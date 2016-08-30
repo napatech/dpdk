@@ -1768,6 +1768,7 @@ ixgbe_vlan_hw_strip_disable_all(struct rte_eth_dev *dev)
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint32_t ctrl;
 	uint16_t i;
+	struct ixgbe_rx_queue *rxq;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -1778,9 +1779,10 @@ ixgbe_vlan_hw_strip_disable_all(struct rte_eth_dev *dev)
 	} else {
 		/* Other 10G NIC, the VLAN strip can be setup per queue in RXDCTL */
 		for (i = 0; i < dev->data->nb_rx_queues; i++) {
-			ctrl = IXGBE_READ_REG(hw, IXGBE_RXDCTL(i));
+			rxq = dev->data->rx_queues[i];
+			ctrl = IXGBE_READ_REG(hw, IXGBE_RXDCTL(rxq->reg_idx));
 			ctrl &= ~IXGBE_RXDCTL_VME;
-			IXGBE_WRITE_REG(hw, IXGBE_RXDCTL(i), ctrl);
+			IXGBE_WRITE_REG(hw, IXGBE_RXDCTL(rxq->reg_idx), ctrl);
 
 			/* record those setting for HW strip per queue */
 			ixgbe_vlan_hw_strip_bitmap_set(dev, i, 0);
@@ -1795,6 +1797,7 @@ ixgbe_vlan_hw_strip_enable_all(struct rte_eth_dev *dev)
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint32_t ctrl;
 	uint16_t i;
+	struct ixgbe_rx_queue *rxq;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -1805,9 +1808,10 @@ ixgbe_vlan_hw_strip_enable_all(struct rte_eth_dev *dev)
 	} else {
 		/* Other 10G NIC, the VLAN strip can be setup per queue in RXDCTL */
 		for (i = 0; i < dev->data->nb_rx_queues; i++) {
-			ctrl = IXGBE_READ_REG(hw, IXGBE_RXDCTL(i));
+			rxq = dev->data->rx_queues[i];
+			ctrl = IXGBE_READ_REG(hw, IXGBE_RXDCTL(rxq->reg_idx));
 			ctrl |= IXGBE_RXDCTL_VME;
-			IXGBE_WRITE_REG(hw, IXGBE_RXDCTL(i), ctrl);
+			IXGBE_WRITE_REG(hw, IXGBE_RXDCTL(rxq->reg_idx), ctrl);
 
 			/* record those setting for HW strip per queue */
 			ixgbe_vlan_hw_strip_bitmap_set(dev, i, 1);
