@@ -229,8 +229,10 @@ eth_pcap_rx(void *queue,
 			if (unlikely(eth_pcap_rx_jumbo(pcap_q->mb_pool,
 						       mbuf,
 						       packet,
-						       header.caplen) == -1))
+						       header.caplen) == -1)) {
+				rte_pktmbuf_free(mbuf);
 				break;
+			}
 		}
 
 		mbuf->pkt_len = (uint16_t)header.caplen;
