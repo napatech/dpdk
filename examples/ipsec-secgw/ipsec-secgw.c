@@ -390,7 +390,7 @@ inbound_sp_sa(struct sp_ctx *sp, struct sa_ctx *sa, struct traffic_type *ip,
 	struct rte_mbuf *m;
 	uint32_t i, j, res, sa_idx;
 
-	if (ip->num == 0)
+	if (ip->num == 0 || sp == NULL)
 		return;
 
 	rte_acl_classify((struct rte_acl_ctx *)sp, ip->data, ip->res,
@@ -465,7 +465,7 @@ outbound_sp(struct sp_ctx *sp, struct traffic_type *ip,
 	struct rte_mbuf *m;
 	uint32_t i, j, sa_idx;
 
-	if (ip->num == 0)
+	if (ip->num == 0 || sp == NULL)
 		return;
 
 	rte_acl_classify((struct rte_acl_ctx *)sp, ip->data, ip->res,
