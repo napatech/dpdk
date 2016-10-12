@@ -163,6 +163,12 @@ struct enic {
 
 };
 
+/* Get the CQ index from a Start of Packet(SOP) RQ index */
+static inline unsigned int enic_sop_rq_idx_to_cq_idx(unsigned int sop_idx)
+{
+	return sop_idx / 2;
+}
+
 static inline unsigned int enic_sop_rq(unsigned int rq)
 {
 	return rq * 2;
