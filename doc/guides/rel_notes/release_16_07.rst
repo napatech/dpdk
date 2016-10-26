@@ -548,3 +548,53 @@ Tested OSes
 - Ubuntu 16.04 LTS
 - Wind River Linux 8
 
+Fixes in 16.07.01 Stable Release
+--------------------------------
+
+The following fixes were applied in DPDK 16.07.01 Stable Release:
+
+* app/test: fix verification of digest for GCM
+* app/testpmd: fix crash when mempool allocation fails
+* app/testpmd: fix help of MTU set commmand
+* app/testpmd: fix timeout in Rx queue flushing
+* contigmem: zero all pages during mmap
+* crypto/null: fix key size increment value
+* crypto/qat: fix FreeBSD build
+* crypto: fix build with icc
+* examples/ip_pipeline: fix Python interpreter
+* examples/ip_pipeline: fix lcore mapping for ppc64
+* hash: fix false zero signature key hit lookup
+* hash: fix ring size
+* mbuf: fix error handling on pool creation
+* mem: fix build with -O1
+* mem: fix crash on hugepage mapping error
+* mempool: fix corruption due to invalid handler
+* net/e1000: fix returned number of available Rx descriptors
+* net/enic: fix bad L4 checksum flag on ICMP packets
+* net/enic: fix freeing memory for descriptor ring
+* net/fm10k: fix MAC address removal from switch
+* net/i40e/base: fix UDP packet header
+* net/i40e: fix dropping packets with ethertype 0x88A8
+* net/i40e: fix mbuf leak during Rx queue release
+* net/i40e: fix null pointer dereferences when using VMDq+RSS
+* net/i40e: fix parsing QinQ packets type
+* net/ixgbe/base: fix check for NACK
+* net/ixgbe/base: fix pointer check
+* net/ixgbe/base: fix possible corruption of shadow RAM
+* net/ixgbe/base: fix skipping PHY config
+* net/ixgbe: fix VF reset to apply to correct VF
+* net/ixgbe: fix mbuf leak during Rx queue release
+* net/mlx: fix debug build with gcc 6.1
+* net/nfp: fix copying MAC address
+* net/pcap: fix memory leak in jumbo frames
+* net/virtio: fix xstats name
+* net/virtio_user: fix error management during init
+* net/virtio_user: fix first queue pair without multiqueue
+* net/virtio_user: fix wrong sequence of messages
+* pci: fix memory leak when detaching device
+* pmdinfogen: fix clang build
+* sched: fix releasing enqueued packets
+* table: fix symbol exports
+* timer: fix lag delay
+* tools: fix json output of pmdinfo
+* tools: fix virtio interface name when binding
