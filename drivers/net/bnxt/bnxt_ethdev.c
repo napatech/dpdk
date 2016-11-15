@@ -384,6 +384,7 @@ static int bnxt_dev_start_op(struct rte_eth_dev *eth_dev)
 	struct bnxt *bp = (struct bnxt *)eth_dev->data->dev_private;
 	int rc;
 
+	bp->dev_stopped = 0;
 	rc = bnxt_hwrm_func_reset(bp);
 	if (rc) {
 		RTE_LOG(ERR, PMD, "hwrm chip reset failure rc: %x\n", rc);
@@ -427,16 +428,6 @@ static int bnxt_dev_set_link_down_op(struct rte_eth_dev *eth_dev)
 	return 0;
 }
 
-static void bnxt_dev_close_op(struct rte_eth_dev *eth_dev)
-{
-	struct bnxt *bp = (struct bnxt *)eth_dev->data->dev_private;
-
-	bnxt_free_tx_mbufs(bp);
-	bnxt_free_rx_mbufs(bp);
-	bnxt_free_mem(bp);
-	rte_free(eth_dev->data->mac_addrs);
-}
-
 /* Unload the driver, release resources */
 static void bnxt_dev_stop_op(struct rte_eth_dev *eth_dev)
 {
@@ -447,6 +438,19 @@ static void bnxt_dev_stop_op(struct rte_eth_dev *eth_dev)
 		eth_dev->data->dev_link.link_status = 0;
 	}
 	bnxt_shutdown_nic(bp);
+}
+
+static void bnxt_dev_close_op(struct rte_eth_dev *eth_dev)
+{
+	struct bnxt *bp = (struct bnxt *)eth_dev->data->dev_private;
+
+	if (bp->dev_stopped == 0)
+		bnxt_dev_stop_op(eth_dev);
+
+	bnxt_free_tx_mbufs(bp);
+	bnxt_free_rx_mbufs(bp);
+	bnxt_free_mem(bp);
+	rte_free(eth_dev->data->mac_addrs);
 }
 
 static void bnxt_mac_addr_remove_op(struct rte_eth_dev *eth_dev,
@@ -1021,6 +1025,8 @@ bnxt_dev_init(struct rte_eth_dev *eth_dev)
 		eth_dev->pci_dev->mem_resource[0].phys_addr,
 		eth_dev->pci_dev->mem_resource[0].addr);
 
+	bp->dev_stopped = 0;
+
 	return 0;
 
 error_free:
@@ -1040,6 +1046,8 @@ bnxt_dev_uninit(struct rte_eth_dev *eth_dev) {
 		rte_free(bp->grp_info);
 	rc = bnxt_hwrm_func_driver_unregister(bp, 0);
 	bnxt_free_hwrm_resources(bp);
+	if (bp->dev_stopped == 0)
+		bnxt_dev_close_op(eth_dev);
 	return rc;
 }
 
