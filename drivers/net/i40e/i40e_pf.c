@@ -906,7 +906,7 @@ i40e_notify_vf_link_status(struct rte_eth_dev *dev, struct i40e_pf_vf *vf)
 	event.event_data.link_event.link_status =
 			dev->data->dev_link.link_status;
 	event.event_data.link_event.link_speed =
-			dev->data->dev_link.link_speed;
+			(enum i40e_aq_link_speed)dev->data->dev_link.link_speed;
 	i40e_pf_host_send_msg_to_vf(vf, I40E_VIRTCHNL_OP_EVENT,
 			I40E_SUCCESS, (uint8_t *)&event, sizeof(event));
 }
