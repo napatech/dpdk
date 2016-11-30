@@ -548,8 +548,11 @@ Tested OSes
 - Ubuntu 16.04 LTS
 - Wind River Linux 8
 
-Fixes in 16.07.01 Stable Release
---------------------------------
+Fixes in Stable Release
+-----------------------
+
+16.07.1
+~~~~~~~
 
 The following fixes were applied in DPDK 16.07.01 Stable Release:
 
@@ -598,3 +601,91 @@ The following fixes were applied in DPDK 16.07.01 Stable Release:
 * timer: fix lag delay
 * tools: fix json output of pmdinfo
 * tools: fix virtio interface name when binding
+
+
+16.07.2
+~~~~~~~
+
+* app/procinfo: free xstats memory upon failure
+* app/test: fix hash multiwriter sequence
+* app/testpmd: fix DCB configuration
+* app/testpmd: fix DCB configuration
+* app/testpmd: fix PF/VF check of flow director
+* app/testpmd: fix RSS hash key size
+* app/testpmd: fix flow director endianness
+* app/testpmd: fix flow director mask
+* doc: add limitations for i40e PMD
+* eal/arm: fix file descriptor leak when getting CPU features
+* eal/ppc: fix file descriptor leak when getting CPU features
+* ethdev: fix vendor id in debug message
+* ethdev: prevent duplicate event callback
+* examples/ip_pipeline: fix plugin loading
+* examples/ipsec-secgw: check SP only when setup
+* examples/l2fwd-crypto: fix verify with decrypt in chain
+* examples/qos_sched: fix dequeue from ring
+* examples/tep_term: fix L4 length
+* examples/tep_term: fix packet length with multi-segments
+* hash: fix bucket size usage
+* hash: fix unlimited cuckoo path
+* kni: fix build with kernel 4.8
+* kni: fix build with kernel 4.9
+* lpm: fix freeing memory
+* lpm: fix freeing unused sub-table on rule delete
+* mempool: fix leak if populate fails
+* mempool: fix search of maximum contiguous pages
+* net/bnx2x: fix build with icc
+* net/bnx2x: fix maximum PF queues
+* net/bnx2x: fix socket id for slowpath memory
+* net/bnxt: ensure entry length is unsigned
+* net/bnxt: fix bit shift size
+* net/bnxt: fix crash when closing
+* net/bonding: validate speed after link up
+* net/ena: improve safety of string handling
+* net/enic: document how to configure vNIC parameters
+* net/enic: fix Rx queue index when not using Rx scatter
+* net/enic: fix crash on MTU update or Rx queue reconfigure
+* net/enic: fix crash with removed flow director filters
+* net/enic: fix flow director
+* net/enic: fix max packet length check
+* net/enic: fix multi-queue Rx performance
+* net/enic: revert truncated packets counter fix
+* net/fm10k: fix Rx checksum flags
+* net/fm10k: fix VF Tx queue initialization
+* net/fm10k: fix out of order Rx read
+* net/i40e: do not use VSI before NULL check
+* net/i40e: fix DCB configuration
+* net/i40e: fix Rx hang when disable LLDP
+* net/i40e: fix VF bonded device link down
+* net/i40e: fix floating VEB
+* net/i40e: fix hash filter on X722
+* net/i40e: fix link status change interrupt
+* net/i40e: fix out of order Rx read
+* net/i40e: fixed build error with icc
+* net/ixgbe: fix VF registers
+* net/ixgbe: fix flow director mask
+* net/ixgbe: fix out of order Rx read
+* net/mlx5: fix Rx VLAN offload capability report
+* net/mlx5: fix Rx checksum macros
+* net/mlx5: fix Rx function selection
+* net/mlx5: fix flow director drop mode
+* net/mlx5: fix handling of small mbuf sizes
+* net/mlx5: fix hash key size retrieval
+* net/mlx5: fix inconsistent return value in flow director
+* net/mlx5: fix initialization in secondary process
+* net/mlx5: fix inline logic
+* net/mlx5: fix link speed capability information
+* net/mlx5: fix link status report
+* net/mlx5: fix possible NULL dereference in Rx path
+* net/mlx5: fix removing VLAN filter
+* net/mlx5: fix support for newer link speeds
+* net/mlx5: re-factorize functions
+* net/mlx5: refactor allocation of flow director queues
+* net/mlx5: support Mellanox OFED 3.4
+* net/qede/base: fix 32-bit build
+* net/ring: fix ring device creation via devargs
+* net/thunderx: fix Tx checksum handling
+* net/virtio: revert fix restart
+* net/vmxnet3: fix mbuf release on reset/stop
+* pci: fix probing error if no driver found
+* pdump: fix created directory permissions
+* vhost: fix Windows VM hang
