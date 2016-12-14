@@ -124,6 +124,8 @@ extern "C" {
  */
 #define PKT_RX_QINQ_PKT      PKT_RX_QINQ_STRIPPED
 
+#define PKT_BATCH            (1ULL << 16) /**< The mbuf contains a batch of packets */
+
 /* add new RX flags here */
 
 /* add new TX flags here */
@@ -841,6 +843,7 @@ struct rte_mbuf {
 			uint32_t hi;
 		} sched;          /**< Hierarchical scheduler */
 		uint32_t usr;	  /**< User defined tags. See rte_distributor_process() */
+		uint64_t value;
 	} hash;                   /**< hash information */
 
 	uint32_t seqn; /**< Sequence number. See also rte_reorder_insert() */
@@ -2010,6 +2013,30 @@ static inline int rte_pktmbuf_chain(struct rte_mbuf *head, struct rte_mbuf *tail
  *   the packet.
  */
 void rte_pktmbuf_dump(FILE *f, const struct rte_mbuf *m, unsigned dump_len);
+
+/* Generic batch packet header */
+struct rte_mbuf_batch_pkt_hdr {
+	uint8_t pkt_hdr_type;	 
+	uint8_t pkt_hdr_len;
+	uint16_t pkt_len;
+	uint8_t port;
+	// The following data depend on the pkt_hdr_type
+};
+
+/* Batch packet header enabling reconstruction of mbuf */
+struct rte_mbuf_batch_pkt_hdr_1 {
+	uint8_t pkt_hdr_type;	 
+	uint8_t pkt_hdr_len;
+	uint16_t pkt_len;
+	uint8_t port;
+	uint8_t align0[3];  // Could be avoided if we pack to one byte
+	uint16_t vlan_tci;
+	uint16_t vlan_tci_outer;
+  uint32_t packet_type;
+	uint64_t hash;
+  uint64_t tx_offload; 
+	uint64_t ol_flags;
+};
 
 #ifdef __cplusplus
 }

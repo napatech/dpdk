@@ -107,6 +107,9 @@ static struct pdump_rxtx_cbs {
 	struct rte_mempool *mp;
 	struct rte_eth_rxtx_callback *cb;
 	void *filter;
+	struct {
+		struct rte_mbuf *mbuf;
+	} batch;
 } rx_cbs[RTE_MAX_ETHPORTS][RTE_MAX_QUEUES_PER_PORT],
 tx_cbs[RTE_MAX_ETHPORTS][RTE_MAX_QUEUES_PER_PORT];
 
@@ -194,7 +197,7 @@ pdump_copy(struct rte_mbuf **pkts, uint16_t nb_pkts, void *user_params)
 	for (i = 0; i < nb_pkts; i++) {
 		p = pdump_pktmbuf_copy(pkts[i], mp);
 		if (p)
-			dup_bufs[d_pkts++] = p;
+			dup_bufs[d_pkts++] = p;		
 	}
 
 	ring_enq = rte_ring_enqueue_burst(ring, (void *)dup_bufs, d_pkts);
@@ -207,13 +210,120 @@ pdump_copy(struct rte_mbuf **pkts, uint16_t nb_pkts, void *user_params)
 	}
 }
 
+static inline void
+pdump_copy_batch(struct rte_mbuf **pkts, uint16_t nb_pkts, void *user_params)
+{
+	unsigned i;
+	int ring_enq;
+	uint16_t d_pkts = 0;
+	struct rte_mbuf *dup_bufs[nb_pkts];
+	struct pdump_rxtx_cbs *cbs;
+	struct rte_ring *ring;
+	struct rte_mempool *mp;
+	cbs  = user_params;
+	ring = cbs->ring;
+	mp = cbs->mp;
+
+	if ((nb_pkts == 0) && cbs->batch.mbuf) {
+		dup_bufs[d_pkts++] = cbs->batch.mbuf;
+		cbs->batch.mbuf = NULL;
+	}
+	i = 0;
+	while (i < nb_pkts) {
+		struct rte_mbuf *p = cbs->batch.mbuf;
+		if (unlikely(p == NULL)) {
+			p = rte_pktmbuf_alloc(mp);
+    	if (unlikely(p == NULL)) {
+				i++; // Drop the packet
+				continue;	
+			}
+			cbs->batch.mbuf = p;
+			// Tag the mbuf to be a batch
+			p->ol_flags |= PKT_BATCH;
+			// Clear the pkt_len which is used to count packets in the batch
+			p->pkt_len = 0;
+
+			// Does this packet fit within a fresh mbuf if not drop the packet			
+			if (unlikely(rte_pktmbuf_tailroom(p) < (rte_pktmbuf_pkt_len(pkts[i]) + 
+				sizeof(struct rte_mbuf_batch_pkt_hdr_1)))) {
+				RTE_LOG(ERR, PDUMP,
+					"Packet too big\n");
+				i++; // Drop the packet
+				continue;
+			}
+		}
+
+		// Do we have room left for the next packet
+		uint16_t offset = rte_pktmbuf_data_len(p);
+		uint16_t tailroom = rte_pktmbuf_tailroom(p); 
+		uint8_t *dest = rte_pktmbuf_mtod(p, uint8_t *);
+		uint16_t o = rte_pktmbuf_pkt_len(p); // Amount of packets in batch so far
+		for (; i < nb_pkts; i++,o++) {
+			struct rte_mbuf *m = pkts[i];
+			const uint16_t pktlen = 
+				(rte_pktmbuf_pkt_len(m) + sizeof(struct rte_mbuf_batch_pkt_hdr_1));
+
+			if (tailroom < pktlen) {
+				rte_pktmbuf_pkt_len(p) = o;                                                                                                                                                                    
+				rte_pktmbuf_data_len(p) = offset;
+				dup_bufs[d_pkts++] = p;
+				cbs->batch.mbuf = NULL;
+				p = NULL;
+				break;
+			}
+			tailroom -= pktlen;
+
+	  	// Build the packet header
+			struct rte_mbuf_batch_pkt_hdr_1 *hdr =
+				(struct rte_mbuf_batch_pkt_hdr_1*)(dest+offset);
+			hdr->pkt_hdr_type = 1;
+			hdr->pkt_hdr_len = sizeof(struct rte_mbuf_batch_pkt_hdr_1);
+			hdr->port = m->port;
+			hdr->pkt_len = m->pkt_len + sizeof(struct rte_mbuf_batch_pkt_hdr_1);
+			hdr->vlan_tci = m->vlan_tci;
+			hdr->vlan_tci_outer = m->vlan_tci_outer;
+			hdr->packet_type = m->packet_type;		
+			hdr->hash = m->hash.value;
+			hdr->tx_offload = m->tx_offload;
+			hdr->ol_flags = m->ol_flags;
+			hdr->vlan_tci_outer = m->vlan_tci_outer;
+			offset += sizeof(struct rte_mbuf_batch_pkt_hdr_1);
+			// Copy all segment(s) payload into dest 
+			do {
+				rte_memcpy(dest+offset, 
+					rte_pktmbuf_mtod(m, void *), rte_pktmbuf_data_len(m));
+				offset += rte_pktmbuf_data_len(m);
+			} while ((m = m->next) != NULL);
+		}
+		if (likely(p != NULL)) {
+			// Update the batch length and packets in the batch
+			rte_pktmbuf_pkt_len(p) = o;                                                                                                                                                                    
+			rte_pktmbuf_data_len(p) = offset;
+		}
+	}
+
+	ring_enq = rte_ring_enqueue_burst(ring, (void *)dup_bufs, d_pkts);
+	if (unlikely(ring_enq < d_pkts)) {
+		RTE_LOG(DEBUG, PDUMP,
+			"only %d of packets enqueued to ring\n", ring_enq);
+		do {
+			rte_pktmbuf_free(dup_bufs[ring_enq]);
+		} while (++ring_enq < d_pkts);
+	}
+}
+
+
 static uint16_t
 pdump_rx(uint8_t port __rte_unused, uint16_t qidx __rte_unused,
 	struct rte_mbuf **pkts, uint16_t nb_pkts,
 	uint16_t max_pkts __rte_unused,
 	void *user_params)
 {
+#ifdef USE_BATCHING
+	pdump_copy_batch(pkts, nb_pkts, user_params);
+#else
 	pdump_copy(pkts, nb_pkts, user_params);
+#endif	
 	return nb_pkts;
 }
 
@@ -221,7 +331,11 @@ static uint16_t
 pdump_tx(uint8_t port __rte_unused, uint16_t qidx __rte_unused,
 		struct rte_mbuf **pkts, uint16_t nb_pkts, void *user_params)
 {
+#ifdef USE_BATCHING
+	pdump_copy_batch(pkts, nb_pkts, user_params);
+#else
 	pdump_copy(pkts, nb_pkts, user_params);
+#endif	
 	return nb_pkts;
 }
 

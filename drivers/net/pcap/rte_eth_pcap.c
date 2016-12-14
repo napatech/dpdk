@@ -59,7 +59,6 @@
 #define ETH_PCAP_ARG_MAXLEN	64
 
 static char errbuf[PCAP_ERRBUF_SIZE];
-static unsigned char tx_pcap_data[RTE_ETH_PCAP_SNAPLEN];
 static struct timeval start_time;
 static uint64_t start_cycles;
 static uint64_t hz;
@@ -81,6 +80,17 @@ struct pcap_tx_queue {
 	volatile unsigned long tx_pkts;
 	volatile unsigned long tx_bytes;
 	volatile unsigned long err_pkts;
+#ifdef USE_STDOUT_STATISTICS		
+	struct {
+		struct timeval ts;
+		unsigned long tx_bytes;
+		unsigned long tx_pkts;
+		unsigned long err_pkts;
+	} last;
+#endif	
+	off_t offset;
+	unsigned char pcap_buffer[RTE_ETH_PCAP_SNAPLEN];
+	unsigned char tx_pcap_data[RTE_ETH_PCAP_SNAPLEN];
 	char name[PATH_MAX];
 	char type[ETH_PCAP_ARG_MAXLEN];
 };
@@ -251,15 +261,57 @@ calculate_timestamp(struct timeval *ts) {
 
 	cycles = rte_get_timer_cycles() - start_cycles;
 	cur_time.tv_sec = cycles / hz;
-	cur_time.tv_usec = (cycles % hz) * 10e6 / hz;
+	cur_time.tv_usec = (cycles % hz) * 1e6 / hz;
 	timeradd(&start_time, &cur_time, ts);
 }
 
-/*
- * Callback to handle writing packets to a pcap file.
- */
-static uint16_t
-eth_pcap_tx_dumper(void *queue,
+struct rte_pcap_timeval {                     
+  uint32_t tv_sec;           /* seconds */
+  uint32_t tv_usec;          /* microseconds */
+};
+
+struct rte_pcap_sf_pkthdr { 
+  struct rte_pcap_timeval ts;  /* time stamp */
+  uint32_t caplen;         /* length of portion present */
+  uint32_t len;            /* length this packet (off wire) */
+}; 
+
+static inline 
+void rte_pcap_dump(struct pcap_tx_queue *queue, const struct pcap_pkthdr *h, 
+	const u_char *sp)
+{
+	if ((sizeof(queue->pcap_buffer) - queue->offset) < (uint)(h->caplen + 
+		sizeof(struct rte_pcap_sf_pkthdr))) {
+		(void)fwrite(queue->pcap_buffer, queue->offset, 1, (FILE *)queue->dumper);
+		queue->offset = 0;
+	} 
+	struct rte_pcap_sf_pkthdr sf_hdr;
+	sf_hdr.ts.tv_sec  = h->ts.tv_sec;
+	sf_hdr.ts.tv_usec = h->ts.tv_usec;
+	sf_hdr.caplen     = h->caplen;
+	sf_hdr.len        = h->len;
+
+	rte_memcpy(queue->pcap_buffer + queue->offset, &sf_hdr, 
+		sizeof(struct rte_pcap_sf_pkthdr));
+	rte_memcpy(queue->pcap_buffer + queue->offset + 
+		sizeof(struct rte_pcap_sf_pkthdr), sp, h->caplen);
+	queue->offset += (h->caplen + sizeof(struct rte_pcap_sf_pkthdr));
+}
+
+static inline
+int rte_pcap_dump_flush(struct pcap_tx_queue *queue)
+{              
+  if (queue->offset) {
+		(void)fwrite(queue->pcap_buffer, queue->offset, 1, 	(FILE *)queue->dumper);
+		queue->offset = 0;
+	}           
+	if (fflush((FILE *)queue->dumper) == EOF)
+		return (-1);
+	else
+	  return (0);
+}
+
+static uint16_t eth_pcap_tx_dump_mbuf(void *queue,
 		struct rte_mbuf **bufs,
 		uint16_t nb_pkts)
 {
@@ -270,9 +322,6 @@ eth_pcap_tx_dumper(void *queue,
 	uint32_t tx_bytes = 0;
 	struct pcap_pkthdr header;
 
-	if (dumper_q->dumper == NULL || nb_pkts == 0)
-		return 0;
-
 	/* writes the nb_pkts packets to the previously opened pcap file dumper */
 	for (i = 0; i < nb_pkts; i++) {
 		mbuf = bufs[i];
@@ -281,13 +330,13 @@ eth_pcap_tx_dumper(void *queue,
 		header.caplen = header.len;
 
 		if (likely(mbuf->nb_segs == 1)) {
-			pcap_dump((u_char *)dumper_q->dumper, &header,
+			rte_pcap_dump(dumper_q, &header,
 				  rte_pktmbuf_mtod(mbuf, void*));
 		} else {
 			if (mbuf->pkt_len <= ETHER_MAX_JUMBO_FRAME_LEN) {
-				eth_pcap_gather_data(tx_pcap_data, mbuf);
-				pcap_dump((u_char *)dumper_q->dumper, &header,
-					  tx_pcap_data);
+				eth_pcap_gather_data(dumper_q->tx_pcap_data, mbuf);
+				rte_pcap_dump(dumper_q, &header,
+					  dumper_q->tx_pcap_data);
 			} else {
 				RTE_LOG(ERR, PMD,
 					"Dropping PCAP packet. "
@@ -303,18 +352,129 @@ eth_pcap_tx_dumper(void *queue,
 		rte_pktmbuf_free(mbuf);
 		num_tx++;
 		tx_bytes += mbuf->pkt_len;
-	}
-
+	}	
 	/*
 	 * Since there's no place to hook a callback when the forwarding
 	 * process stops and to make sure the pcap file is actually written,
 	 * we flush the pcap dumper within each burst.
 	 */
-	pcap_dump_flush(dumper_q->dumper);
+	rte_pcap_dump_flush(dumper_q);
 	dumper_q->tx_pkts += num_tx;
 	dumper_q->tx_bytes += tx_bytes;
 	dumper_q->err_pkts += nb_pkts - num_tx;
 	return num_tx;
+}
+
+static uint16_t eth_pcap_tx_dump_batch(void *queue,
+		struct rte_mbuf **bufs,
+		uint16_t nb_pkts)
+{
+	unsigned i;
+	struct pcap_tx_queue *dumper_q = queue;
+	uint16_t num_tx = 0;
+	uint32_t tx_bytes = 0;
+
+	/* writes the nb_pkts packets to the previously opened pcap file dumper */
+	for (i = 0; i < nb_pkts; i++) {
+		struct rte_mbuf *mbuf = bufs[i];
+		uint16_t offset=0;
+		uint16_t nb_pkts_batch = rte_pktmbuf_pkt_len(mbuf);
+		uint8_t *batch = (uint8_t*) rte_pktmbuf_mtod(mbuf, void*);
+		int o;			
+		for (o = 0; o < nb_pkts_batch; o++) {
+			struct rte_mbuf_batch_pkt_hdr* pkt = 
+				(struct rte_mbuf_batch_pkt_hdr*)(batch+offset);
+			const uint16_t pkt_len = pkt->pkt_len;
+			const uint16_t pkt_hdr_len = pkt->pkt_hdr_len;
+			struct pcap_pkthdr header;
+			calculate_timestamp(&header.ts);
+			/*
+			* If HW can provide this it could already be embedded correct in the
+			* header.
+			**/
+			header.len = pkt_len - pkt_hdr_len; 
+			header.caplen = header.len;	 
+
+			rte_pcap_dump(dumper_q, &header, 
+				batch + offset + pkt_hdr_len);
+
+			num_tx++;
+			tx_bytes += header.len;
+			// Jump to next packet
+			offset += pkt_len;
+		}
+		rte_pktmbuf_free(mbuf);		
+	}
+	/*
+	 * Since there's no place to hook a callback when the forwarding
+	 * process stops and to make sure the pcap file is actually written,
+	 * we flush the pcap dumper within each burst.
+	 */
+	rte_pcap_dump_flush(dumper_q);
+	dumper_q->tx_pkts += num_tx;
+	dumper_q->tx_bytes += tx_bytes;
+	dumper_q->err_pkts += 0;
+	return num_tx;	
+}
+
+/*
+ * Callback to handle writing packets to a pcap file.
+ */
+static uint16_t
+eth_pcap_tx_dumper(void *queue,
+		struct rte_mbuf **bufs,
+		uint16_t nb_pkts)
+{
+	struct pcap_tx_queue *dumper_q = queue;
+
+	if (dumper_q->dumper == NULL || nb_pkts == 0)
+		return 0;
+
+#ifdef USE_STDOUT_STATISTICS	
+	/*
+	* Print statistics
+	*/
+	struct timeval ts;
+	calculate_timestamp(&ts);
+	const unsigned long t = ((ts.tv_sec*1e6 + ts.tv_usec) - 
+		(dumper_q->last.ts.tv_sec*1e6 + dumper_q->last.ts.tv_usec));
+
+	if (t >= 1e6) {
+		// Num packets * 24 (20B IFG and 4B FCS)... 
+		double bw = (double)(((dumper_q->tx_bytes - dumper_q->last.tx_bytes) +
+			(dumper_q->tx_pkts - dumper_q->last.tx_pkts) * 24) * 8) / t;
+#ifdef USE_BATCHING
+		printf("B: %16ld, %16ld, %16ld: %8.2f                         \r", 
+#else
+		printf("N: %16ld, %16ld, %16ld: %8.2f                         \r", 
+#endif		
+			dumper_q->tx_pkts - dumper_q->last.tx_pkts,
+			dumper_q->tx_bytes - dumper_q->last.tx_bytes,
+			dumper_q->err_pkts - dumper_q->last.err_pkts, bw);
+		dumper_q->last.ts = ts;
+		dumper_q->last.tx_pkts = dumper_q->tx_pkts;
+		dumper_q->last.tx_bytes = dumper_q->tx_bytes;
+		dumper_q->last.err_pkts = dumper_q->err_pkts;
+		fflush(stdout);
+	}
+#endif
+
+	/**
+	* There is a big penalty of supporting a mix of batch and 
+	* non-batch so we assume that we always get one or the other
+	* in the bufs array.
+	*/
+	if (unlikely(nb_pkts && (bufs[0]->ol_flags & PKT_BATCH))) {
+		/**
+		* The penalty of predicting wrong using batches is less than
+		* for non-batches, but if it could completely be avoided that would
+		* be best.
+		*/
+	  return eth_pcap_tx_dump_batch(queue, bufs, nb_pkts);
+	} else {
+	  // This will take care of updating the stats
+	  return eth_pcap_tx_dump_mbuf(queue, bufs, nb_pkts);
+	}
 }
 
 /*
@@ -344,9 +504,9 @@ eth_pcap_tx(void *queue,
 					      mbuf->pkt_len);
 		} else {
 			if (mbuf->pkt_len <= ETHER_MAX_JUMBO_FRAME_LEN) {
-				eth_pcap_gather_data(tx_pcap_data, mbuf);
+				eth_pcap_gather_data(tx_queue->tx_pcap_data, mbuf);
 				ret = pcap_sendpacket(tx_queue->pcap,
-						      tx_pcap_data,
+						      tx_queue->tx_pcap_data,
 						      mbuf->pkt_len);
 			} else {
 				RTE_LOG(ERR, PMD,

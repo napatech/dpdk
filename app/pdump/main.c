@@ -494,27 +494,55 @@ pdump_rxtx(struct rte_ring *ring, uint8_t vdev_id, struct pdump_stats *stats)
 {
 	/* write input packets of port to vdev for pdump */
 	struct rte_mbuf *rxtx_bufs[BURST_SIZE];
-
+	
 	/* first dequeue packets from ring of primary process */
 	const uint16_t nb_in_deq = rte_ring_dequeue_burst(ring,
 			(void *)rxtx_bufs, BURST_SIZE);
-	stats->dequeue_pkts += nb_in_deq;
 
-	if (nb_in_deq) {
-		/* then sent on vdev */
-		uint16_t nb_in_txd = rte_eth_tx_burst(
-				vdev_id,
-				0, rxtx_bufs, nb_in_deq);
-		stats->tx_pkts += nb_in_txd;
+	if (likely(nb_in_deq)) {
+		/**
+		* Don't support a mix of batch and non-batch.
+		*/
+		if (unlikely(rxtx_bufs[0]->ol_flags & PKT_BATCH)) {
+			uint16_t i;
+			// Do the statistics. Assume everything can be sent ok
+			for (i = 0; i < nb_in_deq; i++) {
+				stats->dequeue_pkts += rte_pktmbuf_pkt_len(rxtx_bufs[i]);
+				stats->tx_pkts += rte_pktmbuf_pkt_len(rxtx_bufs[i]);			
+			}
+			/* then sent on vdev */
+			uint16_t nb_in_txd = rte_eth_tx_burst(
+					vdev_id,
+					0, rxtx_bufs, nb_in_deq);
 
-		if (unlikely(nb_in_txd < nb_in_deq)) {
-			do {
-				rte_pktmbuf_free(rxtx_bufs[nb_in_txd]);
-				stats->freed_pkts++;
-			} while (++nb_in_txd < nb_in_deq);
+			if (unlikely(nb_in_txd < nb_in_deq)) {
+			  do {
+			    stats->dequeue_pkts -= rte_pktmbuf_pkt_len(rxtx_bufs[nb_in_txd]);
+			    stats->tx_pkts -=	rte_pktmbuf_pkt_len(rxtx_bufs[nb_in_txd]);
+			    stats->freed_pkts +=	rte_pktmbuf_pkt_len(rxtx_bufs[nb_in_txd]);
+			    rte_pktmbuf_free(rxtx_bufs[nb_in_txd]);
+			  } while (++nb_in_txd < nb_in_deq);
+			}
+		} else {
+		  stats->dequeue_pkts += nb_in_deq;
+
+		  if (nb_in_deq) {
+		    /* then sent on vdev */
+		    uint16_t nb_in_txd =
+			rte_eth_tx_burst(vdev_id, 0, rxtx_bufs, nb_in_deq);
+		    stats->tx_pkts += nb_in_txd;
+
+		    if (unlikely(nb_in_txd < nb_in_deq)) {
+		      do {
+						rte_pktmbuf_free(rxtx_bufs[nb_in_txd]);
+						stats->freed_pkts++;
+		      } while (++nb_in_txd < nb_in_deq);
+		    }
+		  }
 		}
 	}
 }
+
 
 static void
 free_ring_data(struct rte_ring *ring, uint8_t vdev_id,

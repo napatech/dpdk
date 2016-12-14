@@ -35,7 +35,7 @@ ifeq ($(CONFIG_RTE_LIBRTE_PDUMP),y)
 
 APP = dpdk-pdump
 
-CFLAGS += $(WERROR_FLAGS)
+CFLAGS += $(WERROR_FLAGS) -O3
 
 # all source are stored in SRCS-y
 
