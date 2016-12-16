@@ -973,6 +973,7 @@ qede_get_xstats(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats,
 	for (i = 0; i < RTE_DIM(qede_xstats_strings); i++) {
 		xstats[stat_idx].value = *(uint64_t *)(((char *)&stats) +
 					     qede_xstats_strings[i].offset);
+		xstats[stat_idx].id = stat_idx;
 		stat_idx++;
 	}
 
@@ -982,6 +983,7 @@ qede_get_xstats(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats,
 				xstats[stat_idx].value = *(uint64_t *)(
 					((char *)(qdev->fp_array[(qid)].rxq)) +
 					 qede_rxq_xstats_strings[i].offset);
+				xstats[stat_idx].id = stat_idx;
 				stat_idx++;
 			}
 		}
