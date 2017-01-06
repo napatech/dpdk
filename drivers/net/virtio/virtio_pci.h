@@ -333,4 +333,8 @@ uint8_t vtpci_isr(struct virtio_hw *);
 
 uint16_t vtpci_irq_config(struct virtio_hw *, uint16_t);
 
+extern const struct virtio_pci_ops legacy_ops;
+extern const struct virtio_pci_ops modern_ops;
+extern const struct virtio_pci_ops virtio_user_ops;
+
 #endif /* _VIRTIO_PCI_H_ */
