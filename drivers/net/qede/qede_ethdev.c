@@ -970,6 +970,7 @@ qede_get_stats(struct rte_eth_dev *eth_dev, struct rte_eth_stats *eth_stats)
 	struct ecore_dev *edev = &qdev->edev;
 	struct ecore_eth_stats stats;
 	unsigned int i = 0, j = 0, qid;
+	unsigned int rxq_stat_cntrs, txq_stat_cntrs;
 	struct qede_tx_queue *txq;
 
 	qdev->ops->get_vport_stats(edev, &stats);
@@ -1003,6 +1004,17 @@ qede_get_stats(struct rte_eth_dev *eth_dev, struct rte_eth_stats *eth_stats)
 	eth_stats->oerrors = stats.tx_err_drop_pkts;
 
 	/* Queue stats */
+	rxq_stat_cntrs = RTE_MIN(QEDE_RSS_COUNT(qdev),
+			       RTE_ETHDEV_QUEUE_STAT_CNTRS);
+	txq_stat_cntrs = RTE_MIN(QEDE_TSS_COUNT(qdev),
+			       RTE_ETHDEV_QUEUE_STAT_CNTRS);
+	if ((rxq_stat_cntrs != QEDE_RSS_COUNT(qdev)) ||
+	    (txq_stat_cntrs != QEDE_TSS_COUNT(qdev)))
+		DP_VERBOSE(edev, ECORE_MSG_DEBUG,
+		       "Not all the queue stats will be displayed. Set"
+		       " RTE_ETHDEV_QUEUE_STAT_CNTRS config param"
+		       " appropriately and retry.\n");
+
 	for (qid = 0; qid < QEDE_QUEUE_CNT(qdev); qid++) {
 		if (qdev->fp_array[qid].type & QEDE_FASTPATH_RX) {
 			eth_stats->q_ipackets[i] =
@@ -1021,7 +1033,11 @@ qede_get_stats(struct rte_eth_dev *eth_dev, struct rte_eth_stats *eth_stats)
 					rx_alloc_errors));
 			i++;
 		}
+		if (i == rxq_stat_cntrs)
+			break;
+	}
 
+	for (qid = 0; qid < QEDE_QUEUE_CNT(qdev); qid++) {
 		if (qdev->fp_array[qid].type & QEDE_FASTPATH_TX) {
 			txq = qdev->fp_array[(qid)].txqs[0];
 			eth_stats->q_opackets[j] =
@@ -1031,13 +1047,17 @@ qede_get_stats(struct rte_eth_dev *eth_dev, struct rte_eth_stats *eth_stats)
 						  xmit_pkts)));
 			j++;
 		}
+		if (j == txq_stat_cntrs)
+			break;
 	}
 }
 
 static unsigned
 qede_get_xstats_count(struct qede_dev *qdev) {
 	return RTE_DIM(qede_xstats_strings) +
-		(RTE_DIM(qede_rxq_xstats_strings) * QEDE_RSS_COUNT(qdev));
+		(RTE_DIM(qede_rxq_xstats_strings) *
+		 RTE_MIN(QEDE_RSS_COUNT(qdev),
+			 RTE_ETHDEV_QUEUE_STAT_CNTRS));
 }
 
 static int
@@ -1047,6 +1067,7 @@ qede_get_xstats_names(__rte_unused struct rte_eth_dev *dev,
 	struct qede_dev *qdev = dev->data->dev_private;
 	const unsigned int stat_cnt = qede_get_xstats_count(qdev);
 	unsigned int i, qid, stat_idx = 0;
+	unsigned int rxq_stat_cntrs;
 
 	if (xstats_names != NULL) {
 		for (i = 0; i < RTE_DIM(qede_xstats_strings); i++) {
@@ -1057,7 +1078,9 @@ qede_get_xstats_names(__rte_unused struct rte_eth_dev *dev,
 			stat_idx++;
 		}
 
-		for (qid = 0; qid < QEDE_RSS_COUNT(qdev); qid++) {
+		rxq_stat_cntrs = RTE_MIN(QEDE_RSS_COUNT(qdev),
+					 RTE_ETHDEV_QUEUE_STAT_CNTRS);
+		for (qid = 0; qid < rxq_stat_cntrs; qid++) {
 			for (i = 0; i < RTE_DIM(qede_rxq_xstats_strings); i++) {
 				snprintf(xstats_names[stat_idx].name,
 					sizeof(xstats_names[stat_idx].name),
@@ -1081,6 +1104,7 @@ qede_get_xstats(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats,
 	struct ecore_eth_stats stats;
 	const unsigned int num = qede_get_xstats_count(qdev);
 	unsigned int i, qid, stat_idx = 0;
+	unsigned int rxq_stat_cntrs;
 
 	if (n < num)
 		return num;
@@ -1094,7 +1118,9 @@ qede_get_xstats(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats,
 		stat_idx++;
 	}
 
-	for (qid = 0; qid < QEDE_QUEUE_CNT(qdev); qid++) {
+	rxq_stat_cntrs = RTE_MIN(QEDE_RSS_COUNT(qdev),
+				 RTE_ETHDEV_QUEUE_STAT_CNTRS);
+	for (qid = 0; qid < rxq_stat_cntrs; qid++) {
 		if (qdev->fp_array[qid].type & QEDE_FASTPATH_RX) {
 			for (i = 0; i < RTE_DIM(qede_rxq_xstats_strings); i++) {
 				xstats[stat_idx].value = *(uint64_t *)(
