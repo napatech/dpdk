@@ -2216,6 +2216,7 @@ test_perf_snow3G_optimise_cyclecount(struct perf_test_params *pparams)
 		rte_pktmbuf_free(c_ops[i]->sym->m_src);
 		rte_crypto_op_free(c_ops[i]);
 	}
+	rte_cryptodev_sym_session_free(ts_params->dev_id, sess);
 
 	return TEST_SUCCESS;
 }
@@ -2418,6 +2419,7 @@ test_perf_openssl_optimise_cyclecount(struct perf_test_params *pparams)
 		rte_pktmbuf_free(c_ops[i]->sym->m_src);
 		rte_crypto_op_free(c_ops[i]);
 	}
+	rte_cryptodev_sym_session_free(ts_params->dev_id, sess);
 
 	return TEST_SUCCESS;
 }
@@ -3039,6 +3041,7 @@ test_perf_aes_sha(uint8_t dev_id, uint16_t queue_id,
 
 	for (i = 0; i < pparams->burst_size * NUM_MBUF_SETS; i++)
 		rte_pktmbuf_free(mbufs[i]);
+	rte_cryptodev_sym_session_free(dev_id, sess);
 
 	printf("\n");
 	return TEST_SUCCESS;
@@ -3202,6 +3205,7 @@ test_perf_snow3g(uint8_t dev_id, uint16_t queue_id,
 
 	for (i = 0; i < pparams->burst_size * NUM_MBUF_SETS; i++)
 		rte_pktmbuf_free(mbufs[i]);
+	rte_cryptodev_sym_session_free(dev_id, sess);
 
 	printf("\n");
 	return TEST_SUCCESS;
@@ -3351,6 +3355,7 @@ test_perf_openssl(uint8_t dev_id, uint16_t queue_id,
 
 	for (i = 0; i < pparams->burst_size * NUM_MBUF_SETS; i++)
 		rte_pktmbuf_free(mbufs[i]);
+	rte_cryptodev_sym_session_free(dev_id, sess);
 
 	printf("\n");
 	return TEST_SUCCESS;
@@ -3956,6 +3961,7 @@ perf_AES_GCM(uint8_t dev_id, uint16_t queue_id,
 
 	for (i = 0; i < burst; i++)
 		rte_pktmbuf_free(mbufs[i]);
+	rte_cryptodev_sym_session_free(dev_id, sess);
 
 	return 0;
 }
