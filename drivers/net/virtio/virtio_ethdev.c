@@ -1206,13 +1206,13 @@ virtio_init_device(struct rte_eth_dev *eth_dev, uint64_t req_features)
 	if (virtio_negotiate_features(hw, req_features) < 0)
 		return -1;
 
+	rte_eth_copy_pci_info(eth_dev, pci_dev);
+
 	/* If host does not support status then disable LSC */
 	if (!vtpci_with_feature(hw, VIRTIO_NET_F_STATUS))
 		eth_dev->data->dev_flags &= ~RTE_ETH_DEV_INTR_LSC;
 	else
 		eth_dev->data->dev_flags |= RTE_ETH_DEV_INTR_LSC;
-
-	rte_eth_copy_pci_info(eth_dev, pci_dev);
 
 	rx_func_get(eth_dev);
 
