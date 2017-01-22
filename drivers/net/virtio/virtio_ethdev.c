@@ -1380,6 +1380,7 @@ eth_virtio_dev_init(struct rte_eth_dev *eth_dev)
 	}
 
 	pci_dev = eth_dev->pci_dev;
+	hw->port_id = eth_dev->data->port_id;
 
 	if (pci_dev) {
 		ret = vtpci_init(pci_dev, hw, &dev_flags);
@@ -1387,7 +1388,6 @@ eth_virtio_dev_init(struct rte_eth_dev *eth_dev)
 			return ret;
 	}
 
-	hw->port_id = eth_dev->data->port_id;
 	eth_dev->data->dev_flags = dev_flags;
 
 	/* reset device and negotiate default features */
