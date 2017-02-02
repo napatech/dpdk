@@ -1042,6 +1042,7 @@ mlx5_tx_burst_mpw_inline(void *dpdk_txq, struct rte_mbuf **pkts,
 				mpw.data.raw =
 					(volatile void *)&(*txq->wqes)[0];
 			++mpw.pkts_n;
+			mpw.total_len += length;
 			++j;
 			if (mpw.pkts_n == MLX5_MPW_DSEG_MAX) {
 				mlx5_mpw_inline_close(txq, &mpw);
@@ -1051,7 +1052,6 @@ mlx5_tx_burst_mpw_inline(void *dpdk_txq, struct rte_mbuf **pkts,
 				inline_room -= length;
 			}
 		}
-		mpw.total_len += length;
 		elts_head = elts_head_next;
 #ifdef MLX5_PMD_SOFT_COUNTERS
 		/* Increment sent bytes counter. */
