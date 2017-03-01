@@ -1542,16 +1542,10 @@ s32 ixgbe_identify_sfp_module_generic(struct ixgbe_hw *hw)
 				status = IXGBE_SUCCESS;
 			} else {
 				if (hw->allow_unsupported_sfp == true) {
-					EWARN(hw, "WARNING: Intel (R) Network "
-					      "Connections are quality tested "
-					      "using Intel (R) Ethernet Optics."
-					      " Using untested modules is not "
-					      "supported and may cause unstable"
-					      " operation or damage to the "
-					      "module or the adapter. Intel "
-					      "Corporation is not responsible "
-					      "for any harm caused by using "
-					      "untested modules.\n", status);
+					EWARN(hw,
+						"WARNING: Intel (R) Network Connections are quality tested using Intel (R) Ethernet Optics. "
+						"Using untested modules is not supported and may cause unstable operation or damage to the module or the adapter. "
+						"Intel Corporation is not responsible for any harm caused by using untested modules.\n");
 					status = IXGBE_SUCCESS;
 				} else {
 					DEBUGOUT("SFP+ module not supported\n");
@@ -1804,16 +1798,10 @@ s32 ixgbe_identify_qsfp_module_generic(struct ixgbe_hw *hw)
 				status = IXGBE_SUCCESS;
 			} else {
 				if (hw->allow_unsupported_sfp == true) {
-					EWARN(hw, "WARNING: Intel (R) Network "
-					      "Connections are quality tested "
-					      "using Intel (R) Ethernet Optics."
-					      " Using untested modules is not "
-					      "supported and may cause unstable"
-					      " operation or damage to the "
-					      "module or the adapter. Intel "
-					      "Corporation is not responsible "
-					      "for any harm caused by using "
-					      "untested modules.\n", status);
+					EWARN(hw,
+						"WARNING: Intel (R) Network Connections are quality tested using Intel (R) Ethernet Optics. "
+						"Using untested modules is not supported and may cause unstable operation or damage to the module or the adapter. "
+						"Intel Corporation is not responsible for any harm caused by using untested modules.\n");
 					status = IXGBE_SUCCESS;
 				} else {
 					DEBUGOUT("QSFP module not supported\n");
@@ -1837,7 +1825,6 @@ err_read_i2c_eeprom:
 
 	return IXGBE_ERR_SFP_NOT_PRESENT;
 }
-
 
 /**
  *  ixgbe_get_sfp_init_sequence_offsets - Provides offset of PHY init sequence
