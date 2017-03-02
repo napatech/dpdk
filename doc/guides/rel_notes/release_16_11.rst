@@ -598,3 +598,113 @@ Tested OSes
 * Ubuntu 14.04
 * Ubuntu 15.04
 * Ubuntu 16.04
+
+Fixes in 16.11 LTS Release
+--------------------------
+
+16.11.1
+~~~~~~~
+
+* app/test: fix symmetric session free in crypto perf tests
+* app/testpmd: fix check for invalid ports
+* app/testpmd: fix static build link ordering
+* crypto/aesni_gcm: fix IV size in capabilities
+* crypto/aesni_gcm: fix J0 padding bytes
+* crypto/aesni_mb: fix incorrect crypto session
+* crypto/openssl: fix extra bytes written at end of data
+* crypto/openssl: fix indentation in guide
+* crypto/qat: fix IV size in capabilities
+* crypto/qat: fix to avoid buffer overwrite in OOP case
+* cryptodev: fix crash on null dereference
+* cryptodev: fix loop in device query
+* devargs: reset driver name pointer on parsing failure
+* drivers/crypto: fix different auth/cipher keys
+* ethdev: check maximum number of queues for statistics
+* ethdev: fix extended statistics name index
+* ethdev: fix port data mismatched in multiple process model
+* ethdev: fix port lookup if none
+* ethdev: remove invalid function from version map
+* examples/ethtool: fix driver information
+* examples/ethtool: fix querying non-PCI devices
+* examples/ip_pipeline: fix coremask limitation
+* examples/ip_pipeline: fix parsing of pass-through pipeline
+* examples/l2fwd-crypto: fix overflow
+* examples/vhost: fix calculation of mbuf count
+* examples/vhost: fix lcore initialization
+* mempool: fix API documentation
+* mempool: fix stack handler dequeue
+* net/af_packet: fix fd use after free
+* net/bnx2x: fix Rx mode configuration
+* net/cxgbe/base: initialize variable before reading EEPROM
+* net/cxgbe: fix parenthesis on bitwise operation
+* net/ena: fix setting host attributes
+* net/enic: fix hardcoding of some flow director masks
+* net/enic: fix memory leak with oversized Tx packets
+* net/enic: remove unnecessary function parameter attributes
+* net/i40e: enable auto link update for 25G
+* net/i40e: fix Rx checksum flag
+* net/i40e: fix TC bandwidth definition
+* net/i40e: fix VF reset flow
+* net/i40e: fix checksum flag in x86 vector Rx
+* net/i40e: fix crash in close
+* net/i40e: fix deletion of all macvlan filters
+* net/i40e: fix ethertype filter on X722
+* net/i40e: fix link update delay
+* net/i40e: fix logging for Tx free threshold check
+* net/i40e: fix segment number in reassemble process
+* net/i40e: fix wrong return value when handling PF message
+* net/i40e: fix xstats value mapping
+* net/i40evf: fix casting between structs
+* net/i40evf: fix reporting of imissed packets
+* net/ixgbe: fix blocked interrupts
+* net/ixgbe: fix received packets number for ARM
+* net/ixgbe: fix received packets number for ARM NEON
+* net/ixgbevf: fix max packet length
+* net/mlx5: fix RSS hash result for flows
+* net/mlx5: fix Rx packet validation and type
+* net/mlx5: fix Tx doorbell
+* net/mlx5: fix endianness in Tx completion queue
+* net/mlx5: fix inconsistent link status
+* net/mlx5: fix leak when starvation occurs
+* net/mlx5: fix link status query
+* net/mlx5: fix memory leak when parsing device params
+* net/mlx5: fix missing inline attributes
+* net/mlx5: fix updating total length of multi-packet send
+* net/mlx: fix IPv4 and IPv6 packet type
+* net/nfp: fix VLAN offload flags check
+* net/nfp: fix typo in Tx offload capabilities
+* net/pcap: fix timestamps in output pcap file
+* net/qede/base: fix FreeBSD build
+* net/qede: add vendor/device id info
+* net/qede: fix PF fastpath status block index
+* net/qede: fix filtering code
+* net/qede: fix function declaration
+* net/qede: fix per queue statisitics
+* net/qede: fix resource leak
+* net/vhost: fix socket file deleted on stop
+* net/vhost: fix unix socket not removed as closing
+* net/virtio-user: fix not properly reset device
+* net/virtio-user: fix wrongly get/set features
+* net/virtio: fix build without virtio-user
+* net/virtio: fix crash when number of virtio devices > 1
+* net/virtio: fix multiple process support
+* net/virtio: fix performance regression due to TSO
+* net/virtio: fix rewriting LSC flag
+* net/virtio: fix wrong Rx/Tx method for secondary process
+* net/virtio: optimize header reset on any layout
+* net/virtio: store IO port info locally
+* net/virtio: store PCI operators pointer locally
+* net/vmxnet3: fix Rx deadlock
+* pci: fix check of mknod
+* pmdinfogen: fix endianness with cross-compilation
+* pmdinfogen: fix null dereference
+* sched: fix crash when freeing port
+* usertools: fix active interface detection when binding
+* vdev: fix detaching with alias
+* vfio: fix file descriptor leak in multi-process
+* vhost: allow many vhost-user ports
+* vhost: do not GSO when no header is present
+* vhost: fix dead loop in enqueue path
+* vhost: fix guest/host physical address mapping
+* vhost: fix long stall of negotiation
+* vhost: fix memory leak
