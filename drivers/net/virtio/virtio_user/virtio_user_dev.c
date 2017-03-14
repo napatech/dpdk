@@ -230,7 +230,7 @@ virtio_user_dev_init(struct virtio_user_dev *dev, char *path, int queues,
 	parse_mac(dev, mac);
 	dev->vhostfd = -1;
 
-	for (i = 0; i < VIRTIO_MAX_VIRTQUEUES * 2 + 1; ++i) {
+	for (i = 0; i < VIRTIO_MAX_VIRTQUEUES; ++i) {
 		dev->kickfds[i] = -1;
 		dev->callfds[i] = -1;
 	}
