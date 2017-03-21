@@ -323,6 +323,7 @@ pci_scan_one(int dev_pci_fd, struct pci_conf *conf)
 
 	/* device is valid, add in list (sorted) */
 	if (TAILQ_EMPTY(&pci_device_list)) {
+		rte_eal_device_insert(&dev->device);
 		TAILQ_INSERT_TAIL(&pci_device_list, dev, next);
 	}
 	else {
@@ -335,7 +336,7 @@ pci_scan_one(int dev_pci_fd, struct pci_conf *conf)
 				continue;
 			else if (ret < 0) {
 				TAILQ_INSERT_BEFORE(dev2, dev, next);
-				return 0;
+				rte_eal_device_insert(&dev->device);
 			} else { /* already registered */
 				dev2->kdrv = dev->kdrv;
 				dev2->max_vfs = dev->max_vfs;
@@ -343,9 +344,10 @@ pci_scan_one(int dev_pci_fd, struct pci_conf *conf)
 					dev->mem_resource,
 					sizeof(dev->mem_resource));
 				free(dev);
-				return 0;
 			}
+			return 0;
 		}
+		rte_eal_device_insert(&dev->device);
 		TAILQ_INSERT_TAIL(&pci_device_list, dev, next);
 	}
 
