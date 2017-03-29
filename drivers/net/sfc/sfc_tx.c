@@ -253,6 +253,8 @@ sfc_tx_qfini(struct sfc_adapter *sa, unsigned int sw_index)
 	rte_free(txq->pend_desc);
 	sfc_dma_free(sa, &txq->mem);
 	rte_free(txq);
+
+	sfc_ev_qfini(sa, sfc_evq_index_by_txq_sw_index(sa, sw_index));
 }
 
 static int
