@@ -2146,6 +2146,9 @@ i40evf_dev_link_update(struct rte_eth_dev *dev,
 	case I40E_LINK_SPEED_20GB:
 		new_link.link_speed = ETH_SPEED_NUM_20G;
 		break;
+	case I40E_LINK_SPEED_25GB:
+		new_link.link_speed = ETH_SPEED_NUM_25G;
+		break;
 	case I40E_LINK_SPEED_40GB:
 		new_link.link_speed = ETH_SPEED_NUM_40G;
 		break;
