@@ -228,6 +228,7 @@ vhost_user_add_connection(int fd, struct vhost_user_socket *vsocket)
 		RTE_LOG(ERR, VHOST_CONFIG,
 			"failed to add fd %d into vhost server fdset\n",
 			fd);
+		return;
 	}
 
 	pthread_mutex_lock(&vsocket->conn_mutex);
