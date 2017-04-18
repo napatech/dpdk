@@ -1037,6 +1037,8 @@ sfc_rx_fini(struct sfc_adapter *sa)
 			sfc_rx_qfini(sa, sw_index);
 	}
 
+	sa->rss_channels = 0;
+
 	rte_free(sa->rxq_info);
 	sa->rxq_info = NULL;
 	sa->rxq_count = 0;
