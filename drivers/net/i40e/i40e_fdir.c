@@ -1296,23 +1296,29 @@ i40e_fdir_filter_programming(struct i40e_pf *pf,
 	rte_wmb();
 	I40E_PCI_REG_WRITE(txq->qtx_tail, txq->tx_tail);
 
-	for (i = 0; i < I40E_FDIR_WAIT_COUNT; i++) {
-		rte_delay_us(I40E_FDIR_WAIT_INTERVAL_US);
+	for (i = 0; i < (I40E_FDIR_WAIT_COUNT * I40E_FDIR_WAIT_INTERVAL_US); i++) {
 		if ((txdp->cmd_type_offset_bsz &
 				rte_cpu_to_le_64(I40E_TXD_QW1_DTYPE_MASK)) ==
 				rte_cpu_to_le_64(I40E_TX_DESC_DTYPE_DESC_DONE))
 			break;
+		rte_delay_us(1);
 	}
-	if (i >= I40E_FDIR_WAIT_COUNT) {
+	if (i >= (I40E_FDIR_WAIT_COUNT * I40E_FDIR_WAIT_INTERVAL_US)) {
 		PMD_DRV_LOG(ERR, "Failed to program FDIR filter:"
 			    " time out to get DD on tx queue.");
 		return -ETIMEDOUT;
 	}
 	/* totally delay 10 ms to check programming status*/
-	rte_delay_us((I40E_FDIR_WAIT_COUNT - i) * I40E_FDIR_WAIT_INTERVAL_US);
+  uint32_t w;
+	for (w = 0; w < (I40E_FDIR_WAIT_COUNT * I40E_FDIR_WAIT_INTERVAL_US); w++) {
+		if (i40e_check_fdir_programming_status(rxq) >= 0) {
+			break;
+		}
+		rte_delay_us(1);
+	}
 	if (i40e_check_fdir_programming_status(rxq) < 0) {
 		PMD_DRV_LOG(ERR, "Failed to program FDIR filter:"
-			    " programming status reported.");
+				    " programming status reported.");
 		return -ENOSYS;
 	}
 
