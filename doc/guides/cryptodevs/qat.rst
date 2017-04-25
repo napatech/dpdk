@@ -80,6 +80,7 @@ Limitations
 * SNOW 3G (UEA2) and KASUMI (F8) supported only if cipher length, cipher offset fields are byte-aligned.
 * SNOW 3G (UIA2) and KASUMI (F9) supported only if hash length, hash offset fields are byte-aligned.
 * No BSD support as BSD QAT kernel driver not available.
+* Maximum additional authenticated data (AAD) for GCM is 240 bytes long.
 
 
 Installation
