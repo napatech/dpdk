@@ -1550,9 +1550,6 @@ virtio_dev_start(struct rte_eth_dev *dev)
 		}
 	}
 
-	/* Initialize Link state */
-	virtio_dev_link_update(dev, 0);
-
 	/*Notify the backend
 	 *Otherwise the tap backend might already stop its queue due to fullness.
 	 *vhost backend will have no chance to be waked up
@@ -1581,7 +1578,11 @@ virtio_dev_start(struct rte_eth_dev *dev)
 		txvq = dev->data->tx_queues[i];
 		VIRTQUEUE_DUMP(txvq->vq);
 	}
+
 	hw->started = 1;
+
+	/* Initialize Link state */
+	virtio_dev_link_update(dev, 0);
 
 	return 0;
 }
