@@ -2129,6 +2129,7 @@ main(int argc, char** argv)
 			start_packet_forwarding(0);
 		}
 		prompt();
+		pmd_test_exit();
 	} else
 #endif
 	{
