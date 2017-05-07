@@ -453,6 +453,7 @@ int rte_eal_pci_read_config(const struct rte_pci_device *dev,
 			    void *buf, size_t len, off_t offset)
 {
 	int fd = -1;
+	int size;
 	struct pci_io pi = {
 		.pi_sel = {
 			.pc_domain = dev->addr.domain,
@@ -461,13 +462,7 @@ int rte_eal_pci_read_config(const struct rte_pci_device *dev,
 			.pc_func = dev->addr.function,
 		},
 		.pi_reg = offset,
-		.pi_width = len,
 	};
-
-	if (len == 3 || len > sizeof(pi.pi_data)) {
-		RTE_LOG(ERR, EAL, "%s(): invalid pci read length\n", __func__);
-		goto error;
-	}
 
 	fd = open("/dev/pci", O_RDWR);
 	if (fd < 0) {
@@ -475,11 +470,20 @@ int rte_eal_pci_read_config(const struct rte_pci_device *dev,
 		goto error;
 	}
 
-	if (ioctl(fd, PCIOCREAD, &pi) < 0)
-		goto error;
+	while (len > 0) {
+		size = (len >= 4) ? 4 : ((len >= 2) ? 2 : 1);
+		pi.pi_width = size;
+
+		if (ioctl(fd, PCIOCREAD, &pi) < 0)
+			goto error;
+		memcpy(buf, &pi.pi_data, size);
+
+		buf = (char *)buf + size;
+		pi.pi_reg += size;
+		len -= size;
+	}
 	close(fd);
 
-	memcpy(buf, &pi.pi_data, len);
 	return 0;
 
  error:
