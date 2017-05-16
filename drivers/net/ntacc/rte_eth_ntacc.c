@@ -69,7 +69,7 @@ static struct {
    int32_t major;
    int32_t minor;
    int32_t patch;
-} supportedDriver = {3, 6, 0};
+} supportedDriver = {3, 6, 2};
 
 #define NB_SUPPORTED_FPGAS 7
 struct {
@@ -80,13 +80,13 @@ struct {
   uint32_t build:10;
 } supportedAdapters[NB_SUPPORTED_FPGAS] = 
 {
-  { 200, 9500, 8, 3, 0 },
-  { 200, 9501, 8, 3, 0 },
-  { 200, 9502, 8, 3, 0 },
-  { 200, 9503, 8, 3, 0 },
-  { 200, 9505, 8, 3, 0 },
-  { 200, 9508, 7, 6, 0 },
-  { 200, 9512, 8, 3, 0 },
+  { 200, 9500, 6, 7, 0 },
+  { 200, 9501, 6, 6, 0 },
+  { 200, 9502, 6, 7, 0 },
+  { 200, 9503, 6, 5, 0 },
+  { 200, 9505, 6, 5, 0 },
+  { 200, 9508, 6, 6, 0 },
+  { 200, 9512, 7, 2, 0 },
 };
 
 static void *_libnt;
