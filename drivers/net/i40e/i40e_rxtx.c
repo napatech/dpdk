@@ -1728,11 +1728,7 @@ i40e_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	rxq->rx_ring_phys_addr = rte_mem_phy2mch(rz->memseg_id, rz->phys_addr);
 	rxq->rx_ring = (union i40e_rx_desc *)rz->addr;
 
-#ifdef RTE_LIBRTE_I40E_RX_ALLOW_BULK_ALLOC
 	len = (uint16_t)(nb_desc + RTE_PMD_I40E_RX_MAX_BURST);
-#else
-	len = nb_desc;
-#endif
 
 	/* Allocate the software ring. */
 	rxq->sw_ring =
