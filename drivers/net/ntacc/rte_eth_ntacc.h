@@ -39,15 +39,32 @@ int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo);
 struct filter_flow {
   LIST_ENTRY(filter_flow) next;
   uint32_t ntpl_id;
+};
+
+struct filter_hash_s {
+  LIST_ENTRY(filter_hash_s) next;
   uint64_t rss_hf;
+  int priority;
+  uint8_t port;
+  uint32_t ntpl_id;
+};
+
+struct filter_keyset_s {
+  LIST_ENTRY(filter_keyset_s) next;
+  uint32_t ntpl_id1;
+  uint32_t ntpl_id2;
+  uint64_t typeMask;
+  uint8_t  key;
 };
 
 struct rte_flow {
 	LIST_ENTRY(rte_flow) next;
   LIST_HEAD(_filter_flows, filter_flow) ntpl_id;
   uint8_t port;
-  int keyset[12];
-  uint8_t nb_keyset;
+  uint8_t  key;
+  uint64_t typeMask;
+  uint64_t rss_hf;
+  int priority;
 };
 
 enum {

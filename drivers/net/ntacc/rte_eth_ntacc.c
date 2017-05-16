@@ -69,7 +69,7 @@ static struct {
    int32_t major;
    int32_t minor;
    int32_t patch;
-} supportedDriver = {3, 6, 2};
+} supportedDriver = {3, 6, 0};
 
 #define NB_SUPPORTED_FPGAS 7
 struct {
@@ -80,13 +80,13 @@ struct {
   uint32_t build:10;
 } supportedAdapters[NB_SUPPORTED_FPGAS] = 
 {
-  { 200, 9500, 6, 7, 0 },
-  { 200, 9501, 6, 6, 0 },
-  { 200, 9502, 6, 7, 0 },
-  { 200, 9503, 6, 5, 0 },
-  { 200, 9505, 6, 5, 0 },
-  { 200, 9508, 6, 6, 0 },
-  { 200, 9512, 7, 2, 0 },
+  { 200, 9500, 8, 3, 0 },
+  { 200, 9501, 8, 3, 0 },
+  { 200, 9502, 8, 3, 0 },
+  { 200, 9503, 8, 3, 0 },
+  { 200, 9505, 8, 3, 0 },
+  { 200, 9508, 7, 6, 0 },
+  { 200, 9512, 8, 3, 0 },
 };
 
 static void *_libnt;
@@ -337,6 +337,8 @@ static uint16_t eth_ntacc_tx(void *queue,
 
   return i;
 }
+
+#define DO_NOT_CREATE_DEFAULT_FILTER
 
 static int eth_dev_start(struct rte_eth_dev *dev)
 {
@@ -736,11 +738,50 @@ static const char *ActionErrorString(enum rte_flow_action_type type)
   }
 }
 
-static int _cleanUpFlow(uint8_t adapterNo, struct rte_flow *flow)
+static void _cleanUpHash(struct rte_flow *flow, struct pmd_internals *internals)
+{
+  struct rte_flow *pTmp;
+  bool found = false;
+  LIST_FOREACH(pTmp, &internals->flows, next) {
+    printf("_cleanUpHash: Looking for Hash %016llX, %u, %d\n", (long long unsigned int)flow->rss_hf, flow->port, flow->priority);
+    if (pTmp->rss_hf == flow->rss_hf && pTmp->port == flow->port && pTmp->priority == flow->priority) {
+      // Key set is still in use
+      printf("_cleanUpHash: Found Hash (still in use): %016llX, %u, %d\n", (long long unsigned int)flow->rss_hf, flow->port, flow->priority);
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    // Hash is not in use anymore. delete it.
+    DeleteHash(flow->rss_hf, flow->port, flow->priority);
+  }
+}
+
+static void _cleanUpKeySet(int key, struct pmd_internals *internals)
+{
+  struct rte_flow *pTmp;
+  bool found = false;
+  LIST_FOREACH(pTmp, &internals->flows, next) {
+    printf("_cleanUpKeySet: Looking for Key set: %d == %d\n", key, pTmp->key);
+    if (pTmp->key == key) {
+      // Key set is still in use
+      printf("_cleanUpKeySet: Found Key set (still in use): %d\n", pTmp->key);
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    // Key set is not in use anymore. delete it.
+    DeleteKeyset(key);
+    RTE_LOG(DEBUG, PMD, "Returning keyset %u: %d\n", internals->adapterNo, key);
+    ReturnKeysetValue(internals->adapterNo, key);
+  }
+}
+
+static void _cleanUpFlow(struct rte_flow *flow, struct pmd_internals *internals)
 {
   NtNtplInfo_t ntplInfo;
   char ntpl_buf[20];
-  uint8_t i;
 
   LIST_REMOVE(flow, next);
   while (!LIST_EMPTY(&flow->ntpl_id)) {
@@ -748,24 +789,14 @@ static int _cleanUpFlow(uint8_t adapterNo, struct rte_flow *flow)
     id = LIST_FIRST(&flow->ntpl_id);
     sprintf(ntpl_buf, "delete=%d", id->ntpl_id);
     DoNtpl(ntpl_buf, &ntplInfo);
-    if (id->rss_hf == 0) {
-      RTE_LOG(DEBUG, PMD, "Deleting Item filter: %s\n", ntpl_buf);
-    }
-    else {
-      RTE_LOG(DEBUG, PMD, "Deleting Hash filter: %s\n", ntpl_buf);
-    }
+    RTE_LOG(DEBUG, PMD, "Deleting Item filter: %s\n", ntpl_buf);
     LIST_REMOVE(id, next);
     free(id);
   }
-  for (i = 0; i < flow->nb_keyset; i++) {
-    RTE_LOG(DEBUG, PMD, "Returning keyset %u: %d\n", adapterNo, flow->keyset[i]);
-    ReturnKeysetValue(adapterNo, flow->keyset[i]);
-  }
+  _cleanUpKeySet(flow->key, internals);
+  _cleanUpHash(flow, internals);
   free(flow);
-  return 0;
 }
-
-#define MAX_EXTRACTOR_NUM 4
 
 static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                                   const struct rte_flow_attr *attr,
@@ -786,6 +817,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   int version;
   int tunneltype;
   int color = -1;
+  uint64_t typeMask = 0;
 
   char *ntpl_buf = NULL;
   struct rte_flow *flow = NULL;
@@ -884,15 +916,6 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   
   // Set the stream IDs
   CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
-
-  if (rss && rss->rss_conf) {
-    // If RSS is used, then set the Hash mode
-    strcat(ntpl_buf, ";");
-    if (CreateHash(&ntpl_buf[strlen(ntpl_buf)], rss->rss_conf->rss_hf, internals, flow, attr->priority + 1) != 0) {
-      rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Failed setting up hash mode");
-      goto FlowError;
-    }
-  }
   
   // Set the port number
   sprintf(&ntpl_buf[strlen(ntpl_buf)], "]=port==%u", internals->port);
@@ -904,10 +927,9 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
     case RTE_FLOW_ITEM_TYPE_VOID:
       continue;
     case RTE_FLOW_ITEM_TYPE_ETH:
-      if (SetEthernetFilter(&ntpl_buf[strlen(ntpl_buf)], 
-                        &filterContinue, 
-                        items,
-                        tunnel) != 0) {
+      if (SetEthernetFilter(items,
+                            tunnel,
+                            typeMask) != 0) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up Ether filter");
         goto FlowError;
       }
@@ -917,7 +939,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         if (SetIPV4Filter(&ntpl_buf[strlen(ntpl_buf)], 
                           &filterContinue, 
                           items,
-                          tunnel) != 0) {
+                          tunnel,
+                          typeMask) != 0) {
           rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up IPV4 filter");
           goto FlowError;
         }
@@ -927,7 +950,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       if (SetIPV6Filter(&ntpl_buf[strlen(ntpl_buf)], 
                         &filterContinue, 
                         items,
-                        tunnel) != 0) {
+                        tunnel,
+                        typeMask) != 0) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up IPV6 filter");
         goto FlowError;
       }
@@ -937,7 +961,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         if (SetSCTPFilter(&ntpl_buf[strlen(ntpl_buf)], 
                           &filterContinue, 
                           items,
-                          tunnel) != 0) {
+                          tunnel,
+                          typeMask) != 0) {
           rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up TCP filter");
           goto FlowError;
         }
@@ -947,7 +972,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         if (SetTCPFilter(&ntpl_buf[strlen(ntpl_buf)], 
                           &filterContinue, 
                           items,
-                          tunnel) != 0) {
+                          tunnel,
+                          typeMask) != 0) {
           rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up TCP filter");
           goto FlowError;
         }
@@ -957,7 +983,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       if (SetUDPFilter(&ntpl_buf[strlen(ntpl_buf)], 
                         &filterContinue, 
                         items,
-                        tunnel) != 0) {
+                        tunnel,
+                        typeMask) != 0) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up UDP filter");
         goto FlowError;
       }
@@ -967,7 +994,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         if (SetICMPFilter(&ntpl_buf[strlen(ntpl_buf)], 
                           &filterContinue, 
                           items,
-                          tunnel) != 0) {
+                          tunnel,
+                          typeMask) != 0) {
           rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up ICMP filter");
           goto FlowError;
         }
@@ -977,7 +1005,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       if (SetVlanFilter(&ntpl_buf[strlen(ntpl_buf)], 
                         &filterContinue, 
                         items,
-                        tunnel) != 0) {
+                        tunnel,
+                        typeMask) != 0) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up VLAN filter");
         goto FlowError;
       }
@@ -1027,7 +1056,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       if (SetTunnelFilter(&ntpl_buf[strlen(ntpl_buf)], 
                         &filterContinue, 
                         version,
-                        tunneltype) != 0) {
+                        tunneltype,
+                        typeMask) != 0) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up tunnel filter");
         goto FlowError;
       }
@@ -1041,7 +1071,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       }
     }
 
-    if (CreateOptimizedFilter(ntpl_buf, internals, flow, &filterContinue) != 0) {
+    if (CreateOptimizedFilter(ntpl_buf, internals, flow, &filterContinue, typeMask) != 0) {
       rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Filter error");
       goto FlowError;
     }
@@ -1051,7 +1081,15 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       goto FlowError;
     }
 
-    pushNtplID(flow, ntplInfo.ntplId, 0);
+    pushNtplID(flow, ntplInfo.ntplId);
+
+    if (rss && rss->rss_conf) {
+      // If RSS is used, then set the Hash mode
+      if (CreateHash(rss->rss_conf->rss_hf, internals, flow, attr->priority + 1) != 0) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Failed setting up hash mode");
+        goto FlowError;
+      }
+    }
 
     if (ntpl_buf) {
       free(ntpl_buf);
@@ -1078,7 +1116,9 @@ static int _dev_flow_destroy(struct rte_eth_dev *dev,
   struct pmd_internals *internals = dev->data->dev_private;
 
   priv_lock(internals);
-  _cleanUpFlow(internals->adapterNo, flow);
+  _cleanUpFlow(flow, internals);
+
+
   priv_unlock(internals);
   return 0;
 }
@@ -1092,7 +1132,7 @@ static int _dev_flow_flush(struct rte_eth_dev *dev,
   while (!LIST_EMPTY(&internals->flows)) {
     struct rte_flow *flow;
     flow = LIST_FIRST(&internals->flows);
-    _cleanUpFlow(internals->adapterNo, flow);
+    _cleanUpFlow(flow, internals);
   }
   priv_unlock(internals);
   return 0;
