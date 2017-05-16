@@ -1916,7 +1916,7 @@ nfp_net_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 	struct nfp_net_tx_desc *txds;
 	struct rte_mbuf *pkt;
 	uint64_t dma_addr;
-	int pkt_size, dma_size;
+	int pkt_size, pkt_len, dma_size;
 	uint16_t free_descs, issued_descs;
 	struct rte_mbuf **lmbuf;
 	int i;
@@ -1964,6 +1964,8 @@ nfp_net_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		 * Checksum and VLAN flags just in the first descriptor for a
 		 * multisegment packet
 		 */
+
+		txds->data_len = pkt->pkt_len;
 		nfp_net_tx_cksum(txq, txds, pkt);
 
 		if ((pkt->ol_flags & PKT_TX_VLAN_PKT) &&
@@ -1981,6 +1983,7 @@ nfp_net_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		 * then data_len = pkt_len
 		 */
 		pkt_size = pkt->pkt_len;
+		pkt_len = pkt->pkt_len;
 
 		/* Releasing mbuf which was prefetched above */
 		if (*lmbuf)
@@ -1999,7 +2002,7 @@ nfp_net_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
 			/* Filling descriptors fields */
 			txds->dma_len = dma_size;
-			txds->data_len = pkt->pkt_len;
+			txds->data_len = pkt_len;
 			txds->dma_addr_hi = (dma_addr >> 32) & 0xff;
 			txds->dma_addr_lo = (dma_addr & 0xffffffff);
 			ASSERT(free_descs > 0);
