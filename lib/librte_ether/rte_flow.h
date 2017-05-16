@@ -282,6 +282,31 @@ enum rte_flow_item_type {
 	 * See struct rte_flow_item_nvgre.
 	 */
 	RTE_FLOW_ITEM_TYPE_NVGRE,
+
+	/**
+	 * Matches a GREv0 header.
+	 */
+	RTE_FLOW_ITEM_TYPE_GREv0,
+
+	/**
+	 * Matches a GREv1 header.
+	 */
+	RTE_FLOW_ITEM_TYPE_GREv1,
+
+	/**
+	 * Matches a GTPV0_U header.
+	 */
+	RTE_FLOW_ITEM_TYPE_GTPv0_U,
+
+	/**
+	 * Matches a GTPV1_U header.
+	 */
+	RTE_FLOW_ITEM_TYPE_GTPv1_U,
+
+	/**
+	 * Matches a IP in IP header.
+	 */
+	RTE_FLOW_ITEM_TYPE_IPinIP,
 };
 
 /**

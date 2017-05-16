@@ -81,6 +81,21 @@ extern "C" {
 #define RTE_VER_RELEASE 16
 
 /**
+* Extra Napatech major version numbers
+*/
+#define RTE_NT_MAJOR_VER 1
+
+/**
+* Extra Napatech minor version numbers
+*/
+#define RTE_NT_MINOR_VER 0
+
+/**
+* Extra Napatech string to be appended to version number
+*/
+#define RTE_NT_VER_SUFFIX ""
+
+/**
  * Macro to compute a version number usable for comparisons
  */
 #define RTE_VERSION_NUM(a,b,c,d) ((a) << 24 | (b) << 16 | (c) << 8 | (d))
@@ -121,6 +136,14 @@ rte_version(void)
 			RTE_VER_RELEASE < 16 ?
 				RTE_VER_RELEASE :
 				RTE_VER_RELEASE - 16);
+
+	if (strlen(RTE_NT_VER_SUFFIX) == 0) {
+		snprintf(&version[strlen(version)], sizeof(version), "_%d.%d", RTE_NT_MAJOR_VER, RTE_NT_MINOR_VER);
+	} 
+	else {
+		snprintf(&version[strlen(version)], sizeof(version), "_%d.%d-%s", RTE_NT_MAJOR_VER, RTE_NT_MINOR_VER, RTE_NT_VER_SUFFIX);
+	}
+
 	return version;
 }
 
