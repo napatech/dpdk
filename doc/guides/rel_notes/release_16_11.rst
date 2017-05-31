@@ -708,3 +708,124 @@ Fixes in 16.11 LTS Release
 * vhost: fix guest/host physical address mapping
 * vhost: fix long stall of negotiation
 * vhost: fix memory leak
+
+16.11.2
+~~~~~~~
+
+* app/testpmd: fix TC mapping in DCB init config
+* app/testpmd: fix crash at mbuf pool creation
+* app/testpmd: fix exit without freeing resources
+* app/testpmd: fix init config for multi-queue mode
+* app/testpmd: fix number of mbufs in pool
+* app: enable HW CRC strip by default
+* crypto/openssl: fix AAD capabilities for AES-GCM
+* crypto/openssl: fix AES-GCM capability
+* crypto/qat: fix AES-GCM authentication length
+* crypto/qat: fix IV zero physical address
+* crypto/qat: fix dequeue statistics
+* cryptodev: fix API digest length comments
+* doc: add limitation of AAD size to QAT guide
+* doc: explain zlib dependency for bnx2x
+* eal/linux: fix build with glibc 2.25
+* eal: fix debug macro redefinition
+* examples/ip_fragmentation: fix check of packet type
+* examples/l2fwd-crypto: fix AEAD tests when AAD is zero
+* examples/l2fwd-crypto: fix packets array index
+* examples/l2fwd-crypto: fix padding calculation
+* examples/l3fwd-power: fix Rx descriptor size
+* examples/l3fwd-power: fix handling no Rx queue
+* examples/load_balancer: fix Tx flush
+* examples/multi_process: fix timer update
+* examples/performance-thread: fix build on FreeBSD
+* examples/performance-thread: fix build on FreeBSD 10.0
+* examples/performance-thread: fix compilation on Suse 11 SP2
+* examples/quota_watermark: fix requirement for 2M pages
+* examples: enable HW CRC strip by default
+* examples: fix build clean on FreeBSD
+* kni: fix build with kernel 4.11
+* kni: fix crash caused by freeing mempool
+* kni: fix possible memory leak
+* mbuf: fix missing includes in exported header
+* mk: fix lib filtering when linking app
+* mk: fix quoting for ARM mtune argument
+* mk: fix shell errors when building with clang
+* net/bnx2x: fix transmit queue free threshold
+* net/bonding: allow configuring jumbo frames without slaves
+* net/bonding: fix updating slave link status
+* net/cxgbe: fix possible null pointer dereference
+* net/e1000/base: fix multicast setting in VF
+* net/ena: cleanup if refilling of Rx descriptors fails
+* net/ena: fix Rx descriptors allocation
+* net/ena: fix delayed cleanup of Rx descriptors
+* net/ena: fix return of hash control flushing
+* net/fm10k: fix memory overflow in 32-bit SSE Rx
+* net/fm10k: fix pointer cast
+* net/i40e/base: fix potential out of bound array access
+* net/i40e: add missing 25G link speed
+* net/i40e: ensure vector mode is not used with QinQ
+* net/i40e: fix TC bitmap of VEB
+* net/i40e: fix VF link speed
+* net/i40e: fix VF link status update
+* net/i40e: fix allocation check
+* net/i40e: fix compile error
+* net/i40e: fix hash input set on X722
+* net/i40e: fix incorrect packet index reference
+* net/i40e: fix mbuf alloc failed counter
+* net/i40e: fix memory overflow in 32-bit SSE Rx
+* net/i40e: fix setup when bulk is disabled
+* net/igb: fix VF MAC address setting
+* net/igb: fix VF MAC address setting
+* net/ixgbe/base: fix build error
+* net/ixgbe: fix Rx queue blocking issue
+* net/ixgbe: fix TC bandwidth setting
+* net/ixgbe: fix VF Rx mode for allmulticast disabled
+* net/ixgbe: fix all queues drop setting of DCB
+* net/ixgbe: fix memory overflow in 32-bit SSE Rx
+* net/ixgbe: fix multi-queue mode check in SRIOV mode
+* net/ixgbe: fix setting MTU on stopped device
+* net/ixgbevf: set xstats id values
+* net/mlx4: fix Rx after mbuf alloc failure
+* net/mlx4: fix returned values upon failed probing
+* net/mlx4: update link status upon probing with LSC
+* net/mlx5: fix Tx when first segment size is too short
+* net/mlx5: fix VLAN stripping indication
+* net/mlx5: fix an uninitialized variable
+* net/mlx5: fix returned values upon failed probing
+* net/mlx5: fix reusing Rx/Tx queues
+* net/mlx5: fix supported packets types
+* net/nfp: fix packet/data length conversion
+* net/pcap: fix using mbuf after freeing it
+* net/qede/base: fix find zero bit macro
+* net/qede: fix FW version string for VF
+* net/qede: fix default MAC address handling
+* net/qede: fix fastpath rings reset phase
+* net/qede: fix missing UDP protocol in RSS offload types
+* net/thunderx: fix 32-bit build
+* net/thunderx: fix build on FreeBSD
+* net/thunderx: fix deadlock in Rx path
+* net/thunderx: fix stats access out of bounds
+* net/virtio-user: fix address on 32-bit system
+* net/virtio-user: fix overflow
+* net/virtio: disable LSC interrupt if MSIX not enabled
+* net/virtio: fix MSI-X for modern devices
+* net/virtio: fix crash when closing twice
+* net/virtio: fix link status always being up
+* net/virtio: fix link status always down
+* net/virtio: fix queue notify
+* net/vmxnet3: fix build with gcc 7
+* net/vmxnet3: fix queue size changes
+* net: fix stripped VLAN flag for offload emulation
+* nic_uio: fix device binding at boot
+* pci: fix device registration on FreeBSD
+* test/cmdline: fix missing break in switch
+* test/mempool: free mempool on exit
+* test: enable HW CRC strip by default
+* vfio: fix disabling INTx
+* vfio: fix secondary process start
+* vhost: change log levels in client mode
+* vhost: fix dequeue zero copy
+* vhost: fix false sharing
+* vhost: fix fd leaks for vhost-user server mode
+* vhost: fix max queues
+* vhost: fix multiple queue not enabled for old kernels
+* vhost: fix use after free
