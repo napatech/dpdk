@@ -3249,6 +3249,7 @@ ixgbevf_dev_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats,
 
 	/* Extended stats */
 	for (i = 0; i < IXGBEVF_NB_XSTATS; i++) {
+		xstats[i].id = i;
 		xstats[i].value = *(uint64_t *)(((char *)hw_stats) +
 			rte_ixgbevf_stats_strings[i].offset);
 	}
@@ -3824,14 +3825,15 @@ ixgbe_dev_interrupt_action(struct rte_eth_dev *dev,
 			timeout = IXGBE_LINK_DOWN_CHECK_TIMEOUT;
 
 		ixgbe_dev_link_status_print(dev);
-		intr->mask_original = intr->mask;
-		/* only disable lsc interrupt */
-		intr->mask &= ~IXGBE_EIMS_LSC;
 		if (rte_eal_alarm_set(timeout * 1000,
 				      ixgbe_dev_interrupt_delayed_handler, (void *)dev) < 0)
 			PMD_DRV_LOG(ERR, "Error setting alarm");
-		else
-			intr->mask = intr->mask_original;
+		else {
+			/* remember original mask */
+			intr->mask_original = intr->mask;
+			/* only disable lsc interrupt */
+			intr->mask &= ~IXGBE_EIMS_LSC;
+		}
 	}
 
 	PMD_DRV_LOG(DEBUG, "enable intr immediately");
@@ -4376,9 +4378,11 @@ ixgbe_remove_rar(struct rte_eth_dev *dev, uint32_t index)
 static void
 ixgbe_set_default_mac_addr(struct rte_eth_dev *dev, struct ether_addr *addr)
 {
+	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(dev);
+
 	ixgbe_remove_rar(dev, 0);
 
-	ixgbe_add_rar(dev, addr, 0, 0);
+	ixgbe_add_rar(dev, addr, 0, pci_dev->max_vfs);
 }
 
 static bool
@@ -4434,6 +4438,7 @@ ixgbe_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	struct ixgbe_hw *hw;
 	struct rte_eth_dev_info dev_info;
 	uint32_t frame_size = mtu + ETHER_HDR_LEN + ETHER_CRC_LEN;
+	struct rte_eth_rxmode *rx_conf = &dev->data->dev_conf.rxmode;
 
 	ixgbe_dev_info_get(dev, &dev_info);
 
@@ -4444,7 +4449,7 @@ ixgbe_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	/* refuse mtu that requires the support of scattered packets when this
 	 * feature has not been enabled before.
 	 */
-	if (!dev->data->scattered_rx &&
+	if (!rx_conf->enable_scatter &&
 	    (frame_size + 2 * IXGBE_VLAN_TAG_SIZE >
 	     dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM))
 		return -EINVAL;
@@ -6201,6 +6206,7 @@ ixgbevf_dev_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 {
 	struct ixgbe_hw *hw;
 	uint32_t max_frame = mtu + ETHER_HDR_LEN + ETHER_CRC_LEN;
+	struct rte_eth_rxmode *rx_conf = &dev->data->dev_conf.rxmode;
 
 	hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
@@ -6210,7 +6216,7 @@ ixgbevf_dev_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 	/* refuse mtu that requires the support of scattered packets when this
 	 * feature has not been enabled before.
 	 */
-	if (!dev->data->scattered_rx &&
+	if (!rx_conf->enable_scatter &&
 	    (max_frame + 2 * IXGBE_VLAN_TAG_SIZE >
 	     dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM))
 		return -EINVAL;
@@ -8104,7 +8110,7 @@ ixgbevf_dev_allmulticast_disable(struct rte_eth_dev *dev)
 {
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
-	hw->mac.ops.update_xcast_mode(hw, IXGBEVF_XCAST_MODE_NONE);
+	hw->mac.ops.update_xcast_mode(hw, IXGBEVF_XCAST_MODE_MULTI);
 }
 
 static void ixgbevf_mbx_process(struct rte_eth_dev *dev)

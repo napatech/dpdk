@@ -550,8 +550,6 @@ qede_mac_addr_set(struct rte_eth_dev *eth_dev, struct ether_addr *mac_addr)
 {
 	struct qede_dev *qdev = QEDE_INIT_QDEV(eth_dev);
 	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
-	struct ecore_filter_ucast ucast;
-	int rc;
 
 	if (IS_VF(edev) && !ecore_vf_check_mac(ECORE_LEADING_HWFN(edev),
 					       mac_addr->addr_bytes)) {
@@ -561,29 +559,7 @@ qede_mac_addr_set(struct rte_eth_dev *eth_dev, struct ether_addr *mac_addr)
 		return;
 	}
 
-	/* First remove the primary mac */
-	qede_set_ucast_cmn_params(&ucast);
-	ucast.opcode = ECORE_FILTER_REMOVE;
-	ucast.type = ECORE_FILTER_MAC;
-	ether_addr_copy(&qdev->primary_mac,
-			(struct ether_addr *)&ucast.mac);
-	rc = ecore_filter_ucast_cmd(edev, &ucast, ECORE_SPQ_MODE_CB, NULL);
-	if (rc != 0) {
-		DP_ERR(edev, "Unable to remove current macaddr"
-			     " Reverting to previous default mac\n");
-		ether_addr_copy(&qdev->primary_mac,
-				&eth_dev->data->mac_addrs[0]);
-		return;
-	}
-
-	/* Add new MAC */
-	ucast.opcode = ECORE_FILTER_ADD;
-	ether_addr_copy(mac_addr, (struct ether_addr *)&ucast.mac);
-	rc = ecore_filter_ucast_cmd(edev, &ucast, ECORE_SPQ_MODE_CB, NULL);
-	if (rc != 0)
-		DP_ERR(edev, "Unable to add new default mac\n");
-	else
-		ether_addr_copy(mac_addr, &qdev->primary_mac);
+	qede_mac_addr_add(eth_dev, mac_addr, 0, 0);
 }
 
 static void qede_config_accept_any_vlan(struct qede_dev *qdev, bool action)
@@ -797,7 +773,7 @@ static void qede_prandom_bytes(uint32_t *buff)
 		buff[i] = rand();
 }
 
-static int qede_config_rss(struct rte_eth_dev *eth_dev)
+int qede_config_rss(struct rte_eth_dev *eth_dev)
 {
 	struct qede_dev *qdev = QEDE_INIT_QDEV(eth_dev);
 	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
@@ -903,20 +879,8 @@ static int qede_dev_configure(struct rte_eth_dev *eth_dev)
 	if (rc != 0)
 		return rc;
 
-	/* Do RSS configuration after vport-start */
-	switch (rxmode->mq_mode) {
-	case ETH_MQ_RX_RSS:
-		rc = qede_config_rss(eth_dev);
-		if (rc != 0) {
-			qdev->ops->vport_stop(edev, 0);
-			qede_dealloc_fp_resc(eth_dev);
-			return -EINVAL;
-		}
-	break;
-	case ETH_MQ_RX_NONE:
-		DP_INFO(edev, "RSS is disabled\n");
-	break;
-	default:
+	if (!(rxmode->mq_mode == ETH_MQ_RX_RSS ||
+	    rxmode->mq_mode == ETH_MQ_RX_NONE)) {
 		DP_ERR(edev, "Unsupported RSS mode\n");
 		qdev->ops->vport_stop(edev, 0);
 		qede_dealloc_fp_resc(eth_dev);
@@ -924,10 +888,6 @@ static int qede_dev_configure(struct rte_eth_dev *eth_dev)
 	}
 
 	SLIST_INIT(&qdev->vlan_list_head);
-
-	/* Add primary mac for PF */
-	if (IS_PF(edev))
-		qede_mac_addr_set(eth_dev, &qdev->primary_mac);
 
 	/* Enable VLAN offloads by default */
 	qede_vlan_offload_set(eth_dev, ETH_VLAN_STRIP_MASK  |
@@ -1477,6 +1437,8 @@ static void qede_init_rss_caps(uint8_t *rss_caps, uint64_t hf)
 	*rss_caps |= (hf & ETH_RSS_NONFRAG_IPV4_TCP)  ? ECORE_RSS_IPV4_TCP : 0;
 	*rss_caps |= (hf & ETH_RSS_NONFRAG_IPV6_TCP)  ? ECORE_RSS_IPV6_TCP : 0;
 	*rss_caps |= (hf & ETH_RSS_IPV6_TCP_EX)       ? ECORE_RSS_IPV6_TCP : 0;
+	*rss_caps |= (hf & ETH_RSS_NONFRAG_IPV4_UDP)  ? ECORE_RSS_IPV4_UDP : 0;
+	*rss_caps |= (hf & ETH_RSS_NONFRAG_IPV6_UDP)  ? ECORE_RSS_IPV6_UDP : 0;
 }
 
 static int qede_rss_hash_update(struct rte_eth_dev *eth_dev,
@@ -1669,32 +1631,61 @@ static int qede_rss_reta_query(struct rte_eth_dev *eth_dev,
 
 int qede_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 {
-	uint32_t frame_size;
-	struct qede_dev *qdev = dev->data->dev_private;
+	struct qede_dev *qdev = QEDE_INIT_QDEV(dev);
+	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
 	struct rte_eth_dev_info dev_info = {0};
+	struct qede_fastpath *fp;
+	uint32_t frame_size;
+	uint16_t rx_buf_size;
+	uint16_t bufsz;
+	int i;
 
+	PMD_INIT_FUNC_TRACE(edev);
 	qede_dev_info_get(dev, &dev_info);
-
-	/* VLAN_TAG = 4 */
-	frame_size = mtu + ETHER_HDR_LEN + ETHER_CRC_LEN + 4;
-
-	if ((mtu < ETHER_MIN_MTU) || (frame_size > dev_info.max_rx_pktlen))
+	frame_size = mtu + QEDE_ETH_OVERHEAD;
+	if ((mtu < ETHER_MIN_MTU) || (frame_size > dev_info.max_rx_pktlen)) {
+		DP_ERR(edev, "MTU %u out of range\n", mtu);
 		return -EINVAL;
-
+	}
 	if (!dev->data->scattered_rx &&
-	    frame_size > dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM)
+	    frame_size > dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM) {
+		DP_INFO(edev, "MTU greater than minimum RX buffer size of %u\n",
+			dev->data->min_rx_buf_size);
 		return -EINVAL;
-
+	}
+	/* Temporarily replace I/O functions with dummy ones. It cannot
+	 * be set to NULL because rte_eth_rx_burst() doesn't check for NULL.
+	 */
+	dev->rx_pkt_burst = qede_rxtx_pkts_dummy;
+	dev->tx_pkt_burst = qede_rxtx_pkts_dummy;
+	qede_dev_stop(dev);
+	rte_delay_ms(1000);
+	qdev->mtu = mtu;
+	/* Fix up RX buf size for all queues of the port */
+	for_each_queue(i) {
+		fp = &qdev->fp_array[i];
+		if (fp->type & QEDE_FASTPATH_RX) {
+			bufsz = (uint16_t)rte_pktmbuf_data_room_size(
+				fp->rxq->mb_pool) - RTE_PKTMBUF_HEADROOM;
+			if (dev->data->scattered_rx)
+				rx_buf_size = bufsz + QEDE_ETH_OVERHEAD;
+			else
+				rx_buf_size = mtu + QEDE_ETH_OVERHEAD;
+			rx_buf_size = QEDE_CEIL_TO_CACHE_LINE_SIZE(rx_buf_size);
+			fp->rxq->rx_buf_size = rx_buf_size;
+			DP_INFO(edev, "buf_size adjusted to %u\n", rx_buf_size);
+		}
+	}
+	qede_dev_start(dev);
 	if (frame_size > ETHER_MAX_LEN)
 		dev->data->dev_conf.rxmode.jumbo_frame = 1;
 	else
 		dev->data->dev_conf.rxmode.jumbo_frame = 0;
-
 	/* update max frame size */
 	dev->data->dev_conf.rxmode.max_rx_pkt_len = frame_size;
-	qdev->mtu = mtu;
-	qede_dev_stop(dev);
-	qede_dev_start(dev);
+	/* Reassign back */
+	dev->rx_pkt_burst = qede_recv_pkts;
+	dev->tx_pkt_burst = qede_xmit_pkts;
 
 	return 0;
 }

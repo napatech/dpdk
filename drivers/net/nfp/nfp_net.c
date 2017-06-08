@@ -708,7 +708,8 @@ nfp_net_start(struct rte_eth_dev *dev)
 			return -1;
 	}
 
-	nfp_configure_rx_interrupt(dev, intr_handle);
+	if (rte_intr_dp_is_en(intr_handle))
+		nfp_configure_rx_interrupt(dev, intr_handle);
 
 	rte_intr_enable(intr_handle);
 
@@ -1665,16 +1666,22 @@ nfp_net_tx_tso(struct nfp_net_txq *txq, struct nfp_net_tx_desc *txd,
 	struct nfp_net_hw *hw = txq->hw;
 
 	if (!(hw->cap & NFP_NET_CFG_CTRL_LSO))
-		return;
+		goto clean_txd;
 
 	ol_flags = mb->ol_flags;
 
 	if (!(ol_flags & PKT_TX_TCP_SEG))
-		return;
+		goto clean_txd;
 
 	txd->l4_offset = mb->l2_len + mb->l3_len + mb->l4_len;
 	txd->lso = rte_cpu_to_le_16(mb->tso_segsz);
-	txd->flags |= PCIE_DESC_TX_LSO;
+	txd->flags = PCIE_DESC_TX_LSO;
+	return;
+
+clean_txd:
+	txd->flags = 0;
+	txd->l4_offset = 0;
+	txd->lso = 0;
 }
 
 /* nfp_net_tx_cksum - Set TX CSUM offload flags in TX descriptor */
@@ -2096,6 +2103,7 @@ nfp_net_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		 * Checksum and VLAN flags just in the first descriptor for a
 		 * multisegment packet, but TSO info needs to be in all of them.
 		 */
+		txd.data_len = pkt->pkt_len;
 		nfp_net_tx_tso(txq, &txd, pkt);
 		nfp_net_tx_cksum(txq, &txd, pkt);
 
@@ -2112,18 +2120,20 @@ nfp_net_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		 */
 		pkt_size = pkt->pkt_len;
 
-		/* Releasing mbuf which was prefetched above */
-		if (*lmbuf)
-			rte_pktmbuf_free(*lmbuf);
-		/*
-		 * Linking mbuf with descriptor for being released
-		 * next time descriptor is used
-		 */
-		*lmbuf = pkt;
-
 		while (pkt_size) {
 			/* Copying TSO, VLAN and cksum info */
 			*txds = txd;
+
+			/* Releasing mbuf used by this descriptor previously*/
+			if (*lmbuf)
+				rte_pktmbuf_free_seg(*lmbuf);
+
+			/*
+			 * Linking mbuf with descriptor for being released
+			 * next time descriptor is used
+			 */
+			*lmbuf = pkt;
+
 			dma_size = pkt->data_len;
 			dma_addr = rte_mbuf_data_dma_addr(pkt);
 			PMD_TX_LOG(DEBUG, "Working with mbuf at dma address:"
@@ -2131,7 +2141,7 @@ nfp_net_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
 			/* Filling descriptors fields */
 			txds->dma_len = dma_size;
-			txds->data_len = pkt->pkt_len;
+			txds->data_len = txd.data_len;
 			txds->dma_addr_hi = (dma_addr >> 32) & 0xff;
 			txds->dma_addr_lo = (dma_addr & 0xffffffff);
 			ASSERT(free_descs > 0);
@@ -2151,6 +2161,7 @@ nfp_net_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 			}
 			/* Referencing next free TX descriptor */
 			txds = &txq->txds[txq->wr_p];
+			lmbuf = &txq->txbufs[txq->wr_p].mbuf;
 			issued_descs++;
 		}
 		i++;

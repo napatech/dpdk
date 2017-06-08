@@ -296,17 +296,16 @@ struct rte_crypto_auth_xform {
 	 * this specifies the length of the digest to be compared for the
 	 * session.
 	 *
+	 * It is the caller's responsibility to ensure that the
+	 * digest length is compliant with the hash algorithm being used.
 	 * If the value is less than the maximum length allowed by the hash,
-	 * the result shall be truncated.  If the value is greater than the
-	 * maximum length allowed by the hash then an error will be generated
-	 * by *rte_cryptodev_sym_session_create* or by the
-	 * *rte_cryptodev_sym_enqueue_burst* if using session-less APIs.
+	 * the result shall be truncated.
 	 */
 
 	uint32_t add_auth_data_length;
 	/**< The length of the additional authenticated data (AAD) in bytes.
-	 * The maximum permitted value is 240 bytes, unless otherwise specified
-	 * below.
+	 * The maximum permitted value is 65535 (2^16 - 1) bytes, unless
+	 * otherwise specified below.
 	 *
 	 * This field must be specified when the hash algorithm is one of the
 	 * following:
@@ -583,7 +582,9 @@ struct rte_crypto_sym_op {
 			phys_addr_t phys_addr;
 			/**< Physical address of digest */
 			uint16_t length;
-			/**< Length of digest */
+			/**< Length of digest. This must be the same value as
+			 * @ref rte_crypto_auth_xform.digest_length.
+			 */
 		} digest; /**< Digest parameters */
 
 		struct {
@@ -598,7 +599,7 @@ struct rte_crypto_sym_op {
 			 * set up for the session in the @ref
 			 * rte_crypto_auth_xform structure as part of the @ref
 			 * rte_cryptodev_sym_session_create function call.
-			 * This length must not exceed 240 bytes.
+			 * This length must not exceed 65535 (2^16-1) bytes.
 			 *
 			 * Specifically for CCM (@ref RTE_CRYPTO_AUTH_AES_CCM),
 			 * the caller should setup this field as follows:
@@ -631,7 +632,10 @@ struct rte_crypto_sym_op {
 			 * operation, this field is used to pass plaintext.
 			 */
 			phys_addr_t phys_addr;	/**< physical address */
-			uint16_t length;	/**< Length of digest */
+			uint16_t length;
+			/**< Length of additional authenticated data (AAD)
+			 * in bytes
+			 */
 		} aad;
 		/**< Additional authentication parameters */
 	} auth;

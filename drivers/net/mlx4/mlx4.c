@@ -3340,6 +3340,8 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			/* Increase out of memory counters. */
 			++rxq->stats.rx_nombuf;
 			++rxq->priv->dev->data->rx_mbuf_alloc_failed;
+			/* Add SGE to array for repost. */
+			sges[i] = elt->sge;
 			goto repost;
 		}
 
@@ -5553,10 +5555,8 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 	list = ibv_get_device_list(&i);
 	if (list == NULL) {
 		assert(errno);
-		if (errno == ENOSYS) {
-			WARN("cannot list devices, is ib_uverbs loaded?");
-			return 0;
-		}
+		if (errno == ENOSYS)
+			ERROR("cannot list devices, is ib_uverbs loaded?");
 		return -errno;
 	}
 	assert(i >= 0);
@@ -5588,11 +5588,11 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		ibv_free_device_list(list);
 		switch (err) {
 		case 0:
-			WARN("cannot access device, is mlx4_ib loaded?");
-			return 0;
+			ERROR("cannot access device, is mlx4_ib loaded?");
+			return -ENODEV;
 		case EINVAL:
-			WARN("cannot use device, are drivers up to date?");
-			return 0;
+			ERROR("cannot use device, are drivers up to date?");
+			return -EINVAL;
 		}
 		assert(err > 0);
 		return -err;
@@ -5836,6 +5836,9 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		/* Bring Ethernet device up. */
 		DEBUG("forcing Ethernet interface up");
 		priv_set_flags(priv, ~IFF_UP, IFF_UP);
+		/* Update link status once if waiting for LSC. */
+		if (eth_dev->data->dev_flags & RTE_ETH_DEV_INTR_LSC)
+			mlx4_link_update(eth_dev, 0);
 		continue;
 
 port_error:

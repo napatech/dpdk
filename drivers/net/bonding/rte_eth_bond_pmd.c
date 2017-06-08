@@ -1423,9 +1423,11 @@ slave_configure(struct rte_eth_dev *bonded_eth_dev,
 	}
 
 	/* If lsc interrupt is set, check initial slave's link status */
-	if (slave_eth_dev->data->dev_flags & RTE_ETH_DEV_INTR_LSC)
+	if (slave_eth_dev->data->dev_flags & RTE_ETH_DEV_INTR_LSC) {
+		slave_eth_dev->dev_ops->link_update(slave_eth_dev, 0);
 		bond_ethdev_lsc_event_callback(slave_eth_dev->data->port_id,
 			RTE_ETH_EVENT_INTR_LSC, &bonded_eth_dev->data->port_id);
+	}
 
 	return 0;
 }
@@ -1664,8 +1666,9 @@ bond_ethdev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 
 	dev_info->max_mac_addrs = 1;
 
-	dev_info->max_rx_pktlen = internals->candidate_max_rx_pktlen ?
-				  internals->candidate_max_rx_pktlen : 2048;
+	dev_info->max_rx_pktlen = internals->candidate_max_rx_pktlen
+				  ? internals->candidate_max_rx_pktlen
+				  : ETHER_MAX_JUMBO_FRAME_LEN;
 
 	dev_info->max_rx_queues = (uint16_t)128;
 	dev_info->max_tx_queues = (uint16_t)512;

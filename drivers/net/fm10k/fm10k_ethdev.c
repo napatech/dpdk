@@ -1803,7 +1803,8 @@ fm10k_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_id,
 	const struct rte_eth_rxconf *conf, struct rte_mempool *mp)
 {
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct fm10k_dev_info *dev_info = FM10K_DEV_PRIVATE_TO_INFO(dev);
+	struct fm10k_dev_info *dev_info =
+		FM10K_DEV_PRIVATE_TO_INFO(dev->data->dev_private);
 	struct fm10k_rx_queue *q;
 	const struct rte_memzone *mz;
 
@@ -2749,6 +2750,21 @@ fm10k_set_tx_function(struct rte_eth_dev *dev)
 	int use_sse = 1;
 	uint16_t tx_ftag_en = 0;
 
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+		/* primary process has set the ftag flag and txq_flags */
+		txq = dev->data->tx_queues[0];
+		if (fm10k_tx_vec_condition_check(txq)) {
+			dev->tx_pkt_burst = fm10k_xmit_pkts;
+			dev->tx_pkt_prepare = fm10k_prep_pkts;
+			PMD_INIT_LOG(DEBUG, "Use regular Tx func");
+		} else {
+			PMD_INIT_LOG(DEBUG, "Use vector Tx func");
+			dev->tx_pkt_burst = fm10k_xmit_pkts_vec;
+			dev->tx_pkt_prepare = NULL;
+		}
+		return;
+	}
+
 	if (fm10k_check_ftag(dev->device->devargs))
 		tx_ftag_en = 1;
 
@@ -2778,7 +2794,8 @@ fm10k_set_tx_function(struct rte_eth_dev *dev)
 static void __attribute__((cold))
 fm10k_set_rx_function(struct rte_eth_dev *dev)
 {
-	struct fm10k_dev_info *dev_info = FM10K_DEV_PRIVATE_TO_INFO(dev);
+	struct fm10k_dev_info *dev_info =
+		FM10K_DEV_PRIVATE_TO_INFO(dev->data->dev_private);
 	uint16_t i, rx_using_sse;
 	uint16_t rx_ftag_en = 0;
 
@@ -2808,6 +2825,9 @@ fm10k_set_rx_function(struct rte_eth_dev *dev)
 	else
 		PMD_INIT_LOG(DEBUG, "Use regular Rx func");
 
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return;
+
 	for (i = 0; i < dev->data->nb_rx_queues; i++) {
 		struct fm10k_rx_queue *rxq = dev->data->rx_queues[i];
 
@@ -2820,7 +2840,8 @@ static void
 fm10k_params_init(struct rte_eth_dev *dev)
 {
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct fm10k_dev_info *info = FM10K_DEV_PRIVATE_TO_INFO(dev);
+	struct fm10k_dev_info *info =
+		FM10K_DEV_PRIVATE_TO_INFO(dev->data->dev_private);
 
 	/* Inialize bus info. Normally we would call fm10k_get_bus_info(), but
 	 * there is no way to get link status without reading BAR4.  Until this
@@ -2853,9 +2874,15 @@ eth_fm10k_dev_init(struct rte_eth_dev *dev)
 	dev->tx_pkt_burst = &fm10k_xmit_pkts;
 	dev->tx_pkt_prepare = &fm10k_prep_pkts;
 
-	/* only initialize in the primary process */
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+	/*
+	 * Primary process does the whole initialization, for secondary
+	 * processes, we just select the same Rx and Tx function as primary.
+	 */
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+		fm10k_set_rx_function(dev);
+		fm10k_set_tx_function(dev);
 		return 0;
+	}
 
 	rte_eth_copy_pci_info(dev, pdev);
 	dev->data->dev_flags |= RTE_ETH_DEV_DETACHABLE;

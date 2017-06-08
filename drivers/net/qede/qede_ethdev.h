@@ -209,7 +209,7 @@ static void qede_init_rss_caps(uint8_t *rss_caps, uint64_t hf);
 static inline uint32_t qede_rx_cqe_to_pkt_type(uint16_t flags);
 
 /* Non-static functions */
-void qede_init_rss_caps(uint8_t *rss_caps, uint64_t hf);
+int qede_config_rss(struct rte_eth_dev *eth_dev);
 
 int qed_fill_eth_dev_info(struct ecore_dev *edev,
 				 struct qed_dev_eth_info *info);

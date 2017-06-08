@@ -919,7 +919,7 @@ static int ena_start(struct rte_eth_dev *dev)
 
 static int ena_queue_restart(struct ena_ring *ring)
 {
-	int rc;
+	int rc, bufs_num;
 
 	ena_assert_msg(ring->configured == 1,
 		       "Trying to restart unconfigured queue\n");
@@ -930,8 +930,9 @@ static int ena_queue_restart(struct ena_ring *ring)
 	if (ring->type == ENA_RING_TYPE_TX)
 		return 0;
 
-	rc = ena_populate_rx_queue(ring, ring->ring_size);
-	if ((unsigned int)rc != ring->ring_size) {
+	bufs_num = ring->ring_size - 1;
+	rc = ena_populate_rx_queue(ring, bufs_num);
+	if (rc != bufs_num) {
 		PMD_INIT_LOG(ERR, "Failed to populate rx ring !");
 		return (-1);
 	}
@@ -1143,7 +1144,7 @@ static int ena_populate_rx_queue(struct ena_ring *rxq, unsigned int count)
 		return 0;
 
 	in_use = rxq->next_to_use - rxq->next_to_clean;
-	ena_assert_msg(((in_use + count) <= ring_size), "bad ring state");
+	ena_assert_msg(((in_use + count) < ring_size), "bad ring state");
 
 	count = RTE_MIN(count,
 			(uint16_t)(ring_size - (next_to_use & ring_mask)));
@@ -1171,6 +1172,8 @@ static int ena_populate_rx_queue(struct ena_ring *rxq, unsigned int count)
 		rc = ena_com_add_single_rx_desc(rxq->ena_com_io_sq,
 						&ebuf, next_to_use_masked);
 		if (unlikely(rc)) {
+			rte_mempool_put_bulk(rxq->mb_pool, (void **)(&mbuf),
+					     count - i);
 			RTE_LOG(WARNING, PMD, "failed adding rx desc\n");
 			break;
 		}
@@ -1574,11 +1577,12 @@ static uint16_t eth_ena_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		recv_idx++;
 	}
 
+	rx_ring->next_to_clean = next_to_clean;
+
+	desc_in_use = desc_in_use - completed + 1;
 	/* Burst refill to save doorbells, memory barriers, const interval */
 	if (ring_size - desc_in_use > ENA_RING_DESCS_RATIO(ring_size))
 		ena_populate_rx_queue(rx_ring, ring_size - desc_in_use);
-
-	rx_ring->next_to_clean = next_to_clean;
 
 	return recv_idx;
 }

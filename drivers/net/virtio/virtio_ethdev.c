@@ -545,6 +545,9 @@ virtio_free_queues(struct virtio_hw *hw)
 	int queue_type;
 	uint16_t i;
 
+	if (hw->vqs == NULL)
+		return;
+
 	for (i = 0; i < nr_vq; i++) {
 		vq = hw->vqs[i];
 		if (!vq)
@@ -563,9 +566,11 @@ virtio_free_queues(struct virtio_hw *hw)
 		}
 
 		rte_free(vq);
+		hw->vqs[i] = NULL;
 	}
 
 	rte_free(hw->vqs);
+	hw->vqs = NULL;
 }
 
 static int
@@ -1338,11 +1343,12 @@ virtio_init_device(struct rte_eth_dev *eth_dev, uint64_t req_features)
 		rte_eth_copy_pci_info(eth_dev, pci_dev);
 	}
 
-	/* If host does not support status then disable LSC */
-	if (!vtpci_with_feature(hw, VIRTIO_NET_F_STATUS))
-		eth_dev->data->dev_flags &= ~RTE_ETH_DEV_INTR_LSC;
-	else
+	eth_dev->data->dev_flags = RTE_ETH_DEV_DETACHABLE;
+	/* If host does not support both status and MSI-X then disable LSC */
+	if (vtpci_with_feature(hw, VIRTIO_NET_F_STATUS) && hw->use_msix)
 		eth_dev->data->dev_flags |= RTE_ETH_DEV_INTR_LSC;
+	else
+		eth_dev->data->dev_flags &= ~RTE_ETH_DEV_INTR_LSC;
 
 	rx_func_get(eth_dev);
 
@@ -1480,7 +1486,6 @@ int
 eth_virtio_dev_init(struct rte_eth_dev *eth_dev)
 {
 	struct virtio_hw *hw = eth_dev->data->dev_private;
-	uint32_t dev_flags = RTE_ETH_DEV_DETACHABLE;
 	int ret;
 
 	RTE_BUILD_BUG_ON(RTE_PKTMBUF_HEADROOM < sizeof(struct virtio_net_hdr_mrg_rxbuf));
@@ -1520,13 +1525,10 @@ eth_virtio_dev_init(struct rte_eth_dev *eth_dev)
 	 * virtio_user_eth_dev_alloc() before eth_virtio_dev_init() is called.
 	 */
 	if (!hw->virtio_user_dev) {
-		ret = vtpci_init(RTE_DEV_TO_PCI(eth_dev->device), hw,
-				 &dev_flags);
+		ret = vtpci_init(RTE_DEV_TO_PCI(eth_dev->device), hw);
 		if (ret)
 			return ret;
 	}
-
-	eth_dev->data->dev_flags = dev_flags;
 
 	/* reset device and negotiate default features */
 	ret = virtio_init_device(eth_dev, VIRTIO_PMD_DEFAULT_GUEST_FEATURES);

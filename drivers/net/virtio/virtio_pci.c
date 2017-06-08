@@ -50,6 +50,7 @@
  */
 #define PCI_CAPABILITY_LIST	0x34
 #define PCI_CAP_ID_VNDR		0x09
+#define PCI_CAP_ID_MSIX		0x11
 
 /*
  * The remaining space is defined by each driver as the per-driver
@@ -304,21 +305,6 @@ legacy_virtio_has_msix(const struct rte_pci_addr *loc __rte_unused)
 }
 #endif
 
-static int
-legacy_virtio_resource_init(struct rte_pci_device *pci_dev,
-			    struct virtio_hw *hw, uint32_t *dev_flags)
-{
-	if (rte_eal_pci_ioport_map(pci_dev, 0, VTPCI_IO(hw)) < 0)
-		return -1;
-
-	if (pci_dev->intr_handle.type != RTE_INTR_HANDLE_UNKNOWN)
-		*dev_flags |= RTE_ETH_DEV_INTR_LSC;
-	else
-		*dev_flags &= ~RTE_ETH_DEV_INTR_LSC;
-
-	return 0;
-}
-
 const struct virtio_pci_ops legacy_ops = {
 	.read_dev_cfg	= legacy_read_dev_config,
 	.write_dev_cfg	= legacy_write_dev_config,
@@ -504,7 +490,7 @@ modern_del_queue(struct virtio_hw *hw, struct virtqueue *vq)
 static void
 modern_notify_queue(struct virtio_hw *hw __rte_unused, struct virtqueue *vq)
 {
-	rte_write16(1, vq->notify_addr);
+	rte_write16(vq->vq_queue_index, vq->notify_addr);
 }
 
 const struct virtio_pci_ops modern_ops = {
@@ -650,6 +636,9 @@ virtio_read_caps(struct rte_pci_device *dev, struct virtio_hw *hw)
 			break;
 		}
 
+		if (cap.cap_vndr == PCI_CAP_ID_MSIX)
+			hw->use_msix = 1;
+
 		if (cap.cap_vndr != PCI_CAP_ID_VNDR) {
 			PMD_INIT_LOG(DEBUG,
 				"[%2x] skipping non VNDR cap id: %02x",
@@ -708,8 +697,7 @@ next:
  * Return 0 on success.
  */
 int
-vtpci_init(struct rte_pci_device *dev, struct virtio_hw *hw,
-	   uint32_t *dev_flags)
+vtpci_init(struct rte_pci_device *dev, struct virtio_hw *hw)
 {
 	/*
 	 * Try if we can succeed reading virtio pci caps, which exists
@@ -720,12 +708,11 @@ vtpci_init(struct rte_pci_device *dev, struct virtio_hw *hw,
 		PMD_INIT_LOG(INFO, "modern virtio pci detected.");
 		virtio_hw_internal[hw->port_id].vtpci_ops = &modern_ops;
 		hw->modern = 1;
-		*dev_flags |= RTE_ETH_DEV_INTR_LSC;
 		return 0;
 	}
 
 	PMD_INIT_LOG(INFO, "trying with legacy virtio pci.");
-	if (legacy_virtio_resource_init(dev, hw, dev_flags) < 0) {
+	if (rte_eal_pci_ioport_map(dev, 0, VTPCI_IO(hw)) < 0) {
 		if (dev->kdrv == RTE_KDRV_UNKNOWN &&
 		    (!dev->device.devargs ||
 		     dev->device.devargs->type !=

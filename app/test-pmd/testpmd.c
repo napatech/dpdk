@@ -573,7 +573,7 @@ init_config(void)
 		uint8_t i;
 		unsigned int nb_mbuf;
 
-		if (param_total_num_mbufs)
+		if (param_total_num_mbufs && nb_ports != 0)
 			nb_mbuf_per_pool = nb_mbuf_per_pool/nb_ports;
 
 		for (i = 0; i < max_socket; i++) {
@@ -1835,22 +1835,11 @@ init_port_config(void)
 			port->dev_conf.rx_adv_conf.rss_conf.rss_hf = 0;
 		}
 
-		if (port->dcb_flag == 0 && port->dev_info.max_vfs == 0) {
+		if (port->dcb_flag == 0) {
 			if( port->dev_conf.rx_adv_conf.rss_conf.rss_hf != 0)
 				port->dev_conf.rxmode.mq_mode = ETH_MQ_RX_RSS;
 			else
 				port->dev_conf.rxmode.mq_mode = ETH_MQ_RX_NONE;
-		}
-
-		if (port->dev_info.max_vfs != 0) {
-			if (port->dev_conf.rx_adv_conf.rss_conf.rss_hf != 0)
-				port->dev_conf.rxmode.mq_mode =
-					ETH_MQ_RX_VMDQ_RSS;
-			else
-				port->dev_conf.rxmode.mq_mode =
-					ETH_MQ_RX_NONE;
-
-			port->dev_conf.txmode.mq_mode = ETH_MQ_TX_NONE;
 		}
 
 		rxtx_port_config(port);
@@ -1944,9 +1933,9 @@ get_eth_dcb_conf(struct rte_eth_conf *eth_conf,
 		rx_conf->nb_tcs = num_tcs;
 		tx_conf->nb_tcs = num_tcs;
 
-		for (i = 0; i < num_tcs; i++) {
-			rx_conf->dcb_tc[i] = i;
-			tx_conf->dcb_tc[i] = i;
+		for (i = 0; i < ETH_DCB_NUM_USER_PRIORITIES; i++) {
+			rx_conf->dcb_tc[i] = i % num_tcs;
+			tx_conf->dcb_tc[i] = i % num_tcs;
 		}
 		eth_conf->rxmode.mq_mode = ETH_MQ_RX_DCB_RSS;
 		eth_conf->rx_adv_conf.rss_conf.rss_hf = rss_hf;
@@ -2146,6 +2135,7 @@ main(int argc, char** argv)
 			start_packet_forwarding(0);
 		}
 		prompt();
+		pmd_test_exit();
 	} else
 #endif
 	{

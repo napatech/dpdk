@@ -3375,7 +3375,6 @@ ixgbe_dcb_tx_hw_config(struct rte_eth_dev *dev,
 		       struct ixgbe_dcb_config *dcb_config)
 {
 	uint32_t reg;
-	uint32_t q;
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
 	PMD_INIT_FUNC_TRACE();
@@ -3394,18 +3393,6 @@ ixgbe_dcb_tx_hw_config(struct rte_eth_dev *dev,
 		if (dcb_config->vt_mode)
 			reg |= IXGBE_MTQC_VT_ENA;
 		IXGBE_WRITE_REG(hw, IXGBE_MTQC, reg);
-
-		if (RTE_ETH_DEV_SRIOV(dev).active == 0) {
-			/* Disable drop for all queues in VMDQ mode*/
-			for (q = 0; q < 128; q++)
-				IXGBE_WRITE_REG(hw, IXGBE_QDE,
-						(IXGBE_QDE_WRITE | (q << IXGBE_QDE_IDX_SHIFT)));
-		} else {
-			/* Enable drop for all queues in SRIOV mode */
-			for (q = 0; q < 128; q++)
-				IXGBE_WRITE_REG(hw, IXGBE_QDE,
-						(IXGBE_QDE_WRITE | (q << IXGBE_QDE_IDX_SHIFT) | IXGBE_QDE_ENABLE));
-		}
 
 		/* Enable the Tx desc arbiter */
 		reg = IXGBE_READ_REG(hw, IXGBE_RTTDCS);
@@ -3540,16 +3527,18 @@ ixgbe_dcb_tx_config(struct rte_eth_dev *dev,
 
 /**
  * ixgbe_dcb_rx_hw_config - Configure general DCB RX HW parameters
- * @hw: pointer to hardware structure
+ * @dev: pointer to eth_dev structure
  * @dcb_config: pointer to ixgbe_dcb_config structure
  */
 static void
-ixgbe_dcb_rx_hw_config(struct ixgbe_hw *hw,
-	       struct ixgbe_dcb_config *dcb_config)
+ixgbe_dcb_rx_hw_config(struct rte_eth_dev *dev,
+		       struct ixgbe_dcb_config *dcb_config)
 {
 	uint32_t reg;
 	uint32_t vlanctrl;
 	uint8_t i;
+	uint32_t q;
+	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
 	PMD_INIT_FUNC_TRACE();
 	/*
@@ -3587,6 +3576,21 @@ ixgbe_dcb_rx_hw_config(struct ixgbe_hw *hw,
 		}
 
 		IXGBE_WRITE_REG(hw, IXGBE_MRQC, reg);
+
+		if (RTE_ETH_DEV_SRIOV(dev).active == 0) {
+			/* Disable drop for all queues in VMDQ mode*/
+			for (q = 0; q < IXGBE_MAX_RX_QUEUE_NUM; q++)
+				IXGBE_WRITE_REG(hw, IXGBE_QDE,
+						(IXGBE_QDE_WRITE |
+						 (q << IXGBE_QDE_IDX_SHIFT)));
+		} else {
+			/* Enable drop for all queues in SRIOV mode */
+			for (q = 0; q < IXGBE_MAX_RX_QUEUE_NUM; q++)
+				IXGBE_WRITE_REG(hw, IXGBE_QDE,
+						(IXGBE_QDE_WRITE |
+						 (q << IXGBE_QDE_IDX_SHIFT) |
+						 IXGBE_QDE_ENABLE));
+		}
 	}
 
 	/* VLNCTRL: enable vlan filtering and allow all vlan tags through */
@@ -3699,7 +3703,7 @@ ixgbe_dcb_hw_configure(struct rte_eth_dev *dev,
 		/* Get dcb TX configuration parameters from rte_eth_conf */
 		ixgbe_dcb_rx_config(dev, dcb_config);
 		/*Configure general DCB RX parameters*/
-		ixgbe_dcb_rx_hw_config(hw, dcb_config);
+		ixgbe_dcb_rx_hw_config(dev, dcb_config);
 		break;
 	default:
 		PMD_INIT_LOG(ERR, "Incorrect DCB RX mode configuration");
@@ -3757,6 +3761,15 @@ ixgbe_dcb_hw_configure(struct rte_eth_dev *dev,
 			tc = &dcb_config->tc_config[i];
 			tc->path[IXGBE_DCB_TX_CONFIG].bwg_percent = 0;
 			tc->path[IXGBE_DCB_RX_CONFIG].bwg_percent = 0;
+		}
+	} else {
+		/* Re-configure 8 TCs BW */
+		for (i = 0; i < nb_tcs; i++) {
+			tc = &dcb_config->tc_config[i];
+			tc->path[IXGBE_DCB_TX_CONFIG].bwg_percent =
+				(uint8_t)(100 / nb_tcs + (i & 1));
+			tc->path[IXGBE_DCB_RX_CONFIG].bwg_percent =
+				(uint8_t)(100 / nb_tcs + (i & 1));
 		}
 	}
 
@@ -4135,9 +4148,8 @@ ixgbe_dev_mq_rx_configure(struct rte_eth_dev *dev)
 			break;
 		}
 	} else {
-		/*
-		 * SRIOV active scheme
-		 * Support RSS together with VMDq & SRIOV
+		/* SRIOV active scheme
+		 * Support RSS together with SRIOV.
 		 */
 		switch (dev->data->dev_conf.rxmode.mq_mode) {
 		case ETH_MQ_RX_RSS:
@@ -4145,10 +4157,13 @@ ixgbe_dev_mq_rx_configure(struct rte_eth_dev *dev)
 			ixgbe_config_vf_rss(dev);
 			break;
 		case ETH_MQ_RX_VMDQ_DCB:
+		case ETH_MQ_RX_DCB:
+		/* In SRIOV, the configuration is the same as VMDq case */
 			ixgbe_vmdq_dcb_configure(dev);
 			break;
-		/* FIXME if support DCB/RSS together with VMDq & SRIOV */
+		/* DCB/RSS together with SRIOV is not supported */
 		case ETH_MQ_RX_VMDQ_DCB_RSS:
+		case ETH_MQ_RX_DCB_RSS:
 			PMD_INIT_LOG(ERR,
 				"Could not support DCB/RSS with VMDq & SRIOV");
 			return -1;

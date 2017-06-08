@@ -1772,13 +1772,11 @@ i40e_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	/* Allocate the maximun number of RX ring hardware descriptor. */
 	len = I40E_MAX_RING_DESC;
 
-#ifdef RTE_LIBRTE_I40E_RX_ALLOW_BULK_ALLOC
 	/**
 	 * Allocating a little more memory because vectorized/bulk_alloc Rx
 	 * functions doesn't check boundaries each time.
 	 */
 	len += RTE_PMD_I40E_RX_MAX_BURST;
-#endif
 
 	ring_size = RTE_ALIGN(len * sizeof(union i40e_rx_desc),
 			      I40E_DMA_MEM_ALIGN);
@@ -1797,11 +1795,7 @@ i40e_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	rxq->rx_ring_phys_addr = rte_mem_phy2mch(rz->memseg_id, rz->phys_addr);
 	rxq->rx_ring = (union i40e_rx_desc *)rz->addr;
 
-#ifdef RTE_LIBRTE_I40E_RX_ALLOW_BULK_ALLOC
 	len = (uint16_t)(nb_desc + RTE_PMD_I40E_RX_MAX_BURST);
-#else
-	len = nb_desc;
-#endif
 
 	/* Allocate the software ring. */
 	rxq->sw_ring =
@@ -2209,11 +2203,11 @@ i40e_reset_rx_queue(struct i40e_rx_queue *rxq)
 	for (i = 0; i < len * sizeof(union i40e_rx_desc); i++)
 		((volatile char *)rxq->rx_ring)[i] = 0;
 
-#ifdef RTE_LIBRTE_I40E_RX_ALLOW_BULK_ALLOC
 	memset(&rxq->fake_mbuf, 0x0, sizeof(rxq->fake_mbuf));
 	for (i = 0; i < RTE_PMD_I40E_RX_MAX_BURST; ++i)
 		rxq->sw_ring[rxq->nb_rx_desc + i].mbuf = &rxq->fake_mbuf;
 
+#ifdef RTE_LIBRTE_I40E_RX_ALLOW_BULK_ALLOC
 	rxq->rx_nb_avail = 0;
 	rxq->rx_next_avail = 0;
 	rxq->rx_free_trigger = (uint16_t)(rxq->rx_free_thresh - 1);

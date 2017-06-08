@@ -258,8 +258,7 @@ sfc_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 
 		if (scatter_pkt != NULL) {
 			if (rte_pktmbuf_chain(scatter_pkt, m) != 0) {
-				rte_mempool_put(rxq->refill_mb_pool,
-						scatter_pkt);
+				rte_pktmbuf_free(scatter_pkt);
 				goto discard;
 			}
 			/* The packet to deliver */
@@ -761,6 +760,8 @@ sfc_rx_qfini(struct sfc_adapter *sa, unsigned int sw_index)
 	rte_free(rxq->sw_desc);
 	sfc_dma_free(sa, &rxq->mem);
 	rte_free(rxq);
+
+	sfc_ev_qfini(sa, sfc_evq_index_by_rxq_sw_index(sa, sw_index));
 }
 
 #if EFSYS_OPT_RX_SCALE
@@ -1035,6 +1036,8 @@ sfc_rx_fini(struct sfc_adapter *sa)
 		if (sa->rxq_info[sw_index].rxq != NULL)
 			sfc_rx_qfini(sa, sw_index);
 	}
+
+	sa->rss_channels = 0;
 
 	rte_free(sa->rxq_info);
 	sa->rxq_info = NULL;

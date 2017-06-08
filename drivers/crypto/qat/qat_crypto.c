@@ -1105,17 +1105,24 @@ qat_write_hw_desc_entry(struct rte_crypto_op *op, uint8_t *out_msg,
 		}
 
 		/* copy IV into request if it fits */
-		if (op->sym->cipher.iv.length && (op->sym->cipher.iv.length <=
-				sizeof(cipher_param->u.cipher_IV_array))) {
-			rte_memcpy(cipher_param->u.cipher_IV_array,
-					op->sym->cipher.iv.data,
-					op->sym->cipher.iv.length);
-		} else {
-			ICP_QAT_FW_LA_CIPH_IV_FLD_FLAG_SET(
-					qat_req->comn_hdr.serv_specif_flags,
-					ICP_QAT_FW_CIPH_IV_64BIT_PTR);
-			cipher_param->u.s.cipher_IV_ptr =
-					op->sym->cipher.iv.phys_addr;
+		/*
+		 * If IV length is zero do not copy anything but still
+		 * use request descriptor embedded IV
+		 *
+		 */
+		if (op->sym->cipher.iv.length) {
+			if (op->sym->cipher.iv.length <=
+					sizeof(cipher_param->u.cipher_IV_array)) {
+				rte_memcpy(cipher_param->u.cipher_IV_array,
+						op->sym->cipher.iv.data,
+						op->sym->cipher.iv.length);
+			} else {
+				ICP_QAT_FW_LA_CIPH_IV_FLD_FLAG_SET(
+						qat_req->comn_hdr.serv_specif_flags,
+						ICP_QAT_FW_CIPH_IV_64BIT_PTR);
+				cipher_param->u.s.cipher_IV_ptr =
+						op->sym->cipher.iv.phys_addr;
+			}
 		}
 		min_ofs = cipher_ofs;
 	}
@@ -1146,6 +1153,12 @@ qat_write_hw_desc_entry(struct rte_crypto_op *op, uint8_t *out_msg,
 				}
 			}
 
+		} else if (ctx->qat_hash_alg ==
+					ICP_QAT_HW_AUTH_ALGO_GALOIS_128 ||
+				ctx->qat_hash_alg ==
+					ICP_QAT_HW_AUTH_ALGO_GALOIS_64) {
+			auth_ofs = op->sym->cipher.data.offset;
+			auth_len = op->sym->cipher.data.length;
 		} else {
 			auth_ofs = op->sym->auth.data.offset;
 			auth_len = op->sym->auth.data.length;
@@ -1393,9 +1406,9 @@ void qat_crypto_sym_stats_get(struct rte_cryptodev *dev,
 		}
 
 		stats->enqueued_count += qp[i]->stats.enqueued_count;
-		stats->dequeued_count += qp[i]->stats.enqueued_count;
+		stats->dequeued_count += qp[i]->stats.dequeued_count;
 		stats->enqueue_err_count += qp[i]->stats.enqueue_err_count;
-		stats->dequeue_err_count += qp[i]->stats.enqueue_err_count;
+		stats->dequeue_err_count += qp[i]->stats.dequeue_err_count;
 	}
 }
 

@@ -1340,12 +1340,17 @@ int qede_dev_start(struct rte_eth_dev *eth_dev)
 		return rc;
 	}
 
+	/* Newer SR-IOV PF driver expects RX/TX queues to be started before
+	 * enabling RSS. Hence RSS configuration is deferred upto this point.
+	 * Also, we would like to retain similar behavior in PF case, so we
+	 * don't do PF/VF specific check here.
+	 */
+	if (eth_dev->data->dev_conf.rxmode.mq_mode  == ETH_MQ_RX_RSS)
+		if (qede_config_rss(eth_dev))
+			return -1;
+
 	/* Bring-up the link */
 	qede_dev_set_link_state(eth_dev, true);
-
-	/* Reset ring */
-	if (qede_reset_fp_rings(qdev))
-		return -ENOMEM;
 
 	/* Start/resume traffic */
 	qdev->ops->fastpath_start(edev);
@@ -1515,6 +1520,7 @@ int qede_reset_fp_rings(struct qede_dev *qdev)
 			}
 		}
 	}
+	qede_reset_fp_rings(qdev);
 
 	return 0;
 }
@@ -1572,4 +1578,12 @@ void qede_dev_stop(struct rte_eth_dev *eth_dev)
 	qdev->state = QEDE_DEV_STOP;
 
 	DP_INFO(edev, "dev_state is QEDE_DEV_STOP\n");
+}
+
+uint16_t
+qede_rxtx_pkts_dummy(__rte_unused void *p_rxq,
+		     __rte_unused struct rte_mbuf **pkts,
+		     __rte_unused uint16_t nb_pkts)
+{
+	return 0;
 }

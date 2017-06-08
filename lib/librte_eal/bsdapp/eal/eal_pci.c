@@ -314,6 +314,7 @@ pci_scan_one(int dev_pci_fd, struct pci_conf *conf)
 
 	/* device is valid, add in list (sorted) */
 	if (TAILQ_EMPTY(&pci_device_list)) {
+		rte_eal_device_insert(&dev->device);
 		TAILQ_INSERT_TAIL(&pci_device_list, dev, next);
 	}
 	else {
@@ -326,7 +327,7 @@ pci_scan_one(int dev_pci_fd, struct pci_conf *conf)
 				continue;
 			else if (ret < 0) {
 				TAILQ_INSERT_BEFORE(dev2, dev, next);
-				return 0;
+				rte_eal_device_insert(&dev->device);
 			} else { /* already registered */
 				dev2->kdrv = dev->kdrv;
 				dev2->max_vfs = dev->max_vfs;
@@ -334,9 +335,10 @@ pci_scan_one(int dev_pci_fd, struct pci_conf *conf)
 					dev->mem_resource,
 					sizeof(dev->mem_resource));
 				free(dev);
-				return 0;
 			}
+			return 0;
 		}
+		rte_eal_device_insert(&dev->device);
 		TAILQ_INSERT_TAIL(&pci_device_list, dev, next);
 	}
 
@@ -451,6 +453,7 @@ int rte_eal_pci_read_config(const struct rte_pci_device *dev,
 			    void *buf, size_t len, off_t offset)
 {
 	int fd = -1;
+	int size;
 	struct pci_io pi = {
 		.pi_sel = {
 			.pc_domain = dev->addr.domain,
@@ -459,13 +462,7 @@ int rte_eal_pci_read_config(const struct rte_pci_device *dev,
 			.pc_func = dev->addr.function,
 		},
 		.pi_reg = offset,
-		.pi_width = len,
 	};
-
-	if (len == 3 || len > sizeof(pi.pi_data)) {
-		RTE_LOG(ERR, EAL, "%s(): invalid pci read length\n", __func__);
-		goto error;
-	}
 
 	fd = open("/dev/pci", O_RDWR);
 	if (fd < 0) {
@@ -473,11 +470,20 @@ int rte_eal_pci_read_config(const struct rte_pci_device *dev,
 		goto error;
 	}
 
-	if (ioctl(fd, PCIOCREAD, &pi) < 0)
-		goto error;
+	while (len > 0) {
+		size = (len >= 4) ? 4 : ((len >= 2) ? 2 : 1);
+		pi.pi_width = size;
+
+		if (ioctl(fd, PCIOCREAD, &pi) < 0)
+			goto error;
+		memcpy(buf, &pi.pi_data, size);
+
+		buf = (char *)buf + size;
+		pi.pi_reg += size;
+		len -= size;
+	}
 	close(fd);
 
-	memcpy(buf, &pi.pi_data, len);
 	return 0;
 
  error:
@@ -610,13 +616,13 @@ pci_uio_ioport_write(struct rte_pci_ioport *p,
 	for (s = data; len > 0; s += size, reg += size, len -= size) {
 		if (len >= 4) {
 			size = 4;
-			outl(*(const uint32_t *)s, reg);
+			outl(reg, *(const uint32_t *)s);
 		} else if (len >= 2) {
 			size = 2;
-			outw(*(const uint16_t *)s, reg);
+			outw(reg, *(const uint16_t *)s);
 		} else {
 			size = 1;
-			outb(*s, reg);
+			outb(reg, *s);
 		}
 	}
 #else

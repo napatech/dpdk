@@ -472,6 +472,19 @@ cperf_throughput_test_runner(void *test_ctx)
 			}
 		}
 
+			/**
+			 * When ops_needed is smaller than ops_enqd, the
+			 * unused ops need to be moved to the front for
+			 * next round use.
+			 */
+			if (unlikely(ops_enqd > ops_needed)) {
+				size_t nb_b_to_mov = ops_unused * sizeof(
+						struct rte_crypto_op *);
+
+				memmove(&ops[ops_needed], &ops[ops_enqd],
+					nb_b_to_mov);
+			}
+
 #ifdef CPERF_LINEARIZATION_ENABLE
 		if (linearize) {
 			/* PMD doesn't support scatter-gather and source buffer

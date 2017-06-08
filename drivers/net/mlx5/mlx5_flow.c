@@ -902,6 +902,12 @@ priv_flow_create_action_queue(struct priv *priv,
 						 .pd = priv->pd,
 						 .cq = rte_flow->cq,
 						 });
+		if (!rte_flow->wq) {
+			rte_flow_error_set(error, ENOMEM,
+					   RTE_FLOW_ERROR_TYPE_HANDLE,
+					   NULL, "cannot allocate WQ");
+			goto error;
+		}
 	} else {
 		rxq = container_of((*priv->rxqs)[action->queue_id],
 				   struct rxq_ctrl, rxq);
@@ -968,7 +974,6 @@ error:
 		ibv_exp_destroy_wq(rte_flow->wq);
 	if (!rte_flow->rxq && rte_flow->cq)
 		ibv_destroy_cq(rte_flow->cq);
-	rte_free(rte_flow->ibv_attr);
 	rte_free(rte_flow);
 	return NULL;
 }
@@ -1062,6 +1067,8 @@ priv_flow_create(struct priv *priv,
 	}
 	rte_flow = priv_flow_create_action_queue(priv, flow.ibv_attr,
 						 &action, error);
+	if (!rte_flow)
+		goto exit;
 	return rte_flow;
 exit:
 	rte_free(flow.ibv_attr);

@@ -517,6 +517,10 @@ l2fwd_simple_crypto_enqueue(struct rte_mbuf *m,
 			op->sym->auth.aad.data = cparams->aad.data;
 			op->sym->auth.aad.phys_addr = cparams->aad.phys_addr;
 			op->sym->auth.aad.length = cparams->aad.length;
+		} else {
+			op->sym->auth.aad.data = NULL;
+			op->sym->auth.aad.phys_addr = 0;
+			op->sym->auth.aad.length = 0;
 		}
 	}
 
@@ -717,7 +721,8 @@ l2fwd_main_loop(struct l2fwd_crypto_options *options)
 					generate_random_key(port_cparams[i].aad.data,
 						port_cparams[i].aad.length);
 
-			}
+			} else
+				port_cparams[i].aad.length = 0;
 
 			if (options->auth_xform.auth.op == RTE_CRYPTO_AUTH_OP_VERIFY)
 				port_cparams[i].hash_verify = 1;
@@ -828,7 +833,7 @@ l2fwd_main_loop(struct l2fwd_crypto_options *options)
 						ops_burst, nb_rx) !=
 								nb_rx) {
 					for (j = 0; j < nb_rx; j++)
-						rte_pktmbuf_free(pkts_burst[i]);
+						rte_pktmbuf_free(pkts_burst[j]);
 
 					nb_rx = 0;
 				}
@@ -1711,7 +1716,6 @@ initialize_cryptodevs(struct l2fwd_crypto_options *options, unsigned nb_ports,
 				continue;
 			}
 
-			options->block_size = cap->sym.auth.block_size;
 			/*
 			 * Check if length of provided AAD is supported
 			 * by the algorithm chosen.
