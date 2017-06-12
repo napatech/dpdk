@@ -34,20 +34,37 @@
 #ifndef __RTE_ETH_NTACC_H__
 #define __RTE_ETH_NTACC_H__
 
-int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo);
-
 struct filter_flow {
   LIST_ENTRY(filter_flow) next;
   uint32_t ntpl_id;
+};
+
+struct filter_hash_s {
+  LIST_ENTRY(filter_hash_s) next;
   uint64_t rss_hf;
+  int priority;
+  uint8_t port;
+  uint32_t ntpl_id;
+};
+
+struct filter_keyset_s {
+  LIST_ENTRY(filter_keyset_s) next;
+  uint32_t ntpl_id1;
+  uint32_t ntpl_id2;
+  uint64_t typeMask;
+  uint8_t  key;
+  uint8_t nb_queues;
+  uint8_t list_queues[RTE_ETHDEV_QUEUE_STAT_CNTRS];
 };
 
 struct rte_flow {
 	LIST_ENTRY(rte_flow) next;
   LIST_HEAD(_filter_flows, filter_flow) ntpl_id;
   uint8_t port;
-  int keyset[12];
-  uint8_t nb_keyset;
+  uint8_t  key;
+  uint64_t typeMask;
+  uint64_t rss_hf;
+  int priority;
 };
 
 enum {
@@ -112,7 +129,10 @@ struct pmd_internals {
     int32_t minor;
     int32_t patch;
   } version;
+  char                  *ntpl_file;
 };
+
+int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo, struct pmd_internals *internals);
 
 #endif
 

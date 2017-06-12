@@ -36,23 +36,26 @@
 
 bool CheckFeatureLevel(uint32_t level);
 
-int CreateHash(char *ntpl_buf, uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow *flow, int priority);
+int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow *flow, int priority);
 void CreateStreamid(char *ntpl_buf, struct pmd_internals *internals, uint32_t nb_queues, uint8_t *list_queues);
 int ReturnKeysetValue(uint8_t adapterNo, int value);
-void pushNtplID(struct rte_flow *flow, uint32_t ntplId, uint64_t rss_hf);
+void pushNtplID(struct rte_flow *flow, uint32_t ntplId);
 
-int SetEthernetFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnel);
-int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnel);
-int SetIPV6Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnel);
-int SetUDPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel);
-int SetSCTPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel);
-int SetTCPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel);
-int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl);
-int SetVlanFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl);
+int SetEthernetFilter(const struct rte_flow_item *item, bool tunnel, uint64_t *typeMask);
+int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnel, uint64_t *typeMask);
+int SetIPV6Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnel, uint64_t *typeMask);
+int SetUDPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel, uint64_t *typeMask);
+int SetSCTPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel, uint64_t *typeMask);
+int SetTCPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel, uint64_t *typeMask);
+int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask);
+int SetVlanFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask);
 
-int SetTunnelFilter(char *ntpl_buf, bool *fc, int version, int type);
+int SetTunnelFilter(char *ntpl_buf, bool *fc, int version, int type, uint64_t *typeMask);
 
-int CreateOptimizedFilter(char *ntpl_buf, struct pmd_internals *internals, struct rte_flow *flow, bool *fc);
+int CreateOptimizedFilter(char *ntpl_buf, struct pmd_internals *internals, struct rte_flow *flow, bool *fc, uint64_t typeMask, uint8_t *plist_queues, uint8_t nb_queues, bool *reuse);
+
+void DeleteKeyset(int key, struct pmd_internals *internals);
+void DeleteHash(uint64_t rss_hf, uint8_t port, int priority, struct pmd_internals *internals);
 
 enum {
   GTP_TUNNEL_TYPE,
@@ -64,11 +67,11 @@ enum {
 
 struct filter_values_s {
 	LIST_ENTRY(filter_values_s) next;
-  int size; 
   uint64_t mask;
-  int offset;
   const char *layerString;
-  uint32_t layer;
+  uint8_t size; 
+  uint8_t layer;
+  uint8_t offset;
   union {
     struct {
       uint16_t specVal;
@@ -91,6 +94,57 @@ struct filter_values_s {
       uint8_t lastVal[16];
     } v128;
   } value;
+};
+
+enum {
+  ETHER_ADDR_DST       = (1ULL << 1),
+  ETHER_ADDR_SRC       = (1ULL << 2),
+  ETHER_TYPE           = (1ULL << 3),
+  IPV4_VERSION_IHL     = (1ULL << 4),
+  IPV4_TYPE_OF_SERVICE = (1ULL << 5),
+  IPV4_TOTAL_LENGTH    = (1ULL << 6),
+  IPV4_PACKET_ID       = (1ULL << 7),
+  IPV4_FRAGMENT_OFFSET = (1ULL << 8),
+  IPV4_TIME_TO_LIVE    = (1ULL << 9),
+  IPV4_NEXT_PROTO_ID   = (1ULL << 10),
+  IPV4_HDR_CHECKSUM    = (1ULL << 11),
+  IPV4_SRC_ADDR        = (1ULL << 12),
+  IPV4_DST_ADDR        = (1ULL << 13),
+  IPV6_VTC_FLOW        = (1ULL << 14),
+  IPV6_PAYLOAD_LEN     = (1ULL << 15),
+  IPV6_PROTO           = (1ULL << 16),
+  IPV6_HOP_LIMITS      = (1ULL << 17),
+  IPV6_SRC_ADDR        = (1ULL << 18),
+  IPV6_DST_ADDR        = (1ULL << 19),
+  TCP_SRC_PORT         = (1ULL << 20),
+  TCP_DST_PORT         = (1ULL << 21),
+  TCP_SENT_SEQ         = (1ULL << 22),
+  TCP_RECV_ACK         = (1ULL << 23),
+  TCP_DATA_OFF         = (1ULL << 24),
+  TCP_FLAGS            = (1ULL << 25),
+  TCP_RX_WIN           = (1ULL << 26),
+  TCP_CKSUM            = (1ULL << 27),
+  TCP_URP              = (1ULL << 28),
+  UDP_SRC_PORT         = (1ULL << 29),
+  UDP_DST_PORT         = (1ULL << 30),
+  UDP_DGRAM_LEN        = (1ULL << 31),
+  UDP_DGRAM_CKSUM      = (1ULL << 32),
+  SCTP_SRC_PORT        = (1ULL << 33),
+  SCTP_DST_PORT        = (1ULL << 34),
+  SCTP_TAG             = (1ULL << 35),
+  SCTP_CKSUM           = (1ULL << 36),
+  ICMP_TYPE            = (1ULL << 37),
+  ICMP_CODE            = (1ULL << 38),
+  ICMP_CKSUM           = (1ULL << 39),
+  ICMP_IDENT           = (1ULL << 40),
+  ICMP_SEQ_NB          = (1ULL << 41),
+  VLAN_TPID            = (1ULL << 42),
+  VLAN_TCI             = (1ULL << 43),
+  GTP_TUNNEL           = (1ULL << 44),
+  GRE_TUNNEL           = (1ULL << 45),
+  VXLAN_TUNNEL         = (1ULL << 46),
+  NVGRE_TUNNEL         = (1ULL << 47),
+  IP_IN_IP_TUNNEL      = (1ULL << 48),
 };
 
 #endif
