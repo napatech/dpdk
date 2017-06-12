@@ -35,6 +35,7 @@
 #include <rte_flow.h>
 #include <rte_flow_driver.h>
 #include <rte_ethdev.h>
+#include <rte_log.h>
 #include <nt.h>
 
 #include "rte_eth_ntacc.h"
@@ -81,9 +82,15 @@ bool CheckFeatureLevel(uint32_t level)
 
 #define MAC_ADDRESS_SWAP(a,b)  {b[5]=a[0];b[4]=a[1];b[3]=a[2];b[2]=a[3];b[1]=a[4];b[0]=a[5];}
 
+#if 0
+#define PRINT_IPV4(a, b) { uint32_t c = b; printf("%s: %d.%d.%d.%d\n", a, IPV4_ADDRESS(c)); }
+#else
+#define PRINT_IPV4(a, b)
+#endif
 
 static LIST_HEAD(filter_values_t, filter_values_s) filter_values;
-
+static LIST_HEAD(filter_hash_t, filter_hash_s) filter_hash;
+static LIST_HEAD(filter_keyset_t, filter_keyset_s) filter_keyset;
 
 static int keyset[8][12] = {{0,0,0,0,0,0,0,0,0,0,0,0},
                             {0,0,0,0,0,0,0,0,0,0,0,0},
@@ -94,7 +101,7 @@ static int keyset[8][12] = {{0,0,0,0,0,0,0,0,0,0,0,0},
                             {0,0,0,0,0,0,0,0,0,0,0,0},
                             {0,0,0,0,0,0,0,0,0,0,0,0}};
 
-void pushNtplID(struct rte_flow *flow, uint32_t ntplId, uint64_t rss_hf)
+void pushNtplID(struct rte_flow *flow, uint32_t ntplId)
 {
   struct filter_flow *filter = malloc(sizeof(struct filter_flow));
   if (!filter) {
@@ -103,7 +110,6 @@ void pushNtplID(struct rte_flow *flow, uint32_t ntplId, uint64_t rss_hf)
   else {
     memset(filter, 0, sizeof(struct filter_flow));
     filter->ntpl_id = ntplId;
-    filter->rss_hf = rss_hf;
     LIST_INSERT_HEAD(&flow->ntpl_id, filter, next);
   }
 }
@@ -142,14 +148,55 @@ static const char *GetHashTuple(struct pmd_internals *internals, uint8_t tuple)
   return "hashroundrobin";
 }
 
+void DeleteHash(uint64_t rss_hf, uint8_t port, int priority, struct pmd_internals *internals) {
+  NtNtplInfo_t ntplInfo;
+  char ntpl_buf[20];
+  struct filter_hash_s *pHash;
+
+  LIST_FOREACH(pHash, &filter_hash, next) {
+    if (pHash->rss_hf == rss_hf && pHash->port == port && pHash->priority == priority) {
+      LIST_REMOVE(pHash, next);
+      sprintf(ntpl_buf, "delete=%d", pHash->ntpl_id);
+      DoNtpl(ntpl_buf, &ntplInfo, internals);
+      RTE_LOG(DEBUG, PMD, "Deleting Hash filter: %s\n", ntpl_buf);
+      free(pHash);
+    }
+  }
+}
+
+static void pushHash(uint32_t ntpl_id, uint64_t rss_hf, uint8_t port, int priority)
+{
+  struct filter_hash_s *pHash = malloc(sizeof(struct filter_hash_s));
+  if (!pHash) {
+    RTE_LOG(ERR, PMD, "Memory allocation failed. Filter clean up is not possible\n");
+  }
+  else {
+    pHash->ntpl_id = ntpl_id;
+    pHash->port = port;
+    pHash->priority = priority;
+    pHash->rss_hf = rss_hf;
+    LIST_INSERT_HEAD(&filter_hash, pHash, next);
+  }
+}
+
+static int FindHash(uint64_t rss_hf, uint8_t port, int priority) {
+  struct filter_hash_s *pHash;
+  LIST_FOREACH(pHash, &filter_hash, next) {
+    if (pHash->rss_hf == rss_hf && pHash->port == port && pHash->priority == priority) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+
 /**
  * Create the hash filter from the DPDK hash function.
  */
-int CreateHash(char *ntpl_buf __rte_unused, uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow *flow, int priority)
+int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow *flow, int priority)
 {
   NtNtplInfo_t ntplInfo;
   char tmpBuf[200];
-
   if (rss_hf == 0) {
     RTE_LOG(ERR, PMD, "No HASH function is selected. Ignoring hash.\n");
     return 0;
@@ -164,6 +211,16 @@ int CreateHash(char *ntpl_buf __rte_unused, uint64_t rss_hf, struct pmd_internal
     RTE_LOG(ERR, PMD, "One of the selected HASH functions is not supported\n");
     return -1;
   }
+
+  flow->port = internals->port;
+  flow->rss_hf = rss_hf;
+  flow->priority = priority;
+
+  if (FindHash(rss_hf, internals->port, priority)) {
+    // Hash is already programmed
+    return 0;
+  }
+  
   /*****************************/
   /* Inner UDP hash mode setup */
   /*****************************/
@@ -177,12 +234,10 @@ int CreateHash(char *ntpl_buf __rte_unused, uint64_t rss_hf, struct pmd_internal
     else if (rss_hf & ETH_RSS_INNER_IPV6_UDP) {
       sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;InnerLayer4Type=UDP]=%s", priority, internals->port, GetHashTuple(internals, 0x15));
     }
-    if (DoNtpl(tmpBuf, &ntplInfo) != 0) {
+    if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
       return -1;
     }
-    if (flow) {
-      pushNtplID(flow, ntplInfo.ntplId, rss_hf & (ETH_RSS_INNER_IPV4_UDP | ETH_RSS_INNER_IPV6_UDP));
-    }
+    pushHash(ntplInfo.ntplId, rss_hf, internals->port, priority);
   }
   /*****************************/
   /* Inner TCP hash mode setup */
@@ -197,12 +252,10 @@ int CreateHash(char *ntpl_buf __rte_unused, uint64_t rss_hf, struct pmd_internal
     else if (rss_hf & ETH_RSS_INNER_IPV6_TCP) {
       sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;InnerLayer4Type=TCP]=%s", priority, internals->port, GetHashTuple(internals, 0x15));
     }
-    if (DoNtpl(tmpBuf, &ntplInfo) != 0) {
+    if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
       return -1;
     }
-    if (flow) {
-      pushNtplID(flow, ntplInfo.ntplId, rss_hf & (ETH_RSS_INNER_IPV4_TCP | ETH_RSS_INNER_IPV6_TCP));
-    }
+    pushHash(ntplInfo.ntplId, rss_hf, internals->port, priority);
   }
   /******************************/
   /* Inner SCTP hash mode setup */
@@ -217,12 +270,10 @@ int CreateHash(char *ntpl_buf __rte_unused, uint64_t rss_hf, struct pmd_internal
     else if (rss_hf & ETH_RSS_INNER_IPV6_SCTP) {
       sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;InnerLayer4Type=SCTP]=%s", priority, internals->port, GetHashTuple(internals, 0x15));
     }
-    if (DoNtpl(tmpBuf, &ntplInfo) != 0) {
+    if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
       return -1;
     }
-    if (flow) {
-      pushNtplID(flow, ntplInfo.ntplId, rss_hf & (ETH_RSS_INNER_IPV4_SCTP | ETH_RSS_INNER_IPV6_SCTP));
-    }
+    pushHash(ntplInfo.ntplId, rss_hf, internals->port, priority);
   }
   /*****************************/
   /* Outer UDP hash mode setup */
@@ -237,12 +288,10 @@ int CreateHash(char *ntpl_buf __rte_unused, uint64_t rss_hf, struct pmd_internal
     else if (rss_hf & ETH_RSS_NONFRAG_IPV6_UDP) {
       sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=UDP]=%s", priority, internals->port, GetHashTuple(internals, 0x05));
     }
-    if (DoNtpl(tmpBuf, &ntplInfo) != 0) {
+    if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
       return -1;
     }
-    if (flow) {
-      pushNtplID(flow, ntplInfo.ntplId, rss_hf & (ETH_RSS_NONFRAG_IPV4_UDP | ETH_RSS_NONFRAG_IPV6_UDP));
-    }
+    pushHash(ntplInfo.ntplId, rss_hf, internals->port, priority);
   }
   /*****************************/
   /* Outer TCP hash mode setup */
@@ -257,12 +306,10 @@ int CreateHash(char *ntpl_buf __rte_unused, uint64_t rss_hf, struct pmd_internal
     else if (rss_hf & ETH_RSS_NONFRAG_IPV6_TCP) {
       sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=TCP]=%s", priority, internals->port, GetHashTuple(internals, 0x05));
     }
-    if (DoNtpl(tmpBuf, &ntplInfo) != 0) {
+    if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
       return -1;
     }
-    if (flow) {
-      pushNtplID(flow, ntplInfo.ntplId, rss_hf & (ETH_RSS_NONFRAG_IPV4_TCP | ETH_RSS_NONFRAG_IPV6_TCP));
-    }
+    pushHash(ntplInfo.ntplId, rss_hf, internals->port, priority);
   }
   /******************************/
   /* Outer SCTP hash mode setup */
@@ -277,12 +324,10 @@ int CreateHash(char *ntpl_buf __rte_unused, uint64_t rss_hf, struct pmd_internal
     else if (rss_hf & ETH_RSS_NONFRAG_IPV6_SCTP) {
       sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=SCTP]=%s", priority, internals->port, GetHashTuple(internals, 0x06));
     }
-    if (DoNtpl(tmpBuf, &ntplInfo) != 0) {
+    if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
       return -1;
     }
-    if (flow) {
-      pushNtplID(flow, ntplInfo.ntplId, rss_hf & (ETH_RSS_NONFRAG_IPV4_SCTP | ETH_RSS_NONFRAG_IPV6_SCTP));
-    }
+    pushHash(ntplInfo.ntplId, rss_hf, internals->port, priority);
   }
   /****************************/
   /* Inner IP hash mode setup */
@@ -300,12 +345,10 @@ int CreateHash(char *ntpl_buf __rte_unused, uint64_t rss_hf, struct pmd_internal
     else if (rss_hf & ETH_RSS_INNER_IPV6) {
       sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6]=%s", priority, internals->port, GetHashTuple(internals, 0x12));
     }
-    if (DoNtpl(tmpBuf, &ntplInfo) != 0) {
+    if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
       return -1;
     }
-    if (flow) {
-      pushNtplID(flow, ntplInfo.ntplId, rss_hf & (ETH_RSS_INNER_IPV4 |ETH_RSS_INNER_IPV6 | ETH_RSS_INNER_IPV4_OTHER | ETH_RSS_INNER_IPV6_OTHER));
-    }
+    pushHash(ntplInfo.ntplId, rss_hf, internals->port, priority);
   }
   /****************************/
   /* Outer IP hash mode setup */
@@ -323,12 +366,10 @@ int CreateHash(char *ntpl_buf __rte_unused, uint64_t rss_hf, struct pmd_internal
     else if ((rss_hf & ETH_RSS_IPV6)  || (rss_hf & ETH_RSS_NONFRAG_IPV6_OTHER)) {
       sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV6]=%s", priority, internals->port, GetHashTuple(internals, 0x02));
     }
-    if (DoNtpl(tmpBuf, &ntplInfo) != 0) {
+    if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
       return -1;
     }
-    if (flow) {
-      pushNtplID(flow, ntplInfo.ntplId, rss_hf & (ETH_RSS_IPV4 | ETH_RSS_IPV6 | ETH_RSS_NONFRAG_IPV4_OTHER | ETH_RSS_NONFRAG_IPV6_OTHER));
-    }
+    pushHash(ntplInfo.ntplId, rss_hf, internals->port, priority);
   }
   return 0;
 }
@@ -447,6 +488,34 @@ static const char *GetLayer(enum layer_e layer, bool tunnel)
   return "UNKNOWN";
 }
 
+static void InsertFilterValues(struct filter_values_s *pInsertFilterValues)
+{
+  struct filter_values_s *pFilter_values;
+  struct filter_values_s *pLast_value;
+  uint32_t insertVal;
+  uint32_t sortVal;
+
+  if (LIST_EMPTY(&filter_values)) {
+    LIST_INSERT_HEAD(&filter_values, pInsertFilterValues, next);
+    return;
+  }
+  
+  insertVal = pInsertFilterValues->layer + 
+              (((uint32_t)pInsertFilterValues->offset << 16) & 0x00FF0000) + 
+              (((uint32_t)pInsertFilterValues->size << 8) & 0x0000FF00);
+  LIST_FOREACH(pFilter_values, &filter_values, next) {
+    sortVal = pFilter_values->layer + 
+              (((uint32_t)pFilter_values->offset << 16) & 0x00FF0000) + 
+              (((uint32_t)pFilter_values->size << 8) & 0x0000FF00);
+    if (sortVal > insertVal) {
+      LIST_INSERT_BEFORE(pFilter_values, pInsertFilterValues, next);
+      return;
+    }
+    pLast_value = pFilter_values;
+  }
+  LIST_INSERT_AFTER(pLast_value, pInsertFilterValues, next);
+}
+
 /**
  * Create the NTPL filter expression part.
  */
@@ -533,73 +602,169 @@ static int SetFilter(int size,
     }
     break;
   }
-  LIST_INSERT_HEAD(&filter_values, pFilter_values, next);
+  InsertFilterValues(pFilter_values);
   return 0;
 }
 
-int CreateOptimizedFilter(char *ntpl_buf, struct pmd_internals *internals, struct rte_flow *flow, bool *fc)
+void DeleteKeyset(int key, struct pmd_internals *internals) {
+  NtNtplInfo_t ntplInfo;
+  char ntpl_buf[20];
+  struct filter_keyset_s *key_set;
+
+  LIST_FOREACH(key_set, &filter_keyset, next) {
+    if (key_set->key == key) {
+      LIST_REMOVE(key_set, next);
+      sprintf(ntpl_buf, "delete=%d", key_set->ntpl_id2);
+      DoNtpl(ntpl_buf, &ntplInfo, internals);
+      sprintf(ntpl_buf, "delete=%d", key_set->ntpl_id1);
+      DoNtpl(ntpl_buf, &ntplInfo, internals);
+      free(key_set);
+      return;
+    }
+  }
+}
+
+static int FindKeyset(uint64_t typeMask, uint8_t *plist_queues, uint8_t nb_queues) 
+{
+  struct filter_keyset_s *key_set;
+  int match = 0;
+  int i;
+
+  LIST_FOREACH(key_set, &filter_keyset, next) {
+    if (key_set->typeMask == typeMask && nb_queues == key_set->nb_queues) {
+      match = 0;
+      for (i = 0; i < nb_queues; i++) {
+        if (plist_queues[i] == key_set->list_queues[i]) {
+          match++;
+        }
+      }
+      if (match == nb_queues) {
+        return key_set->key;
+      }
+    }
+  }
+  return 0;
+}
+
+int CreateOptimizedFilter(char *ntpl_buf, struct pmd_internals *internals, struct rte_flow *flow, bool *fc, uint64_t typeMask, uint8_t *plist_queues, uint8_t nb_queues, bool *reuse)
 {
   NtNtplInfo_t ntplInfo;
   struct filter_values_s *pFilter_values;
-  int keyset;
+  int key;
+  int iRet = 0;
   bool first = true;
+  char *filter_buffer1 = NULL;
+  char *filter_buffer2 = NULL;
+  char *filter_buffer3 = NULL;
 
   if (LIST_EMPTY(&filter_values)) {
     return 0;
   }
 
-  char *filter_buffer1 = malloc(4096);
+  filter_buffer1 = malloc(4096);
   if (!filter_buffer1) {
-    return -1;
+    iRet = -1;
+    RTE_LOG(ERR, PMD, "Allocating memory failed\n");
+    goto Errors;
   }
 
-  char *filter_buffer2 = malloc(4096);
+  filter_buffer2 = malloc(4096);
   if (!filter_buffer2) {
-    return -1;
+    iRet = -1;
+    RTE_LOG(ERR, PMD, "Allocating memory failed\n");
+    goto Errors;
   }
 
-  char *filter_buffer3 = malloc(4096);
+  filter_buffer3 = malloc(4096);
   if (!filter_buffer3) {
-    return -1;
+    iRet = -1;
+    RTE_LOG(ERR, PMD, "Allocating memory failed\n");
+    goto Errors;
   }
-  
-  keyset = GetKeysetValue(internals->adapterNo);
-  if (keyset < 0) {
-    return -1;
+
+  first = true;
+  if (LIST_EMPTY(&filter_keyset) || ((key = FindKeyset(typeMask, plist_queues, nb_queues)) == 0)) {
+    struct filter_keyset_s *key_set = malloc(sizeof(struct filter_keyset_s));
+    if (!key_set) {
+      iRet = -1;
+      RTE_LOG(ERR, PMD, "Allocating memory failed\n");
+      goto Errors;
+    }
+    key = GetKeysetValue(internals->adapterNo);
+    if (key < 0) {
+      free(key_set);
+      iRet = -1;
+      RTE_LOG(ERR, PMD, "Internal error: Illegal key set value returned\n");
+      goto Errors;
+    }
+
+    key_set->key = key;
+    key_set->typeMask = typeMask;
+
+    LIST_FOREACH(pFilter_values, &filter_values, next) {
+      if (first) {
+        sprintf(filter_buffer3, "KeyType[name=KT%u; Access = partial; Bank = 0] = {", key);
+        sprintf(filter_buffer2, "KeyDef[name=KDEF%u; KeyType=KT%u] = (", key, key);
+        first=false;
+      }
+      else {
+        sprintf(&filter_buffer3[strlen(filter_buffer3)], ",");
+        sprintf(&filter_buffer2[strlen(filter_buffer2)], ",");
+      }
+
+      sprintf(&filter_buffer3[strlen(filter_buffer3)], "%u", pFilter_values->size);
+
+      if (pFilter_values->size == 128 && pFilter_values->layer == LAYER2) {
+        // This is an ethernet address
+        sprintf(&filter_buffer2[strlen(filter_buffer2)], "{0xFFFFFFFFFFFFFFFFFFFFFFFF00000000:%s[%u]/%u}", pFilter_values->layerString, pFilter_values->offset, pFilter_values->size);
+      }
+      else {
+        if (pFilter_values->mask != 0) {
+          sprintf(&filter_buffer2[strlen(filter_buffer2)], "{0x%llX:%s[%u]/%u}", (const long long unsigned int)pFilter_values->mask, pFilter_values->layerString, pFilter_values->offset, pFilter_values->size);
+        }
+        else {
+          sprintf(&filter_buffer2[strlen(filter_buffer2)], "%s[%u]/%u", pFilter_values->layerString, pFilter_values->offset, pFilter_values->size);
+        }
+      }
+    }
+    sprintf(&filter_buffer3[strlen(filter_buffer3)], "}");
+    sprintf(&filter_buffer2[strlen(filter_buffer2)], ")");
+
+    if (DoNtpl(filter_buffer3, &ntplInfo, internals)) {
+      free(key_set);
+      iRet = -1;
+      goto Errors;
+    }
+    key_set->ntpl_id1 = ntplInfo.ntplId;
+
+    if (DoNtpl(filter_buffer2, &ntplInfo, internals)) {
+      free(key_set);
+      iRet = -1;
+      goto Errors;
+    }
+    key_set->ntpl_id2 = ntplInfo.ntplId;
+
+    for (int i = 0; i < nb_queues; i++) {
+      key_set->list_queues[i] = plist_queues[i];
+    }
+    key_set->nb_queues = nb_queues;
+    LIST_INSERT_HEAD(&filter_keyset, key_set, next);
+    *reuse = false;
   }
-  flow->keyset[flow->nb_keyset++] = keyset;
+  else {
+    *reuse = true;
+  }
 
-  while (!LIST_EMPTY(&filter_values)) {
-    pFilter_values = LIST_FIRST(&filter_values);
-    LIST_REMOVE(pFilter_values, next);
-
+  flow->key = key;
+  first = true;
+  LIST_FOREACH(pFilter_values, &filter_values, next) {
     if (first) {
-      sprintf(filter_buffer3, "KeyType[name=KT%u; Access = partial; Bank = 0] = {", keyset);
-      sprintf(filter_buffer2, "KeyDef[name=KDEF%u; KeyType=KT%u] = (", keyset, keyset);
-      sprintf(filter_buffer1, "KeyList[KeySet=%u; KeyType=KT%u] = (", keyset, keyset);
+      sprintf(filter_buffer1, "KeyList[KeySet=%u; KeyType=KT%u] = (", key, key);
       first=false;
     }
     else {
-      sprintf(&filter_buffer3[strlen(filter_buffer3)], ",");
-      sprintf(&filter_buffer2[strlen(filter_buffer2)], ",");
       sprintf(&filter_buffer1[strlen(filter_buffer1)], ",");
     }
-    
-    sprintf(&filter_buffer3[strlen(filter_buffer3)], "%u", pFilter_values->size);
-
-    if (pFilter_values->size == 128 && pFilter_values->layer == LAYER2) {
-      // This is an ethernet address
-      sprintf(&filter_buffer2[strlen(filter_buffer2)], "{0xFFFFFFFFFFFFFFFFFFFFFFFF00000000:%s[%u]/%u}", pFilter_values->layerString, pFilter_values->offset, pFilter_values->size);
-    }
-    else {
-      if (pFilter_values->mask != 0) {
-        sprintf(&filter_buffer2[strlen(filter_buffer2)], "{0x%llX:%s[%u]/%u}", (const long long unsigned int)pFilter_values->mask, pFilter_values->layerString, pFilter_values->offset, pFilter_values->size);
-      }
-      else {
-        sprintf(&filter_buffer2[strlen(filter_buffer2)], "%s[%u]/%u", pFilter_values->layerString, pFilter_values->offset, pFilter_values->size);
-      }
-    }
-
 
     switch (pFilter_values->size) 
     {
@@ -674,46 +839,49 @@ int CreateOptimizedFilter(char *ntpl_buf, struct pmd_internals *internals, struc
       break;
     }
   }
-  sprintf(&filter_buffer3[strlen(filter_buffer3)], "}");
-  sprintf(&filter_buffer2[strlen(filter_buffer2)], ")");
   sprintf(&filter_buffer1[strlen(filter_buffer1)], ")");
 
-  if (pFilter_values) {
-    free(pFilter_values);
+  // Cleanup filter values
+  while (!LIST_EMPTY(&filter_values)) {
+    pFilter_values = LIST_FIRST(&filter_values);
+    LIST_REMOVE(pFilter_values, next);
+    if (pFilter_values) {
+      free(pFilter_values);
+    }
   }
 
-  if (DoNtpl(filter_buffer3, &ntplInfo)) {
-    return -1;
+  // Set keylist filter
+  if (DoNtpl(filter_buffer1, &ntplInfo, internals)) {
+    iRet = -1;
+    goto Errors;
   }
-  pushNtplID(flow, ntplInfo.ntplId, 0);
-  if (DoNtpl(filter_buffer2, &ntplInfo)) {
-    return -1;
-  }
-  pushNtplID(flow, ntplInfo.ntplId, 0);
-  if (DoNtpl(filter_buffer1, &ntplInfo)) {
-    return -1;
-  }
-  pushNtplID(flow, ntplInfo.ntplId, 0);
+  pushNtplID(flow, ntplInfo.ntplId);
 
   if (*fc) strcat(ntpl_buf," and ");
   *fc = true;
 
-  sprintf(&ntpl_buf[strlen(ntpl_buf)], "Key(KDEF%u)==%u", keyset, keyset);
+  sprintf(&ntpl_buf[strlen(ntpl_buf)], "Key(KDEF%u)==%u", key, key);
 
-  free(filter_buffer1);
-  free(filter_buffer2);
-  free(filter_buffer3);
+Errors:
+  if (filter_buffer1) {
+    free(filter_buffer1);
+  }
+  if (filter_buffer2) {
+    free(filter_buffer2);
+  }
+  if (filter_buffer3) {
+    free(filter_buffer3);
+  }
 
-  return 0;
+  return iRet;
 }
 
 /**
  * Setup an ethernet filter.
  */
-int SetEthernetFilter(char *ntpl_buf, 
-                      bool *fc, 
-                      const struct rte_flow_item *item, 
-                      bool tnl)
+int SetEthernetFilter(const struct rte_flow_item *item, 
+                      bool tnl,
+                      uint64_t *typeMask)
 {
   const struct rte_flow_item_eth *spec = (const struct rte_flow_item_eth *)item->spec;
   const struct rte_flow_item_eth *mask = (const struct rte_flow_item_eth *)item->mask;
@@ -736,6 +904,7 @@ int SetEthernetFilter(char *ntpl_buf,
       if (SetFilter(128, 0, 0, tnl, LAYER2, (const void *)addr0, (const void *)addr1, NULL) != 0) {
         return -1;
       }
+      *typeMask |= (ETHER_ADDR_DST | ETHER_ADDR_SRC);
       singleSetup = false;
     }
     else {
@@ -747,6 +916,7 @@ int SetEthernetFilter(char *ntpl_buf,
       if (SetFilter(128, 0, 0, tnl, LAYER2, (const void *)addr, NULL, NULL) != 0) {
         return -1;
       }
+      *typeMask |= (ETHER_ADDR_DST | ETHER_ADDR_SRC);
       singleSetup = false;
     }
   }
@@ -765,6 +935,7 @@ int SetEthernetFilter(char *ntpl_buf,
         if (SetFilter(64, 0xFFFFFFFFFFFF0000, 6, tnl, LAYER2, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
           return -1;
         }
+        *typeMask |= (ETHER_ADDR_SRC);
       } 
       else if (mask && NON_ZERO6(mask->src.addr_bytes)) {
         /* Setup source mask filter */
@@ -779,6 +950,7 @@ int SetEthernetFilter(char *ntpl_buf,
         if (SetFilter(64, 0xFFFFFFFFFFFF0000, 6, tnl, LAYER2, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
           return -1;
         }
+        *typeMask |= (ETHER_ADDR_SRC);
       }
       else {
         /* Setup source simpel filter */
@@ -789,6 +961,7 @@ int SetEthernetFilter(char *ntpl_buf,
         if (SetFilter(64, 0xFFFFFFFFFFFF0000, 6, tnl, LAYER2, (const void *)&vSpec, NULL, NULL) != 0) {
           return -1;
         }
+        *typeMask |= (ETHER_ADDR_SRC);
       }
     }
     if (spec && NON_ZERO6(spec->dst.addr_bytes)) {
@@ -805,6 +978,7 @@ int SetEthernetFilter(char *ntpl_buf,
         if (SetFilter(64, 0xFFFFFFFFFFFF0000, 0, tnl, LAYER2, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
           return -1;
         }
+        *typeMask |= (ETHER_ADDR_DST);
       } 
       else if (mask && NON_ZERO6(mask->dst.addr_bytes)) {
         /* Setup destination mask filter */
@@ -819,6 +993,7 @@ int SetEthernetFilter(char *ntpl_buf,
         if (SetFilter(64, 0xFFFFFFFFFFFF0000, 0, tnl, LAYER2, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
           return -1;
         }
+        *typeMask |= (ETHER_ADDR_DST);
       }
       else {
         /* Setup destination simpel filter */
@@ -829,29 +1004,37 @@ int SetEthernetFilter(char *ntpl_buf,
         if (SetFilter(64, 0xFFFFFFFFFFFF0000, 0, tnl, LAYER2, (const void *)&vSpec, NULL, NULL) != 0) {
           return -1;
         }
+        *typeMask |= (ETHER_ADDR_DST);
       }
     }
   }
 
   if (spec && spec->type) {
-    if (*fc) strcat(ntpl_buf," and ");
-    *fc = true;
     if (last && last->type) {
       /* Setup type range filter */
-      sprintf(&ntpl_buf[strlen(ntpl_buf)], "data[dynoffset=dynoffethertypelen;datatype=bytestr2]==(0x%04x..0x%04x)", 
-              rte_bswap16(spec->type),
-              rte_bswap16(last->type));
+      uint16_t vSpec = rte_bswap16(spec->type);
+      uint16_t vLast = rte_bswap16(last->type);
+      if (SetFilter(16, 0, 12, tnl, LAYER2, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
+        return -1;
+      }
+      *typeMask |= (ETHER_TYPE);
     }
     else if (mask && mask->type) {
       /* Setup type mask filter */
-      sprintf(&ntpl_buf[strlen(ntpl_buf)], "data[dynoffset=dynoffethertypelen;datatype=bytestr2]=={0x%04x:0x%04x}", 
-              rte_bswap16(mask->type),
-              rte_bswap16(spec->type));
+      uint16_t vSpec = rte_bswap16(spec->type);
+      uint16_t vMask = rte_bswap16(mask->type);
+      if (SetFilter(16, 0, 12, tnl, LAYER2, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
+        return -1;
+      }
+      *typeMask |= (ETHER_TYPE);
     }
     else {
       /* Setup type simpel filter */
-      sprintf(&ntpl_buf[strlen(ntpl_buf)], "data[dynoffset=dynoffethertypelen;datatype=bytestr2]==0x%04x", 
-              rte_bswap16(spec->type));
+      uint16_t vSpec = rte_bswap16(spec->type);
+      if (SetFilter(16, 0, 12, tnl, LAYER2, (const void *)&vSpec, NULL, NULL) != 0) {
+        return -1;
+      }
+      *typeMask |= (ETHER_TYPE);
     }
   }
   return 0;
@@ -860,7 +1043,7 @@ int SetEthernetFilter(char *ntpl_buf,
 /**
  * Setup an IPv4 filter.
  */
-int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl)
+int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask)
 {
   const struct rte_flow_item_ipv4 *spec = (const struct rte_flow_item_ipv4 *)item->spec;
   const struct rte_flow_item_ipv4 *mask = (const struct rte_flow_item_ipv4 *)item->mask;
@@ -892,6 +1075,7 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(16, 0, 0, tnl, LAYER3, (void *)&vSpec, (void *)&vMask, NULL) != 0) {
         return -1;
       }
+      *typeMask |= IPV4_VERSION_IHL | IPV4_TYPE_OF_SERVICE;
     }
     else {
       uint16_t vSpec;
@@ -899,6 +1083,7 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(16, 0, 0, tnl, LAYER3, (void *)&vSpec, NULL, NULL) != 0) {
         return -1;
       }
+      *typeMask |= IPV4_VERSION_IHL | IPV4_TYPE_OF_SERVICE;
     }
   }
 
@@ -909,6 +1094,7 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(16, 0, 2, tnl, LAYER3, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
         return -1;
       }
+      *typeMask |= IPV4_TOTAL_LENGTH;
     } 
     else if (mask && mask->hdr.total_length) {
       uint16_t vSpec = rte_bswap16(spec->hdr.total_length);
@@ -916,12 +1102,14 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(16, 0, 2, tnl, LAYER3, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
         return -1;
       }
+      *typeMask |= IPV4_TOTAL_LENGTH;
     }
     else {
       uint16_t vSpec = rte_bswap16(spec->hdr.total_length);
       if (SetFilter(16, 0, 2, tnl, LAYER3, (const void *)&vSpec, NULL, NULL) != 0) {
         return -1;
       }
+      *typeMask |= IPV4_TOTAL_LENGTH;
     }
   }
 
@@ -932,6 +1120,7 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(16, 0, 4, tnl, LAYER3, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
         return -1;
       }
+      *typeMask |= IPV4_PACKET_ID;
     } 
     else if (mask && mask->hdr.packet_id) {
       uint16_t vSpec = rte_bswap16(spec->hdr.packet_id);
@@ -939,12 +1128,14 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(16, 0, 4, tnl, LAYER3, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
         return -1;
       }
+      *typeMask |= IPV4_PACKET_ID;
     }
     else {
       uint16_t vSpec = rte_bswap16(spec->hdr.packet_id);
       if (SetFilter(16, 0, 4, tnl, LAYER3, (const void *)&vSpec, NULL, NULL) != 0) {
         return -1;
       }
+      *typeMask |= IPV4_PACKET_ID;
     }
   }
 
@@ -955,6 +1146,7 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(16, 0, 6, tnl, LAYER3, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
         return -1;
       }
+      *typeMask |= IPV4_FRAGMENT_OFFSET;
     } 
     else if (mask && mask->hdr.fragment_offset) {
       uint16_t vSpec = rte_bswap16(spec->hdr.fragment_offset);
@@ -962,12 +1154,14 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(16, 0, 6, tnl, LAYER3, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
         return -1;
       }
+      *typeMask |= IPV4_FRAGMENT_OFFSET;
     }
     else {
       uint16_t vSpec = rte_bswap16(spec->hdr.fragment_offset);
       if (SetFilter(16, 0, 6, tnl, LAYER3, (const void *)&vSpec, NULL, NULL) != 0) {
         return -1;
       }
+      *typeMask |= IPV4_FRAGMENT_OFFSET;
     }
   }
 
@@ -981,6 +1175,7 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(16, 0xFF00, 8, tnl, LAYER3, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
         return -1;
       }
+      *typeMask |= IPV4_TIME_TO_LIVE;
     } 
     else if (mask && mask->hdr.time_to_live) {
       vSpec = spec->hdr.time_to_live << 8;
@@ -1007,6 +1202,7 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(16, 0x00FF, 8, tnl, LAYER3, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
         return -1;
       }
+      *typeMask |= IPV4_NEXT_PROTO_ID;
     } 
     else if (mask && mask->hdr.next_proto_id) {
       vSpec = spec->hdr.next_proto_id;
@@ -1014,12 +1210,14 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(16, 0x00FF, 8, tnl, LAYER3, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
         return -1;
       }
+      *typeMask |= IPV4_NEXT_PROTO_ID;
     }
     else {
       vSpec = spec->hdr.next_proto_id;
       if (SetFilter(16, 0x00FF, 8, tnl, LAYER3, (const void *)&vSpec, NULL, NULL) != 0) {
         return -1;
       }
+      *typeMask |= IPV4_NEXT_PROTO_ID;
     }
   }
   
@@ -1035,7 +1233,10 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
         if (SetFilter(64, 0, 12, tnl, LAYER3, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
           return -1;
         }
+        *typeMask |= IPV4_SRC_ADDR | IPV4_DST_ADDR;
         singleSetup = false;
+        PRINT_IPV4("SRC", rte_bswap32(spec->hdr.src_addr));
+        PRINT_IPV4("DST", rte_bswap32(spec->hdr.dst_addr));
       }
     }
     else {
@@ -1044,6 +1245,8 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
         return -1;
       }
       singleSetup = false;
+      PRINT_IPV4("SRC", rte_bswap32(spec->hdr.src_addr));
+      PRINT_IPV4("DST", rte_bswap32(spec->hdr.dst_addr));
     }
   }
   if (singleSetup) {
@@ -1054,6 +1257,8 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
         if (SetFilter(32, 0, 12, tnl, LAYER3, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
           return -1;
         }
+        *typeMask |= IPV4_SRC_ADDR;
+        PRINT_IPV4("SRC", rte_bswap32(spec->hdr.src_addr));
       } 
       else if (mask && mask->hdr.src_addr) {
         uint32_t vSpec = rte_bswap32(spec->hdr.src_addr);
@@ -1061,12 +1266,16 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
         if (SetFilter(32, 0, 12, tnl, LAYER3, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
           return -1;
         }
+        *typeMask |= IPV4_SRC_ADDR;
+        PRINT_IPV4("SRC", rte_bswap32(spec->hdr.src_addr));
       }
       else {
         uint32_t vSpec = rte_bswap32(spec->hdr.src_addr);
         if (SetFilter(32, 0, 12, tnl, LAYER3, (const void *)&vSpec, NULL, NULL) != 0) {
           return -1;
         }
+        *typeMask |= IPV4_SRC_ADDR;
+        PRINT_IPV4("SRC", rte_bswap32(spec->hdr.src_addr));
       }
     }
     if (spec && spec->hdr.dst_addr) {
@@ -1076,6 +1285,8 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
         if (SetFilter(32, 0, 16, tnl, LAYER3, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
           return -1;
         }
+        *typeMask |= IPV4_DST_ADDR;
+        PRINT_IPV4("DST", rte_bswap32(spec->hdr.dst_addr));
       } 
       else if (mask && mask->hdr.dst_addr) {
         uint32_t vSpec = rte_bswap32(spec->hdr.dst_addr);
@@ -1083,12 +1294,16 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
         if (SetFilter(32, 0, 16, tnl, LAYER3, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
           return -1;
         }
+        *typeMask |= IPV4_DST_ADDR;
+        PRINT_IPV4("DST", rte_bswap32(spec->hdr.dst_addr));
       }
       else {
         uint32_t vSpec = rte_bswap32(spec->hdr.dst_addr);
         if (SetFilter(32, 0, 16, tnl, LAYER3, (const void *)&vSpec, NULL, NULL) != 0) {
           return -1;
         }
+        *typeMask |= IPV4_DST_ADDR;
+        PRINT_IPV4("DST", rte_bswap32(spec->hdr.dst_addr));
       }
     }
   }
@@ -1096,94 +1311,100 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
   return 0;
 }
 
-int SetIPV6Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl)
+int SetIPV6Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask)
 {
   const struct rte_flow_item_ipv6 *spec = (const struct rte_flow_item_ipv6 *)item->spec;
   const struct rte_flow_item_ipv6 *mask = (const struct rte_flow_item_ipv6 *)item->mask;
   const struct rte_flow_item_ipv6 *last = (const struct rte_flow_item_ipv6 *)item->last;
-  const char *frame;
 
-    if (*fc) strcat(ntpl_buf," and ");
-    *fc = true;
-    if (tnl) {
-      strcat(&ntpl_buf[strlen(ntpl_buf)], "(InnerLayer3Protocol==IPV6)");
-      frame = "DynOffInnerIPv6Frame";
-    }
-    else {
-      strcat(&ntpl_buf[strlen(ntpl_buf)], "(Layer3Protocol==IPV6)");
-      frame = "DynOffIPv6Frame";
-    }
+  if (*fc) strcat(ntpl_buf," and ");
+  *fc = true;
+  if (tnl) {
+    strcat(&ntpl_buf[strlen(ntpl_buf)], "(InnerLayer3Protocol==IPV6)");
+  }
+  else {
+    strcat(&ntpl_buf[strlen(ntpl_buf)], "(Layer3Protocol==IPV6)");
+  }
 
   if (!last && !mask && !spec) {
     return 0;
   } 
 
   if (spec && (spec->hdr.vtc_flow)) {
-    if (*fc) strcat(ntpl_buf," and ");
-    *fc = true;
-
     if (last && (last->hdr.vtc_flow)) {
-      sprintf(&ntpl_buf[strlen(ntpl_buf)], "data[dynoffset=%s;datatype=bytestr4]==(0x%08x..0x%08x)", 
-              frame,
-              rte_bswap32(spec->hdr.vtc_flow),
-              rte_bswap32(last->hdr.vtc_flow));
+      uint32_t vSpec = rte_bswap32(spec->hdr.vtc_flow);
+      uint32_t vLast = rte_bswap32(last->hdr.vtc_flow);
+      if (SetFilter(32, 0, 0, tnl, LAYER3, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
+        return -1;
+      }
+      *typeMask |= IPV6_VTC_FLOW;
     }
     else if (mask && (mask->hdr.vtc_flow)) {
-      sprintf(&ntpl_buf[strlen(ntpl_buf)], "data[dynoffset=%s;datatype=bytestr4]=={0x%08x:0x%08x}", 
-              frame,
-              rte_bswap32(mask->hdr.vtc_flow),
-              rte_bswap32(spec->hdr.vtc_flow));
+      uint32_t vSpec = rte_bswap32(spec->hdr.vtc_flow);
+      uint32_t vMask = rte_bswap32(mask->hdr.vtc_flow);
+      if (SetFilter(32, 0, 0, tnl, LAYER3, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
+        return -1;
+      }
+      *typeMask |= IPV6_VTC_FLOW;
     }
     else {
-      sprintf(&ntpl_buf[strlen(ntpl_buf)], "data[dynoffset=%s;datatype=bytestr4]==0x%08x", 
-              frame,
-              rte_bswap32(spec->hdr.vtc_flow));
+      uint32_t vSpec = rte_bswap32(spec->hdr.vtc_flow);
+      if (SetFilter(32, 0, 0, tnl, LAYER3, (const void *)&vSpec, NULL, NULL) != 0) {
+        return -1;
+      }
+      *typeMask |= IPV6_VTC_FLOW;
     }
   }
 
   if (spec && (spec->hdr.proto)) {
-    if (*fc) strcat(ntpl_buf," and ");
-    *fc = true;
-
     if (last && (last->hdr.proto)) {
-      sprintf(&ntpl_buf[strlen(ntpl_buf)], "data[dynoffset=%s;offset=6;datatype=bytestr1]==(0x%02x..0x%02x)", 
-              frame,
-              spec->hdr.proto,
-              last->hdr.proto);
+      uint16_t vSpec = (spec->hdr.proto << 8) & 0xFF00;
+      uint16_t vLast = (last->hdr.proto << 8) & 0xFF00;
+      if (SetFilter(16, 0xFF00, 6, tnl, LAYER3, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
+        return -1;
+      }
+      *typeMask |= IPV6_PROTO;
     }
     else if (mask && (mask->hdr.proto)) {
-      sprintf(&ntpl_buf[strlen(ntpl_buf)], "data[dynoffset=%s;offset=6;datatype=bytestr1]=={0x%02x:0x%02x}", 
-              frame,
-              mask->hdr.proto,
-              spec->hdr.proto);
+      uint16_t vSpec = (spec->hdr.proto << 8) & 0xFF00;
+      uint16_t vMask = (mask->hdr.proto << 8) & 0xFF00;
+      if (SetFilter(16, 0xFF00, 6, tnl, LAYER3, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
+        return -1;
+      }
+      *typeMask |= IPV6_PROTO;
     }
     else {
-      sprintf(&ntpl_buf[strlen(ntpl_buf)], "data[dynoffset=%s;offset=6;datatype=bytestr1]==0x%02x", 
-              frame,
-              spec->hdr.proto);
+      uint16_t vSpec = (spec->hdr.proto << 8) & 0xFF00;
+      if (SetFilter(16, 0xFF00, 6, tnl, LAYER3, (const void *)&vSpec, NULL, NULL) != 0) {
+        return -1;
+      }
+      *typeMask |= IPV6_PROTO;
     }
   }
 
   if (spec && (spec->hdr.hop_limits)) {
-    if (*fc) strcat(ntpl_buf," and ");
-    *fc = true;
-
     if (last && (last->hdr.hop_limits)) {
-      sprintf(&ntpl_buf[strlen(ntpl_buf)], "data[dynoffset=%s;offset=7;datatype=bytestr1]==(0x%02x..0x%02x)", 
-              frame,
-              spec->hdr.hop_limits,
-              last->hdr.hop_limits);
+      uint16_t vSpec = (spec->hdr.hop_limits);
+      uint16_t vLast = (last->hdr.hop_limits);
+      if (SetFilter(16, 0xFF, 6, tnl, LAYER3, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
+        return -1;
+      }
+      *typeMask |= IPV6_HOP_LIMITS;
     }
     else if (mask && (mask->hdr.hop_limits)) {
-      sprintf(&ntpl_buf[strlen(ntpl_buf)], "data[dynoffset=%s;offset=7;datatype=bytestr1]=={0x%02x:0x%02x}", 
-              frame,
-              mask->hdr.hop_limits,
-              spec->hdr.hop_limits);
+      uint16_t vSpec = (spec->hdr.hop_limits);
+      uint16_t vMask = (mask->hdr.hop_limits);
+      if (SetFilter(16, 0xFF, 6, tnl, LAYER3, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
+        return -1;
+      }
+      *typeMask |= IPV6_HOP_LIMITS;
     }
     else {
-      sprintf(&ntpl_buf[strlen(ntpl_buf)], "data[dynoffset=%s;offset=7;datatype=bytestr1]==0x%02x", 
-              frame,
-              spec->hdr.hop_limits);
+      uint16_t vSpec = (spec->hdr.hop_limits);
+      if (SetFilter(16, 0xFF, 6, tnl, LAYER3, (const void *)&vSpec, NULL, NULL) != 0) {
+        return -1;
+      }
+      *typeMask |= IPV6_HOP_LIMITS;
     }
   }
 
@@ -1192,16 +1413,19 @@ int SetIPV6Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(128, 0, 8, tnl, LAYER3, (const void *)&spec->hdr.src_addr, NULL, (const void *)&last->hdr.src_addr) != 0) {
         return -1;
       }
+      *typeMask |= IPV6_SRC_ADDR;
     } 
     else if (mask && NON_ZERO16(mask->hdr.src_addr)) {
       if (SetFilter(128, 0, 8, tnl, LAYER3, (const void *)&spec->hdr.src_addr, (const void *)&mask->hdr.src_addr, NULL) != 0) {
         return -1;
       }
+      *typeMask |= IPV6_SRC_ADDR;
     }
     else {
       if (SetFilter(128, 0, 8, tnl, LAYER3, (const void *)&spec->hdr.src_addr, NULL, NULL) != 0) {
         return -1;
       }
+      *typeMask |= IPV6_SRC_ADDR;
     }
   }
 
@@ -1210,22 +1434,25 @@ int SetIPV6Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(128, 0, 24, tnl, LAYER3, (const void *)&spec->hdr.dst_addr, NULL, (const void *)&last->hdr.dst_addr) != 0) {
         return -1;
       }
+      *typeMask |= IPV6_DST_ADDR;
     } 
     else if (mask && NON_ZERO16(mask->hdr.dst_addr)) {
       if (SetFilter(128, 0, 24, tnl, LAYER3, (const void *)&spec->hdr.dst_addr, (const void *)&mask->hdr.dst_addr, NULL) != 0) {
         return -1;
       }
+      *typeMask |= IPV6_DST_ADDR;
     }
     else {
       if (SetFilter(128, 0, 24, tnl, LAYER3, (const void *)&spec->hdr.dst_addr, NULL, NULL) != 0) {
         return -1;
       }
+      *typeMask |= IPV6_DST_ADDR;
     }
   }
   return 0;
 }
 
-int SetTCPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl)
+int SetTCPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask)
 {
   const struct rte_flow_item_tcp *spec = (const struct rte_flow_item_tcp *)item->spec;
   const struct rte_flow_item_tcp *mask = (const struct rte_flow_item_tcp *)item->mask;
@@ -1255,6 +1482,7 @@ int SetTCPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, boo
       if (SetFilter(32, 0, 0, tnl, LAYER4, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
         return -1;
       }
+      *typeMask |= TCP_SRC_PORT | TCP_DST_PORT;
       singleSetup = false;
     }
     else {
@@ -1262,6 +1490,7 @@ int SetTCPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, boo
       if (SetFilter(32, 0, 0, tnl, LAYER4, (const void *)&vSpec, NULL, NULL) != 0) {
         return -1;
       }
+      *typeMask |= TCP_SRC_PORT | TCP_DST_PORT;
       singleSetup = false;
     }
   }
@@ -1273,6 +1502,7 @@ int SetTCPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, boo
         if (SetFilter(16, 0, 0, tnl, LAYER4, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
           return -1;
         }
+        *typeMask |= TCP_SRC_PORT;
       } 
       else if (mask && mask->hdr.src_port) {
         uint16_t vSpec = rte_bswap16(spec->hdr.src_port);
@@ -1280,12 +1510,14 @@ int SetTCPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, boo
         if (SetFilter(16, 0, 0, tnl, LAYER4, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
           return -1;
         }
+        *typeMask |= TCP_SRC_PORT;
       }
       else {
         uint16_t vSpec = rte_bswap16(spec->hdr.src_port);
         if (SetFilter(16, 0, 0, tnl, LAYER4, (const void *)&vSpec, NULL, NULL) != 0) {
           return -1;
         }
+        *typeMask |= TCP_SRC_PORT;
       }
     }
     if (spec && spec->hdr.dst_port) {
@@ -1295,6 +1527,7 @@ int SetTCPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, boo
         if (SetFilter(16, 0, 2, tnl, LAYER4, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
           return -1;
         }
+        *typeMask |= TCP_DST_PORT;
       } 
       else if (mask && mask->hdr.dst_port) {
         uint16_t vSpec = rte_bswap16(spec->hdr.dst_port);
@@ -1302,12 +1535,14 @@ int SetTCPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, boo
         if (SetFilter(16, 0, 2, tnl, LAYER4, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
           return -1;
         }
+        *typeMask |= TCP_DST_PORT;
       }
       else {
         uint16_t vSpec = rte_bswap16(spec->hdr.dst_port);
         if (SetFilter(16, 0, 2, tnl, LAYER4, (const void *)&vSpec, NULL, NULL) != 0) {
           return -1;
         }
+        *typeMask |= TCP_DST_PORT;
       }
     }
   }
@@ -1324,18 +1559,21 @@ int SetTCPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, boo
       if (SetFilter(16, 0, 12, tnl, LAYER4, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
         return -1;
       }
+      *typeMask |= TCP_DATA_OFF | TCP_FLAGS;
+
     }
     else {
       uint16_t vSpec = ((spec->hdr.data_off << 8) & 0xFF00) | spec->hdr.tcp_flags;
       if (SetFilter(16, 0, 12, tnl, LAYER4, (const void *)&vSpec, NULL, NULL) != 0) {
         return -1;
       }
+      *typeMask |= TCP_DATA_OFF | TCP_FLAGS;
     }
   }
   return 0;
 }
 
-int SetUDPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl)
+int SetUDPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask)
 {
   const struct rte_flow_item_udp *spec = (const struct rte_flow_item_udp *)item->spec;
   const struct rte_flow_item_udp *mask = (const struct rte_flow_item_udp *)item->mask;
@@ -1365,6 +1603,7 @@ int SetUDPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, boo
       if (SetFilter(32, 0, 0, tnl, LAYER4, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
         return -1;
       }
+      *typeMask |= UDP_SRC_PORT | UDP_DST_PORT;
       singleSetup = false;
     }
     else {
@@ -1372,6 +1611,7 @@ int SetUDPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, boo
       if (SetFilter(32, 0, 0, tnl, LAYER4, (const void *)&vSpec, NULL, NULL) != 0) {
         return -1;
       }
+      *typeMask |= UDP_SRC_PORT | UDP_DST_PORT;
       singleSetup = false;
     }
   }
@@ -1383,6 +1623,7 @@ int SetUDPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, boo
         if (SetFilter(16, 0, 0, tnl, LAYER4, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
           return -1;
         }
+        *typeMask |= UDP_SRC_PORT;
       } 
       else if (mask && mask->hdr.src_port) {
         uint16_t vSpec = rte_bswap16(spec->hdr.src_port);
@@ -1390,12 +1631,14 @@ int SetUDPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, boo
         if (SetFilter(16, 0, 0, tnl, LAYER4, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
           return -1;
         }
+        *typeMask |= UDP_SRC_PORT;
       }
       else {
         uint16_t vSpec = rte_bswap16(spec->hdr.src_port);
         if (SetFilter(16, 0, 0, tnl, LAYER4, (const void *)&vSpec, NULL, NULL) != 0) {
           return -1;
         }
+        *typeMask |= UDP_SRC_PORT;
       }
     }
     if (spec && spec->hdr.dst_port) {
@@ -1405,6 +1648,7 @@ int SetUDPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, boo
         if (SetFilter(16, 0, 2, tnl, LAYER4, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
           return -1;
         }
+        *typeMask |= UDP_DST_PORT;
       } 
       else if (mask && mask->hdr.dst_port) {
         uint16_t vSpec = rte_bswap16(spec->hdr.dst_port);
@@ -1412,12 +1656,14 @@ int SetUDPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, boo
         if (SetFilter(16, 0, 2, tnl, LAYER4, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
           return -1;
         }
+        *typeMask |= UDP_DST_PORT;
       }
       else {
         uint16_t vSpec = rte_bswap16(spec->hdr.dst_port);
         if (SetFilter(16, 0, 2, tnl, LAYER4, (const void *)&vSpec, NULL, NULL) != 0) {
           return -1;
         }
+        *typeMask |= UDP_DST_PORT;
       }
     }
   }
@@ -1425,7 +1671,7 @@ int SetUDPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, boo
   return 0;
 }
 
-int SetSCTPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl)
+int SetSCTPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask)
 {
   const struct rte_flow_item_sctp *spec = (const struct rte_flow_item_sctp *)item->spec;
   const struct rte_flow_item_sctp *mask = (const struct rte_flow_item_sctp *)item->mask;
@@ -1455,6 +1701,7 @@ int SetSCTPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(32, 0, 0, tnl, LAYER4, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
         return -1;
       }
+      *typeMask |= SCTP_SRC_PORT | SCTP_DST_PORT;
       singleSetup = false;
     }
     else {
@@ -1462,6 +1709,7 @@ int SetSCTPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(32, 0, 0, tnl, LAYER4, (const void *)&vSpec, NULL, NULL) != 0) {
         return -1;
       }
+      *typeMask |= SCTP_SRC_PORT | SCTP_DST_PORT;
       singleSetup = false;
     }
   }
@@ -1473,6 +1721,7 @@ int SetSCTPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
         if (SetFilter(16, 0, 0, tnl, LAYER4, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
           return -1;
         }
+        *typeMask |= SCTP_SRC_PORT;
       } 
       else if (mask && mask->hdr.src_port) {
         uint16_t vSpec = rte_bswap16(spec->hdr.src_port);
@@ -1480,12 +1729,14 @@ int SetSCTPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
         if (SetFilter(16, 0, 0, tnl, LAYER4, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
           return -1;
         }
+        *typeMask |= SCTP_SRC_PORT;
       }
       else {
         uint16_t vSpec = rte_bswap16(spec->hdr.src_port);
         if (SetFilter(16, 0, 0, tnl, LAYER4, (const void *)&vSpec, NULL, NULL) != 0) {
           return -1;
         }
+        *typeMask |= SCTP_SRC_PORT;
       }
     }
 
@@ -1496,6 +1747,7 @@ int SetSCTPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
         if (SetFilter(16, 0, 2, tnl, LAYER4, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
           return -1;
         }
+        *typeMask |= SCTP_DST_PORT;
       } 
       else if (mask && mask->hdr.dst_port) {
         uint16_t vSpec = rte_bswap16(spec->hdr.dst_port);
@@ -1503,12 +1755,14 @@ int SetSCTPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
         if (SetFilter(16, 0, 2, tnl, LAYER4, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
           return -1;
         }
+        *typeMask |= SCTP_DST_PORT;
       }
       else {
         uint16_t vSpec = rte_bswap16(spec->hdr.dst_port);
         if (SetFilter(16, 0, 2, tnl, LAYER4, (const void *)&vSpec, NULL, NULL) != 0) {
           return -1;
         }
+        *typeMask |= SCTP_DST_PORT;
       }
     }
   }
@@ -1516,7 +1770,7 @@ int SetSCTPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
   return 0;
 }
 
-int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl)
+int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask)
 {
   const struct rte_flow_item_icmp *spec = (const struct rte_flow_item_icmp *)item->spec;
   const struct rte_flow_item_icmp *mask = (const struct rte_flow_item_icmp *)item->mask;
@@ -1546,6 +1800,7 @@ int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(16, 0, 0, tnl, LAYER4, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
         return -1;
       }
+      *typeMask |= ICMP_TYPE | ICMP_CODE;
       singleSetup = false;
     }
     else {
@@ -1553,6 +1808,7 @@ int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(16, 0, 0, tnl, LAYER4, (const void *)&vSpec, NULL, NULL) != 0) {
         return -1;
       }
+      *typeMask |= ICMP_TYPE | ICMP_CODE;
       singleSetup = false;
     }
   }
@@ -1565,6 +1821,7 @@ int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
         if (SetFilter(16, 0xFF00, 0, tnl, LAYER4, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
           return -1;
         }
+        *typeMask |= ICMP_TYPE;
       } 
       else if (mask && mask->hdr.icmp_type) {
         uint16_t vSpec = ((spec->hdr.icmp_type << 8) & 0xFF00);
@@ -1572,12 +1829,14 @@ int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
         if (SetFilter(16, 0xFF00, 0, tnl, LAYER4, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
           return -1;
         }
+        *typeMask |= ICMP_TYPE;
       }
       else {
         uint16_t vSpec = ((spec->hdr.icmp_type << 8) & 0xFF00);
         if (SetFilter(16, 0xFF00, 0, tnl, LAYER4, (const void *)&vSpec, NULL, NULL) != 0) {
           return -1;
         }
+        *typeMask |= ICMP_TYPE;
       }
     }
 
@@ -1588,6 +1847,7 @@ int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
         if (SetFilter(16, 0xFF, 0, tnl, LAYER4, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
           return -1;
         }
+        *typeMask |= ICMP_CODE;
       } 
       else if (mask && mask->hdr.icmp_code) {
         uint16_t vSpec = spec->hdr.icmp_code;
@@ -1595,12 +1855,14 @@ int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
         if (SetFilter(16, 0xFF, 0, tnl, LAYER4, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
           return -1;
         }
+        *typeMask |= ICMP_CODE;
       }
       else {
         uint16_t vSpec = spec->hdr.icmp_code;
         if (SetFilter(16, 0xFF, 0, tnl, LAYER4, (const void *)&vSpec, NULL, NULL) != 0) {
           return -1;
         }
+        *typeMask |= ICMP_CODE;
       }
     }
   }
@@ -1612,6 +1874,7 @@ int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(16, 0, 4, tnl, LAYER4, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
         return -1;
       }
+      *typeMask |= ICMP_IDENT;
     } 
     else if (mask && mask->hdr.icmp_ident) {
       uint16_t vSpec = rte_bswap16(spec->hdr.icmp_ident);
@@ -1619,19 +1882,21 @@ int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(16, 0, 4, tnl, LAYER4, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
         return -1;
       }
+      *typeMask |= ICMP_IDENT;
     }
     else {
       uint16_t vSpec = rte_bswap16(spec->hdr.icmp_ident);
       if (SetFilter(16, 0, 4, tnl, LAYER4, (const void *)&vSpec, NULL, NULL) != 0) {
         return -1;
       }
+      *typeMask |= ICMP_IDENT;
     }
   }
 
   return 0;
 }
 
-int SetVlanFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl)
+int SetVlanFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask)
 {
   const struct rte_flow_item_vlan *spec = (const struct rte_flow_item_vlan *)item->spec;
   const struct rte_flow_item_vlan *mask = (const struct rte_flow_item_vlan *)item->mask;
@@ -1661,6 +1926,7 @@ int SetVlanFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(32, 0, 0, tnl, VLAN, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
         return -1;
       }
+      *typeMask |= VLAN_TPID | VLAN_TCI;
       singleSetup = false;
     }
     else {
@@ -1668,6 +1934,7 @@ int SetVlanFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(32, 0, 0, tnl, VLAN, (const void *)&vSpec, NULL, NULL) != 0) {
         return -1;
       }
+      *typeMask |= VLAN_TPID | VLAN_TCI;
       singleSetup = false;
     }
   }
@@ -1679,6 +1946,7 @@ int SetVlanFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
         if (SetFilter(16, 0, 0, tnl, VLAN, (const void *)&vSpec, NULL, &vLast) != 0) {
           return -1;
         }
+        *typeMask |= VLAN_TPID;
       } 
       else if (mask && mask->tpid) {
         uint16_t vSpec = rte_bswap16(spec->tpid);
@@ -1686,12 +1954,14 @@ int SetVlanFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
         if (SetFilter(16, 0, 0, tnl, VLAN, (const void *)&vSpec, &vMask, NULL) != 0) {
           return -1;
         }
+        *typeMask |= VLAN_TPID;
       }
       else {
         uint16_t vSpec = rte_bswap16(spec->tpid);
         if (SetFilter(16, 0, 0, tnl, VLAN, (const void *)&vSpec, NULL, NULL) != 0) {
           return -1;
         }
+        *typeMask |= VLAN_TPID;
       }
     }
 
@@ -1702,6 +1972,7 @@ int SetVlanFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
         if (SetFilter(16, 0, 2, tnl, VLAN, (const void *)&vSpec, NULL, &vLast) != 0) {
           return -1;
         }
+        *typeMask |= VLAN_TCI;
       } 
       else if (mask && mask->tci) {
         uint16_t vSpec = rte_bswap16(spec->tci);
@@ -1709,12 +1980,14 @@ int SetVlanFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
         if (SetFilter(16, 0, 2, tnl, VLAN, (const void *)&vSpec, &vMask, NULL) != 0) {
           return -1;
         }
+        *typeMask |= VLAN_TCI;
       }
       else {
         uint16_t vSpec = rte_bswap16(spec->tci);
         if (SetFilter(16, 0, 2, tnl, VLAN, (const void *)&vSpec, NULL, NULL) != 0) {
           return -1;
         }
+        *typeMask |= VLAN_TCI;
       }
     }
   }
@@ -1724,25 +1997,31 @@ int SetVlanFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
 int SetTunnelFilter(char *ntpl_buf, 
                     bool *fc, 
                     int version,
-                    int type)
+                    int type,
+                    uint64_t *typeMask)
 {
   if (*fc) strcat(ntpl_buf," and ");
   *fc = true;
   switch (type) {
   case GTP_TUNNEL_TYPE:
     sprintf(&ntpl_buf[strlen(ntpl_buf)], "(TunnelType==GTPv%d-U)", version);
+    *typeMask |= GTP_TUNNEL;
     break;
   case GRE_TUNNEL_TYPE:
     sprintf(&ntpl_buf[strlen(ntpl_buf)], "(TunnelType==GREv%d)", version);
+    *typeMask |= GRE_TUNNEL;
     break;
   case VXLAN_TUNNEL_TYPE:
     sprintf(&ntpl_buf[strlen(ntpl_buf)], "(TunnelType==VXLAN)");
+    *typeMask |= VXLAN_TUNNEL;
     break;
   case NVGRE_TUNNEL_TYPE:
     sprintf(&ntpl_buf[strlen(ntpl_buf)], "((TunnelType == GREv0 OR TunnelType == GREv1) AND InnerLayer2Protocol != other)");
+    *typeMask |= NVGRE_TUNNEL;
     break;
   case IP_IN_IP_TUNNEL_TYPE:
     sprintf(&ntpl_buf[strlen(ntpl_buf)], "(TunnelType == IPinIP)");
+    *typeMask |= IP_IN_IP_TUNNEL;
     break;
   }
   return 0;

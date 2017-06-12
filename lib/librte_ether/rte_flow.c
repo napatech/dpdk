@@ -93,7 +93,6 @@ rte_flow_create(uint8_t port_id,
 {
 	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
 	const struct rte_flow_ops *ops = rte_flow_ops_get(port_id, error);
-
 	if (unlikely(!ops))
 		return NULL;
 	if (likely(!!ops->create))
