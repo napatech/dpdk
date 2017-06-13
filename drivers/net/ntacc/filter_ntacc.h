@@ -41,21 +41,21 @@ void CreateStreamid(char *ntpl_buf, struct pmd_internals *internals, uint32_t nb
 int ReturnKeysetValue(uint8_t adapterNo, int value);
 void pushNtplID(struct rte_flow *flow, uint32_t ntplId);
 
-int SetEthernetFilter(const struct rte_flow_item *item, bool tunnel, uint64_t typeMask);
-int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnel, uint64_t typeMask);
-int SetIPV6Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnel, uint64_t typeMask);
-int SetUDPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel, uint64_t typeMask);
-int SetSCTPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel, uint64_t typeMask);
-int SetTCPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel, uint64_t typeMask);
-int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t typeMask);
-int SetVlanFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t typeMask);
+int SetEthernetFilter(const struct rte_flow_item *item, bool tunnel, uint64_t *typeMask);
+int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnel, uint64_t *typeMask);
+int SetIPV6Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnel, uint64_t *typeMask);
+int SetUDPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel, uint64_t *typeMask);
+int SetSCTPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel, uint64_t *typeMask);
+int SetTCPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel, uint64_t *typeMask);
+int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask);
+int SetVlanFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask);
 
-int SetTunnelFilter(char *ntpl_buf, bool *fc, int version, int type, uint64_t typeMask);
+int SetTunnelFilter(char *ntpl_buf, bool *fc, int version, int type, uint64_t *typeMask);
 
-int CreateOptimizedFilter(char *ntpl_buf, struct pmd_internals *internals, struct rte_flow *flow, bool *fc, uint64_t typeMask);
+int CreateOptimizedFilter(char *ntpl_buf, struct pmd_internals *internals, struct rte_flow *flow, bool *fc, uint64_t typeMask, uint8_t *plist_queues, uint8_t nb_queues, bool *reuse);
 
-void DeleteKeyset(int key);
-void DeleteHash(uint64_t rss_hf, uint8_t port, int priority);
+void DeleteKeyset(int key, struct pmd_internals *internals);
+void DeleteHash(uint64_t rss_hf, uint8_t port, int priority, struct pmd_internals *internals);
 
 enum {
   GTP_TUNNEL_TYPE,
@@ -67,11 +67,11 @@ enum {
 
 struct filter_values_s {
 	LIST_ENTRY(filter_values_s) next;
-  int size; 
   uint64_t mask;
-  int offset;
   const char *layerString;
-  uint32_t layer;
+  uint8_t size; 
+  uint8_t layer;
+  uint8_t offset;
   union {
     struct {
       uint16_t specVal;

@@ -32,7 +32,11 @@
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 #include <time.h>
+#include <linux/limits.h>
 #include <sys/param.h>
+#include <sys/stat.h> 
+#include <fcntl.h>
+#include <unistd.h>
 #include <dlfcn.h>
 #include <rte_mbuf.h>
 #include <rte_ethdev.h>
@@ -52,6 +56,7 @@
 #include "filter_ntacc.h"
 
 #define ETH_NTACC_PORT_ARG "port"
+#define ETH_NTACC_NTPL_ARG "ntpl"
 
 #define HW_MAX_PKT_LEN  10000
 #define HW_MTU    (HW_MAX_PKT_LEN - ETHER_HDR_LEN - ETHER_CRC_LEN) /**< MTU */
@@ -65,11 +70,13 @@
 #define SET_COLOR(a) ((a) | 0x2000)
 #define GET_HASH(a)  ((uint32_t)((((uint64_t)(a)) >> 14) & 0xFFFFFF))
 
+#define MAX_NTPL_NAME 512
+
 static struct {
    int32_t major;
    int32_t minor;
    int32_t patch;
-} supportedDriver = {3, 6, 2};
+} supportedDriver = {3, 6, 6};
 
 #define NB_SUPPORTED_FPGAS 7
 struct {
@@ -80,13 +87,13 @@ struct {
   uint32_t build:10;
 } supportedAdapters[NB_SUPPORTED_FPGAS] = 
 {
-  { 200, 9500, 6, 7, 0 },
-  { 200, 9501, 6, 6, 0 },
-  { 200, 9502, 6, 7, 0 },
-  { 200, 9503, 6, 5, 0 },
-  { 200, 9505, 6, 5, 0 },
-  { 200, 9508, 6, 6, 0 },
-  { 200, 9512, 7, 2, 0 },
+  { 200, 9500, 8, 6, 0 },
+  { 200, 9501, 8, 6, 0 },
+  { 200, 9502, 8, 6, 0 },
+  { 200, 9503, 8, 6, 0 },
+  { 200, 9505, 8, 6, 0 },
+  { 200, 9508, 7, 6, 0 },
+  { 200, 9512, 8, 8, 0 },
 };
 
 static void *_libnt;
@@ -125,6 +132,7 @@ static volatile uint16_t port_locks[MAX_NTACC_PORTS];
 
 static const char *valid_arguments[] = {
   ETH_NTACC_PORT_ARG,
+  ETH_NTACC_NTPL_ARG,
   NULL
 };
 
@@ -140,10 +148,18 @@ static inline void priv_unlock(struct pmd_internals *internals)
 	rte_spinlock_unlock(&internals->lock);
 }
 
-int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo)
+static void _write_to_file(int fd, const char *buffer)
+{
+  if (write(fd, buffer, strlen(buffer)) < 0) {
+    RTE_LOG(ERR, PMD, "NTPL dump failed: Unable to write to file. Error %d\n", errno);
+  }
+}
+
+int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo, struct pmd_internals *internals)
 {
   NtConfigStream_t hCfgStream;      // Config stream
   int status;
+  int fd;
 
   if((status = (*_NT_ConfigOpen)(&hCfgStream, "capture")) != NT_SUCCESS) {
     // Get the status code as text
@@ -152,6 +168,15 @@ int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo)
     return -1;
   }
 
+  if (internals->ntpl_file) {
+    fd = open(internals->ntpl_file, O_WRONLY | O_APPEND | O_CREAT, 0666);
+    if (fd == -1) {
+      RTE_LOG(ERR, PMD, "NTPL dump failed: Unable to open file %s. Error %d\n", internals->ntpl_file, errno);
+    }
+    _write_to_file(fd, ntplStr); _write_to_file(fd, "\n");
+    close(fd);
+  }
+  
   RTE_LOG(DEBUG, PMD, "NTPL : %s\n", ntplStr);
   if((status = (*_NT_NTPL)(hCfgStream, ntplStr, ntplInfo, NT_NTPL_PARSER_VALIDATE_NORMAL)) != NT_SUCCESS) {
     // Get the status code as text
@@ -162,6 +187,17 @@ int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo)
     RTE_LOG(ERR, PMD, ">>> %s\n", ntplInfo->u.errorData.errBuffer[1]);
     RTE_LOG(ERR, PMD, ">>> %s\n", ntplInfo->u.errorData.errBuffer[2]);
     (*_NT_ConfigClose)(hCfgStream);
+
+    if (internals->ntpl_file) {
+      fd = open(internals->ntpl_file, O_WRONLY | O_APPEND | O_CREAT, 0666);
+      if (fd == -1) {
+        RTE_LOG(ERR, PMD, "NT_NTPL() dump failed: Unable to open file %s. Error %d\n", internals->ntpl_file, errno);
+      }
+      _write_to_file(fd, ntplInfo->u.errorData.errBuffer[0]); _write_to_file(fd, "\n");
+      _write_to_file(fd, ntplInfo->u.errorData.errBuffer[1]); _write_to_file(fd, "\n");
+      _write_to_file(fd, ntplInfo->u.errorData.errBuffer[2]); _write_to_file(fd, "\n");
+      close(fd);
+    }
     return -1;
   }
   RTE_LOG(DEBUG, PMD, "NTPL : %d\n", ntplInfo->ntplId);
@@ -392,7 +428,7 @@ static int eth_dev_start(struct rte_eth_dev *dev)
   // Set the port number
   sprintf(&ntpl_buf[strlen(ntpl_buf)], "]=port==%u", internals->port);
 
-  if (DoNtpl(ntpl_buf, &ntplInfo) != 0) {
+  if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
     RTE_LOG(ERR, PMD, "Failed to create default filter in eth_dev_start\n");
     goto StartError;
   }
@@ -742,18 +778,21 @@ static void _cleanUpHash(struct rte_flow *flow, struct pmd_internals *internals)
 {
   struct rte_flow *pTmp;
   bool found = false;
+
+  if (flow->rss_hf == 0) {
+    // No hash => nothing to cleanup
+    return;
+  }
   LIST_FOREACH(pTmp, &internals->flows, next) {
-    printf("_cleanUpHash: Looking for Hash %016llX, %u, %d\n", (long long unsigned int)flow->rss_hf, flow->port, flow->priority);
     if (pTmp->rss_hf == flow->rss_hf && pTmp->port == flow->port && pTmp->priority == flow->priority) {
       // Key set is still in use
-      printf("_cleanUpHash: Found Hash (still in use): %016llX, %u, %d\n", (long long unsigned int)flow->rss_hf, flow->port, flow->priority);
       found = true;
       break;
     }
   }
   if (!found) {
     // Hash is not in use anymore. delete it.
-    DeleteHash(flow->rss_hf, flow->port, flow->priority);
+    DeleteHash(flow->rss_hf, flow->port, flow->priority, internals);
   }
 }
 
@@ -762,17 +801,15 @@ static void _cleanUpKeySet(int key, struct pmd_internals *internals)
   struct rte_flow *pTmp;
   bool found = false;
   LIST_FOREACH(pTmp, &internals->flows, next) {
-    printf("_cleanUpKeySet: Looking for Key set: %d == %d\n", key, pTmp->key);
     if (pTmp->key == key) {
       // Key set is still in use
-      printf("_cleanUpKeySet: Found Key set (still in use): %d\n", pTmp->key);
       found = true;
       break;
     }
   }
   if (!found) {
     // Key set is not in use anymore. delete it.
-    DeleteKeyset(key);
+    DeleteKeyset(key, internals);
     RTE_LOG(DEBUG, PMD, "Returning keyset %u: %d\n", internals->adapterNo, key);
     ReturnKeysetValue(internals->adapterNo, key);
   }
@@ -788,7 +825,7 @@ static void _cleanUpFlow(struct rte_flow *flow, struct pmd_internals *internals)
     struct filter_flow *id;
     id = LIST_FIRST(&flow->ntpl_id);
     sprintf(ntpl_buf, "delete=%d", id->ntpl_id);
-    DoNtpl(ntpl_buf, &ntplInfo);
+    DoNtpl(ntpl_buf, &ntplInfo, internals);
     RTE_LOG(DEBUG, PMD, "Deleting Item filter: %s\n", ntpl_buf);
     LIST_REMOVE(id, next);
     free(id);
@@ -807,7 +844,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   struct pmd_internals *internals = dev->data->dev_private;
   NtNtplInfo_t ntplInfo;
   uint8_t nb_queues = 0;
-  uint8_t list_queues[256];
+  uint8_t list_queues[RTE_ETHDEV_QUEUE_STAT_CNTRS];
   bool filterContinue = true;
   bool queueDefined = false;
   const struct rte_flow_action_rss *rss = NULL;
@@ -818,6 +855,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   int tunneltype;
   int color = -1;
   uint64_t typeMask = 0;
+  bool reuse;
 
   char *ntpl_buf = NULL;
   struct rte_flow *flow = NULL;
@@ -870,6 +908,10 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         goto FlowError;
       }
       queueDefined = true;
+      if (rss->num > RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Number of RSS queues out of range");
+        goto FlowError;
+      }
       for (i = 0; i < rss->num; i++) {
         if (rss->queue[i] >= RTE_ETHDEV_QUEUE_STAT_CNTRS) {
           rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "RSS queue out of range");
@@ -920,6 +962,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   // Set the port number
   sprintf(&ntpl_buf[strlen(ntpl_buf)], "]=port==%u", internals->port);
 
+
   // Set the filter expression
   tunnel = false;
   for (; items->type != RTE_FLOW_ITEM_TYPE_END; ++items) {
@@ -929,7 +972,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
     case RTE_FLOW_ITEM_TYPE_ETH:
       if (SetEthernetFilter(items,
                             tunnel,
-                            typeMask) != 0) {
+                            &typeMask) != 0) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up Ether filter");
         goto FlowError;
       }
@@ -940,7 +983,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                           &filterContinue, 
                           items,
                           tunnel,
-                          typeMask) != 0) {
+                          &typeMask) != 0) {
           rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up IPV4 filter");
           goto FlowError;
         }
@@ -951,7 +994,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                         &filterContinue, 
                         items,
                         tunnel,
-                        typeMask) != 0) {
+                        &typeMask) != 0) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up IPV6 filter");
         goto FlowError;
       }
@@ -962,7 +1005,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                           &filterContinue, 
                           items,
                           tunnel,
-                          typeMask) != 0) {
+                          &typeMask) != 0) {
           rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up TCP filter");
           goto FlowError;
         }
@@ -973,7 +1016,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                           &filterContinue, 
                           items,
                           tunnel,
-                          typeMask) != 0) {
+                          &typeMask) != 0) {
           rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up TCP filter");
           goto FlowError;
         }
@@ -984,7 +1027,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                         &filterContinue, 
                         items,
                         tunnel,
-                        typeMask) != 0) {
+                        &typeMask) != 0) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up UDP filter");
         goto FlowError;
       }
@@ -995,7 +1038,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                           &filterContinue, 
                           items,
                           tunnel,
-                          typeMask) != 0) {
+                          &typeMask) != 0) {
           rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up ICMP filter");
           goto FlowError;
         }
@@ -1006,7 +1049,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                         &filterContinue, 
                         items,
                         tunnel,
-                        typeMask) != 0) {
+                        &typeMask) != 0) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up VLAN filter");
         goto FlowError;
       }
@@ -1057,7 +1100,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                         &filterContinue, 
                         version,
                         tunneltype,
-                        typeMask) != 0) {
+                        &typeMask) != 0) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up tunnel filter");
         goto FlowError;
       }
@@ -1071,17 +1114,18 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       }
     }
 
-    if (CreateOptimizedFilter(ntpl_buf, internals, flow, &filterContinue, typeMask) != 0) {
-      rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Filter error");
+    if (CreateOptimizedFilter(ntpl_buf, internals, flow, &filterContinue, typeMask, list_queues, nb_queues, &reuse) != 0) {
+      rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Creating filter error");
       goto FlowError;
     }
 
-    if (DoNtpl(ntpl_buf, &ntplInfo) != 0) {
-      rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Filter error");
-      goto FlowError;
+    if (!reuse) {
+      if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
+        rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Filter error");
+        goto FlowError;
+      }
+      pushNtplID(flow, ntplInfo.ntplId);
     }
-
-    pushNtplID(flow, ntplInfo.ntplId);
 
     if (rss && rss->rss_conf) {
       // If RSS is used, then set the Hash mode
@@ -1252,6 +1296,7 @@ static struct eth_dev_ops ops = {
 static int rte_pmd_init_internals(const char *name,
                                   const unsigned numa_node,
                                   const uint32_t port,
+                                  const char     *ntpl_file,
                                   struct rte_eth_dev **eth_dev)
 {
   int iRet = 0;
@@ -1294,6 +1339,16 @@ static int rte_pmd_init_internals(const char *name,
     goto error;
   }
 
+  if (strlen(ntpl_file) > 0) {
+    internals->ntpl_file  = rte_zmalloc_socket(name, strlen(ntpl_file) + 1, 0, numa_node);
+    if (internals->ntpl_file == NULL) {
+      RTE_LOG(ERR, PMD, "ERROR: Failed to allocate memory\n");
+      iRet = 1;
+      goto error;
+    }
+    strcpy(internals->ntpl_file, ntpl_file);
+  }
+  
   /* reserve an ethdev entry */
   *eth_dev = rte_eth_dev_allocate(name);
   if (*eth_dev == NULL) {
@@ -1505,6 +1560,12 @@ static inline int ascii_to_u32(const char *key __rte_unused, const char *value, 
   return 0;
 }
 
+static inline int ascii_to_ascii(const char *key __rte_unused, const char *value, void *extra_args)
+{
+  strncpy((char *)extra_args, value, MAX_NTPL_NAME);
+  return 0;
+}
+
 static int _nt_lib_open(void)
 {
   char path[128];
@@ -1650,7 +1711,7 @@ static int rte_pmd_ntacc_dev_probe(const char *name, const char *params)
   unsigned int i;
   uint32_t port=0;
 
-  char ntplStr[512];
+  char ntplStr[MAX_NTPL_NAME] = { 0 };
 
   RTE_LOG(DEBUG, PMD, "Initializing pmd_ntacc %s for %s\n", rte_version(), name);
 
@@ -1667,6 +1728,12 @@ static int rte_pmd_ntacc_dev_probe(const char *name, const char *params)
     ret = rte_kvargs_process(kvlist, ETH_NTACC_PORT_ARG, &ascii_to_u32, &port);
   }
 
+  // Get filename to store ntpl
+  if ((i = rte_kvargs_count(kvlist, ETH_NTACC_NTPL_ARG))) {
+    assert (i == 1);
+    ret = rte_kvargs_process(kvlist, ETH_NTACC_NTPL_ARG, &ascii_to_ascii, ntplStr);
+  }
+
   rte_kvargs_free(kvlist);
  
   if (ret < 0)
@@ -1681,16 +1748,17 @@ static int rte_pmd_ntacc_dev_probe(const char *name, const char *params)
   if (first)
     (*_NT_Init)(NTAPI_VERSION);
 
+  if (rte_pmd_init_internals(name, numa_node, port, ntplStr, &eth_dev) < 0)
+    return -1;
+
   if (first) {
     /* Delete all NTPL */
+    struct pmd_internals *internals = eth_dev->data->dev_private;
     sprintf(ntplStr, "Delete=All");
-    if (DoNtpl(ntplStr, &ntplInfo) != 0) {
+    if (DoNtpl(ntplStr, &ntplInfo, internals) != 0) {
       return -1;
     }
   }
-
-  if (rte_pmd_init_internals(name, numa_node, port, &eth_dev) < 0)
-    return -1;
 
   eth_dev->rx_pkt_burst = eth_ntacc_rx;
   eth_dev->tx_pkt_burst = eth_ntacc_tx;
@@ -1709,6 +1777,10 @@ static int rte_pmd_ntacc_dev_remove(const char *name)
     /* reserve an ethdev entry */
     eth_dev = rte_eth_dev_allocated(name);
     if (eth_dev != NULL) {
+      struct pmd_internals *internals = eth_dev->data->dev_private;
+      if (internals->ntpl_file) {
+        rte_free(internals->ntpl_file);
+      }
       rte_free(eth_dev->data->dev_private);
       rte_free(eth_dev->data);
       rte_eth_dev_release_port(eth_dev);
@@ -1728,5 +1800,7 @@ static struct rte_vdev_driver pmd_ntacc_drv = {
 RTE_PMD_REGISTER_VDEV(net_ntacc, pmd_ntacc_drv);
 RTE_PMD_REGISTER_ALIAS(net_ntacc, eth_ntacc);
 RTE_PMD_REGISTER_PARAM_STRING(net_ntacc,
+  ETH_NTACC_NTPL_ARG     "=<string> "
   ETH_NTACC_PORT_ARG     "=<int> ");
+
 
