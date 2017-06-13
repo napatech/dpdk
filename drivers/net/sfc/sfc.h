@@ -1,5 +1,7 @@
 /*-
- * Copyright (c) 2016 Solarflare Communications Inc.
+ *   BSD LICENSE
+ *
+ * Copyright (c) 2016-2017 Solarflare Communications Inc.
  * All rights reserved.
  *
  * This software was jointly developed between OKTET Labs (under contract
@@ -38,6 +40,8 @@
 
 #include "efx.h"
 
+#include "sfc_filter.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -60,20 +64,20 @@ extern "C" {
  *	V			|
  * +---------------+------------+
  * |  INITIALIZED  |
- * +---------------+<-----------+
- *	|.dev_configure		|
- *	V			|
- * +---------------+		|
- * |  CONFIGURING  |------------^
- * +---------------+ failed	|
- *	|success		|
- *	|		+---------------+
- *	|		|    CLOSING    |
- *	|		+---------------+
- *	|			^
- *	V			|.dev_close
- * +---------------+------------+
- * |  CONFIGURED   |
+ * +---------------+<-----------<---------------+
+ *	|.dev_configure		|		|
+ *	V			|failed		|
+ * +---------------+------------+		|
+ * |  CONFIGURING  |				|
+ * +---------------+----+			|
+ *	|success	|			|
+ *	|		|		+---------------+
+ *	|		|		|    CLOSING    |
+ *	|		|		+---------------+
+ *	|		|			^
+ *	V		|.dev_configure		|
+ * +---------------+----+			|.dev_close
+ * |  CONFIGURED   |----------------------------+
  * +---------------+<-----------+
  *	|.dev_start		|
  *	V			|
@@ -125,6 +129,8 @@ struct sfc_mcdi {
 	enum sfc_mcdi_state		state;
 	efx_mcdi_transport_t		transport;
 	bool				logging;
+	uint32_t			proxy_handle;
+	efx_rc_t			proxy_result;
 };
 
 struct sfc_intr {
@@ -133,9 +139,9 @@ struct sfc_intr {
 	boolean_t			lsc_intr;
 };
 
-struct sfc_evq_info;
 struct sfc_rxq_info;
 struct sfc_txq_info;
+struct sfc_dp_rx;
 
 struct sfc_port {
 	unsigned int			lsc_seq;
@@ -150,9 +156,18 @@ struct sfc_port {
 	boolean_t			promisc;
 	boolean_t			allmulti;
 
+	unsigned int			max_mcast_addrs;
+	unsigned int			nb_mcast_addrs;
+	uint8_t				*mcast_addrs;
+
 	rte_spinlock_t			mac_stats_lock;
 	uint64_t			*mac_stats_buf;
 	efsys_mem_t			mac_stats_dma_mem;
+	boolean_t			mac_stats_reset_pending;
+	uint16_t			mac_stats_update_period_ms;
+	uint32_t			mac_stats_update_generation;
+	boolean_t			mac_stats_periodic_dma_supported;
+	uint64_t			mac_stats_last_request_timestamp;
 
 	uint32_t		mac_stats_mask[EFX_MAC_STATS_MASK_NPAGES];
 };
@@ -179,6 +194,7 @@ struct sfc_adapter {
 	struct sfc_mcdi			mcdi;
 	struct sfc_intr			intr;
 	struct sfc_port			port;
+	struct sfc_filter		filter;
 
 	unsigned int			rxq_max;
 	unsigned int			txq_max;
@@ -187,10 +203,10 @@ struct sfc_adapter {
 
 	uint32_t			evq_flags;
 	unsigned int			evq_count;
-	struct sfc_evq_info		*evq_info;
 
 	unsigned int			mgmt_evq_index;
 	rte_spinlock_t			mgmt_evq_lock;
+	struct sfc_evq			*mgmt_evq;
 
 	unsigned int			rxq_count;
 	struct sfc_rxq_info		*rxq_info;
@@ -209,6 +225,9 @@ struct sfc_adapter {
 	unsigned int			rss_tbl[EFX_RSS_TBL_SIZE];
 	uint8_t				rss_key[SFC_RSS_KEY_SIZE];
 #endif
+
+	const struct sfc_dp_rx		*dp_rx;
+	const struct sfc_dp_tx		*dp_tx;
 };
 
 /*
@@ -252,10 +271,19 @@ sfc_adapter_lock_fini(__rte_unused struct sfc_adapter *sa)
 	/* Just for symmetry of the API */
 }
 
+/** Get the number of milliseconds since boot from the default timer */
+static inline uint64_t
+sfc_get_system_msecs(void)
+{
+	return rte_get_timer_cycles() * MS_PER_S / rte_get_timer_hz();
+}
+
 int sfc_dma_alloc(const struct sfc_adapter *sa, const char *name, uint16_t id,
 		  size_t len, int socket_id, efsys_mem_t *esmp);
 void sfc_dma_free(const struct sfc_adapter *sa, efsys_mem_t *esmp);
 
+int sfc_probe(struct sfc_adapter *sa);
+void sfc_unprobe(struct sfc_adapter *sa);
 int sfc_attach(struct sfc_adapter *sa);
 void sfc_detach(struct sfc_adapter *sa);
 int sfc_start(struct sfc_adapter *sa);
@@ -269,18 +297,21 @@ void sfc_close(struct sfc_adapter *sa);
 
 int sfc_intr_attach(struct sfc_adapter *sa);
 void sfc_intr_detach(struct sfc_adapter *sa);
-int sfc_intr_init(struct sfc_adapter *sa);
-void sfc_intr_fini(struct sfc_adapter *sa);
+int sfc_intr_configure(struct sfc_adapter *sa);
+void sfc_intr_close(struct sfc_adapter *sa);
 int sfc_intr_start(struct sfc_adapter *sa);
 void sfc_intr_stop(struct sfc_adapter *sa);
 
-int sfc_port_init(struct sfc_adapter *sa);
-void sfc_port_fini(struct sfc_adapter *sa);
+int sfc_port_attach(struct sfc_adapter *sa);
+void sfc_port_detach(struct sfc_adapter *sa);
+int sfc_port_configure(struct sfc_adapter *sa);
+void sfc_port_close(struct sfc_adapter *sa);
 int sfc_port_start(struct sfc_adapter *sa);
 void sfc_port_stop(struct sfc_adapter *sa);
 void sfc_port_link_mode_to_info(efx_link_mode_t link_mode,
 				struct rte_eth_link *link_info);
 int sfc_port_update_mac_stats(struct sfc_adapter *sa);
+int sfc_port_reset_mac_stats(struct sfc_adapter *sa);
 int sfc_set_rx_mode(struct sfc_adapter *sa);
 
 

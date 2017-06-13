@@ -257,13 +257,9 @@ priv_dev_rss_reta_query(struct priv *priv,
 {
 	unsigned int idx;
 	unsigned int i;
-	int ret;
 
-	/* See RETA comment in mlx5_dev_infos_get(). */
-	ret = priv_rss_reta_index_resize(priv, priv->ind_table_max_size);
-	if (ret)
-		return ret;
-
+	if (!reta_size || reta_size > priv->reta_idx_n)
+		return EINVAL;
 	/* Fill each entry of the table even if its bit is not set. */
 	for (idx = 0, i = 0; (i != reta_size); ++i) {
 		idx = i / RTE_RETA_GROUP_SIZE;
@@ -296,8 +292,9 @@ priv_dev_rss_reta_update(struct priv *priv,
 	unsigned int pos;
 	int ret;
 
-	/* See RETA comment in mlx5_dev_infos_get(). */
-	ret = priv_rss_reta_index_resize(priv, priv->ind_table_max_size);
+	if (!reta_size)
+		return EINVAL;
+	ret = priv_rss_reta_index_resize(priv, reta_size);
 	if (ret)
 		return ret;
 
@@ -360,8 +357,11 @@ mlx5_dev_rss_reta_update(struct rte_eth_dev *dev,
 	int ret;
 	struct priv *priv = dev->data->dev_private;
 
+	mlx5_dev_stop(dev);
 	priv_lock(priv);
 	ret = priv_dev_rss_reta_update(priv, reta_conf, reta_size);
 	priv_unlock(priv);
-	return -ret;
+	if (ret)
+		return -ret;
+	return mlx5_dev_start(dev);
 }

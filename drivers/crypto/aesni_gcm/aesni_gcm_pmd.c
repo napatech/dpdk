@@ -375,75 +375,73 @@ handle_completed_gcm_crypto_op(struct aesni_gcm_qp *qp,
 		rte_mempool_put(qp->sess_mp, op->sym->session);
 		op->sym->session = NULL;
 	}
-
-	rte_ring_enqueue(qp->processed_pkts, (void *)op);
-}
-
-static uint16_t
-aesni_gcm_pmd_enqueue_burst(void *queue_pair,
-		struct rte_crypto_op **ops, uint16_t nb_ops)
-{
-	struct aesni_gcm_session *sess;
-	struct aesni_gcm_qp *qp = queue_pair;
-
-	int i, retval = 0;
-
-	for (i = 0; i < nb_ops; i++) {
-
-		sess = aesni_gcm_get_session(qp, ops[i]->sym);
-		if (unlikely(sess == NULL)) {
-			ops[i]->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
-			qp->qp_stats.enqueue_err_count++;
-			break;
-		}
-
-		retval = process_gcm_crypto_op(ops[i]->sym, sess);
-		if (retval < 0) {
-			ops[i]->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
-			qp->qp_stats.enqueue_err_count++;
-			break;
-		}
-
-		handle_completed_gcm_crypto_op(qp, ops[i]);
-
-		qp->qp_stats.enqueued_count++;
-	}
-	return i;
 }
 
 static uint16_t
 aesni_gcm_pmd_dequeue_burst(void *queue_pair,
 		struct rte_crypto_op **ops, uint16_t nb_ops)
 {
+	struct aesni_gcm_session *sess;
 	struct aesni_gcm_qp *qp = queue_pair;
 
-	unsigned nb_dequeued;
+	int retval = 0;
+	unsigned int i, nb_dequeued;
 
 	nb_dequeued = rte_ring_dequeue_burst(qp->processed_pkts,
-			(void **)ops, nb_ops);
-	qp->qp_stats.dequeued_count += nb_dequeued;
+			(void **)ops, nb_ops, NULL);
 
-	return nb_dequeued;
+	for (i = 0; i < nb_dequeued; i++) {
+
+		sess = aesni_gcm_get_session(qp, ops[i]->sym);
+		if (unlikely(sess == NULL)) {
+			ops[i]->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
+			qp->qp_stats.dequeue_err_count++;
+			break;
+		}
+
+		retval = process_gcm_crypto_op(ops[i]->sym, sess);
+		if (retval < 0) {
+			ops[i]->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
+			qp->qp_stats.dequeue_err_count++;
+			break;
+		}
+
+		handle_completed_gcm_crypto_op(qp, ops[i]);
+	}
+
+	qp->qp_stats.dequeued_count += i;
+
+	return i;
 }
 
-static int aesni_gcm_remove(const char *name);
+static uint16_t
+aesni_gcm_pmd_enqueue_burst(void *queue_pair,
+		struct rte_crypto_op **ops, uint16_t nb_ops)
+{
+	struct aesni_gcm_qp *qp = queue_pair;
+
+	unsigned int nb_enqueued;
+
+	nb_enqueued = rte_ring_enqueue_burst(qp->processed_pkts,
+			(void **)ops, nb_ops, NULL);
+	qp->qp_stats.enqueued_count += nb_enqueued;
+
+	return nb_enqueued;
+}
+
+static int aesni_gcm_remove(struct rte_vdev_device *vdev);
 
 static int
-aesni_gcm_create(struct rte_crypto_vdev_init_params *init_params)
+aesni_gcm_create(const char *name,
+		struct rte_vdev_device *vdev,
+		struct rte_crypto_vdev_init_params *init_params)
 {
 	struct rte_cryptodev *dev;
 	struct aesni_gcm_private *internals;
 
-	if (init_params->name[0] == '\0') {
-		int ret = rte_cryptodev_pmd_create_dev_name(
-				init_params->name,
-				RTE_STR(CRYPTODEV_NAME_AESNI_GCM_PMD));
-
-		if (ret < 0) {
-			GCM_LOG_ERR("failed to create unique name");
-			return ret;
-		}
-	}
+	if (init_params->name[0] == '\0')
+		snprintf(init_params->name, sizeof(init_params->name),
+				"%s", name);
 
 	/* Check CPU for support for AES instruction set */
 	if (!rte_cpu_get_flag_enabled(RTE_CPUFLAG_AES)) {
@@ -480,12 +478,12 @@ aesni_gcm_create(struct rte_crypto_vdev_init_params *init_params)
 init_error:
 	GCM_LOG_ERR("driver %s: create failed", init_params->name);
 
-	aesni_gcm_remove(init_params->name);
+	aesni_gcm_remove(vdev);
 	return -EFAULT;
 }
 
 static int
-aesni_gcm_probe(const char *name, const char *input_args)
+aesni_gcm_probe(struct rte_vdev_device *vdev)
 {
 	struct rte_crypto_vdev_init_params init_params = {
 		RTE_CRYPTODEV_VDEV_DEFAULT_MAX_NB_QUEUE_PAIRS,
@@ -493,7 +491,13 @@ aesni_gcm_probe(const char *name, const char *input_args)
 		rte_socket_id(),
 		{0}
 	};
+	const char *name;
+	const char *input_args;
 
+	name = rte_vdev_device_name(vdev);
+	if (name == NULL)
+		return -EINVAL;
+	input_args = rte_vdev_device_args(vdev);
 	rte_cryptodev_parse_vdev_init_params(&init_params, input_args);
 
 	RTE_LOG(INFO, PMD, "Initialising %s on NUMA node %d\n", name,
@@ -506,12 +510,15 @@ aesni_gcm_probe(const char *name, const char *input_args)
 	RTE_LOG(INFO, PMD, "  Max number of sessions = %d\n",
 			init_params.max_nb_sessions);
 
-	return aesni_gcm_create(&init_params);
+	return aesni_gcm_create(name, vdev, &init_params);
 }
 
 static int
-aesni_gcm_remove(const char *name)
+aesni_gcm_remove(struct rte_vdev_device *vdev)
 {
+	const char *name;
+
+	name = rte_vdev_device_name(vdev);
 	if (name == NULL)
 		return -EINVAL;
 

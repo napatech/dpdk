@@ -4,7 +4,7 @@ API {#index}
 <!--
   BSD LICENSE
 
-  Copyright 2013 6WIND S.A.
+  Copyright 2013-2017 6WIND S.A.
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions
@@ -42,15 +42,17 @@ There are many libraries, so their headers may be grouped by topics:
   [rte_flow]           (@ref rte_flow.h),
   [rte_flow_driver]    (@ref rte_flow_driver.h),
   [cryptodev]          (@ref rte_cryptodev.h),
+  [eventdev]           (@ref rte_eventdev.h),
   [devargs]            (@ref rte_devargs.h),
   [PCI]                (@ref rte_pci.h)
 
 - **device specific**:
   [bond]               (@ref rte_eth_bond.h),
-  [vhost]              (@ref rte_virtio_net.h),
+  [vhost]              (@ref rte_vhost.h),
   [KNI]                (@ref rte_kni.h),
   [ixgbe]              (@ref rte_pmd_ixgbe.h),
-  [i40e]               (@ref rte_pmd_i40e.h)
+  [i40e]               (@ref rte_pmd_i40e.h),
+  [crypto_scheduler]   (@ref rte_cryptodev_scheduler.h)
 
 - **memory**:
   [memseg]             (@ref rte_memory.h),
@@ -156,4 +158,7 @@ There are many libraries, so their headers may be grouped by topics:
   [common]             (@ref rte_common.h),
   [ABI compat]         (@ref rte_compat.h),
   [keepalive]          (@ref rte_keepalive.h),
+  [device metrics]     (@ref rte_metrics.h),
+  [bitrate statistics] (@ref rte_bitrate.h),
+  [latency statistics] (@ref rte_latencystats.h),
   [version]            (@ref rte_version.h)

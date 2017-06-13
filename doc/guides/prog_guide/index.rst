@@ -1,5 +1,5 @@
 ..  BSD LICENSE
-    Copyright(c) 2010-2014 Intel Corporation. All rights reserved.
+    Copyright(c) 2010-2017 Intel Corporation. All rights reserved.
     All rights reserved.
 
     Redistribution and use in source and binary forms, with or without
@@ -62,6 +62,7 @@ Programmer's Guide
     packet_classif_access_ctrl
     packet_framework
     vhost_lib
+    metrics_lib
     port_hotplug_framework
     source_org
     dev_kit_build_system
@@ -126,10 +127,6 @@ Programmer's Guide
 :numref:`figure_kernel_nic_intf` :ref:`figure_kernel_nic_intf`
 
 :numref:`figure_pkt_flow_kni` :ref:`figure_pkt_flow_kni`
-
-:numref:`figure_vhost_net_arch2` :ref:`figure_vhost_net_arch2`
-
-:numref:`figure_kni_traffic_flow` :ref:`figure_kni_traffic_flow`
 
 
 :numref:`figure_pkt_proc_pipeline_qos` :ref:`figure_pkt_proc_pipeline_qos`

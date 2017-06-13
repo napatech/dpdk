@@ -61,6 +61,15 @@ void ecore_vf_get_num_rxqs(struct ecore_hwfn *p_hwfn,
 			   u8 *num_rxqs);
 
 /**
+ * @brief Get number of Rx queues allocated for VF by ecore
+ *
+ *  @param p_hwfn
+ *  @param num_txqs - allocated RX queues
+ */
+void ecore_vf_get_num_txqs(struct ecore_hwfn *p_hwfn,
+			   u8 *num_txqs);
+
+/**
  * @brief Get port mac address for VF
  *
  * @param p_hwfn
@@ -78,17 +87,17 @@ void ecore_vf_get_port_mac(struct ecore_hwfn *p_hwfn,
 void ecore_vf_get_num_vlan_filters(struct ecore_hwfn *p_hwfn,
 				   u8 *num_vlan_filters);
 
+void ecore_vf_get_num_sbs(struct ecore_hwfn *p_hwfn,
+			  u32 *num_sbs);
+
 /**
  * @brief Get number of MAC filters allocated for VF by ecore
  *
- * @param p_hwfn
- * @param num_mac_filters - allocated MAC filters
+ *  @param p_hwfn
+ *  @param num_rxqs - allocated MAC filters
  */
 void ecore_vf_get_num_mac_filters(struct ecore_hwfn *p_hwfn,
 				  u32 *num_mac_filters);
-
-void ecore_vf_get_num_sbs(struct ecore_hwfn *p_hwfn,
-			  u32 *num_sbs);
 
 /**
  * @brief Check if VF can set a MAC address
@@ -152,5 +161,7 @@ void ecore_vf_get_fw_version(struct ecore_hwfn *p_hwfn,
 			     u16 *fw_minor,
 			     u16 *fw_rev,
 			     u16 *fw_eng);
+void ecore_vf_bulletin_get_udp_ports(struct ecore_hwfn *p_hwfn,
+				     u16 *p_vxlan_port, u16 *p_geneve_port);
 #endif
 #endif

@@ -53,7 +53,7 @@ cperf_set_ops_null_cipher(struct rte_crypto_op **ops,
 		sym_op->m_dst = bufs_out[i];
 
 		/* cipher parameters */
-		sym_op->cipher.data.length = options->buffer_sz;
+		sym_op->cipher.data.length = options->test_buffer_size;
 		sym_op->cipher.data.offset = 0;
 	}
 
@@ -78,7 +78,7 @@ cperf_set_ops_null_auth(struct rte_crypto_op **ops,
 		sym_op->m_dst = bufs_out[i];
 
 		/* auth parameters */
-		sym_op->auth.data.length = options->buffer_sz;
+		sym_op->auth.data.length = options->test_buffer_size;
 		sym_op->auth.data.offset = 0;
 	}
 
@@ -107,7 +107,13 @@ cperf_set_ops_cipher(struct rte_crypto_op **ops,
 		sym_op->cipher.iv.phys_addr = test_vector->iv.phys_addr;
 		sym_op->cipher.iv.length = test_vector->iv.length;
 
-		sym_op->cipher.data.length = options->buffer_sz;
+		if (options->cipher_algo == RTE_CRYPTO_CIPHER_SNOW3G_UEA2 ||
+				options->cipher_algo == RTE_CRYPTO_CIPHER_KASUMI_F8 ||
+				options->cipher_algo == RTE_CRYPTO_CIPHER_ZUC_EEA3)
+			sym_op->cipher.data.length = options->test_buffer_size << 3;
+		else
+			sym_op->cipher.data.length = options->test_buffer_size;
+
 		sym_op->cipher.data.offset = 0;
 	}
 
@@ -139,7 +145,7 @@ cperf_set_ops_auth(struct rte_crypto_op **ops,
 			sym_op->auth.digest.length = options->auth_digest_sz;
 		} else {
 
-			uint32_t offset = options->buffer_sz;
+			uint32_t offset = options->test_buffer_size;
 			struct rte_mbuf *buf, *tbuf;
 
 			if (options->out_of_place) {
@@ -166,7 +172,13 @@ cperf_set_ops_auth(struct rte_crypto_op **ops,
 
 		}
 
-		sym_op->auth.data.length = options->buffer_sz;
+		if (options->auth_algo == RTE_CRYPTO_AUTH_SNOW3G_UIA2 ||
+				options->auth_algo == RTE_CRYPTO_AUTH_KASUMI_F9 ||
+				options->auth_algo == RTE_CRYPTO_AUTH_ZUC_EIA3)
+			sym_op->auth.data.length = options->test_buffer_size << 3;
+		else
+			sym_op->auth.data.length = options->test_buffer_size;
+
 		sym_op->auth.data.offset = 0;
 	}
 
@@ -195,7 +207,13 @@ cperf_set_ops_cipher_auth(struct rte_crypto_op **ops,
 		sym_op->cipher.iv.phys_addr = test_vector->iv.phys_addr;
 		sym_op->cipher.iv.length = test_vector->iv.length;
 
-		sym_op->cipher.data.length = options->buffer_sz;
+		if (options->cipher_algo == RTE_CRYPTO_CIPHER_SNOW3G_UEA2 ||
+				options->cipher_algo == RTE_CRYPTO_CIPHER_KASUMI_F8 ||
+				options->cipher_algo == RTE_CRYPTO_CIPHER_ZUC_EEA3)
+			sym_op->cipher.data.length = options->test_buffer_size << 3;
+		else
+			sym_op->cipher.data.length = options->test_buffer_size;
+
 		sym_op->cipher.data.offset = 0;
 
 		/* authentication parameters */
@@ -206,7 +224,7 @@ cperf_set_ops_cipher_auth(struct rte_crypto_op **ops,
 			sym_op->auth.digest.length = options->auth_digest_sz;
 		} else {
 
-			uint32_t offset = options->buffer_sz;
+			uint32_t offset = options->test_buffer_size;
 			struct rte_mbuf *buf, *tbuf;
 
 			if (options->out_of_place) {
@@ -232,7 +250,13 @@ cperf_set_ops_cipher_auth(struct rte_crypto_op **ops,
 			sym_op->auth.aad.length = options->auth_aad_sz;
 		}
 
-		sym_op->auth.data.length = options->buffer_sz;
+		if (options->auth_algo == RTE_CRYPTO_AUTH_SNOW3G_UIA2 ||
+				options->auth_algo == RTE_CRYPTO_AUTH_KASUMI_F9 ||
+				options->auth_algo == RTE_CRYPTO_AUTH_ZUC_EIA3)
+			sym_op->auth.data.length = options->test_buffer_size << 3;
+		else
+			sym_op->auth.data.length = options->test_buffer_size;
+
 		sym_op->auth.data.offset = 0;
 	}
 
@@ -261,7 +285,7 @@ cperf_set_ops_aead(struct rte_crypto_op **ops,
 		sym_op->cipher.iv.phys_addr = test_vector->iv.phys_addr;
 		sym_op->cipher.iv.length = test_vector->iv.length;
 
-		sym_op->cipher.data.length = options->buffer_sz;
+		sym_op->cipher.data.length = options->test_buffer_size;
 		sym_op->cipher.data.offset =
 				RTE_ALIGN_CEIL(options->auth_aad_sz, 16);
 
@@ -302,7 +326,7 @@ cperf_set_ops_aead(struct rte_crypto_op **ops,
 			sym_op->auth.digest.length = options->auth_digest_sz;
 		}
 
-		sym_op->auth.data.length = options->buffer_sz;
+		sym_op->auth.data.length = options->test_buffer_size;
 		sym_op->auth.data.offset = options->auth_aad_sz;
 	}
 
@@ -333,6 +357,9 @@ cperf_create_session(uint8_t dev_id,
 					test_vector->cipher_key.data;
 			cipher_xform.cipher.key.length =
 					test_vector->cipher_key.length;
+		} else {
+			cipher_xform.cipher.key.data = NULL;
+			cipher_xform.cipher.key.length = 0;
 		}
 		/* create crypto session */
 		sess = rte_cryptodev_sym_session_create(dev_id,	&cipher_xform);
@@ -354,6 +381,11 @@ cperf_create_session(uint8_t dev_id,
 			auth_xform.auth.key.length =
 					test_vector->auth_key.length;
 			auth_xform.auth.key.data = test_vector->auth_key.data;
+		} else {
+			auth_xform.auth.digest_length = 0;
+			auth_xform.auth.add_auth_data_length = 0;
+			auth_xform.auth.key.length = 0;
+			auth_xform.auth.key.data = NULL;
 		}
 		/* create crypto session */
 		sess =  rte_cryptodev_sym_session_create(dev_id, &auth_xform);
@@ -378,6 +410,9 @@ cperf_create_session(uint8_t dev_id,
 					test_vector->cipher_key.data;
 			cipher_xform.cipher.key.length =
 					test_vector->cipher_key.length;
+		} else {
+			cipher_xform.cipher.key.data = NULL;
+			cipher_xform.cipher.key.length = 0;
 		}
 
 		/*
@@ -404,6 +439,11 @@ cperf_create_session(uint8_t dev_id,
 				auth_xform.auth.key.data =
 						test_vector->auth_key.data;
 			}
+		} else {
+			auth_xform.auth.digest_length = 0;
+			auth_xform.auth.add_auth_data_length = 0;
+			auth_xform.auth.key.length = 0;
+			auth_xform.auth.key.data = NULL;
 		}
 
 		/* create crypto session for aes gcm */

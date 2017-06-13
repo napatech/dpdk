@@ -1,5 +1,7 @@
 /*-
- * Copyright (c) 2016 Solarflare Communications Inc.
+ *   BSD LICENSE
+ *
+ * Copyright (c) 2016-2017 Solarflare Communications Inc.
  * All rights reserved.
  *
  * This software was jointly developed between OKTET Labs (under contract
@@ -177,7 +179,7 @@ prefetch_read_once(const volatile void *addr)
 /* MCDI is required for SFN7xxx and SFN8xx */
 #define EFSYS_OPT_MCDI 1
 #define EFSYS_OPT_MCDI_LOGGING 1
-#define EFSYS_OPT_MCDI_PROXY_AUTH 0
+#define EFSYS_OPT_MCDI_PROXY_AUTH 1
 
 #define EFSYS_OPT_MAC_STATS 1
 

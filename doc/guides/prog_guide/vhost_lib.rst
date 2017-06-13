@@ -53,7 +53,7 @@ vhost library should be able to:
 Vhost API Overview
 ------------------
 
-The following is an overview of the Vhost API functions:
+The following is an overview of some key Vhost API functions:
 
 * ``rte_vhost_driver_register(path, flags)``
 
@@ -110,13 +110,13 @@ The following is an overview of the Vhost API functions:
       of those segments, thus the fewer the segments, the quicker we will get
       the mapping. NOTE: we may speed it by using tree searching in future.
 
-* ``rte_vhost_driver_session_start()``
+* ``rte_vhost_driver_set_features(path, features)``
 
-  This function starts the vhost session loop to handle vhost messages. It
-  starts an infinite loop, therefore it should be called in a dedicated
-  thread.
+  This function sets the feature bits the vhost-user driver supports. The
+  vhost-user driver could be vhost-user net, yet it could be something else,
+  say, vhost-user SCSI.
 
-* ``rte_vhost_driver_callback_register(virtio_net_device_ops)``
+* ``rte_vhost_driver_callback_register(path, vhost_device_ops)``
 
   This function registers a set of callbacks, to let DPDK applications take
   the appropriate action when some events happen. The following events are
@@ -124,18 +124,35 @@ The following is an overview of the Vhost API functions:
 
   * ``new_device(int vid)``
 
-    This callback is invoked when a virtio net device becomes ready. ``vid``
-    is the virtio net device ID.
+    This callback is invoked when a virtio device becomes ready. ``vid``
+    is the vhost device ID.
 
   * ``destroy_device(int vid)``
 
-    This callback is invoked when a virtio net device shuts down (or when the
+    This callback is invoked when a virtio device shuts down (or when the
     vhost connection is broken).
 
   * ``vring_state_changed(int vid, uint16_t queue_id, int enable)``
 
     This callback is invoked when a specific queue's state is changed, for
     example to enabled or disabled.
+
+  * ``features_changed(int vid, uint64_t features)``
+
+    This callback is invoked when the features is changed. For example,
+    ``VHOST_F_LOG_ALL`` will be set/cleared at the start/end of live
+    migration, respectively.
+
+* ``rte_vhost_driver_disable/enable_features(path, features))``
+
+  This function disables/enables some features. For example, it can be used to
+  disable mergeable buffers and TSO features, which both are enabled by
+  default.
+
+* ``rte_vhost_driver_start(path)``
+
+  This function triggers the vhost-user negotiation. It should be invoked at
+  the end of initializing a vhost-user driver.
 
 * ``rte_vhost_enqueue_burst(vid, queue_id, pkts, count)``
 
@@ -144,13 +161,6 @@ The following is an overview of the Vhost API functions:
 * ``rte_vhost_dequeue_burst(vid, queue_id, mbuf_pool, pkts, count)``
 
   Receives (dequeues) ``count`` packets from guest, and stored them at ``pkts``.
-
-* ``rte_vhost_feature_disable/rte_vhost_feature_enable(feature_mask)``
-
-  This function disables/enables some features. For example, it can be used to
-  disable mergeable buffers and TSO features, which both are enabled by
-  default.
-
 
 Vhost-user Implementations
 --------------------------

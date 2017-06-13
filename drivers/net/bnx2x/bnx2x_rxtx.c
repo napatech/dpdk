@@ -19,7 +19,7 @@ ring_dma_zone_reserve(struct rte_eth_dev *dev, const char *ring_name,
 	const struct rte_memzone *mz;
 
 	snprintf(z_name, sizeof(z_name), "%s_%s_%d_%d",
-			dev->driver->pci_drv.driver.name, ring_name,
+			dev->device->driver->name, ring_name,
 			dev->data->port_id, queue_id);
 
 	mz = rte_memzone_lookup(z_name);
@@ -273,6 +273,8 @@ bnx2x_dev_tx_queue_setup(struct rte_eth_dev *dev,
 
 	txq->tx_free_thresh = tx_conf->tx_free_thresh ?
 		tx_conf->tx_free_thresh : DEFAULT_TX_FREE_THRESH;
+	txq->tx_free_thresh = min(txq->tx_free_thresh,
+				  txq->nb_tx_desc - BDS_PER_TX_PKT);
 
 	PMD_INIT_LOG(DEBUG, "fp[%02d] req_bd=%u, thresh=%u, usable_bd=%lu, "
 		     "total_bd=%lu, tx_pages=%u",

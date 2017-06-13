@@ -8,51 +8,37 @@ API and ABI deprecation notices are to be posted here.
 Deprecation Notices
 -------------------
 
-* ring: Changes are planned to rte_ring APIs in release 17.05. Proposed
-  changes include:
+* eal: the following functions are deprecated starting from 17.05 and will
+  be removed in 17.08:
 
-    - Removing build time options for the ring:
-      CONFIG_RTE_RING_SPLIT_PROD_CONS
-      CONFIG_RTE_RING_PAUSE_REP_COUNT
-    - Adding an additional parameter to enqueue functions to return the
-      amount of free space in the ring
-    - Adding an additional parameter to dequeue functions to return the
-      number of remaining elements in the ring
-    - Removing direct support for watermarks in the rings, since the
-      additional return value from the enqueue function makes it
-      unneeded
-    - Adjusting the return values of the bulk() enq/deq functions to
-      make them consistent with the burst() equivalents. [Note, parameter
-      to these functions are changing too, per points above, so compiler
-      will flag them as needing update in legacy code]
-    - Updates to some library functions e.g. rte_ring_get_memsize() to
-      allow for variably-sized ring elements.
+  - ``rte_set_log_level``, replaced by ``rte_log_set_global_level``
+  - ``rte_get_log_level``, replaced by ``rte_log_get_global_level``
+  - ``rte_set_log_type``, replaced by ``rte_log_set_level``
+  - ``rte_get_log_type``, replaced by ``rte_log_get_level``
+
+* devargs: An ABI change is planned for 17.08 for the structure ``rte_devargs``.
+  The current version is dependent on bus-specific device identifier, which will
+  be made generic and abstracted, in order to make the EAL bus-agnostic.
+
+  Accompanying this evolution, device command line parameters will thus support
+  explicit bus definition in a device declaration.
 
 * igb_uio: iomem mapping and sysfs files created for iomem and ioport in
   igb_uio will be removed, because we are able to detect these from what Linux
   has exposed, like the way we have done with uio-pci-generic. This change
   targets release 17.05.
 
-* vfio: Some functions are planned to be exported outside librte_eal in 17.05.
-  VFIO APIs like ``vfio_setup_device``, ``vfio_get_group_fd`` can be used by
-  subsystem other than EAL/PCI. For that, these need to be exported symbols.
-  Such APIs are planned to be renamed according to ``rte_*`` naming convention
-  and exported from librte_eal.
+* The VDEV subsystem will be converted as driver of the new bus model.
+  It may imply some EAL API changes in 17.08.
 
-* The PCI and VDEV subsystems will be converted as drivers of the new bus model.
-  It will imply some EAL API changes in 17.05.
+* The struct ``rte_pci_driver`` is planned to be removed from
+  ``rte_cryptodev_driver`` and ``rte_eventdev_driver`` in 17.08.
 
-* ``eth_driver`` is planned to be removed in 17.05. This currently serves as
-  a placeholder for PMDs to register themselves. Changes for ``rte_bus`` will
-  provide a way to handle device initialization currently being done in
-  ``eth_driver``. Similarly, ``rte_pci_driver`` is planned to be removed from
-  ``rte_cryptodev_driver`` in 17.05.
-
-* ethdev: An API change is planned for 17.05 for the function
-  ``_rte_eth_dev_callback_process``. In 17.05 the function will return an ``int``
+* ethdev: An API change is planned for 17.08 for the function
+  ``_rte_eth_dev_callback_process``. In 17.08 the function will return an ``int``
   instead of ``void`` and a fourth parameter ``void *ret_param`` will be added.
 
-* ethdev: for 17.05 it is planned to deprecate the following nine rte_eth_dev_*
+* ethdev: for 17.08 it is planned to deprecate the following nine rte_eth_dev_*
   functions and move them into the ixgbe PMD:
 
   ``rte_eth_dev_bypass_init``, ``rte_eth_dev_bypass_state_set``,
@@ -75,26 +61,17 @@ Deprecation Notices
   ``rte_pmd_ixgbe_bypass_wd_timeout_show``, ``rte_pmd_ixgbe_bypass_ver_show``,
   ``rte_pmd_ixgbe_bypass_wd_reset``.
 
-* ABI changes are planned for 17.05 in the ``rte_mbuf`` structure: some fields
-  may be reordered to facilitate the writing of ``data_off``, ``refcnt``, and
-  ``nb_segs`` in one operation, because some platforms have an overhead if the
-  store address is not naturally aligned. Other mbuf fields, such as the
-  ``port`` field, may be moved or removed as part of this mbuf work. A
-  ``timestamp`` will also be added.
-
 * The mbuf flags PKT_RX_VLAN_PKT and PKT_RX_QINQ_PKT are deprecated and
   are respectively replaced by PKT_RX_VLAN_STRIPPED and
   PKT_RX_QINQ_STRIPPED, that are better described. The old flags and
-  their behavior will be kept until 17.02 and will be removed in 17.05.
+  their behavior will be kept until 17.05 and will be removed in 17.08.
 
-* mempool: The functions ``rte_mempool_count`` and ``rte_mempool_free_count``
-  will be removed in 17.05.
-  They are replaced by ``rte_mempool_avail_count`` and
-  ``rte_mempool_in_use_count`` respectively.
-
-* mempool: The functions for single/multi producer/consumer are deprecated
-  and will be removed in 17.05.
-  It is replaced by ``rte_mempool_generic_get/put`` functions.
+* ethdev: Tx offloads will no longer be enabled by default in 17.08.
+  Instead, the ``rte_eth_txmode`` structure will be extended with
+  bit field to enable each Tx offload.
+  Besides of making the Rx/Tx configuration API more consistent for the
+  application, PMDs will be able to provide a better out of the box performance.
+  As part of the work, ``ETH_TXQ_FLAGS_NO*`` will be superseded as well.
 
 * ethdev: the legacy filter API, including
   ``rte_eth_dev_filter_supported()``, ``rte_eth_dev_filter_ctrl()`` as well
@@ -104,35 +81,50 @@ Deprecation Notices
   Target release for removal of the legacy API will be defined once most
   PMDs have switched to rte_flow.
 
-* vhost: API/ABI changes are planned for 17.05, for making DPDK vhost library
-  generic enough so that applications can build different vhost-user drivers
-  (instead of vhost-user net only) on top of that.
-  Specifically, ``virtio_net_device_ops`` will be renamed to ``vhost_device_ops``.
-  Correspondingly, some API's parameter need be changed. Few more functions also
-  need be reworked to let it be device aware. For example, different virtio device
-  has different feature set, meaning functions like ``rte_vhost_feature_disable``
-  need be changed. Last, file rte_virtio_net.h will be renamed to rte_vhost.h.
+* cryptodev: All PMD names definitions will be moved to the individual PMDs
+  in 17.08.
 
-* kni: Remove :ref:`kni_vhost_backend-label` feature (KNI_VHOST) in 17.05 release.
-  :doc:`Vhost Library </prog_guide/vhost_lib>` is currently preferred method for
-  guest - host communication. Just for clarification, this is not to remove KNI
-  or VHOST feature, but KNI_VHOST which is a KNI feature enabled via a compile
-  time option, and disabled by default.
+* cryptodev: The following changes will be done in in 17.08:
 
-* ABI changes are planned for 17.05 in the ``rte_cryptodev_ops`` structure.
-  A pointer to a rte_cryptodev_config structure will be added to the
-  function prototype ``cryptodev_configure_t``, as a new parameter.
+  - the device type enumeration ``rte_cryptodev_type`` will be removed
+  - the following structures will be changed: ``rte_cryptodev_session``,
+    ``rte_cryptodev_sym_session``, ``rte_cryptodev_info``, ``rte_cryptodev``
+  - the function ``rte_cryptodev_count_devtype`` will be replaced by
+    ``rte_cryptodev_device_count_by_driver``
 
-* cryptodev: A new parameter ``max_nb_sessions_per_qp`` will be added to
-  ``rte_cryptodev_info.sym``. Some drivers may support limited number of
-  sessions per queue_pair. With this new parameter application will know
-  how many sessions can be mapped to each queue_pair of a device.
+* cryptodev: API changes are planned for 17.08 for the sessions management
+  to make it agnostic to the underlying devices, removing coupling with
+  crypto PMDs, so a single session can be used on multiple devices.
 
-* distributor: library API will be changed to incorporate a burst-oriented
-  API. This will include a change to ``rte_distributor_create``
-  to specify which type of instance to create (single or burst), and
-  additional calls for ``rte_distributor_poll_pkt_burst`` and
-  ``rte_distributor_return_pkt_burst``, among others.
+  - ``struct rte_cryptodev_sym_session``, dev_id, dev_type will be removed,
+    _private field changed to the indirect array of private data pointers of
+    all supported devices
 
-* The architecture TILE-Gx and the associated mpipe driver are not
-  maintained and will be removed in 17.05.
+  An API of followed functions will be changed to allow operate on multiple
+  devices with one session:
+
+  - ``rte_cryptodev_sym_session_create``
+  - ``rte_cryptodev_sym_session_free``
+  - ``rte_cryptodev_sym_session_pool_create``
+
+  While dev_id will not be stored in the ``struct rte_cryptodev_sym_session``,
+  directly, the change of followed API is required:
+
+  - ``rte_cryptodev_queue_pair_attach_sym_session``
+  - ``rte_cryptodev_queue_pair_detach_sym_session``
+
+* cryptodev: the structures ``rte_crypto_op``, ``rte_crypto_sym_op``
+  and ``rte_crypto_sym_xform`` will be restructured in 17.08,
+  for correctness and improvement.
+
+* crypto/scheduler: the following two functions are deprecated starting
+  from 17.05 and will be removed in 17.08:
+
+  - ``rte_crpytodev_scheduler_mode_get``, replaced by ``rte_cryptodev_scheduler_mode_get``
+  - ``rte_crpytodev_scheduler_mode_set``, replaced by ``rte_cryptodev_scheduler_mode_set``
+
+* librte_table: The ``key_mask`` parameter will be added to all the hash tables
+  that currently do not have it, as well as to the hash compute function prototype.
+  The non-"do-sig" versions of the hash tables will be removed
+  (including the ``signature_offset`` parameter)
+  and the "do-sig" versions renamed accordingly.

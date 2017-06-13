@@ -14,6 +14,7 @@
 
 #include <rte_ether.h>
 #include <rte_ethdev.h>
+#include <rte_ethdev_pci.h>
 #include <rte_dev.h>
 #include <rte_ip.h>
 
@@ -34,6 +35,9 @@
 #include "base/nvm_cfg.h"
 #include "base/ecore_iov_api.h"
 #include "base/ecore_sp_commands.h"
+#include "base/ecore_l2.h"
+#include "base/ecore_dev_api.h"
+#include "base/ecore_l2.h"
 
 #include "qede_logs.h"
 #include "qede_if.h"
@@ -47,7 +51,7 @@
 /* Driver versions */
 #define QEDE_PMD_VER_PREFIX		"QEDE PMD"
 #define QEDE_PMD_VERSION_MAJOR		2
-#define QEDE_PMD_VERSION_MINOR	        0
+#define QEDE_PMD_VERSION_MINOR	        4
 #define QEDE_PMD_VERSION_REVISION       0
 #define QEDE_PMD_VERSION_PATCH	        1
 
@@ -131,6 +135,9 @@ extern char fw_file[];
 /* Number of PF connections - 32 RX + 32 TX */
 #define QEDE_PF_NUM_CONNS		(64)
 
+/* Maximum number of flowdir filters */
+#define QEDE_RFS_MAX_FLTR		(256)
+
 /* Port/function states */
 enum qede_dev_state {
 	QEDE_DEV_INIT, /* Init the chip and Slowpath */
@@ -156,6 +163,21 @@ struct qede_ucast_entry {
 	SLIST_ENTRY(qede_ucast_entry) list;
 };
 
+struct qede_fdir_entry {
+	uint32_t soft_id; /* unused for now */
+	uint16_t pkt_len; /* actual packet length to match */
+	uint16_t rx_queue; /* queue to be steered to */
+	const struct rte_memzone *mz; /* mz used to hold L2 frame */
+	SLIST_ENTRY(qede_fdir_entry) list;
+};
+
+struct qede_fdir_info {
+	struct ecore_arfs_config_params arfs;
+	uint16_t filter_count;
+	SLIST_HEAD(fdir_list_head, qede_fdir_entry)fdir_list_head;
+};
+
+
 /*
  *  Structure to store private data for each port.
  */
@@ -173,8 +195,7 @@ struct qede_dev {
 	uint16_t rss_ind_table[ECORE_RSS_IND_TABLE_SIZE];
 	uint64_t rss_hf;
 	uint8_t rss_key_len;
-	uint32_t flags;
-	bool gro_disable;
+	bool enable_lro;
 	uint16_t num_queues;
 	uint8_t fp_num_tx;
 	uint8_t fp_num_rx;
@@ -190,29 +211,41 @@ struct qede_dev {
 	bool handle_hw_err;
 	uint16_t num_tunn_filters;
 	uint16_t vxlan_filter_type;
+	struct qede_fdir_info fdir_info;
+	bool vlan_strip_flg;
 	char drv_ver[QEDE_PMD_DRV_VER_STR_SIZE];
 };
 
-/* Static functions */
-static int qede_vlan_filter_set(struct rte_eth_dev *eth_dev,
-				uint16_t vlan_id, int on);
-
-static int qede_rss_hash_update(struct rte_eth_dev *eth_dev,
-				struct rte_eth_rss_conf *rss_conf);
-
-static int qede_rss_reta_update(struct rte_eth_dev *eth_dev,
-				struct rte_eth_rss_reta_entry64 *reta_conf,
-				uint16_t reta_size);
-
-static void qede_init_rss_caps(uint8_t *rss_caps, uint64_t hf);
-
-static inline uint32_t qede_rx_cqe_to_pkt_type(uint16_t flags);
-
 /* Non-static functions */
-void qede_init_rss_caps(uint8_t *rss_caps, uint64_t hf);
+int qede_config_rss(struct rte_eth_dev *eth_dev);
+
+int qede_rss_hash_update(struct rte_eth_dev *eth_dev,
+			 struct rte_eth_rss_conf *rss_conf);
+
+int qede_rss_reta_update(struct rte_eth_dev *eth_dev,
+			 struct rte_eth_rss_reta_entry64 *reta_conf,
+			 uint16_t reta_size);
 
 int qed_fill_eth_dev_info(struct ecore_dev *edev,
 				 struct qed_dev_eth_info *info);
 int qede_dev_set_link_state(struct rte_eth_dev *eth_dev, bool link_up);
+
+int qede_dev_filter_ctrl(struct rte_eth_dev *dev, enum rte_filter_type type,
+			 enum rte_filter_op op, void *arg);
+
+int qede_fdir_filter_conf(struct rte_eth_dev *eth_dev,
+			  enum rte_filter_op filter_op, void *arg);
+
+int qede_ntuple_filter_conf(struct rte_eth_dev *eth_dev,
+			    enum rte_filter_op filter_op, void *arg);
+
+int qede_check_fdir_support(struct rte_eth_dev *eth_dev);
+
+uint16_t qede_fdir_construct_pkt(struct rte_eth_dev *eth_dev,
+				 struct rte_eth_fdir_filter *fdir,
+				 void *buff,
+				 struct ecore_arfs_config_params *params);
+
+void qede_fdir_dealloc_resc(struct rte_eth_dev *eth_dev);
 
 #endif /* _QEDE_ETHDEV_H_ */

@@ -88,7 +88,7 @@ eth_ring_rx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
 	void **ptrs = (void *)&bufs[0];
 	struct ring_queue *r = q;
 	const uint16_t nb_rx = (uint16_t)rte_ring_dequeue_burst(r->rng,
-			ptrs, nb_bufs);
+			ptrs, nb_bufs, NULL);
 	if (r->rng->flags & RING_F_SC_DEQ)
 		r->rx_pkts.cnt += nb_rx;
 	else
@@ -102,7 +102,7 @@ eth_ring_tx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
 	void **ptrs = (void *)&bufs[0];
 	struct ring_queue *r = q;
 	const uint16_t nb_tx = (uint16_t)rte_ring_enqueue_burst(r->rng,
-			ptrs, nb_bufs);
+			ptrs, nb_bufs, NULL);
 	if (r->rng->flags & RING_F_SP_ENQ) {
 		r->tx_pkts.cnt += nb_tx;
 		r->err_pkts.cnt += nb_bufs - nb_tx;
@@ -224,12 +224,13 @@ eth_mac_addr_remove(struct rte_eth_dev *dev __rte_unused,
 {
 }
 
-static void
+static int
 eth_mac_addr_add(struct rte_eth_dev *dev __rte_unused,
 	struct ether_addr *mac_addr __rte_unused,
 	uint32_t index __rte_unused,
 	uint32_t vmdq __rte_unused)
 {
+	return -ENOTSUP;
 }
 
 static void
@@ -338,7 +339,6 @@ do_eth_dev_ring_create(const char *name,
 	data->mac_addrs = &internals->address;
 
 	eth_dev->data = data;
-	eth_dev->driver = NULL;
 	eth_dev->dev_ops = &ops;
 	data->dev_flags = RTE_ETH_DEV_DETACHABLE;
 	data->kdrv = RTE_KDRV_NONE;
@@ -502,11 +502,15 @@ out:
 }
 
 static int
-rte_pmd_ring_probe(const char *name, const char *params)
+rte_pmd_ring_probe(struct rte_vdev_device *dev)
 {
+	const char *name, *params;
 	struct rte_kvargs *kvlist = NULL;
 	int ret = 0;
 	struct node_action_list *info = NULL;
+
+	name = rte_vdev_device_name(dev);
+	params = rte_vdev_device_args(dev);
 
 	RTE_LOG(INFO, PMD, "Initializing pmd_ring for %s\n", name);
 
@@ -577,8 +581,9 @@ out_free:
 }
 
 static int
-rte_pmd_ring_remove(const char *name)
+rte_pmd_ring_remove(struct rte_vdev_device *dev)
 {
+	const char *name = rte_vdev_device_name(dev);
 	struct rte_eth_dev *eth_dev = NULL;
 	struct pmd_internals *internals = NULL;
 	struct ring_queue *r = NULL;

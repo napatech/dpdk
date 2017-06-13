@@ -36,12 +36,7 @@ LIB = librte_pmd_mlx4.a
 
 # Sources.
 SRCS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += mlx4.c
-
-# Dependencies.
-DEPDIRS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += lib/librte_ether
-DEPDIRS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += lib/librte_mbuf
-DEPDIRS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += lib/librte_eal
-DEPDIRS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += lib/librte_mempool
+SRCS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += mlx4_flow.c
 
 # Basic CFLAGS.
 CFLAGS += -O3
@@ -129,7 +124,7 @@ mlx4_autoconf.h: mlx4_autoconf.h.new
 		cmp '$<' '$@' $(AUTOCONF_OUTPUT) || \
 		mv '$<' '$@'
 
-mlx4.o: mlx4_autoconf.h
+$(SRCS-$(CONFIG_RTE_LIBRTE_MLX4_PMD):.c=.o): mlx4_autoconf.h
 
 clean_mlx4: FORCE
 	$Q rm -f -- mlx4_autoconf.h mlx4_autoconf.h.new

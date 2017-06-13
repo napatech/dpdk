@@ -133,11 +133,9 @@ struct rxq_ctrl {
 	struct priv *priv; /* Back pointer to private data. */
 	struct ibv_cq *cq; /* Completion Queue. */
 	struct ibv_exp_wq *wq; /* Work Queue. */
-	struct ibv_exp_res_domain *rd; /* Resource Domain. */
 	struct fdir_queue *fdir_queue; /* Flow director queue. */
 	struct ibv_mr *mr; /* Memory Region (for mp). */
-	struct ibv_exp_wq_family *if_wq; /* WQ burst interface. */
-	struct ibv_exp_cq_family_v1 *if_cq; /* CQ interface. */
+	struct ibv_comp_channel *channel;
 	unsigned int socket; /* CPU socket ID for allocations. */
 	struct rxq rxq; /* Data path structure. */
 };
@@ -247,13 +245,21 @@ struct txq {
 	uint16_t elts_head; /* Current index in (*elts)[]. */
 	uint16_t elts_tail; /* First element awaiting completion. */
 	uint16_t elts_comp; /* Counter since last completion request. */
+	uint16_t mpw_comp; /* WQ index since last completion request. */
 	uint16_t cq_ci; /* Consumer index for completion queue. */
+	uint16_t cq_pi; /* Producer index for completion queue. */
 	uint16_t wqe_ci; /* Consumer index for work queue. */
 	uint16_t wqe_pi; /* Producer index for work queue. */
 	uint16_t elts_n:4; /* (*elts)[] length (in log2). */
 	uint16_t cqe_n:4; /* Number of CQ elements (in log2). */
 	uint16_t wqe_n:4; /* Number of of WQ elements (in log2). */
+	uint16_t inline_en:1; /* When set inline is enabled. */
+	uint16_t tso_en:1; /* When set hardware TSO is enabled. */
+	uint16_t tunnel_en:1;
+	/* When set TX offload for tunneled packets are supported. */
+	uint16_t mpw_hdr_dseg:1; /* Enable DSEGs in the title WQEBB. */
 	uint16_t max_inline; /* Multiple of RTE_CACHE_LINE_SIZE to inline. */
+	uint16_t inline_max_packet_sz; /* Max packet size for inlining. */
 	uint32_t qp_num_8s; /* QP number shifted by 8. */
 	volatile struct mlx5_cqe (*cqes)[]; /* Completion queue. */
 	volatile void *wqes; /* Work queue (use volatile to write into). */
@@ -274,9 +280,6 @@ struct txq_ctrl {
 	struct priv *priv; /* Back pointer to private data. */
 	struct ibv_cq *cq; /* Completion Queue. */
 	struct ibv_qp *qp; /* Queue Pair. */
-	struct ibv_exp_qp_burst_family *if_qp; /* QP burst interface. */
-	struct ibv_exp_cq_family *if_cq; /* CQ interface. */
-	struct ibv_exp_res_domain *rd; /* Resource Domain. */
 	unsigned int socket; /* CPU socket ID for allocations. */
 	struct txq txq; /* Data path structure. */
 };
@@ -295,6 +298,10 @@ int priv_create_hash_rxqs(struct priv *);
 void priv_destroy_hash_rxqs(struct priv *);
 int priv_allow_flow_type(struct priv *, enum hash_rxq_flow_type);
 int priv_rehash_flows(struct priv *);
+int priv_intr_efd_enable(struct priv *priv);
+void priv_intr_efd_disable(struct priv *priv);
+int priv_create_intr_vec(struct priv *priv);
+void priv_destroy_intr_vec(struct priv *priv);
 void rxq_cleanup(struct rxq_ctrl *);
 int rxq_rehash(struct rte_eth_dev *, struct rxq_ctrl *);
 int rxq_ctrl_setup(struct rte_eth_dev *, struct rxq_ctrl *, uint16_t,
@@ -320,9 +327,14 @@ uint16_t mlx5_tx_burst_secondary_setup(void *, struct rte_mbuf **, uint16_t);
 uint16_t mlx5_tx_burst(void *, struct rte_mbuf **, uint16_t);
 uint16_t mlx5_tx_burst_mpw(void *, struct rte_mbuf **, uint16_t);
 uint16_t mlx5_tx_burst_mpw_inline(void *, struct rte_mbuf **, uint16_t);
+uint16_t mlx5_tx_burst_empw(void *, struct rte_mbuf **, uint16_t);
 uint16_t mlx5_rx_burst(void *, struct rte_mbuf **, uint16_t);
 uint16_t removed_tx_burst(void *, struct rte_mbuf **, uint16_t);
 uint16_t removed_rx_burst(void *, struct rte_mbuf **, uint16_t);
+int mlx5_rx_descriptor_status(void *, uint16_t);
+int mlx5_tx_descriptor_status(void *, uint16_t);
+int mlx5_rx_intr_enable(struct rte_eth_dev *dev, uint16_t rx_queue_id);
+int mlx5_rx_intr_disable(struct rte_eth_dev *dev, uint16_t rx_queue_id);
 
 /* mlx5_mr.c */
 

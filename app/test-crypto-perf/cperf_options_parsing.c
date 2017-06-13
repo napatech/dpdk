@@ -33,9 +33,13 @@
 #include <getopt.h>
 #include <unistd.h>
 
+#include <rte_cryptodev.h>
 #include <rte_malloc.h>
 
 #include "cperf_options.h"
+
+#define AES_BLOCK_SIZE 16
+#define DES_BLOCK_SIZE 8
 
 struct name_id_map {
 	const char *name;
@@ -66,8 +70,8 @@ parse_cperf_test_type(struct cperf_options *opts, const char *arg)
 			CPERF_TEST_TYPE_THROUGHPUT
 		},
 		{
-			cperf_test_type_strs[CPERF_TEST_TYPE_CYCLECOUNT],
-			CPERF_TEST_TYPE_CYCLECOUNT
+			cperf_test_type_strs[CPERF_TEST_TYPE_VERIFY],
+			CPERF_TEST_TYPE_VERIFY
 		},
 		{
 			cperf_test_type_strs[CPERF_TEST_TYPE_LATENCY],
@@ -123,6 +127,132 @@ parse_uint16_t(uint16_t *value, const char *arg)
 }
 
 static int
+parse_range(const char *arg, uint32_t *min, uint32_t *max, uint32_t *inc)
+{
+	char *token;
+	uint32_t number;
+
+	char *copy_arg = strdup(arg);
+
+	if (copy_arg == NULL)
+		return -1;
+
+	token = strtok(copy_arg, ":");
+
+	/* Parse minimum value */
+	if (token != NULL) {
+		number = strtoul(token, NULL, 10);
+
+		if (errno == EINVAL || errno == ERANGE ||
+				number == 0)
+			goto err_range;
+
+		*min = number;
+	} else
+		goto err_range;
+
+	token = strtok(NULL, ":");
+
+	/* Parse increment value */
+	if (token != NULL) {
+		number = strtoul(token, NULL, 10);
+
+		if (errno == EINVAL || errno == ERANGE ||
+				number == 0)
+			goto err_range;
+
+		*inc = number;
+	} else
+		goto err_range;
+
+	token = strtok(NULL, ":");
+
+	/* Parse maximum value */
+	if (token != NULL) {
+		number = strtoul(token, NULL, 10);
+
+		if (errno == EINVAL || errno == ERANGE ||
+				number == 0 ||
+				number < *min)
+			goto err_range;
+
+		*max = number;
+	} else
+		goto err_range;
+
+	if (strtok(NULL, ":") != NULL)
+		goto err_range;
+
+	free(copy_arg);
+	return 0;
+
+err_range:
+	free(copy_arg);
+	return -1;
+}
+
+static int
+parse_list(const char *arg, uint32_t *list, uint32_t *min, uint32_t *max)
+{
+	char *token;
+	uint32_t number;
+	uint8_t count = 0;
+
+	char *copy_arg = strdup(arg);
+
+	if (copy_arg == NULL)
+		return -1;
+
+	token = strtok(copy_arg, ",");
+
+	/* Parse first value */
+	if (token != NULL) {
+		number = strtoul(token, NULL, 10);
+
+		if (errno == EINVAL || errno == ERANGE ||
+				number == 0)
+			goto err_list;
+
+		list[count++] = number;
+		*min = number;
+		*max = number;
+	} else
+		goto err_list;
+
+	token = strtok(NULL, ",");
+
+	while (token != NULL) {
+		if (count == MAX_LIST) {
+			RTE_LOG(WARNING, USER1, "Using only the first %u sizes\n",
+					MAX_LIST);
+			break;
+		}
+
+		number = strtoul(token, NULL, 10);
+
+		if (errno == EINVAL || errno == ERANGE ||
+				number == 0)
+			goto err_list;
+
+		list[count++] = number;
+
+		if (number < *min)
+			*min = number;
+		if (number > *max)
+			*max = number;
+
+		token = strtok(NULL, ",");
+	}
+
+	free(copy_arg);
+	return count;
+
+err_list:
+	free(copy_arg);
+	return -1;
+}
+
+static int
 parse_total_ops(struct cperf_options *opts, const char *arg)
 {
 	int ret = parse_uint32_t(&opts->total_ops, arg);
@@ -152,32 +282,43 @@ parse_pool_sz(struct cperf_options *opts, const char *arg)
 static int
 parse_burst_sz(struct cperf_options *opts, const char *arg)
 {
-	int ret = parse_uint32_t(&opts->burst_sz, arg);
+	int ret;
 
-	if (ret)
-		RTE_LOG(ERR, USER1, "failed to parse burst size");
-	return ret;
+	/* Try parsing the argument as a range, if it fails, parse it as a list */
+	if (parse_range(arg, &opts->min_burst_size, &opts->max_burst_size,
+			&opts->inc_burst_size) < 0) {
+		ret = parse_list(arg, opts->burst_size_list,
+					&opts->min_burst_size,
+					&opts->max_burst_size);
+		if (ret < 0) {
+			RTE_LOG(ERR, USER1, "failed to parse burst size/s\n");
+			return -1;
+		}
+		opts->burst_size_count = ret;
+	}
+
+	return 0;
 }
 
 static int
 parse_buffer_sz(struct cperf_options *opts, const char *arg)
 {
-	uint32_t i, valid_buf_sz[] = {
-			32, 64, 128, 256, 384, 512, 768, 1024, 1280, 1536, 1792,
-			2048
-	};
+	int ret;
 
-	if (parse_uint32_t(&opts->buffer_sz, arg)) {
-		RTE_LOG(ERR, USER1, "failed to parse buffer size");
-		return -1;
+	/* Try parsing the argument as a range, if it fails, parse it as a list */
+	if (parse_range(arg, &opts->min_buffer_size, &opts->max_buffer_size,
+			&opts->inc_buffer_size) < 0) {
+		ret = parse_list(arg, opts->buffer_size_list,
+					&opts->min_buffer_size,
+					&opts->max_buffer_size);
+		if (ret < 0) {
+			RTE_LOG(ERR, USER1, "failed to parse burst size/s\n");
+			return -1;
+		}
+		opts->buffer_size_count = ret;
 	}
 
-	for (i = 0; i < RTE_DIM(valid_buf_sz); i++)
-		if (valid_buf_sz[i] == opts->buffer_sz)
-			return 0;
-
-	RTE_LOG(ERR, USER1, "invalid buffer size specified");
-	return -1;
+	return 0;
 }
 
 static int
@@ -265,15 +406,6 @@ parse_out_of_place(struct cperf_options *opts,
 }
 
 static int
-parse_verify(struct cperf_options *opts,
-		const char *arg __rte_unused)
-{
-	opts->verify = 1;
-
-	return 0;
-}
-
-static int
 parse_test_file(struct cperf_options *opts,
 		const char *arg)
 {
@@ -309,93 +441,15 @@ parse_silent(struct cperf_options *opts,
 static int
 parse_cipher_algo(struct cperf_options *opts, const char *arg)
 {
-	struct name_id_map cipher_algo_namemap[] = {
-		{
-			rte_crypto_cipher_algorithm_strings
-			[RTE_CRYPTO_CIPHER_3DES_CBC],
-			RTE_CRYPTO_CIPHER_3DES_CBC
-		},
-		{
-			rte_crypto_cipher_algorithm_strings
-			[RTE_CRYPTO_CIPHER_3DES_ECB],
-			RTE_CRYPTO_CIPHER_3DES_ECB
-		},
-		{
-			rte_crypto_cipher_algorithm_strings
-			[RTE_CRYPTO_CIPHER_3DES_CTR],
-			RTE_CRYPTO_CIPHER_3DES_CTR
-		},
-		{
-			rte_crypto_cipher_algorithm_strings
-			[RTE_CRYPTO_CIPHER_AES_CBC],
-			RTE_CRYPTO_CIPHER_AES_CBC
-		},
-		{
-			rte_crypto_cipher_algorithm_strings
-			[RTE_CRYPTO_CIPHER_AES_CCM],
-			RTE_CRYPTO_CIPHER_AES_CCM
-		},
-		{
-			rte_crypto_cipher_algorithm_strings
-			[RTE_CRYPTO_CIPHER_AES_CTR],
-			RTE_CRYPTO_CIPHER_AES_CTR
-		},
-		{
-			rte_crypto_cipher_algorithm_strings
-			[RTE_CRYPTO_CIPHER_AES_ECB],
-			RTE_CRYPTO_CIPHER_AES_ECB
-		},
-		{
-			rte_crypto_cipher_algorithm_strings
-			[RTE_CRYPTO_CIPHER_AES_GCM],
-			RTE_CRYPTO_CIPHER_AES_GCM
-		},
-		{
-			rte_crypto_cipher_algorithm_strings
-			[RTE_CRYPTO_CIPHER_AES_F8],
-			RTE_CRYPTO_CIPHER_AES_F8
-		},
-		{
-			rte_crypto_cipher_algorithm_strings
-			[RTE_CRYPTO_CIPHER_AES_XTS],
-			RTE_CRYPTO_CIPHER_AES_XTS
-		},
-		{
-			rte_crypto_cipher_algorithm_strings
-			[RTE_CRYPTO_CIPHER_ARC4],
-			RTE_CRYPTO_CIPHER_ARC4
-		},
-		{
-			rte_crypto_cipher_algorithm_strings
-			[RTE_CRYPTO_CIPHER_NULL],
-			RTE_CRYPTO_CIPHER_NULL
-		},
-		{
-			rte_crypto_cipher_algorithm_strings
-			[RTE_CRYPTO_CIPHER_KASUMI_F8],
-			RTE_CRYPTO_CIPHER_KASUMI_F8
-		},
-		{
-			rte_crypto_cipher_algorithm_strings
-			[RTE_CRYPTO_CIPHER_SNOW3G_UEA2],
-			RTE_CRYPTO_CIPHER_SNOW3G_UEA2
-		},
-		{
-			rte_crypto_cipher_algorithm_strings
-			[RTE_CRYPTO_CIPHER_ZUC_EEA3],
-			RTE_CRYPTO_CIPHER_ZUC_EEA3
-		},
-	};
 
+	enum rte_crypto_cipher_algorithm cipher_algo;
 
-	int id = get_str_key_id_mapping(cipher_algo_namemap,
-			RTE_DIM(cipher_algo_namemap), arg);
-	if (id < 0) {
+	if (rte_cryptodev_get_cipher_algo_enum(&cipher_algo, arg) < 0) {
 		RTE_LOG(ERR, USER1, "Invalid cipher algorithm specified\n");
 		return -1;
 	}
 
-	opts->cipher_algo = (enum rte_crypto_cipher_algorithm)id;
+	opts->cipher_algo = cipher_algo;
 
 	return 0;
 }
@@ -440,125 +494,16 @@ parse_cipher_iv_sz(struct cperf_options *opts, const char *arg)
 }
 
 static int
-parse_auth_algo(struct cperf_options *opts, const char *arg) {
-	struct name_id_map cipher_auth_namemap[] = {
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_AES_CBC_MAC],
-			RTE_CRYPTO_AUTH_AES_CBC_MAC
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_AES_CCM],
-			RTE_CRYPTO_AUTH_AES_CCM
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_AES_CMAC],
-			RTE_CRYPTO_AUTH_AES_CMAC
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_AES_GCM],
-			RTE_CRYPTO_AUTH_AES_GCM
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_AES_GMAC],
-			RTE_CRYPTO_AUTH_AES_GMAC
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_AES_XCBC_MAC],
-			RTE_CRYPTO_AUTH_AES_XCBC_MAC
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_MD5],
-			RTE_CRYPTO_AUTH_MD5
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_MD5_HMAC],
-			RTE_CRYPTO_AUTH_MD5_HMAC
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_SHA1],
-			RTE_CRYPTO_AUTH_SHA1
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_SHA1_HMAC],
-			RTE_CRYPTO_AUTH_SHA1_HMAC
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_SHA224],
-			RTE_CRYPTO_AUTH_SHA224
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_SHA224_HMAC],
-			RTE_CRYPTO_AUTH_SHA224_HMAC
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_SHA256],
-			RTE_CRYPTO_AUTH_SHA256
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_SHA256_HMAC],
-			RTE_CRYPTO_AUTH_SHA256_HMAC
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_SHA384],
-			RTE_CRYPTO_AUTH_SHA384
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_SHA384_HMAC],
-			RTE_CRYPTO_AUTH_SHA384_HMAC
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_SHA512],
-			RTE_CRYPTO_AUTH_SHA512
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_SHA512_HMAC],
-			RTE_CRYPTO_AUTH_SHA512_HMAC
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_KASUMI_F9],
-			RTE_CRYPTO_AUTH_KASUMI_F9
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_SNOW3G_UIA2],
-			RTE_CRYPTO_AUTH_SNOW3G_UIA2
-		},
-		{
-			rte_crypto_auth_algorithm_strings
-			[RTE_CRYPTO_AUTH_ZUC_EIA3],
-			RTE_CRYPTO_AUTH_ZUC_EIA3
-		},
-	};
+parse_auth_algo(struct cperf_options *opts, const char *arg)
+{
+	enum rte_crypto_auth_algorithm auth_algo;
 
-
-	int id = get_str_key_id_mapping(cipher_auth_namemap,
-			RTE_DIM(cipher_auth_namemap), arg);
-	if (id < 0) {
-		RTE_LOG(ERR, USER1, "invalid authentication algorithm specified"
-				"\n");
+	if (rte_cryptodev_get_auth_algo_enum(&auth_algo, arg) < 0) {
+		RTE_LOG(ERR, USER1, "Invalid authentication algorithm specified\n");
 		return -1;
 	}
 
-	opts->auth_algo = (enum rte_crypto_auth_algorithm)id;
+	opts->auth_algo = auth_algo;
 
 	return 0;
 }
@@ -642,7 +587,6 @@ static struct option lgopts[] = {
 	{ CPERF_SILENT, no_argument, 0, 0 },
 	{ CPERF_SESSIONLESS, no_argument, 0, 0 },
 	{ CPERF_OUT_OF_PLACE, no_argument, 0, 0 },
-	{ CPERF_VERIFY, no_argument, 0, 0 },
 	{ CPERF_TEST_FILE, required_argument, 0, 0 },
 	{ CPERF_TEST_NAME, required_argument, 0, 0 },
 
@@ -670,8 +614,19 @@ cperf_options_default(struct cperf_options *opts)
 
 	opts->pool_sz = 8192;
 	opts->total_ops = 10000000;
-	opts->burst_sz = 32;
-	opts->buffer_sz = 64;
+
+	opts->buffer_size_list[0] = 64;
+	opts->buffer_size_count = 1;
+	opts->max_buffer_size = 64;
+	opts->min_buffer_size = 64;
+	opts->inc_buffer_size = 0;
+
+	opts->burst_size_list[0] = 32;
+	opts->burst_size_count = 1;
+	opts->max_burst_size = 32;
+	opts->min_burst_size = 32;
+	opts->inc_burst_size = 0;
+
 	opts->segments_nb = 1;
 
 	strncpy(opts->device_type, "crypto_aesni_mb",
@@ -680,7 +635,6 @@ cperf_options_default(struct cperf_options *opts)
 	opts->op_type = CPERF_CIPHER_THEN_AUTH;
 
 	opts->silent = 0;
-	opts->verify = 0;
 	opts->test_file = NULL;
 	opts->test_name = NULL;
 	opts->sessionless = 0;
@@ -715,7 +669,6 @@ cperf_opts_parse_long(int opt_idx, struct cperf_options *opts)
 		{ CPERF_OPTYPE,		parse_op_type },
 		{ CPERF_SESSIONLESS,	parse_sessionless },
 		{ CPERF_OUT_OF_PLACE,	parse_out_of_place },
-		{ CPERF_VERIFY,		parse_verify },
 		{ CPERF_TEST_FILE,	parse_test_file },
 		{ CPERF_TEST_NAME,	parse_test_name },
 		{ CPERF_CIPHER_ALGO,	parse_cipher_algo },
@@ -767,15 +720,26 @@ cperf_options_parse(struct cperf_options *options, int argc, char **argv)
 int
 cperf_options_check(struct cperf_options *options)
 {
-	if (options->segments_nb > options->buffer_sz) {
+	uint32_t buffer_size, buffer_size_idx = 0;
+
+	if (options->segments_nb > options->min_buffer_size) {
 		RTE_LOG(ERR, USER1,
 				"Segments number greater than buffer size.\n");
 		return -EINVAL;
 	}
 
-	if (options->verify && options->test_file == NULL) {
+	if (options->test == CPERF_TEST_TYPE_VERIFY &&
+			options->test_file == NULL) {
 		RTE_LOG(ERR, USER1, "Define path to the file with test"
 				" vectors.\n");
+		return -EINVAL;
+	}
+
+	if (options->test == CPERF_TEST_TYPE_VERIFY &&
+			options->op_type != CPERF_CIPHER_ONLY &&
+			options->test_name == NULL) {
+		RTE_LOG(ERR, USER1, "Define test name to get the correct digest"
+				" from the test vectors.\n");
 		return -EINVAL;
 	}
 
@@ -792,10 +756,26 @@ cperf_options_check(struct cperf_options *options)
 		return -EINVAL;
 	}
 
-	if (options->verify &&
+	if (options->test == CPERF_TEST_TYPE_VERIFY &&
 			options->total_ops > options->pool_sz) {
 		RTE_LOG(ERR, USER1, "Total number of ops must be less than or"
 				" equal to the pool size.\n");
+		return -EINVAL;
+	}
+
+	if (options->test == CPERF_TEST_TYPE_VERIFY &&
+			(options->inc_buffer_size != 0 ||
+			options->buffer_size_count > 1)) {
+		RTE_LOG(ERR, USER1, "Only one buffer size is allowed when "
+				"using the verify test.\n");
+		return -EINVAL;
+	}
+
+	if (options->test == CPERF_TEST_TYPE_VERIFY &&
+			(options->inc_burst_size != 0 ||
+			options->burst_size_count > 1)) {
+		RTE_LOG(ERR, USER1, "Only one burst size is allowed when "
+				"using the verify test.\n");
 		return -EINVAL;
 	}
 
@@ -829,26 +809,97 @@ cperf_options_check(struct cperf_options *options)
 		}
 	}
 
+	if (options->cipher_algo == RTE_CRYPTO_CIPHER_AES_GCM ||
+			options->cipher_algo == RTE_CRYPTO_CIPHER_AES_CCM ||
+			options->auth_algo == RTE_CRYPTO_AUTH_AES_GCM ||
+			options->auth_algo == RTE_CRYPTO_AUTH_AES_CCM ||
+			options->auth_algo == RTE_CRYPTO_AUTH_AES_GMAC) {
+		if (options->op_type != CPERF_AEAD) {
+			RTE_LOG(ERR, USER1, "Use --optype aead\n");
+			return -EINVAL;
+		}
+	}
+
+	if (options->cipher_algo == RTE_CRYPTO_CIPHER_AES_CBC ||
+			options->cipher_algo == RTE_CRYPTO_CIPHER_AES_ECB) {
+		if (options->inc_buffer_size != 0)
+			buffer_size = options->min_buffer_size;
+		else
+			buffer_size = options->buffer_size_list[0];
+
+		while (buffer_size <= options->max_buffer_size) {
+			if ((buffer_size % AES_BLOCK_SIZE) != 0) {
+				RTE_LOG(ERR, USER1, "Some of the buffer sizes are "
+					"not suitable for the algorithm selected\n");
+				return -EINVAL;
+			}
+
+			if (options->inc_buffer_size != 0)
+				buffer_size += options->inc_buffer_size;
+			else {
+				if (++buffer_size_idx == options->buffer_size_count)
+					break;
+				buffer_size = options->buffer_size_list[buffer_size_idx];
+			}
+
+		}
+	}
+
+	if (options->cipher_algo == RTE_CRYPTO_CIPHER_DES_CBC ||
+			options->cipher_algo == RTE_CRYPTO_CIPHER_3DES_CBC ||
+			options->cipher_algo == RTE_CRYPTO_CIPHER_3DES_ECB) {
+		for (buffer_size = options->min_buffer_size;
+				buffer_size < options->max_buffer_size;
+				buffer_size += options->inc_buffer_size) {
+			if ((buffer_size % DES_BLOCK_SIZE) != 0) {
+				RTE_LOG(ERR, USER1, "Some of the buffer sizes are "
+					"not suitable for the algorithm selected\n");
+				return -EINVAL;
+			}
+		}
+	}
+
 	return 0;
 }
 
 void
 cperf_options_dump(struct cperf_options *opts)
 {
+	uint8_t size_idx;
+
 	printf("# Crypto Performance Application Options:\n");
 	printf("#\n");
 	printf("# cperf test: %s\n", cperf_test_type_strs[opts->test]);
 	printf("#\n");
 	printf("# size of crypto op / mbuf pool: %u\n", opts->pool_sz);
 	printf("# total number of ops: %u\n", opts->total_ops);
-	printf("# burst size: %u\n", opts->burst_sz);
-	printf("# buffer size: %u\n", opts->buffer_sz);
-	printf("# segments per buffer: %u\n", opts->segments_nb);
+	if (opts->inc_buffer_size != 0) {
+		printf("# buffer size:\n");
+		printf("#\t min: %u\n", opts->min_buffer_size);
+		printf("#\t max: %u\n", opts->max_buffer_size);
+		printf("#\t inc: %u\n", opts->inc_buffer_size);
+	} else {
+		printf("# buffer sizes: ");
+		for (size_idx = 0; size_idx < opts->buffer_size_count; size_idx++)
+			printf("%u ", opts->buffer_size_list[size_idx]);
+		printf("\n");
+	}
+	if (opts->inc_burst_size != 0) {
+		printf("# burst size:\n");
+		printf("#\t min: %u\n", opts->min_burst_size);
+		printf("#\t max: %u\n", opts->max_burst_size);
+		printf("#\t inc: %u\n", opts->inc_burst_size);
+	} else {
+		printf("# burst sizes: ");
+		for (size_idx = 0; size_idx < opts->burst_size_count; size_idx++)
+			printf("%u ", opts->burst_size_list[size_idx]);
+		printf("\n");
+	}
+	printf("\n# segments per buffer: %u\n", opts->segments_nb);
 	printf("#\n");
 	printf("# cryptodev type: %s\n", opts->device_type);
 	printf("#\n");
 	printf("# crypto operation: %s\n", cperf_op_type_strs[opts->op_type]);
-	printf("# verify operation: %s\n", opts->verify ? "yes" : "no");
 	printf("# sessionless: %s\n", opts->sessionless ? "yes" : "no");
 	printf("# out of place: %s\n", opts->out_of_place ? "yes" : "no");
 

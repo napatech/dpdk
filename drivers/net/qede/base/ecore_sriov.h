@@ -13,9 +13,10 @@
 #include "ecore_vfpf_if.h"
 #include "ecore_iov_api.h"
 #include "ecore_hsi_common.h"
+#include "ecore_l2.h"
 
 #define ECORE_ETH_MAX_VF_NUM_VLAN_FILTERS \
-	(MAX_NUM_VFS * ECORE_ETH_VF_NUM_VLAN_FILTERS)
+	(E4_MAX_NUM_VFS * ECORE_ETH_VF_NUM_VLAN_FILTERS)
 
 /* Represents a full message. Both the request filled by VF
  * and the response filled by the PF. The VF needs one copy
@@ -62,12 +63,18 @@ struct ecore_iov_vf_mbx {
 					 */
 };
 
-struct ecore_vf_q_info {
+struct ecore_vf_queue_cid {
+	bool b_is_tx;
+	struct ecore_queue_cid *p_cid;
+};
+
+/* Describes a qzone associated with the VF */
+struct ecore_vf_queue {
+	/* Input from upper-layer, mapping relateive queue to queue-zone */
 	u16 fw_rx_qid;
 	u16 fw_tx_qid;
-	u8 fw_cid;
-	u8 rxq_active;
-	u8 txq_active;
+
+	struct ecore_vf_queue_cid cids[MAX_QUEUES_PER_QZONE];
 };
 
 enum vf_state {
@@ -111,6 +118,7 @@ struct ecore_vf_info {
 	u16			mtu;
 
 	u8			vport_id;
+	u8			rss_eng_id;
 	u8			relative_vf_id;
 	u8			abs_vf_id;
 #define ECORE_VF_ABS_ID(p_hwfn, p_vf)	(ECORE_PATH_ID(p_hwfn) ? \
@@ -126,7 +134,7 @@ struct ecore_vf_info {
 	u8			num_mac_filters;
 	u8			num_vlan_filters;
 
-	struct ecore_vf_q_info	vf_queues[ECORE_MAX_VF_CHAINS_PER_PF];
+	struct ecore_vf_queue	vf_queues[ECORE_MAX_VF_CHAINS_PER_PF];
 	u16			igu_sbs[ECORE_MAX_VF_CHAINS_PER_PF];
 
 	/* TODO - Only windows is using it - should be removed */
@@ -152,10 +160,9 @@ struct ecore_vf_info {
  * capability enabled.
  */
 struct ecore_pf_iov {
-	struct ecore_vf_info	vfs_array[MAX_NUM_VFS];
+	struct ecore_vf_info	vfs_array[E4_MAX_NUM_VFS];
 	u64			pending_events[ECORE_VF_ARRAY_LENGTH];
 	u64			pending_flr[ECORE_VF_ARRAY_LENGTH];
-	u16			base_vport_id;
 
 #ifndef REMOVE_DBG
 	/* This doesn't serve anything functionally, but it makes windows

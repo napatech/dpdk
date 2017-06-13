@@ -7,7 +7,6 @@ DPDK_2.2 {
 	rte_eth_allmulticast_disable;
 	rte_eth_allmulticast_enable;
 	rte_eth_allmulticast_get;
-	rte_eth_copy_pci_info;
 	rte_eth_dev_allocate;
 	rte_eth_dev_allocated;
 	rte_eth_dev_attach;
@@ -134,14 +133,6 @@ DPDK_16.07 {
 
 } DPDK_16.04;
 
-DPDK_16.11 {
-	global:
-
-	rte_eth_dev_pci_probe;
-	rte_eth_dev_pci_remove;
-
-} DPDK_16.07;
-
 DPDK_17.02 {
 	global:
 
@@ -153,4 +144,15 @@ DPDK_17.02 {
 	rte_flow_query;
 	rte_flow_validate;
 
-} DPDK_16.11;
+} DPDK_16.07;
+
+DPDK_17.05 {
+	global:
+
+	rte_eth_dev_attach_secondary;
+	rte_eth_find_next;
+	rte_eth_xstats_get_by_id;
+	rte_eth_xstats_get_id_by_name;
+	rte_eth_xstats_get_names_by_id;
+
+} DPDK_17.02;

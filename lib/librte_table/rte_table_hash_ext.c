@@ -172,7 +172,7 @@ static void *
 rte_table_hash_ext_create(void *params, int socket_id, uint32_t entry_size)
 {
 	struct rte_table_hash_ext_params *p =
-		(struct rte_table_hash_ext_params *) params;
+		params;
 	struct rte_table_hash *t;
 	uint32_t total_size, table_meta_sz;
 	uint32_t bucket_sz, bucket_ext_sz, key_sz;
@@ -258,7 +258,7 @@ rte_table_hash_ext_create(void *params, int socket_id, uint32_t entry_size)
 static int
 rte_table_hash_ext_free(void *table)
 {
-	struct rte_table_hash *t = (struct rte_table_hash *) table;
+	struct rte_table_hash *t = table;
 
 	/* Check input parameters */
 	if (t == NULL)
@@ -272,7 +272,7 @@ static int
 rte_table_hash_ext_entry_add(void *table, void *key, void *entry,
 	int *key_found, void **entry_ptr)
 {
-	struct rte_table_hash *t = (struct rte_table_hash *) table;
+	struct rte_table_hash *t = table;
 	struct bucket *bkt0, *bkt, *bkt_prev;
 	uint64_t sig;
 	uint32_t bkt_index, i;
@@ -373,7 +373,7 @@ static int
 rte_table_hash_ext_entry_delete(void *table, void *key, int *key_found,
 void *entry)
 {
-	struct rte_table_hash *t = (struct rte_table_hash *) table;
+	struct rte_table_hash *t = table;
 	struct bucket *bkt0, *bkt, *bkt_prev;
 	uint64_t sig;
 	uint32_t bkt_index, i;
@@ -444,7 +444,6 @@ static int rte_table_hash_ext_lookup_unoptimized(
 	uint64_t pkts_mask_out = 0;
 
 	__rte_unused uint32_t n_pkts_in = __builtin_popcountll(pkts_mask);
-	RTE_TABLE_HASH_EXT_STATS_PKTS_IN_ADD(t, n_pkts_in);
 
 	for ( ; pkts_mask; ) {
 		struct bucket *bkt0, *bkt;
@@ -490,7 +489,6 @@ static int rte_table_hash_ext_lookup_unoptimized(
 	}
 
 	*lookup_hit_mask = pkts_mask_out;
-	RTE_TABLE_HASH_EXT_STATS_PKTS_LOOKUP_MISS(t, n_pkts_in - __builtin_popcountll(pkts_mask_out));
 	return 0;
 }
 
@@ -874,9 +872,13 @@ static int rte_table_hash_ext_lookup(
 	RTE_TABLE_HASH_EXT_STATS_PKTS_IN_ADD(t, n_pkts_in);
 
 	/* Cannot run the pipeline with less than 7 packets */
-	if (__builtin_popcountll(pkts_mask) < 7)
-		return rte_table_hash_ext_lookup_unoptimized(table, pkts,
+	if (__builtin_popcountll(pkts_mask) < 7) {
+		status = rte_table_hash_ext_lookup_unoptimized(table, pkts,
 			pkts_mask, lookup_hit_mask, entries, 0);
+		RTE_TABLE_HASH_EXT_STATS_PKTS_LOOKUP_MISS(t, n_pkts_in -
+				__builtin_popcountll(*lookup_hit_mask));
+		return status;
+	}
 
 	/* Pipeline stage 0 */
 	lookup2_stage0(t, g, pkts, pkts_mask, pkt00_index, pkt01_index);
@@ -1007,9 +1009,13 @@ static int rte_table_hash_ext_lookup_dosig(
 	RTE_TABLE_HASH_EXT_STATS_PKTS_IN_ADD(t, n_pkts_in);
 
 	/* Cannot run the pipeline with less than 7 packets */
-	if (__builtin_popcountll(pkts_mask) < 7)
-		return rte_table_hash_ext_lookup_unoptimized(table, pkts,
+	if (__builtin_popcountll(pkts_mask) < 7) {
+		status = rte_table_hash_ext_lookup_unoptimized(table, pkts,
 			pkts_mask, lookup_hit_mask, entries, 1);
+		RTE_TABLE_HASH_EXT_STATS_PKTS_LOOKUP_MISS(t, n_pkts_in -
+				__builtin_popcountll(*lookup_hit_mask));
+		return status;
+	}
 
 	/* Pipeline stage 0 */
 	lookup2_stage0(t, g, pkts, pkts_mask, pkt00_index, pkt01_index);
@@ -1125,7 +1131,7 @@ static int rte_table_hash_ext_lookup_dosig(
 static int
 rte_table_hash_ext_stats_read(void *table, struct rte_table_stats *stats, int clear)
 {
-	struct rte_table_hash *t = (struct rte_table_hash *) table;
+	struct rte_table_hash *t = table;
 
 	if (stats != NULL)
 		memcpy(stats, &t->stats, sizeof(t->stats));

@@ -54,8 +54,8 @@ If you need to change the number of pages, it is easier to first remove the page
 See the "Quick Start Setup Script" section in the :ref:`DPDK Getting Started Guide <linux_gsg>` for more information.
 
 
-If I execute "l2fwd -c f -m 64 -n 3 -- -p 3", I get the following output, indicating that there are no socket 0 hugepages to allocate the mbuf and ring structures to?
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+If I execute "l2fwd -l 0-3 -m 64 -n 3 -- -p 3", I get the following output, indicating that there are no socket 0 hugepages to allocate the mbuf and ring structures to?
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 I have set up a total of 1024 Hugepages (that is, allocated 512 2M pages to each NUMA node).
 
@@ -66,19 +66,21 @@ To request memory to be reserved on a specific socket, please use the --socket-m
 I am running a 32-bit DPDK application on a NUMA system, and sometimes the application initializes fine but cannot allocate memory. Why is that happening?
 ----------------------------------------------------------------------------------------------------------------------------------------------------------
 
-32-bit applications have limitations in terms of how much virtual memory is available, hence the number of hugepages they are able to allocate is also limited (1 GB per page size).
-If your system has a lot (>1 GB per page size) of hugepage memory, not all of it will be allocated.
+32-bit applications have limitations in terms of how much virtual memory is available, hence the number of hugepages they are able to allocate is also limited (1 GB size).
+If your system has a lot (>1 GB size) of hugepage memory, not all of it will be allocated.
 Due to hugepages typically being allocated on a local NUMA node, the hugepages allocation the application gets during the initialization depends on which
 NUMA node it is running on (the EAL does not affinitize cores until much later in the initialization process).
 Sometimes, the Linux OS runs the DPDK application on a core that is located on a different NUMA node from DPDK master core and
 therefore all the hugepages are allocated on the wrong socket.
 
-To avoid this scenario, either lower the amount of hugepage memory available to 1 GB per page size (or less), or run the application with taskset
+To avoid this scenario, either lower the amount of hugepage memory available to 1 GB size (or less), or run the application with taskset
 affinitizing the application to a would-be master core.
 
 For example, if your EAL coremask is 0xff0, the master core will usually be the first core in the coremask (0x10); this is what you have to supply to taskset::
 
-   taskset 0x10 ./l2fwd -c 0xff0 -n 2
+   taskset 0x10 ./l2fwd -l 4-11 -n 2
+
+.. Note: Instead of '-c 0xff0' use the '-l 4-11' as a cleaner way to define lcores.
 
 In this way, the hugepages have a greater chance of being allocated to the correct socket.
 Additionally, a ``--socket-mem`` option could be used to ensure the availability of memory for each socket, so that if hugepages were allocated on

@@ -11,6 +11,7 @@
 
 #include "bcm_osal.h"
 #include "mcp_public.h"
+#include "ecore.h"
 #include "ecore_mcp_api.h"
 
 /* Using hwfn number (and not pf_num) is required since in CMT mode,
@@ -64,10 +65,20 @@ struct ecore_mcp_info {
 struct ecore_mcp_mb_params {
 	u32 cmd;
 	u32 param;
-	union drv_union_data *p_data_src;
-	union drv_union_data *p_data_dst;
+	void *p_data_src;
+	u8 data_src_size;
+	void *p_data_dst;
+	u8 data_dst_size;
 	u32 mcp_resp;
 	u32 mcp_param;
+};
+
+struct ecore_drv_tlv_hdr {
+	u8 tlv_type;	/* According to the enum below */
+	u8 tlv_length;	/* In dwords - not including this header */
+	u8 tlv_reserved;
+#define ECORE_DRV_TLV_FLAGS_CHANGED 0x01
+	u8 tlv_flags;
 };
 
 /**
@@ -128,32 +139,58 @@ enum _ecore_status_t ecore_mcp_handle_events(struct ecore_hwfn *p_hwfn,
  * @param p_hwfn - hw function
  * @param p_ptt - PTT required for register access
  * @return enum _ecore_status_t - ECORE_SUCCESS - operation
- * was successul.
+ * was successful.
  */
 enum _ecore_status_t ecore_issue_pulse(struct ecore_hwfn *p_hwfn,
 				       struct ecore_ptt *p_ptt);
 
+enum ecore_drv_role {
+	ECORE_DRV_ROLE_OS,
+	ECORE_DRV_ROLE_KDUMP,
+};
+
+struct ecore_load_req_params {
+	enum ecore_drv_role drv_role;
+	u8 timeout_val; /* 1..254, '0' - default value, '255' - no timeout */
+	bool avoid_eng_reset;
+	u32 load_code;
+};
+
 /**
- * @brief Sends a LOAD_REQ to the MFW, and in case operation
- *        succeed, returns whether this PF is the first on the
- *        chip/engine/port or function. This function should be
- *        called when driver is ready to accept MFW events after
- *        Storms initializations are done.
+ * @brief Sends a LOAD_REQ to the MFW, and in case the operation succeeds,
+ *        returns whether this PF is the first on the engine/port or function.
  *
- * @param p_hwfn       - hw function
- * @param p_ptt        - PTT required for register access
- * @param p_load_code  - The MCP response param containing one
- *      of the following:
- *      FW_MSG_CODE_DRV_LOAD_ENGINE
- *      FW_MSG_CODE_DRV_LOAD_PORT
- *      FW_MSG_CODE_DRV_LOAD_FUNCTION
- * @return enum _ecore_status_t -
- *      ECORE_SUCCESS - Operation was successul.
- *      ECORE_BUSY - Operation failed
+ * @param p_hwfn
+ * @param p_ptt
+ * @param p_params
+ *
+ * @return enum _ecore_status_t - ECORE_SUCCESS - Operation was successful.
  */
 enum _ecore_status_t ecore_mcp_load_req(struct ecore_hwfn *p_hwfn,
 					struct ecore_ptt *p_ptt,
-					u32 *p_load_code);
+					struct ecore_load_req_params *p_params);
+
+/**
+ * @brief Sends a UNLOAD_REQ message to the MFW
+ *
+ * @param p_hwfn
+ * @param p_ptt
+ *
+ * @return enum _ecore_status_t - ECORE_SUCCESS - Operation was successful.
+ */
+enum _ecore_status_t ecore_mcp_unload_req(struct ecore_hwfn *p_hwfn,
+					  struct ecore_ptt *p_ptt);
+
+/**
+ * @brief Sends a UNLOAD_DONE message to the MFW
+ *
+ * @param p_hwfn
+ * @param p_ptt
+ *
+ * @return enum _ecore_status_t - ECORE_SUCCESS - Operation was successful.
+ */
+enum _ecore_status_t ecore_mcp_unload_done(struct ecore_hwfn *p_hwfn,
+					   struct ecore_ptt *p_ptt);
 
 /**
  * @brief Read the MFW mailbox into Current buffer.
@@ -327,20 +364,37 @@ enum _ecore_status_t ecore_mcp_mdump_trigger(struct ecore_hwfn *p_hwfn,
 					     struct ecore_ptt *p_ptt);
 
 /**
+ * @brief - Sets the MFW's max value for the given resource
+ *
+ *  @param p_hwfn
+ *  @param p_ptt
+ *  @param res_id
+ *  @param resc_max_val
+ *  @param p_mcp_resp
+ *
+ * @return enum _ecore_status_t - ECORE_SUCCESS - operation was successful.
+ */
+enum _ecore_status_t
+ecore_mcp_set_resc_max_val(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt,
+			   enum ecore_resources res_id, u32 resc_max_val,
+			   u32 *p_mcp_resp);
+
+/**
  * @brief - Gets the MFW allocation info for the given resource
  *
  *  @param p_hwfn
  *  @param p_ptt
- *  @param p_resc_info
+ *  @param res_id
  *  @param p_mcp_resp
- *  @param p_mcp_param
+ *  @param p_resc_num
+ *  @param p_resc_start
  *
  * @return enum _ecore_status_t - ECORE_SUCCESS - operation was successful.
  */
-enum _ecore_status_t ecore_mcp_get_resc_info(struct ecore_hwfn *p_hwfn,
-					     struct ecore_ptt *p_ptt,
-					     struct resource_info *p_resc_info,
-					     u32 *p_mcp_resp, u32 *p_mcp_param);
+enum _ecore_status_t
+ecore_mcp_get_resc_info(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt,
+			enum ecore_resources res_id, u32 *p_mcp_resp,
+			u32 *p_resc_num, u32 *p_resc_start);
 
 /**
  * @brief - Initiates PF FLR
@@ -352,5 +406,80 @@ enum _ecore_status_t ecore_mcp_get_resc_info(struct ecore_hwfn *p_hwfn,
  */
 enum _ecore_status_t ecore_mcp_initiate_pf_flr(struct ecore_hwfn *p_hwfn,
 					       struct ecore_ptt *p_ptt);
+
+#define ECORE_MCP_RESC_LOCK_MIN_VAL	RESOURCE_DUMP /* 0 */
+#define ECORE_MCP_RESC_LOCK_MAX_VAL	31
+
+enum ecore_resc_lock {
+	ECORE_RESC_LOCK_DBG_DUMP = ECORE_MCP_RESC_LOCK_MIN_VAL,
+	/* Locks that the MFW is aware of should be added here downwards */
+
+	/* Ecore only locks should be added here upwards */
+	ECORE_RESC_LOCK_RESC_ALLOC = ECORE_MCP_RESC_LOCK_MAX_VAL
+};
+
+struct ecore_resc_lock_params {
+	/* Resource number [valid values are 0..31] */
+	u8 resource;
+
+	/* Lock timeout value in seconds [default, none or 1..254] */
+	u8 timeout;
+#define ECORE_MCP_RESC_LOCK_TO_DEFAULT	0
+#define ECORE_MCP_RESC_LOCK_TO_NONE	255
+
+	/* Number of times to retry locking */
+	u8 retry_num;
+
+	/* The interval in usec between retries */
+	u16 retry_interval;
+
+	/* Use sleep or delay between retries */
+	bool sleep_b4_retry;
+
+	/* Will be set as true if the resource is free and granted */
+	bool b_granted;
+
+	/* Will be filled with the resource owner.
+	 * [0..15 = PF0-15, 16 = MFW, 17 = diag over serial]
+	 */
+	u8 owner;
+};
+
+/**
+ * @brief Acquires MFW generic resource lock
+ *
+ *  @param p_hwfn
+ *  @param p_ptt
+ *  @param p_params
+ *
+ * @return enum _ecore_status_t - ECORE_SUCCESS - operation was successful.
+ */
+enum _ecore_status_t
+ecore_mcp_resc_lock(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt,
+		    struct ecore_resc_lock_params *p_params);
+
+struct ecore_resc_unlock_params {
+	/* Resource number [valid values are 0..31] */
+	u8 resource;
+
+	/* Allow to release a resource even if belongs to another PF */
+	bool b_force;
+
+	/* Will be set as true if the resource is released */
+	bool b_released;
+};
+
+/**
+ * @brief Releases MFW generic resource lock
+ *
+ *  @param p_hwfn
+ *  @param p_ptt
+ *  @param p_params
+ *
+ * @return enum _ecore_status_t - ECORE_SUCCESS - operation was successful.
+ */
+enum _ecore_status_t
+ecore_mcp_resc_unlock(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt,
+		      struct ecore_resc_unlock_params *p_params);
 
 #endif /* __ECORE_MCP_H__ */

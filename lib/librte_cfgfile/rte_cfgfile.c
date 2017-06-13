@@ -35,6 +35,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <rte_common.h>
 #include <rte_string_fns.h>
 
 #include "rte_cfgfile.h"
@@ -57,6 +58,25 @@ struct rte_cfgfile {
 /** when we resize a section structure, how many extra entries
  * for new entries do we add in */
 #define CFG_ALLOC_ENTRY_BATCH 16
+
+/**
+ * Default cfgfile load parameters.
+ */
+static const struct rte_cfgfile_parameters default_cfgfile_params = {
+	.comment_character = CFG_DEFAULT_COMMENT_CHARACTER,
+};
+
+/**
+ * Defines the list of acceptable comment characters supported by this
+ * library.
+ */
+static const char valid_comment_chars[] = {
+	'!',
+	'#',
+	'%',
+	';',
+	'@'
+};
 
 static unsigned
 _strip(char *str, unsigned len)
@@ -85,16 +105,55 @@ _strip(char *str, unsigned len)
 	return newlen;
 }
 
+static int
+rte_cfgfile_check_params(const struct rte_cfgfile_parameters *params)
+{
+	unsigned int valid_comment;
+	unsigned int i;
+
+	if (!params) {
+		printf("Error - missing cfgfile parameters\n");
+		return -EINVAL;
+	}
+
+	valid_comment = 0;
+	for (i = 0; i < RTE_DIM(valid_comment_chars); i++) {
+		if (params->comment_character == valid_comment_chars[i]) {
+			valid_comment = 1;
+			break;
+		}
+	}
+
+	if (valid_comment == 0)	{
+		printf("Error - invalid comment characters %c\n",
+		       params->comment_character);
+		return -ENOTSUP;
+	}
+
+	return 0;
+}
+
 struct rte_cfgfile *
 rte_cfgfile_load(const char *filename, int flags)
+{
+	return rte_cfgfile_load_with_params(filename, flags,
+					    &default_cfgfile_params);
+}
+
+struct rte_cfgfile *
+rte_cfgfile_load_with_params(const char *filename, int flags,
+			     const struct rte_cfgfile_parameters *params)
 {
 	int allocated_sections = CFG_ALLOC_SECTION_BATCH;
 	int allocated_entries = 0;
 	int curr_section = -1;
 	int curr_entry = -1;
-	char buffer[256] = {0};
+	char buffer[CFG_NAME_LEN + CFG_VALUE_LEN + 4] = {0};
 	int lineno = 0;
 	struct rte_cfgfile *cfg = NULL;
+
+	if (rte_cfgfile_check_params(params))
+		return NULL;
 
 	FILE *f = fopen(filename, "r");
 	if (f == NULL)
@@ -107,6 +166,22 @@ rte_cfgfile_load(const char *filename, int flags)
 
 	memset(cfg->sections, 0, sizeof(cfg->sections[0]) * allocated_sections);
 
+	if (flags & CFG_FLAG_GLOBAL_SECTION) {
+		curr_section = 0;
+		allocated_entries = CFG_ALLOC_ENTRY_BATCH;
+		cfg->sections[curr_section] = malloc(
+			sizeof(*cfg->sections[0]) +
+			sizeof(cfg->sections[0]->entries[0]) *
+			allocated_entries);
+		if (cfg->sections[curr_section] == NULL) {
+			printf("Error - no memory for global section\n");
+			goto error1;
+		}
+
+		snprintf(cfg->sections[curr_section]->name,
+				 sizeof(cfg->sections[0]->name), "GLOBAL");
+	}
+
 	while (fgets(buffer, sizeof(buffer), f) != NULL) {
 		char *pos = NULL;
 		size_t len = strnlen(buffer, sizeof(buffer));
@@ -116,7 +191,7 @@ rte_cfgfile_load(const char *filename, int flags)
 					"Check if line too long\n", lineno);
 			goto error1;
 		}
-		pos = memchr(buffer, ';', sizeof(buffer));
+		pos = memchr(buffer, params->comment_character, len);
 		if (pos != NULL) {
 			*pos = '\0';
 			len = pos -  buffer;
@@ -183,12 +258,21 @@ rte_cfgfile_load(const char *filename, int flags)
 
 			struct rte_cfgfile_section *sect =
 				cfg->sections[curr_section];
-			char *split[2];
-			if (rte_strsplit(buffer, sizeof(buffer), split, 2, '=')
-				!= 2) {
-				printf("Error at line %d - cannot split "
-					"string\n", lineno);
-				goto error1;
+			int n;
+			char *split[2] = {NULL};
+			n = rte_strsplit(buffer, sizeof(buffer), split, 2, '=');
+			if (flags & CFG_FLAG_EMPTY_VALUES) {
+				if ((n < 1) || (n > 2)) {
+					printf("Error at line %d - cannot split string, n=%d\n",
+					       lineno, n);
+					goto error1;
+				}
+			} else {
+				if (n != 2) {
+					printf("Error at line %d - cannot split string, n=%d\n",
+					       lineno, n);
+					goto error1;
+				}
 			}
 
 			curr_entry++;
@@ -218,7 +302,7 @@ rte_cfgfile_load(const char *filename, int flags)
 			snprintf(entry->name, sizeof(entry->name), "%s",
 				split[0]);
 			snprintf(entry->value, sizeof(entry->value), "%s",
-				split[1]);
+				 split[1] ? split[1] : "");
 			_strip(entry->name, strnlen(entry->name,
 				sizeof(entry->name)));
 			_strip(entry->value, strnlen(entry->value,

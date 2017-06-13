@@ -197,7 +197,7 @@ pdump_copy(struct rte_mbuf **pkts, uint16_t nb_pkts, void *user_params)
 			dup_bufs[d_pkts++] = p;
 	}
 
-	ring_enq = rte_ring_enqueue_burst(ring, (void *)dup_bufs, d_pkts);
+	ring_enq = rte_ring_enqueue_burst(ring, (void *)dup_bufs, d_pkts, NULL);
 	if (unlikely(ring_enq < d_pkts)) {
 		RTE_LOG(DEBUG, PDUMP,
 			"only %d of packets enqueued to ring\n", ring_enq);
@@ -740,7 +740,7 @@ pdump_validate_ring_mp(struct rte_ring *ring, struct rte_mempool *mp)
 		rte_errno = EINVAL;
 		return -1;
 	}
-	if (ring->prod.sp_enqueue || ring->cons.sc_dequeue) {
+	if (ring->prod.single || ring->cons.single) {
 		RTE_LOG(ERR, PDUMP, "ring with either SP or SC settings"
 		" is not valid for pdump, should have MP and MC settings\n");
 		rte_errno = EINVAL;

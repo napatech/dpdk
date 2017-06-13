@@ -1,5 +1,7 @@
 /*-
- * Copyright (c) 2016 Solarflare Communications Inc.
+ *   BSD LICENSE
+ *
+ * Copyright (c) 2016-2017 Solarflare Communications Inc.
  * All rights reserved.
  *
  * This software was jointly developed between OKTET Labs (under contract
@@ -42,9 +44,12 @@ sfc_kvargs_parse(struct sfc_adapter *sa)
 	struct rte_eth_dev *eth_dev = (sa)->eth_dev;
 	struct rte_devargs *devargs = eth_dev->device->devargs;
 	const char **params = (const char *[]){
+		SFC_KVARG_STATS_UPDATE_PERIOD_MS,
 		SFC_KVARG_DEBUG_INIT,
 		SFC_KVARG_MCDI_LOGGING,
 		SFC_KVARG_PERF_PROFILE,
+		SFC_KVARG_RX_DATAPATH,
+		SFC_KVARG_TX_DATAPATH,
 		NULL,
 	};
 
@@ -107,6 +112,34 @@ sfc_kvarg_bool_handler(__rte_unused const char *key,
 		*value = false;
 	else
 		return -EINVAL;
+
+	return 0;
+}
+
+int
+sfc_kvarg_long_handler(__rte_unused const char *key,
+		       const char *value_str, void *opaque)
+{
+	long value;
+	char *endptr;
+
+	if (!value_str || !opaque)
+		return -EINVAL;
+
+	value = strtol(value_str, &endptr, 0);
+	if (endptr == value_str)
+		return -EINVAL;
+
+	*(long *)opaque = value;
+
+	return 0;
+}
+
+int
+sfc_kvarg_string_handler(__rte_unused const char *key,
+			 const char *value_str, void *opaque)
+{
+	*(const char **)opaque = value_str;
 
 	return 0;
 }

@@ -58,16 +58,38 @@ enum _ecore_status_t ecore_resc_alloc(struct ecore_dev *p_dev);
 void ecore_resc_setup(struct ecore_dev *p_dev);
 
 struct ecore_hw_init_params {
-	/* tunnelling parameters */
-	struct ecore_tunn_start_params *p_tunn;
-	bool b_hw_start;
-	/* interrupt mode [msix, inta, etc.] to use */
-	enum ecore_int_mode int_mode;
-/* npar tx switching to be used for vports configured for tx-switching */
+	/* Tunnelling parameters */
+	struct ecore_tunnel_info *p_tunn;
 
+	bool b_hw_start;
+
+	/* Interrupt mode [msix, inta, etc.] to use */
+	enum ecore_int_mode int_mode;
+
+	/* NPAR tx switching to be used for vports configured for tx-switching
+	 */
 	bool allow_npar_tx_switch;
-	/* binary fw data pointer in binary fw file */
+
+	/* Binary fw data pointer in binary fw file */
 	const u8 *bin_fw_data;
+
+	/* Indicates whether the driver is running over a crash kernel.
+	 * As part of the load request, this will be used for providing the
+	 * driver role to the MFW.
+	 * In case of a crash kernel over PDA - this should be set to false.
+	 */
+	bool is_crash_kernel;
+
+	/* The timeout value that the MFW should use when locking the engine for
+	 * the driver load process.
+	 * A value of '0' means the default value, and '255' means no timeout.
+	 */
+	u8 mfw_timeout_val;
+#define ECORE_LOAD_REQ_LOCK_TO_DEFAULT	0
+#define ECORE_LOAD_REQ_LOCK_TO_NONE	255
+
+	/* Avoid engine reset when first PF loads on it */
+	bool avoid_eng_reset;
 };
 
 /**
@@ -129,26 +151,47 @@ void ecore_prepare_hibernate(struct ecore_dev *p_dev);
  */
 void ecore_hw_start_fastpath(struct ecore_hwfn *p_hwfn);
 
-/**
- * @brief ecore_hw_reset -
- *
- * @param p_dev
- *
- * @return enum _ecore_status_t
- */
-enum _ecore_status_t ecore_hw_reset(struct ecore_dev *p_dev);
+enum ecore_hw_prepare_result {
+	ECORE_HW_PREPARE_SUCCESS,
+
+	/* FAILED results indicate probe has failed & cleaned up */
+	ECORE_HW_PREPARE_FAILED_ENG2,
+	ECORE_HW_PREPARE_FAILED_ME,
+	ECORE_HW_PREPARE_FAILED_MEM,
+	ECORE_HW_PREPARE_FAILED_DEV,
+	ECORE_HW_PREPARE_FAILED_NVM,
+
+	/* BAD results indicate probe is passed even though some wrongness
+	 * has occurred; Trying to actually use [I.e., hw_init()] might have
+	 * dire reprecautions.
+	 */
+	ECORE_HW_PREPARE_BAD_IOV,
+	ECORE_HW_PREPARE_BAD_MCP,
+	ECORE_HW_PREPARE_BAD_IGU,
+};
 
 struct ecore_hw_prepare_params {
-	/* personality to initialize */
+	/* Personality to initialize */
 	int personality;
-	/* force the driver's default resource allocation */
+
+	/* Force the driver's default resource allocation */
 	bool drv_resc_alloc;
-	/* check the reg_fifo after any register access */
+
+	/* Check the reg_fifo after any register access */
 	bool chk_reg_fifo;
-	/* request the MFW to initiate PF FLR */
+
+	/* Request the MFW to initiate PF FLR */
 	bool initiate_pf_flr;
-	/* the OS Epoch time in seconds */
+
+	/* The OS Epoch time in seconds */
 	u32 epoch;
+
+	/* Allow prepare to pass even if some initializations are failing.
+	 * If set, the `p_prepare_res' field would be set with the return,
+	 * and might allow probe to pass even if there are certain issues.
+	 */
+	bool b_relaxed_probe;
+	enum ecore_hw_prepare_result p_relaxed_res;
 };
 
 /**
@@ -518,41 +561,24 @@ enum _ecore_status_t ecore_final_cleanup(struct ecore_hwfn	*p_hwfn,
 					 struct ecore_ptt	*p_ptt,
 					 u16			id,
 					 bool			is_vf);
-
 /**
- * @brief ecore_set_rxq_coalesce - Configure coalesce parameters for an Rx queue
- *    The fact that we can configure coalescing to up to 511, but on varying
- *    accuracy [the bigger the value the less accurate] up to a mistake of 3usec
- *    for the highest values.
- *
- * @param p_hwfn
- * @param p_ptt
- * @param coalesce - Coalesce value in micro seconds.
- * @param qid - Queue index.
- * @param qid - SB Id
- *
- * @return enum _ecore_status_t
- */
-enum _ecore_status_t ecore_set_rxq_coalesce(struct ecore_hwfn *p_hwfn,
-					    struct ecore_ptt *p_ptt,
-					    u16 coalesce, u8 qid, u16 sb_id);
-
-/**
- * @brief ecore_set_txq_coalesce - Configure coalesce parameters for a Tx queue
- *    While the API allows setting coalescing per-qid, all tx queues sharing a
- *    SB should be in same range [i.e., either 0-0x7f, 0x80-0xff or 0x100-0x1ff]
+ * @brief ecore_set_queue_coalesce - Configure coalesce parameters for Rx and
+ *    Tx queue. The fact that we can configure coalescing to up to 511, but on
+ *    varying accuracy [the bigger the value the less accurate] up to a mistake
+ *    of 3usec for the highest values.
+ *    While the API allows setting coalescing per-qid, all queues sharing a SB
+ *    should be in same range [i.e., either 0-0x7f, 0x80-0xff or 0x100-0x1ff]
  *    otherwise configuration would break.
  *
  * @param p_hwfn
- * @param p_ptt
- * @param coalesce - Coalesce value in micro seconds.
- * @param qid - Queue index.
- * @param qid - SB Id
+ * @param rx_coal - Rx Coalesce value in micro seconds.
+ * @param tx_coal - TX Coalesce value in micro seconds.
+ * @param p_handle
  *
  * @return enum _ecore_status_t
- */
-enum _ecore_status_t ecore_set_txq_coalesce(struct ecore_hwfn *p_hwfn,
-					    struct ecore_ptt *p_ptt,
-					    u16 coalesce, u8 qid, u16 sb_id);
+ **/
+enum _ecore_status_t
+ecore_set_queue_coalesce(struct ecore_hwfn *p_hwfn, u16 rx_coal,
+			 u16 tx_coal, void *p_handle);
 
 #endif

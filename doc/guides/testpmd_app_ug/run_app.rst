@@ -165,7 +165,7 @@ They must be separated from the EAL options, shown in the previous section, with
 
 .. code-block:: console
 
-    sudo ./testpmd -c 0xF -n 4 -- -i --portmask=0x1 --nb-cores=2
+    sudo ./testpmd -l 0-3 -n 4 -- -i --portmask=0x1 --nb-cores=2
 
 The commandline options are:
 
@@ -211,7 +211,12 @@ The commandline options are:
 
 *   ``--numa``
 
-    Enable NUMA-aware allocation of RX/TX rings and of RX memory buffers (mbufs).
+    Enable NUMA-aware allocation of RX/TX rings and of RX memory buffers
+    (mbufs). [Default setting]
+
+*   ``--no-numa``
+
+    Disable NUMA-aware allocation of RX/TX rings and of RX memory buffers (mbufs).
 
 *   ``--port-numa-config=(port,socket)[,(port,socket)]``
 
@@ -281,9 +286,9 @@ The commandline options are:
     In perfect filter mode, when a rule is added with queue = -1, the packet will be enqueued into the RX drop-queue.
     If the drop-queue does not exist, the packet is dropped. The default value is N=127.
 
-*   ``--crc-strip``
+*   ``--disable-crc-strip``
 
-    Enable hardware CRC stripping.
+    Disable hardware CRC stripping.
 
 *   ``--enable-lro``
 
@@ -460,3 +465,25 @@ The commandline options are:
 *   ``--disable-link-check``
 
     Disable check on link status when starting/stopping ports.
+
+*   ``--no-lsc-interrupt``
+
+    Disable LSC interrupts for all ports, even those supporting it.
+
+*   ``--no-rmv-interrupt``
+
+    Disable RMV interrupts for all ports, even those supporting it.
+
+*   ``--bitrate-stats=N``
+
+    Set the logical core N to perform bitrate calculation.
+
+*   ``--print-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|all>``
+
+    Enable printing the occurrence of the designated event. Using all will
+    enable all of them.
+
+*   ``--mask-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|all>``
+
+    Disable printing the occurrence of the designated event. Using all will
+    disable all of them.

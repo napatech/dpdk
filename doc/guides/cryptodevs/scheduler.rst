@@ -72,10 +72,10 @@ Initialization
 
 To use the PMD in an application, user must:
 
-* Call rte_eal_vdev_init("crpyto_scheduler") within the application.
+* Call rte_vdev_init("crpyto_scheduler") within the application.
 
 * Use --vdev="crpyto_scheduler" in the EAL options, which will call
-  rte_eal_vdev_init() internally.
+  rte_vdev_init() internally.
 
 
 The following parameters (all optional) can be provided in the previous
@@ -93,6 +93,14 @@ two calls:
   attached to the scheduler using this parameter, simply filling the name
   here. Multiple cryptodevs can be attached initially by presenting this
   parameter multiple times.
+
+* mode: Specify the scheduling mode of the PMD. The supported scheduling
+  mode parameter values are specified in the "Cryptodev Scheduler Modes
+  Overview" section.
+
+* ordering: Specify the status of the crypto operations ordering feature.
+  The value of this parameter can be "enable" or "disable". This feature
+  is disabled by default.
 
 Example:
 
@@ -122,7 +130,43 @@ operation:
 
 *   **CDEV_SCHED_MODE_ROUNDROBIN:**
 
+   *Initialization mode parameter*: **round-robin**
+
    Round-robin mode, which distributes the enqueued burst of crypto ops
    among its slaves in a round-robin manner. This mode may help to fill
    the throughput gap between the physical core and the existing cryptodevs
    to increase the overall performance.
+
+*   **CDEV_SCHED_MODE_PKT_SIZE_DISTR:**
+
+   *Initialization mode parameter*: **packet-size-distr**
+
+   Packet-size based distribution mode, which works with 2 slaves, the primary
+   slave and the secondary slave, and distributes the enqueued crypto
+   operations to them based on their data lengths. A crypto operation will be
+   distributed to the primary slave if its data length is equal to or bigger
+   than the designated threshold, otherwise it will be handled by the secondary
+   slave.
+
+   A typical usecase in this mode is with the QAT cryptodev as the primary and
+   a software cryptodev as the secondary slave. This may help applications to
+   process additional crypto workload than what the QAT cryptodev can handle on
+   its own, by making use of the available CPU cycles to deal with smaller
+   crypto workloads.
+
+   The threshold is set to 128 bytes by default. It can be updated by calling
+   function **rte_cryptodev_scheduler_option_set**. The parameter of
+   **option_type** must be **CDEV_SCHED_OPTION_THRESHOLD** and **option** should
+   point to a rte_cryptodev_scheduler_threshold_option structure filled with
+   appropriate threshold value. Please NOTE this threshold has be a power-of-2
+   unsigned integer.
+
+*   **CDEV_SCHED_MODE_FAILOVER:**
+
+   *Initialization mode parameter*: **fail-over**
+
+   Fail-over mode, which works with 2 slaves, the primary slave and the
+   secondary slave. In this mode, the scheduler will enqueue the incoming
+   crypto operation burst to the primary slave. When one or more crypto
+   operations fail to be enqueued, then they will be enqueued to the secondary
+   slave.

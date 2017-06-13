@@ -140,48 +140,14 @@ txq_free_elts(struct txq_ctrl *txq_ctrl)
 void
 txq_cleanup(struct txq_ctrl *txq_ctrl)
 {
-	struct ibv_exp_release_intf_params params;
 	size_t i;
 
 	DEBUG("cleaning up %p", (void *)txq_ctrl);
 	txq_free_elts(txq_ctrl);
-	if (txq_ctrl->if_qp != NULL) {
-		assert(txq_ctrl->priv != NULL);
-		assert(txq_ctrl->priv->ctx != NULL);
-		assert(txq_ctrl->qp != NULL);
-		params = (struct ibv_exp_release_intf_params){
-			.comp_mask = 0,
-		};
-		claim_zero(ibv_exp_release_intf(txq_ctrl->priv->ctx,
-						txq_ctrl->if_qp,
-						&params));
-	}
-	if (txq_ctrl->if_cq != NULL) {
-		assert(txq_ctrl->priv != NULL);
-		assert(txq_ctrl->priv->ctx != NULL);
-		assert(txq_ctrl->cq != NULL);
-		params = (struct ibv_exp_release_intf_params){
-			.comp_mask = 0,
-		};
-		claim_zero(ibv_exp_release_intf(txq_ctrl->priv->ctx,
-						txq_ctrl->if_cq,
-						&params));
-	}
 	if (txq_ctrl->qp != NULL)
 		claim_zero(ibv_destroy_qp(txq_ctrl->qp));
 	if (txq_ctrl->cq != NULL)
 		claim_zero(ibv_destroy_cq(txq_ctrl->cq));
-	if (txq_ctrl->rd != NULL) {
-		struct ibv_exp_destroy_res_domain_attr attr = {
-			.comp_mask = 0,
-		};
-
-		assert(txq_ctrl->priv != NULL);
-		assert(txq_ctrl->priv->ctx != NULL);
-		claim_zero(ibv_exp_destroy_res_domain(txq_ctrl->priv->ctx,
-						      txq_ctrl->rd,
-						      &attr));
-	}
 	for (i = 0; (i != RTE_DIM(txq_ctrl->txq.mp2mr)); ++i) {
 		if (txq_ctrl->txq.mp2mr[i].mp == NULL)
 			break;
@@ -258,14 +224,15 @@ txq_ctrl_setup(struct rte_eth_dev *dev, struct txq_ctrl *txq_ctrl,
 		.socket = socket,
 	};
 	union {
-		struct ibv_exp_query_intf_params params;
 		struct ibv_exp_qp_init_attr init;
-		struct ibv_exp_res_domain_init_attr rd;
 		struct ibv_exp_cq_init_attr cq;
 		struct ibv_exp_qp_attr mod;
 		struct ibv_exp_cq_attr cq_attr;
 	} attr;
-	enum ibv_exp_query_intf_status status;
+	unsigned int cqe_n;
+	const unsigned int max_tso_inline = ((MLX5_MAX_TSO_HEADER +
+					     (RTE_CACHE_LINE_SIZE - 1)) /
+					      RTE_CACHE_LINE_SIZE);
 	int ret = 0;
 
 	if (mlx5_getenv_int("MLX5_ENABLE_CQE_COMPRESSION")) {
@@ -276,27 +243,18 @@ txq_ctrl_setup(struct rte_eth_dev *dev, struct txq_ctrl *txq_ctrl,
 	(void)conf; /* Thresholds configuration (ignored). */
 	assert(desc > MLX5_TX_COMP_THRESH);
 	tmpl.txq.elts_n = log2above(desc);
+	if (priv->mps == MLX5_MPW_ENHANCED)
+		tmpl.txq.mpw_hdr_dseg = priv->mpw_hdr_dseg;
 	/* MRs will be registered in mp2mr[] later. */
-	attr.rd = (struct ibv_exp_res_domain_init_attr){
-		.comp_mask = (IBV_EXP_RES_DOMAIN_THREAD_MODEL |
-			      IBV_EXP_RES_DOMAIN_MSG_MODEL),
-		.thread_model = IBV_EXP_THREAD_SINGLE,
-		.msg_model = IBV_EXP_MSG_HIGH_BW,
-	};
-	tmpl.rd = ibv_exp_create_res_domain(priv->ctx, &attr.rd);
-	if (tmpl.rd == NULL) {
-		ret = ENOMEM;
-		ERROR("%p: RD creation failure: %s",
-		      (void *)dev, strerror(ret));
-		goto error;
-	}
 	attr.cq = (struct ibv_exp_cq_init_attr){
-		.comp_mask = IBV_EXP_CQ_INIT_ATTR_RES_DOMAIN,
-		.res_domain = tmpl.rd,
+		.comp_mask = 0,
 	};
+	cqe_n = ((desc / MLX5_TX_COMP_THRESH) - 1) ?
+		((desc / MLX5_TX_COMP_THRESH) - 1) : 1;
+	if (priv->mps == MLX5_MPW_ENHANCED)
+		cqe_n += MLX5_TX_COMP_THRESH_INLINE_DIV;
 	tmpl.cq = ibv_exp_create_cq(priv->ctx,
-				    (((desc / MLX5_TX_COMP_THRESH) - 1) ?
-				     ((desc / MLX5_TX_COMP_THRESH) - 1) : 1),
+				    cqe_n,
 				    NULL, NULL, 0, &attr.cq);
 	if (tmpl.cq == NULL) {
 		ret = ENOMEM;
@@ -332,17 +290,52 @@ txq_ctrl_setup(struct rte_eth_dev *dev, struct txq_ctrl *txq_ctrl,
 		 * TX burst. */
 		.sq_sig_all = 0,
 		.pd = priv->pd,
-		.res_domain = tmpl.rd,
-		.comp_mask = (IBV_EXP_QP_INIT_ATTR_PD |
-			      IBV_EXP_QP_INIT_ATTR_RES_DOMAIN),
+		.comp_mask = IBV_EXP_QP_INIT_ATTR_PD,
 	};
 	if (priv->txq_inline && (priv->txqs_n >= priv->txqs_inline)) {
 		tmpl.txq.max_inline =
 			((priv->txq_inline + (RTE_CACHE_LINE_SIZE - 1)) /
 			 RTE_CACHE_LINE_SIZE);
-		attr.init.cap.max_inline_data =
-			tmpl.txq.max_inline * RTE_CACHE_LINE_SIZE;
+		tmpl.txq.inline_en = 1;
+		/* TSO and MPS can't be enabled concurrently. */
+		assert(!priv->tso || !priv->mps);
+		if (priv->mps == MLX5_MPW_ENHANCED) {
+			tmpl.txq.inline_max_packet_sz =
+				priv->inline_max_packet_sz;
+			/* To minimize the size of data set, avoid requesting
+			 * too large WQ.
+			 */
+			attr.init.cap.max_inline_data =
+				((RTE_MIN(priv->txq_inline,
+					  priv->inline_max_packet_sz) +
+				  (RTE_CACHE_LINE_SIZE - 1)) /
+				 RTE_CACHE_LINE_SIZE) * RTE_CACHE_LINE_SIZE;
+		} else if (priv->tso) {
+			int inline_diff = tmpl.txq.max_inline - max_tso_inline;
+
+			/*
+			 * Adjust inline value as Verbs aggregates
+			 * tso_inline and txq_inline fields.
+			 */
+			attr.init.cap.max_inline_data = inline_diff > 0 ?
+							inline_diff *
+							RTE_CACHE_LINE_SIZE :
+							0;
+		} else {
+			attr.init.cap.max_inline_data =
+				tmpl.txq.max_inline * RTE_CACHE_LINE_SIZE;
+		}
 	}
+	if (priv->tso) {
+		attr.init.max_tso_header =
+			max_tso_inline * RTE_CACHE_LINE_SIZE;
+		attr.init.comp_mask |= IBV_EXP_QP_INIT_ATTR_MAX_TSO_HEADER;
+		tmpl.txq.max_inline = RTE_MAX(tmpl.txq.max_inline,
+					      max_tso_inline);
+		tmpl.txq.tso_en = 1;
+	}
+	if (priv->tunnel_en)
+		tmpl.txq.tunnel_en = 1;
 	tmpl.qp = ibv_exp_create_qp(priv->ctx, &attr.init);
 	if (tmpl.qp == NULL) {
 		ret = (errno ? errno : EINVAL);
@@ -389,36 +382,6 @@ txq_ctrl_setup(struct rte_eth_dev *dev, struct txq_ctrl *txq_ctrl,
 	if (ret) {
 		ERROR("%p: QP state to IBV_QPS_RTS failed: %s",
 		      (void *)dev, strerror(ret));
-		goto error;
-	}
-	attr.params = (struct ibv_exp_query_intf_params){
-		.intf_scope = IBV_EXP_INTF_GLOBAL,
-		.intf = IBV_EXP_INTF_CQ,
-		.obj = tmpl.cq,
-	};
-	tmpl.if_cq = ibv_exp_query_intf(priv->ctx, &attr.params, &status);
-	if (tmpl.if_cq == NULL) {
-		ret = EINVAL;
-		ERROR("%p: CQ interface family query failed with status %d",
-		      (void *)dev, status);
-		goto error;
-	}
-	attr.params = (struct ibv_exp_query_intf_params){
-		.intf_scope = IBV_EXP_INTF_GLOBAL,
-		.intf = IBV_EXP_INTF_QP_BURST,
-		.intf_version = 1,
-		.obj = tmpl.qp,
-		/* Enable multi-packet send if supported. */
-		.family_flags =
-			(priv->mps ?
-			 IBV_EXP_QP_BURST_CREATE_ENABLE_MULTI_PACKET_SEND_WR :
-			 0),
-	};
-	tmpl.if_qp = ibv_exp_query_intf(priv->ctx, &attr.params, &status);
-	if (tmpl.if_qp == NULL) {
-		ret = EINVAL;
-		ERROR("%p: QP interface family query failed with status %d",
-		      (void *)dev, status);
 		goto error;
 	}
 	/* Clean up txq in case we're reinitializing it. */
@@ -496,6 +459,19 @@ mlx5_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		}
 		(*priv->txqs)[idx] = NULL;
 		txq_cleanup(txq_ctrl);
+		/* Resize if txq size is changed. */
+		if (txq_ctrl->txq.elts_n != log2above(desc)) {
+			txq_ctrl = rte_realloc(txq_ctrl,
+					       sizeof(*txq_ctrl) +
+					       desc * sizeof(struct rte_mbuf *),
+					       RTE_CACHE_LINE_SIZE);
+			if (!txq_ctrl) {
+				ERROR("%p: unable to reallocate queue index %u",
+					(void *)dev, idx);
+				priv_unlock(priv);
+				return -ENOMEM;
+			}
+		}
 	} else {
 		txq_ctrl =
 			rte_calloc_socket("TXQ", 1,

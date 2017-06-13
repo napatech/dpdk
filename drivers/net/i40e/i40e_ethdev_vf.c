@@ -55,6 +55,7 @@
 #include <rte_alarm.h>
 #include <rte_ether.h>
 #include <rte_ethdev.h>
+#include <rte_ethdev_pci.h>
 #include <rte_atomic.h>
 #include <rte_malloc.h>
 #include <rte_dev.h>
@@ -135,10 +136,10 @@ static int i40evf_dev_tx_queue_start(struct rte_eth_dev *dev,
 				     uint16_t tx_queue_id);
 static int i40evf_dev_tx_queue_stop(struct rte_eth_dev *dev,
 				    uint16_t tx_queue_id);
-static void i40evf_add_mac_addr(struct rte_eth_dev *dev,
-				struct ether_addr *addr,
-				uint32_t index,
-				uint32_t pool);
+static int i40evf_add_mac_addr(struct rte_eth_dev *dev,
+			       struct ether_addr *addr,
+			       uint32_t index,
+			       uint32_t pool);
 static void i40evf_del_mac_addr(struct rte_eth_dev *dev, uint32_t index);
 static int i40evf_dev_rss_reta_update(struct rte_eth_dev *dev,
 			struct rte_eth_rss_reta_entry64 *reta_conf,
@@ -217,6 +218,8 @@ static const struct eth_dev_ops i40evf_eth_dev_ops = {
 	.rx_queue_intr_enable = i40evf_dev_rx_queue_intr_enable,
 	.rx_queue_intr_disable = i40evf_dev_rx_queue_intr_disable,
 	.rx_descriptor_done   = i40e_dev_rx_descriptor_done,
+	.rx_descriptor_status = i40e_dev_rx_descriptor_status,
+	.tx_descriptor_status = i40e_dev_tx_descriptor_status,
 	.tx_queue_setup       = i40e_dev_tx_queue_setup,
 	.tx_queue_release     = i40e_dev_tx_queue_release,
 	.rx_queue_count       = i40e_dev_rx_queue_count,
@@ -852,7 +855,7 @@ i40evf_stop_queues(struct rte_eth_dev *dev)
 	return 0;
 }
 
-static void
+static int
 i40evf_add_mac_addr(struct rte_eth_dev *dev,
 		    struct ether_addr *addr,
 		    __rte_unused uint32_t index,
@@ -870,7 +873,7 @@ i40evf_add_mac_addr(struct rte_eth_dev *dev,
 			    addr->addr_bytes[0], addr->addr_bytes[1],
 			    addr->addr_bytes[2], addr->addr_bytes[3],
 			    addr->addr_bytes[4], addr->addr_bytes[5]);
-		return;
+		return I40E_ERR_INVALID_MAC_ADDR;
 	}
 
 	list = (struct i40e_virtchnl_ether_addr_list *)cmd_buffer;
@@ -889,7 +892,7 @@ i40evf_add_mac_addr(struct rte_eth_dev *dev,
 		PMD_DRV_LOG(ERR, "fail to execute command "
 			    "OP_ADD_ETHER_ADDRESS");
 
-	return;
+	return err;
 }
 
 static void
@@ -1420,8 +1423,7 @@ i40evf_handle_aq_msg(struct rte_eth_dev *dev)
  *  void
  */
 static void
-i40evf_dev_interrupt_handler(struct rte_intr_handle *intr_handle,
-			     void *param)
+i40evf_dev_interrupt_handler(void *param)
 {
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
 	struct i40e_hw *hw = I40E_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -1450,7 +1452,7 @@ i40evf_dev_interrupt_handler(struct rte_intr_handle *intr_handle,
 
 done:
 	i40evf_enable_irq0(hw);
-	rte_intr_enable(intr_handle);
+	rte_intr_enable(dev->intr_handle);
 }
 
 static int
@@ -1476,7 +1478,7 @@ i40evf_dev_init(struct rte_eth_dev *eth_dev)
 		i40e_set_tx_function(eth_dev);
 		return 0;
 	}
-
+	i40e_set_default_ptype_table(eth_dev);
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
 	eth_dev->data->dev_flags |= RTE_ETH_DEV_DETACHABLE;
 
@@ -1542,22 +1544,30 @@ i40evf_dev_uninit(struct rte_eth_dev *eth_dev)
 
 	return 0;
 }
+
+static int eth_i40evf_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
+	struct rte_pci_device *pci_dev)
+{
+	return rte_eth_dev_pci_generic_probe(pci_dev,
+		sizeof(struct i40e_adapter), i40evf_dev_init);
+}
+
+static int eth_i40evf_pci_remove(struct rte_pci_device *pci_dev)
+{
+	return rte_eth_dev_pci_generic_remove(pci_dev, i40evf_dev_uninit);
+}
+
 /*
  * virtual function driver struct
  */
-static struct eth_driver rte_i40evf_pmd = {
-	.pci_drv = {
-		.id_table = pci_id_i40evf_map,
-		.drv_flags = RTE_PCI_DRV_NEED_MAPPING,
-		.probe = rte_eth_dev_pci_probe,
-		.remove = rte_eth_dev_pci_remove,
-	},
-	.eth_dev_init = i40evf_dev_init,
-	.eth_dev_uninit = i40evf_dev_uninit,
-	.dev_private_size = sizeof(struct i40e_adapter),
+static struct rte_pci_driver rte_i40evf_pmd = {
+	.id_table = pci_id_i40evf_map,
+	.drv_flags = RTE_PCI_DRV_NEED_MAPPING,
+	.probe = eth_i40evf_pci_probe,
+	.remove = eth_i40evf_pci_remove,
 };
 
-RTE_PMD_REGISTER_PCI(net_i40e_vf, rte_i40evf_pmd.pci_drv);
+RTE_PMD_REGISTER_PCI(net_i40e_vf, rte_i40evf_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_i40e_vf, pci_id_i40evf_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_i40e_vf, "* igb_uio | vfio");
 
@@ -2014,6 +2024,10 @@ i40evf_add_del_all_mac_addr(struct rte_eth_dev *dev, bool add)
 		}
 
 		list = rte_zmalloc("i40evf_del_mac_buffer", len, 0);
+		if (!list) {
+			PMD_DRV_LOG(ERR, "fail to allocate memory");
+			return;
+		}
 
 		for (i = begin; i < next_begin; i++) {
 			addr = &dev->data->mac_addrs[i];
@@ -2160,6 +2174,9 @@ i40evf_dev_link_update(struct rte_eth_dev *dev,
 		break;
 	case I40E_LINK_SPEED_20GB:
 		new_link.link_speed = ETH_SPEED_NUM_20G;
+		break;
+	case I40E_LINK_SPEED_25GB:
+		new_link.link_speed = ETH_SPEED_NUM_25G;
 		break;
 	case I40E_LINK_SPEED_40GB:
 		new_link.link_speed = ETH_SPEED_NUM_40G;
@@ -2670,8 +2687,7 @@ i40evf_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 {
 	struct i40e_vf *vf = I40EVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
 	struct rte_eth_dev_data *dev_data = vf->dev_data;
-	uint32_t frame_size = mtu + ETHER_HDR_LEN
-			      + ETHER_CRC_LEN + I40E_VLAN_TAG_SIZE;
+	uint32_t frame_size = mtu + I40E_ETH_OVERHEAD;
 	int ret = 0;
 
 	/* check if mtu is within the allowed range */

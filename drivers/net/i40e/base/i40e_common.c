@@ -5633,6 +5633,59 @@ enum i40e_status_code i40e_aq_add_cloud_filters(struct i40e_hw *hw,
 }
 
 /**
+ * i40e_aq_add_cloud_filters_big_buffer
+ * @hw: pointer to the hardware structure
+ * @seid: VSI seid to add cloud filters from
+ * @filters: Buffer which contains the filters in big buffer to be added
+ * @filter_count: number of filters contained in the buffer
+ *
+ * Set the cloud filters for a given VSI.  The contents of the
+ * i40e_aqc_add_rm_cloud_filt_elem_ext are filled in by the caller of
+ * the function.
+ *
+ **/
+enum i40e_status_code i40e_aq_add_cloud_filters_big_buffer(struct i40e_hw *hw,
+	u16 seid,
+	struct i40e_aqc_add_rm_cloud_filt_elem_ext *filters,
+	u8 filter_count)
+{
+	struct i40e_aq_desc desc;
+	struct i40e_aqc_add_remove_cloud_filters *cmd =
+	(struct i40e_aqc_add_remove_cloud_filters *)&desc.params.raw;
+	enum i40e_status_code status;
+	u16 buff_len;
+	int i;
+
+	i40e_fill_default_direct_cmd_desc(&desc,
+					  i40e_aqc_opc_add_cloud_filters);
+
+	buff_len = filter_count * sizeof(*filters);
+	desc.datalen = CPU_TO_LE16(buff_len);
+	desc.flags |= CPU_TO_LE16((u16)(I40E_AQ_FLAG_BUF | I40E_AQ_FLAG_RD));
+	cmd->num_filters = filter_count;
+	cmd->seid = CPU_TO_LE16(seid);
+	cmd->big_buffer_flag = I40E_AQC_ADD_REM_CLOUD_CMD_BIG_BUFFER;
+
+	/* adjust Geneve VNI for HW issue */
+	for (i = 0; i < filter_count; i++) {
+		u16 tnl_type;
+		u32 ti;
+
+		tnl_type = (LE16_TO_CPU(filters[i].element.flags) &
+			   I40E_AQC_ADD_CLOUD_TNL_TYPE_MASK) >>
+			   I40E_AQC_ADD_CLOUD_TNL_TYPE_SHIFT;
+		if (tnl_type == I40E_AQC_ADD_CLOUD_TNL_TYPE_GENEVE) {
+			ti = LE32_TO_CPU(filters[i].element.tenant_id);
+			filters[i].element.tenant_id = CPU_TO_LE32(ti << 8);
+		}
+	}
+
+	status = i40e_asq_send_command(hw, &desc, filters, buff_len, NULL);
+
+	return status;
+}
+
+/**
  * i40e_aq_remove_cloud_filters
  * @hw: pointer to the hardware structure
  * @seid: VSI seid to remove cloud filters from
@@ -5645,9 +5698,9 @@ enum i40e_status_code i40e_aq_add_cloud_filters(struct i40e_hw *hw,
  *
  **/
 enum i40e_status_code i40e_aq_remove_cloud_filters(struct i40e_hw *hw,
-		u16 seid,
-		struct i40e_aqc_add_remove_cloud_filters_element_data *filters,
-		u8 filter_count)
+	u16 seid,
+	struct i40e_aqc_add_remove_cloud_filters_element_data *filters,
+	u8 filter_count)
 {
 	struct i40e_aq_desc desc;
 	struct i40e_aqc_add_remove_cloud_filters *cmd =
@@ -5670,6 +5723,103 @@ enum i40e_status_code i40e_aq_remove_cloud_filters(struct i40e_hw *hw,
 
 	return status;
 }
+
+/**
+ * i40e_aq_remove_cloud_filters_big_buffer
+ * @hw: pointer to the hardware structure
+ * @seid: VSI seid to remove cloud filters from
+ * @filters: Buffer which contains the filters in big buffer to be removed
+ * @filter_count: number of filters contained in the buffer
+ *
+ * Remove the cloud filters for a given VSI.  The contents of the
+ * i40e_aqc_add_rm_cloud_filt_elem_ext are filled in by the caller of
+ * the function.
+ *
+ **/
+enum i40e_status_code i40e_aq_remove_cloud_filters_big_buffer(
+	struct i40e_hw *hw,
+	u16 seid,
+	struct i40e_aqc_add_rm_cloud_filt_elem_ext *filters,
+	u8 filter_count)
+{
+	struct i40e_aq_desc desc;
+	struct i40e_aqc_add_remove_cloud_filters *cmd =
+	(struct i40e_aqc_add_remove_cloud_filters *)&desc.params.raw;
+	enum i40e_status_code status;
+	u16 buff_len;
+	int i;
+
+	i40e_fill_default_direct_cmd_desc(&desc,
+					  i40e_aqc_opc_remove_cloud_filters);
+
+	buff_len = filter_count * sizeof(*filters);
+	desc.datalen = CPU_TO_LE16(buff_len);
+	desc.flags |= CPU_TO_LE16((u16)(I40E_AQ_FLAG_BUF | I40E_AQ_FLAG_RD));
+	cmd->num_filters = filter_count;
+	cmd->seid = CPU_TO_LE16(seid);
+	cmd->big_buffer_flag = I40E_AQC_ADD_REM_CLOUD_CMD_BIG_BUFFER;
+
+	/* adjust Geneve VNI for HW issue */
+	for (i = 0; i < filter_count; i++) {
+		u16 tnl_type;
+		u32 ti;
+
+		tnl_type = (LE16_TO_CPU(filters[i].element.flags) &
+			   I40E_AQC_ADD_CLOUD_TNL_TYPE_MASK) >>
+			   I40E_AQC_ADD_CLOUD_TNL_TYPE_SHIFT;
+		if (tnl_type == I40E_AQC_ADD_CLOUD_TNL_TYPE_GENEVE) {
+			ti = LE32_TO_CPU(filters[i].element.tenant_id);
+			filters[i].element.tenant_id = CPU_TO_LE32(ti << 8);
+		}
+	}
+
+	status = i40e_asq_send_command(hw, &desc, filters, buff_len, NULL);
+
+	return status;
+}
+
+/**
+ * i40e_aq_replace_cloud_filters - Replace cloud filter command
+ * @hw: pointer to the hw struct
+ * @filters: pointer to the i40e_aqc_replace_cloud_filter_cmd struct
+ * @cmd_buf: pointer to the i40e_aqc_replace_cloud_filter_cmd_buf struct
+ *
+ **/
+enum
+i40e_status_code i40e_aq_replace_cloud_filters(struct i40e_hw *hw,
+	struct i40e_aqc_replace_cloud_filters_cmd *filters,
+	struct i40e_aqc_replace_cloud_filters_cmd_buf *cmd_buf)
+{
+	struct i40e_aq_desc desc;
+	struct i40e_aqc_replace_cloud_filters_cmd *cmd =
+		(struct i40e_aqc_replace_cloud_filters_cmd *)&desc.params.raw;
+	enum i40e_status_code status = I40E_SUCCESS;
+	int i = 0;
+
+	i40e_fill_default_direct_cmd_desc(&desc,
+					  i40e_aqc_opc_replace_cloud_filters);
+
+	desc.datalen = CPU_TO_LE16(32);
+	desc.flags |= CPU_TO_LE16((u16)(I40E_AQ_FLAG_BUF | I40E_AQ_FLAG_RD));
+	cmd->old_filter_type = filters->old_filter_type;
+	cmd->new_filter_type = filters->new_filter_type;
+	cmd->valid_flags = filters->valid_flags;
+	cmd->tr_bit = filters->tr_bit;
+
+	status = i40e_asq_send_command(hw, &desc, cmd_buf,
+		sizeof(struct i40e_aqc_replace_cloud_filters_cmd_buf),  NULL);
+
+	/* for get cloud filters command */
+	for (i = 0; i < 32; i += 4) {
+		cmd_buf->filters[i / 4].filter_type = cmd_buf->data[i];
+		cmd_buf->filters[i / 4].input[0] = cmd_buf->data[i + 1];
+		cmd_buf->filters[i / 4].input[1] = cmd_buf->data[i + 2];
+		cmd_buf->filters[i / 4].input[2] = cmd_buf->data[i + 3];
+	}
+
+	return status;
+}
+
 
 /**
  * i40e_aq_alternate_write
@@ -6634,7 +6784,9 @@ u32 i40e_read_rx_ctl(struct i40e_hw *hw, u32 reg_addr)
 	int retry = 5;
 	u32 val = 0;
 
-	use_register = (hw->aq.api_maj_ver == 1) && (hw->aq.api_min_ver < 5);
+	use_register = (((hw->aq.api_maj_ver == 1) &&
+			(hw->aq.api_min_ver < 5)) ||
+			(hw->mac.type == I40E_MAC_X722));
 	if (!use_register) {
 do_retry:
 		status = i40e_aq_rx_ctl_read_register(hw, reg_addr, &val, NULL);
@@ -6693,7 +6845,9 @@ void i40e_write_rx_ctl(struct i40e_hw *hw, u32 reg_addr, u32 reg_val)
 	bool use_register;
 	int retry = 5;
 
-	use_register = (hw->aq.api_maj_ver == 1) && (hw->aq.api_min_ver < 5);
+	use_register = (((hw->aq.api_maj_ver == 1) &&
+			(hw->aq.api_min_ver < 5)) ||
+			(hw->mac.type == I40E_MAC_X722));
 	if (!use_register) {
 do_retry:
 		status = i40e_aq_rx_ctl_write_register(hw, reg_addr,
@@ -6996,5 +7150,218 @@ enum i40e_status_code i40e_aq_clear_all_wol_filters(struct i40e_hw *hw,
 
 	status = i40e_asq_send_command(hw, &desc, NULL, 0, cmd_details);
 
+	return status;
+}
+
+
+/**
+ * i40e_aq_write_ddp - Write dynamic device personalization (ddp)
+ * @hw: pointer to the hw struct
+ * @buff: command buffer (size in bytes = buff_size)
+ * @buff_size: buffer size in bytes
+ * @track_id: package tracking id
+ * @error_offset: returns error offset
+ * @error_info: returns error information
+ * @cmd_details: pointer to command details structure or NULL
+ **/
+enum
+i40e_status_code i40e_aq_write_ddp(struct i40e_hw *hw, void *buff,
+				   u16 buff_size, u32 track_id,
+				   u32 *error_offset, u32 *error_info,
+				   struct i40e_asq_cmd_details *cmd_details)
+{
+	struct i40e_aq_desc desc;
+	struct i40e_aqc_write_personalization_profile *cmd =
+		(struct i40e_aqc_write_personalization_profile *)
+		&desc.params.raw;
+	struct i40e_aqc_write_ddp_resp *resp;
+	enum i40e_status_code status;
+
+	i40e_fill_default_direct_cmd_desc(&desc,
+				  i40e_aqc_opc_write_personalization_profile);
+
+	desc.flags |= CPU_TO_LE16(I40E_AQ_FLAG_BUF | I40E_AQ_FLAG_RD);
+	if (buff_size > I40E_AQ_LARGE_BUF)
+		desc.flags |= CPU_TO_LE16((u16)I40E_AQ_FLAG_LB);
+
+	desc.datalen = CPU_TO_LE16(buff_size);
+
+	cmd->profile_track_id = CPU_TO_LE32(track_id);
+
+	status = i40e_asq_send_command(hw, &desc, buff, buff_size, cmd_details);
+	if (!status) {
+		resp = (struct i40e_aqc_write_ddp_resp *)&desc.params.raw;
+		if (error_offset)
+			*error_offset = LE32_TO_CPU(resp->error_offset);
+		if (error_info)
+			*error_info = LE32_TO_CPU(resp->error_info);
+	}
+
+	return status;
+}
+
+/**
+ * i40e_aq_get_ddp_list - Read dynamic device personalization (ddp)
+ * @hw: pointer to the hw struct
+ * @buff: command buffer (size in bytes = buff_size)
+ * @buff_size: buffer size in bytes
+ * @cmd_details: pointer to command details structure or NULL
+ **/
+enum
+i40e_status_code i40e_aq_get_ddp_list(struct i40e_hw *hw, void *buff,
+				      u16 buff_size, u8 flags,
+				      struct i40e_asq_cmd_details *cmd_details)
+{
+	struct i40e_aq_desc desc;
+	struct i40e_aqc_get_applied_profiles *cmd =
+		(struct i40e_aqc_get_applied_profiles *)&desc.params.raw;
+	enum i40e_status_code status;
+
+	i40e_fill_default_direct_cmd_desc(&desc,
+			  i40e_aqc_opc_get_personalization_profile_list);
+
+	desc.flags |= CPU_TO_LE16((u16)I40E_AQ_FLAG_BUF);
+	if (buff_size > I40E_AQ_LARGE_BUF)
+		desc.flags |= CPU_TO_LE16((u16)I40E_AQ_FLAG_LB);
+	desc.datalen = CPU_TO_LE16(buff_size);
+
+	cmd->flags = flags;
+
+	status = i40e_asq_send_command(hw, &desc, buff, buff_size, cmd_details);
+
+	return status;
+}
+
+/**
+ * i40e_find_segment_in_package
+ * @segment_type: the segment type to search for (i.e., SEGMENT_TYPE_I40E)
+ * @pkg_hdr: pointer to the package header to be searched
+ *
+ * This function searches a package file for a particular segment type. On
+ * success it returns a pointer to the segment header, otherwise it will
+ * return NULL.
+ **/
+struct i40e_generic_seg_header *
+i40e_find_segment_in_package(u32 segment_type,
+			     struct i40e_package_header *pkg_hdr)
+{
+	struct i40e_generic_seg_header *segment;
+	u32 i;
+
+	/* Search all package segments for the requested segment type */
+	for (i = 0; i < pkg_hdr->segment_count; i++) {
+		segment =
+			(struct i40e_generic_seg_header *)((u8 *)pkg_hdr +
+			 pkg_hdr->segment_offset[i]);
+
+		if (segment->type == segment_type)
+			return segment;
+	}
+
+	return NULL;
+}
+
+/**
+ * i40e_write_profile
+ * @hw: pointer to the hardware structure
+ * @profile: pointer to the profile segment of the package to be downloaded
+ * @track_id: package tracking id
+ *
+ * Handles the download of a complete package.
+ */
+enum i40e_status_code
+i40e_write_profile(struct i40e_hw *hw, struct i40e_profile_segment *profile,
+		   u32 track_id)
+{
+	enum i40e_status_code status = I40E_SUCCESS;
+	struct i40e_section_table *sec_tbl;
+	struct i40e_profile_section_header *sec = NULL;
+	u32 dev_cnt;
+	u32 vendor_dev_id;
+	u32 *nvm;
+	u32 section_size = 0;
+	u32 offset = 0, info = 0;
+	u32 i;
+
+	if (!track_id) {
+		i40e_debug(hw, I40E_DEBUG_PACKAGE, "Track_id can't be 0.");
+		return I40E_NOT_SUPPORTED;
+	}
+
+	dev_cnt = profile->device_table_count;
+
+	for (i = 0; i < dev_cnt; i++) {
+		vendor_dev_id = profile->device_table[i].vendor_dev_id;
+		if ((vendor_dev_id >> 16) == I40E_INTEL_VENDOR_ID)
+			if (hw->device_id == (vendor_dev_id & 0xFFFF))
+				break;
+	}
+	if (i == dev_cnt) {
+		i40e_debug(hw, I40E_DEBUG_PACKAGE, "Device doesn't support DDP");
+		return I40E_ERR_DEVICE_NOT_SUPPORTED;
+	}
+
+	nvm = (u32 *)&profile->device_table[dev_cnt];
+	sec_tbl = (struct i40e_section_table *)&nvm[nvm[0] + 1];
+
+	for (i = 0; i < sec_tbl->section_count; i++) {
+		sec = (struct i40e_profile_section_header *)((u8 *)profile +
+					     sec_tbl->section_offset[i]);
+
+		/* Skip 'AQ', 'note' and 'name' sections */
+		if (sec->section.type != SECTION_TYPE_MMIO)
+			continue;
+
+		section_size = sec->section.size +
+			sizeof(struct i40e_profile_section_header);
+
+		/* Write profile */
+		status = i40e_aq_write_ddp(hw, (void *)sec, (u16)section_size,
+					   track_id, &offset, &info, NULL);
+		if (status) {
+			i40e_debug(hw, I40E_DEBUG_PACKAGE,
+				   "Failed to write profile: offset %d, info %d",
+				   offset, info);
+			break;
+		}
+	}
+	return status;
+}
+
+/**
+ * i40e_add_pinfo_to_list
+ * @hw: pointer to the hardware structure
+ * @profile: pointer to the profile segment of the package
+ * @profile_info_sec: buffer for information section
+ * @track_id: package tracking id
+ *
+ * Register a profile to the list of loaded profiles.
+ */
+enum i40e_status_code
+i40e_add_pinfo_to_list(struct i40e_hw *hw,
+		       struct i40e_profile_segment *profile,
+		       u8 *profile_info_sec, u32 track_id)
+{
+	enum i40e_status_code status = I40E_SUCCESS;
+	struct i40e_profile_section_header *sec = NULL;
+	struct i40e_profile_info *pinfo;
+	u32 offset = 0, info = 0;
+
+	sec = (struct i40e_profile_section_header *)profile_info_sec;
+	sec->tbl_size = 1;
+	sec->data_end = sizeof(struct i40e_profile_section_header) +
+			sizeof(struct i40e_profile_info);
+	sec->section.type = SECTION_TYPE_INFO;
+	sec->section.offset = sizeof(struct i40e_profile_section_header);
+	sec->section.size = sizeof(struct i40e_profile_info);
+	pinfo = (struct i40e_profile_info *)(profile_info_sec +
+					     sec->section.offset);
+	pinfo->track_id = track_id;
+	pinfo->version = profile->version;
+	pinfo->op = I40E_DDP_ADD_TRACKID;
+	memcpy(pinfo->name, profile->name, I40E_DDP_NAME_SIZE);
+
+	status = i40e_aq_write_ddp(hw, (void *)sec, sec->data_end,
+				track_id, &offset, &info, NULL);
 	return status;
 }

@@ -126,7 +126,6 @@ ecore_send_msg2pf(struct ecore_hwfn *p_hwfn,
 			   "VF <-- PF Timeout [Type %d]\n",
 			   p_req->first_tlv.tl.type);
 		rc = ECORE_TIMEOUT;
-		return rc;
 	} else {
 		DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
 			   "PF response: %d [Type %d]\n",
@@ -387,8 +386,6 @@ enum _ecore_status_t ecore_vf_hw_prepare(struct ecore_hwfn *p_hwfn)
 		return ECORE_NOMEM;
 	}
 
-	OSAL_MEMSET(p_iov, 0, sizeof(*p_iov));
-
 	/* Allocate vf2pf msg */
 	p_iov->vf2pf_request = OSAL_DMA_ALLOC_COHERENT(p_hwfn->p_dev,
 							 &p_iov->
@@ -454,19 +451,173 @@ free_p_iov:
 #define MSTORM_QZONE_START(dev)   (TSTORM_QZONE_START + \
 				   (TSTORM_QZONE_SIZE * NUM_OF_L2_QUEUES(dev)))
 
-enum _ecore_status_t ecore_vf_pf_rxq_start(struct ecore_hwfn *p_hwfn,
-					   u8 rx_qid,
-					   u16 sb,
-					   u8 sb_index,
-					   u16 bd_max_bytes,
-					   dma_addr_t bd_chain_phys_addr,
-					   dma_addr_t cqe_pbl_addr,
-					   u16 cqe_pbl_size,
-					   void OSAL_IOMEM **pp_prod)
+/* @DPDK - changed enum ecore_tunn_clss to enum ecore_tunn_mode */
+static void
+__ecore_vf_prep_tunn_req_tlv(struct vfpf_update_tunn_param_tlv *p_req,
+			     struct ecore_tunn_update_type *p_src,
+			     enum ecore_tunn_mode mask, u8 *p_cls)
+{
+	if (p_src->b_update_mode) {
+		p_req->tun_mode_update_mask |= (1 << mask);
+
+		if (p_src->b_mode_enabled)
+			p_req->tunn_mode |= (1 << mask);
+	}
+
+	*p_cls = p_src->tun_cls;
+}
+
+/* @DPDK - changed enum ecore_tunn_clss to enum ecore_tunn_mode */
+static void
+ecore_vf_prep_tunn_req_tlv(struct vfpf_update_tunn_param_tlv *p_req,
+			   struct ecore_tunn_update_type *p_src,
+			   enum ecore_tunn_mode mask, u8 *p_cls,
+			   struct ecore_tunn_update_udp_port *p_port,
+			   u8 *p_update_port, u16 *p_udp_port)
+{
+	if (p_port->b_update_port) {
+		*p_update_port = 1;
+		*p_udp_port = p_port->port;
+	}
+
+	__ecore_vf_prep_tunn_req_tlv(p_req, p_src, mask, p_cls);
+}
+
+void ecore_vf_set_vf_start_tunn_update_param(struct ecore_tunnel_info *p_tun)
+{
+	if (p_tun->vxlan.b_mode_enabled)
+		p_tun->vxlan.b_update_mode = true;
+	if (p_tun->l2_geneve.b_mode_enabled)
+		p_tun->l2_geneve.b_update_mode = true;
+	if (p_tun->ip_geneve.b_mode_enabled)
+		p_tun->ip_geneve.b_update_mode = true;
+	if (p_tun->l2_gre.b_mode_enabled)
+		p_tun->l2_gre.b_update_mode = true;
+	if (p_tun->ip_gre.b_mode_enabled)
+		p_tun->ip_gre.b_update_mode = true;
+
+	p_tun->b_update_rx_cls = true;
+	p_tun->b_update_tx_cls = true;
+}
+
+static void
+__ecore_vf_update_tunn_param(struct ecore_tunn_update_type *p_tun,
+			     u16 feature_mask, u8 tunn_mode, u8 tunn_cls,
+			     enum ecore_tunn_mode val)
+{
+	if (feature_mask & (1 << val)) {
+		p_tun->b_mode_enabled = tunn_mode;
+		p_tun->tun_cls = tunn_cls;
+	} else {
+		p_tun->b_mode_enabled = false;
+	}
+}
+
+static void
+ecore_vf_update_tunn_param(struct ecore_hwfn *p_hwfn,
+			   struct ecore_tunnel_info *p_tun,
+			   struct pfvf_update_tunn_param_tlv *p_resp)
+{
+	/* Update mode and classes provided by PF */
+	u16 feat_mask = p_resp->tunn_feature_mask;
+
+	__ecore_vf_update_tunn_param(&p_tun->vxlan, feat_mask,
+				     p_resp->vxlan_mode, p_resp->vxlan_clss,
+				     ECORE_MODE_VXLAN_TUNN);
+	__ecore_vf_update_tunn_param(&p_tun->l2_geneve, feat_mask,
+				     p_resp->l2geneve_mode,
+				     p_resp->l2geneve_clss,
+				     ECORE_MODE_L2GENEVE_TUNN);
+	__ecore_vf_update_tunn_param(&p_tun->ip_geneve, feat_mask,
+				     p_resp->ipgeneve_mode,
+				     p_resp->ipgeneve_clss,
+				     ECORE_MODE_IPGENEVE_TUNN);
+	__ecore_vf_update_tunn_param(&p_tun->l2_gre, feat_mask,
+				     p_resp->l2gre_mode, p_resp->l2gre_clss,
+				     ECORE_MODE_L2GRE_TUNN);
+	__ecore_vf_update_tunn_param(&p_tun->ip_gre, feat_mask,
+				     p_resp->ipgre_mode, p_resp->ipgre_clss,
+				     ECORE_MODE_IPGRE_TUNN);
+	p_tun->geneve_port.port = p_resp->geneve_udp_port;
+	p_tun->vxlan_port.port = p_resp->vxlan_udp_port;
+
+	DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
+		   "tunn mode: vxlan=0x%x, l2geneve=0x%x, ipgeneve=0x%x, l2gre=0x%x, ipgre=0x%x",
+		   p_tun->vxlan.b_mode_enabled, p_tun->l2_geneve.b_mode_enabled,
+		   p_tun->ip_geneve.b_mode_enabled,
+		   p_tun->l2_gre.b_mode_enabled,
+		   p_tun->ip_gre.b_mode_enabled);
+}
+
+enum _ecore_status_t
+ecore_vf_pf_tunnel_param_update(struct ecore_hwfn *p_hwfn,
+				struct ecore_tunnel_info *p_src)
+{
+	struct ecore_tunnel_info *p_tun = &p_hwfn->p_dev->tunnel;
+	struct ecore_vf_iov *p_iov = p_hwfn->vf_iov_info;
+	struct pfvf_update_tunn_param_tlv *p_resp;
+	struct vfpf_update_tunn_param_tlv *p_req;
+	enum _ecore_status_t rc;
+
+	p_req = ecore_vf_pf_prep(p_hwfn, CHANNEL_TLV_UPDATE_TUNN_PARAM,
+				 sizeof(*p_req));
+
+	if (p_src->b_update_rx_cls && p_src->b_update_tx_cls)
+		p_req->update_tun_cls = 1;
+
+	ecore_vf_prep_tunn_req_tlv(p_req, &p_src->vxlan, ECORE_MODE_VXLAN_TUNN,
+				   &p_req->vxlan_clss, &p_src->vxlan_port,
+				   &p_req->update_vxlan_port,
+				   &p_req->vxlan_port);
+	ecore_vf_prep_tunn_req_tlv(p_req, &p_src->l2_geneve,
+				   ECORE_MODE_L2GENEVE_TUNN,
+				   &p_req->l2geneve_clss, &p_src->geneve_port,
+				   &p_req->update_geneve_port,
+				   &p_req->geneve_port);
+	__ecore_vf_prep_tunn_req_tlv(p_req, &p_src->ip_geneve,
+				     ECORE_MODE_IPGENEVE_TUNN,
+				     &p_req->ipgeneve_clss);
+	__ecore_vf_prep_tunn_req_tlv(p_req, &p_src->l2_gre,
+				     ECORE_MODE_L2GRE_TUNN, &p_req->l2gre_clss);
+	__ecore_vf_prep_tunn_req_tlv(p_req, &p_src->ip_gre,
+				     ECORE_MODE_IPGRE_TUNN, &p_req->ipgre_clss);
+
+	/* add list termination tlv */
+	ecore_add_tlv(p_hwfn, &p_iov->offset,
+		      CHANNEL_TLV_LIST_END,
+		      sizeof(struct channel_list_end_tlv));
+
+	p_resp = &p_iov->pf2vf_reply->tunn_param_resp;
+	rc = ecore_send_msg2pf(p_hwfn, &p_resp->hdr.status, sizeof(*p_resp));
+
+	if (rc)
+		goto exit;
+
+	if (p_resp->hdr.status != PFVF_STATUS_SUCCESS) {
+		DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
+			   "Failed to update tunnel parameters\n");
+		rc = ECORE_INVAL;
+	}
+
+	ecore_vf_update_tunn_param(p_hwfn, p_tun, p_resp);
+exit:
+	ecore_vf_pf_req_end(p_hwfn, rc);
+	return rc;
+}
+
+enum _ecore_status_t
+ecore_vf_pf_rxq_start(struct ecore_hwfn *p_hwfn,
+		      struct ecore_queue_cid *p_cid,
+		      u16 bd_max_bytes,
+		      dma_addr_t bd_chain_phys_addr,
+		      dma_addr_t cqe_pbl_addr,
+		      u16 cqe_pbl_size,
+		      void OSAL_IOMEM **pp_prod)
 {
 	struct ecore_vf_iov *p_iov = p_hwfn->vf_iov_info;
 	struct pfvf_start_queue_resp_tlv *resp;
 	struct vfpf_start_rxq_tlv *req;
+	u16 rx_qid = p_cid->rel.queue_id;
 	enum _ecore_status_t rc;
 
 	/* clear mailbox and prep first tlv */
@@ -476,19 +627,20 @@ enum _ecore_status_t ecore_vf_pf_rxq_start(struct ecore_hwfn *p_hwfn,
 	req->cqe_pbl_addr = cqe_pbl_addr;
 	req->cqe_pbl_size = cqe_pbl_size;
 	req->rxq_addr = bd_chain_phys_addr;
-	req->hw_sb = sb;
-	req->sb_index = sb_index;
+	req->hw_sb = p_cid->rel.sb;
+	req->sb_index = p_cid->rel.sb_idx;
 	req->bd_max_bytes = bd_max_bytes;
 	req->stat_id = -1; /* Keep initialized, for future compatibility */
 
 	/* If PF is legacy, we'll need to calculate producers ourselves
 	 * as well as clean them.
 	 */
-	if (pp_prod && p_iov->b_pre_fp_hsi) {
+	if (p_iov->b_pre_fp_hsi) {
 		u8 hw_qid = p_iov->acquire_resp.resc.hw_qid[rx_qid];
 		u32 init_prod_val = 0;
 
-		*pp_prod = (u8 OSAL_IOMEM *)p_hwfn->regview +
+		*pp_prod = (u8 OSAL_IOMEM *)
+			   p_hwfn->regview +
 			   MSTORM_QZONE_START(p_hwfn->p_dev) +
 			   (hw_qid) * MSTORM_QZONE_SIZE;
 
@@ -513,7 +665,7 @@ enum _ecore_status_t ecore_vf_pf_rxq_start(struct ecore_hwfn *p_hwfn,
 	}
 
 	/* Learn the address of the producer from the response */
-	if (pp_prod && !p_iov->b_pre_fp_hsi) {
+	if (!p_iov->b_pre_fp_hsi) {
 		u32 init_prod_val = 0;
 
 		*pp_prod = (u8 OSAL_IOMEM *)p_hwfn->regview + resp->offset;
@@ -537,7 +689,8 @@ exit:
 }
 
 enum _ecore_status_t ecore_vf_pf_rxq_stop(struct ecore_hwfn *p_hwfn,
-					  u16 rx_qid, bool cqe_completion)
+					  struct ecore_queue_cid *p_cid,
+					  bool cqe_completion)
 {
 	struct ecore_vf_iov *p_iov = p_hwfn->vf_iov_info;
 	struct vfpf_stop_rxqs_tlv *req;
@@ -547,7 +700,7 @@ enum _ecore_status_t ecore_vf_pf_rxq_stop(struct ecore_hwfn *p_hwfn,
 	/* clear mailbox and prep first tlv */
 	req = ecore_vf_pf_prep(p_hwfn, CHANNEL_TLV_STOP_RXQS, sizeof(*req));
 
-	req->rx_qid = rx_qid;
+	req->rx_qid = p_cid->rel.queue_id;
 	req->num_rxqs = 1;
 	req->cqe_completion = cqe_completion;
 
@@ -572,29 +725,28 @@ exit:
 	return rc;
 }
 
-enum _ecore_status_t ecore_vf_pf_txq_start(struct ecore_hwfn *p_hwfn,
-					   u16 tx_queue_id,
-					   u16 sb,
-					   u8 sb_index,
-					   dma_addr_t pbl_addr,
-					   u16 pbl_size,
-					   void OSAL_IOMEM **pp_doorbell)
+enum _ecore_status_t
+ecore_vf_pf_txq_start(struct ecore_hwfn *p_hwfn,
+		      struct ecore_queue_cid *p_cid,
+		      dma_addr_t pbl_addr, u16 pbl_size,
+		      void OSAL_IOMEM **pp_doorbell)
 {
 	struct ecore_vf_iov *p_iov = p_hwfn->vf_iov_info;
 	struct pfvf_start_queue_resp_tlv *resp;
 	struct vfpf_start_txq_tlv *req;
+	u16 qid = p_cid->rel.queue_id;
 	enum _ecore_status_t rc;
 
 	/* clear mailbox and prep first tlv */
 	req = ecore_vf_pf_prep(p_hwfn, CHANNEL_TLV_START_TXQ, sizeof(*req));
 
-	req->tx_qid = tx_queue_id;
+	req->tx_qid = qid;
 
 	/* Tx */
 	req->pbl_addr = pbl_addr;
 	req->pbl_size = pbl_size;
-	req->hw_sb = sb;
-	req->sb_index = sb_index;
+	req->hw_sb = p_cid->rel.sb;
+	req->sb_index = p_cid->rel.sb_idx;
 
 	/* add list termination tlv */
 	ecore_add_tlv(p_hwfn, &p_iov->offset,
@@ -611,32 +763,30 @@ enum _ecore_status_t ecore_vf_pf_txq_start(struct ecore_hwfn *p_hwfn,
 		goto exit;
 	}
 
-	if (pp_doorbell) {
-		/* Modern PFs provide the actual offsets, while legacy
-		 * provided only the queue id.
-		 */
-		if (!p_iov->b_pre_fp_hsi) {
-			*pp_doorbell = (u8 OSAL_IOMEM *)p_hwfn->doorbells +
-						       resp->offset;
-		} else {
-			u8 cid = p_iov->acquire_resp.resc.cid[tx_queue_id];
+	/* Modern PFs provide the actual offsets, while legacy
+	 * provided only the queue id.
+	 */
+	if (!p_iov->b_pre_fp_hsi) {
+		*pp_doorbell = (u8 OSAL_IOMEM *)p_hwfn->doorbells +
+						resp->offset;
+	} else {
+		u8 cid = p_iov->acquire_resp.resc.cid[qid];
 
 		*pp_doorbell = (u8 OSAL_IOMEM *)p_hwfn->doorbells +
-				DB_ADDR_VF(cid, DQ_DEMS_LEGACY);
-		}
-
-		DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
-			   "Txq[0x%02x]: doorbell at %p [offset 0x%08x]\n",
-			   tx_queue_id, *pp_doorbell, resp->offset);
+						DB_ADDR_VF(cid, DQ_DEMS_LEGACY);
 	}
 
+	DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
+		   "Txq[0x%02x]: doorbell at %p [offset 0x%08x]\n",
+		   qid, *pp_doorbell, resp->offset);
 exit:
 	ecore_vf_pf_req_end(p_hwfn, rc);
 
 	return rc;
 }
 
-enum _ecore_status_t ecore_vf_pf_txq_stop(struct ecore_hwfn *p_hwfn, u16 tx_qid)
+enum _ecore_status_t ecore_vf_pf_txq_stop(struct ecore_hwfn *p_hwfn,
+					  struct ecore_queue_cid *p_cid)
 {
 	struct ecore_vf_iov *p_iov = p_hwfn->vf_iov_info;
 	struct vfpf_stop_txqs_tlv *req;
@@ -646,7 +796,7 @@ enum _ecore_status_t ecore_vf_pf_txq_stop(struct ecore_hwfn *p_hwfn, u16 tx_qid)
 	/* clear mailbox and prep first tlv */
 	req = ecore_vf_pf_prep(p_hwfn, CHANNEL_TLV_STOP_TXQS, sizeof(*req));
 
-	req->tx_qid = tx_qid;
+	req->tx_qid = p_cid->rel.queue_id;
 	req->num_txqs = 1;
 
 	/* add list termination tlv */
@@ -671,20 +821,36 @@ exit:
 }
 
 enum _ecore_status_t ecore_vf_pf_rxqs_update(struct ecore_hwfn *p_hwfn,
-					     u16 rx_queue_id,
+					     struct ecore_queue_cid **pp_cid,
 					     u8 num_rxqs,
-					     u8 comp_cqe_flg, u8 comp_event_flg)
+					     u8 comp_cqe_flg,
+					     u8 comp_event_flg)
 {
 	struct ecore_vf_iov *p_iov = p_hwfn->vf_iov_info;
 	struct pfvf_def_resp_tlv *resp = &p_iov->pf2vf_reply->default_resp;
 	struct vfpf_update_rxq_tlv *req;
 	enum _ecore_status_t rc;
 
+	/* TODO - API is limited to assuming continuous regions of queues,
+	 * but VF queues might not fullfil this requirement.
+	 * Need to consider whether we need new TLVs for this, or whether
+	 * simply doing it iteratively is good enough.
+	 */
+	if (!num_rxqs)
+		return ECORE_INVAL;
+
+again:
 	/* clear mailbox and prep first tlv */
 	req = ecore_vf_pf_prep(p_hwfn, CHANNEL_TLV_UPDATE_RXQ, sizeof(*req));
 
-	req->rx_qid = rx_queue_id;
-	req->num_rxqs = num_rxqs;
+	/* Find the length of the current contagious range of queues beginning
+	 * at first queue's index.
+	 */
+	req->rx_qid = (*pp_cid)->rel.queue_id;
+	for (req->num_rxqs = 1; req->num_rxqs < num_rxqs; req->num_rxqs++)
+		if (pp_cid[req->num_rxqs]->rel.queue_id !=
+		    req->rx_qid + req->num_rxqs)
+			break;
 
 	if (comp_cqe_flg)
 		req->flags |= VFPF_RXQ_UPD_COMPLETE_CQE_FLAG;
@@ -705,9 +871,17 @@ enum _ecore_status_t ecore_vf_pf_rxqs_update(struct ecore_hwfn *p_hwfn,
 		goto exit;
 	}
 
+	/* Make sure we're done with all the queues */
+	if (req->num_rxqs < num_rxqs) {
+		num_rxqs -= req->num_rxqs;
+		pp_cid += req->num_rxqs;
+		/* TODO - should we give a non-locked variant instead? */
+		ecore_vf_pf_req_end(p_hwfn, rc);
+		goto again;
+	}
+
 exit:
 	ecore_vf_pf_req_end(p_hwfn, rc);
-
 	return rc;
 }
 
@@ -958,6 +1132,7 @@ ecore_vf_pf_vport_update(struct ecore_hwfn *p_hwfn,
 	if (p_params->rss_params) {
 		struct ecore_rss_params *rss_params = p_params->rss_params;
 		struct vfpf_vport_update_rss_tlv *p_rss_tlv;
+		int i, table_size;
 
 		size = sizeof(struct vfpf_vport_update_rss_tlv);
 		p_rss_tlv = ecore_add_tlv(p_hwfn, &p_iov->offset,
@@ -979,8 +1154,16 @@ ecore_vf_pf_vport_update(struct ecore_hwfn *p_hwfn,
 		p_rss_tlv->rss_enable = rss_params->rss_enable;
 		p_rss_tlv->rss_caps = rss_params->rss_caps;
 		p_rss_tlv->rss_table_size_log = rss_params->rss_table_size_log;
-		OSAL_MEMCPY(p_rss_tlv->rss_ind_table, rss_params->rss_ind_table,
-			    sizeof(rss_params->rss_ind_table));
+
+		table_size = OSAL_MIN_T(int, T_ETH_INDIRECTION_TABLE_SIZE,
+					1 << p_rss_tlv->rss_table_size_log);
+		for (i = 0; i < table_size; i++) {
+			struct ecore_queue_cid *p_queue;
+
+			p_queue = rss_params->rss_ind_table[i];
+			p_rss_tlv->rss_ind_table[i] = p_queue->rel.queue_id;
+		}
+
 		OSAL_MEMCPY(p_rss_tlv->rss_key, rss_params->rss_key,
 			    sizeof(rss_params->rss_key));
 	}
@@ -1102,8 +1285,8 @@ enum _ecore_status_t ecore_vf_pf_release(struct ecore_hwfn *p_hwfn)
 	struct ecore_vf_iov *p_iov = p_hwfn->vf_iov_info;
 	struct pfvf_def_resp_tlv *resp;
 	struct vfpf_first_tlv *req;
-	enum _ecore_status_t rc;
 	u32 size;
+	enum _ecore_status_t rc;
 
 	/* clear mailbox and prep first tlv */
 	req = ecore_vf_pf_prep(p_hwfn, CHANNEL_TLV_RELEASE, sizeof(*req));
@@ -1142,7 +1325,6 @@ enum _ecore_status_t ecore_vf_pf_release(struct ecore_hwfn *p_hwfn)
 	}
 
 	OSAL_FREE(p_hwfn->p_dev, p_hwfn->vf_iov_info);
-	p_hwfn->vf_iov_info = OSAL_NULL;
 
 	return rc;
 }
@@ -1239,6 +1421,48 @@ enum _ecore_status_t ecore_vf_pf_int_cleanup(struct ecore_hwfn *p_hwfn)
 exit:
 	ecore_vf_pf_req_end(p_hwfn, rc);
 
+	return rc;
+}
+
+enum _ecore_status_t
+ecore_vf_pf_set_coalesce(struct ecore_hwfn *p_hwfn, u16 rx_coal, u16 tx_coal,
+			 struct ecore_queue_cid     *p_cid)
+{
+	struct ecore_vf_iov *p_iov = p_hwfn->vf_iov_info;
+	struct vfpf_update_coalesce *req;
+	struct pfvf_def_resp_tlv *resp;
+	enum _ecore_status_t rc;
+
+	/* clear mailbox and prep header tlv */
+	req = ecore_vf_pf_prep(p_hwfn, CHANNEL_TLV_COALESCE_UPDATE,
+			       sizeof(*req));
+
+	req->rx_coal = rx_coal;
+	req->tx_coal = tx_coal;
+	req->qid = p_cid->rel.queue_id;
+
+	DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
+		   "Setting coalesce rx_coal = %d, tx_coal = %d at queue = %d\n",
+		   rx_coal, tx_coal, req->qid);
+
+	/* add list termination tlv */
+	ecore_add_tlv(p_hwfn, &p_iov->offset, CHANNEL_TLV_LIST_END,
+		      sizeof(struct channel_list_end_tlv));
+
+	resp = &p_iov->pf2vf_reply->default_resp;
+	rc = ecore_send_msg2pf(p_hwfn, &resp->hdr.status, sizeof(*resp));
+
+	if (rc != ECORE_SUCCESS)
+		goto exit;
+
+	if (resp->hdr.status != PFVF_STATUS_SUCCESS)
+		goto exit;
+
+	p_hwfn->p_dev->rx_coalesce_usecs = rx_coal;
+	p_hwfn->p_dev->tx_coalesce_usecs = tx_coal;
+
+exit:
+	ecore_vf_pf_req_end(p_hwfn, rc);
 	return rc;
 }
 
@@ -1358,6 +1582,12 @@ void ecore_vf_get_num_rxqs(struct ecore_hwfn *p_hwfn, u8 *num_rxqs)
 	*num_rxqs = p_hwfn->vf_iov_info->acquire_resp.resc.num_rxqs;
 }
 
+void ecore_vf_get_num_txqs(struct ecore_hwfn *p_hwfn,
+			   u8 *num_txqs)
+{
+	*num_txqs = p_hwfn->vf_iov_info->acquire_resp.resc.num_txqs;
+}
+
 void ecore_vf_get_port_mac(struct ecore_hwfn *p_hwfn, u8 *port_mac)
 {
 	OSAL_MEMCPY(port_mac,
@@ -1374,16 +1604,6 @@ void ecore_vf_get_num_vlan_filters(struct ecore_hwfn *p_hwfn,
 	*num_vlan_filters = p_vf->acquire_resp.resc.num_vlan_filters;
 }
 
-/* @DPDK */
-void ecore_vf_get_num_mac_filters(struct ecore_hwfn *p_hwfn,
-				  u32 *num_mac)
-{
-	struct ecore_vf_iov *p_vf;
-
-	p_vf = p_hwfn->vf_iov_info;
-	*num_mac = p_vf->acquire_resp.resc.num_mac_filters;
-}
-
 void ecore_vf_get_num_sbs(struct ecore_hwfn *p_hwfn,
 			  u32 *num_sbs)
 {
@@ -1391,6 +1611,14 @@ void ecore_vf_get_num_sbs(struct ecore_hwfn *p_hwfn,
 
 	p_vf = p_hwfn->vf_iov_info;
 	*num_sbs = (u32)p_vf->acquire_resp.resc.num_sbs;
+}
+
+void ecore_vf_get_num_mac_filters(struct ecore_hwfn *p_hwfn,
+				  u32 *num_mac_filters)
+{
+	struct ecore_vf_iov *p_vf = p_hwfn->vf_iov_info;
+
+	*num_mac_filters = p_vf->acquire_resp.resc.num_mac_filters;
 }
 
 bool ecore_vf_check_mac(struct ecore_hwfn *p_hwfn, u8 *mac)
@@ -1428,6 +1656,18 @@ bool ecore_vf_bulletin_get_forced_mac(struct ecore_hwfn *hwfn, u8 *dst_mac,
 	OSAL_MEMCPY(dst_mac, bulletin->mac, ETH_ALEN);
 
 	return true;
+}
+
+void ecore_vf_bulletin_get_udp_ports(struct ecore_hwfn *p_hwfn,
+				     u16 *p_vxlan_port,
+				     u16 *p_geneve_port)
+{
+	struct ecore_bulletin_content *p_bulletin;
+
+	p_bulletin = &p_hwfn->vf_iov_info->bulletin_shadow;
+
+	*p_vxlan_port = p_bulletin->vxlan_udp_port;
+	*p_geneve_port = p_bulletin->geneve_udp_port;
 }
 
 bool ecore_vf_bulletin_get_forced_vlan(struct ecore_hwfn *hwfn, u16 *dst_pvid)

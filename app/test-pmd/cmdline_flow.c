@@ -159,6 +159,14 @@ enum index {
 	ITEM_SCTP_CKSUM,
 	ITEM_VXLAN,
 	ITEM_VXLAN_VNI,
+	ITEM_E_TAG,
+	ITEM_E_TAG_GRP_ECID_B,
+	ITEM_NVGRE,
+	ITEM_NVGRE_TNI,
+	ITEM_MPLS,
+	ITEM_MPLS_LABEL,
+	ITEM_GRE,
+	ITEM_GRE_PROTO,
 
 	/* Validate/create actions. */
 	ACTIONS,
@@ -432,6 +440,10 @@ static const enum index next_item[] = {
 	ITEM_TCP,
 	ITEM_SCTP,
 	ITEM_VXLAN,
+	ITEM_E_TAG,
+	ITEM_NVGRE,
+	ITEM_MPLS,
+	ITEM_GRE,
 	ZERO,
 };
 
@@ -534,6 +546,30 @@ static const enum index item_sctp[] = {
 
 static const enum index item_vxlan[] = {
 	ITEM_VXLAN_VNI,
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_e_tag[] = {
+	ITEM_E_TAG_GRP_ECID_B,
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_nvgre[] = {
+	ITEM_NVGRE_TNI,
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_mpls[] = {
+	ITEM_MPLS_LABEL,
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_gre[] = {
+	ITEM_GRE_PROTO,
 	ITEM_NEXT,
 	ZERO,
 };
@@ -1021,13 +1057,13 @@ static const struct token token_list[] = {
 		.name = "dst",
 		.help = "destination MAC",
 		.next = NEXT(item_eth, NEXT_ENTRY(MAC_ADDR), item_param),
-		.args = ARGS(ARGS_ENTRY(struct rte_flow_item_eth, dst)),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_eth, dst)),
 	},
 	[ITEM_ETH_SRC] = {
 		.name = "src",
 		.help = "source MAC",
 		.next = NEXT(item_eth, NEXT_ENTRY(MAC_ADDR), item_param),
-		.args = ARGS(ARGS_ENTRY(struct rte_flow_item_eth, src)),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_eth, src)),
 	},
 	[ITEM_ETH_TYPE] = {
 		.name = "type",
@@ -1278,6 +1314,63 @@ static const struct token token_list[] = {
 		.help = "VXLAN identifier",
 		.next = NEXT(item_vxlan, NEXT_ENTRY(UNSIGNED), item_param),
 		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_vxlan, vni)),
+	},
+	[ITEM_E_TAG] = {
+		.name = "e_tag",
+		.help = "match E-Tag header",
+		.priv = PRIV_ITEM(E_TAG, sizeof(struct rte_flow_item_e_tag)),
+		.next = NEXT(item_e_tag),
+		.call = parse_vc,
+	},
+	[ITEM_E_TAG_GRP_ECID_B] = {
+		.name = "grp_ecid_b",
+		.help = "GRP and E-CID base",
+		.next = NEXT(item_e_tag, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY_MASK_HTON(struct rte_flow_item_e_tag,
+						  rsvd_grp_ecid_b,
+						  "\x3f\xff")),
+	},
+	[ITEM_NVGRE] = {
+		.name = "nvgre",
+		.help = "match NVGRE header",
+		.priv = PRIV_ITEM(NVGRE, sizeof(struct rte_flow_item_nvgre)),
+		.next = NEXT(item_nvgre),
+		.call = parse_vc,
+	},
+	[ITEM_NVGRE_TNI] = {
+		.name = "tni",
+		.help = "virtual subnet ID",
+		.next = NEXT(item_nvgre, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_nvgre, tni)),
+	},
+	[ITEM_MPLS] = {
+		.name = "mpls",
+		.help = "match MPLS header",
+		.priv = PRIV_ITEM(MPLS, sizeof(struct rte_flow_item_mpls)),
+		.next = NEXT(item_mpls),
+		.call = parse_vc,
+	},
+	[ITEM_MPLS_LABEL] = {
+		.name = "label",
+		.help = "MPLS label",
+		.next = NEXT(item_mpls, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY_MASK_HTON(struct rte_flow_item_mpls,
+						  label_tc_s,
+						  "\xff\xff\xf0")),
+	},
+	[ITEM_GRE] = {
+		.name = "gre",
+		.help = "match GRE header",
+		.priv = PRIV_ITEM(GRE, sizeof(struct rte_flow_item_gre)),
+		.next = NEXT(item_gre),
+		.call = parse_vc,
+	},
+	[ITEM_GRE_PROTO] = {
+		.name = "protocol",
+		.help = "GRE protocol type",
+		.next = NEXT(item_gre, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_gre,
+					     protocol)),
 	},
 	/* Validate/create actions. */
 	[ACTIONS] = {
@@ -1715,6 +1808,8 @@ parse_vc_spec(struct context *ctx, const struct token *token,
 		return -1;
 	/* Parse parameter types. */
 	switch (ctx->curr) {
+		static const enum index prefix[] = NEXT_ENTRY(PREFIX);
+
 	case ITEM_PARAM_IS:
 		index = 0;
 		objmask = 1;
@@ -1729,7 +1824,7 @@ parse_vc_spec(struct context *ctx, const struct token *token,
 		/* Modify next token to expect a prefix. */
 		if (ctx->next_num < 2)
 			return -1;
-		ctx->next[ctx->next_num - 2] = NEXT_ENTRY(PREFIX);
+		ctx->next[ctx->next_num - 2] = prefix;
 		/* Fall through. */
 	case ITEM_PARAM_MASK:
 		index = 2;
@@ -2143,6 +2238,9 @@ parse_mac_addr(struct context *ctx, const struct token *token,
 	/* Bit-mask fill is not supported. */
 	if (arg->mask || size != sizeof(tmp))
 		goto error;
+	/* Only network endian is supported. */
+	if (!arg->hton)
+		goto error;
 	ret = cmdline_parse_etheraddr(NULL, str, &tmp, size);
 	if (ret < 0 || (unsigned int)ret != len)
 		goto error;
@@ -2369,7 +2467,7 @@ comp_port(struct context *ctx, const struct token *token,
 
 	(void)ctx;
 	(void)token;
-	FOREACH_PORT(p, ports) {
+	RTE_ETH_FOREACH_DEV(p) {
 		if (buf && i == ent)
 			return snprintf(buf, size, "%u", p);
 		++i;

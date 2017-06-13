@@ -95,9 +95,6 @@ Other features are supported using optional MACRO configuration. They include:
 
 *   HW extend dual VLAN
 
-*   Enabled by RX_OLFLAGS (RTE_IXGBE_RX_OLFLAGS_ENABLE=y)
-
-
 To guarantee the constraint, configuration flags in dev_conf.rxmode will be checked:
 
 *   hw_vlan_strip
@@ -156,21 +153,6 @@ The declarations for the API functions are in the header ``rte_pmd_ixgbe.h``.
 Sample Application Notes
 ------------------------
 
-testpmd
-~~~~~~~
-
-By default, using CONFIG_RTE_IXGBE_RX_OLFLAGS_ENABLE=y:
-
-.. code-block:: console
-
-    ./x86_64-native-linuxapp-gcc/app/testpmd -c 300 -n 4 -- -i --burst=32 --rxfreet=32 --mbcache=250 --txpt=32 --rxht=8 --rxwt=0 --txfreet=32 --txrst=32 --txqflags=0xf01
-
-When CONFIG_RTE_IXGBE_RX_OLFLAGS_ENABLE=n, better performance can be achieved:
-
-.. code-block:: console
-
-    ./x86_64-native-linuxapp-gcc/app/testpmd -c 300 -n 4 -- -i --burst=32 --rxfreet=32 --mbcache=250 --txpt=32 --rxht=8 --rxwt=0 --txfreet=32 --txrst=32 --txqflags=0xf01 --disable-hw-vlan
-
 l3fwd
 ~~~~~
 
@@ -203,10 +185,13 @@ There's significant performance impact to support MDD. DPDK should check if
 the advanced context descriptor should be set and set it. And DPDK has to ask
 the info about the header length from the upper layer, because parsing the
 packet itself is not acceptable. So, it's too expensive to support MDD.
-When using kernel PF + DPDK VF on x550, please make sure using the kernel
-driver that disables MDD or can disable MDD. (Some kernel driver can use
-this CLI 'insmod ixgbe.ko MDD=0,0' to disable MDD. Some kernel driver disables
-it by default.)
+When using kernel PF + DPDK VF on x550, please make sure to use a kernel
+PF driver that disables MDD or can disable MDD.
+
+Some kernel drivers already disable MDD by default while some kernels can use
+the command ``insmod ixgbe.ko MDD=0,0`` to disable MDD. Each "0" in the
+command refers to a port. For example, if there are 6 ixgbe ports, the command
+should be changed to ``insmod ixgbe.ko MDD=0,0,0,0,0,0``.
 
 
 Statistics

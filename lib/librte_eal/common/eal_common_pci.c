@@ -69,8 +69,10 @@
 #include <sys/queue.h>
 #include <sys/mman.h>
 
+#include <rte_errno.h>
 #include <rte_interrupts.h>
 #include <rte_log.h>
+#include <rte_bus.h>
 #include <rte_pci.h>
 #include <rte_per_lcore.h>
 #include <rte_memory.h>
@@ -82,10 +84,7 @@
 
 #include "eal_private.h"
 
-struct pci_driver_list pci_driver_list =
-	TAILQ_HEAD_INITIALIZER(pci_driver_list);
-struct pci_device_list pci_device_list =
-	TAILQ_HEAD_INITIALIZER(pci_device_list);
+extern struct rte_pci_bus rte_pci_bus;
 
 #define SYSFS_PCI_DEVICES "/sys/bus/pci/devices"
 
@@ -153,73 +152,109 @@ pci_unmap_resource(void *requested_addr, size_t size)
 }
 
 /*
+ * Match the PCI Driver and Device using the ID Table
+ *
+ * @param pci_drv
+ *	PCI driver from which ID table would be extracted
+ * @param pci_dev
+ *	PCI device to match against the driver
+ * @return
+ *	1 for successful match
+ *	0 for unsuccessful match
+ */
+static int
+rte_pci_match(const struct rte_pci_driver *pci_drv,
+	      const struct rte_pci_device *pci_dev)
+{
+	const struct rte_pci_id *id_table;
+
+	for (id_table = pci_drv->id_table; id_table->vendor_id != 0;
+	     id_table++) {
+		/* check if device's identifiers match the driver's ones */
+		if (id_table->vendor_id != pci_dev->id.vendor_id &&
+				id_table->vendor_id != PCI_ANY_ID)
+			continue;
+		if (id_table->device_id != pci_dev->id.device_id &&
+				id_table->device_id != PCI_ANY_ID)
+			continue;
+		if (id_table->subsystem_vendor_id !=
+		    pci_dev->id.subsystem_vendor_id &&
+		    id_table->subsystem_vendor_id != PCI_ANY_ID)
+			continue;
+		if (id_table->subsystem_device_id !=
+		    pci_dev->id.subsystem_device_id &&
+		    id_table->subsystem_device_id != PCI_ANY_ID)
+			continue;
+		if (id_table->class_id != pci_dev->id.class_id &&
+				id_table->class_id != RTE_CLASS_ANY_ID)
+			continue;
+
+		return 1;
+	}
+
+	return 0;
+}
+
+/*
  * If vendor/device ID match, call the probe() function of the
  * driver.
  */
 static int
-rte_eal_pci_probe_one_driver(struct rte_pci_driver *dr, struct rte_pci_device *dev)
+rte_pci_probe_one_driver(struct rte_pci_driver *dr,
+			 struct rte_pci_device *dev)
 {
 	int ret;
-	const struct rte_pci_id *id_table;
+	struct rte_pci_addr *loc;
 
-	for (id_table = dr->id_table; id_table->vendor_id != 0; id_table++) {
+	if ((dr == NULL) || (dev == NULL))
+		return -EINVAL;
 
-		/* check if device's identifiers match the driver's ones */
-		if (id_table->vendor_id != dev->id.vendor_id &&
-				id_table->vendor_id != PCI_ANY_ID)
-			continue;
-		if (id_table->device_id != dev->id.device_id &&
-				id_table->device_id != PCI_ANY_ID)
-			continue;
-		if (id_table->subsystem_vendor_id != dev->id.subsystem_vendor_id &&
-				id_table->subsystem_vendor_id != PCI_ANY_ID)
-			continue;
-		if (id_table->subsystem_device_id != dev->id.subsystem_device_id &&
-				id_table->subsystem_device_id != PCI_ANY_ID)
-			continue;
-		if (id_table->class_id != dev->id.class_id &&
-				id_table->class_id != RTE_CLASS_ANY_ID)
-			continue;
+	loc = &dev->addr;
 
-		struct rte_pci_addr *loc = &dev->addr;
-
-		RTE_LOG(INFO, EAL, "PCI device "PCI_PRI_FMT" on NUMA socket %i\n",
-				loc->domain, loc->bus, loc->devid, loc->function,
-				dev->device.numa_node);
-
-		/* no initialization when blacklisted, return without error */
-		if (dev->device.devargs != NULL &&
-			dev->device.devargs->type ==
-				RTE_DEVTYPE_BLACKLISTED_PCI) {
-			RTE_LOG(INFO, EAL, "  Device is blacklisted, not initializing\n");
-			return 1;
-		}
-
-		RTE_LOG(INFO, EAL, "  probe driver: %x:%x %s\n", dev->id.vendor_id,
-				dev->id.device_id, dr->driver.name);
-
-		if (dr->drv_flags & RTE_PCI_DRV_NEED_MAPPING) {
-			/* map resources for devices that use igb_uio */
-			ret = rte_eal_pci_map_device(dev);
-			if (ret != 0)
-				return ret;
-		}
-
-		/* reference driver structure */
-		dev->driver = dr;
-
-		/* call the driver probe() function */
-		ret = dr->probe(dr, dev);
-		if (ret) {
-			dev->driver = NULL;
-			if (dr->drv_flags & RTE_PCI_DRV_NEED_MAPPING)
-				rte_eal_pci_unmap_device(dev);
-		}
-
-		return ret;
+	/* The device is not blacklisted; Check if driver supports it */
+	if (!rte_pci_match(dr, dev)) {
+		/* Match of device and driver failed */
+		RTE_LOG(DEBUG, EAL, "Driver (%s) doesn't match the device\n",
+			dr->driver.name);
+		return 1;
 	}
-	/* return positive value if driver doesn't support this device */
-	return 1;
+
+	RTE_LOG(INFO, EAL, "PCI device "PCI_PRI_FMT" on NUMA socket %i\n",
+			loc->domain, loc->bus, loc->devid, loc->function,
+			dev->device.numa_node);
+
+	/* no initialization when blacklisted, return without error */
+	if (dev->device.devargs != NULL &&
+		dev->device.devargs->type ==
+			RTE_DEVTYPE_BLACKLISTED_PCI) {
+		RTE_LOG(INFO, EAL, "  Device is blacklisted, not"
+			" initializing\n");
+		return 1;
+	}
+
+	RTE_LOG(INFO, EAL, "  probe driver: %x:%x %s\n", dev->id.vendor_id,
+		dev->id.device_id, dr->driver.name);
+
+	if (dr->drv_flags & RTE_PCI_DRV_NEED_MAPPING) {
+		/* map resources for devices that use igb_uio */
+		ret = rte_pci_map_device(dev);
+		if (ret != 0)
+			return ret;
+	}
+
+	/* reference driver structure */
+	dev->driver = dr;
+	dev->device.driver = &dr->driver;
+
+	/* call the driver probe() function */
+	ret = dr->probe(dr, dev);
+	if (ret) {
+		dev->driver = NULL;
+		if (dr->drv_flags & RTE_PCI_DRV_NEED_MAPPING)
+			rte_pci_unmap_device(dev);
+	}
+
+	return ret;
 }
 
 /*
@@ -227,54 +262,35 @@ rte_eal_pci_probe_one_driver(struct rte_pci_driver *dr, struct rte_pci_device *d
  * driver.
  */
 static int
-rte_eal_pci_detach_dev(struct rte_pci_driver *dr,
-		struct rte_pci_device *dev)
+rte_pci_detach_dev(struct rte_pci_device *dev)
 {
-	const struct rte_pci_id *id_table;
+	struct rte_pci_addr *loc;
+	struct rte_pci_driver *dr;
 
-	if ((dr == NULL) || (dev == NULL))
+	if (dev == NULL)
 		return -EINVAL;
 
-	for (id_table = dr->id_table; id_table->vendor_id != 0; id_table++) {
+	dr = dev->driver;
+	loc = &dev->addr;
 
-		/* check if device's identifiers match the driver's ones */
-		if (id_table->vendor_id != dev->id.vendor_id &&
-				id_table->vendor_id != PCI_ANY_ID)
-			continue;
-		if (id_table->device_id != dev->id.device_id &&
-				id_table->device_id != PCI_ANY_ID)
-			continue;
-		if (id_table->subsystem_vendor_id != dev->id.subsystem_vendor_id &&
-				id_table->subsystem_vendor_id != PCI_ANY_ID)
-			continue;
-		if (id_table->subsystem_device_id != dev->id.subsystem_device_id &&
-				id_table->subsystem_device_id != PCI_ANY_ID)
-			continue;
+	RTE_LOG(DEBUG, EAL, "PCI device "PCI_PRI_FMT" on NUMA socket %i\n",
+			loc->domain, loc->bus, loc->devid,
+			loc->function, dev->device.numa_node);
 
-		struct rte_pci_addr *loc = &dev->addr;
+	RTE_LOG(DEBUG, EAL, "  remove driver: %x:%x %s\n", dev->id.vendor_id,
+			dev->id.device_id, dr->driver.name);
 
-		RTE_LOG(DEBUG, EAL, "PCI device "PCI_PRI_FMT" on NUMA socket %i\n",
-				loc->domain, loc->bus, loc->devid,
-				loc->function, dev->device.numa_node);
+	if (dr->remove && (dr->remove(dev) < 0))
+		return -1;	/* negative value is an error */
 
-		RTE_LOG(DEBUG, EAL, "  remove driver: %x:%x %s\n", dev->id.vendor_id,
-				dev->id.device_id, dr->driver.name);
+	/* clear driver structure */
+	dev->driver = NULL;
 
-		if (dr->remove && (dr->remove(dev) < 0))
-			return -1;	/* negative value is an error */
+	if (dr->drv_flags & RTE_PCI_DRV_NEED_MAPPING)
+		/* unmap resources for devices that use igb_uio */
+		rte_pci_unmap_device(dev);
 
-		/* clear driver structure */
-		dev->driver = NULL;
-
-		if (dr->drv_flags & RTE_PCI_DRV_NEED_MAPPING)
-			/* unmap resources for devices that use igb_uio */
-			rte_eal_pci_unmap_device(dev);
-
-		return 0;
-	}
-
-	/* return positive value if driver doesn't support this device */
-	return 1;
+	return 0;
 }
 
 /*
@@ -295,35 +311,8 @@ pci_probe_all_drivers(struct rte_pci_device *dev)
 	if (dev->driver != NULL)
 		return 0;
 
-	TAILQ_FOREACH(dr, &pci_driver_list, next) {
-		rc = rte_eal_pci_probe_one_driver(dr, dev);
-		if (rc < 0)
-			/* negative value is an error */
-			return -1;
-		if (rc > 0)
-			/* positive value means driver doesn't support it */
-			continue;
-		return 0;
-	}
-	return 1;
-}
-
-/*
- * If vendor/device ID match, call the remove() function of all
- * registered driver for the given device. Return -1 if initialization
- * failed, return 1 if no driver is found for this device.
- */
-static int
-pci_detach_all_drivers(struct rte_pci_device *dev)
-{
-	struct rte_pci_driver *dr = NULL;
-	int rc = 0;
-
-	if (dev == NULL)
-		return -1;
-
-	TAILQ_FOREACH(dr, &pci_driver_list, next) {
-		rc = rte_eal_pci_detach_dev(dr, dev);
+	FOREACH_DRIVER_ON_PCIBUS(dr) {
+		rc = rte_pci_probe_one_driver(dr, dev);
 		if (rc < 0)
 			/* negative value is an error */
 			return -1;
@@ -340,9 +329,10 @@ pci_detach_all_drivers(struct rte_pci_device *dev)
  * the driver of the devive.
  */
 int
-rte_eal_pci_probe_one(const struct rte_pci_addr *addr)
+rte_pci_probe_one(const struct rte_pci_addr *addr)
 {
 	struct rte_pci_device *dev = NULL;
+
 	int ret = 0;
 
 	if (addr == NULL)
@@ -354,7 +344,7 @@ rte_eal_pci_probe_one(const struct rte_pci_addr *addr)
 	if (pci_update_device(addr) < 0)
 		goto err_return;
 
-	TAILQ_FOREACH(dev, &pci_device_list, next) {
+	FOREACH_DEVICE_ON_PCIBUS(dev) {
 		if (rte_eal_compare_pci_addr(&dev->addr, addr))
 			continue;
 
@@ -376,7 +366,7 @@ err_return:
  * Detach device specified by its pci address.
  */
 int
-rte_eal_pci_detach(const struct rte_pci_addr *addr)
+rte_pci_detach(const struct rte_pci_addr *addr)
 {
 	struct rte_pci_device *dev = NULL;
 	int ret = 0;
@@ -384,15 +374,19 @@ rte_eal_pci_detach(const struct rte_pci_addr *addr)
 	if (addr == NULL)
 		return -1;
 
-	TAILQ_FOREACH(dev, &pci_device_list, next) {
+	FOREACH_DEVICE_ON_PCIBUS(dev) {
 		if (rte_eal_compare_pci_addr(&dev->addr, addr))
 			continue;
 
-		ret = pci_detach_all_drivers(dev);
+		ret = rte_pci_detach_dev(dev);
 		if (ret < 0)
+			/* negative value is an error */
 			goto err_return;
+		if (ret > 0)
+			/* positive value means driver doesn't support it */
+			continue;
 
-		TAILQ_REMOVE(&pci_device_list, dev, next);
+		rte_pci_remove_device(dev);
 		free(dev);
 		return 0;
 	}
@@ -411,9 +405,10 @@ err_return:
  * for discovered devices.
  */
 int
-rte_eal_pci_probe(void)
+rte_pci_probe(void)
 {
 	struct rte_pci_device *dev = NULL;
+	size_t probed = 0, failed = 0;
 	struct rte_devargs *devargs;
 	int probe_all = 0;
 	int ret = 0;
@@ -421,7 +416,8 @@ rte_eal_pci_probe(void)
 	if (rte_eal_devargs_type_count(RTE_DEVTYPE_WHITELISTED_PCI) == 0)
 		probe_all = 1;
 
-	TAILQ_FOREACH(dev, &pci_device_list, next) {
+	FOREACH_DEVICE_ON_PCIBUS(dev) {
+		probed++;
 
 		/* set devargs in PCI structure */
 		devargs = pci_devargs_lookup(dev);
@@ -434,13 +430,17 @@ rte_eal_pci_probe(void)
 		else if (devargs != NULL &&
 			devargs->type == RTE_DEVTYPE_WHITELISTED_PCI)
 			ret = pci_probe_all_drivers(dev);
-		if (ret < 0)
-			rte_exit(EXIT_FAILURE, "Requested device " PCI_PRI_FMT
+		if (ret < 0) {
+			RTE_LOG(ERR, EAL, "Requested device " PCI_PRI_FMT
 				 " cannot be used\n", dev->addr.domain, dev->addr.bus,
 				 dev->addr.devid, dev->addr.function);
+			rte_errno = errno;
+			failed++;
+			ret = 0;
+		}
 	}
 
-	return 0;
+	return (probed && probed == failed) ? -1 : 0;
 }
 
 /* dump one device */
@@ -465,27 +465,60 @@ pci_dump_one_device(FILE *f, struct rte_pci_device *dev)
 
 /* dump devices on the bus */
 void
-rte_eal_pci_dump(FILE *f)
+rte_pci_dump(FILE *f)
 {
 	struct rte_pci_device *dev = NULL;
 
-	TAILQ_FOREACH(dev, &pci_device_list, next) {
+	FOREACH_DEVICE_ON_PCIBUS(dev) {
 		pci_dump_one_device(f, dev);
 	}
 }
 
 /* register a driver */
 void
-rte_eal_pci_register(struct rte_pci_driver *driver)
+rte_pci_register(struct rte_pci_driver *driver)
 {
-	TAILQ_INSERT_TAIL(&pci_driver_list, driver, next);
-	rte_eal_driver_register(&driver->driver);
+	TAILQ_INSERT_TAIL(&rte_pci_bus.driver_list, driver, next);
+	driver->bus = &rte_pci_bus;
 }
 
 /* unregister a driver */
 void
-rte_eal_pci_unregister(struct rte_pci_driver *driver)
+rte_pci_unregister(struct rte_pci_driver *driver)
 {
-	rte_eal_driver_unregister(&driver->driver);
-	TAILQ_REMOVE(&pci_driver_list, driver, next);
+	TAILQ_REMOVE(&rte_pci_bus.driver_list, driver, next);
+	driver->bus = NULL;
 }
+
+/* Add a device to PCI bus */
+void
+rte_pci_add_device(struct rte_pci_device *pci_dev)
+{
+	TAILQ_INSERT_TAIL(&rte_pci_bus.device_list, pci_dev, next);
+}
+
+/* Insert a device into a predefined position in PCI bus */
+void
+rte_pci_insert_device(struct rte_pci_device *exist_pci_dev,
+		      struct rte_pci_device *new_pci_dev)
+{
+	TAILQ_INSERT_BEFORE(exist_pci_dev, new_pci_dev, next);
+}
+
+/* Remove a device from PCI bus */
+void
+rte_pci_remove_device(struct rte_pci_device *pci_dev)
+{
+	TAILQ_REMOVE(&rte_pci_bus.device_list, pci_dev, next);
+}
+
+struct rte_pci_bus rte_pci_bus = {
+	.bus = {
+		.scan = rte_pci_scan,
+		.probe = rte_pci_probe,
+	},
+	.device_list = TAILQ_HEAD_INITIALIZER(rte_pci_bus.device_list),
+	.driver_list = TAILQ_HEAD_INITIALIZER(rte_pci_bus.driver_list),
+};
+
+RTE_REGISTER_BUS(PCI_BUS_NAME, rte_pci_bus.bus);

@@ -1,5 +1,7 @@
 #
-# Copyright (c) 2016 Solarflare Communications Inc.
+#   BSD LICENSE
+#
+# Copyright (c) 2016-2017 Solarflare Communications Inc.
 # All rights reserved.
 #
 # This software was jointly developed between OKTET Labs (under contract
@@ -90,6 +92,11 @@ SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += sfc_port.c
 SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += sfc_rx.c
 SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += sfc_tx.c
 SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += sfc_tso.c
+SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += sfc_filter.c
+SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += sfc_flow.c
+SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += sfc_dp.c
+SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += sfc_ef10_rx.c
+SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += sfc_ef10_tx.c
 
 VPATH += $(SRCDIR)/base
 
@@ -132,13 +139,5 @@ SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += ef10_tx.c
 SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += ef10_vpd.c
 SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += hunt_nic.c
 SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += medford_nic.c
-
-# this lib depends upon:
-DEPDIRS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += lib/librte_eal
-DEPDIRS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += lib/librte_kvargs
-DEPDIRS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += lib/librte_ether
-DEPDIRS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += lib/librte_mempool
-DEPDIRS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += lib/librte_mbuf
-DEPDIRS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += lib/librte_net
 
 include $(RTE_SDK)/mk/rte.lib.mk

@@ -48,7 +48,7 @@ LDLIBS += -lgcc_s
 
 EXPORT_MAP := rte_eal_version.map
 
-LIBABIVER := 3
+LIBABIVER := 4
 
 # specific to bsdapp exec-env
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) := eal.c
@@ -110,8 +110,5 @@ INC := rte_interrupts.h
 
 SYMLINK-$(CONFIG_RTE_EXEC_ENV_BSDAPP)-include/exec-env := \
 	$(addprefix include/exec-env/,$(INC))
-
-DEPDIRS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += lib/librte_eal/common
-DEPDIRS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += lib/librte_eal/common/arch/$(ARCH_DIR)
 
 include $(RTE_SDK)/mk/rte.lib.mk

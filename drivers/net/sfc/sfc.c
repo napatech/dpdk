@@ -1,5 +1,7 @@
 /*-
- * Copyright (c) 2016 Solarflare Communications Inc.
+ *   BSD LICENSE
+ *
+ * Copyright (c) 2016-2017 Solarflare Communications Inc.
  * All rights reserved.
  *
  * This software was jointly developed between OKTET Labs (under contract
@@ -320,9 +322,16 @@ sfc_start(struct sfc_adapter *sa)
 	if (rc != 0)
 		goto fail_tx_start;
 
+	rc = sfc_flow_start(sa);
+	if (rc != 0)
+		goto fail_flows_insert;
+
 	sa->state = SFC_ADAPTER_STARTED;
 	sfc_log_init(sa, "done");
 	return 0;
+
+fail_flows_insert:
+	sfc_tx_stop(sa);
 
 fail_tx_start:
 	sfc_rx_stop(sa);
@@ -368,6 +377,7 @@ sfc_stop(struct sfc_adapter *sa)
 
 	sa->state = SFC_ADAPTER_STOPPING;
 
+	sfc_flow_stop(sa);
 	sfc_tx_stop(sa);
 	sfc_rx_stop(sa);
 	sfc_port_stop(sa);
@@ -388,50 +398,44 @@ sfc_configure(struct sfc_adapter *sa)
 
 	SFC_ASSERT(sfc_adapter_is_locked(sa));
 
-	SFC_ASSERT(sa->state == SFC_ADAPTER_INITIALIZED);
+	SFC_ASSERT(sa->state == SFC_ADAPTER_INITIALIZED ||
+		   sa->state == SFC_ADAPTER_CONFIGURED);
 	sa->state = SFC_ADAPTER_CONFIGURING;
 
 	rc = sfc_check_conf(sa);
 	if (rc != 0)
 		goto fail_check_conf;
 
-	rc = sfc_intr_init(sa);
+	rc = sfc_intr_configure(sa);
 	if (rc != 0)
-		goto fail_intr_init;
+		goto fail_intr_configure;
 
-	rc = sfc_ev_init(sa);
+	rc = sfc_port_configure(sa);
 	if (rc != 0)
-		goto fail_ev_init;
+		goto fail_port_configure;
 
-	rc = sfc_port_init(sa);
+	rc = sfc_rx_configure(sa);
 	if (rc != 0)
-		goto fail_port_init;
+		goto fail_rx_configure;
 
-	rc = sfc_rx_init(sa);
+	rc = sfc_tx_configure(sa);
 	if (rc != 0)
-		goto fail_rx_init;
-
-	rc = sfc_tx_init(sa);
-	if (rc != 0)
-		goto fail_tx_init;
+		goto fail_tx_configure;
 
 	sa->state = SFC_ADAPTER_CONFIGURED;
 	sfc_log_init(sa, "done");
 	return 0;
 
-fail_tx_init:
-	sfc_rx_fini(sa);
+fail_tx_configure:
+	sfc_rx_close(sa);
 
-fail_rx_init:
-	sfc_port_fini(sa);
+fail_rx_configure:
+	sfc_port_close(sa);
 
-fail_port_init:
-	sfc_ev_fini(sa);
+fail_port_configure:
+	sfc_intr_close(sa);
 
-fail_ev_init:
-	sfc_intr_fini(sa);
-
-fail_intr_init:
+fail_intr_configure:
 fail_check_conf:
 	sa->state = SFC_ADAPTER_INITIALIZED;
 	sfc_log_init(sa, "failed %d", rc);
@@ -448,11 +452,10 @@ sfc_close(struct sfc_adapter *sa)
 	SFC_ASSERT(sa->state == SFC_ADAPTER_CONFIGURED);
 	sa->state = SFC_ADAPTER_CLOSING;
 
-	sfc_tx_fini(sa);
-	sfc_rx_fini(sa);
-	sfc_port_fini(sa);
-	sfc_ev_fini(sa);
-	sfc_intr_fini(sa);
+	sfc_tx_close(sa);
+	sfc_rx_close(sa);
+	sfc_port_close(sa);
+	sfc_intr_close(sa);
 
 	sa->state = SFC_ADAPTER_INITIALIZED;
 	sfc_log_init(sa, "done");
@@ -561,8 +564,109 @@ fail_intr_init:
 int
 sfc_attach(struct sfc_adapter *sa)
 {
-	struct rte_pci_device *pci_dev = SFC_DEV_TO_PCI(sa->eth_dev);
 	const efx_nic_cfg_t *encp;
+	efx_nic_t *enp = sa->nic;
+	int rc;
+
+	sfc_log_init(sa, "entry");
+
+	SFC_ASSERT(sfc_adapter_is_locked(sa));
+
+	efx_mcdi_new_epoch(enp);
+
+	sfc_log_init(sa, "reset nic");
+	rc = efx_nic_reset(enp);
+	if (rc != 0)
+		goto fail_nic_reset;
+
+	encp = efx_nic_cfg_get(sa->nic);
+
+	if (sa->dp_tx->features & SFC_DP_TX_FEAT_TSO) {
+		sa->tso = encp->enc_fw_assisted_tso_v2_enabled;
+		if (!sa->tso)
+			sfc_warn(sa,
+				 "TSO support isn't available on this adapter");
+	}
+
+	sfc_log_init(sa, "estimate resource limits");
+	rc = sfc_estimate_resource_limits(sa);
+	if (rc != 0)
+		goto fail_estimate_rsrc_limits;
+
+	sa->txq_max_entries = encp->enc_txq_max_ndescs;
+	SFC_ASSERT(rte_is_power_of_2(sa->txq_max_entries));
+
+	rc = sfc_intr_attach(sa);
+	if (rc != 0)
+		goto fail_intr_attach;
+
+	rc = sfc_ev_attach(sa);
+	if (rc != 0)
+		goto fail_ev_attach;
+
+	rc = sfc_port_attach(sa);
+	if (rc != 0)
+		goto fail_port_attach;
+
+	rc = sfc_set_rss_defaults(sa);
+	if (rc != 0)
+		goto fail_set_rss_defaults;
+
+	rc = sfc_filter_attach(sa);
+	if (rc != 0)
+		goto fail_filter_attach;
+
+	sfc_log_init(sa, "fini nic");
+	efx_nic_fini(enp);
+
+	sfc_flow_init(sa);
+
+	sa->state = SFC_ADAPTER_INITIALIZED;
+
+	sfc_log_init(sa, "done");
+	return 0;
+
+fail_filter_attach:
+fail_set_rss_defaults:
+	sfc_port_detach(sa);
+
+fail_port_attach:
+	sfc_ev_detach(sa);
+
+fail_ev_attach:
+	sfc_intr_detach(sa);
+
+fail_intr_attach:
+	efx_nic_fini(sa->nic);
+
+fail_estimate_rsrc_limits:
+fail_nic_reset:
+
+	sfc_log_init(sa, "failed %d", rc);
+	return rc;
+}
+
+void
+sfc_detach(struct sfc_adapter *sa)
+{
+	sfc_log_init(sa, "entry");
+
+	SFC_ASSERT(sfc_adapter_is_locked(sa));
+
+	sfc_flow_fini(sa);
+
+	sfc_filter_detach(sa);
+	sfc_port_detach(sa);
+	sfc_ev_detach(sa);
+	sfc_intr_detach(sa);
+
+	sa->state = SFC_ADAPTER_UNINITIALIZED;
+}
+
+int
+sfc_probe(struct sfc_adapter *sa)
+{
+	struct rte_pci_device *pci_dev = SFC_DEV_TO_PCI(sa->eth_dev);
 	efx_nic_t *enp;
 	int rc;
 
@@ -601,56 +705,8 @@ sfc_attach(struct sfc_adapter *sa)
 	if (rc != 0)
 		goto fail_nic_probe;
 
-	efx_mcdi_new_epoch(enp);
-
-	sfc_log_init(sa, "reset nic");
-	rc = efx_nic_reset(enp);
-	if (rc != 0)
-		goto fail_nic_reset;
-
-	encp = efx_nic_cfg_get(sa->nic);
-
-	sa->tso = encp->enc_fw_assisted_tso_v2_enabled;
-	if (!sa->tso)
-		sfc_warn(sa, "TSO support isn't available on this adapter");
-
-	sfc_log_init(sa, "estimate resource limits");
-	rc = sfc_estimate_resource_limits(sa);
-	if (rc != 0)
-		goto fail_estimate_rsrc_limits;
-
-	sa->txq_max_entries = encp->enc_txq_max_ndescs;
-	SFC_ASSERT(rte_is_power_of_2(sa->txq_max_entries));
-
-	rc = sfc_intr_attach(sa);
-	if (rc != 0)
-		goto fail_intr_attach;
-
-	efx_phy_adv_cap_get(sa->nic, EFX_PHY_CAP_PERM,
-			    &sa->port.phy_adv_cap_mask);
-
-	rc = sfc_set_rss_defaults(sa);
-	if (rc != 0)
-		goto fail_set_rss_defaults;
-
-	sfc_log_init(sa, "fini nic");
-	efx_nic_fini(enp);
-
-	sa->state = SFC_ADAPTER_INITIALIZED;
-
 	sfc_log_init(sa, "done");
 	return 0;
-
-fail_set_rss_defaults:
-	sfc_intr_detach(sa);
-
-fail_intr_attach:
-	efx_nic_fini(sa->nic);
-
-fail_estimate_rsrc_limits:
-fail_nic_reset:
-	sfc_log_init(sa, "unprobe nic");
-	efx_nic_unprobe(enp);
 
 fail_nic_probe:
 	sfc_mcdi_fini(sa);
@@ -670,15 +726,13 @@ fail_mem_bar_init:
 }
 
 void
-sfc_detach(struct sfc_adapter *sa)
+sfc_unprobe(struct sfc_adapter *sa)
 {
 	efx_nic_t *enp = sa->nic;
 
 	sfc_log_init(sa, "entry");
 
 	SFC_ASSERT(sfc_adapter_is_locked(sa));
-
-	sfc_intr_detach(sa);
 
 	sfc_log_init(sa, "unprobe nic");
 	efx_nic_unprobe(enp);
@@ -691,5 +745,6 @@ sfc_detach(struct sfc_adapter *sa)
 
 	sfc_mem_bar_fini(sa);
 
+	sfc_flow_fini(sa);
 	sa->state = SFC_ADAPTER_UNINITIALIZED;
 }

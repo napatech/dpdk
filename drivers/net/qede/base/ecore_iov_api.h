@@ -88,6 +88,28 @@ struct ecore_public_vf_info {
 	u16 forced_vlan;
 };
 
+struct ecore_iov_vf_init_params {
+	u16 rel_vf_id;
+
+	/* Number of requested Queues; Currently, don't support different
+	 * number of Rx/Tx queues.
+	 */
+	/* TODO - remove this limitation */
+	u16 num_queues;
+
+	/* Allow the client to choose which qzones to use for Rx/Tx,
+	 * and which queue_base to use for Tx queues on a per-queue basis.
+	 * Notice values should be relative to the PF resources.
+	 */
+	u16 req_rx_queue[ECORE_MAX_VF_CHAINS_PER_PF];
+	u16 req_tx_queue[ECORE_MAX_VF_CHAINS_PER_PF];
+
+	u8 vport_id;
+
+	/* Should be set in case RSS is going to be used for VF */
+	u8 rss_eng_id;
+};
+
 #ifdef CONFIG_ECORE_SW_CHANNEL
 /* This is SW channel related only... */
 enum mbx_state {
@@ -175,15 +197,14 @@ void ecore_iov_set_vf_to_disable(struct ecore_dev *p_dev,
  *
  * @param p_hwfn
  * @param p_ptt
- * @param rel_vf_id
- * @param num_rx_queues
+ * @param p_params
  *
  * @return enum _ecore_status_t
  */
 enum _ecore_status_t ecore_iov_init_hw_for_vf(struct ecore_hwfn *p_hwfn,
 					      struct ecore_ptt *p_ptt,
-					      u16 rel_vf_id,
-					      u16 num_rx_queues);
+					      struct ecore_iov_vf_init_params
+						     *p_params);
 
 /**
  * @brief ecore_iov_process_mbx_req - process a request received
@@ -399,16 +420,6 @@ ecore_iov_bulletin_set_forced_untagged_default(struct ecore_hwfn *p_hwfn,
  */
 void ecore_iov_get_vfs_opaque_fid(struct ecore_hwfn *p_hwfn, int vfid,
 				  u16 *opaque_fid);
-
-/**
- * @brief Get VFs VPORT id.
- *
- * @param p_hwfn
- * @param vfid
- * @param vport id
- */
-void ecore_iov_get_vfs_vport_id(struct ecore_hwfn *p_hwfn, int vfid,
-				u8 *p_vport_id);
 
 /**
  * @brief Set forced VLAN [pvid] in PFs copy of bulletin board
@@ -682,17 +693,6 @@ bool ecore_iov_is_vf_started(struct ecore_hwfn *p_hwfn,
  * @return - rate in Mbps
  */
 int ecore_iov_get_vf_min_rate(struct ecore_hwfn *p_hwfn, int vfid);
-
-/**
- * @brief - Configure min rate for VF's vport.
- * @param p_dev
- * @param vfid
- * @param - rate in Mbps
- *
- * @return
- */
-enum _ecore_status_t ecore_iov_configure_min_tx_rate(struct ecore_dev *p_dev,
-						     int vfid, u32 rate);
 #endif
 
 /**
@@ -701,15 +701,17 @@ enum _ecore_status_t ecore_iov_configure_min_tx_rate(struct ecore_dev *p_dev,
  * @param p_hwfn
  * @param rel_vf_id
  *
- * @return MAX_NUM_VFS in case no further active VFs, otherwise index.
+ * @return E4_MAX_NUM_VFS in case no further active VFs, otherwise index.
  */
 u16 ecore_iov_get_next_active_vf(struct ecore_hwfn *p_hwfn, u16 rel_vf_id);
 
+void ecore_iov_bulletin_set_udp_ports(struct ecore_hwfn *p_hwfn, int vfid,
+				      u16 vxlan_port, u16 geneve_port);
 #endif /* CONFIG_ECORE_SRIOV */
 
 #define ecore_for_each_vf(_p_hwfn, _i)					\
 	for (_i = ecore_iov_get_next_active_vf(_p_hwfn, 0);		\
-	     _i < MAX_NUM_VFS;						\
+	     _i < E4_MAX_NUM_VFS;					\
 	     _i = ecore_iov_get_next_active_vf(_p_hwfn, _i + 1))
 
 #endif

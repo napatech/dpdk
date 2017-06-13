@@ -126,6 +126,19 @@
 
 #define QEDE_PKT_TYPE_TUNN_MAX_TYPE			0x20 /* 2^5 */
 
+#define QEDE_TX_CSUM_OFFLOAD_MASK (PKT_TX_IP_CKSUM              | \
+				   PKT_TX_TCP_CKSUM             | \
+				   PKT_TX_UDP_CKSUM             | \
+				   PKT_TX_OUTER_IP_CKSUM        | \
+				   PKT_TX_TCP_SEG)
+
+#define QEDE_TX_OFFLOAD_MASK (QEDE_TX_CSUM_OFFLOAD_MASK | \
+			      PKT_TX_QINQ_PKT           | \
+			      PKT_TX_VLAN_PKT)
+
+#define QEDE_TX_OFFLOAD_NOTSUP_MASK \
+	(PKT_TX_OFFLOAD_MASK ^ QEDE_TX_OFFLOAD_MASK)
+
 /*
  * RX BD descriptor ring
  */
@@ -133,6 +146,12 @@ struct qede_rx_entry {
 	struct rte_mbuf *mbuf;
 	uint32_t page_offset;
 	/* allows expansion .. */
+};
+
+/* TPA related structures */
+struct qede_agg_info {
+	struct rte_mbuf *tpa_head; /* Pointer to first TPA segment */
+	struct rte_mbuf *tpa_tail; /* Pointer to last TPA segment */
 };
 
 /*
@@ -155,7 +174,9 @@ struct qede_rx_queue {
 	uint64_t rx_segs;
 	uint64_t rx_hw_errors;
 	uint64_t rx_alloc_errors;
+	struct qede_agg_info tpa_info[ETH_TPA_MAX_AGGS_NUM];
 	struct qede_dev *qdev;
+	void *handle;
 };
 
 /*
@@ -187,6 +208,7 @@ struct qede_tx_queue {
 	uint64_t xmit_pkts;
 	bool is_legacy;
 	struct qede_dev *qdev;
+	void *handle;
 };
 
 struct qede_fastpath {
@@ -230,8 +252,15 @@ void qede_free_mem_load(struct rte_eth_dev *eth_dev);
 uint16_t qede_xmit_pkts(void *p_txq, struct rte_mbuf **tx_pkts,
 			uint16_t nb_pkts);
 
+uint16_t qede_xmit_prep_pkts(void *p_txq, struct rte_mbuf **tx_pkts,
+			     uint16_t nb_pkts);
+
 uint16_t qede_recv_pkts(void *p_rxq, struct rte_mbuf **rx_pkts,
 			uint16_t nb_pkts);
+
+uint16_t qede_rxtx_pkts_dummy(__rte_unused void *p_rxq,
+			      __rte_unused struct rte_mbuf **pkts,
+			      __rte_unused uint16_t nb_pkts);
 
 /* Fastpath resource alloc/dealloc helpers */
 int qede_alloc_fp_resc(struct qede_dev *qdev);

@@ -49,8 +49,9 @@ enum rte_intr_handle_type {
 	RTE_INTR_HANDLE_VFIO_LEGACY,  /**< vfio device handle (legacy) */
 	RTE_INTR_HANDLE_VFIO_MSI,     /**< vfio device handle (MSI) */
 	RTE_INTR_HANDLE_VFIO_MSIX,    /**< vfio device handle (MSIX) */
-	RTE_INTR_HANDLE_ALARM,    /**< alarm handle */
-	RTE_INTR_HANDLE_EXT, /**< external handler */
+	RTE_INTR_HANDLE_ALARM,        /**< alarm handle */
+	RTE_INTR_HANDLE_EXT,          /**< external handler */
+	RTE_INTR_HANDLE_VDEV,         /**< virtual device */
 	RTE_INTR_HANDLE_MAX
 };
 
@@ -169,6 +170,15 @@ rte_intr_tls_epfd(void);
 int
 rte_intr_rx_ctl(struct rte_intr_handle *intr_handle,
 		int epfd, int op, unsigned int vec, void *data);
+
+/**
+ * It deletes registered eventfds.
+ *
+ * @param intr_handle
+ *   Pointer to the interrupt handle.
+ */
+void
+rte_intr_free_epoll_fd(struct rte_intr_handle *intr_handle);
 
 /**
  * It enables the packet I/O interrupt event if it's necessary.

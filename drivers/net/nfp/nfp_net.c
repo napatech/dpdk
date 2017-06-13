@@ -46,6 +46,7 @@
 #include <rte_log.h>
 #include <rte_debug.h>
 #include <rte_ethdev.h>
+#include <rte_ethdev_pci.h>
 #include <rte_dev.h>
 #include <rte_ether.h>
 #include <rte_malloc.h>
@@ -63,8 +64,7 @@
 /* Prototypes */
 static void nfp_net_close(struct rte_eth_dev *dev);
 static int nfp_net_configure(struct rte_eth_dev *dev);
-static void nfp_net_dev_interrupt_handler(struct rte_intr_handle *handle,
-					  void *param);
+static void nfp_net_dev_interrupt_handler(void *param);
 static void nfp_net_dev_interrupt_delayed_handler(void *param);
 static int nfp_net_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
 static void nfp_net_infos_get(struct rte_eth_dev *dev,
@@ -203,26 +203,6 @@ static inline void
 nn_cfg_writeq(struct nfp_net_hw *hw, int off, uint64_t val)
 {
 	nn_writeq(rte_cpu_to_le_64(val), hw->ctrl_bar + off);
-}
-
-/* Creating memzone for hardware rings. */
-static const struct rte_memzone *
-ring_dma_zone_reserve(struct rte_eth_dev *dev, const char *ring_name,
-		      uint16_t queue_id, uint32_t ring_size, int socket_id)
-{
-	char z_name[RTE_MEMZONE_NAMESIZE];
-	const struct rte_memzone *mz;
-
-	snprintf(z_name, sizeof(z_name), "%s_%s_%d_%d",
-		 dev->driver->pci_drv.driver.name,
-		 ring_name, dev->data->port_id, queue_id);
-
-	mz = rte_memzone_lookup(z_name);
-	if (mz)
-		return mz;
-
-	return rte_memzone_reserve_aligned(z_name, ring_size, socket_id, 0,
-					   NFP_MEMZONE_ALIGN);
 }
 
 /*
@@ -708,7 +688,8 @@ nfp_net_start(struct rte_eth_dev *dev)
 			return -1;
 	}
 
-	nfp_configure_rx_interrupt(dev, intr_handle);
+	if (rte_intr_dp_is_en(intr_handle))
+		nfp_configure_rx_interrupt(dev, intr_handle);
 
 	rte_intr_enable(intr_handle);
 
@@ -1184,11 +1165,6 @@ nfp_net_rx_queue_count(struct rte_eth_dev *dev, uint16_t queue_idx)
 
 	rxq = (struct nfp_net_rxq *)dev->data->rx_queues[queue_idx];
 
-	if (rxq == NULL) {
-		PMD_INIT_LOG(ERR, "Bad queue: %u", queue_idx);
-		return 0;
-	}
-
 	idx = rxq->rd_p;
 
 	count = 0;
@@ -1308,8 +1284,7 @@ nfp_net_irq_unmask(struct rte_eth_dev *dev)
 }
 
 static void
-nfp_net_dev_interrupt_handler(__rte_unused struct rte_intr_handle *handle,
-			      void *param)
+nfp_net_dev_interrupt_handler(void *param)
 {
 	int64_t timeout;
 	struct rte_eth_link link;
@@ -1461,9 +1436,10 @@ nfp_net_rx_queue_setup(struct rte_eth_dev *dev,
 	 * handle the maximum ring size is allocated in order to allow for
 	 * resizing in later calls to the queue setup function.
 	 */
-	tz = ring_dma_zone_reserve(dev, "rx_ring", queue_idx,
+	tz = rte_eth_dma_zone_reserve(dev, "rx_ring", queue_idx,
 				   sizeof(struct nfp_net_rx_desc) *
-				   NFP_NET_MAX_RX_DESC, socket_id);
+				   NFP_NET_MAX_RX_DESC, NFP_MEMZONE_ALIGN,
+				   socket_id);
 
 	if (tz == NULL) {
 		RTE_LOG(ERR, PMD, "Error allocatig rx dma\n");
@@ -1603,9 +1579,10 @@ nfp_net_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	 * handle the maximum ring size is allocated in order to allow for
 	 * resizing in later calls to the queue setup function.
 	 */
-	tz = ring_dma_zone_reserve(dev, "tx_ring", queue_idx,
+	tz = rte_eth_dma_zone_reserve(dev, "tx_ring", queue_idx,
 				   sizeof(struct nfp_net_tx_desc) *
-				   NFP_NET_MAX_TX_DESC, socket_id);
+				   NFP_NET_MAX_TX_DESC, NFP_MEMZONE_ALIGN,
+				   socket_id);
 	if (tz == NULL) {
 		RTE_LOG(ERR, PMD, "Error allocating tx dma\n");
 		nfp_net_tx_queue_release(txq);
@@ -1665,16 +1642,22 @@ nfp_net_tx_tso(struct nfp_net_txq *txq, struct nfp_net_tx_desc *txd,
 	struct nfp_net_hw *hw = txq->hw;
 
 	if (!(hw->cap & NFP_NET_CFG_CTRL_LSO))
-		return;
+		goto clean_txd;
 
 	ol_flags = mb->ol_flags;
 
 	if (!(ol_flags & PKT_TX_TCP_SEG))
-		return;
+		goto clean_txd;
 
 	txd->l4_offset = mb->l2_len + mb->l3_len + mb->l4_len;
 	txd->lso = rte_cpu_to_le_16(mb->tso_segsz);
-	txd->flags |= PCIE_DESC_TX_LSO;
+	txd->flags = PCIE_DESC_TX_LSO;
+	return;
+
+clean_txd:
+	txd->flags = 0;
+	txd->l4_offset = 0;
+	txd->lso = 0;
 }
 
 /* nfp_net_tx_cksum - Set TX CSUM offload flags in TX descriptor */
@@ -2096,6 +2079,7 @@ nfp_net_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		 * Checksum and VLAN flags just in the first descriptor for a
 		 * multisegment packet, but TSO info needs to be in all of them.
 		 */
+		txd.data_len = pkt->pkt_len;
 		nfp_net_tx_tso(txq, &txd, pkt);
 		nfp_net_tx_cksum(txq, &txd, pkt);
 
@@ -2112,18 +2096,20 @@ nfp_net_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		 */
 		pkt_size = pkt->pkt_len;
 
-		/* Releasing mbuf which was prefetched above */
-		if (*lmbuf)
-			rte_pktmbuf_free(*lmbuf);
-		/*
-		 * Linking mbuf with descriptor for being released
-		 * next time descriptor is used
-		 */
-		*lmbuf = pkt;
-
 		while (pkt_size) {
 			/* Copying TSO, VLAN and cksum info */
 			*txds = txd;
+
+			/* Releasing mbuf used by this descriptor previously*/
+			if (*lmbuf)
+				rte_pktmbuf_free_seg(*lmbuf);
+
+			/*
+			 * Linking mbuf with descriptor for being released
+			 * next time descriptor is used
+			 */
+			*lmbuf = pkt;
+
 			dma_size = pkt->data_len;
 			dma_addr = rte_mbuf_data_dma_addr(pkt);
 			PMD_TX_LOG(DEBUG, "Working with mbuf at dma address:"
@@ -2131,7 +2117,7 @@ nfp_net_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
 			/* Filling descriptors fields */
 			txds->dma_len = dma_size;
-			txds->data_len = pkt->pkt_len;
+			txds->data_len = txd.data_len;
 			txds->dma_addr_hi = (dma_addr >> 32) & 0xff;
 			txds->dma_addr_lo = (dma_addr & 0xffffffff);
 			ASSERT(free_descs > 0);
@@ -2151,6 +2137,7 @@ nfp_net_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 			}
 			/* Referencing next free TX descriptor */
 			txds = &txq->txds[txq->wr_p];
+			lmbuf = &txq->txbufs[txq->wr_p].mbuf;
 			issued_descs++;
 		}
 		i++;
@@ -2597,18 +2584,26 @@ static const struct rte_pci_id pci_id_nfp_net_map[] = {
 	},
 };
 
-static struct eth_driver rte_nfp_net_pmd = {
-	.pci_drv = {
-		.id_table = pci_id_nfp_net_map,
-		.drv_flags = RTE_PCI_DRV_NEED_MAPPING | RTE_PCI_DRV_INTR_LSC,
-		.probe = rte_eth_dev_pci_probe,
-		.remove = rte_eth_dev_pci_remove,
-	},
-	.eth_dev_init = nfp_net_init,
-	.dev_private_size = sizeof(struct nfp_net_adapter),
+static int eth_nfp_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
+	struct rte_pci_device *pci_dev)
+{
+	return rte_eth_dev_pci_generic_probe(pci_dev,
+		sizeof(struct nfp_net_adapter), nfp_net_init);
+}
+
+static int eth_nfp_pci_remove(struct rte_pci_device *pci_dev)
+{
+	return rte_eth_dev_pci_generic_remove(pci_dev, NULL);
+}
+
+static struct rte_pci_driver rte_nfp_net_pmd = {
+	.id_table = pci_id_nfp_net_map,
+	.drv_flags = RTE_PCI_DRV_NEED_MAPPING | RTE_PCI_DRV_INTR_LSC,
+	.probe = eth_nfp_pci_probe,
+	.remove = eth_nfp_pci_remove,
 };
 
-RTE_PMD_REGISTER_PCI(net_nfp, rte_nfp_net_pmd.pci_drv);
+RTE_PMD_REGISTER_PCI(net_nfp, rte_nfp_net_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_nfp, pci_id_nfp_net_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_nfp, "* igb_uio | uio_pci_generic | vfio");
 

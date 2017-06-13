@@ -9,6 +9,8 @@ Build commands
 	install          install optionally staged in DESTDIR
 	examples         build examples for given targets (T=)
 	examples_clean   clean examples for given targets (T=)
+	test             compile tests and run basic unit tests
+	test-*           run specific subset of unit tests
 Build variables
 	EXTRA_CPPFLAGS   preprocessor options
 	EXTRA_CFLAGS     compiler options
@@ -20,8 +22,8 @@ Build variables
 	V         verbose
 	D         debug dependencies
 	O         build directory (default: build/ - install T= default: ./)
-	DESTDIR   staging install directory
-	prefix    root install directory
+	DESTDIR   staging install directory (default: empty)
+	prefix    root install directory (default: /usr/local)
 	T         target template - used with config or install
 			format: <arch-machine-execenv-toolchain>
 			templates in config/defconfig_*

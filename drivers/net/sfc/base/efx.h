@@ -559,6 +559,10 @@ efx_mac_stats_get_mask(
 
 #define	EFX_MAC_STATS_SIZE 0x400
 
+extern	__checkReturn			efx_rc_t
+efx_mac_stats_clear(
+	__in				efx_nic_t *enp);
+
 /*
  * Upload mac statistics supported by the hardware into the given buffer.
  *
@@ -1154,6 +1158,13 @@ typedef struct efx_nic_cfg_s {
 	uint32_t		enc_rx_batch_max;
 	/* Number of rx descriptors the hardware requires for a push. */
 	uint32_t		enc_rx_push_align;
+	/* Maximum amount of data in DMA descriptor */
+	uint32_t		enc_tx_dma_desc_size_max;
+	/*
+	 * Boundary which DMA descriptor data must not cross or 0 if no
+	 * limitation.
+	 */
+	uint32_t		enc_tx_dma_desc_boundary;
 	/*
 	 * Maximum number of bytes into the packet the TCP header can start for
 	 * the hardware to apply TSO packet edits.
@@ -1199,6 +1210,24 @@ typedef struct efx_nic_cfg_s {
 extern			const efx_nic_cfg_t *
 efx_nic_cfg_get(
 	__in		efx_nic_t *enp);
+
+typedef struct efx_nic_fw_info_s {
+	/* Basic FW version information */
+	uint16_t	enfi_mc_fw_version[4];
+	/*
+	 * If datapath capabilities can be detected,
+	 * additional FW information is to be shown
+	 */
+	boolean_t	enfi_dpcpu_fw_ids_valid;
+	/* Rx and Tx datapath CPU FW IDs */
+	uint16_t	enfi_rx_dpcpu_fw_id;
+	uint16_t	enfi_tx_dpcpu_fw_id;
+} efx_nic_fw_info_t;
+
+extern	__checkReturn		efx_rc_t
+efx_nic_get_fw_version(
+	__in			efx_nic_t *enp,
+	__out			efx_nic_fw_info_t *enfip);
 
 /* Driver resource limits (minimum required/maximum usable). */
 typedef struct efx_drv_limits_s {
@@ -2217,10 +2246,10 @@ typedef enum efx_filter_match_flags_e {
 	EFX_FILTER_MATCH_OUTER_VID = 0x0100,	/* Match by outer VLAN ID */
 	EFX_FILTER_MATCH_IP_PROTO = 0x0200,	/* Match by IP transport
 						 * protocol */
-	EFX_FILTER_MATCH_LOC_MAC_IG = 0x0400,	/* Match by local MAC address
-						 * I/G bit. Used for RX default
-						 * unicast and multicast/
-						 * broadcast filters. */
+	/* Match otherwise-unmatched multicast and broadcast packets */
+	EFX_FILTER_MATCH_UNKNOWN_MCAST_DST = 0x40000000,
+	/* Match otherwise-unmatched unicast packets */
+	EFX_FILTER_MATCH_UNKNOWN_UCAST_DST = 0x80000000,
 } efx_filter_match_flags_t;
 
 typedef enum efx_filter_priority_s {
@@ -2242,7 +2271,7 @@ typedef enum efx_filter_priority_s {
  */
 
 typedef struct efx_filter_spec_s {
-	uint32_t	efs_match_flags:12;
+	uint32_t	efs_match_flags;
 	uint32_t	efs_priority:2;
 	uint32_t	efs_flags:6;
 	uint32_t	efs_dmaq_id:12;
@@ -2289,9 +2318,10 @@ efx_filter_restore(
 
 extern	__checkReturn	efx_rc_t
 efx_filter_supported_filters(
-	__in		efx_nic_t *enp,
-	__out		uint32_t *list,
-	__out		size_t *length);
+	__in				efx_nic_t *enp,
+	__out_ecount(buffer_length)	uint32_t *buffer,
+	__in				size_t buffer_length,
+	__out				size_t *list_lengthp);
 
 extern			void
 efx_filter_spec_init_rx(

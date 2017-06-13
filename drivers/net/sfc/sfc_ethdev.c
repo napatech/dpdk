@@ -1,5 +1,7 @@
 /*-
- * Copyright (c) 2016 Solarflare Communications Inc.
+ *   BSD LICENSE
+ *
+ * Copyright (c) 2016-2017 Solarflare Communications Inc.
  * All rights reserved.
  *
  * This software was jointly developed between OKTET Labs (under contract
@@ -29,7 +31,9 @@
 
 #include <rte_dev.h>
 #include <rte_ethdev.h>
+#include <rte_ethdev_pci.h>
 #include <rte_pci.h>
+#include <rte_errno.h>
 
 #include "efx.h"
 
@@ -40,7 +44,60 @@
 #include "sfc_ev.h"
 #include "sfc_rx.h"
 #include "sfc_tx.h"
+#include "sfc_flow.h"
+#include "sfc_dp.h"
+#include "sfc_dp_rx.h"
 
+static struct sfc_dp_list sfc_dp_head =
+	TAILQ_HEAD_INITIALIZER(sfc_dp_head);
+
+static int
+sfc_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
+{
+	struct sfc_adapter *sa = dev->data->dev_private;
+	efx_nic_fw_info_t enfi;
+	int ret;
+	int rc;
+
+	/*
+	 * Return value of the callback is likely supposed to be
+	 * equal to or greater than 0, nevertheless, if an error
+	 * occurs, it will be desirable to pass it to the caller
+	 */
+	if ((fw_version == NULL) || (fw_size == 0))
+		return -EINVAL;
+
+	rc = efx_nic_get_fw_version(sa->nic, &enfi);
+	if (rc != 0)
+		return -rc;
+
+	ret = snprintf(fw_version, fw_size,
+		       "%" PRIu16 ".%" PRIu16 ".%" PRIu16 ".%" PRIu16,
+		       enfi.enfi_mc_fw_version[0], enfi.enfi_mc_fw_version[1],
+		       enfi.enfi_mc_fw_version[2], enfi.enfi_mc_fw_version[3]);
+	if (ret < 0)
+		return ret;
+
+	if (enfi.enfi_dpcpu_fw_ids_valid) {
+		size_t dpcpu_fw_ids_offset = MIN(fw_size - 1, (size_t)ret);
+		int ret_extra;
+
+		ret_extra = snprintf(fw_version + dpcpu_fw_ids_offset,
+				     fw_size - dpcpu_fw_ids_offset,
+				     " rx%" PRIx16 " tx%" PRIx16,
+				     enfi.enfi_rx_dpcpu_fw_id,
+				     enfi.enfi_tx_dpcpu_fw_id);
+		if (ret_extra < 0)
+			return ret_extra;
+
+		ret += ret_extra;
+	}
+
+	if (fw_size < (size_t)(++ret))
+		return ret;
+	else
+		return 0;
+}
 
 static void
 sfc_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
@@ -79,10 +136,14 @@ sfc_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		DEV_TX_OFFLOAD_TCP_CKSUM;
 
 	dev_info->default_txconf.txq_flags = ETH_TXQ_FLAGS_NOXSUMSCTP;
-	if (!encp->enc_hw_tx_insert_vlan_enabled)
+	if ((~sa->dp_tx->features & SFC_DP_TX_FEAT_VLAN_INSERT) ||
+	    !encp->enc_hw_tx_insert_vlan_enabled)
 		dev_info->default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOVLANOFFL;
 	else
 		dev_info->tx_offload_capa |= DEV_TX_OFFLOAD_VLAN_INSERT;
+
+	if (~sa->dp_tx->features & SFC_DP_TX_FEAT_MULTI_SEG)
+		dev_info->default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOMULTSEGS;
 
 #if EFSYS_OPT_RX_SCALE
 	if (sa->rss_support != EFX_RX_SCALE_UNAVAILABLE) {
@@ -114,19 +175,9 @@ sfc_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 static const uint32_t *
 sfc_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 {
-	static const uint32_t ptypes[] = {
-		RTE_PTYPE_L2_ETHER,
-		RTE_PTYPE_L3_IPV4_EXT_UNKNOWN,
-		RTE_PTYPE_L3_IPV6_EXT_UNKNOWN,
-		RTE_PTYPE_L4_TCP,
-		RTE_PTYPE_L4_UDP,
-		RTE_PTYPE_UNKNOWN
-	};
+	struct sfc_adapter *sa = dev->data->dev_private;
 
-	if (dev->rx_pkt_burst == sfc_recv_pkts)
-		return ptypes;
-
-	return NULL;
+	return sa->dp_rx->supported_ptypes_get();
 }
 
 static int
@@ -142,8 +193,6 @@ sfc_dev_configure(struct rte_eth_dev *dev)
 	sfc_adapter_lock(sa);
 	switch (sa->state) {
 	case SFC_ADAPTER_CONFIGURED:
-		sfc_close(sa);
-		SFC_ASSERT(sa->state == SFC_ADAPTER_INITIALIZED);
 		/* FALLTHROUGH */
 	case SFC_ADAPTER_INITIALIZED:
 		rc = sfc_configure(sa);
@@ -366,7 +415,7 @@ sfc_rx_queue_setup(struct rte_eth_dev *dev, uint16_t rx_queue_id,
 	if (rc != 0)
 		goto fail_rx_qinit;
 
-	dev->data->rx_queues[rx_queue_id] = sa->rxq_info[rx_queue_id].rxq;
+	dev->data->rx_queues[rx_queue_id] = sa->rxq_info[rx_queue_id].rxq->dp;
 
 	sfc_adapter_unlock(sa);
 
@@ -381,13 +430,15 @@ fail_rx_qinit:
 static void
 sfc_rx_queue_release(void *queue)
 {
-	struct sfc_rxq *rxq = queue;
+	struct sfc_dp_rxq *dp_rxq = queue;
+	struct sfc_rxq *rxq;
 	struct sfc_adapter *sa;
 	unsigned int sw_index;
 
-	if (rxq == NULL)
+	if (dp_rxq == NULL)
 		return;
 
+	rxq = sfc_rxq_by_dp_rxq(dp_rxq);
 	sa = rxq->evq->sa;
 	sfc_adapter_lock(sa);
 
@@ -419,7 +470,7 @@ sfc_tx_queue_setup(struct rte_eth_dev *dev, uint16_t tx_queue_id,
 	if (rc != 0)
 		goto fail_tx_qinit;
 
-	dev->data->tx_queues[tx_queue_id] = sa->txq_info[tx_queue_id].txq;
+	dev->data->tx_queues[tx_queue_id] = sa->txq_info[tx_queue_id].txq->dp;
 
 	sfc_adapter_unlock(sa);
 	return 0;
@@ -433,13 +484,15 @@ fail_tx_qinit:
 static void
 sfc_tx_queue_release(void *queue)
 {
-	struct sfc_txq *txq = queue;
+	struct sfc_dp_txq *dp_txq = queue;
+	struct sfc_txq *txq;
 	unsigned int sw_index;
 	struct sfc_adapter *sa;
 
-	if (txq == NULL)
+	if (dp_txq == NULL)
 		return;
 
+	txq = sfc_txq_by_dp_txq(dp_txq);
 	sw_index = sfc_txq_sw_index(txq);
 
 	SFC_ASSERT(txq->evq != NULL);
@@ -523,6 +576,27 @@ sfc_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 
 unlock:
 	rte_spinlock_unlock(&port->mac_stats_lock);
+}
+
+static void
+sfc_stats_reset(struct rte_eth_dev *dev)
+{
+	struct sfc_adapter *sa = dev->data->dev_private;
+	struct sfc_port *port = &sa->port;
+	int rc;
+
+	if (sa->state != SFC_ADAPTER_STARTED) {
+		/*
+		 * The operation cannot be done if port is not started; it
+		 * will be scheduled to be done during the next port start
+		 */
+		port->mac_stats_reset_pending = B_TRUE;
+		return;
+	}
+
+	rc = sfc_port_reset_mac_stats(sa);
+	if (rc != 0)
+		sfc_err(sa, "failed to reset statistics (rc = %d)", rc);
 }
 
 static int
@@ -805,36 +879,33 @@ sfc_set_mc_addr_list(struct rte_eth_dev *dev, struct ether_addr *mc_addr_set,
 		     uint32_t nb_mc_addr)
 {
 	struct sfc_adapter *sa = dev->data->dev_private;
-	uint8_t *mc_addrs_p = NULL;
+	struct sfc_port *port = &sa->port;
+	uint8_t *mc_addrs = port->mcast_addrs;
 	int rc;
 	unsigned int i;
 
-	if (nb_mc_addr > EFX_MAC_MULTICAST_LIST_MAX) {
+	if (mc_addrs == NULL)
+		return -ENOBUFS;
+
+	if (nb_mc_addr > port->max_mcast_addrs) {
 		sfc_err(sa, "too many multicast addresses: %u > %u",
-			 nb_mc_addr, EFX_MAC_MULTICAST_LIST_MAX);
+			 nb_mc_addr, port->max_mcast_addrs);
 		return -EINVAL;
 	}
 
-	if (nb_mc_addr != 0) {
-		uint8_t *mc_addrs;
-
-		mc_addrs_p = rte_calloc("mc-addrs", nb_mc_addr,
-					EFX_MAC_ADDR_LEN, 0);
-		if (mc_addrs_p == NULL)
-			return -ENOMEM;
-
-		mc_addrs = mc_addrs_p;
-		for (i = 0; i < nb_mc_addr; ++i) {
-			(void)rte_memcpy(mc_addrs, mc_addr_set[i].addr_bytes,
-					 EFX_MAC_ADDR_LEN);
-			mc_addrs += EFX_MAC_ADDR_LEN;
-		}
+	for (i = 0; i < nb_mc_addr; ++i) {
+		(void)rte_memcpy(mc_addrs, mc_addr_set[i].addr_bytes,
+				 EFX_MAC_ADDR_LEN);
+		mc_addrs += EFX_MAC_ADDR_LEN;
 	}
 
-	rc = efx_mac_multicast_list_set(sa->nic, mc_addrs_p, nb_mc_addr);
+	port->nb_mcast_addrs = nb_mc_addr;
 
-	rte_free(mc_addrs_p);
+	if (sa->state != SFC_ADAPTER_STARTED)
+		return 0;
 
+	rc = efx_mac_multicast_list_set(sa->nic, port->mcast_addrs,
+					port->nb_mcast_addrs);
 	if (rc != 0)
 		sfc_err(sa, "cannot set multicast address list (rc = %u)", rc);
 
@@ -905,9 +976,9 @@ sfc_rx_queue_count(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 static int
 sfc_rx_descriptor_done(void *queue, uint16_t offset)
 {
-	struct sfc_rxq *rxq = queue;
+	struct sfc_dp_rxq *dp_rxq = queue;
 
-	return sfc_rx_qdesc_done(rxq, offset);
+	return sfc_rx_qdesc_done(dp_rxq, offset);
 }
 
 static int
@@ -1013,9 +1084,11 @@ sfc_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 {
 	struct sfc_adapter *sa = dev->data->dev_private;
 
-	if ((sa->rss_channels == 1) ||
-	    (sa->rss_support != EFX_RX_SCALE_EXCLUSIVE))
+	if (sa->rss_support != EFX_RX_SCALE_EXCLUSIVE)
 		return -ENOTSUP;
+
+	if (sa->rss_channels == 0)
+		return -EINVAL;
 
 	sfc_adapter_lock(sa);
 
@@ -1043,10 +1116,14 @@ sfc_dev_rss_hash_update(struct rte_eth_dev *dev,
 	unsigned int efx_hash_types;
 	int rc = 0;
 
-	if ((sa->rss_channels == 1) ||
-	    (sa->rss_support != EFX_RX_SCALE_EXCLUSIVE)) {
+	if (sa->rss_support != EFX_RX_SCALE_EXCLUSIVE) {
 		sfc_err(sa, "RSS is not available");
 		return -ENOTSUP;
+	}
+
+	if (sa->rss_channels == 0) {
+		sfc_err(sa, "RSS is not configured");
+		return -EINVAL;
 	}
 
 	if ((rss_conf->rss_key != NULL) &&
@@ -1105,9 +1182,11 @@ sfc_dev_rss_reta_query(struct rte_eth_dev *dev,
 	struct sfc_adapter *sa = dev->data->dev_private;
 	int entry;
 
-	if ((sa->rss_channels == 1) ||
-	    (sa->rss_support != EFX_RX_SCALE_EXCLUSIVE))
+	if (sa->rss_support != EFX_RX_SCALE_EXCLUSIVE)
 		return -ENOTSUP;
+
+	if (sa->rss_channels == 0)
+		return -EINVAL;
 
 	if (reta_size != EFX_RSS_TBL_SIZE)
 		return -EINVAL;
@@ -1138,10 +1217,14 @@ sfc_dev_rss_reta_update(struct rte_eth_dev *dev,
 	int rc;
 
 
-	if ((sa->rss_channels == 1) ||
-	    (sa->rss_support != EFX_RX_SCALE_EXCLUSIVE)) {
+	if (sa->rss_support != EFX_RX_SCALE_EXCLUSIVE) {
 		sfc_err(sa, "RSS is not available");
 		return -ENOTSUP;
+	}
+
+	if (sa->rss_channels == 0) {
+		sfc_err(sa, "RSS is not configured");
+		return -EINVAL;
 	}
 
 	if (reta_size != EFX_RSS_TBL_SIZE) {
@@ -1187,6 +1270,62 @@ bad_reta_entry:
 }
 #endif
 
+static int
+sfc_dev_filter_ctrl(struct rte_eth_dev *dev, enum rte_filter_type filter_type,
+		    enum rte_filter_op filter_op,
+		    void *arg)
+{
+	struct sfc_adapter *sa = dev->data->dev_private;
+	int rc = ENOTSUP;
+
+	sfc_log_init(sa, "entry");
+
+	switch (filter_type) {
+	case RTE_ETH_FILTER_NONE:
+		sfc_err(sa, "Global filters configuration not supported");
+		break;
+	case RTE_ETH_FILTER_MACVLAN:
+		sfc_err(sa, "MACVLAN filters not supported");
+		break;
+	case RTE_ETH_FILTER_ETHERTYPE:
+		sfc_err(sa, "EtherType filters not supported");
+		break;
+	case RTE_ETH_FILTER_FLEXIBLE:
+		sfc_err(sa, "Flexible filters not supported");
+		break;
+	case RTE_ETH_FILTER_SYN:
+		sfc_err(sa, "SYN filters not supported");
+		break;
+	case RTE_ETH_FILTER_NTUPLE:
+		sfc_err(sa, "NTUPLE filters not supported");
+		break;
+	case RTE_ETH_FILTER_TUNNEL:
+		sfc_err(sa, "Tunnel filters not supported");
+		break;
+	case RTE_ETH_FILTER_FDIR:
+		sfc_err(sa, "Flow Director filters not supported");
+		break;
+	case RTE_ETH_FILTER_HASH:
+		sfc_err(sa, "Hash filters not supported");
+		break;
+	case RTE_ETH_FILTER_GENERIC:
+		if (filter_op != RTE_ETH_FILTER_GET) {
+			rc = EINVAL;
+		} else {
+			*(const void **)arg = &sfc_flow_ops;
+			rc = 0;
+		}
+		break;
+	default:
+		sfc_err(sa, "Unknown filter type %u", filter_type);
+		break;
+	}
+
+	sfc_log_init(sa, "exit: %d", -rc);
+	SFC_ASSERT(rc >= 0);
+	return -rc;
+}
+
 static const struct eth_dev_ops sfc_eth_dev_ops = {
 	.dev_configure			= sfc_dev_configure,
 	.dev_start			= sfc_dev_start,
@@ -1200,7 +1339,9 @@ static const struct eth_dev_ops sfc_eth_dev_ops = {
 	.allmulticast_disable		= sfc_dev_allmulti_disable,
 	.link_update			= sfc_dev_link_update,
 	.stats_get			= sfc_stats_get,
+	.stats_reset			= sfc_stats_reset,
 	.xstats_get			= sfc_xstats_get,
+	.xstats_reset			= sfc_stats_reset,
 	.xstats_get_names		= sfc_xstats_get_names,
 	.dev_infos_get			= sfc_dev_infos_get,
 	.dev_supported_ptypes_get	= sfc_dev_supported_ptypes_get,
@@ -1224,10 +1365,122 @@ static const struct eth_dev_ops sfc_eth_dev_ops = {
 	.rss_hash_update		= sfc_dev_rss_hash_update,
 	.rss_hash_conf_get		= sfc_dev_rss_hash_conf_get,
 #endif
+	.filter_ctrl			= sfc_dev_filter_ctrl,
 	.set_mc_addr_list		= sfc_set_mc_addr_list,
 	.rxq_info_get			= sfc_rx_queue_info_get,
 	.txq_info_get			= sfc_tx_queue_info_get,
+	.fw_version_get			= sfc_fw_version_get,
 };
+
+static int
+sfc_eth_dev_set_ops(struct rte_eth_dev *dev)
+{
+	struct sfc_adapter *sa = dev->data->dev_private;
+	unsigned int avail_caps = 0;
+	const char *rx_name = NULL;
+	const char *tx_name = NULL;
+	int rc;
+
+	switch (sa->family) {
+	case EFX_FAMILY_HUNTINGTON:
+	case EFX_FAMILY_MEDFORD:
+		avail_caps |= SFC_DP_HW_FW_CAP_EF10;
+		break;
+	default:
+		break;
+	}
+
+	rc = sfc_kvargs_process(sa, SFC_KVARG_RX_DATAPATH,
+				sfc_kvarg_string_handler, &rx_name);
+	if (rc != 0)
+		goto fail_kvarg_rx_datapath;
+
+	if (rx_name != NULL) {
+		sa->dp_rx = sfc_dp_find_rx_by_name(&sfc_dp_head, rx_name);
+		if (sa->dp_rx == NULL) {
+			sfc_err(sa, "Rx datapath %s not found", rx_name);
+			rc = ENOENT;
+			goto fail_dp_rx;
+		}
+		if (!sfc_dp_match_hw_fw_caps(&sa->dp_rx->dp, avail_caps)) {
+			sfc_err(sa,
+				"Insufficient Hw/FW capabilities to use Rx datapath %s",
+				rx_name);
+			rc = EINVAL;
+			goto fail_dp_rx;
+		}
+	} else {
+		sa->dp_rx = sfc_dp_find_rx_by_caps(&sfc_dp_head, avail_caps);
+		if (sa->dp_rx == NULL) {
+			sfc_err(sa, "Rx datapath by caps %#x not found",
+				avail_caps);
+			rc = ENOENT;
+			goto fail_dp_rx;
+		}
+	}
+
+	sfc_info(sa, "use %s Rx datapath", sa->dp_rx->dp.name);
+
+	dev->rx_pkt_burst = sa->dp_rx->pkt_burst;
+
+	rc = sfc_kvargs_process(sa, SFC_KVARG_TX_DATAPATH,
+				sfc_kvarg_string_handler, &tx_name);
+	if (rc != 0)
+		goto fail_kvarg_tx_datapath;
+
+	if (tx_name != NULL) {
+		sa->dp_tx = sfc_dp_find_tx_by_name(&sfc_dp_head, tx_name);
+		if (sa->dp_tx == NULL) {
+			sfc_err(sa, "Tx datapath %s not found", tx_name);
+			rc = ENOENT;
+			goto fail_dp_tx;
+		}
+		if (!sfc_dp_match_hw_fw_caps(&sa->dp_tx->dp, avail_caps)) {
+			sfc_err(sa,
+				"Insufficient Hw/FW capabilities to use Tx datapath %s",
+				tx_name);
+			rc = EINVAL;
+			goto fail_dp_tx;
+		}
+	} else {
+		sa->dp_tx = sfc_dp_find_tx_by_caps(&sfc_dp_head, avail_caps);
+		if (sa->dp_tx == NULL) {
+			sfc_err(sa, "Tx datapath by caps %#x not found",
+				avail_caps);
+			rc = ENOENT;
+			goto fail_dp_tx;
+		}
+	}
+
+	sfc_info(sa, "use %s Tx datapath", sa->dp_tx->dp.name);
+
+	dev->tx_pkt_burst = sa->dp_tx->pkt_burst;
+
+	dev->dev_ops = &sfc_eth_dev_ops;
+
+	return 0;
+
+fail_dp_tx:
+fail_kvarg_tx_datapath:
+fail_dp_rx:
+fail_kvarg_rx_datapath:
+	return rc;
+}
+
+static void
+sfc_register_dp(void)
+{
+	/* Register once */
+	if (TAILQ_EMPTY(&sfc_dp_head)) {
+		/* Prefer EF10 datapath */
+		sfc_dp_register(&sfc_dp_head, &sfc_ef10_rx.dp);
+		sfc_dp_register(&sfc_dp_head, &sfc_efx_rx.dp);
+
+		sfc_dp_register(&sfc_dp_head, &sfc_ef10_tx.dp);
+		sfc_dp_register(&sfc_dp_head, &sfc_efx_tx.dp);
+		sfc_dp_register(&sfc_dp_head, &sfc_ef10_simple_tx.dp);
+	}
+}
 
 static int
 sfc_eth_dev_init(struct rte_eth_dev *dev)
@@ -1237,6 +1490,8 @@ sfc_eth_dev_init(struct rte_eth_dev *dev)
 	int rc;
 	const efx_nic_cfg_t *encp;
 	const struct ether_addr *from;
+
+	sfc_register_dp();
 
 	/* Required for logging */
 	sa->eth_dev = dev;
@@ -1264,6 +1519,16 @@ sfc_eth_dev_init(struct rte_eth_dev *dev)
 	sfc_adapter_lock_init(sa);
 	sfc_adapter_lock(sa);
 
+	sfc_log_init(sa, "probing");
+	rc = sfc_probe(sa);
+	if (rc != 0)
+		goto fail_probe;
+
+	sfc_log_init(sa, "set device ops");
+	rc = sfc_eth_dev_set_ops(dev);
+	if (rc != 0)
+		goto fail_set_ops;
+
 	sfc_log_init(sa, "attaching");
 	rc = sfc_attach(sa);
 	if (rc != 0)
@@ -1278,16 +1543,16 @@ sfc_eth_dev_init(struct rte_eth_dev *dev)
 	from = (const struct ether_addr *)(encp->enc_mac_addr);
 	ether_addr_copy(from, &dev->data->mac_addrs[0]);
 
-	dev->dev_ops = &sfc_eth_dev_ops;
-	dev->rx_pkt_burst = &sfc_recv_pkts;
-	dev->tx_pkt_burst = &sfc_xmit_pkts;
-
 	sfc_adapter_unlock(sa);
 
 	sfc_log_init(sa, "done");
 	return 0;
 
 fail_attach:
+fail_set_ops:
+	sfc_unprobe(sa);
+
+fail_probe:
 	sfc_adapter_unlock(sa);
 	sfc_adapter_lock_fini(sa);
 	rte_free(dev->data->mac_addrs);
@@ -1313,6 +1578,7 @@ sfc_eth_dev_uninit(struct rte_eth_dev *dev)
 	sfc_adapter_lock(sa);
 
 	sfc_detach(sa);
+	sfc_unprobe(sa);
 
 	rte_free(dev->data->mac_addrs);
 	dev->data->mac_addrs = NULL;
@@ -1335,29 +1601,42 @@ sfc_eth_dev_uninit(struct rte_eth_dev *dev)
 
 static const struct rte_pci_id pci_id_sfc_efx_map[] = {
 	{ RTE_PCI_DEVICE(EFX_PCI_VENID_SFC, EFX_PCI_DEVID_FARMINGDALE) },
+	{ RTE_PCI_DEVICE(EFX_PCI_VENID_SFC, EFX_PCI_DEVID_FARMINGDALE_VF) },
 	{ RTE_PCI_DEVICE(EFX_PCI_VENID_SFC, EFX_PCI_DEVID_GREENPORT) },
+	{ RTE_PCI_DEVICE(EFX_PCI_VENID_SFC, EFX_PCI_DEVID_GREENPORT_VF) },
 	{ RTE_PCI_DEVICE(EFX_PCI_VENID_SFC, EFX_PCI_DEVID_MEDFORD) },
+	{ RTE_PCI_DEVICE(EFX_PCI_VENID_SFC, EFX_PCI_DEVID_MEDFORD_VF) },
 	{ .vendor_id = 0 /* sentinel */ }
 };
 
-static struct eth_driver sfc_efx_pmd = {
-	.pci_drv = {
-		.id_table = pci_id_sfc_efx_map,
-		.drv_flags =
-			RTE_PCI_DRV_INTR_LSC |
-			RTE_PCI_DRV_NEED_MAPPING,
-		.probe = rte_eth_dev_pci_probe,
-		.remove = rte_eth_dev_pci_remove,
-	},
-	.eth_dev_init = sfc_eth_dev_init,
-	.eth_dev_uninit = sfc_eth_dev_uninit,
-	.dev_private_size = sizeof(struct sfc_adapter),
+static int sfc_eth_dev_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
+	struct rte_pci_device *pci_dev)
+{
+	return rte_eth_dev_pci_generic_probe(pci_dev,
+		sizeof(struct sfc_adapter), sfc_eth_dev_init);
+}
+
+static int sfc_eth_dev_pci_remove(struct rte_pci_device *pci_dev)
+{
+	return rte_eth_dev_pci_generic_remove(pci_dev, sfc_eth_dev_uninit);
+}
+
+static struct rte_pci_driver sfc_efx_pmd = {
+	.id_table = pci_id_sfc_efx_map,
+	.drv_flags =
+		RTE_PCI_DRV_INTR_LSC |
+		RTE_PCI_DRV_NEED_MAPPING,
+	.probe = sfc_eth_dev_pci_probe,
+	.remove = sfc_eth_dev_pci_remove,
 };
 
-RTE_PMD_REGISTER_PCI(net_sfc_efx, sfc_efx_pmd.pci_drv);
+RTE_PMD_REGISTER_PCI(net_sfc_efx, sfc_efx_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_sfc_efx, pci_id_sfc_efx_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_sfc_efx, "* igb_uio | uio_pci_generic | vfio");
 RTE_PMD_REGISTER_PARAM_STRING(net_sfc_efx,
+	SFC_KVARG_RX_DATAPATH "=" SFC_KVARG_VALUES_RX_DATAPATH " "
+	SFC_KVARG_TX_DATAPATH "=" SFC_KVARG_VALUES_TX_DATAPATH " "
 	SFC_KVARG_PERF_PROFILE "=" SFC_KVARG_VALUES_PERF_PROFILE " "
+	SFC_KVARG_STATS_UPDATE_PERIOD_MS "=<long> "
 	SFC_KVARG_MCDI_LOGGING "=" SFC_KVARG_VALUES_BOOL " "
 	SFC_KVARG_DEBUG_INIT "=" SFC_KVARG_VALUES_BOOL);

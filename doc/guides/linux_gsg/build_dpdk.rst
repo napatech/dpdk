@@ -155,6 +155,10 @@ can provide the uio capability. This module can be loaded using the command
 
     sudo modprobe uio_pci_generic
 
+.. note::
+
+    ``uio_pci_generic`` module doesn't support the creation of virtual functions.
+
 As an alternative to the ``uio_pci_generic``, the DPDK also includes the igb_uio
 module which can be found in the kmod subdirectory referred to above. It can
 be loaded as shown below:
@@ -187,6 +191,10 @@ however please consult your distributions documentation to make sure that is the
 
 Also, to use VFIO, both kernel and BIOS must support and be configured to use IO virtualization (such as Intel® VT-d).
 
+.. note::
+
+    ``vfio-pci`` module doesn't support the creation of virtual functions.
+
 For proper operation of VFIO when running DPDK applications as a non-privileged user, correct permissions should also be set up.
 This can be done by using the DPDK setup script (called dpdk-setup.sh and located in the usertools directory).
 
@@ -208,7 +216,7 @@ Any network ports under Linux* control will be ignored by the DPDK poll-mode dri
 
 To bind ports to the ``uio_pci_generic``, ``igb_uio`` or ``vfio-pci`` module for DPDK use,
 and then subsequently return ports to Linux* control,
-a utility script called dpdk_nic _bind.py is provided in the usertools subdirectory.
+a utility script called dpdk-devbind.py is provided in the usertools subdirectory.
 This utility can be used to provide a view of the current state of the network ports on the system,
 and to bind and unbind those ports from the different kernel modules, including the uio and vfio modules.
 The following are some examples of how the script can be used.

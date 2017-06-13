@@ -126,12 +126,16 @@ rte_crypto_cipher_algorithm_strings[] = {
 	[RTE_CRYPTO_CIPHER_AES_CBC]	= "aes-cbc",
 	[RTE_CRYPTO_CIPHER_AES_CCM]	= "aes-ccm",
 	[RTE_CRYPTO_CIPHER_AES_CTR]	= "aes-ctr",
+	[RTE_CRYPTO_CIPHER_AES_DOCSISBPI]	= "aes-docsisbpi",
 	[RTE_CRYPTO_CIPHER_AES_ECB]	= "aes-ecb",
 	[RTE_CRYPTO_CIPHER_AES_GCM]	= "aes-gcm",
 	[RTE_CRYPTO_CIPHER_AES_F8]	= "aes-f8",
 	[RTE_CRYPTO_CIPHER_AES_XTS]	= "aes-xts",
 
 	[RTE_CRYPTO_CIPHER_ARC4]	= "arc4",
+
+	[RTE_CRYPTO_CIPHER_DES_CBC]     = "des-cbc",
+	[RTE_CRYPTO_CIPHER_DES_DOCSISBPI]	= "des-docsisbpi",
 
 	[RTE_CRYPTO_CIPHER_NULL]	= "null",
 
@@ -166,6 +170,8 @@ rte_crypto_auth_algorithm_strings[] = {
 	[RTE_CRYPTO_AUTH_MD5]		= "md5",
 	[RTE_CRYPTO_AUTH_MD5_HMAC]	= "md5-hmac",
 
+	[RTE_CRYPTO_AUTH_NULL]		= "null",
+
 	[RTE_CRYPTO_AUTH_SHA1]		= "sha1",
 	[RTE_CRYPTO_AUTH_SHA1_HMAC]	= "sha1-hmac",
 
@@ -182,6 +188,40 @@ rte_crypto_auth_algorithm_strings[] = {
 	[RTE_CRYPTO_AUTH_SNOW3G_UIA2]	= "snow3g-uia2",
 	[RTE_CRYPTO_AUTH_ZUC_EIA3]	= "zuc-eia3"
 };
+
+int
+rte_cryptodev_get_cipher_algo_enum(enum rte_crypto_cipher_algorithm *algo_enum,
+		const char *algo_string)
+{
+	unsigned int i;
+
+	for (i = 1; i < RTE_DIM(rte_crypto_cipher_algorithm_strings); i++) {
+		if (strcmp(algo_string, rte_crypto_cipher_algorithm_strings[i]) == 0) {
+			*algo_enum = (enum rte_crypto_cipher_algorithm) i;
+			return 0;
+		}
+	}
+
+	/* Invalid string */
+	return -1;
+}
+
+int
+rte_cryptodev_get_auth_algo_enum(enum rte_crypto_auth_algorithm *algo_enum,
+		const char *algo_string)
+{
+	unsigned int i;
+
+	for (i = 1; i < RTE_DIM(rte_crypto_auth_algorithm_strings); i++) {
+		if (strcmp(algo_string, rte_crypto_auth_algorithm_strings[i]) == 0) {
+			*algo_enum = (enum rte_crypto_auth_algorithm) i;
+			return 0;
+		}
+	}
+
+	/* Invalid string */
+	return -1;
+}
 
 /**
  * The crypto auth operation strings identifiers.
@@ -214,7 +254,7 @@ static int
 parse_integer_arg(const char *key __rte_unused,
 		const char *value, void *extra_args)
 {
-	int *i = (int *) extra_args;
+	int *i = extra_args;
 
 	*i = atoi(value);
 	if (*i < 0) {
@@ -399,7 +439,7 @@ rte_cryptodev_get_feature_name(uint64_t flag)
 int
 rte_cryptodev_create_vdev(const char *name, const char *args)
 {
-	return rte_eal_vdev_init(name, args);
+	return rte_vdev_init(name, args);
 }
 
 struct rte_cryptodev *
@@ -676,7 +716,7 @@ rte_cryptodev_pci_probe(struct rte_pci_driver *pci_drv,
 	if (cryptodrv == NULL)
 		return -ENODEV;
 
-	rte_eal_pci_device_name(&pci_dev->addr, cryptodev_name,
+	rte_pci_device_name(&pci_dev->addr, cryptodev_name,
 			sizeof(cryptodev_name));
 
 	cryptodev = rte_cryptodev_pmd_allocate(cryptodev_name, rte_socket_id());
@@ -732,7 +772,7 @@ rte_cryptodev_pci_remove(struct rte_pci_device *pci_dev)
 	if (pci_dev == NULL)
 		return -EINVAL;
 
-	rte_eal_pci_device_name(&pci_dev->addr, cryptodev_name,
+	rte_pci_device_name(&pci_dev->addr, cryptodev_name,
 			sizeof(cryptodev_name));
 
 	cryptodev = rte_cryptodev_pmd_get_named_dev(cryptodev_name);
@@ -917,6 +957,8 @@ rte_cryptodev_configure(uint8_t dev_id, struct rte_cryptodev_config *config)
 		return -EBUSY;
 	}
 
+	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->dev_configure, -ENOTSUP);
+
 	/* Setup new number of queue pairs and reconfigure device. */
 	diag = rte_cryptodev_queue_pairs_config(dev, config->nb_queue_pairs,
 			config->socket_id);
@@ -927,10 +969,14 @@ rte_cryptodev_configure(uint8_t dev_id, struct rte_cryptodev_config *config)
 	}
 
 	/* Setup Session mempool for device */
-	return rte_cryptodev_sym_session_pool_create(dev,
+	diag = rte_cryptodev_sym_session_pool_create(dev,
 			config->session_mp.nb_objs,
 			config->session_mp.cache_size,
 			config->socket_id);
+	if (diag != 0)
+		return diag;
+
+	return (*dev->dev_ops->dev_configure)(dev, config);
 }
 
 
@@ -1337,7 +1383,7 @@ rte_cryptodev_sym_session_create(uint8_t dev_id,
 		return NULL;
 	}
 
-	sess = (struct rte_cryptodev_sym_session *)_sess;
+	sess = _sess;
 
 	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->session_configure, NULL);
 	if (dev->dev_ops->session_configure(dev, xform, sess->_private) ==
@@ -1353,6 +1399,53 @@ rte_cryptodev_sym_session_create(uint8_t dev_id,
 	return sess;
 }
 
+int
+rte_cryptodev_queue_pair_attach_sym_session(uint16_t qp_id,
+		struct rte_cryptodev_sym_session *sess)
+{
+	struct rte_cryptodev *dev;
+
+	if (!rte_cryptodev_pmd_is_valid_dev(sess->dev_id)) {
+		CDEV_LOG_ERR("Invalid dev_id=%d", sess->dev_id);
+		return -EINVAL;
+	}
+
+	dev = &rte_crypto_devices[sess->dev_id];
+
+	/* The API is optional, not returning error if driver do not suuport */
+	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->qp_attach_session, 0);
+	if (dev->dev_ops->qp_attach_session(dev, qp_id, sess->_private)) {
+		CDEV_LOG_ERR("dev_id %d failed to attach qp: %d with session",
+				sess->dev_id, qp_id);
+		return -EPERM;
+	}
+
+	return 0;
+}
+
+int
+rte_cryptodev_queue_pair_detach_sym_session(uint16_t qp_id,
+		struct rte_cryptodev_sym_session *sess)
+{
+	struct rte_cryptodev *dev;
+
+	if (!rte_cryptodev_pmd_is_valid_dev(sess->dev_id)) {
+		CDEV_LOG_ERR("Invalid dev_id=%d", sess->dev_id);
+		return -EINVAL;
+	}
+
+	dev = &rte_crypto_devices[sess->dev_id];
+
+	/* The API is optional, not returning error if driver do not suuport */
+	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->qp_detach_session, 0);
+	if (dev->dev_ops->qp_detach_session(dev, qp_id, sess->_private)) {
+		CDEV_LOG_ERR("dev_id %d failed to detach qp: %d from session",
+				sess->dev_id, qp_id);
+		return -EPERM;
+	}
+
+	return 0;
+}
 struct rte_cryptodev_sym_session *
 rte_cryptodev_sym_session_free(uint8_t dev_id,
 		struct rte_cryptodev_sym_session *sess)

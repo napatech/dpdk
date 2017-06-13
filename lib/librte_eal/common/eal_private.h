@@ -34,6 +34,7 @@
 #ifndef _EAL_PRIVATE_H_
 #define _EAL_PRIVATE_H_
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <rte_pci.h>
 
@@ -108,18 +109,43 @@ int rte_eal_timer_init(void);
  */
 int rte_eal_log_init(const char *id, int facility);
 
-/**
- * Init the PCI infrastructure
- *
- * This function is private to EAL.
- *
- * @return
- *   0 on success, negative on error
- */
-int rte_eal_pci_init(void);
-
 struct rte_pci_driver;
 struct rte_pci_device;
+
+/**
+ * Add a PCI device to the PCI Bus (append to PCI Device list). This function
+ * also updates the bus references of the PCI Device (and the generic device
+ * object embedded within.
+ *
+ * @param pci_dev
+ *	PCI device to add
+ * @return void
+ */
+void rte_pci_add_device(struct rte_pci_device *pci_dev);
+
+/**
+ * Insert a PCI device in the PCI Bus at a particular location in the device
+ * list. It also updates the PCI Bus reference of the new devices to be
+ * inserted.
+ *
+ * @param exist_pci_dev
+ *	Existing PCI device in PCI Bus
+ * @param new_pci_dev
+ *	PCI device to be added before exist_pci_dev
+ * @return void
+ */
+void rte_pci_insert_device(struct rte_pci_device *exist_pci_dev,
+		struct rte_pci_device *new_pci_dev);
+
+/**
+ * Remove a PCI device from the PCI Bus. This sets to NULL the bus references
+ * in the PCI device object as well as the generic device object.
+ *
+ * @param pci_device
+ *	PCI device to be removed from PCI Bus
+ * @return void
+ */
+void rte_pci_remove_device(struct rte_pci_device *pci_device);
 
 /**
  * Update a pci device object by asking the kernel for the latest information.
@@ -300,5 +326,16 @@ int rte_eal_hugepage_init(void);
  * This function is private to the EAL.
  */
 int rte_eal_hugepage_attach(void);
+
+/**
+ * Returns true if the system is able to obtain
+ * physical addresses. Return false if using DMA
+ * addresses through an IOMMU.
+ *
+ * Drivers based on uio will not load unless physical
+ * addresses are obtainable. It is only possible to get
+ * physical addresses when running as a privileged user.
+ */
+bool rte_eal_using_phys_addrs(void);
 
 #endif /* _EAL_PRIVATE_H_ */

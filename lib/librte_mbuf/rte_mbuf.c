@@ -62,7 +62,7 @@
 
 /*
  * ctrlmbuf constructor, given as a callback function to
- * rte_mempool_create()
+ * rte_mempool_obj_iter() or rte_mempool_create()
  */
 void
 rte_ctrlmbuf_init(struct rte_mempool *mp,
@@ -77,7 +77,8 @@ rte_ctrlmbuf_init(struct rte_mempool *mp,
 
 /*
  * pktmbuf pool constructor, given as a callback function to
- * rte_mempool_create()
+ * rte_mempool_create(), or called directly if using
+ * rte_mempool_create_empty()/rte_mempool_populate()
  */
 void
 rte_pktmbuf_pool_init(struct rte_mempool *mp, void *opaque_arg)
@@ -110,7 +111,7 @@ rte_pktmbuf_pool_init(struct rte_mempool *mp, void *opaque_arg)
 
 /*
  * pktmbuf constructor, given as a callback function to
- * rte_mempool_create().
+ * rte_mempool_obj_iter() or rte_mempool_create().
  * Set the fields of a packet mbuf to their default values.
  */
 void
@@ -145,6 +146,8 @@ rte_pktmbuf_init(struct rte_mempool *mp,
 	m->pool = mp;
 	m->nb_segs = 1;
 	m->port = 0xff;
+	rte_mbuf_refcnt_set(m, 1);
+	m->next = NULL;
 }
 
 /* helper to create a mbuf pool */
@@ -320,6 +323,7 @@ const char *rte_get_rx_ol_flag_name(uint64_t mask)
 	case PKT_RX_IEEE1588_TMST: return "PKT_RX_IEEE1588_TMST";
 	case PKT_RX_QINQ_STRIPPED: return "PKT_RX_QINQ_STRIPPED";
 	case PKT_RX_LRO: return "PKT_RX_LRO";
+	case PKT_RX_TIMESTAMP: return "PKT_RX_TIMESTAMP";
 	default: return NULL;
 	}
 }
@@ -354,6 +358,7 @@ rte_get_rx_ol_flag_list(uint64_t mask, char *buf, size_t buflen)
 		{ PKT_RX_IEEE1588_TMST, PKT_RX_IEEE1588_TMST, NULL },
 		{ PKT_RX_QINQ_STRIPPED, PKT_RX_QINQ_STRIPPED, NULL },
 		{ PKT_RX_LRO, PKT_RX_LRO, NULL },
+		{ PKT_RX_TIMESTAMP, PKT_RX_TIMESTAMP, NULL },
 	};
 	const char *name;
 	unsigned int i;

@@ -47,7 +47,7 @@ if [ "$1" = '-h' -o "$1" = '--help' ] ; then
 	exit
 fi
 
-selfdir=$(dirname $(readlink -e $0))
+selfdir=$(dirname $(readlink -f $0))
 range=${1:-origin/master..}
 # convert -N to HEAD~N.. in order to comply with git-log-fixes.sh getopts
 if printf -- $range | grep -q '^-[0-9]\+' ; then
@@ -121,10 +121,12 @@ bad=$(echo "$headlines" | grep -E --color=always \
 	-e ':.*\<arm\>' \
 	-e ':.*\<armv7\>' \
 	-e ':.*\<armv8\>' \
+	-e ':.*\<crc\>' \
 	-e ':.*\<dma\>' \
 	-e ':.*\<freebsd\>' \
 	-e ':.*\<linux\>' \
 	-e ':.*\<lro\>' \
+	-e ':.*\<lsc\>' \
 	-e ':.*\<mac\>' \
 	-e ':.*\<mtu\>' \
 	-e ':.*\<nic\>' \
@@ -133,10 +135,9 @@ bad=$(echo "$headlines" | grep -E --color=always \
 	-e ':.*\<pci\>' \
 	-e ':.*\<pmd\>' \
 	-e ':.*\<rss\>' \
-	-e ':.*\<tile-gx\>' \
-	-e ':.*\<tilegx\>' \
 	-e ':.*\<tso\>' \
 	-e ':.*\<[Vv]lan\>' \
+	-e ':.*\<vsi\>' \
 	| sed 's,^,\t,')
 [ -z "$bad" ] || printf "Wrong headline lowercase:\n$bad\n"
 

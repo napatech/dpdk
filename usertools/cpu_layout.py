@@ -4,6 +4,7 @@
 #   BSD LICENSE
 #
 #   Copyright(c) 2010-2014 Intel Corporation. All rights reserved.
+#   Copyright(c) 2017 Cavium Networks Ltd. All rights reserved.
 #   All rights reserved.
 #
 #   Redistribution and use in source and binary forms, with or without
@@ -34,50 +35,51 @@
 #
 from __future__ import print_function
 import sys
+try:
+    xrange # Python 2
+except NameError:
+    xrange = range # Python 3
 
 sockets = []
 cores = []
 core_map = {}
-
-fd = open("/proc/cpuinfo")
-lines = fd.readlines()
+base_path = "/sys/devices/system/cpu"
+fd = open("{}/kernel_max".format(base_path))
+max_cpus = int(fd.read())
 fd.close()
-
-core_details = []
-core_lines = {}
-for line in lines:
-    if len(line.strip()) != 0:
-        name, value = line.split(":", 1)
-        core_lines[name.strip()] = value.strip()
-    else:
-        core_details.append(core_lines)
-        core_lines = {}
-
-for core in core_details:
-    for field in ["processor", "core id", "physical id"]:
-        if field not in core:
-            print("Error getting '%s' value from /proc/cpuinfo" % field)
-            sys.exit(1)
-        core[field] = int(core[field])
-
-    if core["core id"] not in cores:
-        cores.append(core["core id"])
-    if core["physical id"] not in sockets:
-        sockets.append(core["physical id"])
-    key = (core["physical id"], core["core id"])
+for cpu in xrange(max_cpus + 1):
+    try:
+        fd = open("{}/cpu{}/topology/core_id".format(base_path, cpu))
+    except IOError:
+        continue
+    except:
+        break
+    core = int(fd.read())
+    fd.close()
+    fd = open("{}/cpu{}/topology/physical_package_id".format(base_path, cpu))
+    socket = int(fd.read())
+    fd.close()
+    if core not in cores:
+        cores.append(core)
+    if socket not in sockets:
+        sockets.append(socket)
+    key = (socket, core)
     if key not in core_map:
         core_map[key] = []
-    core_map[key].append(core["processor"])
+    core_map[key].append(cpu)
 
-print("============================================================")
-print("Core and Socket Information (as reported by '/proc/cpuinfo')")
-print("============================================================\n")
+print(format("=" * (47 + len(base_path))))
+print("Core and Socket Information (as reported by '{}')".format(base_path))
+print("{}\n".format("=" * (47 + len(base_path))))
 print("cores = ", cores)
 print("sockets = ", sockets)
 print("")
 
 max_processor_len = len(str(len(cores) * len(sockets) * 2 - 1))
-max_core_map_len = max_processor_len * 2 + len('[, ]') + len('Socket ')
+max_thread_count = len(list(core_map.values())[0])
+max_core_map_len = (max_processor_len * max_thread_count)  \
+                      + len(", ") * (max_thread_count - 1) \
+                      + len('[]') + len('Socket ')
 max_core_id_len = len(str(max(cores)))
 
 output = " ".ljust(max_core_id_len + len('Core '))
@@ -94,5 +96,8 @@ print(output)
 for c in cores:
     output = "Core %s" % str(c).ljust(max_core_id_len)
     for s in sockets:
-        output += " " + str(core_map[(s, c)]).ljust(max_core_map_len)
+        if (s,c) in core_map:
+            output += " " + str(core_map[(s, c)]).ljust(max_core_map_len)
+        else:
+            output += " " * (max_core_map_len + 1)
     print(output)

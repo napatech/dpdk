@@ -82,21 +82,9 @@ i40e_rxq_rearm(struct i40e_rx_queue *rxq)
 	/* Initialize the mbufs in vector, process 2 mbufs in one loop */
 	for (i = 0; i < RTE_I40E_RXQ_REARM_THRESH; i += 2, rxep += 2) {
 		__m128i vaddr0, vaddr1;
-		uintptr_t p0, p1;
 
 		mb0 = rxep[0].mbuf;
 		mb1 = rxep[1].mbuf;
-
-		 /* Flush mbuf with pkt template.
-		 * Data to be rearmed is 6 bytes long.
-		 * Though, RX will overwrite ol_flags that are coming next
-		 * anyway. So overwrite whole 8 bytes with one load:
-		 * 6 bytes of rearm_data plus first 2 bytes of ol_flags.
-		 */
-		p0 = (uintptr_t)&mb0->rearm_data;
-		*(uint64_t *)p0 = rxq->mbuf_initializer;
-		p1 = (uintptr_t)&mb1->rearm_data;
-		*(uint64_t *)p1 = rxq->mbuf_initializer;
 
 		/* load buf_addr(lo 64bit) and buf_physaddr(hi 64bit) */
 		vaddr0 = _mm_loadu_si128((__m128i *)&mb0->buf_addr);
@@ -128,17 +116,13 @@ i40e_rxq_rearm(struct i40e_rx_queue *rxq)
 	I40E_PCI_REG_WRITE(rxq->qrx_tail, rx_id);
 }
 
-/* Handling the offload flags (olflags) field takes computation
- * time when receiving packets. Therefore we provide a flag to disable
- * the processing of the olflags field when they are not needed. This
- * gives improved performance, at the cost of losing the offload info
- * in the received packet
- */
-#ifdef RTE_LIBRTE_I40E_RX_OLFLAGS_ENABLE
-
 static inline void
-desc_to_olflags_v(__m128i descs[4], struct rte_mbuf **rx_pkts)
+desc_to_olflags_v(struct i40e_rx_queue *rxq, __m128i descs[4] __rte_unused,
+	struct rte_mbuf **rx_pkts)
 {
+	const __m128i mbuf_init = _mm_set_epi64x(0, rxq->mbuf_initializer);
+	__m128i rearm0, rearm1, rearm2, rearm3;
+
 	__m128i vlan0, vlan1, rss, l3_l4e;
 
 	/* mask everything except RSS, flow director and VLAN flags
@@ -206,19 +190,30 @@ desc_to_olflags_v(__m128i descs[4], struct rte_mbuf **rx_pkts)
 	vlan0 = _mm_or_si128(vlan0, rss);
 	vlan0 = _mm_or_si128(vlan0, l3_l4e);
 
-	rx_pkts[0]->ol_flags = _mm_extract_epi16(vlan0, 0);
-	rx_pkts[1]->ol_flags = _mm_extract_epi16(vlan0, 2);
-	rx_pkts[2]->ol_flags = _mm_extract_epi16(vlan0, 4);
-	rx_pkts[3]->ol_flags = _mm_extract_epi16(vlan0, 6);
+	/*
+	 * At this point, we have the 4 sets of flags in the low 16-bits
+	 * of each 32-bit value in vlan0.
+	 * We want to extract these, and merge them with the mbuf init data
+	 * so we can do a single 16-byte write to the mbuf to set the flags
+	 * and all the other initialization fields. Extracting the
+	 * appropriate flags means that we have to do a shift and blend for
+	 * each mbuf before we do the write.
+	 */
+	rearm0 = _mm_blend_epi16(mbuf_init, _mm_slli_si128(vlan0, 8), 0x10);
+	rearm1 = _mm_blend_epi16(mbuf_init, _mm_slli_si128(vlan0, 4), 0x10);
+	rearm2 = _mm_blend_epi16(mbuf_init, vlan0, 0x10);
+	rearm3 = _mm_blend_epi16(mbuf_init, _mm_srli_si128(vlan0, 4), 0x10);
+	_mm_store_si128((__m128i *)&rx_pkts[0]->rearm_data, rearm0);
+	_mm_store_si128((__m128i *)&rx_pkts[1]->rearm_data, rearm1);
+	_mm_store_si128((__m128i *)&rx_pkts[2]->rearm_data, rearm2);
+	_mm_store_si128((__m128i *)&rx_pkts[3]->rearm_data, rearm3);
 }
-#else
-#define desc_to_olflags_v(desc, rx_pkts) do {} while (0)
-#endif
 
 #define PKTLEN_SHIFT     10
 
 static inline void
-desc_to_ptype_v(__m128i descs[4], struct rte_mbuf **rx_pkts)
+desc_to_ptype_v(__m128i descs[4], struct rte_mbuf **rx_pkts,
+		uint32_t *ptype_tbl)
 {
 	__m128i ptype0 = _mm_unpackhi_epi64(descs[0], descs[1]);
 	__m128i ptype1 = _mm_unpackhi_epi64(descs[2], descs[3]);
@@ -226,10 +221,10 @@ desc_to_ptype_v(__m128i descs[4], struct rte_mbuf **rx_pkts)
 	ptype0 = _mm_srli_epi64(ptype0, 30);
 	ptype1 = _mm_srli_epi64(ptype1, 30);
 
-	rx_pkts[0]->packet_type = i40e_rxd_pkt_type_mapping(_mm_extract_epi8(ptype0, 0));
-	rx_pkts[1]->packet_type = i40e_rxd_pkt_type_mapping(_mm_extract_epi8(ptype0, 8));
-	rx_pkts[2]->packet_type = i40e_rxd_pkt_type_mapping(_mm_extract_epi8(ptype1, 0));
-	rx_pkts[3]->packet_type = i40e_rxd_pkt_type_mapping(_mm_extract_epi8(ptype1, 8));
+	rx_pkts[0]->packet_type = ptype_tbl[_mm_extract_epi8(ptype0, 0)];
+	rx_pkts[1]->packet_type = ptype_tbl[_mm_extract_epi8(ptype0, 8)];
+	rx_pkts[2]->packet_type = ptype_tbl[_mm_extract_epi8(ptype1, 0)];
+	rx_pkts[3]->packet_type = ptype_tbl[_mm_extract_epi8(ptype1, 8)];
 }
 
  /*
@@ -248,6 +243,7 @@ _recv_raw_pkts_vec(struct i40e_rx_queue *rxq, struct rte_mbuf **rx_pkts,
 	int pos;
 	uint64_t var;
 	__m128i shuf_msk;
+	uint32_t *ptype_tbl = rxq->vsi->adapter->ptype_tbl;
 
 	__m128i crc_adjust = _mm_set_epi16(
 				0, 0, 0,    /* ignore non-length fields */
@@ -320,20 +316,26 @@ _recv_raw_pkts_vec(struct i40e_rx_queue *rxq, struct rte_mbuf **rx_pkts,
 		__m128i descs[RTE_I40E_DESCS_PER_LOOP];
 		__m128i pkt_mb1, pkt_mb2, pkt_mb3, pkt_mb4;
 		__m128i zero, staterr, sterr_tmp1, sterr_tmp2;
-		__m128i mbp1, mbp2; /* two mbuf pointer in one XMM reg. */
+		/* 2 64 bit or 4 32 bit mbuf pointers in one XMM reg. */
+		__m128i mbp1;
+#if defined(RTE_ARCH_X86_64)
+		__m128i mbp2;
+#endif
 
-		/* B.1 load 1 mbuf point */
+		/* B.1 load 2 (64 bit) or 4 (32 bit) mbuf points */
 		mbp1 = _mm_loadu_si128((__m128i *)&sw_ring[pos]);
 		/* Read desc statuses backwards to avoid race condition */
 		/* A.1 load 4 pkts desc */
 		descs[3] = _mm_loadu_si128((__m128i *)(rxdp + 3));
 		rte_compiler_barrier();
 
-		/* B.2 copy 2 mbuf point into rx_pkts  */
+		/* B.2 copy 2 64 bit or 4 32 bit mbuf point into rx_pkts */
 		_mm_storeu_si128((__m128i *)&rx_pkts[pos], mbp1);
 
-		/* B.1 load 1 mbuf point */
+#if defined(RTE_ARCH_X86_64)
+		/* B.1 load 2 64 bit mbuf points */
 		mbp2 = _mm_loadu_si128((__m128i *)&sw_ring[pos+2]);
+#endif
 
 		descs[2] = _mm_loadu_si128((__m128i *)(rxdp + 2));
 		rte_compiler_barrier();
@@ -342,8 +344,10 @@ _recv_raw_pkts_vec(struct i40e_rx_queue *rxq, struct rte_mbuf **rx_pkts,
 		rte_compiler_barrier();
 		descs[0] = _mm_loadu_si128((__m128i *)(rxdp));
 
+#if defined(RTE_ARCH_X86_64)
 		/* B.2 copy 2 mbuf point into rx_pkts  */
 		_mm_storeu_si128((__m128i *)&rx_pkts[pos+2], mbp2);
+#endif
 
 		if (split_packet) {
 			rte_mbuf_prefetch_part2(rx_pkts[pos]);
@@ -372,7 +376,7 @@ _recv_raw_pkts_vec(struct i40e_rx_queue *rxq, struct rte_mbuf **rx_pkts,
 		/* C.1 4=>2 filter staterr info only */
 		sterr_tmp1 = _mm_unpackhi_epi32(descs[1], descs[0]);
 
-		desc_to_olflags_v(descs, &rx_pkts[pos]);
+		desc_to_olflags_v(rxq, descs, &rx_pkts[pos]);
 
 		/* D.2 pkt 3,4 set in_port/nb_seg and remove crc */
 		pkt_mb4 = _mm_add_epi16(pkt_mb4, crc_adjust);
@@ -424,12 +428,6 @@ _recv_raw_pkts_vec(struct i40e_rx_queue *rxq, struct rte_mbuf **rx_pkts,
 			/* store the resulting 32-bit value */
 			*(int *)split_packet = _mm_cvtsi128_si32(eop_bits);
 			split_packet += RTE_I40E_DESCS_PER_LOOP;
-
-			/* zero-out next pointers */
-			rx_pkts[pos]->next = NULL;
-			rx_pkts[pos + 1]->next = NULL;
-			rx_pkts[pos + 2]->next = NULL;
-			rx_pkts[pos + 3]->next = NULL;
 		}
 
 		/* C.3 calc available number of desc */
@@ -441,7 +439,7 @@ _recv_raw_pkts_vec(struct i40e_rx_queue *rxq, struct rte_mbuf **rx_pkts,
 				 pkt_mb2);
 		_mm_storeu_si128((void *)&rx_pkts[pos]->rx_descriptor_fields1,
 				 pkt_mb1);
-		desc_to_ptype_v(descs, &rx_pkts[pos]);
+		desc_to_ptype_v(descs, &rx_pkts[pos], ptype_tbl);
 		/* C.4 calc avaialbe number of desc */
 		var = __builtin_popcountll(_mm_cvtsi128_si64(staterr));
 		nb_pkts_recd += var;
@@ -536,8 +534,8 @@ vtx(volatile struct i40e_tx_desc *txdp,
 }
 
 uint16_t
-i40e_xmit_pkts_vec(void *tx_queue, struct rte_mbuf **tx_pkts,
-		   uint16_t nb_pkts)
+i40e_xmit_fixed_burst_vec(void *tx_queue, struct rte_mbuf **tx_pkts,
+			  uint16_t nb_pkts)
 {
 	struct i40e_tx_queue *txq = (struct i40e_tx_queue *)tx_queue;
 	volatile struct i40e_tx_desc *txdp;

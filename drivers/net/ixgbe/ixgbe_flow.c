@@ -75,104 +75,6 @@
 #include "base/ixgbe_phy.h"
 #include "rte_pmd_ixgbe.h"
 
-static int ixgbe_flow_flush(struct rte_eth_dev *dev,
-		struct rte_flow_error *error);
-static int
-cons_parse_ntuple_filter(const struct rte_flow_attr *attr,
-					const struct rte_flow_item pattern[],
-					const struct rte_flow_action actions[],
-					struct rte_eth_ntuple_filter *filter,
-					struct rte_flow_error *error);
-static int
-ixgbe_parse_ntuple_filter(const struct rte_flow_attr *attr,
-					const struct rte_flow_item pattern[],
-					const struct rte_flow_action actions[],
-					struct rte_eth_ntuple_filter *filter,
-					struct rte_flow_error *error);
-static int
-cons_parse_ethertype_filter(const struct rte_flow_attr *attr,
-			    const struct rte_flow_item *pattern,
-			    const struct rte_flow_action *actions,
-			    struct rte_eth_ethertype_filter *filter,
-			    struct rte_flow_error *error);
-static int
-ixgbe_parse_ethertype_filter(const struct rte_flow_attr *attr,
-				const struct rte_flow_item pattern[],
-				const struct rte_flow_action actions[],
-				struct rte_eth_ethertype_filter *filter,
-				struct rte_flow_error *error);
-static int
-cons_parse_syn_filter(const struct rte_flow_attr *attr,
-		const struct rte_flow_item pattern[],
-		const struct rte_flow_action actions[],
-		struct rte_eth_syn_filter *filter,
-		struct rte_flow_error *error);
-static int
-ixgbe_parse_syn_filter(const struct rte_flow_attr *attr,
-				const struct rte_flow_item pattern[],
-				const struct rte_flow_action actions[],
-				struct rte_eth_syn_filter *filter,
-				struct rte_flow_error *error);
-static int
-cons_parse_l2_tn_filter(const struct rte_flow_attr *attr,
-		const struct rte_flow_item pattern[],
-		const struct rte_flow_action actions[],
-		struct rte_eth_l2_tunnel_conf *filter,
-		struct rte_flow_error *error);
-static int
-ixgbe_validate_l2_tn_filter(struct rte_eth_dev *dev,
-			const struct rte_flow_attr *attr,
-			const struct rte_flow_item pattern[],
-			const struct rte_flow_action actions[],
-			struct rte_eth_l2_tunnel_conf *rule,
-			struct rte_flow_error *error);
-static int
-ixgbe_validate_fdir_filter(struct rte_eth_dev *dev,
-			const struct rte_flow_attr *attr,
-			const struct rte_flow_item pattern[],
-			const struct rte_flow_action actions[],
-			struct ixgbe_fdir_rule *rule,
-			struct rte_flow_error *error);
-static int
-ixgbe_parse_fdir_filter_normal(const struct rte_flow_attr *attr,
-		const struct rte_flow_item pattern[],
-		const struct rte_flow_action actions[],
-		struct ixgbe_fdir_rule *rule,
-		struct rte_flow_error *error);
-static int
-ixgbe_parse_fdir_filter_tunnel(const struct rte_flow_attr *attr,
-		const struct rte_flow_item pattern[],
-		const struct rte_flow_action actions[],
-		struct ixgbe_fdir_rule *rule,
-		struct rte_flow_error *error);
-static int
-ixgbe_parse_fdir_filter(const struct rte_flow_attr *attr,
-		const struct rte_flow_item pattern[],
-		const struct rte_flow_action actions[],
-		struct ixgbe_fdir_rule *rule,
-		struct rte_flow_error *error);
-static int
-ixgbe_flow_validate(__rte_unused struct rte_eth_dev *dev,
-		const struct rte_flow_attr *attr,
-		const struct rte_flow_item pattern[],
-		const struct rte_flow_action actions[],
-		struct rte_flow_error *error);
-static struct rte_flow *ixgbe_flow_create(struct rte_eth_dev *dev,
-		const struct rte_flow_attr *attr,
-		const struct rte_flow_item pattern[],
-		const struct rte_flow_action actions[],
-		struct rte_flow_error *error);
-static int ixgbe_flow_destroy(struct rte_eth_dev *dev,
-		struct rte_flow *flow,
-		struct rte_flow_error *error);
-
-const struct rte_flow_ops ixgbe_flow_ops = {
-	ixgbe_flow_validate,
-	ixgbe_flow_create,
-	ixgbe_flow_destroy,
-	ixgbe_flow_flush,
-	NULL,
-};
 
 #define IXGBE_MIN_N_TUPLE_PRIO 1
 #define IXGBE_MAX_N_TUPLE_PRIO 7
@@ -219,8 +121,8 @@ const struct rte_flow_ops ixgbe_flow_ops = {
  * IPV4		src_addr 192.168.1.20	0xFFFFFFFF
  *		dst_addr 192.167.3.50	0xFFFFFFFF
  *		next_proto_id	17	0xFF
- * UDP/TCP	src_port	80	0xFFFF
- *		dst_port	80	0xFFFF
+ * UDP/TCP/	src_port	80	0xFFFF
+ * SCTP		dst_port	80	0xFFFF
  * END
  * other members in mask and spec should set to 0x00.
  * item->last should be NULL.
@@ -240,6 +142,8 @@ cons_parse_ntuple_filter(const struct rte_flow_attr *attr,
 	const struct rte_flow_item_tcp *tcp_mask;
 	const struct rte_flow_item_udp *udp_spec;
 	const struct rte_flow_item_udp *udp_mask;
+	const struct rte_flow_item_sctp *sctp_spec;
+	const struct rte_flow_item_sctp *sctp_mask;
 	uint32_t index;
 
 	if (!pattern) {
@@ -351,7 +255,8 @@ cons_parse_ntuple_filter(const struct rte_flow_attr *attr,
 	index++;
 	NEXT_ITEM_OF_PATTERN(item, pattern, index);
 	if (item->type != RTE_FLOW_ITEM_TYPE_TCP &&
-	    item->type != RTE_FLOW_ITEM_TYPE_UDP) {
+	    item->type != RTE_FLOW_ITEM_TYPE_UDP &&
+	    item->type != RTE_FLOW_ITEM_TYPE_SCTP) {
 		memset(filter, 0, sizeof(struct rte_eth_ntuple_filter));
 		rte_flow_error_set(error, EINVAL,
 			RTE_FLOW_ERROR_TYPE_ITEM,
@@ -417,7 +322,7 @@ cons_parse_ntuple_filter(const struct rte_flow_attr *attr,
 		filter->dst_port  = tcp_spec->hdr.dst_port;
 		filter->src_port  = tcp_spec->hdr.src_port;
 		filter->tcp_flags = tcp_spec->hdr.tcp_flags;
-	} else {
+	} else if (item->type == RTE_FLOW_ITEM_TYPE_UDP) {
 		udp_mask = (const struct rte_flow_item_udp *)item->mask;
 
 		/**
@@ -440,6 +345,29 @@ cons_parse_ntuple_filter(const struct rte_flow_attr *attr,
 		udp_spec = (const struct rte_flow_item_udp *)item->spec;
 		filter->dst_port = udp_spec->hdr.dst_port;
 		filter->src_port = udp_spec->hdr.src_port;
+	} else {
+		sctp_mask = (const struct rte_flow_item_sctp *)item->mask;
+
+		/**
+		 * Only support src & dst ports,
+		 * others should be masked.
+		 */
+		if (sctp_mask->hdr.tag ||
+		    sctp_mask->hdr.cksum) {
+			memset(filter, 0,
+				sizeof(struct rte_eth_ntuple_filter));
+			rte_flow_error_set(error, EINVAL,
+				RTE_FLOW_ERROR_TYPE_ITEM,
+				item, "Not supported by ntuple filter");
+			return -rte_errno;
+		}
+
+		filter->dst_port_mask = sctp_mask->hdr.dst_port;
+		filter->src_port_mask = sctp_mask->hdr.src_port;
+
+		sctp_spec = (const struct rte_flow_item_sctp *)item->spec;
+		filter->dst_port = sctp_spec->hdr.dst_port;
+		filter->src_port = sctp_spec->hdr.src_port;
 	}
 
 	/* check if the next not void item is END */
@@ -518,13 +446,17 @@ cons_parse_ntuple_filter(const struct rte_flow_attr *attr,
 
 /* a specific function for ixgbe because the flags is specific */
 static int
-ixgbe_parse_ntuple_filter(const struct rte_flow_attr *attr,
+ixgbe_parse_ntuple_filter(struct rte_eth_dev *dev,
+			  const struct rte_flow_attr *attr,
 			  const struct rte_flow_item pattern[],
 			  const struct rte_flow_action actions[],
 			  struct rte_eth_ntuple_filter *filter,
 			  struct rte_flow_error *error)
 {
 	int ret;
+	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+
+	MAC_TYPE_FILTER_SUP_EXT(hw->mac.type);
 
 	ret = cons_parse_ntuple_filter(attr, pattern, actions, filter, error);
 
@@ -766,13 +698,17 @@ cons_parse_ethertype_filter(const struct rte_flow_attr *attr,
 }
 
 static int
-ixgbe_parse_ethertype_filter(const struct rte_flow_attr *attr,
+ixgbe_parse_ethertype_filter(struct rte_eth_dev *dev,
+				 const struct rte_flow_attr *attr,
 			     const struct rte_flow_item pattern[],
 			     const struct rte_flow_action actions[],
 			     struct rte_eth_ethertype_filter *filter,
 			     struct rte_flow_error *error)
 {
 	int ret;
+	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+
+	MAC_TYPE_FILTER_SUP(hw->mac.type);
 
 	ret = cons_parse_ethertype_filter(attr, pattern,
 					actions, filter, error);
@@ -1061,13 +997,17 @@ cons_parse_syn_filter(const struct rte_flow_attr *attr,
 }
 
 static int
-ixgbe_parse_syn_filter(const struct rte_flow_attr *attr,
+ixgbe_parse_syn_filter(struct rte_eth_dev *dev,
+				 const struct rte_flow_attr *attr,
 			     const struct rte_flow_item pattern[],
 			     const struct rte_flow_action actions[],
 			     struct rte_eth_syn_filter *filter,
 			     struct rte_flow_error *error)
 {
 	int ret;
+	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+
+	MAC_TYPE_FILTER_SUP(hw->mac.type);
 
 	ret = cons_parse_syn_filter(attr, pattern,
 					actions, filter, error);
@@ -1250,7 +1190,7 @@ cons_parse_l2_tn_filter(const struct rte_flow_attr *attr,
 }
 
 static int
-ixgbe_validate_l2_tn_filter(struct rte_eth_dev *dev,
+ixgbe_parse_l2_tn_filter(struct rte_eth_dev *dev,
 			const struct rte_flow_attr *attr,
 			const struct rte_flow_item pattern[],
 			const struct rte_flow_action actions[],
@@ -1401,7 +1341,6 @@ ixgbe_parse_fdir_act_attr(const struct rte_flow_attr *attr,
 		{0xAC, 0x7B, 0xA1,	{0xFF, 0xFF, 0xFF,
 		0x2C, 0x6D, 0x36}	0xFF, 0xFF, 0xFF}
  * MAC VLAN	tci	0x2016		0xEFFF
- *		tpid	0x8100		0xFFFF
  * END
  * Other members in mask and spec should set to 0x00.
  * Item->last should be NULL.
@@ -1599,23 +1538,8 @@ ixgbe_parse_fdir_filter_normal(const struct rte_flow_attr *attr,
 		vlan_spec = (const struct rte_flow_item_vlan *)item->spec;
 		vlan_mask = (const struct rte_flow_item_vlan *)item->mask;
 
-		if (vlan_spec->tpid != rte_cpu_to_be_16(ETHER_TYPE_VLAN)) {
-			memset(rule, 0, sizeof(struct ixgbe_fdir_rule));
-			rte_flow_error_set(error, EINVAL,
-				RTE_FLOW_ERROR_TYPE_ITEM,
-				item, "Not supported by fdir filter");
-			return -rte_errno;
-		}
-
 		rule->ixgbe_fdir.formatted.vlan_id = vlan_spec->tci;
 
-		if (vlan_mask->tpid != (uint16_t)~0U) {
-			memset(rule, 0, sizeof(struct ixgbe_fdir_rule));
-			rte_flow_error_set(error, EINVAL,
-				RTE_FLOW_ERROR_TYPE_ITEM,
-				item, "Not supported by fdir filter");
-			return -rte_errno;
-		}
 		rule->mask.vlan_tci_mask = vlan_mask->tci;
 		rule->mask.vlan_tci_mask &= rte_cpu_to_be_16(0xEFFF);
 		/* More than one tags are not supported. */
@@ -1910,6 +1834,7 @@ ixgbe_parse_fdir_filter_normal(const struct rte_flow_attr *attr,
  * IPV4/IPV6	NULL			NULL
  * UDP		NULL			NULL
  * VxLAN	vni{0x00, 0x32, 0x54}	{0xFF, 0xFF, 0xFF}
+ * MAC VLAN	tci	0x2016		0xEFFF
  * END
  * NEGRV pattern example:
  * ITEM		Spec			Mask
@@ -1917,6 +1842,7 @@ ixgbe_parse_fdir_filter_normal(const struct rte_flow_attr *attr,
  * IPV4/IPV6	NULL			NULL
  * NVGRE	protocol	0x6558	0xFFFF
  *		tni{0x00, 0x32, 0x54}	{0xFF, 0xFF, 0xFF}
+ * MAC VLAN	tci	0x2016		0xEFFF
  * END
  * other members in mask and spec should set to 0x00.
  * item->last should be NULL.
@@ -2317,7 +2243,7 @@ ixgbe_parse_fdir_filter_tunnel(const struct rte_flow_attr *attr,
 	index++;
 	NEXT_ITEM_OF_PATTERN(item, pattern, index);
 	if ((item->type != RTE_FLOW_ITEM_TYPE_VLAN) &&
-		(item->type != RTE_FLOW_ITEM_TYPE_VLAN)) {
+		(item->type != RTE_FLOW_ITEM_TYPE_IPV4)) {
 		memset(rule, 0, sizeof(struct ixgbe_fdir_rule));
 		rte_flow_error_set(error, EINVAL,
 			RTE_FLOW_ERROR_TYPE_ITEM,
@@ -2344,48 +2270,16 @@ ixgbe_parse_fdir_filter_tunnel(const struct rte_flow_attr *attr,
 		vlan_spec = (const struct rte_flow_item_vlan *)item->spec;
 		vlan_mask = (const struct rte_flow_item_vlan *)item->mask;
 
-		if (vlan_spec->tpid != rte_cpu_to_be_16(ETHER_TYPE_VLAN)) {
-			memset(rule, 0, sizeof(struct ixgbe_fdir_rule));
-			rte_flow_error_set(error, EINVAL,
-				RTE_FLOW_ERROR_TYPE_ITEM,
-				item, "Not supported by fdir filter");
-			return -rte_errno;
-		}
-
 		rule->ixgbe_fdir.formatted.vlan_id = vlan_spec->tci;
 
-		if (vlan_mask->tpid != (uint16_t)~0U) {
-			memset(rule, 0, sizeof(struct ixgbe_fdir_rule));
-			rte_flow_error_set(error, EINVAL,
-				RTE_FLOW_ERROR_TYPE_ITEM,
-				item, "Not supported by fdir filter");
-			return -rte_errno;
-		}
 		rule->mask.vlan_tci_mask = vlan_mask->tci;
 		rule->mask.vlan_tci_mask &= rte_cpu_to_be_16(0xEFFF);
 		/* More than one tags are not supported. */
 
-		/**
-		 * Check if the next not void item is not vlan.
-		 */
-		index++;
-		NEXT_ITEM_OF_PATTERN(item, pattern, index);
-		if (item->type == RTE_FLOW_ITEM_TYPE_VLAN) {
-			memset(rule, 0, sizeof(struct ixgbe_fdir_rule));
-			rte_flow_error_set(error, EINVAL,
-				RTE_FLOW_ERROR_TYPE_ITEM,
-				item, "Not supported by fdir filter");
-			return -rte_errno;
-		} else if (item->type != RTE_FLOW_ITEM_TYPE_END) {
-			memset(rule, 0, sizeof(struct ixgbe_fdir_rule));
-			rte_flow_error_set(error, EINVAL,
-				RTE_FLOW_ERROR_TYPE_ITEM,
-				item, "Not supported by fdir filter");
-			return -rte_errno;
-		}
 		/* check if the next not void item is END */
 		index++;
 		NEXT_ITEM_OF_PATTERN(item, pattern, index);
+
 		if (item->type != RTE_FLOW_ITEM_TYPE_END) {
 			memset(rule, 0, sizeof(struct ixgbe_fdir_rule));
 			rte_flow_error_set(error, EINVAL,
@@ -2404,46 +2298,37 @@ ixgbe_parse_fdir_filter_tunnel(const struct rte_flow_attr *attr,
 }
 
 static int
-ixgbe_validate_fdir_filter(struct rte_eth_dev *dev,
+ixgbe_parse_fdir_filter(struct rte_eth_dev *dev,
 			const struct rte_flow_attr *attr,
 			const struct rte_flow_item pattern[],
 			const struct rte_flow_action actions[],
 			struct ixgbe_fdir_rule *rule,
 			struct rte_flow_error *error)
 {
-	int ret = 0;
-
+	int ret;
+	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	enum rte_fdir_mode fdir_mode = dev->data->dev_conf.fdir_conf.mode;
 
-	ixgbe_parse_fdir_filter(attr, pattern, actions,
-				rule, error);
-
-
-	if (fdir_mode == RTE_FDIR_MODE_NONE ||
-	    fdir_mode != rule->mode)
+	if (hw->mac.type != ixgbe_mac_82599EB &&
+		hw->mac.type != ixgbe_mac_X540 &&
+		hw->mac.type != ixgbe_mac_X550 &&
+		hw->mac.type != ixgbe_mac_X550EM_x &&
+		hw->mac.type != ixgbe_mac_X550EM_a)
 		return -ENOTSUP;
-
-	return ret;
-}
-
-static int
-ixgbe_parse_fdir_filter(const struct rte_flow_attr *attr,
-			const struct rte_flow_item pattern[],
-			const struct rte_flow_action actions[],
-			struct ixgbe_fdir_rule *rule,
-			struct rte_flow_error *error)
-{
-	int ret;
 
 	ret = ixgbe_parse_fdir_filter_normal(attr, pattern,
 					actions, rule, error);
 
 	if (!ret)
-		return 0;
+		goto step_next;
 
 	ret = ixgbe_parse_fdir_filter_tunnel(attr, pattern,
 					actions, rule, error);
 
+step_next:
+	if (fdir_mode == RTE_FDIR_MODE_NONE ||
+	    fdir_mode != rule->mode)
+		return -ENOTSUP;
 	return ret;
 }
 
@@ -2547,7 +2432,7 @@ ixgbe_flow_create(struct rte_eth_dev *dev,
 				ixgbe_flow_mem_ptr, entries);
 
 	memset(&ntuple_filter, 0, sizeof(struct rte_eth_ntuple_filter));
-	ret = ixgbe_parse_ntuple_filter(attr, pattern,
+	ret = ixgbe_parse_ntuple_filter(dev, attr, pattern,
 			actions, &ntuple_filter, error);
 	if (!ret) {
 		ret = ixgbe_add_del_ntuple_filter(dev, &ntuple_filter, TRUE);
@@ -2567,7 +2452,7 @@ ixgbe_flow_create(struct rte_eth_dev *dev,
 	}
 
 	memset(&ethertype_filter, 0, sizeof(struct rte_eth_ethertype_filter));
-	ret = ixgbe_parse_ethertype_filter(attr, pattern,
+	ret = ixgbe_parse_ethertype_filter(dev, attr, pattern,
 				actions, &ethertype_filter, error);
 	if (!ret) {
 		ret = ixgbe_add_del_ethertype_filter(dev,
@@ -2589,7 +2474,8 @@ ixgbe_flow_create(struct rte_eth_dev *dev,
 	}
 
 	memset(&syn_filter, 0, sizeof(struct rte_eth_syn_filter));
-	ret = cons_parse_syn_filter(attr, pattern, actions, &syn_filter, error);
+	ret = ixgbe_parse_syn_filter(dev, attr, pattern,
+				actions, &syn_filter, error);
 	if (!ret) {
 		ret = ixgbe_syn_filter_set(dev, &syn_filter, TRUE);
 		if (!ret) {
@@ -2609,7 +2495,7 @@ ixgbe_flow_create(struct rte_eth_dev *dev,
 	}
 
 	memset(&fdir_rule, 0, sizeof(struct ixgbe_fdir_rule));
-	ret = ixgbe_parse_fdir_filter(attr, pattern,
+	ret = ixgbe_parse_fdir_filter(dev, attr, pattern,
 				actions, &fdir_rule, error);
 	if (!ret) {
 		/* A mask cannot be deleted. */
@@ -2662,7 +2548,7 @@ ixgbe_flow_create(struct rte_eth_dev *dev,
 	}
 
 	memset(&l2_tn_filter, 0, sizeof(struct rte_eth_l2_tunnel_conf));
-	ret = cons_parse_l2_tn_filter(attr, pattern,
+	ret = ixgbe_parse_l2_tn_filter(dev, attr, pattern,
 					actions, &l2_tn_filter, error);
 	if (!ret) {
 		ret = ixgbe_dev_l2_tunnel_filter_add(dev, &l2_tn_filter, FALSE);
@@ -2683,6 +2569,9 @@ ixgbe_flow_create(struct rte_eth_dev *dev,
 out:
 	TAILQ_REMOVE(&ixgbe_flow_list,
 		ixgbe_flow_mem_ptr, entries);
+	rte_flow_error_set(error, -ret,
+			   RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
+			   "Failed to create flow.");
 	rte_free(ixgbe_flow_mem_ptr);
 	rte_free(flow);
 	return NULL;
@@ -2708,31 +2597,31 @@ ixgbe_flow_validate(__rte_unused struct rte_eth_dev *dev,
 	int ret;
 
 	memset(&ntuple_filter, 0, sizeof(struct rte_eth_ntuple_filter));
-	ret = ixgbe_parse_ntuple_filter(attr, pattern,
+	ret = ixgbe_parse_ntuple_filter(dev, attr, pattern,
 				actions, &ntuple_filter, error);
 	if (!ret)
 		return 0;
 
 	memset(&ethertype_filter, 0, sizeof(struct rte_eth_ethertype_filter));
-	ret = ixgbe_parse_ethertype_filter(attr, pattern,
+	ret = ixgbe_parse_ethertype_filter(dev, attr, pattern,
 				actions, &ethertype_filter, error);
 	if (!ret)
 		return 0;
 
 	memset(&syn_filter, 0, sizeof(struct rte_eth_syn_filter));
-	ret = ixgbe_parse_syn_filter(attr, pattern,
+	ret = ixgbe_parse_syn_filter(dev, attr, pattern,
 				actions, &syn_filter, error);
 	if (!ret)
 		return 0;
 
 	memset(&fdir_rule, 0, sizeof(struct ixgbe_fdir_rule));
-	ret = ixgbe_validate_fdir_filter(dev, attr, pattern,
+	ret = ixgbe_parse_fdir_filter(dev, attr, pattern,
 				actions, &fdir_rule, error);
 	if (!ret)
 		return 0;
 
 	memset(&l2_tn_filter, 0, sizeof(struct rte_eth_l2_tunnel_conf));
-	ret = ixgbe_validate_l2_tn_filter(dev, attr, pattern,
+	ret = ixgbe_parse_l2_tn_filter(dev, attr, pattern,
 				actions, &l2_tn_filter, error);
 
 	return ret;
@@ -2879,3 +2768,11 @@ ixgbe_flow_flush(struct rte_eth_dev *dev,
 
 	return 0;
 }
+
+const struct rte_flow_ops ixgbe_flow_ops = {
+	ixgbe_flow_validate,
+	ixgbe_flow_create,
+	ixgbe_flow_destroy,
+	ixgbe_flow_flush,
+	NULL,
+};

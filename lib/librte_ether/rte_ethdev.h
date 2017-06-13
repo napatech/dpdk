@@ -179,7 +179,6 @@ extern "C" {
 
 #include <rte_log.h>
 #include <rte_interrupts.h>
-#include <rte_pci.h>
 #include <rte_dev.h>
 #include <rte_devargs.h>
 #include <rte_errno.h>
@@ -576,7 +575,7 @@ struct rte_eth_rss_reta_entry64 {
 
 /**
  * This enum indicates the possible number of traffic classes
- * in DCB configratioins
+ * in DCB configurations
  */
 enum rte_eth_nb_tcs {
 	ETH_4_TCS = 4, /**< 4 TCs with DCB. */
@@ -827,9 +826,11 @@ struct rte_eth_udp_tunnel {
  */
 struct rte_intr_conf {
 	/** enable/disable lsc interrupt. 0 (default) - disable, 1 enable */
-	uint16_t lsc;
+	uint32_t lsc:1;
 	/** enable/disable rxq interrupt. 0 (default) - disable, 1 enable */
-	uint16_t rxq;
+	uint32_t rxq:1;
+	/** enable/disable rmv interrupt. 0 (default) - disable, 1 enable */
+	uint32_t rmv:1;
 };
 
 /**
@@ -911,6 +912,8 @@ struct rte_eth_conf {
 #define DEV_TX_OFFLOAD_IPIP_TNL_TSO     0x00000800    /**< Used for tunneling packet. */
 #define DEV_TX_OFFLOAD_GENEVE_TNL_TSO   0x00001000    /**< Used for tunneling packet. */
 #define DEV_TX_OFFLOAD_MACSEC_INSERT    0x00002000
+
+struct rte_pci_device;
 
 /**
  * Ethernet device information
@@ -1041,15 +1044,6 @@ struct rte_eth_dev_callback;
 /** @internal Structure to keep track of registered callbacks */
 TAILQ_HEAD(rte_eth_dev_cb_list, rte_eth_dev_callback);
 
-
-#ifdef RTE_LIBRTE_ETHDEV_DEBUG
-#define RTE_PMD_DEBUG_TRACE(...) \
-	rte_pmd_debug_trace(__func__, __VA_ARGS__)
-#else
-#define RTE_PMD_DEBUG_TRACE(...)
-#endif
-
-
 /* Macros to check for valid port */
 #define RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, retval) do { \
 	if (!rte_eth_dev_is_valid_port(port_id)) { \
@@ -1129,11 +1123,22 @@ typedef int (*eth_xstats_get_t)(struct rte_eth_dev *dev,
 	struct rte_eth_xstat *stats, unsigned n);
 /**< @internal Get extended stats of an Ethernet device. */
 
+typedef int (*eth_xstats_get_by_id_t)(struct rte_eth_dev *dev,
+				      const uint64_t *ids,
+				      uint64_t *values,
+				      unsigned int n);
+/**< @internal Get extended stats of an Ethernet device. */
+
 typedef void (*eth_xstats_reset_t)(struct rte_eth_dev *dev);
 /**< @internal Reset extended stats of an Ethernet device. */
 
 typedef int (*eth_xstats_get_names_t)(struct rte_eth_dev *dev,
 	struct rte_eth_xstat_name *xstats_names, unsigned size);
+/**< @internal Get names of extended stats of an Ethernet device. */
+
+typedef int (*eth_xstats_get_names_by_id_t)(struct rte_eth_dev *dev,
+	struct rte_eth_xstat_name *xstats_names, const uint64_t *ids,
+	unsigned int size);
 /**< @internal Get names of extended stats of an Ethernet device. */
 
 typedef int (*eth_queue_stats_mapping_set_t)(struct rte_eth_dev *dev,
@@ -1185,14 +1190,23 @@ typedef void (*eth_queue_release_t)(void *queue);
 
 typedef uint32_t (*eth_rx_queue_count_t)(struct rte_eth_dev *dev,
 					 uint16_t rx_queue_id);
-/**< @internal Get number of available descriptors on a receive queue of an Ethernet device. */
+/**< @internal Get number of used descriptors on a receive queue. */
 
 typedef int (*eth_rx_descriptor_done_t)(void *rxq, uint16_t offset);
 /**< @internal Check DD bit of specific RX descriptor */
 
+typedef int (*eth_rx_descriptor_status_t)(void *rxq, uint16_t offset);
+/**< @internal Check the status of a Rx descriptor */
+
+typedef int (*eth_tx_descriptor_status_t)(void *txq, uint16_t offset);
+/**< @internal Check the status of a Tx descriptor */
+
 typedef int (*eth_fw_version_get_t)(struct rte_eth_dev *dev,
 				     char *fw_version, size_t fw_size);
 /**< @internal Get firmware information of an Ethernet device. */
+
+typedef int (*eth_tx_done_cleanup_t)(void *txq, uint32_t free_cnt);
+/**< @internal Force mbufs to be from TX ring. */
 
 typedef void (*eth_rxq_info_get_t)(struct rte_eth_dev *dev,
 	uint16_t rx_queue_id, struct rte_eth_rxq_info *qinfo);
@@ -1279,7 +1293,7 @@ typedef int (*eth_dev_led_off_t)(struct rte_eth_dev *dev);
 typedef void (*eth_mac_addr_remove_t)(struct rte_eth_dev *dev, uint32_t index);
 /**< @internal Remove MAC address from receive address register */
 
-typedef void (*eth_mac_addr_add_t)(struct rte_eth_dev *dev,
+typedef int (*eth_mac_addr_add_t)(struct rte_eth_dev *dev,
 				  struct ether_addr *mac_addr,
 				  uint32_t index,
 				  uint32_t vmdq);
@@ -1492,12 +1506,18 @@ struct eth_dev_ops {
 	eth_queue_stop_t           tx_queue_stop; /**< Stop TX for a queue. */
 	eth_rx_queue_setup_t       rx_queue_setup;/**< Set up device RX queue. */
 	eth_queue_release_t        rx_queue_release; /**< Release RX queue. */
-	eth_rx_queue_count_t       rx_queue_count;/**< Get Rx queue count. */
+	eth_rx_queue_count_t       rx_queue_count;
+	/**< Get the number of used RX descriptors. */
 	eth_rx_descriptor_done_t   rx_descriptor_done; /**< Check rxd DD bit. */
+	eth_rx_descriptor_status_t rx_descriptor_status;
+	/**< Check the status of a Rx descriptor. */
+	eth_tx_descriptor_status_t tx_descriptor_status;
+	/**< Check the status of a Tx descriptor. */
 	eth_rx_enable_intr_t       rx_queue_intr_enable;  /**< Enable Rx queue interrupt. */
 	eth_rx_disable_intr_t      rx_queue_intr_disable; /**< Disable Rx queue interrupt. */
 	eth_tx_queue_setup_t       tx_queue_setup;/**< Set up device TX queue. */
 	eth_queue_release_t        tx_queue_release; /**< Release TX queue. */
+	eth_tx_done_cleanup_t      tx_done_cleanup;/**< Free tx ring mbufs */
 
 	eth_dev_led_on_t           dev_led_on;    /**< Turn on LED. */
 	eth_dev_led_off_t          dev_led_off;   /**< Turn off LED. */
@@ -1559,6 +1579,11 @@ struct eth_dev_ops {
 	eth_timesync_adjust_time   timesync_adjust_time; /** Adjust the device clock. */
 	eth_timesync_read_time     timesync_read_time; /** Get the device clock time. */
 	eth_timesync_write_time    timesync_write_time; /** Set the device clock time. */
+
+	eth_xstats_get_by_id_t     xstats_get_by_id;
+	/**< Get extended device statistic values by ID. */
+	eth_xstats_get_names_by_id_t xstats_get_names_by_id;
+	/**< Get name of extended device statistics by ID. */
 };
 
 /**
@@ -1625,6 +1650,14 @@ struct rte_eth_rxtx_callback {
 };
 
 /**
+ * A set of values to describe the possible states of an eth device.
+ */
+enum rte_eth_dev_state {
+	RTE_ETH_DEV_UNUSED = 0,
+	RTE_ETH_DEV_ATTACHED,
+};
+
+/**
  * @internal
  * The generic data structure associated with each ethernet device.
  *
@@ -1639,7 +1672,6 @@ struct rte_eth_dev {
 	eth_tx_burst_t tx_pkt_burst; /**< Pointer to PMD transmit function. */
 	eth_tx_prep_t tx_pkt_prepare; /**< Pointer to PMD transmit prepare function. */
 	struct rte_eth_dev_data *data;  /**< Pointer to device data */
-	const struct eth_driver *driver;/**< Driver for this device */
 	const struct eth_dev_ops *dev_ops; /**< Functions exported by PMD */
 	struct rte_device *device; /**< Backing device */
 	struct rte_intr_handle *intr_handle; /**< Device interrupt handle */
@@ -1655,7 +1687,7 @@ struct rte_eth_dev {
 	 * received packets before passing them to the driver for transmission.
 	 */
 	struct rte_eth_rxtx_callback *pre_tx_burst_cbs[RTE_MAX_QUEUES_PER_PORT];
-	uint8_t attached; /**< Flag indicating the port is attached */
+	enum rte_eth_dev_state state; /**< Flag indicating the port state */
 } __rte_cache_aligned;
 
 struct rte_eth_dev_sriov {
@@ -1725,6 +1757,8 @@ struct rte_eth_dev_data {
 #define RTE_ETH_DEV_INTR_LSC     0x0002
 /** Device is a bonded slave */
 #define RTE_ETH_DEV_BONDED_SLAVE 0x0004
+/** Device supports device removal interrupt */
+#define RTE_ETH_DEV_INTR_RMV     0x0008
 
 /**
  * @internal
@@ -1734,6 +1768,25 @@ struct rte_eth_dev_data {
 extern struct rte_eth_dev rte_eth_devices[];
 
 /**
+ * Iterates over valid ethdev ports.
+ *
+ * @param port_id
+ *   The id of the next possible valid port.
+ * @return
+ *   Next valid port id, RTE_MAX_ETHPORTS if there is none.
+ */
+uint8_t rte_eth_find_next(uint8_t port_id);
+
+/**
+ * Macro to iterate over all enabled ethdev ports.
+ */
+#define RTE_ETH_FOREACH_DEV(p)					\
+	for (p = rte_eth_find_next(0);				\
+	     (unsigned int)p < (unsigned int)RTE_MAX_ETHPORTS;	\
+	     p = rte_eth_find_next(p + 1))
+
+
+/**
  * Get the total number of Ethernet devices that have been successfully
  * initialized by the [matching] Ethernet driver during the PCI probing phase.
  * All devices whose port identifier is in the range
@@ -1741,7 +1794,7 @@ extern struct rte_eth_dev rte_eth_devices[];
  * immediately after invoking rte_eal_init().
  * If the application unplugs a port using hotplug function, The enabled port
  * numbers may be noncontiguous. In the case, the applications need to manage
- * enabled port by themselves.
+ * enabled port by using the ``RTE_ETH_FOREACH_DEV()`` macro.
  *
  * @return
  *   - The total number of usable Ethernet devices.
@@ -1773,6 +1826,19 @@ struct rte_eth_dev *rte_eth_dev_allocate(const char *name);
 
 /**
  * @internal
+ * Attach to the ethdev already initialized by the primary
+ * process.
+ *
+ * @param       name    Ethernet device's name.
+ * @return
+ *   - Success: Slot in the rte_dev_devices array for attached
+ *        device.
+ *   - Error: Null pointer.
+ */
+struct rte_eth_dev *rte_eth_dev_attach_secondary(const char *name);
+
+/**
+ * @internal
  * Release the specified ethdev port.
  *
  * @param eth_dev
@@ -1783,7 +1849,7 @@ struct rte_eth_dev *rte_eth_dev_allocate(const char *name);
 int rte_eth_dev_release_port(struct rte_eth_dev *eth_dev);
 
 /**
- * Attach a new Ethernet device specified by aruguments.
+ * Attach a new Ethernet device specified by arguments.
  *
  * @param devargs
  *  A pointer to a strings array describing the new device
@@ -1809,78 +1875,6 @@ int rte_eth_dev_attach(const char *devargs, uint8_t *port_id);
  *  0 on success and devname is filled, negative on error
  */
 int rte_eth_dev_detach(uint8_t port_id, char *devname);
-
-struct eth_driver;
-/**
- * @internal
- * Initialization function of an Ethernet driver invoked for each matching
- * Ethernet PCI device detected during the PCI probing phase.
- *
- * @param eth_dev
- *   The *eth_dev* pointer is the address of the *rte_eth_dev* structure
- *   associated with the matching device and which have been [automatically]
- *   allocated in the *rte_eth_devices* array.
- *   The *eth_dev* structure is supplied to the driver initialization function
- *   with the following fields already initialized:
- *
- *   - *pci_dev*: Holds the pointers to the *rte_pci_device* structure which
- *     contains the generic PCI information of the matching device.
- *
- *   - *driver*: Holds the pointer to the *eth_driver* structure.
- *
- *   - *dev_private*: Holds a pointer to the device private data structure.
- *
- *   - *mtu*: Contains the default Ethernet maximum frame length (1500).
- *
- *   - *port_id*: Contains the port index of the device (actually the index
- *     of the *eth_dev* structure in the *rte_eth_devices* array).
- *
- * @return
- *   - 0: Success, the device is properly initialized by the driver.
- *        In particular, the driver MUST have set up the *dev_ops* pointer
- *        of the *eth_dev* structure.
- *   - <0: Error code of the device initialization failure.
- */
-typedef int (*eth_dev_init_t)(struct rte_eth_dev *eth_dev);
-
-/**
- * @internal
- * Finalization function of an Ethernet driver invoked for each matching
- * Ethernet PCI device detected during the PCI closing phase.
- *
- * @param eth_dev
- *   The *eth_dev* pointer is the address of the *rte_eth_dev* structure
- *   associated with the matching device and which have been [automatically]
- *   allocated in the *rte_eth_devices* array.
- * @return
- *   - 0: Success, the device is properly finalized by the driver.
- *        In particular, the driver MUST free the *dev_ops* pointer
- *        of the *eth_dev* structure.
- *   - <0: Error code of the device initialization failure.
- */
-typedef int (*eth_dev_uninit_t)(struct rte_eth_dev *eth_dev);
-
-/**
- * @internal
- * The structure associated with a PMD Ethernet driver.
- *
- * Each Ethernet driver acts as a PCI driver and is represented by a generic
- * *eth_driver* structure that holds:
- *
- * - An *rte_pci_driver* structure (which must be the first field).
- *
- * - The *eth_dev_init* function invoked for each matching PCI device.
- *
- * - The *eth_dev_uninit* function invoked for each matching PCI device.
- *
- * - The size of the private data to allocate for each matching device.
- */
-struct eth_driver {
-	struct rte_pci_driver pci_drv;    /**< The PMD is also a PCI driver. */
-	eth_dev_init_t eth_dev_init;      /**< Device init function. */
-	eth_dev_uninit_t eth_dev_uninit;  /**< Device uninit function. */
-	unsigned int dev_private_size;    /**< Size of device private data. */
-};
 
 /**
  * Convert a numerical speed in Mbps to a bitmap flag that can be used in
@@ -2315,7 +2309,7 @@ void rte_eth_stats_reset(uint8_t port_id);
  */
 int rte_eth_xstats_get_names(uint8_t port_id,
 		struct rte_eth_xstat_name *xstats_names,
-		unsigned size);
+		unsigned int size);
 
 /**
  * Retrieve extended statistics of an Ethernet device.
@@ -2340,7 +2334,80 @@ int rte_eth_xstats_get_names(uint8_t port_id,
  *   - A negative value on error (invalid port id).
  */
 int rte_eth_xstats_get(uint8_t port_id, struct rte_eth_xstat *xstats,
-		unsigned n);
+		unsigned int n);
+
+/**
+ * Retrieve names of extended statistics of an Ethernet device.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param xstats_names
+ *   An rte_eth_xstat_name array of at least *size* elements to
+ *   be filled. If set to NULL, the function returns the required number
+ *   of elements.
+ * @param ids
+ *   IDs array given by app to retrieve specific statistics
+ * @param size
+ *   The size of the xstats_names array (number of elements).
+ * @return
+ *   - A positive value lower or equal to size: success. The return value
+ *     is the number of entries filled in the stats table.
+ *   - A positive value higher than size: error, the given statistics table
+ *     is too small. The return value corresponds to the size that should
+ *     be given to succeed. The entries in the table are not valid and
+ *     shall not be used by the caller.
+ *   - A negative value on error (invalid port id).
+ */
+int
+rte_eth_xstats_get_names_by_id(uint8_t port_id,
+	struct rte_eth_xstat_name *xstats_names, unsigned int size,
+	uint64_t *ids);
+
+/**
+ * Retrieve extended statistics of an Ethernet device.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param ids
+ *   A pointer to an ids array passed by application. This tells wich
+ *   statistics values function should retrieve. This parameter
+ *   can be set to NULL if n is 0. In this case function will retrieve
+ *   all avalible statistics.
+ * @param values
+ *   A pointer to a table to be filled with device statistics values.
+ * @param n
+ *   The size of the ids array (number of elements).
+ * @return
+ *   - A positive value lower or equal to n: success. The return value
+ *     is the number of entries filled in the stats table.
+ *   - A positive value higher than n: error, the given statistics table
+ *     is too small. The return value corresponds to the size that should
+ *     be given to succeed. The entries in the table are not valid and
+ *     shall not be used by the caller.
+ *   - A negative value on error (invalid port id).
+ */
+int rte_eth_xstats_get_by_id(uint8_t port_id, const uint64_t *ids,
+			     uint64_t *values, unsigned int n);
+
+/**
+ * Gets the ID of a statistic from its name.
+ *
+ * This function searches for the statistics using string compares, and
+ * as such should not be used on the fast-path. For fast-path retrieval of
+ * specific statistics, store the ID as provided in *id* from this function,
+ * and pass the ID to rte_eth_xstats_get()
+ *
+ * @param port_id The port to look up statistics from
+ * @param xstat_name The name of the statistic to return
+ * @param[out] id A pointer to an app-supplied uint64_t which should be
+ *                set to the ID of the stat if the stat exists.
+ * @return
+ *    0 on success
+ *    -ENODEV for invalid port_id,
+ *    -EINVAL if the xstat_name doesn't exist in port_id
+ */
+int rte_eth_xstats_get_id_by_name(uint8_t port_id, const char *xstat_name,
+		uint64_t *id);
 
 /**
  * Reset extended statistics of an Ethernet device.
@@ -2463,7 +2530,7 @@ int rte_eth_dev_fw_version_get(uint8_t port_id,
  * @param ptype_mask
  *   A hint of what kind of packet type which the caller is interested in.
  * @param ptypes
- *   An array pointer to store adequent packet types, allocated by caller.
+ *   An array pointer to store adequate packet types, allocated by caller.
  * @param num
  *  Size of the array pointed by param ptypes.
  * @return
@@ -2603,12 +2670,12 @@ int rte_eth_dev_set_vlan_offload(uint8_t port_id, int offload_mask);
 int rte_eth_dev_get_vlan_offload(uint8_t port_id);
 
 /**
- * Set port based TX VLAN insersion on or off.
+ * Set port based TX VLAN insertion on or off.
  *
  * @param port_id
  *  The port identifier of the Ethernet device.
  * @param pvid
- *  Port based TX VLAN identifier togeth with user priority.
+ *  Port based TX VLAN identifier together with user priority.
  * @param on
  *  Turn on or off the port based TX VLAN insertion.
  *
@@ -2665,7 +2732,7 @@ int rte_eth_dev_set_vlan_pvid(uint8_t port_id, uint16_t pvid, int on);
  *   method to retrieve bursts of received packets and to immediately
  *   queue them for further parallel processing by another logical core,
  *   for instance. However, instead of having received packets being
- *   individually queued by the driver, this approach allows the invoker
+ *   individually queued by the driver, this approach allows the caller
  *   of the rte_eth_rx_burst() function to queue a burst of retrieved
  *   packets at a time and therefore dramatically reduce the cost of
  *   enqueue/dequeue operations per packet.
@@ -2734,7 +2801,7 @@ rte_eth_rx_burst(uint8_t port_id, uint16_t queue_id,
 }
 
 /**
- * Get the number of used descriptors in a specific queue
+ * Get the number of used descriptors of a rx queue
  *
  * @param port_id
  *  The port identifier of the Ethernet device.
@@ -2742,16 +2809,21 @@ rte_eth_rx_burst(uint8_t port_id, uint16_t queue_id,
  *  The queue id on the specific port.
  * @return
  *  The number of used descriptors in the specific queue, or:
- *     (-EINVAL) if *port_id* is invalid
+ *     (-EINVAL) if *port_id* or *queue_id* is invalid
  *     (-ENOTSUP) if the device does not support this function
  */
 static inline int
 rte_eth_rx_queue_count(uint8_t port_id, uint16_t queue_id)
 {
-	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
+	struct rte_eth_dev *dev;
+
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -EINVAL);
+	dev = &rte_eth_devices[port_id];
 	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->rx_queue_count, -ENOTSUP);
-        return (*dev->dev_ops->rx_queue_count)(dev, queue_id);
+	if (queue_id >= dev->data->nb_rx_queues)
+		return -EINVAL;
+
+	return (*dev->dev_ops->rx_queue_count)(dev, queue_id);
 }
 
 /**
@@ -2777,6 +2849,121 @@ rte_eth_rx_descriptor_done(uint8_t port_id, uint16_t queue_id, uint16_t offset)
 	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->rx_descriptor_done, -ENOTSUP);
 	return (*dev->dev_ops->rx_descriptor_done)( \
 		dev->data->rx_queues[queue_id], offset);
+}
+
+#define RTE_ETH_RX_DESC_AVAIL    0 /**< Desc available for hw. */
+#define RTE_ETH_RX_DESC_DONE     1 /**< Desc done, filled by hw. */
+#define RTE_ETH_RX_DESC_UNAVAIL  2 /**< Desc used by driver or hw. */
+
+/**
+ * Check the status of a Rx descriptor in the queue
+ *
+ * It should be called in a similar context than the Rx function:
+ * - on a dataplane core
+ * - not concurrently on the same queue
+ *
+ * Since it's a dataplane function, no check is performed on port_id and
+ * queue_id. The caller must therefore ensure that the port is enabled
+ * and the queue is configured and running.
+ *
+ * Note: accessing to a random descriptor in the ring may trigger cache
+ * misses and have a performance impact.
+ *
+ * @param port_id
+ *  A valid port identifier of the Ethernet device which.
+ * @param queue_id
+ *  A valid Rx queue identifier on this port.
+ * @param offset
+ *  The offset of the descriptor starting from tail (0 is the next
+ *  packet to be received by the driver).
+ *
+ * @return
+ *  - (RTE_ETH_RX_DESC_AVAIL): Descriptor is available for the hardware to
+ *    receive a packet.
+ *  - (RTE_ETH_RX_DESC_DONE): Descriptor is done, it is filled by hw, but
+ *    not yet processed by the driver (i.e. in the receive queue).
+ *  - (RTE_ETH_RX_DESC_UNAVAIL): Descriptor is unavailable, either hold by
+ *    the driver and not yet returned to hw, or reserved by the hw.
+ *  - (-EINVAL) bad descriptor offset.
+ *  - (-ENOTSUP) if the device does not support this function.
+ *  - (-ENODEV) bad port or queue (only if compiled with debug).
+ */
+static inline int
+rte_eth_rx_descriptor_status(uint8_t port_id, uint16_t queue_id,
+	uint16_t offset)
+{
+	struct rte_eth_dev *dev;
+	void *rxq;
+
+#ifdef RTE_LIBRTE_ETHDEV_DEBUG
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
+#endif
+	dev = &rte_eth_devices[port_id];
+#ifdef RTE_LIBRTE_ETHDEV_DEBUG
+	if (queue_id >= dev->data->nb_rx_queues)
+		return -ENODEV;
+#endif
+	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->rx_descriptor_status, -ENOTSUP);
+	rxq = dev->data->rx_queues[queue_id];
+
+	return (*dev->dev_ops->rx_descriptor_status)(rxq, offset);
+}
+
+#define RTE_ETH_TX_DESC_FULL    0 /**< Desc filled for hw, waiting xmit. */
+#define RTE_ETH_TX_DESC_DONE    1 /**< Desc done, packet is transmitted. */
+#define RTE_ETH_TX_DESC_UNAVAIL 2 /**< Desc used by driver or hw. */
+
+/**
+ * Check the status of a Tx descriptor in the queue.
+ *
+ * It should be called in a similar context than the Tx function:
+ * - on a dataplane core
+ * - not concurrently on the same queue
+ *
+ * Since it's a dataplane function, no check is performed on port_id and
+ * queue_id. The caller must therefore ensure that the port is enabled
+ * and the queue is configured and running.
+ *
+ * Note: accessing to a random descriptor in the ring may trigger cache
+ * misses and have a performance impact.
+ *
+ * @param port_id
+ *  A valid port identifier of the Ethernet device which.
+ * @param queue_id
+ *  A valid Tx queue identifier on this port.
+ * @param offset
+ *  The offset of the descriptor starting from tail (0 is the place where
+ *  the next packet will be send).
+ *
+ * @return
+ *  - (RTE_ETH_TX_DESC_FULL) Descriptor is being processed by the hw, i.e.
+ *    in the transmit queue.
+ *  - (RTE_ETH_TX_DESC_DONE) Hardware is done with this descriptor, it can
+ *    be reused by the driver.
+ *  - (RTE_ETH_TX_DESC_UNAVAIL): Descriptor is unavailable, reserved by the
+ *    driver or the hardware.
+ *  - (-EINVAL) bad descriptor offset.
+ *  - (-ENOTSUP) if the device does not support this function.
+ *  - (-ENODEV) bad port or queue (only if compiled with debug).
+ */
+static inline int rte_eth_tx_descriptor_status(uint8_t port_id,
+	uint16_t queue_id, uint16_t offset)
+{
+	struct rte_eth_dev *dev;
+	void *txq;
+
+#ifdef RTE_LIBRTE_ETHDEV_DEBUG
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
+#endif
+	dev = &rte_eth_devices[port_id];
+#ifdef RTE_LIBRTE_ETHDEV_DEBUG
+	if (queue_id >= dev->data->nb_tx_queues)
+		return -ENODEV;
+#endif
+	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->tx_descriptor_status, -ENOTSUP);
+	txq = dev->data->tx_queues[queue_id];
+
+	return (*dev->dev_ops->tx_descriptor_status)(txq, offset);
 }
 
 /**
@@ -3183,6 +3370,33 @@ rte_eth_tx_buffer_count_callback(struct rte_mbuf **pkts, uint16_t unsent,
 		void *userdata);
 
 /**
+ * Request the driver to free mbufs currently cached by the driver. The
+ * driver will only free the mbuf if it is no longer in use. It is the
+ * application's responsibity to ensure rte_eth_tx_buffer_flush(..) is
+ * called if needed.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param queue_id
+ *   The index of the transmit queue through which output packets must be
+ *   sent.
+ *   The value must be in the range [0, nb_tx_queue - 1] previously supplied
+ *   to rte_eth_dev_configure().
+ * @param free_cnt
+ *   Maximum number of packets to free. Use 0 to indicate all possible packets
+ *   should be freed. Note that a packet may be using multiple mbufs.
+ * @return
+ *   Failure: < 0
+ *     -ENODEV: Invalid interface
+ *     -ENOTSUP: Driver does not support function
+ *   Success: >= 0
+ *     0-n: Number of packets freed. More packets may still remain in ring that
+ *     are in use.
+ */
+int
+rte_eth_tx_done_cleanup(uint8_t port_id, uint16_t queue_id, uint32_t free_cnt);
+
+/**
  * The eth device event type for interrupt, and maybe others in the future.
  */
 enum rte_eth_event_type {
@@ -3194,6 +3408,7 @@ enum rte_eth_event_type {
 			/**< reset interrupt event, sent to VF on PF reset */
 	RTE_ETH_EVENT_VF_MBOX,  /**< message from the VF received by PF */
 	RTE_ETH_EVENT_MACSEC,   /**< MACsec offload related event */
+	RTE_ETH_EVENT_INTR_RMV, /**< device removal event */
 	RTE_ETH_EVENT_MAX       /**< max value of this enum */
 };
 
@@ -3272,7 +3487,7 @@ void _rte_eth_dev_callback_process(struct rte_eth_dev *dev,
 /**
  * When there is no rx packet coming in Rx Queue for a long time, we can
  * sleep lcore related to RX Queue for power saving, and enable rx interrupt
- * to be triggered when rx packect arrives.
+ * to be triggered when Rx packet arrives.
  *
  * The rte_eth_dev_rx_intr_enable() function enables rx queue
  * interrupt on specific rx queue of a port.
@@ -3942,31 +4157,31 @@ int rte_eth_dev_get_dcb_info(uint8_t port_id,
 void *rte_eth_add_rx_callback(uint8_t port_id, uint16_t queue_id,
 		rte_rx_callback_fn fn, void *user_param);
 
-/*
-* Add a callback that must be called first on packet RX on a given port
-* and queue.
-*
-* This API configures a first function to be called for each burst of
-* packets received on a given NIC port queue. The return value is a pointer
-* that can be used to later remove the callback using
-* rte_eth_remove_rx_callback().
-*
-* Multiple functions are called in the order that they are added.
-*
-* @param port_id
-*   The port identifier of the Ethernet device.
-* @param queue_id
-*   The queue on the Ethernet device on which the callback is to be added.
-* @param fn
-*   The callback function
-* @param user_param
-*   A generic pointer parameter which will be passed to each invocation of the
-*   callback function on this port and queue.
-*
-* @return
-*   NULL on error.
-*   On success, a pointer value which can later be used to remove the callback.
-*/
+/**
+ * Add a callback that must be called first on packet RX on a given port
+ * and queue.
+ *
+ * This API configures a first function to be called for each burst of
+ * packets received on a given NIC port queue. The return value is a pointer
+ * that can be used to later remove the callback using
+ * rte_eth_remove_rx_callback().
+ *
+ * Multiple functions are called in the order that they are added.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param queue_id
+ *   The queue on the Ethernet device on which the callback is to be added.
+ * @param fn
+ *   The callback function
+ * @param user_param
+ *   A generic pointer parameter which will be passed to each invocation of the
+ *   callback function on this port and queue.
+ *
+ * @return
+ *   NULL on error.
+ *   On success, a pointer value which can later be used to remove the callback.
+ */
 void *rte_eth_add_first_rx_callback(uint8_t port_id, uint16_t queue_id,
 		rte_rx_callback_fn fn, void *user_param);
 
@@ -4304,20 +4519,6 @@ int rte_eth_timesync_read_time(uint8_t port_id, struct timespec *time);
 int rte_eth_timesync_write_time(uint8_t port_id, const struct timespec *time);
 
 /**
- * Copy pci device info to the Ethernet device data.
- *
- * @param eth_dev
- * The *eth_dev* pointer is the address of the *rte_eth_dev* structure.
- * @param pci_dev
- * The *pci_dev* pointer is the address of the *rte_pci_device* structure.
- *
- * @return
- *   - 0 on success, negative on error
- */
-void rte_eth_copy_pci_info(struct rte_eth_dev *eth_dev,
-		struct rte_pci_device *pci_dev);
-
-/**
  * Create memzone for HW rings.
  * malloc can't be used as the physical address is needed.
  * If the memzone is already created, then this function returns a ptr
@@ -4389,7 +4590,7 @@ rte_eth_dev_l2_tunnel_offload_set(uint8_t port_id,
 				  uint8_t en);
 
 /**
-* Get the port id from pci adrress or device name
+* Get the port id from pci address or device name
 * Ex: 0000:2:00.0 or vdev name net_pcap0
 *
 * @param name
@@ -4416,21 +4617,6 @@ rte_eth_dev_get_port_by_name(const char *name, uint8_t *port_id);
 */
 int
 rte_eth_dev_get_name_by_port(uint8_t port_id, char *name);
-
-/**
- * @internal
- * Wrapper for use by pci drivers as a .probe function to attach to a ethdev
- * interface.
- */
-int rte_eth_dev_pci_probe(struct rte_pci_driver *pci_drv,
-			  struct rte_pci_device *pci_dev);
-
-/**
- * @internal
- * Wrapper for use by pci drivers as a .remove function to detach a ethdev
- * interface.
- */
-int rte_eth_dev_pci_remove(struct rte_pci_device *pci_dev);
 
 #ifdef __cplusplus
 }

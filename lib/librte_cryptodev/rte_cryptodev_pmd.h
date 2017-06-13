@@ -57,14 +57,6 @@ extern "C" {
 #include "rte_crypto.h"
 #include "rte_cryptodev.h"
 
-
-#ifdef RTE_LIBRTE_CRYPTODEV_DEBUG
-#define RTE_PMD_DEBUG_TRACE(...) \
-	rte_pmd_debug_trace(__func__, __VA_ARGS__)
-#else
-#define RTE_PMD_DEBUG_TRACE(...)
-#endif
-
 struct rte_cryptodev_session {
 	RTE_STD_C11
 	struct {
@@ -201,10 +193,12 @@ extern struct rte_cryptodev *rte_cryptodevs;
  *	Function used to configure device.
  *
  * @param	dev	Crypto device pointer
+ *		config	Crypto device configurations
  *
  * @return	Returns 0 on success
  */
-typedef int (*cryptodev_configure_t)(struct rte_cryptodev *dev);
+typedef int (*cryptodev_configure_t)(struct rte_cryptodev *dev,
+		struct rte_cryptodev_config *config);
 
 /**
  * Function used to start a configured device.
@@ -381,6 +375,31 @@ typedef void * (*cryptodev_sym_configure_session_t)(struct rte_cryptodev *dev,
 typedef void (*cryptodev_sym_free_session_t)(struct rte_cryptodev *dev,
 		void *session_private);
 
+/**
+ * Optional API for drivers to attach sessions with queue pair.
+ * @param	dev		Crypto device pointer
+ * @param	qp_id		queue pair id for attaching session
+ * @param	priv_sess       Pointer to cryptodev's private session structure
+ * @return
+ *  - Return 0 on success
+ */
+typedef int (*cryptodev_sym_queue_pair_attach_session_t)(
+		  struct rte_cryptodev *dev,
+		  uint16_t qp_id,
+		  void *session_private);
+
+/**
+ * Optional API for drivers to detach sessions from queue pair.
+ * @param	dev		Crypto device pointer
+ * @param	qp_id		queue pair id for detaching session
+ * @param	priv_sess       Pointer to cryptodev's private session structure
+ * @return
+ *  - Return 0 on success
+ */
+typedef int (*cryptodev_sym_queue_pair_detach_session_t)(
+		  struct rte_cryptodev *dev,
+		  uint16_t qp_id,
+		  void *session_private);
 
 /** Crypto device operations function pointer table */
 struct rte_cryptodev_ops {
@@ -415,6 +434,10 @@ struct rte_cryptodev_ops {
 	/**< Configure a Crypto session. */
 	cryptodev_sym_free_session_t session_clear;
 	/**< Clear a Crypto sessions private data. */
+	cryptodev_sym_queue_pair_attach_session_t qp_attach_session;
+	/**< Attach session to queue pair. */
+	cryptodev_sym_queue_pair_attach_session_t qp_detach_session;
+	/**< Detach session from queue pair. */
 };
 
 

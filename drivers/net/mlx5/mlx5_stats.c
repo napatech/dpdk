@@ -125,6 +125,10 @@ static const struct mlx5_counter_ctrl mlx5_counters_init[] = {
 		.dpdk_name = "tx_errors_phy",
 		.ctr_name = "tx_errors_phy",
 	},
+	{
+		.dpdk_name = "rx_out_of_buffer",
+		.ctr_name = "out_of_buffer",
+	},
 };
 
 static const unsigned int xstats_n = RTE_DIM(mlx5_counters_init);
@@ -159,10 +163,39 @@ priv_read_dev_counters(struct priv *priv, uint64_t *stats)
 		WARN("unable to read statistic values from device");
 		return -1;
 	}
-	for (i = 0; i != xstats_n; ++i)
-		stats[i] = (uint64_t)
-			   et_stats->data[xstats_ctrl->dev_table_idx[i]];
+	for (i = 0; i != xstats_n; ++i) {
+		if (priv_is_ib_cntr(mlx5_counters_init[i].ctr_name))
+			priv_get_cntr_sysfs(priv,
+					    mlx5_counters_init[i].ctr_name,
+					    &stats[i]);
+		else
+			stats[i] = (uint64_t)
+				et_stats->data[xstats_ctrl->dev_table_idx[i]];
+	}
 	return 0;
+}
+
+/**
+ * Query the number of statistics provided by ETHTOOL.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ *
+ * @return
+ *   Number of statistics on success, -1 on error.
+ */
+static int
+priv_ethtool_get_stats_n(struct priv *priv) {
+	struct ethtool_drvinfo drvinfo;
+	struct ifreq ifr;
+
+	drvinfo.cmd = ETHTOOL_GDRVINFO;
+	ifr.ifr_data = (caddr_t)&drvinfo;
+	if (priv_ifreq(priv, SIOCETHTOOL, &ifr) != 0) {
+		WARN("unable to query number of statistics");
+		return -1;
+	}
+	return drvinfo.n_stats;
 }
 
 /**
@@ -177,25 +210,12 @@ priv_xstats_init(struct priv *priv)
 	struct mlx5_xstats_ctrl *xstats_ctrl = &priv->xstats_ctrl;
 	unsigned int i;
 	unsigned int j;
-	char ifname[IF_NAMESIZE];
 	struct ifreq ifr;
-	struct ethtool_drvinfo drvinfo;
 	struct ethtool_gstrings *strings = NULL;
 	unsigned int dev_stats_n;
 	unsigned int str_sz;
 
-	if (priv_get_ifname(priv, &ifname)) {
-		WARN("unable to get interface name");
-		return;
-	}
-	/* How many statistics are available. */
-	drvinfo.cmd = ETHTOOL_GDRVINFO;
-	ifr.ifr_data = (caddr_t)&drvinfo;
-	if (priv_ifreq(priv, SIOCETHTOOL, &ifr) != 0) {
-		WARN("unable to get driver info");
-		return;
-	}
-	dev_stats_n = drvinfo.n_stats;
+	dev_stats_n = priv_ethtool_get_stats_n(priv);
 	if (dev_stats_n < 1) {
 		WARN("no extended statistics available");
 		return;
@@ -233,6 +253,8 @@ priv_xstats_init(struct priv *priv)
 		}
 	}
 	for (j = 0; j != xstats_n; ++j) {
+		if (priv_is_ib_cntr(mlx5_counters_init[j].ctr_name))
+			continue;
 		if (xstats_ctrl->dev_table_idx[j] >= dev_stats_n) {
 			WARN("counter \"%s\" is not recognized",
 			     mlx5_counters_init[j].dpdk_name);
@@ -415,7 +437,15 @@ mlx5_xstats_get(struct rte_eth_dev *dev,
 	int ret = xstats_n;
 
 	if (n >= xstats_n && stats) {
+		struct mlx5_xstats_ctrl *xstats_ctrl = &priv->xstats_ctrl;
+		int stats_n;
+
 		priv_lock(priv);
+		stats_n = priv_ethtool_get_stats_n(priv);
+		if (stats_n < 0)
+			return -1;
+		if (xstats_ctrl->stats_n != stats_n)
+			priv_xstats_init(priv);
 		ret = priv_xstats_get(priv, stats);
 		priv_unlock(priv);
 	}
@@ -432,8 +462,15 @@ void
 mlx5_xstats_reset(struct rte_eth_dev *dev)
 {
 	struct priv *priv = mlx5_get_priv(dev);
+	struct mlx5_xstats_ctrl *xstats_ctrl = &priv->xstats_ctrl;
+	int stats_n;
 
 	priv_lock(priv);
+	stats_n = priv_ethtool_get_stats_n(priv);
+	if (stats_n < 0)
+		return;
+	if (xstats_ctrl->stats_n != stats_n)
+		priv_xstats_init(priv);
 	priv_xstats_reset(priv);
 	priv_unlock(priv);
 }

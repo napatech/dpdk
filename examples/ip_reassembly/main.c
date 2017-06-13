@@ -200,7 +200,7 @@ static struct rte_eth_conf port_conf = {
 		.hw_ip_checksum = 1, /**< IP checksum offload enabled */
 		.hw_vlan_filter = 0, /**< VLAN filtering disabled */
 		.jumbo_frame    = 1, /**< Jumbo Frame Support disabled */
-		.hw_strip_crc   = 0, /**< CRC stripped by hardware */
+		.hw_strip_crc   = 1, /**< CRC stripped by hardware */
 	},
 	.rx_adv_conf = {
 			.rss_conf = {
@@ -346,8 +346,8 @@ reassemble(struct rte_mbuf *m, uint8_t portid, uint32_t queue,
 	struct rte_ip_frag_death_row *dr;
 	struct rx_queue *rxq;
 	void *d_addr_bytes;
-	uint32_t next_hop_ipv4;
-	uint8_t next_hop_ipv6, dst_port;
+	uint32_t next_hop;
+	uint8_t dst_port;
 
 	rxq = &qconf->rx_queue_list[queue];
 
@@ -390,9 +390,9 @@ reassemble(struct rte_mbuf *m, uint8_t portid, uint32_t queue,
 		ip_dst = rte_be_to_cpu_32(ip_hdr->dst_addr);
 
 		/* Find destination port */
-		if (rte_lpm_lookup(rxq->lpm, ip_dst, &next_hop_ipv4) == 0 &&
-				(enabled_port_mask & 1 << next_hop_ipv4) != 0) {
-			dst_port = next_hop_ipv4;
+		if (rte_lpm_lookup(rxq->lpm, ip_dst, &next_hop) == 0 &&
+				(enabled_port_mask & 1 << next_hop) != 0) {
+			dst_port = next_hop;
 		}
 
 		eth_hdr->ether_type = rte_be_to_cpu_16(ETHER_TYPE_IPv4);
@@ -427,9 +427,10 @@ reassemble(struct rte_mbuf *m, uint8_t portid, uint32_t queue,
 		}
 
 		/* Find destination port */
-		if (rte_lpm6_lookup(rxq->lpm6, ip_hdr->dst_addr, &next_hop_ipv6) == 0 &&
-				(enabled_port_mask & 1 << next_hop_ipv6) != 0) {
-			dst_port = next_hop_ipv6;
+		if (rte_lpm6_lookup(rxq->lpm6, ip_hdr->dst_addr,
+						&next_hop) == 0 &&
+				(enabled_port_mask & 1 << next_hop) != 0) {
+			dst_port = next_hop;
 		}
 
 		eth_hdr->ether_type = rte_be_to_cpu_16(ETHER_TYPE_IPv6);
@@ -718,7 +719,7 @@ parse_args(int argc, char **argv)
 		argv[optind-1] = prgname;
 
 	ret = optind-1;
-	optind = 0; /* reset getopt lib */
+	optind = 1; /* reset getopt lib */
 	return ret;
 }
 
@@ -1062,6 +1063,11 @@ main(int argc, char **argv)
 
 		qconf = &lcore_queue_conf[rx_lcore_id];
 
+		/* limit the frame size to the maximum supported by NIC */
+		rte_eth_dev_info_get(portid, &dev_info);
+		port_conf.rxmode.max_rx_pkt_len = RTE_MIN(
+		    dev_info.max_rx_pktlen, port_conf.rxmode.max_rx_pkt_len);
+
 		/* get the lcore_id for this port */
 		while (rte_lcore_is_enabled(rx_lcore_id) == 0 ||
 			   qconf->n_rx_queue == (unsigned)rx_queue_per_lcore) {
@@ -1128,7 +1134,6 @@ main(int argc, char **argv)
 			printf("txq=%u,%d,%d ", lcore_id, queueid, socket);
 			fflush(stdout);
 
-			rte_eth_dev_info_get(portid, &dev_info);
 			txconf = &dev_info.default_txconf;
 			txconf->txq_flags = 0;
 

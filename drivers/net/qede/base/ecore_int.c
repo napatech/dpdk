@@ -59,6 +59,11 @@ struct aeu_invert_reg_bit {
 #define ATTENTION_OFFSET_MASK		(0x000ff000)
 #define ATTENTION_OFFSET_SHIFT		(12)
 
+#define ATTENTION_BB_MASK		(0x00700000)
+#define ATTENTION_BB_SHIFT		(20)
+#define ATTENTION_BB(value)		((value) << ATTENTION_BB_SHIFT)
+#define ATTENTION_BB_DIFFERENT		(1 << 23)
+
 #define	ATTENTION_CLEAR_ENABLE		(1 << 28)
 	unsigned int flags;
 
@@ -414,7 +419,7 @@ ecore_general_attention_35(struct ecore_hwfn *p_hwfn)
 
 #define ECORE_DORQ_ATTENTION_REASON_MASK (0xfffff)
 #define ECORE_DORQ_ATTENTION_OPAQUE_MASK (0xffff)
-#define ECORE_DORQ_ATTENTION_SIZE_MASK	 (0x7f)
+#define ECORE_DORQ_ATTENTION_SIZE_MASK	 (0x7f0000)
 #define ECORE_DORQ_ATTENTION_SIZE_SHIFT	 (16)
 
 static enum _ecore_status_t ecore_dorq_attn_cb(struct ecore_hwfn *p_hwfn)
@@ -468,7 +473,26 @@ static enum _ecore_status_t ecore_tm_attn_cb(struct ecore_hwfn *p_hwfn)
 	return ECORE_INVAL;
 }
 
-/* Notice aeu_invert_reg must be defined in the same order of bits as HW;  */
+/* Instead of major changes to the data-structure, we have a some 'special'
+ * identifiers for sources that changed meaning between adapters.
+ */
+enum aeu_invert_reg_special_type {
+	AEU_INVERT_REG_SPECIAL_CNIG_0,
+	AEU_INVERT_REG_SPECIAL_CNIG_1,
+	AEU_INVERT_REG_SPECIAL_CNIG_2,
+	AEU_INVERT_REG_SPECIAL_CNIG_3,
+	AEU_INVERT_REG_SPECIAL_MAX,
+};
+
+static struct aeu_invert_reg_bit
+aeu_descs_special[AEU_INVERT_REG_SPECIAL_MAX] = {
+	{"CNIG port 0", ATTENTION_SINGLE, OSAL_NULL, BLOCK_CNIG},
+	{"CNIG port 1", ATTENTION_SINGLE, OSAL_NULL, BLOCK_CNIG},
+	{"CNIG port 2", ATTENTION_SINGLE, OSAL_NULL, BLOCK_CNIG},
+	{"CNIG port 3", ATTENTION_SINGLE, OSAL_NULL, BLOCK_CNIG},
+};
+
+/* Notice aeu_invert_reg must be defined in the same order of bits as HW; */
 static struct aeu_invert_reg aeu_descs[NUM_ATTN_REGS] = {
 	{
 	 {			/* After Invert 1 */
@@ -511,8 +535,18 @@ static struct aeu_invert_reg aeu_descs[NUM_ATTN_REGS] = {
 	   OSAL_NULL, MAX_BLOCK_ID},
 	  {"General Attention 35", ATTENTION_SINGLE | ATTENTION_CLEAR_ENABLE,
 	   ecore_general_attention_35, MAX_BLOCK_ID},
-	  {"CNIG port %d", (4 << ATTENTION_LENGTH_SHIFT), OSAL_NULL,
-	   BLOCK_CNIG},
+	  {"NWS Parity", ATTENTION_PAR | ATTENTION_BB_DIFFERENT |
+			 ATTENTION_BB(AEU_INVERT_REG_SPECIAL_CNIG_0),
+			 OSAL_NULL, BLOCK_NWS},
+	  {"NWS Interrupt", ATTENTION_SINGLE | ATTENTION_BB_DIFFERENT |
+			    ATTENTION_BB(AEU_INVERT_REG_SPECIAL_CNIG_1),
+			    OSAL_NULL, BLOCK_NWS},
+	  {"NWM Parity", ATTENTION_PAR | ATTENTION_BB_DIFFERENT |
+			 ATTENTION_BB(AEU_INVERT_REG_SPECIAL_CNIG_2),
+			 OSAL_NULL, BLOCK_NWM},
+	  {"NWM Interrupt", ATTENTION_SINGLE | ATTENTION_BB_DIFFERENT |
+			    ATTENTION_BB(AEU_INVERT_REG_SPECIAL_CNIG_3),
+			    OSAL_NULL, BLOCK_NWM},
 	  {"MCP CPU", ATTENTION_SINGLE, ecore_mcp_attn_cb, MAX_BLOCK_ID},
 	  {"MCP Watchdog timer", ATTENTION_SINGLE, OSAL_NULL, MAX_BLOCK_ID},
 	  {"MCP M2P", ATTENTION_SINGLE, OSAL_NULL, MAX_BLOCK_ID},
@@ -633,6 +667,27 @@ static struct aeu_invert_reg aeu_descs[NUM_ATTN_REGS] = {
 	 },
 
 };
+
+static struct aeu_invert_reg_bit *
+ecore_int_aeu_translate(struct ecore_hwfn *p_hwfn,
+			struct aeu_invert_reg_bit *p_bit)
+{
+	if (!ECORE_IS_BB(p_hwfn->p_dev))
+		return p_bit;
+
+	if (!(p_bit->flags & ATTENTION_BB_DIFFERENT))
+		return p_bit;
+
+	return &aeu_descs_special[(p_bit->flags & ATTENTION_BB_MASK) >>
+				  ATTENTION_BB_SHIFT];
+}
+
+static bool ecore_int_is_parity_flag(struct ecore_hwfn *p_hwfn,
+				     struct aeu_invert_reg_bit *p_bit)
+{
+	return !!(ecore_int_aeu_translate(p_hwfn, p_bit)->flags &
+		  ATTENTION_PARITY);
+}
 
 #define ATTN_STATE_BITS		(0xfff)
 #define ATTN_BITS_MASKABLE	(0x3ff)
@@ -868,7 +923,7 @@ static enum _ecore_status_t ecore_int_deassertion(struct ecore_hwfn *p_hwfn,
 		for (j = 0, bit_idx = 0; bit_idx < 32; j++) {
 			struct aeu_invert_reg_bit *p_bit = &p_aeu->bits[j];
 
-			if ((p_bit->flags & ATTENTION_PARITY) &&
+			if (ecore_int_is_parity_flag(p_hwfn, p_bit) &&
 			    !!(parities & (1 << bit_idx))) {
 				ecore_int_deassertion_parity(p_hwfn, p_bit,
 							     bit_idx);
@@ -905,26 +960,29 @@ static enum _ecore_status_t ecore_int_deassertion(struct ecore_hwfn *p_hwfn,
 				unsigned long int bitmask;
 				u8 bit, bit_len;
 
+				/* Need to account bits with changed meaning */
 				p_aeu = &sb_attn_sw->p_aeu_desc[i].bits[j];
-
-				/* No need to handle attention-only bits */
-				if (p_aeu->flags == ATTENTION_PAR)
-					continue;
 
 				bit = bit_idx;
 				bit_len = ATTENTION_LENGTH(p_aeu->flags);
-				if (p_aeu->flags & ATTENTION_PAR_INT) {
+				if (ecore_int_is_parity_flag(p_hwfn, p_aeu)) {
 					/* Skip Parity */
 					bit++;
 					bit_len--;
 				}
 
+				/* Find the bits relating to HW-block, then
+				 * shift so they'll become LSB.
+				 */
 				bitmask = bits & (((1 << bit_len) - 1) << bit);
+				bitmask >>= bit;
+
 				if (bitmask) {
 					u32 flags = p_aeu->flags;
 					char bit_name[30];
+					u8 num;
 
-					bit = (u8)OSAL_FIND_FIRST_BIT(&bitmask,
+					num = (u8)OSAL_FIND_FIRST_BIT(&bitmask,
 								bit_len);
 
 					/* Some bits represent more than a
@@ -936,11 +994,17 @@ static enum _ecore_status_t ecore_int_deassertion(struct ecore_hwfn *p_hwfn,
 					    ATTENTION_LENGTH(flags) > 1))
 						OSAL_SNPRINTF(bit_name, 30,
 							      p_aeu->bit_name,
-							      bit);
+							      num);
 					else
 						OSAL_STRNCPY(bit_name,
 							     p_aeu->bit_name,
 							     30);
+
+					/* We now need to pass bitmask in its
+					 * correct position.
+					 */
+					bitmask <<= bit;
+
 					/* Handle source of the attention */
 					ecore_int_deassertion_aeu_bit(p_hwfn,
 								      p_aeu,
@@ -1203,12 +1267,13 @@ static void ecore_int_sb_attn_init(struct ecore_hwfn *p_hwfn,
 	for (i = 0; i < NUM_ATTN_REGS; i++) {
 		/* j is array index, k is bit index */
 		for (j = 0, k = 0; k < 32; j++) {
-			unsigned int flags = aeu_descs[i].bits[j].flags;
+			struct aeu_invert_reg_bit *p_aeu;
 
-			if (flags & ATTENTION_PARITY)
+			p_aeu = &aeu_descs[i].bits[j];
+			if (ecore_int_is_parity_flag(p_hwfn, p_aeu))
 				sb_info->parity_mask[i] |= 1 << k;
 
-			k += ATTENTION_LENGTH(flags);
+			k += ATTENTION_LENGTH(p_aeu->flags);
 		}
 		DP_VERBOSE(p_hwfn, ECORE_MSG_INTR,
 			   "Attn Mask [Reg %d]: 0x%08x\n",
@@ -1964,6 +2029,31 @@ enum _ecore_status_t ecore_int_igu_read_cam(struct ecore_hwfn *p_hwfn,
 			}
 		}
 	}
+
+	/* There's a possibility the igu_sb_cnt_iov doesn't properly reflect
+	 * the number of VF SBs [especially for first VF on engine, as we can't
+	 * diffrentiate between empty entries and its entries].
+	 * Since we don't really support more SBs than VFs today, prevent any
+	 * such configuration by sanitizing the number of SBs to equal the
+	 * number of VFs.
+	 */
+	if (IS_PF_SRIOV(p_hwfn)) {
+		u16 total_vfs = p_hwfn->p_dev->p_iov_info->total_vfs;
+
+		if (total_vfs < p_igu_info->free_blks) {
+			DP_VERBOSE(p_hwfn, (ECORE_MSG_INTR | ECORE_MSG_IOV),
+				   "Limiting number of SBs for IOV - %04x --> %04x\n",
+				   p_igu_info->free_blks,
+				   p_hwfn->p_dev->p_iov_info->total_vfs);
+			p_igu_info->free_blks = total_vfs;
+		} else if (total_vfs > p_igu_info->free_blks) {
+			DP_NOTICE(p_hwfn, true,
+				  "IGU has only %04x SBs for VFs while the device has %04x VFs\n",
+				  p_igu_info->free_blks, total_vfs);
+			return ECORE_INVAL;
+		}
+	}
+
 	p_igu_info->igu_sb_cnt_iov = p_igu_info->free_blks;
 
 	DP_VERBOSE(p_hwfn, ECORE_MSG_INTR,
@@ -2092,24 +2182,6 @@ void ecore_int_get_num_sbs(struct ecore_hwfn *p_hwfn,
 	p_sb_cnt_info->sb_free_blk = info->free_blks;
 }
 
-u16 ecore_int_queue_id_from_sb_id(struct ecore_hwfn *p_hwfn, u16 sb_id)
-{
-	struct ecore_igu_info *p_info = p_hwfn->hw_info.p_igu_info;
-
-	/* Determine origin of SB id */
-	if ((sb_id >= p_info->igu_base_sb) &&
-	    (sb_id < p_info->igu_base_sb + p_info->igu_sb_cnt)) {
-		return sb_id - p_info->igu_base_sb;
-	} else if ((sb_id >= p_info->igu_base_sb_iov) &&
-		   (sb_id < p_info->igu_base_sb_iov + p_info->igu_sb_cnt_iov)) {
-		return sb_id - p_info->igu_base_sb_iov + p_info->igu_sb_cnt;
-	} else {
-		DP_NOTICE(p_hwfn, true, "SB %d not in range for function\n",
-			  sb_id);
-		return 0;
-	}
-}
-
 void ecore_int_disable_post_isr_release(struct ecore_dev *p_dev)
 {
 	int i;
@@ -2158,4 +2230,31 @@ enum _ecore_status_t ecore_int_set_timer_res(struct ecore_hwfn *p_hwfn,
 	}
 
 	return rc;
+}
+
+enum _ecore_status_t ecore_int_get_sb_dbg(struct ecore_hwfn *p_hwfn,
+					  struct ecore_ptt *p_ptt,
+					  struct ecore_sb_info *p_sb,
+					  struct ecore_sb_info_dbg *p_info)
+{
+	u16 sbid = p_sb->igu_sb_id;
+	int i;
+
+	if (IS_VF(p_hwfn->p_dev))
+		return ECORE_INVAL;
+
+	if (sbid > NUM_OF_SBS(p_hwfn->p_dev))
+		return ECORE_INVAL;
+
+	p_info->igu_prod = ecore_rd(p_hwfn, p_ptt,
+				    IGU_REG_PRODUCER_MEMORY + sbid * 4);
+	p_info->igu_cons = ecore_rd(p_hwfn, p_ptt,
+				    IGU_REG_CONSUMER_MEM + sbid * 4);
+
+	for (i = 0; i < PIS_PER_SB; i++)
+		p_info->pi[i] = (u16)ecore_rd(p_hwfn, p_ptt,
+					      CAU_REG_PI_MEMORY +
+					      sbid * 4 * PIS_PER_SB +  i * 4);
+
+	return ECORE_SUCCESS;
 }

@@ -27,7 +27,7 @@
     (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
     OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-AESN-NI Multi Buffer Crytpo Poll Mode Driver
+AESN-NI Multi Buffer Crypto Poll Mode Driver
 ============================================
 
 
@@ -51,14 +51,17 @@ Cipher algorithms:
 * RTE_CRYPTO_CIPHER_AES128_CTR
 * RTE_CRYPTO_CIPHER_AES192_CTR
 * RTE_CRYPTO_CIPHER_AES256_CTR
+* RTE_CRYPTO_CIPHER_AES_DOCSISBPI
 
 Hash algorithms:
 
+* RTE_CRYPTO_HASH_MD5_HMAC
 * RTE_CRYPTO_HASH_SHA1_HMAC
 * RTE_CRYPTO_HASH_SHA224_HMAC
 * RTE_CRYPTO_HASH_SHA256_HMAC
 * RTE_CRYPTO_HASH_SHA384_HMAC
 * RTE_CRYPTO_HASH_SHA512_HMAC
+* RTE_CRYPTO_HASH_AES_XCBC_HMAC
 
 Limitations
 -----------
@@ -73,12 +76,28 @@ Installation
 To build DPDK with the AESNI_MB_PMD the user is required to download the multi-buffer
 library from `here <https://github.com/01org/intel-ipsec-mb>`_
 and compile it on their user system before building DPDK.
-The latest version of the library supported by this PMD is v0.44, which
-can be downloaded in `<https://github.com/01org/intel-ipsec-mb/archive/v0.44.zip>`_.
+The latest version of the library supported by this PMD is v0.45, which
+can be downloaded in `<https://github.com/01org/intel-ipsec-mb/archive/v0.45.zip>`_.
 
 .. code-block:: console
 
 	make
+
+As a reference, the following table shows a mapping between the past DPDK versions
+and the Multi-Buffer library version supported by them:
+
+.. _table_aesni_mb_versions:
+
+.. table:: DPDK and Multi-Buffer library version compatibility
+
+   =============  ============================
+   DPDK version   Multi-buffer library version
+   =============  ============================
+   2.2 - 16.11    0.43 - 0.44
+   17.02          0.44
+   17.05          0.45
+   =============  ============================
+
 
 Initialization
 --------------
@@ -94,9 +113,9 @@ In order to enable this virtual crypto PMD, user must:
 
 To use the PMD in an application, user must:
 
-* Call rte_eal_vdev_init("crypto_aesni_mb") within the application.
+* Call rte_vdev_init("crypto_aesni_mb") within the application.
 
-* Use --vdev="crypto_aesni_mb" in the EAL options, which will call rte_eal_vdev_init() internally.
+* Use --vdev="crypto_aesni_mb" in the EAL options, which will call rte_vdev_init() internally.
 
 The following parameters (all optional) can be provided in the previous two calls:
 
@@ -111,4 +130,4 @@ Example:
 
 .. code-block:: console
 
-    ./l2fwd-crypto -c 40 -n 4 --vdev="crypto_aesni_mb,socket_id=1,max_nb_sessions=128"
+    ./l2fwd-crypto -l 6 -n 4 --vdev="crypto_aesni_mb,socket_id=1,max_nb_sessions=128"

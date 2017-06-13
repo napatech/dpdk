@@ -38,10 +38,33 @@ struct ecore_vf_iov {
 	bool b_pre_fp_hsi;
 };
 
+
+enum _ecore_status_t ecore_set_rxq_coalesce(struct ecore_hwfn *p_hwfn,
+					    struct ecore_ptt *p_ptt,
+					    u16 coalesce,
+					    struct ecore_queue_cid *p_cid);
+enum _ecore_status_t ecore_set_txq_coalesce(struct ecore_hwfn *p_hwfn,
+					    struct ecore_ptt *p_ptt,
+					    u16 coalesce,
+					    struct ecore_queue_cid *p_cid);
+/**
+ * @brief VF - Set Rx/Tx coalesce per VF's relative queue.
+ *	Coalesce value '0' will omit the configuration.
+ *
+ *	@param p_hwfn
+ *	@param rx_coal - coalesce value in micro second for rx queue
+ *	@param tx_coal - coalesce value in micro second for tx queue
+ *	@param queue_cid
+ *
+ **/
+enum _ecore_status_t ecore_vf_pf_set_coalesce(struct ecore_hwfn *p_hwfn,
+					      u16 rx_coal, u16 tx_coal,
+					      struct ecore_queue_cid *p_cid);
+
 #ifdef CONFIG_ECORE_SRIOV
 /**
  * @brief hw preparation for VF
- * sends ACQUIRE message
+ *	sends ACQUIRE message
  *
  * @param p_hwfn
  *
@@ -53,10 +76,7 @@ enum _ecore_status_t ecore_vf_hw_prepare(struct ecore_hwfn *p_hwfn);
  * @brief VF - start the RX Queue by sending a message to the PF
  *
  * @param p_hwfn
- * @param cid			- zero based within the VF
- * @param rx_queue_id		- zero based within the VF
- * @param sb			- VF status block for this queue
- * @param sb_index		- Index within the status block
+ * @param p_cid			- Only relative fields are relevant
  * @param bd_max_bytes		- maximum number of bytes per bd
  * @param bd_chain_phys_addr	- physical address of bd chain
  * @param cqe_pbl_addr		- physical address of pbl
@@ -67,9 +87,7 @@ enum _ecore_status_t ecore_vf_hw_prepare(struct ecore_hwfn *p_hwfn);
  * @return enum _ecore_status_t
  */
 enum _ecore_status_t ecore_vf_pf_rxq_start(struct ecore_hwfn *p_hwfn,
-					   u8 rx_queue_id,
-					   u16 sb,
-					   u8 sb_index,
+					   struct ecore_queue_cid *p_cid,
 					   u16 bd_max_bytes,
 					   dma_addr_t bd_chain_phys_addr,
 					   dma_addr_t cqe_pbl_addr,
@@ -81,46 +99,44 @@ enum _ecore_status_t ecore_vf_pf_rxq_start(struct ecore_hwfn *p_hwfn,
  *        PF.
  *
  * @param p_hwfn
- * @param tx_queue_id		- zero based within the VF
- * @param sb			- status block for this queue
- * @param sb_index		- index within the status block
+ * @param p_cid
  * @param bd_chain_phys_addr	- physical address of tx chain
  * @param pp_doorbell		- pointer to address to which to
  *				write the doorbell too..
  *
  * @return enum _ecore_status_t
  */
-enum _ecore_status_t ecore_vf_pf_txq_start(struct ecore_hwfn *p_hwfn,
-					   u16 tx_queue_id,
-					   u16 sb,
-					   u8 sb_index,
-					   dma_addr_t pbl_addr,
-					   u16 pbl_size,
-					   void OSAL_IOMEM **pp_doorbell);
+enum _ecore_status_t
+ecore_vf_pf_txq_start(struct ecore_hwfn *p_hwfn,
+		      struct ecore_queue_cid *p_cid,
+		      dma_addr_t pbl_addr, u16 pbl_size,
+		      void OSAL_IOMEM **pp_doorbell);
 
 /**
  * @brief VF - stop the RX queue by sending a message to the PF
  *
  * @param p_hwfn
- * @param rx_qid
+ * @param p_cid
  * @param cqe_completion
  *
  * @return enum _ecore_status_t
  */
-enum _ecore_status_t ecore_vf_pf_rxq_stop(struct ecore_hwfn	*p_hwfn,
-					  u16			rx_qid,
-					  bool			cqe_completion);
+enum _ecore_status_t ecore_vf_pf_rxq_stop(struct ecore_hwfn *p_hwfn,
+					  struct ecore_queue_cid *p_cid,
+					  bool cqe_completion);
 
 /**
  * @brief VF - stop the TX queue by sending a message to the PF
  *
  * @param p_hwfn
- * @param tx_qid
+ * @param p_cid
  *
  * @return enum _ecore_status_t
  */
-enum _ecore_status_t ecore_vf_pf_txq_stop(struct ecore_hwfn	*p_hwfn,
-					  u16			tx_qid);
+enum _ecore_status_t ecore_vf_pf_txq_stop(struct ecore_hwfn *p_hwfn,
+					  struct ecore_queue_cid *p_cid);
+
+/* TODO - fix all the !SRIOV prototypes */
 
 #ifndef LINUX_REMOVE
 /**
@@ -128,20 +144,18 @@ enum _ecore_status_t ecore_vf_pf_txq_stop(struct ecore_hwfn	*p_hwfn,
  *        PF
  *
  * @param p_hwfn
- * @param rx_queue_id
+ * @param pp_cid - list of queue-cids which we want to update
  * @param num_rxqs
- * @param init_sge_ring
  * @param comp_cqe_flg
  * @param comp_event_flg
  *
  * @return enum _ecore_status_t
  */
-enum _ecore_status_t ecore_vf_pf_rxqs_update(
-			struct ecore_hwfn	*p_hwfn,
-			u16			rx_queue_id,
-			u8			num_rxqs,
-			u8			comp_cqe_flg,
-			u8			comp_event_flg);
+enum _ecore_status_t ecore_vf_pf_rxqs_update(struct ecore_hwfn *p_hwfn,
+					     struct ecore_queue_cid **pp_cid,
+					     u8 num_rxqs,
+					     u8 comp_cqe_flg,
+					     u8 comp_event_flg);
 #endif
 
 /**
@@ -267,5 +281,10 @@ void __ecore_vf_get_link_caps(struct ecore_hwfn *p_hwfn,
 			      struct ecore_mcp_link_capabilities *p_link_caps,
 			      struct ecore_bulletin_content *p_bulletin);
 
+enum _ecore_status_t
+ecore_vf_pf_tunnel_param_update(struct ecore_hwfn *p_hwfn,
+				struct ecore_tunnel_info *p_tunn);
+
+void ecore_vf_set_vf_start_tunn_update_param(struct ecore_tunnel_info *p_tun);
 #endif
 #endif /* __ECORE_VF_H__ */

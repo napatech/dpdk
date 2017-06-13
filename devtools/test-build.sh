@@ -66,7 +66,7 @@ print_help () {
 	options:
 	        -h    this help
 	        -jX   use X parallel jobs in "make"
-	        -s    short test with only first config without examples/doc
+	        -s    short test only first config without tests|examples|doc
 	        -v    verbose build
 
 	config: defconfig[[~][+]option1[[~][+]option2...]]
@@ -146,7 +146,7 @@ config () # <directory> <target> <options>
 	fi
 	if [ ! -e $1/.config ] || $reconfig ; then
 		echo "================== Configure $1"
-		make -j$J T=$2 O=$1 config
+		make T=$2 O=$1 config
 
 		echo 'Customize configuration'
 		# Built-in options (lowercase)
@@ -194,7 +194,6 @@ config () # <directory> <target> <options>
 		sed -ri        's,(PMD_OPENSSL=)n,\1y,' $1/.config
 		test "$DPDK_DEP_SSL" != y || \
 		sed -ri            's,(PMD_QAT=)n,\1y,' $1/.config
-		sed -ri        's,(KNI_VHOST.*=)n,\1y,' $1/.config
 		sed -ri           's,(SCHED_.*=)n,\1y,' $1/.config
 		build_config_hook $1 $2 $3
 
@@ -231,16 +230,15 @@ for conf in $configs ; do
 	make -j$J EXTRA_CFLAGS="$maxerr $DPDK_DEP_CFLAGS" \
 		EXTRA_LDFLAGS="$DPDK_DEP_LDFLAGS" $verbose O=$dir
 	! $short || break
+	echo "================== Build tests for $dir"
+	make test-build -j$J EXTRA_CFLAGS="$maxerr $DPDK_DEP_CFLAGS" \
+		EXTRA_LDFLAGS="$DPDK_DEP_LDFLAGS" $verbose O=$dir
 	echo "================== Build examples for $dir"
 	export RTE_SDK=$(pwd)
 	export RTE_TARGET=$dir
 	make -j$J -sC examples \
 		EXTRA_LDFLAGS="$DPDK_DEP_LDFLAGS" $verbose \
 		O=$(readlink -m $dir/examples)
-	! echo $target | grep -q '^x86_64' || \
-	make -j$J -sC examples/performance-thread \
-		EXTRA_LDFLAGS="$DPDK_DEP_LDFLAGS" $verbose \
-		O=$(readlink -m $dir/examples/performance-thread)
 	unset RTE_TARGET
 	echo "################## $dir done."
 	unset dir

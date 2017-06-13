@@ -86,6 +86,61 @@ These are divided into sections and can be accessed using help, help section or 
        help all        : All of the above sections.
 
 
+Command File Functions
+----------------------
+
+To facilitate loading large number of commands or to avoid cutting and pasting where not
+practical or possible testpmd supports alternative methods for executing commands.
+
+* If started with the ``--cmdline-file=FILENAME`` command line argument testpmd
+  will execute all CLI commands contained within the file immediately before
+  starting packet forwarding or entering interactive mode.
+
+.. code-block:: console
+
+   ./testpmd -n4 -r2 ... -- -i --cmdline-file=/home/ubuntu/flow-create-commands.txt
+   Interactive-mode selected
+   CLI commands to be read from /home/ubuntu/flow-create-commands.txt
+   Configuring Port 0 (socket 0)
+   Port 0: 7C:FE:90:CB:74:CE
+   Configuring Port 1 (socket 0)
+   Port 1: 7C:FE:90:CB:74:CA
+   Checking link statuses...
+   Port 0 Link Up - speed 10000 Mbps - full-duplex
+   Port 1 Link Up - speed 10000 Mbps - full-duplex
+   Done
+   Flow rule #0 created
+   Flow rule #1 created
+   ...
+   ...
+   Flow rule #498 created
+   Flow rule #499 created
+   Read all CLI commands from /home/ubuntu/flow-create-commands.txt
+   testpmd>
+
+
+* At run-time additional commands can be loaded in bulk by invoking the ``load FILENAME``
+  command.
+
+.. code-block:: console
+
+   testpmd> load /home/ubuntu/flow-create-commands.txt
+   Flow rule #0 created
+   Flow rule #1 created
+   ...
+   ...
+   Flow rule #498 created
+   Flow rule #499 created
+   Read all CLI commands from /home/ubuntu/flow-create-commands.txt
+   testpmd>
+
+
+In all cases output from any included command will be displayed as standard output.
+Execution will continue until the end of the file is reached regardless of
+whether any errors occur.  The end user must examine the output to determine if
+any failures occurred.
+
+
 Control Functions
 -----------------
 
@@ -325,6 +380,19 @@ For example::
    testpmd> read txd 0 0 4
         0x00000001 - 0x24C3C440 / 0x000F0000 - 0x2330003C
 
+show vf stats
+~~~~~~~~~~~~~
+
+Display VF statistics::
+
+   testpmd> show vf stats (port_id) (vf_id)
+
+clear vf stats
+~~~~~~~~~~~~~~
+
+Reset VF statistics::
+
+   testpmd> clear vf stats (port_id) (vf_id)
 
 Configuration Functions
 -----------------------
@@ -837,6 +905,13 @@ Add an alternative MAC address for a VF to a port::
 
    testpmd> mac_add add port (port_id) vf (vf_id) (XX:XX:XX:XX:XX:XX)
 
+mac_addr set
+~~~~~~~~~~~~
+
+Set the default MAC address for a port::
+
+   testpmd> mac_addr set (port_id) (XX:XX:XX:XX:XX:XX)
+
 mac_addr set (for VF)
 ~~~~~~~~~~~~~~~~~~~~~
 
@@ -885,6 +960,41 @@ It's supported by Intel i40e NICs now.
 In promiscuous mode packets are not dropped if they aren't for the specified MAC address::
 
    testpmd> set vf allmulti (port_id) (vf_id) (on|off)
+
+set tx max bandwidth (for VF)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Set TX max absolute bandwidth (Mbps) for a VF from PF::
+
+   testpmd> set vf tx max-bandwidth (port_id) (vf_id) (max_bandwidth)
+
+set tc tx min bandwidth (for VF)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Set all TCs' TX min relative bandwidth (%) for a VF from PF::
+
+   testpmd> set vf tc tx min-bandwidth (port_id) (vf_id) (bw1, bw2, ...)
+
+set tc tx max bandwidth (for VF)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Set a TC's TX max absolute bandwidth (Mbps) for a VF from PF::
+
+   testpmd> set vf tc tx max-bandwidth (port_id) (vf_id) (tc_no) (max_bandwidth)
+
+set tc strict link priority mode
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Set some TCs' strict link priority mode on a physical port::
+
+   testpmd> set tx strict-link-priority (port_id) (tc_bitmap)
+
+set tc tx min bandwidth
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Set all TCs' TX min relative bandwidth (%) globally for all PF and VFs::
+
+   testpmd> set tc tx min-bandwidth (port_id) (bw1, bw2, ...)
 
 set flow_ctrl rx
 ~~~~~~~~~~~~~~~~
@@ -1101,6 +1211,42 @@ Add an E-tag forwarding filter on a port::
 Delete an E-tag forwarding filter on a port::
    testpmd> E-tag set filter del e-tag-id (value) port (port_id)
 
+ptype mapping
+~~~~~~~~~~~~~
+
+List all items from the ptype mapping table::
+
+   testpmd> ptype mapping get (port_id) (valid_only)
+
+Where:
+
+* ``valid_only``: A flag indicates if only list valid items(=1) or all itemss(=0).
+
+Replace a specific or a group of software defined ptype with a new one::
+
+   testpmd> ptype mapping replace  (port_id) (target) (mask) (pkt_type)
+
+where:
+
+* ``target``: A specific software ptype or a mask to represent a group of software ptypes.
+
+* ``mask``: A flag indicate if "target" is a specific software ptype(=0) or a ptype mask(=1).
+
+* ``pkt_type``: The new software ptype to replace the old ones.
+
+Update hardware defined ptype to software defined packet type mapping table::
+
+   testpmd> ptype mapping update (port_id) (hw_ptype) (sw_ptype)
+
+where:
+
+* ``hw_ptype``: hardware ptype as the index of the ptype mapping table.
+
+* ``sw_ptype``: software ptype as the value of the ptype mapping table.
+
+Reset ptype mapping table::
+
+   testpmd> ptype mapping reset (port_id)
 
 Port Functions
 --------------
@@ -1323,9 +1469,9 @@ Set hardware CRC stripping on or off for all ports::
 
    testpmd> port config all crc-strip (on|off)
 
-CRC stripping is off by default.
+CRC stripping is on by default.
 
-The ``on`` option is equivalent to the ``--crc-strip`` command-line option.
+The ``off`` option is equivalent to the ``--disable-crc-strip`` command-line option.
 
 port config - scatter
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -2446,6 +2592,22 @@ This section lists supported pattern items and their attributes, if any.
 
   - ``vni {unsigned}``: VXLAN identifier.
 
+- ``e_tag``: match IEEE 802.1BR E-Tag header.
+
+  - ``grp_ecid_b {unsigned}``: GRP and E-CID base.
+
+- ``nvgre``: match NVGRE header.
+
+  - ``tni {unsigned}``: virtual subnet ID.
+
+- ``mpls``: match MPLS header.
+
+  - ``label {unsigned}``: MPLS label.
+
+- ``gre``: match GRE header.
+
+  - ``protocol {unsigned}``: protocol type.
+
 Actions list
 ^^^^^^^^^^^^
 
@@ -2731,3 +2893,53 @@ Output can be limited to specific groups::
    5       0       1000    i-      ETH IPV6 ICMP => QUEUE
    7       63      0       i-      ETH IPV6 UDP VXLAN => MARK QUEUE
    testpmd>
+
+Sample QinQ flow rules
+~~~~~~~~~~~~~~~~~~~~~~
+
+Before creating QinQ rule(s) the following commands should be issued to enable QinQ::
+
+   testpmd> port stop 0
+   testpmd> vlan set qinq on 0
+
+The above command sets the inner and outer TPID's to 0x8100.
+
+To change the TPID's the following commands should be used::
+
+   testpmd> vlan set outer tpid 0xa100 0
+   testpmd> vlan set inner tpid 0x9100 0
+   testpmd> port start 0
+
+Validate and create a QinQ rule on port 0 to steer traffic to a VF queue in a VM.
+
+::
+
+   testpmd> flow validate 0 ingress pattern eth / vlan tci is 123 /
+       vlan tci is 456 / end actions vf id 1 / queue index 0 / end
+   Flow rule #0 validated
+
+   testpmd> flow create 0 ingress pattern eth / vlan tci is 4 /
+       vlan tci is 456 / end actions vf id 123 / queue index 0 / end
+   Flow rule #0 created
+
+   testpmd> flow list 0
+   ID      Group   Prio    Attr    Rule
+   0       0       0       i-      ETH VLAN VLAN=>VF QUEUE
+
+Validate and create a QinQ rule on port 0 to steer traffic to a queue on the host.
+
+::
+
+   testpmd> flow validate 0 ingress pattern eth / vlan tci is 321 /
+        vlan tci is 654 / end actions pf / queue index 0 / end
+   Flow rule #1 validated
+
+   testpmd> flow create 0 ingress pattern eth / vlan tci is 321 /
+        vlan tci is 654 / end actions pf / queue index 1 / end
+   Flow rule #1 created
+
+   testpmd> flow list 0
+   ID      Group   Prio    Attr    Rule
+   0       0       0       i-      ETH VLAN VLAN=>VF QUEUE
+   1       0       0       i-      ETH VLAN VLAN=>PF QUEUE
+

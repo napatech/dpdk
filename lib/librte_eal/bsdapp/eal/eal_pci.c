@@ -87,9 +87,11 @@
  * enabling bus master.
  */
 
+extern struct rte_pci_bus rte_pci_bus;
+
 /* Map pci device */
 int
-rte_eal_pci_map_device(struct rte_pci_device *dev)
+rte_pci_map_device(struct rte_pci_device *dev)
 {
 	int ret = -1;
 
@@ -111,7 +113,7 @@ rte_eal_pci_map_device(struct rte_pci_device *dev)
 
 /* Unmap pci device */
 void
-rte_eal_pci_unmap_device(struct rte_pci_device *dev)
+rte_pci_unmap_device(struct rte_pci_device *dev)
 {
 	/* try unmapping the NIC resources */
 	switch (dev->kdrv) {
@@ -280,6 +282,9 @@ pci_scan_one(int dev_pci_fd, struct pci_conf *conf)
 	/* FreeBSD has no NUMA support (yet) */
 	dev->device.numa_node = 0;
 
+	rte_pci_device_name(&dev->addr, dev->name, sizeof(dev->name));
+	dev->device.name = dev->name;
+
 	/* FreeBSD has only one pass through driver */
 	dev->kdrv = RTE_KDRV_NIC_UIO;
 
@@ -313,20 +318,19 @@ pci_scan_one(int dev_pci_fd, struct pci_conf *conf)
 	}
 
 	/* device is valid, add in list (sorted) */
-	if (TAILQ_EMPTY(&pci_device_list)) {
-		TAILQ_INSERT_TAIL(&pci_device_list, dev, next);
+	if (TAILQ_EMPTY(&rte_pci_bus.device_list)) {
+		rte_pci_add_device(dev);
 	}
 	else {
 		struct rte_pci_device *dev2 = NULL;
 		int ret;
 
-		TAILQ_FOREACH(dev2, &pci_device_list, next) {
+		TAILQ_FOREACH(dev2, &rte_pci_bus.device_list, next) {
 			ret = rte_eal_compare_pci_addr(&dev->addr, &dev2->addr);
 			if (ret > 0)
 				continue;
 			else if (ret < 0) {
-				TAILQ_INSERT_BEFORE(dev2, dev, next);
-				return 0;
+				rte_pci_insert_device(dev2, dev);
 			} else { /* already registered */
 				dev2->kdrv = dev->kdrv;
 				dev2->max_vfs = dev->max_vfs;
@@ -334,10 +338,10 @@ pci_scan_one(int dev_pci_fd, struct pci_conf *conf)
 					dev->mem_resource,
 					sizeof(dev->mem_resource));
 				free(dev);
-				return 0;
 			}
+			return 0;
 		}
-		TAILQ_INSERT_TAIL(&pci_device_list, dev, next);
+		rte_pci_add_device(dev);
 	}
 
 	return 0;
@@ -352,7 +356,7 @@ skipdev:
  * list. Call pci_scan_one() for each pci entry found.
  */
 int
-rte_eal_pci_scan(void)
+rte_pci_scan(void)
 {
 	int fd;
 	unsigned dev_count = 0;
@@ -364,6 +368,10 @@ rte_eal_pci_scan(void)
 			.match_buf_len = sizeof(matches),
 			.matches = &matches[0],
 	};
+
+	/* for debug purposes, PCI can be disabled */
+	if (internal_config.no_pci)
+		return 0;
 
 	fd = open("/dev/pci", O_RDONLY);
 	if (fd < 0) {
@@ -447,10 +455,11 @@ error:
 }
 
 /* Read PCI config space. */
-int rte_eal_pci_read_config(const struct rte_pci_device *dev,
-			    void *buf, size_t len, off_t offset)
+int rte_pci_read_config(const struct rte_pci_device *dev,
+		void *buf, size_t len, off_t offset)
 {
 	int fd = -1;
+	int size;
 	struct pci_io pi = {
 		.pi_sel = {
 			.pc_domain = dev->addr.domain,
@@ -459,13 +468,7 @@ int rte_eal_pci_read_config(const struct rte_pci_device *dev,
 			.pc_func = dev->addr.function,
 		},
 		.pi_reg = offset,
-		.pi_width = len,
 	};
-
-	if (len == 3 || len > sizeof(pi.pi_data)) {
-		RTE_LOG(ERR, EAL, "%s(): invalid pci read length\n", __func__);
-		goto error;
-	}
 
 	fd = open("/dev/pci", O_RDWR);
 	if (fd < 0) {
@@ -473,11 +476,20 @@ int rte_eal_pci_read_config(const struct rte_pci_device *dev,
 		goto error;
 	}
 
-	if (ioctl(fd, PCIOCREAD, &pi) < 0)
-		goto error;
+	while (len > 0) {
+		size = (len >= 4) ? 4 : ((len >= 2) ? 2 : 1);
+		pi.pi_width = size;
+
+		if (ioctl(fd, PCIOCREAD, &pi) < 0)
+			goto error;
+		memcpy(buf, &pi.pi_data, size);
+
+		buf = (char *)buf + size;
+		pi.pi_reg += size;
+		len -= size;
+	}
 	close(fd);
 
-	memcpy(buf, &pi.pi_data, len);
 	return 0;
 
  error:
@@ -487,8 +499,8 @@ int rte_eal_pci_read_config(const struct rte_pci_device *dev,
 }
 
 /* Write PCI config space. */
-int rte_eal_pci_write_config(const struct rte_pci_device *dev,
-			     const void *buf, size_t len, off_t offset)
+int rte_pci_write_config(const struct rte_pci_device *dev,
+		const void *buf, size_t len, off_t offset)
 {
 	int fd = -1;
 
@@ -530,8 +542,8 @@ int rte_eal_pci_write_config(const struct rte_pci_device *dev,
 }
 
 int
-rte_eal_pci_ioport_map(struct rte_pci_device *dev, int bar,
-		       struct rte_pci_ioport *p)
+rte_pci_ioport_map(struct rte_pci_device *dev, int bar,
+		struct rte_pci_ioport *p)
 {
 	int ret;
 
@@ -558,7 +570,7 @@ rte_eal_pci_ioport_map(struct rte_pci_device *dev, int bar,
 
 static void
 pci_uio_ioport_read(struct rte_pci_ioport *p,
-		    void *data, size_t len, off_t offset)
+		void *data, size_t len, off_t offset)
 {
 #if defined(RTE_ARCH_X86)
 	uint8_t *d;
@@ -586,8 +598,8 @@ pci_uio_ioport_read(struct rte_pci_ioport *p,
 }
 
 void
-rte_eal_pci_ioport_read(struct rte_pci_ioport *p,
-			void *data, size_t len, off_t offset)
+rte_pci_ioport_read(struct rte_pci_ioport *p,
+		void *data, size_t len, off_t offset)
 {
 	switch (p->dev->kdrv) {
 	case RTE_KDRV_NIC_UIO:
@@ -600,7 +612,7 @@ rte_eal_pci_ioport_read(struct rte_pci_ioport *p,
 
 static void
 pci_uio_ioport_write(struct rte_pci_ioport *p,
-		     const void *data, size_t len, off_t offset)
+		const void *data, size_t len, off_t offset)
 {
 #if defined(RTE_ARCH_X86)
 	const uint8_t *s;
@@ -610,13 +622,13 @@ pci_uio_ioport_write(struct rte_pci_ioport *p,
 	for (s = data; len > 0; s += size, reg += size, len -= size) {
 		if (len >= 4) {
 			size = 4;
-			outl(*(const uint32_t *)s, reg);
+			outl(reg, *(const uint32_t *)s);
 		} else if (len >= 2) {
 			size = 2;
-			outw(*(const uint16_t *)s, reg);
+			outw(reg, *(const uint16_t *)s);
 		} else {
 			size = 1;
-			outb(*s, reg);
+			outb(reg, *s);
 		}
 	}
 #else
@@ -628,8 +640,8 @@ pci_uio_ioport_write(struct rte_pci_ioport *p,
 }
 
 void
-rte_eal_pci_ioport_write(struct rte_pci_ioport *p,
-			 const void *data, size_t len, off_t offset)
+rte_pci_ioport_write(struct rte_pci_ioport *p,
+		const void *data, size_t len, off_t offset)
 {
 	switch (p->dev->kdrv) {
 	case RTE_KDRV_NIC_UIO:
@@ -641,7 +653,7 @@ rte_eal_pci_ioport_write(struct rte_pci_ioport *p,
 }
 
 int
-rte_eal_pci_ioport_unmap(struct rte_pci_ioport *p)
+rte_pci_ioport_unmap(struct rte_pci_ioport *p)
 {
 	int ret;
 
@@ -657,19 +669,4 @@ rte_eal_pci_ioport_unmap(struct rte_pci_ioport *p)
 	}
 
 	return ret;
-}
-
-/* Init the PCI EAL subsystem */
-int
-rte_eal_pci_init(void)
-{
-	/* for debug purposes, PCI can be disabled */
-	if (internal_config.no_pci)
-		return 0;
-
-	if (rte_eal_pci_scan() < 0) {
-		RTE_LOG(ERR, EAL, "%s(): Cannot scan PCI bus\n", __func__);
-		return -1;
-	}
-	return 0;
 }

@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright(c) 2010-2015 Intel Corporation. All rights reserved.
+ *   Copyright(c) 2010-2017 Intel Corporation. All rights reserved.
  *   All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
@@ -251,6 +251,13 @@ enum i40e_flxpld_layer_idx {
 	I40E_INSET_FLEX_PAYLOAD_W5 | I40E_INSET_FLEX_PAYLOAD_W6 | \
 	I40E_INSET_FLEX_PAYLOAD_W7 | I40E_INSET_FLEX_PAYLOAD_W8)
 
+/**
+ * The overhead from MTU to max frame size.
+ * Considering QinQ packet, the VLAN tag needs to be counted twice.
+ */
+#define I40E_ETH_OVERHEAD \
+	(ETHER_HDR_LEN + ETHER_CRC_LEN + I40E_VLAN_TAG_SIZE * 2)
+
 struct i40e_adapter;
 
 /**
@@ -305,6 +312,7 @@ struct i40e_veb {
 	uint16_t stats_idx;
 	struct i40e_eth_stats stats;
 	uint8_t enabled_tc;   /* The traffic class enabled */
+	uint8_t strict_prio_tc; /* bit map of TCs set to strict priority mode */
 	struct i40e_bw_info bw_info; /* VEB bandwidth information */
 };
 
@@ -364,6 +372,7 @@ struct i40e_vsi {
 	uint16_t nb_msix;   /* The max number of msix vector */
 	uint8_t enabled_tc; /* The traffic class enabled */
 	uint8_t vlan_anti_spoof_on; /* The VLAN anti-spoofing enabled */
+	uint8_t vlan_filter_on; /* The VLAN filter enabled */
 	struct i40e_bw_info bw_info; /* VSI bandwidth information */
 };
 
@@ -499,6 +508,15 @@ struct i40e_ethertype_rule {
 /* Tunnel filter number HW supports */
 #define I40E_MAX_TUNNEL_FILTER_NUM 400
 
+#define I40E_AQC_REPLACE_CLOUD_CMD_INPUT_FV_TEID_WORD0 44
+#define I40E_AQC_REPLACE_CLOUD_CMD_INPUT_FV_TEID_WORD1 45
+#define I40E_AQC_ADD_CLOUD_TNL_TYPE_MPLSoUDP 8
+#define I40E_AQC_ADD_CLOUD_TNL_TYPE_MPLSoGRE 9
+#define I40E_AQC_ADD_CLOUD_FILTER_CUSTOM_QINQ 0x10
+#define I40E_AQC_ADD_CLOUD_FILTER_TEID_MPLSoUDP 0x11
+#define I40E_AQC_ADD_CLOUD_FILTER_TEID_MPLSoGRE 0x12
+#define I40E_AQC_ADD_L1_FILTER_TEID_MPLS 0x11
+
 enum i40e_tunnel_iptype {
 	I40E_TUNNEL_IPTYPE_IPV4,
 	I40E_TUNNEL_IPTYPE_IPV6,
@@ -512,11 +530,14 @@ struct i40e_tunnel_filter_input {
 	enum i40e_tunnel_iptype ip_type;
 	uint16_t flags;          /* Filter type flag */
 	uint32_t tenant_id;      /* Tenant id to match */
+	uint16_t general_fields[32];  /* Big buffer */
 };
 
 struct i40e_tunnel_filter {
 	TAILQ_ENTRY(i40e_tunnel_filter) rules;
 	struct i40e_tunnel_filter_input input;
+	uint8_t is_to_vf; /* 0 - to PF, 1 - to VF */
+	uint16_t vf_id;   /* VF id, avaiblable when is_to_vf is 1. */
 	uint16_t queue; /* Queue assigned to when match */
 };
 
@@ -526,6 +547,50 @@ struct i40e_tunnel_rule {
 	struct i40e_tunnel_filter_list tunnel_list;
 	struct i40e_tunnel_filter  **hash_map;
 	struct rte_hash *hash_table;
+};
+
+/**
+ * Tunnel type.
+ */
+enum i40e_tunnel_type {
+	I40E_TUNNEL_TYPE_NONE = 0,
+	I40E_TUNNEL_TYPE_VXLAN,
+	I40E_TUNNEL_TYPE_GENEVE,
+	I40E_TUNNEL_TYPE_TEREDO,
+	I40E_TUNNEL_TYPE_NVGRE,
+	I40E_TUNNEL_TYPE_IP_IN_GRE,
+	I40E_L2_TUNNEL_TYPE_E_TAG,
+	I40E_TUNNEL_TYPE_MPLSoUDP,
+	I40E_TUNNEL_TYPE_MPLSoGRE,
+	I40E_TUNNEL_TYPE_QINQ,
+	I40E_TUNNEL_TYPE_MAX,
+};
+
+/**
+ * Tunneling Packet filter configuration.
+ */
+struct i40e_tunnel_filter_conf {
+	struct ether_addr outer_mac;    /**< Outer MAC address to match. */
+	struct ether_addr inner_mac;    /**< Inner MAC address to match. */
+	uint16_t inner_vlan;            /**< Inner VLAN to match. */
+	uint32_t outer_vlan;            /**< Outer VLAN to match */
+	enum i40e_tunnel_iptype ip_type; /**< IP address type. */
+	/**
+	 * Outer destination IP address to match if ETH_TUNNEL_FILTER_OIP
+	 * is set in filter_type, or inner destination IP address to match
+	 * if ETH_TUNNEL_FILTER_IIP is set in filter_type.
+	 */
+	union {
+		uint32_t ipv4_addr;     /**< IPv4 address in big endian. */
+		uint32_t ipv6_addr[4];  /**< IPv6 address in big endian. */
+	} ip_addr;
+	/** Flags from ETH_TUNNEL_FILTER_XX - see above. */
+	uint16_t filter_type;
+	enum i40e_tunnel_type tunnel_type; /**< Tunnel Type. */
+	uint32_t tenant_id;     /**< Tenant ID to match. VNI, GRE key... */
+	uint16_t queue_id;      /**< Queue assigned to if match. */
+	uint8_t is_to_vf;       /**< 0 - to PF, 1 - to VF */
+	uint16_t vf_id;         /**< VF id, avaiblable when is_to_vf is 1. */
 };
 
 #define I40E_MIRROR_MAX_ENTRIES_PER_RULE   64
@@ -618,6 +683,8 @@ struct i40e_pf {
 	/* The floating enable flag for the specific VF */
 	bool floating_veb_list[I40E_MAX_VF];
 	struct i40e_flow_list flow_list;
+	bool mpls_replace_flag;  /* 1 - MPLS filter replace is done */
+	bool qinq_replace_flag;  /* QINQ filter replace is done */
 };
 
 enum pending_msg {
@@ -684,6 +751,8 @@ struct i40e_vf {
 	uint64_t flags;
 };
 
+#define I40E_MAX_PKT_TYPE 256
+
 /*
  * Structure to store private data for each PF/VF instance.
  */
@@ -708,6 +777,9 @@ struct i40e_adapter {
 	struct rte_timecounter systime_tc;
 	struct rte_timecounter rx_tstamp_tc;
 	struct rte_timecounter tx_tstamp_tc;
+
+	/* ptype mapping table */
+	uint32_t ptype_tbl[I40E_MAX_PKT_TYPE] __rte_cache_min_aligned;
 };
 
 extern const struct rte_flow_ops i40e_flow_ops;
@@ -716,6 +788,7 @@ union i40e_filter_t {
 	struct rte_eth_ethertype_filter ethertype_filter;
 	struct rte_eth_fdir_filter fdir_filter;
 	struct rte_eth_tunnel_filter_conf tunnel_filter;
+	struct i40e_tunnel_filter_conf consistent_tunnel_filter;
 };
 
 typedef int (*parse_filter_t)(struct rte_eth_dev *dev,
@@ -804,7 +877,21 @@ int i40e_add_del_fdir_filter(struct rte_eth_dev *dev,
 int i40e_dev_tunnel_filter_set(struct i40e_pf *pf,
 			       struct rte_eth_tunnel_filter_conf *tunnel_filter,
 			       uint8_t add);
+int i40e_dev_consistent_tunnel_filter_set(struct i40e_pf *pf,
+				  struct i40e_tunnel_filter_conf *tunnel_filter,
+				  uint8_t add);
 int i40e_fdir_flush(struct rte_eth_dev *dev);
+int i40e_find_all_vlan_for_mac(struct i40e_vsi *vsi,
+			       struct i40e_macvlan_filter *mv_f,
+			       int num, struct ether_addr *addr);
+int i40e_remove_macvlan_filters(struct i40e_vsi *vsi,
+				struct i40e_macvlan_filter *filter,
+				int total);
+void i40e_set_vlan_filter(struct i40e_vsi *vsi, uint16_t vlan_id, bool on);
+int i40e_add_macvlan_filters(struct i40e_vsi *vsi,
+			     struct i40e_macvlan_filter *filter,
+			     int total);
+bool is_i40e_supported(struct rte_eth_dev *dev);
 
 #define I40E_DEV_TO_PCI(eth_dev) \
 	RTE_DEV_TO_PCI((eth_dev)->device)

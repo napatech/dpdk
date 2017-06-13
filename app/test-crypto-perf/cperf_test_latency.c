@@ -39,26 +39,6 @@
 #include "cperf_ops.h"
 
 
-struct cperf_latency_results {
-
-	uint64_t ops_failed;
-
-	uint64_t enqd_tot;
-	uint64_t enqd_max;
-	uint64_t enqd_min;
-
-	uint64_t deqd_tot;
-	uint64_t deqd_max;
-	uint64_t deqd_min;
-
-	uint64_t cycles_tot;
-	uint64_t cycles_max;
-	uint64_t cycles_min;
-
-	uint64_t burst_num;
-	uint64_t num;
-};
-
 struct cperf_op_result {
 	uint64_t tsc_start;
 	uint64_t tsc_end;
@@ -80,12 +60,10 @@ struct cperf_latency_ctx {
 	struct rte_cryptodev_sym_session *sess;
 
 	cperf_populate_ops_t populate_ops;
-	cperf_verify_crypto_op_t verify_op_output;
 
 	const struct cperf_options *options;
 	const struct cperf_test_vector *test_vector;
 	struct cperf_op_result *res;
-	struct cperf_latency_results results;
 };
 
 #define max(a, b) (a > b ? (uint64_t)a : (uint64_t)b)
@@ -137,8 +115,8 @@ cperf_mbuf_create(struct rte_mempool *mempool,
 		const struct cperf_test_vector *test_vector)
 {
 	struct rte_mbuf *mbuf;
-	uint32_t segment_sz = options->buffer_sz / segments_nb;
-	uint32_t last_sz = options->buffer_sz % segments_nb;
+	uint32_t segment_sz = options->max_buffer_size / segments_nb;
+	uint32_t last_sz = options->max_buffer_size % segments_nb;
 	uint8_t *mbuf_data;
 	uint8_t *test_data =
 			(options->cipher_op == RTE_CRYPTO_CIPHER_OP_ENCRYPT) ?
@@ -183,10 +161,12 @@ cperf_mbuf_create(struct rte_mempool *mempool,
 		memcpy(mbuf_data, test_data, last_sz);
 	}
 
-	mbuf_data = (uint8_t *)rte_pktmbuf_append(mbuf,
+	if (options->op_type != CPERF_CIPHER_ONLY) {
+		mbuf_data = (uint8_t *)rte_pktmbuf_append(mbuf,
 			options->auth_digest_sz);
-	if (mbuf_data == NULL)
-		goto error;
+		if (mbuf_data == NULL)
+			goto error;
+	}
 
 	if (options->op_type == CPERF_AEAD) {
 		uint8_t *aead = (uint8_t *)rte_pktmbuf_prepend(mbuf,
@@ -238,8 +218,8 @@ cperf_latency_test_constructor(uint8_t dev_id, uint16_t qp_id,
 			options->pool_sz * options->segments_nb, 0, 0,
 			RTE_PKTMBUF_HEADROOM +
 			RTE_CACHE_LINE_ROUNDUP(
-				(options->buffer_sz / options->segments_nb) +
-				(options->buffer_sz % options->segments_nb) +
+				(options->max_buffer_size / options->segments_nb) +
+				(options->max_buffer_size % options->segments_nb) +
 					options->auth_digest_sz),
 			rte_socket_id());
 
@@ -247,9 +227,6 @@ cperf_latency_test_constructor(uint8_t dev_id, uint16_t qp_id,
 		goto err;
 
 	/* Generate mbufs_in with plaintext populated for test */
-	if (ctx->options->pool_sz % ctx->options->burst_sz)
-		goto err;
-
 	ctx->mbufs_in = rte_malloc(NULL,
 			(sizeof(struct rte_mbuf *) *
 			ctx->options->pool_sz), 0);
@@ -272,7 +249,7 @@ cperf_latency_test_constructor(uint8_t dev_id, uint16_t qp_id,
 				pool_name, options->pool_sz, 0, 0,
 				RTE_PKTMBUF_HEADROOM +
 				RTE_CACHE_LINE_ROUNDUP(
-					options->buffer_sz +
+					options->max_buffer_size +
 					options->auth_digest_sz),
 				rte_socket_id());
 
@@ -318,119 +295,22 @@ err:
 	return NULL;
 }
 
-static int
-cperf_latency_test_verifier(struct rte_mbuf *mbuf,
-		const struct cperf_options *options,
-		const struct cperf_test_vector *vector)
-{
-	const struct rte_mbuf *m;
-	uint32_t len;
-	uint16_t nb_segs;
-	uint8_t *data;
-	uint32_t cipher_offset, auth_offset;
-	uint8_t	cipher, auth;
-	int res = 0;
-
-	m = mbuf;
-	nb_segs = m->nb_segs;
-	len = 0;
-	while (m && nb_segs != 0) {
-		len += m->data_len;
-		m = m->next;
-		nb_segs--;
-	}
-
-	data = rte_malloc(NULL, len, 0);
-	if (data == NULL)
-		return 1;
-
-	m = mbuf;
-	nb_segs = m->nb_segs;
-	len = 0;
-	while (m && nb_segs != 0) {
-		memcpy(data + len, rte_pktmbuf_mtod(m, uint8_t *),
-				m->data_len);
-		len += m->data_len;
-		m = m->next;
-		nb_segs--;
-	}
-
-	switch (options->op_type) {
-	case CPERF_CIPHER_ONLY:
-		cipher = 1;
-		cipher_offset = 0;
-		auth = 0;
-		auth_offset = 0;
-		break;
-	case CPERF_CIPHER_THEN_AUTH:
-		cipher = 1;
-		cipher_offset = 0;
-		auth = 1;
-		auth_offset = vector->plaintext.length;
-		break;
-	case CPERF_AUTH_ONLY:
-		cipher = 0;
-		cipher_offset = 0;
-		auth = 1;
-		auth_offset = vector->plaintext.length;
-		break;
-	case CPERF_AUTH_THEN_CIPHER:
-		cipher = 1;
-		cipher_offset = 0;
-		auth = 1;
-		auth_offset = vector->plaintext.length;
-		break;
-	case CPERF_AEAD:
-		cipher = 1;
-		cipher_offset = vector->aad.length;
-		auth = 1;
-		auth_offset = vector->aad.length + vector->plaintext.length;
-		break;
-	}
-
-	if (cipher == 1) {
-		if (options->cipher_op == RTE_CRYPTO_CIPHER_OP_ENCRYPT)
-			res += memcmp(data + cipher_offset,
-					vector->ciphertext.data,
-					vector->ciphertext.length);
-		else
-			res += memcmp(data + cipher_offset,
-					vector->plaintext.data,
-					vector->plaintext.length);
-	}
-
-	if (auth == 1) {
-		if (options->auth_op == RTE_CRYPTO_AUTH_OP_GENERATE)
-			res += memcmp(data + auth_offset,
-					vector->digest.data,
-					vector->digest.length);
-	}
-
-	if (res != 0)
-		res = 1;
-
-	return res;
-}
-
 int
 cperf_latency_test_runner(void *arg)
 {
 	struct cperf_latency_ctx *ctx = arg;
 	struct cperf_op_result *pres;
+	uint16_t test_burst_size;
+	uint8_t burst_size_idx = 0;
+
+	static int only_once;
 
 	if (ctx == NULL)
 		return 0;
 
-	struct rte_crypto_op *ops[ctx->options->burst_sz];
-	struct rte_crypto_op *ops_processed[ctx->options->burst_sz];
-	uint64_t ops_enqd = 0, ops_deqd = 0;
-	uint16_t ops_unused = 0;
-	uint64_t m_idx = 0, b_idx = 0, i;
-
-	uint64_t tsc_val, tsc_end, tsc_start;
-	uint64_t tsc_max = 0, tsc_min = ~0UL, tsc_tot = 0, tsc_idx = 0;
-	uint64_t enqd_max = 0, enqd_min = ~0UL, enqd_tot = 0;
-	uint64_t deqd_max = 0, deqd_min = ~0UL, deqd_tot = 0;
+	struct rte_crypto_op *ops[ctx->options->max_burst_size];
+	struct rte_crypto_op *ops_processed[ctx->options->max_burst_size];
+	uint64_t i;
 
 	uint32_t lcore = rte_lcore_id();
 
@@ -453,162 +333,208 @@ cperf_latency_test_runner(void *arg)
 	for (i = 0; i < ctx->options->total_ops; i++)
 		rte_cryptodev_enqueue_burst(ctx->dev_id, ctx->qp_id, NULL, 0);
 
-	while (enqd_tot < ctx->options->total_ops) {
+	/* Get first size from range or list */
+	if (ctx->options->inc_burst_size != 0)
+		test_burst_size = ctx->options->min_burst_size;
+	else
+		test_burst_size = ctx->options->burst_size_list[0];
 
-		uint16_t burst_size = ((enqd_tot + ctx->options->burst_sz)
-				<= ctx->options->total_ops) ?
-						ctx->options->burst_sz :
-						ctx->options->total_ops -
-						enqd_tot;
-		uint16_t ops_needed = burst_size - ops_unused;
+	while (test_burst_size <= ctx->options->max_burst_size) {
+		uint64_t ops_enqd = 0, ops_deqd = 0;
+		uint64_t m_idx = 0, b_idx = 0;
 
-		/* Allocate crypto ops from pool */
-		if (ops_needed != rte_crypto_op_bulk_alloc(
-				ctx->crypto_op_pool,
-				RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-				ops, ops_needed))
-			return -1;
+		uint64_t tsc_val, tsc_end, tsc_start;
+		uint64_t tsc_max = 0, tsc_min = ~0UL, tsc_tot = 0, tsc_idx = 0;
+		uint64_t enqd_max = 0, enqd_min = ~0UL, enqd_tot = 0;
+		uint64_t deqd_max = 0, deqd_min = ~0UL, deqd_tot = 0;
 
-		/* Setup crypto op, attach mbuf etc */
-		(ctx->populate_ops)(ops, &ctx->mbufs_in[m_idx],
-				&ctx->mbufs_out[m_idx],
-				ops_needed, ctx->sess, ctx->options,
-				ctx->test_vector);
+		while (enqd_tot < ctx->options->total_ops) {
 
-		tsc_start = rte_rdtsc_precise();
+			uint16_t burst_size = ((enqd_tot + test_burst_size)
+					<= ctx->options->total_ops) ?
+							test_burst_size :
+							ctx->options->total_ops -
+							enqd_tot;
+
+			/* Allocate crypto ops from pool */
+			if (burst_size != rte_crypto_op_bulk_alloc(
+					ctx->crypto_op_pool,
+					RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+					ops, burst_size))
+				return -1;
+
+			/* Setup crypto op, attach mbuf etc */
+			(ctx->populate_ops)(ops, &ctx->mbufs_in[m_idx],
+					&ctx->mbufs_out[m_idx],
+					burst_size, ctx->sess, ctx->options,
+					ctx->test_vector);
+
+			tsc_start = rte_rdtsc_precise();
 
 #ifdef CPERF_LINEARIZATION_ENABLE
-		if (linearize) {
-			/* PMD doesn't support scatter-gather and source buffer
-			 * is segmented.
-			 * We need to linearize it before enqueuing.
-			 */
-			for (i = 0; i < burst_size; i++)
-				rte_pktmbuf_linearize(ops[i]->sym->m_src);
-		}
+			if (linearize) {
+				/* PMD doesn't support scatter-gather and source buffer
+				 * is segmented.
+				 * We need to linearize it before enqueuing.
+				 */
+				for (i = 0; i < burst_size; i++)
+					rte_pktmbuf_linearize(ops[i]->sym->m_src);
+			}
 #endif /* CPERF_LINEARIZATION_ENABLE */
 
-		/* Enqueue burst of ops on crypto device */
-		ops_enqd = rte_cryptodev_enqueue_burst(ctx->dev_id, ctx->qp_id,
-				ops, burst_size);
+			/* Enqueue burst of ops on crypto device */
+			ops_enqd = rte_cryptodev_enqueue_burst(ctx->dev_id, ctx->qp_id,
+					ops, burst_size);
 
-		/* Dequeue processed burst of ops from crypto device */
-		ops_deqd = rte_cryptodev_dequeue_burst(ctx->dev_id, ctx->qp_id,
-				ops_processed, ctx->options->burst_sz);
+			/* Dequeue processed burst of ops from crypto device */
+			ops_deqd = rte_cryptodev_dequeue_burst(ctx->dev_id, ctx->qp_id,
+					ops_processed, test_burst_size);
 
-		tsc_end = rte_rdtsc_precise();
+			tsc_end = rte_rdtsc_precise();
 
-		for (i = 0; i < ops_needed; i++) {
-			ctx->res[tsc_idx].tsc_start = tsc_start;
-			ops[i]->opaque_data = (void *)&ctx->res[tsc_idx];
-			tsc_idx++;
-		}
+			/* Free memory for not enqueued operations */
+			for (i = ops_enqd; i < burst_size; i++)
+				rte_crypto_op_free(ops[i]);
 
-		/*
-		 * Calculate number of ops not enqueued (mainly for hw
-		 * accelerators whose ingress queue can fill up).
-		 */
-		ops_unused = burst_size - ops_enqd;
-
-		if (likely(ops_deqd))  {
-			/*
-			 * free crypto ops so they can be reused. We don't free
-			 * the mbufs here as we don't want to reuse them as
-			 * the crypto operation will change the data and cause
-			 * failures.
-			 */
-			for (i = 0; i < ops_deqd; i++) {
-				pres = (struct cperf_op_result *)
-						(ops_processed[i]->opaque_data);
-				pres->status = ops_processed[i]->status;
-				pres->tsc_end = tsc_end;
-
-				rte_crypto_op_free(ops_processed[i]);
+			for (i = 0; i < ops_enqd; i++) {
+				ctx->res[tsc_idx].tsc_start = tsc_start;
+				ops[i]->opaque_data = (void *)&ctx->res[tsc_idx];
+				tsc_idx++;
 			}
 
-			deqd_tot += ops_deqd;
-			deqd_max = max(ops_deqd, deqd_max);
-			deqd_min = min(ops_deqd, deqd_min);
-		}
+			if (likely(ops_deqd))  {
+				/*
+				 * free crypto ops so they can be reused. We don't free
+				 * the mbufs here as we don't want to reuse them as
+				 * the crypto operation will change the data and cause
+				 * failures.
+				 */
+				for (i = 0; i < ops_deqd; i++) {
+					pres = (struct cperf_op_result *)
+							(ops_processed[i]->opaque_data);
+					pres->status = ops_processed[i]->status;
+					pres->tsc_end = tsc_end;
 
-		enqd_tot += ops_enqd;
-		enqd_max = max(ops_enqd, enqd_max);
-		enqd_min = min(ops_enqd, enqd_min);
+					rte_crypto_op_free(ops_processed[i]);
+				}
 
-		m_idx += ops_needed;
-		m_idx = m_idx + ctx->options->burst_sz > ctx->options->pool_sz ?
-				0 : m_idx;
-		b_idx++;
-	}
-
-	/* Dequeue any operations still in the crypto device */
-	while (deqd_tot < ctx->options->total_ops) {
-		/* Sending 0 length burst to flush sw crypto device */
-		rte_cryptodev_enqueue_burst(ctx->dev_id, ctx->qp_id, NULL, 0);
-
-		/* dequeue burst */
-		ops_deqd = rte_cryptodev_dequeue_burst(ctx->dev_id, ctx->qp_id,
-				ops_processed, ctx->options->burst_sz);
-
-		tsc_end = rte_rdtsc_precise();
-
-		if (ops_deqd != 0) {
-			for (i = 0; i < ops_deqd; i++) {
-				pres = (struct cperf_op_result *)
-						(ops_processed[i]->opaque_data);
-				pres->status = ops_processed[i]->status;
-				pres->tsc_end = tsc_end;
-
-				rte_crypto_op_free(ops_processed[i]);
+				deqd_tot += ops_deqd;
+				deqd_max = max(ops_deqd, deqd_max);
+				deqd_min = min(ops_deqd, deqd_min);
 			}
 
-			deqd_tot += ops_deqd;
-			deqd_max = max(ops_deqd, deqd_max);
-			deqd_min = min(ops_deqd, deqd_min);
+			enqd_tot += ops_enqd;
+			enqd_max = max(ops_enqd, enqd_max);
+			enqd_min = min(ops_enqd, enqd_min);
+
+			m_idx += ops_enqd;
+			m_idx = m_idx + test_burst_size > ctx->options->pool_sz ?
+					0 : m_idx;
+			b_idx++;
 		}
-	}
 
-	for (i = 0; i < tsc_idx; i++) {
-		tsc_val = ctx->res[i].tsc_end - ctx->res[i].tsc_start;
-		tsc_max = max(tsc_val, tsc_max);
-		tsc_min = min(tsc_val, tsc_min);
-		tsc_tot += tsc_val;
-	}
+		/* Dequeue any operations still in the crypto device */
+		while (deqd_tot < ctx->options->total_ops) {
+			/* Sending 0 length burst to flush sw crypto device */
+			rte_cryptodev_enqueue_burst(ctx->dev_id, ctx->qp_id, NULL, 0);
 
-	if (ctx->options->verify) {
-		struct rte_mbuf **mbufs;
+			/* dequeue burst */
+			ops_deqd = rte_cryptodev_dequeue_burst(ctx->dev_id, ctx->qp_id,
+					ops_processed, test_burst_size);
 
-		if (ctx->options->out_of_place == 1)
-			mbufs = ctx->mbufs_out;
-		else
-			mbufs = ctx->mbufs_in;
+			tsc_end = rte_rdtsc_precise();
 
-		for (i = 0; i < ctx->options->total_ops; i++) {
+			if (ops_deqd != 0) {
+				for (i = 0; i < ops_deqd; i++) {
+					pres = (struct cperf_op_result *)
+							(ops_processed[i]->opaque_data);
+					pres->status = ops_processed[i]->status;
+					pres->tsc_end = tsc_end;
 
-			if (ctx->res[i].status != RTE_CRYPTO_OP_STATUS_SUCCESS
-					|| cperf_latency_test_verifier(mbufs[i],
-							ctx->options,
-							ctx->test_vector)) {
+					rte_crypto_op_free(ops_processed[i]);
+				}
 
-				ctx->results.ops_failed++;
+				deqd_tot += ops_deqd;
+				deqd_max = max(ops_deqd, deqd_max);
+				deqd_min = min(ops_deqd, deqd_min);
 			}
 		}
+
+		for (i = 0; i < tsc_idx; i++) {
+			tsc_val = ctx->res[i].tsc_end - ctx->res[i].tsc_start;
+			tsc_max = max(tsc_val, tsc_max);
+			tsc_min = min(tsc_val, tsc_min);
+			tsc_tot += tsc_val;
+		}
+
+		double time_tot, time_avg, time_max, time_min;
+
+		const uint64_t tunit = 1000000; /* us */
+		const uint64_t tsc_hz = rte_get_tsc_hz();
+
+		uint64_t enqd_avg = enqd_tot / b_idx;
+		uint64_t deqd_avg = deqd_tot / b_idx;
+		uint64_t tsc_avg = tsc_tot / tsc_idx;
+
+		time_tot = tunit*(double)(tsc_tot) / tsc_hz;
+		time_avg = tunit*(double)(tsc_avg) / tsc_hz;
+		time_max = tunit*(double)(tsc_max) / tsc_hz;
+		time_min = tunit*(double)(tsc_min) / tsc_hz;
+
+		if (ctx->options->csv) {
+			if (!only_once)
+				printf("\n# lcore, Buffer Size, Burst Size, Pakt Seq #, "
+						"Packet Size, cycles, time (us)");
+
+			for (i = 0; i < ctx->options->total_ops; i++) {
+
+				printf("\n%u;%u;%u;%"PRIu64";%"PRIu64";%.3f",
+					ctx->lcore_id, ctx->options->test_buffer_size,
+					test_burst_size, i + 1,
+					ctx->res[i].tsc_end - ctx->res[i].tsc_start,
+					tunit * (double) (ctx->res[i].tsc_end
+							- ctx->res[i].tsc_start)
+						/ tsc_hz);
+
+			}
+			only_once = 1;
+		} else {
+			printf("\n# Device %d on lcore %u\n", ctx->dev_id,
+				ctx->lcore_id);
+			printf("\n# total operations: %u", ctx->options->total_ops);
+			printf("\n# Buffer size: %u", ctx->options->test_buffer_size);
+			printf("\n# Burst size: %u", test_burst_size);
+			printf("\n#     Number of bursts: %"PRIu64,
+					b_idx);
+
+			printf("\n#");
+			printf("\n#          \t       Total\t   Average\t   "
+					"Maximum\t   Minimum");
+			printf("\n#  enqueued\t%12"PRIu64"\t%10"PRIu64"\t"
+					"%10"PRIu64"\t%10"PRIu64, enqd_tot,
+					enqd_avg, enqd_max, enqd_min);
+			printf("\n#  dequeued\t%12"PRIu64"\t%10"PRIu64"\t"
+					"%10"PRIu64"\t%10"PRIu64, deqd_tot,
+					deqd_avg, deqd_max, deqd_min);
+			printf("\n#    cycles\t%12"PRIu64"\t%10"PRIu64"\t"
+					"%10"PRIu64"\t%10"PRIu64, tsc_tot,
+					tsc_avg, tsc_max, tsc_min);
+			printf("\n# time [us]\t%12.0f\t%10.3f\t%10.3f\t%10.3f",
+					time_tot, time_avg, time_max, time_min);
+			printf("\n\n");
+
+		}
+
+		/* Get next size from range or list */
+		if (ctx->options->inc_burst_size != 0)
+			test_burst_size += ctx->options->inc_burst_size;
+		else {
+			if (++burst_size_idx == ctx->options->burst_size_count)
+				break;
+			test_burst_size =
+				ctx->options->burst_size_list[burst_size_idx];
+		}
 	}
-
-	ctx->results.enqd_tot = enqd_tot;
-	ctx->results.enqd_max = enqd_max;
-	ctx->results.enqd_min = enqd_min;
-
-	ctx->results.deqd_tot = deqd_tot;
-	ctx->results.deqd_max = deqd_max;
-	ctx->results.deqd_min = deqd_min;
-
-	ctx->results.cycles_tot = tsc_tot;
-	ctx->results.cycles_max = tsc_max;
-	ctx->results.cycles_min = tsc_min;
-
-	ctx->results.burst_num = b_idx;
-	ctx->results.num = tsc_idx;
 
 	return 0;
 }
@@ -617,76 +543,10 @@ void
 cperf_latency_test_destructor(void *arg)
 {
 	struct cperf_latency_ctx *ctx = arg;
-	uint64_t i;
+
 	if (ctx == NULL)
 		return;
-	static int only_once;
-	uint64_t etot, eavg, emax, emin;
-	uint64_t dtot, davg, dmax, dmin;
-	uint64_t ctot, cavg, cmax, cmin;
-	double ttot, tavg, tmax, tmin;
 
-	const uint64_t tunit = 1000000; /* us */
-	const uint64_t tsc_hz = rte_get_tsc_hz();
-
-	etot = ctx->results.enqd_tot;
-	eavg = ctx->results.enqd_tot / ctx->results.burst_num;
-	emax = ctx->results.enqd_max;
-	emin = ctx->results.enqd_min;
-
-	dtot = ctx->results.deqd_tot;
-	davg = ctx->results.deqd_tot / ctx->results.burst_num;
-	dmax = ctx->results.deqd_max;
-	dmin = ctx->results.deqd_min;
-
-	ctot = ctx->results.cycles_tot;
-	cavg = ctx->results.cycles_tot / ctx->results.num;
-	cmax = ctx->results.cycles_max;
-	cmin = ctx->results.cycles_min;
-
-	ttot = tunit*(double)(ctot) / tsc_hz;
-	tavg = tunit*(double)(cavg) / tsc_hz;
-	tmax = tunit*(double)(cmax) / tsc_hz;
-	tmin = tunit*(double)(cmin) / tsc_hz;
-
-	if (ctx->options->csv) {
-		if (!only_once)
-			printf("\n# lcore, Pakt Seq #, Packet Size, cycles,"
-					" time (us)");
-
-		for (i = 0; i < ctx->options->total_ops; i++) {
-
-			printf("\n%u;%"PRIu64";%"PRIu64";%.3f",
-				ctx->lcore_id, i + 1,
-				ctx->res[i].tsc_end - ctx->res[i].tsc_start,
-				tunit * (double) (ctx->res[i].tsc_end
-						- ctx->res[i].tsc_start)
-					/ tsc_hz);
-
-		}
-		only_once = 1;
-	} else {
-		printf("\n# Device %d on lcore %u\n", ctx->dev_id,
-			ctx->lcore_id);
-		printf("\n# total operations: %u", ctx->options->total_ops);
-		printf("\n#  verified failed: %"PRIu64,
-				ctx->results.ops_failed);
-		printf("\n#     burst number: %"PRIu64,
-				ctx->results.burst_num);
-		printf("\n#");
-		printf("\n#          \t       Total\t   Average\t   Maximum\t "
-				"  Minimum");
-		printf("\n#  enqueued\t%12"PRIu64"\t%10"PRIu64"\t%10"PRIu64"\t"
-				"%10"PRIu64, etot, eavg, emax, emin);
-		printf("\n#  dequeued\t%12"PRIu64"\t%10"PRIu64"\t%10"PRIu64"\t"
-				"%10"PRIu64, dtot, davg, dmax, dmin);
-		printf("\n#    cycles\t%12"PRIu64"\t%10"PRIu64"\t%10"PRIu64"\t"
-				"%10"PRIu64, ctot, cavg, cmax, cmin);
-		printf("\n# time [us]\t%12.0f\t%10.3f\t%10.3f\t%10.3f", ttot,
-			tavg, tmax, tmin);
-		printf("\n\n");
-
-	}
 	cperf_latency_test_free(ctx, ctx->options->pool_sz);
 
 }

@@ -57,6 +57,9 @@ CFLAGS_BASE_DRIVER += -Wno-unused-variable
 ifeq ($(CONFIG_RTE_TOOLCHAIN_GCC),y)
 ifeq ($(shell test $(GCC_VERSION) -ge 60 && echo 1), 1)
 CFLAGS_BASE_DRIVER += -Wno-misleading-indentation
+ifeq ($(shell test $(GCC_VERSION) -ge 70 && echo 1), 1)
+CFLAGS_BASE_DRIVER += -Wno-implicit-fallthrough
+endif
 endif
 endif
 endif
@@ -95,10 +98,5 @@ SRCS-$(CONFIG_RTE_LIBRTE_IGB_PMD) += igb_rxtx.c
 SRCS-$(CONFIG_RTE_LIBRTE_IGB_PMD) += igb_pf.c
 SRCS-$(CONFIG_RTE_LIBRTE_EM_PMD) += em_ethdev.c
 SRCS-$(CONFIG_RTE_LIBRTE_EM_PMD) += em_rxtx.c
-
-# this lib depends upon:
-DEPDIRS-$(CONFIG_RTE_LIBRTE_E1000_PMD) += lib/librte_eal lib/librte_ether
-DEPDIRS-$(CONFIG_RTE_LIBRTE_E1000_PMD) += lib/librte_mempool lib/librte_mbuf
-DEPDIRS-$(CONFIG_RTE_LIBRTE_E1000_PMD) += lib/librte_net
 
 include $(RTE_SDK)/mk/rte.lib.mk

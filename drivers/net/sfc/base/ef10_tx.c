@@ -67,7 +67,7 @@ efx_mcdi_init_txq(
 	    EFX_TXQ_NBUFS(enp->en_nic_cfg.enc_txq_max_ndescs));
 
 	npages = EFX_TXQ_NBUFS(size);
-	if (npages > MC_CMD_INIT_TXQ_IN_DMA_ADDR_MAXNUM) {
+	if (MC_CMD_INIT_TXQ_IN_LEN(npages) > sizeof (payload)) {
 		rc = EINVAL;
 		goto fail1;
 	}
@@ -282,9 +282,9 @@ ef10_tx_qpio_enable(
 fail3:
 	EFSYS_PROBE(fail3);
 	ef10_nic_pio_free(enp, etp->et_pio_bufnum, etp->et_pio_blknum);
-	etp->et_pio_size = 0;
 fail2:
 	EFSYS_PROBE(fail2);
+	etp->et_pio_size = 0;
 fail1:
 	EFSYS_PROBE1(fail1, efx_rc_t, rc);
 
@@ -435,8 +435,9 @@ ef10_tx_qpost(
 		size_t offset;
 		efx_qword_t qword;
 
-		/* Fragments must not span 4k boundaries. */
-		EFSYS_ASSERT(P2ROUNDUP(addr + 1, 4096) >= (addr + size));
+		/* No limitations on boundary crossing */
+		EFSYS_ASSERT(size <=
+		    etp->et_enp->en_nic_cfg.enc_tx_dma_desc_size_max);
 
 		id = added++ & etp->et_mask;
 		offset = id * sizeof (efx_qword_t);
@@ -551,8 +552,8 @@ ef10_tx_qdesc_dma_create(
 	__in	boolean_t eop,
 	__out	efx_desc_t *edp)
 {
-	/* Fragments must not span 4k boundaries. */
-	EFSYS_ASSERT(P2ROUNDUP(addr + 1, 4096) >= addr + size);
+	/* No limitations on boundary crossing */
+	EFSYS_ASSERT(size <= etp->et_enp->en_nic_cfg.enc_tx_dma_desc_size_max);
 
 	EFSYS_PROBE4(tx_desc_dma_create, unsigned int, etp->et_index,
 		    efsys_dma_addr_t, addr,

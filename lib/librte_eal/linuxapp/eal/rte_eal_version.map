@@ -6,8 +6,6 @@ DPDK_2.0 {
 	eal_parse_sysfs_value;
 	eal_timer_source;
 	lcore_config;
-	pci_device_list;
-	pci_driver_list;
 	per_lcore__lcore_id;
 	per_lcore__rte_errno;
 	rte_calloc;
@@ -22,12 +20,9 @@ DPDK_2.0 {
 	rte_dump_tailq;
 	rte_eal_alarm_cancel;
 	rte_eal_alarm_set;
-	rte_eal_dev_init;
 	rte_eal_devargs_add;
 	rte_eal_devargs_dump;
 	rte_eal_devargs_type_count;
-	rte_eal_driver_register;
-	rte_eal_driver_unregister;
 	rte_eal_get_configuration;
 	rte_eal_get_lcore_state;
 	rte_eal_get_physmem_layout;
@@ -40,18 +35,10 @@ DPDK_2.0 {
 	rte_eal_mp_remote_launch;
 	rte_eal_mp_wait_lcore;
 	rte_eal_parse_devargs_str;
-	rte_eal_pci_dump;
-	rte_eal_pci_probe;
-	rte_eal_pci_probe_one;
-	rte_eal_pci_register;
-	rte_eal_pci_scan;
-	rte_eal_pci_unregister;
 	rte_eal_process_type;
 	rte_eal_remote_launch;
 	rte_eal_tailq_lookup;
 	rte_eal_tailq_register;
-	rte_eal_vdev_init;
-	rte_eal_vdev_uninit;
 	rte_eal_wait_lcore;
 	rte_exit;
 	rte_free;
@@ -66,11 +53,8 @@ DPDK_2.0 {
 	rte_intr_disable;
 	rte_intr_enable;
 	rte_log;
-	rte_log_add_in_history;
 	rte_log_cur_msg_loglevel;
 	rte_log_cur_msg_logtype;
-	rte_log_dump_history;
-	rte_log_set_history;
 	rte_logs;
 	rte_malloc;
 	rte_malloc_dump_stats;
@@ -114,9 +98,6 @@ DPDK_2.0 {
 DPDK_2.1 {
 	global:
 
-	rte_eal_pci_detach;
-	rte_eal_pci_read_config;
-	rte_eal_pci_write_config;
 	rte_epoll_ctl;
 	rte_epoll_wait;
 	rte_intr_allow_others;
@@ -146,12 +127,6 @@ DPDK_16.04 {
 	global:
 
 	rte_cpu_get_flag_name;
-	rte_eal_pci_ioport_map;
-	rte_eal_pci_ioport_read;
-	rte_eal_pci_ioport_unmap;
-	rte_eal_pci_ioport_write;
-	rte_eal_pci_map_device;
-	rte_eal_pci_unmap_device;
 	rte_eal_primary_proc_alive;
 
 } DPDK_2.2;
@@ -174,8 +149,6 @@ DPDK_16.11 {
 	rte_delay_us_callback_register;
 	rte_eal_dev_attach;
 	rte_eal_dev_detach;
-	rte_eal_vdrv_register;
-	rte_eal_vdrv_unregister;
 
 } DPDK_16.07;
 
@@ -189,3 +162,39 @@ DPDK_17.02 {
 	rte_bus_unregister;
 
 } DPDK_16.11;
+
+DPDK_17.05 {
+	global:
+
+	rte_cpu_is_supported;
+	rte_intr_free_epoll_fd;
+	rte_log_dump;
+	rte_log_get_global_level;
+	rte_log_register;
+	rte_log_set_global_level;
+	rte_log_set_level;
+	rte_log_set_level_regexp;
+	rte_pci_detach;
+	rte_pci_dump;
+	rte_pci_ioport_map;
+	rte_pci_ioport_read;
+	rte_pci_ioport_unmap;
+	rte_pci_ioport_write;
+	rte_pci_map_device;
+	rte_pci_probe;
+	rte_pci_probe_one;
+	rte_pci_read_config;
+	rte_pci_register;
+	rte_pci_scan;
+	rte_pci_unmap_device;
+	rte_pci_unregister;
+	rte_pci_write_config;
+	rte_vdev_init;
+	rte_vdev_register;
+	rte_vdev_uninit;
+	rte_vdev_unregister;
+	vfio_get_container_fd;
+	vfio_get_group_fd;
+	vfio_get_group_no;
+
+} DPDK_17.02;

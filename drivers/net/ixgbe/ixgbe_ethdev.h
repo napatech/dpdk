@@ -45,6 +45,7 @@
 #define IXGBE_FLAG_MAILBOX          (uint32_t)(1 << 1)
 #define IXGBE_FLAG_PHY_INTERRUPT    (uint32_t)(1 << 2)
 #define IXGBE_FLAG_MACSEC           (uint32_t)(1 << 3)
+#define IXGBE_FLAG_NEED_LINK_CONFIG (uint32_t)(1 << 4)
 
 /*
  * Defines that were not part of ixgbe_type.h as they are not used by the
@@ -138,6 +139,18 @@
 
 #define IXGBE_MAX_FDIR_FILTER_NUM       (1024 * 32)
 #define IXGBE_MAX_L2_TN_FILTER_NUM      128
+
+#define MAC_TYPE_FILTER_SUP_EXT(type)    do {\
+	if ((type) != ixgbe_mac_82599EB && (type) != ixgbe_mac_X540)\
+		return -ENOTSUP;\
+} while (0)
+
+#define MAC_TYPE_FILTER_SUP(type)    do {\
+	if ((type) != ixgbe_mac_82599EB && (type) != ixgbe_mac_X540 &&\
+		(type) != ixgbe_mac_X550 && (type) != ixgbe_mac_X550EM_x &&\
+		(type) != ixgbe_mac_X550EM_a)\
+		return -ENOTSUP;\
+} while (0)
 
 /*
  * Information about the fdir mode.
@@ -416,6 +429,11 @@ struct ixgbe_macsec_stats {
 	uint64_t in_pkts_notusingsa;
 };
 
+/* The configuration of bandwidth */
+struct ixgbe_bw_conf {
+	uint8_t tc_num; /* Number of TCs. */
+};
+
 /*
  * Structure to store private data for each driver instance (for each port).
  */
@@ -437,6 +455,7 @@ struct ixgbe_adapter {
 #endif /* RTE_NIC_BYPASS */
 	struct ixgbe_filter_info    filter;
 	struct ixgbe_l2_tn_info     l2_tn;
+	struct ixgbe_bw_conf        bw_conf;
 
 	bool rx_bulk_alloc_allowed;
 	bool rx_vec_allowed;
@@ -490,6 +509,9 @@ struct ixgbe_adapter {
 #define IXGBE_DEV_PRIVATE_TO_L2_TN_INFO(adapter) \
 	(&((struct ixgbe_adapter *)adapter)->l2_tn)
 
+#define IXGBE_DEV_PRIVATE_TO_BW_CONF(adapter) \
+	(&((struct ixgbe_adapter *)adapter)->bw_conf)
+
 /*
  * RX/TX function prototypes
  */
@@ -514,7 +536,9 @@ uint32_t ixgbe_dev_rx_queue_count(struct rte_eth_dev *dev,
 		uint16_t rx_queue_id);
 
 int ixgbe_dev_rx_descriptor_done(void *rx_queue, uint16_t offset);
-int ixgbevf_dev_rx_descriptor_done(void *rx_queue, uint16_t offset);
+
+int ixgbe_dev_rx_descriptor_status(void *rx_queue, uint16_t offset);
+int ixgbe_dev_tx_descriptor_status(void *tx_queue, uint16_t offset);
 
 int ixgbe_dev_rx_init(struct rte_eth_dev *dev);
 
@@ -642,6 +666,11 @@ int ixgbe_clear_all_l2_tn_filter(struct rte_eth_dev *dev);
 int ixgbe_disable_sec_tx_path_generic(struct ixgbe_hw *hw);
 
 int ixgbe_enable_sec_tx_path_generic(struct ixgbe_hw *hw);
+
+int ixgbe_vt_check(struct ixgbe_hw *hw);
+int ixgbe_set_vf_rate_limit(struct rte_eth_dev *dev, uint16_t vf,
+			    uint16_t tx_rate, uint64_t q_msk);
+bool is_ixgbe_supported(struct rte_eth_dev *dev);
 
 static inline int
 ixgbe_ethertype_filter_lookup(struct ixgbe_filter_info *filter_info,

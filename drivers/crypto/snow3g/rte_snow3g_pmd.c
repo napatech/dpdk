@@ -363,7 +363,7 @@ process_ops(struct rte_crypto_op **ops, struct snow3g_session *session,
 	}
 
 	enqueued_ops = rte_ring_enqueue_burst(qp->processed_ops,
-			(void **)ops, processed_ops);
+			(void **)ops, processed_ops, NULL);
 	qp->qp_stats.enqueued_count += enqueued_ops;
 	*accumulated_enqueued_ops += enqueued_ops;
 
@@ -414,7 +414,7 @@ process_op_bit(struct rte_crypto_op *op, struct snow3g_session *session,
 	}
 
 	enqueued_op = rte_ring_enqueue_burst(qp->processed_ops,
-			(void **)&op, processed_op);
+			(void **)&op, processed_op, NULL);
 	qp->qp_stats.enqueued_count += enqueued_op;
 	*accumulated_enqueued_ops += enqueued_op;
 
@@ -533,31 +533,26 @@ snow3g_pmd_dequeue_burst(void *queue_pair,
 	unsigned nb_dequeued;
 
 	nb_dequeued = rte_ring_dequeue_burst(qp->processed_ops,
-			(void **)c_ops, nb_ops);
+			(void **)c_ops, nb_ops, NULL);
 	qp->qp_stats.dequeued_count += nb_dequeued;
 
 	return nb_dequeued;
 }
 
-static int cryptodev_snow3g_remove(const char *name);
+static int cryptodev_snow3g_remove(struct rte_vdev_device *vdev);
 
 static int
-cryptodev_snow3g_create(struct rte_crypto_vdev_init_params *init_params)
+cryptodev_snow3g_create(const char *name,
+			struct rte_vdev_device *vdev,
+			struct rte_crypto_vdev_init_params *init_params)
 {
 	struct rte_cryptodev *dev;
 	struct snow3g_private *internals;
 	uint64_t cpu_flags = 0;
 
-	if (init_params->name[0] == '\0') {
-		int ret = rte_cryptodev_pmd_create_dev_name(
-				init_params->name,
-				RTE_STR(CRYPTODEV_NAME_SNOW3G_PMD));
-
-		if (ret < 0) {
-			SNOW3G_LOG_ERR("failed to create unique name");
-			return ret;
-		}
-	}
+	if (init_params->name[0] == '\0')
+		snprintf(init_params->name, sizeof(init_params->name),
+				"%s", name);
 
 	/* Check CPU for supported vector instruction set */
 	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_SSE4_1))
@@ -595,13 +590,12 @@ init_error:
 	SNOW3G_LOG_ERR("driver %s: cryptodev_snow3g_create failed",
 			init_params->name);
 
-	cryptodev_snow3g_remove(init_params->name);
+	cryptodev_snow3g_remove(vdev);
 	return -EFAULT;
 }
 
 static int
-cryptodev_snow3g_probe(const char *name,
-		const char *input_args)
+cryptodev_snow3g_probe(struct rte_vdev_device *vdev)
 {
 	struct rte_crypto_vdev_init_params init_params = {
 		RTE_CRYPTODEV_VDEV_DEFAULT_MAX_NB_QUEUE_PAIRS,
@@ -609,6 +603,13 @@ cryptodev_snow3g_probe(const char *name,
 		rte_socket_id(),
 		{0}
 	};
+	const char *name;
+	const char *input_args;
+
+	name = rte_vdev_device_name(vdev);
+	if (name == NULL)
+		return -EINVAL;
+	input_args = rte_vdev_device_args(vdev);
 
 	rte_cryptodev_parse_vdev_init_params(&init_params, input_args);
 
@@ -622,12 +623,15 @@ cryptodev_snow3g_probe(const char *name,
 	RTE_LOG(INFO, PMD, "  Max number of sessions = %d\n",
 			init_params.max_nb_sessions);
 
-	return cryptodev_snow3g_create(&init_params);
+	return cryptodev_snow3g_create(name, vdev, &init_params);
 }
 
 static int
-cryptodev_snow3g_remove(const char *name)
+cryptodev_snow3g_remove(struct rte_vdev_device *vdev)
 {
+	const char *name;
+
+	name = rte_vdev_device_name(vdev);
 	if (name == NULL)
 		return -EINVAL;
 

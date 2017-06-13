@@ -50,11 +50,6 @@ typedef int (*cperf_populate_ops_t)(struct rte_crypto_op **ops,
 		const struct cperf_options *options,
 		const struct cperf_test_vector *test_vector);
 
-
-typedef int (*cperf_verify_crypto_op_t)(struct rte_mbuf *m,
-		const struct cperf_options *options,
-		const struct cperf_test_vector *test_vector);
-
 struct cperf_op_fns {
 	cperf_sessions_create_t sess_create;
 	cperf_populate_ops_t populate_ops;

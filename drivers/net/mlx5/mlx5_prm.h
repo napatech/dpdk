@@ -73,6 +73,9 @@
 /* WQE size */
 #define MLX5_WQE_SIZE (4 * MLX5_WQE_DWORD_SIZE)
 
+/* Max size of a WQE session. */
+#define MLX5_WQE_SIZE_MAX 960U
+
 /* Compute the number of DS. */
 #define MLX5_WQE_DS(n) \
 	(((n) + MLX5_WQE_DWORD_SIZE - 1) / MLX5_WQE_DWORD_SIZE)
@@ -80,9 +83,18 @@
 /* Room for inline data in multi-packet WQE. */
 #define MLX5_MWQE64_INL_DATA 28
 
+/* Default minimum number of Tx queues for inlining packets. */
+#define MLX5_EMPW_MIN_TXQS 8
+
+/* Default max packet length to be inlined. */
+#define MLX5_EMPW_MAX_INLINE_LEN (4U * MLX5_WQE_SIZE)
+
 #ifndef HAVE_VERBS_MLX5_OPCODE_TSO
 #define MLX5_OPCODE_TSO MLX5_OPCODE_LSO_MPW /* Compat with OFED 3.3. */
 #endif
+
+#define MLX5_OPC_MOD_ENHANCED_MPSW 0
+#define MLX5_OPCODE_ENHANCED_MPSW 0x29
 
 /* CQE value to inform that VLAN is stripped. */
 #define MLX5_CQE_VLAN_STRIPPED (1u << 0)
@@ -119,6 +131,19 @@
 
 /* Tunnel packet bit in the CQE. */
 #define MLX5_CQE_RX_TUNNEL_PACKET (1u << 0)
+
+/* Inner L3 checksum offload (Tunneled packets only). */
+#define MLX5_ETH_WQE_L3_INNER_CSUM (1u << 4)
+
+/* Inner L4 checksum offload (Tunneled packets only). */
+#define MLX5_ETH_WQE_L4_INNER_CSUM (1u << 5)
+
+/* Is flow mark valid. */
+#if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
+#define MLX5_FLOW_MARK_IS_VALID(val) ((val) & 0xffffff00)
+#else
+#define MLX5_FLOW_MARK_IS_VALID(val) ((val) & 0xffffff)
+#endif
 
 /* INVALID is used by packets matching no flow rules. */
 #define MLX5_FLOW_MARK_INVALID 0
@@ -170,10 +195,18 @@ struct mlx5_wqe64 {
 	uint8_t raw[32];
 } __rte_aligned(MLX5_WQE_SIZE);
 
+/* MPW mode. */
+enum mlx5_mpw_mode {
+	MLX5_MPW_DISABLED,
+	MLX5_MPW,
+	MLX5_MPW_ENHANCED, /* Enhanced Multi-Packet Send WQE, a.k.a MPWv2. */
+};
+
 /* MPW session status. */
 enum mlx5_mpw_state {
 	MLX5_MPW_STATE_OPENED,
 	MLX5_MPW_INL_STATE_OPENED,
+	MLX5_MPW_ENHANCED_STATE_OPENED,
 	MLX5_MPW_STATE_CLOSED,
 };
 
@@ -227,9 +260,11 @@ mlx5_flow_mark_set(uint32_t val)
 
 	/*
 	 * Add one to the user value to differentiate un-marked flows from
-	 * marked flows.
+	 * marked flows, if the ID is equal to MLX5_FLOW_MARK_DEFAULT it
+	 * remains untouched.
 	 */
-	++val;
+	if (val != MLX5_FLOW_MARK_DEFAULT)
+		++val;
 #if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
 	/*
 	 * Mark is 24 bits (minus reserved values) but is stored on a 32 bit
@@ -241,7 +276,6 @@ mlx5_flow_mark_set(uint32_t val)
 #else
 	ret = val;
 #endif
-	assert(ret <= MLX5_FLOW_MARK_MAX);
 	return ret;
 }
 

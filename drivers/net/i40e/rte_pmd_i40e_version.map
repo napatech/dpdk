@@ -8,6 +8,10 @@ DPDK_17.02 {
 
 	rte_pmd_i40e_get_vf_stats;
 	rte_pmd_i40e_ping_vfs;
+	rte_pmd_i40e_ptype_mapping_get;
+	rte_pmd_i40e_ptype_mapping_replace;
+	rte_pmd_i40e_ptype_mapping_reset;
+	rte_pmd_i40e_ptype_mapping_update;
 	rte_pmd_i40e_reset_vf_stats;
 	rte_pmd_i40e_set_tx_loopback;
 	rte_pmd_i40e_set_vf_broadcast;
@@ -22,3 +26,15 @@ DPDK_17.02 {
 	rte_pmd_i40e_set_vf_vlan_tag;
 
 } DPDK_2.0;
+
+DPDK_17.05 {
+	global:
+
+	rte_pmd_i40e_set_tc_strict_prio;
+	rte_pmd_i40e_set_vf_max_bw;
+	rte_pmd_i40e_set_vf_tc_bw_alloc;
+	rte_pmd_i40e_set_vf_tc_max_bw;
+	rte_pmd_i40e_process_ddp_package;
+	rte_pmd_i40e_get_ddp_list;
+
+} DPDK_17.02;

@@ -81,6 +81,8 @@ SFC EFX PMD has support for:
 
 - Transmit VLAN insertion (if running firmware variant supports it)
 
+- Flow API
+
 
 Non-supported Features
 ----------------------
@@ -112,6 +114,49 @@ buffer for the auxiliary packet information provided by the NIC up to
 extra 269 (14 bytes prefix plus up to 255 bytes for end padding) bytes may be
 required in the receive buffer.
 It should be taken into account when mbuf pool for receive is created.
+
+
+Flow API support
+----------------
+
+Supported attributes:
+
+- Ingress
+
+Supported pattern items:
+
+- VOID
+
+- ETH (exact match of source/destination addresses, individual/group match
+  of destination address, EtherType)
+
+- VLAN (exact match of VID, double-tagging is supported)
+
+- IPV4 (exact match of source/destination addresses,
+  IP transport protocol)
+
+- IPV6 (exact match of source/destination addresses,
+  IP transport protocol)
+
+- TCP (exact match of source/destination ports)
+
+- UDP (exact match of source/destination ports)
+
+Supported actions:
+
+- VOID
+
+- QUEUE
+
+Validating flow rules depends on the firmware variant.
+
+Ethernet destinaton individual/group match
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Ethernet item supports I/G matching, if only the corresponding bit is set
+in the mask of destination address. If destinaton address in the spec is
+multicast, it matches all multicast (and broadcast) packets, oherwise it
+matches unicast packets that are not filtered by other flow rules.
 
 
 Supported NICs
@@ -181,6 +226,30 @@ whitelist option like "-w 02:00.0,arg1=value1,...".
 Case-insensitive 1/y/yes/on or 0/n/no/off may be used to specify
 boolean parameters value.
 
+- ``rx_datapath`` [auto|efx|ef10] (default **auto**)
+
+  Choose receive datapath implementation.
+  **auto** allows the driver itself to make a choice based on firmware
+  features available and required by the datapath implementation.
+  **efx** chooses libefx-based datapath which supports Rx scatter.
+  **ef10** chooses EF10 (SFN7xxx, SFN8xxx) native datapath which is
+  more efficient than libefx-based and provides richer packet type
+  classification, but lacks Rx scatter support.
+
+- ``tx_datapath`` [auto|efx|ef10|ef10_simple] (default **auto**)
+
+  Choose transmit datapath implementation.
+  **auto** allows the driver itself to make a choice based on firmware
+  features available and required by the datapath implementation.
+  **efx** chooses libefx-based datapath which supports VLAN insertion
+  (full-feature firmware variant only), TSO and multi-segment mbufs.
+  **ef10** chooses EF10 (SFN7xxx, SFN8xxx) native datapath which is
+  more efficient than libefx-based but has no VLAN insertion and TSO
+  support yet.
+  **ef10_simple** chooses EF10 (SFN7xxx, SFN8xxx) native datapath which
+  is even more faster then **ef10** but does not support multi-segment
+  mbufs.
+
 - ``perf_profile`` [auto|throughput|low-latency] (default **throughput**)
 
   Choose hardware tunning to be optimized for either throughput or
@@ -197,3 +266,12 @@ boolean parameters value.
   Enable extra logging of the communication with the NIC's management CPU.
   The logging is done using RTE_LOG() with INFO level and PMD type.
   The format is consumed by the Solarflare netlogdecode cross-platform tool.
+
+- ``stats_update_period_ms`` [long] (default **1000**)
+
+  Adjust period in milliseconds to update port hardware statistics.
+  The accepted range is 0 to 65535. The value of **0** may be used
+  to disable periodic statistics update. One should note that it's
+  only possible to set an arbitrary value on SFN8xxx provided that
+  firmware version is 6.2.1.1033 or higher, otherwise any positive
+  value will select a fixed update period of **1000** milliseconds

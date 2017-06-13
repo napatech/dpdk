@@ -38,20 +38,6 @@
 #include "cperf_test_throughput.h"
 #include "cperf_ops.h"
 
-struct cperf_throughput_results {
-	uint64_t ops_enqueued;
-	uint64_t ops_dequeued;
-
-	uint64_t ops_enqueued_failed;
-	uint64_t ops_dequeued_failed;
-
-	uint64_t ops_failed;
-
-	double ops_per_second;
-	double throughput_gbps;
-	double cycles_per_byte;
-};
-
 struct cperf_throughput_ctx {
 	uint8_t dev_id;
 	uint16_t qp_id;
@@ -67,16 +53,9 @@ struct cperf_throughput_ctx {
 	struct rte_cryptodev_sym_session *sess;
 
 	cperf_populate_ops_t populate_ops;
-	cperf_verify_crypto_op_t verify_op_output;
 
 	const struct cperf_options *options;
 	const struct cperf_test_vector *test_vector;
-	struct cperf_throughput_results results;
-
-};
-
-struct cperf_op_result {
-	enum rte_crypto_op_status status;
 };
 
 static void
@@ -124,8 +103,8 @@ cperf_mbuf_create(struct rte_mempool *mempool,
 		const struct cperf_test_vector *test_vector)
 {
 	struct rte_mbuf *mbuf;
-	uint32_t segment_sz = options->buffer_sz / segments_nb;
-	uint32_t last_sz = options->buffer_sz % segments_nb;
+	uint32_t segment_sz = options->max_buffer_size / segments_nb;
+	uint32_t last_sz = options->max_buffer_size % segments_nb;
 	uint8_t *mbuf_data;
 	uint8_t *test_data =
 			(options->cipher_op == RTE_CRYPTO_CIPHER_OP_ENCRYPT) ?
@@ -170,10 +149,12 @@ cperf_mbuf_create(struct rte_mempool *mempool,
 		memcpy(mbuf_data, test_data, last_sz);
 	}
 
-	mbuf_data = (uint8_t *)rte_pktmbuf_append(mbuf,
-			options->auth_digest_sz);
-	if (mbuf_data == NULL)
-		goto error;
+	if (options->op_type != CPERF_CIPHER_ONLY) {
+		mbuf_data = (uint8_t *)rte_pktmbuf_append(mbuf,
+				options->auth_digest_sz);
+		if (mbuf_data == NULL)
+			goto error;
+	}
 
 	if (options->op_type == CPERF_AEAD) {
 		uint8_t *aead = (uint8_t *)rte_pktmbuf_prepend(mbuf,
@@ -225,8 +206,8 @@ cperf_throughput_test_constructor(uint8_t dev_id, uint16_t qp_id,
 			options->pool_sz * options->segments_nb, 0, 0,
 			RTE_PKTMBUF_HEADROOM +
 			RTE_CACHE_LINE_ROUNDUP(
-				(options->buffer_sz / options->segments_nb) +
-				(options->buffer_sz % options->segments_nb) +
+				(options->max_buffer_size / options->segments_nb) +
+				(options->max_buffer_size % options->segments_nb) +
 					options->auth_digest_sz),
 			rte_socket_id());
 
@@ -234,9 +215,6 @@ cperf_throughput_test_constructor(uint8_t dev_id, uint16_t qp_id,
 		goto err;
 
 	/* Generate mbufs_in with plaintext populated for test */
-	if (ctx->options->pool_sz % ctx->options->burst_sz)
-		goto err;
-
 	ctx->mbufs_in = rte_malloc(NULL,
 			(sizeof(struct rte_mbuf *) * ctx->options->pool_sz), 0);
 
@@ -257,7 +235,7 @@ cperf_throughput_test_constructor(uint8_t dev_id, uint16_t qp_id,
 				pool_name, options->pool_sz, 0, 0,
 				RTE_PKTMBUF_HEADROOM +
 				RTE_CACHE_LINE_ROUNDUP(
-					options->buffer_sz +
+					options->max_buffer_size +
 					options->auth_digest_sz),
 				rte_socket_id());
 
@@ -297,123 +275,18 @@ err:
 	return NULL;
 }
 
-static int
-cperf_throughput_test_verifier(struct rte_mbuf *mbuf,
-		const struct cperf_options *options,
-		const struct cperf_test_vector *vector)
-{
-	const struct rte_mbuf *m;
-	uint32_t len;
-	uint16_t nb_segs;
-	uint8_t *data;
-	uint32_t cipher_offset, auth_offset;
-	uint8_t	cipher, auth;
-	int res = 0;
-
-	m = mbuf;
-	nb_segs = m->nb_segs;
-	len = 0;
-	while (m && nb_segs != 0) {
-		len += m->data_len;
-		m = m->next;
-		nb_segs--;
-	}
-
-	data = rte_malloc(NULL, len, 0);
-	if (data == NULL)
-		return 1;
-
-	m = mbuf;
-	nb_segs = m->nb_segs;
-	len = 0;
-	while (m && nb_segs != 0) {
-		memcpy(data + len, rte_pktmbuf_mtod(m, uint8_t *),
-				m->data_len);
-		len += m->data_len;
-		m = m->next;
-		nb_segs--;
-	}
-
-	switch (options->op_type) {
-	case CPERF_CIPHER_ONLY:
-		cipher = 1;
-		cipher_offset = 0;
-		auth = 0;
-		auth_offset = 0;
-		break;
-	case CPERF_CIPHER_THEN_AUTH:
-		cipher = 1;
-		cipher_offset = 0;
-		auth = 1;
-		auth_offset = vector->plaintext.length;
-		break;
-	case CPERF_AUTH_ONLY:
-		cipher = 0;
-		cipher_offset = 0;
-		auth = 1;
-		auth_offset = vector->plaintext.length;
-		break;
-	case CPERF_AUTH_THEN_CIPHER:
-		cipher = 1;
-		cipher_offset = 0;
-		auth = 1;
-		auth_offset = vector->plaintext.length;
-		break;
-	case CPERF_AEAD:
-		cipher = 1;
-		cipher_offset = vector->aad.length;
-		auth = 1;
-		auth_offset = vector->aad.length + vector->plaintext.length;
-		break;
-	}
-
-	if (cipher == 1) {
-		if (options->cipher_op == RTE_CRYPTO_CIPHER_OP_ENCRYPT)
-			res += memcmp(data + cipher_offset,
-					vector->ciphertext.data,
-					vector->ciphertext.length);
-		else
-			res += memcmp(data + cipher_offset,
-					vector->plaintext.data,
-					vector->plaintext.length);
-	}
-
-	if (auth == 1) {
-		if (options->auth_op == RTE_CRYPTO_AUTH_OP_GENERATE)
-			res += memcmp(data + auth_offset,
-					vector->digest.data,
-					vector->digest.length);
-	}
-
-	if (res != 0)
-		res = 1;
-
-	return res;
-}
-
 int
 cperf_throughput_test_runner(void *test_ctx)
 {
 	struct cperf_throughput_ctx *ctx = test_ctx;
-	struct cperf_op_result *res, *pres;
+	uint16_t test_burst_size;
+	uint8_t burst_size_idx = 0;
 
-	if (ctx->options->verify) {
-		res = rte_malloc(NULL, sizeof(struct cperf_op_result) *
-				ctx->options->total_ops, 0);
-		if (res == NULL)
-			return 0;
-	}
+	static int only_once;
 
-	uint64_t ops_enqd = 0, ops_enqd_total = 0, ops_enqd_failed = 0;
-	uint64_t ops_deqd = 0, ops_deqd_total = 0, ops_deqd_failed = 0;
-
-	uint64_t i, m_idx = 0, tsc_start, tsc_end, tsc_duration;
-
-	uint16_t ops_unused = 0;
-	uint64_t idx = 0;
-
-	struct rte_crypto_op *ops[ctx->options->burst_sz];
-	struct rte_crypto_op *ops_processed[ctx->options->burst_sz];
+	struct rte_crypto_op *ops[ctx->options->max_burst_size];
+	struct rte_crypto_op *ops_processed[ctx->options->max_burst_size];
+	uint64_t i;
 
 	uint32_t lcore = rte_lcore_id();
 
@@ -432,234 +305,214 @@ cperf_throughput_test_runner(void *test_ctx)
 
 	ctx->lcore_id = lcore;
 
-	if (!ctx->options->csv)
-		printf("\n# Running throughput test on device: %u, lcore: %u\n",
-			ctx->dev_id, lcore);
-
 	/* Warm up the host CPU before starting the test */
 	for (i = 0; i < ctx->options->total_ops; i++)
 		rte_cryptodev_enqueue_burst(ctx->dev_id, ctx->qp_id, NULL, 0);
 
-	tsc_start = rte_rdtsc_precise();
+	/* Get first size from range or list */
+	if (ctx->options->inc_burst_size != 0)
+		test_burst_size = ctx->options->min_burst_size;
+	else
+		test_burst_size = ctx->options->burst_size_list[0];
 
-	while (ops_enqd_total < ctx->options->total_ops) {
+	while (test_burst_size <= ctx->options->max_burst_size) {
+		uint64_t ops_enqd = 0, ops_enqd_total = 0, ops_enqd_failed = 0;
+		uint64_t ops_deqd = 0, ops_deqd_total = 0, ops_deqd_failed = 0;
 
-		uint16_t burst_size = ((ops_enqd_total + ctx->options->burst_sz)
-				<= ctx->options->total_ops) ?
-						ctx->options->burst_sz :
-						ctx->options->total_ops -
-						ops_enqd_total;
+		uint64_t m_idx = 0, tsc_start, tsc_end, tsc_duration;
 
-		uint16_t ops_needed = burst_size - ops_unused;
+		uint16_t ops_unused = 0;
 
-		/* Allocate crypto ops from pool */
-		if (ops_needed != rte_crypto_op_bulk_alloc(
-				ctx->crypto_op_pool,
-				RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-				ops, ops_needed))
-			return -1;
+		tsc_start = rte_rdtsc_precise();
 
-		/* Setup crypto op, attach mbuf etc */
-		(ctx->populate_ops)(ops, &ctx->mbufs_in[m_idx],
-				&ctx->mbufs_out[m_idx],
-				ops_needed, ctx->sess, ctx->options,
-				ctx->test_vector);
+		while (ops_enqd_total < ctx->options->total_ops) {
 
-		if (ctx->options->verify) {
-			for (i = 0; i < ops_needed; i++) {
-				ops[i]->opaque_data = (void *)&res[idx];
-				idx++;
+			uint16_t burst_size = ((ops_enqd_total + test_burst_size)
+					<= ctx->options->total_ops) ?
+							test_burst_size :
+							ctx->options->total_ops -
+							ops_enqd_total;
+
+			uint16_t ops_needed = burst_size - ops_unused;
+
+			/* Allocate crypto ops from pool */
+			if (ops_needed != rte_crypto_op_bulk_alloc(
+					ctx->crypto_op_pool,
+					RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+					ops, ops_needed))
+				return -1;
+
+			/* Setup crypto op, attach mbuf etc */
+			(ctx->populate_ops)(ops, &ctx->mbufs_in[m_idx],
+					&ctx->mbufs_out[m_idx],
+					ops_needed, ctx->sess, ctx->options,
+					ctx->test_vector);
+
+			/**
+			 * When ops_needed is smaller than ops_enqd, the
+			 * unused ops need to be moved to the front for
+			 * next round use.
+			 */
+			if (unlikely(ops_enqd > ops_needed)) {
+				size_t nb_b_to_mov = ops_unused * sizeof(
+						struct rte_crypto_op *);
+
+				memmove(&ops[ops_needed], &ops[ops_enqd],
+					nb_b_to_mov);
 			}
-		}
 
 #ifdef CPERF_LINEARIZATION_ENABLE
-		if (linearize) {
-			/* PMD doesn't support scatter-gather and source buffer
-			 * is segmented.
-			 * We need to linearize it before enqueuing.
-			 */
-			for (i = 0; i < burst_size; i++)
-				rte_pktmbuf_linearize(ops[i]->sym->m_src);
-		}
+			if (linearize) {
+				/* PMD doesn't support scatter-gather and source buffer
+				 * is segmented.
+				 * We need to linearize it before enqueuing.
+				 */
+				for (i = 0; i < burst_size; i++)
+					rte_pktmbuf_linearize(ops[i]->sym->m_src);
+			}
 #endif /* CPERF_LINEARIZATION_ENABLE */
 
-		/* Enqueue burst of ops on crypto device */
-		ops_enqd = rte_cryptodev_enqueue_burst(ctx->dev_id, ctx->qp_id,
-				ops, burst_size);
-		if (ops_enqd < burst_size)
-			ops_enqd_failed++;
+			/* Enqueue burst of ops on crypto device */
+			ops_enqd = rte_cryptodev_enqueue_burst(ctx->dev_id, ctx->qp_id,
+					ops, burst_size);
+			if (ops_enqd < burst_size)
+				ops_enqd_failed++;
 
-		/**
-		 * Calculate number of ops not enqueued (mainly for hw
-		 * accelerators whose ingress queue can fill up).
-		 */
-		ops_unused = burst_size - ops_enqd;
-		ops_enqd_total += ops_enqd;
-
-
-		/* Dequeue processed burst of ops from crypto device */
-		ops_deqd = rte_cryptodev_dequeue_burst(ctx->dev_id, ctx->qp_id,
-				ops_processed, ctx->options->burst_sz);
-
-		if (likely(ops_deqd))  {
-
-			if (ctx->options->verify) {
-				void *opq;
-				for (i = 0; i < ops_deqd; i++) {
-					opq = (ops_processed[i]->opaque_data);
-					pres = (struct cperf_op_result *)opq;
-					pres->status = ops_processed[i]->status;
-				}
-			}
-
-			/* free crypto ops so they can be reused. We don't free
-			 * the mbufs here as we don't want to reuse them as
-			 * the crypto operation will change the data and cause
-			 * failures.
-			 */
-			for (i = 0; i < ops_deqd; i++)
-				rte_crypto_op_free(ops_processed[i]);
-
-			ops_deqd_total += ops_deqd;
-		} else {
 			/**
-			 * Count dequeue polls which didn't return any
-			 * processed operations. This statistic is mainly
-			 * relevant to hw accelerators.
+			 * Calculate number of ops not enqueued (mainly for hw
+			 * accelerators whose ingress queue can fill up).
 			 */
-			ops_deqd_failed++;
+			ops_unused = burst_size - ops_enqd;
+			ops_enqd_total += ops_enqd;
+
+
+			/* Dequeue processed burst of ops from crypto device */
+			ops_deqd = rte_cryptodev_dequeue_burst(ctx->dev_id, ctx->qp_id,
+					ops_processed, test_burst_size);
+
+			if (likely(ops_deqd))  {
+				/* free crypto ops so they can be reused. We don't free
+				 * the mbufs here as we don't want to reuse them as
+				 * the crypto operation will change the data and cause
+				 * failures.
+				 */
+				for (i = 0; i < ops_deqd; i++)
+					rte_crypto_op_free(ops_processed[i]);
+
+				ops_deqd_total += ops_deqd;
+			} else {
+				/**
+				 * Count dequeue polls which didn't return any
+				 * processed operations. This statistic is mainly
+				 * relevant to hw accelerators.
+				 */
+				ops_deqd_failed++;
+			}
+
+			m_idx += ops_needed;
+			m_idx = m_idx + test_burst_size > ctx->options->pool_sz ?
+					0 : m_idx;
 		}
 
-		m_idx += ops_needed;
-		m_idx = m_idx + ctx->options->burst_sz > ctx->options->pool_sz ?
-				0 : m_idx;
-	}
+		/* Dequeue any operations still in the crypto device */
 
-	/* Dequeue any operations still in the crypto device */
+		while (ops_deqd_total < ctx->options->total_ops) {
+			/* Sending 0 length burst to flush sw crypto device */
+			rte_cryptodev_enqueue_burst(ctx->dev_id, ctx->qp_id, NULL, 0);
 
-	while (ops_deqd_total < ctx->options->total_ops) {
-		/* Sending 0 length burst to flush sw crypto device */
-		rte_cryptodev_enqueue_burst(ctx->dev_id, ctx->qp_id, NULL, 0);
+			/* dequeue burst */
+			ops_deqd = rte_cryptodev_dequeue_burst(ctx->dev_id, ctx->qp_id,
+					ops_processed, test_burst_size);
+			if (ops_deqd == 0)
+				ops_deqd_failed++;
+			else {
+				for (i = 0; i < ops_deqd; i++)
+					rte_crypto_op_free(ops_processed[i]);
 
-		/* dequeue burst */
-		ops_deqd = rte_cryptodev_dequeue_burst(ctx->dev_id, ctx->qp_id,
-				ops_processed, ctx->options->burst_sz);
-		if (ops_deqd == 0)
-			ops_deqd_failed++;
+				ops_deqd_total += ops_deqd;
+			}
+		}
+
+		tsc_end = rte_rdtsc_precise();
+		tsc_duration = (tsc_end - tsc_start);
+
+		/* Calculate average operations processed per second */
+		double ops_per_second = ((double)ctx->options->total_ops /
+				tsc_duration) * rte_get_tsc_hz();
+
+		/* Calculate average throughput (Gbps) in bits per second */
+		double throughput_gbps = ((ops_per_second *
+				ctx->options->test_buffer_size * 8) / 1000000000);
+
+		/* Calculate average cycles per packet */
+		double cycles_per_packet = ((double)tsc_duration /
+				ctx->options->total_ops);
+
+		if (!ctx->options->csv) {
+			if (!only_once)
+				printf("%12s%12s%12s%12s%12s%12s%12s%12s%12s%12s\n\n",
+					"lcore id", "Buf Size", "Burst Size",
+					"Enqueued", "Dequeued", "Failed Enq",
+					"Failed Deq", "MOps", "Gbps",
+					"Cycles/Buf");
+			only_once = 1;
+
+			printf("%12u%12u%12u%12"PRIu64"%12"PRIu64"%12"PRIu64
+					"%12"PRIu64"%12.4f%12.4f%12.2f\n",
+					ctx->lcore_id,
+					ctx->options->test_buffer_size,
+					test_burst_size,
+					ops_enqd_total,
+					ops_deqd_total,
+					ops_enqd_failed,
+					ops_deqd_failed,
+					ops_per_second/1000000,
+					throughput_gbps,
+					cycles_per_packet);
+		} else {
+			if (!only_once)
+				printf("# lcore id, Buffer Size(B),"
+					"Burst Size,Enqueued,Dequeued,Failed Enq,"
+					"Failed Deq,Ops(Millions),Throughput(Gbps),"
+					"Cycles/Buf\n\n");
+			only_once = 1;
+
+			printf("%10u;%10u;%u;%"PRIu64";%"PRIu64";%"PRIu64";%"PRIu64";"
+					"%.f3;%.f3;%.f3\n",
+					ctx->lcore_id,
+					ctx->options->test_buffer_size,
+					test_burst_size,
+					ops_enqd_total,
+					ops_deqd_total,
+					ops_enqd_failed,
+					ops_deqd_failed,
+					ops_per_second/1000000,
+					throughput_gbps,
+					cycles_per_packet);
+		}
+
+		/* Get next size from range or list */
+		if (ctx->options->inc_burst_size != 0)
+			test_burst_size += ctx->options->inc_burst_size;
 		else {
-			if (ctx->options->verify) {
-				void *opq;
-				for (i = 0; i < ops_deqd; i++) {
-					opq = (ops_processed[i]->opaque_data);
-					pres = (struct cperf_op_result *)opq;
-					pres->status = ops_processed[i]->status;
-				}
-			}
-
-			for (i = 0; i < ops_deqd; i++)
-				rte_crypto_op_free(ops_processed[i]);
-
-			ops_deqd_total += ops_deqd;
-		}
-	}
-
-	tsc_end = rte_rdtsc_precise();
-	tsc_duration = (tsc_end - tsc_start);
-
-	if (ctx->options->verify) {
-		struct rte_mbuf **mbufs;
-
-		if (ctx->options->out_of_place == 1)
-			mbufs = ctx->mbufs_out;
-		else
-			mbufs = ctx->mbufs_in;
-
-		for (i = 0; i < ctx->options->total_ops; i++) {
-
-			if (res[i].status != RTE_CRYPTO_OP_STATUS_SUCCESS ||
-					cperf_throughput_test_verifier(
-					mbufs[i], ctx->options,
-					ctx->test_vector)) {
-
-				ctx->results.ops_failed++;
-			}
+			if (++burst_size_idx == ctx->options->burst_size_count)
+				break;
+			test_burst_size = ctx->options->burst_size_list[burst_size_idx];
 		}
 
-		rte_free(res);
 	}
-
-	/* Calculate average operations processed per second */
-	ctx->results.ops_per_second = ((double)ctx->options->total_ops /
-			tsc_duration) * rte_get_tsc_hz();
-
-	/* Calculate average throughput (Gbps) in bits per second */
-	ctx->results.throughput_gbps = ((ctx->results.ops_per_second *
-			ctx->options->buffer_sz * 8) / 1000000000);
-
-
-	/* Calculate average cycles per byte */
-	ctx->results.cycles_per_byte =  ((double)tsc_duration /
-			ctx->options->total_ops) / ctx->options->buffer_sz;
-
-	ctx->results.ops_enqueued = ops_enqd_total;
-	ctx->results.ops_dequeued = ops_deqd_total;
-
-	ctx->results.ops_enqueued_failed = ops_enqd_failed;
-	ctx->results.ops_dequeued_failed = ops_deqd_failed;
 
 	return 0;
 }
-
 
 
 void
 cperf_throughput_test_destructor(void *arg)
 {
 	struct cperf_throughput_ctx *ctx = arg;
-	struct cperf_throughput_results *results = &ctx->results;
-	static int only_once;
 
 	if (ctx == NULL)
 		return;
-
-	if (!ctx->options->csv) {
-		printf("\n# Device %d on lcore %u\n",
-				ctx->dev_id, ctx->lcore_id);
-		printf("# Buffer Size(B)\t  Enqueued\t  Dequeued\tFailed Enq"
-				"\tFailed Deq\tOps(Millions)\tThroughput(Gbps)"
-				"\tCycles Per Byte\n");
-
-		printf("\n%16u\t%10"PRIu64"\t%10"PRIu64"\t%10"PRIu64"\t"
-				"%10"PRIu64"\t%16.4f\t%16.4f\t%15.2f\n",
-				ctx->options->buffer_sz,
-				results->ops_enqueued,
-				results->ops_dequeued,
-				results->ops_enqueued_failed,
-				results->ops_dequeued_failed,
-				results->ops_per_second/1000000,
-				results->throughput_gbps,
-				results->cycles_per_byte);
-	} else {
-		if (!only_once)
-			printf("\n# CPU lcore id, Burst Size(B), "
-				"Buffer Size(B),Enqueued,Dequeued,Failed Enq,"
-				"Failed Deq,Ops(Millions),Throughput(Gbps),"
-				"Cycles Per Byte\n");
-		only_once = 1;
-
-		printf("%u;%u;%u;%"PRIu64";%"PRIu64";%"PRIu64";%"PRIu64";"
-				"%.f3;%.f3;%.f3\n",
-				ctx->lcore_id,
-				ctx->options->burst_sz,
-				ctx->options->buffer_sz,
-				results->ops_enqueued,
-				results->ops_dequeued,
-				results->ops_enqueued_failed,
-				results->ops_dequeued_failed,
-				results->ops_per_second/1000000,
-				results->throughput_gbps,
-				results->cycles_per_byte);
-	}
 
 	cperf_throughput_test_free(ctx, ctx->options->pool_sz);
 }
