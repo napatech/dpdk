@@ -88,7 +88,7 @@ extern "C" {
 /**
 * Extra Napatech minor version numbers
 */
-#define RTE_NT_MINOR_VER 0
+#define RTE_NT_MINOR_VER 1
 
 /**
 * Extra Napatech string to be appended to version number
@@ -104,10 +104,10 @@ extern "C" {
  * All version numbers in one to compare with RTE_VERSION_NUM()
  */
 #define RTE_VERSION RTE_VERSION_NUM( \
-			RTE_VER_YEAR, \
-			RTE_VER_MONTH, \
-			RTE_VER_MINOR, \
-			RTE_VER_RELEASE)
+      RTE_VER_YEAR, \
+      RTE_VER_MONTH, \
+      RTE_VER_MINOR, \
+      RTE_VER_RELEASE)
 
 /**
  * Function returning version string
@@ -117,34 +117,34 @@ extern "C" {
 static inline const char *
 rte_version(void)
 {
-	static char version[32];
-	if (version[0] != 0)
-		return version;
-	if (strlen(RTE_VER_SUFFIX) == 0)
-		snprintf(version, sizeof(version), "%s %d.%02d.%d",
-			RTE_VER_PREFIX,
-			RTE_VER_YEAR,
-			RTE_VER_MONTH,
-			RTE_VER_MINOR);
-	else
-		snprintf(version, sizeof(version), "%s %d.%02d.%d%s%d",
-			RTE_VER_PREFIX,
-			RTE_VER_YEAR,
-			RTE_VER_MONTH,
-			RTE_VER_MINOR,
-			RTE_VER_SUFFIX,
-			RTE_VER_RELEASE < 16 ?
-				RTE_VER_RELEASE :
-				RTE_VER_RELEASE - 16);
+  static char version[32];
+  if (version[0] != 0)
+    return version;
+  if (strlen(RTE_VER_SUFFIX) == 0)
+    snprintf(version, sizeof(version), "%s %d.%02d.%d",
+      RTE_VER_PREFIX,
+      RTE_VER_YEAR,
+      RTE_VER_MONTH,
+      RTE_VER_MINOR);
+  else
+    snprintf(version, sizeof(version), "%s %d.%02d.%d%s%d",
+      RTE_VER_PREFIX,
+      RTE_VER_YEAR,
+      RTE_VER_MONTH,
+      RTE_VER_MINOR,
+      RTE_VER_SUFFIX,
+      RTE_VER_RELEASE < 16 ?
+        RTE_VER_RELEASE :
+        RTE_VER_RELEASE - 16);
 
-	if (strlen(RTE_NT_VER_SUFFIX) == 0) {
-		snprintf(&version[strlen(version)], sizeof(version), "_%d.%d", RTE_NT_MAJOR_VER, RTE_NT_MINOR_VER);
-	} 
-	else {
-		snprintf(&version[strlen(version)], sizeof(version), "_%d.%d-%s", RTE_NT_MAJOR_VER, RTE_NT_MINOR_VER, RTE_NT_VER_SUFFIX);
-	}
+  if (strlen(RTE_NT_VER_SUFFIX) == 0) {
+    snprintf(&version[strlen(version)], sizeof(version), "_%d.%d", RTE_NT_MAJOR_VER, RTE_NT_MINOR_VER);
+  }
+  else {
+    snprintf(&version[strlen(version)], sizeof(version), "_%d.%d-%s", RTE_NT_MAJOR_VER, RTE_NT_MINOR_VER, RTE_NT_VER_SUFFIX);
+  }
 
-	return version;
+  return version;
 }
 
 #ifdef __cplusplus
