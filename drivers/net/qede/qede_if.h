@@ -30,11 +30,24 @@ struct qed_dev_info {
 
 	/* MFW version */
 	uint32_t mfw_rev;
+#define QED_MFW_VERSION_0_MASK		0x000000FF
+#define QED_MFW_VERSION_0_OFFSET	0
+#define QED_MFW_VERSION_1_MASK		0x0000FF00
+#define QED_MFW_VERSION_1_OFFSET	8
+#define QED_MFW_VERSION_2_MASK		0x00FF0000
+#define QED_MFW_VERSION_2_OFFSET	16
+#define QED_MFW_VERSION_3_MASK		0xFF000000
+#define QED_MFW_VERSION_3_OFFSET	24
 
 	uint32_t flash_size;
 	uint8_t mf_mode;
 	bool tx_switching;
-	/* To be added... */
+	u16 mtu;
+
+	/* Out param for qede */
+	bool vxlan_enable;
+	bool gre_enable;
+	bool geneve_enable;
 };
 
 enum qed_sb_type {
@@ -88,8 +101,45 @@ struct qed_slowpath_params {
 
 #define ILT_PAGE_SIZE_TCFC 0x8000	/* 32KB */
 
+struct qed_eth_tlvs {
+	u16 feat_flags;
+	u8 mac[3][ETH_ALEN];
+	u16 lso_maxoff;
+	u16 lso_minseg;
+	bool prom_mode;
+	u16 num_txqs;
+	u16 num_rxqs;
+	u16 num_netqs;
+	u16 flex_vlan;
+	u32 tcp4_offloads;
+	u32 tcp6_offloads;
+	u16 tx_avg_qdepth;
+	u16 rx_avg_qdepth;
+	u8 txqs_empty;
+	u8 rxqs_empty;
+	u8 num_txqs_full;
+	u8 num_rxqs_full;
+};
+
+struct qed_tunn_update_params {
+	unsigned long   tunn_mode_update_mask;
+	unsigned long   tunn_mode;
+	u16             vxlan_udp_port;
+	u16             geneve_udp_port;
+	u8              update_rx_pf_clss;
+	u8              update_tx_pf_clss;
+	u8              update_vxlan_udp_port;
+	u8              update_geneve_udp_port;
+	u8              tunn_clss_vxlan;
+	u8              tunn_clss_l2geneve;
+	u8              tunn_clss_ipgeneve;
+	u8              tunn_clss_l2gre;
+	u8              tunn_clss_ipgre;
+};
+
 struct qed_common_cb_ops {
 	void (*link_update)(void *dev, struct qed_link_output *link);
+	void (*get_tlv_data)(void *dev, struct qed_eth_tlvs *data);
 };
 
 struct qed_selftest_ops {
@@ -108,8 +158,7 @@ struct qed_common_ops {
 		     struct rte_pci_device *pci_dev,
 		     enum qed_protocol protocol,
 		     uint32_t dp_module, uint8_t dp_level, bool is_vf);
-	void (*set_id)(struct ecore_dev *edev,
-		char name[], const char ver_str[]);
+	void (*set_name)(struct ecore_dev *edev, char name[]);
 	enum _ecore_status_t
 		(*chain_alloc)(struct ecore_dev *edev,
 			       enum ecore_chain_use_mode
@@ -149,9 +198,16 @@ struct qed_common_ops {
 			    dma_addr_t sb_phy_addr,
 			    uint16_t sb_id, enum qed_sb_type type);
 
+	int (*get_sb_info)(struct ecore_dev *edev,
+			   struct ecore_sb_info *sb, u16 qid,
+			   struct ecore_sb_info_dbg *sb_dbg);
+
 	bool (*can_link_change)(struct ecore_dev *edev);
+
 	void (*update_msglvl)(struct ecore_dev *edev,
 			      uint32_t dp_module, uint8_t dp_level);
+
+	int (*send_drv_state)(struct ecore_dev *edev, bool active);
 };
 
 #endif /* _QEDE_IF_H */

@@ -41,20 +41,66 @@
 
 #include "scheduler_pmd_private.h"
 
+/** attaching the slaves predefined by scheduler's EAL options */
+static int
+scheduler_attach_init_slave(struct rte_cryptodev *dev)
+{
+	struct scheduler_ctx *sched_ctx = dev->data->dev_private;
+	uint8_t scheduler_id = dev->data->dev_id;
+	int i;
+
+	for (i = sched_ctx->nb_init_slaves - 1; i >= 0; i--) {
+		const char *dev_name = sched_ctx->init_slave_names[i];
+		struct rte_cryptodev *slave_dev =
+				rte_cryptodev_pmd_get_named_dev(dev_name);
+		int status;
+
+		if (!slave_dev) {
+			CS_LOG_ERR("Failed to locate slave dev %s",
+					dev_name);
+			return -EINVAL;
+		}
+
+		status = rte_cryptodev_scheduler_slave_attach(
+				scheduler_id, slave_dev->data->dev_id);
+
+		if (status < 0) {
+			CS_LOG_ERR("Failed to attach slave cryptodev %u",
+					slave_dev->data->dev_id);
+			return status;
+		}
+
+		CS_LOG_INFO("Scheduler %s attached slave %s\n",
+				dev->data->name,
+				sched_ctx->init_slave_names[i]);
+
+		rte_free(sched_ctx->init_slave_names[i]);
+
+		sched_ctx->nb_init_slaves -= 1;
+	}
+
+	return 0;
+}
 /** Configure device */
 static int
-scheduler_pmd_config(struct rte_cryptodev *dev)
+scheduler_pmd_config(struct rte_cryptodev *dev,
+		struct rte_cryptodev_config *config)
 {
 	struct scheduler_ctx *sched_ctx = dev->data->dev_private;
 	uint32_t i;
-	int ret = 0;
+	int ret;
+
+	/* although scheduler_attach_init_slave presents multiple times,
+	 * there will be only 1 meaningful execution.
+	 */
+	ret = scheduler_attach_init_slave(dev);
+	if (ret < 0)
+		return ret;
 
 	for (i = 0; i < sched_ctx->nb_slaves; i++) {
 		uint8_t slave_dev_id = sched_ctx->slaves[i].dev_id;
-		struct rte_cryptodev *slave_dev =
-				rte_cryptodev_pmd_get_dev(slave_dev_id);
 
-		ret = (*slave_dev->dev_ops->dev_configure)(slave_dev);
+		ret = rte_cryptodev_configure(slave_dev_id, config);
 		if (ret < 0)
 			break;
 	}
@@ -63,24 +109,25 @@ scheduler_pmd_config(struct rte_cryptodev *dev)
 }
 
 static int
-update_reorder_buff(struct rte_cryptodev *dev, uint16_t qp_id)
+update_order_ring(struct rte_cryptodev *dev, uint16_t qp_id)
 {
 	struct scheduler_ctx *sched_ctx = dev->data->dev_private;
 	struct scheduler_qp_ctx *qp_ctx = dev->data->queue_pairs[qp_id];
 
 	if (sched_ctx->reordering_enabled) {
-		char reorder_buff_name[RTE_CRYPTODEV_NAME_MAX_LEN];
-		uint32_t buff_size = sched_ctx->nb_slaves * PER_SLAVE_BUFF_SIZE;
+		char order_ring_name[RTE_CRYPTODEV_NAME_MAX_LEN];
+		uint32_t buff_size = rte_align32pow2(
+			sched_ctx->nb_slaves * PER_SLAVE_BUFF_SIZE);
 
-		if (qp_ctx->reorder_buf) {
-			rte_reorder_free(qp_ctx->reorder_buf);
-			qp_ctx->reorder_buf = NULL;
+		if (qp_ctx->order_ring) {
+			rte_ring_free(qp_ctx->order_ring);
+			qp_ctx->order_ring = NULL;
 		}
 
 		if (!buff_size)
 			return 0;
 
-		if (snprintf(reorder_buff_name, RTE_CRYPTODEV_NAME_MAX_LEN,
+		if (snprintf(order_ring_name, RTE_CRYPTODEV_NAME_MAX_LEN,
 			"%s_rb_%u_%u", RTE_STR(CRYPTODEV_NAME_SCHEDULER_PMD),
 			dev->data->dev_id, qp_id) < 0) {
 			CS_LOG_ERR("failed to create unique reorder buffer "
@@ -88,16 +135,17 @@ update_reorder_buff(struct rte_cryptodev *dev, uint16_t qp_id)
 			return -ENOMEM;
 		}
 
-		qp_ctx->reorder_buf = rte_reorder_create(reorder_buff_name,
-				rte_socket_id(), buff_size);
-		if (!qp_ctx->reorder_buf) {
-			CS_LOG_ERR("failed to create reorder buffer");
+		qp_ctx->order_ring = rte_ring_create(order_ring_name,
+				buff_size, rte_socket_id(),
+				RING_F_SP_ENQ | RING_F_SC_DEQ);
+		if (!qp_ctx->order_ring) {
+			CS_LOG_ERR("failed to create order ring");
 			return -ENOMEM;
 		}
 	} else {
-		if (qp_ctx->reorder_buf) {
-			rte_reorder_free(qp_ctx->reorder_buf);
-			qp_ctx->reorder_buf = NULL;
+		if (qp_ctx->order_ring) {
+			rte_ring_free(qp_ctx->order_ring);
+			qp_ctx->order_ring = NULL;
 		}
 	}
 
@@ -115,8 +163,15 @@ scheduler_pmd_start(struct rte_cryptodev *dev)
 	if (dev->data->dev_started)
 		return 0;
 
+	/* although scheduler_attach_init_slave presents multiple times,
+	 * there will be only 1 meaningful execution.
+	 */
+	ret = scheduler_attach_init_slave(dev);
+	if (ret < 0)
+		return ret;
+
 	for (i = 0; i < dev->data->nb_queue_pairs; i++) {
-		ret = update_reorder_buff(dev, i);
+		ret = update_order_ring(dev, i);
 		if (ret < 0) {
 			CS_LOG_ERR("Failed to update reorder buffer");
 			return ret;
@@ -224,9 +279,9 @@ scheduler_pmd_close(struct rte_cryptodev *dev)
 	for (i = 0; i < dev->data->nb_queue_pairs; i++) {
 		struct scheduler_qp_ctx *qp_ctx = dev->data->queue_pairs[i];
 
-		if (qp_ctx->reorder_buf) {
-			rte_reorder_free(qp_ctx->reorder_buf);
-			qp_ctx->reorder_buf = NULL;
+		if (qp_ctx->order_ring) {
+			rte_ring_free(qp_ctx->order_ring);
+			qp_ctx->order_ring = NULL;
 		}
 
 		if (qp_ctx->private_qp_ctx) {
@@ -297,6 +352,11 @@ scheduler_pmd_info_get(struct rte_cryptodev *dev,
 	if (!dev_info)
 		return;
 
+	/* although scheduler_attach_init_slave presents multiple times,
+	 * there will be only 1 meaningful execution.
+	 */
+	scheduler_attach_init_slave(dev);
+
 	for (i = 0; i < sched_ctx->nb_slaves; i++) {
 		uint8_t slave_dev_id = sched_ctx->slaves[i].dev_id;
 		struct rte_cryptodev_info slave_info;
@@ -324,8 +384,8 @@ scheduler_pmd_qp_release(struct rte_cryptodev *dev, uint16_t qp_id)
 	if (!qp_ctx)
 		return 0;
 
-	if (qp_ctx->reorder_buf)
-		rte_reorder_free(qp_ctx->reorder_buf);
+	if (qp_ctx->order_ring)
+		rte_ring_free(qp_ctx->order_ring);
 	if (qp_ctx->private_qp_ctx)
 		rte_free(qp_ctx->private_qp_ctx);
 
@@ -338,11 +398,13 @@ scheduler_pmd_qp_release(struct rte_cryptodev *dev, uint16_t qp_id)
 /** Setup a queue pair */
 static int
 scheduler_pmd_qp_setup(struct rte_cryptodev *dev, uint16_t qp_id,
-	__rte_unused const struct rte_cryptodev_qp_conf *qp_conf, int socket_id)
+	const struct rte_cryptodev_qp_conf *qp_conf, int socket_id)
 {
 	struct scheduler_ctx *sched_ctx = dev->data->dev_private;
 	struct scheduler_qp_ctx *qp_ctx;
 	char name[RTE_CRYPTODEV_NAME_MAX_LEN];
+	uint32_t i;
+	int ret;
 
 	if (snprintf(name, RTE_CRYPTODEV_NAME_MAX_LEN,
 			"CRYTO_SCHE PMD %u QP %u",
@@ -355,13 +417,35 @@ scheduler_pmd_qp_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 	if (dev->data->queue_pairs[qp_id] != NULL)
 		scheduler_pmd_qp_release(dev, qp_id);
 
+	for (i = 0; i < sched_ctx->nb_slaves; i++) {
+		uint8_t slave_id = sched_ctx->slaves[i].dev_id;
+
+		ret = rte_cryptodev_queue_pair_setup(slave_id, qp_id,
+				qp_conf, socket_id);
+		if (ret < 0)
+			return ret;
+	}
+
 	/* Allocate the queue pair data structure. */
 	qp_ctx = rte_zmalloc_socket(name, sizeof(*qp_ctx), RTE_CACHE_LINE_SIZE,
 			socket_id);
 	if (qp_ctx == NULL)
 		return -ENOMEM;
 
+	/* The actual available object number = nb_descriptors - 1 */
+	qp_ctx->max_nb_objs = qp_conf->nb_descriptors - 1;
+
 	dev->data->queue_pairs[qp_id] = qp_ctx;
+
+	/* although scheduler_attach_init_slave presents multiple times,
+	 * there will be only 1 meaningful execution.
+	 */
+	ret = scheduler_attach_init_slave(dev);
+	if (ret < 0) {
+		CS_LOG_ERR("Failed to attach slave");
+		scheduler_pmd_qp_release(dev, qp_id);
+		return ret;
+	}
 
 	if (*sched_ctx->ops.config_queue_pair) {
 		if ((*sched_ctx->ops.config_queue_pair)(dev, qp_id) < 0) {
@@ -412,16 +496,13 @@ config_slave_sess(struct scheduler_ctx *sched_ctx,
 
 	for (i = 0; i < sched_ctx->nb_slaves; i++) {
 		struct scheduler_slave *slave = &sched_ctx->slaves[i];
-		struct rte_cryptodev *dev =
-				rte_cryptodev_pmd_get_dev(slave->dev_id);
 
 		if (sess->sessions[i]) {
 			if (create)
 				continue;
 			/* !create */
-			(*dev->dev_ops->session_clear)(dev,
-					(void *)sess->sessions[i]);
-			sess->sessions[i] = NULL;
+			sess->sessions[i] = rte_cryptodev_sym_session_free(
+					slave->dev_id, sess->sessions[i]);
 		} else {
 			if (!create)
 				continue;

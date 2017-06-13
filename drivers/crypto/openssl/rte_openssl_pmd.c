@@ -42,7 +42,9 @@
 
 #include "rte_openssl_pmd_private.h"
 
-static int cryptodev_openssl_remove(const char *name);
+#define DES_BLOCK_SIZE 8
+
+static int cryptodev_openssl_remove(struct rte_vdev_device *vdev);
 
 /*----------------------------------------------------------------------------*/
 
@@ -289,7 +291,21 @@ openssl_set_session_cipher_parameters(struct openssl_session *sess,
 				sess->cipher.key.data) != 0)
 			return -EINVAL;
 		break;
+	case RTE_CRYPTO_CIPHER_DES_DOCSISBPI:
+		sess->cipher.algo = xform->cipher.algo;
+		sess->chain_order = OPENSSL_CHAIN_CIPHER_BPI;
+		sess->cipher.ctx = EVP_CIPHER_CTX_new();
+		sess->cipher.evp_algo = EVP_des_cbc();
 
+		sess->cipher.bpi_ctx = EVP_CIPHER_CTX_new();
+		/* IV will be ECB encrypted whether direction is encrypt or decrypt */
+		if (EVP_EncryptInit_ex(sess->cipher.bpi_ctx, EVP_des_ecb(),
+				NULL, xform->cipher.key.data, 0) != 1)
+			return -EINVAL;
+
+		get_cipher_key(xform->cipher.key.data, sess->cipher.key.length,
+			sess->cipher.key.data);
+		break;
 	default:
 		sess->cipher.algo = RTE_CRYPTO_CIPHER_NULL;
 		return -EINVAL;
@@ -406,6 +422,9 @@ void
 openssl_reset_session(struct openssl_session *sess)
 {
 	EVP_CIPHER_CTX_free(sess->cipher.ctx);
+
+	if (sess->chain_order == OPENSSL_CHAIN_CIPHER_BPI)
+		EVP_CIPHER_CTX_free(sess->cipher.bpi_ctx);
 
 	switch (sess->auth.mode) {
 	case OPENSSL_AUTH_AS_AUTH:
@@ -577,6 +596,29 @@ process_cipher_encrypt_err:
 	return -EINVAL;
 }
 
+/** Process standard openssl cipher encryption */
+static int
+process_openssl_cipher_bpi_encrypt(uint8_t *src, uint8_t *dst,
+		uint8_t *iv, int srclen,
+		EVP_CIPHER_CTX *ctx)
+{
+	uint8_t i;
+	uint8_t encrypted_iv[DES_BLOCK_SIZE];
+	int encrypted_ivlen;
+
+	if (EVP_EncryptUpdate(ctx, encrypted_iv, &encrypted_ivlen,
+			iv, DES_BLOCK_SIZE) <= 0)
+		goto process_cipher_encrypt_err;
+
+	for (i = 0; i < srclen; i++)
+		*(dst + i) = *(src + i) ^ (encrypted_iv[i]);
+
+	return 0;
+
+process_cipher_encrypt_err:
+	OPENSSL_LOG_ERR("Process openssl cipher bpi encrypt failed");
+	return -EINVAL;
+}
 /** Process standard openssl cipher decryption */
 static int
 process_openssl_cipher_decrypt(struct rte_mbuf *mbuf_src, uint8_t *dst,
@@ -969,6 +1011,98 @@ process_openssl_cipher_op
 		op->status = RTE_CRYPTO_OP_STATUS_ERROR;
 }
 
+/** Process cipher operation */
+static void
+process_openssl_docsis_bpi_op(struct rte_crypto_op *op,
+		struct openssl_session *sess, struct rte_mbuf *mbuf_src,
+		struct rte_mbuf *mbuf_dst)
+{
+	uint8_t *src, *dst, *iv;
+	uint8_t block_size, last_block_len;
+	int srclen, status = 0;
+
+	srclen = op->sym->cipher.data.length;
+	src = rte_pktmbuf_mtod_offset(mbuf_src, uint8_t *,
+			op->sym->cipher.data.offset);
+	dst = rte_pktmbuf_mtod_offset(mbuf_dst, uint8_t *,
+			op->sym->cipher.data.offset);
+
+	iv = op->sym->cipher.iv.data;
+
+	block_size = DES_BLOCK_SIZE;
+
+	last_block_len = srclen % block_size;
+	if (sess->cipher.direction == RTE_CRYPTO_CIPHER_OP_ENCRYPT) {
+		/* Encrypt only with ECB mode XOR IV */
+		if (srclen < block_size) {
+			status = process_openssl_cipher_bpi_encrypt(src, dst,
+					iv, srclen,
+					sess->cipher.bpi_ctx);
+		} else {
+			srclen -= last_block_len;
+			/* Encrypt with the block aligned stream with CBC mode */
+			status = process_openssl_cipher_encrypt(mbuf_src, dst,
+					op->sym->cipher.data.offset, iv,
+					sess->cipher.key.data, srclen,
+					sess->cipher.ctx, sess->cipher.evp_algo);
+			if (last_block_len) {
+				/* Point at last block */
+				dst += srclen;
+				/*
+				 * IV is the last encrypted block from
+				 * the previous operation
+				 */
+				iv = dst - block_size;
+				src += srclen;
+				srclen = last_block_len;
+				/* Encrypt the last frame with ECB mode */
+				status |= process_openssl_cipher_bpi_encrypt(src,
+						dst, iv,
+						srclen, sess->cipher.bpi_ctx);
+			}
+		}
+	} else {
+		/* Decrypt only with ECB mode (encrypt, as it is same operation) */
+		if (srclen < block_size) {
+			status = process_openssl_cipher_bpi_encrypt(src, dst,
+					iv,
+					srclen,
+					sess->cipher.bpi_ctx);
+		} else {
+			if (last_block_len) {
+				/* Point at last block */
+				dst += srclen - last_block_len;
+				src += srclen - last_block_len;
+				/*
+				 * IV is the last full block
+				 */
+				iv = src - block_size;
+				/*
+				 * Decrypt the last frame with ECB mode
+				 * (encrypt, as it is the same operation)
+				 */
+				status = process_openssl_cipher_bpi_encrypt(src,
+						dst, iv,
+						last_block_len, sess->cipher.bpi_ctx);
+				/* Prepare parameters for CBC mode op */
+				iv = op->sym->cipher.iv.data;
+				dst += last_block_len - srclen;
+				srclen -= last_block_len;
+			}
+
+			/* Decrypt with CBC mode */
+			status |= process_openssl_cipher_decrypt(mbuf_src, dst,
+					op->sym->cipher.data.offset, iv,
+					sess->cipher.key.data, srclen,
+					sess->cipher.ctx,
+					sess->cipher.evp_algo);
+		}
+	}
+
+	if (status != 0)
+		op->status = RTE_CRYPTO_OP_STATUS_ERROR;
+}
+
 /** Process auth operation */
 static void
 process_openssl_auth_op
@@ -1052,6 +1186,9 @@ process_op(const struct openssl_qp *qp, struct rte_crypto_op *op,
 	case OPENSSL_CHAIN_COMBINED:
 		process_openssl_combined_op(op, sess, msrc, mdst);
 		break;
+	case OPENSSL_CHAIN_CIPHER_BPI:
+		process_openssl_docsis_bpi_op(op, sess, msrc, mdst);
+		break;
 	default:
 		op->status = RTE_CRYPTO_OP_STATUS_ERROR;
 		break;
@@ -1119,7 +1256,7 @@ openssl_pmd_dequeue_burst(void *queue_pair, struct rte_crypto_op **ops,
 	unsigned int nb_dequeued = 0;
 
 	nb_dequeued = rte_ring_dequeue_burst(qp->processed_ops,
-			(void **)ops, nb_ops);
+			(void **)ops, nb_ops, NULL);
 	qp->stats.dequeued_count += nb_dequeued;
 
 	return nb_dequeued;
@@ -1127,21 +1264,16 @@ openssl_pmd_dequeue_burst(void *queue_pair, struct rte_crypto_op **ops,
 
 /** Create OPENSSL crypto device */
 static int
-cryptodev_openssl_create(struct rte_crypto_vdev_init_params *init_params)
+cryptodev_openssl_create(const char *name,
+			struct rte_vdev_device *vdev,
+			struct rte_crypto_vdev_init_params *init_params)
 {
 	struct rte_cryptodev *dev;
 	struct openssl_private *internals;
 
-	if (init_params->name[0] == '\0') {
-		int ret = rte_cryptodev_pmd_create_dev_name(
-				init_params->name,
-				RTE_STR(CRYPTODEV_NAME_OPENSSL_PMD));
-
-		if (ret < 0) {
-			OPENSSL_LOG_ERR("failed to create unique name");
-			return ret;
-		}
-	}
+	if (init_params->name[0] == '\0')
+		snprintf(init_params->name, sizeof(init_params->name),
+				"%s", name);
 
 	dev = rte_cryptodev_pmd_virtual_dev_init(init_params->name,
 			sizeof(struct openssl_private),
@@ -1175,14 +1307,13 @@ init_error:
 	OPENSSL_LOG_ERR("driver %s: cryptodev_openssl_create failed",
 			init_params->name);
 
-	cryptodev_openssl_remove(init_params->name);
+	cryptodev_openssl_remove(vdev);
 	return -EFAULT;
 }
 
 /** Initialise OPENSSL crypto device */
 static int
-cryptodev_openssl_probe(const char *name,
-		const char *input_args)
+cryptodev_openssl_probe(struct rte_vdev_device *vdev)
 {
 	struct rte_crypto_vdev_init_params init_params = {
 		RTE_CRYPTODEV_VDEV_DEFAULT_MAX_NB_QUEUE_PAIRS,
@@ -1190,6 +1321,13 @@ cryptodev_openssl_probe(const char *name,
 		rte_socket_id(),
 		{0}
 	};
+	const char *name;
+	const char *input_args;
+
+	name = rte_vdev_device_name(vdev);
+	if (name == NULL)
+		return -EINVAL;
+	input_args = rte_vdev_device_args(vdev);
 
 	rte_cryptodev_parse_vdev_init_params(&init_params, input_args);
 
@@ -1203,13 +1341,16 @@ cryptodev_openssl_probe(const char *name,
 	RTE_LOG(INFO, PMD, "  Max number of sessions = %d\n",
 			init_params.max_nb_sessions);
 
-	return cryptodev_openssl_create(&init_params);
+	return cryptodev_openssl_create(name, vdev, &init_params);
 }
 
 /** Uninitialise OPENSSL crypto device */
 static int
-cryptodev_openssl_remove(const char *name)
+cryptodev_openssl_remove(struct rte_vdev_device *vdev)
 {
+	const char *name;
+
+	name = rte_vdev_device_name(vdev);
 	if (name == NULL)
 		return -EINVAL;
 

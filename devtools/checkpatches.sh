@@ -44,7 +44,8 @@ options="$options --show-types"
 options="$options --ignore=LINUX_VERSION_CODE,FILE_PATH_CHANGES,\
 VOLATILE,PREFER_PACKED,PREFER_ALIGNED,PREFER_PRINTF,\
 PREFER_KERNEL_TYPES,BIT_MACRO,CONST_STRUCT,\
-SPLIT_STRING,LINE_SPACING,PARENTHESIS_ALIGNMENT,NETWORKING_BLOCK_COMMENT_STYLE,\
+SPLIT_STRING,LONG_LINE_STRING,\
+LINE_SPACING,PARENTHESIS_ALIGNMENT,NETWORKING_BLOCK_COMMENT_STYLE,\
 NEW_TYPEDEFS,COMPARISON_TO_NULL"
 
 print_usage () {
@@ -89,7 +90,7 @@ check () { # <patch> <commit> <title>
 	if [ -n "$1" ] ; then
 		report=$($DPDK_CHECKPATCH_PATH $options "$1" 2>/dev/null)
 	elif [ -n "$2" ] ; then
-		report=$(git format-patch --no-stat --stdout -1 $commit |
+		report=$(git format-patch --find-renames --no-stat --stdout -1 $commit |
 			$DPDK_CHECKPATCH_PATH $options - 2>/dev/null)
 	else
 		report=$($DPDK_CHECKPATCH_PATH $options - 2>/dev/null)

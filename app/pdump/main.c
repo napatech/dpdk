@@ -92,7 +92,6 @@
 #define BURST_SIZE 32
 #define NUM_VDEVS 2
 
-#define RTE_RING_SZ_MASK  (unsigned)(0x0fffffff) /**< Ring size mask */
 /* true if x is a power of 2 */
 #define POWEROF2(x) ((((x)-1) & (x)) == 0)
 
@@ -497,7 +496,7 @@ pdump_rxtx(struct rte_ring *ring, uint8_t vdev_id, struct pdump_stats *stats)
 
 	/* first dequeue packets from ring of primary process */
 	const uint16_t nb_in_deq = rte_ring_dequeue_burst(ring,
-			(void *)rxtx_bufs, BURST_SIZE);
+			(void *)rxtx_bufs, BURST_SIZE, NULL);
 	stats->dequeue_pkts += nb_in_deq;
 
 	if (nb_in_deq) {

@@ -536,7 +536,8 @@ __rte_hash_add_key_with_hash(const struct rte_hash *h, const void *key,
 		if (cached_free_slots->len == 0) {
 			/* Need to get another burst of free slots from global ring */
 			n_slots = rte_ring_mc_dequeue_burst(h->free_slots,
-					cached_free_slots->objs, LCORE_CACHE_SIZE);
+					cached_free_slots->objs,
+					LCORE_CACHE_SIZE, NULL);
 			if (n_slots == 0)
 				return -ENOSPC;
 
@@ -808,7 +809,7 @@ remove_entry(const struct rte_hash *h, struct rte_hash_bucket *bkt, unsigned i)
 			/* Need to enqueue the free slots in global ring. */
 			n_slots = rte_ring_mp_enqueue_burst(h->free_slots,
 						cached_free_slots->objs,
-						LCORE_CACHE_SIZE);
+						LCORE_CACHE_SIZE, NULL);
 			cached_free_slots->len -= n_slots;
 		}
 		/* Put index of new free slot in cache. */

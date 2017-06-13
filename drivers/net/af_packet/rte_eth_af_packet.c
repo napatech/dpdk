@@ -38,6 +38,7 @@
 
 #include <rte_mbuf.h>
 #include <rte_ethdev.h>
+#include <rte_ethdev_vdev.h>
 #include <rte_malloc.h>
 #include <rte_kvargs.h>
 #include <rte_vdev.h>
@@ -451,7 +452,7 @@ eth_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	if (s < 0)
 		return -EINVAL;
 
-	strncpy(ifr.ifr_name, internals->if_name, IFNAMSIZ);
+	snprintf(ifr.ifr_name, IFNAMSIZ, "%s", internals->if_name);
 	ret = ioctl(s, SIOCSIFMTU, &ifr);
 	close(s);
 
@@ -471,7 +472,7 @@ eth_dev_change_flags(char *if_name, uint32_t flags, uint32_t mask)
 	if (s < 0)
 		return;
 
-	strncpy(ifr.ifr_name, if_name, IFNAMSIZ);
+	snprintf(ifr.ifr_name, IFNAMSIZ, "%s", if_name);
 	if (ioctl(s, SIOCGIFFLAGS, &ifr) < 0)
 		goto out;
 	ifr.ifr_flags &= mask;
@@ -539,18 +540,19 @@ open_packet_iface(const char *key __rte_unused,
 static struct rte_vdev_driver pmd_af_packet_drv;
 
 static int
-rte_pmd_init_internals(const char *name,
+rte_pmd_init_internals(struct rte_vdev_device *dev,
                        const int sockfd,
                        const unsigned nb_queues,
                        unsigned int blocksize,
                        unsigned int blockcnt,
                        unsigned int framesize,
                        unsigned int framecnt,
-                       const unsigned numa_node,
                        struct pmd_internals **internals,
                        struct rte_eth_dev **eth_dev,
                        struct rte_kvargs *kvlist)
 {
+	const char *name = rte_vdev_device_name(dev);
+	const unsigned int numa_node = dev->device.numa_node;
 	struct rte_eth_dev_data *data = NULL;
 	struct rte_kvargs_pair *pair = NULL;
 	struct ifreq ifr;
@@ -768,7 +770,7 @@ rte_pmd_init_internals(const char *name,
 	}
 
 	/* reserve an ethdev entry */
-	*eth_dev = rte_eth_dev_allocate(name);
+	*eth_dev = rte_eth_vdev_allocate(dev, 0);
 	if (*eth_dev == NULL)
 		goto error;
 
@@ -782,22 +784,16 @@ rte_pmd_init_internals(const char *name,
 
 	(*internals)->nb_queues = nb_queues;
 
+	rte_memcpy(data, (*eth_dev)->data, sizeof(*data));
 	data->dev_private = *internals;
-	data->port_id = (*eth_dev)->data->port_id;
 	data->nb_rx_queues = (uint16_t)nb_queues;
 	data->nb_tx_queues = (uint16_t)nb_queues;
 	data->dev_link = pmd_link;
 	data->mac_addrs = &(*internals)->eth_addr;
-	strncpy(data->name,
-		(*eth_dev)->data->name, strlen((*eth_dev)->data->name));
 
 	(*eth_dev)->data = data;
 	(*eth_dev)->dev_ops = &ops;
-	(*eth_dev)->driver = NULL;
 	(*eth_dev)->data->dev_flags = RTE_ETH_DEV_DETACHABLE;
-	(*eth_dev)->data->drv_name = pmd_af_packet_drv.driver.name;
-	(*eth_dev)->data->kdrv = RTE_KDRV_NONE;
-	(*eth_dev)->data->numa_node = numa_node;
 
 	return 0;
 
@@ -822,11 +818,11 @@ error_early:
 }
 
 static int
-rte_eth_from_packet(const char *name,
+rte_eth_from_packet(struct rte_vdev_device *dev,
                     int const *sockfd,
-                    const unsigned numa_node,
                     struct rte_kvargs *kvlist)
 {
+	const char *name = rte_vdev_device_name(dev);
 	struct pmd_internals *internals = NULL;
 	struct rte_eth_dev *eth_dev = NULL;
 	struct rte_kvargs_pair *pair = NULL;
@@ -909,11 +905,11 @@ rte_eth_from_packet(const char *name,
 	RTE_LOG(INFO, PMD, "%s:\tframe size %d\n", name, framesize);
 	RTE_LOG(INFO, PMD, "%s:\tframe count %d\n", name, framecount);
 
-	if (rte_pmd_init_internals(name, *sockfd, qpairs,
-	                           blocksize, blockcount,
-	                           framesize, framecount,
-	                           numa_node, &internals, &eth_dev,
-	                           kvlist) < 0)
+	if (rte_pmd_init_internals(dev, *sockfd, qpairs,
+				   blocksize, blockcount,
+				   framesize, framecount,
+				   &internals, &eth_dev,
+				   kvlist) < 0)
 		return -1;
 
 	eth_dev->rx_pkt_burst = eth_af_packet_rx;
@@ -923,18 +919,16 @@ rte_eth_from_packet(const char *name,
 }
 
 static int
-rte_pmd_af_packet_probe(const char *name, const char *params)
+rte_pmd_af_packet_probe(struct rte_vdev_device *dev)
 {
-	unsigned numa_node;
 	int ret = 0;
 	struct rte_kvargs *kvlist;
 	int sockfd = -1;
 
-	RTE_LOG(INFO, PMD, "Initializing pmd_af_packet for %s\n", name);
+	RTE_LOG(INFO, PMD, "Initializing pmd_af_packet for %s\n",
+		rte_vdev_device_name(dev));
 
-	numa_node = rte_socket_id();
-
-	kvlist = rte_kvargs_parse(params, valid_arguments);
+	kvlist = rte_kvargs_parse(rte_vdev_device_args(dev), valid_arguments);
 	if (kvlist == NULL) {
 		ret = -1;
 		goto exit;
@@ -952,7 +946,10 @@ rte_pmd_af_packet_probe(const char *name, const char *params)
 			goto exit;
 	}
 
-	ret = rte_eth_from_packet(name, &sockfd, numa_node, kvlist);
+	if (dev->device.numa_node == SOCKET_ID_ANY)
+		dev->device.numa_node = rte_socket_id();
+
+	ret = rte_eth_from_packet(dev, &sockfd, kvlist);
 	close(sockfd); /* no longer needed */
 
 exit:
@@ -961,7 +958,7 @@ exit:
 }
 
 static int
-rte_pmd_af_packet_remove(const char *name)
+rte_pmd_af_packet_remove(struct rte_vdev_device *dev)
 {
 	struct rte_eth_dev *eth_dev = NULL;
 	struct pmd_internals *internals;
@@ -970,11 +967,11 @@ rte_pmd_af_packet_remove(const char *name)
 	RTE_LOG(INFO, PMD, "Closing AF_PACKET ethdev on numa socket %u\n",
 			rte_socket_id());
 
-	if (name == NULL)
+	if (dev == NULL)
 		return -1;
 
 	/* find the ethdev entry */
-	eth_dev = rte_eth_dev_allocated(name);
+	eth_dev = rte_eth_dev_allocated(rte_vdev_device_name(dev));
 	if (eth_dev == NULL)
 		return -1;
 

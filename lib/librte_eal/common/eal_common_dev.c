@@ -45,65 +45,6 @@
 
 #include "eal_private.h"
 
-/** Global list of device drivers. */
-static struct rte_driver_list dev_driver_list =
-	TAILQ_HEAD_INITIALIZER(dev_driver_list);
-/** Global list of device drivers. */
-static struct rte_device_list dev_device_list =
-	TAILQ_HEAD_INITIALIZER(dev_device_list);
-
-/* register a driver */
-void
-rte_eal_driver_register(struct rte_driver *driver)
-{
-	TAILQ_INSERT_TAIL(&dev_driver_list, driver, next);
-}
-
-/* unregister a driver */
-void
-rte_eal_driver_unregister(struct rte_driver *driver)
-{
-	TAILQ_REMOVE(&dev_driver_list, driver, next);
-}
-
-void rte_eal_device_insert(struct rte_device *dev)
-{
-	TAILQ_INSERT_TAIL(&dev_device_list, dev, next);
-}
-
-void rte_eal_device_remove(struct rte_device *dev)
-{
-	TAILQ_REMOVE(&dev_device_list, dev, next);
-}
-
-int
-rte_eal_dev_init(void)
-{
-	struct rte_devargs *devargs;
-
-	/*
-	 * Note that the dev_driver_list is populated here
-	 * from calls made to rte_eal_driver_register from constructor functions
-	 * embedded into PMD modules via the RTE_PMD_REGISTER_VDEV macro
-	 */
-
-	/* call the init function for each virtual device */
-	TAILQ_FOREACH(devargs, &devargs_list, next) {
-
-		if (devargs->type != RTE_DEVTYPE_VIRTUAL)
-			continue;
-
-		if (rte_eal_vdev_init(devargs->virt.drv_name,
-					devargs->args)) {
-			RTE_LOG(ERR, EAL, "failed to initialize %s device\n",
-					devargs->virt.drv_name);
-			return -1;
-		}
-	}
-
-	return 0;
-}
-
 int rte_eal_dev_attach(const char *name, const char *devargs)
 {
 	struct rte_pci_addr addr;
@@ -114,11 +55,11 @@ int rte_eal_dev_attach(const char *name, const char *devargs)
 	}
 
 	if (eal_parse_pci_DomBDF(name, &addr) == 0) {
-		if (rte_eal_pci_probe_one(&addr) < 0)
+		if (rte_pci_probe_one(&addr) < 0)
 			goto err;
 
 	} else {
-		if (rte_eal_vdev_init(name, devargs))
+		if (rte_vdev_init(name, devargs))
 			goto err;
 	}
 
@@ -139,10 +80,10 @@ int rte_eal_dev_detach(const char *name)
 	}
 
 	if (eal_parse_pci_DomBDF(name, &addr) == 0) {
-		if (rte_eal_pci_detach(&addr) < 0)
+		if (rte_pci_detach(&addr) < 0)
 			goto err;
 	} else {
-		if (rte_eal_vdev_uninit(name))
+		if (rte_vdev_uninit(name))
 			goto err;
 	}
 	return 0;

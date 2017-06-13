@@ -36,9 +36,13 @@ Network Interface Controller Drivers
     :numbered:
 
     overview
+    build_and_test
+    ark
+    avp
     bnx2x
     bnxt
     cxgbe
+    dpaa2
     e1000em
     ena
     enic
@@ -46,6 +50,8 @@ Network Interface Controller Drivers
     i40e
     ixgbe
     intel_vf
+    kni
+    liquidio
     mlx4
     mlx5
     nfp

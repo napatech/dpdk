@@ -42,13 +42,20 @@ EXPORT_MAP := rte_distributor_version.map
 LIBABIVER := 1
 
 # all source are stored in SRCS-y
-SRCS-$(CONFIG_RTE_LIBRTE_DISTRIBUTOR) := rte_distributor.c
+SRCS-$(CONFIG_RTE_LIBRTE_DISTRIBUTOR) := rte_distributor_v20.c
+SRCS-$(CONFIG_RTE_LIBRTE_DISTRIBUTOR) += rte_distributor.c
+ifeq ($(CONFIG_RTE_ARCH_X86),y)
+SRCS-$(CONFIG_RTE_LIBRTE_DISTRIBUTOR) += rte_distributor_match_sse.c
+# distributor SIMD algo needs SSE4.2 support
+ifeq ($(findstring RTE_MACHINE_CPUFLAG_SSE4_2,$(CFLAGS)),)
+CFLAGS_rte_distributor_match_sse.o += -msse4.2
+endif
+else
+SRCS-$(CONFIG_RTE_LIBRTE_DISTRIBUTOR) += rte_distributor_match_generic.c
+endif
+
 
 # install this header file
 SYMLINK-$(CONFIG_RTE_LIBRTE_DISTRIBUTOR)-include := rte_distributor.h
-
-# this lib needs eal
-DEPDIRS-$(CONFIG_RTE_LIBRTE_DISTRIBUTOR) += lib/librte_eal
-DEPDIRS-$(CONFIG_RTE_LIBRTE_DISTRIBUTOR) += lib/librte_mbuf
 
 include $(RTE_SDK)/mk/rte.lib.mk

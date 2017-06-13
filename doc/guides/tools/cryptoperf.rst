@@ -109,9 +109,10 @@ The following are the EAL command-line options that can be used in conjunction
 with the ``dpdk-test-crypto-perf`` applcation.
 See the DPDK Getting Started Guides for more information on these options.
 
-*   ``-c <COREMASK>``
+*   ``-c <COREMASK>`` or ``-l <CORELIST>``
 
-        Set the hexadecimal bitmask of the cores to run on.
+        Set the hexadecimal bitmask of the cores to run on. The corelist is a
+        list cores to use.
 
 *   ``-w <PCI>``
 
@@ -132,6 +133,7 @@ The following are the appication command-line options:
 
            throughput
            latency
+           verify
 
 * ``--silent``
 
@@ -149,9 +151,24 @@ The following are the appication command-line options:
 
         Set the number of packets per burst.
 
+        This can be set as:
+          * Single value (i.e. ``--burst-sz 16``)
+          * Range of values, using the following structure ``min:inc:max``,
+            where ``min`` is minimum size, ``inc`` is the increment size and ``max``
+            is the maximum size (i.e. ``--burst-sz 16:2:32``)
+          * List of values, up to 32 values, separated in commas (i.e. ``--burst-sz 16,24,32``)
+
 * ``--buffer-sz <n>``
 
         Set the size of single packet (plaintext or ciphertext in it).
+
+        This can be set as:
+          * Single value (i.e. ``--buffer-sz 16``)
+          * Range of values, using the following structure ``min:inc:max``,
+            where ``min`` is minimum size, ``inc`` is the increment size and ``max``
+            is the maximum size (i.e. ``--buffer-sz 16:2:32``)
+          * List of values, up to 32 values, separated in commas (i.e. ``--buffer-sz 32,64,128``)
+
 
 * ``--segments-nb <n>``
 
@@ -180,6 +197,8 @@ The following are the appication command-line options:
            auth-then-cipher
            aead
 
+        For GCM/CCM algorithms you should use aead flag.
+
 * ``--sessionless``
 
         Enable session-less crypto operations mode.
@@ -187,11 +206,6 @@ The following are the appication command-line options:
 * ``--out-of-place``
 
         Enable out-of-place crypto operations mode.
-
-* ``--verify``
-
-        Enable verify that all crypto operations were successful.
-        The verification is done after the performance test.
 
 * ``--test-file <name>``
 
@@ -350,7 +364,7 @@ Call application for performance throughput test of single Aesni MB PMD
 for cipher encryption aes-cbc and auth generation sha1-hmac,
 one milion operations, burst size 32, packet size 64::
 
-   dpdk-test-crypto-perf -c 0xc0 --vdev crypto_aesni_mb_pmd -w 0000:00:00.0 --
+   dpdk-test-crypto-perf -l 6-7 --vdev crypto_aesni_mb_pmd -w 0000:00:00.0 --
    --ptest throughput --devtype crypto_aesni_mb --optype cipher-then-auth
    --cipher-algo aes-cbc --cipher-op encrypt --cipher-key-sz 16 --auth-algo
    sha1-hmac --auth-op generate --auth-key-sz 64 --auth-digest-sz 12
@@ -359,23 +373,23 @@ one milion operations, burst size 32, packet size 64::
 Call application for performance latency test of two Aesni MB PMD executed
 on two cores for cipher encryption aes-cbc, ten operations in silent mode::
 
-   dpdk-test-crypto-perf -c 0xf0 --vdev crypto_aesni_mb_pmd1
+   dpdk-test-crypto-perf -l 4-7 --vdev crypto_aesni_mb_pmd1
    --vdev crypto_aesni_mb_pmd2 -w 0000:00:00.0 -- --devtype crypto_aesni_mb
    --cipher-algo aes-cbc --cipher-key-sz 16 --cipher-iv-sz 16
    --cipher-op encrypt --optype cipher-only --silent
    --ptest latency --total-ops 10
 
-Call application for performance latency test of single open ssl PMD
+Call application for verification test of single open ssl PMD
 for cipher encryption aes-gcm and auth generation aes-gcm,ten operations
 in silent mode, test vector provide in file "test_aes_gcm.data"
 with packet verification::
 
-   dpdk-test-crypto-perf -c 0xf0 --vdev crypto_openssl -w 0000:00:00.0 --
+   dpdk-test-crypto-perf -l 4-7 --vdev crypto_openssl -w 0000:00:00.0 --
    --devtype crypto_openssl --cipher-algo aes-gcm --cipher-key-sz 16
    --cipher-iv-sz 16 --cipher-op encrypt --auth-algo aes-gcm --auth-key-sz 16
    --auth-digest-sz 16 --auth-aad-sz 16 --auth-op generate --optype aead
-   --silent --ptest latency --total-ops 10
-   --test-file test_aes_gcm.data --verify
+   --silent --ptest verify --total-ops 10
+   --test-file test_aes_gcm.data
 
 Test vector file for cipher algorithm aes cbc 256 with authorization sha::
 

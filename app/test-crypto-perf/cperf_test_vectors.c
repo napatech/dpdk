@@ -399,14 +399,14 @@ cperf_test_vector_get_dummy(struct cperf_options *options)
 		return t_vec;
 
 	t_vec->plaintext.data = plaintext;
-	t_vec->plaintext.length = options->buffer_sz;
+	t_vec->plaintext.length = options->max_buffer_size;
 
 	if (options->op_type ==	CPERF_CIPHER_ONLY ||
 			options->op_type == CPERF_CIPHER_THEN_AUTH ||
 			options->op_type == CPERF_AUTH_THEN_CIPHER ||
 			options->op_type == CPERF_AEAD) {
 		if (options->cipher_algo == RTE_CRYPTO_CIPHER_NULL) {
-			t_vec->cipher_key.length = -1;
+			t_vec->cipher_key.length = 0;
 			t_vec->ciphertext.data = plaintext;
 			t_vec->cipher_key.data = NULL;
 			t_vec->iv.data = NULL;
@@ -422,11 +422,11 @@ cperf_test_vector_get_dummy(struct cperf_options *options)
 			}
 			memcpy(t_vec->iv.data, iv, options->cipher_iv_sz);
 		}
-		t_vec->ciphertext.length = options->buffer_sz;
+		t_vec->ciphertext.length = options->max_buffer_size;
 		t_vec->iv.phys_addr = rte_malloc_virt2phy(t_vec->iv.data);
 		t_vec->iv.length = options->cipher_iv_sz;
 		t_vec->data.cipher_offset = 0;
-		t_vec->data.cipher_length = options->buffer_sz;
+		t_vec->data.cipher_length = options->max_buffer_size;
 	}
 
 	if (options->op_type ==	CPERF_AUTH_ONLY ||
@@ -463,7 +463,7 @@ cperf_test_vector_get_dummy(struct cperf_options *options)
 			break;
 		}
 
-		if (aad_alloc) {
+		if (aad_alloc && options->auth_aad_sz) {
 			t_vec->aad.data = rte_malloc(NULL,
 					options->auth_aad_sz, 16);
 			if (t_vec->aad.data == NULL) {
@@ -493,7 +493,7 @@ cperf_test_vector_get_dummy(struct cperf_options *options)
 		t_vec->digest.length = options->auth_digest_sz;
 		memcpy(t_vec->digest.data, digest, options->auth_digest_sz);
 		t_vec->data.auth_offset = 0;
-		t_vec->data.auth_length = options->buffer_sz;
+		t_vec->data.auth_length = options->max_buffer_size;
 	}
 
 	return t_vec;

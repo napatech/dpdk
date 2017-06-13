@@ -417,7 +417,7 @@ process_outer_cksums(void *outer_l3_hdr, struct testpmd_offload_info *info,
 			ol_flags |= PKT_TX_OUTER_IP_CKSUM;
 		else
 			ipv4_hdr->hdr_checksum = rte_ipv4_cksum(ipv4_hdr);
-	} else if (testpmd_ol_flags & TESTPMD_TX_OFFLOAD_OUTER_IP_CKSUM)
+	} else
 		ol_flags |= PKT_TX_OUTER_IPV6;
 
 	if (info->outer_l4_proto != IPPROTO_UDP)
@@ -583,7 +583,7 @@ pkt_copy_split(const struct rte_mbuf *pkt)
 		rc = mbuf_copy_split(pkt, md, seglen, nb_seg);
 		if (rc < 0)
 			RTE_LOG(ERR, USER1,
-				"mbuf_copy_split for %p(len=%u, nb_seg=%hhu) "
+				"mbuf_copy_split for %p(len=%u, nb_seg=%u) "
 				"into %u segments failed with error code: %d\n",
 				pkt, pkt->pkt_len, pkt->nb_segs, nb_seg, rc);
 
@@ -756,7 +756,9 @@ pkt_burst_checksum_forward(struct fwd_stream *fs)
 
 		if (info.is_tunnel == 1) {
 			if (info.tunnel_tso_segsz ||
-			    testpmd_ol_flags & TESTPMD_TX_OFFLOAD_OUTER_IP_CKSUM) {
+			    (testpmd_ol_flags &
+			    TESTPMD_TX_OFFLOAD_OUTER_IP_CKSUM) ||
+			    (tx_ol_flags & PKT_TX_OUTER_IPV6)) {
 				m->outer_l2_len = info.outer_l2_len;
 				m->outer_l3_len = info.outer_l3_len;
 				m->l2_len = info.l2_len;
@@ -801,7 +803,7 @@ pkt_burst_checksum_forward(struct fwd_stream *fs)
 			char buf[256];
 
 			printf("-----------------\n");
-			printf("port=%u, mbuf=%p, pkt_len=%u, nb_segs=%hhu:\n",
+			printf("port=%u, mbuf=%p, pkt_len=%u, nb_segs=%u:\n",
 				fs->rx_port, m, m->pkt_len, m->nb_segs);
 			/* dump rx parsed packet info */
 			rte_get_rx_ol_flag_list(rx_ol_flags, buf, sizeof(buf));
@@ -826,8 +828,9 @@ pkt_burst_checksum_forward(struct fwd_stream *fs)
 					"m->l4_len=%d\n",
 					m->l2_len, m->l3_len, m->l4_len);
 			if (info.is_tunnel == 1) {
-				if (testpmd_ol_flags &
-				    TESTPMD_TX_OFFLOAD_OUTER_IP_CKSUM)
+				if ((testpmd_ol_flags &
+				    TESTPMD_TX_OFFLOAD_OUTER_IP_CKSUM) ||
+				    (tx_ol_flags & PKT_TX_OUTER_IPV6))
 					printf("tx: m->outer_l2_len=%d "
 						"m->outer_l3_len=%d\n",
 						m->outer_l2_len,

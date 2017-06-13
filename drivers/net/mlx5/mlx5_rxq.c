@@ -36,6 +36,7 @@
 #include <errno.h>
 #include <string.h>
 #include <stdint.h>
+#include <fcntl.h>
 
 /* Verbs header. */
 /* ISO C doesn't support unnamed structs/unions, disabling -pedantic. */
@@ -57,6 +58,8 @@
 #include <rte_malloc.h>
 #include <rte_ethdev.h>
 #include <rte_common.h>
+#include <rte_interrupts.h>
+#include <rte_debug.h>
 #ifdef PEDANTIC
 #pragma GCC diagnostic error "-Wpedantic"
 #endif
@@ -741,49 +744,16 @@ rxq_free_elts(struct rxq_ctrl *rxq_ctrl)
 void
 rxq_cleanup(struct rxq_ctrl *rxq_ctrl)
 {
-	struct ibv_exp_release_intf_params params;
-
 	DEBUG("cleaning up %p", (void *)rxq_ctrl);
 	rxq_free_elts(rxq_ctrl);
 	if (rxq_ctrl->fdir_queue != NULL)
 		priv_fdir_queue_destroy(rxq_ctrl->priv, rxq_ctrl->fdir_queue);
-	if (rxq_ctrl->if_wq != NULL) {
-		assert(rxq_ctrl->priv != NULL);
-		assert(rxq_ctrl->priv->ctx != NULL);
-		assert(rxq_ctrl->wq != NULL);
-		params = (struct ibv_exp_release_intf_params){
-			.comp_mask = 0,
-		};
-		claim_zero(ibv_exp_release_intf(rxq_ctrl->priv->ctx,
-						rxq_ctrl->if_wq,
-						&params));
-	}
-	if (rxq_ctrl->if_cq != NULL) {
-		assert(rxq_ctrl->priv != NULL);
-		assert(rxq_ctrl->priv->ctx != NULL);
-		assert(rxq_ctrl->cq != NULL);
-		params = (struct ibv_exp_release_intf_params){
-			.comp_mask = 0,
-		};
-		claim_zero(ibv_exp_release_intf(rxq_ctrl->priv->ctx,
-						rxq_ctrl->if_cq,
-						&params));
-	}
 	if (rxq_ctrl->wq != NULL)
 		claim_zero(ibv_exp_destroy_wq(rxq_ctrl->wq));
 	if (rxq_ctrl->cq != NULL)
 		claim_zero(ibv_destroy_cq(rxq_ctrl->cq));
-	if (rxq_ctrl->rd != NULL) {
-		struct ibv_exp_destroy_res_domain_attr attr = {
-			.comp_mask = 0,
-		};
-
-		assert(rxq_ctrl->priv != NULL);
-		assert(rxq_ctrl->priv->ctx != NULL);
-		claim_zero(ibv_exp_destroy_res_domain(rxq_ctrl->priv->ctx,
-						      rxq_ctrl->rd,
-						      &attr));
-	}
+	if (rxq_ctrl->channel != NULL)
+		claim_zero(ibv_destroy_comp_channel(rxq_ctrl->channel));
 	if (rxq_ctrl->mr != NULL)
 		claim_zero(ibv_dereg_mr(rxq_ctrl->mr));
 	memset(rxq_ctrl, 0, sizeof(*rxq_ctrl));
@@ -931,13 +901,10 @@ rxq_ctrl_setup(struct rte_eth_dev *dev, struct rxq_ctrl *rxq_ctrl,
 	};
 	struct ibv_exp_wq_attr mod;
 	union {
-		struct ibv_exp_query_intf_params params;
 		struct ibv_exp_cq_init_attr cq;
-		struct ibv_exp_res_domain_init_attr rd;
 		struct ibv_exp_wq_init_attr wq;
 		struct ibv_exp_cq_attr cq_attr;
 	} attr;
-	enum ibv_exp_query_intf_status status;
 	unsigned int mb_len = rte_pktmbuf_data_room_size(mp);
 	unsigned int cqe_n = desc - 1;
 	struct rte_mbuf *(*elts)[desc] = NULL;
@@ -946,14 +913,10 @@ rxq_ctrl_setup(struct rte_eth_dev *dev, struct rxq_ctrl *rxq_ctrl,
 	(void)conf; /* Thresholds configuration (ignored). */
 	/* Enable scattered packets support for this queue if necessary. */
 	assert(mb_len >= RTE_PKTMBUF_HEADROOM);
-	/* If smaller than MRU, multi-segment support must be enabled. */
-	if (mb_len < (priv->mtu > dev->data->dev_conf.rxmode.max_rx_pkt_len ?
-		     dev->data->dev_conf.rxmode.max_rx_pkt_len :
-		     priv->mtu))
-		dev->data->dev_conf.rxmode.jumbo_frame = 1;
-	if ((dev->data->dev_conf.rxmode.jumbo_frame) &&
-	    (dev->data->dev_conf.rxmode.max_rx_pkt_len >
-	     (mb_len - RTE_PKTMBUF_HEADROOM))) {
+	if (dev->data->dev_conf.rxmode.max_rx_pkt_len <=
+	    (mb_len - RTE_PKTMBUF_HEADROOM)) {
+		tmpl.rxq.sges_n = 0;
+	} else if (dev->data->dev_conf.rxmode.enable_scatter) {
 		unsigned int size =
 			RTE_PKTMBUF_HEADROOM +
 			dev->data->dev_conf.rxmode.max_rx_pkt_len;
@@ -976,6 +939,13 @@ rxq_ctrl_setup(struct rte_eth_dev *dev, struct rxq_ctrl *rxq_ctrl,
 			      dev->data->dev_conf.rxmode.max_rx_pkt_len);
 			return EOVERFLOW;
 		}
+	} else {
+		WARN("%p: the requested maximum Rx packet size (%u) is"
+		     " larger than a single mbuf (%u) and scattered"
+		     " mode has not been requested",
+		     (void *)dev,
+		     dev->data->dev_conf.rxmode.max_rx_pkt_len,
+		     mb_len - RTE_PKTMBUF_HEADROOM);
 	}
 	DEBUG("%p: maximum number of segments per packet: %u",
 	      (void *)dev, 1 << tmpl.rxq.sges_n);
@@ -1001,29 +971,25 @@ rxq_ctrl_setup(struct rte_eth_dev *dev, struct rxq_ctrl *rxq_ctrl,
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
-	attr.rd = (struct ibv_exp_res_domain_init_attr){
-		.comp_mask = (IBV_EXP_RES_DOMAIN_THREAD_MODEL |
-			      IBV_EXP_RES_DOMAIN_MSG_MODEL),
-		.thread_model = IBV_EXP_THREAD_SINGLE,
-		.msg_model = IBV_EXP_MSG_HIGH_BW,
-	};
-	tmpl.rd = ibv_exp_create_res_domain(priv->ctx, &attr.rd);
-	if (tmpl.rd == NULL) {
-		ret = ENOMEM;
-		ERROR("%p: RD creation failure: %s",
-		      (void *)dev, strerror(ret));
-		goto error;
+	if (dev->data->dev_conf.intr_conf.rxq) {
+		tmpl.channel = ibv_create_comp_channel(priv->ctx);
+		if (tmpl.channel == NULL) {
+			dev->data->dev_conf.intr_conf.rxq = 0;
+			ret = ENOMEM;
+			ERROR("%p: Comp Channel creation failure: %s",
+			(void *)dev, strerror(ret));
+			goto error;
+		}
 	}
 	attr.cq = (struct ibv_exp_cq_init_attr){
-		.comp_mask = IBV_EXP_CQ_INIT_ATTR_RES_DOMAIN,
-		.res_domain = tmpl.rd,
+		.comp_mask = 0,
 	};
 	if (priv->cqe_comp) {
 		attr.cq.comp_mask |= IBV_EXP_CQ_INIT_ATTR_FLAGS;
 		attr.cq.flags |= IBV_EXP_CQ_COMPRESSED_CQE;
 		cqe_n = (desc * 2) - 1; /* Double the number of CQEs. */
 	}
-	tmpl.cq = ibv_exp_create_cq(priv->ctx, cqe_n, NULL, NULL, 0,
+	tmpl.cq = ibv_exp_create_cq(priv->ctx, cqe_n, NULL, tmpl.channel, 0,
 				    &attr.cq);
 	if (tmpl.cq == NULL) {
 		ret = ENOMEM;
@@ -1048,10 +1014,8 @@ rxq_ctrl_setup(struct rte_eth_dev *dev, struct rxq_ctrl *rxq_ctrl,
 		.pd = priv->pd,
 		.cq = tmpl.cq,
 		.comp_mask =
-			IBV_EXP_CREATE_WQ_RES_DOMAIN |
 			IBV_EXP_CREATE_WQ_VLAN_OFFLOADS |
 			0,
-		.res_domain = tmpl.rd,
 		.vlan_offloads = (tmpl.rxq.vlan_strip ?
 				  IBV_EXP_RECEIVE_WQ_CVLAN_STRIP :
 				  0),
@@ -1112,29 +1076,6 @@ rxq_ctrl_setup(struct rte_eth_dev *dev, struct rxq_ctrl *rxq_ctrl,
 	/* Save port ID. */
 	tmpl.rxq.port_id = dev->data->port_id;
 	DEBUG("%p: RTE port ID: %u", (void *)rxq_ctrl, tmpl.rxq.port_id);
-	attr.params = (struct ibv_exp_query_intf_params){
-		.intf_scope = IBV_EXP_INTF_GLOBAL,
-		.intf_version = 1,
-		.intf = IBV_EXP_INTF_CQ,
-		.obj = tmpl.cq,
-	};
-	tmpl.if_cq = ibv_exp_query_intf(priv->ctx, &attr.params, &status);
-	if (tmpl.if_cq == NULL) {
-		ERROR("%p: CQ interface family query failed with status %d",
-		      (void *)dev, status);
-		goto error;
-	}
-	attr.params = (struct ibv_exp_query_intf_params){
-		.intf_scope = IBV_EXP_INTF_GLOBAL,
-		.intf = IBV_EXP_INTF_WQ,
-		.obj = tmpl.wq,
-	};
-	tmpl.if_wq = ibv_exp_query_intf(priv->ctx, &attr.params, &status);
-	if (tmpl.if_wq == NULL) {
-		ERROR("%p: WQ interface family query failed with status %d",
-		      (void *)dev, status);
-		goto error;
-	}
 	/* Change queue state to ready. */
 	mod = (struct ibv_exp_wq_attr){
 		.attr_mask = IBV_EXP_WQ_ATTR_STATE,
@@ -1247,6 +1188,19 @@ mlx5_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		}
 		(*priv->rxqs)[idx] = NULL;
 		rxq_cleanup(rxq_ctrl);
+		/* Resize if rxq size is changed. */
+		if (rxq_ctrl->rxq.elts_n != log2above(desc)) {
+			rxq_ctrl = rte_realloc(rxq_ctrl,
+					       sizeof(*rxq_ctrl) +
+					       desc * sizeof(struct rte_mbuf *),
+					       RTE_CACHE_LINE_SIZE);
+			if (!rxq_ctrl) {
+				ERROR("%p: unable to reallocate queue index %u",
+					(void *)dev, idx);
+				priv_unlock(priv);
+				return -ENOMEM;
+			}
+		}
 	} else {
 		rxq_ctrl = rte_calloc_socket("RXQ", 1, sizeof(*rxq_ctrl) +
 					     desc * sizeof(struct rte_mbuf *),
@@ -1295,6 +1249,9 @@ mlx5_rx_queue_release(void *dpdk_rxq)
 	rxq_ctrl = container_of(rxq, struct rxq_ctrl, rxq);
 	priv = rxq_ctrl->priv;
 	priv_lock(priv);
+	if (priv_flow_rxq_in_use(priv, rxq))
+		rte_panic("Rx queue %p is still used by a flow and cannot be"
+			  " removed\n", (void *)rxq_ctrl);
 	for (i = 0; (i != priv->rxqs_n); ++i)
 		if ((*priv->rxqs)[i] == rxq) {
 			DEBUG("%p: removing RX queue %p from list",
@@ -1346,4 +1303,114 @@ mlx5_rx_burst_secondary_setup(void *dpdk_rxq, struct rte_mbuf **pkts,
 		return 0;
 	rxq = (*priv->rxqs)[index];
 	return priv->dev->rx_pkt_burst(rxq, pkts, pkts_n);
+}
+
+/**
+ * Fill epoll fd list for rxq interrupts.
+ *
+ * @param priv
+ *   Private structure.
+ *
+ * @return
+ *   0 on success, negative on failure.
+ */
+int
+priv_intr_efd_enable(struct priv *priv)
+{
+	unsigned int i;
+	unsigned int rxqs_n = priv->rxqs_n;
+	unsigned int n = RTE_MIN(rxqs_n, (uint32_t)RTE_MAX_RXTX_INTR_VEC_ID);
+	struct rte_intr_handle *intr_handle = priv->dev->intr_handle;
+
+	if (n == 0)
+		return 0;
+	if (n < rxqs_n) {
+		WARN("rxqs num is larger than EAL max interrupt vector "
+		     "%u > %u unable to supprt rxq interrupts",
+		     rxqs_n, (uint32_t)RTE_MAX_RXTX_INTR_VEC_ID);
+		return -EINVAL;
+	}
+	intr_handle->type = RTE_INTR_HANDLE_EXT;
+	for (i = 0; i != n; ++i) {
+		struct rxq *rxq = (*priv->rxqs)[i];
+		struct rxq_ctrl *rxq_ctrl =
+			container_of(rxq, struct rxq_ctrl, rxq);
+		int fd = rxq_ctrl->channel->fd;
+		int flags;
+		int rc;
+
+		flags = fcntl(fd, F_GETFL);
+		rc = fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+		if (rc < 0) {
+			WARN("failed to change rxq interrupt file "
+			     "descriptor %d for queue index %d", fd, i);
+			return -1;
+		}
+		intr_handle->efds[i] = fd;
+	}
+	intr_handle->nb_efd = n;
+	return 0;
+}
+
+/**
+ * Clean epoll fd list for rxq interrupts.
+ *
+ * @param priv
+ *   Private structure.
+ */
+void
+priv_intr_efd_disable(struct priv *priv)
+{
+	struct rte_intr_handle *intr_handle = priv->dev->intr_handle;
+
+	rte_intr_free_epoll_fd(intr_handle);
+}
+
+/**
+ * Create and init interrupt vector array.
+ *
+ * @param priv
+ *   Private structure.
+ *
+ * @return
+ *   0 on success, negative on failure.
+ */
+int
+priv_create_intr_vec(struct priv *priv)
+{
+	unsigned int rxqs_n = priv->rxqs_n;
+	unsigned int i;
+	struct rte_intr_handle *intr_handle = priv->dev->intr_handle;
+
+	if (rxqs_n == 0)
+		return 0;
+	intr_handle->intr_vec = (int *)
+		rte_malloc("intr_vec", rxqs_n * sizeof(int), 0);
+	if (intr_handle->intr_vec == NULL) {
+		WARN("Failed to allocate memory for intr_vec "
+		     "rxq interrupt will not be supported");
+		return -ENOMEM;
+	}
+	for (i = 0; i != rxqs_n; ++i) {
+		/* 1:1 mapping between rxq and interrupt. */
+		intr_handle->intr_vec[i] = RTE_INTR_VEC_RXTX_OFFSET + i;
+	}
+	return 0;
+}
+
+/**
+ * Destroy init interrupt vector array.
+ *
+ * @param priv
+ *   Private structure.
+ *
+ * @return
+ *   0 on success, negative on failure.
+ */
+void
+priv_destroy_intr_vec(struct priv *priv)
+{
+	struct rte_intr_handle *intr_handle = priv->dev->intr_handle;
+
+	rte_free(intr_handle->intr_vec);
 }

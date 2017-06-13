@@ -38,18 +38,10 @@ else
   include $(RTE_SDK)/mk/rte.vars.mk
 endif
 
-#
-# include .depdirs and define rules to order priorities between build
-# of directories.
-#
--include $(RTE_OUTPUT)/.depdirs
-
-define depdirs_rule
-$(1): $(sort $(LOCAL_DEPDIRS-$(1)))
-endef
-
-$(foreach d,$(ROOTDIRS-y),$(eval $(call depdirs_rule,$(d))))
-drivers: | buildtools
+buildtools: | lib
+drivers: | lib buildtools
+app: | lib buildtools drivers
+test: | lib buildtools drivers
 
 #
 # build and clean targets
@@ -72,9 +64,12 @@ clean: $(CLEANDIRS)
 	$(Q)$(MAKE) -f $(RTE_SDK)/GNUmakefile gcovclean
 	@echo Clean complete
 
+.PHONY: test-build
+test-build: test
+
 .SECONDEXPANSION:
-.PHONY: $(ROOTDIRS-y)
-$(ROOTDIRS-y):
+.PHONY: $(ROOTDIRS-y) $(ROOTDIRS-)
+$(ROOTDIRS-y) $(ROOTDIRS-):
 	@[ -d $(BUILDDIR)/$@ ] || mkdir -p $(BUILDDIR)/$@
 	@echo "== Build $@"
 	$(Q)$(MAKE) S=$@ -f $(RTE_SRCDIR)/$@/Makefile -C $(BUILDDIR)/$@ all
@@ -90,8 +85,8 @@ $(ROOTDIRS-y):
 
 RTE_MAKE_SUBTARGET ?= all
 
-%_sub: $(addsuffix _sub,$(FULL_DEPDIRS-$(*)))
-	@echo $(addsuffix _sub,$(FULL_DEPDIRS-$(*)))
+%_sub: $(addsuffix _sub,$(*))
+	@echo $(addsuffix _sub,$(*))
 	@[ -d $(BUILDDIR)/$* ] || mkdir -p $(BUILDDIR)/$*
 	@echo "== Build $*"
 	$(Q)$(MAKE) S=$* -f $(RTE_SRCDIR)/$*/Makefile -C $(BUILDDIR)/$* \

@@ -1,4 +1,4 @@
-﻿/*-
+/*-
  *   BSD LICENSE
  *
  *   Copyright(c) 2010-2016 Intel Corporation. All rights reserved.
@@ -103,7 +103,7 @@ static const struct app_link_params link_params_default = {
 			.hw_vlan_strip  = 0, /* VLAN strip */
 			.hw_vlan_extend = 0, /* Extended VLAN */
 			.jumbo_frame    = 0, /* Jumbo frame support */
-			.hw_strip_crc   = 0, /* CRC strip by HW */
+			.hw_strip_crc   = 1, /* CRC strip by HW */
 			.enable_scatter = 0, /* Scattered packets RX handler */
 
 			.max_rx_pkt_len = 9000, /* Jumbo frame max packet len */
@@ -3407,7 +3407,7 @@ app_config_args(struct app_params *app, int argc, char **argv)
 			app_print_usage(argv[0]);
 		}
 
-	optind = 0; /* reset getopt lib */
+	optind = 1; /* reset getopt lib */
 
 	/* Check dependencies between args */
 	if (preproc_params_present && (preproc_present == 0))

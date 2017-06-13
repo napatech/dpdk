@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright(c) 2010-2016 Intel Corporation. All rights reserved.
+ *   Copyright(c) 2010-2017 Intel Corporation. All rights reserved.
  *   All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
@@ -163,7 +163,6 @@ struct port_flow {
  * The data structure associated with each port.
  */
 struct rte_port {
-	uint8_t                 enabled;    /**< Port enabled or not */
 	struct rte_eth_dev_info dev_info;   /**< PCI info + driver name */
 	struct rte_eth_conf     dev_conf;   /**< Port configuration. */
 	struct ether_addr       eth_addr;   /**< Port ethernet address */
@@ -194,14 +193,6 @@ struct rte_port {
 	uint8_t                 slave_flag; /**< bonding slave port */
 	struct port_flow        *flow_list; /**< Associated flows. */
 };
-
-extern portid_t __rte_unused
-find_next_port(portid_t p, struct rte_port *ports, int size);
-
-#define FOREACH_PORT(p, ports) \
-	for (p = find_next_port(0, ports, RTE_MAX_ETHPORTS); \
-	    p < RTE_MAX_ETHPORTS; \
-	    p = find_next_port(p + 1, ports, RTE_MAX_ETHPORTS))
 
 /**
  * The data structure associated with each forwarding logical core.
@@ -308,12 +299,17 @@ extern uint16_t nb_rx_queue_stats_mappings;
 extern uint16_t verbose_level; /**< Drives messages being displayed, if any. */
 extern uint8_t  interactive;
 extern uint8_t  auto_start;
+extern char cmdline_filename[PATH_MAX]; /**< offline commands file */
 extern uint8_t  numa_support; /**< set by "--numa" parameter */
 extern uint16_t port_topology; /**< set by "--port-topology" parameter */
 extern uint8_t no_flush_rx; /**<set by "--no-flush-rx" parameter */
 extern uint8_t  mp_anon; /**< set by "--mp-anon" parameter */
 extern uint8_t no_link_check; /**<set by "--disable-link-check" parameter */
 extern volatile int test_done; /* stop packet forwarding when set to 1. */
+extern uint8_t lsc_interrupt; /**< disabled by "--no-lsc-interrupt" parameter */
+extern uint8_t rmv_interrupt; /**< disabled by "--no-rmv-interrupt" parameter */
+extern uint32_t event_print_mask;
+/**< set by "--print-event xxxx" and "--mask-event xxxx parameters */
 
 #ifdef RTE_NIC_BYPASS
 extern uint32_t bypass_timeout; /**< Store the NIC bypass watchdog timeout */
@@ -347,7 +343,8 @@ extern lcoreid_t nb_lcores; /**< Number of logical cores probed at init time. */
 extern lcoreid_t nb_cfg_lcores; /**< Number of configured logical cores. */
 extern lcoreid_t nb_fwd_lcores; /**< Number of forwarding logical cores. */
 extern unsigned int fwd_lcores_cpuids[RTE_MAX_LCORE];
-extern unsigned max_socket;
+extern unsigned int num_sockets;
+extern unsigned int socket_ids[RTE_MAX_NUMA_NODES];
 
 /*
  * Configuration of Ethernet ports:
@@ -380,6 +377,17 @@ extern enum dcb_queue_mapping_mode dcb_q_mapping;
 
 extern uint16_t mbuf_data_size; /**< Mbuf data space size. */
 extern uint32_t param_total_num_mbufs;
+
+
+#ifdef RTE_LIBRTE_LATENCY_STATS
+extern uint8_t latencystats_enabled;
+extern lcoreid_t latencystats_lcore_id;
+#endif
+
+#ifdef RTE_LIBRTE_BITRATE
+extern lcoreid_t bitrate_lcore_id;
+extern uint8_t bitrate_enabled;
+#endif
 
 extern struct rte_fdir_conf fdir_conf;
 
@@ -492,6 +500,7 @@ unsigned int parse_item_list(char* str, const char* item_name,
 			unsigned int max_items,
 			unsigned int *parsed_items, int check_unique_values);
 void launch_args_parse(int argc, char** argv);
+void cmdline_read_from_file(const char *filename);
 void prompt(void);
 void prompt_exit(void);
 void nic_stats_display(portid_t port_id);
@@ -622,11 +631,15 @@ void mcast_addr_add(uint8_t port_id, struct ether_addr *mc_addr);
 void mcast_addr_remove(uint8_t port_id, struct ether_addr *mc_addr);
 void port_dcb_info_display(uint8_t port_id);
 
+uint8_t *open_ddp_package_file(const char *file_path, uint32_t *size);
+int close_ddp_package_file(uint8_t *buf);
+
 enum print_warning {
 	ENABLED_WARN = 0,
 	DISABLED_WARN
 };
 int port_id_is_invalid(portid_t port_id, enum print_warning warning);
+int new_socket_id(unsigned int socket_id);
 
 /*
  * Work-around of a compilation error with ICC on invocations of the

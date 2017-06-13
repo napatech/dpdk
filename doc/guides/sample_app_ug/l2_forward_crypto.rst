@@ -1,5 +1,5 @@
 ..  BSD LICENSE
-    Copyright(c) 2016 Intel Corporation. All rights reserved.
+    Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
     All rights reserved.
 
     Redistribution and use in source and binary forms, with or without
@@ -89,7 +89,7 @@ The application requires a number of command line options:
     [--cipher_key_random_size SIZE] [--iv IV] [--iv_random_size SIZE] /
     [--auth_algo ALGO] [--auth_op GENERATE/VERIFY] [--auth_key KEY] /
     [--auth_key_random_size SIZE] [--aad AAD] [--aad_random_size SIZE] /
-    [--digest size SIZE] [--sessionless]
+    [--digest size SIZE] [--sessionless] [--cryptodev_mask MASK]
 
 where,
 
@@ -113,7 +113,7 @@ where,
 
     (default is Cipher->Hash)
 
-*   cipher_algo: select the ciphering algorithm (default is AES CBC)
+*   cipher_algo: select the ciphering algorithm (default is aes-cbc)
 
 *   cipher_op: select the ciphering operation to perform: ENCRYPT or DECRYPT
 
@@ -133,7 +133,7 @@ where,
 
     Note that if --iv is used, this will be ignored.
 
-*   auth_algo: select the authentication algorithm (default is SHA1-HMAC)
+*   auth_algo: select the authentication algorithm (default is sha1-hmac)
 
 *   cipher_op: select the authentication operation to perform: GENERATE or VERIFY
 
@@ -157,6 +157,11 @@ where,
 
 *   sessionless: no crypto session will be created.
 
+*   cryptodev_mask: A hexadecimal bitmask of the cryptodevs to be used by the
+    application.
+
+    (default is all cryptodevs).
+
 
 The application requires that crypto devices capable of performing
 the specified crypto operation are available on application initialization.
@@ -167,11 +172,11 @@ To run the application in linuxapp environment with 2 lcores, 2 ports and 2 cryp
 
 .. code-block:: console
 
-    $ ./build/l2fwd-crypto -c 0x3 -n 4 --vdev "cryptodev_aesni_mb_pmd" \
+    $ ./build/l2fwd-crypto -l 0-1 -n 4 --vdev "cryptodev_aesni_mb_pmd" \
     --vdev "cryptodev_aesni_mb_pmd" -- -p 0x3 --chain CIPHER_HASH \
-    --cipher_op ENCRYPT --cipher_algo AES_CBC \
+    --cipher_op ENCRYPT --cipher_algo aes-cbc \
     --cipher_key 00:01:02:03:04:05:06:07:08:09:0a:0b:0c:0d:0e:0f \
-    --auth_op GENERATE --auth_algo AES_XCBC_MAC \
+    --auth_op GENERATE --auth_algo aes-xcbc-mac \
     --auth_key 10:11:12:13:14:15:16:17:18:19:1a:1b:1c:1d:1e:1f
 
 Refer to the *DPDK Getting Started Guide* for general information on running applications

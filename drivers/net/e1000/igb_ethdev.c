@@ -45,6 +45,7 @@
 #include <rte_pci.h>
 #include <rte_ether.h>
 #include <rte_ethdev.h>
+#include <rte_ethdev_pci.h>
 #include <rte_memory.h>
 #include <rte_memzone.h>
 #include <rte_eal.h>
@@ -115,9 +116,15 @@ static void eth_igb_stats_get(struct rte_eth_dev *dev,
 				struct rte_eth_stats *rte_stats);
 static int eth_igb_xstats_get(struct rte_eth_dev *dev,
 			      struct rte_eth_xstat *xstats, unsigned n);
+static int eth_igb_xstats_get_by_id(struct rte_eth_dev *dev,
+		const uint64_t *ids,
+		uint64_t *values, unsigned int n);
 static int eth_igb_xstats_get_names(struct rte_eth_dev *dev,
 				    struct rte_eth_xstat_name *xstats_names,
-				    unsigned limit);
+				    unsigned int size);
+static int eth_igb_xstats_get_names_by_id(struct rte_eth_dev *dev,
+		struct rte_eth_xstat_name *xstats_names, const uint64_t *ids,
+		unsigned int limit);
 static void eth_igb_stats_reset(struct rte_eth_dev *dev);
 static void eth_igb_xstats_reset(struct rte_eth_dev *dev);
 static int eth_igb_fw_version_get(struct rte_eth_dev *dev,
@@ -136,8 +143,7 @@ static int eth_igb_rxq_interrupt_setup(struct rte_eth_dev *dev);
 static int eth_igb_interrupt_get_status(struct rte_eth_dev *dev);
 static int eth_igb_interrupt_action(struct rte_eth_dev *dev,
 				    struct rte_intr_handle *handle);
-static void eth_igb_interrupt_handler(struct rte_intr_handle *handle,
-							void *param);
+static void eth_igb_interrupt_handler(void *param);
 static int  igb_hardware_init(struct e1000_hw *hw);
 static void igb_hw_control_acquire(struct e1000_hw *hw);
 static void igb_hw_control_release(struct e1000_hw *hw);
@@ -165,9 +171,9 @@ static int eth_igb_led_off(struct rte_eth_dev *dev);
 
 static void igb_intr_disable(struct e1000_hw *hw);
 static int  igb_get_rx_buffer_size(struct e1000_hw *hw);
-static void eth_igb_rar_set(struct rte_eth_dev *dev,
-		struct ether_addr *mac_addr,
-		uint32_t index, uint32_t pool);
+static int eth_igb_rar_set(struct rte_eth_dev *dev,
+			   struct ether_addr *mac_addr,
+			   uint32_t index, uint32_t pool);
 static void eth_igb_rar_clear(struct rte_eth_dev *dev, uint32_t index);
 static void eth_igb_default_mac_addr_set(struct rte_eth_dev *dev,
 		struct ether_addr *addr);
@@ -283,8 +289,7 @@ static void eth_igb_assign_msix_vector(struct e1000_hw *hw, int8_t direction,
 static void eth_igb_write_ivar(struct e1000_hw *hw, uint8_t msix_vector,
 			       uint8_t index, uint8_t offset);
 static void eth_igb_configure_msix_intr(struct rte_eth_dev *dev);
-static void eth_igbvf_interrupt_handler(struct rte_intr_handle *handle,
-					void *param);
+static void eth_igbvf_interrupt_handler(void *param);
 static void igbvf_mbx_process(struct rte_eth_dev *dev);
 
 /*
@@ -390,6 +395,8 @@ static const struct eth_dev_ops eth_igb_ops = {
 	.link_update          = eth_igb_link_update,
 	.stats_get            = eth_igb_stats_get,
 	.xstats_get           = eth_igb_xstats_get,
+	.xstats_get_by_id     = eth_igb_xstats_get_by_id,
+	.xstats_get_names_by_id = eth_igb_xstats_get_names_by_id,
 	.xstats_get_names     = eth_igb_xstats_get_names,
 	.stats_reset          = eth_igb_stats_reset,
 	.xstats_reset         = eth_igb_xstats_reset,
@@ -406,8 +413,11 @@ static const struct eth_dev_ops eth_igb_ops = {
 	.rx_queue_release     = eth_igb_rx_queue_release,
 	.rx_queue_count       = eth_igb_rx_queue_count,
 	.rx_descriptor_done   = eth_igb_rx_descriptor_done,
+	.rx_descriptor_status = eth_igb_rx_descriptor_status,
+	.tx_descriptor_status = eth_igb_tx_descriptor_status,
 	.tx_queue_setup       = eth_igb_tx_queue_setup,
 	.tx_queue_release     = eth_igb_tx_queue_release,
+	.tx_done_cleanup      = eth_igb_tx_done_cleanup,
 	.dev_led_on           = eth_igb_led_on,
 	.dev_led_off          = eth_igb_led_off,
 	.flow_ctrl_get        = eth_igb_flow_ctrl_get,
@@ -1023,12 +1033,6 @@ eth_igbvf_dev_init(struct rte_eth_dev *eth_dev)
 	/* Generate a random MAC address, if none was assigned by PF. */
 	if (is_zero_ether_addr(perm_addr)) {
 		eth_random_addr(perm_addr->addr_bytes);
-		diag = e1000_rar_set(hw, perm_addr->addr_bytes, 0);
-		if (diag) {
-			rte_free(eth_dev->data->mac_addrs);
-			eth_dev->data->mac_addrs = NULL;
-			return diag;
-		}
 		PMD_INIT_LOG(INFO, "\tVF MAC address not assigned by Host PF");
 		PMD_INIT_LOG(INFO, "\tAssign randomly generated MAC address "
 			     "%02x:%02x:%02x:%02x:%02x:%02x",
@@ -1040,6 +1044,12 @@ eth_igbvf_dev_init(struct rte_eth_dev *eth_dev)
 			     perm_addr->addr_bytes[5]);
 	}
 
+	diag = e1000_rar_set(hw, perm_addr->addr_bytes, 0);
+	if (diag) {
+		rte_free(eth_dev->data->mac_addrs);
+		eth_dev->data->mac_addrs = NULL;
+		return diag;
+	}
 	/* Copy the permanent MAC address */
 	ether_addr_copy((struct ether_addr *) hw->mac.perm_addr,
 			&eth_dev->data->mac_addrs[0]);
@@ -1087,31 +1097,46 @@ eth_igbvf_dev_uninit(struct rte_eth_dev *eth_dev)
 	return 0;
 }
 
-static struct eth_driver rte_igb_pmd = {
-	.pci_drv = {
-		.id_table = pci_id_igb_map,
-		.drv_flags = RTE_PCI_DRV_NEED_MAPPING | RTE_PCI_DRV_INTR_LSC,
-		.probe = rte_eth_dev_pci_probe,
-		.remove = rte_eth_dev_pci_remove,
-	},
-	.eth_dev_init = eth_igb_dev_init,
-	.eth_dev_uninit = eth_igb_dev_uninit,
-	.dev_private_size = sizeof(struct e1000_adapter),
+static int eth_igb_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
+	struct rte_pci_device *pci_dev)
+{
+	return rte_eth_dev_pci_generic_probe(pci_dev,
+		sizeof(struct e1000_adapter), eth_igb_dev_init);
+}
+
+static int eth_igb_pci_remove(struct rte_pci_device *pci_dev)
+{
+	return rte_eth_dev_pci_generic_remove(pci_dev, eth_igb_dev_uninit);
+}
+
+static struct rte_pci_driver rte_igb_pmd = {
+	.id_table = pci_id_igb_map,
+	.drv_flags = RTE_PCI_DRV_NEED_MAPPING | RTE_PCI_DRV_INTR_LSC,
+	.probe = eth_igb_pci_probe,
+	.remove = eth_igb_pci_remove,
 };
+
+
+static int eth_igbvf_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
+	struct rte_pci_device *pci_dev)
+{
+	return rte_eth_dev_pci_generic_probe(pci_dev,
+		sizeof(struct e1000_adapter), eth_igbvf_dev_init);
+}
+
+static int eth_igbvf_pci_remove(struct rte_pci_device *pci_dev)
+{
+	return rte_eth_dev_pci_generic_remove(pci_dev, eth_igbvf_dev_uninit);
+}
 
 /*
  * virtual function driver struct
  */
-static struct eth_driver rte_igbvf_pmd = {
-	.pci_drv = {
-		.id_table = pci_id_igbvf_map,
-		.drv_flags = RTE_PCI_DRV_NEED_MAPPING,
-		.probe = rte_eth_dev_pci_probe,
-		.remove = rte_eth_dev_pci_remove,
-	},
-	.eth_dev_init = eth_igbvf_dev_init,
-	.eth_dev_uninit = eth_igbvf_dev_uninit,
-	.dev_private_size = sizeof(struct e1000_adapter),
+static struct rte_pci_driver rte_igbvf_pmd = {
+	.id_table = pci_id_igbvf_map,
+	.drv_flags = RTE_PCI_DRV_NEED_MAPPING,
+	.probe = eth_igbvf_pci_probe,
+	.remove = eth_igbvf_pci_remove,
 };
 
 static void
@@ -1828,7 +1853,7 @@ eth_igb_xstats_reset(struct rte_eth_dev *dev)
 
 static int eth_igb_xstats_get_names(__rte_unused struct rte_eth_dev *dev,
 	struct rte_eth_xstat_name *xstats_names,
-	__rte_unused unsigned limit)
+	__rte_unused unsigned int size)
 {
 	unsigned i;
 
@@ -1843,6 +1868,41 @@ static int eth_igb_xstats_get_names(__rte_unused struct rte_eth_dev *dev,
 	}
 
 	return IGB_NB_XSTATS;
+}
+
+static int eth_igb_xstats_get_names_by_id(struct rte_eth_dev *dev,
+		struct rte_eth_xstat_name *xstats_names, const uint64_t *ids,
+		unsigned int limit)
+{
+	unsigned int i;
+
+	if (!ids) {
+		if (xstats_names == NULL)
+			return IGB_NB_XSTATS;
+
+		for (i = 0; i < IGB_NB_XSTATS; i++)
+			snprintf(xstats_names[i].name,
+					sizeof(xstats_names[i].name),
+					"%s", rte_igb_stats_strings[i].name);
+
+		return IGB_NB_XSTATS;
+
+	} else {
+		struct rte_eth_xstat_name xstats_names_copy[IGB_NB_XSTATS];
+
+		eth_igb_xstats_get_names_by_id(dev, xstats_names_copy, NULL,
+				IGB_NB_XSTATS);
+
+		for (i = 0; i < limit; i++) {
+			if (ids[i] >= IGB_NB_XSTATS) {
+				PMD_INIT_LOG(ERR, "id value isn't valid");
+				return -1;
+			}
+			strcpy(xstats_names[i].name,
+					xstats_names_copy[ids[i]].name);
+		}
+		return limit;
+	}
 }
 
 static int
@@ -1873,6 +1933,53 @@ eth_igb_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats,
 	}
 
 	return IGB_NB_XSTATS;
+}
+
+static int
+eth_igb_xstats_get_by_id(struct rte_eth_dev *dev, const uint64_t *ids,
+		uint64_t *values, unsigned int n)
+{
+	unsigned int i;
+
+	if (!ids) {
+		struct e1000_hw *hw =
+			E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+		struct e1000_hw_stats *hw_stats =
+			E1000_DEV_PRIVATE_TO_STATS(dev->data->dev_private);
+
+		if (n < IGB_NB_XSTATS)
+			return IGB_NB_XSTATS;
+
+		igb_read_stats_registers(hw, hw_stats);
+
+		/* If this is a reset xstats is NULL, and we have cleared the
+		 * registers by reading them.
+		 */
+		if (!values)
+			return 0;
+
+		/* Extended stats */
+		for (i = 0; i < IGB_NB_XSTATS; i++)
+			values[i] = *(uint64_t *)(((char *)hw_stats) +
+					rte_igb_stats_strings[i].offset);
+
+		return IGB_NB_XSTATS;
+
+	} else {
+		uint64_t values_copy[IGB_NB_XSTATS];
+
+		eth_igb_xstats_get_by_id(dev, NULL, values_copy,
+				IGB_NB_XSTATS);
+
+		for (i = 0; i < n; i++) {
+			if (ids[i] >= IGB_NB_XSTATS) {
+				PMD_INIT_LOG(ERR, "id value isn't valid");
+				return -1;
+			}
+			values[i] = values_copy[ids[i]];
+		}
+		return n;
+	}
 }
 
 static void
@@ -2781,12 +2888,12 @@ eth_igb_interrupt_action(struct rte_eth_dev *dev,
  *  void
  */
 static void
-eth_igb_interrupt_handler(struct rte_intr_handle *handle, void *param)
+eth_igb_interrupt_handler(void *param)
 {
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
 
 	eth_igb_interrupt_get_status(dev);
-	eth_igb_interrupt_action(dev, handle);
+	eth_igb_interrupt_action(dev, dev->intr_handle);
 }
 
 static int
@@ -2843,13 +2950,12 @@ eth_igbvf_interrupt_action(struct rte_eth_dev *dev, struct rte_intr_handle *intr
 }
 
 static void
-eth_igbvf_interrupt_handler(struct rte_intr_handle *handle,
-			    void *param)
+eth_igbvf_interrupt_handler(void *param)
 {
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
 
 	eth_igbvf_interrupt_get_status(dev);
-	eth_igbvf_interrupt_action(dev, handle);
+	eth_igbvf_interrupt_action(dev, dev->intr_handle);
 }
 
 static int
@@ -2973,7 +3079,7 @@ eth_igb_flow_ctrl_set(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 }
 
 #define E1000_RAH_POOLSEL_SHIFT      (18)
-static void
+static int
 eth_igb_rar_set(struct rte_eth_dev *dev, struct ether_addr *mac_addr,
 	        uint32_t index, __rte_unused uint32_t pool)
 {
@@ -2984,6 +3090,7 @@ eth_igb_rar_set(struct rte_eth_dev *dev, struct ether_addr *mac_addr,
 	rah = E1000_READ_REG(hw, E1000_RAH(index));
 	rah |= (0x1 << (E1000_RAH_POOLSEL_SHIFT + pool));
 	E1000_WRITE_REG(hw, E1000_RAH(index), rah);
+	return 0;
 }
 
 static void
@@ -5309,9 +5416,9 @@ eth_igb_configure_msix_intr(struct rte_eth_dev *dev)
 	E1000_WRITE_FLUSH(hw);
 }
 
-RTE_PMD_REGISTER_PCI(net_e1000_igb, rte_igb_pmd.pci_drv);
+RTE_PMD_REGISTER_PCI(net_e1000_igb, rte_igb_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_e1000_igb, pci_id_igb_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_e1000_igb, "* igb_uio | uio_pci_generic | vfio");
-RTE_PMD_REGISTER_PCI(net_e1000_igb_vf, rte_igbvf_pmd.pci_drv);
+RTE_PMD_REGISTER_PCI(net_e1000_igb_vf, rte_igbvf_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_e1000_igb_vf, pci_id_igbvf_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_e1000_igb_vf, "* igb_uio | vfio");

@@ -89,7 +89,8 @@ static const struct rte_cryptodev_capabilities kasumi_pmd_capabilities[] = {
 
 /** Configure device */
 static int
-kasumi_pmd_config(__rte_unused struct rte_cryptodev *dev)
+kasumi_pmd_config(__rte_unused struct rte_cryptodev *dev,
+		__rte_unused struct rte_cryptodev_config *config)
 {
 	return 0;
 }
@@ -201,7 +202,7 @@ kasumi_pmd_qp_create_processed_ops_ring(struct kasumi_qp *qp,
 
 	r = rte_ring_lookup(qp->name);
 	if (r) {
-		if (r->prod.size == ring_size) {
+		if (rte_ring_get_size(r) == ring_size) {
 			KASUMI_LOG_INFO("Reusing existing ring %s"
 					" for processed packets",
 					 qp->name);

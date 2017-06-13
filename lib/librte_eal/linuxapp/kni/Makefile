@@ -53,15 +53,11 @@ UBUNTU_KERNEL_CODE := $(shell echo `grep UTS_RELEASE $(RTE_KERNELDIR)/include/ge
 MODULE_CFLAGS += -D"UBUNTU_KERNEL_CODE=UBUNTU_KERNEL_VERSION($(UBUNTU_KERNEL_CODE))"
 endif
 
-# this lib needs main eal
-DEPDIRS-y += lib/librte_eal/linuxapp/eal
-
 #
 # all source are stored in SRCS-y
 #
 SRCS-y := kni_misc.c
 SRCS-y += kni_net.c
-SRCS-$(CONFIG_RTE_KNI_VHOST) += kni_vhost.c
 SRCS-$(CONFIG_RTE_KNI_KMOD_ETHTOOL) += kni_ethtool.c
 
 SRCS-$(CONFIG_RTE_KNI_KMOD_ETHTOOL) += ethtool/ixgbe/ixgbe_main.c

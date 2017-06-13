@@ -1,0 +1,1 @@
+cmd_/usr/project/dpdk_github_master/x86_64-native-linuxapp-gcc/build/lib/librte_eal/linuxapp/kni/built-in.o :=  rm -f /usr/project/dpdk_github_master/x86_64-native-linuxapp-gcc/build/lib/librte_eal/linuxapp/kni/built-in.o; ar rcsD /usr/project/dpdk_github_master/x86_64-native-linuxapp-gcc/build/lib/librte_eal/linuxapp/kni/built-in.o

@@ -17,9 +17,6 @@
 #include "ecore_hsi_common.h"
 #include "ecore_dcbx_api.h"
 
-#define ECORE_MFW_GET_FIELD(name, field) \
-	(((name) & (field ## _MASK)) >> (field ## _SHIFT))
-
 struct ecore_dcbx_info {
 	struct lldp_status_params_s lldp_remote[LLDP_MAX_LLDP_AGENTS];
 	struct lldp_config_params_s lldp_local[LLDP_MAX_LLDP_AGENTS];
@@ -32,6 +29,7 @@ struct ecore_dcbx_info {
 	struct ecore_dcbx_set set;
 	struct ecore_dcbx_get get;
 	u8 dcbx_cap;
+	u16 iwarp_port;
 };
 
 struct ecore_dcbx_mib_meta_data {

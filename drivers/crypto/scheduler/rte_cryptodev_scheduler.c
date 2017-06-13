@@ -32,9 +32,9 @@
 #include <rte_reorder.h>
 #include <rte_cryptodev.h>
 #include <rte_cryptodev_pmd.h>
-#include <rte_cryptodev_scheduler.h>
 #include <rte_malloc.h>
 
+#include "rte_cryptodev_scheduler.h"
 #include "scheduler_pmd_private.h"
 
 /** update the scheduler pmd's capability with attaching device's
@@ -64,7 +64,7 @@ sync_caps(struct rte_cryptodev_capabilities *caps,
 
 		for (j = 0; j < nb_slave_caps; j++) {
 			const struct rte_cryptodev_capabilities *s_cap =
-					&slave_caps[i];
+					&slave_caps[j];
 
 			if (s_cap->op != cap->op || s_cap->sym.xform_type !=
 					cap->sym.xform_type)
@@ -209,7 +209,8 @@ rte_cryptodev_scheduler_slave_attach(uint8_t scheduler_id, uint8_t slave_id)
 	}
 
 	sched_ctx = dev->data->dev_private;
-	if (sched_ctx->nb_slaves >= MAX_SLAVES_NUM) {
+	if (sched_ctx->nb_slaves >=
+			RTE_CRYPTODEV_SCHEDULER_MAX_NB_SLAVES) {
 		CS_LOG_ERR("Too many slaves attached");
 		return -ENOMEM;
 	}
@@ -302,7 +303,7 @@ rte_cryptodev_scheduler_slave_detach(uint8_t scheduler_id, uint8_t slave_id)
 }
 
 int
-rte_crpytodev_scheduler_mode_set(uint8_t scheduler_id,
+rte_cryptodev_scheduler_mode_set(uint8_t scheduler_id,
 		enum rte_cryptodev_scheduler_mode mode)
 {
 	struct rte_cryptodev *dev = rte_cryptodev_pmd_get_dev(scheduler_id);
@@ -336,6 +337,20 @@ rte_crpytodev_scheduler_mode_set(uint8_t scheduler_id,
 			return -1;
 		}
 		break;
+	case CDEV_SCHED_MODE_PKT_SIZE_DISTR:
+		if (rte_cryptodev_scheduler_load_user_scheduler(scheduler_id,
+				pkt_size_based_distr_scheduler) < 0) {
+			CS_LOG_ERR("Failed to load scheduler");
+			return -1;
+		}
+		break;
+	case CDEV_SCHED_MODE_FAILOVER:
+		if (rte_cryptodev_scheduler_load_user_scheduler(scheduler_id,
+				failover_scheduler) < 0) {
+			CS_LOG_ERR("Failed to load scheduler");
+			return -1;
+		}
+		break;
 	default:
 		CS_LOG_ERR("Not yet supported");
 		return -ENOTSUP;
@@ -344,8 +359,15 @@ rte_crpytodev_scheduler_mode_set(uint8_t scheduler_id,
 	return 0;
 }
 
+int
+rte_crpytodev_scheduler_mode_set(uint8_t scheduler_id,
+		enum rte_cryptodev_scheduler_mode mode)
+{
+	return rte_cryptodev_scheduler_mode_set(scheduler_id, mode);
+}
+
 enum rte_cryptodev_scheduler_mode
-rte_crpytodev_scheduler_mode_get(uint8_t scheduler_id)
+rte_cryptodev_scheduler_mode_get(uint8_t scheduler_id)
 {
 	struct rte_cryptodev *dev = rte_cryptodev_pmd_get_dev(scheduler_id);
 	struct scheduler_ctx *sched_ctx;
@@ -363,6 +385,12 @@ rte_crpytodev_scheduler_mode_get(uint8_t scheduler_id)
 	sched_ctx = dev->data->dev_private;
 
 	return sched_ctx->mode;
+}
+
+enum rte_cryptodev_scheduler_mode
+rte_crpytodev_scheduler_mode_get(uint8_t scheduler_id)
+{
+	return rte_cryptodev_scheduler_mode_get(scheduler_id);
 }
 
 int
@@ -451,6 +479,8 @@ rte_cryptodev_scheduler_load_user_scheduler(uint8_t scheduler_id,
 	sched_ctx->ops.scheduler_stop = scheduler->ops->scheduler_stop;
 	sched_ctx->ops.slave_attach = scheduler->ops->slave_attach;
 	sched_ctx->ops.slave_detach = scheduler->ops->slave_detach;
+	sched_ctx->ops.option_set = scheduler->ops->option_set;
+	sched_ctx->ops.option_get = scheduler->ops->option_get;
 
 	if (sched_ctx->private_ctx)
 		rte_free(sched_ctx->private_ctx);
@@ -468,4 +498,96 @@ rte_cryptodev_scheduler_load_user_scheduler(uint8_t scheduler_id,
 	sched_ctx->mode = scheduler->mode;
 
 	return 0;
+}
+
+int
+rte_cryptodev_scheduler_slaves_get(uint8_t scheduler_id, uint8_t *slaves)
+{
+	struct rte_cryptodev *dev = rte_cryptodev_pmd_get_dev(scheduler_id);
+	struct scheduler_ctx *sched_ctx;
+	uint32_t nb_slaves = 0;
+
+	if (!dev) {
+		CS_LOG_ERR("Operation not supported");
+		return -ENOTSUP;
+	}
+
+	if (dev->dev_type != RTE_CRYPTODEV_SCHEDULER_PMD) {
+		CS_LOG_ERR("Operation not supported");
+		return -ENOTSUP;
+	}
+
+	sched_ctx = dev->data->dev_private;
+
+	nb_slaves = sched_ctx->nb_slaves;
+
+	if (slaves && nb_slaves) {
+		uint32_t i;
+
+		for (i = 0; i < nb_slaves; i++)
+			slaves[i] = sched_ctx->slaves[i].dev_id;
+	}
+
+	return (int)nb_slaves;
+}
+
+int
+rte_cryptodev_scheduler_option_set(uint8_t scheduler_id,
+		enum rte_cryptodev_schedule_option_type option_type,
+		void *option)
+{
+	struct rte_cryptodev *dev = rte_cryptodev_pmd_get_dev(scheduler_id);
+	struct scheduler_ctx *sched_ctx;
+
+	if (option_type == CDEV_SCHED_OPTION_NOT_SET ||
+			option_type >= CDEV_SCHED_OPTION_COUNT) {
+		CS_LOG_ERR("Invalid option parameter");
+		return -EINVAL;
+	}
+
+	if (!option) {
+		CS_LOG_ERR("Invalid option parameter");
+		return -EINVAL;
+	}
+
+	if (dev->data->dev_started) {
+		CS_LOG_ERR("Illegal operation");
+		return -EBUSY;
+	}
+
+	sched_ctx = dev->data->dev_private;
+
+	RTE_FUNC_PTR_OR_ERR_RET(*sched_ctx->ops.option_set, -ENOTSUP);
+
+	return (*sched_ctx->ops.option_set)(dev, option_type, option);
+}
+
+int
+rte_cryptodev_scheduler_option_get(uint8_t scheduler_id,
+		enum rte_cryptodev_schedule_option_type option_type,
+		void *option)
+{
+	struct rte_cryptodev *dev = rte_cryptodev_pmd_get_dev(scheduler_id);
+	struct scheduler_ctx *sched_ctx;
+
+	if (!dev) {
+		CS_LOG_ERR("Operation not supported");
+		return -ENOTSUP;
+	}
+
+	if (!option) {
+		CS_LOG_ERR("Invalid option parameter");
+		return -EINVAL;
+	}
+
+	if (dev->dev_type != RTE_CRYPTODEV_SCHEDULER_PMD) {
+		CS_LOG_ERR("Operation not supported");
+		return -ENOTSUP;
+	}
+
+	sched_ctx = dev->data->dev_private;
+
+	RTE_FUNC_PTR_OR_ERR_RET(*sched_ctx->ops.option_get, -ENOTSUP);
+
+	return (*sched_ctx->ops.option_get)(dev, option_type, option);
 }

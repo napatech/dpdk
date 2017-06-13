@@ -66,6 +66,59 @@ struct rte_pmd_i40e_mb_event_param {
 };
 
 /**
+ * Option of package processing.
+ */
+enum rte_pmd_i40e_package_op {
+	RTE_PMD_I40E_PKG_OP_UNDEFINED = 0,
+	RTE_PMD_I40E_PKG_OP_WR_ADD,   /**< load package and add to info list */
+	RTE_PMD_I40E_PKG_OP_MAX = 32
+};
+
+#define RTE_PMD_I40E_DDP_NAME_SIZE 32
+
+/**
+ * Version for dynamic device personalization.
+ * Version in "major.minor.update.draft" format.
+ */
+struct rte_pmd_i40e_ddp_version {
+	uint8_t major;
+	uint8_t minor;
+	uint8_t update;
+	uint8_t draft;
+};
+
+/**
+ * Profile information in profile info list.
+ */
+struct rte_pmd_i40e_profile_info {
+	uint32_t track_id;
+	struct rte_pmd_i40e_ddp_version version;
+	uint8_t owner;
+	uint8_t reserved[7];
+	uint8_t name[RTE_PMD_I40E_DDP_NAME_SIZE];
+};
+
+/**
+ * Profile information list returned from HW.
+ */
+struct rte_pmd_i40e_profile_list {
+	uint32_t p_count;
+	struct rte_pmd_i40e_profile_info p_info[1];
+};
+
+/**
+ * ptype mapping table only accept RTE_PTYPE_XXX or "user defined" ptype.
+ * A ptype with MSB set will be regarded as a user defined ptype.
+ * Below macro help to create a user defined ptype.
+ */
+#define RTE_PMD_I40E_PTYPE_USER_DEFINE_MASK 0x80000000
+
+struct rte_pmd_i40e_ptype_mapping {
+	uint16_t hw_ptype; /**< hardware defined packet type*/
+	uint32_t sw_ptype; /**< software defined packet type */
+};
+
+/**
  * Notify VF when PF link status changes.
  *
  * @param port
@@ -331,5 +384,207 @@ int rte_pmd_i40e_get_vf_stats(uint8_t port,
  */
 int rte_pmd_i40e_reset_vf_stats(uint8_t port,
 				uint16_t vf_id);
+
+/**
+ * Set VF's max bandwidth.
+ *
+ * Per VF bandwidth limitation and per TC bandwidth limitation cannot
+ * be enabled in parallel. If per TC bandwidth is enabled, this function
+ * will disable it.
+ *
+ * @param port
+ *    The port identifier of the Ethernet device.
+ * @param vf_id
+ *    ID specifying VF.
+ * @param bw
+ *    Bandwidth for this VF.
+ *    The value should be an absolute bandwidth in Mbps.
+ *    The bandwidth is a L2 bandwidth counting the bytes of ethernet packets.
+ *    Not count the bytes added by physical layer.
+ * @return
+ *   - (0) if successful.
+ *   - (-ENODEV) if *port* invalid.
+ *   - (-EINVAL) if bad parameter.
+ *   - (-ENOTSUP) not supported by firmware.
+ */
+int rte_pmd_i40e_set_vf_max_bw(uint8_t port,
+			       uint16_t vf_id,
+			       uint32_t bw);
+
+/**
+ * Set all the TCs' bandwidth weight on a specific VF.
+ *
+ * The bw_weight means the percentage occupied by the TC.
+ * It can be taken as the relative min bandwidth setting.
+ *
+ * @param port
+ *    The port identifier of the Ethernet device.
+ * @param vf_id
+ *    ID specifying VF.
+ * @param tc_num
+ *    Number of TCs.
+ * @param bw_weight
+ *    An array of relative bandwidth weight for all the TCs.
+ *    The summary of the bw_weight should be 100.
+ * @return
+ *   - (0) if successful.
+ *   - (-ENODEV) if *port* invalid.
+ *   - (-EINVAL) if bad parameter.
+ *   - (-ENOTSUP) not supported by firmware.
+ */
+int rte_pmd_i40e_set_vf_tc_bw_alloc(uint8_t port,
+				    uint16_t vf_id,
+				    uint8_t tc_num,
+				    uint8_t *bw_weight);
+
+/**
+ * Set a specific TC's max bandwidth on a specific VF.
+ *
+ * @param port
+ *    The port identifier of the Ethernet device.
+ * @param vf_id
+ *    ID specifying VF.
+ * @param tc_no
+ *    Number specifying TC.
+ * @param bw
+ *    Max bandwidth for this TC.
+ *    The value should be an absolute bandwidth in Mbps.
+ *    The bandwidth is a L2 bandwidth counting the bytes of ethernet packets.
+ *    Not count the bytes added by physical layer.
+ * @return
+ *   - (0) if successful.
+ *   - (-ENODEV) if *port* invalid.
+ *   - (-EINVAL) if bad parameter.
+ *   - (-ENOTSUP) not supported by firmware.
+ */
+int rte_pmd_i40e_set_vf_tc_max_bw(uint8_t port,
+				  uint16_t vf_id,
+				  uint8_t tc_no,
+				  uint32_t bw);
+
+/**
+ * Set some TCs to strict priority mode on a physical port.
+ *
+ * @param port
+ *    The port identifier of the Ethernet device.
+ * @param tc_map
+ *    A bit map for the TCs.
+ * @return
+ *   - (0) if successful.
+ *   - (-ENODEV) if *port* invalid.
+ *   - (-EINVAL) if bad parameter.
+ *   - (-ENOTSUP) not supported by firmware.
+ */
+int rte_pmd_i40e_set_tc_strict_prio(uint8_t port, uint8_t tc_map);
+
+/**
+ * Load/Unload a ddp package
+ *
+ * @param port
+ *    The port identifier of the Ethernet device.
+ * @param buff
+ *    buffer of package.
+ * @param size
+ *    size of buffer.
+ * @param op
+ *   Operation of package processing
+ * @return
+ *   - (0) if successful.
+ *   - (-ENODEV) if *port* invalid.
+ *   - (-EINVAL) if bad parameter.
+ *   - (1) if profile exists.
+ */
+int rte_pmd_i40e_process_ddp_package(uint8_t port, uint8_t *buff,
+				     uint32_t size,
+				     enum rte_pmd_i40e_package_op op);
+
+/**
+ * rte_pmd_i40e_get_ddp_list - Get loaded profile list
+ * @param port
+ *    port id
+ * @param buff
+ *    buffer for response
+ * @param size
+ *    buffer size
+ * @return
+ *   - (0) if successful.
+ *   - (-ENODEV) if *port* invalid.
+ *   - (-EINVAL) if bad parameter.
+ */
+int rte_pmd_i40e_get_ddp_list(uint8_t port, uint8_t *buff, uint32_t size);
+
+/**
+ * Update hardware defined ptype to software defined packet type
+ * mapping table.
+ *
+ * @param port
+ *    pointer to port identifier of the device.
+ * @param mapping_items
+ *    the base address of the mapping items array.
+ * @param count
+ *    number of mapping items.
+ * @param exclusive
+ *    the flag indicate different ptype mapping update method.
+ *    -(0) only overwrite referred PTYPE mapping,
+ *	keep other PTYPEs mapping unchanged.
+ *    -(!0) overwrite referred PTYPE mapping,
+ *	set other PTYPEs maps to PTYPE_UNKNOWN.
+ */
+int rte_pmd_i40e_ptype_mapping_update(
+			uint8_t port,
+			struct rte_pmd_i40e_ptype_mapping *mapping_items,
+			uint16_t count,
+			uint8_t exclusive);
+
+/**
+ * Reset hardware defined ptype to software defined ptype
+ * mapping table to default.
+ *
+ * @param port
+ *    pointer to port identifier of the device
+ */
+int rte_pmd_i40e_ptype_mapping_reset(uint8_t port);
+
+/**
+ * Get hardware defined ptype to software defined ptype
+ * mapping items.
+ *
+ * @param port
+ *    pointer to port identifier of the device.
+ * @param mapping_items
+ *    the base address of the array to store returned items.
+ * @param size
+ *    the size of the input array.
+ * @param count
+ *    the place to store the number of returned items.
+ * @param valid_only
+ *    -(0) return full mapping table.
+ *    -(!0) only return mapping items which packet_type != RTE_PTYPE_UNKNOWN.
+ */
+int rte_pmd_i40e_ptype_mapping_get(
+			uint8_t port,
+			struct rte_pmd_i40e_ptype_mapping *mapping_items,
+			uint16_t size,
+			uint16_t *count,
+			uint8_t valid_only);
+
+/**
+ * Replace a specific or a group of software defined ptypes
+ * with a new one
+ *
+ * @param port
+ *    pointer to port identifier of the device
+ * @param target
+ *    the packet type to be replaced
+ * @param mask
+ *    -(0) target represent a specific software defined ptype.
+ *    -(!0) target is a mask to represent a group of software defined ptypes.
+ * @param pkt_type
+ *    the new packet type to overwrite
+ */
+int rte_pmd_i40e_ptype_mapping_replace(uint8_t port,
+				       uint32_t target,
+				       uint8_t mask,
+				       uint32_t pkt_type);
 
 #endif /* _PMD_I40E_H_ */

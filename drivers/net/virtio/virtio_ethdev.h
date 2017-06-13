@@ -51,7 +51,7 @@
 #define VIRTIO_MAX_TX_QUEUES 128U
 #define VIRTIO_MAX_MAC_ADDRS 64
 #define VIRTIO_MIN_RX_BUFSIZE 64
-#define VIRTIO_MAX_RX_PKTLEN  9728
+#define VIRTIO_MAX_RX_PKTLEN  9728U
 
 /* Features desired/implemented by this driver. */
 #define VIRTIO_PMD_DEFAULT_GUEST_FEATURES	\
@@ -66,6 +66,7 @@
 	 1u << VIRTIO_NET_F_HOST_TSO4	  |	\
 	 1u << VIRTIO_NET_F_HOST_TSO6	  |	\
 	 1u << VIRTIO_NET_F_MRG_RXBUF	  |	\
+	 1u << VIRTIO_NET_F_MTU	| \
 	 1u << VIRTIO_RING_F_INDIRECT_DESC |    \
 	 1ULL << VIRTIO_F_VERSION_1       |	\
 	 1ULL << VIRTIO_F_IOMMU_PLATFORM)
@@ -111,5 +112,7 @@ uint16_t virtio_xmit_pkts_simple(void *tx_queue, struct rte_mbuf **tx_pkts,
 		uint16_t nb_pkts);
 
 int eth_virtio_dev_init(struct rte_eth_dev *eth_dev);
+
+void virtio_interrupt_handler(void *param);
 
 #endif /* _VIRTIO_ETHDEV_H_ */

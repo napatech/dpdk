@@ -41,23 +41,11 @@ CFLAGS += $(WERROR_FLAGS)
 
 EXPORT_MAP := rte_pmd_null_version.map
 
-LIBABIVER := 1
+LIBABIVER := 2
 
 #
 # all source are stored in SRCS-y
 #
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_NULL) += rte_eth_null.c
-
-#
-# Export include files
-#
-SYMLINK-y-include += rte_eth_null.h
-
-# this lib depends upon:
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_NULL) += lib/librte_eal
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_NULL) += lib/librte_mbuf
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_NULL) += lib/librte_mempool
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_NULL) += lib/librte_ether
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_NULL) += lib/librte_kvargs
 
 include $(RTE_SDK)/mk/rte.lib.mk

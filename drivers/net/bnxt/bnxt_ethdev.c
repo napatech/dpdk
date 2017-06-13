@@ -36,6 +36,7 @@
 
 #include <rte_dev.h>
 #include <rte_ethdev.h>
+#include <rte_ethdev_pci.h>
 #include <rte_malloc.h>
 #include <rte_cycles.h>
 
@@ -59,6 +60,8 @@ static const char bnxt_version[] =
 
 #define PCI_VENDOR_ID_BROADCOM 0x14E4
 
+#define BROADCOM_DEV_ID_STRATUS_NIC 0x1614
+#define BROADCOM_DEV_ID_57414_VF 0x16c1
 #define BROADCOM_DEV_ID_57301 0x16c8
 #define BROADCOM_DEV_ID_57302 0x16c9
 #define BROADCOM_DEV_ID_57304_PF 0x16ca
@@ -93,6 +96,8 @@ static const char bnxt_version[] =
 #define BROADCOM_DEV_ID_57416_MF 0x16ee
 
 static const struct rte_pci_id bnxt_pci_id_map[] = {
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, BROADCOM_DEV_ID_STRATUS_NIC) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, BROADCOM_DEV_ID_57414_VF) },
 	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, BROADCOM_DEV_ID_57301) },
 	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, BROADCOM_DEV_ID_57302) },
 	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, BROADCOM_DEV_ID_57304_PF) },
@@ -613,9 +618,9 @@ static void bnxt_mac_addr_remove_op(struct rte_eth_dev *eth_dev,
 	}
 }
 
-static void bnxt_mac_addr_add_op(struct rte_eth_dev *eth_dev,
-				 struct ether_addr *mac_addr,
-				 uint32_t index, uint32_t pool)
+static int bnxt_mac_addr_add_op(struct rte_eth_dev *eth_dev,
+				struct ether_addr *mac_addr,
+				uint32_t index, uint32_t pool)
 {
 	struct bnxt *bp = (struct bnxt *)eth_dev->data->dev_private;
 	struct bnxt_vnic_info *vnic = STAILQ_FIRST(&bp->ff_pool[pool]);
@@ -623,30 +628,30 @@ static void bnxt_mac_addr_add_op(struct rte_eth_dev *eth_dev,
 
 	if (BNXT_VF(bp)) {
 		RTE_LOG(ERR, PMD, "Cannot add MAC address to a VF interface\n");
-		return;
+		return -ENOTSUP;
 	}
 
 	if (!vnic) {
 		RTE_LOG(ERR, PMD, "VNIC not found for pool %d!\n", pool);
-		return;
+		return -EINVAL;
 	}
 	/* Attach requested MAC address to the new l2_filter */
 	STAILQ_FOREACH(filter, &vnic->filter, next) {
 		if (filter->mac_index == index) {
 			RTE_LOG(ERR, PMD,
 				"MAC addr already existed for pool %d\n", pool);
-			return;
+			return -EINVAL;
 		}
 	}
 	filter = bnxt_alloc_filter(bp);
 	if (!filter) {
 		RTE_LOG(ERR, PMD, "L2 filter alloc failed\n");
-		return;
+		return -ENODEV;
 	}
 	STAILQ_INSERT_TAIL(&vnic->filter, filter, next);
 	filter->mac_index = index;
 	memcpy(filter->l2_addr, mac_addr, ETHER_ADDR_LEN);
-	bnxt_hwrm_set_filter(bp, vnic, filter);
+	return bnxt_hwrm_set_filter(bp, vnic, filter);
 }
 
 int bnxt_link_update_op(struct rte_eth_dev *eth_dev, int wait_to_complete)
@@ -1075,6 +1080,8 @@ init_err_disable:
 	return rc;
 }
 
+static int bnxt_dev_uninit(struct rte_eth_dev *eth_dev);
+
 static int
 bnxt_dev_init(struct rte_eth_dev *eth_dev)
 {
@@ -1167,7 +1174,7 @@ bnxt_dev_init(struct rte_eth_dev *eth_dev)
 	return 0;
 
 error_free:
-	eth_dev->driver->eth_dev_uninit(eth_dev);
+	bnxt_dev_uninit(eth_dev);
 error:
 	return rc;
 }
@@ -1196,19 +1203,26 @@ bnxt_dev_uninit(struct rte_eth_dev *eth_dev) {
 	return rc;
 }
 
-static struct eth_driver bnxt_rte_pmd = {
-	.pci_drv = {
-		    .id_table = bnxt_pci_id_map,
-		    .drv_flags = RTE_PCI_DRV_NEED_MAPPING |
-			    RTE_PCI_DRV_INTR_LSC,
-		    .probe = rte_eth_dev_pci_probe,
-		    .remove = rte_eth_dev_pci_remove
-		    },
-	.eth_dev_init = bnxt_dev_init,
-	.eth_dev_uninit = bnxt_dev_uninit,
-	.dev_private_size = sizeof(struct bnxt),
+static int bnxt_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
+	struct rte_pci_device *pci_dev)
+{
+	return rte_eth_dev_pci_generic_probe(pci_dev, sizeof(struct bnxt),
+		bnxt_dev_init);
+}
+
+static int bnxt_pci_remove(struct rte_pci_device *pci_dev)
+{
+	return rte_eth_dev_pci_generic_remove(pci_dev, bnxt_dev_uninit);
+}
+
+static struct rte_pci_driver bnxt_rte_pmd = {
+	.id_table = bnxt_pci_id_map,
+	.drv_flags = RTE_PCI_DRV_NEED_MAPPING |
+		RTE_PCI_DRV_INTR_LSC,
+	.probe = bnxt_pci_probe,
+	.remove = bnxt_pci_remove,
 };
 
-RTE_PMD_REGISTER_PCI(net_bnxt, bnxt_rte_pmd.pci_drv);
+RTE_PMD_REGISTER_PCI(net_bnxt, bnxt_rte_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_bnxt, bnxt_pci_id_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_bnxt, "* igb_uio | uio_pci_generic | vfio");

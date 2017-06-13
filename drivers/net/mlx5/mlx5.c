@@ -56,6 +56,7 @@
 #endif
 #include <rte_malloc.h>
 #include <rte_ethdev.h>
+#include <rte_ethdev_pci.h>
 #include <rte_pci.h>
 #include <rte_common.h>
 #include <rte_kvargs.h>
@@ -84,6 +85,27 @@
 /* Device parameter to enable multi-packet send WQEs. */
 #define MLX5_TXQ_MPW_EN "txq_mpw_en"
 
+/* Device parameter to include 2 dsegs in the title WQEBB. */
+#define MLX5_TXQ_MPW_HDR_DSEG_EN "txq_mpw_hdr_dseg_en"
+
+/* Device parameter to limit the size of inlining packet. */
+#define MLX5_TXQ_MAX_INLINE_LEN "txq_max_inline_len"
+
+/* Device parameter to enable hardware TSO offload. */
+#define MLX5_TSO "tso"
+
+/* Default PMD specific parameter value. */
+#define MLX5_ARG_UNSET (-1)
+
+struct mlx5_args {
+	int cqe_comp;
+	int txq_inline;
+	int txqs_inline;
+	int mps;
+	int mpw_hdr_dseg;
+	int inline_max_packet_sz;
+	int tso;
+};
 /**
  * Retrieve integer value from environment variable.
  *
@@ -222,6 +244,10 @@ static const struct eth_dev_ops mlx5_dev_ops = {
 	.rss_hash_update = mlx5_rss_hash_update,
 	.rss_hash_conf_get = mlx5_rss_hash_conf_get,
 	.filter_ctrl = mlx5_dev_filter_ctrl,
+	.rx_descriptor_status = mlx5_rx_descriptor_status,
+	.tx_descriptor_status = mlx5_tx_descriptor_status,
+	.rx_queue_intr_enable = mlx5_rx_intr_enable,
+	.rx_queue_intr_disable = mlx5_rx_intr_disable,
 };
 
 static struct {
@@ -273,7 +299,7 @@ mlx5_dev_idx(struct rte_pci_addr *pci_addr)
 static int
 mlx5_args_check(const char *key, const char *val, void *opaque)
 {
-	struct priv *priv = opaque;
+	struct mlx5_args *args = opaque;
 	unsigned long tmp;
 
 	errno = 0;
@@ -283,13 +309,19 @@ mlx5_args_check(const char *key, const char *val, void *opaque)
 		return errno;
 	}
 	if (strcmp(MLX5_RXQ_CQE_COMP_EN, key) == 0) {
-		priv->cqe_comp = !!tmp;
+		args->cqe_comp = !!tmp;
 	} else if (strcmp(MLX5_TXQ_INLINE, key) == 0) {
-		priv->txq_inline = tmp;
+		args->txq_inline = tmp;
 	} else if (strcmp(MLX5_TXQS_MIN_INLINE, key) == 0) {
-		priv->txqs_inline = tmp;
+		args->txqs_inline = tmp;
 	} else if (strcmp(MLX5_TXQ_MPW_EN, key) == 0) {
-		priv->mps &= !!tmp; /* Enable MPW only if HW supports */
+		args->mps = !!tmp;
+	} else if (strcmp(MLX5_TXQ_MPW_HDR_DSEG_EN, key) == 0) {
+		args->mpw_hdr_dseg = !!tmp;
+	} else if (strcmp(MLX5_TXQ_MAX_INLINE_LEN, key) == 0) {
+		args->inline_max_packet_sz = tmp;
+	} else if (strcmp(MLX5_TSO, key) == 0) {
+		args->tso = !!tmp;
 	} else {
 		WARN("%s: unknown parameter", key);
 		return -EINVAL;
@@ -309,13 +341,16 @@ mlx5_args_check(const char *key, const char *val, void *opaque)
  *   0 on success, errno value on failure.
  */
 static int
-mlx5_args(struct priv *priv, struct rte_devargs *devargs)
+mlx5_args(struct mlx5_args *args, struct rte_devargs *devargs)
 {
 	const char **params = (const char *[]){
 		MLX5_RXQ_CQE_COMP_EN,
 		MLX5_TXQ_INLINE,
 		MLX5_TXQS_MIN_INLINE,
 		MLX5_TXQ_MPW_EN,
+		MLX5_TXQ_MPW_HDR_DSEG_EN,
+		MLX5_TXQ_MAX_INLINE_LEN,
+		MLX5_TSO,
 		NULL,
 	};
 	struct rte_kvargs *kvlist;
@@ -332,7 +367,7 @@ mlx5_args(struct priv *priv, struct rte_devargs *devargs)
 	for (i = 0; (params[i] != NULL); ++i) {
 		if (rte_kvargs_count(kvlist, params[i])) {
 			ret = rte_kvargs_process(kvlist, params[i],
-						 mlx5_args_check, priv);
+						 mlx5_args_check, args);
 			if (ret != 0) {
 				rte_kvargs_free(kvlist);
 				return ret;
@@ -343,7 +378,35 @@ mlx5_args(struct priv *priv, struct rte_devargs *devargs)
 	return 0;
 }
 
-static struct eth_driver mlx5_driver;
+static struct rte_pci_driver mlx5_driver;
+
+/**
+ * Assign parameters from args into priv, only non default
+ * values are considered.
+ *
+ * @param[out] priv
+ *   Pointer to private structure.
+ * @param[in] args
+ *   Pointer to args values.
+ */
+static void
+mlx5_args_assign(struct priv *priv, struct mlx5_args *args)
+{
+	if (args->cqe_comp != MLX5_ARG_UNSET)
+		priv->cqe_comp = args->cqe_comp;
+	if (args->txq_inline != MLX5_ARG_UNSET)
+		priv->txq_inline = args->txq_inline;
+	if (args->txqs_inline != MLX5_ARG_UNSET)
+		priv->txqs_inline = args->txqs_inline;
+	if (args->mps != MLX5_ARG_UNSET)
+		priv->mps = args->mps ? priv->mps : 0;
+	if (args->mpw_hdr_dseg != MLX5_ARG_UNSET)
+		priv->mpw_hdr_dseg = args->mpw_hdr_dseg;
+	if (args->inline_max_packet_sz != MLX5_ARG_UNSET)
+		priv->inline_max_packet_sz = args->inline_max_packet_sz;
+	if (args->tso != MLX5_ARG_UNSET)
+		priv->tso = args->tso;
+}
 
 /**
  * DPDK callback to register a PCI device.
@@ -369,11 +432,12 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 	struct ibv_device_attr device_attr;
 	unsigned int sriov;
 	unsigned int mps;
+	unsigned int tunnel_en;
 	int idx;
 	int i;
 
 	(void)pci_drv;
-	assert(pci_drv == &mlx5_driver.pci_drv);
+	assert(pci_drv == &mlx5_driver);
 	/* Get mlx5_dev[] index. */
 	idx = mlx5_dev_idx(&pci_dev->addr);
 	if (idx == -1) {
@@ -387,10 +451,8 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 	list = ibv_get_device_list(&i);
 	if (list == NULL) {
 		assert(errno);
-		if (errno == ENOSYS) {
-			WARN("cannot list devices, is ib_uverbs loaded?");
-			return 0;
-		}
+		if (errno == ENOSYS)
+			ERROR("cannot list devices, is ib_uverbs loaded?");
 		return -errno;
 	}
 	assert(i >= 0);
@@ -423,21 +485,29 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		 * as all ConnectX-5 devices.
 		 */
 		switch (pci_dev->id.device_id) {
+		case PCI_DEVICE_ID_MELLANOX_CONNECTX4:
+			tunnel_en = 1;
+			mps = MLX5_MPW_DISABLED;
+			break;
 		case PCI_DEVICE_ID_MELLANOX_CONNECTX4LX:
+			mps = MLX5_MPW;
+			break;
 		case PCI_DEVICE_ID_MELLANOX_CONNECTX5:
 		case PCI_DEVICE_ID_MELLANOX_CONNECTX5VF:
 		case PCI_DEVICE_ID_MELLANOX_CONNECTX5EX:
 		case PCI_DEVICE_ID_MELLANOX_CONNECTX5EXVF:
-			mps = 1;
+			tunnel_en = 1;
+			mps = MLX5_MPW_ENHANCED;
 			break;
 		default:
-			mps = 0;
+			mps = MLX5_MPW_DISABLED;
 		}
 		INFO("PCI information matches, using device \"%s\""
-		     " (SR-IOV: %s, MPS: %s)",
+		     " (SR-IOV: %s, %sMPS: %s)",
 		     list[i]->name,
 		     sriov ? "true" : "false",
-		     mps ? "true" : "false");
+		     mps == MLX5_MPW_ENHANCED ? "Enhanced " : "",
+		     mps != MLX5_MPW_DISABLED ? "true" : "false");
 		attr_ctx = ibv_open_device(list[i]);
 		err = errno;
 		break;
@@ -446,11 +516,11 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		ibv_free_device_list(list);
 		switch (err) {
 		case 0:
-			WARN("cannot access device, is mlx5_ib loaded?");
-			return 0;
+			ERROR("cannot access device, is mlx5_ib loaded?");
+			return -ENODEV;
 		case EINVAL:
-			WARN("cannot use device, are drivers up to date?");
-			return 0;
+			ERROR("cannot use device, are drivers up to date?");
+			return -EINVAL;
 		}
 		assert(err > 0);
 		return -err;
@@ -473,12 +543,22 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		struct ibv_exp_device_attr exp_device_attr;
 		struct ether_addr mac;
 		uint16_t num_vfs = 0;
+		struct mlx5_args args = {
+			.cqe_comp = MLX5_ARG_UNSET,
+			.txq_inline = MLX5_ARG_UNSET,
+			.txqs_inline = MLX5_ARG_UNSET,
+			.mps = MLX5_ARG_UNSET,
+			.mpw_hdr_dseg = MLX5_ARG_UNSET,
+			.inline_max_packet_sz = MLX5_ARG_UNSET,
+			.tso = MLX5_ARG_UNSET,
+		};
 
 		exp_device_attr.comp_mask =
 			IBV_EXP_DEVICE_ATTR_EXP_CAP_FLAGS |
 			IBV_EXP_DEVICE_ATTR_RX_HASH |
 			IBV_EXP_DEVICE_ATTR_VLAN_OFFLOADS |
 			IBV_EXP_DEVICE_ATTR_RX_PAD_END_ALIGN |
+			IBV_EXP_DEVICE_ATTR_TSO_CAPS |
 			0;
 
 		DEBUG("using port %u (%08" PRIx32 ")", port, test);
@@ -532,12 +612,14 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		priv->mtu = ETHER_MTU;
 		priv->mps = mps; /* Enable MPW by default if supported. */
 		priv->cqe_comp = 1; /* Enable compression by default. */
-		err = mlx5_args(priv, pci_dev->device.devargs);
+		priv->tunnel_en = tunnel_en;
+		err = mlx5_args(&args, pci_dev->device.devargs);
 		if (err) {
 			ERROR("failed to process device arguments: %s",
 			      strerror(err));
 			goto port_error;
 		}
+		mlx5_args_assign(priv, &args);
 		if (ibv_exp_query_device(ctx, &exp_device_attr)) {
 			ERROR("ibv_exp_query_device() failed");
 			goto port_error;
@@ -580,11 +662,36 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 
 		priv_get_num_vfs(priv, &num_vfs);
 		priv->sriov = (num_vfs || sriov);
+		priv->tso = ((priv->tso) &&
+			    (exp_device_attr.tso_caps.max_tso > 0) &&
+			    (exp_device_attr.tso_caps.supported_qpts &
+			    (1 << IBV_QPT_RAW_ETH)));
+		if (priv->tso)
+			priv->max_tso_payload_sz =
+				exp_device_attr.tso_caps.max_tso;
 		if (priv->mps && !mps) {
 			ERROR("multi-packet send not supported on this device"
 			      " (" MLX5_TXQ_MPW_EN ")");
 			err = ENOTSUP;
 			goto port_error;
+		} else if (priv->mps && priv->tso) {
+			WARN("multi-packet send not supported in conjunction "
+			      "with TSO. MPS disabled");
+			priv->mps = 0;
+		}
+		INFO("%sMPS is %s",
+		     priv->mps == MLX5_MPW_ENHANCED ? "Enhanced " : "",
+		     priv->mps != MLX5_MPW_DISABLED ? "enabled" : "disabled");
+		/* Set default values for Enhanced MPW, a.k.a MPWv2. */
+		if (priv->mps == MLX5_MPW_ENHANCED) {
+			if (args.txqs_inline == MLX5_ARG_UNSET)
+				priv->txqs_inline = MLX5_EMPW_MIN_TXQS;
+			if (args.inline_max_packet_sz == MLX5_ARG_UNSET)
+				priv->inline_max_packet_sz =
+					MLX5_EMPW_MAX_INLINE_LEN;
+			if (args.txq_inline == MLX5_ARG_UNSET)
+				priv->txq_inline = MLX5_WQE_SIZE_MAX -
+						   MLX5_WQE_SIZE;
 		}
 		/* Allocate and register default RSS hash keys. */
 		priv->rss_conf = rte_calloc(__func__, hash_rxq_init_n,
@@ -679,7 +786,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 
 		eth_dev->device = &pci_dev->device;
 		rte_eth_copy_pci_info(eth_dev, pci_dev);
-		eth_dev->driver = &mlx5_driver;
+		eth_dev->device->driver = &mlx5_driver.driver;
 		priv->dev = eth_dev;
 		eth_dev->dev_ops = &mlx5_dev_ops;
 
@@ -761,16 +868,13 @@ static const struct rte_pci_id mlx5_pci_id_map[] = {
 	}
 };
 
-static struct eth_driver mlx5_driver = {
-	.pci_drv = {
-		.driver = {
-			.name = MLX5_DRIVER_NAME
-		},
-		.id_table = mlx5_pci_id_map,
-		.probe = mlx5_pci_probe,
-		.drv_flags = RTE_PCI_DRV_INTR_LSC,
+static struct rte_pci_driver mlx5_driver = {
+	.driver = {
+		.name = MLX5_DRIVER_NAME
 	},
-	.dev_private_size = sizeof(struct priv)
+	.id_table = mlx5_pci_id_map,
+	.probe = mlx5_pci_probe,
+	.drv_flags = RTE_PCI_DRV_INTR_LSC,
 };
 
 /**
@@ -788,7 +892,7 @@ rte_mlx5_pmd_init(void)
 	 */
 	setenv("RDMAV_HUGEPAGES_SAFE", "1", 1);
 	ibv_fork_init();
-	rte_eal_pci_register(&mlx5_driver.pci_drv);
+	rte_pci_register(&mlx5_driver);
 }
 
 RTE_PMD_EXPORT_NAME(net_mlx5, __COUNTER__);

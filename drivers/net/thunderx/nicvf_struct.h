@@ -43,8 +43,8 @@
 #include <rte_memory.h>
 
 struct nicvf_rbdr {
-	uint64_t rbdr_status;
-	uint64_t rbdr_door;
+	uintptr_t rbdr_status;
+	uintptr_t rbdr_door;
 	struct rbdr_entry_t *desc;
 	nicvf_phys_addr_t phys;
 	uint32_t buffsz;
@@ -58,8 +58,8 @@ struct nicvf_txq {
 	union sq_entry_t *desc;
 	nicvf_phys_addr_t phys;
 	struct rte_mbuf **txbuffs;
-	uint64_t sq_head;
-	uint64_t sq_door;
+	uintptr_t sq_head;
+	uintptr_t sq_door;
 	struct rte_mempool *pool;
 	struct nicvf *nic;
 	void (*pool_free)(struct nicvf_txq *sq);
@@ -72,10 +72,21 @@ struct nicvf_txq {
 	uint16_t tx_free_thresh;
 } __rte_cache_aligned;
 
+union mbuf_initializer {
+	struct {
+		uint16_t data_off;
+		uint16_t refcnt;
+		uint16_t nb_segs;
+		uint16_t port;
+	} fields;
+	uint64_t value;
+};
+
 struct nicvf_rxq {
 	uint64_t mbuf_phys_off;
-	uint64_t cq_status;
-	uint64_t cq_door;
+	uintptr_t cq_status;
+	uintptr_t cq_door;
+	union mbuf_initializer mbuf_initializer;
 	nicvf_phys_addr_t phys;
 	union cq_entry_t *desc;
 	struct nicvf_rbdr *shared_rbdr;

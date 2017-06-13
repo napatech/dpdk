@@ -28,9 +28,21 @@
 #include "ecore_proto_if.h"
 #include "mcp_public.h"
 
-#define MAX_HWFNS_PER_DEVICE	(4)
+#define ECORE_MAJOR_VERSION		8
+#define ECORE_MINOR_VERSION		18
+#define ECORE_REVISION_VERSION		7
+#define ECORE_ENGINEERING_VERSION	0
+
+#define ECORE_VERSION							\
+	((ECORE_MAJOR_VERSION << 24) | (ECORE_MINOR_VERSION << 16) |	\
+	 (ECORE_REVISION_VERSION << 8) | ECORE_ENGINEERING_VERSION)
+
+#define STORM_FW_VERSION						\
+	((FW_MAJOR_VERSION << 24) | (FW_MINOR_VERSION << 16) |	\
+	 (FW_REVISION_VERSION << 8) | FW_ENGINEERING_VERSION)
+
+#define MAX_HWFNS_PER_DEVICE	2
 #define NAME_SIZE 128 /* @DPDK */
-#define VER_SIZE 16
 #define ECORE_WFQ_UNIT	100
 #include "../qede_logs.h" /* @DPDK */
 
@@ -86,6 +98,15 @@ do {									\
 #define GET_FIELD(value, name)						\
 	(((value) >> (name##_SHIFT)) & name##_MASK)
 #endif
+
+#define ECORE_MFW_GET_FIELD(name, field)				\
+	(((name) & (field ## _MASK)) >> (field ## _SHIFT))
+
+#define ECORE_MFW_SET_FIELD(name, field, value)				\
+do {									\
+	(name) &= ~(field ## _MASK);					\
+	(name) |= (((value) << (field ## _SHIFT)) & (field ## _MASK));	\
+} while (0)
 
 static OSAL_INLINE u32 DB_ADDR(u32 cid, u32 DEMS)
 {
@@ -158,8 +179,8 @@ enum DP_MODULE {
 	ECORE_MSG_CXT		= 0x800000,
 	ECORE_MSG_LL2		= 0x1000000,
 	ECORE_MSG_ILT		= 0x2000000,
-	ECORE_MSG_RDMA          = 0x4000000,
-	ECORE_MSG_DEBUG         = 0x8000000,
+	ECORE_MSG_RDMA		= 0x4000000,
+	ECORE_MSG_DEBUG		= 0x8000000,
 	/* to be added...up to 0x8000000 */
 };
 #endif
@@ -179,6 +200,7 @@ struct ecore_cxt_mngr;
 struct ecore_dma_mem;
 struct ecore_sb_sp_info;
 struct ecore_ll2_info;
+struct ecore_l2_info;
 struct ecore_igu_info;
 struct ecore_mcp_info;
 struct ecore_dcbx_info;
@@ -205,33 +227,29 @@ enum ecore_tunn_clss {
 	MAX_ECORE_TUNN_CLSS,
 };
 
-struct ecore_tunn_start_params {
-	unsigned long tunn_mode;
-	u16	vxlan_udp_port;
-	u16	geneve_udp_port;
-	u8	update_vxlan_udp_port;
-	u8	update_geneve_udp_port;
-	u8	tunn_clss_vxlan;
-	u8	tunn_clss_l2geneve;
-	u8	tunn_clss_ipgeneve;
-	u8	tunn_clss_l2gre;
-	u8	tunn_clss_ipgre;
+struct ecore_tunn_update_type {
+	bool b_update_mode;
+	bool b_mode_enabled;
+	enum ecore_tunn_clss tun_cls;
 };
 
-struct ecore_tunn_update_params {
-	unsigned long tunn_mode_update_mask;
-	unsigned long tunn_mode;
-	u16	vxlan_udp_port;
-	u16	geneve_udp_port;
-	u8	update_rx_pf_clss;
-	u8	update_tx_pf_clss;
-	u8	update_vxlan_udp_port;
-	u8	update_geneve_udp_port;
-	u8	tunn_clss_vxlan;
-	u8	tunn_clss_l2geneve;
-	u8	tunn_clss_ipgeneve;
-	u8	tunn_clss_l2gre;
-	u8	tunn_clss_ipgre;
+struct ecore_tunn_update_udp_port {
+	bool b_update_port;
+	u16 port;
+};
+
+struct ecore_tunnel_info {
+	struct ecore_tunn_update_type vxlan;
+	struct ecore_tunn_update_type l2_geneve;
+	struct ecore_tunn_update_type ip_geneve;
+	struct ecore_tunn_update_type l2_gre;
+	struct ecore_tunn_update_type ip_gre;
+
+	struct ecore_tunn_update_udp_port vxlan_port;
+	struct ecore_tunn_update_udp_port geneve_port;
+
+	bool b_update_rx_cls;
+	bool b_update_tx_cls;
 };
 
 /* The PCI personality is not quite synonymous to protocol ID:
@@ -243,7 +261,8 @@ enum ecore_pci_personality {
 	ECORE_PCI_FCOE,
 	ECORE_PCI_ISCSI,
 	ECORE_PCI_ETH_ROCE,
-	ECORE_PCI_IWARP,
+	ECORE_PCI_ETH_IWARP,
+	ECORE_PCI_ETH_RDMA,
 	ECORE_PCI_DEFAULT /* default in shmem */
 };
 
@@ -273,6 +292,7 @@ enum ecore_resources {
 	ECORE_LL2_QUEUE,
 	ECORE_CMDQS_CQS,
 	ECORE_RDMA_STATS_QUEUE,
+	ECORE_BDQ,
 	ECORE_MAX_RESC,			/* must be last */
 };
 
@@ -288,6 +308,7 @@ enum ecore_feature {
 	ECORE_RDMA_CNQ,
 	ECORE_ISCSI_CQ,
 	ECORE_FCOE_CQ,
+	ECORE_VF_L2_QUE,
 	ECORE_MAX_FEATURES,
 };
 
@@ -327,6 +348,19 @@ enum ecore_hw_err_type {
 struct ecore_hw_info {
 	/* PCI personality */
 	enum ecore_pci_personality personality;
+#define ECORE_IS_RDMA_PERSONALITY(dev)			    \
+	((dev)->hw_info.personality == ECORE_PCI_ETH_ROCE ||  \
+	 (dev)->hw_info.personality == ECORE_PCI_ETH_IWARP || \
+	 (dev)->hw_info.personality == ECORE_PCI_ETH_RDMA)
+#define ECORE_IS_ROCE_PERSONALITY(dev)			   \
+	((dev)->hw_info.personality == ECORE_PCI_ETH_ROCE || \
+	 (dev)->hw_info.personality == ECORE_PCI_ETH_RDMA)
+#define ECORE_IS_IWARP_PERSONALITY(dev)			    \
+	((dev)->hw_info.personality == ECORE_PCI_ETH_IWARP || \
+	 (dev)->hw_info.personality == ECORE_PCI_ETH_RDMA)
+#define ECORE_IS_L2_PERSONALITY(dev)		      \
+	((dev)->hw_info.personality == ECORE_PCI_ETH || \
+	 ECORE_IS_RDMA_PERSONALITY(dev))
 
 	/* Resource Allocation scheme results */
 	u32 resc_start[ECORE_MAX_RESC];
@@ -347,9 +381,6 @@ struct ecore_hw_info {
  */
 
 	u8 num_active_tc;
-
-	/* Traffic class used for tcp out of order traffic */
-	u8 ooo_tc;
 
 	/* The traffic class used by PF for it's offloaded protocol */
 	u8 offload_tc;
@@ -376,16 +407,8 @@ struct ecore_hw_info {
 
 	/* Default DCBX mode */
 	u8 dcbx_mode;
-};
 
-struct ecore_hw_cid_data {
-	u32	cid;
-	bool	b_cid_allocated;
-	u8	vfid; /* 1-based; 0 signals this is for a PF */
-
-	/* Additional identifiers */
-	u16	opaque_fid;
-	u8	vport_id;
+	u16 mtu;
 };
 
 /* maximun size of read/write commands (HW limit) */
@@ -428,15 +451,18 @@ struct ecore_qm_info {
 	struct init_qm_port_params  *qm_port_params;
 	u16			start_pq;
 	u8			start_vport;
-	u8			pure_lb_pq;
-	u8			offload_pq;
-	u8			pure_ack_pq;
-	u8			ooo_pq;
-	u8			vf_queues_offset;
+	u16			pure_lb_pq;
+	u16			offload_pq;
+	u16			pure_ack_pq;
+	u16			ooo_pq;
+	u16			first_vf_pq;
+	u16			first_mcos_pq;
+	u16			first_rl_pq;
 	u16			num_pqs;
 	u16			num_vf_pqs;
 	u8			num_vports;
 	u8			max_phys_tcs_per_port;
+	u8			ooo_tc;
 	bool			pf_rl_en;
 	bool			pf_wfq_en;
 	bool			vport_rl_en;
@@ -476,7 +502,7 @@ struct ecore_hwfn {
 	u32				dp_module;
 	u8				dp_level;
 	char				name[NAME_SIZE];
-	void                            *dp_ctx;
+	void				*dp_ctx;
 
 	bool				first_on_engine;
 	bool				hw_init_done;
@@ -531,8 +557,8 @@ struct ecore_hwfn {
 	u32				rdma_prs_search_reg;
 
 	/* Array of sb_info of all status blocks */
-	struct ecore_sb_info            *sbs_info[MAX_SB_PER_PF_MIMD];
-	u16                             num_sbs;
+	struct ecore_sb_info		*sbs_info[MAX_SB_PER_PF_MIMD];
+	u16				num_sbs;
 
 	struct ecore_cxt_mngr		*p_cxt_mngr;
 
@@ -547,9 +573,6 @@ struct ecore_hwfn {
 	struct ecore_pf_iov		*pf_iov_info;
 	struct ecore_mcp_info		*mcp_info;
 	struct ecore_dcbx_info		*p_dcbx_info;
-
-	struct ecore_hw_cid_data	*p_tx_cids;
-	struct ecore_hw_cid_data	*p_rx_cids;
 
 	struct ecore_dmae_info		dmae_info;
 
@@ -576,6 +599,12 @@ struct ecore_hwfn {
 	/* If one of the following is set then EDPM shouldn't be used */
 	u8				dcbx_no_edpm;
 	u8				db_bar_no_edpm;
+
+	/* L2-related */
+	struct ecore_l2_info		*p_l2_info;
+
+	/* @DPDK */
+	struct ecore_ptt		*p_arfs_ptt;
 };
 
 #ifndef __EXTRACT__LINUX__
@@ -607,7 +636,7 @@ struct ecore_dev {
 	u32				dp_module;
 	u8				dp_level;
 	char				name[NAME_SIZE];
-	void                            *dp_ctx;
+	void				*dp_ctx;
 
 	u8				type;
 #define ECORE_DEV_TYPE_BB	(0 << 0)
@@ -623,6 +652,10 @@ struct ecore_dev {
 #endif
 #define ECORE_IS_AH(dev)	((dev)->type == ECORE_DEV_TYPE_AH)
 #define ECORE_IS_K2(dev)	ECORE_IS_AH(dev)
+
+#define ECORE_DEV_ID_MASK	0xff00
+#define ECORE_DEV_ID_MASK_BB	0x1600
+#define ECORE_DEV_ID_MASK_AH	0x8000
 
 	u16 vendor_id;
 	u16 device_id;
@@ -683,7 +716,7 @@ struct ecore_dev {
 
 	int				pcie_width;
 	int				pcie_speed;
-	u8				ver_str[NAME_SIZE]; /* @DPDK */
+
 	/* Add MF related configuration */
 	u8				mcp_rev;
 	u8				boot_mode;
@@ -715,8 +748,7 @@ struct ecore_dev {
 	/* SRIOV */
 	struct ecore_hw_sriov_info	*p_iov_info;
 #define IS_ECORE_SRIOV(p_dev)		(!!(p_dev)->p_iov_info)
-	unsigned long			tunn_mode;
-
+	struct ecore_tunnel_info	tunnel;
 	bool				b_is_vf;
 
 	u32				drv_type;
@@ -776,8 +808,8 @@ struct ecore_dev {
  *
  * @return OSAL_INLINE u8
  */
-static OSAL_INLINE u8 ecore_concrete_to_sw_fid(struct ecore_dev *p_dev,
-					  u32 concrete_fid)
+static OSAL_INLINE u8
+ecore_concrete_to_sw_fid(__rte_unused struct ecore_dev *p_dev, u32 concrete_fid)
 {
 	u8 vfid     = GET_FIELD(concrete_fid, PXP_CONCRETE_FID_VFID);
 	u8 pfid     = GET_FIELD(concrete_fid, PXP_CONCRETE_FID_PFID);
@@ -807,6 +839,30 @@ int ecore_device_num_ports(struct ecore_dev *p_dev);
 void ecore_set_fw_mac_addr(__le16 *fw_msb, __le16 *fw_mid, __le16 *fw_lsb,
 			   u8 *mac);
 
+/* Flags for indication of required queues */
+#define PQ_FLAGS_RLS	(1 << 0)
+#define PQ_FLAGS_MCOS	(1 << 1)
+#define PQ_FLAGS_LB	(1 << 2)
+#define PQ_FLAGS_OOO	(1 << 3)
+#define PQ_FLAGS_ACK	(1 << 4)
+#define PQ_FLAGS_OFLD	(1 << 5)
+#define PQ_FLAGS_VFS	(1 << 6)
+
+/* physical queue index for cm context intialization */
+u16 ecore_get_cm_pq_idx(struct ecore_hwfn *p_hwfn, u32 pq_flags);
+u16 ecore_get_cm_pq_idx_mcos(struct ecore_hwfn *p_hwfn, u8 tc);
+u16 ecore_get_cm_pq_idx_vf(struct ecore_hwfn *p_hwfn, u16 vf);
+u16 ecore_get_cm_pq_idx_rl(struct ecore_hwfn *p_hwfn, u8 qpid);
+
+/* amount of resources used in qm init */
+u8 ecore_init_qm_get_num_tcs(struct ecore_hwfn *p_hwfn);
+u16 ecore_init_qm_get_num_vfs(struct ecore_hwfn *p_hwfn);
+u16 ecore_init_qm_get_num_pf_rls(struct ecore_hwfn *p_hwfn);
+u16 ecore_init_qm_get_num_vports(struct ecore_hwfn *p_hwfn);
+u16 ecore_init_qm_get_num_pqs(struct ecore_hwfn *p_hwfn);
+
 #define ECORE_LEADING_HWFN(dev)	(&dev->hwfns[0])
+
+const char *ecore_hw_get_resc_name(enum ecore_resources res_id);
 
 #endif /* __ECORE_H */

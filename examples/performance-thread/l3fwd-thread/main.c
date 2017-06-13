@@ -90,6 +90,10 @@
 #define APP_LOOKUP_METHOD             APP_LOOKUP_LPM
 #endif
 
+#ifndef __GLIBC__ /* sched_getcpu() is glibc specific */
+#define sched_getcpu() rte_lcore_id()
+#endif
+
 static int
 check_ptype(int portid)
 {
@@ -341,7 +345,7 @@ static struct rte_eth_conf port_conf = {
 		.hw_ip_checksum = 1, /**< IP checksum offload enabled */
 		.hw_vlan_filter = 0, /**< VLAN filtering disabled */
 		.jumbo_frame    = 0, /**< Jumbo Frame Support disabled */
-		.hw_strip_crc   = 0, /**< CRC stripped by hardware */
+		.hw_strip_crc   = 1, /**< CRC stripped by hardware */
 	},
 	.rx_adv_conf = {
 		.rss_conf = {
@@ -909,7 +913,7 @@ static inline uint8_t
 get_ipv6_dst_port(void *ipv6_hdr,  uint8_t portid,
 		lookup6_struct_t *ipv6_l3fwd_lookup_struct)
 {
-	uint8_t next_hop;
+	uint32_t next_hop;
 
 	return (uint8_t) ((rte_lpm6_lookup(ipv6_l3fwd_lookup_struct,
 			((struct ipv6_hdr *)ipv6_hdr)->dst_addr, &next_hop) == 0) ?
@@ -1396,15 +1400,14 @@ rfc1812_process(struct ipv4_hdr *ipv4_hdr, uint16_t *dp, uint32_t ptype)
 static inline __attribute__((always_inline)) uint16_t
 get_dst_port(struct rte_mbuf *pkt, uint32_t dst_ipv4, uint8_t portid)
 {
-	uint32_t next_hop_ipv4;
-	uint8_t next_hop_ipv6;
+	uint32_t next_hop;
 	struct ipv6_hdr *ipv6_hdr;
 	struct ether_hdr *eth_hdr;
 
 	if (RTE_ETH_IS_IPV4_HDR(pkt->packet_type)) {
 		return (uint16_t) ((rte_lpm_lookup(
 				RTE_PER_LCORE(lcore_conf)->ipv4_lookup_struct, dst_ipv4,
-				&next_hop_ipv4) == 0) ? next_hop_ipv4 : portid);
+				&next_hop) == 0) ? next_hop : portid);
 
 	} else if (RTE_ETH_IS_IPV6_HDR(pkt->packet_type)) {
 
@@ -1413,8 +1416,8 @@ get_dst_port(struct rte_mbuf *pkt, uint32_t dst_ipv4, uint8_t portid)
 
 		return (uint16_t) ((rte_lpm6_lookup(
 				RTE_PER_LCORE(lcore_conf)->ipv6_lookup_struct,
-				ipv6_hdr->dst_addr, &next_hop_ipv6) == 0) ? next_hop_ipv6 :
-						portid);
+				ipv6_hdr->dst_addr, &next_hop) == 0) ?
+				next_hop : portid);
 
 	}
 
@@ -2078,7 +2081,7 @@ lthread_tx_per_ring(void *dummy)
 		 */
 		SET_CPU_BUSY(tx_conf, CPU_POLL);
 		nb_rx = rte_ring_sc_dequeue_burst(ring, (void **)pkts_burst,
-				MAX_PKT_BURST);
+				MAX_PKT_BURST, NULL);
 		SET_CPU_IDLE(tx_conf, CPU_POLL);
 
 		if (nb_rx > 0) {
@@ -2214,7 +2217,7 @@ lthread_rx(void *dummy)
 				ret = rte_ring_sp_enqueue_burst(
 						rx_conf->ring[worker_id],
 						(void **) pkts_burst,
-						nb_rx);
+						nb_rx, NULL);
 
 				new_len = old_len + ret;
 
@@ -2382,7 +2385,7 @@ pthread_tx(void *dummy)
 		 */
 		SET_CPU_BUSY(tx_conf, CPU_POLL);
 		nb_rx = rte_ring_sc_dequeue_burst(tx_conf->ring,
-				(void **)pkts_burst, MAX_PKT_BURST);
+				(void **)pkts_burst, MAX_PKT_BURST, NULL);
 		SET_CPU_IDLE(tx_conf, CPU_POLL);
 
 		if (unlikely(nb_rx == 0)) {
@@ -2454,7 +2457,7 @@ pthread_rx(void *dummy)
 			SET_CPU_BUSY(rx_conf, CPU_PROCESS);
 			worker_id = (worker_id + 1) % rx_conf->n_ring;
 			n = rte_ring_sp_enqueue_burst(rx_conf->ring[worker_id],
-					(void **)pkts_burst, nb_rx);
+					(void **)pkts_burst, nb_rx, NULL);
 
 			if (unlikely(n != nb_rx)) {
 				uint32_t k;
@@ -3052,7 +3055,7 @@ parse_args(int argc, char **argv)
 		argv[optind-1] = prgname;
 
 	ret = optind-1;
-	optind = 0; /* reset getopt lib */
+	optind = 1; /* reset getopt lib */
 	return ret;
 }
 

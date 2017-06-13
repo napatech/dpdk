@@ -135,6 +135,15 @@ efx_mcdi_version(
 	__out_opt		uint32_t *buildp,
 	__out_opt		efx_mcdi_boot_t *statusp);
 
+extern	__checkReturn	efx_rc_t
+efx_mcdi_get_capabilities(
+	__in		efx_nic_t *enp,
+	__out_opt	uint32_t *flagsp,
+	__out_opt	uint16_t *rx_dpcpu_fw_idp,
+	__out_opt	uint16_t *tx_dpcpu_fw_idp,
+	__out_opt	uint32_t *flags2p,
+	__out_opt	uint32_t *tso2ncp);
+
 extern	__checkReturn		efx_rc_t
 efx_mcdi_read_assertion(
 	__in			efx_nic_t *enp);
@@ -216,7 +225,7 @@ extern	__checkReturn	efx_rc_t
 efx_mcdi_mac_stats_periodic(
 	__in		efx_nic_t *enp,
 	__in		efsys_mem_t *esmp,
-	__in		uint16_t period,
+	__in		uint16_t period_ms,
 	__in		boolean_t events);
 
 

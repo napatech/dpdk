@@ -1,0 +1,1 @@
+cmd_librte_pmd_qede.a = ar crDs librte_pmd_qede.a base/ecore_dev.o base/ecore_hw.o base/ecore_cxt.o base/ecore_l2.o base/ecore_sp_commands.o base/ecore_init_fw_funcs.o base/ecore_spq.o base/ecore_init_ops.o base/ecore_mcp.o base/ecore_int.o base/ecore_dcbx.o base/bcm_osal.o base/ecore_sriov.o base/ecore_vf.o qede_ethdev.o qede_eth_if.o qede_main.o qede_rxtx.o 

@@ -168,7 +168,7 @@ struct lcore_queue_conf {
 } __rte_cache_aligned;
 struct lcore_queue_conf lcore_queue_conf[RTE_MAX_LCORE];
 
-static const struct rte_eth_conf port_conf = {
+static struct rte_eth_conf port_conf = {
 	.rxmode = {
 		.max_rx_pkt_len = JUMBO_FRAME_MAX_SIZE,
 		.split_hdr_size = 0,
@@ -176,7 +176,7 @@ static const struct rte_eth_conf port_conf = {
 		.hw_ip_checksum = 1, /**< IP checksum offload enabled */
 		.hw_vlan_filter = 0, /**< VLAN filtering disabled */
 		.jumbo_frame    = 1, /**< Jumbo Frame Support enabled */
-		.hw_strip_crc   = 0, /**< CRC stripped by hardware */
+		.hw_strip_crc   = 1, /**< CRC stripped by hardware */
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
@@ -265,8 +265,8 @@ l3fwd_simple_forward(struct rte_mbuf *m, struct lcore_queue_conf *qconf,
 		uint8_t queueid, uint8_t port_in)
 {
 	struct rx_queue *rxq;
-	uint32_t i, len, next_hop_ipv4;
-	uint8_t next_hop_ipv6, port_out, ipv6;
+	uint32_t i, len, next_hop;
+	uint8_t port_out, ipv6;
 	int32_t len2;
 
 	ipv6 = 0;
@@ -290,9 +290,9 @@ l3fwd_simple_forward(struct rte_mbuf *m, struct lcore_queue_conf *qconf,
 		ip_dst = rte_be_to_cpu_32(ip_hdr->dst_addr);
 
 		/* Find destination port */
-		if (rte_lpm_lookup(rxq->lpm, ip_dst, &next_hop_ipv4) == 0 &&
-				(enabled_port_mask & 1 << next_hop_ipv4) != 0) {
-			port_out = next_hop_ipv4;
+		if (rte_lpm_lookup(rxq->lpm, ip_dst, &next_hop) == 0 &&
+				(enabled_port_mask & 1 << next_hop) != 0) {
+			port_out = next_hop;
 
 			/* Build transmission burst for new port */
 			len = qconf->tx_mbufs[port_out].len;
@@ -326,9 +326,10 @@ l3fwd_simple_forward(struct rte_mbuf *m, struct lcore_queue_conf *qconf,
 		ip_hdr = rte_pktmbuf_mtod(m, struct ipv6_hdr *);
 
 		/* Find destination port */
-		if (rte_lpm6_lookup(rxq->lpm6, ip_hdr->dst_addr, &next_hop_ipv6) == 0 &&
-				(enabled_port_mask & 1 << next_hop_ipv6) != 0) {
-			port_out = next_hop_ipv6;
+		if (rte_lpm6_lookup(rxq->lpm6, ip_hdr->dst_addr,
+						&next_hop) == 0 &&
+				(enabled_port_mask & 1 << next_hop) != 0) {
+			port_out = next_hop;
 
 			/* Build transmission burst for new port */
 			len = qconf->tx_mbufs[port_out].len;
@@ -586,7 +587,7 @@ parse_args(int argc, char **argv)
 		argv[optind-1] = prgname;
 
 	ret = optind-1;
-	optind = 0; /* reset getopt lib */
+	optind = 1; /* reset getopt lib */
 	return ret;
 }
 
@@ -651,6 +652,74 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
 			printf("\ndone\n");
 		}
 	}
+}
+
+/* Check L3 packet type detection capablity of the NIC port */
+static int
+check_ptype(int portid)
+{
+	int i, ret;
+	int ptype_l3_ipv4 = 0, ptype_l3_ipv6 = 0;
+	uint32_t ptype_mask = RTE_PTYPE_L3_MASK;
+
+	ret = rte_eth_dev_get_supported_ptypes(portid, ptype_mask, NULL, 0);
+	if (ret <= 0)
+		return 0;
+
+	uint32_t ptypes[ret];
+
+	ret = rte_eth_dev_get_supported_ptypes(portid, ptype_mask, ptypes, ret);
+	for (i = 0; i < ret; ++i) {
+		if (ptypes[i] & RTE_PTYPE_L3_IPV4)
+			ptype_l3_ipv4 = 1;
+		if (ptypes[i] & RTE_PTYPE_L3_IPV6)
+			ptype_l3_ipv6 = 1;
+	}
+
+	if (ptype_l3_ipv4 == 0)
+		printf("port %d cannot parse RTE_PTYPE_L3_IPV4\n", portid);
+
+	if (ptype_l3_ipv6 == 0)
+		printf("port %d cannot parse RTE_PTYPE_L3_IPV6\n", portid);
+
+	if (ptype_l3_ipv4 && ptype_l3_ipv6)
+		return 1;
+
+	return 0;
+
+}
+
+/* Parse packet type of a packet by SW */
+static inline void
+parse_ptype(struct rte_mbuf *m)
+{
+	struct ether_hdr *eth_hdr;
+	uint32_t packet_type = RTE_PTYPE_UNKNOWN;
+	uint16_t ether_type;
+
+	eth_hdr = rte_pktmbuf_mtod(m, struct ether_hdr *);
+	ether_type = eth_hdr->ether_type;
+	if (ether_type == rte_cpu_to_be_16(ETHER_TYPE_IPv4))
+		packet_type |= RTE_PTYPE_L3_IPV4_EXT_UNKNOWN;
+	else if (ether_type == rte_cpu_to_be_16(ETHER_TYPE_IPv6))
+		packet_type |= RTE_PTYPE_L3_IPV6_EXT_UNKNOWN;
+
+	m->packet_type = packet_type;
+}
+
+/* callback function to detect packet type for a queue of a port */
+static uint16_t
+cb_parse_ptype(uint8_t port __rte_unused, uint16_t queue __rte_unused,
+		   struct rte_mbuf *pkts[], uint16_t nb_pkts,
+		   uint16_t max_pkts __rte_unused,
+		   void *user_param __rte_unused)
+{
+	uint16_t i;
+
+	for (i = 0; i < nb_pkts; ++i)
+		parse_ptype(pkts[i]);
+
+	return nb_pkts;
 }
 
 static int
@@ -846,6 +915,11 @@ main(int argc, char **argv)
 
 		qconf = &lcore_queue_conf[rx_lcore_id];
 
+		/* limit the frame size to the maximum supported by NIC */
+		rte_eth_dev_info_get(portid, &dev_info);
+		port_conf.rxmode.max_rx_pkt_len = RTE_MIN(
+		    dev_info.max_rx_pktlen, port_conf.rxmode.max_rx_pkt_len);
+
 		/* get the lcore_id for this port */
 		while (rte_lcore_is_enabled(rx_lcore_id) == 0 ||
 		       qconf->n_rx_queue == (unsigned)rx_queue_per_lcore) {
@@ -911,7 +985,6 @@ main(int argc, char **argv)
 			printf("txq=%u,%d ", lcore_id, queueid);
 			fflush(stdout);
 
-			rte_eth_dev_info_get(portid, &dev_info);
 			txconf = &dev_info.default_txconf;
 			txconf->txq_flags = 0;
 			ret = rte_eth_tx_queue_setup(portid, queueid, nb_txd,
@@ -944,6 +1017,12 @@ main(int argc, char **argv)
 				ret, portid);
 
 		rte_eth_promiscuous_enable(portid);
+
+		if (check_ptype(portid) == 0) {
+			rte_eth_add_rx_callback(portid, 0, cb_parse_ptype, NULL);
+			printf("Add Rx callback funciton to detect L3 packet type by SW :"
+				" port = %d\n", portid);
+		}
 	}
 
 	if (init_routing_table() < 0)

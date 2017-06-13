@@ -148,12 +148,6 @@ eal_reset_internal_config(struct internal_config *internal_cfg)
 	internal_cfg->base_virtaddr = 0;
 
 	internal_cfg->syslog_facility = LOG_DAEMON;
-	/* default value from build option */
-#if RTE_LOG_LEVEL >= RTE_LOG_DEBUG
-	internal_cfg->log_level = RTE_LOG_INFO;
-#else
-	internal_cfg->log_level = RTE_LOG_LEVEL;
-#endif
 
 	internal_cfg->xen_dom0_support = 0;
 
@@ -739,25 +733,49 @@ eal_parse_syslog(const char *facility, struct internal_config *conf)
 }
 
 static int
-eal_parse_log_level(const char *level, uint32_t *log_level)
+eal_parse_log_level(const char *arg)
 {
-	char *end;
+	char *end, *str, *type, *level;
 	unsigned long tmp;
+
+	str = strdup(arg);
+	if (str == NULL)
+		return -1;
+
+	if (strchr(str, ',') == NULL) {
+		type = NULL;
+		level = str;
+	} else {
+		type = strsep(&str, ",");
+		level = strsep(&str, ",");
+	}
 
 	errno = 0;
 	tmp = strtoul(level, &end, 0);
 
 	/* check for errors */
 	if ((errno != 0) || (level[0] == '\0') ||
-	    end == NULL || (*end != '\0'))
-		return -1;
+		    end == NULL || (*end != '\0'))
+		goto fail;
 
 	/* log_level is a uint32_t */
 	if (tmp >= UINT32_MAX)
-		return -1;
+		goto fail;
 
-	*log_level = tmp;
+	if (type == NULL) {
+		rte_log_set_global_level(tmp);
+	} else if (rte_log_set_level_regexp(type, tmp) < 0) {
+		printf("cannot set log level %s,%lu\n",
+			type, tmp);
+		goto fail;
+	}
+
+	free(str);
 	return 0;
+
+fail:
+	free(str);
+	return -1;
 }
 
 static enum rte_proc_type_t
@@ -898,15 +916,12 @@ eal_parse_common_option(int opt, const char *optarg,
 		break;
 
 	case OPT_LOG_LEVEL_NUM: {
-		uint32_t log;
-
-		if (eal_parse_log_level(optarg, &log) < 0) {
+		if (eal_parse_log_level(optarg) < 0) {
 			RTE_LOG(ERR, EAL,
 				"invalid parameters for --"
 				OPT_LOG_LEVEL "\n");
 			return -1;
 		}
-		conf->log_level = log;
 		break;
 	}
 	case OPT_LCORES_NUM:
@@ -1057,7 +1072,9 @@ eal_common_usage(void)
 	       "  --"OPT_VMWARE_TSC_MAP"    Use VMware TSC map instead of native RDTSC\n"
 	       "  --"OPT_PROC_TYPE"         Type of this process (primary|secondary|auto)\n"
 	       "  --"OPT_SYSLOG"            Set syslog facility\n"
-	       "  --"OPT_LOG_LEVEL"         Set default log level\n"
+	       "  --"OPT_LOG_LEVEL"=<int>   Set global log level\n"
+	       "  --"OPT_LOG_LEVEL"=<type-regexp>,<int>\n"
+	       "                      Set specific log level\n"
 	       "  -v                  Display version information on startup\n"
 	       "  -h, --help          This help\n"
 	       "\nEAL options for DEBUG use only:\n"

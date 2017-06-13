@@ -1,0 +1,32 @@
+FULL_DEPDIRS-app/test += lib
+LOCAL_DEPDIRS-app += lib
+FULL_DEPDIRS-app/test += drivers
+LOCAL_DEPDIRS-app += drivers
+
+FULL_DEPDIRS-app/test-acl += lib
+LOCAL_DEPDIRS-app += lib
+
+FULL_DEPDIRS-app/test-pipeline += lib
+LOCAL_DEPDIRS-app += lib
+FULL_DEPDIRS-app/test-pipeline += drivers
+LOCAL_DEPDIRS-app += drivers
+
+FULL_DEPDIRS-app/test-pmd += lib
+LOCAL_DEPDIRS-app += lib
+FULL_DEPDIRS-app/test-pmd += drivers
+LOCAL_DEPDIRS-app += drivers
+
+FULL_DEPDIRS-app/test-crypto-perf += lib
+LOCAL_DEPDIRS-app += lib
+
+FULL_DEPDIRS-app/cmdline_test += lib
+LOCAL_DEPDIRS-app += lib
+FULL_DEPDIRS-app/cmdline_test += drivers
+LOCAL_DEPDIRS-app += drivers
+
+FULL_DEPDIRS-app/proc_info += lib
+LOCAL_DEPDIRS-app += lib
+
+FULL_DEPDIRS-app/pdump += lib
+LOCAL_DEPDIRS-app += lib
+

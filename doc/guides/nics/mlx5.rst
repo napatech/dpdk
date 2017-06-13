@@ -90,13 +90,15 @@ Features
 - Secondary process TX is supported.
 - KVM and VMware ESX SR-IOV modes are supported.
 - RSS hash result is supported.
+- Hardware TSO.
+- Hardware checksum TX offload for VXLAN and GRE.
 
 Limitations
 -----------
 
 - Inner RSS for VXLAN frames is not supported yet.
 - Port statistics through software counters only.
-- Hardware checksum offloads for VXLAN inner header are not supported yet.
+- Hardware checksum RX offloads for VXLAN inner header are not supported yet.
 - Secondary process RX is not supported.
 
 Configuration
@@ -181,13 +183,47 @@ Run-time configuration
 
 - ``txq_mpw_en`` parameter [int]
 
-  A nonzero value enables multi-packet send. This feature allows the TX
-  burst function to pack up to five packets in two descriptors in order to
-  save PCI bandwidth and improve performance at the cost of a slightly
-  higher CPU usage.
+  A nonzero value enables multi-packet send (MPS) for ConnectX-4 Lx and
+  enhanced multi-packet send (Enhanced MPS) for ConnectX-5. MPS allows the
+  TX burst function to pack up multiple packets in a single descriptor
+  session in order to save PCI bandwidth and improve performance at the
+  cost of a slightly higher CPU usage. When ``txq_inline`` is set along
+  with ``txq_mpw_en``, TX burst function tries to copy entire packet data
+  on to TX descriptor instead of including pointer of packet only if there
+  is enough room remained in the descriptor. ``txq_inline`` sets
+  per-descriptor space for either pointers or inlined packets. In addition,
+  Enhanced MPS supports hybrid mode - mixing inlined packets and pointers
+  in the same descriptor.
+
+  This option cannot be used in conjunction with ``tso`` below. When ``tso``
+  is set, ``txq_mpw_en`` is disabled.
 
   It is currently only supported on the ConnectX-4 Lx and ConnectX-5
   families of adapters. Enabled by default.
+
+- ``txq_mpw_hdr_dseg_en`` parameter [int]
+
+  A nonzero value enables including two pointers in the first block of TX
+  descriptor. This can be used to lessen CPU load for memory copy.
+
+  Effective only when Enhanced MPS is supported. Disabled by default.
+
+- ``txq_max_inline_len`` parameter [int]
+
+  Maximum size of packet to be inlined. This limits the size of packet to
+  be inlined. If the size of a packet is larger than configured value, the
+  packet isn't inlined even though there's enough space remained in the
+  descriptor. Instead, the packet is included with pointer.
+
+  Effective only when Enhanced MPS is supported. The default value is 256.
+
+- ``tso`` parameter [int]
+
+  A nonzero value enables hardware TSO.
+  When hardware TSO is enabled, packets marked with TCP segmentation
+  offload will be divided into segments by the hardware.
+
+  Disabled by default.
 
 Prerequisites
 -------------
@@ -243,13 +279,13 @@ DPDK and must be installed separately:
 
 Currently supported by DPDK:
 
-- Mellanox OFED version: **4.0-1.0.1.0**
+- Mellanox OFED version: **4.0-2.0.0.0**
 - firmware version:
 
-  - ConnectX-4: **12.18.1000**
-  - ConnectX-4 Lx: **14.18.1000**
-  - ConnectX-5: **16.18.1000**
-  - ConnectX-5 Ex: **16.18.1000**
+  - ConnectX-4: **12.18.2000**
+  - ConnectX-4 Lx: **14.18.2000**
+  - ConnectX-5: **16.19.1200**
+  - ConnectX-5 Ex: **16.19.1200**
 
 Getting Mellanox OFED
 ~~~~~~~~~~~~~~~~~~~~~
@@ -382,7 +418,7 @@ ConnectX-4/ConnectX-5 devices managed by librte_pmd_mlx5.
 
    .. code-block:: console
 
-      testpmd -c 0xff00 -n 4 -w 05:00.0 -w 05:00.1 -w 06:00.0 -w 06:00.1 -- --rxq=2 --txq=2 -i
+      testpmd -l 8-15 -n 4 -w 05:00.0 -w 05:00.1 -w 06:00.0 -w 06:00.1 -- --rxq=2 --txq=2 -i
 
    Example output:
 

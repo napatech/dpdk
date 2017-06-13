@@ -174,7 +174,7 @@ nic_stats_display(portid_t port_id)
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN)) {
 		printf("Valid port range is [0");
-		FOREACH_PORT(pid, ports)
+		RTE_ETH_FOREACH_DEV(pid)
 			printf(", %d", pid);
 		printf("]\n");
 		return;
@@ -252,7 +252,7 @@ nic_stats_clear(portid_t port_id)
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN)) {
 		printf("Valid port range is [0");
-		FOREACH_PORT(pid, ports)
+		RTE_ETH_FOREACH_DEV(pid)
 			printf(", %d", pid);
 		printf("]\n");
 		return;
@@ -334,7 +334,7 @@ nic_stats_mapping_display(portid_t port_id)
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN)) {
 		printf("Valid port range is [0");
-		FOREACH_PORT(pid, ports)
+		RTE_ETH_FOREACH_DEV(pid)
 			printf(", %d", pid);
 		printf("]\n");
 		return;
@@ -449,10 +449,11 @@ port_infos_display(portid_t port_id)
 	struct rte_mempool * mp;
 	static const char *info_border = "*********************";
 	portid_t pid;
+	uint16_t mtu;
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN)) {
 		printf("Valid port range is [0");
-		FOREACH_PORT(pid, ports)
+		RTE_ETH_FOREACH_DEV(pid)
 			printf(", %d", pid);
 		printf("]\n");
 		return;
@@ -480,6 +481,10 @@ port_infos_display(portid_t port_id)
 	printf("Link speed: %u Mbps\n", (unsigned) link.link_speed);
 	printf("Link duplex: %s\n", (link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
 	       ("full-duplex") : ("half-duplex"));
+
+	if (!rte_eth_dev_get_mtu(port_id, &mtu))
+		printf("MTU: %u\n", mtu);
+
 	printf("Promiscuous mode: %s\n",
 	       rte_eth_promiscuous_get(port_id) ? "enabled" : "disabled");
 	printf("Allmulticast mode: %s\n",
@@ -725,7 +730,7 @@ port_id_is_invalid(portid_t port_id, enum print_warning warning)
 	if (port_id == (portid_t)RTE_PORT_ALL)
 		return 0;
 
-	if (port_id < RTE_MAX_ETHPORTS && ports[port_id].enabled)
+	if (rte_eth_dev_is_valid_port(port_id))
 		return 0;
 
 	if (warning == ENABLED_WARN)
@@ -963,6 +968,8 @@ static const struct {
 	MK_FLOW_ITEM(TCP, sizeof(struct rte_flow_item_tcp)),
 	MK_FLOW_ITEM(SCTP, sizeof(struct rte_flow_item_sctp)),
 	MK_FLOW_ITEM(VXLAN, sizeof(struct rte_flow_item_vxlan)),
+	MK_FLOW_ITEM(MPLS, sizeof(struct rte_flow_item_mpls)),
+	MK_FLOW_ITEM(GRE, sizeof(struct rte_flow_item_gre)),
 };
 
 /** Compute storage space needed by item specification. */
@@ -2279,7 +2286,7 @@ set_fwd_ports_mask(uint64_t portmask)
 		return;
 	}
 	nb_pt = 0;
-	for (i = 0; i < (unsigned)RTE_MIN(64, RTE_MAX_ETHPORTS); i++) {
+	RTE_ETH_FOREACH_DEV(i) {
 		if (! ((uint64_t)(1ULL << i) & portmask))
 			continue;
 		portlist[nb_pt++] = i;
@@ -3244,4 +3251,71 @@ port_dcb_info_display(uint8_t port_id)
 	for (i = 0; i < dcb_info.nb_tcs; i++)
 		printf("\t%4d", dcb_info.tc_queue.tc_txq[0][i].nb_queue);
 	printf("\n");
+}
+
+uint8_t *
+open_ddp_package_file(const char *file_path, uint32_t *size)
+{
+	FILE *fh = fopen(file_path, "rb");
+	uint32_t pkg_size;
+	uint8_t *buf = NULL;
+	int ret = 0;
+
+	if (size)
+		*size = 0;
+
+	if (fh == NULL) {
+		printf("%s: Failed to open %s\n", __func__, file_path);
+		return buf;
+	}
+
+	ret = fseek(fh, 0, SEEK_END);
+	if (ret < 0) {
+		fclose(fh);
+		printf("%s: File operations failed\n", __func__);
+		return buf;
+	}
+
+	pkg_size = ftell(fh);
+
+	buf = (uint8_t *)malloc(pkg_size);
+	if (!buf) {
+		fclose(fh);
+		printf("%s: Failed to malloc memory\n",	__func__);
+		return buf;
+	}
+
+	ret = fseek(fh, 0, SEEK_SET);
+	if (ret < 0) {
+		fclose(fh);
+		printf("%s: File seek operation failed\n", __func__);
+		close_ddp_package_file(buf);
+		return NULL;
+	}
+
+	ret = fread(buf, 1, pkg_size, fh);
+	if (ret < 0) {
+		fclose(fh);
+		printf("%s: File read operation failed\n", __func__);
+		close_ddp_package_file(buf);
+		return NULL;
+	}
+
+	if (size)
+		*size = pkg_size;
+
+	fclose(fh);
+
+	return buf;
+}
+
+int
+close_ddp_package_file(uint8_t *buf)
+{
+	if (buf) {
+		free((void *)buf);
+		return 0;
+	}
+
+	return -1;
 }

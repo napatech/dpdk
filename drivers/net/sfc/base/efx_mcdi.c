@@ -1024,6 +1024,79 @@ fail1:
 	return (rc);
 }
 
+	__checkReturn	efx_rc_t
+efx_mcdi_get_capabilities(
+	__in		efx_nic_t *enp,
+	__out_opt	uint32_t *flagsp,
+	__out_opt	uint16_t *rx_dpcpu_fw_idp,
+	__out_opt	uint16_t *tx_dpcpu_fw_idp,
+	__out_opt	uint32_t *flags2p,
+	__out_opt	uint32_t *tso2ncp)
+{
+	efx_mcdi_req_t req;
+	uint8_t payload[MAX(MC_CMD_GET_CAPABILITIES_IN_LEN,
+			    MC_CMD_GET_CAPABILITIES_V2_OUT_LEN)];
+	boolean_t v2_capable;
+	efx_rc_t rc;
+
+	(void) memset(payload, 0, sizeof (payload));
+	req.emr_cmd = MC_CMD_GET_CAPABILITIES;
+	req.emr_in_buf = payload;
+	req.emr_in_length = MC_CMD_GET_CAPABILITIES_IN_LEN;
+	req.emr_out_buf = payload;
+	req.emr_out_length = MC_CMD_GET_CAPABILITIES_V2_OUT_LEN;
+
+	efx_mcdi_execute_quiet(enp, &req);
+
+	if (req.emr_rc != 0) {
+		rc = req.emr_rc;
+		goto fail1;
+	}
+
+	if (req.emr_out_length_used < MC_CMD_GET_CAPABILITIES_OUT_LEN) {
+		rc = EMSGSIZE;
+		goto fail2;
+	}
+
+	if (flagsp != NULL)
+		*flagsp = MCDI_OUT_DWORD(req, GET_CAPABILITIES_OUT_FLAGS1);
+
+	if (rx_dpcpu_fw_idp != NULL)
+		*rx_dpcpu_fw_idp = MCDI_OUT_WORD(req,
+					GET_CAPABILITIES_OUT_RX_DPCPU_FW_ID);
+
+	if (tx_dpcpu_fw_idp != NULL)
+		*tx_dpcpu_fw_idp = MCDI_OUT_WORD(req,
+					GET_CAPABILITIES_OUT_TX_DPCPU_FW_ID);
+
+	if (req.emr_out_length_used < MC_CMD_GET_CAPABILITIES_V2_OUT_LEN)
+		v2_capable = B_FALSE;
+	else
+		v2_capable = B_TRUE;
+
+	if (flags2p != NULL) {
+		*flags2p = (v2_capable) ?
+			MCDI_OUT_DWORD(req, GET_CAPABILITIES_V2_OUT_FLAGS2) :
+			0;
+	}
+
+	if (tso2ncp != NULL) {
+		*tso2ncp = (v2_capable) ?
+			MCDI_OUT_WORD(req,
+				GET_CAPABILITIES_V2_OUT_TX_TSO_V2_N_CONTEXTS) :
+			0;
+	}
+
+	return (0);
+
+fail2:
+	EFSYS_PROBE(fail2);
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+
+	return (rc);
+}
+
 static	__checkReturn	efx_rc_t
 efx_mcdi_do_reboot(
 	__in		efx_nic_t *enp,
@@ -1722,7 +1795,8 @@ static	__checkReturn	efx_rc_t
 efx_mcdi_mac_stats(
 	__in		efx_nic_t *enp,
 	__in_opt	efsys_mem_t *esmp,
-	__in		efx_stats_action_t action)
+	__in		efx_stats_action_t action,
+	__in		uint16_t period_ms)
 {
 	efx_mcdi_req_t req;
 	uint8_t payload[MAX(MC_CMD_MAC_STATS_IN_LEN,
@@ -1747,7 +1821,7 @@ efx_mcdi_mac_stats(
 	    MAC_STATS_IN_PERIODIC_CHANGE, enable | events | disable,
 	    MAC_STATS_IN_PERIODIC_ENABLE, enable | events,
 	    MAC_STATS_IN_PERIODIC_NOEVENT, !events,
-	    MAC_STATS_IN_PERIOD_MS, (enable | events) ? 1000 : 0);
+	    MAC_STATS_IN_PERIOD_MS, (enable | events) ? period_ms : 0);
 
 	if (esmp != NULL) {
 		int bytes = MC_CMD_MAC_NSTATS * sizeof (uint64_t);
@@ -1797,7 +1871,7 @@ efx_mcdi_mac_stats_clear(
 {
 	efx_rc_t rc;
 
-	if ((rc = efx_mcdi_mac_stats(enp, NULL, EFX_STATS_CLEAR)) != 0)
+	if ((rc = efx_mcdi_mac_stats(enp, NULL, EFX_STATS_CLEAR, 0)) != 0)
 		goto fail1;
 
 	return (0);
@@ -1820,7 +1894,7 @@ efx_mcdi_mac_stats_upload(
 	 * avoid having to pull the statistics buffer into the cache to
 	 * maintain cumulative statistics.
 	 */
-	if ((rc = efx_mcdi_mac_stats(enp, esmp, EFX_STATS_UPLOAD)) != 0)
+	if ((rc = efx_mcdi_mac_stats(enp, esmp, EFX_STATS_UPLOAD, 0)) != 0)
 		goto fail1;
 
 	return (0);
@@ -1835,7 +1909,7 @@ fail1:
 efx_mcdi_mac_stats_periodic(
 	__in		efx_nic_t *enp,
 	__in		efsys_mem_t *esmp,
-	__in		uint16_t period,
+	__in		uint16_t period_ms,
 	__in		boolean_t events)
 {
 	efx_rc_t rc;
@@ -1844,14 +1918,17 @@ efx_mcdi_mac_stats_periodic(
 	 * The MC DMAs aggregate statistics for our convenience, so we can
 	 * avoid having to pull the statistics buffer into the cache to
 	 * maintain cumulative statistics.
-	 * Huntington uses a fixed 1sec period, so use that on Siena too.
+	 * Huntington uses a fixed 1sec period.
+	 * Medford uses a fixed 1sec period before v6.2.1.1033 firmware.
 	 */
-	if (period == 0)
-		rc = efx_mcdi_mac_stats(enp, NULL, EFX_STATS_DISABLE);
+	if (period_ms == 0)
+		rc = efx_mcdi_mac_stats(enp, NULL, EFX_STATS_DISABLE, 0);
 	else if (events)
-		rc = efx_mcdi_mac_stats(enp, esmp, EFX_STATS_ENABLE_EVENTS);
+		rc = efx_mcdi_mac_stats(enp, esmp, EFX_STATS_ENABLE_EVENTS,
+		    period_ms);
 	else
-		rc = efx_mcdi_mac_stats(enp, esmp, EFX_STATS_ENABLE_NOEVENTS);
+		rc = efx_mcdi_mac_stats(enp, esmp, EFX_STATS_ENABLE_NOEVENTS,
+		    period_ms);
 
 	if (rc != 0)
 		goto fail1;

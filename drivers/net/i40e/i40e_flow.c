@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright (c) 2016 Intel Corporation. All rights reserved.
+ *   Copyright (c) 2016-2017 Intel Corporation. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -90,14 +90,10 @@ static int i40e_flow_parse_fdir_action(struct rte_eth_dev *dev,
 				       const struct rte_flow_action *actions,
 				       struct rte_flow_error *error,
 				       struct rte_eth_fdir_filter *filter);
-static int i40e_flow_parse_tunnel_pattern(__rte_unused struct rte_eth_dev *dev,
-				  const struct rte_flow_item *pattern,
-				  struct rte_flow_error *error,
-				  struct rte_eth_tunnel_filter_conf *filter);
 static int i40e_flow_parse_tunnel_action(struct rte_eth_dev *dev,
 				 const struct rte_flow_action *actions,
 				 struct rte_flow_error *error,
-				 struct rte_eth_tunnel_filter_conf *filter);
+				 struct i40e_tunnel_filter_conf *filter);
 static int i40e_flow_parse_attr(const struct rte_flow_attr *attr,
 				struct rte_flow_error *error);
 static int i40e_flow_parse_ethertype_filter(struct rte_eth_dev *dev,
@@ -112,12 +108,18 @@ static int i40e_flow_parse_fdir_filter(struct rte_eth_dev *dev,
 				       const struct rte_flow_action actions[],
 				       struct rte_flow_error *error,
 				       union i40e_filter_t *filter);
-static int i40e_flow_parse_tunnel_filter(struct rte_eth_dev *dev,
-					 const struct rte_flow_attr *attr,
-					 const struct rte_flow_item pattern[],
-					 const struct rte_flow_action actions[],
-					 struct rte_flow_error *error,
-					 union i40e_filter_t *filter);
+static int i40e_flow_parse_vxlan_filter(struct rte_eth_dev *dev,
+					const struct rte_flow_attr *attr,
+					const struct rte_flow_item pattern[],
+					const struct rte_flow_action actions[],
+					struct rte_flow_error *error,
+					union i40e_filter_t *filter);
+static int i40e_flow_parse_mpls_filter(struct rte_eth_dev *dev,
+				       const struct rte_flow_attr *attr,
+				       const struct rte_flow_item pattern[],
+				       const struct rte_flow_action actions[],
+				       struct rte_flow_error *error,
+				       union i40e_filter_t *filter);
 static int i40e_flow_destroy_ethertype_filter(struct i40e_pf *pf,
 				      struct i40e_ethertype_filter *filter);
 static int i40e_flow_destroy_tunnel_filter(struct i40e_pf *pf,
@@ -125,6 +127,18 @@ static int i40e_flow_destroy_tunnel_filter(struct i40e_pf *pf,
 static int i40e_flow_flush_fdir_filter(struct i40e_pf *pf);
 static int i40e_flow_flush_ethertype_filter(struct i40e_pf *pf);
 static int i40e_flow_flush_tunnel_filter(struct i40e_pf *pf);
+static int
+i40e_flow_parse_qinq_filter(struct rte_eth_dev *dev,
+			      const struct rte_flow_attr *attr,
+			      const struct rte_flow_item pattern[],
+			      const struct rte_flow_action actions[],
+			      struct rte_flow_error *error,
+			      union i40e_filter_t *filter);
+static int
+i40e_flow_parse_qinq_pattern(__rte_unused struct rte_eth_dev *dev,
+			      const struct rte_flow_item *pattern,
+			      struct rte_flow_error *error,
+			      struct i40e_tunnel_filter_conf *filter);
 
 const struct rte_flow_ops i40e_flow_ops = {
 	.validate = i40e_flow_validate,
@@ -282,6 +296,47 @@ static enum rte_flow_item_type pattern_vxlan_4[] = {
 	RTE_FLOW_ITEM_TYPE_END,
 };
 
+/* Pattern matched MPLS */
+static enum rte_flow_item_type pattern_mpls_1[] = {
+	RTE_FLOW_ITEM_TYPE_ETH,
+	RTE_FLOW_ITEM_TYPE_IPV4,
+	RTE_FLOW_ITEM_TYPE_UDP,
+	RTE_FLOW_ITEM_TYPE_MPLS,
+	RTE_FLOW_ITEM_TYPE_END,
+};
+
+static enum rte_flow_item_type pattern_mpls_2[] = {
+	RTE_FLOW_ITEM_TYPE_ETH,
+	RTE_FLOW_ITEM_TYPE_IPV6,
+	RTE_FLOW_ITEM_TYPE_UDP,
+	RTE_FLOW_ITEM_TYPE_MPLS,
+	RTE_FLOW_ITEM_TYPE_END,
+};
+
+static enum rte_flow_item_type pattern_mpls_3[] = {
+	RTE_FLOW_ITEM_TYPE_ETH,
+	RTE_FLOW_ITEM_TYPE_IPV4,
+	RTE_FLOW_ITEM_TYPE_GRE,
+	RTE_FLOW_ITEM_TYPE_MPLS,
+	RTE_FLOW_ITEM_TYPE_END,
+};
+
+static enum rte_flow_item_type pattern_mpls_4[] = {
+	RTE_FLOW_ITEM_TYPE_ETH,
+	RTE_FLOW_ITEM_TYPE_IPV6,
+	RTE_FLOW_ITEM_TYPE_GRE,
+	RTE_FLOW_ITEM_TYPE_MPLS,
+	RTE_FLOW_ITEM_TYPE_END,
+};
+
+/* Pattern matched QINQ */
+static enum rte_flow_item_type pattern_qinq_1[] = {
+	RTE_FLOW_ITEM_TYPE_ETH,
+	RTE_FLOW_ITEM_TYPE_VLAN,
+	RTE_FLOW_ITEM_TYPE_VLAN,
+	RTE_FLOW_ITEM_TYPE_END,
+};
+
 static struct i40e_valid_pattern i40e_supported_patterns[] = {
 	/* Ethertype */
 	{ pattern_ethertype, i40e_flow_parse_ethertype_filter },
@@ -302,11 +357,18 @@ static struct i40e_valid_pattern i40e_supported_patterns[] = {
 	{ pattern_fdir_ipv6_tcp_ext, i40e_flow_parse_fdir_filter },
 	{ pattern_fdir_ipv6_sctp, i40e_flow_parse_fdir_filter },
 	{ pattern_fdir_ipv6_sctp_ext, i40e_flow_parse_fdir_filter },
-	/* tunnel */
-	{ pattern_vxlan_1, i40e_flow_parse_tunnel_filter },
-	{ pattern_vxlan_2, i40e_flow_parse_tunnel_filter },
-	{ pattern_vxlan_3, i40e_flow_parse_tunnel_filter },
-	{ pattern_vxlan_4, i40e_flow_parse_tunnel_filter },
+	/* VXLAN */
+	{ pattern_vxlan_1, i40e_flow_parse_vxlan_filter },
+	{ pattern_vxlan_2, i40e_flow_parse_vxlan_filter },
+	{ pattern_vxlan_3, i40e_flow_parse_vxlan_filter },
+	{ pattern_vxlan_4, i40e_flow_parse_vxlan_filter },
+	/* MPLSoUDP & MPLSoGRE */
+	{ pattern_mpls_1, i40e_flow_parse_mpls_filter },
+	{ pattern_mpls_2, i40e_flow_parse_mpls_filter },
+	{ pattern_mpls_3, i40e_flow_parse_mpls_filter },
+	{ pattern_mpls_4, i40e_flow_parse_mpls_filter },
+	/* QINQ */
+	{ pattern_qinq_1, i40e_flow_parse_qinq_filter },
 };
 
 #define NEXT_ITEM_OF_ACTION(act, actions, index)                        \
@@ -546,6 +608,7 @@ i40e_flow_parse_ethertype_pattern(struct rte_eth_dev *dev,
 
 			if (filter->ether_type == ETHER_TYPE_IPv4 ||
 			    filter->ether_type == ETHER_TYPE_IPv6 ||
+			    filter->ether_type == ETHER_TYPE_LLDP ||
 			    filter->ether_type == outer_tpid) {
 				rte_flow_error_set(error, EINVAL,
 						   RTE_FLOW_ERROR_TYPE_ITEM,
@@ -1130,35 +1193,61 @@ i40e_flow_parse_fdir_filter(struct rte_eth_dev *dev,
 	return 0;
 }
 
-/* Parse to get the action info of a tunnle filter
- * Tunnel action only supports QUEUE.
+/* Parse to get the action info of a tunnel filter
+ * Tunnel action only supports PF, VF and QUEUE.
  */
 static int
 i40e_flow_parse_tunnel_action(struct rte_eth_dev *dev,
 			      const struct rte_flow_action *actions,
 			      struct rte_flow_error *error,
-			      struct rte_eth_tunnel_filter_conf *filter)
+			      struct i40e_tunnel_filter_conf *filter)
 {
 	struct i40e_pf *pf = I40E_DEV_PRIVATE_TO_PF(dev->data->dev_private);
 	const struct rte_flow_action *act;
 	const struct rte_flow_action_queue *act_q;
+	const struct rte_flow_action_vf *act_vf;
 	uint32_t index = 0;
 
-	/* Check if the first non-void action is QUEUE. */
+	/* Check if the first non-void action is PF or VF. */
 	NEXT_ITEM_OF_ACTION(act, actions, index);
-	if (act->type != RTE_FLOW_ACTION_TYPE_QUEUE) {
+	if (act->type != RTE_FLOW_ACTION_TYPE_PF &&
+	    act->type != RTE_FLOW_ACTION_TYPE_VF) {
 		rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_ACTION,
 				   act, "Not supported action.");
 		return -rte_errno;
 	}
 
-	act_q = (const struct rte_flow_action_queue *)act->conf;
-	filter->queue_id = act_q->index;
-	if (filter->queue_id >= pf->dev_data->nb_rx_queues) {
-		rte_flow_error_set(error, EINVAL,
+	if (act->type == RTE_FLOW_ACTION_TYPE_VF) {
+		act_vf = (const struct rte_flow_action_vf *)act->conf;
+		filter->vf_id = act_vf->id;
+		filter->is_to_vf = 1;
+		if (filter->vf_id >= pf->vf_num) {
+			rte_flow_error_set(error, EINVAL,
+				   RTE_FLOW_ERROR_TYPE_ACTION,
+				   act, "Invalid VF ID for tunnel filter");
+			return -rte_errno;
+		}
+	}
+
+	/* Check if the next non-void item is QUEUE */
+	index++;
+	NEXT_ITEM_OF_ACTION(act, actions, index);
+	if (act->type == RTE_FLOW_ACTION_TYPE_QUEUE) {
+		act_q = (const struct rte_flow_action_queue *)act->conf;
+		filter->queue_id = act_q->index;
+		if ((!filter->is_to_vf) &&
+		    (filter->queue_id >= pf->dev_data->nb_rx_queues)) {
+			rte_flow_error_set(error, EINVAL,
 				   RTE_FLOW_ERROR_TYPE_ACTION,
 				   act, "Invalid queue ID for tunnel filter");
-		return -rte_errno;
+			return -rte_errno;
+		} else if (filter->is_to_vf &&
+			   (filter->queue_id >= pf->vf_nb_qps)) {
+			rte_flow_error_set(error, EINVAL,
+				   RTE_FLOW_ERROR_TYPE_ACTION,
+				   act, "Invalid queue ID for tunnel filter");
+			return -rte_errno;
+		}
 	}
 
 	/* Check if the next non-void item is END */
@@ -1205,9 +1294,10 @@ i40e_check_tenant_id_mask(const uint8_t *mask)
  *    filled with 0.
  */
 static int
-i40e_flow_parse_vxlan_pattern(const struct rte_flow_item *pattern,
+i40e_flow_parse_vxlan_pattern(__rte_unused struct rte_eth_dev *dev,
+			      const struct rte_flow_item *pattern,
 			      struct rte_flow_error *error,
-			      struct rte_eth_tunnel_filter_conf *filter)
+			      struct i40e_tunnel_filter_conf *filter)
 {
 	const struct rte_flow_item *item = pattern;
 	const struct rte_flow_item_eth *eth_spec;
@@ -1307,9 +1397,9 @@ i40e_flow_parse_vxlan_pattern(const struct rte_flow_item *pattern,
 			}
 			break;
 		case RTE_FLOW_ITEM_TYPE_IPV4:
-			filter->ip_type = RTE_TUNNEL_IPTYPE_IPV4;
+			filter->ip_type = I40E_TUNNEL_IPTYPE_IPV4;
 			/* IPv4 is used to describe protocol,
-			 * spec amd mask should be NULL.
+			 * spec and mask should be NULL.
 			 */
 			if (item->spec || item->mask) {
 				rte_flow_error_set(error, EINVAL,
@@ -1320,9 +1410,9 @@ i40e_flow_parse_vxlan_pattern(const struct rte_flow_item *pattern,
 			}
 			break;
 		case RTE_FLOW_ITEM_TYPE_IPV6:
-			filter->ip_type = RTE_TUNNEL_IPTYPE_IPV6;
+			filter->ip_type = I40E_TUNNEL_IPTYPE_IPV6;
 			/* IPv6 is used to describe protocol,
-			 * spec amd mask should be NULL.
+			 * spec and mask should be NULL.
 			 */
 			if (item->spec || item->mask) {
 				rte_flow_error_set(error, EINVAL,
@@ -1334,7 +1424,7 @@ i40e_flow_parse_vxlan_pattern(const struct rte_flow_item *pattern,
 			break;
 		case RTE_FLOW_ITEM_TYPE_UDP:
 			/* UDP is used to describe protocol,
-			 * spec amd mask should be NULL.
+			 * spec and mask should be NULL.
 			 */
 			if (item->spec || item->mask) {
 				rte_flow_error_set(error, EINVAL,
@@ -1463,37 +1553,305 @@ i40e_flow_parse_vxlan_pattern(const struct rte_flow_item *pattern,
 		return -rte_errno;
 	}
 
-	filter->tunnel_type = RTE_TUNNEL_TYPE_VXLAN;
+	filter->tunnel_type = I40E_TUNNEL_TYPE_VXLAN;
 
 	return 0;
 }
 
 static int
-i40e_flow_parse_tunnel_pattern(__rte_unused struct rte_eth_dev *dev,
-			       const struct rte_flow_item *pattern,
-			       struct rte_flow_error *error,
-			       struct rte_eth_tunnel_filter_conf *filter)
+i40e_flow_parse_vxlan_filter(struct rte_eth_dev *dev,
+			     const struct rte_flow_attr *attr,
+			     const struct rte_flow_item pattern[],
+			     const struct rte_flow_action actions[],
+			     struct rte_flow_error *error,
+			     union i40e_filter_t *filter)
 {
+	struct i40e_tunnel_filter_conf *tunnel_filter =
+		&filter->consistent_tunnel_filter;
 	int ret;
 
-	ret = i40e_flow_parse_vxlan_pattern(pattern, error, filter);
+	ret = i40e_flow_parse_vxlan_pattern(dev, pattern,
+					    error, tunnel_filter);
+	if (ret)
+		return ret;
+
+	ret = i40e_flow_parse_tunnel_action(dev, actions, error, tunnel_filter);
+	if (ret)
+		return ret;
+
+	ret = i40e_flow_parse_attr(attr, error);
+	if (ret)
+		return ret;
+
+	cons_filter_type = RTE_ETH_FILTER_TUNNEL;
 
 	return ret;
 }
 
+/* 1. Last in item should be NULL as range is not supported.
+ * 2. Supported filter types: MPLS label.
+ * 3. Mask of fields which need to be matched should be
+ *    filled with 1.
+ * 4. Mask of fields which needn't to be matched should be
+ *    filled with 0.
+ */
 static int
-i40e_flow_parse_tunnel_filter(struct rte_eth_dev *dev,
+i40e_flow_parse_mpls_pattern(__rte_unused struct rte_eth_dev *dev,
+			     const struct rte_flow_item *pattern,
+			     struct rte_flow_error *error,
+			     struct i40e_tunnel_filter_conf *filter)
+{
+	const struct rte_flow_item *item = pattern;
+	const struct rte_flow_item_mpls *mpls_spec;
+	const struct rte_flow_item_mpls *mpls_mask;
+	enum rte_flow_item_type item_type;
+	bool is_mplsoudp = 0; /* 1 - MPLSoUDP, 0 - MPLSoGRE */
+	const uint8_t label_mask[3] = {0xFF, 0xFF, 0xF0};
+	uint32_t label_be = 0;
+
+	for (; item->type != RTE_FLOW_ITEM_TYPE_END; item++) {
+		if (item->last) {
+			rte_flow_error_set(error, EINVAL,
+					   RTE_FLOW_ERROR_TYPE_ITEM,
+					   item,
+					   "Not support range");
+			return -rte_errno;
+		}
+		item_type = item->type;
+		switch (item_type) {
+		case RTE_FLOW_ITEM_TYPE_ETH:
+			if (item->spec || item->mask) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Invalid ETH item");
+				return -rte_errno;
+			}
+			break;
+		case RTE_FLOW_ITEM_TYPE_IPV4:
+			filter->ip_type = I40E_TUNNEL_IPTYPE_IPV4;
+			/* IPv4 is used to describe protocol,
+			 * spec and mask should be NULL.
+			 */
+			if (item->spec || item->mask) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Invalid IPv4 item");
+				return -rte_errno;
+			}
+			break;
+		case RTE_FLOW_ITEM_TYPE_IPV6:
+			filter->ip_type = I40E_TUNNEL_IPTYPE_IPV6;
+			/* IPv6 is used to describe protocol,
+			 * spec and mask should be NULL.
+			 */
+			if (item->spec || item->mask) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Invalid IPv6 item");
+				return -rte_errno;
+			}
+			break;
+		case RTE_FLOW_ITEM_TYPE_UDP:
+			/* UDP is used to describe protocol,
+			 * spec and mask should be NULL.
+			 */
+			if (item->spec || item->mask) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Invalid UDP item");
+				return -rte_errno;
+			}
+			is_mplsoudp = 1;
+			break;
+		case RTE_FLOW_ITEM_TYPE_GRE:
+			/* GRE is used to describe protocol,
+			 * spec and mask should be NULL.
+			 */
+			if (item->spec || item->mask) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Invalid GRE item");
+				return -rte_errno;
+			}
+			break;
+		case RTE_FLOW_ITEM_TYPE_MPLS:
+			mpls_spec =
+				(const struct rte_flow_item_mpls *)item->spec;
+			mpls_mask =
+				(const struct rte_flow_item_mpls *)item->mask;
+
+			if (!mpls_spec || !mpls_mask) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Invalid MPLS item");
+				return -rte_errno;
+			}
+
+			if (memcmp(mpls_mask->label_tc_s, label_mask, 3)) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Invalid MPLS label mask");
+				return -rte_errno;
+			}
+			rte_memcpy(((uint8_t *)&label_be + 1),
+				   mpls_spec->label_tc_s, 3);
+			filter->tenant_id = rte_be_to_cpu_32(label_be) >> 4;
+			break;
+		default:
+			break;
+		}
+	}
+
+	if (is_mplsoudp)
+		filter->tunnel_type = I40E_TUNNEL_TYPE_MPLSoUDP;
+	else
+		filter->tunnel_type = I40E_TUNNEL_TYPE_MPLSoGRE;
+
+	return 0;
+}
+
+static int
+i40e_flow_parse_mpls_filter(struct rte_eth_dev *dev,
+			    const struct rte_flow_attr *attr,
+			    const struct rte_flow_item pattern[],
+			    const struct rte_flow_action actions[],
+			    struct rte_flow_error *error,
+			    union i40e_filter_t *filter)
+{
+	struct i40e_tunnel_filter_conf *tunnel_filter =
+		&filter->consistent_tunnel_filter;
+	int ret;
+
+	ret = i40e_flow_parse_mpls_pattern(dev, pattern,
+					   error, tunnel_filter);
+	if (ret)
+		return ret;
+
+	ret = i40e_flow_parse_tunnel_action(dev, actions, error, tunnel_filter);
+	if (ret)
+		return ret;
+
+	ret = i40e_flow_parse_attr(attr, error);
+	if (ret)
+		return ret;
+
+	cons_filter_type = RTE_ETH_FILTER_TUNNEL;
+
+	return ret;
+}
+
+/* 1. Last in item should be NULL as range is not supported.
+ * 2. Supported filter types: QINQ.
+ * 3. Mask of fields which need to be matched should be
+ *    filled with 1.
+ * 4. Mask of fields which needn't to be matched should be
+ *    filled with 0.
+ */
+static int
+i40e_flow_parse_qinq_pattern(__rte_unused struct rte_eth_dev *dev,
+			      const struct rte_flow_item *pattern,
+			      struct rte_flow_error *error,
+			      struct i40e_tunnel_filter_conf *filter)
+{
+	const struct rte_flow_item *item = pattern;
+	const struct rte_flow_item_vlan *vlan_spec = NULL;
+	const struct rte_flow_item_vlan *vlan_mask = NULL;
+	const struct rte_flow_item_vlan *i_vlan_spec = NULL;
+	const struct rte_flow_item_vlan *i_vlan_mask = NULL;
+	const struct rte_flow_item_vlan *o_vlan_spec = NULL;
+	const struct rte_flow_item_vlan *o_vlan_mask = NULL;
+
+	enum rte_flow_item_type item_type;
+	bool vlan_flag = 0;
+
+	for (; item->type != RTE_FLOW_ITEM_TYPE_END; item++) {
+		if (item->last) {
+			rte_flow_error_set(error, EINVAL,
+					   RTE_FLOW_ERROR_TYPE_ITEM,
+					   item,
+					   "Not support range");
+			return -rte_errno;
+		}
+		item_type = item->type;
+		switch (item_type) {
+		case RTE_FLOW_ITEM_TYPE_ETH:
+			if (item->spec || item->mask) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Invalid ETH item");
+				return -rte_errno;
+			}
+			break;
+		case RTE_FLOW_ITEM_TYPE_VLAN:
+			vlan_spec =
+				(const struct rte_flow_item_vlan *)item->spec;
+			vlan_mask =
+				(const struct rte_flow_item_vlan *)item->mask;
+
+			if (!(vlan_spec && vlan_mask)) {
+				rte_flow_error_set(error, EINVAL,
+					   RTE_FLOW_ERROR_TYPE_ITEM,
+					   item,
+					   "Invalid vlan item");
+				return -rte_errno;
+			}
+
+			if (!vlan_flag) {
+				o_vlan_spec = vlan_spec;
+				o_vlan_mask = vlan_mask;
+				vlan_flag = 1;
+			} else {
+				i_vlan_spec = vlan_spec;
+				i_vlan_mask = vlan_mask;
+				vlan_flag = 0;
+			}
+			break;
+
+		default:
+			break;
+		}
+	}
+
+	/* Get filter specification */
+	if ((o_vlan_mask->tci == rte_cpu_to_be_16(I40E_TCI_MASK)) &&
+	    (i_vlan_mask->tci == rte_cpu_to_be_16(I40E_TCI_MASK))) {
+		filter->outer_vlan = rte_be_to_cpu_16(o_vlan_spec->tci)
+			& I40E_TCI_MASK;
+		filter->inner_vlan = rte_be_to_cpu_16(i_vlan_spec->tci)
+			& I40E_TCI_MASK;
+	} else {
+			rte_flow_error_set(error, EINVAL,
+					   RTE_FLOW_ERROR_TYPE_ITEM,
+					   NULL,
+					   "Invalid filter type");
+			return -rte_errno;
+	}
+
+	filter->tunnel_type = I40E_TUNNEL_TYPE_QINQ;
+	return 0;
+}
+
+static int
+i40e_flow_parse_qinq_filter(struct rte_eth_dev *dev,
 			      const struct rte_flow_attr *attr,
 			      const struct rte_flow_item pattern[],
 			      const struct rte_flow_action actions[],
 			      struct rte_flow_error *error,
 			      union i40e_filter_t *filter)
 {
-	struct rte_eth_tunnel_filter_conf *tunnel_filter =
-		&filter->tunnel_filter;
+	struct i40e_tunnel_filter_conf *tunnel_filter =
+		&filter->consistent_tunnel_filter;
 	int ret;
 
-	ret = i40e_flow_parse_tunnel_pattern(dev, pattern,
+	ret = i40e_flow_parse_qinq_pattern(dev, pattern,
 					     error, tunnel_filter);
 	if (ret)
 		return ret;
@@ -1621,8 +1979,8 @@ i40e_flow_create(struct rte_eth_dev *dev,
 					i40e_fdir_filter_list);
 		break;
 	case RTE_ETH_FILTER_TUNNEL:
-		ret = i40e_dev_tunnel_filter_set(pf,
-					 &cons_filter.tunnel_filter, 1);
+		ret = i40e_dev_consistent_tunnel_filter_set(pf,
+			    &cons_filter.consistent_tunnel_filter, 1);
 		if (ret)
 			goto free_flow;
 		flow->rule = TAILQ_LAST(&pf->tunnel.tunnel_list,
@@ -1724,26 +2082,50 @@ i40e_flow_destroy_tunnel_filter(struct i40e_pf *pf,
 				struct i40e_tunnel_filter *filter)
 {
 	struct i40e_hw *hw = I40E_PF_TO_HW(pf);
-	struct i40e_vsi *vsi = pf->main_vsi;
-	struct i40e_aqc_add_remove_cloud_filters_element_data cld_filter;
+	struct i40e_vsi *vsi;
+	struct i40e_pf_vf *vf;
+	struct i40e_aqc_add_rm_cloud_filt_elem_ext cld_filter;
 	struct i40e_tunnel_rule *tunnel_rule = &pf->tunnel;
 	struct i40e_tunnel_filter *node;
+	bool big_buffer = 0;
 	int ret = 0;
 
 	memset(&cld_filter, 0, sizeof(cld_filter));
 	ether_addr_copy((struct ether_addr *)&filter->input.outer_mac,
-			(struct ether_addr *)&cld_filter.outer_mac);
+			(struct ether_addr *)&cld_filter.element.outer_mac);
 	ether_addr_copy((struct ether_addr *)&filter->input.inner_mac,
-			(struct ether_addr *)&cld_filter.inner_mac);
-	cld_filter.inner_vlan = filter->input.inner_vlan;
-	cld_filter.flags = filter->input.flags;
-	cld_filter.tenant_id = filter->input.tenant_id;
-	cld_filter.queue_number = filter->queue;
+			(struct ether_addr *)&cld_filter.element.inner_mac);
+	cld_filter.element.inner_vlan = filter->input.inner_vlan;
+	cld_filter.element.flags = filter->input.flags;
+	cld_filter.element.tenant_id = filter->input.tenant_id;
+	cld_filter.element.queue_number = filter->queue;
+	rte_memcpy(cld_filter.general_fields,
+		   filter->input.general_fields,
+		   sizeof(cld_filter.general_fields));
 
-	ret = i40e_aq_remove_cloud_filters(hw, vsi->seid,
-					   &cld_filter, 1);
+	if (!filter->is_to_vf)
+		vsi = pf->main_vsi;
+	else {
+		vf = &pf->vfs[filter->vf_id];
+		vsi = vf->vsi;
+	}
+
+	if (((filter->input.flags & I40E_AQC_ADD_CLOUD_FILTER_TEID_MPLSoUDP) ==
+	    I40E_AQC_ADD_CLOUD_FILTER_TEID_MPLSoUDP) ||
+	    ((filter->input.flags & I40E_AQC_ADD_CLOUD_FILTER_TEID_MPLSoGRE) ==
+	    I40E_AQC_ADD_CLOUD_FILTER_TEID_MPLSoGRE) ||
+	    ((filter->input.flags & I40E_AQC_ADD_CLOUD_FILTER_CUSTOM_QINQ) ==
+	    I40E_AQC_ADD_CLOUD_FILTER_CUSTOM_QINQ))
+		big_buffer = 1;
+
+	if (big_buffer)
+		ret = i40e_aq_remove_cloud_filters_big_buffer(hw, vsi->seid,
+							      &cld_filter, 1);
+	else
+		ret = i40e_aq_remove_cloud_filters(hw, vsi->seid,
+						   &cld_filter.element, 1);
 	if (ret < 0)
-		return ret;
+		return -ENOTSUP;
 
 	node = i40e_sw_tunnel_filter_lookup(tunnel_rule, &filter->input);
 	if (!node)

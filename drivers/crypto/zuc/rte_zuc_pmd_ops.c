@@ -89,7 +89,8 @@ static const struct rte_cryptodev_capabilities zuc_pmd_capabilities[] = {
 
 /** Configure device */
 static int
-zuc_pmd_config(__rte_unused struct rte_cryptodev *dev)
+zuc_pmd_config(__rte_unused struct rte_cryptodev *dev,
+		__rte_unused struct rte_cryptodev_config *config)
 {
 	return 0;
 }
@@ -198,7 +199,7 @@ zuc_pmd_qp_create_processed_ops_ring(struct zuc_qp *qp,
 
 	r = rte_ring_lookup(qp->name);
 	if (r) {
-		if (r->prod.size >= ring_size) {
+		if (rte_ring_get_size(r) >= ring_size) {
 			ZUC_LOG_INFO("Reusing existing ring %s"
 					" for processed packets",
 					 qp->name);

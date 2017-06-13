@@ -314,7 +314,7 @@ igbuio_setup_bars(struct pci_dev *dev, struct uio_info *info)
 		}
 	}
 
-	return (iom != 0) ? ret : -ENOENT;
+	return (iom != 0 || iop != 0) ? ret : -ENOENT;
 }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 8, 0)
@@ -325,7 +325,11 @@ static int
 igbuio_pci_probe(struct pci_dev *dev, const struct pci_device_id *id)
 {
 	struct rte_uio_pci_dev *udev;
+#ifdef HAVE_PCI_ENABLE_MSIX
 	struct msix_entry msix_entry;
+#endif
+	dma_addr_t map_dma_addr;
+	void *map_addr;
 	int err;
 
 	udev = kzalloc(sizeof(struct rte_uio_pci_dev), GFP_KERNEL);
@@ -379,18 +383,28 @@ igbuio_pci_probe(struct pci_dev *dev, const struct pci_device_id *id)
 	switch (igbuio_intr_mode_preferred) {
 	case RTE_INTR_MODE_MSIX:
 		/* Only 1 msi-x vector needed */
+#ifdef HAVE_PCI_ENABLE_MSIX
 		msix_entry.entry = 0;
 		if (pci_enable_msix(dev, &msix_entry, 1) == 0) {
 			dev_dbg(&dev->dev, "using MSI-X");
+			udev->info.irq_flags = IRQF_NO_THREAD;
 			udev->info.irq = msix_entry.vector;
 			udev->mode = RTE_INTR_MODE_MSIX;
 			break;
 		}
+#else
+		if (pci_alloc_irq_vectors(dev, 1, 1, PCI_IRQ_MSIX) == 1) {
+			dev_dbg(&dev->dev, "using MSI-X");
+			udev->info.irq = pci_irq_vector(dev, 0);
+			udev->mode = RTE_INTR_MODE_MSIX;
+			break;
+		}
+#endif
 		/* fall back to INTX */
 	case RTE_INTR_MODE_LEGACY:
 		if (pci_intx_mask_supported(dev)) {
 			dev_dbg(&dev->dev, "using INTX");
-			udev->info.irq_flags = IRQF_SHARED;
+			udev->info.irq_flags = IRQF_SHARED | IRQF_NO_THREAD;
 			udev->info.irq = dev->irq;
 			udev->mode = RTE_INTR_MODE_LEGACY;
 			break;
@@ -422,6 +436,27 @@ igbuio_pci_probe(struct pci_dev *dev, const struct pci_device_id *id)
 
 	dev_info(&dev->dev, "uio device registered with irq %lx\n",
 		 udev->info.irq);
+
+	/*
+	 * Doing a harmless dma mapping for attaching the device to
+	 * the iommu identity mapping if kernel boots with iommu=pt.
+	 * Note this is not a problem if no IOMMU at all.
+	 */
+	map_addr = dma_alloc_coherent(&dev->dev, 1024, &map_dma_addr,
+			GFP_KERNEL);
+	if (map_addr)
+		memset(map_addr, 0, 1024);
+
+	if (!map_addr)
+		dev_info(&dev->dev, "dma mapping failed\n");
+	else {
+		dev_info(&dev->dev, "mapping 1K dma=%#llx host=%p\n",
+			 (unsigned long long)map_dma_addr, map_addr);
+
+		dma_free_coherent(&dev->dev, 1024, map_addr, map_dma_addr);
+		dev_info(&dev->dev, "unmapping 1K dma=%#llx host=%p\n",
+			 (unsigned long long)map_dma_addr, map_addr);
+	}
 
 	return 0;
 

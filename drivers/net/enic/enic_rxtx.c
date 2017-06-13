@@ -386,7 +386,6 @@ enic_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 
 		if (rq->is_sop) {
 			first_seg = rxmb;
-			first_seg->nb_segs = 1;
 			first_seg->pkt_len = seg_length;
 		} else {
 			first_seg->pkt_len = (uint16_t)(first_seg->pkt_len
@@ -395,7 +394,6 @@ enic_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 			last_seg->next = rxmb;
 		}
 
-		rxmb->next = NULL;
 		rxmb->port = enic->port_id;
 		rxmb->data_len = seg_length;
 
@@ -473,7 +471,7 @@ static inline void enic_free_wq_bufs(struct vnic_wq *wq, u16 completed_index)
 	pool = ((struct rte_mbuf *)buf->mb)->pool;
 	for (i = 0; i < nb_to_free; i++) {
 		buf = &wq->bufs[tail_idx];
-		m = __rte_pktmbuf_prefree_seg((struct rte_mbuf *)(buf->mb));
+		m = rte_pktmbuf_prefree_seg((struct rte_mbuf *)(buf->mb));
 		buf->mb = NULL;
 
 		if (unlikely(m == NULL)) {

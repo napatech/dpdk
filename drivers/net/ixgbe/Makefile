@@ -76,6 +76,9 @@ endif
 
 ifeq ($(shell test $(GCC_VERSION) -ge 50 && echo 1), 1)
 CFLAGS_ixgbe_common.o += -Wno-logical-not-parentheses
+ifeq ($(shell test $(GCC_VERSION) -ge 70 && echo 1), 1)
+CFLAGS_BASE_DRIVER += -Wno-implicit-fallthrough
+endif
 endif
 
 endif
@@ -120,14 +123,9 @@ ifeq ($(CONFIG_RTE_NIC_BYPASS),y)
 SRCS-$(CONFIG_RTE_LIBRTE_IXGBE_PMD) += ixgbe_bypass.c
 SRCS-$(CONFIG_RTE_LIBRTE_IXGBE_PMD) += ixgbe_82599_bypass.c
 endif
+SRCS-$(CONFIG_RTE_LIBRTE_IXGBE_PMD) += rte_pmd_ixgbe.c
 
 # install this header file
 SYMLINK-$(CONFIG_RTE_LIBRTE_IXGBE_PMD)-include := rte_pmd_ixgbe.h
-
-# this lib depends upon:
-DEPDIRS-$(CONFIG_RTE_LIBRTE_IXGBE_PMD) += lib/librte_eal lib/librte_ether
-DEPDIRS-$(CONFIG_RTE_LIBRTE_IXGBE_PMD) += lib/librte_mempool lib/librte_mbuf
-DEPDIRS-$(CONFIG_RTE_LIBRTE_IXGBE_PMD) += lib/librte_net
-DEPDIRS-$(CONFIG_RTE_LIBRTE_IXGBE_PMD) += lib/librte_hash
 
 include $(RTE_SDK)/mk/rte.lib.mk

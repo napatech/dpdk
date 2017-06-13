@@ -85,7 +85,8 @@ static const struct rte_cryptodev_capabilities null_crypto_pmd_capabilities[] = 
 
 /** Configure device */
 static int
-null_crypto_pmd_config(__rte_unused struct rte_cryptodev *dev)
+null_crypto_pmd_config(__rte_unused struct rte_cryptodev *dev,
+		__rte_unused struct rte_cryptodev_config *config)
 {
 	return 0;
 }
@@ -193,7 +194,7 @@ null_crypto_pmd_qp_create_processed_pkts_ring(struct null_crypto_qp *qp,
 
 	r = rte_ring_lookup(qp->name);
 	if (r) {
-		if (r->prod.size >= ring_size) {
+		if (rte_ring_get_size(r) >= ring_size) {
 			NULL_CRYPTO_LOG_INFO(
 				"Reusing existing ring %s for processed packets",
 				qp->name);

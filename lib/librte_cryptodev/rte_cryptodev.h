@@ -70,6 +70,8 @@ extern "C" {
 /**< ARMv8 Crypto PMD device name */
 #define CRYPTODEV_NAME_SCHEDULER_PMD	crypto_scheduler
 /**< Scheduler Crypto PMD device name */
+#define CRYPTODEV_NAME_DPAA2_SEC_PMD	cryptodev_dpaa2_sec_pmd
+/**< NXP DPAA2 - SEC PMD device name */
 
 /** Crypto device type */
 enum rte_cryptodev_type {
@@ -83,6 +85,7 @@ enum rte_cryptodev_type {
 	RTE_CRYPTODEV_OPENSSL_PMD,    /**<  OpenSSL PMD */
 	RTE_CRYPTODEV_ARMV8_PMD,	/**< ARMv8 crypto PMD */
 	RTE_CRYPTODEV_SCHEDULER_PMD,	/**< Crypto Scheduler PMD */
+	RTE_CRYPTODEV_DPAA2_SEC_PMD,    /**< NXP DPAA2 - SEC PMD */
 };
 
 extern const char **rte_cyptodev_names;
@@ -234,6 +237,36 @@ rte_cryptodev_sym_capability_check_auth(
 		const struct rte_cryptodev_symmetric_capability *capability,
 		uint16_t key_size, uint16_t digest_size, uint16_t aad_size);
 
+/**
+ * Provide the cipher algorithm enum, given an algorithm string
+ *
+ * @param	algo_enum	A pointer to the cipher algorithm
+ *				enum to be filled
+ * @param	algo_string	Authentication algo string
+ *
+ * @return
+ * - Return -1 if string is not valid
+ * - Return 0 is the string is valid
+ */
+int
+rte_cryptodev_get_cipher_algo_enum(enum rte_crypto_cipher_algorithm *algo_enum,
+		const char *algo_string);
+
+/**
+ * Provide the authentication algorithm enum, given an algorithm string
+ *
+ * @param	algo_enum	A pointer to the authentication algorithm
+ *				enum to be filled
+ * @param	algo_string	Authentication algo string
+ *
+ * @return
+ * - Return -1 if string is not valid
+ * - Return 0 is the string is valid
+ */
+int
+rte_cryptodev_get_auth_algo_enum(enum rte_crypto_auth_algorithm *algo_enum,
+		const char *algo_string);
+
 /** Macro used at end of crypto PMD list */
 #define RTE_CRYPTODEV_END_OF_CAPABILITIES_LIST() \
 	{ RTE_CRYPTO_OP_TYPE_UNDEFINED }
@@ -302,6 +335,10 @@ struct rte_cryptodev_info {
 	struct {
 		unsigned max_nb_sessions;
 		/**< Maximum number of sessions supported by device. */
+		unsigned int max_nb_sessions_per_qp;
+		/**< Maximum number of sessions per queue pair.
+		 * Default 0 for infinite sessions
+		 */
 	} sym;
 };
 
@@ -883,6 +920,36 @@ rte_cryptodev_sym_session_create(uint8_t dev_id,
  */
 extern struct rte_cryptodev_sym_session *
 rte_cryptodev_sym_session_free(uint8_t dev_id,
+		struct rte_cryptodev_sym_session *session);
+
+/**
+ * Attach queue pair with sym session.
+ *
+ * @param	qp_id		Queue pair to which session will be attached.
+ * @param	session		Session pointer previously allocated by
+ *				*rte_cryptodev_sym_session_create*.
+ *
+ * @return
+ *  - On success, zero.
+ *  - On failure, a negative value.
+ */
+int
+rte_cryptodev_queue_pair_attach_sym_session(uint16_t qp_id,
+		struct rte_cryptodev_sym_session *session);
+
+/**
+ * Detach queue pair with sym session.
+ *
+ * @param	qp_id		Queue pair to which session is attached.
+ * @param	session		Session pointer previously allocated by
+ *				*rte_cryptodev_sym_session_create*.
+ *
+ * @return
+ *  - On success, zero.
+ *  - On failure, a negative value.
+ */
+int
+rte_cryptodev_queue_pair_detach_sym_session(uint16_t qp_id,
 		struct rte_cryptodev_sym_session *session);
 
 

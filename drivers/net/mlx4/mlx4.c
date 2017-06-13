@@ -1,8 +1,8 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright 2012-2015 6WIND S.A.
- *   Copyright 2012 Mellanox.
+ *   Copyright 2012-2017 6WIND S.A.
+ *   Copyright 2012-2017 Mellanox.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -58,22 +58,9 @@
 #include <linux/sockios.h>
 #include <fcntl.h>
 
-/* Verbs header. */
-/* ISO C doesn't support unnamed structs/unions, disabling -pedantic. */
-#ifdef PEDANTIC
-#pragma GCC diagnostic ignored "-Wpedantic"
-#endif
-#include <infiniband/verbs.h>
-#ifdef PEDANTIC
-#pragma GCC diagnostic error "-Wpedantic"
-#endif
-
-/* DPDK headers don't like -pedantic. */
-#ifdef PEDANTIC
-#pragma GCC diagnostic ignored "-Wpedantic"
-#endif
 #include <rte_ether.h>
 #include <rte_ethdev.h>
+#include <rte_ethdev_pci.h>
 #include <rte_dev.h>
 #include <rte_mbuf.h>
 #include <rte_errno.h>
@@ -86,30 +73,15 @@
 #include <rte_log.h>
 #include <rte_alarm.h>
 #include <rte_memory.h>
-#ifdef PEDANTIC
-#pragma GCC diagnostic error "-Wpedantic"
-#endif
+#include <rte_flow.h>
+#include <rte_kvargs.h>
 
 /* Generated configuration header. */
 #include "mlx4_autoconf.h"
 
-/* PMD header. */
+/* PMD headers. */
 #include "mlx4.h"
-
-/* Runtime logging through RTE_LOG() is enabled when not in debugging mode.
- * Intermediate LOG_*() macros add the required end-of-line characters. */
-#ifndef NDEBUG
-#define INFO(...) DEBUG(__VA_ARGS__)
-#define WARN(...) DEBUG(__VA_ARGS__)
-#define ERROR(...) DEBUG(__VA_ARGS__)
-#else
-#define LOG__(level, m, ...) \
-	RTE_LOG(level, PMD, MLX4_DRIVER_NAME ": " m "%c", __VA_ARGS__)
-#define LOG_(level, ...) LOG__(level, __VA_ARGS__, '\n')
-#define INFO(...) LOG_(INFO, __VA_ARGS__)
-#define WARN(...) LOG_(WARNING, __VA_ARGS__)
-#define ERROR(...) LOG_(ERR, __VA_ARGS__)
-#endif
+#include "mlx4_flow.h"
 
 /* Convenience macros for accessing mbuf fields. */
 #define NEXT(m) ((m)->next)
@@ -137,157 +109,6 @@ typedef union {
 	 (((val) & (from)) / ((from) / (to))) : \
 	 (((val) & (from)) * ((to) / (from))))
 
-struct mlx4_rxq_stats {
-	unsigned int idx; /**< Mapping index. */
-#ifdef MLX4_PMD_SOFT_COUNTERS
-	uint64_t ipackets;  /**< Total of successfully received packets. */
-	uint64_t ibytes;    /**< Total of successfully received bytes. */
-#endif
-	uint64_t idropped;  /**< Total of packets dropped when RX ring full. */
-	uint64_t rx_nombuf; /**< Total of RX mbuf allocation failures. */
-};
-
-struct mlx4_txq_stats {
-	unsigned int idx; /**< Mapping index. */
-#ifdef MLX4_PMD_SOFT_COUNTERS
-	uint64_t opackets; /**< Total of successfully sent packets. */
-	uint64_t obytes;   /**< Total of successfully sent bytes. */
-#endif
-	uint64_t odropped; /**< Total of packets not sent when TX ring full. */
-};
-
-/* RX element (scattered packets). */
-struct rxq_elt_sp {
-	struct ibv_recv_wr wr; /* Work Request. */
-	struct ibv_sge sges[MLX4_PMD_SGE_WR_N]; /* Scatter/Gather Elements. */
-	struct rte_mbuf *bufs[MLX4_PMD_SGE_WR_N]; /* SGEs buffers. */
-};
-
-/* RX element. */
-struct rxq_elt {
-	struct ibv_recv_wr wr; /* Work Request. */
-	struct ibv_sge sge; /* Scatter/Gather Element. */
-	/* mbuf pointer is derived from WR_ID(wr.wr_id).offset. */
-};
-
-/* RX queue descriptor. */
-struct rxq {
-	struct priv *priv; /* Back pointer to private data. */
-	struct rte_mempool *mp; /* Memory Pool for allocations. */
-	struct ibv_mr *mr; /* Memory Region (for mp). */
-	struct ibv_cq *cq; /* Completion Queue. */
-	struct ibv_qp *qp; /* Queue Pair. */
-	struct ibv_exp_qp_burst_family *if_qp; /* QP burst interface. */
-	struct ibv_exp_cq_family *if_cq; /* CQ interface. */
-	/*
-	 * Each VLAN ID requires a separate flow steering rule.
-	 */
-	BITFIELD_DECLARE(mac_configured, uint32_t, MLX4_MAX_MAC_ADDRESSES);
-	struct ibv_flow *mac_flow[MLX4_MAX_MAC_ADDRESSES][MLX4_MAX_VLAN_IDS];
-	struct ibv_flow *promisc_flow; /* Promiscuous flow. */
-	struct ibv_flow *allmulti_flow; /* Multicast flow. */
-	unsigned int port_id; /* Port ID for incoming packets. */
-	unsigned int elts_n; /* (*elts)[] length. */
-	unsigned int elts_head; /* Current index in (*elts)[]. */
-	union {
-		struct rxq_elt_sp (*sp)[]; /* Scattered RX elements. */
-		struct rxq_elt (*no_sp)[]; /* RX elements. */
-	} elts;
-	unsigned int sp:1; /* Use scattered RX elements. */
-	unsigned int csum:1; /* Enable checksum offloading. */
-	unsigned int csum_l2tun:1; /* Same for L2 tunnels. */
-	struct mlx4_rxq_stats stats; /* RX queue counters. */
-	unsigned int socket; /* CPU socket ID for allocations. */
-	struct ibv_exp_res_domain *rd; /* Resource Domain. */
-};
-
-/* TX element. */
-struct txq_elt {
-	struct rte_mbuf *buf;
-};
-
-/* Linear buffer type. It is used when transmitting buffers with too many
- * segments that do not fit the hardware queue (see max_send_sge).
- * Extra segments are copied (linearized) in such buffers, replacing the
- * last SGE during TX.
- * The size is arbitrary but large enough to hold a jumbo frame with
- * 8 segments considering mbuf.buf_len is about 2048 bytes. */
-typedef uint8_t linear_t[16384];
-
-/* TX queue descriptor. */
-struct txq {
-	struct priv *priv; /* Back pointer to private data. */
-	struct {
-		const struct rte_mempool *mp; /* Cached Memory Pool. */
-		struct ibv_mr *mr; /* Memory Region (for mp). */
-		uint32_t lkey; /* mr->lkey */
-	} mp2mr[MLX4_PMD_TX_MP_CACHE]; /* MP to MR translation table. */
-	struct ibv_cq *cq; /* Completion Queue. */
-	struct ibv_qp *qp; /* Queue Pair. */
-	struct ibv_exp_qp_burst_family *if_qp; /* QP burst interface. */
-	struct ibv_exp_cq_family *if_cq; /* CQ interface. */
-#if MLX4_PMD_MAX_INLINE > 0
-	uint32_t max_inline; /* Max inline send size <= MLX4_PMD_MAX_INLINE. */
-#endif
-	unsigned int elts_n; /* (*elts)[] length. */
-	struct txq_elt (*elts)[]; /* TX elements. */
-	unsigned int elts_head; /* Current index in (*elts)[]. */
-	unsigned int elts_tail; /* First element awaiting completion. */
-	unsigned int elts_comp; /* Number of completion requests. */
-	unsigned int elts_comp_cd; /* Countdown for next completion request. */
-	unsigned int elts_comp_cd_init; /* Initial value for countdown. */
-	struct mlx4_txq_stats stats; /* TX queue counters. */
-	linear_t (*elts_linear)[]; /* Linearized buffers. */
-	struct ibv_mr *mr_linear; /* Memory Region for linearized buffers. */
-	unsigned int socket; /* CPU socket ID for allocations. */
-	struct ibv_exp_res_domain *rd; /* Resource Domain. */
-};
-
-struct priv {
-	struct rte_eth_dev *dev; /* Ethernet device. */
-	struct ibv_context *ctx; /* Verbs context. */
-	struct ibv_device_attr device_attr; /* Device properties. */
-	struct ibv_pd *pd; /* Protection Domain. */
-	/*
-	 * MAC addresses array and configuration bit-field.
-	 * An extra entry that cannot be modified by the DPDK is reserved
-	 * for broadcast frames (destination MAC address ff:ff:ff:ff:ff:ff).
-	 */
-	struct ether_addr mac[MLX4_MAX_MAC_ADDRESSES];
-	BITFIELD_DECLARE(mac_configured, uint32_t, MLX4_MAX_MAC_ADDRESSES);
-	/* VLAN filters. */
-	struct {
-		unsigned int enabled:1; /* If enabled. */
-		unsigned int id:12; /* VLAN ID (0-4095). */
-	} vlan_filter[MLX4_MAX_VLAN_IDS]; /* VLAN filters table. */
-	/* Device properties. */
-	uint16_t mtu; /* Configured MTU. */
-	uint8_t port; /* Physical port number. */
-	unsigned int started:1; /* Device started, flows enabled. */
-	unsigned int promisc:1; /* Device in promiscuous mode. */
-	unsigned int allmulti:1; /* Device receives all multicast packets. */
-	unsigned int hw_qpg:1; /* QP groups are supported. */
-	unsigned int hw_tss:1; /* TSS is supported. */
-	unsigned int hw_rss:1; /* RSS is supported. */
-	unsigned int hw_csum:1; /* Checksum offload is supported. */
-	unsigned int hw_csum_l2tun:1; /* Same for L2 tunnels. */
-	unsigned int rss:1; /* RSS is enabled. */
-	unsigned int vf:1; /* This is a VF device. */
-	unsigned int pending_alarm:1; /* An alarm is pending. */
-#ifdef INLINE_RECV
-	unsigned int inl_recv_size; /* Inline recv size */
-#endif
-	unsigned int max_rss_tbl_sz; /* Maximum number of RSS queues. */
-	/* RX/TX queues. */
-	struct rxq rxq_parent; /* Parent queue when RSS is enabled. */
-	unsigned int rxqs_n; /* RX queues array size. */
-	unsigned int txqs_n; /* TX queues array size. */
-	struct rxq *(*rxqs)[]; /* RX queues. */
-	struct txq *(*txqs)[]; /* TX queues. */
-	struct rte_intr_handle intr_handle; /* Interrupt handler. */
-	rte_spinlock_t lock; /* Lock for control functions. */
-};
-
 /* Local storage for secondary process data. */
 struct mlx4_secondary_data {
 	struct rte_eth_dev_data data; /* Local device data. */
@@ -295,6 +116,16 @@ struct mlx4_secondary_data {
 	struct rte_eth_dev_data *shared_dev_data; /* Shared device data. */
 	rte_spinlock_t lock; /* Port configuration lock. */
 } mlx4_secondary_data[RTE_MAX_ETHPORTS];
+
+struct mlx4_conf {
+	uint8_t active_ports;
+};
+
+/* Available parameters list. */
+const char *pmd_mlx4_init_params[] = {
+	MLX4_PMD_PORT_KVARG,
+	NULL,
+};
 
 /**
  * Check if running as a secondary process.
@@ -335,8 +166,7 @@ mlx4_get_priv(struct rte_eth_dev *dev)
  * @param priv
  *   Pointer to private structure.
  */
-static void
-priv_lock(struct priv *priv)
+void priv_lock(struct priv *priv)
 {
 	rte_spinlock_lock(&priv->lock);
 }
@@ -347,8 +177,7 @@ priv_lock(struct priv *priv)
  * @param priv
  *   Pointer to private structure.
  */
-static void
-priv_unlock(struct priv *priv)
+void priv_unlock(struct priv *priv)
 {
 	rte_spinlock_unlock(&priv->lock);
 }
@@ -2526,6 +2355,7 @@ rxq_add_flow(struct rxq *rxq, unsigned int mac_index, unsigned int vlan_index)
 	assert(((uint8_t *)attr + sizeof(*attr)) == (uint8_t *)spec);
 	*attr = (struct ibv_flow_attr){
 		.type = IBV_FLOW_ATTR_NORMAL,
+		.priority = 3,
 		.num_of_specs = 1,
 		.port = priv->port,
 		.flags = 0
@@ -3340,6 +3170,8 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			/* Increase out of memory counters. */
 			++rxq->stats.rx_nombuf;
 			++rxq->priv->dev->data->rx_mbuf_alloc_failed;
+			/* Add SGE to array for repost. */
+			sges[i] = elt->sge;
 			goto repost;
 		}
 
@@ -3604,7 +3436,7 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 	}
 	/* Enable scattered packets support for this queue if necessary. */
 	assert(mb_len >= RTE_PKTMBUF_HEADROOM);
-	if ((dev->data->dev_conf.rxmode.jumbo_frame) &&
+	if (dev->data->dev_conf.rxmode.enable_scatter &&
 	    (dev->data->dev_conf.rxmode.max_rx_pkt_len >
 	     (mb_len - RTE_PKTMBUF_HEADROOM))) {
 		tmpl.sp = 1;
@@ -3826,11 +3658,19 @@ rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 		tmpl.csum_l2tun = !!dev->data->dev_conf.rxmode.hw_ip_checksum;
 	/* Enable scattered packets support for this queue if necessary. */
 	assert(mb_len >= RTE_PKTMBUF_HEADROOM);
-	if ((dev->data->dev_conf.rxmode.jumbo_frame) &&
-	    (dev->data->dev_conf.rxmode.max_rx_pkt_len >
-	     (mb_len - RTE_PKTMBUF_HEADROOM))) {
+	if (dev->data->dev_conf.rxmode.max_rx_pkt_len <=
+	    (mb_len - RTE_PKTMBUF_HEADROOM)) {
+		tmpl.sp = 0;
+	} else if (dev->data->dev_conf.rxmode.enable_scatter) {
 		tmpl.sp = 1;
 		desc /= MLX4_PMD_SGE_WR_N;
+	} else {
+		WARN("%p: the requested maximum Rx packet size (%u) is"
+		     " larger than a single mbuf (%u) and scattered"
+		     " mode has not been requested",
+		     (void *)dev,
+		     dev->data->dev_conf.rxmode.max_rx_pkt_len,
+		     mb_len - RTE_PKTMBUF_HEADROOM);
 	}
 	DEBUG("%p: %s scattered packets support (%u WRs)",
 	      (void *)dev, (tmpl.sp ? "enabling" : "disabling"), desc);
@@ -4092,8 +3932,14 @@ mlx4_rx_queue_release(void *dpdk_rxq)
 	priv_unlock(priv);
 }
 
-static void
+static int
 priv_dev_interrupt_handler_install(struct priv *, struct rte_eth_dev *);
+
+static int
+priv_dev_removal_interrupt_handler_install(struct priv *, struct rte_eth_dev *);
+
+static int
+priv_dev_link_interrupt_handler_install(struct priv *, struct rte_eth_dev *);
 
 /**
  * DPDK callback to start the device.
@@ -4113,6 +3959,7 @@ mlx4_dev_start(struct rte_eth_dev *dev)
 	unsigned int i = 0;
 	unsigned int r;
 	struct rxq *rxq;
+	int ret;
 
 	if (mlx4_is_secondary())
 		return -E_RTE_SECONDARY;
@@ -4132,8 +3979,6 @@ mlx4_dev_start(struct rte_eth_dev *dev)
 	}
 	/* Iterate only once when RSS is enabled. */
 	do {
-		int ret;
-
 		/* Ignore nonexistent RX queues. */
 		if (rxq == NULL)
 			continue;
@@ -4146,22 +3991,41 @@ mlx4_dev_start(struct rte_eth_dev *dev)
 			continue;
 		WARN("%p: QP flow attachment failed: %s",
 		     (void *)dev, strerror(ret));
-		/* Rollback. */
-		while (i != 0) {
-			rxq = (*priv->rxqs)[--i];
-			if (rxq != NULL) {
-				rxq_allmulticast_disable(rxq);
-				rxq_promiscuous_disable(rxq);
-				rxq_mac_addrs_del(rxq);
-			}
-		}
-		priv->started = 0;
-		priv_unlock(priv);
-		return -ret;
+		goto err;
 	} while ((--r) && ((rxq = (*priv->rxqs)[++i]), i));
-	priv_dev_interrupt_handler_install(priv, dev);
+	ret = priv_dev_link_interrupt_handler_install(priv, dev);
+	if (ret) {
+		ERROR("%p: LSC handler install failed",
+		     (void *)dev);
+		goto err;
+	}
+	ret = priv_dev_removal_interrupt_handler_install(priv, dev);
+	if (ret) {
+		ERROR("%p: RMV handler install failed",
+		     (void *)dev);
+		goto err;
+	}
+	ret = mlx4_priv_flow_start(priv);
+	if (ret) {
+		ERROR("%p: flow start failed: %s",
+		      (void *)dev, strerror(ret));
+		goto err;
+	}
 	priv_unlock(priv);
 	return 0;
+err:
+	/* Rollback. */
+	while (i != 0) {
+		rxq = (*priv->rxqs)[i--];
+		if (rxq != NULL) {
+			rxq_allmulticast_disable(rxq);
+			rxq_promiscuous_disable(rxq);
+			rxq_mac_addrs_del(rxq);
+		}
+	}
+	priv->started = 0;
+	priv_unlock(priv);
+	return -ret;
 }
 
 /**
@@ -4196,6 +4060,7 @@ mlx4_dev_stop(struct rte_eth_dev *dev)
 		rxq = (*priv->rxqs)[0];
 		r = priv->rxqs_n;
 	}
+	mlx4_priv_flow_stop(priv);
 	/* Iterate only once when RSS is enabled. */
 	do {
 		/* Ignore nonexistent RX queues. */
@@ -4258,8 +4123,15 @@ removed_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	return 0;
 }
 
-static void
+static int
 priv_dev_interrupt_handler_uninstall(struct priv *, struct rte_eth_dev *);
+
+static int
+priv_dev_removal_interrupt_handler_uninstall(struct priv *,
+					     struct rte_eth_dev *);
+
+static int
+priv_dev_link_interrupt_handler_uninstall(struct priv *, struct rte_eth_dev *);
 
 /**
  * DPDK callback to close the device.
@@ -4323,7 +4195,8 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 		claim_zero(ibv_close_device(priv->ctx));
 	} else
 		assert(priv->ctx == NULL);
-	priv_dev_interrupt_handler_uninstall(priv, dev);
+	priv_dev_removal_interrupt_handler_uninstall(priv, dev);
+	priv_dev_link_interrupt_handler_uninstall(priv, dev);
 	priv_unlock(priv);
 	memset(priv, 0, sizeof(*priv));
 }
@@ -4630,26 +4503,30 @@ end:
  * @param vmdq
  *   VMDq pool index to associate address with (ignored).
  */
-static void
+static int
 mlx4_mac_addr_add(struct rte_eth_dev *dev, struct ether_addr *mac_addr,
 		  uint32_t index, uint32_t vmdq)
 {
 	struct priv *priv = dev->data->dev_private;
+	int re;
 
 	if (mlx4_is_secondary())
-		return;
+		return -ENOTSUP;
 	(void)vmdq;
 	priv_lock(priv);
 	DEBUG("%p: adding MAC address at index %" PRIu32,
 	      (void *)dev, index);
 	/* Last array entry is reserved for broadcast. */
-	if (index >= (elemof(priv->mac) - 1))
+	if (index >= (elemof(priv->mac) - 1)) {
+		re = EINVAL;
 		goto end;
-	priv_mac_addr_add(priv, index,
-			  (const uint8_t (*)[ETHER_ADDR_LEN])
-			  mac_addr->addr_bytes);
+	}
+	re = priv_mac_addr_add(priv, index,
+			       (const uint8_t (*)[ETHER_ADDR_LEN])
+			       mac_addr->addr_bytes);
 end:
 	priv_unlock(priv);
+	return -re;
 }
 
 /**
@@ -4883,6 +4760,10 @@ mlx4_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 	return -1;
 }
 
+static int
+mlx4_ibv_device_to_pci_addr(const struct ibv_device *device,
+			    struct rte_pci_addr *pci_addr);
+
 /**
  * DPDK callback to change the MTU.
  *
@@ -4931,21 +4812,16 @@ mlx4_dev_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 	/* Reconfigure each RX queue. */
 	for (i = 0; (i != priv->rxqs_n); ++i) {
 		struct rxq *rxq = (*priv->rxqs)[i];
-		unsigned int mb_len;
 		unsigned int max_frame_len;
-		int sp;
 
 		if (rxq == NULL)
 			continue;
-		/* Calculate new maximum frame length according to MTU and
-		 * toggle scattered support (sp) if necessary. */
+		/* Calculate new maximum frame length according to MTU. */
 		max_frame_len = (priv->mtu + ETHER_HDR_LEN +
 				 (ETHER_MAX_VLAN_FRAME_LEN - ETHER_MAX_LEN));
-		mb_len = rte_pktmbuf_data_room_size(rxq->mp);
-		assert(mb_len >= RTE_PKTMBUF_HEADROOM);
-		sp = (max_frame_len > (mb_len - RTE_PKTMBUF_HEADROOM));
 		/* Provide new values to rxq_setup(). */
-		dev->data->dev_conf.rxmode.jumbo_frame = sp;
+		dev->data->dev_conf.rxmode.jumbo_frame =
+			(max_frame_len > ETHER_MAX_LEN);
 		dev->data->dev_conf.rxmode.max_rx_pkt_len = max_frame_len;
 		ret = rxq_rehash(dev, rxq);
 		if (ret) {
@@ -5197,6 +5073,55 @@ mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 	return -ret;
 }
 
+const struct rte_flow_ops mlx4_flow_ops = {
+	.validate = mlx4_flow_validate,
+	.create = mlx4_flow_create,
+	.destroy = mlx4_flow_destroy,
+	.flush = mlx4_flow_flush,
+	.query = NULL,
+};
+
+/**
+ * Manage filter operations.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param filter_type
+ *   Filter type.
+ * @param filter_op
+ *   Operation to perform.
+ * @param arg
+ *   Pointer to operation-specific structure.
+ *
+ * @return
+ *   0 on success, negative errno value on failure.
+ */
+static int
+mlx4_dev_filter_ctrl(struct rte_eth_dev *dev,
+		     enum rte_filter_type filter_type,
+		     enum rte_filter_op filter_op,
+		     void *arg)
+{
+	int ret = EINVAL;
+
+	switch (filter_type) {
+	case RTE_ETH_FILTER_GENERIC:
+		if (filter_op != RTE_ETH_FILTER_GET)
+			return -EINVAL;
+		*(const void **)arg = &mlx4_flow_ops;
+		return 0;
+	case RTE_ETH_FILTER_FDIR:
+		DEBUG("%p: filter type FDIR is not supported by this PMD",
+		      (void *)dev);
+		break;
+	default:
+		ERROR("%p: filter type (%d) not supported",
+		      (void *)dev, filter_type);
+		break;
+	}
+	return -ret;
+}
+
 static const struct eth_dev_ops mlx4_dev_ops = {
 	.dev_configure = mlx4_dev_configure,
 	.dev_start = mlx4_dev_start,
@@ -5231,6 +5156,7 @@ static const struct eth_dev_ops mlx4_dev_ops = {
 	.mac_addr_add = mlx4_mac_addr_add,
 	.mac_addr_set = mlx4_mac_addr_set,
 	.mtu_set = mlx4_dev_set_mtu,
+	.filter_ctrl = mlx4_dev_filter_ctrl,
 };
 
 /**
@@ -5361,35 +5287,44 @@ mlx4_getenv_int(const char *name)
 static void
 mlx4_dev_link_status_handler(void *);
 static void
-mlx4_dev_interrupt_handler(struct rte_intr_handle *, void *);
+mlx4_dev_interrupt_handler(void *);
 
 /**
- * Link status handler.
+ * Link/device status handler.
  *
  * @param priv
  *   Pointer to private structure.
  * @param dev
  *   Pointer to the rte_eth_dev structure.
+ * @param events
+ *   Pointer to event flags holder.
  *
  * @return
- *   Nonzero if the callback process can be called immediately.
+ *   Number of events
  */
 static int
-priv_dev_link_status_handler(struct priv *priv, struct rte_eth_dev *dev)
+priv_dev_status_handler(struct priv *priv, struct rte_eth_dev *dev,
+			uint32_t *events)
 {
 	struct ibv_async_event event;
 	int port_change = 0;
 	int ret = 0;
 
+	*events = 0;
 	/* Read all message and acknowledge them. */
 	for (;;) {
 		if (ibv_get_async_event(priv->ctx, &event))
 			break;
-
-		if (event.event_type == IBV_EVENT_PORT_ACTIVE ||
-		    event.event_type == IBV_EVENT_PORT_ERR)
+		if ((event.event_type == IBV_EVENT_PORT_ACTIVE ||
+		     event.event_type == IBV_EVENT_PORT_ERR) &&
+		    (priv->intr_conf.lsc == 1)) {
 			port_change = 1;
-		else
+			ret++;
+		} else if (event.event_type == IBV_EVENT_DEVICE_FATAL &&
+			   priv->intr_conf.rmv == 1) {
+			*events |= (1 << RTE_ETH_EVENT_INTR_RMV);
+			ret++;
+		} else
 			DEBUG("event type %d on port %d not handled",
 			      event.event_type, event.element.port_num);
 		ibv_ack_async_event(&event);
@@ -5407,8 +5342,9 @@ priv_dev_link_status_handler(struct priv *priv, struct rte_eth_dev *dev)
 			rte_eal_alarm_set(MLX4_ALARM_TIMEOUT_US,
 					  mlx4_dev_link_status_handler,
 					  dev);
-		} else
-			ret = 1;
+		} else {
+			*events |= (1 << RTE_ETH_EVENT_INTR_LSC);
+		}
 	}
 	return ret;
 }
@@ -5424,13 +5360,14 @@ mlx4_dev_link_status_handler(void *arg)
 {
 	struct rte_eth_dev *dev = arg;
 	struct priv *priv = dev->data->dev_private;
+	uint32_t events;
 	int ret;
 
 	priv_lock(priv);
 	assert(priv->pending_alarm == 1);
-	ret = priv_dev_link_status_handler(priv, dev);
+	ret = priv_dev_status_handler(priv, dev, &events);
 	priv_unlock(priv);
-	if (ret)
+	if (ret > 0 && events & (1 << RTE_ETH_EVENT_INTR_LSC))
 		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
 }
 
@@ -5443,18 +5380,31 @@ mlx4_dev_link_status_handler(void *arg)
  *   Callback argument.
  */
 static void
-mlx4_dev_interrupt_handler(struct rte_intr_handle *intr_handle, void *cb_arg)
+mlx4_dev_interrupt_handler(void *cb_arg)
 {
 	struct rte_eth_dev *dev = cb_arg;
 	struct priv *priv = dev->data->dev_private;
 	int ret;
+	uint32_t ev;
+	int i;
 
-	(void)intr_handle;
 	priv_lock(priv);
-	ret = priv_dev_link_status_handler(priv, dev);
+	ret = priv_dev_status_handler(priv, dev, &ev);
 	priv_unlock(priv);
-	if (ret)
-		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
+	if (ret > 0) {
+		for (i = RTE_ETH_EVENT_UNKNOWN;
+		     i < RTE_ETH_EVENT_MAX;
+		     i++) {
+			if (ev & (1 << i)) {
+				ev &= ~(1 << i);
+				_rte_eth_dev_callback_process(dev, i, NULL);
+				ret--;
+			}
+		}
+		if (ret)
+			WARN("%d event%s not processed", ret,
+			     (ret > 1 ? "s were" : " was"));
+	}
 }
 
 /**
@@ -5464,20 +5414,30 @@ mlx4_dev_interrupt_handler(struct rte_intr_handle *intr_handle, void *cb_arg)
  *   Pointer to private structure.
  * @param dev
  *   Pointer to the rte_eth_dev structure.
+ * @return
+ *   0 on success, negative errno value on failure.
  */
-static void
+static int
 priv_dev_interrupt_handler_uninstall(struct priv *priv, struct rte_eth_dev *dev)
 {
-	if (!dev->data->dev_conf.intr_conf.lsc)
-		return;
-	rte_intr_callback_unregister(&priv->intr_handle,
-				     mlx4_dev_interrupt_handler,
-				     dev);
-	if (priv->pending_alarm)
-		rte_eal_alarm_cancel(mlx4_dev_link_status_handler, dev);
-	priv->pending_alarm = 0;
+	int ret;
+
+	if (priv->intr_conf.lsc ||
+	    priv->intr_conf.rmv)
+		return 0;
+	ret = rte_intr_callback_unregister(&priv->intr_handle,
+					   mlx4_dev_interrupt_handler,
+					   dev);
+	if (ret < 0) {
+		ERROR("rte_intr_callback_unregister failed with %d"
+		      "%s%s%s", ret,
+		      (errno ? " (errno: " : ""),
+		      (errno ? strerror(errno) : ""),
+		      (errno ? ")" : ""));
+	}
 	priv->intr_handle.fd = 0;
 	priv->intr_handle.type = RTE_INTR_HANDLE_UNKNOWN;
+	return ret;
 }
 
 /**
@@ -5487,30 +5447,229 @@ priv_dev_interrupt_handler_uninstall(struct priv *priv, struct rte_eth_dev *dev)
  *   Pointer to private structure.
  * @param dev
  *   Pointer to the rte_eth_dev structure.
+ * @return
+ *   0 on success, negative errno value on failure.
  */
-static void
-priv_dev_interrupt_handler_install(struct priv *priv, struct rte_eth_dev *dev)
+static int
+priv_dev_interrupt_handler_install(struct priv *priv,
+				   struct rte_eth_dev *dev)
 {
-	int rc, flags;
+	int flags;
+	int rc;
 
-	if (!dev->data->dev_conf.intr_conf.lsc)
-		return;
+	/* Check whether the interrupt handler has already been installed
+	 * for either type of interrupt
+	 */
+	if (priv->intr_conf.lsc &&
+	    priv->intr_conf.rmv &&
+	    priv->intr_handle.fd)
+		return 0;
 	assert(priv->ctx->async_fd > 0);
 	flags = fcntl(priv->ctx->async_fd, F_GETFL);
 	rc = fcntl(priv->ctx->async_fd, F_SETFL, flags | O_NONBLOCK);
 	if (rc < 0) {
 		INFO("failed to change file descriptor async event queue");
 		dev->data->dev_conf.intr_conf.lsc = 0;
+		dev->data->dev_conf.intr_conf.rmv = 0;
+		return -errno;
 	} else {
 		priv->intr_handle.fd = priv->ctx->async_fd;
 		priv->intr_handle.type = RTE_INTR_HANDLE_EXT;
-		rte_intr_callback_register(&priv->intr_handle,
-					   mlx4_dev_interrupt_handler,
-					   dev);
+		rc = rte_intr_callback_register(&priv->intr_handle,
+						 mlx4_dev_interrupt_handler,
+						 dev);
+		if (rc) {
+			ERROR("rte_intr_callback_register failed "
+			      " (errno: %s)", strerror(errno));
+			return rc;
+		}
 	}
+	return 0;
 }
 
-static struct eth_driver mlx4_driver;
+/**
+ * Uninstall interrupt handler.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ * @param dev
+ *   Pointer to the rte_eth_dev structure.
+ * @return
+ *   0 on success, negative value on error.
+ */
+static int
+priv_dev_removal_interrupt_handler_uninstall(struct priv *priv,
+					    struct rte_eth_dev *dev)
+{
+	if (dev->data->dev_conf.intr_conf.rmv) {
+		priv->intr_conf.rmv = 0;
+		return priv_dev_interrupt_handler_uninstall(priv, dev);
+	}
+	return 0;
+}
+
+/**
+ * Uninstall interrupt handler.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ * @param dev
+ *   Pointer to the rte_eth_dev structure.
+ * @return
+ *   0 on success, negative value on error,
+ */
+static int
+priv_dev_link_interrupt_handler_uninstall(struct priv *priv,
+					  struct rte_eth_dev *dev)
+{
+	int ret = 0;
+
+	if (dev->data->dev_conf.intr_conf.lsc) {
+		priv->intr_conf.lsc = 0;
+		ret = priv_dev_interrupt_handler_uninstall(priv, dev);
+		if (ret)
+			return ret;
+	}
+	if (priv->pending_alarm)
+		if (rte_eal_alarm_cancel(mlx4_dev_link_status_handler,
+					 dev)) {
+			ERROR("rte_eal_alarm_cancel failed "
+			      " (errno: %s)", strerror(rte_errno));
+			return -rte_errno;
+		}
+	priv->pending_alarm = 0;
+	return 0;
+}
+
+/**
+ * Install link interrupt handler.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ * @param dev
+ *   Pointer to the rte_eth_dev structure.
+ * @return
+ *   0 on success, negative value on error.
+ */
+static int
+priv_dev_link_interrupt_handler_install(struct priv *priv,
+					struct rte_eth_dev *dev)
+{
+	int ret;
+
+	if (dev->data->dev_conf.intr_conf.lsc) {
+		ret = priv_dev_interrupt_handler_install(priv, dev);
+		if (ret)
+			return ret;
+		priv->intr_conf.lsc = 1;
+	}
+	return 0;
+}
+
+/**
+ * Install removal interrupt handler.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ * @param dev
+ *   Pointer to the rte_eth_dev structure.
+ * @return
+ *   0 on success, negative value on error.
+ */
+static int
+priv_dev_removal_interrupt_handler_install(struct priv *priv,
+					   struct rte_eth_dev *dev)
+{
+	int ret;
+
+	if (dev->data->dev_conf.intr_conf.rmv) {
+		ret = priv_dev_interrupt_handler_install(priv, dev);
+		if (ret)
+			return ret;
+		priv->intr_conf.rmv = 1;
+	}
+	return 0;
+}
+
+/**
+ * Verify and store value for device argument.
+ *
+ * @param[in] key
+ *   Key argument to verify.
+ * @param[in] val
+ *   Value associated with key.
+ * @param out
+ *   User data.
+ *
+ * @return
+ *   0 on success, negative errno value on failure.
+ */
+static int
+mlx4_arg_parse(const char *key, const char *val, void *out)
+{
+	struct mlx4_conf *conf = out;
+	unsigned long tmp;
+
+	errno = 0;
+	tmp = strtoul(val, NULL, 0);
+	if (errno) {
+		WARN("%s: \"%s\" is not a valid integer", key, val);
+		return -errno;
+	}
+	if (strcmp(MLX4_PMD_PORT_KVARG, key) == 0) {
+		if (tmp >= MLX4_PMD_MAX_PHYS_PORTS) {
+			ERROR("invalid port index %lu (max: %u)",
+				tmp, MLX4_PMD_MAX_PHYS_PORTS - 1);
+			return -EINVAL;
+		}
+		conf->active_ports |= 1 << tmp;
+	} else {
+		WARN("%s: unknown parameter", key);
+		return -EINVAL;
+	}
+	return 0;
+}
+
+/**
+ * Parse device parameters.
+ *
+ * @param devargs
+ *   Device arguments structure.
+ *
+ * @return
+ *   0 on success, negative errno value on failure.
+ */
+static int
+mlx4_args(struct rte_devargs *devargs, struct mlx4_conf *conf)
+{
+	struct rte_kvargs *kvlist;
+	unsigned int arg_count;
+	int ret = 0;
+	int i;
+
+	if (devargs == NULL)
+		return 0;
+	kvlist = rte_kvargs_parse(devargs->args, pmd_mlx4_init_params);
+	if (kvlist == NULL) {
+		ERROR("failed to parse kvargs");
+		return -EINVAL;
+	}
+	/* Process parameters. */
+	for (i = 0; pmd_mlx4_init_params[i]; ++i) {
+		arg_count = rte_kvargs_count(kvlist, MLX4_PMD_PORT_KVARG);
+		while (arg_count-- > 0) {
+			ret = rte_kvargs_process(kvlist, MLX4_PMD_PORT_KVARG,
+					mlx4_arg_parse, conf);
+			if (ret != 0)
+				goto free_kvlist;
+		}
+	}
+free_kvlist:
+	rte_kvargs_free(kvlist);
+	return ret;
+}
+
+static struct rte_pci_driver mlx4_driver;
 
 /**
  * DPDK callback to register a PCI device.
@@ -5534,12 +5693,15 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 	int err = 0;
 	struct ibv_context *attr_ctx = NULL;
 	struct ibv_device_attr device_attr;
+	struct mlx4_conf conf = {
+		.active_ports = 0,
+	};
 	unsigned int vf;
 	int idx;
 	int i;
 
 	(void)pci_drv;
-	assert(pci_drv == &mlx4_driver.pci_drv);
+	assert(pci_drv == &mlx4_driver);
 	/* Get mlx4_dev[] index. */
 	idx = mlx4_dev_idx(&pci_dev->addr);
 	if (idx == -1) {
@@ -5553,10 +5715,8 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 	list = ibv_get_device_list(&i);
 	if (list == NULL) {
 		assert(errno);
-		if (errno == ENOSYS) {
-			WARN("cannot list devices, is ib_uverbs loaded?");
-			return 0;
-		}
+		if (errno == ENOSYS)
+			ERROR("cannot list devices, is ib_uverbs loaded?");
 		return -errno;
 	}
 	assert(i >= 0);
@@ -5588,11 +5748,11 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		ibv_free_device_list(list);
 		switch (err) {
 		case 0:
-			WARN("cannot access device, is mlx4_ib loaded?");
-			return 0;
+			ERROR("cannot access device, is mlx4_ib loaded?");
+			return -ENODEV;
 		case EINVAL:
-			WARN("cannot use device, are drivers up to date?");
-			return 0;
+			ERROR("cannot use device, are drivers up to date?");
+			return -EINVAL;
 		}
 		assert(err > 0);
 		return -err;
@@ -5604,6 +5764,15 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		goto error;
 	INFO("%u port(s) detected", device_attr.phys_port_cnt);
 
+	if (mlx4_args(pci_dev->device.devargs, &conf)) {
+		ERROR("failed to process device arguments");
+		goto error;
+	}
+	/* Use all ports when none are defined */
+	if (conf.active_ports == 0) {
+		for (i = 0; i < MLX4_PMD_MAX_PHYS_PORTS; i++)
+			conf.active_ports |= 1 << i;
+	}
 	for (i = 0; i < device_attr.phys_port_cnt; i++) {
 		uint32_t port = i + 1; /* ports are indexed from one */
 		uint32_t test = (1 << i);
@@ -5617,6 +5786,9 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 #endif /* HAVE_EXP_QUERY_DEVICE */
 		struct ether_addr mac;
 
+		/* If port is not active, skip. */
+		if (!(conf.active_ports & (1 << i)))
+			continue;
 #ifdef HAVE_EXP_QUERY_DEVICE
 		exp_device_attr.comp_mask = IBV_EXP_DEVICE_ATTR_EXP_CAP_FLAGS;
 #ifdef RSS_SUPPORT
@@ -5828,7 +6000,7 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 
 		rte_eth_copy_pci_info(eth_dev, pci_dev);
 
-		eth_dev->driver = &mlx4_driver;
+		eth_dev->device->driver = &mlx4_driver.driver;
 
 		priv->dev = eth_dev;
 		eth_dev->dev_ops = &mlx4_dev_ops;
@@ -5836,6 +6008,9 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		/* Bring Ethernet device up. */
 		DEBUG("forcing Ethernet interface up");
 		priv_set_flags(priv, ~IFF_UP, IFF_UP);
+		/* Update link status once if waiting for LSC. */
+		if (eth_dev->data->dev_flags & RTE_ETH_DEV_INTR_LSC)
+			mlx4_link_update(eth_dev, 0);
 		continue;
 
 port_error:
@@ -5889,16 +6064,14 @@ static const struct rte_pci_id mlx4_pci_id_map[] = {
 	}
 };
 
-static struct eth_driver mlx4_driver = {
-	.pci_drv = {
-		.driver = {
-			.name = MLX4_DRIVER_NAME
-		},
-		.id_table = mlx4_pci_id_map,
-		.probe = mlx4_pci_probe,
-		.drv_flags = RTE_PCI_DRV_INTR_LSC,
+static struct rte_pci_driver mlx4_driver = {
+	.driver = {
+		.name = MLX4_DRIVER_NAME
 	},
-	.dev_private_size = sizeof(struct priv)
+	.id_table = mlx4_pci_id_map,
+	.probe = mlx4_pci_probe,
+	.drv_flags = RTE_PCI_DRV_INTR_LSC |
+		     RTE_PCI_DRV_INTR_RMV,
 };
 
 /**
@@ -5917,7 +6090,7 @@ rte_mlx4_pmd_init(void)
 	 */
 	setenv("RDMAV_HUGEPAGES_SAFE", "1", 1);
 	ibv_fork_init();
-	rte_eal_pci_register(&mlx4_driver.pci_drv);
+	rte_pci_register(&mlx4_driver);
 }
 
 RTE_PMD_EXPORT_NAME(net_mlx4, __COUNTER__);

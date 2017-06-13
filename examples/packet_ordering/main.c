@@ -216,7 +216,7 @@ parse_args(int argc, char **argv)
 	}
 
 	argv[optind-1] = prgname;
-	optind = 0; /* reset getopt lib */
+	optind = 1; /* reset getopt lib */
 	return 0;
 }
 
@@ -421,8 +421,8 @@ rx_thread(struct rte_ring *ring_out)
 					pkts[i++]->seqn = seqn++;
 
 				/* enqueue to rx_to_workers ring */
-				ret = rte_ring_enqueue_burst(ring_out, (void *) pkts,
-								nb_rx_pkts);
+				ret = rte_ring_enqueue_burst(ring_out,
+						(void *)pkts, nb_rx_pkts, NULL);
 				app_stats.rx.enqueue_pkts += ret;
 				if (unlikely(ret < nb_rx_pkts)) {
 					app_stats.rx.enqueue_failed_pkts +=
@@ -462,7 +462,7 @@ worker_thread(void *args_ptr)
 
 		/* dequeue the mbufs from rx_to_workers ring */
 		burst_size = rte_ring_dequeue_burst(ring_in,
-				(void *)burst_buffer, MAX_PKTS_BURST);
+				(void *)burst_buffer, MAX_PKTS_BURST, NULL);
 		if (unlikely(burst_size == 0))
 			continue;
 
@@ -473,7 +473,8 @@ worker_thread(void *args_ptr)
 			burst_buffer[i++]->port ^= xor_val;
 
 		/* enqueue the modified mbufs to workers_to_tx ring */
-		ret = rte_ring_enqueue_burst(ring_out, (void *)burst_buffer, burst_size);
+		ret = rte_ring_enqueue_burst(ring_out, (void *)burst_buffer,
+				burst_size, NULL);
 		__sync_fetch_and_add(&app_stats.wkr.enqueue_pkts, ret);
 		if (unlikely(ret < burst_size)) {
 			/* Return the mbufs to their respective pool, dropping packets */
@@ -509,7 +510,7 @@ send_thread(struct send_thread_args *args)
 
 		/* deque the mbufs from workers_to_tx ring */
 		nb_dq_mbufs = rte_ring_dequeue_burst(args->ring_in,
-				(void *)mbufs, MAX_PKTS_BURST);
+				(void *)mbufs, MAX_PKTS_BURST, NULL);
 
 		if (unlikely(nb_dq_mbufs == 0))
 			continue;
@@ -594,7 +595,7 @@ tx_thread(struct rte_ring *ring_in)
 
 		/* deque the mbufs from workers_to_tx ring */
 		dqnum = rte_ring_dequeue_burst(ring_in,
-				(void *)mbufs, MAX_PKTS_BURST);
+				(void *)mbufs, MAX_PKTS_BURST, NULL);
 
 		if (unlikely(dqnum == 0))
 			continue;

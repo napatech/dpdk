@@ -162,6 +162,12 @@ Run-time configuration
 
 - **ethtool** operations on related kernel interfaces also affect the PMD.
 
+- ``port`` parameter [int]
+
+  This parameter provides a physical port to probe and can be specified multiple
+  times for additional ports. All ports are probed by default if left
+  unspecified.
+
 Kernel module parameters
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -238,8 +244,8 @@ DPDK and must be installed separately:
 
 Currently supported by DPDK:
 
-- Mellanox OFED **4.0-1.0.1.0**.
-- Firmware version **2.40.5030**.
+- Mellanox OFED **4.0-2.0.0.0**.
+- Firmware version **2.40.7000**.
 - Supported architectures:  **x86_64** and **POWER8**.
 
 Getting Mellanox OFED
@@ -343,7 +349,7 @@ devices managed by librte_pmd_mlx4.
 
    .. code-block:: console
 
-      testpmd -c 0xff00 -n 4 -w 0000:83:00.0 -w 0000:84:00.0 -- --rxq=2 --txq=2 -i
+      testpmd -l 8-15 -n 4 -w 0000:83:00.0 -w 0000:84:00.0 -- --rxq=2 --txq=2 -i
 
    Example output:
 

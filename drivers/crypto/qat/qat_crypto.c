@@ -59,6 +59,8 @@
 #include <rte_string_fns.h>
 #include <rte_spinlock.h>
 #include <rte_hexdump.h>
+#include <rte_crypto_sym.h>
+#include <openssl/evp.h>
 
 #include "qat_logs.h"
 #include "qat_algs.h"
@@ -67,457 +69,144 @@
 
 #define BYTE_LENGTH    8
 
-static const struct rte_cryptodev_capabilities qat_pmd_capabilities[] = {
-	{	/* SHA1 HMAC */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
-			{.auth = {
-				.algo = RTE_CRYPTO_AUTH_SHA1_HMAC,
-				.block_size = 64,
-				.key_size = {
-					.min = 64,
-					.max = 64,
-					.increment = 0
-				},
-				.digest_size = {
-					.min = 20,
-					.max = 20,
-					.increment = 0
-				},
-				.aad_size = { 0 }
-			}, }
-		}, }
-	},
-	{	/* SHA224 HMAC */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
-			{.auth = {
-				.algo = RTE_CRYPTO_AUTH_SHA224_HMAC,
-				.block_size = 64,
-					.key_size = {
-					.min = 64,
-					.max = 64,
-					.increment = 0
-				},
-				.digest_size = {
-					.min = 28,
-					.max = 28,
-					.increment = 0
-				},
-				.aad_size = { 0 }
-			}, }
-		}, }
-	},
-	{	/* SHA256 HMAC */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
-			{.auth = {
-				.algo = RTE_CRYPTO_AUTH_SHA256_HMAC,
-				.block_size = 64,
-				.key_size = {
-					.min = 64,
-					.max = 64,
-					.increment = 0
-				},
-				.digest_size = {
-					.min = 32,
-					.max = 32,
-					.increment = 0
-				},
-				.aad_size = { 0 }
-			}, }
-		}, }
-	},
-	{	/* SHA384 HMAC */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
-			{.auth = {
-				.algo = RTE_CRYPTO_AUTH_SHA384_HMAC,
-				.block_size = 64,
-				.key_size = {
-					.min = 128,
-					.max = 128,
-					.increment = 0
-				},
-				.digest_size = {
-					.min = 48,
-					.max = 48,
-					.increment = 0
-					},
-				.aad_size = { 0 }
-			}, }
-		}, }
-	},
-	{	/* SHA512 HMAC */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
-			{.auth = {
-				.algo = RTE_CRYPTO_AUTH_SHA512_HMAC,
-				.block_size = 128,
-				.key_size = {
-					.min = 128,
-					.max = 128,
-					.increment = 0
-				},
-				.digest_size = {
-					.min = 64,
-					.max = 64,
-					.increment = 0
-				},
-				.aad_size = { 0 }
-			}, }
-		}, }
-	},
-	{	/* MD5 HMAC */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
-			{.auth = {
-				.algo = RTE_CRYPTO_AUTH_MD5_HMAC,
-				.block_size = 64,
-				.key_size = {
-					.min = 8,
-					.max = 64,
-					.increment = 8
-				},
-				.digest_size = {
-					.min = 16,
-					.max = 16,
-					.increment = 0
-				},
-				.aad_size = { 0 }
-			}, }
-		}, }
-	},
-	{	/* AES XCBC MAC */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
-			{.auth = {
-				.algo = RTE_CRYPTO_AUTH_AES_XCBC_MAC,
-				.block_size = 16,
-				.key_size = {
-					.min = 16,
-					.max = 16,
-					.increment = 0
-				},
-				.digest_size = {
-					.min = 16,
-					.max = 16,
-					.increment = 0
-				},
-				.aad_size = { 0 }
-			}, }
-		}, }
-	},
-	{	/* AES GCM (AUTH) */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
-			{.auth = {
-				.algo = RTE_CRYPTO_AUTH_AES_GCM,
-				.block_size = 16,
-				.key_size = {
-					.min = 16,
-					.max = 32,
-					.increment = 8
-				},
-				.digest_size = {
-					.min = 8,
-					.max = 16,
-					.increment = 4
-				},
-				.aad_size = {
-					.min = 8,
-					.max = 12,
-					.increment = 4
-				}
-			}, }
-		}, }
-	},
-	{	/* AES GMAC (AUTH) */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
-			{.auth = {
-				.algo = RTE_CRYPTO_AUTH_AES_GMAC,
-				.block_size = 16,
-				.key_size = {
-					.min = 16,
-					.max = 32,
-					.increment = 8
-				},
-				.digest_size = {
-					.min = 8,
-					.max = 16,
-					.increment = 4
-				},
-				.aad_size = {
-					.min = 1,
-					.max = 65535,
-					.increment = 1
-				}
-			}, }
-		}, }
-	},
-	{	/* SNOW 3G (UIA2) */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
-			{.auth = {
-				.algo = RTE_CRYPTO_AUTH_SNOW3G_UIA2,
-				.block_size = 16,
-				.key_size = {
-					.min = 16,
-					.max = 16,
-					.increment = 0
-				},
-				.digest_size = {
-					.min = 4,
-					.max = 4,
-					.increment = 0
-				},
-				.aad_size = {
-					.min = 16,
-					.max = 16,
-					.increment = 0
-				}
-			}, }
-		}, }
-	},
-	{	/* AES GCM (CIPHER) */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
-			{.cipher = {
-				.algo = RTE_CRYPTO_CIPHER_AES_GCM,
-				.block_size = 16,
-				.key_size = {
-					.min = 16,
-					.max = 32,
-					.increment = 8
-				},
-				.iv_size = {
-					.min = 12,
-					.max = 12,
-					.increment = 0
-				}
-			}, }
-		}, }
-	},
-	{	/* AES CBC */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
-			{.cipher = {
-				.algo = RTE_CRYPTO_CIPHER_AES_CBC,
-				.block_size = 16,
-				.key_size = {
-					.min = 16,
-					.max = 32,
-					.increment = 8
-				},
-				.iv_size = {
-					.min = 16,
-					.max = 16,
-					.increment = 0
-				}
-			}, }
-		}, }
-	},
-	{	/* SNOW 3G (UEA2) */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
-			{.cipher = {
-				.algo = RTE_CRYPTO_CIPHER_SNOW3G_UEA2,
-				.block_size = 16,
-				.key_size = {
-					.min = 16,
-					.max = 16,
-					.increment = 0
-				},
-				.iv_size = {
-					.min = 16,
-					.max = 16,
-					.increment = 0
-				}
-			}, }
-		}, }
-	},
-	{	/* AES CTR */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
-			{.cipher = {
-				.algo = RTE_CRYPTO_CIPHER_AES_CTR,
-				.block_size = 16,
-				.key_size = {
-					.min = 16,
-					.max = 32,
-					.increment = 8
-				},
-				.iv_size = {
-					.min = 16,
-					.max = 16,
-					.increment = 0
-				}
-			}, }
-		}, }
-	},
-	{	/* NULL (AUTH) */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
-			{.auth = {
-				.algo = RTE_CRYPTO_AUTH_NULL,
-				.block_size = 1,
-				.key_size = {
-					.min = 0,
-					.max = 0,
-					.increment = 0
-				},
-				.digest_size = {
-					.min = 0,
-					.max = 0,
-					.increment = 0
-				},
-				.aad_size = { 0 }
-			}, },
-		}, },
-	},
-	{	/* NULL (CIPHER) */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
-			{.cipher = {
-				.algo = RTE_CRYPTO_CIPHER_NULL,
-				.block_size = 1,
-				.key_size = {
-					.min = 0,
-					.max = 0,
-					.increment = 0
-				},
-				.iv_size = {
-					.min = 0,
-					.max = 0,
-					.increment = 0
-				}
-			}, },
-		}, }
-	},
-	{       /* KASUMI (F8) */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
-			{.cipher = {
-				.algo = RTE_CRYPTO_CIPHER_KASUMI_F8,
-				.block_size = 8,
-				.key_size = {
-					.min = 16,
-					.max = 16,
-					.increment = 0
-				},
-				.iv_size = {
-					.min = 8,
-					.max = 8,
-					.increment = 0
-				}
-			}, }
-		}, }
-	},
-	{       /* KASUMI (F9) */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
-			{.auth = {
-				.algo = RTE_CRYPTO_AUTH_KASUMI_F9,
-				.block_size = 8,
-				.key_size = {
-					.min = 16,
-					.max = 16,
-					.increment = 0
-				},
-				.digest_size = {
-					.min = 4,
-					.max = 4,
-					.increment = 0
-				},
-				.aad_size = {
-					.min = 8,
-					.max = 8,
-					.increment = 0
-				}
-			}, }
-		}, }
-	},
-	{	/* 3DES CBC */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
-			{.cipher = {
-				.algo = RTE_CRYPTO_CIPHER_3DES_CBC,
-				.block_size = 8,
-				.key_size = {
-					.min = 16,
-					.max = 24,
-					.increment = 8
-				},
-				.iv_size = {
-					.min = 8,
-					.max = 8,
-					.increment = 0
-				}
-			}, }
-		}, }
-	},
-	{	/* 3DES CTR */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
-			{.cipher = {
-				.algo = RTE_CRYPTO_CIPHER_3DES_CTR,
-				.block_size = 8,
-				.key_size = {
-					.min = 16,
-					.max = 24,
-					.increment = 8
-				},
-				.iv_size = {
-					.min = 8,
-					.max = 8,
-					.increment = 0
-				}
-			}, }
-		}, }
-	},
-	{	/* DES CBC */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
-			{.cipher = {
-				.algo = RTE_CRYPTO_CIPHER_DES_CBC,
-				.block_size = 8,
-				.key_size = {
-					.min = 8,
-					.max = 8,
-					.increment = 0
-				},
-				.iv_size = {
-					.min = 8,
-					.max = 8,
-					.increment = 0
-				}
-			}, }
-		}, }
-	},
-	RTE_CRYPTODEV_END_OF_CAPABILITIES_LIST()
-};
+static int
+qat_is_cipher_alg_supported(enum rte_crypto_cipher_algorithm algo,
+		struct qat_pmd_private *internals) {
+	int i = 0;
+	const struct rte_cryptodev_capabilities *capability;
+
+	while ((capability = &(internals->qat_dev_capabilities[i++]))->op !=
+			RTE_CRYPTO_OP_TYPE_UNDEFINED) {
+		if (capability->op != RTE_CRYPTO_OP_TYPE_SYMMETRIC)
+			continue;
+
+		if (capability->sym.xform_type != RTE_CRYPTO_SYM_XFORM_CIPHER)
+			continue;
+
+		if (capability->sym.cipher.algo == algo)
+			return 1;
+	}
+	return 0;
+}
+
+static int
+qat_is_auth_alg_supported(enum rte_crypto_auth_algorithm algo,
+		struct qat_pmd_private *internals) {
+	int i = 0;
+	const struct rte_cryptodev_capabilities *capability;
+
+	while ((capability = &(internals->qat_dev_capabilities[i++]))->op !=
+			RTE_CRYPTO_OP_TYPE_UNDEFINED) {
+		if (capability->op != RTE_CRYPTO_OP_TYPE_SYMMETRIC)
+			continue;
+
+		if (capability->sym.xform_type != RTE_CRYPTO_SYM_XFORM_AUTH)
+			continue;
+
+		if (capability->sym.auth.algo == algo)
+			return 1;
+	}
+	return 0;
+}
+
+/** Encrypt a single partial block
+ *  Depends on openssl libcrypto
+ *  Uses ECB+XOR to do CFB encryption, same result, more performant
+ */
+static inline int
+bpi_cipher_encrypt(uint8_t *src, uint8_t *dst,
+		uint8_t *iv, int ivlen, int srclen,
+		void *bpi_ctx)
+{
+	EVP_CIPHER_CTX *ctx = (EVP_CIPHER_CTX *)bpi_ctx;
+	int encrypted_ivlen;
+	uint8_t encrypted_iv[16];
+	int i;
+
+	/* ECB method: encrypt the IV, then XOR this with plaintext */
+	if (EVP_EncryptUpdate(ctx, encrypted_iv, &encrypted_ivlen, iv, ivlen)
+								<= 0)
+		goto cipher_encrypt_err;
+
+	for (i = 0; i < srclen; i++)
+		*(dst+i) = *(src+i)^(encrypted_iv[i]);
+
+	return 0;
+
+cipher_encrypt_err:
+	PMD_DRV_LOG(ERR, "libcrypto ECB cipher encrypt failed");
+	return -EINVAL;
+}
+
+/** Decrypt a single partial block
+ *  Depends on openssl libcrypto
+ *  Uses ECB+XOR to do CFB encryption, same result, more performant
+ */
+static inline int
+bpi_cipher_decrypt(uint8_t *src, uint8_t *dst,
+		uint8_t *iv, int ivlen, int srclen,
+		void *bpi_ctx)
+{
+	EVP_CIPHER_CTX *ctx = (EVP_CIPHER_CTX *)bpi_ctx;
+	int encrypted_ivlen;
+	uint8_t encrypted_iv[16];
+	int i;
+
+	/* ECB method: encrypt (not decrypt!) the IV, then XOR with plaintext */
+	if (EVP_EncryptUpdate(ctx, encrypted_iv, &encrypted_ivlen, iv, ivlen)
+								<= 0)
+		goto cipher_decrypt_err;
+
+	for (i = 0; i < srclen; i++)
+		*(dst+i) = *(src+i)^(encrypted_iv[i]);
+
+	return 0;
+
+cipher_decrypt_err:
+	PMD_DRV_LOG(ERR, "libcrypto ECB cipher encrypt for BPI IV failed");
+	return -EINVAL;
+}
+
+/** Creates a context in either AES or DES in ECB mode
+ *  Depends on openssl libcrypto
+ */
+static void *
+bpi_cipher_ctx_init(enum rte_crypto_cipher_algorithm cryptodev_algo,
+		enum rte_crypto_cipher_operation direction __rte_unused,
+					uint8_t *key)
+{
+	const EVP_CIPHER *algo = NULL;
+	EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+
+	if (ctx == NULL)
+		goto ctx_init_err;
+
+	if (cryptodev_algo == RTE_CRYPTO_CIPHER_DES_DOCSISBPI)
+		algo = EVP_des_ecb();
+	else
+		algo = EVP_aes_128_ecb();
+
+	/* IV will be ECB encrypted whether direction is encrypt or decrypt*/
+	if (EVP_EncryptInit_ex(ctx, algo, NULL, key, 0) != 1)
+		goto ctx_init_err;
+
+	return ctx;
+
+ctx_init_err:
+	if (ctx != NULL)
+		EVP_CIPHER_CTX_free(ctx);
+	return NULL;
+}
+
+/** Frees a context previously created
+ *  Depends on openssl libcrypto
+ */
+static void
+bpi_cipher_ctx_free(void *bpi_ctx)
+{
+	if (bpi_ctx != NULL)
+		EVP_CIPHER_CTX_free((EVP_CIPHER_CTX *)bpi_ctx);
+}
 
 static inline uint32_t
 adf_modulo(uint32_t data, uint32_t shift);
@@ -533,7 +222,11 @@ void qat_crypto_sym_clear_session(struct rte_cryptodev *dev,
 	phys_addr_t cd_paddr;
 
 	PMD_INIT_FUNC_TRACE();
-	if (session) {
+	if (sess) {
+		if (sess->bpi_ctx) {
+			bpi_cipher_ctx_free(sess->bpi_ctx);
+			sess->bpi_ctx = NULL;
+		}
 		cd_paddr = sess->cd_paddr;
 		memset(sess, 0, qat_crypto_sym_get_session_private_size(dev));
 		sess->cd_paddr = cd_paddr;
@@ -597,10 +290,8 @@ void *
 qat_crypto_sym_configure_session_cipher(struct rte_cryptodev *dev,
 		struct rte_crypto_sym_xform *xform, void *session_private)
 {
-	struct qat_pmd_private *internals = dev->data->dev_private;
-
 	struct qat_session *session = session_private;
-
+	struct qat_pmd_private *internals = dev->data->dev_private;
 	struct rte_crypto_cipher_xform *cipher_xform = NULL;
 
 	/* Get cipher xform from crypto xform chain */
@@ -674,13 +365,59 @@ qat_crypto_sym_configure_session_cipher(struct rte_cryptodev *dev,
 		}
 		session->qat_mode = ICP_QAT_HW_CIPHER_CTR_MODE;
 		break;
+	case RTE_CRYPTO_CIPHER_DES_DOCSISBPI:
+		session->bpi_ctx = bpi_cipher_ctx_init(
+					cipher_xform->algo,
+					cipher_xform->op,
+					cipher_xform->key.data);
+		if (session->bpi_ctx == NULL) {
+			PMD_DRV_LOG(ERR, "failed to create DES BPI ctx");
+			goto error_out;
+		}
+		if (qat_alg_validate_des_key(cipher_xform->key.length,
+				&session->qat_cipher_alg) != 0) {
+			PMD_DRV_LOG(ERR, "Invalid DES cipher key size");
+			goto error_out;
+		}
+		session->qat_mode = ICP_QAT_HW_CIPHER_CBC_MODE;
+		break;
+	case RTE_CRYPTO_CIPHER_AES_DOCSISBPI:
+		session->bpi_ctx = bpi_cipher_ctx_init(
+					cipher_xform->algo,
+					cipher_xform->op,
+					cipher_xform->key.data);
+		if (session->bpi_ctx == NULL) {
+			PMD_DRV_LOG(ERR, "failed to create AES BPI ctx");
+			goto error_out;
+		}
+		if (qat_alg_validate_aes_docsisbpi_key(cipher_xform->key.length,
+				&session->qat_cipher_alg) != 0) {
+			PMD_DRV_LOG(ERR, "Invalid AES DOCSISBPI key size");
+			goto error_out;
+		}
+		session->qat_mode = ICP_QAT_HW_CIPHER_CBC_MODE;
+		break;
+	case RTE_CRYPTO_CIPHER_ZUC_EEA3:
+		if (!qat_is_cipher_alg_supported(
+			cipher_xform->algo, internals)) {
+			PMD_DRV_LOG(ERR, "%s not supported on this device",
+				rte_crypto_cipher_algorithm_strings
+					[cipher_xform->algo]);
+			goto error_out;
+		}
+		if (qat_alg_validate_zuc_key(cipher_xform->key.length,
+				&session->qat_cipher_alg) != 0) {
+			PMD_DRV_LOG(ERR, "Invalid ZUC cipher key size");
+			goto error_out;
+		}
+		session->qat_mode = ICP_QAT_HW_CIPHER_ECB_MODE;
+		break;
 	case RTE_CRYPTO_CIPHER_3DES_ECB:
 	case RTE_CRYPTO_CIPHER_AES_ECB:
 	case RTE_CRYPTO_CIPHER_AES_CCM:
 	case RTE_CRYPTO_CIPHER_AES_F8:
 	case RTE_CRYPTO_CIPHER_AES_XTS:
 	case RTE_CRYPTO_CIPHER_ARC4:
-	case RTE_CRYPTO_CIPHER_ZUC_EEA3:
 		PMD_DRV_LOG(ERR, "Crypto QAT PMD: Unsupported Cipher alg %u",
 				cipher_xform->algo);
 		goto error_out;
@@ -703,7 +440,10 @@ qat_crypto_sym_configure_session_cipher(struct rte_cryptodev *dev,
 	return session;
 
 error_out:
-	rte_mempool_put(internals->sess_mp, session);
+	if (session->bpi_ctx) {
+		bpi_cipher_ctx_free(session->bpi_ctx);
+		session->bpi_ctx = NULL;
+	}
 	return NULL;
 }
 
@@ -712,12 +452,9 @@ void *
 qat_crypto_sym_configure_session(struct rte_cryptodev *dev,
 		struct rte_crypto_sym_xform *xform, void *session_private)
 {
-	struct qat_pmd_private *internals = dev->data->dev_private;
-
 	struct qat_session *session = session_private;
 
 	int qat_cmd_id;
-
 	PMD_INIT_FUNC_TRACE();
 
 	/* Get requested QAT command id */
@@ -759,10 +496,10 @@ qat_crypto_sym_configure_session(struct rte_cryptodev *dev,
 		session->qat_cmd);
 		goto error_out;
 	}
+
 	return session;
 
 error_out:
-	rte_mempool_put(internals->sess_mp, session);
 	return NULL;
 }
 
@@ -772,10 +509,10 @@ qat_crypto_sym_configure_session_auth(struct rte_cryptodev *dev,
 				struct qat_session *session_private)
 {
 
-	struct qat_pmd_private *internals = dev->data->dev_private;
 	struct qat_session *session = session_private;
 	struct rte_crypto_auth_xform *auth_xform = NULL;
 	struct rte_crypto_cipher_xform *cipher_xform = NULL;
+	struct qat_pmd_private *internals = dev->data->dev_private;
 	auth_xform = qat_get_auth_xform(xform);
 
 	switch (auth_xform->algo) {
@@ -815,6 +552,15 @@ qat_crypto_sym_configure_session_auth(struct rte_cryptodev *dev,
 	case RTE_CRYPTO_AUTH_KASUMI_F9:
 		session->qat_hash_alg = ICP_QAT_HW_AUTH_ALGO_KASUMI_F9;
 		break;
+	case RTE_CRYPTO_AUTH_ZUC_EIA3:
+		if (!qat_is_auth_alg_supported(auth_xform->algo, internals)) {
+			PMD_DRV_LOG(ERR, "%s not supported on this device",
+				rte_crypto_auth_algorithm_strings
+				[auth_xform->algo]);
+			goto error_out;
+		}
+		session->qat_hash_alg = ICP_QAT_HW_AUTH_ALGO_ZUC_3G_128_EIA3;
+		break;
 	case RTE_CRYPTO_AUTH_SHA1:
 	case RTE_CRYPTO_AUTH_SHA256:
 	case RTE_CRYPTO_AUTH_SHA512:
@@ -824,7 +570,6 @@ qat_crypto_sym_configure_session_auth(struct rte_cryptodev *dev,
 	case RTE_CRYPTO_AUTH_AES_CCM:
 	case RTE_CRYPTO_AUTH_AES_CMAC:
 	case RTE_CRYPTO_AUTH_AES_CBC_MAC:
-	case RTE_CRYPTO_AUTH_ZUC_EIA3:
 		PMD_DRV_LOG(ERR, "Crypto: Unsupported hash alg %u",
 				auth_xform->algo);
 		goto error_out;
@@ -857,8 +602,6 @@ qat_crypto_sym_configure_session_auth(struct rte_cryptodev *dev,
 	return session;
 
 error_out:
-	if (internals->sess_mp != NULL)
-		rte_mempool_put(internals->sess_mp, session);
 	return NULL;
 }
 
@@ -866,6 +609,113 @@ unsigned qat_crypto_sym_get_session_private_size(
 		struct rte_cryptodev *dev __rte_unused)
 {
 	return RTE_ALIGN_CEIL(sizeof(struct qat_session), 8);
+}
+
+static inline uint32_t
+qat_bpicipher_preprocess(struct qat_session *ctx,
+				struct rte_crypto_op *op)
+{
+	uint8_t block_len = qat_cipher_get_block_size(ctx->qat_cipher_alg);
+	struct rte_crypto_sym_op *sym_op = op->sym;
+	uint8_t last_block_len = sym_op->cipher.data.length % block_len;
+
+	if (last_block_len &&
+			ctx->qat_dir == ICP_QAT_HW_CIPHER_DECRYPT) {
+
+		/* Decrypt last block */
+		uint8_t *last_block, *dst, *iv;
+		uint32_t last_block_offset = sym_op->cipher.data.offset +
+				sym_op->cipher.data.length - last_block_len;
+		last_block = (uint8_t *) rte_pktmbuf_mtod_offset(sym_op->m_src,
+				uint8_t *, last_block_offset);
+
+		if (unlikely(sym_op->m_dst != NULL))
+			/* out-of-place operation (OOP) */
+			dst = (uint8_t *) rte_pktmbuf_mtod_offset(sym_op->m_dst,
+						uint8_t *, last_block_offset);
+		else
+			dst = last_block;
+
+		if (last_block_len < sym_op->cipher.data.length)
+			/* use previous block ciphertext as IV */
+			iv = last_block - block_len;
+		else
+			/* runt block, i.e. less than one full block */
+			iv = sym_op->cipher.iv.data;
+
+#ifdef RTE_LIBRTE_PMD_QAT_DEBUG_TX
+		rte_hexdump(stdout, "BPI: src before pre-process:", last_block,
+			last_block_len);
+		if (sym_op->m_dst != NULL)
+			rte_hexdump(stdout, "BPI: dst before pre-process:", dst,
+				last_block_len);
+#endif
+		bpi_cipher_decrypt(last_block, dst, iv, block_len,
+				last_block_len, ctx->bpi_ctx);
+#ifdef RTE_LIBRTE_PMD_QAT_DEBUG_TX
+		rte_hexdump(stdout, "BPI: src after pre-process:", last_block,
+			last_block_len);
+		if (sym_op->m_dst != NULL)
+			rte_hexdump(stdout, "BPI: dst after pre-process:", dst,
+				last_block_len);
+#endif
+	}
+
+	return sym_op->cipher.data.length - last_block_len;
+}
+
+static inline uint32_t
+qat_bpicipher_postprocess(struct qat_session *ctx,
+				struct rte_crypto_op *op)
+{
+	uint8_t block_len = qat_cipher_get_block_size(ctx->qat_cipher_alg);
+	struct rte_crypto_sym_op *sym_op = op->sym;
+	uint8_t last_block_len = sym_op->cipher.data.length % block_len;
+
+	if (last_block_len > 0 &&
+			ctx->qat_dir == ICP_QAT_HW_CIPHER_ENCRYPT) {
+
+		/* Encrypt last block */
+		uint8_t *last_block, *dst, *iv;
+		uint32_t last_block_offset;
+
+		last_block_offset = sym_op->cipher.data.offset +
+				sym_op->cipher.data.length - last_block_len;
+		last_block = (uint8_t *) rte_pktmbuf_mtod_offset(sym_op->m_src,
+				uint8_t *, last_block_offset);
+
+		if (unlikely(sym_op->m_dst != NULL))
+			/* out-of-place operation (OOP) */
+			dst = (uint8_t *) rte_pktmbuf_mtod_offset(sym_op->m_dst,
+						uint8_t *, last_block_offset);
+		else
+			dst = last_block;
+
+		if (last_block_len < sym_op->cipher.data.length)
+			/* use previous block ciphertext as IV */
+			iv = dst - block_len;
+		else
+			/* runt block, i.e. less than one full block */
+			iv = sym_op->cipher.iv.data;
+
+#ifdef RTE_LIBRTE_PMD_QAT_DEBUG_RX
+		rte_hexdump(stdout, "BPI: src before post-process:", last_block,
+			last_block_len);
+		if (sym_op->m_dst != NULL)
+			rte_hexdump(stdout, "BPI: dst before post-process:",
+					dst, last_block_len);
+#endif
+		bpi_cipher_encrypt(last_block, dst, iv, block_len,
+				last_block_len, ctx->bpi_ctx);
+#ifdef RTE_LIBRTE_PMD_QAT_DEBUG_RX
+		rte_hexdump(stdout, "BPI: src after post-process:", last_block,
+			last_block_len);
+		if (sym_op->m_dst != NULL)
+			rte_hexdump(stdout, "BPI: dst after post-process:", dst,
+				last_block_len);
+#endif
+	}
+	return sym_op->cipher.data.length - last_block_len;
 }
 
 uint16_t
@@ -950,14 +800,20 @@ qat_pmd_dequeue_op_burst(void *qp, struct rte_crypto_op **ops,
 #ifdef RTE_LIBRTE_PMD_QAT_DEBUG_RX
 		rte_hexdump(stdout, "qat_response:", (uint8_t *)resp_msg,
 			sizeof(struct icp_qat_fw_comn_resp));
+
 #endif
 		if (ICP_QAT_FW_COMN_STATUS_FLAG_OK !=
 				ICP_QAT_FW_COMN_RESP_CRYPTO_STAT_GET(
 					resp_msg->comn_hdr.comn_status)) {
 			rx_op->status = RTE_CRYPTO_OP_STATUS_AUTH_FAILED;
 		} else {
+			struct qat_session *sess = (struct qat_session *)
+						(rx_op->sym->session->_private);
+			if (sess->bpi_ctx)
+				qat_bpicipher_postprocess(sess, rx_op);
 			rx_op->status = RTE_CRYPTO_OP_STATUS_SUCCESS;
 		}
+
 		*(uint32_t *)resp_msg = ADF_RING_EMPTY_SIG;
 		queue->head = adf_modulo(queue->head +
 				queue->msg_size,
@@ -1085,37 +941,54 @@ qat_write_hw_desc_entry(struct rte_crypto_op *op, uint8_t *out_msg,
 
 		if (ctx->qat_cipher_alg ==
 					 ICP_QAT_HW_CIPHER_ALGO_SNOW_3G_UEA2 ||
-			ctx->qat_cipher_alg == ICP_QAT_HW_CIPHER_ALGO_KASUMI) {
+			ctx->qat_cipher_alg == ICP_QAT_HW_CIPHER_ALGO_KASUMI ||
+			ctx->qat_cipher_alg ==
+				ICP_QAT_HW_CIPHER_ALGO_ZUC_3G_128_EEA3) {
 
 			if (unlikely(
 				(cipher_param->cipher_length % BYTE_LENGTH != 0)
 				 || (cipher_param->cipher_offset
 							% BYTE_LENGTH != 0))) {
 				PMD_DRV_LOG(ERR,
-		  "SNOW3G/KASUMI in QAT PMD only supports byte aligned values");
+		  "SNOW3G/KASUMI/ZUC in QAT PMD only supports byte aligned values");
 				op->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
 				return -EINVAL;
 			}
 			cipher_len = op->sym->cipher.data.length >> 3;
 			cipher_ofs = op->sym->cipher.data.offset >> 3;
 
+		} else if (ctx->bpi_ctx) {
+			/* DOCSIS - only send complete blocks to device
+			 * Process any partial block using CFB mode.
+			 * Even if 0 complete blocks, still send this to device
+			 * to get into rx queue for post-process and dequeuing
+			 */
+			cipher_len = qat_bpicipher_preprocess(ctx, op);
+			cipher_ofs = op->sym->cipher.data.offset;
 		} else {
 			cipher_len = op->sym->cipher.data.length;
 			cipher_ofs = op->sym->cipher.data.offset;
 		}
 
 		/* copy IV into request if it fits */
-		if (op->sym->cipher.iv.length && (op->sym->cipher.iv.length <=
-				sizeof(cipher_param->u.cipher_IV_array))) {
-			rte_memcpy(cipher_param->u.cipher_IV_array,
-					op->sym->cipher.iv.data,
-					op->sym->cipher.iv.length);
-		} else {
-			ICP_QAT_FW_LA_CIPH_IV_FLD_FLAG_SET(
-					qat_req->comn_hdr.serv_specif_flags,
-					ICP_QAT_FW_CIPH_IV_64BIT_PTR);
-			cipher_param->u.s.cipher_IV_ptr =
-					op->sym->cipher.iv.phys_addr;
+		/*
+		 * If IV length is zero do not copy anything but still
+		 * use request descriptor embedded IV
+		 *
+		 */
+		if (op->sym->cipher.iv.length) {
+			if (op->sym->cipher.iv.length <=
+					sizeof(cipher_param->u.cipher_IV_array)) {
+				rte_memcpy(cipher_param->u.cipher_IV_array,
+						op->sym->cipher.iv.data,
+						op->sym->cipher.iv.length);
+			} else {
+				ICP_QAT_FW_LA_CIPH_IV_FLD_FLAG_SET(
+						qat_req->comn_hdr.serv_specif_flags,
+						ICP_QAT_FW_CIPH_IV_64BIT_PTR);
+				cipher_param->u.s.cipher_IV_ptr =
+						op->sym->cipher.iv.phys_addr;
+			}
 		}
 		min_ofs = cipher_ofs;
 	}
@@ -1123,11 +996,13 @@ qat_write_hw_desc_entry(struct rte_crypto_op *op, uint8_t *out_msg,
 	if (do_auth) {
 
 		if (ctx->qat_hash_alg == ICP_QAT_HW_AUTH_ALGO_SNOW_3G_UIA2 ||
-			ctx->qat_hash_alg == ICP_QAT_HW_AUTH_ALGO_KASUMI_F9) {
+			ctx->qat_hash_alg == ICP_QAT_HW_AUTH_ALGO_KASUMI_F9 ||
+			ctx->qat_hash_alg ==
+				ICP_QAT_HW_AUTH_ALGO_ZUC_3G_128_EIA3) {
 			if (unlikely((auth_param->auth_off % BYTE_LENGTH != 0)
 				|| (auth_param->auth_len % BYTE_LENGTH != 0))) {
 				PMD_DRV_LOG(ERR,
-		"For SNOW3G/KASUMI, QAT PMD only supports byte aligned values");
+		"For SNOW3G/KASUMI/ZUC, QAT PMD only supports byte aligned values");
 				op->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
 				return -EINVAL;
 			}
@@ -1146,6 +1021,12 @@ qat_write_hw_desc_entry(struct rte_crypto_op *op, uint8_t *out_msg,
 				}
 			}
 
+		} else if (ctx->qat_hash_alg ==
+					ICP_QAT_HW_AUTH_ALGO_GALOIS_128 ||
+				ctx->qat_hash_alg ==
+					ICP_QAT_HW_AUTH_ALGO_GALOIS_64) {
+			auth_ofs = op->sym->cipher.data.offset;
+			auth_len = op->sym->cipher.data.length;
 		} else {
 			auth_ofs = op->sym->auth.data.offset;
 			auth_len = op->sym->auth.data.length;
@@ -1326,10 +1207,11 @@ void qat_crypto_sym_session_init(struct rte_mempool *mp, void *sym_sess)
 		offsetof(struct rte_cryptodev_sym_session, _private);
 }
 
-int qat_dev_config(__rte_unused struct rte_cryptodev *dev)
+int qat_dev_config(__rte_unused struct rte_cryptodev *dev,
+		__rte_unused struct rte_cryptodev_config *config)
 {
 	PMD_INIT_FUNC_TRACE();
-	return -ENOTSUP;
+	return 0;
 }
 
 int qat_dev_start(__rte_unused struct rte_cryptodev *dev)
@@ -1369,7 +1251,7 @@ void qat_dev_info_get(__rte_unused struct rte_cryptodev *dev,
 				ADF_NUM_SYM_QPS_PER_BUNDLE *
 				ADF_NUM_BUNDLES_PER_DEV;
 		info->feature_flags = dev->feature_flags;
-		info->capabilities = qat_pmd_capabilities;
+		info->capabilities = internals->qat_dev_capabilities;
 		info->sym.max_nb_sessions = internals->max_nb_sessions;
 		info->dev_type = RTE_CRYPTODEV_QAT_SYM_PMD;
 	}
@@ -1393,9 +1275,9 @@ void qat_crypto_sym_stats_get(struct rte_cryptodev *dev,
 		}
 
 		stats->enqueued_count += qp[i]->stats.enqueued_count;
-		stats->dequeued_count += qp[i]->stats.enqueued_count;
+		stats->dequeued_count += qp[i]->stats.dequeued_count;
 		stats->enqueue_err_count += qp[i]->stats.enqueue_err_count;
-		stats->dequeue_err_count += qp[i]->stats.enqueue_err_count;
+		stats->dequeue_err_count += qp[i]->stats.dequeue_err_count;
 	}
 }
 
