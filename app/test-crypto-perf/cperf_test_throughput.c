@@ -514,5 +514,7 @@ cperf_throughput_test_destructor(void *arg)
 	if (ctx == NULL)
 		return;
 
+	rte_cryptodev_stop(ctx->dev_id);
+
 	cperf_throughput_test_free(ctx, ctx->options->pool_sz);
 }
