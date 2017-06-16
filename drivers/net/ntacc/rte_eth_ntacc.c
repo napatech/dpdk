@@ -392,8 +392,6 @@ static int eth_dev_start(struct rte_eth_dev *dev)
   uint8_t list_queues[256];
 #endif
 
-  rte_log_set_global_level(RTE_LOG_DEBUG);
-
 #ifndef DO_NOT_CREATE_DEFAULT_FILTER
   // Build default flow
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
@@ -416,7 +414,7 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     // Set the stream IDs
     CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
     // If RSS is used, then set the Hash mode
-    if (CreateHash(&ntpl_buf[strlen(ntpl_buf)], internals->rss_hf, internals, NULL, 62) != 0) {
+    if (CreateHash(internals->rss_hf, internals, NULL, 62) != 0) {
       RTE_LOG(ERR, PMD, "Failed to create hash function eth_dev_start\n");
       goto StartError;
     }
@@ -1308,15 +1306,13 @@ static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
   NtInfo_t info;
   struct rte_eth_link pmd_link;
   const char *name;
-  unsigned int numa_node;
+  int numa_node;
 #ifndef USE_SW_STAT
   NtStatistics_t statData;
 #endif
 
-  numa_node = vdev->device.numa_node;
+  numa_node = rte_socket_id();
   name = rte_vdev_device_name(vdev);
-
-  RTE_LOG(DEBUG, PMD, "Creating ntacc-backend %s ethdev on numa socket %u\n", name, numa_node);
 
   assert(port < MAX_NTACC_PORTS);
 
@@ -1336,15 +1332,13 @@ static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
     iRet = 1;
     goto error;
   }
-  
-  /* reserve an ethdev entry */
-	*eth_dev = rte_eth_vdev_allocate(vdev, sizeof(*internals));
-  if (*eth_dev == NULL) {
-    RTE_LOG(ERR, PMD, "ERROR: Failed to allocate ether device\n");
+
+  internals = rte_zmalloc_socket(name, sizeof(*internals), 0, numa_node);
+  if (internals == NULL) {
+    RTE_LOG(ERR, PMD, "ERROR: Failed to allocate memory\n");
     iRet = 1;
     goto error;
   }
-  internals = (*eth_dev)->data->dev_private;
 
   if (strlen(ntpl_file) > 0) {
     internals->ntpl_file  = rte_zmalloc_socket(name, strlen(ntpl_file) + 1, 0, numa_node);
@@ -1354,6 +1348,14 @@ static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
       goto error;
     }
     strcpy(internals->ntpl_file, ntpl_file);
+  }
+
+  /* reserve an ethdev entry */
+  *eth_dev = rte_eth_vdev_allocate(vdev, sizeof(*internals));
+  if (*eth_dev == NULL) {
+    RTE_LOG(ERR, PMD, "ERROR: Failed to allocate ether device\n");
+    iRet = 1;
+    goto error;
   }
 
   /* now put it all together
@@ -1444,12 +1446,6 @@ static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
     goto error;
   }
   
-  if (!CheckFeatureLevel(internals->featureLevel)) {
-    RTE_LOG(ERR, PMD, ">>> Error: Adapter %u or driver is not supported\n", internals->adapterNo);
-    iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
-    goto error;
-  }
-  
   if (RTE_ETHDEV_QUEUE_STAT_CNTRS > STREAMIDS_PER_PORT) {
     RTE_LOG(ERR, PMD, ">>> Error: This adapter can only support %u queues\n", STREAMIDS_PER_PORT);
     RTE_LOG(ERR, PMD, "           Set RTE_ETHDEV_QUEUE_STAT_CNTRS to %u or less\n", STREAMIDS_PER_PORT);
@@ -1507,7 +1503,8 @@ static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
   strcpy(internals->driverName, "net_ntacc");
 
   device->numa_node = numa_node;
-
+  data->dev_private = internals;
+  data->port_id = (*eth_dev)->data->port_id;
   data->dev_link = pmd_link;
   data->mac_addrs = &eth_addr[port];
   data->numa_node = numa_node;
@@ -1711,8 +1708,19 @@ static int rte_pmd_ntacc_dev_probe(struct rte_vdev_device *vdev)
 
   char ntplStr[MAX_NTPL_NAME] = { 0 };
 
+  rte_log_set_global_level(RTE_LOG_DEBUG);
+
+  vdev->device.numa_node = rte_socket_id();
   name = rte_vdev_device_name(vdev);
-  RTE_LOG(DEBUG, PMD, "Initializing pmd_ntacc %s for %s\n", rte_version(), name);
+
+  if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+    RTE_LOG(DEBUG, PMD, "pmd_ntacc %s %s must run as a primary process\n", name, rte_version());
+    return -1;
+  }
+
+  RTE_LOG(DEBUG, PMD, "Initializing pmd_ntacc %s for %s on numa %d\n", rte_version(), 
+                                                                       name, 
+                                                                       vdev->device.numa_node);
 
   kvlist = rte_kvargs_parse(rte_vdev_device_args(vdev), valid_arguments);
   if (kvlist == NULL) {
@@ -1756,10 +1764,9 @@ static int rte_pmd_ntacc_dev_probe(struct rte_vdev_device *vdev)
       return -1;
     }
   }
-
   eth_dev->rx_pkt_burst = eth_ntacc_rx;
   eth_dev->tx_pkt_burst = eth_ntacc_tx;
-
+  
   first = 0;
   return 0;
 }
@@ -1768,7 +1775,7 @@ static int rte_pmd_ntacc_dev_remove(struct rte_vdev_device *dev)
 {
   struct rte_eth_dev *eth_dev = NULL;
 
-  RTE_LOG(DEBUG, PMD, "Closing %s on numa socket %u\n", rte_vdev_device_name(dev), rte_socket_id());
+  RTE_LOG(DEBUG, PMD, "Closing %s on numa socket %u\n", rte_vdev_device_name(dev), dev->device.numa_node);
 
   /* reserve an ethdev entry */
   eth_dev = rte_eth_dev_allocated(rte_vdev_device_name(dev));
@@ -1779,7 +1786,6 @@ static int rte_pmd_ntacc_dev_remove(struct rte_vdev_device *dev)
     }
     rte_free(eth_dev->data->dev_private);
     rte_free(eth_dev->data);
-    rte_free(eth_dev->device);
     rte_eth_dev_release_port(eth_dev);
   }
 
