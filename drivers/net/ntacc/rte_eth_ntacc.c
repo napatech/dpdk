@@ -415,7 +415,7 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     // Set the stream IDs
     CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
     // If RSS is used, then set the Hash mode
-    if (CreateHash(&ntpl_buf[strlen(ntpl_buf)], internals->rss_hf, internals, NULL, 62) != 0) {
+    if (CreateHash(internals->rss_hf, internals, NULL, 62) != 0) {
       RTE_LOG(ERR, PMD, "Failed to create hash function eth_dev_start\n");
       goto StartError;
     }
@@ -1440,12 +1440,6 @@ static int rte_pmd_init_internals(const char *name,
       RTE_LOG(ERR, PMD, "       %03d-%04d-%02d-%02d-%02d\n", 
          supportedAdapters[i].item, supportedAdapters[i].product, supportedAdapters[i].ver, supportedAdapters[i].rev, supportedAdapters[i].build);
     }
-    iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
-    goto error;
-  }
-  
-  if (!CheckFeatureLevel(internals->featureLevel)) {
-    RTE_LOG(ERR, PMD, ">>> Error: Adapter %u or driver is not supported\n", internals->adapterNo);
     iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
     goto error;
   }
