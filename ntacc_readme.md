@@ -141,6 +141,7 @@ Following rte_flow filters are supported:
 |`RTE_FLOW_ITEM_TYPE_VLAN`  | `tpid`<br>`tci`                                                                                                                                                                 |
 |`RTE_FLOW_ITEM_TYPE_NVGRE` | Only packet type = `NVGRE`                                                                                                                                                    |
 |`RTE_FLOW_ITEM_TYPE_VXLAN` | Only packet type = `VXLAN`                                                                                                                                                    |
+| `RTE_FLOW_ITEM_TYPE_GRE`  | `c_rsvd0_ver` (only version = bit b0-b2)
 
 The following rte_flow filters are added by Napatech and are not a part of the main DPDK:
 
