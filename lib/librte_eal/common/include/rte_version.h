@@ -93,7 +93,7 @@ extern "C" {
 /**
 * Extra Napatech string to be appended to version number
 */
-#define RTE_NT_VER_SUFFIX "dev"
+#define RTE_NT_VER_SUFFIX ""
 
 /**
  * Macro to compute a version number usable for comparisons
