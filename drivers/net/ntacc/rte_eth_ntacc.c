@@ -1054,6 +1054,17 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       }
       break;
 
+    case 	RTE_FLOW_ITEM_TYPE_GRE:
+      if (SetGreFilter(&ntpl_buf[strlen(ntpl_buf)], 
+                       &filterContinue, 
+                       items,
+                       &typeMask) != 0) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up VLAN filter");
+        goto FlowError;
+      }
+      tunnel = true;
+      break;
+
     case RTE_FLOW_ITEM_TYPE_GREv0:
     case RTE_FLOW_ITEM_TYPE_GREv1:
     case RTE_FLOW_ITEM_TYPE_GTPv1_U:

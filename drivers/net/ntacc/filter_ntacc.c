@@ -2037,3 +2037,12 @@ int SetTunnelFilter(char *ntpl_buf,
   return 0;
 }
 
+int SetGreFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, uint64_t *typeMask)
+{
+  const struct rte_flow_item_gre *spec = (const struct rte_flow_item_gre *)item->spec;
+  int version;
+
+  version = spec->c_rsvd0_ver & 0x7;
+  return SetTunnelFilter(ntpl_buf, fc, version, GRE_TUNNEL_TYPE, typeMask);
+}
+

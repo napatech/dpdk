@@ -49,6 +49,7 @@ int SetSCTPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
 int SetTCPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel, uint64_t *typeMask);
 int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask);
 int SetVlanFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask);
+int SetGreFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, uint64_t *typeMask);
 
 int SetTunnelFilter(char *ntpl_buf, bool *fc, int version, int type, uint64_t *typeMask);
 
