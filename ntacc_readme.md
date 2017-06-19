@@ -514,3 +514,129 @@ static struct rte_flow *SetupFilter(uint8_t portid, uint8_t nbQueues)
 }
 ```
 
+## Filter creation example - Multiple 5tuple filter (IPv4 addresses and TCP ports)
+The following example shows how it is possible to create a 5tuple filter matching on a large number of IPv4 addresses and TCP ports. 
+
+The commands used in the loop to program the IP addresses and tcp ports must be the same for all addresses and ports. The only things that must be changed are the values for IP addresses and tcp ports.
+
+The driver is then able to optimize the final filter making it possible to have up to 20.000 filter items. 
+
+> Note: The number of possible filter items depends on the filter made and will vary depending on the complexity of the filter. 
+
+> Note: The way the filter in this example is made, can be used for all rte_flow_items as long as only the filter values are changed.
+
+```C++
+struct ipv4_adresses_s {
+	uint32_t src_addr;		
+	uint32_t dst_addr;		
+	uint16_t tcp_src;
+	uint16_t tcp_dst;
+};
+
+#define NB_ADDR 10
+static struct ipv4_adresses_s ip_table[NB_ADDR] = {
+	{ IPv4(10,10,10,1),  IPv4(172,217,19,206), 32414, 80 },
+	{ IPv4(10,10,10,2),  IPv4(172,217,19,206), 30414, 80  },
+	{ IPv4(10,10,10,3),  IPv4(172,217,19,206),  2373, 80  },
+	{ IPv4(10,10,10,4),  IPv4(172,217,19,206), 42311, 80  },
+	{ IPv4(10,10,10,5),  IPv4(172,217,19,206),   414, 80  },
+	{ IPv4(10,10,10,6),  IPv4(172,217,19,206),  2514, 80  },
+	{ IPv4(10,10,10,7),  IPv4(172,217,19,206), 35634, 80  },
+	{ IPv4(10,10,10,8),  IPv4(172,217,19,206), 35779, 80  },
+	{ IPv4(10,10,10,9),  IPv4(172,217,19,206), 23978, 80  },
+	{ IPv4(10,10,10,10), IPv4(172,217,19,206), 19634, 80  },
+};
+
+static int SetupFilter(uint8_t portid, struct rte_flow_error *error)
+{
+	struct rte_flow_attr attr;
+	struct rte_flow_item pattern[100];
+	struct rte_flow_action actions[10];
+	struct rte_eth_hash_filter_info info;
+	struct rte_flow *flow;
+
+	// Pattern struct
+	struct rte_flow_item_ipv4 ipv4_spec;
+	memset(&ipv4_spec, 0, sizeof(struct rte_flow_item_ipv4));
+
+	static struct rte_flow_item_tcp tcp_spec;
+	memset(&tcp_spec, 0, sizeof(struct rte_flow_item_tcp));
+
+	// Action struct
+	struct rte_eth_rss_conf rss_conf;
+
+	struct {
+		struct rte_flow_action_rss rss;
+		uint16_t queue[4];
+	} test;
+
+	static struct rte_flow_action_mark mark;
+
+	/* Poisoning to make sure PMDs update it in case of error. */
+	memset(error, 0x22, sizeof(struct rte_flow_error));
+
+	memset(&attr, 0, sizeof(attr));
+	attr.ingress = 1;
+	attr.priority = 1;
+
+	for (unsigned i = 0; i < NB_ADDR; i++) {
+		uint32_t patternCount = 0;
+		memset(&pattern, 0, sizeof(pattern));
+
+		ipv4_spec.hdr.src_addr = rte_cpu_to_be_32(ip_table[i].src_addr);
+		ipv4_spec.hdr.dst_addr = rte_cpu_to_be_32(ip_table[i].dst_addr);
+		pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_IPV4;
+		pattern[patternCount].spec = &ipv4_spec;
+		patternCount++;
+
+		tcp_spec.hdr.src_port = rte_cpu_to_be_16(ip_table[i].tcp_src);
+		tcp_spec.hdr.dst_port = rte_cpu_to_be_16(ip_table[i].tcp_dst);
+		pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_TCP;
+		pattern[patternCount].spec = &tcp_spec;
+		patternCount++;
+
+		pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_END; 
+		patternCount++;
+
+		uint32_t actionCount = 0;
+		memset(&actions, 0, sizeof(actions));
+
+		rss_conf.rss_key = NULL;
+		rss_conf.rss_key_len = 0;
+		rss_conf.rss_hf = ETH_RSS_NONFRAG_IPV4_TCP;
+
+		test.rss.num = 4;
+		test.rss.queue[0] = 0;
+		test.rss.queue[1] = 1;
+		test.rss.queue[2] = 2;
+		test.rss.queue[3] = 3;
+		test.rss.rss_conf = &rss_conf;
+		actions[actionCount].type = RTE_FLOW_ACTION_TYPE_RSS;
+		actions[actionCount].conf = &test.rss;
+		actionCount++;
+
+		mark.id = 123;
+		actions[actionCount].type = RTE_FLOW_ACTION_TYPE_MARK;
+		actions[actionCount].conf = &mark;
+		actionCount++;
+
+		actions[actionCount].type = RTE_FLOW_ACTION_TYPE_END;
+		actionCount++;
+
+		memset(&info, 0, sizeof(info));
+		info.info_type = RTE_ETH_HASH_FILTER_SYM_HASH_ENA_PER_PORT;
+		info.info.enable = 0;
+		if (rte_eth_dev_filter_ctrl(0, RTE_ETH_FILTER_HASH, RTE_ETH_FILTER_SET, &info) < 0) {
+			printf("Cannot set symmetric hash enable per port on port %u\n", 0);
+			return -1;
+		}
+		flow = rte_flow_create(portid, &attr, pattern, actions, error);
+		if (flow == NULL) {
+			return -1;
+		}
+		
+	}
+	return 0;
+}
+
+```

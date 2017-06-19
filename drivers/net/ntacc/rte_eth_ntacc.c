@@ -375,8 +375,6 @@ static uint16_t eth_ntacc_tx(void *queue,
   return i;
 }
 
-#define DO_NOT_CREATE_DEFAULT_FILTER
-
 static int eth_dev_start(struct rte_eth_dev *dev)
 {
   struct pmd_internals *internals = dev->data->dev_private;
