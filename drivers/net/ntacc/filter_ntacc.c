@@ -624,14 +624,14 @@ void DeleteKeyset(int key, struct pmd_internals *internals) {
   }
 }
 
-static int FindKeyset(uint64_t typeMask, uint8_t *plist_queues, uint8_t nb_queues) 
+static int FindKeyset(uint64_t typeMask, uint8_t *plist_queues, uint8_t nb_queues, uint8_t port) 
 {
   struct filter_keyset_s *key_set;
   int match = 0;
   int i;
 
   LIST_FOREACH(key_set, &filter_keyset, next) {
-    if (key_set->typeMask == typeMask && nb_queues == key_set->nb_queues) {
+    if (key_set->typeMask == typeMask && nb_queues == key_set->nb_queues && key_set->port == port) {
       match = 0;
       for (i = 0; i < nb_queues; i++) {
         if (plist_queues[i] == key_set->list_queues[i]) {
@@ -689,7 +689,7 @@ int CreateOptimizedFilter(char *ntpl_buf, struct pmd_internals *internals, struc
   }
 
   first = true;
-  if (LIST_EMPTY(&filter_keyset) || ((key = FindKeyset(typeMask, plist_queues, nb_queues)) == 0)) {
+  if (LIST_EMPTY(&filter_keyset) || ((key = FindKeyset(typeMask, plist_queues, nb_queues, internals->port)) == 0)) {
     struct filter_keyset_s *key_set = malloc(sizeof(struct filter_keyset_s));
     if (!key_set) {
       iRet = -1;
@@ -754,6 +754,7 @@ int CreateOptimizedFilter(char *ntpl_buf, struct pmd_internals *internals, struc
       key_set->list_queues[i] = plist_queues[i];
     }
     key_set->nb_queues = nb_queues;
+    key_set->port = internals->port;
     LIST_INSERT_HEAD(&filter_keyset, key_set, next);
     *reuse = false;
   }
