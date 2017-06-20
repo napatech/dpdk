@@ -34,7 +34,7 @@
 #include <time.h>
 #include <linux/limits.h>
 #include <sys/param.h>
-#include <sys/stat.h> 
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <dlfcn.h>
@@ -85,7 +85,7 @@ struct {
   uint32_t ver:8;
   uint32_t rev:8;
   uint32_t build:10;
-} supportedAdapters[NB_SUPPORTED_FPGAS] = 
+} supportedAdapters[NB_SUPPORTED_FPGAS] =
 {
   { 200, 9500, 8, 6, 0 },
   { 200, 9501, 8, 6, 0 },
@@ -140,12 +140,12 @@ static struct ether_addr eth_addr[MAX_NTACC_PORTS];
 
 static inline void priv_lock(struct pmd_internals *internals)
 {
-	rte_spinlock_lock(&internals->lock);
+  rte_spinlock_lock(&internals->lock);
 }
 
 static inline void priv_unlock(struct pmd_internals *internals)
 {
-	rte_spinlock_unlock(&internals->lock);
+  rte_spinlock_unlock(&internals->lock);
 }
 
 static void _write_to_file(int fd, const char *buffer)
@@ -176,7 +176,7 @@ int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo, struct pmd_internals *in
     _write_to_file(fd, ntplStr); _write_to_file(fd, "\n");
     close(fd);
   }
-  
+
   RTE_LOG(DEBUG, PMD, "NTPL : %s\n", ntplStr);
   if((status = (*_NT_NTPL)(hCfgStream, ntplStr, ntplInfo, NT_NTPL_PARSER_VALIDATE_NORMAL)) != NT_SUCCESS) {
     // Get the status code as text
@@ -388,8 +388,6 @@ static int eth_dev_start(struct rte_eth_dev *dev)
   char *ntpl_buf = NULL;
   uint8_t list_queues[256];
 #endif
-
-  rte_set_log_level(RTE_LOG_DEBUG);
 
 #ifndef DO_NOT_CREATE_DEFAULT_FILTER
   // Build default flow
@@ -660,7 +658,7 @@ static void eth_queue_release(void *q __rte_unused)
 {
 }
 
-static int eth_link_update(struct rte_eth_dev *dev, 
+static int eth_link_update(struct rte_eth_dev *dev,
                            int wait_to_complete  __rte_unused)
 {
   NtInfo_t info;
@@ -884,7 +882,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   }
 
   for (; actions->type != RTE_FLOW_ACTION_TYPE_END; ++actions) {
-    switch (actions->type) 
+    switch (actions->type)
     {
     default:
       rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, ActionErrorString(actions->type));
@@ -945,7 +943,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       goto FlowError;
     }
   }
-  
+
   // Set the priority
   sprintf(ntpl_buf, "assign[priority=%u;Descriptor=DYN2;", attr->priority);
 
@@ -953,10 +951,10 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   if (color != -1) {
     sprintf(&ntpl_buf[strlen(ntpl_buf)], "color=%i;", color);
   }
-  
+
   // Set the stream IDs
   CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
-  
+
   // Set the port number
   sprintf(&ntpl_buf[strlen(ntpl_buf)], "]=port==%u", internals->port);
 
@@ -977,8 +975,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       break;
 
       case RTE_FLOW_ITEM_TYPE_IPV4:
-        if (SetIPV4Filter(&ntpl_buf[strlen(ntpl_buf)], 
-                          &filterContinue, 
+        if (SetIPV4Filter(&ntpl_buf[strlen(ntpl_buf)],
+                          &filterContinue,
                           items,
                           tunnel,
                           &typeMask) != 0) {
@@ -988,8 +986,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         break;
 
     case RTE_FLOW_ITEM_TYPE_IPV6:
-      if (SetIPV6Filter(&ntpl_buf[strlen(ntpl_buf)], 
-                        &filterContinue, 
+      if (SetIPV6Filter(&ntpl_buf[strlen(ntpl_buf)],
+                        &filterContinue,
                         items,
                         tunnel,
                         &typeMask) != 0) {
@@ -999,8 +997,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       break;
 
       case RTE_FLOW_ITEM_TYPE_SCTP:
-        if (SetSCTPFilter(&ntpl_buf[strlen(ntpl_buf)], 
-                          &filterContinue, 
+        if (SetSCTPFilter(&ntpl_buf[strlen(ntpl_buf)],
+                          &filterContinue,
                           items,
                           tunnel,
                           &typeMask) != 0) {
@@ -1010,8 +1008,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         break;
 
       case RTE_FLOW_ITEM_TYPE_TCP:
-        if (SetTCPFilter(&ntpl_buf[strlen(ntpl_buf)], 
-                          &filterContinue, 
+        if (SetTCPFilter(&ntpl_buf[strlen(ntpl_buf)],
+                          &filterContinue,
                           items,
                           tunnel,
                           &typeMask) != 0) {
@@ -1021,8 +1019,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         break;
 
     case RTE_FLOW_ITEM_TYPE_UDP:
-      if (SetUDPFilter(&ntpl_buf[strlen(ntpl_buf)], 
-                        &filterContinue, 
+      if (SetUDPFilter(&ntpl_buf[strlen(ntpl_buf)],
+                        &filterContinue,
                         items,
                         tunnel,
                         &typeMask) != 0) {
@@ -1032,8 +1030,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       break;
 
       case RTE_FLOW_ITEM_TYPE_ICMP:
-        if (SetICMPFilter(&ntpl_buf[strlen(ntpl_buf)], 
-                          &filterContinue, 
+        if (SetICMPFilter(&ntpl_buf[strlen(ntpl_buf)],
+                          &filterContinue,
                           items,
                           tunnel,
                           &typeMask) != 0) {
@@ -1043,8 +1041,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         break;
 
     case RTE_FLOW_ITEM_TYPE_VLAN:
-      if (SetVlanFilter(&ntpl_buf[strlen(ntpl_buf)], 
-                        &filterContinue, 
+      if (SetVlanFilter(&ntpl_buf[strlen(ntpl_buf)],
+                        &filterContinue,
                         items,
                         tunnel,
                         &typeMask) != 0) {
@@ -1094,8 +1092,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         goto FlowError;
       }
 
-      if (SetTunnelFilter(&ntpl_buf[strlen(ntpl_buf)], 
-                        &filterContinue, 
+      if (SetTunnelFilter(&ntpl_buf[strlen(ntpl_buf)],
+                        &filterContinue,
                         version,
                         tunneltype,
                         &typeMask) != 0) {
@@ -1186,11 +1184,11 @@ static int _hash_filter_ctrl(struct rte_eth_dev *dev,
 {
   struct pmd_internals *internals = dev->data->dev_private;
   struct rte_eth_hash_filter_info *info = (struct rte_eth_hash_filter_info *)arg;
-	int ret = 0;
+  int ret = 0;
 
-	switch (filter_op) {
-	case RTE_ETH_FILTER_NOP:
-		break;
+  switch (filter_op) {
+  case RTE_ETH_FILTER_NOP:
+    break;
   case RTE_ETH_FILTER_SET:
     if (info->info_type == RTE_ETH_HASH_FILTER_SYM_HASH_ENA_PER_PORT) {
       if (info->info.enable) {
@@ -1208,13 +1206,13 @@ static int _hash_filter_ctrl(struct rte_eth_dev *dev,
       RTE_LOG(WARNING, PMD, ">>> Warning: Filter Hash - info_type (%d) not supported", info->info_type);
       ret = -ENOTSUP;
     }
-		break;
-	default:
+    break;
+  default:
     RTE_LOG(WARNING, PMD, ">>> Warning:  Filter Hash - Filter operation (%d) not supported", filter_op);
-		ret = -ENOTSUP;
-		break;
-	}
-	return ret;
+    ret = -ENOTSUP;
+    break;
+  }
+  return ret;
 }
 
 
@@ -1258,7 +1256,7 @@ static int eth_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t 
   char buf[51];
   struct pmd_internals *internals = dev->data->dev_private;
 
-  snprintf(buf, 50, "%d.%d.%d - %03d-%04d-%02d-%02d-%02d", internals->version.major, 
+  snprintf(buf, 50, "%d.%d.%d - %03d-%04d-%02d-%02d-%02d", internals->version.major,
                                                            internals->version.minor,
                                                            internals->version.patch,
                                                            internals->fpgaid.s.item,
@@ -1346,7 +1344,7 @@ static int rte_pmd_init_internals(const char *name,
     }
     strcpy(internals->ntpl_file, ntpl_file);
   }
-  
+
   /* reserve an ethdev entry */
   *eth_dev = rte_eth_dev_allocate(name);
   if (*eth_dev == NULL) {
@@ -1385,12 +1383,12 @@ static int rte_pmd_init_internals(const char *name,
   internals->version.major = info.u.system.data.version.major;
   internals->version.minor = info.u.system.data.version.minor;
   internals->version.patch = info.u.system.data.version.patch;
-  
+
   // Check that the driver is supported
   if (supportedDriver.major != internals->version.major ||
       supportedDriver.minor != internals->version.minor ||
       supportedDriver.patch != internals->version.patch) {
-    RTE_LOG(ERR, PMD, "ERROR: NT Driver version %d.%d.%d is not supported. The version must be %d.%d.%d.\n", 
+    RTE_LOG(ERR, PMD, "ERROR: NT Driver version %d.%d.%d is not supported. The version must be %d.%d.%d.\n",
             internals->version.major, internals->version.minor, internals->version.patch,
             supportedDriver.major, supportedDriver.minor, supportedDriver.patch);
     iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
@@ -1417,11 +1415,11 @@ static int rte_pmd_init_internals(const char *name,
 
   // Check if FPGA is supported
   for (i = 0; i < NB_SUPPORTED_FPGAS; i++) {
-    if (supportedAdapters[i].item == internals->fpgaid.s.item && 
+    if (supportedAdapters[i].item == internals->fpgaid.s.item &&
         supportedAdapters[i].product == internals->fpgaid.s.product) {
       if (supportedAdapters[i].ver != internals->fpgaid.s.ver ||
           supportedAdapters[i].rev != internals->fpgaid.s.rev) {
-        RTE_LOG(ERR, PMD, "ERROR: NT adapter firmware %03d-%04d-%02d-%02d-%02d is not supported. The firmware must be %03d-%04d-%02d-%02d-%02d.\n", 
+        RTE_LOG(ERR, PMD, "ERROR: NT adapter firmware %03d-%04d-%02d-%02d-%02d is not supported. The firmware must be %03d-%04d-%02d-%02d-%02d.\n",
             internals->fpgaid.s.item, internals->fpgaid.s.product, internals->fpgaid.s.ver, internals->fpgaid.s.rev, internals->fpgaid.s.build,
             supportedAdapters[i].item, supportedAdapters[i].product, supportedAdapters[i].ver, supportedAdapters[i].rev, supportedAdapters[i].build);
         iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
@@ -1435,20 +1433,20 @@ static int rte_pmd_init_internals(const char *name,
     // No matching adapter is found
     RTE_LOG(ERR, PMD, "ERROR: No supported NT adapter is found. Following adapters are supported:\n");
     for (i = 0; i < NB_SUPPORTED_FPGAS; i++) {
-      RTE_LOG(ERR, PMD, "       %03d-%04d-%02d-%02d-%02d\n", 
+      RTE_LOG(ERR, PMD, "       %03d-%04d-%02d-%02d-%02d\n",
          supportedAdapters[i].item, supportedAdapters[i].product, supportedAdapters[i].ver, supportedAdapters[i].rev, supportedAdapters[i].build);
     }
     iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
     goto error;
   }
-  
+
   if (RTE_ETHDEV_QUEUE_STAT_CNTRS > STREAMIDS_PER_PORT) {
     RTE_LOG(ERR, PMD, ">>> Error: This adapter can only support %u queues\n", STREAMIDS_PER_PORT);
     RTE_LOG(ERR, PMD, "           Set RTE_ETHDEV_QUEUE_STAT_CNTRS to %u or less\n", STREAMIDS_PER_PORT);
     iRet = NT_ERROR_STREAMID_OUT_OF_RANGE;
     goto error;
   }
-  
+
   for (i=0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
     internals->rxq[i].stream_id = STREAMIDS_PER_PORT * internals->local_port + i;
     internals->rxq[i].pSeg = NULL;
@@ -1727,7 +1725,7 @@ static int rte_pmd_ntacc_dev_probe(const char *name, const char *params)
   }
 
   rte_kvargs_free(kvlist);
- 
+
   if (ret < 0)
     return -1;
 
