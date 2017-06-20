@@ -53,6 +53,7 @@ struct filter_keyset_s {
   uint32_t ntpl_id2;
   uint64_t typeMask;
   uint8_t  key;
+  uint8_t  port;
   uint8_t nb_queues;
   uint8_t list_queues[RTE_ETHDEV_QUEUE_STAT_CNTRS];
 };
