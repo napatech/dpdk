@@ -53,6 +53,7 @@
 #include <rte_cycles.h>
 #include <rte_ring.h>
 #include <rte_lcore.h>
+#include <rte_atomic.h>
 
 #include "flow_classification.h"
 
@@ -147,7 +148,7 @@ struct flow_db {
 	} hw_offload_rings;
 	void *hw_offload_elem_mem;
 	int hw_offload_core_id;
-	uint32_t hw_enqueue_num;
+	rte_atomic32_t hw_enqueue_num;
 
 	/* Statistics */
 	uint64_t num_total_flows;
@@ -405,9 +406,7 @@ static void hw_offload_prepare_elem(struct hw_offload_elem *elem,
 																		struct rte_flow **rte_flow,
 																		uint8_t port)
 {
-	memset(&elem->flow_l3, 0, sizeof(elem->flow_l3));
-	memset(&elem->flow_l4, 0, sizeof(elem->flow_l4));
-	memset(&elem->attr, 0, sizeof(elem->attr));
+	memset(elem, 0, sizeof(struct hw_offload_elem));
 	elem->attr.ingress = 1;
 
 	/* Prepare the pattern stack */
@@ -479,7 +478,7 @@ static void flow_hw_enqueue(struct flow_db *flow_db, uint8_t port,
 	/* Enqueue */
 	if (rte_ring_sp_enqueue(flow_db->hw_offload_rings.enqueue, hw_offload_elem) != 0) {
 		/* Return the pulled element to the pool */
-		rte_ring_sp_enqueue(flow_db->hw_offload_rings.pool, hw_offload_elem);
+		rte_ring_mp_enqueue(flow_db->hw_offload_rings.pool, hw_offload_elem);
 		return;
 	}
 	/* Mark the element enqued */
@@ -493,7 +492,7 @@ static void flow_hw_add(struct flow_db *flow_db, struct flow_elem *flow_elem, st
 		return;
 	}
 
-	if ((flow_db->hw_enqueue_num+2) >= NUM_HW_OFFLOAD_ENTRIES) {
+	if ((rte_atomic32_read(&flow_db->hw_enqueue_num)+2) >= NUM_HW_OFFLOAD_ENTRIES) {
 		return;
 	}
 
@@ -511,7 +510,7 @@ static void flow_hw_add(struct flow_db *flow_db, struct flow_elem *flow_elem, st
 		return;
 	}
 
-	flow_db->hw_enqueue_num+=2;
+	rte_atomic32_add(&flow_db->hw_enqueue_num, 2);
 
 	struct pkt_meta *pkt_meta = (struct pkt_meta*)RTE_MBUF_METADATA_UINT8_PTR(mb, OFFSET_PKT_TYPE);
 	assert(mb->port <= 1);
@@ -551,12 +550,14 @@ static void flow_hw_remove(struct flow_db *flow_db, struct flow_elem *flow_elem)
 					hw_offload_elem->action = HW_OFFLOAD_DEL;
 					hw_offload_elem->port = port;
 					hw_offload_elem->rte_flow = &flow_elem->rte_flow[port];
+					flow_elem->added_to_hw &= ~(1 << port);
 					/* Enqeueu the element */
 					while(running && (rte_ring_sp_enqueue(flow_db->hw_offload_rings.enqueue, (void*)hw_offload_elem)!= 0));
 				}
 			}
 		}
-		flow_db->hw_enqueue_num-=2;
+		rte_atomic32_sub(&flow_db->hw_enqueue_num, 2);
+		assert(rte_atomic32_read(&flow_db->hw_enqueue_num) >=0);
 	}
 }
 
@@ -606,6 +607,8 @@ hw_offload_scheduler(void *arg)
 #ifdef SHOW_FLOW_IN_HW_COUNT
 			flows_cur_in_hw--;
 #endif
+			} else {
+				printf("Nothing to remove\n");
 			}
 		}
 		clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -618,7 +621,7 @@ hw_offload_scheduler(void *arg)
 		hptm->tns_min = hptm->tns_min > tns ? tns : hptm->tns_min;
 
 		/* Return the pulled element to the pool */
-		rte_ring_sp_enqueue(flow_db->hw_offload_rings.pool, hw_offload_elem);
+		rte_ring_mp_enqueue(flow_db->hw_offload_rings.pool, hw_offload_elem);
 	}
 	return 0;
 }
@@ -901,7 +904,7 @@ flow_classification_init(void **handle, unsigned int num_flows, int id_core __rt
 		flow_db->hw_offload_rings.pool = rte_ring_create("hw_off_pool",
 				NUM_HW_OFFLOAD_ENTRIES << 1,
 				rte_socket_id(),
-				RING_F_SP_ENQ | RING_F_SC_DEQ);
+				RING_F_SC_DEQ);
 		if (flow_db->hw_offload_rings.pool == NULL) {
 			LOG_ERROR("Cannot create ring \"%s\"\n", "hw_off_pool");
 			goto error_handling;
@@ -924,6 +927,7 @@ flow_classification_init(void **handle, unsigned int num_flows, int id_core __rt
 		}
 
 #ifdef ENABLE_HW_OFFLOAD
+		rte_atomic32_init(&flow_db->hw_enqueue_num);
 		/* Start the HW offload scheduler. Start looking from id_core */
 		id_core = rte_get_next_lcore(id_core, 1, 1);
 		flow_db->hw_offload_core_id = rte_eal_remote_launch(hw_offload_scheduler, (void*)flow_db, id_core);
@@ -954,7 +958,7 @@ flow_classification_destroy(void *handle)
 			LOG_INFO("Packets with HW offload: Port0 %ld, Port1 %ld\n",
 				flow_db->num_packets_with_hw_offload[0], flow_db->num_packets_with_hw_offload[1]);
 			LOG_INFO("Max num HW flows: Port0: %d, Port1: %d\n", flow_db->max_hw_flows[0], flow_db->max_hw_flows[1]);
-			LOG_INFO("Still enqueued in HW: %d\n", flow_db->hw_enqueue_num);
+			LOG_INFO("Still enqueued in HW: %d\n", rte_atomic32_read(&flow_db->hw_enqueue_num));
 			int i;
 			for (i = 0; i < 2; i++) {
 				struct hw_offload_prog_tm *htm = &flow_db->hw_offload_prog_tm[i];
