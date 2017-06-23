@@ -479,7 +479,6 @@ virtio_user_pmd_remove(const char *name)
 	virtio_user_dev_uninit(dev);
 
 	rte_free(eth_dev->data->dev_private);
-	rte_free(eth_dev->data);
 	rte_eth_dev_release_port(eth_dev);
 
 	return 0;
