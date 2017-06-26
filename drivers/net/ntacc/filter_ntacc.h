@@ -53,7 +53,15 @@ int SetGreFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, uin
 
 int SetTunnelFilter(char *ntpl_buf, bool *fc, int version, int type, uint64_t *typeMask);
 
-int CreateOptimizedFilter(char *ntpl_buf, struct pmd_internals *internals, struct rte_flow *flow, bool *fc, uint64_t typeMask, uint8_t *plist_queues, uint8_t nb_queues, bool *reuse);
+int CreateOptimizedFilter(char *ntpl_buf, 
+                          struct pmd_internals *internals, 
+                          struct rte_flow *flow, 
+                          bool *fc, 
+                          uint64_t typeMask, 
+                          uint8_t *plist_queues, 
+                          uint8_t nb_queues, 
+                          bool *reuse, 
+                          int color);
 
 void DeleteKeyset(int key, struct pmd_internals *internals);
 void DeleteHash(uint64_t rss_hf, uint8_t port, int priority, struct pmd_internals *internals);
