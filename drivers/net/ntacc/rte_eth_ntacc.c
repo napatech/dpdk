@@ -947,11 +947,6 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   // Set the priority
   sprintf(ntpl_buf, "assign[priority=%u;Descriptor=DYN2;", attr->priority);
 
-  // Add color to NTPL as mark is set.
-  if (color != -1) {
-    sprintf(&ntpl_buf[strlen(ntpl_buf)], "color=%i;", color);
-  }
-
   // Set the stream IDs
   CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
 
@@ -1110,7 +1105,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       }
     }
 
-    if (CreateOptimizedFilter(ntpl_buf, internals, flow, &filterContinue, typeMask, list_queues, nb_queues, &reuse) != 0) {
+    if (CreateOptimizedFilter(ntpl_buf, internals, flow, &filterContinue, typeMask, list_queues, nb_queues, &reuse, color) != 0) {
       rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Creating filter error");
       goto FlowError;
     }
@@ -1386,8 +1381,7 @@ static int rte_pmd_init_internals(const char *name,
 
   // Check that the driver is supported
   if (supportedDriver.major != internals->version.major ||
-      supportedDriver.minor != internals->version.minor ||
-      supportedDriver.patch != internals->version.patch) {
+      supportedDriver.minor != internals->version.minor) {
     RTE_LOG(ERR, PMD, "ERROR: NT Driver version %d.%d.%d is not supported. The version must be %d.%d.%d.\n",
             internals->version.major, internals->version.minor, internals->version.patch,
             supportedDriver.major, supportedDriver.minor, supportedDriver.patch);

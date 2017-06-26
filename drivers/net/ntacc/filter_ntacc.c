@@ -646,7 +646,15 @@ static int FindKeyset(uint64_t typeMask, uint8_t *plist_queues, uint8_t nb_queue
   return 0;
 }
 
-int CreateOptimizedFilter(char *ntpl_buf, struct pmd_internals *internals, struct rte_flow *flow, bool *fc, uint64_t typeMask, uint8_t *plist_queues, uint8_t nb_queues, bool *reuse)
+int CreateOptimizedFilter(char *ntpl_buf, 
+                          struct pmd_internals *internals, 
+                          struct rte_flow *flow, 
+                          bool *fc, 
+                          uint64_t typeMask, 
+                          uint8_t *plist_queues, 
+                          uint8_t nb_queues, 
+                          bool *reuse, 
+                          int color)
 {
   NtNtplInfo_t ntplInfo;
   struct filter_values_s *pFilter_values;
@@ -703,7 +711,12 @@ int CreateOptimizedFilter(char *ntpl_buf, struct pmd_internals *internals, struc
 
     LIST_FOREACH(pFilter_values, &filter_values, next) {
       if (first) {
-        sprintf(filter_buffer3, "KeyType[name=KT%u; Access = partial; Bank = 0] = {", key);
+        if (color != -1) {
+          sprintf(filter_buffer3, "KeyType[name=KT%u; Access = partial; Bank = 0; colorinfo = true] = {", key);
+        }
+        else {
+          sprintf(filter_buffer3, "KeyType[name=KT%u; Access = partial; Bank = 0] = {", key);
+        }
         sprintf(filter_buffer2, "KeyDef[name=KDEF%u; KeyType=KT%u] = (", key, key);
         first=false;
       }
@@ -760,7 +773,12 @@ int CreateOptimizedFilter(char *ntpl_buf, struct pmd_internals *internals, struc
   first = true;
   LIST_FOREACH(pFilter_values, &filter_values, next) {
     if (first) {
-      sprintf(filter_buffer1, "KeyList[KeySet=%u; KeyType=KT%u] = (", key, key);
+      if (color != -1) {
+        sprintf(filter_buffer1, "KeyList[KeySet=%u; KeyType=KT%u; color = %u] = (", key, key, color);
+      }
+      else {
+        sprintf(filter_buffer1, "KeyList[KeySet=%u; KeyType=KT%u] = (", key, key);
+      }
       first=false;
     }
     else {
