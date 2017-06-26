@@ -1,1 +1,0 @@
-cmd_/usr/project/dpdk_github_master/x86_64-native-linuxapp-clang/build/lib/librte_eal/linuxapp/igb_uio/built-in.o :=  rm -f /usr/project/dpdk_github_master/x86_64-native-linuxapp-clang/build/lib/librte_eal/linuxapp/igb_uio/built-in.o; ar rcsD /usr/project/dpdk_github_master/x86_64-native-linuxapp-clang/build/lib/librte_eal/linuxapp/igb_uio/built-in.o

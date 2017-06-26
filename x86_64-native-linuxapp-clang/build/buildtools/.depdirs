@@ -1,3 +1,0 @@
-FULL_DEPDIRS-buildtools/pmdinfogen += lib/librte_eal
-LOCAL_DEPDIRS-buildtools += lib
-
