@@ -75,15 +75,6 @@ static LIST_HEAD(filter_values_t, filter_values_s) filter_values;
 static LIST_HEAD(filter_hash_t, filter_hash_s) filter_hash;
 static LIST_HEAD(filter_keyset_t, filter_keyset_s) filter_keyset;
 
-static int keyset[8][12] = {{0,0,0,0,0,0,0,0,0,0,0,0},
-                            {0,0,0,0,0,0,0,0,0,0,0,0},
-                            {0,0,0,0,0,0,0,0,0,0,0,0},
-                            {0,0,0,0,0,0,0,0,0,0,0,0},
-                            {0,0,0,0,0,0,0,0,0,0,0,0},
-                            {0,0,0,0,0,0,0,0,0,0,0,0},
-                            {0,0,0,0,0,0,0,0,0,0,0,0},
-                            {0,0,0,0,0,0,0,0,0,0,0,0}};
-
 #define CHECK8(a, b)   (a != NULL && (a->b != 0 && a->b != 0xFF))
 #define CHECK16(a, b)  (a != NULL && (a->b != 0 && a->b != 0xFFFF))
 #define CHECK32(a, b)  (a != NULL && (a->b != 0 && a->b != 0xFFFFFFFF))
@@ -226,13 +217,13 @@ int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow
   /*****************************/
   if ((rss_hf & ETH_RSS_INNER_IPV4_UDP) || (rss_hf & ETH_RSS_INNER_IPV6_UDP)) {
     if ((rss_hf & ETH_RSS_INNER_IPV4_UDP) && (rss_hf & ETH_RSS_INNER_IPV6_UDP)) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IP;InnerLayer4Type=UDP]=%s", priority, internals->port, GetHashTuple(internals, 0x15));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IP;InnerLayer4Type=UDP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x15));
     }
     else if (rss_hf & ETH_RSS_INNER_IPV4_UDP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4;InnerLayer4Type=UDP]=%s", priority, internals->port, GetHashTuple(internals, 0x15));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4;InnerLayer4Type=UDP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x15));
     }
     else if (rss_hf & ETH_RSS_INNER_IPV6_UDP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;InnerLayer4Type=UDP]=%s", priority, internals->port, GetHashTuple(internals, 0x15));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;InnerLayer4Type=UDP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x15));
     }
     if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
       return -1;
@@ -244,13 +235,13 @@ int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow
   /*****************************/
   if ((rss_hf & ETH_RSS_INNER_IPV4_TCP) || (rss_hf & ETH_RSS_INNER_IPV6_TCP)) {
     if ((rss_hf & ETH_RSS_INNER_IPV4_TCP) && (rss_hf & ETH_RSS_INNER_IPV6_TCP)) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IP;InnerLayer4Type=TCP]=%s", priority, internals->port, GetHashTuple(internals, 0x15));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IP;InnerLayer4Type=TCP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x15));
     }
     else if (rss_hf & ETH_RSS_INNER_IPV4_TCP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4;InnerLayer4Type=TCP]=%s", priority, internals->port, GetHashTuple(internals, 0x15));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4;InnerLayer4Type=TCP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x15));
     }
     else if (rss_hf & ETH_RSS_INNER_IPV6_TCP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;InnerLayer4Type=TCP]=%s", priority, internals->port, GetHashTuple(internals, 0x15));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;InnerLayer4Type=TCP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x15));
     }
     if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
       return -1;
@@ -262,13 +253,13 @@ int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow
   /******************************/
   if ((rss_hf & ETH_RSS_INNER_IPV4_SCTP) || (rss_hf & ETH_RSS_INNER_IPV6_SCTP)) {
     if ((rss_hf & ETH_RSS_INNER_IPV4_SCTP) && (rss_hf & ETH_RSS_INNER_IPV6_SCTP)) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IP;InnerLayer4Type=SCTP]=%s", priority, internals->port, GetHashTuple(internals, 0x15));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IP;InnerLayer4Type=SCTP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x15));
     }
     else if (rss_hf & ETH_RSS_INNER_IPV4_SCTP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4;InnerLayer4Type=SCTP]=%s", priority, internals->port, GetHashTuple(internals, 0x15));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4;InnerLayer4Type=SCTP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x15));
     }
     else if (rss_hf & ETH_RSS_INNER_IPV6_SCTP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;InnerLayer4Type=SCTP]=%s", priority, internals->port, GetHashTuple(internals, 0x15));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;InnerLayer4Type=SCTP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x15));
     }
     if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
       return -1;
@@ -280,13 +271,13 @@ int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow
   /*****************************/
   if ((rss_hf & ETH_RSS_NONFRAG_IPV4_UDP) || (rss_hf & ETH_RSS_NONFRAG_IPV6_UDP)) {
     if ((rss_hf & ETH_RSS_NONFRAG_IPV4_UDP) && (rss_hf & ETH_RSS_NONFRAG_IPV6_UDP)) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=UDP]=%s", priority, internals->port, GetHashTuple(internals, 0x05));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=UDP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x05));
     }
     else if (rss_hf & ETH_RSS_NONFRAG_IPV4_UDP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=UDP]=%s", priority, internals->port, GetHashTuple(internals, 0x05));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=UDP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x05));
     }
     else if (rss_hf & ETH_RSS_NONFRAG_IPV6_UDP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=UDP]=%s", priority, internals->port, GetHashTuple(internals, 0x05));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=UDP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x05));
     }
     if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
       return -1;
@@ -298,13 +289,13 @@ int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow
   /*****************************/
   if ((rss_hf & ETH_RSS_NONFRAG_IPV4_TCP) || (rss_hf & ETH_RSS_NONFRAG_IPV6_TCP)) {
     if ((rss_hf & ETH_RSS_NONFRAG_IPV4_TCP) && (rss_hf & ETH_RSS_NONFRAG_IPV6_TCP)) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=TCP]=%s", priority, internals->port, GetHashTuple(internals, 0x05));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=TCP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x05));
     }
     else if (rss_hf & ETH_RSS_NONFRAG_IPV4_TCP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=TCP]=%s", priority, internals->port, GetHashTuple(internals, 0x05));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=TCP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x05));
     }
     else if (rss_hf & ETH_RSS_NONFRAG_IPV6_TCP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=TCP]=%s", priority, internals->port, GetHashTuple(internals, 0x05));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=TCP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x05));
     }
     if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
       return -1;
@@ -316,13 +307,13 @@ int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow
   /******************************/
   if ((rss_hf & ETH_RSS_NONFRAG_IPV4_SCTP) || (rss_hf & ETH_RSS_NONFRAG_IPV6_SCTP)) {
     if ((rss_hf & ETH_RSS_NONFRAG_IPV4_SCTP) && (rss_hf & ETH_RSS_NONFRAG_IPV6_SCTP)) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=SCTP]==%s", priority, internals->port, GetHashTuple(internals, 0x06));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=SCTP;tag=%s]==%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x06));
     }
     else if (rss_hf & ETH_RSS_NONFRAG_IPV4_SCTP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=SCTP]=%s", priority, internals->port, GetHashTuple(internals, 0x06));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=SCTP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x06));
     }
     else if (rss_hf & ETH_RSS_NONFRAG_IPV6_SCTP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=SCTP]=%s", priority, internals->port, GetHashTuple(internals, 0x06));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=SCTP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x06));
     }
     if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
       return -1;
@@ -337,13 +328,13 @@ int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow
         ((rss_hf & ETH_RSS_INNER_IPV4_OTHER) && (rss_hf & ETH_RSS_INNER_IPV6)) ||
         ((rss_hf & ETH_RSS_INNER_IPV4_OTHER) && (rss_hf & ETH_RSS_INNER_IPV6_OTHER)) ||
         ((rss_hf & ETH_RSS_INNER_IPV4) && (rss_hf & ETH_RSS_INNER_IPV6_OTHER))) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IP]=%s", priority, internals->port, GetHashTuple(internals, 0x12));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x12));
     }
     else if (rss_hf & ETH_RSS_INNER_IPV4) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4]=%s", priority, internals->port, GetHashTuple(internals, 0x12));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x12));
     }
     else if (rss_hf & ETH_RSS_INNER_IPV6) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6]=%s", priority, internals->port, GetHashTuple(internals, 0x12));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x12));
     }
     if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
       return -1;
@@ -358,13 +349,13 @@ int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow
         ((rss_hf & ETH_RSS_NONFRAG_IPV4_OTHER) && (rss_hf & ETH_RSS_NONFRAG_IPV6_OTHER)) ||
         ((rss_hf & ETH_RSS_NONFRAG_IPV4_OTHER) && (rss_hf & ETH_RSS_IPV6)) ||
         ((rss_hf & ETH_RSS_IPV6) && (rss_hf & ETH_RSS_NONFRAG_IPV6_OTHER))) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IP]=%s", priority, internals->port, GetHashTuple(internals, 0x02));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x02));
     }
     else if ((rss_hf & ETH_RSS_IPV4) || (rss_hf & ETH_RSS_NONFRAG_IPV4_OTHER)) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV4]=%s", priority, internals->port, GetHashTuple(internals, 0x02));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV4;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x02));
     }
     else if ((rss_hf & ETH_RSS_IPV6)  || (rss_hf & ETH_RSS_NONFRAG_IPV6_OTHER)) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV6]=%s", priority, internals->port, GetHashTuple(internals, 0x02));
+      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV6;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x02));
     }
     if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
       return -1;
@@ -378,31 +369,36 @@ int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow
  * Get a keyset value from the keyset pool. 
  * Used by the keymatcher command 
  */
-static int GetKeysetValue(uint8_t adapterNo) 
+static int GetKeysetValue(struct pmd_internals *internals) 
 {
   int i;
 
-  if (adapterNo >= 8) {
+  if (internals->adapterNo >= 8) {
     return -1;
   }
+  pthread_mutex_lock(&internals->shm->mutex);
   for (i = 0; i < 12; i++) {
-    if (keyset[adapterNo][i] == 0) {
-      keyset[adapterNo][i] = 1;
+    if (internals->shm->keyset[internals->adapterNo][i] == 0) {
+      internals->shm->keyset[internals->adapterNo][i] = 1;
+      pthread_mutex_unlock(&internals->shm->mutex);
       return (i + 3);
     }
   }
+  pthread_mutex_unlock(&internals->shm->mutex);
   return -1;
 }
 
 /**
  * Return a keyset value to the keyset pool.
  */
-int ReturnKeysetValue(uint8_t adapterNo, int value) 
+int ReturnKeysetValue(struct pmd_internals *internals, int value) 
 {
-  if (adapterNo >= 8 || value < 3 || value > 15) {
+  if (internals->adapterNo >= 8 || value < 3 || value > 15) {
     return -1;
   }
-  keyset[adapterNo][value - 3] = 0;
+  pthread_mutex_lock(&internals->shm->mutex);
+  internals->shm->keyset[internals->adapterNo][value - 3] = 0;
+  pthread_mutex_unlock(&internals->shm->mutex);
   return 0;
 }
 
@@ -704,7 +700,7 @@ int CreateOptimizedFilter(char *ntpl_buf,
       RTE_LOG(ERR, PMD, "Allocating memory failed\n");
       goto Errors;
     }
-    key = GetKeysetValue(internals->adapterNo);
+    key = GetKeysetValue(internals);
     if (key < 0) {
       free(key_set);
       iRet = -1;
@@ -718,12 +714,12 @@ int CreateOptimizedFilter(char *ntpl_buf,
     LIST_FOREACH(pFilter_values, &filter_values, next) {
       if (first) {
         if (color != -1) {
-          sprintf(filter_buffer3, "KeyType[name=KT%u; Access = partial; Bank = 0; colorinfo = true] = {", key);
+          sprintf(filter_buffer3, "KeyType[name=KT%u; Access = partial; Bank = 0; colorinfo = true; tag=%s] = {", key, internals->tagName);
         }
         else {
-          sprintf(filter_buffer3, "KeyType[name=KT%u; Access = partial; Bank = 0] = {", key);
+          sprintf(filter_buffer3, "KeyType[name=KT%u; Access = partial; Bank = 0; tag=%s] = {", key, internals->tagName);
         }
-        sprintf(filter_buffer2, "KeyDef[name=KDEF%u; KeyType=KT%u] = (", key, key);
+        sprintf(filter_buffer2, "KeyDef[name=KDEF%u; KeyType=KT%u; tag=%s] = (", key, key, internals->tagName);
         first=false;
       }
       else {
@@ -780,10 +776,10 @@ int CreateOptimizedFilter(char *ntpl_buf,
   LIST_FOREACH(pFilter_values, &filter_values, next) {
     if (first) {
       if (color != -1) {
-        sprintf(filter_buffer1, "KeyList[KeySet=%u; KeyType=KT%u; color = %u] = (", key, key, color);
+        sprintf(filter_buffer1, "KeyList[KeySet=%u; KeyType=KT%u; color = %u; tag=%s] = (", key, key, color, internals->tagName);
       }
       else {
-        sprintf(filter_buffer1, "KeyList[KeySet=%u; KeyType=KT%u] = (", key, key);
+        sprintf(filter_buffer1, "KeyList[KeySet=%u; KeyType=KT%u; tag=%s] = (", key, key, internals->tagName);
       }
       first=false;
     }

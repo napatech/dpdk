@@ -104,6 +104,11 @@ struct ntacc_tx_queue {
   int                    enabled;
 };
 
+struct pmd_shared_mem_s {
+  pthread_mutex_t mutex;
+  int keyset[8][12];
+};
+
 struct pmd_internals {
   struct ntacc_rx_queue rxq[RTE_ETHDEV_QUEUE_STAT_CNTRS];
   struct ntacc_tx_queue txq[RTE_ETHDEV_QUEUE_STAT_CNTRS];
@@ -124,6 +129,7 @@ struct pmd_internals {
   uint8_t               nbPorts;
   uint8_t               symHashMode;
   char                  driverName[128];
+  char                  tagName[10];
   union Ntfpgaid_u      fpgaid;
   struct {
     int32_t major;
@@ -131,7 +137,13 @@ struct pmd_internals {
     int32_t patch;
   } version;
   char                  *ntpl_file;
+  int                   shmid;
+  key_t                 key;
+  pthread_mutexattr_t   psharedm;
+  struct pmd_shared_mem_s *shm;
 };
+
+
 
 int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo, struct pmd_internals *internals);
 

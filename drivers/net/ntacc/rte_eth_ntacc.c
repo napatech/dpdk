@@ -35,7 +35,11 @@
 #include <linux/limits.h>
 #include <sys/param.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
 #include <fcntl.h>
+#include <semaphore.h>
 #include <unistd.h>
 #include <dlfcn.h>
 #include <rte_mbuf.h>
@@ -77,7 +81,7 @@ static struct {
    int32_t major;
    int32_t minor;
    int32_t patch;
-} supportedDriver = {3, 6, 6};
+} supportedDriver = {3, 7, 0};
 
 #define NB_SUPPORTED_FPGAS 7
 struct {
@@ -382,6 +386,7 @@ static int eth_dev_start(struct rte_eth_dev *dev)
   struct ntacc_tx_queue *tx_q = internals->txq;
   uint queue;
   int status;
+  char *shm;
 
 #ifndef DO_NOT_CREATE_DEFAULT_FILTER
   uint8_t nb_queues = 0;
@@ -390,6 +395,45 @@ static int eth_dev_start(struct rte_eth_dev *dev)
   uint8_t list_queues[256];
 #endif
 
+  // Open or create shared memory
+  internals->key = 135546;
+  if ((internals->shmid = shmget(internals->key, sizeof(struct pmd_shared_mem_s), 0666)) < 0) {
+    if ((internals->shmid = shmget(internals->key, sizeof(struct pmd_shared_mem_s), IPC_CREAT | 0666)) < 0) {
+      RTE_LOG(ERR, PMD, "Unable to create shared mem size %u in eth_dev_start. Error = %d \"%s\"\n", (unsigned int)sizeof(struct pmd_shared_mem_s), errno, strerror(errno));
+      goto StartError;
+    }
+    if ((shm = shmat(internals->shmid, NULL, 0)) == (char *) -1) {
+      RTE_LOG(ERR, PMD, "Unable to attach to shared mem in eth_dev_start. Error = %d \"%s\"\n", errno, strerror(errno));
+      goto StartError;
+    }
+    memset(shm, 0, sizeof(struct pmd_shared_mem_s));
+    internals->shm = (struct pmd_shared_mem_s *)shm;
+  }
+  else {
+    if ((shm = shmat(internals->shmid, NULL, 0)) == (char *) -1) {
+      RTE_LOG(ERR, PMD, "Unable to attach to shared mem in eth_dev_start. Error = %d\n", errno);
+      goto StartError;
+    }
+    internals->shm = (struct pmd_shared_mem_s *)shm;
+  }
+
+  // Create interprocess mutex
+  status = pthread_mutexattr_init(&internals->psharedm);
+  if (status) {
+    RTE_LOG(ERR, PMD, "Unable to create mutex 1. Error = %d \"%s\"\n", status, strerror(status));
+    goto StartError;
+  }
+  status = pthread_mutexattr_setpshared(&internals->psharedm, PTHREAD_PROCESS_SHARED);
+  if (status) {
+    RTE_LOG(ERR, PMD, "Unable to create mutex 2. Error = %d \"%s\"\n", status, strerror(status));
+    goto StartError;
+  }
+  status = pthread_mutex_init(&internals->shm->mutex, &internals->psharedm);
+  if (status) {
+    RTE_LOG(ERR, PMD, "Unable to create mutex 3. Error = %d \"%s\"\n", status, strerror(status));
+    goto StartError;
+  }
+  
 #ifndef DO_NOT_CREATE_DEFAULT_FILTER
   // Build default flow
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
@@ -423,7 +467,7 @@ static int eth_dev_start(struct rte_eth_dev *dev)
   }
 
   // Set the port number
-  sprintf(&ntpl_buf[strlen(ntpl_buf)], "]=port==%u", internals->port);
+  sprintf(&ntpl_buf[strlen(ntpl_buf)], "; tag=%s]=port==%u", internals->tagName, internals->port);
 
   if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
     RTE_LOG(ERR, PMD, "Failed to create default filter in eth_dev_start\n");
@@ -514,6 +558,10 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
   }
 #endif
   dev->data->dev_link.link_status = 0;
+
+  // Detach shared memory
+  shmdt(internals->shm);
+  shmctl(internals->shmid, IPC_RMID, NULL);
 }
 
 static int eth_dev_configure(struct rte_eth_dev *dev __rte_unused)
@@ -606,14 +654,8 @@ static void eth_stats_get(struct rte_eth_dev *dev,
   igb_stats->oerrors = statData.u.query_v2.data.port.aPorts[port].tx.RMON1.crcAlignErrors;
 
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
-    if (internals->rxq[queue].enabled) {
-      igb_stats->q_ipackets[queue] = statData.u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].forward.pkts;
-      igb_stats->q_ibytes[queue] =  statData.u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].forward.octets;
-    }
-    else {
-      igb_stats->q_ipackets[queue] = 0;
-      igb_stats->q_ibytes[queue] = 0;
-    }
+    igb_stats->q_ipackets[queue] = statData.u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].forward.pkts;
+    igb_stats->q_ibytes[queue] =  statData.u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].forward.octets;
   }
 }
 #endif
@@ -808,7 +850,7 @@ static void _cleanUpKeySet(int key, struct pmd_internals *internals)
     // Key set is not in use anymore. delete it.
     DeleteKeyset(key, internals);
     RTE_LOG(DEBUG, PMD, "Returning keyset %u: %d\n", internals->adapterNo, key);
-    ReturnKeysetValue(internals->adapterNo, key);
+    ReturnKeysetValue(internals, key);
   }
 }
 
@@ -952,7 +994,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
 
   // Set the port number
-  sprintf(&ntpl_buf[strlen(ntpl_buf)], "]=port==%u", internals->port);
+  sprintf(&ntpl_buf[strlen(ntpl_buf)], "; tag=%s]=port==%u", internals->tagName, internals->port);
 
 
   // Set the filter expression
@@ -1304,16 +1346,12 @@ static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
   int iRet = 0;
   struct pmd_internals *internals = NULL;
   struct rte_eth_dev_data *data = NULL;
-  struct rte_device *device = NULL;
   uint i, status;
   char errBuf[NT_ERRBUF_SIZE];
   NtInfo_t info;
   struct rte_eth_link pmd_link;
   const char *name;
   int numa_node;
-#ifndef USE_SW_STAT
-  NtStatistics_t statData;
-#endif
 
   numa_node = rte_socket_id();
   name = rte_vdev_device_name(vdev);
@@ -1325,13 +1363,6 @@ static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
    */
   data = rte_zmalloc_socket(name, sizeof(*data), 0, numa_node);
   if (data == NULL) {
-    RTE_LOG(ERR, PMD, "ERROR: Failed to allocate memory\n");
-    iRet = 1;
-    goto error;
-  }
-
-  device = rte_zmalloc_socket(name, sizeof(*device), 0, numa_node);
-  if (device == NULL) {
     RTE_LOG(ERR, PMD, "ERROR: Failed to allocate memory\n");
     iRet = 1;
     goto error;
@@ -1414,6 +1445,7 @@ static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
     goto error;
   }
 
+  sprintf(internals->tagName, "port%d", port);
   internals->adapterNo = info.u.port_v7.data.adapterNo;
   internals->port = port;
   internals->local_port = port - info.u.port_v7.data.adapterInfo.portOffset;
@@ -1502,21 +1534,17 @@ static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
 
   internals->if_index = internals->local_port;
 
-  // Generate driver name
-  strcpy(internals->driverName, "net_ntacc");
-
-  device->numa_node = numa_node;
+  (*eth_dev)->device->numa_node = numa_node;
   data->dev_private = internals;
   data->port_id = (*eth_dev)->data->port_id;
   data->dev_link = pmd_link;
   data->mac_addrs = &eth_addr[port];
   data->numa_node = numa_node;
-  data->drv_name = internals->driverName;
+  data->dev_flags = RTE_ETH_DEV_DETACHABLE;
   strncpy(data->name, name, RTE_ETH_NAME_MAX_LEN);
 
   (*eth_dev)->data = data;
   (*eth_dev)->dev_ops = &ops;
-  (*eth_dev)->device = device;
 
 #ifndef USE_SW_STAT
   /* Open the stat stream */
@@ -1526,24 +1554,12 @@ static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
     iRet = status;
     goto error;
   }
-  /* Reset stat data */
-  statData.cmd = NT_STATISTICS_READ_CMD_QUERY_V2;
-  statData.u.query_v2.poll=0;
-  statData.u.query_v2.clear=1;
-  if ((status = (*_NT_StatRead)(internals->hStat, &statData)) != 0) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-    RTE_LOG(ERR, PMD, "ERROR: NT_StatRead failed. Code 0x%x = %s\n", status, errBuf);
-    iRet = status;
-    goto error;
-  }
 #endif
   return iRet;
 
 error:
   if (data)
     rte_free(data);
-  if (device)
-    rte_free(device);
   if (internals)
     rte_free(internals);
   return iRet;
@@ -1714,14 +1730,10 @@ static int rte_pmd_ntacc_dev_probe(struct rte_vdev_device *vdev)
   vdev->device.numa_node = rte_socket_id();
   name = rte_vdev_device_name(vdev);
 
-  if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
-    RTE_LOG(DEBUG, PMD, "pmd_ntacc %s %s must run as a primary process\n", name, rte_version());
-    return -1;
-  }
-
-  RTE_LOG(DEBUG, PMD, "Initializing pmd_ntacc %s for %s on numa %d\n", rte_version(),
+  RTE_LOG(DEBUG, PMD, "Initializing pmd_ntacc %s for %s on numa %d (%s)\n", rte_version(),
                                                                        name,
-                                                                       vdev->device.numa_node);
+                                                                       vdev->device.numa_node,
+                                                                       rte_eal_process_type() == RTE_PROC_PRIMARY?"Primary":"Secondary");
 
   kvlist = rte_kvargs_parse(rte_vdev_device_args(vdev), valid_arguments);
   if (kvlist == NULL) {
@@ -1757,10 +1769,10 @@ static int rte_pmd_ntacc_dev_probe(struct rte_vdev_device *vdev)
   if (rte_pmd_init_internals(vdev, port, ntplStr, &eth_dev) < 0)
     return -1;
 
-  if (first) {
+  if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
     /* Delete all NTPL */
     struct pmd_internals *internals = eth_dev->data->dev_private;
-    sprintf(ntplStr, "Delete=All");
+    sprintf(ntplStr, "Delete=tag==%s", internals->tagName);
     if (DoNtpl(ntplStr, &ntplInfo, internals) != 0) {
       return -1;
     }
@@ -1792,6 +1804,7 @@ static int rte_pmd_ntacc_dev_remove(struct rte_vdev_device *dev)
 
   if (_libnt != NULL)
     dlclose(_libnt);
+
   return 0;
 }
 

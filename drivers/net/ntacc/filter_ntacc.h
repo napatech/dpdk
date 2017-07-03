@@ -38,7 +38,7 @@ bool CheckFeatureLevel(uint32_t level);
 
 int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow *flow, int priority);
 void CreateStreamid(char *ntpl_buf, struct pmd_internals *internals, uint32_t nb_queues, uint8_t *list_queues);
-int ReturnKeysetValue(uint8_t adapterNo, int value);
+int ReturnKeysetValue(struct pmd_internals *internals, int value);
 void pushNtplID(struct rte_flow *flow, uint32_t ntplId);
 
 int SetEthernetFilter(const struct rte_flow_item *item, bool tunnel, uint64_t *typeMask);
