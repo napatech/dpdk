@@ -114,6 +114,10 @@ vhost_backend_cleanup(struct virtio_net *dev)
 		rte_free(dev->mem);
 		dev->mem = NULL;
 	}
+
+	free(dev->guest_pages);
+	dev->guest_pages = NULL;
+
 	if (dev->log_addr) {
 		munmap((void *)(uintptr_t)dev->log_addr, dev->log_size);
 		dev->log_addr = 0;
@@ -238,8 +242,6 @@ numa_realloc(struct virtio_net *dev, int index)
 	struct vhost_virtqueue *old_vq, *vq;
 	int ret;
 
-	enum {VIRTIO_RXQ, VIRTIO_TXQ, VIRTIO_QNUM};
-
 	old_dev = dev;
 	vq = old_vq = dev->virtqueue[index];
 
@@ -261,7 +263,7 @@ numa_realloc(struct virtio_net *dev, int index)
 		if (!vq)
 			return dev;
 
-		memcpy(vq, old_vq, sizeof(*vq) * VIRTIO_QNUM);
+		memcpy(vq, old_vq, sizeof(*vq));
 		rte_free(old_vq);
 	}
 

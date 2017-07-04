@@ -3912,10 +3912,6 @@ eth_igb_add_del_flex_filter(struct rte_eth_dev *dev,
 	}
 
 	wufc = E1000_READ_REG(hw, E1000_WUFC);
-	if (flex_filter->index < E1000_MAX_FHFT)
-		reg_off = E1000_FHFT(flex_filter->index);
-	else
-		reg_off = E1000_FHFT_EXT(flex_filter->index - E1000_MAX_FHFT);
 
 	if (add) {
 		if (eth_igb_flex_filter_lookup(&filter_info->flex_list,
@@ -3945,6 +3941,11 @@ eth_igb_add_del_flex_filter(struct rte_eth_dev *dev,
 			return -ENOSYS;
 		}
 
+		if (flex_filter->index < E1000_MAX_FHFT)
+			reg_off = E1000_FHFT(flex_filter->index);
+		else
+			reg_off = E1000_FHFT_EXT(flex_filter->index - E1000_MAX_FHFT);
+
 		E1000_WRITE_REG(hw, E1000_WUFC, wufc | E1000_WUFC_FLEX_HQ |
 				(E1000_WUFC_FLX0 << flex_filter->index));
 		queueing = filter->len |
@@ -3972,6 +3973,11 @@ eth_igb_add_del_flex_filter(struct rte_eth_dev *dev,
 			rte_free(flex_filter);
 			return -ENOENT;
 		}
+
+		if (it->index < E1000_MAX_FHFT)
+			reg_off = E1000_FHFT(it->index);
+		else
+			reg_off = E1000_FHFT_EXT(it->index - E1000_MAX_FHFT);
 
 		for (i = 0; i < E1000_FHFT_SIZE_IN_DWD; i++)
 			E1000_WRITE_REG(hw, reg_off + i * sizeof(uint32_t), 0);
@@ -5418,7 +5424,7 @@ eth_igb_configure_msix_intr(struct rte_eth_dev *dev)
 
 RTE_PMD_REGISTER_PCI(net_e1000_igb, rte_igb_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_e1000_igb, pci_id_igb_map);
-RTE_PMD_REGISTER_KMOD_DEP(net_e1000_igb, "* igb_uio | uio_pci_generic | vfio");
+RTE_PMD_REGISTER_KMOD_DEP(net_e1000_igb, "* igb_uio | uio_pci_generic | vfio-pci");
 RTE_PMD_REGISTER_PCI(net_e1000_igb_vf, rte_igbvf_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_e1000_igb_vf, pci_id_igbvf_map);
-RTE_PMD_REGISTER_KMOD_DEP(net_e1000_igb_vf, "* igb_uio | vfio");
+RTE_PMD_REGISTER_KMOD_DEP(net_e1000_igb_vf, "* igb_uio | vfio-pci");
