@@ -299,6 +299,9 @@ static uint16_t eth_ntacc_rx(void *queue,
       mbuf->ol_flags |= PKT_RX_RSS_HASH;
     }
 
+    mbuf->timestamp = dyn2->timestamp;
+    mbuf->ol_flags |= PKT_RX_TIMESTAMP;
+
     mbuf->port = rx_q->in_port;
 
     const uint16_t data_len = (uint16_t)(dyn2->capLength - dyn2->descrLength - 4);
@@ -315,9 +318,7 @@ static uint16_t eth_ntacc_rx(void *queue,
     num_rx++;
 
     /* Get the next packet if any */
-    if (_nt_net_get_next_packet(rx_q->pSeg,
-        NT_NET_GET_SEGMENT_LENGTH(rx_q->pSeg),
-        &rx_q->pkt) == 0 ) {
+    if (_nt_net_get_next_packet(rx_q->pSeg, NT_NET_GET_SEGMENT_LENGTH(rx_q->pSeg), &rx_q->pkt) == 0 ) {
       (*_NT_NetRxRelease)(rx_q->pNetRx, rx_q->pSeg);
       rx_q->pSeg = NULL;
       break;
