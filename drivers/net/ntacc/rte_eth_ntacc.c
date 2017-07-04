@@ -1338,6 +1338,13 @@ static struct eth_dev_ops ops = {
     .fw_version_get = eth_fw_version_get,
 };
 
+static struct eth_dev_ops ops_secondary = {
+    .stats_get = eth_stats_get,
+    .stats_reset = eth_stats_reset,
+    .dev_infos_get = eth_dev_info,
+    .fw_version_get = eth_fw_version_get,
+};
+
 static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
                                   const uint32_t port,
                                   const char     *ntpl_file,
@@ -1361,14 +1368,14 @@ static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
   /* now do all data allocation - for eth_dev structure, dummy pci driver
    * and internal (private) data
    */
-  data = rte_zmalloc_socket(name, sizeof(*data), 0, numa_node);
+  data = rte_zmalloc_socket(name, sizeof(struct rte_eth_dev_data), 0, numa_node);
   if (data == NULL) {
     RTE_LOG(ERR, PMD, "ERROR: Failed to allocate memory\n");
     iRet = 1;
     goto error;
   }
 
-  internals = rte_zmalloc_socket(name, sizeof(*internals), 0, numa_node);
+  internals = rte_zmalloc_socket(name, sizeof(struct pmd_internals), 0, numa_node);
   if (internals == NULL) {
     RTE_LOG(ERR, PMD, "ERROR: Failed to allocate memory\n");
     iRet = 1;
@@ -1386,9 +1393,9 @@ static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
   }
 
   /* reserve an ethdev entry */
-  *eth_dev = rte_eth_vdev_allocate(vdev, sizeof(*internals));
+  *eth_dev = rte_eth_vdev_allocate(vdev, 0);
   if (*eth_dev == NULL) {
-    RTE_LOG(ERR, PMD, "ERROR: Failed to allocate ether device\n");
+    RTE_LOG(ERR, PMD, "ERROR: Failed to allocate virtual device\n");
     iRet = 1;
     goto error;
   }
@@ -1544,7 +1551,12 @@ static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
   strncpy(data->name, name, RTE_ETH_NAME_MAX_LEN);
 
   (*eth_dev)->data = data;
-  (*eth_dev)->dev_ops = &ops;
+  if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
+    (*eth_dev)->dev_ops = &ops;
+  }
+  else {
+    (*eth_dev)->dev_ops = &ops_secondary;
+  }
 
 #ifndef USE_SW_STAT
   /* Open the stat stream */
@@ -1734,6 +1746,13 @@ static int rte_pmd_ntacc_dev_probe(struct rte_vdev_device *vdev)
                                                                        name,
                                                                        vdev->device.numa_node,
                                                                        rte_eal_process_type() == RTE_PROC_PRIMARY?"Primary":"Secondary");
+
+#ifdef USE_SW_STAT
+  if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+    RTE_LOG(ERR, PMD, "pmd_ntacc %s must run as a primary process, when using SW statistics\n", name);
+    return -1;
+  }
+#endif
 
   kvlist = rte_kvargs_parse(rte_vdev_device_args(vdev), valid_arguments);
   if (kvlist == NULL) {
