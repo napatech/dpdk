@@ -252,8 +252,11 @@ eth_af_packet_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	}
 
 	/* kick-off transmits */
-	if (sendto(pkt_q->sockfd, NULL, 0, MSG_DONTWAIT, NULL, 0) == -1)
-		num_tx = 0; /* error sending -- no packets transmitted */
+	if (sendto(pkt_q->sockfd, NULL, 0, MSG_DONTWAIT, NULL, 0) == -1) {
+		/* error sending -- no packets transmitted */
+		num_tx = 0;
+		num_tx_bytes = 0;
+	}
 
 	pkt_q->framenum = framenum;
 	pkt_q->tx_pkts += num_tx;
@@ -625,6 +628,8 @@ rte_pmd_init_internals(struct rte_vdev_device *dev,
 		goto error_early;
 	}
 	(*internals)->if_name = strdup(pair->value);
+	if ((*internals)->if_name == NULL)
+		goto error_early;
 	(*internals)->if_index = ifr.ifr_ifindex;
 
 	if (ioctl(sockfd, SIOCGIFHWADDR, &ifr) == -1) {
