@@ -34,6 +34,8 @@
 #ifndef __FILTER_NTACC_H__
 #define __FILTER_NTACC_H__
 
+#define NTPL_BSIZE 4096
+
 bool CheckFeatureLevel(uint32_t level);
 
 int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow *flow, int priority);

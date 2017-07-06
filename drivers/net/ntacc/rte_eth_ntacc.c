@@ -443,40 +443,43 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     }
   }
 
-  ntpl_buf = malloc(4096);
-  if (!ntpl_buf) {
-    RTE_LOG(ERR, PMD, "Out of memory in eth_dev_start\n");
-    goto StartError;
-  }
-  ntpl_buf[0] = 0;
-
-  // Set the priority
-  strcat(ntpl_buf, "assign[priority=62;Descriptor=DYN2;");
-
-  if (internals->rss_hf != 0) {
-    // Set the stream IDs
-    CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
-    // If RSS is used, then set the Hash mode
-    if (CreateHash(internals->rss_hf, internals, NULL, 62) != 0) {
-      RTE_LOG(ERR, PMD, "Failed to create hash function eth_dev_start\n");
+  if (nb_queues > 0) {
+    ntpl_buf = malloc(NTPL_BSIZE + 1);
+    if (!ntpl_buf) {
+      RTE_LOG(ERR, PMD, "Out of memory in eth_dev_start\n");
       goto StartError;
     }
-  }
-  else {
-    // Set the stream IDs
-    CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, 1, list_queues);
-  }
+    ntpl_buf[0] = 0;
 
-  // Set the port number
-  sprintf(&ntpl_buf[strlen(ntpl_buf)], "; tag=%s]=port==%u", internals->tagName, internals->port);
+    // Set the priority
+    strcat(ntpl_buf, "assign[priority=62;Descriptor=DYN2;");
 
-  if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
-    RTE_LOG(ERR, PMD, "Failed to create default filter in eth_dev_start\n");
-    goto StartError;
-  }
-  if (ntpl_buf) {
-    free(ntpl_buf);
-    ntpl_buf = NULL;
+    if (internals->rss_hf != 0) {
+      // Set the stream IDs
+      CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
+      // If RSS is used, then set the Hash mode
+      if (CreateHash(internals->rss_hf, internals, NULL, 62) != 0) {
+        RTE_LOG(ERR, PMD, "Failed to create hash function eth_dev_start\n");
+        goto StartError;
+      }
+    }
+    else {
+      // Set the stream IDs
+      CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, 1, list_queues);
+    }
+
+    // Set the port number
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, 
+             "; tag=%s]=port==%u", internals->tagName, internals->port);
+
+    if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
+      RTE_LOG(ERR, PMD, "Failed to create default filter in eth_dev_start\n");
+      goto StartError;
+    }
+    if (ntpl_buf) {
+      free(ntpl_buf);
+      ntpl_buf = NULL;
+    }
   }
 #endif
 
@@ -858,13 +861,13 @@ static void _cleanUpKeySet(int key, struct pmd_internals *internals)
 static void _cleanUpFlow(struct rte_flow *flow, struct pmd_internals *internals)
 {
   NtNtplInfo_t ntplInfo;
-  char ntpl_buf[20];
+  char ntpl_buf[21];
 
   LIST_REMOVE(flow, next);
   while (!LIST_EMPTY(&flow->ntpl_id)) {
     struct filter_flow *id;
     id = LIST_FIRST(&flow->ntpl_id);
-    sprintf(ntpl_buf, "delete=%d", id->ntpl_id);
+    snprintf(ntpl_buf, 20, "delete=%d", id->ntpl_id);
     DoNtpl(ntpl_buf, &ntplInfo, internals);
     RTE_LOG(DEBUG, PMD, "Deleting Item filter: %s\n", ntpl_buf);
     LIST_REMOVE(id, next);
@@ -900,7 +903,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   char *ntpl_buf = NULL;
   struct rte_flow *flow = NULL;
 
-  ntpl_buf = malloc(4096);
+  ntpl_buf = malloc(NTPL_BSIZE + 1);
   if (!ntpl_buf) {
     rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Out of memory");
     goto FlowError;
@@ -989,14 +992,14 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   }
 
   // Set the priority
-  sprintf(ntpl_buf, "assign[priority=%u;Descriptor=DYN2;", attr->priority);
+  snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN2;", attr->priority);
 
   // Set the stream IDs
   CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
 
   // Set the port number
-  sprintf(&ntpl_buf[strlen(ntpl_buf)], "; tag=%s]=port==%u", internals->tagName, internals->port);
-
+  snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
+           "; tag=%s]=port==%u", internals->tagName, internals->port);
 
   // Set the filter expression
   tunnel = false;
@@ -1443,6 +1446,8 @@ static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
     goto error;
   }
 
+  internals->nbPorts = info.u.system.data.numPorts;
+
   /* Find local port offset */
   info.cmd = NT_INFO_CMD_READ_PORT_V7;
   info.u.port_v7.portNo = (uint8_t)(port);
@@ -1453,12 +1458,11 @@ static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
     goto error;
   }
 
-  sprintf(internals->tagName, "port%d", port);
+  snprintf(internals->tagName, 9, "port%d", port);
   internals->adapterNo = info.u.port_v7.data.adapterNo;
   internals->port = port;
   internals->local_port = port - info.u.port_v7.data.adapterInfo.portOffset;
   internals->featureLevel = info.u.port_v7.data.adapterInfo.featureLevel;
-  internals->nbPorts = info.u.port_v7.data.adapterInfo.numPorts;
   internals->symHashMode = SYM_HASH_ENA_PER_PORT;
   internals->fpgaid.value = info.u.port_v7.data.adapterInfo.fpgaid.value;
 
@@ -1497,7 +1501,7 @@ static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
   }
 
   for (i=0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
-    internals->rxq[i].stream_id = STREAMIDS_PER_PORT * internals->local_port + i;
+    internals->rxq[i].stream_id = STREAMIDS_PER_PORT * internals->port + i;
     internals->rxq[i].pSeg = NULL;
     internals->rxq[i].enabled = 0;
   }
@@ -1540,7 +1544,7 @@ static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
   pmd_link.link_duplex = ETH_LINK_FULL_DUPLEX;
   pmd_link.link_status = 0;
 
-  internals->if_index = internals->local_port;
+  internals->if_index = internals->port;
 
   (*eth_dev)->device->numa_node = numa_node;
   data->dev_private = internals;
@@ -1792,7 +1796,7 @@ static int rte_pmd_ntacc_dev_probe(struct rte_vdev_device *vdev)
   if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
     /* Delete all NTPL */
     struct pmd_internals *internals = eth_dev->data->dev_private;
-    sprintf(ntplStr, "Delete=tag==%s", internals->tagName);
+    snprintf(ntplStr, MAX_NTPL_NAME - 1, "Delete=tag==%s", internals->tagName);
     if (DoNtpl(ntplStr, &ntplInfo, internals) != 0) {
       return -1;
     }

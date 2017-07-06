@@ -105,49 +105,15 @@ void pushNtplID(struct rte_flow *flow, uint32_t ntplId)
   }
 }
 
-static const char *GetHashTuple(struct pmd_internals *internals, uint8_t tuple)
-{
-  switch (internals->symHashMode) {
-  case SYM_HASH_DIS_PER_PORT:
-    switch (tuple) {
-    case 0x02:
-      return "hash2Tuple";
-    case 0x05:
-      return "hash5Tuple";
-    case 0x06:
-      return "hash5TupleSCTP";
-    case 0x12:
-      return "hashInner2Tuple";
-    case 0x15:
-      return "hashInner5Tuple";
-    }
-  default:
-  case SYM_HASH_ENA_PER_PORT:
-    switch (tuple) {
-    case 0x02:
-      return "hash2TupleSorted";
-    case 0x05:
-      return "hash5TupleSorted";
-    case 0x06:
-      return "hash5TupleSCTPSorted";
-    case 0x12:
-      return "hashInner2TupleSorted";
-    case 0x15:
-      return "hashInner5TupleSorted";
-    }
-  }
-  return "hashroundrobin";
-}
-
 void DeleteHash(uint64_t rss_hf, uint8_t port, int priority, struct pmd_internals *internals) {
   NtNtplInfo_t ntplInfo;
-  char ntpl_buf[20];
+  char ntpl_buf[21];
   struct filter_hash_s *pHash;
 
   LIST_FOREACH(pHash, &filter_hash, next) {
     if (pHash->rss_hf == rss_hf && pHash->port == port && pHash->priority == priority) {
       LIST_REMOVE(pHash, next);
-      sprintf(ntpl_buf, "delete=%d", pHash->ntpl_id);
+      snprintf(ntpl_buf, 20, "delete=%d", pHash->ntpl_id);
       DoNtpl(ntpl_buf, &ntplInfo, internals);
       RTE_LOG(DEBUG, PMD, "Deleting Hash filter: %s\n", ntpl_buf);
       free(pHash);
@@ -180,14 +146,60 @@ static int FindHash(uint64_t rss_hf, uint8_t port, int priority) {
   return 0;
 }
 
+#define TMP_BSIZE 200
+#define PRINT_HASH(a,b) { if (PrintHash(a, priority, internals, rss_hf, b) != 0)  return -1; }
+static int PrintHash(const char *str, int priority, struct pmd_internals *internals, uint64_t rss_hf, uint8_t tuple)
+{
+  NtNtplInfo_t ntplInfo;
+  char tmpBuf[TMP_BSIZE + 1];
+
+  const char *ptrTuple = "hashroundrobin";
+
+  switch (internals->symHashMode) {
+  case SYM_HASH_DIS_PER_PORT:
+    switch (tuple) {
+    case 0x02:
+      ptrTuple = "hash2Tuple";
+    case 0x05:
+      ptrTuple = "hash5Tuple";
+    case 0x06:
+      ptrTuple = "hash5TupleSCTP";
+    case 0x12:
+      ptrTuple = "hashInner2Tuple";
+    case 0x15:
+      ptrTuple = "hashInner5Tuple";
+    }
+  default:
+  case SYM_HASH_ENA_PER_PORT:
+    switch (tuple) {
+    case 0x02:
+      ptrTuple = "hash2TupleSorted";
+    case 0x05:
+      ptrTuple = "hash5TupleSorted";
+    case 0x06:
+      ptrTuple = "hash5TupleSCTPSorted";
+    case 0x12:
+      ptrTuple = "hashInner2TupleSorted";
+    case 0x15:
+      ptrTuple = "hashInner5TupleSorted";
+    }
+  }
+
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+  snprintf(tmpBuf, TMP_BSIZE, str, priority, internals->port, internals->tagName, ptrTuple);
+#pragma GCC diagnostic pop
+  if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
+    return -1;
+  }
+  pushHash(ntplInfo.ntplId, rss_hf, internals->port, priority);
+  return 0;
+}
 
 /**
  * Create the hash filter from the DPDK hash function.
  */
 int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow *flow, int priority)
 {
-  NtNtplInfo_t ntplInfo;
-  char tmpBuf[200];
   if (rss_hf == 0) {
     RTE_LOG(ERR, PMD, "No HASH function is selected. Ignoring hash.\n");
     return 0;
@@ -217,108 +229,84 @@ int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow
   /*****************************/
   if ((rss_hf & ETH_RSS_INNER_IPV4_UDP) || (rss_hf & ETH_RSS_INNER_IPV6_UDP)) {
     if ((rss_hf & ETH_RSS_INNER_IPV4_UDP) && (rss_hf & ETH_RSS_INNER_IPV6_UDP)) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IP;InnerLayer4Type=UDP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x15));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IP;InnerLayer4Type=UDP;tag=%s]=%s", 0x15);
     }
     else if (rss_hf & ETH_RSS_INNER_IPV4_UDP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4;InnerLayer4Type=UDP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x15));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4;InnerLayer4Type=UDP;tag=%s]=%s", 0x15);
     }
     else if (rss_hf & ETH_RSS_INNER_IPV6_UDP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;InnerLayer4Type=UDP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x15));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;InnerLayer4Type=UDP;tag=%s]=%s", 0x15);
     }
-    if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
-      return -1;
-    }
-    pushHash(ntplInfo.ntplId, rss_hf, internals->port, priority);
   }
   /*****************************/
   /* Inner TCP hash mode setup */
   /*****************************/
   if ((rss_hf & ETH_RSS_INNER_IPV4_TCP) || (rss_hf & ETH_RSS_INNER_IPV6_TCP)) {
     if ((rss_hf & ETH_RSS_INNER_IPV4_TCP) && (rss_hf & ETH_RSS_INNER_IPV6_TCP)) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IP;InnerLayer4Type=TCP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x15));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IP;InnerLayer4Type=TCP;tag=%s]=%s", 0x15);
     }
     else if (rss_hf & ETH_RSS_INNER_IPV4_TCP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4;InnerLayer4Type=TCP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x15));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4;InnerLayer4Type=TCP;tag=%s]=%s", 0x15);
     }
     else if (rss_hf & ETH_RSS_INNER_IPV6_TCP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;InnerLayer4Type=TCP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x15));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;InnerLayer4Type=TCP;tag=%s]=%s", 0x15);
     }
-    if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
-      return -1;
-    }
-    pushHash(ntplInfo.ntplId, rss_hf, internals->port, priority);
   }
   /******************************/
   /* Inner SCTP hash mode setup */
   /******************************/
   if ((rss_hf & ETH_RSS_INNER_IPV4_SCTP) || (rss_hf & ETH_RSS_INNER_IPV6_SCTP)) {
     if ((rss_hf & ETH_RSS_INNER_IPV4_SCTP) && (rss_hf & ETH_RSS_INNER_IPV6_SCTP)) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IP;InnerLayer4Type=SCTP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x15));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IP;InnerLayer4Type=SCTP;tag=%s]=%s", 0x15);
     }
     else if (rss_hf & ETH_RSS_INNER_IPV4_SCTP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4;InnerLayer4Type=SCTP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x15));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4;InnerLayer4Type=SCTP;tag=%s]=%s", 0x15);
     }
     else if (rss_hf & ETH_RSS_INNER_IPV6_SCTP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;InnerLayer4Type=SCTP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x15));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;InnerLayer4Type=SCTP;tag=%s]=%s", 0x15);
     }
-    if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
-      return -1;
-    }
-    pushHash(ntplInfo.ntplId, rss_hf, internals->port, priority);
   }
   /*****************************/
   /* Outer UDP hash mode setup */
   /*****************************/
   if ((rss_hf & ETH_RSS_NONFRAG_IPV4_UDP) || (rss_hf & ETH_RSS_NONFRAG_IPV6_UDP)) {
     if ((rss_hf & ETH_RSS_NONFRAG_IPV4_UDP) && (rss_hf & ETH_RSS_NONFRAG_IPV6_UDP)) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=UDP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x05));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=UDP;tag=%s]=%s", 0x05);
     }
     else if (rss_hf & ETH_RSS_NONFRAG_IPV4_UDP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=UDP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x05));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=UDP;tag=%s]=%s", 0x05);
     }
     else if (rss_hf & ETH_RSS_NONFRAG_IPV6_UDP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=UDP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x05));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=UDP;tag=%s]=%s", 0x05);
     }
-    if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
-      return -1;
-    }
-    pushHash(ntplInfo.ntplId, rss_hf, internals->port, priority);
   }
   /*****************************/
   /* Outer TCP hash mode setup */
   /*****************************/
   if ((rss_hf & ETH_RSS_NONFRAG_IPV4_TCP) || (rss_hf & ETH_RSS_NONFRAG_IPV6_TCP)) {
     if ((rss_hf & ETH_RSS_NONFRAG_IPV4_TCP) && (rss_hf & ETH_RSS_NONFRAG_IPV6_TCP)) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=TCP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x05));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=TCP;tag=%s]=%s", 0x05);
     }
     else if (rss_hf & ETH_RSS_NONFRAG_IPV4_TCP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=TCP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x05));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=TCP;tag=%s]=%s", 0x05);
     }
     else if (rss_hf & ETH_RSS_NONFRAG_IPV6_TCP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=TCP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x05));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=TCP;tag=%s]=%s", 0x05);
     }
-    if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
-      return -1;
-    }
-    pushHash(ntplInfo.ntplId, rss_hf, internals->port, priority);
   }
   /******************************/
   /* Outer SCTP hash mode setup */
   /******************************/
   if ((rss_hf & ETH_RSS_NONFRAG_IPV4_SCTP) || (rss_hf & ETH_RSS_NONFRAG_IPV6_SCTP)) {
     if ((rss_hf & ETH_RSS_NONFRAG_IPV4_SCTP) && (rss_hf & ETH_RSS_NONFRAG_IPV6_SCTP)) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=SCTP;tag=%s]==%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x06));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=SCTP;tag=%s]==%s", 0x06);
     }
     else if (rss_hf & ETH_RSS_NONFRAG_IPV4_SCTP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=SCTP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x06));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=SCTP;tag=%s]=%s", 0x06);
     }
     else if (rss_hf & ETH_RSS_NONFRAG_IPV6_SCTP) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=SCTP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x06));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=SCTP;tag=%s]=%s", 0x06);
     }
-    if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
-      return -1;
-    }
-    pushHash(ntplInfo.ntplId, rss_hf, internals->port, priority);
   }
   /****************************/
   /* Inner IP hash mode setup */
@@ -328,18 +316,14 @@ int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow
         ((rss_hf & ETH_RSS_INNER_IPV4_OTHER) && (rss_hf & ETH_RSS_INNER_IPV6)) ||
         ((rss_hf & ETH_RSS_INNER_IPV4_OTHER) && (rss_hf & ETH_RSS_INNER_IPV6_OTHER)) ||
         ((rss_hf & ETH_RSS_INNER_IPV4) && (rss_hf & ETH_RSS_INNER_IPV6_OTHER))) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x12));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IP;tag=%s]=%s", 0x12);
     }
     else if (rss_hf & ETH_RSS_INNER_IPV4) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x12));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4;tag=%s]=%s", 0x12);
     }
     else if (rss_hf & ETH_RSS_INNER_IPV6) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x12));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;tag=%s]=%s", 0x12);
     }
-    if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
-      return -1;
-    }
-    pushHash(ntplInfo.ntplId, rss_hf, internals->port, priority);
   }
   /****************************/
   /* Outer IP hash mode setup */
@@ -349,18 +333,14 @@ int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow
         ((rss_hf & ETH_RSS_NONFRAG_IPV4_OTHER) && (rss_hf & ETH_RSS_NONFRAG_IPV6_OTHER)) ||
         ((rss_hf & ETH_RSS_NONFRAG_IPV4_OTHER) && (rss_hf & ETH_RSS_IPV6)) ||
         ((rss_hf & ETH_RSS_IPV6) && (rss_hf & ETH_RSS_NONFRAG_IPV6_OTHER))) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IP;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x02));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IP;tag=%s]=%s", 0x02);
     }
     else if ((rss_hf & ETH_RSS_IPV4) || (rss_hf & ETH_RSS_NONFRAG_IPV4_OTHER)) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV4;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x02));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV4;tag=%s]=%s", 0x02);
     }
     else if ((rss_hf & ETH_RSS_IPV6)  || (rss_hf & ETH_RSS_NONFRAG_IPV6_OTHER)) {
-      sprintf(tmpBuf, "Hashmode[priority=%u;port=%u;Layer3Type=IPV6;tag=%s]=%s", priority, internals->port, internals->tagName, GetHashTuple(internals, 0x02));
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV6;tag=%s]=%s", 0x02);
     }
-    if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
-      return -1;
-    }
-    pushHash(ntplInfo.ntplId, rss_hf, internals->port, priority);
   }
   return 0;
 }
@@ -411,7 +391,7 @@ int ReturnKeysetValue(struct pmd_internals *internals, int value)
 void CreateStreamid(char *ntpl_buf, struct pmd_internals *internals, uint32_t nb_queues, uint8_t *list_queues)
 {
   bool range = true;
-  char buf[20];
+  char buf[21];
   uint32_t i;
 
   if (nb_queues > 1) {
@@ -430,12 +410,12 @@ void CreateStreamid(char *ntpl_buf, struct pmd_internals *internals, uint32_t nb
 
   strcat(ntpl_buf, "streamid=");
   if (range) {
-    sprintf(buf, "(%u..%u)", internals->rxq[0].stream_id, internals->rxq[nb_queues - 1].stream_id);
+    snprintf(buf, 20, "(%u..%u)", internals->rxq[0].stream_id, internals->rxq[nb_queues - 1].stream_id);
     strcat(ntpl_buf, buf);
   }
   else {
     for (i = 0; i < nb_queues; i++) {
-      sprintf(buf, "%u", internals->rxq[list_queues[i]].stream_id);
+      snprintf(buf, 20, "%u", internals->rxq[list_queues[i]].stream_id);
       strcat(ntpl_buf, buf);
       if (i < nb_queues - 1) {
         strcat(ntpl_buf, ",");
@@ -604,15 +584,15 @@ static int SetFilter(int size,
 
 void DeleteKeyset(int key, struct pmd_internals *internals) {
   NtNtplInfo_t ntplInfo;
-  char ntpl_buf[20];
+  char ntpl_buf[21];
   struct filter_keyset_s *key_set;
 
   LIST_FOREACH(key_set, &filter_keyset, next) {
     if (key_set->key == key) {
       LIST_REMOVE(key_set, next);
-      sprintf(ntpl_buf, "delete=%d", key_set->ntpl_id2);
+      snprintf(ntpl_buf, 20, "delete=%d", key_set->ntpl_id2);
       DoNtpl(ntpl_buf, &ntplInfo, internals);
-      sprintf(ntpl_buf, "delete=%d", key_set->ntpl_id1);
+      snprintf(ntpl_buf, 20, "delete=%d", key_set->ntpl_id1);
       DoNtpl(ntpl_buf, &ntplInfo, internals);
       free(key_set);
       return;
@@ -671,21 +651,21 @@ int CreateOptimizedFilter(char *ntpl_buf,
     goto Errors;
   }
   
-  filter_buffer1 = malloc(4096);
+  filter_buffer1 = malloc(NTPL_BSIZE + 1);
   if (!filter_buffer1) {
     iRet = -1;
     RTE_LOG(ERR, PMD, "Allocating memory failed\n");
     goto Errors;
   }
 
-  filter_buffer2 = malloc(4096);
+  filter_buffer2 = malloc(NTPL_BSIZE + 1);
   if (!filter_buffer2) {
     iRet = -1;
     RTE_LOG(ERR, PMD, "Allocating memory failed\n");
     goto Errors;
   }
 
-  filter_buffer3 = malloc(4096);
+  filter_buffer3 = malloc(NTPL_BSIZE + 1);
   if (!filter_buffer3) {
     iRet = -1;
     RTE_LOG(ERR, PMD, "Allocating memory failed\n");
@@ -714,36 +694,42 @@ int CreateOptimizedFilter(char *ntpl_buf,
     LIST_FOREACH(pFilter_values, &filter_values, next) {
       if (first) {
         if (color != -1) {
-          sprintf(filter_buffer3, "KeyType[name=KT%u; Access = partial; Bank = 0; colorinfo = true; tag=%s] = {", key, internals->tagName);
+          snprintf(filter_buffer3, NTPL_BSIZE,
+                   "KeyType[name=KT%u; Access = partial; Bank = 0; colorinfo = true; tag=%s] = {", key, internals->tagName);
         }
         else {
-          sprintf(filter_buffer3, "KeyType[name=KT%u; Access = partial; Bank = 0; tag=%s] = {", key, internals->tagName);
+          snprintf(filter_buffer3, NTPL_BSIZE,
+                  "KeyType[name=KT%u; Access = partial; Bank = 0; tag=%s] = {", key, internals->tagName);
         }
-        sprintf(filter_buffer2, "KeyDef[name=KDEF%u; KeyType=KT%u; tag=%s] = (", key, key, internals->tagName);
+        snprintf(filter_buffer2, NTPL_BSIZE,
+                 "KeyDef[name=KDEF%u; KeyType=KT%u; tag=%s] = (", key, key, internals->tagName);
         first=false;
       }
       else {
-        sprintf(&filter_buffer3[strlen(filter_buffer3)], ",");
-        sprintf(&filter_buffer2[strlen(filter_buffer2)], ",");
+        snprintf(&filter_buffer3[strlen(filter_buffer3)], NTPL_BSIZE - strlen(filter_buffer3) - 1, ",");
+        snprintf(&filter_buffer2[strlen(filter_buffer2)], NTPL_BSIZE - strlen(filter_buffer2) - 1, ",");
       }
 
-      sprintf(&filter_buffer3[strlen(filter_buffer3)], "%u", pFilter_values->size);
+      snprintf(&filter_buffer3[strlen(filter_buffer3)], NTPL_BSIZE - strlen(filter_buffer3) - 1, "%u", pFilter_values->size);
 
       if (pFilter_values->size == 128 && pFilter_values->layer == LAYER2) {
         // This is an ethernet address
-        sprintf(&filter_buffer2[strlen(filter_buffer2)], "{0xFFFFFFFFFFFFFFFFFFFFFFFF00000000:%s[%u]/%u}", pFilter_values->layerString, pFilter_values->offset, pFilter_values->size);
+        snprintf(&filter_buffer2[strlen(filter_buffer2)], NTPL_BSIZE - strlen(filter_buffer2) - 1, 
+                "{0xFFFFFFFFFFFFFFFFFFFFFFFF00000000:%s[%u]/%u}", pFilter_values->layerString, pFilter_values->offset, pFilter_values->size);
       }
       else {
         if (pFilter_values->mask != 0) {
-          sprintf(&filter_buffer2[strlen(filter_buffer2)], "{0x%llX:%s[%u]/%u}", (const long long unsigned int)pFilter_values->mask, pFilter_values->layerString, pFilter_values->offset, pFilter_values->size);
+          snprintf(&filter_buffer2[strlen(filter_buffer2)],  NTPL_BSIZE - strlen(filter_buffer2) - 1,
+                   "{0x%llX:%s[%u]/%u}", (const long long unsigned int)pFilter_values->mask, pFilter_values->layerString, pFilter_values->offset, pFilter_values->size);
         }
         else {
-          sprintf(&filter_buffer2[strlen(filter_buffer2)], "%s[%u]/%u", pFilter_values->layerString, pFilter_values->offset, pFilter_values->size);
+          snprintf(&filter_buffer2[strlen(filter_buffer2)],  NTPL_BSIZE - strlen(filter_buffer2) - 1,
+                  "%s[%u]/%u", pFilter_values->layerString, pFilter_values->offset, pFilter_values->size);
         }
       }
     }
-    sprintf(&filter_buffer3[strlen(filter_buffer3)], "}");
-    sprintf(&filter_buffer2[strlen(filter_buffer2)], ")");
+    snprintf(&filter_buffer3[strlen(filter_buffer3)],  NTPL_BSIZE - strlen(filter_buffer3) - 1, "}");
+    snprintf(&filter_buffer2[strlen(filter_buffer2)],  NTPL_BSIZE - strlen(filter_buffer2) - 1, ")");
 
     if (DoNtpl(filter_buffer3, pNtplInfo, internals)) {
       free(key_set);
@@ -776,91 +762,108 @@ int CreateOptimizedFilter(char *ntpl_buf,
   LIST_FOREACH(pFilter_values, &filter_values, next) {
     if (first) {
       if (color != -1) {
-        sprintf(filter_buffer1, "KeyList[KeySet=%u; KeyType=KT%u; color = %u; tag=%s] = (", key, key, color, internals->tagName);
+        snprintf(filter_buffer1, NTPL_BSIZE, 
+                 "KeyList[KeySet=%u; KeyType=KT%u; color = %u; tag=%s] = (", key, key, color, internals->tagName);
       }
       else {
-        sprintf(filter_buffer1, "KeyList[KeySet=%u; KeyType=KT%u; tag=%s] = (", key, key, internals->tagName);
+        snprintf(filter_buffer1, NTPL_BSIZE,
+                "KeyList[KeySet=%u; KeyType=KT%u; tag=%s] = (", key, key, internals->tagName);
       }
       first=false;
     }
     else {
-      sprintf(&filter_buffer1[strlen(filter_buffer1)], ",");
+      snprintf(&filter_buffer1[strlen(filter_buffer1)], NTPL_BSIZE - strlen(filter_buffer1) - 1, ",");
     }
 
     switch (pFilter_values->size) 
     {
     case 16:
       if (pFilter_values->value.v16.lastVal) {
-        sprintf(&filter_buffer1[strlen(filter_buffer1)], "(0x%04X..0x%04X)", pFilter_values->value.v16.specVal, pFilter_values->value.v16.lastVal);
+        snprintf(&filter_buffer1[strlen(filter_buffer1)], NTPL_BSIZE - strlen(filter_buffer1) - 1,
+                 "(0x%04X..0x%04X)", pFilter_values->value.v16.specVal, pFilter_values->value.v16.lastVal);
       }
       else if (pFilter_values->value.v16.maskVal) {
-        sprintf(&filter_buffer1[strlen(filter_buffer1)], "{0x%04X:0x%04X}", pFilter_values->value.v16.maskVal, pFilter_values->value.v16.specVal);
+        snprintf(&filter_buffer1[strlen(filter_buffer1)], NTPL_BSIZE - strlen(filter_buffer1) - 1,
+                 "{0x%04X:0x%04X}", pFilter_values->value.v16.maskVal, pFilter_values->value.v16.specVal);
       }
       else {
-        sprintf(&filter_buffer1[strlen(filter_buffer1)], "0x%04X", pFilter_values->value.v16.specVal);
+        snprintf(&filter_buffer1[strlen(filter_buffer1)], NTPL_BSIZE - strlen(filter_buffer1) - 1,
+                 "0x%04X", pFilter_values->value.v16.specVal);
       }
       break;
     case 32:
       if (pFilter_values->value.v32.lastVal) {
-        sprintf(&filter_buffer1[strlen(filter_buffer1)], "(0x%08X..0x%08X)", pFilter_values->value.v32.specVal, pFilter_values->value.v32.lastVal);
+        snprintf(&filter_buffer1[strlen(filter_buffer1)], NTPL_BSIZE - strlen(filter_buffer1) - 1,
+                 "(0x%08X..0x%08X)", pFilter_values->value.v32.specVal, pFilter_values->value.v32.lastVal);
       }
       else if (pFilter_values->value.v32.maskVal) {
-        sprintf(&filter_buffer1[strlen(filter_buffer1)], "{0x%08X:0x%08X}", pFilter_values->value.v32.maskVal, pFilter_values->value.v32.specVal);
+        snprintf(&filter_buffer1[strlen(filter_buffer1)], NTPL_BSIZE - strlen(filter_buffer1) - 1,
+                 "{0x%08X:0x%08X}", pFilter_values->value.v32.maskVal, pFilter_values->value.v32.specVal);
       }
       else {
-        sprintf(&filter_buffer1[strlen(filter_buffer1)], "0x%08X", pFilter_values->value.v32.specVal);
+        snprintf(&filter_buffer1[strlen(filter_buffer1)], NTPL_BSIZE - strlen(filter_buffer1) - 1,
+                 "0x%08X", pFilter_values->value.v32.specVal);
       }
       break;
     case 64:
       if (pFilter_values->value.v64.lastVal) {
-        sprintf(&filter_buffer1[strlen(filter_buffer1)], "(0x%016llX..0x%016llX)", (long long unsigned int)pFilter_values->value.v64.specVal, 
-                                                                                   (long long unsigned int)pFilter_values->value.v64.lastVal);
+        snprintf(&filter_buffer1[strlen(filter_buffer1)], NTPL_BSIZE - strlen(filter_buffer1) - 1,
+                 "(0x%016llX..0x%016llX)", (long long unsigned int)pFilter_values->value.v64.specVal, 
+                                           (long long unsigned int)pFilter_values->value.v64.lastVal);
       }
       else if (pFilter_values->value.v64.maskVal) {
-        sprintf(&filter_buffer1[strlen(filter_buffer1)], "{0x%016llX:0x%016llX}", (long long unsigned int)pFilter_values->value.v64.maskVal, 
-                                                                                  (long long unsigned int)pFilter_values->value.v64.specVal);
+        snprintf(&filter_buffer1[strlen(filter_buffer1)], NTPL_BSIZE - strlen(filter_buffer1) - 1,
+                 "{0x%016llX:0x%016llX}", (long long unsigned int)pFilter_values->value.v64.maskVal, 
+                                          (long long unsigned int)pFilter_values->value.v64.specVal);
       }
       else {
-        sprintf(&filter_buffer1[strlen(filter_buffer1)], "0x%016llX", (long long unsigned int)pFilter_values->value.v64.specVal);
+        snprintf(&filter_buffer1[strlen(filter_buffer1)], NTPL_BSIZE - strlen(filter_buffer1) - 1,
+                "0x%016llX", (long long unsigned int)pFilter_values->value.v64.specVal);
       }
       break;
     case 128:
       if (pFilter_values->layer == LAYER2) {
         if (NON_ZERO16(pFilter_values->value.v128.lastVal)) {
-          sprintf(&filter_buffer1[strlen(filter_buffer1)], "(0x%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X.."
-                                                            "0x%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X)", 
-                  MAC_ADDRESS2(pFilter_values->value.v128.specVal), MAC_ADDRESS2(pFilter_values->value.v128.lastVal));
+          snprintf(&filter_buffer1[strlen(filter_buffer1)], NTPL_BSIZE - strlen(filter_buffer1) - 1,
+                    "(0x%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X.."
+                    "0x%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X)", 
+                    MAC_ADDRESS2(pFilter_values->value.v128.specVal), MAC_ADDRESS2(pFilter_values->value.v128.lastVal));
         }
         else if (NON_ZERO16(pFilter_values->value.v128.maskVal)) {
-          sprintf(&filter_buffer1[strlen(filter_buffer1)], "{0x%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X:"
-                                                            "0x%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X}", 
-                  MAC_ADDRESS2(pFilter_values->value.v128.maskVal), MAC_ADDRESS2(pFilter_values->value.v128.specVal));
+          snprintf(&filter_buffer1[strlen(filter_buffer1)], NTPL_BSIZE - strlen(filter_buffer1) - 1,
+                   "{0x%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X:"
+                   "0x%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X}", 
+                   MAC_ADDRESS2(pFilter_values->value.v128.maskVal), MAC_ADDRESS2(pFilter_values->value.v128.specVal));
         }
         else {
-          sprintf(&filter_buffer1[strlen(filter_buffer1)], "0x%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
-                  MAC_ADDRESS2(pFilter_values->value.v128.specVal));
+          snprintf(&filter_buffer1[strlen(filter_buffer1)], NTPL_BSIZE - strlen(filter_buffer1) - 1,
+                   "0x%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
+                   MAC_ADDRESS2(pFilter_values->value.v128.specVal));
         }
       }
       else {
         if (NON_ZERO16(pFilter_values->value.v128.lastVal)) {
-          sprintf(&filter_buffer1[strlen(filter_buffer1)], "([%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X].."
-                                                           "[%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X])", 
-                  IPV6_ADDRESS(pFilter_values->value.v128.specVal), IPV6_ADDRESS(pFilter_values->value.v128.lastVal));
+          snprintf(&filter_buffer1[strlen(filter_buffer1)], NTPL_BSIZE - strlen(filter_buffer1) - 1,
+                   "([%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X].."
+                   "[%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X])", 
+                   IPV6_ADDRESS(pFilter_values->value.v128.specVal), IPV6_ADDRESS(pFilter_values->value.v128.lastVal));
         }
         else if (NON_ZERO16(pFilter_values->value.v128.maskVal)) {
-          sprintf(&filter_buffer1[strlen(filter_buffer1)], "{[%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X]:"
-                                                           "[%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X]}", 
-                  IPV6_ADDRESS(pFilter_values->value.v128.maskVal), IPV6_ADDRESS(pFilter_values->value.v128.specVal));
+          snprintf(&filter_buffer1[strlen(filter_buffer1)],  NTPL_BSIZE - strlen(filter_buffer1) - 1,
+                   "{[%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X]:"
+                   "[%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X]}", 
+                   IPV6_ADDRESS(pFilter_values->value.v128.maskVal), IPV6_ADDRESS(pFilter_values->value.v128.specVal));
         }
         else {
-          sprintf(&filter_buffer1[strlen(filter_buffer1)], "[%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X]", 
-                  IPV6_ADDRESS(pFilter_values->value.v128.specVal));
+          snprintf(&filter_buffer1[strlen(filter_buffer1)], NTPL_BSIZE - strlen(filter_buffer1) - 1,
+                   "[%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X]", 
+                   IPV6_ADDRESS(pFilter_values->value.v128.specVal));
         }
       }
       break;
     }
   }
-  sprintf(&filter_buffer1[strlen(filter_buffer1)], ")");
+  snprintf(&filter_buffer1[strlen(filter_buffer1)], NTPL_BSIZE - strlen(filter_buffer1) - 1, ")");
 
   // Cleanup filter values
   while (!LIST_EMPTY(&filter_values)) {
@@ -881,7 +884,7 @@ int CreateOptimizedFilter(char *ntpl_buf,
   if (*fc) strcat(ntpl_buf," and ");
   *fc = true;
 
-  sprintf(&ntpl_buf[strlen(ntpl_buf)], "Key(KDEF%u)==%u", key, key);
+  snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "Key(KDEF%u)==%u", key, key);
 
 Errors:
   if (pNtplInfo) {
@@ -2029,23 +2032,24 @@ int SetTunnelFilter(char *ntpl_buf,
   *fc = true;
   switch (type) {
   case GTP_TUNNEL_TYPE:
-    sprintf(&ntpl_buf[strlen(ntpl_buf)], "(TunnelType==GTPv%d-U)", version);
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "(TunnelType==GTPv%d-U)", version);
     *typeMask |= GTP_TUNNEL;
     break;
   case GRE_TUNNEL_TYPE:
-    sprintf(&ntpl_buf[strlen(ntpl_buf)], "(TunnelType==GREv%d)", version);
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "(TunnelType==GREv%d)", version);
     *typeMask |= GRE_TUNNEL;
     break;
   case VXLAN_TUNNEL_TYPE:
-    sprintf(&ntpl_buf[strlen(ntpl_buf)], "(TunnelType==VXLAN)");
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "(TunnelType==VXLAN)");
     *typeMask |= VXLAN_TUNNEL;
     break;
   case NVGRE_TUNNEL_TYPE:
-    sprintf(&ntpl_buf[strlen(ntpl_buf)], "((TunnelType == GREv0 OR TunnelType == GREv1) AND InnerLayer2Protocol != other)");
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, 
+            "((TunnelType == GREv0 OR TunnelType == GREv1) AND InnerLayer2Protocol != other)");
     *typeMask |= NVGRE_TUNNEL;
     break;
   case IP_IN_IP_TUNNEL_TYPE:
-    sprintf(&ntpl_buf[strlen(ntpl_buf)], "(TunnelType == IPinIP)");
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "(TunnelType == IPinIP)");
     *typeMask |= IP_IN_IP_TUNNEL;
     break;
   }
