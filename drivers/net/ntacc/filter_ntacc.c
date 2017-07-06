@@ -84,7 +84,8 @@ static LIST_HEAD(filter_keyset_t, filter_keyset_s) filter_keyset;
 
 static inline int _CheckArray(const uint8_t *addr, uint8_t len)
 {
-  for (int i = 0; i < len; i++) {
+  int i;
+  for (i = 0; i < len; i++) {
     if (addr[i] != 0 && addr[i] != 0xFF) {
       return 1;
     }
@@ -640,6 +641,7 @@ int CreateOptimizedFilter(char *ntpl_buf,
   char *filter_buffer1 = NULL;
   char *filter_buffer2 = NULL;
   char *filter_buffer3 = NULL;
+  int i;
 
   if (LIST_EMPTY(&filter_values)) {
     return 0;
@@ -745,7 +747,7 @@ int CreateOptimizedFilter(char *ntpl_buf,
     }
     key_set->ntpl_id2 = pNtplInfo->ntplId;
 
-    for (int i = 0; i < nb_queues; i++) {
+    for (i = 0; i < nb_queues; i++) {
       key_set->list_queues[i] = plist_queues[i];
     }
     key_set->nb_queues = nb_queues;
