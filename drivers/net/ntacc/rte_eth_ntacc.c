@@ -69,12 +69,6 @@
 #define MAX_NTACC_PORTS 32
 #define STREAMIDS_PER_PORT  (256 / internals->nbPorts)
 
-#define COLOR_PRESENT(a) ((a) & 0x2000)
-#define COLOR_CHECK(a)   ((a) > 0x1FFF)
-#define GET_COLOR(a) ((uint32_t)((a) & 0x1FFF))
-#define SET_COLOR(a) ((a) | 0x2000)
-#define GET_HASH(a)  ((uint32_t)((((uint64_t)(a)) >> 14) & 0xFFFFFF))
-
 #define MAX_NTPL_NAME 512
 
 static struct {
@@ -287,31 +281,32 @@ static uint16_t eth_ntacc_rx(void *queue,
     rte_mbuf_refcnt_set(mbuf, 1);
     rte_pktmbuf_reset(mbuf);
 
-   NtDyn2Descr_t *dyn2 = _NT_NET_GET_PKT_DESCR_PTR_DYN2(&rx_q->pkt);
+    NtDyn3Descr_t *dyn3 = _NT_NET_GET_PKT_DESCR_PTR_DYN3(&rx_q->pkt);
 
-    const uint64_t color = dyn2->color;
-    if (COLOR_PRESENT(color)) {
-      mbuf->hash.fdir.hi = GET_COLOR(color);
-      mbuf->ol_flags |= PKT_RX_FDIR_ID;
-    }
-    else {
-      mbuf->hash.rss = GET_HASH(color);
+    if (dyn3->descrLength == 20) {
+      // We do have a hash value defined
+      mbuf->hash.rss = dyn3->color_hi;
       mbuf->ol_flags |= PKT_RX_RSS_HASH;
     }
+    else {
+      // We do have a color value defined
+      mbuf->hash.fdir.hi = ((dyn3->color_hi << 14) & 0xFFFFC000) | dyn3->color_lo;
+      mbuf->ol_flags |= PKT_RX_FDIR_ID | PKT_RX_FDIR;
+    }
 
-    mbuf->timestamp = dyn2->timestamp;
+    mbuf->timestamp = dyn3->timestamp;
     mbuf->ol_flags |= PKT_RX_TIMESTAMP;
 
     mbuf->port = rx_q->in_port;
 
-    const uint16_t data_len = (uint16_t)(dyn2->capLength - dyn2->descrLength - 4);
+    const uint16_t data_len = (uint16_t)(dyn3->capLength - dyn3->descrLength - 4);
     if (data_len <= rx_q->buf_size) {
       /* Packet will fit in the mbuf, go ahead and copy */
       mbuf->pkt_len = mbuf->data_len = data_len;
-      rte_memcpy((u_char *)mbuf->buf_addr + RTE_PKTMBUF_HEADROOM, (uint8_t*)dyn2 + dyn2->descrLength, mbuf->data_len);
+      rte_memcpy((u_char *)mbuf->buf_addr + RTE_PKTMBUF_HEADROOM, (uint8_t*)dyn3 + dyn3->descrLength, mbuf->data_len);
     } else {
       /* Try read jumbo frame into multi mbufs. */
-      if (unlikely(eth_ntacc_rx_jumbo(rx_q->mb_pool, mbuf, (uint8_t*)dyn2 + dyn2->descrLength, data_len) == -1))
+      if (unlikely(eth_ntacc_rx_jumbo(rx_q->mb_pool, mbuf, (uint8_t*)dyn3 + dyn3->descrLength, data_len) == -1))
         break;
     }
 
@@ -443,7 +438,7 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     }
   }
 
-  if (nb_queues > 0) {
+  if (nb_queues > 0 && rx_q[0].enabled) {
     ntpl_buf = malloc(NTPL_BSIZE + 1);
     if (!ntpl_buf) {
       RTE_LOG(ERR, PMD, "Out of memory in eth_dev_start\n");
@@ -452,8 +447,7 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     ntpl_buf[0] = 0;
 
     // Set the priority
-    strcat(ntpl_buf, "assign[priority=62;Descriptor=DYN2;");
-
+    strcat(ntpl_buf, "assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;");
     if (internals->rss_hf != 0) {
       // Set the stream IDs
       CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
@@ -470,7 +464,7 @@ static int eth_dev_start(struct rte_eth_dev *dev)
 
     // Set the port number
     snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, 
-             "; tag=%s]=port==%u", internals->tagName, internals->port);
+             ";tag=%s]=port==%u", internals->tagName, internals->port);
 
     if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
       RTE_LOG(ERR, PMD, "Failed to create default filter in eth_dev_start\n");
@@ -891,12 +885,12 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   bool filterContinue = true;
   bool queueDefined = false;
   const struct rte_flow_action_rss *rss = NULL;
-  const struct rte_flow_action_mark *mark = NULL;
   uint32_t i;
   bool tunnel;
   int version;
   int tunneltype;
-  int color = -1;
+  struct color_s color = {0, false};
+
   uint64_t typeMask = 0;
   bool reuse;
 
@@ -937,12 +931,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
     case RTE_FLOW_ACTION_TYPE_VOID:
       continue;
     case RTE_FLOW_ACTION_TYPE_MARK:
-      mark = (const struct rte_flow_action_mark *)actions->conf;
-      if (COLOR_CHECK(mark->id)) {
-        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "mark id out of range. Must be less or equal to 0x1FFF");
-        goto FlowError;
-      }
-      color = SET_COLOR(mark->id);
+      color.color = ((const struct rte_flow_action_mark *)actions->conf)->id;
+      color.valid = true;
       break;
     case RTE_FLOW_ACTION_TYPE_RSS:
       rss = (const struct rte_flow_action_rss *)actions->conf;
@@ -992,14 +982,20 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   }
 
   // Set the priority
-  snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN2;", attr->priority);
+
+  if (color.valid) {
+    snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN3,length=22,colorbits=32;", attr->priority);
+  }
+  else {
+    snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN3,length=20,colorbits=14;", attr->priority);
+  }
 
   // Set the stream IDs
   CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
 
   // Set the port number
   snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
-           "; tag=%s]=port==%u", internals->tagName, internals->port);
+           ";tag=%s]=port==%u", internals->tagName, internals->port);
 
   // Set the filter expression
   tunnel = false;
@@ -1163,7 +1159,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       }
     }
 
-    if (CreateOptimizedFilter(ntpl_buf, internals, flow, &filterContinue, typeMask, list_queues, nb_queues, &reuse, color) != 0) {
+    if (CreateOptimizedFilter(ntpl_buf, internals, flow, &filterContinue, typeMask, list_queues, nb_queues, &reuse, &color) != 0) {
       rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Creating filter error");
       goto FlowError;
     }

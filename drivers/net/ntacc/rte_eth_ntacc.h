@@ -85,7 +85,6 @@ struct ntacc_rx_queue {
 #endif
 
   uint32_t               stream_id;
-
   uint8_t                in_port;
   const char             *name;
   const char             *type;

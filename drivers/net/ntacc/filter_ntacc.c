@@ -153,7 +153,7 @@ static int PrintHash(const char *str, int priority, struct pmd_internals *intern
 {
   NtNtplInfo_t ntplInfo;
   char tmpBuf[TMP_BSIZE + 1];
-
+  
   const char *ptrTuple = "hashroundrobin";
 
   switch (internals->symHashMode) {
@@ -161,29 +161,41 @@ static int PrintHash(const char *str, int priority, struct pmd_internals *intern
     switch (tuple) {
     case 0x02:
       ptrTuple = "hash2Tuple";
+      break;
     case 0x05:
       ptrTuple = "hash5Tuple";
+      break;
     case 0x06:
       ptrTuple = "hash5TupleSCTP";
+      break;
     case 0x12:
       ptrTuple = "hashInner2Tuple";
+      break;
     case 0x15:
       ptrTuple = "hashInner5Tuple";
+      break;
     }
+    break;
   default:
   case SYM_HASH_ENA_PER_PORT:
     switch (tuple) {
     case 0x02:
       ptrTuple = "hash2TupleSorted";
+      break;
     case 0x05:
       ptrTuple = "hash5TupleSorted";
+      break;
     case 0x06:
       ptrTuple = "hash5TupleSCTPSorted";
+      break;
     case 0x12:
       ptrTuple = "hashInner2TupleSorted";
+      break;
     case 0x15:
       ptrTuple = "hashInner5TupleSorted";
+      break;
     }
+    break;
   }
 
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
@@ -631,7 +643,7 @@ int CreateOptimizedFilter(char *ntpl_buf,
                           uint8_t *plist_queues, 
                           uint8_t nb_queues, 
                           bool *reuse, 
-                          int color)
+                          struct color_s *pColor)
 {
   NtNtplInfo_t *pNtplInfo = NULL;
   struct filter_values_s *pFilter_values;
@@ -695,16 +707,16 @@ int CreateOptimizedFilter(char *ntpl_buf,
 
     LIST_FOREACH(pFilter_values, &filter_values, next) {
       if (first) {
-        if (color != -1) {
+        if (pColor->valid) {
           snprintf(filter_buffer3, NTPL_BSIZE,
-                   "KeyType[name=KT%u; Access = partial; Bank = 0; colorinfo = true; tag=%s] = {", key, internals->tagName);
+                   "KeyType[name=KT%u;Access=partial;Bank=0;colorinfo=true;tag=%s]={", key, internals->tagName);
         }
         else {
           snprintf(filter_buffer3, NTPL_BSIZE,
-                  "KeyType[name=KT%u; Access = partial; Bank = 0; tag=%s] = {", key, internals->tagName);
+                  "KeyType[name=KT%u;Access=partial;Bank=0;tag=%s]={", key, internals->tagName);
         }
         snprintf(filter_buffer2, NTPL_BSIZE,
-                 "KeyDef[name=KDEF%u; KeyType=KT%u; tag=%s] = (", key, key, internals->tagName);
+                 "KeyDef[name=KDEF%u;KeyType=KT%u;tag=%s]=(", key, key, internals->tagName);
         first=false;
       }
       else {
@@ -763,13 +775,13 @@ int CreateOptimizedFilter(char *ntpl_buf,
   first = true;
   LIST_FOREACH(pFilter_values, &filter_values, next) {
     if (first) {
-      if (color != -1) {
+      if (pColor->valid) {
         snprintf(filter_buffer1, NTPL_BSIZE, 
-                 "KeyList[KeySet=%u; KeyType=KT%u; color = %u; tag=%s] = (", key, key, color, internals->tagName);
+                 "KeyList[KeySet=%u;KeyType=KT%u;color=%u;tag=%s]=(", key, key, pColor->color, internals->tagName);
       }
       else {
         snprintf(filter_buffer1, NTPL_BSIZE,
-                "KeyList[KeySet=%u; KeyType=KT%u; tag=%s] = (", key, key, internals->tagName);
+                "KeyList[KeySet=%u;KeyType=KT%u;tag=%s]=(", key, key, internals->tagName);
       }
       first=false;
     }
