@@ -34,6 +34,8 @@
 #ifndef __RTE_ETH_NTACC_H__
 #define __RTE_ETH_NTACC_H__
 
+#define SEGMENT_LENGTH  (1024*1024)
+
 struct filter_flow {
   LIST_ENTRY(filter_flow) next;
   uint32_t ntpl_id;

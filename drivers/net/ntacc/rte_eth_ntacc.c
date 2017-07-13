@@ -333,6 +333,7 @@ static uint16_t eth_ntacc_rx(void *queue,
 /*
  * Callback to handle sending packets through a real NIC.
  */
+#if 1
 static uint16_t eth_ntacc_tx(void *queue,
                              struct rte_mbuf **bufs,
                              uint16_t nb_pkts)
@@ -340,6 +341,7 @@ static uint16_t eth_ntacc_tx(void *queue,
   unsigned i;
   int ret;
   struct ntacc_tx_queue *tx_q = queue;
+  NtNetBuf_t hNetBufTx;
 
   if (unlikely(tx_q == NULL || tx_q->pNetTx == NULL || nb_pkts == 0)) {
     return 0;
@@ -347,33 +349,166 @@ static uint16_t eth_ntacc_tx(void *queue,
 
   for (i = 0; i < nb_pkts; i++) {
     struct rte_mbuf *mbuf = bufs[i];
-    struct NtNetTxFragment_s frag[10]; // Need fragments enough for a jumbo packet */
-    uint8_t fragCnt = 0;
-    frag[fragCnt].data = rte_pktmbuf_mtod(mbuf, u_char *);
-    frag[fragCnt++].size = mbuf->data_len;
-    if (unlikely(mbuf->nb_segs > 1)) {
-      while (mbuf->next) {
-        mbuf = mbuf->next;
-        frag[fragCnt].data = rte_pktmbuf_mtod(mbuf, u_char *);
-        frag[fragCnt++].size = mbuf->data_len;
-      }
-    }
-    ret = (*_NT_NetTxAddPacket)(tx_q->pNetTx, tx_q->port, frag, fragCnt, 0);
-    if (unlikely(ret != NT_SUCCESS)) {
-      /* unsent packets is not expected to be freed */
+    // Get a TX buffer for this packet
+    ret = (*_NT_NetTxGet)(tx_q->pNetTx, &hNetBufTx, tx_q->port, MAX(mbuf->data_len + 4, 64), NT_NETTX_PACKET_OPTION_L2, -1);
+    if(unlikely(ret != NT_SUCCESS)) {
+      char errorBuffer[NT_ERRBUF_SIZE]; // Error buffer
+      NT_ExplainError(ret, errorBuffer, NT_ERRBUF_SIZE);
+      RTE_LOG(ERR, PMD, "Failed to get a tx buffer: %s\n", errorBuffer);
 #ifdef USE_SW_STAT
       tx_q->err_pkts += (nb_pkts - i);
 #endif
-      break;
+      return i;
     }
+    NT_NET_SET_PKT_TXNOW(hNetBufTx, 1);
+    rte_memcpy(NT_NET_GET_PKT_L2_PTR(hNetBufTx), rte_pktmbuf_mtod(mbuf, u_char *), mbuf->data_len);
+    
+    // Release the TX buffer and the packet will be transmitted
+    ret = (*_NT_NetTxRelease)(tx_q->pNetTx, hNetBufTx);
+    if(unlikely(ret != NT_SUCCESS)) {
+      char errorBuffer[NT_ERRBUF_SIZE]; // Error buffer
+      NT_ExplainError(ret, errorBuffer, NT_ERRBUF_SIZE);
+      RTE_LOG(ERR, PMD, "Failed to tx a packet: %s\n", errorBuffer);
+#ifdef USE_SW_STAT
+      tx_q->err_pkts += (nb_pkts - i);
+#endif
+      return i;
+    }
+
     rte_pktmbuf_free(bufs[i]);
   }
 #ifdef USE_SW_STAT
       tx_q->tx_pkts += i;
 #endif
-
   return i;
 }
+#else
+static uint16_t eth_ntacc_tx(void *queue,
+                             struct rte_mbuf **bufs,
+                             uint16_t nb_pkts)
+{
+  int status;
+  struct ntacc_tx_queue *tx_q = queue;
+  struct NtNetBuf_s *hNetBufTx;
+  struct NtNetBuf_s pktNetBuf;    
+  uint32_t spaceLeftInSegment;
+  uint32_t tx_pkts;
+  uint32_t packetsInSegment;
+  struct rte_mbuf *mbuf;
+
+  if (unlikely(tx_q == NULL || tx_q->pNetTx == NULL || nb_pkts == 0)) {
+    return 0;
+  }
+
+  spaceLeftInSegment = 0;
+  packetsInSegment = 0;
+  tx_pkts = 0;
+  mbuf = bufs[tx_pkts];
+  while (tx_pkts < nb_pkts) {
+    for (;;) {
+      if (spaceLeftInSegment == 0) {
+        do {
+          // Get a TX segment of size SEGMENT_LENGTH
+          if((status = (*_NT_NetTxGet)(tx_q->pNetTx, &hNetBufTx, tx_q->port, SEGMENT_LENGTH, NT_NETTX_SEGMENT_OPTION_RAW, 1000)) != NT_SUCCESS) {
+            if(status != NT_STATUS_TIMEOUT) {
+              char errorBuffer[NT_ERRBUF_SIZE]; // Error buffer
+              NT_ExplainError(status, errorBuffer, NT_ERRBUF_SIZE);
+              RTE_LOG(ERR, PMD, "Failed to get a tx segment: %s\n", errorBuffer);
+#ifdef USE_SW_STAT
+              tx_q->err_pkts += (nb_pkts - tx_pkts);
+#endif
+              return tx_pkts;
+            }
+          }
+        }
+        while (status == NT_STATUS_TIMEOUT);
+        spaceLeftInSegment = SEGMENT_LENGTH;
+        packetsInSegment = 0;
+        // Get a packet buffer pointer from the segment.
+        _nt_net_build_pkt_netbuf(hNetBufTx, &pktNetBuf);
+      }
+
+      // Build the packet
+      NT_NET_SET_PKT_CLEAR_DESCR_NT((&pktNetBuf));
+      NT_NET_SET_PKT_DESCR_TYPE_NT((&pktNetBuf));
+      NT_NET_SET_PKT_RECALC_L2_CRC((&pktNetBuf), 1);
+      NT_NET_SET_PKT_TXPORT((&pktNetBuf), tx_q->port);
+      NT_NET_UPDATE_PKT_L2_PTR((&pktNetBuf));
+      NT_NET_SET_PKT_CAP_LENGTH((&pktNetBuf), (uint16_t)mbuf->data_len + 4);
+      NT_NET_SET_PKT_WIRE_LENGTH((&pktNetBuf), (uint16_t)mbuf->data_len + 4);
+      NT_NET_SET_PKT_TXNOW((&pktNetBuf), 1);
+
+      rte_memcpy(NT_NET_GET_PKT_L2_PTR((&pktNetBuf)), rte_pktmbuf_mtod(mbuf, u_char *), mbuf->data_len);
+
+      // Release buffer
+      rte_pktmbuf_free(bufs[tx_pkts]);
+
+      // Packets in the segment
+      tx_pkts++;
+      packetsInSegment++;
+
+      // Move the pointer to next packet and get the length of the remining space in the segment
+      spaceLeftInSegment = _nt_net_get_next_packet(hNetBufTx, NT_NET_GET_SEGMENT_LENGTH(hNetBufTx), &pktNetBuf);
+
+      if (tx_pkts >= nb_pkts) {
+        // No more packet. Transmit now
+        break;
+      }
+
+      // Get the next packet size to next transmit.
+      mbuf = bufs[tx_pkts];
+
+      // Check if we have space for more packets including a 64 byte dummy packet.
+      if (spaceLeftInSegment < (mbuf->data_len + 4 + 2 * NT_DESCR_NT_LENGTH + 64)) {
+        // Check if we have space for excately one packet.
+        if(spaceLeftInSegment != (mbuf->data_len + 4 + NT_DESCR_NT_LENGTH)) {
+          // No more space in segment. Transmit now
+          break;
+        }
+      }
+    }
+
+    // Fill the segment with dummy packets
+    while (spaceLeftInSegment > 0) {
+      if (spaceLeftInSegment > 9000) {
+        // Create an 8K dummy packet
+        NT_NET_SET_PKT_CLEAR_DESCR_NT((&pktNetBuf));
+        NT_NET_SET_PKT_DESCR_TYPE_NT((&pktNetBuf));
+        NT_NET_SET_PKT_CAP_LENGTH((&pktNetBuf), 8196);
+        NT_NET_SET_PKT_WIRE_LENGTH((&pktNetBuf), 8196);
+        NT_NET_SET_PKT_TXIGNORE((&pktNetBuf), 1);
+        spaceLeftInSegment = _nt_net_get_next_packet(hNetBufTx, NT_NET_GET_SEGMENT_LENGTH(hNetBufTx), &pktNetBuf);
+      }
+      else {
+        // Create a dummy packet
+        NT_NET_SET_PKT_CLEAR_DESCR_NT((&pktNetBuf));
+        NT_NET_SET_PKT_DESCR_TYPE_NT((&pktNetBuf));
+        NT_NET_SET_PKT_CAP_LENGTH((&pktNetBuf), spaceLeftInSegment - NT_DESCR_NT_LENGTH);
+        NT_NET_SET_PKT_WIRE_LENGTH((&pktNetBuf), spaceLeftInSegment - NT_DESCR_NT_LENGTH);
+        NT_NET_SET_PKT_TXIGNORE((&pktNetBuf), 1);
+        spaceLeftInSegment = 0;
+      }
+    }
+
+    // Release the TX buffer and the segment will be transmitted
+    if((status = (*_NT_NetTxRelease)(tx_q->pNetTx, hNetBufTx)) != NT_SUCCESS) {
+      char errorBuffer[NT_ERRBUF_SIZE]; // Error buffer
+      NT_ExplainError(status, errorBuffer, NT_ERRBUF_SIZE);
+      RTE_LOG(ERR, PMD, "Failed to get a tx segment: %s\n", errorBuffer);
+#ifdef USE_SW_STAT
+      tx_q->err_pkts += (nb_pkts - tx_pkts - packetsInSegment);
+#endif
+      return tx_pkts - packetsInSegment;
+    }
+    spaceLeftInSegment = 0;
+    packetsInSegment = 0;
+  }
+#ifdef USE_SW_STAT
+      tx_q->tx_pkts += tx_pkts;
+#endif
+  return tx_pkts;
+}
+#endif
 
 static int eth_dev_start(struct rte_eth_dev *dev)
 {
@@ -438,16 +573,25 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     }
   }
 
-  if (nb_queues > 0 && rx_q[0].enabled) {
-    ntpl_buf = malloc(NTPL_BSIZE + 1);
-    if (!ntpl_buf) {
-      RTE_LOG(ERR, PMD, "Out of memory in eth_dev_start\n");
+  ntpl_buf = malloc(NTPL_BSIZE + 1);
+  if (!ntpl_buf) {
+    RTE_LOG(ERR, PMD, "Out of memory in eth_dev_start\n");
+    goto StartError;
+  }
+
+  if (nb_queues > 0) {
+    /* Delete all NTPL */
+    snprintf(ntpl_buf, NTPL_BSIZE, "Delete=tag==%s", internals->tagName);
+    if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
+      RTE_LOG(ERR, PMD, "Failed to create delete filters in eth_dev_start\n");
       goto StartError;
     }
-    ntpl_buf[0] = 0;
+  }
+
+  if (nb_queues > 0 && rx_q[0].enabled) {
 
     // Set the priority
-    strcat(ntpl_buf, "assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;");
+    snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;");
     if (internals->rss_hf != 0) {
       // Set the stream IDs
       CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
@@ -470,10 +614,11 @@ static int eth_dev_start(struct rte_eth_dev *dev)
       RTE_LOG(ERR, PMD, "Failed to create default filter in eth_dev_start\n");
       goto StartError;
     }
-    if (ntpl_buf) {
-      free(ntpl_buf);
-      ntpl_buf = NULL;
-    }
+  }
+
+  if (ntpl_buf) {
+    free(ntpl_buf);
+    ntpl_buf = NULL;
   }
 #endif
 
@@ -584,6 +729,7 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
   dev_info->max_rx_queues = STREAMIDS_PER_PORT > RTE_ETHDEV_QUEUE_STAT_CNTRS ? RTE_ETHDEV_QUEUE_STAT_CNTRS : STREAMIDS_PER_PORT;
   dev_info->max_tx_queues = STREAMIDS_PER_PORT > RTE_ETHDEV_QUEUE_STAT_CNTRS ? RTE_ETHDEV_QUEUE_STAT_CNTRS : STREAMIDS_PER_PORT;
   dev_info->min_rx_bufsize = 0;
+  dev_info->default_txconf.txq_flags = ETH_TXQ_FLAGS_NOMULTSEGS;
 }
 
 #ifdef USE_SW_STAT
@@ -1315,7 +1461,15 @@ static int eth_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t 
                                                            internals->fpgaid.s.build);
   size_t size = strlen(buf);
   strncpy(fw_version, buf, MIN(size+1, fw_size));
-  return size;
+  if (fw_size > size) {
+    // We have space for the version string
+    return 0;
+  }
+  else {
+    // We do not have space for the version string
+    // return the needed space
+    return size;
+  }
 }
 
 static struct eth_dev_ops ops = {
@@ -1734,7 +1888,6 @@ static int rte_pmd_ntacc_dev_probe(struct rte_vdev_device *vdev)
   const char *name;
   struct rte_kvargs *kvlist;
   struct rte_eth_dev *eth_dev = NULL;
-  NtNtplInfo_t ntplInfo;
   unsigned int i;
   uint32_t port=0;
 
@@ -1789,14 +1942,6 @@ static int rte_pmd_ntacc_dev_probe(struct rte_vdev_device *vdev)
   if (rte_pmd_init_internals(vdev, port, ntplStr, &eth_dev) < 0)
     return -1;
 
-  if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-    /* Delete all NTPL */
-    struct pmd_internals *internals = eth_dev->data->dev_private;
-    snprintf(ntplStr, MAX_NTPL_NAME - 1, "Delete=tag==%s", internals->tagName);
-    if (DoNtpl(ntplStr, &ntplInfo, internals) != 0) {
-      return -1;
-    }
-  }
   eth_dev->rx_pkt_burst = eth_ntacc_rx;
   eth_dev->tx_pkt_burst = eth_ntacc_tx;
 
