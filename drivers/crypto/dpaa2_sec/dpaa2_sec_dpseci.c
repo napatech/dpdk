@@ -1263,7 +1263,7 @@ dpaa2_sec_dev_configure(struct rte_cryptodev *dev __rte_unused,
 {
 	PMD_INIT_FUNC_TRACE();
 
-	return -ENOTSUP;
+	return 0;
 }
 
 static int
