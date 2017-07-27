@@ -829,7 +829,7 @@ priv_flow_create_action_queue(struct priv *priv,
 		return NULL;
 	}
 	if (action->drop) {
-		qp = priv->flow_drop_queue->qp;
+		qp = priv->flow_drop_queue ? priv->flow_drop_queue->qp : NULL;
 	} else {
 		struct rxq *rxq = (*priv->rxqs)[action->queue_id];
 
@@ -837,6 +837,8 @@ priv_flow_create_action_queue(struct priv *priv,
 		rte_flow->qp = qp;
 	}
 	rte_flow->ibv_attr = ibv_attr;
+	if (!priv->started)
+		return rte_flow;
 	rte_flow->ibv_flow = ibv_create_flow(qp, rte_flow->ibv_attr);
 	if (!rte_flow->ibv_flow) {
 		rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE,
