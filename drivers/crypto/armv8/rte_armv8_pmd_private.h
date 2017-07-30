@@ -192,8 +192,8 @@ struct armv8_crypto_session {
 				uint8_t o_key_pad[SHA_BLOCK_MAX]
 							__rte_cache_aligned;
 				/**< outer pad (max supported block length) */
-				uint8_t key[SHA_AUTH_KEY_MAX];
-				/**< HMAC key (max supported length)*/
+				uint8_t key[SHA_BLOCK_MAX];
+				/**< HMAC key (max supported block length)*/
 			} hmac;
 		};
 	} auth;
