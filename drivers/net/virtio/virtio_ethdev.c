@@ -1678,6 +1678,12 @@ virtio_dev_configure(struct rte_eth_dev *dev)
 			return ret;
 	}
 
+	if (dev->data->dev_conf.intr_conf.rxq) {
+		ret = virtio_init_device(dev, hw->req_guest_features);
+		if (ret < 0)
+			return ret;
+	}
+
 	if (rxmode->hw_ip_checksum &&
 		!vtpci_with_feature(hw, VIRTIO_NET_F_GUEST_CSUM)) {
 		PMD_DRV_LOG(NOTICE,
