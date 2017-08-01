@@ -50,10 +50,19 @@
 #define MAX_PKT_BURST 32
 #define VHOST_LOG_PAGE	4096
 
+/*
+ * Atomically set a bit in memory.
+ */
+static inline void __attribute__((always_inline))
+vhost_set_bit(unsigned int nr, volatile uint8_t *addr)
+{
+	__sync_fetch_and_or_8(addr, (1U << nr));
+}
+
 static inline void __attribute__((always_inline))
 vhost_log_page(uint8_t *log_base, uint64_t page)
 {
-	log_base[page / 8] |= 1 << (page % 8);
+	vhost_set_bit(page % 8, &log_base[page / 8]);
 }
 
 static inline void __attribute__((always_inline))
