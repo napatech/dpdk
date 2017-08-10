@@ -1,6 +1,6 @@
 #   BSD LICENSE
 #
-#   Copyright(c) 2016 Cavium networks. All rights reserved.
+#   Copyright(c) 2016 Cavium, Inc. All rights reserved.
 #   All rights reserved.
 #
 #   Redistribution and use in source and binary forms, with or without
@@ -13,7 +13,7 @@
 #       notice, this list of conditions and the following disclaimer in
 #       the documentation and/or other materials provided with the
 #       distribution.
-#     * Neither the name of Cavium networks nor the names of its
+#     * Neither the name of Cavium, Inc nor the names of its
 #       contributors may be used to endorse or promote products derived
 #       from this software without specific prior written permission.
 #
@@ -39,5 +39,7 @@ DIRS-$(CONFIG_RTE_LIBRTE_PMD_SW_EVENTDEV) += sw
 DEPDIRS-sw = $(core-libs) librte_kvargs librte_ring
 DIRS-$(CONFIG_RTE_LIBRTE_PMD_OCTEONTX_SSOVF) += octeontx
 DEPDIRS-octeontx = $(core-libs)
+DIRS-$(CONFIG_RTE_LIBRTE_PMD_DPAA2_EVENTDEV) += dpaa2
+DEPDIRS-dpaa2 = $(core-libs) librte_bus_fslmc
 
 include $(RTE_SDK)/mk/rte.subdir.mk

@@ -151,6 +151,8 @@ SRCS-y += test_interrupts.c
 SRCS-y += test_version.c
 SRCS-y += test_func_reentrancy.c
 
+SRCS-y += test_service_cores.c
+
 SRCS-$(CONFIG_RTE_LIBRTE_CMDLINE) += test_cmdline.c
 SRCS-$(CONFIG_RTE_LIBRTE_CMDLINE) += test_cmdline_num.c
 SRCS-$(CONFIG_RTE_LIBRTE_CMDLINE) += test_cmdline_etheraddr.c
@@ -201,6 +203,7 @@ SRCS-$(CONFIG_RTE_LIBRTE_CRYPTODEV) += test_cryptodev.c
 
 ifeq ($(CONFIG_RTE_LIBRTE_EVENTDEV),y)
 SRCS-y += test_eventdev.c
+SRCS-y += test_event_ring.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_SW_EVENTDEV) += test_eventdev_sw.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_OCTEONTX_SSOVF) += test_eventdev_octeontx.c
 endif

@@ -52,11 +52,11 @@
 #include <rte_errno.h>
 #include <rte_string_fns.h>
 #include <rte_cpuflags.h>
-#include <rte_log.h>
 #include <rte_rwlock.h>
 #include <rte_spinlock.h>
 #include <rte_ring.h>
 #include <rte_compat.h>
+#include <rte_pause.h>
 
 #include "rte_hash.h"
 #include "rte_cuckoo_hash.h"
@@ -538,8 +538,10 @@ __rte_hash_add_key_with_hash(const struct rte_hash *h, const void *key,
 			n_slots = rte_ring_mc_dequeue_burst(h->free_slots,
 					cached_free_slots->objs,
 					LCORE_CACHE_SIZE, NULL);
-			if (n_slots == 0)
-				return -ENOSPC;
+			if (n_slots == 0) {
+				ret = -ENOSPC;
+				goto failure;
+			}
 
 			cached_free_slots->len += n_slots;
 		}
@@ -548,8 +550,10 @@ __rte_hash_add_key_with_hash(const struct rte_hash *h, const void *key,
 		cached_free_slots->len--;
 		slot_id = cached_free_slots->objs[cached_free_slots->len];
 	} else {
-		if (rte_ring_sc_dequeue(h->free_slots, &slot_id) != 0)
-			return -ENOSPC;
+		if (rte_ring_sc_dequeue(h->free_slots, &slot_id) != 0) {
+			ret = -ENOSPC;
+			goto failure;
+		}
 	}
 
 	new_k = RTE_PTR_ADD(keys, (uintptr_t)slot_id * h->key_entry_size);
@@ -569,7 +573,7 @@ __rte_hash_add_key_with_hash(const struct rte_hash *h, const void *key,
 				k->pdata = data;
 				/*
 				 * Return index where key is stored,
-				 * substracting the first dummy index
+				 * subtracting the first dummy index
 				 */
 				return prim_bkt->key_idx[i] - 1;
 			}
@@ -589,7 +593,7 @@ __rte_hash_add_key_with_hash(const struct rte_hash *h, const void *key,
 				k->pdata = data;
 				/*
 				 * Return index where key is stored,
-				 * substracting the first dummy index
+				 * subtracting the first dummy index
 				 */
 				return sec_bkt->key_idx[i] - 1;
 			}
@@ -659,6 +663,7 @@ __rte_hash_add_key_with_hash(const struct rte_hash *h, const void *key,
 	/* Error in addition, store new slot back in the ring and return error */
 	enqueue_slot_back(h, cached_free_slots, (void *)((uintptr_t) new_idx));
 
+failure:
 	if (h->add_key == ADD_KEY_MULTIWRITER)
 		rte_spinlock_unlock(h->multiwriter_lock);
 	return ret;
@@ -730,7 +735,7 @@ __rte_hash_lookup_with_hash(const struct rte_hash *h, const void *key,
 					*data = k->pdata;
 				/*
 				 * Return index where key is stored,
-				 * substracting the first dummy index
+				 * subtracting the first dummy index
 				 */
 				return bkt->key_idx[i] - 1;
 			}
@@ -753,7 +758,7 @@ __rte_hash_lookup_with_hash(const struct rte_hash *h, const void *key,
 					*data = k->pdata;
 				/*
 				 * Return index where key is stored,
-				 * substracting the first dummy index
+				 * subtracting the first dummy index
 				 */
 				return bkt->key_idx[i] - 1;
 			}
@@ -847,7 +852,7 @@ __rte_hash_del_key_with_hash(const struct rte_hash *h, const void *key,
 
 				/*
 				 * Return index where key is stored,
-				 * substracting the first dummy index
+				 * subtracting the first dummy index
 				 */
 				ret = bkt->key_idx[i] - 1;
 				bkt->key_idx[i] = EMPTY_SLOT;
@@ -872,7 +877,7 @@ __rte_hash_del_key_with_hash(const struct rte_hash *h, const void *key,
 
 				/*
 				 * Return index where key is stored,
-				 * substracting the first dummy index
+				 * subtracting the first dummy index
 				 */
 				ret = bkt->key_idx[i] - 1;
 				bkt->key_idx[i] = EMPTY_SLOT;

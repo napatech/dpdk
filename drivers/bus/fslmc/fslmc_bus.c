@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright (c) 2016 NXP. All rights reserved.
+ *   Copyright 2016 NXP.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -32,6 +32,7 @@
 
 #include <string.h>
 #include <dirent.h>
+#include <stdbool.h>
 
 #include <rte_log.h>
 #include <rte_bus.h>
@@ -105,6 +106,25 @@ rte_fslmc_probe(void)
 	return ret;
 }
 
+static struct rte_device *
+rte_fslmc_find_device(const struct rte_device *start, rte_dev_cmp_t cmp,
+		      const void *data)
+{
+	struct rte_dpaa2_device *dev;
+
+	TAILQ_FOREACH(dev, &rte_fslmc_bus.device_list, next) {
+		if (start && &dev->device == start) {
+			start = NULL;  /* starting point found */
+			continue;
+		}
+
+		if (cmp(&dev->device, data) == 0)
+			return &dev->device;
+	}
+
+	return NULL;
+}
+
 /*register a fslmc bus based dpaa2 driver */
 void
 rte_fslmc_driver_register(struct rte_dpaa2_driver *driver)
@@ -133,9 +153,10 @@ struct rte_fslmc_bus rte_fslmc_bus = {
 	.bus = {
 		.scan = rte_fslmc_scan,
 		.probe = rte_fslmc_probe,
+		.find_device = rte_fslmc_find_device,
 	},
 	.device_list = TAILQ_HEAD_INITIALIZER(rte_fslmc_bus.device_list),
 	.driver_list = TAILQ_HEAD_INITIALIZER(rte_fslmc_bus.driver_list),
 };
 
-RTE_REGISTER_BUS(FSLMC_BUS_NAME, rte_fslmc_bus.bus);
+RTE_REGISTER_BUS(fslmc, rte_fslmc_bus.bus);

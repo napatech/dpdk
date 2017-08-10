@@ -1,5 +1,5 @@
 ..  BSD LICENSE
-    Copyright(c) 2016 Intel Corporation. All rights reserved.
+    Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
     All rights reserved.
 
     Redistribution and use in source and binary forms, with or without
@@ -153,7 +153,7 @@ The mapping of lcores to port/queues is similar to other l3fwd applications.
 For example, given the following command line::
 
     ./build/ipsec-secgw -l 20,21 -n 4 --socket-mem 0,2048       \
-           --vdev "cryptodev_null_pmd" -- -p 0xf -P -u 0x3      \
+           --vdev "crypto_null" -- -p 0xf -P -u 0x3      \
            --config="(0,0,20),(1,0,20),(2,0,21),(3,0,21)"       \
            -f /path/to/config_file                              \
 
@@ -165,7 +165,7 @@ where each options means:
 
 *   The ``--socket-mem`` to use 2GB on socket 1.
 
-*   The ``--vdev "cryptodev_null_pmd"`` option creates virtual NULL cryptodev PMD.
+*   The ``--vdev "crypto_null"`` option creates virtual NULL cryptodev PMD.
 
 *   The ``-p`` option enables ports (detected) 0, 1, 2 and 3.
 
@@ -218,7 +218,7 @@ For example, something like the following command line:
 
     ./build/ipsec-secgw -l 20,21 -n 4 --socket-mem 0,2048 \
             -w 81:00.0 -w 81:00.1 -w 81:00.2 -w 81:00.3 \
-            --vdev "cryptodev_aesni_mb_pmd" --vdev "cryptodev_null_pmd" \
+            --vdev "crypto_aesni_mb" --vdev "crypto_null" \
 	    -- \
             -p 0xf -P -u 0x3 --config="(0,0,20),(1,0,20),(2,0,21),(3,0,21)" \
             -f sample.cfg
@@ -412,14 +412,13 @@ where each options means:
 
  * Cipher algorithm
 
- * Optional: No
+ * Optional: Yes, unless <aead_algo> is not used
 
  * Available options:
 
    * *null*: NULL algorithm
    * *aes-128-cbc*: AES-CBC 128-bit algorithm
    * *aes-128-ctr*: AES-CTR 128-bit algorithm
-   * *aes-128-gcm*: AES-GCM 128-bit algorithm
 
  * Syntax: *cipher_algo <your algorithm>*
 
@@ -427,7 +426,8 @@ where each options means:
 
  * Cipher key, NOT available when 'null' algorithm is used
 
- * Optional: No, must followed by <cipher_algo> option
+ * Optional: Yes, unless <aead_algo> is not used.
+   Must be followed by <cipher_algo> option
 
  * Syntax: Hexadecimal bytes (0x0-0xFF) concatenate by colon symbol ':'.
    The number of bytes should be as same as the specified cipher algorithm
@@ -440,26 +440,52 @@ where each options means:
 
  * Authentication algorithm
 
- * Optional: No
+ * Optional: Yes, unless <aead_algo> is not used
 
  * Available options:
 
     * *null*: NULL algorithm
     * *sha1-hmac*: HMAC SHA1 algorithm
-    * *aes-128-gcm*: AES-GCM 128-bit algorithm
 
 ``<auth_key>``
 
  * Authentication key, NOT available when 'null' or 'aes-128-gcm' algorithm
    is used.
 
- * Optional: No, must followed by <auth_algo> option
+ * Optional: Yes, unless <aead_algo> is not used.
+   Must be followed by <auth_algo> option
 
  * Syntax: Hexadecimal bytes (0x0-0xFF) concatenate by colon symbol ':'.
    The number of bytes should be as same as the specified authentication
    algorithm key size.
 
    For example: *auth_key A1:B2:C3:D4:A1:B2:C3:D4:A1:B2:C3:D4:A1:B2:C3:D4:
+   A1:B2:C3:D4*
+
+``<aead_algo>``
+
+ * AEAD algorithm
+
+ * Optional: Yes, unless <cipher_algo> and <auth_algo> are not used
+
+ * Available options:
+
+   * *aes-128-gcm*: AES-GCM 128-bit algorithm
+
+ * Syntax: *cipher_algo <your algorithm>*
+
+``<aead_key>``
+
+ * Cipher key, NOT available when 'null' algorithm is used
+
+ * Optional: Yes, unless <cipher_algo> and <auth_algo> are not used.
+   Must be followed by <aead_algo> option
+
+ * Syntax: Hexadecimal bytes (0x0-0xFF) concatenate by colon symbol ':'.
+   The number of bytes should be as same as the specified AEAD algorithm
+   key size.
+
+   For example: *aead_key A1:B2:C3:D4:A1:B2:C3:D4:A1:B2:C3:D4:
    A1:B2:C3:D4*
 
 ``<mode>``
@@ -515,9 +541,8 @@ Example SA rules:
     src 1111:1111:1111:1111:1111:1111:1111:5555 \
     dst 2222:2222:2222:2222:2222:2222:2222:5555
 
-    sa in 105 cipher_algo aes-128-gcm \
-    cipher_key de:ad:be:ef:de:ad:be:ef:de:ad:be:ef:de:ad:be:ef:de:ad:be:ef \
-    auth_algo aes-128-gcm \
+    sa in 105 aead_algo aes-128-gcm \
+    aead_key de:ad:be:ef:de:ad:be:ef:de:ad:be:ef:de:ad:be:ef:de:ad:be:ef \
     mode ipv4-tunnel src 172.16.2.5 dst 172.16.1.5
 
 Routing rule syntax

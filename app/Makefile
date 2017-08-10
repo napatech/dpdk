@@ -39,4 +39,8 @@ ifeq ($(CONFIG_RTE_LIBRTE_CRYPTODEV),y)
 DIRS-$(CONFIG_RTE_APP_CRYPTO_PERF) += test-crypto-perf
 endif
 
+ifeq ($(CONFIG_RTE_LIBRTE_EVENTDEV),y)
+DIRS-$(CONFIG_RTE_APP_EVENTDEV) += test-eventdev
+endif
+
 include $(RTE_SDK)/mk/rte.subdir.mk

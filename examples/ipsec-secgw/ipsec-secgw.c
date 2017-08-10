@@ -710,10 +710,12 @@ main_loop(__attribute__((unused)) void *dummy)
 	qconf->inbound.sp6_ctx = socket_ctx[socket_id].sp_ip6_in;
 	qconf->inbound.sa_ctx = socket_ctx[socket_id].sa_in;
 	qconf->inbound.cdev_map = cdev_map_in;
+	qconf->inbound.session_pool = socket_ctx[socket_id].session_pool;
 	qconf->outbound.sp4_ctx = socket_ctx[socket_id].sp_ip4_out;
 	qconf->outbound.sp6_ctx = socket_ctx[socket_id].sp_ip6_out;
 	qconf->outbound.sa_ctx = socket_ctx[socket_id].sa_out;
 	qconf->outbound.cdev_map = cdev_map_out;
+	qconf->outbound.session_pool = socket_ctx[socket_id].session_pool;
 
 	if (qconf->nb_rx_queue == 0) {
 		RTE_LOG(INFO, IPSEC, "lcore %u has nothing to do\n", lcore_id);
@@ -1238,6 +1240,13 @@ cryptodevs_init(void)
 
 	printf("lcore/cryptodev/qp mappings:\n");
 
+	uint32_t max_sess_sz = 0, sess_sz;
+	for (cdev_id = 0; cdev_id < rte_cryptodev_count(); cdev_id++) {
+		sess_sz = rte_cryptodev_get_private_session_size(cdev_id);
+		if (sess_sz > max_sess_sz)
+			max_sess_sz = sess_sz;
+	}
+
 	idx = 0;
 	/* Start from last cdev id to give HW priority */
 	for (cdev_id = rte_cryptodev_count() - 1; cdev_id >= 0; cdev_id--) {
@@ -1266,17 +1275,39 @@ cryptodevs_init(void)
 
 		dev_conf.socket_id = rte_cryptodev_socket_id(cdev_id);
 		dev_conf.nb_queue_pairs = qp;
-		dev_conf.session_mp.nb_objs = CDEV_MP_NB_OBJS;
-		dev_conf.session_mp.cache_size = CDEV_MP_CACHE_SZ;
+
+		if (!socket_ctx[dev_conf.socket_id].session_pool) {
+			char mp_name[RTE_MEMPOOL_NAMESIZE];
+			struct rte_mempool *sess_mp;
+
+			snprintf(mp_name, RTE_MEMPOOL_NAMESIZE,
+					"sess_mp_%u", dev_conf.socket_id);
+			sess_mp = rte_mempool_create(mp_name,
+					CDEV_MP_NB_OBJS,
+					max_sess_sz,
+					CDEV_MP_CACHE_SZ,
+					0, NULL, NULL, NULL,
+					NULL, dev_conf.socket_id,
+					0);
+			if (sess_mp == NULL)
+				rte_exit(EXIT_FAILURE,
+					"Cannot create session pool on socket %d\n",
+					dev_conf.socket_id);
+			else
+				printf("Allocated session pool on socket %d\n",
+					dev_conf.socket_id);
+			socket_ctx[dev_conf.socket_id].session_pool = sess_mp;
+		}
 
 		if (rte_cryptodev_configure(cdev_id, &dev_conf))
-			rte_panic("Failed to initialize crypodev %u\n",
+			rte_panic("Failed to initialize cryptodev %u\n",
 					cdev_id);
 
 		qp_conf.nb_descriptors = CDEV_QUEUE_DESC;
 		for (qp = 0; qp < dev_conf.nb_queue_pairs; qp++)
 			if (rte_cryptodev_queue_pair_setup(cdev_id, qp,
-						&qp_conf, dev_conf.socket_id))
+					&qp_conf, dev_conf.socket_id,
+					socket_ctx[dev_conf.socket_id].session_pool))
 				rte_panic("Failed to setup queue %u for "
 						"cdev_id %u\n",	0, cdev_id);
 
@@ -1330,6 +1361,11 @@ port_init(uint8_t portid)
 			&port_conf);
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "Cannot configure device: "
+				"err=%d, port=%d\n", ret, portid);
+
+	ret = rte_eth_dev_adjust_nb_rx_tx_desc(portid, &nb_rxd, &nb_txd);
+	if (ret < 0)
+		rte_exit(EXIT_FAILURE, "Cannot adjust number of descriptors: "
 				"err=%d, port=%d\n", ret, portid);
 
 	/* init one TX queue per lcore */
@@ -1433,7 +1469,7 @@ main(int32_t argc, char **argv)
 
 	nb_lcores = rte_lcore_count();
 
-	/* Replicate each contex per socket */
+	/* Replicate each context per socket */
 	for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++) {
 		if (rte_lcore_is_enabled(lcore_id) == 0)
 			continue;

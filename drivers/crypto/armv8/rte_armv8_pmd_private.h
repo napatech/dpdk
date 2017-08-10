@@ -1,7 +1,7 @@
 /*
  *   BSD LICENSE
  *
- *   Copyright (C) Cavium networks Ltd. 2017.
+ *   Copyright (C) Cavium, Inc. 2017.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -13,7 +13,7 @@
  *       notice, this list of conditions and the following disclaimer in
  *       the documentation and/or other materials provided with the
  *       distribution.
- *     * Neither the name of Cavium networks nor the names of its
+ *     * Neither the name of Cavium, Inc nor the names of its
  *       contributors may be used to endorse or promote products derived
  *       from this software without specific prior written permission.
  *
@@ -32,6 +32,9 @@
 
 #ifndef _RTE_ARMV8_PMD_PRIVATE_H_
 #define _RTE_ARMV8_PMD_PRIVATE_H_
+
+#define CRYPTODEV_NAME_ARMV8_PMD	crypto_armv8
+/**< ARMv8 Crypto PMD device name */
 
 #define ARMV8_CRYPTO_LOG_ERR(fmt, args...) \
 	RTE_LOG(ERR, CRYPTODEV, "[%s] %s() line %u: " fmt "\n",  \
@@ -159,8 +162,11 @@ struct armv8_crypto_session {
 		/**< cipher operation direction */
 		enum rte_crypto_cipher_algorithm algo;
 		/**< cipher algorithm */
-		int iv_len;
-		/**< IV length */
+		struct {
+			uint16_t length;
+			uint16_t offset;
+		} iv;
+		/**< IV parameters */
 
 		struct {
 			uint8_t data[256];
@@ -192,10 +198,12 @@ struct armv8_crypto_session {
 				uint8_t o_key_pad[SHA_BLOCK_MAX]
 							__rte_cache_aligned;
 				/**< outer pad (max supported block length) */
-				uint8_t key[SHA_AUTH_KEY_MAX];
-				/**< HMAC key (max supported length)*/
+				uint8_t key[SHA_BLOCK_MAX];
+				/**< HMAC key (max supported block length)*/
 			} hmac;
 		};
+		uint16_t digest_length;
+		/* Digest length */
 	} auth;
 
 } __rte_cache_aligned;

@@ -113,6 +113,11 @@ struct rte_pci_driver;
 struct rte_pci_device;
 
 /**
+ * Find the name of a PCI device.
+ */
+void pci_name_set(struct rte_pci_device *dev);
+
+/**
  * Add a PCI device to the PCI Bus (append to PCI Device list). This function
  * also updates the bus references of the PCI Device (and the generic device
  * object embedded within.
@@ -337,5 +342,17 @@ int rte_eal_hugepage_attach(void);
  * physical addresses when running as a privileged user.
  */
 bool rte_eal_using_phys_addrs(void);
+
+/**
+ * Find a bus capable of identifying a device.
+ *
+ * @param str
+ *   A device identifier (PCI address, virtual PMD name, ...).
+ *
+ * @return
+ *   A valid bus handle if found.
+ *   NULL if no bus is able to parse this device.
+ */
+struct rte_bus *rte_bus_find_by_device_name(const char *str);
 
 #endif /* _EAL_PRIVATE_H_ */

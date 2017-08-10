@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright(c) 2017 Cavium networks. All rights reserved.
+ *   Copyright(c) 2017 Cavium, Inc. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -13,7 +13,7 @@
  *	   notice, this list of conditions and the following disclaimer in
  *	   the documentation and/or other materials provided with the
  *	   distribution.
- *	 * Neither the name of Cavium networks nor the names of its
+ *	 * Neither the name of Cavium, Inc nor the names of its
  *	   contributors may be used to endorse or promote products derived
  *	   from this software without specific prior written permission.
  *
@@ -194,6 +194,11 @@ _eventdev_setup(int mode)
 	TEST_ASSERT_SUCCESS(ret, "Failed to configure eventdev");
 
 	if (mode == TEST_EVENTDEV_SETUP_PRIORITY) {
+		if (rte_event_queue_count(evdev) > 8) {
+			printf("test expects the unique priority per queue\n");
+			return -ENOTSUP;
+		}
+
 		/* Configure event queues(0 to n) with
 		 * RTE_EVENT_DEV_PRIORITY_HIGHEST to
 		 * RTE_EVENT_DEV_PRIORITY_LOWEST

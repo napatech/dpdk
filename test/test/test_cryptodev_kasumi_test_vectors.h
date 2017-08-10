@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright(c) 2016 Intel Corporation. All rights reserved.
+ *   Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -42,16 +42,15 @@ struct kasumi_test_data {
 	struct {
 		uint8_t data[64] __rte_aligned(16);
 		unsigned len;
-	} iv;
+	} cipher_iv;
 
-	/* Includes: COUNT (4 bytes) and FRESH (4 bytes) */
+	/*
+	 * Data may include COUNT (4 bytes), FRESH (4 bytes),
+	 * DIRECTION (1 bit), plus 1 0*, with enough 0s,
+	 * so total length is multiple of 8 or 64 bits
+	 */
 	struct {
-		uint8_t data[8];
-		unsigned len;
-	} aad;
-
-	struct {
-		uint8_t data[1024]; /* Data may include direction bit */
+		uint8_t data[1024];
 		unsigned len; /* length must be in Bits */
 	} plaintext;
 
@@ -69,17 +68,13 @@ struct kasumi_test_data {
 	} validCipherLenInBits;
 
 	struct {
-		unsigned len;
-	} validCipherOffsetLenInBits;
+		unsigned int len;
+	} validCipherOffsetInBits;
 
 	/* Actual length of data to be hashed */
 	struct {
 		unsigned len;
 	} validAuthLenInBits;
-
-	struct {
-		unsigned len;
-	} validAuthOffsetLenInBits;
 
 	struct {
 		uint8_t data[64];
@@ -96,7 +91,7 @@ struct kasumi_test_data kasumi_test_case_1 = {
 		},
 		.len = 16
 	},
-	.iv = {
+	.cipher_iv = {
 		.data = {
 			0x72, 0xA4, 0xF2, 0x0F, 0x64, 0x00, 0x00, 0x00
 		},
@@ -141,9 +136,9 @@ struct kasumi_test_data kasumi_test_case_1 = {
 	.validCipherLenInBits = {
 		.len = 798
 	},
-	.validCipherOffsetLenInBits = {
-		.len = 64
-	},
+	.validCipherOffsetInBits = {
+		.len = 0
+	}
 };
 
 struct kasumi_test_data kasumi_test_case_2 = {
@@ -154,7 +149,7 @@ struct kasumi_test_data kasumi_test_case_2 = {
 		},
 		.len = 16
 	},
-	.iv = {
+	.cipher_iv = {
 		.data = {
 			0xE2, 0x8B, 0xCF, 0x7B, 0xC0, 0x00, 0x00, 0x00
 		},
@@ -189,8 +184,8 @@ struct kasumi_test_data kasumi_test_case_2 = {
 	.validCipherLenInBits = {
 		.len = 510
 	},
-	.validCipherOffsetLenInBits = {
-		.len = 64
+	.validCipherOffsetInBits = {
+		.len = 0
 	}
 };
 
@@ -202,45 +197,38 @@ struct kasumi_test_data kasumi_test_case_3 = {
 		},
 		.len = 16
 	},
-	.iv = {
+	.cipher_iv = {
 		.data = {
 			0xFA, 0x55, 0x6B, 0x26, 0x1C, 0x00, 0x00, 0x00
 		},
 		.len = 8
 	},
-	.aad = {
-		.data = {
-			0x38, 0xA6, 0xF0, 0x56, 0x05, 0xD2, 0xEC, 0x49
-		},
-		.len = 8
-	},
 	.plaintext = {
 		.data = {
+			0x38, 0xA6, 0xF0, 0x56, 0x05, 0xD2, 0xEC, 0x49,
 			0xAD, 0x9C, 0x44, 0x1F, 0x89, 0x0B, 0x38, 0xC4,
 			0x57, 0xA4, 0x9D, 0x42, 0x14, 0x07, 0xE8, 0xC0
 		},
-		.len = 128
+		.len = 192
 	},
 	.ciphertext = {
 		.data = {
+			0x38, 0xA6, 0xF0, 0x56, 0x05, 0xD2, 0xEC, 0x49,
 			0x9B, 0xC9, 0x2C, 0xA8, 0x03, 0xC6, 0x7B, 0x28,
-			0xA1, 0x1A, 0x4B, 0xEE, 0x5A, 0x0C, 0x25
+			0xA1, 0x1A, 0x4B, 0xEE, 0x5A, 0x0C, 0x25, 0xC0
 		},
-		.len = 120
+		.len = 192
 	},
 	.validDataLenInBits = {
-			.len = 128
+		.len = 192
 	},
 	.validCipherLenInBits = {
 		.len = 120
 	},
-	.validCipherOffsetLenInBits = {
-		.len = 64
-	},
 	.validAuthLenInBits = {
-		.len = 120
+		.len = 192
 	},
-	.validAuthOffsetLenInBits = {
+	.validCipherOffsetInBits = {
 		.len = 64
 	},
 	.digest = {
@@ -257,7 +245,7 @@ struct kasumi_test_data kasumi_test_case_4 = {
 		},
 		.len = 16
 	},
-	.iv = {
+	.cipher_iv = {
 		.data = {
 			0x39, 0x8A, 0x59, 0xB4, 0x2C, 0x00, 0x00, 0x00,
 		},
@@ -284,8 +272,8 @@ struct kasumi_test_data kasumi_test_case_4 = {
 	.validCipherLenInBits = {
 		.len = 253
 	},
-	.validCipherOffsetLenInBits = {
-		.len = 64
+	.validCipherOffsetInBits = {
+		.len = 0
 	}
 };
 
@@ -297,7 +285,7 @@ struct kasumi_test_data kasumi_test_case_5 = {
 		},
 		.len = 16
 	},
-	.iv = {
+	.cipher_iv = {
 		.data = {
 			0x72, 0xA4, 0xF2, 0x0F, 0x48, 0x00, 0x00, 0x00
 		},
@@ -344,9 +332,9 @@ struct kasumi_test_data kasumi_test_case_5 = {
 	.validCipherLenInBits = {
 		.len = 837
 	},
-	.validCipherOffsetLenInBits = {
-		.len = 64
-	},
+	.validCipherOffsetInBits = {
+		.len = 0
+	}
 };
 
 struct kasumi_test_data kasumi_test_case_6 = {
@@ -357,51 +345,43 @@ struct kasumi_test_data kasumi_test_case_6 = {
 		},
 		.len = 16
 	},
-	.iv = {
+	.cipher_iv = {
 		.data = {
 			0xFA, 0x55, 0x6B, 0x26, 0x1C, 0x00, 0x00, 0x00
 		},
 		.len = 8
 	},
-	.aad = {
-		.data = {
-			0x38, 0xA6, 0xF0, 0x56, 0x05, 0xD2, 0xEC, 0x49
-		},
-		.len = 8
-	},
 	.plaintext = {
 		.data = {
+			0x38, 0xA6, 0xF0, 0x56, 0x05, 0xD2, 0xEC, 0x49,
 			0xAD, 0x9C, 0x44, 0x1F, 0x89, 0x0B, 0x38, 0xC4,
 			0x57, 0xA4, 0x9D, 0x42, 0x14, 0x07, 0xE8, 0xC0
 		},
-		.len = 128
+		.len = 192
 	},
 	.ciphertext = {
 		.data = {
+			0x38, 0xA6, 0xF0, 0x56, 0x05, 0xD2, 0xEC, 0x49,
 			0x9B, 0xC9, 0x2C, 0xA8, 0x03, 0xC6, 0x7B, 0x28,
-			0xA1, 0x1A, 0x4B, 0xEE, 0x5A, 0x0C, 0x25
+			0xA1, 0x1A, 0x4B, 0xEE, 0x5A, 0x0C, 0x25, 0xC0
 		},
-		.len = 120
+		.len = 192
 	},
 	.validDataLenInBits = {
-			.len = 128
+		.len = 192
 	},
 	.validCipherLenInBits = {
 		.len = 120
 	},
-	.validCipherOffsetLenInBits = {
+	.validCipherOffsetInBits = {
 		.len = 64
 	},
 	.validAuthLenInBits = {
-		.len = 120
-	},
-	.validAuthOffsetLenInBits = {
-		.len = 64
+		.len = 192
 	},
 	.digest = {
 		.data = {0x0F, 0xD2, 0xAA, 0xB5},
 		.len  = 4
 	}
 };
-
 #endif /* TEST_CRYPTODEV_KASUMI_TEST_VECTORS_H_ */

@@ -67,15 +67,13 @@
 #define I40E_FDIR_IP_DEFAULT_VERSION_IHL    0x45
 #define I40E_FDIR_TCP_DEFAULT_DATAOFF       0x50
 #define I40E_FDIR_IPv6_DEFAULT_VTC_FLOW     0x60000000
-#define I40E_FDIR_IPv6_TC_OFFSET            20
 
 #define I40E_FDIR_IPv6_DEFAULT_HOP_LIMITS   0xFF
 #define I40E_FDIR_IPv6_PAYLOAD_LEN          380
 #define I40E_FDIR_UDP_DEFAULT_LEN           400
 
-/* Wait count and interval for fdir filter programming */
-#define I40E_FDIR_WAIT_COUNT       10
-#define I40E_FDIR_WAIT_INTERVAL_US 1000
+/* Wait time for fdir filter programming */
+#define I40E_FDIR_MAX_WAIT_US 10000
 
 /* Wait count and interval for fdir filter flush */
 #define I40E_FDIR_FLUSH_RETRY       50
@@ -84,21 +82,6 @@
 #define I40E_COUNTER_PF           2
 /* Statistic counter index for one pf */
 #define I40E_COUNTER_INDEX_FDIR(pf_id)   (0 + (pf_id) * I40E_COUNTER_PF)
-#define I40E_MAX_FLX_SOURCE_OFF           480
-#define I40E_FLX_OFFSET_IN_FIELD_VECTOR   50
-
-#define NONUSE_FLX_PIT_DEST_OFF 63
-#define NONUSE_FLX_PIT_FSIZE    1
-#define MK_FLX_PIT(src_offset, fsize, dst_offset) ( \
-	(((src_offset) << I40E_PRTQF_FLX_PIT_SOURCE_OFF_SHIFT) & \
-		I40E_PRTQF_FLX_PIT_SOURCE_OFF_MASK) | \
-	(((fsize) << I40E_PRTQF_FLX_PIT_FSIZE_SHIFT) & \
-			I40E_PRTQF_FLX_PIT_FSIZE_MASK) | \
-	((((dst_offset) == NONUSE_FLX_PIT_DEST_OFF ? \
-			NONUSE_FLX_PIT_DEST_OFF : \
-			((dst_offset) + I40E_FLX_OFFSET_IN_FIELD_VECTOR)) << \
-			I40E_PRTQF_FLX_PIT_DEST_OFF_SHIFT) & \
-			I40E_PRTQF_FLX_PIT_DEST_OFF_MASK))
 
 #define I40E_FDIR_FLOWS ( \
 	(1 << RTE_ETH_FLOW_FRAG_IPV4) | \
@@ -112,8 +95,6 @@
 	(1 << RTE_ETH_FLOW_NONFRAG_IPV6_SCTP) | \
 	(1 << RTE_ETH_FLOW_NONFRAG_IPV6_OTHER) | \
 	(1 << RTE_ETH_FLOW_L2_PAYLOAD))
-
-#define I40E_FLEX_WORD_MASK(off) (0x80 >> (off))
 
 static int i40e_fdir_filter_programming(struct i40e_pf *pf,
 			enum i40e_filter_pctype pctype,
@@ -257,7 +238,7 @@ i40e_fdir_setup(struct i40e_pf *pf)
 
 	/* reserve memory for the fdir programming packet */
 	snprintf(z_name, sizeof(z_name), "%s_%s_%d",
-			eth_dev->data->drv_name,
+			eth_dev->device->driver->name,
 			I40E_FDIR_MZ_NAME,
 			eth_dev->data->port_id);
 	mz = i40e_memzone_reserve(z_name, I40E_FDIR_PKT_LEN, SOCKET_ID_ANY);
@@ -300,8 +281,12 @@ i40e_fdir_teardown(struct i40e_pf *pf)
 	vsi = pf->fdir.fdir_vsi;
 	if (!vsi)
 		return;
-	i40e_switch_tx_queue(hw, vsi->base_queue, FALSE);
-	i40e_switch_rx_queue(hw, vsi->base_queue, FALSE);
+	int err = i40e_switch_tx_queue(hw, vsi->base_queue, FALSE);
+	if (err)
+		PMD_DRV_LOG(DEBUG, "Failed to do FDIR TX switch off");
+	err = i40e_switch_rx_queue(hw, vsi->base_queue, FALSE);
+	if (err)
+		PMD_DRV_LOG(DEBUG, "Failed to do FDIR RX switch off");
 	i40e_dev_rx_queue_release(pf->fdir.rxq);
 	pf->fdir.rxq = NULL;
 	i40e_dev_tx_queue_release(pf->fdir.txq);
@@ -377,8 +362,6 @@ i40e_init_flx_pld(struct i40e_pf *pf)
 		}
 	}
 }
-
-#define I40E_WORD(hi, lo) (uint16_t)((((hi) << 8) & 0xFF00) | ((lo) & 0xFF))
 
 #define I40E_VALIDATE_FLEX_PIT(flex_pit1, flex_pit2) do { \
 	if ((flex_pit2).src_offset < \
@@ -1295,28 +1278,27 @@ i40e_fdir_filter_programming(struct i40e_pf *pf,
 	/* Update the tx tail register */
 	rte_wmb();
 	I40E_PCI_REG_WRITE(txq->qtx_tail, txq->tx_tail);
-
-	for (i = 0; i < I40E_FDIR_WAIT_COUNT; i++) {
-		rte_delay_us(I40E_FDIR_WAIT_INTERVAL_US);
+	for (i = 0; i < I40E_FDIR_MAX_WAIT_US; i++) {
 		if ((txdp->cmd_type_offset_bsz &
 				rte_cpu_to_le_64(I40E_TXD_QW1_DTYPE_MASK)) ==
 				rte_cpu_to_le_64(I40E_TX_DESC_DTYPE_DESC_DONE))
 			break;
+		rte_delay_us(1);
 	}
-	if (i >= I40E_FDIR_WAIT_COUNT) {
+	if (i >= I40E_FDIR_MAX_WAIT_US) {
 		PMD_DRV_LOG(ERR, "Failed to program FDIR filter:"
 			    " time out to get DD on tx queue.");
 		return -ETIMEDOUT;
 	}
 	/* totally delay 10 ms to check programming status*/
-	rte_delay_us((I40E_FDIR_WAIT_COUNT - i) * I40E_FDIR_WAIT_INTERVAL_US);
-	if (i40e_check_fdir_programming_status(rxq) < 0) {
-		PMD_DRV_LOG(ERR, "Failed to program FDIR filter:"
-			    " programming status reported.");
-		return -ENOSYS;
+	for (; i < I40E_FDIR_MAX_WAIT_US; i++) {
+		if (i40e_check_fdir_programming_status(rxq) >= 0)
+			return 0;
+		rte_delay_us(1);
 	}
-
-	return 0;
+	PMD_DRV_LOG(ERR,
+		"Failed to program FDIR filter: programming status reported.");
+	return -ETIMEDOUT;
 }
 
 /*

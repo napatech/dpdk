@@ -445,13 +445,22 @@ vhost_user_reconnect_init(void)
 {
 	int ret;
 
-	pthread_mutex_init(&reconn_list.mutex, NULL);
+	ret = pthread_mutex_init(&reconn_list.mutex, NULL);
+	if (ret < 0) {
+		RTE_LOG(ERR, VHOST_CONFIG, "failed to initialize mutex");
+		return ret;
+	}
 	TAILQ_INIT(&reconn_list.head);
 
 	ret = pthread_create(&reconn_tid, NULL,
 			     vhost_user_client_reconnect, NULL);
-	if (ret < 0)
+	if (ret < 0) {
 		RTE_LOG(ERR, VHOST_CONFIG, "failed to create reconnect thread");
+		if (pthread_mutex_destroy(&reconn_list.mutex)) {
+			RTE_LOG(ERR, VHOST_CONFIG,
+				"failed to destroy reconnect mutex");
+		}
+	}
 
 	return ret;
 }
@@ -613,8 +622,19 @@ rte_vhost_driver_register(const char *path, uint64_t flags)
 		goto out;
 	memset(vsocket, 0, sizeof(struct vhost_user_socket));
 	vsocket->path = strdup(path);
+	if (vsocket->path == NULL) {
+		RTE_LOG(ERR, VHOST_CONFIG,
+			"error: failed to copy socket path string\n");
+		free(vsocket);
+		goto out;
+	}
 	TAILQ_INIT(&vsocket->conn_list);
-	pthread_mutex_init(&vsocket->conn_mutex, NULL);
+	ret = pthread_mutex_init(&vsocket->conn_mutex, NULL);
+	if (ret) {
+		RTE_LOG(ERR, VHOST_CONFIG,
+			"error: failed to init connection mutex\n");
+		goto out_free;
+	}
 	vsocket->dequeue_zero_copy = flags & RTE_VHOST_USER_DEQUEUE_ZERO_COPY;
 
 	/*
@@ -636,9 +656,7 @@ rte_vhost_driver_register(const char *path, uint64_t flags)
 		vsocket->reconnect = !(flags & RTE_VHOST_USER_NO_RECONNECT);
 		if (vsocket->reconnect && reconn_tid == 0) {
 			if (vhost_user_reconnect_init() < 0) {
-				free(vsocket->path);
-				free(vsocket);
-				goto out;
+				goto out_mutex;
 			}
 		}
 	} else {
@@ -646,13 +664,22 @@ rte_vhost_driver_register(const char *path, uint64_t flags)
 	}
 	ret = create_unix_socket(vsocket);
 	if (ret < 0) {
-		free(vsocket->path);
-		free(vsocket);
-		goto out;
+		goto out_mutex;
 	}
 
 	vhost_user.vsockets[vhost_user.vsocket_cnt++] = vsocket;
 
+	pthread_mutex_unlock(&vhost_user.mutex);
+	return ret;
+
+out_mutex:
+	if (pthread_mutex_destroy(&vsocket->conn_mutex)) {
+		RTE_LOG(ERR, VHOST_CONFIG,
+			"error: failed to destroy connection mutex\n");
+	}
+out_free:
+	free(vsocket->path);
+	free(vsocket);
 out:
 	pthread_mutex_unlock(&vhost_user.mutex);
 
@@ -724,6 +751,7 @@ rte_vhost_driver_unregister(const char *path)
 			}
 			pthread_mutex_unlock(&vsocket->conn_mutex);
 
+			pthread_mutex_destroy(&vsocket->conn_mutex);
 			free(vsocket->path);
 			free(vsocket);
 

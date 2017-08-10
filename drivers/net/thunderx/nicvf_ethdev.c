@@ -1,7 +1,7 @@
 /*
  *   BSD LICENSE
  *
- *   Copyright (C) Cavium networks Ltd. 2016.
+ *   Copyright (C) Cavium, Inc. 2016.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -13,7 +13,7 @@
  *       notice, this list of conditions and the following disclaimer in
  *       the documentation and/or other materials provided with the
  *       distribution.
- *     * Neither the name of Cavium networks nor the names of its
+ *     * Neither the name of Cavium, Inc nor the names of its
  *       contributors may be used to endorse or promote products derived
  *       from this software without specific prior written permission.
  *
@@ -111,7 +111,8 @@ nicvf_interrupt(void *arg)
 	if (nicvf_reg_poll_interrupts(nic) == NIC_MBOX_MSG_BGX_LINK_CHANGE) {
 		if (dev->data->dev_conf.intr_conf.lsc)
 			nicvf_set_eth_link_status(nic, &dev->data->dev_link);
-		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
+		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC,
+					      NULL, NULL);
 	}
 
 	rte_eal_alarm_set(NICVF_INTR_POLL_INTERVAL_MS * 1000,
@@ -1239,6 +1240,13 @@ nicvf_rxq_mbuf_setup(struct nicvf_rxq *rxq)
 	struct rte_mbuf mb_def;
 
 	RTE_BUILD_BUG_ON(sizeof(union mbuf_initializer) != 8);
+	RTE_BUILD_BUG_ON(offsetof(struct rte_mbuf, data_off) % 8 != 0);
+	RTE_BUILD_BUG_ON(offsetof(struct rte_mbuf, refcnt) -
+				offsetof(struct rte_mbuf, data_off) != 2);
+	RTE_BUILD_BUG_ON(offsetof(struct rte_mbuf, nb_segs) -
+				offsetof(struct rte_mbuf, data_off) != 4);
+	RTE_BUILD_BUG_ON(offsetof(struct rte_mbuf, port) -
+				offsetof(struct rte_mbuf, data_off) != 6);
 	mb_def.nb_segs = 1;
 	mb_def.data_off = RTE_PKTMBUF_HEADROOM;
 	mb_def.port = rxq->port_id;
@@ -1366,11 +1374,11 @@ static void
 nicvf_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 {
 	struct nicvf *nic = nicvf_pmd_priv(dev);
-	struct rte_pci_device *pci_dev = RTE_DEV_TO_PCI(dev->device);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 
 	PMD_INIT_FUNC_TRACE();
 
-	dev_info->pci_dev = RTE_DEV_TO_PCI(dev->device);
+	dev_info->pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 
 	dev_info->min_rx_bufsize = ETHER_MIN_MTU;
 	dev_info->max_rx_pktlen = NIC_HW_MAX_FRS;
@@ -2017,7 +2025,7 @@ nicvf_eth_dev_init(struct rte_eth_dev *eth_dev)
 		}
 	}
 
-	pci_dev = RTE_DEV_TO_PCI(eth_dev->device);
+	pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
 
 	nic->device_id = pci_dev->id.device_id;
@@ -2079,7 +2087,7 @@ nicvf_eth_dev_init(struct rte_eth_dev *eth_dev)
 			goto fail;
 		}
 
-		/* Detach port by returning postive error number */
+		/* Detach port by returning positive error number */
 		return ENOTSUP;
 	}
 
@@ -2164,7 +2172,8 @@ static int nicvf_eth_pci_remove(struct rte_pci_device *pci_dev)
 
 static struct rte_pci_driver rte_nicvf_pmd = {
 	.id_table = pci_id_nicvf_map,
-	.drv_flags = RTE_PCI_DRV_NEED_MAPPING | RTE_PCI_DRV_INTR_LSC,
+	.drv_flags = RTE_PCI_DRV_NEED_MAPPING | RTE_PCI_DRV_KEEP_MAPPED_RES |
+			RTE_PCI_DRV_INTR_LSC,
 	.probe = nicvf_eth_pci_probe,
 	.remove = nicvf_eth_pci_remove,
 };

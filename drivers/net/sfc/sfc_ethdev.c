@@ -107,7 +107,7 @@ sfc_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 
 	sfc_log_init(sa, "entry");
 
-	dev_info->pci_dev = RTE_DEV_TO_PCI(dev->device);
+	dev_info->pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	dev_info->max_rx_pktlen = EFX_MAC_PDU_MAX;
 
 	/* Autonegotiation may be disabled */
@@ -361,8 +361,13 @@ sfc_dev_filter_set(struct rte_eth_dev *dev, enum sfc_dev_filter_mode mode,
 	if (*toggle != enabled) {
 		*toggle = enabled;
 
-		if ((sa->state == SFC_ADAPTER_STARTED) &&
-		    (sfc_set_rx_mode(sa) != 0)) {
+		if (port->isolated) {
+			sfc_warn(sa, "isolated mode is active on the port");
+			sfc_warn(sa, "the change is to be applied on the next "
+				     "start provided that isolated mode is "
+				     "disabled prior the next start");
+		} else if ((sa->state == SFC_ADAPTER_STARTED) &&
+			   (sfc_set_rx_mode(sa) != 0)) {
 			*toggle = !(enabled);
 			sfc_warn(sa, "Failed to %s %s mode",
 				 ((enabled) ? "enable" : "disable"), desc);
@@ -661,6 +666,85 @@ sfc_xstats_get_names(struct rte_eth_dev *dev,
 }
 
 static int
+sfc_xstats_get_by_id(struct rte_eth_dev *dev, const uint64_t *ids,
+		     uint64_t *values, unsigned int n)
+{
+	struct sfc_adapter *sa = dev->data->dev_private;
+	struct sfc_port *port = &sa->port;
+	uint64_t *mac_stats;
+	unsigned int nb_supported = 0;
+	unsigned int nb_written = 0;
+	unsigned int i;
+	int ret;
+	int rc;
+
+	if (unlikely(values == NULL) ||
+	    unlikely((ids == NULL) && (n < port->mac_stats_nb_supported)))
+		return port->mac_stats_nb_supported;
+
+	rte_spinlock_lock(&port->mac_stats_lock);
+
+	rc = sfc_port_update_mac_stats(sa);
+	if (rc != 0) {
+		SFC_ASSERT(rc > 0);
+		ret = -rc;
+		goto unlock;
+	}
+
+	mac_stats = port->mac_stats_buf;
+
+	for (i = 0; (i < EFX_MAC_NSTATS) && (nb_written < n); ++i) {
+		if (!EFX_MAC_STAT_SUPPORTED(port->mac_stats_mask, i))
+			continue;
+
+		if ((ids == NULL) || (ids[nb_written] == nb_supported))
+			values[nb_written++] = mac_stats[i];
+
+		++nb_supported;
+	}
+
+	ret = nb_written;
+
+unlock:
+	rte_spinlock_unlock(&port->mac_stats_lock);
+
+	return ret;
+}
+
+static int
+sfc_xstats_get_names_by_id(struct rte_eth_dev *dev,
+			   struct rte_eth_xstat_name *xstats_names,
+			   const uint64_t *ids, unsigned int size)
+{
+	struct sfc_adapter *sa = dev->data->dev_private;
+	struct sfc_port *port = &sa->port;
+	unsigned int nb_supported = 0;
+	unsigned int nb_written = 0;
+	unsigned int i;
+
+	if (unlikely(xstats_names == NULL) ||
+	    unlikely((ids == NULL) && (size < port->mac_stats_nb_supported)))
+		return port->mac_stats_nb_supported;
+
+	for (i = 0; (i < EFX_MAC_NSTATS) && (nb_written < size); ++i) {
+		if (!EFX_MAC_STAT_SUPPORTED(port->mac_stats_mask, i))
+			continue;
+
+		if ((ids == NULL) || (ids[nb_written] == nb_supported)) {
+			char *name = xstats_names[nb_written++].name;
+
+			strncpy(name, efx_mac_stat_name(sa->nic, i),
+				sizeof(xstats_names[0].name));
+			name[sizeof(xstats_names[0].name) - 1] = '\0';
+		}
+
+		++nb_supported;
+	}
+
+	return nb_written;
+}
+
+static int
 sfc_flow_ctrl_get(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 {
 	struct sfc_adapter *sa = dev->data->dev_private;
@@ -826,9 +910,16 @@ sfc_mac_addr_set(struct rte_eth_dev *dev, struct ether_addr *mac_addr)
 {
 	struct sfc_adapter *sa = dev->data->dev_private;
 	const efx_nic_cfg_t *encp = efx_nic_cfg_get(sa->nic);
+	struct sfc_port *port = &sa->port;
 	int rc;
 
 	sfc_adapter_lock(sa);
+
+	if (port->isolated) {
+		sfc_err(sa, "isolated mode is active on the port");
+		sfc_err(sa, "will not set MAC address");
+		goto unlock;
+	}
 
 	if (sa->state != SFC_ADAPTER_STARTED) {
 		sfc_info(sa, "the port is not started");
@@ -884,6 +975,12 @@ sfc_set_mc_addr_list(struct rte_eth_dev *dev, struct ether_addr *mc_addr_set,
 	int rc;
 	unsigned int i;
 
+	if (port->isolated) {
+		sfc_err(sa, "isolated mode is active on the port");
+		sfc_err(sa, "will not set multicast address list");
+		return -ENOTSUP;
+	}
+
 	if (mc_addrs == NULL)
 		return -ENOBUFS;
 
@@ -913,6 +1010,10 @@ sfc_set_mc_addr_list(struct rte_eth_dev *dev, struct ether_addr *mc_addr_set,
 	return -rc;
 }
 
+/*
+ * The function is used by the secondary process as well. It must not
+ * use any process-local pointers from the adapter data.
+ */
 static void
 sfc_rx_queue_info_get(struct rte_eth_dev *dev, uint16_t rx_queue_id,
 		      struct rte_eth_rxq_info *qinfo)
@@ -939,6 +1040,10 @@ sfc_rx_queue_info_get(struct rte_eth_dev *dev, uint16_t rx_queue_id,
 	sfc_adapter_unlock(sa);
 }
 
+/*
+ * The function is used by the secondary process as well. It must not
+ * use any process-local pointers from the adapter data.
+ */
 static void
 sfc_tx_queue_info_get(struct rte_eth_dev *dev, uint16_t tx_queue_id,
 		      struct rte_eth_txq_info *qinfo)
@@ -1083,8 +1188,9 @@ sfc_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 			  struct rte_eth_rss_conf *rss_conf)
 {
 	struct sfc_adapter *sa = dev->data->dev_private;
+	struct sfc_port *port = &sa->port;
 
-	if (sa->rss_support != EFX_RX_SCALE_EXCLUSIVE)
+	if ((sa->rss_support != EFX_RX_SCALE_EXCLUSIVE) || port->isolated)
 		return -ENOTSUP;
 
 	if (sa->rss_channels == 0)
@@ -1113,8 +1219,12 @@ sfc_dev_rss_hash_update(struct rte_eth_dev *dev,
 			struct rte_eth_rss_conf *rss_conf)
 {
 	struct sfc_adapter *sa = dev->data->dev_private;
+	struct sfc_port *port = &sa->port;
 	unsigned int efx_hash_types;
 	int rc = 0;
+
+	if (port->isolated)
+		return -ENOTSUP;
 
 	if (sa->rss_support != EFX_RX_SCALE_EXCLUSIVE) {
 		sfc_err(sa, "RSS is not available");
@@ -1180,9 +1290,10 @@ sfc_dev_rss_reta_query(struct rte_eth_dev *dev,
 		       uint16_t reta_size)
 {
 	struct sfc_adapter *sa = dev->data->dev_private;
+	struct sfc_port *port = &sa->port;
 	int entry;
 
-	if (sa->rss_support != EFX_RX_SCALE_EXCLUSIVE)
+	if ((sa->rss_support != EFX_RX_SCALE_EXCLUSIVE) || port->isolated)
 		return -ENOTSUP;
 
 	if (sa->rss_channels == 0)
@@ -1212,10 +1323,14 @@ sfc_dev_rss_reta_update(struct rte_eth_dev *dev,
 			uint16_t reta_size)
 {
 	struct sfc_adapter *sa = dev->data->dev_private;
+	struct sfc_port *port = &sa->port;
 	unsigned int *rss_tbl_new;
 	uint16_t entry;
 	int rc;
 
+
+	if (port->isolated)
+		return -ENOTSUP;
 
 	if (sa->rss_support != EFX_RX_SCALE_EXCLUSIVE) {
 		sfc_err(sa, "RSS is not available");
@@ -1370,7 +1485,32 @@ static const struct eth_dev_ops sfc_eth_dev_ops = {
 	.rxq_info_get			= sfc_rx_queue_info_get,
 	.txq_info_get			= sfc_tx_queue_info_get,
 	.fw_version_get			= sfc_fw_version_get,
+	.xstats_get_by_id		= sfc_xstats_get_by_id,
+	.xstats_get_names_by_id		= sfc_xstats_get_names_by_id,
 };
+
+/**
+ * Duplicate a string in potentially shared memory required for
+ * multi-process support.
+ *
+ * strdup() allocates from process-local heap/memory.
+ */
+static char *
+sfc_strdup(const char *str)
+{
+	size_t size;
+	char *copy;
+
+	if (str == NULL)
+		return NULL;
+
+	size = strlen(str) + 1;
+	copy = rte_malloc(__func__, size, 0);
+	if (copy != NULL)
+		rte_memcpy(copy, str, size);
+
+	return copy;
+}
 
 static int
 sfc_eth_dev_set_ops(struct rte_eth_dev *dev)
@@ -1407,7 +1547,7 @@ sfc_eth_dev_set_ops(struct rte_eth_dev *dev)
 				"Insufficient Hw/FW capabilities to use Rx datapath %s",
 				rx_name);
 			rc = EINVAL;
-			goto fail_dp_rx;
+			goto fail_dp_rx_caps;
 		}
 	} else {
 		sa->dp_rx = sfc_dp_find_rx_by_caps(&sfc_dp_head, avail_caps);
@@ -1419,7 +1559,13 @@ sfc_eth_dev_set_ops(struct rte_eth_dev *dev)
 		}
 	}
 
-	sfc_info(sa, "use %s Rx datapath", sa->dp_rx->dp.name);
+	sa->dp_rx_name = sfc_strdup(sa->dp_rx->dp.name);
+	if (sa->dp_rx_name == NULL) {
+		rc = ENOMEM;
+		goto fail_dp_rx_name;
+	}
+
+	sfc_info(sa, "use %s Rx datapath", sa->dp_rx_name);
 
 	dev->rx_pkt_burst = sa->dp_rx->pkt_burst;
 
@@ -1440,7 +1586,7 @@ sfc_eth_dev_set_ops(struct rte_eth_dev *dev)
 				"Insufficient Hw/FW capabilities to use Tx datapath %s",
 				tx_name);
 			rc = EINVAL;
-			goto fail_dp_tx;
+			goto fail_dp_tx_caps;
 		}
 	} else {
 		sa->dp_tx = sfc_dp_find_tx_by_caps(&sfc_dp_head, avail_caps);
@@ -1452,7 +1598,13 @@ sfc_eth_dev_set_ops(struct rte_eth_dev *dev)
 		}
 	}
 
-	sfc_info(sa, "use %s Tx datapath", sa->dp_tx->dp.name);
+	sa->dp_tx_name = sfc_strdup(sa->dp_tx->dp.name);
+	if (sa->dp_tx_name == NULL) {
+		rc = ENOMEM;
+		goto fail_dp_tx_name;
+	}
+
+	sfc_info(sa, "use %s Tx datapath", sa->dp_tx_name);
 
 	dev->tx_pkt_burst = sa->dp_tx->pkt_burst;
 
@@ -1460,11 +1612,105 @@ sfc_eth_dev_set_ops(struct rte_eth_dev *dev)
 
 	return 0;
 
+fail_dp_tx_name:
+fail_dp_tx_caps:
+	sa->dp_tx = NULL;
+
 fail_dp_tx:
 fail_kvarg_tx_datapath:
+	rte_free(sa->dp_rx_name);
+	sa->dp_rx_name = NULL;
+
+fail_dp_rx_name:
+fail_dp_rx_caps:
+	sa->dp_rx = NULL;
+
 fail_dp_rx:
 fail_kvarg_rx_datapath:
 	return rc;
+}
+
+static void
+sfc_eth_dev_clear_ops(struct rte_eth_dev *dev)
+{
+	struct sfc_adapter *sa = dev->data->dev_private;
+
+	dev->dev_ops = NULL;
+	dev->rx_pkt_burst = NULL;
+	dev->tx_pkt_burst = NULL;
+
+	rte_free(sa->dp_tx_name);
+	sa->dp_tx_name = NULL;
+	sa->dp_tx = NULL;
+
+	rte_free(sa->dp_rx_name);
+	sa->dp_rx_name = NULL;
+	sa->dp_rx = NULL;
+}
+
+static const struct eth_dev_ops sfc_eth_dev_secondary_ops = {
+	.rxq_info_get			= sfc_rx_queue_info_get,
+	.txq_info_get			= sfc_tx_queue_info_get,
+};
+
+static int
+sfc_eth_dev_secondary_set_ops(struct rte_eth_dev *dev)
+{
+	/*
+	 * Device private data has really many process-local pointers.
+	 * Below code should be extremely careful to use data located
+	 * in shared memory only.
+	 */
+	struct sfc_adapter *sa = dev->data->dev_private;
+	const struct sfc_dp_rx *dp_rx;
+	const struct sfc_dp_tx *dp_tx;
+	int rc;
+
+	dp_rx = sfc_dp_find_rx_by_name(&sfc_dp_head, sa->dp_rx_name);
+	if (dp_rx == NULL) {
+		sfc_err(sa, "cannot find %s Rx datapath", sa->dp_tx_name);
+		rc = ENOENT;
+		goto fail_dp_rx;
+	}
+	if (~dp_rx->features & SFC_DP_RX_FEAT_MULTI_PROCESS) {
+		sfc_err(sa, "%s Rx datapath does not support multi-process",
+			sa->dp_tx_name);
+		rc = EINVAL;
+		goto fail_dp_rx_multi_process;
+	}
+
+	dp_tx = sfc_dp_find_tx_by_name(&sfc_dp_head, sa->dp_tx_name);
+	if (dp_tx == NULL) {
+		sfc_err(sa, "cannot find %s Tx datapath", sa->dp_tx_name);
+		rc = ENOENT;
+		goto fail_dp_tx;
+	}
+	if (~dp_tx->features & SFC_DP_TX_FEAT_MULTI_PROCESS) {
+		sfc_err(sa, "%s Tx datapath does not support multi-process",
+			sa->dp_tx_name);
+		rc = EINVAL;
+		goto fail_dp_tx_multi_process;
+	}
+
+	dev->rx_pkt_burst = dp_rx->pkt_burst;
+	dev->tx_pkt_burst = dp_tx->pkt_burst;
+	dev->dev_ops = &sfc_eth_dev_secondary_ops;
+
+	return 0;
+
+fail_dp_tx_multi_process:
+fail_dp_tx:
+fail_dp_rx_multi_process:
+fail_dp_rx:
+	return rc;
+}
+
+static void
+sfc_eth_dev_secondary_clear_ops(struct rte_eth_dev *dev)
+{
+	dev->dev_ops = NULL;
+	dev->tx_pkt_burst = NULL;
+	dev->rx_pkt_burst = NULL;
 }
 
 static void
@@ -1486,18 +1732,26 @@ static int
 sfc_eth_dev_init(struct rte_eth_dev *dev)
 {
 	struct sfc_adapter *sa = dev->data->dev_private;
-	struct rte_pci_device *pci_dev = SFC_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	int rc;
 	const efx_nic_cfg_t *encp;
 	const struct ether_addr *from;
 
 	sfc_register_dp();
 
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return -sfc_eth_dev_secondary_set_ops(dev);
+
 	/* Required for logging */
+	sa->pci_addr = pci_dev->addr;
+	sa->port_id = dev->data->port_id;
+
 	sa->eth_dev = dev;
 
 	/* Copy PCI device info to the dev->data */
 	rte_eth_copy_pci_info(dev, pci_dev);
+
+	dev->data->dev_flags |= RTE_ETH_DEV_DETACHABLE;
 
 	rc = sfc_kvargs_parse(sa);
 	if (rc != 0)
@@ -1549,6 +1803,8 @@ sfc_eth_dev_init(struct rte_eth_dev *dev)
 	return 0;
 
 fail_attach:
+	sfc_eth_dev_clear_ops(dev);
+
 fail_set_ops:
 	sfc_unprobe(sa);
 
@@ -1571,21 +1827,25 @@ fail_kvargs_parse:
 static int
 sfc_eth_dev_uninit(struct rte_eth_dev *dev)
 {
-	struct sfc_adapter *sa = dev->data->dev_private;
+	struct sfc_adapter *sa;
 
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+		sfc_eth_dev_secondary_clear_ops(dev);
+		return 0;
+	}
+
+	sa = dev->data->dev_private;
 	sfc_log_init(sa, "entry");
 
 	sfc_adapter_lock(sa);
+
+	sfc_eth_dev_clear_ops(dev);
 
 	sfc_detach(sa);
 	sfc_unprobe(sa);
 
 	rte_free(dev->data->mac_addrs);
 	dev->data->mac_addrs = NULL;
-
-	dev->dev_ops = NULL;
-	dev->rx_pkt_burst = NULL;
-	dev->tx_pkt_burst = NULL;
 
 	sfc_kvargs_cleanup(sa);
 

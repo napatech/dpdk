@@ -69,6 +69,17 @@ on their system before building DPDK::
 
    make snow3G
 
+**Note**: When encrypting with SNOW3G UEA2, by default the library
+encrypts blocks of 4 bytes, regardless the number of bytes to
+be encrypted provided (which leads to a possible buffer overflow).
+To avoid this situation, it is necessary not to pass
+3GPP_SAFE_BUFFERS as a compilation flag.
+For this, in the Makefile of the library, make sure that this flag
+is commented out.::
+
+  #EXTRA_CFLAGS  += -D_3GPP_SAFE_BUFFERS
+
+
 Initialization
 --------------
 
@@ -100,4 +111,5 @@ Example:
 
 .. code-block:: console
 
-    ./l2fwd-crypto -l 6 -n 4 --vdev="crypto_snow3g,socket_id=1,max_nb_sessions=128"
+    ./l2fwd-crypto -l 1 -n 4 --vdev="crypto_snow3g,socket_id=0,max_nb_sessions=128" \
+    -- -p 1 --cdev SW --chain CIPHER_ONLY --cipher_algo "snow3g-uea2"

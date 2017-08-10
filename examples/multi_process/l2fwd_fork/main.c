@@ -53,7 +53,6 @@
 #include <rte_memcpy.h>
 #include <rte_memzone.h>
 #include <rte_eal.h>
-#include <rte_per_lcore.h>
 #include <rte_launch.h>
 #include <rte_atomic.h>
 #include <rte_spinlock.h>
@@ -937,7 +936,6 @@ main(int argc, char **argv)
 	unsigned rx_lcore_id;
 	unsigned nb_ports_in_mask = 0;
 	unsigned i;
-	int flags = 0;
 	uint64_t prev_tsc, diff_tsc, cur_tsc, timer_tsc;
 
 	/* Save cpu_affinity first, restore it in case it's floating process option */
@@ -987,7 +985,6 @@ main(int argc, char **argv)
 		if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
 			continue;
 		char buf_name[RTE_MEMPOOL_NAMESIZE];
-		flags = MEMPOOL_F_SP_PUT | MEMPOOL_F_SC_GET;
 		snprintf(buf_name, RTE_MEMPOOL_NAMESIZE, MBUF_NAME, portid);
 		l2fwd_pktmbuf_pool[portid] =
 			rte_pktmbuf_pool_create(buf_name, NB_MBUF, 32,
@@ -1081,6 +1078,13 @@ main(int argc, char **argv)
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%u\n",
 				  ret, (unsigned) portid);
+
+		ret = rte_eth_dev_adjust_nb_rx_tx_desc(portid, &nb_rxd,
+						       &nb_txd);
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE,
+				 "rte_eth_dev_adjust_nb_rx_tx_desc: err=%d, port=%u\n",
+				 ret, (unsigned) portid);
 
 		rte_eth_macaddr_get(portid,&l2fwd_ports_eth_addr[portid]);
 

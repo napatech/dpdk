@@ -120,7 +120,7 @@ struct vhost_device_ops {
  * @return
  *  the host virtual address on success, 0 on failure
  */
-static inline uint64_t __attribute__((always_inline))
+static __rte_always_inline uint64_t
 rte_vhost_gpa_to_vva(struct rte_vhost_memory *mem, uint64_t gpa)
 {
 	struct rte_vhost_mem_region *reg;
@@ -365,7 +365,7 @@ struct rte_mempool;
 /**
  * This function adds buffers to the virtio devices RX virtqueue. Buffers can
  * be received from the physical port or from another virtual device. A packet
- * count is returned to indicate the number of packets that were succesfully
+ * count is returned to indicate the number of packets that were successfully
  * added to the RX queue.
  * @param vid
  *  vhost device ID
@@ -431,6 +431,18 @@ int rte_vhost_get_mem_table(int vid, struct rte_vhost_memory **mem);
  */
 int rte_vhost_get_vhost_vring(int vid, uint16_t vring_idx,
 			      struct rte_vhost_vring *vring);
+
+/**
+ * Get vhost RX queue avail count.
+ *
+ * @param vid
+ *  vhost device ID
+ * @param qid
+ *  virtio queue index in mq case
+ * @return
+ *  num of desc available
+ */
+uint32_t rte_vhost_rx_queue_count(int vid, uint16_t qid);
 
 #ifdef __cplusplus
 }

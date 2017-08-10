@@ -6,7 +6,6 @@ DPDK_16.04 {
 	rte_cryptodev_callback_unregister;
 	rte_cryptodev_close;
 	rte_cryptodev_count;
-	rte_cryptodev_count_devtype;
 	rte_cryptodev_configure;
 	rte_cryptodev_create_vdev;
 	rte_cryptodev_get_dev_id;
@@ -15,7 +14,6 @@ DPDK_16.04 {
 	rte_cryptodev_pmd_allocate;
 	rte_cryptodev_pmd_callback_process;
 	rte_cryptodev_pmd_release_device;
-	rte_cryptodev_pmd_virtual_dev_init;
 	rte_cryptodev_sym_session_create;
 	rte_cryptodev_sym_session_free;
 	rte_cryptodev_socket_id;
@@ -31,21 +29,6 @@ DPDK_16.04 {
 
 	local: *;
 };
-
-DPDK_16.07 {
-	global:
-
-	rte_cryptodev_parse_vdev_init_params;
-
-} DPDK_16.04;
-
-DPDK_16.11 {
-	global:
-
-	rte_cryptodev_pci_probe;
-	rte_cryptodev_pci_remove;
-
-} DPDK_16.07;
 
 DPDK_17.02 {
 	global:
@@ -63,7 +46,7 @@ DPDK_17.02 {
 	rte_crypto_cipher_algorithm_strings;
 	rte_crypto_cipher_operation_strings;
 
-} DPDK_16.11;
+} DPDK_16.04;
 
 DPDK_17.05 {
 	global:
@@ -74,3 +57,25 @@ DPDK_17.05 {
 	rte_cryptodev_queue_pair_detach_sym_session;
 
 } DPDK_17.02;
+
+DPDK_17.08 {
+	global:
+
+	rte_cryptodev_allocate_driver;
+	rte_cryptodev_device_count_by_driver;
+	rte_cryptodev_driver_id_get;
+	rte_cryptodev_driver_name_get;
+	rte_cryptodev_get_aead_algo_enum;
+	rte_cryptodev_get_header_session_size;
+	rte_cryptodev_get_private_session_size;
+	rte_cryptodev_pci_generic_probe;
+	rte_cryptodev_pci_generic_remove;
+	rte_cryptodev_sym_capability_check_aead;
+	rte_cryptodev_sym_session_init;
+	rte_cryptodev_sym_session_clear;
+	rte_cryptodev_vdev_parse_init_params;
+	rte_cryptodev_vdev_pmd_init;
+	rte_crypto_aead_algorithm_strings;
+	rte_crypto_aead_operation_strings;
+
+} DPDK_17.05;

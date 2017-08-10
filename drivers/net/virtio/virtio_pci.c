@@ -38,6 +38,7 @@
 #endif
 
 #include <rte_io.h>
+#include <rte_bus.h>
 
 #include "virtio_pci.h"
 #include "virtio_logs.h"
@@ -579,6 +580,8 @@ get_cfg_addr(struct rte_pci_device *dev, struct virtio_pci_cap *cap)
 	return base + offset;
 }
 
+#define PCI_MSIX_ENABLE 0x8000
+
 static int
 virtio_read_caps(struct rte_pci_device *dev, struct virtio_hw *hw)
 {
@@ -605,8 +608,17 @@ virtio_read_caps(struct rte_pci_device *dev, struct virtio_hw *hw)
 			break;
 		}
 
-		if (cap.cap_vndr == PCI_CAP_ID_MSIX)
-			hw->use_msix = 1;
+		if (cap.cap_vndr == PCI_CAP_ID_MSIX) {
+			/* Transitional devices would also have this capability,
+			 * that's why we also check if msix is enabled.
+			 * 1st byte is cap ID; 2nd byte is the position of next
+			 * cap; next two bytes are the flags.
+			 */
+			uint16_t flags = ((uint16_t *)&cap)[1];
+
+			if (flags & PCI_MSIX_ENABLE)
+				hw->use_msix = 1;
+		}
 
 		if (cap.cap_vndr != PCI_CAP_ID_VNDR) {
 			PMD_INIT_LOG(DEBUG,
@@ -684,8 +696,8 @@ vtpci_init(struct rte_pci_device *dev, struct virtio_hw *hw)
 	if (rte_pci_ioport_map(dev, 0, VTPCI_IO(hw)) < 0) {
 		if (dev->kdrv == RTE_KDRV_UNKNOWN &&
 		    (!dev->device.devargs ||
-		     dev->device.devargs->type !=
-			RTE_DEVTYPE_WHITELISTED_PCI)) {
+		     dev->device.devargs->bus !=
+		     rte_bus_find_by_name("pci"))) {
 			PMD_INIT_LOG(INFO,
 				"skip kernel managed virtio device.");
 			return 1;

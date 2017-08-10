@@ -64,8 +64,10 @@ cperf_throughput_test_free(struct cperf_throughput_ctx *ctx, uint32_t mbuf_nb)
 	uint32_t i;
 
 	if (ctx) {
-		if (ctx->sess)
-			rte_cryptodev_sym_session_free(ctx->dev_id, ctx->sess);
+		if (ctx->sess) {
+			rte_cryptodev_sym_session_clear(ctx->dev_id, ctx->sess);
+			rte_cryptodev_sym_session_free(ctx->sess);
+		}
 
 		if (ctx->mbufs_in) {
 			for (i = 0; i < mbuf_nb; i++)
@@ -151,14 +153,14 @@ cperf_mbuf_create(struct rte_mempool *mempool,
 
 	if (options->op_type != CPERF_CIPHER_ONLY) {
 		mbuf_data = (uint8_t *)rte_pktmbuf_append(mbuf,
-				options->auth_digest_sz);
+				options->digest_sz);
 		if (mbuf_data == NULL)
 			goto error;
 	}
 
 	if (options->op_type == CPERF_AEAD) {
 		uint8_t *aead = (uint8_t *)rte_pktmbuf_prepend(mbuf,
-			RTE_ALIGN_CEIL(options->auth_aad_sz, 16));
+			RTE_ALIGN_CEIL(options->aead_aad_sz, 16));
 
 		if (aead == NULL)
 			goto error;
@@ -175,7 +177,8 @@ error:
 }
 
 void *
-cperf_throughput_test_constructor(uint8_t dev_id, uint16_t qp_id,
+cperf_throughput_test_constructor(struct rte_mempool *sess_mp,
+		uint8_t dev_id, uint16_t qp_id,
 		const struct cperf_options *options,
 		const struct cperf_test_vector *test_vector,
 		const struct cperf_op_fns *op_fns)
@@ -195,7 +198,12 @@ cperf_throughput_test_constructor(uint8_t dev_id, uint16_t qp_id,
 	ctx->options = options;
 	ctx->test_vector = test_vector;
 
-	ctx->sess = op_fns->sess_create(dev_id, options, test_vector);
+	/* IV goes at the end of the cryptop operation */
+	uint16_t iv_offset = sizeof(struct rte_crypto_op) +
+		sizeof(struct rte_crypto_sym_op);
+
+	ctx->sess = op_fns->sess_create(sess_mp, dev_id, options, test_vector,
+					iv_offset);
 	if (ctx->sess == NULL)
 		goto err;
 
@@ -208,7 +216,7 @@ cperf_throughput_test_constructor(uint8_t dev_id, uint16_t qp_id,
 			RTE_CACHE_LINE_ROUNDUP(
 				(options->max_buffer_size / options->segments_nb) +
 				(options->max_buffer_size % options->segments_nb) +
-					options->auth_digest_sz),
+					options->digest_sz),
 			rte_socket_id());
 
 	if (ctx->pkt_mbuf_pool_in == NULL)
@@ -236,7 +244,7 @@ cperf_throughput_test_constructor(uint8_t dev_id, uint16_t qp_id,
 				RTE_PKTMBUF_HEADROOM +
 				RTE_CACHE_LINE_ROUNDUP(
 					options->max_buffer_size +
-					options->auth_digest_sz),
+					options->digest_sz),
 				rte_socket_id());
 
 		if (ctx->pkt_mbuf_pool_out == NULL)
@@ -262,9 +270,12 @@ cperf_throughput_test_constructor(uint8_t dev_id, uint16_t qp_id,
 	snprintf(pool_name, sizeof(pool_name), "cperf_op_pool_cdev_%d",
 			dev_id);
 
+	uint16_t priv_size = test_vector->cipher_iv.length +
+		test_vector->auth_iv.length + test_vector->aead_iv.length;
+
 	ctx->crypto_op_pool = rte_crypto_op_pool_create(pool_name,
-			RTE_CRYPTO_OP_TYPE_SYMMETRIC, options->pool_sz, 0, 0,
-			rte_socket_id());
+			RTE_CRYPTO_OP_TYPE_SYMMETRIC, options->pool_sz,
+			512, priv_size, rte_socket_id());
 	if (ctx->crypto_op_pool == NULL)
 		goto err;
 
@@ -315,6 +326,9 @@ cperf_throughput_test_runner(void *test_ctx)
 	else
 		test_burst_size = ctx->options->burst_size_list[0];
 
+	uint16_t iv_offset = sizeof(struct rte_crypto_op) +
+		sizeof(struct rte_crypto_sym_op);
+
 	while (test_burst_size <= ctx->options->max_burst_size) {
 		uint64_t ops_enqd = 0, ops_enqd_total = 0, ops_enqd_failed = 0;
 		uint64_t ops_deqd = 0, ops_deqd_total = 0, ops_deqd_failed = 0;
@@ -339,14 +353,20 @@ cperf_throughput_test_runner(void *test_ctx)
 			if (ops_needed != rte_crypto_op_bulk_alloc(
 					ctx->crypto_op_pool,
 					RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-					ops, ops_needed))
+					ops, ops_needed)) {
+				RTE_LOG(ERR, USER1,
+					"Failed to allocate more crypto operations "
+					"from the the crypto operation pool.\n"
+					"Consider increasing the pool size "
+					"with --pool-sz\n");
 				return -1;
+			}
 
 			/* Setup crypto op, attach mbuf etc */
 			(ctx->populate_ops)(ops, &ctx->mbufs_in[m_idx],
 					&ctx->mbufs_out[m_idx],
 					ops_needed, ctx->sess, ctx->options,
-					ctx->test_vector);
+					ctx->test_vector, iv_offset);
 
 			/**
 			 * When ops_needed is smaller than ops_enqd, the
@@ -396,8 +416,8 @@ cperf_throughput_test_runner(void *test_ctx)
 				 * the crypto operation will change the data and cause
 				 * failures.
 				 */
-				for (i = 0; i < ops_deqd; i++)
-					rte_crypto_op_free(ops_processed[i]);
+				rte_mempool_put_bulk(ctx->crypto_op_pool,
+						(void **)ops_processed, ops_deqd);
 
 				ops_deqd_total += ops_deqd;
 			} else {
@@ -426,8 +446,8 @@ cperf_throughput_test_runner(void *test_ctx)
 			if (ops_deqd == 0)
 				ops_deqd_failed++;
 			else {
-				for (i = 0; i < ops_deqd; i++)
-					rte_crypto_op_free(ops_processed[i]);
+				rte_mempool_put_bulk(ctx->crypto_op_pool,
+						(void **)ops_processed, ops_deqd);
 
 				ops_deqd_total += ops_deqd;
 			}
@@ -471,14 +491,14 @@ cperf_throughput_test_runner(void *test_ctx)
 					cycles_per_packet);
 		} else {
 			if (!only_once)
-				printf("# lcore id, Buffer Size(B),"
+				printf("#lcore id,Buffer Size(B),"
 					"Burst Size,Enqueued,Dequeued,Failed Enq,"
 					"Failed Deq,Ops(Millions),Throughput(Gbps),"
 					"Cycles/Buf\n\n");
 			only_once = 1;
 
-			printf("%10u;%10u;%u;%"PRIu64";%"PRIu64";%"PRIu64";%"PRIu64";"
-					"%.f3;%.f3;%.f3\n",
+			printf("%u;%u;%u;%"PRIu64";%"PRIu64";%"PRIu64";%"PRIu64";"
+					"%.3f;%.3f;%.3f\n",
 					ctx->lcore_id,
 					ctx->options->test_buffer_size,
 					test_burst_size,
@@ -513,6 +533,8 @@ cperf_throughput_test_destructor(void *arg)
 
 	if (ctx == NULL)
 		return;
+
+	rte_cryptodev_stop(ctx->dev_id);
 
 	cperf_throughput_test_free(ctx, ctx->options->pool_sz);
 }

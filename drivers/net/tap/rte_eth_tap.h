@@ -37,6 +37,7 @@
 #include <sys/queue.h>
 #include <sys/uio.h>
 #include <inttypes.h>
+#include <net/if.h>
 
 #include <linux/if_tun.h>
 
@@ -83,12 +84,12 @@ struct pmd_internals {
 	char name[RTE_ETH_NAME_MAX_LEN];  /* Internal Tap device name */
 	uint16_t nb_queues;               /* Number of queues supported */
 	struct ether_addr eth_addr;       /* Mac address of the device port */
+	struct ifreq remote_initial_flags;   /* Remote netdevice flags on init */
 	int remote_if_index;              /* remote netdevice IF_INDEX */
 	int if_index;                     /* IF_INDEX for the port */
 	int ioctl_sock;                   /* socket for ioctl calls */
 	int nlsk_fd;                      /* Netlink socket fd */
-	int flower_support;               /* 1 if kernel supports, else 0 */
-	int flower_vlan_support;          /* 1 if kernel supports, else 0 */
+	int flow_isolate;                 /* 1 if flow isolation is enabled */
 	LIST_HEAD(tap_flows, rte_flow) flows;        /* rte_flow rules */
 	/* implicit rte_flow rules set when a remote device is active */
 	LIST_HEAD(tap_implicit_flows, rte_flow) implicit_flows;

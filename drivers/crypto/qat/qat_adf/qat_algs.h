@@ -17,7 +17,7 @@
  *  qat-linux@intel.com
  *
  *  BSD LICENSE
- *  Copyright(c) 2015-2016 Intel Corporation.
+ *  Copyright(c) 2015-2017 Intel Corporation.
  *  Redistribution and use in source and binary forms, with or without
  *  modification, are permitted provided that the following conditions
  *  are met:
@@ -51,6 +51,7 @@
 #include "icp_qat_hw.h"
 #include "icp_qat_fw.h"
 #include "icp_qat_fw_la.h"
+#include "../qat_crypto.h"
 
 /*
  * Key Modifier (KM) value used in KASUMI algorithm in F9 mode to XOR
@@ -127,15 +128,17 @@ struct qat_session {
 	struct icp_qat_fw_la_bulk_req fw_req;
 	uint8_t aad_len;
 	struct qat_crypto_instance *inst;
+	struct {
+		uint16_t offset;
+		uint16_t length;
+	} cipher_iv;
+	struct {
+		uint16_t offset;
+		uint16_t length;
+	} auth_iv;
+	uint16_t digest_length;
 	rte_spinlock_t lock;	/* protects this struct */
-};
-
-struct qat_alg_ablkcipher_cd {
-	struct icp_qat_hw_cipher_algo_blk *cd;
-	phys_addr_t cd_paddr;
-	struct icp_qat_fw_la_bulk_req fw_req;
-	struct qat_crypto_instance *inst;
-	rte_spinlock_t lock;	/* protects this struct */
+	enum qat_device_gen min_qat_dev_gen;
 };
 
 int qat_get_inter_state_size(enum icp_qat_hw_auth_algo qat_hash_alg);
@@ -147,20 +150,12 @@ int qat_alg_aead_session_create_content_desc_cipher(struct qat_session *cd,
 int qat_alg_aead_session_create_content_desc_auth(struct qat_session *cdesc,
 						uint8_t *authkey,
 						uint32_t authkeylen,
-						uint32_t add_auth_data_length,
+						uint32_t aad_length,
 						uint32_t digestsize,
 						unsigned int operation);
 
 void qat_alg_init_common_hdr(struct icp_qat_fw_comn_req_hdr *header,
 					enum qat_crypto_proto_flag proto_flags);
-
-void qat_alg_ablkcipher_init_enc(struct qat_alg_ablkcipher_cd *cd,
-					int alg, const uint8_t *key,
-					unsigned int keylen);
-
-void qat_alg_ablkcipher_init_dec(struct qat_alg_ablkcipher_cd *cd,
-					int alg, const uint8_t *key,
-					unsigned int keylen);
 
 int qat_alg_validate_aes_key(int key_len, enum icp_qat_hw_cipher_algo *alg);
 int qat_alg_validate_aes_docsisbpi_key(int key_len,

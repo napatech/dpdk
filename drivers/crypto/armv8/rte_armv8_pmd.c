@@ -1,7 +1,7 @@
 /*
  *   BSD LICENSE
  *
- *   Copyright (C) Cavium networks Ltd. 2017.
+ *   Copyright (C) Cavium, Inc. 2017.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -13,7 +13,7 @@
  *       notice, this list of conditions and the following disclaimer in
  *       the documentation and/or other materials provided with the
  *       distribution.
- *     * Neither the name of Cavium networks nor the names of its
+ *     * Neither the name of Cavium, Inc nor the names of its
  *       contributors may be used to endorse or promote products derived
  *       from this software without specific prior written permission.
  *
@@ -36,6 +36,7 @@
 #include <rte_hexdump.h>
 #include <rte_cryptodev.h>
 #include <rte_cryptodev_pmd.h>
+#include <rte_cryptodev_vdev.h>
 #include <rte_vdev.h>
 #include <rte_malloc.h>
 #include <rte_cpuflags.h>
@@ -43,6 +44,8 @@
 #include "armv8_crypto_defs.h"
 
 #include "rte_armv8_pmd_private.h"
+
+static uint8_t cryptodev_driver_id;
 
 static int cryptodev_armv8_crypto_uninit(struct rte_vdev_device *vdev);
 
@@ -288,27 +291,14 @@ auth_set_prerequisites(struct armv8_crypto_session *sess,
 		 * Generate authentication key, i_key_pad and o_key_pad.
 		 */
 		/* Zero memory under key */
-		memset(sess->auth.hmac.key, 0, SHA1_AUTH_KEY_LENGTH);
+		memset(sess->auth.hmac.key, 0, SHA1_BLOCK_SIZE);
 
-		if (xform->auth.key.length > SHA1_AUTH_KEY_LENGTH) {
-			/*
-			 * In case the key is longer than 160 bits
-			 * the algorithm will use SHA1(key) instead.
-			 */
-			error = sha1_block(NULL, xform->auth.key.data,
-				sess->auth.hmac.key, xform->auth.key.length);
-			if (error != 0)
-				return -1;
-		} else {
-			/*
-			 * Now copy the given authentication key to the session
-			 * key assuming that the session key is zeroed there is
-			 * no need for additional zero padding if the key is
-			 * shorter than SHA1_AUTH_KEY_LENGTH.
-			 */
-			rte_memcpy(sess->auth.hmac.key, xform->auth.key.data,
-							xform->auth.key.length);
-		}
+		/*
+		 * Now copy the given authentication key to the session
+		 * key.
+		 */
+		rte_memcpy(sess->auth.hmac.key, xform->auth.key.data,
+						xform->auth.key.length);
 
 		/* Prepare HMAC padding: key|pattern */
 		auth_hmac_pad_prepare(sess, xform);
@@ -334,27 +324,14 @@ auth_set_prerequisites(struct armv8_crypto_session *sess,
 		 * Generate authentication key, i_key_pad and o_key_pad.
 		 */
 		/* Zero memory under key */
-		memset(sess->auth.hmac.key, 0, SHA256_AUTH_KEY_LENGTH);
+		memset(sess->auth.hmac.key, 0, SHA256_BLOCK_SIZE);
 
-		if (xform->auth.key.length > SHA256_AUTH_KEY_LENGTH) {
-			/*
-			 * In case the key is longer than 256 bits
-			 * the algorithm will use SHA256(key) instead.
-			 */
-			error = sha256_block(NULL, xform->auth.key.data,
-				sess->auth.hmac.key, xform->auth.key.length);
-			if (error != 0)
-				return -1;
-		} else {
-			/*
-			 * Now copy the given authentication key to the session
-			 * key assuming that the session key is zeroed there is
-			 * no need for additional zero padding if the key is
-			 * shorter than SHA256_AUTH_KEY_LENGTH.
-			 */
-			rte_memcpy(sess->auth.hmac.key, xform->auth.key.data,
-							xform->auth.key.length);
-		}
+		/*
+		 * Now copy the given authentication key to the session
+		 * key.
+		 */
+		rte_memcpy(sess->auth.hmac.key, xform->auth.key.data,
+						xform->auth.key.length);
 
 		/* Prepare HMAC padding: key|pattern */
 		auth_hmac_pad_prepare(sess, xform);
@@ -414,7 +391,7 @@ armv8_crypto_set_session_chained_parameters(struct armv8_crypto_session *sess,
 		order = sess->chain_order;
 		break;
 	default:
-		return -EINVAL;
+		return -ENOTSUP;
 	}
 	/* Select cipher direction */
 	sess->cipher.direction = cipher_xform->cipher.op;
@@ -431,10 +408,10 @@ armv8_crypto_set_session_chained_parameters(struct armv8_crypto_session *sess,
 	case RTE_CRYPTO_CIPHER_AES_CBC:
 		sess->cipher.algo = calg;
 		/* IV len is always 16 bytes (block size) for AES CBC */
-		sess->cipher.iv_len = 16;
+		sess->cipher.iv.length = 16;
 		break;
 	default:
-		return -EINVAL;
+		return -ENOTSUP;
 	}
 	/* Select auth generate/verify */
 	sess->auth.operation = auth_xform->auth.op;
@@ -448,8 +425,11 @@ armv8_crypto_set_session_chained_parameters(struct armv8_crypto_session *sess,
 		sess->auth.mode = ARMV8_CRYPTO_AUTH_AS_HMAC;
 		break;
 	default:
-		return -EINVAL;
+		return -ENOTSUP;
 	}
+
+	/* Set the digest length */
+	sess->auth.digest_length = auth_xform->auth.digest_length;
 
 	/* Verify supported key lengths and extract proper algorithm */
 	switch (cipher_xform->cipher.key.length << 3) {
@@ -465,7 +445,7 @@ armv8_crypto_set_session_chained_parameters(struct armv8_crypto_session *sess,
 	default: /* Fall through */
 		sess->crypto_func = NULL;
 		sess->cipher.key_sched = NULL;
-		return -EINVAL;
+		return -ENOTSUP;
 	}
 
 	if (unlikely(sess->crypto_func == NULL)) {
@@ -519,8 +499,11 @@ armv8_crypto_set_session_parameters(struct armv8_crypto_session *sess,
 		break;
 	default:
 		is_chained_op = false;
-		return -EINVAL;
+		return -ENOTSUP;
 	}
+
+	/* Set IV offset */
+	sess->cipher.iv.offset = cipher_xform->cipher.iv.offset;
 
 	if (is_chained_op) {
 		ret = armv8_crypto_set_session_chained_parameters(sess,
@@ -528,11 +511,11 @@ armv8_crypto_set_session_parameters(struct armv8_crypto_session *sess,
 		if (unlikely(ret != 0)) {
 			ARMV8_CRYPTO_LOG_ERR(
 			"Invalid/unsupported chained (cipher/auth) parameters");
-			return -EINVAL;
+			return ret;
 		}
 	} else {
 		ARMV8_CRYPTO_LOG_ERR("Invalid/unsupported operation");
-		return -EINVAL;
+		return -ENOTSUP;
 	}
 
 	return 0;
@@ -544,30 +527,36 @@ get_session(struct armv8_crypto_qp *qp, struct rte_crypto_op *op)
 {
 	struct armv8_crypto_session *sess = NULL;
 
-	if (op->sym->sess_type == RTE_CRYPTO_SYM_OP_WITH_SESSION) {
+	if (op->sess_type == RTE_CRYPTO_OP_WITH_SESSION) {
 		/* get existing session */
-		if (likely(op->sym->session != NULL &&
-				op->sym->session->dev_type ==
-				RTE_CRYPTODEV_ARMV8_PMD)) {
+		if (likely(op->sym->session != NULL)) {
 			sess = (struct armv8_crypto_session *)
-				op->sym->session->_private;
+					get_session_private_data(
+					op->sym->session,
+					cryptodev_driver_id);
 		}
 	} else {
 		/* provide internal session */
 		void *_sess = NULL;
+		void *_sess_private_data = NULL;
 
-		if (!rte_mempool_get(qp->sess_mp, (void **)&_sess)) {
-			sess = (struct armv8_crypto_session *)
-				((struct rte_cryptodev_sym_session *)_sess)
-				->_private;
+		if (rte_mempool_get(qp->sess_mp, (void **)&_sess))
+			return NULL;
 
-			if (unlikely(armv8_crypto_set_session_parameters(
-					sess, op->sym->xform) != 0)) {
-				rte_mempool_put(qp->sess_mp, _sess);
-				sess = NULL;
-			} else
-				op->sym->session = _sess;
+		if (rte_mempool_get(qp->sess_mp, (void **)&_sess_private_data))
+			return NULL;
+
+		sess = (struct armv8_crypto_session *)_sess_private_data;
+
+		if (unlikely(armv8_crypto_set_session_parameters(sess,
+				op->sym->xform) != 0)) {
+			rte_mempool_put(qp->sess_mp, _sess);
+			rte_mempool_put(qp->sess_mp, _sess_private_data);
+			sess = NULL;
 		}
+		op->sym->session = (struct rte_cryptodev_sym_session *)_sess;
+		set_session_private_data(op->sym->session, cryptodev_driver_id,
+			_sess_private_data);
 	}
 
 	if (unlikely(sess == NULL))
@@ -645,15 +634,11 @@ process_armv8_chained_op
 		}
 	} else {
 		adst = (uint8_t *)rte_pktmbuf_append(m_asrc,
-				op->sym->auth.digest.length);
+				sess->auth.digest_length);
 	}
 
-	if (unlikely(op->sym->cipher.iv.length != sess->cipher.iv_len)) {
-		op->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
-		return;
-	}
-
-	arg.cipher.iv = op->sym->cipher.iv.data;
+	arg.cipher.iv = rte_crypto_op_ctod_offset(op, uint8_t *,
+					sess->cipher.iv.offset);
 	arg.cipher.key = sess->cipher.key.data;
 	/* Acquire combined mode function */
 	crypto_func = sess->crypto_func;
@@ -667,12 +652,12 @@ process_armv8_chained_op
 	op->status = RTE_CRYPTO_OP_STATUS_SUCCESS;
 	if (sess->auth.operation == RTE_CRYPTO_AUTH_OP_VERIFY) {
 		if (memcmp(adst, op->sym->auth.digest.data,
-				op->sym->auth.digest.length) != 0) {
+				sess->auth.digest_length) != 0) {
 			op->status = RTE_CRYPTO_OP_STATUS_AUTH_FAILED;
 		}
 		/* Trim area used for digest from mbuf. */
 		rte_pktmbuf_trim(m_asrc,
-				op->sym->auth.digest.length);
+				sess->auth.digest_length);
 	}
 }
 
@@ -699,8 +684,11 @@ process_op(const struct armv8_crypto_qp *qp, struct rte_crypto_op *op,
 	}
 
 	/* Free session if a session-less crypto op */
-	if (op->sym->sess_type == RTE_CRYPTO_SYM_OP_SESSIONLESS) {
+	if (op->sess_type == RTE_CRYPTO_OP_SESSIONLESS) {
 		memset(sess, 0, sizeof(struct armv8_crypto_session));
+		memset(op->sym->session, 0,
+				rte_cryptodev_get_header_session_size());
+		rte_mempool_put(qp->sess_mp, sess);
 		rte_mempool_put(qp->sess_mp, op->sym->session);
 		op->sym->session = NULL;
 	}
@@ -806,15 +794,16 @@ cryptodev_armv8_crypto_create(const char *name,
 		snprintf(init_params->name, sizeof(init_params->name),
 				"%s", name);
 
-	dev = rte_cryptodev_pmd_virtual_dev_init(init_params->name,
+	dev = rte_cryptodev_vdev_pmd_init(init_params->name,
 				sizeof(struct armv8_crypto_private),
-				init_params->socket_id);
+				init_params->socket_id,
+				vdev);
 	if (dev == NULL) {
 		ARMV8_CRYPTO_LOG_ERR("failed to create cryptodev vdev");
 		goto init_error;
 	}
 
-	dev->dev_type = RTE_CRYPTODEV_ARMV8_PMD;
+	dev->driver_id = cryptodev_driver_id;
 	dev->dev_ops = rte_armv8_crypto_pmd_ops;
 
 	/* register rx/tx burst functions for data path */
@@ -860,7 +849,7 @@ cryptodev_armv8_crypto_init(struct rte_vdev_device *vdev)
 	if (name == NULL)
 		return -EINVAL;
 	input_args = rte_vdev_device_args(vdev);
-	rte_cryptodev_parse_vdev_init_params(&init_params, input_args);
+	rte_cryptodev_vdev_parse_init_params(&init_params, input_args);
 
 	RTE_LOG(INFO, PMD, "Initialising %s on NUMA node %d\n", name,
 			init_params.socket_id);
@@ -904,3 +893,4 @@ RTE_PMD_REGISTER_PARAM_STRING(CRYPTODEV_NAME_ARMV8_PMD,
 	"max_nb_queue_pairs=<int> "
 	"max_nb_sessions=<int> "
 	"socket_id=<int>");
+RTE_PMD_REGISTER_CRYPTO_DRIVER(armv8_crypto_drv, cryptodev_driver_id);

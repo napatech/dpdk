@@ -898,13 +898,62 @@ Matches a MPLS header.
 - Default ``mask`` matches label only.
 
 Item: ``GRE``
-^^^^^^^^^^^^^^
+^^^^^^^^^^^^^
 
 Matches a GRE header.
 
 - ``c_rsvd0_ver``: checksum, reserved 0 and version.
 - ``protocol``: protocol type.
 - Default ``mask`` matches protocol only.
+
+Item: ``FUZZY``
+^^^^^^^^^^^^^^^
+
+Fuzzy pattern match, expect faster than default.
+
+This is for device that support fuzzy match option. Usually a fuzzy match is
+fast but the cost is accuracy. i.e. Signature Match only match pattern's hash
+value, but it is possible two different patterns have the same hash value.
+
+Matching accuracy level can be configured by threshold. Driver can divide the
+range of threshold and map to different accuracy levels that device support.
+
+Threshold 0 means perfect match (no fuzziness), while threshold 0xffffffff
+means fuzziest match.
+
+.. _table_rte_flow_item_fuzzy:
+
+.. table:: FUZZY
+
+   +----------+---------------+--------------------------------------------------+
+   | Field    |   Subfield    | Value                                            |
+   +==========+===============+==================================================+
+   | ``spec`` | ``threshold`` | 0 as perfect match, 0xffffffff as fuzziest match |
+   +----------+---------------+--------------------------------------------------+
+   | ``last`` | ``threshold`` | upper range value                                |
+   +----------+---------------+--------------------------------------------------+
+   | ``mask`` | ``threshold`` | bit-mask apply to "spec" and "last"              |
+   +----------+---------------+--------------------------------------------------+
+
+Usage example, fuzzy match a TCPv4 packets:
+
+.. _table_rte_flow_item_fuzzy_example:
+
+.. table:: Fuzzy matching
+
+   +-------+----------+
+   | Index | Item     |
+   +=======+==========+
+   | 0     | FUZZY    |
+   +-------+----------+
+   | 1     | Ethernet |
+   +-------+----------+
+   | 2     | IPv4     |
+   +-------+----------+
+   | 3     | TCP      |
+   +-------+----------+
+   | 4     | END      |
+   +-------+----------+
 
 Actions
 ~~~~~~~
@@ -1517,6 +1566,73 @@ Return values:
 
 - 0 on success, a negative errno value otherwise and ``rte_errno`` is set.
 
+Isolated mode
+-------------
+
+The general expectation for ingress traffic is that flow rules process it
+first; the remaining unmatched or pass-through traffic usually ends up in a
+queue (with or without RSS, locally or in some sub-device instance)
+depending on the global configuration settings of a port.
+
+While fine from a compatibility standpoint, this approach makes drivers more
+complex as they have to check for possible side effects outside of this API
+when creating or destroying flow rules. It results in a more limited set of
+available rule types due to the way device resources are assigned (e.g. no
+support for the RSS action even on capable hardware).
+
+Given that nonspecific traffic can be handled by flow rules as well,
+isolated mode is a means for applications to tell a driver that ingress on
+the underlying port must be injected from the defined flow rules only; that
+no default traffic is expected outside those rules.
+
+This has the following benefits:
+
+- Applications get finer-grained control over the kind of traffic they want
+  to receive (no traffic by default).
+
+- More importantly they control at what point nonspecific traffic is handled
+  relative to other flow rules, by adjusting priority levels.
+
+- Drivers can assign more hardware resources to flow rules and expand the
+  set of supported rule types.
+
+Because toggling isolated mode may cause profound changes to the ingress
+processing path of a driver, it may not be possible to leave it once
+entered. Likewise, existing flow rules or global configuration settings may
+prevent a driver from entering isolated mode.
+
+Applications relying on this mode are therefore encouraged to toggle it as
+soon as possible after device initialization, ideally before the first call
+to ``rte_eth_dev_configure()`` to avoid possible failures due to conflicting
+settings.
+
+Once effective, the following functionality has no effect on the underlying
+port and may return errors such as ``ENOTSUP`` ("not supported"):
+
+- Toggling promiscuous mode.
+- Toggling allmulticast mode.
+- Configuring MAC addresses.
+- Configuring multicast addresses.
+- Configuring VLAN filters.
+- Configuring Rx filters through the legacy API (e.g. FDIR).
+- Configuring global RSS settings.
+
+.. code-block:: c
+
+   int
+   rte_flow_isolate(uint8_t port_id, int set, struct rte_flow_error *error);
+
+Arguments:
+
+- ``port_id``: port identifier of Ethernet device.
+- ``set``: nonzero to enter isolated mode, attempt to leave it otherwise.
+- ``error``: perform verbose error reporting if not NULL. PMDs initialize
+  this structure in case of error only.
+
+Return values:
+
+- 0 on success, a negative errno value otherwise and ``rte_errno`` is set.
+
 Verbose error reporting
 -----------------------
 
@@ -2026,8 +2142,8 @@ A few features are intentionally not supported:
 - "MAC VLAN" or "tunnel" perfect matching modes should be automatically set
   according to the created flow rules.
 
-- Signature mode of operation is not defined but could be handled through a
-  specific item type if needed.
+- Signature mode of operation is not defined but could be handled through
+  "FUZZY" item.
 
 .. _table_rte_flow_migration_fdir:
 
@@ -2054,8 +2170,8 @@ A few features are intentionally not supported:
    |   |                   +----------+-----+                       |
    |   |                   | ``mask`` | any |                       |
    +---+-------------------+----------+-----+                       |
-   | 3 | VF, PF (optional) | ``spec`` | any |                       |
-   |   |                   +----------+-----+                       |
+   | 3 | VF, PF, FUZZY     | ``spec`` | any |                       |
+   |   | (optional)        +----------+-----+                       |
    |   |                   | ``last`` | N/A |                       |
    |   |                   +----------+-----+                       |
    |   |                   | ``mask`` | any |                       |

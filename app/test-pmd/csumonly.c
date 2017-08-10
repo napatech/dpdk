@@ -56,10 +56,8 @@
 #include <rte_lcore.h>
 #include <rte_atomic.h>
 #include <rte_branch_prediction.h>
-#include <rte_memory.h>
 #include <rte_mempool.h>
 #include <rte_mbuf.h>
-#include <rte_memcpy.h>
 #include <rte_interrupts.h>
 #include <rte_pci.h>
 #include <rte_ether.h>
@@ -71,6 +69,7 @@
 #include <rte_prefetch.h>
 #include <rte_string_fns.h>
 #include <rte_flow.h>
+#include <rte_gro.h>
 #include "testpmd.h"
 
 #define IP_DEFTTL  64   /* from RFC 1340. */
@@ -658,6 +657,10 @@ pkt_burst_checksum_forward(struct fwd_stream *fs)
 				 nb_pkt_per_burst);
 	if (unlikely(nb_rx == 0))
 		return;
+	if (unlikely(gro_ports[fs->rx_port].enable))
+		nb_rx = rte_gro_reassemble_burst(pkts_burst,
+				nb_rx,
+				&(gro_ports[fs->rx_port].param));
 
 #ifdef RTE_TEST_PMD_RECORD_BURST_STATS
 	fs->rx_burst_stats.pkt_burst_spread[nb_rx]++;

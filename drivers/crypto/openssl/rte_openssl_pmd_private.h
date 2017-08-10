@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright(c) 2016 Intel Corporation. All rights reserved.
+ *   Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -36,6 +36,8 @@
 #include <openssl/evp.h>
 #include <openssl/des.h>
 
+#define CRYPTODEV_NAME_OPENSSL_PMD	crypto_openssl
+/**< Open SSL Crypto PMD device name */
 
 #define OPENSSL_LOG_ERR(fmt, args...) \
 	RTE_LOG(ERR, CRYPTODEV, "[%s] %s() line %u: " fmt "\n",  \
@@ -108,6 +110,15 @@ struct openssl_session {
 	enum openssl_chain_order chain_order;
 	/**< chain order mode */
 
+	struct {
+		uint16_t length;
+		uint16_t offset;
+	} iv;
+	/**< IV parameters */
+
+	enum rte_crypto_aead_algorithm aead_algo;
+	/**< AEAD algorithm */
+
 	/** Cipher Parameters */
 	struct {
 		enum rte_crypto_cipher_operation direction;
@@ -157,6 +168,11 @@ struct openssl_session {
 				/**< pointer to EVP context structure */
 			} hmac;
 		};
+
+		uint16_t aad_length;
+		/**< AAD length */
+		uint16_t digest_length;
+		/**< digest length */
 	} auth;
 
 } __rte_cache_aligned;

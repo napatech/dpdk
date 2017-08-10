@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright(c) 2015 Intel Corporation. All rights reserved.
+ *   Copyright(c) 2015-2017 Intel Corporation. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -42,7 +42,7 @@ struct snow3g_test_data {
 	struct {
 		uint8_t data[64] __rte_aligned(16);
 		unsigned len;
-	} iv;
+	} cipher_iv;
 
 	struct {
 		uint8_t data[1024];
@@ -64,20 +64,12 @@ struct snow3g_test_data {
 
 	struct {
 		unsigned len;
-	} validCipherOffsetLenInBits;
-
-	struct {
-		unsigned len;
 	} validAuthLenInBits;
-
-	struct {
-		unsigned len;
-	} validAuthOffsetLenInBits;
 
 	struct {
 		uint8_t data[64];
 		unsigned len;
-	} aad;
+	} auth_iv;
 
 	struct {
 		uint8_t data[64];
@@ -92,7 +84,7 @@ struct snow3g_test_data snow3g_test_case_1 = {
 		},
 		.len = 16
 	},
-	.iv = {
+	.cipher_iv = {
 		.data = {
 			0x72, 0xA4, 0xF2, 0x0F, 0x64, 0x00, 0x00, 0x00,
 			0x72, 0xA4, 0xF2, 0x0F, 0x64, 0x00, 0x00, 0x00
@@ -141,10 +133,7 @@ struct snow3g_test_data snow3g_test_case_1 = {
 	.validCipherLenInBits = {
 		.len = 800
 	},
-	.validCipherOffsetLenInBits = {
-		.len = 128
-	},
-	.aad = {
+	.auth_iv = {
 		.data = {
 			 0x72, 0xA4, 0xF2, 0x0F, 0x64, 0x00, 0x00, 0x00,
 			 0x72, 0xA4, 0xF2, 0x0F, 0x64, 0x00, 0x00, 0x00
@@ -161,7 +150,7 @@ struct snow3g_test_data snow3g_test_case_2 = {
 		},
 		.len = 16
 	},
-	.iv = {
+	.cipher_iv = {
 	       .data = {
 			0xE2, 0x8B, 0xCF, 0x7B, 0xC0, 0x00, 0x00, 0x00,
 			0xE2, 0x8B, 0xCF, 0x7B, 0xC0, 0x00, 0x00, 0x00
@@ -200,10 +189,7 @@ struct snow3g_test_data snow3g_test_case_2 = {
 	.validCipherLenInBits = {
 		.len = 512
 	},
-	.validCipherOffsetLenInBits = {
-		.len = 128
-	},
-	.aad = {
+	.auth_iv = {
 		.data = {
 			 0xE2, 0x8B, 0xCF, 0x7B, 0xC0, 0x00, 0x00, 0x00,
 			 0xE2, 0x8B, 0xCF, 0x7B, 0xC0, 0x00, 0x00, 0x00
@@ -220,7 +206,7 @@ struct snow3g_test_data snow3g_test_case_3 = {
 		},
 		.len = 16
 	},
-	.iv = {
+	.cipher_iv = {
 		.data = {
 			0xFA, 0x55, 0x6B, 0x26, 0x1C, 0x00, 0x00, 0x00,
 			0xFA, 0x55, 0x6B, 0x26, 0x1C, 0x00, 0x00, 0x00
@@ -247,10 +233,7 @@ struct snow3g_test_data snow3g_test_case_3 = {
 	.validCipherLenInBits = {
 		.len = 120
 	},
-	.validCipherOffsetLenInBits = {
-		.len = 128
-	},
-	.aad = {
+	.auth_iv = {
 		.data = {
 			0xFA, 0x55, 0x6B, 0x26, 0x1C, 0x00, 0x00, 0x00,
 			0xFA, 0x55, 0x6B, 0x26, 0x1C, 0x00, 0x00, 0x00
@@ -263,9 +246,6 @@ struct snow3g_test_data snow3g_test_case_3 = {
 	},
 	.validAuthLenInBits = {
 		.len = 120
-	},
-	.validAuthOffsetLenInBits = {
-		.len = 128
 	}
 };
 
@@ -277,7 +257,7 @@ struct snow3g_test_data snow3g_test_case_4 = {
 		},
 		.len = 16
 	},
-	.iv = {
+	.cipher_iv = {
 		.data = {
 			0x39, 0x8A, 0x59, 0xB4, 0x2C, 0x00, 0x00, 0x00,
 			0x39, 0x8A, 0x59, 0xB4, 0x2C, 0x00, 0x00, 0x00
@@ -307,9 +287,6 @@ struct snow3g_test_data snow3g_test_case_4 = {
 	},
 	.validCipherLenInBits = {
 		.len = 256
-	},
-	.validCipherOffsetLenInBits = {
-		.len = 128
 	}
 };
 
@@ -321,7 +298,7 @@ struct snow3g_test_data snow3g_test_case_5 = {
 		},
 		.len = 16
 	},
-	.iv = {
+	.cipher_iv = {
 		.data = {
 			0x72, 0xA4, 0xF2, 0x0F, 0x48, 0x00, 0x00, 0x00,
 			0x72, 0xA4, 0xF2, 0x0F, 0x48, 0x00, 0x00, 0x00
@@ -371,9 +348,6 @@ struct snow3g_test_data snow3g_test_case_5 = {
 	.validCipherLenInBits = {
 		.len = 840
 	},
-	.validCipherOffsetLenInBits = {
-		.len = 128
-	}
 };
 struct snow3g_test_data snow3g_test_case_6 = {
 	.key = {
@@ -383,14 +357,14 @@ struct snow3g_test_data snow3g_test_case_6 = {
 		},
 		.len = 16
 	},
-	.iv = {
+	.cipher_iv = {
 		.data = {
 			0x14, 0x79, 0x3E, 0x41, 0x03, 0x97, 0xE8, 0xFD,
 			0x94, 0x79, 0x3E, 0x41, 0x03, 0x97, 0x68, 0xFD
 		},
 		.len = 16
 	},
-	.aad = {
+	.auth_iv = {
 		.data = {
 			0x14, 0x79, 0x3E, 0x41, 0x03, 0x97, 0xE8, 0xFD,
 			0x94, 0x79, 0x3E, 0x41, 0x03, 0x97, 0x68, 0xFD
@@ -429,15 +403,9 @@ struct snow3g_test_data snow3g_test_case_6 = {
 	.validCipherLenInBits = {
 		.len = 384
 	},
-	.validCipherOffsetLenInBits = {
-		.len = 128
-	},
 	.validAuthLenInBits = {
 		.len = 384
 	},
-	.validAuthOffsetLenInBits = {
-		.len = 128
-	}
 };
 
 #endif /* TEST_CRYPTODEV_SNOW3G_TEST_VECTORS_H_ */

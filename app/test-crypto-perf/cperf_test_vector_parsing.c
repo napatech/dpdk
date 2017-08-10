@@ -1,3 +1,34 @@
+/*-
+ *   BSD LICENSE
+ *
+ *   Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
+ *
+ *   Redistribution and use in source and binary forms, with or without
+ *   modification, are permitted provided that the following conditions
+ *   are met:
+ *
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *     * Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in
+ *       the documentation and/or other materials provided with the
+ *       distribution.
+ *     * Neither the name of Intel Corporation nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
 #ifdef RTE_EXEC_ENV_BSDAPP
 	#define _WITH_GETLINE
 #endif
@@ -15,7 +46,8 @@ free_test_vector(struct cperf_test_vector *vector, struct cperf_options *opts)
 	if (vector == NULL || opts == NULL)
 		return -1;
 
-	rte_free(vector->iv.data);
+	rte_free(vector->cipher_iv.data);
+	rte_free(vector->auth_iv.data);
 	rte_free(vector->aad.data);
 	rte_free(vector->digest.data);
 
@@ -84,15 +116,28 @@ show_test_vector(struct cperf_test_vector *test_vector)
 		printf("\n");
 	}
 
-	if (test_vector->iv.data) {
-		printf("\niv =\n");
-		for (i = 0; i < test_vector->iv.length; ++i) {
+	if (test_vector->cipher_iv.data) {
+		printf("\ncipher_iv =\n");
+		for (i = 0; i < test_vector->cipher_iv.length; ++i) {
 			if ((i % wrap == 0) && (i != 0))
 				printf("\n");
-			if (i == (uint32_t)(test_vector->iv.length - 1))
-				printf("0x%02x", test_vector->iv.data[i]);
+			if (i == (uint32_t)(test_vector->cipher_iv.length - 1))
+				printf("0x%02x", test_vector->cipher_iv.data[i]);
 			else
-				printf("0x%02x, ", test_vector->iv.data[i]);
+				printf("0x%02x, ", test_vector->cipher_iv.data[i]);
+		}
+		printf("\n");
+	}
+
+	if (test_vector->auth_iv.data) {
+		printf("\nauth_iv =\n");
+		for (i = 0; i < test_vector->auth_iv.length; ++i) {
+			if ((i % wrap == 0) && (i != 0))
+				printf("\n");
+			if (i == (uint32_t)(test_vector->auth_iv.length - 1))
+				printf("0x%02x", test_vector->auth_iv.data[i]);
+			else
+				printf("0x%02x, ", test_vector->auth_iv.data[i]);
 		}
 		printf("\n");
 	}
@@ -300,19 +345,32 @@ parse_entry(char *entry, struct cperf_test_vector *vector,
 			vector->auth_key.length = opts->auth_key_sz;
 		}
 
-	} else if (strstr(key_token, "iv")) {
-		rte_free(vector->iv.data);
-		vector->iv.data = data;
-		vector->iv.phys_addr = rte_malloc_virt2phy(vector->iv.data);
+	} else if (strstr(key_token, "cipher_iv")) {
+		rte_free(vector->cipher_iv.data);
+		vector->cipher_iv.data = data;
 		if (tc_found)
-			vector->iv.length = data_length;
+			vector->cipher_iv.length = data_length;
 		else {
 			if (opts->cipher_iv_sz > data_length) {
-				printf("Global iv shorter than "
+				printf("Global cipher iv shorter than "
 					"cipher_iv_sz\n");
 				return -1;
 			}
-			vector->iv.length = opts->cipher_iv_sz;
+			vector->cipher_iv.length = opts->cipher_iv_sz;
+		}
+
+	} else if (strstr(key_token, "auth_iv")) {
+		rte_free(vector->auth_iv.data);
+		vector->auth_iv.data = data;
+		if (tc_found)
+			vector->auth_iv.length = data_length;
+		else {
+			if (opts->auth_iv_sz > data_length) {
+				printf("Global auth iv shorter than "
+					"auth_iv_sz\n");
+				return -1;
+			}
+			vector->auth_iv.length = opts->auth_iv_sz;
 		}
 
 	} else if (strstr(key_token, "ciphertext")) {
@@ -336,12 +394,12 @@ parse_entry(char *entry, struct cperf_test_vector *vector,
 		if (tc_found)
 			vector->aad.length = data_length;
 		else {
-			if (opts->auth_aad_sz > data_length) {
+			if (opts->aead_aad_sz > data_length) {
 				printf("Global aad shorter than "
-					"auth_aad_sz\n");
+					"aead_aad_sz\n");
 				return -1;
 			}
-			vector->aad.length = opts->auth_aad_sz;
+			vector->aad.length = opts->aead_aad_sz;
 		}
 
 	} else if (strstr(key_token, "digest")) {
@@ -352,12 +410,12 @@ parse_entry(char *entry, struct cperf_test_vector *vector,
 		if (tc_found)
 			vector->digest.length = data_length;
 		else {
-			if (opts->auth_digest_sz > data_length) {
+			if (opts->digest_sz > data_length) {
 				printf("Global digest shorter than "
-					"auth_digest_sz\n");
+					"digest_sz\n");
 				return -1;
 			}
-			vector->digest.length = opts->auth_digest_sz;
+			vector->digest.length = opts->digest_sz;
 		}
 	} else {
 		printf("Not valid key: '%s'\n", trim_space(key_token));

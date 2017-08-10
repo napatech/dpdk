@@ -35,14 +35,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <sys/queue.h>
 
 #include <rte_eal.h>
+#include <rte_dev.h>
 #include <rte_bus.h>
 #include <rte_vdev.h>
 #include <rte_common.h>
 #include <rte_devargs.h>
 #include <rte_memory.h>
+#include <rte_errno.h>
+
+/* Forward declare to access virtual bus name */
+static struct rte_bus rte_vdev_bus;
 
 /** Double linked list of virtual device drivers. */
 TAILQ_HEAD(vdev_device_list, rte_vdev_device);
@@ -52,14 +58,10 @@ static struct vdev_device_list vdev_device_list =
 struct vdev_driver_list vdev_driver_list =
 	TAILQ_HEAD_INITIALIZER(vdev_driver_list);
 
-static void rte_vdev_bus_register(void);
-
 /* register a driver */
 void
 rte_vdev_register(struct rte_vdev_driver *driver)
 {
-	rte_vdev_bus_register();
-
 	TAILQ_INSERT_TAIL(&vdev_driver_list, driver, next);
 }
 
@@ -70,84 +72,45 @@ rte_vdev_unregister(struct rte_vdev_driver *driver)
 	TAILQ_REMOVE(&vdev_driver_list, driver, next);
 }
 
-/*
- * Parse "driver" devargs without adding a dependency on rte_kvargs.h
- */
-static char *parse_driver_arg(const char *args)
+static int
+vdev_parse(const char *name, void *addr)
 {
-	const char *c;
-	char *str;
+	struct rte_vdev_driver **out = addr;
+	struct rte_vdev_driver *driver = NULL;
 
-	if (!args || args[0] == '\0')
-		return NULL;
-
-	c = args;
-
-	do {
-		if (strncmp(c, "driver=", 7) == 0) {
-			c += 7;
+	TAILQ_FOREACH(driver, &vdev_driver_list, next) {
+		if (strncmp(driver->driver.name, name,
+			    strlen(driver->driver.name)) == 0)
 			break;
-		}
-
-		c = strchr(c, ',');
-		if (c)
-			c++;
-	} while (c);
-
-	if (c)
-		str = strdup(c);
-	else
-		str = NULL;
-
-	return str;
+		if (driver->driver.alias &&
+		    strncmp(driver->driver.alias, name,
+			    strlen(driver->driver.alias)) == 0)
+			break;
+	}
+	if (driver != NULL &&
+	    addr != NULL)
+		*out = driver;
+	return driver == NULL;
 }
 
 static int
 vdev_probe_all_drivers(struct rte_vdev_device *dev)
 {
 	const char *name;
-	char *drv_name;
 	struct rte_vdev_driver *driver;
-	int ret = 1;
+	int ret;
 
-	drv_name = parse_driver_arg(rte_vdev_device_args(dev));
-	name = drv_name ? drv_name : rte_vdev_device_name(dev);
+	name = rte_vdev_device_name(dev);
 
 	RTE_LOG(DEBUG, EAL, "Search driver %s to probe device %s\n", name,
 		rte_vdev_device_name(dev));
 
-	TAILQ_FOREACH(driver, &vdev_driver_list, next) {
-		/*
-		 * search a driver prefix in virtual device name.
-		 * For example, if the driver is pcap PMD, driver->name
-		 * will be "net_pcap", but "name" will be "net_pcapN".
-		 * So use strncmp to compare.
-		 */
-		if (!strncmp(driver->driver.name, name,
-			    strlen(driver->driver.name))) {
-			dev->device.driver = &driver->driver;
-			ret = driver->probe(dev);
-			if (ret)
-				dev->device.driver = NULL;
-			goto out;
-		}
-	}
-
-	/* Give new names precedence over aliases. */
-	TAILQ_FOREACH(driver, &vdev_driver_list, next) {
-		if (driver->driver.alias &&
-		    !strncmp(driver->driver.alias, name,
-			    strlen(driver->driver.alias))) {
-			dev->device.driver = &driver->driver;
-			ret = driver->probe(dev);
-			if (ret)
-				dev->device.driver = NULL;
-			break;
-		}
-	}
-
-out:
-	free(drv_name);
+	if (vdev_parse(name, &driver))
+		return -1;
+	dev->device.driver = &driver->driver;
+	ret = driver->probe(dev);
+	if (ret)
+		dev->device.driver = NULL;
 	return ret;
 }
 
@@ -178,13 +141,14 @@ alloc_devargs(const char *name, const char *args)
 	if (!devargs)
 		return NULL;
 
-	devargs->type = RTE_DEVTYPE_VIRTUAL;
+	devargs->bus = &rte_vdev_bus;
 	if (args)
 		devargs->args = strdup(args);
+	else
+		devargs->args = strdup("");
 
-	ret = snprintf(devargs->virt.drv_name,
-			       sizeof(devargs->virt.drv_name), "%s", name);
-	if (ret < 0 || ret >= (int)sizeof(devargs->virt.drv_name)) {
+	ret = snprintf(devargs->name, sizeof(devargs->name), "%s", name);
+	if (ret < 0 || ret >= (int)sizeof(devargs->name)) {
 		free(devargs->args);
 		free(devargs);
 		return NULL;
@@ -219,7 +183,7 @@ rte_vdev_init(const char *name, const char *args)
 
 	dev->device.devargs = devargs;
 	dev->device.numa_node = SOCKET_ID_ANY;
-	dev->device.name = devargs->virt.drv_name;
+	dev->device.name = devargs->name;
 
 	ret = vdev_probe_all_drivers(dev);
 	if (ret) {
@@ -293,13 +257,12 @@ vdev_scan(void)
 	struct rte_devargs *devargs;
 
 	/* for virtual devices we scan the devargs_list populated via cmdline */
-
 	TAILQ_FOREACH(devargs, &devargs_list, next) {
 
-		if (devargs->type != RTE_DEVTYPE_VIRTUAL)
+		if (devargs->bus != &rte_vdev_bus)
 			continue;
 
-		dev = find_vdev(devargs->virt.drv_name);
+		dev = find_vdev(devargs->name);
 		if (dev)
 			continue;
 
@@ -309,7 +272,7 @@ vdev_scan(void)
 
 		dev->device.devargs = devargs;
 		dev->device.numa_node = SOCKET_ID_ANY;
-		dev->device.name = devargs->virt.drv_name;
+		dev->device.name = devargs->name;
 
 		TAILQ_INSERT_TAIL(&vdev_device_list, dev, next);
 	}
@@ -338,21 +301,42 @@ vdev_probe(void)
 	return 0;
 }
 
+static struct rte_device *
+vdev_find_device(const struct rte_device *start, rte_dev_cmp_t cmp,
+		 const void *data)
+{
+	struct rte_vdev_device *dev;
+
+	TAILQ_FOREACH(dev, &vdev_device_list, next) {
+		if (start && &dev->device == start) {
+			start = NULL;
+			continue;
+		}
+		if (cmp(&dev->device, data) == 0)
+			return &dev->device;
+	}
+	return NULL;
+}
+
+static int
+vdev_plug(struct rte_device *dev)
+{
+	return vdev_probe_all_drivers(RTE_DEV_TO_VDEV(dev));
+}
+
+static int
+vdev_unplug(struct rte_device *dev)
+{
+	return rte_vdev_uninit(dev->name);
+}
+
 static struct rte_bus rte_vdev_bus = {
 	.scan = vdev_scan,
 	.probe = vdev_probe,
+	.find_device = vdev_find_device,
+	.plug = vdev_plug,
+	.unplug = vdev_unplug,
+	.parse = vdev_parse,
 };
 
-RTE_INIT(rte_vdev_bus_register);
-
-static void rte_vdev_bus_register(void)
-{
-	static int registered;
-
-	if (registered)
-		return;
-
-	registered = 1;
-	rte_vdev_bus.name = RTE_STR(virtual);
-	rte_bus_register(&rte_vdev_bus);
-}
+RTE_REGISTER_BUS(vdev, rte_vdev_bus);

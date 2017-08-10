@@ -292,7 +292,7 @@ sfc_efx_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		if (desc_flags & EFX_PKT_CONT) {
 			/* The packet is scattered, more fragments to come */
 			scatter_pkt = m;
-			/* Futher fragments have no prefix */
+			/* Further fragments have no prefix */
 			prefix_size = 0;
 			continue;
 		}
@@ -529,6 +529,7 @@ sfc_rx_qflush(struct sfc_adapter *sa, unsigned int sw_index)
 	struct sfc_rxq *rxq;
 	unsigned int retry_count;
 	unsigned int wait_count;
+	int rc;
 
 	rxq = sa->rxq_info[sw_index].rxq;
 	SFC_ASSERT(rxq->state & SFC_RXQ_STARTED);
@@ -541,8 +542,10 @@ sfc_rx_qflush(struct sfc_adapter *sa, unsigned int sw_index)
 	     ((rxq->state & SFC_RXQ_FLUSHED) == 0) &&
 	     (retry_count < SFC_RX_QFLUSH_ATTEMPTS);
 	     ++retry_count) {
-		if (efx_rx_qflush(rxq->common) != 0) {
-			rxq->state |= SFC_RXQ_FLUSH_FAILED;
+		rc = efx_rx_qflush(rxq->common);
+		if (rc != 0) {
+			rxq->state |= (rc == EALREADY) ?
+				SFC_RXQ_FLUSHED : SFC_RXQ_FLUSH_FAILED;
 			break;
 		}
 		rxq->state &= ~SFC_RXQ_FLUSH_FAILED;
@@ -627,6 +630,7 @@ retry:
 int
 sfc_rx_qstart(struct sfc_adapter *sa, unsigned int sw_index)
 {
+	struct sfc_port *port = &sa->port;
 	struct sfc_rxq_info *rxq_info;
 	struct sfc_rxq *rxq;
 	struct sfc_evq *evq;
@@ -661,7 +665,7 @@ sfc_rx_qstart(struct sfc_adapter *sa, unsigned int sw_index)
 
 	rxq->state |= SFC_RXQ_STARTED;
 
-	if (sw_index == 0) {
+	if ((sw_index == 0) && !port->isolated) {
 		rc = sfc_rx_default_rxq_set_filter(sa, rxq);
 		if (rc != 0)
 			goto fail_mac_filter_default_rxq_set;
@@ -942,7 +946,7 @@ sfc_rx_qinit(struct sfc_adapter *sa, unsigned int sw_index,
 	info.mem_bar = sa->mem_bar.esb_base;
 
 	rc = sa->dp_rx->qcreate(sa->eth_dev->data->port_id, sw_index,
-				&SFC_DEV_TO_PCI(sa->eth_dev)->addr,
+				&RTE_ETH_DEV_TO_PCI(sa->eth_dev)->addr,
 				socket_id, &info, &rxq->dp);
 	if (rc != 0)
 		goto fail_dp_rx_qcreate;

@@ -71,7 +71,7 @@ static void virtio_dev_allmulticast_disable(struct rte_eth_dev *dev);
 static void virtio_dev_info_get(struct rte_eth_dev *dev,
 				struct rte_eth_dev_info *dev_info);
 static int virtio_dev_link_update(struct rte_eth_dev *dev,
-	__rte_unused int wait_to_complete);
+	int wait_to_complete);
 
 static void virtio_set_hwaddr(struct virtio_hw *hw);
 static void virtio_get_hwaddr(struct virtio_hw *hw);
@@ -89,16 +89,16 @@ static int virtio_vlan_filter_set(struct rte_eth_dev *dev,
 				uint16_t vlan_id, int on);
 static int virtio_mac_addr_add(struct rte_eth_dev *dev,
 				struct ether_addr *mac_addr,
-				uint32_t index, uint32_t vmdq __rte_unused);
+				uint32_t index, uint32_t vmdq);
 static void virtio_mac_addr_remove(struct rte_eth_dev *dev, uint32_t index);
 static void virtio_mac_addr_set(struct rte_eth_dev *dev,
 				struct ether_addr *mac_addr);
 
 static int virtio_dev_queue_stats_mapping_set(
-	__rte_unused struct rte_eth_dev *eth_dev,
-	__rte_unused uint16_t queue_id,
-	__rte_unused uint8_t stat_idx,
-	__rte_unused uint8_t is_rx);
+	struct rte_eth_dev *eth_dev,
+	uint16_t queue_id,
+	uint8_t stat_idx,
+	uint8_t is_rx);
 
 /*
  * The set of PCI devices this driver supports
@@ -1229,7 +1229,8 @@ virtio_interrupt_handler(void *param)
 	if (isr & VIRTIO_PCI_ISR_CONFIG) {
 		if (virtio_dev_link_update(dev, 0) == 0)
 			_rte_eth_dev_callback_process(dev,
-						      RTE_ETH_EVENT_INTR_LSC, NULL);
+						      RTE_ETH_EVENT_INTR_LSC,
+						      NULL, NULL);
 	}
 
 }
@@ -1355,7 +1356,7 @@ virtio_init_device(struct rte_eth_dev *eth_dev, uint64_t req_features)
 		return -1;
 
 	if (!hw->virtio_user_dev) {
-		pci_dev = RTE_DEV_TO_PCI(eth_dev->device);
+		pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 		rte_eth_copy_pci_info(eth_dev, pci_dev);
 	}
 
@@ -1537,8 +1538,7 @@ eth_virtio_dev_init(struct rte_eth_dev *eth_dev)
 
 	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
 		if (!hw->virtio_user_dev) {
-			ret = virtio_remap_pci(RTE_DEV_TO_PCI(eth_dev->device),
-					       hw);
+			ret = virtio_remap_pci(RTE_ETH_DEV_TO_PCI(eth_dev), hw);
 			if (ret)
 				return ret;
 		}
@@ -1567,7 +1567,7 @@ eth_virtio_dev_init(struct rte_eth_dev *eth_dev)
 	 * virtio_user_eth_dev_alloc() before eth_virtio_dev_init() is called.
 	 */
 	if (!hw->virtio_user_dev) {
-		ret = vtpci_init(RTE_DEV_TO_PCI(eth_dev->device), hw);
+		ret = vtpci_init(RTE_ETH_DEV_TO_PCI(eth_dev), hw);
 		if (ret)
 			return ret;
 	}
@@ -1609,7 +1609,7 @@ eth_virtio_dev_uninit(struct rte_eth_dev *eth_dev)
 						virtio_interrupt_handler,
 						eth_dev);
 	if (eth_dev->device)
-		rte_pci_unmap_device(RTE_DEV_TO_PCI(eth_dev->device));
+		rte_pci_unmap_device(RTE_ETH_DEV_TO_PCI(eth_dev));
 
 	PMD_INIT_LOG(DEBUG, "dev_uninit completed");
 
@@ -1659,37 +1659,26 @@ virtio_dev_configure(struct rte_eth_dev *dev)
 {
 	const struct rte_eth_rxmode *rxmode = &dev->data->dev_conf.rxmode;
 	struct virtio_hw *hw = dev->data->dev_private;
-	uint64_t req_features;
 	int ret;
 
 	PMD_INIT_LOG(DEBUG, "configure");
-	req_features = VIRTIO_PMD_DEFAULT_GUEST_FEATURES;
-	if (rxmode->hw_ip_checksum)
-		req_features |= (1ULL << VIRTIO_NET_F_GUEST_CSUM);
-	if (rxmode->enable_lro)
-		req_features |=
-			(1ULL << VIRTIO_NET_F_GUEST_TSO4) |
-			(1ULL << VIRTIO_NET_F_GUEST_TSO6);
 
-	/* if request features changed, reinit the device */
-	if (req_features != hw->req_guest_features) {
-		ret = virtio_init_device(dev, req_features);
+	if (dev->data->dev_conf.intr_conf.rxq) {
+		ret = virtio_init_device(dev, hw->req_guest_features);
 		if (ret < 0)
 			return ret;
 	}
 
-	if (rxmode->hw_ip_checksum &&
-		!vtpci_with_feature(hw, VIRTIO_NET_F_GUEST_CSUM)) {
+	/* Virtio does L4 checksum but not L3! */
+	if (rxmode->hw_ip_checksum) {
 		PMD_DRV_LOG(NOTICE,
-			"rx ip checksum not available on this host");
+			    "virtio does not support IP checksum");
 		return -ENOTSUP;
 	}
 
-	if (rxmode->enable_lro &&
-		(!vtpci_with_feature(hw, VIRTIO_NET_F_GUEST_TSO4) ||
-			!vtpci_with_feature(hw, VIRTIO_NET_F_GUEST_TSO4))) {
+	if (rxmode->enable_lro) {
 		PMD_DRV_LOG(NOTICE,
-			"lro not available on this host");
+			    "virtio does not support Large Receive Offload");
 		return -ENOTSUP;
 	}
 
@@ -1894,7 +1883,7 @@ virtio_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 
 	dev_info->speed_capa = ETH_LINK_SPEED_10G; /* fake value */
 
-	dev_info->pci_dev = dev->device ? RTE_DEV_TO_PCI(dev->device) : NULL;
+	dev_info->pci_dev = dev->device ? RTE_ETH_DEV_TO_PCI(dev) : NULL;
 	dev_info->max_rx_queues =
 		RTE_MIN(hw->max_queue_pairs, VIRTIO_MAX_RX_QUEUES);
 	dev_info->max_tx_queues =
@@ -1915,8 +1904,6 @@ virtio_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	}
 	tso_mask = (1ULL << VIRTIO_NET_F_GUEST_TSO4) |
 		(1ULL << VIRTIO_NET_F_GUEST_TSO6);
-	if ((host_features & tso_mask) == tso_mask)
-		dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_TCP_LRO;
 
 	dev_info->tx_offload_capa = 0;
 	if (hw->guest_features & (1ULL << VIRTIO_NET_F_CSUM)) {

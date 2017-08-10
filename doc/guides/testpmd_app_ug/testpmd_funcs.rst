@@ -380,6 +380,20 @@ For example::
    testpmd> read txd 0 0 4
         0x00000001 - 0x24C3C440 / 0x000F0000 - 0x2330003C
 
+ddp get list
+~~~~~~~~~~~~
+
+Get loaded dynamic device personalization (DDP) package info list::
+
+   testpmd> ddp get list (port_id)
+
+ddp get info
+~~~~~~~~~~~~
+
+Display information about dynamic device personalization (DDP) profile::
+
+   testpmd> ddp get info (profile_patch)
+
 show vf stats
 ~~~~~~~~~~~~~
 
@@ -884,6 +898,40 @@ Display the status of TCP Segmentation Offload::
 
    testpmd> tso show (port_id)
 
+gro
+~~~
+
+Enable or disable GRO in ``csum`` forwarding engine::
+
+   testpmd> gro (on|off) (port_id)
+
+If enabled, the csum forwarding engine will perform GRO on the TCP/IPv4
+packets received from the given port.
+
+If disabled, packets received from the given port won't be performed
+GRO. By default, GRO is disabled for all ports.
+
+.. note::
+
+   When enable GRO for a port, TCP/IPv4 packets received from the port
+   will be performed GRO. After GRO, the merged packets are multi-segments.
+   But csum forwarding engine doesn't support to calculate TCP checksum
+   for multi-segment packets in SW. So please select TCP HW checksum
+   calculation for the port which GROed packets are transmitted to.
+
+gro set
+~~~~~~~
+
+Set max flow number and max packet number per-flow for GRO::
+
+   testpmd> gro set (max_flow_num) (max_item_num_per_flow) (port_id)
+
+The product of ``max_flow_num`` and ``max_item_num_per_flow`` is the max
+number of packets a GRO table can store.
+
+If current packet number is greater than or equal to the max value, GRO
+will stop processing incoming packets.
+
 mac_addr add
 ~~~~~~~~~~~~
 
@@ -1210,6 +1258,20 @@ Add an E-tag forwarding filter on a port::
 
 Delete an E-tag forwarding filter on a port::
    testpmd> E-tag set filter del e-tag-id (value) port (port_id)
+
+ddp add
+~~~~~~~
+
+Load a dynamic device personalization (DDP) package::
+
+   testpmd> ddp add (port_id) (package_path[,output_path])
+
+ddp del
+~~~~~~~
+
+Delete a dynamic device personalization package::
+
+   testpmd> ddp del (port_id) (package_path)
 
 ptype mapping
 ~~~~~~~~~~~~~
@@ -1738,6 +1800,23 @@ For example, to set the link status monitoring polling period of bonded device (
    testpmd> set bonding mon_period 5 150
 
 
+set bonding lacp dedicated_queue
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Enable dedicated tx/rx queues on bonding devices slaves to handle LACP control plane traffic
+when in mode 4 (link-aggregration-802.3ad)::
+
+   testpmd> set bonding lacp dedicated_queues (port_id) (enable|disable)
+
+
+set bonding agg_mode
+~~~~~~~~~~~~~~~~~~~~
+
+Enable one of the specific aggregators mode when in mode 4 (link-aggregration-802.3ad)::
+
+   testpmd> set bonding agg_mode (port_id) (bandwidth|count|stable)
+
+
 show bonding config
 ~~~~~~~~~~~~~~~~~~~
 
@@ -2264,7 +2343,8 @@ Flow rules management
 ---------------------
 
 Control of the generic flow API (*rte_flow*) is fully exposed through the
-``flow`` command (validation, creation, destruction and queries).
+``flow`` command (validation, creation, destruction, queries and operation
+modes).
 
 Considering *rte_flow* overlaps with all `Filter Functions`_, using both
 features simultaneously may cause undefined side-effects and is therefore
@@ -2317,6 +2397,10 @@ following sections.
   identifiers::
 
    flow list {port_id} [group {group_id}] [...]
+
+- Restrict ingress traffic to the defined flow rules::
+
+   flow isolate {port_id} {boolean}
 
 Validating flow rules
 ~~~~~~~~~~~~~~~~~~~~~
@@ -2608,6 +2692,10 @@ This section lists supported pattern items and their attributes, if any.
 
   - ``protocol {unsigned}``: protocol type.
 
+- ``fuzzy``: fuzzy pattern match, expect faster than default.
+
+  - ``thresh {unsigned}``: accuracy threshold.
+
 Actions list
 ^^^^^^^^^^^^
 
@@ -2894,6 +2982,46 @@ Output can be limited to specific groups::
    7       63      0       i-      ETH IPV6 UDP VXLAN => MARK QUEUE
    testpmd>
 
+Toggling isolated mode
+~~~~~~~~~~~~~~~~~~~~~~
+
+``flow isolate`` can be used to tell the underlying PMD that ingress traffic
+must only be injected from the defined flow rules; that no default traffic
+is expected outside those rules and the driver is free to assign more
+resources to handle them. It is bound to ``rte_flow_isolate()``::
+
+ flow isolate {port_id} {boolean}
+
+If successful, enabling or disabling isolated mode shows either::
+
+ Ingress traffic on port [...]
+    is now restricted to the defined flow rules
+
+Or::
+
+ Ingress traffic on port [...]
+    is not restricted anymore to the defined flow rules
+
+Otherwise, in case of error::
+
+   Caught error type [...] ([...]): [...]
+
+Mainly due to its side effects, PMDs supporting this mode may not have the
+ability to toggle it more than once without reinitializing affected ports
+first (e.g. by exiting testpmd).
+
+Enabling isolated mode::
+
+ testpmd> flow isolate 0 true
+ Ingress traffic on port 0 is now restricted to the defined flow rules
+ testpmd>
+
+Disabling isolated mode::
+
+ testpmd> flow isolate 0 false
+ Ingress traffic on port 0 is not restricted anymore to the defined flow rules
+ testpmd>
+
 Sample QinQ flow rules
 ~~~~~~~~~~~~~~~~~~~~~~
 
@@ -2942,4 +3070,3 @@ Validate and create a QinQ rule on port 0 to steer traffic to a queue on the hos
    ID      Group   Prio    Attr    Rule
    0       0       0       i-      ETH VLAN VLAN=>VF QUEUE
    1       0       0       i-      ETH VLAN VLAN=>PF QUEUE
-

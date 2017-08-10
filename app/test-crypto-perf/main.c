@@ -1,3 +1,35 @@
+/*-
+ *   BSD LICENSE
+ *
+ *   Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
+ *
+ *   Redistribution and use in source and binary forms, with or without
+ *   modification, are permitted provided that the following conditions
+ *   are met:
+ *
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *     * Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in
+ *       the documentation and/or other materials provided with the
+ *       distribution.
+ *     * Neither the name of Intel Corporation nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 #include <stdio.h>
 #include <unistd.h>
 
@@ -10,6 +42,9 @@
 #include "cperf_test_throughput.h"
 #include "cperf_test_latency.h"
 #include "cperf_test_verify.h"
+
+#define NUM_SESSIONS 2048
+#define SESS_MEMPOOL_CACHE_SIZE 64
 
 const char *cperf_test_type_strs[] = {
 	[CPERF_TEST_TYPE_THROUGHPUT] = "throughput",
@@ -44,9 +79,11 @@ const struct cperf_test cperf_testmap[] = {
 };
 
 static int
-cperf_initialize_cryptodev(struct cperf_options *opts, uint8_t *enabled_cdevs)
+cperf_initialize_cryptodev(struct cperf_options *opts, uint8_t *enabled_cdevs,
+			struct rte_mempool *session_pool_socket[])
 {
-	uint8_t cdev_id, enabled_cdev_count = 0, nb_lcores;
+	uint8_t enabled_cdev_count = 0, nb_lcores, cdev_id;
+	unsigned int i;
 	int ret;
 
 	enabled_cdev_count = rte_cryptodev_devices_get(opts->device_type,
@@ -66,40 +103,74 @@ cperf_initialize_cryptodev(struct cperf_options *opts, uint8_t *enabled_cdevs)
 		return -EINVAL;
 	}
 
-	for (cdev_id = 0; cdev_id < enabled_cdev_count &&
-			cdev_id < RTE_CRYPTO_MAX_DEVS; cdev_id++) {
+	/* Create a mempool shared by all the devices */
+	uint32_t max_sess_size = 0, sess_size;
+
+	for (cdev_id = 0; cdev_id < rte_cryptodev_count(); cdev_id++) {
+		sess_size = rte_cryptodev_get_private_session_size(cdev_id);
+		if (sess_size > max_sess_size)
+			max_sess_size = sess_size;
+	}
+
+	for (i = 0; i < enabled_cdev_count &&
+			i < RTE_CRYPTO_MAX_DEVS; i++) {
+		cdev_id = enabled_cdevs[i];
+		uint8_t socket_id = rte_cryptodev_socket_id(cdev_id);
 
 		struct rte_cryptodev_config conf = {
 				.nb_queue_pairs = 1,
-				.socket_id = SOCKET_ID_ANY,
-				.session_mp = {
-					.nb_objs = 2048,
-					.cache_size = 64
-				}
-			};
+				.socket_id = socket_id
+		};
+
 		struct rte_cryptodev_qp_conf qp_conf = {
 				.nb_descriptors = 2048
 		};
 
-		ret = rte_cryptodev_configure(enabled_cdevs[cdev_id], &conf);
+
+		if (session_pool_socket[socket_id] == NULL) {
+			char mp_name[RTE_MEMPOOL_NAMESIZE];
+			struct rte_mempool *sess_mp;
+
+			snprintf(mp_name, RTE_MEMPOOL_NAMESIZE,
+				"sess_mp_%u", socket_id);
+
+			sess_mp = rte_mempool_create(mp_name,
+						NUM_SESSIONS,
+						max_sess_size,
+						SESS_MEMPOOL_CACHE_SIZE,
+						0, NULL, NULL, NULL,
+						NULL, socket_id,
+						0);
+
+			if (sess_mp == NULL) {
+				printf("Cannot create session pool on socket %d\n",
+					socket_id);
+				return -ENOMEM;
+			}
+
+			printf("Allocated session pool on socket %d\n", socket_id);
+			session_pool_socket[socket_id] = sess_mp;
+		}
+
+		ret = rte_cryptodev_configure(cdev_id, &conf);
 		if (ret < 0) {
-			printf("Failed to configure cryptodev %u",
-					enabled_cdevs[cdev_id]);
+			printf("Failed to configure cryptodev %u", cdev_id);
 			return -EINVAL;
 		}
 
-		ret = rte_cryptodev_queue_pair_setup(enabled_cdevs[cdev_id], 0,
-				&qp_conf, SOCKET_ID_ANY);
+		ret = rte_cryptodev_queue_pair_setup(cdev_id, 0,
+				&qp_conf, socket_id,
+				session_pool_socket[socket_id]);
 			if (ret < 0) {
 				printf("Failed to setup queue pair %u on "
 					"cryptodev %u",	0, cdev_id);
 				return -EINVAL;
 			}
 
-		ret = rte_cryptodev_start(enabled_cdevs[cdev_id]);
+		ret = rte_cryptodev_start(cdev_id);
 		if (ret < 0) {
 			printf("Failed to start device %u: error %d\n",
-					enabled_cdevs[cdev_id], ret);
+					cdev_id, ret);
 			return -EPERM;
 		}
 	}
@@ -123,8 +194,7 @@ cperf_verify_devices_capabilities(struct cperf_options *opts,
 
 		if (opts->op_type == CPERF_AUTH_ONLY ||
 				opts->op_type == CPERF_CIPHER_THEN_AUTH ||
-				opts->op_type == CPERF_AUTH_THEN_CIPHER ||
-				opts->op_type == CPERF_AEAD)  {
+				opts->op_type == CPERF_AUTH_THEN_CIPHER) {
 
 			cap_idx.type = RTE_CRYPTO_SYM_XFORM_AUTH;
 			cap_idx.algo.auth = opts->auth_algo;
@@ -137,16 +207,15 @@ cperf_verify_devices_capabilities(struct cperf_options *opts,
 			ret = rte_cryptodev_sym_capability_check_auth(
 					capability,
 					opts->auth_key_sz,
-					opts->auth_digest_sz,
-					opts->auth_aad_sz);
+					opts->digest_sz,
+					opts->auth_iv_sz);
 			if (ret != 0)
 				return ret;
 		}
 
 		if (opts->op_type == CPERF_CIPHER_ONLY ||
 				opts->op_type == CPERF_CIPHER_THEN_AUTH ||
-				opts->op_type == CPERF_AUTH_THEN_CIPHER ||
-				opts->op_type == CPERF_AEAD) {
+				opts->op_type == CPERF_AUTH_THEN_CIPHER) {
 
 			cap_idx.type = RTE_CRYPTO_SYM_XFORM_CIPHER;
 			cap_idx.algo.cipher = opts->cipher_algo;
@@ -160,6 +229,26 @@ cperf_verify_devices_capabilities(struct cperf_options *opts,
 					capability,
 					opts->cipher_key_sz,
 					opts->cipher_iv_sz);
+			if (ret != 0)
+				return ret;
+		}
+
+		if (opts->op_type == CPERF_AEAD) {
+
+			cap_idx.type = RTE_CRYPTO_SYM_XFORM_AEAD;
+			cap_idx.algo.aead = opts->aead_algo;
+
+			capability = rte_cryptodev_sym_capability_get(cdev_id,
+					&cap_idx);
+			if (capability == NULL)
+				return -1;
+
+			ret = rte_cryptodev_sym_capability_check_aead(
+					capability,
+					opts->aead_key_sz,
+					opts->digest_sz,
+					opts->aead_aad_sz,
+					opts->aead_iv_sz);
 			if (ret != 0)
 				return ret;
 		}
@@ -185,9 +274,9 @@ cperf_check_test_vector(struct cperf_options *opts,
 				return -1;
 			if (test_vec->ciphertext.length < opts->max_buffer_size)
 				return -1;
-			if (test_vec->iv.data == NULL)
+			if (test_vec->cipher_iv.data == NULL)
 				return -1;
-			if (test_vec->iv.length != opts->cipher_iv_sz)
+			if (test_vec->cipher_iv.length != opts->cipher_iv_sz)
 				return -1;
 			if (test_vec->cipher_key.data == NULL)
 				return -1;
@@ -204,9 +293,14 @@ cperf_check_test_vector(struct cperf_options *opts,
 				return -1;
 			if (test_vec->auth_key.length != opts->auth_key_sz)
 				return -1;
+			if (test_vec->auth_iv.length != opts->auth_iv_sz)
+				return -1;
+			/* Auth IV is only required for some algorithms */
+			if (opts->auth_iv_sz && test_vec->auth_iv.data == NULL)
+				return -1;
 			if (test_vec->digest.data == NULL)
 				return -1;
-			if (test_vec->digest.length < opts->auth_digest_sz)
+			if (test_vec->digest.length < opts->digest_sz)
 				return -1;
 		}
 
@@ -226,9 +320,9 @@ cperf_check_test_vector(struct cperf_options *opts,
 				return -1;
 			if (test_vec->ciphertext.length < opts->max_buffer_size)
 				return -1;
-			if (test_vec->iv.data == NULL)
+			if (test_vec->cipher_iv.data == NULL)
 				return -1;
-			if (test_vec->iv.length != opts->cipher_iv_sz)
+			if (test_vec->cipher_iv.length != opts->cipher_iv_sz)
 				return -1;
 			if (test_vec->cipher_key.data == NULL)
 				return -1;
@@ -240,9 +334,14 @@ cperf_check_test_vector(struct cperf_options *opts,
 				return -1;
 			if (test_vec->auth_key.length != opts->auth_key_sz)
 				return -1;
+			if (test_vec->auth_iv.length != opts->auth_iv_sz)
+				return -1;
+			/* Auth IV is only required for some algorithms */
+			if (opts->auth_iv_sz && test_vec->auth_iv.data == NULL)
+				return -1;
 			if (test_vec->digest.data == NULL)
 				return -1;
-			if (test_vec->digest.length < opts->auth_digest_sz)
+			if (test_vec->digest.length < opts->digest_sz)
 				return -1;
 		}
 	} else if (opts->op_type == CPERF_AEAD) {
@@ -254,13 +353,17 @@ cperf_check_test_vector(struct cperf_options *opts,
 			return -1;
 		if (test_vec->ciphertext.length < opts->max_buffer_size)
 			return -1;
+		if (test_vec->aead_iv.data == NULL)
+			return -1;
+		if (test_vec->aead_iv.length != opts->aead_iv_sz)
+			return -1;
 		if (test_vec->aad.data == NULL)
 			return -1;
-		if (test_vec->aad.length != opts->auth_aad_sz)
+		if (test_vec->aad.length != opts->aead_aad_sz)
 			return -1;
 		if (test_vec->digest.data == NULL)
 			return -1;
-		if (test_vec->digest.length < opts->auth_digest_sz)
+		if (test_vec->digest.length < opts->digest_sz)
 			return -1;
 	}
 	return 0;
@@ -274,6 +377,7 @@ main(int argc, char **argv)
 	struct cperf_op_fns op_fns;
 
 	void *ctx[RTE_MAX_LCORE] = { };
+	struct rte_mempool *session_pool_socket[RTE_MAX_NUMA_NODES] = { 0 };
 
 	int nb_cryptodevs = 0;
 	uint8_t cdev_id, i;
@@ -309,7 +413,8 @@ main(int argc, char **argv)
 	if (!opts.silent)
 		cperf_options_dump(&opts);
 
-	nb_cryptodevs = cperf_initialize_cryptodev(&opts, enabled_cdevs);
+	nb_cryptodevs = cperf_initialize_cryptodev(&opts, enabled_cdevs,
+			session_pool_socket);
 	if (nb_cryptodevs < 1) {
 		RTE_LOG(ERR, USER1, "Failed to initialise requested crypto "
 				"device type\n");
@@ -367,7 +472,10 @@ main(int argc, char **argv)
 
 		cdev_id = enabled_cdevs[i];
 
-		ctx[cdev_id] = cperf_testmap[opts.test].constructor(cdev_id, 0,
+		uint8_t socket_id = rte_cryptodev_socket_id(cdev_id);
+
+		ctx[cdev_id] = cperf_testmap[opts.test].constructor(
+				session_pool_socket[socket_id], cdev_id, 0,
 				&opts, t_vec, &op_fns);
 		if (ctx[cdev_id] == NULL) {
 			RTE_LOG(ERR, USER1, "Test run constructor failed\n");
@@ -395,7 +503,14 @@ main(int argc, char **argv)
 				ctx[cdev_id], lcore_id);
 			i++;
 		}
-		rte_eal_mp_wait_lcore();
+		i = 0;
+		RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+
+			if (i == nb_cryptodevs)
+				break;
+			rte_eal_wait_lcore(lcore_id);
+			i++;
+		}
 
 		/* Get next size from range or list */
 		if (opts.inc_buffer_size != 0)

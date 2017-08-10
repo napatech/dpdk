@@ -182,7 +182,13 @@ enum {
 		(DEBUG__(__VA_ARGS__), 0)	\
 	})[0])
 #define DEBUG(...) DEBUG_(__VA_ARGS__, '\n')
+#ifndef MLX4_PMD_DEBUG_BROKEN_VERBS
 #define claim_zero(...) assert((__VA_ARGS__) == 0)
+#else /* MLX4_PMD_DEBUG_BROKEN_VERBS */
+#define claim_zero(...) \
+	(void)(((__VA_ARGS__) == 0) || \
+		DEBUG("Assertion `(" # __VA_ARGS__ ") == 0' failed (IGNORED)."))
+#endif /* MLX4_PMD_DEBUG_BROKEN_VERBS */
 #define claim_nonzero(...) assert((__VA_ARGS__) != 0)
 #define claim_positive(...) assert((__VA_ARGS__) >= 0)
 #else /* NDEBUG */
@@ -219,6 +225,7 @@ struct rxq_elt {
 
 /* RX queue descriptor. */
 struct rxq {
+	LIST_ENTRY(rxq) next; /* Used by parent queue only */
 	struct priv *priv; /* Back pointer to private data. */
 	struct rte_mempool *mp; /* Memory Pool for allocations. */
 	struct ibv_mr *mr; /* Memory Region (for mp). */
@@ -226,6 +233,7 @@ struct rxq {
 	struct ibv_qp *qp; /* Queue Pair. */
 	struct ibv_exp_qp_burst_family *if_qp; /* QP burst interface. */
 	struct ibv_exp_cq_family *if_cq; /* CQ interface. */
+	struct ibv_comp_channel *channel;
 	/*
 	 * Each VLAN ID requires a separate flow steering rule.
 	 */
@@ -246,6 +254,10 @@ struct rxq {
 	struct mlx4_rxq_stats stats; /* RX queue counters. */
 	unsigned int socket; /* CPU socket ID for allocations. */
 	struct ibv_exp_res_domain *rd; /* Resource Domain. */
+	struct {
+		uint16_t queues_n;
+		uint16_t queues[RTE_MAX_QUEUES_PER_PORT];
+	} rss;
 };
 
 /* TX element. */
@@ -334,24 +346,41 @@ struct priv {
 	unsigned int rss:1; /* RSS is enabled. */
 	unsigned int vf:1; /* This is a VF device. */
 	unsigned int pending_alarm:1; /* An alarm is pending. */
+	unsigned int isolated:1; /* Toggle isolated mode. */
 #ifdef INLINE_RECV
 	unsigned int inl_recv_size; /* Inline recv size */
 #endif
 	unsigned int max_rss_tbl_sz; /* Maximum number of RSS queues. */
 	/* RX/TX queues. */
-	struct rxq rxq_parent; /* Parent queue when RSS is enabled. */
 	unsigned int rxqs_n; /* RX queues array size. */
 	unsigned int txqs_n; /* TX queues array size. */
 	struct rxq *(*rxqs)[]; /* RX queues. */
 	struct txq *(*txqs)[]; /* TX queues. */
+	struct rte_intr_handle intr_handle_dev; /* Device interrupt handler. */
 	struct rte_intr_handle intr_handle; /* Interrupt handler. */
 	struct rte_flow_drop *flow_drop_queue; /* Flow drop queue. */
 	LIST_HEAD(mlx4_flows, rte_flow) flows;
 	struct rte_intr_conf intr_conf; /* Active interrupt configuration. */
+	LIST_HEAD(mlx4_parents, rxq) parents;
 	rte_spinlock_t lock; /* Lock for control functions. */
 };
 
 void priv_lock(struct priv *priv);
 void priv_unlock(struct priv *priv);
+
+int
+rxq_create_qp(struct rxq *rxq,
+	      uint16_t desc,
+	      int inactive,
+	      int children_n,
+	      struct rxq *rxq_parent);
+
+void
+rxq_parent_cleanup(struct rxq *parent);
+
+struct rxq *
+priv_parent_create(struct priv *priv,
+		   uint16_t queues[],
+		   uint16_t children_n);
 
 #endif /* RTE_PMD_MLX4_H_ */

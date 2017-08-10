@@ -124,6 +124,36 @@ uint32_t qbman_swp_interrupt_read_status(struct qbman_swp *p);
 void qbman_swp_interrupt_clear_status(struct qbman_swp *p, uint32_t mask);
 
 /**
+ * qbman_swp_dqrr_thrshld_read_status() - Get the data in software portal
+ * DQRR interrupt threshold register.
+ * @p: the given software portal object.
+ */
+uint32_t qbman_swp_dqrr_thrshld_read_status(struct qbman_swp *p);
+
+/**
+ * qbman_swp_dqrr_thrshld_write() - Set the data in software portal
+ * DQRR interrupt threshold register.
+ * @p: the given software portal object.
+ * @mask: The value to set in SWP_DQRR_ITR register.
+ */
+void qbman_swp_dqrr_thrshld_write(struct qbman_swp *p, uint32_t mask);
+
+/**
+ * qbman_swp_intr_timeout_read_status() - Get the data in software portal
+ * Interrupt Time-Out period register.
+ * @p: the given software portal object.
+ */
+uint32_t qbman_swp_intr_timeout_read_status(struct qbman_swp *p);
+
+/**
+ * qbman_swp_intr_timeout_write() - Set the data in software portal
+ * Interrupt Time-Out period register.
+ * @p: the given software portal object.
+ * @mask: The value to set in SWP_ITPR register.
+ */
+void qbman_swp_intr_timeout_write(struct qbman_swp *p, uint32_t mask);
+
+/**
  * qbman_swp_interrupt_get_trigger() - Get the data in software portal
  * interrupt enable register.
  * @p: the given software portal object.
@@ -349,7 +379,7 @@ void qbman_swp_dqrr_consume(struct qbman_swp *s, const struct qbman_result *dq);
  *
  * Return dqrr index.
  */
-uint8_t qbman_get_dqrr_idx(struct qbman_result *dqrr);
+uint8_t qbman_get_dqrr_idx(const struct qbman_result *dqrr);
 
 /**
  * qbman_get_dqrr_from_idx() - Use index to get the dqrr entry from the
@@ -883,6 +913,20 @@ void qbman_eq_desc_set_dca(struct qbman_eq_desc *d, int enable,
  */
 int qbman_swp_enqueue(struct qbman_swp *s, const struct qbman_eq_desc *d,
 		      const struct qbman_fd *fd);
+/**
+ * qbman_swp_enqueue_multiple_eqdesc() - Enqueue multiple frames with separte
+ * enqueue descriptors.
+ * @s: the software portal used for enqueue.
+ * @d: the enqueue descriptors
+ * @fd: the frame descriptor to be enqueued.
+ * @num_frames: the number of the frames to be enqueued.
+ *
+ * Return the number of enqueued frames, -EBUSY if the EQCR is not ready.
+ */
+int qbman_swp_enqueue_multiple_eqdesc(struct qbman_swp *s,
+			       const struct qbman_eq_desc *d,
+			       const struct qbman_fd *fd,
+			       int num_frames);
 
 /* TODO:
  * qbman_swp_enqueue_thresh() - Set threshold for EQRI interrupt.

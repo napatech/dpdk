@@ -49,7 +49,32 @@ static const struct rte_cryptodev_capabilities aesni_gcm_pmd_capabilities[] = {
 				.key_size = {
 					.min = 16,
 					.max = 32,
-					.increment = 16
+					.increment = 8
+				},
+				.digest_size = {
+					.min = 8,
+					.max = 16,
+					.increment = 4
+				},
+				.iv_size = {
+					.min = 12,
+					.max = 12,
+					.increment = 0
+				}
+			}, }
+		}, }
+	},
+	{	/* AES GCM */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_AEAD,
+			{.aead = {
+				.algo = RTE_CRYPTO_AEAD_AES_GCM,
+				.block_size = 16,
+				.key_size = {
+					.min = 16,
+					.max = 32,
+					.increment = 8
 				},
 				.digest_size = {
 					.min = 8,
@@ -60,46 +85,6 @@ static const struct rte_cryptodev_capabilities aesni_gcm_pmd_capabilities[] = {
 					.min = 0,
 					.max = 65535,
 					.increment = 1
-				}
-			}, }
-		}, }
-	},
-	{	/* AES GCM (AUTH) */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
-			{.auth = {
-				.algo = RTE_CRYPTO_AUTH_AES_GCM,
-				.block_size = 16,
-				.key_size = {
-					.min = 16,
-					.max = 32,
-					.increment = 16
-				},
-				.digest_size = {
-					.min = 8,
-					.max = 16,
-					.increment = 4
-				},
-				.aad_size = {
-					.min = 0,
-					.max = 65535,
-					.increment = 1
-				}
-			}, }
-		}, }
-	},
-	{	/* AES GCM (CIPHER) */
-		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-		{.sym = {
-			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
-			{.cipher = {
-				.algo = RTE_CRYPTO_CIPHER_AES_GCM,
-				.block_size = 16,
-				.key_size = {
-					.min = 16,
-					.max = 32,
-					.increment = 16
 				},
 				.iv_size = {
 					.min = 12,
@@ -181,9 +166,9 @@ aesni_gcm_pmd_info_get(struct rte_cryptodev *dev,
 	struct aesni_gcm_private *internals = dev->data->dev_private;
 
 	if (dev_info != NULL) {
-		dev_info->dev_type = dev->dev_type;
-                dev_info->feature_flags = dev->feature_flags;
-                dev_info->capabilities = aesni_gcm_pmd_capabilities;
+		dev_info->driver_id = dev->driver_id;
+		dev_info->feature_flags = dev->feature_flags;
+		dev_info->capabilities = aesni_gcm_pmd_capabilities;
 
 		dev_info->max_nb_queue_pairs = internals->max_nb_queue_pairs;
 		dev_info->sym.max_nb_sessions = internals->max_nb_sessions;
@@ -244,9 +229,10 @@ aesni_gcm_pmd_qp_create_processed_pkts_ring(struct aesni_gcm_qp *qp,
 static int
 aesni_gcm_pmd_qp_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 		const struct rte_cryptodev_qp_conf *qp_conf,
-		 int socket_id)
+		int socket_id, struct rte_mempool *session_pool)
 {
 	struct aesni_gcm_qp *qp = NULL;
+	struct aesni_gcm_private *internals = dev->data->dev_private;
 
 	/* Free memory prior to re-allocation if needed. */
 	if (dev->data->queue_pairs[qp_id] != NULL)
@@ -264,12 +250,14 @@ aesni_gcm_pmd_qp_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 	if (aesni_gcm_pmd_qp_set_unique_name(dev, qp))
 		goto qp_setup_cleanup;
 
+	qp->ops = (const struct aesni_gcm_ops *)gcm_ops[internals->vector_mode];
+
 	qp->processed_pkts = aesni_gcm_pmd_qp_create_processed_pkts_ring(qp,
 			qp_conf->nb_descriptors, socket_id);
 	if (qp->processed_pkts == NULL)
 		goto qp_setup_cleanup;
 
-	qp->sess_mp = dev->data->session_pool;
+	qp->sess_mp = session_pool;
 
 	memset(&qp->qp_stats, 0, sizeof(qp->qp_stats));
 
@@ -313,29 +301,57 @@ aesni_gcm_pmd_session_get_size(struct rte_cryptodev *dev __rte_unused)
 }
 
 /** Configure a aesni gcm session from a crypto xform chain */
-static void *
+static int
 aesni_gcm_pmd_session_configure(struct rte_cryptodev *dev __rte_unused,
-		struct rte_crypto_sym_xform *xform,	void *sess)
+		struct rte_crypto_sym_xform *xform,
+		struct rte_cryptodev_sym_session *sess,
+		struct rte_mempool *mempool)
 {
+	void *sess_private_data;
+	int ret;
+	struct aesni_gcm_private *internals = dev->data->dev_private;
+
 	if (unlikely(sess == NULL)) {
 		GCM_LOG_ERR("invalid session struct");
-		return NULL;
+		return -EINVAL;
 	}
 
-	if (aesni_gcm_set_session_parameters(sess, xform) != 0) {
+	if (rte_mempool_get(mempool, &sess_private_data)) {
+		CDEV_LOG_ERR(
+			"Couldn't get object from session mempool");
+		return -ENOMEM;
+	}
+	ret = aesni_gcm_set_session_parameters(gcm_ops[internals->vector_mode],
+				sess_private_data, xform);
+	if (ret != 0) {
 		GCM_LOG_ERR("failed configure session parameters");
-		return NULL;
+
+		/* Return session to mempool */
+		rte_mempool_put(mempool, sess_private_data);
+		return ret;
 	}
 
-	return sess;
+	set_session_private_data(sess, dev->driver_id,
+			sess_private_data);
+
+	return 0;
 }
 
 /** Clear the memory of session so it doesn't leave key material behind */
 static void
-aesni_gcm_pmd_session_clear(struct rte_cryptodev *dev __rte_unused, void *sess)
+aesni_gcm_pmd_session_clear(struct rte_cryptodev *dev,
+		struct rte_cryptodev_sym_session *sess)
 {
-	if (sess)
-		memset(sess, 0, sizeof(struct aesni_gcm_session));
+	uint8_t index = dev->driver_id;
+	void *sess_priv = get_session_private_data(sess, index);
+
+	/* Zero out the whole structure */
+	if (sess_priv) {
+		memset(sess_priv, 0, sizeof(struct aesni_gcm_session));
+		struct rte_mempool *sess_mp = rte_mempool_from_obj(sess_priv);
+		set_session_private_data(sess, index, NULL);
+		rte_mempool_put(sess_mp, sess_priv);
+	}
 }
 
 struct rte_cryptodev_ops aesni_gcm_pmd_ops = {

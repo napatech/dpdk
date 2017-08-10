@@ -1,7 +1,7 @@
 /*
  *   BSD LICENSE
  *
- *   Copyright (C) Cavium networks Ltd. 2016.
+ *   Copyright (C) Cavium, Inc. 2016.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -13,7 +13,7 @@
  *       notice, this list of conditions and the following disclaimer in
  *       the documentation and/or other materials provided with the
  *       distribution.
- *     * Neither the name of Cavium networks nor the names of its
+ *     * Neither the name of Cavium, Inc nor the names of its
  *       contributors may be used to endorse or promote products derived
  *       from this software without specific prior written permission.
  *
@@ -43,10 +43,9 @@
 #include <rte_dev.h>
 #include <rte_eal.h>
 #include <rte_log.h>
+#include <rte_malloc.h>
 #include <rte_memory.h>
 #include <rte_memzone.h>
-#include <rte_malloc.h>
-#include <rte_pci.h>
 #include <rte_lcore.h>
 #include <rte_vdev.h>
 
@@ -130,6 +129,7 @@ skeleton_eventdev_info_get(struct rte_eventdev *dev,
 	dev_info->max_event_port_enqueue_depth = 16;
 	dev_info->max_num_events = (1ULL << 20);
 	dev_info->event_dev_cap = RTE_EVENT_DEV_CAP_QUEUE_QOS |
+					RTE_EVENT_DEV_CAP_BURST_MODE |
 					RTE_EVENT_DEV_CAP_EVENT_QOS;
 }
 
@@ -427,18 +427,28 @@ static const struct rte_pci_id pci_id_skeleton_map[] = {
 	},
 };
 
-static struct rte_eventdev_driver pci_eventdev_skeleton_pmd = {
-	.pci_drv = {
-		.id_table = pci_id_skeleton_map,
-		.drv_flags = RTE_PCI_DRV_NEED_MAPPING,
-		.probe = rte_event_pmd_pci_probe,
-		.remove = rte_event_pmd_pci_remove,
-	},
-	.eventdev_init = skeleton_eventdev_init,
-	.dev_private_size = sizeof(struct skeleton_eventdev),
+static int
+event_skeleton_pci_probe(struct rte_pci_driver *pci_drv,
+			 struct rte_pci_device *pci_dev)
+{
+	return rte_event_pmd_pci_probe(pci_drv, pci_dev,
+		sizeof(struct skeleton_eventdev), skeleton_eventdev_init);
+}
+
+static int
+event_skeleton_pci_remove(struct rte_pci_device *pci_dev)
+{
+	return rte_event_pmd_pci_remove(pci_dev, NULL);
+}
+
+static struct rte_pci_driver pci_eventdev_skeleton_pmd = {
+	.id_table = pci_id_skeleton_map,
+	.drv_flags = RTE_PCI_DRV_NEED_MAPPING,
+	.probe = event_skeleton_pci_probe,
+	.remove = event_skeleton_pci_remove,
 };
 
-RTE_PMD_REGISTER_PCI(event_skeleton_pci, pci_eventdev_skeleton_pmd.pci_drv);
+RTE_PMD_REGISTER_PCI(event_skeleton_pci, pci_eventdev_skeleton_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(event_skeleton_pci, pci_id_skeleton_map);
 
 /* VDEV based event device */

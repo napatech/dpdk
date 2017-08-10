@@ -40,7 +40,7 @@
 				CaptureOutputWith="ProcessBuffer"
 				Deletable="0"
 				SaveOption="SaveWorkspaceFiles"
-				RunFromDir="%rw">
+				RunFromDir="/usr/project/dpdkcap/">
 				<Exec CmdLine="make"/>
 			</Target>
 			<Target
@@ -56,12 +56,11 @@
 				Name="Debug"
 				MenuCaption="&amp;Debug"
 				Dialog="_gnuc_options_form Run/Debug"
-				BuildFirst="1"
 				CaptureOutputWith="ProcessBuffer"
 				Deletable="0"
 				SaveOption="SaveNone"
-				RunFromDir="%rw">
-				<Exec CmdLine='vsdebugio -prog "%o"'/>
+				RunFromDir="/usr/project/dpdkcap/build/app/">
+				<Exec CmdLine="&quot;%(VSLICKBIN1)vsdebugio&quot; -port 8001 -prog /usr/project/dpdkcap/build/app/dpdkcap   -c 0x7 --vdev 'eth_ntacc0,port=0,ntpl=test.ntpl'  --log-level=8"/>
 			</Target>
 			<Target
 				Name="Execute"
@@ -71,8 +70,8 @@
 				CaptureOutputWith="ProcessBuffer"
 				Deletable="0"
 				SaveOption="SaveWorkspaceFiles"
-				RunFromDir="%rw">
-				<Exec CmdLine='"%o"'/>
+				RunFromDir="/usr/project/dpdkcap/build/app/">
+				<Exec CmdLine="/usr/project/dpdkcap/build/app/dpdkcap   -c 0x7 --vdev 'eth_ntacc0,port=0,ntpl=test.ntpl'  --log-level=8"/>
 			</Target>
 			<Target
 				Name="dash"
@@ -133,7 +132,7 @@
 				CaptureOutputWith="ProcessBuffer"
 				Deletable="0"
 				SaveOption="SaveWorkspaceFiles"
-				RunFromDir="%rw">
+				RunFromDir="/usr/project/dpdkcap/">
 				<Exec CmdLine="make"/>
 			</Target>
 			<Target
@@ -149,12 +148,11 @@
 				Name="Debug"
 				MenuCaption="&amp;Debug"
 				Dialog="_gnuc_options_form Run/Debug"
-				BuildFirst="1"
 				CaptureOutputWith="ProcessBuffer"
 				Deletable="0"
 				SaveOption="SaveNone"
-				RunFromDir="%rw">
-				<Exec CmdLine='vsdebugio -prog "%o"'/>
+				RunFromDir="/usr/project/dpdkcap/build/app/">
+				<Exec CmdLine="&quot;%(VSLICKBIN1)vsdebugio&quot; -port 8001 -prog /usr/project/dpdkcap/build/app/dpdkcap   -c 0x7 --vdev 'eth_ntacc0,port=0,ntpl=test.ntpl'  --log-level=8"/>
 			</Target>
 			<Target
 				Name="Execute"
@@ -164,8 +162,8 @@
 				CaptureOutputWith="ProcessBuffer"
 				Deletable="0"
 				SaveOption="SaveWorkspaceFiles"
-				RunFromDir="%rw">
-				<Exec CmdLine='"%o"'/>
+				RunFromDir="/usr/project/dpdkcap/build/app/">
+				<Exec CmdLine="/usr/project/dpdkcap/build/app/dpdkcap   -c 0x7 --vdev 'eth_ntacc0,port=0,ntpl=test.ntpl'  --log-level=8"/>
 			</Target>
 			<Target
 				Name="dash"
@@ -213,24 +211,16 @@
 			GUID="{000AD577-8282-4959-B06B-6D343D64301C}"></Folder>
 	</CustomFolders>
 	<Files AutoFolders="DirectoryView">
-		<Folder
-			Name="app"
-			GUID="{38738DCD-7B3D-4FC7-B28D-5FCC27EA03D7}">
-			<Folder
-				Name="pdump"
-				GUID="{9C6F044A-72F9-45FB-A364-4857BC09BEAB}">
+		<Folder Name="app">
+			<Folder Name="pdump">
 				<F N="app/pdump/main.c"/>
 				<F N="app/pdump/Makefile"/>
 			</Folder>
-			<Folder
-				Name="proc_info"
-				GUID="{BF95804D-D460-4237-9A25-2ED3DFF681C3}">
+			<Folder Name="proc_info">
 				<F N="app/proc_info/main.c"/>
 				<F N="app/proc_info/Makefile"/>
 			</Folder>
-			<Folder
-				Name="test-crypto-perf"
-				GUID="{A56C3AB4-D2BE-462D-A961-FF3726511219}">
+			<Folder Name="test-crypto-perf">
 				<F N="app/test-crypto-perf/cperf.h"/>
 				<F N="app/test-crypto-perf/cperf_ops.c"/>
 				<F N="app/test-crypto-perf/cperf_ops.h"/>
@@ -249,9 +239,7 @@
 				<F N="app/test-crypto-perf/main.c"/>
 				<F N="app/test-crypto-perf/Makefile"/>
 			</Folder>
-			<Folder
-				Name="test-pmd"
-				GUID="{94F4ADEC-C03F-4269-9BC2-E1578AD8AEB5}">
+			<Folder Name="test-pmd">
 				<F N="app/test-pmd/cmdline.c"/>
 				<F N="app/test-pmd/cmdline_flow.c"/>
 				<F N="app/test-pmd/config.c"/>
@@ -271,31 +259,21 @@
 			</Folder>
 			<F N="app/Makefile"/>
 		</Folder>
-		<Folder
-			Name="build"
-			GUID="{8072A0E5-C36D-4A17-9C71-C9C915C965D0}">
-			<Folder
-				Name="include"
-				GUID="{A4FC1A2D-CFE3-461F-B3EF-BC5D7824600C}">
+		<Folder Name="build">
+			<Folder Name="include">
 				<F N="build/include/rte_config.h"/>
 			</Folder>
 			<F N="build/Makefile"/>
 		</Folder>
-		<Folder
-			Name="buildtools"
-			GUID="{7CA2976E-78B2-499D-8737-953D25040A37}">
-			<Folder
-				Name="pmdinfogen"
-				GUID="{BCBBCBC9-62E3-42E0-B89E-4098E4270B5E}">
+		<Folder Name="buildtools">
+			<Folder Name="pmdinfogen">
 				<F N="buildtools/pmdinfogen/Makefile"/>
 				<F N="buildtools/pmdinfogen/pmdinfogen.c"/>
 				<F N="buildtools/pmdinfogen/pmdinfogen.h"/>
 			</Folder>
 			<F N="buildtools/Makefile"/>
 		</Folder>
-		<Folder
-			Name="config"
-			GUID="{9AFD452C-9102-41D8-8777-31AE2C618D1D}">
+		<Folder Name="config">
 			<F N="config/common_base"/>
 			<F N="config/common_bsdapp"/>
 			<F N="config/common_linuxapp"/>
@@ -314,18 +292,36 @@
 			<F N="config/defconfig_x86_64-native-linuxapp-icc"/>
 			<F N="config/defconfig_x86_x32-native-linuxapp-gcc"/>
 		</Folder>
-		<Folder
-			Name="drivers"
-			GUID="{83FF17EF-262E-44F9-96C0-C54EB800CE38}">
-			<Folder
-				Name="bus"
-				GUID="{73190DA8-E1FF-495C-93B6-E6E0F06C6A2B}">
-				<Folder
-					Name="fslmc"
-					GUID="{C8F27FB3-016C-4243-9E3F-C8305B8AE5C2}">
-					<Folder
-						Name="mc"
-						GUID="{56E22E0D-EF91-4638-B4FD-0CA3A867B64D}">
+		<Folder Name="../dpdkcap">
+			<Folder Name="src">
+				<Folder Name="lzo">
+					<Folder Name="minilzo">
+						<F N="../dpdkcap/src/lzo/minilzo/lzoconf.h"/>
+						<F N="../dpdkcap/src/lzo/minilzo/lzodefs.h"/>
+						<F N="../dpdkcap/src/lzo/minilzo/minilzo.c"/>
+						<F N="../dpdkcap/src/lzo/minilzo/minilzo.h"/>
+					</Folder>
+					<F N="../dpdkcap/src/lzo/lzowrite.c"/>
+					<F N="../dpdkcap/src/lzo/lzowrite.h"/>
+				</Folder>
+				<F N="../dpdkcap/src/core_capture.c"/>
+				<F N="../dpdkcap/src/core_capture.h"/>
+				<F N="../dpdkcap/src/core_write.c"/>
+				<F N="../dpdkcap/src/core_write.h"/>
+				<F N="../dpdkcap/src/dpdkcap.c"/>
+				<F N="../dpdkcap/src/pcap.h"/>
+				<F N="../dpdkcap/src/pcapng.h"/>
+				<F N="../dpdkcap/src/statistics.c"/>
+				<F N="../dpdkcap/src/statistics.h"/>
+				<F N="../dpdkcap/src/statistics_ncurses.c"/>
+				<F N="../dpdkcap/src/utils.c"/>
+				<F N="../dpdkcap/src/utils.h"/>
+			</Folder>
+		</Folder>
+		<Folder Name="drivers">
+			<Folder Name="bus">
+				<Folder Name="fslmc">
+					<Folder Name="mc">
 						<F N="drivers/bus/fslmc/mc/dpbp.c"/>
 						<F N="drivers/bus/fslmc/mc/dpio.c"/>
 						<F N="drivers/bus/fslmc/mc/fsl_dpbp.h"/>
@@ -336,20 +332,14 @@
 						<F N="drivers/bus/fslmc/mc/fsl_mc_sys.h"/>
 						<F N="drivers/bus/fslmc/mc/mc_sys.c"/>
 					</Folder>
-					<Folder
-						Name="portal"
-						GUID="{702C1514-0DD0-418C-B4C2-C24CCAE16698}">
+					<Folder Name="portal">
 						<F N="drivers/bus/fslmc/portal/dpaa2_hw_dpbp.c"/>
 						<F N="drivers/bus/fslmc/portal/dpaa2_hw_dpio.c"/>
 						<F N="drivers/bus/fslmc/portal/dpaa2_hw_dpio.h"/>
 						<F N="drivers/bus/fslmc/portal/dpaa2_hw_pvt.h"/>
 					</Folder>
-					<Folder
-						Name="qbman"
-						GUID="{6247D9CD-E775-4CD6-8BB8-6F82A311AB6B}">
-						<Folder
-							Name="include"
-							GUID="{F7F0A2AE-F286-4F32-9D89-663314ABED93}">
+					<Folder Name="qbman">
+						<Folder Name="include">
 							<F N="drivers/bus/fslmc/qbman/include/compat.h"/>
 							<F N="drivers/bus/fslmc/qbman/include/fsl_qbman_base.h"/>
 							<F N="drivers/bus/fslmc/qbman/include/fsl_qbman_portal.h"/>
@@ -369,51 +359,35 @@
 				</Folder>
 				<F N="drivers/bus/Makefile"/>
 			</Folder>
-			<Folder
-				Name="crypto"
-				GUID="{E9FEE24F-4F30-4771-AAE4-95863739C7FD}">
-				<Folder
-					Name="aesni_gcm"
-					GUID="{DE9D34E4-0182-45BB-A158-D9A85D3B2890}">
+			<Folder Name="crypto">
+				<Folder Name="aesni_gcm">
 					<F N="drivers/crypto/aesni_gcm/aesni_gcm_ops.h"/>
 					<F N="drivers/crypto/aesni_gcm/aesni_gcm_pmd.c"/>
 					<F N="drivers/crypto/aesni_gcm/aesni_gcm_pmd_ops.c"/>
 					<F N="drivers/crypto/aesni_gcm/aesni_gcm_pmd_private.h"/>
 					<F N="drivers/crypto/aesni_gcm/Makefile"/>
 				</Folder>
-				<Folder
-					Name="aesni_mb"
-					GUID="{E3C4109B-7D62-4A11-B6B4-16392E4D934D}">
+				<Folder Name="aesni_mb">
 					<F N="drivers/crypto/aesni_mb/aesni_mb_ops.h"/>
 					<F N="drivers/crypto/aesni_mb/Makefile"/>
 					<F N="drivers/crypto/aesni_mb/rte_aesni_mb_pmd.c"/>
 					<F N="drivers/crypto/aesni_mb/rte_aesni_mb_pmd_ops.c"/>
 					<F N="drivers/crypto/aesni_mb/rte_aesni_mb_pmd_private.h"/>
 				</Folder>
-				<Folder
-					Name="armv8"
-					GUID="{304B98D4-D922-4C35-AC7D-C665E1D25A5B}">
+				<Folder Name="armv8">
 					<F N="drivers/crypto/armv8/Makefile"/>
 					<F N="drivers/crypto/armv8/rte_armv8_pmd.c"/>
 					<F N="drivers/crypto/armv8/rte_armv8_pmd_ops.c"/>
 					<F N="drivers/crypto/armv8/rte_armv8_pmd_private.h"/>
 				</Folder>
-				<Folder
-					Name="dpaa2_sec"
-					GUID="{DEB1959E-FDF3-47B1-8724-46B89CD2B1FF}">
-					<Folder
-						Name="hw"
-						GUID="{C5C08EB8-D581-4C1E-8423-9BB9A441C87E}">
-						<Folder
-							Name="desc"
-							GUID="{E5B2384F-EDF8-4548-A486-2E8086A88D9B}">
+				<Folder Name="dpaa2_sec">
+					<Folder Name="hw">
+						<Folder Name="desc">
 							<F N="drivers/crypto/dpaa2_sec/hw/desc/algo.h"/>
 							<F N="drivers/crypto/dpaa2_sec/hw/desc/common.h"/>
 							<F N="drivers/crypto/dpaa2_sec/hw/desc/ipsec.h"/>
 						</Folder>
-						<Folder
-							Name="rta"
-							GUID="{69F45A39-9F95-4271-80D0-B637A8F00804}">
+						<Folder Name="rta">
 							<F N="drivers/crypto/dpaa2_sec/hw/rta/fifo_load_store_cmd.h"/>
 							<F N="drivers/crypto/dpaa2_sec/hw/rta/header_cmd.h"/>
 							<F N="drivers/crypto/dpaa2_sec/hw/rta/jump_cmd.h"/>
@@ -433,9 +407,7 @@
 						<F N="drivers/crypto/dpaa2_sec/hw/desc.h"/>
 						<F N="drivers/crypto/dpaa2_sec/hw/rta.h"/>
 					</Folder>
-					<Folder
-						Name="mc"
-						GUID="{2477FFB4-E971-4342-91F8-BC08355F3C35}">
+					<Folder Name="mc">
 						<F N="drivers/crypto/dpaa2_sec/mc/dpseci.c"/>
 						<F N="drivers/crypto/dpaa2_sec/mc/fsl_dpseci.h"/>
 						<F N="drivers/crypto/dpaa2_sec/mc/fsl_dpseci_cmd.h"/>
@@ -445,36 +417,26 @@
 					<F N="drivers/crypto/dpaa2_sec/dpaa2_sec_priv.h"/>
 					<F N="drivers/crypto/dpaa2_sec/Makefile"/>
 				</Folder>
-				<Folder
-					Name="kasumi"
-					GUID="{1F21D5CB-99AE-441A-B395-08DC50F22A95}">
+				<Folder Name="kasumi">
 					<F N="drivers/crypto/kasumi/Makefile"/>
 					<F N="drivers/crypto/kasumi/rte_kasumi_pmd.c"/>
 					<F N="drivers/crypto/kasumi/rte_kasumi_pmd_ops.c"/>
 					<F N="drivers/crypto/kasumi/rte_kasumi_pmd_private.h"/>
 				</Folder>
-				<Folder
-					Name="null"
-					GUID="{CC3A6006-D49A-4EB1-9CFD-855ACF128B67}">
+				<Folder Name="null">
 					<F N="drivers/crypto/null/Makefile"/>
 					<F N="drivers/crypto/null/null_crypto_pmd.c"/>
 					<F N="drivers/crypto/null/null_crypto_pmd_ops.c"/>
 					<F N="drivers/crypto/null/null_crypto_pmd_private.h"/>
 				</Folder>
-				<Folder
-					Name="openssl"
-					GUID="{1CE7F903-9B97-4228-A666-866DA261694F}">
+				<Folder Name="openssl">
 					<F N="drivers/crypto/openssl/Makefile"/>
 					<F N="drivers/crypto/openssl/rte_openssl_pmd.c"/>
 					<F N="drivers/crypto/openssl/rte_openssl_pmd_ops.c"/>
 					<F N="drivers/crypto/openssl/rte_openssl_pmd_private.h"/>
 				</Folder>
-				<Folder
-					Name="qat"
-					GUID="{8F5A0848-F906-49E5-BBB8-DACB498C7CC7}">
-					<Folder
-						Name="qat_adf"
-						GUID="{A9856ADC-6498-43D8-A2EE-F842E9EE827A}">
+				<Folder Name="qat">
+					<Folder Name="qat_adf">
 						<F N="drivers/crypto/qat/qat_adf/adf_transport_access_macros.h"/>
 						<F N="drivers/crypto/qat/qat_adf/icp_qat_fw.h"/>
 						<F N="drivers/crypto/qat/qat_adf/icp_qat_fw_la.h"/>
@@ -490,9 +452,7 @@
 					<F N="drivers/crypto/qat/qat_qp.c"/>
 					<F N="drivers/crypto/qat/rte_qat_cryptodev.c"/>
 				</Folder>
-				<Folder
-					Name="scheduler"
-					GUID="{B46A6E59-E9DB-4BC6-A142-E94E14BC7434}">
+				<Folder Name="scheduler">
 					<F N="drivers/crypto/scheduler/Makefile"/>
 					<F N="drivers/crypto/scheduler/rte_cryptodev_scheduler.c"/>
 					<F N="drivers/crypto/scheduler/rte_cryptodev_scheduler.h"/>
@@ -504,17 +464,13 @@
 					<F N="drivers/crypto/scheduler/scheduler_pmd_private.h"/>
 					<F N="drivers/crypto/scheduler/scheduler_roundrobin.c"/>
 				</Folder>
-				<Folder
-					Name="snow3g"
-					GUID="{75E2CFA7-3FFD-408E-8DC7-195C6024F2EC}">
+				<Folder Name="snow3g">
 					<F N="drivers/crypto/snow3g/Makefile"/>
 					<F N="drivers/crypto/snow3g/rte_snow3g_pmd.c"/>
 					<F N="drivers/crypto/snow3g/rte_snow3g_pmd_ops.c"/>
 					<F N="drivers/crypto/snow3g/rte_snow3g_pmd_private.h"/>
 				</Folder>
-				<Folder
-					Name="zuc"
-					GUID="{52BF294B-882B-4929-8FC4-1F371C84FFBE}">
+				<Folder Name="zuc">
 					<F N="drivers/crypto/zuc/Makefile"/>
 					<F N="drivers/crypto/zuc/rte_zuc_pmd.c"/>
 					<F N="drivers/crypto/zuc/rte_zuc_pmd_ops.c"/>
@@ -522,12 +478,8 @@
 				</Folder>
 				<F N="drivers/crypto/Makefile"/>
 			</Folder>
-			<Folder
-				Name="event"
-				GUID="{7A9F69C0-F8AB-447B-807E-7DB33C3B31D6}">
-				<Folder
-					Name="octeontx"
-					GUID="{05627A31-D8AA-4F5E-9ACA-5D39B9BA522C}">
+			<Folder Name="event">
+				<Folder Name="octeontx">
 					<F N="drivers/event/octeontx/Makefile"/>
 					<F N="drivers/event/octeontx/rte_pmd_octeontx_ssovf.h"/>
 					<F N="drivers/event/octeontx/ssovf_evdev.c"/>
@@ -537,16 +489,12 @@
 					<F N="drivers/event/octeontx/ssovf_worker.c"/>
 					<F N="drivers/event/octeontx/ssovf_worker.h"/>
 				</Folder>
-				<Folder
-					Name="skeleton"
-					GUID="{E86507AC-002B-4B8D-A1C3-CB3952712021}">
+				<Folder Name="skeleton">
 					<F N="drivers/event/skeleton/Makefile"/>
 					<F N="drivers/event/skeleton/skeleton_eventdev.c"/>
 					<F N="drivers/event/skeleton/skeleton_eventdev.h"/>
 				</Folder>
-				<Folder
-					Name="sw"
-					GUID="{7BA984B0-03FF-4813-A3A9-F90AD77F658A}">
+				<Folder Name="sw">
 					<F N="drivers/event/sw/event_ring.h"/>
 					<F N="drivers/event/sw/iq_ring.h"/>
 					<F N="drivers/event/sw/Makefile"/>
@@ -558,42 +506,28 @@
 				</Folder>
 				<F N="drivers/event/Makefile"/>
 			</Folder>
-			<Folder
-				Name="mempool"
-				GUID="{2923BFCA-D265-4D74-B544-893BE3A7F417}">
-				<Folder
-					Name="dpaa2"
-					GUID="{FC3773A5-E831-4761-A8EA-97DBECA1C212}">
+			<Folder Name="mempool">
+				<Folder Name="dpaa2">
 					<F N="drivers/mempool/dpaa2/dpaa2_hw_mempool.c"/>
 					<F N="drivers/mempool/dpaa2/dpaa2_hw_mempool.h"/>
 					<F N="drivers/mempool/dpaa2/Makefile"/>
 				</Folder>
-				<Folder
-					Name="ring"
-					GUID="{BDD7170A-0188-4B23-A182-5340D59AD551}">
+				<Folder Name="ring">
 					<F N="drivers/mempool/ring/Makefile"/>
 					<F N="drivers/mempool/ring/rte_mempool_ring.c"/>
 				</Folder>
-				<Folder
-					Name="stack"
-					GUID="{4A425A7D-29FA-4F50-8B26-947DF89CE3CC}">
+				<Folder Name="stack">
 					<F N="drivers/mempool/stack/Makefile"/>
 					<F N="drivers/mempool/stack/rte_mempool_stack.c"/>
 				</Folder>
 				<F N="drivers/mempool/Makefile"/>
 			</Folder>
-			<Folder
-				Name="net"
-				GUID="{A9AB05B6-14F3-4A69-A290-9A4067D5C215}">
-				<Folder
-					Name="af_packet"
-					GUID="{2076BEAC-8740-42EC-A2E3-6C0747E62B91}">
+			<Folder Name="net">
+				<Folder Name="af_packet">
 					<F N="drivers/net/af_packet/Makefile"/>
 					<F N="drivers/net/af_packet/rte_eth_af_packet.c"/>
 				</Folder>
-				<Folder
-					Name="ark"
-					GUID="{D0CF4EF6-00A2-458E-960D-837BF5608D4C}">
+				<Folder Name="ark">
 					<F N="drivers/net/ark/ark_ddm.c"/>
 					<F N="drivers/net/ark/ark_ddm.h"/>
 					<F N="drivers/net/ark/ark_ethdev.c"/>
@@ -619,18 +553,14 @@
 					<F N="drivers/net/ark/ark_udm.h"/>
 					<F N="drivers/net/ark/Makefile"/>
 				</Folder>
-				<Folder
-					Name="avp"
-					GUID="{781903DE-6E64-47DA-9653-39084486E9F2}">
+				<Folder Name="avp">
 					<F N="drivers/net/avp/avp_ethdev.c"/>
 					<F N="drivers/net/avp/avp_logs.h"/>
 					<F N="drivers/net/avp/Makefile"/>
 					<F N="drivers/net/avp/rte_avp_common.h"/>
 					<F N="drivers/net/avp/rte_avp_fifo.h"/>
 				</Folder>
-				<Folder
-					Name="bnx2x"
-					GUID="{572DD5A3-AFDA-40D9-94DB-859BDF3BD49A}">
+				<Folder Name="bnx2x">
 					<F N="drivers/net/bnx2x/bnx2x.c"/>
 					<F N="drivers/net/bnx2x/bnx2x.h"/>
 					<F N="drivers/net/bnx2x/bnx2x_ethdev.c"/>
@@ -654,9 +584,7 @@
 					<F N="drivers/net/bnx2x/elink.h"/>
 					<F N="drivers/net/bnx2x/Makefile"/>
 				</Folder>
-				<Folder
-					Name="bnxt"
-					GUID="{529F1896-D91F-4909-B195-9984531AA489}">
+				<Folder Name="bnxt">
 					<F N="drivers/net/bnxt/bnxt.h"/>
 					<F N="drivers/net/bnxt/bnxt_cpr.c"/>
 					<F N="drivers/net/bnxt/bnxt_cpr.h"/>
@@ -684,9 +612,7 @@
 					<F N="drivers/net/bnxt/hsi_struct_def_dpdk.h"/>
 					<F N="drivers/net/bnxt/Makefile"/>
 				</Folder>
-				<Folder
-					Name="bonding"
-					GUID="{AD597D6C-86AB-4BBA-9EEF-CEEE17C26855}">
+				<Folder Name="bonding">
 					<F N="drivers/net/bonding/Makefile"/>
 					<F N="drivers/net/bonding/rte_eth_bond.h"/>
 					<F N="drivers/net/bonding/rte_eth_bond_8023ad.c"/>
@@ -699,12 +625,8 @@
 					<F N="drivers/net/bonding/rte_eth_bond_pmd.c"/>
 					<F N="drivers/net/bonding/rte_eth_bond_private.h"/>
 				</Folder>
-				<Folder
-					Name="cxgbe"
-					GUID="{3B251AAD-68A1-4A53-8E4D-5BFE93E0FCD1}">
-					<Folder
-						Name="base"
-						GUID="{83FAE88C-A0A4-4636-94AB-69DADA1F91E4}">
+				<Folder Name="cxgbe">
+					<Folder Name="base">
 						<F N="drivers/net/cxgbe/base/adapter.h"/>
 						<F N="drivers/net/cxgbe/base/common.h"/>
 						<F N="drivers/net/cxgbe/base/t4_chip_type.h"/>
@@ -723,18 +645,12 @@
 					<F N="drivers/net/cxgbe/Makefile"/>
 					<F N="drivers/net/cxgbe/sge.c"/>
 				</Folder>
-				<Folder
-					Name="dpaa2"
-					GUID="{C944E46A-FF90-4F46-92DF-37F473497767}">
-					<Folder
-						Name="base"
-						GUID="{6CC0D2B6-D30B-4C21-91EA-461B1C354621}">
+				<Folder Name="dpaa2">
+					<Folder Name="base">
 						<F N="drivers/net/dpaa2/base/dpaa2_hw_dpni.c"/>
 						<F N="drivers/net/dpaa2/base/dpaa2_hw_dpni_annot.h"/>
 					</Folder>
-					<Folder
-						Name="mc"
-						GUID="{EEF8FF16-A49E-477A-AA9B-D4A4E477E946}">
+					<Folder Name="mc">
 						<F N="drivers/net/dpaa2/mc/dpni.c"/>
 						<F N="drivers/net/dpaa2/mc/fsl_dpkg.h"/>
 						<F N="drivers/net/dpaa2/mc/fsl_dpni.h"/>
@@ -746,12 +662,8 @@
 					<F N="drivers/net/dpaa2/dpaa2_rxtx.c"/>
 					<F N="drivers/net/dpaa2/Makefile"/>
 				</Folder>
-				<Folder
-					Name="e1000"
-					GUID="{3547536A-2B3A-44FE-856C-F9F842EDEEEA}">
-					<Folder
-						Name="base"
-						GUID="{EEAB38F1-0CCF-43FA-B1BF-D923E02464AE}">
+				<Folder Name="e1000">
+					<Folder Name="base">
 						<F N="drivers/net/e1000/base/e1000_80003es2lan.c"/>
 						<F N="drivers/net/e1000/base/e1000_80003es2lan.h"/>
 						<F N="drivers/net/e1000/base/e1000_82540.c"/>
@@ -798,15 +710,9 @@
 					<F N="drivers/net/e1000/igb_rxtx.c"/>
 					<F N="drivers/net/e1000/Makefile"/>
 				</Folder>
-				<Folder
-					Name="ena"
-					GUID="{679883C8-01C4-448C-937D-F7810B3832A1}">
-					<Folder
-						Name="base"
-						GUID="{1A4F5EB3-2056-4118-A14E-CF784825DC67}">
-						<Folder
-							Name="ena_defs"
-							GUID="{8F8BB933-A333-441B-88A2-F1CB491441F2}">
+				<Folder Name="ena">
+					<Folder Name="base">
+						<Folder Name="ena_defs">
 							<F N="drivers/net/ena/base/ena_defs/ena_admin_defs.h"/>
 							<F N="drivers/net/ena/base/ena_defs/ena_common_defs.h"/>
 							<F N="drivers/net/ena/base/ena_defs/ena_eth_io_defs.h"/>
@@ -827,12 +733,8 @@
 					<F N="drivers/net/ena/ena_platform.h"/>
 					<F N="drivers/net/ena/Makefile"/>
 				</Folder>
-				<Folder
-					Name="enic"
-					GUID="{B52E23CB-A840-4506-A2B7-DEE2262560ED}">
-					<Folder
-						Name="base"
-						GUID="{041D99BE-7800-4489-862A-481C56030C15}">
+				<Folder Name="enic">
+					<Folder Name="base">
 						<F N="drivers/net/enic/base/cq_desc.h"/>
 						<F N="drivers/net/enic/base/cq_enet_desc.h"/>
 						<F N="drivers/net/enic/base/rq_enet_desc.h"/>
@@ -865,12 +767,8 @@
 					<F N="drivers/net/enic/enic_rxtx.c"/>
 					<F N="drivers/net/enic/Makefile"/>
 				</Folder>
-				<Folder
-					Name="fm10k"
-					GUID="{20F1E082-36F2-4339-80EF-92DBD104610D}">
-					<Folder
-						Name="base"
-						GUID="{292234E2-C2AF-4243-8BF3-DEA38D9A7C5A}">
+				<Folder Name="fm10k">
+					<Folder Name="base">
 						<F N="drivers/net/fm10k/base/fm10k_api.c"/>
 						<F N="drivers/net/fm10k/base/fm10k_api.h"/>
 						<F N="drivers/net/fm10k/base/fm10k_common.c"/>
@@ -893,12 +791,8 @@
 					<F N="drivers/net/fm10k/fm10k_rxtx_vec.c"/>
 					<F N="drivers/net/fm10k/Makefile"/>
 				</Folder>
-				<Folder
-					Name="i40e"
-					GUID="{A4756690-E766-4190-8635-25FB32E8CEE1}">
-					<Folder
-						Name="base"
-						GUID="{737BC3EB-EF92-4A8D-8730-40E98D51EDB5}">
+				<Folder Name="i40e">
+					<Folder Name="base">
 						<F N="drivers/net/i40e/base/i40e_adminq.c"/>
 						<F N="drivers/net/i40e/base/i40e_adminq.h"/>
 						<F N="drivers/net/i40e/base/i40e_adminq_cmd.h"/>
@@ -940,12 +834,8 @@
 					<F N="drivers/net/i40e/rte_pmd_i40e.c"/>
 					<F N="drivers/net/i40e/rte_pmd_i40e.h"/>
 				</Folder>
-				<Folder
-					Name="ixgbe"
-					GUID="{CAEDB13E-01A8-4472-AE3A-C161ED65E4BB}">
-					<Folder
-						Name="base"
-						GUID="{7C74874D-5A62-4D8C-96EC-538AAA69D427}">
+				<Folder Name="ixgbe">
+					<Folder Name="base">
 						<F N="drivers/net/ixgbe/base/ixgbe_82598.c"/>
 						<F N="drivers/net/ixgbe/base/ixgbe_82598.h"/>
 						<F N="drivers/net/ixgbe/base/ixgbe_82599.c"/>
@@ -996,18 +886,12 @@
 					<F N="drivers/net/ixgbe/rte_pmd_ixgbe.c"/>
 					<F N="drivers/net/ixgbe/rte_pmd_ixgbe.h"/>
 				</Folder>
-				<Folder
-					Name="kni"
-					GUID="{DCBD9BE4-AD27-4790-956C-1A2B84F8CE16}">
+				<Folder Name="kni">
 					<F N="drivers/net/kni/Makefile"/>
 					<F N="drivers/net/kni/rte_eth_kni.c"/>
 				</Folder>
-				<Folder
-					Name="liquidio"
-					GUID="{2C1AE712-E4AF-469C-98FA-C0A04C97021D}">
-					<Folder
-						Name="base"
-						GUID="{06500F50-57C6-42E6-BB9A-7DE5FA730C81}">
+				<Folder Name="liquidio">
+					<Folder Name="base">
 						<F N="drivers/net/liquidio/base/lio_23xx_reg.h"/>
 						<F N="drivers/net/liquidio/base/lio_23xx_vf.c"/>
 						<F N="drivers/net/liquidio/base/lio_23xx_vf.h"/>
@@ -1023,18 +907,14 @@
 					<F N="drivers/net/liquidio/lio_struct.h"/>
 					<F N="drivers/net/liquidio/Makefile"/>
 				</Folder>
-				<Folder
-					Name="mlx4"
-					GUID="{A2CAD792-C030-4660-AAA8-7015FAA76BCB}">
+				<Folder Name="mlx4">
 					<F N="drivers/net/mlx4/Makefile"/>
 					<F N="drivers/net/mlx4/mlx4.c"/>
 					<F N="drivers/net/mlx4/mlx4.h"/>
 					<F N="drivers/net/mlx4/mlx4_flow.c"/>
 					<F N="drivers/net/mlx4/mlx4_flow.h"/>
 				</Folder>
-				<Folder
-					Name="mlx5"
-					GUID="{10DEF5E8-F608-4D10-8D52-0B0D0A72535B}">
+				<Folder Name="mlx5">
 					<F N="drivers/net/mlx5/Makefile"/>
 					<F N="drivers/net/mlx5/mlx5.c"/>
 					<F N="drivers/net/mlx5/mlx5.h"/>
@@ -1056,42 +936,30 @@
 					<F N="drivers/net/mlx5/mlx5_utils.h"/>
 					<F N="drivers/net/mlx5/mlx5_vlan.c"/>
 				</Folder>
-				<Folder
-					Name="nfp"
-					GUID="{0C04DC93-267E-4371-B148-C1EAB2DFEA90}">
+				<Folder Name="nfp">
 					<F N="drivers/net/nfp/Makefile"/>
 					<F N="drivers/net/nfp/nfp_net.c"/>
 					<F N="drivers/net/nfp/nfp_net_ctrl.h"/>
 					<F N="drivers/net/nfp/nfp_net_logs.h"/>
 					<F N="drivers/net/nfp/nfp_net_pmd.h"/>
 				</Folder>
-				<Folder
-					Name="ntacc"
-					GUID="{E759C4DF-7FB0-4B75-AF16-097BA7EFAB7B}">
+				<Folder Name="ntacc">
 					<F N="drivers/net/ntacc/filter_ntacc.c"/>
 					<F N="drivers/net/ntacc/filter_ntacc.h"/>
 					<F N="drivers/net/ntacc/Makefile"/>
 					<F N="drivers/net/ntacc/rte_eth_ntacc.c"/>
 					<F N="drivers/net/ntacc/rte_eth_ntacc.h"/>
 				</Folder>
-				<Folder
-					Name="null"
-					GUID="{C128D263-F639-4F5D-8603-C185CE86FD42}">
+				<Folder Name="null">
 					<F N="drivers/net/null/Makefile"/>
 					<F N="drivers/net/null/rte_eth_null.c"/>
 				</Folder>
-				<Folder
-					Name="pcap"
-					GUID="{C4085CDC-EF23-4AAE-BCEA-EFF7498F58F2}">
+				<Folder Name="pcap">
 					<F N="drivers/net/pcap/Makefile"/>
 					<F N="drivers/net/pcap/rte_eth_pcap.c"/>
 				</Folder>
-				<Folder
-					Name="qede"
-					GUID="{692BC2EB-3F07-455D-B151-3D0C694D3934}">
-					<Folder
-						Name="base"
-						GUID="{55977D41-ADBD-4B64-8BAB-1E8B86A5914B}">
+				<Folder Name="qede">
+					<Folder Name="base">
 						<F N="drivers/net/qede/base/bcm_osal.c"/>
 						<F N="drivers/net/qede/base/bcm_osal.h"/>
 						<F N="drivers/net/qede/base/common_hsi.h"/>
@@ -1165,19 +1033,13 @@
 					<F N="drivers/net/qede/qede_rxtx.c"/>
 					<F N="drivers/net/qede/qede_rxtx.h"/>
 				</Folder>
-				<Folder
-					Name="ring"
-					GUID="{160617E3-82F0-4CCC-ADA2-1D23F3B03765}">
+				<Folder Name="ring">
 					<F N="drivers/net/ring/Makefile"/>
 					<F N="drivers/net/ring/rte_eth_ring.c"/>
 					<F N="drivers/net/ring/rte_eth_ring.h"/>
 				</Folder>
-				<Folder
-					Name="sfc"
-					GUID="{E9EE4542-B1B8-43C6-A02C-98A14B3CF814}">
-					<Folder
-						Name="base"
-						GUID="{A0D7BD2C-53E1-4EF8-9950-471B9BB5B46D}">
+				<Folder Name="sfc">
+					<Folder Name="base">
 						<F N="drivers/net/sfc/base/ef10_ev.c"/>
 						<F N="drivers/net/sfc/base/ef10_filter.c"/>
 						<F N="drivers/net/sfc/base/ef10_impl.h"/>
@@ -1267,16 +1129,12 @@
 					<F N="drivers/net/sfc/sfc_tx.c"/>
 					<F N="drivers/net/sfc/sfc_tx.h"/>
 				</Folder>
-				<Folder
-					Name="szedata2"
-					GUID="{5DBC7893-E195-4383-8815-2E574AE9EA73}">
+				<Folder Name="szedata2">
 					<F N="drivers/net/szedata2/Makefile"/>
 					<F N="drivers/net/szedata2/rte_eth_szedata2.c"/>
 					<F N="drivers/net/szedata2/rte_eth_szedata2.h"/>
 				</Folder>
-				<Folder
-					Name="tap"
-					GUID="{734EC586-888D-47BA-8811-AC58DD513BA8}">
+				<Folder Name="tap">
 					<F N="drivers/net/tap/Makefile"/>
 					<F N="drivers/net/tap/rte_eth_tap.c"/>
 					<F N="drivers/net/tap/rte_eth_tap.h"/>
@@ -1287,12 +1145,8 @@
 					<F N="drivers/net/tap/tap_tcmsgs.c"/>
 					<F N="drivers/net/tap/tap_tcmsgs.h"/>
 				</Folder>
-				<Folder
-					Name="thunderx"
-					GUID="{00FDF19A-38A2-4081-B659-A4DA1815C1FE}">
-					<Folder
-						Name="base"
-						GUID="{C148A5EE-8853-4FB5-AC6A-63FAFB387639}">
+				<Folder Name="thunderx">
+					<Folder Name="base">
 						<F N="drivers/net/thunderx/base/nicvf_bsvf.c"/>
 						<F N="drivers/net/thunderx/base/nicvf_bsvf.h"/>
 						<F N="drivers/net/thunderx/base/nicvf_hw.c"/>
@@ -1312,19 +1166,13 @@
 					<F N="drivers/net/thunderx/nicvf_svf.c"/>
 					<F N="drivers/net/thunderx/nicvf_svf.h"/>
 				</Folder>
-				<Folder
-					Name="vhost"
-					GUID="{02534C68-0A2A-4729-8F35-6BBFB75E5110}">
+				<Folder Name="vhost">
 					<F N="drivers/net/vhost/Makefile"/>
 					<F N="drivers/net/vhost/rte_eth_vhost.c"/>
 					<F N="drivers/net/vhost/rte_eth_vhost.h"/>
 				</Folder>
-				<Folder
-					Name="virtio"
-					GUID="{6072E2AD-040E-4B3D-A541-71865B173A43}">
-					<Folder
-						Name="virtio_user"
-						GUID="{425378A3-0B84-4BA4-87E9-10AC832EE806}">
+				<Folder Name="virtio">
+					<Folder Name="virtio_user">
 						<F N="drivers/net/virtio/virtio_user/vhost.h"/>
 						<F N="drivers/net/virtio/virtio_user/vhost_kernel.c"/>
 						<F N="drivers/net/virtio/virtio_user/vhost_kernel_tap.c"/>
@@ -1350,12 +1198,8 @@
 					<F N="drivers/net/virtio/virtqueue.c"/>
 					<F N="drivers/net/virtio/virtqueue.h"/>
 				</Folder>
-				<Folder
-					Name="vmxnet3"
-					GUID="{EA8E1D8A-082A-45AF-852A-392289A4F2D4}">
-					<Folder
-						Name="base"
-						GUID="{B04E8C25-217F-403E-9250-7A64847ECF1F}">
+				<Folder Name="vmxnet3">
+					<Folder Name="base">
 						<F N="drivers/net/vmxnet3/base/upt1_defs.h"/>
 						<F N="drivers/net/vmxnet3/base/vmware_pack_begin.h"/>
 						<F N="drivers/net/vmxnet3/base/vmware_pack_end.h"/>
@@ -1369,9 +1213,7 @@
 					<F N="drivers/net/vmxnet3/vmxnet3_ring.h"/>
 					<F N="drivers/net/vmxnet3/vmxnet3_rxtx.c"/>
 				</Folder>
-				<Folder
-					Name="xenvirt"
-					GUID="{6EFD411A-C204-4747-9C46-1A830C7B485A}">
+				<Folder Name="xenvirt">
 					<F N="drivers/net/xenvirt/Makefile"/>
 					<F N="drivers/net/xenvirt/rte_eth_xenvirt.c"/>
 					<F N="drivers/net/xenvirt/rte_eth_xenvirt.h"/>
@@ -1385,19 +1227,13 @@
 			</Folder>
 			<F N="drivers/Makefile"/>
 		</Folder>
-		<Folder
-			Name="examples"
-			GUID="{EC270C80-5210-436D-8C83-1A76EB4E4178}">
-			<Folder
-				Name="bond"
-				GUID="{30E95EF5-A8E5-4172-A4AF-A2148990D4FD}">
+		<Folder Name="examples">
+			<Folder Name="bond">
 				<F N="examples/bond/main.c"/>
 				<F N="examples/bond/main.h"/>
 				<F N="examples/bond/Makefile"/>
 			</Folder>
-			<Folder
-				Name="cmdline"
-				GUID="{12CA65E2-0D06-4737-B40B-6254871A0A63}">
+			<Folder Name="cmdline">
 				<F N="examples/cmdline/commands.c"/>
 				<F N="examples/cmdline/commands.h"/>
 				<F N="examples/cmdline/main.c"/>
@@ -1405,56 +1241,38 @@
 				<F N="examples/cmdline/parse_obj_list.c"/>
 				<F N="examples/cmdline/parse_obj_list.h"/>
 			</Folder>
-			<Folder
-				Name="distributor"
-				GUID="{CDE4D3E1-5751-4EBE-B807-6C550344597A}">
+			<Folder Name="distributor">
 				<F N="examples/distributor/main.c"/>
 				<F N="examples/distributor/Makefile"/>
 			</Folder>
-			<Folder
-				Name="ethtool"
-				GUID="{99DAD1CE-4308-489E-9ED2-5B1A7818EB33}">
-				<Folder
-					Name="ethtool-app"
-					GUID="{82F65A0D-AFA7-4EF5-AB48-9FAD82D348AE}">
+			<Folder Name="ethtool">
+				<Folder Name="ethtool-app">
 					<F N="examples/ethtool/ethtool-app/ethapp.c"/>
 					<F N="examples/ethtool/ethtool-app/ethapp.h"/>
 					<F N="examples/ethtool/ethtool-app/main.c"/>
 					<F N="examples/ethtool/ethtool-app/Makefile"/>
 				</Folder>
-				<Folder
-					Name="lib"
-					GUID="{E6E9FCAB-8B73-49B3-ABDE-474AF9A6821E}">
+				<Folder Name="lib">
 					<F N="examples/ethtool/lib/Makefile"/>
 					<F N="examples/ethtool/lib/rte_ethtool.c"/>
 					<F N="examples/ethtool/lib/rte_ethtool.h"/>
 				</Folder>
 				<F N="examples/ethtool/Makefile"/>
 			</Folder>
-			<Folder
-				Name="exception_path"
-				GUID="{8CA270AE-7D0C-457E-A36F-6E570A3A8F83}">
+			<Folder Name="exception_path">
 				<F N="examples/exception_path/main.c"/>
 				<F N="examples/exception_path/Makefile"/>
 			</Folder>
-			<Folder
-				Name="helloworld"
-				GUID="{D34A0008-E650-4797-B53A-C1CB1891A042}">
+			<Folder Name="helloworld">
 				<F N="examples/helloworld/main.c"/>
 				<F N="examples/helloworld/Makefile"/>
 			</Folder>
-			<Folder
-				Name="ip_fragmentation"
-				GUID="{99587B1C-F300-4ADC-B814-A97EC07350F0}">
+			<Folder Name="ip_fragmentation">
 				<F N="examples/ip_fragmentation/main.c"/>
 				<F N="examples/ip_fragmentation/Makefile"/>
 			</Folder>
-			<Folder
-				Name="ip_pipeline"
-				GUID="{711C0878-2855-4710-BF78-0F75BB7E54D6}">
-				<Folder
-					Name="pipeline"
-					GUID="{D284B118-BBA8-490D-8B38-AF2CA0EFFDDC}">
+			<Folder Name="ip_pipeline">
+				<Folder Name="pipeline">
 					<F N="examples/ip_pipeline/pipeline/hash_func.h"/>
 					<F N="examples/ip_pipeline/pipeline/pipeline_actions_common.h"/>
 					<F N="examples/ip_pipeline/pipeline/pipeline_common_be.c"/>
@@ -1504,15 +1322,11 @@
 				<F N="examples/ip_pipeline/thread_fe.c"/>
 				<F N="examples/ip_pipeline/thread_fe.h"/>
 			</Folder>
-			<Folder
-				Name="ip_reassembly"
-				GUID="{26C36B6C-DCA6-4515-991C-3E661E03A85C}">
+			<Folder Name="ip_reassembly">
 				<F N="examples/ip_reassembly/main.c"/>
 				<F N="examples/ip_reassembly/Makefile"/>
 			</Folder>
-			<Folder
-				Name="ipsec-secgw"
-				GUID="{86E343D6-F6EE-4535-8CE7-A5CEAADD5632}">
+			<Folder Name="ipsec-secgw">
 				<F N="examples/ipsec-secgw/esp.c"/>
 				<F N="examples/ipsec-secgw/esp.h"/>
 				<F N="examples/ipsec-secgw/ipip.h"/>
@@ -1527,50 +1341,34 @@
 				<F N="examples/ipsec-secgw/sp4.c"/>
 				<F N="examples/ipsec-secgw/sp6.c"/>
 			</Folder>
-			<Folder
-				Name="ipv4_multicast"
-				GUID="{381E9735-2BC2-4344-A273-66850E39B182}">
+			<Folder Name="ipv4_multicast">
 				<F N="examples/ipv4_multicast/main.c"/>
 				<F N="examples/ipv4_multicast/Makefile"/>
 			</Folder>
-			<Folder
-				Name="kni"
-				GUID="{AFCE7938-B16B-4ECC-9FCC-3581BB290793}">
+			<Folder Name="kni">
 				<F N="examples/kni/main.c"/>
 				<F N="examples/kni/Makefile"/>
 			</Folder>
-			<Folder
-				Name="l2fwd"
-				GUID="{779C68FD-F5E6-4FFC-96F5-739D9566BE00}">
+			<Folder Name="l2fwd">
 				<F N="examples/l2fwd/main.c"/>
 				<F N="examples/l2fwd/Makefile"/>
 			</Folder>
-			<Folder
-				Name="l2fwd-cat"
-				GUID="{74980061-D6EE-4FD3-8776-F97C8F436493}">
+			<Folder Name="l2fwd-cat">
 				<F N="examples/l2fwd-cat/cat.c"/>
 				<F N="examples/l2fwd-cat/cat.h"/>
 				<F N="examples/l2fwd-cat/l2fwd-cat.c"/>
 				<F N="examples/l2fwd-cat/Makefile"/>
 			</Folder>
-			<Folder
-				Name="l2fwd-crypto"
-				GUID="{DD3C4B76-3288-46D7-8B2D-07B767C0C8F3}">
+			<Folder Name="l2fwd-crypto">
 				<F N="examples/l2fwd-crypto/main.c"/>
 				<F N="examples/l2fwd-crypto/Makefile"/>
 			</Folder>
-			<Folder
-				Name="l2fwd-jobstats"
-				GUID="{6B0A9D0F-8962-4B07-949D-3B353F569478}">
+			<Folder Name="l2fwd-jobstats">
 				<F N="examples/l2fwd-jobstats/main.c"/>
 				<F N="examples/l2fwd-jobstats/Makefile"/>
 			</Folder>
-			<Folder
-				Name="l2fwd-keepalive"
-				GUID="{84173460-8886-4D23-A1FA-5C84A4B7A262}">
-				<Folder
-					Name="ka-agent"
-					GUID="{D299065F-102F-4871-AA1A-806810013156}">
+			<Folder Name="l2fwd-keepalive">
+				<Folder Name="ka-agent">
 					<F N="examples/l2fwd-keepalive/ka-agent/main.c"/>
 					<F N="examples/l2fwd-keepalive/ka-agent/Makefile"/>
 				</Folder>
@@ -1579,9 +1377,7 @@
 				<F N="examples/l2fwd-keepalive/shm.c"/>
 				<F N="examples/l2fwd-keepalive/shm.h"/>
 			</Folder>
-			<Folder
-				Name="l3fwd"
-				GUID="{51234FB5-AFBD-4AD9-96E0-CE51D850B69B}">
+			<Folder Name="l3fwd">
 				<F N="examples/l3fwd/l3fwd.h"/>
 				<F N="examples/l3fwd/l3fwd_em.c"/>
 				<F N="examples/l3fwd/l3fwd_em.h"/>
@@ -1594,33 +1390,23 @@
 				<F N="examples/l3fwd/main.c"/>
 				<F N="examples/l3fwd/Makefile"/>
 			</Folder>
-			<Folder
-				Name="l3fwd-acl"
-				GUID="{76553507-A52E-48EE-AA94-E08D8FF5FB26}">
+			<Folder Name="l3fwd-acl">
 				<F N="examples/l3fwd-acl/main.c"/>
 				<F N="examples/l3fwd-acl/Makefile"/>
 			</Folder>
-			<Folder
-				Name="l3fwd-power"
-				GUID="{697826D0-13B8-4A6D-A496-4E377B4EB52E}">
+			<Folder Name="l3fwd-power">
 				<F N="examples/l3fwd-power/main.c"/>
 				<F N="examples/l3fwd-power/Makefile"/>
 			</Folder>
-			<Folder
-				Name="l3fwd-vf"
-				GUID="{A0DC62EC-C895-4584-A064-9030011B3332}">
+			<Folder Name="l3fwd-vf">
 				<F N="examples/l3fwd-vf/main.c"/>
 				<F N="examples/l3fwd-vf/Makefile"/>
 			</Folder>
-			<Folder
-				Name="link_status_interrupt"
-				GUID="{B1606076-D77A-4F56-A22A-B0B89CCCC8DF}">
+			<Folder Name="link_status_interrupt">
 				<F N="examples/link_status_interrupt/main.c"/>
 				<F N="examples/link_status_interrupt/Makefile"/>
 			</Folder>
-			<Folder
-				Name="load_balancer"
-				GUID="{6CA981BB-A08E-4D8D-AD70-243CFB46B165}">
+			<Folder Name="load_balancer">
 				<F N="examples/load_balancer/config.c"/>
 				<F N="examples/load_balancer/init.c"/>
 				<F N="examples/load_balancer/main.c"/>
@@ -1628,21 +1414,13 @@
 				<F N="examples/load_balancer/Makefile"/>
 				<F N="examples/load_balancer/runtime.c"/>
 			</Folder>
-			<Folder
-				Name="multi_process"
-				GUID="{D2B1F77E-DDA7-436A-9E26-F0979CB5824E}">
-				<Folder
-					Name="client_server_mp"
-					GUID="{35C0799A-FB1C-46B1-B9B8-95F867B59F70}">
-					<Folder
-						Name="mp_client"
-						GUID="{A9473257-B291-4B10-82AF-91640B5E6CEF}">
+			<Folder Name="multi_process">
+				<Folder Name="client_server_mp">
+					<Folder Name="mp_client">
 						<F N="examples/multi_process/client_server_mp/mp_client/client.c"/>
 						<F N="examples/multi_process/client_server_mp/mp_client/Makefile"/>
 					</Folder>
-					<Folder
-						Name="mp_server"
-						GUID="{00028166-2032-4558-B9BF-7AB94D47CBA1}">
+					<Folder Name="mp_server">
 						<F N="examples/multi_process/client_server_mp/mp_server/args.c"/>
 						<F N="examples/multi_process/client_server_mp/mp_server/args.h"/>
 						<F N="examples/multi_process/client_server_mp/mp_server/init.c"/>
@@ -1650,78 +1428,52 @@
 						<F N="examples/multi_process/client_server_mp/mp_server/main.c"/>
 						<F N="examples/multi_process/client_server_mp/mp_server/Makefile"/>
 					</Folder>
-					<Folder
-						Name="shared"
-						GUID="{C1408679-78F1-4A18-B03E-11B8654CEB0E}">
+					<Folder Name="shared">
 						<F N="examples/multi_process/client_server_mp/shared/common.h"/>
 					</Folder>
 					<F N="examples/multi_process/client_server_mp/Makefile"/>
 				</Folder>
-				<Folder
-					Name="l2fwd_fork"
-					GUID="{9A851226-6CD6-4FC2-B397-777F9C7681C9}">
+				<Folder Name="l2fwd_fork">
 					<F N="examples/multi_process/l2fwd_fork/flib.c"/>
 					<F N="examples/multi_process/l2fwd_fork/flib.h"/>
 					<F N="examples/multi_process/l2fwd_fork/main.c"/>
 					<F N="examples/multi_process/l2fwd_fork/Makefile"/>
 				</Folder>
-				<Folder
-					Name="simple_mp"
-					GUID="{24BB845C-0040-45EB-A5CC-B1E5C9799A44}">
+				<Folder Name="simple_mp">
 					<F N="examples/multi_process/simple_mp/main.c"/>
 					<F N="examples/multi_process/simple_mp/Makefile"/>
 					<F N="examples/multi_process/simple_mp/mp_commands.c"/>
 					<F N="examples/multi_process/simple_mp/mp_commands.h"/>
 				</Folder>
-				<Folder
-					Name="symmetric_mp"
-					GUID="{30C1AA4D-9362-4594-A5FB-B98A76977FCA}">
+				<Folder Name="symmetric_mp">
 					<F N="examples/multi_process/symmetric_mp/main.c"/>
 					<F N="examples/multi_process/symmetric_mp/Makefile"/>
 				</Folder>
 				<F N="examples/multi_process/Makefile"/>
 			</Folder>
-			<Folder
-				Name="netmap_compat"
-				GUID="{004D50FF-6FC6-4AE3-9A44-669BA3B97D08}">
-				<Folder
-					Name="bridge"
-					GUID="{477B466F-32DC-40A9-A280-7ABF894BE22C}">
+			<Folder Name="netmap_compat">
+				<Folder Name="bridge">
 					<F N="examples/netmap_compat/bridge/bridge.c"/>
 					<F N="examples/netmap_compat/bridge/Makefile"/>
 				</Folder>
-				<Folder
-					Name="lib"
-					GUID="{CCA5BFFA-E368-4C52-BCAC-0603FDCC3660}">
+				<Folder Name="lib">
 					<F N="examples/netmap_compat/lib/compat_netmap.c"/>
 					<F N="examples/netmap_compat/lib/compat_netmap.h"/>
 				</Folder>
-				<Folder
-					Name="netmap"
-					GUID="{B278F7AE-C111-40D6-B4F1-29CD6DE4D866}">
+				<Folder Name="netmap">
 					<F N="examples/netmap_compat/netmap/netmap.h"/>
 					<F N="examples/netmap_compat/netmap/netmap_user.h"/>
 				</Folder>
 				<F N="examples/netmap_compat/Makefile"/>
 			</Folder>
-			<Folder
-				Name="packet_ordering"
-				GUID="{701C38B9-617F-4B16-822D-8035DAA7E7C8}">
+			<Folder Name="packet_ordering">
 				<F N="examples/packet_ordering/main.c"/>
 				<F N="examples/packet_ordering/Makefile"/>
 			</Folder>
-			<Folder
-				Name="performance-thread"
-				GUID="{2B7A7126-A506-4E69-9B06-ADABECAF700F}">
-				<Folder
-					Name="common"
-					GUID="{67D39AB0-26D2-4532-961C-DA377336CD53}">
-					<Folder
-						Name="arch"
-						GUID="{D54ED77B-925F-49D6-AF15-C631E512DC74}">
-						<Folder
-							Name="x86"
-							GUID="{77DFD994-6CA6-465E-91A4-4AC6853044F7}">
+			<Folder Name="performance-thread">
+				<Folder Name="common">
+					<Folder Name="arch">
+						<Folder Name="x86">
 							<F N="examples/performance-thread/common/arch/x86/ctx.c"/>
 							<F N="examples/performance-thread/common/arch/x86/ctx.h"/>
 						</Folder>
@@ -1746,15 +1498,11 @@
 					<F N="examples/performance-thread/common/lthread_tls.c"/>
 					<F N="examples/performance-thread/common/lthread_tls.h"/>
 				</Folder>
-				<Folder
-					Name="l3fwd-thread"
-					GUID="{D1D09343-6322-4B29-9D26-97392140B107}">
+				<Folder Name="l3fwd-thread">
 					<F N="examples/performance-thread/l3fwd-thread/main.c"/>
 					<F N="examples/performance-thread/l3fwd-thread/Makefile"/>
 				</Folder>
-				<Folder
-					Name="pthread_shim"
-					GUID="{F4F99D1A-DDC9-4930-A92B-8AB970EE5620}">
+				<Folder Name="pthread_shim">
 					<F N="examples/performance-thread/pthread_shim/main.c"/>
 					<F N="examples/performance-thread/pthread_shim/Makefile"/>
 					<F N="examples/performance-thread/pthread_shim/pthread_shim.c"/>
@@ -1762,24 +1510,18 @@
 				</Folder>
 				<F N="examples/performance-thread/Makefile"/>
 			</Folder>
-			<Folder
-				Name="ptpclient"
-				GUID="{D51740D6-1E58-40BE-935B-B102A7828727}">
+			<Folder Name="ptpclient">
 				<F N="examples/ptpclient/Makefile"/>
 				<F N="examples/ptpclient/ptpclient.c"/>
 			</Folder>
-			<Folder
-				Name="qos_meter"
-				GUID="{D1AAB21B-4DB6-4D1E-9512-2A985285DF1E}">
+			<Folder Name="qos_meter">
 				<F N="examples/qos_meter/main.c"/>
 				<F N="examples/qos_meter/main.h"/>
 				<F N="examples/qos_meter/Makefile"/>
 				<F N="examples/qos_meter/rte_policer.c"/>
 				<F N="examples/qos_meter/rte_policer.h"/>
 			</Folder>
-			<Folder
-				Name="qos_sched"
-				GUID="{4F74C1CF-FBA4-4CB5-B406-230E8B5F7869}">
+			<Folder Name="qos_sched">
 				<F N="examples/qos_sched/app_thread.c"/>
 				<F N="examples/qos_sched/args.c"/>
 				<F N="examples/qos_sched/cfg_file.c"/>
@@ -1791,17 +1533,11 @@
 				<F N="examples/qos_sched/Makefile"/>
 				<F N="examples/qos_sched/stats.c"/>
 			</Folder>
-			<Folder
-				Name="quota_watermark"
-				GUID="{CB774A11-39AA-478D-96AA-E4D16B91DCF8}">
-				<Folder
-					Name="include"
-					GUID="{9F24BAF7-B306-41AF-8B99-642D4F2F6BE3}">
+			<Folder Name="quota_watermark">
+				<Folder Name="include">
 					<F N="examples/quota_watermark/include/conf.h"/>
 				</Folder>
-				<Folder
-					Name="qw"
-					GUID="{A312170A-81BF-4D53-8689-AB13066EDC5A}">
+				<Folder Name="qw">
 					<F N="examples/quota_watermark/qw/args.c"/>
 					<F N="examples/quota_watermark/qw/args.h"/>
 					<F N="examples/quota_watermark/qw/init.c"/>
@@ -1810,9 +1546,7 @@
 					<F N="examples/quota_watermark/qw/main.h"/>
 					<F N="examples/quota_watermark/qw/Makefile"/>
 				</Folder>
-				<Folder
-					Name="qwctl"
-					GUID="{4373465A-BCE8-4AE4-9C92-2EDD993F04D3}">
+				<Folder Name="qwctl">
 					<F N="examples/quota_watermark/qwctl/commands.c"/>
 					<F N="examples/quota_watermark/qwctl/commands.h"/>
 					<F N="examples/quota_watermark/qwctl/Makefile"/>
@@ -1821,24 +1555,16 @@
 				</Folder>
 				<F N="examples/quota_watermark/Makefile"/>
 			</Folder>
-			<Folder
-				Name="rxtx_callbacks"
-				GUID="{22C57B05-0A42-4B22-87CF-9AAE15973D57}">
+			<Folder Name="rxtx_callbacks">
 				<F N="examples/rxtx_callbacks/main.c"/>
 				<F N="examples/rxtx_callbacks/Makefile"/>
 			</Folder>
-			<Folder
-				Name="server_node_efd"
-				GUID="{E5E98296-7983-4872-9398-5BE4FD19475B}">
-				<Folder
-					Name="node"
-					GUID="{CCA7A80B-BD90-4C83-900D-16091AA73F4C}">
+			<Folder Name="server_node_efd">
+				<Folder Name="node">
 					<F N="examples/server_node_efd/node/Makefile"/>
 					<F N="examples/server_node_efd/node/node.c"/>
 				</Folder>
-				<Folder
-					Name="server"
-					GUID="{DD11F7F0-C82B-49DB-9A2F-3664C438EADF}">
+				<Folder Name="server">
 					<F N="examples/server_node_efd/server/args.c"/>
 					<F N="examples/server_node_efd/server/args.h"/>
 					<F N="examples/server_node_efd/server/init.c"/>
@@ -1846,22 +1572,16 @@
 					<F N="examples/server_node_efd/server/main.c"/>
 					<F N="examples/server_node_efd/server/Makefile"/>
 				</Folder>
-				<Folder
-					Name="shared"
-					GUID="{2735F451-2DDA-41F1-8491-7FB83B968E16}">
+				<Folder Name="shared">
 					<F N="examples/server_node_efd/shared/common.h"/>
 				</Folder>
 				<F N="examples/server_node_efd/Makefile"/>
 			</Folder>
-			<Folder
-				Name="skeleton"
-				GUID="{707C0C41-232E-4950-A153-AC0F6C17DDFF}">
+			<Folder Name="skeleton">
 				<F N="examples/skeleton/basicfwd.c"/>
 				<F N="examples/skeleton/Makefile"/>
 			</Folder>
-			<Folder
-				Name="tep_termination"
-				GUID="{97F00120-CE41-4EA5-83F5-EF52DB86B01D}">
+			<Folder Name="tep_termination">
 				<F N="examples/tep_termination/main.c"/>
 				<F N="examples/tep_termination/main.h"/>
 				<F N="examples/tep_termination/Makefile"/>
@@ -1870,23 +1590,17 @@
 				<F N="examples/tep_termination/vxlan_setup.c"/>
 				<F N="examples/tep_termination/vxlan_setup.h"/>
 			</Folder>
-			<Folder
-				Name="timer"
-				GUID="{DC12D652-6D1A-44E0-AC80-903A7E92C932}">
+			<Folder Name="timer">
 				<F N="examples/timer/main.c"/>
 				<F N="examples/timer/Makefile"/>
 			</Folder>
-			<Folder
-				Name="vhost"
-				GUID="{629EF807-81D3-4FC6-AD5B-29A73F3738AA}">
+			<Folder Name="vhost">
 				<F N="examples/vhost/main.c"/>
 				<F N="examples/vhost/main.h"/>
 				<F N="examples/vhost/Makefile"/>
 				<F N="examples/vhost/virtio_net.c"/>
 			</Folder>
-			<Folder
-				Name="vhost_xen"
-				GUID="{8BE809E0-244D-4222-8BDF-EB356422F158}">
+			<Folder Name="vhost_xen">
 				<F N="examples/vhost_xen/main.c"/>
 				<F N="examples/vhost_xen/main.h"/>
 				<F N="examples/vhost_xen/Makefile"/>
@@ -1895,12 +1609,8 @@
 				<F N="examples/vhost_xen/xen_vhost.h"/>
 				<F N="examples/vhost_xen/xenstore_parse.c"/>
 			</Folder>
-			<Folder
-				Name="vm_power_manager"
-				GUID="{E8AF3458-1519-4845-8A73-CE10F657F5DA}">
-				<Folder
-					Name="guest_cli"
-					GUID="{AC2B8D51-7765-4FB5-AEBC-F3478FE08B4B}">
+			<Folder Name="vm_power_manager">
+				<Folder Name="guest_cli">
 					<F N="examples/vm_power_manager/guest_cli/main.c"/>
 					<F N="examples/vm_power_manager/guest_cli/Makefile"/>
 					<F N="examples/vm_power_manager/guest_cli/vm_power_cli_guest.c"/>
@@ -1917,26 +1627,18 @@
 				<F N="examples/vm_power_manager/vm_power_cli.c"/>
 				<F N="examples/vm_power_manager/vm_power_cli.h"/>
 			</Folder>
-			<Folder
-				Name="vmdq"
-				GUID="{BF14B561-0974-416E-8DB0-505017030B58}">
+			<Folder Name="vmdq">
 				<F N="examples/vmdq/main.c"/>
 				<F N="examples/vmdq/Makefile"/>
 			</Folder>
-			<Folder
-				Name="vmdq_dcb"
-				GUID="{EC8EF72E-AFD0-4A14-B6EE-C5547F6B52B9}">
+			<Folder Name="vmdq_dcb">
 				<F N="examples/vmdq_dcb/main.c"/>
 				<F N="examples/vmdq_dcb/Makefile"/>
 			</Folder>
 			<F N="examples/Makefile"/>
 		</Folder>
-		<Folder
-			Name="lib"
-			GUID="{B0EE9F4D-6A96-49B0-BE6A-BD4F1030BB40}">
-			<Folder
-				Name="librte_acl"
-				GUID="{3C0320F6-D540-4D6D-823D-1888098F1C55}">
+		<Folder Name="lib">
+			<Folder Name="librte_acl">
 				<F N="lib/librte_acl/acl.h"/>
 				<F N="lib/librte_acl/acl_bld.c"/>
 				<F N="lib/librte_acl/acl_gen.c"/>
@@ -1958,23 +1660,17 @@
 				<F N="lib/librte_acl/tb_mem.c"/>
 				<F N="lib/librte_acl/tb_mem.h"/>
 			</Folder>
-			<Folder
-				Name="librte_bitratestats"
-				GUID="{CE572C1F-F0ED-43BF-9CE2-6C30F16A08C4}">
+			<Folder Name="librte_bitratestats">
 				<F N="lib/librte_bitratestats/Makefile"/>
 				<F N="lib/librte_bitratestats/rte_bitrate.c"/>
 				<F N="lib/librte_bitratestats/rte_bitrate.h"/>
 			</Folder>
-			<Folder
-				Name="librte_cfgfile"
-				GUID="{25344327-2DE8-486F-AEA8-8DBDB606A434}">
+			<Folder Name="librte_cfgfile">
 				<F N="lib/librte_cfgfile/Makefile"/>
 				<F N="lib/librte_cfgfile/rte_cfgfile.c"/>
 				<F N="lib/librte_cfgfile/rte_cfgfile.h"/>
 			</Folder>
-			<Folder
-				Name="librte_cmdline"
-				GUID="{615CE478-F64C-4CCE-ACA2-5367F1E0EE78}">
+			<Folder Name="librte_cmdline">
 				<F N="lib/librte_cmdline/cmdline.c"/>
 				<F N="lib/librte_cmdline/cmdline.h"/>
 				<F N="lib/librte_cmdline/cmdline_cirbuf.c"/>
@@ -1999,15 +1695,11 @@
 				<F N="lib/librte_cmdline/cmdline_vt100.h"/>
 				<F N="lib/librte_cmdline/Makefile"/>
 			</Folder>
-			<Folder
-				Name="librte_compat"
-				GUID="{EC64100D-1D6F-481E-A8CC-911C73D9DE6A}">
+			<Folder Name="librte_compat">
 				<F N="lib/librte_compat/Makefile"/>
 				<F N="lib/librte_compat/rte_compat.h"/>
 			</Folder>
-			<Folder
-				Name="librte_cryptodev"
-				GUID="{17340BDC-D828-4B89-86DA-E639162AF504}">
+			<Folder Name="librte_cryptodev">
 				<F N="lib/librte_cryptodev/Makefile"/>
 				<F N="lib/librte_cryptodev/rte_crypto.h"/>
 				<F N="lib/librte_cryptodev/rte_crypto_sym.h"/>
@@ -2015,9 +1707,7 @@
 				<F N="lib/librte_cryptodev/rte_cryptodev.h"/>
 				<F N="lib/librte_cryptodev/rte_cryptodev_pmd.h"/>
 			</Folder>
-			<Folder
-				Name="librte_distributor"
-				GUID="{9FABF52B-3D0B-4EAD-8E9A-37A84D6E8E06}">
+			<Folder Name="librte_distributor">
 				<F N="lib/librte_distributor/Makefile"/>
 				<F N="lib/librte_distributor/rte_distributor.c"/>
 				<F N="lib/librte_distributor/rte_distributor.h"/>
@@ -2028,27 +1718,15 @@
 				<F N="lib/librte_distributor/rte_distributor_v20.c"/>
 				<F N="lib/librte_distributor/rte_distributor_v20.h"/>
 			</Folder>
-			<Folder
-				Name="librte_eal"
-				GUID="{5F8490C5-E87E-4319-B061-7DBE48F0B1E7}">
-				<Folder
-					Name="bsdapp"
-					GUID="{2B0CF30D-22CD-4BD4-987F-F507E1CA4F40}">
-					<Folder
-						Name="contigmem"
-						GUID="{FADE4DE5-51D1-4D8A-B2A0-9D9134A84668}">
+			<Folder Name="librte_eal">
+				<Folder Name="bsdapp">
+					<Folder Name="contigmem">
 						<F N="lib/librte_eal/bsdapp/contigmem/contigmem.c"/>
 						<F N="lib/librte_eal/bsdapp/contigmem/Makefile"/>
 					</Folder>
-					<Folder
-						Name="eal"
-						GUID="{644C8B04-B9CA-4494-8DDC-CC6DAAC32EE5}">
-						<Folder
-							Name="include"
-							GUID="{9B0498DF-BF74-49BE-86B1-19B4A10105B1}">
-							<Folder
-								Name="exec-env"
-								GUID="{706923F8-4762-4BB6-A00A-08FB1D7B5DFA}">
+					<Folder Name="eal">
+						<Folder Name="include">
+							<Folder Name="exec-env">
 								<F N="lib/librte_eal/bsdapp/eal/include/exec-env/rte_dom0_common.h"/>
 								<F N="lib/librte_eal/bsdapp/eal/include/exec-env/rte_interrupts.h"/>
 							</Folder>
@@ -2065,46 +1743,28 @@
 						<F N="lib/librte_eal/bsdapp/eal/eal_timer.c"/>
 						<F N="lib/librte_eal/bsdapp/eal/Makefile"/>
 					</Folder>
-					<Folder
-						Name="nic_uio"
-						GUID="{A9CADEA1-FAE8-4E78-8EE3-4B4E24E9325E}">
+					<Folder Name="nic_uio">
 						<F N="lib/librte_eal/bsdapp/nic_uio/Makefile"/>
 						<F N="lib/librte_eal/bsdapp/nic_uio/nic_uio.c"/>
 					</Folder>
 					<F N="lib/librte_eal/bsdapp/Makefile"/>
 				</Folder>
-				<Folder
-					Name="common"
-					GUID="{3339D453-5912-4CE2-A961-3F1F37737503}">
-					<Folder
-						Name="arch"
-						GUID="{DFA3124F-B403-4EF7-9C8E-627574495D52}">
-						<Folder
-							Name="arm"
-							GUID="{FA66A9B7-EE5A-4EC9-9933-B0DA5F21D84E}">
+				<Folder Name="common">
+					<Folder Name="arch">
+						<Folder Name="arm">
 							<F N="lib/librte_eal/common/arch/arm/rte_cpuflags.c"/>
 						</Folder>
-						<Folder
-							Name="ppc_64"
-							GUID="{B1BA358F-2847-4516-A311-F6497AD09439}">
+						<Folder Name="ppc_64">
 							<F N="lib/librte_eal/common/arch/ppc_64/rte_cpuflags.c"/>
 						</Folder>
-						<Folder
-							Name="x86"
-							GUID="{2DC5E710-0CD5-4917-9DE2-207D2FBA6AF0}">
+						<Folder Name="x86">
 							<F N="lib/librte_eal/common/arch/x86/rte_cpuflags.c"/>
 							<F N="lib/librte_eal/common/arch/x86/rte_spinlock.c"/>
 						</Folder>
 					</Folder>
-					<Folder
-						Name="include"
-						GUID="{CD581D31-B824-4156-B8B4-74FF0BA279DF}">
-						<Folder
-							Name="arch"
-							GUID="{781DEC87-2E99-47E4-B24F-8B0D859956F0}">
-							<Folder
-								Name="arm"
-								GUID="{0069E923-33D1-4E33-B8E2-26C6FF2194BD}">
+					<Folder Name="include">
+						<Folder Name="arch">
+							<Folder Name="arm">
 								<F N="lib/librte_eal/common/include/arch/arm/rte_atomic.h"/>
 								<F N="lib/librte_eal/common/include/arch/arm/rte_atomic_32.h"/>
 								<F N="lib/librte_eal/common/include/arch/arm/rte_atomic_64.h"/>
@@ -2127,9 +1787,7 @@
 								<F N="lib/librte_eal/common/include/arch/arm/rte_spinlock.h"/>
 								<F N="lib/librte_eal/common/include/arch/arm/rte_vect.h"/>
 							</Folder>
-							<Folder
-								Name="ppc_64"
-								GUID="{A7890733-42C9-479E-A905-FE78EFA4FE5B}">
+							<Folder Name="ppc_64">
 								<F N="lib/librte_eal/common/include/arch/ppc_64/rte_atomic.h"/>
 								<F N="lib/librte_eal/common/include/arch/ppc_64/rte_byteorder.h"/>
 								<F N="lib/librte_eal/common/include/arch/ppc_64/rte_cpuflags.h"/>
@@ -2141,9 +1799,7 @@
 								<F N="lib/librte_eal/common/include/arch/ppc_64/rte_spinlock.h"/>
 								<F N="lib/librte_eal/common/include/arch/ppc_64/rte_vect.h"/>
 							</Folder>
-							<Folder
-								Name="x86"
-								GUID="{6B55BCD2-F6D7-4DB1-ADBF-D6976D906C3D}">
+							<Folder Name="x86">
 								<F N="lib/librte_eal/common/include/arch/x86/rte_atomic.h"/>
 								<F N="lib/librte_eal/common/include/arch/x86/rte_atomic_32.h"/>
 								<F N="lib/librte_eal/common/include/arch/x86/rte_atomic_64.h"/>
@@ -2161,9 +1817,7 @@
 								<F N="lib/librte_eal/common/include/arch/x86/rte_vect.h"/>
 							</Folder>
 						</Folder>
-						<Folder
-							Name="generic"
-							GUID="{5307C308-66EB-40AA-B007-2E25794AB32E}">
+						<Folder Name="generic">
 							<F N="lib/librte_eal/common/include/generic/rte_atomic.h"/>
 							<F N="lib/librte_eal/common/include/generic/rte_byteorder.h"/>
 							<F N="lib/librte_eal/common/include/generic/rte_cpuflags.h"/>
@@ -2240,18 +1894,10 @@
 					<F N="lib/librte_eal/common/rte_keepalive.c"/>
 					<F N="lib/librte_eal/common/rte_malloc.c"/>
 				</Folder>
-				<Folder
-					Name="linuxapp"
-					GUID="{65FCFAD5-39E7-4298-9228-66FC83097964}">
-					<Folder
-						Name="eal"
-						GUID="{48F20432-D314-4FC4-85D1-BCE574D2551C}">
-						<Folder
-							Name="include"
-							GUID="{EE61A8EA-983C-493D-8A88-61FDF5EA58FF}">
-							<Folder
-								Name="exec-env"
-								GUID="{C7EBC529-6527-4B5A-B4D5-169EF941456A}">
+				<Folder Name="linuxapp">
+					<Folder Name="eal">
+						<Folder Name="include">
+							<Folder Name="exec-env">
 								<F N="lib/librte_eal/linuxapp/eal/include/exec-env/rte_dom0_common.h"/>
 								<F N="lib/librte_eal/linuxapp/eal/include/exec-env/rte_interrupts.h"/>
 								<F N="lib/librte_eal/linuxapp/eal/include/exec-env/rte_kni_common.h"/>
@@ -2277,22 +1923,14 @@
 						<F N="lib/librte_eal/linuxapp/eal/eal_xen_memory.c"/>
 						<F N="lib/librte_eal/linuxapp/eal/Makefile"/>
 					</Folder>
-					<Folder
-						Name="igb_uio"
-						GUID="{77BA2357-D693-4F78-B374-0E9FCA4A1919}">
+					<Folder Name="igb_uio">
 						<F N="lib/librte_eal/linuxapp/igb_uio/compat.h"/>
 						<F N="lib/librte_eal/linuxapp/igb_uio/igb_uio.c"/>
 						<F N="lib/librte_eal/linuxapp/igb_uio/Makefile"/>
 					</Folder>
-					<Folder
-						Name="kni"
-						GUID="{C4873B42-AB83-4E51-A79E-B842915CD3D0}">
-						<Folder
-							Name="ethtool"
-							GUID="{DAAA5BD7-C1E7-4B1D-9422-6EEEE6A7FDBB}">
-							<Folder
-								Name="igb"
-								GUID="{124A4E22-AD7F-4E14-8A1F-F55C7FA8822E}">
+					<Folder Name="kni">
+						<Folder Name="ethtool">
+							<Folder Name="igb">
 								<F N="lib/librte_eal/linuxapp/kni/ethtool/igb/e1000_82575.c"/>
 								<F N="lib/librte_eal/linuxapp/kni/ethtool/igb/e1000_82575.h"/>
 								<F N="lib/librte_eal/linuxapp/kni/ethtool/igb/e1000_api.c"/>
@@ -2322,9 +1960,7 @@
 								<F N="lib/librte_eal/linuxapp/kni/ethtool/igb/igb_vmdq.h"/>
 								<F N="lib/librte_eal/linuxapp/kni/ethtool/igb/kcompat.h"/>
 							</Folder>
-							<Folder
-								Name="ixgbe"
-								GUID="{609911A6-8FBA-428C-B70E-FC0D48844952}">
+							<Folder Name="ixgbe">
 								<F N="lib/librte_eal/linuxapp/kni/ethtool/ixgbe/ixgbe.h"/>
 								<F N="lib/librte_eal/linuxapp/kni/ethtool/ixgbe/ixgbe_82598.c"/>
 								<F N="lib/librte_eal/linuxapp/kni/ethtool/ixgbe/ixgbe_82598.h"/>
@@ -2357,9 +1993,7 @@
 						<F N="lib/librte_eal/linuxapp/kni/kni_net.c"/>
 						<F N="lib/librte_eal/linuxapp/kni/Makefile"/>
 					</Folder>
-					<Folder
-						Name="xen_dom0"
-						GUID="{8631A233-9083-4DF5-97B5-2181BA480937}">
+					<Folder Name="xen_dom0">
 						<F N="lib/librte_eal/linuxapp/xen_dom0/compat.h"/>
 						<F N="lib/librte_eal/linuxapp/xen_dom0/dom0_mm_dev.h"/>
 						<F N="lib/librte_eal/linuxapp/xen_dom0/dom0_mm_misc.c"/>
@@ -2369,17 +2003,13 @@
 				</Folder>
 				<F N="lib/librte_eal/Makefile"/>
 			</Folder>
-			<Folder
-				Name="librte_efd"
-				GUID="{C8B41593-95FA-4690-AF22-8523E13CE311}">
+			<Folder Name="librte_efd">
 				<F N="lib/librte_efd/Makefile"/>
 				<F N="lib/librte_efd/rte_efd.c"/>
 				<F N="lib/librte_efd/rte_efd.h"/>
 				<F N="lib/librte_efd/rte_efd_x86.h"/>
 			</Folder>
-			<Folder
-				Name="librte_ether"
-				GUID="{174BAFCB-760A-41E0-BBD4-32388CDB2836}">
+			<Folder Name="librte_ether">
 				<F N="lib/librte_ether/Makefile"/>
 				<F N="lib/librte_ether/rte_dev_info.h"/>
 				<F N="lib/librte_ether/rte_eth_ctrl.h"/>
@@ -2391,17 +2021,13 @@
 				<F N="lib/librte_ether/rte_flow.h"/>
 				<F N="lib/librte_ether/rte_flow_driver.h"/>
 			</Folder>
-			<Folder
-				Name="librte_eventdev"
-				GUID="{8CC2C32A-5282-4F6C-A0FE-254D7F4C63C9}">
+			<Folder Name="librte_eventdev">
 				<F N="lib/librte_eventdev/Makefile"/>
 				<F N="lib/librte_eventdev/rte_eventdev.c"/>
 				<F N="lib/librte_eventdev/rte_eventdev.h"/>
 				<F N="lib/librte_eventdev/rte_eventdev_pmd.h"/>
 			</Folder>
-			<Folder
-				Name="librte_hash"
-				GUID="{D9E9FF04-4950-48DB-80E4-9F93245C1349}">
+			<Folder Name="librte_hash">
 				<F N="lib/librte_hash/Makefile"/>
 				<F N="lib/librte_hash/rte_cmp_arm64.h"/>
 				<F N="lib/librte_hash/rte_cmp_x86.h"/>
@@ -2416,9 +2042,7 @@
 				<F N="lib/librte_hash/rte_jhash.h"/>
 				<F N="lib/librte_hash/rte_thash.h"/>
 			</Folder>
-			<Folder
-				Name="librte_ip_frag"
-				GUID="{2DFD2C23-F903-4F72-8A79-A3457A333B3D}">
+			<Folder Name="librte_ip_frag">
 				<F N="lib/librte_ip_frag/ip_frag_common.h"/>
 				<F N="lib/librte_ip_frag/ip_frag_internal.c"/>
 				<F N="lib/librte_ip_frag/Makefile"/>
@@ -2429,38 +2053,28 @@
 				<F N="lib/librte_ip_frag/rte_ipv6_fragmentation.c"/>
 				<F N="lib/librte_ip_frag/rte_ipv6_reassembly.c"/>
 			</Folder>
-			<Folder
-				Name="librte_jobstats"
-				GUID="{98502C3F-46C0-4AA9-93E5-CB04A22389E1}">
+			<Folder Name="librte_jobstats">
 				<F N="lib/librte_jobstats/Makefile"/>
 				<F N="lib/librte_jobstats/rte_jobstats.c"/>
 				<F N="lib/librte_jobstats/rte_jobstats.h"/>
 			</Folder>
-			<Folder
-				Name="librte_kni"
-				GUID="{B2BF4FEF-EE83-462B-B0A1-DF179CAF5245}">
+			<Folder Name="librte_kni">
 				<F N="lib/librte_kni/Makefile"/>
 				<F N="lib/librte_kni/rte_kni.c"/>
 				<F N="lib/librte_kni/rte_kni.h"/>
 				<F N="lib/librte_kni/rte_kni_fifo.h"/>
 			</Folder>
-			<Folder
-				Name="librte_kvargs"
-				GUID="{634F3417-4735-4E51-A1DB-E9FF96E7853B}">
+			<Folder Name="librte_kvargs">
 				<F N="lib/librte_kvargs/Makefile"/>
 				<F N="lib/librte_kvargs/rte_kvargs.c"/>
 				<F N="lib/librte_kvargs/rte_kvargs.h"/>
 			</Folder>
-			<Folder
-				Name="librte_latencystats"
-				GUID="{3455DE70-B65C-417B-A657-9AA7F059E8A8}">
+			<Folder Name="librte_latencystats">
 				<F N="lib/librte_latencystats/Makefile"/>
 				<F N="lib/librte_latencystats/rte_latencystats.c"/>
 				<F N="lib/librte_latencystats/rte_latencystats.h"/>
 			</Folder>
-			<Folder
-				Name="librte_lpm"
-				GUID="{722CC2EA-B21C-4EB2-B0D1-594DE4CA1093}">
+			<Folder Name="librte_lpm">
 				<F N="lib/librte_lpm/Makefile"/>
 				<F N="lib/librte_lpm/rte_lpm.c"/>
 				<F N="lib/librte_lpm/rte_lpm.h"/>
@@ -2470,40 +2084,30 @@
 				<F N="lib/librte_lpm/rte_lpm_neon.h"/>
 				<F N="lib/librte_lpm/rte_lpm_sse.h"/>
 			</Folder>
-			<Folder
-				Name="librte_mbuf"
-				GUID="{6A09016A-23E6-4174-B612-2E70C351A088}">
+			<Folder Name="librte_mbuf">
 				<F N="lib/librte_mbuf/Makefile"/>
 				<F N="lib/librte_mbuf/rte_mbuf.c"/>
 				<F N="lib/librte_mbuf/rte_mbuf.h"/>
 				<F N="lib/librte_mbuf/rte_mbuf_ptype.c"/>
 				<F N="lib/librte_mbuf/rte_mbuf_ptype.h"/>
 			</Folder>
-			<Folder
-				Name="librte_mempool"
-				GUID="{A4863ADC-A0A2-4BD2-8953-0BF58427D154}">
+			<Folder Name="librte_mempool">
 				<F N="lib/librte_mempool/Makefile"/>
 				<F N="lib/librte_mempool/rte_mempool.c"/>
 				<F N="lib/librte_mempool/rte_mempool.h"/>
 				<F N="lib/librte_mempool/rte_mempool_ops.c"/>
 			</Folder>
-			<Folder
-				Name="librte_meter"
-				GUID="{41A07F75-66B9-48D3-84BF-9B40BD71B7A4}">
+			<Folder Name="librte_meter">
 				<F N="lib/librte_meter/Makefile"/>
 				<F N="lib/librte_meter/rte_meter.c"/>
 				<F N="lib/librte_meter/rte_meter.h"/>
 			</Folder>
-			<Folder
-				Name="librte_metrics"
-				GUID="{0BCBE470-DD5C-4C98-831A-4D4650DB93DA}">
+			<Folder Name="librte_metrics">
 				<F N="lib/librte_metrics/Makefile"/>
 				<F N="lib/librte_metrics/rte_metrics.c"/>
 				<F N="lib/librte_metrics/rte_metrics.h"/>
 			</Folder>
-			<Folder
-				Name="librte_net"
-				GUID="{1B45C944-91F2-4954-9ADA-904C0005E66C}">
+			<Folder Name="librte_net">
 				<F N="lib/librte_net/Makefile"/>
 				<F N="lib/librte_net/net_crc_sse.h"/>
 				<F N="lib/librte_net/rte_arp.h"/>
@@ -2519,23 +2123,17 @@
 				<F N="lib/librte_net/rte_tcp.h"/>
 				<F N="lib/librte_net/rte_udp.h"/>
 			</Folder>
-			<Folder
-				Name="librte_pdump"
-				GUID="{9AACFBA8-2338-49FB-8402-B59AE53384F5}">
+			<Folder Name="librte_pdump">
 				<F N="lib/librte_pdump/Makefile"/>
 				<F N="lib/librte_pdump/rte_pdump.c"/>
 				<F N="lib/librte_pdump/rte_pdump.h"/>
 			</Folder>
-			<Folder
-				Name="librte_pipeline"
-				GUID="{D44DF29A-94F3-4584-BAEB-FBC0FEAD9C90}">
+			<Folder Name="librte_pipeline">
 				<F N="lib/librte_pipeline/Makefile"/>
 				<F N="lib/librte_pipeline/rte_pipeline.c"/>
 				<F N="lib/librte_pipeline/rte_pipeline.h"/>
 			</Folder>
-			<Folder
-				Name="librte_port"
-				GUID="{406D6622-DE0E-4362-9A9D-4A832D7E54BF}">
+			<Folder Name="librte_port">
 				<F N="lib/librte_port/Makefile"/>
 				<F N="lib/librte_port/rte_port.h"/>
 				<F N="lib/librte_port/rte_port_ethdev.c"/>
@@ -2555,9 +2153,7 @@
 				<F N="lib/librte_port/rte_port_source_sink.c"/>
 				<F N="lib/librte_port/rte_port_source_sink.h"/>
 			</Folder>
-			<Folder
-				Name="librte_power"
-				GUID="{7E655688-EE6C-4512-B946-5CAC55009D09}">
+			<Folder Name="librte_power">
 				<F N="lib/librte_power/channel_commands.h"/>
 				<F N="lib/librte_power/guest_channel.c"/>
 				<F N="lib/librte_power/guest_channel.h"/>
@@ -2570,23 +2166,17 @@
 				<F N="lib/librte_power/rte_power_kvm_vm.c"/>
 				<F N="lib/librte_power/rte_power_kvm_vm.h"/>
 			</Folder>
-			<Folder
-				Name="librte_reorder"
-				GUID="{8FDB9BBB-74C4-42AB-881E-DD8B70ECA1C1}">
+			<Folder Name="librte_reorder">
 				<F N="lib/librte_reorder/Makefile"/>
 				<F N="lib/librte_reorder/rte_reorder.c"/>
 				<F N="lib/librte_reorder/rte_reorder.h"/>
 			</Folder>
-			<Folder
-				Name="librte_ring"
-				GUID="{FECE8541-CE3C-4178-BD28-02543BA25174}">
+			<Folder Name="librte_ring">
 				<F N="lib/librte_ring/Makefile"/>
 				<F N="lib/librte_ring/rte_ring.c"/>
 				<F N="lib/librte_ring/rte_ring.h"/>
 			</Folder>
-			<Folder
-				Name="librte_sched"
-				GUID="{EB49FA3F-ED9A-4732-B7E4-6985BE53A6E0}">
+			<Folder Name="librte_sched">
 				<F N="lib/librte_sched/Makefile"/>
 				<F N="lib/librte_sched/rte_approx.c"/>
 				<F N="lib/librte_sched/rte_approx.h"/>
@@ -2599,9 +2189,7 @@
 				<F N="lib/librte_sched/rte_sched.h"/>
 				<F N="lib/librte_sched/rte_sched_common.h"/>
 			</Folder>
-			<Folder
-				Name="librte_table"
-				GUID="{6F05AEB4-7EFB-498A-8FED-09886B57A59D}">
+			<Folder Name="librte_table">
 				<F N="lib/librte_table/Makefile"/>
 				<F N="lib/librte_table/rte_lru.h"/>
 				<F N="lib/librte_table/rte_table.h"/>
@@ -2623,16 +2211,12 @@
 				<F N="lib/librte_table/rte_table_stub.c"/>
 				<F N="lib/librte_table/rte_table_stub.h"/>
 			</Folder>
-			<Folder
-				Name="librte_timer"
-				GUID="{7E56B470-F4A3-4B16-9F0D-09190DD52B00}">
+			<Folder Name="librte_timer">
 				<F N="lib/librte_timer/Makefile"/>
 				<F N="lib/librte_timer/rte_timer.c"/>
 				<F N="lib/librte_timer/rte_timer.h"/>
 			</Folder>
-			<Folder
-				Name="librte_vhost"
-				GUID="{2A46513F-839F-4F29-82CD-B426A45819E5}">
+			<Folder Name="librte_vhost">
 				<F N="lib/librte_vhost/fd_man.c"/>
 				<F N="lib/librte_vhost/fd_man.h"/>
 				<F N="lib/librte_vhost/Makefile"/>
@@ -2646,62 +2230,38 @@
 			</Folder>
 			<F N="lib/Makefile"/>
 		</Folder>
-		<Folder
-			Name="mk"
-			GUID="{48F2E86E-37A8-45E7-85CC-380F0E2786AF}">
-			<Folder
-				Name="arch"
-				GUID="{893EF4C7-90C2-4ACC-9318-D116AE19C9CE}">
-				<Folder
-					Name="arm"
-					GUID="{DA84F886-2DA9-4DC4-9F6A-A651D4EE4B6C}">
+		<Folder Name="mk">
+			<Folder Name="arch">
+				<Folder Name="arm">
 					<F N="mk/arch/arm/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="arm64"
-					GUID="{027D1D39-7417-4EBF-A0C9-FAD4A755238C}">
+				<Folder Name="arm64">
 					<F N="mk/arch/arm64/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="i686"
-					GUID="{DE6AAB90-6320-4FCF-8003-BBD3F9DEB416}">
+				<Folder Name="i686">
 					<F N="mk/arch/i686/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="ppc_64"
-					GUID="{F35A5D74-C2C4-433B-95D1-993722FFD3E2}">
+				<Folder Name="ppc_64">
 					<F N="mk/arch/ppc_64/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="x86_64"
-					GUID="{31CDF485-4546-4ACE-809C-B9F3F1C57CEC}">
+				<Folder Name="x86_64">
 					<F N="mk/arch/x86_64/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="x86_x32"
-					GUID="{91C93021-EC62-432D-B215-1E1F532670CF}">
+				<Folder Name="x86_x32">
 					<F N="mk/arch/x86_x32/rte.vars.mk"/>
 				</Folder>
 			</Folder>
-			<Folder
-				Name="exec-env"
-				GUID="{CB7CFDAF-F2D4-48A7-9EDF-3F181B73D0F9}">
-				<Folder
-					Name="bsdapp"
-					GUID="{8C0223EA-85B4-431A-8C9C-6131BA876987}">
+			<Folder Name="exec-env">
+				<Folder Name="bsdapp">
 					<F N="mk/exec-env/bsdapp/rte.app.mk"/>
 					<F N="mk/exec-env/bsdapp/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="linuxapp"
-					GUID="{E590E241-0AF2-483B-830D-9E2C16392FB7}">
+				<Folder Name="linuxapp">
 					<F N="mk/exec-env/linuxapp/rte.app.mk"/>
 					<F N="mk/exec-env/linuxapp/rte.vars.mk"/>
 				</Folder>
 			</Folder>
-			<Folder
-				Name="internal"
-				GUID="{A7E1D9F9-ED2F-42C8-8642-A72BCC2E576C}">
+			<Folder Name="internal">
 				<F N="mk/internal/rte.build-post.mk"/>
 				<F N="mk/internal/rte.build-pre.mk"/>
 				<F N="mk/internal/rte.clean-post.mk"/>
@@ -2712,113 +2272,69 @@
 				<F N="mk/internal/rte.install-post.mk"/>
 				<F N="mk/internal/rte.install-pre.mk"/>
 			</Folder>
-			<Folder
-				Name="machine"
-				GUID="{C6FD90A2-07B3-4114-90A8-26A7CCBB0E6A}">
-				<Folder
-					Name="armv7a"
-					GUID="{330DD85C-939A-44B6-9BF4-45013D99D8B0}">
+			<Folder Name="machine">
+				<Folder Name="armv7a">
 					<F N="mk/machine/armv7a/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="armv8a"
-					GUID="{889BF5C8-74C3-4517-812C-BF1546F9AFD0}">
+				<Folder Name="armv8a">
 					<F N="mk/machine/armv8a/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="atm"
-					GUID="{E7C93365-9DD8-45F0-A1A0-3D50B8084EC1}">
+				<Folder Name="atm">
 					<F N="mk/machine/atm/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="default"
-					GUID="{C1B98844-E16D-42AA-A7D3-4BAEFBE3968D}">
+				<Folder Name="default">
 					<F N="mk/machine/default/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="dpaa2"
-					GUID="{AC0ED6F0-E115-46F5-8FC3-018D213A8AA7}">
+				<Folder Name="dpaa2">
 					<F N="mk/machine/dpaa2/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="hsw"
-					GUID="{92D746DB-D5D2-4E9C-AA36-88C166191387}">
+				<Folder Name="hsw">
 					<F N="mk/machine/hsw/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="ivb"
-					GUID="{CDFB4BBE-705B-47AF-B3DF-1F49D1AE0D0E}">
+				<Folder Name="ivb">
 					<F N="mk/machine/ivb/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="native"
-					GUID="{BE9A53AD-C583-4F86-92DA-F531F1F12AFE}">
+				<Folder Name="native">
 					<F N="mk/machine/native/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="nhm"
-					GUID="{96F262F6-F67D-47B1-BE0B-B872C2E37BEE}">
+				<Folder Name="nhm">
 					<F N="mk/machine/nhm/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="power8"
-					GUID="{A48FE7C5-3D68-48E9-998E-AB7AE0E6C37C}">
+				<Folder Name="power8">
 					<F N="mk/machine/power8/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="snb"
-					GUID="{0F1FC503-18F3-409E-8000-5A5DB23A8B2B}">
+				<Folder Name="snb">
 					<F N="mk/machine/snb/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="thunderx"
-					GUID="{C9CC8A2E-FA96-44BD-8B39-7A1102CEA1B7}">
+				<Folder Name="thunderx">
 					<F N="mk/machine/thunderx/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="tilegx"
-					GUID="{6E5D78D9-FA3E-4022-926F-755847287BC9}">
+				<Folder Name="tilegx">
 					<F N="mk/machine/tilegx/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="wsm"
-					GUID="{C511C0E7-381B-4074-8A61-2AF6F2B7565E}">
+				<Folder Name="wsm">
 					<F N="mk/machine/wsm/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="xgene1"
-					GUID="{CFD1F47A-1B8B-4838-A885-C52F09EEF149}">
+				<Folder Name="xgene1">
 					<F N="mk/machine/xgene1/rte.vars.mk"/>
 				</Folder>
 			</Folder>
-			<Folder
-				Name="target"
-				GUID="{34056B05-A741-4047-88DE-2E48BC04F4AE}">
-				<Folder
-					Name="generic"
-					GUID="{726B890C-BADF-473E-97A0-3AF0B33C05EE}">
+			<Folder Name="target">
+				<Folder Name="generic">
 					<F N="mk/target/generic/rte.app.mk"/>
 					<F N="mk/target/generic/rte.vars.mk"/>
 				</Folder>
 			</Folder>
-			<Folder
-				Name="toolchain"
-				GUID="{483F9899-A9BC-4F98-AB15-1DA24CF04CFE}">
-				<Folder
-					Name="clang"
-					GUID="{B3010F28-81CD-453C-9F1A-7E564F6EF420}">
+			<Folder Name="toolchain">
+				<Folder Name="clang">
 					<F N="mk/toolchain/clang/rte.toolchain-compat.mk"/>
 					<F N="mk/toolchain/clang/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="gcc"
-					GUID="{50175A46-2E5A-497C-A2EF-09C8BC2DD817}">
+				<Folder Name="gcc">
 					<F N="mk/toolchain/gcc/rte.toolchain-compat.mk"/>
 					<F N="mk/toolchain/gcc/rte.vars.mk"/>
 				</Folder>
-				<Folder
-					Name="icc"
-					GUID="{D14E5D57-3EB0-4CB9-B50F-F3F9E6E4C7E9}">
+				<Folder Name="icc">
 					<F N="mk/toolchain/icc/rte.toolchain-compat.mk"/>
 					<F N="mk/toolchain/icc/rte.vars.mk"/>
 				</Folder>
@@ -2852,20 +2368,92 @@
 			<F N="mk/rte.subdir.mk"/>
 			<F N="mk/rte.vars.mk"/>
 		</Folder>
-		<Folder
-			Name="test"
-			GUID="{09EC7006-6A1C-4D47-8A89-C6DB525ABE39}">
-			<Folder
-				Name="cmdline_test"
-				GUID="{3A9AFD29-2191-4E8E-B26E-F0715591C38A}">
+		<Folder Name="../nt_dpdk">
+			<Folder Name="ntapps">
+				<Folder Name="advanced_filter">
+					<F N="../nt_dpdk/ntapps/advanced_filter/advanced_filter.c"/>
+				</Folder>
+				<Folder Name="infini">
+					<F N="../nt_dpdk/ntapps/infini/infini.c"/>
+				</Folder>
+				<Folder Name="ip_filter">
+					<F N="../nt_dpdk/ntapps/ip_filter/ip_filter.c"/>
+				</Folder>
+				<Folder Name="nt_filter_test">
+					<F N="../nt_dpdk/ntapps/nt_filter_test/nt_filter_test.c"/>
+				</Folder>
+				<Folder Name="nt_single_stream">
+					<F N="../nt_dpdk/ntapps/nt_single_stream/nt_single_stream.c"/>
+				</Folder>
+				<Folder Name="rx_simple">
+					<F N="../nt_dpdk/ntapps/rx_simple/rx_simple.c"/>
+				</Folder>
+				<Folder Name="test_dpdk">
+					<F N="../nt_dpdk/ntapps/test_dpdk/main.c"/>
+					<F
+						N="../nt_dpdk/ntapps/test_dpdk/Makefile"
+						Type="Makefile"/>
+					<F N="../nt_dpdk/ntapps/test_dpdk/test_dpdk.h"/>
+					<F N="../nt_dpdk/ntapps/test_dpdk/tx.c"/>
+				</Folder>
+				<Folder Name="throughput">
+					<F N="../nt_dpdk/ntapps/throughput/throughput.c"/>
+				</Folder>
+				<Folder Name="tx">
+					<F
+						N="../nt_dpdk/ntapps/tx/Makefile"
+						Type="Makefile"/>
+					<F N="../nt_dpdk/ntapps/tx/tx.c"/>
+					<F N="../nt_dpdk/ntapps/tx/tx_modified.c"/>
+				</Folder>
+				<Folder Name="txperf">
+					<F N="../nt_dpdk/ntapps/txperf/txperf.c"/>
+					<F N="../nt_dpdk/ntapps/txperf/txperf_modified.c"/>
+				</Folder>
+			</Folder>
+		</Folder>
+		<Folder Name="/opt">
+			<Folder Name="napatech3">
+				<Folder Name="include">
+					<Folder Name="ntapi">
+						<F N="/opt/napatech3/include/ntapi/commontypes.h"/>
+						<F N="/opt/napatech3/include/ntapi/errorcodes.h"/>
+						<F N="/opt/napatech3/include/ntapi/ntapi.h"/>
+						<F N="/opt/napatech3/include/ntapi/pktdescr.h"/>
+						<F N="/opt/napatech3/include/ntapi/pktdescr_dyn.h"/>
+						<F N="/opt/napatech3/include/ntapi/pktdescr_dyn1.h"/>
+						<F N="/opt/napatech3/include/ntapi/pktdescr_dyn2.h"/>
+						<F N="/opt/napatech3/include/ntapi/pktdescr_dyn3.h"/>
+						<F N="/opt/napatech3/include/ntapi/pktdescr_ext7.h"/>
+						<F N="/opt/napatech3/include/ntapi/pktdescr_ext8.h"/>
+						<F N="/opt/napatech3/include/ntapi/pktdescr_ext9.h"/>
+						<F N="/opt/napatech3/include/ntapi/pktdescr_std0.h"/>
+						<F N="/opt/napatech3/include/ntapi/stream_config.h"/>
+						<F N="/opt/napatech3/include/ntapi/stream_config_compat.h"/>
+						<F N="/opt/napatech3/include/ntapi/stream_event.h"/>
+						<F N="/opt/napatech3/include/ntapi/stream_info.h"/>
+						<F N="/opt/napatech3/include/ntapi/stream_info_compat.h"/>
+						<F N="/opt/napatech3/include/ntapi/stream_net.h"/>
+						<F N="/opt/napatech3/include/ntapi/stream_statistics.h"/>
+						<F N="/opt/napatech3/include/ntapi/stream_statistics_compat.h"/>
+						<F N="/opt/napatech3/include/ntapi/version.h"/>
+					</Folder>
+					<Folder Name="ntutil">
+						<F N="/opt/napatech3/include/ntutil/hashref.h"/>
+					</Folder>
+					<F N="/opt/napatech3/include/nt.h"/>
+					<F N="/opt/napatech3/include/ntutil.h"/>
+				</Folder>
+			</Folder>
+		</Folder>
+		<Folder Name="test">
+			<Folder Name="cmdline_test">
 				<F N="test/cmdline_test/cmdline_test.c"/>
 				<F N="test/cmdline_test/cmdline_test.h"/>
 				<F N="test/cmdline_test/commands.c"/>
 				<F N="test/cmdline_test/Makefile"/>
 			</Folder>
-			<Folder
-				Name="test"
-				GUID="{F3DCD540-EF77-4418-A8E5-43F6CA3DD0D9}">
+			<Folder Name="test">
 				<F N="test/test/commands.c"/>
 				<F N="test/test/Makefile"/>
 				<F N="test/test/packet_burst_generator.c"/>
@@ -2988,15 +2576,11 @@
 				<F N="test/test/virtual_pmd.c"/>
 				<F N="test/test/virtual_pmd.h"/>
 			</Folder>
-			<Folder
-				Name="test-acl"
-				GUID="{289E8BD1-ACA8-478C-BED8-F7B31BD6528E}">
+			<Folder Name="test-acl">
 				<F N="test/test-acl/main.c"/>
 				<F N="test/test-acl/Makefile"/>
 			</Folder>
-			<Folder
-				Name="test-pipeline"
-				GUID="{970AA171-C60F-4CB7-A11E-433DC2D66CA6}">
+			<Folder Name="test-pipeline">
 				<F N="test/test-pipeline/config.c"/>
 				<F N="test/test-pipeline/init.c"/>
 				<F N="test/test-pipeline/main.c"/>
@@ -3012,29 +2596,5 @@
 			<F N="test/Makefile"/>
 		</Folder>
 		<F N="Makefile"/>
-		<F N="/opt/napatech3/include/ntapi/stream_config.h"/>
-		<F N="/opt/napatech3/include/ntapi/pktdescr_ext9.h"/>
-		<F N="/opt/napatech3/include/ntapi/stream_config_compat.h"/>
-		<F N="/opt/napatech3/include/ntapi/pktdescr_dyn.h"/>
-		<F N="/opt/napatech3/include/ntapi/stream_info_compat.h"/>
-		<F N="/opt/napatech3/include/ntapi/ntapi.h"/>
-		<F N="/opt/napatech3/include/ntapi/pktdescr_ext7.h"/>
-		<F N="/opt/napatech3/include/ntapi/stream_event.h"/>
-		<F N="/opt/napatech3/include/ntapi/pktdescr_ext8.h"/>
-		<F N="/opt/napatech3/include/ntapi/stream_statistics.h"/>
-		<F N="/opt/napatech3/include/ntapi/stream_info.h"/>
-		<F N="/opt/napatech3/include/ntapi/stream_statistics_compat.h"/>
-		<F N="/opt/napatech3/include/ntapi/commontypes.h"/>
-		<F N="/opt/napatech3/include/ntapi/pktdescr_dyn3.h"/>
-		<F N="/opt/napatech3/include/ntapi/pktdescr.h"/>
-		<F N="/opt/napatech3/include/ntapi/version.h"/>
-		<F N="/opt/napatech3/include/ntapi/stream_net.h"/>
-		<F N="/opt/napatech3/include/ntapi/errorcodes.h"/>
-		<F N="/opt/napatech3/include/ntapi/pktdescr_std0.h"/>
-		<F N="/opt/napatech3/include/ntapi/pktdescr_dyn2.h"/>
-		<F N="/opt/napatech3/include/ntapi/pktdescr_dyn1.h"/>
-		<F N="/opt/napatech3/include/nt.h"/>
-		<F N="/opt/napatech3/include/ntutil/hashref.h"/>
-		<F N="/opt/napatech3/include/ntutil.h"/>
 	</Files>
 </Project>

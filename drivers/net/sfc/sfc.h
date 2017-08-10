@@ -34,6 +34,7 @@
 
 #include <stdbool.h>
 
+#include <rte_pci.h>
 #include <rte_ethdev.h>
 #include <rte_kvargs.h>
 #include <rte_spinlock.h>
@@ -45,9 +46,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#define SFC_DEV_TO_PCI(eth_dev) \
-	RTE_DEV_TO_PCI((eth_dev)->device)
 
 #if EFSYS_OPT_RX_SCALE
 /** RSS key length (bytes) */
@@ -153,6 +151,11 @@ struct sfc_port {
 	boolean_t			flow_ctrl_autoneg;
 	size_t				pdu;
 
+	/*
+	 * Flow API isolated mode overrides promisc and allmulti settings;
+	 * they won't be applied if isolated mode is active
+	 */
+	boolean_t			isolated;
 	boolean_t			promisc;
 	boolean_t			allmulti;
 
@@ -162,6 +165,7 @@ struct sfc_port {
 
 	rte_spinlock_t			mac_stats_lock;
 	uint64_t			*mac_stats_buf;
+	unsigned int			mac_stats_nb_supported;
 	efsys_mem_t			mac_stats_dma_mem;
 	boolean_t			mac_stats_reset_pending;
 	uint16_t			mac_stats_update_period_ms;
@@ -182,6 +186,8 @@ struct sfc_adapter {
 	 */
 	rte_spinlock_t			lock;
 	enum sfc_adapter_state		state;
+	struct rte_pci_addr		pci_addr;
+	uint16_t			port_id;
 	struct rte_eth_dev		*eth_dev;
 	struct rte_kvargs		*kvargs;
 	bool				debug_init;
@@ -226,7 +232,18 @@ struct sfc_adapter {
 	uint8_t				rss_key[SFC_RSS_KEY_SIZE];
 #endif
 
+	/*
+	 * Shared memory copy of the Rx datapath name to be used by
+	 * the secondary process to find Rx datapath to be used.
+	 */
+	char				*dp_rx_name;
 	const struct sfc_dp_rx		*dp_rx;
+
+	/*
+	 * Shared memory copy of the Tx datapath name to be used by
+	 * the secondary process to find Rx datapath to be used.
+	 */
+	char				*dp_tx_name;
 	const struct sfc_dp_tx		*dp_tx;
 };
 

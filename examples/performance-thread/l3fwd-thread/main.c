@@ -52,7 +52,6 @@
 #include <rte_memcpy.h>
 #include <rte_memzone.h>
 #include <rte_eal.h>
-#include <rte_per_lcore.h>
 #include <rte_launch.h>
 #include <rte_atomic.h>
 #include <rte_cycles.h>
@@ -73,6 +72,7 @@
 #include <rte_tcp.h>
 #include <rte_udp.h>
 #include <rte_string_fns.h>
+#include <rte_pause.h>
 
 #include <cmdline_parse.h>
 #include <cmdline_parse_etheraddr.h>
@@ -157,11 +157,7 @@ cb_parse_ptype(__rte_unused uint8_t port, __rte_unused uint16_t queue,
  *  When set to one, optimized forwarding path is enabled.
  *  Note that LPM optimisation path uses SSE4.1 instructions.
  */
-#if ((APP_LOOKUP_METHOD == APP_LOOKUP_LPM) && !defined(__SSE4_1__))
-#define ENABLE_MULTI_BUFFER_OPTIMIZE	0
-#else
 #define ENABLE_MULTI_BUFFER_OPTIMIZE	1
-#endif
 
 #if (APP_LOOKUP_METHOD == APP_LOOKUP_EXACT_MATCH)
 #include <rte_hash.h>
@@ -188,10 +184,10 @@ cb_parse_ptype(__rte_unused uint8_t port, __rte_unused uint16_t queue,
  */
 
 #define NB_MBUF RTE_MAX(\
-		(nb_ports*nb_rx_queue*RTE_TEST_RX_DESC_DEFAULT +       \
-		nb_ports*nb_lcores*MAX_PKT_BURST +                     \
-		nb_ports*n_tx_queue*RTE_TEST_TX_DESC_DEFAULT +         \
-		nb_lcores*MEMPOOL_CACHE_SIZE),                         \
+		(nb_ports*nb_rx_queue*nb_rxd +      \
+		nb_ports*nb_lcores*MAX_PKT_BURST +  \
+		nb_ports*n_tx_queue*nb_txd +        \
+		nb_lcores*MEMPOOL_CACHE_SIZE),      \
 		(unsigned)8192)
 
 #define MAX_PKT_BURST     32
@@ -225,7 +221,7 @@ static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
 static uint64_t dest_eth_addr[RTE_MAX_ETHPORTS];
 static struct ether_addr ports_eth_addr[RTE_MAX_ETHPORTS];
 
-static __m128i val_eth[RTE_MAX_ETHPORTS];
+static xmm_t val_eth[RTE_MAX_ETHPORTS];
 
 /* replace first 12B of the ethernet header. */
 #define	MASK_ETH 0x3f
@@ -362,13 +358,8 @@ static struct rte_mempool *pktmbuf_pool[NB_SOCKETS];
 
 #if (APP_LOOKUP_METHOD == APP_LOOKUP_EXACT_MATCH)
 
-#ifdef RTE_MACHINE_CPUFLAG_SSE4_2
 #include <rte_hash_crc.h>
 #define DEFAULT_HASH_FUNC       rte_hash_crc
-#else
-#include <rte_jhash.h>
-#define DEFAULT_HASH_FUNC       rte_jhash
-#endif
 
 struct ipv4_5tuple {
 	uint32_t ip_dst;
@@ -485,17 +476,10 @@ ipv4_hash_crc(const void *data, __rte_unused uint32_t data_len,
 	t = k->proto;
 	p = (const uint32_t *)&k->port_src;
 
-#ifdef RTE_MACHINE_CPUFLAG_SSE4_2
 	init_val = rte_hash_crc_4byte(t, init_val);
 	init_val = rte_hash_crc_4byte(k->ip_src, init_val);
 	init_val = rte_hash_crc_4byte(k->ip_dst, init_val);
 	init_val = rte_hash_crc_4byte(*p, init_val);
-#else /* RTE_MACHINE_CPUFLAG_SSE4_2 */
-	init_val = rte_jhash_1word(t, init_val);
-	init_val = rte_jhash_1word(k->ip_src, init_val);
-	init_val = rte_jhash_1word(k->ip_dst, init_val);
-	init_val = rte_jhash_1word(*p, init_val);
-#endif /* RTE_MACHINE_CPUFLAG_SSE4_2 */
 	return init_val;
 }
 
@@ -506,16 +490,13 @@ ipv6_hash_crc(const void *data, __rte_unused uint32_t data_len,
 	const union ipv6_5tuple_host *k;
 	uint32_t t;
 	const uint32_t *p;
-#ifdef RTE_MACHINE_CPUFLAG_SSE4_2
 	const uint32_t *ip_src0, *ip_src1, *ip_src2, *ip_src3;
 	const uint32_t *ip_dst0, *ip_dst1, *ip_dst2, *ip_dst3;
-#endif /* RTE_MACHINE_CPUFLAG_SSE4_2 */
 
 	k = data;
 	t = k->proto;
 	p = (const uint32_t *)&k->port_src;
 
-#ifdef RTE_MACHINE_CPUFLAG_SSE4_2
 	ip_src0 = (const uint32_t *) k->ip_src;
 	ip_src1 = (const uint32_t *)(k->ip_src + 4);
 	ip_src2 = (const uint32_t *)(k->ip_src + 8);
@@ -534,12 +515,6 @@ ipv6_hash_crc(const void *data, __rte_unused uint32_t data_len,
 	init_val = rte_hash_crc_4byte(*ip_dst2, init_val);
 	init_val = rte_hash_crc_4byte(*ip_dst3, init_val);
 	init_val = rte_hash_crc_4byte(*p, init_val);
-#else /* RTE_MACHINE_CPUFLAG_SSE4_2 */
-	init_val = rte_jhash_1word(t, init_val);
-	init_val = rte_jhash(k->ip_src, sizeof(uint8_t) * IPV6_ADDR_LEN, init_val);
-	init_val = rte_jhash(k->ip_dst, sizeof(uint8_t) * IPV6_ADDR_LEN, init_val);
-	init_val = rte_jhash_1word(*p, init_val);
-#endif /* RTE_MACHINE_CPUFLAG_SSE4_2 */
 	return init_val;
 }
 
@@ -720,7 +695,7 @@ send_single_packet(struct rte_mbuf *m, uint8_t port)
 
 #if ((APP_LOOKUP_METHOD == APP_LOOKUP_LPM) && \
 	(ENABLE_MULTI_BUFFER_OPTIMIZE == 1))
-static inline __attribute__((always_inline)) void
+static __rte_always_inline void
 send_packetsx4(uint8_t port,
 	struct rte_mbuf *m[], uint32_t num)
 {
@@ -761,12 +736,15 @@ send_packetsx4(uint8_t port,
 	case 0:
 		qconf->tx_mbufs[port].m_table[len + j] = m[j];
 		j++;
+		/* fall-through */
 	case 3:
 		qconf->tx_mbufs[port].m_table[len + j] = m[j];
 		j++;
+		/* fall-through */
 	case 2:
 		qconf->tx_mbufs[port].m_table[len + j] = m[j];
 		j++;
+		/* fall-through */
 	case 1:
 		qconf->tx_mbufs[port].m_table[len + j] = m[j];
 		j++;
@@ -788,12 +766,15 @@ send_packetsx4(uint8_t port,
 		case 0:
 			qconf->tx_mbufs[port].m_table[j] = m[n + j];
 			j++;
+			/* fall-through */
 		case 3:
 			qconf->tx_mbufs[port].m_table[j] = m[n + j];
 			j++;
+			/* fall-through */
 		case 2:
 			qconf->tx_mbufs[port].m_table[j] = m[n + j];
 			j++;
+			/* fall-through */
 		case 1:
 			qconf->tx_mbufs[port].m_table[j] = m[n + j];
 			j++;
@@ -1281,7 +1262,7 @@ simple_ipv6_fwd_8pkts(struct rte_mbuf *m[8], uint8_t portid)
 }
 #endif /* APP_LOOKUP_METHOD */
 
-static inline __attribute__((always_inline)) void
+static __rte_always_inline void
 l3fwd_simple_forward(struct rte_mbuf *m, uint8_t portid)
 {
 	struct ether_hdr *eth_hdr;
@@ -1369,7 +1350,7 @@ l3fwd_simple_forward(struct rte_mbuf *m, uint8_t portid)
  * If we encounter invalid IPV4 packet, then set destination port for it
  * to BAD_PORT value.
  */
-static inline __attribute__((always_inline)) void
+static __rte_always_inline void
 rfc1812_process(struct ipv4_hdr *ipv4_hdr, uint16_t *dp, uint32_t ptype)
 {
 	uint8_t ihl;
@@ -1397,7 +1378,7 @@ rfc1812_process(struct ipv4_hdr *ipv4_hdr, uint16_t *dp, uint32_t ptype)
 #if ((APP_LOOKUP_METHOD == APP_LOOKUP_LPM) && \
 	(ENABLE_MULTI_BUFFER_OPTIMIZE == 1))
 
-static inline __attribute__((always_inline)) uint16_t
+static __rte_always_inline uint16_t
 get_dst_port(struct rte_mbuf *pkt, uint32_t dst_ipv4, uint8_t portid)
 {
 	uint32_t next_hop;
@@ -1598,7 +1579,7 @@ processx4_step3(struct rte_mbuf *pkt[FWDSTEP], uint16_t dst_port[FWDSTEP])
  * Suppose we have array of destionation ports:
  * dst_port[] = {a, b, c, d,, e, ... }
  * dp1 should contain: <a, b, c, d>, dp2: <b, c, d, e>.
- * We doing 4 comparisions at once and the result is 4 bit mask.
+ * We doing 4 comparisons at once and the result is 4 bit mask.
  * This mask is used as an index into prebuild array of pnum values.
  */
 static inline uint16_t *
@@ -1860,10 +1841,12 @@ process_burst(struct rte_mbuf *pkts_burst[MAX_PKT_BURST], int nb_rx,
 		process_packet(pkts_burst[j], dst_port + j, portid);
 		GROUP_PORT_STEP(dlp, dst_port, lp, pnum, j);
 		j++;
+		/* fall-through */
 	case 2:
 		process_packet(pkts_burst[j], dst_port + j, portid);
 		GROUP_PORT_STEP(dlp, dst_port, lp, pnum, j);
 		j++;
+		/* fall-through */
 	case 1:
 		process_packet(pkts_burst[j], dst_port + j, portid);
 		GROUP_PORT_STEP(dlp, dst_port, lp, pnum, j);
@@ -3586,6 +3569,13 @@ main(int argc, char **argv)
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%d\n",
 				ret, portid);
+
+		ret = rte_eth_dev_adjust_nb_rx_tx_desc(portid, &nb_rxd,
+						       &nb_txd);
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE,
+				 "rte_eth_dev_adjust_nb_rx_tx_desc: err=%d, port=%d\n",
+				 ret, portid);
 
 		rte_eth_macaddr_get(portid, &ports_eth_addr[portid]);
 		print_ethaddr(" Address:", &ports_eth_addr[portid]);

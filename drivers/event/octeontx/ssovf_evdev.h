@@ -1,7 +1,7 @@
 /*
  *   BSD LICENSE
  *
- *   Copyright (C) Cavium networks Ltd. 2017.
+ *   Copyright (C) Cavium, Inc. 2017.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -13,7 +13,7 @@
  *       notice, this list of conditions and the following disclaimer in
  *       the documentation and/or other materials provided with the
  *       distribution.
- *     * Neither the name of Cavium networks nor the names of its
+ *     * Neither the name of Cavium, Inc nor the names of its
  *       contributors may be used to endorse or promote products derived
  *       from this software without specific prior written permission.
  *
@@ -34,7 +34,7 @@
 #define __SSOVF_EVDEV_H__
 
 #include <rte_config.h>
-#include <rte_eventdev_pmd.h>
+#include <rte_eventdev_pmd_vdev.h>
 #include <rte_io.h>
 
 #include "rte_pmd_octeontx_ssovf.h"
@@ -189,6 +189,10 @@ ssovf_pmd_priv(const struct rte_eventdev *eventdev)
 
 uint16_t ssows_enq(void *port, const struct rte_event *ev);
 uint16_t ssows_enq_burst(void *port,
+		const struct rte_event ev[], uint16_t nb_events);
+uint16_t ssows_enq_new_burst(void *port,
+		const struct rte_event ev[], uint16_t nb_events);
+uint16_t ssows_enq_fwd_burst(void *port,
 		const struct rte_event ev[], uint16_t nb_events);
 uint16_t ssows_deq(void *port, struct rte_event *ev, uint64_t timeout_ticks);
 uint16_t ssows_deq_burst(void *port, struct rte_event ev[],

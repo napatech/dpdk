@@ -5,7 +5,7 @@
  *   BSD LICENSE
  *
  * Copyright 2013-2016 Freescale Semiconductor Inc.
- * Copyright (c) 2016 NXP.
+ * Copyright 2016 NXP.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -444,6 +444,24 @@ int dpni_get_qdid(struct fsl_mc_io *mc_io,
 
 	return 0;
 }
+
+int dpni_set_link_cfg(struct fsl_mc_io *mc_io,
+		      uint32_t cmd_flags,
+		      uint16_t token,
+		      const struct dpni_link_cfg *cfg)
+{
+	struct mc_command cmd = { 0 };
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_SET_LINK_CFG,
+					  cmd_flags,
+					  token);
+	DPNI_CMD_SET_LINK_CFG(cmd, cfg);
+
+	/* send command to mc*/
+	return mc_send_command(mc_io, &cmd);
+}
+
 int dpni_get_link_state(struct fsl_mc_io *mc_io,
 			uint32_t cmd_flags,
 			uint16_t token,
@@ -505,6 +523,47 @@ int dpni_get_max_frame_length(struct fsl_mc_io *mc_io,
 
 	/* retrieve response parameters */
 	DPNI_RSP_GET_MAX_FRAME_LENGTH(cmd, *max_frame_length);
+
+	return 0;
+}
+
+int dpni_set_multicast_promisc(struct fsl_mc_io *mc_io,
+			       uint32_t cmd_flags,
+			       uint16_t token,
+			       int en)
+{
+	struct mc_command cmd = { 0 };
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_SET_MCAST_PROMISC,
+					  cmd_flags,
+					  token);
+	DPNI_CMD_SET_MULTICAST_PROMISC(cmd, en);
+
+	/* send command to mc*/
+	return mc_send_command(mc_io, &cmd);
+}
+
+int dpni_get_multicast_promisc(struct fsl_mc_io *mc_io,
+			       uint32_t cmd_flags,
+			       uint16_t token,
+			       int *en)
+{
+	struct mc_command cmd = { 0 };
+	int err;
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_GET_MCAST_PROMISC,
+					  cmd_flags,
+					  token);
+
+	/* send command to mc*/
+	err = mc_send_command(mc_io, &cmd);
+	if (err)
+		return err;
+
+	/* retrieve response parameters */
+	DPNI_RSP_GET_MULTICAST_PROMISC(cmd, *en);
 
 	return 0;
 }
@@ -591,6 +650,148 @@ int dpni_get_primary_mac_addr(struct fsl_mc_io *mc_io,
 	return 0;
 }
 
+int dpni_add_mac_addr(struct fsl_mc_io *mc_io,
+		      uint32_t cmd_flags,
+		      uint16_t token,
+		      const uint8_t mac_addr[6])
+{
+	struct mc_command cmd = { 0 };
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_ADD_MAC_ADDR,
+					  cmd_flags,
+					  token);
+	DPNI_CMD_ADD_MAC_ADDR(cmd, mac_addr);
+
+	/* send command to mc*/
+	return mc_send_command(mc_io, &cmd);
+}
+
+int dpni_remove_mac_addr(struct fsl_mc_io *mc_io,
+			 uint32_t cmd_flags,
+			 uint16_t token,
+			 const uint8_t mac_addr[6])
+{
+	struct mc_command cmd = { 0 };
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_REMOVE_MAC_ADDR,
+					  cmd_flags,
+					  token);
+	DPNI_CMD_REMOVE_MAC_ADDR(cmd, mac_addr);
+
+	/* send command to mc*/
+	return mc_send_command(mc_io, &cmd);
+}
+
+int dpni_clear_mac_filters(struct fsl_mc_io *mc_io,
+			   uint32_t cmd_flags,
+			   uint16_t token,
+			   int unicast,
+			   int multicast)
+{
+	struct mc_command cmd = { 0 };
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_CLR_MAC_FILTERS,
+					  cmd_flags,
+					  token);
+	DPNI_CMD_CLEAR_MAC_FILTERS(cmd, unicast, multicast);
+
+	/* send command to mc*/
+	return mc_send_command(mc_io, &cmd);
+}
+
+int dpni_get_port_mac_addr(struct fsl_mc_io *mc_io,
+			   uint32_t cmd_flags,
+			   uint16_t token,
+			   uint8_t mac_addr[6])
+{
+	struct mc_command cmd = { 0 };
+	int err;
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_GET_PORT_MAC_ADDR,
+					  cmd_flags,
+					  token);
+
+	/* send command to mc*/
+	err = mc_send_command(mc_io, &cmd);
+	if (err)
+		return err;
+
+	/* retrieve response parameters */
+	DPNI_RSP_GET_PORT_MAC_ADDR(cmd, mac_addr);
+
+	return 0;
+}
+
+int dpni_enable_vlan_filter(struct fsl_mc_io *mc_io,
+			    uint32_t cmd_flags,
+			  uint16_t token,
+			  int en)
+{
+	struct mc_command cmd = { 0 };
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_ENABLE_VLAN_FILTER,
+					  cmd_flags,
+					  token);
+	DPNI_CMD_ENABLE_VLAN_FILTER(cmd, en);
+
+	/* send command to mc*/
+	return mc_send_command(mc_io, &cmd);
+}
+
+int dpni_add_vlan_id(struct fsl_mc_io *mc_io,
+		     uint32_t cmd_flags,
+		     uint16_t token,
+		     uint16_t vlan_id)
+{
+	struct mc_command cmd = { 0 };
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_ADD_VLAN_ID,
+					  cmd_flags,
+					  token);
+	DPNI_CMD_ADD_VLAN_ID(cmd, vlan_id);
+
+	/* send command to mc*/
+	return mc_send_command(mc_io, &cmd);
+}
+
+int dpni_remove_vlan_id(struct fsl_mc_io *mc_io,
+			uint32_t cmd_flags,
+			uint16_t token,
+			uint16_t vlan_id)
+{
+	struct mc_command cmd = { 0 };
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_REMOVE_VLAN_ID,
+					  cmd_flags,
+					  token);
+	DPNI_CMD_REMOVE_VLAN_ID(cmd, vlan_id);
+
+	/* send command to mc*/
+	return mc_send_command(mc_io, &cmd);
+}
+
+int dpni_clear_vlan_filters(struct fsl_mc_io *mc_io,
+			    uint32_t cmd_flags,
+			    uint16_t token)
+{
+	struct mc_command cmd = { 0 };
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_CLR_VLAN_FILTERS,
+					  cmd_flags,
+					  token);
+
+	/* send command to mc*/
+	return mc_send_command(mc_io, &cmd);
+}
+
 int dpni_set_rx_tc_dist(struct fsl_mc_io *mc_io,
 			uint32_t cmd_flags,
 			uint16_t token,
@@ -624,6 +825,54 @@ int dpni_set_tx_confirmation_mode(struct fsl_mc_io	*mc_io,
 
 	/* send command to mc*/
 	return mc_send_command(mc_io, &cmd);
+}
+
+int dpni_set_congestion_notification(
+			struct fsl_mc_io	*mc_io,
+			uint32_t		cmd_flags,
+			uint16_t		token,
+			enum dpni_queue_type qtype,
+			uint8_t		tc_id,
+			const struct dpni_congestion_notification_cfg *cfg)
+{
+	struct mc_command cmd = { 0 };
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(
+			DPNI_CMDID_SET_CONGESTION_NOTIFICATION,
+			cmd_flags,
+			token);
+	DPNI_CMD_SET_CONGESTION_NOTIFICATION(cmd, qtype, tc_id, cfg);
+
+	/* send command to mc*/
+	return mc_send_command(mc_io, &cmd);
+}
+
+int dpni_get_congestion_notification(struct fsl_mc_io	*mc_io,
+				     uint32_t		cmd_flags,
+					   uint16_t		token,
+				     enum dpni_queue_type qtype,
+					   uint8_t		tc_id,
+				struct dpni_congestion_notification_cfg *cfg)
+{
+	struct mc_command cmd = { 0 };
+	int err;
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(
+			DPNI_CMDID_GET_CONGESTION_NOTIFICATION,
+			cmd_flags,
+			token);
+	DPNI_CMD_GET_CONGESTION_NOTIFICATION(cmd, qtype, tc_id);
+
+	/* send command to mc*/
+	err = mc_send_command(mc_io, &cmd);
+	if (err)
+		return err;
+
+	DPNI_RSP_GET_CONGESTION_NOTIFICATION(cmd, cfg);
+
+	return 0;
 }
 
 int dpni_get_api_version(struct fsl_mc_io *mc_io,
@@ -736,4 +985,54 @@ int dpni_reset_statistics(struct fsl_mc_io *mc_io,
 
 	/* send command to mc*/
 	return mc_send_command(mc_io, &cmd);
+}
+
+int dpni_set_taildrop(struct fsl_mc_io *mc_io,
+		      uint32_t cmd_flags,
+		      uint16_t token,
+		      enum dpni_congestion_point cg_point,
+		      enum dpni_queue_type q_type,
+		      uint8_t tc,
+		      uint8_t q_index,
+		      struct dpni_taildrop *taildrop)
+{
+	struct mc_command cmd = { 0 };
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_SET_TAILDROP,
+					  cmd_flags,
+					  token);
+	DPNI_CMD_SET_TAILDROP(cmd, cg_point, q_type, tc, q_index, taildrop);
+
+	/* send command to mc*/
+	return mc_send_command(mc_io, &cmd);
+}
+
+int dpni_get_taildrop(struct fsl_mc_io *mc_io,
+		      uint32_t cmd_flags,
+		     uint16_t token,
+			 enum dpni_congestion_point cg_point,
+			 enum dpni_queue_type q_type,
+			 uint8_t tc,
+			 uint8_t q_index,
+			 struct dpni_taildrop *taildrop)
+{
+	struct mc_command cmd = { 0 };
+	int err;
+
+	/* prepare command */
+	cmd.header = mc_encode_cmd_header(DPNI_CMDID_GET_TAILDROP,
+					  cmd_flags,
+					  token);
+	DPNI_CMD_GET_TAILDROP(cmd, cg_point, q_type, tc, q_index);
+
+	/* send command to mc*/
+	err = mc_send_command(mc_io, &cmd);
+	if (err)
+		return err;
+
+	/* retrieve response parameters */
+	DPNI_RSP_GET_TAILDROP(cmd, taildrop);
+
+	return 0;
 }

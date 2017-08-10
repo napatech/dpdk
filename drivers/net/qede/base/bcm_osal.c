@@ -16,6 +16,10 @@
 #include "ecore_mcp_api.h"
 #include "ecore_l2_api.h"
 
+/* Array of memzone pointers */
+static const struct rte_memzone *ecore_mz_mapping[RTE_MAX_MEMZONE];
+/* Counter to track current memzone allocated */
+uint16_t ecore_mz_count;
 
 unsigned long qede_log2_align(unsigned long n)
 {
@@ -118,6 +122,13 @@ void *osal_dma_alloc_coherent(struct ecore_dev *p_dev,
 	uint32_t core_id = rte_lcore_id();
 	unsigned int socket_id;
 
+	if (ecore_mz_count >= RTE_MAX_MEMZONE) {
+		DP_ERR(p_dev, "Memzone allocation count exceeds %u\n",
+		       RTE_MAX_MEMZONE);
+		*phys = 0;
+		return OSAL_NULL;
+	}
+
 	OSAL_MEM_ZERO(mz_name, sizeof(*mz_name));
 	snprintf(mz_name, sizeof(mz_name) - 1, "%lx",
 					(unsigned long)rte_get_timer_cycles());
@@ -134,9 +145,11 @@ void *osal_dma_alloc_coherent(struct ecore_dev *p_dev,
 		return OSAL_NULL;
 	}
 	*phys = mz->phys_addr;
-	DP_VERBOSE(p_dev, ECORE_MSG_PROBE,
-		   "size=%zu phys=0x%" PRIx64 " virt=%p on socket=%u\n",
-		   mz->len, mz->phys_addr, mz->addr, socket_id);
+	ecore_mz_mapping[ecore_mz_count++] = mz;
+	DP_VERBOSE(p_dev, ECORE_MSG_SP,
+		   "Allocated dma memory size=%zu phys=0x%lx"
+		   " virt=%p core=%d\n",
+		   mz->len, (unsigned long)mz->phys_addr, mz->addr, core_id);
 	return mz->addr;
 }
 
@@ -147,6 +160,13 @@ void *osal_dma_alloc_coherent_aligned(struct ecore_dev *p_dev,
 	char mz_name[RTE_MEMZONE_NAMESIZE];
 	uint32_t core_id = rte_lcore_id();
 	unsigned int socket_id;
+
+	if (ecore_mz_count >= RTE_MAX_MEMZONE) {
+		DP_ERR(p_dev, "Memzone allocation count exceeds %u\n",
+		       RTE_MAX_MEMZONE);
+		*phys = 0;
+		return OSAL_NULL;
+	}
 
 	OSAL_MEM_ZERO(mz_name, sizeof(*mz_name));
 	snprintf(mz_name, sizeof(mz_name) - 1, "%lx",
@@ -163,10 +183,28 @@ void *osal_dma_alloc_coherent_aligned(struct ecore_dev *p_dev,
 		return OSAL_NULL;
 	}
 	*phys = mz->phys_addr;
-	DP_VERBOSE(p_dev, ECORE_MSG_PROBE,
-		   "aligned memory size=%zu phys=0x%" PRIx64 " virt=%p core=%d\n",
-		   mz->len, mz->phys_addr, mz->addr, core_id);
+	ecore_mz_mapping[ecore_mz_count++] = mz;
+	DP_VERBOSE(p_dev, ECORE_MSG_SP,
+		   "Allocated aligned dma memory size=%zu phys=0x%lx"
+		   " virt=%p core=%d\n",
+		   mz->len, (unsigned long)mz->phys_addr, mz->addr, core_id);
 	return mz->addr;
+}
+
+void osal_dma_free_mem(struct ecore_dev *p_dev, dma_addr_t phys)
+{
+	uint16_t j;
+
+	for (j = 0 ; j < ecore_mz_count; j++) {
+		if (phys == ecore_mz_mapping[j]->phys_addr) {
+			DP_VERBOSE(p_dev, ECORE_MSG_SP,
+				"Free memzone %s\n", ecore_mz_mapping[j]->name);
+			rte_memzone_free(ecore_mz_mapping[j]);
+			return;
+		}
+	}
+
+	DP_ERR(p_dev, "Unexpected memory free request\n");
 }
 
 #ifdef CONFIG_ECORE_ZIPPED_FW
@@ -211,11 +249,46 @@ qede_get_mcp_proto_stats(struct ecore_dev *edev,
 
 	if (type == ECORE_MCP_LAN_STATS) {
 		ecore_get_vport_stats(edev, &lan_stats);
-		stats->lan_stats.ucast_rx_pkts = lan_stats.rx_ucast_pkts;
-		stats->lan_stats.ucast_tx_pkts = lan_stats.tx_ucast_pkts;
+
+		/* @DPDK */
+		stats->lan_stats.ucast_rx_pkts = lan_stats.common.rx_ucast_pkts;
+		stats->lan_stats.ucast_tx_pkts = lan_stats.common.tx_ucast_pkts;
+
 		stats->lan_stats.fcs_err = -1;
 	} else {
 		DP_INFO(edev, "Statistics request type %d not supported\n",
 		       type);
 	}
+}
+
+void
+qede_hw_err_notify(struct ecore_hwfn *p_hwfn, enum ecore_hw_err_type err_type)
+{
+	char err_str[64];
+
+	switch (err_type) {
+	case ECORE_HW_ERR_FAN_FAIL:
+		strcpy(err_str, "Fan Failure");
+		break;
+	case ECORE_HW_ERR_MFW_RESP_FAIL:
+		strcpy(err_str, "MFW Response Failure");
+		break;
+	case ECORE_HW_ERR_HW_ATTN:
+		strcpy(err_str, "HW Attention");
+		break;
+	case ECORE_HW_ERR_DMAE_FAIL:
+		strcpy(err_str, "DMAE Failure");
+		break;
+	case ECORE_HW_ERR_RAMROD_FAIL:
+		strcpy(err_str, "Ramrod Failure");
+		break;
+	case ECORE_HW_ERR_FW_ASSERT:
+		strcpy(err_str, "FW Assertion");
+		break;
+	default:
+		strcpy(err_str, "Unknown");
+	}
+
+	DP_ERR(p_hwfn, "HW error occurred [%s]\n", err_str);
+	ecore_int_attn_clr_enable(p_hwfn->p_dev, true);
 }

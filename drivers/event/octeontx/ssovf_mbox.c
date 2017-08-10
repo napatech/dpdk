@@ -1,7 +1,7 @@
 /*
  *   BSD LICENSE
  *
- *   Copyright (C) Cavium networks Ltd. 2017.
+ *   Copyright (C) Cavium, Inc. 2017.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -13,7 +13,7 @@
  *       notice, this list of conditions and the following disclaimer in
  *       the documentation and/or other materials provided with the
  *       distribution.
- *     * Neither the name of Cavium networks nor the names of its
+ *     * Neither the name of Cavium, Inc nor the names of its
  *       contributors may be used to endorse or promote products derived
  *       from this software without specific prior written permission.
  *
@@ -172,7 +172,7 @@ mbox_wait_response(struct mbox *m, struct octeontx_mbox_hdr *hdr,
 
 error:
 	ssovf_log_err("Failed to send mbox(%d/%d) coproc=%d msg=%d ret=(%d,%d)",
-			m->tag_own, rx_hdr.tag, hdr->msg, hdr->coproc, res,
+			m->tag_own, rx_hdr.tag, hdr->coproc, hdr->msg, res,
 			hdr->res_code);
 	return res;
 }

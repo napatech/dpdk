@@ -168,7 +168,7 @@ mbuf_to_slot(struct rte_mbuf *mbuf, struct netmap_ring *r, uint32_t index)
 /**
  * Given a Netmap ring and a slot index for that ring, construct a dpdk mbuf
  * from the data held in the buffer associated with the slot.
- * Allocation/deallocation of the dpdk mbuf are the responsability of the
+ * Allocation/deallocation of the dpdk mbuf are the responsibility of the
  * caller.
  * Note that mbuf chains are not supported.
  */
@@ -717,6 +717,15 @@ rte_netmap_init_port(uint8_t portid, const struct rte_netmap_port_conf *conf)
 	if (ret < 0) {
 	    RTE_LOG(ERR, USER1, "Couldn't configure port %hhu\n", portid);
 	    return ret;
+	}
+
+	ret = rte_eth_dev_adjust_nb_rx_tx_desc(portid, &rx_slots, &tx_slots);
+
+	if (ret < 0) {
+		RTE_LOG(ERR, USER1,
+			"Couldn't ot adjust number of descriptors for port %hhu\n",
+			portid);
+		return ret;
 	}
 
 	for (i = 0; i < conf->nr_tx_rings; i++) {

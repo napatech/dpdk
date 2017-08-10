@@ -201,13 +201,22 @@ struct virtio_net {
 
 #define VHOST_LOG_PAGE	4096
 
-static inline void __attribute__((always_inline))
-vhost_log_page(uint8_t *log_base, uint64_t page)
+/*
+ * Atomically set a bit in memory.
+ */
+static __rte_always_inline void
+vhost_set_bit(unsigned int nr, volatile uint8_t *addr)
 {
-	log_base[page / 8] |= 1 << (page % 8);
+	__sync_fetch_and_or_8(addr, (1U << nr));
 }
 
-static inline void __attribute__((always_inline))
+static __rte_always_inline void
+vhost_log_page(uint8_t *log_base, uint64_t page)
+{
+	vhost_set_bit(page % 8, &log_base[page / 8]);
+}
+
+static __rte_always_inline void
 vhost_log_write(struct virtio_net *dev, uint64_t addr, uint64_t len)
 {
 	uint64_t page;
@@ -229,7 +238,7 @@ vhost_log_write(struct virtio_net *dev, uint64_t addr, uint64_t len)
 	}
 }
 
-static inline void __attribute__((always_inline))
+static __rte_always_inline void
 vhost_log_used_vring(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		     uint64_t offset, uint64_t len)
 {
@@ -272,7 +281,7 @@ extern uint64_t VHOST_FEATURES;
 extern struct virtio_net *vhost_devices[MAX_VHOST_DEVICE];
 
 /* Convert guest physical address to host physical address */
-static inline phys_addr_t __attribute__((always_inline))
+static __rte_always_inline phys_addr_t
 gpa_to_hpa(struct virtio_net *dev, uint64_t gpa, uint64_t size)
 {
 	uint32_t i;

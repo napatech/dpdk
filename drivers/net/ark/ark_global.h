@@ -64,7 +64,7 @@
 #define ARK_RCPACING_BASE 0xb0000
 #define ARK_EXTERNAL_BASE 0x100000
 #define ARK_MPU_QOFFSET   0x00100
-#define ARK_MAX_PORTS     8
+#define ARK_MAX_PORTS     RTE_MAX_ETHPORTS
 
 #define offset8(n)     n
 #define offset16(n)   ((n) / 2)
@@ -106,11 +106,12 @@ struct ark_user_ext {
 						 void *);
 	void (*mac_addr_remove)(struct rte_eth_dev *, uint32_t, void *);
 	void (*mac_addr_set)(struct rte_eth_dev *, struct ether_addr *, void *);
+	int (*set_mtu)(struct rte_eth_dev *, uint16_t, void *);
 };
 
 struct ark_adapter {
 	/* User extension private data */
-	void *user_data;
+	void *user_data[ARK_MAX_PORTS];
 
 	/* Pointers to packet generator and checker */
 	int start_pg;

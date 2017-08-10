@@ -1,6 +1,6 @@
 /*
  *
- *   Copyright(c) 2016 Cavium networks. All rights reserved.
+ *   Copyright(c) 2016 Cavium, Inc. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -12,7 +12,7 @@
  *       notice, this list of conditions and the following disclaimer in
  *       the documentation and/or other materials provided with the
  *       distribution.
- *     * Neither the name of Cavium networks nor the names of its
+ *     * Neither the name of Cavium, Inc nor the names of its
  *       contributors may be used to endorse or promote products derived
  *       from this software without specific prior written permission.
  *
@@ -46,11 +46,10 @@ extern "C" {
 
 #include <string.h>
 
-#include <rte_dev.h>
-#include <rte_pci.h>
-#include <rte_malloc.h>
-#include <rte_log.h>
 #include <rte_common.h>
+#include <rte_dev.h>
+#include <rte_log.h>
+#include <rte_malloc.h>
 
 #include "rte_eventdev.h"
 
@@ -86,60 +85,6 @@ extern "C" {
 
 #define RTE_EVENTDEV_DETACHED  (0)
 #define RTE_EVENTDEV_ATTACHED  (1)
-
-/**
- * Initialisation function of a event driver invoked for each matching
- * event PCI device detected during the PCI probing phase.
- *
- * @param dev
- *   The dev pointer is the address of the *rte_eventdev* structure associated
- *   with the matching device and which has been [automatically] allocated in
- *   the *rte_event_devices* array.
- *
- * @return
- *   - 0: Success, the device is properly initialised by the driver.
- *        In particular, the driver MUST have set up the *dev_ops* pointer
- *        of the *dev* structure.
- *   - <0: Error code of the device initialisation failure.
- */
-typedef int (*eventdev_init_t)(struct rte_eventdev *dev);
-
-/**
- * Finalisation function of a driver invoked for each matching
- * PCI device detected during the PCI closing phase.
- *
- * @param dev
- *   The dev pointer is the address of the *rte_eventdev* structure associated
- *   with the matching device and which	has been [automatically] allocated in
- *   the *rte_event_devices* array.
- *
- * @return
- *   - 0: Success, the device is properly finalised by the driver.
- *        In particular, the driver MUST free the *dev_ops* pointer
- *        of the *dev* structure.
- *   - <0: Error code of the device initialisation failure.
- */
-typedef int (*eventdev_uninit_t)(struct rte_eventdev *dev);
-
-/**
- * The structure associated with a PMD driver.
- *
- * Each driver acts as a PCI driver and is represented by a generic
- * *event_driver* structure that holds:
- *
- * - An *rte_pci_driver* structure (which must be the first field).
- *
- * - The *eventdev_init* function invoked for each matching PCI device.
- *
- * - The size of the private data to allocate for each matching device.
- */
-struct rte_eventdev_driver {
-	struct rte_pci_driver pci_drv;	/**< The PMD is also a PCI driver. */
-	unsigned int dev_private_size;	/**< Size of device private data. */
-
-	eventdev_init_t eventdev_init;	/**< Device init function. */
-	eventdev_uninit_t eventdev_uninit; /**< Device uninit function. */
-};
 
 /** Global structure used for maintaining state of allocated event devices */
 struct rte_eventdev_global {
@@ -549,48 +494,6 @@ rte_event_pmd_allocate(const char *name, int socket_id);
  */
 int
 rte_event_pmd_release(struct rte_eventdev *eventdev);
-
-/**
- * Creates a new virtual event device and returns the pointer to that device.
- *
- * @param name
- *   PMD type name
- * @param dev_private_size
- *   Size of event PMDs private data
- * @param socket_id
- *   Socket to allocate resources on.
- *
- * @return
- *   - Eventdev pointer if device is successfully created.
- *   - NULL if device cannot be created.
- */
-struct rte_eventdev *
-rte_event_pmd_vdev_init(const char *name, size_t dev_private_size,
-		int socket_id);
-
-/**
- * Destroy the given virtual event device
- *
- * @param name
- *   PMD type name
- * @return
- *   - 0 on success, negative on error
- */
-int
-rte_event_pmd_vdev_uninit(const char *name);
-
-/**
- * Wrapper for use by pci drivers as a .probe function to attach to a event
- * interface.
- */
-int rte_event_pmd_pci_probe(struct rte_pci_driver *pci_drv,
-			    struct rte_pci_device *pci_dev);
-
-/**
- * Wrapper for use by pci drivers as a .remove function to detach a event
- * interface.
- */
-int rte_event_pmd_pci_remove(struct rte_pci_device *pci_dev);
 
 #ifdef __cplusplus
 }

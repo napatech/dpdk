@@ -19,7 +19,7 @@
 char fw_file[PATH_MAX];
 
 const char *QEDE_DEFAULT_FIRMWARE =
-	"/lib/firmware/qed/qed_init_values-8.18.9.0.bin";
+	"/lib/firmware/qed/qed_init_values-8.20.0.0.bin";
 
 static void
 qed_update_pf_params(struct ecore_dev *edev, struct ecore_pf_params *params)
@@ -40,16 +40,14 @@ static void qed_init_pci(struct ecore_dev *edev, struct rte_pci_device *pci_dev)
 
 static int
 qed_probe(struct ecore_dev *edev, struct rte_pci_device *pci_dev,
-	  enum qed_protocol protocol, uint32_t dp_module,
-	  uint8_t dp_level, bool is_vf)
+	  uint32_t dp_module, uint8_t dp_level, bool is_vf)
 {
 	struct ecore_hw_prepare_params hw_prepare_params;
-	struct qede_dev *qdev = (struct qede_dev *)edev;
 	int rc;
 
 	ecore_init_struct(edev);
 	edev->drv_type = DRV_ID_DRV_TYPE_LINUX;
-	qdev->protocol = protocol;
+	/* Protocol type is always fixed to PROTOCOL_ETH */
 
 	if (is_vf)
 		edev->b_is_vf = true;
@@ -62,6 +60,7 @@ qed_probe(struct ecore_dev *edev, struct rte_pci_device *pci_dev,
 	hw_prepare_params.drv_resc_alloc = false;
 	hw_prepare_params.chk_reg_fifo = false;
 	hw_prepare_params.initiate_pf_flr = true;
+	hw_prepare_params.allow_mdump = false;
 	hw_prepare_params.epoch = (u32)time(NULL);
 	rc = ecore_hw_prepare(edev, &hw_prepare_params);
 	if (rc) {
@@ -132,12 +131,12 @@ static int qed_load_firmware_data(struct ecore_dev *edev)
 
 	fd = open(fw_file, O_RDONLY);
 	if (fd < 0) {
-		DP_NOTICE(edev, false, "Can't open firmware file\n");
+		DP_ERR(edev, "Can't open firmware file\n");
 		return -ENOENT;
 	}
 
 	if (fstat(fd, &st) < 0) {
-		DP_NOTICE(edev, false, "Can't stat firmware file\n");
+		DP_ERR(edev, "Can't stat firmware file\n");
 		close(fd);
 		return -1;
 	}
@@ -145,20 +144,20 @@ static int qed_load_firmware_data(struct ecore_dev *edev)
 	edev->firmware = rte_zmalloc("qede_fw", st.st_size,
 				    RTE_CACHE_LINE_SIZE);
 	if (!edev->firmware) {
-		DP_NOTICE(edev, false, "Can't allocate memory for firmware\n");
+		DP_ERR(edev, "Can't allocate memory for firmware\n");
 		close(fd);
 		return -ENOMEM;
 	}
 
 	if (read(fd, edev->firmware, st.st_size) != st.st_size) {
-		DP_NOTICE(edev, false, "Can't read firmware data\n");
+		DP_ERR(edev, "Can't read firmware data\n");
 		close(fd);
 		return -1;
 	}
 
 	edev->fw_len = st.st_size;
 	if (edev->fw_len < 104) {
-		DP_NOTICE(edev, false, "Invalid fw size: %" PRIu64 "\n",
+		DP_ERR(edev, "Invalid fw size: %" PRIu64 "\n",
 			  edev->fw_len);
 		close(fd);
 		return -EINVAL;
@@ -262,8 +261,7 @@ static int qed_slowpath_start(struct ecore_dev *edev,
 		/* Allocate stream for unzipping */
 		rc = qed_alloc_stream_mem(edev);
 		if (rc) {
-			DP_NOTICE(edev, true,
-			"Failed to allocate stream memory\n");
+			DP_ERR(edev, "Failed to allocate stream memory\n");
 			goto err1;
 		}
 	}
@@ -303,8 +301,7 @@ static int qed_slowpath_start(struct ecore_dev *edev,
 		rc = ecore_mcp_send_drv_version(hwfn, hwfn->p_main_ptt,
 						&drv_version);
 		if (rc) {
-			DP_NOTICE(edev, true,
-				  "Failed sending drv version command\n");
+			DP_ERR(edev, "Failed sending drv version command\n");
 			goto err3;
 		}
 	}
@@ -460,22 +457,13 @@ static void qed_set_name(struct ecore_dev *edev, char name[NAME_SIZE])
 
 static uint32_t
 qed_sb_init(struct ecore_dev *edev, struct ecore_sb_info *sb_info,
-	    void *sb_virt_addr, dma_addr_t sb_phy_addr,
-	    uint16_t sb_id, enum qed_sb_type type)
+	    void *sb_virt_addr, dma_addr_t sb_phy_addr, uint16_t sb_id)
 {
 	struct ecore_hwfn *p_hwfn;
 	int hwfn_index;
 	uint16_t rel_sb_id;
-	uint8_t n_hwfns;
+	uint8_t n_hwfns = edev->num_hwfns;
 	uint32_t rc;
-
-	/* RoCE uses single engine and CMT uses two engines. When using both
-	 * we force only a single engine. Storage uses only engine 0 too.
-	 */
-	if (type == QED_SB_TYPE_L2_QUEUE)
-		n_hwfns = edev->num_hwfns;
-	else
-		n_hwfns = 1;
 
 	hwfn_index = sb_id % n_hwfns;
 	p_hwfn = &edev->hwfns[hwfn_index];
@@ -617,7 +605,7 @@ static int qed_drain(struct ecore_dev *edev)
 		hwfn = &edev->hwfns[i];
 		ptt = ecore_ptt_acquire(hwfn);
 		if (!ptt) {
-			DP_NOTICE(hwfn, true, "Failed to drain NIG; No PTT\n");
+			DP_ERR(hwfn, "Failed to drain NIG; No PTT\n");
 			return -EBUSY;
 		}
 		rc = ecore_mcp_drain(hwfn, ptt);
@@ -710,7 +698,7 @@ static int qed_get_sb_info(struct ecore_dev *edev, struct ecore_sb_info *sb,
 
 	ptt = ecore_ptt_acquire(hwfn);
 	if (!ptt) {
-		DP_NOTICE(hwfn, true, "Can't acquire PTT\n");
+		DP_ERR(hwfn, "Can't acquire PTT\n");
 		return -EAGAIN;
 	}
 
@@ -737,3 +725,13 @@ const struct qed_common_ops qed_common_ops_pass = {
 	INIT_STRUCT_FIELD(remove, &qed_remove),
 	INIT_STRUCT_FIELD(send_drv_state, &qed_send_drv_state),
 };
+
+const struct qed_eth_ops qed_eth_ops_pass = {
+	INIT_STRUCT_FIELD(common, &qed_common_ops_pass),
+	INIT_STRUCT_FIELD(fill_dev_info, &qed_fill_eth_dev_info),
+};
+
+const struct qed_eth_ops *qed_get_eth_ops(void)
+{
+	return &qed_eth_ops_pass;
+}

@@ -1,7 +1,6 @@
 DPDK_2.2 {
 	global:
 
-	_rte_eth_dev_callback_process;
 	rte_eth_add_rx_callback;
 	rte_eth_add_tx_callback;
 	rte_eth_allmulticast_disable;
@@ -10,14 +9,6 @@ DPDK_2.2 {
 	rte_eth_dev_allocate;
 	rte_eth_dev_allocated;
 	rte_eth_dev_attach;
-	rte_eth_dev_bypass_event_show;
-	rte_eth_dev_bypass_event_store;
-	rte_eth_dev_bypass_init;
-	rte_eth_dev_bypass_state_set;
-	rte_eth_dev_bypass_state_show;
-	rte_eth_dev_bypass_ver_show;
-	rte_eth_dev_bypass_wd_reset;
-	rte_eth_dev_bypass_wd_timeout_show;
 	rte_eth_dev_callback_register;
 	rte_eth_dev_callback_unregister;
 	rte_eth_dev_close;
@@ -70,7 +61,6 @@ DPDK_2.2 {
 	rte_eth_dev_uc_all_hash_table_set;
 	rte_eth_dev_uc_hash_table_set;
 	rte_eth_dev_vlan_filter;
-	rte_eth_dev_wd_timeout_store;
 	rte_eth_dma_zone_reserve;
 	rte_eth_led_off;
 	rte_eth_led_on;
@@ -151,8 +141,49 @@ DPDK_17.05 {
 
 	rte_eth_dev_attach_secondary;
 	rte_eth_find_next;
+	rte_eth_tx_done_cleanup;
 	rte_eth_xstats_get_by_id;
 	rte_eth_xstats_get_id_by_name;
 	rte_eth_xstats_get_names_by_id;
 
 } DPDK_17.02;
+
+DPDK_17.08 {
+	global:
+
+	_rte_eth_dev_callback_process;
+	rte_eth_dev_adjust_nb_rx_tx_desc;
+	rte_flow_copy;
+	rte_flow_isolate;
+	rte_tm_capabilities_get;
+	rte_tm_get_leaf_nodes;
+	rte_tm_hierarchy_commit;
+	rte_tm_level_capabilities_get;
+	rte_tm_mark_ip_dscp;
+	rte_tm_mark_ip_ecn;
+	rte_tm_mark_vlan_dei;
+	rte_tm_node_add;
+	rte_tm_node_capabilities_get;
+	rte_tm_node_cman_update;
+	rte_tm_node_delete;
+	rte_tm_node_parent_update;
+	rte_tm_node_resume;
+	rte_tm_node_shaper_update;
+	rte_tm_node_shared_shaper_update;
+	rte_tm_node_shared_wred_context_update;
+	rte_tm_node_stats_read;
+	rte_tm_node_stats_update;
+	rte_tm_node_suspend;
+	rte_tm_node_type_get;
+	rte_tm_node_wfq_weight_mode_update;
+	rte_tm_node_wred_context_update;
+	rte_tm_shaper_profile_add;
+	rte_tm_shaper_profile_delete;
+	rte_tm_shared_shaper_add_update;
+	rte_tm_shared_shaper_delete;
+	rte_tm_shared_wred_context_add_update;
+	rte_tm_shared_wred_context_delete;
+	rte_tm_wred_profile_add;
+	rte_tm_wred_profile_delete;
+
+} DPDK_17.05;

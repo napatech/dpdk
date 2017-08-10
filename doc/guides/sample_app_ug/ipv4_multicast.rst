@@ -51,6 +51,12 @@ The lookup method is the Four-byte Key (FBK) hash-based method.
 The lookup table is composed of pairs of destination IPv4 address (the FBK)
 and a port mask associated with that IPv4 address.
 
+.. note::
+
+    The max port mask supported in the given hash table is 0xf, so only first
+    four ports can be supported.
+    If using non-consecutive ports, use the destination IPv4 address accordingly.
+
 For convenience and simplicity, this sample application does not take IANA-assigned multicast addresses into account,
 but instead equates the last four bytes of the multicast group (that is, the last four bytes of the destination IP address)
 with the mask of ports to multicast packets to.
@@ -117,7 +123,7 @@ Typically, to run the IPv4 Multicast sample application, issue the following com
 
 In this command:
 
-*   The -c option enables cores 0, 1, 2 and 3
+*   The -l option enables cores 0, 1, 2 and 3
 
 *   The -n option specifies 3 memory channels
 

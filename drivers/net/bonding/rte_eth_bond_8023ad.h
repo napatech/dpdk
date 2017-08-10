@@ -73,6 +73,12 @@ enum rte_bond_8023ad_selection {
 	SELECTED
 };
 
+enum rte_bond_8023ad_agg_selection {
+	AGG_BANDWIDTH,
+	AGG_COUNT,
+	AGG_STABLE
+};
+
 /** Generic slow protocol structure */
 struct slow_protocol {
 	uint8_t subtype;
@@ -161,6 +167,7 @@ struct rte_eth_bond_8023ad_conf {
 	uint32_t rx_marker_period_ms;
 	uint32_t update_timeout_ms;
 	rte_eth_bond_8023ad_ext_slowrx_fn slowrx_cb;
+	enum rte_bond_8023ad_agg_selection agg_selection;
 };
 
 struct rte_eth_bond_8023ad_slave_info {
@@ -193,6 +200,9 @@ rte_eth_bond_8023ad_conf_get_v20(uint8_t port_id,
 int
 rte_eth_bond_8023ad_conf_get_v1607(uint8_t port_id,
 		struct rte_eth_bond_8023ad_conf *conf);
+int
+rte_eth_bond_8023ad_conf_get_v1708(uint8_t port_id,
+		struct rte_eth_bond_8023ad_conf *conf);
 
 /**
  * @internal
@@ -213,6 +223,9 @@ rte_eth_bond_8023ad_setup_v20(uint8_t port_id,
 		struct rte_eth_bond_8023ad_conf *conf);
 int
 rte_eth_bond_8023ad_setup_v1607(uint8_t port_id,
+		struct rte_eth_bond_8023ad_conf *conf);
+int
+rte_eth_bond_8023ad_setup_v1708(uint8_t port_id,
 		struct rte_eth_bond_8023ad_conf *conf);
 
 /**
@@ -302,4 +315,65 @@ int
 rte_eth_bond_8023ad_ext_slowtx(uint8_t port_id, uint8_t slave_id,
 		struct rte_mbuf *lacp_pkt);
 
+/**
+ * Enable dedicated hw queues for 802.3ad control plane traffic on on slaves
+ *
+ * This function creates an additional tx and rx queue on each slave for
+ * dedicated 802.3ad control plane traffic . A flow filtering rule is
+ * programmed on each slave to redirect all LACP slow packets to that rx queue
+ * for processing in the LACP state machine, this removes the need to filter
+ * these packets in the bonded devices data path. The additional tx queue is
+ * used to enable the LACP state machine to enqueue LACP packets directly to
+ * slave hw independently of the bonded devices data path.
+ *
+ * To use this feature all slaves must support the programming of the flow
+ * filter rule required for rx and have enough queues that one rx and tx queue
+ * can be reserved for the LACP state machines control packets.
+ *
+ * Bonding port must be stopped to change this configuration.
+ *
+ * @param port_id      Bonding device id
+ *
+ * @return
+ *   0 on success, negative value otherwise.
+ */
+int
+rte_eth_bond_8023ad_dedicated_queues_enable(uint8_t port_id);
+
+/**
+ * Disable slow queue on slaves
+ *
+ * This function disables hardware slow packet filter.
+ *
+ * Bonding port must be stopped to change this configuration.
+ *
+ * @see rte_eth_bond_8023ad_slow_pkt_hw_filter_enable
+ *
+ * @param port_id      Bonding device id
+ * @return
+ *   0 on success, negative value otherwise.
+ *
+ */
+int
+rte_eth_bond_8023ad_dedicated_queues_disable(uint8_t port_id);
+
+/*
+ * Get aggregator mode for 8023ad
+ * @param port_id Bonding device id
+ *
+ * @return
+ *   agregator mode on success, negative value otherwise
+ */
+int
+rte_eth_bond_8023ad_agg_selection_get(uint8_t port_id);
+
+/**
+ * Set aggregator mode for 8023ad
+ * @param port_id Bonding device id
+ * @return
+ *   0 on success, negative value otherwise
+ */
+int
+rte_eth_bond_8023ad_agg_selection_set(uint8_t port_id,
+		enum rte_bond_8023ad_agg_selection agg_selection);
 #endif /* RTE_ETH_BOND_8023AD_H_ */

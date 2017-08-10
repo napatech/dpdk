@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright(c) 2016 Intel Corporation. All rights reserved.
+ *   Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -34,6 +34,9 @@
 #define _RTE_ZUC_PMD_PRIVATE_H_
 
 #include <sso_zuc.h>
+
+#define CRYPTODEV_NAME_ZUC_PMD		crypto_zuc
+/**< KASUMI PMD device name */
 
 #define ZUC_LOG_ERR(fmt, args...) \
 	RTE_LOG(ERR, CRYPTODEV, "[%s] %s() line %u: " fmt "\n",  \
@@ -92,6 +95,8 @@ struct zuc_session {
 	enum rte_crypto_auth_operation auth_op;
 	uint8_t pKey_cipher[ZUC_IV_KEY_LENGTH];
 	uint8_t pKey_hash[ZUC_IV_KEY_LENGTH];
+	uint16_t cipher_iv_offset;
+	uint16_t auth_iv_offset;
 } __rte_cache_aligned;
 
 

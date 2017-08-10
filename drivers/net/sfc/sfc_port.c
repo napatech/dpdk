@@ -151,6 +151,7 @@ sfc_port_start(struct sfc_adapter *sa)
 	uint32_t phy_adv_cap;
 	const uint32_t phy_pause_caps =
 		((1u << EFX_PHY_CAP_PAUSE) | (1u << EFX_PHY_CAP_ASYM));
+	unsigned int i;
 
 	sfc_log_init(sa, "entry");
 
@@ -186,26 +187,29 @@ sfc_port_start(struct sfc_adapter *sa)
 	if (rc != 0)
 		goto fail_mac_pdu_set;
 
-	sfc_log_init(sa, "set MAC address");
-	rc = efx_mac_addr_set(sa->nic,
-			      sa->eth_dev->data->mac_addrs[0].addr_bytes);
-	if (rc != 0)
-		goto fail_mac_addr_set;
+	if (!port->isolated) {
+		struct ether_addr *mac_addrs = sa->eth_dev->data->mac_addrs;
 
-	sfc_log_init(sa, "set MAC filters");
-	port->promisc = (sa->eth_dev->data->promiscuous != 0) ?
-			B_TRUE : B_FALSE;
-	port->allmulti = (sa->eth_dev->data->all_multicast != 0) ?
-			 B_TRUE : B_FALSE;
-	rc = sfc_set_rx_mode(sa);
-	if (rc != 0)
-		goto fail_mac_filter_set;
+		sfc_log_init(sa, "set MAC address");
+		rc = efx_mac_addr_set(sa->nic, mac_addrs[0].addr_bytes);
+		if (rc != 0)
+			goto fail_mac_addr_set;
 
-	sfc_log_init(sa, "set multicast address list");
-	rc = efx_mac_multicast_list_set(sa->nic, port->mcast_addrs,
-					port->nb_mcast_addrs);
-	if (rc != 0)
-		goto fail_mcast_address_list_set;
+		sfc_log_init(sa, "set MAC filters");
+		port->promisc = (sa->eth_dev->data->promiscuous != 0) ?
+				B_TRUE : B_FALSE;
+		port->allmulti = (sa->eth_dev->data->all_multicast != 0) ?
+				 B_TRUE : B_FALSE;
+		rc = sfc_set_rx_mode(sa);
+		if (rc != 0)
+			goto fail_mac_filter_set;
+
+		sfc_log_init(sa, "set multicast address list");
+		rc = efx_mac_multicast_list_set(sa->nic, port->mcast_addrs,
+						port->nb_mcast_addrs);
+		if (rc != 0)
+			goto fail_mcast_address_list_set;
+	}
 
 	if (port->mac_stats_reset_pending) {
 		rc = sfc_port_reset_mac_stats(sa);
@@ -218,6 +222,10 @@ sfc_port_start(struct sfc_adapter *sa)
 
 	efx_mac_stats_get_mask(sa->nic, port->mac_stats_mask,
 			       sizeof(port->mac_stats_mask));
+
+	for (i = 0, port->mac_stats_nb_supported = 0; i < EFX_MAC_NSTATS; ++i)
+		if (EFX_MAC_STAT_SUPPORTED(port->mac_stats_mask, i))
+			port->mac_stats_nb_supported++;
 
 	port->mac_stats_update_generation = 0;
 
@@ -242,6 +250,18 @@ sfc_port_start(struct sfc_adapter *sa)
 		}
 	}
 
+	if ((port->mac_stats_update_period_ms != 0) &&
+	    port->mac_stats_periodic_dma_supported) {
+		/*
+		 * Request an explicit MAC stats upload immediately to
+		 * preclude bogus figures readback if the user decides
+		 * to read stats before periodic DMA is really started
+		 */
+		rc = efx_mac_stats_upload(sa->nic, &port->mac_stats_dma_mem);
+		if (rc != 0)
+			goto fail_mac_stats_upload;
+	}
+
 	sfc_log_init(sa, "disable MAC drain");
 	rc = efx_mac_drain(sa->nic, B_FALSE);
 	if (rc != 0)
@@ -262,6 +282,7 @@ fail_mac_drain:
 	(void)efx_mac_stats_periodic(sa->nic, &port->mac_stats_dma_mem,
 				     0, B_FALSE);
 
+fail_mac_stats_upload:
 fail_mac_stats_periodic:
 fail_mcast_address_list_set:
 fail_mac_filter_set:

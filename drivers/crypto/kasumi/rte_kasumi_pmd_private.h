@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright(c) 2016 Intel Corporation. All rights reserved.
+ *   Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -34,6 +34,9 @@
 #define _RTE_KASUMI_PMD_PRIVATE_H_
 
 #include <sso_kasumi.h>
+
+#define CRYPTODEV_NAME_KASUMI_PMD	crypto_kasumi
+/**< KASUMI PMD device name */
 
 #define KASUMI_LOG_ERR(fmt, args...) \
 	RTE_LOG(ERR, CRYPTODEV, "[%s] %s() line %u: " fmt "\n",  \
@@ -92,6 +95,7 @@ struct kasumi_session {
 	sso_kasumi_key_sched_t pKeySched_hash;
 	enum kasumi_operation op;
 	enum rte_crypto_auth_operation auth_op;
+	uint16_t cipher_iv_offset;
 } __rte_cache_aligned;
 
 

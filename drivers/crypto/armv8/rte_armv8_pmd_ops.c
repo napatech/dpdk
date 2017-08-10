@@ -1,7 +1,7 @@
 /*
  *   BSD LICENSE
  *
- *   Copyright (C) Cavium networks Ltd. 2017.
+ *   Copyright (C) Cavium, Inc. 2017.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -13,7 +13,7 @@
  *       notice, this list of conditions and the following disclaimer in
  *       the documentation and/or other materials provided with the
  *       distribution.
- *     * Neither the name of Cavium networks nor the names of its
+ *     * Neither the name of Cavium, Inc nor the names of its
  *       contributors may be used to endorse or promote products derived
  *       from this software without specific prior written permission.
  *
@@ -50,16 +50,16 @@ static const struct rte_cryptodev_capabilities
 					.algo = RTE_CRYPTO_AUTH_SHA1_HMAC,
 					.block_size = 64,
 					.key_size = {
-						.min = 16,
-						.max = 128,
-						.increment = 0
+						.min = 1,
+						.max = 64,
+						.increment = 1
 					},
 					.digest_size = {
 						.min = 20,
 						.max = 20,
 						.increment = 0
 					},
-					.aad_size = { 0 }
+					.iv_size = { 0 }
 				}, }
 			}, }
 	},
@@ -71,16 +71,16 @@ static const struct rte_cryptodev_capabilities
 					.algo = RTE_CRYPTO_AUTH_SHA256_HMAC,
 					.block_size = 64,
 					.key_size = {
-						.min = 16,
-						.max = 128,
-						.increment = 0
+						.min = 1,
+						.max = 64,
+						.increment = 1
 					},
 					.digest_size = {
 						.min = 32,
 						.max = 32,
 						.increment = 0
 					},
-					.aad_size = { 0 }
+					.iv_size = { 0 }
 				}, }
 			}, }
 	},
@@ -178,7 +178,7 @@ armv8_crypto_pmd_info_get(struct rte_cryptodev *dev,
 	struct armv8_crypto_private *internals = dev->data->dev_private;
 
 	if (dev_info != NULL) {
-		dev_info->dev_type = dev->dev_type;
+		dev_info->driver_id = dev->driver_id;
 		dev_info->feature_flags = dev->feature_flags;
 		dev_info->capabilities = armv8_crypto_pmd_capabilities;
 		dev_info->max_nb_queue_pairs = internals->max_nb_qpairs;
@@ -247,7 +247,7 @@ armv8_crypto_pmd_qp_create_processed_ops_ring(struct armv8_crypto_qp *qp,
 static int
 armv8_crypto_pmd_qp_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 		const struct rte_cryptodev_qp_conf *qp_conf,
-		 int socket_id)
+		int socket_id, struct rte_mempool *session_pool)
 {
 	struct armv8_crypto_qp *qp = NULL;
 
@@ -272,7 +272,7 @@ armv8_crypto_pmd_qp_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 	if (qp->processed_ops == NULL)
 		goto qp_setup_cleanup;
 
-	qp->sess_mp = dev->data->session_pool;
+	qp->sess_mp = session_pool;
 
 	memset(&qp->stats, 0, sizeof(qp->stats));
 
@@ -316,33 +316,56 @@ armv8_crypto_pmd_session_get_size(struct rte_cryptodev *dev __rte_unused)
 }
 
 /** Configure the session from a crypto xform chain */
-static void *
-armv8_crypto_pmd_session_configure(struct rte_cryptodev *dev __rte_unused,
-		struct rte_crypto_sym_xform *xform, void *sess)
+static int
+armv8_crypto_pmd_session_configure(struct rte_cryptodev *dev,
+		struct rte_crypto_sym_xform *xform,
+		struct rte_cryptodev_sym_session *sess,
+		struct rte_mempool *mempool)
 {
+	void *sess_private_data;
+	int ret;
+
 	if (unlikely(sess == NULL)) {
 		ARMV8_CRYPTO_LOG_ERR("invalid session struct");
-		return NULL;
+		return -EINVAL;
 	}
 
-	if (armv8_crypto_set_session_parameters(
-			sess, xform) != 0) {
+	if (rte_mempool_get(mempool, &sess_private_data)) {
+		CDEV_LOG_ERR(
+			"Couldn't get object from session mempool");
+		return -ENOMEM;
+	}
+
+	ret = armv8_crypto_set_session_parameters(sess_private_data, xform);
+	if (ret != 0) {
 		ARMV8_CRYPTO_LOG_ERR("failed configure session parameters");
-		return NULL;
+
+		/* Return session to mempool */
+		rte_mempool_put(mempool, sess_private_data);
+		return ret;
 	}
 
-	return sess;
+	set_session_private_data(sess, dev->driver_id,
+			sess_private_data);
+
+	return 0;
 }
 
 /** Clear the memory of session so it doesn't leave key material behind */
 static void
-armv8_crypto_pmd_session_clear(struct rte_cryptodev *dev __rte_unused,
-				void *sess)
+armv8_crypto_pmd_session_clear(struct rte_cryptodev *dev,
+		struct rte_cryptodev_sym_session *sess)
 {
+	uint8_t index = dev->driver_id;
+	void *sess_priv = get_session_private_data(sess, index);
 
 	/* Zero out the whole structure */
-	if (sess)
-		memset(sess, 0, sizeof(struct armv8_crypto_session));
+	if (sess_priv) {
+		memset(sess_priv, 0, sizeof(struct armv8_crypto_session));
+		struct rte_mempool *sess_mp = rte_mempool_from_obj(sess_priv);
+		set_session_private_data(sess, index, NULL);
+		rte_mempool_put(sess_mp, sess_priv);
+	}
 }
 
 struct rte_cryptodev_ops armv8_crypto_pmd_ops = {

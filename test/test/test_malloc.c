@@ -45,7 +45,6 @@
 #include <rte_per_lcore.h>
 #include <rte_launch.h>
 #include <rte_eal.h>
-#include <rte_per_lcore.h>
 #include <rte_lcore.h>
 #include <rte_malloc.h>
 #include <rte_cycles.h>
@@ -738,7 +737,7 @@ err_return:
 	return -1;
 }
 
-/* Check if memory is avilable on a specific socket */
+/* Check if memory is available on a specific socket */
 static int
 is_mem_on_socket(int32_t socket)
 {

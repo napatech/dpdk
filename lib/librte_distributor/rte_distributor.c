@@ -41,7 +41,8 @@
 #include <rte_errno.h>
 #include <rte_string_fns.h>
 #include <rte_eal_memconfig.h>
-#include <rte_compat.h>
+#include <rte_pause.h>
+
 #include "rte_distributor_private.h"
 #include "rte_distributor.h"
 #include "rte_distributor_v20.h"
@@ -656,12 +657,10 @@ rte_distributor_create_v1705(const char *name,
 	d->num_workers = num_workers;
 	d->alg_type = alg_type;
 
+	d->dist_match_fn = RTE_DIST_MATCH_SCALAR;
 #if defined(RTE_ARCH_X86)
-	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_SSE4_2))
-		d->dist_match_fn = RTE_DIST_MATCH_VECTOR;
-	else
+	d->dist_match_fn = RTE_DIST_MATCH_VECTOR;
 #endif
-		d->dist_match_fn = RTE_DIST_MATCH_SCALAR;
 
 	/*
 	 * Set up the backog tags so they're pointing at the second cache

@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright(c) 2016 Intel Corporation. All rights reserved.
+ *   Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -66,8 +66,6 @@ enum rte_crypto_op_status {
 	/**< Operation completed successfully */
 	RTE_CRYPTO_OP_STATUS_NOT_PROCESSED,
 	/**< Operation has not yet been processed by a crypto device */
-	RTE_CRYPTO_OP_STATUS_ENQUEUED,
-	/**< Operation is enqueued on device */
 	RTE_CRYPTO_OP_STATUS_AUTH_FAILED,
 	/**< Authentication verification failed */
 	RTE_CRYPTO_OP_STATUS_INVALID_SESSION,
@@ -82,6 +80,16 @@ enum rte_crypto_op_status {
 };
 
 /**
+ * Crypto operation session type. This is used to specify whether a crypto
+ * operation has session structure attached for immutable parameters or if all
+ * operation information is included in the operation data structure.
+ */
+enum rte_crypto_op_sess_type {
+	RTE_CRYPTO_OP_WITH_SESSION,	/**< Session based crypto operation */
+	RTE_CRYPTO_OP_SESSIONLESS	/**< Session-less crypto operation */
+};
+
+/**
  * Cryptographic Operation.
  *
  * This structure contains data relating to performing cryptographic
@@ -92,32 +100,32 @@ enum rte_crypto_op_status {
  * rte_cryptodev_enqueue_burst() / rte_cryptodev_dequeue_burst() .
  */
 struct rte_crypto_op {
-	enum rte_crypto_op_type type;
+	uint8_t type;
 	/**< operation type */
-
-	enum rte_crypto_op_status status;
+	uint8_t status;
 	/**<
 	 * operation status - this is reset to
 	 * RTE_CRYPTO_OP_STATUS_NOT_PROCESSED on allocation from mempool and
 	 * will be set to RTE_CRYPTO_OP_STATUS_SUCCESS after crypto operation
 	 * is successfully processed by a crypto PMD
 	 */
+	uint8_t sess_type;
+	/**< operation session type */
 
+	uint8_t reserved[5];
+	/**< Reserved bytes to fill 64 bits for future additions */
 	struct rte_mempool *mempool;
 	/**< crypto operation mempool which operation is allocated from */
 
 	phys_addr_t phys_addr;
 	/**< physical address of crypto operation */
 
-	void *opaque_data;
-	/**< Opaque pointer for user data */
-
 	RTE_STD_C11
 	union {
-		struct rte_crypto_sym_op *sym;
+		struct rte_crypto_sym_op sym[0];
 		/**< Symmetric operation parameters */
 	}; /**< operation specific parameters */
-} __rte_cache_aligned;
+};
 
 /**
  * Reset the fields of a crypto operation to their default values.
@@ -130,22 +138,15 @@ __rte_crypto_op_reset(struct rte_crypto_op *op, enum rte_crypto_op_type type)
 {
 	op->type = type;
 	op->status = RTE_CRYPTO_OP_STATUS_NOT_PROCESSED;
+	op->sess_type = RTE_CRYPTO_OP_SESSIONLESS;
 
 	switch (type) {
 	case RTE_CRYPTO_OP_TYPE_SYMMETRIC:
-		/** Symmetric operation structure starts after the end of the
-		 * rte_crypto_op structure.
-		 */
-		op->sym = (struct rte_crypto_sym_op *)(op + 1);
-		op->type = type;
-
 		__rte_crypto_sym_op_reset(op->sym);
 		break;
 	default:
 		break;
 	}
-
-	op->opaque_data = NULL;
 }
 
 /**
@@ -265,8 +266,9 @@ rte_crypto_op_alloc(struct rte_mempool *mempool, enum rte_crypto_op_type type)
  * @param	nb_ops	Number of crypto operations to allocate
  *
  * @returns
- * - On success returns a valid rte_crypto_op structure
- * - On failure returns NULL
+ * - nb_ops if the number of operations requested were allocated.
+ * - 0 if the requested number of ops are not available.
+ *   None are allocated in this case.
  */
 
 static inline unsigned
@@ -406,6 +408,8 @@ rte_crypto_op_attach_sym_session(struct rte_crypto_op *op,
 {
 	if (unlikely(op->type != RTE_CRYPTO_OP_TYPE_SYMMETRIC))
 		return -1;
+
+	op->sess_type = RTE_CRYPTO_OP_WITH_SESSION;
 
 	return __rte_crypto_sym_op_attach_sym_session(op->sym, sess);
 }

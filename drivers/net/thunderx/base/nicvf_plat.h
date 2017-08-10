@@ -1,7 +1,7 @@
 /*
  *   BSD LICENSE
  *
- *   Copyright (C) Cavium networks Ltd. 2016.
+ *   Copyright (C) Cavium, Inc. 2016.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -13,7 +13,7 @@
  *       notice, this list of conditions and the following disclaimer in
  *       the documentation and/or other materials provided with the
  *       distribution.
- *     * Neither the name of Cavium networks nor the names of its
+ *     * Neither the name of Cavium, Inc nor the names of its
  *       contributors may be used to endorse or promote products derived
  *       from this software without specific prior written permission.
  *
@@ -59,6 +59,7 @@
 /* utils */
 #include <rte_common.h>
 #define nicvf_min(x, y) RTE_MIN(x, y)
+#define nicvf_log2_u32(x) rte_log2_u32(x)
 
 /* byte order */
 #include <rte_byteorder.h>
@@ -80,7 +81,7 @@
 /* ARM64 specific functions */
 #if defined(RTE_ARCH_ARM64)
 #define nicvf_prefetch_store_keep(_ptr) ({\
-	asm volatile("prfm pstl1keep, %a0\n" : : "p" (_ptr)); })
+	asm volatile("prfm pstl1keep, [%x0]\n" : : "r" (_ptr)); })
 
 
 #define NICVF_LOAD_PAIR(reg1, reg2, addr) ({		\

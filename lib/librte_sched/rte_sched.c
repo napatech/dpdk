@@ -56,8 +56,10 @@
 #ifdef RTE_SCHED_VECTOR
 #include <rte_vect.h>
 
-#if defined(__SSE4__)
+#ifdef RTE_ARCH_X86
 #define SCHED_VECTOR_SSE4
+#elif defined(RTE_MACHINE_CPUFLAG_NEON)
+#define SCHED_VECTOR_NEON
 #endif
 
 #endif
@@ -1730,6 +1732,26 @@ grinder_pipe_exists(struct rte_sched_port *port, uint32_t base_pipe)
 		return 0;
 
 	return 1;
+}
+
+#elif defined(SCHED_VECTOR_NEON)
+
+static inline int
+grinder_pipe_exists(struct rte_sched_port *port, uint32_t base_pipe)
+{
+	uint32x4_t index, pipes;
+	uint32_t *pos = (uint32_t *)port->grinder_base_bmp_pos;
+
+	index = vmovq_n_u32(base_pipe);
+	pipes = vld1q_u32(pos);
+	if (!vminvq_u32(veorq_u32(pipes, index)))
+		return 1;
+
+	pipes = vld1q_u32(pos + 4);
+	if (!vminvq_u32(veorq_u32(pipes, index)))
+		return 1;
+
+	return 0;
 }
 
 #else

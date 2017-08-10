@@ -310,22 +310,20 @@ pci_scan_one(const char *dirname, const struct rte_pci_addr *addr)
 			dev->max_vfs = (uint16_t)tmp;
 	}
 
-	/* get numa node */
+	/* get numa node, default to 0 if not present */
 	snprintf(filename, sizeof(filename), "%s/numa_node",
 		 dirname);
-	if (access(filename, R_OK) != 0) {
-		/* if no NUMA support, set default to 0 */
-		dev->device.numa_node = 0;
+
+	if (access(filename, F_OK) != -1) {
+		if (eal_parse_sysfs_value(filename, &tmp) == 0)
+			dev->device.numa_node = tmp;
+		else
+			dev->device.numa_node = -1;
 	} else {
-		if (eal_parse_sysfs_value(filename, &tmp) < 0) {
-			free(dev);
-			return -1;
-		}
-		dev->device.numa_node = tmp;
+		dev->device.numa_node = 0;
 	}
 
-	rte_pci_device_name(addr, dev->name, sizeof(dev->name));
-	dev->device.name = dev->name;
+	pci_name_set(dev);
 
 	/* parse resources */
 	snprintf(filename, sizeof(filename), "%s/resource", dirname);
@@ -373,6 +371,7 @@ pci_scan_one(const char *dirname, const struct rte_pci_addr *addr)
 			} else { /* already registered */
 				dev2->kdrv = dev->kdrv;
 				dev2->max_vfs = dev->max_vfs;
+				pci_name_set(dev2);
 				memmove(dev2->mem_resource, dev->mem_resource,
 					sizeof(dev->mem_resource));
 				free(dev);
@@ -430,10 +429,10 @@ parse_pci_addr_format(const char *buf, int bufsize, struct rte_pci_addr *addr)
 
 	/* now convert to int values */
 	errno = 0;
-	addr->domain = (uint16_t)strtoul(splitaddr.domain, NULL, 16);
-	addr->bus = (uint8_t)strtoul(splitaddr.bus, NULL, 16);
-	addr->devid = (uint8_t)strtoul(splitaddr.devid, NULL, 16);
-	addr->function = (uint8_t)strtoul(splitaddr.function, NULL, 10);
+	addr->domain = strtoul(splitaddr.domain, NULL, 16);
+	addr->bus = strtoul(splitaddr.bus, NULL, 16);
+	addr->devid = strtoul(splitaddr.devid, NULL, 16);
+	addr->function = strtoul(splitaddr.function, NULL, 10);
 	if (errno != 0)
 		goto error;
 

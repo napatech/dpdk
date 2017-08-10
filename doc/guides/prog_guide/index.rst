@@ -38,11 +38,13 @@ Programmer's Guide
     intro
     overview
     env_abstraction_layer
+    service_cores
     ring_lib
     mempool_lib
     mbuf_lib
     poll_mode_drv
     rte_flow
+    traffic_management
     cryptodev_lib
     link_bonding_poll_mode_drv_lib
     timer_lib
@@ -53,10 +55,12 @@ Programmer's Guide
     packet_distrib_lib
     reorder_lib
     ip_fragment_reassembly_lib
+    generic_receive_offload_lib
     pdump_lib
     multi_proc_support
     kernel_nic_interface
     thread_safety_dpdk_functions
+    eventdev
     qos_framework
     power_man
     packet_classif_access_ctrl

@@ -103,6 +103,7 @@ CONFIG_RTE_EAL_ALWAYS_PANIC_ON_ERROR=n
 CONFIG_RTE_EAL_IGB_UIO=n
 CONFIG_RTE_EAL_VFIO=n
 CONFIG_RTE_MALLOC_DEBUG=n
+CONFIG_RTE_EAL_NUMA_AWARE_HUGEPAGES=n
 
 #
 # Recognize/ignore the AVX/AVX512 CPU flags for performance/power testing.
@@ -139,15 +140,10 @@ CONFIG_RTE_ETHDEV_RXTX_CALLBACKS=y
 #
 # Turn off Tx preparation stage
 #
-# Warning: rte_ethdev_tx_prepare() can be safely disabled only if using a
+# Warning: rte_eth_tx_prepare() can be safely disabled only if using a
 # driver which do not implement any Tx preparation.
 #
 CONFIG_RTE_ETHDEV_TX_PREPARE_NOOP=n
-
-#
-# Support NIC bypass logic
-#
-CONFIG_RTE_NIC_BYPASS=n
 
 #
 # Compile burst-oriented Amazon ENA PMD driver
@@ -182,6 +178,7 @@ CONFIG_RTE_LIBRTE_IXGBE_DEBUG_TX_FREE=n
 CONFIG_RTE_LIBRTE_IXGBE_DEBUG_DRIVER=n
 CONFIG_RTE_LIBRTE_IXGBE_PF_DISABLE_STRIP_CRC=n
 CONFIG_RTE_IXGBE_INC_VECTOR=y
+CONFIG_RTE_LIBRTE_IXGBE_BYPASS=n
 
 #
 # Compile burst-oriented I40E PMD driver
@@ -216,6 +213,7 @@ CONFIG_RTE_LIBRTE_FM10K_INC_VECTOR=y
 #
 CONFIG_RTE_LIBRTE_MLX4_PMD=n
 CONFIG_RTE_LIBRTE_MLX4_DEBUG=n
+CONFIG_RTE_LIBRTE_MLX4_DEBUG_BROKEN_VERBS=n
 CONFIG_RTE_LIBRTE_MLX4_SGE_WR_N=4
 CONFIG_RTE_LIBRTE_MLX4_MAX_INLINE=0
 CONFIG_RTE_LIBRTE_MLX4_TX_MP_CACHE=8
@@ -240,7 +238,7 @@ CONFIG_RTE_LIBRTE_BNX2X_MF_SUPPORT=n
 CONFIG_RTE_LIBRTE_BNX2X_DEBUG_PERIODIC=n
 
 #
-# Compile burst-oriented Chelsio Terminator 10GbE/40GbE (CXGBE) PMD
+# Compile burst-oriented Chelsio Terminator (CXGBE) PMD
 #
 CONFIG_RTE_LIBRTE_CXGBE_PMD=y
 CONFIG_RTE_LIBRTE_CXGBE_DEBUG=n
@@ -248,12 +246,14 @@ CONFIG_RTE_LIBRTE_CXGBE_DEBUG_REG=n
 CONFIG_RTE_LIBRTE_CXGBE_DEBUG_MBOX=n
 CONFIG_RTE_LIBRTE_CXGBE_DEBUG_TX=n
 CONFIG_RTE_LIBRTE_CXGBE_DEBUG_RX=n
+CONFIG_RTE_LIBRTE_CXGBE_TPUT=y
 
 #
 # Compile burst-oriented Cisco ENIC PMD driver
 #
 CONFIG_RTE_LIBRTE_ENIC_PMD=y
 CONFIG_RTE_LIBRTE_ENIC_DEBUG=n
+CONFIG_RTE_LIBRTE_ENIC_DEBUG_FLOW=n
 
 #
 # Compile burst-oriented Netronome NFP PMD driver
@@ -278,12 +278,8 @@ CONFIG_RTE_LIBRTE_SFC_EFX_DEBUG=n
 CONFIG_RTE_LIBRTE_PMD_SZEDATA2=n
 #
 # Defines firmware type address space.
-# RTE_LIBRTE_PMD_SZEDATA2_AS can be:
-# 0 - for firmwares:
-#         NIC_100G1_LR4
-#         HANIC_100G1_LR4
-#         HANIC_100G1_SR10
-# Other values raise compile time error
+# See documentation for supported values.
+# Other values raise compile time error.
 CONFIG_RTE_LIBRTE_PMD_SZEDATA2_AS=0
 
 #
@@ -429,6 +425,11 @@ CONFIG_RTE_LIBRTE_PMD_XENVIRT=n
 # Compile null PMD
 #
 CONFIG_RTE_LIBRTE_PMD_NULL=y
+
+#
+# Compile fail-safe PMD
+#
+CONFIG_RTE_LIBRTE_PMD_FAILSAFE=y
 
 #
 # Do prefetch of packet data within PMD driver receive function
@@ -652,6 +653,11 @@ CONFIG_RTE_LIBRTE_IP_FRAG_MAX_FRAG=4
 CONFIG_RTE_LIBRTE_IP_FRAG_TBL_STAT=n
 
 #
+# Compile GRO library
+#
+CONFIG_RTE_LIBRTE_GRO=y
+
+#
 # Compile librte_meter
 #
 CONFIG_RTE_LIBRTE_METER=y
@@ -745,3 +751,8 @@ CONFIG_RTE_TEST_PMD_RECORD_BURST_STATS=n
 # Compile the crypto performance application
 #
 CONFIG_RTE_APP_CRYPTO_PERF=y
+
+#
+# Compile the eventdev application
+#
+CONFIG_RTE_APP_EVENTDEV=y

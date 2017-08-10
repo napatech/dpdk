@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright(c) 2010-2016 Intel Corporation. All rights reserved.
+ *   Copyright(c) 2010-2017 Intel Corporation. All rights reserved.
  *   All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
@@ -118,7 +118,7 @@
  *     - NIC queue statistics mappings
  *
  * Any other configuration will not be stored and will need to be re-entered
- * after a call to rte_eth_dev_start().
+ * before a call to rte_eth_dev_start().
  *
  * Finally, a network application can close an Ethernet device by invoking the
  * rte_eth_dev_close() function.
@@ -171,8 +171,6 @@ extern "C" {
 #endif
 
 #include <stdint.h>
-
-#include <rte_dev.h>
 
 /* Use this macro to check if LRO API is supported */
 #define RTE_ETHDEV_HAS_LRO_SUPPORT
@@ -371,6 +369,14 @@ enum rte_vlan_type {
 	ETH_VLAN_TYPE_INNER, /**< Inner VLAN. */
 	ETH_VLAN_TYPE_OUTER, /**< Single VLAN, or outer VLAN. */
 	ETH_VLAN_TYPE_MAX,
+};
+
+/**
+ * A structure used to describe a vlan filter.
+ * If the bit corresponding to a VID is set, such VID is on.
+ */
+struct rte_vlan_filter_conf {
+	uint64_t ids[64];
 };
 
 /**
@@ -640,6 +646,24 @@ struct rte_eth_vmdq_dcb_conf {
 	/**< Selects a queue in a pool */
 };
 
+/**
+ * A structure used to configure the VMDQ feature of an Ethernet port when
+ * not combined with the DCB feature.
+ *
+ * Using this feature, packets are routed to a pool of queues. By default,
+ * the pool selection is based on the MAC address, the vlan id in the
+ * vlan tag as specified in the pool_map array.
+ * Passing the ETH_VMDQ_ACCEPT_UNTAG in the rx_mode field allows pool
+ * selection using only the MAC address. MAC address to pool mapping is done
+ * using the rte_eth_dev_mac_addr_add function, with the pool parameter
+ * corresponding to the pool id.
+ *
+ * Queue selection within the selected pool will be done using RSS when
+ * it is enabled or revert to the first queue of the pool if not.
+ *
+ * A default pool may be used, if desired, to route all traffic which
+ * does not match the vlan filter rules or any pool MAC address.
+ */
 struct rte_eth_vmdq_rx_conf {
 	enum rte_eth_nb_pools nb_queue_pools; /**< VMDq only mode, 8 or 64 pools */
 	uint8_t enable_default_pool; /**< If non-zero, use a default pool */
@@ -912,6 +936,10 @@ struct rte_eth_conf {
 #define DEV_TX_OFFLOAD_IPIP_TNL_TSO     0x00000800    /**< Used for tunneling packet. */
 #define DEV_TX_OFFLOAD_GENEVE_TNL_TSO   0x00001000    /**< Used for tunneling packet. */
 #define DEV_TX_OFFLOAD_MACSEC_INSERT    0x00002000
+#define DEV_TX_OFFLOAD_MT_LOCKFREE      0x00004000
+/**< Multiple threads can invoke rte_eth_tx_burst() concurrently on the same
+ * tx queue without SW lock.
+ */
 
 struct rte_pci_device;
 
@@ -1058,6 +1086,8 @@ TAILQ_HEAD(rte_eth_dev_cb_list, rte_eth_dev_callback);
 		return; \
 	} \
 } while (0)
+
+#define RTE_ETH_DEV_TO_PCI(eth_dev)	RTE_DEV_TO_PCI((eth_dev)->device)
 
 /**
  * l2 tunnel configuration.
@@ -1392,65 +1422,15 @@ typedef int (*eth_l2_tunnel_offload_set_t)
 	 uint8_t en);
 /**< @internal enable/disable the l2 tunnel offload functions */
 
-#ifdef RTE_NIC_BYPASS
-
-enum {
-	RTE_BYPASS_MODE_NONE,
-	RTE_BYPASS_MODE_NORMAL,
-	RTE_BYPASS_MODE_BYPASS,
-	RTE_BYPASS_MODE_ISOLATE,
-	RTE_BYPASS_MODE_NUM,
-};
-
-#define	RTE_BYPASS_MODE_VALID(x)	\
-	((x) > RTE_BYPASS_MODE_NONE && (x) < RTE_BYPASS_MODE_NUM)
-
-enum {
-	RTE_BYPASS_EVENT_NONE,
-	RTE_BYPASS_EVENT_START,
-	RTE_BYPASS_EVENT_OS_ON = RTE_BYPASS_EVENT_START,
-	RTE_BYPASS_EVENT_POWER_ON,
-	RTE_BYPASS_EVENT_OS_OFF,
-	RTE_BYPASS_EVENT_POWER_OFF,
-	RTE_BYPASS_EVENT_TIMEOUT,
-	RTE_BYPASS_EVENT_NUM
-};
-
-#define	RTE_BYPASS_EVENT_VALID(x)	\
-	((x) > RTE_BYPASS_EVENT_NONE && (x) < RTE_BYPASS_MODE_NUM)
-
-enum {
-	RTE_BYPASS_TMT_OFF,     /* timeout disabled. */
-	RTE_BYPASS_TMT_1_5_SEC, /* timeout for 1.5 seconds */
-	RTE_BYPASS_TMT_2_SEC,   /* timeout for 2 seconds */
-	RTE_BYPASS_TMT_3_SEC,   /* timeout for 3 seconds */
-	RTE_BYPASS_TMT_4_SEC,   /* timeout for 4 seconds */
-	RTE_BYPASS_TMT_8_SEC,   /* timeout for 8 seconds */
-	RTE_BYPASS_TMT_16_SEC,  /* timeout for 16 seconds */
-	RTE_BYPASS_TMT_32_SEC,  /* timeout for 32 seconds */
-	RTE_BYPASS_TMT_NUM
-};
-
-#define	RTE_BYPASS_TMT_VALID(x)	\
-	((x) == RTE_BYPASS_TMT_OFF || \
-	((x) > RTE_BYPASS_TMT_OFF && (x) < RTE_BYPASS_TMT_NUM))
-
-typedef void (*bypass_init_t)(struct rte_eth_dev *dev);
-typedef int32_t (*bypass_state_set_t)(struct rte_eth_dev *dev, uint32_t *new_state);
-typedef int32_t (*bypass_state_show_t)(struct rte_eth_dev *dev, uint32_t *state);
-typedef int32_t (*bypass_event_set_t)(struct rte_eth_dev *dev, uint32_t state, uint32_t event);
-typedef int32_t (*bypass_event_show_t)(struct rte_eth_dev *dev, uint32_t event_shift, uint32_t *event);
-typedef int32_t (*bypass_wd_timeout_set_t)(struct rte_eth_dev *dev, uint32_t timeout);
-typedef int32_t (*bypass_wd_timeout_show_t)(struct rte_eth_dev *dev, uint32_t *wd_timeout);
-typedef int32_t (*bypass_ver_show_t)(struct rte_eth_dev *dev, uint32_t *ver);
-typedef int32_t (*bypass_wd_reset_t)(struct rte_eth_dev *dev);
-#endif
 
 typedef int (*eth_filter_ctrl_t)(struct rte_eth_dev *dev,
 				 enum rte_filter_type filter_type,
 				 enum rte_filter_op filter_op,
 				 void *arg);
 /**< @internal Take operations to assigned filter type on an Ethernet device */
+
+typedef int (*eth_tm_ops_get_t)(struct rte_eth_dev *dev, void *ops);
+/**< @internal Get Traffic Management (TM) operations on an Ethernet device */
 
 typedef int (*eth_get_dcb_info)(struct rte_eth_dev *dev,
 				 struct rte_eth_dcb_info *dcb_info);
@@ -1471,7 +1451,7 @@ struct eth_dev_ops {
 	eth_promiscuous_enable_t   promiscuous_enable; /**< Promiscuous ON. */
 	eth_promiscuous_disable_t  promiscuous_disable;/**< Promiscuous OFF. */
 	eth_allmulticast_enable_t  allmulticast_enable;/**< RX multicast ON. */
-	eth_allmulticast_disable_t allmulticast_disable;/**< RX multicast OF. */
+	eth_allmulticast_disable_t allmulticast_disable;/**< RX multicast OFF. */
 	eth_mac_addr_remove_t      mac_addr_remove; /**< Remove MAC address. */
 	eth_mac_addr_add_t         mac_addr_add;  /**< Add a MAC address. */
 	eth_mac_addr_set_t         mac_addr_set;  /**< Set a MAC address. */
@@ -1551,18 +1531,6 @@ struct eth_dev_ops {
 	eth_get_eeprom_t           get_eeprom;        /**< Get eeprom data. */
 	eth_set_eeprom_t           set_eeprom;        /**< Set eeprom. */
 
-	/* bypass control */
-#ifdef RTE_NIC_BYPASS
-	bypass_init_t              bypass_init;
-	bypass_state_set_t         bypass_state_set;
-	bypass_state_show_t        bypass_state_show;
-	bypass_event_set_t         bypass_event_set;
-	bypass_event_show_t        bypass_event_show;
-	bypass_wd_timeout_set_t    bypass_wd_timeout_set;
-	bypass_wd_timeout_show_t   bypass_wd_timeout_show;
-	bypass_ver_show_t          bypass_ver_show;
-	bypass_wd_reset_t          bypass_wd_reset;
-#endif
 
 	eth_filter_ctrl_t          filter_ctrl; /**< common filter control. */
 
@@ -1584,6 +1552,9 @@ struct eth_dev_ops {
 	/**< Get extended device statistic values by ID. */
 	eth_xstats_get_names_by_id_t xstats_get_names_by_id;
 	/**< Get name of extended device statistics by ID. */
+
+	eth_tm_ops_get_t tm_ops_get;
+	/**< Get Traffic Management (TM) operations. */
 };
 
 /**
@@ -1655,6 +1626,7 @@ struct rte_eth_rxtx_callback {
 enum rte_eth_dev_state {
 	RTE_ETH_DEV_UNUSED = 0,
 	RTE_ETH_DEV_ATTACHED,
+	RTE_ETH_DEV_DEFERRED,
 };
 
 /**
@@ -1698,7 +1670,7 @@ struct rte_eth_dev_sriov {
 };
 #define RTE_ETH_DEV_SRIOV(dev)         ((dev)->data->sriov)
 
-#define RTE_ETH_NAME_MAX_LEN (32)
+#define RTE_ETH_NAME_MAX_LEN RTE_DEV_NAME_MAX_LEN
 
 /**
  * @internal
@@ -1748,7 +1720,8 @@ struct rte_eth_dev_data {
 	uint32_t dev_flags; /**< Capabilities */
 	enum rte_kernel_driver kdrv;    /**< Kernel driver passthrough */
 	int numa_node;  /**< NUMA node connection */
-	const char *drv_name;   /**< Driver name */
+	struct rte_vlan_filter_conf vlan_filter_conf;
+	/**< VLAN filter configuration. */
 };
 
 /** Device supports hotplug detach */
@@ -1788,13 +1761,12 @@ uint8_t rte_eth_find_next(uint8_t port_id);
 
 /**
  * Get the total number of Ethernet devices that have been successfully
- * initialized by the [matching] Ethernet driver during the PCI probing phase.
- * All devices whose port identifier is in the range
- * [0,  rte_eth_dev_count() - 1] can be operated on by network applications
- * immediately after invoking rte_eal_init().
- * If the application unplugs a port using hotplug function, The enabled port
- * numbers may be noncontiguous. In the case, the applications need to manage
- * enabled port by using the ``RTE_ETH_FOREACH_DEV()`` macro.
+ * initialized by the matching Ethernet driver during the PCI probing phase
+ * and that are available for applications to use. These devices must be
+ * accessed by using the ``RTE_ETH_FOREACH_DEV()`` macro to deal with
+ * non-contiguous ranges of devices.
+ * These non-contiguous ranges can be created by calls to hotplug functions or
+ * by some PMDs.
  *
  * @return
  *   - The total number of usable Ethernet devices.
@@ -1870,7 +1842,8 @@ int rte_eth_dev_attach(const char *devargs, uint8_t *port_id);
  * @param port_id
  *   The port identifier of the device to detach.
  * @param devname
- *  A pointer to a device name actually detached.
+ *   A pointer to a buffer that will be filled with the device name.
+ *   This buffer must be at least RTE_DEV_NAME_MAX_LEN long.
  * @return
  *  0 on success and devname is filled, negative on error
  */
@@ -2369,7 +2342,7 @@ rte_eth_xstats_get_names_by_id(uint8_t port_id,
  * @param port_id
  *   The port identifier of the Ethernet device.
  * @param ids
- *   A pointer to an ids array passed by application. This tells wich
+ *   A pointer to an ids array passed by application. This tells which
  *   statistics values function should retrieve. This parameter
  *   can be set to NULL if n is 0. In this case function will retrieve
  *   all avalible statistics.
@@ -3008,6 +2981,10 @@ static inline int rte_eth_tx_descriptor_status(uint8_t port_id,
  * rte_eth_tx_burst() function must [attempt to] free the *rte_mbuf*  buffers
  * of those packets whose transmission was effectively completed.
  *
+ * If the PMD is DEV_TX_OFFLOAD_MT_LOCKFREE capable, multiple threads can
+ * invoke this function concurrently on the same tx queue without SW lock.
+ * @see rte_eth_dev_info_get, struct rte_eth_txconf::txq_flags
+ *
  * @param port_id
  *   The port identifier of the Ethernet device.
  * @param queue_id
@@ -3277,7 +3254,7 @@ rte_eth_tx_buffer_flush(uint8_t port_id, uint16_t queue_id,
  *     causing N packets to be sent, and the error callback to be called for
  *     the rest.
  */
-static inline uint16_t __attribute__((always_inline))
+static __rte_always_inline uint16_t
 rte_eth_tx_buffer(uint8_t port_id, uint16_t queue_id,
 		struct rte_eth_dev_tx_buffer *buffer, struct rte_mbuf *tx_pkt)
 {
@@ -3412,8 +3389,8 @@ enum rte_eth_event_type {
 	RTE_ETH_EVENT_MAX       /**< max value of this enum */
 };
 
-typedef void (*rte_eth_dev_cb_fn)(uint8_t port_id, \
-		enum rte_eth_event_type event, void *cb_arg);
+typedef int (*rte_eth_dev_cb_fn)(uint8_t port_id,
+		enum rte_eth_event_type event, void *cb_arg, void *ret_param);
 /**< user application callback to be registered for interrupts */
 
 
@@ -3429,11 +3406,6 @@ typedef void (*rte_eth_dev_cb_fn)(uint8_t port_id, \
  *  User supplied callback function to be called.
  * @param cb_arg
  *  Pointer to the parameters for the registered callback.
- *
- *  The user data is overwritten in the case of RTE_ETH_EVENT_VF_MBOX.
- *	This even occurs when a message from the VF is received by the PF.
- *	The user data is overwritten with struct rte_pmd_ixgbe_mb_event_param.
- *	This struct is defined in rte_pmd_ixgbe.h.
  *
  * @return
  *  - On success, zero.
@@ -3474,15 +3446,17 @@ int rte_eth_dev_callback_unregister(uint8_t port_id,
  * @param event
  *  Eth device interrupt event type.
  * @param cb_arg
- *  Update callback parameter to pass data back to user application.
+ *  callback parameter.
+ * @param ret_param
+ *  To pass data back to user application.
  *  This allows the user application to decide if a particular function
  *  is permitted or not.
  *
  * @return
- *  void
+ *  int
  */
-void _rte_eth_dev_callback_process(struct rte_eth_dev *dev,
-				enum rte_eth_event_type event, void *cb_arg);
+int _rte_eth_dev_callback_process(struct rte_eth_dev *dev,
+		enum rte_eth_event_type event, void *cb_arg, void *ret_param);
 
 /**
  * When there is no rx packet coming in Rx Queue for a long time, we can
@@ -3837,171 +3811,6 @@ int rte_eth_mirror_rule_reset(uint8_t port_id,
  */
 int rte_eth_set_queue_rate_limit(uint8_t port_id, uint16_t queue_idx,
 			uint16_t tx_rate);
-
-/**
- * Initialize bypass logic. This function needs to be called before
- * executing any other bypass API.
- *
- * @param port
- *   The port identifier of the Ethernet device.
- * @return
- *   - (0) if successful.
- *   - (-ENOTSUP) if hardware doesn't support.
- *   - (-EINVAL) if bad parameter.
- */
-int rte_eth_dev_bypass_init(uint8_t port);
-
-/**
- * Return bypass state.
- *
- * @param port
- *   The port identifier of the Ethernet device.
- * @param state
- *   The return bypass state.
- *   - (1) Normal mode
- *   - (2) Bypass mode
- *   - (3) Isolate mode
- * @return
- *   - (0) if successful.
- *   - (-ENOTSUP) if hardware doesn't support.
- *   - (-EINVAL) if bad parameter.
- */
-int rte_eth_dev_bypass_state_show(uint8_t port, uint32_t *state);
-
-/**
- * Set bypass state
- *
- * @param port
- *   The port identifier of the Ethernet device.
- * @param new_state
- *   The current bypass state.
- *   - (1) Normal mode
- *   - (2) Bypass mode
- *   - (3) Isolate mode
- * @return
- *   - (0) if successful.
- *   - (-ENOTSUP) if hardware doesn't support.
- *   - (-EINVAL) if bad parameter.
- */
-int rte_eth_dev_bypass_state_set(uint8_t port, uint32_t *new_state);
-
-/**
- * Return bypass state when given event occurs.
- *
- * @param port
- *   The port identifier of the Ethernet device.
- * @param event
- *   The bypass event
- *   - (1) Main power on (power button is pushed)
- *   - (2) Auxiliary power on (power supply is being plugged)
- *   - (3) Main power off (system shutdown and power supply is left plugged in)
- *   - (4) Auxiliary power off (power supply is being unplugged)
- *   - (5) Display or set the watchdog timer
- * @param state
- *   The bypass state when given event occurred.
- *   - (1) Normal mode
- *   - (2) Bypass mode
- *   - (3) Isolate mode
- * @return
- *   - (0) if successful.
- *   - (-ENOTSUP) if hardware doesn't support.
- *   - (-EINVAL) if bad parameter.
- */
-int rte_eth_dev_bypass_event_show(uint8_t port, uint32_t event, uint32_t *state);
-
-/**
- * Set bypass state when given event occurs.
- *
- * @param port
- *   The port identifier of the Ethernet device.
- * @param event
- *   The bypass event
- *   - (1) Main power on (power button is pushed)
- *   - (2) Auxiliary power on (power supply is being plugged)
- *   - (3) Main power off (system shutdown and power supply is left plugged in)
- *   - (4) Auxiliary power off (power supply is being unplugged)
- *   - (5) Display or set the watchdog timer
- * @param state
- *   The assigned state when given event occurs.
- *   - (1) Normal mode
- *   - (2) Bypass mode
- *   - (3) Isolate mode
- * @return
- *   - (0) if successful.
- *   - (-ENOTSUP) if hardware doesn't support.
- *   - (-EINVAL) if bad parameter.
- */
-int rte_eth_dev_bypass_event_store(uint8_t port, uint32_t event, uint32_t state);
-
-/**
- * Set bypass watchdog timeout count.
- *
- * @param port
- *   The port identifier of the Ethernet device.
- * @param timeout
- *   The timeout to be set.
- *   - (0) 0 seconds (timer is off)
- *   - (1) 1.5 seconds
- *   - (2) 2 seconds
- *   - (3) 3 seconds
- *   - (4) 4 seconds
- *   - (5) 8 seconds
- *   - (6) 16 seconds
- *   - (7) 32 seconds
- * @return
- *   - (0) if successful.
- *   - (-ENOTSUP) if hardware doesn't support.
- *   - (-EINVAL) if bad parameter.
- */
-int rte_eth_dev_wd_timeout_store(uint8_t port, uint32_t timeout);
-
-/**
- * Get bypass firmware version.
- *
- * @param port
- *   The port identifier of the Ethernet device.
- * @param ver
- *   The firmware version
- * @return
- *   - (0) if successful.
- *   - (-ENOTSUP) if hardware doesn't support.
- *   - (-EINVAL) if bad parameter.
- */
-int rte_eth_dev_bypass_ver_show(uint8_t port, uint32_t *ver);
-
-/**
- * Return bypass watchdog timeout in seconds
- *
- * @param port
- *   The port identifier of the Ethernet device.
- * @param wd_timeout
- *   The return watchdog timeout. "0" represents timer expired
- *   - (0) 0 seconds (timer is off)
- *   - (1) 1.5 seconds
- *   - (2) 2 seconds
- *   - (3) 3 seconds
- *   - (4) 4 seconds
- *   - (5) 8 seconds
- *   - (6) 16 seconds
- *   - (7) 32 seconds
- * @return
- *   - (0) if successful.
- *   - (-ENOTSUP) if hardware doesn't support.
- *   - (-EINVAL) if bad parameter.
- */
-int rte_eth_dev_bypass_wd_timeout_show(uint8_t port, uint32_t *wd_timeout);
-
-/**
- * Reset bypass watchdog timer
- *
- * @param port
- *   The port identifier of the Ethernet device.
- * @return
- *   - (0) if successful.
- *   - (-ENOTSUP) if hardware doesn't support.
- *   - (-EINVAL) if bad parameter.
- */
-int rte_eth_dev_bypass_wd_reset(uint8_t port);
 
  /**
  * Configuration of Receive Side Scaling hash computation of Ethernet device.
@@ -4598,7 +4407,7 @@ rte_eth_dev_l2_tunnel_offload_set(uint8_t port_id,
 * @param port_id
 *   pointer to port identifier of the device
 * @return
-*   - (0) if successful.
+*   - (0) if successful and port_id is filled.
 *   - (-ENODEV or -EINVAL) on failure.
 */
 int
@@ -4617,6 +4426,26 @@ rte_eth_dev_get_port_by_name(const char *name, uint8_t *port_id);
 */
 int
 rte_eth_dev_get_name_by_port(uint8_t port_id, char *name);
+
+/**
+ * Check that numbers of Rx and Tx descriptors satisfy descriptors limits from
+ * the ethernet device information, otherwise adjust them to boundaries.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param nb_rx_desc
+ *   A pointer to a uint16_t where the number of receive
+ *   descriptors stored.
+ * @param nb_tx_desc
+ *   A pointer to a uint16_t where the number of transmit
+ *   descriptors stored.
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOTSUP, -ENODEV or -EINVAL) on failure.
+ */
+int rte_eth_dev_adjust_nb_rx_tx_desc(uint8_t port_id,
+				     uint16_t *nb_rx_desc,
+				     uint16_t *nb_tx_desc);
 
 #ifdef __cplusplus
 }

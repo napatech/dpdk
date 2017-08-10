@@ -38,10 +38,9 @@ default_path=$PATH
 # - DPDK_BUILD_TEST_CONFIGS (defconfig1+option1+option2 defconfig2)
 # - DPDK_DEP_ARCHIVE
 # - DPDK_DEP_CFLAGS
-# - DPDK_DEP_ISAL_CRYPTO (y/[n])
 # - DPDK_DEP_LDFLAGS
 # - DPDK_DEP_MOFED (y/[n])
-# - DPDK_DEP_NUMA (y/[n])
+# - DPDK_DEP_NUMA ([y]/n)
 # - DPDK_DEP_PCAP (y/[n])
 # - DPDK_DEP_SSL (y/[n])
 # - DPDK_DEP_SZE (y/[n])
@@ -121,7 +120,6 @@ reset_env ()
 	unset CROSS
 	unset DPDK_DEP_ARCHIVE
 	unset DPDK_DEP_CFLAGS
-	unset DPDK_DEP_ISAL_CRYPTO
 	unset DPDK_DEP_LDFLAGS
 	unset DPDK_DEP_MOFED
 	unset DPDK_DEP_NUMA
@@ -163,8 +161,8 @@ config () # <directory> <target> <options>
 		sed -ri 's,(TEST_PMD_RECORD_.*=)n,\1y,' $1/.config )
 
 		# Automatic configuration
-		test "$DPDK_DEP_NUMA" != y || \
-		sed -ri               's,(NUMA=)n,\1y,' $1/.config
+		test "$DPDK_DEP_NUMA" != n || \
+		sed -ri             's,(NUMA.*=)y,\1n,' $1/.config
 		sed -ri    's,(LIBRTE_IEEE1588=)n,\1y,' $1/.config
 		sed -ri             's,(BYPASS=)n,\1y,' $1/.config
 		test "$DPDK_DEP_ARCHIVE" != y || \
@@ -182,7 +180,7 @@ config () # <directory> <target> <options>
 		sed -ri   's,(PMD_ARMV8_CRYPTO=)n,\1y,' $1/.config
 		test -z "$AESNI_MULTI_BUFFER_LIB_PATH" || \
 		sed -ri       's,(PMD_AESNI_MB=)n,\1y,' $1/.config
-		test "$DPDK_DEP_ISAL_CRYPTO" != y || \
+		test -z "$AESNI_MULTI_BUFFER_LIB_PATH" || \
 		sed -ri      's,(PMD_AESNI_GCM=)n,\1y,' $1/.config
 		test -z "$LIBSSO_SNOW3G_PATH" || \
 		sed -ri         's,(PMD_SNOW3G=)n,\1y,' $1/.config

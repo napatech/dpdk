@@ -36,6 +36,7 @@ Network Interface Controller Drivers
     :numbered:
 
     overview
+    features
     build_and_test
     ark
     avp
@@ -64,6 +65,7 @@ Network Interface Controller Drivers
     vhost
     vmxnet3
     pcap_ring
+    fail_safe
 
 **Figures**
 

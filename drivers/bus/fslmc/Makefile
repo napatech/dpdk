@@ -1,7 +1,6 @@
 #   BSD LICENSE
 #
-#   Copyright(c) 2016 NXP.
-#   All rights reserved.
+#   Copyright 2016 NXP.
 #
 #   Redistribution and use in source and binary forms, with or without
 #   modification, are permitted provided that the following conditions
@@ -63,12 +62,16 @@ SRCS-$(CONFIG_RTE_LIBRTE_FSLMC_BUS) += \
         qbman/qbman_portal.c
 
 SRCS-$(CONFIG_RTE_LIBRTE_FSLMC_BUS) += \
+	mc/dpmng.c \
         mc/dpbp.c \
         mc/dpio.c \
-        mc/mc_sys.c
+        mc/mc_sys.c \
+	mc/dpcon.c \
+	mc/dpci.c
 
 SRCS-$(CONFIG_RTE_LIBRTE_FSLMC_BUS) += portal/dpaa2_hw_dpio.c
 SRCS-$(CONFIG_RTE_LIBRTE_FSLMC_BUS) += portal/dpaa2_hw_dpbp.c
+SRCS-$(CONFIG_RTE_LIBRTE_FSLMC_BUS) += portal/dpaa2_hw_dpci.c
 SRCS-$(CONFIG_RTE_LIBRTE_FSLMC_BUS) += fslmc_vfio.c
 SRCS-$(CONFIG_RTE_LIBRTE_FSLMC_BUS) += fslmc_bus.c
 

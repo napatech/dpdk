@@ -430,7 +430,7 @@ enic_intr_handler(void *arg)
 	vnic_intr_return_all_credits(&enic->intr);
 
 	enic_link_update(enic);
-	_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
+	_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL, NULL);
 	enic_log_q_error(enic);
 }
 
@@ -1225,7 +1225,7 @@ int enic_set_mtu(struct enic *enic, uint16_t new_mtu)
 		}
 	}
 
-	/* replace Rx funciton with a no-op to avoid getting stale pkts */
+	/* replace Rx function with a no-op to avoid getting stale pkts */
 	eth_dev->rx_pkt_burst = enic_dummy_recv_pkts;
 	rte_mb();
 
@@ -1313,6 +1313,9 @@ static int enic_dev_init(struct enic *enic)
 			eth_dev->data->mac_addrs);
 
 	vnic_dev_set_reset_flag(enic->vdev, 0);
+
+	LIST_INIT(&enic->flows);
+	rte_spinlock_init(&enic->flows_lock);
 
 	/* set up link status checking */
 	vnic_dev_notify_set(enic->vdev, -1); /* No Intr for notify */

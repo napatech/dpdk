@@ -64,7 +64,6 @@
 #include "mlx5.h"
 #include "mlx5_rxtx.h"
 #include "mlx5_autoconf.h"
-#include "mlx5_defs.h"
 
 /**
  * Allocate TX queue elements.
@@ -103,9 +102,10 @@ txq_alloc_elts(struct txq_ctrl *txq_ctrl, unsigned int elts_n)
 static void
 txq_free_elts(struct txq_ctrl *txq_ctrl)
 {
-	unsigned int elts_n = 1 << txq_ctrl->txq.elts_n;
-	unsigned int elts_head = txq_ctrl->txq.elts_head;
-	unsigned int elts_tail = txq_ctrl->txq.elts_tail;
+	const uint16_t elts_n = 1 << txq_ctrl->txq.elts_n;
+	const uint16_t elts_m = elts_n - 1;
+	uint16_t elts_head = txq_ctrl->txq.elts_head;
+	uint16_t elts_tail = txq_ctrl->txq.elts_tail;
 	struct rte_mbuf *(*elts)[elts_n] = txq_ctrl->txq.elts;
 
 	DEBUG("%p: freeing WRs", (void *)txq_ctrl);
@@ -114,18 +114,17 @@ txq_free_elts(struct txq_ctrl *txq_ctrl)
 	txq_ctrl->txq.elts_comp = 0;
 
 	while (elts_tail != elts_head) {
-		struct rte_mbuf *elt = (*elts)[elts_tail];
+		struct rte_mbuf *elt = (*elts)[elts_tail & elts_m];
 
 		assert(elt != NULL);
 		rte_pktmbuf_free_seg(elt);
 #ifndef NDEBUG
 		/* Poisoning. */
-		memset(&(*elts)[elts_tail],
+		memset(&(*elts)[elts_tail & elts_m],
 		       0x77,
-		       sizeof((*elts)[elts_tail]));
+		       sizeof((*elts)[elts_tail & elts_m]));
 #endif
-		if (++elts_tail == elts_n)
-			elts_tail = 0;
+		++elts_tail;
 	}
 }
 
@@ -149,9 +148,8 @@ txq_cleanup(struct txq_ctrl *txq_ctrl)
 	if (txq_ctrl->cq != NULL)
 		claim_zero(ibv_destroy_cq(txq_ctrl->cq));
 	for (i = 0; (i != RTE_DIM(txq_ctrl->txq.mp2mr)); ++i) {
-		if (txq_ctrl->txq.mp2mr[i].mp == NULL)
+		if (txq_ctrl->txq.mp2mr[i].mr == NULL)
 			break;
-		assert(txq_ctrl->txq.mp2mr[i].mr != NULL);
 		claim_zero(ibv_dereg_mr(txq_ctrl->txq.mp2mr[i].mr));
 	}
 	memset(txq_ctrl, 0, sizeof(*txq_ctrl));
@@ -244,7 +242,7 @@ txq_ctrl_setup(struct rte_eth_dev *dev, struct txq_ctrl *txq_ctrl,
 		ERROR("MLX5_ENABLE_CQE_COMPRESSION must never be set");
 		goto error;
 	}
-	(void)conf; /* Thresholds configuration (ignored). */
+	tmpl.txq.flags = conf->txq_flags;
 	assert(desc > MLX5_TX_COMP_THRESH);
 	tmpl.txq.elts_n = log2above(desc);
 	if (priv->mps == MLX5_MPW_ENHANCED)
@@ -497,8 +495,6 @@ mlx5_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		DEBUG("%p: adding TX queue %p to list",
 		      (void *)dev, (void *)txq_ctrl);
 		(*priv->txqs)[idx] = &txq_ctrl->txq;
-		/* Update send callback. */
-		priv_select_tx_function(priv);
 	}
 	priv_unlock(priv);
 	return -ret;

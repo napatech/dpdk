@@ -144,6 +144,8 @@ rte_metrics_reg_names(const char * const *names, uint16_t cnt_names)
 		entry = &stats->metadata[idx_name + stats->cnt_stats];
 		strncpy(entry->name, names[idx_name],
 			RTE_METRICS_MAX_NAME_LEN);
+		/* Enforce NULL-termination */
+		entry->name[RTE_METRICS_MAX_NAME_LEN - 1] = '\0';
 		memset(entry->value, 0, sizeof(entry->value));
 		entry->idx_next_stat = idx_name + stats->cnt_stats + 1;
 	}
@@ -176,7 +178,7 @@ rte_metrics_update_values(int port_id,
 	uint16_t cnt_setsize;
 
 	if (port_id != RTE_METRICS_GLOBAL &&
-			(port_id < 0 || port_id > RTE_MAX_ETHPORTS))
+			(port_id < 0 || port_id >= RTE_MAX_ETHPORTS))
 		return -EINVAL;
 
 	if (values == NULL)
@@ -263,7 +265,7 @@ rte_metrics_get_values(int port_id,
 	int return_value;
 
 	if (port_id != RTE_METRICS_GLOBAL &&
-			(port_id < 0 || port_id > RTE_MAX_ETHPORTS))
+			(port_id < 0 || port_id >= RTE_MAX_ETHPORTS))
 		return -EINVAL;
 
 	memzone = rte_memzone_lookup(RTE_METRICS_MEMZONE_NAME);

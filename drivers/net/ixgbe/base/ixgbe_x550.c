@@ -86,6 +86,10 @@ s32 ixgbe_init_ops_X550(struct ixgbe_hw *hw)
 	/* Manageability interface */
 	mac->ops.set_fw_drv_ver = ixgbe_set_fw_drv_ver_x550;
 	switch (hw->device_id) {
+	case IXGBE_DEV_ID_X550EM_X_1G_T:
+		hw->mac.ops.led_on = NULL;
+		hw->mac.ops.led_off = NULL;
+		break;
 	case IXGBE_DEV_ID_X550EM_X_10G_T:
 	case IXGBE_DEV_ID_X550EM_A_10G_T:
 		hw->mac.ops.led_on = ixgbe_led_on_t_X550em;
@@ -459,9 +463,13 @@ STATIC s32 ixgbe_identify_phy_x550em(struct ixgbe_hw *hw)
 		hw->phy.type = ixgbe_phy_x550em_kr;
 		break;
 	case IXGBE_DEV_ID_X550EM_A_10G_T:
-	case IXGBE_DEV_ID_X550EM_X_1G_T:
 	case IXGBE_DEV_ID_X550EM_X_10G_T:
 		return ixgbe_identify_phy_generic(hw);
+	case IXGBE_DEV_ID_X550EM_X_1G_T:
+		hw->phy.type = ixgbe_phy_ext_1g_t;
+		hw->phy.ops.read_reg = NULL;
+		hw->phy.ops.write_reg = NULL;
+		break;
 	case IXGBE_DEV_ID_X550EM_A_1G_T:
 	case IXGBE_DEV_ID_X550EM_A_1G_T_L:
 		hw->phy.type = ixgbe_phy_fw;
@@ -751,6 +759,11 @@ s32 ixgbe_init_ops_X550EM(struct ixgbe_hw *hw)
 		phy->ops.set_phy_power = NULL;
 		phy->ops.get_firmware_version = NULL;
 		break;
+	case IXGBE_DEV_ID_X550EM_X_1G_T:
+		mac->ops.setup_fc = NULL;
+		phy->ops.identify = ixgbe_identify_phy_x550em;
+		phy->ops.set_phy_power = NULL;
+		break;
 	default:
 		phy->ops.identify = ixgbe_identify_phy_x550em;
 	}
@@ -945,6 +958,11 @@ s32 ixgbe_init_ops_X550EM_x(struct ixgbe_hw *hw)
 				      ixgbe_write_i2c_combined_generic_unlocked;
 	link->addr = IXGBE_CS4227;
 
+	if (hw->device_id == IXGBE_DEV_ID_X550EM_X_1G_T) {
+		mac->ops.setup_fc = NULL;
+		mac->ops.setup_eee = NULL;
+		mac->ops.init_led_link_act = NULL;
+	}
 
 	return ret_val;
 }
@@ -1915,6 +1933,8 @@ void ixgbe_init_mac_link_ops_X550em(struct ixgbe_hw *hw)
 						ixgbe_setup_mac_link_sfp_x550em;
 		break;
 	case ixgbe_media_type_copper:
+		if (hw->device_id == IXGBE_DEV_ID_X550EM_X_1G_T)
+			break;
 		if (hw->mac.type == ixgbe_mac_X550EM_a) {
 			if (hw->device_id == IXGBE_DEV_ID_X550EM_A_1G_T ||
 			    hw->device_id == IXGBE_DEV_ID_X550EM_A_1G_T_L) {
@@ -2380,10 +2400,6 @@ s32 ixgbe_init_phy_ops_X550em(struct ixgbe_hw *hw)
 		/* set up for CS4227 usage */
 		hw->phy.phy_semaphore_mask = IXGBE_GSSR_SHARED_I2C_SM;
 		break;
-	case IXGBE_DEV_ID_X550EM_X_1G_T:
-		phy->ops.read_reg_mdi = ixgbe_read_phy_reg_mdi_22;
-		phy->ops.write_reg_mdi = ixgbe_write_phy_reg_mdi_22;
-		break;
 	default:
 		break;
 	}
@@ -2414,6 +2430,7 @@ s32 ixgbe_init_phy_ops_X550em(struct ixgbe_hw *hw)
 	case ixgbe_phy_ext_1g_t:
 		/* link is managed by FW */
 		phy->ops.setup_link = NULL;
+		phy->ops.reset = NULL;
 		break;
 	case ixgbe_phy_x550em_xfi:
 		/* link is managed by HW */
@@ -2565,10 +2582,9 @@ mac_reset_top:
 	status = hw->mac.ops.acquire_swfw_sync(hw, swfw_mask);
 	if (status != IXGBE_SUCCESS) {
 		ERROR_REPORT2(IXGBE_ERROR_CAUTION,
-				"semaphore failed with %d", status);
+			"semaphore failed with %d", status);
 		return IXGBE_ERR_SWFW_SYNC;
 	}
-
 	ctrl |= IXGBE_READ_REG(hw, IXGBE_CTRL);
 	IXGBE_WRITE_REG(hw, IXGBE_CTRL, ctrl);
 	IXGBE_WRITE_FLUSH(hw);

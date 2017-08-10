@@ -327,9 +327,9 @@ rte_malloc_set_limit(const char *type, size_t max);
  * rte_malloc
  *
  * @param addr
- *   Adress obtained from a previous rte_malloc call
+ *   Address obtained from a previous rte_malloc call
  * @return
- *   NULL on error
+ *   RTE_BAD_PHYS_ADDR on error
  *   otherwise return physical address of the buffer
  */
 phys_addr_t

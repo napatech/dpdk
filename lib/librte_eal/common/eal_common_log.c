@@ -112,6 +112,15 @@ rte_get_log_level(void)
 	return rte_log_get_global_level();
 }
 
+int
+rte_log_get_level(uint32_t type)
+{
+	if (type >= rte_logs.dynamic_types_len)
+		return -1;
+
+	return rte_logs.dynamic_types[type].loglevel;
+}
+
 /* Set global log type */
 __rte_deprecated void
 rte_set_log_type(uint32_t type, int enable)
@@ -173,13 +182,13 @@ rte_log_set_level_regexp(const char *pattern, uint32_t level)
 	return 0;
 }
 
-/* get the current loglevel for the message beeing processed */
+/* get the current loglevel for the message being processed */
 int rte_log_cur_msg_loglevel(void)
 {
 	return RTE_PER_LCORE(log_cur_msg).loglevel;
 }
 
-/* get the current logtype for the message beeing processed */
+/* get the current logtype for the message being processed */
 int rte_log_cur_msg_logtype(void)
 {
 	return RTE_PER_LCORE(log_cur_msg).logtype;

@@ -34,7 +34,7 @@
 #define _SW_EVDEV_H_
 
 #include <rte_eventdev.h>
-#include <rte_eventdev_pmd.h>
+#include <rte_eventdev_pmd_vdev.h>
 #include <rte_atomic.h>
 
 #define SW_DEFAULT_CREDIT_QUANTA 32
@@ -59,6 +59,7 @@
 
 #define EVENTDEV_NAME_SW_PMD event_sw
 #define SW_PMD_NAME RTE_STR(event_sw)
+#define SW_PMD_NAME_MAX 64
 
 #define SW_SCHED_TYPE_DIRECT (RTE_SCHED_TYPE_PARALLEL + 1)
 
@@ -149,6 +150,7 @@ struct sw_qid {
 	uint32_t cq_num_mapped_cqs;
 	uint32_t cq_next_tx; /* cq to write next (non-atomic) packet */
 	uint32_t cq_map[SW_PORTS_MAX];
+	uint64_t to_port[SW_PORTS_MAX];
 
 	/* Track flow ids for atomic load balancing */
 	struct sw_fid_t fids[SW_QID_NUM_FIDS];
@@ -189,9 +191,9 @@ struct sw_port {
 	int16_t num_ordered_qids;
 
 	/** Ring and buffer for pulling events from workers for scheduling */
-	struct qe_ring *rx_worker_ring __rte_cache_aligned;
+	struct rte_event_ring *rx_worker_ring __rte_cache_aligned;
 	/** Ring and buffer for pushing packets to workers after scheduling */
-	struct qe_ring *cq_worker_ring;
+	struct rte_event_ring *cq_worker_ring;
 
 	/* hole */
 
@@ -275,6 +277,8 @@ struct sw_evdev {
 	/* store num stats and offset of the stats for each queue */
 	uint16_t xstats_count_per_qid[RTE_EVENT_MAX_QUEUES_PER_DEV];
 	uint16_t xstats_offset_for_qid[RTE_EVENT_MAX_QUEUES_PER_DEV];
+
+	char service_name[SW_PMD_NAME_MAX];
 };
 
 static inline struct sw_evdev *

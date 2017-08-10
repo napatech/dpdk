@@ -84,6 +84,7 @@ static void fm10k_rx_queue_release(void *queue);
 static void fm10k_set_rx_function(struct rte_eth_dev *dev);
 static void fm10k_set_tx_function(struct rte_eth_dev *dev);
 static int fm10k_check_ftag(struct rte_devargs *devargs);
+static int fm10k_link_update(struct rte_eth_dev *dev, int wait_to_complete);
 
 struct fm10k_xstats_name_off {
 	char name[RTE_ETH_XSTATS_NAME_SIZE];
@@ -712,7 +713,7 @@ fm10k_dev_rx_init(struct rte_eth_dev *dev)
 {
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct fm10k_macvlan_filter_info *macvlan;
-	struct rte_pci_device *pdev = RTE_DEV_TO_PCI(dev->device);
+	struct rte_pci_device *pdev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pdev->intr_handle;
 	int i, ret;
 	struct fm10k_rx_queue *rxq;
@@ -1166,6 +1167,8 @@ fm10k_dev_start(struct rte_eth_dev *dev)
 	if (!(dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_VMDQ_FLAG))
 		fm10k_vlan_filter_set(dev, hw->mac.default_vid, true);
 
+	fm10k_link_update(dev, 0);
+
 	return 0;
 }
 
@@ -1173,7 +1176,7 @@ static void
 fm10k_dev_stop(struct rte_eth_dev *dev)
 {
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct rte_pci_device *pdev = RTE_DEV_TO_PCI(dev->device);
+	struct rte_pci_device *pdev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pdev->intr_handle;
 	int i;
 
@@ -1393,7 +1396,7 @@ fm10k_dev_infos_get(struct rte_eth_dev *dev,
 	struct rte_eth_dev_info *dev_info)
 {
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct rte_pci_device *pdev = RTE_DEV_TO_PCI(dev->device);
+	struct rte_pci_device *pdev = RTE_ETH_DEV_TO_PCI(dev);
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -1588,7 +1591,7 @@ fm10k_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 }
 
 static void
-fm10k_vlan_offload_set(__rte_unused struct rte_eth_dev *dev, int mask)
+fm10k_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 {
 	if (mask & ETH_VLAN_STRIP_MASK) {
 		if (!dev->data->dev_conf.rxmode.hw_vlan_strip)
@@ -2345,7 +2348,7 @@ static int
 fm10k_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct rte_pci_device *pdev = RTE_DEV_TO_PCI(dev->device);
+	struct rte_pci_device *pdev = RTE_ETH_DEV_TO_PCI(dev);
 
 	/* Enable ITR */
 	if (hw->mac.type == fm10k_mac_pf)
@@ -2362,7 +2365,7 @@ static int
 fm10k_dev_rx_queue_intr_disable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct rte_pci_device *pdev = RTE_DEV_TO_PCI(dev->device);
+	struct rte_pci_device *pdev = RTE_ETH_DEV_TO_PCI(dev);
 
 	/* Disable ITR */
 	if (hw->mac.type == fm10k_mac_pf)
@@ -2378,7 +2381,7 @@ static int
 fm10k_dev_rxq_interrupt_setup(struct rte_eth_dev *dev)
 {
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct rte_pci_device *pdev = RTE_DEV_TO_PCI(dev->device);
+	struct rte_pci_device *pdev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pdev->intr_handle;
 	uint32_t intr_vector, vec;
 	uint16_t queue_id;
@@ -2882,7 +2885,7 @@ static int
 eth_fm10k_dev_init(struct rte_eth_dev *dev)
 {
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct rte_pci_device *pdev = RTE_DEV_TO_PCI(dev->device);
+	struct rte_pci_device *pdev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pdev->intr_handle;
 	int diag, i;
 	struct fm10k_macvlan_filter_info *macvlan;
@@ -3069,7 +3072,7 @@ static int
 eth_fm10k_dev_uninit(struct rte_eth_dev *dev)
 {
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct rte_pci_device *pdev = RTE_DEV_TO_PCI(dev->device);
+	struct rte_pci_device *pdev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pdev->intr_handle;
 	PMD_INIT_FUNC_TRACE();
 

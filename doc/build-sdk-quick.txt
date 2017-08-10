@@ -1,7 +1,10 @@
 Basic build
+	make defconfig && make
+	or
 	make config T=x86_64-native-linuxapp-gcc && make
 Build commands
 	config           get configuration from target template (T=)
+	defconfig        auto-select target template based on arch, OS, etc.
 	all              same as build (default rule)
 	build            build in a configured directory
 	clean            remove files but keep configuration
@@ -11,6 +14,8 @@ Build commands
 	examples_clean   clean examples for given targets (T=)
 	test             compile tests and run basic unit tests
 	test-*           run specific subset of unit tests
+	tags|etags|gtags generate tags database for given targets (T=)
+	cscope           generate cscope database for given targets (T=)
 Build variables
 	EXTRA_CPPFLAGS   preprocessor options
 	EXTRA_CFLAGS     compiler options

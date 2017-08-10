@@ -180,11 +180,8 @@ struct rte_ip_frag_tbl * rte_ip_frag_table_create(uint32_t bucket_num,
  * @param tbl
  *   Fragmentation table to free.
  */
-static inline void
-rte_ip_frag_table_destroy(struct rte_ip_frag_tbl *tbl)
-{
-	rte_free(tbl);
-}
+void
+rte_ip_frag_table_destroy(struct rte_ip_frag_tbl *tbl);
 
 /**
  * This function implements the fragmentation of IPv6 packets.
@@ -233,7 +230,7 @@ rte_ipv6_fragment_packet(struct rte_mbuf *pkt_in,
  *   Pointer to the IPv6 fragment extension header.
  * @return
  *   Pointer to mbuf for reassembled packet, or NULL if:
- *   - an error occured.
+ *   - an error occurred.
  *   - not all fragments of the packet are collected yet.
  */
 struct rte_mbuf *rte_ipv6_frag_reassemble_packet(struct rte_ip_frag_tbl *tbl,
@@ -307,7 +304,7 @@ int32_t rte_ipv4_fragment_packet(struct rte_mbuf *pkt_in,
  *   Pointer to the IPV4 header inside the fragment.
  * @return
  *   Pointer to mbuf for reassebled packet, or NULL if:
- *   - an error occured.
+ *   - an error occurred.
  *   - not all fragments of the packet are collected yet.
  */
 struct rte_mbuf * rte_ipv4_frag_reassemble_packet(struct rte_ip_frag_tbl *tbl,

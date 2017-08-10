@@ -1,7 +1,7 @@
 /*
  *   BSD LICENSE
  *
- *   Copyright(c) 2016 Cavium networks. All rights reserved.
+ *   Copyright(c) 2016 Cavium, Inc. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -13,7 +13,7 @@
  *       notice, this list of conditions and the following disclaimer in
  *       the documentation and/or other materials provided with the
  *       distribution.
- *     * Neither the name of Cavium networks nor the names of its
+ *     * Neither the name of Cavium, Inc nor the names of its
  *       contributors may be used to endorse or promote products derived
  *       from this software without specific prior written permission.
  *
@@ -45,7 +45,6 @@
 #include <rte_log.h>
 #include <rte_debug.h>
 #include <rte_dev.h>
-#include <rte_pci.h>
 #include <rte_memory.h>
 #include <rte_memcpy.h>
 #include <rte_memzone.h>
@@ -126,8 +125,6 @@ rte_event_dev_info_get(uint8_t dev_id, struct rte_event_dev_info *dev_info)
 	dev_info->dequeue_timeout_ns = dev->data->dev_conf.dequeue_timeout_ns;
 
 	dev_info->dev = dev->dev;
-	if (dev->driver)
-		dev_info->driver_name = dev->driver->pci_drv.driver.name;
 	return 0;
 }
 
@@ -301,7 +298,7 @@ rte_event_dev_port_config(struct rte_eventdev *dev, uint8_t nb_ports)
 			sizeof(dev->data->links_map[0]) * nb_ports *
 			RTE_EVENT_MAX_QUEUES_PER_DEV,
 			RTE_CACHE_LINE_SIZE);
-		if (dev->data->links_map == NULL) {
+		if (links_map == NULL) {
 			dev->data->nb_ports = 0;
 			RTE_EDEV_LOG_ERR("failed to realloc mem for port_map,"
 					"nb_ports %u", nb_ports);
@@ -369,9 +366,10 @@ rte_event_dev_configure(uint8_t dev_id,
 
 	/* Check dequeue_timeout_ns value is in limit */
 	if (!(dev_conf->event_dev_cfg & RTE_EVENT_DEV_CFG_PER_DEQUEUE_TIMEOUT)) {
-		if (dev_conf->dequeue_timeout_ns < info.min_dequeue_timeout_ns
+		if (dev_conf->dequeue_timeout_ns &&
+		    (dev_conf->dequeue_timeout_ns < info.min_dequeue_timeout_ns
 			|| dev_conf->dequeue_timeout_ns >
-				 info.max_dequeue_timeout_ns) {
+				 info.max_dequeue_timeout_ns)) {
 			RTE_EDEV_LOG_ERR("dev%d invalid dequeue_timeout_ns=%d"
 			" min_dequeue_timeout_ns=%d max_dequeue_timeout_ns=%d",
 			dev_id, dev_conf->dequeue_timeout_ns,
@@ -429,8 +427,9 @@ rte_event_dev_configure(uint8_t dev_id,
 					dev_id);
 		return -EINVAL;
 	}
-	if (dev_conf->nb_event_port_dequeue_depth >
-			 info.max_event_port_dequeue_depth) {
+	if ((info.event_dev_cap & RTE_EVENT_DEV_CAP_BURST_MODE) &&
+		 (dev_conf->nb_event_port_dequeue_depth >
+			 info.max_event_port_dequeue_depth)) {
 		RTE_EDEV_LOG_ERR("dev%d nb_dq_depth=%d > max_dq_depth=%d",
 		dev_id, dev_conf->nb_event_port_dequeue_depth,
 		info.max_event_port_dequeue_depth);
@@ -443,8 +442,9 @@ rte_event_dev_configure(uint8_t dev_id,
 					dev_id);
 		return -EINVAL;
 	}
-	if (dev_conf->nb_event_port_enqueue_depth >
-			 info.max_event_port_enqueue_depth) {
+	if ((info.event_dev_cap & RTE_EVENT_DEV_CAP_BURST_MODE) &&
+		(dev_conf->nb_event_port_enqueue_depth >
+			 info.max_event_port_enqueue_depth)) {
 		RTE_EDEV_LOG_ERR("dev%d nb_enq_depth=%d > max_enq_depth=%d",
 		dev_id, dev_conf->nb_event_port_enqueue_depth,
 		info.max_event_port_enqueue_depth);
@@ -1174,10 +1174,6 @@ rte_event_pmd_release(struct rte_eventdev *eventdev)
 	if (eventdev == NULL)
 		return -EINVAL;
 
-	ret = rte_event_dev_close(eventdev->data->dev_id);
-	if (ret < 0)
-		return ret;
-
 	eventdev->attached = RTE_EVENTDEV_DETACHED;
 	eventdev_globals.nb_devs--;
 
@@ -1200,146 +1196,5 @@ rte_event_pmd_release(struct rte_eventdev *eventdev)
 	}
 
 	eventdev->data = NULL;
-	return 0;
-}
-
-struct rte_eventdev *
-rte_event_pmd_vdev_init(const char *name, size_t dev_private_size,
-		int socket_id)
-{
-	struct rte_eventdev *eventdev;
-
-	/* Allocate device structure */
-	eventdev = rte_event_pmd_allocate(name, socket_id);
-	if (eventdev == NULL)
-		return NULL;
-
-	/* Allocate private device structure */
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-		eventdev->data->dev_private =
-				rte_zmalloc_socket("eventdev device private",
-						dev_private_size,
-						RTE_CACHE_LINE_SIZE,
-						socket_id);
-
-		if (eventdev->data->dev_private == NULL)
-			rte_panic("Cannot allocate memzone for private device"
-					" data");
-	}
-
-	return eventdev;
-}
-
-int
-rte_event_pmd_vdev_uninit(const char *name)
-{
-	struct rte_eventdev *eventdev;
-
-	if (name == NULL)
-		return -EINVAL;
-
-	eventdev = rte_event_pmd_get_named_dev(name);
-	if (eventdev == NULL)
-		return -ENODEV;
-
-	/* Free the event device */
-	rte_event_pmd_release(eventdev);
-
-	return 0;
-}
-
-int
-rte_event_pmd_pci_probe(struct rte_pci_driver *pci_drv,
-			struct rte_pci_device *pci_dev)
-{
-	struct rte_eventdev_driver *eventdrv;
-	struct rte_eventdev *eventdev;
-
-	char eventdev_name[RTE_EVENTDEV_NAME_MAX_LEN];
-
-	int retval;
-
-	eventdrv = (struct rte_eventdev_driver *)pci_drv;
-	if (eventdrv == NULL)
-		return -ENODEV;
-
-	rte_pci_device_name(&pci_dev->addr, eventdev_name,
-			sizeof(eventdev_name));
-
-	eventdev = rte_event_pmd_allocate(eventdev_name,
-			 pci_dev->device.numa_node);
-	if (eventdev == NULL)
-		return -ENOMEM;
-
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-		eventdev->data->dev_private =
-				rte_zmalloc_socket(
-						"eventdev private structure",
-						eventdrv->dev_private_size,
-						RTE_CACHE_LINE_SIZE,
-						rte_socket_id());
-
-		if (eventdev->data->dev_private == NULL)
-			rte_panic("Cannot allocate memzone for private "
-					"device data");
-	}
-
-	eventdev->dev = &pci_dev->device;
-	eventdev->driver = eventdrv;
-
-	/* Invoke PMD device initialization function */
-	retval = (*eventdrv->eventdev_init)(eventdev);
-	if (retval == 0)
-		return 0;
-
-	RTE_EDEV_LOG_ERR("driver %s: (vendor_id=0x%x device_id=0x%x)"
-			" failed", pci_drv->driver.name,
-			(unsigned int) pci_dev->id.vendor_id,
-			(unsigned int) pci_dev->id.device_id);
-
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
-		rte_free(eventdev->data->dev_private);
-
-	eventdev->attached = RTE_EVENTDEV_DETACHED;
-	eventdev_globals.nb_devs--;
-
-	return -ENXIO;
-}
-
-int
-rte_event_pmd_pci_remove(struct rte_pci_device *pci_dev)
-{
-	const struct rte_eventdev_driver *eventdrv;
-	struct rte_eventdev *eventdev;
-	char eventdev_name[RTE_EVENTDEV_NAME_MAX_LEN];
-	int ret;
-
-	if (pci_dev == NULL)
-		return -EINVAL;
-
-	rte_pci_device_name(&pci_dev->addr, eventdev_name,
-			sizeof(eventdev_name));
-
-	eventdev = rte_event_pmd_get_named_dev(eventdev_name);
-	if (eventdev == NULL)
-		return -ENODEV;
-
-	eventdrv = (const struct rte_eventdev_driver *)pci_dev->driver;
-	if (eventdrv == NULL)
-		return -ENODEV;
-
-	/* Invoke PMD device un-init function */
-	if (*eventdrv->eventdev_uninit) {
-		ret = (*eventdrv->eventdev_uninit)(eventdev);
-		if (ret)
-			return ret;
-	}
-
-	/* Free event device */
-	rte_event_pmd_release(eventdev);
-
-	eventdev->dev = NULL;
-	eventdev->driver = NULL;
-
 	return 0;
 }

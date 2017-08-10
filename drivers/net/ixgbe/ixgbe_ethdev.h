@@ -33,12 +33,15 @@
 
 #ifndef _IXGBE_ETHDEV_H_
 #define _IXGBE_ETHDEV_H_
+#include "base/ixgbe_type.h"
 #include "base/ixgbe_dcb.h"
 #include "base/ixgbe_dcb_82599.h"
 #include "base/ixgbe_dcb_82598.h"
 #include "ixgbe_bypass.h"
 #include <rte_time.h>
 #include <rte_hash.h>
+#include <rte_pci.h>
+#include <rte_tm_driver.h>
 
 /* need update link, bit flag */
 #define IXGBE_FLAG_NEED_LINK_UPDATE (uint32_t)(1 << 0)
@@ -72,7 +75,7 @@
 #endif
 #define IXGBE_HWSTRIP_BITMAP_SIZE (IXGBE_MAX_RX_QUEUE_NUM / (sizeof(uint32_t) * NBBY))
 
-/* EITR Inteval is in 2048ns uinits for 1G and 10G link */
+/* EITR Interval is in 2048ns uinits for 1G and 10G link */
 #define IXGBE_EITR_INTERVAL_UNIT_NS	2048
 #define IXGBE_EITR_ITR_INT_SHIFT       3
 #define IXGBE_EITR_INTERVAL_US(us) \
@@ -152,6 +155,13 @@
 		return -ENOTSUP;\
 } while (0)
 
+/* Link speed for X550 auto negotiation */
+#define IXGBE_LINK_SPEED_X550_AUTONEG	(IXGBE_LINK_SPEED_100_FULL | \
+					 IXGBE_LINK_SPEED_1GB_FULL | \
+					 IXGBE_LINK_SPEED_2_5GB_FULL | \
+					 IXGBE_LINK_SPEED_5GB_FULL | \
+					 IXGBE_LINK_SPEED_10GB_FULL)
+
 /*
  * Information about the fdir mode.
  */
@@ -189,6 +199,7 @@ struct ixgbe_fdir_rule {
 	uint32_t fdirflags; /* drop or forward */
 	uint32_t soft_id; /* an unique value for this rule */
 	uint8_t queue; /* assigned rx queue */
+	uint8_t flex_bytes_offset;
 };
 
 struct ixgbe_hw_fdir_info {
@@ -434,6 +445,68 @@ struct ixgbe_bw_conf {
 	uint8_t tc_num; /* Number of TCs. */
 };
 
+/* Struct to store Traffic Manager shaper profile. */
+struct ixgbe_tm_shaper_profile {
+	TAILQ_ENTRY(ixgbe_tm_shaper_profile) node;
+	uint32_t shaper_profile_id;
+	uint32_t reference_count;
+	struct rte_tm_shaper_params profile;
+};
+
+TAILQ_HEAD(ixgbe_shaper_profile_list, ixgbe_tm_shaper_profile);
+
+/* node type of Traffic Manager */
+enum ixgbe_tm_node_type {
+	IXGBE_TM_NODE_TYPE_PORT,
+	IXGBE_TM_NODE_TYPE_TC,
+	IXGBE_TM_NODE_TYPE_QUEUE,
+	IXGBE_TM_NODE_TYPE_MAX,
+};
+
+/* Struct to store Traffic Manager node configuration. */
+struct ixgbe_tm_node {
+	TAILQ_ENTRY(ixgbe_tm_node) node;
+	uint32_t id;
+	uint32_t priority;
+	uint32_t weight;
+	uint32_t reference_count;
+	uint16_t no;
+	struct ixgbe_tm_node *parent;
+	struct ixgbe_tm_shaper_profile *shaper_profile;
+	struct rte_tm_node_params params;
+};
+
+TAILQ_HEAD(ixgbe_tm_node_list, ixgbe_tm_node);
+
+/* The configuration of Traffic Manager */
+struct ixgbe_tm_conf {
+	struct ixgbe_shaper_profile_list shaper_profile_list;
+	struct ixgbe_tm_node *root; /* root node - port */
+	struct ixgbe_tm_node_list tc_list; /* node list for all the TCs */
+	struct ixgbe_tm_node_list queue_list; /* node list for all the queues */
+	/**
+	 * The number of added TC nodes.
+	 * It should be no more than the TC number of this port.
+	 */
+	uint32_t nb_tc_node;
+	/**
+	 * The number of added queue nodes.
+	 * It should be no more than the queue number of this port.
+	 */
+	uint32_t nb_queue_node;
+	/**
+	 * This flag is used to check if APP can change the TM node
+	 * configuration.
+	 * When it's true, means the configuration is applied to HW,
+	 * APP should not change the configuration.
+	 * As we don't support on-the-fly configuration, when starting
+	 * the port, APP should call the hierarchy_commit API to set this
+	 * flag to true. When stopping the port, this flag should be set
+	 * to false.
+	 */
+	bool committed;
+};
+
 /*
  * Structure to store private data for each driver instance (for each port).
  */
@@ -450,9 +523,9 @@ struct ixgbe_adapter {
 	struct ixgbe_mirror_info    mr_data;
 	struct ixgbe_vf_info        *vfdata;
 	struct ixgbe_uta_info       uta_info;
-#ifdef RTE_NIC_BYPASS
+#ifdef RTE_LIBRTE_IXGBE_BYPASS
 	struct ixgbe_bypass_info    bps;
-#endif /* RTE_NIC_BYPASS */
+#endif /* RTE_LIBRTE_IXGBE_BYPASS */
 	struct ixgbe_filter_info    filter;
 	struct ixgbe_l2_tn_info     l2_tn;
 	struct ixgbe_bw_conf        bw_conf;
@@ -462,10 +535,8 @@ struct ixgbe_adapter {
 	struct rte_timecounter      systime_tc;
 	struct rte_timecounter      rx_tstamp_tc;
 	struct rte_timecounter      tx_tstamp_tc;
+ 	struct ixgbe_tm_conf        tm_conf;
 };
-
-#define IXGBE_DEV_TO_PCI(eth_dev) \
-	RTE_DEV_TO_PCI((eth_dev)->device)
 
 #define IXGBE_DEV_PRIVATE_TO_HW(adapter)\
 	(&((struct ixgbe_adapter *)adapter)->hw)
@@ -511,6 +582,9 @@ struct ixgbe_adapter {
 
 #define IXGBE_DEV_PRIVATE_TO_BW_CONF(adapter) \
 	(&((struct ixgbe_adapter *)adapter)->bw_conf)
+
+#define IXGBE_DEV_PRIVATE_TO_TM_CONF(adapter) \
+	(&((struct ixgbe_adapter *)adapter)->tm_conf)
 
 /*
  * RX/TX function prototypes
@@ -624,6 +698,8 @@ void ixgbe_filterlist_flush(void);
  */
 int ixgbe_fdir_configure(struct rte_eth_dev *dev);
 int ixgbe_fdir_set_input_mask(struct rte_eth_dev *dev);
+int ixgbe_fdir_set_flexbytes_offset(struct rte_eth_dev *dev,
+				    uint16_t offset);
 int ixgbe_fdir_filter_program(struct rte_eth_dev *dev,
 			      struct ixgbe_fdir_rule *rule,
 			      bool del, bool update);
@@ -671,6 +747,11 @@ int ixgbe_vt_check(struct ixgbe_hw *hw);
 int ixgbe_set_vf_rate_limit(struct rte_eth_dev *dev, uint16_t vf,
 			    uint16_t tx_rate, uint64_t q_msk);
 bool is_ixgbe_supported(struct rte_eth_dev *dev);
+int ixgbe_tm_ops_get(struct rte_eth_dev *dev, void *ops);
+void ixgbe_tm_conf_init(struct rte_eth_dev *dev);
+void ixgbe_tm_conf_uninit(struct rte_eth_dev *dev);
+int ixgbe_set_queue_rate_limit(struct rte_eth_dev *dev, uint16_t queue_idx,
+			       uint16_t tx_rate);
 
 static inline int
 ixgbe_ethertype_filter_lookup(struct ixgbe_filter_info *filter_info,

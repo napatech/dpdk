@@ -34,6 +34,9 @@
 #ifndef _TESTPMD_H_
 #define _TESTPMD_H_
 
+#include <rte_pci.h>
+#include <rte_gro.h>
+
 #define RTE_PORT_ALL            (~(portid_t)0x0)
 
 #define RTE_TEST_RX_DESC_MAX    2048
@@ -299,10 +302,12 @@ extern uint16_t nb_rx_queue_stats_mappings;
 extern uint16_t verbose_level; /**< Drives messages being displayed, if any. */
 extern uint8_t  interactive;
 extern uint8_t  auto_start;
+extern uint8_t  tx_first;
 extern char cmdline_filename[PATH_MAX]; /**< offline commands file */
 extern uint8_t  numa_support; /**< set by "--numa" parameter */
 extern uint16_t port_topology; /**< set by "--port-topology" parameter */
 extern uint8_t no_flush_rx; /**<set by "--no-flush-rx" parameter */
+extern uint8_t flow_isolate_all; /**< set by "--flow-isolate-all */
 extern uint8_t  mp_anon; /**< set by "--mp-anon" parameter */
 extern uint8_t no_link_check; /**<set by "--disable-link-check" parameter */
 extern volatile int test_done; /* stop packet forwarding when set to 1. */
@@ -311,7 +316,7 @@ extern uint8_t rmv_interrupt; /**< disabled by "--no-rmv-interrupt" parameter */
 extern uint32_t event_print_mask;
 /**< set by "--print-event xxxx" and "--mask-event xxxx parameters */
 
-#ifdef RTE_NIC_BYPASS
+#ifdef RTE_LIBRTE_IXGBE_BYPASS
 extern uint32_t bypass_timeout; /**< Store the NIC bypass watchdog timeout */
 #endif
 
@@ -378,6 +383,7 @@ extern enum dcb_queue_mapping_mode dcb_q_mapping;
 extern uint16_t mbuf_data_size; /**< Mbuf data space size. */
 extern uint32_t param_total_num_mbufs;
 
+extern uint16_t stats_period;
 
 #ifdef RTE_LIBRTE_LATENCY_STATS
 extern uint8_t latencystats_enabled;
@@ -427,6 +433,14 @@ extern struct ether_addr peer_eth_addrs[RTE_MAX_ETHPORTS];
 
 extern uint32_t burst_tx_delay_time; /**< Burst tx delay time(us) for mac-retry. */
 extern uint32_t burst_tx_retry_num;  /**< Burst tx retry number for mac-retry. */
+
+#define GRO_DEFAULT_FLOW_NUM 4
+#define GRO_DEFAULT_ITEM_NUM_PER_FLOW DEF_PKT_BURST
+struct gro_status {
+	struct rte_gro_param param;
+	uint8_t enable;
+};
+extern struct gro_status gro_ports[RTE_MAX_ETHPORTS];
 
 static inline unsigned int
 lcore_num(void)
@@ -543,6 +557,7 @@ int port_flow_flush(portid_t port_id);
 int port_flow_query(portid_t port_id, uint32_t rule,
 		    enum rte_flow_action_type action);
 void port_flow_list(portid_t port_id, uint32_t n, const uint32_t *group);
+int port_flow_isolate(portid_t port_id, int set);
 
 void rx_ring_desc_display(portid_t port_id, queueid_t rxq_id, uint16_t rxd_id);
 void tx_ring_desc_display(portid_t port_id, queueid_t txq_id, uint16_t txd_id);
@@ -625,6 +640,7 @@ void get_2tuple_filter(uint8_t port_id, uint16_t index);
 void get_5tuple_filter(uint8_t port_id, uint16_t index);
 int rx_queue_id_is_invalid(queueid_t rxq_id);
 int tx_queue_id_is_invalid(queueid_t txq_id);
+void setup_gro(const char *mode, uint8_t port_id);
 
 /* Functions to manage the set of filtered Multicast MAC addresses */
 void mcast_addr_add(uint8_t port_id, struct ether_addr *mc_addr);
@@ -632,6 +648,7 @@ void mcast_addr_remove(uint8_t port_id, struct ether_addr *mc_addr);
 void port_dcb_info_display(uint8_t port_id);
 
 uint8_t *open_ddp_package_file(const char *file_path, uint32_t *size);
+int save_ddp_package_file(const char *file_path, uint8_t *buf, uint32_t size);
 int close_ddp_package_file(uint8_t *buf);
 
 enum print_warning {

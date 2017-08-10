@@ -40,6 +40,7 @@
 #include <numaif.h>
 #endif
 
+#include <rte_errno.h>
 #include <rte_ethdev.h>
 #include <rte_log.h>
 #include <rte_string_fns.h>
@@ -272,7 +273,7 @@ rte_vhost_get_mtu(int vid, uint16_t *mtu)
 	if (!(dev->flags & VIRTIO_DEV_READY))
 		return -EAGAIN;
 
-	if (!(dev->features & VIRTIO_NET_F_MTU))
+	if (!(dev->features & (1ULL << VIRTIO_NET_F_MTU)))
 		return -ENOTSUP;
 
 	*mtu = dev->mtu;
@@ -295,7 +296,8 @@ rte_vhost_get_numa_node(int vid)
 			    MPOL_F_NODE | MPOL_F_ADDR);
 	if (ret < 0) {
 		RTE_LOG(ERR, VHOST_CONFIG,
-			"(%d) failed to query numa node: %d\n", vid, ret);
+			"(%d) failed to query numa node: %s\n",
+			vid, rte_strerror(errno));
 		return -1;
 	}
 
@@ -474,4 +476,30 @@ rte_vhost_log_used_vring(int vid, uint16_t vring_idx,
 		return;
 
 	vhost_log_used_vring(dev, vq, offset, len);
+}
+
+uint32_t
+rte_vhost_rx_queue_count(int vid, uint16_t qid)
+{
+	struct virtio_net *dev;
+	struct vhost_virtqueue *vq;
+
+	dev = get_device(vid);
+	if (dev == NULL)
+		return 0;
+
+	if (unlikely(qid >= dev->nr_vring || (qid & 1) == 0)) {
+		RTE_LOG(ERR, VHOST_DATA, "(%d) %s: invalid virtqueue idx %d.\n",
+			dev->vid, __func__, qid);
+		return 0;
+	}
+
+	vq = dev->virtqueue[qid];
+	if (vq == NULL)
+		return 0;
+
+	if (unlikely(vq->enabled == 0 || vq->avail == NULL))
+		return 0;
+
+	return *((volatile uint16_t *)&vq->avail->idx) - vq->last_avail_idx;
 }

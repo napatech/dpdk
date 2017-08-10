@@ -213,12 +213,12 @@ static void ena_tx_queue_release(void *queue);
 static void ena_rx_queue_release_bufs(struct ena_ring *ring);
 static void ena_tx_queue_release_bufs(struct ena_ring *ring);
 static int ena_link_update(struct rte_eth_dev *dev,
-			   __rte_unused int wait_to_complete);
+			   int wait_to_complete);
 static int ena_queue_restart(struct ena_ring *ring);
 static int ena_queue_restart_all(struct rte_eth_dev *dev,
 				 enum ena_ring_type ring_type);
 static void ena_stats_restart(struct rte_eth_dev *dev);
-static void ena_infos_get(__rte_unused struct rte_eth_dev *dev,
+static void ena_infos_get(struct rte_eth_dev *dev,
 			  struct rte_eth_dev_info *dev_info);
 static int ena_rss_reta_update(struct rte_eth_dev *dev,
 			       struct rte_eth_rss_reta_entry64 *reta_conf,
@@ -689,11 +689,10 @@ static void ena_rx_queue_release_bufs(struct ena_ring *ring)
 
 static void ena_tx_queue_release_bufs(struct ena_ring *ring)
 {
-	unsigned int ring_mask = ring->ring_size - 1;
+	unsigned int i;
 
-	while (ring->next_to_clean != ring->next_to_use) {
-		struct ena_tx_buffer *tx_buf =
-			&ring->tx_buffer_info[ring->next_to_clean & ring_mask];
+	for (i = 0; i < ring->ring_size; ++i) {
+		struct ena_tx_buffer *tx_buf = &ring->tx_buffer_info[i];
 
 		if (tx_buf->mbuf)
 			rte_pktmbuf_free(tx_buf->mbuf);
@@ -1289,7 +1288,7 @@ static int eth_ena_dev_init(struct rte_eth_dev *eth_dev)
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
 
-	pci_dev = RTE_DEV_TO_PCI(eth_dev->device);
+	pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	adapter->pdev = pci_dev;
 
 	PMD_INIT_LOG(INFO, "Initializing %x:%x:%x.%d",
@@ -1451,7 +1450,7 @@ static void ena_infos_get(struct rte_eth_dev *dev,
 	ena_dev = &adapter->ena_dev;
 	ena_assert_msg(ena_dev != NULL, "Uninitialized device");
 
-	dev_info->pci_dev = RTE_DEV_TO_PCI(dev->device);
+	dev_info->pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 
 	dev_info->speed_capa =
 			ETH_LINK_SPEED_1G   |
@@ -1772,6 +1771,7 @@ static uint16_t eth_ena_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 		/* Free whole mbuf chain  */
 		mbuf = tx_info->mbuf;
 		rte_pktmbuf_free(mbuf);
+		tx_info->mbuf = NULL;
 
 		/* Put back descriptor to the ring for reuse */
 		tx_ring->empty_tx_reqs[next_to_clean & ring_mask] = req_id;

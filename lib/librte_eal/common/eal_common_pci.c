@@ -2,6 +2,7 @@
  *   BSD LICENSE
  *
  *   Copyright(c) 2010-2014 Intel Corporation. All rights reserved.
+ *   Copyright 2013-2014 6WIND S.A.
  *   All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
@@ -15,36 +16,6 @@
  *       the documentation and/or other materials provided with the
  *       distribution.
  *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
-/*   BSD LICENSE
- *
- *   Copyright 2013-2014 6WIND S.A.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of 6WIND S.A. nor the names of its
  *       contributors may be used to endorse or promote products derived
  *       from this software without specific prior written permission.
  *
@@ -102,15 +73,41 @@ const char *pci_get_sysfs_path(void)
 static struct rte_devargs *pci_devargs_lookup(struct rte_pci_device *dev)
 {
 	struct rte_devargs *devargs;
+	struct rte_pci_addr addr;
+	struct rte_bus *pbus;
 
+	pbus = rte_bus_find_by_name("pci");
 	TAILQ_FOREACH(devargs, &devargs_list, next) {
-		if (devargs->type != RTE_DEVTYPE_BLACKLISTED_PCI &&
-			devargs->type != RTE_DEVTYPE_WHITELISTED_PCI)
+		if (devargs->bus != pbus)
 			continue;
-		if (!rte_eal_compare_pci_addr(&dev->addr, &devargs->pci.addr))
+		devargs->bus->parse(devargs->name, &addr);
+		if (!rte_eal_compare_pci_addr(&dev->addr, &addr))
 			return devargs;
 	}
 	return NULL;
+}
+
+void
+pci_name_set(struct rte_pci_device *dev)
+{
+	struct rte_devargs *devargs;
+
+	/* Each device has its internal, canonical name set. */
+	rte_pci_device_name(&dev->addr,
+			dev->name, sizeof(dev->name));
+	devargs = pci_devargs_lookup(dev);
+	dev->device.devargs = devargs;
+	/* In blacklist mode, if the device is not blacklisted, no
+	 * rte_devargs exists for it.
+	 */
+	if (devargs != NULL)
+		/* If an rte_devargs exists, the generic rte_device uses the
+		 * given name as its namea
+		 */
+		dev->device.name = dev->device.devargs->name;
+	else
+		/* Otherwise, it uses the internal, canonical form. */
+		dev->device.name = dev->name;
 }
 
 /* map a particular resource from a file */
@@ -212,12 +209,9 @@ rte_pci_probe_one_driver(struct rte_pci_driver *dr,
 	loc = &dev->addr;
 
 	/* The device is not blacklisted; Check if driver supports it */
-	if (!rte_pci_match(dr, dev)) {
+	if (!rte_pci_match(dr, dev))
 		/* Match of device and driver failed */
-		RTE_LOG(DEBUG, EAL, "Driver (%s) doesn't match the device\n",
-			dr->driver.name);
 		return 1;
-	}
 
 	RTE_LOG(INFO, EAL, "PCI device "PCI_PRI_FMT" on NUMA socket %i\n",
 			loc->domain, loc->bus, loc->devid, loc->function,
@@ -225,11 +219,16 @@ rte_pci_probe_one_driver(struct rte_pci_driver *dr,
 
 	/* no initialization when blacklisted, return without error */
 	if (dev->device.devargs != NULL &&
-		dev->device.devargs->type ==
-			RTE_DEVTYPE_BLACKLISTED_PCI) {
+		dev->device.devargs->policy ==
+			RTE_DEV_BLACKLISTED) {
 		RTE_LOG(INFO, EAL, "  Device is blacklisted, not"
 			" initializing\n");
 		return 1;
+	}
+
+	if (dev->device.numa_node < 0) {
+		RTE_LOG(WARNING, EAL, "  Invalid NUMA socket, default to 0\n");
+		dev->device.numa_node = 0;
 	}
 
 	RTE_LOG(INFO, EAL, "  probe driver: %x:%x %s\n", dev->id.vendor_id,
@@ -250,7 +249,13 @@ rte_pci_probe_one_driver(struct rte_pci_driver *dr,
 	ret = dr->probe(dr, dev);
 	if (ret) {
 		dev->driver = NULL;
-		if (dr->drv_flags & RTE_PCI_DRV_NEED_MAPPING)
+		dev->device.driver = NULL;
+		if ((dr->drv_flags & RTE_PCI_DRV_NEED_MAPPING) &&
+			/* Don't unmap if device is unsupported and
+			 * driver needs mapped resources.
+			 */
+			!(ret > 0 &&
+				(dr->drv_flags & RTE_PCI_DRV_KEEP_MAPPED_RES)))
 			rte_pci_unmap_device(dev);
 	}
 
@@ -326,7 +331,7 @@ pci_probe_all_drivers(struct rte_pci_device *dev)
 
 /*
  * Find the pci device specified by pci address, then invoke probe function of
- * the driver of the devive.
+ * the driver of the device.
  */
 int
 rte_pci_probe_one(const struct rte_pci_addr *addr)
@@ -413,22 +418,18 @@ rte_pci_probe(void)
 	int probe_all = 0;
 	int ret = 0;
 
-	if (rte_eal_devargs_type_count(RTE_DEVTYPE_WHITELISTED_PCI) == 0)
+	if (rte_pci_bus.bus.conf.scan_mode != RTE_BUS_SCAN_WHITELIST)
 		probe_all = 1;
 
 	FOREACH_DEVICE_ON_PCIBUS(dev) {
 		probed++;
 
-		/* set devargs in PCI structure */
-		devargs = pci_devargs_lookup(dev);
-		if (devargs != NULL)
-			dev->device.devargs = devargs;
-
+		devargs = dev->device.devargs;
 		/* probe all or only whitelisted devices */
 		if (probe_all)
 			ret = pci_probe_all_drivers(dev);
 		else if (devargs != NULL &&
-			devargs->type == RTE_DEVTYPE_WHITELISTED_PCI)
+			devargs->policy == RTE_DEV_WHITELISTED)
 			ret = pci_probe_all_drivers(dev);
 		if (ret < 0) {
 			RTE_LOG(ERR, EAL, "Requested device " PCI_PRI_FMT
@@ -474,6 +475,20 @@ rte_pci_dump(FILE *f)
 	}
 }
 
+static int
+pci_parse(const char *name, void *addr)
+{
+	struct rte_pci_addr *out = addr;
+	struct rte_pci_addr pci_addr;
+	bool parse;
+
+	parse = (eal_parse_pci_BDF(name, &pci_addr) == 0 ||
+		 eal_parse_pci_DomBDF(name, &pci_addr) == 0);
+	if (parse && addr != NULL)
+		*out = pci_addr;
+	return parse == false;
+}
+
 /* register a driver */
 void
 rte_pci_register(struct rte_pci_driver *driver)
@@ -512,13 +527,54 @@ rte_pci_remove_device(struct rte_pci_device *pci_dev)
 	TAILQ_REMOVE(&rte_pci_bus.device_list, pci_dev, next);
 }
 
+static struct rte_device *
+pci_find_device(const struct rte_device *start, rte_dev_cmp_t cmp,
+		const void *data)
+{
+	struct rte_pci_device *dev;
+
+	FOREACH_DEVICE_ON_PCIBUS(dev) {
+		if (start && &dev->device == start) {
+			start = NULL; /* starting point found */
+			continue;
+		}
+		if (cmp(&dev->device, data) == 0)
+			return &dev->device;
+	}
+
+	return NULL;
+}
+
+static int
+pci_plug(struct rte_device *dev)
+{
+	return pci_probe_all_drivers(RTE_DEV_TO_PCI(dev));
+}
+
+static int
+pci_unplug(struct rte_device *dev)
+{
+	struct rte_pci_device *pdev;
+	int ret;
+
+	pdev = RTE_DEV_TO_PCI(dev);
+	ret = rte_pci_detach_dev(pdev);
+	rte_pci_remove_device(pdev);
+	free(pdev);
+	return ret;
+}
+
 struct rte_pci_bus rte_pci_bus = {
 	.bus = {
 		.scan = rte_pci_scan,
 		.probe = rte_pci_probe,
+		.find_device = pci_find_device,
+		.plug = pci_plug,
+		.unplug = pci_unplug,
+		.parse = pci_parse,
 	},
 	.device_list = TAILQ_HEAD_INITIALIZER(rte_pci_bus.device_list),
 	.driver_list = TAILQ_HEAD_INITIALIZER(rte_pci_bus.driver_list),
 };
 
-RTE_REGISTER_BUS(PCI_BUS_NAME, rte_pci_bus.bus);
+RTE_REGISTER_BUS(pci, rte_pci_bus.bus);

@@ -41,10 +41,11 @@ INC += rte_eal_memconfig.h rte_malloc_heap.h
 INC += rte_hexdump.h rte_devargs.h rte_bus.h rte_dev.h rte_vdev.h
 INC += rte_pci_dev_feature_defs.h rte_pci_dev_features.h
 INC += rte_malloc.h rte_keepalive.h rte_time.h
+INC += rte_service.h rte_service_component.h
 
 GENERIC_INC := rte_atomic.h rte_byteorder.h rte_cycles.h rte_prefetch.h
 GENERIC_INC += rte_spinlock.h rte_memcpy.h rte_cpuflags.h rte_rwlock.h
-GENERIC_INC += rte_vect.h rte_io.h
+GENERIC_INC += rte_vect.h rte_pause.h rte_io.h
 
 # defined in mk/arch/$(RTE_ARCH)/rte.vars.mk
 ARCH_DIR ?= $(RTE_ARCH)

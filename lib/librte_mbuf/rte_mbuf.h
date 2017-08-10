@@ -208,6 +208,8 @@ extern "C" {
 #define PKT_TX_TUNNEL_GRE     (0x2ULL << 45)
 #define PKT_TX_TUNNEL_IPIP    (0x3ULL << 45)
 #define PKT_TX_TUNNEL_GENEVE  (0x4ULL << 45)
+/**< TX packet with MPLS-in-UDP RFC 7510 header. */
+#define PKT_TX_TUNNEL_MPLSINUDP (0x5ULL << 45)
 /* add new TX TUNNEL type here */
 #define PKT_TX_TUNNEL_MASK    (0xFULL << 45)
 
@@ -840,7 +842,7 @@ static inline struct rte_mbuf *rte_mbuf_raw_alloc(struct rte_mempool *mp)
  * @param m
  *   The mbuf to be freed.
  */
-static inline void __attribute__((always_inline))
+static __rte_always_inline void
 rte_mbuf_raw_free(struct rte_mbuf *m)
 {
 	RTE_ASSERT(RTE_MBUF_DIRECT(m));
@@ -1136,6 +1138,7 @@ static inline struct rte_mbuf *rte_pktmbuf_alloc(struct rte_mempool *mp)
  *    Array size
  *  @return
  *   - 0: Success
+ *   - -ENOENT: Not enough entries in the mempool; no mbufs are retrieved.
  */
 static inline int rte_pktmbuf_alloc_bulk(struct rte_mempool *pool,
 	 struct rte_mbuf **mbufs, unsigned count)
@@ -1287,8 +1290,7 @@ static inline void rte_pktmbuf_detach(struct rte_mbuf *m)
  *   - (m) if it is the last reference. It can be recycled or freed.
  *   - (NULL) if the mbuf still has remaining references on it.
  */
-__attribute__((always_inline))
-static inline struct rte_mbuf *
+static __rte_always_inline struct rte_mbuf *
 rte_pktmbuf_prefree_seg(struct rte_mbuf *m)
 {
 	__rte_mbuf_sanity_check(m, 0);
@@ -1339,7 +1341,7 @@ __rte_pktmbuf_prefree_seg(struct rte_mbuf *m)
  * @param m
  *   The packet mbuf segment to be freed.
  */
-static inline void __attribute__((always_inline))
+static __rte_always_inline void
 rte_pktmbuf_free_seg(struct rte_mbuf *m)
 {
 	m = rte_pktmbuf_prefree_seg(m);
@@ -1453,7 +1455,7 @@ static inline void rte_pktmbuf_refcnt_update(struct rte_mbuf *m, int16_t v)
  */
 static inline uint16_t rte_pktmbuf_headroom(const struct rte_mbuf *m)
 {
-	__rte_mbuf_sanity_check(m, 1);
+	__rte_mbuf_sanity_check(m, 0);
 	return m->data_off;
 }
 
@@ -1467,7 +1469,7 @@ static inline uint16_t rte_pktmbuf_headroom(const struct rte_mbuf *m)
  */
 static inline uint16_t rte_pktmbuf_tailroom(const struct rte_mbuf *m)
 {
-	__rte_mbuf_sanity_check(m, 1);
+	__rte_mbuf_sanity_check(m, 0);
 	return (uint16_t)(m->buf_len - rte_pktmbuf_headroom(m) -
 			  m->data_len);
 }

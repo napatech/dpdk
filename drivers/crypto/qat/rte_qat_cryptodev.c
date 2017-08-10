@@ -35,18 +35,21 @@
 #include <rte_dev.h>
 #include <rte_malloc.h>
 #include <rte_cryptodev_pmd.h>
+#include <rte_cryptodev_pci.h>
 
 #include "qat_crypto.h"
 #include "qat_logs.h"
 
-static const struct rte_cryptodev_capabilities qat_cpm16_capabilities[] = {
-	QAT_BASE_CPM16_SYM_CAPABILITIES,
+uint8_t cryptodev_qat_driver_id;
+
+static const struct rte_cryptodev_capabilities qat_gen1_capabilities[] = {
+	QAT_BASE_GEN1_SYM_CAPABILITIES,
 	RTE_CRYPTODEV_END_OF_CAPABILITIES_LIST()
 };
 
-static const struct rte_cryptodev_capabilities qat_cpm17_capabilities[] = {
-	QAT_BASE_CPM16_SYM_CAPABILITIES,
-	QAT_EXTRA_CPM17_SYM_CAPABILITIES,
+static const struct rte_cryptodev_capabilities qat_gen2_capabilities[] = {
+	QAT_BASE_GEN1_SYM_CAPABILITIES,
+	QAT_EXTRA_GEN2_SYM_CAPABILITIES,
 	RTE_CRYPTODEV_END_OF_CAPABILITIES_LIST()
 };
 
@@ -70,7 +73,6 @@ static struct rte_cryptodev_ops crypto_qat_ops = {
 		/* Crypto related operations */
 		.session_get_size	= qat_crypto_sym_get_session_private_size,
 		.session_configure	= qat_crypto_sym_configure_session,
-		.session_initialize	= qat_crypto_sym_session_init,
 		.session_clear		= qat_crypto_sym_clear_session
 };
 
@@ -95,8 +97,7 @@ static const struct rte_pci_id pci_id_qat_map[] = {
 };
 
 static int
-crypto_qat_dev_init(__attribute__((unused)) struct rte_cryptodev_driver *crypto_drv,
-			struct rte_cryptodev *cryptodev)
+crypto_qat_dev_init(struct rte_cryptodev *cryptodev)
 {
 	struct qat_pmd_private *internals;
 
@@ -106,7 +107,7 @@ crypto_qat_dev_init(__attribute__((unused)) struct rte_cryptodev_driver *crypto_
 		RTE_DEV_TO_PCI(cryptodev->device)->addr.devid,
 		RTE_DEV_TO_PCI(cryptodev->device)->addr.function);
 
-	cryptodev->dev_type = RTE_CRYPTODEV_QAT_SYM_PMD;
+	cryptodev->driver_id = cryptodev_qat_driver_id;
 	cryptodev->dev_ops = &crypto_qat_ops;
 
 	cryptodev->enqueue_burst = qat_pmd_enqueue_op_burst;
@@ -121,12 +122,14 @@ crypto_qat_dev_init(__attribute__((unused)) struct rte_cryptodev_driver *crypto_
 	internals->max_nb_sessions = RTE_QAT_PMD_MAX_NB_SESSIONS;
 	switch (RTE_DEV_TO_PCI(cryptodev->device)->id.device_id) {
 	case 0x0443:
-		internals->qat_dev_capabilities = qat_cpm16_capabilities;
+		internals->qat_dev_gen = QAT_GEN1;
+		internals->qat_dev_capabilities = qat_gen1_capabilities;
 		break;
 	case 0x37c9:
 	case 0x19e3:
 	case 0x6f55:
-		internals->qat_dev_capabilities = qat_cpm17_capabilities;
+		internals->qat_dev_gen = QAT_GEN2;
+		internals->qat_dev_capabilities = qat_gen2_capabilities;
 		break;
 	default:
 		PMD_DRV_LOG(ERR,
@@ -147,17 +150,25 @@ crypto_qat_dev_init(__attribute__((unused)) struct rte_cryptodev_driver *crypto_
 	return 0;
 }
 
-static struct rte_cryptodev_driver rte_qat_pmd = {
-	.pci_drv = {
-		.id_table = pci_id_qat_map,
-		.drv_flags = RTE_PCI_DRV_NEED_MAPPING,
-		.probe = rte_cryptodev_pci_probe,
-		.remove = rte_cryptodev_pci_remove,
-	},
-	.cryptodev_init = crypto_qat_dev_init,
-	.dev_private_size = sizeof(struct qat_pmd_private),
+static int crypto_qat_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
+	struct rte_pci_device *pci_dev)
+{
+	return rte_cryptodev_pci_generic_probe(pci_dev,
+		sizeof(struct qat_pmd_private), crypto_qat_dev_init);
+}
+
+static int crypto_qat_pci_remove(struct rte_pci_device *pci_dev)
+{
+	return rte_cryptodev_pci_generic_remove(pci_dev, NULL);
+}
+
+static struct rte_pci_driver rte_qat_pmd = {
+	.id_table = pci_id_qat_map,
+	.drv_flags = RTE_PCI_DRV_NEED_MAPPING,
+	.probe = crypto_qat_pci_probe,
+	.remove = crypto_qat_pci_remove
 };
 
-RTE_PMD_REGISTER_PCI(CRYPTODEV_NAME_QAT_SYM_PMD, rte_qat_pmd.pci_drv);
+RTE_PMD_REGISTER_PCI(CRYPTODEV_NAME_QAT_SYM_PMD, rte_qat_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(CRYPTODEV_NAME_QAT_SYM_PMD, pci_id_qat_map);
-
+RTE_PMD_REGISTER_CRYPTO_DRIVER(rte_qat_pmd, cryptodev_qat_driver_id);

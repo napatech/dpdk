@@ -39,6 +39,9 @@ SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5.c
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_rxq.c
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_txq.c
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_rxtx.c
+ifeq ($(CONFIG_RTE_ARCH_X86_64),y)
+SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_rxtx_vec_sse.c
+endif
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_trigger.c
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_ethdev.c
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_mac.c
@@ -52,7 +55,7 @@ SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_flow.c
 
 # Basic CFLAGS.
 CFLAGS += -O3
-CFLAGS += -std=gnu99 -Wall -Wextra
+CFLAGS += -std=c11 -Wall -Wextra
 CFLAGS += -g
 CFLAGS += -I.
 CFLAGS += -D_BSD_SOURCE
@@ -100,6 +103,11 @@ mlx5_autoconf.h.new: FORCE
 
 mlx5_autoconf.h.new: $(RTE_SDK)/buildtools/auto-config-h.sh
 	$Q $(RM) -f -- '$@'
+	$Q sh -- '$<' '$@' \
+		HAVE_VERBS_IBV_EXP_FLOW_SPEC_ACTION_DROP \
+		infiniband/verbs_exp.h \
+		enum IBV_EXP_FLOW_SPEC_ACTION_DROP \
+		$(AUTOCONF_OUTPUT)
 	$Q sh -- '$<' '$@' \
 		HAVE_VERBS_IBV_EXP_CQ_COMPRESSED_CQE \
 		infiniband/verbs_exp.h \

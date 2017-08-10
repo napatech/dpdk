@@ -59,7 +59,7 @@ enum rte_pmd_i40e_mb_event_rsp {
  */
 struct rte_pmd_i40e_mb_event_param {
 	uint16_t vfid;     /**< Virtual Function number */
-	uint16_t msg_type; /**< VF to PF message type, see i40e_virtchnl_ops */
+	uint16_t msg_type; /**< VF to PF message type, see virtchnl_ops */
 	uint16_t retval;   /**< return value */
 	void *msg;         /**< pointer to message */
 	uint16_t msglen;   /**< length of the message */
@@ -71,7 +71,24 @@ struct rte_pmd_i40e_mb_event_param {
 enum rte_pmd_i40e_package_op {
 	RTE_PMD_I40E_PKG_OP_UNDEFINED = 0,
 	RTE_PMD_I40E_PKG_OP_WR_ADD,   /**< load package and add to info list */
+	RTE_PMD_I40E_PKG_OP_WR_DEL, /**< load package and delete from info list */
+	RTE_PMD_I40E_PKG_OP_WR_ONLY, /**< load package without modifying info list */
 	RTE_PMD_I40E_PKG_OP_MAX = 32
+};
+
+/**
+ * Types of package information.
+ */
+enum rte_pmd_i40e_package_info {
+	RTE_PMD_I40E_PKG_INFO_UNDEFINED = 0,
+	RTE_PMD_I40E_PKG_INFO_GLOBAL_HEADER,
+	RTE_PMD_I40E_PKG_INFO_GLOBAL_NOTES_SIZE,
+	RTE_PMD_I40E_PKG_INFO_GLOBAL_NOTES,
+	RTE_PMD_I40E_PKG_INFO_GLOBAL_MAX = 1024,
+	RTE_PMD_I40E_PKG_INFO_HEADER,
+	RTE_PMD_I40E_PKG_INFO_DEVID_NUM,
+	RTE_PMD_I40E_PKG_INFO_DEVID_LIST,
+	RTE_PMD_I40E_PKG_INFO_MAX = 0xFFFFFFFF
 };
 
 #define RTE_PMD_I40E_DDP_NAME_SIZE 32
@@ -88,6 +105,14 @@ struct rte_pmd_i40e_ddp_version {
 };
 
 /**
+ * Device ID for dynamic device personalization.
+ */
+struct rte_pmd_i40e_ddp_device_id {
+	uint32_t vendor_dev_id;
+	uint32_t sub_vendor_dev_id;
+};
+
+/**
  * Profile information in profile info list.
  */
 struct rte_pmd_i40e_profile_info {
@@ -97,6 +122,8 @@ struct rte_pmd_i40e_profile_info {
 	uint8_t reserved[7];
 	uint8_t name[RTE_PMD_I40E_DDP_NAME_SIZE];
 };
+
+#define RTE_PMD_I40E_DDP_OWNER_UNKNOWN 0xFF
 
 /**
  * Profile information list returned from HW.
@@ -492,11 +519,34 @@ int rte_pmd_i40e_set_tc_strict_prio(uint8_t port, uint8_t tc_map);
  *   - (0) if successful.
  *   - (-ENODEV) if *port* invalid.
  *   - (-EINVAL) if bad parameter.
- *   - (1) if profile exists.
+ *   - (-EEXIST) if profile exists.
+ *   - (-EACCES) if profile does not exist.
+ *   - (-ENOTSUP) if operation not supported.
  */
 int rte_pmd_i40e_process_ddp_package(uint8_t port, uint8_t *buff,
 				     uint32_t size,
 				     enum rte_pmd_i40e_package_op op);
+
+/**
+ * rte_pmd_i40e_get_ddp_info - Get profile's info
+ * @param pkg
+ *    buffer of package.
+ * @param pkg_size
+ *    package buffer size
+ * @param info
+ *    buffer for response
+ * @param size
+ *    response buffer size
+ * @param type
+ *    type of information requested
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOTSUP) if information type not supported by the profile.
+ *   - (-EINVAL) if bad parameter.
+ */
+int rte_pmd_i40e_get_ddp_info(uint8_t *pkg, uint32_t pkg_size,
+				     uint8_t *info, uint32_t size,
+				     enum rte_pmd_i40e_package_info type);
 
 /**
  * rte_pmd_i40e_get_ddp_list - Get loaded profile list

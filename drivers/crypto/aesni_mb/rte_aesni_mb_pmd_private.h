@@ -35,6 +35,9 @@
 
 #include "aesni_mb_ops.h"
 
+#define CRYPTODEV_NAME_AESNI_MB_PMD	crypto_aesni_mb
+/**< AES-NI Multi buffer PMD device name */
+
 #define MB_LOG_ERR(fmt, args...) \
 	RTE_LOG(ERR, CRYPTODEV, "[%s] %s() line %u: " fmt "\n",  \
 			RTE_STR(CRYPTODEV_NAME_AESNI_MB_PMD), \
@@ -167,6 +170,11 @@ struct aesni_mb_qp {
 /** AES-NI multi-buffer private session structure */
 struct aesni_mb_session {
 	JOB_CHAIN_ORDER chain_order;
+	struct {
+		uint16_t length;
+		uint16_t offset;
+	} iv;
+	/**< IV parameters */
 
 	/** Cipher Parameters */
 	struct {

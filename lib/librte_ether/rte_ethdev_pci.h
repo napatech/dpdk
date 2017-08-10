@@ -45,9 +45,6 @@
  * The *eth_dev* pointer is the address of the *rte_eth_dev* structure.
  * @param pci_dev
  * The *pci_dev* pointer is the address of the *rte_pci_device* structure.
- *
- * @return
- *   - 0 on success, negative on error
  */
 static inline void
 rte_eth_copy_pci_info(struct rte_eth_dev *eth_dev,
@@ -69,7 +66,6 @@ rte_eth_copy_pci_info(struct rte_eth_dev *eth_dev,
 
 	eth_dev->data->kdrv = pci_dev->kdrv;
 	eth_dev->data->numa_node = pci_dev->device.numa_node;
-	eth_dev->data->drv_name = pci_dev->driver->driver.name;
 }
 
 /**
@@ -118,7 +114,6 @@ rte_eth_dev_pci_allocate(struct rte_pci_device *dev, size_t private_data_size)
 	}
 
 	eth_dev->device = &dev->device;
-	eth_dev->intr_handle = &dev->intr_handle;
 	rte_eth_copy_pci_info(eth_dev, dev);
 	return eth_dev;
 }
@@ -133,6 +128,12 @@ rte_eth_dev_pci_release(struct rte_eth_dev *eth_dev)
 		rte_free(eth_dev->data->dev_private);
 
 	eth_dev->data->dev_private = NULL;
+
+	/*
+	 * Secondary process will check the name to attach.
+	 * Clear this field to avoid attaching a released ports.
+	 */
+	eth_dev->data->name[0] = '\0';
 
 	eth_dev->device = NULL;
 	eth_dev->intr_handle = NULL;

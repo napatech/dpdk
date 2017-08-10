@@ -2,7 +2,7 @@
  *   BSD LICENSE
  *
  *   Copyright (c) 2016 Freescale Semiconductor, Inc. All rights reserved.
- *   Copyright (c) 2016 NXP. All rights reserved.
+ *   Copyright 2016 NXP.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -34,6 +34,8 @@
 #ifndef _DPAA2_HW_PVT_H_
 #define _DPAA2_HW_PVT_H_
 
+#include <rte_eventdev.h>
+
 #include <mc/fsl_mc_sys.h>
 #include <fsl_qbman_portal.h>
 
@@ -45,6 +47,10 @@
 #endif
 #define lower_32_bits(x) ((uint32_t)(x))
 #define upper_32_bits(x) ((uint32_t)(((x) >> 16) >> 16))
+
+#define SVR_LS1080A             0x87030000
+#define SVR_LS2080A             0x87010000
+#define SVR_LS2088A             0x87090000
 
 #ifndef ETH_VLAN_HLEN
 #define ETH_VLAN_HLEN   4 /** < Vlan Header Length */
@@ -65,7 +71,7 @@
 
 #define MAX_BPID 256
 #define DPAA2_MBUF_HW_ANNOTATION	64
-#define DPAA2_FD_PTA_SIZE		64
+#define DPAA2_FD_PTA_SIZE		0
 
 #if (DPAA2_MBUF_HW_ANNOTATION + DPAA2_FD_PTA_SIZE) > RTE_PKTMBUF_HEADROOM
 #error "Annotation requirement is more than RTE_PKTMBUF_HEADROOM"
@@ -74,6 +80,8 @@
 /* we will re-use the HEADROOM for annotation in RX */
 #define DPAA2_HW_BUF_RESERVE	0
 #define DPAA2_PACKET_LAYOUT_ALIGN	64 /*changing from 256 */
+
+#define DPAA2_DPCI_MAX_QUEUES 2
 
 struct dpaa2_dpio_dev {
 	TAILQ_ENTRY(dpaa2_dpio_dev) next;
@@ -93,8 +101,11 @@ struct dpaa2_dpio_dev {
 	uintptr_t qbman_portal_ci_paddr;
 		/**< Physical address of Cache Inhibit Area */
 	uintptr_t ci_size; /**< Size of the CI region */
-	int32_t	vfio_fd; /**< File descriptor received via VFIO */
+	struct rte_intr_handle intr_handle; /* Interrupt related info */
+	int32_t	epoll_fd; /**< File descriptor created for interrupt polling */
 	int32_t hw_id; /**< An unique ID of this DPIO device instance */
+	uint64_t dqrr_held;
+	uint8_t dqrr_size;
 };
 
 struct dpaa2_dpbp_dev {
@@ -108,7 +119,15 @@ struct dpaa2_dpbp_dev {
 
 struct queue_storage_info_t {
 	struct qbman_result *dq_storage[NUM_DQS_PER_QUEUE];
+	struct qbman_result *active_dqs;
+	int active_dpio_id;
+	int toggle;
 };
+
+typedef void (dpaa2_queue_cb_dqrr_t)(struct qbman_swp *swp,
+		const struct qbman_fd *fd,
+		const struct qbman_result *dq,
+		struct rte_event *ev);
 
 struct dpaa2_queue {
 	struct rte_mempool *mb_pool; /**< mbuf pool to populate RX ring. */
@@ -120,7 +139,30 @@ struct dpaa2_queue {
 	uint64_t rx_pkts;
 	uint64_t tx_pkts;
 	uint64_t err_pkts;
-	struct queue_storage_info_t *q_storage;
+	union {
+		struct queue_storage_info_t *q_storage;
+		struct qbman_result *cscn;
+	};
+	dpaa2_queue_cb_dqrr_t *cb;
+};
+
+struct swp_active_dqs {
+	struct qbman_result *global_active_dqs;
+	uint64_t reserved[7];
+};
+
+#define NUM_MAX_SWP 64
+
+extern struct swp_active_dqs rte_global_active_dqs_list[NUM_MAX_SWP];
+
+struct dpaa2_dpci_dev {
+	TAILQ_ENTRY(dpaa2_dpci_dev) next;
+		/**< Pointer to Next device instance */
+	struct fsl_mc_io dpci;  /** handle to DPCI portal object */
+	uint16_t token;
+	rte_atomic16_t in_use;
+	uint32_t dpci_id; /*HW ID for DPCI object */
+	struct dpaa2_queue queue[DPAA2_DPCI_MAX_QUEUES];
 };
 
 /*! Global MCP list */
@@ -137,6 +179,19 @@ struct qbman_fle {
 	uint32_t reserved[3]; /* Not used currently */
 };
 
+struct qbman_sge {
+	uint32_t addr_lo;
+	uint32_t addr_hi;
+	uint32_t length;
+	uint32_t fin_bpid_offset;
+};
+
+/* There are three types of frames: Single, Scatter Gather and Frame Lists */
+enum qbman_fd_format {
+	qbman_fd_single = 0,
+	qbman_fd_list,
+	qbman_fd_sg
+};
 /*Macros to define operations on FD*/
 #define DPAA2_SET_FD_ADDR(fd, addr) do {			\
 	fd->simple.addr_lo = lower_32_bits((uint64_t)(addr));	\
@@ -163,10 +218,17 @@ struct qbman_fle {
 	fle->addr_lo = lower_32_bits((uint64_t)addr);     \
 	fle->addr_hi = upper_32_bits((uint64_t)addr);	  \
 } while (0)
+#define DPAA2_GET_FLE_CTXT(fle)					\
+	(uint64_t)((((uint64_t)((fle)->reserved[1])) << 32) + \
+			(fle)->reserved[0])
+#define DPAA2_FLE_SAVE_CTXT(fle, addr) do { \
+	fle->reserved[0] = lower_32_bits((uint64_t)addr);     \
+	fle->reserved[1] = upper_32_bits((uint64_t)addr);	  \
+} while (0)
 #define DPAA2_SET_FLE_OFFSET(fle, offset) \
 	((fle)->fin_bpid_offset |= (uint32_t)(offset) << 16)
 #define DPAA2_SET_FLE_BPID(fle, bpid) ((fle)->fin_bpid_offset |= (uint64_t)bpid)
-#define DPAA2_GET_FLE_BPID(fle, bpid) (fle->fin_bpid_offset & 0x000000ff)
+#define DPAA2_GET_FLE_BPID(fle) ((fle)->fin_bpid_offset & 0x000000ff)
 #define DPAA2_SET_FLE_FIN(fle)	(fle->fin_bpid_offset |= (uint64_t)1 << 31)
 #define DPAA2_SET_FLE_IVP(fle)   (((fle)->fin_bpid_offset |= 0x00004000))
 #define DPAA2_SET_FD_COMPOUND_FMT(fd)	\
@@ -178,6 +240,7 @@ struct qbman_fle {
 #define DPAA2_GET_FD_BPID(fd)	(((fd)->simple.bpid_offset & 0x00003FFF))
 #define DPAA2_GET_FD_IVP(fd)   ((fd->simple.bpid_offset & 0x00004000) >> 14)
 #define DPAA2_GET_FD_OFFSET(fd)	(((fd)->simple.bpid_offset & 0x0FFF0000) >> 16)
+#define DPAA2_GET_FLE_OFFSET(fle) (((fle)->fin_bpid_offset & 0x0FFF0000) >> 16)
 #define DPAA2_SET_FLE_SG_EXT(fle) (fle->fin_bpid_offset |= (uint64_t)1 << 29)
 #define DPAA2_IS_SET_FLE_SG_EXT(fle)	\
 	((fle->fin_bpid_offset & ((uint64_t)1 << 29)) ? 1 : 0)
@@ -187,6 +250,17 @@ struct qbman_fle {
 
 #define DPAA2_ASAL_VAL (DPAA2_MBUF_HW_ANNOTATION / 64)
 
+#define DPAA2_FD_SET_FORMAT(fd, format)	do {				\
+		(fd)->simple.bpid_offset &= 0xCFFFFFFF;			\
+		(fd)->simple.bpid_offset |= (uint32_t)format << 28;	\
+} while (0)
+#define DPAA2_FD_GET_FORMAT(fd)	(((fd)->simple.bpid_offset >> 28) & 0x3)
+
+#define DPAA2_SG_SET_FINAL(sg, fin)	do {				\
+		(sg)->fin_bpid_offset &= 0x7FFFFFFF;			\
+		(sg)->fin_bpid_offset |= (uint32_t)fin << 31;		\
+} while (0)
+#define DPAA2_SG_IS_FINAL(sg) (!!((sg)->fin_bpid_offset >> 31))
 /* Only Enqueue Error responses will be
  * pushed on FQID_ERR of Enqueue FQ
  */
@@ -231,7 +305,7 @@ static phys_addr_t dpaa2_mem_vtop(uint64_t vaddr)
 /**
  * When we are using Physical addresses as IO Virtual Addresses,
  * Need to call conversion routines dpaa2_mem_vtop & dpaa2_mem_ptov
- * whereever required.
+ * wherever required.
  * These routines are called with help of below MACRO's
  */
 
@@ -264,7 +338,35 @@ static phys_addr_t dpaa2_mem_vtop(uint64_t vaddr)
 
 #endif /* RTE_LIBRTE_DPAA2_USE_PHYS_IOVA */
 
+static inline
+int check_swp_active_dqs(uint16_t dpio_index)
+{
+	if (rte_global_active_dqs_list[dpio_index].global_active_dqs != NULL)
+		return 1;
+	return 0;
+}
+
+static inline
+void clear_swp_active_dqs(uint16_t dpio_index)
+{
+	rte_global_active_dqs_list[dpio_index].global_active_dqs = NULL;
+}
+
+static inline
+struct qbman_result *get_swp_active_dqs(uint16_t dpio_index)
+{
+	return rte_global_active_dqs_list[dpio_index].global_active_dqs;
+}
+
+static inline
+void set_swp_active_dqs(uint16_t dpio_index, struct qbman_result *dqs)
+{
+	rte_global_active_dqs_list[dpio_index].global_active_dqs = dqs;
+}
 struct dpaa2_dpbp_dev *dpaa2_alloc_dpbp_dev(void);
 void dpaa2_free_dpbp_dev(struct dpaa2_dpbp_dev *dpbp);
+
+struct dpaa2_dpci_dev *rte_dpaa2_alloc_dpci_dev(void);
+void rte_dpaa2_free_dpci_dev(struct dpaa2_dpci_dev *dpci);
 
 #endif

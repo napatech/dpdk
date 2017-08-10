@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright(c) 2014-2016 Chelsio Communications.
+ *   Copyright(c) 2014-2017 Chelsio Communications.
  *   All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
@@ -148,6 +148,7 @@ struct sge_rspq {                   /* state for an SGE response queue */
 
 	void __iomem *bar2_addr;    /* address of BAR2 Queue registers */
 	unsigned int bar2_qid;      /* Queue ID for BAR2 Queue registers */
+	struct sge_qstat *stat;
 
 	unsigned int cidx;          /* consumer index */
 	unsigned int gts_idx;	    /* last gts write sent */
@@ -459,7 +460,10 @@ static inline void t4_write_reg64(struct adapter *adapter, u32 reg_addr,
 #define PCI_CAP_ID_EXP          0x10    /* PCI Express */
 #define PCI_CAP_LIST_ID         0       /* Capability ID */
 #define PCI_CAP_LIST_NEXT       1       /* Next capability in the list */
+#define PCI_EXP_DEVCTL          0x0008  /* Device control */
 #define PCI_EXP_DEVCTL2         40      /* Device Control 2 */
+#define PCI_EXP_DEVCTL_EXT_TAG  0x0100  /* Extended Tag Field Enable */
+#define PCI_EXP_DEVCTL_PAYLOAD  0x00E0  /* Max payload */
 #define PCI_CAP_ID_VPD          0x03    /* Vital Product Data */
 #define PCI_VPD_ADDR            2       /* Address to access (15 bits!) */
 #define PCI_VPD_ADDR_F          0x8000  /* Write 0, 1 indicates completion */
@@ -706,7 +710,8 @@ void reclaim_completed_tx(struct sge_txq *q);
 void t4_free_sge_resources(struct adapter *adap);
 void t4_sge_tx_monitor_start(struct adapter *adap);
 void t4_sge_tx_monitor_stop(struct adapter *adap);
-int t4_eth_xmit(struct sge_eth_txq *txq, struct rte_mbuf *mbuf);
+int t4_eth_xmit(struct sge_eth_txq *txq, struct rte_mbuf *mbuf,
+		uint16_t nb_pkts);
 int t4_ethrx_handler(struct sge_rspq *q, const __be64 *rsp,
 		     const struct pkt_gl *gl);
 int t4_sge_init(struct adapter *adap);

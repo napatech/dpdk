@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright(c) 2016 Intel Corporation. All rights reserved.
+ *   Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
  *   All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
@@ -33,6 +33,7 @@
 
 #include <rte_atomic.h>
 #include <rte_branch_prediction.h>
+#include <rte_byteorder.h>
 #include <rte_common.h>
 #include <rte_mbuf.h>
 #include <rte_ethdev.h>
@@ -41,6 +42,8 @@
 #include <rte_vdev.h>
 #include <rte_kvargs.h>
 #include <rte_net.h>
+#include <rte_debug.h>
+#include <rte_ip.h>
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -72,6 +75,8 @@
 #define ETH_TAP_IFACE_ARG       "iface"
 #define ETH_TAP_SPEED_ARG       "speed"
 #define ETH_TAP_REMOTE_ARG      "remote"
+#define ETH_TAP_MAC_ARG         "mac"
+#define ETH_TAP_MAC_FIXED       "fixed"
 
 #define FLOWER_KERNEL_VERSION KERNEL_VERSION(4, 2, 0)
 #define FLOWER_VLAN_KERNEL_VERSION KERNEL_VERSION(4, 9, 0)
@@ -82,6 +87,7 @@ static const char *valid_arguments[] = {
 	ETH_TAP_IFACE_ARG,
 	ETH_TAP_SPEED_ARG,
 	ETH_TAP_REMOTE_ARG,
+	ETH_TAP_MAC_ARG,
 	NULL
 };
 
@@ -110,10 +116,6 @@ enum ioctl_mode {
 	REMOTE_ONLY,
 };
 
-static int
-tap_ioctl(struct pmd_internals *pmd, unsigned long request,
-	  struct ifreq *ifr, int set, enum ioctl_mode mode);
-
 static int tap_intr_handle_set(struct rte_eth_dev *dev, int set);
 
 /* Tun/Tap allocation routine
@@ -122,7 +124,7 @@ static int tap_intr_handle_set(struct rte_eth_dev *dev, int set);
  * supplied name.
  */
 static int
-tun_alloc(struct pmd_internals *pmd, uint16_t qid)
+tun_alloc(struct pmd_internals *pmd)
 {
 	struct ifreq ifr;
 #ifdef IFF_MULTI_QUEUE
@@ -143,7 +145,7 @@ tun_alloc(struct pmd_internals *pmd, uint16_t qid)
 
 	fd = open(TUN_TAP_DEV_PATH, O_RDWR);
 	if (fd < 0) {
-		RTE_LOG(ERR, PMD, "Unable to create TAP interface");
+		RTE_LOG(ERR, PMD, "Unable to create TAP interface\n");
 		goto error;
 	}
 
@@ -221,81 +223,66 @@ tun_alloc(struct pmd_internals *pmd, uint16_t qid)
 			strerror(errno));
 	}
 
-	if (qid == 0) {
-		struct ifreq ifr;
-
-		/*
-		 * pmd->eth_addr contains the desired MAC, either from remote
-		 * or from a random assignment. Sync it with the tap netdevice.
-		 */
-		ifr.ifr_hwaddr.sa_family = AF_LOCAL;
-		rte_memcpy(ifr.ifr_hwaddr.sa_data, &pmd->eth_addr,
-			   ETHER_ADDR_LEN);
-		if (tap_ioctl(pmd, SIOCSIFHWADDR, &ifr, 0, LOCAL_ONLY) < 0)
-			goto error;
-
-		pmd->if_index = if_nametoindex(pmd->name);
-		if (!pmd->if_index) {
-			RTE_LOG(ERR, PMD,
-				"Could not find ifindex for %s: rte_flow won't be usable.\n",
-				pmd->name);
-			return fd;
-		}
-		if (!pmd->flower_support)
-			return fd;
-		if (qdisc_create_multiq(pmd->nlsk_fd, pmd->if_index) < 0) {
-			RTE_LOG(ERR, PMD,
-				"Could not create multiq qdisc for %s: rte_flow won't be usable.\n",
-				pmd->name);
-			return fd;
-		}
-		if (qdisc_create_ingress(pmd->nlsk_fd, pmd->if_index) < 0) {
-			RTE_LOG(ERR, PMD,
-				"Could not create multiq qdisc for %s: rte_flow won't be usable.\n",
-				pmd->name);
-			return fd;
-		}
-		if (pmd->remote_if_index) {
-			/*
-			 * Flush usually returns negative value because it tries
-			 * to delete every QDISC (and on a running device, one
-			 * QDISC at least is needed). Ignore negative return
-			 * value.
-			 */
-			qdisc_flush(pmd->nlsk_fd, pmd->remote_if_index);
-			if (qdisc_create_ingress(pmd->nlsk_fd,
-						 pmd->remote_if_index) < 0)
-				goto remote_fail;
-			LIST_INIT(&pmd->implicit_flows);
-			if (tap_flow_implicit_create(
-				    pmd, TAP_REMOTE_LOCAL_MAC) < 0)
-				goto remote_fail;
-			if (tap_flow_implicit_create(
-				    pmd, TAP_REMOTE_BROADCAST) < 0)
-				goto remote_fail;
-			if (tap_flow_implicit_create(
-				    pmd, TAP_REMOTE_BROADCASTV6) < 0)
-				goto remote_fail;
-			if (tap_flow_implicit_create(
-				    pmd, TAP_REMOTE_TX) < 0)
-				goto remote_fail;
-		}
-	}
-
-	return fd;
-
-remote_fail:
-	RTE_LOG(ERR, PMD,
-		"Could not set up remote flow rules for %s: remote disabled.\n",
-		pmd->name);
-	pmd->remote_if_index = 0;
-	tap_flow_implicit_flush(pmd, NULL);
 	return fd;
 
 error:
 	if (fd > 0)
 		close(fd);
 	return -1;
+}
+
+static void
+tap_verify_csum(struct rte_mbuf *mbuf)
+{
+	uint32_t l2 = mbuf->packet_type & RTE_PTYPE_L2_MASK;
+	uint32_t l3 = mbuf->packet_type & RTE_PTYPE_L3_MASK;
+	uint32_t l4 = mbuf->packet_type & RTE_PTYPE_L4_MASK;
+	unsigned int l2_len = sizeof(struct ether_hdr);
+	unsigned int l3_len;
+	uint16_t cksum = 0;
+	void *l3_hdr;
+	void *l4_hdr;
+
+	if (l2 == RTE_PTYPE_L2_ETHER_VLAN)
+		l2_len += 4;
+	else if (l2 == RTE_PTYPE_L2_ETHER_QINQ)
+		l2_len += 8;
+	/* Don't verify checksum for packets with discontinuous L2 header */
+	if (unlikely(l2_len + sizeof(struct ipv4_hdr) >
+		     rte_pktmbuf_data_len(mbuf)))
+		return;
+	l3_hdr = rte_pktmbuf_mtod_offset(mbuf, void *, l2_len);
+	if (l3 == RTE_PTYPE_L3_IPV4 || l3 == RTE_PTYPE_L3_IPV4_EXT) {
+		struct ipv4_hdr *iph = l3_hdr;
+
+		/* ihl contains the number of 4-byte words in the header */
+		l3_len = 4 * (iph->version_ihl & 0xf);
+		if (unlikely(l2_len + l3_len > rte_pktmbuf_data_len(mbuf)))
+			return;
+
+		cksum = ~rte_raw_cksum(iph, l3_len);
+		mbuf->ol_flags |= cksum ?
+			PKT_RX_IP_CKSUM_BAD :
+			PKT_RX_IP_CKSUM_GOOD;
+	} else if (l3 == RTE_PTYPE_L3_IPV6) {
+		l3_len = sizeof(struct ipv6_hdr);
+	} else {
+		/* IPv6 extensions are not supported */
+		return;
+	}
+	if (l4 == RTE_PTYPE_L4_UDP || l4 == RTE_PTYPE_L4_TCP) {
+		l4_hdr = rte_pktmbuf_mtod_offset(mbuf, void *, l2_len + l3_len);
+		/* Don't verify checksum for multi-segment packets. */
+		if (mbuf->nb_segs > 1)
+			return;
+		if (l3 == RTE_PTYPE_L3_IPV4)
+			cksum = ~rte_ipv4_udptcp_cksum(l3_hdr, l4_hdr);
+		else if (l3 == RTE_PTYPE_L3_IPV6)
+			cksum = ~rte_ipv6_udptcp_cksum(l3_hdr, l4_hdr);
+		mbuf->ol_flags |= cksum ?
+			PKT_RX_L4_CKSUM_BAD :
+			PKT_RX_L4_CKSUM_GOOD;
+	}
 }
 
 /* Callback to handle the rx burst of packets to the correct interface and
@@ -378,6 +365,8 @@ pmd_rx_burst(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		seg->next = NULL;
 		mbuf->packet_type = rte_net_get_ptype(mbuf, NULL,
 						      RTE_PTYPE_ALL_MASK);
+		if (rxq->rxmode->hw_ip_checksum)
+			tap_verify_csum(mbuf);
 
 		/* account for the receive frame */
 		bufs[num_rx++] = mbuf;
@@ -388,6 +377,56 @@ end:
 	rxq->stats.ibytes += num_rx_bytes;
 
 	return num_rx;
+}
+
+static void
+tap_tx_offload(char *packet, uint64_t ol_flags, unsigned int l2_len,
+	       unsigned int l3_len)
+{
+	void *l3_hdr = packet + l2_len;
+
+	if (ol_flags & (PKT_TX_IP_CKSUM | PKT_TX_IPV4)) {
+		struct ipv4_hdr *iph = l3_hdr;
+		uint16_t cksum;
+
+		iph->hdr_checksum = 0;
+		cksum = rte_raw_cksum(iph, l3_len);
+		iph->hdr_checksum = (cksum == 0xffff) ? cksum : ~cksum;
+	}
+	if (ol_flags & PKT_TX_L4_MASK) {
+		uint16_t l4_len;
+		uint32_t cksum;
+		uint16_t *l4_cksum;
+		void *l4_hdr;
+
+		l4_hdr = packet + l2_len + l3_len;
+		if ((ol_flags & PKT_TX_L4_MASK) == PKT_TX_UDP_CKSUM)
+			l4_cksum = &((struct udp_hdr *)l4_hdr)->dgram_cksum;
+		else if ((ol_flags & PKT_TX_L4_MASK) == PKT_TX_TCP_CKSUM)
+			l4_cksum = &((struct tcp_hdr *)l4_hdr)->cksum;
+		else
+			return;
+		*l4_cksum = 0;
+		if (ol_flags & PKT_TX_IPV4) {
+			struct ipv4_hdr *iph = l3_hdr;
+
+			l4_len = rte_be_to_cpu_16(iph->total_length) - l3_len;
+			cksum = rte_ipv4_phdr_cksum(l3_hdr, 0);
+		} else {
+			struct ipv6_hdr *ip6h = l3_hdr;
+
+			/* payload_len does not include ext headers */
+			l4_len = rte_be_to_cpu_16(ip6h->payload_len) -
+				l3_len + sizeof(struct ipv6_hdr);
+			cksum = rte_ipv6_phdr_cksum(l3_hdr, 0);
+		}
+		cksum += rte_raw_cksum(l4_hdr, l4_len);
+		cksum = ((cksum & 0xffff0000) >> 16) + (cksum & 0xffff);
+		cksum = (~cksum) & 0xffff;
+		if (cksum == 0)
+			cksum = 0xffff;
+		*l4_cksum = cksum;
+	}
 }
 
 /* Callback to handle sending packets from the tap interface
@@ -410,6 +449,7 @@ pmd_tx_burst(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		struct iovec iovecs[mbuf->nb_segs + 1];
 		struct tun_pi pi = { .flags = 0 };
 		struct rte_mbuf *seg = mbuf;
+		char m_copy[mbuf->data_len];
 		int n;
 		int j;
 
@@ -424,6 +464,19 @@ pmd_tx_burst(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 			iovecs[j].iov_base =
 				rte_pktmbuf_mtod(seg, void *);
 			seg = seg->next;
+		}
+		if (mbuf->ol_flags & (PKT_TX_IP_CKSUM | PKT_TX_IPV4) ||
+		    (mbuf->ol_flags & PKT_TX_L4_MASK) == PKT_TX_UDP_CKSUM ||
+		    (mbuf->ol_flags & PKT_TX_L4_MASK) == PKT_TX_TCP_CKSUM) {
+			/* Support only packets with all data in the same seg */
+			if (mbuf->nb_segs > 1)
+				break;
+			/* To change checksums, work on a copy of data. */
+			rte_memcpy(m_copy, rte_pktmbuf_mtod(mbuf, void *),
+				   rte_pktmbuf_data_len(mbuf));
+			tap_tx_offload(m_copy, mbuf->ol_flags,
+				       mbuf->l2_len, mbuf->l3_len);
+			iovecs[1].iov_base = m_copy;
 		}
 		/* copy the tx frame data */
 		n = writev(txq->fd, iovecs, mbuf->nb_segs + 1);
@@ -440,6 +493,24 @@ pmd_tx_burst(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	txq->stats.obytes += num_tx_bytes;
 
 	return num_tx;
+}
+
+static const char *
+tap_ioctl_req2str(unsigned long request)
+{
+	switch (request) {
+	case SIOCSIFFLAGS:
+		return "SIOCSIFFLAGS";
+	case SIOCGIFFLAGS:
+		return "SIOCGIFFLAGS";
+	case SIOCGIFHWADDR:
+		return "SIOCGIFHWADDR";
+	case SIOCSIFHWADDR:
+		return "SIOCSIFHWADDR";
+	case SIOCSIFMTU:
+		return "SIOCSIFMTU";
+	}
+	return "UNKNOWN";
 }
 
 static int
@@ -477,9 +548,7 @@ apply:
 	case SIOCSIFMTU:
 		break;
 	default:
-		RTE_LOG(WARNING, PMD, "%s: ioctl() called with wrong arg\n",
-			pmd->name);
-		return -EINVAL;
+		RTE_ASSERT(!"unsupported request type: must not happen");
 	}
 	if (ioctl(pmd->ioctl_sock, request, ifr) < 0)
 		goto error;
@@ -488,8 +557,8 @@ apply:
 	return 0;
 
 error:
-	RTE_LOG(ERR, PMD, "%s: ioctl(%lu) failed with error: %s\n",
-		ifr->ifr_name, request, strerror(errno));
+	RTE_LOG(DEBUG, PMD, "%s: %s(%s) failed: %s(%d)\n", ifr->ifr_name,
+		__func__, tap_ioctl_req2str(request), strerror(errno), errno);
 	return -errno;
 }
 
@@ -500,7 +569,7 @@ tap_link_set_down(struct rte_eth_dev *dev)
 	struct ifreq ifr = { .ifr_flags = IFF_UP };
 
 	dev->data->dev_link.link_status = ETH_LINK_DOWN;
-	return tap_ioctl(pmd, SIOCSIFFLAGS, &ifr, 0, LOCAL_AND_REMOTE);
+	return tap_ioctl(pmd, SIOCSIFFLAGS, &ifr, 0, LOCAL_ONLY);
 }
 
 static int
@@ -586,6 +655,13 @@ tap_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->min_rx_bufsize = 0;
 	dev_info->pci_dev = NULL;
 	dev_info->speed_capa = tap_dev_speed_capa();
+	dev_info->rx_offload_capa = (DEV_RX_OFFLOAD_IPV4_CKSUM |
+				     DEV_RX_OFFLOAD_UDP_CKSUM |
+				     DEV_RX_OFFLOAD_TCP_CKSUM);
+	dev_info->tx_offload_capa =
+		(DEV_TX_OFFLOAD_IPV4_CKSUM |
+		 DEV_TX_OFFLOAD_UDP_CKSUM |
+		 DEV_TX_OFFLOAD_TCP_CKSUM);
 }
 
 static void
@@ -644,7 +720,7 @@ tap_stats_reset(struct rte_eth_dev *dev)
 }
 
 static void
-tap_dev_close(struct rte_eth_dev *dev __rte_unused)
+tap_dev_close(struct rte_eth_dev *dev)
 {
 	int i;
 	struct pmd_internals *internals = dev->data->dev_private;
@@ -658,6 +734,12 @@ tap_dev_close(struct rte_eth_dev *dev __rte_unused)
 			close(internals->rxq[i].fd);
 		internals->rxq[i].fd = -1;
 		internals->txq[i].fd = -1;
+	}
+
+	if (internals->remote_if_index) {
+		/* Restore initial remote state */
+		ioctl(internals->ioctl_sock, SIOCSIFFLAGS,
+				&internals->remote_initial_flags);
 	}
 }
 
@@ -718,7 +800,7 @@ tap_promisc_enable(struct rte_eth_dev *dev)
 
 	dev->data->promiscuous = 1;
 	tap_ioctl(pmd, SIOCSIFFLAGS, &ifr, 1, LOCAL_AND_REMOTE);
-	if (pmd->remote_if_index)
+	if (pmd->remote_if_index && !pmd->flow_isolate)
 		tap_flow_implicit_create(pmd, TAP_REMOTE_PROMISC);
 }
 
@@ -730,7 +812,7 @@ tap_promisc_disable(struct rte_eth_dev *dev)
 
 	dev->data->promiscuous = 0;
 	tap_ioctl(pmd, SIOCSIFFLAGS, &ifr, 0, LOCAL_AND_REMOTE);
-	if (pmd->remote_if_index)
+	if (pmd->remote_if_index && !pmd->flow_isolate)
 		tap_flow_implicit_destroy(pmd, TAP_REMOTE_PROMISC);
 }
 
@@ -742,7 +824,7 @@ tap_allmulti_enable(struct rte_eth_dev *dev)
 
 	dev->data->all_multicast = 1;
 	tap_ioctl(pmd, SIOCSIFFLAGS, &ifr, 1, LOCAL_AND_REMOTE);
-	if (pmd->remote_if_index)
+	if (pmd->remote_if_index && !pmd->flow_isolate)
 		tap_flow_implicit_create(pmd, TAP_REMOTE_ALLMULTI);
 }
 
@@ -754,50 +836,51 @@ tap_allmulti_disable(struct rte_eth_dev *dev)
 
 	dev->data->all_multicast = 0;
 	tap_ioctl(pmd, SIOCSIFFLAGS, &ifr, 0, LOCAL_AND_REMOTE);
-	if (pmd->remote_if_index)
+	if (pmd->remote_if_index && !pmd->flow_isolate)
 		tap_flow_implicit_destroy(pmd, TAP_REMOTE_ALLMULTI);
 }
-
 
 static void
 tap_mac_set(struct rte_eth_dev *dev, struct ether_addr *mac_addr)
 {
 	struct pmd_internals *pmd = dev->data->dev_private;
+	enum ioctl_mode mode = LOCAL_ONLY;
 	struct ifreq ifr;
 
 	if (is_zero_ether_addr(mac_addr)) {
 		RTE_LOG(ERR, PMD, "%s: can't set an empty MAC address\n",
-			dev->data->name);
+			dev->device->name);
 		return;
 	}
 	/* Check the actual current MAC address on the tap netdevice */
-	if (tap_ioctl(pmd, SIOCGIFHWADDR, &ifr, 0, LOCAL_ONLY) != 0) {
-		RTE_LOG(ERR, PMD,
-			"%s: couldn't check current tap MAC address\n",
-			dev->data->name);
+	if (tap_ioctl(pmd, SIOCGIFHWADDR, &ifr, 0, LOCAL_ONLY) < 0)
 		return;
-	}
 	if (is_same_ether_addr((struct ether_addr *)&ifr.ifr_hwaddr.sa_data,
 			       mac_addr))
 		return;
-
+	/* Check the current MAC address on the remote */
+	if (tap_ioctl(pmd, SIOCGIFHWADDR, &ifr, 0, REMOTE_ONLY) < 0)
+		return;
+	if (!is_same_ether_addr((struct ether_addr *)&ifr.ifr_hwaddr.sa_data,
+			       mac_addr))
+		mode = LOCAL_AND_REMOTE;
 	ifr.ifr_hwaddr.sa_family = AF_LOCAL;
 	rte_memcpy(ifr.ifr_hwaddr.sa_data, mac_addr, ETHER_ADDR_LEN);
-	if (tap_ioctl(pmd, SIOCSIFHWADDR, &ifr, 1, LOCAL_AND_REMOTE) < 0)
+	if (tap_ioctl(pmd, SIOCSIFHWADDR, &ifr, 1, mode) < 0)
 		return;
 	rte_memcpy(&pmd->eth_addr, mac_addr, ETHER_ADDR_LEN);
-	if (pmd->remote_if_index) {
+	if (pmd->remote_if_index && !pmd->flow_isolate) {
 		/* Replace MAC redirection rule after a MAC change */
 		if (tap_flow_implicit_destroy(pmd, TAP_REMOTE_LOCAL_MAC) < 0) {
 			RTE_LOG(ERR, PMD,
 				"%s: Couldn't delete MAC redirection rule\n",
-				dev->data->name);
+				dev->device->name);
 			return;
 		}
 		if (tap_flow_implicit_create(pmd, TAP_REMOTE_LOCAL_MAC) < 0)
 			RTE_LOG(ERR, PMD,
 				"%s: Couldn't add MAC redirection rule\n",
-				dev->data->name);
+				dev->device->name);
 	}
 }
 
@@ -809,30 +892,16 @@ tap_setup_queue(struct rte_eth_dev *dev,
 	struct pmd_internals *pmd = dev->data->dev_private;
 	struct rx_queue *rx = &internals->rxq[qid];
 	struct tx_queue *tx = &internals->txq[qid];
-	int fd;
+	int fd = rx->fd == -1 ? tx->fd : rx->fd;
 
-	fd = rx->fd;
-	if (fd < 0) {
-		fd = tx->fd;
+	if (fd == -1) {
+		RTE_LOG(INFO, PMD, "Add queue to TAP %s for qid %d\n",
+			pmd->name, qid);
+		fd = tun_alloc(pmd);
 		if (fd < 0) {
-			RTE_LOG(INFO, PMD, "Add queue to TAP %s for qid %d\n",
-				pmd->name, qid);
-			fd = tun_alloc(pmd, qid);
-			if (fd < 0) {
-				RTE_LOG(ERR, PMD, "tun_alloc(%s, %d) failed\n",
-					pmd->name, qid);
-				return -1;
-			}
-			if (qid == 0) {
-				struct ifreq ifr;
-
-				ifr.ifr_mtu = dev->data->mtu;
-				if (tap_ioctl(pmd, SIOCSIFMTU, &ifr, 1,
-					      LOCAL_AND_REMOTE) < 0) {
-					close(fd);
-					return -1;
-				}
-			}
+			RTE_LOG(ERR, PMD, "%s: tun_alloc() failed.\n",
+				pmd->name);
+			return -1;
 		}
 	}
 
@@ -842,26 +911,6 @@ tap_setup_queue(struct rte_eth_dev *dev,
 	rx->rxmode = &dev->data->dev_conf.rxmode;
 
 	return fd;
-}
-
-static int
-rx_setup_queue(struct rte_eth_dev *dev,
-		struct pmd_internals *internals,
-		uint16_t qid)
-{
-	dev->data->rx_queues[qid] = &internals->rxq[qid];
-
-	return tap_setup_queue(dev, internals, qid);
-}
-
-static int
-tx_setup_queue(struct rte_eth_dev *dev,
-		struct pmd_internals *internals,
-		uint16_t qid)
-{
-	dev->data->tx_queues[qid] = &internals->txq[qid];
-
-	return tap_setup_queue(dev, internals, qid);
 }
 
 static int
@@ -894,17 +943,18 @@ tap_rx_queue_setup(struct rte_eth_dev *dev,
 	rxq->trigger_seen = 1; /* force initial burst */
 	rxq->in_port = dev->data->port_id;
 	rxq->nb_rx_desc = nb_desc;
-	iovecs = rte_zmalloc_socket(dev->data->name, sizeof(*iovecs), 0,
+	iovecs = rte_zmalloc_socket(dev->device->name, sizeof(*iovecs), 0,
 				    socket_id);
 	if (!iovecs) {
 		RTE_LOG(WARNING, PMD,
 			"%s: Couldn't allocate %d RX descriptors\n",
-			dev->data->name, nb_desc);
+			dev->device->name, nb_desc);
 		return -ENOMEM;
 	}
 	rxq->iovecs = iovecs;
 
-	fd = rx_setup_queue(dev, internals, rx_queue_id);
+	dev->data->rx_queues[rx_queue_id] = rxq;
+	fd = tap_setup_queue(dev, internals, rx_queue_id);
 	if (fd == -1) {
 		ret = fd;
 		goto error;
@@ -918,7 +968,7 @@ tap_rx_queue_setup(struct rte_eth_dev *dev,
 		if (!*tmp) {
 			RTE_LOG(WARNING, PMD,
 				"%s: couldn't allocate memory for queue %d\n",
-				dev->data->name, rx_queue_id);
+				dev->device->name, rx_queue_id);
 			ret = -ENOMEM;
 			goto error;
 		}
@@ -955,7 +1005,8 @@ tap_tx_queue_setup(struct rte_eth_dev *dev,
 	if (tx_queue_id >= internals->nb_queues)
 		return -1;
 
-	ret = tx_setup_queue(dev, internals, tx_queue_id);
+	dev->data->tx_queues[tx_queue_id] = &internals->txq[tx_queue_id];
+	ret = tap_setup_queue(dev, internals, tx_queue_id);
 	if (ret == -1)
 		return -1;
 
@@ -1115,32 +1166,16 @@ static const struct eth_dev_ops ops = {
 	.filter_ctrl            = tap_dev_filter_ctrl,
 };
 
-static int
-tap_kernel_support(struct pmd_internals *pmd)
-{
-	struct utsname utsname;
-	int ver[3];
-
-	if (uname(&utsname) == -1 ||
-	    sscanf(utsname.release, "%d.%d.%d",
-		   &ver[0], &ver[1], &ver[2]) != 3)
-		return 0;
-	if (KERNEL_VERSION(ver[0], ver[1], ver[2]) >= FLOWER_KERNEL_VERSION)
-		pmd->flower_support = 1;
-	if (KERNEL_VERSION(ver[0], ver[1], ver[2]) >=
-	    FLOWER_VLAN_KERNEL_VERSION)
-		pmd->flower_vlan_support = 1;
-	return 1;
-}
 
 static int
 eth_dev_tap_create(struct rte_vdev_device *vdev, char *tap_name,
-		   char *remote_iface)
+		   char *remote_iface, int fixed_mac_type)
 {
 	int numa_node = rte_socket_id();
 	struct rte_eth_dev *dev;
 	struct pmd_internals *pmd;
 	struct rte_eth_dev_data *data;
+	struct ifreq ifr;
 	int i;
 
 	RTE_LOG(DEBUG, PMD, "  TAP device on numa %u\n", rte_socket_id());
@@ -1174,7 +1209,6 @@ eth_dev_tap_create(struct rte_vdev_device *vdev, char *tap_name,
 	data->dev_private = pmd;
 	data->dev_flags = RTE_ETH_DEV_DETACHABLE | RTE_ETH_DEV_INTR_LSC;
 	data->numa_node = numa_node;
-	data->drv_name = pmd_tap_drv.driver.name;
 
 	data->dev_link = pmd_link;
 	data->mac_addrs = &pmd->eth_addr;
@@ -1195,41 +1229,132 @@ eth_dev_tap_create(struct rte_vdev_device *vdev, char *tap_name,
 		pmd->txq[i].fd = -1;
 	}
 
-	tap_kernel_support(pmd);
-	if (!pmd->flower_support)
-		return 0;
-	LIST_INIT(&pmd->flows);
-	/*
-	 * If no netlink socket can be created, then it will fail when
-	 * creating/destroying flow rules.
-	 */
-	pmd->nlsk_fd = nl_init(0);
-	if (strlen(remote_iface)) {
-		struct ifreq ifr;
+	if (fixed_mac_type) {
+		/* fixed mac = 00:64:74:61:70:<iface_idx> */
+		static int iface_idx;
+		char mac[ETHER_ADDR_LEN] = "\0dtap";
 
-		pmd->remote_if_index = if_nametoindex(remote_iface);
-		snprintf(pmd->remote_iface, RTE_ETH_NAME_MAX_LEN,
-			 "%s", remote_iface);
-		if (!pmd->remote_if_index) {
-			RTE_LOG(ERR, PMD, "Could not find %s ifindex: "
-				"remote interface will remain unconfigured\n",
-				remote_iface);
-			return 0;
-		}
-		if (tap_ioctl(pmd, SIOCGIFHWADDR, &ifr, 0, REMOTE_ONLY) < 0) {
-			RTE_LOG(ERR, PMD, "Could not get remote MAC address\n");
-			goto error_exit;
-		}
-		rte_memcpy(&pmd->eth_addr, ifr.ifr_hwaddr.sa_data,
-			   ETHER_ADDR_LEN);
+		mac[ETHER_ADDR_LEN - 1] = iface_idx++;
+		rte_memcpy(&pmd->eth_addr, mac, ETHER_ADDR_LEN);
 	} else {
 		eth_random_addr((uint8_t *)&pmd->eth_addr);
 	}
 
+	/* Immediately create the netdevice (this will create the 1st queue). */
+	if (tap_setup_queue(dev, pmd, 0) == -1)
+		goto error_exit;
+
+	ifr.ifr_mtu = dev->data->mtu;
+	if (tap_ioctl(pmd, SIOCSIFMTU, &ifr, 1, LOCAL_AND_REMOTE) < 0)
+		goto error_exit;
+
+	memset(&ifr, 0, sizeof(struct ifreq));
+	ifr.ifr_hwaddr.sa_family = AF_LOCAL;
+	rte_memcpy(ifr.ifr_hwaddr.sa_data, &pmd->eth_addr, ETHER_ADDR_LEN);
+	if (tap_ioctl(pmd, SIOCSIFHWADDR, &ifr, 0, LOCAL_ONLY) < 0)
+		goto error_exit;
+
+	/*
+	 * Set up everything related to rte_flow:
+	 * - netlink socket
+	 * - tap / remote if_index
+	 * - mandatory QDISCs
+	 * - rte_flow actual/implicit lists
+	 * - implicit rules
+	 */
+	pmd->nlsk_fd = nl_init(0);
+	if (pmd->nlsk_fd == -1) {
+		RTE_LOG(WARNING, PMD, "%s: failed to create netlink socket.\n",
+			pmd->name);
+		goto disable_rte_flow;
+	}
+	pmd->if_index = if_nametoindex(pmd->name);
+	if (!pmd->if_index) {
+		RTE_LOG(ERR, PMD, "%s: failed to get if_index.\n", pmd->name);
+		goto disable_rte_flow;
+	}
+	if (qdisc_create_multiq(pmd->nlsk_fd, pmd->if_index) < 0) {
+		RTE_LOG(ERR, PMD, "%s: failed to create multiq qdisc.\n",
+			pmd->name);
+		goto disable_rte_flow;
+	}
+	if (qdisc_create_ingress(pmd->nlsk_fd, pmd->if_index) < 0) {
+		RTE_LOG(ERR, PMD, "%s: failed to create ingress qdisc.\n",
+			pmd->name);
+		goto disable_rte_flow;
+	}
+	LIST_INIT(&pmd->flows);
+
+	if (strlen(remote_iface)) {
+		pmd->remote_if_index = if_nametoindex(remote_iface);
+		if (!pmd->remote_if_index) {
+			RTE_LOG(ERR, PMD, "%s: failed to get %s if_index.\n",
+				pmd->name, remote_iface);
+			goto error_remote;
+		}
+		snprintf(pmd->remote_iface, RTE_ETH_NAME_MAX_LEN,
+			 "%s", remote_iface);
+
+		/* Save state of remote device */
+		tap_ioctl(pmd, SIOCGIFFLAGS, &pmd->remote_initial_flags, 0, REMOTE_ONLY);
+
+		/* Replicate remote MAC address */
+		if (tap_ioctl(pmd, SIOCGIFHWADDR, &ifr, 0, REMOTE_ONLY) < 0) {
+			RTE_LOG(ERR, PMD, "%s: failed to get %s MAC address.\n",
+				pmd->name, pmd->remote_iface);
+			goto error_remote;
+		}
+		rte_memcpy(&pmd->eth_addr, ifr.ifr_hwaddr.sa_data,
+			   ETHER_ADDR_LEN);
+		/* The desired MAC is already in ifreq after SIOCGIFHWADDR. */
+		if (tap_ioctl(pmd, SIOCSIFHWADDR, &ifr, 0, LOCAL_ONLY) < 0) {
+			RTE_LOG(ERR, PMD, "%s: failed to get %s MAC address.\n",
+				pmd->name, remote_iface);
+			goto error_remote;
+		}
+
+		/*
+		 * Flush usually returns negative value because it tries to
+		 * delete every QDISC (and on a running device, one QDISC at
+		 * least is needed). Ignore negative return value.
+		 */
+		qdisc_flush(pmd->nlsk_fd, pmd->remote_if_index);
+		if (qdisc_create_ingress(pmd->nlsk_fd,
+					 pmd->remote_if_index) < 0) {
+			RTE_LOG(ERR, PMD, "%s: failed to create ingress qdisc.\n",
+				pmd->remote_iface);
+			goto error_remote;
+		}
+		LIST_INIT(&pmd->implicit_flows);
+		if (tap_flow_implicit_create(pmd, TAP_REMOTE_TX) < 0 ||
+		    tap_flow_implicit_create(pmd, TAP_REMOTE_LOCAL_MAC) < 0 ||
+		    tap_flow_implicit_create(pmd, TAP_REMOTE_BROADCAST) < 0 ||
+		    tap_flow_implicit_create(pmd, TAP_REMOTE_BROADCASTV6) < 0) {
+			RTE_LOG(ERR, PMD,
+				"%s: failed to create implicit rules.\n",
+				pmd->name);
+			goto error_remote;
+		}
+	}
+
 	return 0;
 
+disable_rte_flow:
+	RTE_LOG(ERR, PMD, " Disabling rte flow support: %s(%d)\n",
+		strerror(errno), errno);
+	if (strlen(remote_iface)) {
+		RTE_LOG(ERR, PMD, "Remote feature requires flow support.\n");
+		goto error_exit;
+	}
+	return 0;
+
+error_remote:
+	RTE_LOG(ERR, PMD, " Can't set up remote feature: %s(%d)\n",
+		strerror(errno), errno);
+	tap_flow_implicit_flush(pmd, NULL);
+
 error_exit:
-	RTE_LOG(DEBUG, PMD, "TAP Unable to initialize %s\n",
+	RTE_LOG(ERR, PMD, "TAP Unable to initialize %s\n",
 		rte_vdev_device_name(vdev));
 
 	rte_free(data);
@@ -1275,6 +1400,17 @@ set_remote_iface(const char *key __rte_unused,
 	return 0;
 }
 
+static int
+set_mac_type(const char *key __rte_unused,
+	     const char *value,
+	     void *extra_args)
+{
+	if (value &&
+	    !strncasecmp(ETH_TAP_MAC_FIXED, value, strlen(ETH_TAP_MAC_FIXED)))
+		*(int *)extra_args = 1;
+	return 0;
+}
+
 /* Open a TAP interface device.
  */
 static int
@@ -1286,6 +1422,7 @@ rte_pmd_tap_probe(struct rte_vdev_device *dev)
 	int speed;
 	char tap_name[RTE_ETH_NAME_MAX_LEN];
 	char remote_iface[RTE_ETH_NAME_MAX_LEN];
+	int fixed_mac_type = 0;
 
 	name = rte_vdev_device_name(dev);
 	params = rte_vdev_device_args(dev);
@@ -1296,7 +1433,7 @@ rte_pmd_tap_probe(struct rte_vdev_device *dev)
 	memset(remote_iface, 0, RTE_ETH_NAME_MAX_LEN);
 
 	if (params && (params[0] != '\0')) {
-		RTE_LOG(DEBUG, PMD, "paramaters (%s)\n", params);
+		RTE_LOG(DEBUG, PMD, "parameters (%s)\n", params);
 
 		kvlist = rte_kvargs_parse(params, valid_arguments);
 		if (kvlist) {
@@ -1326,6 +1463,15 @@ rte_pmd_tap_probe(struct rte_vdev_device *dev)
 				if (ret == -1)
 					goto leave;
 			}
+
+			if (rte_kvargs_count(kvlist, ETH_TAP_MAC_ARG) == 1) {
+				ret = rte_kvargs_process(kvlist,
+							 ETH_TAP_MAC_ARG,
+							 &set_mac_type,
+							 &fixed_mac_type);
+				if (ret == -1)
+					goto leave;
+			}
 		}
 	}
 	pmd_link.link_speed = speed;
@@ -1333,7 +1479,7 @@ rte_pmd_tap_probe(struct rte_vdev_device *dev)
 	RTE_LOG(NOTICE, PMD, "Initializing pmd_tap for %s as %s\n",
 		name, tap_name);
 
-	ret = eth_dev_tap_create(dev, tap_name, remote_iface);
+	ret = eth_dev_tap_create(dev, tap_name, remote_iface, fixed_mac_type);
 
 leave:
 	if (ret == -1) {
@@ -1364,7 +1510,7 @@ rte_pmd_tap_remove(struct rte_vdev_device *dev)
 		return 0;
 
 	internals = eth_dev->data->dev_private;
-	if (internals->flower_support && internals->nlsk_fd) {
+	if (internals->nlsk_fd) {
 		tap_flow_flush(eth_dev, NULL);
 		tap_flow_implicit_flush(internals, NULL);
 		nl_final(internals->nlsk_fd);
@@ -1391,4 +1537,5 @@ RTE_PMD_REGISTER_ALIAS(net_tap, eth_tap);
 RTE_PMD_REGISTER_PARAM_STRING(net_tap,
 			      ETH_TAP_IFACE_ARG "=<string> "
 			      ETH_TAP_SPEED_ARG "=<int> "
+			      ETH_TAP_MAC_ARG "=" ETH_TAP_MAC_FIXED " "
 			      ETH_TAP_REMOTE_ARG "=<string>");

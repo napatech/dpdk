@@ -57,7 +57,6 @@
 #include <rte_ether.h>
 #include <rte_ethdev.h>
 #include <rte_ethdev_pci.h>
-#include <rte_atomic.h>
 #include <rte_malloc.h>
 #include <rte_random.h>
 #include <rte_dev.h>
@@ -187,13 +186,13 @@ ixgbe_dev_xstats_get_by_id(struct rte_eth_dev *dev, const uint64_t *ids,
 		uint64_t *values, unsigned int n);
 static void ixgbe_dev_stats_reset(struct rte_eth_dev *dev);
 static void ixgbe_dev_xstats_reset(struct rte_eth_dev *dev);
-static int ixgbe_dev_xstats_get_names(__rte_unused struct rte_eth_dev *dev,
+static int ixgbe_dev_xstats_get_names(struct rte_eth_dev *dev,
 	struct rte_eth_xstat_name *xstats_names,
-	__rte_unused unsigned int size);
-static int ixgbevf_dev_xstats_get_names(__rte_unused struct rte_eth_dev *dev,
-	struct rte_eth_xstat_name *xstats_names, __rte_unused unsigned limit);
+	unsigned int size);
+static int ixgbevf_dev_xstats_get_names(struct rte_eth_dev *dev,
+	struct rte_eth_xstat_name *xstats_names, unsigned limit);
 static int ixgbe_dev_xstats_get_names_by_id(
-	__rte_unused struct rte_eth_dev *dev,
+	struct rte_eth_dev *dev,
 	struct rte_eth_xstat_name *xstats_names,
 	const uint64_t *ids,
 	unsigned int limit);
@@ -240,7 +239,7 @@ static int ixgbe_dev_rss_reta_query(struct rte_eth_dev *dev,
 			struct rte_eth_rss_reta_entry64 *reta_conf,
 			uint16_t reta_size);
 static void ixgbe_dev_link_status_print(struct rte_eth_dev *dev);
-static int ixgbe_dev_lsc_interrupt_setup(struct rte_eth_dev *dev);
+static int ixgbe_dev_lsc_interrupt_setup(struct rte_eth_dev *dev, uint8_t on);
 static int ixgbe_dev_macsec_interrupt_setup(struct rte_eth_dev *dev);
 static int ixgbe_dev_rxq_interrupt_setup(struct rte_eth_dev *dev);
 static int ixgbe_dev_interrupt_get_status(struct rte_eth_dev *dev);
@@ -262,6 +261,8 @@ static int eth_ixgbevf_dev_init(struct rte_eth_dev *eth_dev);
 static int eth_ixgbevf_dev_uninit(struct rte_eth_dev *eth_dev);
 static int  ixgbevf_dev_configure(struct rte_eth_dev *dev);
 static int  ixgbevf_dev_start(struct rte_eth_dev *dev);
+static int ixgbevf_dev_link_update(struct rte_eth_dev *dev,
+				   int wait_to_complete);
 static void ixgbevf_dev_stop(struct rte_eth_dev *dev);
 static void ixgbevf_dev_close(struct rte_eth_dev *dev);
 static void ixgbevf_intr_disable(struct ixgbe_hw *hw);
@@ -301,9 +302,6 @@ static int ixgbe_dev_rx_queue_intr_disable(struct rte_eth_dev *dev,
 static void ixgbe_set_ivar_map(struct ixgbe_hw *hw, int8_t direction,
 			       uint8_t queue, uint8_t msix_vector);
 static void ixgbe_configure_msix(struct rte_eth_dev *dev);
-
-static int ixgbe_set_queue_rate_limit(struct rte_eth_dev *dev,
-		uint16_t queue_idx, uint16_t tx_rate);
 
 static int ixgbevf_add_mac_addr(struct rte_eth_dev *dev,
 				struct ether_addr *mac_addr,
@@ -444,13 +442,8 @@ static const struct rte_pci_id pci_id_ixgbe_map[] = {
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_82599_KX4_MEZZ) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_82599_KR) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_82599_COMBO_BACKPLANE) },
-	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_SUBDEV_ID_82599_KX4_KR_MEZZ) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_82599_CX4) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_82599_SFP) },
-	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_SUBDEV_ID_82599_SFP) },
-	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_SUBDEV_ID_82599_RNDC) },
-	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_SUBDEV_ID_82599_560FLR) },
-	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_SUBDEV_ID_82599_ECNA_DP) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_82599_BACKPLANE_FCOE) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_82599_SFP_FCOE) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_82599_SFP_EM) },
@@ -481,7 +474,7 @@ static const struct rte_pci_id pci_id_ixgbe_map[] = {
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_X550EM_A_1G_T_L) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_X550EM_X_KX4) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_X550EM_X_KR) },
-#ifdef RTE_NIC_BYPASS
+#ifdef RTE_LIBRTE_IXGBE_BYPASS
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_82599_BYPASS) },
 #endif
 	{ .vendor_id = 0, /* sentinel */ },
@@ -575,17 +568,6 @@ static const struct eth_dev_ops ixgbe_eth_dev_ops = {
 	.set_queue_rate_limit = ixgbe_set_queue_rate_limit,
 	.reta_update          = ixgbe_dev_rss_reta_update,
 	.reta_query           = ixgbe_dev_rss_reta_query,
-#ifdef RTE_NIC_BYPASS
-	.bypass_init          = ixgbe_bypass_init,
-	.bypass_state_set     = ixgbe_bypass_state_store,
-	.bypass_state_show    = ixgbe_bypass_state_show,
-	.bypass_event_set     = ixgbe_bypass_event_store,
-	.bypass_event_show    = ixgbe_bypass_event_show,
-	.bypass_wd_timeout_set  = ixgbe_bypass_wd_timeout_store,
-	.bypass_wd_timeout_show = ixgbe_bypass_wd_timeout_show,
-	.bypass_ver_show      = ixgbe_bypass_ver_show,
-	.bypass_wd_reset      = ixgbe_bypass_wd_reset,
-#endif /* RTE_NIC_BYPASS */
 	.rss_hash_update      = ixgbe_dev_rss_hash_update,
 	.rss_hash_conf_get    = ixgbe_dev_rss_hash_conf_get,
 	.filter_ctrl          = ixgbe_dev_filter_ctrl,
@@ -608,6 +590,7 @@ static const struct eth_dev_ops ixgbe_eth_dev_ops = {
 	.l2_tunnel_offload_set   = ixgbe_dev_l2_tunnel_offload_set,
 	.udp_tunnel_port_add  = ixgbe_dev_udp_tunnel_port_add,
 	.udp_tunnel_port_del  = ixgbe_dev_udp_tunnel_port_del,
+	.tm_ops_get           = ixgbe_tm_ops_get,
 };
 
 /*
@@ -618,7 +601,7 @@ static const struct eth_dev_ops ixgbevf_eth_dev_ops = {
 	.dev_configure        = ixgbevf_dev_configure,
 	.dev_start            = ixgbevf_dev_start,
 	.dev_stop             = ixgbevf_dev_stop,
-	.link_update          = ixgbe_dev_link_update,
+	.link_update          = ixgbevf_dev_link_update,
 	.stats_get            = ixgbevf_dev_stats_get,
 	.xstats_get           = ixgbevf_dev_xstats_get,
 	.stats_reset          = ixgbevf_dev_stats_reset,
@@ -1131,7 +1114,7 @@ ixgbe_swfw_lock_reset(struct ixgbe_hw *hw)
 static int
 eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev)
 {
-	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(eth_dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
@@ -1190,11 +1173,11 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev)
 	hw->allow_unsupported_sfp = 1;
 
 	/* Initialize the shared code (base driver) */
-#ifdef RTE_NIC_BYPASS
+#ifdef RTE_LIBRTE_IXGBE_BYPASS
 	diag = ixgbe_bypass_init_shared_code(hw);
 #else
 	diag = ixgbe_init_shared_code(hw);
-#endif /* RTE_NIC_BYPASS */
+#endif /* RTE_LIBRTE_IXGBE_BYPASS */
 
 	if (diag != IXGBE_SUCCESS) {
 		PMD_INIT_LOG(ERR, "Shared code init failed: %d", diag);
@@ -1227,11 +1210,11 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev)
 		return -EIO;
 	}
 
-#ifdef RTE_NIC_BYPASS
+#ifdef RTE_LIBRTE_IXGBE_BYPASS
 	diag = ixgbe_bypass_init_hw(hw);
 #else
 	diag = ixgbe_init_hw(hw);
-#endif /* RTE_NIC_BYPASS */
+#endif /* RTE_LIBRTE_IXGBE_BYPASS */
 
 	/*
 	 * Devices with copper phys will fail to initialise if ixgbe_init_hw()
@@ -1359,13 +1342,16 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev)
 	/* initialize bandwidth configuration info */
 	memset(bw_conf, 0, sizeof(struct ixgbe_bw_conf));
 
+	/* initialize Traffic Manager configuration */
+	ixgbe_tm_conf_init(eth_dev);
+
 	return 0;
 }
 
 static int
 eth_ixgbe_dev_uninit(struct rte_eth_dev *eth_dev)
 {
-	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(eth_dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	struct ixgbe_hw *hw;
 
@@ -1411,6 +1397,9 @@ eth_ixgbe_dev_uninit(struct rte_eth_dev *eth_dev)
 
 	/* clear all the filters list */
 	ixgbe_filterlist_flush();
+
+	/* Remove all Traffic Manager configuration */
+	ixgbe_tm_conf_uninit(eth_dev);
 
 	return 0;
 }
@@ -1491,7 +1480,7 @@ static int ixgbe_fdir_filter_init(struct rte_eth_dev *eth_dev)
 
 	TAILQ_INIT(&fdir_info->fdir_list);
 	snprintf(fdir_hash_name, RTE_HASH_NAMESIZE,
-		 "fdir_%s", eth_dev->data->name);
+		 "fdir_%s", eth_dev->device->name);
 	fdir_info->hash_handle = rte_hash_create(&fdir_hash_params);
 	if (!fdir_info->hash_handle) {
 		PMD_INIT_LOG(ERR, "Failed to create fdir hash table!");
@@ -1527,7 +1516,7 @@ static int ixgbe_l2_tn_filter_init(struct rte_eth_dev *eth_dev)
 
 	TAILQ_INIT(&l2_tn_info->l2_tn_list);
 	snprintf(l2_tn_hash_name, RTE_HASH_NAMESIZE,
-		 "l2_tn_%s", eth_dev->data->name);
+		 "l2_tn_%s", eth_dev->device->name);
 	l2_tn_info->hash_handle = rte_hash_create(&l2_tn_hash_params);
 	if (!l2_tn_info->hash_handle) {
 		PMD_INIT_LOG(ERR, "Failed to create L2 TN hash table!");
@@ -1598,7 +1587,7 @@ eth_ixgbevf_dev_init(struct rte_eth_dev *eth_dev)
 {
 	int diag;
 	uint32_t tc, tcs;
-	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(eth_dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
@@ -1747,7 +1736,7 @@ eth_ixgbevf_dev_init(struct rte_eth_dev *eth_dev)
 static int
 eth_ixgbevf_dev_uninit(struct rte_eth_dev *eth_dev)
 {
-	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(eth_dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	struct ixgbe_hw *hw;
 
@@ -2176,7 +2165,7 @@ ixgbe_vmdq_vlan_hw_filter_enable(struct rte_eth_dev *dev)
 static int
 ixgbe_check_vf_rss_rxq_num(struct rte_eth_dev *dev, uint16_t nb_rx_q)
 {
-	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 
 	switch (nb_rx_q) {
 	case 1:
@@ -2425,7 +2414,7 @@ ixgbe_set_vf_rate_limit(struct rte_eth_dev *dev, uint16_t vf,
 	uint16_t total_rate = 0;
 	struct rte_pci_device *pci_dev;
 
-	pci_dev = IXGBE_DEV_TO_PCI(dev);
+	pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	rte_eth_link_get_nowait(dev->data->port_id, &link);
 
 	if (vf >= pci_dev->max_vfs)
@@ -2496,7 +2485,7 @@ ixgbe_dev_start(struct rte_eth_dev *dev)
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct ixgbe_vf_info *vfinfo =
 		*IXGBE_DEV_PRIVATE_TO_P_VFDATA(dev->data->dev_private);
-	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	uint32_t intr_vector = 0;
 	int err, link_up = 0, negotiate = 0;
@@ -2505,6 +2494,8 @@ ixgbe_dev_start(struct rte_eth_dev *dev)
 	int status;
 	uint16_t vf, idx;
 	uint32_t *link_speeds;
+	struct ixgbe_tm_conf *tm_conf =
+		IXGBE_DEV_PRIVATE_TO_TM_CONF(dev->data->dev_private);
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -2651,9 +2642,22 @@ ixgbe_dev_start(struct rte_eth_dev *dev)
 
 	speed = 0x0;
 	if (*link_speeds == ETH_LINK_SPEED_AUTONEG) {
-		speed = (hw->mac.type != ixgbe_mac_82598EB) ?
-				IXGBE_LINK_SPEED_82599_AUTONEG :
-				IXGBE_LINK_SPEED_82598_AUTONEG;
+		switch (hw->mac.type) {
+		case ixgbe_mac_82598EB:
+			speed = IXGBE_LINK_SPEED_82598_AUTONEG;
+			break;
+		case ixgbe_mac_82599EB:
+		case ixgbe_mac_X540:
+			speed = IXGBE_LINK_SPEED_82599_AUTONEG;
+			break;
+		case ixgbe_mac_X550:
+		case ixgbe_mac_X550EM_x:
+		case ixgbe_mac_X550EM_a:
+			speed = IXGBE_LINK_SPEED_X550_AUTONEG;
+			break;
+		default:
+			speed = IXGBE_LINK_SPEED_82599_AUTONEG;
+		}
 	} else {
 		if (*link_speeds & ETH_LINK_SPEED_10G)
 			speed |= IXGBE_LINK_SPEED_10GB_FULL;
@@ -2672,7 +2676,9 @@ skip_link_setup:
 	if (rte_intr_allow_others(intr_handle)) {
 		/* check if lsc interrupt is enabled */
 		if (dev->data->dev_conf.intr_conf.lsc != 0)
-			ixgbe_dev_lsc_interrupt_setup(dev);
+			ixgbe_dev_lsc_interrupt_setup(dev, TRUE);
+		else
+			ixgbe_dev_lsc_interrupt_setup(dev, FALSE);
 		ixgbe_dev_macsec_interrupt_setup(dev);
 	} else {
 		rte_intr_callback_unregister(intr_handle,
@@ -2695,6 +2701,11 @@ skip_link_setup:
 	ixgbe_l2_tunnel_conf(dev);
 	ixgbe_filter_restore(dev);
 
+	if (tm_conf->root && !tm_conf->committed)
+		PMD_DRV_LOG(WARNING,
+			    "please call hierarchy_commit() "
+			    "before starting the port");
+
 	return 0;
 
 error:
@@ -2714,9 +2725,11 @@ ixgbe_dev_stop(struct rte_eth_dev *dev)
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct ixgbe_vf_info *vfinfo =
 		*IXGBE_DEV_PRIVATE_TO_P_VFDATA(dev->data->dev_private);
-	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	int vf;
+	struct ixgbe_tm_conf *tm_conf =
+		IXGBE_DEV_PRIVATE_TO_TM_CONF(dev->data->dev_private);
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -2763,6 +2776,9 @@ ixgbe_dev_stop(struct rte_eth_dev *dev)
 		rte_free(intr_handle->intr_vec);
 		intr_handle->intr_vec = NULL;
 	}
+
+	/* reset hierarchy commit */
+	tm_conf->committed = false;
 }
 
 /*
@@ -2774,7 +2790,7 @@ ixgbe_dev_set_link_up(struct rte_eth_dev *dev)
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	if (hw->mac.type == ixgbe_mac_82599EB) {
-#ifdef RTE_NIC_BYPASS
+#ifdef RTE_LIBRTE_IXGBE_BYPASS
 		if (hw->device_id == IXGBE_DEV_ID_82599_BYPASS) {
 			/* Not suported in bypass mode */
 			PMD_INIT_LOG(ERR, "Set link up is not supported "
@@ -2804,7 +2820,7 @@ ixgbe_dev_set_link_down(struct rte_eth_dev *dev)
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	if (hw->mac.type == ixgbe_mac_82599EB) {
-#ifdef RTE_NIC_BYPASS
+#ifdef RTE_LIBRTE_IXGBE_BYPASS
 		if (hw->device_id == IXGBE_DEV_ID_82599_BYPASS) {
 			/* Not suported in bypass mode */
 			PMD_INIT_LOG(ERR, "Set link down is not supported "
@@ -3194,7 +3210,7 @@ static int ixgbe_dev_xstats_get_names(__rte_unused struct rte_eth_dev *dev,
 }
 
 static int ixgbe_dev_xstats_get_names_by_id(
-	__rte_unused struct rte_eth_dev *dev,
+	struct rte_eth_dev *dev,
 	struct rte_eth_xstat_name *xstats_names,
 	const uint64_t *ids,
 	unsigned int limit)
@@ -3582,7 +3598,7 @@ ixgbe_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
 static void
 ixgbe_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 {
-	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct rte_eth_conf *dev_conf = &dev->data->dev_conf;
 
@@ -3685,6 +3701,10 @@ ixgbe_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	    hw->mac.type == ixgbe_mac_X550_vf) {
 		dev_info->speed_capa |= ETH_LINK_SPEED_100M;
 	}
+	if (hw->mac.type == ixgbe_mac_X550) {
+		dev_info->speed_capa |= ETH_LINK_SPEED_2_5G;
+		dev_info->speed_capa |= ETH_LINK_SPEED_5G;
+	}
 }
 
 static const uint32_t *
@@ -3717,6 +3737,12 @@ ixgbe_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 	    dev->rx_pkt_burst == ixgbe_recv_pkts_lro_bulk_alloc ||
 	    dev->rx_pkt_burst == ixgbe_recv_pkts_bulk_alloc)
 		return ptypes;
+
+#if defined(RTE_ARCH_X86)
+	if (dev->rx_pkt_burst == ixgbe_recv_pkts_vec ||
+	    dev->rx_pkt_burst == ixgbe_recv_scattered_pkts_vec)
+		return ptypes;
+#endif
 	return NULL;
 }
 
@@ -3724,7 +3750,7 @@ static void
 ixgbevf_dev_info_get(struct rte_eth_dev *dev,
 		     struct rte_eth_dev_info *dev_info)
 {
-	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
 	dev_info->pci_dev = pci_dev;
@@ -3776,9 +3802,116 @@ ixgbevf_dev_info_get(struct rte_eth_dev *dev,
 	dev_info->tx_desc_lim = tx_desc_lim;
 }
 
+static int
+ixgbevf_check_link(struct ixgbe_hw *hw, ixgbe_link_speed *speed,
+		   int *link_up, int wait_to_complete)
+{
+	/**
+	 * for a quick link status checking, wait_to_compelet == 0,
+	 * skip PF link status checking
+	 */
+	bool no_pflink_check = wait_to_complete == 0;
+	struct ixgbe_mbx_info *mbx = &hw->mbx;
+	struct ixgbe_mac_info *mac = &hw->mac;
+	uint32_t links_reg, in_msg;
+	int ret_val = 0;
+
+	/* If we were hit with a reset drop the link */
+	if (!mbx->ops.check_for_rst(hw, 0) || !mbx->timeout)
+		mac->get_link_status = true;
+
+	if (!mac->get_link_status)
+		goto out;
+
+	/* if link status is down no point in checking to see if pf is up */
+	links_reg = IXGBE_READ_REG(hw, IXGBE_VFLINKS);
+	if (!(links_reg & IXGBE_LINKS_UP))
+		goto out;
+
+	/* for SFP+ modules and DA cables on 82599 it can take up to 500usecs
+	 * before the link status is correct
+	 */
+	if (mac->type == ixgbe_mac_82599_vf) {
+		int i;
+
+		for (i = 0; i < 5; i++) {
+			rte_delay_us(100);
+			links_reg = IXGBE_READ_REG(hw, IXGBE_VFLINKS);
+
+			if (!(links_reg & IXGBE_LINKS_UP))
+				goto out;
+		}
+	}
+
+	switch (links_reg & IXGBE_LINKS_SPEED_82599) {
+	case IXGBE_LINKS_SPEED_10G_82599:
+		*speed = IXGBE_LINK_SPEED_10GB_FULL;
+		if (hw->mac.type >= ixgbe_mac_X550) {
+			if (links_reg & IXGBE_LINKS_SPEED_NON_STD)
+				*speed = IXGBE_LINK_SPEED_2_5GB_FULL;
+		}
+		break;
+	case IXGBE_LINKS_SPEED_1G_82599:
+		*speed = IXGBE_LINK_SPEED_1GB_FULL;
+		break;
+	case IXGBE_LINKS_SPEED_100_82599:
+		*speed = IXGBE_LINK_SPEED_100_FULL;
+		if (hw->mac.type == ixgbe_mac_X550) {
+			if (links_reg & IXGBE_LINKS_SPEED_NON_STD)
+				*speed = IXGBE_LINK_SPEED_5GB_FULL;
+		}
+		break;
+	case IXGBE_LINKS_SPEED_10_X550EM_A:
+		*speed = IXGBE_LINK_SPEED_UNKNOWN;
+		/* Since Reserved in older MAC's */
+		if (hw->mac.type >= ixgbe_mac_X550)
+			*speed = IXGBE_LINK_SPEED_10_FULL;
+		break;
+	default:
+		*speed = IXGBE_LINK_SPEED_UNKNOWN;
+	}
+
+	if (no_pflink_check) {
+		if (*speed == IXGBE_LINK_SPEED_UNKNOWN)
+			mac->get_link_status = true;
+		else
+			mac->get_link_status = false;
+
+		goto out;
+	}
+	/* if the read failed it could just be a mailbox collision, best wait
+	 * until we are called again and don't report an error
+	 */
+	if (mbx->ops.read(hw, &in_msg, 1, 0))
+		goto out;
+
+	if (!(in_msg & IXGBE_VT_MSGTYPE_CTS)) {
+		/* msg is not CTS and is NACK we must have lost CTS status */
+		if (in_msg & IXGBE_VT_MSGTYPE_NACK)
+			ret_val = -1;
+		goto out;
+	}
+
+	/* the pf is talking, if we timed out in the past we reinit */
+	if (!mbx->timeout) {
+		ret_val = -1;
+		goto out;
+	}
+
+	/* if we passed all the tests above then the link is up and we no
+	 * longer need to check for link
+	 */
+	mac->get_link_status = false;
+
+out:
+	*link_up = !mac->get_link_status;
+	return ret_val;
+}
+
 /* return 0 means link status changed, -1 means not changed */
 static int
-ixgbe_dev_link_update(struct rte_eth_dev *dev, int wait_to_complete)
+ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
+			    int wait_to_complete, int vf)
 {
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct rte_eth_link link, old;
@@ -3788,6 +3921,7 @@ ixgbe_dev_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 	int link_up;
 	int diag;
 	u32 speed = 0;
+	int wait = 1;
 	bool autoneg = false;
 
 	link.link_status = ETH_LINK_DOWN;
@@ -3808,9 +3942,12 @@ ixgbe_dev_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 
 	/* check if it needs to wait to complete, if lsc interrupt is enabled */
 	if (wait_to_complete == 0 || dev->data->dev_conf.intr_conf.lsc != 0)
-		diag = ixgbe_check_link(hw, &link_speed, &link_up, 0);
+		wait = 0;
+
+	if (vf)
+		diag = ixgbevf_check_link(hw, &link_speed, &link_up, wait);
 	else
-		diag = ixgbe_check_link(hw, &link_speed, &link_up, 1);
+		diag = ixgbe_check_link(hw, &link_speed, &link_up, wait);
 
 	if (diag != 0) {
 		link.link_speed = ETH_SPEED_NUM_100M;
@@ -3847,6 +3984,14 @@ ixgbe_dev_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 		link.link_speed = ETH_SPEED_NUM_1G;
 		break;
 
+	case IXGBE_LINK_SPEED_2_5GB_FULL:
+		link.link_speed = ETH_SPEED_NUM_2_5G;
+		break;
+
+	case IXGBE_LINK_SPEED_5GB_FULL:
+		link.link_speed = ETH_SPEED_NUM_5G;
+		break;
+
 	case IXGBE_LINK_SPEED_10GB_FULL:
 		link.link_speed = ETH_SPEED_NUM_10G;
 		break;
@@ -3857,6 +4002,18 @@ ixgbe_dev_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 		return -1;
 
 	return 0;
+}
+
+static int
+ixgbe_dev_link_update(struct rte_eth_dev *dev, int wait_to_complete)
+{
+	return ixgbe_dev_link_update_share(dev, wait_to_complete, 0);
+}
+
+static int
+ixgbevf_dev_link_update(struct rte_eth_dev *dev, int wait_to_complete)
+{
+	return ixgbe_dev_link_update_share(dev, wait_to_complete, 1);
 }
 
 static void
@@ -3916,19 +4073,24 @@ ixgbe_dev_allmulticast_disable(struct rte_eth_dev *dev)
  *
  * @param dev
  *  Pointer to struct rte_eth_dev.
+ * @param on
+ *  Enable or Disable.
  *
  * @return
  *  - On success, zero.
  *  - On failure, a negative value.
  */
 static int
-ixgbe_dev_lsc_interrupt_setup(struct rte_eth_dev *dev)
+ixgbe_dev_lsc_interrupt_setup(struct rte_eth_dev *dev, uint8_t on)
 {
 	struct ixgbe_interrupt *intr =
 		IXGBE_DEV_PRIVATE_TO_INTR(dev->data->dev_private);
 
 	ixgbe_dev_link_status_print(dev);
-	intr->mask |= IXGBE_EICR_LSC;
+	if (on)
+		intr->mask |= IXGBE_EICR_LSC;
+	else
+		intr->mask &= ~IXGBE_EICR_LSC;
 
 	return 0;
 }
@@ -4035,7 +4197,7 @@ ixgbe_dev_interrupt_get_status(struct rte_eth_dev *dev)
 static void
 ixgbe_dev_link_status_print(struct rte_eth_dev *dev)
 {
-	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_eth_link link;
 
 	memset(&link, 0, sizeof(link));
@@ -4143,7 +4305,7 @@ static void
 ixgbe_dev_interrupt_delayed_handler(void *param)
 {
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
-	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	struct ixgbe_interrupt *intr =
 		IXGBE_DEV_PRIVATE_TO_INTR(dev->data->dev_private);
@@ -4166,12 +4328,13 @@ ixgbe_dev_interrupt_delayed_handler(void *param)
 		ixgbe_dev_link_update(dev, 0);
 		intr->flags &= ~IXGBE_FLAG_NEED_LINK_UPDATE;
 		ixgbe_dev_link_status_print(dev);
-		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
+		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC,
+					      NULL, NULL);
 	}
 
 	if (intr->flags & IXGBE_FLAG_MACSEC) {
 		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_MACSEC,
-					      NULL);
+					      NULL, NULL);
 		intr->flags &= ~IXGBE_FLAG_MACSEC;
 	}
 
@@ -4660,7 +4823,7 @@ ixgbe_remove_rar(struct rte_eth_dev *dev, uint32_t index)
 static void
 ixgbe_set_default_mac_addr(struct rte_eth_dev *dev, struct ether_addr *addr)
 {
-	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 
 	ixgbe_remove_rar(dev, 0);
 
@@ -4670,7 +4833,7 @@ ixgbe_set_default_mac_addr(struct rte_eth_dev *dev, struct ether_addr *addr)
 static bool
 is_device_supported(struct rte_eth_dev *dev, struct rte_pci_driver *drv)
 {
-	if (strcmp(dev->data->drv_name, drv->driver.name))
+	if (strcmp(dev->device->driver->name, drv->driver.name))
 		return false;
 
 	return true;
@@ -4690,7 +4853,7 @@ ixgbe_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	struct ixgbe_hw *hw;
 	struct rte_eth_dev_info dev_info;
 	uint32_t frame_size = mtu + ETHER_HDR_LEN + ETHER_CRC_LEN;
-	struct rte_eth_rxmode *rx_conf = &dev->data->dev_conf.rxmode;
+	struct rte_eth_dev_data *dev_data = dev->data;
 
 	ixgbe_dev_info_get(dev, &dev_info);
 
@@ -4698,13 +4861,15 @@ ixgbe_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	if ((mtu < ETHER_MIN_MTU) || (frame_size > dev_info.max_rx_pktlen))
 		return -EINVAL;
 
-	/* refuse mtu that requires the support of scattered packets when this
-	 * feature has not been enabled before.
+	/* If device is started, refuse mtu that requires the support of
+	 * scattered packets when this feature has not been enabled before.
 	 */
-	if (!rx_conf->enable_scatter &&
+	if (dev_data->dev_started && !dev_data->scattered_rx &&
 	    (frame_size + 2 * IXGBE_VLAN_TAG_SIZE >
-	     dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM))
+	     dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM)) {
+		PMD_INIT_LOG(ERR, "Stop port first.");
 		return -EINVAL;
+	}
 
 	hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	hlreg0 = IXGBE_READ_REG(hw, IXGBE_HLREG0);
@@ -4799,7 +4964,7 @@ ixgbevf_dev_start(struct rte_eth_dev *dev)
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint32_t intr_vector = 0;
-	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 
 	int err, mask = 0;
@@ -4863,7 +5028,7 @@ static void
 ixgbevf_dev_stop(struct rte_eth_dev *dev)
 {
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 
 	PMD_INIT_FUNC_TRACE();
@@ -5316,6 +5481,9 @@ ixgbe_mirror_rule_reset(struct rte_eth_dev *dev, uint8_t rule_id)
 	if (ixgbe_vt_check(hw) < 0)
 		return -ENOTSUP;
 
+	if (rule_id >= IXGBE_MAX_MIRROR_RULES)
+		return -EINVAL;
+
 	memset(&mr_info->mr_conf[rule_id], 0,
 	       sizeof(struct rte_eth_mirror_conf));
 
@@ -5336,7 +5504,7 @@ ixgbe_mirror_rule_reset(struct rte_eth_dev *dev, uint8_t rule_id)
 static int
 ixgbevf_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
-	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	uint32_t mask;
 	struct ixgbe_hw *hw =
@@ -5370,7 +5538,7 @@ ixgbevf_dev_rx_queue_intr_disable(struct rte_eth_dev *dev, uint16_t queue_id)
 static int
 ixgbe_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
-	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	uint32_t mask;
 	struct ixgbe_hw *hw =
@@ -5473,7 +5641,8 @@ ixgbe_set_ivar_map(struct ixgbe_hw *hw, int8_t direction,
 		tmp |= (msix_vector << (8 * (queue & 0x3)));
 		IXGBE_WRITE_REG(hw, IXGBE_IVAR(idx), tmp);
 	} else if ((hw->mac.type == ixgbe_mac_82599EB) ||
-			(hw->mac.type == ixgbe_mac_X540)) {
+			(hw->mac.type == ixgbe_mac_X540) ||
+			(hw->mac.type == ixgbe_mac_X550)) {
 		if (direction == -1) {
 			/* other causes */
 			idx = ((queue & 1) * 8);
@@ -5495,7 +5664,7 @@ ixgbe_set_ivar_map(struct ixgbe_hw *hw, int8_t direction,
 static void
 ixgbevf_configure_msix(struct rte_eth_dev *dev)
 {
-	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -5529,7 +5698,7 @@ ixgbevf_configure_msix(struct rte_eth_dev *dev)
 static void
 ixgbe_configure_msix(struct rte_eth_dev *dev)
 {
-	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -5581,6 +5750,7 @@ ixgbe_configure_msix(struct rte_eth_dev *dev)
 		break;
 	case ixgbe_mac_82599EB:
 	case ixgbe_mac_X540:
+	case ixgbe_mac_X550:
 		ixgbe_set_ivar_map(hw, -1, 1, IXGBE_MISC_VEC_ID);
 		break;
 	default:
@@ -5598,8 +5768,9 @@ ixgbe_configure_msix(struct rte_eth_dev *dev)
 	IXGBE_WRITE_REG(hw, IXGBE_EIAC, mask);
 }
 
-static int ixgbe_set_queue_rate_limit(struct rte_eth_dev *dev,
-	uint16_t queue_idx, uint16_t tx_rate)
+int
+ixgbe_set_queue_rate_limit(struct rte_eth_dev *dev,
+			   uint16_t queue_idx, uint16_t tx_rate)
 {
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint32_t rf_dec, rf_int;
@@ -7531,7 +7702,7 @@ ixgbe_e_tag_insertion_en_dis(struct rte_eth_dev *dev,
 			     struct rte_eth_l2_tunnel_conf *l2_tunnel,
 			     bool en)
 {
-	struct rte_pci_device *pci_dev = IXGBE_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	int ret = 0;
 	uint32_t vmtir, vmvir;
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -7879,7 +8050,8 @@ static void ixgbevf_mbx_process(struct rte_eth_dev *dev)
 
 	/* PF reset VF event */
 	if (in_msg == IXGBE_PF_CONTROL_MSG)
-		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_RESET, NULL);
+		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_RESET,
+					      NULL, NULL);
 }
 
 static int

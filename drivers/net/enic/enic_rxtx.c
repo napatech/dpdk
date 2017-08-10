@@ -253,8 +253,20 @@ enic_cq_rx_to_pkt_flags(struct cq_desc *cqd, struct rte_mbuf *mbuf)
 	}
 	mbuf->vlan_tci = vlan_tci;
 
-	/* RSS flag */
-	if (enic_cq_rx_desc_rss_type(cqrd)) {
+	if ((cqd->type_color & CQ_DESC_TYPE_MASK) == CQ_DESC_TYPE_CLASSIFIER) {
+		struct cq_enet_rq_clsf_desc *clsf_cqd;
+		uint16_t filter_id;
+		clsf_cqd = (struct cq_enet_rq_clsf_desc *)cqd;
+		filter_id = clsf_cqd->filter_id;
+		if (filter_id) {
+			pkt_flags |= PKT_RX_FDIR;
+			if (filter_id != ENIC_MAGIC_FILTER_ID) {
+				mbuf->hash.fdir.hi = clsf_cqd->filter_id;
+				pkt_flags |= PKT_RX_FDIR_ID;
+			}
+		}
+	} else if (enic_cq_rx_desc_rss_type(cqrd)) {
+		/* RSS flag */
 		pkt_flags |= PKT_RX_RSS_HASH;
 		mbuf->hash.rss = enic_cq_rx_desc_rss_hash(cqrd);
 	}
@@ -491,7 +503,8 @@ static inline void enic_free_wq_bufs(struct vnic_wq *wq, u16 completed_index)
 		tail_idx = enic_ring_incr(desc_count, tail_idx);
 	}
 
-	rte_mempool_put_bulk(pool, (void **)free, nb_free);
+	if (nb_free > 0)
+		rte_mempool_put_bulk(pool, (void **)free, nb_free);
 
 	wq->tail_idx = tail_idx;
 	wq->ring.desc_avail += nb_to_free;

@@ -17,7 +17,7 @@
  *  qat-linux@intel.com
  *
  *  BSD LICENSE
- *  Copyright(c) 2015-2016 Intel Corporation.
+ *  Copyright(c) 2015-2017 Intel Corporation.
  *  Redistribution and use in source and binary forms, with or without
  *  modification, are permitted provided that the following conditions
  *  are met:
@@ -120,6 +120,9 @@ static int qat_hash_get_state1_size(enum icp_qat_hw_auth_algo qat_hash_alg)
 						QAT_HW_DEFAULT_ALIGNMENT);
 	case ICP_QAT_HW_AUTH_ALGO_KASUMI_F9:
 		return QAT_HW_ROUND_UP(ICP_QAT_HW_KASUMI_F9_STATE1_SZ,
+						QAT_HW_DEFAULT_ALIGNMENT);
+	case ICP_QAT_HW_AUTH_ALGO_NULL:
+		return QAT_HW_ROUND_UP(ICP_QAT_HW_NULL_STATE1_SZ,
 						QAT_HW_DEFAULT_ALIGNMENT);
 	case ICP_QAT_HW_AUTH_ALGO_DELIMITER:
 		/* return maximum state1 size in this case */
@@ -603,6 +606,7 @@ int qat_alg_aead_session_create_content_desc_cipher(struct qat_session *cdesc,
 		cipher_cd_ctrl->cipher_state_sz =
 			ICP_QAT_HW_ZUC_3G_EEA3_IV_SZ >> 3;
 		qat_proto_flag = QAT_CRYPTO_PROTO_FLAG_ZUC;
+		cdesc->min_qat_dev_gen = QAT_GEN2;
 	} else {
 		total_key_size = cipherkeylen;
 		cipher_cd_ctrl->cipher_state_sz = ICP_QAT_HW_AES_BLK_SZ >> 3;
@@ -661,7 +665,7 @@ int qat_alg_aead_session_create_content_desc_cipher(struct qat_session *cdesc,
 int qat_alg_aead_session_create_content_desc_auth(struct qat_session *cdesc,
 						uint8_t *authkey,
 						uint32_t authkeylen,
-						uint32_t add_auth_data_length,
+						uint32_t aad_length,
 						uint32_t digestsize,
 						unsigned int operation)
 {
@@ -810,13 +814,14 @@ int qat_alg_aead_session_create_content_desc_auth(struct qat_session *cdesc,
 		 * in big-endian format. This field is 8 bytes
 		 */
 		auth_param->u2.aad_sz =
-				RTE_ALIGN_CEIL(add_auth_data_length, 16);
+				RTE_ALIGN_CEIL(aad_length, 16);
 		auth_param->hash_state_sz = (auth_param->u2.aad_sz) >> 3;
 
 		aad_len = (uint32_t *)(cdesc->cd_cur_ptr +
 					ICP_QAT_HW_GALOIS_128_STATE1_SZ +
 					ICP_QAT_HW_GALOIS_H_SZ);
-		*aad_len = rte_bswap32(add_auth_data_length);
+		*aad_len = rte_bswap32(aad_length);
+		cdesc->aad_len = aad_length;
 		break;
 	case ICP_QAT_HW_AUTH_ALGO_SNOW_3G_UIA2:
 		qat_proto_flag = QAT_CRYPTO_PROTO_FLAG_SNOW3G;
@@ -837,8 +842,7 @@ int qat_alg_aead_session_create_content_desc_auth(struct qat_session *cdesc,
 				0, ICP_QAT_HW_SNOW_3G_UEA2_IV_SZ);
 		cdesc->cd_cur_ptr += sizeof(struct icp_qat_hw_cipher_config) +
 				authkeylen + ICP_QAT_HW_SNOW_3G_UEA2_IV_SZ;
-		auth_param->hash_state_sz =
-				RTE_ALIGN_CEIL(add_auth_data_length, 16) >> 3;
+		auth_param->hash_state_sz = ICP_QAT_HW_SNOW_3G_UEA2_IV_SZ >> 3;
 		break;
 	case ICP_QAT_HW_AUTH_ALGO_ZUC_3G_128_EIA3:
 		hash->auth_config.config =
@@ -854,8 +858,8 @@ int qat_alg_aead_session_create_content_desc_auth(struct qat_session *cdesc,
 		memcpy(cdesc->cd_cur_ptr + state1_size, authkey, authkeylen);
 		cdesc->cd_cur_ptr += state1_size + state2_size
 			+ ICP_QAT_HW_ZUC_3G_EEA3_IV_SZ;
-		auth_param->hash_state_sz =
-				RTE_ALIGN_CEIL(add_auth_data_length, 16) >> 3;
+		auth_param->hash_state_sz = ICP_QAT_HW_ZUC_3G_EEA3_IV_SZ >> 3;
+		cdesc->min_qat_dev_gen = QAT_GEN2;
 
 		break;
 	case ICP_QAT_HW_AUTH_ALGO_MD5:
@@ -868,6 +872,9 @@ int qat_alg_aead_session_create_content_desc_auth(struct qat_session *cdesc,
 		state2_size = ICP_QAT_HW_MD5_STATE2_SZ;
 		break;
 	case ICP_QAT_HW_AUTH_ALGO_NULL:
+		state1_size = qat_hash_get_state1_size(
+				ICP_QAT_HW_AUTH_ALGO_NULL);
+		state2_size = ICP_QAT_HW_NULL_STATE2_SZ;
 		break;
 	case ICP_QAT_HW_AUTH_ALGO_KASUMI_F9:
 		state1_size = qat_hash_get_state1_size(

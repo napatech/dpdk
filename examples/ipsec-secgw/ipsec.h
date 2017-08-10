@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright(c) 2016 Intel Corporation. All rights reserved.
+ *   Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
  *   All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
@@ -48,6 +48,9 @@
 
 #define MAX_DIGEST_SIZE 32 /* Bytes -- 256 bits */
 
+#define IV_OFFSET		(sizeof(struct rte_crypto_op) + \
+				sizeof(struct rte_crypto_sym_op))
+
 #define uint32_t_to_char(ip, a, b, c, d) do {\
 		*a = (uint8_t)(ip >> 24 & 0xff);\
 		*b = (uint8_t)(ip >> 16 & 0xff);\
@@ -72,7 +75,6 @@
 
 struct rte_crypto_xform;
 struct ipsec_xform;
-struct rte_cryptodev_session;
 struct rte_mbuf;
 
 struct ipsec_sa;
@@ -100,6 +102,7 @@ struct ipsec_sa {
 	struct rte_cryptodev_sym_session *crypto_session;
 	enum rte_crypto_cipher_algorithm cipher_algo;
 	enum rte_crypto_auth_algorithm auth_algo;
+	enum rte_crypto_aead_algorithm aead_algo;
 	uint16_t digest_len;
 	uint16_t iv_len;
 	uint16_t block_size;
@@ -118,10 +121,10 @@ struct ipsec_sa {
 } __rte_cache_aligned;
 
 struct ipsec_mbuf_metadata {
-	uint8_t buf[32];
 	struct ipsec_sa *sa;
 	struct rte_crypto_op cop;
 	struct rte_crypto_sym_op sym_cop;
+	uint8_t buf[32];
 } __rte_cache_aligned;
 
 struct cdev_qp {
@@ -140,6 +143,7 @@ struct ipsec_ctx {
 	uint16_t nb_qps;
 	uint16_t last_qp;
 	struct cdev_qp tbl[MAX_QP_PER_LCORE];
+	struct rte_mempool *session_pool;
 };
 
 struct cdev_key {
@@ -158,6 +162,7 @@ struct socket_ctx {
 	struct rt_ctx *rt_ip4;
 	struct rt_ctx *rt_ip6;
 	struct rte_mempool *mbuf_pool;
+	struct rte_mempool *session_pool;
 };
 
 struct cnt_blk {

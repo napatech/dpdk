@@ -31,7 +31,7 @@
 #define ECORE_MAJOR_VERSION		8
 #define ECORE_MINOR_VERSION		18
 #define ECORE_REVISION_VERSION		7
-#define ECORE_ENGINEERING_VERSION	0
+#define ECORE_ENGINEERING_VERSION	1
 
 #define ECORE_VERSION							\
 	((ECORE_MAJOR_VERSION << 24) | (ECORE_MINOR_VERSION << 16) |	\
@@ -770,7 +770,7 @@ struct ecore_dev {
 	bool				attn_clr_en;
 
 	/* Indicates whether allowing the MFW to collect a crash dump */
-	bool				mdump_en;
+	bool				allow_mdump;
 
 	/* Indicates if the reg_fifo is checked after any register access */
 	bool				chk_reg_fifo;

@@ -37,7 +37,6 @@
 #include <stdint.h>
 #include <inttypes.h>
 #include <sys/types.h>
-#include <string.h>
 #include <sys/queue.h>
 #include <netinet/in.h>
 #include <setjmp.h>
@@ -53,7 +52,6 @@
 #include <rte_memcpy.h>
 #include <rte_memzone.h>
 #include <rte_eal.h>
-#include <rte_per_lcore.h>
 #include <rte_launch.h>
 #include <rte_atomic.h>
 #include <rte_cycles.h>
@@ -469,14 +467,16 @@ lsi_parse_args(int argc, char **argv)
  *  Pointer to(address of) the parameters.
  *
  * @return
- *  void.
+ *  int.
  */
-static void
-lsi_event_callback(uint8_t port_id, enum rte_eth_event_type type, void *param)
+static int
+lsi_event_callback(uint8_t port_id, enum rte_eth_event_type type, void *param,
+		    void *ret_param)
 {
 	struct rte_eth_link link;
 
 	RTE_SET_USED(param);
+	RTE_SET_USED(ret_param);
 
 	printf("\n\nIn registered callback...\n");
 	printf("Event type: %s\n", type == RTE_ETH_EVENT_INTR_LSC ? "LSC interrupt" : "unknown event");
@@ -488,6 +488,8 @@ lsi_event_callback(uint8_t port_id, enum rte_eth_event_type type, void *param)
 				("full-duplex") : ("half-duplex"));
 	} else
 		printf("Port %d Link Down\n\n", port_id);
+
+	return 0;
 }
 
 /* Check the link status of all ports in up to 9s, and print them finally */
@@ -645,6 +647,13 @@ main(int argc, char **argv)
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%u\n",
 				  ret, (unsigned) portid);
+
+		ret = rte_eth_dev_adjust_nb_rx_tx_desc(portid, &nb_rxd,
+						       &nb_txd);
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE,
+				 "rte_eth_dev_adjust_nb_rx_tx_desc: err=%d, port=%u\n",
+				 ret, (unsigned) portid);
 
 		/* register lsi interrupt callback, need to be after
 		 * rte_eth_dev_configure(). if (intr_conf.lsc == 0), no

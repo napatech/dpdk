@@ -66,6 +66,12 @@ extern "C" {
 #define RTE_STD_C11
 #endif
 
+/** Define GCC_VERSION **/
+#ifdef RTE_TOOLCHAIN_GCC
+#define GCC_VERSION (__GNUC__ * 10000 + __GNUC_MINOR__ * 100 +	\
+		__GNUC_PATCHLEVEL__)
+#endif
+
 #ifdef RTE_ARCH_STRICT_ALIGN
 typedef uint64_t unaligned_uint64_t __attribute__ ((aligned(1)));
 typedef uint32_t unaligned_uint32_t __attribute__ ((aligned(1)));
@@ -101,6 +107,16 @@ typedef uint16_t unaligned_uint16_t;
  * as to avoid a compiler warning
  */
 #define RTE_SET_USED(x) (void)(x)
+
+/**
+ * Force a function to be inlined
+ */
+#define __rte_always_inline inline __attribute__((always_inline))
+
+/**
+ * Force a function to be noinlined
+ */
+#define __rte_noinline  __attribute__((noinline))
 
 /*********** Macros for pointer arithmetic ********/
 
@@ -294,21 +310,6 @@ rte_align64pow2(uint64_t v)
 
 /*********** Other general functions / macros ********/
 
-#ifdef __SSE2__
-#include <emmintrin.h>
-/**
- * PAUSE instruction for tight loops (avoid busy waiting)
- */
-static inline void
-rte_pause (void)
-{
-	_mm_pause();
-}
-#else
-static inline void
-rte_pause(void) {}
-#endif
-
 /**
  * Searches the input parameter for the least significant set bit
  * (starting from zero).
@@ -324,6 +325,23 @@ static inline uint32_t
 rte_bsf32(uint32_t v)
 {
 	return __builtin_ctz(v);
+}
+
+/**
+ * Return the rounded-up log2 of a integer.
+ *
+ * @param v
+ *     The input parameter.
+ * @return
+ *     The rounded-up log2 of the input, or 0 if the input is 0.
+ */
+static inline uint32_t
+rte_log2_u32(uint32_t v)
+{
+	if (v == 0)
+		return 0;
+	v = rte_align32pow2(v);
+	return rte_bsf32(v);
 }
 
 #ifndef offsetof

@@ -72,6 +72,9 @@ mlx5_dev_start(struct rte_eth_dev *dev)
 		priv_unlock(priv);
 		return 0;
 	}
+	/* Update Rx/Tx callback. */
+	priv_select_tx_function(priv);
+	priv_select_rx_function(priv);
 	DEBUG("%p: allocating and configuring hash RX queues", (void *)dev);
 	err = priv_create_hash_rxqs(priv);
 	if (!err)
@@ -94,12 +97,13 @@ mlx5_dev_start(struct rte_eth_dev *dev)
 		      (void *)priv, strerror(err));
 		goto error;
 	}
-	priv_dev_interrupt_handler_install(priv, dev);
-	if (dev->data->dev_conf.intr_conf.rxq) {
-		err = priv_intr_efd_enable(priv);
-		if (!err)
-			err = priv_create_intr_vec(priv);
+	err = priv_rx_intr_vec_enable(priv);
+	if (err) {
+		ERROR("%p: RX interrupt vector creation failed",
+		      (void *)priv);
+		goto error;
 	}
+	priv_dev_interrupt_handler_install(priv, dev);
 	priv_xstats_init(priv);
 	priv_unlock(priv);
 	return 0;
@@ -140,11 +144,8 @@ mlx5_dev_stop(struct rte_eth_dev *dev)
 	priv_destroy_hash_rxqs(priv);
 	priv_fdir_disable(priv);
 	priv_flow_stop(priv);
+	priv_rx_intr_vec_disable(priv);
 	priv_dev_interrupt_handler_uninstall(priv, dev);
-	if (priv->dev->data->dev_conf.intr_conf.rxq) {
-		priv_destroy_intr_vec(priv);
-		priv_intr_efd_disable(priv);
-	}
 	priv->started = 0;
 	priv_unlock(priv);
 }

@@ -139,6 +139,21 @@ nb_common_chars(const char * s1, const char * s2)
 	return i;
 }
 
+/** Retrieve either static or dynamic token at a given index. */
+static cmdline_parse_token_hdr_t *
+get_token(cmdline_parse_inst_t *inst, unsigned int index)
+{
+	cmdline_parse_token_hdr_t *token_p;
+
+	/* check presence of static tokens first */
+	if (inst->tokens[0] || !inst->f)
+		return inst->tokens[index];
+	/* generate dynamic token */
+	token_p = NULL;
+	inst->f(&token_p, NULL, &inst->tokens[index]);
+	return token_p;
+}
+
 /**
  * try to match the buffer with an instruction (only the first
  * nb_match_token tokens if != 0). Return 0 if we match all the
@@ -146,27 +161,20 @@ nb_common_chars(const char * s1, const char * s2)
  */
 static int
 match_inst(cmdline_parse_inst_t *inst, const char *buf,
-	   unsigned int nb_match_token, void *resbuf, unsigned resbuf_size,
-	   cmdline_parse_token_hdr_t
-		*(*dyn_tokens)[CMDLINE_PARSE_DYNAMIC_TOKENS])
+	   unsigned int nb_match_token, void *resbuf, unsigned resbuf_size)
 {
-	unsigned int token_num=0;
 	cmdline_parse_token_hdr_t * token_p;
 	unsigned int i=0;
 	int n = 0;
 	struct cmdline_token_hdr token_hdr;
 
-	token_p = inst->tokens[token_num];
-	if (!token_p && dyn_tokens && inst->f) {
-		if (!(*dyn_tokens)[0])
-			inst->f(&(*dyn_tokens)[0], NULL, dyn_tokens);
-		token_p = (*dyn_tokens)[0];
-	}
-	if (token_p)
+	/* check if we match all tokens of inst */
+	while (!nb_match_token || i < nb_match_token) {
+		token_p = get_token(inst, i);
+		if (!token_p)
+			break;
 		memcpy(&token_hdr, token_p, sizeof(token_hdr));
 
-	/* check if we match all tokens of inst */
-	while (token_p && (!nb_match_token || i<nb_match_token)) {
 		debug_printf("TK\n");
 		/* skip spaces */
 		while (isblank2(*buf)) {
@@ -201,21 +209,6 @@ match_inst(cmdline_parse_inst_t *inst, const char *buf,
 		debug_printf("TK parsed (len=%d)\n", n);
 		i++;
 		buf += n;
-
-		token_num ++;
-		if (!inst->tokens[0]) {
-			if (token_num < (CMDLINE_PARSE_DYNAMIC_TOKENS - 1)) {
-				if (!(*dyn_tokens)[token_num])
-					inst->f(&(*dyn_tokens)[token_num],
-						NULL,
-						dyn_tokens);
-				token_p = (*dyn_tokens)[token_num];
-			} else
-				token_p = NULL;
-		} else
-			token_p = inst->tokens[token_num];
-		if (token_p)
-			memcpy(&token_hdr, token_p, sizeof(token_hdr));
 	}
 
 	/* does not match */
@@ -259,7 +252,6 @@ cmdline_parse(struct cmdline *cl, const char * buf)
 		char buf[CMDLINE_PARSE_RESULT_BUFSIZE];
 		long double align; /* strong alignment constraint for buf */
 	} result, tmp_result;
-	cmdline_parse_token_hdr_t *dyn_tokens[CMDLINE_PARSE_DYNAMIC_TOKENS];
 	void (*f)(void *, struct cmdline *, void *) = NULL;
 	void *data = NULL;
 	int comment = 0;
@@ -276,7 +268,6 @@ cmdline_parse(struct cmdline *cl, const char * buf)
 		return CMDLINE_PARSE_BAD_ARGS;
 
 	ctx = cl->ctx;
-	memset(&dyn_tokens, 0, sizeof(dyn_tokens));
 
 	/*
 	 * - look if the buffer contains at least one line
@@ -322,7 +313,7 @@ cmdline_parse(struct cmdline *cl, const char * buf)
 
 		/* fully parsed */
 		tok = match_inst(inst, buf, 0, tmp_result.buf,
-				 sizeof(tmp_result.buf), &dyn_tokens);
+				 sizeof(tmp_result.buf));
 
 		if (tok > 0) /* we matched at least one token */
 			err = CMDLINE_PARSE_BAD_ARGS;
@@ -380,7 +371,6 @@ cmdline_complete(struct cmdline *cl, const char *buf, int *state,
 	cmdline_parse_token_hdr_t *token_p;
 	struct cmdline_token_hdr token_hdr;
 	char tmpbuf[CMDLINE_BUFFER_SIZE], comp_buf[CMDLINE_BUFFER_SIZE];
-	cmdline_parse_token_hdr_t *dyn_tokens[CMDLINE_PARSE_DYNAMIC_TOKENS];
 	unsigned int partial_tok_len;
 	int comp_len = -1;
 	int tmp_len = -1;
@@ -400,7 +390,6 @@ cmdline_complete(struct cmdline *cl, const char *buf, int *state,
 
 	debug_printf("%s called\n", __func__);
 	memset(&token_hdr, 0, sizeof(token_hdr));
-	memset(&dyn_tokens, 0, sizeof(dyn_tokens));
 
 	/* count the number of complete token to parse */
 	for (i=0 ; buf[i] ; i++) {
@@ -424,23 +413,11 @@ cmdline_complete(struct cmdline *cl, const char *buf, int *state,
 		while (inst) {
 			/* parse the first tokens of the inst */
 			if (nb_token &&
-			    match_inst(inst, buf, nb_token, NULL, 0,
-				       &dyn_tokens))
+			    match_inst(inst, buf, nb_token, NULL, 0))
 				goto next;
 
 			debug_printf("instruction match\n");
-			if (!inst->tokens[0]) {
-				if (nb_token <
-				    (CMDLINE_PARSE_DYNAMIC_TOKENS - 1)) {
-					if (!dyn_tokens[nb_token])
-						inst->f(&dyn_tokens[nb_token],
-							NULL,
-							&dyn_tokens);
-					token_p = dyn_tokens[nb_token];
-				} else
-					token_p = NULL;
-			} else
-				token_p = inst->tokens[nb_token];
+			token_p = get_token(inst, nb_token);
 			if (token_p)
 				memcpy(&token_hdr, token_p, sizeof(token_hdr));
 
@@ -531,20 +508,10 @@ cmdline_complete(struct cmdline *cl, const char *buf, int *state,
 		inst = ctx[inst_num];
 
 		if (nb_token &&
-		    match_inst(inst, buf, nb_token, NULL, 0, &dyn_tokens))
+		    match_inst(inst, buf, nb_token, NULL, 0))
 			goto next2;
 
-		if (!inst->tokens[0]) {
-			if (nb_token < (CMDLINE_PARSE_DYNAMIC_TOKENS - 1)) {
-				if (!dyn_tokens[nb_token])
-					inst->f(&dyn_tokens[nb_token],
-						NULL,
-						&dyn_tokens);
-				token_p = dyn_tokens[nb_token];
-			} else
-				token_p = NULL;
-		} else
-			token_p = inst->tokens[nb_token];
+		token_p = get_token(inst, nb_token);
 		if (token_p)
 			memcpy(&token_hdr, token_p, sizeof(token_hdr));
 

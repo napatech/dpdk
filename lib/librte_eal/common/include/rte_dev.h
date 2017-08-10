@@ -115,6 +115,26 @@ rte_pmd_debug_trace(const char *func_name, const char *fmt, ...)
 } while (0)
 
 /**
+ * Device driver.
+ */
+enum rte_kernel_driver {
+	RTE_KDRV_UNKNOWN = 0,
+	RTE_KDRV_IGB_UIO,
+	RTE_KDRV_VFIO,
+	RTE_KDRV_UIO_GENERIC,
+	RTE_KDRV_NIC_UIO,
+	RTE_KDRV_NONE,
+};
+
+/**
+ * Device policies.
+ */
+enum rte_dev_policy {
+	RTE_DEV_WHITELISTED,
+	RTE_DEV_BLACKLISTED,
+};
+
+/**
  * A generic memory resource representation.
  */
 struct rte_mem_resource {
@@ -131,6 +151,8 @@ struct rte_driver {
 	const char *name;                   /**< Driver name. */
 	const char *alias;              /**< Driver alias. */
 };
+
+#define RTE_DEV_NAME_MAX_LEN (32)
 
 /**
  * A structure describing a generic device.
@@ -183,13 +205,67 @@ int rte_eal_dev_attach(const char *name, const char *devargs);
 /**
  * Detach a device from its driver.
  *
- * @param name
- *   Same description as for rte_eal_dev_attach().
- *   Here, eal will call the driver detaching function.
+ * @param dev
+ *   A pointer to a rte_device structure.
  * @return
  *   0 on success, negative on error.
  */
-int rte_eal_dev_detach(const char *name);
+int rte_eal_dev_detach(struct rte_device *dev);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
+ * Hotplug add a given device to a specific bus.
+ *
+ * @param busname
+ *   The bus name the device is added to.
+ * @param devname
+ *   The device name. Based on this device name, eal will identify a driver
+ *   capable of handling it and pass it to the driver probing function.
+ * @param devargs
+ *   Device arguments to be passed to the driver.
+ * @return
+ *   0 on success, negative on error.
+ */
+int rte_eal_hotplug_add(const char *busname, const char *devname,
+			const char *devargs);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
+ * Hotplug remove a given device from a specific bus.
+ *
+ * @param busname
+ *   The bus name the device is removed from.
+ * @param devname
+ *   The device name being removed.
+ * @return
+ *   0 on success, negative on error.
+ */
+int rte_eal_hotplug_remove(const char *busname, const char *devname);
+
+/**
+ * Device comparison function.
+ *
+ * This type of function is used to compare an rte_device with arbitrary
+ * data.
+ *
+ * @param dev
+ *   Device handle.
+ *
+ * @param data
+ *   Data to compare against. The type of this parameter is determined by
+ *   the kind of comparison performed by the function.
+ *
+ * @return
+ *   0 if the device matches the data.
+ *   !0 if the device does not match.
+ *   <0 if ordering is possible and the device is lower than the data.
+ *   >0 if ordering is possible and the device is greater than the data.
+ */
+typedef int (*rte_dev_cmp_t)(const struct rte_device *dev, const void *data);
 
 #define RTE_PMD_EXPORT_NAME_ARRAY(n, idx) n##idx[]
 

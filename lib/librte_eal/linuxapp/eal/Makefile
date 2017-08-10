@@ -37,7 +37,7 @@ ARCH_DIR ?= $(RTE_ARCH)
 EXPORT_MAP := rte_eal_version.map
 VPATH += $(RTE_SDK)/lib/librte_eal/common/arch/$(ARCH_DIR)
 
-LIBABIVER := 4
+LIBABIVER := 5
 
 VPATH += $(RTE_SDK)/lib/librte_eal/common
 
@@ -50,6 +50,9 @@ LDLIBS += -ldl
 LDLIBS += -lpthread
 LDLIBS += -lgcc_s
 LDLIBS += -lrt
+ifeq ($(CONFIG_RTE_EAL_NUMA_AWARE_HUGEPAGES),y)
+LDLIBS += -lnuma
+endif
 
 # specific to linuxapp exec-env
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) := eal.c
@@ -96,6 +99,7 @@ SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += rte_malloc.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += malloc_elem.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += malloc_heap.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += rte_keepalive.c
+SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += rte_service.c
 
 # from arch dir
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += rte_cpuflags.c

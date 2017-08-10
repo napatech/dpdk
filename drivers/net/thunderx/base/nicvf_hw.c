@@ -1,7 +1,7 @@
 /*
  *   BSD LICENSE
  *
- *   Copyright (C) Cavium networks Ltd. 2016.
+ *   Copyright (C) Cavium, Inc. 2016.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -13,7 +13,7 @@
  *       notice, this list of conditions and the following disclaimer in
  *       the documentation and/or other materials provided with the
  *       distribution.
- *     * Neither the name of Cavium networks nor the names of its
+ *     * Neither the name of Cavium, Inc nor the names of its
  *       contributors may be used to endorse or promote products derived
  *       from this software without specific prior written permission.
  *
@@ -448,7 +448,8 @@ nicvf_qsize_regbit(uint32_t len, uint32_t len_shift)
 {
 	int val;
 
-	val = ((uint32_t)log2(len) - len_shift);
+	val = nicvf_log2_u32(len) - len_shift;
+
 	assert(val >= NICVF_QSIZE_MIN_VAL);
 	assert(val <= NICVF_QSIZE_MAX_VAL);
 	return val;
@@ -585,6 +586,7 @@ nicvf_qset_sq_config(struct nicvf *nic, uint16_t qidx, struct nicvf_txq *txq)
 	nicvf_queue_reg_write(nic, NIC_QSET_SQ_0_7_BASE, qidx, txq->phys);
 
 	/* Enable send queue  & set queue size */
+	sq_cfg.cq_limit = 0;
 	sq_cfg.ena = 1;
 	sq_cfg.reset = 0;
 	sq_cfg.ldwb = 0;
@@ -801,7 +803,7 @@ nicvf_rss_reta_update(struct nicvf *nic, uint8_t *tbl, uint32_t max_count)
 		return NICVF_ERR_RSS_GET_SZ;
 
 	assert(rss->rss_size > 0);
-	rss->hash_bits = (uint8_t)log2(rss->rss_size);
+	rss->hash_bits = (uint8_t)nicvf_log2_u32(rss->rss_size);
 	for (idx = 0; idx < rss->rss_size && idx < max_count; idx++)
 		rss->ind_tbl[idx] = tbl[idx];
 
@@ -822,7 +824,8 @@ nicvf_rss_reta_query(struct nicvf *nic, uint8_t *tbl, uint32_t max_count)
 		return NICVF_ERR_RSS_GET_SZ;
 
 	assert(rss->rss_size > 0);
-	rss->hash_bits = (uint8_t)log2(rss->rss_size);
+	rss->hash_bits = (uint8_t)nicvf_log2_u32(rss->rss_size);
+
 	for (idx = 0; idx < rss->rss_size && idx < max_count; idx++)
 		tbl[idx] = rss->ind_tbl[idx];
 

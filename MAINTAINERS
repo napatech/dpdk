@@ -24,6 +24,7 @@ General Project Administration
 M: Thomas Monjalon <thomas@monjalon.net>
 T: git://dpdk.org/dpdk
 F: MAINTAINERS
+F: devtools/check-dup-includes.sh
 F: devtools/check-maintainers.sh
 F: devtools/check-git-log.sh
 F: devtools/check-includes.sh
@@ -134,6 +135,14 @@ F: test/test/test_mp_secondary.c
 F: examples/multi_process/
 F: doc/guides/sample_app_ug/multi_process.rst
 
+Service Cores - EXPERIMENTAL
+M: Harry van Haaren <harry.van.haaren@intel.com>
+F: lib/librte_eal/common/include/rte_service.h
+F: lib/librte_eal/common/include/rte_service_component.h
+F: lib/librte_eal/common/rte_service.c
+F: doc/guides/prog_guide/service_cores.rst
+F: test/test/test_service_cores.c
+
 ARM v7
 M: Jan Viktorin <viktorin@rehivetech.com>
 M: Jianbo Liu <jianbo.liu@linaro.org>
@@ -144,9 +153,12 @@ ARM v8
 M: Jerin Jacob <jerin.jacob@caviumnetworks.com>
 M: Jianbo Liu <jianbo.liu@linaro.org>
 F: lib/librte_eal/common/include/arch/arm/*_64.h
+F: lib/librte_net/net_crc_neon.h
 F: lib/librte_acl/acl_run_neon.*
 F: lib/librte_lpm/rte_lpm_neon.h
 F: lib/librte_hash/rte*_arm64.h
+F: lib/librte_efd/rte*_arm64.h
+F: lib/librte_table/rte*_arm64.h
 F: drivers/net/ixgbe/ixgbe_rxtx_vec_neon.c
 F: drivers/net/i40e/i40e_rxtx_vec_neon.c
 F: drivers/net/virtio/virtio_rxtx_simple_neon.c
@@ -239,6 +251,11 @@ F: devtools/test-null.sh
 Flow API
 M: Adrien Mazarguil <adrien.mazarguil@6wind.com>
 F: lib/librte_ether/rte_flow*
+
+Traffic Management API - EXPERIMENTAL
+M: Cristian Dumitrescu <cristian.dumitrescu@intel.com>
+T: git://dpdk.org/next/dpdk-next-tm
+F: lib/librte_ether/rte_tm*
 
 Crypto API
 M: Declan Doherty <declan.doherty@intel.com>
@@ -350,8 +367,8 @@ F: doc/guides/nics/intel_vf.rst
 F: doc/guides/nics/features/ixgbe*.ini
 
 Intel i40e
-M: Helin Zhang <helin.zhang@intel.com>
 M: Jingjing Wu <jingjing.wu@intel.com>
+M: Beilei Xing <beilei.xing@intel.com>
 F: drivers/net/i40e/
 F: doc/guides/nics/i40e.rst
 F: doc/guides/nics/intel_vf.rst
@@ -407,6 +424,7 @@ F: doc/guides/nics/features/bnx2x*.ini
 QLogic qede PMD
 M: Rasesh Mody <rasesh.mody@cavium.com>
 M: Harish Patil <harish.patil@cavium.com>
+M: Shahed Shaikh <shahed.shaikh@cavium.com>
 F: drivers/net/qede/
 F: doc/guides/nics/qede.rst
 F: doc/guides/nics/features/qede*.ini
@@ -424,24 +442,26 @@ F: doc/guides/nics/vmxnet3.rst
 F: doc/guides/nics/features/vmxnet3.ini
 
 Vhost-user
-M: Yuanhan Liu <yuanhan.liu@linux.intel.com>
+M: Yuanhan Liu <yliu@fridaylinux.org>
 M: Maxime Coquelin <maxime.coquelin@redhat.com>
 T: git://dpdk.org/next/dpdk-next-virtio
 F: lib/librte_vhost/
 F: doc/guides/prog_guide/vhost_lib.rst
 F: examples/vhost/
 F: doc/guides/sample_app_ug/vhost.rst
+F: examples/vhost_scsi/
+F: doc/guides/sample_app_ug/vhost_scsi.rst
 
 Vhost PMD
 M: Tetsuya Mukawa <mtetsuyah@gmail.com>
-M: Yuanhan Liu <yuanhan.liu@linux.intel.com>
+M: Yuanhan Liu <yliu@fridaylinux.org>
 M: Maxime Coquelin <maxime.coquelin@redhat.com>
 T: git://dpdk.org/next/dpdk-next-virtio
 F: drivers/net/vhost/
 F: doc/guides/nics/features/vhost.ini
 
 Virtio PMD
-M: Yuanhan Liu <yuanhan.liu@linux.intel.com>
+M: Yuanhan Liu <yliu@fridaylinux.org>
 M: Maxime Coquelin <maxime.coquelin@redhat.com>
 T: git://dpdk.org/next/dpdk-next-virtio
 F: drivers/net/virtio/
@@ -486,6 +506,11 @@ M: Tetsuya Mukawa <mtetsuyah@gmail.com>
 F: drivers/net/null/
 F: doc/guides/nics/features/null.ini
 
+Fail-safe PMD
+M: Gaetan Rivet <gaetan.rivet@6wind.com>
+F: drivers/net/failsafe/
+F: doc/guides/nics/fail_safe.rst
+
 
 Crypto Drivers
 --------------
@@ -494,7 +519,6 @@ T: git://dpdk.org/next/dpdk-next-crypto
 F: doc/guides/cryptodevs/features/default.ini
 
 ARMv8 Crypto PMD
-M: Zbigniew Bodek <zbigniew.bodek@caviumnetworks.com>
 M: Jerin Jacob <jerin.jacob@caviumnetworks.com>
 F: drivers/crypto/armv8/
 F: doc/guides/cryptodevs/armv8.rst
@@ -562,6 +586,7 @@ M: Fan Zhang <roy.fan.zhang@intel.com>
 F: drivers/crypto/scheduler/
 F: doc/guides/cryptodevs/scheduler.rst
 
+
 Eventdev Drivers
 ----------------
 M: Jerin Jacob <jerin.jacob@caviumnetworks.com>
@@ -574,11 +599,19 @@ F: drivers/event/octeontx/
 F: test/test/test_eventdev_octeontx.c
 F: doc/guides/eventdevs/octeontx.rst
 
+NXP DPAA2 eventdev
+M: Hemant Agrawal <hemant.agrawal@nxp.com>
+M: Nipun Gupta <nipun.gupta@nxp.com>
+F: drivers/event/dpaa2/
+F: doc/guides/eventdevs/dpaa2.rst
+
 Software Eventdev PMD
 M: Harry van Haaren <harry.van.haaren@intel.com>
 F: drivers/event/sw/
 F: test/test/test_eventdev_sw.c
 F: doc/guides/eventdevs/sw.rst
+F: examples/eventdev_pipeline_sw_pmd/
+F: doc/guides/sample_app_ug/eventdev_pipeline_sw_pmd.rst
 
 
 Packet processing
@@ -602,6 +635,11 @@ F: examples/ip_fragmentation/
 F: doc/guides/sample_app_ug/ip_frag.rst
 F: examples/ip_reassembly/
 F: doc/guides/sample_app_ug/ip_reassembly.rst
+
+Generic Receive Offload - EXPERIMENTAL
+M: Jiayu Hu <jiayu.hu@intel.com>
+F: lib/librte_gro/
+F: doc/guides/prog_guide/generic_receive_offload_lib.rst
 
 Distributor
 M: Bruce Richardson <bruce.richardson@intel.com>
@@ -720,6 +758,7 @@ F: lib/librte_kvargs/
 F: test/test/test_kvargs.c
 
 Power management
+M: David Hunt <david.hunt@intel.com>
 F: lib/librte_power/
 F: doc/guides/prog_guide/power_man.rst
 F: test/test/test_power*
@@ -783,6 +822,13 @@ Crypto performance test application
 M: Declan Doherty <declan.doherty@intel.com>
 F: app/test-crypto-perf/
 F: doc/guides/tools/cryptoperf.rst
+
+Eventdev test application
+M: Jerin Jacob <jerin.jacob@caviumnetworks.com>
+F: app/test-eventdev/
+F: doc/guides/tools/testeventdev.rst
+F: doc/guides/tools/img/eventdev_*
+F: test/test/test_event_ring.c
 
 Procinfo tool
 M: Maryam Tahhan <maryam.tahhan@intel.com>

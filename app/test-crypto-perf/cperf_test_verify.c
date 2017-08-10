@@ -68,8 +68,10 @@ cperf_verify_test_free(struct cperf_verify_ctx *ctx, uint32_t mbuf_nb)
 	uint32_t i;
 
 	if (ctx) {
-		if (ctx->sess)
-			rte_cryptodev_sym_session_free(ctx->dev_id, ctx->sess);
+		if (ctx->sess) {
+			rte_cryptodev_sym_session_clear(ctx->dev_id, ctx->sess);
+			rte_cryptodev_sym_session_free(ctx->sess);
+		}
 
 		if (ctx->mbufs_in) {
 			for (i = 0; i < mbuf_nb; i++)
@@ -155,14 +157,14 @@ cperf_mbuf_create(struct rte_mempool *mempool,
 
 	if (options->op_type != CPERF_CIPHER_ONLY) {
 		mbuf_data = (uint8_t *)rte_pktmbuf_append(mbuf,
-				options->auth_digest_sz);
+				options->digest_sz);
 		if (mbuf_data == NULL)
 			goto error;
 	}
 
 	if (options->op_type == CPERF_AEAD) {
 		uint8_t *aead = (uint8_t *)rte_pktmbuf_prepend(mbuf,
-			RTE_ALIGN_CEIL(options->auth_aad_sz, 16));
+			RTE_ALIGN_CEIL(options->aead_aad_sz, 16));
 
 		if (aead == NULL)
 			goto error;
@@ -179,7 +181,8 @@ error:
 }
 
 void *
-cperf_verify_test_constructor(uint8_t dev_id, uint16_t qp_id,
+cperf_verify_test_constructor(struct rte_mempool *sess_mp,
+		uint8_t dev_id, uint16_t qp_id,
 		const struct cperf_options *options,
 		const struct cperf_test_vector *test_vector,
 		const struct cperf_op_fns *op_fns)
@@ -199,7 +202,12 @@ cperf_verify_test_constructor(uint8_t dev_id, uint16_t qp_id,
 	ctx->options = options;
 	ctx->test_vector = test_vector;
 
-	ctx->sess = op_fns->sess_create(dev_id, options, test_vector);
+	/* IV goes at the end of the cryptop operation */
+	uint16_t iv_offset = sizeof(struct rte_crypto_op) +
+		sizeof(struct rte_crypto_sym_op);
+
+	ctx->sess = op_fns->sess_create(sess_mp, dev_id, options, test_vector,
+			iv_offset);
 	if (ctx->sess == NULL)
 		goto err;
 
@@ -212,7 +220,7 @@ cperf_verify_test_constructor(uint8_t dev_id, uint16_t qp_id,
 			RTE_CACHE_LINE_ROUNDUP(
 				(options->max_buffer_size / options->segments_nb) +
 				(options->max_buffer_size % options->segments_nb) +
-					options->auth_digest_sz),
+					options->digest_sz),
 			rte_socket_id());
 
 	if (ctx->pkt_mbuf_pool_in == NULL)
@@ -240,7 +248,7 @@ cperf_verify_test_constructor(uint8_t dev_id, uint16_t qp_id,
 				RTE_PKTMBUF_HEADROOM +
 				RTE_CACHE_LINE_ROUNDUP(
 					options->max_buffer_size +
-					options->auth_digest_sz),
+					options->digest_sz),
 				rte_socket_id());
 
 		if (ctx->pkt_mbuf_pool_out == NULL)
@@ -266,9 +274,11 @@ cperf_verify_test_constructor(uint8_t dev_id, uint16_t qp_id,
 	snprintf(pool_name, sizeof(pool_name), "cperf_op_pool_cdev_%d",
 			dev_id);
 
+	uint16_t priv_size = test_vector->cipher_iv.length +
+		test_vector->auth_iv.length + test_vector->aead_iv.length;
 	ctx->crypto_op_pool = rte_crypto_op_pool_create(pool_name,
-			RTE_CRYPTO_OP_TYPE_SYMMETRIC, options->pool_sz, 0, 0,
-			rte_socket_id());
+			RTE_CRYPTO_OP_TYPE_SYMMETRIC, options->pool_sz,
+			512, priv_size, rte_socket_id());
 	if (ctx->crypto_op_pool == NULL)
 		goto err;
 
@@ -373,7 +383,7 @@ cperf_verify_op(struct rte_crypto_op *op,
 		if (options->auth_op == RTE_CRYPTO_AUTH_OP_GENERATE)
 			res += memcmp(data + auth_offset,
 					vector->digest.data,
-					options->auth_digest_sz);
+					options->digest_sz);
 	}
 
 	return !!res;
@@ -417,6 +427,9 @@ cperf_verify_test_runner(void *test_ctx)
 		printf("\n# Running verify test on device: %u, lcore: %u\n",
 			ctx->dev_id, lcore);
 
+	uint16_t iv_offset = sizeof(struct rte_crypto_op) +
+		sizeof(struct rte_crypto_sym_op);
+
 	while (ops_enqd_total < ctx->options->total_ops) {
 
 		uint16_t burst_size = ((ops_enqd_total + ctx->options->max_burst_size)
@@ -431,14 +444,20 @@ cperf_verify_test_runner(void *test_ctx)
 		if (ops_needed != rte_crypto_op_bulk_alloc(
 				ctx->crypto_op_pool,
 				RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-				ops, ops_needed))
+				ops, ops_needed)) {
+			RTE_LOG(ERR, USER1,
+				"Failed to allocate more crypto operations "
+				"from the the crypto operation pool.\n"
+				"Consider increasing the pool size "
+				"with --pool-sz\n");
 			return -1;
+		}
 
 		/* Setup crypto op, attach mbuf etc */
 		(ctx->populate_ops)(ops, &ctx->mbufs_in[m_idx],
 				&ctx->mbufs_out[m_idx],
 				ops_needed, ctx->sess, ctx->options,
-				ctx->test_vector);
+				ctx->test_vector, iv_offset);
 
 #ifdef CPERF_LINEARIZATION_ENABLE
 		if (linearize) {
@@ -574,6 +593,8 @@ cperf_verify_test_destructor(void *arg)
 
 	if (ctx == NULL)
 		return;
+
+	rte_cryptodev_stop(ctx->dev_id);
 
 	cperf_verify_test_free(ctx, ctx->options->pool_sz);
 }

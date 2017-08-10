@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright(c) 2016 Intel Corporation. All rights reserved.
+ *   Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -35,6 +35,7 @@
 #include <rte_hexdump.h>
 #include <rte_cryptodev.h>
 #include <rte_cryptodev_pmd.h>
+#include <rte_cryptodev_vdev.h>
 #include <rte_vdev.h>
 #include <rte_malloc.h>
 #include <rte_cpuflags.h>
@@ -45,6 +46,8 @@
 #define SNOW3G_DIGEST_LENGTH 4
 #define SNOW3G_MAX_BURST 8
 #define BYTE_LEN 8
+
+static uint8_t cryptodev_driver_id;
 
 /** Get xform chain order. */
 static enum snow3g_operation
@@ -108,13 +111,20 @@ snow3g_set_session_parameters(struct snow3g_session *sess,
 	case SNOW3G_OP_NOT_SUPPORTED:
 	default:
 		SNOW3G_LOG_ERR("Unsupported operation chain order parameter");
-		return -EINVAL;
+		return -ENOTSUP;
 	}
 
 	if (cipher_xform) {
 		/* Only SNOW 3G UEA2 supported */
 		if (cipher_xform->cipher.algo != RTE_CRYPTO_CIPHER_SNOW3G_UEA2)
+			return -ENOTSUP;
+
+		if (cipher_xform->cipher.iv.length != SNOW3G_IV_LENGTH) {
+			SNOW3G_LOG_ERR("Wrong IV length");
 			return -EINVAL;
+		}
+		sess->cipher_iv_offset = cipher_xform->cipher.iv.offset;
+
 		/* Initialize key */
 		sso_snow3g_init_key_sched(cipher_xform->cipher.key.data,
 				&sess->pKeySched_cipher);
@@ -123,8 +133,21 @@ snow3g_set_session_parameters(struct snow3g_session *sess,
 	if (auth_xform) {
 		/* Only SNOW 3G UIA2 supported */
 		if (auth_xform->auth.algo != RTE_CRYPTO_AUTH_SNOW3G_UIA2)
+			return -ENOTSUP;
+
+		if (auth_xform->auth.digest_length != SNOW3G_DIGEST_LENGTH) {
+			SNOW3G_LOG_ERR("Wrong digest length");
 			return -EINVAL;
+		}
+
 		sess->auth_op = auth_xform->auth.op;
+
+		if (auth_xform->auth.iv.length != SNOW3G_IV_LENGTH) {
+			SNOW3G_LOG_ERR("Wrong IV length");
+			return -EINVAL;
+		}
+		sess->auth_iv_offset = auth_xform->auth.iv.offset;
+
 		/* Initialize key */
 		sso_snow3g_init_key_sched(auth_xform->auth.key.data,
 				&sess->pKeySched_hash);
@@ -140,26 +163,40 @@ snow3g_set_session_parameters(struct snow3g_session *sess,
 static struct snow3g_session *
 snow3g_get_session(struct snow3g_qp *qp, struct rte_crypto_op *op)
 {
-	struct snow3g_session *sess;
+	struct snow3g_session *sess = NULL;
 
-	if (op->sym->sess_type == RTE_CRYPTO_SYM_OP_WITH_SESSION) {
-		if (unlikely(op->sym->session->dev_type !=
-				RTE_CRYPTODEV_SNOW3G_PMD))
+	if (op->sess_type == RTE_CRYPTO_OP_WITH_SESSION) {
+		if (likely(op->sym->session != NULL))
+			sess = (struct snow3g_session *)
+					get_session_private_data(
+					op->sym->session,
+					cryptodev_driver_id);
+	} else {
+		void *_sess = NULL;
+		void *_sess_private_data = NULL;
+
+		if (rte_mempool_get(qp->sess_mp, (void **)&_sess))
 			return NULL;
 
-		sess = (struct snow3g_session *)op->sym->session->_private;
-	} else  {
-		struct rte_cryptodev_session *c_sess = NULL;
-
-		if (rte_mempool_get(qp->sess_mp, (void **)&c_sess))
+		if (rte_mempool_get(qp->sess_mp, (void **)&_sess_private_data))
 			return NULL;
 
-		sess = (struct snow3g_session *)c_sess->_private;
+		sess = (struct snow3g_session *)_sess_private_data;
 
 		if (unlikely(snow3g_set_session_parameters(sess,
-				op->sym->xform) != 0))
-			return NULL;
+				op->sym->xform) != 0)) {
+			rte_mempool_put(qp->sess_mp, _sess);
+			rte_mempool_put(qp->sess_mp, _sess_private_data);
+			sess = NULL;
+		}
+		op->sym->session = (struct rte_cryptodev_sym_session *)_sess;
+		set_session_private_data(op->sym->session, cryptodev_driver_id,
+			_sess_private_data);
 	}
+
+	if (unlikely(sess == NULL))
+		op->status = RTE_CRYPTO_OP_STATUS_INVALID_SESSION;
+
 
 	return sess;
 }
@@ -173,17 +210,10 @@ process_snow3g_cipher_op(struct rte_crypto_op **ops,
 	unsigned i;
 	uint8_t processed_ops = 0;
 	uint8_t *src[SNOW3G_MAX_BURST], *dst[SNOW3G_MAX_BURST];
-	uint8_t *IV[SNOW3G_MAX_BURST];
+	uint8_t *iv[SNOW3G_MAX_BURST];
 	uint32_t num_bytes[SNOW3G_MAX_BURST];
 
 	for (i = 0; i < num_ops; i++) {
-		/* Sanity checks. */
-		if (unlikely(ops[i]->sym->cipher.iv.length != SNOW3G_IV_LENGTH)) {
-			ops[i]->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
-			SNOW3G_LOG_ERR("iv");
-			break;
-		}
-
 		src[i] = rte_pktmbuf_mtod(ops[i]->sym->m_src, uint8_t *) +
 				(ops[i]->sym->cipher.data.offset >> 3);
 		dst[i] = ops[i]->sym->m_dst ?
@@ -191,13 +221,14 @@ process_snow3g_cipher_op(struct rte_crypto_op **ops,
 				(ops[i]->sym->cipher.data.offset >> 3) :
 			rte_pktmbuf_mtod(ops[i]->sym->m_src, uint8_t *) +
 				(ops[i]->sym->cipher.data.offset >> 3);
-		IV[i] = ops[i]->sym->cipher.iv.data;
+		iv[i] = rte_crypto_op_ctod_offset(ops[i], uint8_t *,
+				session->cipher_iv_offset);
 		num_bytes[i] = ops[i]->sym->cipher.data.length >> 3;
 
 		processed_ops++;
 	}
 
-	sso_snow3g_f8_n_buffer(&session->pKeySched_cipher, IV, src, dst,
+	sso_snow3g_f8_n_buffer(&session->pKeySched_cipher, iv, src, dst,
 			num_bytes, processed_ops);
 
 	return processed_ops;
@@ -209,15 +240,8 @@ process_snow3g_cipher_op_bit(struct rte_crypto_op *op,
 		struct snow3g_session *session)
 {
 	uint8_t *src, *dst;
-	uint8_t *IV;
+	uint8_t *iv;
 	uint32_t length_in_bits, offset_in_bits;
-
-	/* Sanity checks. */
-	if (unlikely(op->sym->cipher.iv.length != SNOW3G_IV_LENGTH)) {
-		op->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
-		SNOW3G_LOG_ERR("iv");
-		return 0;
-	}
 
 	offset_in_bits = op->sym->cipher.data.offset;
 	src = rte_pktmbuf_mtod(op->sym->m_src, uint8_t *);
@@ -227,10 +251,11 @@ process_snow3g_cipher_op_bit(struct rte_crypto_op *op,
 		return 0;
 	}
 	dst = rte_pktmbuf_mtod(op->sym->m_dst, uint8_t *);
-	IV = op->sym->cipher.iv.data;
+	iv = rte_crypto_op_ctod_offset(op, uint8_t *,
+				session->cipher_iv_offset);
 	length_in_bits = op->sym->cipher.data.length;
 
-	sso_snow3g_f8_1_buffer_bit(&session->pKeySched_cipher, IV,
+	sso_snow3g_f8_1_buffer_bit(&session->pKeySched_cipher, iv,
 			src, dst, length_in_bits, offset_in_bits);
 
 	return 1;
@@ -246,20 +271,9 @@ process_snow3g_hash_op(struct rte_crypto_op **ops,
 	uint8_t processed_ops = 0;
 	uint8_t *src, *dst;
 	uint32_t length_in_bits;
+	uint8_t *iv;
 
 	for (i = 0; i < num_ops; i++) {
-		if (unlikely(ops[i]->sym->auth.aad.length != SNOW3G_IV_LENGTH)) {
-			ops[i]->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
-			SNOW3G_LOG_ERR("aad");
-			break;
-		}
-
-		if (unlikely(ops[i]->sym->auth.digest.length != SNOW3G_DIGEST_LENGTH)) {
-			ops[i]->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
-			SNOW3G_LOG_ERR("digest");
-			break;
-		}
-
 		/* Data must be byte aligned */
 		if ((ops[i]->sym->auth.data.offset % BYTE_LEN) != 0) {
 			ops[i]->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
@@ -271,27 +285,29 @@ process_snow3g_hash_op(struct rte_crypto_op **ops,
 
 		src = rte_pktmbuf_mtod(ops[i]->sym->m_src, uint8_t *) +
 				(ops[i]->sym->auth.data.offset >> 3);
+		iv = rte_crypto_op_ctod_offset(ops[i], uint8_t *,
+				session->auth_iv_offset);
 
 		if (session->auth_op == RTE_CRYPTO_AUTH_OP_VERIFY) {
 			dst = (uint8_t *)rte_pktmbuf_append(ops[i]->sym->m_src,
-					ops[i]->sym->auth.digest.length);
+					SNOW3G_DIGEST_LENGTH);
 
 			sso_snow3g_f9_1_buffer(&session->pKeySched_hash,
-					ops[i]->sym->auth.aad.data, src,
+					iv, src,
 					length_in_bits,	dst);
 			/* Verify digest. */
 			if (memcmp(dst, ops[i]->sym->auth.digest.data,
-					ops[i]->sym->auth.digest.length) != 0)
+					SNOW3G_DIGEST_LENGTH) != 0)
 				ops[i]->status = RTE_CRYPTO_OP_STATUS_AUTH_FAILED;
 
 			/* Trim area used for digest from mbuf. */
 			rte_pktmbuf_trim(ops[i]->sym->m_src,
-					ops[i]->sym->auth.digest.length);
+					SNOW3G_DIGEST_LENGTH);
 		} else  {
 			dst = ops[i]->sym->auth.digest.data;
 
 			sso_snow3g_f9_1_buffer(&session->pKeySched_hash,
-					ops[i]->sym->auth.aad.data, src,
+					iv, src,
 					length_in_bits, dst);
 		}
 		processed_ops++;
@@ -356,7 +372,11 @@ process_ops(struct rte_crypto_op **ops, struct snow3g_session *session,
 		if (ops[i]->status == RTE_CRYPTO_OP_STATUS_NOT_PROCESSED)
 			ops[i]->status = RTE_CRYPTO_OP_STATUS_SUCCESS;
 		/* Free session if a session-less crypto op. */
-		if (ops[i]->sym->sess_type == RTE_CRYPTO_SYM_OP_SESSIONLESS) {
+		if (ops[i]->sess_type == RTE_CRYPTO_OP_SESSIONLESS) {
+			memset(session, 0, sizeof(struct snow3g_session));
+			memset(ops[i]->sym->session, 0,
+					rte_cryptodev_get_header_session_size());
+			rte_mempool_put(qp->sess_mp, session);
 			rte_mempool_put(qp->sess_mp, ops[i]->sym->session);
 			ops[i]->sym->session = NULL;
 		}
@@ -408,8 +428,9 @@ process_op_bit(struct rte_crypto_op *op, struct snow3g_session *session,
 		op->status = RTE_CRYPTO_OP_STATUS_SUCCESS;
 
 	/* Free session if a session-less crypto op. */
-	if (op->sym->sess_type == RTE_CRYPTO_SYM_OP_SESSIONLESS) {
-		rte_mempool_put(qp->sess_mp, op->sym->session);
+	if (op->sess_type == RTE_CRYPTO_OP_SESSIONLESS) {
+		memset(op->sym->session, 0, sizeof(struct snow3g_session));
+		rte_cryptodev_sym_session_free(op->sym->session);
 		op->sym->session = NULL;
 	}
 
@@ -548,28 +569,21 @@ cryptodev_snow3g_create(const char *name,
 {
 	struct rte_cryptodev *dev;
 	struct snow3g_private *internals;
-	uint64_t cpu_flags = 0;
+	uint64_t cpu_flags = RTE_CRYPTODEV_FF_CPU_SSE;
 
 	if (init_params->name[0] == '\0')
 		snprintf(init_params->name, sizeof(init_params->name),
 				"%s", name);
 
-	/* Check CPU for supported vector instruction set */
-	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_SSE4_1))
-		cpu_flags |= RTE_CRYPTODEV_FF_CPU_SSE;
-	else {
-		SNOW3G_LOG_ERR("Vector instructions are not supported by CPU");
-		return -EFAULT;
-	}
-
-	dev = rte_cryptodev_pmd_virtual_dev_init(init_params->name,
-			sizeof(struct snow3g_private), init_params->socket_id);
+	dev = rte_cryptodev_vdev_pmd_init(init_params->name,
+			sizeof(struct snow3g_private), init_params->socket_id,
+			vdev);
 	if (dev == NULL) {
 		SNOW3G_LOG_ERR("failed to create cryptodev vdev");
 		goto init_error;
 	}
 
-	dev->dev_type = RTE_CRYPTODEV_SNOW3G_PMD;
+	dev->driver_id = cryptodev_driver_id;
 	dev->dev_ops = rte_snow3g_pmd_ops;
 
 	/* Register RX/TX burst functions for data path. */
@@ -611,7 +625,7 @@ cryptodev_snow3g_probe(struct rte_vdev_device *vdev)
 		return -EINVAL;
 	input_args = rte_vdev_device_args(vdev);
 
-	rte_cryptodev_parse_vdev_init_params(&init_params, input_args);
+	rte_cryptodev_vdev_parse_init_params(&init_params, input_args);
 
 	RTE_LOG(INFO, PMD, "Initialising %s on NUMA node %d\n", name,
 			init_params.socket_id);
@@ -653,3 +667,4 @@ RTE_PMD_REGISTER_PARAM_STRING(CRYPTODEV_NAME_SNOW3G_PMD,
 	"max_nb_queue_pairs=<int> "
 	"max_nb_sessions=<int> "
 	"socket_id=<int>");
+RTE_PMD_REGISTER_CRYPTO_DRIVER(cryptodev_snow3g_pmd_drv, cryptodev_driver_id);

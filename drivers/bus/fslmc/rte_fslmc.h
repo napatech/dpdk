@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright (c) 2016 NXP. All rights reserved.
+ *   Copyright 2016 NXP.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -56,9 +56,6 @@ extern "C" {
 #include <rte_dev.h>
 #include <rte_bus.h>
 
-/** Name of FSLMC Bus */
-#define FSLMC_BUS_NAME "FSLMC"
-
 struct rte_dpaa2_driver;
 
 /* DPAA2 Device and Driver lists for FSLMC bus */
@@ -81,6 +78,7 @@ struct rte_dpaa2_device {
 	uint16_t object_id;             /**< DPAA2 Object ID */
 	struct rte_intr_handle intr_handle; /**< Interrupt handle */
 	struct rte_dpaa2_driver *driver;    /**< Associated driver */
+	char name[32];          /**< DPAA2 Object name*/
 };
 
 typedef int (*rte_dpaa2_probe_t)(struct rte_dpaa2_driver *dpaa2_drv,

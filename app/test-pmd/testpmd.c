@@ -73,6 +73,9 @@
 #include <rte_ethdev.h>
 #include <rte_dev.h>
 #include <rte_string_fns.h>
+#ifdef RTE_LIBRTE_IXGBE_PMD
+#include <rte_pmd_ixgbe.h>
+#endif
 #ifdef RTE_LIBRTE_PMD_XENVIRT
 #include <rte_eth_xenvirt.h>
 #endif
@@ -87,6 +90,7 @@
 #ifdef RTE_LIBRTE_LATENCY_STATS
 #include <rte_latencystats.h>
 #endif
+#include <rte_gro.h>
 
 #include "testpmd.h"
 
@@ -95,6 +99,7 @@ uint16_t verbose_level = 0; /**< Silent by default. */
 /* use master core for command line ? */
 uint8_t interactive = 0;
 uint8_t auto_start = 0;
+uint8_t tx_first;
 char cmdline_filename[PATH_MAX] = {0};
 
 /*
@@ -177,7 +182,7 @@ uint32_t burst_tx_retry_num = BURST_TX_RETRIES;
 uint16_t mbuf_data_size = DEFAULT_MBUF_DATA_SIZE; /**< Mbuf data space size. */
 uint32_t param_total_num_mbufs = 0;  /**< number of mbufs in all pools - if
                                       * specified on command-line. */
-
+uint16_t stats_period; /**< Period to show statistics (disabled by default) */
 /*
  * Configuration of packet segments used by the "txonly" processing engine.
  */
@@ -267,6 +272,11 @@ uint16_t port_topology = PORT_TOPOLOGY_PAIRED; /* Ports are paired by default */
 uint8_t no_flush_rx = 0; /* flush by default */
 
 /*
+ * Flow API isolated mode.
+ */
+uint8_t flow_isolate_all;
+
+/*
  * Avoids to check link status when starting/stopping a port.
  */
 uint8_t no_link_check = 0; /* check by default */
@@ -295,12 +305,12 @@ uint32_t event_print_mask = (UINT32_C(1) << RTE_ETH_EVENT_UNKNOWN) |
 /*
  * NIC bypass mode configuration options.
  */
-#ifdef RTE_NIC_BYPASS
 
+#if defined RTE_LIBRTE_IXGBE_PMD && defined RTE_LIBRTE_IXGBE_BYPASS
 /* The NIC bypass watchdog timeout. */
-uint32_t bypass_timeout = RTE_BYPASS_TMT_OFF;
-
+uint32_t bypass_timeout = RTE_PMD_IXGBE_BYPASS_TMT_OFF;
 #endif
+
 
 #ifdef RTE_LIBRTE_LATENCY_STATS
 
@@ -375,12 +385,14 @@ lcoreid_t bitrate_lcore_id;
 uint8_t bitrate_enabled;
 #endif
 
+struct gro_status gro_ports[RTE_MAX_ETHPORTS];
+
 /* Forward function declarations */
 static void map_port_queue_stats_mapping_registers(uint8_t pi, struct rte_port *port);
 static void check_all_ports_link_status(uint32_t port_mask);
-static void eth_event_callback(uint8_t port_id,
-			       enum rte_eth_event_type type,
-			       void *param);
+static int eth_event_callback(uint8_t port_id,
+			      enum rte_eth_event_type type,
+			      void *param, void *ret_param);
 
 /*
  * Check if all the ports are started.
@@ -389,7 +401,7 @@ static void eth_event_callback(uint8_t port_id,
 static int all_ports_started(void);
 
 /*
- * Helper function to check if socket is allready discovered.
+ * Helper function to check if socket is already discovered.
  * If yes, return positive value. If not, return zero.
  */
 int
@@ -1422,6 +1434,15 @@ start_port(portid_t pid)
 		if (port->need_reconfig > 0) {
 			port->need_reconfig = 0;
 
+			if (flow_isolate_all) {
+				int ret = port_flow_isolate(pi, 1);
+				if (ret) {
+					printf("Failed to apply isolated"
+					       " mode on port %d\n", pi);
+					return -1;
+				}
+			}
+
 			printf("Configuring Port %d (socket %u)\n", pi,
 					port->socket_id);
 			/* configure port */
@@ -1707,8 +1728,10 @@ detach_port(uint8_t port_id)
 	if (ports[port_id].flow_list)
 		port_flow_flush(port_id);
 
-	if (rte_eth_dev_detach(port_id, name))
+	if (rte_eth_dev_detach(port_id, name)) {
+		RTE_LOG(ERR, USER1, "Failed to detach port '%s'\n", name);
 		return;
+	}
 
 	nb_ports = rte_eth_dev_count();
 
@@ -1806,28 +1829,23 @@ static void
 rmv_event_callback(void *arg)
 {
 	struct rte_eth_dev *dev;
-	struct rte_devargs *da;
-	char name[32] = "";
 	uint8_t port_id = (intptr_t)arg;
 
 	RTE_ETH_VALID_PORTID_OR_RET(port_id);
 	dev = &rte_eth_devices[port_id];
-	da = dev->device->devargs;
 
 	stop_port(port_id);
 	close_port(port_id);
-	if (da->type == RTE_DEVTYPE_VIRTUAL)
-		snprintf(name, sizeof(name), "%s", da->virt.drv_name);
-	else if (da->type == RTE_DEVTYPE_WHITELISTED_PCI)
-		rte_pci_device_name(&da->pci.addr, name, sizeof(name));
-	printf("removing device %s\n", name);
-	rte_eal_dev_detach(name);
-	dev->state = RTE_ETH_DEV_UNUSED;
+	printf("removing device %s\n", dev->device->name);
+	if (rte_eal_dev_detach(dev->device))
+		RTE_LOG(ERR, USER1, "Failed to detach device %s\n",
+			dev->device->name);
 }
 
 /* This function is used by the interrupt thread */
-static void
-eth_event_callback(uint8_t port_id, enum rte_eth_event_type type, void *param)
+static int
+eth_event_callback(uint8_t port_id, enum rte_eth_event_type type, void *param,
+		  void *ret_param)
 {
 	static const char * const event_desc[] = {
 		[RTE_ETH_EVENT_UNKNOWN] = "Unknown",
@@ -1841,6 +1859,7 @@ eth_event_callback(uint8_t port_id, enum rte_eth_event_type type, void *param)
 	};
 
 	RTE_SET_USED(param);
+	RTE_SET_USED(ret_param);
 
 	if (type >= RTE_ETH_EVENT_MAX) {
 		fprintf(stderr, "\nPort %" PRIu8 ": %s called upon invalid event %d\n",
@@ -1861,6 +1880,7 @@ eth_event_callback(uint8_t port_id, enum rte_eth_event_type type, void *param)
 	default:
 		break;
 	}
+	return 0;
 }
 
 static int
@@ -2012,8 +2032,8 @@ init_port_config(void)
 		rte_eth_macaddr_get(pid, &port->eth_addr);
 
 		map_port_queue_stats_mapping_registers(pid, port);
-#ifdef RTE_NIC_BYPASS
-		rte_eth_dev_bypass_init(pid);
+#if defined RTE_LIBRTE_IXGBE_PMD && defined RTE_LIBRTE_IXGBE_BYPASS
+		rte_pmd_ixgbe_bypass_init(pid);
 #endif
 
 		if (lsc_interrupt &&
@@ -2229,6 +2249,21 @@ force_quit(void)
 }
 
 static void
+print_stats(void)
+{
+	uint8_t i;
+	const char clr[] = { 27, '[', '2', 'J', '\0' };
+	const char top_left[] = { 27, '[', '1', ';', '1', 'H', '\0' };
+
+	/* Clear screen and move to top left */
+	printf("%s%s", clr, top_left);
+
+	printf("\nPort statistics ====================================");
+	for (i = 0; i < cur_fwd_config.nb_fwd_ports; i++)
+		nic_stats_display(fwd_ports_ids[i]);
+}
+
+static void
 signal_handler(int signum)
 {
 	if (signum == SIGINT || signum == SIGTERM) {
@@ -2291,6 +2326,16 @@ main(int argc, char** argv)
 	if (argc > 1)
 		launch_args_parse(argc, argv);
 
+	if (tx_first && interactive)
+		rte_exit(EXIT_FAILURE, "--tx-first cannot be used on "
+				"interactive mode.\n");
+
+	if (tx_first && lsc_interrupt) {
+		printf("Warning: lsc_interrupt needs to be off when "
+				" using tx_first. Disabling.\n");
+		lsc_interrupt = 0;
+	}
+
 	if (!nb_rxq && !nb_txq)
 		printf("Warning: Either rx or tx queues should be non-zero\n");
 
@@ -2350,7 +2395,29 @@ main(int argc, char** argv)
 		int rc;
 
 		printf("No commandline core given, start packet forwarding\n");
-		start_packet_forwarding(0);
+		start_packet_forwarding(tx_first);
+		if (stats_period != 0) {
+			uint64_t prev_time = 0, cur_time, diff_time = 0;
+			uint64_t timer_period;
+
+			/* Convert to number of cycles */
+			timer_period = stats_period * rte_get_timer_hz();
+
+			while (1) {
+				cur_time = rte_get_timer_cycles();
+				diff_time += cur_time - prev_time;
+
+				if (diff_time >= timer_period) {
+					print_stats();
+					/* Reset the timer */
+					diff_time = 0;
+				}
+				/* Sleep to avoid unnecessary checks */
+				prev_time = cur_time;
+				sleep(1);
+			}
+		}
+
 		printf("Press enter to exit\n");
 		rc = read(0, &c, 1);
 		pmd_test_exit();

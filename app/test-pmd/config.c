@@ -2,6 +2,7 @@
  *   BSD LICENSE
  *
  *   Copyright(c) 2010-2016 Intel Corporation. All rights reserved.
+ *   Copyright 2013-2014 6WIND S.A.
  *   All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
@@ -30,42 +31,11 @@
  *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-/*   BSD LICENSE
- *
- *   Copyright 2013-2014 6WIND S.A.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of 6WIND S.A. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
 
 #include <stdarg.h>
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
-#include <stdarg.h>
 #include <stdint.h>
 #include <inttypes.h>
 
@@ -97,6 +67,10 @@
 #ifdef RTE_LIBRTE_IXGBE_PMD
 #include <rte_pmd_ixgbe.h>
 #endif
+#ifdef RTE_LIBRTE_BNXT_PMD
+#include <rte_pmd_bnxt.h>
+#endif
+#include <rte_gro.h>
 
 #include "testpmd.h"
 
@@ -972,6 +946,7 @@ static const struct {
 	MK_FLOW_ITEM(NVGRE, sizeof(struct rte_flow_item_nvgre)),
 	MK_FLOW_ITEM(MPLS, sizeof(struct rte_flow_item_mpls)),
 	MK_FLOW_ITEM(GRE, sizeof(struct rte_flow_item_gre)),
+	MK_FLOW_ITEM(FUZZY, sizeof(struct rte_flow_item_fuzzy)),
 };
 
 /** Compute storage space needed by item specification. */
@@ -979,8 +954,10 @@ static void
 flow_item_spec_size(const struct rte_flow_item *item,
 		    size_t *size, size_t *pad)
 {
-	if (!item->spec)
+	if (!item->spec) {
+		*size = 0;
 		goto empty;
+	}
 	switch (item->type) {
 		union {
 			const struct rte_flow_item_raw *raw;
@@ -992,10 +969,10 @@ flow_item_spec_size(const struct rte_flow_item *item,
 			spec.raw->length * sizeof(*spec.raw->pattern);
 		break;
 	default:
-empty:
-		*size = 0;
+		*size = flow_item[item->type].size;
 		break;
 	}
+empty:
 	*pad = RTE_ALIGN_CEIL(*size, sizeof(double)) - *size;
 }
 
@@ -1030,8 +1007,10 @@ static void
 flow_action_conf_size(const struct rte_flow_action *action,
 		      size_t *size, size_t *pad)
 {
-	if (!action->conf)
+	if (!action->conf) {
+		*size = 0;
 		goto empty;
+	}
 	switch (action->type) {
 		union {
 			const struct rte_flow_action_rss *rss;
@@ -1043,10 +1022,10 @@ flow_action_conf_size(const struct rte_flow_action *action,
 			conf.rss->num * sizeof(*conf.rss->queue);
 		break;
 	default:
-empty:
-		*size = 0;
+		*size = flow_action[action->type].size;
 		break;
 	}
+empty:
 	*pad = RTE_ALIGN_CEIL(*size, sizeof(double)) - *size;
 }
 
@@ -1435,6 +1414,22 @@ port_flow_list(portid_t port_id, uint32_t n, const uint32_t group[n])
 		}
 		printf("\n");
 	}
+}
+
+/** Restrict ingress traffic to the defined flow rules. */
+int
+port_flow_isolate(portid_t port_id, int set)
+{
+	struct rte_flow_error error;
+
+	/* Poisoning to make sure PMDs update it in case of error. */
+	memset(&error, 0x66, sizeof(error));
+	if (rte_flow_isolate(port_id, set, &error))
+		return port_flow_complain(&error);
+	printf("Ingress traffic on port %u is %s to the defined flow rules\n",
+	       port_id,
+	       set ? "now restricted" : "not restricted anymore");
+	return 0;
 }
 
 /*
@@ -2424,6 +2419,41 @@ set_tx_pkt_segments(unsigned *seg_lengths, unsigned nb_segs)
 	tx_pkt_nb_segs = (uint8_t) nb_segs;
 }
 
+void
+setup_gro(const char *mode, uint8_t port_id)
+{
+	if (!rte_eth_dev_is_valid_port(port_id)) {
+		printf("invalid port id %u\n", port_id);
+		return;
+	}
+	if (test_done == 0) {
+		printf("Before enable/disable GRO,"
+				" please stop forwarding first\n");
+		return;
+	}
+	if (strcmp(mode, "on") == 0) {
+		if (gro_ports[port_id].enable) {
+			printf("port %u has enabled GRO\n", port_id);
+			return;
+		}
+		gro_ports[port_id].enable = 1;
+		gro_ports[port_id].param.gro_types = RTE_GRO_TCP_IPV4;
+
+		if (gro_ports[port_id].param.max_flow_num == 0)
+			gro_ports[port_id].param.max_flow_num =
+				GRO_DEFAULT_FLOW_NUM;
+		if (gro_ports[port_id].param.max_item_per_flow == 0)
+			gro_ports[port_id].param.max_item_per_flow =
+				GRO_DEFAULT_ITEM_NUM_PER_FLOW;
+	} else {
+		if (gro_ports[port_id].enable == 0) {
+			printf("port %u has disabled GRO\n", port_id);
+			return;
+		}
+		gro_ports[port_id].enable = 0;
+	}
+}
+
 char*
 list_pkt_forwarding_modes(void)
 {
@@ -3010,10 +3040,10 @@ fdir_set_flex_payload(portid_t port_id, struct rte_eth_flex_payload_cfg *cfg)
 
 }
 
-#ifdef RTE_LIBRTE_IXGBE_PMD
 void
 set_vf_traffic(portid_t port_id, uint8_t is_rx, uint16_t vf, uint8_t on)
 {
+#ifdef RTE_LIBRTE_IXGBE_PMD
 	int diag;
 
 	if (is_rx)
@@ -3023,15 +3053,15 @@ set_vf_traffic(portid_t port_id, uint8_t is_rx, uint16_t vf, uint8_t on)
 
 	if (diag == 0)
 		return;
-	if(is_rx)
-		printf("rte_pmd_ixgbe_set_vf_rx for port_id=%d failed "
-	       		"diag=%d\n", port_id, diag);
-	else
-		printf("rte_pmd_ixgbe_set_vf_tx for port_id=%d failed "
-	       		"diag=%d\n", port_id, diag);
-
-}
+	printf("rte_pmd_ixgbe_set_vf_%s for port_id=%d failed diag=%d\n",
+			is_rx ? "rx" : "tx", port_id, diag);
+	return;
 #endif
+	printf("VF %s setting not supported for port %d\n",
+			is_rx ? "Rx" : "Tx", port_id);
+	RTE_SET_USED(vf);
+	RTE_SET_USED(on);
+}
 
 int
 set_queue_rate_limit(portid_t port_id, uint16_t queue_idx, uint16_t rate)
@@ -3055,20 +3085,27 @@ set_queue_rate_limit(portid_t port_id, uint16_t queue_idx, uint16_t rate)
 	return diag;
 }
 
-#ifdef RTE_LIBRTE_IXGBE_PMD
 int
 set_vf_rate_limit(portid_t port_id, uint16_t vf, uint16_t rate, uint64_t q_msk)
 {
-	int diag;
+	int diag = -ENOTSUP;
 
-	diag = rte_pmd_ixgbe_set_vf_rate_limit(port_id, vf, rate, q_msk);
+#ifdef RTE_LIBRTE_IXGBE_PMD
+	if (diag == -ENOTSUP)
+		diag = rte_pmd_ixgbe_set_vf_rate_limit(port_id, vf, rate,
+						       q_msk);
+#endif
+#ifdef RTE_LIBRTE_BNXT_PMD
+	if (diag == -ENOTSUP)
+		diag = rte_pmd_bnxt_set_vf_rate_limit(port_id, vf, rate, q_msk);
+#endif
 	if (diag == 0)
 		return diag;
-	printf("rte_pmd_ixgbe_set_vf_rate_limit for port_id=%d failed diag=%d\n",
+
+	printf("set_vf_rate_limit for port_id=%d failed diag=%d\n",
 		port_id, diag);
 	return diag;
 }
-#endif
 
 /*
  * Functions to manage the set of filtered Multicast MAC addresses.
@@ -3309,6 +3346,27 @@ open_ddp_package_file(const char *file_path, uint32_t *size)
 	fclose(fh);
 
 	return buf;
+}
+
+int
+save_ddp_package_file(const char *file_path, uint8_t *buf, uint32_t size)
+{
+	FILE *fh = fopen(file_path, "wb");
+
+	if (fh == NULL) {
+		printf("%s: Failed to open %s\n", __func__, file_path);
+		return -1;
+	}
+
+	if (fwrite(buf, 1, size, fh) != size) {
+		fclose(fh);
+		printf("%s: File write operation failed\n", __func__);
+		return -1;
+	}
+
+	fclose(fh);
+
+	return 0;
 }
 
 int

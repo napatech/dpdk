@@ -5,7 +5,7 @@
  *   BSD LICENSE
  *
  * Copyright 2013-2016 Freescale Semiconductor Inc.
- * Copyright (c) 2016 NXP.
+ * Copyright 2016 NXP.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -64,11 +64,22 @@
 #define DPNI_CMDID_GET_LINK_STATE                      ((0x215 << 4) | (0x1))
 #define DPNI_CMDID_SET_MAX_FRAME_LENGTH                ((0x216 << 4) | (0x1))
 #define DPNI_CMDID_GET_MAX_FRAME_LENGTH                ((0x217 << 4) | (0x1))
+#define DPNI_CMDID_SET_LINK_CFG                        ((0x21a << 4) | (0x1))
 
+#define DPNI_CMDID_SET_MCAST_PROMISC                   ((0x220 << 4) | (0x1))
+#define DPNI_CMDID_GET_MCAST_PROMISC                   ((0x221 << 4) | (0x1))
 #define DPNI_CMDID_SET_UNICAST_PROMISC                 ((0x222 << 4) | (0x1))
 #define DPNI_CMDID_GET_UNICAST_PROMISC                 ((0x223 << 4) | (0x1))
 #define DPNI_CMDID_SET_PRIM_MAC                        ((0x224 << 4) | (0x1))
 #define DPNI_CMDID_GET_PRIM_MAC                        ((0x225 << 4) | (0x1))
+#define DPNI_CMDID_ADD_MAC_ADDR                        ((0x226 << 4) | (0x1))
+#define DPNI_CMDID_REMOVE_MAC_ADDR                     ((0x227 << 4) | (0x1))
+#define DPNI_CMDID_CLR_MAC_FILTERS                     ((0x228 << 4) | (0x1))
+
+#define DPNI_CMDID_ENABLE_VLAN_FILTER                  ((0x230 << 4) | (0x1))
+#define DPNI_CMDID_ADD_VLAN_ID                         ((0x231 << 4) | (0x1))
+#define DPNI_CMDID_REMOVE_VLAN_ID                      ((0x232 << 4) | (0x1))
+#define DPNI_CMDID_CLR_VLAN_FILTERS                    ((0x233 << 4) | (0x1))
 
 #define DPNI_CMDID_SET_RX_TC_DIST                      ((0x235 << 4) | (0x1))
 
@@ -76,12 +87,16 @@
 #define DPNI_CMDID_RESET_STATISTICS                    ((0x25E << 4) | (0x1))
 #define DPNI_CMDID_GET_QUEUE                           ((0x25F << 4) | (0x1))
 #define DPNI_CMDID_SET_QUEUE                           ((0x260 << 4) | (0x1))
+#define DPNI_CMDID_GET_TAILDROP                        ((0x261 << 4) | (0x1))
+#define DPNI_CMDID_SET_TAILDROP                        ((0x262 << 4) | (0x1))
 
 #define DPNI_CMDID_GET_PORT_MAC_ADDR                   ((0x263 << 4) | (0x1))
 
 #define DPNI_CMDID_GET_BUFFER_LAYOUT                   ((0x264 << 4) | (0x1))
 #define DPNI_CMDID_SET_BUFFER_LAYOUT                   ((0x265 << 4) | (0x1))
 
+#define DPNI_CMDID_SET_CONGESTION_NOTIFICATION         ((0x267 << 4) | (0x1))
+#define DPNI_CMDID_GET_CONGESTION_NOTIFICATION         ((0x268 << 4) | (0x1))
 #define DPNI_CMDID_GET_OFFLOAD                         ((0x26B << 4) | (0x1))
 #define DPNI_CMDID_SET_OFFLOAD                         ((0x26C << 4) | (0x1))
 #define DPNI_CMDID_SET_TX_CONFIRMATION_MODE            ((0x266 << 4) | (0x1))
@@ -224,6 +239,13 @@ do { \
 } while (0)
 
 /*                cmd, param, offset, width, type, arg_name */
+#define DPNI_CMD_SET_LINK_CFG(cmd, cfg) \
+do { \
+	MC_CMD_OP(cmd, 1, 0,  32, uint32_t, cfg->rate);\
+	MC_CMD_OP(cmd, 2, 0,  64, uint64_t, cfg->options);\
+} while (0)
+
+/*                cmd, param, offset, width, type, arg_name */
 #define DPNI_RSP_GET_LINK_STATE(cmd, state) \
 do { \
 	MC_RSP_OP(cmd, 0, 32,  1, int,      state->up);\
@@ -238,6 +260,14 @@ do { \
 /*                cmd, param, offset, width, type, arg_name */
 #define DPNI_RSP_GET_MAX_FRAME_LENGTH(cmd, max_frame_length) \
 	MC_RSP_OP(cmd, 0, 0,  16, uint16_t, max_frame_length)
+
+/*                cmd, param, offset, width, type, arg_name */
+#define DPNI_CMD_SET_MULTICAST_PROMISC(cmd, en) \
+	MC_CMD_OP(cmd, 0, 0,  1,  int,      en)
+
+/*                cmd, param, offset, width, type, arg_name */
+#define DPNI_RSP_GET_MULTICAST_PROMISC(cmd, en) \
+	MC_RSP_OP(cmd, 0, 0,  1,  int,	    en)
 
 /*                cmd, param, offset, width, type, arg_name */
 #define DPNI_CMD_SET_UNICAST_PROMISC(cmd, en) \
@@ -268,6 +298,57 @@ do { \
 	MC_RSP_OP(cmd, 0, 48, 8,  uint8_t,  mac_addr[1]); \
 	MC_RSP_OP(cmd, 0, 56, 8,  uint8_t,  mac_addr[0]); \
 } while (0)
+
+#define DPNI_RSP_GET_PORT_MAC_ADDR(cmd, mac_addr) \
+do { \
+	MC_RSP_OP(cmd, 0, 16, 8,  uint8_t,  mac_addr[5]); \
+	MC_RSP_OP(cmd, 0, 24, 8,  uint8_t,  mac_addr[4]); \
+	MC_RSP_OP(cmd, 0, 32, 8,  uint8_t,  mac_addr[3]); \
+	MC_RSP_OP(cmd, 0, 40, 8,  uint8_t,  mac_addr[2]); \
+	MC_RSP_OP(cmd, 0, 48, 8,  uint8_t,  mac_addr[1]); \
+	MC_RSP_OP(cmd, 0, 56, 8,  uint8_t,  mac_addr[0]); \
+} while (0)
+
+/*                cmd, param, offset, width, type, arg_name */
+#define DPNI_CMD_ADD_MAC_ADDR(cmd, mac_addr) \
+do { \
+	MC_CMD_OP(cmd, 0, 16, 8,  uint8_t,  mac_addr[5]); \
+	MC_CMD_OP(cmd, 0, 24, 8,  uint8_t,  mac_addr[4]); \
+	MC_CMD_OP(cmd, 0, 32, 8,  uint8_t,  mac_addr[3]); \
+	MC_CMD_OP(cmd, 0, 40, 8,  uint8_t,  mac_addr[2]); \
+	MC_CMD_OP(cmd, 0, 48, 8,  uint8_t,  mac_addr[1]); \
+	MC_CMD_OP(cmd, 0, 56, 8,  uint8_t,  mac_addr[0]); \
+} while (0)
+
+/*                cmd, param, offset, width, type, arg_name */
+#define DPNI_CMD_REMOVE_MAC_ADDR(cmd, mac_addr) \
+do { \
+	MC_CMD_OP(cmd, 0, 16, 8,  uint8_t,  mac_addr[5]); \
+	MC_CMD_OP(cmd, 0, 24, 8,  uint8_t,  mac_addr[4]); \
+	MC_CMD_OP(cmd, 0, 32, 8,  uint8_t,  mac_addr[3]); \
+	MC_CMD_OP(cmd, 0, 40, 8,  uint8_t,  mac_addr[2]); \
+	MC_CMD_OP(cmd, 0, 48, 8,  uint8_t,  mac_addr[1]); \
+	MC_CMD_OP(cmd, 0, 56, 8,  uint8_t,  mac_addr[0]); \
+} while (0)
+
+/*                cmd, param, offset, width, type, arg_name */
+#define DPNI_CMD_CLEAR_MAC_FILTERS(cmd, unicast, multicast) \
+do { \
+	MC_CMD_OP(cmd, 0, 0,  1,  int,      unicast); \
+	MC_CMD_OP(cmd, 0, 1,  1,  int,      multicast); \
+} while (0)
+
+/*                cmd, param, offset, width, type, arg_name */
+#define DPNI_CMD_ENABLE_VLAN_FILTER(cmd, en) \
+	MC_CMD_OP(cmd, 0, 0,  1,  int,	    en)
+
+/*                cmd, param, offset, width, type, arg_name */
+#define DPNI_CMD_ADD_VLAN_ID(cmd, vlan_id) \
+	MC_CMD_OP(cmd, 0, 32, 16, uint16_t, vlan_id)
+
+/*                cmd, param, offset, width, type, arg_name */
+#define DPNI_CMD_REMOVE_VLAN_ID(cmd, vlan_id) \
+	MC_CMD_OP(cmd, 0, 32, 16, uint16_t, vlan_id)
 
 
 /*                cmd, param, offset, width, type, arg_name */
@@ -324,11 +405,72 @@ do { \
 	MC_RSP_OP(cmd, 0, 16, 16, uint16_t, minor);\
 } while (0)
 
+#define DPNI_CMD_GET_TAILDROP(cmd, cp, q_type, tc, q_index) \
+do { \
+	MC_CMD_OP(cmd, 0,  0,  8, enum dpni_congestion_point, cp); \
+	MC_CMD_OP(cmd, 0,  8,  8, enum dpni_queue_type, q_type); \
+	MC_CMD_OP(cmd, 0, 16,  8, uint8_t, tc); \
+	MC_CMD_OP(cmd, 0, 24,  8, uint8_t, q_index); \
+} while (0)
+
+#define DPNI_RSP_GET_TAILDROP(cmd, taildrop) \
+do { \
+	MC_RSP_OP(cmd, 1,  0,  1, char, (taildrop)->enable); \
+	MC_RSP_OP(cmd, 1, 16,  8, enum dpni_congestion_unit, \
+				(taildrop)->units); \
+	MC_RSP_OP(cmd, 1, 32, 32, uint32_t, (taildrop)->threshold); \
+} while (0)
+
+#define DPNI_CMD_SET_TAILDROP(cmd, cp, q_type, tc, q_index, taildrop) \
+do { \
+	MC_CMD_OP(cmd, 0,  0,  8, enum dpni_congestion_point, cp); \
+	MC_CMD_OP(cmd, 0,  8,  8, enum dpni_queue_type, q_type); \
+	MC_CMD_OP(cmd, 0, 16,  8, uint8_t, tc); \
+	MC_CMD_OP(cmd, 0, 24,  8, uint8_t, q_index); \
+	MC_CMD_OP(cmd, 1,  0,  1, char, (taildrop)->enable); \
+	MC_CMD_OP(cmd, 1, 16,  8, enum dpni_congestion_unit, \
+				(taildrop)->units); \
+	MC_CMD_OP(cmd, 1, 32, 32, uint32_t, (taildrop)->threshold); \
+} while (0)
 
 #define DPNI_CMD_SET_TX_CONFIRMATION_MODE(cmd, mode) \
 	MC_CMD_OP(cmd, 0, 32, 8, enum dpni_confirmation_mode, mode)
 
 #define DPNI_RSP_GET_TX_CONFIRMATION_MODE(cmd, mode) \
 	MC_RSP_OP(cmd, 0, 32, 8, enum dpni_confirmation_mode, mode)
+
+#define DPNI_CMD_SET_CONGESTION_NOTIFICATION(cmd, qtype, tc, cfg) \
+do { \
+	MC_CMD_OP(cmd, 0,  0,  8, enum dpni_queue_type, qtype); \
+	MC_CMD_OP(cmd, 0,  8,  8, uint8_t, tc); \
+	MC_CMD_OP(cmd, 1,  0, 32, uint32_t, (cfg)->dest_cfg.dest_id); \
+	MC_CMD_OP(cmd, 1, 32, 16, uint16_t, (cfg)->notification_mode); \
+	MC_CMD_OP(cmd, 1, 48,  8, uint8_t, (cfg)->dest_cfg.priority); \
+	MC_CMD_OP(cmd, 1, 56,  4, enum dpni_dest, (cfg)->dest_cfg.dest_type); \
+	MC_CMD_OP(cmd, 1, 60,  2, enum dpni_congestion_unit, (cfg)->units); \
+	MC_CMD_OP(cmd, 2,  0, 64, uint64_t, (cfg)->message_iova); \
+	MC_CMD_OP(cmd, 3,  0, 64, uint64_t, (cfg)->message_ctx); \
+	MC_CMD_OP(cmd, 4,  0, 32, uint32_t, (cfg)->threshold_entry); \
+	MC_CMD_OP(cmd, 4, 32, 32, uint32_t, (cfg)->threshold_exit); \
+} while (0)
+
+#define DPNI_CMD_GET_CONGESTION_NOTIFICATION(cmd, qtype, tc) \
+do { \
+	MC_CMD_OP(cmd, 0,  0,  8, enum dpni_queue_type, qtype); \
+	MC_CMD_OP(cmd, 0,  8,  8, uint8_t, tc); \
+} while (0)
+
+#define DPNI_RSP_GET_CONGESTION_NOTIFICATION(cmd, cfg) \
+do { \
+	MC_RSP_OP(cmd, 1,  0, 32, uint32_t, (cfg)->dest_cfg.dest_id); \
+	MC_RSP_OP(cmd, 1,  0, 16, uint16_t, (cfg)->notification_mode); \
+	MC_RSP_OP(cmd, 1, 48,  8, uint8_t, (cfg)->dest_cfg.priority); \
+	MC_RSP_OP(cmd, 1, 56,  4, enum dpni_dest, (cfg)->dest_cfg.dest_type); \
+	MC_RSP_OP(cmd, 1, 60,  2, enum dpni_congestion_unit, (cfg)->units); \
+	MC_RSP_OP(cmd, 2,  0, 64, uint64_t, (cfg)->message_iova); \
+	MC_RSP_OP(cmd, 3,  0, 64, uint64_t, (cfg)->message_ctx); \
+	MC_RSP_OP(cmd, 4,  0, 32, uint32_t, (cfg)->threshold_entry); \
+	MC_RSP_OP(cmd, 4, 32, 32, uint32_t, (cfg)->threshold_exit); \
+} while (0)
 
 #endif /* _FSL_DPNI_CMD_H */

@@ -1,7 +1,7 @@
 /*
  *   BSD LICENSE
  *
- *   Copyright (C) Cavium networks Ltd. 2017.
+ *   Copyright (C) Cavium, Inc. 2017.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -13,7 +13,7 @@
  *       notice, this list of conditions and the following disclaimer in
  *       the documentation and/or other materials provided with the
  *       distribution.
- *     * Neither the name of Cavium networks nor the names of its
+ *     * Neither the name of Cavium, Inc nor the names of its
  *       contributors may be used to endorse or promote products derived
  *       from this software without specific prior written permission.
  *
@@ -29,6 +29,8 @@
  *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+
+#include <inttypes.h>
 
 #include <rte_common.h>
 #include <rte_debug.h>
@@ -156,6 +158,8 @@ ssovf_fastpath_fns_set(struct rte_eventdev *dev)
 	dev->schedule      = NULL;
 	dev->enqueue       = ssows_enq;
 	dev->enqueue_burst = ssows_enq_burst;
+	dev->enqueue_new_burst = ssows_enq_new_burst;
+	dev->enqueue_forward_burst = ssows_enq_fwd_burst;
 	dev->dequeue       = ssows_deq;
 	dev->dequeue_burst = ssows_deq_burst;
 
@@ -170,6 +174,7 @@ ssovf_info_get(struct rte_eventdev *dev, struct rte_event_dev_info *dev_info)
 {
 	struct ssovf_evdev *edev = ssovf_pmd_priv(dev);
 
+	dev_info->driver_name = RTE_STR(EVENTDEV_NAME_OCTEONTX_PMD);
 	dev_info->min_dequeue_timeout_ns = edev->min_deq_timeout_ns;
 	dev_info->max_dequeue_timeout_ns = edev->max_deq_timeout_ns;
 	dev_info->max_event_queues = edev->max_event_queues;
@@ -194,6 +199,8 @@ ssovf_configure(const struct rte_eventdev *dev)
 
 	ssovf_func_trace();
 	deq_tmo_ns = conf->dequeue_timeout_ns;
+	if (deq_tmo_ns == 0)
+		deq_tmo_ns = edev->min_deq_timeout_ns;
 
 	if (conf->event_dev_cfg & RTE_EVENT_DEV_CFG_PER_DEQUEUE_TIMEOUT) {
 		edev->is_timeout_deq = 1;

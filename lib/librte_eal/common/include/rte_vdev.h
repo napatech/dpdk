@@ -46,11 +46,18 @@ struct rte_vdev_device {
 	struct rte_device device;               /**< Inherit core device */
 };
 
+/**
+ * @internal
+ * Helper macro for drivers that need to convert to struct rte_vdev_device.
+ */
+#define RTE_DEV_TO_VDEV(ptr) \
+	container_of(ptr, struct rte_vdev_device, device)
+
 static inline const char *
 rte_vdev_device_name(const struct rte_vdev_device *dev)
 {
-	if (dev && dev->device.devargs)
-		return dev->device.devargs->virt.drv_name;
+	if (dev && dev->device.name)
+		return dev->device.name;
 	return NULL;
 }
 

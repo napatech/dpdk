@@ -2,7 +2,7 @@
  *   BSD LICENSE
  *
  *   Copyright (c) 2015-2016 Freescale Semiconductor, Inc. All rights reserved.
- *   Copyright (c) 2016 NXP. All rights reserved.
+ *   Copyright 2016 NXP.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -47,8 +47,31 @@
 /*default tc to be used for ,congestion, distribution etc configuration. */
 #define DPAA2_DEF_TC		0
 
+/* Threshold for a Tx queue to *Enter* Congestion state.
+ */
+#define CONG_ENTER_TX_THRESHOLD   512
+
+/* Threshold for a queue to *Exit* Congestion state.
+ */
+#define CONG_EXIT_TX_THRESHOLD    480
+
+#define CONG_RETRY_COUNT 18000
+
+/* RX queue tail drop threshold
+ * currently considering 32 KB packets
+ */
+#define CONG_THRESHOLD_RX_Q  (64 * 1024)
+
 /* Size of the input SMMU mapped memory required by MC */
 #define DIST_PARAM_IOVA_SIZE 256
+
+/* Enable TX Congestion control support
+ * default is disable
+ */
+#define DPAA2_TX_CGR_OFF	0x01
+
+/* Disable RX tail drop, default is enable */
+#define DPAA2_RX_TAILDROP_OFF	0x04
 
 struct dpaa2_dev_priv {
 	void *hw;
@@ -62,7 +85,6 @@ struct dpaa2_dev_priv {
 
 	struct dpaa2_bp_list *bp_list; /**<Attached buffer pool list */
 	uint32_t options;
-	uint16_t num_dist_per_tc[MAX_TCS];
 	uint8_t max_mac_filters;
 	uint8_t max_vlan_filters;
 	uint8_t num_tc;
@@ -77,7 +99,8 @@ int dpaa2_remove_flow_dist(struct rte_eth_dev *eth_dev,
 
 int dpaa2_attach_bp_list(struct dpaa2_dev_priv *priv, void *blist);
 
-uint16_t dpaa2_dev_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts);
+uint16_t dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs,
+			       uint16_t nb_pkts);
 uint16_t dpaa2_dev_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts);
-
+uint16_t dummy_dev_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts);
 #endif /* _DPAA2_ETHDEV_H */

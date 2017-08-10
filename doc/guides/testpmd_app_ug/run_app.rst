@@ -188,6 +188,19 @@ The commandline options are:
 
     Start forwarding on initialization.
 
+*   ``--tx-first``
+
+    Start forwarding, after sending a burst of packets first.
+
+.. Note::
+
+   This flag should be only used in non-interactive mode.
+
+*   ``--stats-period PERIOD``
+
+    Display statistics every PERIOD seconds, if interactive mode is disabled.
+    The default value is 0, which means that the statistics will not be displayed.
+
 *   ``--nb-cores=N``
 
     Set the number of forwarding cores,
@@ -487,3 +500,11 @@ The commandline options are:
 
     Disable printing the occurrence of the designated event. Using all will
     disable all of them.
+
+*   ``--flow-isolate-all``
+
+    Providing this parameter requests flow API isolated mode on all ports at
+    initialization time. It ensures all traffic is received through the
+    configured flow rules only (see flow command).
+
+    Ports that do not support this mode are automatically discarded.

@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright(c) 2016 Cavium networks. All rights reserved.
+ *   Copyright(c) 2016 Cavium, Inc. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -13,7 +13,7 @@
  *	   notice, this list of conditions and the following disclaimer in
  *	   the documentation and/or other materials provided with the
  *	   distribution.
- *	 * Neither the name of Cavium networks nor the names of its
+ *	 * Neither the name of Cavium, Inc nor the names of its
  *	   contributors may be used to endorse or promote products derived
  *	   from this software without specific prior written permission.
  *
@@ -139,13 +139,6 @@ test_ethdev_config_run(struct rte_event_dev_config *dev_conf,
 }
 
 static void
-min_dequeue_limit(struct rte_event_dev_config *dev_conf,
-		  struct rte_event_dev_info *info)
-{
-	dev_conf->dequeue_timeout_ns = info->min_dequeue_timeout_ns - 1;
-}
-
-static void
 max_dequeue_limit(struct rte_event_dev_config *dev_conf,
 		  struct rte_event_dev_info *info)
 {
@@ -210,9 +203,6 @@ test_eventdev_configure(void)
 	TEST_ASSERT_SUCCESS(ret, "Failed to get event dev info");
 
 	/* Check limits */
-	TEST_ASSERT_EQUAL(-EINVAL,
-		test_ethdev_config_run(&dev_conf, &info, min_dequeue_limit),
-		 "Config negative test failed");
 	TEST_ASSERT_EQUAL(-EINVAL,
 		test_ethdev_config_run(&dev_conf, &info, max_dequeue_limit),
 		 "Config negative test failed");

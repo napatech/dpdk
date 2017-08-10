@@ -44,6 +44,8 @@
 #define QBMAN_CINH_SWP_IER     0xe40
 #define QBMAN_CINH_SWP_ISDR    0xe80
 #define QBMAN_CINH_SWP_IIR     0xec0
+#define QBMAN_CINH_SWP_DQRR_ITR    0xa80
+#define QBMAN_CINH_SWP_ITPR    0xf40
 
 /* CENA register offsets */
 #define QBMAN_CENA_SWP_EQCR(n) (0x000 + ((uint32_t)(n) << 6))
@@ -218,6 +220,26 @@ void qbman_swp_interrupt_clear_status(struct qbman_swp *p, uint32_t mask)
 	qbman_cinh_write(&p->sys, QBMAN_CINH_SWP_ISR, mask);
 }
 
+uint32_t qbman_swp_dqrr_thrshld_read_status(struct qbman_swp *p)
+{
+	return qbman_cinh_read(&p->sys, QBMAN_CINH_SWP_DQRR_ITR);
+}
+
+void qbman_swp_dqrr_thrshld_write(struct qbman_swp *p, uint32_t mask)
+{
+	qbman_cinh_write(&p->sys, QBMAN_CINH_SWP_DQRR_ITR, mask);
+}
+
+uint32_t qbman_swp_intr_timeout_read_status(struct qbman_swp *p)
+{
+	return qbman_cinh_read(&p->sys, QBMAN_CINH_SWP_ITPR);
+}
+
+void qbman_swp_intr_timeout_write(struct qbman_swp *p, uint32_t mask)
+{
+	qbman_cinh_write(&p->sys, QBMAN_CINH_SWP_ITPR, mask);
+}
+
 uint32_t qbman_swp_interrupt_get_trigger(struct qbman_swp *p)
 {
 	return qbman_cinh_read(&p->sys, QBMAN_CINH_SWP_IER);
@@ -288,7 +310,7 @@ void *qbman_swp_mc_result(struct qbman_swp *p)
 	qbman_cena_invalidate_prefetch(&p->sys,
 				       QBMAN_CENA_SWP_RR(p->mc.valid_bit));
 	ret = qbman_cena_read(&p->sys, QBMAN_CENA_SWP_RR(p->mc.valid_bit));
-	/* Remove the valid-bit - command completed iff the rest is non-zero */
+	/* Remove the valid-bit - command completed if the rest is non-zero */
 	verb = ret[0] & ~QB_VALID_BIT;
 	if (!verb)
 		return NULL;
@@ -574,6 +596,76 @@ int qbman_swp_enqueue(struct qbman_swp *s, const struct qbman_eq_desc *d,
 		return qbman_swp_enqueue_ring_mode(s, d, fd);
 }
 
+int qbman_swp_enqueue_multiple_eqdesc(struct qbman_swp *s,
+			       const struct qbman_eq_desc *d,
+			       const struct qbman_fd *fd,
+			       int num_frames)
+{
+	uint32_t *p;
+	const uint32_t *cl = qb_cl(d);
+	uint32_t eqcr_ci, eqcr_pi;
+	uint8_t diff;
+	int i, num_enqueued = 0;
+	uint64_t addr_cena;
+
+	if (!s->eqcr.available) {
+		eqcr_ci = s->eqcr.ci;
+		s->eqcr.ci = qbman_cena_read_reg(&s->sys,
+				QBMAN_CENA_SWP_EQCR_CI) & 0xF;
+		diff = qm_cyc_diff(QBMAN_EQCR_SIZE,
+				   eqcr_ci, s->eqcr.ci);
+		s->eqcr.available += diff;
+		if (!diff)
+			return 0;
+	}
+
+	eqcr_pi = s->eqcr.pi;
+	num_enqueued = (s->eqcr.available < num_frames) ?
+			s->eqcr.available : num_frames;
+	s->eqcr.available -= num_enqueued;
+	/* Fill in the EQCR ring */
+	for (i = 0; i < num_enqueued; i++) {
+		p = qbman_cena_write_start_wo_shadow(&s->sys,
+					QBMAN_CENA_SWP_EQCR(eqcr_pi & 7));
+		memcpy(&p[1], &cl[1], 28);
+		memcpy(&p[8], &fd[i], sizeof(*fd));
+		eqcr_pi++;
+		eqcr_pi &= 0xF;
+		/*Pointing to the next enqueue descriptor*/
+		cl += (sizeof(struct qbman_eq_desc) / sizeof(uint32_t));
+	}
+
+	lwsync();
+
+	/* Set the verb byte, have to substitute in the valid-bit */
+	eqcr_pi = s->eqcr.pi;
+	cl = qb_cl(d);
+	for (i = 0; i < num_enqueued; i++) {
+		p = qbman_cena_write_start_wo_shadow(&s->sys,
+					QBMAN_CENA_SWP_EQCR(eqcr_pi & 7));
+		p[0] = cl[0] | s->eqcr.pi_vb;
+		eqcr_pi++;
+		eqcr_pi &= 0xF;
+		if (!(eqcr_pi & 7))
+			s->eqcr.pi_vb ^= QB_VALID_BIT;
+		/*Pointing to the next enqueue descriptor*/
+		cl += (sizeof(struct qbman_eq_desc) / sizeof(uint32_t));
+	}
+
+	/* Flush all the cacheline without load/store in between */
+	eqcr_pi = s->eqcr.pi;
+	addr_cena = (uint64_t)s->sys.addr_cena;
+	for (i = 0; i < num_enqueued; i++) {
+		dcbf((uint64_t *)(addr_cena +
+				QBMAN_CENA_SWP_EQCR(eqcr_pi & 7)));
+		eqcr_pi++;
+		eqcr_pi &= 0xF;
+	}
+	s->eqcr.pi = eqcr_pi;
+
+	return num_enqueued;
+}
+
 /*************************/
 /* Static (push) dequeue */
 /*************************/
@@ -769,7 +861,7 @@ const struct qbman_result *qbman_swp_dqrr_next(struct qbman_swp *s)
 		 */
 		uint32_t dqpi = qbman_cinh_read(&s->sys, QBMAN_CINH_SWP_DQPI);
 		uint32_t pi = qb_attr_code_decode(&code_dqpi_pi, &dqpi);
-		/* there are new entries iff pi != next_idx */
+		/* there are new entries if pi != next_idx */
 		if (pi == s->dqrr.next_idx)
 			return NULL;
 		/* if next_idx is/was the last ring index, and 'pi' is
@@ -1393,7 +1485,7 @@ int qbman_swp_CDAN_set_context_enable(struct qbman_swp *s, uint16_t channelid,
 				  1, ctx);
 }
 
-uint8_t qbman_get_dqrr_idx(struct qbman_result *dqrr)
+uint8_t qbman_get_dqrr_idx(const struct qbman_result *dqrr)
 {
 	return QBMAN_IDX_FROM_DQRR(dqrr);
 }

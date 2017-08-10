@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright(c) 2015 Cavium Networks. All rights reserved.
+ *   Copyright(c) 2015 Cavium, Inc. All rights reserved.
  *   All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
@@ -14,7 +14,7 @@
  *       notice, this list of conditions and the following disclaimer in
  *       the documentation and/or other materials provided with the
  *       distribution.
- *     * Neither the name of Cavium Networks nor the names of its
+ *     * Neither the name of Cavium, Inc nor the names of its
  *       contributors may be used to endorse or promote products derived
  *       from this software without specific prior written permission.
  *
@@ -44,7 +44,7 @@
 #define vect_loadu_sil128(p) vld1q_s32((const int32_t *)p)
 
 /* sets the 4 signed 32-bit integer values and returns the xmm_t variable */
-static inline xmm_t  __attribute__((always_inline))
+static __rte_always_inline xmm_t
 vect_set_epi32(int i3, int i2, int i1, int i0)
 {
 	int32_t data[4] = {i0, i1, i2, i3};
@@ -70,7 +70,7 @@ vect_set_epi32(int i3, int i2, int i1, int i0)
 #define vect_loadu_sil128(p) vec_ld(0, p)
 
 /* sets the 4 signed 32-bit integer values and returns the xmm_t variable */
-static inline xmm_t  __attribute__((always_inline))
+static __rte_always_inline xmm_t
 vect_set_epi32(int i3, int i2, int i1, int i0)
 {
 	xmm_t data = (xmm_t){i0, i1, i2, i3};

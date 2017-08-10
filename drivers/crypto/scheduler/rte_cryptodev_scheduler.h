@@ -58,12 +58,17 @@ extern "C" {
 #define RTE_CRYPTODEV_SCHEDULER_MAX_NB_SLAVES	(8)
 #endif
 
+/** Maximum number of multi-core worker cores */
+#define RTE_CRYPTODEV_SCHEDULER_MAX_NB_WORKER_CORES	(64)
+
 /** Round-robin scheduling mode string */
 #define SCHEDULER_MODE_NAME_ROUND_ROBIN		round-robin
 /** Packet-size based distribution scheduling mode string */
 #define SCHEDULER_MODE_NAME_PKT_SIZE_DISTR	packet-size-distr
 /** Fail-over scheduling mode string */
 #define SCHEDULER_MODE_NAME_FAIL_OVER		fail-over
+/** multi-core scheduling mode string */
+#define SCHEDULER_MODE_NAME_MULTI_CORE		multi-core
 
 /**
  * Crypto scheduler PMD operation modes
@@ -78,6 +83,8 @@ enum rte_cryptodev_scheduler_mode {
 	CDEV_SCHED_MODE_PKT_SIZE_DISTR,
 	/** Fail-over mode */
 	CDEV_SCHED_MODE_FAILOVER,
+	/** multi-core mode */
+	CDEV_SCHED_MODE_MULTICORE,
 
 	CDEV_SCHED_MODE_COUNT /**< number of modes */
 };
@@ -116,6 +123,7 @@ struct rte_cryptodev_scheduler;
  *   - 0 if the scheduler is successfully loaded
  *   - -ENOTSUP if the operation is not supported.
  *   - -EBUSY if device is started.
+ *   - -EINVAL if input values are invalid.
  */
 int
 rte_cryptodev_scheduler_load_user_scheduler(uint8_t scheduler_id,
@@ -184,38 +192,6 @@ rte_cryptodev_scheduler_mode_set(uint8_t scheduler_id,
  */
 enum rte_cryptodev_scheduler_mode
 rte_cryptodev_scheduler_mode_get(uint8_t scheduler_id);
-
-/**
- * @deprecated
- * Set the scheduling mode
- *
- * @param scheduler_id
- *   The target scheduler device ID
- * @param mode
- *   The scheduling mode
- *
- * @return
- *	0 if attaching successful, negative integer if otherwise.
- */
-__rte_deprecated
-int
-rte_crpytodev_scheduler_mode_set(uint8_t scheduler_id,
-		enum rte_cryptodev_scheduler_mode mode);
-
-/**
- * @deprecated
- * Get the current scheduling mode
- *
- * @param scheduler_id
- *   The target scheduler device ID
- *
- * @return
- *	If successful, returns the scheduling mode, negative integer
- *	otherwise
- */
-__rte_deprecated
-enum rte_cryptodev_scheduler_mode
-rte_crpytodev_scheduler_mode_get(uint8_t scheduler_id);
 
 /**
  * Set the crypto ops reordering feature on/off
@@ -327,6 +303,8 @@ extern struct rte_cryptodev_scheduler *roundrobin_scheduler;
 extern struct rte_cryptodev_scheduler *pkt_size_based_distr_scheduler;
 /** Fail-over mode scheduler */
 extern struct rte_cryptodev_scheduler *failover_scheduler;
+/** multi-core mode scheduler */
+extern struct rte_cryptodev_scheduler *multicore_scheduler;
 
 #ifdef __cplusplus
 }

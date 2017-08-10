@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright(c) 2016 Intel Corporation. All rights reserved.
+ *   Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
  *   All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
@@ -64,9 +64,19 @@ struct supported_auth_algo {
 	enum rte_crypto_auth_algorithm algo;
 	uint16_t digest_len;
 	uint16_t key_len;
-	uint8_t aad_len;
 	uint8_t key_not_req;
 };
+
+struct supported_aead_algo {
+	const char *keyword;
+	enum rte_crypto_aead_algorithm algo;
+	uint16_t iv_len;
+	uint16_t block_size;
+	uint16_t digest_len;
+	uint16_t key_len;
+	uint8_t aad_len;
+};
+
 
 const struct supported_cipher_algo cipher_algos[] = {
 	{
@@ -82,13 +92,6 @@ const struct supported_cipher_algo cipher_algos[] = {
 		.iv_len = 16,
 		.block_size = 16,
 		.key_len = 16
-	},
-	{
-		.keyword = "aes-128-gcm",
-		.algo = RTE_CRYPTO_CIPHER_AES_GCM,
-		.iv_len = 8,
-		.block_size = 4,
-		.key_len = 20
 	},
 	{
 		.keyword = "aes-128-ctr",
@@ -118,13 +121,18 @@ const struct supported_auth_algo auth_algos[] = {
 		.algo = RTE_CRYPTO_AUTH_SHA256_HMAC,
 		.digest_len = 12,
 		.key_len = 32
-	},
+	}
+};
+
+const struct supported_aead_algo aead_algos[] = {
 	{
 		.keyword = "aes-128-gcm",
-		.algo = RTE_CRYPTO_AUTH_AES_GCM,
+		.algo = RTE_CRYPTO_AEAD_AES_GCM,
+		.iv_len = 8,
+		.block_size = 4,
+		.key_len = 20,
 		.digest_len = 16,
 		.aad_len = 8,
-		.key_not_req = 1
 	}
 };
 
@@ -160,6 +168,22 @@ find_match_auth_algo(const char *auth_keyword)
 			&auth_algos[i];
 
 		if (strcmp(auth_keyword, algo->keyword) == 0)
+			return algo;
+	}
+
+	return NULL;
+}
+
+static const struct supported_aead_algo *
+find_match_aead_algo(const char *aead_keyword)
+{
+	size_t i;
+
+	for (i = 0; i < RTE_DIM(aead_algos); i++) {
+		const struct supported_aead_algo *algo =
+			&aead_algos[i];
+
+		if (strcmp(aead_keyword, algo->keyword) == 0)
 			return algo;
 	}
 
@@ -210,6 +234,7 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 	uint32_t *ri /*rule index*/;
 	uint32_t cipher_algo_p = 0;
 	uint32_t auth_algo_p = 0;
+	uint32_t aead_algo_p = 0;
 	uint32_t src_p = 0;
 	uint32_t dst_p = 0;
 	uint32_t mode_p = 0;
@@ -319,8 +344,7 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 			if (algo->algo == RTE_CRYPTO_CIPHER_AES_CBC)
 				rule->salt = (uint32_t)rte_rand();
 
-			if ((algo->algo == RTE_CRYPTO_CIPHER_AES_CTR) ||
-				(algo->algo == RTE_CRYPTO_CIPHER_AES_GCM)) {
+			if (algo->algo == RTE_CRYPTO_CIPHER_AES_CTR) {
 				key_len -= 4;
 				rule->cipher_key_len = key_len;
 				memcpy(&rule->salt,
@@ -383,6 +407,61 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 				return;
 
 			auth_algo_p = 1;
+			continue;
+		}
+
+		if (strcmp(tokens[ti], "aead_algo") == 0) {
+			const struct supported_aead_algo *algo;
+			uint32_t key_len;
+
+			APP_CHECK_PRESENCE(aead_algo_p, tokens[ti],
+				status);
+			if (status->status < 0)
+				return;
+
+			INCREMENT_TOKEN_INDEX(ti, n_tokens, status);
+			if (status->status < 0)
+				return;
+
+			algo = find_match_aead_algo(tokens[ti]);
+
+			APP_CHECK(algo != NULL, status, "unrecognized "
+				"input \"%s\"", tokens[ti]);
+
+			rule->aead_algo = algo->algo;
+			rule->cipher_key_len = algo->key_len;
+			rule->digest_len = algo->digest_len;
+			rule->aad_len = algo->key_len;
+			rule->block_size = algo->block_size;
+			rule->iv_len = algo->iv_len;
+
+			INCREMENT_TOKEN_INDEX(ti, n_tokens, status);
+			if (status->status < 0)
+				return;
+
+			APP_CHECK(strcmp(tokens[ti], "aead_key") == 0,
+				status, "unrecognized input \"%s\", "
+				"expect \"aead_key\"", tokens[ti]);
+			if (status->status < 0)
+				return;
+
+			INCREMENT_TOKEN_INDEX(ti, n_tokens, status);
+			if (status->status < 0)
+				return;
+
+			key_len = parse_key_string(tokens[ti],
+				rule->cipher_key);
+			APP_CHECK(key_len == rule->cipher_key_len, status,
+				"unrecognized input \"%s\"", tokens[ti]);
+			if (status->status < 0)
+				return;
+
+			key_len -= 4;
+			rule->cipher_key_len = key_len;
+			memcpy(&rule->salt,
+				&rule->cipher_key[key_len], 4);
+
+			aead_algo_p = 1;
 			continue;
 		}
 
@@ -477,13 +556,25 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 		return;
 	}
 
-	APP_CHECK(cipher_algo_p == 1, status, "missing cipher options");
-	if (status->status < 0)
-		return;
+	if (aead_algo_p) {
+		APP_CHECK(cipher_algo_p == 0, status,
+				"AEAD used, no need for cipher options");
+		if (status->status < 0)
+			return;
 
-	APP_CHECK(auth_algo_p == 1, status, "missing auth options");
-	if (status->status < 0)
-		return;
+		APP_CHECK(auth_algo_p == 0, status,
+				"AEAD used, no need for auth options");
+		if (status->status < 0)
+			return;
+	} else {
+		APP_CHECK(cipher_algo_p == 1, status, "missing cipher or AEAD options");
+		if (status->status < 0)
+			return;
+
+		APP_CHECK(auth_algo_p == 1, status, "missing auth or AEAD options");
+		if (status->status < 0)
+			return;
+	}
 
 	APP_CHECK(mode_p == 1, status, "missing mode option");
 	if (status->status < 0)
@@ -510,6 +601,13 @@ print_one_sa_rule(const struct ipsec_sa *sa, int inbound)
 	for (i = 0; i < RTE_DIM(auth_algos); i++) {
 		if (auth_algos[i].algo == sa->auth_algo) {
 			printf("%s ", auth_algos[i].keyword);
+			break;
+		}
+	}
+
+	for (i = 0; i < RTE_DIM(aead_algos); i++) {
+		if (aead_algos[i].algo == sa->aead_algo) {
+			printf("%s ", aead_algos[i].keyword);
 			break;
 		}
 	}
@@ -589,6 +687,7 @@ sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 {
 	struct ipsec_sa *sa;
 	uint32_t i, idx;
+	uint16_t iv_length;
 
 	for (i = 0; i < nb_entries; i++) {
 		idx = SPI2IDX(entries[i].spi);
@@ -607,56 +706,110 @@ sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 			sa->dst.ip.ip4 = rte_cpu_to_be_32(sa->dst.ip.ip4);
 		}
 
-		if (inbound) {
-			sa_ctx->xf[idx].b.type = RTE_CRYPTO_SYM_XFORM_CIPHER;
-			sa_ctx->xf[idx].b.cipher.algo = sa->cipher_algo;
-			sa_ctx->xf[idx].b.cipher.key.data = sa->cipher_key;
-			sa_ctx->xf[idx].b.cipher.key.length =
-				sa->cipher_key_len;
-			sa_ctx->xf[idx].b.cipher.op =
-				RTE_CRYPTO_CIPHER_OP_DECRYPT;
+		if (sa->aead_algo == RTE_CRYPTO_AEAD_AES_GCM) {
+			iv_length = 16;
+
+			if (inbound) {
+				sa_ctx->xf[idx].a.type = RTE_CRYPTO_SYM_XFORM_AEAD;
+				sa_ctx->xf[idx].a.aead.algo = sa->aead_algo;
+				sa_ctx->xf[idx].a.aead.key.data = sa->cipher_key;
+				sa_ctx->xf[idx].a.aead.key.length =
+					sa->cipher_key_len;
+				sa_ctx->xf[idx].a.aead.op =
+					RTE_CRYPTO_AEAD_OP_DECRYPT;
+				sa_ctx->xf[idx].a.next = NULL;
+				sa_ctx->xf[idx].a.aead.iv.offset = IV_OFFSET;
+				sa_ctx->xf[idx].a.aead.iv.length = iv_length;
+				sa_ctx->xf[idx].a.aead.aad_length =
+					sa->aad_len;
+				sa_ctx->xf[idx].a.aead.digest_length =
+					sa->digest_len;
+			} else { /* outbound */
+				sa_ctx->xf[idx].a.type = RTE_CRYPTO_SYM_XFORM_AEAD;
+				sa_ctx->xf[idx].a.aead.algo = sa->aead_algo;
+				sa_ctx->xf[idx].a.aead.key.data = sa->cipher_key;
+				sa_ctx->xf[idx].a.aead.key.length =
+					sa->cipher_key_len;
+				sa_ctx->xf[idx].a.aead.op =
+					RTE_CRYPTO_AEAD_OP_ENCRYPT;
+				sa_ctx->xf[idx].a.next = NULL;
+				sa_ctx->xf[idx].a.aead.iv.offset = IV_OFFSET;
+				sa_ctx->xf[idx].a.aead.iv.length = iv_length;
+				sa_ctx->xf[idx].a.aead.aad_length =
+					sa->aad_len;
+				sa_ctx->xf[idx].a.aead.digest_length =
+					sa->digest_len;
+			}
+
+			sa->xforms = &sa_ctx->xf[idx].a;
+
+			print_one_sa_rule(sa, inbound);
+		} else {
+			switch (sa->cipher_algo) {
+			case RTE_CRYPTO_CIPHER_NULL:
+			case RTE_CRYPTO_CIPHER_AES_CBC:
+				iv_length = sa->iv_len;
+				break;
+			case RTE_CRYPTO_CIPHER_AES_CTR:
+				iv_length = 16;
+				break;
+			default:
+				RTE_LOG(ERR, IPSEC_ESP,
+						"unsupported cipher algorithm %u\n",
+						sa->cipher_algo);
+				return -EINVAL;
+			}
+
+			if (inbound) {
+				sa_ctx->xf[idx].b.type = RTE_CRYPTO_SYM_XFORM_CIPHER;
+				sa_ctx->xf[idx].b.cipher.algo = sa->cipher_algo;
+				sa_ctx->xf[idx].b.cipher.key.data = sa->cipher_key;
+				sa_ctx->xf[idx].b.cipher.key.length =
+					sa->cipher_key_len;
+				sa_ctx->xf[idx].b.cipher.op =
+					RTE_CRYPTO_CIPHER_OP_DECRYPT;
+				sa_ctx->xf[idx].b.next = NULL;
+				sa_ctx->xf[idx].b.cipher.iv.offset = IV_OFFSET;
+				sa_ctx->xf[idx].b.cipher.iv.length = iv_length;
+
+				sa_ctx->xf[idx].a.type = RTE_CRYPTO_SYM_XFORM_AUTH;
+				sa_ctx->xf[idx].a.auth.algo = sa->auth_algo;
+				sa_ctx->xf[idx].a.auth.key.data = sa->auth_key;
+				sa_ctx->xf[idx].a.auth.key.length =
+					sa->auth_key_len;
+				sa_ctx->xf[idx].a.auth.digest_length =
+					sa->digest_len;
+				sa_ctx->xf[idx].a.auth.op =
+					RTE_CRYPTO_AUTH_OP_VERIFY;
+			} else { /* outbound */
+				sa_ctx->xf[idx].a.type = RTE_CRYPTO_SYM_XFORM_CIPHER;
+				sa_ctx->xf[idx].a.cipher.algo = sa->cipher_algo;
+				sa_ctx->xf[idx].a.cipher.key.data = sa->cipher_key;
+				sa_ctx->xf[idx].a.cipher.key.length =
+					sa->cipher_key_len;
+				sa_ctx->xf[idx].a.cipher.op =
+					RTE_CRYPTO_CIPHER_OP_ENCRYPT;
+				sa_ctx->xf[idx].a.next = NULL;
+				sa_ctx->xf[idx].a.cipher.iv.offset = IV_OFFSET;
+				sa_ctx->xf[idx].a.cipher.iv.length = iv_length;
+
+				sa_ctx->xf[idx].b.type = RTE_CRYPTO_SYM_XFORM_AUTH;
+				sa_ctx->xf[idx].b.auth.algo = sa->auth_algo;
+				sa_ctx->xf[idx].b.auth.key.data = sa->auth_key;
+				sa_ctx->xf[idx].b.auth.key.length =
+					sa->auth_key_len;
+				sa_ctx->xf[idx].b.auth.digest_length =
+					sa->digest_len;
+				sa_ctx->xf[idx].b.auth.op =
+					RTE_CRYPTO_AUTH_OP_GENERATE;
+			}
+
+			sa_ctx->xf[idx].a.next = &sa_ctx->xf[idx].b;
 			sa_ctx->xf[idx].b.next = NULL;
+			sa->xforms = &sa_ctx->xf[idx].a;
 
-			sa_ctx->xf[idx].a.type = RTE_CRYPTO_SYM_XFORM_AUTH;
-			sa_ctx->xf[idx].a.auth.algo = sa->auth_algo;
-			sa_ctx->xf[idx].a.auth.add_auth_data_length =
-				sa->aad_len;
-			sa_ctx->xf[idx].a.auth.key.data = sa->auth_key;
-			sa_ctx->xf[idx].a.auth.key.length =
-				sa->auth_key_len;
-			sa_ctx->xf[idx].a.auth.digest_length =
-				sa->digest_len;
-			sa_ctx->xf[idx].a.auth.op =
-				RTE_CRYPTO_AUTH_OP_VERIFY;
-
-		} else { /* outbound */
-			sa_ctx->xf[idx].a.type = RTE_CRYPTO_SYM_XFORM_CIPHER;
-			sa_ctx->xf[idx].a.cipher.algo = sa->cipher_algo;
-			sa_ctx->xf[idx].a.cipher.key.data = sa->cipher_key;
-			sa_ctx->xf[idx].a.cipher.key.length =
-				sa->cipher_key_len;
-			sa_ctx->xf[idx].a.cipher.op =
-				RTE_CRYPTO_CIPHER_OP_ENCRYPT;
-			sa_ctx->xf[idx].a.next = NULL;
-
-			sa_ctx->xf[idx].b.type = RTE_CRYPTO_SYM_XFORM_AUTH;
-			sa_ctx->xf[idx].b.auth.algo = sa->auth_algo;
-			sa_ctx->xf[idx].b.auth.add_auth_data_length =
-				sa->aad_len;
-			sa_ctx->xf[idx].b.auth.key.data = sa->auth_key;
-			sa_ctx->xf[idx].b.auth.key.length =
-				sa->auth_key_len;
-			sa_ctx->xf[idx].b.auth.digest_length =
-				sa->digest_len;
-			sa_ctx->xf[idx].b.auth.op =
-				RTE_CRYPTO_AUTH_OP_GENERATE;
+			print_one_sa_rule(sa, inbound);
 		}
-
-		sa_ctx->xf[idx].a.next = &sa_ctx->xf[idx].b;
-		sa_ctx->xf[idx].b.next = NULL;
-		sa->xforms = &sa_ctx->xf[idx].a;
-
-		print_one_sa_rule(sa, inbound);
 	}
 
 	return 0;

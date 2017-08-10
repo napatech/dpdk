@@ -1,7 +1,7 @@
 #   BSD LICENSE
 #
 #   Copyright (c) 2016 Freescale Semiconductor, Inc. All rights reserved.
-#   Copyright (c) 2016 NXP. All rights reserved.
+#   Copyright 2016 NXP.
 #
 #   Redistribution and use in source and binary forms, with or without
 #   modification, are permitted provided that the following conditions
@@ -45,6 +45,12 @@ CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
 endif
 CFLAGS += -D _GNU_SOURCE
+
+ifeq ($(CONFIG_RTE_TOOLCHAIN_GCC),y)
+ifeq ($(shell test $(GCC_VERSION) -gt 70 && echo 1), 1)
+CFLAGS += -Wno-implicit-fallthrough
+endif
+endif
 
 CFLAGS += -I$(RTE_SDK)/drivers/crypto/dpaa2_sec/
 CFLAGS += -I$(RTE_SDK)/drivers/crypto/dpaa2_sec/mc

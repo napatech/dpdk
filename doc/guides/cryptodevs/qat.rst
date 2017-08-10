@@ -55,7 +55,6 @@ Cipher algorithms:
 * ``RTE_CRYPTO_CIPHER_AES192_CTR``
 * ``RTE_CRYPTO_CIPHER_AES256_CTR``
 * ``RTE_CRYPTO_CIPHER_SNOW3G_UEA2``
-* ``RTE_CRYPTO_CIPHER_AES_GCM``
 * ``RTE_CRYPTO_CIPHER_NULL``
 * ``RTE_CRYPTO_CIPHER_KASUMI_F8``
 * ``RTE_CRYPTO_CIPHER_DES_CBC``
@@ -78,14 +77,16 @@ Hash algorithms:
 * ``RTE_CRYPTO_AUTH_AES_GMAC``
 * ``RTE_CRYPTO_AUTH_ZUC_EIA3``
 
+Supported AEAD algorithms:
+* ``RTE_CRYPTO_AEAD_AES_GCM``
+
 
 Limitations
 -----------
 
-* Hash only is not supported except SNOW 3G UIA2 and KASUMI F9.
 * Only supports the session-oriented API implementation (session-less APIs are not supported).
-* SNOW 3G (UEA2) and KASUMI (F8) supported only if cipher length, cipher offset fields are byte-aligned.
-* SNOW 3G (UIA2) and KASUMI (F9) supported only if hash length, hash offset fields are byte-aligned.
+* SNOW 3G (UEA2), KASUMI (F8) and ZUC (EEA3) supported only if cipher length and offset fields are byte-multiple.
+* SNOW 3G (UIA2) and ZUC (EIA3) supported only if hash length and offset fields are byte-multiple.
 * No BSD support as BSD QAT kernel driver not available.
 * ZUC EEA3/EIA3 is not supported by dh895xcc devices
 * Maximum additional authenticated data (AAD) for GCM is 240 bytes long.
@@ -112,21 +113,21 @@ available kernel drivers and device ids are :
 
 .. _table_qat_pmds_drivers:
 
-.. table:: QAT devices and drivers
+.. table:: QAT device generations, devices and drivers
 
-   +----------+--------+---------------+------------+--------+---------+--------+------------+
-   | Device   | Driver | Kernel Module | Pci Driver | PF Did | Num PFs | Vf Did | VFs per PF |
-   +==========+========+===============+============+========+=========+========+============+
-   | DH895xCC | 01.org | icp_qa_al     | n/a        | 435    | 1       | 443    | 32         |
-   +----------+--------+---------------+------------+--------+---------+--------+------------+
-   | DH895xCC | 4.4+   | qat_dh895xcc  | dh895xcc   | 435    | 1       | 443    | 32         |
-   +----------+--------+---------------+------------+--------+---------+--------+------------+
-   | C62x     | 4.5+   | qat_c62x      | c6xx       | 37c8   | 3       | 37c9   | 16         |
-   +----------+--------+---------------+------------+--------+---------+--------+------------+
-   | C3xxx    | 4.5+   | qat_c3xxx     | c3xxx      | 19e2   | 1       | 19e3   | 16         |
-   +----------+--------+---------------+------------+--------+---------+--------+------------+
-   | D15xx    | p      | qat_d15xx     | d15xx      | 6f54   | 1       | 6f55   | 16         |
-   +----------+--------+---------------+------------+--------+---------+--------+------------+
+   +-----+----------+--------+---------------+------------+--------+------+--------+--------+
+   | Gen | Device   | Driver | Kernel Module | Pci Driver | PF Did | #PFs | Vf Did | VFs/PF |
+   +=====+==========+========+===============+============+========+======+========+========+
+   | 1   | DH895xCC | 01.org | icp_qa_al     | n/a        | 435    | 1    | 443    | 32     |
+   +-----+----------+--------+---------------+------------+--------+------+--------+--------+
+   | 1   | DH895xCC | 4.4+   | qat_dh895xcc  | dh895xcc   | 435    | 1    | 443    | 32     |
+   +-----+----------+--------+---------------+------------+--------+------+--------+--------+
+   | 2   | C62x     | 4.5+   | qat_c62x      | c6xx       | 37c8   | 3    | 37c9   | 16     |
+   +-----+----------+--------+---------------+------------+--------+------+--------+--------+
+   | 2   | C3xxx    | 4.5+   | qat_c3xxx     | c3xxx      | 19e2   | 1    | 19e3   | 16     |
+   +-----+----------+--------+---------------+------------+--------+------+--------+--------+
+   | 2   | D15xx    | p      | qat_d15xx     | d15xx      | 6f54   | 1    | 6f55   | 16     |
+   +-----+----------+--------+---------------+------------+--------+------+--------+--------+
 
 
 The ``Driver`` column indicates either the Linux kernel version in which
@@ -364,3 +365,21 @@ Another way to bind the VFs to the DPDK UIO driver is by using the
 
     cd to the top-level DPDK directory
     ./usertools/dpdk-devbind.py -b igb_uio 0000:03:01.1
+
+
+Extra notes on KASUMI F9
+------------------------
+
+When using KASUMI F9 authentication algorithm, the input buffer must be
+constructed according to the 3GPP KASUMI specifications (section 4.4, page 13):
+`<http://cryptome.org/3gpp/35201-900.pdf>`_.
+Input buffer has to have COUNT (4 bytes), FRESH (4 bytes), MESSAGE and DIRECTION (1 bit)
+concatenated. After the DIRECTION bit, a single '1' bit is appended, followed by
+between 0 and 7 '0' bits, so that the total length of the buffer is multiple of 8 bits.
+Note that the actual message can be any length, specified in bits.
+
+Once this buffer is passed this way, when creating the crypto operation,
+length of data to authenticate (op.sym.auth.data.length) must be the length
+of all the items described above, including the padding at the end.
+Also, offset of data to authenticate (op.sym.auth.data.offset)
+must be such that points at the start of the COUNT bytes.

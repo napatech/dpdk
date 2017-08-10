@@ -44,7 +44,6 @@
 #include <rte_per_lcore.h>
 #include <rte_launch.h>
 #include <rte_eal.h>
-#include <rte_per_lcore.h>
 #include <rte_lcore.h>
 #include <rte_cycles.h>
 #include <rte_spinlock.h>
@@ -202,7 +201,7 @@ test_spinlock_perf(void)
 
 /*
  * Use rte_spinlock_trylock() to trylock a spinlock object,
- * If it could not lock the object sucessfully, it would
+ * If it could not lock the object successfully, it would
  * return immediately and the variable of "count" would be
  * increased by one per times. the value of "count" could be
  * checked as the result later.

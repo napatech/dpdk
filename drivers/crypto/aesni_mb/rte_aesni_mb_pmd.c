@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright(c) 2015-2016 Intel Corporation. All rights reserved.
+ *   Copyright(c) 2015-2017 Intel Corporation. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -34,11 +34,14 @@
 #include <rte_hexdump.h>
 #include <rte_cryptodev.h>
 #include <rte_cryptodev_pmd.h>
+#include <rte_cryptodev_vdev.h>
 #include <rte_vdev.h>
 #include <rte_malloc.h>
 #include <rte_cpuflags.h>
 
 #include "rte_aesni_mb_pmd_private.h"
+
+static uint8_t cryptodev_driver_id;
 
 typedef void (*hash_one_block_t)(const void *data, void *digest);
 typedef void (*aes_keyexp_t)(const void *key, void *enc_exp_keys, void *dec_exp_keys);
@@ -166,7 +169,7 @@ aesni_mb_set_session_auth_parameters(const struct aesni_mb_op_fns *mb_ops,
 		break;
 	default:
 		MB_LOG_ERR("Unsupported authentication algorithm selection");
-		return -1;
+		return -ENOTSUP;
 	}
 
 	/* Calculate Authentication precomputes */
@@ -194,7 +197,7 @@ aesni_mb_set_session_cipher_parameters(const struct aesni_mb_op_fns *mb_ops,
 
 	if (xform->type != RTE_CRYPTO_SYM_XFORM_CIPHER) {
 		MB_LOG_ERR("Crypto xform struct not of type cipher");
-		return -1;
+		return -EINVAL;
 	}
 
 	/* Select cipher direction */
@@ -206,8 +209,8 @@ aesni_mb_set_session_cipher_parameters(const struct aesni_mb_op_fns *mb_ops,
 		sess->cipher.direction = DECRYPT;
 		break;
 	default:
-		MB_LOG_ERR("Unsupported cipher operation parameter");
-		return -1;
+		MB_LOG_ERR("Invalid cipher operation parameter");
+		return -EINVAL;
 	}
 
 	/* Select cipher mode */
@@ -223,7 +226,7 @@ aesni_mb_set_session_cipher_parameters(const struct aesni_mb_op_fns *mb_ops,
 		break;
 	default:
 		MB_LOG_ERR("Unsupported cipher mode parameter");
-		return -1;
+		return -ENOTSUP;
 	}
 
 	/* Check key length and choose key expansion function */
@@ -241,9 +244,13 @@ aesni_mb_set_session_cipher_parameters(const struct aesni_mb_op_fns *mb_ops,
 		aes_keyexp_fn = mb_ops->aux.keyexp.aes256;
 		break;
 	default:
-		MB_LOG_ERR("Unsupported cipher key length");
-		return -1;
+		MB_LOG_ERR("Invalid cipher key length");
+		return -EINVAL;
 	}
+
+	/* Set IV parameters */
+	sess->iv.offset = xform->cipher.iv.offset;
+	sess->iv.length = xform->cipher.iv.length;
 
 	/* Expanded cipher keys */
 	(*aes_keyexp_fn)(xform->cipher.key.data,
@@ -261,6 +268,7 @@ aesni_mb_set_session_parameters(const struct aesni_mb_op_fns *mb_ops,
 {
 	const struct rte_crypto_sym_xform *auth_xform = NULL;
 	const struct rte_crypto_sym_xform *cipher_xform = NULL;
+	int ret;
 
 	/* Select Crypto operation - hash then cipher / cipher then hash */
 	switch (aesni_mb_get_chain_order(xform)) {
@@ -296,19 +304,25 @@ aesni_mb_set_session_parameters(const struct aesni_mb_op_fns *mb_ops,
 	case AESNI_MB_OP_NOT_SUPPORTED:
 	default:
 		MB_LOG_ERR("Unsupported operation chain order parameter");
-		return -1;
+		return -ENOTSUP;
 	}
 
-	if (aesni_mb_set_session_auth_parameters(mb_ops, sess, auth_xform)) {
+	/* Default IV length = 0 */
+	sess->iv.length = 0;
+
+	ret = aesni_mb_set_session_auth_parameters(mb_ops, sess, auth_xform);
+	if (ret != 0) {
 		MB_LOG_ERR("Invalid/unsupported authentication parameters");
-		return -1;
+		return ret;
 	}
 
-	if (aesni_mb_set_session_cipher_parameters(mb_ops, sess,
-			cipher_xform)) {
+	ret = aesni_mb_set_session_cipher_parameters(mb_ops, sess,
+			cipher_xform);
+	if (ret != 0) {
 		MB_LOG_ERR("Invalid/unsupported cipher parameters");
-		return -1;
+		return ret;
 	}
+
 	return 0;
 }
 
@@ -344,29 +358,37 @@ get_session(struct aesni_mb_qp *qp, struct rte_crypto_op *op)
 {
 	struct aesni_mb_session *sess = NULL;
 
-	if (op->sym->sess_type == RTE_CRYPTO_SYM_OP_WITH_SESSION) {
-		if (unlikely(op->sym->session->dev_type !=
-				RTE_CRYPTODEV_AESNI_MB_PMD)) {
-			return NULL;
-		}
-
-		sess = (struct aesni_mb_session *)op->sym->session->_private;
-	} else  {
+	if (op->sess_type == RTE_CRYPTO_OP_WITH_SESSION) {
+		if (likely(op->sym->session != NULL))
+			sess = (struct aesni_mb_session *)
+					get_session_private_data(
+					op->sym->session,
+					cryptodev_driver_id);
+	} else {
 		void *_sess = NULL;
+		void *_sess_private_data = NULL;
 
 		if (rte_mempool_get(qp->sess_mp, (void **)&_sess))
 			return NULL;
 
-		sess = (struct aesni_mb_session *)
-			((struct rte_cryptodev_sym_session *)_sess)->_private;
+		if (rte_mempool_get(qp->sess_mp, (void **)&_sess_private_data))
+			return NULL;
+
+		sess = (struct aesni_mb_session *)_sess_private_data;
 
 		if (unlikely(aesni_mb_set_session_parameters(qp->op_fns,
 				sess, op->sym->xform) != 0)) {
 			rte_mempool_put(qp->sess_mp, _sess);
+			rte_mempool_put(qp->sess_mp, _sess_private_data);
 			sess = NULL;
 		}
 		op->sym->session = (struct rte_cryptodev_sym_session *)_sess;
+		set_session_private_data(op->sym->session, cryptodev_driver_id,
+			_sess_private_data);
 	}
+
+	if (unlikely(sess == NULL))
+		op->status = RTE_CRYPTO_OP_STATUS_INVALID_SESSION;
 
 	return sess;
 }
@@ -396,7 +418,6 @@ set_mb_job_params(JOB_AES_HMAC *job, struct aesni_mb_qp *qp,
 		op->status = RTE_CRYPTO_OP_STATUS_INVALID_SESSION;
 		return -1;
 	}
-	op->status = RTE_CRYPTO_OP_STATUS_ENQUEUED;
 
 	/* Set crypto operation */
 	job->chain_order = session->chain_order;
@@ -470,8 +491,9 @@ set_mb_job_params(JOB_AES_HMAC *job, struct aesni_mb_qp *qp,
 			get_truncated_digest_byte_length(job->hash_alg);
 
 	/* Set IV parameters */
-	job->iv = op->sym->cipher.iv.data;
-	job->iv_len_in_bytes = op->sym->cipher.iv.length;
+	job->iv = rte_crypto_op_ctod_offset(op, uint8_t *,
+			session->iv.offset);
+	job->iv_len_in_bytes = session->iv.length;
 
 	/* Data  Parameter */
 	job->src = rte_pktmbuf_mtod(m_src, uint8_t *);
@@ -494,8 +516,6 @@ static inline void
 verify_digest(JOB_AES_HMAC *job, struct rte_crypto_op *op) {
 	struct rte_mbuf *m_dst = (struct rte_mbuf *)job->user_data2;
 
-	RTE_ASSERT(m_dst == NULL);
-
 	/* Verify digest if required */
 	if (memcmp(job->auth_tag_output, op->sym->auth.digest.data,
 			job->auth_tag_output_len_in_bytes) != 0)
@@ -508,31 +528,28 @@ verify_digest(JOB_AES_HMAC *job, struct rte_crypto_op *op) {
 /**
  * Process a completed job and return rte_mbuf which job processed
  *
+ * @param qp		Queue Pair to process
  * @param job	JOB_AES_HMAC job to process
  *
  * @return
- * - Returns processed mbuf which is trimmed of output digest used in
- * verification of supplied digest in the case of a HASH_CIPHER operation
+ * - Returns processed crypto operation which mbuf is trimmed of output digest
+ *   used in verification of supplied digest.
  * - Returns NULL on invalid job
  */
 static inline struct rte_crypto_op *
 post_process_mb_job(struct aesni_mb_qp *qp, JOB_AES_HMAC *job)
 {
 	struct rte_crypto_op *op = (struct rte_crypto_op *)job->user_data;
+	struct aesni_mb_session *sess = get_session_private_data(
+							op->sym->session,
+							cryptodev_driver_id);
 
-	struct aesni_mb_session *sess;
-
-	RTE_ASSERT(op == NULL);
-
-	if (unlikely(op->status == RTE_CRYPTO_OP_STATUS_ENQUEUED)) {
+	if (likely(op->status == RTE_CRYPTO_OP_STATUS_NOT_PROCESSED)) {
 		switch (job->status) {
 		case STS_COMPLETED:
 			op->status = RTE_CRYPTO_OP_STATUS_SUCCESS;
 
 			if (job->hash_alg != NULL_HASH) {
-				sess = (struct aesni_mb_session *)
-						op->sym->session->_private;
-
 				if (sess->auth.operation ==
 						RTE_CRYPTO_AUTH_OP_VERIFY)
 					verify_digest(job, op);
@@ -544,7 +561,11 @@ post_process_mb_job(struct aesni_mb_qp *qp, JOB_AES_HMAC *job)
 	}
 
 	/* Free session if a session-less crypto op */
-	if (op->sym->sess_type == RTE_CRYPTO_SYM_OP_SESSIONLESS) {
+	if (op->sess_type == RTE_CRYPTO_OP_SESSIONLESS) {
+		memset(sess, 0, sizeof(struct aesni_mb_session));
+		memset(op->sym->session, 0,
+				rte_cryptodev_get_header_session_size());
+		rte_mempool_put(qp->sess_mp, sess);
 		rte_mempool_put(qp->sess_mp, op->sym->session);
 		op->sym->session = NULL;
 	}
@@ -569,7 +590,7 @@ handle_completed_jobs(struct aesni_mb_qp *qp, JOB_AES_HMAC *job,
 	struct rte_crypto_op *op = NULL;
 	unsigned processed_jobs = 0;
 
-	while (job != NULL && processed_jobs < nb_ops) {
+	while (job != NULL) {
 		op = post_process_mb_job(qp, job);
 
 		if (op) {
@@ -579,6 +600,8 @@ handle_completed_jobs(struct aesni_mb_qp *qp, JOB_AES_HMAC *job,
 			qp->stats.dequeue_err_count++;
 			break;
 		}
+		if (processed_jobs == nb_ops)
+			break;
 
 		job = (*qp->op_fns->job.get_completed_job)(&qp->mb_mgr);
 	}
@@ -623,6 +646,9 @@ aesni_mb_pmd_dequeue_burst(void *queue_pair, struct rte_crypto_op **ops,
 	JOB_AES_HMAC *job;
 
 	int retval, processed_jobs = 0;
+
+	if (unlikely(nb_ops == 0))
+		return 0;
 
 	do {
 		/* Get next operation to process from ingress queue */
@@ -691,21 +717,18 @@ cryptodev_aesni_mb_create(const char *name,
 		vector_mode = RTE_AESNI_MB_AVX2;
 	else if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX))
 		vector_mode = RTE_AESNI_MB_AVX;
-	else if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_SSE4_1))
+	else
 		vector_mode = RTE_AESNI_MB_SSE;
-	else {
-		MB_LOG_ERR("Vector instructions are not supported by CPU");
-		return -EFAULT;
-	}
 
-	dev = rte_cryptodev_pmd_virtual_dev_init(init_params->name,
-			sizeof(struct aesni_mb_private), init_params->socket_id);
+	dev = rte_cryptodev_vdev_pmd_init(init_params->name,
+			sizeof(struct aesni_mb_private), init_params->socket_id,
+			vdev);
 	if (dev == NULL) {
 		MB_LOG_ERR("failed to create cryptodev vdev");
 		goto init_error;
 	}
 
-	dev->dev_type = RTE_CRYPTODEV_AESNI_MB_PMD;
+	dev->driver_id = cryptodev_driver_id;
 	dev->dev_ops = rte_aesni_mb_pmd_ops;
 
 	/* register rx/tx burst functions for data path */
@@ -765,7 +788,7 @@ cryptodev_aesni_mb_probe(struct rte_vdev_device *vdev)
 	if (name == NULL)
 		return -EINVAL;
 	input_args = rte_vdev_device_args(vdev);
-	rte_cryptodev_parse_vdev_init_params(&init_params, input_args);
+	rte_cryptodev_vdev_parse_init_params(&init_params, input_args);
 
 	RTE_LOG(INFO, PMD, "Initialising %s on NUMA node %d\n", name,
 			init_params.socket_id);
@@ -806,3 +829,4 @@ RTE_PMD_REGISTER_PARAM_STRING(CRYPTODEV_NAME_AESNI_MB_PMD,
 	"max_nb_queue_pairs=<int> "
 	"max_nb_sessions=<int> "
 	"socket_id=<int>");
+RTE_PMD_REGISTER_CRYPTO_DRIVER(cryptodev_aesni_mb_pmd_drv, cryptodev_driver_id);

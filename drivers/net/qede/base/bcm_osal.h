@@ -27,6 +27,7 @@ struct ecore_vf_acquire_sw_info;
 struct vf_pf_resc_request;
 enum ecore_mcp_protocol_type;
 union ecore_mcp_protocol_stats;
+enum ecore_hw_err_type;
 
 void qed_link_update(struct ecore_hwfn *hwfn);
 
@@ -107,14 +108,16 @@ void *osal_dma_alloc_coherent(struct ecore_dev *, dma_addr_t *, size_t);
 void *osal_dma_alloc_coherent_aligned(struct ecore_dev *, dma_addr_t *,
 				      size_t, int);
 
+void osal_dma_free_mem(struct ecore_dev *edev, dma_addr_t phys);
+
 #define OSAL_DMA_ALLOC_COHERENT(dev, phys, size) \
 	osal_dma_alloc_coherent(dev, phys, size)
 
 #define OSAL_DMA_ALLOC_COHERENT_ALIGNED(dev, phys, size, align) \
 	osal_dma_alloc_coherent_aligned(dev, phys, size, align)
 
-/* TODO: */
-#define OSAL_DMA_FREE_COHERENT(dev, virt, phys, size) nothing
+#define OSAL_DMA_FREE_COHERENT(dev, virt, phys, size) \
+	osal_dma_free_mem(dev, phys)
 
 /* HW reads/writes */
 
@@ -348,6 +351,8 @@ u32 qede_unzip_data(struct ecore_hwfn *p_hwfn, u32 input_len,
 		   u8 *input_buf, u32 max_size, u8 *unzip_buf);
 void qede_vf_fill_driver_data(struct ecore_hwfn *, struct vf_pf_resc_request *,
 			      struct ecore_vf_acquire_sw_info *);
+void qede_hw_err_notify(struct ecore_hwfn *p_hwfn,
+			enum ecore_hw_err_type err_type);
 #define OSAL_VF_FILL_ACQUIRE_RESC_REQ(_dev_p, _resc_req, _os_info) \
 	qede_vf_fill_driver_data(_dev_p, _resc_req, _os_info)
 
@@ -356,7 +361,8 @@ void qede_vf_fill_driver_data(struct ecore_hwfn *, struct vf_pf_resc_request *,
 
 /* TODO: */
 #define OSAL_SCHEDULE_RECOVERY_HANDLER(hwfn) nothing
-#define OSAL_HW_ERROR_OCCURRED(hwfn, err_type) nothing
+#define OSAL_HW_ERROR_OCCURRED(hwfn, err_type) \
+	qede_hw_err_notify(hwfn, err_type)
 
 #define OSAL_NVM_IS_ACCESS_ENABLED(hwfn) (1)
 #define OSAL_NUM_ACTIVE_CPU()	0
@@ -421,6 +427,9 @@ void qede_get_mcp_proto_stats(struct ecore_dev *, enum ecore_mcp_protocol_type,
 	qede_get_mcp_proto_stats(dev, type, stats)
 
 #define	OSAL_SLOWPATH_IRQ_REQ(p_hwfn) (0)
+#define OSAL_CRC32(crc, buf, length) 0
+#define OSAL_CRC8_POPULATE(table, polynomial) nothing
+#define OSAL_CRC8(table, pdata, nbytes, crc) 0
 #define OSAL_MFW_TLV_REQ(p_hwfn) (0)
 #define OSAL_MFW_FILL_TLV_DATA(type, buf, data) (0)
 #define OSAL_PF_VALIDATE_MODIFY_TUNN_CONFIG(p_hwfn, mask, b_update, tunn) 0

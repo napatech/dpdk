@@ -38,7 +38,6 @@
 #include <ctype.h>
 #include <getopt.h>
 
-#include <rte_alarm.h>
 #include <rte_common.h>
 #include <rte_log.h>
 #include <rte_malloc.h>
@@ -46,7 +45,6 @@
 #include <rte_memcpy.h>
 #include <rte_memzone.h>
 #include <rte_eal.h>
-#include <rte_per_lcore.h>
 #include <rte_launch.h>
 #include <rte_atomic.h>
 #include <rte_cycles.h>
@@ -67,6 +65,7 @@
 #include <rte_jobstats.h>
 #include <rte_timer.h>
 #include <rte_alarm.h>
+#include <rte_pause.h>
 
 #define RTE_LOGTYPE_L2FWD RTE_LOGTYPE_USER1
 
@@ -882,6 +881,13 @@ main(int argc, char **argv)
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%u\n",
 				  ret, (unsigned) portid);
+
+		ret = rte_eth_dev_adjust_nb_rx_tx_desc(portid, &nb_rxd,
+						       &nb_txd);
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE,
+				 "Cannot adjust number of descriptors: err=%d, port=%u\n",
+				 ret, (unsigned) portid);
 
 		rte_eth_macaddr_get(portid, &l2fwd_ports_eth_addr[portid]);
 

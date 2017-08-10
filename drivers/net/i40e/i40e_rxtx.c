@@ -1257,7 +1257,7 @@ end_of_tx:
 	return nb_tx;
 }
 
-static inline int __attribute__((always_inline))
+static __rte_always_inline int
 i40e_tx_free_bufs(struct i40e_tx_queue *txq)
 {
 	struct i40e_tx_entry *txep;
@@ -1608,7 +1608,7 @@ i40e_dev_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 		rxq = dev->data->rx_queues[rx_queue_id];
 
 		/*
-		* rx_queue_id is queue id aplication refers to, while
+		* rx_queue_id is queue id application refers to, while
 		* rxq->reg_idx is the real queue index.
 		*/
 		err = i40e_switch_rx_queue(hw, rxq->reg_idx, FALSE);
@@ -1639,7 +1639,7 @@ i40e_dev_tx_queue_start(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 		txq = dev->data->tx_queues[tx_queue_id];
 
 		/*
-		* tx_queue_id is queue id aplication refers to, while
+		* tx_queue_id is queue id application refers to, while
 		* rxq->reg_idx is the real queue index.
 		*/
 		err = i40e_switch_tx_queue(hw, txq->reg_idx, TRUE);
@@ -1664,7 +1664,7 @@ i40e_dev_tx_queue_stop(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 		txq = dev->data->tx_queues[tx_queue_id];
 
 		/*
-		* tx_queue_id is queue id aplication refers to, while
+		* tx_queue_id is queue id application refers to, while
 		* txq->reg_idx is the real queue index.
 		*/
 		err = i40e_switch_tx_queue(hw, txq->reg_idx, FALSE);
@@ -2474,7 +2474,7 @@ i40e_rx_queue_config(struct i40e_rx_queue *rxq)
 	case I40E_FLAG_HEADER_SPLIT_DISABLED:
 	default:
 		rxq->rx_hdr_len = 0;
-		rxq->rx_buf_len = RTE_ALIGN(buf_size,
+		rxq->rx_buf_len = RTE_ALIGN_FLOOR(buf_size,
 			(1 << I40E_RXQ_CTX_DBUFF_SHIFT));
 		rxq->hs_mode = i40e_header_split_none;
 		break;

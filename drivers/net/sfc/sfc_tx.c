@@ -185,7 +185,7 @@ sfc_tx_qinit(struct sfc_adapter *sa, unsigned int sw_index,
 	info.mem_bar = sa->mem_bar.esb_base;
 
 	rc = sa->dp_tx->qcreate(sa->eth_dev->data->port_id, sw_index,
-				&SFC_DEV_TO_PCI(sa->eth_dev)->addr,
+				&RTE_ETH_DEV_TO_PCI(sa->eth_dev)->addr,
 				socket_id, &info, &txq->dp);
 	if (rc != 0)
 		goto fail_dp_tx_qinit;
@@ -479,6 +479,7 @@ sfc_tx_qstop(struct sfc_adapter *sa, unsigned int sw_index)
 	struct sfc_txq *txq;
 	unsigned int retry_count;
 	unsigned int wait_count;
+	int rc;
 
 	sfc_log_init(sa, "TxQ = %u", sw_index);
 
@@ -502,8 +503,10 @@ sfc_tx_qstop(struct sfc_adapter *sa, unsigned int sw_index)
 	     ((txq->state & SFC_TXQ_FLUSHED) == 0) &&
 	     (retry_count < SFC_TX_QFLUSH_ATTEMPTS);
 	     ++retry_count) {
-		if (efx_tx_qflush(txq->common) != 0) {
-			txq->state |= SFC_TXQ_FLUSH_FAILED;
+		rc = efx_tx_qflush(txq->common);
+		if (rc != 0) {
+			txq->state |= (rc == EALREADY) ?
+				SFC_TXQ_FLUSHED : SFC_TXQ_FLUSH_FAILED;
 			break;
 		}
 

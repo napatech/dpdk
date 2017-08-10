@@ -33,6 +33,7 @@
 
 #include <rte_mbuf.h>
 #include <rte_ethdev.h>
+#include <rte_pci.h>
 #include <rte_malloc.h>
 #include <rte_memcpy.h>
 #include <rte_memory.h>
@@ -484,7 +485,8 @@ virtual_ethdev_simulate_link_status_interrupt(uint8_t port_id,
 
 	vrtl_eth_dev->data->dev_link.link_status = link_status;
 
-	_rte_eth_dev_callback_process(vrtl_eth_dev, RTE_ETH_EVENT_INTR_LSC, NULL);
+	_rte_eth_dev_callback_process(vrtl_eth_dev, RTE_ETH_EVENT_INTR_LSC,
+				      NULL, NULL);
 }
 
 int
@@ -511,20 +513,6 @@ virtual_ethdev_get_mbufs_from_tx_queue(uint8_t port_id,
 		burst_length, NULL);
 }
 
-static uint8_t
-get_number_of_sockets(void)
-{
-	int sockets = 0;
-	int i;
-	const struct rte_memseg *ms = rte_eal_get_physmem_layout();
-
-	for (i = 0; i < RTE_MAX_MEMSEG && ms[i].addr != NULL; i++) {
-		if (sockets < ms[i].socket_id)
-			sockets = ms[i].socket_id;
-	}
-	/* Number of sockets = maximum socket_id + 1 */
-	return ++sockets;
-}
 
 int
 virtual_ethdev_create(const char *name, struct ether_addr *mac_addr,
@@ -541,9 +529,6 @@ virtual_ethdev_create(const char *name, struct ether_addr *mac_addr,
 	/* now do all data allocation - for eth_dev structure, dummy pci driver
 	 * and internal (dev_private) data
 	 */
-
-	if (socket_id >= get_number_of_sockets())
-		goto err;
 
 	pci_dev = rte_zmalloc_socket(name, sizeof(*pci_dev), 0, socket_id);
 	if (pci_dev == NULL)
@@ -580,6 +565,7 @@ virtual_ethdev_create(const char *name, struct ether_addr *mac_addr,
 		goto err;
 
 	pci_dev->device.numa_node = socket_id;
+	pci_dev->device.name = eth_dev->data->name;
 	pci_drv->driver.name = virtual_ethdev_driver_name;
 	pci_drv->id_table = id_table;
 
