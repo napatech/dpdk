@@ -586,8 +586,10 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		DEBUG("using port %u (%08" PRIx32 ")", port, test);
 
 		ctx = ibv_open_device(ibv_dev);
-		if (ctx == NULL)
+		if (ctx == NULL) {
+			err = ENODEV;
 			goto port_error;
+		}
 
 		/* Check port status. */
 		err = ibv_query_port(ctx, port, &port_attr);
@@ -599,6 +601,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		if (port_attr.link_layer != IBV_LINK_LAYER_ETHERNET) {
 			ERROR("port %d is not configured in Ethernet mode",
 			      port);
+			err = EINVAL;
 			goto port_error;
 		}
 
@@ -647,6 +650,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		mlx5_args_assign(priv, &args);
 		if (ibv_exp_query_device(ctx, &exp_device_attr)) {
 			ERROR("ibv_exp_query_device() failed");
+			err = ENODEV;
 			goto port_error;
 		}
 
@@ -735,6 +739,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		if (priv_get_mac(priv, &mac.addr_bytes)) {
 			ERROR("cannot get MAC address, is mlx5_en loaded?"
 			      " (errno: %s)", strerror(errno));
+			err = ENODEV;
 			goto port_error;
 		}
 		INFO("port %u MAC address is %02x:%02x:%02x:%02x:%02x:%02x",
