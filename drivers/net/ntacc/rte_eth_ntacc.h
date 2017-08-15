@@ -110,10 +110,16 @@ struct pmd_shared_mem_s {
   int keyset[8][12];
 };
 
+struct version_s {
+    int32_t major;
+    int32_t minor;
+    int32_t patch;
+};
+
+
 struct pmd_internals {
   struct ntacc_rx_queue rxq[RTE_ETHDEV_QUEUE_STAT_CNTRS];
   struct ntacc_tx_queue txq[RTE_ETHDEV_QUEUE_STAT_CNTRS];
-  NtInfoStream_t        hInfo;
   uint32_t              nbStreamIDs;
   uint32_t              streamIDOffset;
   uint64_t              rss_hf;
@@ -123,20 +129,17 @@ struct pmd_internals {
   int                   if_index;
   LIST_HEAD(_flows, rte_flow) flows;
   rte_spinlock_t        lock;
-  enum NtFeatureLevel_e featureLevel;
   uint8_t               port;
   uint8_t               local_port;
   uint8_t               adapterNo;
-  uint8_t               nbPorts;
+  uint8_t               nbPortsOnAdapter;
+  uint8_t               nbPortsInSystem;
   uint8_t               symHashMode;
   char                  driverName[128];
   char                  tagName[10];
+  char                  name[PCI_PRI_STR_SIZE];
   union Ntfpgaid_u      fpgaid;
-  struct {
-    int32_t major;
-    int32_t minor;
-    int32_t patch;
-  } version;
+  struct version_s      version;
   char                  *ntpl_file;
   int                   shmid;
   key_t                 key;

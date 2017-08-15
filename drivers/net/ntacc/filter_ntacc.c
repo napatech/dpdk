@@ -36,6 +36,7 @@
 #include <rte_flow_driver.h>
 #include <rte_ethdev.h>
 #include <rte_log.h>
+#include <rte_pci.h>
 #include <nt.h>
 
 #include "rte_eth_ntacc.h"
@@ -358,6 +359,7 @@ int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow
   return 0;
 }
 
+#if 0
 /**
  * Get a keyset value from the keyset pool. 
  * Used by the keymatcher command 
@@ -371,6 +373,7 @@ static int GetKeysetValue(struct pmd_internals *internals)
   }
   pthread_mutex_lock(&internals->shm->mutex);
   for (i = 0; i < 12; i++) {
+    printf(">>>>>>>>>>>>>>>>>> Get key set adapter: %u - Key %u=%u\n", internals->adapterNo, i, internals->shm->keyset[internals->adapterNo][i]);
     if (internals->shm->keyset[internals->adapterNo][i] == 0) {
       internals->shm->keyset[internals->adapterNo][i] = 1;
       pthread_mutex_unlock(&internals->shm->mutex);
@@ -394,6 +397,44 @@ int ReturnKeysetValue(struct pmd_internals *internals, int value)
   pthread_mutex_unlock(&internals->shm->mutex);
   return 0;
 }
+#else
+/**
+ * Get a keyset value from the keyset pool. 
+ * Used by the keymatcher command 
+ */
+static int GetKeysetValue(struct pmd_internals *internals) 
+{
+  int i;
+
+  if (internals->adapterNo >= 8) {
+    return -1;
+  }
+  pthread_mutex_lock(&internals->shm->mutex);
+  for (i = 0; i < 12; i++) {
+    if (internals->shm->keyset[0][i] == 0) {
+      internals->shm->keyset[0][i] = 1;
+      pthread_mutex_unlock(&internals->shm->mutex);
+      return (i + 3);
+    }
+  }
+  pthread_mutex_unlock(&internals->shm->mutex);
+  return -1;
+}
+
+/**
+ * Return a keyset value to the keyset pool.
+ */
+int ReturnKeysetValue(struct pmd_internals *internals, int value) 
+{
+  if (internals->adapterNo >= 8 || value < 3 || value > 15) {
+    return -1;
+  }
+  pthread_mutex_lock(&internals->shm->mutex);
+  internals->shm->keyset[0][value - 3] = 0;
+  pthread_mutex_unlock(&internals->shm->mutex);
+  return 0;
+}
+#endif
 
 /**
  * Create the stream ID part of the NTPL assign command. 

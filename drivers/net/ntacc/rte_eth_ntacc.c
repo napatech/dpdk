@@ -49,25 +49,24 @@
 #include <rte_string_fns.h>
 #include <rte_cycles.h>
 #include <rte_kvargs.h>
-#include <rte_vdev.h>
 #include <rte_flow.h>
 #include <rte_flow_driver.h>
 #include <rte_version.h>
-#include <rte_ethdev_vdev.h>
+#include <rte_pci.h>
 #include <net/if.h>
 #include <nt.h>
 
 #include "rte_eth_ntacc.h"
 #include "filter_ntacc.h"
 
-#define ETH_NTACC_PORT_ARG "port"
+#define ETH_NTACC_MASK_ARG "mask"
 #define ETH_NTACC_NTPL_ARG "ntpl"
 
 #define HW_MAX_PKT_LEN  10000
 #define HW_MTU    (HW_MAX_PKT_LEN - ETHER_HDR_LEN - ETHER_CRC_LEN) /**< MTU */
 
 #define MAX_NTACC_PORTS 32
-#define STREAMIDS_PER_PORT  (256 / internals->nbPorts)
+#define STREAMIDS_PER_PORT  (256 / internals->nbPortsInSystem)
 
 #define MAX_NTPL_NAME 512
 
@@ -76,6 +75,14 @@ static struct {
    int32_t minor;
    int32_t patch;
 } supportedDriver = {3, 7, 0};
+
+#define PCI_VENDOR_ID_NAPATECH 0x18F4
+#define PCI_DEVICE_ID_NT200A01 0x01A5
+#define PCI_DEVICE_ID_NT80E3   0x0165
+#define PCI_DEVICE_ID_NT20E3   0x0175
+#define PCI_DEVICE_ID_NT40E3   0x0145
+#define PCI_DEVICE_ID_NT40A01  0x0185
+#define PCI_DEVICE_ID_NT100E3  0x0155
 
 #define NB_SUPPORTED_FPGAS 7
 struct {
@@ -130,7 +137,7 @@ static int first = 1;
 static volatile uint16_t port_locks[MAX_NTACC_PORTS];
 
 static const char *valid_arguments[] = {
-  ETH_NTACC_PORT_ARG,
+  ETH_NTACC_MASK_ARG,
   ETH_NTACC_NTPL_ARG,
   NULL
 };
@@ -333,7 +340,7 @@ static uint16_t eth_ntacc_rx(void *queue,
 /*
  * Callback to handle sending packets through a real NIC.
  */
-#if 1
+#if 0
 static uint16_t eth_ntacc_tx(void *queue,
                              struct rte_mbuf **bufs,
                              uint16_t nb_pkts)
@@ -382,7 +389,7 @@ static uint16_t eth_ntacc_tx(void *queue,
 #endif
   return i;
 }
-#else
+#elif 0
 static uint16_t eth_ntacc_tx(void *queue,
                              struct rte_mbuf **bufs,
                              uint16_t nb_pkts)
@@ -507,6 +514,48 @@ static uint16_t eth_ntacc_tx(void *queue,
       tx_q->tx_pkts += tx_pkts;
 #endif
   return tx_pkts;
+}
+#else
+static uint16_t eth_ntacc_tx(void *queue,
+                             struct rte_mbuf **bufs,
+                             uint16_t nb_pkts)
+{
+  unsigned i;
+  int ret;
+  struct ntacc_tx_queue *tx_q = queue;
+
+  if (unlikely(tx_q == NULL || tx_q->pNetTx == NULL || nb_pkts == 0)) {
+    return 0;
+  }
+
+  for (i = 0; i < nb_pkts; i++) {
+    struct rte_mbuf *mbuf = bufs[i];
+    struct NtNetTxFragment_s frag[10]; // Need fragments enough for a jumbo packet */
+    uint8_t fragCnt = 0;
+    frag[fragCnt].data = rte_pktmbuf_mtod(mbuf, u_char *);
+    frag[fragCnt++].size = mbuf->data_len;
+    if (unlikely(mbuf->nb_segs > 1)) {
+      while (mbuf->next) {
+        mbuf = mbuf->next;
+        frag[fragCnt].data = rte_pktmbuf_mtod(mbuf, u_char *);
+        frag[fragCnt++].size = mbuf->data_len;
+      }
+    }
+    ret = (*_NT_NetTxAddPacket)(tx_q->pNetTx, tx_q->port, frag, fragCnt, 0);
+    if (unlikely(ret != NT_SUCCESS)) {
+      /* unsent packets is not expected to be freed */
+#ifdef USE_SW_STAT
+      tx_q->err_pkts += (nb_pkts - i);
+#endif
+      break;
+    }
+    rte_pktmbuf_free(bufs[i]);
+  }
+#ifdef USE_SW_STAT
+      tx_q->tx_pkts += i;
+#endif
+
+  return i;
 }
 #endif
 
@@ -692,9 +741,6 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
     }
   }
 
-  if (internals->hInfo) {
-    (void)(*_NT_InfoClose)(internals->hInfo);
-  }
 #ifndef USE_SW_STAT
   if (internals->hStat) {
     (void)(*_NT_StatClose)(internals->hStat);
@@ -730,6 +776,7 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
   dev_info->max_tx_queues = STREAMIDS_PER_PORT > RTE_ETHDEV_QUEUE_STAT_CNTRS ? RTE_ETHDEV_QUEUE_STAT_CNTRS : STREAMIDS_PER_PORT;
   dev_info->min_rx_bufsize = 0;
   dev_info->default_txconf.txq_flags = ETH_TXQ_FLAGS_NOMULTSEGS;
+  dev_info->pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 }
 
 #ifdef USE_SW_STAT
@@ -837,8 +884,24 @@ static void eth_stats_reset(struct rte_eth_dev *dev)
 }
 #endif
 
-static void eth_dev_close(struct rte_eth_dev *dev __rte_unused)
+static void eth_dev_close(struct rte_eth_dev *dev)
 {
+  struct rte_eth_dev *eth_dev = NULL;
+
+  RTE_LOG(DEBUG, PMD, "Closing %s\n", dev->device->name);
+
+  eth_dev = rte_eth_dev_allocated(dev->device->name);
+  if (eth_dev != NULL) {
+    struct pmd_internals *internals = eth_dev->data->dev_private;
+    if (internals->ntpl_file) {
+      rte_free(internals->ntpl_file);
+    }
+    rte_free(eth_dev->data->dev_private);
+    rte_eth_dev_release_port(eth_dev);
+  }
+
+  if (_libnt != NULL)
+    dlclose(_libnt);
 }
 
 static void eth_queue_release(void *q __rte_unused)
@@ -848,19 +911,26 @@ static void eth_queue_release(void *q __rte_unused)
 static int eth_link_update(struct rte_eth_dev *dev,
                            int wait_to_complete  __rte_unused)
 {
+  NtInfoStream_t hInfo;
   NtInfo_t info;
   uint status;
   char errBuf[NT_ERRBUF_SIZE];
   struct pmd_internals *internals = dev->data->dev_private;
 
-  /* Find local port offset */
+  if ((status = (*_NT_InfoOpen)(&hInfo, "DPDK Info stream")) != NT_SUCCESS) {
+    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
+    RTE_LOG(ERR, PMD, "Error: NT_InfoOpen failed. Code 0x%x = %s\n", status, errBuf);
+    return status;
+  }
   info.cmd = NT_INFO_CMD_READ_PORT_V8;
   info.u.port_v8.portNo = (uint8_t)(internals->txq[0].port);
-  if ((status = (*_NT_InfoRead)(internals->hInfo, &info)) != 0) {
+  if ((status = (*_NT_InfoRead)(hInfo, &info)) != 0) {
     (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
     RTE_LOG(ERR, PMD, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
     return status;
   }
+  (void)(*_NT_InfoClose)(hInfo);
+
   dev->data->dev_link.link_status = info.u.port_v8.data.state == NT_LINK_STATE_UP ? 1 : 0;
   switch (info.u.port_v8.data.speed) {
   case NT_LINK_SPEED_UNKNOWN:
@@ -1492,81 +1562,29 @@ static struct eth_dev_ops ops = {
     .fw_version_get = eth_fw_version_get,
 };
 
-static struct eth_dev_ops ops_secondary = {
-    .stats_get = eth_stats_get,
-    .stats_reset = eth_stats_reset,
-    .dev_infos_get = eth_dev_info,
-    .fw_version_get = eth_fw_version_get,
-};
-
-static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
-                                  const uint32_t port,
-                                  const char     *ntpl_file,
-                                  struct rte_eth_dev **eth_dev)
+static int rte_pmd_init_internals(struct rte_pci_device *dev,
+                                  const uint32_t mask,
+                                  const char     *ntpl_file)
 {
   int iRet = 0;
+  NtInfoStream_t hInfo = NULL;
   struct pmd_internals *internals = NULL;
-  struct rte_eth_dev_data *data = NULL;
+  struct rte_eth_dev *eth_dev = NULL;
   uint i, status;
   char errBuf[NT_ERRBUF_SIZE];
   NtInfo_t info;
   struct rte_eth_link pmd_link;
-  const char *name;
-  int numa_node;
-
-  numa_node = rte_socket_id();
-  name = rte_vdev_device_name(vdev);
-
-  assert(port < MAX_NTACC_PORTS);
-
-  /* now do all data allocation - for eth_dev structure, dummy pci driver
-   * and internal (private) data
-   */
-  data = rte_zmalloc_socket(name, sizeof(struct rte_eth_dev_data), 0, numa_node);
-  if (data == NULL) {
-    RTE_LOG(ERR, PMD, "ERROR: Failed to allocate memory\n");
-    iRet = 1;
-    goto error;
-  }
-
-  internals = rte_zmalloc_socket(name, sizeof(struct pmd_internals), 0, numa_node);
-  if (internals == NULL) {
-    RTE_LOG(ERR, PMD, "ERROR: Failed to allocate memory\n");
-    iRet = 1;
-    goto error;
-  }
-
-  if (strlen(ntpl_file) > 0) {
-    internals->ntpl_file  = rte_zmalloc_socket(name, strlen(ntpl_file) + 1, 0, numa_node);
-    if (internals->ntpl_file == NULL) {
-      RTE_LOG(ERR, PMD, "ERROR: Failed to allocate memory\n");
-      iRet = 1;
-      goto error;
-    }
-    strcpy(internals->ntpl_file, ntpl_file);
-  }
-
-  /* reserve an ethdev entry */
-  *eth_dev = rte_eth_vdev_allocate(vdev, 0);
-  if (*eth_dev == NULL) {
-    RTE_LOG(ERR, PMD, "ERROR: Failed to allocate virtual device\n");
-    iRet = 1;
-    goto error;
-  }
-
-  /* now put it all together
-   * - store queue data in internals,
-   * - store numa_node info in pci_driver
-   * - point eth_dev_data to internals and pci_driver
-   * - and point eth_dev structure to new eth_dev_data structure
-   */
-  /* NOTE: we'll replace the data element, of originally allocated eth_dev
-   * so the rings are local per-process
-   */
-  rte_memcpy(data, (*eth_dev)->data, sizeof(*data));
+  char name[PCI_PRI_STR_SIZE];
+  uint8_t nbPortsOnAdapter;
+  uint8_t nbPortsInSystem;
+  uint8_t nbAdapters;
+  uint8_t adapterNo;
+  uint8_t offset;
+  uint8_t localPort;
+  struct version_s version;
 
   /* Open the information stream */
-  if ((status = (*_NT_InfoOpen)(&internals->hInfo, "DPDK Info stream")) != NT_SUCCESS) {
+  if ((status = (*_NT_InfoOpen)(&hInfo, "DPDK Info stream")) != NT_SUCCESS) {
     (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
     RTE_LOG(ERR, PMD, ">>> Error: NT_InfoOpen failed. Code 0x%x = %s\n", status, errBuf);
     iRet = status;
@@ -1575,158 +1593,238 @@ static int rte_pmd_init_internals(struct rte_vdev_device *vdev,
 
   /* Find driver version */
   info.cmd = NT_INFO_CMD_READ_SYSTEM;
-  if ((status = (*_NT_InfoRead)(internals->hInfo, &info)) != 0) {
+  if ((status = (*_NT_InfoRead)(hInfo, &info)) != 0) {
     (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
     RTE_LOG(ERR, PMD, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
     iRet = status;
     goto error;
   }
 
-  internals->version.major = info.u.system.data.version.major;
-  internals->version.minor = info.u.system.data.version.minor;
-  internals->version.patch = info.u.system.data.version.patch;
+  nbAdapters = info.u.system.data.numAdapters;
+  nbPortsInSystem = info.u.system.data.numPorts;
+  version.major = info.u.system.data.version.major;
+  version.minor = info.u.system.data.version.minor;
+  version.patch = info.u.system.data.version.patch;
 
   // Check that the driver is supported
-  if (supportedDriver.major != internals->version.major ||
-      supportedDriver.minor != internals->version.minor) {
+  if (supportedDriver.major != version.major ||
+      supportedDriver.minor != version.minor) {
     RTE_LOG(ERR, PMD, "ERROR: NT Driver version %d.%d.%d is not supported. The version must be %d.%d.%d.\n",
-            internals->version.major, internals->version.minor, internals->version.patch,
+            version.major, version.minor, version.patch,
             supportedDriver.major, supportedDriver.minor, supportedDriver.patch);
     iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
     goto error;
   }
 
-  internals->nbPorts = info.u.system.data.numPorts;
+  for (i = 0; i < nbAdapters; i++) {
+    // Find adapter matching bus ID
+    info.cmd = NT_INFO_CMD_READ_ADAPTER_V6;
+    info.u.adapter_v6.adapterNo = i;
+    if ((status = (*_NT_InfoRead)(hInfo, &info)) != 0) {
+      (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
+      RTE_LOG(ERR, PMD, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
+      iRet = status;
+      goto error;
+    }
 
-  /* Find local port offset */
-  info.cmd = NT_INFO_CMD_READ_PORT_V7;
-  info.u.port_v7.portNo = (uint8_t)(port);
-  if ((status = (*_NT_InfoRead)(internals->hInfo, &info)) != 0) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-    RTE_LOG(ERR, PMD, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
-    iRet = status;
-    goto error;
-  }
-
-  snprintf(internals->tagName, 9, "port%d", port);
-  internals->adapterNo = info.u.port_v7.data.adapterNo;
-  internals->port = port;
-  internals->local_port = port - info.u.port_v7.data.adapterInfo.portOffset;
-  internals->featureLevel = info.u.port_v7.data.adapterInfo.featureLevel;
-  internals->symHashMode = SYM_HASH_ENA_PER_PORT;
-  internals->fpgaid.value = info.u.port_v7.data.adapterInfo.fpgaid.value;
-
-  // Check if FPGA is supported
-  for (i = 0; i < NB_SUPPORTED_FPGAS; i++) {
-    if (supportedAdapters[i].item == internals->fpgaid.s.item &&
-        supportedAdapters[i].product == internals->fpgaid.s.product) {
-      if (supportedAdapters[i].ver != internals->fpgaid.s.ver ||
-          supportedAdapters[i].rev != internals->fpgaid.s.rev) {
-        RTE_LOG(ERR, PMD, "ERROR: NT adapter firmware %03d-%04d-%02d-%02d-%02d is not supported. The firmware must be %03d-%04d-%02d-%02d-%02d.\n",
-            internals->fpgaid.s.item, internals->fpgaid.s.product, internals->fpgaid.s.ver, internals->fpgaid.s.rev, internals->fpgaid.s.build,
-            supportedAdapters[i].item, supportedAdapters[i].product, supportedAdapters[i].ver, supportedAdapters[i].rev, supportedAdapters[i].build);
-        iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
-        goto error;
-      }
+    RTE_LOG(INFO, PMD, "Checking: "PCI_PRI_FMT"\n", dev->addr.domain, dev->addr.bus, dev->addr.devid, dev->addr.function);
+    if (dev->addr.bus == info.u.adapter_v6.data.busid.s.bus &&
+        dev->addr.devid == info.u.adapter_v6.data.busid.s.device &&
+        dev->addr.domain == info.u.adapter_v6.data.busid.s.domain &&
+        dev->addr.function == info.u.adapter_v6.data.busid.s.function) {
+      nbPortsOnAdapter = info.u.adapter_v6.data.numPorts;
+      offset = info.u.adapter_v6.data.portOffset;
+      adapterNo = i;
       break;
     }
   }
 
-  if (i == NB_SUPPORTED_FPGAS) {
-    // No matching adapter is found
-    RTE_LOG(ERR, PMD, "ERROR: No supported NT adapter is found. Following adapters are supported:\n");
-    for (i = 0; i < NB_SUPPORTED_FPGAS; i++) {
-      RTE_LOG(ERR, PMD, "       %03d-%04d-%02d-%02d-%02d\n",
-         supportedAdapters[i].item, supportedAdapters[i].product, supportedAdapters[i].ver, supportedAdapters[i].rev, supportedAdapters[i].build);
+  if (i == nbAdapters) {
+    // No adapters found
+    RTE_LOG(INFO, PMD, "Adapter not found\n");
+    return 1;
+  }
+  RTE_LOG(INFO, PMD, "Found: "PCI_PRI_FMT": Ports %u, Offset %u, Adapter %u\n", dev->addr.domain, dev->addr.bus, dev->addr.devid, dev->addr.function, nbPortsOnAdapter, offset, adapterNo);
+
+  for (localPort = 0; localPort < nbPortsOnAdapter; localPort++) {
+    info.cmd = NT_INFO_CMD_READ_PORT_V7;
+    info.u.port_v7.portNo = (uint8_t)localPort + offset;
+    if ((status = (*_NT_InfoRead)(hInfo, &info)) != 0) {
+      (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
+      RTE_LOG(ERR, PMD, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
+      iRet = status;
+      goto error;
     }
-    iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
-    goto error;
+
+    if (!((1<<localPort)&mask)) {
+      printf("Local Port %u is ignored\n", localPort);
+      continue;
+    }
+    
+    snprintf(name, PCI_PRI_STR_SIZE, PCI_PRI_FMT, dev->addr.domain, dev->addr.bus, dev->addr.devid, localPort);
+    RTE_LOG(INFO, PMD, "Port: %u - %s\n", offset + localPort, name);
+    
+    // Check if FPGA is supported
+    for (i = 0; i < NB_SUPPORTED_FPGAS; i++) {
+      if (supportedAdapters[i].item == info.u.port_v7.data.adapterInfo.fpgaid.s.item &&
+          supportedAdapters[i].product == info.u.port_v7.data.adapterInfo.fpgaid.s.product) {
+        if (supportedAdapters[i].ver != info.u.port_v7.data.adapterInfo.fpgaid.s.ver ||
+            supportedAdapters[i].rev != info.u.port_v7.data.adapterInfo.fpgaid.s.rev) {
+          RTE_LOG(ERR, PMD, "ERROR: NT adapter firmware %03d-%04d-%02d-%02d-%02d is not supported. The firmware must be %03d-%04d-%02d-%02d-%02d.\n",
+                  info.u.port_v7.data.adapterInfo.fpgaid.s.item, 
+                  info.u.port_v7.data.adapterInfo.fpgaid.s.product,
+                  info.u.port_v7.data.adapterInfo.fpgaid.s.ver,
+                  info.u.port_v7.data.adapterInfo.fpgaid.s.rev,
+                  info.u.port_v7.data.adapterInfo.fpgaid.s.build,
+                  supportedAdapters[i].item,
+                  supportedAdapters[i].product,
+                  supportedAdapters[i].ver,
+                  supportedAdapters[i].rev,
+                  supportedAdapters[i].build);
+          iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
+          goto error;
+        }
+        break;
+      }
+    }
+
+    if (i == NB_SUPPORTED_FPGAS) {
+      // No matching adapter is found
+      RTE_LOG(ERR, PMD, ">>> ERROR: No supported NT adapter is found. Following adapters are supported:\n");
+      for (i = 0; i < NB_SUPPORTED_FPGAS; i++) {
+        RTE_LOG(ERR, PMD, "           %03d-%04d-%02d-%02d-%02d\n",
+                supportedAdapters[i].item,
+                supportedAdapters[i].product,
+                supportedAdapters[i].ver,
+                supportedAdapters[i].rev,
+                supportedAdapters[i].build);
+      }
+      iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
+      goto error;
+    }
+    if (RTE_ETHDEV_QUEUE_STAT_CNTRS > (256 / nbPortsInSystem)) {
+      RTE_LOG(ERR, PMD, ">>> Error: This adapter can only support %u queues\n", STREAMIDS_PER_PORT);
+      RTE_LOG(ERR, PMD, "           Set RTE_ETHDEV_QUEUE_STAT_CNTRS to %u or less\n", STREAMIDS_PER_PORT);
+      iRet = NT_ERROR_STREAMID_OUT_OF_RANGE;
+      goto error;
+    }
+
+    /* reserve an ethdev entry */
+    eth_dev = rte_eth_dev_allocate(name);
+    if (eth_dev == NULL) {
+      RTE_LOG(ERR, PMD, "ERROR: Failed to allocate ethernet device\n");
+      iRet = 1;
+      goto error;
+    }
+
+    internals = rte_zmalloc_socket(name, sizeof(struct pmd_internals), 0, dev->numa_node);
+    if (internals == NULL) {
+      RTE_LOG(ERR, PMD, "ERROR: Failed to allocate memory\n");
+      iRet = 1;
+      goto error;
+    }
+
+    if (strlen(ntpl_file) > 0) {
+      internals->ntpl_file  = rte_zmalloc_socket(name, strlen(ntpl_file) + 1, 0, dev->numa_node);
+      if (internals->ntpl_file == NULL) {
+        RTE_LOG(ERR, PMD, "ERROR: Failed to allocate memory\n");
+        iRet = 1;
+        goto error;
+      }
+      strcpy(internals->ntpl_file, ntpl_file);
+    }
+
+    internals->version.major = version.major;
+    internals->version.minor = version.minor;
+    internals->version.patch = version.patch;
+    internals->nbPortsOnAdapter = nbPortsOnAdapter;
+    internals->nbPortsInSystem = nbPortsInSystem;
+    strcpy(internals->name, name);
+    strcpy(internals->driverName, "net_ntacc");
+
+    snprintf(internals->tagName, 9, "port%d", localPort + offset);
+    RTE_LOG(INFO, PMD, "Tagname: %s - %u\n", internals->tagName, localPort + offset);
+
+    internals->adapterNo = info.u.port_v7.data.adapterNo;
+    internals->port = offset + localPort;
+    internals->local_port = localPort;
+    internals->symHashMode = SYM_HASH_ENA_PER_PORT;
+    internals->fpgaid.value = info.u.port_v7.data.adapterInfo.fpgaid.value;
+
+    for (i=0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
+      internals->rxq[i].stream_id = STREAMIDS_PER_PORT * internals->port + i;
+      internals->rxq[i].pSeg = NULL;
+      internals->rxq[i].enabled = 0;
+    }
+
+    for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
+      internals->txq[i].port = internals->port;
+      internals->txq[i].local_port = localPort;
+      internals->txq[i].enabled = 0;
+    }
+
+    switch (info.u.port_v7.data.speed) {
+    case NT_LINK_SPEED_UNKNOWN:
+      pmd_link.link_speed = ETH_SPEED_NUM_1G;
+      break;
+    case NT_LINK_SPEED_10M:
+      pmd_link.link_speed = ETH_SPEED_NUM_10M;
+      break;
+    case NT_LINK_SPEED_100M:
+      pmd_link.link_speed = ETH_SPEED_NUM_100M;
+      break;
+    case NT_LINK_SPEED_1G:
+      pmd_link.link_speed = ETH_SPEED_NUM_1G;
+      break;
+    case NT_LINK_SPEED_10G:
+      pmd_link.link_speed = ETH_SPEED_NUM_10G;
+      break;
+    case NT_LINK_SPEED_40G:
+      pmd_link.link_speed = ETH_SPEED_NUM_40G;
+      break;
+    case NT_LINK_SPEED_50G:
+      pmd_link.link_speed = ETH_SPEED_NUM_50G;
+      break;
+    case NT_LINK_SPEED_100G:
+      pmd_link.link_speed = ETH_SPEED_NUM_100G;
+      break;
+    }
+
+    memcpy(&eth_addr[internals->port].addr_bytes, &info.u.port_v7.data.macAddress, sizeof(eth_addr[internals->port].addr_bytes));
+
+    pmd_link.link_duplex = ETH_LINK_FULL_DUPLEX;
+    pmd_link.link_status = 0;
+
+    internals->if_index = internals->port;
+
+    eth_dev->device = &dev->device;
+    eth_dev->data->dev_private = internals;
+    eth_dev->data->port_id = eth_dev->data->port_id;
+    eth_dev->data->dev_link = pmd_link;
+    eth_dev->data->mac_addrs = &eth_addr[internals->port];
+    eth_dev->data->numa_node = dev->numa_node;
+
+    eth_dev->dev_ops = &ops;
+    eth_dev->rx_pkt_burst = eth_ntacc_rx;
+    eth_dev->tx_pkt_burst = eth_ntacc_tx;
+
+  #ifndef USE_SW_STAT
+    /* Open the stat stream */
+    if ((status = (*_NT_StatOpen)(&internals->hStat, "DPDK Stat stream")) != NT_SUCCESS) {
+      (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
+      RTE_LOG(ERR, PMD, ">>> Error: NT_StatOpen failed. Code 0x%x = %s\n", status, errBuf);
+      iRet = status;
+      goto error;
+    }
+  #endif
   }
+  (void)(*_NT_InfoClose)(hInfo);
 
-  if (RTE_ETHDEV_QUEUE_STAT_CNTRS > STREAMIDS_PER_PORT) {
-    RTE_LOG(ERR, PMD, ">>> Error: This adapter can only support %u queues\n", STREAMIDS_PER_PORT);
-    RTE_LOG(ERR, PMD, "           Set RTE_ETHDEV_QUEUE_STAT_CNTRS to %u or less\n", STREAMIDS_PER_PORT);
-    iRet = NT_ERROR_STREAMID_OUT_OF_RANGE;
-    goto error;
-  }
-
-  for (i=0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
-    internals->rxq[i].stream_id = STREAMIDS_PER_PORT * internals->port + i;
-    internals->rxq[i].pSeg = NULL;
-    internals->rxq[i].enabled = 0;
-  }
-
-  for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
-    internals->txq[i].port = port;
-    internals->txq[i].local_port = port - info.u.port_v7.data.adapterInfo.portOffset;
-    internals->txq[i].enabled = 0;
-  }
-
-  switch (info.u.port_v7.data.speed) {
-  case NT_LINK_SPEED_UNKNOWN:
-    pmd_link.link_speed = ETH_SPEED_NUM_1G;
-    break;
-  case NT_LINK_SPEED_10M:
-    pmd_link.link_speed = ETH_SPEED_NUM_10M;
-    break;
-  case NT_LINK_SPEED_100M:
-    pmd_link.link_speed = ETH_SPEED_NUM_100M;
-    break;
-  case NT_LINK_SPEED_1G:
-    pmd_link.link_speed = ETH_SPEED_NUM_1G;
-    break;
-  case NT_LINK_SPEED_10G:
-    pmd_link.link_speed = ETH_SPEED_NUM_10G;
-    break;
-  case NT_LINK_SPEED_40G:
-    pmd_link.link_speed = ETH_SPEED_NUM_40G;
-    break;
-  case NT_LINK_SPEED_50G:
-    pmd_link.link_speed = ETH_SPEED_NUM_50G;
-    break;
-  case NT_LINK_SPEED_100G:
-    pmd_link.link_speed = ETH_SPEED_NUM_100G;
-    break;
-  }
-
-  memcpy(&eth_addr[port].addr_bytes, &info.u.port_v7.data.macAddress, sizeof(eth_addr[port].addr_bytes));
-
-  pmd_link.link_duplex = ETH_LINK_FULL_DUPLEX;
-  pmd_link.link_status = 0;
-
-  internals->if_index = internals->port;
-
-  (*eth_dev)->device->numa_node = numa_node;
-  data->dev_private = internals;
-  data->port_id = (*eth_dev)->data->port_id;
-  data->dev_link = pmd_link;
-  data->mac_addrs = &eth_addr[port];
-  data->numa_node = numa_node;
-  data->dev_flags = RTE_ETH_DEV_DETACHABLE;
-  strncpy(data->name, name, RTE_ETH_NAME_MAX_LEN);
-
-  (*eth_dev)->data = data;
-  if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-    (*eth_dev)->dev_ops = &ops;
-  }
-  else {
-    (*eth_dev)->dev_ops = &ops_secondary;
-  }
-
-#ifndef USE_SW_STAT
-  /* Open the stat stream */
-  if ((status = (*_NT_StatOpen)(&internals->hStat, "DPDK Stat stream")) != NT_SUCCESS) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-    RTE_LOG(ERR, PMD, ">>> Error: NT_StatOpen failed. Code 0x%x = %s\n", status, errBuf);
-    iRet = status;
-    goto error;
-  }
-#endif
   return iRet;
 
 error:
-  if (data)
-    rte_free(data);
+  if (hInfo) 
+    (void)(*_NT_InfoClose)(hInfo);
   if (internals)
     rte_free(internals);
   return iRet;
@@ -1882,24 +1980,39 @@ static int _nt_lib_open(void)
   return 0;
 }
 
-static int rte_pmd_ntacc_dev_probe(struct rte_vdev_device *vdev)
+static int rte_pmd_ntacc_dev_probe(struct rte_pci_driver *drv __rte_unused, struct rte_pci_device *dev)
 {
   int ret = 0;
-  const char *name;
   struct rte_kvargs *kvlist;
-  struct rte_eth_dev *eth_dev = NULL;
   unsigned int i;
-  uint32_t port=0;
+  uint32_t mask=0xF;
 
   char ntplStr[MAX_NTPL_NAME] = { 0 };
 
-  vdev->device.numa_node = rte_socket_id();
-  name = rte_vdev_device_name(vdev);
+  switch (dev->id.device_id) {
+  case PCI_DEVICE_ID_NT20E3:
+  case PCI_DEVICE_ID_NT40E3:
+  case PCI_DEVICE_ID_NT40A01:
+    break;
+  case PCI_DEVICE_ID_NT200A01:
+  case PCI_DEVICE_ID_NT80E3:
+  case PCI_DEVICE_ID_NT100E3:
+    if (dev->id.subsystem_device_id != 1) {
+      // Subdevice of the adapter. Ignore it
+      return 1;
+    }
+    break;
+  }
 
-  RTE_LOG(DEBUG, PMD, "Initializing pmd_ntacc %s for %s on numa %d (%s)\n", rte_version(),
-                                                                       name,
-                                                                       vdev->device.numa_node,
-                                                                       rte_eal_process_type() == RTE_PROC_PRIMARY?"Primary":"Secondary");
+  RTE_LOG(DEBUG, PMD, "Initializing net_ntacc %s for %s on numa %d\n", rte_version(),
+                                                                       dev->device.name,
+                                                                       dev->device.numa_node);
+
+  RTE_LOG(DEBUG, PMD, "PCI ID :    0x%04X:0x%04X\n", dev->id.vendor_id, dev->id.device_id);
+  RTE_LOG(DEBUG, PMD, "PCI device: "PCI_PRI_FMT"\n", dev->addr.domain, 
+                                                     dev->addr.bus, 
+                                                     dev->addr.devid, 
+                                                     dev->addr.function);
 
 #ifdef USE_SW_STAT
   if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
@@ -1908,24 +2021,26 @@ static int rte_pmd_ntacc_dev_probe(struct rte_vdev_device *vdev)
   }
 #endif
 
-  kvlist = rte_kvargs_parse(rte_vdev_device_args(vdev), valid_arguments);
-  if (kvlist == NULL) {
-    return -1;
-  }
+  if (dev->device.devargs && dev->device.devargs->args) {
+    kvlist = rte_kvargs_parse(dev->device.devargs->args, valid_arguments);
+    if (kvlist == NULL) {
+      return -1;
+    }
 
-  // Get port to use for Rx/Tx
-  if ((i = rte_kvargs_count(kvlist, ETH_NTACC_PORT_ARG))) {
-    assert (i == 1);
-    ret = rte_kvargs_process(kvlist, ETH_NTACC_PORT_ARG, &ascii_to_u32, &port);
-  }
+    // Get port to use for Rx/Tx
+    if ((i = rte_kvargs_count(kvlist, ETH_NTACC_MASK_ARG))) {
+      assert (i == 1);
+      ret = rte_kvargs_process(kvlist, ETH_NTACC_MASK_ARG, &ascii_to_u32, &mask);
+    }
 
-  // Get filename to store ntpl
-  if ((i = rte_kvargs_count(kvlist, ETH_NTACC_NTPL_ARG))) {
-    assert (i == 1);
-    ret = rte_kvargs_process(kvlist, ETH_NTACC_NTPL_ARG, &ascii_to_ascii, ntplStr);
-  }
+    // Get filename to store ntpl
+    if ((i = rte_kvargs_count(kvlist, ETH_NTACC_NTPL_ARG))) {
+      assert (i == 1);
+      ret = rte_kvargs_process(kvlist, ETH_NTACC_NTPL_ARG, &ascii_to_ascii, ntplStr);
+    }
 
-  rte_kvargs_free(kvlist);
+    rte_kvargs_free(kvlist);
+  }
 
   if (ret < 0)
     return -1;
@@ -1939,49 +2054,56 @@ static int rte_pmd_ntacc_dev_probe(struct rte_vdev_device *vdev)
   if (first)
     (*_NT_Init)(NTAPI_VERSION);
 
-  if (rte_pmd_init_internals(vdev, port, ntplStr, &eth_dev) < 0)
+  printf(">>>>>>>>>>>> Mask=%X\n",mask);
+  if (rte_pmd_init_internals(dev, mask, ntplStr) < 0)
     return -1;
-
-  eth_dev->rx_pkt_burst = eth_ntacc_rx;
-  eth_dev->tx_pkt_burst = eth_ntacc_tx;
 
   first = 0;
   return 0;
 }
 
-static int rte_pmd_ntacc_dev_remove(struct rte_vdev_device *dev)
-{
-  struct rte_eth_dev *eth_dev = NULL;
-
-  RTE_LOG(DEBUG, PMD, "Closing %s on numa socket %u\n", rte_vdev_device_name(dev), dev->device.numa_node);
-
-  /* reserve an ethdev entry */
-  eth_dev = rte_eth_dev_allocated(rte_vdev_device_name(dev));
-  if (eth_dev != NULL) {
-    struct pmd_internals *internals = eth_dev->data->dev_private;
-    if (internals->ntpl_file) {
-      rte_free(internals->ntpl_file);
-    }
-    rte_free(eth_dev->data->dev_private);
-    rte_free(eth_dev->data);
-    rte_eth_dev_release_port(eth_dev);
-  }
-
-  if (_libnt != NULL)
-    dlclose(_libnt);
-
-  return 0;
-}
-
-static struct rte_vdev_driver pmd_ntacc_drv = {
-  .probe = rte_pmd_ntacc_dev_probe,
-  .remove = rte_pmd_ntacc_dev_remove,
+static const struct rte_pci_id ntacc_pci_id_map[] = {
+	{
+		RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT200A01)
+	},
+  {
+    RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT80E3)
+  },
+  {
+    RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT20E3)
+  },
+  {
+    RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT40E3)
+  },
+  {
+    RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT40A01)
+  },
+  {
+    RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT100E3)
+  },
+	{
+		.vendor_id = 0
+	}
 };
 
-RTE_PMD_REGISTER_VDEV(net_ntacc, pmd_ntacc_drv);
-RTE_PMD_REGISTER_ALIAS(net_ntacc, eth_ntacc);
-RTE_PMD_REGISTER_PARAM_STRING(net_ntacc,
-  ETH_NTACC_NTPL_ARG     "=<string> "
-  ETH_NTACC_PORT_ARG     "=<int> ");
+static struct rte_pci_driver ntacc_driver = {
+	.driver = {
+		.name = "net_ntacc",
+	},
+	.id_table = ntacc_pci_id_map,
+  .probe = rte_pmd_ntacc_dev_probe,
+};
 
+/**
+ * Driver initialization routine.
+ */
+RTE_INIT(rte_ntacc_pmd_init);
+static void rte_ntacc_pmd_init(void)
+{
+	rte_pci_register(&ntacc_driver);
+}
+
+RTE_PMD_EXPORT_NAME(net_ntacc, __COUNTER__);
+RTE_PMD_REGISTER_PCI_TABLE(net_ntacc, ntacc_pci_id_map);
+RTE_PMD_REGISTER_KMOD_DEP(net_ntacc, "* nt3gd");
 

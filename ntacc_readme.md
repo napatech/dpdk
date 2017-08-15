@@ -1,33 +1,33 @@
-# Napatech Virtual Poll Mode driver – NTACC PMD.
+# Napatech PCI Poll Mode driver – NTACC PMD.
 ----------
-The Napatech NTACC PMD enables users to run DPDK on top of the Napatech accelerators and driver. The NTACC PMD is a virtual driver and must be configured and started using the "--vdev" configuration parameter applied to DPDK when starting applications using DPDK.
+The Napatech NTACC PMD enables users to run DPDK on top of the Napatech accelerators and driver. The NTACC PMD is a PCI driver.
 
+The NTACC PMD driver does not need to be binded, this means that the dpdk-devbind-py script cannot be used to bind the interface. 
 
-
-> Note: As the NTACC PMD driver is virtual, the dpdk-devbind-py script cannot be used to bind the interface.
+When starting the DPDK app, it will automatically find and use the NTACC PMD driver provided that the Napatech driver is started and the Napatech accelerator is not blacklisted.
 
 
 ## Napatech Driver ##
 
-The Napatech driver and adapter must be installed and started before the NTACC PMD can be used. See the installation guide in the Napatech driver package for how to install and start the driver.
+The Napatech driver and accelerator must be installed and started before the NTACC PMD can be used. See the installation guide in the Napatech driver package for how to install and start the driver.
 
-See below for supported drivers and adapters:
+See below for supported drivers and accelerators:
 
 |  Supported drivers |
 |-------------------------|
-| 3.6.2                      |
+| 3.7.X                      |
 
 <br>
 
-|  Supported Adapters                              | FPGA                        |
+|  Supported accelerators                        | FPGA                        |
 |---------------------------------------------------|---------------------------|
-|  NT40A01-01-SCC-4×1-E3-FF-ANL        |  200-9500-06-07-00 |
-|  NT20E3-2-PTP-ANL                               |  200-9501-06-06-00 |
-|  NT40E3-4-PTP-ANL                               |  200-9502-06-07-00 |
-|  NT80E3-2-PTP-ANL                               |  200-9503-06-05-00 |
-|  NT100E3‐1‐PTP‐ANL                             |  200-9505-06-05-00 |
-|  NT200A01-02-SCC-2×100-E3-FF-ANL  |  200-9508-06-06-00 |
-|  NT200A01-02-SCC-2×40-E3-FF-ANL    |  200-9512-07-02-00 |
+|  NT40A01-01-SCC-4×1-E3-FF-ANL        |  200-9500-08-06-00 |
+|  NT20E3-2-PTP-ANL                               |  200-9501-08-06-00 |
+|  NT40E3-4-PTP-ANL                               |  200-9502-08-06-00 |
+|  NT80E3-2-PTP-ANL                               |  200-9503-08-06-00 |
+|  NT100E3‐1‐PTP‐ANL                             |  200-9505-08-06-00 |
+|  NT200A01-02-SCC-2×100-E3-FF-ANL  |  200-9508-07-06-00 |
+|  NT200A01-02-SCC-2×40-E3-FF-ANL    |  200-9512-08-08-00 |
 
 
 
@@ -99,27 +99,35 @@ The maximum number of RX queues per port are the smallest number of either:
 
 ## Starting NTACC PMD
 
-The NTACC PMD is a virtual driver. To start the driver, the DPDK `--vdev` option must be used.
+The NTACC PMD is automatically found and used by the DPDK, when starting a DPDK app. All Napatech accelerators installed and activated will appear in the DPDK app. To use only some of the installed Napatech accelerators, the whitelist command must be used. The whitelist command is also used to select specific ports on an accelerator.
 
-The `--vdev` option is also used to select the port on the Napatech accelerator to be used.
+| whitelist command format |  Description |
+|-----------------------------------|---|
+| `-w <[domain:]bus:devid.func>` | Select a specific PCI accelerator |
+| `-w <[domain:]bus:devid.func>,mask=X` | Select a specific PCI accelerator, <br>but use only the ports defined by mask<br>The mask command is specific for Napatech accelerators |
 
-| --vdev parameter    | Description                                   |
-|---------------------|-----------------------------------------------|
-| `<driver><id>`	  |Name of the driver followed by an ID.          |
-|`port=<port number>` |Port number of the Napatech accelerator to use.|
 
-Examples:
-- `--vdev eth_ntacc0, port=3` 
-DPDK port 0 mapped to accelerator port 3
 
-- `--vdev eth_ntacc0,port=0 --vdev eth_ntacc1,port=1 --vdev eth_ntacc2,port=2 --vdev eth_ntacc3,port=3`
-DPDK port 0, 1, 2, 3 mapped to accelerator port 0, 1, 2, 3
+Example 1:
+A NT40E3-4-PTP-ANL Napatech accelerator is installed. We want to use only port 0 and 1.
 
-- `--vdev eth_ntacc2,port=2 --vdev eth_ntacc1,port=1`
-DPDK port 0, 1 mapped to accelerator port 2, 1
+- `DPDKApp  -w 0000:82:00.0,mask=3`
 
-The DPDK ports are numbered in the order they are listed, so the first `--vdev` will be port number 0 and so on.
-This makes it possible to map the DPDK port to a arbitrary port on the Napatech accelerator.
+Example 2:
+Two NT40E3-4-PTP-ANL Napatech accelerators are installed. We want to use only port 0 and 1 on accelerator 1 and only port 2 and 3 on accelerator 2..
+
+- `DPDKApp  -w 0000:82:00.0,mask=3 -w 0000:84:00.0,mask=0xC`
+
+Example 3:
+A NT40E3-4-PTP-ANL Napatech accelerator is installed. We want app1 to use only port 0 and 1 and app2 to use only port 2 and 3. In order to start two DPDK applications we must share the memory between the two applications using --file-prefix and --socket-mem. Note that both applications will get DPDK port number 0 and 1 eventhough app2 will use port number 2 and 3 on the accelerator.
+
+- `DPDKApp1  -w 0000:82:00.0,mask=3 --file-prefix fc0 --socket-mem 1024,1024`
+- `DPDKApp2  -w 0000:82:00.0,mask=12 --file-prefix fc1 --socket-mem 1024,1024`
+
+<br>
+> Note: When using the whitelist command all accelerators that have to be used must be included.
+
+The Napatech accelerators can also be disabled by using the blacklist command.
  
 ## Generic rte_flow filter items
 
