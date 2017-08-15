@@ -847,6 +847,7 @@ int bnxt_hwrm_vnic_alloc(struct bnxt *bp, struct bnxt_vnic_info *vnic)
 	HWRM_CHECK_RESULT;
 
 	vnic->fw_vnic_id = rte_le_to_cpu_16(resp->vnic_id);
+	RTE_LOG(DEBUG, PMD, "VNIC ID %x\n", vnic->fw_vnic_id);
 	return rc;
 }
 
@@ -855,6 +856,11 @@ int bnxt_hwrm_vnic_cfg(struct bnxt *bp, struct bnxt_vnic_info *vnic)
 	int rc = 0;
 	struct hwrm_vnic_cfg_input req = {.req_type = 0 };
 	struct hwrm_vnic_cfg_output *resp = bp->hwrm_cmd_resp_addr;
+
+	if (vnic->fw_vnic_id == INVALID_HW_RING_ID) {
+		RTE_LOG(DEBUG, PMD, "VNIC ID %x\n", vnic->fw_vnic_id);
+		return rc;
+	}
 
 	HWRM_PREP(req, VNIC_CFG, -1, resp);
 
@@ -898,6 +904,7 @@ int bnxt_hwrm_vnic_ctx_alloc(struct bnxt *bp, struct bnxt_vnic_info *vnic)
 	HWRM_CHECK_RESULT;
 
 	vnic->fw_rss_cos_lb_ctx = rte_le_to_cpu_16(resp->rss_cos_lb_ctx_id);
+	RTE_LOG(DEBUG, PMD, "VNIC RSS Rule %x\n", vnic->fw_rss_cos_lb_ctx);
 
 	return rc;
 }
@@ -908,6 +915,12 @@ int bnxt_hwrm_vnic_ctx_free(struct bnxt *bp, struct bnxt_vnic_info *vnic)
 	struct hwrm_vnic_rss_cos_lb_ctx_free_input req = {.req_type = 0 };
 	struct hwrm_vnic_rss_cos_lb_ctx_free_output *resp =
 						bp->hwrm_cmd_resp_addr;
+
+	if (vnic->fw_rss_cos_lb_ctx == 0xffff) {
+		RTE_LOG(DEBUG, PMD,
+			"VNIC RSS Rule %x\n", vnic->fw_rss_cos_lb_ctx);
+		return rc;
+	}
 
 	HWRM_PREP(req, VNIC_RSS_COS_LB_CTX_FREE, -1, resp);
 
@@ -928,8 +941,10 @@ int bnxt_hwrm_vnic_free(struct bnxt *bp, struct bnxt_vnic_info *vnic)
 	struct hwrm_vnic_free_input req = {.req_type = 0 };
 	struct hwrm_vnic_free_output *resp = bp->hwrm_cmd_resp_addr;
 
-	if (vnic->fw_vnic_id == INVALID_HW_RING_ID)
+	if (vnic->fw_vnic_id == INVALID_HW_RING_ID) {
+		RTE_LOG(DEBUG, PMD, "VNIC FREE ID %x\n", vnic->fw_vnic_id);
 		return rc;
+	}
 
 	HWRM_PREP(req, VNIC_FREE, -1, resp);
 
