@@ -132,7 +132,8 @@ static int _dev_flow_flush(struct rte_eth_dev *dev, struct rte_flow_error *error
 
 static char errorBuffer[1024];
 
-static int first = 1;
+static int first = 0;
+static int deviceCount = 0;
 
 static volatile uint16_t port_locks[MAX_NTACC_PORTS];
 
@@ -590,9 +591,19 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     internals->shm = (struct pmd_shared_mem_s *)shm;
   }
   else {
+    bool clearMem = false;
+    struct shmid_ds shmid_ds;
+    if(shmctl(internals->shmid, IPC_STAT, &shmid_ds) != -1) {
+      if(shmid_ds.shm_nattch == 0) {
+        clearMem = true;      
+      }
+    }
     if ((shm = shmat(internals->shmid, NULL, 0)) == (char *) -1) {
       RTE_LOG(ERR, PMD, "Unable to attach to shared mem in eth_dev_start. Error = %d\n", errno);
       goto StartError;
+    }
+    if (clearMem) {
+      memset(shm, 0, sizeof(struct pmd_shared_mem_s));
     }
     internals->shm = (struct pmd_shared_mem_s *)shm;
   }
@@ -720,8 +731,8 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
   struct rte_flow_error error;
   uint queue;
 
+  RTE_LOG(DEBUG, PMD, "Stopping port %u (%u) on adapter %u\n", internals->port, deviceCount, internals->adapterNo);
   _dev_flow_flush(dev, &error);
-
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
     if (rx_q[queue].enabled) {
       if (rx_q[queue].pSeg) {
@@ -886,22 +897,20 @@ static void eth_stats_reset(struct rte_eth_dev *dev)
 
 static void eth_dev_close(struct rte_eth_dev *dev)
 {
-  struct rte_eth_dev *eth_dev = NULL;
+  struct pmd_internals *internals = dev->data->dev_private;
+  RTE_LOG(DEBUG, PMD, "Closing port %u (%u) on adapter %u\n", internals->port, deviceCount, internals->adapterNo);
 
-  RTE_LOG(DEBUG, PMD, "Closing %s\n", dev->device->name);
-
-  eth_dev = rte_eth_dev_allocated(dev->device->name);
-  if (eth_dev != NULL) {
-    struct pmd_internals *internals = eth_dev->data->dev_private;
-    if (internals->ntpl_file) {
-      rte_free(internals->ntpl_file);
-    }
-    rte_free(eth_dev->data->dev_private);
-    rte_eth_dev_release_port(eth_dev);
+  if (internals->ntpl_file) {
+    rte_free(internals->ntpl_file);
   }
+  rte_free(dev->data->dev_private);
+  rte_eth_dev_release_port(dev);
 
-  if (_libnt != NULL)
+  deviceCount--;
+  if (deviceCount == 0 && _libnt != NULL) {
+    RTE_LOG(DEBUG, PMD, "Closing dyn lib\n");
     dlclose(_libnt);
+  }
 }
 
 static void eth_queue_release(void *q __rte_unused)
@@ -1733,6 +1742,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
       }
       strcpy(internals->ntpl_file, ntpl_file);
     }
+    deviceCount++;
 
     internals->version.major = version.major;
     internals->version.minor = version.minor;
@@ -2045,20 +2055,19 @@ static int rte_pmd_ntacc_dev_probe(struct rte_pci_driver *drv __rte_unused, stru
   if (ret < 0)
     return -1;
 
-  if (first) {
+  if (first == 0) {
     ret = _nt_lib_open();
     if (ret < 0)
       return -1;
+
+    (*_NT_Init)(NTAPI_VERSION);
+    first++;
   }
 
-  if (first)
-    (*_NT_Init)(NTAPI_VERSION);
 
-  printf(">>>>>>>>>>>> Mask=%X\n",mask);
   if (rte_pmd_init_internals(dev, mask, ntplStr) < 0)
     return -1;
 
-  first = 0;
   return 0;
 }
 
