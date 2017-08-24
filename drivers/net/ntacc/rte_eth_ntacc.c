@@ -129,6 +129,8 @@ int (*_NT_StatOpen)(NtStatStream_t *, const char *);
 int (*_NT_StatRead)(NtStatStream_t, NtStatistics_t *);
 
 static int _dev_flow_flush(struct rte_eth_dev *dev, struct rte_flow_error *error __rte_unused);
+static int eth_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id);
+static int eth_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id);
 
 static char errorBuffer[1024];
 
@@ -689,6 +691,7 @@ static int eth_dev_start(struct rte_eth_dev *dev)
         RTE_LOG(ERR, PMD, "NT_NetRxOpen() failed: %s\n", errorBuffer);
         goto StartError;
       }
+      eth_rx_queue_start(dev, queue);
     }
   }
 
@@ -742,6 +745,7 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
       if (rx_q[queue].pNetRx) {
           (void)(*_NT_NetRxClose)(rx_q[queue].pNetRx);
       }
+      eth_rx_queue_stop(dev, queue);
     }
   }
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
@@ -989,6 +993,30 @@ static int eth_rx_queue_setup(struct rte_eth_dev *dev,
   rx_q->buf_size = (uint16_t) (mbp_priv->mbuf_data_room_size - RTE_PKTMBUF_HEADROOM);
   rx_q->enabled = 1;
   return 0;
+}
+
+static int eth_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
+{
+  struct pmd_internals *internals = dev->data->dev_private;
+  NtNtplInfo_t ntplInfo;
+  char ntpl_buf[50];
+  snprintf(ntpl_buf, sizeof(ntpl_buf),
+    "Setup[State=Active] = StreamId == %d",
+    internals->rxq[rx_queue_id].stream_id);
+  DoNtpl(ntpl_buf, &ntplInfo, internals);
+  dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
+}
+
+static int eth_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
+{
+  struct pmd_internals *internals = dev->data->dev_private;
+  NtNtplInfo_t ntplInfo;
+  char ntpl_buf[50];
+  snprintf(ntpl_buf, sizeof(ntpl_buf),
+    "Setup[State=InActive] = StreamId == %d",
+    internals->rxq[rx_queue_id].stream_id);
+  DoNtpl(ntpl_buf, &ntplInfo, internals);
+  dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
 }
 
 static int eth_tx_queue_setup(struct rte_eth_dev *dev,
@@ -1562,6 +1590,8 @@ static struct eth_dev_ops ops = {
     .tx_queue_setup = eth_tx_queue_setup,
     .rx_queue_release = eth_queue_release,
     .tx_queue_release = eth_queue_release,
+    .rx_queue_start = eth_rx_queue_start,
+    .rx_queue_stop = eth_rx_queue_stop,
     .link_update = eth_link_update,
     .stats_get = eth_stats_get,
     .stats_reset = eth_stats_reset,
