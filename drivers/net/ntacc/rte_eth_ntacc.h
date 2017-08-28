@@ -123,6 +123,7 @@ struct pmd_internals {
   uint32_t              nbStreamIDs;
   uint32_t              streamIDOffset;
   uint64_t              rss_hf;
+  struct rte_flow       *defaultFlow;
 #ifndef USE_SW_STAT
   NtStatStream_t        hStat;
 #endif

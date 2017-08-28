@@ -131,6 +131,7 @@ int (*_NT_StatRead)(NtStatStream_t, NtStatistics_t *);
 static int _dev_flow_flush(struct rte_eth_dev *dev, struct rte_flow_error *error __rte_unused);
 static int eth_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id);
 static int eth_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id);
+static int _dev_flow_isolate(struct rte_eth_dev *dev, int set, struct rte_flow_error *error);
 
 static char errorBuffer[1024];
 
@@ -565,18 +566,15 @@ static uint16_t eth_ntacc_tx(void *queue,
 static int eth_dev_start(struct rte_eth_dev *dev)
 {
   struct pmd_internals *internals = dev->data->dev_private;
+  struct rte_flow_error error;
   struct ntacc_rx_queue *rx_q = internals->rxq;
   struct ntacc_tx_queue *tx_q = internals->txq;
   uint queue;
   int status;
   char *shm;
-
-#ifndef DO_NOT_CREATE_DEFAULT_FILTER
   uint8_t nb_queues = 0;
   NtNtplInfo_t ntplInfo;
   char *ntpl_buf = NULL;
-  uint8_t list_queues[256];
-#endif
 
   // Open or create shared memory
   internals->key = 135546;
@@ -627,20 +625,6 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     goto StartError;
   }
   
-#ifndef DO_NOT_CREATE_DEFAULT_FILTER
-  // Build default flow
-  for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
-    if (rx_q[queue].enabled) {
-      list_queues[nb_queues++] = queue;
-    }
-  }
-
-  ntpl_buf = malloc(NTPL_BSIZE + 1);
-  if (!ntpl_buf) {
-    RTE_LOG(ERR, PMD, "Out of memory in eth_dev_start\n");
-    goto StartError;
-  }
-
   if (nb_queues > 0) {
     /* Delete all NTPL */
     snprintf(ntpl_buf, NTPL_BSIZE, "Delete=tag==%s", internals->tagName);
@@ -650,38 +634,9 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     }
   }
 
-  if (nb_queues > 0 && rx_q[0].enabled) {
-
-    // Set the priority
-    snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;");
-    if (internals->rss_hf != 0) {
-      // Set the stream IDs
-      CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
-      // If RSS is used, then set the Hash mode
-      if (CreateHash(internals->rss_hf, internals, NULL, 62) != 0) {
-        RTE_LOG(ERR, PMD, "Failed to create hash function eth_dev_start\n");
-        goto StartError;
-      }
-    }
-    else {
-      // Set the stream IDs
-      CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, 1, list_queues);
-    }
-
-    // Set the port number
-    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, 
-             ";tag=%s]=port==%u", internals->tagName, internals->port);
-
-    if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
-      RTE_LOG(ERR, PMD, "Failed to create default filter in eth_dev_start\n");
-      goto StartError;
-    }
-  }
-
-  if (ntpl_buf) {
-    free(ntpl_buf);
-    ntpl_buf = NULL;
-  }
+#ifndef DO_NOT_CREATE_DEFAULT_FILTER
+  internals->rss_hf = ETH_RSS_IPV4;
+  _dev_flow_isolate(dev, 0, &error);
 #endif
 
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
@@ -735,6 +690,7 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
   uint queue;
 
   RTE_LOG(DEBUG, PMD, "Stopping port %u (%u) on adapter %u\n", internals->port, deviceCount, internals->adapterNo);
+  _dev_flow_isolate(dev, 1, &error);
   _dev_flow_flush(dev, &error);
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
     if (rx_q[queue].enabled) {
@@ -1005,6 +961,7 @@ static int eth_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
     internals->rxq[rx_queue_id].stream_id);
   DoNtpl(ntpl_buf, &ntplInfo, internals);
   dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
+  return 0;
 }
 
 static int eth_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
@@ -1017,6 +974,7 @@ static int eth_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
     internals->rxq[rx_queue_id].stream_id);
   DoNtpl(ntpl_buf, &ntplInfo, internals);
   dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
+  return 0;
 }
 
 static int eth_tx_queue_setup(struct rte_eth_dev *dev,
@@ -1517,6 +1475,99 @@ static int _hash_filter_ctrl(struct rte_eth_dev *dev,
   return ret;
 }
 
+static int _dev_flow_isolate(struct rte_eth_dev *dev, 
+                             int set, 
+                             struct rte_flow_error *error __rte_unused)
+{
+  char ntpl_buf[21];
+  NtNtplInfo_t ntplInfo;
+  struct pmd_internals *internals = dev->data->dev_private;
+
+  if (set == 1 && internals->defaultFlow) {
+    priv_lock(internals);
+    while (!LIST_EMPTY(&internals->defaultFlow->ntpl_id)) {
+      struct filter_flow *id;
+      id = LIST_FIRST(&internals->defaultFlow->ntpl_id);
+      snprintf(ntpl_buf, 20, "delete=%d", id->ntpl_id);
+      DoNtpl(ntpl_buf, &ntplInfo, internals);
+      RTE_LOG(DEBUG, PMD, "Deleting Item filter: %s\n", ntpl_buf);
+      LIST_REMOVE(id, next);
+      free(id);
+    }
+    _cleanUpHash(internals->defaultFlow, internals);
+    free(internals->defaultFlow);
+    internals->defaultFlow = NULL;
+    priv_unlock(internals);
+  }
+  else if (set == 0 && !internals->defaultFlow) {
+    struct ntacc_rx_queue *rx_q = internals->rxq;
+    uint queue;
+    uint8_t nb_queues = 0;
+    NtNtplInfo_t ntplInfo;
+    char *ntpl_buf = NULL;
+    uint8_t list_queues[256];
+
+    priv_lock(internals);
+    // Build default flow
+    for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
+      if (rx_q[queue].enabled) {
+        list_queues[nb_queues++] = queue;
+      }
+    }
+
+    ntpl_buf = malloc(NTPL_BSIZE + 1);
+    if (!ntpl_buf) {
+      RTE_LOG(ERR, PMD, "Out of memory in flow_isolate\n");
+      goto IsolateError;
+    }
+
+    if (nb_queues > 0 && rx_q[0].enabled) {
+      struct rte_flow *defFlow = malloc(sizeof(struct rte_flow));
+      if (!defFlow) {
+        RTE_LOG(ERR, PMD, "Out of memory in flow_isolate\n");
+        goto IsolateError;
+      }
+      memset(defFlow, 0, sizeof(struct rte_flow));
+
+      // Set the priority
+      snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;");
+      if (internals->rss_hf != 0) {
+        // Set the stream IDs
+        CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
+        // If RSS is used, then set the Hash mode
+        if (CreateHash(internals->rss_hf, internals, defFlow, 62) != 0) {
+          RTE_LOG(ERR, PMD, "Failed to create hash function eth_dev_start\n");
+          goto IsolateError;
+        }
+      }
+      else {
+        // Set the stream IDs
+        CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, 1, list_queues);
+      }
+
+      // Set the port number
+      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, 
+               ";tag=%s]=port==%u", internals->tagName, internals->port);
+
+      if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
+        RTE_LOG(ERR, PMD, "Failed to create default filter in flow_isolate\n");
+        goto IsolateError;
+      }
+      defFlow->priority = 62;
+      pushNtplID(defFlow, ntplInfo.ntplId);
+      internals->defaultFlow = defFlow;
+    }
+
+    IsolateError:
+    priv_unlock(internals);
+
+    if (ntpl_buf) {
+      free(ntpl_buf);
+      ntpl_buf = NULL;
+    }
+  }
+  return 0;
+}
 
 static const struct rte_flow_ops _dev_flow_ops = {
   .validate = NULL,
@@ -1524,6 +1575,7 @@ static const struct rte_flow_ops _dev_flow_ops = {
   .destroy = _dev_flow_destroy,
   .flush = _dev_flow_flush,
   .query = NULL,
+  .isolate = _dev_flow_isolate,
 };
 
 static int _dev_filter_ctrl(struct rte_eth_dev *dev __rte_unused,
