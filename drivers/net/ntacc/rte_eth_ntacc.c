@@ -635,7 +635,6 @@ static int eth_dev_start(struct rte_eth_dev *dev)
   }
 
 #ifndef DO_NOT_CREATE_DEFAULT_FILTER
-  internals->rss_hf = ETH_RSS_IPV4;
   _dev_flow_isolate(dev, 0, &error);
 #endif
 
