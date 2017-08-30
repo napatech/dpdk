@@ -829,3 +829,87 @@ Fixes in 16.11 LTS Release
 * vhost: fix max queues
 * vhost: fix multiple queue not enabled for old kernels
 * vhost: fix use after free
+
+16.11.3
+~~~~~~~
+
+* contigmem: do not zero pages during each mmap
+* contigmem: free allocated memory on error
+* crypto/aesni_mb: fix HMAC supported key sizes
+* cryptodev: fix device stop function
+* crypto/openssl: fix HMAC supported key sizes
+* crypto/qat: fix HMAC supported key sizes
+* crypto/qat: fix NULL authentication hang
+* crypto/qat: fix SHA384-HMAC block size
+* doc: remove incorrect limitation on AESNI-MB PMD
+* doc: remove incorrect limitation on QAT PMD
+* eal: fix config file path when checking process
+* examples/l2fwd-crypto: fix application help
+* examples/l2fwd-crypto: fix option parsing
+* examples/l2fwd-crypto: fix padding
+* examples/l3fwd: fix IPv6 packet type parse
+* examples/qos_sched: fix build for less lcores
+* ip_frag: free mbufs on reassembly table destroy
+* kni: fix build with gcc 7.1
+* lpm: fix index of tbl8
+* mbuf: fix debug checks for headroom and tailroom
+* mbuf: fix doxygen comment of bulk alloc
+* mbuf: fix VXLAN port in comment
+* mem: fix malloc element resize with padding
+* net/bnxt: check invalid L2 filter id
+* net/bnxt: enable default VNIC allocation
+* net/bnxt: fix autoneg on 10GBase-T links
+* net/bnxt: fix get link config
+* net/bnxt: fix reporting of link status
+* net/bnxt: fix set link config
+* net/bnxt: fix set link config
+* net/bnxt: fix vnic cleanup
+* net/bnxt: free filter before reusing it
+* net/bonding: change link status check to no-wait
+* net/bonding: fix number of bonding Tx/Rx queues
+* net/bonding: fix when NTT flag updated
+* net/cxgbe: fix port statistics
+* net/e1000: fix LSC interrupt
+* net/ena: fix cleanup of the Tx bufs
+* net/enic: fix build with gcc 7.1
+* net/enic: fix crash when freeing 0 packet to mempool
+* net/fm10k: initialize link status in device start
+* net/i40e: add return value checks
+* net/i40e/base: fix Tx error stats on VF
+* net/i40e: exclude internal packet's byte count
+* net/i40e: fix division by 0
+* net/i40e: fix ethertype filter for new FW
+* net/i40e: fix link down and negotiation
+* net/i40e: fix Rx data segment buffer length
+* net/i40e: fix VF statistics
+* net/igb: fix add/delete of flex filters
+* net/igb: fix checksum valid flags
+* net/igb: fix flex filter length
+* net/ixgbe: fix mirror rule index overflow
+* net/ixgbe: fix Rx/Tx queue interrupt for x550 devices
+* net/mlx4: fix mbuf poisoning in debug code
+* net/mlx4: fix probe failure report
+* net/mlx5: fix build with gcc 7.1
+* net/mlx5: fix completion buffer size
+* net/mlx5: fix exception handling
+* net/mlx5: fix inconsistent link status query
+* net/mlx5: fix redundant free of Tx buffer
+* net/qede: fix chip details print
+* net/virtio: do not claim to support LRO
+* net/virtio: do not falsely claim to do IP checksum
+* net/virtio-user: fix crash when detaching device
+* net/virtio: zero the whole memory zone
+* net/vmxnet3: fix filtering on promiscuous disabling
+* net/vmxnet3: fix receive queue memory leak
+* Revert "ip_frag: free mbufs on reassembly table destroy"
+* test/bonding: fix memory corruptions
+* test/bonding: fix mode 4 names
+* test/bonding: fix namespace of the RSS tests
+* test/bonding: fix parameters of a balance Tx
+* test/crypto: fix overflow
+* test/crypto: fix wrong AAD setting
+* vhost: fix checking of device features
+* vhost: fix guest pages memory leak
+* vhost: fix IP checksum
+* vhost: fix TCP checksum
+* vhost: make page logging atomic
