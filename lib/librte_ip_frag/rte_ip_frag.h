@@ -180,8 +180,11 @@ struct rte_ip_frag_tbl * rte_ip_frag_table_create(uint32_t bucket_num,
  * @param tbl
  *   Fragmentation table to free.
  */
-void
-rte_ip_frag_table_destroy(struct rte_ip_frag_tbl *tbl);
+static inline void
+rte_ip_frag_table_destroy(struct rte_ip_frag_tbl *tbl)
+{
+	rte_free(tbl);
+}
 
 /**
  * This function implements the fragmentation of IPv6 packets.
