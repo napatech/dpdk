@@ -169,6 +169,11 @@ enum index {
 	ITEM_MPLS_LABEL,
 	ITEM_GRE,
 	ITEM_GRE_PROTO,
+	ITEM_GRE_VERSION,
+	ITEM_GTPV1U,
+	ITEM_GTPV1_U_DUMMY,
+	ITEM_IP_IN_IP,
+	ITEM_IP_IN_IP_DUMMY,
 	ITEM_FUZZY,
 	ITEM_FUZZY_THRESH,
 
@@ -450,6 +455,8 @@ static const enum index next_item[] = {
 	ITEM_NVGRE,
 	ITEM_MPLS,
 	ITEM_GRE,
+	ITEM_GTPV1U,
+	ITEM_IP_IN_IP,
 	ITEM_FUZZY,
 	ZERO,
 };
@@ -582,7 +589,20 @@ static const enum index item_mpls[] = {
 	ZERO,
 };
 
+static const enum index item_gtpv1_u[] = {
+	ITEM_GTPV1_U_DUMMY,
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_ip_in_ip[] = {
+	ITEM_IP_IN_IP_DUMMY,
+	ITEM_NEXT,
+	ZERO,
+};
+
 static const enum index item_gre[] = {
+	ITEM_GRE_VERSION,
 	ITEM_GRE_PROTO,
 	ITEM_NEXT,
 	ZERO,
@@ -1392,6 +1412,34 @@ static const struct token token_list[] = {
 						  label_tc_s,
 						  "\xff\xff\xf0")),
 	},
+	[ITEM_GTPV1U] = {
+		.name = "gtpv1_u",
+		.help = "match GTPv1_U header",
+		.priv = PRIV_ITEM(GTPv1_U, sizeof(struct rte_flow_item_gtpv1_u)),
+		.next = NEXT(item_gtpv1_u),
+		.call = parse_vc,
+	},
+	[ITEM_GTPV1_U_DUMMY] = {
+		.name = "dummy",
+		.help = "Dummy - not used",
+		.next = NEXT(item_gtpv1_u, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_gtpv1_u,
+							 dummy)),
+	},
+	[ITEM_IP_IN_IP] = {
+		.name = "ipinip",
+		.help = "match IPinIP header",
+		.priv = PRIV_ITEM(IPinIP, sizeof(struct rte_flow_item_ip_in_ip)),
+		.next = NEXT(item_ip_in_ip),
+		.call = parse_vc,
+	},
+	[ITEM_IP_IN_IP_DUMMY] = {
+		.name = "dummy",
+		.help = "Dummy - not used",
+		.next = NEXT(item_ip_in_ip, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_ip_in_ip,
+							 dummy)),
+	},
 	[ITEM_GRE] = {
 		.name = "gre",
 		.help = "match GRE header",
@@ -1405,6 +1453,13 @@ static const struct token token_list[] = {
 		.next = NEXT(item_gre, NEXT_ENTRY(UNSIGNED), item_param),
 		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_gre,
 					     protocol)),
+	},
+	[ITEM_GRE_VERSION] = {
+		.name = "version",
+		.help = "GRE version",
+		.next = NEXT(item_gre, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY_MASK_HTON(struct rte_flow_item_gre,
+							 c_rsvd0_ver, "\x7")),
 	},
 	[ITEM_FUZZY] = {
 		.name = "fuzzy",

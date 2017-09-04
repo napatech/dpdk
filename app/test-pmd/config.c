@@ -945,6 +945,8 @@ static const struct {
 	MK_FLOW_ITEM(E_TAG, sizeof(struct rte_flow_item_e_tag)),
 	MK_FLOW_ITEM(NVGRE, sizeof(struct rte_flow_item_nvgre)),
 	MK_FLOW_ITEM(MPLS, sizeof(struct rte_flow_item_mpls)),
+	MK_FLOW_ITEM(GTPv1_U, sizeof(struct rte_flow_item_gtpv1_u)),
+	MK_FLOW_ITEM(IPinIP, sizeof(struct rte_flow_item_ip_in_ip)),
 	MK_FLOW_ITEM(GRE, sizeof(struct rte_flow_item_gre)),
 	MK_FLOW_ITEM(FUZZY, sizeof(struct rte_flow_item_fuzzy)),
 };

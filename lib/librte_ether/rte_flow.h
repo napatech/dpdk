@@ -711,6 +711,24 @@ static const struct rte_flow_item_mpls rte_flow_item_mpls_mask = {
 #endif
 
 /**
+ * RTE_FLOW_ITEM_TYPE_GTPv1_U.
+ *
+ * Matches a GTPv1_U header.
+ */
+struct rte_flow_item_gtpv1_u {
+	rte_be16_t dummy;
+};
+
+/**
+ * RTE_FLOW_ITEM_TYPE_IPinIP.
+ *
+ * Matches a IPinIP header.
+ */
+struct rte_flow_item_ip_in_ip {
+	rte_be16_t dummy;
+};
+
+/**
  * RTE_FLOW_ITEM_TYPE_GRE.
  *
  * Matches a GRE header.

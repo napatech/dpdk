@@ -42,6 +42,8 @@
 #include "rte_eth_ntacc.h"
 #include "filter_ntacc.h"
 
+#define USE_KEY_MATCH
+
 #define NON_ZERO2(a)  (*a != 0 || *(a + 1) != 0)
 #define NON_ZERO4(a)  (*a != 0 || *(a + 1) != 0 || *(a + 2) != 0 || *(a + 3) != 0)
 #define NON_ZERO6(a)  (a[0] != 0  || a[1] != 0  || a[2] != 0  || a[3] != 0 || a[4] != 0  || a[5] != 0)
@@ -86,12 +88,19 @@ static LIST_HEAD(filter_keyset_t, filter_keyset_s) filter_keyset;
 static inline int _CheckArray(const uint8_t *addr, uint8_t len)
 {
   int i;
+  int zeros = 0;
+  int ffs = 0;
   for (i = 0; i < len; i++) {
-    if (addr[i] != 0 && addr[i] != 0xFF) {
-      return 1;
-    }
+    if (addr[i] == 0) 
+      zeros++;
+    if (addr[i] == 0xFF)
+      ffs++;
   }
-  return 0;
+  if (zeros == len ||
+      ffs == len) {
+    return 0;
+  }
+  return 1;
 }
 
 void pushNtplID(struct rte_flow *flow, uint32_t ntplId)
@@ -1145,7 +1154,7 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
     return 0;
   } 
 
-  if (spec && (spec->hdr.version_ihl || spec->hdr.type_of_service)) {
+  if (spec && (spec->hdr.version_ihl && spec->hdr.type_of_service)) {
     if (last && (last->hdr.version_ihl || spec->hdr.type_of_service)) {
       RTE_LOG(ERR, PMD, "Range is not supported for version_ihl and type_of_service\n");
     } 
@@ -1167,6 +1176,62 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
         return -1;
       }
       *typeMask |= IPV4_VERSION_IHL | IPV4_TYPE_OF_SERVICE;
+    }
+  }
+  else {
+    if (spec && spec->hdr.type_of_service) {
+      if (last && last->hdr.type_of_service) {
+        uint16_t vSpec;
+        uint16_t vLast;
+        vSpec = spec->hdr.type_of_service;
+        vLast = last->hdr.type_of_service;
+        if (SetFilter(16, 0xFF, 0, tnl, LAYER3, (void *)&vSpec, NULL, (void *)&vLast) != 0) {
+          return -1;
+        }
+        *typeMask |= IPV4_TYPE_OF_SERVICE;
+      } else if (CHECK8(mask, hdr.type_of_service)) {
+        uint16_t vSpec;
+        uint16_t vMask;
+        vSpec = spec->hdr.type_of_service;
+        vMask = mask->hdr.type_of_service;
+        if (SetFilter(16, 0xFF, 0, tnl, LAYER3, (void *)&vSpec, (void *)&vMask, NULL) != 0) {
+          return -1;
+        }
+        *typeMask |= IPV4_TYPE_OF_SERVICE;
+      }
+      else {
+        uint16_t vSpec;
+        vSpec = spec->hdr.type_of_service;
+        if (SetFilter(16, 0xFF, 0, tnl, LAYER3, (void *)&vSpec, NULL, NULL) != 0) {
+          return -1;
+        }
+        *typeMask |= IPV4_TYPE_OF_SERVICE;
+      }
+    }
+
+    if (spec && spec->hdr.version_ihl) {
+      if (last && last->hdr.version_ihl) {
+        RTE_LOG(ERR, PMD, "Range is not supported for version_ihl\n");
+      } 
+
+      if (CHECK8(mask, hdr.version_ihl)) {
+        uint16_t vSpec;
+        uint16_t vMask;
+        vSpec = (spec->hdr.version_ihl << 8) & 0xFF00;
+        vMask = (mask->hdr.version_ihl << 8) & 0xFF00;
+        if (SetFilter(16, 0xFF00, 0, tnl, LAYER3, (void *)&vSpec, (void *)&vMask, NULL) != 0) {
+          return -1;
+        }
+        *typeMask |= IPV4_VERSION_IHL;
+      }
+      else {
+        uint16_t vSpec;
+        vSpec = (spec->hdr.version_ihl << 8) & 0xFF00;
+        if (SetFilter(16, 0xFF00, 0, tnl, LAYER3, (void *)&vSpec, NULL, NULL) != 0) {
+          return -1;
+        }
+        *typeMask |= IPV4_VERSION_IHL;
+      }
     }
   }
 
@@ -1248,59 +1313,85 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
     }
   }
 
-  if (spec && spec->hdr.time_to_live) {
-    uint16_t vSpec;
-    uint16_t vMask;
-    uint16_t vLast;
-    if (last && last->hdr.time_to_live) {
-      vSpec = spec->hdr.time_to_live << 8;
-      vLast = last->hdr.time_to_live << 8;
-      if (SetFilter(16, 0xFF00, 8, tnl, LAYER3, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
-        return -1;
-      }
-      *typeMask |= IPV4_TIME_TO_LIVE;
+  if (spec && (spec->hdr.time_to_live && spec->hdr.next_proto_id)) {
+    if (last && (last->hdr.time_to_live || last->hdr.next_proto_id)) {
+      RTE_LOG(ERR, PMD, "Range is not supported for time_to_live and next_proto_id\n");
     } 
-    else if (CHECK8(mask, hdr.time_to_live)) {
-      vSpec = spec->hdr.time_to_live << 8;
-      vMask = mask->hdr.time_to_live << 8;
-      if (SetFilter(16, 0xFF00, 8, tnl, LAYER3, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
+
+    if (CHECK8(mask, hdr.time_to_live) || CHECK8(mask, hdr.next_proto_id)) {
+      uint16_t vSpec;
+      uint16_t vMask;
+      vSpec = ((spec->hdr.time_to_live << 8) & 0xFF00) | spec->hdr.next_proto_id;
+      vMask = ((mask->hdr.time_to_live << 8) & 0xFF00) | mask->hdr.next_proto_id;
+      if (SetFilter(16, 0, 8, tnl, LAYER3, (void *)&vSpec, (void *)&vMask, NULL) != 0) {
         return -1;
       }
+      *typeMask |= IPV4_TIME_TO_LIVE | IPV4_NEXT_PROTO_ID;
     }
     else {
-      vSpec = spec->hdr.time_to_live << 8;
-      if (SetFilter(16, 0xFF00, 8, tnl, LAYER3, (const void *)&vSpec, NULL, NULL) != 0) {
+      uint16_t vSpec;
+      vSpec = ((spec->hdr.time_to_live << 8) & 0xFF00) | spec->hdr.next_proto_id;
+      if (SetFilter(16, 0, 8, tnl, LAYER3, (void *)&vSpec, NULL, NULL) != 0) {
         return -1;
       }
+      *typeMask |= IPV4_TIME_TO_LIVE | IPV4_NEXT_PROTO_ID;
     }
   }
-
-  if (spec && spec->hdr.next_proto_id) {
-    uint16_t vSpec;
-    uint16_t vMask;
-    uint16_t vLast;
-    if (last && last->hdr.next_proto_id) {
-      vSpec = spec->hdr.next_proto_id;
-      vLast = last->hdr.next_proto_id;
-      if (SetFilter(16, 0x00FF, 8, tnl, LAYER3, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
-        return -1;
+  else {
+    if (spec && spec->hdr.time_to_live) {
+      uint16_t vSpec;
+      uint16_t vMask;
+      uint16_t vLast;
+      if (last && last->hdr.time_to_live) {
+        vSpec = spec->hdr.time_to_live << 8;
+        vLast = last->hdr.time_to_live << 8;
+        if (SetFilter(16, 0xFF00, 8, tnl, LAYER3, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
+          return -1;
+        }
+        *typeMask |= IPV4_TIME_TO_LIVE;
+      } 
+      else if (CHECK8(mask, hdr.time_to_live)) {
+        vSpec = spec->hdr.time_to_live << 8;
+        vMask = mask->hdr.time_to_live << 8;
+        if (SetFilter(16, 0xFF00, 8, tnl, LAYER3, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
+          return -1;
+        }
       }
-      *typeMask |= IPV4_NEXT_PROTO_ID;
-    } 
-    else if (CHECK8(mask, hdr.next_proto_id)) {
-      vSpec = spec->hdr.next_proto_id;
-      vMask = mask->hdr.next_proto_id;
-      if (SetFilter(16, 0x00FF, 8, tnl, LAYER3, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
-        return -1;
+      else {
+        vSpec = spec->hdr.time_to_live << 8;
+        if (SetFilter(16, 0xFF00, 8, tnl, LAYER3, (const void *)&vSpec, NULL, NULL) != 0) {
+          return -1;
+        }
       }
-      *typeMask |= IPV4_NEXT_PROTO_ID;
     }
-    else {
-      vSpec = spec->hdr.next_proto_id;
-      if (SetFilter(16, 0x00FF, 8, tnl, LAYER3, (const void *)&vSpec, NULL, NULL) != 0) {
-        return -1;
+
+    if (spec && spec->hdr.next_proto_id) {
+      uint16_t vSpec;
+      uint16_t vMask;
+      uint16_t vLast;
+      if (last && last->hdr.next_proto_id) {
+        vSpec = spec->hdr.next_proto_id;
+        vLast = last->hdr.next_proto_id;
+        if (SetFilter(16, 0x00FF, 8, tnl, LAYER3, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
+          return -1;
+        }
+        *typeMask |= IPV4_NEXT_PROTO_ID;
+      } 
+      else if (CHECK8(mask, hdr.next_proto_id)) {
+        vSpec = spec->hdr.next_proto_id;
+        vMask = mask->hdr.next_proto_id;
+        if (SetFilter(16, 0x00FF, 8, tnl, LAYER3, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
+          return -1;
+        }
+        *typeMask |= IPV4_NEXT_PROTO_ID;
       }
-      *typeMask |= IPV4_NEXT_PROTO_ID;
+      else {
+        vSpec = spec->hdr.next_proto_id;
+        if (SetFilter(16, 0x00FF, 8, tnl, LAYER3, (const void *)&vSpec, NULL, NULL) != 0) {
+          return -1;
+        }
+        *typeMask |= IPV4_NEXT_PROTO_ID;
+      }
     }
   }
   
@@ -1439,55 +1530,82 @@ int SetIPV6Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
     }
   }
 
-  if (spec && (spec->hdr.proto)) {
-    if (last && (last->hdr.proto)) {
-      uint16_t vSpec = (spec->hdr.proto << 8) & 0xFF00;
-      uint16_t vLast = (last->hdr.proto << 8) & 0xFF00;
-      if (SetFilter(16, 0xFF00, 6, tnl, LAYER3, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
+  if (spec && spec->hdr.proto && spec->hdr.hop_limits) {
+    if (last && last->hdr.proto && last->hdr.hop_limits) {
+      uint16_t vSpec = ((spec->hdr.proto << 8) & 0xFF00) + spec->hdr.hop_limits;
+      uint16_t vLast = ((last->hdr.proto << 8) & 0xFF00) + last->hdr.hop_limits;
+      if (SetFilter(16, 0, 6, tnl, LAYER3, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
         return -1;
       }
-      *typeMask |= IPV6_PROTO;
+      *typeMask |= IPV6_PROTO | IPV6_HOP_LIMITS;
     }
-    else if (CHECK8(mask, hdr.proto)) {
-      uint16_t vSpec = (spec->hdr.proto << 8) & 0xFF00;
-      uint16_t vMask = (mask->hdr.proto << 8) & 0xFF00;
-      if (SetFilter(16, 0xFF00, 6, tnl, LAYER3, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
+    else if (CHECK8(mask, hdr.proto) && CHECK8(mask, hdr.hop_limits)) {
+      uint16_t vSpec = ((spec->hdr.proto << 8) & 0xFF00) + spec->hdr.hop_limits;
+      uint16_t vMask = ((mask->hdr.proto << 8) & 0xFF00) + mask->hdr.hop_limits;
+      if (SetFilter(16, 0, 6, tnl, LAYER3, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
         return -1;
       }
-      *typeMask |= IPV6_PROTO;
+      *typeMask |= IPV6_PROTO | IPV6_HOP_LIMITS;
     }
     else {
-      uint16_t vSpec = (spec->hdr.proto << 8) & 0xFF00;
-      if (SetFilter(16, 0xFF00, 6, tnl, LAYER3, (const void *)&vSpec, NULL, NULL) != 0) {
+      uint16_t vSpec = ((spec->hdr.proto << 8) & 0xFF00) + spec->hdr.hop_limits;
+      if (SetFilter(16, 0, 6, tnl, LAYER3, (const void *)&vSpec, NULL, NULL) != 0) {
         return -1;
       }
-      *typeMask |= IPV6_PROTO;
+      *typeMask |= IPV6_PROTO | IPV6_HOP_LIMITS;
     }
   }
+  else {
+    if (spec && (spec->hdr.proto)) {
+      if (last && (last->hdr.proto)) {
+        uint16_t vSpec = (spec->hdr.proto << 8) & 0xFF00;
+        uint16_t vLast = (last->hdr.proto << 8) & 0xFF00;
+        if (SetFilter(16, 0xFF00, 6, tnl, LAYER3, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
+          return -1;
+        }
+        *typeMask |= IPV6_PROTO;
+      }
+      else if (CHECK8(mask, hdr.proto)) {
+        uint16_t vSpec = (spec->hdr.proto << 8) & 0xFF00;
+        uint16_t vMask = (mask->hdr.proto << 8) & 0xFF00;
+        if (SetFilter(16, 0xFF00, 6, tnl, LAYER3, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
+          return -1;
+        }
+        *typeMask |= IPV6_PROTO;
+      }
+      else {
+        uint16_t vSpec = (spec->hdr.proto << 8) & 0xFF00;
+        if (SetFilter(16, 0xFF00, 6, tnl, LAYER3, (const void *)&vSpec, NULL, NULL) != 0) {
+          return -1;
+        }
+        *typeMask |= IPV6_PROTO;
+      }
+    }
 
-  if (spec && (spec->hdr.hop_limits)) {
-    if (last && (last->hdr.hop_limits)) {
-      uint16_t vSpec = (spec->hdr.hop_limits);
-      uint16_t vLast = (last->hdr.hop_limits);
-      if (SetFilter(16, 0xFF, 6, tnl, LAYER3, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
-        return -1;
+    if (spec && (spec->hdr.hop_limits)) {
+      if (last && (last->hdr.hop_limits)) {
+        uint16_t vSpec = (spec->hdr.hop_limits);
+        uint16_t vLast = (last->hdr.hop_limits);
+        if (SetFilter(16, 0xFF, 6, tnl, LAYER3, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
+          return -1;
+        }
+        *typeMask |= IPV6_HOP_LIMITS;
       }
-      *typeMask |= IPV6_HOP_LIMITS;
-    }
-    else if (CHECK8(mask, hdr.hop_limits)) {
-      uint16_t vSpec = (spec->hdr.hop_limits);
-      uint16_t vMask = (mask->hdr.hop_limits);
-      if (SetFilter(16, 0xFF, 6, tnl, LAYER3, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
-        return -1;
+      else if (CHECK8(mask, hdr.hop_limits)) {
+        uint16_t vSpec = (spec->hdr.hop_limits);
+        uint16_t vMask = (mask->hdr.hop_limits);
+        if (SetFilter(16, 0xFF, 6, tnl, LAYER3, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
+          return -1;
+        }
+        *typeMask |= IPV6_HOP_LIMITS;
       }
-      *typeMask |= IPV6_HOP_LIMITS;
-    }
-    else {
-      uint16_t vSpec = (spec->hdr.hop_limits);
-      if (SetFilter(16, 0xFF, 6, tnl, LAYER3, (const void *)&vSpec, NULL, NULL) != 0) {
-        return -1;
+      else {
+        uint16_t vSpec = (spec->hdr.hop_limits);
+        if (SetFilter(16, 0xFF, 6, tnl, LAYER3, (const void *)&vSpec, NULL, NULL) != 0) {
+          return -1;
+        }
+        *typeMask |= IPV6_HOP_LIMITS;
       }
-      *typeMask |= IPV6_HOP_LIMITS;
     }
   }
 
@@ -1630,7 +1748,7 @@ int SetTCPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, boo
     }
   }
 
-  if (spec && (spec->hdr.data_off || spec->hdr.tcp_flags)) {
+  if (spec && spec->hdr.data_off && spec->hdr.tcp_flags) {
     if (last && (last->hdr.data_off || last->hdr.tcp_flags)) {      
       RTE_LOG(ERR, PMD, "Range is not supported for data_off and tcp_flags\n");
       return -1;
@@ -1651,6 +1769,58 @@ int SetTCPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, boo
         return -1;
       }
       *typeMask |= TCP_DATA_OFF | TCP_FLAGS;
+    }
+  }
+  else {
+    if (spec && spec->hdr.tcp_flags) {
+      if (last && last->hdr.tcp_flags) {      
+        uint16_t vSpec = spec->hdr.tcp_flags;
+        uint16_t vLast = last->hdr.tcp_flags;
+        if (SetFilter(16, 0xFF, 12, tnl, LAYER4, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
+          return -1;
+        }
+        *typeMask |= TCP_FLAGS;
+      }
+      else if (CHECK8(mask, hdr.tcp_flags)) {
+        uint16_t vSpec = spec->hdr.tcp_flags;
+        uint16_t vMask = mask->hdr.tcp_flags;
+        if (SetFilter(16, 0xFF, 12, tnl, LAYER4, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
+          return -1;
+        }
+        *typeMask |= TCP_FLAGS;
+      }
+      else {
+        uint16_t vSpec = spec->hdr.tcp_flags;
+        if (SetFilter(16, 0xFF, 12, tnl, LAYER4, (const void *)&vSpec, NULL, NULL) != 0) {
+          return -1;
+        }
+        *typeMask |= TCP_FLAGS;
+      }
+    }
+    if (spec && spec->hdr.data_off) {
+      if (last && last->hdr.data_off) {      
+        uint16_t vSpec = ((spec->hdr.data_off << 8) & 0xFF00);
+        uint16_t vLast = ((last->hdr.data_off << 8) & 0xFF00);
+        if (SetFilter(16, 0xFF00, 12, tnl, LAYER4, (const void *)&vSpec, NULL, (const void *)&vLast) != 0) {
+          return -1;
+        }
+        *typeMask |= TCP_DATA_OFF;
+      }
+      else if (CHECK8(mask, hdr.data_off)) {
+        uint16_t vSpec = ((spec->hdr.data_off << 8) & 0xFF00);
+        uint16_t vMask = ((mask->hdr.data_off << 8) & 0xFF00);
+        if (SetFilter(16, 0xFF00, 12, tnl, LAYER4, (const void *)&vSpec, (const void *)&vMask, NULL) != 0) {
+          return -1;
+        }
+        *typeMask |= TCP_DATA_OFF;
+      }
+      else {
+        uint16_t vSpec = (spec->hdr.data_off << 8) & 0xFF00;
+        if (SetFilter(16, 0xFF00, 12, tnl, LAYER4, (const void *)&vSpec, NULL, NULL) != 0) {
+          return -1;
+        }
+        *typeMask |= TCP_DATA_OFF;
+      }
     }
   }
   return 0;
@@ -1860,6 +2030,10 @@ int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
   const struct rte_flow_item_icmp *last = (const struct rte_flow_item_icmp *)item->last;
   bool singleSetup = true;
 
+  #ifndef USE_KEY_MATCH
+  (void)typeMask;
+  #endif
+
   if (*fc) strcat(ntpl_buf," and ");
   *fc = true;
   if (tnl) {
@@ -1873,6 +2047,93 @@ int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
     return 0;
   } 
 
+#ifndef USE_KEY_MATCH
+  if (spec && spec->hdr.icmp_type && spec->hdr.icmp_code) {
+    if (last && (last->hdr.icmp_type || last->hdr.icmp_code)) {
+      singleSetup = true;
+    }
+    else if (mask && CHECK8(mask, hdr.icmp_type) && CHECK8(mask, hdr.icmp_code)) {
+      if (*fc) strcat(ntpl_buf," and ");
+      *fc = true;
+      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "data[dynoffset=DynOffIcmpFrame;offset=0;datatype=bytestr2]=={0x%02X%02X:0x%02X%02X}",
+                    mask->hdr.icmp_type,
+                    mask->hdr.icmp_code,
+                    spec->hdr.icmp_type,
+                    spec->hdr.icmp_code);
+      singleSetup = false;
+    }
+    else if (!mask || (mask && !CHECK8(mask, hdr.icmp_type) && !CHECK8(mask, hdr.icmp_code))) {
+      if (*fc) strcat(ntpl_buf," and ");
+      *fc = true;
+      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "data[dynoffset=DynOffIcmpFrame;offset=0;datatype=bytestr2]==0x%02X%02X",
+                    spec->hdr.icmp_type,
+                    spec->hdr.icmp_code);
+      singleSetup = false;
+    }
+  }
+
+  if (singleSetup) {
+    if (spec && spec->hdr.icmp_type) {
+      if (*fc) strcat(ntpl_buf," and ");
+      *fc = true;
+
+      if (last && last->hdr.icmp_type) {
+        snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "data[dynoffset=DynOffIcmpFrame;offset=0;datatype=bytestr1]==(0x%02x..0x%02X)",
+                      spec->hdr.icmp_type,
+                      last->hdr.icmp_type);
+      } 
+      else if (mask && CHECK8(mask, hdr.icmp_type)) {
+        snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "data[dynoffset=DynOffIcmpFrame;offset=0;datatype=bytestr1]=={0x%02x:0x%02X}",
+                      mask->hdr.icmp_type,
+                      spec->hdr.icmp_type);
+      }
+      else {
+        snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "data[dynoffset=DynOffIcmpFrame;offset=0;datatype=bytestr1]==0x%02X",
+                      spec->hdr.icmp_type);
+      }
+    }
+
+    if (spec && spec->hdr.icmp_code) {
+      if (*fc) strcat(ntpl_buf," and ");
+      *fc = true;
+
+      if (last && last->hdr.icmp_code) {
+        snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "data[dynoffset=DynOffIcmpFrame;offset=1;datatype=bytestr1]==(0x%02x..0x%02X)",
+                      spec->hdr.icmp_code,
+                      last->hdr.icmp_code);
+      } 
+      else if (mask && CHECK8(mask, hdr.icmp_code)) {
+        snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "data[dynoffset=DynOffIcmpFrame;offset=1;datatype=bytestr1]=={0x%02x:0x%02X}",
+                      mask->hdr.icmp_code,
+                      spec->hdr.icmp_code);
+      }
+      else {
+        snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "data[dynoffset=DynOffIcmpFrame;offset=1;datatype=bytestr1]==0x%02X",
+                      spec->hdr.icmp_code);
+      }
+    }
+  }
+
+  if (spec && spec->hdr.icmp_ident) {
+    if (*fc) strcat(ntpl_buf," and ");
+    *fc = true;
+
+    if (last && last->hdr.icmp_ident) {
+      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "data[dynoffset=DynOffIcmpFrame;offset=4;datatype=bytestr2]==(0x%04x..0x%04X)",
+                    rte_bswap16(spec->hdr.icmp_ident),
+                    rte_bswap16(last->hdr.icmp_ident));
+    } 
+    else if (mask && CHECK16(mask, hdr.icmp_ident)) {
+      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "data[dynoffset=DynOffIcmpFrame;offset=4;datatype=bytestr2]=={0x%04x:0x%04X}",
+                    rte_bswap16(mask->hdr.icmp_ident),
+                    rte_bswap16(spec->hdr.icmp_ident));
+    }
+    else {
+      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "data[dynoffset=DynOffIcmpFrame;offset=4;datatype=bytestr2]==0x%04x",
+                    rte_bswap16(spec->hdr.icmp_ident));
+    }
+  }
+#else
   if (spec && spec->hdr.icmp_type && spec->hdr.icmp_code) {
     if (last && (last->hdr.icmp_type || last->hdr.icmp_code)) {
       singleSetup = true;
@@ -1975,6 +2236,7 @@ int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       *typeMask |= ICMP_IDENT;
     }
   }
+#endif
 
   return 0;
 }
@@ -2116,7 +2378,11 @@ int SetGreFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, uin
   const struct rte_flow_item_gre *spec = (const struct rte_flow_item_gre *)item->spec;
   int version;
 
-  version = spec->c_rsvd0_ver & 0x7;
+  if (spec)
+    version = spec->c_rsvd0_ver & 0x7;
+  else
+    version = 0;
+
   return SetTunnelFilter(ntpl_buf, fc, version, GRE_TUNNEL_TYPE, typeMask);
 }
 

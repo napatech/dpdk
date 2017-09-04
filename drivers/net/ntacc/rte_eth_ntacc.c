@@ -572,9 +572,6 @@ static int eth_dev_start(struct rte_eth_dev *dev)
   uint queue;
   int status;
   char *shm;
-  uint8_t nb_queues = 0;
-  NtNtplInfo_t ntplInfo;
-  char *ntpl_buf = NULL;
 
   // Open or create shared memory
   internals->key = 135546;
@@ -625,12 +622,17 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     goto StartError;
   }
   
-  if (nb_queues > 0) {
-    /* Delete all NTPL */
-    snprintf(ntpl_buf, NTPL_BSIZE, "Delete=tag==%s", internals->tagName);
-    if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
-      RTE_LOG(ERR, PMD, "Failed to create delete filters in eth_dev_start\n");
-      goto StartError;
+  for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
+    if (rx_q[queue].enabled) {
+      NtNtplInfo_t ntplInfo;
+      char ntpl_buf[21];
+      /* Delete all NTPL */
+      snprintf(ntpl_buf, 20, "Delete=tag==%s", internals->tagName);
+      if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
+        RTE_LOG(ERR, PMD, "Failed to create delete filters in eth_dev_start\n");
+        goto StartError;
+      }
+      break;
     }
   }
 
@@ -667,11 +669,6 @@ static int eth_dev_start(struct rte_eth_dev *dev)
   return 0;
 
 StartError:
-#ifndef DO_NOT_CREATE_DEFAULT_FILTER
-  if (ntpl_buf) {
-    free(ntpl_buf);
-  }
-#endif
   return -1;
 }
 
