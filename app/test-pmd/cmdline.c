@@ -1696,6 +1696,46 @@ cmd_config_rss_parsed(void *parsed_result,
 		rss_conf.rss_hf = ETH_RSS_IP | ETH_RSS_TCP |
 				ETH_RSS_UDP | ETH_RSS_SCTP |
 					ETH_RSS_L2_PAYLOAD;
+	else if (!strcmp(res->value, "ipv4"))
+		rss_conf.rss_hf = ETH_RSS_IPV4;
+	else if (!strcmp(res->value, "ipv4-tcp"))
+		rss_conf.rss_hf = ETH_RSS_NONFRAG_IPV4_TCP;
+	else if (!strcmp(res->value, "ipv4-udp"))
+		rss_conf.rss_hf = ETH_RSS_NONFRAG_IPV4_UDP;
+	else if (!strcmp(res->value, "ipv4-sctp"))
+		rss_conf.rss_hf = ETH_RSS_NONFRAG_IPV4_SCTP;
+	else if (!strcmp(res->value, "ipv4-other"))
+		rss_conf.rss_hf = ETH_RSS_NONFRAG_IPV4_OTHER;
+	else if (!strcmp(res->value, "ipv6"))
+		rss_conf.rss_hf = ETH_RSS_IPV6;
+	else if (!strcmp(res->value, "ipv6-tcp"))
+		rss_conf.rss_hf = ETH_RSS_NONFRAG_IPV6_TCP;
+	else if (!strcmp(res->value, "ipv6-udp"))
+		rss_conf.rss_hf = ETH_RSS_NONFRAG_IPV6_UDP;
+	else if (!strcmp(res->value, "ipv6-sctp"))
+		rss_conf.rss_hf = ETH_RSS_NONFRAG_IPV6_SCTP;
+	else if (!strcmp(res->value, "ipv6-other"))
+		rss_conf.rss_hf = ETH_RSS_NONFRAG_IPV6_OTHER;
+	else if (!strcmp(res->value, "ipv4-inner"))
+		rss_conf.rss_hf = ETH_RSS_INNER_IPV4;
+	else if (!strcmp(res->value, "ipv4-tcp-inner"))
+		rss_conf.rss_hf = ETH_RSS_INNER_IPV4_TCP;
+	else if (!strcmp(res->value, "ipv4-udp-inner"))
+		rss_conf.rss_hf = ETH_RSS_INNER_IPV4_UDP;
+	else if (!strcmp(res->value, "ipv4-sctp-inner"))
+		rss_conf.rss_hf = ETH_RSS_INNER_IPV4_SCTP;
+	else if (!strcmp(res->value, "ipv4-other-inner"))
+		rss_conf.rss_hf = ETH_RSS_INNER_IPV4_OTHER;
+	else if (!strcmp(res->value, "ipv6-inner"))
+		rss_conf.rss_hf = ETH_RSS_INNER_IPV6;
+	else if (!strcmp(res->value, "ipv6-tcp-inner"))
+		rss_conf.rss_hf = ETH_RSS_INNER_IPV6_TCP;
+	else if (!strcmp(res->value, "ipv6-udp-inner"))
+		rss_conf.rss_hf = ETH_RSS_INNER_IPV6_UDP;
+	else if (!strcmp(res->value, "ipv6-sctp-inner"))
+		rss_conf.rss_hf = ETH_RSS_INNER_IPV6_SCTP;
+	else if (!strcmp(res->value, "ipv6-other-inner"))
+		rss_conf.rss_hf = ETH_RSS_INNER_IPV6_OTHER;
 	else if (!strcmp(res->value, "ip"))
 		rss_conf.rss_hf = ETH_RSS_IP;
 	else if (!strcmp(res->value, "udp"))
@@ -1740,13 +1780,25 @@ cmdline_parse_token_string_t cmd_config_rss_name =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_rss, name, "rss");
 cmdline_parse_token_string_t cmd_config_rss_value =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_rss, value,
-		"all#ip#tcp#udp#sctp#ether#port#vxlan#geneve#nvgre#none");
+		"all#ip#tcp#udp#sctp#ether#port#vxlan#geneve#nvgre#"
+	  "ipv4#ipv4-tcp#ipv4-udp#ipv4-sctp#ipv4-other#ipv6#ipv6-tcp#"
+    "ipv6-udp#ipv6-sctp#ipv6-other#ipv4-inner#ipv4-tcp-inner#"
+    "ipv4-udp-inner#ipv4-sctp-inner#ipv4-other-inner#ipv6-inner#"
+    "ipv6-tcp-inner#ipv6-udp-inner#ipv6-sctp-inner#ipv6-other-inner#"
+		"none");
+
+
 
 cmdline_parse_inst_t cmd_config_rss = {
 	.f = cmd_config_rss_parsed,
 	.data = NULL,
 	.help_str = "port config all rss "
-		"all|ip|tcp|udp|sctp|ether|port|vxlan|geneve|nvgre|none",
+		"all|ip|tcp|udp|sctp|ether|port|vxlan|geneve|nvgre|"
+	  "ipv4|ipv4-tcp|ipv4-udp|ipv4-sctp|ipv4-other|ipv6|ipv6-tcp|"
+    "ipv6-udp|ipv6-sctp|ipv6-other|ipv4-inner|ipv4-tcp-inner|"
+    "ipv4-udp-inner|ipv4-sctp-inner|ipv4-other-inner|ipv6-inner|"
+    "ipv6-tcp-inner|ipv6-udp-inner|ipv6-sctp-inner|ipv6-other-inner|"
+		"none",
 	.tokens = {
 		(void *)&cmd_config_rss_port,
 		(void *)&cmd_config_rss_keyword,

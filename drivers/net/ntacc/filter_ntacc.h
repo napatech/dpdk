@@ -162,6 +162,7 @@ int CreateOptimizedFilter(char *ntpl_buf,
 
 void DeleteKeyset(int key, struct pmd_internals *internals);
 void DeleteHash(uint64_t rss_hf, uint8_t port, int priority, struct pmd_internals *internals);
+void FlushHash(struct pmd_internals *internals);
 
 #endif
 

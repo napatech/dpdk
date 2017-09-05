@@ -116,6 +116,24 @@ void pushNtplID(struct rte_flow *flow, uint32_t ntplId)
   }
 }
 
+void FlushHash(struct pmd_internals *internals) 
+{
+  NtNtplInfo_t ntplInfo;
+  char ntpl_buf[21];
+  struct filter_hash_s *pHash;
+loop:
+  LIST_FOREACH(pHash, &filter_hash, next) {
+  if (pHash->port == internals->port) {
+      LIST_REMOVE(pHash, next);
+      snprintf(ntpl_buf, 20, "delete=%d", pHash->ntpl_id);
+      DoNtpl(ntpl_buf, &ntplInfo, internals);
+      RTE_LOG(DEBUG, PMD, "Deleting Hash filter: %s\n", ntpl_buf);
+      free(pHash);
+      goto loop;
+    }
+  }
+}
+
 void DeleteHash(uint64_t rss_hf, uint8_t port, int priority, struct pmd_internals *internals) {
   NtNtplInfo_t ntplInfo;
   char ntpl_buf[21];
@@ -322,7 +340,7 @@ int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow
   /******************************/
   if ((rss_hf & ETH_RSS_NONFRAG_IPV4_SCTP) || (rss_hf & ETH_RSS_NONFRAG_IPV6_SCTP)) {
     if ((rss_hf & ETH_RSS_NONFRAG_IPV4_SCTP) && (rss_hf & ETH_RSS_NONFRAG_IPV6_SCTP)) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=SCTP;tag=%s]==%s", 0x06);
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=SCTP;tag=%s]=%s", 0x06);
     }
     else if (rss_hf & ETH_RSS_NONFRAG_IPV4_SCTP) {
       PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=SCTP;tag=%s]=%s", 0x06);

@@ -1627,6 +1627,34 @@ static int eth_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t 
   }
 }
 
+static int eth_rss_hash_update(struct rte_eth_dev *dev,
+                               struct rte_eth_rss_conf *rss_conf)
+{
+  int ret = 0;
+  struct pmd_internals *internals = dev->data->dev_private;
+
+  priv_lock(internals);
+  if (rss_conf->rss_hf == 0) {
+    // Flush all hash settings
+    FlushHash(internals);
+  }
+  else {
+    struct rte_flow dummyFlow;
+    memset(&dummyFlow, 0, sizeof(struct rte_flow));
+
+    // Flush all other hash settings first
+    FlushHash(internals);
+    if (CreateHash(rss_conf->rss_hf, internals, &dummyFlow, 61) != 0) {
+      RTE_LOG(ERR, PMD, "Failed to create hash function eth_rss_hash_update\n");
+      ret = 1;
+      goto UpdateError;
+    }
+  }
+UpdateError:
+  priv_unlock(internals);
+  return ret;
+}
+
 static struct eth_dev_ops ops = {
     .dev_start = eth_dev_start,
     .dev_stop = eth_dev_stop,
@@ -1647,6 +1675,7 @@ static struct eth_dev_ops ops = {
     .flow_ctrl_set = _dev_set_flow_ctrl,
     .filter_ctrl = _dev_filter_ctrl,
     .fw_version_get = eth_fw_version_get,
+    .rss_hash_update = eth_rss_hash_update,
 };
 
 static int rte_pmd_init_internals(struct rte_pci_device *dev,
