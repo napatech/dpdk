@@ -124,6 +124,7 @@ int (*_NT_NetRxOpenMulti)(NtNetStreamRx_t *, const char *, enum NtNetInterface_e
 int (*_NT_NetTxRelease)(NtNetStreamTx_t, NtNetBuf_t);
 int (*_NT_NetTxGet)(NtNetStreamTx_t, NtNetBuf_t *, uint32_t, size_t, enum NtNetTxPacketOption_e, int);
 int (*_NT_NetTxAddPacket)(NtNetStreamTx_t hStream, uint32_t port, NtNetTxFragment_t *fragments, uint32_t fragmentCount, int timeout );
+int (*_NT_NetTxRead)(NtNetStreamTx_t hStream, NtNetTx_t *cmd);
 int (*_NT_StatClose)(NtStatStream_t);
 int (*_NT_StatOpen)(NtStatStream_t *, const char *);
 int (*_NT_StatRead)(NtStatStream_t, NtStatistics_t *);
@@ -259,7 +260,7 @@ static uint16_t eth_ntacc_rx(void *queue,
                              uint16_t nb_pkts)
 {
   struct ntacc_rx_queue *rx_q = queue;
-
+  uint32_t bytes=0;
   if (unlikely(rx_q->pNetRx == NULL || nb_pkts == 0))
     return 0;
 
@@ -320,7 +321,7 @@ static uint16_t eth_ntacc_rx(void *queue,
       if (unlikely(eth_ntacc_rx_jumbo(rx_q->mb_pool, mbuf, (uint8_t*)dyn3 + dyn3->descrLength, data_len) == -1))
         break;
     }
-
+    bytes += data_len+4;
     num_rx++;
 
     /* Get the next packet if any */
@@ -527,36 +528,59 @@ static uint16_t eth_ntacc_tx(void *queue,
   unsigned i;
   int ret;
   struct ntacc_tx_queue *tx_q = queue;
+#ifdef USE_SW_STAT
+  uint32_t bytes=0;
+#endif
 
   if (unlikely(tx_q == NULL || tx_q->pNetTx == NULL || nb_pkts == 0)) {
     return 0;
   }
 
   for (i = 0; i < nb_pkts; i++) {
+    uint16_t wLen;
     struct rte_mbuf *mbuf = bufs[i];
     struct NtNetTxFragment_s frag[10]; // Need fragments enough for a jumbo packet */
     uint8_t fragCnt = 0;
     frag[fragCnt].data = rte_pktmbuf_mtod(mbuf, u_char *);
     frag[fragCnt++].size = mbuf->data_len;
+    wLen = mbuf->data_len + 4;
     if (unlikely(mbuf->nb_segs > 1)) {
       while (mbuf->next) {
         mbuf = mbuf->next;
         frag[fragCnt].data = rte_pktmbuf_mtod(mbuf, u_char *);
         frag[fragCnt++].size = mbuf->data_len;
+        wLen += mbuf->data_len;
       }
+    }
+    /* Check if packet needs padding or is too big to transmit */
+    if (unlikely(wLen < tx_q->minTxPktSize)) {
+      frag[fragCnt].data = rte_pktmbuf_mtod(mbuf, u_char *);
+      frag[fragCnt++].size = tx_q->minTxPktSize - wLen;
+    }
+    if (unlikely(wLen > tx_q->maxTxPktSize)) {
+      /* Packet is too big. Drop it as an error and continue */
+#ifdef USE_SW_STAT
+      tx_q->err_pkts++;
+#endif
+      rte_pktmbuf_free(bufs[i]);
+      continue;
     }
     ret = (*_NT_NetTxAddPacket)(tx_q->pNetTx, tx_q->port, frag, fragCnt, 0);
     if (unlikely(ret != NT_SUCCESS)) {
       /* unsent packets is not expected to be freed */
 #ifdef USE_SW_STAT
-      tx_q->err_pkts += (nb_pkts - i);
+      tx_q->err_pkts++;
 #endif
       break;
     }
+#ifdef USE_SW_STAT
+    bytes += wLen;
+#endif
     rte_pktmbuf_free(bufs[i]);
   }
 #ifdef USE_SW_STAT
-      tx_q->tx_pkts += i;
+  tx_q->tx_pkts += i;
+  tx_q->tx_bytes += bytes;
 #endif
 
   return i;
@@ -751,30 +775,38 @@ static void eth_stats_get(struct rte_eth_dev *dev,
                           struct rte_eth_stats *igb_stats)
 {
   unsigned i;
-  unsigned long rx_total = 0;
-  unsigned long tx_total = 0;
-  unsigned long tx_err_total = 0;
+  uint64_t rx_total = 0;
+  uint64_t tx_total = 0;
+  uint64_t tx_err_total = 0;
+  uint64_t rx_total_bytes = 0;
+  uint64_t tx_total_bytes = 0;
   const struct pmd_internals *internal = dev->data->dev_private;
 
   memset(igb_stats, 0, sizeof(*igb_stats));
   for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
     if (internal->rxq[i].enabled) {
       igb_stats->q_ipackets[i] = internal->rxq[i].rx_pkts;
+      igb_stats->q_ibytes[i] = internal->rxq[i].rx_bytes;
       rx_total += igb_stats->q_ipackets[i];
+      rx_total_bytes += igb_stats->q_ibytes[i];
     }
   }
 
   for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
     if (internal->txq[i].enabled) {
       igb_stats->q_opackets[i] = internal->txq[i].tx_pkts;
+      igb_stats->q_obytes[i] = internal->txq[i].tx_bytes;
       igb_stats->q_errors[i] = internal->txq[i].err_pkts;
       tx_total += igb_stats->q_opackets[i];
+      tx_total_bytes += igb_stats->q_obytes[i];
       tx_err_total += igb_stats->q_errors[i];
     }
   }
 
   igb_stats->ipackets = rx_total;
   igb_stats->opackets = tx_total;
+  igb_stats->ibytes = rx_total_bytes;
+  igb_stats->obytes = tx_total_bytes;
   igb_stats->oerrors = tx_err_total;
 }
 #else
@@ -814,6 +846,8 @@ static void eth_stats_get(struct rte_eth_dev *dev,
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
     igb_stats->q_ipackets[queue] = statData.u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].forward.pkts;
     igb_stats->q_ibytes[queue] =  statData.u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].forward.octets;
+    igb_stats->q_errors[queue] = internals->txq[queue].err_pkts;
+
   }
 }
 #endif
@@ -826,9 +860,11 @@ static void eth_stats_reset(struct rte_eth_dev *dev)
 
   for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
     internal->rxq[i].rx_pkts = 0;
+    internal->rxq[i].rx_bytes = 0;
   }
   for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
     internal->txq[i].tx_pkts = 0;
+    internal->txq[i].tx_bytes = 0;
     internal->txq[i].err_pkts = 0;
   }
 }
@@ -1878,6 +1914,8 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
       internals->txq[i].port = internals->port;
       internals->txq[i].local_port = localPort;
       internals->txq[i].enabled = 0;
+      internals->txq[i].minTxPktSize = info.u.port_v7.data.capabilities.minTxPktSize;
+      internals->txq[i].maxTxPktSize = info.u.port_v7.data.capabilities.maxTxPktSize;
     }
 
     switch (info.u.port_v7.data.speed) {
@@ -2087,7 +2125,11 @@ static int _nt_lib_open(void)
     fprintf(stderr, "Failed to find \"NT_NetTxAddPacket\" in %s\n", path);
     return -1;
   }
-
+  _NT_NetTxRead = dlsym(_libnt, "NT_NetTxRead");
+  if (_NT_NetTxRead == NULL) {
+    fprintf(stderr, "Failed to find \"NT_NetTxRead\" in %s\n", path);
+    return -1;
+  }
   _NT_NetTxGet = dlsym(_libnt, "NT_NetTxGet");
   if (_NT_NetTxGet == NULL) {
     fprintf(stderr, "Failed to find \"NT_NetTxGet\" in %s\n", path);
@@ -2133,7 +2175,7 @@ static int rte_pmd_ntacc_dev_probe(struct rte_pci_driver *drv __rte_unused, stru
 
 #ifdef USE_SW_STAT
   if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
-    RTE_LOG(ERR, PMD, "pmd_ntacc %s must run as a primary process, when using SW statistics\n", name);
+    RTE_LOG(ERR, PMD, "pmd_ntacc %s must run as a primary process, when using SW statistics\n", dev->device.name);
     return -1;
   }
 #endif

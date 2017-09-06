@@ -82,8 +82,9 @@ struct ntacc_rx_queue {
   NtNetBuf_t             pSeg;    /* The current segment we are working with */
   struct NtNetBuf_s      pkt;     /* The current packet */
 #ifdef USE_SW_STAT
-  volatile unsigned long rx_pkts;
-  volatile unsigned long err_pkts;
+  volatile uint64_t      rx_pkts;
+  volatile uint64_t      rx_bytes;
+  volatile uint64_t      err_pkts;
 #endif
 
   uint32_t               stream_id;
@@ -96,11 +97,14 @@ struct ntacc_rx_queue {
 struct ntacc_tx_queue {
   NtNetStreamTx_t        pNetTx;
 #ifdef USE_SW_STAT
-  volatile unsigned long tx_pkts;
-  volatile unsigned long err_pkts;
+  volatile uint64_t      tx_pkts;
+  volatile uint64_t      tx_bytes;
 #endif
+  volatile uint64_t      err_pkts;
   volatile uint16_t     *plock;
   uint32_t               port;
+  uint16_t               minTxPktSize;
+  uint16_t               maxTxPktSize;
   uint8_t                local_port;
   int                    enabled;
 };
