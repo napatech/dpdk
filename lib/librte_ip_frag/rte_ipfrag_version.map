@@ -11,10 +11,3 @@ DPDK_2.0 {
 
 	local: *;
 };
-
-DPDK_17.08 {
-    global:
-
-    rte_ip_frag_table_destroy;
-
-} DPDK_2.0;
