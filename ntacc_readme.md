@@ -314,9 +314,19 @@ If a default RSS (hash) mode is defined using the rte_eth_dev_configure command 
 
 > With a default RSS/HASH function, the default filter will collide with any rte_flow filters created, as all non matched packets will be distributed to all defined queues using the default RSS/HASH function. It is recommended not to define a default RSS/HASH function if any rte_flow filters are going to be used.
 
-If a default filter is not wanted, it can be disabled by setting:
+
+#### Disabling default filter
+The default filer can be disabled either at compile time by setting:
 
 `CONFIG_RTE_LIBRTE_PMD_NTACC_DISABLE_DEFAULT_FILTER=y`
+
+or at runtime by using the rte_flow_isolate command:
+
+| Action                       | Command                                      |
+|---------------------------|---------------------------------------------|
+| Disable default filter |`rte_flow_isolate(portid, 1, error) ` |
+| Enable default filter  | `rte_flow_isolate(portid, 0, error) `|
+
 
 ## Examples of generic rte_flow filters
 
