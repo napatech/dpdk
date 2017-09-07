@@ -873,3 +873,122 @@ Fixes in 17.05 Stable Release
 * vhost: fix crash on NUMA
 * vhost: fix guest pages memory leak
 * vhost: fix malloc size too small
+
+17.05.2
+~~~~~~~
+
+* app/crypto-perf: fix CSV output
+* app/crypto-perf: fix digest data for chained mbufs
+* app/crypto-perf: fix error message
+* app/crypto-perf: stop crypto devices after test
+* app/testpmd: fix flow rule copy functions
+* app/testpmd: fix token matching in flow command
+* bus/fslmc: fix the failure loop condition
+* cmdline: fix dynamic tokens initialization
+* cmdline: fix dynamic tokens interface
+* contigmem: do not zero pages during each mmap
+* contigmem: free allocated memory on error
+* crypto/aesni_mb: fix HMAC supported key sizes
+* crypto/aesni_mb: fix possible crypto job leak
+* crypto/aesni_mb: fix zero burst dequeue
+* crypto/aesni_mb: remove assert checks
+* crypto/armv8: fix authentication session configuration
+* crypto/armv8: fix HMAC supported key sizes
+* cryptodev: fix device stop function
+* cryptodev: rename device retrieval argument
+* crypto/dpaa2_sec: fix build with gcc 7.1
+* crypto/dpaa2_sec: fix free usage for dpsec
+* crypto/dpaa2_sec: fix HMAC supported key sizes
+* crypto/dpaa2_sec: fix the return of supported API
+* crypto/openssl: fix HMAC supported key sizes
+* crypto/qat: fix HMAC supported key sizes
+* crypto/qat: fix NULL authentication hang
+* crypto/qat: fix SHA384-HMAC block size
+* crypto/scheduler: fix slave name parsing
+* crypto/scheduler: fix strings not null terminated
+* doc: add missing algorithm in limitations for QAT
+* doc: add VLAN flow limitation on mlx5 PMD
+* doc: remove incorrect limitation on AESNI-MB PMD
+* eal: fix config file path when checking process
+* ethdev: add missing symbol in map
+* ethdev: fix build with gcc 5.4.0
+* ethdev: fix secondary process crash on unused virtio
+* eventdev: fix memory realloc check in port config
+* event/octeontx: fix missing enqueue SMP barrier
+* examples/l2fwd-crypto: fix application help
+* examples/l2fwd-crypto: fix auth info display
+* examples/l2fwd-crypto: fix option parsing
+* examples/l3fwd: fix IPv6 packet type parse
+* examples/qos_sched: fix build for less lcores
+* hash: fix lock release on add
+* ip_frag: free mbufs on reassembly table destroy
+* mbuf: fix debug checks for headroom and tailroom
+* mbuf: fix doxygen comment of bulk alloc
+* mbuf: fix VXLAN port in comment
+* mem: do not advertise physical address when no hugepages
+* mempool/dpaa2: fix error code for allocation failure
+* mempool/dpaa2: fix freeing bp list
+* metrics: fix name string termination
+* net/ark: fix stats reset
+* net/bnxt: check invalid L2 filter id
+* net/bnxt: fix autoneg on 10GBase-T links
+* net/bnxt: fix get link config
+* net/bnxt: fix set link config
+* net/bnxt: fix set link config
+* net/bnxt: free filter before reusing it
+* net/bonding: change link status check to no-wait
+* net/bonding: fix number of bonding Tx/Rx queues
+* net/bonding: fix when NTT flag updated
+* net/e1000: fix LSC interrupt
+* net/ena/base: initialize memory in the allocation macros
+* net/ena: fix cleanup of the Tx bufs
+* net/enic: fix crash when freeing 0 packet to mempool
+* net/fm10k: initialize link status in device start
+* net/i40e: fix division by 0
+* net/i40e: fix ethertype filter for new FW
+* net/i40e: fix incorrect PF Rx bytes
+* net/i40e: fix link down and negotiation
+* net/i40e: fix LSC interrupt
+* net/i40e: fix parsing QinQ pattern
+* net/i40e: fix PF notify when VF is not up
+* net/i40e: fix Rx data segment buffer length
+* net/i40e: fix VF Tx bytes
+* net/i40e: revert fix of PF notify when VF not up
+* net/igb: fix flex filter length
+* net/ixgbe: fix LSC interrupt
+* net/ixgbe: fix mask flag on flow rule creation
+* net/ixgbe: fix mirror rule index overflow
+* net/ixgbe: fix Rx/Tx queue interrupt for x550 devices
+* net/mlx4: fix assertion failure on link update
+* net/mlx4: fix flow creation before start
+* net/mlx4: fix mbuf poisoning in debug code
+* net/mlx4: fix probe failure report
+* net/mlx5: fix inconsistent link status query
+* net/mlx5: fix misplaced Rx interrupts functions
+* net/mlx5: fix missing packet type calculation
+* net/mlx5: fix return value in Rx interrupts code
+* net/mlx5: fix Rx interrupts management
+* net/mlx5: fix Rx interrupts support checks
+* net/mlx5: fix TSO segment size
+* net/qede: fix chip details print
+* net/sfc: request MAC stats upload immediately on port start
+* net/virtio: fix MAC address read
+* net/virtio: fix Rx interrupt setup
+* net/virtio-user: fix crash when detaching device
+* net/vmxnet3: fix filtering on promiscuous disabling
+* net/vmxnet3: fix receive queue memory leak
+* Revert "ip_frag: free mbufs on reassembly table destroy"
+* Revert "net/i40e: revert fix of PF notify when VF not up"
+* ring: fix return value for dequeue
+* ring: use aligned memzone allocation
+* test/bonding: fix device name
+* test/bonding: fix memory corruptions
+* test/bonding: fix mode 4 names
+* test/bonding: fix namespace of the RSS tests
+* test/bonding: fix parameters of a balance Tx
+* test/crypto: fix overflow
+* test/crypto: fix wrong AAD setting
+* vhost: fix checking of device features
+* vhost: fix IP checksum
+* vhost: fix MTU device feature check
+* vhost: fix TCP checksum
