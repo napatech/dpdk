@@ -49,37 +49,6 @@ struct color_s {
   bool     valid;
 };
 
-struct filter_values_s {
-	LIST_ENTRY(filter_values_s) next;
-  uint64_t mask;
-  const char *layerString;
-  uint8_t size; 
-  uint8_t layer;
-  uint8_t offset;
-  union {
-    struct {
-      uint16_t specVal;
-      uint16_t maskVal;
-      uint16_t lastVal;
-    } v16;
-    struct {
-      uint32_t specVal;
-      uint32_t maskVal;
-      uint32_t lastVal;
-    } v32;
-    struct {
-      uint64_t specVal;
-      uint64_t maskVal;
-      uint64_t lastVal;
-    } v64;
-    struct {
-      uint8_t specVal[16];
-      uint8_t maskVal[16];
-      uint8_t lastVal[16];
-    } v128;
-  } value;
-};
-
 enum {
   ETHER_ADDR_DST       = (1ULL << 1),
   ETHER_ADDR_SRC       = (1ULL << 2),
@@ -138,14 +107,14 @@ void CreateStreamid(char *ntpl_buf, struct pmd_internals *internals, uint32_t nb
 int ReturnKeysetValue(struct pmd_internals *internals, int value);
 void pushNtplID(struct rte_flow *flow, uint32_t ntplId);
 
-int SetEthernetFilter(const struct rte_flow_item *item, bool tunnel, uint64_t *typeMask);
-int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnel, uint64_t *typeMask);
-int SetIPV6Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnel, uint64_t *typeMask);
-int SetUDPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel, uint64_t *typeMask);
-int SetSCTPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel, uint64_t *typeMask);
-int SetTCPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel, uint64_t *typeMask);
-int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask);
-int SetVlanFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask);
+int SetEthernetFilter(const struct rte_flow_item *item, bool tunnel, uint64_t *typeMask, struct pmd_internals *internals);
+int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnel, uint64_t *typeMask, struct pmd_internals *internals);
+int SetIPV6Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnel, uint64_t *typeMask, struct pmd_internals *internals);
+int SetUDPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel, uint64_t *typeMask, struct pmd_internals *internals);
+int SetSCTPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel, uint64_t *typeMask, struct pmd_internals *internals);
+int SetTCPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel, uint64_t *typeMask, struct pmd_internals *internals);
+int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask, struct pmd_internals *internals);
+int SetVlanFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask, struct pmd_internals *internals);
 int SetGreFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, uint64_t *typeMask);
 
 int SetTunnelFilter(char *ntpl_buf, bool *fc, int version, int type, uint64_t *typeMask);

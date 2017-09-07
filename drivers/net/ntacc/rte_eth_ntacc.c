@@ -149,16 +149,6 @@ static const char *valid_arguments[] = {
 
 static struct ether_addr eth_addr[MAX_NTACC_PORTS];
 
-static inline void priv_lock(struct pmd_internals *internals)
-{
-  rte_spinlock_lock(&internals->lock);
-}
-
-static inline void priv_unlock(struct pmd_internals *internals)
-{
-  rte_spinlock_unlock(&internals->lock);
-}
-
 static void _write_to_file(int fd, const char *buffer)
 {
   if (write(fd, buffer, strlen(buffer)) < 0) {
@@ -1063,6 +1053,7 @@ static void _cleanUpHash(struct rte_flow *flow, struct pmd_internals *internals)
     // No hash => nothing to cleanup
     return;
   }
+  priv_lock(internals);
   LIST_FOREACH(pTmp, &internals->flows, next) {
     if (pTmp->rss_hf == flow->rss_hf && pTmp->port == flow->port && pTmp->priority == flow->priority) {
       // Key set is still in use
@@ -1074,6 +1065,7 @@ static void _cleanUpHash(struct rte_flow *flow, struct pmd_internals *internals)
     // Hash is not in use anymore. delete it.
     DeleteHash(flow->rss_hf, flow->port, flow->priority, internals);
   }
+  priv_unlock(internals);
 }
 
 static void _cleanUpKeySet(int key, struct pmd_internals *internals)
@@ -1249,7 +1241,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
     case RTE_FLOW_ITEM_TYPE_ETH:
       if (SetEthernetFilter(items,
                             tunnel,
-                            &typeMask) != 0) {
+                            &typeMask,
+                            internals) != 0) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up Ether filter");
         goto FlowError;
       }
@@ -1260,7 +1253,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                           &filterContinue,
                           items,
                           tunnel,
-                          &typeMask) != 0) {
+                          &typeMask,
+                          internals) != 0) {
           rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up IPV4 filter");
           goto FlowError;
         }
@@ -1271,7 +1265,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                         &filterContinue,
                         items,
                         tunnel,
-                        &typeMask) != 0) {
+                        &typeMask,
+                        internals) != 0) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up IPV6 filter");
         goto FlowError;
       }
@@ -1282,7 +1277,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                           &filterContinue,
                           items,
                           tunnel,
-                          &typeMask) != 0) {
+                          &typeMask,
+                          internals) != 0) {
           rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up TCP filter");
           goto FlowError;
         }
@@ -1293,7 +1289,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                           &filterContinue,
                           items,
                           tunnel,
-                          &typeMask) != 0) {
+                          &typeMask,
+                          internals) != 0) {
           rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up TCP filter");
           goto FlowError;
         }
@@ -1304,7 +1301,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                         &filterContinue,
                         items,
                         tunnel,
-                        &typeMask) != 0) {
+                        &typeMask,
+                        internals) != 0) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up UDP filter");
         goto FlowError;
       }
@@ -1315,7 +1313,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                           &filterContinue,
                           items,
                           tunnel,
-                          &typeMask) != 0) {
+                          &typeMask,
+                          internals) != 0) {
           rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up ICMP filter");
           goto FlowError;
         }
@@ -1326,7 +1325,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                         &filterContinue,
                         items,
                         tunnel,
-                        &typeMask) != 0) {
+                        &typeMask,
+                        internals) != 0) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up VLAN filter");
         goto FlowError;
       }
@@ -1412,7 +1412,9 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Filter error");
         goto FlowError;
       }
+      priv_lock(internals);
       pushNtplID(flow, ntplInfo.ntplId);
+      priv_unlock(internals);
     }
 
     if (rss && rss->rss_conf) {

@@ -120,6 +120,36 @@ struct version_s {
     int32_t patch;
 };
 
+struct filter_values_s {
+	LIST_ENTRY(filter_values_s) next;
+  uint64_t mask;
+  const char *layerString;
+  uint8_t size; 
+  uint8_t layer;
+  uint8_t offset;
+  union {
+    struct {
+      uint16_t specVal;
+      uint16_t maskVal;
+      uint16_t lastVal;
+    } v16;
+    struct {
+      uint32_t specVal;
+      uint32_t maskVal;
+      uint32_t lastVal;
+    } v32;
+    struct {
+      uint64_t specVal;
+      uint64_t maskVal;
+      uint64_t lastVal;
+    } v64;
+    struct {
+      uint8_t specVal[16];
+      uint8_t maskVal[16];
+      uint8_t lastVal[16];
+    } v128;
+  } value;
+};
 
 struct pmd_internals {
   struct ntacc_rx_queue rxq[RTE_ETHDEV_QUEUE_STAT_CNTRS];
@@ -133,6 +163,9 @@ struct pmd_internals {
 #endif
   int                   if_index;
   LIST_HEAD(_flows, rte_flow) flows;
+  LIST_HEAD(filter_values_t, filter_values_s) filter_values;
+  LIST_HEAD(filter_hash_t, filter_hash_s) filter_hash;
+  LIST_HEAD(filter_keyset_t, filter_keyset_s) filter_keyset;
   rte_spinlock_t        lock;
   uint8_t               port;
   uint8_t               local_port;
@@ -152,9 +185,17 @@ struct pmd_internals {
   struct pmd_shared_mem_s *shm;
 };
 
-
-
 int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo, struct pmd_internals *internals);
+
+static inline void priv_lock(struct pmd_internals *internals)
+{
+  rte_spinlock_lock(&internals->lock);
+}
+
+static inline void priv_unlock(struct pmd_internals *internals)
+{
+  rte_spinlock_unlock(&internals->lock);
+}
 
 #endif
 
