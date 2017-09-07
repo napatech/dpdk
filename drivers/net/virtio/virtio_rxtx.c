@@ -412,9 +412,6 @@ virtio_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	struct virtio_hw *hw = dev->data->dev_private;
 	struct virtqueue *vq = hw->vqs[vtpci_queue_idx];
 	struct virtnet_rx *rxvq;
-	int error, nbufs;
-	struct rte_mbuf *m;
-	uint16_t desc_idx;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -431,10 +428,24 @@ virtio_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	}
 	dev->data->rx_queues[queue_idx] = rxvq;
 
+	return 0;
+}
+
+int
+virtio_dev_rx_queue_setup_finish(struct rte_eth_dev *dev, uint16_t queue_idx)
+{
+	uint16_t vtpci_queue_idx = 2 * queue_idx + VTNET_SQ_RQ_QUEUE_IDX;
+	struct virtio_hw *hw = dev->data->dev_private;
+	struct virtqueue *vq = hw->vqs[vtpci_queue_idx];
+	struct virtnet_rx *rxvq = &vq->rxq;
+	struct rte_mbuf *m;
+	uint16_t desc_idx;
+	int error, nbufs;
+
+	PMD_INIT_FUNC_TRACE();
 
 	/* Allocate blank mbufs for the each rx descriptor */
 	nbufs = 0;
-	error = ENOSPC;
 
 	if (hw->use_simple_rxtx) {
 		for (desc_idx = 0; desc_idx < vq->vq_nentries;
@@ -525,7 +536,6 @@ virtio_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	struct virtqueue *vq = hw->vqs[vtpci_queue_idx];
 	struct virtnet_tx *txvq;
 	uint16_t tx_free_thresh;
-	uint16_t desc_idx;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -554,9 +564,24 @@ virtio_dev_tx_queue_setup(struct rte_eth_dev *dev,
 
 	vq->vq_free_thresh = tx_free_thresh;
 
-	if (hw->use_simple_rxtx) {
-		uint16_t mid_idx  = vq->vq_nentries >> 1;
+	dev->data->tx_queues[queue_idx] = txvq;
+	return 0;
+}
 
+int
+virtio_dev_tx_queue_setup_finish(struct rte_eth_dev *dev,
+				uint16_t queue_idx)
+{
+	uint8_t vtpci_queue_idx = 2 * queue_idx + VTNET_SQ_TQ_QUEUE_IDX;
+	struct virtio_hw *hw = dev->data->dev_private;
+	struct virtqueue *vq = hw->vqs[vtpci_queue_idx];
+	uint16_t mid_idx = vq->vq_nentries >> 1;
+	struct virtnet_tx *txvq = &vq->txq;
+	uint16_t desc_idx;
+
+	PMD_INIT_FUNC_TRACE();
+
+	if (hw->use_simple_rxtx) {
 		for (desc_idx = 0; desc_idx < mid_idx; desc_idx++) {
 			vq->vq_ring.avail->ring[desc_idx] =
 				desc_idx + mid_idx;
@@ -578,7 +603,6 @@ virtio_dev_tx_queue_setup(struct rte_eth_dev *dev,
 
 	VIRTQUEUE_DUMP(vq);
 
-	dev->data->tx_queues[queue_idx] = txvq;
 	return 0;
 }
 
