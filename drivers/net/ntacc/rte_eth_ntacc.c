@@ -885,7 +885,6 @@ static void eth_dev_close(struct rte_eth_dev *dev)
   if (internals->ntpl_file) {
     rte_free(internals->ntpl_file);
   }
-  rte_free(dev->device);
   rte_free(dev->data->dev_private);
   rte_eth_dev_release_port(dev);
 
@@ -1868,13 +1867,6 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
       goto error;
     }
 
-    eth_dev->device = rte_zmalloc_socket(name, sizeof(struct rte_device), 0, dev->numa_node);
-    if (eth_dev->device == NULL) {
-      RTE_LOG(ERR, PMD, "ERROR: Failed to allocate memory\n");
-      iRet = 1;
-      goto error;
-    }
-
     internals = rte_zmalloc_socket(name, sizeof(struct pmd_internals), 0, dev->numa_node);
     if (internals == NULL) {
       RTE_LOG(ERR, PMD, "ERROR: Failed to allocate memory\n");
@@ -1951,10 +1943,6 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
       break;
     }
 
-    eth_dev->device->name = eth_dev->data->name;
-    eth_dev->device->driver = dev->device.driver;
-    eth_dev->device->devargs = dev->device.devargs;
-
     memcpy(&eth_addr[internals->port].addr_bytes, &info.u.port_v7.data.macAddress, sizeof(eth_addr[internals->port].addr_bytes));
 
     pmd_link.link_duplex = ETH_LINK_FULL_DUPLEX;
@@ -1962,12 +1950,12 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
 
     internals->if_index = internals->port;
 
+    eth_dev->device = &dev->device;
     eth_dev->data->dev_private = internals;
     eth_dev->data->port_id = eth_dev->data->port_id;
     eth_dev->data->dev_link = pmd_link;
     eth_dev->data->mac_addrs = &eth_addr[internals->port];
     eth_dev->data->numa_node = dev->numa_node;
-    eth_dev->device->numa_node = dev->numa_node;
 
     eth_dev->dev_ops = &ops;
     eth_dev->rx_pkt_burst = eth_ntacc_rx;
