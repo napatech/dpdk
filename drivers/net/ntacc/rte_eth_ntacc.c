@@ -885,6 +885,7 @@ static void eth_dev_close(struct rte_eth_dev *dev)
   if (internals->ntpl_file) {
     rte_free(internals->ntpl_file);
   }
+  rte_free(dev->device);
   rte_free(dev->data->dev_private);
   rte_eth_dev_release_port(dev);
 
@@ -1053,7 +1054,6 @@ static void _cleanUpHash(struct rte_flow *flow, struct pmd_internals *internals)
     // No hash => nothing to cleanup
     return;
   }
-  priv_lock(internals);
   LIST_FOREACH(pTmp, &internals->flows, next) {
     if (pTmp->rss_hf == flow->rss_hf && pTmp->port == flow->port && pTmp->priority == flow->priority) {
       // Key set is still in use
@@ -1065,7 +1065,6 @@ static void _cleanUpHash(struct rte_flow *flow, struct pmd_internals *internals)
     // Hash is not in use anymore. delete it.
     DeleteHash(flow->rss_hf, flow->port, flow->priority, internals);
   }
-  priv_unlock(internals);
 }
 
 static void _cleanUpKeySet(int key, struct pmd_internals *internals)
@@ -1091,14 +1090,13 @@ static void _cleanUpFlow(struct rte_flow *flow, struct pmd_internals *internals)
 {
   NtNtplInfo_t ntplInfo;
   char ntpl_buf[21];
-
   LIST_REMOVE(flow, next);
   while (!LIST_EMPTY(&flow->ntpl_id)) {
     struct filter_flow *id;
     id = LIST_FIRST(&flow->ntpl_id);
     snprintf(ntpl_buf, 20, "delete=%d", id->ntpl_id);
     DoNtpl(ntpl_buf, &ntplInfo, internals);
-    RTE_LOG(DEBUG, PMD, "Deleting Item filter: %s\n", ntpl_buf);
+    RTE_LOG(DEBUG, PMD, "Deleting Item filter 1: %s\n", ntpl_buf);
     LIST_REMOVE(id, next);
     free(id);
   }
@@ -1524,7 +1522,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       id = LIST_FIRST(&internals->defaultFlow->ntpl_id);
       snprintf(ntpl_buf, 20, "delete=%d", id->ntpl_id);
       DoNtpl(ntpl_buf, &ntplInfo, internals);
-      RTE_LOG(DEBUG, PMD, "Deleting Item filter: %s\n", ntpl_buf);
+      RTE_LOG(DEBUG, PMD, "Deleting Item filter 0: %s\n", ntpl_buf);
       LIST_REMOVE(id, next);
       free(id);
     }
@@ -1811,7 +1809,6 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     }
 
     if (!((1<<localPort)&mask)) {
-      printf("Local Port %u is ignored\n", localPort);
       continue;
     }
     
@@ -1867,6 +1864,13 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     eth_dev = rte_eth_dev_allocate(name);
     if (eth_dev == NULL) {
       RTE_LOG(ERR, PMD, "ERROR: Failed to allocate ethernet device\n");
+      iRet = 1;
+      goto error;
+    }
+
+    eth_dev->device = rte_zmalloc_socket(name, sizeof(struct rte_device), 0, dev->numa_node);
+    if (eth_dev->device == NULL) {
+      RTE_LOG(ERR, PMD, "ERROR: Failed to allocate memory\n");
       iRet = 1;
       goto error;
     }
@@ -1947,6 +1951,10 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
       break;
     }
 
+    eth_dev->device->name = eth_dev->data->name;
+    eth_dev->device->driver = dev->device.driver;
+    eth_dev->device->devargs = dev->device.devargs;
+
     memcpy(&eth_addr[internals->port].addr_bytes, &info.u.port_v7.data.macAddress, sizeof(eth_addr[internals->port].addr_bytes));
 
     pmd_link.link_duplex = ETH_LINK_FULL_DUPLEX;
@@ -1954,12 +1962,12 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
 
     internals->if_index = internals->port;
 
-    eth_dev->device = &dev->device;
     eth_dev->data->dev_private = internals;
     eth_dev->data->port_id = eth_dev->data->port_id;
     eth_dev->data->dev_link = pmd_link;
     eth_dev->data->mac_addrs = &eth_addr[internals->port];
     eth_dev->data->numa_node = dev->numa_node;
+    eth_dev->device->numa_node = dev->numa_node;
 
     eth_dev->dev_ops = &ops;
     eth_dev->rx_pkt_burst = eth_ntacc_rx;
