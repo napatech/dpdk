@@ -431,8 +431,10 @@ mlx5_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 #ifdef MLX5_PMD_SOFT_COUNTERS
 		total_length = length;
 #endif
-		if (length < (MLX5_WQE_DWORD_SIZE + 2))
+		if (length < (MLX5_WQE_DWORD_SIZE + 2)) {
+			txq->stats.oerrors++;
 			break;
+		}
 		/* Update element. */
 		(*txq->elts)[elts_head] = buf;
 		elts_head = (elts_head + 1) & (elts_n - 1);
@@ -735,8 +737,10 @@ mlx5_tx_burst_mpw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		if (max < segs_n + 1)
 			break;
 		/* Do not bother with large packets MPW cannot handle. */
-		if (segs_n > MLX5_MPW_DSEG_MAX)
+		if (segs_n > MLX5_MPW_DSEG_MAX) {
+			txq->stats.oerrors++;
 			break;
+		}
 		max -= segs_n;
 		--pkts_n;
 		/* Should we enable HW CKSUM offload */
@@ -941,8 +945,10 @@ mlx5_tx_burst_mpw_inline(void *dpdk_txq, struct rte_mbuf **pkts,
 		if (max < segs_n + 1)
 			break;
 		/* Do not bother with large packets MPW cannot handle. */
-		if (segs_n > MLX5_MPW_DSEG_MAX)
+		if (segs_n > MLX5_MPW_DSEG_MAX) {
+			txq->stats.oerrors++;
 			break;
+		}
 		max -= segs_n;
 		--pkts_n;
 		/* Should we enable HW CKSUM offload */
