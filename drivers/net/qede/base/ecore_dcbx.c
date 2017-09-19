@@ -619,7 +619,7 @@ ecore_dcbx_get_remote_params(struct ecore_hwfn *p_hwfn,
 	return ECORE_SUCCESS;
 }
 
-static enum _ecore_status_t
+static void
 ecore_dcbx_get_operational_params(struct ecore_hwfn *p_hwfn,
 				  struct ecore_ptt *p_ptt,
 				  struct ecore_dcbx_get *params)
@@ -644,7 +644,7 @@ ecore_dcbx_get_operational_params(struct ecore_hwfn *p_hwfn,
 	if (!enabled) {
 		p_operational->enabled = enabled;
 		p_operational->valid = false;
-		return ECORE_INVAL;
+		return;
 	}
 
 	p_data = &p_operational->params;
@@ -671,8 +671,6 @@ ecore_dcbx_get_operational_params(struct ecore_hwfn *p_hwfn,
 	p_operational->err = err;
 	p_operational->enabled = enabled;
 	p_operational->valid = true;
-
-	return rc;
 }
 
 static enum _ecore_status_t
