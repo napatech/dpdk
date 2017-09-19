@@ -2856,12 +2856,10 @@ static enum _ecore_status_t ecore_get_dev_info(struct ecore_dev *p_dev)
 	else
 		p_dev->type = ECORE_DEV_TYPE_BB;
 
-	p_dev->chip_num = (u16)ecore_rd(p_hwfn, p_hwfn->p_main_ptt,
-					 MISCS_REG_CHIP_NUM);
-	p_dev->chip_rev = (u16)ecore_rd(p_hwfn, p_hwfn->p_main_ptt,
-					 MISCS_REG_CHIP_REV);
-
-	MASK_FIELD(CHIP_REV, p_dev->chip_rev);
+	tmp = ecore_rd(p_hwfn, p_hwfn->p_main_ptt, MISCS_REG_CHIP_NUM);
+	p_dev->chip_num = (u16)GET_FIELD(tmp, CHIP_NUM);
+	tmp = ecore_rd(p_hwfn, p_hwfn->p_main_ptt, MISCS_REG_CHIP_REV);
+	p_dev->chip_rev = (u8)GET_FIELD(tmp, CHIP_REV);
 
 	/* Learn number of HW-functions */
 	tmp = ecore_rd(p_hwfn, p_hwfn->p_main_ptt,
@@ -2885,20 +2883,19 @@ static enum _ecore_status_t ecore_get_dev_info(struct ecore_dev *p_dev)
 	}
 #endif
 
-	p_dev->chip_bond_id = ecore_rd(p_hwfn, p_hwfn->p_main_ptt,
-				       MISCS_REG_CHIP_TEST_REG) >> 4;
-	MASK_FIELD(CHIP_BOND_ID, p_dev->chip_bond_id);
-	p_dev->chip_metal = (u16)ecore_rd(p_hwfn, p_hwfn->p_main_ptt,
-					   MISCS_REG_CHIP_METAL);
-	MASK_FIELD(CHIP_METAL, p_dev->chip_metal);
+	tmp = ecore_rd(p_hwfn, p_hwfn->p_main_ptt, MISCS_REG_CHIP_TEST_REG);
+	p_dev->chip_bond_id = (u8)GET_FIELD(tmp, CHIP_BOND_ID);
+	tmp = ecore_rd(p_hwfn, p_hwfn->p_main_ptt, MISCS_REG_CHIP_METAL);
+	p_dev->chip_metal = (u8)GET_FIELD(tmp, CHIP_METAL);
+
 	DP_INFO(p_dev->hwfns,
-		"Chip details - %s%d, Num: %04x Rev: %04x Bond id: %04x Metal: %04x\n",
+		"Chip details - %s%d, Num: %04x Rev: %02x Bond id: %02x Metal: %02x\n",
 		ECORE_IS_BB(p_dev) ? "BB" : "AH",
 		CHIP_REV_IS_A0(p_dev) ? 0 : 1,
 		p_dev->chip_num, p_dev->chip_rev, p_dev->chip_bond_id,
 		p_dev->chip_metal);
 
-	if (ECORE_IS_BB(p_dev) && CHIP_REV_IS_A0(p_dev)) {
+	if (ECORE_IS_BB_A0(p_dev)) {
 		DP_NOTICE(p_dev->hwfns, false,
 			  "The chip type/rev (BB A0) is not supported!\n");
 		return ECORE_ABORTED;
