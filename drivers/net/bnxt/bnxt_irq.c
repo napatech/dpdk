@@ -56,6 +56,9 @@ static void bnxt_int_handler(struct rte_intr_handle *handle __rte_unused,
 	struct cmpl_base *cmp;
 
 	while (1) {
+		if (!cpr || !cpr->cp_ring_struct)
+			return;
+
 		cons = RING_CMP(cpr->cp_ring_struct, raw_cons);
 		cmp = &cpr->cp_desc_ring[cons];
 
