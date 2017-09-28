@@ -37,6 +37,22 @@
 #define B_RX_DB(db, prod)						\
 		(*(uint32_t *)db = (DB_KEY_RX | prod))
 
+#define RX_CMP_L4_CS_BITS	rte_cpu_to_le_32(RX_PKT_CMPL_FLAGS2_L4_CS_CALC)
+
+#define RX_CMP_L4_CS_ERR_BITS	rte_cpu_to_le_32(RX_PKT_CMPL_ERRORS_L4_CS_ERROR)
+
+#define RX_CMP_L4_CS_OK(rxcmp1)						\
+	    (((rxcmp1)->flags2 & RX_CMP_L4_CS_BITS) &&		\
+	     !((rxcmp1)->errors_v2 & RX_CMP_L4_CS_ERR_BITS))
+
+#define RX_CMP_IP_CS_ERR_BITS	rte_cpu_to_le_32(RX_PKT_CMPL_ERRORS_IP_CS_ERROR)
+
+#define RX_CMP_IP_CS_BITS	rte_cpu_to_le_32(RX_PKT_CMPL_FLAGS2_IP_CS_CALC)
+
+#define RX_CMP_IP_CS_OK(rxcmp1)						\
+		(((rxcmp1)->flags2 & RX_CMP_IP_CS_BITS) &&	\
+		!((rxcmp1)->errors_v2 & RX_CMP_IP_CS_ERR_BITS))
+
 struct bnxt_sw_rx_bd {
 	struct rte_mbuf		*mbuf; /* data associated with RX descriptor */
 };
