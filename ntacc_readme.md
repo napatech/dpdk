@@ -21,14 +21,17 @@ See below for supported drivers and accelerators:
 
 |  Supported accelerators                        | FPGA                        |
 |---------------------------------------------------|---------------------------|
-|  NT40A01-01-SCC-4×1-E3-FF-ANL        |  200-9500-08-06-00 |
-|  NT20E3-2-PTP-ANL                               |  200-9501-08-06-00 |
-|  NT40E3-4-PTP-ANL                               |  200-9502-08-06-00 |
-|  NT80E3-2-PTP-ANL                               |  200-9503-08-06-00 |
-|  NT100E3‐1‐PTP‐ANL                             |  200-9505-08-06-00 |
-|  NT200A01-02-SCC-2×100-E3-FF-ANL  |  200-9508-07-06-00 |
-|  NT200A01-02-SCC-2×40-E3-FF-ANL    |  200-9512-08-08-00 |
+|  NT40A01-01-SCC-4×1-E3-FF-ANL        |  200-9500-09-08-00 |
+|  NT20E3-2-PTP-ANL                               |  200-9501-09-08-00 |
+|  NT40E3-4-PTP-ANL                               |  200-9502-09-08-00 |
+|  NT80E3-2-PTP-ANL                               |  200-9503-09-08-00 |
+|  NT100E3‐1‐PTP‐ANL                             |  200-9505-09-08-00 |
+|  NT200A01-02-SCC-2×40-E3-FF-ANL    |  200-9512-09-08-00 |
+|  NT200A01-02-SCC-2×100-E3-FF-ANL  |  200-9515-09-08-00 |
+|  NT200A01-02-SCC-2×40-E3-FF-ANL    |  200-9517-09-08-00 |
 
+The complete driver package can be downloaded here:
+[ntanl_package_3gd_linux_9.0.7](https://support.napatech.com/Releases/SmartNICs/9.0.7/ntanl_package_3gd_linux_9.0.7.tar.gz) 
 
 
 ## Compiling the Napatech NTACC PMD driver 
