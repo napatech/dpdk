@@ -151,6 +151,8 @@ struct filter_values_s {
   } value;
 };
 
+#define NTACC_NAME_LEN (PCI_PRI_STR_SIZE + 10)
+
 struct pmd_internals {
   struct ntacc_rx_queue rxq[RTE_ETHDEV_QUEUE_STAT_CNTRS];
   struct ntacc_tx_queue txq[RTE_ETHDEV_QUEUE_STAT_CNTRS];
@@ -175,7 +177,7 @@ struct pmd_internals {
   uint8_t               symHashMode;
   char                  driverName[128];
   char                  tagName[10];
-  char                  name[PCI_PRI_STR_SIZE];
+  char                  name[NTACC_NAME_LEN];
   union Ntfpgaid_u      fpgaid;
   struct version_s      version;
   char                  *ntpl_file;

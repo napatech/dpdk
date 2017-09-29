@@ -84,7 +84,7 @@ static struct {
 #define PCI_DEVICE_ID_NT40A01  0x0185
 #define PCI_DEVICE_ID_NT100E3  0x0155
 
-#define NB_SUPPORTED_FPGAS 7
+#define NB_SUPPORTED_FPGAS 8
 struct {
   uint32_t item:12;
   uint32_t product:16;
@@ -95,11 +95,12 @@ struct {
 {
   { 200, 9500, 8, 6, 0 },
   { 200, 9501, 8, 6, 0 },
-  { 200, 9502, 8, 6, 0 },
+  { 200, 9502, 9, 7, 0 },
   { 200, 9503, 8, 6, 0 },
   { 200, 9505, 8, 6, 0 },
   { 200, 9508, 7, 6, 0 },
   { 200, 9512, 8, 8, 0 },
+  { 200, 9515, 9, 8, 0 },
 };
 
 static void *_libnt;
@@ -817,7 +818,7 @@ static void eth_stats_get(struct rte_eth_dev *dev,
 
   /* Get stat data */
   statData.cmd = NT_STATISTICS_READ_CMD_QUERY_V2;
-  statData.u.query_v2.poll=1;
+  statData.u.query_v2.poll=0;
   statData.u.query_v2.clear=0;
   if ((status = (*_NT_StatRead)(internals->hStat, &statData)) != 0) {
     (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
@@ -867,7 +868,7 @@ static void eth_stats_reset(struct rte_eth_dev *dev)
   char errBuf[NT_ERRBUF_SIZE];
 
   statData.cmd = NT_STATISTICS_READ_CMD_QUERY_V2;
-  statData.u.query_v2.poll=1;
+  statData.u.query_v2.poll=0;
   statData.u.query_v2.clear=1;
   if ((status = (*_NT_StatRead)(internals->hStat, &statData)) != 0) {
     (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
@@ -1725,7 +1726,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   char errBuf[NT_ERRBUF_SIZE];
   NtInfo_t info;
   struct rte_eth_link pmd_link;
-  char name[PCI_PRI_STR_SIZE];
+  char name[NTACC_NAME_LEN];
   uint8_t nbPortsOnAdapter;
   uint8_t nbPortsInSystem;
   uint8_t nbAdapters;
@@ -1811,7 +1812,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
       continue;
     }
     
-    snprintf(name, PCI_PRI_STR_SIZE, PCI_PRI_FMT, dev->addr.domain, dev->addr.bus, dev->addr.devid, localPort);
+    snprintf(name, NTACC_NAME_LEN, PCI_PRI_FMT " Port %u", dev->addr.domain, dev->addr.bus, dev->addr.devid, dev->addr.function, localPort);
     RTE_LOG(INFO, PMD, "Port: %u - %s\n", offset + localPort, name);
     
     // Check if FPGA is supported
@@ -1840,7 +1841,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
 
     if (i == NB_SUPPORTED_FPGAS) {
       // No matching adapter is found
-      RTE_LOG(ERR, PMD, ">>> ERROR: No supported NT adapter is found. Following adapters are supported:\n");
+      RTE_LOG(ERR, PMD, ">>> ERROR: Not supported NT adapter is found. Following adapters are supported:\n");
       for (i = 0; i < NB_SUPPORTED_FPGAS; i++) {
         RTE_LOG(ERR, PMD, "           %03d-%04d-%02d-%02d-%02d\n",
                 supportedAdapters[i].item,

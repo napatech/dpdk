@@ -328,9 +328,17 @@ rte_eth_dev_get_name_by_port(uint8_t port_id, char *name)
 		return -EINVAL;
 	}
 
-	/* shouldn't check 'rte_eth_devices[i].data',
-	 * because it might be overwritten by VDEV PMD */
-	tmp = rte_eth_devices[port_id].device->name;
+	if (rte_eth_devices[port_id].data) {
+		if (strcmp(rte_eth_devices[port_id].data->name, rte_eth_devices[port_id].device->name)) {
+			tmp = rte_eth_devices[port_id].data->name;
+		}
+		else {
+			tmp = rte_eth_devices[port_id].device->name;
+		}
+	}
+	else {
+		tmp = rte_eth_devices[port_id].device->name;
+	}
 	strcpy(name, tmp);
 	return 0;
 }
@@ -346,11 +354,24 @@ rte_eth_dev_get_port_by_name(const char *name, uint8_t *port_id)
 		return -EINVAL;
 	}
 
+	// Check first device->name
 	RTE_ETH_FOREACH_DEV(i) {
 		if (!rte_eth_devices[i].device)
 			continue;
 
 		ret = strncmp(name, rte_eth_devices[i].device->name,
+				strlen(name));
+		if (ret == 0) {
+			*port_id = i;
+			return 0;
+		}
+	}
+	// If not found then check data->name
+	RTE_ETH_FOREACH_DEV(i) {
+		if (!rte_eth_devices[i].data)
+			continue;
+
+		ret = strncmp(name, rte_eth_devices[i].data->name,
 				strlen(name));
 		if (ret == 0) {
 			*port_id = i;
