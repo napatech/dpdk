@@ -98,8 +98,9 @@ DEPDIRS-virtio = $(core-libs)
 DIRS-$(CONFIG_RTE_LIBRTE_VMXNET3_PMD) += vmxnet3
 DEPDIRS-vmxnet3 = $(core-libs)
 DIRS-$(CONFIG_RTE_LIBRTE_PMD_XENVIRT) += xenvirt
-DIRS-$(CONFIG_RTE_LIBRTE_PMD_NTACC) += ntacc
 DEPDIRS-xenvirt = $(core-libs) librte_cmdline
+DIRS-$(CONFIG_RTE_LIBRTE_PMD_NTACC) += ntacc
+DEPDIRS-ntacc = $(core-libs)
 
 ifeq ($(CONFIG_RTE_LIBRTE_KNI),y)
 DIRS-$(CONFIG_RTE_LIBRTE_PMD_KNI) += kni

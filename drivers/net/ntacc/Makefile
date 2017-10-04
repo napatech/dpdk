@@ -56,7 +56,7 @@ ifeq ($(CONFIG_RTE_LIBRTE_PMD_NTACC_DISABLE_DEFAULT_FILTER),y)
 CFLAGS += -DDO_NOT_CREATE_DEFAULT_FILTER
 endif
 
-LDLIBS += -ldl
+LDLIBS += -ldl -lpthread
 
 EXPORT_MAP := rte_pmd_ntacc_version.map
 
