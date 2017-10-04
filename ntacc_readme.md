@@ -28,10 +28,9 @@ See below for supported drivers and accelerators:
 |  NT100E3‐1‐PTP‐ANL                             |  200-9505-09-08-00 |
 |  NT200A01-02-SCC-2×40-E3-FF-ANL    |  200-9512-09-08-00 |
 |  NT200A01-02-SCC-2×100-E3-FF-ANL  |  200-9515-09-08-00 |
-|  NT200A01-02-SCC-2×40-E3-FF-ANL    |  200-9517-09-08-00 |
 
 The complete driver package can be downloaded here:
-[ntanl_package_3gd_linux_9.0.7](https://support.napatech.com/Releases/SmartNICs/9.0.7/ntanl_package_3gd_linux_9.0.7.tar.gz) 
+[ntanl_package_3gd_linux_10.0.1](https://support.napatech.com/Releases/SmartNICs/10.0.1/ntanl_package_3gd_linux_10.0.1.tar.gz) 
 
 
 ## Compiling the Napatech NTACC PMD driver 
