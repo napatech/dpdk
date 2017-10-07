@@ -1214,13 +1214,17 @@ static void ecore_iov_send_response(struct ecore_hwfn *p_hwfn,
 			     (sizeof(union pfvf_tlvs) - sizeof(u64)) / 4,
 			     &params);
 
-	ecore_dmae_host2host(p_hwfn, p_ptt, mbx->reply_phys,
-			     mbx->req_virt->first_tlv.reply_address,
-			     sizeof(u64) / 4, &params);
-
+	/* Once PF copies the rc to the VF, the latter can continue and
+	 * and send an additional message. So we have to make sure the
+	 * channel would be re-set to ready prior to that.
+	 */
 	REG_WR(p_hwfn,
 	       GTT_BAR0_MAP_REG_USDM_RAM +
 	       USTORM_VF_PF_CHANNEL_READY_OFFSET(eng_vf_id), 1);
+
+	ecore_dmae_host2host(p_hwfn, p_ptt, mbx->reply_phys,
+			     mbx->req_virt->first_tlv.reply_address,
+			     sizeof(u64) / 4, &params);
 }
 
 static u16 ecore_iov_vport_to_tlv(struct ecore_hwfn *p_hwfn,
