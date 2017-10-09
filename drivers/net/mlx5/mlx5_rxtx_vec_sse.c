@@ -1377,6 +1377,8 @@ priv_check_vec_rx_support(struct priv *priv)
 	for (i = 0; i < priv->rxqs_n; ++i) {
 		struct rxq *rxq = (*priv->rxqs)[i];
 
+		if (!rxq)
+			continue;
 		if (rxq_check_vec_support(rxq) < 0)
 			break;
 	}
