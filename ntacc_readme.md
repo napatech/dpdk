@@ -6,8 +6,30 @@ The NTACC PMD driver does not need to be binded, this means that the dpdk-devbin
 
 When starting the DPDK app, it will automatically find and use the NTACC PMD driver provided that the Napatech driver is started and the Napatech accelerator is not blacklisted.
 
+## Table of Contents
+1. [Napatech Driver](#driver)
+2. [Compiling the Napatech NTACC PMD driver](#compiling)
+	1. [Environment variable](#Environment)
+	2. [Configuration setting](#configuration)
+3. [Napatech Driver Configuration](#driverconfig)
+4. [Number of RX queues and TX queues available](#queues)
+5. [Starting NTACC PMD](#starting)
+5. [Priority](#Priority)
+6. [Generic rte_flow filter items](#genericflow)
+7. [Generic rte_flow RSS/Hash functions](#hash)
+7. [Generic rte_flow filter Attributes](#attributes)
+8. [Generic rte_flow filter actions](#actions)
+7. [Generic rte_flow RSS/Hash functions](#hash)
+	1. [Symmetric/Unsymmetric hash](#Symmetric)
+	2. [Default RSS/HASH function](#DefaultRSS)
+8. [Default filter](#DefaultFilter)
+	1. [Disabling default filter](#DisablingDefaultFilter)
+9. [Examples of generic rte_flow filters](#examples1)
+9. [Limited filter resources](#resources)
+9. [Filter creation example -  5tuple filter](#Filtercreationexample)
+10. [Filter creation example - Multiple 5tuple filter (IPv4 addresses and TCP ports)](#examples2)
 
-## Napatech Driver ##
+## Napatech Driver <a name="driver"></a>
 
 The Napatech driver and accelerator must be installed and started before the NTACC PMD can be used. See the installation guide in the Napatech driver package for how to install and start the driver.
 
@@ -33,21 +55,21 @@ The complete driver package can be downloaded here:
 [ntanl_package_3gd_linux_10.0.1](https://support.napatech.com/Releases/SmartNICs/10.0.1/ntanl_package_3gd_linux_10.0.1.tar.gz) 
 
 
-## Compiling the Napatech NTACC PMD driver 
+## Compiling the Napatech NTACC PMD driver <a name="compiling"></a>
 
-##### Environment variable 
+##### Environment variable <a name="Environment"></a>
 In order to compile the NTACC PMD the NAPATECH3_PATH environment variable must be set. This tells DPDK where the Napatech driver is installed.
 
 `export NAPATECH3_PATH=/opt/napatech3`
 
 /opt/napatech3 is the default path for installing the Napatech driver. If the driver is installed elsewhere, that path must be used.
 
-##### Configuration setting
+##### Configuration setting  <a name="configuration"></a>
 To enable DPDK to compile NTACC PMD a configuration setting must be set in the file common_base.
 
 `CONFIG_RTE_LIBRTE_PMD_NTACC=y`
 
-Two other configurations settings can be used to change the behaviour of the NTACC PMD:
+Three other configurations settings can be used to change the behaviour of the NTACC PMD:
 
 - Hardware based or software based statistic:
 This setting is used to select between software based and hardware based statistic.
@@ -57,7 +79,11 @@ This setting is used to select between software based and hardware based statist
 This setting is used to disable generation of a default catch all filter. See [Default filter](#default-filter) for further information.
 `CONFIG_RTE_LIBRTE_PMD_NTACC_DISABLE_DEFAULT_FILTER=n`
 
-## Napatech Driver Configuration
+- Copy offset:
+This setting is used to copy offset to different packets layers into the mbuf. See [copy packet offset to mbuf](#copyoffset) for further information.
+`CONFIG_RTE_LIBRTE_PMD_NTACC_COPY_OFFSET
+
+## Napatech Driver Configuration <a name="driverconfig"></a>
 The Napatech driver is configured using an ini-file – `ntservice.ini`. By default, the ini-file is located in `/opt/napatech3/config`. The following changes must be made to the default ini-file.
 
 The Napatech driver uses hostbuffers to receive and transmit data. The number of hostbuffers must be equal to or larger than the number of RX and TX queues used by the DPDK.
@@ -86,7 +112,7 @@ HostBuffersTx = [4, 16, -1]
 ```
 This means that it would be possible to create 4 RX queues and 4 TX queues.
 
-## Number of RX queues and TX queues available
+## Number of RX queues and TX queues available <a name="queues"></a>
 
 Up to 128 RX queues are supported. They are distributed between the ports on the Napatech accelerator and rte_flow filters on a first-come, first-served basis.
 
@@ -99,7 +125,7 @@ The maximum number of RX queues per port are the smallest number of either:
 
 `RTE_ETHDEV_QUEUE_STAT_CNTRS` is defined in `common_config`
 
-## Starting NTACC PMD
+## Starting NTACC PMD <a name="starting"></a>
 
 The NTACC PMD is automatically found and used by the DPDK, when starting a DPDK app. All Napatech accelerators installed and activated will appear in the DPDK app. To use only some of the installed Napatech accelerators, the whitelist command must be used. The whitelist command is also used to select specific ports on an accelerator.
 
@@ -131,7 +157,7 @@ A NT40E3-4-PTP-ANL Napatech accelerator is installed. We want app1 to use only p
 
 The Napatech accelerators can also be disabled by using the blacklist command.
  
-## Generic rte_flow filter items
+## Generic rte_flow filter items <a name="genericflow"></a>
 
 The NTACC PMD driver supports a number of generic rte_flow filters including some Napatech defined filters.
 
@@ -177,7 +203,7 @@ All flow items defined after a tunnel flow item will be an inner filter, as show
 4. `RTE_FLOW_ITEM_TYPE_ETH`: Inner ether filter (because of the tunnel filter)
 5. `RTE_FLOW_ITEM_TYPE_IPV4`: Inner IPv4 filter (because of the tunnel filter)
 
-## Generic rte_flow filter Attributes
+## Generic rte_flow filter Attributes <a name="attributes"></a>
 
 The following rte_flow filter attributes are supported:
 
@@ -186,7 +212,7 @@ The following rte_flow filter attributes are supported:
 |`priority`     | 0 – 62<br>Highest priority = 0<br>Lowest priority = 62 |
 |`ingress`      |                                                        |
 
-## Priority
+## Priority <a name="Priority"></a>
 If multiple filters are used, priority is used to select the order of the filters. The filter with the highest priority will always be the filter to be used. If filters overlap, for example an ethernet filter sending the packets to queue 0 and an IPv4 filter sending the packets to queue 1 (filters overlap as IPv4 packets are also ethernet packets), then the filter with the highest priority is used. 
 
 If the ethernet filter has the highest priority all packets will go to queue 0 and no packets will go to queue 1.
@@ -195,7 +221,7 @@ If the IPv4 filter has the highest priority all IPv4 packets will go to queue 1 
 
 If the filters have the samme priority, the filter entered last is the one to be used.
 
-## Generic rte_flow filter actions
+## Generic rte_flow filter actions <a name="actions"></a>
 
 Following rte_flow filter actions are supported:
 
@@ -216,7 +242,7 @@ Note: Currently maximum MARK value is 0x1FFF (13 bit).
 - `RTE_FLOW_ACTION_TYPE_RSS`
 The supported HASH function is described below.
 
-## Generic rte_flow RSS/Hash functions
+## Generic rte_flow RSS/Hash functions <a name="hash"></a>
 
 Following rte_flow filter HASH functions are supported:
 
@@ -248,7 +274,7 @@ The following rte_flow filter HASH functions are added by Napatech and is not a 
 |`ETH_RSS_INNER_IPV6_SCTP`| As `ETH_RSS_NONFRAG_IPV6_SCTP`, but hashing is done on the inner IPv6 and SCTP.|
 |`ETH_RSS_INNER_IPV6_OTHER`| As `ETH_RSS_NONFRAG_IPV6_OTHER`, but hashing is done on the inner IPv6.|
 
-##### Symmetric/Unsymmetric hash
+##### Symmetric/Unsymmetric hash <a name="Symmetric"></a>
 The key generation can either be symmetric (sorted) or unsymmetric (unsorted). This is selected by the function:
 
 ```
@@ -274,7 +300,7 @@ Setting `info.info.enable = 0` disables symmetric hash and setting `info.info.en
  
 
 
-##### Default RSS/HASH function
+##### Default RSS/HASH function <a name="DefaultRSS"></a>
 A default RSS/HASH function can be setup when configuring the ethernet device by using the function:
 
 	int rte_eth_dev_configure(uint8_t port_id, uint16_t nb_rx_queue, uint16_t nb_tx_queue, const struct rte_eth_conf *eth_conf);
@@ -309,7 +335,7 @@ if (retval != 0)
 See below for information about the consequences of setting a default RSS/HASH function
 
 
-## Default filter
+## Default filter <a name="DefaultFilter"></a>
 When starting the NTACC PMD driver, a default catch all filter with priority 62 (lowest priority) is created for each DPDK port. The filter will send all incoming packets to queue 0 for each DPDK port. If rte_flow filters are created with higher priority, then all packets matching these filters will be send to the queues defined by the filters. All packets not matching the filter will be send to queue 0.
 
 If a default RSS (hash) mode is defined using the rte_eth_dev_configure command (mq_mode = ETH_MQ_RX_RSS), a default catch all filter is created, that will send incoming packet to all defined queues using the defined RSS/HASH function. 
@@ -317,7 +343,7 @@ If a default RSS (hash) mode is defined using the rte_eth_dev_configure command 
 > With a default RSS/HASH function, the default filter will collide with any rte_flow filters created, as all non matched packets will be distributed to all defined queues using the default RSS/HASH function. It is recommended not to define a default RSS/HASH function if any rte_flow filters are going to be used.
 
 
-#### Disabling default filter
+#### Disabling default filter <a name="DisablingDefaultFilter"></a>
 The default filer can be disabled either at compile time by setting:
 
 `CONFIG_RTE_LIBRTE_PMD_NTACC_DISABLE_DEFAULT_FILTER=y`
@@ -330,7 +356,7 @@ or at runtime by using the rte_flow_isolate command:
 | Enable default filter  | `rte_flow_isolate(portid, 0, error) `|
 
 
-## Examples of generic rte_flow filters
+## Examples of generic rte_flow filters <a name="examples1"></a>
 
 Some examples of how to use the generic rte_flow is shown below.
 
@@ -393,11 +419,11 @@ flow = rte_flow_create(0, &attr, pattern, actions, &error);
 
 All rte_flow filters added in same rte_flow_create will be and’ed together. If any filter have to be created where the it needs to be or’ed together, it has to be done with several calls to rte_flow_create for each filter.
 
-## Limited filter resources
+## Limited filter resources <a name="resources"></a>
 
 The Napatech accelerator and driver has a limited number of filter resources, when using the generic rte_flow filter. In some cases a filter cannot be created. In these cases, it will be necessary to simplify the filter.
 
-## Filter creation example
+## Filter creation example <a name="Filtercreationexample"></a>
 The following example creates a 5tuple IPv4/TCP filter. If `nbQueues > 1` RSS/Hashing is made to the number of queues using hash function `ETH_RSS_IPV4`. Symmetric hashing is enabled. Packets are marked with 12.
 ```C++
 static struct rte_flow *SetupFilter(uint8_t portid, uint8_t nbQueues)
@@ -535,7 +561,7 @@ static struct rte_flow *SetupFilter(uint8_t portid, uint8_t nbQueues)
 }
 ```
 
-## Filter creation example - Multiple 5tuple filter (IPv4 addresses and TCP ports)
+## Filter creation example - Multiple 5tuple filter (IPv4 addresses and TCP ports) <a name="examples2"></a>
 The following example shows how it is possible to create a 5tuple filter matching on a large number of IPv4 addresses and TCP ports. 
 
 The commands used in the loop to program the IP addresses and tcp ports must be the same for all addresses and ports. The only things that must be changed are the values for IP addresses and tcp ports.
@@ -661,3 +687,5 @@ static int SetupFilter(uint8_t portid, struct rte_flow_error *error)
 }
 
 ```
+
+## copy packet offset to mbuf <a name="copyoffset"></a>
