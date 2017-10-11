@@ -171,6 +171,7 @@ struct pmd_internals {
   rte_spinlock_t        lock;
   uint8_t               port;
   uint8_t               local_port;
+  uint8_t               local_port_offset;
   uint8_t               adapterNo;
   uint8_t               nbPortsOnAdapter;
   uint8_t               nbPortsInSystem;
