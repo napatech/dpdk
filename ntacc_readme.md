@@ -12,24 +12,25 @@ When starting the DPDK app, it will automatically find and use the NTACC PMD dri
 	1. [Environment variable](#Environment)
 	2. [Configuration setting](#configuration)
 3. [Napatech Driver Configuration](#driverconfig)
+	1. [Statistics update interval](#statinterval)
 4. [Number of RX queues and TX queues available](#queues)
 5. [Starting NTACC PMD](#starting)
-5. [Priority](#Priority)
-6. [Generic rte_flow filter items](#genericflow)
-7. [Generic rte_flow RSS/Hash functions](#hash)
-7. [Generic rte_flow filter Attributes](#attributes)
-8. [Generic rte_flow filter actions](#actions)
-7. [Generic rte_flow RSS/Hash functions](#hash)
+6. [Priority](#Priority)
+7. [Generic rte_flow filter items](#genericflow)
+8. [Generic rte_flow RSS/Hash functions](#hash)
+9. [Generic rte_flow filter Attributes](#attributes)
+10. [Generic rte_flow filter actions](#actions)
+11. [Generic rte_flow RSS/Hash functions](#hash)
 	1. [Symmetric/Unsymmetric hash](#Symmetric)
 	2. [Default RSS/HASH function](#DefaultRSS)
-8. [Default filter](#DefaultFilter)
+12. [Default filter](#DefaultFilter)
 	1. [Disabling default filter](#DisablingDefaultFilter)
-9. [Examples of generic rte_flow filters](#examples1)
-9. [Limited filter resources](#resources)
-9. [Filter creation example -  5tuple filter](#Filtercreationexample)
-10. [Filter creation example - Multiple 5tuple filter (IPv4 addresses and TCP ports)](#examples2)
-11. [Copy packet offset to mbuf](#copyoffset)
-12. [Use NTPL filters addition (Making an ethernet over MPLS filter)](#ntplfilter)
+13. [Examples of generic rte_flow filters](#examples1)
+14. [Limited filter resources](#resources)
+15. [Filter creation example -  5tuple filter](#Filtercreationexample)
+16. [Filter creation example - Multiple 5tuple filter (IPv4 addresses and TCP ports)](#examples2)
+17. [Copy packet offset to mbuf](#copyoffset)
+18. [Use NTPL filters addition (Making an ethernet over MPLS filter)](#ntplfilter)
 
 ## Napatech Driver <a name="driver"></a>
 
@@ -106,13 +107,26 @@ Hostbuffer settings:
 | T2        |  Size of a hostbuffer in MB                  | The optimal size depends of the use. The default is usually fine.<br>The value must be a multiple of 4 and larger or equal than 16.      |
 | T3        |  Numa node where the hostbuffer is allocated | Use -1 for NUMA node autodetect. Hostbuffers will be allocated from the NUMA node to which the accelerator is connected.                 |
 
-The default setting is:
+The default setting for accelerator X is:
 
 ```
+[AdapterX]
 HostBuffersRx = [4, 16, -1]
 HostBuffersTx = [4, 16, -1]
 ```
 This means that it would be possible to create 4 RX queues and 4 TX queues.
+
+#### Statistics update interval  <a name="statinterval"></a>
+When using hardware based statistics `CONFIG_RTE_LIBRTE_PMD_NTACC_USE_SW_STAT=n`, the default update interval is 500 ms i.e. the time between each time the statistics is updated by the adapter. In some cases the update interval is to slow for some applications. The update interval can be changed by changing the `StatInterval` option in the system section in the ini-file.
+```
+[System]
+StatInterval=1
+```
+
+Possible values in milliseconds for StatInterval are:
+`1, 10, 20, 25, 50, 100, 200, 400, 500`
+
+> Note: Increasing the statistics update requires more CPU cycles.
 
 ## Number of RX queues and TX queues available <a name="queues"></a>
 
