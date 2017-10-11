@@ -28,6 +28,8 @@ When starting the DPDK app, it will automatically find and use the NTACC PMD dri
 9. [Limited filter resources](#resources)
 9. [Filter creation example -  5tuple filter](#Filtercreationexample)
 10. [Filter creation example - Multiple 5tuple filter (IPv4 addresses and TCP ports)](#examples2)
+11. [Copy packet offset to mbuf](#copyoffset)
+12. [Use NTPL filters addition (Making an ethernet over MPLS filter)](#ntplfilter)
 
 ## Napatech Driver <a name="driver"></a>
 
@@ -73,15 +75,15 @@ Three other configurations settings can be used to change the behaviour of the N
 
 - Hardware based or software based statistic:
 This setting is used to select between software based and hardware based statistic.
-`CONFIG_RTE_LIBRTE_PMD_NTACC_USE_SW_STAT=n`
+<br>`CONFIG_RTE_LIBRTE_PMD_NTACC_USE_SW_STAT=n`
 
 - Disable default filter:
 This setting is used to disable generation of a default catch all filter. See [Default filter](#default-filter) for further information.
-`CONFIG_RTE_LIBRTE_PMD_NTACC_DISABLE_DEFAULT_FILTER=n`
+<br>`CONFIG_RTE_LIBRTE_PMD_NTACC_DISABLE_DEFAULT_FILTER=n`
 
 - Copy offset:
-This setting is used to copy offset to different packets layers into the mbuf. See [copy packet offset to mbuf](#copyoffset) for further information.
-`CONFIG_RTE_LIBRTE_PMD_NTACC_COPY_OFFSET
+This setting is used to copy offset to different packets layers into the mbuf. See [Copy packet offset to mbuf](#copyoffset) for further information.
+<br>`CONFIG_RTE_LIBRTE_PMD_NTACC_COPY_OFFSET=y`
 
 ## Napatech Driver Configuration <a name="driverconfig"></a>
 The Napatech driver is configured using an ini-file – `ntservice.ini`. By default, the ini-file is located in `/opt/napatech3/config`. The following changes must be made to the default ini-file.
@@ -177,7 +179,8 @@ Following rte_flow filters are supported:
 |`RTE_FLOW_ITEM_TYPE_VLAN`  | `tpid`<br>`tci`                                                                                                                                                                 |
 |`RTE_FLOW_ITEM_TYPE_NVGRE` | Only packet type = `NVGRE`                                                                                                                                                    |
 |`RTE_FLOW_ITEM_TYPE_VXLAN` | Only packet type = `VXLAN`                                                                                                                                                    |
-| `RTE_FLOW_ITEM_TYPE_GRE`  | `c_rsvd0_ver` (only version = bit b0-b2)
+| `RTE_FLOW_ITEM_TYPE_GRE`  | `c_rsvd0_ver` (only version = bit b0-b2)|
+| `RTE_FLOW_ITEM_TYPE_PORT`  | `index`<br>The port numbers used, must be the local port numbers for the accelerator. <br>For a 4 port accelerator the port numbers are 0 to 3.|
 
 The following rte_flow filters are added by Napatech and are not a part of the main DPDK:
 
@@ -188,6 +191,7 @@ The following rte_flow filters are added by Napatech and are not a part of the m
 |`RTE_FLOW_ITEM_TYPE_GTPv1_U`  | Only packet type = `GTPv1_U` |
 |`RTE_FLOW_ITEM_TYPE_GTPv0_U`  | Only packet type = `GTPv0_U` |
 |`RTE_FLOW_ITEM_TYPE_IPinIP`   | Only packet type = `IPinIP`  |
+|`RTE_FLOW_ITEM_TYPE_NTPL`   | [see *Use NTPL filters*](#ntplfilter)  |
 
 **Supported fields**: The fields in the different filters that can be used when creating a rte_flow filter.
 
@@ -688,4 +692,123 @@ static int SetupFilter(uint8_t portid, struct rte_flow_error *error)
 
 ```
 
-## copy packet offset to mbuf <a name="copyoffset"></a>
+## Copy packet offset to mbuf <a name="copyoffset"></a>
+Normally `mbuf->data_off  = RTE_PKTMBUF_HEADROOM` which is the offset to the beginnig of packet data. 
+When enabling *copy packet offset to mbuf*, a predefined packet offset is copied into `mbuf->data_off` replacing
+the offset to the beginning of packet data.
+
+Supported offsets are:
+
+| Offset in packet data |
+|----------------------------|
+|`StartOfFrame`             |
+|`Layer2Header`             |
+|`FirstVLAN`                  |
+|`FirstMPLS`                   |
+|`Layer3Header`            |
+|`Layer4Header`            |
+|`Layer4Payload`           |
+|`InnerLayer2Header`   |
+|`InnerFirstVLAN`          |
+|`InnerFirstMPLS`          |
+|`InnerLayer3Header`   |
+|`InnerLayer4Header`   |
+|`InnerLayer4Payload`  |
+|`EndOfFrame`             |
+
+To enable *copy packet offset to mbuf* set following in common_base
+
+- `CONFIG_RTE_LIBRTE_PMD_NTACC_COPY_OFFSET=y`
+- `CONFIG_RTE_LIBRTE_PMD_NTACC_OFFSET0=InnerLayer3Header`
+
+This setting will enable copying of offset to the inner layer3 header to `mbuf->data_off`,  so 
+`mbuf->data_off  = RTE_PKTMBUF_HEADROOM + "offset to  InnerLayer3Header"`
+
+To access the offset, use the command:
+```
+struct ipv4_hdr *pHdr = (struct ipv4_hdr *)&(((uint8_t *)mbuf->buf_addr)[mbuf->data_off]);
+```
+
+Other offsets can be chosen by setting `CONFIG_RTE_LIBRTE_PMD_NTACC_OFFSET0` to the wanted offset.
+
+> Note: If a packet does not contain the wanted layer, the offset is undefined. Due to the filter setup, this will normally never happen.
+
+## Use NTPL filters addition (Making an ethernet over MPLS filter) <a name="ntplfilter"></a>
+By using the `RTE_FLOW_ITEM_TYPE_NTPL` rte_flow item, it is possible to use some NTPL commands and thereby create filters that are not a part of the DPDK.
+
+The 	`RTE_FLOW_ITEM_TYPE_NTPL` struct:
+
+```
+enum {
+	RTE_FLOW_NTPL_NO_TUNNEL,
+	RTE_FLOW_NTPL_TUNNEL,
+};
+
+struct rte_flow_item_ntpl {
+	const char *ntpl_str;
+	int tunnel;
+};
+```
+#### ntpl_str
+The string that will be embedded into the resulting NTPL filer expression. The string must be carefully selected,
+so it does not break the NTPL filer expression. See below for an example.
+
+Following RTE_FLOW filter without the `RTE_FLOW_ITEM_TYPE_NTPL`:
+```
+ipv4_spec.hdr.src_addr = rte_cpu_to_be_32(IPv4(10,0,0,1));
+ipv4_spec.hdr.dst_addr = rte_cpu_to_be_32(IPv4(159,20,6,6));
+pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_IPV4;
+pattern[patternCount].spec = &ipv4_spec;
+patternCount++;
+
+pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_END;
+patternCount++;
+```
+Will be converted to following NTPL filer:
+```
+KeyType[name=KT3;Access=partial;Bank=0;colorinfo=true;tag=port0]={64}
+KeyDef[name=KDEF3;KeyType=KT3;tag=port0]=(Layer3Header[12]/64)
+KeyList[KeySet=3;KeyType=KT3;color=305419896;tag=port0]=(0x0A0000019F140606)
+assign[priority=1;Descriptor=DYN3,length=22,colorbits=32;streamid=0;tag=port0]=(Layer3Protocol==IPV4) and port==0 and Key(KDEF3)==3
+```
+Adding `RTE_FLOW_ITEM_TYPE_NTPL` to the RTE_FLOW filer:
+```
+ntpl_spec.ntpl_str = "TunnelType==EoMPLS";
+ntpl_spec.tunnel = RTE_FLOW_NTPL_TUNNEL;
+pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_NTPL;
+pattern[patternCount].spec = &ntpl_spec;
+patternCount++;
+
+ipv4_spec.hdr.src_addr = rte_cpu_to_be_32(IPv4(10,0,0,1));
+ipv4_spec.hdr.dst_addr = rte_cpu_to_be_32(IPv4(159,20,6,6));
+pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_IPV4;
+pattern[patternCount].spec = &ipv4_spec;
+patternCount++;
+
+pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_END;
+patternCount++;
+```
+Will be converted to following NTPL filer:
+```
+KeyType[name=KT3;Access=partial;Bank=0;colorinfo=true;tag=port0]={64}
+KeyDef[name=KDEF3;KeyType=KT3;tag=port0]=(InnerLayer3Header[12]/64)
+KeyList[KeySet=3;KeyType=KT3;color=305419896;tag=port0]=(0x0A0000019F140606)
+assign[priority=1;Descriptor=DYN3,length=22,colorbits=32;streamid=0;tag=port0]=(InnerLayer3Protocol==IPV4) and TunnelType==EoMPLS and port==0 and Key(KDEF3)==3
+```
+The string "TunnelType==EoMPLS" is now embedded into to the NTPL filter expression and the resulting filter is changed to a ethernet over MPLS filter matching the inner layer3 protocol.
+ 
+#### tunnel
+This tells the driver whether the following rte_flow filter items have the be inner or outer filter items
+
+In the above example tunnel=RTE_FLOW_NTPL_TUNNEL, which makes the filter to be an inner layer3 filter. If tunnel=RTE_FLOW_NTPL_NO_TUNNEL, the filter is now a outer layer3 filter.
+```
+KeyType[name=KT3;Access=partial;Bank=0;colorinfo=true;tag=port0]={64}
+KeyDef[name=KDEF3;KeyType=KT3;tag=port0]=(Layer3Header[12]/64)
+KeyList[KeySet=3;KeyType=KT3;color=305419896;tag=port0]=(0x0A0000019F140606)
+PMD: NTPL : assign[priority=1;Descriptor=DYN3,length=22,colorbits=32;streamid=0;tag=port0]=(Layer3Protocol==IPV4) and TunnelType==EoMPLS and port==0 and Key(KDEF3)==3
+```
+`InnerLayer3Header` and `InnerLayer3Protocol` is now changed to `Layer3Header` and `Layer3Protocol`. 
+   
+Other NTPL filter expressions can be used as long as it does not break the resulting NTPL filer expression.
+
+
