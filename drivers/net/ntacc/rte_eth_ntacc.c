@@ -59,6 +59,9 @@
 #include "rte_eth_ntacc.h"
 #include "filter_ntacc.h"
 
+#define STRINGIZE(x) #x
+#define STRINGIZE_VALUE_OF(x) STRINGIZE(x)
+
 #define ETH_NTACC_MASK_ARG "mask"
 #define ETH_NTACC_NTPL_ARG "ntpl"
 
@@ -74,7 +77,7 @@ static struct {
    int32_t major;
    int32_t minor;
    int32_t patch;
-} supportedDriver = {3, 7, 0};
+} supportedDriver = {3, 7, 2};
 
 #define PCI_VENDOR_ID_NAPATECH 0x18F4
 #define PCI_DEVICE_ID_NT200A01 0x01A5
@@ -299,14 +302,16 @@ static uint16_t eth_ntacc_rx(void *queue,
 
     mbuf->timestamp = dyn3->timestamp;
     mbuf->ol_flags |= PKT_RX_TIMESTAMP;
-
-    mbuf->port = rx_q->in_port;
+    mbuf->port = dyn3->rxPort;
 
     const uint16_t data_len = (uint16_t)(dyn3->capLength - dyn3->descrLength - 4);
     if (data_len <= rx_q->buf_size) {
       /* Packet will fit in the mbuf, go ahead and copy */
       mbuf->pkt_len = mbuf->data_len = data_len;
       rte_memcpy((u_char *)mbuf->buf_addr + RTE_PKTMBUF_HEADROOM, (uint8_t*)dyn3 + dyn3->descrLength, mbuf->data_len);
+#ifdef COPY_OFFSET0
+      mbuf->data_off = RTE_PKTMBUF_HEADROOM + dyn3->offset0;
+#endif
     } else {
       /* Try read jumbo frame into multi mbufs. */
       if (unlikely(eth_ntacc_rx_jumbo(rx_q->mb_pool, mbuf, (uint8_t*)dyn3 + dyn3->descrLength, data_len) == -1))
@@ -314,6 +319,7 @@ static uint16_t eth_ntacc_rx(void *queue,
     }
     bytes += data_len+4;
     num_rx++;
+
 
     /* Get the next packet if any */
     if (_nt_net_get_next_packet(rx_q->pSeg, NT_NET_GET_SEGMENT_LENGTH(rx_q->pSeg), &rx_q->pkt) == 0 ) {
@@ -750,6 +756,11 @@ static int eth_dev_configure(struct rte_eth_dev *dev __rte_unused)
 static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 {
   struct pmd_internals *internals = dev->data->dev_private;
+  NtInfoStream_t hInfo;
+  NtInfo_t info;
+  uint status;
+  char errBuf[NT_ERRBUF_SIZE];
+
   dev_info->if_index = internals->if_index;
   dev_info->driver_name = internals->driverName;
   dev_info->max_mac_addrs = 1;
@@ -759,6 +770,43 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
   dev_info->min_rx_bufsize = 0;
   dev_info->default_txconf.txq_flags = ETH_TXQ_FLAGS_NOMULTSEGS;
   dev_info->pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+
+  // Read speed capabilities for the port
+  if ((status = (*_NT_InfoOpen)(&hInfo, "DPDK Info stream")) != NT_SUCCESS) {
+    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
+    RTE_LOG(ERR, PMD, "Error: NT_InfoOpen failed. Code 0x%x = %s\n", status, errBuf);
+  }
+  info.cmd = NT_INFO_CMD_READ_PORT_V8;
+  info.u.port_v8.portNo = (uint8_t)(internals->txq[0].port);
+  if ((status = (*_NT_InfoRead)(hInfo, &info)) != 0) {
+    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
+    RTE_LOG(ERR, PMD, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
+  }
+  (void)(*_NT_InfoClose)(hInfo);
+
+  // Update speed capabilities for the port
+  dev_info->speed_capa = 0; 
+  if (info.u.port_v7.data.capabilities.speed & NT_LINK_SPEED_10M) {
+    dev_info->speed_capa |= ETH_LINK_SPEED_10M;
+  }
+  if (info.u.port_v7.data.capabilities.speed & NT_LINK_SPEED_100M) {
+    dev_info->speed_capa |= ETH_LINK_SPEED_100M;
+  }
+  if (info.u.port_v7.data.capabilities.speed & NT_LINK_SPEED_1G) {
+    dev_info->speed_capa |= ETH_LINK_SPEED_1G;
+  }
+  if (info.u.port_v7.data.capabilities.speed & NT_LINK_SPEED_10G) {
+    dev_info->speed_capa |= ETH_LINK_SPEED_10G;
+  }
+  if (info.u.port_v7.data.capabilities.speed & NT_LINK_SPEED_40G) {
+    dev_info->speed_capa |= ETH_LINK_SPEED_40G;
+  }
+  if (info.u.port_v7.data.capabilities.speed & NT_LINK_SPEED_100G) {
+    dev_info->speed_capa |= ETH_LINK_SPEED_100G;
+  }
+  if (info.u.port_v7.data.capabilities.speed & NT_LINK_SPEED_50G) {
+    dev_info->speed_capa |= ETH_LINK_SPEED_50G;
+  }
 }
 
 #ifdef USE_SW_STAT
@@ -1115,7 +1163,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   NtNtplInfo_t ntplInfo;
   uint8_t nb_queues = 0;
   uint8_t list_queues[RTE_ETHDEV_QUEUE_STAT_CNTRS];
-  bool filterContinue = true;
+  bool filterContinue = false;
   bool queueDefined = false;
   const struct rte_flow_action_rss *rss = NULL;
   uint32_t i;
@@ -1123,12 +1171,16 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   int version;
   int tunneltype;
   struct color_s color = {0, false};
+  uint8_t nb_ports = 0;
+  uint8_t list_ports[MAX_NTACC_PORTS];
+
 
   uint64_t typeMask = 0;
   bool reuse;
 
   char *ntpl_buf = NULL;
   struct rte_flow *flow = NULL;
+  const char *ntpl_str = NULL;
 
   ntpl_buf = malloc(NTPL_BSIZE + 1);
   if (!ntpl_buf) {
@@ -1217,25 +1269,49 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   // Set the priority
 
   if (color.valid) {
+#ifdef COPY_OFFSET0
+    snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN3,length=22,colorbits=32,Offset0=%s[0];", attr->priority, STRINGIZE_VALUE_OF(COPY_OFFSET0));
+#else
     snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN3,length=22,colorbits=32;", attr->priority);
+#endif
   }
   else {
-    snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN3,length=20,colorbits=14;", attr->priority);
+#ifdef COPY_OFFSET0
+    snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN3,length=20,colorbits=14,Offset0=%s[0];", attr->priority, STRINGIZE_VALUE_OF(COPY_OFFSET0));
+#else
+    snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN3,length=20,colorbits=14];", attr->priority);
+#endif
   }
 
   // Set the stream IDs
   CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
 
-  // Set the port number
-  snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
-           ";tag=%s]=port==%u", internals->tagName, internals->port);
+  // Set the tag name
+  snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ";tag=%s]=", internals->tagName);
 
   // Set the filter expression
   tunnel = false;
   for (; items->type != RTE_FLOW_ITEM_TYPE_END; ++items) {
     switch (items->type) {
+      case RTE_FLOW_ITEM_TYPE_NTPL:
+        ntpl_str = ((const struct rte_flow_item_ntpl*)items->spec)->ntpl_str;
+        if (((const struct rte_flow_item_ntpl*)items->spec)->tunnel == RTE_FLOW_NTPL_TUNNEL) {
+          tunnel = true;
+        }
+        break;
     case RTE_FLOW_ITEM_TYPE_VOID:
       continue;
+    case RTE_FLOW_ITEM_TYPE_PORT:
+      if (nb_ports < MAX_NTACC_PORTS) {
+        const struct rte_flow_item_port *spec = (const struct rte_flow_item_port *)items->spec;
+        printf("Port number: %u\n", spec->index);
+        if (spec->index > internals->nbPortsOnAdapter) {
+          rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Illegal port number in port flow. All port numbers must be from the same adapter");
+          goto FlowError;
+        }
+        list_ports[nb_ports++] = spec->index + internals->local_port_offset;
+      }
+      break;
     case RTE_FLOW_ITEM_TYPE_ETH:
       if (SetEthernetFilter(items,
                             tunnel,
@@ -1400,6 +1476,33 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       }
     }
 
+    if (ntpl_str) {
+      if (filterContinue) {
+        snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " and");
+      }
+      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " %s", ntpl_str);
+      filterContinue = true;
+    }
+	
+    if (filterContinue) {
+      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " and");
+    }
+    if (nb_ports == 0) {
+    // Set the ports
+      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " port==%u", internals->port);
+      filterContinue = true;
+    }
+    else {
+      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " port==");
+      for (int ports = 0; ports < nb_ports;ports++) {
+        snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "%u", list_ports[ports]);
+        if (ports < (nb_ports - 1)) {
+          snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ",");
+        }
+      }
+      filterContinue = true;
+    }
+
     if (CreateOptimizedFilter(ntpl_buf, internals, flow, &filterContinue, typeMask, list_queues, nb_queues, &reuse, &color) != 0) {
       rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Creating filter error");
       goto FlowError;
@@ -1562,7 +1665,11 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       memset(defFlow, 0, sizeof(struct rte_flow));
 
       // Set the priority
+#ifdef COPY_OFFSET0
+      snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=62;Descriptor=DYN3,length=22,colorbits=32,Offset0=%s[0];color=0xFFFFFFFF;", STRINGIZE_VALUE_OF(COPY_OFFSET0));
+#else
       snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;");
+#endif
       if (internals->rss_hf != 0) {
         // Set the stream IDs
         CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
@@ -1727,12 +1834,12 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   NtInfo_t info;
   struct rte_eth_link pmd_link;
   char name[NTACC_NAME_LEN];
-  uint8_t nbPortsOnAdapter;
-  uint8_t nbPortsInSystem;
-  uint8_t nbAdapters;
-  uint8_t adapterNo;
-  uint8_t offset;
-  uint8_t localPort;
+  uint8_t nbPortsOnAdapter = 0;
+  uint8_t nbPortsInSystem = 0;
+  uint8_t nbAdapters = 0;
+  uint8_t adapterNo = 0;
+  uint8_t offset = 0;
+  uint8_t localPort = 0;
   struct version_s version;
 
   /* Open the information stream */
@@ -1900,6 +2007,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     internals->adapterNo = info.u.port_v7.data.adapterNo;
     internals->port = offset + localPort;
     internals->local_port = localPort;
+    internals->local_port_offset = offset;
     internals->symHashMode = SYM_HASH_ENA_PER_PORT;
     internals->fpgaid.value = info.u.port_v7.data.adapterInfo.fpgaid.value;
 
