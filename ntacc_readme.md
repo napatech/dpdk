@@ -139,7 +139,7 @@ The maximum number of RX queues per port are the smallest number of either:
 - (256 / number of ports)
 - `RTE_ETHDEV_QUEUE_STAT_CNTRS`
 
-`RTE_ETHDEV_QUEUE_STAT_CNTRS` is defined in `common_config`
+`RTE_ETHDEV_QUEUE_STAT_CNTRS` is defined in `common_base`
 
 ## Starting NTACC PMD <a name="starting"></a>
 
