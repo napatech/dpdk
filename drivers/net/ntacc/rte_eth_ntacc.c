@@ -757,7 +757,7 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
 {
   struct pmd_internals *internals = dev->data->dev_private;
   NtInfoStream_t hInfo;
-  NtInfo_t info;
+  NtInfo_t *pInfo;
   uint status;
   char errBuf[NT_ERRBUF_SIZE];
 
@@ -771,42 +771,53 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
   dev_info->default_txconf.txq_flags = ETH_TXQ_FLAGS_NOMULTSEGS;
   dev_info->pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 
+  pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
+  if (!pInfo) {
+    RTE_LOG(ERR, PMD, "Error %s: Out of memory\n", __func__);
+    return;
+  }
+
   // Read speed capabilities for the port
   if ((status = (*_NT_InfoOpen)(&hInfo, "DPDK Info stream")) != NT_SUCCESS) {
     (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
     RTE_LOG(ERR, PMD, "Error: NT_InfoOpen failed. Code 0x%x = %s\n", status, errBuf);
+    rte_free(pInfo);
+    return;
   }
-  info.cmd = NT_INFO_CMD_READ_PORT_V8;
-  info.u.port_v8.portNo = (uint8_t)(internals->txq[0].port);
-  if ((status = (*_NT_InfoRead)(hInfo, &info)) != 0) {
+  pInfo->cmd = NT_INFO_CMD_READ_PORT_V8;
+  pInfo->u.port_v8.portNo = (uint8_t)(internals->txq[0].port);
+  if ((status = (*_NT_InfoRead)(hInfo, pInfo)) != 0) {
     (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
     RTE_LOG(ERR, PMD, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
+    rte_free(pInfo);
+    return;
   }
   (void)(*_NT_InfoClose)(hInfo);
 
   // Update speed capabilities for the port
   dev_info->speed_capa = 0; 
-  if (info.u.port_v7.data.capabilities.speed & NT_LINK_SPEED_10M) {
+  if (pInfo->u.port_v7.data.capabilities.speed & NT_LINK_SPEED_10M) {
     dev_info->speed_capa |= ETH_LINK_SPEED_10M;
   }
-  if (info.u.port_v7.data.capabilities.speed & NT_LINK_SPEED_100M) {
+  if (pInfo->u.port_v7.data.capabilities.speed & NT_LINK_SPEED_100M) {
     dev_info->speed_capa |= ETH_LINK_SPEED_100M;
   }
-  if (info.u.port_v7.data.capabilities.speed & NT_LINK_SPEED_1G) {
+  if (pInfo->u.port_v7.data.capabilities.speed & NT_LINK_SPEED_1G) {
     dev_info->speed_capa |= ETH_LINK_SPEED_1G;
   }
-  if (info.u.port_v7.data.capabilities.speed & NT_LINK_SPEED_10G) {
+  if (pInfo->u.port_v7.data.capabilities.speed & NT_LINK_SPEED_10G) {
     dev_info->speed_capa |= ETH_LINK_SPEED_10G;
   }
-  if (info.u.port_v7.data.capabilities.speed & NT_LINK_SPEED_40G) {
+  if (pInfo->u.port_v7.data.capabilities.speed & NT_LINK_SPEED_40G) {
     dev_info->speed_capa |= ETH_LINK_SPEED_40G;
   }
-  if (info.u.port_v7.data.capabilities.speed & NT_LINK_SPEED_100G) {
+  if (pInfo->u.port_v7.data.capabilities.speed & NT_LINK_SPEED_100G) {
     dev_info->speed_capa |= ETH_LINK_SPEED_100G;
   }
-  if (info.u.port_v7.data.capabilities.speed & NT_LINK_SPEED_50G) {
+  if (pInfo->u.port_v7.data.capabilities.speed & NT_LINK_SPEED_50G) {
     dev_info->speed_capa |= ETH_LINK_SPEED_50G;
   }
+  rte_free(pInfo);
 }
 
 #ifdef USE_SW_STAT
@@ -855,39 +866,47 @@ static void eth_stats_get(struct rte_eth_dev *dev,
   struct pmd_internals *internals = dev->data->dev_private;
   uint queue;
   int status;
-  NtStatistics_t statData;
+  NtStatistics_t *pStatData;
   uint8_t port;
   char errBuf[NT_ERRBUF_SIZE];
 
+  pStatData = (NtStatistics_t *)rte_malloc(internals->name, sizeof(NtStatistics_t), 0);
+  if (!pStatData) {
+    RTE_LOG(ERR, PMD, "Error %s: Out of memory\n", __func__);
+    return;
+  }
+  
   memset(igb_stats, 0, sizeof(*igb_stats));
 
   /* port used */
   port = (uint8_t)internals->txq[0].port;
 
   /* Get stat data */
-  statData.cmd = NT_STATISTICS_READ_CMD_QUERY_V2;
-  statData.u.query_v2.poll=0;
-  statData.u.query_v2.clear=0;
-  if ((status = (*_NT_StatRead)(internals->hStat, &statData)) != 0) {
+  pStatData->cmd = NT_STATISTICS_READ_CMD_QUERY_V2;
+  pStatData->u.query_v2.poll=0;
+  pStatData->u.query_v2.clear=0;
+  if ((status = (*_NT_StatRead)(internals->hStat, pStatData)) != 0) {
     (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
     RTE_LOG(ERR, PMD, "ERROR: NT_StatRead failed. Code 0x%x = %s\n", status, errBuf);
+    rte_free(pStatData);
     return;
   }
 
-  igb_stats->ipackets = statData.u.query_v2.data.port.aPorts[port].rx.RMON1.pkts;
-  igb_stats->ibytes = statData.u.query_v2.data.port.aPorts[port].rx.RMON1.octets;
-  igb_stats->opackets = statData.u.query_v2.data.port.aPorts[port].tx.RMON1.pkts;
-  igb_stats->obytes = statData.u.query_v2.data.port.aPorts[port].tx.RMON1.octets;
-  igb_stats->imissed = statData.u.query_v2.data.port.aPorts[port].rx.extDrop.pktsOverflow;
-  igb_stats->ierrors = statData.u.query_v2.data.port.aPorts[port].rx.RMON1.crcAlignErrors;
-  igb_stats->oerrors = statData.u.query_v2.data.port.aPorts[port].tx.RMON1.crcAlignErrors;
+  igb_stats->ipackets = pStatData->u.query_v2.data.port.aPorts[port].rx.RMON1.pkts;
+  igb_stats->ibytes = pStatData->u.query_v2.data.port.aPorts[port].rx.RMON1.octets;
+  igb_stats->opackets = pStatData->u.query_v2.data.port.aPorts[port].tx.RMON1.pkts;
+  igb_stats->obytes = pStatData->u.query_v2.data.port.aPorts[port].tx.RMON1.octets;
+  igb_stats->imissed = pStatData->u.query_v2.data.port.aPorts[port].rx.extDrop.pktsOverflow;
+  igb_stats->ierrors = pStatData->u.query_v2.data.port.aPorts[port].rx.RMON1.crcAlignErrors;
+  igb_stats->oerrors = pStatData->u.query_v2.data.port.aPorts[port].tx.RMON1.crcAlignErrors;
 
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
-    igb_stats->q_ipackets[queue] = statData.u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].forward.pkts;
-    igb_stats->q_ibytes[queue] =  statData.u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].forward.octets;
+    igb_stats->q_ipackets[queue] = pStatData->u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].forward.pkts;
+    igb_stats->q_ibytes[queue] =  pStatData->u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].forward.octets;
     igb_stats->q_errors[queue] = internals->txq[queue].err_pkts;
 
   }
+  rte_free(pStatData);
 }
 #endif
 
@@ -912,17 +931,25 @@ static void eth_stats_reset(struct rte_eth_dev *dev)
 {
   struct pmd_internals *internals = dev->data->dev_private;
   int status;
-  NtStatistics_t statData;
+  NtStatistics_t *pStatData;
   char errBuf[NT_ERRBUF_SIZE];
 
-  statData.cmd = NT_STATISTICS_READ_CMD_QUERY_V2;
-  statData.u.query_v2.poll=0;
-  statData.u.query_v2.clear=1;
-  if ((status = (*_NT_StatRead)(internals->hStat, &statData)) != 0) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-    RTE_LOG(ERR, PMD, "ERROR: NT_StatRead failed. Code 0x%x = %s\n", status, errBuf);
+  pStatData = (NtStatistics_t *)rte_malloc(internals->name, sizeof(NtStatistics_t), 0);
+  if (!pStatData) {
+    RTE_LOG(ERR, PMD, "Error %s: Out of memory\n", __func__);
     return;
   }
+
+  pStatData->cmd = NT_STATISTICS_READ_CMD_QUERY_V2;
+  pStatData->u.query_v2.poll=0;
+  pStatData->u.query_v2.clear=1;
+  if ((status = (*_NT_StatRead)(internals->hStat, pStatData)) != 0) {
+    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
+    RTE_LOG(ERR, PMD, "ERROR: NT_StatRead failed. Code 0x%x = %s\n", status, errBuf);
+    rte_free(pStatData);
+    return;
+  }
+  rte_free(pStatData);
 }
 #endif
 
@@ -952,27 +979,35 @@ static int eth_link_update(struct rte_eth_dev *dev,
                            int wait_to_complete  __rte_unused)
 {
   NtInfoStream_t hInfo;
-  NtInfo_t info;
+  NtInfo_t *pInfo;
   uint status;
   char errBuf[NT_ERRBUF_SIZE];
   struct pmd_internals *internals = dev->data->dev_private;
 
+  pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
+  if (!pInfo) {
+    RTE_LOG(ERR, PMD, "Error %s: Out of memory\n", __func__);
+    return 1;
+  }
+
   if ((status = (*_NT_InfoOpen)(&hInfo, "DPDK Info stream")) != NT_SUCCESS) {
     (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
     RTE_LOG(ERR, PMD, "Error: NT_InfoOpen failed. Code 0x%x = %s\n", status, errBuf);
+    rte_free(pInfo);
     return status;
   }
-  info.cmd = NT_INFO_CMD_READ_PORT_V8;
-  info.u.port_v8.portNo = (uint8_t)(internals->txq[0].port);
-  if ((status = (*_NT_InfoRead)(hInfo, &info)) != 0) {
+  pInfo->cmd = NT_INFO_CMD_READ_PORT_V8;
+  pInfo->u.port_v8.portNo = (uint8_t)(internals->txq[0].port);
+  if ((status = (*_NT_InfoRead)(hInfo, pInfo)) != 0) {
     (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
     RTE_LOG(ERR, PMD, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
+    rte_free(pInfo);
     return status;
   }
   (void)(*_NT_InfoClose)(hInfo);
 
-  dev->data->dev_link.link_status = info.u.port_v8.data.state == NT_LINK_STATE_UP ? 1 : 0;
-  switch (info.u.port_v8.data.speed) {
+  dev->data->dev_link.link_status = pInfo->u.port_v8.data.state == NT_LINK_STATE_UP ? 1 : 0;
+  switch (pInfo->u.port_v8.data.speed) {
   case NT_LINK_SPEED_UNKNOWN:
     dev->data->dev_link.link_speed = ETH_SPEED_NUM_1G;
     break;
@@ -998,6 +1033,7 @@ static int eth_link_update(struct rte_eth_dev *dev,
     dev->data->dev_link.link_speed = ETH_SPEED_NUM_100G;
     break;
   }
+  rte_free(pInfo);
   return 0;
 }
 
@@ -1831,7 +1867,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   struct rte_eth_dev *eth_dev = NULL;
   uint i, status;
   char errBuf[NT_ERRBUF_SIZE];
-  NtInfo_t info;
+  NtInfo_t *pInfo = NULL;
   struct rte_eth_link pmd_link;
   char name[NTACC_NAME_LEN];
   uint8_t nbPortsOnAdapter = 0;
@@ -1842,6 +1878,13 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   uint8_t localPort = 0;
   struct version_s version;
 
+  pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
+  if (!pInfo) {
+    RTE_LOG(ERR, PMD, "Error %s: Out of memory\n", __func__);
+    iRet = 1;
+    goto error;
+  }
+
   /* Open the information stream */
   if ((status = (*_NT_InfoOpen)(&hInfo, "DPDK Info stream")) != NT_SUCCESS) {
     (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
@@ -1851,19 +1894,19 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   }
 
   /* Find driver version */
-  info.cmd = NT_INFO_CMD_READ_SYSTEM;
-  if ((status = (*_NT_InfoRead)(hInfo, &info)) != 0) {
+  pInfo->cmd = NT_INFO_CMD_READ_SYSTEM;
+  if ((status = (*_NT_InfoRead)(hInfo, pInfo)) != 0) {
     (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
     RTE_LOG(ERR, PMD, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
     iRet = status;
     goto error;
   }
 
-  nbAdapters = info.u.system.data.numAdapters;
-  nbPortsInSystem = info.u.system.data.numPorts;
-  version.major = info.u.system.data.version.major;
-  version.minor = info.u.system.data.version.minor;
-  version.patch = info.u.system.data.version.patch;
+  nbAdapters = pInfo->u.system.data.numAdapters;
+  nbPortsInSystem = pInfo->u.system.data.numPorts;
+  version.major = pInfo->u.system.data.version.major;
+  version.minor = pInfo->u.system.data.version.minor;
+  version.patch = pInfo->u.system.data.version.patch;
 
   // Check that the driver is supported
   if (supportedDriver.major != version.major ||
@@ -1877,9 +1920,9 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
 
   for (i = 0; i < nbAdapters; i++) {
     // Find adapter matching bus ID
-    info.cmd = NT_INFO_CMD_READ_ADAPTER_V6;
-    info.u.adapter_v6.adapterNo = i;
-    if ((status = (*_NT_InfoRead)(hInfo, &info)) != 0) {
+    pInfo->cmd = NT_INFO_CMD_READ_ADAPTER_V6;
+    pInfo->u.adapter_v6.adapterNo = i;
+    if ((status = (*_NT_InfoRead)(hInfo, pInfo)) != 0) {
       (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
       RTE_LOG(ERR, PMD, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
       iRet = status;
@@ -1887,12 +1930,12 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     }
 
     RTE_LOG(INFO, PMD, "Checking: "PCI_PRI_FMT"\n", dev->addr.domain, dev->addr.bus, dev->addr.devid, dev->addr.function);
-    if (dev->addr.bus == info.u.adapter_v6.data.busid.s.bus &&
-        dev->addr.devid == info.u.adapter_v6.data.busid.s.device &&
-        dev->addr.domain == info.u.adapter_v6.data.busid.s.domain &&
-        dev->addr.function == info.u.adapter_v6.data.busid.s.function) {
-      nbPortsOnAdapter = info.u.adapter_v6.data.numPorts;
-      offset = info.u.adapter_v6.data.portOffset;
+    if (dev->addr.bus == pInfo->u.adapter_v6.data.busid.s.bus &&
+        dev->addr.devid == pInfo->u.adapter_v6.data.busid.s.device &&
+        dev->addr.domain == pInfo->u.adapter_v6.data.busid.s.domain &&
+        dev->addr.function == pInfo->u.adapter_v6.data.busid.s.function) {
+      nbPortsOnAdapter = pInfo->u.adapter_v6.data.numPorts;
+      offset = pInfo->u.adapter_v6.data.portOffset;
       adapterNo = i;
       break;
     }
@@ -1906,9 +1949,9 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   RTE_LOG(INFO, PMD, "Found: "PCI_PRI_FMT": Ports %u, Offset %u, Adapter %u\n", dev->addr.domain, dev->addr.bus, dev->addr.devid, dev->addr.function, nbPortsOnAdapter, offset, adapterNo);
 
   for (localPort = 0; localPort < nbPortsOnAdapter; localPort++) {
-    info.cmd = NT_INFO_CMD_READ_PORT_V7;
-    info.u.port_v7.portNo = (uint8_t)localPort + offset;
-    if ((status = (*_NT_InfoRead)(hInfo, &info)) != 0) {
+    pInfo->cmd = NT_INFO_CMD_READ_PORT_V7;
+    pInfo->u.port_v7.portNo = (uint8_t)localPort + offset;
+    if ((status = (*_NT_InfoRead)(hInfo, pInfo)) != 0) {
       (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
       RTE_LOG(ERR, PMD, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
       iRet = status;
@@ -1924,16 +1967,16 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     
     // Check if FPGA is supported
     for (i = 0; i < NB_SUPPORTED_FPGAS; i++) {
-      if (supportedAdapters[i].item == info.u.port_v7.data.adapterInfo.fpgaid.s.item &&
-          supportedAdapters[i].product == info.u.port_v7.data.adapterInfo.fpgaid.s.product) {
-        if (supportedAdapters[i].ver != info.u.port_v7.data.adapterInfo.fpgaid.s.ver ||
-            supportedAdapters[i].rev != info.u.port_v7.data.adapterInfo.fpgaid.s.rev) {
+      if (supportedAdapters[i].item == pInfo->u.port_v7.data.adapterInfo.fpgaid.s.item &&
+          supportedAdapters[i].product == pInfo->u.port_v7.data.adapterInfo.fpgaid.s.product) {
+        if (supportedAdapters[i].ver != pInfo->u.port_v7.data.adapterInfo.fpgaid.s.ver ||
+            supportedAdapters[i].rev != pInfo->u.port_v7.data.adapterInfo.fpgaid.s.rev) {
           RTE_LOG(ERR, PMD, "ERROR: NT adapter firmware %03d-%04d-%02d-%02d-%02d is not supported. The firmware must be %03d-%04d-%02d-%02d-%02d.\n",
-                  info.u.port_v7.data.adapterInfo.fpgaid.s.item, 
-                  info.u.port_v7.data.adapterInfo.fpgaid.s.product,
-                  info.u.port_v7.data.adapterInfo.fpgaid.s.ver,
-                  info.u.port_v7.data.adapterInfo.fpgaid.s.rev,
-                  info.u.port_v7.data.adapterInfo.fpgaid.s.build,
+                  pInfo->u.port_v7.data.adapterInfo.fpgaid.s.item, 
+                  pInfo->u.port_v7.data.adapterInfo.fpgaid.s.product,
+                  pInfo->u.port_v7.data.adapterInfo.fpgaid.s.ver,
+                  pInfo->u.port_v7.data.adapterInfo.fpgaid.s.rev,
+                  pInfo->u.port_v7.data.adapterInfo.fpgaid.s.build,
                   supportedAdapters[i].item,
                   supportedAdapters[i].product,
                   supportedAdapters[i].ver,
@@ -2004,12 +2047,12 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     snprintf(internals->tagName, 9, "port%d", localPort + offset);
     RTE_LOG(INFO, PMD, "Tagname: %s - %u\n", internals->tagName, localPort + offset);
 
-    internals->adapterNo = info.u.port_v7.data.adapterNo;
+    internals->adapterNo = pInfo->u.port_v7.data.adapterNo;
     internals->port = offset + localPort;
     internals->local_port = localPort;
     internals->local_port_offset = offset;
     internals->symHashMode = SYM_HASH_ENA_PER_PORT;
-    internals->fpgaid.value = info.u.port_v7.data.adapterInfo.fpgaid.value;
+    internals->fpgaid.value = pInfo->u.port_v7.data.adapterInfo.fpgaid.value;
 
     for (i=0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
       internals->rxq[i].stream_id = STREAMIDS_PER_PORT * internals->port + i;
@@ -2021,11 +2064,11 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
       internals->txq[i].port = internals->port;
       internals->txq[i].local_port = localPort;
       internals->txq[i].enabled = 0;
-      internals->txq[i].minTxPktSize = info.u.port_v7.data.capabilities.minTxPktSize;
-      internals->txq[i].maxTxPktSize = info.u.port_v7.data.capabilities.maxTxPktSize;
+      internals->txq[i].minTxPktSize = pInfo->u.port_v7.data.capabilities.minTxPktSize;
+      internals->txq[i].maxTxPktSize = pInfo->u.port_v7.data.capabilities.maxTxPktSize;
     }
 
-    switch (info.u.port_v7.data.speed) {
+    switch (pInfo->u.port_v7.data.speed) {
     case NT_LINK_SPEED_UNKNOWN:
       pmd_link.link_speed = ETH_SPEED_NUM_1G;
       break;
@@ -2052,7 +2095,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
       break;
     }
 
-    memcpy(&eth_addr[internals->port].addr_bytes, &info.u.port_v7.data.macAddress, sizeof(eth_addr[internals->port].addr_bytes));
+    memcpy(&eth_addr[internals->port].addr_bytes, &pInfo->u.port_v7.data.macAddress, sizeof(eth_addr[internals->port].addr_bytes));
 
     pmd_link.link_duplex = ETH_LINK_FULL_DUPLEX;
     pmd_link.link_status = 0;
@@ -2082,9 +2125,13 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   }
   (void)(*_NT_InfoClose)(hInfo);
 
+  rte_free(pInfo);
   return iRet;
 
 error:
+  if (pInfo) {
+    rte_free(pInfo);
+  }
   if (hInfo) 
     (void)(*_NT_InfoClose)(hInfo);
   if (internals)
