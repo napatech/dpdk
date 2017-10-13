@@ -53,7 +53,7 @@ See below for supported drivers and adapters:
 |  NT200A01-02-SCC-2×100-E3-FF-ANL  |  200-9515-09-08-00 |
 
 The complete driver package can be downloaded here:
-[ntanl_package_3gd_linux_10.0.1](https://support.napatech.com/Releases/SmartNICs/10.0.1/ntanl_package_3gd_linux_10.0.1.tar.gz) 
+[ntanl_package_3gd_linux_10.0.2](https://supportportal.napatech.com/index.php?/selfhelp/view-article/ntanl-v1002-linux/220) 
 
 
 ## Compiling the Napatech NTACC PMD driver <a name="compiling"></a>
