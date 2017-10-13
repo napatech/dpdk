@@ -1,10 +1,8 @@
 # Napatech PCI Poll Mode driver – NTACC PMD.
 ----------
-The Napatech NTACC PMD enables users to run DPDK on top of the Napatech accelerators and driver. The NTACC PMD is a PCI driver.
+The Napatech NTACC PMD enables users to run DPDK on top of the Napatech adapters and driver. The NTACC PMD is a PCI driver.
 
-The NTACC PMD driver does not need to be binded, this means that the dpdk-devbind-py script cannot be used to bind the interface. 
-
-When starting the DPDK app, it will automatically find and use the NTACC PMD driver provided that the Napatech driver is started and the Napatech accelerator is not blacklisted.
+The NTACC PMD driver does not need to be bound. This means that the dpdk-devbind-py script cannot be used to bind the interface. The DPDK app will automatically find and use the NTACC PMD driver when starting, provided that the Napatech driver is started and the Napatech adapter is not blacklisted.
 
 ## Table of Contents
 1. [Napatech Driver](#driver)
@@ -34,9 +32,9 @@ When starting the DPDK app, it will automatically find and use the NTACC PMD dri
 
 ## Napatech Driver <a name="driver"></a>
 
-The Napatech driver and accelerator must be installed and started before the NTACC PMD can be used. See the installation guide in the Napatech driver package for how to install and start the driver.
+The Napatech driver and adapter must be installed and started before the NTACC PMD can be used. See the installation guide in the Napatech driver package for how to install and start the driver.
 
-See below for supported drivers and accelerators:
+See below for supported drivers and adapters:
 
 |  Supported drivers |
 |-------------------------|
@@ -44,7 +42,7 @@ See below for supported drivers and accelerators:
 
 <br>
 
-|  Supported accelerators                        | FPGA                        |
+|  Supported adapters                        | FPGA                        |
 |---------------------------------------------------|---------------------------|
 |  NT40A01-01-SCC-4×1-E3-FF-ANL        |  200-9500-09-08-00 |
 |  NT20E3-2-PTP-ANL                               |  200-9501-09-08-00 |
@@ -61,21 +59,21 @@ The complete driver package can be downloaded here:
 ## Compiling the Napatech NTACC PMD driver <a name="compiling"></a>
 
 ##### Environment variable <a name="Environment"></a>
-In order to compile the NTACC PMD the NAPATECH3_PATH environment variable must be set. This tells DPDK where the Napatech driver is installed.
+In order to compile the NTACC PMD, the NAPATECH3_PATH environment variable must be set. This tells DPDK where the Napatech driver is installed.
 
 `export NAPATECH3_PATH=/opt/napatech3`
 
 /opt/napatech3 is the default path for installing the Napatech driver. If the driver is installed elsewhere, that path must be used.
 
 ##### Configuration setting  <a name="configuration"></a>
-To enable DPDK to compile NTACC PMD a configuration setting must be set in the file common_base.
+To enable DPDK to compile NTACC PMD, a configuration setting must be set in the file common_base.
 
 `CONFIG_RTE_LIBRTE_PMD_NTACC=y`
 
 Three other configurations settings can be used to change the behaviour of the NTACC PMD:
 
 - Hardware based or software based statistic:
-This setting is used to select between software based and hardware based statistic.
+This setting is used to select between software based and hardware based statistics.
 <br>`CONFIG_RTE_LIBRTE_PMD_NTACC_USE_SW_STAT=n`
 
 - Disable default filter:
@@ -101,23 +99,23 @@ Hostbuffer settings:
 | Parameter | Description                                  |                                                                                                                                          |
 |-----------|----------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------|
 | R1        |  Number of RX hostbuffers                    | Must be equal to or larger than the number of RX queues used.<br>Maximum value = 128.                                                    | 
-| R2        |  Size of a hostbuffer in MB                  | The optimal size depends of the use. The default is usually fine.<br>The value must be a multiple of 4 and larger or equal than 16.      |
-| R3        |  Numa node where the hostbuffer is allocated | Use -1 for NUMA node autodetect. Hostbuffers will be allocated from the NUMA node to which the accelerator is connected.                 |
+| R2        |  Size of a hostbuffer in MB                  | The optimal size depends of the use. The default is usually fine.<br>The value must be a multiple of 4 and larger or equal to 16.        |
+| R3        |  Numa node where the hostbuffer is allocated | Use -1 for NUMA node autodetect. Hostbuffers will be allocated from the NUMA node to which the adapter is connected.                 |
 | T1        |  Number of TX hostbuffers                    | Must be equal to or larger than the number of TX queues used.<br>Maximum value = 128.                                                    | 
-| T2        |  Size of a hostbuffer in MB                  | The optimal size depends of the use. The default is usually fine.<br>The value must be a multiple of 4 and larger or equal than 16.      |
-| T3        |  Numa node where the hostbuffer is allocated | Use -1 for NUMA node autodetect. Hostbuffers will be allocated from the NUMA node to which the accelerator is connected.                 |
+| T2        |  Size of a hostbuffer in MB                  | The optimal size depends of the use. The default is usually fine.<br>The value must be a multiple of 4 and larger or equal to 16.        |
+| T3        |  Numa node where the hostbuffer is allocated | Use -1 for NUMA node autodetect. Hostbuffers will be allocated from the NUMA node to which the adapter is connected.                 |
 
-The default setting for accelerator X is:
+The default setting for adapter X is:
 
 ```
 [AdapterX]
 HostBuffersRx = [4, 16, -1]
 HostBuffersTx = [4, 16, -1]
 ```
-This means that it would be possible to create 4 RX queues and 4 TX queues.
+This means that it will be possible to create 4 RX queues and 4 TX queues.
 
 #### Statistics update interval  <a name="statinterval"></a>
-When using hardware based statistics `CONFIG_RTE_LIBRTE_PMD_NTACC_USE_SW_STAT=n`, the default update interval is 500 ms i.e. the time between each time the statistics is updated by the adapter. In some cases the update interval is to slow for some applications. The update interval can be changed by changing the `StatInterval` option in the system section in the ini-file.
+When using hardware based statistics `CONFIG_RTE_LIBRTE_PMD_NTACC_USE_SW_STAT=n`, the default update interval is 500 ms i.e. the time between each time the statistics is updated by the adapter. In some cases, the update interval is too large. The update interval can be changed by changing the `StatInterval` option in the system section in the ini-file.
 ```
 [System]
 StatInterval=1
@@ -126,13 +124,13 @@ StatInterval=1
 Possible values in milliseconds for StatInterval are:
 `1, 10, 20, 25, 50, 100, 200, 400, 500`
 
-> Note: Increasing the statistics update requires more CPU cycles.
+> Note: Increasing the statistics update frequency requires more CPU cycles.
 
 ## Number of RX queues and TX queues available <a name="queues"></a>
 
-Up to 128 RX queues are supported. They are distributed between the ports on the Napatech accelerator and rte_flow filters on a first-come, first-served basis.
+Up to 128 RX queues are supported. They are distributed between the ports on the Napatech adapter and rte_flow filters on a first-come, first-served basis.
 
-Up to 128 TX queues are supported. They are distributed between the ports on the Napatech accelerator on a first-come, first-served basis.
+Up to 128 TX queues are supported. They are distributed between the ports on the Napatech adapter on a first-come, first-served basis.
 
 The maximum number of RX queues per port are the smallest number of either:
 
@@ -143,35 +141,35 @@ The maximum number of RX queues per port are the smallest number of either:
 
 ## Starting NTACC PMD <a name="starting"></a>
 
-The NTACC PMD is automatically found and used by the DPDK, when starting a DPDK app. All Napatech accelerators installed and activated will appear in the DPDK app. To use only some of the installed Napatech accelerators, the whitelist command must be used. The whitelist command is also used to select specific ports on an accelerator.
+When a DPDK app is starting, the NTACC PMD is automatically found and used by the DPDK. All Napatech adapters installed and activated will appear in the DPDK app. To use only some of the installed Napatech adapters, the whitelist command must be used. The whitelist command is also used to select specific ports on an adapter.
 
 | whitelist command format |  Description |
 |-----------------------------------|---|
-| `-w <[domain:]bus:devid.func>` | Select a specific PCI accelerator |
-| `-w <[domain:]bus:devid.func>,mask=X` | Select a specific PCI accelerator, <br>but use only the ports defined by mask<br>The mask command is specific for Napatech accelerators |
+| `-w <[domain:]bus:devid.func>` | Select a specific PCI adapter |
+| `-w <[domain:]bus:devid.func>,mask=X` | Select a specific PCI adapter, <br>but use only the ports defined by mask<br>The mask command is specific for Napatech adapters |
 
 
 
 Example 1:
-A NT40E3-4-PTP-ANL Napatech accelerator is installed. We want to use only port 0 and 1.
+A NT40E3-4-PTP-ANL Napatech adapter is installed. We want to use only port 0 and 1.
 
 - `DPDKApp  -w 0000:82:00.0,mask=3`
 
 Example 2:
-Two NT40E3-4-PTP-ANL Napatech accelerators are installed. We want to use only port 0 and 1 on accelerator 1 and only port 2 and 3 on accelerator 2..
+Two NT40E3-4-PTP-ANL Napatech adapters are installed. We want to use only port 0 and 1 on adapter 1 and only port 2 and 3 on adapter 2.
 
 - `DPDKApp  -w 0000:82:00.0,mask=3 -w 0000:84:00.0,mask=0xC`
 
 Example 3:
-A NT40E3-4-PTP-ANL Napatech accelerator is installed. We want app1 to use only port 0 and 1 and app2 to use only port 2 and 3. In order to start two DPDK applications we must share the memory between the two applications using --file-prefix and --socket-mem. Note that both applications will get DPDK port number 0 and 1 eventhough app2 will use port number 2 and 3 on the accelerator.
+A NT40E3-4-PTP-ANL Napatech adapter is installed. We want app1 to use only port 0 and 1, and app2 to use only port 2 and 3. In order to start two DPDK applications, we must share the memory between the two applications using --file-prefix and --socket-mem. Note that both applications will get DPDK port number 0 and 1, even though app2 will use port number 2 and 3 on the adapter.
 
 - `DPDKApp1  -w 0000:82:00.0,mask=3 --file-prefix fc0 --socket-mem 1024,1024`
 - `DPDKApp2  -w 0000:82:00.0,mask=12 --file-prefix fc1 --socket-mem 1024,1024`
 
 <br>
-> Note: When using the whitelist command all accelerators that have to be used must be included.
+> Note: When using the whitelist command, all adapters to be used must be included.
 
-The Napatech accelerators can also be disabled by using the blacklist command.
+The Napatech adapters can also be disabled by using the blacklist command.
  
 ## Generic rte_flow filter items <a name="genericflow"></a>
 
@@ -194,7 +192,7 @@ Following rte_flow filters are supported:
 |`RTE_FLOW_ITEM_TYPE_NVGRE` | Only packet type = `NVGRE`                                                                                                                                                    |
 |`RTE_FLOW_ITEM_TYPE_VXLAN` | Only packet type = `VXLAN`                                                                                                                                                    |
 | `RTE_FLOW_ITEM_TYPE_GRE`  | `c_rsvd0_ver` (only version = bit b0-b2)|
-| `RTE_FLOW_ITEM_TYPE_PORT`  | `index`<br>The port numbers used, must be the local port numbers for the accelerator. <br>For a 4 port accelerator the port numbers are 0 to 3.|
+| `RTE_FLOW_ITEM_TYPE_PORT`  | `index`<br>The port numbers used, must be the local port numbers for the adapter. <br>For a 4 port adapter the port numbers are 0 to 3.|
 
 The following rte_flow filters are added by Napatech and are not a part of the main DPDK:
 
@@ -233,9 +231,9 @@ The following rte_flow filter attributes are supported:
 ## Priority <a name="Priority"></a>
 If multiple filters are used, priority is used to select the order of the filters. The filter with the highest priority will always be the filter to be used. If filters overlap, for example an ethernet filter sending the packets to queue 0 and an IPv4 filter sending the packets to queue 1 (filters overlap as IPv4 packets are also ethernet packets), then the filter with the highest priority is used. 
 
-If the ethernet filter has the highest priority all packets will go to queue 0 and no packets will go to queue 1.
+If the ethernet filter has the highest priority, all packets will go to queue 0 and no packets will go to queue 1.
 
-If the IPv4 filter has the highest priority all IPv4 packets will go to queue 1 and all other packets will go to queue 0.
+If the IPv4 filter has the highest priority, all IPv4 packets will go to queue 1 and all other packets will go to queue 0.
 
 If the filters have the samme priority, the filter entered last is the one to be used.
 
@@ -253,7 +251,7 @@ Following rte_flow filter actions are supported:
 
 - `RTE_FLOW_ACTION_TYPE_MARK`
   - If MARK is set and a packet matching the filter is received, the mark value will be copied to mbuf->hash.fdir.hi and the PKT_RX_FDIR_ID flag in mbuf->ol_flags is set.
-  - If a packet not matching the filter is received the HASH value of the packet will be copied to mbuf->hash.rss and the PKT_RX_RSS_HASH flag in mbuf->ol_flags is set.
+  - If a packet not matching the filter is received, the HASH value of the packet will be copied to mbuf->hash.rss and the PKT_RX_RSS_HASH flag in mbuf->ol_flags is set.
 
 Note: Currently maximum MARK value is 0x1FFF (13 bit).
 
@@ -262,7 +260,7 @@ The supported HASH function is described below.
 
 ## Generic rte_flow RSS/Hash functions <a name="hash"></a>
 
-Following rte_flow filter HASH functions are supported:
+The following rte_flow filter HASH functions are supported:
 
 | HASH function	| | HASH Keys |
 |------|--|------|
@@ -362,7 +360,7 @@ If a default RSS (hash) mode is defined using the rte_eth_dev_configure command 
 
 
 #### Disabling default filter <a name="DisablingDefaultFilter"></a>
-The default filer can be disabled either at compile time by setting:
+The default filter can be disabled either at compile time by setting:
 
 `CONFIG_RTE_LIBRTE_PMD_NTACC_DISABLE_DEFAULT_FILTER=y`
 
@@ -401,7 +399,7 @@ patternCount++;
 flow = rte_flow_create(0, &attr, pattern, actions, &error);
 ```
 
-An ether outer ether filter and an IPV4 inner filter:
+An outer ether filter and an inner IPV4 filter:
 ```C++
 attr.ingress = 1;
 attr.priority = 1;
@@ -435,11 +433,11 @@ patternCount++;
 flow = rte_flow_create(0, &attr, pattern, actions, &error);
 ```
 
-All rte_flow filters added in same rte_flow_create will be and’ed together. If any filter have to be created where the it needs to be or’ed together, it has to be done with several calls to rte_flow_create for each filter.
+All rte_flow filters added in same rte_flow_create will be and’ed together. To create filters that are or’ed together, call rte_flow_create for each filter.
 
 ## Limited filter resources <a name="resources"></a>
 
-The Napatech accelerator and driver has a limited number of filter resources, when using the generic rte_flow filter. In some cases a filter cannot be created. In these cases, it will be necessary to simplify the filter.
+The Napatech adapter and driver has a limited number of filter resources when using the generic rte_flow filter. In some cases, a filter cannot be created. In these cases, it will be necessary to simplify the filter.
 
 ## Filter creation example <a name="Filtercreationexample"></a>
 The following example creates a 5tuple IPv4/TCP filter. If `nbQueues > 1` RSS/Hashing is made to the number of queues using hash function `ETH_RSS_IPV4`. Symmetric hashing is enabled. Packets are marked with 12.
@@ -730,12 +728,12 @@ Supported offsets are:
 |`InnerLayer4Payload`  |
 |`EndOfFrame`             |
 
-To enable *copy packet offset to mbuf* set following in common_base
+To enable *copy packet offset to mbuf*, set following in common_base
 
 - `CONFIG_RTE_LIBRTE_PMD_NTACC_COPY_OFFSET=y`
 - `CONFIG_RTE_LIBRTE_PMD_NTACC_OFFSET0=InnerLayer3Header`
 
-This setting will enable copying of offset to the inner layer3 header to `mbuf->data_off`,  so 
+This setting will enable copying of offset to the inner layer3 header to `mbuf->data_off`, so 
 `mbuf->data_off  = RTE_PKTMBUF_HEADROOM + "offset to  InnerLayer3Header"`
 
 To access the offset, use the command:
@@ -764,8 +762,7 @@ struct rte_flow_item_ntpl {
 };
 ```
 #### ntpl_str
-The string that will be embedded into the resulting NTPL filer expression. The string must be carefully selected,
-so it does not break the NTPL filer expression. See below for an example.
+The string that will be embedded into the resulting NTPL filter expression. Ensure that the string will not break the NTPL filter expression. See below for an example.
 
 Following RTE_FLOW filter without the `RTE_FLOW_ITEM_TYPE_NTPL`:
 ```
@@ -778,14 +775,14 @@ patternCount++;
 pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_END;
 patternCount++;
 ```
-Will be converted to following NTPL filer:
+Will be converted to following NTPL filter:
 ```
 KeyType[name=KT3;Access=partial;Bank=0;colorinfo=true;tag=port0]={64}
 KeyDef[name=KDEF3;KeyType=KT3;tag=port0]=(Layer3Header[12]/64)
 KeyList[KeySet=3;KeyType=KT3;color=305419896;tag=port0]=(0x0A0000019F140606)
 assign[priority=1;Descriptor=DYN3,length=22,colorbits=32;streamid=0;tag=port0]=(Layer3Protocol==IPV4) and port==0 and Key(KDEF3)==3
 ```
-Adding `RTE_FLOW_ITEM_TYPE_NTPL` to the RTE_FLOW filer:
+Adding `RTE_FLOW_ITEM_TYPE_NTPL` to the RTE_FLOW filter:
 ```
 ntpl_spec.ntpl_str = "TunnelType==EoMPLS";
 ntpl_spec.tunnel = RTE_FLOW_NTPL_TUNNEL;
@@ -802,27 +799,27 @@ patternCount++;
 pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_END;
 patternCount++;
 ```
-Will be converted to following NTPL filer:
+Will be converted to following NTPL filter:
 ```
 KeyType[name=KT3;Access=partial;Bank=0;colorinfo=true;tag=port0]={64}
 KeyDef[name=KDEF3;KeyType=KT3;tag=port0]=(InnerLayer3Header[12]/64)
 KeyList[KeySet=3;KeyType=KT3;color=305419896;tag=port0]=(0x0A0000019F140606)
 assign[priority=1;Descriptor=DYN3,length=22,colorbits=32;streamid=0;tag=port0]=(InnerLayer3Protocol==IPV4) and TunnelType==EoMPLS and port==0 and Key(KDEF3)==3
 ```
-The string "TunnelType==EoMPLS" is now embedded into to the NTPL filter expression and the resulting filter is changed to a ethernet over MPLS filter matching the inner layer3 protocol.
+The string "TunnelType==EoMPLS" is now embedded into to the NTPL filter expression, and the resulting filter is changed to a ethernet over MPLS filter matching the inner layer3 protocol.
  
 #### tunnel
-This tells the driver whether the following rte_flow filter items have the be inner or outer filter items
+This tells the driver whether the following rte_flow filter items should be inner or outer filter items
 
-In the above example tunnel=RTE_FLOW_NTPL_TUNNEL, which makes the filter to be an inner layer3 filter. If tunnel=RTE_FLOW_NTPL_NO_TUNNEL, the filter is now a outer layer3 filter.
+In the above example, tunnel=RTE_FLOW_NTPL_TUNNEL, which makes the filter an inner layer3 filter. If tunnel=RTE_FLOW_NTPL_NO_TUNNEL, the filter is now a outer layer3 filter.
 ```
 KeyType[name=KT3;Access=partial;Bank=0;colorinfo=true;tag=port0]={64}
 KeyDef[name=KDEF3;KeyType=KT3;tag=port0]=(Layer3Header[12]/64)
 KeyList[KeySet=3;KeyType=KT3;color=305419896;tag=port0]=(0x0A0000019F140606)
-PMD: NTPL : assign[priority=1;Descriptor=DYN3,length=22,colorbits=32;streamid=0;tag=port0]=(Layer3Protocol==IPV4) and TunnelType==EoMPLS and port==0 and Key(KDEF3)==3
+assign[priority=1;Descriptor=DYN3,length=22,colorbits=32;streamid=0;tag=port0]=(Layer3Protocol==IPV4) and TunnelType==EoMPLS and port==0 and Key(KDEF3)==3
 ```
 `InnerLayer3Header` and `InnerLayer3Protocol` is now changed to `Layer3Header` and `Layer3Protocol`. 
    
-Other NTPL filter expressions can be used as long as it does not break the resulting NTPL filer expression.
+Other NTPL filter expressions can be used as long as it does not break the resulting NTPL filter expression.
 
 
