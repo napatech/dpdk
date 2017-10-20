@@ -2838,6 +2838,7 @@ bond_probe(struct rte_vdev_device *dev)
 	struct rte_kvargs *kvlist;
 	uint8_t bonding_mode, socket_id/*, agg_mode*/;
 	int  arg_count, port_id;
+	uint8_t agg_mode;
 
 	if (!dev)
 		return -EINVAL;
@@ -2894,6 +2895,25 @@ bond_probe(struct rte_vdev_device *dev)
 	}
 	internals = rte_eth_devices[port_id].data->dev_private;
 	internals->kvlist = kvlist;
+
+
+	if (rte_kvargs_count(kvlist, PMD_BOND_AGG_MODE_KVARG) == 1) {
+		if (rte_kvargs_process(kvlist,
+				PMD_BOND_AGG_MODE_KVARG,
+				&bond_ethdev_parse_slave_agg_mode_kvarg,
+				&agg_mode) != 0) {
+			RTE_LOG(ERR, EAL,
+					"Failed to parse agg selection mode for bonded device %s\n",
+					name);
+			goto parse_error;
+		}
+
+		if (internals->mode == BONDING_MODE_8023AD)
+			rte_eth_bond_8023ad_agg_selection_set(port_id,
+					agg_mode);
+	} else {
+		rte_eth_bond_8023ad_agg_selection_set(port_id, AGG_STABLE);
+	}
 
 	RTE_LOG(INFO, EAL, "Create bonded device %s on port %d in mode %u on "
 			"socket %u.\n",	name, port_id, bonding_mode, socket_id);
@@ -3061,7 +3081,6 @@ bond_ethdev_configure(struct rte_eth_dev *dev)
 					name);
 		}
 		if (internals->mode == BONDING_MODE_8023AD)
-			if (agg_mode != 0)
 				rte_eth_bond_8023ad_agg_selection_set(port_id,
 						agg_mode);
 	}
