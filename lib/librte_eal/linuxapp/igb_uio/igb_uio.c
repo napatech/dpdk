@@ -179,8 +179,6 @@ igbuio_pci_open(struct uio_info *info, struct inode *inode)
 	struct rte_uio_pci_dev *udev = info->priv;
 	struct pci_dev *dev = udev->pdev;
 
-	pci_reset_function(dev);
-
 	/* set bus master, which was cleared by the reset function */
 	pci_set_master(dev);
 
