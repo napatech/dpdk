@@ -72,7 +72,7 @@
 #define VIRTIO_SIMPLE_FLAGS ((uint32_t)ETH_TXQ_FLAGS_NOMULTSEGS | \
 	ETH_TXQ_FLAGS_NOOFFLOADS)
 
-static void
+void
 vq_ring_free_chain(struct virtqueue *vq, uint16_t desc_idx)
 {
 	struct vring_desc *dp, *dp_tail;
