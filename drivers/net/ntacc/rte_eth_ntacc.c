@@ -1678,7 +1678,6 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
     char *ntpl_buf = NULL;
     uint8_t list_queues[256];
 
-    priv_lock(internals);
     // Build default flow
     for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
       if (rx_q[queue].enabled) {
@@ -1728,13 +1727,14 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
         RTE_LOG(ERR, PMD, "Failed to create default filter in flow_isolate\n");
         goto IsolateError;
       }
+      priv_lock(internals);
       defFlow->priority = 62;
       pushNtplID(defFlow, ntplInfo.ntplId);
       internals->defaultFlow = defFlow;
+      priv_unlock(internals);
     }
 
     IsolateError:
-    priv_unlock(internals);
 
     if (ntpl_buf) {
       free(ntpl_buf);
@@ -1812,17 +1812,20 @@ static int eth_rss_hash_update(struct rte_eth_dev *dev,
   int ret = 0;
   struct pmd_internals *internals = dev->data->dev_private;
 
-  priv_lock(internals);
   if (rss_conf->rss_hf == 0) {
     // Flush all hash settings
+    priv_lock(internals);
     FlushHash(internals);
+    priv_unlock(internals);
   }
   else {
     struct rte_flow dummyFlow;
     memset(&dummyFlow, 0, sizeof(struct rte_flow));
 
     // Flush all other hash settings first
+    priv_lock(internals);
     FlushHash(internals);
+    priv_unlock(internals);
     if (CreateHash(rss_conf->rss_hf, internals, &dummyFlow, 61) != 0) {
       RTE_LOG(ERR, PMD, "Failed to create hash function eth_rss_hash_update\n");
       ret = 1;
@@ -1830,7 +1833,6 @@ static int eth_rss_hash_update(struct rte_eth_dev *dev,
     }
   }
 UpdateError:
-  priv_unlock(internals);
   return ret;
 }
 
