@@ -162,7 +162,7 @@ static const struct rte_cryptodev_capabilities qat_pmd_capabilities[] = {
 				.key_size = {
 					.min = 1,
 					.max = 128,
-					.increment = 128
+					.increment = 1
 				},
 				.digest_size = {
 					.min = 64,
