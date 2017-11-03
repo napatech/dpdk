@@ -68,7 +68,6 @@
 #include "i40e_ethdev.h"
 #include "i40e_pf.h"
 #define I40EVF_VSI_DEFAULT_MSIX_INTR     1
-#define I40EVF_VSI_DEFAULT_MSIX_INTR_LNX 0
 
 /* busy wait delay in msec */
 #define I40EVF_BUSY_WAIT_DELAY 10
@@ -727,7 +726,7 @@ i40evf_config_irq_map(struct rte_eth_dev *dev)
 		if (vf->version_major == I40E_DPDK_VERSION_MAJOR)
 			vector_id = I40EVF_VSI_DEFAULT_MSIX_INTR;
 		else
-			vector_id = I40EVF_VSI_DEFAULT_MSIX_INTR_LNX;
+			vector_id = I40E_RX_VEC_START;
 	} else {
 		vector_id = I40E_MISC_VEC_ID;
 	}
