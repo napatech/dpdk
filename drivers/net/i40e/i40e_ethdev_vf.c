@@ -1504,7 +1504,6 @@ i40evf_dev_interrupt_handler(__rte_unused struct rte_intr_handle *handle,
 
 done:
 	i40evf_enable_irq0(hw);
-	rte_intr_enable(&dev->pci_dev->intr_handle);
 }
 
 static int
@@ -2155,7 +2154,20 @@ i40evf_dev_start(struct rte_eth_dev *dev)
 		goto err_mac;
 	}
 
+	/* When a VF port is bound to VFIO-PCI, only miscellaneous interrupt
+	 * is mapped to VFIO vector 0 in i40evf_dev_init( ).
+	 * If previous VFIO interrupt mapping set in i40evf_dev_init( ) is
+	 * not cleared, it will fail when rte_intr_enable( ) tries to map Rx
+	 * queue interrupt to other VFIO vectors.
+	 * So clear uio/vfio intr/evevnfd first to avoid failure.
+	 */
+	if (dev->data->dev_conf.intr_conf.rxq != 0) {
+		rte_intr_disable(intr_handle);
+		rte_intr_enable(intr_handle);
+	}
+
 	i40evf_enable_queues_intr(dev);
+
 	return 0;
 
 err_mac:
