@@ -5095,7 +5095,13 @@ eth_igb_rx_queue_intr_disable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
 	struct e1000_hw *hw =
 		E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	uint32_t mask = 1 << queue_id;
+	struct rte_intr_handle *intr_handle = &dev->pci_dev->intr_handle;
+	uint32_t vec = E1000_MISC_VEC_ID;
+
+	if (rte_intr_allow_others(intr_handle))
+		vec = E1000_RX_VEC_START;
+
+	uint32_t mask = 1 << (queue_id + vec);
 
 	E1000_WRITE_REG(hw, E1000_EIMC, mask);
 	E1000_WRITE_FLUSH(hw);
@@ -5108,7 +5114,13 @@ eth_igb_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
 	struct e1000_hw *hw =
 		E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	uint32_t mask = 1 << queue_id;
+	struct rte_intr_handle *intr_handle = &dev->pci_dev->intr_handle;
+	uint32_t vec = E1000_MISC_VEC_ID;
+
+	if (rte_intr_allow_others(intr_handle))
+		vec = E1000_RX_VEC_START;
+
+	uint32_t mask = 1 << (queue_id + vec);
 	uint32_t regval;
 
 	regval = E1000_READ_REG(hw, E1000_EIMS);
