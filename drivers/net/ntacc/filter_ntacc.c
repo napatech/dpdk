@@ -228,9 +228,9 @@ static int PrintHash(const char *str, int priority, struct pmd_internals *intern
   if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
     return -1;
   }
-  priv_lock(internals);
+  rte_spinlock_lock(&internals->lock);
   pushHash(ntplInfo.ntplId, rss_hf, internals, priority);
-  priv_unlock(internals);
+  rte_spinlock_unlock(&internals->lock);
   return 0;
 }
 
@@ -258,13 +258,13 @@ int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow
   flow->rss_hf = rss_hf;
   flow->priority = priority;
 
-  priv_lock(internals);
+  rte_spinlock_lock(&internals->lock);
   if (FindHash(rss_hf, internals, priority)) {
     // Hash is already programmed
-    priv_unlock(internals);
+    rte_spinlock_unlock(&internals->lock);
     return 0;
   }
-  priv_unlock(internals);
+  rte_spinlock_unlock(&internals->lock);
   
   /*****************************/
   /* Inner UDP hash mode setup */
@@ -661,9 +661,9 @@ static int SetFilter(int size,
     }
     break;
   }
-  priv_lock(internals);
+  rte_spinlock_lock(&internals->lock);
   InsertFilterValues(pFilter_values, internals);
-  priv_unlock(internals);
+  rte_spinlock_unlock(&internals->lock);
   return 0;
 }
 
@@ -727,9 +727,9 @@ int CreateOptimizedFilter(char *ntpl_buf,
   char *filter_buffer3 = NULL;
   int i;
 
-  priv_lock(internals);
+  rte_spinlock_lock(&internals->lock);
   if (LIST_EMPTY(&internals->filter_values)) {
-    priv_unlock(internals);
+    rte_spinlock_unlock(&internals->lock);
     return 0;
   }
   pNtplInfo = malloc(sizeof(NtNtplInfo_t));
@@ -975,7 +975,7 @@ int CreateOptimizedFilter(char *ntpl_buf,
   snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "Key(KDEF%u)==%u", key, key);
 
 Errors:
-  priv_unlock(internals);
+  rte_spinlock_unlock(&internals->lock);
 
   if (pNtplInfo) {
     free(pNtplInfo);

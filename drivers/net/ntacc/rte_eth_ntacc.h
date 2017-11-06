@@ -60,6 +60,7 @@ struct filter_keyset_s {
   uint8_t list_queues[RTE_ETHDEV_QUEUE_STAT_CNTRS];
 };
 
+#define NUM_FLOW_QUEUES 256
 struct rte_flow {
 	LIST_ENTRY(rte_flow) next;
   LIST_HEAD(_filter_flows, filter_flow) ntpl_id;
@@ -68,6 +69,8 @@ struct rte_flow {
   uint64_t typeMask;
   uint64_t rss_hf;
   int priority;
+  uint8_t nb_queues;
+  uint8_t list_queues[NUM_FLOW_QUEUES];
 };
 
 enum {
@@ -89,9 +92,11 @@ struct ntacc_rx_queue {
 
   uint32_t               stream_id;
   uint8_t                in_port;
+  uint8_t                local_port;
   const char             *name;
   const char             *type;
   int                    enabled;
+  int                    batching;
 };
 
 struct ntacc_tx_queue {
@@ -169,6 +174,7 @@ struct pmd_internals {
   LIST_HEAD(filter_hash_t, filter_hash_s) filter_hash;
   LIST_HEAD(filter_keyset_t, filter_keyset_s) filter_keyset;
   rte_spinlock_t        lock;
+  rte_spinlock_t        statlock;
   uint8_t               port;
   uint8_t               local_port;
   uint8_t               local_port_offset;
@@ -188,17 +194,13 @@ struct pmd_internals {
   struct pmd_shared_mem_s *shm;
 };
 
+struct batch_ctrl {
+	void      *orig_buf_addr;
+	void      *queue;
+	NtNetBuf_t pSeg;
+};
+
 int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo, struct pmd_internals *internals);
-
-static inline void priv_lock(struct pmd_internals *internals)
-{
-  rte_spinlock_lock(&internals->lock);
-}
-
-static inline void priv_unlock(struct pmd_internals *internals)
-{
-  rte_spinlock_unlock(&internals->lock);
-}
 
 #endif
 

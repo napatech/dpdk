@@ -239,6 +239,24 @@
 				<F N="app/test-crypto-perf/main.c"/>
 				<F N="app/test-crypto-perf/Makefile"/>
 			</Folder>
+			<Folder Name="test-eventdev">
+				<F N="app/test-eventdev/evt_common.h"/>
+				<F N="app/test-eventdev/evt_main.c"/>
+				<F N="app/test-eventdev/evt_options.c"/>
+				<F N="app/test-eventdev/evt_options.h"/>
+				<F N="app/test-eventdev/evt_test.c"/>
+				<F N="app/test-eventdev/evt_test.h"/>
+				<F N="app/test-eventdev/parser.c"/>
+				<F N="app/test-eventdev/parser.h"/>
+				<F N="app/test-eventdev/test_order_atq.c"/>
+				<F N="app/test-eventdev/test_order_common.c"/>
+				<F N="app/test-eventdev/test_order_common.h"/>
+				<F N="app/test-eventdev/test_order_queue.c"/>
+				<F N="app/test-eventdev/test_perf_atq.c"/>
+				<F N="app/test-eventdev/test_perf_common.c"/>
+				<F N="app/test-eventdev/test_perf_common.h"/>
+				<F N="app/test-eventdev/test_perf_queue.c"/>
+			</Folder>
 			<Folder Name="test-pmd">
 				<F N="app/test-pmd/cmdline.c"/>
 				<F N="app/test-pmd/cmdline_flow.c"/>
@@ -323,17 +341,27 @@
 				<Folder Name="fslmc">
 					<Folder Name="mc">
 						<F N="drivers/bus/fslmc/mc/dpbp.c"/>
+						<F N="drivers/bus/fslmc/mc/dpci.c"/>
+						<F N="drivers/bus/fslmc/mc/dpcon.c"/>
 						<F N="drivers/bus/fslmc/mc/dpio.c"/>
+						<F N="drivers/bus/fslmc/mc/dpmng.c"/>
 						<F N="drivers/bus/fslmc/mc/fsl_dpbp.h"/>
 						<F N="drivers/bus/fslmc/mc/fsl_dpbp_cmd.h"/>
+						<F N="drivers/bus/fslmc/mc/fsl_dpci.h"/>
+						<F N="drivers/bus/fslmc/mc/fsl_dpci_cmd.h"/>
+						<F N="drivers/bus/fslmc/mc/fsl_dpcon.h"/>
+						<F N="drivers/bus/fslmc/mc/fsl_dpcon_cmd.h"/>
 						<F N="drivers/bus/fslmc/mc/fsl_dpio.h"/>
 						<F N="drivers/bus/fslmc/mc/fsl_dpio_cmd.h"/>
+						<F N="drivers/bus/fslmc/mc/fsl_dpmng.h"/>
+						<F N="drivers/bus/fslmc/mc/fsl_dpmng_cmd.h"/>
 						<F N="drivers/bus/fslmc/mc/fsl_mc_cmd.h"/>
 						<F N="drivers/bus/fslmc/mc/fsl_mc_sys.h"/>
 						<F N="drivers/bus/fslmc/mc/mc_sys.c"/>
 					</Folder>
 					<Folder Name="portal">
 						<F N="drivers/bus/fslmc/portal/dpaa2_hw_dpbp.c"/>
+						<F N="drivers/bus/fslmc/portal/dpaa2_hw_dpci.c"/>
 						<F N="drivers/bus/fslmc/portal/dpaa2_hw_dpio.c"/>
 						<F N="drivers/bus/fslmc/portal/dpaa2_hw_dpio.h"/>
 						<F N="drivers/bus/fslmc/portal/dpaa2_hw_pvt.h"/>
@@ -458,6 +486,7 @@
 					<F N="drivers/crypto/scheduler/rte_cryptodev_scheduler.h"/>
 					<F N="drivers/crypto/scheduler/rte_cryptodev_scheduler_operations.h"/>
 					<F N="drivers/crypto/scheduler/scheduler_failover.c"/>
+					<F N="drivers/crypto/scheduler/scheduler_multicore.c"/>
 					<F N="drivers/crypto/scheduler/scheduler_pkt_size_distr.c"/>
 					<F N="drivers/crypto/scheduler/scheduler_pmd.c"/>
 					<F N="drivers/crypto/scheduler/scheduler_pmd_ops.c"/>
@@ -479,6 +508,11 @@
 				<F N="drivers/crypto/Makefile"/>
 			</Folder>
 			<Folder Name="event">
+				<Folder Name="dpaa2">
+					<F N="drivers/event/dpaa2/dpaa2_eventdev.c"/>
+					<F N="drivers/event/dpaa2/dpaa2_eventdev.h"/>
+					<F N="drivers/event/dpaa2/dpaa2_hw_dpcon.c"/>
+				</Folder>
 				<Folder Name="octeontx">
 					<F N="drivers/event/octeontx/Makefile"/>
 					<F N="drivers/event/octeontx/rte_pmd_octeontx_ssovf.h"/>
@@ -611,6 +645,8 @@
 					<F N="drivers/net/bnxt/bnxt_vnic.h"/>
 					<F N="drivers/net/bnxt/hsi_struct_def_dpdk.h"/>
 					<F N="drivers/net/bnxt/Makefile"/>
+					<F N="drivers/net/bnxt/rte_pmd_bnxt.c"/>
+					<F N="drivers/net/bnxt/rte_pmd_bnxt.h"/>
 				</Folder>
 				<Folder Name="bonding">
 					<F N="drivers/net/bonding/Makefile"/>
@@ -705,6 +741,7 @@
 					<F N="drivers/net/e1000/em_ethdev.c"/>
 					<F N="drivers/net/e1000/em_rxtx.c"/>
 					<F N="drivers/net/e1000/igb_ethdev.c"/>
+					<F N="drivers/net/e1000/igb_flow.c"/>
 					<F N="drivers/net/e1000/igb_pf.c"/>
 					<F N="drivers/net/e1000/igb_regs.h"/>
 					<F N="drivers/net/e1000/igb_rxtx.c"/>
@@ -761,11 +798,22 @@
 					<F N="drivers/net/enic/enic_clsf.c"/>
 					<F N="drivers/net/enic/enic_compat.h"/>
 					<F N="drivers/net/enic/enic_ethdev.c"/>
+					<F N="drivers/net/enic/enic_flow.c"/>
 					<F N="drivers/net/enic/enic_main.c"/>
 					<F N="drivers/net/enic/enic_res.c"/>
 					<F N="drivers/net/enic/enic_res.h"/>
 					<F N="drivers/net/enic/enic_rxtx.c"/>
 					<F N="drivers/net/enic/Makefile"/>
+				</Folder>
+				<Folder Name="failsafe">
+					<F N="drivers/net/failsafe/failsafe.c"/>
+					<F N="drivers/net/failsafe/failsafe_args.c"/>
+					<F N="drivers/net/failsafe/failsafe_eal.c"/>
+					<F N="drivers/net/failsafe/failsafe_ether.c"/>
+					<F N="drivers/net/failsafe/failsafe_flow.c"/>
+					<F N="drivers/net/failsafe/failsafe_ops.c"/>
+					<F N="drivers/net/failsafe/failsafe_private.h"/>
+					<F N="drivers/net/failsafe/failsafe_rxtx.c"/>
 				</Folder>
 				<Folder Name="fm10k">
 					<Folder Name="base">
@@ -814,6 +862,7 @@
 						<F N="drivers/net/i40e/base/i40e_status.h"/>
 						<F N="drivers/net/i40e/base/i40e_type.h"/>
 						<F N="drivers/net/i40e/base/i40e_virtchnl.h"/>
+						<F N="drivers/net/i40e/base/virtchnl.h"/>
 					</Folder>
 					<F N="drivers/net/i40e/i40e_ethdev.c"/>
 					<F N="drivers/net/i40e/i40e_ethdev.h"/>
@@ -830,6 +879,7 @@
 					<F N="drivers/net/i40e/i40e_rxtx_vec_common.h"/>
 					<F N="drivers/net/i40e/i40e_rxtx_vec_neon.c"/>
 					<F N="drivers/net/i40e/i40e_rxtx_vec_sse.c"/>
+					<F N="drivers/net/i40e/i40e_tm.c"/>
 					<F N="drivers/net/i40e/Makefile"/>
 					<F N="drivers/net/i40e/rte_pmd_i40e.c"/>
 					<F N="drivers/net/i40e/rte_pmd_i40e.h"/>
@@ -882,6 +932,7 @@
 					<F N="drivers/net/ixgbe/ixgbe_rxtx_vec_common.h"/>
 					<F N="drivers/net/ixgbe/ixgbe_rxtx_vec_neon.c"/>
 					<F N="drivers/net/ixgbe/ixgbe_rxtx_vec_sse.c"/>
+					<F N="drivers/net/ixgbe/ixgbe_tm.c"/>
 					<F N="drivers/net/ixgbe/Makefile"/>
 					<F N="drivers/net/ixgbe/rte_pmd_ixgbe.c"/>
 					<F N="drivers/net/ixgbe/rte_pmd_ixgbe.h"/>
@@ -930,6 +981,7 @@
 					<F N="drivers/net/mlx5/mlx5_rxq.c"/>
 					<F N="drivers/net/mlx5/mlx5_rxtx.c"/>
 					<F N="drivers/net/mlx5/mlx5_rxtx.h"/>
+					<F N="drivers/net/mlx5/mlx5_rxtx_vec_sse.c"/>
 					<F N="drivers/net/mlx5/mlx5_stats.c"/>
 					<F N="drivers/net/mlx5/mlx5_trigger.c"/>
 					<F N="drivers/net/mlx5/mlx5_txq.c"/>
@@ -1133,6 +1185,8 @@
 					<F N="drivers/net/szedata2/Makefile"/>
 					<F N="drivers/net/szedata2/rte_eth_szedata2.c"/>
 					<F N="drivers/net/szedata2/rte_eth_szedata2.h"/>
+					<F N="drivers/net/szedata2/szedata2_iobuf.c"/>
+					<F N="drivers/net/szedata2/szedata2_iobuf.h"/>
 				</Folder>
 				<Folder Name="tap">
 					<F N="drivers/net/tap/Makefile"/>
@@ -1228,6 +1282,12 @@
 			<F N="drivers/Makefile"/>
 		</Folder>
 		<Folder Name="examples">
+			<Folder Name="batching">
+				<F N="examples/batching/batching.c"/>
+				<F
+					N="examples/batching/Makefile"
+					Type="Makefile"/>
+			</Folder>
 			<Folder Name="bond">
 				<F N="examples/bond/main.c"/>
 				<F N="examples/bond/main.h"/>
@@ -1258,6 +1318,9 @@
 					<F N="examples/ethtool/lib/rte_ethtool.h"/>
 				</Folder>
 				<F N="examples/ethtool/Makefile"/>
+			</Folder>
+			<Folder Name="eventdev_pipeline_sw_pmd">
+				<F N="examples/eventdev_pipeline_sw_pmd/main.c"/>
 			</Folder>
 			<Folder Name="exception_path">
 				<F N="examples/exception_path/main.c"/>
@@ -1379,13 +1442,19 @@
 			</Folder>
 			<Folder Name="l3fwd">
 				<F N="examples/l3fwd/l3fwd.h"/>
+				<F N="examples/l3fwd/l3fwd_common.h"/>
 				<F N="examples/l3fwd/l3fwd_em.c"/>
 				<F N="examples/l3fwd/l3fwd_em.h"/>
+				<F N="examples/l3fwd/l3fwd_em_hlm.h"/>
+				<F N="examples/l3fwd/l3fwd_em_hlm_neon.h"/>
 				<F N="examples/l3fwd/l3fwd_em_hlm_sse.h"/>
+				<F N="examples/l3fwd/l3fwd_em_sequential.h"/>
 				<F N="examples/l3fwd/l3fwd_em_sse.h"/>
 				<F N="examples/l3fwd/l3fwd_lpm.c"/>
 				<F N="examples/l3fwd/l3fwd_lpm.h"/>
+				<F N="examples/l3fwd/l3fwd_lpm_neon.h"/>
 				<F N="examples/l3fwd/l3fwd_lpm_sse.h"/>
+				<F N="examples/l3fwd/l3fwd_neon.h"/>
 				<F N="examples/l3fwd/l3fwd_sse.h"/>
 				<F N="examples/l3fwd/main.c"/>
 				<F N="examples/l3fwd/Makefile"/>
@@ -1473,9 +1542,15 @@
 			<Folder Name="performance-thread">
 				<Folder Name="common">
 					<Folder Name="arch">
+						<Folder Name="arm64">
+							<F N="examples/performance-thread/common/arch/arm64/ctx.c"/>
+							<F N="examples/performance-thread/common/arch/arm64/ctx.h"/>
+							<F N="examples/performance-thread/common/arch/arm64/stack.h"/>
+						</Folder>
 						<Folder Name="x86">
 							<F N="examples/performance-thread/common/arch/x86/ctx.c"/>
 							<F N="examples/performance-thread/common/arch/x86/ctx.h"/>
+							<F N="examples/performance-thread/common/arch/x86/stack.h"/>
 						</Folder>
 					</Folder>
 					<F N="examples/performance-thread/common/lthread.c"/>
@@ -1600,6 +1675,12 @@
 				<F N="examples/vhost/Makefile"/>
 				<F N="examples/vhost/virtio_net.c"/>
 			</Folder>
+			<Folder Name="vhost_scsi">
+				<F N="examples/vhost_scsi/scsi.c"/>
+				<F N="examples/vhost_scsi/scsi_spec.h"/>
+				<F N="examples/vhost_scsi/vhost_scsi.c"/>
+				<F N="examples/vhost_scsi/vhost_scsi.h"/>
+			</Folder>
 			<Folder Name="vhost_xen">
 				<F N="examples/vhost_xen/main.c"/>
 				<F N="examples/vhost_xen/main.h"/>
@@ -1705,7 +1786,10 @@
 				<F N="lib/librte_cryptodev/rte_crypto_sym.h"/>
 				<F N="lib/librte_cryptodev/rte_cryptodev.c"/>
 				<F N="lib/librte_cryptodev/rte_cryptodev.h"/>
+				<F N="lib/librte_cryptodev/rte_cryptodev_pci.h"/>
+				<F N="lib/librte_cryptodev/rte_cryptodev_pmd.c"/>
 				<F N="lib/librte_cryptodev/rte_cryptodev_pmd.h"/>
+				<F N="lib/librte_cryptodev/rte_cryptodev_vdev.h"/>
 			</Folder>
 			<Folder Name="librte_distributor">
 				<F N="lib/librte_distributor/Makefile"/>
@@ -1780,6 +1864,9 @@
 								<F N="lib/librte_eal/common/include/arch/arm/rte_memcpy.h"/>
 								<F N="lib/librte_eal/common/include/arch/arm/rte_memcpy_32.h"/>
 								<F N="lib/librte_eal/common/include/arch/arm/rte_memcpy_64.h"/>
+								<F N="lib/librte_eal/common/include/arch/arm/rte_pause.h"/>
+								<F N="lib/librte_eal/common/include/arch/arm/rte_pause_32.h"/>
+								<F N="lib/librte_eal/common/include/arch/arm/rte_pause_64.h"/>
 								<F N="lib/librte_eal/common/include/arch/arm/rte_prefetch.h"/>
 								<F N="lib/librte_eal/common/include/arch/arm/rte_prefetch_32.h"/>
 								<F N="lib/librte_eal/common/include/arch/arm/rte_prefetch_64.h"/>
@@ -1794,6 +1881,7 @@
 								<F N="lib/librte_eal/common/include/arch/ppc_64/rte_cycles.h"/>
 								<F N="lib/librte_eal/common/include/arch/ppc_64/rte_io.h"/>
 								<F N="lib/librte_eal/common/include/arch/ppc_64/rte_memcpy.h"/>
+								<F N="lib/librte_eal/common/include/arch/ppc_64/rte_pause.h"/>
 								<F N="lib/librte_eal/common/include/arch/ppc_64/rte_prefetch.h"/>
 								<F N="lib/librte_eal/common/include/arch/ppc_64/rte_rwlock.h"/>
 								<F N="lib/librte_eal/common/include/arch/ppc_64/rte_spinlock.h"/>
@@ -1810,6 +1898,7 @@
 								<F N="lib/librte_eal/common/include/arch/x86/rte_cycles.h"/>
 								<F N="lib/librte_eal/common/include/arch/x86/rte_io.h"/>
 								<F N="lib/librte_eal/common/include/arch/x86/rte_memcpy.h"/>
+								<F N="lib/librte_eal/common/include/arch/x86/rte_pause.h"/>
 								<F N="lib/librte_eal/common/include/arch/x86/rte_prefetch.h"/>
 								<F N="lib/librte_eal/common/include/arch/x86/rte_rtm.h"/>
 								<F N="lib/librte_eal/common/include/arch/x86/rte_rwlock.h"/>
@@ -1824,6 +1913,7 @@
 							<F N="lib/librte_eal/common/include/generic/rte_cycles.h"/>
 							<F N="lib/librte_eal/common/include/generic/rte_io.h"/>
 							<F N="lib/librte_eal/common/include/generic/rte_memcpy.h"/>
+							<F N="lib/librte_eal/common/include/generic/rte_pause.h"/>
 							<F N="lib/librte_eal/common/include/generic/rte_prefetch.h"/>
 							<F N="lib/librte_eal/common/include/generic/rte_rwlock.h"/>
 							<F N="lib/librte_eal/common/include/generic/rte_spinlock.h"/>
@@ -1854,6 +1944,8 @@
 						<F N="lib/librte_eal/common/include/rte_pci_dev_features.h"/>
 						<F N="lib/librte_eal/common/include/rte_per_lcore.h"/>
 						<F N="lib/librte_eal/common/include/rte_random.h"/>
+						<F N="lib/librte_eal/common/include/rte_service.h"/>
+						<F N="lib/librte_eal/common/include/rte_service_component.h"/>
 						<F N="lib/librte_eal/common/include/rte_string_fns.h"/>
 						<F N="lib/librte_eal/common/include/rte_tailq.h"/>
 						<F N="lib/librte_eal/common/include/rte_time.h"/>
@@ -1893,6 +1985,7 @@
 					<F N="lib/librte_eal/common/malloc_heap.h"/>
 					<F N="lib/librte_eal/common/rte_keepalive.c"/>
 					<F N="lib/librte_eal/common/rte_malloc.c"/>
+					<F N="lib/librte_eal/common/rte_service.c"/>
 				</Folder>
 				<Folder Name="linuxapp">
 					<Folder Name="eal">
@@ -2007,9 +2100,12 @@
 				<F N="lib/librte_efd/Makefile"/>
 				<F N="lib/librte_efd/rte_efd.c"/>
 				<F N="lib/librte_efd/rte_efd.h"/>
+				<F N="lib/librte_efd/rte_efd_arm64.h"/>
 				<F N="lib/librte_efd/rte_efd_x86.h"/>
 			</Folder>
 			<Folder Name="librte_ether">
+				<F N="lib/librte_ether/ethdev_profile.c"/>
+				<F N="lib/librte_ether/ethdev_profile.h"/>
 				<F N="lib/librte_ether/Makefile"/>
 				<F N="lib/librte_ether/rte_dev_info.h"/>
 				<F N="lib/librte_ether/rte_eth_ctrl.h"/>
@@ -2020,12 +2116,25 @@
 				<F N="lib/librte_ether/rte_flow.c"/>
 				<F N="lib/librte_ether/rte_flow.h"/>
 				<F N="lib/librte_ether/rte_flow_driver.h"/>
+				<F N="lib/librte_ether/rte_tm.c"/>
+				<F N="lib/librte_ether/rte_tm.h"/>
+				<F N="lib/librte_ether/rte_tm_driver.h"/>
 			</Folder>
 			<Folder Name="librte_eventdev">
 				<F N="lib/librte_eventdev/Makefile"/>
+				<F N="lib/librte_eventdev/rte_event_ring.c"/>
+				<F N="lib/librte_eventdev/rte_event_ring.h"/>
 				<F N="lib/librte_eventdev/rte_eventdev.c"/>
 				<F N="lib/librte_eventdev/rte_eventdev.h"/>
 				<F N="lib/librte_eventdev/rte_eventdev_pmd.h"/>
+				<F N="lib/librte_eventdev/rte_eventdev_pmd_pci.h"/>
+				<F N="lib/librte_eventdev/rte_eventdev_pmd_vdev.h"/>
+			</Folder>
+			<Folder Name="librte_gro">
+				<F N="lib/librte_gro/gro_tcp4.c"/>
+				<F N="lib/librte_gro/gro_tcp4.h"/>
+				<F N="lib/librte_gro/rte_gro.c"/>
+				<F N="lib/librte_gro/rte_gro.h"/>
 			</Folder>
 			<Folder Name="librte_hash">
 				<F N="lib/librte_hash/Makefile"/>
@@ -2109,6 +2218,7 @@
 			</Folder>
 			<Folder Name="librte_net">
 				<F N="lib/librte_net/Makefile"/>
+				<F N="lib/librte_net/net_crc_neon.h"/>
 				<F N="lib/librte_net/net_crc_sse.h"/>
 				<F N="lib/librte_net/rte_arp.h"/>
 				<F N="lib/librte_net/rte_ether.h"/>
@@ -2192,6 +2302,8 @@
 			<Folder Name="librte_table">
 				<F N="lib/librte_table/Makefile"/>
 				<F N="lib/librte_table/rte_lru.h"/>
+				<F N="lib/librte_table/rte_lru_arm64.h"/>
+				<F N="lib/librte_table/rte_lru_x86.h"/>
 				<F N="lib/librte_table/rte_table.h"/>
 				<F N="lib/librte_table/rte_table_acl.c"/>
 				<F N="lib/librte_table/rte_table_acl.h"/>
@@ -2506,6 +2618,7 @@
 				<F N="test/test/test_efd.c"/>
 				<F N="test/test/test_efd_perf.c"/>
 				<F N="test/test/test_errno.c"/>
+				<F N="test/test/test_event_ring.c"/>
 				<F N="test/test/test_eventdev.c"/>
 				<F N="test/test/test_eventdev_octeontx.c"/>
 				<F N="test/test/test_eventdev_sw.c"/>
@@ -2552,6 +2665,7 @@
 				<F N="test/test/test_ring_perf.c"/>
 				<F N="test/test/test_rwlock.c"/>
 				<F N="test/test/test_sched.c"/>
+				<F N="test/test/test_service_cores.c"/>
 				<F N="test/test/test_spinlock.c"/>
 				<F N="test/test/test_string_fns.c"/>
 				<F N="test/test/test_table.c"/>
@@ -2594,6 +2708,307 @@
 				<F N="test/test-pipeline/runtime.c"/>
 			</Folder>
 			<F N="test/Makefile"/>
+		</Folder>
+		<Folder Name="x86_64-native-linuxapp-gcc">
+			<Folder Name="build">
+				<Folder Name="drivers">
+					<Folder Name="crypto">
+						<Folder Name="null">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/crypto/null/null_crypto_pmd.o.pmd.c"/>
+						</Folder>
+					</Folder>
+					<Folder Name="event">
+						<Folder Name="octeontx">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/event/octeontx/ssovf_evdev.o.pmd.c"/>
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/event/octeontx/ssovf_probe.o.pmd.c"/>
+						</Folder>
+						<Folder Name="skeleton">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/event/skeleton/skeleton_eventdev.o.pmd.c"/>
+						</Folder>
+						<Folder Name="sw">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/event/sw/sw_evdev.o.pmd.c"/>
+						</Folder>
+					</Folder>
+					<Folder Name="net">
+						<Folder Name="af_packet">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/af_packet/rte_eth_af_packet.o.pmd.c"/>
+						</Folder>
+						<Folder Name="ark">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/ark/ark_ethdev.o.pmd.c"/>
+						</Folder>
+						<Folder Name="avp">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/avp/avp_ethdev.o.pmd.c"/>
+						</Folder>
+						<Folder Name="bnxt">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/bnxt/bnxt_ethdev.o.pmd.c"/>
+						</Folder>
+						<Folder Name="bonding">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/bonding/rte_eth_bond_pmd.o.pmd.c"/>
+						</Folder>
+						<Folder Name="cxgbe">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/cxgbe/cxgbe_ethdev.o.pmd.c"/>
+						</Folder>
+						<Folder Name="e1000">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/e1000/em_ethdev.o.pmd.c"/>
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/e1000/igb_ethdev.o.pmd.c"/>
+						</Folder>
+						<Folder Name="ena">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/ena/ena_ethdev.o.pmd.c"/>
+						</Folder>
+						<Folder Name="enic">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/enic/enic_ethdev.o.pmd.c"/>
+						</Folder>
+						<Folder Name="failsafe">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/failsafe/failsafe.o.pmd.c"/>
+						</Folder>
+						<Folder Name="fm10k">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/fm10k/fm10k_ethdev.o.pmd.c"/>
+						</Folder>
+						<Folder Name="i40e">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/i40e/i40e_ethdev.o.pmd.c"/>
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/i40e/i40e_ethdev_vf.o.pmd.c"/>
+						</Folder>
+						<Folder Name="ixgbe">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/ixgbe/ixgbe_ethdev.o.pmd.c"/>
+						</Folder>
+						<Folder Name="kni">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/kni/rte_eth_kni.o.pmd.c"/>
+						</Folder>
+						<Folder Name="liquidio">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/liquidio/lio_ethdev.o.pmd.c"/>
+						</Folder>
+						<Folder Name="nfp">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/nfp/nfp_net.o.pmd.c"/>
+						</Folder>
+						<Folder Name="ntacc">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/ntacc/rte_eth_ntacc.o.pmd.c"/>
+						</Folder>
+						<Folder Name="null">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/null/rte_eth_null.o.pmd.c"/>
+						</Folder>
+						<Folder Name="qede">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/qede/qede_ethdev.o.pmd.c"/>
+						</Folder>
+						<Folder Name="ring">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/ring/rte_eth_ring.o.pmd.c"/>
+						</Folder>
+						<Folder Name="sfc">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/sfc/sfc_ethdev.o.pmd.c"/>
+						</Folder>
+						<Folder Name="tap">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/tap/rte_eth_tap.o.pmd.c"/>
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/tap/tap_autoconf.h"/>
+						</Folder>
+						<Folder Name="thunderx">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/thunderx/nicvf_ethdev.o.pmd.c"/>
+						</Folder>
+						<Folder Name="vhost">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/vhost/rte_eth_vhost.o.pmd.c"/>
+						</Folder>
+						<Folder Name="virtio">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/virtio/virtio_ethdev.o.pmd.c"/>
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/virtio/virtio_user_ethdev.o.pmd.c"/>
+						</Folder>
+						<Folder Name="vmxnet3">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/vmxnet3/vmxnet3_ethdev.o.pmd.c"/>
+						</Folder>
+					</Folder>
+				</Folder>
+				<Folder Name="lib">
+					<Folder Name="librte_eal">
+						<Folder Name="linuxapp">
+							<Folder Name="igb_uio">
+								<F N="x86_64-native-linuxapp-gcc/build/lib/librte_eal/linuxapp/igb_uio/igb_uio.c"/>
+								<F N="x86_64-native-linuxapp-gcc/build/lib/librte_eal/linuxapp/igb_uio/igb_uio.mod.c"/>
+							</Folder>
+							<Folder Name="kni">
+								<F N="x86_64-native-linuxapp-gcc/build/lib/librte_eal/linuxapp/kni/kni_misc.c"/>
+								<F N="x86_64-native-linuxapp-gcc/build/lib/librte_eal/linuxapp/kni/kni_net.c"/>
+								<F N="x86_64-native-linuxapp-gcc/build/lib/librte_eal/linuxapp/kni/rte_kni.mod.c"/>
+							</Folder>
+						</Folder>
+					</Folder>
+				</Folder>
+			</Folder>
+			<Folder Name="include">
+				<Folder Name="exec-env">
+					<F N="x86_64-native-linuxapp-gcc/include/exec-env/rte_dom0_common.h"/>
+					<F N="x86_64-native-linuxapp-gcc/include/exec-env/rte_interrupts.h"/>
+					<F N="x86_64-native-linuxapp-gcc/include/exec-env/rte_kni_common.h"/>
+				</Folder>
+				<Folder Name="generic">
+					<F N="x86_64-native-linuxapp-gcc/include/generic/rte_atomic.h"/>
+					<F N="x86_64-native-linuxapp-gcc/include/generic/rte_byteorder.h"/>
+					<F N="x86_64-native-linuxapp-gcc/include/generic/rte_cpuflags.h"/>
+					<F N="x86_64-native-linuxapp-gcc/include/generic/rte_cycles.h"/>
+					<F N="x86_64-native-linuxapp-gcc/include/generic/rte_io.h"/>
+					<F N="x86_64-native-linuxapp-gcc/include/generic/rte_memcpy.h"/>
+					<F N="x86_64-native-linuxapp-gcc/include/generic/rte_pause.h"/>
+					<F N="x86_64-native-linuxapp-gcc/include/generic/rte_prefetch.h"/>
+					<F N="x86_64-native-linuxapp-gcc/include/generic/rte_rwlock.h"/>
+					<F N="x86_64-native-linuxapp-gcc/include/generic/rte_spinlock.h"/>
+					<F N="x86_64-native-linuxapp-gcc/include/generic/rte_vect.h"/>
+				</Folder>
+				<F N="x86_64-native-linuxapp-gcc/include/cmdline.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/cmdline_cirbuf.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/cmdline_parse.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/cmdline_parse_etheraddr.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/cmdline_parse_ipaddr.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/cmdline_parse_num.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/cmdline_parse_portlist.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/cmdline_parse_string.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/cmdline_rdline.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/cmdline_socket.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/cmdline_vt100.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_acl.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_acl_osdep.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_alarm.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_approx.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_arp.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_atomic.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_atomic_32.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_atomic_64.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_avp_common.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_avp_fifo.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_bitmap.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_bitrate.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_branch_prediction.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_bus.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_byteorder.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_byteorder_32.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_byteorder_64.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_cfgfile.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_common.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_compat.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_config.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_cpuflags.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_crypto.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_crypto_sym.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_cryptodev.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_cryptodev_pci.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_cryptodev_pmd.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_cryptodev_scheduler.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_cryptodev_scheduler_operations.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_cryptodev_vdev.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_cycles.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_debug.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_dev.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_dev_info.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_devargs.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_distributor.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_eal.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_eal_memconfig.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_efd.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_errno.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_eth_bond.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_eth_bond_8023ad.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_eth_ctrl.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_eth_ring.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_eth_vhost.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_ethdev.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_ethdev_pci.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_ethdev_vdev.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_ether.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_event_ring.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_eventdev.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_eventdev_pmd.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_eventdev_pmd_pci.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_eventdev_pmd_vdev.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_fbk_hash.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_flow.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_flow_driver.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_gre.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_gro.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_hash.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_hash_crc.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_hexdump.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_icmp.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_interrupts.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_io.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_ip.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_ip_frag.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_jhash.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_jobstats.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_keepalive.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_kni.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_kvargs.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_latencystats.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_launch.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_lcore.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_log.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_lpm.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_lpm6.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_lpm_sse.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_lru.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_lru_x86.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_malloc.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_malloc_heap.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_mbuf.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_mbuf_ptype.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_memcpy.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_memory.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_mempool.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_memzone.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_meter.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_metrics.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_net.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_net_crc.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_pause.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_pci.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_pci_dev_feature_defs.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_pci_dev_features.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_pdump.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_per_lcore.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_pipeline.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_pmd_bnxt.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_pmd_i40e.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_pmd_ixgbe.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_pmd_octeontx_ssovf.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_port.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_port_ethdev.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_port_fd.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_port_frag.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_port_kni.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_port_ras.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_port_ring.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_port_sched.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_port_source_sink.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_power.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_prefetch.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_random.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_reciprocal.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_red.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_reorder.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_ring.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_rtm.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_rwlock.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_sched.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_sched_common.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_sctp.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_service.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_service_component.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_spinlock.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_string_fns.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_table.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_table_acl.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_table_array.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_table_hash.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_table_lpm.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_table_lpm_ipv6.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_table_stub.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_tailq.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_tcp.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_thash.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_time.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_timer.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_tm.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_tm_driver.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_udp.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_vdev.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_vect.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_version.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_vhost.h"/>
+			</Folder>
 		</Folder>
 		<F N="Makefile"/>
 	</Files>
