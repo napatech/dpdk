@@ -190,6 +190,10 @@ extern "C" {
 #define PKT_RX_TIMESTAMP     (1ULL << 17)
 
 /* add new RX flags here */
+/**< The packet has a RX header */
+#define PKT_RX_HAS_HEADER    (1ULL << 42) 
+/**< The mbuf contains a batch of packets */
+#define PKT_BATCH            (1ULL << 43) 
 
 /* add new TX flags here */
 
@@ -460,6 +464,7 @@ struct rte_mbuf {
 			uint32_t inner_l3_type:4; /**< Inner L3 type. */
 			uint32_t inner_l4_type:4; /**< Inner L4 type. */
 		};
+		uint32_t batch_nb_packet; /**< Number of contiguous packet in batch. When ol_flags has PKT_BATCH bit */
 	};
 
 	uint32_t pkt_len;         /**< Total pkt len: sum of all segments. */
@@ -544,6 +549,8 @@ struct rte_mbuf {
 	/** Sequence number. See also rte_reorder_insert(). */
 	uint32_t seqn;
 
+	/** Batching callback. Called when releasing the mbuf. */
+	void (*batch_release_cb)(struct rte_mbuf *m);
 } __rte_cache_aligned;
 
 /**
@@ -1102,6 +1109,7 @@ static inline void rte_pktmbuf_reset(struct rte_mbuf *m)
 	rte_pktmbuf_reset_headroom(m);
 
 	m->data_len = 0;
+	m->batch_release_cb = NULL;
 	__rte_mbuf_sanity_check(m, 1);
 }
 
@@ -1345,8 +1353,11 @@ static __rte_always_inline void
 rte_pktmbuf_free_seg(struct rte_mbuf *m)
 {
 	m = rte_pktmbuf_prefree_seg(m);
-	if (likely(m != NULL))
+	if (likely(m != NULL)) {
+		if ((m->ol_flags & PKT_BATCH) && m->batch_release_cb)
+	    m->batch_release_cb(m);
 		rte_mbuf_raw_free(m);
+	}
 }
 
 /**
@@ -1887,6 +1898,230 @@ rte_pktmbuf_linearize(struct rte_mbuf *mbuf)
  *   the packet.
  */
 void rte_pktmbuf_dump(FILE *f, const struct rte_mbuf *m, unsigned dump_len);
+
+/*********************************************************************** 
+              Napatech Additions to handle batching
+ ***********************************************************************/
+
+struct rte_mbuf_batch_pkt_hdr  {
+  uint64_t storedLength:14; /**< The length of the packet incl. descriptor. */ /*  0*/
+  uint64_t wireLength:14;   /**< The wire length of the packet.             */ /* 14*/
+  uint64_t color_lo:14;     /**< Programmable packet color[13:0].           */ /* 28*/
+  uint64_t rxPort:6;        /**< The port that received the frame.          */ /* 42*/
+  uint64_t descrFormat:8;   /**< The descriptor type.                       */ /* 48*/
+  uint64_t descrLength:6;   /**< The length of the descriptor in bytes.     */ /* 56*/
+  uint64_t tsColor:1;       /**< Timestamp color.                           */ /* 62*/
+  uint64_t ntDynDescr:1;    /**< Set to 1 to identify this descriptor as a  */ /* 63*/
+                            /**< dynamic descriptor.                        */
+  uint64_t timestamp;       /**< The time of arrival of the packet.         */ /* 64*/
+  uint64_t color_hi:28;     /**< Programmable packet color[41:14].          */ /*128*/
+  uint16_t offset0:10;      /**< Programmable offset into the packet.       */ /*156*/
+  uint16_t offset1:10;      /**< Programmable offset into the packet.       */ /*166*/
+} __attribute__((__packed__)); // descrLength = 22
+
+/**
+ * Get the next packet from the batching buffer.
+ *
+ * This function will return the next packet from a batching
+ * buffer in a local mbuf.
+ *
+ * @param mbuf
+ *   m_batch: 	mbuf containing a batching buffer
+ *   m:         local mbuf. Packet data is return in this mbuf.
+ *  						Note: No packet data is copied.
+ *   offset:    Offset in batching buffer
+ * @return
+ *   Number of bytes in returned packet incl, packet descriptor
+ */
+static inline int
+rte_pktmbuf_batch_get_next_packet(struct rte_mbuf *m_batch, 
+																	struct rte_mbuf *m, 
+																	uint32_t *offset)
+{
+	struct rte_mbuf_batch_pkt_hdr *phdr;    // Packet descriptor
+
+	if (unlikely(*offset == 0)) {        // First packet. setup mbuf struct.
+		//ctrl->max_size = 0;
+		rte_mbuf_refcnt_set(m, 1);
+		rte_pktmbuf_reset(m);
+		m->buf_len = 0;
+		m->buf_physaddr = 0;
+
+		// Mark mbuf as a special mbuf. The mbuf is a control
+		// mbuf and the packet in this mbuf has a descriptor
+		// header. 
+		m->ol_flags = CTRL_MBUF_FLAG | PKT_RX_HAS_HEADER;
+	}
+
+	// No more packets in batching buffer
+	if (unlikely(*offset >= m_batch->pkt_len)) {
+		return 0;
+	}
+
+	// Point to next packet in batching buffer
+	m->buf_addr = (u_char *)m_batch->buf_addr + *offset;
+
+	// Point to descriptor header in packet buffer
+	phdr = (struct rte_mbuf_batch_pkt_hdr *)m->buf_addr;
+
+	// Update packet info
+	m->port = phdr->rxPort;
+	m->data_len = phdr->wireLength;
+	m->pkt_len = phdr->storedLength;
+
+	// Point to start of Layer2 header (after the descriptor)
+	m->data_off = phdr->descrLength;
+
+	if (phdr->descrLength == 20) {
+		// We do have a hash value defined
+		m->hash.rss = phdr->color_hi;
+		m->ol_flags |= PKT_RX_RSS_HASH;
+	}
+	else {
+		// We do have a MARK value defined
+		m->hash.fdir.hi = ((phdr->color_hi << 14) & 0xFFFFC000) | phdr->color_lo;
+		m->ol_flags |= PKT_RX_FDIR_ID | PKT_RX_FDIR;
+	}
+
+	// Copy the timestamp.
+	m->timestamp = phdr->timestamp;
+	m->ol_flags |= PKT_RX_TIMESTAMP;
+
+	// Move packet pointer to next packet
+	*offset += phdr->storedLength;
+
+	// Return number of stored bytes in packet incl. descriptor
+	return phdr->storedLength;
+}
+
+/**
+ * Copy a packet from a batching buffer to a normal mbuf.
+ *
+ * This function will copy a packet from a batching buffer 
+ * to a normal mbuf. The function will allocate the needed number of 
+ * mbufs to hold the packet. 
+ *
+ * @param mbuf
+ *   hdr: 	Pointer to the batching buffer
+ *   mp:    Pointer to memory pool to allocate mbufs from.
+ * @return
+ *   Pointer to new mbuf or NULL if it fails
+ */
+static inline struct rte_mbuf *
+rte_pktmbuf_batch_copy_packet_from_batch(struct rte_mbuf_batch_pkt_hdr *hdr,
+                                         struct rte_mempool *mp)
+{
+	struct rte_mbuf *mbuf;
+	uint16_t data_len;
+	uint16_t mbuf_len;
+
+	// Allocate mbuf to segment 1 of the buffer
+	if (unlikely((mbuf = rte_pktmbuf_alloc(mp)) == NULL))
+		return NULL;
+
+	rte_mbuf_refcnt_set(mbuf, 1);
+
+	// Setup the new mbuf
+	if (hdr->descrLength == 20) {
+		// We do have a hash value defined
+		mbuf->hash.rss = hdr->color_hi;
+		mbuf->ol_flags |= PKT_RX_RSS_HASH;
+	}
+	else {
+		// We do have a color value defined
+		mbuf->hash.fdir.hi = ((hdr->color_hi << 14) & 0xFFFFC000) | hdr->color_lo;
+		mbuf->ol_flags |= PKT_RX_FDIR_ID | PKT_RX_FDIR;
+	}
+	
+	// Copy the timestamp
+	mbuf->timestamp = hdr->timestamp;
+	mbuf->ol_flags |= PKT_RX_TIMESTAMP;
+
+	// Copy the port number. 
+	// Note: This is the local adapter port number.
+	//       Not the DPDK port number as it is unknown here.
+	mbuf->port = hdr->rxPort;
+
+	// Total length of the packet
+	data_len = (uint16_t)(hdr->storedLength - hdr->descrLength - 4);
+
+	// Space in the mbuf
+	mbuf_len = rte_pktmbuf_tailroom(mbuf);
+
+	if (data_len <= mbuf_len) {
+		// Packet will fit in the mbuf, go ahead and copy 
+		mbuf->pkt_len = mbuf->data_len = data_len;
+		rte_memcpy((u_char *)mbuf->buf_addr + mbuf->data_off, (u_char *)hdr + hdr->descrLength, mbuf->data_len);
+	} else {
+		// Packet does not fit in the mbuf. The packets must be copied to a segmented mbuf ie. 
+		// chained mbufs. 
+		struct rte_mbuf *m;
+		const u_char *data;
+		uint16_t total_len = data_len;
+
+		// pkt_len contains the complete packets size
+		mbuf->pkt_len = total_len;
+
+		// data_len contains the size of the part of the packets 
+		// contained in this mbuf
+		mbuf->data_len = mbuf_len;
+
+		data = (u_char *)hdr + hdr->descrLength;
+		rte_memcpy((u_char *)mbuf->buf_addr + mbuf->data_off, data, mbuf_len);
+		data_len -= mbuf_len;
+		data += mbuf_len;
+
+		m = mbuf;
+		while (data_len > 0) {
+			// Allocate next mbuf and point to that.
+			m->next = rte_pktmbuf_alloc(mp);
+			if (unlikely(!m->next))
+				return NULL;
+
+			m = m->next;
+			// Copy next segment. 
+			mbuf_len = RTE_MIN(rte_pktmbuf_tailroom(m), data_len);
+			rte_memcpy((u_char *)m->buf_addr + m->data_off, data, mbuf_len);
+
+			// pkt_len contains the complete packets size
+			m->pkt_len = total_len;
+
+			// data_len contains the size of the part of the packets 
+			// contained in this mbuf
+			m->data_len = mbuf_len;
+
+			// The number of segments in this mbuf chain.
+			mbuf->nb_segs++;
+			data_len -= mbuf_len;
+			data += mbuf_len;
+		}
+	}
+	return mbuf;
+}
+
+/**
+ * Copy a packet from a mbuf batching buffer to a normal mbuf.
+ *
+ * This function will copy a packet from a mbuf batching buffer 
+ * to a normal mbuf. The function will allocate the needed number of 
+ * mbufs to hold the packet. 
+ *
+ * @param mbuf
+ *   hdr: 	Pointer to the batching buffer
+ *   mp:    Pointer to memory pool to allocate mbufs from.
+ * @return
+ *   Pointer to new mbuf or NULL if it fails
+ */
+static inline struct rte_mbuf *
+rte_pktmbuf_batch_copy_packet_from_mbuf(struct rte_mbuf *mbuf,
+                                        struct rte_mempool *mp)
+{
+	return 
+		rte_pktmbuf_batch_copy_packet_from_batch(
+			(struct rte_mbuf_batch_pkt_hdr *)mbuf->buf_addr, mp);
+}
+
+
 
 #ifdef __cplusplus
 }

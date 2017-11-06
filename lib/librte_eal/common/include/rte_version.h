@@ -88,7 +88,7 @@ extern "C" {
 /**
 * Extra Napatech minor version numbers
 */
-#define RTE_NT_MINOR_VER 2
+#define RTE_NT_MINOR_VER 3
 
 /**
 * Extra Napatech string to be appended to version number
