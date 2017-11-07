@@ -67,6 +67,7 @@ union type0_task_context {
 
 /* TYPE-1 task context - ROCE */
 union type1_task_context {
+	struct regpair reserved; /* @DPDK */
 };
 
 struct src_ent {
