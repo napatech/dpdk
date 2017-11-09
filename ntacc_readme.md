@@ -29,7 +29,7 @@ The NTACC PMD driver does not need to be bound. This means that the dpdk-devbind
 16. [Filter creation example - Multiple 5tuple filter (IPv4 addresses and TCP ports)](#examples2)
 17. [Copy packet offset to mbuf](#copyoffset)
 18. [Use NTPL filters addition (Making an ethernet over MPLS filter)](#ntplfilter)
-19.  [Batching - Receive a batch of packets](#batching)
+19. [Batching - Receive a batch of packets](#batching)
 	1. [mbuf changes](#mbuf)
 	2. [Batching buffer](#batchbuf)
 	3. [Browsing the batch buffer directly](#browbatchbuf)
