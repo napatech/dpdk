@@ -29,16 +29,16 @@ The NTACC PMD driver does not need to be bound. This means that the dpdk-devbind
 16. [Filter creation example - Multiple 5tuple filter (IPv4 addresses and TCP ports)](#examples2)
 17. [Copy packet offset to mbuf](#copyoffset)
 18. [Use NTPL filters addition (Making an ethernet over MPLS filter)](#ntplfilter)
-19. [Batching - Receive a batch of packets](#batching)
+19.  [Contiguous Memory Batching - Receive a batch of packets](#batching)
 	1. [mbuf changes](#mbuf)
-	2. [Batching buffer](#batchbuf)
+	2. [Batch buffer](#batchbuf)
 	3. [Browsing the batch buffer directly](#browbatchbuf)
 	4. [Browsing the batch buffer using mbuf helper function](#browhelper)
 	5. [Helper functions](#helperfunc)
-		1. [rte_pktmbuf_batch_get_next_packet](#getnext)
-		2. [rte_pktmbuf_batch_copy_packet_from_batch](#copybatch)
-		3. [rte_pktmbuf_batch_copy_packet_from_mbuf](#copymbuf)
-	6. [Batching example](#batchexam)
+		1. [rte_pktmbuf_cmbatch_get_next_packet](#getnext)
+		2. [rte_pktmbuf_cmbatch_copy_packet_from_batch](#copybatch)
+		3. [rte_pktmbuf_cmbatch_copy_packet_from_mbuf](#copymbuf)
+	6. [Contiguous Memory Batching example](#batchexam)
 
 ## Napatech Driver <a name="driver"></a>
 
@@ -125,7 +125,7 @@ HostBuffersTx = [4, 16, -1]
 This means that it will be possible to create 4 RX queues and 4 TX queues.
 
 #### Statistics update interval  <a name="statinterval"></a>
-When using hardware based statistics `CONFIG_RTE_LIBRTE_PMD_NTACC_USE_SW_STAT=n`, the default update interval is 500 ms i.e. the time between each time the statistics is updated by the adapter. In some cases, the update interval is too large. The update interval can be changed by changing the `StatInterval` option in the system section in the ini-file.
+When using hardware based statistics `CONFIG_RTE_LIBRTE_PMD_NTACC_USE_SW_STAT=n`, the default update interval is 500 ms, i.e. the time between each time the statistics is updated by the adapter. In some cases, the update interval is too large. The update interval can be changed by changing the `StatInterval` option in the system section in the ini-file.
 ```
 [System]
 StatInterval=1
@@ -202,7 +202,7 @@ Following rte_flow filters are supported:
 |`RTE_FLOW_ITEM_TYPE_NVGRE` | Only packet type = `NVGRE`                                                                                                                                                    |
 |`RTE_FLOW_ITEM_TYPE_VXLAN` | Only packet type = `VXLAN`                                                                                                                                                    |
 | `RTE_FLOW_ITEM_TYPE_GRE`  | `c_rsvd0_ver` (only version = bit b0-b2)|
-| `RTE_FLOW_ITEM_TYPE_PORT`  | `index`<br>The port numbers used, must be the local port numbers for the adapter. <br>For a 4 port adapter the port numbers are 0 to 3.|
+| `RTE_FLOW_ITEM_TYPE_PORT`  | `index`<br>The port numbers used must be the local port numbers for the adapter. <br>For a 4 port adapter the port numbers are 0 to 3.|
 
 The following rte_flow filters are added by Napatech and are not a part of the main DPDK:
 
@@ -596,7 +596,7 @@ The driver is then able to optimize the final filter making it possible to have 
 
 > Note: The number of possible filter items depends on the filter made and will vary depending on the complexity of the filter. 
 
-> Note: The way the filter in this example is made, can be used for all rte_flow_items as long as only the filter values are changed.
+> Note: The way the filter in this example is made can be used for all rte_flow_items as long as only the filter values are changed.
 
 ```C++
 struct ipv4_adresses_s {
@@ -833,19 +833,19 @@ assign[priority=1;Descriptor=DYN3,length=22,colorbits=32;streamid=0;tag=port0]=(
 Other NTPL filter expressions can be used as long as it does not break the resulting NTPL filter expression.
 
 
-## Batching - Receive a batch of packets<a name="batching"></a>
-Barching is the possibility to receive a batch of packets instead of one packet at a time. The advantage of using batching is that packets are DMA'ed directly from the adapter in to the batching buffer and thereby no copying is required by the host (zero copy). The disadvantage of using batching is that packets cannot be kept for later analysis. If a packet needs to be kept, it must be copied to another buffer. It can be done by using a helper function ([see description below](#helperfunc)). A batch of packets are released when a new batch is requested. The packet data in the previous batch will then be invalid.
+## Contiguous Memory Batching - Receive a batch of packets<a name="batching"></a>
+Contiguous memory batching is the possibility to receive a batch of packets instead of one packet at a time. The advantage of using contiguous memory batching is that packets are DMA'ed directly from the adapter in to the batch buffer and thereby no copying is required by the host (zero copy). The disadvantage by using Contiguous Memory Batching is that packets cannot be kept for later analysis. If a packet needs to be kept, it must be copied to another buffer. It can be done by using a helper function ([see description below](#helperfunc)). A batch of packets are released when a new batch is requested. The packet data in the previous batch will then be invalid.
 
-> Note: Batching is a Napatech addition to DPDK and is not compatible with any standard applications. Some small changes must be done to utilize the batching functionality. See the batching example for how to use batching.
+> Note: Contiguous memory batching is a Napatech addition to DPDK and is not compatible with any standard applications. Some small changes must be done to utilize contiguous memory batching functionality. See the cmbatch example for how to use contiguous memory batching.
 
 ### mbuf changes<a name="mbuf"></a>
-In order to support batching in DPDK, some mbuf changes have been made.
+In order to support contiguous memory batching in DPDK, some mbuf changes have been made.
 
-A new packet offload features flag `PKT_BATCH` has been added. If this flag is set it means that the mbuf contains a batching buffer and needs special handling.
+A new packet offload features flag `PKT_BATCH` has been added. If this flag is set it means that the mbuf contains a batch buffer and needs special handling.
 
 ```
 if (mbuf->ol_flags & PKT_BATCH) {
-  // mbuf contains a batching buffer
+  // mbuf contains a batch buffer
 }
 else {
   // mbuf contains a standard DPDK packet
@@ -866,8 +866,8 @@ When a mbuf that contains a batch buffer is received the following mbuf variable
 | mbuf->batch_release_cb | Pointer to callback function called when the batch buffer is released<br>Must not be changed | Addition |
   
 
-### Batching buffer<a name="batchbuf"></a>
-The batching buffer is different from the standard mbuf packet buffer as it contains a batch of packets and each packet contain a packet descriptor. When a mbuf that contains a batch buffer is received the `mbuf->buf_addr` variable will point to the beginning of the batch buffer. The number of packets in the batch buffer are given by the variable `mbuf->batch_nb_packet`. The packet descriptor that is placed in front of each packet is shown below.
+### Batch buffer<a name="batchbuf"></a>
+The batch buffer is different from the standard mbuf packet buffer as it contains a batch of packets and each packet contain a packet descriptor. When a mbuf that contains a batch buffer is received the `mbuf->buf_addr` variable will point to the beginning of the batch buffer. The number of packets in the batch buffer are given by the variable `mbuf->batch_nb_packet`. The packet descriptor that is placed in front of each packet is shown below.
 
 The packet descriptor:
 ```
@@ -907,7 +907,7 @@ The batch buffer can be browsed directly using the packet descriptor to walk thr
 | phdr->color_hi | Packet hash value<br>if (phdr->descrLength == 20) |
 | phdr->color_hi<br>phdr->color_lo | Packet MARK value<br>if (phdr->descrLength == 22)<br>MARK = ((phdr->color_hi << 14) & 0xFFFFC000) | phdr->color_lo |
 
-An example of how to browse the batching buffer.
+An example of how to browse the batch buffer.
 
 ```
 struct rte_mbuf_batch_pkt_hdr *phdr; 
@@ -931,10 +931,10 @@ for (pack = 0; pack < mbuf->batch_nb_packet; pack++) {
   phdr = (struct rte_mbuf_batch_pkt_hdr *)((u_char *)phdr + phdr->storedLength);
 }
 ```
-> Note: It is not allowed to keep packets for further analysis. The packets will be invalid when a new batch buffer is requested. To keep a packet, it must be copied to a local mbuf using the function [`rte_pktmbuf_batch_copy_packet_from_batch`](#copybatch)
+> Note: It is not allowed to keep packets for further analysis. The packets will be invalid when a new batch buffer is requested. To keep a packet, it must be copied to a local mbuf using the function [`rte_pktmbuf_cmbatch_copy_packet_from_batch`](#copybatch)
 
 ### Browsing the batch buffer using mbuf helper function<a name="browhelper"></a>
-The batch buffer can be browsed using a helper function [`rte_pktmbuf_batch_get_next_packet`](#browhelper). The helper function returns packet data in a mbuf. A description of the different mbuf variables used are described below.
+The batch buffer can be browsed using a helper function [`rte_pktmbuf_cmbatch_get_next_packet`](#browhelper). The helper function returns packet data in a mbuf. A description of the different mbuf variables used are described below.
 
 | Variable | Description |
 |-----------|-----------|
@@ -947,15 +947,15 @@ The batch buffer can be browsed using a helper function [`rte_pktmbuf_batch_get_
 | m.hash.fdir.hi | The MARK value.<br>if (m->ol_flags & (PKT_RX_FDIR_ID | PKT_RX_FDIR)) |
 | m.timestamp | Packet timestamp.<br>if (m->ol_flags & PKT_RX_TIMESTAMP) |
 
-An example of how to browse the batching buffer using helper function.
+An example of how to browse the batch buffer using helper function.
 
 ```
-uint32_t offset;       // Offset in batching buffer
+uint32_t offset;       // Offset in batch buffer
 struct rte_mbuf m1;    // mbuf to hold a single packet.
 
 offset = 0; // Set to 0 to indicate the first packet
 for (pack = 0; pack < mbuf->batch_nb_packet; pack++) {
-  rte_pktmbuf_batch_get_next_packet(mbuf, &m1, &offset); // Copy pointers and info to the mbuf.
+  rte_pktmbuf_cmbatch_get_next_packet(mbuf, &m1, &offset); // Copy pointers and info to the mbuf.
 
   countOctets += m1.data_len;   // This is the wirelength
   countPakets++;
@@ -972,22 +972,22 @@ for (pack = 0; pack < mbuf->batch_nb_packet; pack++) {
                                                         IPV4_ADDRESS(ipv4hdr->dst_addr));
 }
 ```
-> Note: It is not allowed to keep packets for further analysis. The packets will be invalid when a new batch buffer is requested. To keep a packet, it must be copied to a local mbuf using the function [`rte_pktmbuf_batch_copy_packet_from_mbuf`](#copymbuf)
+> Note: It is not allowed to keep packets for further analysis. The packets will be invalid when a new batch buffer is requested. To keep a packet, it must be copied to a local mbuf using the function [`rte_pktmbuf_cmbatch_copy_packet_from_mbuf`](#copymbuf)
 
 ### Helper functions<a name="helperfunc"></a>
 
-#### rte_pktmbuf_batch_get_next_packet - Browse the batch buffer<a name="getnext"></a>
+#### rte_pktmbuf_cmbatch_get_next_packet - Browse the batch buffer<a name="getnext"></a>
 To get the next packet from the batch buffer in a mbuf. The packets are still placed in the batch buffer and no copying is done. The mbuf->buf_addr points to the packet in the batch buffer.
 
 ```
 /**
- * Get the next packet from the batching buffer.
+ * Get the next packet from the batch buffer.
  *
- * This function will return the next packet from a batching
+ * This function will return the next packet from a batch
  * buffer in a local mbuf.
  *
  * @param mbuf
- *   m_batch:     mbuf containing a batching buffer
+ *   m_batch:     mbuf containing a batch buffer
  *   m:         local mbuf. Packet data is return in this mbuf.
  *                          Note: No packet data is copied.
  *   offset:    Offset in the batch buffer
@@ -995,12 +995,12 @@ To get the next packet from the batch buffer in a mbuf. The packets are still pl
  *   Number of bytes in returned packet incl. packet descriptor
  */
 static inline int
-rte_pktmbuf_batch_get_next_packet(struct rte_mbuf *m_batch, 
-                                  struct rte_mbuf *m, 
-                                  uint32_t *offset)
+rte_pktmbuf_cmbatch_get_next_packet(struct rte_mbuf *m_batch, 
+                                    struct rte_mbuf *m, 
+                                    uint32_t *offset)
 ```
 
-#### rte_pktmbuf_batch_copy_packet_from_batch - Copy a packet from the batch buffer<a name="copybatch"></a>
+#### rte_pktmbuf_cmbatch_copy_packet_from_batch - Copy a packet from the batch buffer<a name="copybatch"></a>
 Copy a packet from the batch buffer using the packet descriptor pointer into a new allocated mbuf.
 If the packets is larger than the mbuf buffer size, the packet will be copied into several new allocated linked mbufs.
 
@@ -1008,20 +1008,20 @@ The returned mbuf must be kept for later analysis, It must be freed after it is 
 
 ```
 /**
- * Copy a packet from a batching buffer to a normal mbuf.
+ * Copy a packet from a batch buffer to a normal mbuf.
  *
- * This function will copy a packet from a batching buffer 
+ * This function will copy a packet from a batch buffer 
  * to a normal mbuf. The function will allocate the needed number of 
  * mbufs to hold the packet. 
  *
  * @param mbuf
- *   hdr:     Pointer to the batching buffer
+ *   hdr:     Pointer to the batch buffer
  *   mp:    Pointer to memory pool to allocate mbufs from.
  * @return
  *   Pointer to new mbuf or NULL if it fails
  */
 static inline struct rte_mbuf *
-rte_pktmbuf_batch_copy_packet_from_batch(struct rte_mbuf_batch_pkt_hdr *hdr,
+rte_pktmbuf_cmbatch_copy_packet_from_batch(struct rte_mbuf_batch_pkt_hdr *hdr,
                                          struct rte_mempool *mp)
 ```
 
@@ -1030,7 +1030,7 @@ An example of how to use the copy packet function.
 phdr = mbuf->buf_addr;  // Point to the beginning of the batch buffer
 for (pack = 0; pack < mbuf->batch_nb_packet; pack++) {
   struct rte_mbuf *next;
-  struct rte_mbuf *m = rte_pktmbuf_batch_copy_packet_from_batch(phdr, data->mbuf_pool);
+  struct rte_mbuf *m = rte_pktmbuf_cmbatch_copy_packet_from_batch(phdr, data->mbuf_pool);
   next = m;
 
   // If packet length is larger than the mbuf buffer size
@@ -1047,40 +1047,40 @@ for (pack = 0; pack < mbuf->batch_nb_packet; pack++) {
 }
 ```
 
-#### rte_pktmbuf_batch_copy_packet_from_mbuf - Copy a packet from the batch buffer using mbuf<a name="copymbuf"></a>
-Similar to the above copy function, but instead of using the packet descriptor pointer, the mbuf returned from the rte_pktmbuf_batch_get_next_packet is used. Otherwise there is no difference.
+#### rte_pktmbuf_cmbatch_copy_packet_from_mbuf - Copy a packet from the batch buffer using mbuf<a name="copymbuf"></a>
+Similar to the above copy function, but instead of using the packet descriptor pointer, the mbuf returned from the rte_pktmbuf_cmbatch_get_next_packet is used. Otherwise there is no difference.
  
 ```
 /**
- * Copy a packet from a mbuf batching buffer to a normal mbuf.
+ * Copy a packet from a mbuf batch buffer to a normal mbuf.
  *
- * This function will copy a packet from a mbuf batching buffer 
+ * This function will copy a packet from a mbuf batch buffer 
  * to a normal mbuf. The function will allocate the needed number of 
  * mbufs to hold the packet. 
  *
  * @param mbuf
- *   hdr:     Pointer to the batching buffer
+ *   hdr:     Pointer to the batch buffer
  *   mp:    Pointer to memory pool to allocate mbufs from.
  * @return
  *   Pointer to new mbuf or NULL if it fails
  */
 static inline struct rte_mbuf *
-rte_pktmbuf_batch_copy_packet_from_mbuf(struct rte_mbuf *mbuf,
-                                        struct rte_mempool *mp)
+rte_pktmbuf_cmbatch_copy_packet_from_mbuf(struct rte_mbuf *mbuf,
+                                          struct rte_mempool *mp)
 ```
 
-### Batching example<a name="batchexam"></a>
-An example showing how to use batching is placed in the directory:
+### Contiguous memory batching example<a name="batchexam"></a>
+An example showing how to use contiguous memory batching is placed in the directory:
 
-`examples/batching`
+`examples/cmbatch`
 
 A number of command line option can be used to control the number of ports to receive data from and the number of queues per port (receive side scaling). The example will setup an IPV4 rte_flow filter in the function `SetupFilter`. This can either be a catch all IPV4 data filter or by using the `-d` and/or `-i` command line options a source and/or destination IP address can be added to the filter to catch only certain IPV4 addresses.
 
 The example can either use SW statistics where the received packets are counted in software or HW statistics where  the number of received packets are returned from the adapter.
 
-batching example command line options:
+cmbatch example command line options:
 ```
-./build/app/batching [EAL options] -- [-p no_ports][-q queues_per_port][-t parse_type][-s stat_type][-i ip_addr][-d ip_addr][-e]
+./build/app/cmbatch [EAL options] -- [-p no_ports][-q queues_per_port][-t parse_type][-s stat_type][-i ip_addr][-d ip_addr][-e]
   -p no_ports: Number of ports to use. Always starting with port 0.
   -q queues_per_port: Number of queue per port
   -t parse_type: Type of parsing done
@@ -1091,15 +1091,15 @@ batching example command line options:
                  1: Use software statistics
   -i ip_addr:    Source IP address to use in filter
   -d ip_addr:    Destination IP address to use in filter
-  -e:            Fail if non batching segments are received
+  -e:            Fail if non batch mbuf is received
 
   lcores used are equal to no_ports * queues_per_port + 1
 ```    
-> Note: Using the option -e causing the batching example to fail if a non batch mbuf is received.
+> Note: Using the option -e causing the cmbatch example to fail if a non batch mbuf is received.
 
-Output of the batching example:
+Output of the cmbatch example:
 ```
-./build/app/batching -c 1f -- -q 4 -p 1 -t 0 -e
+./build/app/cmbatch -c 1f -- -q 4 -p 1 -t 0 -e
 EAL: Detected 32 lcore(s)
 EAL: Probing VFIO support...
 EAL: PCI device 0000:02:00.0 on NUMA socket 0
@@ -1135,14 +1135,14 @@ PMD: Tagname: port2 - 2
 PMD: Port: 3 - 0000:82:00.0 Port 3
 PMD: Tagname: port3 - 3
 Port 0 MAC: 00 0d e9 03 bd ce
-Core 1 capturing packets for port 0, Queue 0. Parsing done directly in batching buffer
-Non batching queue not accepted.
-Core 2 capturing packets for port 0, Queue 1. Parsing done directly in batching buffer
-Non batching queue not accepted.
-Core 3 capturing packets for port 0, Queue 2. Parsing done directly in batching buffer
-Non batching queue not accepted.
-Core 4 capturing packets for port 0, Queue 3. Parsing done directly in batching buffer
-Non batching queue not accepted.
+Core 1 capturing packets for port 0, Queue 0. Parsing done directly in batch buffer
+Non batch mbuf not accepted.
+Core 2 capturing packets for port 0, Queue 1. Parsing done directly in batch buffer
+Non batch mbuf not accepted.
+Core 3 capturing packets for port 0, Queue 2. Parsing done directly in batch buffer
+Non batch mbuf not accepted.
+Core 4 caturing packets for port 0, Queue 3. Parsing done directly in batch buffer
+Non batch mbuf not accepted.
 Core 0 is handling software statistics output
 
 Q0,0: 0 pk,     0.0 Mbps Q0,1: 0 pk,     0.0 Mbps Q0,2: 0 pk,     0.0 Mbps Q0,3: 0 pk,     0.0 Mbps

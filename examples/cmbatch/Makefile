@@ -39,10 +39,10 @@ RTE_TARGET ?= x86_64-native-linuxapp-gcc
 include $(RTE_SDK)/mk/rte.vars.mk
 
 # binary name
-APP = batching
+APP = cmbatch
 
 # all source are stored in SRCS-y
-SRCS-y := batching.c
+SRCS-y := cmbatch.c
 
 CFLAGS += $(WERROR_FLAGS)
 

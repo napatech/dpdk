@@ -694,7 +694,7 @@ struct rte_eth_txmode {
 		/**< If set, enable port based VLAN insertion */
 };
 
-#define ETH_RXQ_FLAGS_BATCHING 0x0001 /**< RX queue has to use batching */
+#define ETH_RXQ_FLAGS_CMBATCH 0x0001 /**< RX queue has to use Contiguous Memory Batching */
 /**
  * A structure used to configure an RX ring of an Ethernet port.
  */

@@ -96,7 +96,7 @@ struct ntacc_rx_queue {
   const char             *name;
   const char             *type;
   int                    enabled;
-  int                    batching;
+  int                    cmbatch;
 };
 
 struct ntacc_tx_queue {

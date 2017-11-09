@@ -87,12 +87,12 @@ static inline int port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 	memset(&port_conf, 0, sizeof(struct rte_eth_conf));
 	port_conf.rxmode.max_rx_pkt_len = ETHER_MAX_LEN;
 
-	/////////////////////////////////////
-	// Select batching for this queue. //
-	/////////////////////////////////////
+	///////////////////////////////////////////////////////
+	// Select Contiguous Memory Batching for this queue. //
+	///////////////////////////////////////////////////////
 	memset(&rx_conf, 0,sizeof(struct rte_eth_rxconf));
-	rx_conf.rxq_flags = ETH_RXQ_FLAGS_BATCHING;  // Remove this line if batching 
-																							 // is not wanted for a queue
+	rx_conf.rxq_flags = ETH_RXQ_FLAGS_CMBATCH;  // Remove this line if contiguous memory batching  
+																							// is not wanted for a queue
 
 	if (port >= rte_eth_dev_count())
 		return -1;
@@ -172,8 +172,8 @@ static int lcore_worker(void *p)
 	}
 
 	printf("Core %u capturing packets for port %d, Queue %d. Parsing done %s\n%s", 
-				 rte_lcore_id(), data->port, data->queue, parse_type == 1 ? "using helper functions.":"directly in batching buffer",
-				 error_no_batch == 1?"Non batching queue not accepted.\n":"");
+				 rte_lcore_id(), data->port, data->queue, parse_type == 1 ? "using helper functions.":"directly in batch buffer",
+				 error_no_batch == 1?"Non batch mbuf not accepted.\n":"");
 
 	(*data->countOctets) = 0;
 	(*data->countPakets) = 0;
@@ -226,15 +226,15 @@ static int lcore_worker(void *p)
 						//       new batch of packets is requested.
 						//       If a packet must be kept for later analysis, 
 						//       it must be copied to a new mbuf with the
-						//       function: rte_pktmbuf_batch_copy_packet_from_mbuf
+						//       function: rte_pktmbuf_cmbatch_copy_packet_from_mbuf
 						/////////////////////////////////////////////////////////////////
 						
-						uint32_t offset;      // Offset in batching buffer
+						uint32_t offset;      // Offset in batch buffer
 						struct rte_mbuf m1;    // mbuf act as pointer to a single packet.
 
 						offset = 0; // Set to 0 to indicate the first packet
 						for (pack = 0; pack < mbuf->batch_nb_packet; pack++) {
-							rte_pktmbuf_batch_get_next_packet(mbuf, &m1, &offset); // Copy pointers and info to the mbuf.
+							rte_pktmbuf_cmbatch_get_next_packet(mbuf, &m1, &offset); // Copy pointers and info to the mbuf.
 	#if 1
 						/////////////////////////////////////////////////////////////////
 						// Just count the data.
@@ -248,7 +248,7 @@ static int lcore_worker(void *p)
 							/////////////////////////////////////////////////////////////////
 
 							struct rte_mbuf *next;
-							struct rte_mbuf *m2 = rte_pktmbuf_batch_copy_packet_from_mbuf(&m1, data->mbuf_pool);
+							struct rte_mbuf *m2 = rte_pktmbuf_cmbatch_copy_packet_from_mbuf(&m1, data->mbuf_pool);
 							next = m2;
 							while (next != NULL) {
 								(*data->countOctets) += next->data_len; // The wire length
@@ -261,7 +261,7 @@ static int lcore_worker(void *p)
 							/////////////////////////////////////////////////////////////////
 							//
 							// The following values are copied to the local mbuf by the 
-							// rte_pktmbuf_batch_get_next_packet inline function
+							// rte_pktmbuf_cmbatch_get_next_packet inline function
 							// 
 							// m.buf_addr: Pointer to the packet including the packet descriptor
 							// 
@@ -308,7 +308,7 @@ static int lcore_worker(void *p)
 						//       new batch of packets is requested.
 						//       If a packet must be kept for later analysis, 
 						//       it must be copied to a new mbuf with the
-						//       function: rte_pktmbuf_batch_copy_packet_from_batch
+						//       function: rte_pktmbuf_cmbatch_copy_packet_from_batch
 						/////////////////////////////////////////////////////////////////
 
 						struct rte_mbuf_batch_pkt_hdr *phdr; 
@@ -328,7 +328,7 @@ static int lcore_worker(void *p)
 						/////////////////////////////////////////////////////////////////
 
 							struct rte_mbuf *next;
-							struct rte_mbuf *m = rte_pktmbuf_batch_copy_packet_from_batch(phdr, data->mbuf_pool);
+							struct rte_mbuf *m = rte_pktmbuf_cmbatch_copy_packet_from_batch(phdr, data->mbuf_pool);
 							next = m;
 							while (next != NULL) {
 								(*data->countOctets) += next->data_len; // The wire length
@@ -395,7 +395,7 @@ static int lcore_worker(void *p)
 					/////////////////////////////////////////////////////////////////
 
           if (error_no_batch == 1) {
-            printf("ERROR: Non batching queue %u received on port %u\n", data->queue, data->port);
+            printf("ERROR: Non batch mbuf %u received on port %u\n", data->queue, data->port);
 						fflush(stdout);
 						quit_signal = 1;
 						return 0;
@@ -534,7 +534,7 @@ static int SetupFilter(uint8_t portid, struct rte_flow_error *error)
 
 	// Use a receive side scaling
 	struct rte_flow_action_rss *rss = rte_zmalloc(
-		"batching", 
+		"cmbatch", 
 		sizeof(struct rte_flow_action_rss) + sizeof(uint16_t) * number_of_queues, 
 		0);
 
@@ -639,14 +639,14 @@ static const char short_options[] =
 	"q:"  /* number of queues per port to use */
 	"t:"  /* Type of parsing done */
 	"s:"  /* Type of statistic used */
-	"e"   /* Fail if non batching segments are received */
+	"e"   /* Fail if non batch mbufs are received */
 	"d:"  /* Destination IP address to use in filter */
   "i:"  /* Source IP address to use in filter */
 	;
 
 /* display usage */
 static void
-batching_usage(const char *prgname)
+cmbatch_usage(const char *prgname)
 {
 	printf("\n%s [EAL options] -- [-p no_ports][-q queues_per_port][-t parse_type]"
 				 "[-s stat_type][-i ip_addr][-d ip_addr][-e]\n"
@@ -660,14 +660,14 @@ batching_usage(const char *prgname)
 				 "                 1: Use software statistics\n"
 				 "  -i ip_addr:    Source IP address to use in filter\n"
 				 "  -d ip_addr:    Destination IP address to use in filter\n"
-				 "  -e:            Fail if non batching segments are received \n"
+				 "  -e:            Fail if non batch mbufs are received \n"
 				 "\n"
 				 "  lcores used are equal to no_ports * queues_per_port + 1\n\n",
 	       prgname);
 }
 
 static unsigned int
-batching_parse_value(const char *q_arg)
+cmbatch_parse_value(const char *q_arg)
 {
 	char *end = NULL;
 	unsigned long n;
@@ -682,7 +682,7 @@ batching_parse_value(const char *q_arg)
 
 /* Parse the argument given in the command line of the application */
 static int
-batching_parse_args(int argc, char **argv)
+cmbatch_parse_args(int argc, char **argv)
 {
 	int opt, ret;
 	char **argvopt;
@@ -693,37 +693,37 @@ batching_parse_args(int argc, char **argv)
 	while ((opt = getopt(argc, argvopt, short_options)) != EOF) {
 		switch (opt) {
 		case 'p':
-			number_of_ports = batching_parse_value(optarg);
+			number_of_ports = cmbatch_parse_value(optarg);
 			if (number_of_ports == 0 || number_of_ports > MAX_RX_PORTS) {
 				printf("Invalid number of ports - Must be between 0 and %u\n", MAX_RX_PORTS);
-				batching_usage(prgname);
+				cmbatch_usage(prgname);
 				return -1;
 			}
 			break;
 
 		case 'q':
-			number_of_queues = batching_parse_value(optarg);
+			number_of_queues = cmbatch_parse_value(optarg);
 			if (number_of_queues == 0 || number_of_queues > RTE_ETHDEV_QUEUE_STAT_CNTRS) {
 				printf("Invalid number of queues - Must be between 0 and %u\n", RTE_ETHDEV_QUEUE_STAT_CNTRS);
-				batching_usage(prgname);
+				cmbatch_usage(prgname);
 				return -1;
 			}
 			break;
 
 		case 't':
-			parse_type = batching_parse_value(optarg);
+			parse_type = cmbatch_parse_value(optarg);
 			if (parse_type != 0 && parse_type != 1) {
 				printf("Invalid parse type selected\n");
-				batching_usage(prgname);
+				cmbatch_usage(prgname);
 				return -1;
 			}
 			break;
 
 		case 's':
-			useSwStat = batching_parse_value(optarg);
+			useSwStat = cmbatch_parse_value(optarg);
 			if (useSwStat != 0 && useSwStat != 1) {
 				printf("Invalid statistics type selected\n");
-				batching_usage(prgname);
+				cmbatch_usage(prgname);
 				return -1;
 			}
 			break;
@@ -745,7 +745,7 @@ batching_parse_args(int argc, char **argv)
 			break;
 
 		default:
-			batching_usage(prgname);
+			cmbatch_usage(prgname);
 			return -1;
 		}
 	}
@@ -789,9 +789,9 @@ main(int argc, char *argv[])
 	argv += ret;
 
 	/* parse application arguments (after the EAL ones) */
-	ret = batching_parse_args(argc, argv);
+	ret = cmbatch_parse_args(argc, argv);
 	if (ret < 0)
-		rte_exit(EXIT_FAILURE, "Invalid batching arguments\n");
+		rte_exit(EXIT_FAILURE, "Invalid cmbatch arguments\n");
 
 	/* Check that there is at least one port. */
 	nb_ports = rte_eth_dev_count();
