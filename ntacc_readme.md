@@ -834,12 +834,12 @@ Other NTPL filter expressions can be used as long as it does not break the resul
 
 
 ## Batching - Receive a batch of packets<a name="batching"></a>
-Barching is the possibility to receive a batch of packets instead of one packet at a time. The advantage of using batching is that packets are DMA'ed directly from the adapter in to the batching buffer and thereby no copying is done (zero copy). The disadvantage by using batching is that packets must not be kept for later analysis. If a packet needs to be kept, it must be copied to another buffer. It can be done by using a helper function ([see description below](#helperfunc)). A batch of packets are released when a new batch is requested. The packet data in the previous batch will then be invalid.
+Barching is the possibility to receive a batch of packets instead of one packet at a time. The advantage of using batching is that packets are DMA'ed directly from the adapter in to the batching buffer and thereby no copying is required by the host (zero copy). The disadvantage of using batching is that packets cannot be kept for later analysis. If a packet needs to be kept, it must be copied to another buffer. It can be done by using a helper function ([see description below](#helperfunc)). A batch of packets are released when a new batch is requested. The packet data in the previous batch will then be invalid.
 
-> Note: Batching is a Napatech addition to DPDK and is not compatible with any standard applications. Some small changes must be done to implement batching. See the batching example for how to use batching.
+> Note: Batching is a Napatech addition to DPDK and is not compatible with any standard applications. Some small changes must be done to utilize the batching functionality. See the batching example for how to use batching.
 
 ### mbuf changes<a name="mbuf"></a>
-In order to support batching in DPDK, a some mbuf changes have been made.
+In order to support batching in DPDK, some mbuf changes have been made.
 
 A new packet offload features flag `PKT_BATCH` has been added. If this flag is set it means that the mbuf contains a batching buffer and needs special handling.
 
@@ -977,7 +977,7 @@ for (pack = 0; pack < mbuf->batch_nb_packet; pack++) {
 ### Helper functions<a name="helperfunc"></a>
 
 #### rte_pktmbuf_batch_get_next_packet - Browse the batch buffer<a name="getnext"></a>
-To get the next packet from the batch buffer in a mbuf. The packets are still placed in the batch buffer. No copying has been done. The mbuf->buf_addr points to the packet in the batch buffer.
+To get the next packet from the batch buffer in a mbuf. The packets are still placed in the batch buffer and no copying is done. The mbuf->buf_addr points to the packet in the batch buffer.
 
 ```
 /**
