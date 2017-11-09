@@ -1282,16 +1282,16 @@
 			<F N="drivers/Makefile"/>
 		</Folder>
 		<Folder Name="examples">
-			<Folder Name="batching">
-				<F N="examples/batching/batching.c"/>
-				<F
-					N="examples/batching/Makefile"
-					Type="Makefile"/>
-			</Folder>
 			<Folder Name="bond">
 				<F N="examples/bond/main.c"/>
 				<F N="examples/bond/main.h"/>
 				<F N="examples/bond/Makefile"/>
+			</Folder>
+			<Folder Name="cmbatch">
+				<F N="examples/cmbatch/cmbatch.c"/>
+				<F
+					N="examples/cmbatch/Makefile"
+					Type="Makefile"/>
 			</Folder>
 			<Folder Name="cmdline">
 				<F N="examples/cmdline/commands.c"/>

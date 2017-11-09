@@ -549,8 +549,8 @@ struct rte_mbuf {
 	/** Sequence number. See also rte_reorder_insert(). */
 	uint32_t seqn;
 
-	/** Batching callback. Called when releasing the mbuf. */
-	void (*batch_release_cb)(struct rte_mbuf *m);
+	/** Contiguous Memory Batching callback. Called when releasing the mbuf. */
+	void (*cmbatch_release_cb)(struct rte_mbuf *m);
 } __rte_cache_aligned;
 
 /**
@@ -1109,7 +1109,7 @@ static inline void rte_pktmbuf_reset(struct rte_mbuf *m)
 	rte_pktmbuf_reset_headroom(m);
 
 	m->data_len = 0;
-	m->batch_release_cb = NULL;
+	m->cmbatch_release_cb = NULL;
 	__rte_mbuf_sanity_check(m, 1);
 }
 
@@ -1354,8 +1354,8 @@ rte_pktmbuf_free_seg(struct rte_mbuf *m)
 {
 	m = rte_pktmbuf_prefree_seg(m);
 	if (likely(m != NULL)) {
-		if ((m->ol_flags & PKT_BATCH) && m->batch_release_cb)
-	    m->batch_release_cb(m);
+		if ((m->ol_flags & PKT_BATCH) && m->cmbatch_release_cb)
+	    m->cmbatch_release_cb(m);
 		rte_mbuf_raw_free(m);
 	}
 }
@@ -1900,7 +1900,7 @@ rte_pktmbuf_linearize(struct rte_mbuf *mbuf)
 void rte_pktmbuf_dump(FILE *f, const struct rte_mbuf *m, unsigned dump_len);
 
 /*********************************************************************** 
-              Napatech Additions to handle batching
+       Napatech Additions to handle contiguous memory batching
  ***********************************************************************/
 
 struct rte_mbuf_batch_pkt_hdr  {
@@ -1920,21 +1920,21 @@ struct rte_mbuf_batch_pkt_hdr  {
 } __attribute__((__packed__)); // descrLength = 22
 
 /**
- * Get the next packet from the batching buffer.
+ * Get the next packet from the batch buffer.
  *
- * This function will return the next packet from a batching
+ * This function will return the next packet from a batch
  * buffer in a local mbuf.
  *
  * @param mbuf
- *   m_batch: 	mbuf containing a batching buffer
+ *   m_batch: 	mbuf containing a batch buffer
  *   m:         local mbuf. Packet data is return in this mbuf.
  *  						Note: No packet data is copied.
- *   offset:    Offset in batching buffer
+ *   offset:    Offset in batch buffer
  * @return
  *   Number of bytes in returned packet incl, packet descriptor
  */
 static inline int
-rte_pktmbuf_batch_get_next_packet(struct rte_mbuf *m_batch, 
+rte_pktmbuf_cmbatch_get_next_packet(struct rte_mbuf *m_batch, 
 																	struct rte_mbuf *m, 
 																	uint32_t *offset)
 {
@@ -1953,12 +1953,12 @@ rte_pktmbuf_batch_get_next_packet(struct rte_mbuf *m_batch,
 		m->ol_flags = CTRL_MBUF_FLAG | PKT_RX_HAS_HEADER;
 	}
 
-	// No more packets in batching buffer
+	// No more packets in batch buffer
 	if (unlikely(*offset >= m_batch->pkt_len)) {
 		return 0;
 	}
 
-	// Point to next packet in batching buffer
+	// Point to next packet in batch buffer
 	m->buf_addr = (u_char *)m_batch->buf_addr + *offset;
 
 	// Point to descriptor header in packet buffer
@@ -1995,20 +1995,20 @@ rte_pktmbuf_batch_get_next_packet(struct rte_mbuf *m_batch,
 }
 
 /**
- * Copy a packet from a batching buffer to a normal mbuf.
+ * Copy a packet from a batch buffer to a normal mbuf.
  *
- * This function will copy a packet from a batching buffer 
+ * This function will copy a packet from a batch buffer 
  * to a normal mbuf. The function will allocate the needed number of 
  * mbufs to hold the packet. 
  *
  * @param mbuf
- *   hdr: 	Pointer to the batching buffer
+ *   hdr: 	Pointer to the batch buffer
  *   mp:    Pointer to memory pool to allocate mbufs from.
  * @return
  *   Pointer to new mbuf or NULL if it fails
  */
 static inline struct rte_mbuf *
-rte_pktmbuf_batch_copy_packet_from_batch(struct rte_mbuf_batch_pkt_hdr *hdr,
+rte_pktmbuf_cmbatch_copy_packet_from_batch(struct rte_mbuf_batch_pkt_hdr *hdr,
                                          struct rte_mempool *mp)
 {
 	struct rte_mbuf *mbuf;
@@ -2100,24 +2100,24 @@ rte_pktmbuf_batch_copy_packet_from_batch(struct rte_mbuf_batch_pkt_hdr *hdr,
 }
 
 /**
- * Copy a packet from a mbuf batching buffer to a normal mbuf.
+ * Copy a packet from a mbuf batch buffer to a normal mbuf.
  *
- * This function will copy a packet from a mbuf batching buffer 
+ * This function will copy a packet from a mbuf batch buffer 
  * to a normal mbuf. The function will allocate the needed number of 
  * mbufs to hold the packet. 
  *
  * @param mbuf
- *   hdr: 	Pointer to the batching buffer
+ *   hdr: 	Pointer to the batch buffer
  *   mp:    Pointer to memory pool to allocate mbufs from.
  * @return
  *   Pointer to new mbuf or NULL if it fails
  */
 static inline struct rte_mbuf *
-rte_pktmbuf_batch_copy_packet_from_mbuf(struct rte_mbuf *mbuf,
+rte_pktmbuf_cmbatch_copy_packet_from_mbuf(struct rte_mbuf *mbuf,
                                         struct rte_mempool *mp)
 {
 	return 
-		rte_pktmbuf_batch_copy_packet_from_batch(
+		rte_pktmbuf_cmbatch_copy_packet_from_batch(
 			(struct rte_mbuf_batch_pkt_hdr *)mbuf->buf_addr, mp);
 }
 

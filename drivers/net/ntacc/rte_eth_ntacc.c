@@ -257,7 +257,7 @@ static uint16_t eth_ntacc_rx(void *queue,
     }
   }
 
-  if (rx_q->batching) {
+  if (rx_q->cmbatch) {
     struct batch_ctrl *batchCtl;
     uint64_t countPackets;
 
@@ -279,7 +279,7 @@ static uint16_t eth_ntacc_rx(void *queue,
 
     mbuf->port = rx_q->in_port;
     mbuf->ol_flags |= PKT_BATCH | CTRL_MBUF_FLAG;
-    mbuf->batch_release_cb = _seg_release_cb;
+    mbuf->cmbatch_release_cb = _seg_release_cb;
 
     /* let userdata point to original mbuf address where batchCtl is placed */
     mbuf->userdata = (void *)batchCtl;
@@ -1126,9 +1126,9 @@ static int eth_rx_queue_setup(struct rte_eth_dev *dev,
   rx_q->in_port = dev->data->port_id;
   rx_q->local_port = internals->local_port;
 
-  // Enable batching for this queue
-  if (rx_conf->rxq_flags & ETH_RXQ_FLAGS_BATCHING) {
-    rx_q->batching = 1;
+  // Enable contiguous memory batching for this queue
+  if (rx_conf->rxq_flags & ETH_RXQ_FLAGS_CMBATCH) {
+    rx_q->cmbatch = 1;
   }
   
   mbp_priv =  rte_mempool_get_priv(rx_q->mb_pool);
