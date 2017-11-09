@@ -722,7 +722,8 @@ i40evf_config_irq_map(struct rte_eth_dev *dev)
 	uint32_t vector_id;
 	int i, err;
 
-	if (rte_intr_allow_others(intr_handle)) {
+	if (dev->data->dev_conf.intr_conf.rxq != 0 &&
+	    rte_intr_allow_others(intr_handle)) {
 		if (vf->version_major == I40E_DPDK_VERSION_MAJOR)
 			vector_id = I40EVF_VSI_DEFAULT_MSIX_INTR;
 		else
