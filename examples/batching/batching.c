@@ -209,7 +209,7 @@ static int lcore_worker(void *p)
 					//
 					// mbuf->pkt_len: Length of the batch buffer
 					//
-					// mbuf->userdata: Pointer to the btach control buffer
+					// mbuf->userdata: Pointer to the batch control buffer
 					//                 Must not be changed
 					//
 					// mbuf->port: DPDK port number.
