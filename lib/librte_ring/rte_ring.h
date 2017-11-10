@@ -450,6 +450,12 @@ __rte_ring_mp_do_enqueue(struct rte_ring *r, void * const *obj_table,
 		n = max;
 
 		prod_head = r->prod.head;
+
+		/* add rmb barrier to avoid load/load reorder in weak
+		 * memory model. It is noop on x86
+		 */
+		rte_smp_rmb();
+
 		cons_tail = r->cons.tail;
 		/* The subtraction is done between two unsigned 32bits value
 		 * (the result is always modulo 32 bits even if we have
@@ -642,6 +648,12 @@ __rte_ring_mc_do_dequeue(struct rte_ring *r, void **obj_table,
 		n = max;
 
 		cons_head = r->cons.head;
+
+		/* add rmb barrier to avoid load/load reorder in weak
+		 * memory model. It is noop on x86
+		 */
+		rte_smp_rmb();
+
 		prod_tail = r->prod.tail;
 		/* The subtraction is done between two unsigned 32bits value
 		 * (the result is always modulo 32 bits even if we have
