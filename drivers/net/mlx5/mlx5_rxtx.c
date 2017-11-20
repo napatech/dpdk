@@ -374,7 +374,7 @@ mlx5_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		uint16_t pkt_inline_sz = MLX5_WQE_DWORD_SIZE + 2;
 		uint16_t tso_header_sz = 0;
 		uint16_t ehdr;
-		uint8_t cs_flags = 0;
+		uint8_t cs_flags;
 		uint64_t tso = 0;
 		uint16_t tso_segsz = 0;
 #ifdef MLX5_PMD_SOFT_COUNTERS
@@ -417,23 +417,7 @@ mlx5_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		if (pkts_n - i > 1)
 			rte_prefetch0(
 			    rte_pktmbuf_mtod(*(pkts + 1), volatile void *));
-		/* Should we enable HW CKSUM offload */
-		if (buf->ol_flags &
-		    (PKT_TX_IP_CKSUM | PKT_TX_TCP_CKSUM | PKT_TX_UDP_CKSUM)) {
-			const uint64_t is_tunneled = buf->ol_flags &
-						     (PKT_TX_TUNNEL_GRE |
-						      PKT_TX_TUNNEL_VXLAN);
-
-			if (is_tunneled && txq->tunnel_en) {
-				cs_flags = MLX5_ETH_WQE_L3_INNER_CSUM |
-					   MLX5_ETH_WQE_L4_INNER_CSUM;
-				if (buf->ol_flags & PKT_TX_OUTER_IP_CKSUM)
-					cs_flags |= MLX5_ETH_WQE_L3_CSUM;
-			} else {
-				cs_flags = MLX5_ETH_WQE_L3_CSUM |
-					   MLX5_ETH_WQE_L4_CSUM;
-			}
-		}
+		cs_flags = txq_ol_cksum_to_cs(txq, buf);
 		raw = ((uint8_t *)(uintptr_t)wqe) + 2 * MLX5_WQE_DWORD_SIZE;
 		/* Replace the Ethernet type by the VLAN if necessary. */
 		if (buf->ol_flags & PKT_TX_VLAN_PKT) {
@@ -847,7 +831,7 @@ mlx5_tx_burst_mpw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		struct rte_mbuf *buf = *(pkts++);
 		uint32_t length;
 		unsigned int segs_n = buf->nb_segs;
-		uint32_t cs_flags = 0;
+		uint32_t cs_flags;
 
 		/*
 		 * Make sure there is enough room to store this packet and
@@ -863,10 +847,7 @@ mlx5_tx_burst_mpw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		}
 		max_elts -= segs_n;
 		--pkts_n;
-		/* Should we enable HW CKSUM offload */
-		if (buf->ol_flags &
-		    (PKT_TX_IP_CKSUM | PKT_TX_TCP_CKSUM | PKT_TX_UDP_CKSUM))
-			cs_flags = MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+		cs_flags = txq_ol_cksum_to_cs(txq, buf);
 		/* Retrieve packet information. */
 		length = PKT_LEN(buf);
 		assert(length);
@@ -1072,7 +1053,7 @@ mlx5_tx_burst_mpw_inline(void *dpdk_txq, struct rte_mbuf **pkts,
 		uintptr_t addr;
 		uint32_t length;
 		unsigned int segs_n = buf->nb_segs;
-		uint32_t cs_flags = 0;
+		uint8_t cs_flags;
 
 		/*
 		 * Make sure there is enough room to store this packet and
@@ -1093,10 +1074,7 @@ mlx5_tx_burst_mpw_inline(void *dpdk_txq, struct rte_mbuf **pkts,
 		 * iteration.
 		 */
 		max_wqe = (1u << txq->wqe_n) - (txq->wqe_ci - txq->wqe_pi);
-		/* Should we enable HW CKSUM offload */
-		if (buf->ol_flags &
-		    (PKT_TX_IP_CKSUM | PKT_TX_TCP_CKSUM | PKT_TX_UDP_CKSUM))
-			cs_flags = MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+		cs_flags = txq_ol_cksum_to_cs(txq, buf);
 		/* Retrieve packet information. */
 		length = PKT_LEN(buf);
 		/* Start new session if packet differs. */
@@ -1366,7 +1344,7 @@ mlx5_tx_burst_empw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		unsigned int do_inline = 0; /* Whether inline is possible. */
 		uint32_t length;
 		unsigned int segs_n = buf->nb_segs;
-		uint32_t cs_flags = 0;
+		uint8_t cs_flags;
 
 		/*
 		 * Make sure there is enough room to store this packet and
@@ -1380,10 +1358,7 @@ mlx5_tx_burst_empw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			txq->stats.oerrors++;
 			break;
 		}
-		/* Should we enable HW CKSUM offload. */
-		if (buf->ol_flags &
-		    (PKT_TX_IP_CKSUM | PKT_TX_TCP_CKSUM | PKT_TX_UDP_CKSUM))
-			cs_flags = MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+		cs_flags = txq_ol_cksum_to_cs(txq, buf);
 		/* Retrieve packet information. */
 		length = PKT_LEN(buf);
 		/* Start new session if:
