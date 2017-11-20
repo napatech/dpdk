@@ -79,10 +79,11 @@ enum {
 };
 
 struct ntacc_rx_queue {
+  NtNetBuf_t             pSeg;    /* The current segment we are working with */
   NtNetStreamRx_t        pNetRx;
   struct rte_mempool    *mb_pool;
-  uint16_t               buf_size;
-  NtNetBuf_t             pSeg;    /* The current segment we are working with */
+  uint32_t               cmbatch;
+  uint32_t               in_port;
   struct NtNetBuf_s      pkt;     /* The current packet */
 #ifdef USE_SW_STAT
   volatile uint64_t      rx_pkts;
@@ -90,14 +91,13 @@ struct ntacc_rx_queue {
   volatile uint64_t      err_pkts;
 #endif
 
+  uint16_t               buf_size;
   uint32_t               stream_id;
-  uint8_t                in_port;
   uint8_t                local_port;
   const char             *name;
   const char             *type;
   int                    enabled;
-  int                    cmbatch;
-};
+} __rte_cache_aligned;
 
 struct ntacc_tx_queue {
   NtNetStreamTx_t        pNetTx;
@@ -112,7 +112,7 @@ struct ntacc_tx_queue {
   uint16_t               maxTxPktSize;
   uint8_t                local_port;
   int                    enabled;
-};
+} __rte_cache_aligned;
 
 struct pmd_shared_mem_s {
   pthread_mutex_t mutex;

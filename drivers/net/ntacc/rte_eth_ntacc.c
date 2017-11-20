@@ -233,7 +233,7 @@ static uint16_t eth_ntacc_rx(void *queue,
 #endif
   uint16_t num_rx = 0;
 
-  if (rx_q->pNetRx == NULL || nb_pkts == 0)
+  if (unlikely(rx_q->pNetRx == NULL || nb_pkts == 0))
     return 0;
 
   // Do we have any segment
@@ -247,7 +247,7 @@ static uint16_t eth_ntacc_rx(void *queue,
       return 0;
     }
 
-    if (NT_NET_GET_SEGMENT_LENGTH(rx_q->pSeg)) {
+    if (likely(NT_NET_GET_SEGMENT_LENGTH(rx_q->pSeg))) {
       _nt_net_build_pkt_netbuf(rx_q->pSeg, &rx_q->pkt);
     }
     else {
@@ -261,7 +261,7 @@ static uint16_t eth_ntacc_rx(void *queue,
     struct batch_ctrl *batchCtl;
     uint64_t countPackets;
 
-    if (rte_mempool_get_bulk(rx_q->mb_pool, (void **)bufs, 1) != 0) {
+    if (unlikely(rte_mempool_get_bulk(rx_q->mb_pool, (void **)bufs, 1) != 0)) {
       return 0;
     }
 
@@ -2124,7 +2124,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
       goto error;
     }
 
-    internals = rte_zmalloc_socket(name, sizeof(struct pmd_internals), 0, dev->numa_node);
+    internals = rte_zmalloc_socket(name, sizeof(struct pmd_internals), RTE_CACHE_LINE_SIZE, dev->numa_node);
     if (internals == NULL) {
       RTE_LOG(ERR, PMD, "ERROR: Failed to allocate memory\n");
       iRet = 1;
