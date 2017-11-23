@@ -41,6 +41,7 @@ fs_bus_init(struct rte_eth_dev *dev)
 	struct sub_device *sdev;
 	struct rte_devargs *da;
 	uint8_t i;
+	uint16_t j;
 	int ret;
 
 	FOREACH_SUBDEV(sdev, i, dev) {
@@ -57,7 +58,13 @@ fs_bus_init(struct rte_eth_dev *dev)
 			      rte_errno ? ")" : "");
 			continue;
 		}
-		ETH(sdev) = rte_eth_dev_allocated(da->name);
+		RTE_ETH_FOREACH_DEV(j) {
+			if (strcmp(rte_eth_devices[j].device->name,
+				    da->name) == 0) {
+				ETH(sdev) = &rte_eth_devices[j];
+				break;
+			}
+		}
 		if (ETH(sdev) == NULL) {
 			ERROR("sub_device %d init went wrong", i);
 			return -ENODEV;
@@ -90,19 +97,20 @@ fs_bus_uninit(struct rte_eth_dev *dev)
 {
 	struct sub_device *sdev = NULL;
 	uint8_t i;
-	int ret;
+	int sdev_ret;
+	int ret = 0;
 
 	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_PROBED) {
-		ret = rte_eal_hotplug_remove(sdev->bus->name,
-					     sdev->dev->name);
-		if (ret) {
-			ERROR("Failed to remove requested device %s",
-			      sdev->dev->name);
+		sdev_ret = rte_eal_hotplug_remove(sdev->bus->name,
+							sdev->dev->name);
+		if (sdev_ret) {
+			ERROR("Failed to remove requested device %s (err: %d)",
+			      sdev->dev->name, sdev_ret);
 			continue;
 		}
 		sdev->state = DEV_PROBED - 1;
 	}
-	return 0;
+	return ret;
 }
 
 int
@@ -111,8 +119,6 @@ failsafe_eal_uninit(struct rte_eth_dev *dev)
 	int ret;
 
 	ret = fs_bus_uninit(dev);
-	if (ret)
-		return ret;
 	PRIV(dev)->state = DEV_PROBED - 1;
-	return 0;
+	return ret;
 }

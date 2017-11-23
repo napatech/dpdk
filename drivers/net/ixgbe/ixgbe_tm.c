@@ -312,7 +312,7 @@ ixgbe_shaper_profile_add(struct rte_eth_dev *dev,
 	if (!shaper_profile)
 		return -ENOMEM;
 	shaper_profile->shaper_profile_id = shaper_profile_id;
-	(void)rte_memcpy(&shaper_profile->profile, profile,
+	rte_memcpy(&shaper_profile->profile, profile,
 			 sizeof(struct rte_tm_shaper_params));
 	TAILQ_INSERT_TAIL(&tm_conf->shaper_profile_list,
 			  shaper_profile, node);
@@ -482,7 +482,7 @@ ixgbe_queue_base_nb_get(struct rte_eth_dev *dev, uint16_t tc_node_no,
 }
 
 static int
-ixgbe_node_param_check(uint32_t node_id, uint32_t parent_node_id,
+ixgbe_node_param_check(struct rte_eth_dev *dev, uint32_t node_id,
 		       uint32_t priority, uint32_t weight,
 		       struct rte_tm_node_params *params,
 		       struct rte_tm_error *error)
@@ -517,8 +517,8 @@ ixgbe_node_param_check(uint32_t node_id, uint32_t parent_node_id,
 		return -EINVAL;
 	}
 
-	/* for root node */
-	if (parent_node_id == RTE_TM_NODE_ID_NULL) {
+	/* for non-leaf node */
+	if (node_id >= dev->data->nb_tx_queues) {
 		/* check the unsupported parameters */
 		if (params->nonleaf.wfq_weight_mode) {
 			error->type =
@@ -542,7 +542,7 @@ ixgbe_node_param_check(uint32_t node_id, uint32_t parent_node_id,
 		return 0;
 	}
 
-	/* for TC or queue node */
+	/* for leaf node */
 	/* check the unsupported parameters */
 	if (params->leaf.cman) {
 		error->type = RTE_TM_ERROR_TYPE_NODE_PARAMS_CMAN;
@@ -588,7 +588,7 @@ ixgbe_node_add(struct rte_eth_dev *dev, uint32_t node_id,
 		IXGBE_DEV_PRIVATE_TO_TM_CONF(dev->data->dev_private);
 	enum ixgbe_tm_node_type node_type = IXGBE_TM_NODE_TYPE_MAX;
 	enum ixgbe_tm_node_type parent_node_type = IXGBE_TM_NODE_TYPE_MAX;
-	struct ixgbe_tm_shaper_profile *shaper_profile;
+	struct ixgbe_tm_shaper_profile *shaper_profile = NULL;
 	struct ixgbe_tm_node *tm_node;
 	struct ixgbe_tm_node *parent_node;
 	uint8_t nb_tcs;
@@ -606,7 +606,7 @@ ixgbe_node_add(struct rte_eth_dev *dev, uint32_t node_id,
 		return -EINVAL;
 	}
 
-	ret = ixgbe_node_param_check(node_id, parent_node_id, priority, weight,
+	ret = ixgbe_node_param_check(dev, node_id, priority, weight,
 				     params, error);
 	if (ret)
 		return ret;
@@ -619,12 +619,15 @@ ixgbe_node_add(struct rte_eth_dev *dev, uint32_t node_id,
 	}
 
 	/* check the shaper profile id */
-	shaper_profile = ixgbe_shaper_profile_search(dev,
-						     params->shaper_profile_id);
-	if (!shaper_profile) {
-		error->type = RTE_TM_ERROR_TYPE_NODE_PARAMS_SHAPER_PROFILE_ID;
-		error->message = "shaper profile not exist";
-		return -EINVAL;
+	if (params->shaper_profile_id != RTE_TM_SHAPER_PROFILE_ID_NONE) {
+		shaper_profile = ixgbe_shaper_profile_search(
+					dev, params->shaper_profile_id);
+		if (!shaper_profile) {
+			error->type =
+				RTE_TM_ERROR_TYPE_NODE_PARAMS_SHAPER_PROFILE_ID;
+			error->message = "shaper profile not exist";
+			return -EINVAL;
+		}
 	}
 
 	/* root node if not have a parent */
@@ -657,12 +660,13 @@ ixgbe_node_add(struct rte_eth_dev *dev, uint32_t node_id,
 		tm_node->no = 0;
 		tm_node->parent = NULL;
 		tm_node->shaper_profile = shaper_profile;
-		(void)rte_memcpy(&tm_node->params, params,
+		rte_memcpy(&tm_node->params, params,
 				 sizeof(struct rte_tm_node_params));
 		tm_conf->root = tm_node;
 
 		/* increase the reference counter of the shaper profile */
-		shaper_profile->reference_count++;
+		if (shaper_profile)
+			shaper_profile->reference_count++;
 
 		return 0;
 	}
@@ -737,7 +741,7 @@ ixgbe_node_add(struct rte_eth_dev *dev, uint32_t node_id,
 	tm_node->reference_count = 0;
 	tm_node->parent = parent_node;
 	tm_node->shaper_profile = shaper_profile;
-	(void)rte_memcpy(&tm_node->params, params,
+	rte_memcpy(&tm_node->params, params,
 			 sizeof(struct rte_tm_node_params));
 	if (parent_node_type == IXGBE_TM_NODE_TYPE_PORT) {
 		tm_node->no = parent_node->reference_count;
@@ -753,7 +757,8 @@ ixgbe_node_add(struct rte_eth_dev *dev, uint32_t node_id,
 	tm_node->parent->reference_count++;
 
 	/* increase the reference counter of the shaper profile */
-	shaper_profile->reference_count++;
+	if (shaper_profile)
+		shaper_profile->reference_count++;
 
 	return 0;
 }
@@ -801,14 +806,16 @@ ixgbe_node_delete(struct rte_eth_dev *dev, uint32_t node_id,
 
 	/* root node */
 	if (node_type == IXGBE_TM_NODE_TYPE_PORT) {
-		tm_node->shaper_profile->reference_count--;
+		if (tm_node->shaper_profile)
+			tm_node->shaper_profile->reference_count--;
 		rte_free(tm_node);
 		tm_conf->root = NULL;
 		return 0;
 	}
 
 	/* TC or queue node */
-	tm_node->shaper_profile->reference_count--;
+	if (tm_node->shaper_profile)
+		tm_node->shaper_profile->reference_count--;
 	tm_node->parent->reference_count--;
 	if (node_type == IXGBE_TM_NODE_TYPE_TC) {
 		TAILQ_REMOVE(&tm_conf->tc_list, tm_node, node);
@@ -876,15 +883,34 @@ ixgbe_level_capabilities_get(struct rte_eth_dev *dev,
 		cap->n_nodes_max = 1;
 		cap->n_nodes_nonleaf_max = 1;
 		cap->n_nodes_leaf_max = 0;
-		cap->non_leaf_nodes_identical = true;
-		cap->leaf_nodes_identical = true;
+	} else if (level_id == IXGBE_TM_NODE_TYPE_TC) {
+		/* TC */
+		cap->n_nodes_max = IXGBE_DCB_MAX_TRAFFIC_CLASS;
+		cap->n_nodes_nonleaf_max = IXGBE_DCB_MAX_TRAFFIC_CLASS;
+		cap->n_nodes_leaf_max = 0;
+	} else {
+		/* queue */
+		cap->n_nodes_max = hw->mac.max_tx_queues;
+		cap->n_nodes_nonleaf_max = 0;
+		cap->n_nodes_leaf_max = hw->mac.max_tx_queues;
+	}
+
+	cap->non_leaf_nodes_identical = true;
+	cap->leaf_nodes_identical = true;
+
+	if (level_id != IXGBE_TM_NODE_TYPE_QUEUE) {
 		cap->nonleaf.shaper_private_supported = true;
 		cap->nonleaf.shaper_private_dual_rate_supported = false;
 		cap->nonleaf.shaper_private_rate_min = 0;
 		/* 10Gbps -> 1.25GBps */
 		cap->nonleaf.shaper_private_rate_max = 1250000000ull;
 		cap->nonleaf.shaper_shared_n_max = 0;
-		cap->nonleaf.sched_n_children_max = IXGBE_DCB_MAX_TRAFFIC_CLASS;
+		if (level_id == IXGBE_TM_NODE_TYPE_PORT)
+			cap->nonleaf.sched_n_children_max =
+				IXGBE_DCB_MAX_TRAFFIC_CLASS;
+		else
+			cap->nonleaf.sched_n_children_max =
+				hw->mac.max_tx_queues;
 		cap->nonleaf.sched_sp_n_priorities_max = 1;
 		cap->nonleaf.sched_wfq_n_children_per_group_max = 0;
 		cap->nonleaf.sched_wfq_n_groups_max = 0;
@@ -894,21 +920,7 @@ ixgbe_level_capabilities_get(struct rte_eth_dev *dev,
 		return 0;
 	}
 
-	/* TC or queue node */
-	if (level_id == IXGBE_TM_NODE_TYPE_TC) {
-		/* TC */
-		cap->n_nodes_max = IXGBE_DCB_MAX_TRAFFIC_CLASS;
-		cap->n_nodes_nonleaf_max = IXGBE_DCB_MAX_TRAFFIC_CLASS;
-		cap->n_nodes_leaf_max = 0;
-		cap->non_leaf_nodes_identical = true;
-	} else {
-		/* queue */
-		cap->n_nodes_max = hw->mac.max_tx_queues;
-		cap->n_nodes_nonleaf_max = 0;
-		cap->n_nodes_leaf_max = hw->mac.max_tx_queues;
-		cap->non_leaf_nodes_identical = true;
-	}
-	cap->leaf_nodes_identical = true;
+	/* queue node */
 	cap->leaf.shaper_private_supported = true;
 	cap->leaf.shaper_private_dual_rate_supported = false;
 	cap->leaf.shaper_private_rate_min = 0;
@@ -998,7 +1010,8 @@ ixgbe_hierarchy_commit(struct rte_eth_dev *dev,
 		goto done;
 
 	/* not support port max bandwidth yet */
-	if (tm_conf->root->shaper_profile->profile.peak.rate) {
+	if (tm_conf->root->shaper_profile &&
+	    tm_conf->root->shaper_profile->profile.peak.rate) {
 		error->type = RTE_TM_ERROR_TYPE_SHAPER_PROFILE;
 		error->message = "no port max bandwidth";
 		goto fail_clear;
@@ -1006,7 +1019,8 @@ ixgbe_hierarchy_commit(struct rte_eth_dev *dev,
 
 	/* HW not support TC max bandwidth */
 	TAILQ_FOREACH(tm_node, &tm_conf->tc_list, node) {
-		if (tm_node->shaper_profile->profile.peak.rate) {
+		if (tm_node->shaper_profile &&
+		    tm_node->shaper_profile->profile.peak.rate) {
 			error->type = RTE_TM_ERROR_TYPE_SHAPER_PROFILE;
 			error->message = "no TC max bandwidth";
 			goto fail_clear;
@@ -1015,7 +1029,10 @@ ixgbe_hierarchy_commit(struct rte_eth_dev *dev,
 
 	/* queue max bandwidth */
 	TAILQ_FOREACH(tm_node, &tm_conf->queue_list, node) {
-		bw = tm_node->shaper_profile->profile.peak.rate;
+		if (tm_node->shaper_profile)
+			bw = tm_node->shaper_profile->profile.peak.rate;
+		else
+			bw = 0;
 		if (bw) {
 			/* interpret Bps to Mbps */
 			bw = bw * 8 / 1000 / 1000;

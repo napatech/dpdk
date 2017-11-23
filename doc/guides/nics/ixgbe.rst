@@ -227,6 +227,33 @@ So when the user sets different MTUs on PF and VF ports in one physical port,
 the real MTU for all these PF and VF ports is the largest value set.
 This behavior is based on the kernel driver behavior.
 
+VF MAC address setting
+~~~~~~~~~~~~~~~~~~~~~~
+
+On ixgbe, the concept of "pool" can be used for different things depending on
+the mode. In VMDq mode, "pool" means a VMDq pool. In IOV mode, "pool" means a
+VF.
+
+There is no RTE API to add a VF's MAC address from the PF. On ixgbe, the
+``rte_eth_dev_mac_addr_add()`` function can be used to add a VF's MAC address,
+as a workaround.
+
+
+Inline crypto processing support
+--------------------------------
+
+Inline IPsec processing is supported for ``RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO``
+mode for ESP packets only:
+
+- ESP authentication only: AES-128-GMAC (128-bit key)
+- ESP encryption and authentication: AES-128-GCM (128-bit key)
+
+IPsec Security Gateway Sample Application supports inline IPsec processing for
+ixgbe PMD.
+
+For more details see the IPsec Security Gateway Sample Application and Security
+library documentation.
+
 
 Supported Chipsets and NICs
 ---------------------------

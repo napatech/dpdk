@@ -121,7 +121,7 @@ struct i40e_rx_queue {
 	uint16_t rxrearm_start;	/**< the idx we start the re-arming from */
 	uint64_t mbuf_initializer; /**< value to init mbufs */
 
-	uint8_t port_id; /**< device port ID */
+	uint16_t port_id; /**< device port ID */
 	uint8_t crc_len; /**< 0 if CRC stripped, 4 otherwise */
 	uint16_t queue_id; /**< RX queue index */
 	uint16_t reg_idx; /**< RX queue register index */
@@ -167,7 +167,7 @@ struct i40e_tx_queue {
 	uint8_t pthresh; /**< Prefetch threshold register. */
 	uint8_t hthresh; /**< Host threshold register. */
 	uint8_t wthresh; /**< Write-back threshold reg. */
-	uint8_t port_id; /**< Device port identifier. */
+	uint16_t port_id; /**< Device port identifier. */
 	uint16_t queue_id; /**< TX queue index. */
 	uint16_t reg_idx;
 	uint32_t txq_flags;
@@ -255,6 +255,7 @@ void i40e_set_tx_function_flag(struct rte_eth_dev *dev,
 			       struct i40e_tx_queue *txq);
 void i40e_set_tx_function(struct rte_eth_dev *dev);
 void i40e_set_default_ptype_table(struct rte_eth_dev *dev);
+void i40e_set_default_pctype_table(struct rte_eth_dev *dev);
 
 /* For each value it means, datasheet of hardware can tell more details
  *

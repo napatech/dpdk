@@ -45,10 +45,11 @@ LDLIBS += -lpthread
 ifeq ($(CONFIG_RTE_LIBRTE_VHOST_NUMA),y)
 LDLIBS += -lnuma
 endif
+LDLIBS += -lrte_eal -lrte_mempool -lrte_mbuf -lrte_ethdev
 
 # all source are stored in SRCS-y
-SRCS-$(CONFIG_RTE_LIBRTE_VHOST) := fd_man.c socket.c vhost.c vhost_user.c \
-				   virtio_net.c
+SRCS-$(CONFIG_RTE_LIBRTE_VHOST) := fd_man.c iotlb.c socket.c vhost.c \
+					vhost_user.c virtio_net.c
 
 # install includes
 SYMLINK-$(CONFIG_RTE_LIBRTE_VHOST)-include += rte_vhost.h

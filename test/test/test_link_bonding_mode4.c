@@ -102,7 +102,7 @@ static const struct ether_addr slow_protocol_mac_addr = {
 struct slave_conf {
 	struct rte_ring *rx_queue;
 	struct rte_ring *tx_queue;
-	uint8_t port_id;
+	uint16_t port_id;
 	uint8_t bonded : 1;
 
 	uint8_t lacp_parnter_state;
@@ -235,7 +235,7 @@ free_pkts(struct rte_mbuf **pkts, uint16_t count)
 }
 
 static int
-configure_ethdev(uint8_t port_id, uint8_t start)
+configure_ethdev(uint16_t port_id, uint8_t start)
 {
 	TEST_ASSERT(rte_eth_dev_configure(port_id, 1, 1, &default_pmd_conf) == 0,
 		"Failed to configure device %u", port_id);
@@ -325,7 +325,7 @@ remove_slave(struct slave_conf *slave)
 }
 
 static void
-lacp_recv_cb(uint8_t slave_id, struct rte_mbuf *lacp_pkt)
+lacp_recv_cb(uint16_t slave_id, struct rte_mbuf *lacp_pkt)
 {
 	struct ether_hdr *hdr;
 	struct slow_protocol_frame *slow_hdr;
@@ -343,7 +343,7 @@ lacp_recv_cb(uint8_t slave_id, struct rte_mbuf *lacp_pkt)
 }
 
 static int
-initialize_bonded_device_with_slaves(uint8_t slave_count, uint8_t external_sm)
+initialize_bonded_device_with_slaves(uint16_t slave_count, uint8_t external_sm)
 {
 	uint8_t i;
 
@@ -379,8 +379,8 @@ remove_slaves_and_stop_bonded_device(void)
 {
 	struct slave_conf *slave;
 	int retval;
-	uint8_t slaves[RTE_MAX_ETHPORTS];
-	uint8_t i;
+	uint16_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t i;
 
 	rte_eth_dev_stop(test_params.bonded_port_id);
 
@@ -411,7 +411,7 @@ test_setup(void)
 	char name[RTE_ETH_NAME_MAX_LEN];
 	struct slave_conf *port;
 	const uint8_t socket_id = rte_socket_id();
-	uint8_t i;
+	uint16_t i;
 
 	if (test_params.mbuf_pool == NULL) {
 		nb_mbuf_per_pool = TEST_RX_DESC_MAX + DEF_PKT_BURST +
@@ -661,7 +661,7 @@ bond_handshake(void)
 	TEST_ASSERT_EQUAL(all_slaves_done, 1, "Bond handshake failed\n");
 
 	/* If flags doesn't match - report failure */
-	return all_slaves_done = 1 ? TEST_SUCCESS : TEST_FAILED;
+	return all_slaves_done == 1 ? TEST_SUCCESS : TEST_FAILED;
 }
 
 #define TEST_LACP_SLAVE_COUT RTE_DIM(test_params.slave_ports)
@@ -1521,7 +1521,7 @@ check_environment(void)
 {
 	struct slave_conf *port;
 	uint8_t i, env_state;
-	uint8_t slaves[RTE_DIM(test_params.slave_ports)];
+	uint16_t slaves[RTE_DIM(test_params.slave_ports)];
 	int slaves_count;
 
 	env_state = 0;

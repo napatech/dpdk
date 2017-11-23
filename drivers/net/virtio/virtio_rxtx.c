@@ -39,7 +39,6 @@
 
 #include <rte_cycles.h>
 #include <rte_memory.h>
-#include <rte_memzone.h>
 #include <rte_branch_prediction.h>
 #include <rte_mempool.h>
 #include <rte_malloc.h>
@@ -50,7 +49,6 @@
 #include <rte_string_fns.h>
 #include <rte_errno.h>
 #include <rte_byteorder.h>
-#include <rte_cpuflags.h>
 #include <rte_net.h>
 #include <rte_ip.h>
 #include <rte_udp.h>
@@ -81,7 +79,7 @@ virtio_dev_rx_queue_done(void *rxq, uint16_t offset)
 	return VIRTQUEUE_NUSED(vq) >= offset;
 }
 
-static void
+void
 vq_ring_free_chain(struct virtqueue *vq, uint16_t desc_idx)
 {
 	struct vring_desc *dp, *dp_tail;
@@ -300,6 +298,10 @@ virtqueue_enqueue_xmit(struct virtnet_tx *txvq, struct rte_mbuf *cookie,
 		/* prepend cannot fail, checked by caller */
 		hdr = (struct virtio_net_hdr *)
 			rte_pktmbuf_prepend(cookie, head_size);
+		/* rte_pktmbuf_prepend() counts the hdr size to the pkt length,
+		 * which is wrong. Below subtract restores correct pkt size.
+		 */
+		cookie->pkt_len -= head_size;
 		/* if offload disabled, it is not zeroed below, do it now */
 		if (offload == 0) {
 			ASSIGN_UNLESS_EQUAL(hdr->csum_start, 0);
@@ -421,9 +423,6 @@ virtio_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	struct virtio_hw *hw = dev->data->dev_private;
 	struct virtqueue *vq = hw->vqs[vtpci_queue_idx];
 	struct virtnet_rx *rxvq;
-	int error, nbufs;
-	struct rte_mbuf *m;
-	uint16_t desc_idx;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -440,12 +439,26 @@ virtio_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	}
 	dev->data->rx_queues[queue_idx] = rxvq;
 
+	return 0;
+}
+
+int
+virtio_dev_rx_queue_setup_finish(struct rte_eth_dev *dev, uint16_t queue_idx)
+{
+	uint16_t vtpci_queue_idx = 2 * queue_idx + VTNET_SQ_RQ_QUEUE_IDX;
+	struct virtio_hw *hw = dev->data->dev_private;
+	struct virtqueue *vq = hw->vqs[vtpci_queue_idx];
+	struct virtnet_rx *rxvq = &vq->rxq;
+	struct rte_mbuf *m;
+	uint16_t desc_idx;
+	int error, nbufs;
+
+	PMD_INIT_FUNC_TRACE();
 
 	/* Allocate blank mbufs for the each rx descriptor */
 	nbufs = 0;
-	error = ENOSPC;
 
-	if (hw->use_simple_rxtx) {
+	if (hw->use_simple_rx) {
 		for (desc_idx = 0; desc_idx < vq->vq_nentries;
 		     desc_idx++) {
 			vq->vq_ring.avail->ring[desc_idx] = desc_idx;
@@ -467,7 +480,7 @@ virtio_dev_rx_queue_setup(struct rte_eth_dev *dev,
 			break;
 
 		/* Enqueue allocated buffers */
-		if (hw->use_simple_rxtx)
+		if (hw->use_simple_rx)
 			error = virtqueue_enqueue_recv_refill_simple(vq, m);
 		else
 			error = virtqueue_enqueue_recv_refill(vq, m);
@@ -490,31 +503,6 @@ virtio_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	return 0;
 }
 
-static void
-virtio_update_rxtx_handler(struct rte_eth_dev *dev,
-			   const struct rte_eth_txconf *tx_conf)
-{
-	uint8_t use_simple_rxtx = 0;
-	struct virtio_hw *hw = dev->data->dev_private;
-
-#if defined RTE_ARCH_X86
-	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_SSE3))
-		use_simple_rxtx = 1;
-#elif defined RTE_ARCH_ARM64 || defined CONFIG_RTE_ARCH_ARM
-	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_NEON))
-		use_simple_rxtx = 1;
-#endif
-	/* Use simple rx/tx func if single segment and no offloads */
-	if (use_simple_rxtx &&
-	    (tx_conf->txq_flags & VIRTIO_SIMPLE_FLAGS) == VIRTIO_SIMPLE_FLAGS &&
-	    !vtpci_with_feature(hw, VIRTIO_NET_F_MRG_RXBUF)) {
-		PMD_INIT_LOG(INFO, "Using simple rx/tx path");
-		dev->tx_pkt_burst = virtio_xmit_pkts_simple;
-		dev->rx_pkt_burst = virtio_recv_pkts_vec;
-		hw->use_simple_rxtx = use_simple_rxtx;
-	}
-}
-
 /*
  * struct rte_eth_dev *dev: Used to update dev
  * uint16_t nb_desc: Defaults to values read from config space
@@ -534,11 +522,12 @@ virtio_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	struct virtqueue *vq = hw->vqs[vtpci_queue_idx];
 	struct virtnet_tx *txvq;
 	uint16_t tx_free_thresh;
-	uint16_t desc_idx;
 
 	PMD_INIT_FUNC_TRACE();
 
-	virtio_update_rxtx_handler(dev, tx_conf);
+	/* cannot use simple rxtx funcs with multisegs or offloads */
+	if ((tx_conf->txq_flags & VIRTIO_SIMPLE_FLAGS) != VIRTIO_SIMPLE_FLAGS)
+		hw->use_simple_tx = 0;
 
 	if (nb_desc == 0 || nb_desc > vq->vq_nentries)
 		nb_desc = vq->vq_nentries;
@@ -563,9 +552,24 @@ virtio_dev_tx_queue_setup(struct rte_eth_dev *dev,
 
 	vq->vq_free_thresh = tx_free_thresh;
 
-	if (hw->use_simple_rxtx) {
-		uint16_t mid_idx  = vq->vq_nentries >> 1;
+	dev->data->tx_queues[queue_idx] = txvq;
+	return 0;
+}
 
+int
+virtio_dev_tx_queue_setup_finish(struct rte_eth_dev *dev,
+				uint16_t queue_idx)
+{
+	uint8_t vtpci_queue_idx = 2 * queue_idx + VTNET_SQ_TQ_QUEUE_IDX;
+	struct virtio_hw *hw = dev->data->dev_private;
+	struct virtqueue *vq = hw->vqs[vtpci_queue_idx];
+	uint16_t mid_idx = vq->vq_nentries >> 1;
+	struct virtnet_tx *txvq = &vq->txq;
+	uint16_t desc_idx;
+
+	PMD_INIT_FUNC_TRACE();
+
+	if (hw->use_simple_tx) {
 		for (desc_idx = 0; desc_idx < mid_idx; desc_idx++) {
 			vq->vq_ring.avail->ring[desc_idx] =
 				desc_idx + mid_idx;
@@ -587,7 +591,6 @@ virtio_dev_tx_queue_setup(struct rte_eth_dev *dev,
 
 	VIRTQUEUE_DUMP(vq);
 
-	dev->data->tx_queues[queue_idx] = txvq;
 	return 0;
 }
 
@@ -670,7 +673,7 @@ virtio_rx_offload(struct rte_mbuf *m, struct virtio_net_hdr *hdr)
 			 * In case of SCTP, this will be wrong since it's a CRC
 			 * but there's nothing we can do.
 			 */
-			uint16_t csum, off;
+			uint16_t csum = 0, off;
 
 			rte_raw_cksum_mbuf(m, hdr->csum_start,
 				rte_pktmbuf_pkt_len(m) - hdr->csum_start,

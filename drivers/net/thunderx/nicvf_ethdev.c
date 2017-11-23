@@ -61,6 +61,7 @@
 #include <rte_malloc.h>
 #include <rte_random.h>
 #include <rte_pci.h>
+#include <rte_bus_pci.h>
 #include <rte_tailq.h>
 
 #include "base/nicvf_plat.h"
@@ -242,7 +243,7 @@ nicvf_dev_get_regs(struct rte_eth_dev *dev, struct rte_dev_reg_info *regs)
 	return -ENOTSUP;
 }
 
-static void
+static int
 nicvf_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 {
 	uint16_t qidx;
@@ -332,6 +333,8 @@ nicvf_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	stats->opackets += port_stats.tx_bcast_frames_ok;
 	stats->opackets += port_stats.tx_mcast_frames_ok;
 	stats->oerrors = port_stats.tx_drops;
+
+	return 0;
 }
 
 static const uint32_t *
@@ -602,7 +605,7 @@ nicvf_qset_cq_alloc(struct rte_eth_dev *dev, struct nicvf *nic,
 
 	memset(rz->addr, 0, ring_size);
 
-	rxq->phys = rz->phys_addr;
+	rxq->phys = rz->iova;
 	rxq->desc = rz->addr;
 	rxq->qlen_mask = desc_cnt - 1;
 
@@ -626,7 +629,7 @@ nicvf_qset_sq_alloc(struct rte_eth_dev *dev, struct nicvf *nic,
 
 	memset(rz->addr, 0, ring_size);
 
-	sq->phys = rz->phys_addr;
+	sq->phys = rz->iova;
 	sq->desc = rz->addr;
 	sq->qlen_mask = desc_cnt - 1;
 
@@ -660,7 +663,7 @@ nicvf_qset_rbdr_alloc(struct rte_eth_dev *dev, struct nicvf *nic,
 
 	memset(rz->addr, 0, ring_size);
 
-	rbdr->phys = rz->phys_addr;
+	rbdr->phys = rz->iova;
 	rbdr->tail = 0;
 	rbdr->next_tail = 0;
 	rbdr->desc = rz->addr;
@@ -677,7 +680,7 @@ nicvf_qset_rbdr_alloc(struct rte_eth_dev *dev, struct nicvf *nic,
 
 static void
 nicvf_rbdr_release_mbuf(struct rte_eth_dev *dev, struct nicvf *nic,
-			nicvf_phys_addr_t phy)
+			nicvf_iova_addr_t phy)
 {
 	uint16_t qidx;
 	void *obj;
@@ -1380,6 +1383,13 @@ nicvf_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 
 	dev_info->pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 
+	/* Autonegotiation may be disabled */
+	dev_info->speed_capa = ETH_LINK_SPEED_FIXED;
+	dev_info->speed_capa |= ETH_LINK_SPEED_10M | ETH_LINK_SPEED_100M |
+				 ETH_LINK_SPEED_1G | ETH_LINK_SPEED_10G;
+	if (nicvf_hw_version(nic) != PCI_SUB_DEVICE_ID_CN81XX_NICVF)
+		dev_info->speed_capa |= ETH_LINK_SPEED_40G;
+
 	dev_info->min_rx_bufsize = ETHER_MIN_MTU;
 	dev_info->max_rx_pktlen = NIC_HW_MAX_FRS;
 	dev_info->max_rx_queues =
@@ -1419,7 +1429,7 @@ nicvf_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	};
 }
 
-static nicvf_phys_addr_t
+static nicvf_iova_addr_t
 rbdr_rte_mempool_get(void *dev, void *opaque)
 {
 	uint16_t qidx;

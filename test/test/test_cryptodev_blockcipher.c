@@ -92,6 +92,10 @@ test_blockcipher_one_case(const struct blockcipher_test_case *t,
 			RTE_STR(CRYPTODEV_NAME_QAT_SYM_PMD));
 	int dpaa2_sec_pmd = rte_cryptodev_driver_id_get(
 			RTE_STR(CRYPTODEV_NAME_DPAA2_SEC_PMD));
+	int dpaa_sec_pmd = rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_DPAA_SEC_PMD));
+	int mrvl_pmd = rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_MRVL_PMD));
 
 	int nb_segs = 1;
 
@@ -114,9 +118,11 @@ test_blockcipher_one_case(const struct blockcipher_test_case *t,
 			tdata->auth_key.len);
 
 	if (driver_id == dpaa2_sec_pmd ||
+			driver_id == dpaa_sec_pmd ||
 			driver_id == qat_pmd ||
 			driver_id == openssl_pmd ||
-			driver_id == armv8_pmd) { /* Fall through */
+			driver_id == armv8_pmd ||
+			driver_id == mrvl_pmd) { /* Fall through */
 		digest_len = tdata->digest.len;
 	} else if (driver_id == aesni_mb_pmd ||
 			driver_id == scheduler_pmd) {
@@ -323,14 +329,14 @@ test_blockcipher_one_case(const struct blockcipher_test_case *t,
 			sym_op->auth.digest.data = pktmbuf_mtod_offset
 				(iobuf, digest_offset);
 			sym_op->auth.digest.phys_addr =
-				pktmbuf_mtophys_offset(iobuf,
+				pktmbuf_iova_offset(iobuf,
 					digest_offset);
 		} else {
 			auth_xform->auth.op = RTE_CRYPTO_AUTH_OP_VERIFY;
 			sym_op->auth.digest.data = pktmbuf_mtod_offset
 				(sym_op->m_src, digest_offset);
 			sym_op->auth.digest.phys_addr =
-				pktmbuf_mtophys_offset(sym_op->m_src,
+				pktmbuf_iova_offset(sym_op->m_src,
 					digest_offset);
 		}
 
@@ -452,25 +458,13 @@ test_blockcipher_one_case(const struct blockcipher_test_case *t,
 	if (t->feature_mask & BLOCKCIPHER_TEST_FEATURE_OOP) {
 		struct rte_mbuf *mbuf;
 		uint8_t value;
-		uint32_t head_unchanged_len = 0, changed_len = 0;
+		uint32_t head_unchanged_len, changed_len = 0;
 		uint32_t i;
 
 		mbuf = sym_op->m_src;
-		if (t->op_mask & BLOCKCIPHER_TEST_OP_AUTH_VERIFY) {
-			/* white-box test: PMDs use some of the
-			 * tailroom as temp storage in verify case
-			 */
-			head_unchanged_len = rte_pktmbuf_headroom(mbuf)
-					+ rte_pktmbuf_data_len(mbuf);
-			changed_len = digest_len;
-		} else {
-			head_unchanged_len = mbuf->buf_len;
-			changed_len = 0;
-		}
+		head_unchanged_len = mbuf->buf_len;
 
 		for (i = 0; i < mbuf->buf_len; i++) {
-			if (i == head_unchanged_len)
-				i += changed_len;
 			value = *((uint8_t *)(mbuf->buf_addr)+i);
 			if (value != tmp_src_buf[i]) {
 				snprintf(test_msg, BLOCKCIPHER_TEST_MSG_LEN,
@@ -531,19 +525,6 @@ test_blockcipher_one_case(const struct blockcipher_test_case *t,
 		if (t->op_mask & BLOCKCIPHER_TEST_OP_AUTH_GEN)
 			changed_len += digest_len;
 
-		if (t->op_mask & BLOCKCIPHER_TEST_OP_AUTH_VERIFY) {
-			/* white-box test: PMDs use some of the
-			 * tailroom as temp storage in verify case
-			 */
-			if (t->op_mask & BLOCKCIPHER_TEST_OP_CIPHER) {
-				/* This is simplified, not checking digest*/
-				changed_len += digest_len*2;
-			} else {
-				head_unchanged_len += digest_len;
-				changed_len += digest_len;
-			}
-		}
-
 		for (i = 0; i < mbuf->buf_len; i++) {
 			if (i == head_unchanged_len)
 				i += changed_len;
@@ -602,8 +583,10 @@ test_blockcipher_all_tests(struct rte_mempool *mbuf_pool,
 
 	int openssl_pmd = rte_cryptodev_driver_id_get(
 			RTE_STR(CRYPTODEV_NAME_OPENSSL_PMD));
-	int dpaa2_pmd = rte_cryptodev_driver_id_get(
+	int dpaa2_sec_pmd = rte_cryptodev_driver_id_get(
 			RTE_STR(CRYPTODEV_NAME_DPAA2_SEC_PMD));
+	int dpaa_sec_pmd = rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_DPAA_SEC_PMD));
 	int scheduler_pmd = rte_cryptodev_driver_id_get(
 			RTE_STR(CRYPTODEV_NAME_SCHEDULER_PMD));
 	int armv8_pmd = rte_cryptodev_driver_id_get(
@@ -612,6 +595,8 @@ test_blockcipher_all_tests(struct rte_mempool *mbuf_pool,
 			RTE_STR(CRYPTODEV_NAME_AESNI_MB_PMD));
 	int qat_pmd = rte_cryptodev_driver_id_get(
 			RTE_STR(CRYPTODEV_NAME_QAT_SYM_PMD));
+	int mrvl_pmd = rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_MRVL_PMD));
 
 	switch (test_type) {
 	case BLKCIPHER_AES_CHAIN_TYPE:
@@ -668,8 +653,12 @@ test_blockcipher_all_tests(struct rte_mempool *mbuf_pool,
 		target_pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_ARMV8;
 	else if (driver_id == scheduler_pmd)
 		target_pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_SCHEDULER;
-	else if (driver_id == dpaa2_pmd)
+	else if (driver_id == dpaa2_sec_pmd)
 		target_pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC;
+	else if (driver_id == dpaa_sec_pmd)
+		target_pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_DPAA_SEC;
+	else if (driver_id == mrvl_pmd)
+		target_pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_MRVL;
 	else
 		TEST_ASSERT(0, "Unrecognized cryptodev type");
 

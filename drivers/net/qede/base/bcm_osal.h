@@ -23,6 +23,7 @@
 /* Forward declaration */
 struct ecore_dev;
 struct ecore_hwfn;
+struct ecore_ptt;
 struct ecore_vf_acquire_sw_info;
 struct vf_pf_resc_request;
 enum ecore_mcp_protocol_type;
@@ -45,6 +46,8 @@ void qed_link_update(struct ecore_hwfn *hwfn);
 
 #define OSAL_WARN(arg1, arg2, arg3, ...) (0)
 
+#define UNUSED(x)	(void)(x)
+
 /* Memory Types */
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -60,7 +63,7 @@ typedef u32 OSAL_BE32;
 
 #define osal_uintptr_t uintptr_t
 
-typedef phys_addr_t dma_addr_t;
+typedef rte_iova_t dma_addr_t;
 
 typedef rte_spinlock_t osal_spinlock_t;
 
@@ -147,6 +150,9 @@ void osal_dma_free_mem(struct ecore_dev *edev, dma_addr_t phys);
 			      ((u8 *)(uintptr_t)(_p_hwfn->doorbells) +	\
 			      (_db_addr)), (u32)_val)
 
+#define DIRECT_REG_WR64(hwfn, addr, value) nothing
+#define DIRECT_REG_RD64(hwfn, addr) 0
+
 /* Mutexes */
 
 typedef pthread_mutex_t osal_mutex_t;
@@ -161,7 +167,12 @@ typedef pthread_mutex_t osal_mutex_t;
 #define OSAL_SPIN_LOCK_INIT(lock) rte_spinlock_init(lock)
 #define OSAL_SPIN_LOCK(lock) rte_spinlock_lock(lock)
 #define OSAL_SPIN_UNLOCK(lock) rte_spinlock_unlock(lock)
-#define OSAL_SPIN_LOCK_IRQSAVE(lock, flags) nothing
+#define OSAL_SPIN_LOCK_IRQSAVE(lock, flags)	\
+	do {					\
+		UNUSED(lock);			\
+		flags = 0;			\
+		UNUSED(flags);			\
+	} while (0)
 #define OSAL_SPIN_UNLOCK_IRQSAVE(lock, flags) nothing
 #define OSAL_SPIN_LOCK_ALLOC(hwfn, lock) nothing
 #define OSAL_SPIN_LOCK_DEALLOC(lock) nothing
@@ -328,6 +339,7 @@ u32 qede_find_first_zero_bit(unsigned long *, u32);
 #define OSAL_BITMAP_WEIGHT(bitmap, count) 0
 
 #define OSAL_LINK_UPDATE(hwfn) qed_link_update(hwfn)
+#define OSAL_TRANSCEIVER_UPDATE(hwfn) nothing
 #define OSAL_DCBX_AEN(hwfn, mib_type) nothing
 
 /* SR-IOV channel */
@@ -344,8 +356,9 @@ u32 qede_find_first_zero_bit(unsigned long *, u32);
 #define OSAL_IOV_VF_VPORT_UPDATE(hwfn, vfid, p_params, p_mask) 0
 #define OSAL_VF_UPDATE_ACQUIRE_RESC_RESP(_dev_p, _resc_resp) 0
 #define OSAL_IOV_GET_OS_TYPE() 0
-#define OSAL_IOV_VF_MSG_TYPE(hwfn, vfid, vf_msg_type) 0
-#define OSAL_IOV_PF_RESP_TYPE(hwfn, vfid, pf_resp_type) 0
+#define OSAL_IOV_VF_MSG_TYPE(hwfn, vfid, vf_msg_type) nothing
+#define OSAL_IOV_PF_RESP_TYPE(hwfn, vfid, pf_resp_type) nothing
+#define OSAL_IOV_VF_VPORT_STOP(hwfn, vf) nothing
 
 u32 qede_unzip_data(struct ecore_hwfn *p_hwfn, u32 input_len,
 		   u8 *input_buf, u32 max_size, u8 *unzip_buf);
@@ -365,7 +378,7 @@ void qede_hw_err_notify(struct ecore_hwfn *p_hwfn,
 	qede_hw_err_notify(hwfn, err_type)
 
 #define OSAL_NVM_IS_ACCESS_ENABLED(hwfn) (1)
-#define OSAL_NUM_ACTIVE_CPU()	0
+#define OSAL_NUM_CPUS()	0
 
 /* Utility functions */
 
@@ -414,7 +427,9 @@ u32 qede_osal_log2(u32);
 #define OSAL_REG_ADDR(_p_hwfn, _offset) \
 		(void *)((u8 *)(uintptr_t)(_p_hwfn->regview) + (_offset))
 #define OSAL_PAGE_SIZE 4096
+#define OSAL_CACHE_LINE_SIZE RTE_CACHE_LINE_SIZE
 #define OSAL_IOMEM volatile
+#define OSAL_UNUSED    __attribute__((unused))
 #define OSAL_UNLIKELY(x)  __builtin_expect(!!(x), 0)
 #define OSAL_MIN_T(type, __min1, __min2)	\
 	((type)(__min1) < (type)(__min2) ? (type)(__min1) : (type)(__min2))
@@ -427,10 +442,17 @@ void qede_get_mcp_proto_stats(struct ecore_dev *, enum ecore_mcp_protocol_type,
 	qede_get_mcp_proto_stats(dev, type, stats)
 
 #define	OSAL_SLOWPATH_IRQ_REQ(p_hwfn) (0)
-#define OSAL_CRC32(crc, buf, length) 0
+
+u32 qede_crc32(u32 crc, u8 *ptr, u32 length);
+#define OSAL_CRC32(crc, buf, length) qede_crc32(crc, buf, length)
 #define OSAL_CRC8_POPULATE(table, polynomial) nothing
 #define OSAL_CRC8(table, pdata, nbytes, crc) 0
-#define OSAL_MFW_TLV_REQ(p_hwfn) (0)
+#define OSAL_MFW_TLV_REQ(p_hwfn) nothing
 #define OSAL_MFW_FILL_TLV_DATA(type, buf, data) (0)
+#define OSAL_MFW_CMD_PREEMPT(p_hwfn) nothing
 #define OSAL_PF_VALIDATE_MODIFY_TUNN_CONFIG(p_hwfn, mask, b_update, tunn) 0
+
+#define OSAL_DIV_S64(a, b)	((a) / (b))
+#define OSAL_LLDP_RX_TLVS(p_hwfn, tlv_buf, tlv_size) nothing
+
 #endif /* __BCM_OSAL_H */

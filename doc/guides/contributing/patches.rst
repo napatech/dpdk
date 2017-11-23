@@ -367,7 +367,6 @@ The builds can be modified via the following environmental variables:
 * ``DPDK_BUILD_TEST_CONFIGS`` (target1+option1+option2 target2)
 * ``DPDK_DEP_CFLAGS``
 * ``DPDK_DEP_LDFLAGS``
-* ``DPDK_DEP_MOFED`` (y/[n])
 * ``DPDK_DEP_PCAP`` (y/[n])
 * ``DPDK_NOTIFY`` (notify-send)
 
@@ -403,6 +402,10 @@ If the patches are a change to existing files then you should send them TO the m
 The appropriate maintainer can be found in the ``MAINTAINERS`` file::
 
    git send-email --to maintainer@some.org --cc dev@dpdk.org 000*.patch
+
+Script ``get-maintainer.sh`` can be used to select maintainers automatically::
+
+  git send-email --to-cmd ./devtools/get-maintainer.sh --cc dev@dpdk.org 000*.patch
 
 New additions can be sent without a maintainer::
 

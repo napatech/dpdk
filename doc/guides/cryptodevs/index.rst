@@ -40,8 +40,10 @@ Crypto Device Drivers
     aesni_gcm
     armv8
     dpaa2_sec
+    dpaa_sec
     kasumi
     openssl
+    mrvl
     null
     scheduler
     snow3g

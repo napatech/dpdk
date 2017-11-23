@@ -38,6 +38,7 @@
 #include <rte_ethdev.h>
 #include <rte_malloc.h>
 #include <rte_flow.h>
+#include <rte_cycles.h>
 
 #include "failsafe_private.h"
 
@@ -79,131 +80,13 @@ static struct rte_eth_dev_info default_infos = {
 	.flow_type_rss_offloads = 0x0,
 };
 
-/**
- * Check whether a specific offloading capability
- * is supported by a sub_device.
- *
- * @return
- *   0: all requested capabilities are supported by the sub_device
- *   positive value: This flag at least is not supported by the sub_device
- */
-static int
-fs_port_offload_validate(struct rte_eth_dev *dev,
-			 struct sub_device *sdev)
-{
-	struct rte_eth_dev_info infos = {0};
-	struct rte_eth_conf *cf;
-	uint32_t cap;
-
-	cf = &dev->data->dev_conf;
-	SUBOPS(sdev, dev_infos_get)(ETH(sdev), &infos);
-	/* RX capabilities */
-	cap = infos.rx_offload_capa;
-	if (cf->rxmode.hw_vlan_strip &&
-	    ((cap & DEV_RX_OFFLOAD_VLAN_STRIP) == 0)) {
-		WARN("VLAN stripping offload requested but not supported by sub_device %d",
-		      SUB_ID(sdev));
-		return DEV_RX_OFFLOAD_VLAN_STRIP;
-	}
-	if (cf->rxmode.hw_ip_checksum &&
-	    ((cap & (DEV_RX_OFFLOAD_IPV4_CKSUM |
-		     DEV_RX_OFFLOAD_UDP_CKSUM |
-		     DEV_RX_OFFLOAD_TCP_CKSUM)) !=
-	     (DEV_RX_OFFLOAD_IPV4_CKSUM |
-	      DEV_RX_OFFLOAD_UDP_CKSUM |
-	      DEV_RX_OFFLOAD_TCP_CKSUM))) {
-		WARN("IP checksum offload requested but not supported by sub_device %d",
-		      SUB_ID(sdev));
-		return DEV_RX_OFFLOAD_IPV4_CKSUM |
-		       DEV_RX_OFFLOAD_UDP_CKSUM |
-		       DEV_RX_OFFLOAD_TCP_CKSUM;
-	}
-	if (cf->rxmode.enable_lro &&
-	    ((cap & DEV_RX_OFFLOAD_TCP_LRO) == 0)) {
-		WARN("TCP LRO offload requested but not supported by sub_device %d",
-		      SUB_ID(sdev));
-		return DEV_RX_OFFLOAD_TCP_LRO;
-	}
-	if (cf->rxmode.hw_vlan_extend &&
-	    ((cap & DEV_RX_OFFLOAD_QINQ_STRIP) == 0)) {
-		WARN("Stacked VLAN stripping offload requested but not supported by sub_device %d",
-		      SUB_ID(sdev));
-		return DEV_RX_OFFLOAD_QINQ_STRIP;
-	}
-	/* TX capabilities */
-	/* Nothing to do, no tx capa supported */
-	return 0;
-}
-
-/*
- * Disable the dev_conf flag related to an offload capability flag
- * within an ethdev configuration.
- */
-static int
-fs_port_disable_offload(struct rte_eth_conf *cf,
-			uint32_t ol_cap)
-{
-	switch (ol_cap) {
-	case DEV_RX_OFFLOAD_VLAN_STRIP:
-		INFO("Disabling VLAN stripping offload");
-		cf->rxmode.hw_vlan_strip = 0;
-		break;
-	case DEV_RX_OFFLOAD_IPV4_CKSUM:
-	case DEV_RX_OFFLOAD_UDP_CKSUM:
-	case DEV_RX_OFFLOAD_TCP_CKSUM:
-	case (DEV_RX_OFFLOAD_IPV4_CKSUM |
-	      DEV_RX_OFFLOAD_UDP_CKSUM |
-	      DEV_RX_OFFLOAD_TCP_CKSUM):
-		INFO("Disabling IP checksum offload");
-		cf->rxmode.hw_ip_checksum = 0;
-		break;
-	case DEV_RX_OFFLOAD_TCP_LRO:
-		INFO("Disabling TCP LRO offload");
-		cf->rxmode.enable_lro = 0;
-		break;
-	case DEV_RX_OFFLOAD_QINQ_STRIP:
-		INFO("Disabling stacked VLAN stripping offload");
-		cf->rxmode.hw_vlan_extend = 0;
-		break;
-	default:
-		DEBUG("Unable to disable offload capability: %" PRIx32,
-		      ol_cap);
-		return -1;
-	}
-	return 0;
-}
-
 static int
 fs_dev_configure(struct rte_eth_dev *dev)
 {
 	struct sub_device *sdev;
 	uint8_t i;
-	int capa_flag;
 	int ret;
 
-	FOREACH_SUBDEV(sdev, i, dev) {
-		if (sdev->state != DEV_PROBED)
-			continue;
-		DEBUG("Checking capabilities for sub_device %d", i);
-		while ((capa_flag = fs_port_offload_validate(dev, sdev))) {
-			/*
-			 * Refuse to change configuration if multiple devices
-			 * are present and we already have configured at least
-			 * some of them.
-			 */
-			if (PRIV(dev)->state >= DEV_ACTIVE &&
-			    PRIV(dev)->subs_tail > 1) {
-				ERROR("device already configured, cannot fix live configuration");
-				return -1;
-			}
-			ret = fs_port_disable_offload(&dev->data->dev_conf,
-						      capa_flag);
-			if (ret) {
-				ERROR("Unable to disable offload capability");
-				return ret;
-			}
-		}
-	}
 	FOREACH_SUBDEV(sdev, i, dev) {
 		int rmv_interrupt = 0;
 		int lsc_interrupt = 0;
@@ -582,13 +465,30 @@ fs_link_update(struct rte_eth_dev *dev,
 	return -1;
 }
 
-static void
+static int
 fs_stats_get(struct rte_eth_dev *dev,
 	     struct rte_eth_stats *stats)
 {
-	if (TX_SUBDEV(dev) == NULL)
-		return;
-	rte_eth_stats_get(PORT_ID(TX_SUBDEV(dev)), stats);
+	struct sub_device *sdev;
+	uint8_t i;
+	int ret;
+
+	rte_memcpy(stats, &PRIV(dev)->stats_accumulator, sizeof(*stats));
+	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
+		struct rte_eth_stats *snapshot = &sdev->stats_snapshot.stats;
+		uint64_t *timestamp = &sdev->stats_snapshot.timestamp;
+
+		ret = rte_eth_stats_get(PORT_ID(sdev), snapshot);
+		if (ret) {
+			ERROR("Operation rte_eth_stats_get failed for sub_device %d with error %d",
+				  i, ret);
+			*timestamp = 0;
+			return ret;
+		}
+		*timestamp = rte_rdtsc();
+		failsafe_stats_increment(stats, snapshot);
+	}
+	return 0;
 }
 
 static void
@@ -597,8 +497,11 @@ fs_stats_reset(struct rte_eth_dev *dev)
 	struct sub_device *sdev;
 	uint8_t i;
 
-	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE)
+	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
 		rte_eth_stats_reset(PORT_ID(sdev));
+		memset(&sdev->stats_snapshot, 0, sizeof(struct rte_eth_stats));
+	}
+	memset(&PRIV(dev)->stats_accumulator, 0, sizeof(struct rte_eth_stats));
 }
 
 /**

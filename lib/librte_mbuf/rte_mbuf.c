@@ -46,7 +46,6 @@
 #include <rte_common.h>
 #include <rte_log.h>
 #include <rte_memory.h>
-#include <rte_memzone.h>
 #include <rte_launch.h>
 #include <rte_eal.h>
 #include <rte_per_lcore.h>
@@ -135,7 +134,7 @@ rte_pktmbuf_init(struct rte_mempool *mp,
 	/* start of buffer is after mbuf structure and priv data */
 	m->priv_size = priv_size;
 	m->buf_addr = (char *)m + mbuf_size;
-	m->buf_physaddr = rte_mempool_virt2phy(mp, m) + mbuf_size;
+	m->buf_iova = rte_mempool_virt2iova(m) + mbuf_size;
 	m->buf_len = (uint16_t)buf_len;
 
 	/* keep some headroom between start of buffer and data */
@@ -144,7 +143,7 @@ rte_pktmbuf_init(struct rte_mempool *mp,
 	/* init some constant fields */
 	m->pool = mp;
 	m->nb_segs = 1;
-	m->port = 0xff;
+	m->port = MBUF_INVALID_PORT;
 	rte_mbuf_refcnt_set(m, 1);
 	m->next = NULL;
 }
@@ -157,6 +156,7 @@ rte_pktmbuf_pool_create(const char *name, unsigned n,
 {
 	struct rte_mempool *mp;
 	struct rte_pktmbuf_pool_private mbp_priv;
+	const char *mp_ops_name;
 	unsigned elt_size;
 	int ret;
 
@@ -176,8 +176,8 @@ rte_pktmbuf_pool_create(const char *name, unsigned n,
 	if (mp == NULL)
 		return NULL;
 
-	ret = rte_mempool_set_ops_byname(mp,
-		RTE_MBUF_DEFAULT_MEMPOOL_OPS, NULL);
+	mp_ops_name = rte_eal_mbuf_default_mempool_ops();
+	ret = rte_mempool_set_ops_byname(mp, mp_ops_name, NULL);
 	if (ret != 0) {
 		RTE_LOG(ERR, MBUF, "error setting mempool handler\n");
 		rte_mempool_free(mp);
@@ -203,7 +203,7 @@ void
 rte_mbuf_sanity_check(const struct rte_mbuf *m, int is_header)
 {
 	const struct rte_mbuf *m_seg;
-	unsigned nb_segs;
+	unsigned int nb_segs;
 
 	if (m == NULL)
 		rte_panic("mbuf is NULL\n");
@@ -211,8 +211,8 @@ rte_mbuf_sanity_check(const struct rte_mbuf *m, int is_header)
 	/* generic checks */
 	if (m->pool == NULL)
 		rte_panic("bad mbuf pool\n");
-	if (m->buf_physaddr == 0)
-		rte_panic("bad phys addr\n");
+	if (m->buf_iova == 0)
+		rte_panic("bad IO addr\n");
 	if (m->buf_addr == NULL)
 		rte_panic("bad virt addr\n");
 
@@ -239,12 +239,12 @@ void
 rte_pktmbuf_dump(FILE *f, const struct rte_mbuf *m, unsigned dump_len)
 {
 	unsigned int len;
-	unsigned nb_segs;
+	unsigned int nb_segs;
 
 	__rte_mbuf_sanity_check(m, 1);
 
-	fprintf(f, "dump mbuf at %p, phys=%"PRIx64", buf_len=%u\n",
-	       m, (uint64_t)m->buf_physaddr, (unsigned)m->buf_len);
+	fprintf(f, "dump mbuf at %p, iova=%"PRIx64", buf_len=%u\n",
+	       m, (uint64_t)m->buf_iova, (unsigned)m->buf_len);
 	fprintf(f, "  pkt_len=%"PRIu32", ol_flags=%"PRIx64", nb_segs=%u, "
 	       "in_port=%u\n", m->pkt_len, m->ol_flags,
 	       (unsigned)m->nb_segs, (unsigned)m->port);
@@ -307,7 +307,7 @@ const void *__rte_pktmbuf_read(const struct rte_mbuf *m, uint32_t off,
 const char *rte_get_rx_ol_flag_name(uint64_t mask)
 {
 	switch (mask) {
-	case PKT_RX_VLAN_PKT: return "PKT_RX_VLAN_PKT";
+	case PKT_RX_VLAN: return "PKT_RX_VLAN";
 	case PKT_RX_RSS_HASH: return "PKT_RX_RSS_HASH";
 	case PKT_RX_FDIR: return "PKT_RX_FDIR";
 	case PKT_RX_L4_CKSUM_BAD: return "PKT_RX_L4_CKSUM_BAD";
@@ -323,6 +323,8 @@ const char *rte_get_rx_ol_flag_name(uint64_t mask)
 	case PKT_RX_QINQ_STRIPPED: return "PKT_RX_QINQ_STRIPPED";
 	case PKT_RX_LRO: return "PKT_RX_LRO";
 	case PKT_RX_TIMESTAMP: return "PKT_RX_TIMESTAMP";
+	case PKT_RX_SEC_OFFLOAD: return "PKT_RX_SEC_OFFLOAD";
+	case PKT_RX_SEC_OFFLOAD_FAILED: return "PKT_RX_SEC_OFFLOAD_FAILED";
 	default: return NULL;
 	}
 }
@@ -338,7 +340,7 @@ int
 rte_get_rx_ol_flag_list(uint64_t mask, char *buf, size_t buflen)
 {
 	const struct flag_mask rx_flags[] = {
-		{ PKT_RX_VLAN_PKT, PKT_RX_VLAN_PKT, NULL },
+		{ PKT_RX_VLAN, PKT_RX_VLAN, NULL },
 		{ PKT_RX_RSS_HASH, PKT_RX_RSS_HASH, NULL },
 		{ PKT_RX_FDIR, PKT_RX_FDIR, NULL },
 		{ PKT_RX_L4_CKSUM_BAD, PKT_RX_L4_CKSUM_MASK, NULL },
@@ -358,6 +360,9 @@ rte_get_rx_ol_flag_list(uint64_t mask, char *buf, size_t buflen)
 		{ PKT_RX_QINQ_STRIPPED, PKT_RX_QINQ_STRIPPED, NULL },
 		{ PKT_RX_LRO, PKT_RX_LRO, NULL },
 		{ PKT_RX_TIMESTAMP, PKT_RX_TIMESTAMP, NULL },
+		{ PKT_RX_SEC_OFFLOAD, PKT_RX_SEC_OFFLOAD, NULL },
+		{ PKT_RX_SEC_OFFLOAD_FAILED, PKT_RX_SEC_OFFLOAD_FAILED, NULL },
+		{ PKT_RX_QINQ, PKT_RX_QINQ, NULL },
 	};
 	const char *name;
 	unsigned int i;
@@ -410,6 +415,7 @@ const char *rte_get_tx_ol_flag_name(uint64_t mask)
 	case PKT_TX_TUNNEL_GENEVE: return "PKT_TX_TUNNEL_GENEVE";
 	case PKT_TX_TUNNEL_MPLSINUDP: return "PKT_TX_TUNNEL_MPLSINUDP";
 	case PKT_TX_MACSEC: return "PKT_TX_MACSEC";
+	case PKT_TX_SEC_OFFLOAD: return "PKT_TX_SEC_OFFLOAD";
 	default: return NULL;
 	}
 }
@@ -443,6 +449,7 @@ rte_get_tx_ol_flag_list(uint64_t mask, char *buf, size_t buflen)
 		{ PKT_TX_TUNNEL_MPLSINUDP, PKT_TX_TUNNEL_MASK,
 		  "PKT_TX_TUNNEL_NONE" },
 		{ PKT_TX_MACSEC, PKT_TX_MACSEC, NULL },
+		{ PKT_TX_SEC_OFFLOAD, PKT_TX_SEC_OFFLOAD, NULL },
 	};
 	const char *name;
 	unsigned int i;

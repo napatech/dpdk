@@ -116,7 +116,7 @@ The following is the list of options that can be given to the EAL:
 
     ./rte-app [-c COREMASK | -l CORELIST] [-n NUM] [-b <domain:bus:devid.func>] \
               [--socket-mem=MB,...] [-d LIB.so|DIR] [-m MB] [-r NUM] [-v] [--file-prefix] \
-	      [--proc-type <primary|secondary|auto>] [-- xen-dom0]
+	      [--proc-type <primary|secondary|auto>]
 
 The EAL options are as follows:
 
@@ -157,14 +157,14 @@ The EAL options are as follows:
 * ``--huge-dir``:
   The directory where hugetlbfs is mounted.
 
+* ``mbuf-pool-ops-name``:
+  Pool ops name for mbuf to use.
+
 * ``--file-prefix``:
   The prefix text used for hugepage filenames.
 
 * ``--proc-type``:
   The type of process instance.
-
-* ``--xen-dom0``:
-  Support application running on Xen Domain0 without hugetlbfs.
 
 * ``--vmware-tsc-map``:
   Use VMware TSC map instead of native RDTSC.

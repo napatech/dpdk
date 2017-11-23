@@ -49,12 +49,12 @@
 #endif
 
 #include <rte_log.h>
-#include <rte_pci.h>
 #include <rte_eal_memconfig.h>
 #include <rte_malloc.h>
+#include <rte_vfio.h>
 
 #include "eal_filesystem.h"
-#include "eal_pci_init.h"
+#include "eal_vfio.h"
 #include "eal_thread.h"
 
 /**
@@ -301,7 +301,8 @@ vfio_mp_sync_thread(void __rte_unused * arg)
 				vfio_mp_sync_send_request(conn_sock, SOCKET_ERR);
 			else
 				vfio_mp_sync_send_fd(conn_sock, fd);
-			close(fd);
+			if (fd >= 0)
+				close(fd);
 			break;
 		case SOCKET_REQ_GROUP:
 			/* wait for group number */

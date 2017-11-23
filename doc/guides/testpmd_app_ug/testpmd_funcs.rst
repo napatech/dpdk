@@ -347,6 +347,13 @@ The available information categories are:
 
 * ``ieee1588``: Demonstrate L2 IEEE1588 V2 PTP timestamping for RX and TX. Requires ``CONFIG_RTE_LIBRTE_IEEE1588=y``.
 
+* ``tm``: Traffic Management forwarding mode
+  Demonstrates the use of ethdev traffic management APIs and softnic PMD for
+  QoS traffic management. In this mode, 5-level hierarchical QoS scheduler is
+  available as an default option that can be enabled through CLI. The user can
+  also modify the default hierarchy or specify the new hierarchy through CLI for
+  implementing QoS scheduler.  Requires ``CONFIG_RTE_LIBRTE_PMD_SOFTNIC=y`` ``CONFIG_RTE_LIBRTE_SCHED=y``.
+
 Note: TX timestamping is only available in the "Full Featured" TX path. To force ``testpmd`` into this mode set ``--txqflags=0``.
 
 Example::
@@ -392,7 +399,7 @@ ddp get info
 
 Display information about dynamic device personalization (DDP) profile::
 
-   testpmd> ddp get info (profile_patch)
+   testpmd> ddp get info (profile_path)
 
 show vf stats
 ~~~~~~~~~~~~~
@@ -407,6 +414,14 @@ clear vf stats
 Reset VF statistics::
 
    testpmd> clear vf stats (port_id) (vf_id)
+
+show port pctype mapping
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+List all items from the pctype mapping table::
+
+   testpmd> show port (port_id) pctype mapping
+
 
 Configuration Functions
 -----------------------
@@ -842,6 +857,49 @@ Where:
 
    Check the NIC Datasheet for hardware limits.
 
+RSS queue region
+~~~~~~~~~~~~~~~~
+
+Set RSS queue region span on a port::
+
+   testpmd> set port (port_id) queue-region region_id (value) \
+		queue_start_index (value) queue_num (value)
+
+Set flowtype mapping on a RSS queue region on a port::
+
+   testpmd> set port (port_id) queue-region region_id (value) flowtype (value)
+
+where:
+
+* For the flowtype(pctype) of packet,the specific index for each type has
+  been defined in file i40e_type.h as enum i40e_filter_pctype.
+
+Set user priority mapping on a RSS queue region on a port::
+
+   testpmd> set port (port_id) queue-region UP (value) region_id (value)
+
+Flush all queue region related configuration on a port::
+
+   testpmd> set port (port_id) queue-region flush (on|off)
+
+where:
+
+* "on"is just an enable function which server for other configuration,
+  it is for all configuration about queue region from up layer,
+  at first will only keep in DPDK softwarestored in driver,
+  only after "flush on", it commit all configuration to HW.
+  "off" is just clean all configuration about queue region just now,
+  and restore all to DPDK i40e driver default config when start up.
+
+Show all queue region related configuration info on a port::
+
+   testpmd> show port (port_id) queue-region
+
+.. note::
+
+  Queue region only support on PF by now, so these command is
+  only for configuration of queue region on PF port.
+
 csum parse-tunnel
 ~~~~~~~~~~~~~~~~~
 
@@ -898,12 +956,12 @@ Display the status of TCP Segmentation Offload::
 
    testpmd> tso show (port_id)
 
-gro
-~~~
+set port - gro
+~~~~~~~~~~~~~~
 
 Enable or disable GRO in ``csum`` forwarding engine::
 
-   testpmd> gro (on|off) (port_id)
+   testpmd> set port <port_id> gro on|off
 
 If enabled, the csum forwarding engine will perform GRO on the TCP/IPv4
 packets received from the given port.
@@ -914,23 +972,89 @@ GRO. By default, GRO is disabled for all ports.
 .. note::
 
    When enable GRO for a port, TCP/IPv4 packets received from the port
-   will be performed GRO. After GRO, the merged packets are multi-segments.
-   But csum forwarding engine doesn't support to calculate TCP checksum
-   for multi-segment packets in SW. So please select TCP HW checksum
-   calculation for the port which GROed packets are transmitted to.
+   will be performed GRO. After GRO, all merged packets have bad
+   checksums, since the GRO library doesn't re-calculate checksums for
+   the merged packets. Therefore, if users want the merged packets to
+   have correct checksums, please select HW IP checksum calculation and
+   HW TCP checksum calculation for the port which the merged packets are
+   transmitted to.
 
-gro set
-~~~~~~~
+show port - gro
+~~~~~~~~~~~~~~~
 
-Set max flow number and max packet number per-flow for GRO::
+Display GRO configuration for a given port::
 
-   testpmd> gro set (max_flow_num) (max_item_num_per_flow) (port_id)
+   testpmd> show port <port_id> gro
 
-The product of ``max_flow_num`` and ``max_item_num_per_flow`` is the max
-number of packets a GRO table can store.
+set gro flush
+~~~~~~~~~~~~~
 
-If current packet number is greater than or equal to the max value, GRO
-will stop processing incoming packets.
+Set the cycle to flush the GROed packets from reassembly tables::
+
+   testpmd> set gro flush <cycles>
+
+When enable GRO, the csum forwarding engine performs GRO on received
+packets, and the GROed packets are stored in reassembly tables. Users
+can use this command to determine when the GROed packets are flushed
+from the reassembly tables.
+
+The ``cycles`` is measured in GRO operation times. The csum forwarding
+engine flushes the GROed packets from the tables every ``cycles`` GRO
+operations.
+
+By default, the value of ``cycles`` is 1, which means flush GROed packets
+from the reassembly tables as soon as one GRO operation finishes. The value
+of ``cycles`` should be in the range of 1 to ``GRO_MAX_FLUSH_CYCLES``.
+
+Please note that the large value of ``cycles`` may cause the poor TCP/IP
+stack performance. Because the GROed packets are delayed to arrive the
+stack, thus causing more duplicated ACKs and TCP retransmissions.
+
+set port - gso
+~~~~~~~~~~~~~~
+
+Toggle per-port GSO support in ``csum`` forwarding engine::
+
+   testpmd> set port <port_id> gso on|off
+
+If enabled, the csum forwarding engine will perform GSO on supported IPv4
+packets, transmitted on the given port.
+
+If disabled, packets transmitted on the given port will not undergo GSO.
+By default, GSO is disabled for all ports.
+
+.. note::
+
+   When GSO is enabled on a port, supported IPv4 packets transmitted on that
+   port undergo GSO. Afterwards, the segmented packets are represented by
+   multi-segment mbufs; however, the csum forwarding engine doesn't calculation
+   of checksums for GSO'd segments in SW. As a result, if users want correct
+   checksums in GSO segments, they should enable HW checksum calculation for
+   GSO-enabled ports.
+
+   For example, HW checksum calculation for VxLAN GSO'd packets may be enabled
+   by setting the following options in the csum forwarding engine:
+
+   testpmd> csum set outer_ip hw <port_id>
+
+   testpmd> csum set ip hw <port_id>
+
+   testpmd> csum set tcp hw <port_id>
+
+set gso segsz
+~~~~~~~~~~~~~
+
+Set the maximum GSO segment size (measured in bytes), which includes the
+packet header and the packet payload for GSO-enabled ports (global)::
+
+   testpmd> set gso segsz <length>
+
+show port - gso
+~~~~~~~~~~~~~~~
+
+Display the status of Generic Segmentation Offload for a given port::
+
+   testpmd> show port <port_id> gso
 
 mac_addr add
 ~~~~~~~~~~~~
@@ -1095,6 +1219,17 @@ Set statistics mapping (qmapping 0..15) for RX/TX queue on port::
 For example, to set rx queue 2 on port 0 to mapping 5::
 
    testpmd>set stat_qmap rx 0 2 5
+
+set xstats-hide-zero
+~~~~~~~~~~~~~~~~~~~~
+
+Set the option to hide zero values for xstats display::
+
+	testpmd> set xstats-hide-zero on|off
+
+.. note::
+
+	By default, the zero values are displayed for xstats.
 
 set port - rx/tx (for VF)
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1697,6 +1832,23 @@ Enable/disable the E-tag support::
 
    testpmd> port config (port_id|all) l2-tunnel E-tag (enable|disable)
 
+port config pctype mapping
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Reset pctype mapping table::
+
+   testpmd> port config (port_id) pctype mapping reset
+
+Update hardware defined pctype to software defined flow type mapping table::
+
+   testpmd> port config (port_id) pctype mapping update (pctype_id_0[,pctype_id_1]*) (flow_type_id)
+
+where:
+
+* ``pctype_id_x``: hardware pctype id as index of bit in bitmask value of the pctype mapping table.
+
+* ``flow_type_id``: software flow type id as the index of the pctype mapping table.
+
 
 Link Bonding Functions
 ----------------------
@@ -1916,6 +2068,261 @@ For example, to set the high bit in the register from the example above::
    testpmd> write regbit 0 0xEE00 31 1
    port 0 PCI register at offset 0xEE00: 0x8000000A (2147483658)
 
+
+Traffic Management
+------------------
+
+The following section shows functions for configuring traffic management on
+on the ethernet device through the use of generic TM API.
+
+show port traffic management capability
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Show traffic management capability of the port::
+
+   testpmd> show port tm cap (port_id)
+
+show port traffic management capability (hierarchy level)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Show traffic management hierarchy level capability of the port::
+
+   testpmd> show port tm cap (port_id) (level_id)
+
+show port traffic management capability (hierarchy node level)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Show the traffic management hierarchy node capability of the port::
+
+   testpmd> show port tm cap (port_id) (node_id)
+
+show port traffic management hierarchy node type
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Show the port traffic management hierarchy node type::
+
+   testpmd> show port tm node type (port_id) (node_id)
+
+show port traffic management hierarchy node stats
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Show the port traffic management hierarchy node statistics::
+
+   testpmd> show port tm node stats (port_id) (node_id) (clear)
+
+where:
+
+* ``clear``: When this parameter has a non-zero value, the statistics counters
+  are cleared (i.e. set to zero) immediately after they have been read,
+  otherwise the statistics counters are left untouched.
+
+Add port traffic management private shaper profile
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Add the port traffic management private shaper profile::
+
+   testpmd> add port tm node shaper profile (port_id) (shaper_profile_id) \
+   (tb_rate) (tb_size) (packet_length_adjust)
+
+where:
+
+* ``shaper_profile id``: Shaper profile ID for the new profile.
+* ``tb_rate``: Token bucket rate (bytes per second).
+* ``tb_size``: Token bucket size (bytes).
+* ``packet_length_adjust``: The value (bytes) to be added to the length of
+  each packet for the purpose of shaping. This parameter value can be used to
+  correct the packet length with the framing overhead bytes that are consumed
+  on the wire.
+
+Delete port traffic management private shaper profile
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Delete the port traffic management private shaper::
+
+   testpmd> del port tm node shaper profile (port_id) (shaper_profile_id)
+
+where:
+
+* ``shaper_profile id``: Shaper profile ID that needs to be deleted.
+
+Add port traffic management shared shaper
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Create the port traffic management shared shaper::
+
+   testpmd> add port tm node shared shaper (port_id) (shared_shaper_id) \
+   (shaper_profile_id)
+
+where:
+
+* ``shared_shaper_id``: Shared shaper ID to be created.
+* ``shaper_profile id``: Shaper profile ID for shared shaper.
+
+Set port traffic management shared shaper
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Update the port traffic management shared shaper::
+
+   testpmd> set port tm node shared shaper (port_id) (shared_shaper_id) \
+   (shaper_profile_id)
+
+where:
+
+* ``shared_shaper_id``: Shared shaper ID to be update.
+* ``shaper_profile id``: Shaper profile ID for shared shaper.
+
+Delete port traffic management shared shaper
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Delete the port traffic management shared shaper::
+
+   testpmd> del port tm node shared shaper (port_id) (shared_shaper_id)
+
+where:
+
+* ``shared_shaper_id``: Shared shaper ID to be deleted.
+
+Set port traffic management hiearchy node private shaper
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+set the port traffic management hierarchy node private shaper::
+
+   testpmd> set port tm node shaper profile (port_id) (node_id) \
+   (shaper_profile_id)
+
+where:
+
+* ``shaper_profile id``: Private shaper profile ID to be enabled on the
+  hierarchy node.
+
+Add port traffic management WRED profile
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Create a new WRED profile::
+
+   testpmd> add port tm node wred profile (port_id) (wred_profile_id) \
+   (color_g) (min_th_g) (max_th_g) (maxp_inv_g) (wq_log2_g) \
+   (color_y) (min_th_y) (max_th_y) (maxp_inv_y) (wq_log2_y) \
+   (color_r) (min_th_r) (max_th_r) (maxp_inv_r) (wq_log2_r)
+
+where:
+
+* ``wred_profile id``: Identifier for the newly create WRED profile
+* ``color_g``: Packet color (green)
+* ``min_th_g``: Minimum queue threshold for packet with green color
+* ``max_th_g``: Minimum queue threshold for packet with green color
+* ``maxp_inv_g``: Inverse of packet marking probability maximum value (maxp)
+* ``wq_log2_g``: Negated log2 of queue weight (wq)
+* ``color_y``: Packet color (yellow)
+* ``min_th_y``: Minimum queue threshold for packet with yellow color
+* ``max_th_y``: Minimum queue threshold for packet with yellow color
+* ``maxp_inv_y``: Inverse of packet marking probability maximum value (maxp)
+* ``wq_log2_y``: Negated log2 of queue weight (wq)
+* ``color_r``: Packet color (red)
+* ``min_th_r``: Minimum queue threshold for packet with yellow color
+* ``max_th_r``: Minimum queue threshold for packet with yellow color
+* ``maxp_inv_r``: Inverse of packet marking probability maximum value (maxp)
+* ``wq_log2_r``: Negated log2 of queue weight (wq)
+
+Delete port traffic management WRED profile
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Delete the WRED profile::
+
+   testpmd> del port tm node wred profile (port_id) (wred_profile_id)
+
+Add port traffic management hierarchy nonleaf node
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Add nonleaf node to port traffic management hiearchy::
+
+   testpmd> add port tm nonleaf node (port_id) (node_id) (parent_node_id) \
+   (priority) (weight) (level_id) (shaper_profile_id) \
+   (n_sp_priorities) (stats_mask) (n_shared_shapers) \
+   [(shared_shaper_0) (shared_shaper_1) ...] \
+
+where:
+
+* ``parent_node_id``: Node ID of the parent.
+* ``priority``: Node priority (highest node priority is zero). This is used by
+  the SP algorithm running on the parent node for scheduling this node.
+* ``weight``: Node weight (lowest weight is one). The node weight is relative
+  to the weight sum of all siblings that have the same priority. It is used by
+  the WFQ algorithm running on the parent node for scheduling this node.
+* ``level_id``: Hiearchy level of the node.
+* ``shaper_profile_id``: Shaper profile ID of the private shaper to be used by
+  the node.
+* ``n_sp_priorities``: Number of strict priorities.
+* ``stats_mask``: Mask of statistics counter types to be enabled for this node.
+* ``n_shared_shapers``: Number of shared shapers.
+* ``shared_shaper_id``: Shared shaper id.
+
+Add port traffic management hierarchy leaf node
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Add leaf node to port traffic management hiearchy::
+
+   testpmd> add port tm leaf node (port_id) (node_id) (parent_node_id) \
+   (priority) (weight) (level_id) (shaper_profile_id) \
+   (cman_mode) (wred_profile_id) (stats_mask) (n_shared_shapers) \
+   [(shared_shaper_id) (shared_shaper_id) ...] \
+
+where:
+
+* ``parent_node_id``: Node ID of the parent.
+* ``priority``: Node priority (highest node priority is zero). This is used by
+  the SP algorithm running on the parent node for scheduling this node.
+* ``weight``: Node weight (lowest weight is one). The node weight is relative
+  to the weight sum of all siblings that have the same priority. It is used by
+  the WFQ algorithm running on the parent node for scheduling this node.
+* ``level_id``: Hiearchy level of the node.
+* ``shaper_profile_id``: Shaper profile ID of the private shaper to be used by
+  the node.
+* ``cman_mode``: Congestion management mode to be enabled for this node.
+* ``wred_profile_id``: WRED profile id to be enabled for this node.
+* ``stats_mask``: Mask of statistics counter types to be enabled for this node.
+* ``n_shared_shapers``: Number of shared shapers.
+* ``shared_shaper_id``: Shared shaper id.
+
+Delete port traffic management hierarchy node
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Delete node from port traffic management hiearchy::
+
+   testpmd> del port tm node (port_id) (node_id)
+
+Update port traffic management hierarchy parent node
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Update port traffic management hierarchy parent node::
+
+   testpmd> set port tm node parent (port_id) (node_id) (parent_node_id) \
+   (priority) (weight)
+
+This function can only be called after the hierarchy commit invocation. Its
+success depends on the port support for this operation, as advertised through
+the port capability set. This function is valid for all nodes of the traffic
+management hierarchy except root node.
+
+Commit port traffic management hierarchy
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Commit the traffic management hierarchy on the port::
+
+   testpmd> port tm hierarchy commit (port_id) (clean_on_fail)
+
+where:
+
+* ``clean_on_fail``: When set to non-zero, hierarchy is cleared on function
+  call failure. On the other hand, hierarchy is preserved when this parameter
+  is equal to zero.
+
+Set port traffic management default hierarchy (tm forwarding mode)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+set the traffic management default hierarchy on the port::
+
+   testpmd> set port tm hierarchy default (port_id)
 
 Filter Functions
 ----------------
@@ -2695,6 +3102,10 @@ This section lists supported pattern items and their attributes, if any.
 - ``fuzzy``: fuzzy pattern match, expect faster than default.
 
   - ``thresh {unsigned}``: accuracy threshold.
+
+- ``gtp``, ``gtpc``, ``gtpu``: match GTPv1 header.
+
+  - ``teid {unsigned}``: tunnel endpoint identifier.
 
 Actions list
 ^^^^^^^^^^^^

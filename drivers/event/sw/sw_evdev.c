@@ -33,8 +33,7 @@
 #include <inttypes.h>
 #include <string.h>
 
-#include <rte_vdev.h>
-#include <rte_memzone.h>
+#include <rte_bus_vdev.h>
 #include <rte_kvargs.h>
 #include <rte_ring.h>
 #include <rte_errno.h>
@@ -345,28 +344,14 @@ sw_queue_setup(struct rte_eventdev *dev, uint8_t queue_id,
 {
 	int type;
 
-	/* SINGLE_LINK can be OR-ed with other types, so handle first */
+	type = conf->schedule_type;
+
 	if (RTE_EVENT_QUEUE_CFG_SINGLE_LINK & conf->event_queue_cfg) {
 		type = SW_SCHED_TYPE_DIRECT;
-	} else {
-		switch (conf->event_queue_cfg) {
-		case RTE_EVENT_QUEUE_CFG_ATOMIC_ONLY:
-			type = RTE_SCHED_TYPE_ATOMIC;
-			break;
-		case RTE_EVENT_QUEUE_CFG_ORDERED_ONLY:
-			type = RTE_SCHED_TYPE_ORDERED;
-			break;
-		case RTE_EVENT_QUEUE_CFG_PARALLEL_ONLY:
-			type = RTE_SCHED_TYPE_PARALLEL;
-			break;
-		case RTE_EVENT_QUEUE_CFG_ALL_TYPES:
-			SW_LOG_ERR("QUEUE_CFG_ALL_TYPES not supported\n");
-			return -ENOTSUP;
-		default:
-			SW_LOG_ERR("Unknown queue type %d requested\n",
-				   conf->event_queue_cfg);
-			return -EINVAL;
-		}
+	} else if (RTE_EVENT_QUEUE_CFG_ALL_TYPES
+			& conf->event_queue_cfg) {
+		SW_LOG_ERR("QUEUE_CFG_ALL_TYPES not supported\n");
+		return -ENOTSUP;
 	}
 
 	struct sw_evdev *sw = sw_pmd_priv(dev);
@@ -400,7 +385,7 @@ sw_queue_def_conf(struct rte_eventdev *dev, uint8_t queue_id,
 	static const struct rte_event_queue_conf default_conf = {
 		.nb_atomic_flows = 4096,
 		.nb_atomic_order_sequences = 1,
-		.event_queue_cfg = RTE_EVENT_QUEUE_CFG_ATOMIC_ONLY,
+		.schedule_type = RTE_SCHED_TYPE_ATOMIC,
 		.priority = RTE_EVENT_DEV_PRIORITY_NORMAL,
 	};
 
@@ -434,6 +419,19 @@ sw_dev_configure(const struct rte_eventdev *dev)
 	if (conf->event_dev_cfg & RTE_EVENT_DEV_CFG_PER_DEQUEUE_TIMEOUT)
 		return -ENOTSUP;
 
+	return 0;
+}
+
+struct rte_eth_dev;
+
+static int
+sw_eth_rx_adapter_caps_get(const struct rte_eventdev *dev,
+			const struct rte_eth_dev *eth_dev,
+			uint32_t *caps)
+{
+	RTE_SET_USED(dev);
+	RTE_SET_USED(eth_dev);
+	*caps = RTE_EVENT_ETH_RX_ADAPTER_SW_CAP;
 	return 0;
 }
 
@@ -616,11 +614,14 @@ sw_start(struct rte_eventdev *dev)
 	unsigned int i, j;
 	struct sw_evdev *sw = sw_pmd_priv(dev);
 
+	rte_service_component_runstate_set(sw->service_id, 1);
+
 	/* check a service core is mapped to this service */
-	struct rte_service_spec *s = rte_service_get_by_name(sw->service_name);
-	if (!rte_service_is_running(s))
+	if (!rte_service_runstate_get(sw->service_id)) {
 		SW_LOG_ERR("Warning: No Service core enabled on service %s\n",
-				s->name);
+				sw->service_name);
+		return -ENOENT;
+	}
 
 	/* check all ports are set up */
 	for (i = 0; i < sw->port_count; i++)
@@ -752,6 +753,8 @@ sw_probe(struct rte_vdev_device *vdev)
 			.port_link = sw_port_link,
 			.port_unlink = sw_port_unlink,
 
+			.eth_rx_adapter_caps_get = sw_eth_rx_adapter_caps_get,
+
 			.xstats_get = sw_xstats_get,
 			.xstats_get_names = sw_xstats_get_names,
 			.xstats_get_by_name = sw_xstats_get_by_name,
@@ -833,7 +836,6 @@ sw_probe(struct rte_vdev_device *vdev)
 	dev->enqueue_forward_burst = sw_event_enqueue_burst;
 	dev->dequeue = sw_event_dequeue;
 	dev->dequeue_burst = sw_event_dequeue_burst;
-	dev->schedule = sw_event_schedule;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
@@ -855,11 +857,14 @@ sw_probe(struct rte_vdev_device *vdev)
 	service.callback = sw_sched_service_func;
 	service.callback_userdata = (void *)dev;
 
-	int32_t ret = rte_service_register(&service);
+	int32_t ret = rte_service_component_register(&service, &sw->service_id);
 	if (ret) {
 		SW_LOG_ERR("service register() failed");
 		return -ENOEXEC;
 	}
+
+	dev->data->service_inited = 1;
+	dev->data->service_id = sw->service_id;
 
 	return 0;
 }

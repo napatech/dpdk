@@ -56,7 +56,6 @@
 #include <rte_common.h>
 #include <rte_debug.h>
 #include <rte_memory.h>
-#include <rte_memzone.h>
 #include <rte_launch.h>
 #include <rte_eal.h>
 #include <rte_eal_memconfig.h>
@@ -71,12 +70,12 @@
 #include <rte_cpuflags.h>
 #include <rte_interrupts.h>
 #include <rte_bus.h>
-#include <rte_pci.h>
 #include <rte_dev.h>
 #include <rte_devargs.h>
 #include <rte_version.h>
 #include <rte_atomic.h>
 #include <malloc_heap.h>
+#include <rte_vfio.h>
 
 #include "eal_private.h"
 #include "eal_thread.h"
@@ -121,11 +120,24 @@ struct internal_config internal_config;
 /* used by rte_rdtsc() */
 int rte_cycles_vmware_tsc_map;
 
+/* Return mbuf pool ops name */
+const char *
+rte_eal_mbuf_default_mempool_ops(void)
+{
+	return internal_config.mbuf_pool_ops_name;
+}
+
 /* Return a pointer to the configuration structure */
 struct rte_config *
 rte_eal_get_configuration(void)
 {
 	return &rte_config;
+}
+
+enum rte_iova_mode
+rte_eal_iova_mode(void)
+{
+	return rte_eal_get_configuration()->iova_mode;
 }
 
 /* parse a sysfs (or other) file containing one integer value */
@@ -354,7 +366,6 @@ eal_usage(const char *prgname)
 	       "  --"OPT_BASE_VIRTADDR"     Base virtual address\n"
 	       "  --"OPT_CREATE_UIO_DEV"    Create /dev/uioX (usually done by hotplug)\n"
 	       "  --"OPT_VFIO_INTR"         Interrupt mode for VFIO (legacy|msi|msix)\n"
-	       "  --"OPT_XEN_DOM0"          Support running on Xen dom0 without hugetlbfs\n"
 	       "\n");
 	/* Allow the application to print its usage message too if hook is set */
 	if ( rte_application_usage_hook ) {
@@ -555,25 +566,12 @@ eal_parse_args(int argc, char **argv)
 			eal_usage(prgname);
 			exit(EXIT_SUCCESS);
 
-		/* long options */
-		case OPT_XEN_DOM0_NUM:
-#ifdef RTE_LIBRTE_XEN_DOM0
-			internal_config.xen_dom0_support = 1;
-#else
-			RTE_LOG(ERR, EAL, "Can't support DPDK app "
-				"running on Dom0, please configure"
-				" RTE_LIBRTE_XEN_DOM0=y\n");
-			ret = -1;
-			goto out;
-#endif
-			break;
-
 		case OPT_HUGE_DIR_NUM:
-			internal_config.hugepage_dir = optarg;
+			internal_config.hugepage_dir = strdup(optarg);
 			break;
 
 		case OPT_FILE_PREFIX_NUM:
-			internal_config.hugefile_prefix = optarg;
+			internal_config.hugefile_prefix = strdup(optarg);
 			break;
 
 		case OPT_SOCKET_MEM_NUM:
@@ -610,6 +608,10 @@ eal_parse_args(int argc, char **argv)
 			internal_config.create_uio_dev = 1;
 			break;
 
+		case OPT_MBUF_POOL_OPS_NAME_NUM:
+			internal_config.mbuf_pool_ops_name = optarg;
+			break;
+
 		default:
 			if (opt < OPT_LONG_MIN_NUM && isprint(opt)) {
 				RTE_LOG(ERR, EAL, "Option %c is not supported "
@@ -636,15 +638,6 @@ eal_parse_args(int argc, char **argv)
 
 	/* sanity checks */
 	if (eal_check_common_options(&internal_config) != 0) {
-		eal_usage(prgname);
-		ret = -1;
-		goto out;
-	}
-
-	/* --xen-dom0 doesn't make sense with --socket-mem */
-	if (internal_config.xen_dom0_support && internal_config.force_sockets == 1) {
-		RTE_LOG(ERR, EAL, "Options --"OPT_SOCKET_MEM" cannot be specified "
-			"together with --"OPT_XEN_DOM0"\n");
 		eal_usage(prgname);
 		ret = -1;
 		goto out;
@@ -716,10 +709,9 @@ static int rte_eal_vfio_setup(void)
 {
 	int vfio_enabled = 0;
 
-	if (!internal_config.no_pci) {
-		pci_vfio_enable();
-		vfio_enabled |= pci_vfio_is_enabled();
-	}
+	if (rte_vfio_enable("vfio"))
+		return -1;
+	vfio_enabled = rte_vfio_is_enabled("vfio");
 
 	if (vfio_enabled) {
 
@@ -792,9 +784,40 @@ rte_eal_init(int argc, char **argv)
 		return -1;
 	}
 
+	if (eal_plugins_init() < 0) {
+		rte_eal_init_alert("Cannot init plugins\n");
+		rte_errno = EINVAL;
+		rte_atomic32_clear(&run_once);
+		return -1;
+	}
+
+	if (eal_option_device_parse()) {
+		rte_errno = ENODEV;
+		rte_atomic32_clear(&run_once);
+		return -1;
+	}
+
+	if (rte_bus_scan()) {
+		rte_eal_init_alert("Cannot scan the buses for devices\n");
+		rte_errno = ENODEV;
+		rte_atomic32_clear(&run_once);
+		return -1;
+	}
+
+	/* autodetect the iova mapping mode (default is iova_pa) */
+	rte_eal_get_configuration()->iova_mode = rte_bus_get_iommu_class();
+
+	/* Workaround for KNI which requires physical address to work */
+	if (rte_eal_get_configuration()->iova_mode == RTE_IOVA_VA &&
+			rte_eal_check_module("rte_kni") == 1) {
+		rte_eal_get_configuration()->iova_mode = RTE_IOVA_PA;
+		RTE_LOG(WARNING, EAL,
+			"Some devices want IOVA as VA but PA will be used because.. "
+			"KNI module inserted\n");
+	}
+
 	if (internal_config.no_hugetlbfs == 0 &&
 			internal_config.process_type != RTE_PROC_SECONDARY &&
-			internal_config.xen_dom0_support == 0 &&
 			eal_hugepage_info_init() < 0) {
 		rte_eal_init_alert("Cannot get hugepage information.");
 		rte_errno = EACCES;
@@ -873,9 +896,6 @@ rte_eal_init(int argc, char **argv)
 
 	eal_check_mem_on_local_socket();
 
-	if (eal_plugins_init() < 0)
-		rte_eal_init_alert("Cannot init plugins\n");
-
 	eal_thread_init_master(rte_config.master_lcore);
 
 	ret = eal_thread_dump_affinity(cpuset, RTE_CPU_AFFINITY_STR_LEN);
@@ -886,17 +906,6 @@ rte_eal_init(int argc, char **argv)
 
 	if (rte_eal_intr_init() < 0) {
 		rte_eal_init_alert("Cannot init interrupt-handling thread\n");
-		return -1;
-	}
-
-	if (eal_option_device_parse()) {
-		rte_errno = ENODEV;
-		return -1;
-	}
-
-	if (rte_bus_scan()) {
-		rte_eal_init_alert("Cannot scan the buses for devices\n");
-		rte_errno = ENODEV;
 		return -1;
 	}
 
@@ -981,6 +990,22 @@ rte_eal_process_type(void)
 int rte_eal_has_hugepages(void)
 {
 	return ! internal_config.no_hugetlbfs;
+}
+
+int rte_eal_has_pci(void)
+{
+	return !internal_config.no_pci;
+}
+
+int rte_eal_create_uio_dev(void)
+{
+	return internal_config.create_uio_dev;
+}
+
+enum rte_intr_mode
+rte_eal_vfio_intr_mode(void)
+{
+	return internal_config.vfio_intr_mode;
 }
 
 int

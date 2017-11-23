@@ -44,7 +44,6 @@
 #include <rte_log.h>
 #include <rte_debug.h>
 #include <rte_memory.h>
-#include <rte_memzone.h>
 #include <rte_launch.h>
 #include <rte_cycles.h>
 #include <rte_eal.h>
@@ -129,7 +128,7 @@ test_mempool_basic(struct rte_mempool *mp, int use_external_cache)
 	rte_mempool_dump(stdout, mp);
 
 	printf("get an object\n");
-	if (rte_mempool_generic_get(mp, &obj, 1, cache, 0) < 0)
+	if (rte_mempool_generic_get(mp, &obj, 1, cache) < 0)
 		GOTO_ERR(ret, out);
 	rte_mempool_dump(stdout, mp);
 
@@ -145,28 +144,28 @@ test_mempool_basic(struct rte_mempool *mp, int use_external_cache)
 			MEMPOOL_HEADER_SIZE(mp, mp->cache_size))
 		GOTO_ERR(ret, out);
 
-#ifndef RTE_EXEC_ENV_BSDAPP /* rte_mem_virt2phy() not supported on bsd */
+#ifndef RTE_EXEC_ENV_BSDAPP /* rte_mem_virt2iova() not supported on bsd */
 	printf("get physical address of an object\n");
-	if (rte_mempool_virt2phy(mp, obj) != rte_mem_virt2phy(obj))
+	if (rte_mempool_virt2iova(obj) != rte_mem_virt2iova(obj))
 		GOTO_ERR(ret, out);
 #endif
 
 	printf("put the object back\n");
-	rte_mempool_generic_put(mp, &obj, 1, cache, 0);
+	rte_mempool_generic_put(mp, &obj, 1, cache);
 	rte_mempool_dump(stdout, mp);
 
 	printf("get 2 objects\n");
-	if (rte_mempool_generic_get(mp, &obj, 1, cache, 0) < 0)
+	if (rte_mempool_generic_get(mp, &obj, 1, cache) < 0)
 		GOTO_ERR(ret, out);
-	if (rte_mempool_generic_get(mp, &obj2, 1, cache, 0) < 0) {
-		rte_mempool_generic_put(mp, &obj, 1, cache, 0);
+	if (rte_mempool_generic_get(mp, &obj2, 1, cache) < 0) {
+		rte_mempool_generic_put(mp, &obj, 1, cache);
 		GOTO_ERR(ret, out);
 	}
 	rte_mempool_dump(stdout, mp);
 
 	printf("put the objects back\n");
-	rte_mempool_generic_put(mp, &obj, 1, cache, 0);
-	rte_mempool_generic_put(mp, &obj2, 1, cache, 0);
+	rte_mempool_generic_put(mp, &obj, 1, cache);
+	rte_mempool_generic_put(mp, &obj2, 1, cache);
 	rte_mempool_dump(stdout, mp);
 
 	/*
@@ -178,7 +177,7 @@ test_mempool_basic(struct rte_mempool *mp, int use_external_cache)
 		GOTO_ERR(ret, out);
 
 	for (i = 0; i < MEMPOOL_SIZE; i++) {
-		if (rte_mempool_generic_get(mp, &objtable[i], 1, cache, 0) < 0)
+		if (rte_mempool_generic_get(mp, &objtable[i], 1, cache) < 0)
 			break;
 	}
 
@@ -200,7 +199,7 @@ test_mempool_basic(struct rte_mempool *mp, int use_external_cache)
 				ret = -1;
 		}
 
-		rte_mempool_generic_put(mp, &objtable[i], 1, cache, 0);
+		rte_mempool_generic_put(mp, &objtable[i], 1, cache);
 	}
 
 	free(objtable);
@@ -474,7 +473,7 @@ test_mempool_same_name_twice_creation(void)
 }
 
 /*
- * BAsic test for mempool_xmem functions.
+ * Basic test for mempool_xmem functions.
  */
 static int
 test_mempool_xmem_misc(void)
@@ -485,10 +484,11 @@ test_mempool_xmem_misc(void)
 
 	elt_num = MAX_KEEP;
 	total_size = rte_mempool_calc_obj_size(MEMPOOL_ELT_SIZE, 0, NULL);
-	sz = rte_mempool_xmem_size(elt_num, total_size, MEMPOOL_PG_SHIFT_MAX);
+	sz = rte_mempool_xmem_size(elt_num, total_size, MEMPOOL_PG_SHIFT_MAX,
+					0);
 
 	usz = rte_mempool_xmem_usage(NULL, elt_num, total_size, 0, 1,
-		MEMPOOL_PG_SHIFT_MAX);
+		MEMPOOL_PG_SHIFT_MAX, 0);
 
 	if (sz != (size_t)usz)  {
 		printf("failure @ %s: rte_mempool_xmem_usage(%u, %u) "

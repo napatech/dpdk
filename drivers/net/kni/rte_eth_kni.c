@@ -40,7 +40,7 @@
 #include <rte_kni.h>
 #include <rte_kvargs.h>
 #include <rte_malloc.h>
-#include <rte_vdev.h>
+#include <rte_bus_vdev.h>
 
 /* Only single queue supported */
 #define KNI_MAX_QUEUE_PER_PORT 1
@@ -283,7 +283,7 @@ eth_kni_link_update(struct rte_eth_dev *dev __rte_unused,
 	return 0;
 }
 
-static void
+static int
 eth_kni_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 {
 	unsigned long rx_packets_total = 0, rx_bytes_total = 0;
@@ -320,6 +320,8 @@ eth_kni_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	stats->opackets = tx_packets_total;
 	stats->obytes = tx_bytes_total;
 	stats->oerrors = tx_packets_err_total;
+
+	return 0;
 }
 
 static void
@@ -355,8 +357,6 @@ static const struct eth_dev_ops eth_kni_ops = {
 	.stats_get = eth_kni_stats_get,
 	.stats_reset = eth_kni_stats_reset,
 };
-
-static struct rte_vdev_driver eth_kni_drv;
 
 static struct rte_eth_dev *
 eth_kni_create(struct rte_vdev_device *vdev,
@@ -394,8 +394,6 @@ eth_kni_create(struct rte_vdev_device *vdev,
 
 	eth_dev->data = data;
 	eth_dev->dev_ops = &eth_kni_ops;
-
-	data->dev_flags = RTE_ETH_DEV_DETACHABLE;
 
 	internals->no_request_thread = args->no_request_thread;
 

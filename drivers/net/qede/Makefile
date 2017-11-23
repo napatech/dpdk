@@ -13,6 +13,9 @@ LIB = librte_pmd_qede.a
 
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
+LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
+LDLIBS += -lrte_ethdev -lrte_net -lrte_kvargs
+LDLIBS += -lrte_bus_pci
 
 EXPORT_MAP := rte_pmd_qede_version.map
 
@@ -69,8 +72,9 @@ CFLAGS_BASE_DRIVER += -Wno-sometimes-uninitialized
 ifeq ($(shell clang -Wno-pointer-bool-conversion -Werror -E - < /dev/null > /dev/null 2>&1; echo $$?),0)
 CFLAGS_BASE_DRIVER += -Wno-pointer-bool-conversion
 endif
-else
-CFLAGS_BASE_DRIVER += -wd188 #188: enumerated type mixed with another type
+else #ICC
+CFLAGS_BASE_DRIVER += -wd188   #188: enumerated type mixed with another type
+CFLAGS_qede_ethdev.o += -wd279 #279: controlling expression is constant
 endif
 
 #
@@ -78,7 +82,7 @@ endif
 # to disable warnings in them
 #
 #
-BASE_DRIVER_OBJS=$(patsubst %.c,%.o,$(notdir $(wildcard $(SRCDIR)/base/*.c)))
+BASE_DRIVER_OBJS=$(sort $(patsubst %.c,%.o,$(notdir $(wildcard $(SRCDIR)/base/*.c))))
 $(foreach obj, $(BASE_DRIVER_OBJS), $(eval CFLAGS_$(obj)+=$(CFLAGS_BASE_DRIVER)))
 
 VPATH += $(SRCDIR)/base

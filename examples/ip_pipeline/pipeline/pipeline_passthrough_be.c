@@ -102,7 +102,7 @@ pkt_work_dma(
 
 	/* Read (dma_dst), compute (hash), write (hash) */
 	if (hash_enabled) {
-		uint32_t hash = p->f_hash(dma_dst, dma_size, 0);
+		uint32_t hash = p->f_hash(dma_src, dma_mask, dma_size, 0);
 		*dma_hash = hash;
 
 		if (lb_hash) {
@@ -173,10 +173,10 @@ pkt4_work_dma(
 
 	/* Read (dma_dst), compute (hash), write (hash) */
 	if (hash_enabled) {
-		uint32_t hash0 = p->f_hash(dma_dst0, dma_size, 0);
-		uint32_t hash1 = p->f_hash(dma_dst1, dma_size, 0);
-		uint32_t hash2 = p->f_hash(dma_dst2, dma_size, 0);
-		uint32_t hash3 = p->f_hash(dma_dst3, dma_size, 0);
+		uint32_t hash0 = p->f_hash(dma_src0, dma_mask, dma_size, 0);
+		uint32_t hash1 = p->f_hash(dma_src1, dma_mask, dma_size, 0);
+		uint32_t hash2 = p->f_hash(dma_src2, dma_mask, dma_size, 0);
+		uint32_t hash3 = p->f_hash(dma_src3, dma_mask, dma_size, 0);
 
 		*dma_hash0 = hash0;
 		*dma_hash1 = hash1;

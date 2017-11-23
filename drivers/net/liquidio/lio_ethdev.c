@@ -311,7 +311,7 @@ lio_dev_xstats_reset(struct rte_eth_dev *eth_dev)
 }
 
 /* Retrieve the device statistics (# packets in/out, # bytes in/out, etc */
-static void
+static int
 lio_dev_stats_get(struct rte_eth_dev *eth_dev,
 		  struct rte_eth_stats *stats)
 {
@@ -359,6 +359,8 @@ lio_dev_stats_get(struct rte_eth_dev *eth_dev,
 	stats->ibytes = bytes;
 	stats->ipackets = pkts;
 	stats->ierrors = drop;
+
+	return 0;
 }
 
 static void
@@ -403,6 +405,10 @@ lio_dev_info_get(struct rte_eth_dev *eth_dev,
 	/* CN23xx 10G cards */
 	case PCI_SUBSYS_DEV_ID_CN2350_210:
 	case PCI_SUBSYS_DEV_ID_CN2360_210:
+	case PCI_SUBSYS_DEV_ID_CN2350_210SVPN3:
+	case PCI_SUBSYS_DEV_ID_CN2360_210SVPN3:
+	case PCI_SUBSYS_DEV_ID_CN2350_210SVPT:
+	case PCI_SUBSYS_DEV_ID_CN2360_210SVPT:
 		devinfo->speed_capa = ETH_LINK_SPEED_10G;
 		break;
 	/* CN23xx 25G cards */
@@ -411,8 +417,9 @@ lio_dev_info_get(struct rte_eth_dev *eth_dev,
 		devinfo->speed_capa = ETH_LINK_SPEED_25G;
 		break;
 	default:
+		devinfo->speed_capa = ETH_LINK_SPEED_10G;
 		lio_dev_err(lio_dev,
-			    "Unknown CN23XX subsystem device id. Not setting speed capability.\n");
+			    "Unknown CN23XX subsystem device id. Setting 10G as default link speed.\n");
 	}
 
 	devinfo->max_rx_queues = lio_dev->max_rx_queues;
@@ -446,28 +453,63 @@ lio_dev_info_get(struct rte_eth_dev *eth_dev,
 }
 
 static int
-lio_dev_validate_vf_mtu(struct rte_eth_dev *eth_dev, uint16_t new_mtu)
+lio_dev_mtu_set(struct rte_eth_dev *eth_dev, uint16_t mtu)
 {
 	struct lio_device *lio_dev = LIO_DEV(eth_dev);
+	uint16_t pf_mtu = lio_dev->linfo.link.s.mtu;
+	uint32_t frame_len = mtu + ETHER_HDR_LEN + ETHER_CRC_LEN;
+	struct lio_dev_ctrl_cmd ctrl_cmd;
+	struct lio_ctrl_pkt ctrl_pkt;
 
 	PMD_INIT_FUNC_TRACE();
 
 	if (!lio_dev->intf_open) {
-		lio_dev_err(lio_dev, "Port %d down, can't check MTU\n",
+		lio_dev_err(lio_dev, "Port %d down, can't set MTU\n",
 			    lio_dev->port_id);
 		return -EINVAL;
 	}
 
-	/* Limit the MTU to make sure the ethernet packets are between
-	 * ETHER_MIN_MTU bytes and PF's MTU
+	/* check if VF MTU is within allowed range.
+	 * New value should not exceed PF MTU.
 	 */
-	if ((new_mtu < ETHER_MIN_MTU) ||
-			(new_mtu > lio_dev->linfo.link.s.mtu)) {
-		lio_dev_err(lio_dev, "Invalid MTU: %d\n", new_mtu);
-		lio_dev_err(lio_dev, "Valid range %d and %d\n",
-			    ETHER_MIN_MTU, lio_dev->linfo.link.s.mtu);
+	if ((mtu < ETHER_MIN_MTU) || (mtu > pf_mtu)) {
+		lio_dev_err(lio_dev, "VF MTU should be >= %d and <= %d\n",
+			    ETHER_MIN_MTU, pf_mtu);
 		return -EINVAL;
 	}
+
+	/* flush added to prevent cmd failure
+	 * incase the queue is full
+	 */
+	lio_flush_iq(lio_dev, lio_dev->instr_queue[0]);
+
+	memset(&ctrl_pkt, 0, sizeof(struct lio_ctrl_pkt));
+	memset(&ctrl_cmd, 0, sizeof(struct lio_dev_ctrl_cmd));
+
+	ctrl_cmd.eth_dev = eth_dev;
+	ctrl_cmd.cond = 0;
+
+	ctrl_pkt.ncmd.s.cmd = LIO_CMD_CHANGE_MTU;
+	ctrl_pkt.ncmd.s.param1 = mtu;
+	ctrl_pkt.ctrl_cmd = &ctrl_cmd;
+
+	if (lio_send_ctrl_pkt(lio_dev, &ctrl_pkt)) {
+		lio_dev_err(lio_dev, "Failed to send command to change MTU\n");
+		return -1;
+	}
+
+	if (lio_wait_for_ctrl_cmd(lio_dev, &ctrl_cmd)) {
+		lio_dev_err(lio_dev, "Command to change MTU timed out\n");
+		return -1;
+	}
+
+	if (frame_len > ETHER_MAX_LEN)
+		eth_dev->data->dev_conf.rxmode.jumbo_frame = 1;
+	else
+		eth_dev->data->dev_conf.rxmode.jumbo_frame = 0;
+
+	eth_dev->data->dev_conf.rxmode.max_rx_pkt_len = frame_len;
+	eth_dev->data->mtu = mtu;
 
 	return 0;
 }
@@ -939,6 +981,7 @@ lio_dev_link_update(struct rte_eth_dev *eth_dev,
 	link.link_status = ETH_LINK_DOWN;
 	link.link_speed = ETH_SPEED_NUM_NONE;
 	link.link_duplex = ETH_LINK_HALF_DUPLEX;
+	link.link_autoneg = ETH_LINK_AUTONEG;
 	memset(&old, 0, sizeof(old));
 
 	/* Return what we found */
@@ -1008,6 +1051,48 @@ lio_change_dev_flag(struct rte_eth_dev *eth_dev)
 
 	if (lio_wait_for_ctrl_cmd(lio_dev, &ctrl_cmd))
 		lio_dev_err(lio_dev, "Change dev flag command timed out\n");
+}
+
+static void
+lio_dev_promiscuous_enable(struct rte_eth_dev *eth_dev)
+{
+	struct lio_device *lio_dev = LIO_DEV(eth_dev);
+
+	if (strcmp(lio_dev->firmware_version, LIO_VF_TRUST_MIN_VERSION) < 0) {
+		lio_dev_err(lio_dev, "Require firmware version >= %s\n",
+			    LIO_VF_TRUST_MIN_VERSION);
+		return;
+	}
+
+	if (!lio_dev->intf_open) {
+		lio_dev_err(lio_dev, "Port %d down, can't enable promiscuous\n",
+			    lio_dev->port_id);
+		return;
+	}
+
+	lio_dev->ifflags |= LIO_IFFLAG_PROMISC;
+	lio_change_dev_flag(eth_dev);
+}
+
+static void
+lio_dev_promiscuous_disable(struct rte_eth_dev *eth_dev)
+{
+	struct lio_device *lio_dev = LIO_DEV(eth_dev);
+
+	if (strcmp(lio_dev->firmware_version, LIO_VF_TRUST_MIN_VERSION) < 0) {
+		lio_dev_err(lio_dev, "Require firmware version >= %s\n",
+			    LIO_VF_TRUST_MIN_VERSION);
+		return;
+	}
+
+	if (!lio_dev->intf_open) {
+		lio_dev_err(lio_dev, "Port %d down, can't disable promiscuous\n",
+			    lio_dev->port_id);
+		return;
+	}
+
+	lio_dev->ifflags &= ~LIO_IFFLAG_PROMISC;
+	lio_change_dev_flag(eth_dev);
 }
 
 static void
@@ -1333,6 +1418,11 @@ lio_dev_get_link_status(struct rte_eth_dev *eth_dev)
 	lio_swap_8B_data((uint64_t *)ls, sizeof(union octeon_link_status) >> 3);
 
 	if (lio_dev->linfo.link.link_status64 != ls->link_status64) {
+		if (ls->s.mtu < eth_dev->data->mtu) {
+			lio_dev_info(lio_dev, "Lowered VF MTU to %d as PF MTU dropped\n",
+				     ls->s.mtu);
+			eth_dev->data->mtu = ls->s.mtu;
+		}
 		lio_dev->linfo.link.link_status64 = ls->link_status64;
 		lio_dev_link_update(eth_dev, 0);
 	}
@@ -1404,35 +1494,22 @@ lio_dev_start(struct rte_eth_dev *eth_dev)
 
 	if (lio_dev->linfo.link.link_status64 == 0) {
 		ret = -1;
-		goto dev_mtu_check_error;
+		goto dev_mtu_set_error;
 	}
 
-	if (eth_dev->data->dev_conf.rxmode.jumbo_frame == 1) {
-		if (frame_len <= ETHER_MAX_LEN ||
-		    frame_len > LIO_MAX_RX_PKTLEN) {
-			lio_dev_err(lio_dev, "max packet length should be >= %d and < %d when jumbo frame is enabled\n",
-				    ETHER_MAX_LEN, LIO_MAX_RX_PKTLEN);
-			ret = -EINVAL;
-			goto dev_mtu_check_error;
-		}
-		mtu = (uint16_t)(frame_len - ETHER_HDR_LEN - ETHER_CRC_LEN);
-	} else {
-		/* default MTU */
-		mtu = ETHER_MTU;
-		eth_dev->data->dev_conf.rxmode.max_rx_pkt_len = ETHER_MAX_LEN;
-	}
+	mtu = (uint16_t)(frame_len - ETHER_HDR_LEN - ETHER_CRC_LEN);
+	if (mtu < ETHER_MIN_MTU)
+		mtu = ETHER_MIN_MTU;
 
-	if (lio_dev->linfo.link.s.mtu != mtu) {
-		ret = lio_dev_validate_vf_mtu(eth_dev, mtu);
+	if (eth_dev->data->mtu != mtu) {
+		ret = lio_dev_mtu_set(eth_dev, mtu);
 		if (ret)
-			goto dev_mtu_check_error;
+			goto dev_mtu_set_error;
 	}
-
-	eth_dev->data->mtu = mtu;
 
 	return 0;
 
-dev_mtu_check_error:
+dev_mtu_set_error:
 	rte_eal_alarm_cancel(lio_sync_link_state_check, eth_dev);
 
 dev_lsc_handle_error:
@@ -1559,8 +1636,10 @@ lio_dev_close(struct rte_eth_dev *eth_dev)
 		rte_write32(pkt_count, droq->pkts_sent_reg);
 	}
 
-	/* Do FLR for the VF */
-	cn23xx_vf_ask_pf_to_do_flr(lio_dev);
+	if (lio_dev->pci_dev->kdrv == RTE_KDRV_IGB_UIO) {
+		cn23xx_vf_ask_pf_to_do_flr(lio_dev);
+		rte_delay_ms(LIO_PCI_FLR_WAIT);
+	}
 
 	/* lio_free_mbox */
 	lio_dev->fn_list.free_mbox(lio_dev);
@@ -1721,6 +1800,9 @@ static int lio_dev_configure(struct rte_eth_dev *eth_dev)
 		goto nic_config_fail;
 	}
 
+	snprintf(lio_dev->firmware_version, LIO_FW_VERSION_LENGTH, "%s",
+		 resp->cfg_info.lio_firmware_version);
+
 	lio_swap_8B_data((uint64_t *)(&resp->cfg_info),
 			 sizeof(struct octeon_if_cfg_info) >> 3);
 
@@ -1824,6 +1906,8 @@ static const struct eth_dev_ops liovf_eth_dev_ops = {
 	.dev_set_link_up	= lio_dev_set_link_up,
 	.dev_set_link_down	= lio_dev_set_link_down,
 	.dev_close		= lio_dev_close,
+	.promiscuous_enable	= lio_dev_promiscuous_enable,
+	.promiscuous_disable	= lio_dev_promiscuous_disable,
 	.allmulticast_enable	= lio_dev_allmulticast_enable,
 	.allmulticast_disable	= lio_dev_allmulticast_disable,
 	.link_update		= lio_dev_link_update,
@@ -1844,6 +1928,7 @@ static const struct eth_dev_ops liovf_eth_dev_ops = {
 	.rss_hash_update	= lio_dev_rss_hash_update,
 	.udp_tunnel_port_add	= lio_dev_udp_tunnel_add,
 	.udp_tunnel_port_del	= lio_dev_udp_tunnel_del,
+	.mtu_set		= lio_dev_mtu_set,
 };
 
 static void
@@ -1929,10 +2014,12 @@ lio_first_time_init(struct lio_device *lio_dev,
 	if (cn23xx_pfvf_handshake(lio_dev))
 		goto error;
 
-	/* Initial reset */
-	cn23xx_vf_ask_pf_to_do_flr(lio_dev);
-	/* Wait for FLR for 100ms per SRIOV specification */
-	rte_delay_ms(100);
+	/* Request and wait for device reset. */
+	if (pdev->kdrv == RTE_KDRV_IGB_UIO) {
+		cn23xx_vf_ask_pf_to_do_flr(lio_dev);
+		/* FLR wait time doubled as a precaution. */
+		rte_delay_ms(LIO_PCI_FLR_WAIT * 2);
+	}
 
 	if (cn23xx_vf_set_io_queues_off(lio_dev)) {
 		lio_dev_err(lio_dev, "Setting io queues off failed\n");
@@ -2009,7 +2096,6 @@ lio_eth_dev_init(struct rte_eth_dev *eth_dev)
 		return 0;
 
 	rte_eth_copy_pci_info(eth_dev, pdev);
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_DETACHABLE;
 
 	if (pdev->mem_resource[0].addr) {
 		lio_dev->hw_addr = pdev->mem_resource[0].addr;

@@ -49,7 +49,6 @@ extern "C" {
 #include <stdio.h>
 #include <sys/queue.h>
 
-#include <rte_config.h>
 #include <rte_log.h>
 
 __attribute__((format(printf, 2, 0)))
@@ -152,7 +151,11 @@ struct rte_driver {
 	const char *alias;              /**< Driver alias. */
 };
 
-#define RTE_DEV_NAME_MAX_LEN (32)
+/*
+ * Internal identifier length
+ * Sufficiently large to allow for UUID or PCI address
+ */
+#define RTE_DEV_NAME_MAX_LEN 64
 
 /**
  * A structure describing a generic device.
@@ -164,28 +167,6 @@ struct rte_device {
 	int numa_node;                /**< NUMA node connection */
 	struct rte_devargs *devargs;  /**< Device user arguments */
 };
-
-/**
- * Initialize a driver specified by name.
- *
- * @param name
- *   The pointer to a driver name to be initialized.
- * @param args
- *   The pointer to arguments used by driver initialization.
- * @return
- *  0 on success, negative on error
- */
-int rte_vdev_init(const char *name, const char *args);
-
-/**
- * Uninitalize a driver specified by name.
- *
- * @param name
- *   The pointer to a driver name to be initialized.
- * @return
- *  0 on success, negative on error
- */
-int rte_vdev_uninit(const char *name);
 
 /**
  * Attach a device to a registered driver.
@@ -312,4 +293,4 @@ __attribute__((used)) = str
 }
 #endif
 
-#endif /* _RTE_VDEV_H_ */
+#endif /* _RTE_DEV_H_ */

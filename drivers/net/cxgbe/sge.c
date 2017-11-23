@@ -149,7 +149,7 @@ static int map_mbuf(struct rte_mbuf *mbuf, dma_addr_t *addr)
 	struct rte_mbuf *m = mbuf;
 
 	for (; m; m = m->next, addr++) {
-		*addr = m->buf_physaddr + rte_pktmbuf_headroom(m);
+		*addr = m->buf_iova + rte_pktmbuf_headroom(m);
 		if (*addr == 0)
 			goto out_err;
 	}
@@ -423,7 +423,7 @@ static unsigned int refill_fl_usembufs(struct adapter *adap, struct sge_fl *q,
 		mbuf->nb_segs = 1;
 		mbuf->port = rxq->rspq.port_id;
 
-		mapping = (dma_addr_t)RTE_ALIGN(mbuf->buf_physaddr +
+		mapping = (dma_addr_t)RTE_ALIGN(mbuf->buf_iova +
 						mbuf->data_off,
 						adap->sge.fl_align);
 		mapping |= buf_size_idx;
@@ -1318,7 +1318,7 @@ alloc_sw_ring:
 	if (metadata)
 		*(void **)metadata = s;
 
-	*phys = (uint64_t)tz->phys_addr;
+	*phys = (uint64_t)tz->iova;
 	return tz->addr;
 }
 
@@ -1405,7 +1405,7 @@ int t4_ethrx_handler(struct sge_rspq *q, const __be64 *rsp,
 	}
 
 	if (pkt->vlan_ex) {
-		mbuf->ol_flags |= PKT_RX_VLAN_PKT;
+		mbuf->ol_flags |= PKT_RX_VLAN;
 		mbuf->vlan_tci = ntohs(pkt->vlan);
 	}
 	rxq->stats.pkts++;
@@ -1550,7 +1550,7 @@ static int process_responses(struct sge_rspq *q, int budget,
 				}
 
 				if (cpl->vlan_ex) {
-					pkt->ol_flags |= PKT_RX_VLAN_PKT;
+					pkt->ol_flags |= PKT_RX_VLAN;
 					pkt->vlan_tci = ntohs(cpl->vlan);
 				}
 

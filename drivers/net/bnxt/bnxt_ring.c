@@ -98,7 +98,7 @@ int bnxt_alloc_rings(struct bnxt *bp, uint16_t qidx,
 	struct rte_pci_device *pdev = bp->pdev;
 	const struct rte_memzone *mz = NULL;
 	char mz_name[RTE_MEMZONE_NAMESIZE];
-	phys_addr_t mz_phys_addr;
+	rte_iova_t mz_phys_addr;
 	int sz;
 
 	int stats_len = (tx_ring_info || rx_ring_info) ?
@@ -172,15 +172,15 @@ int bnxt_alloc_rings(struct bnxt *bp, uint16_t qidx,
 			return -ENOMEM;
 	}
 	memset(mz->addr, 0, mz->len);
-	mz_phys_addr = mz->phys_addr;
+	mz_phys_addr = mz->iova;
 	if ((unsigned long)mz->addr == mz_phys_addr) {
 		RTE_LOG(WARNING, PMD,
 			"Memzone physical address same as virtual.\n");
 		RTE_LOG(WARNING, PMD,
-			"Using rte_mem_virt2phy()\n");
+			"Using rte_mem_virt2iova()\n");
 		for (sz = 0; sz < total_alloc_len; sz += getpagesize())
 			rte_mem_lock_page(((char *)mz->addr) + sz);
-		mz_phys_addr = rte_mem_virt2phy(mz->addr);
+		mz_phys_addr = rte_mem_virt2iova(mz->addr);
 		if (mz_phys_addr == 0) {
 			RTE_LOG(ERR, PMD,
 			"unable to map ring address to physical memory\n");
@@ -231,7 +231,7 @@ int bnxt_alloc_rings(struct bnxt *bp, uint16_t qidx,
 		rx_ring->bd = ((char *)mz->addr + ag_ring_start);
 		rx_ring_info->ag_desc_ring =
 		    (struct rx_prod_pkt_bd *)rx_ring->bd;
-		rx_ring->bd_dma = mz->phys_addr + ag_ring_start;
+		rx_ring->bd_dma = mz->iova + ag_ring_start;
 		rx_ring_info->ag_desc_mapping = rx_ring->bd_dma;
 		rx_ring->mem_zone = (const void *)mz;
 
@@ -323,8 +323,10 @@ int bnxt_alloc_hwrm_rings(struct bnxt *bp)
 
 		ring = rxr->ag_ring_struct;
 		/* Agg ring */
-		if (ring == NULL)
+		if (ring == NULL) {
 			RTE_LOG(ERR, PMD, "Alloc AGG Ring is NULL!\n");
+			goto err_out;
+		}
 
 		rc = bnxt_hwrm_ring_alloc(bp, ring,
 				HWRM_RING_ALLOC_INPUT_RING_TYPE_RX,

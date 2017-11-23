@@ -61,8 +61,8 @@ sfc_dma_alloc(const struct sfc_adapter *sa, const char *name, uint16_t id,
 		return ENOMEM;
 	}
 
-	esmp->esm_addr = rte_mem_phy2mch(mz->memseg_id, mz->phys_addr);
-	if (esmp->esm_addr == RTE_BAD_PHYS_ADDR) {
+	esmp->esm_addr = mz->iova;
+	if (esmp->esm_addr == RTE_BAD_IOVA) {
 		(void)rte_memzone_free(mz);
 		return EFAULT;
 	}
@@ -501,7 +501,7 @@ sfc_mem_bar_fini(struct sfc_adapter *sa)
  * and also known to give a uniform distribution
  * (a good distribution of traffic between different CPUs)
  */
-static const uint8_t default_rss_key[SFC_RSS_KEY_SIZE] = {
+static const uint8_t default_rss_key[EFX_RSS_KEY_SIZE] = {
 	0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a,
 	0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a,
 	0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a,
@@ -510,10 +510,10 @@ static const uint8_t default_rss_key[SFC_RSS_KEY_SIZE] = {
 };
 #endif
 
+#if EFSYS_OPT_RX_SCALE
 static int
 sfc_set_rss_defaults(struct sfc_adapter *sa)
 {
-#if EFSYS_OPT_RX_SCALE
 	int rc;
 
 	rc = efx_intr_init(sa->nic, sa->intr.type, NULL);
@@ -528,11 +528,11 @@ sfc_set_rss_defaults(struct sfc_adapter *sa)
 	if (rc != 0)
 		goto fail_rx_init;
 
-	rc = efx_rx_scale_support_get(sa->nic, &sa->rss_support);
+	rc = efx_rx_scale_default_support_get(sa->nic, &sa->rss_support);
 	if (rc != 0)
 		goto fail_scale_support_get;
 
-	rc = efx_rx_hash_support_get(sa->nic, &sa->hash_support);
+	rc = efx_rx_hash_default_support_get(sa->nic, &sa->hash_support);
 	if (rc != 0)
 		goto fail_hash_support_get;
 
@@ -556,10 +556,14 @@ fail_ev_init:
 
 fail_intr_init:
 	return rc;
-#else
-	return 0;
-#endif
 }
+#else
+static int
+sfc_set_rss_defaults(__rte_unused struct sfc_adapter *sa)
+{
+	return 0;
+}
+#endif
 
 int
 sfc_attach(struct sfc_adapter *sa)

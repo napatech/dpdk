@@ -36,7 +36,6 @@
 #include "ark_ethdev_rx.h"
 #include "ark_global.h"
 #include "ark_logs.h"
-#include "ark_ethdev.h"
 #include "ark_mpu.h"
 #include "ark_udm.h"
 
@@ -62,7 +61,7 @@ struct ark_rx_queue {
 	struct rte_mbuf **reserve_q;
 	/* array of physical addresses of the mbuf data pointer */
 	/* This point is a virtual address */
-	phys_addr_t *paddress_q;
+	rte_iova_t *paddress_q;
 	struct rte_mempool *mb_pool;
 
 	struct ark_udm_t *udm;
@@ -96,18 +95,18 @@ eth_ark_rx_hw_setup(struct rte_eth_dev *dev,
 		    struct ark_rx_queue *queue,
 		    uint16_t rx_queue_id __rte_unused, uint16_t rx_queue_idx)
 {
-	phys_addr_t queue_base;
-	phys_addr_t phys_addr_q_base;
-	phys_addr_t phys_addr_prod_index;
+	rte_iova_t queue_base;
+	rte_iova_t phys_addr_q_base;
+	rte_iova_t phys_addr_prod_index;
 
-	queue_base = rte_malloc_virt2phy(queue);
+	queue_base = rte_malloc_virt2iova(queue);
 	phys_addr_prod_index = queue_base +
 		offsetof(struct ark_rx_queue, prod_index);
 
-	phys_addr_q_base = rte_malloc_virt2phy(queue->paddress_q);
+	phys_addr_q_base = rte_malloc_virt2iova(queue->paddress_q);
 
 	/* Verify HW */
-	if (ark_mpu_verify(queue->mpu, sizeof(phys_addr_t))) {
+	if (ark_mpu_verify(queue->mpu, sizeof(rte_iova_t))) {
 		PMD_DRV_LOG(ERR, "Illegal configuration rx queue\n");
 		return -1;
 	}
@@ -205,7 +204,7 @@ eth_ark_dev_rx_queue_setup(struct rte_eth_dev *dev,
 				   socket_id);
 	queue->paddress_q =
 		rte_zmalloc_socket("Ark_rx_queue paddr",
-				   nb_desc * sizeof(phys_addr_t),
+				   nb_desc * sizeof(rte_iova_t),
 				   64,
 				   socket_id);
 
@@ -357,7 +356,7 @@ eth_ark_rx_jumbo(struct ark_rx_queue *queue,
 
 	uint16_t remaining;
 	uint16_t data_len;
-	uint8_t segments;
+	uint16_t segments;
 
 	/* first buf populated by called */
 	mbuf_prev = mbuf0;
@@ -500,22 +499,22 @@ eth_ark_rx_seed_mbufs(struct ark_rx_queue *queue)
 	case 0:
 		while (count != nb) {
 			queue->paddress_q[seed_m++] =
-				(*mbufs++)->buf_physaddr;
+				(*mbufs++)->buf_iova;
 			count++;
 		/* FALLTHROUGH */
 	case 3:
 		queue->paddress_q[seed_m++] =
-			(*mbufs++)->buf_physaddr;
+			(*mbufs++)->buf_iova;
 		count++;
 		/* FALLTHROUGH */
 	case 2:
 		queue->paddress_q[seed_m++] =
-			(*mbufs++)->buf_physaddr;
+			(*mbufs++)->buf_iova;
 		count++;
 		/* FALLTHROUGH */
 	case 1:
 		queue->paddress_q[seed_m++] =
-			(*mbufs++)->buf_physaddr;
+			(*mbufs++)->buf_iova;
 		count++;
 		/* FALLTHROUGH */
 

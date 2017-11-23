@@ -49,7 +49,6 @@ extern "C" {
 #include "rte_crypto.h"
 #include "rte_dev.h"
 #include <rte_common.h>
-#include <rte_vdev.h>
 
 extern const char **rte_cyptodev_names;
 
@@ -60,10 +59,10 @@ extern const char **rte_cyptodev_names;
 		RTE_FMT("%s() line %u: " RTE_FMT_HEAD(__VA_ARGS__,) "\n", \
 			__func__, __LINE__, RTE_FMT_TAIL(__VA_ARGS__,)))
 
-#define CDEV_PMD_LOG_ERR(dev, ...) \
-	RTE_LOG(ERR, CRYPTODEV, \
-		RTE_FMT("[%s] %s() line %u: " RTE_FMT_HEAD(__VA_ARGS__,) "\n", \
-			dev, __func__, __LINE__, RTE_FMT_TAIL(__VA_ARGS__,)))
+#define CDEV_LOG_INFO(...) \
+	RTE_LOG(INFO, CRYPTODEV, \
+		RTE_FMT(RTE_FMT_HEAD(__VA_ARGS__,) "\n", \
+			RTE_FMT_TAIL(__VA_ARGS__,)))
 
 #ifdef RTE_LIBRTE_CRYPTODEV_DEBUG
 #define CDEV_LOG_DEBUG(...) \
@@ -111,7 +110,7 @@ extern const char **rte_cyptodev_names;
  *   to calculate address from.
  */
 #define rte_crypto_op_ctophys_offset(c, o)	\
-	(phys_addr_t)((c)->phys_addr + (o))
+	(rte_iova_t)((c)->phys_addr + (o))
 
 /**
  * Crypto parameters range description
@@ -351,6 +350,8 @@ rte_cryptodev_get_aead_algo_enum(enum rte_crypto_aead_algorithm *algo_enum,
 /**< Utilises CPU NEON instructions */
 #define	RTE_CRYPTODEV_FF_CPU_ARM_CE		(1ULL << 11)
 /**< Utilises ARM CPU Cryptographic Extensions */
+#define	RTE_CRYPTODEV_FF_SECURITY		(1ULL << 12)
+/**< Support Security Protocol Processing */
 
 
 /**
@@ -434,23 +435,6 @@ struct rte_cryptodev_stats {
 /**< Max length of name of crypto PMD */
 
 /**
- * @deprecated
- *
- * Create a virtual crypto device
- *
- * @param	name	Cryptodev PMD name of device to be created.
- * @param	args	Options arguments for device.
- *
- * @return
- * - On successful creation of the cryptodev the device index is returned,
- *   which will be between 0 and rte_cryptodev_count().
- * - In the case of a failure, returns -1.
- */
-__rte_deprecated
-extern int
-rte_cryptodev_create_vdev(const char *name, const char *args);
-
-/**
  * Get the device identifier for the named crypto device.
  *
  * @param	name	device name to select the device structure.
@@ -461,6 +445,19 @@ rte_cryptodev_create_vdev(const char *name, const char *args);
  */
 extern int
 rte_cryptodev_get_dev_id(const char *name);
+
+/**
+ * Get the crypto device name given a device identifier.
+ *
+ * @param dev_id
+ *   The identifier of the device
+ *
+ * @return
+ *   - Returns crypto device name.
+ *   - Returns NULL if crypto device is not present.
+ */
+extern const char *
+rte_cryptodev_name_get(uint8_t dev_id);
 
 /**
  * Get the total number of crypto devices that have been successfully
@@ -676,6 +673,11 @@ rte_cryptodev_stats_reset(uint8_t dev_id);
  * @param	dev_info	A pointer to a structure of type
  *				*rte_cryptodev_info* to be filled with the
  *				contextual information of the device.
+ *
+ * @note The capabilities field of dev_info is set to point to the first
+ * element of an array of struct rte_cryptodev_capabilities. The element after
+ * the last valid element has it's op field set to
+ * RTE_CRYPTO_OP_TYPE_UNDEFINED.
  */
 extern void
 rte_cryptodev_info_get(uint8_t dev_id, struct rte_cryptodev_info *dev_info);
@@ -756,10 +758,16 @@ struct rte_cryptodev {
 	struct rte_cryptodev_cb_list link_intr_cbs;
 	/**< User application callback for interrupts if present */
 
+	void *security_ctx;
+	/**< Context for security ops */
+
 	__extension__
 	uint8_t attached : 1;
 	/**< Flag indicating the device is attached */
 } __rte_cache_aligned;
+
+void *
+rte_cryptodev_get_sec_ctx(uint8_t dev_id);
 
 /**
  *
@@ -1024,26 +1032,6 @@ int rte_cryptodev_driver_id_get(const char *name);
  *  The driver name or null if no driver found
  */
 const char *rte_cryptodev_driver_name_get(uint8_t driver_id);
-
-/**
- * @internal
- * Allocate Cryptodev driver.
- *
- * @param driver
- *   Pointer to rte_driver.
- * @return
- *  The driver type identifier
- */
-uint8_t rte_cryptodev_allocate_driver(const struct rte_driver *driver);
-
-
-#define RTE_PMD_REGISTER_CRYPTO_DRIVER(drv, driver_id)\
-RTE_INIT(init_ ##driver_id);\
-static void init_ ##driver_id(void)\
-{\
-	driver_id = rte_cryptodev_allocate_driver(&(drv).driver);\
-}
-
 
 #ifdef __cplusplus
 }

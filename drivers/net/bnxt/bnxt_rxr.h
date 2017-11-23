@@ -52,6 +52,22 @@
 #define BNXT_TPA_OUTER_L3_OFF(hdr_info)	\
 	((hdr_info) & 0x1ff)
 
+#define RX_CMP_L4_CS_BITS	rte_cpu_to_le_32(RX_PKT_CMPL_FLAGS2_L4_CS_CALC)
+
+#define RX_CMP_L4_CS_ERR_BITS	rte_cpu_to_le_32(RX_PKT_CMPL_ERRORS_L4_CS_ERROR)
+
+#define RX_CMP_L4_CS_OK(rxcmp1)						\
+	    (((rxcmp1)->flags2 & RX_CMP_L4_CS_BITS) &&		\
+	     !((rxcmp1)->errors_v2 & RX_CMP_L4_CS_ERR_BITS))
+
+#define RX_CMP_IP_CS_ERR_BITS	rte_cpu_to_le_32(RX_PKT_CMPL_ERRORS_IP_CS_ERROR)
+
+#define RX_CMP_IP_CS_BITS	rte_cpu_to_le_32(RX_PKT_CMPL_FLAGS2_IP_CS_CALC)
+
+#define RX_CMP_IP_CS_OK(rxcmp1)						\
+		(((rxcmp1)->flags2 & RX_CMP_IP_CS_BITS) &&	\
+		!((rxcmp1)->errors_v2 & RX_CMP_IP_CS_ERR_BITS))
+
 enum pkt_hash_types {
 	PKT_HASH_TYPE_NONE,	/* Undefined type */
 	PKT_HASH_TYPE_L2,	/* Input: src_MAC, dest_MAC */
@@ -85,8 +101,8 @@ struct bnxt_rx_ring_info {
 	struct bnxt_sw_rx_bd	*rx_buf_ring; /* sw ring */
 	struct bnxt_sw_rx_bd	*ag_buf_ring; /* sw ring */
 
-	phys_addr_t		rx_desc_mapping;
-	phys_addr_t		ag_desc_mapping;
+	rte_iova_t		rx_desc_mapping;
+	rte_iova_t		ag_desc_mapping;
 
 	struct bnxt_ring	*rx_ring_struct;
 	struct bnxt_ring	*ag_ring_struct;

@@ -42,7 +42,6 @@
 #include <rte_common.h>
 #include <rte_memory.h>
 #include <rte_malloc.h>
-#include <rte_memzone.h>
 #include <rte_memcpy.h>
 #include <rte_eal.h>
 #include <rte_eal_memconfig.h>
@@ -191,6 +190,7 @@ rte_lpm6_create(const char *name, int socket_id,
 	te = rte_zmalloc("LPM6_TAILQ_ENTRY", sizeof(*te), 0);
 	if (te == NULL) {
 		RTE_LOG(ERR, LPM, "Failed to allocate tailq entry!\n");
+		rte_errno = ENOMEM;
 		goto exit;
 	}
 
@@ -201,6 +201,7 @@ rte_lpm6_create(const char *name, int socket_id,
 	if (lpm == NULL) {
 		RTE_LOG(ERR, LPM, "LPM memory allocation failed\n");
 		rte_free(te);
+		rte_errno = ENOMEM;
 		goto exit;
 	}
 
@@ -212,6 +213,7 @@ rte_lpm6_create(const char *name, int socket_id,
 		rte_free(lpm);
 		lpm = NULL;
 		rte_free(te);
+		rte_errno = ENOMEM;
 		goto exit;
 	}
 
@@ -518,7 +520,7 @@ rte_lpm6_add_v1705(struct rte_lpm6 *lpm, uint8_t *ip, uint8_t depth,
 		uint32_t next_hop)
 {
 	struct rte_lpm6_tbl_entry *tbl;
-	struct rte_lpm6_tbl_entry *tbl_next;
+	struct rte_lpm6_tbl_entry *tbl_next = NULL;
 	int32_t rule_index;
 	int status;
 	uint8_t masked_ip[RTE_LPM6_IPV6_ADDR_SIZE];

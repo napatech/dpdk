@@ -152,11 +152,17 @@ typedef struct efx_rx_ops_s {
 	efx_rc_t	(*erxo_scatter_enable)(efx_nic_t *, unsigned int);
 #endif
 #if EFSYS_OPT_RX_SCALE
-	efx_rc_t	(*erxo_scale_mode_set)(efx_nic_t *, efx_rx_hash_alg_t,
+	efx_rc_t	(*erxo_scale_context_alloc)(efx_nic_t *,
+						    efx_rx_scale_context_type_t,
+						    uint32_t, uint32_t *);
+	efx_rc_t	(*erxo_scale_context_free)(efx_nic_t *, uint32_t);
+	efx_rc_t	(*erxo_scale_mode_set)(efx_nic_t *, uint32_t,
+					       efx_rx_hash_alg_t,
 					       efx_rx_hash_type_t, boolean_t);
-	efx_rc_t	(*erxo_scale_key_set)(efx_nic_t *, uint8_t *, size_t);
-	efx_rc_t	(*erxo_scale_tbl_set)(efx_nic_t *, unsigned int *,
-					      size_t);
+	efx_rc_t	(*erxo_scale_key_set)(efx_nic_t *, uint32_t,
+					      uint8_t *, size_t);
+	efx_rc_t	(*erxo_scale_tbl_set)(efx_nic_t *, uint32_t,
+					      unsigned int *, size_t);
 	uint32_t	(*erxo_prefix_hash)(efx_nic_t *, efx_rx_hash_alg_t,
 					    uint8_t *);
 #endif /* EFSYS_OPT_RX_SCALE */
@@ -648,9 +654,9 @@ struct efx_nic_s {
 	const efx_vpd_ops_t	*en_evpdop;
 #endif	/* EFSYS_OPT_VPD */
 #if EFSYS_OPT_RX_SCALE
-	efx_rx_hash_support_t	en_hash_support;
-	efx_rx_scale_support_t	en_rss_support;
-	uint32_t		en_rss_context;
+	efx_rx_hash_support_t		en_hash_support;
+	efx_rx_scale_context_type_t	en_rss_context_type;
+	uint32_t			en_rss_context;
 #endif	/* EFSYS_OPT_RX_SCALE */
 	uint32_t		en_vport_id;
 #if EFSYS_OPT_LICENSING

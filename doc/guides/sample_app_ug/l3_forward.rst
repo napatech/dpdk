@@ -62,28 +62,9 @@ In the sample application, hash-based forwarding supports IPv4 and IPv6. LPM-bas
 Compiling the Application
 -------------------------
 
-To compile the application:
+To compile the sample application see :doc:`compiling`.
 
-#.  Go to the sample application directory:
-
-    .. code-block:: console
-
-        export RTE_SDK=/path/to/rte_sdk
-        cd ${RTE_SDK}/examples/l3fwd
-
-#.  Set the target (a default target is used if not specified). For example:
-
-    .. code-block:: console
-
-        export RTE_TARGET=x86_64-native-linuxapp-gcc
-
-    See the *DPDK Getting Started Guide* for possible RTE_TARGET values.
-
-#.  Build the application:
-
-    .. code-block:: console
-
-        make
+The application is located in the ``l3fwd`` sub-directory.
 
 Running the Application
 -----------------------
@@ -283,7 +264,7 @@ The get_ipv4_dst_port() function is shown below:
 .. code-block:: c
 
     static inline uint8_t
-    get_ipv4_dst_port(void *ipv4_hdr, uint8_t portid, lookup_struct_t *ipv4_l3fwd_lookup_struct)
+    get_ipv4_dst_port(void *ipv4_hdr, uint16_t portid, lookup_struct_t *ipv4_l3fwd_lookup_struct)
     {
         int ret = 0;
         union ipv4_5tuple_host key;
@@ -312,7 +293,7 @@ The key code snippet of simple_ipv4_fwd_4pkts() is shown below:
 .. code-block:: c
 
     static inline void
-    simple_ipv4_fwd_4pkts(struct rte_mbuf* m[4], uint8_t portid, struct lcore_conf *qconf)
+    simple_ipv4_fwd_4pkts(struct rte_mbuf* m[4], uint16_t portid, struct lcore_conf *qconf)
     {
         // ...
 
@@ -351,10 +332,10 @@ for LPM-based lookups is done by the get_ipv4_dst_port() function below:
 
 .. code-block:: c
 
-    static inline uint8_t
-    get_ipv4_dst_port(struct ipv4_hdr *ipv4_hdr, uint8_t portid, lookup_struct_t *ipv4_l3fwd_lookup_struct)
+    static inline uint16_t
+    get_ipv4_dst_port(struct ipv4_hdr *ipv4_hdr, uint16_t portid, lookup_struct_t *ipv4_l3fwd_lookup_struct)
     {
         uint8_t next_hop;
 
-        return (uint8_t) ((rte_lpm_lookup(ipv4_l3fwd_lookup_struct, rte_be_to_cpu_32(ipv4_hdr->dst_addr), &next_hop) == 0)? next_hop : portid);
+        return ((rte_lpm_lookup(ipv4_l3fwd_lookup_struct, rte_be_to_cpu_32(ipv4_hdr->dst_addr), &next_hop) == 0)? next_hop : portid);
     }

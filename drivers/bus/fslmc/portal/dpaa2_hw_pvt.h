@@ -51,6 +51,7 @@
 #define SVR_LS1080A             0x87030000
 #define SVR_LS2080A             0x87010000
 #define SVR_LS2088A             0x87090000
+#define SVR_LX2160A             0x87360000
 
 #ifndef ETH_VLAN_HLEN
 #define ETH_VLAN_HLEN   4 /** < Vlan Header Length */
@@ -124,9 +125,12 @@ struct queue_storage_info_t {
 	int toggle;
 };
 
+struct dpaa2_queue;
+
 typedef void (dpaa2_queue_cb_dqrr_t)(struct qbman_swp *swp,
 		const struct qbman_fd *fd,
 		const struct qbman_result *dq,
+		struct dpaa2_queue *rxq,
 		struct rte_event *ev);
 
 struct dpaa2_queue {
@@ -143,6 +147,7 @@ struct dpaa2_queue {
 		struct queue_storage_info_t *q_storage;
 		struct qbman_result *cscn;
 	};
+	struct rte_event ev;
 	dpaa2_queue_cb_dqrr_t *cb;
 };
 
@@ -309,7 +314,7 @@ static phys_addr_t dpaa2_mem_vtop(uint64_t vaddr)
  * These routines are called with help of below MACRO's
  */
 
-#define DPAA2_MBUF_VADDR_TO_IOVA(mbuf) ((mbuf)->buf_physaddr)
+#define DPAA2_MBUF_VADDR_TO_IOVA(mbuf) ((mbuf)->buf_iova)
 #define DPAA2_OP_VADDR_TO_IOVA(op) (op->phys_addr)
 
 /**
@@ -365,6 +370,7 @@ void set_swp_active_dqs(uint16_t dpio_index, struct qbman_result *dqs)
 }
 struct dpaa2_dpbp_dev *dpaa2_alloc_dpbp_dev(void);
 void dpaa2_free_dpbp_dev(struct dpaa2_dpbp_dev *dpbp);
+int dpaa2_dpbp_supported(void);
 
 struct dpaa2_dpci_dev *rte_dpaa2_alloc_dpci_dev(void);
 void rte_dpaa2_free_dpci_dev(struct dpaa2_dpci_dev *dpci);

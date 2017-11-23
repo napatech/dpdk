@@ -226,8 +226,12 @@
 				<F N="app/test-crypto-perf/cperf_ops.h"/>
 				<F N="app/test-crypto-perf/cperf_options.h"/>
 				<F N="app/test-crypto-perf/cperf_options_parsing.c"/>
+				<F N="app/test-crypto-perf/cperf_test_common.c"/>
+				<F N="app/test-crypto-perf/cperf_test_common.h"/>
 				<F N="app/test-crypto-perf/cperf_test_latency.c"/>
 				<F N="app/test-crypto-perf/cperf_test_latency.h"/>
+				<F N="app/test-crypto-perf/cperf_test_pmd_cyclecount.c"/>
+				<F N="app/test-crypto-perf/cperf_test_pmd_cyclecount.h"/>
 				<F N="app/test-crypto-perf/cperf_test_throughput.c"/>
 				<F N="app/test-crypto-perf/cperf_test_throughput.h"/>
 				<F N="app/test-crypto-perf/cperf_test_vector_parsing.c"/>
@@ -246,6 +250,7 @@
 				<F N="app/test-eventdev/evt_options.h"/>
 				<F N="app/test-eventdev/evt_test.c"/>
 				<F N="app/test-eventdev/evt_test.h"/>
+				<F N="app/test-eventdev/Makefile"/>
 				<F N="app/test-eventdev/parser.c"/>
 				<F N="app/test-eventdev/parser.h"/>
 				<F N="app/test-eventdev/test_order_atq.c"/>
@@ -260,6 +265,10 @@
 			<Folder Name="test-pmd">
 				<F N="app/test-pmd/cmdline.c"/>
 				<F N="app/test-pmd/cmdline_flow.c"/>
+				<F N="app/test-pmd/cmdline_mtr.c"/>
+				<F N="app/test-pmd/cmdline_mtr.h"/>
+				<F N="app/test-pmd/cmdline_tm.c"/>
+				<F N="app/test-pmd/cmdline_tm.h"/>
 				<F N="app/test-pmd/config.c"/>
 				<F N="app/test-pmd/csumonly.c"/>
 				<F N="app/test-pmd/flowgen.c"/>
@@ -273,6 +282,7 @@
 				<F N="app/test-pmd/rxonly.c"/>
 				<F N="app/test-pmd/testpmd.c"/>
 				<F N="app/test-pmd/testpmd.h"/>
+				<F N="app/test-pmd/tm.c"/>
 				<F N="app/test-pmd/txonly.c"/>
 			</Folder>
 			<F N="app/Makefile"/>
@@ -289,55 +299,325 @@
 				<F N="buildtools/pmdinfogen/pmdinfogen.c"/>
 				<F N="buildtools/pmdinfogen/pmdinfogen.h"/>
 			</Folder>
+			<F N="buildtools/auto-config-h.sh"/>
+			<F N="buildtools/gen-build-mk.sh"/>
+			<F N="buildtools/gen-config-h.sh"/>
 			<F N="buildtools/Makefile"/>
+			<F N="buildtools/relpath.sh"/>
 		</Folder>
-		<Folder Name="config">
-			<F N="config/common_base"/>
-			<F N="config/common_bsdapp"/>
-			<F N="config/common_linuxapp"/>
-			<F N="config/defconfig_arm-armv7a-linuxapp-gcc"/>
-			<F N="config/defconfig_arm64-armv8a-linuxapp-gcc"/>
-			<F N="config/defconfig_arm64-dpaa2-linuxapp-gcc"/>
-			<F N="config/defconfig_arm64-thunderx-linuxapp-gcc"/>
-			<F N="config/defconfig_arm64-xgene1-linuxapp-gcc"/>
-			<F N="config/defconfig_i686-native-linuxapp-gcc"/>
-			<F N="config/defconfig_i686-native-linuxapp-icc"/>
-			<F N="config/defconfig_ppc_64-power8-linuxapp-gcc"/>
-			<F N="config/defconfig_x86_64-native-bsdapp-clang"/>
-			<F N="config/defconfig_x86_64-native-bsdapp-gcc"/>
-			<F N="config/defconfig_x86_64-native-linuxapp-clang"/>
-			<F N="config/defconfig_x86_64-native-linuxapp-gcc"/>
-			<F N="config/defconfig_x86_64-native-linuxapp-icc"/>
-			<F N="config/defconfig_x86_x32-native-linuxapp-gcc"/>
+		<Folder Name="devtools">
+			<F N="devtools/build-tags.sh"/>
+			<F N="devtools/check-dup-includes.sh"/>
+			<F N="devtools/check-git-log.sh"/>
+			<F N="devtools/check-includes.sh"/>
+			<F N="devtools/check-maintainers.sh"/>
+			<F N="devtools/checkpatches.sh"/>
+			<F N="devtools/cocci.sh"/>
+			<F N="devtools/get-maintainer.sh"/>
+			<F N="devtools/git-log-fixes.sh"/>
+			<F N="devtools/test-build.sh"/>
+			<F N="devtools/test-null.sh"/>
+			<F N="devtools/validate-abi.sh"/>
 		</Folder>
-		<Folder Name="../dpdkcap">
-			<Folder Name="src">
-				<Folder Name="lzo">
-					<Folder Name="minilzo">
-						<F N="../dpdkcap/src/lzo/minilzo/lzoconf.h"/>
-						<F N="../dpdkcap/src/lzo/minilzo/lzodefs.h"/>
-						<F N="../dpdkcap/src/lzo/minilzo/minilzo.c"/>
-						<F N="../dpdkcap/src/lzo/minilzo/minilzo.h"/>
-					</Folder>
-					<F N="../dpdkcap/src/lzo/lzowrite.c"/>
-					<F N="../dpdkcap/src/lzo/lzowrite.h"/>
+		<Folder Name="doc">
+			<Folder Name="api">
+				<F N="doc/api/doxy-html-custom.sh"/>
+			</Folder>
+			<Folder Name="guides">
+				<Folder Name="contributing">
+					<F N="doc/guides/contributing/cheatsheet.rst"/>
+					<F N="doc/guides/contributing/coding_style.rst"/>
+					<F N="doc/guides/contributing/design.rst"/>
+					<F N="doc/guides/contributing/documentation.rst"/>
+					<F N="doc/guides/contributing/index.rst"/>
+					<F N="doc/guides/contributing/patches.rst"/>
+					<F N="doc/guides/contributing/stable.rst"/>
+					<F N="doc/guides/contributing/versioning.rst"/>
 				</Folder>
-				<F N="../dpdkcap/src/core_capture.c"/>
-				<F N="../dpdkcap/src/core_capture.h"/>
-				<F N="../dpdkcap/src/core_write.c"/>
-				<F N="../dpdkcap/src/core_write.h"/>
-				<F N="../dpdkcap/src/dpdkcap.c"/>
-				<F N="../dpdkcap/src/pcap.h"/>
-				<F N="../dpdkcap/src/pcapng.h"/>
-				<F N="../dpdkcap/src/statistics.c"/>
-				<F N="../dpdkcap/src/statistics.h"/>
-				<F N="../dpdkcap/src/statistics_ncurses.c"/>
-				<F N="../dpdkcap/src/utils.c"/>
-				<F N="../dpdkcap/src/utils.h"/>
+				<Folder Name="cryptodevs">
+					<F N="doc/guides/cryptodevs/aesni_gcm.rst"/>
+					<F N="doc/guides/cryptodevs/aesni_mb.rst"/>
+					<F N="doc/guides/cryptodevs/armv8.rst"/>
+					<F N="doc/guides/cryptodevs/dpaa2_sec.rst"/>
+					<F N="doc/guides/cryptodevs/dpaa_sec.rst"/>
+					<F N="doc/guides/cryptodevs/index.rst"/>
+					<F N="doc/guides/cryptodevs/kasumi.rst"/>
+					<F N="doc/guides/cryptodevs/mrvl.rst"/>
+					<F N="doc/guides/cryptodevs/null.rst"/>
+					<F N="doc/guides/cryptodevs/openssl.rst"/>
+					<F N="doc/guides/cryptodevs/overview.rst"/>
+					<F N="doc/guides/cryptodevs/qat.rst"/>
+					<F N="doc/guides/cryptodevs/scheduler.rst"/>
+					<F N="doc/guides/cryptodevs/snow3g.rst"/>
+					<F N="doc/guides/cryptodevs/zuc.rst"/>
+				</Folder>
+				<Folder Name="eventdevs">
+					<F N="doc/guides/eventdevs/dpaa2.rst"/>
+					<F N="doc/guides/eventdevs/index.rst"/>
+					<F N="doc/guides/eventdevs/octeontx.rst"/>
+					<F N="doc/guides/eventdevs/sw.rst"/>
+				</Folder>
+				<Folder Name="faq">
+					<F N="doc/guides/faq/faq.rst"/>
+					<F N="doc/guides/faq/index.rst"/>
+				</Folder>
+				<Folder Name="freebsd_gsg">
+					<F N="doc/guides/freebsd_gsg/build_dpdk.rst"/>
+					<F N="doc/guides/freebsd_gsg/build_sample_apps.rst"/>
+					<F N="doc/guides/freebsd_gsg/index.rst"/>
+					<F N="doc/guides/freebsd_gsg/install_from_ports.rst"/>
+					<F N="doc/guides/freebsd_gsg/intro.rst"/>
+				</Folder>
+				<Folder Name="howto">
+					<F N="doc/guides/howto/flow_bifurcation.rst"/>
+					<F N="doc/guides/howto/index.rst"/>
+					<F N="doc/guides/howto/lm_bond_virtio_sriov.rst"/>
+					<F N="doc/guides/howto/lm_virtio_vhost_user.rst"/>
+					<F N="doc/guides/howto/packet_capture_framework.rst"/>
+					<F N="doc/guides/howto/pvp_reference_benchmark.rst"/>
+					<F N="doc/guides/howto/rte_flow.rst"/>
+					<F N="doc/guides/howto/vfd.rst"/>
+					<F N="doc/guides/howto/virtio_user_as_exceptional_path.rst"/>
+					<F N="doc/guides/howto/virtio_user_for_container_networking.rst"/>
+				</Folder>
+				<Folder Name="linux_gsg">
+					<F N="doc/guides/linux_gsg/build_dpdk.rst"/>
+					<F N="doc/guides/linux_gsg/build_sample_apps.rst"/>
+					<F N="doc/guides/linux_gsg/enable_func.rst"/>
+					<F N="doc/guides/linux_gsg/index.rst"/>
+					<F N="doc/guides/linux_gsg/intro.rst"/>
+					<F N="doc/guides/linux_gsg/linux_drivers.rst"/>
+					<F N="doc/guides/linux_gsg/nic_perf_intel_platform.rst"/>
+					<F N="doc/guides/linux_gsg/quick_start.rst"/>
+					<F N="doc/guides/linux_gsg/sys_reqs.rst"/>
+				</Folder>
+				<Folder Name="mempool">
+					<F N="doc/guides/mempool/index.rst"/>
+					<F N="doc/guides/mempool/octeontx.rst"/>
+				</Folder>
+				<Folder Name="nics">
+					<F N="doc/guides/nics/ark.rst"/>
+					<F N="doc/guides/nics/avp.rst"/>
+					<F N="doc/guides/nics/bnx2x.rst"/>
+					<F N="doc/guides/nics/bnxt.rst"/>
+					<F N="doc/guides/nics/build_and_test.rst"/>
+					<F N="doc/guides/nics/cxgbe.rst"/>
+					<F N="doc/guides/nics/dpaa.rst"/>
+					<F N="doc/guides/nics/dpaa2.rst"/>
+					<F N="doc/guides/nics/e1000em.rst"/>
+					<F N="doc/guides/nics/ena.rst"/>
+					<F N="doc/guides/nics/enic.rst"/>
+					<F N="doc/guides/nics/fail_safe.rst"/>
+					<F N="doc/guides/nics/features.rst"/>
+					<F N="doc/guides/nics/fm10k.rst"/>
+					<F N="doc/guides/nics/i40e.rst"/>
+					<F N="doc/guides/nics/index.rst"/>
+					<F N="doc/guides/nics/intel_vf.rst"/>
+					<F N="doc/guides/nics/ixgbe.rst"/>
+					<F N="doc/guides/nics/kni.rst"/>
+					<F N="doc/guides/nics/liquidio.rst"/>
+					<F N="doc/guides/nics/mlx4.rst"/>
+					<F N="doc/guides/nics/mlx5.rst"/>
+					<F N="doc/guides/nics/mrvl.rst"/>
+					<F N="doc/guides/nics/nfp.rst"/>
+					<F N="doc/guides/nics/octeontx.rst"/>
+					<F N="doc/guides/nics/overview.rst"/>
+					<F N="doc/guides/nics/pcap_ring.rst"/>
+					<F N="doc/guides/nics/qede.rst"/>
+					<F N="doc/guides/nics/sfc_efx.rst"/>
+					<F N="doc/guides/nics/szedata2.rst"/>
+					<F N="doc/guides/nics/tap.rst"/>
+					<F N="doc/guides/nics/thunderx.rst"/>
+					<F N="doc/guides/nics/vhost.rst"/>
+					<F N="doc/guides/nics/virtio.rst"/>
+					<F N="doc/guides/nics/vmxnet3.rst"/>
+				</Folder>
+				<Folder Name="platform">
+					<F N="doc/guides/platform/index.rst"/>
+					<F N="doc/guides/platform/octeontx.rst"/>
+				</Folder>
+				<Folder Name="prog_guide">
+					<F N="doc/guides/prog_guide/build_app.rst"/>
+					<F N="doc/guides/prog_guide/cryptodev_lib.rst"/>
+					<F N="doc/guides/prog_guide/dev_kit_build_system.rst"/>
+					<F N="doc/guides/prog_guide/dev_kit_root_make_help.rst"/>
+					<F N="doc/guides/prog_guide/efd_lib.rst"/>
+					<F N="doc/guides/prog_guide/env_abstraction_layer.rst"/>
+					<F N="doc/guides/prog_guide/event_ethernet_rx_adapter.rst"/>
+					<F N="doc/guides/prog_guide/eventdev.rst"/>
+					<F N="doc/guides/prog_guide/ext_app_lib_make_help.rst"/>
+					<F N="doc/guides/prog_guide/extend_dpdk.rst"/>
+					<F N="doc/guides/prog_guide/flow_classify_lib.rst"/>
+					<F N="doc/guides/prog_guide/generic_receive_offload_lib.rst"/>
+					<F N="doc/guides/prog_guide/generic_segmentation_offload_lib.rst"/>
+					<F N="doc/guides/prog_guide/glossary.rst"/>
+					<F N="doc/guides/prog_guide/hash_lib.rst"/>
+					<F N="doc/guides/prog_guide/index.rst"/>
+					<F N="doc/guides/prog_guide/intro.rst"/>
+					<F N="doc/guides/prog_guide/ip_fragment_reassembly_lib.rst"/>
+					<F N="doc/guides/prog_guide/kernel_nic_interface.rst"/>
+					<F N="doc/guides/prog_guide/link_bonding_poll_mode_drv_lib.rst"/>
+					<F N="doc/guides/prog_guide/lpm6_lib.rst"/>
+					<F N="doc/guides/prog_guide/lpm_lib.rst"/>
+					<F N="doc/guides/prog_guide/mbuf_lib.rst"/>
+					<F N="doc/guides/prog_guide/member_lib.rst"/>
+					<F N="doc/guides/prog_guide/mempool_lib.rst"/>
+					<F N="doc/guides/prog_guide/metrics_lib.rst"/>
+					<F N="doc/guides/prog_guide/multi_proc_support.rst"/>
+					<F N="doc/guides/prog_guide/overview.rst"/>
+					<F N="doc/guides/prog_guide/packet_classif_access_ctrl.rst"/>
+					<F N="doc/guides/prog_guide/packet_distrib_lib.rst"/>
+					<F N="doc/guides/prog_guide/packet_framework.rst"/>
+					<F N="doc/guides/prog_guide/pdump_lib.rst"/>
+					<F N="doc/guides/prog_guide/perf_opt_guidelines.rst"/>
+					<F N="doc/guides/prog_guide/poll_mode_drv.rst"/>
+					<F N="doc/guides/prog_guide/port_hotplug_framework.rst"/>
+					<F N="doc/guides/prog_guide/power_man.rst"/>
+					<F N="doc/guides/prog_guide/profile_app.rst"/>
+					<F N="doc/guides/prog_guide/qos_framework.rst"/>
+					<F N="doc/guides/prog_guide/reorder_lib.rst"/>
+					<F N="doc/guides/prog_guide/ring_lib.rst"/>
+					<F N="doc/guides/prog_guide/rte_flow.rst"/>
+					<F N="doc/guides/prog_guide/rte_security.rst"/>
+					<F N="doc/guides/prog_guide/service_cores.rst"/>
+					<F N="doc/guides/prog_guide/source_org.rst"/>
+					<F N="doc/guides/prog_guide/thread_safety_dpdk_functions.rst"/>
+					<F N="doc/guides/prog_guide/timer_lib.rst"/>
+					<F N="doc/guides/prog_guide/traffic_management.rst"/>
+					<F N="doc/guides/prog_guide/traffic_metering_and_policing.rst"/>
+					<F N="doc/guides/prog_guide/vhost_lib.rst"/>
+					<F N="doc/guides/prog_guide/writing_efficient_code.rst"/>
+				</Folder>
+				<Folder Name="rel_notes">
+					<F N="doc/guides/rel_notes/deprecation.rst"/>
+					<F N="doc/guides/rel_notes/index.rst"/>
+					<F N="doc/guides/rel_notes/known_issues.rst"/>
+					<F N="doc/guides/rel_notes/rel_description.rst"/>
+					<F N="doc/guides/rel_notes/release_16_04.rst"/>
+					<F N="doc/guides/rel_notes/release_16_07.rst"/>
+					<F N="doc/guides/rel_notes/release_16_11.rst"/>
+					<F N="doc/guides/rel_notes/release_17_02.rst"/>
+					<F N="doc/guides/rel_notes/release_17_05.rst"/>
+					<F N="doc/guides/rel_notes/release_17_08.rst"/>
+					<F N="doc/guides/rel_notes/release_17_11.rst"/>
+					<F N="doc/guides/rel_notes/release_1_8.rst"/>
+					<F N="doc/guides/rel_notes/release_2_0.rst"/>
+					<F N="doc/guides/rel_notes/release_2_1.rst"/>
+					<F N="doc/guides/rel_notes/release_2_2.rst"/>
+				</Folder>
+				<Folder Name="sample_app_ug">
+					<F N="doc/guides/sample_app_ug/cmd_line.rst"/>
+					<F N="doc/guides/sample_app_ug/compiling.rst"/>
+					<F N="doc/guides/sample_app_ug/dist_app.rst"/>
+					<F N="doc/guides/sample_app_ug/ethtool.rst"/>
+					<F N="doc/guides/sample_app_ug/eventdev_pipeline_sw_pmd.rst"/>
+					<F N="doc/guides/sample_app_ug/exception_path.rst"/>
+					<F N="doc/guides/sample_app_ug/flow_classify.rst"/>
+					<F N="doc/guides/sample_app_ug/flow_filtering.rst"/>
+					<F N="doc/guides/sample_app_ug/hello_world.rst"/>
+					<F N="doc/guides/sample_app_ug/index.rst"/>
+					<F N="doc/guides/sample_app_ug/intro.rst"/>
+					<F N="doc/guides/sample_app_ug/ip_frag.rst"/>
+					<F N="doc/guides/sample_app_ug/ip_pipeline.rst"/>
+					<F N="doc/guides/sample_app_ug/ip_reassembly.rst"/>
+					<F N="doc/guides/sample_app_ug/ipsec_secgw.rst"/>
+					<F N="doc/guides/sample_app_ug/ipv4_multicast.rst"/>
+					<F N="doc/guides/sample_app_ug/keep_alive.rst"/>
+					<F N="doc/guides/sample_app_ug/kernel_nic_interface.rst"/>
+					<F N="doc/guides/sample_app_ug/l2_forward_cat.rst"/>
+					<F N="doc/guides/sample_app_ug/l2_forward_crypto.rst"/>
+					<F N="doc/guides/sample_app_ug/l2_forward_job_stats.rst"/>
+					<F N="doc/guides/sample_app_ug/l2_forward_real_virtual.rst"/>
+					<F N="doc/guides/sample_app_ug/l3_forward.rst"/>
+					<F N="doc/guides/sample_app_ug/l3_forward_access_ctrl.rst"/>
+					<F N="doc/guides/sample_app_ug/l3_forward_power_man.rst"/>
+					<F N="doc/guides/sample_app_ug/l3_forward_virtual.rst"/>
+					<F N="doc/guides/sample_app_ug/link_status_intr.rst"/>
+					<F N="doc/guides/sample_app_ug/load_balancer.rst"/>
+					<F N="doc/guides/sample_app_ug/multi_process.rst"/>
+					<F N="doc/guides/sample_app_ug/netmap_compatibility.rst"/>
+					<F N="doc/guides/sample_app_ug/packet_ordering.rst"/>
+					<F N="doc/guides/sample_app_ug/performance_thread.rst"/>
+					<F N="doc/guides/sample_app_ug/ptpclient.rst"/>
+					<F N="doc/guides/sample_app_ug/qos_metering.rst"/>
+					<F N="doc/guides/sample_app_ug/qos_scheduler.rst"/>
+					<F N="doc/guides/sample_app_ug/quota_watermark.rst"/>
+					<F N="doc/guides/sample_app_ug/rxtx_callbacks.rst"/>
+					<F N="doc/guides/sample_app_ug/server_node_efd.rst"/>
+					<F N="doc/guides/sample_app_ug/service_cores.rst"/>
+					<F N="doc/guides/sample_app_ug/skeleton.rst"/>
+					<F N="doc/guides/sample_app_ug/tep_termination.rst"/>
+					<F N="doc/guides/sample_app_ug/test_pipeline.rst"/>
+					<F N="doc/guides/sample_app_ug/timer.rst"/>
+					<F N="doc/guides/sample_app_ug/vhost.rst"/>
+					<F N="doc/guides/sample_app_ug/vhost_scsi.rst"/>
+					<F N="doc/guides/sample_app_ug/vm_power_management.rst"/>
+					<F N="doc/guides/sample_app_ug/vmdq_dcb_forwarding.rst"/>
+				</Folder>
+				<Folder Name="testpmd_app_ug">
+					<F N="doc/guides/testpmd_app_ug/build_app.rst"/>
+					<F N="doc/guides/testpmd_app_ug/index.rst"/>
+					<F N="doc/guides/testpmd_app_ug/intro.rst"/>
+					<F N="doc/guides/testpmd_app_ug/run_app.rst"/>
+					<F N="doc/guides/testpmd_app_ug/testpmd_funcs.rst"/>
+				</Folder>
+				<Folder Name="tools">
+					<F N="doc/guides/tools/cryptoperf.rst"/>
+					<F N="doc/guides/tools/devbind.rst"/>
+					<F N="doc/guides/tools/index.rst"/>
+					<F N="doc/guides/tools/pdump.rst"/>
+					<F N="doc/guides/tools/pmdinfo.rst"/>
+					<F N="doc/guides/tools/proc_info.rst"/>
+					<F N="doc/guides/tools/testeventdev.rst"/>
+				</Folder>
+				<F N="doc/guides/index.rst"/>
 			</Folder>
 		</Folder>
 		<Folder Name="drivers">
 			<Folder Name="bus">
+				<Folder Name="dpaa">
+					<Folder Name="base">
+						<Folder Name="fman">
+							<F N="drivers/bus/dpaa/base/fman/fman.c"/>
+							<F N="drivers/bus/dpaa/base/fman/fman_hw.c"/>
+							<F N="drivers/bus/dpaa/base/fman/netcfg_layer.c"/>
+							<F N="drivers/bus/dpaa/base/fman/of.c"/>
+						</Folder>
+						<Folder Name="qbman">
+							<F N="drivers/bus/dpaa/base/qbman/bman.c"/>
+							<F N="drivers/bus/dpaa/base/qbman/bman.h"/>
+							<F N="drivers/bus/dpaa/base/qbman/bman_driver.c"/>
+							<F N="drivers/bus/dpaa/base/qbman/bman_priv.h"/>
+							<F N="drivers/bus/dpaa/base/qbman/dpaa_alloc.c"/>
+							<F N="drivers/bus/dpaa/base/qbman/dpaa_sys.c"/>
+							<F N="drivers/bus/dpaa/base/qbman/dpaa_sys.h"/>
+							<F N="drivers/bus/dpaa/base/qbman/process.c"/>
+							<F N="drivers/bus/dpaa/base/qbman/qman.c"/>
+							<F N="drivers/bus/dpaa/base/qbman/qman.h"/>
+							<F N="drivers/bus/dpaa/base/qbman/qman_driver.c"/>
+							<F N="drivers/bus/dpaa/base/qbman/qman_priv.h"/>
+						</Folder>
+					</Folder>
+					<Folder Name="include">
+						<F N="drivers/bus/dpaa/include/compat.h"/>
+						<F N="drivers/bus/dpaa/include/dpaa_bits.h"/>
+						<F N="drivers/bus/dpaa/include/dpaa_list.h"/>
+						<F N="drivers/bus/dpaa/include/dpaa_rbtree.h"/>
+						<F N="drivers/bus/dpaa/include/fman.h"/>
+						<F N="drivers/bus/dpaa/include/fsl_bman.h"/>
+						<F N="drivers/bus/dpaa/include/fsl_fman.h"/>
+						<F N="drivers/bus/dpaa/include/fsl_fman_crc64.h"/>
+						<F N="drivers/bus/dpaa/include/fsl_qman.h"/>
+						<F N="drivers/bus/dpaa/include/fsl_usd.h"/>
+						<F N="drivers/bus/dpaa/include/netcfg.h"/>
+						<F N="drivers/bus/dpaa/include/of.h"/>
+						<F N="drivers/bus/dpaa/include/process.h"/>
+					</Folder>
+					<F N="drivers/bus/dpaa/dpaa_bus.c"/>
+					<F N="drivers/bus/dpaa/Makefile"/>
+					<F N="drivers/bus/dpaa/rte_dpaa_bus.h"/>
+					<F N="drivers/bus/dpaa/rte_dpaa_logs.h"/>
+				</Folder>
 				<Folder Name="fslmc">
 					<Folder Name="mc">
 						<F N="drivers/bus/fslmc/mc/dpbp.c"/>
@@ -374,7 +654,6 @@
 						</Folder>
 						<F N="drivers/bus/fslmc/qbman/qbman_portal.c"/>
 						<F N="drivers/bus/fslmc/qbman/qbman_portal.h"/>
-						<F N="drivers/bus/fslmc/qbman/qbman_private.h"/>
 						<F N="drivers/bus/fslmc/qbman/qbman_sys.h"/>
 						<F N="drivers/bus/fslmc/qbman/qbman_sys_decl.h"/>
 					</Folder>
@@ -384,6 +663,30 @@
 					<F N="drivers/bus/fslmc/fslmc_vfio.h"/>
 					<F N="drivers/bus/fslmc/Makefile"/>
 					<F N="drivers/bus/fslmc/rte_fslmc.h"/>
+				</Folder>
+				<Folder Name="pci">
+					<Folder Name="bsd">
+						<F N="drivers/bus/pci/bsd/Makefile"/>
+						<F N="drivers/bus/pci/bsd/pci.c"/>
+					</Folder>
+					<Folder Name="linux">
+						<F N="drivers/bus/pci/linux/Makefile"/>
+						<F N="drivers/bus/pci/linux/pci.c"/>
+						<F N="drivers/bus/pci/linux/pci_init.h"/>
+						<F N="drivers/bus/pci/linux/pci_uio.c"/>
+						<F N="drivers/bus/pci/linux/pci_vfio.c"/>
+					</Folder>
+					<F N="drivers/bus/pci/Makefile"/>
+					<F N="drivers/bus/pci/pci_common.c"/>
+					<F N="drivers/bus/pci/pci_common_uio.c"/>
+					<F N="drivers/bus/pci/private.h"/>
+					<F N="drivers/bus/pci/rte_bus_pci.h"/>
+				</Folder>
+				<Folder Name="vdev">
+					<F N="drivers/bus/vdev/Makefile"/>
+					<F N="drivers/bus/vdev/rte_bus_vdev.h"/>
+					<F N="drivers/bus/vdev/vdev.c"/>
+					<F N="drivers/bus/vdev/vdev_logs.h"/>
 				</Folder>
 				<F N="drivers/bus/Makefile"/>
 			</Folder>
@@ -445,11 +748,24 @@
 					<F N="drivers/crypto/dpaa2_sec/dpaa2_sec_priv.h"/>
 					<F N="drivers/crypto/dpaa2_sec/Makefile"/>
 				</Folder>
+				<Folder Name="dpaa_sec">
+					<F N="drivers/crypto/dpaa_sec/dpaa_sec.c"/>
+					<F N="drivers/crypto/dpaa_sec/dpaa_sec.h"/>
+					<F N="drivers/crypto/dpaa_sec/dpaa_sec_log.h"/>
+					<F N="drivers/crypto/dpaa_sec/Makefile"/>
+				</Folder>
 				<Folder Name="kasumi">
 					<F N="drivers/crypto/kasumi/Makefile"/>
 					<F N="drivers/crypto/kasumi/rte_kasumi_pmd.c"/>
 					<F N="drivers/crypto/kasumi/rte_kasumi_pmd_ops.c"/>
 					<F N="drivers/crypto/kasumi/rte_kasumi_pmd_private.h"/>
+				</Folder>
+				<Folder Name="mrvl">
+					<F N="drivers/crypto/mrvl/Makefile"/>
+					<F N="drivers/crypto/mrvl/rte_mrvl_compat.h"/>
+					<F N="drivers/crypto/mrvl/rte_mrvl_pmd.c"/>
+					<F N="drivers/crypto/mrvl/rte_mrvl_pmd_ops.c"/>
+					<F N="drivers/crypto/mrvl/rte_mrvl_pmd_private.h"/>
 				</Folder>
 				<Folder Name="null">
 					<F N="drivers/crypto/null/Makefile"/>
@@ -512,14 +828,12 @@
 					<F N="drivers/event/dpaa2/dpaa2_eventdev.c"/>
 					<F N="drivers/event/dpaa2/dpaa2_eventdev.h"/>
 					<F N="drivers/event/dpaa2/dpaa2_hw_dpcon.c"/>
+					<F N="drivers/event/dpaa2/Makefile"/>
 				</Folder>
 				<Folder Name="octeontx">
 					<F N="drivers/event/octeontx/Makefile"/>
-					<F N="drivers/event/octeontx/rte_pmd_octeontx_ssovf.h"/>
 					<F N="drivers/event/octeontx/ssovf_evdev.c"/>
 					<F N="drivers/event/octeontx/ssovf_evdev.h"/>
-					<F N="drivers/event/octeontx/ssovf_mbox.c"/>
-					<F N="drivers/event/octeontx/ssovf_probe.c"/>
 					<F N="drivers/event/octeontx/ssovf_worker.c"/>
 					<F N="drivers/event/octeontx/ssovf_worker.h"/>
 				</Folder>
@@ -541,10 +855,25 @@
 				<F N="drivers/event/Makefile"/>
 			</Folder>
 			<Folder Name="mempool">
+				<Folder Name="dpaa">
+					<F N="drivers/mempool/dpaa/dpaa_mempool.c"/>
+					<F N="drivers/mempool/dpaa/dpaa_mempool.h"/>
+					<F N="drivers/mempool/dpaa/Makefile"/>
+				</Folder>
 				<Folder Name="dpaa2">
 					<F N="drivers/mempool/dpaa2/dpaa2_hw_mempool.c"/>
 					<F N="drivers/mempool/dpaa2/dpaa2_hw_mempool.h"/>
 					<F N="drivers/mempool/dpaa2/Makefile"/>
+				</Folder>
+				<Folder Name="octeontx">
+					<F N="drivers/mempool/octeontx/Makefile"/>
+					<F N="drivers/mempool/octeontx/octeontx_fpavf.c"/>
+					<F N="drivers/mempool/octeontx/octeontx_fpavf.h"/>
+					<F N="drivers/mempool/octeontx/octeontx_mbox.c"/>
+					<F N="drivers/mempool/octeontx/octeontx_mbox.h"/>
+					<F N="drivers/mempool/octeontx/octeontx_pool_logs.h"/>
+					<F N="drivers/mempool/octeontx/octeontx_ssovf.c"/>
+					<F N="drivers/mempool/octeontx/rte_mempool_octeontx.c"/>
 				</Folder>
 				<Folder Name="ring">
 					<F N="drivers/mempool/ring/Makefile"/>
@@ -565,7 +894,6 @@
 					<F N="drivers/net/ark/ark_ddm.c"/>
 					<F N="drivers/net/ark/ark_ddm.h"/>
 					<F N="drivers/net/ark/ark_ethdev.c"/>
-					<F N="drivers/net/ark/ark_ethdev.h"/>
 					<F N="drivers/net/ark/ark_ethdev_rx.c"/>
 					<F N="drivers/net/ark/ark_ethdev_rx.h"/>
 					<F N="drivers/net/ark/ark_ethdev_tx.c"/>
@@ -629,6 +957,7 @@
 					<F N="drivers/net/bnxt/bnxt_hwrm.h"/>
 					<F N="drivers/net/bnxt/bnxt_irq.c"/>
 					<F N="drivers/net/bnxt/bnxt_irq.h"/>
+					<F N="drivers/net/bnxt/bnxt_nvm_defs.h"/>
 					<F N="drivers/net/bnxt/bnxt_ring.c"/>
 					<F N="drivers/net/bnxt/bnxt_ring.h"/>
 					<F N="drivers/net/bnxt/bnxt_rxq.c"/>
@@ -681,12 +1010,20 @@
 					<F N="drivers/net/cxgbe/Makefile"/>
 					<F N="drivers/net/cxgbe/sge.c"/>
 				</Folder>
+				<Folder Name="dpaa">
+					<F N="drivers/net/dpaa/dpaa_ethdev.c"/>
+					<F N="drivers/net/dpaa/dpaa_ethdev.h"/>
+					<F N="drivers/net/dpaa/dpaa_rxtx.c"/>
+					<F N="drivers/net/dpaa/dpaa_rxtx.h"/>
+					<F N="drivers/net/dpaa/Makefile"/>
+				</Folder>
 				<Folder Name="dpaa2">
 					<Folder Name="base">
 						<F N="drivers/net/dpaa2/base/dpaa2_hw_dpni.c"/>
 						<F N="drivers/net/dpaa2/base/dpaa2_hw_dpni_annot.h"/>
 					</Folder>
 					<Folder Name="mc">
+						<F N="drivers/net/dpaa2/mc/dpkg.c"/>
 						<F N="drivers/net/dpaa2/mc/dpni.c"/>
 						<F N="drivers/net/dpaa2/mc/fsl_dpkg.h"/>
 						<F N="drivers/net/dpaa2/mc/fsl_dpni.h"/>
@@ -814,6 +1151,7 @@
 					<F N="drivers/net/failsafe/failsafe_ops.c"/>
 					<F N="drivers/net/failsafe/failsafe_private.h"/>
 					<F N="drivers/net/failsafe/failsafe_rxtx.c"/>
+					<F N="drivers/net/failsafe/Makefile"/>
 				</Folder>
 				<Folder Name="fm10k">
 					<Folder Name="base">
@@ -861,7 +1199,6 @@
 						<F N="drivers/net/i40e/base/i40e_register.h"/>
 						<F N="drivers/net/i40e/base/i40e_status.h"/>
 						<F N="drivers/net/i40e/base/i40e_type.h"/>
-						<F N="drivers/net/i40e/base/i40e_virtchnl.h"/>
 						<F N="drivers/net/i40e/base/virtchnl.h"/>
 					</Folder>
 					<F N="drivers/net/i40e/i40e_ethdev.c"/>
@@ -924,6 +1261,8 @@
 					<F N="drivers/net/ixgbe/ixgbe_ethdev.h"/>
 					<F N="drivers/net/ixgbe/ixgbe_fdir.c"/>
 					<F N="drivers/net/ixgbe/ixgbe_flow.c"/>
+					<F N="drivers/net/ixgbe/ixgbe_ipsec.c"/>
+					<F N="drivers/net/ixgbe/ixgbe_ipsec.h"/>
 					<F N="drivers/net/ixgbe/ixgbe_logs.h"/>
 					<F N="drivers/net/ixgbe/ixgbe_pf.c"/>
 					<F N="drivers/net/ixgbe/ixgbe_regs.h"/>
@@ -962,8 +1301,18 @@
 					<F N="drivers/net/mlx4/Makefile"/>
 					<F N="drivers/net/mlx4/mlx4.c"/>
 					<F N="drivers/net/mlx4/mlx4.h"/>
+					<F N="drivers/net/mlx4/mlx4_ethdev.c"/>
 					<F N="drivers/net/mlx4/mlx4_flow.c"/>
 					<F N="drivers/net/mlx4/mlx4_flow.h"/>
+					<F N="drivers/net/mlx4/mlx4_intr.c"/>
+					<F N="drivers/net/mlx4/mlx4_mr.c"/>
+					<F N="drivers/net/mlx4/mlx4_prm.h"/>
+					<F N="drivers/net/mlx4/mlx4_rxq.c"/>
+					<F N="drivers/net/mlx4/mlx4_rxtx.c"/>
+					<F N="drivers/net/mlx4/mlx4_rxtx.h"/>
+					<F N="drivers/net/mlx4/mlx4_txq.c"/>
+					<F N="drivers/net/mlx4/mlx4_utils.c"/>
+					<F N="drivers/net/mlx4/mlx4_utils.h"/>
 				</Folder>
 				<Folder Name="mlx5">
 					<F N="drivers/net/mlx5/Makefile"/>
@@ -971,7 +1320,6 @@
 					<F N="drivers/net/mlx5/mlx5.h"/>
 					<F N="drivers/net/mlx5/mlx5_defs.h"/>
 					<F N="drivers/net/mlx5/mlx5_ethdev.c"/>
-					<F N="drivers/net/mlx5/mlx5_fdir.c"/>
 					<F N="drivers/net/mlx5/mlx5_flow.c"/>
 					<F N="drivers/net/mlx5/mlx5_mac.c"/>
 					<F N="drivers/net/mlx5/mlx5_mr.c"/>
@@ -981,19 +1329,35 @@
 					<F N="drivers/net/mlx5/mlx5_rxq.c"/>
 					<F N="drivers/net/mlx5/mlx5_rxtx.c"/>
 					<F N="drivers/net/mlx5/mlx5_rxtx.h"/>
-					<F N="drivers/net/mlx5/mlx5_rxtx_vec_sse.c"/>
+					<F N="drivers/net/mlx5/mlx5_rxtx_vec.c"/>
+					<F N="drivers/net/mlx5/mlx5_rxtx_vec.h"/>
+					<F N="drivers/net/mlx5/mlx5_rxtx_vec_neon.h"/>
+					<F N="drivers/net/mlx5/mlx5_rxtx_vec_sse.h"/>
+					<F N="drivers/net/mlx5/mlx5_socket.c"/>
 					<F N="drivers/net/mlx5/mlx5_stats.c"/>
 					<F N="drivers/net/mlx5/mlx5_trigger.c"/>
 					<F N="drivers/net/mlx5/mlx5_txq.c"/>
 					<F N="drivers/net/mlx5/mlx5_utils.h"/>
 					<F N="drivers/net/mlx5/mlx5_vlan.c"/>
 				</Folder>
+				<Folder Name="mrvl">
+					<F N="drivers/net/mrvl/Makefile"/>
+					<F N="drivers/net/mrvl/mrvl_ethdev.c"/>
+					<F N="drivers/net/mrvl/mrvl_ethdev.h"/>
+					<F N="drivers/net/mrvl/mrvl_qos.c"/>
+					<F N="drivers/net/mrvl/mrvl_qos.h"/>
+				</Folder>
 				<Folder Name="nfp">
 					<F N="drivers/net/nfp/Makefile"/>
 					<F N="drivers/net/nfp/nfp_net.c"/>
 					<F N="drivers/net/nfp/nfp_net_ctrl.h"/>
+					<F N="drivers/net/nfp/nfp_net_eth.h"/>
 					<F N="drivers/net/nfp/nfp_net_logs.h"/>
 					<F N="drivers/net/nfp/nfp_net_pmd.h"/>
+					<F N="drivers/net/nfp/nfp_nfpu.c"/>
+					<F N="drivers/net/nfp/nfp_nfpu.h"/>
+					<F N="drivers/net/nfp/nfp_nspu.c"/>
+					<F N="drivers/net/nfp/nfp_nspu.h"/>
 				</Folder>
 				<Folder Name="ntacc">
 					<F N="drivers/net/ntacc/filter_ntacc.c"/>
@@ -1005,6 +1369,24 @@
 				<Folder Name="null">
 					<F N="drivers/net/null/Makefile"/>
 					<F N="drivers/net/null/rte_eth_null.c"/>
+				</Folder>
+				<Folder Name="octeontx">
+					<Folder Name="base">
+						<F N="drivers/net/octeontx/base/octeontx_bgx.c"/>
+						<F N="drivers/net/octeontx/base/octeontx_bgx.h"/>
+						<F N="drivers/net/octeontx/base/octeontx_io.h"/>
+						<F N="drivers/net/octeontx/base/octeontx_pki_var.h"/>
+						<F N="drivers/net/octeontx/base/octeontx_pkivf.c"/>
+						<F N="drivers/net/octeontx/base/octeontx_pkivf.h"/>
+						<F N="drivers/net/octeontx/base/octeontx_pkovf.c"/>
+						<F N="drivers/net/octeontx/base/octeontx_pkovf.h"/>
+					</Folder>
+					<F N="drivers/net/octeontx/Makefile"/>
+					<F N="drivers/net/octeontx/octeontx_ethdev.c"/>
+					<F N="drivers/net/octeontx/octeontx_ethdev.h"/>
+					<F N="drivers/net/octeontx/octeontx_logs.h"/>
+					<F N="drivers/net/octeontx/octeontx_rxtx.c"/>
+					<F N="drivers/net/octeontx/octeontx_rxtx.h"/>
 				</Folder>
 				<Folder Name="pcap">
 					<F N="drivers/net/pcap/Makefile"/>
@@ -1074,8 +1456,6 @@
 						<F N="drivers/net/qede/base/reg_addr.h"/>
 					</Folder>
 					<F N="drivers/net/qede/Makefile"/>
-					<F N="drivers/net/qede/qede_eth_if.c"/>
-					<F N="drivers/net/qede/qede_eth_if.h"/>
 					<F N="drivers/net/qede/qede_ethdev.c"/>
 					<F N="drivers/net/qede/qede_ethdev.h"/>
 					<F N="drivers/net/qede/qede_fdir.c"/>
@@ -1181,6 +1561,13 @@
 					<F N="drivers/net/sfc/sfc_tx.c"/>
 					<F N="drivers/net/sfc/sfc_tx.h"/>
 				</Folder>
+				<Folder Name="softnic">
+					<F N="drivers/net/softnic/Makefile"/>
+					<F N="drivers/net/softnic/rte_eth_softnic.c"/>
+					<F N="drivers/net/softnic/rte_eth_softnic.h"/>
+					<F N="drivers/net/softnic/rte_eth_softnic_internals.h"/>
+					<F N="drivers/net/softnic/rte_eth_softnic_tm.c"/>
+				</Folder>
 				<Folder Name="szedata2">
 					<F N="drivers/net/szedata2/Makefile"/>
 					<F N="drivers/net/szedata2/rte_eth_szedata2.c"/>
@@ -1267,16 +1654,6 @@
 					<F N="drivers/net/vmxnet3/vmxnet3_ring.h"/>
 					<F N="drivers/net/vmxnet3/vmxnet3_rxtx.c"/>
 				</Folder>
-				<Folder Name="xenvirt">
-					<F N="drivers/net/xenvirt/Makefile"/>
-					<F N="drivers/net/xenvirt/rte_eth_xenvirt.c"/>
-					<F N="drivers/net/xenvirt/rte_eth_xenvirt.h"/>
-					<F N="drivers/net/xenvirt/rte_mempool_gntalloc.c"/>
-					<F N="drivers/net/xenvirt/rte_xen_lib.c"/>
-					<F N="drivers/net/xenvirt/rte_xen_lib.h"/>
-					<F N="drivers/net/xenvirt/virtio_logs.h"/>
-					<F N="drivers/net/xenvirt/virtqueue.h"/>
-				</Folder>
 				<F N="drivers/net/Makefile"/>
 			</Folder>
 			<F N="drivers/Makefile"/>
@@ -1289,9 +1666,7 @@
 			</Folder>
 			<Folder Name="cmbatch">
 				<F N="examples/cmbatch/cmbatch.c"/>
-				<F
-					N="examples/cmbatch/Makefile"
-					Type="Makefile"/>
+				<F N="examples/cmbatch/Makefile"/>
 			</Folder>
 			<Folder Name="cmdline">
 				<F N="examples/cmdline/commands.c"/>
@@ -1321,10 +1696,20 @@
 			</Folder>
 			<Folder Name="eventdev_pipeline_sw_pmd">
 				<F N="examples/eventdev_pipeline_sw_pmd/main.c"/>
+				<F N="examples/eventdev_pipeline_sw_pmd/Makefile"/>
 			</Folder>
 			<Folder Name="exception_path">
 				<F N="examples/exception_path/main.c"/>
 				<F N="examples/exception_path/Makefile"/>
+			</Folder>
+			<Folder Name="flow_classify">
+				<F N="examples/flow_classify/flow_classify.c"/>
+				<F N="examples/flow_classify/Makefile"/>
+			</Folder>
+			<Folder Name="flow_filtering">
+				<F N="examples/flow_filtering/flow_blocks.c"/>
+				<F N="examples/flow_filtering/main.c"/>
+				<F N="examples/flow_filtering/Makefile"/>
 			</Folder>
 			<Folder Name="helloworld">
 				<F N="examples/helloworld/main.c"/>
@@ -1335,8 +1720,20 @@
 				<F N="examples/ip_fragmentation/Makefile"/>
 			</Folder>
 			<Folder Name="ip_pipeline">
+				<Folder Name="config">
+					<F N="examples/ip_pipeline/config/action.sh"/>
+					<F N="examples/ip_pipeline/config/edge_router_downstream.sh"/>
+					<F N="examples/ip_pipeline/config/edge_router_upstream.sh"/>
+					<F N="examples/ip_pipeline/config/firewall.sh"/>
+					<F N="examples/ip_pipeline/config/flow.sh"/>
+					<F N="examples/ip_pipeline/config/ip_pipeline.sh"/>
+					<F N="examples/ip_pipeline/config/l3fwd.sh"/>
+					<F N="examples/ip_pipeline/config/l3fwd_arp.sh"/>
+					<F N="examples/ip_pipeline/config/network_layers.sh"/>
+				</Folder>
 				<Folder Name="pipeline">
 					<F N="examples/ip_pipeline/pipeline/hash_func.h"/>
+					<F N="examples/ip_pipeline/pipeline/hash_func_arm64.h"/>
 					<F N="examples/ip_pipeline/pipeline/pipeline_actions_common.h"/>
 					<F N="examples/ip_pipeline/pipeline/pipeline_common_be.c"/>
 					<F N="examples/ip_pipeline/pipeline/pipeline_common_be.h"/>
@@ -1442,6 +1839,7 @@
 			</Folder>
 			<Folder Name="l3fwd">
 				<F N="examples/l3fwd/l3fwd.h"/>
+				<F N="examples/l3fwd/l3fwd_altivec.h"/>
 				<F N="examples/l3fwd/l3fwd_common.h"/>
 				<F N="examples/l3fwd/l3fwd_em.c"/>
 				<F N="examples/l3fwd/l3fwd_em.h"/>
@@ -1449,9 +1847,9 @@
 				<F N="examples/l3fwd/l3fwd_em_hlm_neon.h"/>
 				<F N="examples/l3fwd/l3fwd_em_hlm_sse.h"/>
 				<F N="examples/l3fwd/l3fwd_em_sequential.h"/>
-				<F N="examples/l3fwd/l3fwd_em_sse.h"/>
 				<F N="examples/l3fwd/l3fwd_lpm.c"/>
 				<F N="examples/l3fwd/l3fwd_lpm.h"/>
+				<F N="examples/l3fwd/l3fwd_lpm_altivec.h"/>
 				<F N="examples/l3fwd/l3fwd_lpm_neon.h"/>
 				<F N="examples/l3fwd/l3fwd_lpm_sse.h"/>
 				<F N="examples/l3fwd/l3fwd_neon.h"/>
@@ -1553,6 +1951,7 @@
 							<F N="examples/performance-thread/common/arch/x86/stack.h"/>
 						</Folder>
 					</Folder>
+					<F N="examples/performance-thread/common/common.mk"/>
 					<F N="examples/performance-thread/common/lthread.c"/>
 					<F N="examples/performance-thread/common/lthread.h"/>
 					<F N="examples/performance-thread/common/lthread_api.h"/>
@@ -1576,6 +1975,7 @@
 				<Folder Name="l3fwd-thread">
 					<F N="examples/performance-thread/l3fwd-thread/main.c"/>
 					<F N="examples/performance-thread/l3fwd-thread/Makefile"/>
+					<F N="examples/performance-thread/l3fwd-thread/test.sh"/>
 				</Folder>
 				<Folder Name="pthread_shim">
 					<F N="examples/performance-thread/pthread_shim/main.c"/>
@@ -1652,6 +2052,10 @@
 				</Folder>
 				<F N="examples/server_node_efd/Makefile"/>
 			</Folder>
+			<Folder Name="service_cores">
+				<F N="examples/service_cores/main.c"/>
+				<F N="examples/service_cores/Makefile"/>
+			</Folder>
 			<Folder Name="skeleton">
 				<F N="examples/skeleton/basicfwd.c"/>
 				<F N="examples/skeleton/Makefile"/>
@@ -1676,19 +2080,11 @@
 				<F N="examples/vhost/virtio_net.c"/>
 			</Folder>
 			<Folder Name="vhost_scsi">
+				<F N="examples/vhost_scsi/Makefile"/>
 				<F N="examples/vhost_scsi/scsi.c"/>
 				<F N="examples/vhost_scsi/scsi_spec.h"/>
 				<F N="examples/vhost_scsi/vhost_scsi.c"/>
 				<F N="examples/vhost_scsi/vhost_scsi.h"/>
-			</Folder>
-			<Folder Name="vhost_xen">
-				<F N="examples/vhost_xen/main.c"/>
-				<F N="examples/vhost_xen/main.h"/>
-				<F N="examples/vhost_xen/Makefile"/>
-				<F N="examples/vhost_xen/vhost_monitor.c"/>
-				<F N="examples/vhost_xen/virtio-net.h"/>
-				<F N="examples/vhost_xen/xen_vhost.h"/>
-				<F N="examples/vhost_xen/xenstore_parse.c"/>
 			</Folder>
 			<Folder Name="vm_power_manager">
 				<Folder Name="guest_cli">
@@ -1786,10 +2182,8 @@
 				<F N="lib/librte_cryptodev/rte_crypto_sym.h"/>
 				<F N="lib/librte_cryptodev/rte_cryptodev.c"/>
 				<F N="lib/librte_cryptodev/rte_cryptodev.h"/>
-				<F N="lib/librte_cryptodev/rte_cryptodev_pci.h"/>
 				<F N="lib/librte_cryptodev/rte_cryptodev_pmd.c"/>
 				<F N="lib/librte_cryptodev/rte_cryptodev_pmd.h"/>
-				<F N="lib/librte_cryptodev/rte_cryptodev_vdev.h"/>
 			</Folder>
 			<Folder Name="librte_distributor">
 				<F N="lib/librte_distributor/Makefile"/>
@@ -1809,12 +2203,6 @@
 						<F N="lib/librte_eal/bsdapp/contigmem/Makefile"/>
 					</Folder>
 					<Folder Name="eal">
-						<Folder Name="include">
-							<Folder Name="exec-env">
-								<F N="lib/librte_eal/bsdapp/eal/include/exec-env/rte_dom0_common.h"/>
-								<F N="lib/librte_eal/bsdapp/eal/include/exec-env/rte_interrupts.h"/>
-							</Folder>
-						</Folder>
 						<F N="lib/librte_eal/bsdapp/eal/eal.c"/>
 						<F N="lib/librte_eal/bsdapp/eal/eal_alarm.c"/>
 						<F N="lib/librte_eal/bsdapp/eal/eal_debug.c"/>
@@ -1822,7 +2210,6 @@
 						<F N="lib/librte_eal/bsdapp/eal/eal_interrupts.c"/>
 						<F N="lib/librte_eal/bsdapp/eal/eal_lcore.c"/>
 						<F N="lib/librte_eal/bsdapp/eal/eal_memory.c"/>
-						<F N="lib/librte_eal/bsdapp/eal/eal_pci.c"/>
 						<F N="lib/librte_eal/bsdapp/eal/eal_thread.c"/>
 						<F N="lib/librte_eal/bsdapp/eal/eal_timer.c"/>
 						<F N="lib/librte_eal/bsdapp/eal/Makefile"/>
@@ -1837,12 +2224,16 @@
 					<Folder Name="arch">
 						<Folder Name="arm">
 							<F N="lib/librte_eal/common/arch/arm/rte_cpuflags.c"/>
+							<F N="lib/librte_eal/common/arch/arm/rte_cycles.c"/>
 						</Folder>
 						<Folder Name="ppc_64">
 							<F N="lib/librte_eal/common/arch/ppc_64/rte_cpuflags.c"/>
+							<F N="lib/librte_eal/common/arch/ppc_64/rte_cycles.c"/>
 						</Folder>
 						<Folder Name="x86">
 							<F N="lib/librte_eal/common/arch/x86/rte_cpuflags.c"/>
+							<F N="lib/librte_eal/common/arch/x86/rte_cycles.c"/>
+							<F N="lib/librte_eal/common/arch/x86/rte_memcpy.c"/>
 							<F N="lib/librte_eal/common/arch/x86/rte_spinlock.c"/>
 						</Folder>
 					</Folder>
@@ -1920,6 +2311,7 @@
 							<F N="lib/librte_eal/common/include/generic/rte_vect.h"/>
 						</Folder>
 						<F N="lib/librte_eal/common/include/rte_alarm.h"/>
+						<F N="lib/librte_eal/common/include/rte_bitmap.h"/>
 						<F N="lib/librte_eal/common/include/rte_branch_prediction.h"/>
 						<F N="lib/librte_eal/common/include/rte_bus.h"/>
 						<F N="lib/librte_eal/common/include/rte_common.h"/>
@@ -1927,6 +2319,7 @@
 						<F N="lib/librte_eal/common/include/rte_dev.h"/>
 						<F N="lib/librte_eal/common/include/rte_devargs.h"/>
 						<F N="lib/librte_eal/common/include/rte_eal.h"/>
+						<F N="lib/librte_eal/common/include/rte_eal_interrupts.h"/>
 						<F N="lib/librte_eal/common/include/rte_eal_memconfig.h"/>
 						<F N="lib/librte_eal/common/include/rte_errno.h"/>
 						<F N="lib/librte_eal/common/include/rte_hexdump.h"/>
@@ -1939,7 +2332,6 @@
 						<F N="lib/librte_eal/common/include/rte_malloc_heap.h"/>
 						<F N="lib/librte_eal/common/include/rte_memory.h"/>
 						<F N="lib/librte_eal/common/include/rte_memzone.h"/>
-						<F N="lib/librte_eal/common/include/rte_pci.h"/>
 						<F N="lib/librte_eal/common/include/rte_pci_dev_feature_defs.h"/>
 						<F N="lib/librte_eal/common/include/rte_pci_dev_features.h"/>
 						<F N="lib/librte_eal/common/include/rte_per_lcore.h"/>
@@ -1949,8 +2341,8 @@
 						<F N="lib/librte_eal/common/include/rte_string_fns.h"/>
 						<F N="lib/librte_eal/common/include/rte_tailq.h"/>
 						<F N="lib/librte_eal/common/include/rte_time.h"/>
-						<F N="lib/librte_eal/common/include/rte_vdev.h"/>
 						<F N="lib/librte_eal/common/include/rte_version.h"/>
+						<F N="lib/librte_eal/common/include/rte_vfio.h"/>
 					</Folder>
 					<F N="lib/librte_eal/common/eal_common_bus.c"/>
 					<F N="lib/librte_eal/common/eal_common_cpuflags.c"/>
@@ -1964,14 +2356,11 @@
 					<F N="lib/librte_eal/common/eal_common_memory.c"/>
 					<F N="lib/librte_eal/common/eal_common_memzone.c"/>
 					<F N="lib/librte_eal/common/eal_common_options.c"/>
-					<F N="lib/librte_eal/common/eal_common_pci.c"/>
-					<F N="lib/librte_eal/common/eal_common_pci_uio.c"/>
 					<F N="lib/librte_eal/common/eal_common_proc.c"/>
 					<F N="lib/librte_eal/common/eal_common_string_fns.c"/>
 					<F N="lib/librte_eal/common/eal_common_tailqs.c"/>
 					<F N="lib/librte_eal/common/eal_common_thread.c"/>
 					<F N="lib/librte_eal/common/eal_common_timer.c"/>
-					<F N="lib/librte_eal/common/eal_common_vdev.c"/>
 					<F N="lib/librte_eal/common/eal_filesystem.h"/>
 					<F N="lib/librte_eal/common/eal_hugepages.h"/>
 					<F N="lib/librte_eal/common/eal_internal_cfg.h"/>
@@ -1991,8 +2380,6 @@
 					<Folder Name="eal">
 						<Folder Name="include">
 							<Folder Name="exec-env">
-								<F N="lib/librte_eal/linuxapp/eal/include/exec-env/rte_dom0_common.h"/>
-								<F N="lib/librte_eal/linuxapp/eal/include/exec-env/rte_interrupts.h"/>
 								<F N="lib/librte_eal/linuxapp/eal/include/exec-env/rte_kni_common.h"/>
 							</Folder>
 						</Folder>
@@ -2004,16 +2391,11 @@
 						<F N="lib/librte_eal/linuxapp/eal/eal_lcore.c"/>
 						<F N="lib/librte_eal/linuxapp/eal/eal_log.c"/>
 						<F N="lib/librte_eal/linuxapp/eal/eal_memory.c"/>
-						<F N="lib/librte_eal/linuxapp/eal/eal_pci.c"/>
-						<F N="lib/librte_eal/linuxapp/eal/eal_pci_init.h"/>
-						<F N="lib/librte_eal/linuxapp/eal/eal_pci_uio.c"/>
-						<F N="lib/librte_eal/linuxapp/eal/eal_pci_vfio.c"/>
 						<F N="lib/librte_eal/linuxapp/eal/eal_thread.c"/>
 						<F N="lib/librte_eal/linuxapp/eal/eal_timer.c"/>
 						<F N="lib/librte_eal/linuxapp/eal/eal_vfio.c"/>
 						<F N="lib/librte_eal/linuxapp/eal/eal_vfio.h"/>
 						<F N="lib/librte_eal/linuxapp/eal/eal_vfio_mp_sync.c"/>
-						<F N="lib/librte_eal/linuxapp/eal/eal_xen_memory.c"/>
 						<F N="lib/librte_eal/linuxapp/eal/Makefile"/>
 					</Folder>
 					<Folder Name="igb_uio">
@@ -2086,12 +2468,6 @@
 						<F N="lib/librte_eal/linuxapp/kni/kni_net.c"/>
 						<F N="lib/librte_eal/linuxapp/kni/Makefile"/>
 					</Folder>
-					<Folder Name="xen_dom0">
-						<F N="lib/librte_eal/linuxapp/xen_dom0/compat.h"/>
-						<F N="lib/librte_eal/linuxapp/xen_dom0/dom0_mm_dev.h"/>
-						<F N="lib/librte_eal/linuxapp/xen_dom0/dom0_mm_misc.c"/>
-						<F N="lib/librte_eal/linuxapp/xen_dom0/Makefile"/>
-					</Folder>
 					<F N="lib/librte_eal/linuxapp/Makefile"/>
 				</Folder>
 				<F N="lib/librte_eal/Makefile"/>
@@ -2116,12 +2492,17 @@
 				<F N="lib/librte_ether/rte_flow.c"/>
 				<F N="lib/librte_ether/rte_flow.h"/>
 				<F N="lib/librte_ether/rte_flow_driver.h"/>
+				<F N="lib/librte_ether/rte_mtr.c"/>
+				<F N="lib/librte_ether/rte_mtr.h"/>
+				<F N="lib/librte_ether/rte_mtr_driver.h"/>
 				<F N="lib/librte_ether/rte_tm.c"/>
 				<F N="lib/librte_ether/rte_tm.h"/>
 				<F N="lib/librte_ether/rte_tm_driver.h"/>
 			</Folder>
 			<Folder Name="librte_eventdev">
 				<F N="lib/librte_eventdev/Makefile"/>
+				<F N="lib/librte_eventdev/rte_event_eth_rx_adapter.c"/>
+				<F N="lib/librte_eventdev/rte_event_eth_rx_adapter.h"/>
 				<F N="lib/librte_eventdev/rte_event_ring.c"/>
 				<F N="lib/librte_eventdev/rte_event_ring.h"/>
 				<F N="lib/librte_eventdev/rte_eventdev.c"/>
@@ -2130,11 +2511,30 @@
 				<F N="lib/librte_eventdev/rte_eventdev_pmd_pci.h"/>
 				<F N="lib/librte_eventdev/rte_eventdev_pmd_vdev.h"/>
 			</Folder>
+			<Folder Name="librte_flow_classify">
+				<F N="lib/librte_flow_classify/Makefile"/>
+				<F N="lib/librte_flow_classify/rte_flow_classify.c"/>
+				<F N="lib/librte_flow_classify/rte_flow_classify.h"/>
+				<F N="lib/librte_flow_classify/rte_flow_classify_parse.c"/>
+				<F N="lib/librte_flow_classify/rte_flow_classify_parse.h"/>
+			</Folder>
 			<Folder Name="librte_gro">
 				<F N="lib/librte_gro/gro_tcp4.c"/>
 				<F N="lib/librte_gro/gro_tcp4.h"/>
+				<F N="lib/librte_gro/Makefile"/>
 				<F N="lib/librte_gro/rte_gro.c"/>
 				<F N="lib/librte_gro/rte_gro.h"/>
+			</Folder>
+			<Folder Name="librte_gso">
+				<F N="lib/librte_gso/gso_common.c"/>
+				<F N="lib/librte_gso/gso_common.h"/>
+				<F N="lib/librte_gso/gso_tcp4.c"/>
+				<F N="lib/librte_gso/gso_tcp4.h"/>
+				<F N="lib/librte_gso/gso_tunnel_tcp4.c"/>
+				<F N="lib/librte_gso/gso_tunnel_tcp4.h"/>
+				<F N="lib/librte_gso/Makefile"/>
+				<F N="lib/librte_gso/rte_gso.c"/>
+				<F N="lib/librte_gso/rte_gso.h"/>
 			</Folder>
 			<Folder Name="librte_hash">
 				<F N="lib/librte_hash/Makefile"/>
@@ -2200,6 +2600,16 @@
 				<F N="lib/librte_mbuf/rte_mbuf_ptype.c"/>
 				<F N="lib/librte_mbuf/rte_mbuf_ptype.h"/>
 			</Folder>
+			<Folder Name="librte_member">
+				<F N="lib/librte_member/Makefile"/>
+				<F N="lib/librte_member/rte_member.c"/>
+				<F N="lib/librte_member/rte_member.h"/>
+				<F N="lib/librte_member/rte_member_ht.c"/>
+				<F N="lib/librte_member/rte_member_ht.h"/>
+				<F N="lib/librte_member/rte_member_vbf.c"/>
+				<F N="lib/librte_member/rte_member_vbf.h"/>
+				<F N="lib/librte_member/rte_member_x86.h"/>
+			</Folder>
 			<Folder Name="librte_mempool">
 				<F N="lib/librte_mempool/Makefile"/>
 				<F N="lib/librte_mempool/rte_mempool.c"/>
@@ -2221,6 +2631,7 @@
 				<F N="lib/librte_net/net_crc_neon.h"/>
 				<F N="lib/librte_net/net_crc_sse.h"/>
 				<F N="lib/librte_net/rte_arp.h"/>
+				<F N="lib/librte_net/rte_esp.h"/>
 				<F N="lib/librte_net/rte_ether.h"/>
 				<F N="lib/librte_net/rte_gre.h"/>
 				<F N="lib/librte_net/rte_icmp.h"/>
@@ -2232,6 +2643,11 @@
 				<F N="lib/librte_net/rte_sctp.h"/>
 				<F N="lib/librte_net/rte_tcp.h"/>
 				<F N="lib/librte_net/rte_udp.h"/>
+			</Folder>
+			<Folder Name="librte_pci">
+				<F N="lib/librte_pci/Makefile"/>
+				<F N="lib/librte_pci/rte_pci.c"/>
+				<F N="lib/librte_pci/rte_pci.h"/>
 			</Folder>
 			<Folder Name="librte_pdump">
 				<F N="lib/librte_pdump/Makefile"/>
@@ -2290,7 +2706,6 @@
 				<F N="lib/librte_sched/Makefile"/>
 				<F N="lib/librte_sched/rte_approx.c"/>
 				<F N="lib/librte_sched/rte_approx.h"/>
-				<F N="lib/librte_sched/rte_bitmap.h"/>
 				<F N="lib/librte_sched/rte_reciprocal.c"/>
 				<F N="lib/librte_sched/rte_reciprocal.h"/>
 				<F N="lib/librte_sched/rte_red.c"/>
@@ -2298,6 +2713,12 @@
 				<F N="lib/librte_sched/rte_sched.c"/>
 				<F N="lib/librte_sched/rte_sched.h"/>
 				<F N="lib/librte_sched/rte_sched_common.h"/>
+			</Folder>
+			<Folder Name="librte_security">
+				<F N="lib/librte_security/Makefile"/>
+				<F N="lib/librte_security/rte_security.c"/>
+				<F N="lib/librte_security/rte_security.h"/>
+				<F N="lib/librte_security/rte_security_driver.h"/>
 			</Folder>
 			<Folder Name="librte_table">
 				<F N="lib/librte_table/Makefile"/>
@@ -2331,6 +2752,8 @@
 			<Folder Name="librte_vhost">
 				<F N="lib/librte_vhost/fd_man.c"/>
 				<F N="lib/librte_vhost/fd_man.h"/>
+				<F N="lib/librte_vhost/iotlb.c"/>
+				<F N="lib/librte_vhost/iotlb.h"/>
 				<F N="lib/librte_vhost/Makefile"/>
 				<F N="lib/librte_vhost/rte_vhost.h"/>
 				<F N="lib/librte_vhost/socket.c"/>
@@ -2391,11 +2814,11 @@
 				<Folder Name="armv8a">
 					<F N="mk/machine/armv8a/rte.vars.mk"/>
 				</Folder>
-				<Folder Name="atm">
-					<F N="mk/machine/atm/rte.vars.mk"/>
-				</Folder>
 				<Folder Name="default">
 					<F N="mk/machine/default/rte.vars.mk"/>
+				</Folder>
+				<Folder Name="dpaa">
+					<F N="mk/machine/dpaa/rte.vars.mk"/>
 				</Folder>
 				<Folder Name="dpaa2">
 					<F N="mk/machine/dpaa2/rte.vars.mk"/>
@@ -2414,6 +2837,9 @@
 				</Folder>
 				<Folder Name="power8">
 					<F N="mk/machine/power8/rte.vars.mk"/>
+				</Folder>
+				<Folder Name="silvermont">
+					<F N="mk/machine/silvermont/rte.vars.mk"/>
 				</Folder>
 				<Folder Name="snb">
 					<F N="mk/machine/snb/rte.vars.mk"/>
@@ -2480,84 +2906,6 @@
 			<F N="mk/rte.subdir.mk"/>
 			<F N="mk/rte.vars.mk"/>
 		</Folder>
-		<Folder Name="../nt_dpdk">
-			<Folder Name="ntapps">
-				<Folder Name="advanced_filter">
-					<F N="../nt_dpdk/ntapps/advanced_filter/advanced_filter.c"/>
-				</Folder>
-				<Folder Name="infini">
-					<F N="../nt_dpdk/ntapps/infini/infini.c"/>
-				</Folder>
-				<Folder Name="ip_filter">
-					<F N="../nt_dpdk/ntapps/ip_filter/ip_filter.c"/>
-				</Folder>
-				<Folder Name="nt_filter_test">
-					<F N="../nt_dpdk/ntapps/nt_filter_test/nt_filter_test.c"/>
-				</Folder>
-				<Folder Name="nt_single_stream">
-					<F N="../nt_dpdk/ntapps/nt_single_stream/nt_single_stream.c"/>
-				</Folder>
-				<Folder Name="rx_simple">
-					<F N="../nt_dpdk/ntapps/rx_simple/rx_simple.c"/>
-				</Folder>
-				<Folder Name="test_dpdk">
-					<F N="../nt_dpdk/ntapps/test_dpdk/main.c"/>
-					<F
-						N="../nt_dpdk/ntapps/test_dpdk/Makefile"
-						Type="Makefile"/>
-					<F N="../nt_dpdk/ntapps/test_dpdk/test_dpdk.h"/>
-					<F N="../nt_dpdk/ntapps/test_dpdk/tx.c"/>
-				</Folder>
-				<Folder Name="throughput">
-					<F N="../nt_dpdk/ntapps/throughput/throughput.c"/>
-				</Folder>
-				<Folder Name="tx">
-					<F
-						N="../nt_dpdk/ntapps/tx/Makefile"
-						Type="Makefile"/>
-					<F N="../nt_dpdk/ntapps/tx/tx.c"/>
-					<F N="../nt_dpdk/ntapps/tx/tx_modified.c"/>
-				</Folder>
-				<Folder Name="txperf">
-					<F N="../nt_dpdk/ntapps/txperf/txperf.c"/>
-					<F N="../nt_dpdk/ntapps/txperf/txperf_modified.c"/>
-				</Folder>
-			</Folder>
-		</Folder>
-		<Folder Name="/opt">
-			<Folder Name="napatech3">
-				<Folder Name="include">
-					<Folder Name="ntapi">
-						<F N="/opt/napatech3/include/ntapi/commontypes.h"/>
-						<F N="/opt/napatech3/include/ntapi/errorcodes.h"/>
-						<F N="/opt/napatech3/include/ntapi/ntapi.h"/>
-						<F N="/opt/napatech3/include/ntapi/pktdescr.h"/>
-						<F N="/opt/napatech3/include/ntapi/pktdescr_dyn.h"/>
-						<F N="/opt/napatech3/include/ntapi/pktdescr_dyn1.h"/>
-						<F N="/opt/napatech3/include/ntapi/pktdescr_dyn2.h"/>
-						<F N="/opt/napatech3/include/ntapi/pktdescr_dyn3.h"/>
-						<F N="/opt/napatech3/include/ntapi/pktdescr_ext7.h"/>
-						<F N="/opt/napatech3/include/ntapi/pktdescr_ext8.h"/>
-						<F N="/opt/napatech3/include/ntapi/pktdescr_ext9.h"/>
-						<F N="/opt/napatech3/include/ntapi/pktdescr_std0.h"/>
-						<F N="/opt/napatech3/include/ntapi/stream_config.h"/>
-						<F N="/opt/napatech3/include/ntapi/stream_config_compat.h"/>
-						<F N="/opt/napatech3/include/ntapi/stream_event.h"/>
-						<F N="/opt/napatech3/include/ntapi/stream_info.h"/>
-						<F N="/opt/napatech3/include/ntapi/stream_info_compat.h"/>
-						<F N="/opt/napatech3/include/ntapi/stream_net.h"/>
-						<F N="/opt/napatech3/include/ntapi/stream_statistics.h"/>
-						<F N="/opt/napatech3/include/ntapi/stream_statistics_compat.h"/>
-						<F N="/opt/napatech3/include/ntapi/version.h"/>
-					</Folder>
-					<Folder Name="ntutil">
-						<F N="/opt/napatech3/include/ntutil/hashref.h"/>
-					</Folder>
-					<F N="/opt/napatech3/include/nt.h"/>
-					<F N="/opt/napatech3/include/ntutil.h"/>
-				</Folder>
-			</Folder>
-		</Folder>
 		<Folder Name="test">
 			<Folder Name="cmdline_test">
 				<F N="test/cmdline_test/cmdline_test.c"/>
@@ -2579,6 +2927,7 @@
 				<F N="test/test/test_acl.h"/>
 				<F N="test/test/test_alarm.c"/>
 				<F N="test/test/test_atomic.c"/>
+				<F N="test/test/test_bitmap.c"/>
 				<F N="test/test/test_byteorder.c"/>
 				<F N="test/test/test_cfgfile.c"/>
 				<F N="test/test/test_cmdline.c"/>
@@ -2595,16 +2944,15 @@
 				<F N="test/test/test_crc.c"/>
 				<F N="test/test/test_cryptodev.c"/>
 				<F N="test/test/test_cryptodev.h"/>
+				<F N="test/test/test_cryptodev_aead_test_vectors.h"/>
 				<F N="test/test/test_cryptodev_aes_test_vectors.h"/>
 				<F N="test/test/test_cryptodev_blockcipher.c"/>
 				<F N="test/test/test_cryptodev_blockcipher.h"/>
 				<F N="test/test/test_cryptodev_des_test_vectors.h"/>
-				<F N="test/test/test_cryptodev_gcm_test_vectors.h"/>
 				<F N="test/test/test_cryptodev_hash_test_vectors.h"/>
 				<F N="test/test/test_cryptodev_hmac_test_vectors.h"/>
 				<F N="test/test/test_cryptodev_kasumi_hash_test_vectors.h"/>
 				<F N="test/test/test_cryptodev_kasumi_test_vectors.h"/>
-				<F N="test/test/test_cryptodev_perf.c"/>
 				<F N="test/test/test_cryptodev_snow3g_hash_test_vectors.h"/>
 				<F N="test/test/test_cryptodev_snow3g_test_vectors.h"/>
 				<F N="test/test/test_cryptodev_zuc_test_vectors.h"/>
@@ -2618,10 +2966,13 @@
 				<F N="test/test/test_efd.c"/>
 				<F N="test/test/test_efd_perf.c"/>
 				<F N="test/test/test_errno.c"/>
+				<F N="test/test/test_event_eth_rx_adapter.c"/>
 				<F N="test/test/test_event_ring.c"/>
 				<F N="test/test/test_eventdev.c"/>
 				<F N="test/test/test_eventdev_octeontx.c"/>
 				<F N="test/test/test_eventdev_sw.c"/>
+				<F N="test/test/test_flow_classify.c"/>
+				<F N="test/test/test_flow_classify.h"/>
 				<F N="test/test/test_func_reentrancy.c"/>
 				<F N="test/test/test_hash.c"/>
 				<F N="test/test/test_hash_functions.c"/>
@@ -2642,6 +2993,8 @@
 				<F N="test/test/test_lpm_perf.c"/>
 				<F N="test/test/test_malloc.c"/>
 				<F N="test/test/test_mbuf.c"/>
+				<F N="test/test/test_member.c"/>
+				<F N="test/test/test_member_perf.c"/>
 				<F N="test/test/test_memcpy.c"/>
 				<F N="test/test/test_memcpy_perf.c"/>
 				<F N="test/test/test_memory.c"/>
@@ -2709,24 +3062,16 @@
 			</Folder>
 			<F N="test/Makefile"/>
 		</Folder>
+		<Folder Name="usertools">
+			<F N="usertools/dpdk-setup.sh"/>
+		</Folder>
 		<Folder Name="x86_64-native-linuxapp-gcc">
 			<Folder Name="build">
 				<Folder Name="drivers">
-					<Folder Name="crypto">
-						<Folder Name="null">
-							<F N="x86_64-native-linuxapp-gcc/build/drivers/crypto/null/null_crypto_pmd.o.pmd.c"/>
-						</Folder>
-					</Folder>
-					<Folder Name="event">
+					<Folder Name="mempool">
 						<Folder Name="octeontx">
-							<F N="x86_64-native-linuxapp-gcc/build/drivers/event/octeontx/ssovf_evdev.o.pmd.c"/>
-							<F N="x86_64-native-linuxapp-gcc/build/drivers/event/octeontx/ssovf_probe.o.pmd.c"/>
-						</Folder>
-						<Folder Name="skeleton">
-							<F N="x86_64-native-linuxapp-gcc/build/drivers/event/skeleton/skeleton_eventdev.o.pmd.c"/>
-						</Folder>
-						<Folder Name="sw">
-							<F N="x86_64-native-linuxapp-gcc/build/drivers/event/sw/sw_evdev.o.pmd.c"/>
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/mempool/octeontx/octeontx_fpavf.o.pmd.c"/>
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/mempool/octeontx/octeontx_ssovf.o.pmd.c"/>
 						</Folder>
 					</Folder>
 					<Folder Name="net">
@@ -2771,20 +3116,19 @@
 						<Folder Name="ixgbe">
 							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/ixgbe/ixgbe_ethdev.o.pmd.c"/>
 						</Folder>
-						<Folder Name="kni">
-							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/kni/rte_eth_kni.o.pmd.c"/>
-						</Folder>
 						<Folder Name="liquidio">
 							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/liquidio/lio_ethdev.o.pmd.c"/>
 						</Folder>
 						<Folder Name="nfp">
 							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/nfp/nfp_net.o.pmd.c"/>
 						</Folder>
-						<Folder Name="ntacc">
-							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/ntacc/rte_eth_ntacc.o.pmd.c"/>
-						</Folder>
 						<Folder Name="null">
 							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/null/rte_eth_null.o.pmd.c"/>
+						</Folder>
+						<Folder Name="octeontx">
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/octeontx/octeontx_ethdev.o.pmd.c"/>
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/octeontx/octeontx_pkivf.o.pmd.c"/>
+							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/octeontx/octeontx_pkovf.o.pmd.c"/>
 						</Folder>
 						<Folder Name="qede">
 							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/qede/qede_ethdev.o.pmd.c"/>
@@ -2802,9 +3146,6 @@
 						<Folder Name="thunderx">
 							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/thunderx/nicvf_ethdev.o.pmd.c"/>
 						</Folder>
-						<Folder Name="vhost">
-							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/vhost/rte_eth_vhost.o.pmd.c"/>
-						</Folder>
 						<Folder Name="virtio">
 							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/virtio/virtio_ethdev.o.pmd.c"/>
 							<F N="x86_64-native-linuxapp-gcc/build/drivers/net/virtio/virtio_user_ethdev.o.pmd.c"/>
@@ -2820,10 +3161,12 @@
 							<Folder Name="igb_uio">
 								<F N="x86_64-native-linuxapp-gcc/build/lib/librte_eal/linuxapp/igb_uio/igb_uio.c"/>
 								<F N="x86_64-native-linuxapp-gcc/build/lib/librte_eal/linuxapp/igb_uio/igb_uio.mod.c"/>
+								<F N="x86_64-native-linuxapp-gcc/build/lib/librte_eal/linuxapp/igb_uio/Makefile"/>
 							</Folder>
 							<Folder Name="kni">
 								<F N="x86_64-native-linuxapp-gcc/build/lib/librte_eal/linuxapp/kni/kni_misc.c"/>
 								<F N="x86_64-native-linuxapp-gcc/build/lib/librte_eal/linuxapp/kni/kni_net.c"/>
+								<F N="x86_64-native-linuxapp-gcc/build/lib/librte_eal/linuxapp/kni/Makefile"/>
 								<F N="x86_64-native-linuxapp-gcc/build/lib/librte_eal/linuxapp/kni/rte_kni.mod.c"/>
 							</Folder>
 						</Folder>
@@ -2832,8 +3175,6 @@
 			</Folder>
 			<Folder Name="include">
 				<Folder Name="exec-env">
-					<F N="x86_64-native-linuxapp-gcc/include/exec-env/rte_dom0_common.h"/>
-					<F N="x86_64-native-linuxapp-gcc/include/exec-env/rte_interrupts.h"/>
 					<F N="x86_64-native-linuxapp-gcc/include/exec-env/rte_kni_common.h"/>
 				</Folder>
 				<Folder Name="generic">
@@ -2874,6 +3215,8 @@
 				<F N="x86_64-native-linuxapp-gcc/include/rte_bitrate.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_branch_prediction.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_bus.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_bus_pci.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_bus_vdev.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_byteorder.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_byteorder_32.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_byteorder_64.h"/>
@@ -2885,11 +3228,7 @@
 				<F N="x86_64-native-linuxapp-gcc/include/rte_crypto.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_crypto_sym.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_cryptodev.h"/>
-				<F N="x86_64-native-linuxapp-gcc/include/rte_cryptodev_pci.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_cryptodev_pmd.h"/>
-				<F N="x86_64-native-linuxapp-gcc/include/rte_cryptodev_scheduler.h"/>
-				<F N="x86_64-native-linuxapp-gcc/include/rte_cryptodev_scheduler_operations.h"/>
-				<F N="x86_64-native-linuxapp-gcc/include/rte_cryptodev_vdev.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_cycles.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_debug.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_dev.h"/>
@@ -2897,18 +3236,20 @@
 				<F N="x86_64-native-linuxapp-gcc/include/rte_devargs.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_distributor.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_eal.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_eal_interrupts.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_eal_memconfig.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_efd.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_errno.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_esp.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_eth_bond.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_eth_bond_8023ad.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_eth_ctrl.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_eth_ring.h"/>
-				<F N="x86_64-native-linuxapp-gcc/include/rte_eth_vhost.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_ethdev.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_ethdev_pci.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_ethdev_vdev.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_ether.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_event_eth_rx_adapter.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_event_ring.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_eventdev.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_eventdev_pmd.h"/>
@@ -2916,9 +3257,11 @@
 				<F N="x86_64-native-linuxapp-gcc/include/rte_eventdev_pmd_vdev.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_fbk_hash.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_flow.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_flow_classify.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_flow_driver.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_gre.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_gro.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_gso.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_hash.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_hash_crc.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_hexdump.h"/>
@@ -2945,12 +3288,15 @@
 				<F N="x86_64-native-linuxapp-gcc/include/rte_malloc_heap.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_mbuf.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_mbuf_ptype.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_member.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_memcpy.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_memory.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_mempool.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_memzone.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_meter.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_metrics.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_mtr.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_mtr_driver.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_net.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_net_crc.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_pause.h"/>
@@ -2963,7 +3309,6 @@
 				<F N="x86_64-native-linuxapp-gcc/include/rte_pmd_bnxt.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_pmd_i40e.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_pmd_ixgbe.h"/>
-				<F N="x86_64-native-linuxapp-gcc/include/rte_pmd_octeontx_ssovf.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_port.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_port_ethdev.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_port_fd.h"/>
@@ -2985,6 +3330,8 @@
 				<F N="x86_64-native-linuxapp-gcc/include/rte_sched.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_sched_common.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_sctp.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_security.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_security_driver.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_service.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_service_component.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_spinlock.h"/>
@@ -3004,11 +3351,12 @@
 				<F N="x86_64-native-linuxapp-gcc/include/rte_tm.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_tm_driver.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_udp.h"/>
-				<F N="x86_64-native-linuxapp-gcc/include/rte_vdev.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_vect.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_version.h"/>
+				<F N="x86_64-native-linuxapp-gcc/include/rte_vfio.h"/>
 				<F N="x86_64-native-linuxapp-gcc/include/rte_vhost.h"/>
 			</Folder>
+			<F N="x86_64-native-linuxapp-gcc/Makefile"/>
 		</Folder>
 		<F N="Makefile"/>
 	</Files>

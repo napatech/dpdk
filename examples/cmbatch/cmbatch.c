@@ -71,7 +71,6 @@ struct worker_data_s workerData[MAX_RX_PORTS][MAX_RX_QUEUES];
 static uint32_t number_of_ports = 1;
 static uint32_t number_of_queues = 4;
 static uint32_t parse_type = 1;
-static uint32_t error_no_batch = 0;
 static uint32_t useSwStat = 1;
 static uint32_t dstIP[4] = {0};
 static uint32_t srcIP[4] = {0};
@@ -777,7 +776,6 @@ static const char short_options[] =
 	"q:"  /* number of queues per port to use */
 	"t:"  /* Type of parsing done */
 	"s:"  /* Type of statistic used */
-	"e"   /* Fail if non batch mbufs are received */
 	"d:"  /* Destination IP address to use in filter */
   "i:"  /* Source IP address to use in filter */
 	;
@@ -799,7 +797,6 @@ cmbatch_usage(const char *prgname)
 				 "                 1: Use software statistics\n"
 				 "  -i ip_addr:    Source IP address to use in filter\n"
 				 "  -d ip_addr:    Destination IP address to use in filter\n"
-				 "  -e:            Fail if non batch mbufs are received \n"
 				 "\n"
 				 "  lcores used are equal to no_ports * queues_per_port + 1\n\n",
 	       prgname);
@@ -877,10 +874,6 @@ cmbatch_parse_args(int argc, char **argv)
 			{
 				sscanf(optarg, "%d.%d.%d.%d", &srcIP[0], &srcIP[1], &srcIP[2], &srcIP[3]);
 			}
-			break;
-
-		case 'e':
-			error_no_batch = 1;
 			break;
 
 		default:

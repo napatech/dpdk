@@ -19,7 +19,7 @@
 char fw_file[PATH_MAX];
 
 const char *QEDE_DEFAULT_FIRMWARE =
-	"/lib/firmware/qed/qed_init_values-8.20.0.0.bin";
+	"/lib/firmware/qed/qed_init_values-8.30.12.0.bin";
 
 static void
 qed_update_pf_params(struct ecore_dev *edev, struct ecore_pf_params *params)
@@ -36,6 +36,7 @@ static void qed_init_pci(struct ecore_dev *edev, struct rte_pci_device *pci_dev)
 {
 	edev->regview = pci_dev->mem_resource[0].addr;
 	edev->doorbells = pci_dev->mem_resource[2].addr;
+	edev->db_size = pci_dev->mem_resource[2].len;
 }
 
 static int
@@ -221,10 +222,11 @@ static void qed_stop_iov_task(struct ecore_dev *edev)
 static int qed_slowpath_start(struct ecore_dev *edev,
 			      struct qed_slowpath_params *params)
 {
+	struct ecore_drv_load_params drv_load_params;
+	struct ecore_hw_init_params hw_init_params;
+	struct ecore_mcp_drv_version drv_version;
 	const uint8_t *data = NULL;
 	struct ecore_hwfn *hwfn;
-	struct ecore_mcp_drv_version drv_version;
-	struct ecore_hw_init_params hw_init_params;
 	struct ecore_ptt *p_ptt;
 	int rc;
 
@@ -280,8 +282,13 @@ static int qed_slowpath_start(struct ecore_dev *edev,
 	hw_init_params.int_mode = ECORE_INT_MODE_MSIX;
 	hw_init_params.allow_npar_tx_switch = true;
 	hw_init_params.bin_fw_data = data;
-	hw_init_params.mfw_timeout_val = ECORE_LOAD_REQ_LOCK_TO_DEFAULT;
-	hw_init_params.avoid_eng_reset = false;
+
+	memset(&drv_load_params, 0, sizeof(drv_load_params));
+	drv_load_params.mfw_timeout_val = ECORE_LOAD_REQ_LOCK_TO_DEFAULT;
+	drv_load_params.avoid_eng_reset = false;
+	drv_load_params.override_force_load = ECORE_OVERRIDE_FORCE_LOAD_ALWAYS;
+	hw_init_params.p_drv_load_params = &drv_load_params;
+
 	rc = ecore_hw_init(edev, &hw_init_params);
 	if (rc) {
 		DP_ERR(edev, "ecore_hw_init failed\n");
@@ -335,6 +342,7 @@ err:
 static int
 qed_fill_dev_info(struct ecore_dev *edev, struct qed_dev_info *dev_info)
 {
+	struct ecore_hwfn *p_hwfn = ECORE_LEADING_HWFN(edev);
 	struct ecore_ptt *ptt = NULL;
 	struct ecore_tunnel_info *tun = &edev->tunnel;
 
@@ -357,6 +365,7 @@ qed_fill_dev_info(struct ecore_dev *edev, struct qed_dev_info *dev_info)
 	dev_info->num_hwfns = edev->num_hwfns;
 	dev_info->is_mf_default = IS_MF_DEFAULT(&edev->hwfns[0]);
 	dev_info->mtu = ECORE_LEADING_HWFN(edev)->hw_info.mtu;
+	dev_info->dev_type = edev->type;
 
 	rte_memcpy(&dev_info->hw_mac, &edev->hwfns[0].hw_info.hw_mac_addr,
 	       ETHER_ADDR_LEN);
@@ -367,8 +376,13 @@ qed_fill_dev_info(struct ecore_dev *edev, struct qed_dev_info *dev_info)
 	dev_info->fw_eng = FW_ENGINEERING_VERSION;
 
 	if (IS_PF(edev)) {
-		dev_info->mf_mode = edev->mf_mode;
+		dev_info->b_inter_pf_switch =
+			OSAL_TEST_BIT(ECORE_MF_INTER_PF_SWITCH, &edev->mf_bits);
+		if (!OSAL_TEST_BIT(ECORE_MF_DISABLE_ARFS, &edev->mf_bits))
+			dev_info->b_arfs_capable = true;
 		dev_info->tx_switching = false;
+
+		dev_info->smart_an = ecore_mcp_is_smart_an_supported(p_hwfn);
 
 		ptt = ecore_ptt_acquire(ECORE_LEADING_HWFN(edev));
 		if (ptt) {
@@ -412,7 +426,7 @@ qed_fill_eth_dev_info(struct ecore_dev *edev, struct qed_dev_eth_info *info)
 			info->num_queues +=
 			FEAT_NUM(&edev->hwfns[i], ECORE_PF_L2_QUE);
 
-		if (edev->p_iov_info)
+		if (IS_ECORE_SRIOV(edev))
 			max_vf_vlan_filters = edev->p_iov_info->total_vfs *
 					      ECORE_ETH_VF_NUM_VLAN_FILTERS;
 		info->num_vlan_filters = RESC_NUM(&edev->hwfns[0], ECORE_VLAN) -
@@ -423,7 +437,7 @@ qed_fill_eth_dev_info(struct ecore_dev *edev, struct qed_dev_eth_info *info)
 	} else {
 		ecore_vf_get_num_rxqs(ECORE_LEADING_HWFN(edev),
 				      &info->num_queues);
-		if (edev->num_hwfns > 1) {
+		if (ECORE_IS_CMT(edev)) {
 			ecore_vf_get_num_rxqs(&edev->hwfns[1], &queues);
 			info->num_queues += queues;
 		}
@@ -479,6 +493,7 @@ qed_sb_init(struct ecore_dev *edev, struct ecore_sb_info *sb_info,
 }
 
 static void qed_fill_link(struct ecore_hwfn *hwfn,
+			  __rte_unused struct ecore_ptt *ptt,
 			  struct qed_link_output *if_link)
 {
 	struct ecore_mcp_link_params params;
@@ -529,17 +544,42 @@ static void qed_fill_link(struct ecore_hwfn *hwfn,
 
 	if (params.pause.forced_tx)
 		if_link->pause_config |= QED_LINK_PAUSE_TX_ENABLE;
+
+	if (link_caps.default_eee == ECORE_MCP_EEE_UNSUPPORTED) {
+		if_link->eee_supported = false;
+	} else {
+		if_link->eee_supported = true;
+		if_link->eee_active = link.eee_active;
+		if_link->sup_caps = link_caps.eee_speed_caps;
+		/* MFW clears adv_caps on eee disable; use configured value */
+		if_link->eee.adv_caps = link.eee_adv_caps ? link.eee_adv_caps :
+					params.eee.adv_caps;
+		if_link->eee.lp_adv_caps = link.eee_lp_adv_caps;
+		if_link->eee.enable = params.eee.enable;
+		if_link->eee.tx_lpi_enable = params.eee.tx_lpi_enable;
+		if_link->eee.tx_lpi_timer = params.eee.tx_lpi_timer;
+	}
 }
 
 static void
 qed_get_current_link(struct ecore_dev *edev, struct qed_link_output *if_link)
 {
-	qed_fill_link(&edev->hwfns[0], if_link);
+	struct ecore_hwfn *hwfn;
+	struct ecore_ptt *ptt;
 
-#ifdef CONFIG_QED_SRIOV
-	for_each_hwfn(cdev, i)
-		qed_inform_vf_link_state(&cdev->hwfns[i]);
-#endif
+	hwfn = &edev->hwfns[0];
+	if (IS_PF(edev)) {
+		ptt = ecore_ptt_acquire(hwfn);
+		if (!ptt)
+			DP_NOTICE(hwfn, true, "Failed to fill link; No PTT\n");
+
+			qed_fill_link(hwfn, ptt, if_link);
+
+		if (ptt)
+			ecore_ptt_release(hwfn, ptt);
+	} else {
+		qed_fill_link(hwfn, NULL, if_link);
+	}
 }
 
 static int qed_set_link(struct ecore_dev *edev, struct qed_link_params *params)
@@ -578,6 +618,10 @@ static int qed_set_link(struct ecore_dev *edev, struct qed_link_params *params)
 			link_params->pause.forced_tx = false;
 	}
 
+	if (params->override_flags & QED_LINK_OVERRIDE_EEE_CONFIG)
+		memcpy(&link_params->eee, &params->eee,
+		       sizeof(link_params->eee));
+
 	rc = ecore_mcp_set_link(hwfn, ptt, params->link_up);
 
 	ecore_ptt_release(hwfn, ptt);
@@ -587,9 +631,10 @@ static int qed_set_link(struct ecore_dev *edev, struct qed_link_params *params)
 
 void qed_link_update(struct ecore_hwfn *hwfn)
 {
-	struct qed_link_output if_link;
+	struct ecore_dev *edev = hwfn->p_dev;
+	struct qede_dev *qdev = (struct qede_dev *)edev;
 
-	qed_fill_link(hwfn, &if_link);
+	qede_link_update((struct rte_eth_dev *)qdev->ethdev, 0);
 }
 
 static int qed_drain(struct ecore_dev *edev)

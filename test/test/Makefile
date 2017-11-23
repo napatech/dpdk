@@ -94,6 +94,7 @@ SRCS-y += test_cycles.c
 SRCS-y += test_spinlock.c
 SRCS-y += test_memory.c
 SRCS-y += test_memzone.c
+SRCS-y += test_bitmap.c
 
 SRCS-y += test_ring.c
 SRCS-y += test_ring_perf.c
@@ -106,6 +107,7 @@ SRCS-y += test_table_tables.c
 SRCS-y += test_table_ports.c
 SRCS-y += test_table_combined.c
 SRCS-$(CONFIG_RTE_LIBRTE_ACL) += test_table_acl.c
+SRCS-$(CONFIG_RTE_LIBRTE_FLOW_CLASSIFY) += test_flow_classify.c
 endif
 
 SRCS-y += test_rwlock.c
@@ -122,6 +124,10 @@ SRCS-y += test_logs.c
 
 SRCS-y += test_memcpy.c
 SRCS-y += test_memcpy_perf.c
+
+
+SRCS-$(CONFIG_RTE_LIBRTE_MEMBER) += test_member.c
+SRCS-$(CONFIG_RTE_LIBRTE_MEMBER) += test_member_perf.c
 
 SRCS-$(CONFIG_RTE_LIBRTE_EFD) += test_efd.c
 SRCS-$(CONFIG_RTE_LIBRTE_EFD) += test_efd_perf.c
@@ -198,12 +204,12 @@ SRCS-$(CONFIG_RTE_LIBRTE_PMD_RING) += test_pmd_ring.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_RING) += test_pmd_ring_perf.c
 
 SRCS-$(CONFIG_RTE_LIBRTE_CRYPTODEV) += test_cryptodev_blockcipher.c
-SRCS-$(CONFIG_RTE_LIBRTE_CRYPTODEV) += test_cryptodev_perf.c
 SRCS-$(CONFIG_RTE_LIBRTE_CRYPTODEV) += test_cryptodev.c
 
 ifeq ($(CONFIG_RTE_LIBRTE_EVENTDEV),y)
 SRCS-y += test_eventdev.c
 SRCS-y += test_event_ring.c
+SRCS-y += test_event_eth_rx_adapter.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_SW_EVENTDEV) += test_eventdev_sw.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_OCTEONTX_SSOVF) += test_eventdev_octeontx.c
 endif

@@ -49,7 +49,6 @@
 #include <rte_cycles.h>
 #include <rte_memory.h>
 #include <rte_memcpy.h>
-#include <rte_memzone.h>
 #include <rte_launch.h>
 #include <rte_eal.h>
 #include <rte_per_lcore.h>
@@ -122,7 +121,7 @@ pkt_burst_receive(struct fwd_stream *fs)
 	 */
 	if (verbose_level > 0)
 		printf("port %u/queue %u: received %u packets\n",
-		       (unsigned) fs->rx_port,
+		       fs->rx_port,
 		       (unsigned) fs->rx_queue,
 		       (unsigned) nb_rx);
 	for (i = 0; i < nb_rx; i++) {
@@ -158,6 +157,8 @@ pkt_burst_receive(struct fwd_stream *fs)
 				printf("hash=0x%x ID=0x%x ",
 				       mb->hash.fdir.hash, mb->hash.fdir.id);
 		}
+		if (ol_flags & PKT_RX_TIMESTAMP)
+			printf(" - timestamp %"PRIu64" ", mb->timestamp);
 		if (ol_flags & PKT_RX_VLAN_STRIPPED)
 			printf(" - VLAN tci=0x%x", mb->vlan_tci);
 		if (ol_flags & PKT_RX_QINQ_STRIPPED)

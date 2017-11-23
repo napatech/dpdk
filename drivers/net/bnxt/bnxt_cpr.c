@@ -55,7 +55,7 @@ void bnxt_handle_async_event(struct bnxt *bp,
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_LINK_STATUS_CHANGE:
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_LINK_SPEED_CHANGE:
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_LINK_SPEED_CFG_CHANGE:
-		bnxt_link_update_op(bp->eth_dev, 0);
+		bnxt_link_update_op(bp->eth_dev, 1);
 		break;
 	default:
 		RTE_LOG(DEBUG, PMD, "handle_async_event id = 0x%x\n", event_id);
@@ -183,8 +183,10 @@ void bnxt_free_def_cp_ring(struct bnxt *bp)
 		return;
 
 	bnxt_free_ring(cpr->cp_ring_struct);
+	cpr->cp_ring_struct = NULL;
 	rte_free(cpr->cp_ring_struct);
 	rte_free(cpr);
+	bp->def_cp_ring = NULL;
 }
 
 /* For the default completion ring only */

@@ -53,6 +53,7 @@
 #include <rte_flow_driver.h>
 #include <rte_version.h>
 #include <rte_pci.h>
+#include <rte_bus_pci.h>
 #include <net/if.h>
 #include <nt.h>
 
@@ -891,7 +892,7 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
 }
 
 #ifdef USE_SW_STAT
-static void eth_stats_get(struct rte_eth_dev *dev,
+static int eth_stats_get(struct rte_eth_dev *dev,
                           struct rte_eth_stats *igb_stats)
 {
   unsigned i;
@@ -928,10 +929,11 @@ static void eth_stats_get(struct rte_eth_dev *dev,
   igb_stats->ibytes = rx_total_bytes;
   igb_stats->obytes = tx_total_bytes;
   igb_stats->oerrors = tx_err_total;
+  return 0;
 }
 #else
-static void eth_stats_get(struct rte_eth_dev *dev,
-                          struct rte_eth_stats *igb_stats)
+static int eth_stats_get(struct rte_eth_dev *dev,
+                         struct rte_eth_stats *igb_stats)
 {
   struct pmd_internals *internals = dev->data->dev_private;
   uint queue;
@@ -943,7 +945,7 @@ static void eth_stats_get(struct rte_eth_dev *dev,
   pStatData = (NtStatistics_t *)rte_malloc(internals->name, sizeof(NtStatistics_t), 0);
   if (!pStatData) {
     RTE_LOG(ERR, PMD, "Error %s: Out of memory\n", __func__);
-    return;
+    return -ENOMEM;
   }
   
   memset(igb_stats, 0, sizeof(*igb_stats));
@@ -960,7 +962,7 @@ static void eth_stats_get(struct rte_eth_dev *dev,
     (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
     RTE_LOG(ERR, PMD, "ERROR: NT_StatRead failed. Code 0x%x = %s\n", status, errBuf);
     rte_free(pStatData);
-    return;
+    return -EIO;
   }
   rte_spinlock_unlock(&internals->statlock);
   igb_stats->ipackets = pStatData->u.query_v2.data.port.aPorts[port].rx.RMON1.pkts;
@@ -978,6 +980,7 @@ static void eth_stats_get(struct rte_eth_dev *dev,
 
   }
   rte_free(pStatData);
+  return 0;
 }
 #endif
 
@@ -1060,7 +1063,7 @@ static int eth_link_update(struct rte_eth_dev *dev,
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
     RTE_LOG(ERR, PMD, "Error %s: Out of memory\n", __func__);
-    return 1;
+    return -ENOMEM;
   }
 
   if ((status = (*_NT_InfoOpen)(&hInfo, "DPDK Info stream")) != NT_SUCCESS) {
@@ -1264,11 +1267,11 @@ static void _cleanUpFlow(struct rte_flow *flow, struct pmd_internals *internals)
     DoNtpl(ntpl_buf, &ntplInfo, internals);
     RTE_LOG(DEBUG, PMD, "Deleting Item filter 1: %s\n", ntpl_buf);
     LIST_REMOVE(id, next);
-    free(id);
+    rte_free(id);
   }
   _cleanUpKeySet(flow->key, internals);
   _cleanUpHash(flow, internals);
-  free(flow);
+  rte_free(flow);
 }
 
 static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
@@ -1286,7 +1289,6 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   const struct rte_flow_action_rss *rss = NULL;
   uint32_t i;
   bool tunnel;
-  int version;
   int tunneltype;
   struct color_s color = {0, false};
   uint8_t nb_ports = 0;
@@ -1300,13 +1302,13 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   struct rte_flow *flow = NULL;
   const char *ntpl_str = NULL;
 
-  ntpl_buf = malloc(NTPL_BSIZE + 1);
+  ntpl_buf = rte_malloc(internals->name, NTPL_BSIZE + 1, 0);
   if (!ntpl_buf) {
     rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Out of memory");
     goto FlowError;
   }
 
-  flow = malloc(sizeof(struct rte_flow));
+  flow = rte_malloc(internals->name, sizeof(struct rte_flow), 0);
   if (!flow) {
     rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Out of memory");
     goto FlowError;
@@ -1523,51 +1525,63 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       }
       break;
 
+    case RTE_FLOW_ITEM_TYPE_MPLS:
+      if (SetMplsFilter(&ntpl_buf[strlen(ntpl_buf)],
+                        &filterContinue,
+                        items,
+                        tunnel,
+                        &typeMask,
+                        internals) != 0) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up MPLS filter");
+        goto FlowError;
+      }
+      break;
+
     case  RTE_FLOW_ITEM_TYPE_GRE:
       if (SetGreFilter(&ntpl_buf[strlen(ntpl_buf)],
                        &filterContinue,
                        items,
                        &typeMask) != 0) {
-        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up VLAN filter");
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up GRE filter");
+        goto FlowError;
+      }
+      tunnel = true;
+      break;
+    case RTE_FLOW_ITEM_TYPE_GTPU:
+      if (SetGtpFilter(&ntpl_buf[strlen(ntpl_buf)],
+                       &filterContinue,
+                       items,
+                       &typeMask,
+                       'U') != 0) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up GTP-U filter");
+        goto FlowError;
+      }
+      tunnel = true;
+      break;
+    case 	RTE_FLOW_ITEM_TYPE_GTPC:
+      if (SetGtpFilter(&ntpl_buf[strlen(ntpl_buf)],
+                       &filterContinue,
+                       items,
+                       &typeMask,
+                       'C') != 0) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up GTP-C filter");
         goto FlowError;
       }
       tunnel = true;
       break;
 
-    case RTE_FLOW_ITEM_TYPE_GREv0:
-    case RTE_FLOW_ITEM_TYPE_GREv1:
-    case RTE_FLOW_ITEM_TYPE_GTPv1_U:
-    case RTE_FLOW_ITEM_TYPE_GTPv0_U:
+
     case RTE_FLOW_ITEM_TYPE_VXLAN:
     case RTE_FLOW_ITEM_TYPE_NVGRE:
     case RTE_FLOW_ITEM_TYPE_IPinIP:
       switch (items->type) {
-      case RTE_FLOW_ITEM_TYPE_GREv1:
-        version = 1;
-        tunneltype = GRE_TUNNEL_TYPE;
-        break;
-      case RTE_FLOW_ITEM_TYPE_GREv0:
-        version = 0;
-        tunneltype = GRE_TUNNEL_TYPE;
-        break;
-      case RTE_FLOW_ITEM_TYPE_GTPv1_U:
-        version = 1;
-        tunneltype = GTP_TUNNEL_TYPE;
-        break;
-      case RTE_FLOW_ITEM_TYPE_GTPv0_U:
-        version = 0;
-        tunneltype = GTP_TUNNEL_TYPE;
-        break;
       case RTE_FLOW_ITEM_TYPE_VXLAN:
-        version = 0;
         tunneltype = VXLAN_TUNNEL_TYPE;
         break;
       case RTE_FLOW_ITEM_TYPE_NVGRE:
-        version = 0;
         tunneltype = NVGRE_TUNNEL_TYPE;
         break;
       case RTE_FLOW_ITEM_TYPE_IPinIP:
-        version = 0;
         tunneltype = IP_IN_IP_TUNNEL_TYPE;
         break;
       default:
@@ -1577,7 +1591,6 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
 
       if (SetTunnelFilter(&ntpl_buf[strlen(ntpl_buf)],
                         &filterContinue,
-                        version,
                         tunneltype,
                         &typeMask) != 0) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up tunnel filter");
@@ -1645,7 +1658,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
     }
 
     if (ntpl_buf) {
-      free(ntpl_buf);
+      rte_free(ntpl_buf);
     }
     rte_spinlock_lock(&internals->lock);
     LIST_INSERT_HEAD(&internals->flows, flow, next);
@@ -1654,10 +1667,10 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
 
 FlowError:
     if (flow) {
-      free(flow);
+      rte_free(flow);
     }
     if (ntpl_buf) {
-      free(ntpl_buf);
+      rte_free(ntpl_buf);
     }
     return NULL;
 }
@@ -1745,7 +1758,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       DoNtpl(ntpl_buf, &ntplInfo, internals);
       RTE_LOG(DEBUG, PMD, "Deleting Item filter 0: %s\n", ntpl_buf);
       LIST_REMOVE(id, next);
-      free(id);
+      rte_free(id);
     }
     _cleanUpHash(internals->defaultFlow, internals);
     rte_spinlock_unlock(&internals->lock);
@@ -1764,7 +1777,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       }
     }
     rte_spinlock_lock(&internals->lock);
-    free(internals->defaultFlow);
+    rte_free(internals->defaultFlow);
     internals->defaultFlow = NULL;
     rte_spinlock_unlock(&internals->lock);
   }
@@ -1782,14 +1795,14 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       }
     }
 
-    ntpl_buf = malloc(NTPL_BSIZE + 1);
+    ntpl_buf = rte_malloc(internals->name, NTPL_BSIZE + 1, 0);
     if (!ntpl_buf) {
       RTE_LOG(ERR, PMD, "Out of memory in flow_isolate\n");
       goto IsolateError;
     }
 
     if (nb_queues > 0 && rx_q[0].enabled) {
-      struct rte_flow *defFlow = malloc(sizeof(struct rte_flow));
+      struct rte_flow *defFlow = rte_malloc(internals->name, sizeof(struct rte_flow), 0);
       if (!defFlow) {
         RTE_LOG(ERR, PMD, "Out of memory in flow_isolate\n");
         goto IsolateError;
@@ -1841,7 +1854,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
     IsolateError:
 
     if (ntpl_buf) {
-      free(ntpl_buf);
+      rte_free(ntpl_buf);
       ntpl_buf = NULL;
     }
   }
@@ -1987,7 +2000,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
     RTE_LOG(ERR, PMD, "Error %s: Out of memory\n", __func__);
-    iRet = 1;
+    iRet = -ENOMEM;
     goto error;
   }
 
@@ -2120,22 +2133,22 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     eth_dev = rte_eth_dev_allocate(name);
     if (eth_dev == NULL) {
       RTE_LOG(ERR, PMD, "ERROR: Failed to allocate ethernet device\n");
-      iRet = 1;
+      iRet = -ENOMEM;
       goto error;
     }
 
-    internals = rte_zmalloc_socket(name, sizeof(struct pmd_internals), RTE_CACHE_LINE_SIZE, dev->numa_node);
+    internals = rte_zmalloc_socket(name, sizeof(struct pmd_internals), RTE_CACHE_LINE_SIZE, dev->device.numa_node);
     if (internals == NULL) {
       RTE_LOG(ERR, PMD, "ERROR: Failed to allocate memory\n");
-      iRet = 1;
+      iRet = -ENOMEM;
       goto error;
     }
 
     if (strlen(ntpl_file) > 0) {
-      internals->ntpl_file  = rte_zmalloc_socket(name, strlen(ntpl_file) + 1, 0, dev->numa_node);
+      internals->ntpl_file  = rte_zmalloc(name, strlen(ntpl_file) + 1, 0);
       if (internals->ntpl_file == NULL) {
         RTE_LOG(ERR, PMD, "ERROR: Failed to allocate memory\n");
-        iRet = 1;
+        iRet = -ENOMEM;
         goto error;
       }
       strcpy(internals->ntpl_file, ntpl_file);
@@ -2213,7 +2226,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     eth_dev->data->port_id = eth_dev->data->port_id;
     eth_dev->data->dev_link = pmd_link;
     eth_dev->data->mac_addrs = &eth_addr[internals->port];
-    eth_dev->data->numa_node = dev->numa_node;
+    eth_dev->data->numa_node = dev->device.numa_node;
 
     eth_dev->dev_ops = &ops;
     eth_dev->rx_pkt_burst = eth_ntacc_rx;

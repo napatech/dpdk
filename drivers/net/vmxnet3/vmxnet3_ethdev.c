@@ -48,6 +48,7 @@
 #include <rte_log.h>
 #include <rte_debug.h>
 #include <rte_pci.h>
+#include <rte_bus_pci.h>
 #include <rte_atomic.h>
 #include <rte_branch_prediction.h>
 #include <rte_memory.h>
@@ -87,7 +88,7 @@ static int __vmxnet3_dev_link_update(struct rte_eth_dev *dev,
 static int vmxnet3_dev_link_update(struct rte_eth_dev *dev,
 				   int wait_to_complete);
 static void vmxnet3_hw_stats_save(struct vmxnet3_hw *hw);
-static void vmxnet3_dev_stats_get(struct rte_eth_dev *dev,
+static int vmxnet3_dev_stats_get(struct rte_eth_dev *dev,
 				  struct rte_eth_stats *stats);
 static int vmxnet3_dev_xstats_get_names(struct rte_eth_dev *dev,
 					struct rte_eth_xstat_name *xstats,
@@ -100,7 +101,7 @@ static const uint32_t *
 vmxnet3_dev_supported_ptypes_get(struct rte_eth_dev *dev);
 static int vmxnet3_dev_vlan_filter_set(struct rte_eth_dev *dev,
 				       uint16_t vid, int on);
-static void vmxnet3_dev_vlan_offload_set(struct rte_eth_dev *dev, int mask);
+static int vmxnet3_dev_vlan_offload_set(struct rte_eth_dev *dev, int mask);
 static void vmxnet3_mac_addr_set(struct rte_eth_dev *dev,
 				 struct ether_addr *mac_addr);
 static void vmxnet3_interrupt_handler(void *param);
@@ -309,7 +310,6 @@ eth_vmxnet3_dev_init(struct rte_eth_dev *eth_dev)
 		return 0;
 
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_DETACHABLE;
 
 	/* Vendor and Device ID need to be set before init of shared code */
 	hw->device_id = pci_dev->id.device_id;
@@ -484,7 +484,7 @@ vmxnet3_dev_configure(struct rte_eth_dev *dev)
 	memset(mz->addr, 0, mz->len);
 
 	hw->shared = mz->addr;
-	hw->sharedPA = mz->phys_addr;
+	hw->sharedPA = mz->iova;
 
 	/*
 	 * Allocate a memzone for Vmxnet3_RxQueueDesc - Vmxnet3_TxQueueDesc
@@ -505,7 +505,7 @@ vmxnet3_dev_configure(struct rte_eth_dev *dev)
 	hw->tqd_start = (Vmxnet3_TxQueueDesc *)mz->addr;
 	hw->rqd_start = (Vmxnet3_RxQueueDesc *)(hw->tqd_start + hw->num_tx_queues);
 
-	hw->queueDescPA = mz->phys_addr;
+	hw->queueDescPA = mz->iova;
 	hw->queue_desc_len = (uint16_t)size;
 
 	if (dev->data->dev_conf.rxmode.mq_mode == ETH_MQ_RX_RSS) {
@@ -521,7 +521,7 @@ vmxnet3_dev_configure(struct rte_eth_dev *dev)
 		memset(mz->addr, 0, mz->len);
 
 		hw->rss_conf = mz->addr;
-		hw->rss_confPA = mz->phys_addr;
+		hw->rss_confPA = mz->iova;
 	}
 
 	return 0;
@@ -537,10 +537,10 @@ vmxnet3_write_mac(struct vmxnet3_hw *hw, const uint8_t *addr)
 		     addr[0], addr[1], addr[2],
 		     addr[3], addr[4], addr[5]);
 
-	val = *(const uint32_t *)addr;
+	memcpy(&val, addr, 4);
 	VMXNET3_WRITE_BAR1_REG(hw, VMXNET3_REG_MACL, val);
 
-	val = (addr[5] << 8) | addr[4];
+	memcpy(&val, addr + 4, 2);
 	VMXNET3_WRITE_BAR1_REG(hw, VMXNET3_REG_MACH, val);
 }
 
@@ -569,7 +569,7 @@ vmxnet3_dev_setup_memreg(struct rte_eth_dev *dev)
 		}
 		memset(mz->addr, 0, mz->len);
 		hw->memRegs = mz->addr;
-		hw->memRegsPA = mz->phys_addr;
+		hw->memRegsPA = mz->iova;
 	}
 
 	num = hw->num_rx_queues;
@@ -604,7 +604,7 @@ vmxnet3_dev_setup_memreg(struct rte_eth_dev *dev)
 		Vmxnet3_MemoryRegion *mr = &hw->memRegs->memRegs[j];
 
 		mr->startPA =
-			(uintptr_t)STAILQ_FIRST(&mp[i]->mem_list)->phys_addr;
+			(uintptr_t)STAILQ_FIRST(&mp[i]->mem_list)->iova;
 		mr->length = STAILQ_FIRST(&mp[i]->mem_list)->len <= INT32_MAX ?
 			STAILQ_FIRST(&mp[i]->mem_list)->len : INT32_MAX;
 		mr->txQueueBits = index[i];
@@ -730,8 +730,10 @@ vmxnet3_setup_driver_shared(struct rte_eth_dev *dev)
 		devRead->rssConfDesc.confPA  = hw->rss_confPA;
 	}
 
-	vmxnet3_dev_vlan_offload_set(dev,
-				     ETH_VLAN_STRIP_MASK | ETH_VLAN_FILTER_MASK);
+	ret = vmxnet3_dev_vlan_offload_set(dev,
+			ETH_VLAN_STRIP_MASK | ETH_VLAN_FILTER_MASK);
+	if (ret)
+		return ret;
 
 	vmxnet3_write_mac(hw, dev->data->mac_addrs->addr_bytes);
 
@@ -1034,7 +1036,7 @@ vmxnet3_dev_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats,
 	return count;
 }
 
-static void
+static int
 vmxnet3_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 {
 	unsigned int i;
@@ -1080,6 +1082,8 @@ vmxnet3_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 		stats->ierrors += rxStats.pktsRxError;
 		stats->rx_nombuf += rxStats.pktsRxOutOfBuf;
 	}
+
+	return 0;
 }
 
 static void
@@ -1144,6 +1148,8 @@ vmxnet3_mac_addr_set(struct rte_eth_dev *dev, struct ether_addr *mac_addr)
 {
 	struct vmxnet3_hw *hw = dev->data->dev_private;
 
+	ether_addr_copy(mac_addr, (struct ether_addr *)(hw->perm_addr));
+	ether_addr_copy(mac_addr, &dev->data->mac_addrs[0]);
 	vmxnet3_write_mac(hw, mac_addr->addr_bytes);
 }
 
@@ -1275,7 +1281,7 @@ vmxnet3_dev_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vid, int on)
 	return 0;
 }
 
-static void
+static int
 vmxnet3_dev_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 {
 	struct vmxnet3_hw *hw = dev->data->dev_private;
@@ -1301,6 +1307,8 @@ vmxnet3_dev_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 		VMXNET3_WRITE_BAR1_REG(hw, VMXNET3_REG_CMD,
 				       VMXNET3_CMD_UPDATE_VLAN_FILTERS);
 	}
+
+	return 0;
 }
 
 static void

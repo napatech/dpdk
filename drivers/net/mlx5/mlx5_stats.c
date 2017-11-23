@@ -34,16 +34,9 @@
 #include <linux/sockios.h>
 #include <linux/ethtool.h>
 
-/* DPDK headers don't like -pedantic. */
-#ifdef PEDANTIC
-#pragma GCC diagnostic ignored "-Wpedantic"
-#endif
 #include <rte_ethdev.h>
 #include <rte_common.h>
 #include <rte_malloc.h>
-#ifdef PEDANTIC
-#pragma GCC diagnostic error "-Wpedantic"
-#endif
 
 #include "mlx5.h"
 #include "mlx5_rxtx.h"
@@ -325,7 +318,7 @@ priv_xstats_reset(struct priv *priv)
  * @param[out] stats
  *   Stats structure output buffer.
  */
-void
+int
 mlx5_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 {
 	struct priv *priv = mlx5_get_priv(dev);
@@ -336,7 +329,7 @@ mlx5_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	priv_lock(priv);
 	/* Add software counters. */
 	for (i = 0; (i != priv->rxqs_n); ++i) {
-		struct rxq *rxq = (*priv->rxqs)[i];
+		struct mlx5_rxq_data *rxq = (*priv->rxqs)[i];
 
 		if (rxq == NULL)
 			continue;
@@ -357,7 +350,7 @@ mlx5_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 		tmp.rx_nombuf += rxq->stats.rx_nombuf;
 	}
 	for (i = 0; (i != priv->txqs_n); ++i) {
-		struct txq *txq = (*priv->txqs)[i];
+		struct mlx5_txq_data *txq = (*priv->txqs)[i];
 
 		if (txq == NULL)
 			continue;
@@ -367,19 +360,20 @@ mlx5_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 			tmp.q_opackets[idx] += txq->stats.opackets;
 			tmp.q_obytes[idx] += txq->stats.obytes;
 #endif
-			tmp.q_errors[idx] += txq->stats.odropped;
+			tmp.q_errors[idx] += txq->stats.oerrors;
 		}
 #ifdef MLX5_PMD_SOFT_COUNTERS
 		tmp.opackets += txq->stats.opackets;
 		tmp.obytes += txq->stats.obytes;
 #endif
-		tmp.oerrors += txq->stats.odropped;
+		tmp.oerrors += txq->stats.oerrors;
 	}
 #ifndef MLX5_PMD_SOFT_COUNTERS
 	/* FIXME: retrieve and add hardware counters. */
 #endif
 	*stats = tmp;
 	priv_unlock(priv);
+	return 0;
 }
 
 /**
@@ -442,8 +436,10 @@ mlx5_xstats_get(struct rte_eth_dev *dev,
 
 		priv_lock(priv);
 		stats_n = priv_ethtool_get_stats_n(priv);
-		if (stats_n < 0)
+		if (stats_n < 0) {
+			priv_unlock(priv);
 			return -1;
+		}
 		if (xstats_ctrl->stats_n != stats_n)
 			priv_xstats_init(priv);
 		ret = priv_xstats_get(priv, stats);
@@ -468,10 +464,11 @@ mlx5_xstats_reset(struct rte_eth_dev *dev)
 	priv_lock(priv);
 	stats_n = priv_ethtool_get_stats_n(priv);
 	if (stats_n < 0)
-		return;
+		goto unlock;
 	if (xstats_ctrl->stats_n != stats_n)
 		priv_xstats_init(priv);
 	priv_xstats_reset(priv);
+unlock:
 	priv_unlock(priv);
 }
 

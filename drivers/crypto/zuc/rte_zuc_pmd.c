@@ -31,18 +31,15 @@
  */
 
 #include <rte_common.h>
-#include <rte_config.h>
 #include <rte_hexdump.h>
 #include <rte_cryptodev.h>
 #include <rte_cryptodev_pmd.h>
-#include <rte_cryptodev_vdev.h>
-#include <rte_vdev.h>
+#include <rte_bus_vdev.h>
 #include <rte_malloc.h>
 #include <rte_cpuflags.h>
 
 #include "rte_zuc_pmd_private.h"
 
-#define ZUC_DIGEST_LENGTH 4
 #define ZUC_MAX_BURST 8
 #define BYTE_LEN 8
 
@@ -258,7 +255,7 @@ process_zuc_cipher_op(struct rte_crypto_op **ops,
 
 /** Generate/verify hash from mbufs with same hash key. */
 static int
-process_zuc_hash_op(struct rte_crypto_op **ops,
+process_zuc_hash_op(struct zuc_qp *qp, struct rte_crypto_op **ops,
 		struct zuc_session *session,
 		uint8_t num_ops)
 {
@@ -285,8 +282,7 @@ process_zuc_hash_op(struct rte_crypto_op **ops,
 				session->auth_iv_offset);
 
 		if (session->auth_op == RTE_CRYPTO_AUTH_OP_VERIFY) {
-			dst = (uint32_t *)rte_pktmbuf_append(ops[i]->sym->m_src,
-					ZUC_DIGEST_LENGTH);
+			dst = (uint32_t *)qp->temp_digest;
 
 			sso_zuc_eia3_1_buffer(session->pKey_hash,
 					iv, src,
@@ -295,10 +291,6 @@ process_zuc_hash_op(struct rte_crypto_op **ops,
 			if (memcmp(dst, ops[i]->sym->auth.digest.data,
 					ZUC_DIGEST_LENGTH) != 0)
 				ops[i]->status = RTE_CRYPTO_OP_STATUS_AUTH_FAILED;
-
-			/* Trim area used for digest from mbuf. */
-			rte_pktmbuf_trim(ops[i]->sym->m_src,
-					ZUC_DIGEST_LENGTH);
 		} else  {
 			dst = (uint32_t *)ops[i]->sym->auth.digest.data;
 
@@ -327,16 +319,16 @@ process_ops(struct rte_crypto_op **ops, struct zuc_session *session,
 				session, num_ops);
 		break;
 	case ZUC_OP_ONLY_AUTH:
-		processed_ops = process_zuc_hash_op(ops, session,
+		processed_ops = process_zuc_hash_op(qp, ops, session,
 				num_ops);
 		break;
 	case ZUC_OP_CIPHER_AUTH:
 		processed_ops = process_zuc_cipher_op(ops, session,
 				num_ops);
-		process_zuc_hash_op(ops, session, processed_ops);
+		process_zuc_hash_op(qp, ops, session, processed_ops);
 		break;
 	case ZUC_OP_AUTH_CIPHER:
-		processed_ops = process_zuc_hash_op(ops, session,
+		processed_ops = process_zuc_hash_op(qp, ops, session,
 				num_ops);
 		process_zuc_cipher_op(ops, session, processed_ops);
 		break;
@@ -469,19 +461,14 @@ static int cryptodev_zuc_remove(struct rte_vdev_device *vdev);
 static int
 cryptodev_zuc_create(const char *name,
 		struct rte_vdev_device *vdev,
-		struct rte_crypto_vdev_init_params *init_params)
+		struct rte_cryptodev_pmd_init_params *init_params)
 {
 	struct rte_cryptodev *dev;
 	struct zuc_private *internals;
 	uint64_t cpu_flags = RTE_CRYPTODEV_FF_CPU_SSE;
 
-	if (init_params->name[0] == '\0')
-		snprintf(init_params->name, sizeof(init_params->name),
-				"%s", name);
 
-	dev = rte_cryptodev_vdev_pmd_init(init_params->name,
-			sizeof(struct zuc_private), init_params->socket_id,
-			vdev);
+	dev = rte_cryptodev_pmd_create(name, &vdev->device, init_params);
 	if (dev == NULL) {
 		ZUC_LOG_ERR("failed to create cryptodev vdev");
 		goto init_error;
@@ -515,11 +502,12 @@ init_error:
 static int
 cryptodev_zuc_probe(struct rte_vdev_device *vdev)
 {
-	struct rte_crypto_vdev_init_params init_params = {
-		RTE_CRYPTODEV_VDEV_DEFAULT_MAX_NB_QUEUE_PAIRS,
-		RTE_CRYPTODEV_VDEV_DEFAULT_MAX_NB_SESSIONS,
+	struct rte_cryptodev_pmd_init_params init_params = {
+		"",
+		sizeof(struct zuc_private),
 		rte_socket_id(),
-		{0}
+		RTE_CRYPTODEV_PMD_DEFAULT_MAX_NB_QUEUE_PAIRS,
+		RTE_CRYPTODEV_PMD_DEFAULT_MAX_NB_SESSIONS
 	};
 	const char *name;
 	const char *input_args;
@@ -529,17 +517,7 @@ cryptodev_zuc_probe(struct rte_vdev_device *vdev)
 		return -EINVAL;
 	input_args = rte_vdev_device_args(vdev);
 
-	rte_cryptodev_vdev_parse_init_params(&init_params, input_args);
-
-	RTE_LOG(INFO, PMD, "Initialising %s on NUMA node %d\n", name,
-			init_params.socket_id);
-	if (init_params.name[0] != '\0')
-		RTE_LOG(INFO, PMD, "  User defined name = %s\n",
-			init_params.name);
-	RTE_LOG(INFO, PMD, "  Max number of queue pairs = %d\n",
-			init_params.max_nb_queue_pairs);
-	RTE_LOG(INFO, PMD, "  Max number of sessions = %d\n",
-			init_params.max_nb_sessions);
+	rte_cryptodev_pmd_parse_input_args(&init_params, input_args);
 
 	return cryptodev_zuc_create(name, vdev, &init_params);
 }
@@ -547,17 +525,19 @@ cryptodev_zuc_probe(struct rte_vdev_device *vdev)
 static int
 cryptodev_zuc_remove(struct rte_vdev_device *vdev)
 {
+
+	struct rte_cryptodev *cryptodev;
 	const char *name;
 
 	name = rte_vdev_device_name(vdev);
 	if (name == NULL)
 		return -EINVAL;
 
-	RTE_LOG(INFO, PMD, "Closing ZUC crypto device %s"
-			" on numa socket %u\n",
-			name, rte_socket_id());
+	cryptodev = rte_cryptodev_pmd_get_named_dev(name);
+	if (cryptodev == NULL)
+		return -ENODEV;
 
-	return 0;
+	return rte_cryptodev_pmd_destroy(cryptodev);
 }
 
 static struct rte_vdev_driver cryptodev_zuc_pmd_drv = {
@@ -565,9 +545,12 @@ static struct rte_vdev_driver cryptodev_zuc_pmd_drv = {
 	.remove = cryptodev_zuc_remove
 };
 
+static struct cryptodev_driver zuc_crypto_drv;
+
 RTE_PMD_REGISTER_VDEV(CRYPTODEV_NAME_ZUC_PMD, cryptodev_zuc_pmd_drv);
 RTE_PMD_REGISTER_PARAM_STRING(CRYPTODEV_NAME_ZUC_PMD,
 	"max_nb_queue_pairs=<int> "
 	"max_nb_sessions=<int> "
 	"socket_id=<int>");
-RTE_PMD_REGISTER_CRYPTO_DRIVER(cryptodev_zuc_pmd_drv, cryptodev_driver_id);
+RTE_PMD_REGISTER_CRYPTO_DRIVER(zuc_crypto_drv, cryptodev_zuc_pmd_drv,
+		cryptodev_driver_id);

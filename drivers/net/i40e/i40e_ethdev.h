@@ -186,9 +186,9 @@ enum i40e_flxpld_layer_idx {
 
 /* Default queue interrupt throttling time in microseconds */
 #define I40E_ITR_INDEX_DEFAULT          0
+#define I40E_ITR_INDEX_NONE             3
 #define I40E_QUEUE_ITR_INTERVAL_DEFAULT 32 /* 32 us */
 #define I40E_QUEUE_ITR_INTERVAL_MAX     8160 /* 8160 us */
-
 /* Special FW support this floating VEB feature */
 #define FLOATING_VEB_SUPPORTED_FW_MAJ 5
 #define FLOATING_VEB_SUPPORTED_FW_MIN 0
@@ -260,6 +260,12 @@ enum i40e_flxpld_layer_idx {
 #define I40E_QOS_BW_WEIGHT_MIN 1
 /* The max bandwidth weight is 127. */
 #define I40E_QOS_BW_WEIGHT_MAX 127
+/* The max queue region index is 7. */
+#define I40E_REGION_MAX_INDEX 7
+
+#define I40E_MAX_PERCENT            100
+#define I40E_DEFAULT_DCB_APP_NUM    1
+#define I40E_DEFAULT_DCB_APP_PRIO   3
 
 /**
  * The overhead from MTU to max frame size.
@@ -460,6 +466,119 @@ struct i40e_vmdq_info {
 #define I40E_FLEX_WORD_MASK(off) (0x80 >> (off))
 #define I40E_FDIR_IPv6_TC_OFFSET	20
 
+/* A structure used to define the input for GTP flow */
+struct i40e_gtp_flow {
+	struct rte_eth_udpv4_flow udp; /* IPv4 UDP fields to match. */
+	uint8_t msg_type;              /* Message type. */
+	uint32_t teid;                 /* TEID in big endian. */
+};
+
+/* A structure used to define the input for GTP IPV4 flow */
+struct i40e_gtp_ipv4_flow {
+	struct i40e_gtp_flow gtp;
+	struct rte_eth_ipv4_flow ip4;
+};
+
+/* A structure used to define the input for GTP IPV6 flow */
+struct i40e_gtp_ipv6_flow {
+	struct i40e_gtp_flow gtp;
+	struct rte_eth_ipv6_flow ip6;
+};
+
+/* A structure used to define the input for raw type flow */
+struct i40e_raw_flow {
+	uint16_t pctype;
+	void *packet;
+	uint32_t length;
+};
+
+/*
+ * A union contains the inputs for all types of flow
+ * items in flows need to be in big endian
+ */
+union i40e_fdir_flow {
+	struct rte_eth_l2_flow     l2_flow;
+	struct rte_eth_udpv4_flow  udp4_flow;
+	struct rte_eth_tcpv4_flow  tcp4_flow;
+	struct rte_eth_sctpv4_flow sctp4_flow;
+	struct rte_eth_ipv4_flow   ip4_flow;
+	struct rte_eth_udpv6_flow  udp6_flow;
+	struct rte_eth_tcpv6_flow  tcp6_flow;
+	struct rte_eth_sctpv6_flow sctp6_flow;
+	struct rte_eth_ipv6_flow   ipv6_flow;
+	struct i40e_gtp_flow       gtp_flow;
+	struct i40e_gtp_ipv4_flow  gtp_ipv4_flow;
+	struct i40e_gtp_ipv6_flow  gtp_ipv6_flow;
+	struct i40e_raw_flow       raw_flow;
+};
+
+enum i40e_fdir_ip_type {
+	I40E_FDIR_IPTYPE_IPV4,
+	I40E_FDIR_IPTYPE_IPV6,
+};
+
+/* A structure used to contain extend input of flow */
+struct i40e_fdir_flow_ext {
+	uint16_t vlan_tci;
+	uint8_t flexbytes[RTE_ETH_FDIR_MAX_FLEXLEN];
+	/* It is filled by the flexible payload to match. */
+	uint8_t is_vf;   /* 1 for VF, 0 for port dev */
+	uint16_t dst_id; /* VF ID, available when is_vf is 1*/
+	bool inner_ip;   /* If there is inner ip */
+	enum i40e_fdir_ip_type iip_type; /* ip type for inner ip */
+	bool customized_pctype; /* If customized pctype is used */
+	bool pkt_template; /* If raw packet template is used */
+};
+
+/* A structure used to define the input for a flow director filter entry */
+struct i40e_fdir_input {
+	enum i40e_filter_pctype pctype;
+	union i40e_fdir_flow flow;
+	/* Flow fields to match, dependent on flow_type */
+	struct i40e_fdir_flow_ext flow_ext;
+	/* Additional fields to match */
+};
+
+/* Behavior will be taken if FDIR match */
+enum i40e_fdir_behavior {
+	I40E_FDIR_ACCEPT = 0,
+	I40E_FDIR_REJECT,
+	I40E_FDIR_PASSTHRU,
+};
+
+/* Flow director report status
+ * It defines what will be reported if FDIR entry is matched.
+ */
+enum i40e_fdir_status {
+	I40E_FDIR_NO_REPORT_STATUS = 0, /* Report nothing. */
+	I40E_FDIR_REPORT_ID,            /* Only report FD ID. */
+	I40E_FDIR_REPORT_ID_FLEX_4,     /* Report FD ID and 4 flex bytes. */
+	I40E_FDIR_REPORT_FLEX_8,        /* Report 8 flex bytes. */
+};
+
+/* A structure used to define an action when match FDIR packet filter. */
+struct i40e_fdir_action {
+	uint16_t rx_queue;        /* Queue assigned to if FDIR match. */
+	enum i40e_fdir_behavior behavior;     /* Behavior will be taken */
+	enum i40e_fdir_status report_status;  /* Status report option */
+	/* If report_status is I40E_FDIR_REPORT_ID_FLEX_4 or
+	 * I40E_FDIR_REPORT_FLEX_8, flex_off specifies where the reported
+	 * flex bytes start from in flexible payload.
+	 */
+	uint8_t flex_off;
+};
+
+/* A structure used to define the flow director filter entry by filter_ctrl API
+ * It supports RTE_ETH_FILTER_FDIR with RTE_ETH_FILTER_ADD and
+ * RTE_ETH_FILTER_DELETE operations.
+ */
+struct i40e_fdir_filter_conf {
+	uint32_t soft_id;
+	/* ID, an unique value is required when deal with FDIR entry */
+	struct i40e_fdir_input input;    /* Input set */
+	struct i40e_fdir_action action;  /* Action taken when match */
+};
+
 /*
  * Structure to store flex pit for flow diretor.
  */
@@ -478,12 +597,13 @@ struct i40e_fdir_flex_mask {
 	} bitmask[I40E_FDIR_BITMASK_NUM_WORD];
 };
 
-#define I40E_FILTER_PCTYPE_MAX 64
-#define I40E_MAX_FDIR_FILTER_NUM (1024 * 8)
+#define I40E_FILTER_PCTYPE_INVALID 0
+#define I40E_FILTER_PCTYPE_MAX     64
+#define I40E_MAX_FDIR_FILTER_NUM   (1024 * 8)
 
 struct i40e_fdir_filter {
 	TAILQ_ENTRY(i40e_fdir_filter) rules;
-	struct rte_eth_fdir_filter fdir;
+	struct i40e_fdir_filter_conf fdir;
 };
 
 TAILQ_HEAD(i40e_fdir_filter_list, i40e_fdir_filter);
@@ -541,17 +661,49 @@ struct i40e_ethertype_rule {
 	struct rte_hash *hash_table;
 };
 
+/* queue region info */
+struct i40e_queue_region_info {
+	/* the region id for this configuration */
+	uint8_t region_id;
+	/* the start queue index for this region */
+	uint8_t queue_start_index;
+	/* the total queue number of this queue region */
+	uint8_t queue_num;
+	/* the total number of user priority for this region */
+	uint8_t user_priority_num;
+	/* the packet's user priority for this region */
+	uint8_t user_priority[I40E_MAX_USER_PRIORITY];
+	/* the total number of flowtype for this region */
+	uint8_t flowtype_num;
+	/**
+	 * the pctype or hardware flowtype of packet,
+	 * the specific index for each type has been defined
+	 * in file i40e_type.h as enum i40e_filter_pctype.
+	 */
+	uint8_t hw_flowtype[I40E_FILTER_PCTYPE_MAX];
+};
+
+struct i40e_queue_regions {
+	/* the total number of queue region for this port */
+	uint16_t queue_region_number;
+	struct i40e_queue_region_info region[I40E_REGION_MAX_INDEX + 1];
+};
+
 /* Tunnel filter number HW supports */
 #define I40E_MAX_TUNNEL_FILTER_NUM 400
 
 #define I40E_AQC_REPLACE_CLOUD_CMD_INPUT_FV_TEID_WORD0 44
 #define I40E_AQC_REPLACE_CLOUD_CMD_INPUT_FV_TEID_WORD1 45
-#define I40E_AQC_ADD_CLOUD_TNL_TYPE_MPLSoUDP 8
-#define I40E_AQC_ADD_CLOUD_TNL_TYPE_MPLSoGRE 9
-#define I40E_AQC_ADD_CLOUD_FILTER_CUSTOM_QINQ 0x10
-#define I40E_AQC_ADD_CLOUD_FILTER_TEID_MPLSoUDP 0x11
-#define I40E_AQC_ADD_CLOUD_FILTER_TEID_MPLSoGRE 0x12
-#define I40E_AQC_ADD_L1_FILTER_TEID_MPLS 0x11
+#define I40E_AQC_ADD_CLOUD_TNL_TYPE_MPLSOUDP	8
+#define I40E_AQC_ADD_CLOUD_TNL_TYPE_MPLSOGRE	9
+#define I40E_AQC_ADD_CLOUD_FILTER_0X10		0x10
+#define I40E_AQC_ADD_CLOUD_FILTER_0X11		0x11
+#define I40E_AQC_ADD_CLOUD_FILTER_0X12		0x12
+#define I40E_AQC_ADD_L1_FILTER_0X11		0x11
+#define I40E_AQC_ADD_L1_FILTER_0X12		0x12
+#define I40E_AQC_ADD_L1_FILTER_0X13		0x13
+#define I40E_AQC_NEW_TR_21			21
+#define I40E_AQC_NEW_TR_22			22
 
 enum i40e_tunnel_iptype {
 	I40E_TUNNEL_IPTYPE_IPV4,
@@ -599,6 +751,8 @@ enum i40e_tunnel_type {
 	I40E_TUNNEL_TYPE_MPLSoUDP,
 	I40E_TUNNEL_TYPE_MPLSoGRE,
 	I40E_TUNNEL_TYPE_QINQ,
+	I40E_TUNNEL_TYPE_GTPC,
+	I40E_TUNNEL_TYPE_GTPU,
 	I40E_TUNNEL_TYPE_MAX,
 };
 
@@ -722,6 +876,21 @@ struct i40e_tm_conf {
 	bool committed;
 };
 
+enum i40e_new_pctype {
+	I40E_CUSTOMIZED_GTPC = 0,
+	I40E_CUSTOMIZED_GTPU_IPV4,
+	I40E_CUSTOMIZED_GTPU_IPV6,
+	I40E_CUSTOMIZED_GTPU,
+	I40E_CUSTOMIZED_MAX,
+};
+
+#define I40E_FILTER_PCTYPE_INVALID     0
+struct i40e_customized_pctype {
+	enum i40e_new_pctype index;  /* Indicate which customized pctype */
+	uint8_t pctype;   /* New pctype value */
+	bool valid;   /* Check if it's valid */
+};
+
 /*
  * Structure to store private data specific for PF instance.
  */
@@ -776,6 +945,7 @@ struct i40e_pf {
 	struct i40e_fdir_info fdir; /* flow director info */
 	struct i40e_ethertype_rule ethertype; /* Ethertype filter rule */
 	struct i40e_tunnel_rule tunnel; /* Tunnel filter rule */
+	struct i40e_queue_regions queue_region; /* queue region info */
 	struct i40e_fc_conf fc_conf; /* Flow control conf */
 	struct i40e_mirror_rule_list mirror_list;
 	uint16_t nb_mirror_rule;   /* The number of mirror rules */
@@ -784,8 +954,14 @@ struct i40e_pf {
 	bool floating_veb_list[I40E_MAX_VF];
 	struct i40e_flow_list flow_list;
 	bool mpls_replace_flag;  /* 1 - MPLS filter replace is done */
+	bool gtp_replace_flag;   /* 1 - GTP-C/U filter replace is done */
 	bool qinq_replace_flag;  /* QINQ filter replace is done */
 	struct i40e_tm_conf tm_conf;
+
+	/* Dynamic Device Personalization */
+	bool gtp_support; /* 1 - support GTP-C and GTP-U */
+	/* customer customized pctype */
+	struct i40e_customized_pctype customized_pctype[I40E_CUSTOMIZED_MAX];
 };
 
 enum pending_msg {
@@ -852,7 +1028,8 @@ struct i40e_vf {
 	uint64_t flags;
 };
 
-#define I40E_MAX_PKT_TYPE 256
+#define I40E_MAX_PKT_TYPE  256
+#define I40E_FLOW_TYPE_MAX 64
 
 /*
  * Structure to store private data for each PF/VF instance.
@@ -881,13 +1058,17 @@ struct i40e_adapter {
 
 	/* ptype mapping table */
 	uint32_t ptype_tbl[I40E_MAX_PKT_TYPE] __rte_cache_min_aligned;
+	/* flow type to pctype mapping table */
+	uint64_t pctypes_tbl[I40E_FLOW_TYPE_MAX] __rte_cache_min_aligned;
+	uint64_t flow_types_mask;
+	uint64_t pctypes_mask;
 };
 
 extern const struct rte_flow_ops i40e_flow_ops;
 
 union i40e_filter_t {
 	struct rte_eth_ethertype_filter ethertype_filter;
-	struct rte_eth_fdir_filter fdir_filter;
+	struct i40e_fdir_filter_conf fdir_filter;
 	struct rte_eth_tunnel_filter_conf tunnel_filter;
 	struct i40e_tunnel_filter_conf consistent_tunnel_filter;
 };
@@ -919,14 +1100,14 @@ void i40e_update_vsi_stats(struct i40e_vsi *vsi);
 void i40e_pf_disable_irq0(struct i40e_hw *hw);
 void i40e_pf_enable_irq0(struct i40e_hw *hw);
 int i40e_dev_link_update(struct rte_eth_dev *dev, int wait_to_complete);
-void i40e_vsi_queues_bind_intr(struct i40e_vsi *vsi);
+void i40e_vsi_queues_bind_intr(struct i40e_vsi *vsi, uint16_t itr_idx);
 void i40e_vsi_queues_unbind_intr(struct i40e_vsi *vsi);
 int i40e_vsi_vlan_pvid_set(struct i40e_vsi *vsi,
 			   struct i40e_vsi_vlan_pvid_info *info);
 int i40e_vsi_config_vlan_stripping(struct i40e_vsi *vsi, bool on);
 int i40e_vsi_config_vlan_filter(struct i40e_vsi *vsi, bool on);
-uint64_t i40e_config_hena(uint64_t flags, enum i40e_mac_type type);
-uint64_t i40e_parse_hena(uint64_t flags);
+uint64_t i40e_config_hena(const struct i40e_adapter *adapter, uint64_t flags);
+uint64_t i40e_parse_hena(const struct i40e_adapter *adapter, uint64_t flags);
 enum i40e_status_code i40e_fdir_setup_tx_resources(struct i40e_pf *pf);
 enum i40e_status_code i40e_fdir_setup_rx_resources(struct i40e_pf *pf);
 int i40e_fdir_setup(struct i40e_pf *pf);
@@ -935,8 +1116,11 @@ const struct rte_memzone *i40e_memzone_reserve(const char *name,
 					int socket_id);
 int i40e_fdir_configure(struct rte_eth_dev *dev);
 void i40e_fdir_teardown(struct i40e_pf *pf);
-enum i40e_filter_pctype i40e_flowtype_to_pctype(uint16_t flow_type);
-uint16_t i40e_pctype_to_flowtype(enum i40e_filter_pctype pctype);
+enum i40e_filter_pctype
+	i40e_flowtype_to_pctype(const struct i40e_adapter *adapter,
+				uint16_t flow_type);
+uint16_t i40e_pctype_to_flowtype(const struct i40e_adapter *adapter,
+				 enum i40e_filter_pctype pctype);
 int i40e_fdir_ctrl_func(struct rte_eth_dev *dev,
 			  enum rte_filter_op filter_op,
 			  void *arg);
@@ -961,7 +1145,7 @@ i40e_sw_ethertype_filter_lookup(struct i40e_ethertype_rule *ethertype_rule,
 int i40e_sw_ethertype_filter_del(struct i40e_pf *pf,
 				 struct i40e_ethertype_filter_input *input);
 int i40e_sw_fdir_filter_del(struct i40e_pf *pf,
-			    struct rte_eth_fdir_input *input);
+			    struct i40e_fdir_input *input);
 struct i40e_tunnel_filter *
 i40e_sw_tunnel_filter_lookup(struct i40e_tunnel_rule *tunnel_rule,
 			     const struct i40e_tunnel_filter_input *input);
@@ -974,6 +1158,9 @@ int i40e_ethertype_filter_set(struct i40e_pf *pf,
 int i40e_add_del_fdir_filter(struct rte_eth_dev *dev,
 			     const struct rte_eth_fdir_filter *filter,
 			     bool add);
+int i40e_flow_add_del_fdir_filter(struct rte_eth_dev *dev,
+				  const struct i40e_fdir_filter_conf *filter,
+				  bool add);
 int i40e_dev_tunnel_filter_set(struct i40e_pf *pf,
 			       struct rte_eth_tunnel_filter_conf *tunnel_filter,
 			       uint8_t add);
@@ -1003,6 +1190,14 @@ void i40e_check_write_reg(struct i40e_hw *hw, uint32_t addr, uint32_t val);
 int i40e_tm_ops_get(struct rte_eth_dev *dev, void *ops);
 void i40e_tm_conf_init(struct rte_eth_dev *dev);
 void i40e_tm_conf_uninit(struct rte_eth_dev *dev);
+struct i40e_customized_pctype*
+i40e_find_customized_pctype(struct i40e_pf *pf, uint8_t index);
+void i40e_update_customized_info(struct rte_eth_dev *dev, uint8_t *pkg,
+				 uint32_t pkg_size);
+int i40e_dcb_init_configure(struct rte_eth_dev *dev, bool sw_dcb);
+int i40e_flush_queue_region_all_conf(struct rte_eth_dev *dev,
+		struct i40e_hw *hw, struct i40e_pf *pf, uint16_t on);
+void i40e_init_queue_region_conf(struct rte_eth_dev *dev);
 
 #define I40E_DEV_TO_PCI(eth_dev) \
 	RTE_DEV_TO_PCI((eth_dev)->device)

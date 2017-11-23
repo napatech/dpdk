@@ -51,7 +51,6 @@
 #include <rte_atomic.h>
 #include <rte_branch_prediction.h>
 #include <rte_memory.h>
-#include <rte_memzone.h>
 #include <rte_eal.h>
 #include <rte_alarm.h>
 #include <rte_ether.h>
@@ -78,6 +77,51 @@
 #define IXGBE_MIN_N_TUPLE_PRIO 1
 #define IXGBE_MAX_N_TUPLE_PRIO 7
 #define IXGBE_MAX_FLX_SOURCE_OFF 62
+
+/* ntuple filter list structure */
+struct ixgbe_ntuple_filter_ele {
+	TAILQ_ENTRY(ixgbe_ntuple_filter_ele) entries;
+	struct rte_eth_ntuple_filter filter_info;
+};
+/* ethertype filter list structure */
+struct ixgbe_ethertype_filter_ele {
+	TAILQ_ENTRY(ixgbe_ethertype_filter_ele) entries;
+	struct rte_eth_ethertype_filter filter_info;
+};
+/* syn filter list structure */
+struct ixgbe_eth_syn_filter_ele {
+	TAILQ_ENTRY(ixgbe_eth_syn_filter_ele) entries;
+	struct rte_eth_syn_filter filter_info;
+};
+/* fdir filter list structure */
+struct ixgbe_fdir_rule_ele {
+	TAILQ_ENTRY(ixgbe_fdir_rule_ele) entries;
+	struct ixgbe_fdir_rule filter_info;
+};
+/* l2_tunnel filter list structure */
+struct ixgbe_eth_l2_tunnel_conf_ele {
+	TAILQ_ENTRY(ixgbe_eth_l2_tunnel_conf_ele) entries;
+	struct rte_eth_l2_tunnel_conf filter_info;
+};
+/* ixgbe_flow memory list structure */
+struct ixgbe_flow_mem {
+	TAILQ_ENTRY(ixgbe_flow_mem) entries;
+	struct rte_flow *flow;
+};
+
+TAILQ_HEAD(ixgbe_ntuple_filter_list, ixgbe_ntuple_filter_ele);
+TAILQ_HEAD(ixgbe_ethertype_filter_list, ixgbe_ethertype_filter_ele);
+TAILQ_HEAD(ixgbe_syn_filter_list, ixgbe_eth_syn_filter_ele);
+TAILQ_HEAD(ixgbe_fdir_rule_filter_list, ixgbe_fdir_rule_ele);
+TAILQ_HEAD(ixgbe_l2_tunnel_filter_list, ixgbe_eth_l2_tunnel_conf_ele);
+TAILQ_HEAD(ixgbe_flow_mem_list, ixgbe_flow_mem);
+
+static struct ixgbe_ntuple_filter_list filter_ntuple_list;
+static struct ixgbe_ethertype_filter_list filter_ethertype_list;
+static struct ixgbe_syn_filter_list filter_syn_list;
+static struct ixgbe_fdir_rule_filter_list filter_fdir_list;
+static struct ixgbe_l2_tunnel_filter_list filter_l2_tunnel_list;
+static struct ixgbe_flow_mem_list ixgbe_flow_list;
 
 /**
  * Endless loop will never happen with below assumption
@@ -142,6 +186,9 @@ const struct rte_flow_action *next_no_void_action(
  * END
  * other members in mask and spec should set to 0x00.
  * item->last should be NULL.
+ *
+ * Special case for flow action type RTE_FLOW_ACTION_TYPE_SECURITY.
+ *
  */
 static int
 cons_parse_ntuple_filter(const struct rte_flow_attr *attr,
@@ -180,6 +227,43 @@ cons_parse_ntuple_filter(const struct rte_flow_attr *attr,
 				   NULL, "NULL attribute.");
 		return -rte_errno;
 	}
+
+#ifdef RTE_LIBRTE_SECURITY
+	/**
+	 *  Special case for flow action type RTE_FLOW_ACTION_TYPE_SECURITY
+	 */
+	act = next_no_void_action(actions, NULL);
+	if (act->type == RTE_FLOW_ACTION_TYPE_SECURITY) {
+		const void *conf = act->conf;
+		/* check if the next not void item is END */
+		act = next_no_void_action(actions, act);
+		if (act->type != RTE_FLOW_ACTION_TYPE_END) {
+			memset(filter, 0, sizeof(struct rte_eth_ntuple_filter));
+			rte_flow_error_set(error, EINVAL,
+				RTE_FLOW_ERROR_TYPE_ACTION,
+				act, "Not supported action.");
+			return -rte_errno;
+		}
+
+		/* get the IP pattern*/
+		item = next_no_void_pattern(pattern, NULL);
+		while (item->type != RTE_FLOW_ITEM_TYPE_IPV4 &&
+				item->type != RTE_FLOW_ITEM_TYPE_IPV6) {
+			if (item->last ||
+					item->type == RTE_FLOW_ITEM_TYPE_END) {
+				rte_flow_error_set(error, EINVAL,
+					RTE_FLOW_ERROR_TYPE_ITEM,
+					item, "IP pattern missing.");
+				return -rte_errno;
+			}
+			item = next_no_void_pattern(pattern, item);
+		}
+
+		filter->proto = IPPROTO_ESP;
+		return ixgbe_crypto_add_ingress_sa_from_flow(conf, item->spec,
+					item->type == RTE_FLOW_ITEM_TYPE_IPV6);
+	}
+#endif
 
 	/* the first not void item can be MAC or IPv4 */
 	item = next_no_void_pattern(pattern, NULL);
@@ -473,6 +557,12 @@ ixgbe_parse_ntuple_filter(struct rte_eth_dev *dev,
 
 	if (ret)
 		return ret;
+
+#ifdef RTE_LIBRTE_SECURITY
+	/* ESP flow not really a flow*/
+	if (filter->proto == IPPROTO_ESP)
+		return 0;
+#endif
 
 	/* Ixgbe doesn't support tcp flags. */
 	if (filter->flags & RTE_NTUPLE_FLAGS_TCP_FLAG) {
@@ -1004,7 +1094,7 @@ ixgbe_parse_syn_filter(struct rte_eth_dev *dev,
  * The first not void item can be E_TAG.
  * The next not void item must be END.
  * action:
- * The first not void action should be QUEUE.
+ * The first not void action should be VF or PF.
  * The next not void action should be END.
  * pattern example:
  * ITEM		Spec			Mask
@@ -1015,7 +1105,8 @@ ixgbe_parse_syn_filter(struct rte_eth_dev *dev,
  * item->last should be NULL.
  */
 static int
-cons_parse_l2_tn_filter(const struct rte_flow_attr *attr,
+cons_parse_l2_tn_filter(struct rte_eth_dev *dev,
+			const struct rte_flow_attr *attr,
 			const struct rte_flow_item pattern[],
 			const struct rte_flow_action actions[],
 			struct rte_eth_l2_tunnel_conf *filter,
@@ -1025,7 +1116,8 @@ cons_parse_l2_tn_filter(const struct rte_flow_attr *attr,
 	const struct rte_flow_item_e_tag *e_tag_spec;
 	const struct rte_flow_item_e_tag *e_tag_mask;
 	const struct rte_flow_action *act;
-	const struct rte_flow_action_queue *act_q;
+	const struct rte_flow_action_vf *act_vf;
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 
 	if (!pattern) {
 		rte_flow_error_set(error, EINVAL,
@@ -1133,9 +1225,10 @@ cons_parse_l2_tn_filter(const struct rte_flow_attr *attr,
 		return -rte_errno;
 	}
 
-	/* check if the first not void action is QUEUE. */
+	/* check if the first not void action is VF or PF. */
 	act = next_no_void_action(actions, NULL);
-	if (act->type != RTE_FLOW_ACTION_TYPE_QUEUE) {
+	if (act->type != RTE_FLOW_ACTION_TYPE_VF &&
+			act->type != RTE_FLOW_ACTION_TYPE_PF) {
 		memset(filter, 0, sizeof(struct rte_eth_l2_tunnel_conf));
 		rte_flow_error_set(error, EINVAL,
 			RTE_FLOW_ERROR_TYPE_ACTION,
@@ -1143,8 +1236,12 @@ cons_parse_l2_tn_filter(const struct rte_flow_attr *attr,
 		return -rte_errno;
 	}
 
-	act_q = (const struct rte_flow_action_queue *)act->conf;
-	filter->pool = act_q->index;
+	if (act->type == RTE_FLOW_ACTION_TYPE_VF) {
+		act_vf = (const struct rte_flow_action_vf *)act->conf;
+		filter->pool = act_vf->id;
+	} else {
+		filter->pool = pci_dev->max_vfs;
+	}
 
 	/* check if the next not void item is END */
 	act = next_no_void_action(actions, act);
@@ -1169,8 +1266,10 @@ ixgbe_parse_l2_tn_filter(struct rte_eth_dev *dev,
 {
 	int ret = 0;
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	uint16_t vf_num;
 
-	ret = cons_parse_l2_tn_filter(attr, pattern,
+	ret = cons_parse_l2_tn_filter(dev, attr, pattern,
 				actions, l2_tn_filter, error);
 
 	if (hw->mac.type != ixgbe_mac_X550 &&
@@ -1183,7 +1282,9 @@ ixgbe_parse_l2_tn_filter(struct rte_eth_dev *dev,
 		return -rte_errno;
 	}
 
-	if (l2_tn_filter->pool >= dev->data->nb_rx_queues)
+	vf_num = pci_dev->max_vfs;
+
+	if (l2_tn_filter->pool > vf_num)
 		return -rte_errno;
 
 	return ret;
@@ -2600,6 +2701,17 @@ step_next:
 }
 
 void
+ixgbe_filterlist_init(void)
+{
+	TAILQ_INIT(&filter_ntuple_list);
+	TAILQ_INIT(&filter_ethertype_list);
+	TAILQ_INIT(&filter_syn_list);
+	TAILQ_INIT(&filter_fdir_list);
+	TAILQ_INIT(&filter_l2_tunnel_list);
+	TAILQ_INIT(&ixgbe_flow_list);
+}
+
+void
 ixgbe_filterlist_flush(void)
 {
 	struct ixgbe_ntuple_filter_ele *ntuple_filter_ptr;
@@ -2702,12 +2814,23 @@ ixgbe_flow_create(struct rte_eth_dev *dev,
 	memset(&ntuple_filter, 0, sizeof(struct rte_eth_ntuple_filter));
 	ret = ixgbe_parse_ntuple_filter(dev, attr, pattern,
 			actions, &ntuple_filter, error);
+
+#ifdef RTE_LIBRTE_SECURITY
+	/* ESP flow not really a flow*/
+	if (ntuple_filter.proto == IPPROTO_ESP)
+		return flow;
+#endif
+
 	if (!ret) {
 		ret = ixgbe_add_del_ntuple_filter(dev, &ntuple_filter, TRUE);
 		if (!ret) {
 			ntuple_filter_ptr = rte_zmalloc("ixgbe_ntuple_filter",
 				sizeof(struct ixgbe_ntuple_filter_ele), 0);
-			(void)rte_memcpy(&ntuple_filter_ptr->filter_info,
+			if (!ntuple_filter_ptr) {
+				PMD_DRV_LOG(ERR, "failed to allocate memory");
+				goto out;
+			}
+			rte_memcpy(&ntuple_filter_ptr->filter_info,
 				&ntuple_filter,
 				sizeof(struct rte_eth_ntuple_filter));
 			TAILQ_INSERT_TAIL(&filter_ntuple_list,
@@ -2729,7 +2852,11 @@ ixgbe_flow_create(struct rte_eth_dev *dev,
 			ethertype_filter_ptr = rte_zmalloc(
 				"ixgbe_ethertype_filter",
 				sizeof(struct ixgbe_ethertype_filter_ele), 0);
-			(void)rte_memcpy(&ethertype_filter_ptr->filter_info,
+			if (!ethertype_filter_ptr) {
+				PMD_DRV_LOG(ERR, "failed to allocate memory");
+				goto out;
+			}
+			rte_memcpy(&ethertype_filter_ptr->filter_info,
 				&ethertype_filter,
 				sizeof(struct rte_eth_ethertype_filter));
 			TAILQ_INSERT_TAIL(&filter_ethertype_list,
@@ -2749,7 +2876,11 @@ ixgbe_flow_create(struct rte_eth_dev *dev,
 		if (!ret) {
 			syn_filter_ptr = rte_zmalloc("ixgbe_syn_filter",
 				sizeof(struct ixgbe_eth_syn_filter_ele), 0);
-			(void)rte_memcpy(&syn_filter_ptr->filter_info,
+			if (!syn_filter_ptr) {
+				PMD_DRV_LOG(ERR, "failed to allocate memory");
+				goto out;
+			}
+			rte_memcpy(&syn_filter_ptr->filter_info,
 				&syn_filter,
 				sizeof(struct rte_eth_syn_filter));
 			TAILQ_INSERT_TAIL(&filter_syn_list,
@@ -2809,7 +2940,11 @@ ixgbe_flow_create(struct rte_eth_dev *dev,
 			if (!ret) {
 				fdir_rule_ptr = rte_zmalloc("ixgbe_fdir_filter",
 					sizeof(struct ixgbe_fdir_rule_ele), 0);
-				(void)rte_memcpy(&fdir_rule_ptr->filter_info,
+				if (!fdir_rule_ptr) {
+					PMD_DRV_LOG(ERR, "failed to allocate memory");
+					goto out;
+				}
+				rte_memcpy(&fdir_rule_ptr->filter_info,
 					&fdir_rule,
 					sizeof(struct ixgbe_fdir_rule));
 				TAILQ_INSERT_TAIL(&filter_fdir_list,
@@ -2842,7 +2977,11 @@ ixgbe_flow_create(struct rte_eth_dev *dev,
 		if (!ret) {
 			l2_tn_filter_ptr = rte_zmalloc("ixgbe_l2_tn_filter",
 				sizeof(struct ixgbe_eth_l2_tunnel_conf_ele), 0);
-			(void)rte_memcpy(&l2_tn_filter_ptr->filter_info,
+			if (!l2_tn_filter_ptr) {
+				PMD_DRV_LOG(ERR, "failed to allocate memory");
+				goto out;
+			}
+			rte_memcpy(&l2_tn_filter_ptr->filter_info,
 				&l2_tn_filter,
 				sizeof(struct rte_eth_l2_tunnel_conf));
 			TAILQ_INSERT_TAIL(&filter_l2_tunnel_list,
@@ -2941,7 +3080,7 @@ ixgbe_flow_destroy(struct rte_eth_dev *dev,
 	case RTE_ETH_FILTER_NTUPLE:
 		ntuple_filter_ptr = (struct ixgbe_ntuple_filter_ele *)
 					pmd_flow->rule;
-		(void)rte_memcpy(&ntuple_filter,
+		rte_memcpy(&ntuple_filter,
 			&ntuple_filter_ptr->filter_info,
 			sizeof(struct rte_eth_ntuple_filter));
 		ret = ixgbe_add_del_ntuple_filter(dev, &ntuple_filter, FALSE);
@@ -2954,7 +3093,7 @@ ixgbe_flow_destroy(struct rte_eth_dev *dev,
 	case RTE_ETH_FILTER_ETHERTYPE:
 		ethertype_filter_ptr = (struct ixgbe_ethertype_filter_ele *)
 					pmd_flow->rule;
-		(void)rte_memcpy(&ethertype_filter,
+		rte_memcpy(&ethertype_filter,
 			&ethertype_filter_ptr->filter_info,
 			sizeof(struct rte_eth_ethertype_filter));
 		ret = ixgbe_add_del_ethertype_filter(dev,
@@ -2968,7 +3107,7 @@ ixgbe_flow_destroy(struct rte_eth_dev *dev,
 	case RTE_ETH_FILTER_SYN:
 		syn_filter_ptr = (struct ixgbe_eth_syn_filter_ele *)
 				pmd_flow->rule;
-		(void)rte_memcpy(&syn_filter,
+		rte_memcpy(&syn_filter,
 			&syn_filter_ptr->filter_info,
 			sizeof(struct rte_eth_syn_filter));
 		ret = ixgbe_syn_filter_set(dev, &syn_filter, FALSE);
@@ -2980,7 +3119,7 @@ ixgbe_flow_destroy(struct rte_eth_dev *dev,
 		break;
 	case RTE_ETH_FILTER_FDIR:
 		fdir_rule_ptr = (struct ixgbe_fdir_rule_ele *)pmd_flow->rule;
-		(void)rte_memcpy(&fdir_rule,
+		rte_memcpy(&fdir_rule,
 			&fdir_rule_ptr->filter_info,
 			sizeof(struct ixgbe_fdir_rule));
 		ret = ixgbe_fdir_filter_program(dev, &fdir_rule, TRUE, FALSE);
@@ -2995,7 +3134,7 @@ ixgbe_flow_destroy(struct rte_eth_dev *dev,
 	case RTE_ETH_FILTER_L2_TUNNEL:
 		l2_tn_filter_ptr = (struct ixgbe_eth_l2_tunnel_conf_ele *)
 				pmd_flow->rule;
-		(void)rte_memcpy(&l2_tn_filter, &l2_tn_filter_ptr->filter_info,
+		rte_memcpy(&l2_tn_filter, &l2_tn_filter_ptr->filter_info,
 			sizeof(struct rte_eth_l2_tunnel_conf));
 		ret = ixgbe_dev_l2_tunnel_filter_del(dev, &l2_tn_filter);
 		if (!ret) {

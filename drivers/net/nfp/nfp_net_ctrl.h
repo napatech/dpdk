@@ -52,6 +52,13 @@
 /* Offset in Freelist buffer where packet starts on RX */
 #define NFP_NET_RX_OFFSET               32
 
+/* working with metadata api (NFD version > 3.0) */
+#define NFP_NET_META_FIELD_SIZE         4
+#define NFP_NET_META_FIELD_MASK ((1 << NFP_NET_META_FIELD_SIZE) - 1)
+
+/* Prepend field types */
+#define NFP_NET_META_HASH               1 /* next field carries hash type */
+
 /* Hash type pre-pended when a RSS hash was computed */
 #define NFP_NET_RSS_NONE                0
 #define NFP_NET_RSS_IPV4                1
@@ -326,6 +333,9 @@
 #define NFP_NET_CFG_RXR_STATS_BASE      0x1400
 #define NFP_NET_CFG_RXR_STATS(_x)       (NFP_NET_CFG_RXR_STATS_BASE + \
 					 ((_x) * 0x10))
+
+/* PF multiport offset */
+#define NFP_PF_CSR_SLICE_SIZE	(32 * 1024)
 
 #endif /* _NFP_NET_CTRL_H_ */
 /*

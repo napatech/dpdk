@@ -47,12 +47,15 @@ CFLAGS += $(WERROR_FLAGS)
 LIBABIVER := 1
 
 # versioning export map
-EXPORT_MAP := rte_pmd_aesni_version.map
+EXPORT_MAP := rte_pmd_aesni_mb_version.map
 
 # external library dependencies
 CFLAGS += -I$(AESNI_MULTI_BUFFER_LIB_PATH)
 CFLAGS += -I$(AESNI_MULTI_BUFFER_LIB_PATH)/include
 LDLIBS += -L$(AESNI_MULTI_BUFFER_LIB_PATH) -lIPSec_MB
+LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
+LDLIBS += -lrte_cryptodev
+LDLIBS += -lrte_bus_vdev
 
 # library source files
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_AESNI_MB) += rte_aesni_mb_pmd.c

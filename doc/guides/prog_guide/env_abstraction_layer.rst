@@ -117,17 +117,6 @@ The physical address of the reserved memory for that memory zone is also returne
 
     Memory reservations done using the APIs provided by rte_malloc are also backed by pages from the hugetlbfs filesystem.
 
-Xen Dom0 support without hugetbls
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The existing memory management implementation is based on the Linux kernel hugepage mechanism.
-However, Xen Dom0 does not support hugepages, so a new Linux kernel module rte_dom0_mm is added to workaround this limitation.
-
-The EAL uses IOCTL interface to notify the Linux kernel module rte_dom0_mm to allocate memory of specified size,
-and get all memory segments information from the module,
-and the EAL uses MMAP interface to map the allocated memory.
-For each memory segment, the physical addresses are contiguous within it but actual hardware addresses are contiguous within 2MB.
-
 PCI Access
 ~~~~~~~~~~
 
@@ -164,7 +153,7 @@ which can trigger the generation of a core file, readable by gdb.
 CPU Feature Identification
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The EAL can query the CPU at runtime (using the rte_cpu_get_feature() function) to determine which CPU features are available.
+The EAL can query the CPU at runtime (using the rte_cpu_get_features() function) to determine which CPU features are available.
 
 User Space Interrupt Event
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -320,7 +309,7 @@ All these impacts are mentioned in :ref:`known_issue_label` section.
 Public Thread API
 ~~~~~~~~~~~~~~~~~
 
-There are two public APIs ``rte_thread_set_affinity()`` and ``rte_pthread_get_affinity()`` introduced for threads.
+There are two public APIs ``rte_thread_set_affinity()`` and ``rte_thread_get_affinity()`` introduced for threads.
 When they're used in any pthread context, the Thread Local Storage(TLS) will be set/get.
 
 Those TLS include *_cpuset* and *_socket_id*:

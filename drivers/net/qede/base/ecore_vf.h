@@ -14,6 +14,11 @@
 #include "ecore_l2_api.h"
 #include "ecore_vfpf_if.h"
 
+/* Default number of CIDs [total of both Rx and Tx] to be requested
+ * by default.
+ */
+#define ECORE_ETH_VF_DEFAULT_NUM_CIDS	(32)
+
 /* This data is held in the ecore_hwfn structure for VFs only. */
 struct ecore_vf_iov {
 	union vfpf_tlvs			*vf2pf_request;
@@ -36,25 +41,47 @@ struct ecore_vf_iov {
 	 * this has to be propagated as it affects the fastpath.
 	 */
 	bool b_pre_fp_hsi;
+
+	/* Current day VFs are passing the SBs physical address on vport
+	 * start, and as they lack an IGU mapping they need to store the
+	 * addresses of previously registered SBs.
+	 * Even if we were to change configuration flow, due to backward
+	 * compatibility [with older PFs] we'd still need to store these.
+	 */
+	struct ecore_sb_info *sbs_info[PFVF_MAX_SBS_PER_VF];
+
+#ifdef CONFIG_ECORE_SW_CHANNEL
+	/* Would be set if the VF is to try communicating with it PF
+	 * using a hw channel.
+	 */
+	bool b_hw_channel;
+#endif
+
+	/* Determines whether VF utilizes doorbells via limited register
+	 * bar or via the doorbell bar.
+	 */
+	bool b_doorbell_bar;
 };
 
-
-enum _ecore_status_t ecore_set_rxq_coalesce(struct ecore_hwfn *p_hwfn,
-					    struct ecore_ptt *p_ptt,
-					    u16 coalesce,
-					    struct ecore_queue_cid *p_cid);
-enum _ecore_status_t ecore_set_txq_coalesce(struct ecore_hwfn *p_hwfn,
-					    struct ecore_ptt *p_ptt,
-					    u16 coalesce,
-					    struct ecore_queue_cid *p_cid);
+/**
+ * @brief VF - Get coalesce per VF's relative queue.
+ *
+ * @param p_hwfn
+ * @param p_coal - coalesce value in micro second for VF queues.
+ * @param p_cid  - queue cid
+ *
+ **/
+enum _ecore_status_t ecore_vf_pf_get_coalesce(struct ecore_hwfn *p_hwfn,
+					      u16 *p_coal,
+					      struct ecore_queue_cid *p_cid);
 /**
  * @brief VF - Set Rx/Tx coalesce per VF's relative queue.
- *	Coalesce value '0' will omit the configuration.
+ *             Coalesce value '0' will omit the configuration.
  *
- *	@param p_hwfn
- *	@param rx_coal - coalesce value in micro second for rx queue
- *	@param tx_coal - coalesce value in micro second for tx queue
- *	@param queue_cid
+ * @param p_hwfn
+ * @param rx_coal - coalesce value in micro second for rx queue
+ * @param tx_coal - coalesce value in micro second for tx queue
+ * @param p_cid   - queue cid
  *
  **/
 enum _ecore_status_t ecore_vf_pf_set_coalesce(struct ecore_hwfn *p_hwfn,
@@ -200,6 +227,15 @@ enum _ecore_status_t ecore_vf_pf_release(struct ecore_hwfn *p_hwfn);
 u16 ecore_vf_get_igu_sb_id(struct ecore_hwfn *p_hwfn,
 			   u16               sb_id);
 
+/**
+ * @brief Stores [or removes] a configured sb_info.
+ *
+ * @param p_hwfn
+ * @param sb_id - zero-based SB index [for fastpath]
+ * @param sb_info - may be OSAL_NULL [during removal].
+ */
+void ecore_vf_set_sb_info(struct ecore_hwfn *p_hwfn,
+			  u16 sb_id, struct ecore_sb_info *p_sb);
 
 /**
  * @brief ecore_vf_pf_vport_start - perform vport start for VF.
@@ -251,34 +287,28 @@ enum _ecore_status_t ecore_vf_pf_int_cleanup(struct ecore_hwfn *p_hwfn);
 /**
  * @brief - return the link params in a given bulletin board
  *
- * @param p_hwfn
  * @param p_params - pointer to a struct to fill with link params
  * @param p_bulletin
  */
-void __ecore_vf_get_link_params(struct ecore_hwfn *p_hwfn,
-				struct ecore_mcp_link_params *p_params,
+void __ecore_vf_get_link_params(struct ecore_mcp_link_params *p_params,
 				struct ecore_bulletin_content *p_bulletin);
 
 /**
  * @brief - return the link state in a given bulletin board
  *
- * @param p_hwfn
  * @param p_link - pointer to a struct to fill with link state
  * @param p_bulletin
  */
-void __ecore_vf_get_link_state(struct ecore_hwfn *p_hwfn,
-			       struct ecore_mcp_link_state *p_link,
+void __ecore_vf_get_link_state(struct ecore_mcp_link_state *p_link,
 			       struct ecore_bulletin_content *p_bulletin);
 
 /**
  * @brief - return the link capabilities in a given bulletin board
  *
- * @param p_hwfn
  * @param p_link - pointer to a struct to fill with link capabilities
  * @param p_bulletin
  */
-void __ecore_vf_get_link_caps(struct ecore_hwfn *p_hwfn,
-			      struct ecore_mcp_link_capabilities *p_link_caps,
+void __ecore_vf_get_link_caps(struct ecore_mcp_link_capabilities *p_link_caps,
 			      struct ecore_bulletin_content *p_bulletin);
 
 enum _ecore_status_t
@@ -286,5 +316,8 @@ ecore_vf_pf_tunnel_param_update(struct ecore_hwfn *p_hwfn,
 				struct ecore_tunnel_info *p_tunn);
 
 void ecore_vf_set_vf_start_tunn_update_param(struct ecore_tunnel_info *p_tun);
+
+u32 ecore_vf_hw_bar_size(struct ecore_hwfn *p_hwfn,
+		     enum BAR_ID bar_id);
 #endif
 #endif /* __ECORE_VF_H__ */

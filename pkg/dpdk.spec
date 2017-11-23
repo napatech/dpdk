@@ -30,7 +30,7 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Name: dpdk
-Version: 17.08
+Version: 17.11
 Release: 1
 Packager: packaging@6wind.com
 URL: http://dpdk.org
@@ -52,9 +52,6 @@ ExclusiveArch: i686 x86_64 aarch64
 %endif
 
 BuildRequires: kernel-devel, kernel-headers, libpcap-devel
-%ifarch i686 x86_64
-BuildRequires: xen-devel
-%endif
 BuildRequires: doxygen, python-sphinx, inkscape
 BuildRequires: texlive-collection-latexextra
 
@@ -90,9 +87,6 @@ sed -ri 's,(RTE_BUILD_SHARED_LIB=).*,\1y,' %{target}/.config
 sed -ri 's,(RTE_NEXT_ABI=).*,\1n,'         %{target}/.config
 sed -ri 's,(LIBRTE_VHOST=).*,\1y,'         %{target}/.config
 sed -ri 's,(LIBRTE_PMD_PCAP=).*,\1y,'      %{target}/.config
-%ifarch i686 x86_64
-sed -ri 's,(LIBRTE_PMD_XENVIRT=).*,\1y,'   %{target}/.config
-%endif
 make O=%{target} %{?_smp_mflags}
 make O=%{target} doc
 

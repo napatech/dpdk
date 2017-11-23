@@ -87,6 +87,7 @@ extern struct rte_logs rte_logs;
 #define RTE_LOGTYPE_CRYPTODEV 17 /**< Log related to cryptodev. */
 #define RTE_LOGTYPE_EFD       18 /**< Log related to EFD. */
 #define RTE_LOGTYPE_EVENTDEV  19 /**< Log related to eventdev. */
+#define RTE_LOGTYPE_GSO       20 /**< Log related to GSO. */
 
 /* these log types can be used in an application */
 #define RTE_LOGTYPE_USER1     24 /**< User-defined log type 1. */
@@ -138,41 +139,12 @@ int rte_openlog_stream(FILE *f);
 void rte_log_set_global_level(uint32_t level);
 
 /**
- * Deprecated, replaced by rte_log_set_global_level().
- */
-__rte_deprecated
-void rte_set_log_level(uint32_t level);
-
-/**
  * Get the global log level.
  *
  * @return
  *   The current global log level.
  */
 uint32_t rte_log_get_global_level(void);
-
-/**
- * Deprecated, replaced by rte_log_get_global_level().
- */
-__rte_deprecated
-uint32_t rte_get_log_level(void);
-
-/**
- * Enable or disable the log type.
- *
- * @param type
- *   Log type, for example, RTE_LOGTYPE_EAL.
- * @param enable
- *   True for enable; false for disable.
- */
-__rte_deprecated
-void rte_set_log_type(uint32_t type, int enable);
-
-/**
- * Get the global log type.
- */
-__rte_deprecated
-uint32_t rte_get_log_type(void);
 
 /**
  * Get the log level for a given type.
@@ -246,7 +218,7 @@ int rte_log_cur_msg_logtype(void);
  *   The string identifying the log type.
  * @return
  *   - >0: success, the returned value is the log type identifier.
- *   - (-ENONEM): cannot allocate memory.
+ *   - (-ENOMEM): cannot allocate memory.
  */
 int rte_log_register(const char *name);
 

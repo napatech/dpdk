@@ -122,7 +122,7 @@ dpaa2_dev_rx_offload(uint64_t hw_annot_addr, struct rte_mbuf *mbuf)
 
 	if (BIT_ISSET_AT_POS(annotation->word3,
 			     L2_VLAN_1_PRESENT | L2_VLAN_N_PRESENT))
-		mbuf->ol_flags |= PKT_RX_VLAN_PKT;
+		mbuf->ol_flags |= PKT_RX_VLAN;
 
 	if (BIT_ISSET_AT_POS(annotation->word8, DPAA2_ETH_FAS_L3CE))
 		mbuf->ol_flags |= PKT_RX_IP_CKSUM_BAD;
@@ -350,7 +350,6 @@ eth_copy_mbuf_to_fd(struct rte_mbuf *mbuf,
 	if (rte_dpaa2_mbuf_alloc_bulk(
 		rte_dpaa2_bpid_info[bpid].bp_list->mp, &mb, 1)) {
 		PMD_TX_LOG(WARNING, "Unable to allocated DPAA2 buffer");
-		rte_pktmbuf_free(mbuf);
 		return -1;
 	}
 	m = (struct rte_mbuf *)mb;
@@ -382,8 +381,6 @@ eth_copy_mbuf_to_fd(struct rte_mbuf *mbuf,
 		rte_dpaa2_bpid_info[DPAA2_GET_FD_BPID(fd)].meta_data_size,
 		DPAA2_GET_FD_OFFSET(fd),
 		DPAA2_GET_FD_LEN(fd));
-	/*free the original packet */
-	rte_pktmbuf_free(mbuf);
 
 	return 0;
 }
@@ -422,7 +419,7 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		qbman_pull_desc_set_storage(&pulldesc, dq_storage,
 			(dma_addr_t)(DPAA2_VADDR_TO_IOVA(dq_storage)), 1);
 		if (check_swp_active_dqs(DPAA2_PER_LCORE_DPIO->index)) {
-			while (!qbman_check_command_complete(swp,
+			while (!qbman_check_command_complete(
 			       get_swp_active_dqs(DPAA2_PER_LCORE_DPIO->index)))
 				;
 			clear_swp_active_dqs(DPAA2_PER_LCORE_DPIO->index);
@@ -445,7 +442,7 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	 * Also seems like the SWP is shared between the Ethernet Driver
 	 * and the SEC driver.
 	 */
-	while (!qbman_check_command_complete(swp, dq_storage))
+	while (!qbman_check_command_complete(dq_storage))
 		;
 	if (dq_storage == get_swp_active_dqs(q_storage->active_dpio_id))
 		clear_swp_active_dqs(q_storage->active_dpio_id);
@@ -453,7 +450,7 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		/* Loop until the dq_storage is updated with
 		 * new token by QBMAN
 		 */
-		while (!qbman_result_has_new_result(swp, dq_storage))
+		while (!qbman_check_new_result(dq_storage))
 			;
 		rte_prefetch0((void *)((uint64_t)(dq_storage + 1)));
 		/* Check whether Last Pull command is Expired and
@@ -486,7 +483,7 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	}
 
 	if (check_swp_active_dqs(DPAA2_PER_LCORE_DPIO->index)) {
-		while (!qbman_check_command_complete(swp,
+		while (!qbman_check_command_complete(
 		       get_swp_active_dqs(DPAA2_PER_LCORE_DPIO->index)))
 			;
 		clear_swp_active_dqs(DPAA2_PER_LCORE_DPIO->index);
@@ -515,6 +512,26 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 
 	/* Return the total number of packets received to DPAA2 app */
 	return num_rx;
+}
+
+void __attribute__((hot))
+dpaa2_dev_process_parallel_event(struct qbman_swp *swp,
+				 const struct qbman_fd *fd,
+				 const struct qbman_result *dq,
+				 struct dpaa2_queue *rxq,
+				 struct rte_event *ev)
+{
+	ev->mbuf = eth_fd_to_mbuf(fd);
+
+	ev->flow_id = rxq->ev.flow_id;
+	ev->sub_event_type = rxq->ev.sub_event_type;
+	ev->event_type = RTE_EVENT_TYPE_ETHDEV;
+	ev->op = RTE_EVENT_OP_NEW;
+	ev->sched_type = rxq->ev.sched_type;
+	ev->queue_id = rxq->ev.queue_id;
+	ev->priority = rxq->ev.priority;
+
+	qbman_swp_dqrr_consume(swp, dq);
 }
 
 /*
@@ -560,7 +577,7 @@ dpaa2_dev_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	while (nb_pkts) {
 		/*Check if the queue is congested*/
 		retry_count = 0;
-		if (qbman_result_SCN_state_in_mem(dpaa2_q->cscn)) {
+		while (qbman_result_SCN_state(dpaa2_q->cscn)) {
 			retry_count++;
 			/* Retry for some time before giving up */
 			if (retry_count > CONG_RETRY_COUNT)
@@ -580,39 +597,35 @@ dpaa2_dev_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 				mp = mi->pool;
 			}
 			/* Not a hw_pkt pool allocated frame */
-			if (!mp) {
+			if (unlikely(!mp || !priv->bp_list)) {
 				PMD_TX_LOG(ERR, "err: no bpool attached");
-				goto skip_tx;
+				goto send_n_return;
 			}
+
 			if (mp->ops_index != priv->bp_list->dpaa2_ops_index) {
 				PMD_TX_LOG(ERR, "non hw offload bufffer ");
 				/* alloc should be from the default buffer pool
 				 * attached to this interface
 				 */
-				if (priv->bp_list) {
-					bpid = priv->bp_list->buf_pool.bpid;
-				} else {
-					PMD_TX_LOG(ERR,
-						   "err: no bpool attached");
-					num_tx = 0;
-					goto skip_tx;
-				}
+				bpid = priv->bp_list->buf_pool.bpid;
+
 				if (unlikely((*bufs)->nb_segs > 1)) {
 					PMD_TX_LOG(ERR, "S/G support not added"
 						" for non hw offload buffer");
-					goto skip_tx;
+					goto send_n_return;
 				}
 				if (eth_copy_mbuf_to_fd(*bufs,
 							&fd_arr[loop], bpid)) {
-					bufs++;
-					continue;
+					goto send_n_return;
 				}
+				/* free the original packet */
+				rte_pktmbuf_free(*bufs);
 			} else {
 				bpid = mempool_to_bpid(mp);
 				if (unlikely((*bufs)->nb_segs > 1)) {
 					if (eth_mbuf_to_sg_fd(*bufs,
 							&fd_arr[loop], bpid))
-						goto skip_tx;
+						goto send_n_return;
 				} else {
 					eth_mbuf_to_fd(*bufs,
 						       &fd_arr[loop], bpid);
@@ -622,13 +635,27 @@ dpaa2_dev_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		}
 		loop = 0;
 		while (loop < frames_to_send) {
-			loop += qbman_swp_send_multiple(swp, &eqdesc,
+			loop += qbman_swp_enqueue_multiple(swp, &eqdesc,
 					&fd_arr[loop], frames_to_send - loop);
 		}
 
 		num_tx += frames_to_send;
 		dpaa2_q->tx_pkts += frames_to_send;
 		nb_pkts -= frames_to_send;
+	}
+	return num_tx;
+
+send_n_return:
+	/* send any already prepared fd */
+	if (loop) {
+		unsigned int i = 0;
+
+		while (i < loop) {
+			i += qbman_swp_enqueue_multiple(swp, &eqdesc,
+							&fd_arr[i], loop - i);
+		}
+		num_tx += loop;
+		dpaa2_q->tx_pkts += loop;
 	}
 skip_tx:
 	return num_tx;

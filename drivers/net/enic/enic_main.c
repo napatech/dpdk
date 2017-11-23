@@ -40,6 +40,7 @@
 #include <libgen.h>
 
 #include <rte_pci.h>
+#include <rte_bus_pci.h>
 #include <rte_memzone.h>
 #include <rte_malloc.h>
 #include <rte_mbuf.h>
@@ -156,16 +157,17 @@ void enic_dev_stats_clear(struct enic *enic)
 	enic_clear_soft_stats(enic);
 }
 
-void enic_dev_stats_get(struct enic *enic, struct rte_eth_stats *r_stats)
+int enic_dev_stats_get(struct enic *enic, struct rte_eth_stats *r_stats)
 {
 	struct vnic_stats *stats;
 	struct enic_soft_stats *soft_stats = &enic->soft_stats;
 	int64_t rx_truncated;
 	uint64_t rx_packet_errors;
+	int ret = vnic_dev_stats_dump(enic->vdev, &stats);
 
-	if (vnic_dev_stats_dump(enic->vdev, &stats)) {
+	if (ret) {
 		dev_err(enic, "Error in getting stats\n");
-		return;
+		return ret;
 	}
 
 	/* The number of truncated packets can only be calculated by
@@ -191,6 +193,7 @@ void enic_dev_stats_get(struct enic *enic, struct rte_eth_stats *r_stats)
 	r_stats->imissed = stats->rx.rx_no_bufs + rx_truncated;
 
 	r_stats->rx_nombuf = rte_atomic64_read(&soft_stats->rx_nombuf);
+	return 0;
 }
 
 void enic_del_mac_address(struct enic *enic, int mac_index)
@@ -224,7 +227,7 @@ enic_free_rq_buf(struct rte_mbuf **mbuf)
 		return;
 
 	rte_pktmbuf_free(*mbuf);
-	mbuf = NULL;
+	*mbuf = NULL;
 }
 
 void enic_init_vnic_resources(struct enic *enic)
@@ -280,7 +283,7 @@ void enic_init_vnic_resources(struct enic *enic)
 			0 /* cq_entry_enable */,
 			1 /* cq_message_enable */,
 			0 /* interrupt offset */,
-			(u64)enic->wq[index].cqmsg_rz->phys_addr);
+			(u64)enic->wq[index].cqmsg_rz->iova);
 	}
 
 	vnic_intr_init(&enic->intr,
@@ -313,7 +316,7 @@ enic_alloc_rx_queue_mbufs(struct enic *enic, struct vnic_rq *rq)
 		}
 
 		mb->data_off = RTE_PKTMBUF_HEADROOM;
-		dma_addr = (dma_addr_t)(mb->buf_physaddr
+		dma_addr = (dma_addr_t)(mb->buf_iova
 			   + RTE_PKTMBUF_HEADROOM);
 		rq_enet_desc_enc(rqd, dma_addr,
 				(rq->is_sop ? RQ_ENET_TYPE_ONLY_SOP
@@ -359,7 +362,7 @@ enic_alloc_consistent(void *priv, size_t size,
 	}
 
 	vaddr = rz->addr;
-	*dma_handle = (dma_addr_t)rz->phys_addr;
+	*dma_handle = (dma_addr_t)rz->iova;
 
 	mze = rte_malloc("enic memzone entry",
 			 sizeof(struct enic_memzone_entry), 0);
@@ -368,6 +371,7 @@ enic_alloc_consistent(void *priv, size_t size,
 		pr_err("%s : Failed to allocate memory for memzone list\n",
 		       __func__);
 		rte_memzone_free(rz);
+		return NULL;
 	}
 
 	mze->rz = rz;
@@ -391,7 +395,7 @@ enic_free_consistent(void *priv,
 	rte_spinlock_lock(&enic->memzone_list_lock);
 	LIST_FOREACH(mze, &enic->memzone_list, entries) {
 		if (mze->rz->addr == vaddr &&
-		    mze->rz->phys_addr == dma_handle)
+		    mze->rz->iova == dma_handle)
 			break;
 	}
 	if (mze == NULL) {
@@ -1116,11 +1120,12 @@ static int
 enic_reinit_rq(struct enic *enic, unsigned int rq_idx)
 {
 	struct vnic_rq *sop_rq, *data_rq;
-	unsigned int cq_idx = enic_cq_rq(enic, rq_idx);
+	unsigned int cq_idx;
 	int rc = 0;
 
 	sop_rq = &enic->rq[enic_rte_rq_idx_to_sop_idx(rq_idx)];
 	data_rq = &enic->rq[enic_rte_rq_idx_to_data_idx(rq_idx)];
+	cq_idx = rq_idx;
 
 	vnic_cq_clean(&enic->cq[cq_idx]);
 	vnic_cq_init(&enic->cq[cq_idx],
@@ -1179,6 +1184,9 @@ int enic_set_mtu(struct enic *enic, uint16_t new_mtu)
 
 	old_mtu = eth_dev->data->mtu;
 	config_mtu = enic->config.mtu;
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return -E_RTE_SECONDARY;
 
 	if (new_mtu > enic->max_mtu) {
 		dev_err(enic,
@@ -1330,6 +1338,10 @@ int enic_probe(struct enic *enic)
 	int err = -1;
 
 	dev_debug(enic, " Initializing ENIC PMD\n");
+
+	/* if this is a secondary process the hardware is already initialized */
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	enic->bar0.vaddr = (void *)pdev->mem_resource[0].addr;
 	enic->bar0.len = pdev->mem_resource[0].len;

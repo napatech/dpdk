@@ -56,6 +56,7 @@ extern "C" {
 #define RTE_VHOST_USER_CLIENT		(1ULL << 0)
 #define RTE_VHOST_USER_NO_RECONNECT	(1ULL << 1)
 #define RTE_VHOST_USER_DEQUEUE_ZERO_COPY	(1ULL << 2)
+#define RTE_VHOST_USER_IOMMU_SUPPORT	(1ULL << 3)
 
 /**
  * Information relating to memory regions including offsets to
@@ -107,7 +108,10 @@ struct vhost_device_ops {
 	 */
 	int (*features_changed)(int vid, uint64_t features);
 
-	void *reserved[4]; /**< Reserved for future extension */
+	int (*new_connection)(int vid);
+	void (*destroy_connection)(int vid);
+
+	void *reserved[2]; /**< Reserved for future extension */
 };
 
 /**

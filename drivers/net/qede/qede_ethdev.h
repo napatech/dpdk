@@ -29,14 +29,10 @@
 #include "base/ecore_chain.h"
 #include "base/ecore_status.h"
 #include "base/ecore_hsi_eth.h"
-#include "base/ecore_dev_api.h"
 #include "base/ecore_iov_api.h"
 #include "base/ecore_cxt.h"
 #include "base/nvm_cfg.h"
-#include "base/ecore_iov_api.h"
 #include "base/ecore_sp_commands.h"
-#include "base/ecore_l2.h"
-#include "base/ecore_dev_api.h"
 #include "base/ecore_l2.h"
 
 #include "qede_logs.h"
@@ -49,8 +45,8 @@
 /* Driver versions */
 #define QEDE_PMD_VER_PREFIX		"QEDE PMD"
 #define QEDE_PMD_VERSION_MAJOR		2
-#define QEDE_PMD_VERSION_MINOR	        5
-#define QEDE_PMD_VERSION_REVISION       2
+#define QEDE_PMD_VERSION_MINOR	        6
+#define QEDE_PMD_VERSION_REVISION       0
 #define QEDE_PMD_VERSION_PATCH	        1
 
 #define QEDE_PMD_VERSION qede_stringify(QEDE_PMD_VERSION_MAJOR) "."     \
@@ -122,7 +118,6 @@
 #define PCI_DEVICE_ID_QLOGIC_AH_IOV            CHIP_NUM_AH_IOV
 
 
-#define QEDE_VXLAN_DEF_PORT		8472
 
 extern char fw_file[];
 
@@ -171,6 +166,13 @@ struct qede_fdir_info {
 	SLIST_HEAD(fdir_list_head, qede_fdir_entry)fdir_list_head;
 };
 
+struct qede_vxlan_tunn {
+	bool enable;
+	uint16_t num_filters;
+	uint16_t filter_type;
+#define QEDE_VXLAN_DEF_PORT			(4789)
+	uint16_t udp_port;
+};
 
 /*
  *  Structure to store private data for each port.
@@ -200,11 +202,11 @@ struct qede_dev {
 	SLIST_HEAD(uc_list_head, qede_ucast_entry) uc_list_head;
 	uint16_t num_uc_addr;
 	bool handle_hw_err;
-	uint16_t num_tunn_filters;
-	uint16_t vxlan_filter_type;
+	struct qede_vxlan_tunn vxlan;
 	struct qede_fdir_info fdir_info;
 	bool vlan_strip_flg;
 	char drv_ver[QEDE_PMD_DRV_VER_STR_SIZE];
+	void *ethdev;
 };
 
 /* Non-static functions */
@@ -220,6 +222,9 @@ int qede_rss_reta_update(struct rte_eth_dev *eth_dev,
 int qed_fill_eth_dev_info(struct ecore_dev *edev,
 				 struct qed_dev_eth_info *info);
 int qede_dev_set_link_state(struct rte_eth_dev *eth_dev, bool link_up);
+
+int qede_link_update(struct rte_eth_dev *eth_dev,
+		     __rte_unused int wait_to_complete);
 
 int qede_dev_filter_ctrl(struct rte_eth_dev *dev, enum rte_filter_type type,
 			 enum rte_filter_op op, void *arg);

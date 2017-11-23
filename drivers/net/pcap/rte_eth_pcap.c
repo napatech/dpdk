@@ -44,7 +44,7 @@
 #include <rte_kvargs.h>
 #include <rte_malloc.h>
 #include <rte_mbuf.h>
-#include <rte_vdev.h>
+#include <rte_bus_vdev.h>
 
 #define RTE_ETH_PCAP_SNAPSHOT_LEN 65535
 #define RTE_ETH_PCAP_SNAPLEN ETHER_MAX_JUMBO_FRAME_LEN
@@ -75,7 +75,7 @@ struct queue_stat {
 
 struct pcap_rx_queue {
 	pcap_t *pcap;
-	uint8_t in_port;
+	uint16_t in_port;
 	struct rte_mempool *mb_pool;
 	struct queue_stat rx_stat;
 	char name[PATH_MAX];
@@ -411,11 +411,13 @@ open_single_tx_pcap(const char *pcap_filename, pcap_dumper_t **dumper)
 	/* The dumper is created using the previous pcap_t reference */
 	*dumper = pcap_dump_open(tx_pcap, pcap_filename);
 	if (*dumper == NULL) {
+		pcap_close(tx_pcap);
 		RTE_LOG(ERR, PMD, "Couldn't open %s for writing.\n",
 			pcap_filename);
 		return -1;
 	}
 
+	pcap_close(tx_pcap);
 	return 0;
 }
 
@@ -560,7 +562,7 @@ eth_dev_info(struct rte_eth_dev *dev,
 	dev_info->min_rx_bufsize = 0;
 }
 
-static void
+static int
 eth_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 {
 	unsigned int i;
@@ -592,6 +594,8 @@ eth_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	stats->opackets = tx_packets_total;
 	stats->obytes = tx_bytes_total;
 	stats->oerrors = tx_packets_err_total;
+
+	return 0;
 }
 
 static void
@@ -838,7 +842,6 @@ pmd_init_internals(struct rte_vdev_device *vdev,
 	 */
 	(*eth_dev)->data = data;
 	(*eth_dev)->dev_ops = &ops;
-	data->dev_flags = RTE_ETH_DEV_DETACHABLE;
 
 	return 0;
 }

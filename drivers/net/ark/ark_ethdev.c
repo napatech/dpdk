@@ -35,12 +35,12 @@
 #include <sys/stat.h>
 #include <dlfcn.h>
 
+#include <rte_bus_pci.h>
 #include <rte_ethdev_pci.h>
 #include <rte_kvargs.h>
 
 #include "ark_global.h"
 #include "ark_logs.h"
-#include "ark_ethdev.h"
 #include "ark_ethdev_tx.h"
 #include "ark_ethdev_rx.h"
 #include "ark_mpu.h"
@@ -66,7 +66,7 @@ static int eth_ark_dev_link_update(struct rte_eth_dev *dev,
 				   int wait_to_complete);
 static int eth_ark_dev_set_link_up(struct rte_eth_dev *dev);
 static int eth_ark_dev_set_link_down(struct rte_eth_dev *dev);
-static void eth_ark_dev_stats_get(struct rte_eth_dev *dev,
+static int eth_ark_dev_stats_get(struct rte_eth_dev *dev,
 				  struct rte_eth_stats *stats);
 static void eth_ark_dev_stats_reset(struct rte_eth_dev *dev);
 static void eth_ark_set_default_mac_addr(struct rte_eth_dev *dev,
@@ -242,7 +242,7 @@ check_for_ext(struct ark_adapter *ark)
 		(int (*)(struct rte_eth_dev *, void *))
 		dlsym(ark->d_handle, "dev_set_link_down");
 	ark->user_ext.stats_get =
-		(void (*)(struct rte_eth_dev *, struct rte_eth_stats *,
+		(int (*)(struct rte_eth_dev *, struct rte_eth_stats *,
 			  void *))
 		dlsym(ark->d_handle, "stats_get");
 	ark->user_ext.stats_reset =
@@ -343,7 +343,6 @@ eth_ark_dev_init(struct rte_eth_dev *dev)
 	/* We are a single function multi-port device. */
 	ret = ark_config_device(dev);
 	dev->dev_ops = &ark_eth_dev_ops;
-	dev->data->dev_flags |= RTE_ETH_DEV_DETACHABLE;
 
 	dev->data->mac_addrs = rte_zmalloc("ark", ETHER_ADDR_LEN, 0);
 	if (!dev->data->mac_addrs) {
@@ -452,10 +451,16 @@ ark_config_device(struct rte_eth_dev *dev)
 	 */
 	ark->start_pg = 0;
 	ark->pg = ark_pktgen_init(ark->pktgen.v, 0, 1);
+	if (ark->pg == NULL)
+		return -1;
 	ark_pktgen_reset(ark->pg);
 	ark->pc = ark_pktchkr_init(ark->pktchkr.v, 0, 1);
+	if (ark->pc == NULL)
+		return -1;
 	ark_pktchkr_stop(ark->pc);
 	ark->pd = ark_pktdir_init(ark->pktdir.v);
+	if (ark->pd == NULL)
+		return -1;
 
 	/* Verify HW */
 	if (ark_udm_verify(ark->udm.v))
@@ -641,7 +646,7 @@ eth_ark_dev_stop(struct rte_eth_dev *dev)
 	for (i = 0; i < dev->data->nb_tx_queues; i++) {
 		status = eth_ark_tx_queue_stop(dev, i);
 		if (status != 0) {
-			uint8_t port = dev->data->port_id;
+			uint16_t port = dev->data->port_id;
 			PMD_DRV_LOG(ERR,
 				    "tx_queue stop anomaly"
 				    " port %u, queue %u\n",
@@ -693,7 +698,7 @@ eth_ark_dev_stop(struct rte_eth_dev *dev)
 	ark_udm_dump_stats(ark->udm.v, "Post stop");
 	ark_udm_dump_perf(ark->udm.v, "Post stop");
 
-	for (i = 0; i < dev->data->nb_tx_queues; i++)
+	for (i = 0; i < dev->data->nb_rx_queues; i++)
 		eth_ark_rx_dump_queue(dev, i, __func__);
 
 	/* Stop the packet checker if it is running */
@@ -811,7 +816,7 @@ eth_ark_dev_set_link_down(struct rte_eth_dev *dev)
 	return 0;
 }
 
-static void
+static int
 eth_ark_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 {
 	uint16_t i;
@@ -830,8 +835,9 @@ eth_ark_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	for (i = 0; i < dev->data->nb_rx_queues; i++)
 		eth_rx_queue_stats_get(dev->data->rx_queues[i], stats);
 	if (ark->user_ext.stats_get)
-		ark->user_ext.stats_get(dev, stats,
+		return ark->user_ext.stats_get(dev, stats,
 			ark->user_data[dev->data->port_id]);
+	return 0;
 }
 
 static void

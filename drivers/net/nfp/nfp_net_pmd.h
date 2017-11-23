@@ -42,6 +42,7 @@
 
 #define NFP_NET_PMD_VERSION "0.1"
 #define PCI_VENDOR_ID_NETRONOME         0x19ee
+#define PCI_DEVICE_ID_NFP4000_PF_NIC    0x4000
 #define PCI_DEVICE_ID_NFP6000_PF_NIC    0x6000
 #define PCI_DEVICE_ID_NFP6000_VF_NIC    0x6003
 
@@ -141,6 +142,11 @@ static inline uint32_t nn_readl(volatile const void *addr)
 static inline void nn_writel(uint32_t val, volatile void *addr)
 {
 	rte_write32(val, addr);
+}
+
+static inline void nn_writew(uint16_t val, volatile void *addr)
+{
+	rte_write16(val, addr);
 }
 
 static inline uint64_t nn_readq(volatile void *addr)
@@ -250,7 +256,7 @@ struct nfp_net_txq {
 	uint32_t tx_hthresh;   /* not used by now. Future? */
 	uint32_t tx_wthresh;   /* not used by now. Future? */
 	uint32_t txq_flags;    /* not used by now. Future? */
-	uint8_t  port_id;
+	uint16_t port_id;
 	int qidx;
 	int tx_qcidx;
 	__le64 dma;
@@ -431,6 +437,13 @@ struct nfp_net_hw {
 	struct nfp_cpp_area *rx_area;
 	struct nfp_cpp_area *msix_area;
 #endif
+	uint8_t *hw_queues;
+	uint8_t is_pf;
+	uint8_t pf_port_idx;
+	uint8_t pf_multiport_enabled;
+	union eth_table_entry *eth_table;
+	nspu_desc_t *nspu_desc;
+	nfpu_desc_t *nfpu_desc;
 };
 
 struct nfp_net_adapter {

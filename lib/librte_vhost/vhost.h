@@ -45,6 +45,7 @@
 
 #include <rte_log.h>
 #include <rte_ether.h>
+#include <rte_rwlock.h>
 
 #include "rte_vhost.h"
 
@@ -81,6 +82,16 @@ struct zcopy_mbuf {
 };
 TAILQ_HEAD(zcopy_mbuf_list, zcopy_mbuf);
 
+/*
+ * Structure contains the info for each batched memory copy.
+ */
+struct batch_copy_elem {
+	void *dst;
+	void *src;
+	uint32_t len;
+	uint64_t log_addr;
+};
+
 /**
  * Structure contains variables relevant to RX/TX virtqueues.
  */
@@ -102,6 +113,7 @@ struct vhost_virtqueue {
 	/* Currently unused as polling mode is enabled */
 	int			kickfd;
 	int			enabled;
+	int			access_ok;
 
 	/* Physical address of used ring, for logging */
 	uint64_t		log_guest_addr;
@@ -114,6 +126,17 @@ struct vhost_virtqueue {
 
 	struct vring_used_elem  *shadow_used_ring;
 	uint16_t                shadow_used_idx;
+	struct vhost_vring_addr ring_addrs;
+
+	struct batch_copy_elem	*batch_copy_elems;
+	uint16_t		batch_copy_nb_elems;
+
+	rte_rwlock_t	iotlb_lock;
+	rte_rwlock_t	iotlb_pending_lock;
+	struct rte_mempool *iotlb_pool;
+	TAILQ_HEAD(, vhost_iotlb_entry) iotlb_list;
+	int				iotlb_cache_nr;
+	TAILQ_HEAD(, vhost_iotlb_entry) iotlb_pending_list;
 } __rte_cache_aligned;
 
 /* Old kernels have no such macros defined */
@@ -130,6 +153,37 @@ struct vhost_virtqueue {
 
 #ifndef VIRTIO_NET_F_MTU
  #define VIRTIO_NET_F_MTU 3
+#endif
+
+/* Declare IOMMU related bits for older kernels */
+#ifndef VIRTIO_F_IOMMU_PLATFORM
+
+#define VIRTIO_F_IOMMU_PLATFORM 33
+
+struct vhost_iotlb_msg {
+	__u64 iova;
+	__u64 size;
+	__u64 uaddr;
+#define VHOST_ACCESS_RO      0x1
+#define VHOST_ACCESS_WO      0x2
+#define VHOST_ACCESS_RW      0x3
+	__u8 perm;
+#define VHOST_IOTLB_MISS           1
+#define VHOST_IOTLB_UPDATE         2
+#define VHOST_IOTLB_INVALIDATE     3
+#define VHOST_IOTLB_ACCESS_FAIL    4
+	__u8 type;
+};
+
+#define VHOST_IOTLB_MSG 0x1
+
+struct vhost_msg {
+	int type;
+	union {
+		struct vhost_iotlb_msg iotlb;
+		__u8 padding[64];
+	};
+};
 #endif
 
 /*
@@ -157,7 +211,8 @@ struct vhost_virtqueue {
 				(1ULL << VIRTIO_NET_F_GUEST_TSO4) | \
 				(1ULL << VIRTIO_NET_F_GUEST_TSO6) | \
 				(1ULL << VIRTIO_RING_F_INDIRECT_DESC) | \
-				(1ULL << VIRTIO_NET_F_MTU))
+				(1ULL << VIRTIO_NET_F_MTU) | \
+				(1ULL << VIRTIO_F_IOMMU_PLATFORM))
 
 
 struct guest_page {
@@ -196,6 +251,8 @@ struct virtio_net {
 	uint32_t		nr_guest_pages;
 	uint32_t		max_guest_pages;
 	struct guest_page       *guest_pages;
+
+	int			slave_req_fd;
 } __rte_cache_aligned;
 
 
@@ -281,7 +338,7 @@ extern uint64_t VHOST_FEATURES;
 extern struct virtio_net *vhost_devices[MAX_VHOST_DEVICE];
 
 /* Convert guest physical address to host physical address */
-static __rte_always_inline phys_addr_t
+static __rte_always_inline rte_iova_t
 gpa_to_hpa(struct virtio_net *dev, uint64_t gpa, uint64_t size)
 {
 	uint32_t i;
@@ -320,5 +377,20 @@ struct vhost_device_ops const *vhost_driver_callback_get(const char *path);
  * TODO: fix it; we have one backend now
  */
 void vhost_backend_cleanup(struct virtio_net *dev);
+
+uint64_t __vhost_iova_to_vva(struct virtio_net *dev, struct vhost_virtqueue *vq,
+			uint64_t iova, uint64_t size, uint8_t perm);
+int vring_translate(struct virtio_net *dev, struct vhost_virtqueue *vq);
+void vring_invalidate(struct virtio_net *dev, struct vhost_virtqueue *vq);
+
+static __rte_always_inline uint64_t
+vhost_iova_to_vva(struct virtio_net *dev, struct vhost_virtqueue *vq,
+			uint64_t iova, uint64_t size, uint8_t perm)
+{
+	if (!(dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM)))
+		return rte_vhost_gpa_to_vva(dev->mem, iova);
+
+	return __vhost_iova_to_vva(dev, vq, iova, size, perm);
+}
 
 #endif /* _VHOST_NET_CDEV_H_ */

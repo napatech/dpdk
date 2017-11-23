@@ -18,7 +18,6 @@ struct init_qm_pq_params;
  * Returns the required host memory size in 4KB units.
  * Must be called before all QM init HSI functions.
  *
- * @param pf_id -	physical function ID
  * @param num_pf_cids - number of connections used by this PF
  * @param num_vf_cids -	number of connections used by VFs of this PF
  * @param num_tids -	number of tasks used by this PF
@@ -27,8 +26,7 @@ struct init_qm_pq_params;
  *
  * @return The required host memory size in 4KB units.
  */
-u32 ecore_qm_pf_mem_size(u8 pf_id,
-						 u32 num_pf_cids,
+u32 ecore_qm_pf_mem_size(u32 num_pf_cids,
 						 u32 num_vf_cids,
 						 u32 num_tids,
 						 u16 num_pf_pqs,
@@ -66,7 +64,6 @@ int ecore_qm_common_rt_init(struct ecore_hwfn *p_hwfn,
  * @param port_id		- port ID
  * @param pf_id			- PF ID
  * @param max_phys_tcs_per_port	- max number of physical TCs per port in HW
- * @param is_first_pf		- 1 = first PF in engine, 0 = othwerwise
  * @param num_pf_cids		- number of connections used by this PF
  * @param num_vf_cids		- number of connections used by VFs of this PF
  * @param num_tids		- number of tasks used by this PF
@@ -80,6 +77,7 @@ int ecore_qm_common_rt_init(struct ecore_hwfn *p_hwfn,
  *		   be 0. otherwise, the weight must be non-zero.
  * @param pf_rl - rate limit in Mb/sec units. a value of 0 means don't
  *                configure. ignored if PF RL is globally disabled.
+ * @param link_speed -		  link speed in Mbps.
  * @param pq_params - array of size (num_pf_pqs+num_vf_pqs) with parameters for
  *                    each Tx PQ associated with the specified PF.
  * @param vport_params - array of size num_vports with parameters for each
@@ -88,23 +86,23 @@ int ecore_qm_common_rt_init(struct ecore_hwfn *p_hwfn,
  * @return 0 on success, -1 on error.
  */
 int ecore_qm_pf_rt_init(struct ecore_hwfn *p_hwfn,
-				struct ecore_ptt *p_ptt,
-				u8 port_id,
-				u8 pf_id,
-				u8 max_phys_tcs_per_port,
-				bool is_first_pf,
-				u32 num_pf_cids,
-				u32 num_vf_cids,
-				u32 num_tids,
-				u16 start_pq,
-				u16 num_pf_pqs,
-				u16 num_vf_pqs,
-				u8 start_vport,
-				u8 num_vports,
-				u16 pf_wfq,
-				u32 pf_rl,
-				struct init_qm_pq_params *pq_params,
-				struct init_qm_vport_params *vport_params);
+			struct ecore_ptt *p_ptt,
+			u8 port_id,
+			u8 pf_id,
+			u8 max_phys_tcs_per_port,
+			u32 num_pf_cids,
+			u32 num_vf_cids,
+			u32 num_tids,
+			u16 start_pq,
+			u16 num_pf_pqs,
+			u16 num_vf_pqs,
+			u8 start_vport,
+			u8 num_vports,
+			u16 pf_wfq,
+			u32 pf_rl,
+			u32 link_speed,
+			struct init_qm_pq_params *pq_params,
+			struct init_qm_vport_params *vport_params);
 
 /**
  * @brief ecore_init_pf_wfq  Initializes the WFQ weight of the specified PF
@@ -157,17 +155,19 @@ int ecore_init_vport_wfq(struct ecore_hwfn *p_hwfn,
  * @brief ecore_init_vport_rl - Initializes the rate limit of the specified
  * VPORT.
  *
- * @param p_hwfn	- HW device data
- * @param p_ptt		- ptt window used for writing the registers
- * @param vport_id	- VPORT ID
- * @param vport_rl	- rate limit in Mb/sec units
+ * @param p_hwfn -	       HW device data
+ * @param p_ptt -	       ptt window used for writing the registers
+ * @param vport_id -   VPORT ID
+ * @param vport_rl -   rate limit in Mb/sec units
+ * @param link_speed - link speed in Mbps.
  *
  * @return 0 on success, -1 on error.
  */
 int ecore_init_vport_rl(struct ecore_hwfn *p_hwfn,
 						struct ecore_ptt *p_ptt,
 						u8 vport_id,
-						u32 vport_rl);
+						u32 vport_rl,
+						u32 link_speed);
 
 /**
  * @brief ecore_send_qm_stop_cmd  Sends a stop command to the QM
@@ -261,28 +261,15 @@ void ecore_init_brb_ram(struct ecore_hwfn *p_hwfn,
 
 #ifndef UNUSED_HSI_FUNC
 /**
- * @brief ecore_set_engine_mf_ovlan_eth_type - initializes Nig,Prs,Pbf and llh
- *                                             ethType Regs to  input ethType
- *                                             should Be called once per engine
- *                                             if engine
- *  is in BD mode.
- *
- * @param p_ptt   - ptt window used for writing the registers.
- * @param ethType - etherType to configure
- */
-void ecore_set_engine_mf_ovlan_eth_type(struct ecore_hwfn *p_hwfn,
-			struct ecore_ptt *p_ptt, u32 ethType);
-
-/**
  * @brief ecore_set_port_mf_ovlan_eth_type - initializes DORQ ethType Regs to
  *                                           input ethType should Be called
  *                                           once per port.
  *
- * @param p_ptt   - ptt window used for writing the registers.
+ * @param p_hwfn -	    HW device data
  * @param ethType - etherType to configure
  */
 void ecore_set_port_mf_ovlan_eth_type(struct ecore_hwfn *p_hwfn,
-			struct ecore_ptt *p_ptt, u32 ethType);
+				      u32 ethType);
 #endif /* UNUSED_HSI_FUNC */
 
 /**
@@ -351,33 +338,35 @@ void ecore_set_gft_event_id_cm_hdr(struct ecore_hwfn *p_hwfn,
 				   struct ecore_ptt *p_ptt);
 
 /**
- * @brief ecore_set_rfs_mode_disable - Disable and configure HW for RFS
+ * @brief ecore_gft_disable - Disable and GFT
  *
  * @param p_hwfn -   HW device data
  * @param p_ptt -   ptt window used for writing the registers.
- * @param pf_id - pf on which to disable RFS.
+ * @param pf_id - pf on which to disable GFT.
  */
-void ecore_set_rfs_mode_disable(struct ecore_hwfn *p_hwfn,
-				struct ecore_ptt *p_ptt,
-				u16 pf_id);
+void ecore_gft_disable(struct ecore_hwfn *p_hwfn,
+						struct ecore_ptt *p_ptt,
+						u16 pf_id);
 
 /**
-* @brief ecore_set_rfs_mode_enable - enable and configure HW for RFS
+ * @brief ecore_gft_config - Enable and configure HW for GFT
 *
 * @param p_ptt	- ptt window used for writing the registers.
-* @param pf_id	- pf on which to enable RFS.
+ * @param pf_id - pf on which to enable GFT.
 * @param tcp	- set profile tcp packets.
 * @param udp	- set profile udp  packet.
 * @param ipv4	- set profile ipv4 packet.
 * @param ipv6	- set profile ipv6 packet.
+ * @param profile_type -  define packet same fields. Use enum gft_profile_type.
 */
-void ecore_set_rfs_mode_enable(struct ecore_hwfn *p_hwfn,
+void ecore_gft_config(struct ecore_hwfn *p_hwfn,
 	struct ecore_ptt *p_ptt,
 	u16 pf_id,
 	bool tcp,
 	bool udp,
 	bool ipv4,
-	bool ipv6);
+	bool ipv6,
+	enum gft_profile_type profile_type);
 #endif /* UNUSED_HSI_FUNC */
 
 /**
@@ -431,26 +420,25 @@ void ecore_enable_context_validation(struct ecore_hwfn *p_hwfn,
  * @param ctx_type -	context type.
  * @param cid -		context cid.
  */
-void ecore_calc_session_ctx_validation(struct ecore_hwfn *p_hwfn,
-				       void *p_ctx_mem,
+void ecore_calc_session_ctx_validation(void *p_ctx_mem,
 				       u16 ctx_size,
 				       u8 ctx_type,
 				       u32 cid);
+
 /**
  * @brief ecore_calc_task_ctx_validation - Calcualte validation byte for task
  * context.
  *
- * @param p_hwfn -		    HW device data
  * @param p_ctx_mem -	pointer to context memory.
  * @param ctx_size -	context size.
  * @param ctx_type -	context type.
  * @param tid -		    context tid.
  */
-void ecore_calc_task_ctx_validation(struct ecore_hwfn *p_hwfn,
-				    void *p_ctx_mem,
+void ecore_calc_task_ctx_validation(void *p_ctx_mem,
 				    u16 ctx_size,
 				    u8 ctx_type,
 				    u32 tid);
+
 /**
  * @brief ecore_memset_session_ctx - Memset session context to 0 while
  * preserving validation bytes.

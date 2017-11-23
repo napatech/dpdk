@@ -37,13 +37,16 @@ include $(RTE_SDK)/mk/rte.vars.mk
 LIB = librte_pmd_vhost.a
 
 LDLIBS += -lpthread
+LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
+LDLIBS += -lrte_ethdev -lrte_net -lrte_kvargs -lrte_vhost
+LDLIBS += -lrte_bus_vdev
 
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
 
 EXPORT_MAP := rte_pmd_vhost_version.map
 
-LIBABIVER := 1
+LIBABIVER := 2
 
 #
 # all source are stored in SRCS-y

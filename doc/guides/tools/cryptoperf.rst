@@ -50,7 +50,8 @@ offload are still consumed by the test tool and included in the cycle-count.
 These cycles are consumed by retries and inefficient API calls enqueuing and
 dequeuing smaller bursts than specified by the cmdline parameter. This results
 in a larger cycle-count measurement and should not be interpreted as an offload
-cost measurement.
+cost measurement. Using "pmd-cyclecount" mode will give a better idea of
+actual costs of hardware acceleration.
 
 On hardware devices the throughput measurement is not necessarily the maximum
 possible for the device, e.g. it may be necessary to use multiple cores to keep
@@ -134,6 +135,7 @@ The following are the appication command-line options:
            throughput
            latency
            verify
+           pmd-cyclecount
 
 * ``--silent``
 
@@ -170,9 +172,11 @@ The following are the appication command-line options:
           * List of values, up to 32 values, separated in commas (i.e. ``--buffer-sz 32,64,128``)
 
 
-* ``--segments-nb <n>``
+* ``--segment-sz <n>``
 
-        Set the number of segments per packet.
+        Set the size of the segment to use, for Scatter Gather List testing.
+        By default, it is set to the size of the maximum buffer size, including the digest size,
+        so a single segment is created.
 
 * ``--devtype <name>``
 
@@ -186,9 +190,11 @@ The following are the appication command-line options:
            crypto_snow3g
            crypto_kasumi
            crypto_zuc
+           crypto_dpaa_sec
            crypto_dpaa2_sec
            crypto_armv8
            crypto_scheduler
+           crypto_mrvl
 
 * ``--optype <name>``
 
@@ -324,6 +330,16 @@ The following are the appication command-line options:
 * ``--digest-sz <n>``
 
         Set the size of digest.
+
+* ``--desc-nb <n>``
+
+        Set number of descriptors for each crypto device.
+
+* ``--pmd-cyclecount-delay-ms <n>``
+
+        Add a delay (in milliseconds) between enqueue and dequeue in
+        pmd-cyclecount benchmarking mode (useful when benchmarking
+        hardware acceleration).
 
 * ``--csv-friendly``
 

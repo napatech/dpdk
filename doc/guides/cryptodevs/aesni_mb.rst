@@ -52,6 +52,8 @@ Cipher algorithms:
 * RTE_CRYPTO_CIPHER_AES192_CTR
 * RTE_CRYPTO_CIPHER_AES256_CTR
 * RTE_CRYPTO_CIPHER_AES_DOCSISBPI
+* RTE_CRYPTO_CIPHER_DES_CBC
+* RTE_CRYPTO_CIPHER_DES_DOCSISBPI
 
 Hash algorithms:
 
@@ -76,8 +78,8 @@ Installation
 To build DPDK with the AESNI_MB_PMD the user is required to download the multi-buffer
 library from `here <https://github.com/01org/intel-ipsec-mb>`_
 and compile it on their user system before building DPDK.
-The latest version of the library supported by this PMD is v0.46, which
-can be downloaded in `<https://github.com/01org/intel-ipsec-mb/archive/v0.46.zip>`_.
+The latest version of the library supported by this PMD is v0.47, which
+can be downloaded from `<https://github.com/01org/intel-ipsec-mb/archive/v0.47.zip>`_.
 
 .. code-block:: console
 
@@ -90,13 +92,14 @@ and the Multi-Buffer library version supported by them:
 
 .. table:: DPDK and Multi-Buffer library version compatibility
 
-   =============  ============================
-   DPDK version   Multi-buffer library version
-   =============  ============================
-   2.2 - 16.11    0.43 - 0.44
-   17.02          0.44
-   17.05+         0.45+
-   =============  ============================
+   ==============  ============================
+   DPDK version    Multi-buffer library version
+   ==============  ============================
+   2.2 - 16.11     0.43 - 0.44
+   17.02           0.44
+   17.05 - 17.08   0.45 - 0.47
+   17.11+          0.47
+   ==============  ============================
 
 
 Initialization

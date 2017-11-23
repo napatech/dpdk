@@ -205,8 +205,8 @@ perf_queue_eventdev_setup(struct evt_test *test, struct evt_options *opt)
 	};
 	/* queue configurations */
 	for (queue = 0; queue < perf_queue_nb_event_queues(opt); queue++) {
-		q_conf.event_queue_cfg =  evt_sched_type2queue_cfg
-				(opt->sched_type_list[queue % nb_stages]);
+		q_conf.schedule_type =
+			(opt->sched_type_list[queue % nb_stages]);
 
 		if (opt->q_priority) {
 			uint8_t stage_pos = queue % nb_stages;
@@ -231,6 +231,12 @@ perf_queue_eventdev_setup(struct evt_test *test, struct evt_options *opt)
 					perf_queue_nb_event_queues(opt));
 	if (ret)
 		return ret;
+
+	ret = evt_service_setup(opt->dev_id);
+	if (ret) {
+		evt_err("No service lcore found to run event dev.");
+		return ret;
+	}
 
 	ret = rte_event_dev_start(opt->dev_id);
 	if (ret) {

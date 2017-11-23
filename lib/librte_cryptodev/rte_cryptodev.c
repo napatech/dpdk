@@ -377,12 +377,6 @@ rte_cryptodev_get_feature_name(uint64_t flag)
 	}
 }
 
-int
-rte_cryptodev_create_vdev(const char *name, const char *args)
-{
-	return rte_vdev_init(name, args);
-}
-
 struct rte_cryptodev *
 rte_cryptodev_pmd_get_dev(uint8_t dev_id)
 {
@@ -488,6 +482,16 @@ rte_cryptodev_devices_get(const char *driver_name, uint8_t *devices,
 	return count;
 }
 
+void *
+rte_cryptodev_get_sec_ctx(uint8_t dev_id)
+{
+	if (rte_crypto_devices[dev_id].feature_flags &
+			RTE_CRYPTODEV_FF_SECURITY)
+		return rte_crypto_devices[dev_id].security_ctx;
+
+	return NULL;
+}
+
 int
 rte_cryptodev_socket_id(uint8_t dev_id)
 {
@@ -582,6 +586,9 @@ rte_cryptodev_pmd_allocate(const char *name, int socket_id)
 		cryptodev->data->dev_id = dev_id;
 		cryptodev->data->socket_id = socket_id;
 		cryptodev->data->dev_started = 0;
+
+		/* init user callbacks */
+		TAILQ_INIT(&(cryptodev->link_intr_cbs));
 
 		cryptodev->attached = RTE_CRYPTODEV_ATTACHED;
 
@@ -1271,7 +1278,7 @@ rte_crypto_op_init(struct rte_mempool *mempool,
 
 	__rte_crypto_op_reset(op, type);
 
-	op->phys_addr = rte_mem_virt2phy(_op_data);
+	op->phys_addr = rte_mem_virt2iova(_op_data);
 	op->mempool = mempool;
 }
 
@@ -1362,12 +1369,6 @@ TAILQ_HEAD(cryptodev_driver_list, cryptodev_driver);
 static struct cryptodev_driver_list cryptodev_driver_list =
 	TAILQ_HEAD_INITIALIZER(cryptodev_driver_list);
 
-struct cryptodev_driver {
-	TAILQ_ENTRY(cryptodev_driver) next; /**< Next in list. */
-	const struct rte_driver *driver;
-	uint8_t id;
-};
-
 int
 rte_cryptodev_driver_id_get(const char *name)
 {
@@ -1388,6 +1389,17 @@ rte_cryptodev_driver_id_get(const char *name)
 }
 
 const char *
+rte_cryptodev_name_get(uint8_t dev_id)
+{
+	struct rte_cryptodev *dev = rte_cryptodev_pmd_get_dev(dev_id);
+
+	if (dev == NULL)
+		return NULL;
+
+	return dev->data->name;
+}
+
+const char *
 rte_cryptodev_driver_name_get(uint8_t driver_id)
 {
 	struct cryptodev_driver *driver;
@@ -1399,15 +1411,13 @@ rte_cryptodev_driver_name_get(uint8_t driver_id)
 }
 
 uint8_t
-rte_cryptodev_allocate_driver(const struct rte_driver *drv)
+rte_cryptodev_allocate_driver(struct cryptodev_driver *crypto_drv,
+		const struct rte_driver *drv)
 {
-	struct cryptodev_driver *driver;
+	crypto_drv->driver = drv;
+	crypto_drv->id = nb_drivers;
 
-	driver = malloc(sizeof(*driver));
-	driver->driver = drv;
-	driver->id = nb_drivers;
-
-	TAILQ_INSERT_TAIL(&cryptodev_driver_list, driver, next);
+	TAILQ_INSERT_TAIL(&cryptodev_driver_list, crypto_drv, next);
 
 	return nb_drivers++;
 }

@@ -108,7 +108,7 @@ static const struct rte_flow_desc_data rte_flow_desc_action[] = {
 
 /* Get generic flow operations structure from a port. */
 const struct rte_flow_ops *
-rte_flow_ops_get(uint8_t port_id, struct rte_flow_error *error)
+rte_flow_ops_get(uint16_t port_id, struct rte_flow_error *error)
 {
 	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
 	const struct rte_flow_ops *ops;
@@ -132,7 +132,7 @@ rte_flow_ops_get(uint8_t port_id, struct rte_flow_error *error)
 
 /* Check whether a flow rule can be created on a given port. */
 int
-rte_flow_validate(uint8_t port_id,
+rte_flow_validate(uint16_t port_id,
 		  const struct rte_flow_attr *attr,
 		  const struct rte_flow_item pattern[],
 		  const struct rte_flow_action actions[],
@@ -145,14 +145,14 @@ rte_flow_validate(uint8_t port_id,
 		return -rte_errno;
 	if (likely(!!ops->validate))
 		return ops->validate(dev, attr, pattern, actions, error);
-	return -rte_flow_error_set(error, ENOSYS,
-				   RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
-				   NULL, rte_strerror(ENOSYS));
+	return rte_flow_error_set(error, ENOSYS,
+				  RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+				  NULL, rte_strerror(ENOSYS));
 }
 
 /* Create a flow rule on a given port. */
 struct rte_flow *
-rte_flow_create(uint8_t port_id,
+rte_flow_create(uint16_t port_id,
 		const struct rte_flow_attr *attr,
 		const struct rte_flow_item pattern[],
 		const struct rte_flow_action actions[],
@@ -172,7 +172,7 @@ rte_flow_create(uint8_t port_id,
 
 /* Destroy a flow rule on a given port. */
 int
-rte_flow_destroy(uint8_t port_id,
+rte_flow_destroy(uint16_t port_id,
 		 struct rte_flow *flow,
 		 struct rte_flow_error *error)
 {
@@ -183,14 +183,14 @@ rte_flow_destroy(uint8_t port_id,
 		return -rte_errno;
 	if (likely(!!ops->destroy))
 		return ops->destroy(dev, flow, error);
-	return -rte_flow_error_set(error, ENOSYS,
-				   RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
-				   NULL, rte_strerror(ENOSYS));
+	return rte_flow_error_set(error, ENOSYS,
+				  RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+				  NULL, rte_strerror(ENOSYS));
 }
 
 /* Destroy all flow rules associated with a port. */
 int
-rte_flow_flush(uint8_t port_id,
+rte_flow_flush(uint16_t port_id,
 	       struct rte_flow_error *error)
 {
 	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
@@ -200,14 +200,14 @@ rte_flow_flush(uint8_t port_id,
 		return -rte_errno;
 	if (likely(!!ops->flush))
 		return ops->flush(dev, error);
-	return -rte_flow_error_set(error, ENOSYS,
-				   RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
-				   NULL, rte_strerror(ENOSYS));
+	return rte_flow_error_set(error, ENOSYS,
+				  RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+				  NULL, rte_strerror(ENOSYS));
 }
 
 /* Query an existing flow rule. */
 int
-rte_flow_query(uint8_t port_id,
+rte_flow_query(uint16_t port_id,
 	       struct rte_flow *flow,
 	       enum rte_flow_action_type action,
 	       void *data,
@@ -220,14 +220,14 @@ rte_flow_query(uint8_t port_id,
 		return -rte_errno;
 	if (likely(!!ops->query))
 		return ops->query(dev, flow, action, data, error);
-	return -rte_flow_error_set(error, ENOSYS,
-				   RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
-				   NULL, rte_strerror(ENOSYS));
+	return rte_flow_error_set(error, ENOSYS,
+				  RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+				  NULL, rte_strerror(ENOSYS));
 }
 
 /* Restrict ingress traffic to the defined flow rules. */
 int
-rte_flow_isolate(uint8_t port_id,
+rte_flow_isolate(uint16_t port_id,
 		 int set,
 		 struct rte_flow_error *error)
 {
@@ -238,9 +238,28 @@ rte_flow_isolate(uint8_t port_id,
 		return -rte_errno;
 	if (likely(!!ops->isolate))
 		return ops->isolate(dev, set, error);
-	return -rte_flow_error_set(error, ENOSYS,
-				   RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
-				   NULL, rte_strerror(ENOSYS));
+	return rte_flow_error_set(error, ENOSYS,
+				  RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+				  NULL, rte_strerror(ENOSYS));
+}
+
+/* Initialize flow error structure. */
+int
+rte_flow_error_set(struct rte_flow_error *error,
+		   int code,
+		   enum rte_flow_error_type type,
+		   const void *cause,
+		   const char *message)
+{
+	if (error) {
+		*error = (struct rte_flow_error){
+			.type = type,
+			.cause = cause,
+			.message = message,
+		};
+	}
+	rte_errno = code;
+	return -code;
 }
 
 /** Compute storage space needed by item specification. */

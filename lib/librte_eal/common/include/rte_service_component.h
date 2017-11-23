@@ -85,21 +85,30 @@ struct rte_service_spec {
  *
  * For example the eventdev SW PMD requires CPU cycles to perform its
  * scheduling. This can be achieved by registering it as a service, and the
- * application can then assign CPU resources to it using
- * *rte_service_set_coremask*.
+ * application can then assign CPU resources to that service.
+ *
+ * Note that when a service component registers itself, it is not permitted to
+ * add or remove service-core threads, or modify lcore-to-service mappings. The
+ * only API that may be called by the service-component is
+ * *rte_service_component_runstate_set*, which indicates that the service
+ * component is ready to be executed.
  *
  * @param spec The specification of the service to register
+ * @param[out] service_id A pointer to a uint32_t, which will be filled in
+ *             during registration of the service. It is set to the integers
+ *             service number given to the service. This parameter may be NULL.
  * @retval 0 Successfully registered the service.
  *         -EINVAL Attempted to register an invalid service (eg, no callback
  *         set)
  */
-int32_t rte_service_register(const struct rte_service_spec *spec);
+int32_t rte_service_component_register(const struct rte_service_spec *spec,
+				       uint32_t *service_id);
 
 /**
  * @warning
  * @b EXPERIMENTAL: this API may change without prior notice
  *
- * Unregister a service.
+ * Unregister a service component.
  *
  * The service being removed must be stopped before calling this function.
  *
@@ -107,7 +116,7 @@ int32_t rte_service_register(const struct rte_service_spec *spec);
  * @retval -EBUSY The service is currently running, stop the service before
  *          calling unregister. No action has been taken.
  */
-int32_t rte_service_unregister(struct rte_service_spec *service);
+int32_t rte_service_component_unregister(uint32_t id);
 
 /**
  * @warning
@@ -126,6 +135,23 @@ int32_t rte_service_unregister(struct rte_service_spec *service);
  * @retval -ENOEXEC Error when starting services
  */
 int32_t rte_service_start_with_defaults(void);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
+ * Set the backend runstate of a component.
+ *
+ * This function allows services to be registered at startup, but not yet
+ * enabled to run by default. When the service has been configured (via the
+ * usual method; eg rte_eventdev_configure, the service can mark itself as
+ * ready to run. The differentiation between backend runstate and
+ * service_runstate is that the backend runstate is set by the service
+ * component while the service runstate is reserved for application usage.
+ *
+ * @retval 0 Success
+ */
+int32_t rte_service_component_runstate_set(uint32_t id, uint32_t runstate);
 
 /**
  * @warning

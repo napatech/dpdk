@@ -93,6 +93,11 @@ enum dev_state {
 	DEV_STARTED,
 };
 
+struct fs_stats {
+	struct rte_eth_stats stats;
+	uint64_t timestamp;
+};
+
 struct sub_device {
 	/* Exhaustive DPDK device description */
 	struct rte_devargs devargs;
@@ -102,6 +107,8 @@ struct sub_device {
 	uint8_t sid;
 	/* Device state machine */
 	enum dev_state state;
+	/* Last stats snapshot passed to user */
+	struct fs_stats stats_snapshot;
 	/* Some device are defined as a command line */
 	char *cmdline;
 	/* fail-safe device backreference */
@@ -140,6 +147,7 @@ struct fs_priv {
 	 * synchronized state.
 	 */
 	enum dev_state state;
+	struct rte_eth_stats stats_accumulator;
 	unsigned int pending_alarm:1; /* An alarm is pending */
 	/* flow isolation state */
 	int flow_isolated:1;
@@ -180,10 +188,12 @@ int failsafe_eal_uninit(struct rte_eth_dev *dev);
 
 int failsafe_eth_dev_state_sync(struct rte_eth_dev *dev);
 void failsafe_dev_remove(struct rte_eth_dev *dev);
-int failsafe_eth_rmv_event_callback(uint8_t port_id,
+void failsafe_stats_increment(struct rte_eth_stats *to,
+				struct rte_eth_stats *from);
+int failsafe_eth_rmv_event_callback(uint16_t port_id,
 				    enum rte_eth_event_type type,
 				    void *arg, void *out);
-int failsafe_eth_lsc_event_callback(uint8_t port_id,
+int failsafe_eth_lsc_event_callback(uint16_t port_id,
 				    enum rte_eth_event_type event,
 				    void *cb_arg, void *out);
 
@@ -220,10 +230,10 @@ extern int mac_from_arg;
  * dev:   (struct rte_eth_dev *), fail-safe ethdev
  * state: (enum dev_state), minimum acceptable device state
  */
-#define FOREACH_SUBDEV_STATE(s, i, dev, state)				\
-	for (i = fs_find_next((dev), 0, state);				\
-	     i < PRIV(dev)->subs_tail && (s = &PRIV(dev)->subs[i]);	\
-	     i = fs_find_next((dev), i + 1, state))
+#define FOREACH_SUBDEV_STATE(s, i, dev, state)		\
+	for (s = fs_find_next((dev), 0, state, &i);	\
+	     s != NULL;					\
+	     s = fs_find_next((dev), i + 1, state, &i))
 
 /**
  * Iterator construct over fail-safe sub-devices:
@@ -294,18 +304,26 @@ extern int mac_from_arg;
 
 /* inlined functions */
 
-static inline uint8_t
-fs_find_next(struct rte_eth_dev *dev, uint8_t sid,
-		enum dev_state min_state)
+static inline struct sub_device *
+fs_find_next(struct rte_eth_dev *dev,
+	     uint8_t sid,
+	     enum dev_state min_state,
+	     uint8_t *sid_out)
 {
-	while (sid < PRIV(dev)->subs_tail) {
-		if (PRIV(dev)->subs[sid].state >= min_state)
+	struct sub_device *subs;
+	uint8_t tail;
+
+	subs = PRIV(dev)->subs;
+	tail = PRIV(dev)->subs_tail;
+	while (sid < tail) {
+		if (subs[sid].state >= min_state)
 			break;
 		sid++;
 	}
-	if (sid >= PRIV(dev)->subs_tail)
-		return PRIV(dev)->subs_tail;
-	return sid;
+	*sid_out = sid;
+	if (sid >= tail)
+		return NULL;
+	return &subs[sid];
 }
 
 /*
@@ -334,7 +352,7 @@ fs_switch_dev(struct rte_eth_dev *dev,
 	} else if ((txd && txd->state < req_state) ||
 		   txd == NULL ||
 		   txd == banned) {
-		struct sub_device *sdev;
+		struct sub_device *sdev = NULL;
 		uint8_t i;
 
 		/* Using acceptable device */
@@ -346,9 +364,10 @@ fs_switch_dev(struct rte_eth_dev *dev,
 			PRIV(dev)->subs_tx = i;
 			break;
 		}
-	} else if (txd && txd->state < req_state) {
-		DEBUG("No device ready, deactivating tx_dev");
-		PRIV(dev)->subs_tx = PRIV(dev)->subs_tail;
+		if (i >= PRIV(dev)->subs_tail || sdev == NULL) {
+			DEBUG("No device ready, deactivating tx_dev");
+			PRIV(dev)->subs_tx = PRIV(dev)->subs_tail;
+		}
 	} else {
 		return;
 	}

@@ -44,7 +44,8 @@ DPDK documentation
    nics/index
    cryptodevs/index
    eventdevs/index
-   xen/index
+   mempool/index
+   platform/index
    contributing/index
    rel_notes/index
    faq/index

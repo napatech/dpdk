@@ -40,6 +40,10 @@
 #include <inttypes.h>
 
 #include <sys/queue.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <rte_common.h>
 #include <rte_byteorder.h>
@@ -66,6 +70,9 @@
 #include <rte_errno.h>
 #ifdef RTE_LIBRTE_IXGBE_PMD
 #include <rte_pmd_ixgbe.h>
+#endif
+#ifdef RTE_LIBRTE_I40E_PMD
+#include <rte_pmd_i40e.h>
 #endif
 #ifdef RTE_LIBRTE_BNXT_PMD
 #include <rte_pmd_bnxt.h>
@@ -203,8 +210,10 @@ nic_stats_display(portid_t port_id)
 	if (diff_cycles > 0)
 		diff_cycles = prev_cycles[port_id] - diff_cycles;
 
-	diff_pkts_rx = stats.ipackets - prev_pkts_rx[port_id];
-	diff_pkts_tx = stats.opackets - prev_pkts_tx[port_id];
+	diff_pkts_rx = (stats.ipackets > prev_pkts_rx[port_id]) ?
+		(stats.ipackets - prev_pkts_rx[port_id]) : 0;
+	diff_pkts_tx = (stats.opackets > prev_pkts_tx[port_id]) ?
+		(stats.opackets - prev_pkts_tx[port_id]) : 0;
 	prev_pkts_rx[port_id] = stats.ipackets;
 	prev_pkts_tx[port_id] = stats.opackets;
 	mpps_rx = diff_cycles > 0 ?
@@ -283,10 +292,13 @@ nic_xstats_display(portid_t port_id)
 	}
 
 	/* Display xstats */
-	for (idx_xstat = 0; idx_xstat < cnt_xstats; idx_xstat++)
+	for (idx_xstat = 0; idx_xstat < cnt_xstats; idx_xstat++) {
+		if (xstats_hide_zero && !xstats[idx_xstat].value)
+			continue;
 		printf("%s: %"PRIu64"\n",
 			xstats_names[idx_xstat].name,
 			xstats[idx_xstat].value);
+	}
 	free(xstats_names);
 	free(xstats);
 }
@@ -358,7 +370,7 @@ rx_queue_infos_display(portid_t port_id, uint16_t queue_id)
 
 	rc = rte_eth_rx_queue_info_get(port_id, queue_id, &qinfo);
 	if (rc != 0) {
-		printf("Failed to retrieve information for port: %hhu, "
+		printf("Failed to retrieve information for port: %u, "
 			"RX queue: %hu\nerror desc: %s(%d)\n",
 			port_id, queue_id, strerror(-rc), rc);
 		return;
@@ -391,7 +403,7 @@ tx_queue_infos_display(portid_t port_id, uint16_t queue_id)
 
 	rc = rte_eth_tx_queue_info_get(port_id, queue_id, &qinfo);
 	if (rc != 0) {
-		printf("Failed to retrieve information for port: %hhu, "
+		printf("Failed to retrieve information for port: %u, "
 			"TX queue: %hu\nerror desc: %s(%d)\n",
 			port_id, queue_id, strerror(-rc), rc);
 		return;
@@ -498,12 +510,15 @@ port_infos_display(portid_t port_id)
 		char *p;
 
 		printf("Supported flow types:\n");
-		for (i = RTE_ETH_FLOW_UNKNOWN + 1; i < RTE_ETH_FLOW_MAX;
-								i++) {
+		for (i = RTE_ETH_FLOW_UNKNOWN + 1;
+		     i < sizeof(dev_info.flow_type_rss_offloads) * CHAR_BIT; i++) {
 			if (!(dev_info.flow_type_rss_offloads & (1ULL << i)))
 				continue;
 			p = flowtype_to_str(i);
-			printf("  %s\n", (p ? p : "unknown"));
+			if (p)
+				printf("  %s\n", p);
+			else
+				printf("  user defined %d\n", i);
 		}
 	}
 
@@ -593,6 +608,14 @@ port_offload_cap_display(portid_t port_id)
 		printf("VLAN insert:                   ");
 		if (ports[port_id].tx_ol_flags &
 		    TESTPMD_TX_OFFLOAD_INSERT_VLAN)
+			printf("on\n");
+		else
+			printf("off\n");
+	}
+
+	if (dev_info.rx_offload_capa & DEV_RX_OFFLOAD_TIMESTAMP) {
+		printf("HW timestamp:                  ");
+		if (dev->data->dev_conf.rxmode.hw_timestamp)
 			printf("on\n");
 		else
 			printf("off\n");
@@ -945,10 +968,12 @@ static const struct {
 	MK_FLOW_ITEM(E_TAG, sizeof(struct rte_flow_item_e_tag)),
 	MK_FLOW_ITEM(NVGRE, sizeof(struct rte_flow_item_nvgre)),
 	MK_FLOW_ITEM(MPLS, sizeof(struct rte_flow_item_mpls)),
-	MK_FLOW_ITEM(GTPv1_U, sizeof(struct rte_flow_item_gtpv1_u)),
 	MK_FLOW_ITEM(IPinIP, sizeof(struct rte_flow_item_ip_in_ip)),
 	MK_FLOW_ITEM(GRE, sizeof(struct rte_flow_item_gre)),
 	MK_FLOW_ITEM(FUZZY, sizeof(struct rte_flow_item_fuzzy)),
+	MK_FLOW_ITEM(GTP, sizeof(struct rte_flow_item_gtp)),
+	MK_FLOW_ITEM(GTPC, sizeof(struct rte_flow_item_gtp)),
+	MK_FLOW_ITEM(GTPU, sizeof(struct rte_flow_item_gtp)),
 };
 
 /** Compute storage space needed by item specification. */
@@ -1476,7 +1501,7 @@ tx_desc_id_is_invalid(uint16_t txdesc_id)
 }
 
 static const struct rte_memzone *
-ring_dma_zone_lookup(const char *ring_name, uint8_t port_id, uint16_t q_id)
+ring_dma_zone_lookup(const char *ring_name, portid_t port_id, uint16_t q_id)
 {
 	char mz_name[RTE_MEMZONE_NAMESIZE];
 	const struct rte_memzone *mz;
@@ -1526,9 +1551,9 @@ ring_rxd_display_dword(union igb_ring_dword dword)
 static void
 ring_rx_descriptor_display(const struct rte_memzone *ring_mz,
 #ifndef RTE_LIBRTE_I40E_16BYTE_RX_DESC
-			   uint8_t port_id,
+			   portid_t port_id,
 #else
-			   __rte_unused uint8_t port_id,
+			   __rte_unused portid_t port_id,
 #endif
 			   uint16_t desc_id)
 {
@@ -1881,7 +1906,7 @@ simple_fwd_config_setup(void)
 		fwd_streams[i]->rx_queue  = 0;
 		fwd_streams[i]->tx_port   = fwd_ports_ids[j];
 		fwd_streams[i]->tx_queue  = 0;
-		fwd_streams[i]->peer_addr = j;
+		fwd_streams[i]->peer_addr = fwd_streams[i]->tx_port;
 		fwd_streams[i]->retry_enabled = retry_enabled;
 
 		if (port_topology == PORT_TOPOLOGY_PAIRED) {
@@ -1889,7 +1914,7 @@ simple_fwd_config_setup(void)
 			fwd_streams[j]->rx_queue  = 0;
 			fwd_streams[j]->tx_port   = fwd_ports_ids[i];
 			fwd_streams[j]->tx_queue  = 0;
-			fwd_streams[j]->peer_addr = i;
+			fwd_streams[j]->peer_addr = fwd_streams[j]->tx_port;
 			fwd_streams[j]->retry_enabled = retry_enabled;
 		}
 	}
@@ -2422,7 +2447,7 @@ set_tx_pkt_segments(unsigned *seg_lengths, unsigned nb_segs)
 }
 
 void
-setup_gro(const char *mode, uint8_t port_id)
+setup_gro(const char *onoff, portid_t port_id)
 {
 	if (!rte_eth_dev_is_valid_port(port_id)) {
 		printf("invalid port id %u\n", port_id);
@@ -2433,26 +2458,98 @@ setup_gro(const char *mode, uint8_t port_id)
 				" please stop forwarding first\n");
 		return;
 	}
-	if (strcmp(mode, "on") == 0) {
-		if (gro_ports[port_id].enable) {
-			printf("port %u has enabled GRO\n", port_id);
+	if (strcmp(onoff, "on") == 0) {
+		if (gro_ports[port_id].enable != 0) {
+			printf("Port %u has enabled GRO. Please"
+					" disable GRO first\n", port_id);
 			return;
 		}
-		gro_ports[port_id].enable = 1;
-		gro_ports[port_id].param.gro_types = RTE_GRO_TCP_IPV4;
-
-		if (gro_ports[port_id].param.max_flow_num == 0)
+		if (gro_flush_cycles == GRO_DEFAULT_FLUSH_CYCLES) {
+			gro_ports[port_id].param.gro_types = RTE_GRO_TCP_IPV4;
 			gro_ports[port_id].param.max_flow_num =
 				GRO_DEFAULT_FLOW_NUM;
-		if (gro_ports[port_id].param.max_item_per_flow == 0)
 			gro_ports[port_id].param.max_item_per_flow =
 				GRO_DEFAULT_ITEM_NUM_PER_FLOW;
+		}
+		gro_ports[port_id].enable = 1;
 	} else {
 		if (gro_ports[port_id].enable == 0) {
-			printf("port %u has disabled GRO\n", port_id);
+			printf("Port %u has disabled GRO\n", port_id);
 			return;
 		}
 		gro_ports[port_id].enable = 0;
+	}
+}
+
+void
+setup_gro_flush_cycles(uint8_t cycles)
+{
+	if (test_done == 0) {
+		printf("Before change flush interval for GRO,"
+				" please stop forwarding first.\n");
+		return;
+	}
+
+	if (cycles > GRO_MAX_FLUSH_CYCLES || cycles <
+			GRO_DEFAULT_FLUSH_CYCLES) {
+		printf("The flushing cycle be in the range"
+				" of 1 to %u. Revert to the default"
+				" value %u.\n",
+				GRO_MAX_FLUSH_CYCLES,
+				GRO_DEFAULT_FLUSH_CYCLES);
+		cycles = GRO_DEFAULT_FLUSH_CYCLES;
+	}
+
+	gro_flush_cycles = cycles;
+}
+
+void
+show_gro(portid_t port_id)
+{
+	struct rte_gro_param *param;
+	uint32_t max_pkts_num;
+
+	param = &gro_ports[port_id].param;
+
+	if (!rte_eth_dev_is_valid_port(port_id)) {
+		printf("Invalid port id %u.\n", port_id);
+		return;
+	}
+	if (gro_ports[port_id].enable) {
+		printf("GRO type: TCP/IPv4\n");
+		if (gro_flush_cycles == GRO_DEFAULT_FLUSH_CYCLES) {
+			max_pkts_num = param->max_flow_num *
+				param->max_item_per_flow;
+		} else
+			max_pkts_num = MAX_PKT_BURST * GRO_MAX_FLUSH_CYCLES;
+		printf("Max number of packets to perform GRO: %u\n",
+				max_pkts_num);
+		printf("Flushing cycles: %u\n", gro_flush_cycles);
+	} else
+		printf("Port %u doesn't enable GRO.\n", port_id);
+}
+
+void
+setup_gso(const char *mode, portid_t port_id)
+{
+	if (!rte_eth_dev_is_valid_port(port_id)) {
+		printf("invalid port id %u\n", port_id);
+		return;
+	}
+	if (strcmp(mode, "on") == 0) {
+		if (test_done == 0) {
+			printf("before enabling GSO,"
+					" please stop forwarding first\n");
+			return;
+		}
+		gso_ports[port_id].enable = 1;
+	} else if (strcmp(mode, "off") == 0) {
+		if (test_done == 0) {
+			printf("before disabling GSO,"
+					" please stop forwarding first\n");
+			return;
+		}
+		gso_ports[port_id].enable = 0;
 	}
 }
 
@@ -2773,6 +2870,12 @@ set_qmap(portid_t port_id, uint8_t is_rx, uint16_t queue_id, uint8_t map_value)
 	}
 }
 
+void
+set_xstats_hide_zero(uint8_t on_off)
+{
+	xstats_hide_zero = on_off;
+}
+
 static inline void
 print_fdir_mask(struct rte_eth_fdir_masks *mask)
 {
@@ -3006,7 +3109,7 @@ fdir_set_flex_mask(portid_t port_id, struct rte_eth_fdir_flex_mask *cfg)
 			return;
 		}
 	}
-	(void)rte_memcpy(&flex_conf->flex_mask[idx],
+	rte_memcpy(&flex_conf->flex_mask[idx],
 			 cfg,
 			 sizeof(struct rte_eth_fdir_flex_mask));
 }
@@ -3036,7 +3139,7 @@ fdir_set_flex_payload(portid_t port_id, struct rte_eth_flex_payload_cfg *cfg)
 			return;
 		}
 	}
-	(void)rte_memcpy(&flex_conf->flex_set[idx],
+	rte_memcpy(&flex_conf->flex_set[idx],
 			 cfg,
 			 sizeof(struct rte_eth_flex_payload_cfg));
 
@@ -3091,6 +3194,10 @@ int
 set_vf_rate_limit(portid_t port_id, uint16_t vf, uint16_t rate, uint64_t q_msk)
 {
 	int diag = -ENOTSUP;
+
+	RTE_SET_USED(vf);
+	RTE_SET_USED(rate);
+	RTE_SET_USED(q_msk);
 
 #ifdef RTE_LIBRTE_IXGBE_PMD
 	if (diag == -ENOTSUP)
@@ -3182,7 +3289,7 @@ mcast_addr_pool_remove(struct rte_port *port, uint32_t addr_idx)
 }
 
 static void
-eth_port_multicast_addr_list_set(uint8_t port_id)
+eth_port_multicast_addr_list_set(portid_t port_id)
 {
 	struct rte_port *port;
 	int diag;
@@ -3197,7 +3304,7 @@ eth_port_multicast_addr_list_set(uint8_t port_id)
 }
 
 void
-mcast_addr_add(uint8_t port_id, struct ether_addr *mc_addr)
+mcast_addr_add(portid_t port_id, struct ether_addr *mc_addr)
 {
 	struct rte_port *port;
 	uint32_t i;
@@ -3225,7 +3332,7 @@ mcast_addr_add(uint8_t port_id, struct ether_addr *mc_addr)
 }
 
 void
-mcast_addr_remove(uint8_t port_id, struct ether_addr *mc_addr)
+mcast_addr_remove(portid_t port_id, struct ether_addr *mc_addr)
 {
 	struct rte_port *port;
 	uint32_t i;
@@ -3252,7 +3359,7 @@ mcast_addr_remove(uint8_t port_id, struct ether_addr *mc_addr)
 }
 
 void
-port_dcb_info_display(uint8_t port_id)
+port_dcb_info_display(portid_t port_id)
 {
 	struct rte_eth_dcb_info dcb_info;
 	uint16_t i;
@@ -3297,46 +3404,43 @@ port_dcb_info_display(uint8_t port_id)
 uint8_t *
 open_ddp_package_file(const char *file_path, uint32_t *size)
 {
-	FILE *fh = fopen(file_path, "rb");
-	uint32_t pkg_size;
+	int fd = open(file_path, O_RDONLY);
+	off_t pkg_size;
 	uint8_t *buf = NULL;
 	int ret = 0;
+	struct stat st_buf;
 
 	if (size)
 		*size = 0;
 
-	if (fh == NULL) {
+	if (fd == -1) {
 		printf("%s: Failed to open %s\n", __func__, file_path);
 		return buf;
 	}
 
-	ret = fseek(fh, 0, SEEK_END);
-	if (ret < 0) {
-		fclose(fh);
+	if ((fstat(fd, &st_buf) != 0) || (!S_ISREG(st_buf.st_mode))) {
+		close(fd);
 		printf("%s: File operations failed\n", __func__);
 		return buf;
 	}
 
-	pkg_size = ftell(fh);
+	pkg_size = st_buf.st_size;
+	if (pkg_size < 0) {
+		close(fd);
+		printf("%s: File operations failed\n", __func__);
+		return buf;
+	}
 
 	buf = (uint8_t *)malloc(pkg_size);
 	if (!buf) {
-		fclose(fh);
+		close(fd);
 		printf("%s: Failed to malloc memory\n",	__func__);
 		return buf;
 	}
 
-	ret = fseek(fh, 0, SEEK_SET);
+	ret = read(fd, buf, pkg_size);
 	if (ret < 0) {
-		fclose(fh);
-		printf("%s: File seek operation failed\n", __func__);
-		close_ddp_package_file(buf);
-		return NULL;
-	}
-
-	ret = fread(buf, 1, pkg_size, fh);
-	if (ret < 0) {
-		fclose(fh);
+		close(fd);
 		printf("%s: File read operation failed\n", __func__);
 		close_ddp_package_file(buf);
 		return NULL;
@@ -3345,7 +3449,7 @@ open_ddp_package_file(const char *file_path, uint32_t *size)
 	if (size)
 		*size = pkg_size;
 
-	fclose(fh);
+	close(fd);
 
 	return buf;
 }
@@ -3380,4 +3484,47 @@ close_ddp_package_file(uint8_t *buf)
 	}
 
 	return -1;
+}
+
+void
+port_queue_region_info_display(portid_t port_id, void *buf)
+{
+#ifdef RTE_LIBRTE_I40E_PMD
+	uint16_t i, j;
+	struct rte_pmd_i40e_queue_regions *info =
+		(struct rte_pmd_i40e_queue_regions *)buf;
+	static const char *queue_region_info_stats_border = "-------";
+
+	if (!info->queue_region_number)
+		printf("there is no region has been set before");
+
+	printf("\n	%s All queue region info for port=%2d %s",
+			queue_region_info_stats_border, port_id,
+			queue_region_info_stats_border);
+	printf("\n	queue_region_number: %-14u \n",
+			info->queue_region_number);
+
+	for (i = 0; i < info->queue_region_number; i++) {
+		printf("\n	region_id: %-14u queue_number: %-14u "
+			"queue_start_index: %-14u \n",
+			info->region[i].region_id,
+			info->region[i].queue_num,
+			info->region[i].queue_start_index);
+
+		printf("  user_priority_num is	%-14u :",
+					info->region[i].user_priority_num);
+		for (j = 0; j < info->region[i].user_priority_num; j++)
+			printf(" %-14u ", info->region[i].user_priority[j]);
+
+		printf("\n	flowtype_num is  %-14u :",
+				info->region[i].flowtype_num);
+		for (j = 0; j < info->region[i].flowtype_num; j++)
+			printf(" %-14u ", info->region[i].hw_flowtype[j]);
+	}
+#else
+	RTE_SET_USED(port_id);
+	RTE_SET_USED(buf);
+#endif
+
+	printf("\n\n");
 }

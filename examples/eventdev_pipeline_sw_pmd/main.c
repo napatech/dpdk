@@ -46,6 +46,7 @@
 #include <rte_cycles.h>
 #include <rte_ethdev.h>
 #include <rte_eventdev.h>
+#include <rte_service.h>
 
 #define MAX_NUM_STAGES 8
 #define BATCH_SIZE 16
@@ -76,6 +77,7 @@ struct fastpath_data {
 	uint32_t rx_lock;
 	uint32_t tx_lock;
 	uint32_t sched_lock;
+	uint32_t evdev_service_id;
 	bool rx_single;
 	bool tx_single;
 	bool sched_single;
@@ -108,7 +110,7 @@ struct config_data {
 static struct config_data cdata = {
 	.num_packets = (1L << 25), /* do ~32M packets */
 	.num_fids = 512,
-	.queue_type = RTE_EVENT_QUEUE_CFG_ATOMIC_ONLY,
+	.queue_type = RTE_SCHED_TYPE_ATOMIC,
 	.next_qid = {-1},
 	.qid = {-1},
 	.num_stages = 1,
@@ -233,7 +235,7 @@ producer(void)
 }
 
 static inline void
-schedule_devices(uint8_t dev_id, unsigned int lcore_id)
+schedule_devices(unsigned int lcore_id)
 {
 	if (fdata->rx_core[lcore_id] && (fdata->rx_single ||
 	    rte_atomic32_cmpset(&(fdata->rx_lock), 0, 1))) {
@@ -243,7 +245,7 @@ schedule_devices(uint8_t dev_id, unsigned int lcore_id)
 
 	if (fdata->sched_core[lcore_id] && (fdata->sched_single ||
 	    rte_atomic32_cmpset(&(fdata->sched_lock), 0, 1))) {
-		rte_event_schedule(dev_id);
+		rte_service_run_iter_on_app_lcore(fdata->evdev_service_id, 1);
 		if (cdata.dump_dev_signal) {
 			rte_event_dev_dump(0, stdout);
 			cdata.dump_dev_signal = 0;
@@ -294,7 +296,7 @@ worker(void *arg)
 	while (!fdata->done) {
 		uint16_t i;
 
-		schedule_devices(dev_id, lcore_id);
+		schedule_devices(lcore_id);
 
 		if (!fdata->worker_core[lcore_id]) {
 			rte_pause();
@@ -490,10 +492,10 @@ parse_app_args(int argc, char **argv)
 			cdata.enable_queue_priorities = 1;
 			break;
 		case 'o':
-			cdata.queue_type = RTE_EVENT_QUEUE_CFG_ORDERED_ONLY;
+			cdata.queue_type = RTE_SCHED_TYPE_ORDERED;
 			break;
 		case 'p':
-			cdata.queue_type = RTE_EVENT_QUEUE_CFG_PARALLEL_ONLY;
+			cdata.queue_type = RTE_SCHED_TYPE_PARALLEL;
 			break;
 		case 'q':
 			cdata.quiet = 1;
@@ -684,7 +686,7 @@ setup_eventdev(struct prod_data *prod_data,
 			.new_event_threshold = 4096,
 	};
 	struct rte_event_queue_conf wkr_q_conf = {
-			.event_queue_cfg = cdata.queue_type,
+			.schedule_type = cdata.queue_type,
 			.priority = RTE_EVENT_DEV_PRIORITY_NORMAL,
 			.nb_atomic_flows = 1024,
 			.nb_atomic_order_sequences = 1024,
@@ -696,11 +698,7 @@ setup_eventdev(struct prod_data *prod_data,
 	};
 	const struct rte_event_queue_conf tx_q_conf = {
 			.priority = RTE_EVENT_DEV_PRIORITY_HIGHEST,
-			.event_queue_cfg =
-					RTE_EVENT_QUEUE_CFG_ATOMIC_ONLY |
-					RTE_EVENT_QUEUE_CFG_SINGLE_LINK,
-			.nb_atomic_flows = 1024,
-			.nb_atomic_order_sequences = 1024,
+			.event_queue_cfg = RTE_EVENT_QUEUE_CFG_SINGLE_LINK,
 	};
 
 	struct port_link worker_queues[MAX_NUM_STAGES];
@@ -755,11 +753,11 @@ setup_eventdev(struct prod_data *prod_data,
 		}
 
 		const char *type_str = "Atomic";
-		switch (wkr_q_conf.event_queue_cfg) {
-		case RTE_EVENT_QUEUE_CFG_ORDERED_ONLY:
+		switch (wkr_q_conf.schedule_type) {
+		case RTE_SCHED_TYPE_ORDERED:
 			type_str = "Ordered";
 			break;
-		case RTE_EVENT_QUEUE_CFG_PARALLEL_ONLY:
+		case RTE_SCHED_TYPE_PARALLEL:
 			type_str = "Parallel";
 			break;
 		}
@@ -843,6 +841,14 @@ setup_eventdev(struct prod_data *prod_data,
 	*cons_data = (struct cons_data){.dev_id = dev_id,
 					.port_id = i };
 
+	ret = rte_event_dev_service_id_get(dev_id,
+				&fdata->evdev_service_id);
+	if (ret != -ESRCH && ret != 0) {
+		printf("Error getting the service ID for sw eventdev\n");
+		return -1;
+	}
+	rte_service_runstate_set(fdata->evdev_service_id, 1);
+	rte_service_set_runstate_mapped_check(fdata->evdev_service_id, 0);
 	if (rte_event_dev_start(dev_id) < 0) {
 		printf("Error starting eventdev\n");
 		return -1;
@@ -911,9 +917,9 @@ main(int argc, char **argv)
 		printf("\tworkers: %u\n", cdata.num_workers);
 		printf("\tpackets: %"PRIi64"\n", cdata.num_packets);
 		printf("\tQueue-prio: %u\n", cdata.enable_queue_priorities);
-		if (cdata.queue_type == RTE_EVENT_QUEUE_CFG_ORDERED_ONLY)
+		if (cdata.queue_type == RTE_SCHED_TYPE_ORDERED)
 			printf("\tqid0 type: ordered\n");
-		if (cdata.queue_type == RTE_EVENT_QUEUE_CFG_ATOMIC_ONLY)
+		if (cdata.queue_type == RTE_SCHED_TYPE_ATOMIC)
 			printf("\tqid0 type: atomic\n");
 		printf("\tCores available: %u\n", rte_lcore_count());
 		printf("\tCores used: %u\n", cores_needed);

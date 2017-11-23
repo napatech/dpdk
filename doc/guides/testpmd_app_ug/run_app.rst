@@ -94,10 +94,6 @@ See the DPDK Getting Started Guides for more information on these options.
 
     Display the version information on startup.
 
-*   ``--xen-dom0``
-
-    Support application running on Xen Domain0 without hugetlbfs.
-
 *   ``--syslog``
 
     Set the syslog facility.
@@ -109,6 +105,10 @@ See the DPDK Getting Started Guides for more information on these options.
 *   ``--huge-dir``
 
     Specify the directory where the hugetlbfs is mounted.
+
+*   ``mbuf-pool-ops-name``:
+
+    Pool ops name for mbuf to use.
 
 *   ``--proc-type``
 
@@ -362,6 +362,7 @@ The commandline options are:
        csum
        icmpecho
        ieee1588
+       tm
 
 *   ``--rss-ip``
 

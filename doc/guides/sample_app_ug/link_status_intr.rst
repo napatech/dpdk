@@ -55,32 +55,9 @@ and the behavior of L2 forwarding each time the link status changes.
 Compiling the Application
 -------------------------
 
-#.  Go to the example directory:
+To compile the sample application see :doc:`compiling`.
 
-    .. code-block:: console
-
-        export RTE_SDK=/path/to/rte_sdk
-        cd ${RTE_SDK}/examples/link_status_interrupt
-
-#.  Set the target (a default target is used if not specified). For example:
-
-    .. code-block:: console
-
-        export RTE_TARGET=x86_64-native-linuxapp-gcc
-
-    See the *DPDK Getting Started Guide* for possible RTE_TARGET values.
-
-#.  Build the application:
-
-    .. code-block:: console
-
-        make
-
-.. note::
-
-    The compiled application is written to the build subdirectory.
-    To have the application written to a different location,
-    the O=/path/to/build/directory option may be specified on the make command line.
+The application is located in the ``link_status_interrupt`` sub-directory.
 
 Running the Application
 -----------------------
@@ -219,7 +196,7 @@ An example callback function that has been written as indicated below.
 .. code-block:: c
 
     static void
-    lsi_event_callback(uint8_t port_id, enum rte_eth_event_type type, void *param)
+    lsi_event_callback(uint16_t port_id, enum rte_eth_event_type type, void *param)
     {
         struct rte_eth_link link;
 
@@ -405,7 +382,7 @@ If the table is full, the whole packets table is transmitted using the lsi_send_
     /* Send the packet on an output interface */
 
     static int
-    lsi_send_packet(struct rte_mbuf *m, uint8_t port)
+    lsi_send_packet(struct rte_mbuf *m, uint16_t port)
     {
         unsigned lcore_id, len;
         struct lcore_queue_conf *qconf;

@@ -243,7 +243,7 @@ enic_cq_rx_to_pkt_flags(struct cq_desc *cqd, struct rte_mbuf *mbuf)
 
 	/* VLAN STRIPPED flag. The L2 packet type updated here also */
 	if (bwflags & CQ_ENET_RQ_DESC_FLAGS_VLAN_STRIPPED) {
-		pkt_flags |= PKT_RX_VLAN_PKT | PKT_RX_VLAN_STRIPPED;
+		pkt_flags |= PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED;
 		mbuf->packet_type |= RTE_PTYPE_L2_ETHER;
 	} else {
 		if (vlan_tci != 0)
@@ -386,7 +386,7 @@ enic_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 
 		/* Push descriptor for newly allocated mbuf */
 		nmb->data_off = RTE_PKTMBUF_HEADROOM;
-		dma_addr = (dma_addr_t)(nmb->buf_physaddr +
+		dma_addr = (dma_addr_t)(nmb->buf_iova +
 					RTE_PKTMBUF_HEADROOM);
 		rq_enet_desc_enc(rqd_ptr, dma_addr,
 				(rq->is_sop ? RQ_ENET_TYPE_ONLY_SOP
@@ -546,12 +546,15 @@ uint16_t enic_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 	uint64_t bus_addr;
 	uint8_t offload_mode;
 	uint16_t header_len;
+	uint64_t tso;
+	rte_atomic64_t *tx_oversized;
 
 	enic_cleanup_wq(enic, wq);
 	wq_desc_avail = vnic_wq_desc_avail(wq);
 	head_idx = wq->head_idx;
 	desc_count = wq->ring.desc_count;
 	ol_flags_mask = PKT_TX_VLAN_PKT | PKT_TX_IP_CKSUM | PKT_TX_L4_MASK;
+	tx_oversized = &enic->soft_stats.tx_oversized;
 
 	nb_pkts = RTE_MIN(nb_pkts, ENIC_TX_XMIT_MAX);
 
@@ -561,10 +564,12 @@ uint16_t enic_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 		data_len = tx_pkt->data_len;
 		ol_flags = tx_pkt->ol_flags;
 		nb_segs = tx_pkt->nb_segs;
+		tso = ol_flags & PKT_TX_TCP_SEG;
 
-		if (pkt_len > ENIC_TX_MAX_PKT_SIZE) {
+		/* drop packet if it's too big to send */
+		if (unlikely(!tso && pkt_len > ENIC_TX_MAX_PKT_SIZE)) {
 			rte_pktmbuf_free(tx_pkt);
-			rte_atomic64_inc(&enic->soft_stats.tx_oversized);
+			rte_atomic64_inc(tx_oversized);
 			continue;
 		}
 
@@ -578,7 +583,7 @@ uint16_t enic_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 		vlan_id = 0;
 		vlan_tag_insert = 0;
 		bus_addr = (dma_addr_t)
-			   (tx_pkt->buf_physaddr + tx_pkt->data_off);
+			   (tx_pkt->buf_iova + tx_pkt->data_off);
 
 		descs = (struct wq_enet_desc *)wq->ring.descs;
 		desc_p = descs + head_idx;
@@ -587,13 +592,21 @@ uint16_t enic_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 		offload_mode = WQ_ENET_OFFLOAD_MODE_CSUM;
 		header_len = 0;
 
-		if (tx_pkt->tso_segsz) {
+		if (tso) {
 			header_len = tso_header_len(tx_pkt);
-			if (header_len) {
-				offload_mode = WQ_ENET_OFFLOAD_MODE_TSO;
-				mss = tx_pkt->tso_segsz;
+
+			/* Drop if non-TCP packet or TSO seg size is too big */
+			if (unlikely(header_len == 0 || ((tx_pkt->tso_segsz +
+			    header_len) > ENIC_TX_MAX_PKT_SIZE))) {
+				rte_pktmbuf_free(tx_pkt);
+				rte_atomic64_inc(tx_oversized);
+				continue;
 			}
+
+			offload_mode = WQ_ENET_OFFLOAD_MODE_TSO;
+			mss = tx_pkt->tso_segsz;
 		}
+
 		if ((ol_flags & ol_flags_mask) && (header_len == 0)) {
 			if (ol_flags & PKT_TX_IP_CKSUM)
 				mss |= ENIC_CALC_IP_CKSUM;
@@ -630,7 +643,7 @@ uint16_t enic_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 				if (tx_pkt->next == NULL)
 					eop = 1;
 				desc_p = descs + head_idx;
-				bus_addr = (dma_addr_t)(tx_pkt->buf_physaddr
+				bus_addr = (dma_addr_t)(tx_pkt->buf_iova
 					   + tx_pkt->data_off);
 				wq_enet_desc_enc((struct wq_enet_desc *)
 						 &desc_tmp, bus_addr, data_len,

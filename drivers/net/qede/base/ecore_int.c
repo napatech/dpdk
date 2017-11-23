@@ -9,7 +9,6 @@
 #include "bcm_osal.h"
 #include "ecore.h"
 #include "ecore_spq.h"
-#include "reg_addr.h"
 #include "ecore_gtt_reg_addr.h"
 #include "ecore_init_ops.h"
 #include "ecore_rt_defs.h"
@@ -30,7 +29,7 @@ struct ecore_pi_info {
 struct ecore_sb_sp_info {
 	struct ecore_sb_info sb_info;
 	/* per protocol index data */
-	struct ecore_pi_info pi_info_arr[PIS_PER_SB];
+	struct ecore_pi_info pi_info_arr[PIS_PER_SB_E4];
 };
 
 enum ecore_attention_type {
@@ -248,21 +247,21 @@ static enum _ecore_status_t ecore_grc_attn_cb(struct ecore_hwfn *p_hwfn)
 	tmp2 = ecore_rd(p_hwfn, p_hwfn->p_dpc_ptt,
 			GRC_REG_TIMEOUT_ATTN_ACCESS_DATA_1);
 
-	DP_INFO(p_hwfn->p_dev,
-		"GRC timeout [%08x:%08x] - %s Address [%08x] [Master %s]"
-		" [PF: %02x %s %02x]\n",
-		tmp2, tmp,
-		(tmp & ECORE_GRC_ATTENTION_RDWR_BIT) ? "Write to" : "Read from",
-		(tmp & ECORE_GRC_ATTENTION_ADDRESS_MASK) << 2,
-		grc_timeout_attn_master_to_str((tmp &
-					ECORE_GRC_ATTENTION_MASTER_MASK) >>
-				       ECORE_GRC_ATTENTION_MASTER_SHIFT),
-		(tmp2 & ECORE_GRC_ATTENTION_PF_MASK),
-		(((tmp2 & ECORE_GRC_ATTENTION_PRIV_MASK) >>
+	DP_NOTICE(p_hwfn->p_dev, false,
+		  "GRC timeout [%08x:%08x] - %s Address [%08x] [Master %s] [PF: %02x %s %02x]\n",
+		  tmp2, tmp,
+		  (tmp & ECORE_GRC_ATTENTION_RDWR_BIT) ? "Write to"
+						       : "Read from",
+		  (tmp & ECORE_GRC_ATTENTION_ADDRESS_MASK) << 2,
+		  grc_timeout_attn_master_to_str(
+			(tmp & ECORE_GRC_ATTENTION_MASTER_MASK) >>
+			 ECORE_GRC_ATTENTION_MASTER_SHIFT),
+		  (tmp2 & ECORE_GRC_ATTENTION_PF_MASK),
+		  (((tmp2 & ECORE_GRC_ATTENTION_PRIV_MASK) >>
 		  ECORE_GRC_ATTENTION_PRIV_SHIFT) ==
-		 ECORE_GRC_ATTENTION_PRIV_VF) ? "VF" : "(Irrelevant:)",
-		(tmp2 & ECORE_GRC_ATTENTION_VF_MASK) >>
-		ECORE_GRC_ATTENTION_VF_SHIFT);
+		  ECORE_GRC_ATTENTION_PRIV_VF) ? "VF" : "(Irrelevant:)",
+		  (tmp2 & ECORE_GRC_ATTENTION_VF_MASK) >>
+		  ECORE_GRC_ATTENTION_VF_SHIFT);
 
 out:
 	/* Regardles of anything else, clean the validity bit */
@@ -414,30 +413,135 @@ ecore_general_attention_35(struct ecore_hwfn *p_hwfn)
 	return ECORE_SUCCESS;
 }
 
-#define ECORE_DORQ_ATTENTION_REASON_MASK (0xfffff)
-#define ECORE_DORQ_ATTENTION_OPAQUE_MASK (0xffff)
-#define ECORE_DORQ_ATTENTION_SIZE_MASK	 (0x7f0000)
-#define ECORE_DORQ_ATTENTION_SIZE_SHIFT	 (16)
+#define ECORE_DORQ_ATTENTION_REASON_MASK	(0xfffff)
+#define ECORE_DORQ_ATTENTION_OPAQUE_MASK	(0xffff)
+#define ECORE_DORQ_ATTENTION_OPAQUE_SHIFT	(0x0)
+#define ECORE_DORQ_ATTENTION_SIZE_MASK		(0x7f)
+#define ECORE_DORQ_ATTENTION_SIZE_SHIFT		(16)
+
+#define ECORE_DB_REC_COUNT			10
+#define ECORE_DB_REC_INTERVAL			100
+
+/* assumes sticky overflow indication was set for this PF */
+static enum _ecore_status_t ecore_db_rec_attn(struct ecore_hwfn *p_hwfn,
+					      struct ecore_ptt *p_ptt)
+{
+	u8 count = ECORE_DB_REC_COUNT;
+	u32 usage = 1;
+
+	/* wait for usage to zero or count to run out. This is necessary since
+	 * EDPM doorbell transactions can take multiple 64b cycles, and as such
+	 * can "split" over the pci. Possibly, the doorbell drop can happen with
+	 * half an EDPM in the queue and other half dropped. Another EDPM
+	 * doorbell to the same address (from doorbell recovery mechanism or
+	 * from the doorbelling entity) could have first half dropped and second
+	 * half interperted as continuation of the first. To prevent such
+	 * malformed doorbells from reaching the device, flush the queue before
+	 * releaseing the overflow sticky indication.
+	 */
+	while (count-- && usage) {
+		usage = ecore_rd(p_hwfn, p_ptt, DORQ_REG_PF_USAGE_CNT);
+		OSAL_UDELAY(ECORE_DB_REC_INTERVAL);
+	}
+
+	/* should have been depleted by now */
+	if (usage) {
+		DP_NOTICE(p_hwfn->p_dev, false,
+			  "DB recovery: doorbell usage failed to zero after %d usec. usage was %x\n",
+			  ECORE_DB_REC_INTERVAL * ECORE_DB_REC_COUNT, usage);
+		return ECORE_TIMEOUT;
+	}
+
+	/* flush any pedning (e)dpm as they may never arrive */
+	ecore_wr(p_hwfn, p_ptt, DORQ_REG_DPM_FORCE_ABORT, 0x1);
+
+	/* release overflow sticky indication (stop silently dropping
+	 * everything)
+	 */
+	ecore_wr(p_hwfn, p_ptt, DORQ_REG_PF_OVFL_STICKY, 0x0);
+
+	/* repeat all last doorbells (doorbell drop recovery) */
+	ecore_db_recovery_execute(p_hwfn, DB_REC_REAL_DEAL);
+
+	return ECORE_SUCCESS;
+}
 
 static enum _ecore_status_t ecore_dorq_attn_cb(struct ecore_hwfn *p_hwfn)
 {
-	u32 reason;
+	u32 int_sts, first_drop_reason, details, address, overflow,
+		all_drops_reason;
+	struct ecore_ptt *p_ptt = p_hwfn->p_dpc_ptt;
+	enum _ecore_status_t rc;
 
-	reason = ecore_rd(p_hwfn, p_hwfn->p_dpc_ptt, DORQ_REG_DB_DROP_REASON) &
-	    ECORE_DORQ_ATTENTION_REASON_MASK;
-	if (reason) {
-		u32 details = ecore_rd(p_hwfn, p_hwfn->p_dpc_ptt,
-				       DORQ_REG_DB_DROP_DETAILS);
+	int_sts = ecore_rd(p_hwfn, p_ptt, DORQ_REG_INT_STS);
+	DP_NOTICE(p_hwfn->p_dev, false, "DORQ attention. int_sts was %x\n",
+		  int_sts);
 
-		DP_INFO(p_hwfn->p_dev,
-			"DORQ db_drop: address 0x%08x Opaque FID 0x%04x"
-			" Size [bytes] 0x%08x Reason: 0x%08x\n",
-			ecore_rd(p_hwfn, p_hwfn->p_dpc_ptt,
-				 DORQ_REG_DB_DROP_DETAILS_ADDRESS),
-			(u16)(details & ECORE_DORQ_ATTENTION_OPAQUE_MASK),
-			((details & ECORE_DORQ_ATTENTION_SIZE_MASK) >>
-			 ECORE_DORQ_ATTENTION_SIZE_SHIFT) * 4, reason);
+	/* int_sts may be zero since all PFs were interrupted for doorbell
+	 * overflow but another one already handled it. Can abort here. If
+	 * This PF also requires overflow recovery we will be interrupted again
+	 */
+	if (!int_sts)
+		return ECORE_SUCCESS;
+
+	/* check if db_drop or overflow happened */
+	if (int_sts & (DORQ_REG_INT_STS_DB_DROP |
+		       DORQ_REG_INT_STS_DORQ_FIFO_OVFL_ERR)) {
+		/* obtain data about db drop/overflow */
+		first_drop_reason = ecore_rd(p_hwfn, p_ptt,
+				  DORQ_REG_DB_DROP_REASON) &
+				  ECORE_DORQ_ATTENTION_REASON_MASK;
+		details = ecore_rd(p_hwfn, p_ptt,
+				   DORQ_REG_DB_DROP_DETAILS);
+		address = ecore_rd(p_hwfn, p_ptt,
+				   DORQ_REG_DB_DROP_DETAILS_ADDRESS);
+		overflow = ecore_rd(p_hwfn, p_ptt,
+				    DORQ_REG_PF_OVFL_STICKY);
+		all_drops_reason = ecore_rd(p_hwfn, p_ptt,
+					    DORQ_REG_DB_DROP_DETAILS_REASON);
+
+		/* log info */
+		DP_NOTICE(p_hwfn->p_dev, false,
+			  "Doorbell drop occurred\n"
+			  "Address\t\t0x%08x\t(second BAR address)\n"
+			  "FID\t\t0x%04x\t\t(Opaque FID)\n"
+			  "Size\t\t0x%04x\t\t(in bytes)\n"
+			  "1st drop reason\t0x%08x\t(details on first drop since last handling)\n"
+			  "Sticky reasons\t0x%08x\t(all drop reasons since last handling)\n"
+			  "Overflow\t0x%x\t\t(a per PF indication)\n",
+			  address,
+			  GET_FIELD(details, ECORE_DORQ_ATTENTION_OPAQUE),
+			  GET_FIELD(details, ECORE_DORQ_ATTENTION_SIZE) * 4,
+			  first_drop_reason, all_drops_reason, overflow);
+
+		/* if this PF caused overflow, initiate recovery */
+		if (overflow) {
+			rc = ecore_db_rec_attn(p_hwfn, p_ptt);
+			if (rc != ECORE_SUCCESS)
+				return rc;
+		}
+
+		/* clear the doorbell drop details and prepare for next drop */
+		ecore_wr(p_hwfn, p_ptt, DORQ_REG_DB_DROP_DETAILS_REL, 0);
+
+		/* mark interrupt as handeld (note: even if drop was due to a
+		 * different reason than overflow we mark as handled)
+		 */
+		ecore_wr(p_hwfn, p_ptt, DORQ_REG_INT_STS_WR,
+			 DORQ_REG_INT_STS_DB_DROP |
+			 DORQ_REG_INT_STS_DORQ_FIFO_OVFL_ERR);
+
+		/* if there are no indications otherthan drop indications,
+		 * success
+		 */
+		if ((int_sts & ~(DORQ_REG_INT_STS_DB_DROP |
+				 DORQ_REG_INT_STS_DORQ_FIFO_OVFL_ERR |
+				 DORQ_REG_INT_STS_DORQ_FIFO_AFULL)) == 0)
+			return ECORE_SUCCESS;
 	}
+
+	/* some other indication was present - non recoverable */
+	DP_INFO(p_hwfn, "DORQ fatal attention\n");
 
 	return ECORE_INVAL;
 }
@@ -851,32 +955,38 @@ ecore_int_deassertion_aeu_bit(struct ecore_hwfn *p_hwfn,
  * @brief ecore_int_deassertion_parity - handle a single parity AEU source
  *
  * @param p_hwfn
- * @param p_aeu - descriptor of an AEU bit which caused the
- *              parity
+ * @param p_aeu - descriptor of an AEU bit which caused the parity
+ * @param aeu_en_reg - address of the AEU enable register
  * @param bit_index
  */
 static void ecore_int_deassertion_parity(struct ecore_hwfn *p_hwfn,
 					 struct aeu_invert_reg_bit *p_aeu,
-					 u8 bit_index)
+					 u32 aeu_en_reg, u8 bit_index)
 {
-	u32 block_id = p_aeu->block_index;
+	u32 block_id = p_aeu->block_index, mask, val;
 
-	DP_INFO(p_hwfn->p_dev, "%s[%d] parity attention is set\n",
-		p_aeu->bit_name, bit_index);
+	DP_NOTICE(p_hwfn->p_dev, false,
+		  "%s parity attention is set [address 0x%08x, bit %d]\n",
+		  p_aeu->bit_name, aeu_en_reg, bit_index);
 
-	if (block_id == MAX_BLOCK_ID)
-		return;
+	if (block_id != MAX_BLOCK_ID) {
+		ecore_int_attn_print(p_hwfn, block_id, ATTN_TYPE_PARITY, false);
 
-	ecore_int_attn_print(p_hwfn, block_id,
-			     ATTN_TYPE_PARITY, false);
-
-	/* In A0, there's a single parity bit for several blocks */
-	if (block_id == BLOCK_BTB) {
-		ecore_int_attn_print(p_hwfn, BLOCK_OPTE,
-				     ATTN_TYPE_PARITY, false);
-		ecore_int_attn_print(p_hwfn, BLOCK_MCP,
-				     ATTN_TYPE_PARITY, false);
+		/* In A0, there's a single parity bit for several blocks */
+		if (block_id == BLOCK_BTB) {
+			ecore_int_attn_print(p_hwfn, BLOCK_OPTE,
+					     ATTN_TYPE_PARITY, false);
+			ecore_int_attn_print(p_hwfn, BLOCK_MCP,
+					     ATTN_TYPE_PARITY, false);
+		}
 	}
+
+	/* Prevent this parity error from being re-asserted */
+	mask = ~(0x1 << bit_index);
+	val = ecore_rd(p_hwfn, p_hwfn->p_dpc_ptt, aeu_en_reg);
+	ecore_wr(p_hwfn, p_hwfn->p_dpc_ptt, aeu_en_reg, val & mask);
+	DP_INFO(p_hwfn, "`%s' - Disabled future parity errors\n",
+		p_aeu->bit_name);
 }
 
 /**
@@ -891,8 +1001,7 @@ static enum _ecore_status_t ecore_int_deassertion(struct ecore_hwfn *p_hwfn,
 						  u16 deasserted_bits)
 {
 	struct ecore_sb_attn_info *sb_attn_sw = p_hwfn->p_sb_attn;
-	u32 aeu_inv_arr[NUM_ATTN_REGS], aeu_mask;
-	bool b_parity = false;
+	u32 aeu_inv_arr[NUM_ATTN_REGS], aeu_mask, aeu_en, en;
 	u8 i, j, k, bit_idx;
 	enum _ecore_status_t rc = ECORE_SUCCESS;
 
@@ -908,11 +1017,11 @@ static enum _ecore_status_t ecore_int_deassertion(struct ecore_hwfn *p_hwfn,
 	/* Handle parity attentions first */
 	for (i = 0; i < NUM_ATTN_REGS; i++) {
 		struct aeu_invert_reg *p_aeu = &sb_attn_sw->p_aeu_desc[i];
-		u32 en = ecore_rd(p_hwfn, p_hwfn->p_dpc_ptt,
-				  MISC_REG_AEU_ENABLE1_IGU_OUT_0 +
-				  i * sizeof(u32));
+		u32 parities;
 
-		u32 parities = sb_attn_sw->parity_mask[i] & aeu_inv_arr[i] & en;
+		aeu_en = MISC_REG_AEU_ENABLE1_IGU_OUT_0 + i * sizeof(u32);
+		en = ecore_rd(p_hwfn, p_hwfn->p_dpc_ptt, aeu_en);
+		parities = sb_attn_sw->parity_mask[i] & aeu_inv_arr[i] & en;
 
 		/* Skip register in which no parity bit is currently set */
 		if (!parities)
@@ -922,11 +1031,9 @@ static enum _ecore_status_t ecore_int_deassertion(struct ecore_hwfn *p_hwfn,
 			struct aeu_invert_reg_bit *p_bit = &p_aeu->bits[j];
 
 			if (ecore_int_is_parity_flag(p_hwfn, p_bit) &&
-			    !!(parities & (1 << bit_idx))) {
+			    !!(parities & (1 << bit_idx)))
 				ecore_int_deassertion_parity(p_hwfn, p_bit,
-							     bit_idx);
-				b_parity = true;
-			}
+							     aeu_en, bit_idx);
 
 			bit_idx += ATTENTION_LENGTH(p_bit->flags);
 		}
@@ -941,10 +1048,13 @@ static enum _ecore_status_t ecore_int_deassertion(struct ecore_hwfn *p_hwfn,
 			continue;
 
 		for (i = 0; i < NUM_ATTN_REGS; i++) {
-			u32 aeu_en = MISC_REG_AEU_ENABLE1_IGU_OUT_0 +
-			    i * sizeof(u32) + k * sizeof(u32) * NUM_ATTN_REGS;
-			u32 en = ecore_rd(p_hwfn, p_hwfn->p_dpc_ptt, aeu_en);
-			u32 bits = aeu_inv_arr[i] & en;
+			u32 bits;
+
+			aeu_en = MISC_REG_AEU_ENABLE1_IGU_OUT_0 +
+				 i * sizeof(u32) +
+				 k * sizeof(u32) * NUM_ATTN_REGS;
+			en = ecore_rd(p_hwfn, p_hwfn->p_dpc_ptt, aeu_en);
+			bits = aeu_inv_arr[i] & en;
 
 			/* Skip if no bit from this group is currently set */
 			if (!bits)
@@ -1369,6 +1479,49 @@ void ecore_init_cau_sb_entry(struct ecore_hwfn *p_hwfn,
 	SET_FIELD(p_sb_entry->data, CAU_SB_ENTRY_STATE1, cau_state);
 }
 
+static void _ecore_int_cau_conf_pi(struct ecore_hwfn *p_hwfn,
+				   struct ecore_ptt *p_ptt,
+				   u16 igu_sb_id, u32 pi_index,
+				   enum ecore_coalescing_fsm coalescing_fsm,
+				   u8 timeset)
+{
+	struct cau_pi_entry pi_entry;
+	u32 sb_offset, pi_offset;
+
+	if (IS_VF(p_hwfn->p_dev))
+		return;/* @@@TBD MichalK- VF CAU... */
+
+	sb_offset = igu_sb_id * PIS_PER_SB_E4;
+	OSAL_MEMSET(&pi_entry, 0, sizeof(struct cau_pi_entry));
+
+	SET_FIELD(pi_entry.prod, CAU_PI_ENTRY_PI_TIMESET, timeset);
+	if (coalescing_fsm == ECORE_COAL_RX_STATE_MACHINE)
+		SET_FIELD(pi_entry.prod, CAU_PI_ENTRY_FSM_SEL, 0);
+	else
+		SET_FIELD(pi_entry.prod, CAU_PI_ENTRY_FSM_SEL, 1);
+
+	pi_offset = sb_offset + pi_index;
+	if (p_hwfn->hw_init_done) {
+		ecore_wr(p_hwfn, p_ptt,
+			 CAU_REG_PI_MEMORY + pi_offset * sizeof(u32),
+			 *((u32 *)&(pi_entry)));
+	} else {
+		STORE_RT_REG(p_hwfn,
+			     CAU_REG_PI_MEMORY_RT_OFFSET + pi_offset,
+			     *((u32 *)&(pi_entry)));
+	}
+}
+
+void ecore_int_cau_conf_pi(struct ecore_hwfn *p_hwfn,
+			   struct ecore_ptt *p_ptt,
+			   struct ecore_sb_info *p_sb, u32 pi_index,
+			   enum ecore_coalescing_fsm coalescing_fsm,
+			   u8 timeset)
+{
+	_ecore_int_cau_conf_pi(p_hwfn, p_ptt, p_sb->igu_sb_id,
+			       pi_index, coalescing_fsm, timeset);
+}
+
 void ecore_int_cau_conf_sb(struct ecore_hwfn *p_hwfn,
 			   struct ecore_ptt *p_ptt,
 			   dma_addr_t sb_phys, u16 igu_sb_id,
@@ -1420,8 +1573,9 @@ void ecore_int_cau_conf_sb(struct ecore_hwfn *p_hwfn,
 		else
 			timer_res = 2;
 		timeset = (u8)(p_hwfn->p_dev->rx_coalesce_usecs >> timer_res);
-		ecore_int_cau_conf_pi(p_hwfn, p_ptt, igu_sb_id, RX_PI,
-				      ECORE_COAL_RX_STATE_MACHINE, timeset);
+		_ecore_int_cau_conf_pi(p_hwfn, p_ptt, igu_sb_id, RX_PI,
+				       ECORE_COAL_RX_STATE_MACHINE,
+				       timeset);
 
 		if (p_hwfn->p_dev->tx_coalesce_usecs <= 0x7F)
 			timer_res = 0;
@@ -1431,43 +1585,11 @@ void ecore_int_cau_conf_sb(struct ecore_hwfn *p_hwfn,
 			timer_res = 2;
 		timeset = (u8)(p_hwfn->p_dev->tx_coalesce_usecs >> timer_res);
 		for (i = 0; i < num_tc; i++) {
-			ecore_int_cau_conf_pi(p_hwfn, p_ptt,
-					      igu_sb_id, TX_PI(i),
-					      ECORE_COAL_TX_STATE_MACHINE,
-					      timeset);
+			_ecore_int_cau_conf_pi(p_hwfn, p_ptt,
+					       igu_sb_id, TX_PI(i),
+					       ECORE_COAL_TX_STATE_MACHINE,
+					       timeset);
 		}
-	}
-}
-
-void ecore_int_cau_conf_pi(struct ecore_hwfn *p_hwfn,
-			   struct ecore_ptt *p_ptt,
-			   u16 igu_sb_id, u32 pi_index,
-			   enum ecore_coalescing_fsm coalescing_fsm, u8 timeset)
-{
-	struct cau_pi_entry pi_entry;
-	u32 sb_offset, pi_offset;
-
-	if (IS_VF(p_hwfn->p_dev))
-		return;		/* @@@TBD MichalK- VF CAU... */
-
-	sb_offset = igu_sb_id * PIS_PER_SB;
-	OSAL_MEMSET(&pi_entry, 0, sizeof(struct cau_pi_entry));
-
-	SET_FIELD(pi_entry.prod, CAU_PI_ENTRY_PI_TIMESET, timeset);
-	if (coalescing_fsm == ECORE_COAL_RX_STATE_MACHINE)
-		SET_FIELD(pi_entry.prod, CAU_PI_ENTRY_FSM_SEL, 0);
-	else
-		SET_FIELD(pi_entry.prod, CAU_PI_ENTRY_FSM_SEL, 1);
-
-	pi_offset = sb_offset + pi_index;
-	if (p_hwfn->hw_init_done) {
-		ecore_wr(p_hwfn, p_ptt,
-			 CAU_REG_PI_MEMORY + pi_offset * sizeof(u32),
-			 *((u32 *)&(pi_entry)));
-	} else {
-		STORE_RT_REG(p_hwfn,
-			     CAU_REG_PI_MEMORY_RT_OFFSET + pi_offset,
-			     *((u32 *)&(pi_entry)));
 	}
 }
 
@@ -1483,16 +1605,50 @@ void ecore_int_sb_setup(struct ecore_hwfn *p_hwfn,
 				      sb_info->igu_sb_id, 0, 0);
 }
 
-/**
- * @brief ecore_get_igu_sb_id - given a sw sb_id return the
- *        igu_sb_id
- *
- * @param p_hwfn
- * @param sb_id
- *
- * @return u16
- */
-static u16 ecore_get_igu_sb_id(struct ecore_hwfn *p_hwfn, u16 sb_id)
+struct ecore_igu_block *
+ecore_get_igu_free_sb(struct ecore_hwfn *p_hwfn, bool b_is_pf)
+{
+	struct ecore_igu_block *p_block;
+	u16 igu_id;
+
+	for (igu_id = 0; igu_id < ECORE_MAPPING_MEMORY_SIZE(p_hwfn->p_dev);
+	     igu_id++) {
+		p_block = &p_hwfn->hw_info.p_igu_info->entry[igu_id];
+
+		if (!(p_block->status & ECORE_IGU_STATUS_VALID) ||
+		    !(p_block->status & ECORE_IGU_STATUS_FREE))
+			continue;
+
+		if (!!(p_block->status & ECORE_IGU_STATUS_PF) ==
+		    b_is_pf)
+			return p_block;
+	}
+
+	return OSAL_NULL;
+}
+
+static u16 ecore_get_pf_igu_sb_id(struct ecore_hwfn *p_hwfn,
+				  u16 vector_id)
+{
+	struct ecore_igu_block *p_block;
+	u16 igu_id;
+
+	for (igu_id = 0; igu_id < ECORE_MAPPING_MEMORY_SIZE(p_hwfn->p_dev);
+	     igu_id++) {
+		p_block = &p_hwfn->hw_info.p_igu_info->entry[igu_id];
+
+		if (!(p_block->status & ECORE_IGU_STATUS_VALID) ||
+		    !p_block->is_pf ||
+		    p_block->vector_number != vector_id)
+			continue;
+
+		return igu_id;
+	}
+
+	return ECORE_SB_INVALID_IDX;
+}
+
+u16 ecore_get_igu_sb_id(struct ecore_hwfn *p_hwfn, u16 sb_id)
 {
 	u16 igu_sb_id;
 
@@ -1500,11 +1656,15 @@ static u16 ecore_get_igu_sb_id(struct ecore_hwfn *p_hwfn, u16 sb_id)
 	if (sb_id == ECORE_SP_SB_ID)
 		igu_sb_id = p_hwfn->hw_info.p_igu_info->igu_dsb_id;
 	else if (IS_PF(p_hwfn->p_dev))
-		igu_sb_id = sb_id + p_hwfn->hw_info.p_igu_info->igu_base_sb;
+		igu_sb_id = ecore_get_pf_igu_sb_id(p_hwfn, sb_id + 1);
 	else
 		igu_sb_id = ecore_vf_get_igu_sb_id(p_hwfn, sb_id);
 
-	if (sb_id == ECORE_SP_SB_ID)
+	if (igu_sb_id == ECORE_SB_INVALID_IDX)
+		DP_NOTICE(p_hwfn, true,
+			  "Slowpath SB vector %04x doesn't exist\n",
+			  sb_id);
+	else if (sb_id == ECORE_SP_SB_ID)
 		DP_VERBOSE(p_hwfn, ECORE_MSG_INTR,
 			   "Slowpath SB index in IGU is 0x%04x\n", igu_sb_id);
 	else
@@ -1525,9 +1685,24 @@ enum _ecore_status_t ecore_int_sb_init(struct ecore_hwfn *p_hwfn,
 
 	sb_info->igu_sb_id = ecore_get_igu_sb_id(p_hwfn, sb_id);
 
+	if (sb_info->igu_sb_id == ECORE_SB_INVALID_IDX)
+		return ECORE_INVAL;
+
+	/* Let the igu info reference the client's SB info */
 	if (sb_id != ECORE_SP_SB_ID) {
-		p_hwfn->sbs_info[sb_id] = sb_info;
-		p_hwfn->num_sbs++;
+		if (IS_PF(p_hwfn->p_dev)) {
+			struct ecore_igu_info *p_info;
+			struct ecore_igu_block *p_block;
+
+			p_info = p_hwfn->hw_info.p_igu_info;
+			p_block = &p_info->entry[sb_info->igu_sb_id];
+
+			p_block->sb_info = sb_info;
+			p_block->status &= ~ECORE_IGU_STATUS_FREE;
+			p_info->usage.free_cnt--;
+		} else {
+			ecore_vf_set_sb_info(p_hwfn, sb_id, sb_info);
+		}
 	}
 #ifdef ECORE_CONFIG_DIRECT_HWFN
 	sb_info->p_hwfn = p_hwfn;
@@ -1559,19 +1734,34 @@ enum _ecore_status_t ecore_int_sb_release(struct ecore_hwfn *p_hwfn,
 					  struct ecore_sb_info *sb_info,
 					  u16 sb_id)
 {
-	if (sb_id == ECORE_SP_SB_ID) {
-		DP_ERR(p_hwfn, "Do Not free sp sb using this function");
-		return ECORE_INVAL;
-	}
+	struct ecore_igu_info *p_info;
+	struct ecore_igu_block *p_block;
+
+	if (sb_info == OSAL_NULL)
+		return ECORE_SUCCESS;
 
 	/* zero status block and ack counter */
 	sb_info->sb_ack = 0;
 	OSAL_MEMSET(sb_info->sb_virt, 0, sizeof(*sb_info->sb_virt));
 
-	if (p_hwfn->sbs_info[sb_id] != OSAL_NULL) {
-		p_hwfn->sbs_info[sb_id] = OSAL_NULL;
-		p_hwfn->num_sbs--;
+	if (IS_VF(p_hwfn->p_dev)) {
+		ecore_vf_set_sb_info(p_hwfn, sb_id, OSAL_NULL);
+		return ECORE_SUCCESS;
 	}
+
+	p_info = p_hwfn->hw_info.p_igu_info;
+	p_block = &p_info->entry[sb_info->igu_sb_id];
+
+	/* Vector 0 is reserved to Default SB */
+	if (p_block->vector_number == 0) {
+		DP_ERR(p_hwfn, "Do Not free sp sb using this function");
+		return ECORE_INVAL;
+	}
+
+	/* Lose reference to client's SB info, and fix counters */
+	p_block->sb_info = OSAL_NULL;
+	p_block->status |= ECORE_IGU_STATUS_FREE;
+	p_info->usage.free_cnt++;
 
 	return ECORE_SUCCESS;
 }
@@ -1735,15 +1925,6 @@ ecore_int_igu_enable(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt,
 			  enum ecore_int_mode int_mode)
 {
 	enum _ecore_status_t rc = ECORE_SUCCESS;
-	u32 tmp;
-
-	/* @@@tmp - Starting with MFW 8.2.1.0 we've started hitting AVS stop
-	 * attentions. Since we're waiting for BRCM answer regarding this
-	 * attention, in the meanwhile we simply mask it.
-	 */
-	tmp = ecore_rd(p_hwfn, p_ptt, MISC_REG_AEU_ENABLE4_IGU_OUT_0);
-	tmp &= ~0x800;
-	ecore_wr(p_hwfn, p_ptt, MISC_REG_AEU_ENABLE4_IGU_OUT_0, tmp);
 
 	ecore_int_igu_enable_attn(p_hwfn, p_ptt);
 
@@ -1778,11 +1959,13 @@ void ecore_int_igu_disable_int(struct ecore_hwfn *p_hwfn,
 
 #define IGU_CLEANUP_SLEEP_LENGTH		(1000)
 static void ecore_int_igu_cleanup_sb(struct ecore_hwfn *p_hwfn,
-			      struct ecore_ptt *p_ptt,
-			      u32 sb_id, bool cleanup_set, u16 opaque_fid)
+				     struct ecore_ptt *p_ptt,
+				     u32 igu_sb_id,
+				     bool cleanup_set,
+				     u16 opaque_fid)
 {
 	u32 cmd_ctrl = 0, val = 0, sb_bit = 0, sb_bit_addr = 0, data = 0;
-	u32 pxp_addr = IGU_CMD_INT_ACK_BASE + sb_id;
+	u32 pxp_addr = IGU_CMD_INT_ACK_BASE + igu_sb_id;
 	u32 sleep_cnt = IGU_CLEANUP_SLEEP_LENGTH;
 	u8 type = 0;		/* FIXME MichalS type??? */
 
@@ -1813,8 +1996,8 @@ static void ecore_int_igu_cleanup_sb(struct ecore_hwfn *p_hwfn,
 	OSAL_MMIOWB(p_hwfn->p_dev);
 
 	/* calculate where to read the status bit from */
-	sb_bit = 1 << (sb_id % 32);
-	sb_bit_addr = sb_id / 32 * sizeof(u32);
+	sb_bit = 1 << (igu_sb_id % 32);
+	sb_bit_addr = igu_sb_id / 32 * sizeof(u32);
 
 	sb_bit_addr += IGU_REG_CLEANUP_STATUS_0 + (0x80 * type);
 
@@ -1829,21 +2012,28 @@ static void ecore_int_igu_cleanup_sb(struct ecore_hwfn *p_hwfn,
 	if (!sleep_cnt)
 		DP_NOTICE(p_hwfn, true,
 			  "Timeout waiting for clear status 0x%08x [for sb %d]\n",
-			  val, sb_id);
+			  val, igu_sb_id);
 }
 
 void ecore_int_igu_init_pure_rt_single(struct ecore_hwfn *p_hwfn,
 				       struct ecore_ptt *p_ptt,
-				       u32 sb_id, u16 opaque, bool b_set)
+				       u16 igu_sb_id, u16 opaque, bool b_set)
 {
+	struct ecore_igu_block *p_block;
 	int pi, i;
+
+	p_block = &p_hwfn->hw_info.p_igu_info->entry[igu_sb_id];
+	DP_VERBOSE(p_hwfn, ECORE_MSG_INTR,
+		   "Cleaning SB [%04x]: func_id= %d is_pf = %d vector_num = 0x%0x\n",
+		   igu_sb_id, p_block->function_id, p_block->is_pf,
+		   p_block->vector_number);
 
 	/* Set */
 	if (b_set)
-		ecore_int_igu_cleanup_sb(p_hwfn, p_ptt, sb_id, 1, opaque);
+		ecore_int_igu_cleanup_sb(p_hwfn, p_ptt, igu_sb_id, 1, opaque);
 
 	/* Clear */
-	ecore_int_igu_cleanup_sb(p_hwfn, p_ptt, sb_id, 0, opaque);
+	ecore_int_igu_cleanup_sb(p_hwfn, p_ptt, igu_sb_id, 0, opaque);
 
 	/* Wait for the IGU SB to cleanup */
 	for (i = 0; i < IGU_CLEANUP_SLEEP_LENGTH; i++) {
@@ -1851,8 +2041,8 @@ void ecore_int_igu_init_pure_rt_single(struct ecore_hwfn *p_hwfn,
 
 		val = ecore_rd(p_hwfn, p_ptt,
 			       IGU_REG_WRITE_DONE_PENDING +
-			       ((sb_id / 32) * 4));
-		if (val & (1 << (sb_id % 32)))
+			       ((igu_sb_id / 32) * 4));
+		if (val & (1 << (igu_sb_id % 32)))
 			OSAL_UDELAY(10);
 		else
 			break;
@@ -1860,21 +2050,22 @@ void ecore_int_igu_init_pure_rt_single(struct ecore_hwfn *p_hwfn,
 	if (i == IGU_CLEANUP_SLEEP_LENGTH)
 		DP_NOTICE(p_hwfn, true,
 			  "Failed SB[0x%08x] still appearing in WRITE_DONE_PENDING\n",
-			  sb_id);
+			  igu_sb_id);
 
 	/* Clear the CAU for the SB */
 	for (pi = 0; pi < 12; pi++)
 		ecore_wr(p_hwfn, p_ptt,
-			 CAU_REG_PI_MEMORY + (sb_id * 12 + pi) * 4, 0);
+			 CAU_REG_PI_MEMORY + (igu_sb_id * 12 + pi) * 4, 0);
 }
 
 void ecore_int_igu_init_pure_rt(struct ecore_hwfn *p_hwfn,
 				struct ecore_ptt *p_ptt,
 				bool b_set, bool b_slowpath)
 {
-	u32 igu_base_sb = p_hwfn->hw_info.p_igu_info->igu_base_sb;
-	u32 igu_sb_cnt = p_hwfn->hw_info.p_igu_info->igu_sb_cnt;
-	u32 sb_id = 0, val = 0;
+	struct ecore_igu_info *p_info = p_hwfn->hw_info.p_igu_info;
+	struct ecore_igu_block *p_block;
+	u16 igu_sb_id = 0;
+	u32 val = 0;
 
 	/* @@@TBD MichalK temporary... should be moved to init-tool... */
 	val = ecore_rd(p_hwfn, p_ptt, IGU_REG_BLOCK_CONFIGURATION);
@@ -1883,53 +2074,204 @@ void ecore_int_igu_init_pure_rt(struct ecore_hwfn *p_hwfn,
 	ecore_wr(p_hwfn, p_ptt, IGU_REG_BLOCK_CONFIGURATION, val);
 	/* end temporary */
 
-	DP_VERBOSE(p_hwfn, ECORE_MSG_INTR,
-		   "IGU cleaning SBs [%d,...,%d]\n",
-		   igu_base_sb, igu_base_sb + igu_sb_cnt - 1);
+	for (igu_sb_id = 0;
+	     igu_sb_id < ECORE_MAPPING_MEMORY_SIZE(p_hwfn->p_dev);
+	     igu_sb_id++) {
+		p_block = &p_info->entry[igu_sb_id];
 
-	for (sb_id = igu_base_sb; sb_id < igu_base_sb + igu_sb_cnt; sb_id++)
-		ecore_int_igu_init_pure_rt_single(p_hwfn, p_ptt, sb_id,
+		if (!(p_block->status & ECORE_IGU_STATUS_VALID) ||
+		    !p_block->is_pf ||
+		    (p_block->status & ECORE_IGU_STATUS_DSB))
+			continue;
+
+		ecore_int_igu_init_pure_rt_single(p_hwfn, p_ptt, igu_sb_id,
 						  p_hwfn->hw_info.opaque_fid,
 						  b_set);
+	}
 
-	if (!b_slowpath)
-		return;
-
-	sb_id = p_hwfn->hw_info.p_igu_info->igu_dsb_id;
-	DP_VERBOSE(p_hwfn, ECORE_MSG_INTR,
-		   "IGU cleaning slowpath SB [%d]\n", sb_id);
-	ecore_int_igu_init_pure_rt_single(p_hwfn, p_ptt, sb_id,
-					  p_hwfn->hw_info.opaque_fid, b_set);
+	if (b_slowpath)
+		ecore_int_igu_init_pure_rt_single(p_hwfn, p_ptt,
+						  p_info->igu_dsb_id,
+						  p_hwfn->hw_info.opaque_fid,
+						  b_set);
 }
 
-static u32 ecore_int_igu_read_cam_block(struct ecore_hwfn *p_hwfn,
-					struct ecore_ptt *p_ptt, u16 sb_id)
+int ecore_int_igu_reset_cam(struct ecore_hwfn *p_hwfn,
+			    struct ecore_ptt *p_ptt)
+{
+	struct ecore_igu_info *p_info = p_hwfn->hw_info.p_igu_info;
+	struct ecore_igu_block *p_block;
+	int pf_sbs, vf_sbs;
+	u16 igu_sb_id;
+	u32 val, rval;
+
+	if (!RESC_NUM(p_hwfn, ECORE_SB)) {
+		/* We're using an old MFW - have to prevent any switching
+		 * of SBs between PF and VFs as later driver wouldn't be
+		 * able to tell which belongs to which.
+		 */
+		p_info->b_allow_pf_vf_change = false;
+	} else {
+		/* Use the numbers the MFW have provided -
+		 * don't forget MFW accounts for the default SB as well.
+		 */
+		p_info->b_allow_pf_vf_change = true;
+
+		if (p_info->usage.cnt != RESC_NUM(p_hwfn, ECORE_SB) - 1) {
+			DP_INFO(p_hwfn,
+				"MFW notifies of 0x%04x PF SBs; IGU indicates of only 0x%04x\n",
+				RESC_NUM(p_hwfn, ECORE_SB) - 1,
+				p_info->usage.cnt);
+			p_info->usage.cnt = RESC_NUM(p_hwfn, ECORE_SB) - 1;
+		}
+
+		/* TODO - how do we learn about VF SBs from MFW? */
+		if (IS_PF_SRIOV(p_hwfn)) {
+			u16 vfs = p_hwfn->p_dev->p_iov_info->total_vfs;
+
+			if (vfs != p_info->usage.iov_cnt)
+				DP_VERBOSE(p_hwfn, ECORE_MSG_INTR,
+					   "0x%04x VF SBs in IGU CAM != PCI configuration 0x%04x\n",
+					   p_info->usage.iov_cnt, vfs);
+
+			/* At this point we know how many SBs we have totally
+			 * in IGU + number of PF SBs. So we can validate that
+			 * we'd have sufficient for VF.
+			 */
+			if (vfs > p_info->usage.free_cnt +
+				  p_info->usage.free_cnt_iov -
+				  p_info->usage.cnt) {
+				DP_NOTICE(p_hwfn, true,
+					  "Not enough SBs for VFs - 0x%04x SBs, from which %04x PFs and %04x are required\n",
+					  p_info->usage.free_cnt +
+					  p_info->usage.free_cnt_iov,
+					  p_info->usage.cnt, vfs);
+				return ECORE_INVAL;
+			}
+		}
+	}
+
+	/* Cap the number of VFs SBs by the number of VFs */
+	if (IS_PF_SRIOV(p_hwfn))
+		p_info->usage.iov_cnt = p_hwfn->p_dev->p_iov_info->total_vfs;
+
+	/* Mark all SBs as free, now in the right PF/VFs division */
+	p_info->usage.free_cnt = p_info->usage.cnt;
+	p_info->usage.free_cnt_iov = p_info->usage.iov_cnt;
+	p_info->usage.orig = p_info->usage.cnt;
+	p_info->usage.iov_orig = p_info->usage.iov_cnt;
+
+	/* We now proceed to re-configure the IGU cam to reflect the initial
+	 * configuration. We can start with the Default SB.
+	 */
+	pf_sbs = p_info->usage.cnt;
+	vf_sbs = p_info->usage.iov_cnt;
+
+	for (igu_sb_id = p_info->igu_dsb_id;
+	     igu_sb_id < ECORE_MAPPING_MEMORY_SIZE(p_hwfn->p_dev);
+	     igu_sb_id++) {
+		p_block = &p_info->entry[igu_sb_id];
+		val = 0;
+
+		if (!(p_block->status & ECORE_IGU_STATUS_VALID))
+			continue;
+
+		if (p_block->status & ECORE_IGU_STATUS_DSB) {
+			p_block->function_id = p_hwfn->rel_pf_id;
+			p_block->is_pf = 1;
+			p_block->vector_number = 0;
+			p_block->status = ECORE_IGU_STATUS_VALID |
+					  ECORE_IGU_STATUS_PF |
+					  ECORE_IGU_STATUS_DSB;
+		} else if (pf_sbs) {
+			pf_sbs--;
+			p_block->function_id = p_hwfn->rel_pf_id;
+			p_block->is_pf = 1;
+			p_block->vector_number = p_info->usage.cnt - pf_sbs;
+			p_block->status = ECORE_IGU_STATUS_VALID |
+					  ECORE_IGU_STATUS_PF |
+					  ECORE_IGU_STATUS_FREE;
+		} else if (vf_sbs) {
+			p_block->function_id =
+				p_hwfn->p_dev->p_iov_info->first_vf_in_pf +
+				p_info->usage.iov_cnt - vf_sbs;
+			p_block->is_pf = 0;
+			p_block->vector_number = 0;
+			p_block->status = ECORE_IGU_STATUS_VALID |
+					  ECORE_IGU_STATUS_FREE;
+			vf_sbs--;
+		} else {
+			p_block->function_id = 0;
+			p_block->is_pf = 0;
+			p_block->vector_number = 0;
+		}
+
+		SET_FIELD(val, IGU_MAPPING_LINE_FUNCTION_NUMBER,
+			  p_block->function_id);
+		SET_FIELD(val, IGU_MAPPING_LINE_PF_VALID, p_block->is_pf);
+		SET_FIELD(val, IGU_MAPPING_LINE_VECTOR_NUMBER,
+			  p_block->vector_number);
+
+		/* VF entries would be enabled when VF is initializaed */
+		SET_FIELD(val, IGU_MAPPING_LINE_VALID, p_block->is_pf);
+
+		rval = ecore_rd(p_hwfn, p_ptt,
+				IGU_REG_MAPPING_MEMORY +
+				sizeof(u32) * igu_sb_id);
+
+		if (rval != val) {
+			ecore_wr(p_hwfn, p_ptt,
+				 IGU_REG_MAPPING_MEMORY +
+				 sizeof(u32) * igu_sb_id,
+				 val);
+
+			DP_VERBOSE(p_hwfn, ECORE_MSG_INTR,
+				   "IGU reset: [SB 0x%04x] func_id = %d is_pf = %d vector_num = 0x%x [%08x -> %08x]\n",
+				   igu_sb_id, p_block->function_id,
+				   p_block->is_pf, p_block->vector_number,
+				   rval, val);
+		}
+	}
+
+	return 0;
+}
+
+int ecore_int_igu_reset_cam_default(struct ecore_hwfn *p_hwfn,
+				    struct ecore_ptt *p_ptt)
+{
+	struct ecore_sb_cnt_info *p_cnt = &p_hwfn->hw_info.p_igu_info->usage;
+
+	/* Return all the usage indications to default prior to the reset;
+	 * The reset expects the !orig to reflect the initial status of the
+	 * SBs, and would re-calculate the originals based on those.
+	 */
+	p_cnt->cnt = p_cnt->orig;
+	p_cnt->free_cnt = p_cnt->orig;
+	p_cnt->iov_cnt = p_cnt->iov_orig;
+	p_cnt->free_cnt_iov = p_cnt->iov_orig;
+	p_cnt->orig = 0;
+	p_cnt->iov_orig = 0;
+
+	/* TODO - we probably need to re-configure the CAU as well... */
+	return ecore_int_igu_reset_cam(p_hwfn, p_ptt);
+}
+
+static void ecore_int_igu_read_cam_block(struct ecore_hwfn *p_hwfn,
+					 struct ecore_ptt *p_ptt,
+					 u16 igu_sb_id)
 {
 	u32 val = ecore_rd(p_hwfn, p_ptt,
-			   IGU_REG_MAPPING_MEMORY + sizeof(u32) * sb_id);
+			   IGU_REG_MAPPING_MEMORY + sizeof(u32) * igu_sb_id);
 	struct ecore_igu_block *p_block;
 
-	p_block = &p_hwfn->hw_info.p_igu_info->igu_map.igu_blocks[sb_id];
-
-	/* stop scanning when hit first invalid PF entry */
-	if (!GET_FIELD(val, IGU_MAPPING_LINE_VALID) &&
-	    GET_FIELD(val, IGU_MAPPING_LINE_PF_VALID))
-		goto out;
+	p_block = &p_hwfn->hw_info.p_igu_info->entry[igu_sb_id];
 
 	/* Fill the block information */
-	p_block->status = ECORE_IGU_STATUS_VALID;
 	p_block->function_id = GET_FIELD(val, IGU_MAPPING_LINE_FUNCTION_NUMBER);
 	p_block->is_pf = GET_FIELD(val, IGU_MAPPING_LINE_PF_VALID);
 	p_block->vector_number = GET_FIELD(val, IGU_MAPPING_LINE_VECTOR_NUMBER);
 
-	DP_VERBOSE(p_hwfn, ECORE_MSG_INTR,
-		   "IGU_BLOCK: [SB 0x%04x, Value in CAM 0x%08x] func_id = %d"
-		   " is_pf = %d vector_num = 0x%x\n",
-		   sb_id, val, p_block->function_id, p_block->is_pf,
-		   p_block->vector_number);
-
-out:
-	return val;
+	p_block->igu_sb_id = igu_sb_id;
 }
 
 enum _ecore_status_t ecore_int_igu_read_cam(struct ecore_hwfn *p_hwfn,
@@ -1937,139 +2279,216 @@ enum _ecore_status_t ecore_int_igu_read_cam(struct ecore_hwfn *p_hwfn,
 {
 	struct ecore_igu_info *p_igu_info;
 	struct ecore_igu_block *p_block;
-	u32 min_vf = 0, max_vf = 0, val;
-	u16 sb_id, last_iov_sb_id = 0;
-	u16 prev_sb_id = 0xFF;
+	u32 min_vf = 0, max_vf = 0;
+	u16 igu_sb_id;
 
-	p_hwfn->hw_info.p_igu_info = OSAL_ALLOC(p_hwfn->p_dev,
-						GFP_KERNEL,
-						sizeof(*p_igu_info));
+	p_hwfn->hw_info.p_igu_info = OSAL_ZALLOC(p_hwfn->p_dev,
+						 GFP_KERNEL,
+						 sizeof(*p_igu_info));
 	if (!p_hwfn->hw_info.p_igu_info)
 		return ECORE_NOMEM;
-
-	OSAL_MEMSET(p_hwfn->hw_info.p_igu_info, 0, sizeof(*p_igu_info));
-
 	p_igu_info = p_hwfn->hw_info.p_igu_info;
 
-	/* Initialize base sb / sb cnt for PFs and VFs */
-	p_igu_info->igu_base_sb = 0xffff;
-	p_igu_info->igu_sb_cnt = 0;
-	p_igu_info->igu_dsb_id = 0xffff;
-	p_igu_info->igu_base_sb_iov = 0xffff;
+	/* Distinguish between existent and onn-existent default SB */
+	p_igu_info->igu_dsb_id = ECORE_SB_INVALID_IDX;
 
+	/* Find the range of VF ids whose SB belong to this PF */
 	if (p_hwfn->p_dev->p_iov_info) {
 		struct ecore_hw_sriov_info *p_iov = p_hwfn->p_dev->p_iov_info;
 
 		min_vf = p_iov->first_vf_in_pf;
 		max_vf = p_iov->first_vf_in_pf + p_iov->total_vfs;
 	}
-	for (sb_id = 0;
-	     sb_id < ECORE_MAPPING_MEMORY_SIZE(p_hwfn->p_dev);
-	     sb_id++) {
-		p_block = &p_igu_info->igu_map.igu_blocks[sb_id];
-		val = ecore_int_igu_read_cam_block(p_hwfn, p_ptt, sb_id);
-		if (!GET_FIELD(val, IGU_MAPPING_LINE_VALID) &&
-		    GET_FIELD(val, IGU_MAPPING_LINE_PF_VALID))
-			break;
 
-		if (p_block->is_pf) {
-			if (p_block->function_id == p_hwfn->rel_pf_id) {
-				p_block->status |= ECORE_IGU_STATUS_PF;
+	for (igu_sb_id = 0;
+	     igu_sb_id < ECORE_MAPPING_MEMORY_SIZE(p_hwfn->p_dev);
+	     igu_sb_id++) {
+		/* Read current entry; Notice it might not belong to this PF */
+		ecore_int_igu_read_cam_block(p_hwfn, p_ptt, igu_sb_id);
+		p_block = &p_igu_info->entry[igu_sb_id];
 
-				if (p_block->vector_number == 0) {
-					if (p_igu_info->igu_dsb_id == 0xffff)
-						p_igu_info->igu_dsb_id = sb_id;
-				} else {
-					if (p_igu_info->igu_base_sb == 0xffff) {
-						p_igu_info->igu_base_sb = sb_id;
-					} else if (prev_sb_id != sb_id - 1) {
-						DP_NOTICE(p_hwfn->p_dev, false,
-							  "consecutive igu"
-							  " vectors for HWFN"
-							  " %x broken",
-							  p_hwfn->rel_pf_id);
-						break;
-					}
-					prev_sb_id = sb_id;
-					/* we don't count the default */
-					(p_igu_info->igu_sb_cnt)++;
-				}
-			}
-		} else {
-			if ((p_block->function_id >= min_vf) &&
-			    (p_block->function_id < max_vf)) {
-				/* Available for VFs of this PF */
-				if (p_igu_info->igu_base_sb_iov == 0xffff) {
-					p_igu_info->igu_base_sb_iov = sb_id;
-				} else if (last_iov_sb_id != sb_id - 1) {
-					if (!val)
-						DP_VERBOSE(p_hwfn->p_dev,
-							   ECORE_MSG_INTR,
-							   "First uninited IGU"
-							   " CAM entry at"
-							   " index 0x%04x\n",
-							   sb_id);
-					else
-						DP_NOTICE(p_hwfn->p_dev, false,
-							  "Consecutive igu"
-							  " vectors for HWFN"
-							  " %x vfs is broken"
-							  " [jumps from %04x"
-							  " to %04x]\n",
-							  p_hwfn->rel_pf_id,
-							  last_iov_sb_id,
-							  sb_id);
-					break;
-				}
-				p_block->status |= ECORE_IGU_STATUS_FREE;
-				p_hwfn->hw_info.p_igu_info->free_blks++;
-				last_iov_sb_id = sb_id;
-			}
+		if ((p_block->is_pf) &&
+		    (p_block->function_id == p_hwfn->rel_pf_id)) {
+			p_block->status = ECORE_IGU_STATUS_PF |
+					  ECORE_IGU_STATUS_VALID |
+					  ECORE_IGU_STATUS_FREE;
+
+			if (p_igu_info->igu_dsb_id != ECORE_SB_INVALID_IDX)
+				p_igu_info->usage.cnt++;
+		} else if (!(p_block->is_pf) &&
+			   (p_block->function_id >= min_vf) &&
+			   (p_block->function_id < max_vf)) {
+			/* Available for VFs of this PF */
+			p_block->status = ECORE_IGU_STATUS_VALID |
+					  ECORE_IGU_STATUS_FREE;
+
+			if (p_igu_info->igu_dsb_id != ECORE_SB_INVALID_IDX)
+				p_igu_info->usage.iov_cnt++;
 		}
+
+		/* Mark the First entry belonging to the PF or its VFs
+		 * as the default SB [we'll reset IGU prior to first usage].
+		 */
+		if ((p_block->status & ECORE_IGU_STATUS_VALID) &&
+		    (p_igu_info->igu_dsb_id == ECORE_SB_INVALID_IDX)) {
+			p_igu_info->igu_dsb_id = igu_sb_id;
+			p_block->status |= ECORE_IGU_STATUS_DSB;
+		}
+
+		/* While this isn't suitable for all clients, limit number
+		 * of prints by having each PF print only its entries with the
+		 * exception of PF0 which would print everything.
+		 */
+		if ((p_block->status & ECORE_IGU_STATUS_VALID) ||
+		    (p_hwfn->abs_pf_id == 0))
+			DP_VERBOSE(p_hwfn, ECORE_MSG_INTR,
+				   "IGU_BLOCK: [SB 0x%04x] func_id = %d is_pf = %d vector_num = 0x%x\n",
+				   igu_sb_id, p_block->function_id,
+				   p_block->is_pf, p_block->vector_number);
 	}
 
-	/* There's a possibility the igu_sb_cnt_iov doesn't properly reflect
-	 * the number of VF SBs [especially for first VF on engine, as we can't
-	 * diffrentiate between empty entries and its entries].
-	 * Since we don't really support more SBs than VFs today, prevent any
-	 * such configuration by sanitizing the number of SBs to equal the
-	 * number of VFs.
-	 */
-	if (IS_PF_SRIOV(p_hwfn)) {
-		u16 total_vfs = p_hwfn->p_dev->p_iov_info->total_vfs;
-
-		if (total_vfs < p_igu_info->free_blks) {
-			DP_VERBOSE(p_hwfn, (ECORE_MSG_INTR | ECORE_MSG_IOV),
-				   "Limiting number of SBs for IOV - %04x --> %04x\n",
-				   p_igu_info->free_blks,
-				   p_hwfn->p_dev->p_iov_info->total_vfs);
-			p_igu_info->free_blks = total_vfs;
-		} else if (total_vfs > p_igu_info->free_blks) {
-			DP_NOTICE(p_hwfn, true,
-				  "IGU has only %04x SBs for VFs while the device has %04x VFs\n",
-				  p_igu_info->free_blks, total_vfs);
-			return ECORE_INVAL;
-		}
-	}
-
-	p_igu_info->igu_sb_cnt_iov = p_igu_info->free_blks;
-
-	DP_VERBOSE(p_hwfn, ECORE_MSG_INTR,
-		   "IGU igu_base_sb=0x%x [IOV 0x%x] igu_sb_cnt=%d [IOV 0x%x] "
-		   "igu_dsb_id=0x%x\n",
-		   p_igu_info->igu_base_sb, p_igu_info->igu_base_sb_iov,
-		   p_igu_info->igu_sb_cnt, p_igu_info->igu_sb_cnt_iov,
-		   p_igu_info->igu_dsb_id);
-
-	if (p_igu_info->igu_base_sb == 0xffff ||
-	    p_igu_info->igu_dsb_id == 0xffff || p_igu_info->igu_sb_cnt == 0) {
+	if (p_igu_info->igu_dsb_id == ECORE_SB_INVALID_IDX) {
 		DP_NOTICE(p_hwfn, true,
-			  "IGU CAM returned invalid values igu_base_sb=0x%x "
-			  "igu_sb_cnt=%d igu_dsb_id=0x%x\n",
-			  p_igu_info->igu_base_sb, p_igu_info->igu_sb_cnt,
+			  "IGU CAM returned invalid values igu_dsb_id=0x%x\n",
 			  p_igu_info->igu_dsb_id);
 		return ECORE_INVAL;
 	}
+
+	/* All non default SB are considered free at this point */
+	p_igu_info->usage.free_cnt = p_igu_info->usage.cnt;
+	p_igu_info->usage.free_cnt_iov = p_igu_info->usage.iov_cnt;
+
+	DP_VERBOSE(p_hwfn, ECORE_MSG_INTR,
+		   "igu_dsb_id=0x%x, num Free SBs - PF: %04x VF: %04x [might change after resource allocation]\n",
+		   p_igu_info->igu_dsb_id, p_igu_info->usage.cnt,
+		   p_igu_info->usage.iov_cnt);
+
+	return ECORE_SUCCESS;
+}
+
+enum _ecore_status_t
+ecore_int_igu_relocate_sb(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt,
+			  u16 sb_id, bool b_to_vf)
+{
+	struct ecore_igu_info *p_info = p_hwfn->hw_info.p_igu_info;
+	struct ecore_igu_block *p_block = OSAL_NULL;
+	u16 igu_sb_id = 0, vf_num = 0;
+	u32 val = 0;
+
+	if (IS_VF(p_hwfn->p_dev) || !IS_PF_SRIOV(p_hwfn))
+		return ECORE_INVAL;
+
+	if (sb_id == ECORE_SP_SB_ID)
+		return ECORE_INVAL;
+
+	if (!p_info->b_allow_pf_vf_change) {
+		DP_INFO(p_hwfn, "Can't relocate SBs as MFW is too old.\n");
+		return ECORE_INVAL;
+	}
+
+	/* If we're moving a SB from PF to VF, the client had to specify
+	 * which vector it wants to move.
+	 */
+	if (b_to_vf) {
+		igu_sb_id = ecore_get_pf_igu_sb_id(p_hwfn, sb_id + 1);
+		if (igu_sb_id == ECORE_SB_INVALID_IDX)
+			return ECORE_INVAL;
+	}
+
+	/* If we're moving a SB from VF to PF, need to validate there isn't
+	 * already a line configured for that vector.
+	 */
+	if (!b_to_vf) {
+		if (ecore_get_pf_igu_sb_id(p_hwfn, sb_id + 1) !=
+		    ECORE_SB_INVALID_IDX)
+			return ECORE_INVAL;
+	}
+
+	/* We need to validate that the SB can actually be relocated.
+	 * This would also handle the previous case where we've explicitly
+	 * stated which IGU SB needs to move.
+	 */
+	for (; igu_sb_id < ECORE_MAPPING_MEMORY_SIZE(p_hwfn->p_dev);
+	     igu_sb_id++) {
+		p_block = &p_info->entry[igu_sb_id];
+
+		if (!(p_block->status & ECORE_IGU_STATUS_VALID) ||
+		    !(p_block->status & ECORE_IGU_STATUS_FREE) ||
+		    (!!(p_block->status & ECORE_IGU_STATUS_PF) != b_to_vf)) {
+			if (b_to_vf)
+				return ECORE_INVAL;
+			else
+				continue;
+		}
+
+		break;
+	}
+
+	if (igu_sb_id == ECORE_MAPPING_MEMORY_SIZE(p_hwfn->p_dev)) {
+		DP_VERBOSE(p_hwfn, (ECORE_MSG_INTR | ECORE_MSG_IOV),
+			   "Failed to find a free SB to move\n");
+		return ECORE_INVAL;
+	}
+
+	/* At this point, p_block points to the SB we want to relocate */
+	if (b_to_vf) {
+		p_block->status &= ~ECORE_IGU_STATUS_PF;
+
+		/* It doesn't matter which VF number we choose, since we're
+		 * going to disable the line; But let's keep it in range.
+		 */
+		vf_num = (u16)p_hwfn->p_dev->p_iov_info->first_vf_in_pf;
+
+		p_block->function_id = (u8)vf_num;
+		p_block->is_pf = 0;
+		p_block->vector_number = 0;
+
+		p_info->usage.cnt--;
+		p_info->usage.free_cnt--;
+		p_info->usage.iov_cnt++;
+		p_info->usage.free_cnt_iov++;
+
+		/* TODO - if SBs aren't really the limiting factor,
+		 * then it might not be accurate [in the since that
+		 * we might not need decrement the feature].
+		 */
+		p_hwfn->hw_info.feat_num[ECORE_PF_L2_QUE]--;
+		p_hwfn->hw_info.feat_num[ECORE_VF_L2_QUE]++;
+	} else {
+		p_block->status |= ECORE_IGU_STATUS_PF;
+		p_block->function_id = p_hwfn->rel_pf_id;
+		p_block->is_pf = 1;
+		p_block->vector_number = sb_id + 1;
+
+		p_info->usage.cnt++;
+		p_info->usage.free_cnt++;
+		p_info->usage.iov_cnt--;
+		p_info->usage.free_cnt_iov--;
+
+		p_hwfn->hw_info.feat_num[ECORE_PF_L2_QUE]++;
+		p_hwfn->hw_info.feat_num[ECORE_VF_L2_QUE]--;
+	}
+
+	/* Update the IGU and CAU with the new configuration */
+	SET_FIELD(val, IGU_MAPPING_LINE_FUNCTION_NUMBER,
+		  p_block->function_id);
+	SET_FIELD(val, IGU_MAPPING_LINE_PF_VALID, p_block->is_pf);
+	SET_FIELD(val, IGU_MAPPING_LINE_VALID, p_block->is_pf);
+	SET_FIELD(val, IGU_MAPPING_LINE_VECTOR_NUMBER,
+		  p_block->vector_number);
+
+	ecore_wr(p_hwfn, p_ptt,
+		 IGU_REG_MAPPING_MEMORY + sizeof(u32) * igu_sb_id,
+		 val);
+
+	ecore_int_cau_conf_sb(p_hwfn, p_ptt, 0,
+			      igu_sb_id, vf_num,
+			      p_block->is_pf ? 0 : 1);
+
+	DP_VERBOSE(p_hwfn, ECORE_MSG_INTR,
+		   "Relocation: [SB 0x%04x] func_id = %d is_pf = %d vector_num = 0x%x\n",
+		   igu_sb_id, p_block->function_id,
+		   p_block->is_pf, p_block->vector_number);
 
 	return ECORE_SUCCESS;
 }
@@ -2170,14 +2589,13 @@ void ecore_int_setup(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt)
 void ecore_int_get_num_sbs(struct ecore_hwfn *p_hwfn,
 			   struct ecore_sb_cnt_info *p_sb_cnt_info)
 {
-	struct ecore_igu_info *info = p_hwfn->hw_info.p_igu_info;
+	struct ecore_igu_info *p_igu_info = p_hwfn->hw_info.p_igu_info;
 
-	if (!info || !p_sb_cnt_info)
+	if (!p_igu_info || !p_sb_cnt_info)
 		return;
 
-	p_sb_cnt_info->sb_cnt = info->igu_sb_cnt;
-	p_sb_cnt_info->sb_iov_cnt = info->igu_sb_cnt_iov;
-	p_sb_cnt_info->sb_free_blk = info->free_blks;
+	OSAL_MEMCPY(p_sb_cnt_info, &p_igu_info->usage,
+		    sizeof(*p_sb_cnt_info));
 }
 
 void ecore_int_disable_post_isr_release(struct ecore_dev *p_dev)
@@ -2249,10 +2667,11 @@ enum _ecore_status_t ecore_int_get_sb_dbg(struct ecore_hwfn *p_hwfn,
 	p_info->igu_cons = ecore_rd(p_hwfn, p_ptt,
 				    IGU_REG_CONSUMER_MEM + sbid * 4);
 
-	for (i = 0; i < PIS_PER_SB; i++)
+	for (i = 0; i < PIS_PER_SB_E4; i++)
 		p_info->pi[i] = (u16)ecore_rd(p_hwfn, p_ptt,
 					      CAU_REG_PI_MEMORY +
-					      sbid * 4 * PIS_PER_SB +  i * 4);
+					      sbid * 4 * PIS_PER_SB_E4 +
+					      i * 4);
 
 	return ECORE_SUCCESS;
 }

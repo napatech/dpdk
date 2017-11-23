@@ -117,7 +117,7 @@ struct rte_jobstats_context {
 	/**< Minimum loop execute time. */
 
 	uint64_t max_exec_time;
-	/**< Minimum loop execute time. */
+	/**< Maximum loop execute time. */
 
 	/**
 	 * Sum of time that is not the execute time (ex: from job finish to next
@@ -313,7 +313,7 @@ rte_jobstats_set_max(struct rte_jobstats *job, uint64_t period);
  *
  * @param job
  *  Job object.
- * @param update_pedriod_cb
+ * @param update_period_cb
  *  Callback to set. If NULL restore default update function.
  */
 void

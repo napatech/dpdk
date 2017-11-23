@@ -18,7 +18,16 @@
 #define MAX_QUEUES_PER_QZONE	(sizeof(unsigned long) * 8)
 #define ECORE_QUEUE_CID_PF	(0xff)
 
-/* Additional parameters required for initialization of the queue_cid
+/* Almost identical to the ecore_queue_start_common_params,
+ * but here we maintain the SB index in IGU CAM.
+ */
+struct ecore_queue_cid_params {
+	u8 vport_id;
+	u16 queue_id;
+	u8 stats_id;
+};
+
+ /* Additional parameters required for initialization of the queue_cid
  * and are relevant only for a PF initializing one for its VFs.
  */
 struct ecore_queue_cid_vf_params {
@@ -34,7 +43,7 @@ struct ecore_queue_cid_vf_params {
 	 *  - Producers would be placed in a different place.
 	 *  - Makes assumptions regarding the CIDs.
 	 */
-	bool b_legacy;
+	u8 vf_legacy;
 
 	/* For VFs, this index arrives via TLV to diffrentiate between
 	 * different queues opened on the same qzone, and is passed
@@ -44,15 +53,18 @@ struct ecore_queue_cid_vf_params {
 };
 
 struct ecore_queue_cid {
-	/* 'Relative' is a relative term ;-). Usually the indices [not counting
-	 * SBs] would be PF-relative, but there are some cases where that isn't
-	 * the case - specifically for a PF configuring its VF indices it's
-	 * possible some fields [E.g., stats-id] in 'rel' would already be abs.
-	 */
-	struct ecore_queue_start_common_params rel;
-	struct ecore_queue_start_common_params abs;
+	/* For stats-id, the `rel' is actually absolute as well */
+	struct ecore_queue_cid_params rel;
+	struct ecore_queue_cid_params abs;
+
+	/* These have no 'relative' meaning */
+	u16 sb_igu_id;
+	u8 sb_idx;
+
 	u32 cid;
 	u16 opaque_fid;
+
+	bool b_is_rx;
 
 	/* VFs queues are mapped differently, so we need to know the
 	 * relative queue associated with them [0-based].
@@ -69,7 +81,9 @@ struct ecore_queue_cid {
 	u8 qid_usage_idx;
 
 	/* Legacy VFs might have Rx producer located elsewhere */
-	bool b_legacy_vf;
+	u8 vf_legacy;
+#define ECORE_QCID_LEGACY_VF_RX_PROD	(1 << 0)
+#define ECORE_QCID_LEGACY_VF_CID	(1 << 1)
 
 	struct ecore_hwfn *p_owner;
 };
@@ -84,6 +98,7 @@ void ecore_eth_queue_cid_release(struct ecore_hwfn *p_hwfn,
 struct ecore_queue_cid *
 ecore_eth_queue_to_cid(struct ecore_hwfn *p_hwfn, u16 opaque_fid,
 		       struct ecore_queue_start_common_params *p_params,
+		       bool b_is_rx,
 		       struct ecore_queue_cid_vf_params *p_vf_params);
 
 enum _ecore_status_t
@@ -129,31 +144,24 @@ ecore_eth_txq_start_ramrod(struct ecore_hwfn *p_hwfn,
 
 u8 ecore_mcast_bin_from_mac(u8 *mac);
 
-/**
- * @brief - ecore_configure_rfs_ntuple_filter
- *
- * This ramrod should be used to add or remove arfs hw filter
- *
- * @params p_hwfn
- * @params p_ptt
- * @params p_cb		Used for ECORE_SPQ_MODE_CB,where client would initialize
-			it with cookie and callback function address, if not
-			using this mode then client must pass NULL.
- * @params p_addr	p_addr is an actual packet header that needs to be
- *			filter. It has to mapped with IO to read prior to
- *			calling this, [contains 4 tuples- src ip, dest ip,
- *			src port, dest port].
- * @params length	length of p_addr header up to past the transport header.
- * @params qid		receive packet will be directed to this queue.
- * @params vport_id
- * @params b_is_add	flag to add or remove filter.
- *
- */
-enum _ecore_status_t
-ecore_configure_rfs_ntuple_filter(struct ecore_hwfn *p_hwfn,
-				  struct ecore_ptt *p_ptt,
-				  struct ecore_spq_comp_cb *p_cb,
-				  dma_addr_t p_addr, u16 length,
-				  u16 qid, u8 vport_id,
-				  bool b_is_add);
+enum _ecore_status_t ecore_set_rxq_coalesce(struct ecore_hwfn *p_hwfn,
+					    struct ecore_ptt *p_ptt,
+					    u16 coalesce,
+					    struct ecore_queue_cid *p_cid);
+
+enum _ecore_status_t ecore_set_txq_coalesce(struct ecore_hwfn *p_hwfn,
+					    struct ecore_ptt *p_ptt,
+					    u16 coalesce,
+					    struct ecore_queue_cid *p_cid);
+
+enum _ecore_status_t ecore_get_rxq_coalesce(struct ecore_hwfn *p_hwfn,
+					    struct ecore_ptt *p_ptt,
+					    struct ecore_queue_cid *p_cid,
+					    u16 *p_hw_coal);
+
+enum _ecore_status_t ecore_get_txq_coalesce(struct ecore_hwfn *p_hwfn,
+					    struct ecore_ptt *p_ptt,
+					    struct ecore_queue_cid *p_cid,
+					    u16 *p_hw_coal);
+
 #endif

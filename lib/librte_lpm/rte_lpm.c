@@ -43,7 +43,6 @@
 #include <rte_common.h>
 #include <rte_memory.h>        /* for definition of RTE_CACHE_LINE_SIZE */
 #include <rte_malloc.h>
-#include <rte_memzone.h>
 #include <rte_eal.h>
 #include <rte_eal_memconfig.h>
 #include <rte_per_lcore.h>
@@ -218,6 +217,7 @@ rte_lpm_create_v20(const char *name, int socket_id, int max_rules,
 	te = rte_zmalloc("LPM_TAILQ_ENTRY", sizeof(*te), 0);
 	if (te == NULL) {
 		RTE_LOG(ERR, LPM, "Failed to allocate tailq entry\n");
+		rte_errno = ENOMEM;
 		goto exit;
 	}
 
@@ -227,6 +227,7 @@ rte_lpm_create_v20(const char *name, int socket_id, int max_rules,
 	if (lpm == NULL) {
 		RTE_LOG(ERR, LPM, "LPM memory allocation failed\n");
 		rte_free(te);
+		rte_errno = ENOMEM;
 		goto exit;
 	}
 
@@ -292,6 +293,7 @@ rte_lpm_create_v1604(const char *name, int socket_id,
 	te = rte_zmalloc("LPM_TAILQ_ENTRY", sizeof(*te), 0);
 	if (te == NULL) {
 		RTE_LOG(ERR, LPM, "Failed to allocate tailq entry\n");
+		rte_errno = ENOMEM;
 		goto exit;
 	}
 
@@ -301,6 +303,7 @@ rte_lpm_create_v1604(const char *name, int socket_id,
 	if (lpm == NULL) {
 		RTE_LOG(ERR, LPM, "LPM memory allocation failed\n");
 		rte_free(te);
+		rte_errno = ENOMEM;
 		goto exit;
 	}
 
@@ -312,6 +315,7 @@ rte_lpm_create_v1604(const char *name, int socket_id,
 		rte_free(lpm);
 		lpm = NULL;
 		rte_free(te);
+		rte_errno = ENOMEM;
 		goto exit;
 	}
 
@@ -324,6 +328,7 @@ rte_lpm_create_v1604(const char *name, int socket_id,
 		rte_free(lpm);
 		lpm = NULL;
 		rte_free(te);
+		rte_errno = ENOMEM;
 		goto exit;
 	}
 

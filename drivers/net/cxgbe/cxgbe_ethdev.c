@@ -48,10 +48,10 @@
 #include <rte_log.h>
 #include <rte_debug.h>
 #include <rte_pci.h>
+#include <rte_bus_pci.h>
 #include <rte_atomic.h>
 #include <rte_branch_prediction.h>
 #include <rte_memory.h>
-#include <rte_memzone.h>
 #include <rte_tailq.h>
 #include <rte_eal.h>
 #include <rte_alarm.h>
@@ -647,7 +647,7 @@ static void cxgbe_dev_rx_queue_release(void *q)
 /*
  * Get port statistics.
  */
-static void cxgbe_dev_stats_get(struct rte_eth_dev *eth_dev,
+static int cxgbe_dev_stats_get(struct rte_eth_dev *eth_dev,
 				struct rte_eth_stats *eth_stats)
 {
 	struct port_info *pi = (struct port_info *)(eth_dev->data->dev_private);
@@ -690,6 +690,7 @@ static void cxgbe_dev_stats_get(struct rte_eth_dev *eth_dev,
 		eth_stats->q_obytes[i] = txq->stats.tx_bytes;
 		eth_stats->q_errors[i] = txq->stats.mapping_err;
 	}
+	return 0;
 }
 
 /*

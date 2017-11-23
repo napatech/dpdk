@@ -37,20 +37,18 @@
 /*
  * determine if VFIO is present on the system
  */
-#ifdef RTE_EAL_VFIO
+#if !defined(VFIO_PRESENT) && defined(RTE_EAL_VFIO)
 #include <linux/version.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 6, 0)
-#include <linux/vfio.h>
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 10, 0)
-#define RTE_PCI_MSIX_TABLE_BIR    0x7
-#define RTE_PCI_MSIX_TABLE_OFFSET 0xfffffff8
-#define RTE_PCI_MSIX_FLAGS_QSIZE  0x07ff
+#define VFIO_PRESENT
 #else
-#define RTE_PCI_MSIX_TABLE_BIR    PCI_MSIX_TABLE_BIR
-#define RTE_PCI_MSIX_TABLE_OFFSET PCI_MSIX_TABLE_OFFSET
-#define RTE_PCI_MSIX_FLAGS_QSIZE  PCI_MSIX_FLAGS_QSIZE
-#endif
+#pragma message("VFIO configured but not supported by this kernel, disabling.")
+#endif /* kernel version >= 3.6.0 */
+#endif /* RTE_EAL_VFIO */
+
+#ifdef VFIO_PRESENT
+
+#include <linux/vfio.h>
 
 #define RTE_VFIO_TYPE1 VFIO_TYPE1_IOMMU
 
@@ -144,13 +142,6 @@ struct vfio_config {
 	struct vfio_group vfio_groups[VFIO_MAX_GROUPS];
 };
 
-#define VFIO_DIR "/dev/vfio"
-#define VFIO_CONTAINER_PATH "/dev/vfio/vfio"
-#define VFIO_GROUP_FMT "/dev/vfio/%u"
-#define VFIO_NOIOMMU_GROUP_FMT "/dev/vfio/noiommu-%u"
-#define VFIO_GET_REGION_ADDR(x) ((uint64_t) x << 40ULL)
-#define VFIO_GET_REGION_IDX(x) (x >> 40)
-
 /* DMA mapping function prototype.
  * Takes VFIO container fd as a parameter.
  * Returns 0 on success, -1 on error.
@@ -190,24 +181,6 @@ vfio_get_group_fd(int iommu_group_no);
 int
 clear_group(int vfio_group_fd);
 
-/**
- * Setup vfio_cfg for the device identified by its address. It discovers
- * the configured I/O MMU groups or sets a new one for the device. If a new
- * groups is assigned, the DMA mapping is performed.
- * Returns 0 on success, a negative value on failure and a positive value in
- * case the given device cannot be managed this way.
- */
-int vfio_setup_device(const char *sysfs_base, const char *dev_addr,
-		int *vfio_dev_fd, struct vfio_device_info *device_info);
-
-int vfio_release_device(const char *sysfs_base, const char *dev_addr, int fd);
-
-int vfio_enable(const char *modname);
-int vfio_is_enabled(const char *modname);
-
-int pci_vfio_enable(void);
-int pci_vfio_is_enabled(void);
-
 int vfio_mp_sync_setup(void);
 
 #define SOCKET_REQ_CONTAINER 0x100
@@ -217,8 +190,6 @@ int vfio_mp_sync_setup(void);
 #define SOCKET_NO_FD 0x1
 #define SOCKET_ERR 0xFF
 
-#define VFIO_PRESENT
-#endif /* kernel version */
-#endif /* RTE_EAL_VFIO */
+#endif /* VFIO_PRESENT */
 
 #endif /* EAL_VFIO_H_ */

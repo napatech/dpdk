@@ -36,7 +36,7 @@
 #include <rte_ethdev_vdev.h>
 #include <rte_malloc.h>
 #include <rte_memcpy.h>
-#include <rte_vdev.h>
+#include <rte_bus_vdev.h>
 #include <rte_kvargs.h>
 #include <rte_spinlock.h>
 
@@ -68,7 +68,7 @@ struct null_queue {
 struct pmd_internals {
 	unsigned packet_size;
 	unsigned packet_copy;
-	uint8_t port_id;
+	uint16_t port_id;
 
 	struct null_queue rx_null_queues[RTE_MAX_QUEUES_PER_PORT];
 	struct null_queue tx_null_queues[RTE_MAX_QUEUES_PER_PORT];
@@ -298,7 +298,7 @@ eth_dev_info(struct rte_eth_dev *dev,
 	dev_info->flow_type_rss_offloads = internals->flow_type_rss_offloads;
 }
 
-static void
+static int
 eth_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *igb_stats)
 {
 	unsigned i, num_stats;
@@ -306,7 +306,7 @@ eth_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *igb_stats)
 	const struct pmd_internals *internal;
 
 	if ((dev == NULL) || (igb_stats == NULL))
-		return;
+		return -EINVAL;
 
 	internal = dev->data->dev_private;
 	num_stats = RTE_MIN((unsigned)RTE_ETHDEV_QUEUE_STAT_CNTRS,
@@ -333,6 +333,8 @@ eth_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *igb_stats)
 	igb_stats->ipackets = rx_total;
 	igb_stats->opackets = tx_total;
 	igb_stats->oerrors = tx_err_total;
+
+	return 0;
 }
 
 static void
@@ -539,8 +541,6 @@ eth_dev_null_create(struct rte_vdev_device *dev,
 
 	eth_dev->data = data;
 	eth_dev->dev_ops = &ops;
-
-	data->dev_flags = RTE_ETH_DEV_DETACHABLE;
 
 	/* finally assign rx and tx ops */
 	if (packet_copy) {

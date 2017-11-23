@@ -47,7 +47,6 @@
 #include <rte_log.h>
 #include <rte_memory.h>
 #include <rte_memcpy.h>
-#include <rte_memzone.h>
 #include <rte_eal.h>
 #include <rte_per_lcore.h>
 #include <rte_launch.h>
@@ -194,9 +193,9 @@ app_ports_check_link(void)
 
 	for (i = 0; i < app.n_ports; i++) {
 		struct rte_eth_link link;
-		uint8_t port;
+		uint16_t port;
 
-		port = (uint8_t) app.ports[i];
+		port = app.ports[i];
 		memset(&link, 0, sizeof(link));
 		rte_eth_link_get_nowait(port, &link);
 		RTE_LOG(INFO, USER1, "Port %u (%u Gbps) %s\n",
@@ -219,10 +218,10 @@ app_init_ports(void)
 
 	/* Init NIC ports, then start the ports */
 	for (i = 0; i < app.n_ports; i++) {
-		uint8_t port;
+		uint16_t port;
 		int ret;
 
-		port = (uint8_t) app.ports[i];
+		port = app.ports[i];
 		RTE_LOG(INFO, USER1, "Initializing NIC port %u ...\n", port);
 
 		/* Init port */

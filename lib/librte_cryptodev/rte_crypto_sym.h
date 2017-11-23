@@ -160,9 +160,6 @@ struct rte_crypto_cipher_xform {
 	 * Cipher key length is in bytes. For AES it can be 128 bits (16 bytes),
 	 * 192 bits (24 bytes) or 256 bits (32 bytes).
 	 *
-	 * For the CCM mode of operation, the only supported key length is 128
-	 * bits (16 bytes).
-	 *
 	 * For the RTE_CRYPTO_CIPHER_AES_F8 mode of operation, key.length
 	 * should be set to the combined length of the encryption key and the
 	 * keymask. Since the keymask and the encryption key are the same size,
@@ -196,7 +193,9 @@ struct rte_crypto_cipher_xform {
 		 * space for the implementation to write in the flags
 		 * in the first byte). Note that a full 16 bytes should
 		 * be allocated, even though the length field will
-		 * have a value less than this.
+		 * have a value less than this. Note that the PMDs may
+		 * modify the memory reserved (the first byte and the
+		 * final padding)
 		 *
 		 * - For AES-XTS, this is the 128bit tweak, i, from
 		 * IEEE Std 1619-2007.
@@ -427,7 +426,11 @@ struct rte_crypto_aead_xform {
 	uint16_t digest_length;
 
 	uint16_t aad_length;
-	/**< The length of the additional authenticated data (AAD) in bytes. */
+	/**< The length of the additional authenticated data (AAD) in bytes.
+	 * For CCM mode, this is the length of the actual AAD, even though
+	 * it is required to reserve 18 bytes before the AAD and padding
+	 * at the end of it, so a multiple of 16 bytes is allocated.
+	 */
 };
 
 /** Crypto transformation types */
@@ -505,6 +508,8 @@ struct rte_crypto_sym_op {
 		/**< Handle for the initialised session context */
 		struct rte_crypto_sym_xform *xform;
 		/**< Session-less API crypto operation parameters */
+		struct rte_security_session *sec_session;
+		/**< Handle for the initialised security session context */
 	};
 
 	RTE_STD_C11
@@ -543,7 +548,7 @@ struct rte_crypto_sym_op {
 				 * For GCM (@ref RTE_CRYPTO_AEAD_AES_GCM), for
 				 * "digest result" read "authentication tag T".
 				 */
-				phys_addr_t phys_addr;
+				rte_iova_t phys_addr;
 				/**< Physical address of digest */
 			} digest; /**< Digest parameters */
 			struct {
@@ -555,20 +560,19 @@ struct rte_crypto_sym_op {
 				 * Specifically for CCM (@ref RTE_CRYPTO_AEAD_AES_CCM),
 				 * the caller should setup this field as follows:
 				 *
-				 * - the nonce should be written starting at an offset
-				 * of one byte into the array, leaving room for the
-				 * implementation to write in the flags to the first
-				 * byte.
-				 *
-				 * - the additional  authentication data itself should
+				 * - the additional authentication data itself should
 				 * be written starting at an offset of 18 bytes into
-				 * the array, leaving room for the length encoding in
-				 * the first two bytes of the second block.
+				 * the array, leaving room for the first block (16 bytes)
+				 * and the length encoding in the first two bytes of the
+				 * second block.
 				 *
 				 * - the array should be big enough to hold the above
-				 *  fields, plus any padding to round this up to the
-				 *  nearest multiple of the block size (16 bytes).
-				 *  Padding will be added by the implementation.
+				 * fields, plus any padding to round this up to the
+				 * nearest multiple of the block size (16 bytes).
+				 * Padding will be added by the implementation.
+				 *
+				 * - Note that PMDs may modify the memory reserved
+				 * (first 18 bytes and the final padding).
 				 *
 				 * Finally, for GCM (@ref RTE_CRYPTO_AEAD_AES_GCM), the
 				 * caller should setup this field as follows:
@@ -579,7 +583,7 @@ struct rte_crypto_sym_op {
 				 * of the block size (16 bytes).
 				 *
 				 */
-				phys_addr_t phys_addr;	/**< physical address */
+				rte_iova_t phys_addr;	/**< physical address */
 			} aad;
 			/**< Additional authentication parameters */
 		} aead;
@@ -676,7 +680,7 @@ struct rte_crypto_sym_op {
 					 * will overwrite any data at this location.
 					 *
 					 */
-					phys_addr_t phys_addr;
+					rte_iova_t phys_addr;
 					/**< Physical address of digest */
 				} digest; /**< Digest parameters */
 			} auth;

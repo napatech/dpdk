@@ -1089,13 +1089,29 @@ priv_flow_process(struct pmd_internals *pmd,
 			const struct rte_flow_action_queue *queue =
 				(const struct rte_flow_action_queue *)
 				actions->conf;
+
 			if (action)
 				goto exit_action_not_supported;
 			action = 1;
-			if (!queue || (queue->index >= pmd->nb_queues))
+			if (!queue ||
+			    (queue->index > pmd->dev->data->nb_rx_queues - 1))
 				goto exit_action_not_supported;
 			if (flow)
 				err = add_action_skbedit(flow, queue->index);
+		} else if (actions->type == RTE_FLOW_ACTION_TYPE_RSS) {
+			/* Fake RSS support. */
+			const struct rte_flow_action_rss *rss =
+				(const struct rte_flow_action_rss *)
+				actions->conf;
+
+			if (action)
+				goto exit_action_not_supported;
+			action = 1;
+			if (!rss || rss->num < 1 ||
+			    (rss->queue[0] > pmd->dev->data->nb_rx_queues - 1))
+				goto exit_action_not_supported;
+			if (flow)
+				err = add_action_skbedit(flow, rss->queue[0]);
 		} else {
 			goto exit_action_not_supported;
 		}
@@ -1446,7 +1462,7 @@ tap_flow_isolate(struct rte_eth_dev *dev,
 	return 0;
 error:
 	pmd->flow_isolate = 0;
-	return -rte_flow_error_set(
+	return rte_flow_error_set(
 		error, ENOTSUP, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
 		"TC rule creation failed");
 }

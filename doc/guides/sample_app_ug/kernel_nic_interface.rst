@@ -77,34 +77,16 @@ The packet flow through the Kernel NIC Interface application is as shown in the 
 
    Kernel NIC Application Packet Flow
 
-
 Compiling the Application
 -------------------------
 
-Compile the application as follows:
+To compile the sample application see :doc:`compiling`.
 
-#.  Go to the example directory:
+The application is located in the ``kni`` sub-directory.
 
-    .. code-block:: console
-
-        export RTE_SDK=/path/to/rte_sdk
-        cd ${RTE_SDK}/examples/kni
-
-#.  Set the target (a default target is used if not specified)
-
-    .. note::
+.. note::
 
         This application is intended as a linuxapp only.
-
-    .. code-block:: console
-
-        export RTE_TARGET=x86_64-native-linuxapp-gcc
-
-#.  Build the application:
-
-    .. code-block:: console
-
-        make
 
 Loading the Kernel Module
 -------------------------
@@ -246,7 +228,7 @@ The code for allocating the kernel NIC interfaces for a specific port is as foll
 .. code-block:: c
 
     static int
-    kni_alloc(uint8_t port_id)
+    kni_alloc(uint16_t port_id)
     {
         uint8_t i;
         struct rte_kni *kni;
@@ -335,7 +317,7 @@ The code is as follows:
         int i, j, nb_token;
         char *str_fld[_NUM_FLD];
         unsigned long int_fld[_NUM_FLD];
-        uint8_t port_id, nb_kni_port_params = 0;
+        uint16_t port_id, nb_kni_port_params = 0;
 
         memset(&kni_port_params_array, 0, sizeof(kni_port_params_array));
 
@@ -532,7 +514,7 @@ Currently, setting a new MTU and configuring the network interface (up/ down) ar
     /* Callback for request of changing MTU */
 
     static int
-    kni_change_mtu(uint8_t port_id, unsigned new_mtu)
+    kni_change_mtu(uint16_t port_id, unsigned new_mtu)
     {
         int ret;
         struct rte_eth_conf conf;
@@ -581,7 +563,7 @@ Currently, setting a new MTU and configuring the network interface (up/ down) ar
     /* Callback for request of configuring network interface up/down */
 
     static int
-    kni_config_network_interface(uint8_t port_id, uint8_t if_up)
+    kni_config_network_interface(uint16_t port_id, uint8_t if_up)
     {
         int ret = 0;
 

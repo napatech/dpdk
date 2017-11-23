@@ -37,7 +37,6 @@
 #include "ark_global.h"
 #include "ark_mpu.h"
 #include "ark_ddm.h"
-#include "ark_ethdev.h"
 #include "ark_logs.h"
 
 #define ARK_TX_META_SIZE   32
@@ -94,7 +93,7 @@ eth_ark_tx_meta_from_mbuf(struct ark_tx_meta *meta,
 			  const struct rte_mbuf *mbuf,
 			  uint8_t flags)
 {
-	meta->physaddr = rte_mbuf_data_dma_addr(mbuf);
+	meta->physaddr = rte_mbuf_data_iova(mbuf);
 	meta->delta_ns = 0;
 	meta->data_len = rte_pktmbuf_data_len(mbuf);
 	meta->flags = flags;
@@ -311,15 +310,15 @@ eth_ark_tx_queue_setup(struct rte_eth_dev *dev,
 static int
 eth_ark_tx_hw_queue_config(struct ark_tx_queue *queue)
 {
-	phys_addr_t queue_base, ring_base, cons_index_addr;
+	rte_iova_t queue_base, ring_base, cons_index_addr;
 	uint32_t write_interval_ns;
 
 	/* Verify HW -- MPU */
 	if (ark_mpu_verify(queue->mpu, sizeof(struct ark_tx_meta)))
 		return -1;
 
-	queue_base = rte_malloc_virt2phy(queue);
-	ring_base = rte_malloc_virt2phy(queue->meta_q);
+	queue_base = rte_malloc_virt2iova(queue);
+	ring_base = rte_malloc_virt2iova(queue->meta_q);
 	cons_index_addr =
 		queue_base + offsetof(struct ark_tx_queue, cons_index);
 

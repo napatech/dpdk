@@ -43,11 +43,11 @@
 #include <rte_log.h>
 #include <rte_debug.h>
 #include <rte_pci.h>
+#include <rte_bus_pci.h>
 #include <rte_ether.h>
 #include <rte_ethdev.h>
 #include <rte_ethdev_pci.h>
 #include <rte_memory.h>
-#include <rte_memzone.h>
 #include <rte_eal.h>
 #include <rte_atomic.h>
 #include <rte_malloc.h>
@@ -72,7 +72,7 @@ static void eth_em_allmulticast_enable(struct rte_eth_dev *dev);
 static void eth_em_allmulticast_disable(struct rte_eth_dev *dev);
 static int eth_em_link_update(struct rte_eth_dev *dev,
 				int wait_to_complete);
-static void eth_em_stats_get(struct rte_eth_dev *dev,
+static int eth_em_stats_get(struct rte_eth_dev *dev,
 				struct rte_eth_stats *rte_stats);
 static void eth_em_stats_reset(struct rte_eth_dev *dev);
 static void eth_em_infos_get(struct rte_eth_dev *dev,
@@ -99,7 +99,7 @@ static int eth_em_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
 
 static int eth_em_vlan_filter_set(struct rte_eth_dev *dev,
 		uint16_t vlan_id, int on);
-static void eth_em_vlan_offload_set(struct rte_eth_dev *dev, int mask);
+static int eth_em_vlan_offload_set(struct rte_eth_dev *dev, int mask);
 static void em_vlan_hw_filter_enable(struct rte_eth_dev *dev);
 static void em_vlan_hw_filter_disable(struct rte_eth_dev *dev);
 static void em_vlan_hw_strip_enable(struct rte_eth_dev *dev);
@@ -341,7 +341,6 @@ eth_em_dev_init(struct rte_eth_dev *eth_dev)
 	}
 
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_DETACHABLE;
 
 	hw->hw_addr = (void *)pci_dev->mem_resource[0].addr;
 	hw->device_id = pci_dev->id.device_id;
@@ -432,7 +431,8 @@ static int eth_em_pci_remove(struct rte_pci_device *pci_dev)
 
 static struct rte_pci_driver rte_em_pmd = {
 	.id_table = pci_id_em_map,
-	.drv_flags = RTE_PCI_DRV_NEED_MAPPING | RTE_PCI_DRV_INTR_LSC,
+	.drv_flags = RTE_PCI_DRV_NEED_MAPPING | RTE_PCI_DRV_INTR_LSC |
+		     RTE_PCI_DRV_IOVA_AS_VA,
 	.probe = eth_em_pci_probe,
 	.remove = eth_em_pci_remove,
 };
@@ -668,7 +668,12 @@ eth_em_start(struct rte_eth_dev *dev)
 
 	mask = ETH_VLAN_STRIP_MASK | ETH_VLAN_FILTER_MASK | \
 			ETH_VLAN_EXTEND_MASK;
-	eth_em_vlan_offload_set(dev, mask);
+	ret = eth_em_vlan_offload_set(dev, mask);
+	if (ret) {
+		PMD_INIT_LOG(ERR, "Unable to update vlan offload");
+		em_dev_clear_queues(dev);
+		return ret;
+	}
 
 	/* Set Interrupt Throttling Rate to maximum allowed value. */
 	E1000_WRITE_REG(hw, E1000_ITR, UINT16_MAX);
@@ -906,7 +911,7 @@ em_hardware_init(struct e1000_hw *hw)
 }
 
 /* This function is based on em_update_stats_counters() in e1000/if_em.c */
-static void
+static int
 eth_em_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats)
 {
 	struct e1000_hw *hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -1006,7 +1011,7 @@ eth_em_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats)
 	}
 
 	if (rte_stats == NULL)
-		return;
+		return -EINVAL;
 
 	/* Rx Errors */
 	rte_stats->imissed = stats->mpc;
@@ -1021,6 +1026,7 @@ eth_em_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats)
 	rte_stats->opackets = stats->gptc;
 	rte_stats->ibytes   = stats->gorc;
 	rte_stats->obytes   = stats->gotc;
+	return 0;
 }
 
 static void
@@ -1447,7 +1453,7 @@ em_vlan_hw_strip_enable(struct rte_eth_dev *dev)
 	E1000_WRITE_REG(hw, E1000_CTRL, reg);
 }
 
-static void
+static int
 eth_em_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 {
 	if(mask & ETH_VLAN_STRIP_MASK){
@@ -1463,6 +1469,8 @@ eth_em_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 		else
 			em_vlan_hw_filter_disable(dev);
 	}
+
+	return 0;
 }
 
 /*
@@ -1624,7 +1632,7 @@ eth_em_interrupt_action(struct rte_eth_dev *dev,
 	rte_em_dev_atomic_read_link_status(dev, &link);
 	if (link.link_status) {
 		PMD_INIT_LOG(INFO, " Port %d: Link Up - speed %u Mbps - %s",
-			     dev->data->port_id, (unsigned)link.link_speed,
+			     dev->data->port_id, link.link_speed,
 			     link.link_duplex == ETH_LINK_FULL_DUPLEX ?
 			     "full-duplex" : "half-duplex");
 	} else {
