@@ -203,15 +203,14 @@ Following rte_flow filters are supported:
 |`RTE_FLOW_ITEM_TYPE_VXLAN` | Only packet type = `VXLAN`                                                                                                                                                    |
 | `RTE_FLOW_ITEM_TYPE_GRE`  | `c_rsvd0_ver` (only version = bit b0-b2)|
 | `RTE_FLOW_ITEM_TYPE_PORT`  | `index`<br>The port numbers used must be the local port numbers for the adapter. <br>For a 4 port adapter the port numbers are 0 to 3.|
-
+|`RTE_FLOW_ITEM_TYPE_GRE`    | `c_rsvd0_ver=1`: Packet type = `GREv1`<br>`c_rsvd0_ver=0`: Packet type = `GREv0`   |
+|`RTE_FLOW_ITEM_TYPE_GTPU`  | `v_pt_rsv_flags=0`: Packet type = `GTPv0_U`<br>`v_pt_rsv_flags=0x20`: Packet type = `GTPv1_U` |
+|`RTE_FLOW_ITEM_TYPE_GTPC`  | `v_pt_rsv_flags=0x20`: Packet type = `GTPv1_C`<br>`v_pt_rsv_flags=0x40`: Packet type = `GTPv2_C`<br>No parameter:  Packet type = `GTPv1_C` or `GTPv2_C` |
+| `RTE_FLOW_ITEM_TYPE_MPLS` | Label parameter defined in:<br>`label_tc_s[0]`, `label_tc_s[1]`, `label_tc_s[2]` |
 The following rte_flow filters are added by Napatech and are not a part of the main DPDK:
 
 | rte_flow filter	         | Supported fields           | 
 |----------------------------|----------------------------|
-|`RTE_FLOW_ITEM_TYPE_GREv0`    | Only packet type = `GREv0`   |
-|`RTE_FLOW_ITEM_TYPE_GREv1`    | Only packet type = `GREv1`   |
-|`RTE_FLOW_ITEM_TYPE_GTPv1_U`  | Only packet type = `GTPv1_U` |
-|`RTE_FLOW_ITEM_TYPE_GTPv0_U`  | Only packet type = `GTPv0_U` |
 |`RTE_FLOW_ITEM_TYPE_IPinIP`   | Only packet type = `IPinIP`  |
 |`RTE_FLOW_ITEM_TYPE_NTPL`   | [see *Use NTPL filters*](#ntplfilter)  |
 
