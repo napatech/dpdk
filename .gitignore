@@ -15,3 +15,9 @@ TAGS
 x86_64-native-linuxapp-clang/
 x86_64-native-linuxapp-gcc/
 build/
+*.vpj
+*.vpw
+*.vpwhistu
+*.vtg
+*.project
+*.workspace
