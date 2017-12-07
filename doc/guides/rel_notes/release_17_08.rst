@@ -612,3 +612,204 @@ Tested Platforms
        * Firmware version: 1.48, 0x800006e7
        * Device id (pf/vf): 8086:1521 / 8086:1520
        * Driver version: 5.2.13-k (igb)
+
+Fixes in 17.08 Stable Release
+-----------------------------
+
+17.08.1
+~~~~~~~
+
+* app/crypto-perf: fix packet length check
+* app/crypto-perf: fix uninitialized errno value
+* app/crypto-perf: parse AEAD data from vectors
+* app/test-crypto-perf: fix compilation with -Og
+* app/test-crypto-perf: fix memory leak
+* app/testpmd: fix build without ixgbe and bnxt PMDs
+* app/testpmd: fix DDP package filesize detection
+* app/testpmd: fix forwarding between non consecutive ports
+* app/testpmd: fix forward port ids setting
+* app/testpmd: fix invalid port id parameters
+* app/testpmd: fix mapping of user priority to DCB TC
+* app/testpmd: fix packet throughput after stats reset
+* app/testpmd: fix quitting in container
+* app/testpmd: fix RSS structure initialisation
+* app/testpmd: fix topology error message
+* crypto/aesni_gcm: fix zero data operation
+* crypto/aesni_mb: fix invalid session error
+* cryptodev: fix build with -Ofast
+* crypto/dpaa2_sec: add check for segmented buffer
+* crypto/dpaa2_sec: remove ICV memset on decryption side
+* crypto/openssl: fix AEAD parameters
+* crypto/qat: fix HMAC supported digest sizes
+* drivers/crypto: use snprintf return value correctly
+* eal: copy raw strings taken from command line
+* eal: fix auxv open check for ARM and PPC
+* eal: initialize logging before bus
+* eal/x86: fix atomic cmpset
+* ethdev: fix ABI version
+* ethdev: revert use port name from device structure
+* examples/ipsec-secgw: fix AAD length setting
+* examples/ipsec-secgw: fix crypto device mapping
+* examples/ipsec-secgw: fix IPv6 payload length
+* examples/ipsec-secgw: fix IP version check
+* examples/ipsec-secgw: fix session creation
+* examples/l2fwd-crypto: fix physical address setting
+* examples/l2fwd-crypto: fix uninitialized errno value
+* examples/l2fwd_fork: fix message pool init
+* examples/l3fwd: fix aliasing in port grouping
+* examples/l3fwd: fix NEON instructions
+* examples/multi_process: fix received message length
+* examples/qos_sched: fix uninitialized config
+* examples/vhost_scsi: fix product id string termination
+* gro: fix typo in map file
+* hash: fix eviction counter
+* igb_uio: remove device reset in open
+* kni: fix SLE version detection
+* lpm6: fix compilation with -Og
+* mem: fix malloc debug config
+* mem: fix malloc element free in debug mode
+* net/ark: fix loop counter
+* net/bnxt: check VLANs from pool map only for VMDq
+* net/bnxt: do not set hash type unnecessarily
+* net/bnxt: fix a bit shift operation
+* net/bnxt: fix an issue with broadcast traffic
+* net/bnxt: fix an issue with group id calculation
+* net/bnxt: fix an unused value
+* net/bnxt: fix a pointer deref before null check
+* net/bnxt: fix a potential null pointer dereference
+* net/bnxt: fix a potential null pointer dereference
+* net/bnxt: fix calculation of number of pools
+* net/bnxt: fix compilation with -Og
+* net/bnxt: fix config RSS update
+* net/bnxt: fix HWRM macros and locking
+* net/bnxt: fix interrupt handler
+* net/bnxt: fix number of MAC addresses for VMDq
+* net/bnxt: fix per queue stats display in xstats
+* net/bnxt: fix Rx handling and buffer allocation logic
+* net/bnxt: fix Rx offload capability
+* net/bnxt: fix the association of a MACVLAN per VNIC
+* net/bnxt: fix Tx offload capability
+* net/bnxt: fix usage of VMDq flags
+* net/bnxt: fix VLAN spoof configuration
+* net/bnxt: handle multi queue mode properly
+* net/bnxt: handle Rx multi queue creation properly
+* net/bnxt: remove redundant code parsing pool map
+* net/bnxt: set checksum offload flags correctly
+* net/bnxt: set the hash key size
+* net/bnxt: update status of Rx IP/L4 CKSUM
+* net/bnxt: use 64-bits of address for VLAN table
+* net/bonding: fix check slaves link properties
+* net/bonding: fix default aggregator mode to stable
+* net/bonding: fix slaves capacity check
+* net/bonding: support bifurcated driver in eal
+* net/cxgbe: fix memory leak
+* net/dpaa2: fix the Tx handling of non HW pool bufs
+* net/dpaa2: set queues after reconfiguration
+* net/enic: fix assignment
+* net/enic: fix multi-process operation
+* net/enic: fix packet loss after MTU change
+* net/enic: fix possible null pointer dereference
+* net/enic: fix TSO for packets greater than 9208 bytes
+* net/failsafe: fix adding MAC error report miss
+* net/failsafe: fix errno set on command execution
+* net/failsafe: fix failsafe bus uninit return value
+* net/failsafe: fix parameters parsing
+* net/failsafe: fix PCI devices init
+* net/failsafe: fix Rx clean race
+* net/failsafe: fix Tx sub device deactivating
+* net/failsafe: fix VLAN stripping configuration
+* net: fix inner L2 length in packet type parser
+* net/i40e: fix assignment of enum values
+* net/i40e: fix clear xstats bug in VF
+* net/i40e: fix flexible payload configuration
+* net/i40e: fix flow control watermark mismatch
+* net/i40e: fix i40evf MAC filter table
+* net/i40e: fix interrupt throttling setting in PF
+* net/i40e: fix mbuf free in vector Tx
+* net/i40e: fix memory leak if VF init fails
+* net/i40e: fix mirror rule reset when port is closed
+* net/i40e: fix mirror with firmware 6.0
+* net/i40e: fix not supporting NULL TM profile
+* net/i40e: fix packet count for PF
+* net/i40e: fix parent when adding TM node
+* net/i40e: fix PF notify issue when VF is not up
+* net/i40e: fix Rx packets number for NEON
+* net/i40e: fix TM level capability getting
+* net/i40e: fix TM node parameter checking
+* net/i40e: fix uninitialized variable
+* net/i40e: fix variable assignment
+* net/i40e: fix VF device stop issue
+* net/i40e: fix VF initialization error
+* net/i40e: fix VFIO interrupt mapping in VF
+* net/igb: fix memcpy length
+* net/igb: fix Rx interrupt with VFIO and MSI-X
+* net/ixgbe: fix adding a mirror rule
+* net/ixgbe: fix filter parser for L2 tunnel
+* net/ixgbe: fix MAC VLAN filter fail problem
+* net/ixgbe: fix mapping of user priority to TC
+* net/ixgbe: fix not supporting NULL TM profile
+* net/ixgbe: fix PF DCB info
+* net/ixgbe: fix Rx queue interrupt mapping in VF
+* net/ixgbe: fix TM level capability getting
+* net/ixgbe: fix TM node parameter checking
+* net/ixgbe: fix uninitialized variable
+* net/ixgbe: fix VFIO interrupt mapping in VF
+* net/kni: remove driver struct forward declaration
+* net/liquidio: fix uninitialized variable
+* net/mlx5: fix calculating TSO inline size
+* net/mlx5: fix clang build
+* net/mlx5: fix clang compilation error
+* net/mlx5: fix locking in xstats functions
+* net/mlx5: fix num seg assumption in SSE Tx
+* net/mlx5: fix overflow of Rx SW ring
+* net/mlx5: fix packet type flags for Ethernet only frame
+* net/mlx5: fix probe failure report
+* net/mlx5: fix SSE Rx support verification
+* net/mlx5: fix TSO segment size verification
+* net/mlx5: fix tunneled TCP/UDP packet type
+* net/mlx5: fix tunnel offload detection
+* net/mlx5: fix Tx stats error counter definition
+* net/mlx5: fix Tx stats error counter logic
+* net/nfp: fix RSS
+* net/nfp: fix Rx interrupt when multiqueue
+* net/pcap: fix memory leak in dumper open
+* net/qede/base: fix division by zero
+* net/qede/base: fix return code to align with FW
+* net/qede/base: fix to use a passed ptt handle
+* net/qede: disable per-VF Tx switching feature
+* net/qede: fix compilation with -Og
+* net/qede: fix default config option
+* net/qede: fix icc build
+* net/qede: fix possible null pointer dereference
+* net/qede: fix supported packet types
+* net/qede: fix to re-enable LRO during device start
+* net/qede: remove duplicate includes
+* net/sfc/base: fix default RSS context check on Siena
+* net/sfc: fix unused variable in RSS-agnostic build
+* net/sfc: specify correct scale table size on Rx start
+* net/tap: fix flow and port commands
+* net/tap: fix unregistering callback with invalid fd
+* net/virtio: check error on setting non block flag
+* net/virtio: fix compilation with -Og
+* net/virtio: fix log levels in configure
+* net/virtio: fix mbuf port for simple Rx function
+* net/virtio: fix queue setup consistency
+* net/virtio: fix Tx packet length stats
+* net/virtio: fix untrusted scalar value
+* net/virtio: flush Rx queues on start
+* net/virtio: revert not claiming IP checksum offload
+* net/virtio: revert not claiming LRO support
+* net/virtio-user: fix TAP name string termination
+* net/vmxnet3: fix dereference before null check
+* net/vmxnet3: fix MAC address set
+* net/vmxnet3: fix memory leak when releasing queues
+* net/vmxnet3: fix unintentional integer overflow
+* Revert "net/virtio: flush Rx queues on start"
+* service: fix build with gcc 4.9
+* test/crypto: fix dpaa2 sec macros and definitions
+* test: fix assignment operation
+* timer: use 64-bit specific code on more platforms
+* vfio: fix close unchecked file descriptor
+* vfio: fix secondary process initialization
+* vhost: check poll error code
+* vhost: fix dereferencing invalid pointer after realloc
