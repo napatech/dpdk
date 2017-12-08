@@ -913,3 +913,118 @@ Fixes in 16.11 LTS Release
 * vhost: fix IP checksum
 * vhost: fix TCP checksum
 * vhost: make page logging atomic
+
+16.11.4
+~~~~~~~
+
+* app/testpmd: fix forwarding between non consecutive ports
+* app/testpmd: fix invalid port id parameters
+* app/testpmd: fix mapping of user priority to DCB TC
+* app/testpmd: fix packet throughput after stats reset
+* app/testpmd: fix RSS structure initialisation
+* app/testpmd: fix topology error message
+* buildtools: check allocation error in pmdinfogen
+* buildtools: fix icc build
+* cmdline: fix compilation with -Og
+* cmdline: fix warning for unused return value
+* config: fix bnx2x option for armv7a
+* cryptodev: fix build with -Ofast
+* crypto/qat: fix SHA512-HMAC supported key size
+* drivers/crypto: use snprintf return value correctly
+* eal/bsd: fix missing interrupt stub functions
+* eal: copy raw strings taken from command line
+* eal: fix auxv open check for ARM and PPC
+* eal/x86: fix atomic cmpset
+* examples/ipsec-secgw: fix IPv6 payload length
+* examples/ipsec-secgw: fix IP version check
+* examples/l2fwd-cat: fix build with PQOS 1.4
+* examples/l2fwd-crypto: fix uninitialized errno value
+* examples/l2fwd_fork: fix message pool init
+* examples/l3fwd-acl: check fseek return
+* examples/multi_process: fix received message length
+* examples/performance-thread: check thread creation
+* examples/performance-thread: fix out-of-bounds sched array
+* examples/performance-thread: fix out-of-bounds tls array
+* examples/qos_sched: fix uninitialized config
+* hash: fix eviction counter
+* kni: fix build on RHEL 7.4
+* kni: fix build on SLE12 SP3
+* kni: fix ethtool build with kernel 4.11
+* lpm6: fix compilation with -Og
+* mem: fix malloc element free in debug mode
+* net/bnxt: fix a bit shift operation
+* net/bnxt: fix an issue with broadcast traffic
+* net/bnxt: fix a potential null pointer dereference
+* net/bnxt: fix interrupt handler
+* net/bnxt: fix link handling and configuration
+* net/bnxt: fix Rx offload capability
+* net/bnxt: fix Tx offload capability
+* net/bnxt: set checksum offload flags correctly
+* net/bnxt: update status of Rx IP/L4 CKSUM
+* net/bonding: fix LACP slave deactivate behavioral
+* net/cxgbe: fix memory leak
+* net/enic: fix assignment
+* net/enic: fix packet loss after MTU change
+* net/enic: fix possible null pointer dereference
+* net: fix inner L2 length in packet type parser
+* net/i40e/base: fix bool definition
+* net/i40e: fix clear xstats bug in VF
+* net/i40e: fix flexible payload configuration
+* net/i40e: fix flow control watermark mismatch
+* net/i40e: fix i40evf MAC filter table
+* net/i40e: fix mbuf free in vector Tx
+* net/i40e: fix memory leak if VF init fails
+* net/i40e: fix mirror rule reset when port is closed
+* net/i40e: fix mirror with firmware 6.0
+* net/i40e: fix packet count for PF
+* net/i40e: fix PF notify issue when VF is not up
+* net/i40e: fix Rx packets number for NEON
+* net/i40e: fix Rx queue interrupt mapping in VF
+* net/i40e: fix uninitialized variable
+* net/i40e: fix variable assignment
+* net/i40e: fix VF cannot forward packets issue
+* net/i40e: fix VFIO interrupt mapping in VF
+* net/igb: fix memcpy length
+* net/igb: fix Rx interrupt with VFIO and MSI-X
+* net/ixgbe: fix adding a mirror rule
+* net/ixgbe: fix mapping of user priority to TC
+* net/ixgbe: fix PF DCB info
+* net/ixgbe: fix uninitialized variable
+* net/ixgbe: fix VFIO interrupt mapping in VF
+* net/ixgbe: fix VF RX hang
+* net/mlx5: fix clang build
+* net/mlx5: fix clang compilation error
+* net/mlx5: fix link speed bitmasks
+* net/mlx5: fix probe failure report
+* net/mlx5: fix Tx stats error counter definition
+* net/mlx5: fix Tx stats error counter logic
+* net/mlx5: improve stack usage during link update
+* net/nfp: fix RSS
+* net/nfp: fix stats struct initial value
+* net/pcap: fix memory leak in dumper open
+* net/qede/base: fix API return types
+* net/qede/base: fix division by zero
+* net/qede/base: fix for VF malicious indication
+* net/qede/base: fix macros to check chip revision/metal
+* net/qede/base: fix number of app table entries
+* net/qede/base: fix return code to align with FW
+* net/qede/base: fix to use a passed ptt handle
+* net/qede: fix icc build
+* net/virtio: fix compilation with -Og
+* net/virtio: fix mbuf port for simple Rx function
+* net/virtio: fix queue setup consistency
+* net/virtio: fix Tx packet length stats
+* net/virtio: fix untrusted scalar value
+* net/virtio: flush Rx queues on start
+* net/vmxnet3: fix dereference before null check
+* net/vmxnet3: fix MAC address set
+* net/vmxnet3: fix memory leak when releasing queues
+* pdump: fix possible mbuf leak on failure
+* ring: guarantee load/load order in enqueue and dequeue
+* test: fix assignment operation
+* test/memzone: fix memory leak
+* test/pmd_perf: fix crash with multiple devices
+* timer: use 64-bit specific code on more platforms
+* uio: fix compilation with -Og
+* usertools: fix device binding with python 3
+* vfio: fix close unchecked file descriptor
