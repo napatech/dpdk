@@ -75,9 +75,15 @@ enum {
   SYM_HASH_ENA_PER_PORT,
 };
 
+#define DIRECT_RX_RING_CONTROL
 struct ntacc_rx_queue {
-  NtNetStreamRx_t        pNetRx;
+#ifdef DIRECT_RX_RING_CONTROL
+  uint64_t offW;
+  uint64_t offR;
+  struct NtNetRxHbRing_s ringControl;
+#endif
   struct rte_mempool    *mb_pool;
+  NtNetStreamRx_t        pNetRx;
   uint16_t               buf_size;
   NtNetBuf_t             pSeg;    /* The current segment we are working with */
   struct NtNetBuf_s      pkt;     /* The current packet */
@@ -94,7 +100,11 @@ struct ntacc_rx_queue {
   int                    enabled;
 };
 
+#define DIRECT_TX_RING_CONTROL
 struct ntacc_tx_queue {
+#ifdef DIRECT_TX_RING_CONTROL
+  struct NtNetTxHbRing_s ringControl;
+#endif
   NtNetStreamTx_t        pNetTx;
 #ifdef USE_SW_STAT
   volatile uint64_t      tx_pkts;
@@ -124,7 +134,7 @@ struct filter_values_s {
 	LIST_ENTRY(filter_values_s) next;
   uint64_t mask;
   const char *layerString;
-  uint8_t size; 
+  uint8_t size;
   uint8_t layer;
   uint8_t offset;
   union {

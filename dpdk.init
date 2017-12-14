@@ -1,0 +1,64 @@
+#!/bin/bash
+
+
+NUM_2K_HUGEPAGES=2048
+
+if [ -a /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages ]; then
+    if [ `cat /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages` == 0 ]; then
+    	echo "Enabling $NUM_2K_HUGE_PAGES on NUMA0"
+    	echo $NUM_2K_HUGEPAGES > /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages
+    fi
+elif [ -a /sys/devices/system/node/node0/hugepages/hugepages-1048576kB/nr_hugepages ]; then
+    if [ `cat /sys/devices/system/node/node0/hugepages/hugepages-1048576kB/nr_hugepages` == 0 ]; then
+        echo "No 1GB hugepages reserved. Please consult boot loader"
+        exit 1
+    fi
+fi
+
+if [ -a /sys/devices/system/node/node1/hugepages/hugepages-2048kB/nr_hugepages ]; then
+    if [ `cat /sys/devices/system/node/node1/hugepages/hugepages-2048kB/nr_hugepages` == 0 ]; then
+    	echo "Enabling $NUM_2K_HUGEPAGES on NUMA1"
+    	echo $NUM_2K_HUGEPAGES > /sys/devices/system/node/node1/hugepages/hugepages-2048kB/nr_hugepages
+    fi
+elif [ -a /sys/devices/system/node/node1/hugepages/hugepages-1048576kB/nr_hugepages ]; then
+    if [ `cat /sys/devices/system/node/node1/hugepages/hugepages-1048576kB/nr_hugepages` == 0 ]; then
+        echo "No 1GB hugepages reserved. Please consult boot loader"
+        exit 1
+    fi
+fi
+
+if [ -z "`mount | grep /mnt/huge`" ]
+then
+    echo "Mounting hugetlbfs"
+    if [ ! -d /mnt/huge ]; then
+	mkdir -p /mnt/huge
+    fi
+    mount -t hugetlbfs nodev /mnt/huge
+fi
+
+if [ -z "`lsmod | grep uio`" ]
+then
+    echo "Loading UIO driver"
+    modprobe uio
+fi
+
+if [ -z "`lsmod | grep igb_uio`" ]
+then
+    echo "Loading IGB_UIO driver"
+    insmod ./x86_64-native-linuxapp-gcc/kmod/igb_uio.ko
+fi
+
+# Arg1 can contain a string to limit the devices to bind
+if [ -z $1 ]; then
+    DPDK_DEVICES=`./usertools/dpdk-devbind.py --status | grep -v "*Active*" | grep unused=igb_uio | cut -d"'" -f1`
+else
+    DPDK_DEVICES=`./usertools/dpdk-devbind.py --status | grep -v "*Active*" | grep unused=igb_uio | grep $1 | cut -d"'" -f1`
+fi
+
+for dev in $DPDK_DEVICES
+do
+    echo "Binding NIC with PCI-ID: $dev"
+    ./usertools/dpdk-devbind.py -b igb_uio $dev
+done
+
+./usertools/dpdk-devbind.py --status

@@ -77,7 +77,7 @@ static struct {
    int32_t major;
    int32_t minor;
    int32_t patch;
-} supportedDriver = {3, 7, 2};
+} supportedDriver = {3, 8, 0};
 
 #define PCI_VENDOR_ID_NAPATECH 0x18F4
 #define PCI_DEVICE_ID_NT200A01 0x01A5
@@ -103,6 +103,7 @@ struct {
   { 200, 9505, 9, 8, 0 },
   { 200, 9512, 9, 8, 0 },
   { 200, 9515, 9, 8, 0 },
+  { 200, 9516, 9, 8, 0 },
   { 200, 9517, 9, 8, 0 },
 };
 
@@ -125,6 +126,7 @@ int (*_NT_ConfigClose)(NtConfigStream_t);
 int (*_NT_NTPL)(NtConfigStream_t, const char *, NtNtplInfo_t *, uint32_t);
 int (*_NT_NetRxGetNextPacket)(NtNetStreamRx_t, NtNetBuf_t *, int);
 int (*_NT_NetRxOpenMulti)(NtNetStreamRx_t *, const char *, enum NtNetInterface_e, uint32_t *, unsigned int, int);
+int (*_NT_NetRxRead)(NtNetStreamRx_t hStream, NtNetRx_t *cmd);
 int (*_NT_NetTxRelease)(NtNetStreamTx_t, NtNetBuf_t);
 int (*_NT_NetTxGet)(NtNetStreamTx_t, NtNetBuf_t *, uint32_t, size_t, enum NtNetTxPacketOption_e, int);
 int (*_NT_NetTxAddPacket)(NtNetStreamTx_t hStream, uint32_t port, NtNetTxFragment_t *fragments, uint32_t fragmentCount, int timeout );
@@ -249,6 +251,130 @@ static int eth_ntacc_rx_jumbo(struct rte_mempool *mb_pool,
   return mbuf->nb_segs;
 }
 
+static __rte_always_inline uint16_t eth_ntacc_convert_pkt_to_mbuf(NtDyn3Descr_t *dyn3,
+  struct rte_mbuf *mbuf,
+  struct ntacc_rx_queue *rx_q)
+{
+  rte_pktmbuf_reset(mbuf);
+  rte_mbuf_refcnt_set(mbuf, 1);
+
+  if (dyn3->descrLength == 20) {
+    // We do have a hash value defined
+    mbuf->hash.rss = dyn3->color_hi;
+    mbuf->ol_flags |= PKT_RX_RSS_HASH;
+  }
+  else {
+    // We do have a color value defined
+    mbuf->hash.fdir.hi = ((dyn3->color_hi << 14) & 0xFFFFC000) | dyn3->color_lo;
+    mbuf->ol_flags |= PKT_RX_FDIR_ID | PKT_RX_FDIR;
+  }
+
+  mbuf->timestamp = dyn3->timestamp;
+  mbuf->ol_flags |= PKT_RX_TIMESTAMP;
+  mbuf->port = dyn3->rxPort;
+
+  const uint16_t data_len = (uint16_t)(dyn3->capLength - dyn3->descrLength - 4);
+  if (likely(data_len <= rx_q->buf_size)) {
+    /* Packet will fit in the mbuf, go ahead and copy */
+    mbuf->pkt_len = mbuf->data_len = data_len;
+    rte_memcpy((u_char *)mbuf->buf_addr + RTE_PKTMBUF_HEADROOM, (uint8_t*)dyn3 + dyn3->descrLength, mbuf->data_len);
+#ifdef COPY_OFFSET0
+    mbuf->data_off = RTE_PKTMBUF_HEADROOM + dyn3->offset0;
+#endif
+  } else {
+    /* Try read jumbo frame into multi mbufs. */
+    if (unlikely(eth_ntacc_rx_jumbo(rx_q->mb_pool, mbuf, (uint8_t*)dyn3 + dyn3->descrLength, data_len) == -1))
+      return 0;
+  }
+  return data_len + 4;
+}
+
+#ifdef DIRECT_RX_RING_CONTROL
+
+static void eth_ntacc_rx_get_ring(struct ntacc_rx_queue *rx_q)
+{
+  int status;
+  NtNetRx_t cmd;
+  cmd.cmd = NT_NETRX_READ_CMD_GET_RING_CONTROL;
+  if ((status = _NT_NetRxRead(rx_q->pNetRx, &cmd)) != NT_SUCCESS) {
+    if (status != NT_STATUS_TRYAGAIN) {
+      (*_NT_ExplainError)(status, errorBuffer, sizeof(errorBuffer));
+      RTE_LOG(DEBUG, PMD, "Failed to get ring control of the RX ring for streamid %d: %s\n", rx_q->stream_id, errorBuffer);
+    }
+    return;
+  }
+  rte_memcpy(&rx_q->ringControl, &cmd.u.ringControl, sizeof(rx_q->ringControl));
+  rx_q->offR = *rx_q->ringControl.pRead;
+  rx_q->offW = *rx_q->ringControl.pWrite & rx_q->ringControl.mask;
+}
+
+static uint16_t eth_ntacc_rx(void *queue,
+  struct rte_mbuf **bufs,
+  const uint16_t nb_pkts)
+{
+  struct ntacc_rx_queue *rx_q = queue;
+
+  if (unlikely(rx_q->pNetRx == NULL || nb_pkts == 0)) {
+    return 0;
+  }
+
+  if (unlikely(rx_q->ringControl.ring == NULL)) {
+    eth_ntacc_rx_get_ring(rx_q);
+    return 0;
+  }
+
+  uint64_t offR = rx_q->offR;
+  uint64_t offW = rx_q->offW;
+
+  /* Check if we have packets */
+  if (unlikely(offR == offW)) {
+    rx_q->offW = *rx_q->ringControl.pWrite & rx_q->ringControl.mask;
+    return 0;
+  }
+
+
+  /* Allocate buffers */
+  if (unlikely(rte_mempool_get_bulk(rx_q->mb_pool, (void **)bufs, nb_pkts) != 0)) {
+    return 0;
+  }
+
+  uint16_t num_rx = 0;
+  uint32_t bytes = 0;
+  uint8_t *ring;
+  if (offR > rx_q->ringControl.size) {
+    ring = rx_q->ringControl.ring + (offR - rx_q->ringControl.size);
+  } else {
+    ring = rx_q->ringControl.ring + offR;
+  }
+
+  while((offR != offW) && (num_rx < nb_pkts)) {
+    struct rte_mbuf *mbuf = bufs[num_rx];
+
+    NtDyn3Descr_t *dyn3 = (NtDyn3Descr_t*)(ring);
+    bytes += eth_ntacc_convert_pkt_to_mbuf(dyn3, mbuf, rx_q);
+    num_rx++;
+
+    offR += dyn3->capLength;
+    ring += dyn3->capLength;
+    if (offR >= (2*rx_q->ringControl.size)) {
+      offR -= (2*rx_q->ringControl.size);
+    }
+  }
+  /* Refresh the HW pointer */
+  *rx_q->ringControl.pRead = offR;
+  rx_q->offR = offR;
+
+#ifdef USE_SW_STAT
+  rx_q->rx_pkts+=num_rx;
+  rx_q->rx_bytes+=bytes;
+#endif
+
+  if (unlikely(num_rx < nb_pkts)) {
+    rte_mempool_put_bulk(rx_q->mb_pool, (void * const *)(bufs + num_rx), nb_pkts-num_rx);
+  }
+  return num_rx;
+}
+#else
 static uint16_t eth_ntacc_rx(void *queue,
                              struct rte_mbuf **bufs,
                              uint16_t nb_pkts)
@@ -259,7 +385,7 @@ static uint16_t eth_ntacc_rx(void *queue,
     return 0;
 
   // Do we have any segment
-  if (rx_q->pSeg == NULL) {
+  if (unlikely(rx_q->pSeg == NULL)) {
     if ((*_NT_NetRxGet)(rx_q->pNetRx, &rx_q->pSeg, 0) != NT_SUCCESS) {
       if (rx_q->pSeg != NULL) {
         (*_NT_NetRxRelease)(rx_q->pNetRx, rx_q->pSeg);
@@ -278,51 +404,18 @@ static uint16_t eth_ntacc_rx(void *queue,
     }
   }
 
-  if (rte_mempool_get_bulk(rx_q->mb_pool, (void **)bufs, nb_pkts) != 0)
+  if (unlikely(rte_mempool_get_bulk(rx_q->mb_pool, (void **)bufs, nb_pkts) != 0))
     return 0;
 
   uint16_t i, num_rx = 0;
   for (i = 0; i < nb_pkts; i++) {
     struct rte_mbuf *mbuf = bufs[i];
-    rte_mbuf_refcnt_set(mbuf, 1);
-    rte_pktmbuf_reset(mbuf);
 
-    NtDyn3Descr_t *dyn3 = _NT_NET_GET_PKT_DESCR_PTR_DYN3(&rx_q->pkt);
-
-    if (dyn3->descrLength == 20) {
-      // We do have a hash value defined
-      mbuf->hash.rss = dyn3->color_hi;
-      mbuf->ol_flags |= PKT_RX_RSS_HASH;
-    }
-    else {
-      // We do have a color value defined
-      mbuf->hash.fdir.hi = ((dyn3->color_hi << 14) & 0xFFFFC000) | dyn3->color_lo;
-      mbuf->ol_flags |= PKT_RX_FDIR_ID | PKT_RX_FDIR;
-    }
-
-    mbuf->timestamp = dyn3->timestamp;
-    mbuf->ol_flags |= PKT_RX_TIMESTAMP;
-    mbuf->port = dyn3->rxPort;
-
-    const uint16_t data_len = (uint16_t)(dyn3->capLength - dyn3->descrLength - 4);
-    if (data_len <= rx_q->buf_size) {
-      /* Packet will fit in the mbuf, go ahead and copy */
-      mbuf->pkt_len = mbuf->data_len = data_len;
-      rte_memcpy((u_char *)mbuf->buf_addr + RTE_PKTMBUF_HEADROOM, (uint8_t*)dyn3 + dyn3->descrLength, mbuf->data_len);
-#ifdef COPY_OFFSET0
-      mbuf->data_off = RTE_PKTMBUF_HEADROOM + dyn3->offset0;
-#endif
-    } else {
-      /* Try read jumbo frame into multi mbufs. */
-      if (unlikely(eth_ntacc_rx_jumbo(rx_q->mb_pool, mbuf, (uint8_t*)dyn3 + dyn3->descrLength, data_len) == -1))
-        break;
-    }
-    bytes += data_len+4;
+    bytes += eth_ntacc_convert_pkt_to_mbuf(_NT_NET_GET_PKT_DESCR_PTR_DYN3(&rx_q->pkt), mbuf, rx_q);
     num_rx++;
 
-
     /* Get the next packet if any */
-    if (_nt_net_get_next_packet(rx_q->pSeg, NT_NET_GET_SEGMENT_LENGTH(rx_q->pSeg), &rx_q->pkt) == 0 ) {
+    if (unlikely(_nt_net_get_next_packet(rx_q->pSeg, NT_NET_GET_SEGMENT_LENGTH(rx_q->pSeg), &rx_q->pkt) == 0 )) {
       (*_NT_NetRxRelease)(rx_q->pNetRx, rx_q->pSeg);
       rx_q->pSeg = NULL;
       break;
@@ -331,13 +424,15 @@ static uint16_t eth_ntacc_rx(void *queue,
 
 #ifdef USE_SW_STAT
   rx_q->rx_pkts+=num_rx;
-#endif
+  rx_q->rx_bytes+=bytes;
+  #endif
 
-  if (num_rx < nb_pkts) {
+  if (unlikely(num_rx < nb_pkts)) {
     rte_mempool_put_bulk(rx_q->mb_pool, (void * const *)(bufs + num_rx), nb_pkts-num_rx);
   }
   return num_rx;
 }
+#endif
 
 /*
  * Callback to handle sending packets through a real NIC.
@@ -371,7 +466,7 @@ static uint16_t eth_ntacc_tx(void *queue,
     }
     NT_NET_SET_PKT_TXNOW(hNetBufTx, 1);
     rte_memcpy(NT_NET_GET_PKT_L2_PTR(hNetBufTx), rte_pktmbuf_mtod(mbuf, u_char *), mbuf->data_len);
-    
+
     // Release the TX buffer and the packet will be transmitted
     ret = (*_NT_NetTxRelease)(tx_q->pNetTx, hNetBufTx);
     if(unlikely(ret != NT_SUCCESS)) {
@@ -399,7 +494,7 @@ static uint16_t eth_ntacc_tx(void *queue,
   int status;
   struct ntacc_tx_queue *tx_q = queue;
   struct NtNetBuf_s *hNetBufTx;
-  struct NtNetBuf_s pktNetBuf;    
+  struct NtNetBuf_s pktNetBuf;
   uint32_t spaceLeftInSegment;
   uint32_t tx_pkts;
   uint32_t packetsInSegment;
@@ -517,6 +612,102 @@ static uint16_t eth_ntacc_tx(void *queue,
 #endif
   return tx_pkts;
 }
+#elif defined(DIRECT_TX_RING_CONTROL)
+/*
+ * Callback to handle sending packets through a real NIC.
+ */
+static uint16_t eth_ntacc_tx(void *queue,
+                             struct rte_mbuf **bufs,
+                             uint16_t nb_pkts)
+{
+  unsigned i;
+  struct ntacc_tx_queue *tx_q = queue;
+  uint32_t bytes=0;
+  if (unlikely(tx_q == NULL || tx_q->pNetTx == NULL || nb_pkts == 0)) {
+    return 0;
+  }
+  uint64_t spaceLeft;
+  uint64_t offR, offW, off=0;
+  uint8_t *dst, *ring;
+  offR = *tx_q->ringControl.pRead;
+  offW = *tx_q->ringControl.pWrite;
+  ring =  tx_q->ringControl.ring + offW;
+  if (offW >= offR) {
+    spaceLeft = tx_q->ringControl.size - (offW - offR);
+  } else {
+    spaceLeft = tx_q->ringControl.size - ((offW+(2*tx_q->ringControl.size)) - offR);
+  }
+  if (offW >= tx_q->ringControl.size) {
+    ring -= tx_q->ringControl.size; // Rebase the dst pointer
+  }
+
+  for (i = 0; i < nb_pkts; i++) {
+    dst = ring + off;
+    struct rte_mbuf *mbuf = bufs[i];
+    /* Detect packet size */
+    uint16_t sLen;
+    uint16_t wLen = mbuf->data_len + 4; // Make room for FCS
+    if (unlikely(mbuf->nb_segs > 1)) {
+      while (mbuf->next) {
+        mbuf = mbuf->next;
+        wLen += mbuf->data_len;
+      }
+      // Reset the pointer
+      mbuf = bufs[i];
+    }
+    /* Check if packet needs padding or is too big to transmit */
+    if (unlikely(wLen < tx_q->minTxPktSize)) {
+      wLen = tx_q->minTxPktSize; // Add padding
+      //TODO: There is a data leak issue here. If wLen is just extended
+      //the memory in the ring is not zero'ed and padding will contain
+      //data from previous packets. For performance reasons this has not been
+      //addressed, but the fix is to memset() the padding area.
+    }
+    if (unlikely(wLen > tx_q->maxTxPktSize)) {
+      /* Packet is too big. Drop it as an error and continue */
+      tx_q->err_pkts++;
+      rte_pktmbuf_free(bufs[i]);
+      continue;
+    }
+    // 8B align wireLength and add 16B descriptor
+    sLen = ((wLen + 7) & ~7) + 16;
+    // Do we have space for this packet
+    if (likely(spaceLeft >= sLen)) {
+      // Add packet descriptor
+      *((uint64_t*)dst)=0;
+      *((uint64_t*)dst+1)=(0x0100000040100000LL | (uint64_t)wLen<<32 | sLen);
+      // Copy the packet to the destination
+      rte_memcpy(dst + 16, rte_pktmbuf_mtod(mbuf, u_char *), mbuf->data_len);
+      dst += (16 + mbuf->data_len);
+      if (unlikely(mbuf->nb_segs > 1)) {
+        while (mbuf->next) {
+          mbuf = mbuf->next;
+          rte_memcpy(dst, rte_pktmbuf_mtod(mbuf, u_char *), mbuf->data_len);
+          dst += mbuf->data_len;
+        }
+      }
+      off += sLen;
+      bytes += wLen;
+      spaceLeft -= sLen;
+      rte_pktmbuf_free(bufs[i]);
+    } else {
+      // We cannot place more packets
+      break;
+    }
+  }
+  // Update the write offset
+  offW += off;
+  if (offW >= (2*tx_q->ringControl.size)) {
+    offW -= (2*tx_q->ringControl.size);
+  }
+  *tx_q->ringControl.pWrite = offW;
+
+#ifdef USE_SW_STAT
+  tx_q->tx_pkts += i;
+  tx_q->tx_bytes += bytes;
+#endif
+  return i;
+}
 #else
 static uint16_t eth_ntacc_tx(void *queue,
                              struct rte_mbuf **bufs,
@@ -613,7 +804,7 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     struct shmid_ds shmid_ds;
     if(shmctl(internals->shmid, IPC_STAT, &shmid_ds) != -1) {
       if(shmid_ds.shm_nattch == 0) {
-        clearMem = true;      
+        clearMem = true;
       }
     }
     if ((shm = shmat(internals->shmid, NULL, 0)) == (char *) -1) {
@@ -642,7 +833,7 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     RTE_LOG(ERR, PMD, "Unable to create mutex 3. Error = %d \"%s\"\n", status, strerror(status));
     goto StartError;
   }
-  
+
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
     if (rx_q[queue].enabled) {
       NtNtplInfo_t ntplInfo;
@@ -668,6 +859,9 @@ static int eth_dev_start(struct rte_eth_dev *dev)
         RTE_LOG(ERR, PMD, "NT_NetRxOpen() failed: %s\n", errorBuffer);
         goto StartError;
       }
+#ifdef DIRECT_RX_RING_CONTROL
+      memset(&rx_q[queue].ringControl, 0, sizeof(rx_q[queue].ringControl));
+#endif
       eth_rx_queue_start(dev, queue);
     }
   }
@@ -682,6 +876,18 @@ static int eth_dev_start(struct rte_eth_dev *dev)
         }
         RTE_LOG(DEBUG, PMD, "NT_NetTxOpen() Not optimal hostbuffer found on a neighbour numa node\n");
       }
+#ifdef DIRECT_TX_RING_CONTROL
+      /* Get the ring control structure */
+      NtNetTx_t cmd;
+      cmd.cmd = NT_NETTX_READ_CMD_GET_RING_CONTROL;
+      cmd.u.ringControl.port = internals->port;
+      if ((status = _NT_NetTxRead(tx_q[queue].pNetTx, &cmd)) != NT_SUCCESS) {
+        (*_NT_ExplainError)(status, errorBuffer, sizeof(errorBuffer));
+        RTE_LOG(DEBUG, PMD, "Failed to get ring control of the TX ring for port %d: %s\n", tx_q[queue].port, errorBuffer);
+        goto StartError;
+      }
+      rte_memcpy(&tx_q[queue].ringControl, &cmd.u.ringControl, sizeof(tx_q[queue].ringControl));
+#endif
     }
     tx_q[queue].plock = &port_locks[tx_q[queue].port];
   }
@@ -718,6 +924,9 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
       if (rx_q[queue].pNetRx) {
           (void)(*_NT_NetRxClose)(rx_q[queue].pNetRx);
       }
+#ifdef DIRECT_RX_RING_CONTROL
+      memset(&rx_q[queue].ringControl, 0, sizeof(rx_q[queue].ringControl));
+#endif
       eth_rx_queue_stop(dev, queue);
     }
   }
@@ -795,7 +1004,7 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
   (void)(*_NT_InfoClose)(hInfo);
 
   // Update speed capabilities for the port
-  dev_info->speed_capa = 0; 
+  dev_info->speed_capa = 0;
   if (pInfo->u.port_v7.data.capabilities.speed & NT_LINK_SPEED_10M) {
     dev_info->speed_capa |= ETH_LINK_SPEED_10M;
   }
@@ -875,7 +1084,7 @@ static void eth_stats_get(struct rte_eth_dev *dev,
     RTE_LOG(ERR, PMD, "Error %s: Out of memory\n", __func__);
     return;
   }
-  
+
   memset(igb_stats, 0, sizeof(*igb_stats));
 
   /* port used */
@@ -1519,7 +1728,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " %s", ntpl_str);
       filterContinue = true;
     }
-	
+
     if (filterContinue) {
       snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " and");
     }
@@ -1530,7 +1739,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
     }
     else {
       snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " port==");
-      for (int ports = 0; ports < nb_ports;ports++) {
+      int ports;
+      for (ports = 0; ports < nb_ports;ports++) {
         snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "%u", list_ports[ports]);
         if (ports < (nb_ports - 1)) {
           snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ",");
@@ -1646,8 +1856,8 @@ static int _hash_filter_ctrl(struct rte_eth_dev *dev,
   return ret;
 }
 
-static int _dev_flow_isolate(struct rte_eth_dev *dev, 
-                             int set, 
+static int _dev_flow_isolate(struct rte_eth_dev *dev,
+                             int set,
                              struct rte_flow_error *error __rte_unused)
 {
   char ntpl_buf[21];
@@ -1720,7 +1930,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       }
 
       // Set the port number
-      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, 
+      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
                ";tag=%s]=port==%u", internals->tagName, internals->port);
 
       if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
@@ -1963,10 +2173,10 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     if (!((1<<localPort)&mask)) {
       continue;
     }
-    
+
     snprintf(name, NTACC_NAME_LEN, PCI_PRI_FMT " Port %u", dev->addr.domain, dev->addr.bus, dev->addr.devid, dev->addr.function, localPort);
     RTE_LOG(INFO, PMD, "Port: %u - %s\n", offset + localPort, name);
-    
+
     // Check if FPGA is supported
     for (i = 0; i < NB_SUPPORTED_FPGAS; i++) {
       if (supportedAdapters[i].item == pInfo->u.port_v7.data.adapterInfo.fpgaid.s.item &&
@@ -1974,7 +2184,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
         if (supportedAdapters[i].ver != pInfo->u.port_v7.data.adapterInfo.fpgaid.s.ver ||
             supportedAdapters[i].rev != pInfo->u.port_v7.data.adapterInfo.fpgaid.s.rev) {
           RTE_LOG(ERR, PMD, "ERROR: NT adapter firmware %03d-%04d-%02d-%02d-%02d is not supported. The firmware must be %03d-%04d-%02d-%02d-%02d.\n",
-                  pInfo->u.port_v7.data.adapterInfo.fpgaid.s.item, 
+                  pInfo->u.port_v7.data.adapterInfo.fpgaid.s.item,
                   pInfo->u.port_v7.data.adapterInfo.fpgaid.s.product,
                   pInfo->u.port_v7.data.adapterInfo.fpgaid.s.ver,
                   pInfo->u.port_v7.data.adapterInfo.fpgaid.s.rev,
@@ -2134,7 +2344,7 @@ error:
   if (pInfo) {
     rte_free(pInfo);
   }
-  if (hInfo) 
+  if (hInfo)
     (void)(*_NT_InfoClose)(hInfo);
   if (internals)
     rte_free(internals);
@@ -2270,6 +2480,12 @@ static int _nt_lib_open(void)
     return -1;
   }
 
+  _NT_NetRxRead = dlsym(_libnt, "NT_NetRxRead");
+  if (_NT_NetRxRead == NULL) {
+    fprintf(stderr, "Failed to find \"NT_NetRxRead\" in %s\n", path);
+    return -1;
+  }
+
   _NT_NetTxRelease = dlsym(_libnt, "NT_NetTxRelease");
   if (_NT_NetTxRelease == NULL) {
     fprintf(stderr, "Failed to find \"NT_NetTxRelease\" in %s\n", path);
@@ -2324,9 +2540,9 @@ static int rte_pmd_ntacc_dev_probe(struct rte_pci_driver *drv __rte_unused, stru
                                                                        dev->device.numa_node);
 
   RTE_LOG(DEBUG, PMD, "PCI ID :    0x%04X:0x%04X\n", dev->id.vendor_id, dev->id.device_id);
-  RTE_LOG(DEBUG, PMD, "PCI device: "PCI_PRI_FMT"\n", dev->addr.domain, 
-                                                     dev->addr.bus, 
-                                                     dev->addr.devid, 
+  RTE_LOG(DEBUG, PMD, "PCI device: "PCI_PRI_FMT"\n", dev->addr.domain,
+                                                     dev->addr.bus,
+                                                     dev->addr.devid,
                                                      dev->addr.function);
 
 #ifdef USE_SW_STAT
