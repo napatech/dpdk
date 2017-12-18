@@ -55,6 +55,7 @@ static inline struct rte_mbuf *__bnxt_alloc_rx_data(struct rte_mempool *mb)
 	struct rte_mbuf *data;
 
 	data = rte_mbuf_raw_alloc(mb);
+	data->data_off = RTE_PKTMBUF_HEADROOM;
 
 	return data;
 }
