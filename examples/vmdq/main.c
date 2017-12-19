@@ -47,7 +47,6 @@
 #include <rte_log.h>
 #include <rte_memory.h>
 #include <rte_memcpy.h>
-#include <rte_memzone.h>
 #include <rte_eal.h>
 #include <rte_launch.h>
 #include <rte_atomic.h>
@@ -57,7 +56,6 @@
 #include <rte_per_lcore.h>
 #include <rte_branch_prediction.h>
 #include <rte_interrupts.h>
-#include <rte_pci.h>
 #include <rte_random.h>
 #include <rte_debug.h>
 #include <rte_ether.h>
@@ -121,7 +119,7 @@ static const struct rte_eth_conf vmdq_conf_default = {
 };
 
 static unsigned lcore_ids[RTE_MAX_LCORE];
-static uint8_t ports[RTE_MAX_ETHPORTS];
+static uint16_t ports[RTE_MAX_ETHPORTS];
 static unsigned num_ports; /**< The number of ports specified in command line */
 
 /* array used for printing out statistics */
@@ -186,7 +184,7 @@ get_eth_conf(struct rte_eth_conf *eth_conf, uint32_t num_pools)
  * coming from the mbuf_pool passed as parameter
  */
 static inline int
-port_init(uint8_t port, struct rte_mempool *mbuf_pool)
+port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 {
 	struct rte_eth_dev_info dev_info;
 	struct rte_eth_rxconf *rxconf;
@@ -583,7 +581,7 @@ main(int argc, char *argv[])
 	unsigned lcore_id, core_id = 0;
 	int ret;
 	unsigned nb_ports, valid_num_ports;
-	uint8_t portid;
+	uint16_t portid;
 
 	signal(SIGHUP, sighup_handler);
 

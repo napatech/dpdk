@@ -38,7 +38,6 @@
 
 #include <rte_log.h>
 #include <rte_memory.h>
-#include <rte_memzone.h>
 #include <rte_launch.h>
 #include <rte_eal.h>
 #include <rte_per_lcore.h>
@@ -61,9 +60,9 @@
 static int
 test_logs(void)
 {
-	/* enable these logs type */
-	rte_log_set_level(RTE_LOGTYPE_TESTAPP1, RTE_LOG_EMERG);
-	rte_log_set_level(RTE_LOGTYPE_TESTAPP2, RTE_LOG_EMERG);
+	/* set logtype level low to so we can test global level */
+	rte_log_set_level(RTE_LOGTYPE_TESTAPP1, RTE_LOG_DEBUG);
+	rte_log_set_level(RTE_LOGTYPE_TESTAPP2, RTE_LOG_DEBUG);
 
 	/* log in error level */
 	rte_log_set_global_level(RTE_LOG_ERR);
@@ -75,8 +74,8 @@ test_logs(void)
 	RTE_LOG(ERR, TESTAPP2, "error message (not displayed)\n");
 	RTE_LOG(CRIT, TESTAPP2, "critical message\n");
 
-	/* disable one log type */
-	rte_log_set_level(RTE_LOGTYPE_TESTAPP2, RTE_LOG_DEBUG);
+	/* bump up single log type level above global to test it */
+	rte_log_set_level(RTE_LOGTYPE_TESTAPP2, RTE_LOG_EMERG);
 
 	/* log in error level */
 	rte_log_set_global_level(RTE_LOG_ERR);

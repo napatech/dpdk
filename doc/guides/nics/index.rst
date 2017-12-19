@@ -43,6 +43,7 @@ Network Interface Controller Drivers
     bnx2x
     bnxt
     cxgbe
+    dpaa
     dpaa2
     e1000em
     ena
@@ -55,7 +56,9 @@ Network Interface Controller Drivers
     liquidio
     mlx4
     mlx5
+    mrvl
     nfp
+    octeontx
     qede
     sfc_efx
     szedata2

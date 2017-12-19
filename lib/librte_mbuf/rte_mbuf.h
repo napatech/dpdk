@@ -89,12 +89,13 @@ extern "C" {
  */
 
 /**
- * RX packet is a 802.1q VLAN packet. This flag was set by PMDs when
- * the packet is recognized as a VLAN, but the behavior between PMDs
- * was not the same. This flag is kept for some time to avoid breaking
- * applications and should be replaced by PKT_RX_VLAN_STRIPPED.
+ * The RX packet is a 802.1q VLAN packet, and the tci has been
+ * saved in in mbuf->vlan_tci.
+ * If the flag PKT_RX_VLAN_STRIPPED is also present, the VLAN
+ * header has been stripped from mbuf data, else it is still
+ * present.
  */
-#define PKT_RX_VLAN_PKT      (1ULL << 0)
+#define PKT_RX_VLAN          (1ULL << 0)
 
 #define PKT_RX_RSS_HASH      (1ULL << 1)  /**< RX packet with RSS hash result. */
 #define PKT_RX_FDIR          (1ULL << 2)  /**< RX packet with FDIR match indicate. */
@@ -123,6 +124,7 @@ extern "C" {
  * A vlan has been stripped by the hardware and its tci is saved in
  * mbuf->vlan_tci. This can only happen if vlan stripping is enabled
  * in the RX configuration of the PMD.
+ * When PKT_RX_VLAN_STRIPPED is set, PKT_RX_VLAN must also be set.
  */
 #define PKT_RX_VLAN_STRIPPED (1ULL << 6)
 
@@ -165,17 +167,11 @@ extern "C" {
  * The 2 vlans have been stripped by the hardware and their tci are
  * saved in mbuf->vlan_tci (inner) and mbuf->vlan_tci_outer (outer).
  * This can only happen if vlan stripping is enabled in the RX
- * configuration of the PMD. If this flag is set, PKT_RX_VLAN_STRIPPED
- * must also be set.
+ * configuration of the PMD. If this flag is set,
+ * When PKT_RX_QINQ_STRIPPED is set, the flags (PKT_RX_VLAN |
+ * PKT_RX_VLAN_STRIPPED | PKT_RX_QINQ) must also be set.
  */
 #define PKT_RX_QINQ_STRIPPED (1ULL << 15)
-
-/**
- * Deprecated.
- * RX packet with double VLAN stripped.
- * This flag is replaced by PKT_RX_QINQ_STRIPPED.
- */
-#define PKT_RX_QINQ_PKT      PKT_RX_QINQ_STRIPPED
 
 /**
  * When packets are coalesced by a hardware or virtual driver, this flag
@@ -189,9 +185,37 @@ extern "C" {
  */
 #define PKT_RX_TIMESTAMP     (1ULL << 17)
 
+/**
+ * Indicate that security offload processing was applied on the RX packet.
+ */
+#define PKT_RX_SEC_OFFLOAD		(1ULL << 18)
+
+/**
+ * Indicate that security offload processing failed on the RX packet.
+ */
+#define PKT_RX_SEC_OFFLOAD_FAILED  	(1ULL << 19)
+
+/**
+ * The RX packet is a double VLAN, and the outer tci has been
+ * saved in in mbuf->vlan_tci_outer.
+ * If the flag PKT_RX_QINQ_STRIPPED is also present, both VLANs
+ * headers have been stripped from mbuf data, else they are still
+ * present.
+ */
+#define PKT_RX_QINQ          (1ULL << 20)
+
 /* add new RX flags here */
+/**< The packet has a RX header */
+#define PKT_RX_HAS_HEADER    (1ULL << 42) 
+/**< The mbuf contains a batch of packets */
+#define PKT_BATCH            (1ULL << 43) 
 
 /* add new TX flags here */
+
+/**
+ * Request security offload processing on the TX packet.
+ */
+#define PKT_TX_SEC_OFFLOAD 		(1ULL << 43)
 
 /**
  * Offload the MACsec. This flag must be set by the application to enable
@@ -316,7 +340,8 @@ extern "C" {
 		PKT_TX_QINQ_PKT |        \
 		PKT_TX_VLAN_PKT |        \
 		PKT_TX_TUNNEL_MASK |	 \
-		PKT_TX_MACSEC)
+		PKT_TX_MACSEC |		 \
+		PKT_TX_SEC_OFFLOAD)
 
 #define __RESERVED           (1ULL << 61) /**< reserved for future mbuf use */
 
@@ -411,7 +436,11 @@ struct rte_mbuf {
 	 * same mbuf cacheline0 layout for 32-bit and 64-bit. This makes
 	 * working on vector drivers easier.
 	 */
-	phys_addr_t buf_physaddr __rte_aligned(sizeof(phys_addr_t));
+	RTE_STD_C11
+	union {
+		rte_iova_t buf_iova;
+		rte_iova_t buf_physaddr; /**< deprecated */
+	} __rte_aligned(sizeof(rte_iova_t));
 
 	/* next 8 bytes are initialised on RX descriptor rearm */
 	MARKER64 rearm_data;
@@ -456,10 +485,24 @@ struct rte_mbuf {
 			uint32_t l3_type:4; /**< (Outer) L3 type. */
 			uint32_t l4_type:4; /**< (Outer) L4 type. */
 			uint32_t tun_type:4; /**< Tunnel type. */
-			uint32_t inner_l2_type:4; /**< Inner L2 type. */
-			uint32_t inner_l3_type:4; /**< Inner L3 type. */
+			RTE_STD_C11
+			union {
+				uint8_t inner_esp_next_proto;
+				/**< ESP next protocol type, valid if
+				 * RTE_PTYPE_TUNNEL_ESP tunnel type is set
+				 * on both Tx and Rx.
+				 */
+				__extension__
+				struct {
+					uint8_t inner_l2_type:4;
+					/**< Inner L2 type. */
+					uint8_t inner_l3_type:4;
+					/**< Inner L3 type. */
+				};
+			};
 			uint32_t inner_l4_type:4; /**< Inner L4 type. */
 		};
+		uint32_t batch_nb_packet; /**< Number of contiguous packet in batch. When ol_flags has PKT_BATCH bit */
 	};
 
 	uint32_t pkt_len;         /**< Total pkt len: sum of all segments. */
@@ -544,7 +587,12 @@ struct rte_mbuf {
 	/** Sequence number. See also rte_reorder_insert(). */
 	uint32_t seqn;
 
+	/** Contiguous Memory Batching callback. Called when releasing the mbuf. */
+	void (*cmbatch_release_cb)(struct rte_mbuf *m);
 } __rte_cache_aligned;
+
+/**< Maximum number of nb_segs allowed. */
+#define RTE_MBUF_MAX_NB_SEGS	UINT16_MAX
 
 /**
  * Prefetch the first part of the mbuf
@@ -587,21 +635,28 @@ rte_mbuf_prefetch_part2(struct rte_mbuf *m)
 static inline uint16_t rte_pktmbuf_priv_size(struct rte_mempool *mp);
 
 /**
- * Return the DMA address of the beginning of the mbuf data
+ * Return the IO address of the beginning of the mbuf data
  *
  * @param mb
  *   The pointer to the mbuf.
  * @return
- *   The physical address of the beginning of the mbuf data
+ *   The IO address of the beginning of the mbuf data
  */
+static inline rte_iova_t
+rte_mbuf_data_iova(const struct rte_mbuf *mb)
+{
+	return mb->buf_iova + mb->data_off;
+}
+
+__rte_deprecated
 static inline phys_addr_t
 rte_mbuf_data_dma_addr(const struct rte_mbuf *mb)
 {
-	return mb->buf_physaddr + mb->data_off;
+	return rte_mbuf_data_iova(mb);
 }
 
 /**
- * Return the default DMA address of the beginning of the mbuf data
+ * Return the default IO address of the beginning of the mbuf data
  *
  * This function is used by drivers in their receive function, as it
  * returns the location where data should be written by the NIC, taking
@@ -610,12 +665,19 @@ rte_mbuf_data_dma_addr(const struct rte_mbuf *mb)
  * @param mb
  *   The pointer to the mbuf.
  * @return
- *   The physical address of the beginning of the mbuf data
+ *   The IO address of the beginning of the mbuf data
  */
+static inline rte_iova_t
+rte_mbuf_data_iova_default(const struct rte_mbuf *mb)
+{
+	return mb->buf_iova + RTE_PKTMBUF_HEADROOM;
+}
+
+__rte_deprecated
 static inline phys_addr_t
 rte_mbuf_data_dma_addr_default(const struct rte_mbuf *mb)
 {
-	return mb->buf_physaddr + RTE_PKTMBUF_HEADROOM;
+	return rte_mbuf_data_iova_default(mb);
 }
 
 /**
@@ -798,15 +860,15 @@ rte_mbuf_sanity_check(const struct rte_mbuf *m, int is_header);
 } while (0)
 
 /**
- * Allocate an unitialized mbuf from mempool *mp*.
+ * Allocate an uninitialized mbuf from mempool *mp*.
  *
  * This function can be used by PMDs (especially in RX functions) to
- * allocate an unitialized mbuf. The driver is responsible of
+ * allocate an uninitialized mbuf. The driver is responsible of
  * initializing all the required fields. See rte_pktmbuf_reset().
  * For standard needs, prefer rte_pktmbuf_alloc().
  *
  * The caller can expect that the following fields of the mbuf structure
- * are initialized: buf_addr, buf_physaddr, buf_len, refcnt=1, nb_segs=1,
+ * are initialized: buf_addr, buf_iova, buf_len, refcnt=1, nb_segs=1,
  * next=NULL, pool, priv_size. The other fields must be initialized
  * by the caller.
  *
@@ -1087,6 +1149,8 @@ static inline void rte_pktmbuf_reset_headroom(struct rte_mbuf *m)
  * @param m
  *   The packet mbuf to be resetted.
  */
+#define MBUF_INVALID_PORT UINT16_MAX
+
 static inline void rte_pktmbuf_reset(struct rte_mbuf *m)
 {
 	m->next = NULL;
@@ -1095,13 +1159,14 @@ static inline void rte_pktmbuf_reset(struct rte_mbuf *m)
 	m->vlan_tci = 0;
 	m->vlan_tci_outer = 0;
 	m->nb_segs = 1;
-	m->port = 0xff;
+	m->port = MBUF_INVALID_PORT;
 
 	m->ol_flags = 0;
 	m->packet_type = 0;
 	rte_pktmbuf_reset_headroom(m);
 
 	m->data_len = 0;
+	m->cmbatch_release_cb = NULL;
 	__rte_mbuf_sanity_check(m, 1);
 }
 
@@ -1214,7 +1279,7 @@ static inline void rte_pktmbuf_attach(struct rte_mbuf *mi, struct rte_mbuf *m)
 
 	rte_mbuf_refcnt_update(md, 1);
 	mi->priv_size = m->priv_size;
-	mi->buf_physaddr = m->buf_physaddr;
+	mi->buf_iova = m->buf_iova;
 	mi->buf_addr = m->buf_addr;
 	mi->buf_len = m->buf_len;
 
@@ -1262,7 +1327,7 @@ static inline void rte_pktmbuf_detach(struct rte_mbuf *m)
 
 	m->priv_size = priv_size;
 	m->buf_addr = (char *)m + mbuf_size;
-	m->buf_physaddr = rte_mempool_virt2phy(mp, m) + mbuf_size;
+	m->buf_iova = rte_mempool_virt2iova(m) + mbuf_size;
 	m->buf_len = (uint16_t)buf_len;
 	rte_pktmbuf_reset_headroom(m);
 	m->data_len = 0;
@@ -1345,8 +1410,11 @@ static __rte_always_inline void
 rte_pktmbuf_free_seg(struct rte_mbuf *m)
 {
 	m = rte_pktmbuf_prefree_seg(m);
-	if (likely(m != NULL))
+	if (likely(m != NULL)) {
+		if ((m->ol_flags & PKT_BATCH) && m->cmbatch_release_cb)
+	    m->cmbatch_release_cb(m);
 		rte_mbuf_raw_free(m);
+	}
 }
 
 /**
@@ -1393,7 +1461,7 @@ static inline struct rte_mbuf *rte_pktmbuf_clone(struct rte_mbuf *md,
 {
 	struct rte_mbuf *mc, *mi, **prev;
 	uint32_t pktlen;
-	uint8_t nseg;
+	uint16_t nseg;
 
 	if (unlikely ((mc = rte_pktmbuf_alloc(mp)) == NULL))
 		return NULL;
@@ -1524,7 +1592,7 @@ static inline struct rte_mbuf *rte_pktmbuf_lastseg(struct rte_mbuf *m)
 #define rte_pktmbuf_mtod(m, t) rte_pktmbuf_mtod_offset(m, t, 0)
 
 /**
- * A macro that returns the physical address that points to an offset of the
+ * A macro that returns the IO address that points to an offset of the
  * start of the data in the mbuf
  *
  * @param m
@@ -1532,17 +1600,24 @@ static inline struct rte_mbuf *rte_pktmbuf_lastseg(struct rte_mbuf *m)
  * @param o
  *   The offset into the data to calculate address from.
  */
+#define rte_pktmbuf_iova_offset(m, o) \
+	(rte_iova_t)((m)->buf_iova + (m)->data_off + (o))
+
+/* deprecated */
 #define rte_pktmbuf_mtophys_offset(m, o) \
-	(phys_addr_t)((m)->buf_physaddr + (m)->data_off + (o))
+	rte_pktmbuf_iova_offset(m, o)
 
 /**
- * A macro that returns the physical address that points to the start of the
+ * A macro that returns the IO address that points to the start of the
  * data in the mbuf
  *
  * @param m
  *   The packet mbuf.
  */
-#define rte_pktmbuf_mtophys(m) rte_pktmbuf_mtophys_offset(m, 0)
+#define rte_pktmbuf_iova(m) rte_pktmbuf_iova_offset(m, 0)
+
+/* deprecated */
+#define rte_pktmbuf_mtophys(m) rte_pktmbuf_iova(m)
 
 /**
  * A macro that returns the length of the packet.
@@ -1717,7 +1792,7 @@ const void *__rte_pktmbuf_read(const struct rte_mbuf *m, uint32_t off,
  * @param len
  *   The amount of bytes to read.
  * @param buf
- *   The buffer where data is copied if it is not contigous in mbuf
+ *   The buffer where data is copied if it is not contiguous in mbuf
  *   data. Its length should be at least equal to the len parameter.
  * @return
  *   The pointer to the data, either in the mbuf if it is contiguous,
@@ -1746,14 +1821,14 @@ static inline const void *rte_pktmbuf_read(const struct rte_mbuf *m,
  *
  * @return
  *   - 0, on success.
- *   - -EOVERFLOW, if the chain is full (256 entries)
+ *   - -EOVERFLOW, if the chain segment limit exceeded
  */
 static inline int rte_pktmbuf_chain(struct rte_mbuf *head, struct rte_mbuf *tail)
 {
 	struct rte_mbuf *cur_tail;
 
 	/* Check for number-of-segments-overflow */
-	if (head->nb_segs + tail->nb_segs >= 1 << (sizeof(head->nb_segs) * 8))
+	if (head->nb_segs + tail->nb_segs > RTE_MBUF_MAX_NB_SEGS)
 		return -EOVERFLOW;
 
 	/* Chain 'tail' onto the old tail */
@@ -1761,7 +1836,7 @@ static inline int rte_pktmbuf_chain(struct rte_mbuf *head, struct rte_mbuf *tail
 	cur_tail->next = tail;
 
 	/* accumulate number of segments and total length. */
-	head->nb_segs = (uint8_t)(head->nb_segs + tail->nb_segs);
+	head->nb_segs += tail->nb_segs;
 	head->pkt_len += tail->pkt_len;
 
 	/* pkt_len is only set in the head */
@@ -1887,6 +1962,231 @@ rte_pktmbuf_linearize(struct rte_mbuf *mbuf)
  *   the packet.
  */
 void rte_pktmbuf_dump(FILE *f, const struct rte_mbuf *m, unsigned dump_len);
+
+/*********************************************************************** 
+       Napatech Additions to handle contiguous memory batching
+ ***********************************************************************/
+
+RTE_STD_C11
+struct rte_mbuf_batch_pkt_hdr  {
+  uint64_t storedLength:14; /**< The length of the packet incl. descriptor. */ /*  0*/
+  uint64_t wireLength:14;   /**< The wire length of the packet.             */ /* 14*/
+  uint64_t color_lo:14;     /**< Programmable packet color[13:0].           */ /* 28*/
+  uint64_t rxPort:6;        /**< The port that received the frame.          */ /* 42*/
+  uint64_t descrFormat:8;   /**< The descriptor type.                       */ /* 48*/
+  uint64_t descrLength:6;   /**< The length of the descriptor in bytes.     */ /* 56*/
+  uint64_t tsColor:1;       /**< Timestamp color.                           */ /* 62*/
+  uint64_t ntDynDescr:1;    /**< Set to 1 to identify this descriptor as a  */ /* 63*/
+                            /**< dynamic descriptor.                        */
+  uint64_t timestamp;       /**< The time of arrival of the packet.         */ /* 64*/
+  uint64_t color_hi:28;     /**< Programmable packet color[41:14].          */ /*128*/
+  uint16_t offset0:10;      /**< Programmable offset into the packet.       */ /*156*/
+  uint16_t offset1:10;      /**< Programmable offset into the packet.       */ /*166*/
+} __attribute__((__packed__)); // descrLength = 22
+
+/**
+ * Get the next packet from the batch buffer.
+ *
+ * This function will return the next packet from a batch
+ * buffer in a local mbuf.
+ *
+ * @param mbuf
+ *   m_batch: 	mbuf containing a batch buffer
+ *   m:         local mbuf. Packet data is return in this mbuf.
+ *  						Note: No packet data is copied.
+ *   offset:    Offset in batch buffer
+ * @return
+ *   Number of bytes in returned packet incl, packet descriptor
+ */
+static inline int
+rte_pktmbuf_cmbatch_get_next_packet(struct rte_mbuf *m_batch, 
+																	struct rte_mbuf *m, 
+																	uint32_t *offset)
+{
+	struct rte_mbuf_batch_pkt_hdr *phdr;    // Packet descriptor
+
+	if (unlikely(*offset == 0)) {        // First packet. setup mbuf struct.
+		//ctrl->max_size = 0;
+		rte_mbuf_refcnt_set(m, 1);
+		rte_pktmbuf_reset(m);
+		m->buf_len = 0;
+		m->buf_physaddr = 0;
+
+		// Mark mbuf as a special mbuf. The mbuf is a control
+		// mbuf and the packet in this mbuf has a descriptor
+		// header. 
+		m->ol_flags = CTRL_MBUF_FLAG | PKT_RX_HAS_HEADER;
+	}
+
+	// No more packets in batch buffer
+	if (unlikely(*offset >= m_batch->pkt_len)) {
+		return 0;
+	}
+
+	// Point to next packet in batch buffer
+	m->buf_addr = (uint8_t *)m_batch->buf_addr + *offset;
+
+	// Point to descriptor header in packet buffer
+	phdr = (struct rte_mbuf_batch_pkt_hdr *)m->buf_addr;
+
+	// Update packet info
+	m->port = phdr->rxPort;
+	m->data_len = phdr->wireLength;
+	m->pkt_len = phdr->storedLength;
+
+	// Point to start of Layer2 header (after the descriptor)
+	m->data_off = phdr->descrLength;
+
+	if (phdr->descrLength == 20) {
+		// We do have a hash value defined
+		m->hash.rss = phdr->color_hi;
+		m->ol_flags |= PKT_RX_RSS_HASH;
+	}
+	else {
+		// We do have a MARK value defined
+		m->hash.fdir.hi = ((phdr->color_hi << 14) & 0xFFFFC000) | phdr->color_lo;
+		m->ol_flags |= PKT_RX_FDIR_ID | PKT_RX_FDIR;
+	}
+
+	// Copy the timestamp.
+	m->timestamp = phdr->timestamp;
+	m->ol_flags |= PKT_RX_TIMESTAMP;
+
+	// Move packet pointer to next packet
+	*offset += phdr->storedLength;
+
+	// Return number of stored bytes in packet incl. descriptor
+	return phdr->storedLength;
+}
+
+/**
+ * Copy a packet from a batch buffer to a normal mbuf.
+ *
+ * This function will copy a packet from a batch buffer 
+ * to a normal mbuf. The function will allocate the needed number of 
+ * mbufs to hold the packet. 
+ *
+ * @param mbuf
+ *   hdr: 	Pointer to the batch buffer
+ *   mp:    Pointer to memory pool to allocate mbufs from.
+ * @return
+ *   Pointer to new mbuf or NULL if it fails
+ */
+static inline struct rte_mbuf *
+rte_pktmbuf_cmbatch_copy_packet_from_batch(struct rte_mbuf_batch_pkt_hdr *hdr,
+                                         struct rte_mempool *mp)
+{
+	struct rte_mbuf *mbuf;
+	uint16_t data_len;
+	uint16_t mbuf_len;
+
+	// Allocate mbuf to segment 1 of the buffer
+	if (unlikely((mbuf = rte_pktmbuf_alloc(mp)) == NULL))
+		return NULL;
+
+	rte_mbuf_refcnt_set(mbuf, 1);
+
+	// Setup the new mbuf
+	if (hdr->descrLength == 20) {
+		// We do have a hash value defined
+		mbuf->hash.rss = hdr->color_hi;
+		mbuf->ol_flags |= PKT_RX_RSS_HASH;
+	}
+	else {
+		// We do have a color value defined
+		mbuf->hash.fdir.hi = ((hdr->color_hi << 14) & 0xFFFFC000) | hdr->color_lo;
+		mbuf->ol_flags |= PKT_RX_FDIR_ID | PKT_RX_FDIR;
+	}
+	
+	// Copy the timestamp
+	mbuf->timestamp = hdr->timestamp;
+	mbuf->ol_flags |= PKT_RX_TIMESTAMP;
+
+	// Copy the port number. 
+	// Note: This is the local adapter port number.
+	//       Not the DPDK port number as it is unknown here.
+	mbuf->port = hdr->rxPort;
+
+	// Total length of the packet
+	data_len = (uint16_t)(hdr->storedLength - hdr->descrLength - 4);
+
+	// Space in the mbuf
+	mbuf_len = rte_pktmbuf_tailroom(mbuf);
+
+	if (data_len <= mbuf_len) {
+		// Packet will fit in the mbuf, go ahead and copy 
+		mbuf->pkt_len = mbuf->data_len = data_len;
+		rte_memcpy((uint8_t *)mbuf->buf_addr + mbuf->data_off, (uint8_t *)hdr + hdr->descrLength, mbuf->data_len);
+	} else {
+		// Packet does not fit in the mbuf. The packets must be copied to a segmented mbuf ie. 
+		// chained mbufs. 
+		struct rte_mbuf *m;
+		const uint8_t *data;
+		uint16_t total_len = data_len;
+
+		// pkt_len contains the complete packets size
+		mbuf->pkt_len = total_len;
+
+		// data_len contains the size of the part of the packets 
+		// contained in this mbuf
+		mbuf->data_len = mbuf_len;
+
+		data = (uint8_t *)hdr + hdr->descrLength;
+		rte_memcpy((uint8_t *)mbuf->buf_addr + mbuf->data_off, data, mbuf_len);
+		data_len -= mbuf_len;
+		data += mbuf_len;
+
+		m = mbuf;
+		while (data_len > 0) {
+			// Allocate next mbuf and point to that.
+			m->next = rte_pktmbuf_alloc(mp);
+			if (unlikely(!m->next))
+				return NULL;
+
+			m = m->next;
+			// Copy next segment. 
+			mbuf_len = RTE_MIN(rte_pktmbuf_tailroom(m), data_len);
+			rte_memcpy((uint8_t *)m->buf_addr + m->data_off, data, mbuf_len);
+
+			// pkt_len contains the complete packets size
+			m->pkt_len = total_len;
+
+			// data_len contains the size of the part of the packets 
+			// contained in this mbuf
+			m->data_len = mbuf_len;
+
+			// The number of segments in this mbuf chain.
+			mbuf->nb_segs++;
+			data_len -= mbuf_len;
+			data += mbuf_len;
+		}
+	}
+	return mbuf;
+}
+
+/**
+ * Copy a packet from a mbuf batch buffer to a normal mbuf.
+ *
+ * This function will copy a packet from a mbuf batch buffer 
+ * to a normal mbuf. The function will allocate the needed number of 
+ * mbufs to hold the packet. 
+ *
+ * @param mbuf
+ *   hdr: 	Pointer to the batch buffer
+ *   mp:    Pointer to memory pool to allocate mbufs from.
+ * @return
+ *   Pointer to new mbuf or NULL if it fails
+ */
+static inline struct rte_mbuf *
+rte_pktmbuf_cmbatch_copy_packet_from_mbuf(struct rte_mbuf *mbuf,
+                                        struct rte_mempool *mp)
+{
+	return 
+		rte_pktmbuf_cmbatch_copy_packet_from_batch(
+			(struct rte_mbuf_batch_pkt_hdr *)mbuf->buf_addr, mp);
+}
+
+
 
 #ifdef __cplusplus
 }

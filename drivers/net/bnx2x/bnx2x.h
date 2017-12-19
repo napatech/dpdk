@@ -18,6 +18,7 @@
 
 #include <rte_byteorder.h>
 #include <rte_spinlock.h>
+#include <rte_bus_pci.h>
 #include <rte_io.h>
 
 #if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
@@ -317,7 +318,7 @@ struct bnx2x_bar {
 /* Used to manage DMA allocations. */
 struct bnx2x_dma {
 	struct bnx2x_softc        *sc;
-	phys_addr_t             paddr;
+	rte_iova_t              paddr;
 	void                    *vaddr;
 	int                     nseg;
 	char                    msg[RTE_MEMZONE_NAMESIZE - 6];
@@ -370,10 +371,10 @@ struct bnx2x_fastpath {
 	struct bnx2x_dma                 sb_dma;
 	union bnx2x_host_hc_status_block status_block;
 
-	phys_addr_t tx_desc_mapping;
+	rte_iova_t tx_desc_mapping;
 
-	phys_addr_t rx_desc_mapping;
-	phys_addr_t rx_comp_mapping;
+	rte_iova_t rx_desc_mapping;
+	rte_iova_t rx_comp_mapping;
 
 	uint16_t *sb_index_values;
 	uint16_t *sb_running_index;
@@ -468,7 +469,7 @@ union cdu_context {
 struct hw_context {
     struct bnx2x_dma    vcxt_dma;
     union cdu_context *vcxt;
-    //phys_addr_t        cxt_mapping;
+    //rte_iova_t        cxt_mapping;
     size_t            size;
 };
 
@@ -1242,7 +1243,7 @@ struct bnx2x_softc {
 	uint32_t       gz_outlen;
 #define GUNZIP_BUF(sc)    (sc->gz_buf)
 #define GUNZIP_OUTLEN(sc) (sc->gz_outlen)
-#define GUNZIP_PHYS(sc)   (phys_addr_t)(sc->gz_buf_dma.paddr)
+#define GUNZIP_PHYS(sc)   (rte_iova_t)(sc->gz_buf_dma.paddr)
 #define FW_BUF_SIZE       0x40000
 
 	struct raw_op *init_ops;
@@ -1310,14 +1311,14 @@ struct bnx2x_softc {
 	 */
 	int                     fw_stats_req_size;
 	struct bnx2x_fw_stats_req *fw_stats_req;
-	phys_addr_t              fw_stats_req_mapping;
+	rte_iova_t              fw_stats_req_mapping;
 	/*
 	 * FW statistics data shortcut (points at the beginning of fw_stats
 	 * buffer + fw_stats_req_size).
 	 */
 	int                      fw_stats_data_size;
 	struct bnx2x_fw_stats_data *fw_stats_data;
-	phys_addr_t               fw_stats_data_mapping;
+	rte_iova_t               fw_stats_data_mapping;
 
 	/* tracking a pending STAT_QUERY ramrod */
 	uint16_t stats_pending;
@@ -1402,8 +1403,8 @@ union bnx2x_stats_show_data {
 #define FUNC_FLG_LEADING 0x0020 /* PF only */
 
 struct bnx2x_func_init_params {
-    phys_addr_t fw_stat_map; /* (dma) valid if FUNC_FLG_STATS */
-    phys_addr_t spq_map;     /* (dma) valid if FUNC_FLG_SPQ */
+    rte_iova_t fw_stat_map; /* (dma) valid if FUNC_FLG_STATS */
+    rte_iova_t spq_map;     /* (dma) valid if FUNC_FLG_SPQ */
     uint16_t   func_flgs;
     uint16_t   func_id;     /* abs function id */
     uint16_t   pf_id;
@@ -1525,12 +1526,12 @@ bnx2x_reg_read32(struct bnx2x_softc *sc, size_t offset)
 #define REG_RD_DMAE(sc, offset, valp, len32)               \
     do {                                                   \
 	(void)bnx2x_read_dmae(sc, offset, len32);                  \
-	(void)rte_memcpy(valp, BNX2X_SP(sc, wb_data[0]), (len32) * 4); \
+	rte_memcpy(valp, BNX2X_SP(sc, wb_data[0]), (len32) * 4); \
     } while (0)
 
 #define REG_WR_DMAE(sc, offset, valp, len32)                            \
     do {                                                                \
-	(void)rte_memcpy(BNX2X_SP(sc, wb_data[0]), valp, (len32) * 4);              \
+	rte_memcpy(BNX2X_SP(sc, wb_data[0]), valp, (len32) * 4);              \
 	(void)bnx2x_write_dmae(sc, BNX2X_SP_MAPPING(sc, wb_data), offset, len32); \
     } while (0)
 
@@ -1748,7 +1749,7 @@ uint32_t bnx2x_dmae_opcode(struct bnx2x_softc *sc, uint8_t src_type,
 			 uint8_t comp_type);
 void bnx2x_post_dmae(struct bnx2x_softc *sc, struct dmae_command *dmae, int idx);
 void bnx2x_read_dmae(struct bnx2x_softc *sc, uint32_t src_addr, uint32_t len32);
-void bnx2x_write_dmae(struct bnx2x_softc *sc, phys_addr_t dma_addr,
+void bnx2x_write_dmae(struct bnx2x_softc *sc, rte_iova_t dma_addr,
 		    uint32_t dst_addr, uint32_t len32);
 void bnx2x_set_ctx_validation(struct bnx2x_softc *sc, struct eth_context *cxt,
 			    uint32_t cid);

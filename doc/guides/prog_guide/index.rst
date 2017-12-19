@@ -44,23 +44,29 @@ Programmer's Guide
     mbuf_lib
     poll_mode_drv
     rte_flow
+    traffic_metering_and_policing
     traffic_management
     cryptodev_lib
+    rte_security
     link_bonding_poll_mode_drv_lib
     timer_lib
     hash_lib
     efd_lib
+    member_lib
     lpm_lib
     lpm6_lib
+    flow_classify_lib
     packet_distrib_lib
     reorder_lib
     ip_fragment_reassembly_lib
     generic_receive_offload_lib
+    generic_segmentation_offload_lib
     pdump_lib
     multi_proc_support
     kernel_nic_interface
     thread_safety_dpdk_functions
     eventdev
+    event_ethernet_rx_adapter
     qos_framework
     power_man
     packet_classif_access_ctrl
@@ -191,6 +197,19 @@ Programmer's Guide
 
 :numref:`figure_efd11` :ref:`figure_efd11`
 
+:numref:`figure_membership1` :ref:`figure_membership1`
+
+:numref:`figure_membership2` :ref:`figure_membership2`
+
+:numref:`figure_membership3` :ref:`figure_membership3`
+
+:numref:`figure_membership4` :ref:`figure_membership4`
+
+:numref:`figure_membership5` :ref:`figure_membership5`
+
+:numref:`figure_membership6` :ref:`figure_membership6`
+
+:numref:`figure_membership7` :ref:`figure_membership7`
 
 **Tables**
 

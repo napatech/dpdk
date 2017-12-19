@@ -39,6 +39,7 @@
 #include <rte_log.h>
 #include <rte_memory.h>
 #include <rte_eal_memconfig.h>
+#include <rte_vfio.h>
 
 #include "eal_filesystem.h"
 #include "eal_vfio.h"
@@ -68,8 +69,8 @@ vfio_get_group_fd(int iommu_group_no)
 {
 	int i;
 	int vfio_group_fd;
-	int group_idx = -1;
 	char filename[PATH_MAX];
+	struct vfio_group *cur_grp;
 
 	/* check if we already have the group descriptor open */
 	for (i = 0; i < VFIO_MAX_GROUPS; i++)
@@ -85,12 +86,12 @@ vfio_get_group_fd(int iommu_group_no)
 	/* Now lets get an index for the new group */
 	for (i = 0; i < VFIO_MAX_GROUPS; i++)
 		if (vfio_cfg.vfio_groups[i].group_no == -1) {
-			group_idx = i;
+			cur_grp = &vfio_cfg.vfio_groups[i];
 			break;
 		}
 
 	/* This should not happen */
-	if (group_idx == -1) {
+	if (i == VFIO_MAX_GROUPS) {
 		RTE_LOG(ERR, EAL, "No VFIO group free slot found\n");
 		return -1;
 	}
@@ -123,8 +124,8 @@ vfio_get_group_fd(int iommu_group_no)
 			/* noiommu group found */
 		}
 
-		vfio_cfg.vfio_groups[group_idx].group_no = iommu_group_no;
-		vfio_cfg.vfio_groups[group_idx].fd = vfio_group_fd;
+		cur_grp->group_no = iommu_group_no;
+		cur_grp->fd = vfio_group_fd;
 		vfio_cfg.vfio_active_groups++;
 		return vfio_group_fd;
 	}
@@ -157,9 +158,12 @@ vfio_get_group_fd(int iommu_group_no)
 			return 0;
 		case SOCKET_OK:
 			vfio_group_fd = vfio_mp_sync_receive_fd(socket_fd);
-			/* if we got the fd, return it */
+			/* if we got the fd, store it and return it */
 			if (vfio_group_fd > 0) {
 				close(socket_fd);
+				cur_grp->group_no = iommu_group_no;
+				cur_grp->fd = vfio_group_fd;
+				vfio_cfg.vfio_active_groups++;
 				return vfio_group_fd;
 			}
 			/* fall-through on error */
@@ -280,7 +284,7 @@ clear_group(int vfio_group_fd)
 }
 
 int
-vfio_setup_device(const char *sysfs_base, const char *dev_addr,
+rte_vfio_setup_device(const char *sysfs_base, const char *dev_addr,
 		int *vfio_dev_fd, struct vfio_device_info *device_info)
 {
 	struct vfio_group_status group_status = {
@@ -412,7 +416,7 @@ vfio_setup_device(const char *sysfs_base, const char *dev_addr,
 }
 
 int
-vfio_release_device(const char *sysfs_base, const char *dev_addr,
+rte_vfio_release_device(const char *sysfs_base, const char *dev_addr,
 		    int vfio_dev_fd)
 {
 	struct vfio_group_status group_status = {
@@ -474,7 +478,7 @@ vfio_release_device(const char *sysfs_base, const char *dev_addr,
 }
 
 int
-vfio_enable(const char *modname)
+rte_vfio_enable(const char *modname)
 {
 	/* initialize group list */
 	int i;
@@ -489,7 +493,7 @@ vfio_enable(const char *modname)
 	/* inform the user that we are probing for VFIO */
 	RTE_LOG(INFO, EAL, "Probing VFIO support...\n");
 
-	/* check if vfio-pci module is loaded */
+	/* check if vfio module is loaded */
 	vfio_available = rte_eal_check_module(modname);
 
 	/* return error directly */
@@ -519,7 +523,7 @@ vfio_enable(const char *modname)
 }
 
 int
-vfio_is_enabled(const char *modname)
+rte_vfio_is_enabled(const char *modname)
 {
 	const int mod_available = rte_eal_check_module(modname);
 	return vfio_cfg.vfio_enabled && mod_available;
@@ -706,7 +710,10 @@ vfio_type1_dma_map(int vfio_container_fd)
 		dma_map.argsz = sizeof(struct vfio_iommu_type1_dma_map);
 		dma_map.vaddr = ms[i].addr_64;
 		dma_map.size = ms[i].len;
-		dma_map.iova = ms[i].phys_addr;
+		if (rte_eal_iova_mode() == RTE_IOVA_VA)
+			dma_map.iova = dma_map.vaddr;
+		else
+			dma_map.iova = ms[i].iova;
 		dma_map.flags = VFIO_DMA_MAP_FLAG_READ | VFIO_DMA_MAP_FLAG_WRITE;
 
 		ret = ioctl(vfio_container_fd, VFIO_IOMMU_MAP_DMA, &dma_map);
@@ -759,15 +766,29 @@ vfio_spapr_dma_map(int vfio_container_fd)
 		return -1;
 	}
 
-	/* calculate window size based on number of hugepages configured */
-	create.window_size = rte_eal_get_physmem_size();
+	/* create DMA window from 0 to max(phys_addr + len) */
+	for (i = 0; i < RTE_MAX_MEMSEG; i++) {
+		if (ms[i].addr == NULL)
+			break;
+
+		create.window_size = RTE_MAX(create.window_size,
+				ms[i].iova + ms[i].len);
+	}
+
+	/* sPAPR requires window size to be a power of 2 */
+	create.window_size = rte_align64pow2(create.window_size);
 	create.page_shift = __builtin_ctzll(ms->hugepage_sz);
-	create.levels = 2;
+	create.levels = 1;
 
 	ret = ioctl(vfio_container_fd, VFIO_IOMMU_SPAPR_TCE_CREATE, &create);
 	if (ret) {
 		RTE_LOG(ERR, EAL, "  cannot create new DMA window, "
 				"error %i (%s)\n", errno, strerror(errno));
+		return -1;
+	}
+
+	if (create.start_addr != 0) {
+		RTE_LOG(ERR, EAL, "  DMA window start address != 0\n");
 		return -1;
 	}
 
@@ -792,7 +813,10 @@ vfio_spapr_dma_map(int vfio_container_fd)
 		dma_map.argsz = sizeof(struct vfio_iommu_type1_dma_map);
 		dma_map.vaddr = ms[i].addr_64;
 		dma_map.size = ms[i].len;
-		dma_map.iova = ms[i].phys_addr;
+		if (rte_eal_iova_mode() == RTE_IOVA_VA)
+			dma_map.iova = dma_map.vaddr;
+		else
+			dma_map.iova = ms[i].iova;
 		dma_map.flags = VFIO_DMA_MAP_FLAG_READ |
 				 VFIO_DMA_MAP_FLAG_WRITE;
 
@@ -814,6 +838,25 @@ vfio_noiommu_dma_map(int __rte_unused vfio_container_fd)
 {
 	/* No-IOMMU mode does not need DMA mapping */
 	return 0;
+}
+
+int
+rte_vfio_noiommu_is_enabled(void)
+{
+	int fd, ret, cnt __rte_unused;
+	char c;
+
+	ret = -1;
+	fd = open(VFIO_NOIOMMU_MODE, O_RDONLY);
+	if (fd < 0)
+		return -1;
+
+	cnt = read(fd, &c, 1);
+	if (c == 'Y')
+		ret = 1;
+
+	close(fd);
+	return ret;
 }
 
 #endif

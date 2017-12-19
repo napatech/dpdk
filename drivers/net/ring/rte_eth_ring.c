@@ -36,9 +36,8 @@
 #include <rte_ethdev.h>
 #include <rte_malloc.h>
 #include <rte_memcpy.h>
-#include <rte_memzone.h>
 #include <rte_string_fns.h>
-#include <rte_vdev.h>
+#include <rte_bus_vdev.h>
 #include <rte_kvargs.h>
 #include <rte_errno.h>
 
@@ -190,7 +189,7 @@ eth_dev_info(struct rte_eth_dev *dev,
 	dev_info->min_rx_bufsize = 0;
 }
 
-static void
+static int
 eth_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 {
 	unsigned i;
@@ -214,6 +213,8 @@ eth_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	stats->ipackets = rx_total;
 	stats->opackets = tx_total;
 	stats->oerrors = tx_err_total;
+
+	return 0;
 }
 
 static void
@@ -356,7 +357,6 @@ do_eth_dev_ring_create(const char *name,
 
 	eth_dev->data = data;
 	eth_dev->dev_ops = &ops;
-	data->dev_flags = RTE_ETH_DEV_DETACHABLE;
 	data->kdrv = RTE_KDRV_NONE;
 	data->numa_node = numa_node;
 
@@ -394,7 +394,7 @@ rte_eth_from_rings(const char *name, struct rte_ring *const rx_queues[],
 	};
 	char args_str[32] = { 0 };
 	char ring_name[32] = { 0 };
-	uint8_t port_id = RTE_MAX_ETHPORTS;
+	uint16_t port_id = RTE_MAX_ETHPORTS;
 	int ret;
 
 	/* do some parameter checking */

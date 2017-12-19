@@ -33,6 +33,7 @@
 #include <rte_ethdev.h>
 #include <rte_ethdev_pci.h>
 #include <rte_pci.h>
+#include <rte_bus_pci.h>
 #include <rte_errno.h>
 
 #include "efx.h"
@@ -145,10 +146,16 @@ sfc_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	if (~sa->dp_tx->features & SFC_DP_TX_FEAT_MULTI_SEG)
 		dev_info->default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOMULTSEGS;
 
+	if (~sa->dp_tx->features & SFC_DP_TX_FEAT_MULTI_POOL)
+		dev_info->default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOMULTMEMP;
+
+	if (~sa->dp_tx->features & SFC_DP_TX_FEAT_REFCNT)
+		dev_info->default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOREFCOUNT;
+
 #if EFSYS_OPT_RX_SCALE
 	if (sa->rss_support != EFX_RX_SCALE_UNAVAILABLE) {
 		dev_info->reta_size = EFX_RSS_TBL_SIZE;
-		dev_info->hash_key_size = SFC_RSS_KEY_SIZE;
+		dev_info->hash_key_size = EFX_RSS_KEY_SIZE;
 		dev_info->flow_type_rss_offloads = SFC_RSS_OFFLOADS;
 	}
 #endif
@@ -515,16 +522,18 @@ sfc_tx_queue_release(void *queue)
 	sfc_adapter_unlock(sa);
 }
 
-static void
+static int
 sfc_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 {
 	struct sfc_adapter *sa = dev->data->dev_private;
 	struct sfc_port *port = &sa->port;
 	uint64_t *mac_stats;
+	int ret;
 
 	rte_spinlock_lock(&port->mac_stats_lock);
 
-	if (sfc_port_update_mac_stats(sa) != 0)
+	ret = sfc_port_update_mac_stats(sa);
+	if (ret != 0)
 		goto unlock;
 
 	mac_stats = port->mac_stats_buf;
@@ -581,6 +590,8 @@ sfc_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 
 unlock:
 	rte_spinlock_unlock(&port->mac_stats_lock);
+	SFC_ASSERT(ret >= 0);
+	return -ret;
 }
 
 static void
@@ -991,7 +1002,7 @@ sfc_set_mc_addr_list(struct rte_eth_dev *dev, struct ether_addr *mc_addr_set,
 	}
 
 	for (i = 0; i < nb_mc_addr; ++i) {
-		(void)rte_memcpy(mc_addrs, mc_addr_set[i].addr_bytes,
+		rte_memcpy(mc_addrs, mc_addr_set[i].addr_bytes,
 				 EFX_MAC_ADDR_LEN);
 		mc_addrs += EFX_MAC_ADDR_LEN;
 	}
@@ -1084,6 +1095,24 @@ sfc_rx_descriptor_done(void *queue, uint16_t offset)
 	struct sfc_dp_rxq *dp_rxq = queue;
 
 	return sfc_rx_qdesc_done(dp_rxq, offset);
+}
+
+static int
+sfc_rx_descriptor_status(void *queue, uint16_t offset)
+{
+	struct sfc_dp_rxq *dp_rxq = queue;
+	struct sfc_rxq *rxq = sfc_rxq_by_dp_rxq(dp_rxq);
+
+	return rxq->evq->sa->dp_rx->qdesc_status(dp_rxq, offset);
+}
+
+static int
+sfc_tx_descriptor_status(void *queue, uint16_t offset)
+{
+	struct sfc_dp_txq *dp_txq = queue;
+	struct sfc_txq *txq = sfc_txq_by_dp_txq(dp_txq);
+
+	return txq->evq->sa->dp_tx->qdesc_status(dp_txq, offset);
 }
 
 static int
@@ -1205,9 +1234,9 @@ sfc_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 	 * locally in 'sfc_adapter' and kept up-to-date
 	 */
 	rss_conf->rss_hf = sfc_efx_to_rte_hash_type(sa->rss_hash_types);
-	rss_conf->rss_key_len = SFC_RSS_KEY_SIZE;
+	rss_conf->rss_key_len = EFX_RSS_KEY_SIZE;
 	if (rss_conf->rss_key != NULL)
-		rte_memcpy(rss_conf->rss_key, sa->rss_key, SFC_RSS_KEY_SIZE);
+		rte_memcpy(rss_conf->rss_key, sa->rss_key, EFX_RSS_KEY_SIZE);
 
 	sfc_adapter_unlock(sa);
 
@@ -1252,14 +1281,17 @@ sfc_dev_rss_hash_update(struct rte_eth_dev *dev,
 
 	efx_hash_types = sfc_rte_to_efx_hash_type(rss_conf->rss_hf);
 
-	rc = efx_rx_scale_mode_set(sa->nic, EFX_RX_HASHALG_TOEPLITZ,
+	rc = efx_rx_scale_mode_set(sa->nic, EFX_RSS_CONTEXT_DEFAULT,
+				   EFX_RX_HASHALG_TOEPLITZ,
 				   efx_hash_types, B_TRUE);
 	if (rc != 0)
 		goto fail_scale_mode_set;
 
 	if (rss_conf->rss_key != NULL) {
 		if (sa->state == SFC_ADAPTER_STARTED) {
-			rc = efx_rx_scale_key_set(sa->nic, rss_conf->rss_key,
+			rc = efx_rx_scale_key_set(sa->nic,
+						  EFX_RSS_CONTEXT_DEFAULT,
+						  rss_conf->rss_key,
 						  sizeof(sa->rss_key));
 			if (rc != 0)
 				goto fail_scale_key_set;
@@ -1275,7 +1307,8 @@ sfc_dev_rss_hash_update(struct rte_eth_dev *dev,
 	return 0;
 
 fail_scale_key_set:
-	if (efx_rx_scale_mode_set(sa->nic, EFX_RX_HASHALG_TOEPLITZ,
+	if (efx_rx_scale_mode_set(sa->nic, EFX_RSS_CONTEXT_DEFAULT,
+				  EFX_RX_HASHALG_TOEPLITZ,
 				  sa->rss_hash_types, B_TRUE) != 0)
 		sfc_err(sa, "failed to restore RSS mode");
 
@@ -1326,7 +1359,7 @@ sfc_dev_rss_reta_update(struct rte_eth_dev *dev,
 	struct sfc_port *port = &sa->port;
 	unsigned int *rss_tbl_new;
 	uint16_t entry;
-	int rc;
+	int rc = 0;
 
 
 	if (port->isolated)
@@ -1371,10 +1404,16 @@ sfc_dev_rss_reta_update(struct rte_eth_dev *dev,
 		}
 	}
 
-	rc = efx_rx_scale_tbl_set(sa->nic, rss_tbl_new, EFX_RSS_TBL_SIZE);
-	if (rc == 0)
-		rte_memcpy(sa->rss_tbl, rss_tbl_new, sizeof(sa->rss_tbl));
+	if (sa->state == SFC_ADAPTER_STARTED) {
+		rc = efx_rx_scale_tbl_set(sa->nic, EFX_RSS_CONTEXT_DEFAULT,
+					  rss_tbl_new, EFX_RSS_TBL_SIZE);
+		if (rc != 0)
+			goto fail_scale_tbl_set;
+	}
 
+	rte_memcpy(sa->rss_tbl, rss_tbl_new, sizeof(sa->rss_tbl));
+
+fail_scale_tbl_set:
 bad_reta_entry:
 	sfc_adapter_unlock(sa);
 
@@ -1469,6 +1508,8 @@ static const struct eth_dev_ops sfc_eth_dev_ops = {
 	.rx_queue_release		= sfc_rx_queue_release,
 	.rx_queue_count			= sfc_rx_queue_count,
 	.rx_descriptor_done		= sfc_rx_descriptor_done,
+	.rx_descriptor_status		= sfc_rx_descriptor_status,
+	.tx_descriptor_status		= sfc_tx_descriptor_status,
 	.tx_queue_setup			= sfc_tx_queue_setup,
 	.tx_queue_release		= sfc_tx_queue_release,
 	.flow_ctrl_get			= sfc_flow_ctrl_get,
@@ -1750,8 +1791,6 @@ sfc_eth_dev_init(struct rte_eth_dev *dev)
 
 	/* Copy PCI device info to the dev->data */
 	rte_eth_copy_pci_info(dev, pci_dev);
-
-	dev->data->dev_flags |= RTE_ETH_DEV_DETACHABLE;
 
 	rc = sfc_kvargs_parse(sa);
 	if (rc != 0)

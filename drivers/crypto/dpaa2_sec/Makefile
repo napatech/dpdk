@@ -31,6 +31,12 @@
 
 include $(RTE_SDK)/mk/rte.vars.mk
 
+ifneq ($(MAKECMDGOALS),clean)
+ifneq ($(CONFIG_RTE_LIBRTE_SECURITY),y)
+$(error "RTE_LIBRTE_SECURITY is required to build RTE_LIBRTE_PMD_DPAA2_SEC")
+endif
+endif
+
 #
 # library name
 #
@@ -71,14 +77,9 @@ LIBABIVER := 1
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_DPAA2_SEC) += dpaa2_sec_dpseci.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_DPAA2_SEC) += mc/dpseci.c
 
-# library dependencies
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_DPAA2_SEC) += lib/librte_eal
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_DPAA2_SEC) += lib/librte_mempool lib/librte_mbuf
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_DPAA2_SEC) += lib/librte_cryptodev
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_DPAA2_SEC) += drivers/bus/fslmc
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_DPAA2_SEC) += drivers/mempool/dpaa2
-
 LDLIBS += -lrte_bus_fslmc
 LDLIBS += -lrte_mempool_dpaa2
+LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
+LDLIBS += -lrte_cryptodev
 
 include $(RTE_SDK)/mk/rte.lib.mk

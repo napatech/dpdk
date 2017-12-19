@@ -310,6 +310,26 @@ exported by each PMD. The list of flags and their precise meaning is
 described in the mbuf API documentation and in the in :ref:`Mbuf Library
 <Mbuf_Library>`, section "Meta Information".
 
+Per-Port and Per-Queue Offloads
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+In the DPDK offload API, offloads are divided into per-port and per-queue offloads.
+The different offloads capabilities can be queried using ``rte_eth_dev_info_get()``.
+Supported offloads can be either per-port or per-queue.
+
+Offloads are enabled using the existing ``DEV_TX_OFFLOAD_*`` or ``DEV_RX_OFFLOAD_*`` flags.
+Per-port offload configuration is set using ``rte_eth_dev_configure``.
+Per-queue offload configuration is set using ``rte_eth_rx_queue_setup`` and ``rte_eth_tx_queue_setup``.
+To enable per-port offload, the offload should be set on both device configuration and queue setup.
+In case of a mixed configuration the queue setup shall return with an error.
+To enable per-queue offload, the offload can be set only on the queue setup.
+Offloads which are not enabled are disabled by default.
+
+For an application to use the Tx offloads API it should set the ``ETH_TXQ_FLAGS_IGNORE`` flag in the ``txq_flags`` field located in ``rte_eth_txconf`` struct.
+In such cases it is not required to set other flags in ``txq_flags``.
+For an application to use the Rx offloads API it should set the ``ignore_offload_bitfield`` bit in the ``rte_eth_rxmode`` struct.
+In such cases it is not required to set other bitfield offloads in the ``rxmode`` struct.
+
 Poll Mode Driver API
 --------------------
 
@@ -536,3 +556,43 @@ call. As an end result, the application is able to achieve its goal of
 monitoring a single statistic ("rx_errors" in this case), and if that shows
 packets being dropped, it can easily retrieve a "set" of statistics using the
 IDs array parameter to ``rte_eth_xstats_get_by_id`` function.
+
+NIC Reset API
+~~~~~~~~~~~~~
+
+.. code-block:: c
+
+    int rte_eth_dev_reset(uint16_t port_id);
+
+Sometimes a port has to be reset passively. For example when a PF is
+reset, all its VFs should also be reset by the application to make them
+consistent with the PF. A DPDK application also can call this function
+to trigger a port reset. Normally, a DPDK application would invokes this
+function when an RTE_ETH_EVENT_INTR_RESET event is detected.
+
+It is the duty of the PMD to trigger RTE_ETH_EVENT_INTR_RESET events and
+the application should register a callback function to handle these
+events. When a PMD needs to trigger a reset, it can trigger an
+RTE_ETH_EVENT_INTR_RESET event. On receiving an RTE_ETH_EVENT_INTR_RESET
+event, applications can handle it as follows: Stop working queues, stop
+calling Rx and Tx functions, and then call rte_eth_dev_reset(). For
+thread safety all these operations should be called from the same thread.
+
+For example when PF is reset, the PF sends a message to notify VFs of
+this event and also trigger an interrupt to VFs. Then in the interrupt
+service routine the VFs detects this notification message and calls
+_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_RESET, NULL,
+NULL). This means that a PF reset triggers an RTE_ETH_EVENT_INTR_RESET
+event within VFs. The function _rte_eth_dev_callback_process() will
+call the registered callback function. The callback function can trigger
+the application to handle all operations the VF reset requires including
+stopping Rx/Tx queues and calling rte_eth_dev_reset().
+
+The rte_eth_dev_reset() itself is a generic function which only does
+some hardware reset operations through calling dev_unint() and
+dev_init(), and itself does not handle synchronization, which is handled
+by application.
+
+The PMD itself should not call rte_eth_dev_reset(). The PMD can trigger
+the application to handle reset event. It is duty of application to
+handle all synchronization before it calls rte_eth_dev_reset().

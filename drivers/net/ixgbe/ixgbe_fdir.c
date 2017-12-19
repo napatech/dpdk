@@ -1276,7 +1276,8 @@ ixgbe_fdir_filter_program(struct rte_eth_dev *dev,
 	     rule->ixgbe_fdir.formatted.flow_type ==
 	     IXGBE_ATR_FLOW_TYPE_IPV6) &&
 	    (info->mask.src_port_mask != 0 ||
-	     info->mask.dst_port_mask != 0)) {
+	     info->mask.dst_port_mask != 0) &&
+	     rule->mode != RTE_FDIR_MODE_PERFECT_MAC_VLAN) {
 		PMD_DRV_LOG(ERR, "By this device,"
 			    " IPv4 is not supported without"
 			    " L4 protocol and ports masked!");
@@ -1347,7 +1348,7 @@ ixgbe_fdir_filter_program(struct rte_eth_dev *dev,
 				   0);
 		if (!node)
 			return -ENOMEM;
-		(void)rte_memcpy(&node->ixgbe_fdir,
+		rte_memcpy(&node->ixgbe_fdir,
 				 &rule->ixgbe_fdir,
 				 sizeof(union ixgbe_atr_input));
 		node->fdirflags = fdircmd_flags;

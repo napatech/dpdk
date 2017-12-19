@@ -453,6 +453,13 @@ int qede_activate_vport(struct rte_eth_dev *eth_dev, bool flg)
 	params.update_vport_active_tx_flg = 1;
 	params.vport_active_rx_flg = flg;
 	params.vport_active_tx_flg = flg;
+#ifndef RTE_LIBRTE_QEDE_VF_TX_SWITCH
+	if (IS_VF(edev)) {
+		params.update_tx_switching_flg = 1;
+		params.tx_switching_flg = !flg;
+		DP_INFO(edev, "VF tx-switching is disabled\n");
+	}
+#endif
 	for_each_hwfn(edev, i) {
 		p_hwfn = &edev->hwfns[i];
 		params.opaque_fid = p_hwfn->hw_info.opaque_fid;
@@ -463,7 +470,8 @@ int qede_activate_vport(struct rte_eth_dev *eth_dev, bool flg)
 			break;
 		}
 	}
-	DP_INFO(edev, "vport %s\n", flg ? "activated" : "deactivated");
+	DP_INFO(edev, "vport is %s\n", flg ? "activated" : "deactivated");
+
 	return rc;
 }
 
@@ -520,7 +528,7 @@ int qede_enable_tpa(struct rte_eth_dev *eth_dev, bool flg)
 			return -1;
 		}
 	}
-
+	qdev->enable_lro = flg;
 	DP_INFO(edev, "LRO is %s\n", flg ? "enabled" : "disabled");
 
 	return 0;
@@ -602,15 +610,53 @@ qed_configure_filter_rx_mode(struct rte_eth_dev *eth_dev,
 	return ecore_filter_accept_cmd(edev, 0, flags, false, false,
 			ECORE_SPQ_MODE_CB, NULL);
 }
-static void qede_set_cmn_tunn_param(struct ecore_tunnel_info *p_tunn,
-				    uint8_t clss, bool mode, bool mask)
+
+static int
+qede_vxlan_enable(struct rte_eth_dev *eth_dev, uint8_t clss,
+		  bool enable, bool mask)
 {
-	memset(p_tunn, 0, sizeof(struct ecore_tunnel_info));
-	p_tunn->vxlan.b_update_mode = mode;
-	p_tunn->vxlan.b_mode_enabled = mask;
-	p_tunn->b_update_rx_cls = true;
-	p_tunn->b_update_tx_cls = true;
-	p_tunn->vxlan.tun_cls = clss;
+	struct qede_dev *qdev = QEDE_INIT_QDEV(eth_dev);
+	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
+	enum _ecore_status_t rc = ECORE_INVAL;
+	struct ecore_ptt *p_ptt;
+	struct ecore_tunnel_info tunn;
+	struct ecore_hwfn *p_hwfn;
+	int i;
+
+	memset(&tunn, 0, sizeof(struct ecore_tunnel_info));
+	tunn.vxlan.b_update_mode = enable;
+	tunn.vxlan.b_mode_enabled = mask;
+	tunn.b_update_rx_cls = true;
+	tunn.b_update_tx_cls = true;
+	tunn.vxlan.tun_cls = clss;
+
+	for_each_hwfn(edev, i) {
+		p_hwfn = &edev->hwfns[i];
+		if (IS_PF(edev)) {
+			p_ptt = ecore_ptt_acquire(p_hwfn);
+			if (!p_ptt)
+				return -EAGAIN;
+		} else {
+			p_ptt = NULL;
+		}
+		rc = ecore_sp_pf_update_tunn_cfg(p_hwfn, p_ptt,
+				&tunn, ECORE_SPQ_MODE_CB, NULL);
+		if (rc != ECORE_SUCCESS) {
+			DP_ERR(edev, "Failed to update tunn_clss %u\n",
+					tunn.vxlan.tun_cls);
+			if (IS_PF(edev))
+				ecore_ptt_release(p_hwfn, p_ptt);
+			break;
+		}
+	}
+
+	if (rc == ECORE_SUCCESS) {
+		qdev->vxlan.enable = enable;
+		qdev->vxlan.udp_port = (enable) ? QEDE_VXLAN_DEF_PORT : 0;
+		DP_INFO(edev, "vxlan is %s\n", enable ? "enabled" : "disabled");
+	}
+
+	return rc;
 }
 
 static int
@@ -975,7 +1021,7 @@ static int qede_vlan_filter_set(struct rte_eth_dev *eth_dev,
 	return rc;
 }
 
-static void qede_vlan_offload_set(struct rte_eth_dev *eth_dev, int mask)
+static int qede_vlan_offload_set(struct rte_eth_dev *eth_dev, int mask)
 {
 	struct qede_dev *qdev = QEDE_INIT_QDEV(eth_dev);
 	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
@@ -1013,6 +1059,8 @@ static void qede_vlan_offload_set(struct rte_eth_dev *eth_dev, int mask)
 
 	DP_INFO(edev, "vlan offload mask %d vlan-strip %d vlan-filter %d\n",
 		mask, rxmode->hw_vlan_strip, rxmode->hw_vlan_filter);
+
+	return 0;
 }
 
 static void qede_prandom_bytes(uint32_t *buff)
@@ -1078,6 +1126,7 @@ static void qede_fastpath_start(struct ecore_dev *edev)
 
 static int qede_dev_start(struct rte_eth_dev *eth_dev)
 {
+	struct rte_eth_rxmode *rxmode = &eth_dev->data->dev_conf.rxmode;
 	struct qede_dev *qdev = QEDE_INIT_QDEV(eth_dev);
 	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
 
@@ -1088,10 +1137,15 @@ static int qede_dev_start(struct rte_eth_dev *eth_dev)
 		if (qede_update_mtu(eth_dev, qdev->new_mtu))
 			goto err;
 		qdev->mtu = qdev->new_mtu;
-		/* If MTU has changed then update TPA too */
-		if (qdev->enable_lro)
-			if (qede_enable_tpa(eth_dev, true))
-				goto err;
+	}
+
+	/* Configure TPA parameters */
+	if (rxmode->enable_lro) {
+		if (qede_enable_tpa(eth_dev, true))
+			return -EINVAL;
+		/* Enable scatter mode for LRO */
+		if (!rxmode->enable_scatter)
+			eth_dev->data->scattered_rx = 1;
 	}
 
 	/* Start queues */
@@ -1103,7 +1157,7 @@ static int qede_dev_start(struct rte_eth_dev *eth_dev)
 	 * Also, we would like to retain similar behavior in PF case, so we
 	 * don't do PF/VF specific check here.
 	 */
-	if (eth_dev->data->dev_conf.rxmode.mq_mode == ETH_MQ_RX_RSS)
+	if (rxmode->mq_mode == ETH_MQ_RX_RSS)
 		if (qede_config_rss(eth_dev))
 			goto err;
 
@@ -1113,6 +1167,9 @@ static int qede_dev_start(struct rte_eth_dev *eth_dev)
 
 	/* Bring-up the link */
 	qede_dev_set_link_state(eth_dev, true);
+
+	/* Update link status */
+	qede_link_update(eth_dev, 0);
 
 	/* Start/resume traffic */
 	qede_fastpath_start(edev);
@@ -1139,7 +1196,6 @@ static void qede_dev_stop(struct rte_eth_dev *eth_dev)
 	if (qdev->enable_lro)
 		qede_enable_tpa(eth_dev, false);
 
-	/* TODO: Do we need disable LRO or RSS */
 	/* Stop queues */
 	qede_stop_queues(eth_dev);
 
@@ -1157,11 +1213,12 @@ static int qede_dev_configure(struct rte_eth_dev *eth_dev)
 	struct qede_dev *qdev = QEDE_INIT_QDEV(eth_dev);
 	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
 	struct rte_eth_rxmode *rxmode = &eth_dev->data->dev_conf.rxmode;
+	int ret;
 
 	PMD_INIT_FUNC_TRACE(edev);
 
 	/* Check requirements for 100G mode */
-	if (edev->num_hwfns > 1) {
+	if (ECORE_IS_CMT(edev)) {
 		if (eth_dev->data->nb_rx_queues < 2 ||
 				eth_dev->data->nb_tx_queues < 2) {
 			DP_ERR(edev, "100G mode needs min. 2 RX/TX queues\n");
@@ -1226,20 +1283,12 @@ static int qede_dev_configure(struct rte_eth_dev *eth_dev)
 	qdev->mtu = rxmode->max_rx_pkt_len;
 	qdev->new_mtu = qdev->mtu;
 
-	/* Configure TPA parameters */
-	if (rxmode->enable_lro) {
-		if (qede_enable_tpa(eth_dev, true))
-			return -EINVAL;
-		/* Enable scatter mode for LRO */
-		if (!rxmode->enable_scatter)
-			eth_dev->data->scattered_rx = 1;
-	}
-	qdev->enable_lro = rxmode->enable_lro;
-
 	/* Enable VLAN offloads by default */
-	qede_vlan_offload_set(eth_dev, ETH_VLAN_STRIP_MASK  |
+	ret = qede_vlan_offload_set(eth_dev, ETH_VLAN_STRIP_MASK  |
 			ETH_VLAN_FILTER_MASK |
 			ETH_VLAN_EXTEND_MASK);
+	if (ret)
+		return ret;
 
 	DP_INFO(edev, "Device configured with RSS=%d TSS=%d\n",
 			QEDE_RSS_COUNT(qdev), QEDE_TSS_COUNT(qdev));
@@ -1330,7 +1379,7 @@ qede_dev_info_get(struct rte_eth_dev *eth_dev,
 }
 
 /* return 0 means link status changed, -1 means not changed */
-static int
+int
 qede_link_update(struct rte_eth_dev *eth_dev, __rte_unused int wait_to_complete)
 {
 	struct qede_dev *qdev = eth_dev->data->dev_private;
@@ -1456,11 +1505,11 @@ static void qede_dev_close(struct rte_eth_dev *eth_dev)
 	rte_intr_disable(&pci_dev->intr_handle);
 	rte_intr_callback_unregister(&pci_dev->intr_handle,
 				     qede_interrupt_handler, (void *)eth_dev);
-	if (edev->num_hwfns > 1)
+	if (ECORE_IS_CMT(edev))
 		rte_eal_alarm_cancel(qede_poll_sp_sb_cb, (void *)eth_dev);
 }
 
-static void
+static int
 qede_get_stats(struct rte_eth_dev *eth_dev, struct rte_eth_stats *eth_stats)
 {
 	struct qede_dev *qdev = eth_dev->data->dev_private;
@@ -1544,6 +1593,8 @@ qede_get_stats(struct rte_eth_dev *eth_dev, struct rte_eth_stats *eth_stats)
 		if (j == txq_stat_cntrs)
 			break;
 	}
+
+	return 0;
 }
 
 static unsigned
@@ -1806,8 +1857,22 @@ static const uint32_t *
 qede_dev_supported_ptypes_get(struct rte_eth_dev *eth_dev)
 {
 	static const uint32_t ptypes[] = {
+		RTE_PTYPE_L2_ETHER,
+		RTE_PTYPE_L2_ETHER_VLAN,
 		RTE_PTYPE_L3_IPV4,
 		RTE_PTYPE_L3_IPV6,
+		RTE_PTYPE_L4_TCP,
+		RTE_PTYPE_L4_UDP,
+		RTE_PTYPE_TUNNEL_VXLAN,
+		RTE_PTYPE_L4_FRAG,
+		/* Inner */
+		RTE_PTYPE_INNER_L2_ETHER,
+		RTE_PTYPE_INNER_L2_ETHER_VLAN,
+		RTE_PTYPE_INNER_L3_IPV4,
+		RTE_PTYPE_INNER_L3_IPV6,
+		RTE_PTYPE_INNER_L4_TCP,
+		RTE_PTYPE_INNER_L4_UDP,
+		RTE_PTYPE_INNER_L4_FRAG,
 		RTE_PTYPE_UNKNOWN
 	};
 
@@ -2012,6 +2077,10 @@ int qede_rss_reta_update(struct rte_eth_dev *eth_dev,
 	memset(&vport_update_params, 0, sizeof(vport_update_params));
 	params = rte_zmalloc("qede_rss", sizeof(*params) * edev->num_hwfns,
 			     RTE_CACHE_LINE_SIZE);
+	if (params == NULL) {
+		DP_ERR(edev, "failed to allocate memory\n");
+		return -ENOMEM;
+	}
 
 	for (i = 0; i < reta_size; i++) {
 		idx = i / RTE_RETA_GROUP_SIZE;
@@ -2031,7 +2100,7 @@ int qede_rss_reta_update(struct rte_eth_dev *eth_dev,
 	params->update_rss_config = 1;
 
 	/* Fix up RETA for CMT mode device */
-	if (edev->num_hwfns > 1)
+	if (ECORE_IS_CMT(edev))
 		qdev->rss_enable = qede_update_rss_parm_cmt(edev,
 							    params);
 	vport_update_params.vport_id = 0;
@@ -2152,25 +2221,76 @@ qede_conf_udp_dst_port(struct rte_eth_dev *eth_dev,
 	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
 	struct ecore_tunnel_info tunn; /* @DPDK */
 	struct ecore_hwfn *p_hwfn;
+	struct ecore_ptt *p_ptt;
+	uint16_t udp_port;
 	int rc, i;
 
 	PMD_INIT_FUNC_TRACE(edev);
 
 	memset(&tunn, 0, sizeof(tunn));
 	if (tunnel_udp->prot_type == RTE_TUNNEL_TYPE_VXLAN) {
+		/* Enable VxLAN tunnel if needed before UDP port update using
+		 * default MAC/VLAN classification.
+		 */
+		if (add) {
+			if (qdev->vxlan.udp_port == tunnel_udp->udp_port) {
+				DP_INFO(edev,
+					"UDP port %u was already configured\n",
+					tunnel_udp->udp_port);
+				return ECORE_SUCCESS;
+			}
+			/* Enable VXLAN if it was not enabled while adding
+			 * VXLAN filter.
+			 */
+			if (!qdev->vxlan.enable) {
+				rc = qede_vxlan_enable(eth_dev,
+					ECORE_TUNN_CLSS_MAC_VLAN, true, true);
+				if (rc != ECORE_SUCCESS) {
+					DP_ERR(edev, "Failed to enable VXLAN "
+						"prior to updating UDP port\n");
+					return rc;
+				}
+			}
+			udp_port = tunnel_udp->udp_port;
+		} else {
+			if (qdev->vxlan.udp_port != tunnel_udp->udp_port) {
+				DP_ERR(edev, "UDP port %u doesn't exist\n",
+					tunnel_udp->udp_port);
+				return ECORE_INVAL;
+			}
+			udp_port = 0;
+		}
+
 		tunn.vxlan_port.b_update_port = true;
-		tunn.vxlan_port.port = (add) ? tunnel_udp->udp_port :
-						  QEDE_VXLAN_DEF_PORT;
+		tunn.vxlan_port.port = udp_port;
 		for_each_hwfn(edev, i) {
 			p_hwfn = &edev->hwfns[i];
-			rc = ecore_sp_pf_update_tunn_cfg(p_hwfn, &tunn,
+			if (IS_PF(edev)) {
+				p_ptt = ecore_ptt_acquire(p_hwfn);
+				if (!p_ptt)
+					return -EAGAIN;
+			} else {
+				p_ptt = NULL;
+			}
+			rc = ecore_sp_pf_update_tunn_cfg(p_hwfn, p_ptt, &tunn,
 						ECORE_SPQ_MODE_CB, NULL);
 			if (rc != ECORE_SUCCESS) {
 				DP_ERR(edev, "Unable to config UDP port %u\n",
 				       tunn.vxlan_port.port);
+				if (IS_PF(edev))
+					ecore_ptt_release(p_hwfn, p_ptt);
 				return rc;
 			}
 		}
+
+		qdev->vxlan.udp_port = udp_port;
+		/* If the request is to delete UDP port and if the number of
+		 * VXLAN filters have reached 0 then VxLAN offload can be be
+		 * disabled.
+		 */
+		if (!add && qdev->vxlan.enable && qdev->vxlan.num_filters == 0)
+			return qede_vxlan_enable(eth_dev,
+					ECORE_TUNN_CLSS_MAC_VLAN, false, true);
 	}
 
 	return 0;
@@ -2260,35 +2380,38 @@ static int qede_vxlan_tunn_config(struct rte_eth_dev *eth_dev,
 {
 	struct qede_dev *qdev = QEDE_INIT_QDEV(eth_dev);
 	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
-	struct ecore_tunnel_info tunn;
-	struct ecore_hwfn *p_hwfn;
 	enum ecore_filter_ucast_type type;
-	enum ecore_tunn_clss clss;
-	struct ecore_filter_ucast ucast;
+	enum ecore_tunn_clss clss = MAX_ECORE_TUNN_CLSS;
+	struct ecore_filter_ucast ucast = {0};
 	char str[80];
-	uint16_t filter_type;
-	int rc, i;
+	uint16_t filter_type = 0;
+	int rc;
 
 	PMD_INIT_FUNC_TRACE(edev);
 
-	filter_type = conf->filter_type | qdev->vxlan_filter_type;
-	/* First determine if the given filter classification is supported */
-	qede_get_ecore_tunn_params(filter_type, &type, &clss, str);
-	if (clss == MAX_ECORE_TUNN_CLSS) {
-		DP_ERR(edev, "Wrong filter type\n");
-		return -EINVAL;
-	}
-	/* Init tunnel ucast params */
-	rc = qede_set_ucast_tunn_cmn_param(&ucast, conf, type);
-	if (rc != ECORE_SUCCESS) {
-		DP_ERR(edev, "Unsupported VxLAN filter type 0x%x\n",
-				conf->filter_type);
-		return rc;
-	}
-	DP_INFO(edev, "Rule: \"%s\", op %d, type 0x%x\n",
-		str, filter_op, ucast.type);
 	switch (filter_op) {
 	case RTE_ETH_FILTER_ADD:
+		if (IS_VF(edev))
+			return qede_vxlan_enable(eth_dev,
+					ECORE_TUNN_CLSS_MAC_VLAN, true, true);
+
+		filter_type = conf->filter_type;
+		/* Determine if the given filter classification is supported */
+		qede_get_ecore_tunn_params(filter_type, &type, &clss, str);
+		if (clss == MAX_ECORE_TUNN_CLSS) {
+			DP_ERR(edev, "Unsupported filter type\n");
+			return -EINVAL;
+		}
+		/* Init tunnel ucast params */
+		rc = qede_set_ucast_tunn_cmn_param(&ucast, conf, type);
+		if (rc != ECORE_SUCCESS) {
+			DP_ERR(edev, "Unsupported VxLAN filter type 0x%x\n",
+			conf->filter_type);
+			return rc;
+		}
+		DP_INFO(edev, "Rule: \"%s\", op %d, type 0x%x\n",
+			str, filter_op, ucast.type);
+
 		ucast.opcode = ECORE_FILTER_ADD;
 
 		/* Skip MAC/VLAN if filter is based on VNI */
@@ -2308,22 +2431,34 @@ static int qede_vxlan_tunn_config(struct rte_eth_dev *eth_dev,
 		if (rc != ECORE_SUCCESS)
 			return rc;
 
-		qdev->vxlan_filter_type = filter_type;
+		qdev->vxlan.num_filters++;
+		qdev->vxlan.filter_type = filter_type;
+		if (!qdev->vxlan.enable)
+			return qede_vxlan_enable(eth_dev, clss, true, true);
 
-		DP_INFO(edev, "Enabling VXLAN tunneling\n");
-		qede_set_cmn_tunn_param(&tunn, clss, true, true);
-		for_each_hwfn(edev, i) {
-			p_hwfn = &edev->hwfns[i];
-			rc = ecore_sp_pf_update_tunn_cfg(p_hwfn,
-				&tunn, ECORE_SPQ_MODE_CB, NULL);
-			if (rc != ECORE_SUCCESS) {
-				DP_ERR(edev, "Failed to update tunn_clss %u\n",
-				       tunn.vxlan.tun_cls);
-			}
-		}
-		qdev->num_tunn_filters++; /* Filter added successfully */
 	break;
 	case RTE_ETH_FILTER_DELETE:
+		if (IS_VF(edev))
+			return qede_vxlan_enable(eth_dev,
+				ECORE_TUNN_CLSS_MAC_VLAN, false, true);
+
+		filter_type = conf->filter_type;
+		/* Determine if the given filter classification is supported */
+		qede_get_ecore_tunn_params(filter_type, &type, &clss, str);
+		if (clss == MAX_ECORE_TUNN_CLSS) {
+			DP_ERR(edev, "Unsupported filter type\n");
+			return -EINVAL;
+		}
+		/* Init tunnel ucast params */
+		rc = qede_set_ucast_tunn_cmn_param(&ucast, conf, type);
+		if (rc != ECORE_SUCCESS) {
+			DP_ERR(edev, "Unsupported VxLAN filter type 0x%x\n",
+			conf->filter_type);
+			return rc;
+		}
+		DP_INFO(edev, "Rule: \"%s\", op %d, type 0x%x\n",
+			str, filter_op, ucast.type);
+
 		ucast.opcode = ECORE_FILTER_REMOVE;
 
 		if (!(filter_type & ETH_TUNNEL_FILTER_TENID)) {
@@ -2337,33 +2472,16 @@ static int qede_vxlan_tunn_config(struct rte_eth_dev *eth_dev,
 		if (rc != ECORE_SUCCESS)
 			return rc;
 
-		qdev->vxlan_filter_type = filter_type;
-		qdev->num_tunn_filters--;
+		qdev->vxlan.num_filters--;
 
 		/* Disable VXLAN if VXLAN filters become 0 */
-		if (qdev->num_tunn_filters == 0) {
-			DP_INFO(edev, "Disabling VXLAN tunneling\n");
-
-			/* Use 0 as tunnel mode */
-			qede_set_cmn_tunn_param(&tunn, clss, false, true);
-			for_each_hwfn(edev, i) {
-				p_hwfn = &edev->hwfns[i];
-				rc = ecore_sp_pf_update_tunn_cfg(p_hwfn, &tunn,
-					ECORE_SPQ_MODE_CB, NULL);
-				if (rc != ECORE_SUCCESS) {
-					DP_ERR(edev,
-						"Failed to update tunn_clss %u\n",
-						tunn.vxlan.tun_cls);
-					break;
-				}
-			}
-		}
+		if (qdev->vxlan.num_filters == 0)
+			return qede_vxlan_enable(eth_dev, clss, false, true);
 	break;
 	default:
 		DP_ERR(edev, "Unsupported operation %d\n", filter_op);
 		return -EINVAL;
 	}
-	DP_INFO(edev, "Current VXLAN filters %d\n", qdev->num_tunn_filters);
 
 	return 0;
 }
@@ -2491,6 +2609,8 @@ static const struct eth_dev_ops qede_eth_vf_dev_ops = {
 	.reta_update  = qede_rss_reta_update,
 	.reta_query  = qede_rss_reta_query,
 	.mtu_set = qede_set_mtu,
+	.udp_tunnel_port_add = qede_udp_dst_port_add,
+	.udp_tunnel_port_del = qede_udp_dst_port_del,
 };
 
 static void qede_update_pf_params(struct ecore_dev *edev)
@@ -2523,6 +2643,7 @@ static int qede_common_dev_init(struct rte_eth_dev *eth_dev, bool is_vf)
 
 	/* Extract key data structures */
 	adapter = eth_dev->data->dev_private;
+	adapter->ethdev = eth_dev;
 	edev = &adapter->edev;
 	pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	pci_addr = pci_dev->addr;
@@ -2583,7 +2704,7 @@ static int qede_common_dev_init(struct rte_eth_dev *eth_dev, bool is_vf)
 	 * This is required since uio device uses only one MSI-x
 	 * interrupt vector but we need one for each engine.
 	 */
-	if (edev->num_hwfns > 1 && IS_PF(edev)) {
+	if (ECORE_IS_CMT(edev) && IS_PF(edev)) {
 		rc = rte_eal_alarm_set(timer_period * US_PER_S,
 				       qede_poll_sp_sb_cb,
 				       (void *)eth_dev);

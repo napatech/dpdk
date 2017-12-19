@@ -50,7 +50,7 @@
 #define MAX_PKT_BURST                   (32)
 #define RTE_TEST_RX_DESC_DEFAULT        (128)
 #define RTE_TEST_TX_DESC_DEFAULT        (512)
-#define RTE_PORT_ALL            (~(uint8_t)0x0)
+#define RTE_PORT_ALL            (~(uint16_t)0x0)
 
 /* how long test would take at full line rate */
 #define RTE_TEST_DURATION                (2)
@@ -143,7 +143,7 @@ struct lcore_conf {
 	uint8_t status;
 	uint8_t socketid;
 	uint16_t nb_ports;
-	uint8_t portlist[RTE_MAX_ETHPORTS];
+	uint16_t portlist[RTE_MAX_ETHPORTS];
 } __rte_cache_aligned;
 
 struct lcore_conf lcore_conf[RTE_MAX_LCORE];
@@ -160,11 +160,12 @@ static uint32_t sc_flag;
 
 /* Check the link status of all ports in up to 3s, and print them finally */
 static void
-check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
+check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
 {
 #define CHECK_INTERVAL 100 /* 100ms */
 #define MAX_CHECK_TIME 30 /* 3s (30 * 100ms) in total */
-	uint8_t portid, count, all_ports_up, print_flag = 0;
+	uint16_t portid;
+	uint8_t count, all_ports_up, print_flag = 0;
 	struct rte_eth_link link;
 
 	printf("Checking link statuses...\n");
@@ -179,16 +180,15 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
 			/* print link status if flag set */
 			if (print_flag == 1) {
 				if (link.link_status) {
-					printf("Port %d Link Up - speed %u "
-						"Mbps - %s\n", (uint8_t)portid,
-						(unsigned)link.link_speed,
+					printf(
+					"Port%d Link Up. Speed %u Mbps - %s\n",
+						portid, link.link_speed,
 				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
 					("full-duplex") : ("half-duplex\n"));
 					if (link_mbps == 0)
 						link_mbps = link.link_speed;
 				} else
-					printf("Port %d Link Down\n",
-						(uint8_t)portid);
+					printf("Port %d Link Down\n", portid);
 				continue;
 			}
 			/* clear all_ports_up flag if any link down */
@@ -335,7 +335,7 @@ reset_count(void)
 }
 
 static void
-stats_display(uint8_t port_id)
+stats_display(uint16_t port_id)
 {
 	struct rte_eth_stats stats;
 	rte_eth_stats_get(port_id, &stats);
@@ -383,7 +383,7 @@ measure_rxtx(struct lcore_conf *conf,
 	while (likely(!stop)) {
 		for (i = 0; i < conf->nb_ports; i++) {
 			portid = conf->portlist[i];
-			nb_rx = rte_eth_rx_burst((uint8_t) portid, 0,
+			nb_rx = rte_eth_rx_burst(portid, 0,
 						 pkts_burst, MAX_PKT_BURST);
 			if (unlikely(nb_rx == 0)) {
 				idle++;
@@ -422,7 +422,7 @@ measure_rxonly(struct lcore_conf *conf,
 			portid = conf->portlist[i];
 
 			cur_tsc = rte_rdtsc();
-			nb_rx = rte_eth_rx_burst((uint8_t) portid, 0,
+			nb_rx = rte_eth_rx_burst(portid, 0,
 						 pkts_burst, MAX_PKT_BURST);
 			if (unlikely(nb_rx == 0)) {
 				idle++;
@@ -459,7 +459,7 @@ measure_txonly(struct lcore_conf *conf,
 	while (likely(!stop)) {
 		for (i = 0; i < conf->nb_ports; i++) {
 			portid = conf->portlist[i];
-			nb_rx = rte_eth_rx_burst((uint8_t) portid, 0,
+			nb_rx = rte_eth_rx_burst(portid, 0,
 						 pkts_burst, MAX_PKT_BURST);
 			if (unlikely(nb_rx == 0)) {
 				idle++;
@@ -537,7 +537,7 @@ main_loop(__rte_unused void *args)
 		portid = conf->portlist[i];
 		int nb_free = pkt_per_port;
 		do { /* dry out */
-			nb_rx = rte_eth_rx_burst((uint8_t) portid, 0,
+			nb_rx = rte_eth_rx_burst(portid, 0,
 						 pkts_burst, MAX_PKT_BURST);
 			nb_tx = 0;
 			while (nb_tx < nb_rx)
@@ -572,6 +572,7 @@ poll_burst(void *args)
 	unsigned i, portid, nb_rx = 0;
 	uint64_t total;
 	uint64_t timeout = MAX_IDLE;
+	int num[RTE_MAX_ETHPORTS];
 
 	lcore_id = rte_lcore_id();
 	conf = &lcore_conf[lcore_id];
@@ -591,6 +592,7 @@ poll_burst(void *args)
 	for (i = 0; i < conf->nb_ports; i++) {
 		portid = conf->portlist[i];
 		next[portid] = i * pkt_per_port;
+		num[portid] = pkt_per_port;
 	}
 
 	while (!rte_atomic64_read(&start))
@@ -600,9 +602,9 @@ poll_burst(void *args)
 	while (total) {
 		for (i = 0; i < conf->nb_ports; i++) {
 			portid = conf->portlist[i];
-			nb_rx = rte_eth_rx_burst((uint8_t) portid, 0,
-						 &pkts_burst[next[portid]],
-						 MAX_PKT_BURST);
+			nb_rx = rte_eth_rx_burst(portid, 0,
+					&pkts_burst[next[portid]],
+					RTE_MIN(MAX_PKT_BURST, num[portid]));
 			if (unlikely(nb_rx == 0)) {
 				timeout--;
 				if (unlikely(timeout == 0))
@@ -610,6 +612,7 @@ poll_burst(void *args)
 				continue;
 			}
 			next[portid] += nb_rx;
+			num[portid] -= nb_rx;
 			total -= nb_rx;
 		}
 	}
@@ -618,7 +621,6 @@ timeout:
 
 	printf("%"PRIu64" packets lost, IDLE %"PRIu64" times\n",
 	       total, MAX_IDLE - timeout);
-
 	/* clean up */
 	total = pkt_per_port * conf->nb_ports - total;
 	for (i = 0; i < total; i++)
@@ -644,7 +646,7 @@ exec_burst(uint32_t flags, int lcore)
 	conf = &lcore_conf[lcore];
 
 	pkt_per_port = MAX_TRAFFIC_BURST;
-	num = pkt_per_port;
+	num = pkt_per_port * conf->nb_ports;
 
 	rte_atomic64_init(&start);
 
@@ -661,11 +663,12 @@ exec_burst(uint32_t flags, int lcore)
 		nb_tx = RTE_MIN(MAX_PKT_BURST, num);
 		for (i = 0; i < conf->nb_ports; i++) {
 			portid = conf->portlist[i];
-			rte_eth_tx_burst(portid, 0,
+			nb_tx = rte_eth_tx_burst(portid, 0,
 					 &tx_burst[idx], nb_tx);
 			idx += nb_tx;
+			num -= nb_tx;
 		}
-		num -= nb_tx;
+
 	}
 
 	sleep(5);

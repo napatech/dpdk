@@ -340,7 +340,7 @@ rte_kni_alloc(struct rte_mempool *pktmbuf_pool,
 	/* Get an available slot from the pool */
 	slot = kni_memzone_pool_alloc();
 	if (!slot) {
-		RTE_LOG(ERR, KNI, "Cannot allocate more KNI interfaces; increase the number of max_kni_ifaces(current %d) or release unusued ones.\n",
+		RTE_LOG(ERR, KNI, "Cannot allocate more KNI interfaces; increase the number of max_kni_ifaces(current %d) or release unused ones.\n",
 			kni_memzone_pool.max_ifaces);
 		return NULL;
 	}
@@ -456,7 +456,7 @@ va2pa(struct rte_mbuf *m)
 {
 	return (void *)((unsigned long)m -
 			((unsigned long)m->buf_addr -
-			 (unsigned long)m->buf_physaddr));
+			 (unsigned long)m->buf_iova));
 }
 
 static void
@@ -659,7 +659,7 @@ kni_allocate_mbufs(struct rte_kni *kni)
 		phys[i] = va2pa(pkts[i]);
 	}
 
-	/* No pkt mbuf alocated */
+	/* No pkt mbuf allocated */
 	if (i <= 0)
 		return;
 

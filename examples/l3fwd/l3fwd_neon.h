@@ -114,6 +114,7 @@ port_groupx4(uint16_t pn[FWDSTEP + 1], uint16_t *lp, uint16x8_t dp1,
 
 	/* update last port counter. */
 	lp[0] += gptbl[v].lpv;
+	rte_compiler_barrier();
 
 	/* if dest port value has changed. */
 	if (v != GRPMSK) {
@@ -192,7 +193,7 @@ send_packets_multi(struct lcore_conf *qconf, struct rte_mbuf **pkts_burst,
 			 * dp1:
 			 * <d[j], d[j+1], d[j+2], d[j+3], ... >
 			 */
-			dp1 = vextq_u16(dp1, dp1, FWDSTEP - 1);
+			dp1 = vextq_u16(dp2, dp1, FWDSTEP - 1);
 		}
 
 		/*

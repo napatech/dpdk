@@ -34,10 +34,10 @@ include $(RTE_SDK)/mk/rte.vars.mk
 LIB = librte_eal.a
 
 ARCH_DIR ?= $(RTE_ARCH)
-EXPORT_MAP := rte_eal_version.map
+EXPORT_MAP := ../../rte_eal_version.map
 VPATH += $(RTE_SDK)/lib/librte_eal/common/arch/$(ARCH_DIR)
 
-LIBABIVER := 5
+LIBABIVER := 6
 
 VPATH += $(RTE_SDK)/lib/librte_eal/common
 
@@ -58,16 +58,10 @@ endif
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) := eal.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_hugepage_info.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_memory.c
-ifeq ($(CONFIG_RTE_LIBRTE_XEN_DOM0),y)
-SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_xen_memory.c
-endif
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_thread.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_log.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_vfio.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_vfio_mp_sync.c
-SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_pci.c
-SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_pci_uio.c
-SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_pci_vfio.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_debug.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_lcore.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_timer.c
@@ -80,9 +74,6 @@ SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_timer.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_memzone.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_log.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_launch.c
-SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_vdev.c
-SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_pci.c
-SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_pci_uio.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_memory.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_tailqs.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_errno.c
@@ -104,6 +95,7 @@ SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += rte_service.c
 # from arch dir
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += rte_cpuflags.c
 SRCS-$(CONFIG_RTE_ARCH_X86) += rte_spinlock.c
+SRCS-y += rte_cycles.c
 
 CFLAGS_eal_common_cpuflags.o := $(CPUFLAGS_LIST)
 
@@ -116,13 +108,11 @@ CFLAGS_eal_thread.o := -D_GNU_SOURCE
 CFLAGS_eal_log.o := -D_GNU_SOURCE
 CFLAGS_eal_common_log.o := -D_GNU_SOURCE
 CFLAGS_eal_hugepage_info.o := -D_GNU_SOURCE
-CFLAGS_eal_pci.o := -D_GNU_SOURCE
-CFLAGS_eal_pci_uio.o := -D_GNU_SOURCE
-CFLAGS_eal_pci_vfio.o := -D_GNU_SOURCE
 CFLAGS_eal_common_whitelist.o := -D_GNU_SOURCE
 CFLAGS_eal_common_options.o := -D_GNU_SOURCE
 CFLAGS_eal_common_thread.o := -D_GNU_SOURCE
 CFLAGS_eal_common_lcore.o := -D_GNU_SOURCE
+CFLAGS_rte_cycles.o := -D_GNU_SOURCE
 
 # workaround for a gcc bug with noreturn attribute
 # http://gcc.gnu.org/bugzilla/show_bug.cgi?id=12603
@@ -130,7 +120,7 @@ ifeq ($(CONFIG_RTE_TOOLCHAIN_GCC),y)
 CFLAGS_eal_thread.o += -Wno-return-type
 endif
 
-INC := rte_interrupts.h rte_kni_common.h rte_dom0_common.h
+INC := rte_kni_common.h
 
 SYMLINK-$(CONFIG_RTE_EXEC_ENV_LINUXAPP)-include/exec-env := \
 	$(addprefix include/exec-env/,$(INC))

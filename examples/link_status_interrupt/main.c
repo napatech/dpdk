@@ -50,7 +50,6 @@
 #include <rte_malloc.h>
 #include <rte_memory.h>
 #include <rte_memcpy.h>
-#include <rte_memzone.h>
 #include <rte_eal.h>
 #include <rte_launch.h>
 #include <rte_atomic.h>
@@ -60,7 +59,6 @@
 #include <rte_per_lcore.h>
 #include <rte_branch_prediction.h>
 #include <rte_interrupts.h>
-#include <rte_pci.h>
 #include <rte_random.h>
 #include <rte_debug.h>
 #include <rte_ether.h>
@@ -145,7 +143,7 @@ print_stats(void)
 {
 	struct rte_eth_link link;
 	uint64_t total_packets_dropped, total_packets_tx, total_packets_rx;
-	unsigned portid;
+	uint16_t portid;
 
 	total_packets_dropped = 0;
 	total_packets_tx = 0;
@@ -165,7 +163,7 @@ print_stats(void)
 			continue;
 
 		memset(&link, 0, sizeof(link));
-		rte_eth_link_get_nowait((uint8_t)portid, &link);
+		rte_eth_link_get_nowait(portid, &link);
 		printf("\nStatistics for port %u ------------------------------"
 			   "\nLink status: %25s"
 			   "\nLink speed: %26u"
@@ -470,7 +468,7 @@ lsi_parse_args(int argc, char **argv)
  *  int.
  */
 static int
-lsi_event_callback(uint8_t port_id, enum rte_eth_event_type type, void *param,
+lsi_event_callback(uint16_t port_id, enum rte_eth_event_type type, void *param,
 		    void *ret_param)
 {
 	struct rte_eth_link link;
@@ -494,11 +492,12 @@ lsi_event_callback(uint8_t port_id, enum rte_eth_event_type type, void *param,
 
 /* Check the link status of all ports in up to 9s, and print them finally */
 static void
-check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
+check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
 {
 #define CHECK_INTERVAL 100 /* 100ms */
 #define MAX_CHECK_TIME 90 /* 9s (90 * 100ms) in total */
-	uint8_t portid, count, all_ports_up, print_flag = 0;
+	uint8_t count, all_ports_up, print_flag = 0;
+	uint16_t portid;
 	struct rte_eth_link link;
 
 	printf("\nChecking link status");
@@ -513,14 +512,13 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
 			/* print link status if flag set */
 			if (print_flag == 1) {
 				if (link.link_status)
-					printf("Port %d Link Up - speed %u "
-						"Mbps - %s\n", (uint8_t)portid,
-						(unsigned)link.link_speed,
+					printf(
+					"Port%d Link Up. Speed %u Mbps - %s\n",
+						portid, link.link_speed,
 				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
 					("full-duplex") : ("half-duplex\n"));
 				else
-					printf("Port %d Link Down\n",
-							(uint8_t)portid);
+					printf("Port %d Link Down\n", portid);
 				continue;
 			}
 			/* clear all_ports_up flag if any link down */
@@ -553,8 +551,8 @@ main(int argc, char **argv)
 	struct lcore_queue_conf *qconf;
 	struct rte_eth_dev_info dev_info;
 	int ret;
-	uint8_t nb_ports;
-	uint8_t portid, portid_last = 0;
+	uint16_t nb_ports;
+	uint16_t portid, portid_last = 0;
 	unsigned lcore_id, rx_lcore_id;
 	unsigned nb_ports_in_mask = 0;
 

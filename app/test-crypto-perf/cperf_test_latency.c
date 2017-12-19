@@ -37,7 +37,7 @@
 
 #include "cperf_test_latency.h"
 #include "cperf_ops.h"
-
+#include "cperf_test_common.h"
 
 struct cperf_op_result {
 	uint64_t tsc_start;
@@ -50,16 +50,14 @@ struct cperf_latency_ctx {
 	uint16_t qp_id;
 	uint8_t lcore_id;
 
-	struct rte_mempool *pkt_mbuf_pool_in;
-	struct rte_mempool *pkt_mbuf_pool_out;
-	struct rte_mbuf **mbufs_in;
-	struct rte_mbuf **mbufs_out;
-
-	struct rte_mempool *crypto_op_pool;
+	struct rte_mempool *pool;
 
 	struct rte_cryptodev_sym_session *sess;
 
 	cperf_populate_ops_t populate_ops;
+
+	uint32_t src_buf_offset;
+	uint32_t dst_buf_offset;
 
 	const struct cperf_options *options;
 	const struct cperf_test_vector *test_vector;
@@ -74,122 +72,20 @@ struct priv_op_data {
 #define min(a, b) (a < b ? (uint64_t)a : (uint64_t)b)
 
 static void
-cperf_latency_test_free(struct cperf_latency_ctx *ctx, uint32_t mbuf_nb)
+cperf_latency_test_free(struct cperf_latency_ctx *ctx)
 {
-	uint32_t i;
-
 	if (ctx) {
 		if (ctx->sess) {
 			rte_cryptodev_sym_session_clear(ctx->dev_id, ctx->sess);
 			rte_cryptodev_sym_session_free(ctx->sess);
 		}
 
-		if (ctx->mbufs_in) {
-			for (i = 0; i < mbuf_nb; i++)
-				rte_pktmbuf_free(ctx->mbufs_in[i]);
-
-			rte_free(ctx->mbufs_in);
-		}
-
-		if (ctx->mbufs_out) {
-			for (i = 0; i < mbuf_nb; i++) {
-				if (ctx->mbufs_out[i] != NULL)
-					rte_pktmbuf_free(ctx->mbufs_out[i]);
-			}
-
-			rte_free(ctx->mbufs_out);
-		}
-
-		if (ctx->pkt_mbuf_pool_in)
-			rte_mempool_free(ctx->pkt_mbuf_pool_in);
-
-		if (ctx->pkt_mbuf_pool_out)
-			rte_mempool_free(ctx->pkt_mbuf_pool_out);
-
-		if (ctx->crypto_op_pool)
-			rte_mempool_free(ctx->crypto_op_pool);
+		if (ctx->pool)
+			rte_mempool_free(ctx->pool);
 
 		rte_free(ctx->res);
 		rte_free(ctx);
 	}
-}
-
-static struct rte_mbuf *
-cperf_mbuf_create(struct rte_mempool *mempool,
-		uint32_t segments_nb,
-		const struct cperf_options *options,
-		const struct cperf_test_vector *test_vector)
-{
-	struct rte_mbuf *mbuf;
-	uint32_t segment_sz = options->max_buffer_size / segments_nb;
-	uint32_t last_sz = options->max_buffer_size % segments_nb;
-	uint8_t *mbuf_data;
-	uint8_t *test_data =
-			(options->cipher_op == RTE_CRYPTO_CIPHER_OP_ENCRYPT) ?
-					test_vector->plaintext.data :
-					test_vector->ciphertext.data;
-
-	mbuf = rte_pktmbuf_alloc(mempool);
-	if (mbuf == NULL)
-		goto error;
-
-	mbuf_data = (uint8_t *)rte_pktmbuf_append(mbuf, segment_sz);
-	if (mbuf_data == NULL)
-		goto error;
-
-	memcpy(mbuf_data, test_data, segment_sz);
-	test_data += segment_sz;
-	segments_nb--;
-
-	while (segments_nb) {
-		struct rte_mbuf *m;
-
-		m = rte_pktmbuf_alloc(mempool);
-		if (m == NULL)
-			goto error;
-
-		rte_pktmbuf_chain(mbuf, m);
-
-		mbuf_data = (uint8_t *)rte_pktmbuf_append(mbuf, segment_sz);
-		if (mbuf_data == NULL)
-			goto error;
-
-		memcpy(mbuf_data, test_data, segment_sz);
-		test_data += segment_sz;
-		segments_nb--;
-	}
-
-	if (last_sz) {
-		mbuf_data = (uint8_t *)rte_pktmbuf_append(mbuf, last_sz);
-		if (mbuf_data == NULL)
-			goto error;
-
-		memcpy(mbuf_data, test_data, last_sz);
-	}
-
-	if (options->op_type != CPERF_CIPHER_ONLY) {
-		mbuf_data = (uint8_t *)rte_pktmbuf_append(mbuf,
-			options->digest_sz);
-		if (mbuf_data == NULL)
-			goto error;
-	}
-
-	if (options->op_type == CPERF_AEAD) {
-		uint8_t *aead = (uint8_t *)rte_pktmbuf_prepend(mbuf,
-			RTE_ALIGN_CEIL(options->aead_aad_sz, 16));
-
-		if (aead == NULL)
-			goto error;
-
-		memcpy(aead, test_vector->aad.data, test_vector->aad.length);
-	}
-
-	return mbuf;
-error:
-	if (mbuf != NULL)
-		rte_pktmbuf_free(mbuf);
-
-	return NULL;
 }
 
 void *
@@ -200,8 +96,7 @@ cperf_latency_test_constructor(struct rte_mempool *sess_mp,
 		const struct cperf_op_fns *op_fns)
 {
 	struct cperf_latency_ctx *ctx = NULL;
-	unsigned int mbuf_idx = 0;
-	char pool_name[32] = "";
+	size_t extra_op_priv_size = sizeof(struct priv_op_data);
 
 	ctx = rte_malloc(NULL, sizeof(struct cperf_latency_ctx), 0);
 	if (ctx == NULL)
@@ -224,80 +119,10 @@ cperf_latency_test_constructor(struct rte_mempool *sess_mp,
 	if (ctx->sess == NULL)
 		goto err;
 
-	snprintf(pool_name, sizeof(pool_name), "cperf_pool_in_cdev_%d",
-				dev_id);
-
-	ctx->pkt_mbuf_pool_in = rte_pktmbuf_pool_create(pool_name,
-			options->pool_sz * options->segments_nb, 0, 0,
-			RTE_PKTMBUF_HEADROOM +
-			RTE_CACHE_LINE_ROUNDUP(
-				(options->max_buffer_size / options->segments_nb) +
-				(options->max_buffer_size % options->segments_nb) +
-					options->digest_sz),
-			rte_socket_id());
-
-	if (ctx->pkt_mbuf_pool_in == NULL)
-		goto err;
-
-	/* Generate mbufs_in with plaintext populated for test */
-	ctx->mbufs_in = rte_malloc(NULL,
-			(sizeof(struct rte_mbuf *) *
-			ctx->options->pool_sz), 0);
-
-	for (mbuf_idx = 0; mbuf_idx < options->pool_sz; mbuf_idx++) {
-		ctx->mbufs_in[mbuf_idx] = cperf_mbuf_create(
-				ctx->pkt_mbuf_pool_in, options->segments_nb,
-				options, test_vector);
-		if (ctx->mbufs_in[mbuf_idx] == NULL)
-			goto err;
-	}
-
-	if (options->out_of_place == 1)	{
-
-		snprintf(pool_name, sizeof(pool_name),
-				"cperf_pool_out_cdev_%d",
-				dev_id);
-
-		ctx->pkt_mbuf_pool_out = rte_pktmbuf_pool_create(
-				pool_name, options->pool_sz, 0, 0,
-				RTE_PKTMBUF_HEADROOM +
-				RTE_CACHE_LINE_ROUNDUP(
-					options->max_buffer_size +
-					options->digest_sz),
-				rte_socket_id());
-
-		if (ctx->pkt_mbuf_pool_out == NULL)
-			goto err;
-	}
-
-	ctx->mbufs_out = rte_malloc(NULL,
-			(sizeof(struct rte_mbuf *) *
-			ctx->options->pool_sz), 0);
-
-	for (mbuf_idx = 0; mbuf_idx < options->pool_sz; mbuf_idx++) {
-		if (options->out_of_place == 1)	{
-			ctx->mbufs_out[mbuf_idx] = cperf_mbuf_create(
-					ctx->pkt_mbuf_pool_out, 1,
-					options, test_vector);
-			if (ctx->mbufs_out[mbuf_idx] == NULL)
-				goto err;
-		} else {
-			ctx->mbufs_out[mbuf_idx] = NULL;
-		}
-	}
-
-	snprintf(pool_name, sizeof(pool_name), "cperf_op_pool_cdev_%d",
-			dev_id);
-
-	uint16_t priv_size = sizeof(struct priv_op_data) +
-			test_vector->cipher_iv.length +
-			test_vector->auth_iv.length +
-			test_vector->aead_iv.length;
-	ctx->crypto_op_pool = rte_crypto_op_pool_create(pool_name,
-			RTE_CRYPTO_OP_TYPE_SYMMETRIC, options->pool_sz,
-			512, priv_size, rte_socket_id());
-
-	if (ctx->crypto_op_pool == NULL)
+	if (cperf_alloc_common_memory(options, test_vector, dev_id, qp_id,
+			extra_op_priv_size,
+			&ctx->src_buf_offset, &ctx->dst_buf_offset,
+			&ctx->pool) < 0)
 		goto err;
 
 	ctx->res = rte_malloc(NULL, sizeof(struct cperf_op_result) *
@@ -308,7 +133,7 @@ cperf_latency_test_constructor(struct rte_mempool *sess_mp,
 
 	return ctx;
 err:
-	cperf_latency_test_free(ctx, mbuf_idx);
+	cperf_latency_test_free(ctx);
 
 	return NULL;
 }
@@ -347,7 +172,7 @@ cperf_latency_test_runner(void *arg)
 	int linearize = 0;
 
 	/* Check if source mbufs require coalescing */
-	if (ctx->options->segments_nb > 1) {
+	if (ctx->options->segment_sz < ctx->options->max_buffer_size) {
 		rte_cryptodev_info_get(ctx->dev_id, &dev_info);
 		if ((dev_info.feature_flags &
 				RTE_CRYPTODEV_FF_MBUF_SCATTER_GATHER) == 0)
@@ -373,7 +198,7 @@ cperf_latency_test_runner(void *arg)
 
 	while (test_burst_size <= ctx->options->max_burst_size) {
 		uint64_t ops_enqd = 0, ops_deqd = 0;
-		uint64_t m_idx = 0, b_idx = 0;
+		uint64_t b_idx = 0;
 
 		uint64_t tsc_val, tsc_end, tsc_start;
 		uint64_t tsc_max = 0, tsc_min = ~0UL, tsc_tot = 0, tsc_idx = 0;
@@ -388,11 +213,9 @@ cperf_latency_test_runner(void *arg)
 							ctx->options->total_ops -
 							enqd_tot;
 
-			/* Allocate crypto ops from pool */
-			if (burst_size != rte_crypto_op_bulk_alloc(
-					ctx->crypto_op_pool,
-					RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-					ops, burst_size)) {
+			/* Allocate objects containing crypto operations and mbufs */
+			if (rte_mempool_get_bulk(ctx->pool, (void **)ops,
+						burst_size) != 0) {
 				RTE_LOG(ERR, USER1,
 					"Failed to allocate more crypto operations "
 					"from the the crypto operation pool.\n"
@@ -402,8 +225,8 @@ cperf_latency_test_runner(void *arg)
 			}
 
 			/* Setup crypto op, attach mbuf etc */
-			(ctx->populate_ops)(ops, &ctx->mbufs_in[m_idx],
-					&ctx->mbufs_out[m_idx],
+			(ctx->populate_ops)(ops, ctx->src_buf_offset,
+					ctx->dst_buf_offset,
 					burst_size, ctx->sess, ctx->options,
 					ctx->test_vector, iv_offset);
 
@@ -432,7 +255,7 @@ cperf_latency_test_runner(void *arg)
 
 			/* Free memory for not enqueued operations */
 			if (ops_enqd != burst_size)
-				rte_mempool_put_bulk(ctx->crypto_op_pool,
+				rte_mempool_put_bulk(ctx->pool,
 						(void **)&ops[ops_enqd],
 						burst_size - ops_enqd);
 
@@ -448,16 +271,11 @@ cperf_latency_test_runner(void *arg)
 			}
 
 			if (likely(ops_deqd))  {
-				/*
-				 * free crypto ops so they can be reused. We don't free
-				 * the mbufs here as we don't want to reuse them as
-				 * the crypto operation will change the data and cause
-				 * failures.
-				 */
+				/* Free crypto ops so they can be reused. */
 				for (i = 0; i < ops_deqd; i++)
 					store_timestamp(ops_processed[i], tsc_end);
 
-				rte_mempool_put_bulk(ctx->crypto_op_pool,
+				rte_mempool_put_bulk(ctx->pool,
 						(void **)ops_processed, ops_deqd);
 
 				deqd_tot += ops_deqd;
@@ -469,9 +287,6 @@ cperf_latency_test_runner(void *arg)
 			enqd_max = max(ops_enqd, enqd_max);
 			enqd_min = min(ops_enqd, enqd_min);
 
-			m_idx += ops_enqd;
-			m_idx = m_idx + test_burst_size > ctx->options->pool_sz ?
-					0 : m_idx;
 			b_idx++;
 		}
 
@@ -490,7 +305,7 @@ cperf_latency_test_runner(void *arg)
 				for (i = 0; i < ops_deqd; i++)
 					store_timestamp(ops_processed[i], tsc_end);
 
-				rte_mempool_put_bulk(ctx->crypto_op_pool,
+				rte_mempool_put_bulk(ctx->pool,
 						(void **)ops_processed, ops_deqd);
 
 				deqd_tot += ops_deqd;
@@ -586,7 +401,5 @@ cperf_latency_test_destructor(void *arg)
 	if (ctx == NULL)
 		return;
 
-	rte_cryptodev_stop(ctx->dev_id);
-
-	cperf_latency_test_free(ctx, ctx->options->pool_sz);
+	cperf_latency_test_free(ctx);
 }

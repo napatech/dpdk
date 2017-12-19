@@ -41,7 +41,6 @@
 #include <rte_ether.h>
 #include <rte_ethdev.h>
 #include <rte_log.h>
-#include <rte_memzone.h>
 #include <rte_malloc.h>
 #include <rte_eth_ctrl.h>
 #include <rte_tailq.h>
@@ -84,11 +83,11 @@ static int i40e_flow_parse_ethertype_action(struct rte_eth_dev *dev,
 static int i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 					const struct rte_flow_item *pattern,
 					struct rte_flow_error *error,
-					struct rte_eth_fdir_filter *filter);
+					struct i40e_fdir_filter_conf *filter);
 static int i40e_flow_parse_fdir_action(struct rte_eth_dev *dev,
 				       const struct rte_flow_action *actions,
 				       struct rte_flow_error *error,
-				       struct rte_eth_fdir_filter *filter);
+				       struct i40e_fdir_filter_conf *filter);
 static int i40e_flow_parse_tunnel_action(struct rte_eth_dev *dev,
 				 const struct rte_flow_action *actions,
 				 struct rte_flow_error *error,
@@ -125,6 +124,12 @@ static int i40e_flow_parse_mpls_filter(struct rte_eth_dev *dev,
 				       const struct rte_flow_action actions[],
 				       struct rte_flow_error *error,
 				       union i40e_filter_t *filter);
+static int i40e_flow_parse_gtp_filter(struct rte_eth_dev *dev,
+				      const struct rte_flow_attr *attr,
+				      const struct rte_flow_item pattern[],
+				      const struct rte_flow_action actions[],
+				      struct rte_flow_error *error,
+				      union i40e_filter_t *filter);
 static int i40e_flow_destroy_ethertype_filter(struct i40e_pf *pf,
 				      struct i40e_ethertype_filter *filter);
 static int i40e_flow_destroy_tunnel_filter(struct i40e_pf *pf,
@@ -189,6 +194,40 @@ static enum rte_flow_item_type pattern_fdir_ipv4_sctp[] = {
 	RTE_FLOW_ITEM_TYPE_END,
 };
 
+static enum rte_flow_item_type pattern_fdir_ipv4_gtpc[] = {
+	RTE_FLOW_ITEM_TYPE_ETH,
+	RTE_FLOW_ITEM_TYPE_IPV4,
+	RTE_FLOW_ITEM_TYPE_UDP,
+	RTE_FLOW_ITEM_TYPE_GTPC,
+	RTE_FLOW_ITEM_TYPE_END,
+};
+
+static enum rte_flow_item_type pattern_fdir_ipv4_gtpu[] = {
+	RTE_FLOW_ITEM_TYPE_ETH,
+	RTE_FLOW_ITEM_TYPE_IPV4,
+	RTE_FLOW_ITEM_TYPE_UDP,
+	RTE_FLOW_ITEM_TYPE_GTPU,
+	RTE_FLOW_ITEM_TYPE_END,
+};
+
+static enum rte_flow_item_type pattern_fdir_ipv4_gtpu_ipv4[] = {
+	RTE_FLOW_ITEM_TYPE_ETH,
+	RTE_FLOW_ITEM_TYPE_IPV4,
+	RTE_FLOW_ITEM_TYPE_UDP,
+	RTE_FLOW_ITEM_TYPE_GTPU,
+	RTE_FLOW_ITEM_TYPE_IPV4,
+	RTE_FLOW_ITEM_TYPE_END,
+};
+
+static enum rte_flow_item_type pattern_fdir_ipv4_gtpu_ipv6[] = {
+	RTE_FLOW_ITEM_TYPE_ETH,
+	RTE_FLOW_ITEM_TYPE_IPV4,
+	RTE_FLOW_ITEM_TYPE_UDP,
+	RTE_FLOW_ITEM_TYPE_GTPU,
+	RTE_FLOW_ITEM_TYPE_IPV6,
+	RTE_FLOW_ITEM_TYPE_END,
+};
+
 static enum rte_flow_item_type pattern_fdir_ipv6[] = {
 	RTE_FLOW_ITEM_TYPE_ETH,
 	RTE_FLOW_ITEM_TYPE_IPV6,
@@ -213,6 +252,40 @@ static enum rte_flow_item_type pattern_fdir_ipv6_sctp[] = {
 	RTE_FLOW_ITEM_TYPE_ETH,
 	RTE_FLOW_ITEM_TYPE_IPV6,
 	RTE_FLOW_ITEM_TYPE_SCTP,
+	RTE_FLOW_ITEM_TYPE_END,
+};
+
+static enum rte_flow_item_type pattern_fdir_ipv6_gtpc[] = {
+	RTE_FLOW_ITEM_TYPE_ETH,
+	RTE_FLOW_ITEM_TYPE_IPV6,
+	RTE_FLOW_ITEM_TYPE_UDP,
+	RTE_FLOW_ITEM_TYPE_GTPC,
+	RTE_FLOW_ITEM_TYPE_END,
+};
+
+static enum rte_flow_item_type pattern_fdir_ipv6_gtpu[] = {
+	RTE_FLOW_ITEM_TYPE_ETH,
+	RTE_FLOW_ITEM_TYPE_IPV6,
+	RTE_FLOW_ITEM_TYPE_UDP,
+	RTE_FLOW_ITEM_TYPE_GTPU,
+	RTE_FLOW_ITEM_TYPE_END,
+};
+
+static enum rte_flow_item_type pattern_fdir_ipv6_gtpu_ipv4[] = {
+	RTE_FLOW_ITEM_TYPE_ETH,
+	RTE_FLOW_ITEM_TYPE_IPV6,
+	RTE_FLOW_ITEM_TYPE_UDP,
+	RTE_FLOW_ITEM_TYPE_GTPU,
+	RTE_FLOW_ITEM_TYPE_IPV4,
+	RTE_FLOW_ITEM_TYPE_END,
+};
+
+static enum rte_flow_item_type pattern_fdir_ipv6_gtpu_ipv6[] = {
+	RTE_FLOW_ITEM_TYPE_ETH,
+	RTE_FLOW_ITEM_TYPE_IPV6,
+	RTE_FLOW_ITEM_TYPE_UDP,
+	RTE_FLOW_ITEM_TYPE_GTPU,
+	RTE_FLOW_ITEM_TYPE_IPV6,
 	RTE_FLOW_ITEM_TYPE_END,
 };
 
@@ -1576,10 +1649,18 @@ static struct i40e_valid_pattern i40e_supported_patterns[] = {
 	{ pattern_fdir_ipv4_udp, i40e_flow_parse_fdir_filter },
 	{ pattern_fdir_ipv4_tcp, i40e_flow_parse_fdir_filter },
 	{ pattern_fdir_ipv4_sctp, i40e_flow_parse_fdir_filter },
+	{ pattern_fdir_ipv4_gtpc, i40e_flow_parse_fdir_filter },
+	{ pattern_fdir_ipv4_gtpu, i40e_flow_parse_fdir_filter },
+	{ pattern_fdir_ipv4_gtpu_ipv4, i40e_flow_parse_fdir_filter },
+	{ pattern_fdir_ipv4_gtpu_ipv6, i40e_flow_parse_fdir_filter },
 	{ pattern_fdir_ipv6, i40e_flow_parse_fdir_filter },
 	{ pattern_fdir_ipv6_udp, i40e_flow_parse_fdir_filter },
 	{ pattern_fdir_ipv6_tcp, i40e_flow_parse_fdir_filter },
 	{ pattern_fdir_ipv6_sctp, i40e_flow_parse_fdir_filter },
+	{ pattern_fdir_ipv6_gtpc, i40e_flow_parse_fdir_filter },
+	{ pattern_fdir_ipv6_gtpu, i40e_flow_parse_fdir_filter },
+	{ pattern_fdir_ipv6_gtpu_ipv4, i40e_flow_parse_fdir_filter },
+	{ pattern_fdir_ipv6_gtpu_ipv6, i40e_flow_parse_fdir_filter },
 	/* FDIR - support default flow type with flexible payload */
 	{ pattern_fdir_ethertype_raw_1, i40e_flow_parse_fdir_filter },
 	{ pattern_fdir_ethertype_raw_2, i40e_flow_parse_fdir_filter },
@@ -1732,6 +1813,11 @@ static struct i40e_valid_pattern i40e_supported_patterns[] = {
 	{ pattern_mpls_2, i40e_flow_parse_mpls_filter },
 	{ pattern_mpls_3, i40e_flow_parse_mpls_filter },
 	{ pattern_mpls_4, i40e_flow_parse_mpls_filter },
+	/* GTP-C & GTP-U */
+	{ pattern_fdir_ipv4_gtpc, i40e_flow_parse_gtp_filter },
+	{ pattern_fdir_ipv4_gtpu, i40e_flow_parse_gtp_filter },
+	{ pattern_fdir_ipv6_gtpc, i40e_flow_parse_gtp_filter },
+	{ pattern_fdir_ipv6_gtpu, i40e_flow_parse_gtp_filter },
 	/* QINQ */
 	{ pattern_qinq_1, i40e_flow_parse_qinq_filter },
 };
@@ -2302,20 +2388,58 @@ i40e_flow_set_fdir_inset(struct i40e_pf *pf,
 	return 0;
 }
 
+static uint8_t
+i40e_flow_fdir_get_pctype_value(struct i40e_pf *pf,
+				enum rte_flow_item_type item_type,
+				struct i40e_fdir_filter_conf *filter)
+{
+	struct i40e_customized_pctype *cus_pctype = NULL;
+
+	switch (item_type) {
+	case RTE_FLOW_ITEM_TYPE_GTPC:
+		cus_pctype = i40e_find_customized_pctype(pf,
+							 I40E_CUSTOMIZED_GTPC);
+		break;
+	case RTE_FLOW_ITEM_TYPE_GTPU:
+		if (!filter->input.flow_ext.inner_ip)
+			cus_pctype = i40e_find_customized_pctype(pf,
+							 I40E_CUSTOMIZED_GTPU);
+		else if (filter->input.flow_ext.iip_type ==
+			 I40E_FDIR_IPTYPE_IPV4)
+			cus_pctype = i40e_find_customized_pctype(pf,
+						 I40E_CUSTOMIZED_GTPU_IPV4);
+		else if (filter->input.flow_ext.iip_type ==
+			 I40E_FDIR_IPTYPE_IPV6)
+			cus_pctype = i40e_find_customized_pctype(pf,
+						 I40E_CUSTOMIZED_GTPU_IPV6);
+		break;
+	default:
+		PMD_DRV_LOG(ERR, "Unsupported item type");
+		break;
+	}
+
+	if (cus_pctype)
+		return cus_pctype->pctype;
+
+	return I40E_FILTER_PCTYPE_INVALID;
+}
+
 /* 1. Last in item should be NULL as range is not supported.
  * 2. Supported patterns: refer to array i40e_supported_patterns.
- * 3. Supported flow type and input set: refer to array
+ * 3. Default supported flow type and input set: refer to array
  *    valid_fdir_inset_table in i40e_ethdev.c.
  * 4. Mask of fields which need to be matched should be
  *    filled with 1.
  * 5. Mask of fields which needn't to be matched should be
  *    filled with 0.
+ * 6. GTP profile supports GTPv1 only.
+ * 7. GTP-C response message ('source_port' = 2123) is not supported.
  */
 static int
 i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 			     const struct rte_flow_item *pattern,
 			     struct rte_flow_error *error,
-			     struct rte_eth_fdir_filter *filter)
+			     struct i40e_fdir_filter_conf *filter)
 {
 	struct i40e_pf *pf = I40E_DEV_PRIVATE_TO_PF(dev->data->dev_private);
 	const struct rte_flow_item *item = pattern;
@@ -2326,15 +2450,16 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 	const struct rte_flow_item_tcp *tcp_spec, *tcp_mask;
 	const struct rte_flow_item_udp *udp_spec, *udp_mask;
 	const struct rte_flow_item_sctp *sctp_spec, *sctp_mask;
+	const struct rte_flow_item_gtp *gtp_spec, *gtp_mask;
 	const struct rte_flow_item_raw *raw_spec, *raw_mask;
 	const struct rte_flow_item_vf *vf_spec;
 
-	uint32_t flow_type = RTE_ETH_FLOW_UNKNOWN;
-	enum i40e_filter_pctype pctype;
+	uint8_t pctype = 0;
 	uint64_t input_set = I40E_INSET_NONE;
 	uint16_t frag_off;
 	enum rte_flow_item_type item_type;
 	enum rte_flow_item_type l3 = RTE_FLOW_ITEM_TYPE_END;
+	enum rte_flow_item_type cus_proto = RTE_FLOW_ITEM_TYPE_END;
 	uint32_t i, j;
 	uint8_t  ipv6_addr_mask[16] = {
 		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
@@ -2352,12 +2477,14 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 	uint16_t outer_tpid;
 	uint16_t ether_type;
 	uint32_t vtc_flow_cpu;
+	bool outer_ip = true;
 	int ret;
 
 	memset(off_arr, 0, sizeof(off_arr));
 	memset(len_arr, 0, sizeof(len_arr));
 	memset(flex_mask, 0, I40E_FDIR_MAX_FLEX_LEN);
 	outer_tpid = i40e_get_outer_vlan(dev);
+	filter->input.flow_ext.customized_pctype = false;
 	for (; item->type != RTE_FLOW_ITEM_TYPE_END; item++) {
 		if (item->last) {
 			rte_flow_error_set(error, EINVAL,
@@ -2402,7 +2529,7 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 				}
 			}
 
-			flow_type = RTE_ETH_FLOW_L2_PAYLOAD;
+			pctype = I40E_FILTER_PCTYPE_L2_PAYLOAD;
 			layer_idx = I40E_FLXPLD_L2_IDX;
 
 			break;
@@ -2420,7 +2547,7 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 				}
 			}
 
-			flow_type = RTE_ETH_FLOW_L2_PAYLOAD;
+			pctype = I40E_FILTER_PCTYPE_L2_PAYLOAD;
 			layer_idx = I40E_FLXPLD_L2_IDX;
 
 			break;
@@ -2430,8 +2557,10 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 				(const struct rte_flow_item_ipv4 *)item->spec;
 			ipv4_mask =
 				(const struct rte_flow_item_ipv4 *)item->mask;
+			pctype = I40E_FILTER_PCTYPE_NONF_IPV4_OTHER;
+			layer_idx = I40E_FLXPLD_L3_IDX;
 
-			if (ipv4_spec && ipv4_mask) {
+			if (ipv4_spec && ipv4_mask && outer_ip) {
 				/* Check IPv4 mask and update input set */
 				if (ipv4_mask->hdr.version_ihl ||
 				    ipv4_mask->hdr.total_length ||
@@ -2456,14 +2585,12 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 				if (ipv4_mask->hdr.next_proto_id == UINT8_MAX)
 					input_set |= I40E_INSET_IPV4_PROTO;
 
-				/* Get filter info */
-				flow_type = RTE_ETH_FLOW_NONFRAG_IPV4_OTHER;
 				/* Check if it is fragment. */
 				frag_off = ipv4_spec->hdr.fragment_offset;
 				frag_off = rte_be_to_cpu_16(frag_off);
 				if (frag_off & IPV4_HDR_OFFSET_MASK ||
 				    frag_off & IPV4_HDR_MF_FLAG)
-					flow_type = RTE_ETH_FLOW_FRAG_IPV4;
+					pctype = I40E_FILTER_PCTYPE_FRAG_IPV4;
 
 				/* Get the filter info */
 				filter->input.flow.ip4_flow.proto =
@@ -2476,9 +2603,20 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 					ipv4_spec->hdr.src_addr;
 				filter->input.flow.ip4_flow.dst_ip =
 					ipv4_spec->hdr.dst_addr;
+			} else if (!ipv4_spec && !ipv4_mask && !outer_ip) {
+				filter->input.flow_ext.inner_ip = true;
+				filter->input.flow_ext.iip_type =
+					I40E_FDIR_IPTYPE_IPV4;
+			} else if ((ipv4_spec || ipv4_mask) && !outer_ip) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Invalid inner IPv4 mask.");
+				return -rte_errno;
 			}
 
-			layer_idx = I40E_FLXPLD_L3_IDX;
+			if (outer_ip)
+				outer_ip = false;
 
 			break;
 		case RTE_FLOW_ITEM_TYPE_IPV6:
@@ -2487,8 +2625,10 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 				(const struct rte_flow_item_ipv6 *)item->spec;
 			ipv6_mask =
 				(const struct rte_flow_item_ipv6 *)item->mask;
+			pctype = I40E_FILTER_PCTYPE_NONF_IPV6_OTHER;
+			layer_idx = I40E_FLXPLD_L3_IDX;
 
-			if (ipv6_spec && ipv6_mask) {
+			if (ipv6_spec && ipv6_mask && outer_ip) {
 				/* Check IPv6 mask and update input set */
 				if (ipv6_mask->hdr.payload_len) {
 					rte_flow_error_set(error, EINVAL,
@@ -2535,20 +2675,32 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 				/* Check if it is fragment. */
 				if (ipv6_spec->hdr.proto ==
 				    I40E_IPV6_FRAG_HEADER)
-					flow_type =
-						RTE_ETH_FLOW_FRAG_IPV6;
-				else
-					flow_type =
-						RTE_ETH_FLOW_NONFRAG_IPV6_OTHER;
+					pctype = I40E_FILTER_PCTYPE_FRAG_IPV6;
+			} else if (!ipv6_spec && !ipv6_mask && !outer_ip) {
+				filter->input.flow_ext.inner_ip = true;
+				filter->input.flow_ext.iip_type =
+					I40E_FDIR_IPTYPE_IPV6;
+			} else if ((ipv6_spec || ipv6_mask) && !outer_ip) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Invalid inner IPv6 mask");
+				return -rte_errno;
 			}
 
-			layer_idx = I40E_FLXPLD_L3_IDX;
-
+			if (outer_ip)
+				outer_ip = false;
 			break;
 		case RTE_FLOW_ITEM_TYPE_TCP:
 			tcp_spec = (const struct rte_flow_item_tcp *)item->spec;
 			tcp_mask = (const struct rte_flow_item_tcp *)item->mask;
 
+			if (l3 == RTE_FLOW_ITEM_TYPE_IPV4)
+				pctype =
+					I40E_FILTER_PCTYPE_NONF_IPV4_TCP;
+			else if (l3 == RTE_FLOW_ITEM_TYPE_IPV6)
+				pctype =
+					I40E_FILTER_PCTYPE_NONF_IPV6_TCP;
 			if (tcp_spec && tcp_mask) {
 				/* Check TCP mask and update input set */
 				if (tcp_mask->hdr.sent_seq ||
@@ -2571,13 +2723,6 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 					input_set |= I40E_INSET_DST_PORT;
 
 				/* Get filter info */
-				if (l3 == RTE_FLOW_ITEM_TYPE_IPV4)
-					flow_type =
-						RTE_ETH_FLOW_NONFRAG_IPV4_TCP;
-				else if (l3 == RTE_FLOW_ITEM_TYPE_IPV6)
-					flow_type =
-						RTE_ETH_FLOW_NONFRAG_IPV6_TCP;
-
 				if (l3 == RTE_FLOW_ITEM_TYPE_IPV4) {
 					filter->input.flow.tcp4_flow.src_port =
 						tcp_spec->hdr.src_port;
@@ -2598,6 +2743,13 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 			udp_spec = (const struct rte_flow_item_udp *)item->spec;
 			udp_mask = (const struct rte_flow_item_udp *)item->mask;
 
+			if (l3 == RTE_FLOW_ITEM_TYPE_IPV4)
+				pctype =
+					I40E_FILTER_PCTYPE_NONF_IPV4_UDP;
+			else if (l3 == RTE_FLOW_ITEM_TYPE_IPV6)
+				pctype =
+					I40E_FILTER_PCTYPE_NONF_IPV6_UDP;
+
 			if (udp_spec && udp_mask) {
 				/* Check UDP mask and update input set*/
 				if (udp_mask->hdr.dgram_len ||
@@ -2615,13 +2767,6 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 					input_set |= I40E_INSET_DST_PORT;
 
 				/* Get filter info */
-				if (l3 == RTE_FLOW_ITEM_TYPE_IPV4)
-					flow_type =
-						RTE_ETH_FLOW_NONFRAG_IPV4_UDP;
-				else if (l3 == RTE_FLOW_ITEM_TYPE_IPV6)
-					flow_type =
-						RTE_ETH_FLOW_NONFRAG_IPV6_UDP;
-
 				if (l3 == RTE_FLOW_ITEM_TYPE_IPV4) {
 					filter->input.flow.udp4_flow.src_port =
 						udp_spec->hdr.src_port;
@@ -2638,11 +2783,49 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 			layer_idx = I40E_FLXPLD_L4_IDX;
 
 			break;
+		case RTE_FLOW_ITEM_TYPE_GTPC:
+		case RTE_FLOW_ITEM_TYPE_GTPU:
+			if (!pf->gtp_support) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Unsupported protocol");
+				return -rte_errno;
+			}
+
+			gtp_spec = (const struct rte_flow_item_gtp *)item->spec;
+			gtp_mask = (const struct rte_flow_item_gtp *)item->mask;
+
+			if (gtp_spec && gtp_mask) {
+				if (gtp_mask->v_pt_rsv_flags ||
+				    gtp_mask->msg_type ||
+				    gtp_mask->msg_len ||
+				    gtp_mask->teid != UINT32_MAX) {
+					rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Invalid GTP mask");
+					return -rte_errno;
+				}
+
+				filter->input.flow.gtp_flow.teid =
+					gtp_spec->teid;
+				filter->input.flow_ext.customized_pctype = true;
+				cus_proto = item_type;
+			}
+			break;
 		case RTE_FLOW_ITEM_TYPE_SCTP:
 			sctp_spec =
 				(const struct rte_flow_item_sctp *)item->spec;
 			sctp_mask =
 				(const struct rte_flow_item_sctp *)item->mask;
+
+			if (l3 == RTE_FLOW_ITEM_TYPE_IPV4)
+				pctype =
+					I40E_FILTER_PCTYPE_NONF_IPV4_SCTP;
+			else if (l3 == RTE_FLOW_ITEM_TYPE_IPV6)
+				pctype =
+					I40E_FILTER_PCTYPE_NONF_IPV6_SCTP;
 
 			if (sctp_spec && sctp_mask) {
 				/* Check SCTP mask and update input set */
@@ -2662,13 +2845,6 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 					input_set |= I40E_INSET_SCTP_VT;
 
 				/* Get filter info */
-				if (l3 == RTE_FLOW_ITEM_TYPE_IPV4)
-					flow_type =
-						RTE_ETH_FLOW_NONFRAG_IPV4_SCTP;
-				else if (l3 == RTE_FLOW_ITEM_TYPE_IPV6)
-					flow_type =
-						RTE_ETH_FLOW_NONFRAG_IPV6_SCTP;
-
 				if (l3 == RTE_FLOW_ITEM_TYPE_IPV4) {
 					filter->input.flow.sctp4_flow.src_port =
 						sctp_spec->hdr.src_port;
@@ -2776,51 +2952,58 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 		}
 	}
 
-	pctype = i40e_flowtype_to_pctype(flow_type);
-	if (pctype == 0 || pctype > I40E_FILTER_PCTYPE_L2_PAYLOAD) {
-		rte_flow_error_set(error, EINVAL,
-				   RTE_FLOW_ERROR_TYPE_ITEM, item,
-				   "Unsupported flow type");
-		return -rte_errno;
+	/* Get customized pctype value */
+	if (filter->input.flow_ext.customized_pctype) {
+		pctype = i40e_flow_fdir_get_pctype_value(pf, cus_proto, filter);
+		if (pctype == I40E_FILTER_PCTYPE_INVALID) {
+			rte_flow_error_set(error, EINVAL,
+					   RTE_FLOW_ERROR_TYPE_ITEM,
+					   item,
+					   "Unsupported pctype");
+			return -rte_errno;
+		}
 	}
 
-	ret = i40e_flow_set_fdir_inset(pf, pctype, input_set);
-	if (ret == -1) {
-		rte_flow_error_set(error, EINVAL,
-				   RTE_FLOW_ERROR_TYPE_ITEM, item,
-				   "Conflict with the first rule's input set.");
-		return -rte_errno;
-	} else if (ret == -EINVAL) {
-		rte_flow_error_set(error, EINVAL,
-				   RTE_FLOW_ERROR_TYPE_ITEM, item,
-				   "Invalid pattern mask.");
-		return -rte_errno;
+	/* If customized pctype is not used, set fdir configuration.*/
+	if (!filter->input.flow_ext.customized_pctype) {
+		ret = i40e_flow_set_fdir_inset(pf, pctype, input_set);
+		if (ret == -1) {
+			rte_flow_error_set(error, EINVAL,
+					   RTE_FLOW_ERROR_TYPE_ITEM, item,
+					   "Conflict with the first rule's input set.");
+			return -rte_errno;
+		} else if (ret == -EINVAL) {
+			rte_flow_error_set(error, EINVAL,
+					   RTE_FLOW_ERROR_TYPE_ITEM, item,
+					   "Invalid pattern mask.");
+			return -rte_errno;
+		}
+
+		/* Store flex mask to SW */
+		ret = i40e_flow_store_flex_mask(pf, pctype, flex_mask);
+		if (ret == -1) {
+			rte_flow_error_set(error, EINVAL,
+					   RTE_FLOW_ERROR_TYPE_ITEM,
+					   item,
+					   "Exceed maximal number of bitmasks");
+			return -rte_errno;
+		} else if (ret == -2) {
+			rte_flow_error_set(error, EINVAL,
+					   RTE_FLOW_ERROR_TYPE_ITEM,
+					   item,
+					   "Conflict with the first flexible rule");
+			return -rte_errno;
+		} else if (ret > 0)
+			cfg_flex_msk = false;
+
+		if (cfg_flex_pit)
+			i40e_flow_set_fdir_flex_pit(pf, layer_idx, raw_id);
+
+		if (cfg_flex_msk)
+			i40e_flow_set_fdir_flex_msk(pf, pctype);
 	}
 
-	filter->input.flow_type = flow_type;
-
-	/* Store flex mask to SW */
-	ret = i40e_flow_store_flex_mask(pf, pctype, flex_mask);
-	if (ret == -1) {
-		rte_flow_error_set(error, EINVAL,
-				   RTE_FLOW_ERROR_TYPE_ITEM,
-				   item,
-				   "Exceed maximal number of bitmasks");
-		return -rte_errno;
-	} else if (ret == -2) {
-		rte_flow_error_set(error, EINVAL,
-				   RTE_FLOW_ERROR_TYPE_ITEM,
-				   item,
-				   "Conflict with the first flexible rule");
-		return -rte_errno;
-	} else if (ret > 0)
-		cfg_flex_msk = false;
-
-	if (cfg_flex_pit)
-		i40e_flow_set_fdir_flex_pit(pf, layer_idx, raw_id);
-
-	if (cfg_flex_msk)
-		i40e_flow_set_fdir_flex_msk(pf, pctype);
+	filter->input.pctype = pctype;
 
 	return 0;
 }
@@ -2832,7 +3015,7 @@ static int
 i40e_flow_parse_fdir_action(struct rte_eth_dev *dev,
 			    const struct rte_flow_action *actions,
 			    struct rte_flow_error *error,
-			    struct rte_eth_fdir_filter *filter)
+			    struct i40e_fdir_filter_conf *filter)
 {
 	struct i40e_pf *pf = I40E_DEV_PRIVATE_TO_PF(dev->data->dev_private);
 	const struct rte_flow_action *act;
@@ -2855,13 +3038,13 @@ i40e_flow_parse_fdir_action(struct rte_eth_dev *dev,
 					   "Invalid queue ID for FDIR.");
 			return -rte_errno;
 		}
-		filter->action.behavior = RTE_ETH_FDIR_ACCEPT;
+		filter->action.behavior = I40E_FDIR_ACCEPT;
 		break;
 	case RTE_FLOW_ACTION_TYPE_DROP:
-		filter->action.behavior = RTE_ETH_FDIR_REJECT;
+		filter->action.behavior = I40E_FDIR_REJECT;
 		break;
 	case RTE_FLOW_ACTION_TYPE_PASSTHRU:
-		filter->action.behavior = RTE_ETH_FDIR_PASSTHRU;
+		filter->action.behavior = I40E_FDIR_PASSTHRU;
 		break;
 	default:
 		rte_flow_error_set(error, EINVAL,
@@ -2876,11 +3059,11 @@ i40e_flow_parse_fdir_action(struct rte_eth_dev *dev,
 	switch (act->type) {
 	case RTE_FLOW_ACTION_TYPE_MARK:
 		mark_spec = (const struct rte_flow_action_mark *)act->conf;
-		filter->action.report_status = RTE_ETH_FDIR_REPORT_ID;
+		filter->action.report_status = I40E_FDIR_REPORT_ID;
 		filter->soft_id = mark_spec->id;
 		break;
 	case RTE_FLOW_ACTION_TYPE_FLAG:
-		filter->action.report_status = RTE_ETH_FDIR_NO_REPORT_STATUS;
+		filter->action.report_status = I40E_FDIR_NO_REPORT_STATUS;
 		break;
 	case RTE_FLOW_ACTION_TYPE_END:
 		return 0;
@@ -2911,7 +3094,7 @@ i40e_flow_parse_fdir_filter(struct rte_eth_dev *dev,
 			    struct rte_flow_error *error,
 			    union i40e_filter_t *filter)
 {
-	struct rte_eth_fdir_filter *fdir_filter =
+	struct i40e_fdir_filter_conf *fdir_filter =
 		&filter->fdir_filter;
 	int ret;
 
@@ -3646,6 +3829,148 @@ i40e_flow_parse_mpls_filter(struct rte_eth_dev *dev,
 }
 
 /* 1. Last in item should be NULL as range is not supported.
+ * 2. Supported filter types: GTP TEID.
+ * 3. Mask of fields which need to be matched should be
+ *    filled with 1.
+ * 4. Mask of fields which needn't to be matched should be
+ *    filled with 0.
+ * 5. GTP profile supports GTPv1 only.
+ * 6. GTP-C response message ('source_port' = 2123) is not supported.
+ */
+static int
+i40e_flow_parse_gtp_pattern(struct rte_eth_dev *dev,
+			    const struct rte_flow_item *pattern,
+			    struct rte_flow_error *error,
+			    struct i40e_tunnel_filter_conf *filter)
+{
+	struct i40e_pf *pf = I40E_DEV_PRIVATE_TO_PF(dev->data->dev_private);
+	const struct rte_flow_item *item = pattern;
+	const struct rte_flow_item_gtp *gtp_spec;
+	const struct rte_flow_item_gtp *gtp_mask;
+	enum rte_flow_item_type item_type;
+
+	if (!pf->gtp_support) {
+		rte_flow_error_set(error, EINVAL,
+				   RTE_FLOW_ERROR_TYPE_ITEM,
+				   item,
+				   "GTP is not supported by default.");
+		return -rte_errno;
+	}
+
+	for (; item->type != RTE_FLOW_ITEM_TYPE_END; item++) {
+		if (item->last) {
+			rte_flow_error_set(error, EINVAL,
+					   RTE_FLOW_ERROR_TYPE_ITEM,
+					   item,
+					   "Not support range");
+			return -rte_errno;
+		}
+		item_type = item->type;
+		switch (item_type) {
+		case RTE_FLOW_ITEM_TYPE_ETH:
+			if (item->spec || item->mask) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Invalid ETH item");
+				return -rte_errno;
+			}
+			break;
+		case RTE_FLOW_ITEM_TYPE_IPV4:
+			filter->ip_type = I40E_TUNNEL_IPTYPE_IPV4;
+			/* IPv4 is used to describe protocol,
+			 * spec and mask should be NULL.
+			 */
+			if (item->spec || item->mask) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Invalid IPv4 item");
+				return -rte_errno;
+			}
+			break;
+		case RTE_FLOW_ITEM_TYPE_UDP:
+			if (item->spec || item->mask) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Invalid UDP item");
+				return -rte_errno;
+			}
+			break;
+		case RTE_FLOW_ITEM_TYPE_GTPC:
+		case RTE_FLOW_ITEM_TYPE_GTPU:
+			gtp_spec =
+				(const struct rte_flow_item_gtp *)item->spec;
+			gtp_mask =
+				(const struct rte_flow_item_gtp *)item->mask;
+
+			if (!gtp_spec || !gtp_mask) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Invalid GTP item");
+				return -rte_errno;
+			}
+
+			if (gtp_mask->v_pt_rsv_flags ||
+			    gtp_mask->msg_type ||
+			    gtp_mask->msg_len ||
+			    gtp_mask->teid != UINT32_MAX) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Invalid GTP mask");
+				return -rte_errno;
+			}
+
+			if (item_type == RTE_FLOW_ITEM_TYPE_GTPC)
+				filter->tunnel_type = I40E_TUNNEL_TYPE_GTPC;
+			else if (item_type == RTE_FLOW_ITEM_TYPE_GTPU)
+				filter->tunnel_type = I40E_TUNNEL_TYPE_GTPU;
+
+			filter->tenant_id = rte_be_to_cpu_32(gtp_spec->teid);
+
+			break;
+		default:
+			break;
+		}
+	}
+
+	return 0;
+}
+
+static int
+i40e_flow_parse_gtp_filter(struct rte_eth_dev *dev,
+			   const struct rte_flow_attr *attr,
+			   const struct rte_flow_item pattern[],
+			   const struct rte_flow_action actions[],
+			   struct rte_flow_error *error,
+			   union i40e_filter_t *filter)
+{
+	struct i40e_tunnel_filter_conf *tunnel_filter =
+		&filter->consistent_tunnel_filter;
+	int ret;
+
+	ret = i40e_flow_parse_gtp_pattern(dev, pattern,
+					  error, tunnel_filter);
+	if (ret)
+		return ret;
+
+	ret = i40e_flow_parse_tunnel_action(dev, actions, error, tunnel_filter);
+	if (ret)
+		return ret;
+
+	ret = i40e_flow_parse_attr(attr, error);
+	if (ret)
+		return ret;
+
+	cons_filter_type = RTE_ETH_FILTER_TUNNEL;
+
+	return ret;
+}
+
+/* 1. Last in item should be NULL as range is not supported.
  * 2. Supported filter types: QINQ.
  * 3. Mask of fields which need to be matched should be
  *    filled with 1.
@@ -3877,7 +4202,7 @@ i40e_flow_create(struct rte_eth_dev *dev,
 					i40e_ethertype_filter_list);
 		break;
 	case RTE_ETH_FILTER_FDIR:
-		ret = i40e_add_del_fdir_filter(dev,
+		ret = i40e_flow_add_del_fdir_filter(dev,
 				       &cons_filter.fdir_filter, 1);
 		if (ret)
 			goto free_flow;
@@ -3927,7 +4252,7 @@ i40e_flow_destroy(struct rte_eth_dev *dev,
 			      (struct i40e_tunnel_filter *)flow->rule);
 		break;
 	case RTE_ETH_FILTER_FDIR:
-		ret = i40e_add_del_fdir_filter(dev,
+		ret = i40e_flow_add_del_fdir_filter(dev,
 		       &((struct i40e_fdir_filter *)flow->rule)->fdir, 0);
 		break;
 	default:
@@ -4016,12 +4341,12 @@ i40e_flow_destroy_tunnel_filter(struct i40e_pf *pf,
 		vsi = vf->vsi;
 	}
 
-	if (((filter->input.flags & I40E_AQC_ADD_CLOUD_FILTER_TEID_MPLSoUDP) ==
-	    I40E_AQC_ADD_CLOUD_FILTER_TEID_MPLSoUDP) ||
-	    ((filter->input.flags & I40E_AQC_ADD_CLOUD_FILTER_TEID_MPLSoGRE) ==
-	    I40E_AQC_ADD_CLOUD_FILTER_TEID_MPLSoGRE) ||
-	    ((filter->input.flags & I40E_AQC_ADD_CLOUD_FILTER_CUSTOM_QINQ) ==
-	    I40E_AQC_ADD_CLOUD_FILTER_CUSTOM_QINQ))
+	if (((filter->input.flags & I40E_AQC_ADD_CLOUD_FILTER_0X11) ==
+	    I40E_AQC_ADD_CLOUD_FILTER_0X11) ||
+	    ((filter->input.flags & I40E_AQC_ADD_CLOUD_FILTER_0X12) ==
+	    I40E_AQC_ADD_CLOUD_FILTER_0X12) ||
+	    ((filter->input.flags & I40E_AQC_ADD_CLOUD_FILTER_0X10) ==
+	    I40E_AQC_ADD_CLOUD_FILTER_0X10))
 		big_buffer = 1;
 
 	if (big_buffer)

@@ -64,7 +64,9 @@ enum _ecore_status_t ecore_ptt_pool_alloc(struct ecore_hwfn *p_hwfn)
 	}
 
 	p_hwfn->p_ptt_pool = p_pool;
+#ifdef CONFIG_ECORE_LOCK_ALLOC
 	OSAL_SPIN_LOCK_ALLOC(p_hwfn, &p_pool->lock);
+#endif
 	OSAL_SPIN_LOCK_INIT(&p_pool->lock);
 
 	return ECORE_SUCCESS;
@@ -83,8 +85,10 @@ void ecore_ptt_invalidate(struct ecore_hwfn *p_hwfn)
 
 void ecore_ptt_pool_free(struct ecore_hwfn *p_hwfn)
 {
+#ifdef CONFIG_ECORE_LOCK_ALLOC
 	if (p_hwfn->p_ptt_pool)
 		OSAL_SPIN_LOCK_DEALLOC(&p_hwfn->p_ptt_pool->lock);
+#endif
 	OSAL_FREE(p_hwfn->p_dev, p_hwfn->p_ptt_pool);
 }
 
@@ -132,7 +136,7 @@ void ecore_ptt_release(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt)
 	OSAL_SPIN_UNLOCK(&p_hwfn->p_ptt_pool->lock);
 }
 
-u32 ecore_ptt_get_hw_addr(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt)
+static u32 ecore_ptt_get_hw_addr(struct ecore_ptt *p_ptt)
 {
 	/* The HW is using DWORDS and we need to translate it to Bytes */
 	return OSAL_LE32_TO_CPU(p_ptt->pxp.offset) << 2;
@@ -155,7 +159,7 @@ void ecore_ptt_set_win(struct ecore_hwfn *p_hwfn,
 {
 	u32 prev_hw_addr;
 
-	prev_hw_addr = ecore_ptt_get_hw_addr(p_hwfn, p_ptt);
+	prev_hw_addr = ecore_ptt_get_hw_addr(p_ptt);
 
 	if (new_hw_addr == prev_hw_addr)
 		return;
@@ -177,7 +181,7 @@ void ecore_ptt_set_win(struct ecore_hwfn *p_hwfn,
 static u32 ecore_set_ptt(struct ecore_hwfn *p_hwfn,
 			 struct ecore_ptt *p_ptt, u32 hw_addr)
 {
-	u32 win_hw_addr = ecore_ptt_get_hw_addr(p_hwfn, p_ptt);
+	u32 win_hw_addr = ecore_ptt_get_hw_addr(p_ptt);
 	u32 offset;
 
 	offset = hw_addr - win_hw_addr;
@@ -740,10 +744,10 @@ ecore_dmae_execute_sub_operation(struct ecore_hwfn *p_hwfn,
 
 	if (ecore_status != ECORE_SUCCESS) {
 		DP_NOTICE(p_hwfn, ECORE_MSG_HW,
-			  "ecore_dmae_host2grc: Wait Failed. source_addr"
-			  " 0x%lx, grc_addr 0x%lx, size_in_dwords 0x%x\n",
+			  "Wait Failed. source_addr 0x%lx, grc_addr 0x%lx, size_in_dwords 0x%x, intermediate buffer 0x%lx.\n",
 			  (unsigned long)src_addr, (unsigned long)dst_addr,
-			  length_dw);
+			  length_dw,
+			  (unsigned long)p_hwfn->dmae_info.intermediate_buffer_phys_addr);
 		return ecore_status;
 	}
 
@@ -783,6 +787,15 @@ ecore_dmae_execute_command(struct ecore_hwfn *p_hwfn,
 		 * w/o any error handling.
 		 */
 		return ECORE_SUCCESS;
+	}
+
+	if (!cmd) {
+		DP_NOTICE(p_hwfn, true,
+			  "ecore_dmae_execute_sub_operation failed. Invalid state. source_addr 0x%lx, destination addr 0x%lx, size_in_dwords 0x%x\n",
+			  (unsigned long)src_addr,
+			  (unsigned long)dst_addr,
+			  length_cur);
+		return ECORE_INVAL;
 	}
 
 	ecore_dmae_opcode(p_hwfn,

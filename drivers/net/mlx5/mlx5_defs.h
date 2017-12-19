@@ -45,9 +45,6 @@
 /* Maximum number of simultaneous VLAN filters. */
 #define MLX5_MAX_VLAN_IDS 128
 
-/* Maximum number of special flows. */
-#define MLX5_MAX_SPECIAL_FLOWS 4
-
 /*
  * Request TX completion every time descriptors reach this threshold since
  * the previous request. Must be a power of two for performance reasons.
@@ -100,7 +97,8 @@
 
 /*
  * Maximum size of burst for vectorized Tx. This is related to the maximum size
- * of Enhaned MPW (eMPW) WQE as vectorized Tx is supported with eMPW.
+ * of Enhanced MPW (eMPW) WQE as vectorized Tx is supported with eMPW.
+ * Careful when changing, large value can cause WQE DS to overlap.
  */
 #define MLX5_VPMD_TX_MAX_BURST        32U
 

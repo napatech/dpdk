@@ -158,12 +158,12 @@ struct ptpv2_data_slave_ordinary {
 	struct clock_id master_clock_id;
 	struct timeval new_adj;
 	int64_t delta;
-	uint8_t portid;
+	uint16_t portid;
 	uint16_t seqID_SYNC;
 	uint16_t seqID_FOLLOWUP;
 	uint8_t ptpset;
 	uint8_t kernel_time_set;
-	uint8_t current_ptp_port;
+	uint16_t current_ptp_port;
 };
 
 static struct ptpv2_data_slave_ordinary ptp_data;
@@ -202,7 +202,7 @@ ns_to_timeval(int64_t nsec)
  * coming from the mbuf_pool passed as a parameter.
  */
 static inline int
-port_init(uint8_t port, struct rte_mempool *mbuf_pool)
+port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 {
 	struct rte_eth_dev_info dev_info;
 	struct rte_eth_conf port_conf = port_conf_default;
@@ -555,7 +555,7 @@ parse_drsp(struct ptpv2_data_slave_ordinary *ptp_data)
  * functionality.
  */
 static void
-parse_ptp_frames(uint8_t portid, struct rte_mbuf *m) {
+parse_ptp_frames(uint16_t portid, struct rte_mbuf *m) {
 	struct ptp_header *ptp_hdr;
 	struct ether_hdr *eth_hdr;
 	uint16_t eth_type;
@@ -593,7 +593,7 @@ parse_ptp_frames(uint8_t portid, struct rte_mbuf *m) {
 static __attribute__((noreturn)) void
 lcore_main(void)
 {
-	uint8_t portid;
+	uint16_t portid;
 	unsigned nb_rx;
 	struct rte_mbuf *m;
 
@@ -728,7 +728,7 @@ main(int argc, char *argv[])
 {
 	unsigned nb_ports;
 
-	uint8_t portid;
+	uint16_t portid;
 
 	/* Initialize the Environment Abstraction Layer (EAL). */
 	int ret = rte_eal_init(argc, argv);

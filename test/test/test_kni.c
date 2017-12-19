@@ -42,6 +42,7 @@
 #include <rte_string_fns.h>
 #include <rte_mempool.h>
 #include <rte_ethdev.h>
+#include <rte_bus_pci.h>
 #include <rte_cycles.h>
 #include <rte_kni.h>
 
@@ -132,7 +133,7 @@ test_kni_lookup_mempool(void)
 }
 /* Callback for request of changing MTU */
 static int
-kni_change_mtu(uint8_t port_id, unsigned new_mtu)
+kni_change_mtu(uint16_t port_id, unsigned int new_mtu)
 {
 	printf("Change MTU of port %d to %u\n", port_id, new_mtu);
 	kni_pkt_mtu = new_mtu;
@@ -362,7 +363,7 @@ test_kni_register_handler_mp(void)
 }
 
 static int
-test_kni_processing(uint8_t port_id, struct rte_mempool *mp)
+test_kni_processing(uint16_t port_id, struct rte_mempool *mp)
 {
 	int ret = 0;
 	unsigned i;
@@ -387,7 +388,7 @@ test_kni_processing(uint8_t port_id, struct rte_mempool *mp)
 	conf.core_id = 1;
 	conf.force_bind = 1;
 	conf.mbuf_size = MAX_PACKET_SZ;
-	conf.group_id = (uint16_t)port_id;
+	conf.group_id = port_id;
 
 	ops = kni_ops;
 	ops.port_id = port_id;
@@ -472,7 +473,7 @@ static int
 test_kni(void)
 {
 	int ret = -1;
-	uint8_t nb_ports, port_id;
+	uint16_t nb_ports, port_id;
 	struct rte_kni *kni;
 	struct rte_mempool *mp;
 	struct rte_kni_conf conf;
@@ -538,7 +539,7 @@ test_kni(void)
 	rte_eth_dev_info_get(port_id, &info);
 	conf.addr = info.pci_dev->addr;
 	conf.id = info.pci_dev->id;
-	conf.group_id = (uint16_t)port_id;
+	conf.group_id = port_id;
 	conf.mbuf_size = MAX_PACKET_SZ;
 
 	ops = kni_ops;
@@ -567,7 +568,7 @@ test_kni(void)
 	rte_eth_dev_info_get(port_id, &info);
 	conf.addr = info.pci_dev->addr;
 	conf.id = info.pci_dev->id;
-	conf.group_id = (uint16_t)port_id;
+	conf.group_id = port_id;
 	conf.mbuf_size = MAX_PACKET_SZ;
 
 	ops = kni_ops;

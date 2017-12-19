@@ -26,7 +26,7 @@ enum ecore_int_mode {
 #endif
 
 struct ecore_sb_info {
-	struct status_block *sb_virt;
+	struct status_block_e4 *sb_virt;
 	dma_addr_t sb_phys;
 	u32 sb_ack;		/* Last given ack */
 	u16 igu_sb_id;
@@ -44,13 +44,19 @@ struct ecore_sb_info {
 struct ecore_sb_info_dbg {
 	u32 igu_prod;
 	u32 igu_cons;
-	u16 pi[PIS_PER_SB];
+	u16 pi[PIS_PER_SB_E4];
 };
 
 struct ecore_sb_cnt_info {
-	int sb_cnt;
-	int sb_iov_cnt;
-	int sb_free_blk;
+	/* Original, current, and free SBs for PF */
+	int orig;
+	int cnt;
+	int free_cnt;
+
+	/* Original, current and free SBS for child VFs */
+	int iov_orig;
+	int iov_cnt;
+	int free_cnt_iov;
 };
 
 static OSAL_INLINE u16 ecore_sb_update_sb_idx(struct ecore_sb_info *sb_info)
@@ -61,7 +67,7 @@ static OSAL_INLINE u16 ecore_sb_update_sb_idx(struct ecore_sb_info *sb_info)
 	/* barrier(); status block is written to by the chip */
 	/* FIXME: need some sort of barrier. */
 	prod = OSAL_LE32_TO_CPU(sb_info->sb_virt->prod_index) &
-	    STATUS_BLOCK_PROD_INDEX_MASK;
+	    STATUS_BLOCK_E4_PROD_INDEX_MASK;
 	if (sb_info->sb_ack != prod) {
 		sb_info->sb_ack = prod;
 		rc |= ECORE_SB_IDX;
@@ -173,17 +179,17 @@ enum ecore_coalescing_fsm {
  *
  * @param p_hwfn
  * @param p_ptt
- * @param igu_sb_id
+ * @param p_sb
  * @param pi_index
  * @param state
  * @param timeset
  */
-void ecore_int_cau_conf_pi(struct ecore_hwfn *p_hwfn,
-			   struct ecore_ptt *p_ptt,
-			   u16 igu_sb_id,
-			   u32 pi_index,
-			   enum ecore_coalescing_fsm coalescing_fsm,
-			   u8 timeset);
+void ecore_int_cau_conf_pi(struct ecore_hwfn		*p_hwfn,
+			   struct ecore_ptt		*p_ptt,
+			   struct ecore_sb_info		*p_sb,
+			   u32				pi_index,
+			   enum ecore_coalescing_fsm	coalescing_fsm,
+			   u8				timeset);
 
 /**
  *
@@ -219,6 +225,7 @@ void ecore_int_igu_disable_int(struct ecore_hwfn *p_hwfn,
 u64 ecore_int_igu_read_sisr_reg(struct ecore_hwfn *p_hwfn);
 
 #define ECORE_SP_SB_ID 0xffff
+
 /**
  * @brief ecore_int_sb_init - Initializes the sb_info structure.
  *
@@ -324,4 +331,18 @@ enum _ecore_status_t ecore_int_get_sb_dbg(struct ecore_hwfn *p_hwfn,
 					  struct ecore_sb_info *p_sb,
 					  struct ecore_sb_info_dbg *p_info);
 
+/**
+ * @brief - Move a free Status block between PF and child VF
+ *
+ * @param p_hwfn
+ * @param p_ptt
+ * @param sb_id - The PF fastpath vector to be moved [re-assigned if claiming
+ *                from VF, given-up if moving to VF]
+ * @param b_to_vf - PF->VF == true, VF->PF == false
+ *
+ * @return ECORE_SUCCESS if SB successfully moved.
+ */
+enum _ecore_status_t
+ecore_int_igu_relocate_sb(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt,
+			  u16 sb_id, bool b_to_vf);
 #endif

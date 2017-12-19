@@ -40,11 +40,11 @@
 #include <rte_ethdev_pci.h>
 #include <rte_memcpy.h>
 #include <rte_string_fns.h>
-#include <rte_memzone.h>
 #include <rte_malloc.h>
 #include <rte_atomic.h>
 #include <rte_branch_prediction.h>
 #include <rte_pci.h>
+#include <rte_bus_pci.h>
 #include <rte_ether.h>
 #include <rte_common.h>
 #include <rte_cycles.h>
@@ -70,7 +70,7 @@ static void avp_dev_stop(struct rte_eth_dev *dev);
 static void avp_dev_close(struct rte_eth_dev *dev);
 static void avp_dev_info_get(struct rte_eth_dev *dev,
 			     struct rte_eth_dev_info *dev_info);
-static void avp_vlan_offload_set(struct rte_eth_dev *dev, int mask);
+static int avp_vlan_offload_set(struct rte_eth_dev *dev, int mask);
 static int avp_dev_link_update(struct rte_eth_dev *dev, int wait_to_complete);
 static void avp_dev_promiscuous_enable(struct rte_eth_dev *dev);
 static void avp_dev_promiscuous_disable(struct rte_eth_dev *dev);
@@ -107,7 +107,7 @@ static uint16_t avp_xmit_pkts(void *tx_queue,
 static void avp_dev_rx_queue_release(void *rxq);
 static void avp_dev_tx_queue_release(void *txq);
 
-static void avp_dev_stats_get(struct rte_eth_dev *dev,
+static int avp_dev_stats_get(struct rte_eth_dev *dev,
 			      struct rte_eth_stats *stats);
 static void avp_dev_stats_reset(struct rte_eth_dev *dev);
 
@@ -190,7 +190,7 @@ struct avp_dev {
 	struct rte_eth_dev_data *dev_data;
 	/**< Back pointer to ethernet device data */
 	volatile uint32_t flags; /**< Device operational flags */
-	uint8_t port_id; /**< Ethernet port identifier */
+	uint16_t port_id; /**< Ethernet port identifier */
 	struct rte_mempool *pool; /**< pkt mbuf mempool */
 	unsigned int guest_mbuf_size; /**< local pool mbuf size */
 	unsigned int host_mbuf_size; /**< host mbuf size */
@@ -387,7 +387,7 @@ avp_dev_translate_buffer(struct avp_dev *avp, void *host_mbuf_address)
 /* translate from host physical address to guest virtual address */
 static void *
 avp_dev_translate_address(struct rte_eth_dev *eth_dev,
-			  phys_addr_t host_phys_addr)
+			  rte_iova_t host_phys_addr)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	struct rte_mem_resource *resource;
@@ -1004,8 +1004,6 @@ eth_avp_dev_init(struct rte_eth_dev *eth_dev)
 
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
 
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_DETACHABLE;
-
 	/* Check current migration status */
 	if (avp_dev_migration_pending(eth_dev)) {
 		PMD_DRV_LOG(ERR, "VM live migration operation in progress\n");
@@ -1361,7 +1359,7 @@ avp_dev_copy_from_buffers(struct avp_dev *avp,
 	src_offset = 0;
 
 	if (pkt_buf->ol_flags & RTE_AVP_RX_VLAN_PKT) {
-		ol_flags = PKT_RX_VLAN_PKT;
+		ol_flags = PKT_RX_VLAN;
 		vlan_tci = pkt_buf->vlan_tci;
 	} else {
 		ol_flags = 0;
@@ -1619,7 +1617,7 @@ avp_recv_pkts(void *rx_queue,
 		m->port = avp->port_id;
 
 		if (pkt_buf->ol_flags & RTE_AVP_RX_VLAN_PKT) {
-			m->ol_flags = PKT_RX_VLAN_PKT;
+			m->ol_flags = PKT_RX_VLAN;
 			m->vlan_tci = pkt_buf->vlan_tci;
 		}
 
@@ -2031,7 +2029,12 @@ avp_dev_configure(struct rte_eth_dev *eth_dev)
 	mask = (ETH_VLAN_STRIP_MASK |
 		ETH_VLAN_FILTER_MASK |
 		ETH_VLAN_EXTEND_MASK);
-	avp_vlan_offload_set(eth_dev, mask);
+	ret = avp_vlan_offload_set(eth_dev, mask);
+	if (ret < 0) {
+		PMD_DRV_LOG(ERR, "VLAN offload set failed by host, ret=%d\n",
+			    ret);
+		goto unlock;
+	}
 
 	/* update device config */
 	memset(&config, 0, sizeof(config));
@@ -2214,7 +2217,7 @@ avp_dev_info_get(struct rte_eth_dev *eth_dev,
 	}
 }
 
-static void
+static int
 avp_vlan_offload_set(struct rte_eth_dev *eth_dev, int mask)
 {
 	struct avp_dev *avp = AVP_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
@@ -2239,9 +2242,11 @@ avp_vlan_offload_set(struct rte_eth_dev *eth_dev, int mask)
 		if (eth_dev->data->dev_conf.rxmode.hw_vlan_extend)
 			PMD_DRV_LOG(ERR, "VLAN extend offload not supported\n");
 	}
+
+	return 0;
 }
 
-static void
+static int
 avp_dev_stats_get(struct rte_eth_dev *eth_dev, struct rte_eth_stats *stats)
 {
 	struct avp_dev *avp = AVP_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
@@ -2274,6 +2279,8 @@ avp_dev_stats_get(struct rte_eth_dev *eth_dev, struct rte_eth_stats *stats)
 			stats->q_errors[i] += txq->errors;
 		}
 	}
+
+	return 0;
 }
 
 static void

@@ -35,6 +35,7 @@
 
 #include <rte_flow.h>
 #include <rte_flow_driver.h>
+#include <rte_cycles.h>
 
 #include "failsafe_private.h"
 
@@ -203,6 +204,7 @@ fs_eth_dev_conf_apply(struct rte_eth_dev *dev,
 
 			ether_format_addr(ea_fmt, ETHER_ADDR_FMT_SIZE, ea);
 			ERROR("Adding MAC address %s failed", ea_fmt);
+			return ret;
 		}
 	}
 	/* VLAN filter */
@@ -308,6 +310,28 @@ fs_dev_remove(struct sub_device *sdev)
 	failsafe_hotplug_alarm_install(sdev->fs_dev);
 }
 
+static void
+fs_dev_stats_save(struct sub_device *sdev)
+{
+	struct rte_eth_stats stats;
+	int err;
+
+	/* Attempt to read current stats. */
+	err = rte_eth_stats_get(PORT_ID(sdev), &stats);
+	if (err) {
+		uint64_t timestamp = sdev->stats_snapshot.timestamp;
+
+		WARN("Could not access latest statistics from sub-device %d.\n",
+			 SUB_ID(sdev));
+		if (timestamp != 0)
+			WARN("Using latest snapshot taken before %"PRIu64" seconds.\n",
+				 (rte_rdtsc() - timestamp) / rte_get_tsc_hz());
+	}
+	failsafe_stats_increment(&PRIV(sdev->fs_dev)->stats_accumulator,
+			err ? &sdev->stats_snapshot.stats : &stats);
+	memset(&sdev->stats_snapshot, 0, sizeof(sdev->stats_snapshot));
+}
+
 static inline int
 fs_rxtx_clean(struct sub_device *sdev)
 {
@@ -329,8 +353,10 @@ failsafe_dev_remove(struct rte_eth_dev *dev)
 	uint8_t i;
 
 	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE)
-		if (sdev->remove && fs_rxtx_clean(sdev))
+		if (sdev->remove && fs_rxtx_clean(sdev)) {
+			fs_dev_stats_save(sdev);
 			fs_dev_remove(sdev);
+		}
 }
 
 int
@@ -399,8 +425,31 @@ err_remove:
 	return ret;
 }
 
+void
+failsafe_stats_increment(struct rte_eth_stats *to, struct rte_eth_stats *from)
+{
+	uint32_t i;
+
+	RTE_ASSERT(to != NULL && from != NULL);
+	to->ipackets += from->ipackets;
+	to->opackets += from->opackets;
+	to->ibytes += from->ibytes;
+	to->obytes += from->obytes;
+	to->imissed += from->imissed;
+	to->ierrors += from->ierrors;
+	to->oerrors += from->oerrors;
+	to->rx_nombuf += from->rx_nombuf;
+	for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
+		to->q_ipackets[i] += from->q_ipackets[i];
+		to->q_opackets[i] += from->q_opackets[i];
+		to->q_ibytes[i] += from->q_ibytes[i];
+		to->q_obytes[i] += from->q_obytes[i];
+		to->q_errors[i] += from->q_errors[i];
+	}
+}
+
 int
-failsafe_eth_rmv_event_callback(uint8_t port_id __rte_unused,
+failsafe_eth_rmv_event_callback(uint16_t port_id __rte_unused,
 				enum rte_eth_event_type event __rte_unused,
 				void *cb_arg, void *out __rte_unused)
 {
@@ -419,7 +468,7 @@ failsafe_eth_rmv_event_callback(uint8_t port_id __rte_unused,
 }
 
 int
-failsafe_eth_lsc_event_callback(uint8_t port_id __rte_unused,
+failsafe_eth_lsc_event_callback(uint16_t port_id __rte_unused,
 				enum rte_eth_event_type event __rte_unused,
 				void *cb_arg, void *out __rte_unused)
 {

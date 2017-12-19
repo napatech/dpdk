@@ -45,7 +45,6 @@
 #include <rte_log.h>
 #include <rte_memory.h>
 #include <rte_memcpy.h>
-#include <rte_memzone.h>
 #include <rte_launch.h>
 #include <rte_eal.h>
 #include <rte_per_lcore.h>
@@ -907,7 +906,7 @@ test_failing_mbuf_sanity_check(struct rte_mempool *pktmbuf_pool)
 	}
 
 	badbuf = *buf;
-	badbuf.buf_physaddr = 0;
+	badbuf.buf_iova = 0;
 	if (verify_mbuf_check_panics(&badbuf)) {
 		printf("Error with bad-physaddr mbuf test\n");
 		return -1;

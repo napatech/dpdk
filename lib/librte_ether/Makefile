@@ -38,14 +38,18 @@ LIB = librte_ethdev.a
 
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
+LDLIBS += -lrte_net -lrte_eal -lrte_mempool -lrte_ring
+LDLIBS += -lrte_mbuf
 
-EXPORT_MAP := rte_ether_version.map
+EXPORT_MAP := rte_ethdev_version.map
 
-LIBABIVER := 6
+LIBABIVER := 8
 
 SRCS-y += rte_ethdev.c
 SRCS-y += rte_flow.c
 SRCS-y += rte_tm.c
+SRCS-y += rte_mtr.c
+SRCS-y += ethdev_profile.c
 
 #
 # Export include files
@@ -59,5 +63,7 @@ SYMLINK-y-include += rte_flow.h
 SYMLINK-y-include += rte_flow_driver.h
 SYMLINK-y-include += rte_tm.h
 SYMLINK-y-include += rte_tm_driver.h
+SYMLINK-y-include += rte_mtr.h
+SYMLINK-y-include += rte_mtr_driver.h
 
 include $(RTE_SDK)/mk/rte.lib.mk

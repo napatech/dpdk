@@ -31,12 +31,10 @@
  */
 
 #include <rte_common.h>
-#include <rte_config.h>
 #include <rte_hexdump.h>
 #include <rte_cryptodev.h>
 #include <rte_cryptodev_pmd.h>
-#include <rte_cryptodev_vdev.h>
-#include <rte_vdev.h>
+#include <rte_bus_vdev.h>
 #include <rte_malloc.h>
 #include <rte_cpuflags.h>
 
@@ -44,7 +42,6 @@
 
 #define KASUMI_KEY_LENGTH 16
 #define KASUMI_IV_LENGTH 8
-#define KASUMI_DIGEST_LENGTH 4
 #define KASUMI_MAX_BURST 4
 #define BYTE_LEN 8
 
@@ -261,7 +258,7 @@ process_kasumi_cipher_op_bit(struct rte_crypto_op *op,
 
 /** Generate/verify hash from mbufs with same hash key. */
 static int
-process_kasumi_hash_op(struct rte_crypto_op **ops,
+process_kasumi_hash_op(struct kasumi_qp *qp, struct rte_crypto_op **ops,
 		struct kasumi_session *session,
 		uint8_t num_ops)
 {
@@ -287,8 +284,7 @@ process_kasumi_hash_op(struct rte_crypto_op **ops,
 		num_bytes = length_in_bits >> 3;
 
 		if (session->auth_op == RTE_CRYPTO_AUTH_OP_VERIFY) {
-			dst = (uint8_t *)rte_pktmbuf_append(ops[i]->sym->m_src,
-					KASUMI_DIGEST_LENGTH);
+			dst = qp->temp_digest;
 			sso_kasumi_f9_1_buffer(&session->pKeySched_hash, src,
 					num_bytes, dst);
 
@@ -296,10 +292,6 @@ process_kasumi_hash_op(struct rte_crypto_op **ops,
 			if (memcmp(dst, ops[i]->sym->auth.digest.data,
 					KASUMI_DIGEST_LENGTH) != 0)
 				ops[i]->status = RTE_CRYPTO_OP_STATUS_AUTH_FAILED;
-
-			/* Trim area used for digest from mbuf. */
-			rte_pktmbuf_trim(ops[i]->sym->m_src,
-					KASUMI_DIGEST_LENGTH);
 		} else  {
 			dst = ops[i]->sym->auth.digest.data;
 
@@ -327,16 +319,16 @@ process_ops(struct rte_crypto_op **ops, struct kasumi_session *session,
 				session, num_ops);
 		break;
 	case KASUMI_OP_ONLY_AUTH:
-		processed_ops = process_kasumi_hash_op(ops, session,
+		processed_ops = process_kasumi_hash_op(qp, ops, session,
 				num_ops);
 		break;
 	case KASUMI_OP_CIPHER_AUTH:
 		processed_ops = process_kasumi_cipher_op(ops, session,
 				num_ops);
-		process_kasumi_hash_op(ops, session, processed_ops);
+		process_kasumi_hash_op(qp, ops, session, processed_ops);
 		break;
 	case KASUMI_OP_AUTH_CIPHER:
-		processed_ops = process_kasumi_hash_op(ops, session,
+		processed_ops = process_kasumi_hash_op(qp, ops, session,
 				num_ops);
 		process_kasumi_cipher_op(ops, session, processed_ops);
 		break;
@@ -384,15 +376,15 @@ process_op_bit(struct rte_crypto_op *op, struct kasumi_session *session,
 				session);
 		break;
 	case KASUMI_OP_ONLY_AUTH:
-		processed_op = process_kasumi_hash_op(&op, session, 1);
+		processed_op = process_kasumi_hash_op(qp, &op, session, 1);
 		break;
 	case KASUMI_OP_CIPHER_AUTH:
 		processed_op = process_kasumi_cipher_op_bit(op, session);
 		if (processed_op == 1)
-			process_kasumi_hash_op(&op, session, 1);
+			process_kasumi_hash_op(qp, &op, session, 1);
 		break;
 	case KASUMI_OP_AUTH_CIPHER:
-		processed_op = process_kasumi_hash_op(&op, session, 1);
+		processed_op = process_kasumi_hash_op(qp, &op, session, 1);
 		if (processed_op == 1)
 			process_kasumi_cipher_op_bit(op, session);
 		break;
@@ -559,29 +551,23 @@ static int cryptodev_kasumi_remove(struct rte_vdev_device *vdev);
 static int
 cryptodev_kasumi_create(const char *name,
 			struct rte_vdev_device *vdev,
-			struct rte_crypto_vdev_init_params *init_params)
+			struct rte_cryptodev_pmd_init_params *init_params)
 {
 	struct rte_cryptodev *dev;
 	struct kasumi_private *internals;
 	uint64_t cpu_flags = 0;
 
-	if (init_params->name[0] == '\0')
-		snprintf(init_params->name, sizeof(init_params->name),
-				"%s", name);
+	dev = rte_cryptodev_pmd_create(name, &vdev->device, init_params);
+	if (dev == NULL) {
+		KASUMI_LOG_ERR("failed to create cryptodev vdev");
+		goto init_error;
+	}
 
 	/* Check CPU for supported vector instruction set */
 	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX))
 		cpu_flags |= RTE_CRYPTODEV_FF_CPU_AVX;
 	else
 		cpu_flags |= RTE_CRYPTODEV_FF_CPU_SSE;
-
-	dev = rte_cryptodev_vdev_pmd_init(init_params->name,
-			sizeof(struct kasumi_private), init_params->socket_id,
-			vdev);
-	if (dev == NULL) {
-		KASUMI_LOG_ERR("failed to create cryptodev vdev");
-		goto init_error;
-	}
 
 	dev->driver_id = cryptodev_driver_id;
 	dev->dev_ops = rte_kasumi_pmd_ops;
@@ -611,11 +597,12 @@ init_error:
 static int
 cryptodev_kasumi_probe(struct rte_vdev_device *vdev)
 {
-	struct rte_crypto_vdev_init_params init_params = {
-		RTE_CRYPTODEV_VDEV_DEFAULT_MAX_NB_QUEUE_PAIRS,
-		RTE_CRYPTODEV_VDEV_DEFAULT_MAX_NB_SESSIONS,
+	struct rte_cryptodev_pmd_init_params init_params = {
+		"",
+		sizeof(struct kasumi_private),
 		rte_socket_id(),
-		{0}
+		RTE_CRYPTODEV_PMD_DEFAULT_MAX_NB_QUEUE_PAIRS,
+		RTE_CRYPTODEV_PMD_DEFAULT_MAX_NB_SESSIONS
 	};
 	const char *name;
 	const char *input_args;
@@ -625,17 +612,7 @@ cryptodev_kasumi_probe(struct rte_vdev_device *vdev)
 		return -EINVAL;
 	input_args = rte_vdev_device_args(vdev);
 
-	rte_cryptodev_vdev_parse_init_params(&init_params, input_args);
-
-	RTE_LOG(INFO, PMD, "Initialising %s on NUMA node %d\n", name,
-			init_params.socket_id);
-	if (init_params.name[0] != '\0')
-		RTE_LOG(INFO, PMD, "  User defined name = %s\n",
-			init_params.name);
-	RTE_LOG(INFO, PMD, "  Max number of queue pairs = %d\n",
-			init_params.max_nb_queue_pairs);
-	RTE_LOG(INFO, PMD, "  Max number of sessions = %d\n",
-			init_params.max_nb_sessions);
+	rte_cryptodev_pmd_parse_input_args(&init_params, input_args);
 
 	return cryptodev_kasumi_create(name, vdev, &init_params);
 }
@@ -643,17 +620,18 @@ cryptodev_kasumi_probe(struct rte_vdev_device *vdev)
 static int
 cryptodev_kasumi_remove(struct rte_vdev_device *vdev)
 {
+	struct rte_cryptodev *cryptodev;
 	const char *name;
 
 	name = rte_vdev_device_name(vdev);
 	if (name == NULL)
 		return -EINVAL;
 
-	RTE_LOG(INFO, PMD, "Closing KASUMI crypto device %s"
-			" on numa socket %u\n",
-			name, rte_socket_id());
+	cryptodev = rte_cryptodev_pmd_get_named_dev(name);
+	if (cryptodev == NULL)
+		return -ENODEV;
 
-	return 0;
+	return rte_cryptodev_pmd_destroy(cryptodev);
 }
 
 static struct rte_vdev_driver cryptodev_kasumi_pmd_drv = {
@@ -661,10 +639,13 @@ static struct rte_vdev_driver cryptodev_kasumi_pmd_drv = {
 	.remove = cryptodev_kasumi_remove
 };
 
+static struct cryptodev_driver kasumi_crypto_drv;
+
 RTE_PMD_REGISTER_VDEV(CRYPTODEV_NAME_KASUMI_PMD, cryptodev_kasumi_pmd_drv);
 RTE_PMD_REGISTER_ALIAS(CRYPTODEV_NAME_KASUMI_PMD, cryptodev_kasumi_pmd);
 RTE_PMD_REGISTER_PARAM_STRING(CRYPTODEV_NAME_KASUMI_PMD,
 	"max_nb_queue_pairs=<int> "
 	"max_nb_sessions=<int> "
 	"socket_id=<int>");
-RTE_PMD_REGISTER_CRYPTO_DRIVER(cryptodev_kasumi_pmd_drv, cryptodev_driver_id);
+RTE_PMD_REGISTER_CRYPTO_DRIVER(kasumi_crypto_drv, cryptodev_kasumi_pmd_drv,
+		cryptodev_driver_id);

@@ -40,7 +40,7 @@
 #include <rte_malloc.h>
 #include <rte_kvargs.h>
 #include <rte_ethdev_vdev.h>
-#include <rte_vdev.h>
+#include <rte_bus_vdev.h>
 #include <rte_alarm.h>
 
 #include "virtio_ethdev.h"
@@ -86,7 +86,11 @@ virtio_user_read_dev_config(struct virtio_hw *hw, size_t offset,
 			int flags;
 
 			flags = fcntl(dev->vhostfd, F_GETFL);
-			fcntl(dev->vhostfd, F_SETFL, flags | O_NONBLOCK);
+			if (fcntl(dev->vhostfd, F_SETFL,
+					flags | O_NONBLOCK) == -1) {
+				PMD_DRV_LOG(ERR, "error setting O_NONBLOCK flag");
+				return;
+			}
 			r = recv(dev->vhostfd, buf, 128, MSG_PEEK);
 			if (r == 0 || (r < 0 && errno != EAGAIN)) {
 				dev->status &= (~VIRTIO_NET_S_LINK_UP);
@@ -369,9 +373,9 @@ virtio_user_eth_dev_alloc(struct rte_vdev_device *vdev)
 	 */
 	hw->use_msix = 1;
 	hw->modern   = 0;
-	hw->use_simple_rxtx = 0;
+	hw->use_simple_rx = 0;
+	hw->use_simple_tx = 0;
 	hw->virtio_user_dev = dev;
-	data->dev_flags = RTE_ETH_DEV_DETACHABLE;
 	return eth_dev;
 }
 

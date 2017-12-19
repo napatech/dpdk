@@ -7,7 +7,6 @@ DPDK_16.04 {
 	rte_cryptodev_close;
 	rte_cryptodev_count;
 	rte_cryptodev_configure;
-	rte_cryptodev_create_vdev;
 	rte_cryptodev_get_dev_id;
 	rte_cryptodev_get_feature_name;
 	rte_cryptodev_info_get;
@@ -68,14 +67,21 @@ DPDK_17.08 {
 	rte_cryptodev_get_aead_algo_enum;
 	rte_cryptodev_get_header_session_size;
 	rte_cryptodev_get_private_session_size;
-	rte_cryptodev_pci_generic_probe;
-	rte_cryptodev_pci_generic_remove;
 	rte_cryptodev_sym_capability_check_aead;
 	rte_cryptodev_sym_session_init;
 	rte_cryptodev_sym_session_clear;
-	rte_cryptodev_vdev_parse_init_params;
-	rte_cryptodev_vdev_pmd_init;
 	rte_crypto_aead_algorithm_strings;
 	rte_crypto_aead_operation_strings;
 
 } DPDK_17.05;
+
+DPDK_17.11 {
+	global:
+
+	rte_cryptodev_get_sec_ctx;
+	rte_cryptodev_name_get;
+	rte_cryptodev_pmd_create;
+	rte_cryptodev_pmd_destroy;
+	rte_cryptodev_pmd_parse_input_args;
+
+} DPDK_17.08;

@@ -159,7 +159,7 @@ fail1:
 static	__checkReturn	efx_rc_t
 efx_mcdi_rss_context_alloc(
 	__in		efx_nic_t *enp,
-	__in		efx_rx_scale_support_t scale_support,
+	__in		efx_rx_scale_context_type_t type,
 	__in		uint32_t num_queues,
 	__out		uint32_t *rss_contextp)
 {
@@ -175,7 +175,7 @@ efx_mcdi_rss_context_alloc(
 		goto fail1;
 	}
 
-	switch (scale_support) {
+	switch (type) {
 	case EFX_RX_SCALE_EXCLUSIVE:
 		context_type = MC_CMD_RSS_CONTEXT_ALLOC_IN_TYPE_EXCLUSIVE;
 		break;
@@ -461,7 +461,7 @@ ef10_rx_init(
 		 * Allocated an exclusive RSS context, which allows both the
 		 * indirection table and key to be modified.
 		 */
-		enp->en_rss_support = EFX_RX_SCALE_EXCLUSIVE;
+		enp->en_rss_context_type = EFX_RX_SCALE_EXCLUSIVE;
 		enp->en_hash_support = EFX_RX_HASH_AVAILABLE;
 	} else {
 		/*
@@ -469,7 +469,7 @@ ef10_rx_init(
 		 * operation without support for RSS. The pseudo-header in
 		 * received packets will not contain a Toeplitz hash value.
 		 */
-		enp->en_rss_support = EFX_RX_SCALE_UNAVAILABLE;
+		enp->en_rss_context_type = EFX_RX_SCALE_UNAVAILABLE;
 		enp->en_hash_support = EFX_RX_HASH_UNAVAILABLE;
 	}
 
@@ -491,8 +491,51 @@ ef10_rx_scatter_enable(
 
 #if EFSYS_OPT_RX_SCALE
 	__checkReturn	efx_rc_t
+ef10_rx_scale_context_alloc(
+	__in		efx_nic_t *enp,
+	__in		efx_rx_scale_context_type_t type,
+	__in		uint32_t num_queues,
+	__out		uint32_t *rss_contextp)
+{
+	efx_rc_t rc;
+
+	rc = efx_mcdi_rss_context_alloc(enp, type, num_queues, rss_contextp);
+	if (rc != 0)
+		goto fail1;
+
+	return (0);
+
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+	return (rc);
+}
+#endif /* EFSYS_OPT_RX_SCALE */
+
+#if EFSYS_OPT_RX_SCALE
+	__checkReturn	efx_rc_t
+ef10_rx_scale_context_free(
+	__in		efx_nic_t *enp,
+	__in		uint32_t rss_context)
+{
+	efx_rc_t rc;
+
+	rc = efx_mcdi_rss_context_free(enp, rss_context);
+	if (rc != 0)
+		goto fail1;
+
+	return (0);
+
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+	return (rc);
+}
+#endif /* EFSYS_OPT_RX_SCALE */
+
+#if EFSYS_OPT_RX_SCALE
+	__checkReturn	efx_rc_t
 ef10_rx_scale_mode_set(
 	__in		efx_nic_t *enp,
+	__in		uint32_t rss_context,
 	__in		efx_rx_hash_alg_t alg,
 	__in		efx_rx_hash_type_t type,
 	__in		boolean_t insert)
@@ -507,13 +550,16 @@ ef10_rx_scale_mode_set(
 		goto fail1;
 	}
 
-	if (enp->en_rss_support == EFX_RX_SCALE_UNAVAILABLE) {
-		rc = ENOTSUP;
-		goto fail2;
+	if (rss_context == EFX_RSS_CONTEXT_DEFAULT) {
+		if (enp->en_rss_context_type == EFX_RX_SCALE_UNAVAILABLE) {
+			rc = ENOTSUP;
+			goto fail2;
+		}
+		rss_context = enp->en_rss_context;
 	}
 
 	if ((rc = efx_mcdi_rss_context_set_flags(enp,
-		    enp->en_rss_context, type)) != 0)
+		    rss_context, type)) != 0)
 		goto fail3;
 
 	return (0);
@@ -533,18 +579,24 @@ fail1:
 	__checkReturn	efx_rc_t
 ef10_rx_scale_key_set(
 	__in		efx_nic_t *enp,
+	__in		uint32_t rss_context,
 	__in_ecount(n)	uint8_t *key,
 	__in		size_t n)
 {
 	efx_rc_t rc;
 
-	if (enp->en_rss_support == EFX_RX_SCALE_UNAVAILABLE) {
-		rc = ENOTSUP;
-		goto fail1;
+	EFX_STATIC_ASSERT(EFX_RSS_KEY_SIZE ==
+	    MC_CMD_RSS_CONTEXT_SET_KEY_IN_TOEPLITZ_KEY_LEN);
+
+	if (rss_context == EFX_RSS_CONTEXT_DEFAULT) {
+		if (enp->en_rss_context_type == EFX_RX_SCALE_UNAVAILABLE) {
+			rc = ENOTSUP;
+			goto fail1;
+		}
+		rss_context = enp->en_rss_context;
 	}
 
-	if ((rc = efx_mcdi_rss_context_set_key(enp,
-	    enp->en_rss_context, key, n)) != 0)
+	if ((rc = efx_mcdi_rss_context_set_key(enp, rss_context, key, n)) != 0)
 		goto fail2;
 
 	return (0);
@@ -562,18 +614,23 @@ fail1:
 	__checkReturn	efx_rc_t
 ef10_rx_scale_tbl_set(
 	__in		efx_nic_t *enp,
+	__in		uint32_t rss_context,
 	__in_ecount(n)	unsigned int *table,
 	__in		size_t n)
 {
 	efx_rc_t rc;
 
-	if (enp->en_rss_support == EFX_RX_SCALE_UNAVAILABLE) {
-		rc = ENOTSUP;
-		goto fail1;
+
+	if (rss_context == EFX_RSS_CONTEXT_DEFAULT) {
+		if (enp->en_rss_context_type == EFX_RX_SCALE_UNAVAILABLE) {
+			rc = ENOTSUP;
+			goto fail1;
+		}
+		rss_context = enp->en_rss_context;
 	}
 
 	if ((rc = efx_mcdi_rss_context_set_table(enp,
-	    enp->en_rss_context, table, n)) != 0)
+		    rss_context, table, n)) != 0)
 		goto fail2;
 
 	return (0);
@@ -964,11 +1021,10 @@ ef10_rx_fini(
 	__in	efx_nic_t *enp)
 {
 #if EFSYS_OPT_RX_SCALE
-	if (enp->en_rss_support != EFX_RX_SCALE_UNAVAILABLE) {
+	if (enp->en_rss_context_type != EFX_RX_SCALE_UNAVAILABLE)
 		(void) efx_mcdi_rss_context_free(enp, enp->en_rss_context);
-	}
 	enp->en_rss_context = 0;
-	enp->en_rss_support = EFX_RX_SCALE_UNAVAILABLE;
+	enp->en_rss_context_type = EFX_RX_SCALE_UNAVAILABLE;
 #else
 	_NOTE(ARGUNUSED(enp))
 #endif /* EFSYS_OPT_RX_SCALE */

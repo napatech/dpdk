@@ -40,14 +40,19 @@ struct qed_dev_info {
 #define QED_MFW_VERSION_3_OFFSET	24
 
 	uint32_t flash_size;
-	uint8_t mf_mode;
+	bool b_arfs_capable;
+	bool b_inter_pf_switch;
 	bool tx_switching;
 	u16 mtu;
+
+	bool smart_an;
 
 	/* Out param for qede */
 	bool vxlan_enable;
 	bool gre_enable;
 	bool geneve_enable;
+
+	enum ecore_dev_type dev_type;
 };
 
 struct qed_dev_eth_info {
@@ -79,6 +84,7 @@ struct qed_link_params {
 #define QED_LINK_OVERRIDE_SPEED_ADV_SPEEDS      (1 << 1)
 #define QED_LINK_OVERRIDE_SPEED_FORCED_SPEED    (1 << 2)
 #define QED_LINK_OVERRIDE_PAUSE_CONFIG          (1 << 3)
+#define QED_LINK_OVERRIDE_EEE_CONFIG		(1 << 5)
 	uint32_t override_flags;
 	bool autoneg;
 	uint32_t adv_speeds;
@@ -87,6 +93,7 @@ struct qed_link_params {
 #define QED_LINK_PAUSE_RX_ENABLE                (1 << 1)
 #define QED_LINK_PAUSE_TX_ENABLE                (1 << 2)
 	uint32_t pause_config;
+	struct ecore_link_eee_params eee;
 };
 
 struct qed_link_output {
@@ -97,9 +104,15 @@ struct qed_link_output {
 	uint32_t speed;		/* In Mb/s */
 	uint32_t adv_speed;	/* Speed mask */
 	uint8_t duplex;		/* In DUPLEX defs */
-	uint8_t port;		/* In PORT defs */
+	uint16_t port;		/* In PORT defs */
 	bool autoneg;
 	uint32_t pause_config;
+
+	/* EEE - capability & param */
+	bool eee_supported;
+	bool eee_active;
+	u8 sup_caps;
+	struct ecore_link_eee_params eee;
 };
 
 struct qed_slowpath_params {

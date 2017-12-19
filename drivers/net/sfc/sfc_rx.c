@@ -128,7 +128,7 @@ sfc_efx_rx_qrefill(struct sfc_efx_rxq *rxq)
 			SFC_ASSERT(m->nb_segs == 1);
 			m->port = port_id;
 
-			addr[i] = rte_pktmbuf_mtophys(m);
+			addr[i] = rte_pktmbuf_iova(m);
 		}
 
 		efx_rx_qpost(rxq->common, addr, rxq->buf_size,
@@ -207,11 +207,11 @@ sfc_efx_supported_ptypes_get(void)
 	return ptypes;
 }
 
+#if EFSYS_OPT_RX_SCALE
 static void
 sfc_efx_rx_set_rss_hash(struct sfc_efx_rxq *rxq, unsigned int flags,
 			struct rte_mbuf *m)
 {
-#if EFSYS_OPT_RX_SCALE
 	uint8_t *mbuf_data;
 
 
@@ -227,8 +227,15 @@ sfc_efx_rx_set_rss_hash(struct sfc_efx_rxq *rxq, unsigned int flags,
 
 		m->ol_flags |= PKT_RX_RSS_HASH;
 	}
-#endif
 }
+#else
+static void
+sfc_efx_rx_set_rss_hash(__rte_unused struct sfc_efx_rxq *rxq,
+			__rte_unused unsigned int flags,
+			__rte_unused struct rte_mbuf *m)
+{
+}
+#endif
 
 static uint16_t
 sfc_efx_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
@@ -347,6 +354,43 @@ sfc_efx_rx_qdesc_npending(struct sfc_dp_rxq *dp_rxq)
 	sfc_ev_qpoll(rxq->evq);
 
 	return rxq->pending - rxq->completed;
+}
+
+static sfc_dp_rx_qdesc_status_t sfc_efx_rx_qdesc_status;
+static int
+sfc_efx_rx_qdesc_status(struct sfc_dp_rxq *dp_rxq, uint16_t offset)
+{
+	struct sfc_efx_rxq *rxq = sfc_efx_rxq_by_dp_rxq(dp_rxq);
+
+	if (unlikely(offset > rxq->ptr_mask))
+		return -EINVAL;
+
+	/*
+	 * Poll EvQ to derive up-to-date 'rxq->pending' figure;
+	 * it is required for the queue to be running, but the
+	 * check is omitted because API design assumes that it
+	 * is the duty of the caller to satisfy all conditions
+	 */
+	SFC_ASSERT((rxq->flags & SFC_EFX_RXQ_FLAG_RUNNING) ==
+		   SFC_EFX_RXQ_FLAG_RUNNING);
+	sfc_ev_qpoll(rxq->evq);
+
+	/*
+	 * There is a handful of reserved entries in the ring,
+	 * but an explicit check whether the offset points to
+	 * a reserved entry is neglected since the two checks
+	 * below rely on the figures which take the HW limits
+	 * into account and thus if an entry is reserved, the
+	 * checks will fail and UNAVAIL code will be returned
+	 */
+
+	if (offset < (rxq->pending - rxq->completed))
+		return RTE_ETH_RX_DESC_DONE;
+
+	if (offset < (rxq->added - rxq->completed))
+		return RTE_ETH_RX_DESC_AVAIL;
+
+	return RTE_ETH_RX_DESC_UNAVAIL;
 }
 
 struct sfc_rxq *
@@ -498,6 +542,7 @@ struct sfc_dp_rx sfc_efx_rx = {
 	.qpurge			= sfc_efx_rx_qpurge,
 	.supported_ptypes_get	= sfc_efx_supported_ptypes_get,
 	.qdesc_npending		= sfc_efx_rx_qdesc_npending,
+	.qdesc_status		= sfc_efx_rx_qdesc_status,
 	.pkt_burst		= sfc_efx_recv_pkts,
 };
 
@@ -735,9 +780,8 @@ sfc_rx_qcheck_conf(struct sfc_adapter *sa, uint16_t nb_rx_desc,
 	if (rx_conf->rx_thresh.pthresh != 0 ||
 	    rx_conf->rx_thresh.hthresh != 0 ||
 	    rx_conf->rx_thresh.wthresh != 0) {
-		sfc_err(sa,
+		sfc_warn(sa,
 			"RxQ prefetch/host/writeback thresholds are not supported");
-		rc = EINVAL;
 	}
 
 	if (rx_conf->rx_free_thresh > rx_free_thresh_max) {
@@ -1050,31 +1094,39 @@ sfc_efx_to_rte_hash_type(efx_rx_hash_type_t efx_hash_types)
 }
 #endif
 
+#if EFSYS_OPT_RX_SCALE
 static int
 sfc_rx_rss_config(struct sfc_adapter *sa)
 {
 	int rc = 0;
 
-#if EFSYS_OPT_RX_SCALE
 	if (sa->rss_channels > 0) {
-		rc = efx_rx_scale_mode_set(sa->nic, EFX_RX_HASHALG_TOEPLITZ,
+		rc = efx_rx_scale_mode_set(sa->nic, EFX_RSS_CONTEXT_DEFAULT,
+					   EFX_RX_HASHALG_TOEPLITZ,
 					   sa->rss_hash_types, B_TRUE);
 		if (rc != 0)
 			goto finish;
 
-		rc = efx_rx_scale_key_set(sa->nic, sa->rss_key,
+		rc = efx_rx_scale_key_set(sa->nic, EFX_RSS_CONTEXT_DEFAULT,
+					  sa->rss_key,
 					  sizeof(sa->rss_key));
 		if (rc != 0)
 			goto finish;
 
-		rc = efx_rx_scale_tbl_set(sa->nic, sa->rss_tbl,
-					  sizeof(sa->rss_tbl));
+		rc = efx_rx_scale_tbl_set(sa->nic, EFX_RSS_CONTEXT_DEFAULT,
+					  sa->rss_tbl, RTE_DIM(sa->rss_tbl));
 	}
 
 finish:
-#endif
 	return rc;
 }
+#else
+static int
+sfc_rx_rss_config(__rte_unused struct sfc_adapter *sa)
+{
+	return 0;
+}
+#endif
 
 int
 sfc_rx_start(struct sfc_adapter *sa)
@@ -1243,7 +1295,6 @@ sfc_rx_configure(struct sfc_adapter *sa)
 {
 	struct rte_eth_conf *dev_conf = &sa->eth_dev->data->dev_conf;
 	const unsigned int nb_rx_queues = sa->eth_dev->data->nb_rx_queues;
-	unsigned int sw_index;
 	int rc;
 
 	sfc_log_init(sa, "nb_rx_queues=%u (old %u)",
@@ -1296,6 +1347,8 @@ sfc_rx_configure(struct sfc_adapter *sa)
 			   MIN(sa->rxq_count, EFX_MAXRSS) : 0;
 
 	if (sa->rss_channels > 0) {
+		unsigned int sw_index;
+
 		for (sw_index = 0; sw_index < EFX_RSS_TBL_SIZE; ++sw_index)
 			sa->rss_tbl[sw_index] = sw_index % sa->rss_channels;
 	}

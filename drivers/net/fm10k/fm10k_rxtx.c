@@ -158,10 +158,10 @@ fm10k_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		 * Packets in fm10k device always carry at least one VLAN tag.
 		 * For those packets coming in without VLAN tag,
 		 * the port default VLAN tag will be used.
-		 * So, always PKT_RX_VLAN_PKT flag is set and vlan_tci
+		 * So, always PKT_RX_VLAN flag is set and vlan_tci
 		 * is valid for each RX packet's mbuf.
 		 */
-		mbuf->ol_flags |= PKT_RX_VLAN_PKT;
+		mbuf->ol_flags |= PKT_RX_VLAN;
 		mbuf->vlan_tci = desc.w.vlan;
 		/**
 		 * mbuf->vlan_tci_outer is an idle field in fm10k driver,
@@ -198,7 +198,7 @@ fm10k_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 					q->alloc_thresh);
 
 		if (unlikely(ret != 0)) {
-			uint8_t port = q->port_id;
+			uint16_t port = q->port_id;
 			PMD_RX_LOG(ERR, "Failed to alloc mbuf");
 			/*
 			 * Need to restore next_dd if we cannot allocate new
@@ -319,10 +319,10 @@ fm10k_recv_scattered_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		 * Packets in fm10k device always carry at least one VLAN tag.
 		 * For those packets coming in without VLAN tag,
 		 * the port default VLAN tag will be used.
-		 * So, always PKT_RX_VLAN_PKT flag is set and vlan_tci
+		 * So, always PKT_RX_VLAN flag is set and vlan_tci
 		 * is valid for each RX packet's mbuf.
 		 */
-		first_seg->ol_flags |= PKT_RX_VLAN_PKT;
+		first_seg->ol_flags |= PKT_RX_VLAN;
 		first_seg->vlan_tci = desc.w.vlan;
 		/**
 		 * mbuf->vlan_tci_outer is an idle field in fm10k driver,
@@ -356,7 +356,7 @@ fm10k_recv_scattered_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 					q->alloc_thresh);
 
 		if (unlikely(ret != 0)) {
-			uint8_t port = q->port_id;
+			uint16_t port = q->port_id;
 			PMD_RX_LOG(ERR, "Failed to alloc mbuf");
 			/*
 			 * Need to restore next_dd if we cannot allocate new

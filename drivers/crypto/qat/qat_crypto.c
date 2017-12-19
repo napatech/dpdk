@@ -44,15 +44,12 @@
 #include <rte_log.h>
 #include <rte_debug.h>
 #include <rte_memory.h>
-#include <rte_memzone.h>
 #include <rte_tailq.h>
-#include <rte_ether.h>
 #include <rte_malloc.h>
 #include <rte_launch.h>
 #include <rte_eal.h>
 #include <rte_per_lcore.h>
 #include <rte_lcore.h>
-#include <rte_atomic.h>
 #include <rte_branch_prediction.h>
 #include <rte_mempool.h>
 #include <rte_mbuf.h>
@@ -60,7 +57,10 @@
 #include <rte_spinlock.h>
 #include <rte_hexdump.h>
 #include <rte_crypto_sym.h>
-#include <rte_cryptodev_pci.h>
+#include <rte_byteorder.h>
+#include <rte_pci.h>
+#include <rte_bus_pci.h>
+
 #include <openssl/evp.h>
 
 #include "qat_logs.h"
@@ -253,10 +253,21 @@ qat_get_cmd_id(const struct rte_crypto_sym_xform *xform)
 
 	/* AEAD */
 	if (xform->type == RTE_CRYPTO_SYM_XFORM_AEAD) {
+		/* AES-GCM and AES-CCM works with different direction
+		 * GCM first encrypts and generate hash where AES-CCM
+		 * first generate hash and encrypts. Similar relation
+		 * applies to decryption.
+		 */
 		if (xform->aead.op == RTE_CRYPTO_AEAD_OP_ENCRYPT)
-			return ICP_QAT_FW_LA_CMD_CIPHER_HASH;
+			if (xform->aead.algo == RTE_CRYPTO_AEAD_AES_GCM)
+				return ICP_QAT_FW_LA_CMD_CIPHER_HASH;
+			else
+				return ICP_QAT_FW_LA_CMD_HASH_CIPHER;
 		else
-			return ICP_QAT_FW_LA_CMD_HASH_CIPHER;
+			if (xform->aead.algo == RTE_CRYPTO_AEAD_AES_GCM)
+				return ICP_QAT_FW_LA_CMD_HASH_CIPHER;
+			else
+				return ICP_QAT_FW_LA_CMD_CIPHER_HASH;
 	}
 
 	if (xform->next == NULL)
@@ -516,7 +527,7 @@ qat_crypto_set_session_parameters(struct rte_cryptodev *dev,
 	PMD_INIT_FUNC_TRACE();
 
 	/* Set context descriptor physical address */
-	session->cd_paddr = rte_mempool_virt2phy(NULL, session) +
+	session->cd_paddr = rte_mempool_virt2iova(session) +
 			offsetof(struct qat_session, cd);
 
 	session->min_qat_dev_gen = QAT_GEN1;
@@ -736,6 +747,7 @@ qat_crypto_sym_configure_session_aead(struct rte_crypto_sym_xform *xform,
 				struct qat_session *session)
 {
 	struct rte_crypto_aead_xform *aead_xform = &xform->aead;
+	enum rte_crypto_auth_operation crypto_operation;
 
 	/*
 	 * Store AEAD IV parameters as cipher IV,
@@ -755,21 +767,33 @@ qat_crypto_sym_configure_session_aead(struct rte_crypto_sym_xform *xform,
 		session->qat_hash_alg = ICP_QAT_HW_AUTH_ALGO_GALOIS_128;
 		break;
 	case RTE_CRYPTO_AEAD_AES_CCM:
-		PMD_DRV_LOG(ERR, "Crypto QAT PMD: Unsupported AEAD alg %u",
-				aead_xform->algo);
-		return -ENOTSUP;
+		if (qat_alg_validate_aes_key(aead_xform->key.length,
+				&session->qat_cipher_alg) != 0) {
+			PMD_DRV_LOG(ERR, "Invalid AES key size");
+			return -EINVAL;
+		}
+		session->qat_mode = ICP_QAT_HW_CIPHER_CTR_MODE;
+		session->qat_hash_alg = ICP_QAT_HW_AUTH_ALGO_AES_CBC_MAC;
+		break;
 	default:
 		PMD_DRV_LOG(ERR, "Crypto: Undefined AEAD specified %u\n",
 				aead_xform->algo);
 		return -EINVAL;
 	}
 
-	if (aead_xform->op == RTE_CRYPTO_AEAD_OP_ENCRYPT) {
+	if ((aead_xform->op == RTE_CRYPTO_AEAD_OP_ENCRYPT &&
+			aead_xform->algo == RTE_CRYPTO_AEAD_AES_GCM) ||
+			(aead_xform->op == RTE_CRYPTO_AEAD_OP_DECRYPT &&
+			aead_xform->algo == RTE_CRYPTO_AEAD_AES_CCM)) {
 		session->qat_dir = ICP_QAT_HW_CIPHER_ENCRYPT;
 		/*
 		 * It needs to create cipher desc content first,
 		 * then authentication
 		 */
+
+		crypto_operation = aead_xform->algo == RTE_CRYPTO_AEAD_AES_GCM ?
+			RTE_CRYPTO_AUTH_OP_GENERATE : RTE_CRYPTO_AUTH_OP_VERIFY;
+
 		if (qat_alg_aead_session_create_content_desc_cipher(session,
 					aead_xform->key.data,
 					aead_xform->key.length))
@@ -780,7 +804,7 @@ qat_crypto_sym_configure_session_aead(struct rte_crypto_sym_xform *xform,
 					aead_xform->key.length,
 					aead_xform->aad_length,
 					aead_xform->digest_length,
-					RTE_CRYPTO_AUTH_OP_GENERATE))
+					crypto_operation))
 			return -EINVAL;
 	} else {
 		session->qat_dir = ICP_QAT_HW_CIPHER_DECRYPT;
@@ -788,12 +812,16 @@ qat_crypto_sym_configure_session_aead(struct rte_crypto_sym_xform *xform,
 		 * It needs to create authentication desc content first,
 		 * then cipher
 		 */
+
+		crypto_operation = aead_xform->algo == RTE_CRYPTO_AEAD_AES_GCM ?
+			RTE_CRYPTO_AUTH_OP_VERIFY : RTE_CRYPTO_AUTH_OP_GENERATE;
+
 		if (qat_alg_aead_session_create_content_desc_auth(session,
 					aead_xform->key.data,
 					aead_xform->key.length,
 					aead_xform->aad_length,
 					aead_xform->digest_length,
-					RTE_CRYPTO_AUTH_OP_VERIFY))
+					crypto_operation))
 			return -EINVAL;
 
 		if (qat_alg_aead_session_create_content_desc_cipher(session,
@@ -923,6 +951,14 @@ qat_bpicipher_postprocess(struct qat_session *ctx,
 	return sym_op->cipher.data.length - last_block_len;
 }
 
+static inline void
+txq_write_tail(struct qat_qp *qp, struct qat_queue *q) {
+	WRITE_CSR_RING_TAIL(qp->mmap_bar_addr, q->hw_bundle_number,
+			q->hw_queue_number, q->tail);
+	q->nb_pending_requests = 0;
+	q->csr_tail = q->tail;
+}
+
 uint16_t
 qat_pmd_enqueue_op_burst(void *qp, struct rte_crypto_op **ops,
 		uint16_t nb_ops)
@@ -946,10 +982,10 @@ qat_pmd_enqueue_op_burst(void *qp, struct rte_crypto_op **ops,
 	tail = queue->tail;
 
 	/* Find how many can actually fit on the ring */
-	overflow = rte_atomic16_add_return(&tmp_qp->inflights16, nb_ops)
-				- queue->max_inflights;
+	tmp_qp->inflights16 += nb_ops;
+	overflow = tmp_qp->inflights16 - queue->max_inflights;
 	if (overflow > 0) {
-		rte_atomic16_sub(&tmp_qp->inflights16, overflow);
+		tmp_qp->inflights16 -= overflow;
 		nb_ops_possible = nb_ops - overflow;
 		if (nb_ops_possible == 0)
 			return 0;
@@ -964,8 +1000,7 @@ qat_pmd_enqueue_op_burst(void *qp, struct rte_crypto_op **ops,
 			 * This message cannot be enqueued,
 			 * decrease number of ops that wasn't sent
 			 */
-			rte_atomic16_sub(&tmp_qp->inflights16,
-					nb_ops_possible - nb_ops_sent);
+			tmp_qp->inflights16 -= nb_ops_possible - nb_ops_sent;
 			if (nb_ops_sent == 0)
 				return 0;
 			goto kick_tail;
@@ -976,26 +1011,59 @@ qat_pmd_enqueue_op_burst(void *qp, struct rte_crypto_op **ops,
 		cur_op++;
 	}
 kick_tail:
-	WRITE_CSR_RING_TAIL(tmp_qp->mmap_bar_addr, queue->hw_bundle_number,
-			queue->hw_queue_number, tail);
 	queue->tail = tail;
 	tmp_qp->stats.enqueued_count += nb_ops_sent;
+	queue->nb_pending_requests += nb_ops_sent;
+	if (tmp_qp->inflights16 < QAT_CSR_TAIL_FORCE_WRITE_THRESH ||
+			queue->nb_pending_requests > QAT_CSR_TAIL_WRITE_THRESH) {
+		txq_write_tail(tmp_qp, queue);
+	}
 	return nb_ops_sent;
+}
+
+static inline
+void rxq_free_desc(struct qat_qp *qp, struct qat_queue *q)
+{
+	uint32_t old_head, new_head;
+	uint32_t max_head;
+
+	old_head = q->csr_head;
+	new_head = q->head;
+	max_head = qp->nb_descriptors * q->msg_size;
+
+	/* write out free descriptors */
+	void *cur_desc = (uint8_t *)q->base_addr + old_head;
+
+	if (new_head < old_head) {
+		memset(cur_desc, ADF_RING_EMPTY_SIG, max_head - old_head);
+		memset(q->base_addr, ADF_RING_EMPTY_SIG, new_head);
+	} else {
+		memset(cur_desc, ADF_RING_EMPTY_SIG, new_head - old_head);
+	}
+	q->nb_processed_responses = 0;
+	q->csr_head = new_head;
+
+	/* write current head to CSR */
+	WRITE_CSR_RING_HEAD(qp->mmap_bar_addr, q->hw_bundle_number,
+			    q->hw_queue_number, new_head);
 }
 
 uint16_t
 qat_pmd_dequeue_op_burst(void *qp, struct rte_crypto_op **ops,
 		uint16_t nb_ops)
 {
-	struct qat_queue *queue;
+	struct qat_queue *rx_queue, *tx_queue;
 	struct qat_qp *tmp_qp = (struct qat_qp *)qp;
 	uint32_t msg_counter = 0;
 	struct rte_crypto_op *rx_op;
 	struct icp_qat_fw_comn_resp *resp_msg;
+	uint32_t head;
 
-	queue = &(tmp_qp->rx_q);
+	rx_queue = &(tmp_qp->rx_q);
+	tx_queue = &(tmp_qp->tx_q);
+	head = rx_queue->head;
 	resp_msg = (struct icp_qat_fw_comn_resp *)
-			((uint8_t *)queue->base_addr + queue->head);
+			((uint8_t *)rx_queue->base_addr + head);
 
 	while (*(uint32_t *)resp_msg != ADF_RING_EMPTY_SIG &&
 			msg_counter != nb_ops) {
@@ -1005,7 +1073,6 @@ qat_pmd_dequeue_op_burst(void *qp, struct rte_crypto_op **ops,
 #ifdef RTE_LIBRTE_PMD_QAT_DEBUG_RX
 		rte_hexdump(stdout, "qat_response:", (uint8_t *)resp_msg,
 			sizeof(struct icp_qat_fw_comn_resp));
-
 #endif
 		if (ICP_QAT_FW_COMN_STATUS_FLAG_OK !=
 				ICP_QAT_FW_COMN_RESP_CRYPTO_STAT_GET(
@@ -1022,23 +1089,26 @@ qat_pmd_dequeue_op_burst(void *qp, struct rte_crypto_op **ops,
 			rx_op->status = RTE_CRYPTO_OP_STATUS_SUCCESS;
 		}
 
-		*(uint32_t *)resp_msg = ADF_RING_EMPTY_SIG;
-		queue->head = adf_modulo(queue->head +
-				queue->msg_size,
-				ADF_RING_SIZE_MODULO(queue->queue_size));
+		head = adf_modulo(head + rx_queue->msg_size, rx_queue->modulo);
 		resp_msg = (struct icp_qat_fw_comn_resp *)
-					((uint8_t *)queue->base_addr +
-							queue->head);
+				((uint8_t *)rx_queue->base_addr + head);
 		*ops = rx_op;
 		ops++;
 		msg_counter++;
 	}
 	if (msg_counter > 0) {
-		WRITE_CSR_RING_HEAD(tmp_qp->mmap_bar_addr,
-					queue->hw_bundle_number,
-					queue->hw_queue_number, queue->head);
-		rte_atomic16_sub(&tmp_qp->inflights16, msg_counter);
+		rx_queue->head = head;
 		tmp_qp->stats.dequeued_count += msg_counter;
+		rx_queue->nb_processed_responses += msg_counter;
+		tmp_qp->inflights16 -= msg_counter;
+
+		if (rx_queue->nb_processed_responses > QAT_CSR_HEAD_WRITE_THRESH)
+			rxq_free_desc(tmp_qp, rx_queue);
+	}
+	/* also check if tail needs to be advanced */
+	if (tmp_qp->inflights16 <= QAT_CSR_TAIL_FORCE_WRITE_THRESH &&
+			tx_queue->tail != tx_queue->csr_tail) {
+		txq_write_tail(tmp_qp, tx_queue);
 	}
 	return msg_counter;
 }
@@ -1049,7 +1119,7 @@ qat_sgl_fill_array(struct rte_mbuf *buf, uint64_t buff_start,
 {
 	int nr = 1;
 
-	uint32_t buf_len = rte_pktmbuf_mtophys(buf) -
+	uint32_t buf_len = rte_pktmbuf_iova(buf) -
 			buff_start + rte_pktmbuf_data_len(buf);
 
 	list->bufers[0].addr = buff_start;
@@ -1073,7 +1143,7 @@ qat_sgl_fill_array(struct rte_mbuf *buf, uint64_t buff_start,
 
 		list->bufers[nr].len = rte_pktmbuf_data_len(buf);
 		list->bufers[nr].resrvd = 0;
-		list->bufers[nr].addr = rte_pktmbuf_mtophys(buf);
+		list->bufers[nr].addr = rte_pktmbuf_iova(buf);
 
 		buf_len += list->bufers[nr].len;
 		buf = buf->next;
@@ -1110,6 +1180,29 @@ set_cipher_iv(uint16_t iv_length, uint16_t iv_offset,
 				rte_crypto_op_ctophys_offset(op,
 					iv_offset);
 	}
+}
+
+/** Set IV for CCM is special case, 0th byte is set to q-1
+ *  where q is padding of nonce in 16 byte block
+ */
+static inline void
+set_cipher_iv_ccm(uint16_t iv_length, uint16_t iv_offset,
+		struct icp_qat_fw_la_cipher_req_params *cipher_param,
+		struct rte_crypto_op *op, uint8_t q, uint8_t aad_len_field_sz)
+{
+	rte_memcpy(((uint8_t *)cipher_param->u.cipher_IV_array) +
+			ICP_QAT_HW_CCM_NONCE_OFFSET,
+			rte_crypto_op_ctod_offset(op, uint8_t *,
+				iv_offset) + ICP_QAT_HW_CCM_NONCE_OFFSET,
+			iv_length);
+	*(uint8_t *)&cipher_param->u.cipher_IV_array[0] =
+			q - ICP_QAT_HW_CCM_NONCE_OFFSET;
+
+	if (aad_len_field_sz)
+		rte_memcpy(&op->sym->aead.aad.data[ICP_QAT_HW_CCM_NONCE_OFFSET],
+			rte_crypto_op_ctod_offset(op, uint8_t *,
+				iv_offset) + ICP_QAT_HW_CCM_NONCE_OFFSET,
+			iv_length);
 }
 
 static inline int
@@ -1156,6 +1249,8 @@ qat_write_hw_desc_entry(struct rte_crypto_op *op, uint8_t *out_msg,
 		return -EINVAL;
 	}
 
+
+
 	qat_req = (struct icp_qat_fw_la_bulk_req *)out_msg;
 	rte_mov128((uint8_t *)qat_req, (const uint8_t *)&(ctx->fw_req));
 	qat_req->comn_mid.opaque_data = (uint64_t)(uintptr_t)op;
@@ -1164,9 +1259,13 @@ qat_write_hw_desc_entry(struct rte_crypto_op *op, uint8_t *out_msg,
 
 	if (ctx->qat_cmd == ICP_QAT_FW_LA_CMD_HASH_CIPHER ||
 			ctx->qat_cmd == ICP_QAT_FW_LA_CMD_CIPHER_HASH) {
-		/* AES-GCM */
+		/* AES-GCM or AES-CCM */
 		if (ctx->qat_hash_alg == ICP_QAT_HW_AUTH_ALGO_GALOIS_128 ||
-				ctx->qat_hash_alg == ICP_QAT_HW_AUTH_ALGO_GALOIS_64) {
+				ctx->qat_hash_alg == ICP_QAT_HW_AUTH_ALGO_GALOIS_64 ||
+				(ctx->qat_cipher_alg == ICP_QAT_HW_CIPHER_ALGO_AES128
+				&& ctx->qat_mode == ICP_QAT_HW_CIPHER_CTR_MODE
+				&& ctx->qat_hash_alg ==
+						ICP_QAT_HW_AUTH_ALGO_AES_CBC_MAC)) {
 			do_aead = 1;
 		} else {
 			do_auth = 1;
@@ -1273,6 +1372,11 @@ qat_write_hw_desc_entry(struct rte_crypto_op *op, uint8_t *out_msg,
 	}
 
 	if (do_aead) {
+		/*
+		 * This address may used for setting AAD physical pointer
+		 * into IV offset from op
+		 */
+		rte_iova_t aad_phys_addr_aead = op->sym->aead.aad.phys_addr;
 		if (ctx->qat_hash_alg ==
 				ICP_QAT_HW_AUTH_ALGO_GALOIS_128 ||
 				ctx->qat_hash_alg ==
@@ -1286,6 +1390,87 @@ qat_write_hw_desc_entry(struct rte_crypto_op *op, uint8_t *out_msg,
 					ICP_QAT_FW_LA_GCM_IV_LEN_12_OCTETS);
 			}
 
+			set_cipher_iv(ctx->cipher_iv.length,
+					ctx->cipher_iv.offset,
+					cipher_param, op, qat_req);
+
+		} else if (ctx->qat_hash_alg ==
+				ICP_QAT_HW_AUTH_ALGO_AES_CBC_MAC) {
+
+			/* In case of AES-CCM this may point to user selected memory
+			 * or iv offset in cypto_op
+			 */
+			uint8_t *aad_data = op->sym->aead.aad.data;
+			/* This is true AAD length, it not includes 18 bytes of
+			 * preceding data
+			 */
+			uint8_t aad_ccm_real_len = 0;
+
+			uint8_t aad_len_field_sz = 0;
+			uint32_t msg_len_be =
+					rte_bswap32(op->sym->aead.data.length);
+
+			if (ctx->aad_len > ICP_QAT_HW_CCM_AAD_DATA_OFFSET) {
+				aad_len_field_sz = ICP_QAT_HW_CCM_AAD_LEN_INFO;
+				aad_ccm_real_len = ctx->aad_len -
+					ICP_QAT_HW_CCM_AAD_B0_LEN -
+					ICP_QAT_HW_CCM_AAD_LEN_INFO;
+			} else {
+				/*
+				 * aad_len not greater than 18, so no actual aad data,
+				 * then use IV after op for B0 block
+				 */
+				aad_data = rte_crypto_op_ctod_offset(op, uint8_t *,
+						ctx->cipher_iv.offset);
+				aad_phys_addr_aead =
+						rte_crypto_op_ctophys_offset(op,
+								ctx->cipher_iv.offset);
+			}
+
+			uint8_t q = ICP_QAT_HW_CCM_NQ_CONST - ctx->cipher_iv.length;
+
+			aad_data[0] = ICP_QAT_HW_CCM_BUILD_B0_FLAGS(aad_len_field_sz,
+							ctx->digest_length, q);
+
+			if (q > ICP_QAT_HW_CCM_MSG_LEN_MAX_FIELD_SIZE) {
+				memcpy(aad_data	+ ctx->cipher_iv.length +
+					ICP_QAT_HW_CCM_NONCE_OFFSET
+					+ (q - ICP_QAT_HW_CCM_MSG_LEN_MAX_FIELD_SIZE),
+					(uint8_t *)&msg_len_be,
+					ICP_QAT_HW_CCM_MSG_LEN_MAX_FIELD_SIZE);
+			} else {
+				memcpy(aad_data	+ ctx->cipher_iv.length +
+					ICP_QAT_HW_CCM_NONCE_OFFSET,
+					(uint8_t *)&msg_len_be
+					+ (ICP_QAT_HW_CCM_MSG_LEN_MAX_FIELD_SIZE
+					- q), q);
+			}
+
+			if (aad_len_field_sz > 0) {
+				*(uint16_t *)&aad_data[ICP_QAT_HW_CCM_AAD_B0_LEN]
+						= rte_bswap16(aad_ccm_real_len);
+
+				if ((aad_ccm_real_len + aad_len_field_sz)
+						% ICP_QAT_HW_CCM_AAD_B0_LEN) {
+					uint8_t pad_len = 0;
+					uint8_t pad_idx = 0;
+
+					pad_len = ICP_QAT_HW_CCM_AAD_B0_LEN -
+						((aad_ccm_real_len + aad_len_field_sz) %
+							ICP_QAT_HW_CCM_AAD_B0_LEN);
+					pad_idx = ICP_QAT_HW_CCM_AAD_B0_LEN +
+						aad_ccm_real_len + aad_len_field_sz;
+					memset(&aad_data[pad_idx],
+							0, pad_len);
+				}
+
+			}
+
+			set_cipher_iv_ccm(ctx->cipher_iv.length,
+					ctx->cipher_iv.offset,
+					cipher_param, op, q,
+					aad_len_field_sz);
+
 		}
 
 		cipher_len = op->sym->aead.data.length;
@@ -1293,10 +1478,8 @@ qat_write_hw_desc_entry(struct rte_crypto_op *op, uint8_t *out_msg,
 		auth_len = op->sym->aead.data.length;
 		auth_ofs = op->sym->aead.data.offset;
 
-		auth_param->u1.aad_adr = op->sym->aead.aad.phys_addr;
+		auth_param->u1.aad_adr = aad_phys_addr_aead;
 		auth_param->auth_res_addr = op->sym->aead.digest.phys_addr;
-		set_cipher_iv(ctx->cipher_iv.length, ctx->cipher_iv.offset,
-				cipher_param, op, qat_req);
 		min_ofs = op->sym->aead.data.offset;
 	}
 
@@ -1316,26 +1499,26 @@ qat_write_hw_desc_entry(struct rte_crypto_op *op, uint8_t *out_msg,
 		 * so as not to overwrite data in dest buffer
 		 */
 		src_buf_start =
-			rte_pktmbuf_mtophys_offset(op->sym->m_src, min_ofs);
+			rte_pktmbuf_iova_offset(op->sym->m_src, min_ofs);
 		dst_buf_start =
-			rte_pktmbuf_mtophys_offset(op->sym->m_dst, min_ofs);
+			rte_pktmbuf_iova_offset(op->sym->m_dst, min_ofs);
 
 	} else {
 		/* In-place operation
 		 * Start DMA at nearest aligned address below min_ofs
 		 */
 		src_buf_start =
-			rte_pktmbuf_mtophys_offset(op->sym->m_src, min_ofs)
+			rte_pktmbuf_iova_offset(op->sym->m_src, min_ofs)
 						& QAT_64_BTYE_ALIGN_MASK;
 
-		if (unlikely((rte_pktmbuf_mtophys(op->sym->m_src) -
+		if (unlikely((rte_pktmbuf_iova(op->sym->m_src) -
 					rte_pktmbuf_headroom(op->sym->m_src))
 							> src_buf_start)) {
 			/* alignment has pushed addr ahead of start of mbuf
 			 * so revert and take the performance hit
 			 */
 			src_buf_start =
-				rte_pktmbuf_mtophys_offset(op->sym->m_src,
+				rte_pktmbuf_iova_offset(op->sym->m_src,
 								min_ofs);
 		}
 		dst_buf_start = src_buf_start;
@@ -1343,7 +1526,7 @@ qat_write_hw_desc_entry(struct rte_crypto_op *op, uint8_t *out_msg,
 
 	if (do_cipher || do_aead) {
 		cipher_param->cipher_offset =
-				(uint32_t)rte_pktmbuf_mtophys_offset(
+				(uint32_t)rte_pktmbuf_iova_offset(
 				op->sym->m_src, cipher_ofs) - src_buf_start;
 		cipher_param->cipher_length = cipher_len;
 	} else {
@@ -1352,7 +1535,7 @@ qat_write_hw_desc_entry(struct rte_crypto_op *op, uint8_t *out_msg,
 	}
 
 	if (do_auth || do_aead) {
-		auth_param->auth_off = (uint32_t)rte_pktmbuf_mtophys_offset(
+		auth_param->auth_off = (uint32_t)rte_pktmbuf_iova_offset(
 				op->sym->m_src, auth_ofs) - src_buf_start;
 		auth_param->auth_len = auth_len;
 	} else {

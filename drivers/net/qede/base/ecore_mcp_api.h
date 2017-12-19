@@ -23,24 +23,51 @@ struct ecore_mcp_link_pause_params {
 	bool forced_tx;
 };
 
+enum ecore_mcp_eee_mode {
+	ECORE_MCP_EEE_DISABLED,
+	ECORE_MCP_EEE_ENABLED,
+	ECORE_MCP_EEE_UNSUPPORTED
+};
+
+struct ecore_link_eee_params {
+	u32 tx_lpi_timer;
+#define ECORE_EEE_1G_ADV	(1 << 0)
+#define ECORE_EEE_10G_ADV	(1 << 1)
+	/* Capabilities are represented using ECORE_EEE_*_ADV values */
+	u8 adv_caps;
+	u8 lp_adv_caps;
+	bool enable;
+	bool tx_lpi_enable;
+};
+
 struct ecore_mcp_link_params {
 	struct ecore_mcp_link_speed_params speed;
 	struct ecore_mcp_link_pause_params pause;
 	u32 loopback_mode; /* in PMM_LOOPBACK values */
+	struct ecore_link_eee_params eee;
 };
 
 struct ecore_mcp_link_capabilities {
 	u32 speed_capabilities;
 	bool default_speed_autoneg; /* In Mb/s */
 	u32 default_speed; /* In Mb/s */
+	enum ecore_mcp_eee_mode default_eee;
+	u32 eee_lpi_timer;
+	u8 eee_speed_caps;
 };
 
 struct ecore_mcp_link_state {
 	bool link_up;
 
-	u32 line_speed; /* In Mb/s */
 	u32 min_pf_rate; /* In Mb/s */
-	u32 speed; /* In Mb/s */
+
+	/* Actual link speed in Mb/s */
+	u32 line_speed;
+
+	/* PF max speed in MB/s, deduced from line_speed
+	 * according to PF max bandwidth configuration.
+	 */
+	u32 speed;
 	bool full_duplex;
 
 	bool an;
@@ -67,6 +94,10 @@ struct ecore_mcp_link_state {
 	u8 partner_adv_pause;
 
 	bool sfp_tx_fault;
+
+	bool eee_active;
+	u8 eee_adv_caps;
+	u8 eee_lp_adv_caps;
 };
 
 struct ecore_mcp_function_info {
@@ -86,37 +117,6 @@ struct ecore_mcp_function_info {
 	u16 ovlan;
 
 	u16 mtu;
-};
-
-struct ecore_mcp_nvm_common {
-	u32 offset;
-	u32 param;
-	u32 resp;
-	u32 cmd;
-};
-
-struct ecore_mcp_nvm_rd {
-	u32 *buf_size;
-	u32 *buf;
-};
-
-struct ecore_mcp_nvm_wr {
-	u32 buf_size;
-	u32 *buf;
-};
-
-struct ecore_mcp_nvm_params {
-#define ECORE_MCP_CMD		(1 << 0)
-#define ECORE_MCP_NVM_RD	(1 << 1)
-#define ECORE_MCP_NVM_WR	(1 << 2)
-	u8 type;
-
-	struct ecore_mcp_nvm_common nvm_common;
-
-	union {
-		struct ecore_mcp_nvm_rd nvm_rd;
-		struct ecore_mcp_nvm_wr nvm_wr;
-	};
 };
 
 #ifndef __EXTRACT__LINUX__
@@ -583,14 +583,16 @@ enum _ecore_status_t ecore_mcp_get_mfw_ver(struct ecore_hwfn *p_hwfn,
  * @brief Get media type value of the port.
  *
  * @param p_dev      - ecore dev pointer
+ * @param p_ptt
  * @param mfw_ver    - media type value
  *
  * @return enum _ecore_status_t -
  *      ECORE_SUCCESS - Operation was successful.
  *      ECORE_BUSY - Operation failed
  */
-enum _ecore_status_t ecore_mcp_get_media_type(struct ecore_dev *p_dev,
-					   u32 *media_type);
+enum _ecore_status_t ecore_mcp_get_media_type(struct ecore_hwfn *p_hwfn,
+					      struct ecore_ptt *p_ptt,
+					      u32 *media_type);
 
 /**
  * @brief - Sends a command to the MCP mailbox.
@@ -598,9 +600,9 @@ enum _ecore_status_t ecore_mcp_get_media_type(struct ecore_dev *p_dev,
  * @param p_hwfn      - hw function
  * @param p_ptt       - PTT required for register access
  * @param cmd         - command to be sent to the MCP
- * @param param       - optional param
- * @param o_mcp_resp  - the MCP response code (exclude sequence)
- * @param o_mcp_param - optional parameter provided by the MCP response
+ * @param param       - Optional param
+ * @param o_mcp_resp  - The MCP response code (exclude sequence)
+ * @param o_mcp_param - Optional parameter provided by the MCP response
  *
  * @return enum _ecore_status_t -
  *      ECORE_SUCCESS - operation was successful
@@ -631,44 +633,6 @@ enum _ecore_status_t ecore_mcp_drain(struct ecore_hwfn *p_hwfn,
 const struct ecore_mcp_function_info
 *ecore_mcp_get_function_info(struct ecore_hwfn *p_hwfn);
 #endif
-
-/**
- * @brief - Function for reading/manipulating the nvram. Following are supported
- *          functionalities.
- *          1. Read: Read the specified nvram offset.
- *             input values:
- *               type   - ECORE_MCP_NVM_RD
- *               cmd    - command code (e.g. DRV_MSG_CODE_NVM_READ_NVRAM)
- *               offset - nvm offset
- *
- *             output values:
- *               buf      - buffer
- *               buf_size - buffer size
- *
- *          2. Write: Write the data at the specified nvram offset
- *             input values:
- *               type     - ECORE_MCP_NVM_WR
- *               cmd      - command code (e.g. DRV_MSG_CODE_NVM_WRITE_NVRAM)
- *               offset   - nvm offset
- *               buf      - buffer
- *               buf_size - buffer size
- *
- *          3. Command: Send the NVM command to MCP.
- *             input values:
- *               type   - ECORE_MCP_CMD
- *               cmd    - command code (e.g. DRV_MSG_CODE_NVM_DEL_FILE)
- *               offset - nvm offset
- *
- *
- * @param p_hwfn
- * @param p_ptt
- * @param params
- *
- * @return ECORE_SUCCESS - operation was successful.
- */
-enum _ecore_status_t ecore_mcp_nvm_command(struct ecore_hwfn *p_hwfn,
-					   struct ecore_ptt *p_ptt,
-					   struct ecore_mcp_nvm_params *params);
 
 #ifndef LINUX_REMOVE
 /**
@@ -891,7 +855,7 @@ enum _ecore_status_t ecore_mcp_nvm_resp(struct ecore_dev *p_dev, u8 *p_buf);
  *  @param p_dev
  *  @param addr - nvm offset
  *  @param cmd - nvm command
- *  @param p_buf - nvm write buffer
+ *  @param p_buf - nvm read buffer
  *  @param len - buffer len
  *
  * @return enum _ecore_status_t - ECORE_SUCCESS - operation was successful.
@@ -904,13 +868,63 @@ enum _ecore_status_t ecore_mcp_phy_read(struct ecore_dev *p_dev, u32 cmd,
  *
  *  @param p_dev
  *  @param addr - nvm offset
- *  @param p_buf - nvm write buffer
+ *  @param p_buf - nvm read buffer
  *  @param len - buffer len
  *
  * @return enum _ecore_status_t - ECORE_SUCCESS - operation was successful.
  */
 enum _ecore_status_t ecore_mcp_nvm_read(struct ecore_dev *p_dev, u32 addr,
 			   u8 *p_buf, u32 len);
+
+/**
+ * @brief - Sends an NVM write command request to the MFW with
+ *          payload.
+ *
+ * @param p_hwfn
+ * @param p_ptt
+ * @param cmd - Command: Either DRV_MSG_CODE_NVM_WRITE_NVRAM or
+ *            DRV_MSG_CODE_NVM_PUT_FILE_DATA
+ * @param param - [0:23] - Offset [24:31] - Size
+ * @param o_mcp_resp - MCP response
+ * @param o_mcp_param - MCP response param
+ * @param i_txn_size -  Buffer size
+ * @param i_buf - Pointer to the buffer
+ *
+ * @param return ECORE_SUCCESS upon success.
+ */
+enum _ecore_status_t ecore_mcp_nvm_wr_cmd(struct ecore_hwfn *p_hwfn,
+					  struct ecore_ptt *p_ptt,
+					  u32 cmd,
+					  u32 param,
+					  u32 *o_mcp_resp,
+					  u32 *o_mcp_param,
+					  u32 i_txn_size,
+					  u32 *i_buf);
+
+/**
+ * @brief - Sends an NVM read command request to the MFW to get
+ *        a buffer.
+ *
+ * @param p_hwfn
+ * @param p_ptt
+ * @param cmd - Command: DRV_MSG_CODE_NVM_GET_FILE_DATA or
+ *            DRV_MSG_CODE_NVM_READ_NVRAM commands
+ * @param param - [0:23] - Offset [24:31] - Size
+ * @param o_mcp_resp - MCP response
+ * @param o_mcp_param - MCP response param
+ * @param o_txn_size -  Buffer size output
+ * @param o_buf - Pointer to the buffer returned by the MFW.
+ *
+ * @param return ECORE_SUCCESS upon success.
+ */
+enum _ecore_status_t ecore_mcp_nvm_rd_cmd(struct ecore_hwfn *p_hwfn,
+					  struct ecore_ptt *p_ptt,
+					  u32 cmd,
+					  u32 param,
+					  u32 *o_mcp_resp,
+					  u32 *o_mcp_param,
+					  u32 *o_txn_size,
+					  u32 *o_buf);
 
 /**
  * @brief Read from sfp
@@ -1123,6 +1137,17 @@ enum _ecore_status_t ecore_mcp_mdump_clear_logs(struct ecore_hwfn *p_hwfn,
 						struct ecore_ptt *p_ptt);
 
 /**
+ * @brief - Clear the mdump retained data.
+ *
+ * @param p_hwfn
+ * @param p_ptt
+ *
+ * @param return ECORE_SUCCESS upon success.
+ */
+enum _ecore_status_t ecore_mcp_mdump_clr_retain(struct ecore_hwfn *p_hwfn,
+						struct ecore_ptt *p_ptt);
+
+/**
  * @brief - Processes the TLV request from MFW i.e., get the required TLV info
  *          from the ecore client and send it to the MFW.
  *
@@ -1134,4 +1159,13 @@ enum _ecore_status_t ecore_mcp_mdump_clear_logs(struct ecore_hwfn *p_hwfn,
 enum _ecore_status_t ecore_mfw_process_tlv_req(struct ecore_hwfn *p_hwfn,
 					       struct ecore_ptt *p_ptt);
 
+
+/**
+ * @brief - Return whether management firmware support smart AN
+ *
+ * @param p_hwfn
+ *
+ * @return bool - true iff feature is supported.
+ */
+bool ecore_mcp_is_smart_an_supported(struct ecore_hwfn *p_hwfn);
 #endif

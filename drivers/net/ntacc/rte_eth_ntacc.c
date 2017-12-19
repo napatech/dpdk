@@ -53,6 +53,7 @@
 #include <rte_flow_driver.h>
 #include <rte_version.h>
 #include <rte_pci.h>
+#include <rte_bus_pci.h>
 #include <net/if.h>
 #include <nt.h>
 
@@ -87,7 +88,7 @@ static struct {
 #define PCI_DEVICE_ID_NT40A01  0x0185
 #define PCI_DEVICE_ID_NT100E3  0x0155
 
-#define NB_SUPPORTED_FPGAS 8
+#define NB_SUPPORTED_FPGAS 9
 struct {
   uint32_t item:12;
   uint32_t product:16;
@@ -212,6 +213,203 @@ int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo, struct pmd_internals *in
   return 0;
 }
 
+
+
+#ifndef DIRECT_RX_RING_CONTROL
+static void _seg_release_cb(struct rte_mbuf *mbuf)
+{
+	struct batch_ctrl *batchCtl = (struct batch_ctrl *)((u_char *)mbuf->userdata);
+	struct ntacc_rx_queue *rx_q = batchCtl->queue;
+
+  (*_NT_NetRxRelease)(rx_q->pNetRx, batchCtl->pSeg);
+
+	/* swap poniter back */
+	mbuf->buf_addr = batchCtl->orig_buf_addr;
+}
+
+static uint16_t eth_ntacc_rx(void *queue,
+                             struct rte_mbuf **bufs,
+                             uint16_t nb_pkts)
+{
+  struct rte_mbuf *mbuf;
+  struct ntacc_rx_queue *rx_q = queue;
+#ifdef USE_SW_STAT
+  uint32_t bytes = 0;
+#endif
+  uint16_t num_rx = 0;
+
+  if (unlikely(rx_q->pNetRx == NULL || nb_pkts == 0))
+    return 0;
+
+  // Do we have any segment
+  if (rx_q->pSeg == NULL) {
+    int status = (*_NT_NetRxGet)(rx_q->pNetRx, &rx_q->pSeg, 0);
+    if (status != NT_SUCCESS) {
+      if (rx_q->pSeg != NULL) {
+        (*_NT_NetRxRelease)(rx_q->pNetRx, rx_q->pSeg);
+        rx_q->pSeg = NULL;
+      }
+      return 0;
+    }
+
+    if (likely(NT_NET_GET_SEGMENT_LENGTH(rx_q->pSeg))) {
+      _nt_net_build_pkt_netbuf(rx_q->pSeg, &rx_q->pkt);
+    }
+    else {
+      (*_NT_NetRxRelease)(rx_q->pNetRx, rx_q->pSeg);
+      rx_q->pSeg = NULL;
+      return 0;
+    }
+  }
+
+  if (rx_q->cmbatch) {
+    struct batch_ctrl *batchCtl;
+    uint64_t countPackets;
+
+    if (unlikely(rte_mempool_get_bulk(rx_q->mb_pool, (void **)bufs, 1) != 0)) {
+      return 0;
+    }
+
+    mbuf = bufs[0];
+
+    rte_mbuf_refcnt_set(mbuf, 1);
+    rte_pktmbuf_reset(mbuf);
+
+    batchCtl = (struct batch_ctrl *)((u_char *)mbuf->buf_addr + RTE_PKTMBUF_HEADROOM);
+    batchCtl->queue = queue;
+    batchCtl->pSeg = rx_q->pSeg;
+
+    /* Hand over release responsibility and ownership */
+    rx_q->pSeg = NULL;
+
+    mbuf->port = rx_q->in_port;
+    mbuf->ol_flags |= PKT_BATCH | CTRL_MBUF_FLAG;
+    mbuf->cmbatch_release_cb = _seg_release_cb;
+
+    /* let userdata point to original mbuf address where batchCtl is placed */
+    mbuf->userdata = (void *)batchCtl;
+
+    /* save buf_addr */
+    batchCtl->orig_buf_addr = mbuf->buf_addr;
+
+    NtDyn3Descr_t *hdr = (NtDyn3Descr_t*)batchCtl->pSeg->hHdr;
+    mbuf->buf_addr = (uint8_t *)batchCtl->pSeg->hHdr;
+    mbuf->data_off = 0;
+
+    mbuf->data_len = hdr->capLength;
+    mbuf->pkt_len = (uint32_t)batchCtl->pSeg->length;
+    num_rx++;
+
+    /* do packet count */
+    mbuf->batch_nb_packet = 0;
+    countPackets = 0;
+    do {
+      countPackets++;
+    } while (_nt_net_get_next_packet(batchCtl->pSeg, NT_NET_GET_SEGMENT_LENGTH(batchCtl->pSeg), &rx_q->pkt)>0);
+    mbuf->batch_nb_packet = countPackets;
+
+#ifdef USE_SW_STAT
+    rx_q->rx_pkts += mbuf->batch_nb_packet;
+    rx_q->rx_bytes += batchCtl->seg->length - mbuf->batch_nb_packet * hdr->descrLength;
+#endif
+    return num_rx;
+  }
+  else {
+    NtDyn3Descr_t *dyn3;
+    uint16_t i;
+    uint16_t mbuf_len;
+    uint16_t data_len;
+
+    if (rte_mempool_get_bulk(rx_q->mb_pool, (void **)bufs, nb_pkts) != 0)
+      return 0;
+
+    for (i = 0; i < nb_pkts; i++) {
+      mbuf = bufs[i];
+      rte_mbuf_refcnt_set(mbuf, 1);
+      rte_pktmbuf_reset(mbuf);
+
+      dyn3 = _NT_NET_GET_PKT_DESCR_PTR_DYN3(&rx_q->pkt);
+
+      if (dyn3->descrLength == 20) {
+        // We do have a hash value defined
+        mbuf->hash.rss = dyn3->color_hi;
+        mbuf->ol_flags |= PKT_RX_RSS_HASH;
+      }
+      else {
+        // We do have a color value defined
+        mbuf->hash.fdir.hi = ((dyn3->color_hi << 14) & 0xFFFFC000) | dyn3->color_lo;
+        mbuf->ol_flags |= PKT_RX_FDIR_ID | PKT_RX_FDIR;
+      }
+
+      mbuf->timestamp = dyn3->timestamp;
+      mbuf->ol_flags |= PKT_RX_TIMESTAMP;
+      mbuf->port = rx_q->in_port + (dyn3->rxPort - rx_q->local_port);
+
+      data_len = (uint16_t)(dyn3->capLength - dyn3->descrLength - 4);
+      mbuf_len = rte_pktmbuf_tailroom(mbuf);
+#ifdef USE_SW_STAT
+      bytes += data_len+4;
+#endif
+      if (data_len <= mbuf_len) {
+        /* Packet will fit in the mbuf, go ahead and copy */
+        mbuf->pkt_len = mbuf->data_len = data_len;
+				rte_memcpy((u_char *)mbuf->buf_addr + mbuf->data_off, (uint8_t *)dyn3 + dyn3->descrLength, mbuf->data_len);
+#ifdef COPY_OFFSET0
+        mbuf->data_off += dyn3->offset0;
+#endif
+      } else {
+        /* Try read jumbo frame into multi mbufs. */
+        struct rte_mbuf *m;
+        const u_char *data;
+        uint16_t total_len = data_len;
+
+        mbuf->pkt_len = total_len;
+        mbuf->data_len = mbuf_len;
+        data = (u_char *)dyn3 + dyn3->descrLength;
+        rte_memcpy((u_char *)mbuf->buf_addr + mbuf->data_off, data, mbuf_len);
+        data_len -= mbuf_len;
+        data += mbuf_len;
+
+        m = mbuf;
+        while (data_len > 0) {
+          /* Allocate next mbuf and point to that. */
+          m->next = rte_pktmbuf_alloc(rx_q->mb_pool);
+          if (unlikely(!m->next))
+            return 0;
+
+          m = m->next;
+          /* Copy next segment. */
+          mbuf_len = RTE_MIN(rte_pktmbuf_tailroom(m), data_len);
+          rte_memcpy((u_char *)m->buf_addr + m->data_off, data, mbuf_len);
+
+          m->pkt_len = total_len;
+          m->data_len = mbuf_len;
+
+          mbuf->nb_segs++;
+          data_len -= mbuf_len;
+          data += mbuf_len;
+        }
+      }
+      num_rx++;
+
+      /* Get the next packet if any */
+      if (_nt_net_get_next_packet(rx_q->pSeg, NT_NET_GET_SEGMENT_LENGTH(rx_q->pSeg), &rx_q->pkt) == 0 ) {
+        (*_NT_NetRxRelease)(rx_q->pNetRx, rx_q->pSeg);
+        rx_q->pSeg = NULL;
+        break;
+      }
+    }
+#ifdef USE_SW_STAT
+    rx_q->rx_pkts+=num_rx;
+    rx_q->rx_bytes+=bytes;
+#endif
+    if (num_rx < nb_pkts) {
+      rte_mempool_put_bulk(rx_q->mb_pool, (void * const *)(bufs + num_rx), nb_pkts-num_rx);
+    }
+    return num_rx;
+  }
+}
+#else
 static int eth_ntacc_rx_jumbo(struct rte_mempool *mb_pool,
                               struct rte_mbuf *mbuf,
                               const u_char *data,
@@ -289,7 +487,6 @@ static __rte_always_inline uint16_t eth_ntacc_convert_pkt_to_mbuf(NtDyn3Descr_t 
   return data_len + 4;
 }
 
-#ifdef DIRECT_RX_RING_CONTROL
 
 static void eth_ntacc_rx_get_ring(struct ntacc_rx_queue *rx_q)
 {
@@ -374,66 +571,7 @@ static uint16_t eth_ntacc_rx(void *queue,
   }
   return num_rx;
 }
-#else
-static uint16_t eth_ntacc_rx(void *queue,
-                             struct rte_mbuf **bufs,
-                             uint16_t nb_pkts)
-{
-  struct ntacc_rx_queue *rx_q = queue;
-  uint32_t bytes=0;
-  if (unlikely(rx_q->pNetRx == NULL || nb_pkts == 0))
-    return 0;
-
-  // Do we have any segment
-  if (unlikely(rx_q->pSeg == NULL)) {
-    if ((*_NT_NetRxGet)(rx_q->pNetRx, &rx_q->pSeg, 0) != NT_SUCCESS) {
-      if (rx_q->pSeg != NULL) {
-        (*_NT_NetRxRelease)(rx_q->pNetRx, rx_q->pSeg);
-        rx_q->pSeg = NULL;
-      }
-      return 0;
-
-    }
-    if (NT_NET_GET_SEGMENT_LENGTH(rx_q->pSeg)) {
-      // Build a packet structure
-      _nt_net_build_pkt_netbuf(rx_q->pSeg, &rx_q->pkt);
-    } else {
-      (*_NT_NetRxRelease)(rx_q->pNetRx, rx_q->pSeg);
-      rx_q->pSeg = NULL;
-      return 0;
-    }
-  }
-
-  if (unlikely(rte_mempool_get_bulk(rx_q->mb_pool, (void **)bufs, nb_pkts) != 0))
-    return 0;
-
-  uint16_t i, num_rx = 0;
-  for (i = 0; i < nb_pkts; i++) {
-    struct rte_mbuf *mbuf = bufs[i];
-
-    bytes += eth_ntacc_convert_pkt_to_mbuf(_NT_NET_GET_PKT_DESCR_PTR_DYN3(&rx_q->pkt), mbuf, rx_q);
-    num_rx++;
-
-    /* Get the next packet if any */
-    if (unlikely(_nt_net_get_next_packet(rx_q->pSeg, NT_NET_GET_SEGMENT_LENGTH(rx_q->pSeg), &rx_q->pkt) == 0 )) {
-      (*_NT_NetRxRelease)(rx_q->pNetRx, rx_q->pSeg);
-      rx_q->pSeg = NULL;
-      break;
-    }
-  }
-
-#ifdef USE_SW_STAT
-  rx_q->rx_pkts+=num_rx;
-  rx_q->rx_bytes+=bytes;
-  #endif
-
-  if (unlikely(num_rx < nb_pkts)) {
-    rte_mempool_put_bulk(rx_q->mb_pool, (void * const *)(bufs + num_rx), nb_pkts-num_rx);
-  }
-  return num_rx;
-}
 #endif
-
 /*
  * Callback to handle sending packets through a real NIC.
  */
@@ -778,7 +916,9 @@ static uint16_t eth_ntacc_tx(void *queue,
 static int eth_dev_start(struct rte_eth_dev *dev)
 {
   struct pmd_internals *internals = dev->data->dev_private;
+#ifndef DO_NOT_CREATE_DEFAULT_FILTER
   struct rte_flow_error error;
+#endif
   struct ntacc_rx_queue *rx_q = internals->rxq;
   struct ntacc_tx_queue *tx_q = internals->txq;
   uint queue;
@@ -939,9 +1079,11 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
   }
 
 #ifndef USE_SW_STAT
+  rte_spinlock_lock(&internals->statlock);
   if (internals->hStat) {
     (void)(*_NT_StatClose)(internals->hStat);
   }
+  rte_spinlock_unlock(&internals->statlock);
 #endif
   dev->data->dev_link.link_status = 0;
 
@@ -1030,7 +1172,7 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
 }
 
 #ifdef USE_SW_STAT
-static void eth_stats_get(struct rte_eth_dev *dev,
+static int eth_stats_get(struct rte_eth_dev *dev,
                           struct rte_eth_stats *igb_stats)
 {
   unsigned i;
@@ -1067,10 +1209,11 @@ static void eth_stats_get(struct rte_eth_dev *dev,
   igb_stats->ibytes = rx_total_bytes;
   igb_stats->obytes = tx_total_bytes;
   igb_stats->oerrors = tx_err_total;
+  return 0;
 }
 #else
-static void eth_stats_get(struct rte_eth_dev *dev,
-                          struct rte_eth_stats *igb_stats)
+static int eth_stats_get(struct rte_eth_dev *dev,
+                         struct rte_eth_stats *igb_stats)
 {
   struct pmd_internals *internals = dev->data->dev_private;
   uint queue;
@@ -1082,7 +1225,7 @@ static void eth_stats_get(struct rte_eth_dev *dev,
   pStatData = (NtStatistics_t *)rte_malloc(internals->name, sizeof(NtStatistics_t), 0);
   if (!pStatData) {
     RTE_LOG(ERR, PMD, "Error %s: Out of memory\n", __func__);
-    return;
+    return -ENOMEM;
   }
 
   memset(igb_stats, 0, sizeof(*igb_stats));
@@ -1094,13 +1237,14 @@ static void eth_stats_get(struct rte_eth_dev *dev,
   pStatData->cmd = NT_STATISTICS_READ_CMD_QUERY_V2;
   pStatData->u.query_v2.poll=0;
   pStatData->u.query_v2.clear=0;
+  rte_spinlock_lock(&internals->statlock);
   if ((status = (*_NT_StatRead)(internals->hStat, pStatData)) != 0) {
     (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
     RTE_LOG(ERR, PMD, "ERROR: NT_StatRead failed. Code 0x%x = %s\n", status, errBuf);
     rte_free(pStatData);
-    return;
+    return -EIO;
   }
-
+  rte_spinlock_unlock(&internals->statlock);
   igb_stats->ipackets = pStatData->u.query_v2.data.port.aPorts[port].rx.RMON1.pkts;
   igb_stats->ibytes = pStatData->u.query_v2.data.port.aPorts[port].rx.RMON1.octets;
   igb_stats->opackets = pStatData->u.query_v2.data.port.aPorts[port].tx.RMON1.pkts;
@@ -1116,6 +1260,7 @@ static void eth_stats_get(struct rte_eth_dev *dev,
 
   }
   rte_free(pStatData);
+  return 0;
 }
 #endif
 
@@ -1152,12 +1297,14 @@ static void eth_stats_reset(struct rte_eth_dev *dev)
   pStatData->cmd = NT_STATISTICS_READ_CMD_QUERY_V2;
   pStatData->u.query_v2.poll=0;
   pStatData->u.query_v2.clear=1;
+  rte_spinlock_lock(&internals->statlock);
   if ((status = (*_NT_StatRead)(internals->hStat, pStatData)) != 0) {
     (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
     RTE_LOG(ERR, PMD, "ERROR: NT_StatRead failed. Code 0x%x = %s\n", status, errBuf);
     rte_free(pStatData);
     return;
   }
+  rte_spinlock_unlock(&internals->statlock);
   rte_free(pStatData);
 }
 #endif
@@ -1196,7 +1343,7 @@ static int eth_link_update(struct rte_eth_dev *dev,
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
     RTE_LOG(ERR, PMD, "Error %s: Out of memory\n", __func__);
-    return 1;
+    return -ENOMEM;
   }
 
   if ((status = (*_NT_InfoOpen)(&hInfo, "DPDK Info stream")) != NT_SUCCESS) {
@@ -1250,7 +1397,7 @@ static int eth_rx_queue_setup(struct rte_eth_dev *dev,
                               uint16_t rx_queue_id,
                               uint16_t nb_rx_desc __rte_unused,
                               unsigned int socket_id __rte_unused,
-                              const struct rte_eth_rxconf *rx_conf __rte_unused,
+                              const struct rte_eth_rxconf *rx_conf,
                               struct rte_mempool *mb_pool)
 {
   struct rte_pktmbuf_pool_private *mbp_priv;
@@ -1260,6 +1407,12 @@ static int eth_rx_queue_setup(struct rte_eth_dev *dev,
   rx_q->mb_pool = mb_pool;
   dev->data->rx_queues[rx_queue_id] = rx_q;
   rx_q->in_port = dev->data->port_id;
+  rx_q->local_port = internals->local_port;
+
+  // Enable contiguous memory batching for this queue
+  if (rx_conf->rxq_flags & ETH_RXQ_FLAGS_CMBATCH) {
+    rx_q->cmbatch = 1;
+  }
 
   mbp_priv =  rte_mempool_get_priv(rx_q->mb_pool);
   rx_q->buf_size = (uint16_t) (mbp_priv->mbuf_data_room_size - RTE_PKTMBUF_HEADROOM);
@@ -1338,6 +1491,7 @@ static const char *ActionErrorString(enum rte_flow_action_type type)
   }
 }
 
+// No lock in this code
 static void _cleanUpHash(struct rte_flow *flow, struct pmd_internals *internals)
 {
   struct rte_flow *pTmp;
@@ -1360,6 +1514,7 @@ static void _cleanUpHash(struct rte_flow *flow, struct pmd_internals *internals)
   }
 }
 
+// No lock in this code
 static void _cleanUpKeySet(int key, struct pmd_internals *internals)
 {
   struct rte_flow *pTmp;
@@ -1379,6 +1534,7 @@ static void _cleanUpKeySet(int key, struct pmd_internals *internals)
   }
 }
 
+// No lock in this code
 static void _cleanUpFlow(struct rte_flow *flow, struct pmd_internals *internals)
 {
   NtNtplInfo_t ntplInfo;
@@ -1391,11 +1547,11 @@ static void _cleanUpFlow(struct rte_flow *flow, struct pmd_internals *internals)
     DoNtpl(ntpl_buf, &ntplInfo, internals);
     RTE_LOG(DEBUG, PMD, "Deleting Item filter 1: %s\n", ntpl_buf);
     LIST_REMOVE(id, next);
-    free(id);
+    rte_free(id);
   }
   _cleanUpKeySet(flow->key, internals);
   _cleanUpHash(flow, internals);
-  free(flow);
+  rte_free(flow);
 }
 
 static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
@@ -1413,7 +1569,6 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   const struct rte_flow_action_rss *rss = NULL;
   uint32_t i;
   bool tunnel;
-  int version;
   int tunneltype;
   struct color_s color = {0, false};
   uint8_t nb_ports = 0;
@@ -1427,13 +1582,13 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   struct rte_flow *flow = NULL;
   const char *ntpl_str = NULL;
 
-  ntpl_buf = malloc(NTPL_BSIZE + 1);
+  ntpl_buf = rte_malloc(internals->name, NTPL_BSIZE + 1, 0);
   if (!ntpl_buf) {
     rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Out of memory");
     goto FlowError;
   }
 
-  flow = malloc(sizeof(struct rte_flow));
+  flow = rte_malloc(internals->name, sizeof(struct rte_flow), 0);
   if (!flow) {
     rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Out of memory");
     goto FlowError;
@@ -1524,7 +1679,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
 #ifdef COPY_OFFSET0
     snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN3,length=20,colorbits=14,Offset0=%s[0];", attr->priority, STRINGIZE_VALUE_OF(COPY_OFFSET0));
 #else
-    snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN3,length=20,colorbits=14];", attr->priority);
+    snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN3,length=20,colorbits=14;", attr->priority);
 #endif
   }
 
@@ -1549,7 +1704,6 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
     case RTE_FLOW_ITEM_TYPE_PORT:
       if (nb_ports < MAX_NTACC_PORTS) {
         const struct rte_flow_item_port *spec = (const struct rte_flow_item_port *)items->spec;
-        printf("Port number: %u\n", spec->index);
         if (spec->index > internals->nbPortsOnAdapter) {
           rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Illegal port number in port flow. All port numbers must be from the same adapter");
           goto FlowError;
@@ -1651,51 +1805,63 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       }
       break;
 
+    case RTE_FLOW_ITEM_TYPE_MPLS:
+      if (SetMplsFilter(&ntpl_buf[strlen(ntpl_buf)],
+                        &filterContinue,
+                        items,
+                        tunnel,
+                        &typeMask,
+                        internals) != 0) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up MPLS filter");
+        goto FlowError;
+      }
+      break;
+
     case  RTE_FLOW_ITEM_TYPE_GRE:
       if (SetGreFilter(&ntpl_buf[strlen(ntpl_buf)],
                        &filterContinue,
                        items,
                        &typeMask) != 0) {
-        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up VLAN filter");
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up GRE filter");
+        goto FlowError;
+      }
+      tunnel = true;
+      break;
+    case RTE_FLOW_ITEM_TYPE_GTPU:
+      if (SetGtpFilter(&ntpl_buf[strlen(ntpl_buf)],
+                       &filterContinue,
+                       items,
+                       &typeMask,
+                       'U') != 0) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up GTP-U filter");
+        goto FlowError;
+      }
+      tunnel = true;
+      break;
+    case 	RTE_FLOW_ITEM_TYPE_GTPC:
+      if (SetGtpFilter(&ntpl_buf[strlen(ntpl_buf)],
+                       &filterContinue,
+                       items,
+                       &typeMask,
+                       'C') != 0) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up GTP-C filter");
         goto FlowError;
       }
       tunnel = true;
       break;
 
-    case RTE_FLOW_ITEM_TYPE_GREv0:
-    case RTE_FLOW_ITEM_TYPE_GREv1:
-    case RTE_FLOW_ITEM_TYPE_GTPv1_U:
-    case RTE_FLOW_ITEM_TYPE_GTPv0_U:
+
     case RTE_FLOW_ITEM_TYPE_VXLAN:
     case RTE_FLOW_ITEM_TYPE_NVGRE:
     case RTE_FLOW_ITEM_TYPE_IPinIP:
       switch (items->type) {
-      case RTE_FLOW_ITEM_TYPE_GREv1:
-        version = 1;
-        tunneltype = GRE_TUNNEL_TYPE;
-        break;
-      case RTE_FLOW_ITEM_TYPE_GREv0:
-        version = 0;
-        tunneltype = GRE_TUNNEL_TYPE;
-        break;
-      case RTE_FLOW_ITEM_TYPE_GTPv1_U:
-        version = 1;
-        tunneltype = GTP_TUNNEL_TYPE;
-        break;
-      case RTE_FLOW_ITEM_TYPE_GTPv0_U:
-        version = 0;
-        tunneltype = GTP_TUNNEL_TYPE;
-        break;
       case RTE_FLOW_ITEM_TYPE_VXLAN:
-        version = 0;
         tunneltype = VXLAN_TUNNEL_TYPE;
         break;
       case RTE_FLOW_ITEM_TYPE_NVGRE:
-        version = 0;
         tunneltype = NVGRE_TUNNEL_TYPE;
         break;
       case RTE_FLOW_ITEM_TYPE_IPinIP:
-        version = 0;
         tunneltype = IP_IN_IP_TUNNEL_TYPE;
         break;
       default:
@@ -1705,7 +1871,6 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
 
       if (SetTunnelFilter(&ntpl_buf[strlen(ntpl_buf)],
                         &filterContinue,
-                        version,
                         tunneltype,
                         &typeMask) != 0) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up tunnel filter");
@@ -1738,8 +1903,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       filterContinue = true;
     }
     else {
-      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " port==");
       int ports;
+      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " port==");
       for (ports = 0; ports < nb_ports;ports++) {
         snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "%u", list_ports[ports]);
         if (ports < (nb_ports - 1)) {
@@ -1759,9 +1924,9 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Filter error");
         goto FlowError;
       }
-      priv_lock(internals);
+      rte_spinlock_lock(&internals->lock);
       pushNtplID(flow, ntplInfo.ntplId);
-      priv_unlock(internals);
+      rte_spinlock_unlock(&internals->lock);
     }
 
     if (rss && rss->rss_conf) {
@@ -1773,19 +1938,19 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
     }
 
     if (ntpl_buf) {
-      free(ntpl_buf);
+      rte_free(ntpl_buf);
     }
-    priv_lock(internals);
+    rte_spinlock_lock(&internals->lock);
     LIST_INSERT_HEAD(&internals->flows, flow, next);
-    priv_unlock(internals);
+    rte_spinlock_unlock(&internals->lock);
     return flow;
 
 FlowError:
     if (flow) {
-      free(flow);
+      rte_free(flow);
     }
     if (ntpl_buf) {
-      free(ntpl_buf);
+      rte_free(ntpl_buf);
     }
     return NULL;
 }
@@ -1796,11 +1961,9 @@ static int _dev_flow_destroy(struct rte_eth_dev *dev,
 {
   struct pmd_internals *internals = dev->data->dev_private;
 
-  priv_lock(internals);
+  rte_spinlock_lock(&internals->lock);
   _cleanUpFlow(flow, internals);
-
-
-  priv_unlock(internals);
+  rte_spinlock_unlock(&internals->lock);
   return 0;
 }
 
@@ -1809,13 +1972,13 @@ static int _dev_flow_flush(struct rte_eth_dev *dev,
 {
   struct pmd_internals *internals = dev->data->dev_private;
 
-  priv_lock(internals);
+  rte_spinlock_lock(&internals->lock);
   while (!LIST_EMPTY(&internals->flows)) {
     struct rte_flow *flow;
     flow = LIST_FIRST(&internals->flows);
     _cleanUpFlow(flow, internals);
   }
-  priv_unlock(internals);
+  rte_spinlock_unlock(&internals->lock);
   return 0;
 }
 
@@ -1860,12 +2023,14 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
                              int set,
                              struct rte_flow_error *error __rte_unused)
 {
-  char ntpl_buf[21];
   NtNtplInfo_t ntplInfo;
   struct pmd_internals *internals = dev->data->dev_private;
+  int status;
+  int i;
 
   if (set == 1 && internals->defaultFlow) {
-    priv_lock(internals);
+    char ntpl_buf[21];
+    rte_spinlock_lock(&internals->lock);
     while (!LIST_EMPTY(&internals->defaultFlow->ntpl_id)) {
       struct filter_flow *id;
       id = LIST_FIRST(&internals->defaultFlow->ntpl_id);
@@ -1873,36 +2038,51 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       DoNtpl(ntpl_buf, &ntplInfo, internals);
       RTE_LOG(DEBUG, PMD, "Deleting Item filter 0: %s\n", ntpl_buf);
       LIST_REMOVE(id, next);
-      free(id);
+      rte_free(id);
     }
     _cleanUpHash(internals->defaultFlow, internals);
-    free(internals->defaultFlow);
+    rte_spinlock_unlock(&internals->lock);
+
+    // Call RxGet in order to activate the delete of the default filter
+    for (i = 0; i < internals->defaultFlow->nb_queues; i++) {
+      NtNetBuf_t pSeg;
+      struct ntacc_rx_queue *rx_q;
+      rx_q = &internals->rxq[internals->defaultFlow->list_queues[i]];
+      RTE_LOG(DEBUG, PMD, "Get dummy segment: Queue %u streamID %u\n", internals->defaultFlow->list_queues[i], rx_q->stream_id);
+      status = (*_NT_NetRxGet)(rx_q->pNetRx, &pSeg, 0);
+      if (status == NT_SUCCESS) {
+        RTE_LOG(DEBUG, PMD, "Discard dummy segment: Queue %u streamID %u\n", internals->defaultFlow->list_queues[i], rx_q->stream_id);
+        // We got a segment of data. Discard it and release the segment again
+        (*_NT_NetRxRelease)(rx_q->pNetRx, pSeg);
+      }
+    }
+    rte_spinlock_lock(&internals->lock);
+    rte_free(internals->defaultFlow);
     internals->defaultFlow = NULL;
-    priv_unlock(internals);
+    rte_spinlock_unlock(&internals->lock);
   }
   else if (set == 0 && !internals->defaultFlow) {
     struct ntacc_rx_queue *rx_q = internals->rxq;
     uint queue;
     uint8_t nb_queues = 0;
-    NtNtplInfo_t ntplInfo;
     char *ntpl_buf = NULL;
-    uint8_t list_queues[256];
+    uint8_t list_queues[NUM_FLOW_QUEUES];
 
     // Build default flow
-    for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
+    for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS && queue < NUM_FLOW_QUEUES; queue++) {
       if (rx_q[queue].enabled) {
         list_queues[nb_queues++] = queue;
       }
     }
 
-    ntpl_buf = malloc(NTPL_BSIZE + 1);
+    ntpl_buf = rte_malloc(internals->name, NTPL_BSIZE + 1, 0);
     if (!ntpl_buf) {
       RTE_LOG(ERR, PMD, "Out of memory in flow_isolate\n");
       goto IsolateError;
     }
 
     if (nb_queues > 0 && rx_q[0].enabled) {
-      struct rte_flow *defFlow = malloc(sizeof(struct rte_flow));
+      struct rte_flow *defFlow = rte_malloc(internals->name, sizeof(struct rte_flow), 0);
       if (!defFlow) {
         RTE_LOG(ERR, PMD, "Out of memory in flow_isolate\n");
         goto IsolateError;
@@ -1937,17 +2117,24 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
         RTE_LOG(ERR, PMD, "Failed to create default filter in flow_isolate\n");
         goto IsolateError;
       }
-      priv_lock(internals);
+
+      // Store the used queues for the default flow
+      for (i = 0; i < nb_queues && i < NUM_FLOW_QUEUES; i++) {
+        defFlow->list_queues[i] = list_queues[i];
+        defFlow->nb_queues++;
+      }
+
+      rte_spinlock_lock(&internals->lock);
       defFlow->priority = 62;
       pushNtplID(defFlow, ntplInfo.ntplId);
       internals->defaultFlow = defFlow;
-      priv_unlock(internals);
+      rte_spinlock_unlock(&internals->lock);
     }
 
     IsolateError:
 
     if (ntpl_buf) {
-      free(ntpl_buf);
+      rte_free(ntpl_buf);
       ntpl_buf = NULL;
     }
   }
@@ -2024,18 +2211,18 @@ static int eth_rss_hash_update(struct rte_eth_dev *dev,
 
   if (rss_conf->rss_hf == 0) {
     // Flush all hash settings
-    priv_lock(internals);
+    rte_spinlock_lock(&internals->lock);
     FlushHash(internals);
-    priv_unlock(internals);
+    rte_spinlock_unlock(&internals->lock);
   }
   else {
     struct rte_flow dummyFlow;
     memset(&dummyFlow, 0, sizeof(struct rte_flow));
 
     // Flush all other hash settings first
-    priv_lock(internals);
+    rte_spinlock_lock(&internals->lock);
     FlushHash(internals);
-    priv_unlock(internals);
+    rte_spinlock_unlock(&internals->lock);
     if (CreateHash(rss_conf->rss_hf, internals, &dummyFlow, 61) != 0) {
       RTE_LOG(ERR, PMD, "Failed to create hash function eth_rss_hash_update\n");
       ret = 1;
@@ -2093,7 +2280,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
     RTE_LOG(ERR, PMD, "Error %s: Out of memory\n", __func__);
-    iRet = 1;
+    iRet = -ENOMEM;
     goto error;
   }
 
@@ -2226,22 +2413,22 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     eth_dev = rte_eth_dev_allocate(name);
     if (eth_dev == NULL) {
       RTE_LOG(ERR, PMD, "ERROR: Failed to allocate ethernet device\n");
-      iRet = 1;
+      iRet = -ENOMEM;
       goto error;
     }
 
-    internals = rte_zmalloc_socket(name, sizeof(struct pmd_internals), 0, dev->numa_node);
+    internals = rte_zmalloc_socket(name, sizeof(struct pmd_internals), RTE_CACHE_LINE_SIZE, dev->device.numa_node);
     if (internals == NULL) {
       RTE_LOG(ERR, PMD, "ERROR: Failed to allocate memory\n");
-      iRet = 1;
+      iRet = -ENOMEM;
       goto error;
     }
 
     if (strlen(ntpl_file) > 0) {
-      internals->ntpl_file  = rte_zmalloc_socket(name, strlen(ntpl_file) + 1, 0, dev->numa_node);
+      internals->ntpl_file  = rte_zmalloc(name, strlen(ntpl_file) + 1, 0);
       if (internals->ntpl_file == NULL) {
         RTE_LOG(ERR, PMD, "ERROR: Failed to allocate memory\n");
-        iRet = 1;
+        iRet = -ENOMEM;
         goto error;
       }
       strcpy(internals->ntpl_file, ntpl_file);
@@ -2319,7 +2506,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     eth_dev->data->port_id = eth_dev->data->port_id;
     eth_dev->data->dev_link = pmd_link;
     eth_dev->data->mac_addrs = &eth_addr[internals->port];
-    eth_dev->data->numa_node = dev->numa_node;
+    eth_dev->data->numa_node = dev->device.numa_node;
 
     eth_dev->dev_ops = &ops;
     eth_dev->rx_pkt_burst = eth_ntacc_rx;
@@ -2333,7 +2520,9 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
       iRet = status;
       goto error;
     }
+		rte_spinlock_init(&internals->statlock);
   #endif
+  rte_spinlock_init(&internals->lock);
   }
   (void)(*_NT_InfoClose)(hInfo);
 

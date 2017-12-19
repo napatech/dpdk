@@ -44,7 +44,6 @@
 #include <rte_pci.h>
 #include <rte_ether.h>
 #include <rte_ethdev.h>
-#include <rte_memzone.h>
 #include <rte_malloc.h>
 #include <rte_memcpy.h>
 
@@ -538,73 +537,6 @@ send_msg:
 	return ret;
 }
 
-static int
-i40e_pf_host_process_cmd_config_vsi_queues_ext(struct i40e_pf_vf *vf,
-					       uint8_t *msg,
-					       uint16_t msglen,
-					       bool b_op)
-{
-	struct i40e_hw *hw = I40E_PF_TO_HW(vf->pf);
-	struct i40e_vsi *vsi = vf->vsi;
-	struct virtchnl_vsi_queue_config_ext_info *vc_vqcei =
-		(struct virtchnl_vsi_queue_config_ext_info *)msg;
-	struct virtchnl_queue_pair_ext_info *vc_qpei;
-	int i, ret = I40E_SUCCESS;
-
-	if (!b_op) {
-		i40e_pf_host_send_msg_to_vf(
-			vf,
-			VIRTCHNL_OP_CONFIG_VSI_QUEUES_EXT,
-			I40E_NOT_SUPPORTED, NULL, 0);
-		return ret;
-	}
-
-	if (!msg || vc_vqcei->num_queue_pairs > vsi->nb_qps ||
-		vc_vqcei->num_queue_pairs > I40E_MAX_VSI_QP ||
-		msglen < I40E_VIRTCHNL_CONFIG_VSI_QUEUES_SIZE(vc_vqcei,
-					vc_vqcei->num_queue_pairs)) {
-		PMD_DRV_LOG(ERR, "vsi_queue_config_ext_info argument wrong");
-		ret = I40E_ERR_PARAM;
-		goto send_msg;
-	}
-
-	vc_qpei = vc_vqcei->qpair;
-	for (i = 0; i < vc_vqcei->num_queue_pairs; i++) {
-		if (vc_qpei[i].rxq.queue_id > vsi->nb_qps - 1 ||
-			vc_qpei[i].txq.queue_id > vsi->nb_qps - 1) {
-			ret = I40E_ERR_PARAM;
-			goto send_msg;
-		}
-		/*
-		 * Apply VF RX queue setting to HMC.
-		 * If the opcode is VIRTCHNL_OP_CONFIG_VSI_QUEUES_EXT,
-		 * then the extra information of
-		 * 'struct virtchnl_queue_pair_ext_info' is needed,
-		 * otherwise set the last parameter to NULL.
-		 */
-		if (i40e_pf_host_hmc_config_rxq(hw, vf, &vc_qpei[i].rxq,
-			vc_qpei[i].rxq_ext.crcstrip) != I40E_SUCCESS) {
-			PMD_DRV_LOG(ERR, "Configure RX queue HMC failed");
-			ret = I40E_ERR_PARAM;
-			goto send_msg;
-		}
-
-		/* Apply VF TX queue setting to HMC */
-		if (i40e_pf_host_hmc_config_txq(hw, vf, &vc_qpei[i].txq) !=
-							I40E_SUCCESS) {
-			PMD_DRV_LOG(ERR, "Configure TX queue HMC failed");
-			ret = I40E_ERR_PARAM;
-			goto send_msg;
-		}
-	}
-
-send_msg:
-	i40e_pf_host_send_msg_to_vf(vf, VIRTCHNL_OP_CONFIG_VSI_QUEUES_EXT,
-								ret, NULL, 0);
-
-	return ret;
-}
-
 static void
 i40e_pf_config_irq_link_list(struct i40e_pf_vf *vf,
 			      struct virtchnl_vector_map *vvm)
@@ -714,7 +646,7 @@ i40e_pf_host_process_cmd_config_irq_map(struct i40e_pf_vf *vf,
 	    (struct virtchnl_irq_map_info *)msg;
 	struct virtchnl_vector_map *map;
 	int i;
-	uint16_t vector_id;
+	uint16_t vector_id, itr_idx;
 	unsigned long qbit_max;
 
 	if (!b_op) {
@@ -741,12 +673,13 @@ i40e_pf_host_process_cmd_config_irq_map(struct i40e_pf_vf *vf,
 		vf->vsi->msix_intr = irqmap->vecmap[0].vector_id;
 		vf->vsi->nb_msix = irqmap->num_vectors;
 		vf->vsi->nb_used_qps = vf->vsi->nb_qps;
+		itr_idx = irqmap->vecmap[0].rxitr_idx;
 
 		/* Don't care how the TX/RX queue mapping with this vector.
 		 * Link all VF RX queues together. Only did mapping work.
 		 * VF can disable/enable the intr by itself.
 		 */
-		i40e_vsi_queues_bind_intr(vf->vsi);
+		i40e_vsi_queues_bind_intr(vf->vsi, itr_idx);
 		goto send_msg;
 	}
 
@@ -909,7 +842,7 @@ i40e_pf_host_process_cmd_add_ether_address(struct i40e_pf_vf *vf,
 
 	for (i = 0; i < addr_list->num_elements; i++) {
 		mac = (struct ether_addr *)(addr_list->list[i].addr);
-		(void)rte_memcpy(&filter.mac_addr, mac, ETHER_ADDR_LEN);
+		rte_memcpy(&filter.mac_addr, mac, ETHER_ADDR_LEN);
 		filter.filter_type = RTE_MACVLAN_PERFECT_MATCH;
 		if (is_zero_ether_addr(mac) ||
 		    i40e_vsi_add_mac(vf->vsi, &filter)) {
@@ -1157,42 +1090,13 @@ i40e_pf_host_process_cmd_disable_vlan_strip(struct i40e_pf_vf *vf, bool b_op)
 	return ret;
 }
 
-static int
-i40e_pf_host_process_cmd_cfg_pvid(struct i40e_pf_vf *vf,
-					uint8_t *msg,
-					uint16_t msglen,
-					bool b_op)
-{
-	int ret = I40E_SUCCESS;
-	struct virtchnl_pvid_info  *tpid_info =
-			(struct virtchnl_pvid_info *)msg;
-
-	if (!b_op) {
-		i40e_pf_host_send_msg_to_vf(
-			vf,
-			I40E_VIRTCHNL_OP_CFG_VLAN_PVID,
-			I40E_NOT_SUPPORTED, NULL, 0);
-		return ret;
-	}
-
-	if (msg == NULL || msglen != sizeof(*tpid_info)) {
-		ret = I40E_ERR_PARAM;
-		goto send_msg;
-	}
-
-	ret = i40e_vsi_vlan_pvid_set(vf->vsi, &tpid_info->info);
-
-send_msg:
-	i40e_pf_host_send_msg_to_vf(vf, I40E_VIRTCHNL_OP_CFG_VLAN_PVID,
-					ret, NULL, 0);
-
-	return ret;
-}
-
 void
 i40e_notify_vf_link_status(struct rte_eth_dev *dev, struct i40e_pf_vf *vf)
 {
+	struct i40e_hw *hw = I40E_PF_TO_HW(vf->pf);
 	struct virtchnl_pf_event event;
+	uint16_t vf_id = vf->vf_idx;
+	uint32_t tval, rval;
 
 	event.event = VIRTCHNL_EVENT_LINK_CHANGE;
 	event.event_data.link_event.link_status =
@@ -1224,8 +1128,15 @@ i40e_notify_vf_link_status(struct rte_eth_dev *dev, struct i40e_pf_vf *vf)
 		break;
 	}
 
-	i40e_pf_host_send_msg_to_vf(vf, VIRTCHNL_OP_EVENT,
-		I40E_SUCCESS, (uint8_t *)&event, sizeof(event));
+	tval = I40E_READ_REG(hw, I40E_VF_ATQLEN(vf_id));
+	rval = I40E_READ_REG(hw, I40E_VF_ARQLEN(vf_id));
+
+	if (tval & I40E_VF_ATQLEN_ATQLEN_MASK ||
+	    tval & I40E_VF_ATQLEN_ATQENABLE_MASK ||
+	    rval & I40E_VF_ARQLEN_ARQLEN_MASK ||
+	    rval & I40E_VF_ARQLEN_ARQENABLE_MASK)
+		i40e_pf_host_send_msg_to_vf(vf, VIRTCHNL_OP_EVENT,
+			I40E_SUCCESS, (uint8_t *)&event, sizeof(event));
 }
 
 void
@@ -1300,11 +1211,6 @@ i40e_pf_host_handle_vf_msg(struct rte_eth_dev *dev,
 		i40e_pf_host_process_cmd_config_vsi_queues(vf, msg,
 							   msglen, b_op);
 		break;
-	case VIRTCHNL_OP_CONFIG_VSI_QUEUES_EXT:
-		PMD_DRV_LOG(INFO, "OP_CONFIG_VSI_QUEUES_EXT received");
-		i40e_pf_host_process_cmd_config_vsi_queues_ext(vf, msg,
-							       msglen, b_op);
-		break;
 	case VIRTCHNL_OP_CONFIG_IRQ_MAP:
 		PMD_DRV_LOG(INFO, "OP_CONFIG_IRQ_MAP received");
 		i40e_pf_host_process_cmd_config_irq_map(vf, msg, msglen, b_op);
@@ -1358,10 +1264,6 @@ i40e_pf_host_handle_vf_msg(struct rte_eth_dev *dev,
 	case VIRTCHNL_OP_DISABLE_VLAN_STRIPPING:
 		PMD_DRV_LOG(INFO, "OP_DISABLE_VLAN_STRIPPING received");
 		i40e_pf_host_process_cmd_disable_vlan_strip(vf, b_op);
-		break;
-	case I40E_VIRTCHNL_OP_CFG_VLAN_PVID:
-		PMD_DRV_LOG(INFO, "OP_CFG_VLAN_PVID received");
-		i40e_pf_host_process_cmd_cfg_pvid(vf, msg, msglen, b_op);
 		break;
 	/* Don't add command supported below, which will
 	 * return an error code.

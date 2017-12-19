@@ -63,37 +63,12 @@ with the mask of ports to multicast packets to.
 Also, the application does not consider the Ethernet addresses;
 it looks only at the IPv4 destination address for any given packet.
 
-Building the Application
-------------------------
+Compiling the Application
+-------------------------
 
-To compile the application:
+To compile the sample application see :doc:`compiling`.
 
-#.  Go to the sample application directory:
-
-    .. code-block:: console
-
-        export RTE_SDK=/path/to/rte_sdk
-        cd ${RTE_SDK}/examples/ipv4_multicast
-
-#.  Set the target (a default target is used if not specified). For example:
-
-    .. code-block:: console
-
-        export RTE_TARGET=x86_64-native-linuxapp-gcc
-
-See the *DPDK Getting Started Guide* for possible RTE_TARGET values.
-
-#.  Build the application:
-
-    .. code-block:: console
-
-        make
-
-.. note::
-
-    The compiled application is written to the build subdirectory.
-    To have the application written to a different location,
-    the O=/path/to/build/directory option may be specified in the make command.
+The application is located in the ``ipv4_multicast`` sub-directory.
 
 Running the Application
 -----------------------
@@ -268,7 +243,7 @@ The actual packet transmission is done in the mcast_send_pkt() function:
 
 .. code-block:: c
 
-    static inline void mcast_send_pkt(struct rte_mbuf *pkt, struct ether_addr *dest_addr, struct lcore_queue_conf *qconf, uint8_t port)
+    static inline void mcast_send_pkt(struct rte_mbuf *pkt, struct ether_addr *dest_addr, struct lcore_queue_conf *qconf, uint16_t port)
     {
         struct ether_hdr *ethdr;
         uint16_t len;
@@ -364,7 +339,7 @@ It is the mcast_out_pkt() function that performs the packet duplication (either 
         /* update header's fields */
 
         hdr->pkt.pkt_len = (uint16_t)(hdr->pkt.data_len + pkt->pkt.pkt_len);
-        hdr->pkt.nb_segs = (uint8_t)(pkt->pkt.nb_segs + 1);
+        hdr->pkt.nb_segs = pkt->pkt.nb_segs + 1;
 
         /* copy metadata from source packet */
 

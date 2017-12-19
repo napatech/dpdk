@@ -247,6 +247,48 @@ static const struct rte_cryptodev_capabilities aesni_mb_pmd_capabilities[] = {
 			}, }
 		}, }
 	},
+	{	/* DES CBC */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
+			{.cipher = {
+				.algo = RTE_CRYPTO_CIPHER_DES_CBC,
+				.block_size = 8,
+				.key_size = {
+					.min = 8,
+					.max = 8,
+					.increment = 0
+				},
+				.iv_size = {
+					.min = 8,
+					.max = 8,
+					.increment = 0
+				}
+			}, }
+		}, }
+	},
+	{	/* DES DOCSIS BPI */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
+			{.cipher = {
+				.algo = RTE_CRYPTO_CIPHER_DES_DOCSISBPI,
+				.block_size = 8,
+				.key_size = {
+					.min = 8,
+					.max = 8,
+					.increment = 0
+				},
+				.iv_size = {
+					.min = 8,
+					.max = 8,
+					.increment = 0
+				}
+			}, }
+		}, }
+	},
+
+
 
 	RTE_CRYPTODEV_END_OF_CAPABILITIES_LIST()
 };
@@ -355,7 +397,7 @@ aesni_mb_pmd_qp_set_unique_name(struct rte_cryptodev *dev,
 			"aesni_mb_pmd_%u_qp_%u",
 			dev->data->dev_id, qp->id);
 
-	if (n > sizeof(qp->name))
+	if (n >= sizeof(qp->name))
 		return -1;
 
 	return 0;
@@ -373,7 +415,7 @@ aesni_mb_pmd_qp_create_processed_ops_ring(struct aesni_mb_qp *qp,
 				"%s_%s",
 				qp->name, str);
 
-	if (n > sizeof(ring_name))
+	if (n >= sizeof(ring_name))
 		return NULL;
 
 	r = rte_ring_lookup(ring_name);
@@ -429,6 +471,11 @@ aesni_mb_pmd_qp_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 	qp->sess_mp = session_pool;
 
 	memset(&qp->stats, 0, sizeof(qp->stats));
+
+	char mp_name[RTE_MEMPOOL_NAMESIZE];
+
+	snprintf(mp_name, RTE_MEMPOOL_NAMESIZE,
+				"digest_mp_%u_%u", dev->data->dev_id, qp_id);
 
 	/* Initialise multi-buffer manager */
 	(*qp->op_fns->job.init_mgr)(&qp->mb_mgr);

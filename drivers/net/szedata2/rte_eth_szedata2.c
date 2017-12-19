@@ -71,7 +71,7 @@
 struct szedata2_rx_queue {
 	struct szedata *sze;
 	uint8_t rx_channel;
-	uint8_t in_port;
+	uint16_t in_port;
 	struct rte_mempool *mb_pool;
 	volatile uint64_t rx_pkts;
 	volatile uint64_t rx_bytes;
@@ -682,7 +682,7 @@ eth_szedata2_tx(void *queue,
 	uint32_t hwpkt_len;
 	uint32_t unlock_size;
 	uint32_t rem_len;
-	uint8_t mbuf_segs;
+	uint16_t mbuf_segs;
 	uint16_t pkt_left = nb_pkts;
 
 	if (sze_q->sze == NULL || nb_pkts == 0)
@@ -1042,7 +1042,7 @@ eth_dev_info(struct rte_eth_dev *dev,
 	dev_info->speed_capa = ETH_LINK_SPEED_100G;
 }
 
-static void
+static int
 eth_stats_get(struct rte_eth_dev *dev,
 		struct rte_eth_stats *stats)
 {
@@ -1077,6 +1077,8 @@ eth_stats_get(struct rte_eth_dev *dev,
 	stats->ibytes = rx_total_bytes;
 	stats->obytes = tx_total_bytes;
 	stats->oerrors = tx_err_total;
+
+	return 0;
 }
 
 static void
@@ -1538,7 +1540,7 @@ rte_szedata2_eth_dev_init(struct rte_eth_dev *dev)
 		return -EINVAL;
 	}
 	snprintf(rsc_filename, PATH_MAX,
-		"%s/" PCI_PRI_FMT "/resource%u", pci_get_sysfs_path(),
+		"%s/" PCI_PRI_FMT "/resource%u", rte_pci_get_sysfs_path(),
 		pci_addr->domain, pci_addr->bus,
 		pci_addr->devid, pci_addr->function, PCI_RESOURCE_NUMBER);
 	fd = open(rsc_filename, O_RDWR);

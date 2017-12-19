@@ -50,11 +50,17 @@ extern "C" {
 #include <sys/queue.h>
 #include <stdint.h>
 #include <inttypes.h>
+#include <linux/vfio.h>
 
 #include <rte_debug.h>
 #include <rte_interrupts.h>
 #include <rte_dev.h>
 #include <rte_bus.h>
+#include <rte_tailq.h>
+
+#include <fslmc_vfio.h>
+
+#define FSLMC_OBJECT_MAX_LEN 32   /**< Length of each device on bus */
 
 struct rte_dpaa2_driver;
 
@@ -63,6 +69,36 @@ TAILQ_HEAD(rte_fslmc_device_list, rte_dpaa2_device);
 TAILQ_HEAD(rte_fslmc_driver_list, rte_dpaa2_driver);
 
 extern struct rte_fslmc_bus rte_fslmc_bus;
+
+enum rte_dpaa2_dev_type {
+	/* Devices backed by DPDK driver */
+	DPAA2_ETH,	/**< DPNI type device*/
+	DPAA2_CRYPTO,	/**< DPSECI type device */
+	DPAA2_CON,	/**< DPCONC type device */
+	/* Devices not backed by a DPDK driver: DPIO, DPBP, DPCI, DPMCP */
+	DPAA2_BPOOL,	/**< DPBP type device */
+	DPAA2_IO,	/**< DPIO type device */
+	DPAA2_CI,	/**< DPCI type device */
+	DPAA2_MPORTAL,  /**< DPMCP type device */
+	/* Unknown device placeholder */
+	DPAA2_UNKNOWN
+};
+
+TAILQ_HEAD(rte_dpaa2_object_list, rte_dpaa2_object);
+
+typedef int (*rte_dpaa2_obj_create_t)(int vdev_fd,
+				      struct vfio_device_info *obj_info,
+				      int object_id);
+
+/**
+ * A structure describing a DPAA2 object.
+ */
+struct rte_dpaa2_object {
+	TAILQ_ENTRY(rte_dpaa2_object) next; /**< Next in list. */
+	const char *name;                   /**< Name of Object. */
+	enum rte_dpaa2_dev_type dev_type;   /**< Type of device */
+	rte_dpaa2_obj_create_t create;
+};
 
 /**
  * A structure describing a DPAA2 device.
@@ -74,11 +110,11 @@ struct rte_dpaa2_device {
 		struct rte_eth_dev *eth_dev;        /**< ethernet device */
 		struct rte_cryptodev *cryptodev;    /**< Crypto Device */
 	};
-	uint16_t dev_type;                  /**< Device Type */
-	uint16_t object_id;             /**< DPAA2 Object ID */
+	enum rte_dpaa2_dev_type dev_type;   /**< Device Type */
+	uint16_t object_id;                 /**< DPAA2 Object ID */
 	struct rte_intr_handle intr_handle; /**< Interrupt handle */
 	struct rte_dpaa2_driver *driver;    /**< Associated driver */
-	char name[32];          /**< DPAA2 Object name*/
+	char name[FSLMC_OBJECT_MAX_LEN];    /**< DPAA2 Object name*/
 };
 
 typedef int (*rte_dpaa2_probe_t)(struct rte_dpaa2_driver *dpaa2_drv,
@@ -93,7 +129,7 @@ struct rte_dpaa2_driver {
 	struct rte_driver driver;           /**< Inherit core driver. */
 	struct rte_fslmc_bus *fslmc_bus;    /**< FSLMC bus reference */
 	uint32_t drv_flags;                 /**< Flags for controlling device.*/
-	uint16_t drv_type;                  /**< Driver Type */
+	enum rte_dpaa2_dev_type drv_type;   /**< Driver Type */
 	rte_dpaa2_probe_t probe;
 	rte_dpaa2_remove_t remove;
 };
@@ -142,5 +178,24 @@ RTE_PMD_EXPORT_NAME(nm, __COUNTER__)
 #ifdef __cplusplus
 }
 #endif
+
+/**
+ * Register a DPAA2 MC Object driver.
+ *
+ * @param mc_object
+ *   A pointer to a rte_dpaa_object structure describing the mc object
+ *   to be registered.
+ */
+void rte_fslmc_object_register(struct rte_dpaa2_object *object);
+
+/** Helper for DPAA2 object registration */
+#define RTE_PMD_REGISTER_DPAA2_OBJECT(nm, dpaa2_obj) \
+RTE_INIT(dpaa2objinitfn_ ##nm); \
+static void dpaa2objinitfn_ ##nm(void) \
+{\
+	(dpaa2_obj).name = RTE_STR(nm);\
+	rte_fslmc_object_register(&dpaa2_obj); \
+} \
+RTE_PMD_EXPORT_NAME(nm, __COUNTER__)
 
 #endif /* _RTE_FSLMC_H_ */

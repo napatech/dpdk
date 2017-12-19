@@ -52,13 +52,22 @@ The application classifies the ports as *Protected* and *Unprotected*.
 Thus, traffic received on an Unprotected or Protected port is consider
 Inbound or Outbound respectively.
 
+The application also supports complete IPSec protocol offload to hardware
+(Look aside crypto accelarator or using ethernet device). It also support
+inline ipsec processing by the supported ethernet device during transmission.
+These modes can be selected during the SA creation configuration.
+
+In case of complete protocol offload, the processing of headers(ESP and outer
+IP header) is done by the hardware and the application does not need to
+add/remove them during outbound/inbound processing.
+
 The Path for IPsec Inbound traffic is:
 
 *  Read packets from the port.
 *  Classify packets between IPv4 and ESP.
 *  Perform Inbound SA lookup for ESP packets based on their SPI.
-*  Perform Verification/Decryption.
-*  Remove ESP and outer IP header
+*  Perform Verification/Decryption (Not needed in case of inline ipsec).
+*  Remove ESP and outer IP header (Not needed in case of protocol offload).
 *  Inbound SP check using ACL of decrypted packets and any other IPv4 packets.
 *  Routing.
 *  Write packet to port.
@@ -68,8 +77,8 @@ The Path for the IPsec Outbound traffic is:
 *  Read packets from the port.
 *  Perform Outbound SP check using ACL of all IPv4 traffic.
 *  Perform Outbound SA lookup for packets that need IPsec protection.
-*  Add ESP and outer IP header.
-*  Perform Encryption/Digest.
+*  Add ESP and outer IP header (Not needed in case protocol offload).
+*  Perform Encryption/Digest (Not needed in case of inline ipsec).
 *  Routing.
 *  Write packet to port.
 
@@ -83,27 +92,12 @@ Constraints
 *  Each SA must be handle by a unique lcore (*1 RX queue per port*).
 *  No chained mbufs.
 
-
 Compiling the Application
 -------------------------
 
-To compile the application:
+To compile the sample application see :doc:`compiling`.
 
-#. Go to the sample application directory::
-
-      export RTE_SDK=/path/to/rte_sdk
-      cd ${RTE_SDK}/examples/ipsec-secgw
-
-#. Set the target (a default target is used if not specified). For example::
-
-
-      export RTE_TARGET=x86_64-native-linuxapp-gcc
-
-   See the *DPDK Getting Started Guide* for possible RTE_TARGET values.
-
-#. Build the application::
-
-       make
+The application is located in the ``rpsec-secgw`` sub-directory.
 
 #. [Optional] Build the application for debugging:
    This option adds some extra flags, disables compiler optimizations and
@@ -119,7 +113,7 @@ The application has a number of command line options::
 
 
    ./build/ipsec-secgw [EAL options] --
-                        -p PORTMASK -P -u PORTMASK
+                        -p PORTMASK -P -u PORTMASK -j FRAMESIZE
                         --config (port,queue,lcore)[,(port,queue,lcore]
                         --single-sa SAIDX
                         -f CONFIG_FILE_PATH
@@ -134,6 +128,10 @@ Where:
     set to the Ethernet address of the port are accepted (default is enabled).
 
 *   ``-u PORTMASK``: hexadecimal bitmask of unprotected ports
+
+*   ``-j FRAMESIZE``: *optional*. Enables jumbo frames with the maximum size
+    specified as FRAMESIZE. If an invalid value is provided as FRAMESIZE
+    then the default value 9000 is used.
 
 *   ``--config (port,queue,lcore)[,(port,queue,lcore)]``: determines which queues
     from which ports are mapped to which cores.
@@ -385,7 +383,7 @@ The SA rule syntax is shown as follows:
 .. code-block:: console
 
     sa <dir> <spi> <cipher_algo> <cipher_key> <auth_algo> <auth_key>
-    <mode> <src_ip> <dst_ip>
+    <mode> <src_ip> <dst_ip> <action_type> <port_id>
 
 where each options means:
 
@@ -526,6 +524,34 @@ where each options means:
    * *dst X.X.X.X* for IPv4
    * *dst XXXX:XXXX:XXXX:XXXX:XXXX:XXXX:XXXX:XXXX* for IPv6
 
+``<type>``
+
+ * Action type to specify the security action. This option specify
+   the SA to be performed with look aside protocol offload to HW
+   accelerator or protocol offload on ethernet device or inline
+   crypto processing on the ethernet device during transmission.
+
+ * Optional: Yes, default type *no-offload*
+
+ * Available options:
+
+   * *lookaside-protocol-offload*: look aside protocol offload to HW accelerator
+   * *inline-protocol-offload*: inline protocol offload on ethernet device
+   * *inline-crypto-offload*: inline crypto processing on ethernet device
+   * *no-offload*: no offloading to hardware
+
+ ``<port_id>``
+
+ * Port/device ID of the ethernet/crypto accelerator for which the SA is
+   configured. This option is used when *type* is NOT *no-offload*
+
+ * Optional: No, if *type* is not *no-offload*
+
+ * Syntax:
+
+   * *port_id X* X is a valid device number in decimal
+
+
 Example SA rules:
 
 .. code-block:: console
@@ -544,6 +570,11 @@ Example SA rules:
     sa in 105 aead_algo aes-128-gcm \
     aead_key de:ad:be:ef:de:ad:be:ef:de:ad:be:ef:de:ad:be:ef:de:ad:be:ef \
     mode ipv4-tunnel src 172.16.2.5 dst 172.16.1.5
+
+    sa out 5 cipher_algo aes-128-cbc cipher_key 0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0 \
+    auth_algo sha1-hmac auth_key 0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0 \
+    mode ipv4-tunnel src 172.16.1.5 dst 172.16.2.5 \
+    type lookaside-protocol-offload port_id 4
 
 Routing rule syntax
 ^^^^^^^^^^^^^^^^^^^

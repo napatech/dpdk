@@ -27,6 +27,12 @@
 #include "ecore_init_fw_funcs.h"
 #include "ecore_sp_commands.h"
 
+static enum _ecore_status_t ecore_sriov_eqe_event(struct ecore_hwfn *p_hwfn,
+						  u8 opcode,
+						  __le16 echo,
+						  union event_ring_data *data,
+						  u8 fw_return_code);
+
 const char *ecore_channel_tlvs_string[] = {
 	"CHANNEL_TLV_NONE",	/* ends tlv sequence */
 	"CHANNEL_TLV_ACQUIRE",
@@ -53,8 +59,25 @@ const char *ecore_channel_tlvs_string[] = {
 	"CHANNEL_TLV_VPORT_UPDATE_SGE_TPA",
 	"CHANNEL_TLV_UPDATE_TUNN_PARAM",
 	"CHANNEL_TLV_COALESCE_UPDATE",
+	"CHANNEL_TLV_QID",
+	"CHANNEL_TLV_COALESCE_READ",
 	"CHANNEL_TLV_MAX"
 };
+
+static u8 ecore_vf_calculate_legacy(struct ecore_vf_info *p_vf)
+{
+	u8 legacy = 0;
+
+	if (p_vf->acquire.vfdev_info.eth_fp_hsi_minor ==
+	    ETH_HSI_VER_NO_PKT_LEN_TUNN)
+		legacy |= ECORE_QCID_LEGACY_VF_RX_PROD;
+
+	if (!(p_vf->acquire.vfdev_info.capabilities &
+	     VFPF_ACQUIRE_CAP_QUEUE_QIDS))
+		legacy |= ECORE_QCID_LEGACY_VF_CID;
+
+	return legacy;
+}
 
 /* IOV ramrods */
 static enum _ecore_status_t ecore_sp_vf_start(struct ecore_hwfn *p_hwfn,
@@ -193,9 +216,7 @@ struct ecore_vf_info *ecore_iov_get_vf_info(struct ecore_hwfn *p_hwfn,
 }
 
 static struct ecore_queue_cid *
-ecore_iov_get_vf_rx_queue_cid(struct ecore_hwfn *p_hwfn,
-			      struct ecore_vf_info *p_vf,
-			      struct ecore_vf_queue *p_queue)
+ecore_iov_get_vf_rx_queue_cid(struct ecore_vf_queue *p_queue)
 {
 	int i;
 
@@ -214,8 +235,7 @@ enum ecore_iov_validate_q_mode {
 	ECORE_IOV_VALIDATE_Q_DISABLE,
 };
 
-static bool ecore_iov_validate_queue_mode(struct ecore_hwfn *p_hwfn,
-					  struct ecore_vf_info *p_vf,
+static bool ecore_iov_validate_queue_mode(struct ecore_vf_info *p_vf,
 					  u16 qid,
 					  enum ecore_iov_validate_q_mode mode,
 					  bool b_is_tx)
@@ -257,8 +277,7 @@ static bool ecore_iov_validate_rxq(struct ecore_hwfn *p_hwfn,
 		return false;
 	}
 
-	return ecore_iov_validate_queue_mode(p_hwfn, p_vf, rx_qid,
-					     mode, false);
+	return ecore_iov_validate_queue_mode(p_vf, rx_qid, mode, false);
 }
 
 static bool ecore_iov_validate_txq(struct ecore_hwfn *p_hwfn,
@@ -274,8 +293,7 @@ static bool ecore_iov_validate_txq(struct ecore_hwfn *p_hwfn,
 		return false;
 	}
 
-	return ecore_iov_validate_queue_mode(p_hwfn, p_vf, tx_qid,
-					     mode, true);
+	return ecore_iov_validate_queue_mode(p_vf, tx_qid, mode, true);
 }
 
 static bool ecore_iov_validate_sb(struct ecore_hwfn *p_hwfn,
@@ -297,13 +315,12 @@ static bool ecore_iov_validate_sb(struct ecore_hwfn *p_hwfn,
 }
 
 /* Is there at least 1 queue open? */
-static bool ecore_iov_validate_active_rxq(struct ecore_hwfn *p_hwfn,
-					  struct ecore_vf_info *p_vf)
+static bool ecore_iov_validate_active_rxq(struct ecore_vf_info *p_vf)
 {
 	u8 i;
 
 	for (i = 0; i < p_vf->num_rxqs; i++)
-		if (ecore_iov_validate_queue_mode(p_hwfn, p_vf, i,
+		if (ecore_iov_validate_queue_mode(p_vf, i,
 						  ECORE_IOV_VALIDATE_Q_ENABLE,
 						  false))
 			return true;
@@ -311,31 +328,17 @@ static bool ecore_iov_validate_active_rxq(struct ecore_hwfn *p_hwfn,
 	return false;
 }
 
-static bool ecore_iov_validate_active_txq(struct ecore_hwfn *p_hwfn,
-					  struct ecore_vf_info *p_vf)
+static bool ecore_iov_validate_active_txq(struct ecore_vf_info *p_vf)
 {
 	u8 i;
 
 	for (i = 0; i < p_vf->num_txqs; i++)
-		if (ecore_iov_validate_queue_mode(p_hwfn, p_vf, i,
+		if (ecore_iov_validate_queue_mode(p_vf, i,
 						  ECORE_IOV_VALIDATE_Q_ENABLE,
 						  true))
 			return true;
 
 	return false;
-}
-
-/* TODO - this is linux crc32; Need a way to ifdef it out for linux */
-u32 ecore_crc32(u32 crc, u8 *ptr, u32 length)
-{
-	int i;
-
-	while (length--) {
-		crc ^= *ptr++;
-		for (i = 0; i < 8; i++)
-			crc = (crc >> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
-	}
-	return crc;
 }
 
 enum _ecore_status_t ecore_iov_post_vf_bulletin(struct ecore_hwfn *p_hwfn,
@@ -359,8 +362,8 @@ enum _ecore_status_t ecore_iov_post_vf_bulletin(struct ecore_hwfn *p_hwfn,
 
 	/* Increment bulletin board version and compute crc */
 	p_bulletin->version++;
-	p_bulletin->crc = ecore_crc32(0, (u8 *)p_bulletin + crc_size,
-				      p_vf->bulletin.size - crc_size);
+	p_bulletin->crc = OSAL_CRC32(0, (u8 *)p_bulletin + crc_size,
+				     p_vf->bulletin.size - crc_size);
 
 	DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
 		   "Posting Bulletin 0x%08x to VF[%d] (CRC 0x%08x)\n",
@@ -440,33 +443,6 @@ static enum _ecore_status_t ecore_iov_pci_cfg_info(struct ecore_dev *p_dev)
 	}
 
 	return ECORE_SUCCESS;
-}
-
-static void ecore_iov_clear_vf_igu_blocks(struct ecore_hwfn *p_hwfn,
-					  struct ecore_ptt *p_ptt)
-{
-	struct ecore_igu_block *p_sb;
-	u16 sb_id;
-	u32 val;
-
-	if (!p_hwfn->hw_info.p_igu_info) {
-		DP_ERR(p_hwfn,
-		       "ecore_iov_clear_vf_igu_blocks IGU Info not inited\n");
-		return;
-	}
-
-	for (sb_id = 0;
-	     sb_id < ECORE_MAPPING_MEMORY_SIZE(p_hwfn->p_dev); sb_id++) {
-		p_sb = &p_hwfn->hw_info.p_igu_info->igu_map.igu_blocks[sb_id];
-		if ((p_sb->status & ECORE_IGU_STATUS_FREE) &&
-		    !(p_sb->status & ECORE_IGU_STATUS_PF)) {
-			val = ecore_rd(p_hwfn, p_ptt,
-				       IGU_REG_MAPPING_MEMORY + sb_id * 4);
-			SET_FIELD(val, IGU_MAPPING_LINE_VALID, 0);
-			ecore_wr(p_hwfn, p_ptt,
-				 IGU_REG_MAPPING_MEMORY + 4 * sb_id, val);
-		}
-	}
 }
 
 static void ecore_iov_setup_vfdb(struct ecore_hwfn *p_hwfn)
@@ -621,20 +597,24 @@ enum _ecore_status_t ecore_iov_alloc(struct ecore_hwfn *p_hwfn)
 
 	p_hwfn->pf_iov_info = p_sriov;
 
+	ecore_spq_register_async_cb(p_hwfn, PROTOCOLID_COMMON,
+				    ecore_sriov_eqe_event);
+
 	return ecore_iov_allocate_vfdb(p_hwfn);
 }
 
-void ecore_iov_setup(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt)
+void ecore_iov_setup(struct ecore_hwfn *p_hwfn)
 {
 	if (!IS_PF_SRIOV(p_hwfn) || !IS_PF_SRIOV_ALLOC(p_hwfn))
 		return;
 
 	ecore_iov_setup_vfdb(p_hwfn);
-	ecore_iov_clear_vf_igu_blocks(p_hwfn, p_ptt);
 }
 
 void ecore_iov_free(struct ecore_hwfn *p_hwfn)
 {
+	ecore_spq_unregister_async_cb(p_hwfn, PROTOCOLID_COMMON);
+
 	if (IS_PF_SRIOV_ALLOC(p_hwfn)) {
 		ecore_iov_free_vfdb(p_hwfn);
 		OSAL_FREE(p_hwfn->p_dev, p_hwfn->pf_iov_info);
@@ -843,11 +823,52 @@ static void ecore_iov_vf_igu_set_int(struct ecore_hwfn *p_hwfn,
 }
 
 static enum _ecore_status_t
+ecore_iov_enable_vf_access_msix(struct ecore_hwfn *p_hwfn,
+				struct ecore_ptt *p_ptt,
+				u8 abs_vf_id,
+				u8 num_sbs)
+{
+	u8 current_max = 0;
+	int i;
+
+	/* If client overrides this, don't do anything */
+	if (p_hwfn->p_dev->b_dont_override_vf_msix)
+		return ECORE_SUCCESS;
+
+	/* For AH onward, configuration is per-PF. Find maximum of all
+	 * the currently enabled child VFs, and set the number to be that.
+	 */
+	if (!ECORE_IS_BB(p_hwfn->p_dev)) {
+		ecore_for_each_vf(p_hwfn, i) {
+			struct ecore_vf_info *p_vf;
+
+			p_vf  = ecore_iov_get_vf_info(p_hwfn, (u16)i, true);
+			if (!p_vf)
+				continue;
+
+			current_max = OSAL_MAX_T(u8, current_max,
+						 p_vf->num_sbs);
+		}
+	}
+
+	if (num_sbs > current_max)
+		return ecore_mcp_config_vf_msix(p_hwfn, p_ptt,
+						abs_vf_id, num_sbs);
+
+	return ECORE_SUCCESS;
+}
+
+static enum _ecore_status_t
 ecore_iov_enable_vf_access(struct ecore_hwfn *p_hwfn,
 			   struct ecore_ptt *p_ptt, struct ecore_vf_info *vf)
 {
 	u32 igu_vf_conf = IGU_VF_CONF_FUNC_EN;
-	enum _ecore_status_t rc;
+	enum _ecore_status_t rc = ECORE_SUCCESS;
+
+	/* It's possible VF was previously considered malicious -
+	 * clear the indication even if we're only going to disable VF.
+	 */
+	vf->b_malicious = false;
 
 	if (vf->to_disable)
 		return ECORE_SUCCESS;
@@ -861,11 +882,8 @@ ecore_iov_enable_vf_access(struct ecore_hwfn *p_hwfn,
 
 	ecore_iov_vf_igu_reset(p_hwfn, p_ptt, vf);
 
-	/* It's possible VF was previously considered malicious */
-	vf->b_malicious = false;
-
-	rc = ecore_mcp_config_vf_msix(p_hwfn, p_ptt,
-				      vf->abs_vf_id, vf->num_sbs);
+	rc = ecore_iov_enable_vf_access_msix(p_hwfn, p_ptt,
+					     vf->abs_vf_id, vf->num_sbs);
 	if (rc != ECORE_SUCCESS)
 		return rc;
 
@@ -934,46 +952,38 @@ static u8 ecore_iov_alloc_vf_igu_sbs(struct ecore_hwfn *p_hwfn,
 				     struct ecore_vf_info *vf,
 				     u16 num_rx_queues)
 {
-	struct ecore_igu_block *igu_blocks;
-	int qid = 0, igu_id = 0;
+	struct ecore_igu_block *p_block;
+	struct cau_sb_entry sb_entry;
+	int qid = 0;
 	u32 val = 0;
 
-	igu_blocks = p_hwfn->hw_info.p_igu_info->igu_map.igu_blocks;
-
-	if (num_rx_queues > p_hwfn->hw_info.p_igu_info->free_blks)
-		num_rx_queues = p_hwfn->hw_info.p_igu_info->free_blks;
-
-	p_hwfn->hw_info.p_igu_info->free_blks -= num_rx_queues;
+	if (num_rx_queues > p_hwfn->hw_info.p_igu_info->usage.free_cnt_iov)
+		num_rx_queues =
+		(u16)p_hwfn->hw_info.p_igu_info->usage.free_cnt_iov;
+	p_hwfn->hw_info.p_igu_info->usage.free_cnt_iov -= num_rx_queues;
 
 	SET_FIELD(val, IGU_MAPPING_LINE_FUNCTION_NUMBER, vf->abs_vf_id);
 	SET_FIELD(val, IGU_MAPPING_LINE_VALID, 1);
 	SET_FIELD(val, IGU_MAPPING_LINE_PF_VALID, 0);
 
-	while ((qid < num_rx_queues) &&
-	       (igu_id < ECORE_MAPPING_MEMORY_SIZE(p_hwfn->p_dev))) {
-		if (igu_blocks[igu_id].status & ECORE_IGU_STATUS_FREE) {
-			struct cau_sb_entry sb_entry;
+	for (qid = 0; qid < num_rx_queues; qid++) {
+		p_block = ecore_get_igu_free_sb(p_hwfn, false);
+		vf->igu_sbs[qid] = p_block->igu_sb_id;
+		p_block->status &= ~ECORE_IGU_STATUS_FREE;
+		SET_FIELD(val, IGU_MAPPING_LINE_VECTOR_NUMBER, qid);
 
-			vf->igu_sbs[qid] = (u16)igu_id;
-			igu_blocks[igu_id].status &= ~ECORE_IGU_STATUS_FREE;
+		ecore_wr(p_hwfn, p_ptt,
+			 IGU_REG_MAPPING_MEMORY +
+			 sizeof(u32) * p_block->igu_sb_id, val);
 
-			SET_FIELD(val, IGU_MAPPING_LINE_VECTOR_NUMBER, qid);
-
-			ecore_wr(p_hwfn, p_ptt,
-				 IGU_REG_MAPPING_MEMORY + sizeof(u32) * igu_id,
-				 val);
-
-			/* Configure igu sb in CAU which were marked valid */
-			ecore_init_cau_sb_entry(p_hwfn, &sb_entry,
-						p_hwfn->rel_pf_id,
-						vf->abs_vf_id, 1);
-			ecore_dmae_host2grc(p_hwfn, p_ptt,
-					    (u64)(osal_uintptr_t)&sb_entry,
-					    CAU_REG_SB_VAR_MEMORY +
-					    igu_id * sizeof(u64), 2, 0);
-			qid++;
-		}
-		igu_id++;
+		/* Configure igu sb in CAU which were marked valid */
+		ecore_init_cau_sb_entry(p_hwfn, &sb_entry,
+					p_hwfn->rel_pf_id,
+					vf->abs_vf_id, 1);
+		ecore_dmae_host2grc(p_hwfn, p_ptt,
+				    (u64)(osal_uintptr_t)&sb_entry,
+				    CAU_REG_SB_VAR_MEMORY +
+				    p_block->igu_sb_id * sizeof(u64), 2, 0);
 	}
 
 	vf->num_sbs = (u8)num_rx_queues;
@@ -1009,10 +1019,8 @@ static void ecore_iov_free_vf_igu_sbs(struct ecore_hwfn *p_hwfn,
 		SET_FIELD(val, IGU_MAPPING_LINE_VALID, 0);
 		ecore_wr(p_hwfn, p_ptt, addr, val);
 
-		p_info->igu_map.igu_blocks[igu_id].status |=
-		    ECORE_IGU_STATUS_FREE;
-
-		p_hwfn->hw_info.p_igu_info->free_blks++;
+		p_info->entry[igu_id].status |= ECORE_IGU_STATUS_FREE;
+		p_hwfn->hw_info.p_igu_info->usage.free_cnt_iov++;
 	}
 
 	vf->num_sbs = 0;
@@ -1110,34 +1118,28 @@ ecore_iov_init_hw_for_vf(struct ecore_hwfn *p_hwfn,
 	vf->vport_id = p_params->vport_id;
 	vf->rss_eng_id = p_params->rss_eng_id;
 
-	/* Perform sanity checking on the requested queue_id */
+	/* Since it's possible to relocate SBs, it's a bit difficult to check
+	 * things here. Simply check whether the index falls in the range
+	 * belonging to the PF.
+	 */
 	for (i = 0; i < p_params->num_queues; i++) {
-		u16 min_vf_qzone = (u16)FEAT_NUM(p_hwfn, ECORE_PF_L2_QUE);
-		u16 max_vf_qzone = min_vf_qzone +
-				   FEAT_NUM(p_hwfn, ECORE_VF_L2_QUE) - 1;
-
 		qid = p_params->req_rx_queue[i];
-		if (qid < min_vf_qzone || qid > max_vf_qzone) {
+		if (qid > (u16)RESC_NUM(p_hwfn, ECORE_L2_QUEUE)) {
 			DP_NOTICE(p_hwfn, true,
-				  "Can't enable Rx qid [%04x] for VF[%d]: qids [0x%04x,...,0x%04x] available\n",
+				  "Can't enable Rx qid [%04x] for VF[%d]: qids [0,,...,0x%04x] available\n",
 				  qid, p_params->rel_vf_id,
-				  min_vf_qzone, max_vf_qzone);
+				  (u16)RESC_NUM(p_hwfn, ECORE_L2_QUEUE));
 			return ECORE_INVAL;
 		}
 
 		qid = p_params->req_tx_queue[i];
-		if (qid > max_vf_qzone) {
+		if (qid > (u16)RESC_NUM(p_hwfn, ECORE_L2_QUEUE)) {
 			DP_NOTICE(p_hwfn, true,
-				  "Can't enable Tx qid [%04x] for VF[%d]: max qid 0x%04x\n",
-				  qid, p_params->rel_vf_id, max_vf_qzone);
+				  "Can't enable Tx qid [%04x] for VF[%d]: qids [0,,...,0x%04x] available\n",
+				  qid, p_params->rel_vf_id,
+				  (u16)RESC_NUM(p_hwfn, ECORE_L2_QUEUE));
 			return ECORE_INVAL;
 		}
-
-		/* If client *really* wants, Tx qid can be shared with PF */
-		if (qid < min_vf_qzone)
-			DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
-				   "VF[%d] is using PF qid [0x%04x] for Txq[0x%02x]\n",
-				   p_params->rel_vf_id, qid, i);
 	}
 
 	/* Limit number of queues according to number of CIDs */
@@ -1307,8 +1309,7 @@ static void ecore_iov_unlock_vf_pf_channel(struct ecore_hwfn *p_hwfn,
 }
 
 /* place a given tlv on the tlv buffer, continuing current tlv list */
-void *ecore_add_tlv(struct ecore_hwfn *p_hwfn,
-		    u8 **offset, u16 type, u16 length)
+void *ecore_add_tlv(u8 **offset, u16 type, u16 length)
 {
 	struct channel_tlv *tl = (struct channel_tlv *)*offset;
 
@@ -1364,7 +1365,12 @@ void ecore_dp_tlv_list(struct ecore_hwfn *p_hwfn, void *tlvs_list)
 static void ecore_iov_send_response(struct ecore_hwfn *p_hwfn,
 				    struct ecore_ptt *p_ptt,
 				    struct ecore_vf_info *p_vf,
-				    u16 length, u8 status)
+#ifdef CONFIG_ECORE_SW_CHANNEL
+				    u16 length,
+#else
+				    u16 OSAL_UNUSED length,
+#endif
+				    u8 status)
 {
 	struct ecore_iov_vf_mbx *mbx = &p_vf->vf_mbx;
 	struct ecore_dmae_params params;
@@ -1378,7 +1384,7 @@ static void ecore_iov_send_response(struct ecore_hwfn *p_hwfn,
 	mbx->sw_mbx.response_size =
 	    length + sizeof(struct channel_list_end_tlv);
 
-	if (!p_hwfn->p_dev->b_hw_channel)
+	if (!p_vf->b_hw_channel)
 		return;
 #endif
 
@@ -1394,17 +1400,22 @@ static void ecore_iov_send_response(struct ecore_hwfn *p_hwfn,
 			     (sizeof(union pfvf_tlvs) - sizeof(u64)) / 4,
 			     &params);
 
+	/* Once PF copies the rc to the VF, the latter can continue and
+	 * and send an additional message. So we have to make sure the
+	 * channel would be re-set to ready prior to that.
+	 */
+	REG_WR(p_hwfn,
+	       GTT_BAR0_MAP_REG_USDM_RAM +
+	       USTORM_VF_PF_CHANNEL_READY_OFFSET(eng_vf_id), 1);
+
 	ecore_dmae_host2host(p_hwfn, p_ptt, mbx->reply_phys,
 			     mbx->req_virt->first_tlv.reply_address,
 			     sizeof(u64) / 4, &params);
 
-	REG_WR(p_hwfn,
-	       GTT_BAR0_MAP_REG_USDM_RAM +
-	       USTORM_VF_PF_CHANNEL_READY_OFFSET(eng_vf_id), 1);
+	OSAL_IOV_PF_RESP_TYPE(p_hwfn, p_vf->relative_vf_id, status);
 }
 
-static u16 ecore_iov_vport_to_tlv(struct ecore_hwfn *p_hwfn,
-				  enum ecore_iov_vport_update_flag flag)
+static u16 ecore_iov_vport_to_tlv(enum ecore_iov_vport_update_flag flag)
 {
 	switch (flag) {
 	case ECORE_IOV_VP_UPDATE_ACTIVATE:
@@ -1442,15 +1453,15 @@ static u16 ecore_iov_prep_vp_update_resp_tlvs(struct ecore_hwfn *p_hwfn,
 	size = sizeof(struct pfvf_def_resp_tlv);
 	total_len = size;
 
-	ecore_add_tlv(p_hwfn, &p_mbx->offset, CHANNEL_TLV_VPORT_UPDATE, size);
+	ecore_add_tlv(&p_mbx->offset, CHANNEL_TLV_VPORT_UPDATE, size);
 
 	/* Prepare response for all extended tlvs if they are found by PF */
 	for (i = 0; i < ECORE_IOV_VP_UPDATE_MAX; i++) {
 		if (!(tlvs_mask & (1 << i)))
 			continue;
 
-		resp = ecore_add_tlv(p_hwfn, &p_mbx->offset,
-				     ecore_iov_vport_to_tlv(p_hwfn, i), size);
+		resp = ecore_add_tlv(&p_mbx->offset, ecore_iov_vport_to_tlv(i),
+				     size);
 
 		if (tlvs_accepted & (1 << i))
 			resp->hdr.status = status;
@@ -1460,12 +1471,13 @@ static u16 ecore_iov_prep_vp_update_resp_tlvs(struct ecore_hwfn *p_hwfn,
 		DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
 			   "VF[%d] - vport_update resp: TLV %d, status %02x\n",
 			   p_vf->relative_vf_id,
-			   ecore_iov_vport_to_tlv(p_hwfn, i), resp->hdr.status);
+			   ecore_iov_vport_to_tlv(i),
+			   resp->hdr.status);
 
 		total_len += size;
 	}
 
-	ecore_add_tlv(p_hwfn, &p_mbx->offset, CHANNEL_TLV_LIST_END,
+	ecore_add_tlv(&p_mbx->offset, CHANNEL_TLV_LIST_END,
 		      sizeof(struct channel_list_end_tlv));
 
 	return total_len;
@@ -1480,13 +1492,11 @@ static void ecore_iov_prepare_resp(struct ecore_hwfn *p_hwfn,
 
 	mbx->offset = (u8 *)mbx->reply_virt;
 
-	ecore_add_tlv(p_hwfn, &mbx->offset, type, length);
-	ecore_add_tlv(p_hwfn, &mbx->offset, CHANNEL_TLV_LIST_END,
+	ecore_add_tlv(&mbx->offset, type, length);
+	ecore_add_tlv(&mbx->offset, CHANNEL_TLV_LIST_END,
 		      sizeof(struct channel_list_end_tlv));
 
 	ecore_iov_send_response(p_hwfn, p_ptt, vf_info, length, status);
-
-	OSAL_IOV_PF_RESP_TYPE(p_hwfn, vf_info->relative_vf_id, status);
 }
 
 struct ecore_public_vf_info
@@ -1535,6 +1545,60 @@ static void ecore_iov_vf_cleanup(struct ecore_hwfn *p_hwfn,
 	OSAL_IOV_VF_CLEANUP(p_hwfn, p_vf->relative_vf_id);
 }
 
+/* Returns either 0, or log(size) */
+static u32 ecore_iov_vf_db_bar_size(struct ecore_hwfn *p_hwfn,
+				    struct ecore_ptt *p_ptt)
+{
+	u32 val = ecore_rd(p_hwfn, p_ptt, PGLUE_B_REG_VF_BAR1_SIZE);
+
+	if (val)
+		return val + 11;
+	return 0;
+}
+
+static void
+ecore_iov_vf_mbx_acquire_resc_cids(struct ecore_hwfn *p_hwfn,
+				   struct ecore_ptt *p_ptt,
+				   struct ecore_vf_info *p_vf,
+				   struct vf_pf_resc_request *p_req,
+				   struct pf_vf_resc *p_resp)
+{
+	u8 num_vf_cons = p_hwfn->pf_params.eth_pf_params.num_vf_cons;
+	u8 db_size = DB_ADDR_VF(1, DQ_DEMS_LEGACY) -
+		     DB_ADDR_VF(0, DQ_DEMS_LEGACY);
+	u32 bar_size;
+
+	p_resp->num_cids = OSAL_MIN_T(u8, p_req->num_cids, num_vf_cons);
+
+	/* If VF didn't bother asking for QIDs than don't bother limiting
+	 * number of CIDs. The VF doesn't care about the number, and this
+	 * has the likely result of causing an additional acquisition.
+	 */
+	if (!(p_vf->acquire.vfdev_info.capabilities &
+	      VFPF_ACQUIRE_CAP_QUEUE_QIDS))
+		return;
+
+	/* If doorbell bar was mapped by VF, limit the VF CIDs to an amount
+	 * that would make sure doorbells for all CIDs fall within the bar.
+	 * If it doesn't, make sure regview window is sufficient.
+	 */
+	if (p_vf->acquire.vfdev_info.capabilities &
+	    VFPF_ACQUIRE_CAP_PHYSICAL_BAR) {
+		bar_size = ecore_iov_vf_db_bar_size(p_hwfn, p_ptt);
+		if (bar_size)
+			bar_size = 1 << bar_size;
+
+		if (ECORE_IS_CMT(p_hwfn->p_dev))
+			bar_size /= 2;
+	} else {
+		bar_size = PXP_VF_BAR0_DQ_LENGTH;
+	}
+
+	if (bar_size / db_size < 256)
+		p_resp->num_cids = OSAL_MIN_T(u8, p_resp->num_cids,
+					      (u8)(bar_size / db_size));
+}
+
 static u8 ecore_iov_vf_mbx_acquire_resc(struct ecore_hwfn *p_hwfn,
 					struct ecore_ptt *p_ptt,
 					struct ecore_vf_info *p_vf,
@@ -1571,6 +1635,8 @@ static u8 ecore_iov_vf_mbx_acquire_resc(struct ecore_hwfn *p_hwfn,
 	p_resp->num_vlan_filters = OSAL_MIN_T(u8, p_vf->num_vlan_filters,
 					      p_req->num_vlan_filters);
 
+	ecore_iov_vf_mbx_acquire_resc_cids(p_hwfn, p_ptt, p_vf, p_req, p_resp);
+
 	/* This isn't really needed/enforced, but some legacy VFs might depend
 	 * on the correct filling of this field.
 	 */
@@ -1582,18 +1648,18 @@ static u8 ecore_iov_vf_mbx_acquire_resc(struct ecore_hwfn *p_hwfn,
 	    p_resp->num_sbs < p_req->num_sbs ||
 	    p_resp->num_mac_filters < p_req->num_mac_filters ||
 	    p_resp->num_vlan_filters < p_req->num_vlan_filters ||
-	    p_resp->num_mc_filters < p_req->num_mc_filters) {
+	    p_resp->num_mc_filters < p_req->num_mc_filters ||
+	    p_resp->num_cids < p_req->num_cids) {
 		DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
-			   "VF[%d] - Insufficient resources: rxq [%02x/%02x]"
-			   " txq [%02x/%02x] sbs [%02x/%02x] mac [%02x/%02x]"
-			   " vlan [%02x/%02x] mc [%02x/%02x]\n",
+			   "VF[%d] - Insufficient resources: rxq [%02x/%02x] txq [%02x/%02x] sbs [%02x/%02x] mac [%02x/%02x] vlan [%02x/%02x] mc [%02x/%02x] cids [%02x/%02x]\n",
 			   p_vf->abs_vf_id,
 			   p_req->num_rxqs, p_resp->num_rxqs,
 			   p_req->num_rxqs, p_resp->num_txqs,
 			   p_req->num_sbs, p_resp->num_sbs,
 			   p_req->num_mac_filters, p_resp->num_mac_filters,
 			   p_req->num_vlan_filters, p_resp->num_vlan_filters,
-			   p_req->num_mc_filters, p_resp->num_mc_filters);
+			   p_req->num_mc_filters, p_resp->num_mc_filters,
+			   p_req->num_cids, p_resp->num_cids);
 
 		/* Some legacy OSes are incapable of correctly handling this
 		 * failure.
@@ -1610,8 +1676,7 @@ static u8 ecore_iov_vf_mbx_acquire_resc(struct ecore_hwfn *p_hwfn,
 	return PFVF_STATUS_SUCCESS;
 }
 
-static void ecore_iov_vf_mbx_acquire_stats(struct ecore_hwfn *p_hwfn,
-					   struct pfvf_stats_info *p_stats)
+static void ecore_iov_vf_mbx_acquire_stats(struct pfvf_stats_info *p_stats)
 {
 	p_stats->mstats.address = PXP_VF_BAR0_START_MSDM_ZONE_B +
 				  OFFSETOF(struct mstorm_vf_zone,
@@ -1693,7 +1758,7 @@ static void ecore_iov_vf_mbx_acquire(struct ecore_hwfn       *p_hwfn,
 	}
 
 	/* On 100g PFs, prevent old VFs from loading */
-	if ((p_hwfn->p_dev->num_hwfns > 1) &&
+	if (ECORE_IS_CMT(p_hwfn->p_dev) &&
 	    !(req->vfdev_info.capabilities & VFPF_ACQUIRE_CAP_100G)) {
 		DP_INFO(p_hwfn,
 			"VF[%d] is running an old driver that doesn't support"
@@ -1721,14 +1786,24 @@ static void ecore_iov_vf_mbx_acquire(struct ecore_hwfn       *p_hwfn,
 	/* fill in pfdev info */
 	pfdev_info->chip_num = p_hwfn->p_dev->chip_num;
 	pfdev_info->db_size = 0;	/* @@@ TBD MichalK Vf Doorbells */
-	pfdev_info->indices_per_sb = PIS_PER_SB;
+	pfdev_info->indices_per_sb = PIS_PER_SB_E4;
 
 	pfdev_info->capabilities = PFVF_ACQUIRE_CAP_DEFAULT_UNTAGGED |
 				   PFVF_ACQUIRE_CAP_POST_FW_OVERRIDE;
-	if (p_hwfn->p_dev->num_hwfns > 1)
+	if (ECORE_IS_CMT(p_hwfn->p_dev))
 		pfdev_info->capabilities |= PFVF_ACQUIRE_CAP_100G;
 
-	ecore_iov_vf_mbx_acquire_stats(p_hwfn, &pfdev_info->stats_info);
+	/* Share our ability to use multiple queue-ids only with VFs
+	 * that request it.
+	 */
+	if (req->vfdev_info.capabilities & VFPF_ACQUIRE_CAP_QUEUE_QIDS)
+		pfdev_info->capabilities |= PFVF_ACQUIRE_CAP_QUEUE_QIDS;
+
+	/* Share the sizes of the bars with VF */
+	resp->pfdev_info.bar_size = (u8)ecore_iov_vf_db_bar_size(p_hwfn,
+							     p_ptt);
+
+	ecore_iov_vf_mbx_acquire_stats(&pfdev_info->stats_info);
 
 	OSAL_MEMCPY(pfdev_info->port_mac, p_hwfn->hw_info.hw_mac_addr,
 		    ETH_ALEN);
@@ -1969,8 +2044,7 @@ ecore_iov_configure_vport_forced(struct ecore_hwfn *p_hwfn,
 			struct ecore_queue_cid *p_cid = OSAL_NULL;
 
 			/* There can be at most 1 Rx queue on qzone. Find it */
-			p_cid = ecore_iov_get_vf_rx_queue_cid(p_hwfn, p_vf,
-							      p_queue);
+			p_cid = ecore_iov_get_vf_rx_queue_cid(p_queue);
 			if (p_cid == OSAL_NULL)
 				continue;
 
@@ -2106,16 +2180,19 @@ static void ecore_iov_vf_mbx_stop_vport(struct ecore_hwfn *p_hwfn,
 	u8 status = PFVF_STATUS_SUCCESS;
 	enum _ecore_status_t rc;
 
+	OSAL_IOV_VF_VPORT_STOP(p_hwfn, vf);
 	vf->vport_instance--;
 	vf->spoof_chk = false;
 
-	if ((ecore_iov_validate_active_rxq(p_hwfn, vf)) ||
-	    (ecore_iov_validate_active_txq(p_hwfn, vf))) {
+	if ((ecore_iov_validate_active_rxq(vf)) ||
+	    (ecore_iov_validate_active_txq(vf))) {
 		vf->b_malicious = true;
 		DP_NOTICE(p_hwfn, false,
 			  "VF [%02x] - considered malicious;"
 			  " Unable to stop RX/TX queuess\n",
 			  vf->abs_vf_id);
+		status = PFVF_STATUS_MALICIOUS;
+		goto out;
 	}
 
 	rc = ecore_sp_vport_stop(p_hwfn, vf->opaque_fid, vf->vport_id);
@@ -2129,6 +2206,7 @@ static void ecore_iov_vf_mbx_stop_vport(struct ecore_hwfn *p_hwfn,
 	vf->configured_features = 0;
 	OSAL_MEMSET(&vf->shadow_config, 0, sizeof(vf->shadow_config));
 
+out:
 	ecore_iov_prepare_resp(p_hwfn, p_ptt, vf, CHANNEL_TLV_VPORT_TEARDOWN,
 			       sizeof(struct pfvf_def_resp_tlv), status);
 }
@@ -2154,9 +2232,8 @@ static void ecore_iov_vf_mbx_start_rxq_resp(struct ecore_hwfn *p_hwfn,
 	else
 		length = sizeof(struct pfvf_def_resp_tlv);
 
-	p_tlv = ecore_add_tlv(p_hwfn, &mbx->offset, CHANNEL_TLV_START_RXQ,
-			      length);
-	ecore_add_tlv(p_hwfn, &mbx->offset, CHANNEL_TLV_LIST_END,
+	p_tlv = ecore_add_tlv(&mbx->offset, CHANNEL_TLV_START_RXQ, length);
+	ecore_add_tlv(&mbx->offset, CHANNEL_TLV_LIST_END,
 		      sizeof(struct channel_list_end_tlv));
 
 	/* Update the TLV with the response */
@@ -2171,6 +2248,42 @@ static void ecore_iov_vf_mbx_start_rxq_resp(struct ecore_hwfn *p_hwfn,
 	ecore_iov_send_response(p_hwfn, p_ptt, vf, length, status);
 }
 
+static u8 ecore_iov_vf_mbx_qid(struct ecore_hwfn *p_hwfn,
+			       struct ecore_vf_info *p_vf, bool b_is_tx)
+{
+	struct ecore_iov_vf_mbx *p_mbx = &p_vf->vf_mbx;
+	struct vfpf_qid_tlv *p_qid_tlv;
+
+	/* Search for the qid if the VF published if its going to provide it */
+	if (!(p_vf->acquire.vfdev_info.capabilities &
+	      VFPF_ACQUIRE_CAP_QUEUE_QIDS)) {
+		if (b_is_tx)
+			return ECORE_IOV_LEGACY_QID_TX;
+		else
+			return ECORE_IOV_LEGACY_QID_RX;
+	}
+
+	p_qid_tlv = (struct vfpf_qid_tlv *)
+		    ecore_iov_search_list_tlvs(p_hwfn, p_mbx->req_virt,
+					       CHANNEL_TLV_QID);
+	if (p_qid_tlv == OSAL_NULL) {
+		DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
+			   "VF[%2x]: Failed to provide qid\n",
+			   p_vf->relative_vf_id);
+
+		return ECORE_IOV_QID_INVALID;
+	}
+
+	if (p_qid_tlv->qid >= MAX_QUEUES_PER_QZONE) {
+		DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
+			   "VF[%02x]: Provided qid out-of-bounds %02x\n",
+			   p_vf->relative_vf_id, p_qid_tlv->qid);
+		return ECORE_IOV_QID_INVALID;
+	}
+
+	return p_qid_tlv->qid;
+}
+
 static void ecore_iov_vf_mbx_start_rxq(struct ecore_hwfn *p_hwfn,
 				       struct ecore_ptt *p_ptt,
 				       struct ecore_vf_info *vf)
@@ -2179,11 +2292,11 @@ static void ecore_iov_vf_mbx_start_rxq(struct ecore_hwfn *p_hwfn,
 	struct ecore_queue_cid_vf_params vf_params;
 	struct ecore_iov_vf_mbx *mbx = &vf->vf_mbx;
 	u8 status = PFVF_STATUS_NO_RESOURCE;
+	u8 qid_usage_idx, vf_legacy = 0;
 	struct ecore_vf_queue *p_queue;
 	struct vfpf_start_rxq_tlv *req;
 	struct ecore_queue_cid *p_cid;
-	bool b_legacy_vf = false;
-	u8 qid_usage_idx;
+	struct ecore_sb_info sb_dummy;
 	enum _ecore_status_t rc;
 
 	req = &mbx->req_virt->start_rxq;
@@ -2193,45 +2306,43 @@ static void ecore_iov_vf_mbx_start_rxq(struct ecore_hwfn *p_hwfn,
 	    !ecore_iov_validate_sb(p_hwfn, vf, req->hw_sb))
 		goto out;
 
-	/* Legacy VFs made assumptions on the CID their queues connected to,
-	 * assuming queue X used CID X.
-	 * TODO - need to validate that there was no official release post
-	 * the current legacy scheme that still made that assumption.
-	 */
-	if (vf->acquire.vfdev_info.eth_fp_hsi_minor ==
-	    ETH_HSI_VER_NO_PKT_LEN_TUNN)
-		b_legacy_vf = true;
+	qid_usage_idx = ecore_iov_vf_mbx_qid(p_hwfn, vf, false);
+	if (qid_usage_idx == ECORE_IOV_QID_INVALID)
+		goto out;
+
+	p_queue = &vf->vf_queues[req->rx_qid];
+	if (p_queue->cids[qid_usage_idx].p_cid)
+		goto out;
+
+	vf_legacy = ecore_vf_calculate_legacy(vf);
 
 	/* Acquire a new queue-cid */
-	p_queue = &vf->vf_queues[req->rx_qid];
-
 	OSAL_MEMSET(&params, 0, sizeof(params));
 	params.queue_id = (u8)p_queue->fw_rx_qid;
 	params.vport_id = vf->vport_id;
 	params.stats_id = vf->abs_vf_id + 0x10;
-	params.sb = req->hw_sb;
-	params.sb_idx = req->sb_index;
 
-	/* TODO - set qid_usage_idx according to extended TLV. For now, use
-	 * '0' for Rx.
-	 */
-	qid_usage_idx = 0;
+	/* Since IGU index is passed via sb_info, construct a dummy one */
+	OSAL_MEM_ZERO(&sb_dummy, sizeof(sb_dummy));
+	sb_dummy.igu_sb_id = req->hw_sb;
+	params.p_sb = &sb_dummy;
+	params.sb_idx = req->sb_index;
 
 	OSAL_MEM_ZERO(&vf_params, sizeof(vf_params));
 	vf_params.vfid = vf->relative_vf_id;
 	vf_params.vf_qid = (u8)req->rx_qid;
-	vf_params.b_legacy = b_legacy_vf;
+	vf_params.vf_legacy = vf_legacy;
 	vf_params.qid_usage_idx = qid_usage_idx;
 
 	p_cid = ecore_eth_queue_to_cid(p_hwfn, vf->opaque_fid,
-				       &params, &vf_params);
+				       &params, true, &vf_params);
 	if (p_cid == OSAL_NULL)
 		goto out;
 
 	/* Legacy VFs have their Producers in a different location, which they
 	 * calculate on their own and clean the producer prior to this.
 	 */
-	if (!b_legacy_vf)
+	if (!(vf_legacy & ECORE_QCID_LEGACY_VF_RX_PROD))
 		REG_WR(p_hwfn,
 		       GTT_BAR0_MAP_REG_MSDM_RAM +
 		       MSTORM_ETH_VF_PRODS_OFFSET(vf->abs_vf_id, req->rx_qid),
@@ -2254,7 +2365,8 @@ static void ecore_iov_vf_mbx_start_rxq(struct ecore_hwfn *p_hwfn,
 
 out:
 	ecore_iov_vf_mbx_start_rxq_resp(p_hwfn, p_ptt, vf, status,
-					b_legacy_vf);
+					!!(vf_legacy &
+					   ECORE_QCID_LEGACY_VF_RX_PROD));
 }
 
 static void
@@ -2382,7 +2494,7 @@ static void ecore_iov_vf_mbx_update_tunn_param(struct ecore_hwfn *p_hwfn,
 	if (b_update_required) {
 		u16 geneve_port;
 
-		rc = ecore_sp_pf_update_tunn_cfg(p_hwfn, &tunn,
+		rc = ecore_sp_pf_update_tunn_cfg(p_hwfn, p_ptt, &tunn,
 						 ECORE_SPQ_MODE_EBLOCK,
 						 OSAL_NULL);
 		if (rc != ECORE_SUCCESS)
@@ -2397,11 +2509,11 @@ static void ecore_iov_vf_mbx_update_tunn_param(struct ecore_hwfn *p_hwfn,
 	}
 
 send_resp:
-	p_resp = ecore_add_tlv(p_hwfn, &mbx->offset,
+	p_resp = ecore_add_tlv(&mbx->offset,
 			       CHANNEL_TLV_UPDATE_TUNN_PARAM, sizeof(*p_resp));
 
 	ecore_iov_pf_update_tun_response(p_resp, p_tun, tunn_feature_mask);
-	ecore_add_tlv(p_hwfn, &mbx->offset, CHANNEL_TLV_LIST_END,
+	ecore_add_tlv(&mbx->offset, CHANNEL_TLV_LIST_END,
 		      sizeof(struct channel_list_end_tlv));
 
 	ecore_iov_send_response(p_hwfn, p_ptt, p_vf, sizeof(*p_resp), status);
@@ -2433,9 +2545,8 @@ static void ecore_iov_vf_mbx_start_txq_resp(struct ecore_hwfn *p_hwfn,
 	else
 		length = sizeof(struct pfvf_def_resp_tlv);
 
-	p_tlv = ecore_add_tlv(p_hwfn, &mbx->offset, CHANNEL_TLV_START_TXQ,
-			      length);
-	ecore_add_tlv(p_hwfn, &mbx->offset, CHANNEL_TLV_LIST_END,
+	p_tlv = ecore_add_tlv(&mbx->offset, CHANNEL_TLV_START_TXQ, length);
+	ecore_add_tlv(&mbx->offset, CHANNEL_TLV_LIST_END,
 		      sizeof(struct channel_list_end_tlv));
 
 	/* Update the TLV with the response */
@@ -2456,8 +2567,8 @@ static void ecore_iov_vf_mbx_start_txq(struct ecore_hwfn *p_hwfn,
 	struct ecore_vf_queue *p_queue;
 	struct vfpf_start_txq_tlv *req;
 	struct ecore_queue_cid *p_cid;
-	bool b_legacy_vf = false;
-	u8 qid_usage_idx;
+	struct ecore_sb_info sb_dummy;
+	u8 qid_usage_idx, vf_legacy;
 	u32 cid = 0;
 	enum _ecore_status_t rc;
 	u16 pq;
@@ -2470,39 +2581,35 @@ static void ecore_iov_vf_mbx_start_txq(struct ecore_hwfn *p_hwfn,
 	    !ecore_iov_validate_sb(p_hwfn, vf, req->hw_sb))
 		goto out;
 
-	/* In case this is a legacy VF - need to know to use the right cids.
-	 * TODO - need to validate that there was no official release post
-	 * the current legacy scheme that still made that assumption.
-	 */
-	if (vf->acquire.vfdev_info.eth_fp_hsi_minor ==
-	    ETH_HSI_VER_NO_PKT_LEN_TUNN)
-		b_legacy_vf = true;
+	qid_usage_idx = ecore_iov_vf_mbx_qid(p_hwfn, vf, true);
+	if (qid_usage_idx == ECORE_IOV_QID_INVALID)
+		goto out;
+
+	p_queue = &vf->vf_queues[req->tx_qid];
+	if (p_queue->cids[qid_usage_idx].p_cid)
+		goto out;
+
+	vf_legacy = ecore_vf_calculate_legacy(vf);
 
 	/* Acquire a new queue-cid */
-	p_queue = &vf->vf_queues[req->tx_qid];
-
 	params.queue_id = p_queue->fw_tx_qid;
 	params.vport_id = vf->vport_id;
 	params.stats_id = vf->abs_vf_id + 0x10;
-	params.sb = req->hw_sb;
+
+	/* Since IGU index is passed via sb_info, construct a dummy one */
+	OSAL_MEM_ZERO(&sb_dummy, sizeof(sb_dummy));
+	sb_dummy.igu_sb_id = req->hw_sb;
+	params.p_sb = &sb_dummy;
 	params.sb_idx = req->sb_index;
-
-	/* TODO - set qid_usage_idx according to extended TLV. For now, use
-	 * '1' for Tx.
-	 */
-	qid_usage_idx = 1;
-
-	if (p_queue->cids[qid_usage_idx].p_cid)
-		goto out;
 
 	OSAL_MEM_ZERO(&vf_params, sizeof(vf_params));
 	vf_params.vfid = vf->relative_vf_id;
 	vf_params.vf_qid = (u8)req->tx_qid;
-	vf_params.b_legacy = b_legacy_vf;
+	vf_params.vf_legacy = vf_legacy;
 	vf_params.qid_usage_idx = qid_usage_idx;
 
 	p_cid = ecore_eth_queue_to_cid(p_hwfn, vf->opaque_fid,
-				       &params, &vf_params);
+				       &params, false, &vf_params);
 	if (p_cid == OSAL_NULL)
 		goto out;
 
@@ -2528,80 +2635,74 @@ out:
 static enum _ecore_status_t ecore_iov_vf_stop_rxqs(struct ecore_hwfn *p_hwfn,
 						   struct ecore_vf_info *vf,
 						   u16 rxq_id,
-						   u8 num_rxqs,
+						   u8 qid_usage_idx,
 						   bool cqe_completion)
 {
+	struct ecore_vf_queue *p_queue;
 	enum _ecore_status_t rc = ECORE_SUCCESS;
-	int qid, i;
 
-	/* TODO - improve validation [wrap around] */
-	if (rxq_id + num_rxqs > OSAL_ARRAY_SIZE(vf->vf_queues))
+	if (!ecore_iov_validate_rxq(p_hwfn, vf, rxq_id,
+				    ECORE_IOV_VALIDATE_Q_NA)) {
+		DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
+			   "VF[%d] Tried Closing Rx 0x%04x.%02x which is inactive\n",
+			   vf->relative_vf_id, rxq_id, qid_usage_idx);
 		return ECORE_INVAL;
-
-	for (qid = rxq_id; qid < rxq_id + num_rxqs; qid++) {
-		struct ecore_vf_queue *p_queue = &vf->vf_queues[qid];
-		struct ecore_queue_cid **pp_cid = OSAL_NULL;
-
-		/* There can be at most a single Rx per qzone. Find it */
-		for (i = 0; i < MAX_QUEUES_PER_QZONE; i++) {
-			if (p_queue->cids[i].p_cid &&
-			    !p_queue->cids[i].b_is_tx) {
-				pp_cid = &p_queue->cids[i].p_cid;
-				break;
-			}
-		}
-		if (pp_cid == OSAL_NULL) {
-			DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
-				   "Ignoring VF[%02x] request of closing Rx queue %04x - closed\n",
-				   vf->relative_vf_id, qid);
-			continue;
-		}
-
-		rc = ecore_eth_rx_queue_stop(p_hwfn, *pp_cid,
-					     false, cqe_completion);
-		if (rc != ECORE_SUCCESS)
-			return rc;
-
-		*pp_cid = OSAL_NULL;
-		vf->num_active_rxqs--;
 	}
 
-	return rc;
+	p_queue = &vf->vf_queues[rxq_id];
+
+	/* We've validated the index and the existence of the active RXQ -
+	 * now we need to make sure that it's using the correct qid.
+	 */
+	if (!p_queue->cids[qid_usage_idx].p_cid ||
+	    p_queue->cids[qid_usage_idx].b_is_tx) {
+		struct ecore_queue_cid *p_cid;
+
+		p_cid = ecore_iov_get_vf_rx_queue_cid(p_queue);
+		DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
+			   "VF[%d] - Tried Closing Rx 0x%04x.%02x, but Rx is at %04x.%02x\n",
+			    vf->relative_vf_id, rxq_id, qid_usage_idx,
+			    rxq_id, p_cid->qid_usage_idx);
+		return ECORE_INVAL;
+	}
+
+	/* Now that we know we have a valid Rx-queue - close it */
+	rc = ecore_eth_rx_queue_stop(p_hwfn,
+				     p_queue->cids[qid_usage_idx].p_cid,
+				     false, cqe_completion);
+	if (rc != ECORE_SUCCESS)
+		return rc;
+
+	p_queue->cids[qid_usage_idx].p_cid = OSAL_NULL;
+	vf->num_active_rxqs--;
+
+	return ECORE_SUCCESS;
 }
 
 static enum _ecore_status_t ecore_iov_vf_stop_txqs(struct ecore_hwfn *p_hwfn,
 						   struct ecore_vf_info *vf,
-						   u16 txq_id, u8 num_txqs)
+						   u16 txq_id,
+						   u8 qid_usage_idx)
 {
-	enum _ecore_status_t rc = ECORE_SUCCESS;
 	struct ecore_vf_queue *p_queue;
-	int qid, j;
+	enum _ecore_status_t rc = ECORE_SUCCESS;
 
 	if (!ecore_iov_validate_txq(p_hwfn, vf, txq_id,
-				    ECORE_IOV_VALIDATE_Q_NA) ||
-	    !ecore_iov_validate_txq(p_hwfn, vf, txq_id + num_txqs,
 				    ECORE_IOV_VALIDATE_Q_NA))
 		return ECORE_INVAL;
 
-	for (qid = txq_id; qid < txq_id + num_txqs; qid++) {
-		p_queue = &vf->vf_queues[qid];
-		for (j = 0; j < MAX_QUEUES_PER_QZONE; j++) {
-			if (p_queue->cids[j].p_cid == OSAL_NULL)
-				continue;
+	p_queue = &vf->vf_queues[txq_id];
+	if (!p_queue->cids[qid_usage_idx].p_cid ||
+	    !p_queue->cids[qid_usage_idx].b_is_tx)
+		return ECORE_INVAL;
 
-			if (!p_queue->cids[j].b_is_tx)
-				continue;
+	rc = ecore_eth_tx_queue_stop(p_hwfn,
+				     p_queue->cids[qid_usage_idx].p_cid);
+	if (rc != ECORE_SUCCESS)
+		return rc;
 
-			rc = ecore_eth_tx_queue_stop(p_hwfn,
-						     p_queue->cids[j].p_cid);
-			if (rc != ECORE_SUCCESS)
-				return rc;
-
-			p_queue->cids[j].p_cid = OSAL_NULL;
-		}
-	}
-
-	return rc;
+	p_queue->cids[qid_usage_idx].p_cid = OSAL_NULL;
+	return ECORE_SUCCESS;
 }
 
 static void ecore_iov_vf_mbx_stop_rxqs(struct ecore_hwfn *p_hwfn,
@@ -2610,20 +2711,34 @@ static void ecore_iov_vf_mbx_stop_rxqs(struct ecore_hwfn *p_hwfn,
 {
 	u16 length = sizeof(struct pfvf_def_resp_tlv);
 	struct ecore_iov_vf_mbx *mbx = &vf->vf_mbx;
-	u8 status = PFVF_STATUS_SUCCESS;
+	u8 status = PFVF_STATUS_FAILURE;
 	struct vfpf_stop_rxqs_tlv *req;
+	u8 qid_usage_idx;
 	enum _ecore_status_t rc;
 
-	/* We give the option of starting from qid != 0, in this case we
-	 * need to make sure that qid + num_qs doesn't exceed the actual
-	 * amount of queues that exist.
+	/* Starting with CHANNEL_TLV_QID, it's assumed the 'num_rxqs'
+	 * would be one. Since no older ecore passed multiple queues
+	 * using this API, sanitize on the value.
 	 */
 	req = &mbx->req_virt->stop_rxqs;
-	rc = ecore_iov_vf_stop_rxqs(p_hwfn, vf, req->rx_qid,
-				    req->num_rxqs, req->cqe_completion);
-	if (rc)
-		status = PFVF_STATUS_FAILURE;
+	if (req->num_rxqs != 1) {
+		DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
+			   "Odd; VF[%d] tried stopping multiple Rx queues\n",
+			   vf->relative_vf_id);
+		status = PFVF_STATUS_NOT_SUPPORTED;
+		goto out;
+	}
 
+	/* Find which qid-index is associated with the queue */
+	qid_usage_idx = ecore_iov_vf_mbx_qid(p_hwfn, vf, false);
+	if (qid_usage_idx == ECORE_IOV_QID_INVALID)
+		goto out;
+
+	rc = ecore_iov_vf_stop_rxqs(p_hwfn, vf, req->rx_qid,
+				    qid_usage_idx, req->cqe_completion);
+	if (rc == ECORE_SUCCESS)
+		status = PFVF_STATUS_SUCCESS;
+out:
 	ecore_iov_prepare_resp(p_hwfn, p_ptt, vf, CHANNEL_TLV_STOP_RXQS,
 			       length, status);
 }
@@ -2634,19 +2749,35 @@ static void ecore_iov_vf_mbx_stop_txqs(struct ecore_hwfn *p_hwfn,
 {
 	u16 length = sizeof(struct pfvf_def_resp_tlv);
 	struct ecore_iov_vf_mbx *mbx = &vf->vf_mbx;
-	u8 status = PFVF_STATUS_SUCCESS;
+	u8 status = PFVF_STATUS_FAILURE;
 	struct vfpf_stop_txqs_tlv *req;
+	u8 qid_usage_idx;
 	enum _ecore_status_t rc;
 
-	/* We give the option of starting from qid != 0, in this case we
-	 * need to make sure that qid + num_qs doesn't exceed the actual
-	 * amount of queues that exist.
+	/* Starting with CHANNEL_TLV_QID, it's assumed the 'num_txqs'
+	 * would be one. Since no older ecore passed multiple queues
+	 * using this API, sanitize on the value.
 	 */
 	req = &mbx->req_virt->stop_txqs;
-	rc = ecore_iov_vf_stop_txqs(p_hwfn, vf, req->tx_qid, req->num_txqs);
-	if (rc)
-		status = PFVF_STATUS_FAILURE;
+	if (req->num_txqs != 1) {
+		DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
+			   "Odd; VF[%d] tried stopping multiple Tx queues\n",
+			   vf->relative_vf_id);
+		status = PFVF_STATUS_NOT_SUPPORTED;
+		goto out;
+	}
 
+	/* Find which qid-index is associated with the queue */
+	qid_usage_idx = ecore_iov_vf_mbx_qid(p_hwfn, vf, true);
+	if (qid_usage_idx == ECORE_IOV_QID_INVALID)
+		goto out;
+
+	rc = ecore_iov_vf_stop_txqs(p_hwfn, vf, req->tx_qid,
+				    qid_usage_idx);
+	if (rc == ECORE_SUCCESS)
+		status = PFVF_STATUS_SUCCESS;
+
+out:
 	ecore_iov_prepare_resp(p_hwfn, p_ptt, vf, CHANNEL_TLV_STOP_TXQS,
 			       length, status);
 }
@@ -2662,6 +2793,7 @@ static void ecore_iov_vf_mbx_update_rxqs(struct ecore_hwfn *p_hwfn,
 	u8 status = PFVF_STATUS_FAILURE;
 	u8 complete_event_flg;
 	u8 complete_cqe_flg;
+	u8 qid_usage_idx;
 	enum _ecore_status_t rc;
 	u16 i;
 
@@ -2669,10 +2801,30 @@ static void ecore_iov_vf_mbx_update_rxqs(struct ecore_hwfn *p_hwfn,
 	complete_cqe_flg = !!(req->flags & VFPF_RXQ_UPD_COMPLETE_CQE_FLAG);
 	complete_event_flg = !!(req->flags & VFPF_RXQ_UPD_COMPLETE_EVENT_FLAG);
 
-	/* Validate inputs */
+	qid_usage_idx = ecore_iov_vf_mbx_qid(p_hwfn, vf, false);
+	if (qid_usage_idx == ECORE_IOV_QID_INVALID)
+		goto out;
+
+	/* Starting with the addition of CHANNEL_TLV_QID, this API started
+	 * expecting a single queue at a time. Validate this.
+	 */
+	if ((vf->acquire.vfdev_info.capabilities &
+	     VFPF_ACQUIRE_CAP_QUEUE_QIDS) &&
+	     req->num_rxqs != 1) {
+		DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
+			   "VF[%d] supports QIDs but sends multiple queues\n",
+			   vf->relative_vf_id);
+		goto out;
+	}
+
+	/* Validate inputs - for the legacy case this is still true since
+	 * qid_usage_idx for each Rx queue would be LEGACY_QID_RX.
+	 */
 	for (i = req->rx_qid; i < req->rx_qid + req->num_rxqs; i++) {
 		if (!ecore_iov_validate_rxq(p_hwfn, vf, i,
-					    ECORE_IOV_VALIDATE_Q_ENABLE)) {
+					    ECORE_IOV_VALIDATE_Q_NA) ||
+		    !vf->vf_queues[i].cids[qid_usage_idx].p_cid ||
+		    vf->vf_queues[i].cids[qid_usage_idx].b_is_tx) {
 			DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
 				   "VF[%d]: Incorrect Rxqs [%04x, %02x]\n",
 				   vf->relative_vf_id, req->rx_qid,
@@ -2682,12 +2834,9 @@ static void ecore_iov_vf_mbx_update_rxqs(struct ecore_hwfn *p_hwfn,
 	}
 
 	for (i = 0; i < req->num_rxqs; i++) {
-		struct ecore_vf_queue *p_queue;
 		u16 qid = req->rx_qid + i;
 
-		p_queue = &vf->vf_queues[qid];
-		handlers[i] = ecore_iov_get_vf_rx_queue_cid(p_hwfn, vf,
-							    p_queue);
+		handlers[i] = vf->vf_queues[qid].cids[qid_usage_idx].p_cid;
 	}
 
 	rc = ecore_sp_eth_rx_queues_update(p_hwfn, (void **)&handlers,
@@ -2696,7 +2845,7 @@ static void ecore_iov_vf_mbx_update_rxqs(struct ecore_hwfn *p_hwfn,
 					   complete_event_flg,
 					   ECORE_SPQ_MODE_EBLOCK,
 					   OSAL_NULL);
-	if (rc)
+	if (rc != ECORE_SUCCESS)
 		goto out;
 
 	status = PFVF_STATUS_SUCCESS;
@@ -2931,8 +3080,7 @@ ecore_iov_vp_update_rss_param(struct ecore_hwfn *p_hwfn,
 			goto out;
 		}
 
-		p_cid = ecore_iov_get_vf_rx_queue_cid(p_hwfn, vf,
-						      &vf->vf_queues[q_idx]);
+		p_cid = ecore_iov_get_vf_rx_queue_cid(&vf->vf_queues[q_idx]);
 		p_rss->rss_ind_table[i] = p_cid;
 	}
 
@@ -2945,7 +3093,6 @@ out:
 
 static void
 ecore_iov_vp_update_sge_tpa_param(struct ecore_hwfn *p_hwfn,
-				  struct ecore_vf_info *vf,
 				  struct ecore_sp_vport_update_params *p_data,
 				  struct ecore_sge_tpa_params *p_sge_tpa,
 				  struct ecore_iov_vf_mbx *p_mbx,
@@ -3035,7 +3182,7 @@ static void ecore_iov_vf_mbx_vport_update(struct ecore_hwfn *p_hwfn,
 	ecore_iov_vp_update_mcast_bin_param(p_hwfn, &params, mbx, &tlvs_mask);
 	ecore_iov_vp_update_accept_flag(p_hwfn, &params, mbx, &tlvs_mask);
 	ecore_iov_vp_update_accept_any_vlan(p_hwfn, &params, mbx, &tlvs_mask);
-	ecore_iov_vp_update_sge_tpa_param(p_hwfn, vf, &params,
+	ecore_iov_vp_update_sge_tpa_param(p_hwfn, &params,
 					  &sge_tpa_params, mbx, &tlvs_mask);
 
 	tlvs_accepted = tlvs_mask;
@@ -3066,8 +3213,8 @@ static void ecore_iov_vf_mbx_vport_update(struct ecore_hwfn *p_hwfn,
 				   "Upper-layer prevents said VF"
 				   " configuration\n");
 		else
-			DP_NOTICE(p_hwfn, true,
-				  "No feature tlvs found for vport update\n");
+			DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
+				   "No feature tlvs found for vport update\n");
 		status = PFVF_STATUS_NOT_SUPPORTED;
 		goto out;
 	}
@@ -3272,12 +3419,13 @@ static void ecore_iov_vf_mbx_ucast_filter(struct ecore_hwfn *p_hwfn,
 		goto out;
 	}
 
-	/* Update shadow copy of the VF configuration */
+	/* Update shadow copy of the VF configuration. In case shadow indicates
+	 * the action should be blocked return success to VF to imitate the
+	 * firmware behaviour in such case.
+	 */
 	if (ecore_iov_vf_update_unicast_shadow(p_hwfn, vf, &params) !=
-	    ECORE_SUCCESS) {
-		status = PFVF_STATUS_FAILURE;
+	    ECORE_SUCCESS)
 		goto out;
-	}
 
 	/* Determine if the unicast filtering is acceptible by PF */
 	if ((p_bulletin->valid_bitmap & (1 << VLAN_ADDR_FORCED)) &&
@@ -3382,6 +3530,76 @@ static void ecore_iov_vf_mbx_release(struct ecore_hwfn *p_hwfn,
 			       length, status);
 }
 
+static void ecore_iov_vf_pf_get_coalesce(struct ecore_hwfn *p_hwfn,
+					 struct ecore_ptt *p_ptt,
+					 struct ecore_vf_info *p_vf)
+{
+	struct ecore_iov_vf_mbx *mbx = &p_vf->vf_mbx;
+	struct pfvf_read_coal_resp_tlv *p_resp;
+	struct vfpf_read_coal_req_tlv *req;
+	u8 status = PFVF_STATUS_FAILURE;
+	struct ecore_vf_queue *p_queue;
+	struct ecore_queue_cid *p_cid;
+	enum _ecore_status_t rc = ECORE_SUCCESS;
+	u16 coal = 0, qid, i;
+	bool b_is_rx;
+
+	mbx->offset = (u8 *)mbx->reply_virt;
+	req = &mbx->req_virt->read_coal_req;
+
+	qid = req->qid;
+	b_is_rx = req->is_rx ? true : false;
+
+	if (b_is_rx) {
+		if (!ecore_iov_validate_rxq(p_hwfn, p_vf, qid,
+					    ECORE_IOV_VALIDATE_Q_ENABLE)) {
+			DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
+				   "VF[%d]: Invalid Rx queue_id = %d\n",
+				   p_vf->abs_vf_id, qid);
+			goto send_resp;
+		}
+
+		p_cid = ecore_iov_get_vf_rx_queue_cid(&p_vf->vf_queues[qid]);
+		rc = ecore_get_rxq_coalesce(p_hwfn, p_ptt, p_cid, &coal);
+		if (rc != ECORE_SUCCESS)
+			goto send_resp;
+	} else {
+		if (!ecore_iov_validate_txq(p_hwfn, p_vf, qid,
+					    ECORE_IOV_VALIDATE_Q_ENABLE)) {
+			DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
+				   "VF[%d]: Invalid Tx queue_id = %d\n",
+				   p_vf->abs_vf_id, qid);
+			goto send_resp;
+		}
+		for (i = 0; i < MAX_QUEUES_PER_QZONE; i++) {
+			p_queue = &p_vf->vf_queues[qid];
+			if ((p_queue->cids[i].p_cid == OSAL_NULL) ||
+			    (!p_queue->cids[i].b_is_tx))
+				continue;
+
+			p_cid = p_queue->cids[i].p_cid;
+
+			rc = ecore_get_txq_coalesce(p_hwfn, p_ptt,
+						    p_cid, &coal);
+			if (rc != ECORE_SUCCESS)
+				goto send_resp;
+			break;
+		}
+	}
+
+	status = PFVF_STATUS_SUCCESS;
+
+send_resp:
+	p_resp = ecore_add_tlv(&mbx->offset, CHANNEL_TLV_COALESCE_READ,
+			       sizeof(*p_resp));
+	p_resp->coal = coal;
+
+	ecore_add_tlv(&mbx->offset, CHANNEL_TLV_LIST_END,
+		      sizeof(struct channel_list_end_tlv));
+
+	ecore_iov_send_response(p_hwfn, p_ptt, p_vf, sizeof(*p_resp), status);
+}
+
 static void ecore_iov_vf_pf_set_coalesce(struct ecore_hwfn *p_hwfn,
 					 struct ecore_ptt *p_ptt,
 					 struct ecore_vf_info *vf)
@@ -3422,8 +3640,7 @@ static void ecore_iov_vf_pf_set_coalesce(struct ecore_hwfn *p_hwfn,
 		   vf->abs_vf_id, rx_coal, tx_coal, qid);
 
 	if (rx_coal) {
-		p_cid = ecore_iov_get_vf_rx_queue_cid(p_hwfn, vf,
-						      &vf->vf_queues[qid]);
+		p_cid = ecore_iov_get_vf_rx_queue_cid(&vf->vf_queues[qid]);
 
 		rc = ecore_set_rxq_coalesce(p_hwfn, p_ptt, rx_coal, p_cid);
 		if (rc != ECORE_SUCCESS) {
@@ -3432,6 +3649,7 @@ static void ecore_iov_vf_pf_set_coalesce(struct ecore_hwfn *p_hwfn,
 				   vf->abs_vf_id, vf->vf_queues[qid].fw_rx_qid);
 			goto out;
 		}
+		vf->rx_coal = rx_coal;
 	}
 
 	/* TODO - in future, it might be possible to pass this in a per-cid
@@ -3456,12 +3674,99 @@ static void ecore_iov_vf_pf_set_coalesce(struct ecore_hwfn *p_hwfn,
 				goto out;
 			}
 		}
+		vf->tx_coal = tx_coal;
 	}
 
 	status = PFVF_STATUS_SUCCESS;
 out:
 	ecore_iov_prepare_resp(p_hwfn, p_ptt, vf, CHANNEL_TLV_COALESCE_UPDATE,
 			       sizeof(struct pfvf_def_resp_tlv), status);
+}
+
+enum _ecore_status_t
+ecore_iov_pf_configure_vf_queue_coalesce(struct ecore_hwfn *p_hwfn,
+					 u16 rx_coal, u16 tx_coal,
+					 u16 vf_id, u16 qid)
+{
+	struct ecore_queue_cid *p_cid;
+	struct ecore_vf_info *vf;
+	struct ecore_ptt *p_ptt;
+	int i, rc = 0;
+
+	if (!ecore_iov_is_valid_vfid(p_hwfn, vf_id, true, true)) {
+		DP_NOTICE(p_hwfn, true,
+			  "VF[%d] - Can not set coalescing: VF is not active\n",
+			  vf_id);
+		return ECORE_INVAL;
+	}
+
+	vf = &p_hwfn->pf_iov_info->vfs_array[vf_id];
+	p_ptt = ecore_ptt_acquire(p_hwfn);
+	if (!p_ptt)
+		return ECORE_AGAIN;
+
+	if (!ecore_iov_validate_rxq(p_hwfn, vf, qid,
+				    ECORE_IOV_VALIDATE_Q_ENABLE) &&
+	    rx_coal) {
+		DP_ERR(p_hwfn, "VF[%d]: Invalid Rx queue_id = %d\n",
+		       vf->abs_vf_id, qid);
+		goto out;
+	}
+
+	if (!ecore_iov_validate_txq(p_hwfn, vf, qid,
+				    ECORE_IOV_VALIDATE_Q_ENABLE) &&
+	    tx_coal) {
+		DP_ERR(p_hwfn, "VF[%d]: Invalid Tx queue_id = %d\n",
+		       vf->abs_vf_id, qid);
+		goto out;
+	}
+
+	DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
+		   "VF[%d]: Setting coalesce for VF rx_coal = %d, tx_coal = %d at queue = %d\n",
+		   vf->abs_vf_id, rx_coal, tx_coal, qid);
+
+	if (rx_coal) {
+		p_cid = ecore_iov_get_vf_rx_queue_cid(&vf->vf_queues[qid]);
+
+		rc = ecore_set_rxq_coalesce(p_hwfn, p_ptt, rx_coal, p_cid);
+		if (rc != ECORE_SUCCESS) {
+			DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
+				   "VF[%d]: Unable to set rx queue = %d coalesce\n",
+				   vf->abs_vf_id, vf->vf_queues[qid].fw_rx_qid);
+			goto out;
+		}
+		vf->rx_coal = rx_coal;
+	}
+
+	/* TODO - in future, it might be possible to pass this in a per-cid
+	 * granularity. For now, do this for all Tx queues.
+	 */
+	if (tx_coal) {
+		struct ecore_vf_queue *p_queue = &vf->vf_queues[qid];
+
+		for (i = 0; i < MAX_QUEUES_PER_QZONE; i++) {
+			if (p_queue->cids[i].p_cid == OSAL_NULL)
+				continue;
+
+			if (!p_queue->cids[i].b_is_tx)
+				continue;
+
+			rc = ecore_set_txq_coalesce(p_hwfn, p_ptt, tx_coal,
+						    p_queue->cids[i].p_cid);
+			if (rc != ECORE_SUCCESS) {
+				DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
+					   "VF[%d]: Unable to set tx queue coalesce\n",
+					   vf->abs_vf_id);
+				goto out;
+			}
+		}
+		vf->tx_coal = tx_coal;
+	}
+
+out:
+	ecore_ptt_release(p_hwfn, p_ptt);
+
+	return rc;
 }
 
 static enum _ecore_status_t
@@ -3495,11 +3800,11 @@ static enum _ecore_status_t
 ecore_iov_vf_flr_poll_pbf(struct ecore_hwfn *p_hwfn,
 			  struct ecore_vf_info *p_vf, struct ecore_ptt *p_ptt)
 {
-	u32 cons[MAX_NUM_VOQS], distance[MAX_NUM_VOQS];
+	u32 cons[MAX_NUM_VOQS_E4], distance[MAX_NUM_VOQS_E4];
 	int i, cnt;
 
 	/* Read initial consumers & producers */
-	for (i = 0; i < MAX_NUM_VOQS; i++) {
+	for (i = 0; i < MAX_NUM_VOQS_E4; i++) {
 		u32 prod;
 
 		cons[i] = ecore_rd(p_hwfn, p_ptt,
@@ -3514,7 +3819,7 @@ ecore_iov_vf_flr_poll_pbf(struct ecore_hwfn *p_hwfn,
 	/* Wait for consumers to pass the producers */
 	i = 0;
 	for (cnt = 0; cnt < 50; cnt++) {
-		for (; i < MAX_NUM_VOQS; i++) {
+		for (; i < MAX_NUM_VOQS_E4; i++) {
 			u32 tmp;
 
 			tmp = ecore_rd(p_hwfn, p_ptt,
@@ -3524,7 +3829,7 @@ ecore_iov_vf_flr_poll_pbf(struct ecore_hwfn *p_hwfn,
 				break;
 		}
 
-		if (i == MAX_NUM_VOQS)
+		if (i == MAX_NUM_VOQS_E4)
 			break;
 
 		OSAL_MSLEEP(20);
@@ -3623,8 +3928,7 @@ cleanup:
 		ack_vfs[vfid / 32] |= (1 << (vfid % 32));
 		p_hwfn->pf_iov_info->pending_flr[rel_vf_id / 64] &=
 		    ~(1ULL << (rel_vf_id % 64));
-		p_hwfn->pf_iov_info->pending_events[rel_vf_id / 64] &=
-		    ~(1ULL << (rel_vf_id % 64));
+		p_vf->vf_mbx.b_pending_msg = false;
 	}
 
 	return rc;
@@ -3734,11 +4038,11 @@ void ecore_iov_get_link(struct ecore_hwfn *p_hwfn,
 	p_bulletin = p_vf->bulletin.p_virt;
 
 	if (p_params)
-		__ecore_vf_get_link_params(p_hwfn, p_params, p_bulletin);
+		__ecore_vf_get_link_params(p_params, p_bulletin);
 	if (p_link)
-		__ecore_vf_get_link_state(p_hwfn, p_link, p_bulletin);
+		__ecore_vf_get_link_state(p_link, p_bulletin);
 	if (p_caps)
-		__ecore_vf_get_link_caps(p_hwfn, p_caps, p_bulletin);
+		__ecore_vf_get_link_caps(p_caps, p_bulletin);
 }
 
 void ecore_iov_process_mbx_req(struct ecore_hwfn *p_hwfn,
@@ -3754,11 +4058,21 @@ void ecore_iov_process_mbx_req(struct ecore_hwfn *p_hwfn,
 	mbx = &p_vf->vf_mbx;
 
 	/* ecore_iov_process_mbx_request */
-	DP_VERBOSE(p_hwfn,
-		   ECORE_MSG_IOV,
-		   "VF[%02x]: Processing mailbox message\n", p_vf->abs_vf_id);
+#ifndef CONFIG_ECORE_SW_CHANNEL
+	if (!mbx->b_pending_msg) {
+		DP_NOTICE(p_hwfn, true,
+			  "VF[%02x]: Trying to process mailbox message when none is pending\n",
+			  p_vf->abs_vf_id);
+		return;
+	}
+	mbx->b_pending_msg = false;
+#endif
 
 	mbx->first_tlv = mbx->req_virt->first_tlv;
+
+	DP_VERBOSE(p_hwfn, ECORE_MSG_IOV,
+		   "VF[%02x]: Processing mailbox message [type %04x]\n",
+		   p_vf->abs_vf_id, mbx->first_tlv.tl.type);
 
 	OSAL_IOV_VF_MSG_TYPE(p_hwfn,
 			     p_vf->relative_vf_id,
@@ -3819,6 +4133,9 @@ void ecore_iov_process_mbx_req(struct ecore_hwfn *p_hwfn,
 			break;
 		case CHANNEL_TLV_COALESCE_UPDATE:
 			ecore_iov_vf_pf_set_coalesce(p_hwfn, p_ptt, p_vf);
+			break;
+		case CHANNEL_TLV_COALESCE_READ:
+			ecore_iov_vf_pf_get_coalesce(p_hwfn, p_ptt, p_vf);
 			break;
 		}
 	} else if (ecore_iov_tlv_supported(mbx->first_tlv.tl.type)) {
@@ -3884,26 +4201,20 @@ void ecore_iov_process_mbx_req(struct ecore_hwfn *p_hwfn,
 #endif
 }
 
-void ecore_iov_pf_add_pending_events(struct ecore_hwfn *p_hwfn, u8 vfid)
+void ecore_iov_pf_get_pending_events(struct ecore_hwfn *p_hwfn,
+				     u64 *events)
 {
-	u64 add_bit = 1ULL << (vfid % 64);
+	int i;
 
-	/* TODO - add locking mechanisms [no atomics in ecore, so we can't
-	* add the lock inside the ecore_pf_iov struct].
-	*/
-	p_hwfn->pf_iov_info->pending_events[vfid / 64] |= add_bit;
-}
+	OSAL_MEM_ZERO(events, sizeof(u64) * ECORE_VF_ARRAY_LENGTH);
 
-void ecore_iov_pf_get_and_clear_pending_events(struct ecore_hwfn *p_hwfn,
-					       u64 *events)
-{
-	u64 *p_pending_events = p_hwfn->pf_iov_info->pending_events;
+	ecore_for_each_vf(p_hwfn, i) {
+		struct ecore_vf_info *p_vf;
 
-	/* TODO - Take a lock */
-	OSAL_MEMCPY(events, p_pending_events,
-		    sizeof(u64) * ECORE_VF_ARRAY_LENGTH);
-	OSAL_MEMSET(p_pending_events, 0,
-		    sizeof(u64) * ECORE_VF_ARRAY_LENGTH);
+		p_vf = &p_hwfn->pf_iov_info->vfs_array[i];
+		if (p_vf->vf_mbx.b_pending_msg)
+			events[i / 64] |= 1ULL << (i % 64);
+	}
 }
 
 static struct ecore_vf_info *
@@ -3937,6 +4248,8 @@ static enum _ecore_status_t ecore_sriov_vfpf_msg(struct ecore_hwfn *p_hwfn,
 	 */
 	p_vf->vf_mbx.pending_req = (((u64)vf_msg->hi) << 32) | vf_msg->lo;
 
+	p_vf->vf_mbx.b_pending_msg = true;
+
 	return OSAL_PF_VF_MSG(p_hwfn, p_vf->relative_vf_id);
 }
 
@@ -3945,24 +4258,31 @@ static void ecore_sriov_vfpf_malicious(struct ecore_hwfn *p_hwfn,
 {
 	struct ecore_vf_info *p_vf;
 
-	p_vf = ecore_sriov_get_vf_from_absid(p_hwfn, p_data->vfId);
+	p_vf = ecore_sriov_get_vf_from_absid(p_hwfn, p_data->vf_id);
 
 	if (!p_vf)
 		return;
 
-	DP_INFO(p_hwfn,
-		"VF [%d] - Malicious behavior [%02x]\n",
-		p_vf->abs_vf_id, p_data->errId);
+	if (!p_vf->b_malicious) {
+		DP_NOTICE(p_hwfn, false,
+			  "VF [%d] - Malicious behavior [%02x]\n",
+			  p_vf->abs_vf_id, p_data->err_id);
 
-	p_vf->b_malicious = true;
+		p_vf->b_malicious = true;
+	} else {
+		DP_INFO(p_hwfn,
+			"VF [%d] - Malicious behavior [%02x]\n",
+			p_vf->abs_vf_id, p_data->err_id);
+	}
 
 	OSAL_PF_VF_MALICIOUS(p_hwfn, p_vf->relative_vf_id);
 }
 
-enum _ecore_status_t ecore_sriov_eqe_event(struct ecore_hwfn *p_hwfn,
-					   u8 opcode,
-					   __le16 echo,
-					   union event_ring_data *data)
+static enum _ecore_status_t ecore_sriov_eqe_event(struct ecore_hwfn *p_hwfn,
+						  u8 opcode,
+						  __le16 echo,
+						  union event_ring_data *data,
+						  u8 OSAL_UNUSED fw_return_code)
 {
 	switch (opcode) {
 	case COMMON_EVENT_VF_PF_CHANNEL:
@@ -4001,7 +4321,7 @@ u16 ecore_iov_get_next_active_vf(struct ecore_hwfn *p_hwfn, u16 rel_vf_id)
 			return i;
 
 out:
-	return E4_MAX_NUM_VFS;
+	return MAX_NUM_VFS_E4;
 }
 
 enum _ecore_status_t ecore_iov_copy_vf_msg(struct ecore_hwfn *p_hwfn,
@@ -4370,6 +4690,7 @@ enum _ecore_status_t ecore_iov_configure_tx_rate(struct ecore_hwfn *p_hwfn,
 						 struct ecore_ptt *p_ptt,
 						 int vfid, int val)
 {
+	struct ecore_mcp_link_state *p_link;
 	struct ecore_vf_info *vf;
 	u8 abs_vp_id = 0;
 	enum _ecore_status_t rc;
@@ -4383,7 +4704,10 @@ enum _ecore_status_t ecore_iov_configure_tx_rate(struct ecore_hwfn *p_hwfn,
 	if (rc != ECORE_SUCCESS)
 		return rc;
 
-	return ecore_init_vport_rl(p_hwfn, p_ptt, abs_vp_id, (u32)val);
+	p_link = &ECORE_LEADING_HWFN(p_hwfn->p_dev)->mcp_info->link_output;
+
+	return ecore_init_vport_rl(p_hwfn, p_ptt, abs_vp_id, (u32)val,
+				   p_link->speed);
 }
 
 enum _ecore_status_t ecore_iov_get_vf_stats(struct ecore_hwfn *p_hwfn,
@@ -4513,3 +4837,17 @@ ecore_iov_get_vf_min_rate(struct ecore_hwfn *p_hwfn, int vfid)
 	else
 		return 0;
 }
+
+#ifdef CONFIG_ECORE_SW_CHANNEL
+void ecore_iov_set_vf_hw_channel(struct ecore_hwfn *p_hwfn, int vfid,
+				 bool b_is_hw)
+{
+	struct ecore_vf_info *vf_info;
+
+	vf_info = ecore_iov_get_vf_info(p_hwfn, (u16)vfid, true);
+	if (!vf_info)
+		return;
+
+	vf_info->b_hw_channel = b_is_hw;
+}
+#endif

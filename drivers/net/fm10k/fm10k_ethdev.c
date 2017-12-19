@@ -1256,14 +1256,17 @@ static int
 fm10k_link_update(struct rte_eth_dev *dev,
 	__rte_unused int wait_to_complete)
 {
+	struct fm10k_dev_info *dev_info =
+		FM10K_DEV_PRIVATE_TO_INFO(dev->data->dev_private);
 	PMD_INIT_FUNC_TRACE();
 
-	/* The host-interface link is always up.  The speed is ~50Gbps per Gen3
-	 * x8 PCIe interface. For now, we leave the speed undefined since there
-	 * is no 50Gbps Ethernet. */
+	/* The speed is ~50Gbps per Gen3 x8 PCIe interface. For now, we
+	 * leave the speed undefined since there is no 50Gbps Ethernet.
+	 */
 	dev->data->dev_link.link_speed  = 0;
 	dev->data->dev_link.link_duplex = ETH_LINK_FULL_DUPLEX;
-	dev->data->dev_link.link_status = ETH_LINK_UP;
+	dev->data->dev_link.link_status =
+		dev_info->sm_down ? ETH_LINK_DOWN : ETH_LINK_UP;
 
 	return 0;
 }
@@ -1346,7 +1349,7 @@ fm10k_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats,
 	return FM10K_NB_XSTATS;
 }
 
-static void
+static int
 fm10k_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 {
 	uint64_t ipackets, opackets, ibytes, obytes;
@@ -1376,6 +1379,7 @@ fm10k_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	stats->opackets = opackets;
 	stats->ibytes = ibytes;
 	stats->obytes = obytes;
+	return 0;
 }
 
 static void
@@ -1590,7 +1594,7 @@ fm10k_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 	return 0;
 }
 
-static void
+static int
 fm10k_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 {
 	if (mask & ETH_VLAN_STRIP_MASK) {
@@ -1609,6 +1613,8 @@ fm10k_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 		if (!dev->data->dev_conf.rxmode.hw_vlan_filter)
 			PMD_INIT_LOG(ERR, "VLAN filter is always on in fm10k");
 	}
+
+	return 0;
 }
 
 /* Add/Remove a MAC address, and update filters to main VSI */
@@ -1887,7 +1893,7 @@ fm10k_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_id,
 		return -ENOMEM;
 	}
 	q->hw_ring = mz->addr;
-	q->hw_ring_phys_addr = rte_mem_phy2mch(mz->memseg_id, mz->phys_addr);
+	q->hw_ring_phys_addr = mz->iova;
 
 	/* Check if number of descs satisfied Vector requirement */
 	if (!rte_is_power_of_2(nb_desc)) {
@@ -2047,7 +2053,7 @@ fm10k_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_id,
 		return -ENOMEM;
 	}
 	q->hw_ring = mz->addr;
-	q->hw_ring_phys_addr = rte_mem_phy2mch(mz->memseg_id, mz->phys_addr);
+	q->hw_ring_phys_addr = mz->iova;
 
 	/*
 	 * allocate memory for the RS bit tracker. Enough slots to hold the
@@ -2552,6 +2558,10 @@ fm10k_dev_interrupt_handler_pf(void *param)
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint32_t cause, status;
+	struct fm10k_dev_info *dev_info =
+		FM10K_DEV_PRIVATE_TO_INFO(dev->data->dev_private);
+	int status_mbx;
+	s32 err;
 
 	if (hw->mac.type != fm10k_mac_pf)
 		return;
@@ -2568,13 +2578,68 @@ fm10k_dev_interrupt_handler_pf(void *param)
 	if (cause & FM10K_EICR_SWITCHNOTREADY)
 		PMD_INIT_LOG(ERR, "INT: Switch is not ready");
 
-	if (cause & FM10K_EICR_SWITCHREADY)
+	if (cause & FM10K_EICR_SWITCHREADY) {
 		PMD_INIT_LOG(INFO, "INT: Switch is ready");
+		if (dev_info->sm_down == 1) {
+			fm10k_mbx_lock(hw);
+
+			/* For recreating logical ports */
+			status_mbx = hw->mac.ops.update_lport_state(hw,
+					hw->mac.dglort_map, MAX_LPORT_NUM, 1);
+			if (status_mbx == FM10K_SUCCESS)
+				PMD_INIT_LOG(INFO,
+					"INT: Recreated Logical port");
+			else
+				PMD_INIT_LOG(INFO,
+					"INT: Logical ports weren't recreated");
+
+			status_mbx = hw->mac.ops.update_xcast_mode(hw,
+				hw->mac.dglort_map, FM10K_XCAST_MODE_NONE);
+			if (status_mbx != FM10K_SUCCESS)
+				PMD_INIT_LOG(ERR, "Failed to set XCAST mode");
+
+			fm10k_mbx_unlock(hw);
+
+			/* first clear the internal SW recording structure */
+			if (!(dev->data->dev_conf.rxmode.mq_mode &
+						ETH_MQ_RX_VMDQ_FLAG))
+				fm10k_vlan_filter_set(dev, hw->mac.default_vid,
+					false);
+
+			fm10k_MAC_filter_set(dev, hw->mac.addr, false,
+					MAIN_VSI_POOL_NUMBER);
+
+			/*
+			 * Add default mac address and vlan for the logical
+			 * ports that have been created, leave to the
+			 * application to fully recover Rx filtering.
+			 */
+			fm10k_MAC_filter_set(dev, hw->mac.addr, true,
+					MAIN_VSI_POOL_NUMBER);
+
+			if (!(dev->data->dev_conf.rxmode.mq_mode &
+						ETH_MQ_RX_VMDQ_FLAG))
+				fm10k_vlan_filter_set(dev, hw->mac.default_vid,
+					true);
+
+			dev_info->sm_down = 0;
+			_rte_eth_dev_callback_process(dev,
+					RTE_ETH_EVENT_INTR_LSC,
+					NULL, NULL);
+		}
+	}
 
 	/* Handle mailbox message */
 	fm10k_mbx_lock(hw);
-	hw->mbx.ops.process(hw, &hw->mbx);
+	err = hw->mbx.ops.process(hw, &hw->mbx);
 	fm10k_mbx_unlock(hw);
+
+	if (err == FM10K_ERR_RESET_REQUESTED) {
+		PMD_INIT_LOG(INFO, "INT: Switch is down");
+		dev_info->sm_down = 1;
+		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC,
+				NULL, NULL);
+	}
 
 	/* Handle SRAM error */
 	if (cause & FM10K_EICR_SRAMERROR) {
@@ -2616,6 +2681,11 @@ fm10k_dev_interrupt_handler_vf(void *param)
 {
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct fm10k_mbx_info *mbx = &hw->mbx;
+	struct fm10k_dev_info *dev_info =
+		FM10K_DEV_PRIVATE_TO_INFO(dev->data->dev_private);
+	const enum fm10k_mbx_state state = mbx->state;
+	int status_mbx;
 
 	if (hw->mac.type != fm10k_mac_vf)
 		return;
@@ -2624,6 +2694,49 @@ fm10k_dev_interrupt_handler_vf(void *param)
 	fm10k_mbx_lock(hw);
 	hw->mbx.ops.process(hw, &hw->mbx);
 	fm10k_mbx_unlock(hw);
+
+	if (state == FM10K_STATE_OPEN && mbx->state == FM10K_STATE_CONNECT) {
+		PMD_INIT_LOG(INFO, "INT: Switch has gone down");
+
+		fm10k_mbx_lock(hw);
+		hw->mac.ops.update_lport_state(hw, hw->mac.dglort_map,
+				MAX_LPORT_NUM, 1);
+		fm10k_mbx_unlock(hw);
+
+		/* Setting reset flag */
+		dev_info->sm_down = 1;
+		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC,
+				NULL, NULL);
+	}
+
+	if (dev_info->sm_down == 1 &&
+			hw->mac.dglort_map == FM10K_DGLORTMAP_ZERO) {
+		PMD_INIT_LOG(INFO, "INT: Switch has gone up");
+		fm10k_mbx_lock(hw);
+		status_mbx = hw->mac.ops.update_xcast_mode(hw,
+				hw->mac.dglort_map, FM10K_XCAST_MODE_NONE);
+		if (status_mbx != FM10K_SUCCESS)
+			PMD_INIT_LOG(ERR, "Failed to set XCAST mode");
+		fm10k_mbx_unlock(hw);
+
+		/* first clear the internal SW recording structure */
+		fm10k_vlan_filter_set(dev, hw->mac.default_vid, false);
+		fm10k_MAC_filter_set(dev, hw->mac.addr, false,
+				MAIN_VSI_POOL_NUMBER);
+
+		/*
+		 * Add default mac address and vlan for the logical ports that
+		 * have been created, leave to the application to fully recover
+		 * Rx filtering.
+		 */
+		fm10k_MAC_filter_set(dev, hw->mac.addr, true,
+				MAIN_VSI_POOL_NUMBER);
+		fm10k_vlan_filter_set(dev, hw->mac.default_vid, true);
+
+		dev_info->sm_down = 0;
+		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC,
+				NULL, NULL);
+	}
 
 	/* Re-enable interrupt from device side */
 	FM10K_WRITE_REG(hw, FM10K_VFITR(0), FM10K_ITR_AUTOMASK |
@@ -2908,7 +3021,6 @@ eth_fm10k_dev_init(struct rte_eth_dev *dev)
 	}
 
 	rte_eth_copy_pci_info(dev, pdev);
-	dev->data->dev_flags |= RTE_ETH_DEV_DETACHABLE;
 
 	macvlan = FM10K_DEV_PRIVATE_TO_MACVLAN(dev->data->dev_private);
 	memset(macvlan, 0, sizeof(*macvlan));
@@ -3142,7 +3254,8 @@ static const struct rte_pci_id pci_id_fm10k_map[] = {
 
 static struct rte_pci_driver rte_pmd_fm10k = {
 	.id_table = pci_id_fm10k_map,
-	.drv_flags = RTE_PCI_DRV_NEED_MAPPING | RTE_PCI_DRV_INTR_LSC,
+	.drv_flags = RTE_PCI_DRV_NEED_MAPPING | RTE_PCI_DRV_INTR_LSC |
+		     RTE_PCI_DRV_IOVA_AS_VA,
 	.probe = eth_fm10k_pci_probe,
 	.remove = eth_fm10k_pci_remove,
 };

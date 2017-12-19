@@ -53,7 +53,6 @@
 #include <rte_log.h>
 #include <rte_memory.h>
 #include <rte_memcpy.h>
-#include <rte_memzone.h>
 #include <rte_eal.h>
 #include <rte_per_lcore.h>
 #include <rte_launch.h>
@@ -61,7 +60,7 @@
 #include <rte_lcore.h>
 #include <rte_branch_prediction.h>
 #include <rte_interrupts.h>
-#include <rte_pci.h>
+#include <rte_bus_pci.h>
 #include <rte_debug.h>
 #include <rte_ether.h>
 #include <rte_ethdev.h>
@@ -110,7 +109,7 @@
  * Structure of port parameters
  */
 struct kni_port_params {
-	uint8_t port_id;/* Port ID */
+	uint16_t port_id;/* Port ID */
 	unsigned lcore_rx; /* lcore ID for RX */
 	unsigned lcore_tx; /* lcore ID for TX */
 	uint32_t nb_lcore_k; /* Number of lcores for KNI multi kernel threads */
@@ -162,8 +161,8 @@ struct kni_interface_stats {
 /* kni device statistics array */
 static struct kni_interface_stats kni_stats[RTE_MAX_ETHPORTS];
 
-static int kni_change_mtu(uint8_t port_id, unsigned new_mtu);
-static int kni_config_network_interface(uint8_t port_id, uint8_t if_up);
+static int kni_change_mtu(uint16_t port_id, unsigned int new_mtu);
+static int kni_config_network_interface(uint16_t port_id, uint8_t if_up);
 
 static rte_atomic32_t kni_stop = RTE_ATOMIC32_INIT(0);
 
@@ -171,7 +170,7 @@ static rte_atomic32_t kni_stop = RTE_ATOMIC32_INIT(0);
 static void
 print_stats(void)
 {
-	uint8_t i;
+	uint16_t i;
 
 	printf("\n**KNI example application statistics**\n"
 	       "======  ==============  ============  ============  ============  ============\n"
@@ -238,7 +237,8 @@ kni_burst_free_mbufs(struct rte_mbuf **pkts, unsigned num)
 static void
 kni_ingress(struct kni_port_params *p)
 {
-	uint8_t i, port_id;
+	uint8_t i;
+	uint16_t port_id;
 	unsigned nb_rx, num;
 	uint32_t nb_kni;
 	struct rte_mbuf *pkts_burst[PKT_BURST_SZ];
@@ -274,7 +274,8 @@ kni_ingress(struct kni_port_params *p)
 static void
 kni_egress(struct kni_port_params *p)
 {
-	uint8_t i, port_id;
+	uint8_t i;
+	uint16_t port_id;
 	unsigned nb_tx, num;
 	uint32_t nb_kni;
 	struct rte_mbuf *pkts_burst[PKT_BURST_SZ];
@@ -416,7 +417,7 @@ parse_config(const char *arg)
 	int i, j, nb_token;
 	char *str_fld[_NUM_FLD];
 	unsigned long int_fld[_NUM_FLD];
-	uint8_t port_id, nb_kni_port_params = 0;
+	uint16_t port_id, nb_kni_port_params = 0;
 
 	memset(&kni_port_params_array, 0, sizeof(kni_port_params_array));
 	while (((p = strchr(p0, '(')) != NULL) &&
@@ -445,7 +446,7 @@ parse_config(const char *arg)
 		}
 
 		i = 0;
-		port_id = (uint8_t)int_fld[i++];
+		port_id = int_fld[i++];
 		if (port_id >= RTE_MAX_ETHPORTS) {
 			printf("Port ID %d could not exceed the maximum %d\n",
 						port_id, RTE_MAX_ETHPORTS);
@@ -601,7 +602,7 @@ init_kni(void)
 
 /* Initialise a single port on an Ethernet device */
 static void
-init_port(uint8_t port)
+init_port(uint16_t port)
 {
 	int ret;
 	uint16_t nb_rxd = NB_RXD;
@@ -643,11 +644,12 @@ init_port(uint8_t port)
 
 /* Check the link status of all ports in up to 9s, and print them finally */
 static void
-check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
+check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
 {
 #define CHECK_INTERVAL 100 /* 100ms */
 #define MAX_CHECK_TIME 90 /* 9s (90 * 100ms) in total */
-	uint8_t portid, count, all_ports_up, print_flag = 0;
+	uint16_t portid;
+	uint8_t count, all_ports_up, print_flag = 0;
 	struct rte_eth_link link;
 
 	printf("\nChecking link status\n");
@@ -662,14 +664,13 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
 			/* print link status if flag set */
 			if (print_flag == 1) {
 				if (link.link_status)
-					printf("Port %d Link Up - speed %u "
-						"Mbps - %s\n", (uint8_t)portid,
-						(unsigned)link.link_speed,
+					printf(
+					"Port%d Link Up - speed %uMbps - %s\n",
+						portid, link.link_speed,
 				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
 					("full-duplex") : ("half-duplex\n"));
 				else
-					printf("Port %d Link Down\n",
-						(uint8_t)portid);
+					printf("Port %d Link Down\n", portid);
 				continue;
 			}
 			/* clear all_ports_up flag if any link down */
@@ -698,7 +699,7 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
 
 /* Callback for request of changing MTU */
 static int
-kni_change_mtu(uint8_t port_id, unsigned new_mtu)
+kni_change_mtu(uint16_t port_id, unsigned int new_mtu)
 {
 	int ret;
 	struct rte_eth_conf conf;
@@ -741,7 +742,7 @@ kni_change_mtu(uint8_t port_id, unsigned new_mtu)
 
 /* Callback for request of configuring network interface up/down */
 static int
-kni_config_network_interface(uint8_t port_id, uint8_t if_up)
+kni_config_network_interface(uint16_t port_id, uint8_t if_up)
 {
 	int ret = 0;
 
@@ -766,7 +767,7 @@ kni_config_network_interface(uint8_t port_id, uint8_t if_up)
 }
 
 static int
-kni_alloc(uint8_t port_id)
+kni_alloc(uint16_t port_id)
 {
 	uint8_t i;
 	struct rte_kni *kni;
@@ -790,7 +791,7 @@ kni_alloc(uint8_t port_id)
 		} else
 			snprintf(conf.name, RTE_KNI_NAMESIZE,
 						"vEth%u", port_id);
-		conf.group_id = (uint16_t)port_id;
+		conf.group_id = port_id;
 		conf.mbuf_size = MAX_PACKET_SZ;
 		/*
 		 * The first KNI device associated to a port
@@ -803,8 +804,11 @@ kni_alloc(uint8_t port_id)
 
 			memset(&dev_info, 0, sizeof(dev_info));
 			rte_eth_dev_info_get(port_id, &dev_info);
-			conf.addr = dev_info.pci_dev->addr;
-			conf.id = dev_info.pci_dev->id;
+
+			if (dev_info.pci_dev) {
+				conf.addr = dev_info.pci_dev->addr;
+				conf.id = dev_info.pci_dev->id;
+			}
 
 			memset(&ops, 0, sizeof(ops));
 			ops.port_id = port_id;
@@ -825,7 +829,7 @@ kni_alloc(uint8_t port_id)
 }
 
 static int
-kni_free_kni(uint8_t port_id)
+kni_free_kni(uint16_t port_id)
 {
 	uint8_t i;
 	struct kni_port_params **p = kni_port_params_array;
@@ -848,7 +852,7 @@ int
 main(int argc, char** argv)
 {
 	int ret;
-	uint8_t nb_sys_ports, port;
+	uint16_t nb_sys_ports, port;
 	unsigned i;
 
 	/* Associate signal_hanlder function with USR signals */
@@ -919,9 +923,6 @@ main(int argc, char** argv)
 			continue;
 		kni_free_kni(port);
 	}
-#ifdef RTE_LIBRTE_XEN_DOM0
-	rte_kni_close();
-#endif
 	for (i = 0; i < RTE_MAX_ETHPORTS; i++)
 		if (kni_port_params_array[i]) {
 			rte_free(kni_port_params_array[i]);

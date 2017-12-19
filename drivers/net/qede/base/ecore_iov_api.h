@@ -345,21 +345,13 @@ ecore_iov_get_public_vf_info(struct ecore_hwfn *p_hwfn,
 			     u16 vfid, bool b_enabled_only);
 
 /**
- * @brief Set pending events bitmap for given @vfid
- *
- * @param p_hwfn
- * @param vfid
- */
-void ecore_iov_pf_add_pending_events(struct ecore_hwfn *p_hwfn, u8 vfid);
-
-/**
- * @brief Copy pending events bitmap in @events and clear
- *	  original copy of events
+ * @brief fills a bitmask of all VFs which have pending unhandled
+ *        messages.
  *
  * @param p_hwfn
  */
-void ecore_iov_pf_get_and_clear_pending_events(struct ecore_hwfn *p_hwfn,
-					       u64 *events);
+void ecore_iov_pf_get_pending_events(struct ecore_hwfn *p_hwfn,
+				     u64 *events);
 
 /**
  * @brief Copy VF's message to PF's buffer
@@ -693,7 +685,28 @@ bool ecore_iov_is_vf_started(struct ecore_hwfn *p_hwfn,
  * @return - rate in Mbps
  */
 int ecore_iov_get_vf_min_rate(struct ecore_hwfn *p_hwfn, int vfid);
+
 #endif
+
+/**
+ * @brief ecore_pf_configure_vf_queue_coalesce - PF configure coalesce
+ *    parameters of VFs for Rx and Tx queue.
+ *    While the API allows setting coalescing per-qid, all queues sharing a SB
+ *    should be in same range [i.e., either 0-0x7f, 0x80-0xff or 0x100-0x1ff]
+ *    otherwise configuration would break.
+ *
+ * @param p_hwfn
+ * @param rx_coal - Rx Coalesce value in micro seconds.
+ * @param tx_coal - TX Coalesce value in micro seconds.
+ * @param vf_id
+ * @param qid
+ *
+ * @return int
+ **/
+enum _ecore_status_t
+ecore_iov_pf_configure_vf_queue_coalesce(struct ecore_hwfn *p_hwfn,
+					 u16 rx_coal, u16 tx_coal,
+					 u16 vf_id, u16 qid);
 
 /**
  * @brief - Given a VF index, return index of next [including that] active VF.
@@ -701,17 +714,31 @@ int ecore_iov_get_vf_min_rate(struct ecore_hwfn *p_hwfn, int vfid);
  * @param p_hwfn
  * @param rel_vf_id
  *
- * @return E4_MAX_NUM_VFS in case no further active VFs, otherwise index.
+ * @return MAX_NUM_VFS_E4 in case no further active VFs, otherwise index.
  */
 u16 ecore_iov_get_next_active_vf(struct ecore_hwfn *p_hwfn, u16 rel_vf_id);
 
 void ecore_iov_bulletin_set_udp_ports(struct ecore_hwfn *p_hwfn, int vfid,
 				      u16 vxlan_port, u16 geneve_port);
+
+#ifdef CONFIG_ECORE_SW_CHANNEL
+/**
+ * @brief Set whether PF should communicate with VF using SW/HW channel
+ *        Needs to be called for an enabled VF before acquire is over
+ *        [latest good point for doing that is OSAL_IOV_VF_ACQUIRE()]
+ *
+ * @param p_hwfn
+ * @param vfid - relative vf index
+ * @param b_is_hw - true iff PF is to use HW channel for communication
+ */
+void ecore_iov_set_vf_hw_channel(struct ecore_hwfn *p_hwfn, int vfid,
+				 bool b_is_hw);
+#endif
 #endif /* CONFIG_ECORE_SRIOV */
 
 #define ecore_for_each_vf(_p_hwfn, _i)					\
 	for (_i = ecore_iov_get_next_active_vf(_p_hwfn, 0);		\
-	     _i < E4_MAX_NUM_VFS;					\
+	     _i < MAX_NUM_VFS_E4;					\
 	     _i = ecore_iov_get_next_active_vf(_p_hwfn, _i + 1))
 
 #endif

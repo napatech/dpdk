@@ -11,7 +11,8 @@
 #define CPERF_TOTAL_OPS		("total-ops")
 #define CPERF_BURST_SIZE	("burst-sz")
 #define CPERF_BUFFER_SIZE	("buffer-sz")
-#define CPERF_SEGMENTS_NB	("segments-nb")
+#define CPERF_SEGMENT_SIZE	("segment-sz")
+#define CPERF_DESC_NB		("desc-nb")
 
 #define CPERF_DEVTYPE		("devtype")
 #define CPERF_OPTYPE		("optype")
@@ -40,12 +41,16 @@
 
 #define CPERF_CSV		("csv-friendly")
 
+/* benchmark-specific options */
+#define CPERF_PMDCC_DELAY_MS	("pmd-cyclecount-delay-ms")
+
 #define MAX_LIST 32
 
 enum cperf_perf_test_type {
 	CPERF_TEST_TYPE_THROUGHPUT,
 	CPERF_TEST_TYPE_LATENCY,
-	CPERF_TEST_TYPE_VERIFY
+	CPERF_TEST_TYPE_VERIFY,
+	CPERF_TEST_TYPE_PMDCC
 };
 
 
@@ -66,8 +71,10 @@ struct cperf_options {
 
 	uint32_t pool_sz;
 	uint32_t total_ops;
-	uint32_t segments_nb;
+	uint32_t segment_sz;
 	uint32_t test_buffer_size;
+	uint32_t nb_descriptors;
+	uint16_t nb_qps;
 
 	uint32_t sessionless:1;
 	uint32_t out_of_place:1;
@@ -113,6 +120,8 @@ struct cperf_options {
 	uint32_t min_burst_size;
 	uint32_t inc_burst_size;
 
+	/* pmd-cyclecount specific options */
+	uint32_t pmdcc_delay;
 };
 
 void

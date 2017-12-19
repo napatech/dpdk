@@ -86,7 +86,8 @@ enum rte_crypto_op_status {
  */
 enum rte_crypto_op_sess_type {
 	RTE_CRYPTO_OP_WITH_SESSION,	/**< Session based crypto operation */
-	RTE_CRYPTO_OP_SESSIONLESS	/**< Session-less crypto operation */
+	RTE_CRYPTO_OP_SESSIONLESS,	/**< Session-less crypto operation */
+	RTE_CRYPTO_OP_SECURITY_SESSION	/**< Security session crypto operation */
 };
 
 /**
@@ -117,7 +118,7 @@ struct rte_crypto_op {
 	struct rte_mempool *mempool;
 	/**< crypto operation mempool which operation is allocated from */
 
-	phys_addr_t phys_addr;
+	rte_iova_t phys_addr;
 	/**< physical address of crypto operation */
 
 	RTE_STD_C11
@@ -144,6 +145,7 @@ __rte_crypto_op_reset(struct rte_crypto_op *op, enum rte_crypto_op_type type)
 	case RTE_CRYPTO_OP_TYPE_SYMMETRIC:
 		__rte_crypto_sym_op_reset(op->sym);
 		break;
+	case RTE_CRYPTO_OP_TYPE_UNDEFINED:
 	default:
 		break;
 	}

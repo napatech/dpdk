@@ -43,11 +43,11 @@
 #include <rte_log.h>
 #include <rte_debug.h>
 #include <rte_pci.h>
+#include <rte_bus_pci.h>
 #include <rte_ether.h>
 #include <rte_ethdev.h>
 #include <rte_ethdev_pci.h>
 #include <rte_memory.h>
-#include <rte_memzone.h>
 #include <rte_eal.h>
 #include <rte_atomic.h>
 #include <rte_malloc.h>
@@ -112,7 +112,7 @@ static void eth_igb_allmulticast_enable(struct rte_eth_dev *dev);
 static void eth_igb_allmulticast_disable(struct rte_eth_dev *dev);
 static int  eth_igb_link_update(struct rte_eth_dev *dev,
 				int wait_to_complete);
-static void eth_igb_stats_get(struct rte_eth_dev *dev,
+static int eth_igb_stats_get(struct rte_eth_dev *dev,
 				struct rte_eth_stats *rte_stats);
 static int eth_igb_xstats_get(struct rte_eth_dev *dev,
 			      struct rte_eth_xstat *xstats, unsigned n);
@@ -157,7 +157,7 @@ static int eth_igb_vlan_filter_set(struct rte_eth_dev *dev,
 static int eth_igb_vlan_tpid_set(struct rte_eth_dev *dev,
 				 enum rte_vlan_type vlan_type,
 				 uint16_t tpid_id);
-static void eth_igb_vlan_offload_set(struct rte_eth_dev *dev, int mask);
+static int eth_igb_vlan_offload_set(struct rte_eth_dev *dev, int mask);
 
 static void igb_vlan_hw_filter_enable(struct rte_eth_dev *dev);
 static void igb_vlan_hw_filter_disable(struct rte_eth_dev *dev);
@@ -188,7 +188,7 @@ static void igbvf_promiscuous_disable(struct rte_eth_dev *dev);
 static void igbvf_allmulticast_enable(struct rte_eth_dev *dev);
 static void igbvf_allmulticast_disable(struct rte_eth_dev *dev);
 static int eth_igbvf_link_update(struct e1000_hw *hw);
-static void eth_igbvf_stats_get(struct rte_eth_dev *dev,
+static int eth_igbvf_stats_get(struct rte_eth_dev *dev,
 				struct rte_eth_stats *rte_stats);
 static int eth_igbvf_xstats_get(struct rte_eth_dev *dev,
 				struct rte_eth_xstat *xstats, unsigned n);
@@ -334,6 +334,8 @@ static const struct rte_pci_id pci_id_igb_map[] = {
 	{ RTE_PCI_DEVICE(E1000_INTEL_VENDOR_ID, E1000_DEV_ID_I210_FIBER) },
 	{ RTE_PCI_DEVICE(E1000_INTEL_VENDOR_ID, E1000_DEV_ID_I210_SERDES) },
 	{ RTE_PCI_DEVICE(E1000_INTEL_VENDOR_ID, E1000_DEV_ID_I210_SGMII) },
+	{ RTE_PCI_DEVICE(E1000_INTEL_VENDOR_ID, E1000_DEV_ID_I210_COPPER_FLASHLESS) },
+	{ RTE_PCI_DEVICE(E1000_INTEL_VENDOR_ID, E1000_DEV_ID_I210_SERDES_FLASHLESS) },
 	{ RTE_PCI_DEVICE(E1000_INTEL_VENDOR_ID, E1000_DEV_ID_I211_COPPER) },
 	{ RTE_PCI_DEVICE(E1000_INTEL_VENDOR_ID, E1000_DEV_ID_I354_BACKPLANE_1GBPS) },
 	{ RTE_PCI_DEVICE(E1000_INTEL_VENDOR_ID, E1000_DEV_ID_I354_SGMII) },
@@ -816,7 +818,6 @@ eth_igb_dev_init(struct rte_eth_dev *eth_dev)
 	}
 
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_DETACHABLE;
 
 	hw->hw_addr= (void *)pci_dev->mem_resource[0].addr;
 
@@ -1051,7 +1052,6 @@ eth_igbvf_dev_init(struct rte_eth_dev *eth_dev)
 
 	pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_DETACHABLE;
 
 	hw->device_id = pci_dev->id.device_id;
 	hw->vendor_id = pci_dev->id.vendor_id;
@@ -1166,7 +1166,8 @@ static int eth_igb_pci_remove(struct rte_pci_device *pci_dev)
 
 static struct rte_pci_driver rte_igb_pmd = {
 	.id_table = pci_id_igb_map,
-	.drv_flags = RTE_PCI_DRV_NEED_MAPPING | RTE_PCI_DRV_INTR_LSC,
+	.drv_flags = RTE_PCI_DRV_NEED_MAPPING | RTE_PCI_DRV_INTR_LSC |
+		     RTE_PCI_DRV_IOVA_AS_VA,
 	.probe = eth_igb_pci_probe,
 	.remove = eth_igb_pci_remove,
 };
@@ -1189,7 +1190,7 @@ static int eth_igbvf_pci_remove(struct rte_pci_device *pci_dev)
  */
 static struct rte_pci_driver rte_igbvf_pmd = {
 	.id_table = pci_id_igbvf_map,
-	.drv_flags = RTE_PCI_DRV_NEED_MAPPING,
+	.drv_flags = RTE_PCI_DRV_NEED_MAPPING | RTE_PCI_DRV_IOVA_AS_VA,
 	.probe = eth_igbvf_pci_probe,
 	.remove = eth_igbvf_pci_remove,
 };
@@ -1400,7 +1401,12 @@ eth_igb_start(struct rte_eth_dev *dev)
 	 */
 	mask = ETH_VLAN_STRIP_MASK | ETH_VLAN_FILTER_MASK | \
 			ETH_VLAN_EXTEND_MASK;
-	eth_igb_vlan_offload_set(dev, mask);
+	ret = eth_igb_vlan_offload_set(dev, mask);
+	if (ret) {
+		PMD_INIT_LOG(ERR, "Unable to set vlan offload");
+		igb_dev_clear_queues(dev);
+		return ret;
+	}
 
 	if (dev->data->dev_conf.rxmode.mq_mode == ETH_MQ_RX_VMDQ_ONLY) {
 		/* Enable VLAN filter since VMDq always use VLAN filter */
@@ -1828,7 +1834,7 @@ igb_read_stats_registers(struct e1000_hw *hw, struct e1000_hw_stats *stats)
 	stats->tsctfc += E1000_READ_REG(hw, E1000_TSCTFC);
 }
 
-static void
+static int
 eth_igb_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats)
 {
 	struct e1000_hw *hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -1838,7 +1844,7 @@ eth_igb_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats)
 	igb_read_stats_registers(hw, stats);
 
 	if (rte_stats == NULL)
-		return;
+		return -EINVAL;
 
 	/* Rx Errors */
 	rte_stats->imissed = stats->mpc;
@@ -1853,6 +1859,7 @@ eth_igb_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats)
 	rte_stats->opackets = stats->gptc;
 	rte_stats->ibytes   = stats->gorc;
 	rte_stats->obytes   = stats->gotc;
+	return 0;
 }
 
 static void
@@ -2093,7 +2100,7 @@ eth_igbvf_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats,
 	return IGBVF_NB_XSTATS;
 }
 
-static void
+static int
 eth_igbvf_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats)
 {
 	struct e1000_hw *hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -2103,12 +2110,13 @@ eth_igbvf_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats)
 	igbvf_read_stats_registers(hw, hw_stats);
 
 	if (rte_stats == NULL)
-		return;
+		return -EINVAL;
 
 	rte_stats->ipackets = hw_stats->gprc;
 	rte_stats->ibytes = hw_stats->gorc;
 	rte_stats->opackets = hw_stats->gptc;
 	rte_stats->obytes = hw_stats->gotc;
+	return 0;
 }
 
 static void
@@ -2715,7 +2723,7 @@ igb_vlan_hw_extend_enable(struct rte_eth_dev *dev)
 						2 * VLAN_TAG_SIZE);
 }
 
-static void
+static int
 eth_igb_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 {
 	if(mask & ETH_VLAN_STRIP_MASK){
@@ -2738,6 +2746,8 @@ eth_igb_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 		else
 			igb_vlan_hw_extend_disable(dev);
 	}
+
+	return 0;
 }
 
 
@@ -4094,7 +4104,7 @@ eth_igb_get_flex_filter(struct rte_eth_dev *dev,
 	flex_filter.filter_info.priority = filter->priority;
 	memcpy(flex_filter.filter_info.dwords, filter->bytes, filter->len);
 	memcpy(flex_filter.filter_info.mask, filter->mask,
-			RTE_ALIGN(filter->len, sizeof(char)) / sizeof(char));
+			RTE_ALIGN(filter->len, CHAR_BIT) / CHAR_BIT);
 
 	it = eth_igb_flex_filter_lookup(&filter_info->flex_list,
 				&flex_filter.filter_info);
@@ -5382,7 +5392,14 @@ eth_igb_rx_queue_intr_disable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
 	struct e1000_hw *hw =
 		E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	uint32_t mask = 1 << queue_id;
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	uint32_t vec = E1000_MISC_VEC_ID;
+
+	if (rte_intr_allow_others(intr_handle))
+		vec = E1000_RX_VEC_START;
+
+	uint32_t mask = 1 << (queue_id + vec);
 
 	E1000_WRITE_REG(hw, E1000_EIMC, mask);
 	E1000_WRITE_FLUSH(hw);
@@ -5397,7 +5414,12 @@ eth_igb_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 		E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
-	uint32_t mask = 1 << queue_id;
+	uint32_t vec = E1000_MISC_VEC_ID;
+
+	if (rte_intr_allow_others(intr_handle))
+		vec = E1000_RX_VEC_START;
+
+	uint32_t mask = 1 << (queue_id + vec);
 	uint32_t regval;
 
 	regval = E1000_READ_REG(hw, E1000_EIMS);

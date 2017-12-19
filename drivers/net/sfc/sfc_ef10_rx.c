@@ -177,7 +177,7 @@ sfc_ef10_rx_qrefill(struct sfc_ef10_rxq *rxq)
 		     ++i, ++id) {
 			struct rte_mbuf *m = objs[i];
 			struct sfc_ef10_rx_sw_desc *rxd;
-			phys_addr_t phys_addr;
+			rte_iova_t phys_addr;
 
 			SFC_ASSERT((id & ~ptr_mask) == 0);
 			rxd = &rxq->sw_ring[id];
@@ -189,7 +189,7 @@ sfc_ef10_rx_qrefill(struct sfc_ef10_rxq *rxq)
 			 * structure members.
 			 */
 
-			phys_addr = rte_mbuf_data_dma_addr_default(m);
+			phys_addr = rte_mbuf_data_iova_default(m);
 			EFX_POPULATE_QWORD_2(rxq->rxq_hw_ring[id],
 			    ESF_DZ_RX_KER_BYTE_CNT, buf_size,
 			    ESF_DZ_RX_KER_BUF_ADDR, phys_addr);
@@ -544,6 +544,14 @@ sfc_ef10_rx_qdesc_npending(__rte_unused struct sfc_dp_rxq *dp_rxq)
 	return -ENOTSUP;
 }
 
+static sfc_dp_rx_qdesc_status_t sfc_ef10_rx_qdesc_status;
+static int
+sfc_ef10_rx_qdesc_status(__rte_unused struct sfc_dp_rxq *dp_rxq,
+			 __rte_unused uint16_t offset)
+{
+	return -ENOTSUP;
+}
+
 
 static uint64_t
 sfc_ef10_mk_mbuf_rearm_data(uint16_t port_id, uint16_t prefix_size)
@@ -708,5 +716,6 @@ struct sfc_dp_rx sfc_ef10_rx = {
 	.qpurge			= sfc_ef10_rx_qpurge,
 	.supported_ptypes_get	= sfc_ef10_supported_ptypes_get,
 	.qdesc_npending		= sfc_ef10_rx_qdesc_npending,
+	.qdesc_status		= sfc_ef10_rx_qdesc_status,
 	.pkt_burst		= sfc_ef10_recv_pkts,
 };

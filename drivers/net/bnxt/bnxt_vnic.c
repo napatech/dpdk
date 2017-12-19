@@ -83,6 +83,7 @@ void bnxt_init_vnics(struct bnxt *bp)
 
 		prandom_bytes(vnic->rss_hash_key, HW_HASH_KEY_SIZE);
 		STAILQ_INIT(&vnic->filter);
+		STAILQ_INIT(&vnic->flow_list);
 		STAILQ_INSERT_TAIL(&bp->free_vnic_list, vnic, next);
 	}
 	for (i = 0; i < MAX_FF_POOLS; i++)
@@ -174,7 +175,7 @@ int bnxt_alloc_vnic_attributes(struct bnxt *bp)
 				BNXT_MAX_MC_ADDRS * ETHER_ADDR_LEN);
 	uint16_t max_vnics;
 	int i;
-	phys_addr_t mz_phys_addr;
+	rte_iova_t mz_phys_addr;
 
 	max_vnics = bp->max_vnics;
 	snprintf(mz_name, RTE_MEMZONE_NAMESIZE,
@@ -191,13 +192,13 @@ int bnxt_alloc_vnic_attributes(struct bnxt *bp)
 		if (!mz)
 			return -ENOMEM;
 	}
-	mz_phys_addr = mz->phys_addr;
+	mz_phys_addr = mz->iova;
 	if ((unsigned long)mz->addr == mz_phys_addr) {
 		RTE_LOG(WARNING, PMD,
 			"Memzone physical address same as virtual.\n");
 		RTE_LOG(WARNING, PMD,
-			"Using rte_mem_virt2phy()\n");
-		mz_phys_addr = rte_mem_virt2phy(mz->addr);
+			"Using rte_mem_virt2iova()\n");
+		mz_phys_addr = rte_mem_virt2iova(mz->addr);
 		if (mz_phys_addr == 0) {
 			RTE_LOG(ERR, PMD,
 			"unable to map vnic address to physical memory\n");

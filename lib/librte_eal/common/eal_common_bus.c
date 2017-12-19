@@ -35,6 +35,7 @@
 #include <sys/queue.h>
 
 #include <rte_bus.h>
+#include <rte_debug.h>
 
 #include "eal_private.h"
 
@@ -73,11 +74,9 @@ rte_bus_scan(void)
 
 	TAILQ_FOREACH(bus, &rte_bus_list, next) {
 		ret = bus->scan();
-		if (ret) {
+		if (ret)
 			RTE_LOG(ERR, EAL, "Scan for (%s) bus failed.\n",
 				bus->name);
-			return ret;
-		}
 	}
 
 	return 0;
@@ -97,20 +96,16 @@ rte_bus_probe(void)
 		}
 
 		ret = bus->probe();
-		if (ret) {
+		if (ret)
 			RTE_LOG(ERR, EAL, "Bus (%s) probe failed.\n",
 				bus->name);
-			return ret;
-		}
 	}
 
 	if (vbus) {
 		ret = vbus->probe();
-		if (ret) {
+		if (ret)
 			RTE_LOG(ERR, EAL, "Bus (%s) probe failed.\n",
 				vbus->name);
-			return ret;
-		}
 	}
 
 	return 0;
@@ -152,15 +147,16 @@ struct rte_bus *
 rte_bus_find(const struct rte_bus *start, rte_bus_cmp_t cmp,
 	     const void *data)
 {
-	struct rte_bus *bus = NULL;
+	struct rte_bus *bus;
 
-	TAILQ_FOREACH(bus, &rte_bus_list, next) {
-		if (start && bus == start) {
-			start = NULL; /* starting point found */
-			continue;
-		}
+	if (start != NULL)
+		bus = TAILQ_NEXT(start, next);
+	else
+		bus = TAILQ_FIRST(&rte_bus_list);
+	while (bus != NULL) {
 		if (cmp(bus, data) == 0)
 			break;
+		bus = TAILQ_NEXT(bus, next);
 	}
 	return bus;
 }
@@ -221,4 +217,27 @@ rte_bus_find_by_device_name(const char *str)
 	if (c != NULL)
 		c[0] = '\0';
 	return rte_bus_find(NULL, bus_can_parse, name);
+}
+
+
+/*
+ * Get iommu class of devices on the bus.
+ */
+enum rte_iova_mode
+rte_bus_get_iommu_class(void)
+{
+	int mode = RTE_IOVA_DC;
+	struct rte_bus *bus;
+
+	TAILQ_FOREACH(bus, &rte_bus_list, next) {
+
+		if (bus->get_iommu_class)
+			mode |= bus->get_iommu_class();
+	}
+
+	if (mode != RTE_IOVA_VA) {
+		/* Use default IOVA mode */
+		mode = RTE_IOVA_PA;
+	}
+	return mode;
 }

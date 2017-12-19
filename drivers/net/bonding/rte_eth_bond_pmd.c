@@ -43,7 +43,7 @@
 #include <rte_ip_frag.h>
 #include <rte_devargs.h>
 #include <rte_kvargs.h>
-#include <rte_vdev.h>
+#include <rte_bus_vdev.h>
 #include <rte_alarm.h>
 #include <rte_cycles.h>
 
@@ -125,11 +125,12 @@ bond_ethdev_rx_burst_active_backup(void *queue, struct rte_mbuf **bufs,
 }
 
 static inline uint8_t
-is_lacp_packets(uint16_t ethertype, uint8_t subtype, uint16_t vlan_tci)
+is_lacp_packets(uint16_t ethertype, uint8_t subtype, struct rte_mbuf *mbuf)
 {
 	const uint16_t ether_type_slow_be = rte_be_to_cpu_16(ETHER_TYPE_SLOW);
 
-	return !vlan_tci && (ethertype == ether_type_slow_be &&
+	return !((mbuf->ol_flags & PKT_RX_VLAN) ? mbuf->vlan_tci : 0) &&
+		(ethertype == ether_type_slow_be &&
 		(subtype == SLOW_SUBTYPE_MARKER || subtype == SLOW_SUBTYPE_LACP));
 }
 
@@ -174,13 +175,14 @@ const struct rte_flow_attr flow_attr_8023ad = {
 
 int
 bond_ethdev_8023ad_flow_verify(struct rte_eth_dev *bond_dev,
-		uint8_t slave_port) {
+		uint16_t slave_port) {
+	struct rte_eth_dev_info slave_info;
 	struct rte_flow_error error;
 	struct bond_dev_private *internals = (struct bond_dev_private *)
 			(bond_dev->data->dev_private);
 
-	struct rte_flow_action_queue lacp_queue_conf = {
-		.index = internals->mode4.dedicated_queues.rx_qid,
+	const struct rte_flow_action_queue lacp_queue_conf = {
+		.index = 0,
 	};
 
 	const struct rte_flow_action actions[] = {
@@ -195,19 +197,32 @@ bond_ethdev_8023ad_flow_verify(struct rte_eth_dev *bond_dev,
 
 	int ret = rte_flow_validate(slave_port, &flow_attr_8023ad,
 			flow_item_8023ad, actions, &error);
-	if (ret < 0)
+	if (ret < 0) {
+		RTE_BOND_LOG(ERR, "%s: %s (slave_port=%d queue_id=%d)",
+				__func__, error.message, slave_port,
+				internals->mode4.dedicated_queues.rx_qid);
 		return -1;
+	}
+
+	rte_eth_dev_info_get(slave_port, &slave_info);
+	if (slave_info.max_rx_queues < bond_dev->data->nb_rx_queues ||
+			slave_info.max_tx_queues < bond_dev->data->nb_tx_queues) {
+		RTE_BOND_LOG(ERR,
+			"%s: Slave %d capabilities doesn't allow to allocate additional queues",
+			__func__, slave_port);
+		return -1;
+	}
 
 	return 0;
 }
 
 int
-bond_8023ad_slow_pkt_hw_filter_supported(uint8_t port_id) {
+bond_8023ad_slow_pkt_hw_filter_supported(uint16_t port_id) {
 	struct rte_eth_dev *bond_dev = &rte_eth_devices[port_id];
 	struct bond_dev_private *internals = (struct bond_dev_private *)
 			(bond_dev->data->dev_private);
-	struct rte_eth_dev_info bond_info, slave_info;
-	uint8_t idx;
+	struct rte_eth_dev_info bond_info;
+	uint16_t idx;
 
 	/* Verify if all slaves in bonding supports flow director and */
 	if (internals->slave_count > 0) {
@@ -217,9 +232,6 @@ bond_8023ad_slow_pkt_hw_filter_supported(uint8_t port_id) {
 		internals->mode4.dedicated_queues.tx_qid = bond_info.nb_tx_queues;
 
 		for (idx = 0; idx < internals->slave_count; idx++) {
-			rte_eth_dev_info_get(internals->slaves[idx].port_id,
-					&slave_info);
-
 			if (bond_ethdev_8023ad_flow_verify(bond_dev,
 					internals->slaves[idx].port_id) != 0)
 				return -1;
@@ -230,7 +242,7 @@ bond_8023ad_slow_pkt_hw_filter_supported(uint8_t port_id) {
 }
 
 int
-bond_ethdev_8023ad_flow_set(struct rte_eth_dev *bond_dev, uint8_t slave_port) {
+bond_ethdev_8023ad_flow_set(struct rte_eth_dev *bond_dev, uint16_t slave_port) {
 
 	struct rte_flow_error error;
 	struct bond_dev_private *internals = (struct bond_dev_private *)
@@ -270,10 +282,10 @@ bond_ethdev_rx_burst_8023ad_fast_queue(void *queue, struct rte_mbuf **bufs,
 	struct bond_rx_queue *bd_rx_q = (struct bond_rx_queue *)queue;
 	struct bond_dev_private *internals = bd_rx_q->dev_private;
 	uint16_t num_rx_total = 0;	/* Total number of received packets */
-	uint8_t slaves[RTE_MAX_ETHPORTS];
-	uint8_t slave_count;
+	uint16_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t slave_count;
 
-	uint8_t i, idx;
+	uint16_t i, idx;
 
 	/* Copy slave list to protect against slave up/down changes during tx
 	 * bursting */
@@ -302,8 +314,8 @@ bond_ethdev_tx_burst_8023ad_fast_queue(void *queue, struct rte_mbuf **bufs,
 	struct bond_dev_private *internals;
 	struct bond_tx_queue *bd_tx_q;
 
-	uint8_t num_of_slaves;
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t num_of_slaves;
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 	 /* positions in slaves, not ID */
 	uint8_t distributing_offsets[RTE_MAX_ETHPORTS];
 	uint8_t distributing_count;
@@ -394,8 +406,8 @@ bond_ethdev_rx_burst_8023ad(void *queue, struct rte_mbuf **bufs,
 
 	const uint16_t ether_type_slow_be = rte_be_to_cpu_16(ETHER_TYPE_SLOW);
 	uint16_t num_rx_total = 0;	/* Total number of received packets */
-	uint8_t slaves[RTE_MAX_ETHPORTS];
-	uint8_t slave_count, idx;
+	uint16_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t slave_count, idx;
 
 	uint8_t collecting;  /* current slave collecting status */
 	const uint8_t promisc = internals->promiscuous_en;
@@ -444,7 +456,7 @@ bond_ethdev_rx_burst_8023ad(void *queue, struct rte_mbuf **bufs,
 			/* Remove packet from array if it is slow packet or slave is not
 			 * in collecting state or bonding interface is not in promiscuous
 			 * mode and packet address does not match. */
-			if (unlikely(is_lacp_packets(hdr->ether_type, subtype, bufs[j]->vlan_tci) ||
+			if (unlikely(is_lacp_packets(hdr->ether_type, subtype, bufs[j]) ||
 				!collecting || (!promisc &&
 					!is_multicast_ether_addr(&hdr->d_addr) &&
 					!is_same_ether_addr(&bond_mac, &hdr->d_addr)))) {
@@ -526,7 +538,7 @@ ipv4_addr_to_dot(uint32_t be_ipv4_addr, char *buf, uint8_t buf_size)
 #define MAX_CLIENTS_NUMBER	128
 uint8_t active_clients;
 struct client_stats_t {
-	uint8_t port;
+	uint16_t port;
 	uint32_t ipv4_addr;
 	uint32_t ipv4_rx_packets;
 	uint32_t ipv4_tx_packets;
@@ -534,7 +546,7 @@ struct client_stats_t {
 struct client_stats_t client_stats[MAX_CLIENTS_NUMBER];
 
 static void
-update_client_stats(uint32_t addr, uint8_t port, uint32_t *TXorRXindicator)
+update_client_stats(uint32_t addr, uint16_t port, uint32_t *TXorRXindicator)
 {
 	int i = 0;
 
@@ -592,7 +604,7 @@ update_client_stats(uint32_t addr, uint8_t port, uint32_t *TXorRXindicator)
 
 static void
 mode6_debug(const char __attribute__((unused)) *info, struct ether_hdr *eth_h,
-		uint8_t port, uint32_t __attribute__((unused)) *burstnumber)
+		uint16_t port, uint32_t __attribute__((unused)) *burstnumber)
 {
 	struct ipv4_hdr *ipv4_h;
 #ifdef RTE_LIBRTE_BOND_DEBUG_ALB
@@ -673,8 +685,8 @@ bond_ethdev_tx_burst_round_robin(void *queue, struct rte_mbuf **bufs,
 	struct rte_mbuf *slave_bufs[RTE_MAX_ETHPORTS][nb_pkts];
 	uint16_t slave_nb_pkts[RTE_MAX_ETHPORTS] = { 0 };
 
-	uint8_t num_of_slaves;
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t num_of_slaves;
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 
 	uint16_t num_tx_total = 0, num_tx_slave;
 
@@ -904,7 +916,7 @@ bandwidth_cmp(const void *a, const void *b)
 }
 
 static void
-bandwidth_left(uint8_t port_id, uint64_t load, uint8_t update_idx,
+bandwidth_left(uint16_t port_id, uint64_t load, uint8_t update_idx,
 		struct bwg_slave *bwg_slave)
 {
 	struct rte_eth_link link_status;
@@ -970,10 +982,10 @@ bond_ethdev_tx_burst_tlb(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	struct rte_eth_dev *primary_port =
 			&rte_eth_devices[internals->primary_port];
 	uint16_t num_tx_total = 0;
-	uint8_t i, j;
+	uint16_t i, j;
 
-	uint8_t num_of_slaves = internals->active_slave_count;
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t num_of_slaves = internals->active_slave_count;
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 
 	struct ether_hdr *ether_hdr;
 	struct ether_addr primary_slave_addr;
@@ -1059,7 +1071,7 @@ bond_ethdev_tx_burst_alb(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 
 	uint16_t num_send, num_not_send = 0;
 	uint16_t num_tx_total = 0;
-	uint8_t slave_idx;
+	uint16_t slave_idx;
 
 	int i, j;
 
@@ -1178,8 +1190,8 @@ bond_ethdev_tx_burst_balance(void *queue, struct rte_mbuf **bufs,
 	struct bond_dev_private *internals;
 	struct bond_tx_queue *bd_tx_q;
 
-	uint8_t num_of_slaves;
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t num_of_slaves;
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 
 	uint16_t num_tx_total = 0, num_tx_slave = 0, tx_fail_total = 0;
 
@@ -1239,8 +1251,8 @@ bond_ethdev_tx_burst_8023ad(void *queue, struct rte_mbuf **bufs,
 	struct bond_dev_private *internals;
 	struct bond_tx_queue *bd_tx_q;
 
-	uint8_t num_of_slaves;
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t num_of_slaves;
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 	 /* positions in slaves, not ID */
 	uint8_t distributing_offsets[RTE_MAX_ETHPORTS];
 	uint8_t distributing_count;
@@ -1333,7 +1345,7 @@ bond_ethdev_tx_burst_broadcast(void *queue, struct rte_mbuf **bufs,
 	struct bond_tx_queue *bd_tx_q;
 
 	uint8_t tx_failed_flag = 0, num_of_slaves;
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 
 	uint16_t max_nb_of_tx_pkts = 0;
 
@@ -1861,7 +1873,7 @@ slave_add(struct bond_dev_private *internals,
 
 void
 bond_ethdev_primary_set(struct bond_dev_private *internals,
-		uint8_t slave_port_id)
+		uint16_t slave_port_id)
 {
 	int i;
 
@@ -2047,7 +2059,7 @@ bond_ethdev_close(struct rte_eth_dev *dev)
 
 	RTE_LOG(INFO, EAL, "Closing bonded device %s\n", dev->device->name);
 	while (internals->slave_count != skipped) {
-		uint8_t port_id = internals->slaves[skipped].port_id;
+		uint16_t port_id = internals->slaves[skipped].port_id;
 
 		rte_eth_dev_stop(port_id);
 
@@ -2125,7 +2137,7 @@ static int
 bond_ethdev_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 {
 	int res;
-	uint8_t i;
+	uint16_t i;
 	struct bond_dev_private *internals = dev->data->dev_private;
 
 	/* don't do this while a slave is being added */
@@ -2137,7 +2149,7 @@ bond_ethdev_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 		rte_bitmap_clear(internals->vlan_filter_bmp, vlan_id);
 
 	for (i = 0; i < internals->slave_count; i++) {
-		uint8_t port_id = internals->slaves[i].port_id;
+		uint16_t port_id = internals->slaves[i].port_id;
 
 		res = rte_eth_dev_vlan_filter(port_id, vlan_id, on);
 		if (res == ENOTSUP)
@@ -2277,7 +2289,7 @@ bond_ethdev_slave_link_status_change_monitor(void *cb_arg)
 static int
 bond_ethdev_link_update(struct rte_eth_dev *ethdev, int wait_to_complete)
 {
-	void (*link_update)(uint8_t port_id, struct rte_eth_link *eth_link);
+	void (*link_update)(uint16_t port_id, struct rte_eth_link *eth_link);
 
 	struct bond_dev_private *bond_ctx;
 	struct rte_eth_link slave_link;
@@ -2359,7 +2371,7 @@ bond_ethdev_link_update(struct rte_eth_dev *ethdev, int wait_to_complete)
 }
 
 
-static void
+static int
 bond_ethdev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 {
 	struct bond_dev_private *internals = dev->data->dev_private;
@@ -2387,6 +2399,8 @@ bond_ethdev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 		}
 
 	}
+
+	return 0;
 }
 
 static void
@@ -2466,7 +2480,7 @@ bond_ethdev_delayed_lsc_propagation(void *arg)
 }
 
 int
-bond_ethdev_lsc_event_callback(uint8_t port_id, enum rte_eth_event_type type,
+bond_ethdev_lsc_event_callback(uint16_t port_id, enum rte_eth_event_type type,
 		void *param, void *ret_param __rte_unused)
 {
 	struct rte_eth_dev *bonded_eth_dev;
@@ -2747,8 +2761,7 @@ bond_alloc(struct rte_vdev_device *dev, uint8_t mode)
 	}
 
 	eth_dev->dev_ops = &default_dev_ops;
-	eth_dev->data->dev_flags = RTE_ETH_DEV_INTR_LSC |
-		RTE_ETH_DEV_DETACHABLE;
+	eth_dev->data->dev_flags = RTE_ETH_DEV_INTR_LSC;
 
 	rte_spinlock_init(&internals->lock);
 
@@ -2827,6 +2840,7 @@ bond_probe(struct rte_vdev_device *dev)
 	struct rte_kvargs *kvlist;
 	uint8_t bonding_mode, socket_id/*, agg_mode*/;
 	int  arg_count, port_id;
+	uint8_t agg_mode;
 
 	if (!dev)
 		return -EINVAL;
@@ -2883,6 +2897,25 @@ bond_probe(struct rte_vdev_device *dev)
 	}
 	internals = rte_eth_devices[port_id].data->dev_private;
 	internals->kvlist = kvlist;
+
+
+	if (rte_kvargs_count(kvlist, PMD_BOND_AGG_MODE_KVARG) == 1) {
+		if (rte_kvargs_process(kvlist,
+				PMD_BOND_AGG_MODE_KVARG,
+				&bond_ethdev_parse_slave_agg_mode_kvarg,
+				&agg_mode) != 0) {
+			RTE_LOG(ERR, EAL,
+					"Failed to parse agg selection mode for bonded device %s\n",
+					name);
+			goto parse_error;
+		}
+
+		if (internals->mode == BONDING_MODE_8023AD)
+			rte_eth_bond_8023ad_agg_selection_set(port_id,
+					agg_mode);
+	} else {
+		rte_eth_bond_8023ad_agg_selection_set(port_id, AGG_STABLE);
+	}
 
 	RTE_LOG(INFO, EAL, "Create bonded device %s on port %d in mode %u on "
 			"socket %u.\n",	name, port_id, bonding_mode, socket_id);
@@ -2951,7 +2984,7 @@ bond_ethdev_configure(struct rte_eth_dev *dev)
 	struct bond_dev_private *internals = dev->data->dev_private;
 	struct rte_kvargs *kvlist = internals->kvlist;
 	int arg_count;
-	uint8_t port_id = dev - rte_eth_devices;
+	uint16_t port_id = dev - rte_eth_devices;
 	uint8_t agg_mode;
 
 	static const uint8_t default_rss_key[40] = {
@@ -3050,7 +3083,6 @@ bond_ethdev_configure(struct rte_eth_dev *dev)
 					name);
 		}
 		if (internals->mode == BONDING_MODE_8023AD)
-			if (agg_mode != 0)
 				rte_eth_bond_8023ad_agg_selection_set(port_id,
 						agg_mode);
 	}
@@ -3086,7 +3118,7 @@ bond_ethdev_configure(struct rte_eth_dev *dev)
 	/* Parse/set primary slave port id*/
 	arg_count = rte_kvargs_count(kvlist, PMD_BOND_PRIMARY_SLAVE_KVARG);
 	if (arg_count == 1) {
-		uint8_t primary_slave_port_id;
+		uint16_t primary_slave_port_id;
 
 		if (rte_kvargs_process(kvlist,
 				PMD_BOND_PRIMARY_SLAVE_KVARG,
@@ -3099,7 +3131,7 @@ bond_ethdev_configure(struct rte_eth_dev *dev)
 		}
 
 		/* Set balance mode transmit policy*/
-		if (rte_eth_bond_primary_set(port_id, (uint8_t)primary_slave_port_id)
+		if (rte_eth_bond_primary_set(port_id, primary_slave_port_id)
 				!= 0) {
 			RTE_LOG(ERR, EAL,
 					"Failed to set primary slave port %d on bonded device %s\n",

@@ -44,7 +44,6 @@
 #include <rte_log.h>
 #include <rte_debug.h>
 #include <rte_memory.h>
-#include <rte_memzone.h>
 #include <rte_launch.h>
 #include <rte_cycles.h>
 #include <rte_eal.h>
@@ -186,7 +185,7 @@ per_lcore_mempool_test(void *arg)
 				ret = rte_mempool_generic_get(mp,
 							      &obj_table[idx],
 							      n_get_bulk,
-							      cache, 0);
+							      cache);
 				if (unlikely(ret < 0)) {
 					rte_mempool_dump(stdout, mp);
 					/* in this case, objects are lost... */
@@ -200,7 +199,7 @@ per_lcore_mempool_test(void *arg)
 			while (idx < n_keep) {
 				rte_mempool_generic_put(mp, &obj_table[idx],
 							n_put_bulk,
-							cache, 0);
+							cache);
 				idx += n_put_bulk;
 			}
 		}

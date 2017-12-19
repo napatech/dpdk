@@ -52,8 +52,32 @@
 #include <mc/fsl_dpmng.h>
 #include "dpaa2_ethdev.h"
 
+struct rte_dpaa2_xstats_name_off {
+	char name[RTE_ETH_XSTATS_NAME_SIZE];
+	uint8_t page_id; /* dpni statistics page id */
+	uint8_t stats_id; /* stats id in the given page */
+};
+
+static const struct rte_dpaa2_xstats_name_off dpaa2_xstats_strings[] = {
+	{"ingress_multicast_frames", 0, 2},
+	{"ingress_multicast_bytes", 0, 3},
+	{"ingress_broadcast_frames", 0, 4},
+	{"ingress_broadcast_bytes", 0, 5},
+	{"egress_multicast_frames", 1, 2},
+	{"egress_multicast_bytes", 1, 3},
+	{"egress_broadcast_frames", 1, 4},
+	{"egress_broadcast_bytes", 1, 5},
+	{"ingress_filtered_frames", 2, 0},
+	{"ingress_discarded_frames", 2, 1},
+	{"ingress_nobuffer_discards", 2, 2},
+	{"egress_discarded_frames", 2, 3},
+	{"egress_confirmed_frames", 2, 4},
+};
+
 static struct rte_dpaa2_driver rte_dpaa2_pmd;
 static int dpaa2_dev_uninit(struct rte_eth_dev *eth_dev);
+static int dpaa2_dev_link_update(struct rte_eth_dev *dev,
+				 int wait_to_complete);
 static int dpaa2_dev_set_link_up(struct rte_eth_dev *dev);
 static int dpaa2_dev_set_link_down(struct rte_eth_dev *dev);
 static int dpaa2_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
@@ -138,7 +162,7 @@ dpaa2_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 	return ret;
 }
 
-static void
+static int
 dpaa2_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 {
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
@@ -158,6 +182,14 @@ dpaa2_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 			RTE_LOG(ERR, PMD, "Unable to set vlan filter = %d\n",
 				ret);
 	}
+
+	if (mask & ETH_VLAN_EXTEND_MASK) {
+		if (dev->data->dev_conf.rxmode.hw_vlan_extend)
+			RTE_LOG(INFO, PMD,
+				"VLAN extend offload not supported\n");
+	}
+
+	return 0;
 }
 
 static int
@@ -304,8 +336,10 @@ fail:
 static int
 dpaa2_eth_dev_configure(struct rte_eth_dev *dev)
 {
-	struct rte_eth_dev_data *data = dev->data;
-	struct rte_eth_conf *eth_conf = &data->dev_conf;
+	struct dpaa2_dev_priv *priv = dev->data->dev_private;
+	struct fsl_mc_io *dpni = priv->hw;
+	struct rte_eth_conf *eth_conf = &dev->data->dev_conf;
+	int rx_ip_csum_offload = false;
 	int ret;
 
 	PMD_INIT_FUNC_TRACE();
@@ -324,18 +358,7 @@ dpaa2_eth_dev_configure(struct rte_eth_dev *dev)
 		}
 	}
 
-	/* Check for correct configuration */
-	if (eth_conf->rxmode.mq_mode != ETH_MQ_RX_RSS &&
-	    data->nb_rx_queues > 1) {
-		PMD_INIT_LOG(ERR, "Distribution is not enabled, "
-			    "but Rx queues more than 1\n");
-		return -1;
-	}
-
 	if (eth_conf->rxmode.mq_mode == ETH_MQ_RX_RSS) {
-		/* Return in case number of Rx queues is 1 */
-		if (data->nb_rx_queues == 1)
-			return 0;
 		ret = dpaa2_setup_flow_dist(dev,
 				eth_conf->rx_adv_conf.rss_conf.rss_hf);
 		if (ret) {
@@ -344,6 +367,41 @@ dpaa2_eth_dev_configure(struct rte_eth_dev *dev)
 			return ret;
 		}
 	}
+
+	if (eth_conf->rxmode.hw_ip_checksum)
+		rx_ip_csum_offload = true;
+
+	ret = dpni_set_offload(dpni, CMD_PRI_LOW, priv->token,
+			       DPNI_OFF_RX_L3_CSUM, rx_ip_csum_offload);
+	if (ret) {
+		PMD_INIT_LOG(ERR, "Error to set RX l3 csum:Error = %d\n", ret);
+		return ret;
+	}
+
+	ret = dpni_set_offload(dpni, CMD_PRI_LOW, priv->token,
+			       DPNI_OFF_RX_L4_CSUM, rx_ip_csum_offload);
+	if (ret) {
+		PMD_INIT_LOG(ERR, "Error to get RX l4 csum:Error = %d\n", ret);
+		return ret;
+	}
+
+	ret = dpni_set_offload(dpni, CMD_PRI_LOW, priv->token,
+			       DPNI_OFF_TX_L3_CSUM, true);
+	if (ret) {
+		PMD_INIT_LOG(ERR, "Error to set TX l3 csum:Error = %d\n", ret);
+		return ret;
+	}
+
+	ret = dpni_set_offload(dpni, CMD_PRI_LOW, priv->token,
+			       DPNI_OFF_TX_L4_CSUM, true);
+	if (ret) {
+		PMD_INIT_LOG(ERR, "Error to get TX l4 csum:Error = %d\n", ret);
+		return ret;
+	}
+
+	/* update the current status */
+	dpaa2_dev_link_update(dev, 0);
+
 	return 0;
 }
 
@@ -370,8 +428,8 @@ dpaa2_dev_rx_queue_setup(struct rte_eth_dev *dev,
 
 	PMD_INIT_FUNC_TRACE();
 
-	PMD_INIT_LOG(DEBUG, "dev =%p, queue =%d, pool = %p, conf =%p",
-		     dev, rx_queue_id, mb_pool, rx_conf);
+	PMD_DRV_LOG(DEBUG, "dev =%p, queue =%d, pool = %p, conf =%p",
+		    dev, rx_queue_id, mb_pool, rx_conf);
 
 	if (!priv->bp_list || priv->bp_list->mp != mb_pool) {
 		bpid = mempool_to_bpid(mb_pool);
@@ -419,8 +477,9 @@ dpaa2_dev_rx_queue_setup(struct rte_eth_dev *dev,
 		/*enabling per rx queue congestion control */
 		taildrop.threshold = CONG_THRESHOLD_RX_Q;
 		taildrop.units = DPNI_CONGESTION_UNIT_BYTES;
-		PMD_INIT_LOG(DEBUG, "Enabling Early Drop on queue = %d",
-			     rx_queue_id);
+		taildrop.oal = CONG_RX_OAL;
+		PMD_DRV_LOG(DEBUG, "Enabling Early Drop on queue = %d",
+			    rx_queue_id);
 		ret = dpni_set_taildrop(dpni, CMD_PRI_LOW, priv->token,
 					DPNI_CP_QUEUE, DPNI_QUEUE_RX,
 					dpaa2_q->tc_index, flow_id, &taildrop);
@@ -455,8 +514,10 @@ dpaa2_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	PMD_INIT_FUNC_TRACE();
 
 	/* Return if queue already configured */
-	if (dpaa2_q->flow_id != 0xffff)
+	if (dpaa2_q->flow_id != 0xffff) {
+		dev->data->tx_queues[tx_queue_id] = dpaa2_q;
 		return 0;
+	}
 
 	memset(&tx_conf_cfg, 0, sizeof(struct dpni_queue));
 	memset(&tx_flow_cfg, 0, sizeof(struct dpni_queue));
@@ -555,9 +616,87 @@ dpaa2_supported_ptypes_get(struct rte_eth_dev *dev)
 	return NULL;
 }
 
+/**
+ * Dpaa2 link Interrupt handler
+ *
+ * @param param
+ *  The address of parameter (struct rte_eth_dev *) regsitered before.
+ *
+ * @return
+ *  void
+ */
+static void
+dpaa2_interrupt_handler(void *param)
+{
+	struct rte_eth_dev *dev = param;
+	struct dpaa2_dev_priv *priv = dev->data->dev_private;
+	struct fsl_mc_io *dpni = (struct fsl_mc_io *)priv->hw;
+	int ret;
+	int irq_index = DPNI_IRQ_INDEX;
+	unsigned int status = 0, clear = 0;
+
+	PMD_INIT_FUNC_TRACE();
+
+	if (dpni == NULL) {
+		RTE_LOG(ERR, PMD, "dpni is NULL");
+		return;
+	}
+
+	ret = dpni_get_irq_status(dpni, CMD_PRI_LOW, priv->token,
+				  irq_index, &status);
+	if (unlikely(ret)) {
+		RTE_LOG(ERR, PMD, "Can't get irq status (err %d)", ret);
+		clear = 0xffffffff;
+		goto out;
+	}
+
+	if (status & DPNI_IRQ_EVENT_LINK_CHANGED) {
+		clear = DPNI_IRQ_EVENT_LINK_CHANGED;
+		dpaa2_dev_link_update(dev, 0);
+		/* calling all the apps registered for link status event */
+		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC,
+					      NULL, NULL);
+	}
+out:
+	ret = dpni_clear_irq_status(dpni, CMD_PRI_LOW, priv->token,
+				    irq_index, clear);
+	if (unlikely(ret))
+		RTE_LOG(ERR, PMD, "Can't clear irq status (err %d)", ret);
+}
+
+static int
+dpaa2_eth_setup_irqs(struct rte_eth_dev *dev, int enable)
+{
+	int err = 0;
+	struct dpaa2_dev_priv *priv = dev->data->dev_private;
+	struct fsl_mc_io *dpni = (struct fsl_mc_io *)priv->hw;
+	int irq_index = DPNI_IRQ_INDEX;
+	unsigned int mask = DPNI_IRQ_EVENT_LINK_CHANGED;
+
+	PMD_INIT_FUNC_TRACE();
+
+	err = dpni_set_irq_mask(dpni, CMD_PRI_LOW, priv->token,
+				irq_index, mask);
+	if (err < 0) {
+		PMD_INIT_LOG(ERR, "Error: dpni_set_irq_mask():%d (%s)", err,
+			     strerror(-err));
+		return err;
+	}
+
+	err = dpni_set_irq_enable(dpni, CMD_PRI_LOW, priv->token,
+				  irq_index, enable);
+	if (err < 0)
+		PMD_INIT_LOG(ERR, "Error: dpni_set_irq_enable():%d (%s)", err,
+			     strerror(-err));
+
+	return err;
+}
+
 static int
 dpaa2_dev_start(struct rte_eth_dev *dev)
 {
+	struct rte_device *rdev = dev->device;
+	struct rte_dpaa2_device *dpaa2_dev;
 	struct rte_eth_dev_data *data = dev->data;
 	struct dpaa2_dev_priv *priv = data->dev_private;
 	struct fsl_mc_io *dpni = (struct fsl_mc_io *)priv->hw;
@@ -567,6 +706,10 @@ dpaa2_dev_start(struct rte_eth_dev *dev)
 	struct dpni_queue_id qid;
 	struct dpaa2_queue *dpaa2_q;
 	int ret, i;
+	struct rte_intr_handle *intr_handle;
+
+	dpaa2_dev = container_of(rdev, struct rte_dpaa2_device, device);
+	intr_handle = &dpaa2_dev->intr_handle;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -577,7 +720,7 @@ dpaa2_dev_start(struct rte_eth_dev *dev)
 		return ret;
 	}
 
-	/* Power up the phy. Needed to make the link go Up */
+	/* Power up the phy. Needed to make the link go UP */
 	dpaa2_dev_set_link_up(dev);
 
 	ret = dpni_get_qdid(dpni, CMD_PRI_LOW, priv->token,
@@ -601,34 +744,6 @@ dpaa2_dev_start(struct rte_eth_dev *dev)
 		dpaa2_q->fqid = qid.fqid;
 	}
 
-	ret = dpni_set_offload(dpni, CMD_PRI_LOW, priv->token,
-			       DPNI_OFF_RX_L3_CSUM, true);
-	if (ret) {
-		PMD_INIT_LOG(ERR, "Error to set RX l3 csum:Error = %d\n", ret);
-		return ret;
-	}
-
-	ret = dpni_set_offload(dpni, CMD_PRI_LOW, priv->token,
-			       DPNI_OFF_RX_L4_CSUM, true);
-	if (ret) {
-		PMD_INIT_LOG(ERR, "Error to get RX l4 csum:Error = %d\n", ret);
-		return ret;
-	}
-
-	ret = dpni_set_offload(dpni, CMD_PRI_LOW, priv->token,
-			       DPNI_OFF_TX_L3_CSUM, true);
-	if (ret) {
-		PMD_INIT_LOG(ERR, "Error to set TX l3 csum:Error = %d\n", ret);
-		return ret;
-	}
-
-	ret = dpni_set_offload(dpni, CMD_PRI_LOW, priv->token,
-			       DPNI_OFF_TX_L4_CSUM, true);
-	if (ret) {
-		PMD_INIT_LOG(ERR, "Error to get TX l4 csum:Error = %d\n", ret);
-		return ret;
-	}
-
 	/*checksum errors, send them to normal path and set it in annotation */
 	err_cfg.errors = DPNI_ERROR_L3CE | DPNI_ERROR_L4CE;
 
@@ -643,8 +758,33 @@ dpaa2_dev_start(struct rte_eth_dev *dev)
 		return ret;
 	}
 	/* VLAN Offload Settings */
-	if (priv->max_vlan_filters)
-		dpaa2_vlan_offload_set(dev, ETH_VLAN_FILTER_MASK);
+	if (priv->max_vlan_filters) {
+		ret = dpaa2_vlan_offload_set(dev, ETH_VLAN_FILTER_MASK);
+		if (ret) {
+			PMD_INIT_LOG(ERR, "Error to dpaa2_vlan_offload_set:"
+				     "code = %d\n", ret);
+			return ret;
+		}
+	}
+
+
+	/* if the interrupts were configured on this devices*/
+	if (intr_handle && (intr_handle->fd) &&
+	    (dev->data->dev_conf.intr_conf.lsc != 0)) {
+		/* Registering LSC interrupt handler */
+		rte_intr_callback_register(intr_handle,
+					   dpaa2_interrupt_handler,
+					   (void *)dev);
+
+		/* enable vfio intr/eventfd mapping
+		 * Interrupt index 0 is required, so we can not use
+		 * rte_intr_enable.
+		 */
+		rte_dpaa2_intr_enable(intr_handle, DPNI_IRQ_INDEX);
+
+		/* enable dpni_irqs */
+		dpaa2_eth_setup_irqs(dev, 1);
+	}
 
 	return 0;
 }
@@ -660,8 +800,24 @@ dpaa2_dev_stop(struct rte_eth_dev *dev)
 	struct fsl_mc_io *dpni = (struct fsl_mc_io *)priv->hw;
 	int ret;
 	struct rte_eth_link link;
+	struct rte_intr_handle *intr_handle = dev->intr_handle;
 
 	PMD_INIT_FUNC_TRACE();
+
+	/* reset interrupt callback  */
+	if (intr_handle && (intr_handle->fd) &&
+	    (dev->data->dev_conf.intr_conf.lsc != 0)) {
+		/*disable dpni irqs */
+		dpaa2_eth_setup_irqs(dev, 0);
+
+		/* disable vfio intr before callback unregister */
+		rte_dpaa2_intr_disable(intr_handle, DPNI_IRQ_INDEX);
+
+		/* Unregistering LSC interrupt handler */
+		rte_intr_callback_unregister(intr_handle,
+					     dpaa2_interrupt_handler,
+					     (void *)dev);
+	}
 
 	dpaa2_dev_set_link_down(dev);
 
@@ -838,7 +994,7 @@ dpaa2_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 		PMD_DRV_LOG(ERR, "setting the max frame length failed");
 		return -1;
 	}
-	PMD_DRV_LOG(INFO, "MTU is configured %d for the device\n", mtu);
+	PMD_DRV_LOG(INFO, "MTU is configured %d for the device", mtu);
 	return 0;
 }
 
@@ -916,7 +1072,7 @@ dpaa2_dev_set_mac_addr(struct rte_eth_dev *dev,
 			"error: Setting the MAC ADDR failed %d\n", ret);
 }
 static
-void dpaa2_dev_stats_get(struct rte_eth_dev *dev,
+int dpaa2_dev_stats_get(struct rte_eth_dev *dev,
 			 struct rte_eth_stats *stats)
 {
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
@@ -931,17 +1087,17 @@ void dpaa2_dev_stats_get(struct rte_eth_dev *dev,
 
 	if (!dpni) {
 		RTE_LOG(ERR, PMD, "dpni is NULL\n");
-		return;
+		return -EINVAL;
 	}
 
 	if (!stats) {
 		RTE_LOG(ERR, PMD, "stats is NULL\n");
-		return;
+		return -EINVAL;
 	}
 
 	/*Get Counters from page_0*/
 	retcode = dpni_get_statistics(dpni, CMD_PRI_LOW, priv->token,
-				      page0, &value);
+				      page0, 0, &value);
 	if (retcode)
 		goto err;
 
@@ -950,7 +1106,7 @@ void dpaa2_dev_stats_get(struct rte_eth_dev *dev,
 
 	/*Get Counters from page_1*/
 	retcode = dpni_get_statistics(dpni, CMD_PRI_LOW, priv->token,
-				      page1, &value);
+				      page1, 0, &value);
 	if (retcode)
 		goto err;
 
@@ -959,7 +1115,7 @@ void dpaa2_dev_stats_get(struct rte_eth_dev *dev,
 
 	/*Get Counters from page_2*/
 	retcode = dpni_get_statistics(dpni, CMD_PRI_LOW, priv->token,
-				      page2, &value);
+				      page2, 0, &value);
 	if (retcode)
 		goto err;
 
@@ -971,15 +1127,158 @@ void dpaa2_dev_stats_get(struct rte_eth_dev *dev,
 	stats->oerrors = value.page_2.egress_discarded_frames;
 	stats->imissed = value.page_2.ingress_nobuffer_discards;
 
-	return;
+	return 0;
 
 err:
 	RTE_LOG(ERR, PMD, "Operation not completed:Error Code = %d\n", retcode);
-	return;
+	return retcode;
 };
 
-static
-void dpaa2_dev_stats_reset(struct rte_eth_dev *dev)
+static int
+dpaa2_dev_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats,
+		     unsigned int n)
+{
+	struct dpaa2_dev_priv *priv = dev->data->dev_private;
+	struct fsl_mc_io *dpni = (struct fsl_mc_io *)priv->hw;
+	int32_t  retcode;
+	union dpni_statistics value[3] = {};
+	unsigned int i = 0, num = RTE_DIM(dpaa2_xstats_strings);
+
+	if (xstats == NULL)
+		return 0;
+
+	if (n < num)
+		return num;
+
+	/* Get Counters from page_0*/
+	retcode = dpni_get_statistics(dpni, CMD_PRI_LOW, priv->token,
+				      0, 0, &value[0]);
+	if (retcode)
+		goto err;
+
+	/* Get Counters from page_1*/
+	retcode = dpni_get_statistics(dpni, CMD_PRI_LOW, priv->token,
+				      1, 0, &value[1]);
+	if (retcode)
+		goto err;
+
+	/* Get Counters from page_2*/
+	retcode = dpni_get_statistics(dpni, CMD_PRI_LOW, priv->token,
+				      2, 0, &value[2]);
+	if (retcode)
+		goto err;
+
+	for (i = 0; i < num; i++) {
+		xstats[i].id = i;
+		xstats[i].value = value[dpaa2_xstats_strings[i].page_id].
+			raw.counter[dpaa2_xstats_strings[i].stats_id];
+	}
+	return i;
+err:
+	RTE_LOG(ERR, PMD, "Error in obtaining extended stats (%d)\n", retcode);
+	return retcode;
+}
+
+static int
+dpaa2_xstats_get_names(__rte_unused struct rte_eth_dev *dev,
+		       struct rte_eth_xstat_name *xstats_names,
+		       __rte_unused unsigned int limit)
+{
+	unsigned int i, stat_cnt = RTE_DIM(dpaa2_xstats_strings);
+
+	if (xstats_names != NULL)
+		for (i = 0; i < stat_cnt; i++)
+			snprintf(xstats_names[i].name,
+				 sizeof(xstats_names[i].name),
+				 "%s",
+				 dpaa2_xstats_strings[i].name);
+
+	return stat_cnt;
+}
+
+static int
+dpaa2_xstats_get_by_id(struct rte_eth_dev *dev, const uint64_t *ids,
+		       uint64_t *values, unsigned int n)
+{
+	unsigned int i, stat_cnt = RTE_DIM(dpaa2_xstats_strings);
+	uint64_t values_copy[stat_cnt];
+
+	if (!ids) {
+		struct dpaa2_dev_priv *priv = dev->data->dev_private;
+		struct fsl_mc_io *dpni = (struct fsl_mc_io *)priv->hw;
+		int32_t  retcode;
+		union dpni_statistics value[3] = {};
+
+		if (n < stat_cnt)
+			return stat_cnt;
+
+		if (!values)
+			return 0;
+
+		/* Get Counters from page_0*/
+		retcode = dpni_get_statistics(dpni, CMD_PRI_LOW, priv->token,
+					      0, 0, &value[0]);
+		if (retcode)
+			return 0;
+
+		/* Get Counters from page_1*/
+		retcode = dpni_get_statistics(dpni, CMD_PRI_LOW, priv->token,
+					      1, 0, &value[1]);
+		if (retcode)
+			return 0;
+
+		/* Get Counters from page_2*/
+		retcode = dpni_get_statistics(dpni, CMD_PRI_LOW, priv->token,
+					      2, 0, &value[2]);
+		if (retcode)
+			return 0;
+
+		for (i = 0; i < stat_cnt; i++) {
+			values[i] = value[dpaa2_xstats_strings[i].page_id].
+				raw.counter[dpaa2_xstats_strings[i].stats_id];
+		}
+		return stat_cnt;
+	}
+
+	dpaa2_xstats_get_by_id(dev, NULL, values_copy, stat_cnt);
+
+	for (i = 0; i < n; i++) {
+		if (ids[i] >= stat_cnt) {
+			PMD_INIT_LOG(ERR, "id value isn't valid");
+			return -1;
+		}
+		values[i] = values_copy[ids[i]];
+	}
+	return n;
+}
+
+static int
+dpaa2_xstats_get_names_by_id(
+	struct rte_eth_dev *dev,
+	struct rte_eth_xstat_name *xstats_names,
+	const uint64_t *ids,
+	unsigned int limit)
+{
+	unsigned int i, stat_cnt = RTE_DIM(dpaa2_xstats_strings);
+	struct rte_eth_xstat_name xstats_names_copy[stat_cnt];
+
+	if (!ids)
+		return dpaa2_xstats_get_names(dev, xstats_names, limit);
+
+	dpaa2_xstats_get_names(dev, xstats_names_copy, limit);
+
+	for (i = 0; i < limit; i++) {
+		if (ids[i] >= stat_cnt) {
+			PMD_INIT_LOG(ERR, "id value isn't valid");
+			return -1;
+		}
+		strcpy(xstats_names[i].name, xstats_names_copy[ids[i]].name);
+	}
+	return limit;
+}
+
+static void
+dpaa2_dev_stats_reset(struct rte_eth_dev *dev)
 {
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
 	struct fsl_mc_io *dpni = (struct fsl_mc_io *)priv->hw;
@@ -1014,8 +1313,6 @@ dpaa2_dev_link_update(struct rte_eth_dev *dev,
 	struct rte_eth_link link, old;
 	struct dpni_link_state state = {0};
 
-	PMD_INIT_FUNC_TRACE();
-
 	if (dpni == NULL) {
 		RTE_LOG(ERR, PMD, "dpni is NULL\n");
 		return 0;
@@ -1048,7 +1345,7 @@ dpaa2_dev_link_update(struct rte_eth_dev *dev,
 	if (link.link_status)
 		PMD_DRV_LOG(INFO, "Port %d Link is Up\n", dev->data->port_id);
 	else
-		PMD_DRV_LOG(INFO, "Port %d Link is Down\n", dev->data->port_id);
+		PMD_DRV_LOG(INFO, "Port %d Link is Down", dev->data->port_id);
 	return 0;
 }
 
@@ -1063,8 +1360,7 @@ dpaa2_dev_set_link_up(struct rte_eth_dev *dev)
 	struct dpaa2_dev_priv *priv;
 	struct fsl_mc_io *dpni;
 	int en = 0;
-
-	PMD_INIT_FUNC_TRACE();
+	struct dpni_link_state state = {0};
 
 	priv = dev->data->dev_private;
 	dpni = (struct fsl_mc_io *)priv->hw;
@@ -1090,11 +1386,21 @@ dpaa2_dev_set_link_up(struct rte_eth_dev *dev)
 			return -EINVAL;
 		}
 	}
+	ret = dpni_get_link_state(dpni, CMD_PRI_LOW, priv->token, &state);
+	if (ret < 0) {
+		RTE_LOG(ERR, PMD, "error: dpni_get_link_state %d\n", ret);
+		return -1;
+	}
+
 	/* changing tx burst function to start enqueues */
 	dev->tx_pkt_burst = dpaa2_dev_tx;
-	dev->data->dev_link.link_status = 1;
+	dev->data->dev_link.link_status = state.up;
 
-	PMD_DRV_LOG(INFO, "Port %d Link UP successful", dev->data->port_id);
+	if (state.up)
+		PMD_DRV_LOG(INFO, "Port %d Link is set as UP",
+			    dev->data->port_id);
+	else
+		PMD_DRV_LOG(INFO, "Port %d Link is DOWN", dev->data->port_id);
 	return ret;
 }
 
@@ -1299,6 +1605,108 @@ dpaa2_flow_ctrl_set(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 	return ret;
 }
 
+static int
+dpaa2_dev_rss_hash_update(struct rte_eth_dev *dev,
+			  struct rte_eth_rss_conf *rss_conf)
+{
+	struct rte_eth_dev_data *data = dev->data;
+	struct rte_eth_conf *eth_conf = &data->dev_conf;
+	int ret;
+
+	PMD_INIT_FUNC_TRACE();
+
+	if (rss_conf->rss_hf) {
+		ret = dpaa2_setup_flow_dist(dev, rss_conf->rss_hf);
+		if (ret) {
+			PMD_INIT_LOG(ERR, "unable to set flow dist");
+			return ret;
+		}
+	} else {
+		ret = dpaa2_remove_flow_dist(dev, 0);
+		if (ret) {
+			PMD_INIT_LOG(ERR, "unable to remove flow dist");
+			return ret;
+		}
+	}
+	eth_conf->rx_adv_conf.rss_conf.rss_hf = rss_conf->rss_hf;
+	return 0;
+}
+
+static int
+dpaa2_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
+			    struct rte_eth_rss_conf *rss_conf)
+{
+	struct rte_eth_dev_data *data = dev->data;
+	struct rte_eth_conf *eth_conf = &data->dev_conf;
+
+	/* dpaa2 does not support rss_key, so length should be 0*/
+	rss_conf->rss_key_len = 0;
+	rss_conf->rss_hf = eth_conf->rx_adv_conf.rss_conf.rss_hf;
+	return 0;
+}
+
+int dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
+		int eth_rx_queue_id,
+		uint16_t dpcon_id,
+		const struct rte_event_eth_rx_adapter_queue_conf *queue_conf)
+{
+	struct dpaa2_dev_priv *eth_priv = dev->data->dev_private;
+	struct fsl_mc_io *dpni = (struct fsl_mc_io *)eth_priv->hw;
+	struct dpaa2_queue *dpaa2_ethq = eth_priv->rx_vq[eth_rx_queue_id];
+	uint8_t flow_id = dpaa2_ethq->flow_id;
+	struct dpni_queue cfg;
+	uint8_t options;
+	int ret;
+
+	if (queue_conf->ev.sched_type == RTE_SCHED_TYPE_PARALLEL)
+		dpaa2_ethq->cb = dpaa2_dev_process_parallel_event;
+	else
+		return -EINVAL;
+
+	memset(&cfg, 0, sizeof(struct dpni_queue));
+	options = DPNI_QUEUE_OPT_DEST;
+	cfg.destination.type = DPNI_DEST_DPCON;
+	cfg.destination.id = dpcon_id;
+	cfg.destination.priority = queue_conf->ev.priority;
+
+	options |= DPNI_QUEUE_OPT_USER_CTX;
+	cfg.user_context = (uint64_t)(dpaa2_ethq);
+
+	ret = dpni_set_queue(dpni, CMD_PRI_LOW, eth_priv->token, DPNI_QUEUE_RX,
+			     dpaa2_ethq->tc_index, flow_id, options, &cfg);
+	if (ret) {
+		RTE_LOG(ERR, PMD, "Error in dpni_set_queue: ret: %d\n", ret);
+		return ret;
+	}
+
+	memcpy(&dpaa2_ethq->ev, &queue_conf->ev, sizeof(struct rte_event));
+
+	return 0;
+}
+
+int dpaa2_eth_eventq_detach(const struct rte_eth_dev *dev,
+		int eth_rx_queue_id)
+{
+	struct dpaa2_dev_priv *eth_priv = dev->data->dev_private;
+	struct fsl_mc_io *dpni = (struct fsl_mc_io *)eth_priv->hw;
+	struct dpaa2_queue *dpaa2_ethq = eth_priv->rx_vq[eth_rx_queue_id];
+	uint8_t flow_id = dpaa2_ethq->flow_id;
+	struct dpni_queue cfg;
+	uint8_t options;
+	int ret;
+
+	memset(&cfg, 0, sizeof(struct dpni_queue));
+	options = DPNI_QUEUE_OPT_DEST;
+	cfg.destination.type = DPNI_DEST_NONE;
+
+	ret = dpni_set_queue(dpni, CMD_PRI_LOW, eth_priv->token, DPNI_QUEUE_RX,
+			     dpaa2_ethq->tc_index, flow_id, options, &cfg);
+	if (ret)
+		RTE_LOG(ERR, PMD, "Error in dpni_set_queue: ret: %d\n", ret);
+
+	return ret;
+}
+
 static struct eth_dev_ops dpaa2_ethdev_ops = {
 	.dev_configure	  = dpaa2_eth_dev_configure,
 	.dev_start	      = dpaa2_dev_start,
@@ -1312,7 +1720,12 @@ static struct eth_dev_ops dpaa2_ethdev_ops = {
 	.dev_set_link_down    = dpaa2_dev_set_link_down,
 	.link_update	   = dpaa2_dev_link_update,
 	.stats_get	       = dpaa2_dev_stats_get,
+	.xstats_get	       = dpaa2_dev_xstats_get,
+	.xstats_get_by_id     = dpaa2_xstats_get_by_id,
+	.xstats_get_names_by_id = dpaa2_xstats_get_names_by_id,
+	.xstats_get_names      = dpaa2_xstats_get_names,
 	.stats_reset	   = dpaa2_dev_stats_reset,
+	.xstats_reset	      = dpaa2_dev_stats_reset,
 	.fw_version_get	   = dpaa2_fw_version_get,
 	.dev_infos_get	   = dpaa2_dev_info_get,
 	.dev_supported_ptypes_get = dpaa2_supported_ptypes_get,
@@ -1328,6 +1741,8 @@ static struct eth_dev_ops dpaa2_ethdev_ops = {
 	.mac_addr_add         = dpaa2_dev_add_mac_addr,
 	.mac_addr_remove      = dpaa2_dev_remove_mac_addr,
 	.mac_addr_set         = dpaa2_dev_set_mac_addr,
+	.rss_hash_update      = dpaa2_dev_rss_hash_update,
+	.rss_hash_conf_get    = dpaa2_dev_rss_hash_conf_get,
 };
 
 static int
@@ -1384,22 +1799,19 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 		goto init_err;
 	}
 
-	priv->num_tc = attr.num_tcs;
+	priv->num_rx_tc = attr.num_rx_tcs;
 
-	/* Resetting the "num_rx_vqueues" to equal number of queues in first TC
+	/* Resetting the "num_rx_queues" to equal number of queues in first TC
 	 * as only one TC is supported on Rx Side. Once Multiple TCs will be
 	 * in use for Rx processing then this will be changed or removed.
 	 */
 	priv->nb_rx_queues = attr.num_queues;
 
-	/* TODO:Using hard coded value for number of TX queues due to dependency
-	 * in MC.
-	 */
-	priv->nb_tx_queues = 8;
+	/* Using number of TX queues as number of TX TCs */
+	priv->nb_tx_queues = attr.num_tx_tcs;
 
-	PMD_INIT_LOG(DEBUG, "num TC - RX %d", priv->num_tc);
-	PMD_INIT_LOG(DEBUG, "nb_tx_queues %d", priv->nb_tx_queues);
-	PMD_INIT_LOG(DEBUG, "nb_rx_queues %d", priv->nb_rx_queues);
+	PMD_DRV_LOG(DEBUG, "RX-TC= %d, nb_rx_queues= %d, nb_tx_queues=%d",
+		    priv->num_rx_tc, priv->nb_rx_queues, priv->nb_tx_queues);
 
 	priv->hw = dpni_dev;
 	priv->hw_id = hw_id;
@@ -1460,11 +1872,13 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	}
 
 	eth_dev->dev_ops = &dpaa2_ethdev_ops;
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_INTR_LSC;
 
 	eth_dev->rx_pkt_burst = dpaa2_dev_prefetch_rx;
 	eth_dev->tx_pkt_burst = dpaa2_dev_tx;
 	rte_fslmc_vfio_dmamap();
 
+	RTE_LOG(INFO, PMD, "%s: netdev created\n", eth_dev->data->name);
 	return 0;
 init_err:
 	dpaa2_dev_uninit(eth_dev);
@@ -1525,6 +1939,7 @@ dpaa2_dev_uninit(struct rte_eth_dev *eth_dev)
 	eth_dev->rx_pkt_burst = NULL;
 	eth_dev->tx_pkt_burst = NULL;
 
+	RTE_LOG(INFO, PMD, "%s: netdev created\n", eth_dev->data->name);
 	return 0;
 }
 
@@ -1588,7 +2003,7 @@ rte_dpaa2_remove(struct rte_dpaa2_device *dpaa2_dev)
 }
 
 static struct rte_dpaa2_driver rte_dpaa2_pmd = {
-	.drv_type = DPAA2_MC_DPNI_DEVID,
+	.drv_type = DPAA2_ETH,
 	.probe = rte_dpaa2_probe,
 	.remove = rte_dpaa2_remove,
 };

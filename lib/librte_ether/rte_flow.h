@@ -50,6 +50,7 @@
 #include <rte_tcp.h>
 #include <rte_udp.h>
 #include <rte_byteorder.h>
+#include <rte_esp.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -285,26 +286,6 @@ enum rte_flow_item_type {
 	RTE_FLOW_ITEM_TYPE_NVGRE,
 
 	/**
-	 * Matches a GREv0 header.
-	 */
-	RTE_FLOW_ITEM_TYPE_GREv0,
-
-	/**
-	 * Matches a GREv1 header.
-	 */
-	RTE_FLOW_ITEM_TYPE_GREv1,
-
-	/**
-	 * Matches a GTPV0_U header.
-	 */
-	RTE_FLOW_ITEM_TYPE_GTPv0_U,
-
-	/**
-	 * Matches a GTPV1_U header.
-	 */
-	RTE_FLOW_ITEM_TYPE_GTPv1_U,
-
-	/**
 	 * Matches a IP in IP header.
 	 */
 	RTE_FLOW_ITEM_TYPE_IPinIP,
@@ -335,13 +316,46 @@ enum rte_flow_item_type {
 	 */
 	RTE_FLOW_ITEM_TYPE_FUZZY,
 
-
 	/**
 	 * Insert a NTPL string into the NTPL filtercode.
 	 *
 	 * See struct rte_flow_item_ntpl.
 	 */
 	RTE_FLOW_ITEM_TYPE_NTPL,
+
+	/**
+	 * Matches a GTP header.
+	 *
+	 * Configure flow for GTP packets.
+	 *
+	 * See struct rte_flow_item_gtp.
+	 */
+	RTE_FLOW_ITEM_TYPE_GTP,
+
+	/**
+	 * Matches a GTP header.
+	 *
+	 * Configure flow for GTP-C packets.
+	 *
+	 * See struct rte_flow_item_gtp.
+	 */
+	RTE_FLOW_ITEM_TYPE_GTPC,
+
+	/**
+	 * Matches a GTP header.
+	 *
+	 * Configure flow for GTP-U packets.
+	 *
+	 * See struct rte_flow_item_gtp.
+	 */
+	RTE_FLOW_ITEM_TYPE_GTPU,
+
+	/**
+	 * Matches a ESP header.
+	 *
+	 * See struct rte_flow_item_esp.
+	 */
+	RTE_FLOW_ITEM_TYPE_ESP,
 };
 
 /**
@@ -719,15 +733,6 @@ static const struct rte_flow_item_mpls rte_flow_item_mpls_mask = {
 #endif
 
 /**
- * RTE_FLOW_ITEM_TYPE_GTPv1_U.
- *
- * Matches a GTPv1_U header.
- */
-struct rte_flow_item_gtpv1_u {
-	rte_be16_t dummy;
-};
-
-/**
  * RTE_FLOW_ITEM_TYPE_IPinIP.
  *
  * Matches a IPinIP header.
@@ -826,6 +831,49 @@ enum {
 static const struct rte_flow_item_ntpl rte_flow_item_ntpl_mask = {
 	.ntpl_str = NULL,
 	.tunnel   = RTE_FLOW_NTPL_NO_TUNNEL,
+};
+#endif
+
+/**
+ * RTE_FLOW_ITEM_TYPE_GTP.
+ *
+ * Matches a GTPv1 header.
+ */
+struct rte_flow_item_gtp {
+	/**
+	 * Version (3b), protocol type (1b), reserved (1b),
+	 * Extension header flag (1b),
+	 * Sequence number flag (1b),
+	 * N-PDU number flag (1b).
+	 */
+	uint8_t v_pt_rsv_flags;
+	uint8_t msg_type; /**< Message type. */
+	rte_be16_t msg_len; /**< Message length. */
+	rte_be32_t teid; /**< Tunnel endpoint identifier. */
+};
+
+/** Default mask for RTE_FLOW_ITEM_TYPE_GTP. */
+#ifndef __cplusplus
+static const struct rte_flow_item_gtp rte_flow_item_gtp_mask = {
+	.teid = RTE_BE32(0xffffffff),
+};
+#endif
+
+/**
+ * RTE_FLOW_ITEM_TYPE_ESP
+ *
+ * Matches an ESP header.
+ */
+struct rte_flow_item_esp {
+	struct esp_hdr hdr; /**< ESP header definition. */
+};
+
+/** Default mask for RTE_FLOW_ITEM_TYPE_ESP. */
+#ifndef __cplusplus
+static const struct rte_flow_item_esp rte_flow_item_esp_mask = {
+	.hdr = {
+		.spi = 0xffffffff,
+	},
 };
 #endif
 
@@ -1010,6 +1058,22 @@ enum rte_flow_action_type {
 	 * See struct rte_flow_action_vf.
 	 */
 	RTE_FLOW_ACTION_TYPE_VF,
+
+	/**
+	 * Traffic metering and policing (MTR).
+	 *
+	 * See struct rte_flow_action_meter.
+	 * See file rte_mtr.h for MTR object configuration.
+	 */
+	RTE_FLOW_ACTION_TYPE_METER,
+
+	/**
+	 * Redirects packets to security engine of current device for security
+	 * processing as specified by security session.
+	 *
+	 * See struct rte_flow_action_security.
+	 */
+	RTE_FLOW_ACTION_TYPE_SECURITY
 };
 
 /**
@@ -1100,6 +1164,51 @@ struct rte_flow_action_vf {
 	uint32_t original:1; /**< Use original VF ID if possible. */
 	uint32_t reserved:31; /**< Reserved, must be zero. */
 	uint32_t id; /**< VF ID to redirect packets to. */
+};
+
+/**
+ * RTE_FLOW_ACTION_TYPE_METER
+ *
+ * Traffic metering and policing (MTR).
+ *
+ * Packets matched by items of this type can be either dropped or passed to the
+ * next item with their color set by the MTR object.
+ *
+ * Non-terminating by default.
+ */
+struct rte_flow_action_meter {
+	uint32_t mtr_id; /**< MTR object ID created with rte_mtr_create(). */
+};
+
+/**
+ * RTE_FLOW_ACTION_TYPE_SECURITY
+ *
+ * Perform the security action on flows matched by the pattern items
+ * according to the configuration of the security session.
+ *
+ * This action modifies the payload of matched flows. For INLINE_CRYPTO, the
+ * security protocol headers and IV are fully provided by the application as
+ * specified in the flow pattern. The payload of matching packets is
+ * encrypted on egress, and decrypted and authenticated on ingress.
+ * For INLINE_PROTOCOL, the security protocol is fully offloaded to HW,
+ * providing full encapsulation and decapsulation of packets in security
+ * protocols. The flow pattern specifies both the outer security header fields
+ * and the inner packet fields. The security session specified in the action
+ * must match the pattern parameters.
+ *
+ * The security session specified in the action must be created on the same
+ * port as the flow action that is being specified.
+ *
+ * The ingress/egress flow attribute should match that specified in the
+ * security session if the security session supports the definition of the
+ * direction.
+ *
+ * Multiple flows can be configured to use the same security session.
+ *
+ * Non-terminating by default.
+ */
+struct rte_flow_action_security {
+	void *security_session; /**< Pointer to security session structure. */
 };
 
 /**
@@ -1211,7 +1320,7 @@ struct rte_flow_error {
  *   state (see rte_eth_dev_rx_queue_stop() and rte_eth_dev_stop()).
  */
 int
-rte_flow_validate(uint8_t port_id,
+rte_flow_validate(uint16_t port_id,
 		  const struct rte_flow_attr *attr,
 		  const struct rte_flow_item pattern[],
 		  const struct rte_flow_action actions[],
@@ -1238,7 +1347,7 @@ rte_flow_validate(uint8_t port_id,
  *   rte_flow_validate().
  */
 struct rte_flow *
-rte_flow_create(uint8_t port_id,
+rte_flow_create(uint16_t port_id,
 		const struct rte_flow_attr *attr,
 		const struct rte_flow_item pattern[],
 		const struct rte_flow_action actions[],
@@ -1265,7 +1374,7 @@ rte_flow_create(uint8_t port_id,
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
-rte_flow_destroy(uint8_t port_id,
+rte_flow_destroy(uint16_t port_id,
 		 struct rte_flow *flow,
 		 struct rte_flow_error *error);
 
@@ -1286,7 +1395,7 @@ rte_flow_destroy(uint8_t port_id,
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
-rte_flow_flush(uint8_t port_id,
+rte_flow_flush(uint16_t port_id,
 	       struct rte_flow_error *error);
 
 /**
@@ -1314,7 +1423,7 @@ rte_flow_flush(uint8_t port_id,
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
-rte_flow_query(uint8_t port_id,
+rte_flow_query(uint16_t port_id,
 	       struct rte_flow *flow,
 	       enum rte_flow_action_type action,
 	       void *data,
@@ -1362,7 +1471,31 @@ rte_flow_query(uint8_t port_id,
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
-rte_flow_isolate(uint8_t port_id, int set, struct rte_flow_error *error);
+rte_flow_isolate(uint16_t port_id, int set, struct rte_flow_error *error);
+
+/**
+ * Initialize flow error structure.
+ *
+ * @param[out] error
+ *   Pointer to flow error structure (may be NULL).
+ * @param code
+ *   Related error code (rte_errno).
+ * @param type
+ *   Cause field and error types.
+ * @param cause
+ *   Object responsible for the error.
+ * @param message
+ *   Human-readable error message.
+ *
+ * @return
+ *   Negative error code (errno value) and rte_errno is set.
+ */
+int
+rte_flow_error_set(struct rte_flow_error *error,
+		   int code,
+		   enum rte_flow_error_type type,
+		   const void *cause,
+		   const char *message);
 
 /**
  * Generic flow representation.

@@ -50,14 +50,16 @@
 #include <rte_malloc.h>
 #include <rte_memcpy.h>
 #include <rte_memory.h>
-#include <rte_memzone.h>
 #include <rte_pci.h>
-#include <rte_vdev.h>
+#include <rte_bus_vdev.h>
+#include <rte_ethdev.h>
+#include <rte_event_eth_rx_adapter.h>
 
 #include <fslmc_vfio.h>
 #include <dpaa2_hw_pvt.h>
 #include <dpaa2_hw_mempool.h>
 #include <dpaa2_hw_dpio.h>
+#include <dpaa2_ethdev.h>
 #include "dpaa2_eventdev.h"
 #include <portal/dpaa2_hw_pvt.h>
 #include <mc/fsl_dpci.h>
@@ -137,14 +139,23 @@ dpaa2_eventdev_enqueue_burst(void *port, const struct rte_event ev[],
 			 */
 			struct rte_event *ev_temp = rte_malloc(NULL,
 				sizeof(struct rte_event), 0);
+
+			if (!ev_temp) {
+				if (!loop)
+					return num_tx;
+				frames_to_send = loop;
+				PMD_DRV_LOG(ERR, "Unable to allocate memory");
+				goto send_partial;
+			}
 			rte_memcpy(ev_temp, event, sizeof(struct rte_event));
 			DPAA2_SET_FD_ADDR((&fd_arr[loop]), ev_temp);
 			DPAA2_SET_FD_LEN((&fd_arr[loop]),
 					 sizeof(struct rte_event));
 		}
+send_partial:
 		loop = 0;
 		while (loop < frames_to_send) {
-			loop += qbman_swp_enqueue_multiple_eqdesc(swp,
+			loop += qbman_swp_enqueue_multiple_desc(swp,
 					&eqdesc[loop], &fd_arr[loop],
 					frames_to_send - loop);
 		}
@@ -189,10 +200,14 @@ RETRY:
 static void dpaa2_eventdev_process_parallel(struct qbman_swp *swp,
 					    const struct qbman_fd *fd,
 					    const struct qbman_result *dq,
+					    struct dpaa2_queue *rxq,
 					    struct rte_event *ev)
 {
 	struct rte_event *ev_temp =
 		(struct rte_event *)DPAA2_GET_FD_ADDR(fd);
+
+	RTE_SET_USED(rxq);
+
 	rte_memcpy(ev, ev_temp, sizeof(struct rte_event));
 	rte_free(ev_temp);
 
@@ -202,6 +217,7 @@ static void dpaa2_eventdev_process_parallel(struct qbman_swp *swp,
 static void dpaa2_eventdev_process_atomic(struct qbman_swp *swp,
 					  const struct qbman_fd *fd,
 					  const struct qbman_result *dq,
+					  struct dpaa2_queue *rxq,
 					  struct rte_event *ev)
 {
 	struct rte_event *ev_temp =
@@ -209,6 +225,7 @@ static void dpaa2_eventdev_process_atomic(struct qbman_swp *swp,
 	uint8_t dqrr_index = qbman_get_dqrr_idx(dq);
 
 	RTE_SET_USED(swp);
+	RTE_SET_USED(rxq);
 
 	rte_memcpy(ev, ev_temp, sizeof(struct rte_event));
 	rte_free(ev_temp);
@@ -265,7 +282,7 @@ dpaa2_eventdev_dequeue_burst(void *port, struct rte_event ev[],
 
 		rxq = (struct dpaa2_queue *)qbman_result_DQ_fqd_ctx(dq);
 		if (rxq) {
-			rxq->cb(swp, fd, dq, &ev[num_pkts]);
+			rxq->cb(swp, fd, dq, rxq, &ev[num_pkts]);
 		} else {
 			qbman_swp_dqrr_consume(swp, dq);
 			PMD_DRV_LOG(ERR, "Null Return VQ received\n");
@@ -378,8 +395,8 @@ dpaa2_eventdev_queue_def_conf(struct rte_eventdev *dev, uint8_t queue_id,
 	RTE_SET_USED(queue_conf);
 
 	queue_conf->nb_atomic_flows = DPAA2_EVENT_QUEUE_ATOMIC_FLOWS;
-	queue_conf->event_queue_cfg = RTE_EVENT_QUEUE_CFG_ATOMIC_ONLY |
-				      RTE_EVENT_QUEUE_CFG_PARALLEL_ONLY;
+	queue_conf->schedule_type = RTE_SCHED_TYPE_ATOMIC |
+				      RTE_SCHED_TYPE_PARALLEL;
 	queue_conf->priority = RTE_EVENT_DEV_PRIORITY_NORMAL;
 }
 
@@ -551,6 +568,147 @@ dpaa2_eventdev_dump(struct rte_eventdev *dev, FILE *f)
 	RTE_SET_USED(f);
 }
 
+static int
+dpaa2_eventdev_eth_caps_get(const struct rte_eventdev *dev,
+			    const struct rte_eth_dev *eth_dev,
+			    uint32_t *caps)
+{
+	const char *ethdev_driver = eth_dev->device->driver->name;
+
+	PMD_DRV_FUNC_TRACE();
+
+	RTE_SET_USED(dev);
+
+	if (!strcmp(ethdev_driver, "net_dpaa2"))
+		*caps = RTE_EVENT_ETH_RX_ADAPTER_DPAA2_CAP;
+	else
+		*caps = RTE_EVENT_ETH_RX_ADAPTER_SW_CAP;
+
+	return 0;
+}
+
+static int
+dpaa2_eventdev_eth_queue_add_all(const struct rte_eventdev *dev,
+		const struct rte_eth_dev *eth_dev,
+		const struct rte_event_eth_rx_adapter_queue_conf *queue_conf)
+{
+	struct dpaa2_eventdev *priv = dev->data->dev_private;
+	uint8_t ev_qid = queue_conf->ev.queue_id;
+	uint16_t dpcon_id = priv->evq_info[ev_qid].dpcon->dpcon_id;
+	int i, ret;
+
+	PMD_DRV_FUNC_TRACE();
+
+	for (i = 0; i < eth_dev->data->nb_rx_queues; i++) {
+		ret = dpaa2_eth_eventq_attach(eth_dev, i,
+				dpcon_id, queue_conf);
+		if (ret) {
+			PMD_DRV_ERR("dpaa2_eth_eventq_attach failed: ret %d\n",
+				    ret);
+			goto fail;
+		}
+	}
+	return 0;
+fail:
+	for (i = (i - 1); i >= 0 ; i--)
+		dpaa2_eth_eventq_detach(eth_dev, i);
+
+	return ret;
+}
+
+static int
+dpaa2_eventdev_eth_queue_add(const struct rte_eventdev *dev,
+		const struct rte_eth_dev *eth_dev,
+		int32_t rx_queue_id,
+		const struct rte_event_eth_rx_adapter_queue_conf *queue_conf)
+{
+	struct dpaa2_eventdev *priv = dev->data->dev_private;
+	uint8_t ev_qid = queue_conf->ev.queue_id;
+	uint16_t dpcon_id = priv->evq_info[ev_qid].dpcon->dpcon_id;
+	int ret;
+
+	PMD_DRV_FUNC_TRACE();
+
+	if (rx_queue_id == -1)
+		return dpaa2_eventdev_eth_queue_add_all(dev,
+				eth_dev, queue_conf);
+
+	ret = dpaa2_eth_eventq_attach(eth_dev, rx_queue_id,
+			dpcon_id, queue_conf);
+	if (ret) {
+		PMD_DRV_ERR("dpaa2_eth_eventq_attach failed: ret: %d\n", ret);
+		return ret;
+	}
+	return 0;
+}
+
+static int
+dpaa2_eventdev_eth_queue_del_all(const struct rte_eventdev *dev,
+			     const struct rte_eth_dev *eth_dev)
+{
+	int i, ret;
+
+	PMD_DRV_FUNC_TRACE();
+
+	RTE_SET_USED(dev);
+
+	for (i = 0; i < eth_dev->data->nb_rx_queues; i++) {
+		ret = dpaa2_eth_eventq_detach(eth_dev, i);
+		if (ret) {
+			PMD_DRV_ERR("dpaa2_eth_eventq_detach failed: ret %d\n",
+				    ret);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
+static int
+dpaa2_eventdev_eth_queue_del(const struct rte_eventdev *dev,
+			     const struct rte_eth_dev *eth_dev,
+			     int32_t rx_queue_id)
+{
+	int ret;
+
+	PMD_DRV_FUNC_TRACE();
+
+	if (rx_queue_id == -1)
+		return dpaa2_eventdev_eth_queue_del_all(dev, eth_dev);
+
+	ret = dpaa2_eth_eventq_detach(eth_dev, rx_queue_id);
+	if (ret) {
+		PMD_DRV_ERR("dpaa2_eth_eventq_detach failed: ret: %d\n", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+static int
+dpaa2_eventdev_eth_start(const struct rte_eventdev *dev,
+			 const struct rte_eth_dev *eth_dev)
+{
+	PMD_DRV_FUNC_TRACE();
+
+	RTE_SET_USED(dev);
+	RTE_SET_USED(eth_dev);
+
+	return 0;
+}
+
+static int
+dpaa2_eventdev_eth_stop(const struct rte_eventdev *dev,
+			const struct rte_eth_dev *eth_dev)
+{
+	PMD_DRV_FUNC_TRACE();
+
+	RTE_SET_USED(dev);
+	RTE_SET_USED(eth_dev);
+
+	return 0;
+}
+
 static const struct rte_eventdev_ops dpaa2_eventdev_ops = {
 	.dev_infos_get    = dpaa2_eventdev_info_get,
 	.dev_configure    = dpaa2_eventdev_configure,
@@ -566,7 +724,12 @@ static const struct rte_eventdev_ops dpaa2_eventdev_ops = {
 	.port_link        = dpaa2_eventdev_port_link,
 	.port_unlink      = dpaa2_eventdev_port_unlink,
 	.timeout_ticks    = dpaa2_eventdev_timeout_ticks,
-	.dump             = dpaa2_eventdev_dump
+	.dump             = dpaa2_eventdev_dump,
+	.eth_rx_adapter_caps_get = dpaa2_eventdev_eth_caps_get,
+	.eth_rx_adapter_queue_add = dpaa2_eventdev_eth_queue_add,
+	.eth_rx_adapter_queue_del = dpaa2_eventdev_eth_queue_del,
+	.eth_rx_adapter_start = dpaa2_eventdev_eth_start,
+	.eth_rx_adapter_stop = dpaa2_eventdev_eth_stop,
 };
 
 static int
@@ -621,7 +784,6 @@ dpaa2_eventdev_create(const char *name)
 	}
 
 	eventdev->dev_ops       = &dpaa2_eventdev_ops;
-	eventdev->schedule      = NULL;
 	eventdev->enqueue       = dpaa2_eventdev_enqueue;
 	eventdev->enqueue_burst = dpaa2_eventdev_enqueue_burst;
 	eventdev->enqueue_new_burst = dpaa2_eventdev_enqueue_burst;

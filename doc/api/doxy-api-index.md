@@ -41,8 +41,11 @@ The public API headers are grouped by topics:
   [ethctrl]            (@ref rte_eth_ctrl.h),
   [rte_flow]           (@ref rte_flow.h),
   [rte_tm]             (@ref rte_tm.h),
+  [rte_mtr]            (@ref rte_mtr.h),
   [cryptodev]          (@ref rte_cryptodev.h),
+  [security]           (@ref rte_security.h),
   [eventdev]           (@ref rte_eventdev.h),
+  [event_eth_rx_adapter]   (@ref rte_event_eth_rx_adapter.h),
   [metrics]            (@ref rte_metrics.h),
   [bitrate]            (@ref rte_bitrate.h),
   [latency]            (@ref rte_latencystats.h),
@@ -50,11 +53,13 @@ The public API headers are grouped by topics:
   [PCI]                (@ref rte_pci.h)
 
 - **device specific**:
+  [softnic]            (@ref rte_eth_softnic.h),
   [bond]               (@ref rte_eth_bond.h),
   [vhost]              (@ref rte_vhost.h),
   [KNI]                (@ref rte_kni.h),
   [ixgbe]              (@ref rte_pmd_ixgbe.h),
   [i40e]               (@ref rte_pmd_i40e.h),
+  [bnxt]               (@ref rte_pmd_bnxt.h),
   [crypto_scheduler]   (@ref rte_cryptodev_scheduler.h)
 
 - **memory**:
@@ -96,16 +101,16 @@ The public API headers are grouped by topics:
   [ethernet]           (@ref rte_ether.h),
   [ARP]                (@ref rte_arp.h),
   [ICMP]               (@ref rte_icmp.h),
+  [ESP]                (@ref rte_esp.h),
   [IP]                 (@ref rte_ip.h),
   [SCTP]               (@ref rte_sctp.h),
   [TCP]                (@ref rte_tcp.h),
   [UDP]                (@ref rte_udp.h),
   [GRO]                (@ref rte_gro.h),
+  [GSO]                (@ref rte_gso.h),
   [frag/reass]         (@ref rte_ip_frag.h),
   [LPM IPv4 route]     (@ref rte_lpm.h),
-  [LPM IPv6 route]     (@ref rte_lpm6.h),
-  [ACL]                (@ref rte_acl.h),
-  [EFD]                (@ref rte_efd.h)
+  [LPM IPv6 route]     (@ref rte_lpm6.h)
 
 - **QoS**:
   [metering]           (@ref rte_meter.h),
@@ -119,13 +124,19 @@ The public API headers are grouped by topics:
   [FBK hash]           (@ref rte_fbk_hash.h),
   [CRC hash]           (@ref rte_hash_crc.h)
 
+- **classification**
+  [reorder]            (@ref rte_reorder.h),
+  [distributor]        (@ref rte_distributor.h),
+  [EFD]                (@ref rte_efd.h),
+  [ACL]                (@ref rte_acl.h),
+  [member]             (@ref rte_member.h),
+  [flow classify]      (@ref rte_flow_classify.h)
+
 - **containers**:
   [mbuf]               (@ref rte_mbuf.h),
   [ring]               (@ref rte_ring.h),
-  [distributor]        (@ref rte_distributor.h),
-  [reorder]            (@ref rte_reorder.h),
   [tailq]              (@ref rte_tailq.h),
-  [bitmap]             (@ref rte_bitmap.h),
+  [bitmap]             (@ref rte_bitmap.h)
 
 - **packet framework**:
   * [port]             (@ref rte_port.h):

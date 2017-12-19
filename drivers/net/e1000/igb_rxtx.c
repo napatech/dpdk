@@ -105,6 +105,13 @@ struct igb_tx_entry {
 };
 
 /**
+ * rx queue flags
+ */
+enum igb_rxq_flags {
+	IGB_RXQ_FLAG_LB_BSWAP_VLAN = 0x01,
+};
+
+/**
  * Structure associated with each RX queue.
  */
 struct igb_rx_queue {
@@ -122,12 +129,13 @@ struct igb_rx_queue {
 	uint16_t            rx_free_thresh; /**< max free RX desc to hold. */
 	uint16_t            queue_id;   /**< RX queue index. */
 	uint16_t            reg_idx;    /**< RX queue register index. */
-	uint8_t             port_id;    /**< Device port identifier. */
+	uint16_t            port_id;    /**< Device port identifier. */
 	uint8_t             pthresh;    /**< Prefetch threshold register. */
 	uint8_t             hthresh;    /**< Host threshold register. */
 	uint8_t             wthresh;    /**< Write-back threshold register. */
 	uint8_t             crc_len;    /**< 0 if CRC stripped, 4 otherwise. */
 	uint8_t             drop_en;  /**< If not 0, set SRRCTL.Drop_En. */
+	uint32_t            flags;      /**< RX flags. */
 };
 
 /**
@@ -191,7 +199,7 @@ struct igb_tx_queue {
 	/**< Index of first used TX descriptor. */
 	uint16_t               queue_id; /**< TX queue index. */
 	uint16_t               reg_idx;  /**< TX queue register index. */
-	uint8_t                port_id;  /**< Device port identifier. */
+	uint16_t               port_id;  /**< Device port identifier. */
 	uint8_t                pthresh;  /**< Prefetch threshold register. */
 	uint8_t                hthresh;  /**< Host threshold register. */
 	uint8_t                wthresh;  /**< Write-back threshold register. */
@@ -589,7 +597,7 @@ eth_igb_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 			 * Set up transmit descriptor.
 			 */
 			slen = (uint16_t) m_seg->data_len;
-			buf_dma_addr = rte_mbuf_data_dma_addr(m_seg);
+			buf_dma_addr = rte_mbuf_data_iova(m_seg);
 			txd->read.buffer_addr =
 				rte_cpu_to_le_64(buf_dma_addr);
 			txd->read.cmd_type_len =
@@ -785,7 +793,7 @@ rx_desc_status_to_pkt_flags(uint32_t rx_status)
 
 	/* Check if VLAN present */
 	pkt_flags = ((rx_status & E1000_RXD_STAT_VP) ?
-		PKT_RX_VLAN_PKT | PKT_RX_VLAN_STRIPPED : 0);
+		PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED : 0);
 
 #if defined(RTE_LIBRTE_IEEE1588)
 	if (rx_status & E1000_RXD_STAT_TMST)
@@ -917,7 +925,7 @@ eth_igb_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		rxm = rxe->mbuf;
 		rxe->mbuf = nmb;
 		dma_addr =
-			rte_cpu_to_le_64(rte_mbuf_data_dma_addr_default(nmb));
+			rte_cpu_to_le_64(rte_mbuf_data_iova_default(nmb));
 		rxdp->read.hdr_addr = 0;
 		rxdp->read.pkt_addr = dma_addr;
 
@@ -946,9 +954,17 @@ eth_igb_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 
 		rxm->hash.rss = rxd.wb.lower.hi_dword.rss;
 		hlen_type_rss = rte_le_to_cpu_32(rxd.wb.lower.lo_dword.data);
-		/* Only valid if PKT_RX_VLAN_PKT set in pkt_flags */
-		rxm->vlan_tci = rte_le_to_cpu_16(rxd.wb.upper.vlan);
 
+		/*
+		 * The vlan_tci field is only valid when PKT_RX_VLAN is
+		 * set in the pkt_flags field and must be in CPU byte order.
+		 */
+		if ((staterr & rte_cpu_to_le_32(E1000_RXDEXT_STATERR_LB)) &&
+				(rxq->flags & IGB_RXQ_FLAG_LB_BSWAP_VLAN)) {
+			rxm->vlan_tci = rte_be_to_cpu_16(rxd.wb.upper.vlan);
+		} else {
+			rxm->vlan_tci = rte_le_to_cpu_16(rxd.wb.upper.vlan);
+		}
 		pkt_flags = rx_desc_hlen_type_rss_to_pkt_flags(rxq, hlen_type_rss);
 		pkt_flags = pkt_flags | rx_desc_status_to_pkt_flags(staterr);
 		pkt_flags = pkt_flags | rx_desc_error_to_pkt_flags(staterr);
@@ -1103,7 +1119,7 @@ eth_igb_recv_scattered_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		 */
 		rxm = rxe->mbuf;
 		rxe->mbuf = nmb;
-		dma = rte_cpu_to_le_64(rte_mbuf_data_dma_addr_default(nmb));
+		dma = rte_cpu_to_le_64(rte_mbuf_data_iova_default(nmb));
 		rxdp->read.pkt_addr = dma;
 		rxdp->read.hdr_addr = 0;
 
@@ -1180,10 +1196,17 @@ eth_igb_recv_scattered_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		first_seg->hash.rss = rxd.wb.lower.hi_dword.rss;
 
 		/*
-		 * The vlan_tci field is only valid when PKT_RX_VLAN_PKT is
-		 * set in the pkt_flags field.
+		 * The vlan_tci field is only valid when PKT_RX_VLAN is
+		 * set in the pkt_flags field and must be in CPU byte order.
 		 */
-		first_seg->vlan_tci = rte_le_to_cpu_16(rxd.wb.upper.vlan);
+		if ((staterr & rte_cpu_to_le_32(E1000_RXDEXT_STATERR_LB)) &&
+				(rxq->flags & IGB_RXQ_FLAG_LB_BSWAP_VLAN)) {
+			first_seg->vlan_tci =
+				rte_be_to_cpu_16(rxd.wb.upper.vlan);
+		} else {
+			first_seg->vlan_tci =
+				rte_le_to_cpu_16(rxd.wb.upper.vlan);
+		}
 		hlen_type_rss = rte_le_to_cpu_32(rxd.wb.lower.lo_dword.data);
 		pkt_flags = rx_desc_hlen_type_rss_to_pkt_flags(rxq, hlen_type_rss);
 		pkt_flags = pkt_flags | rx_desc_status_to_pkt_flags(staterr);
@@ -1530,7 +1553,7 @@ eth_igb_tx_queue_setup(struct rte_eth_dev *dev,
 	txq->port_id = dev->data->port_id;
 
 	txq->tdt_reg_addr = E1000_PCI_REG_ADDR(hw, E1000_TDT(txq->reg_idx));
-	txq->tx_ring_phys_addr = rte_mem_phy2mch(tz->memseg_id, tz->phys_addr);
+	txq->tx_ring_phys_addr = tz->iova;
 
 	txq->tx_ring = (union e1000_adv_tx_desc *) tz->addr;
 	/* Allocate software ring */
@@ -1667,7 +1690,7 @@ eth_igb_rx_queue_setup(struct rte_eth_dev *dev,
 	}
 	rxq->rdt_reg_addr = E1000_PCI_REG_ADDR(hw, E1000_RDT(rxq->reg_idx));
 	rxq->rdh_reg_addr = E1000_PCI_REG_ADDR(hw, E1000_RDH(rxq->reg_idx));
-	rxq->rx_ring_phys_addr = rte_mem_phy2mch(rz->memseg_id, rz->phys_addr);
+	rxq->rx_ring_phys_addr = rz->iova;
 	rxq->rx_ring = (union e1000_adv_rx_desc *) rz->addr;
 
 	/* Allocate software ring. */
@@ -2180,7 +2203,7 @@ igb_alloc_rx_queue_mbufs(struct igb_rx_queue *rxq)
 			return -ENOMEM;
 		}
 		dma_addr =
-			rte_cpu_to_le_64(rte_mbuf_data_dma_addr_default(mbuf));
+			rte_cpu_to_le_64(rte_mbuf_data_iova_default(mbuf));
 		rxd = &rxq->rx_ring[i];
 		rxd->read.hdr_addr = 0;
 		rxd->read.pkt_addr = dma_addr;
@@ -2277,6 +2300,17 @@ eth_igb_rx_init(struct rte_eth_dev *dev)
 		uint32_t rxdctl;
 
 		rxq = dev->data->rx_queues[i];
+
+		rxq->flags = 0;
+		/*
+		 * i350 and i354 vlan packets have vlan tags byte swapped.
+		 */
+		if (hw->mac.type == e1000_i350 || hw->mac.type == e1000_i354) {
+			rxq->flags |= IGB_RXQ_FLAG_LB_BSWAP_VLAN;
+			PMD_INIT_LOG(DEBUG, "IGB rx vlan bswap required");
+		} else {
+			PMD_INIT_LOG(DEBUG, "IGB rx vlan bswap not required");
+		}
 
 		/* Allocate buffers for descriptor rings and set up queue */
 		ret = igb_alloc_rx_queue_mbufs(rxq);
@@ -2556,6 +2590,17 @@ eth_igbvf_rx_init(struct rte_eth_dev *dev)
 		uint32_t rxdctl;
 
 		rxq = dev->data->rx_queues[i];
+
+		rxq->flags = 0;
+		/*
+		 * i350VF LB vlan packets have vlan tags byte swapped.
+		 */
+		if (hw->mac.type == e1000_vfadapt_i350) {
+			rxq->flags |= IGB_RXQ_FLAG_LB_BSWAP_VLAN;
+			PMD_INIT_LOG(DEBUG, "IGB rx vlan bswap required");
+		} else {
+			PMD_INIT_LOG(DEBUG, "IGB rx vlan bswap not required");
+		}
 
 		/* Allocate buffers for descriptor rings and set up queue */
 		ret = igb_alloc_rx_queue_mbufs(rxq);

@@ -55,6 +55,21 @@ extern "C" {
 /** Double linked list of buses */
 TAILQ_HEAD(rte_bus_list, rte_bus);
 
+
+/**
+ * IOVA mapping mode.
+ *
+ * IOVA mapping mode is iommu programming mode of a device.
+ * That device (for example: IOMMU backed DMA device) based
+ * on rte_iova_mode will generate physical or virtual address.
+ *
+ */
+enum rte_iova_mode {
+	RTE_IOVA_DC = 0,	/* Don't care mode */
+	RTE_IOVA_PA = (1 << 0), /* DMA using physical address */
+	RTE_IOVA_VA = (1 << 1)  /* DMA using virtual address */
+};
+
 /**
  * Bus specific scan for devices attached on the bus.
  * For each bus object, the scan would be responsible for finding devices and
@@ -168,6 +183,20 @@ struct rte_bus_conf {
 	enum rte_bus_scan_mode scan_mode; /**< Scan policy. */
 };
 
+
+/**
+ * Get common iommu class of the all the devices on the bus. The bus may
+ * check that those devices are attached to iommu driver.
+ * If no devices are attached to the bus. The bus may return with don't care
+ * (_DC) value.
+ * Otherwise, The bus will return appropriate _pa or _va iova mode.
+ *
+ * @return
+ *      enum rte_iova_mode value.
+ */
+typedef enum rte_iova_mode (*rte_bus_get_iommu_class_t)(void);
+
+
 /**
  * A structure describing a generic bus.
  */
@@ -181,6 +210,7 @@ struct rte_bus {
 	rte_bus_unplug_t unplug;     /**< Remove single device from driver */
 	rte_bus_parse_t parse;       /**< Parse a device name */
 	struct rte_bus_conf conf;    /**< Bus configuration */
+	rte_bus_get_iommu_class_t get_iommu_class; /**< Get iommu class */
 };
 
 /**
@@ -280,12 +310,22 @@ struct rte_bus *rte_bus_find_by_device(const struct rte_device *dev);
  */
 struct rte_bus *rte_bus_find_by_name(const char *busname);
 
+
+/**
+ * Get the common iommu class of devices bound on to buses available in the
+ * system. The default mode is PA.
+ *
+ * @return
+ *     enum rte_iova_mode value.
+ */
+enum rte_iova_mode rte_bus_get_iommu_class(void);
+
 /**
  * Helper for Bus registration.
  * The constructor has higher priority than PMD constructors.
  */
 #define RTE_REGISTER_BUS(nm, bus) \
-RTE_INIT_PRIO(businitfn_ ##nm, 101); \
+RTE_INIT_PRIO(businitfn_ ##nm, 110); \
 static void businitfn_ ##nm(void) \
 {\
 	(bus).name = RTE_STR(nm);\

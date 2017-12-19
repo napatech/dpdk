@@ -170,12 +170,15 @@ enum index {
 	ITEM_GRE,
 	ITEM_GRE_PROTO,
 	ITEM_GRE_VERSION,
-	ITEM_GTPV1U,
-	ITEM_GTPV1_U_DUMMY,
 	ITEM_IP_IN_IP,
 	ITEM_IP_IN_IP_DUMMY,
 	ITEM_FUZZY,
 	ITEM_FUZZY_THRESH,
+	ITEM_GTP,
+  ITEM_GTP_VERSION,
+	ITEM_GTP_TEID,
+	ITEM_GTPC,
+	ITEM_GTPU,
 
 	/* Validate/create actions. */
 	ACTIONS,
@@ -199,6 +202,8 @@ enum index {
 	ACTION_VF,
 	ACTION_VF_ORIGINAL,
 	ACTION_VF_ID,
+	ACTION_METER,
+	ACTION_METER_ID,
 };
 
 /** Size of pattern[] field in struct rte_flow_item_raw. */
@@ -231,7 +236,7 @@ struct context {
 	int args_num; /**< Number of entries in args[]. */
 	uint32_t eol:1; /**< EOL has been detected. */
 	uint32_t last:1; /**< No more arguments. */
-	uint16_t port; /**< Current port ID (for completions). */
+	portid_t port; /**< Current port ID (for completions). */
 	uint32_t objdata; /**< Object-specific data. */
 	void *object; /**< Address of current object for relative offsets. */
 	void *objmask; /**< Object a full mask must be written to. */
@@ -351,7 +356,7 @@ struct token {
 /** Parser output buffer layout expected by cmd_flow_parsed(). */
 struct buffer {
 	enum index command; /**< Flow command. */
-	uint16_t port; /**< Affected port ID. */
+	portid_t port; /**< Affected port ID. */
 	union {
 		struct {
 			struct rte_flow_attr attr;
@@ -455,9 +460,11 @@ static const enum index next_item[] = {
 	ITEM_NVGRE,
 	ITEM_MPLS,
 	ITEM_GRE,
-	ITEM_GTPV1U,
 	ITEM_IP_IN_IP,
 	ITEM_FUZZY,
+	ITEM_GTP,
+	ITEM_GTPC,
+	ITEM_GTPU,
 	ZERO,
 };
 
@@ -589,12 +596,6 @@ static const enum index item_mpls[] = {
 	ZERO,
 };
 
-static const enum index item_gtpv1_u[] = {
-	ITEM_GTPV1_U_DUMMY,
-	ITEM_NEXT,
-	ZERO,
-};
-
 static const enum index item_ip_in_ip[] = {
 	ITEM_IP_IN_IP_DUMMY,
 	ITEM_NEXT,
@@ -604,6 +605,13 @@ static const enum index item_ip_in_ip[] = {
 static const enum index item_gre[] = {
 	ITEM_GRE_VERSION,
 	ITEM_GRE_PROTO,
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_gtp[] = {
+  ITEM_GTP_VERSION,
+  ITEM_GTP_TEID,
 	ITEM_NEXT,
 	ZERO,
 };
@@ -621,6 +629,7 @@ static const enum index next_action[] = {
 	ACTION_RSS,
 	ACTION_PF,
 	ACTION_VF,
+	ACTION_METER,
 	ZERO,
 };
 
@@ -651,6 +660,12 @@ static const enum index action_rss[] = {
 static const enum index action_vf[] = {
 	ACTION_VF_ORIGINAL,
 	ACTION_VF_ID,
+	ACTION_NEXT,
+	ZERO,
+};
+
+static const enum index action_meter[] = {
+	ACTION_METER_ID,
 	ACTION_NEXT,
 	ZERO,
 };
@@ -1412,20 +1427,6 @@ static const struct token token_list[] = {
 						  label_tc_s,
 						  "\xff\xff\xf0")),
 	},
-	[ITEM_GTPV1U] = {
-		.name = "gtpv1_u",
-		.help = "match GTPv1_U header",
-		.priv = PRIV_ITEM(GTPv1_U, sizeof(struct rte_flow_item_gtpv1_u)),
-		.next = NEXT(item_gtpv1_u),
-		.call = parse_vc,
-	},
-	[ITEM_GTPV1_U_DUMMY] = {
-		.name = "dummy",
-		.help = "Dummy - not used",
-		.next = NEXT(item_gtpv1_u, NEXT_ENTRY(UNSIGNED), item_param),
-		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_gtpv1_u,
-							 dummy)),
-	},
 	[ITEM_IP_IN_IP] = {
 		.name = "ipinip",
 		.help = "match IPinIP header",
@@ -1475,6 +1476,40 @@ static const struct token token_list[] = {
 		.next = NEXT(item_fuzzy, NEXT_ENTRY(UNSIGNED), item_param),
 		.args = ARGS(ARGS_ENTRY(struct rte_flow_item_fuzzy,
 					thresh)),
+	},
+	[ITEM_GTP] = {
+		.name = "gtp",
+		.help = "match GTP header",
+		.priv = PRIV_ITEM(GTP, sizeof(struct rte_flow_item_gtp)),
+		.next = NEXT(item_gtp),
+		.call = parse_vc,
+	},
+  [ITEM_GTP_VERSION] = {
+    .name = "version",
+    .help = "GTPU version",
+    .next = NEXT(item_gtp, NEXT_ENTRY(UNSIGNED), item_param),
+    .args = ARGS(ARGS_ENTRY_MASK_HTON(struct rte_flow_item_gtp,
+               v_pt_rsv_flags, "\xE0")),
+  },
+	[ITEM_GTP_TEID] = {
+		.name = "teid",
+		.help = "tunnel endpoint identifier",
+		.next = NEXT(item_gtp, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_gtp, teid)),
+	},
+	[ITEM_GTPC] = {
+		.name = "gtpc",
+		.help = "match GTP header",
+		.priv = PRIV_ITEM(GTPC, sizeof(struct rte_flow_item_gtp)),
+		.next = NEXT(item_gtp),
+		.call = parse_vc,
+	},
+	[ITEM_GTPU] = {
+		.name = "gtpu",
+		.help = "match GTP header",
+		.priv = PRIV_ITEM(GTPU, sizeof(struct rte_flow_item_gtp)),
+		.next = NEXT(item_gtp),
+		.call = parse_vc,
 	},
 
 	/* Validate/create actions. */
@@ -1619,6 +1654,21 @@ static const struct token token_list[] = {
 		.help = "VF ID to redirect packets to",
 		.next = NEXT(action_vf, NEXT_ENTRY(UNSIGNED)),
 		.args = ARGS(ARGS_ENTRY(struct rte_flow_action_vf, id)),
+		.call = parse_vc_conf,
+	},
+	[ACTION_METER] = {
+		.name = "meter",
+		.help = "meter the directed packets at given id",
+		.priv = PRIV_ACTION(METER,
+				    sizeof(struct rte_flow_action_meter)),
+		.next = NEXT(action_meter),
+		.call = parse_vc,
+	},
+	[ACTION_METER_ID] = {
+		.name = "mtr_id",
+		.help = "meter id to use",
+		.next = NEXT(action_meter, NEXT_ENTRY(UNSIGNED)),
+		.args = ARGS(ARGS_ENTRY(struct rte_flow_action_meter, mtr_id)),
 		.call = parse_vc_conf,
 	},
 };
@@ -2633,7 +2683,7 @@ comp_rule_id(struct context *ctx, const struct token *token,
 
 	(void)token;
 	if (port_id_is_invalid(ctx->port, DISABLED_WARN) ||
-	    ctx->port == (uint16_t)RTE_PORT_ALL)
+	    ctx->port == (portid_t)RTE_PORT_ALL)
 		return -1;
 	port = &ports[ctx->port];
 	for (pf = port->flow_list; pf != NULL; pf = pf->next) {

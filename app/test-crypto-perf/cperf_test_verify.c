@@ -37,22 +37,21 @@
 
 #include "cperf_test_verify.h"
 #include "cperf_ops.h"
+#include "cperf_test_common.h"
 
 struct cperf_verify_ctx {
 	uint8_t dev_id;
 	uint16_t qp_id;
 	uint8_t lcore_id;
 
-	struct rte_mempool *pkt_mbuf_pool_in;
-	struct rte_mempool *pkt_mbuf_pool_out;
-	struct rte_mbuf **mbufs_in;
-	struct rte_mbuf **mbufs_out;
-
-	struct rte_mempool *crypto_op_pool;
+	struct rte_mempool *pool;
 
 	struct rte_cryptodev_sym_session *sess;
 
 	cperf_populate_ops_t populate_ops;
+
+	uint32_t src_buf_offset;
+	uint32_t dst_buf_offset;
 
 	const struct cperf_options *options;
 	const struct cperf_test_vector *test_vector;
@@ -63,121 +62,19 @@ struct cperf_op_result {
 };
 
 static void
-cperf_verify_test_free(struct cperf_verify_ctx *ctx, uint32_t mbuf_nb)
+cperf_verify_test_free(struct cperf_verify_ctx *ctx)
 {
-	uint32_t i;
-
 	if (ctx) {
 		if (ctx->sess) {
 			rte_cryptodev_sym_session_clear(ctx->dev_id, ctx->sess);
 			rte_cryptodev_sym_session_free(ctx->sess);
 		}
 
-		if (ctx->mbufs_in) {
-			for (i = 0; i < mbuf_nb; i++)
-				rte_pktmbuf_free(ctx->mbufs_in[i]);
-
-			rte_free(ctx->mbufs_in);
-		}
-
-		if (ctx->mbufs_out) {
-			for (i = 0; i < mbuf_nb; i++) {
-				if (ctx->mbufs_out[i] != NULL)
-					rte_pktmbuf_free(ctx->mbufs_out[i]);
-			}
-
-			rte_free(ctx->mbufs_out);
-		}
-
-		if (ctx->pkt_mbuf_pool_in)
-			rte_mempool_free(ctx->pkt_mbuf_pool_in);
-
-		if (ctx->pkt_mbuf_pool_out)
-			rte_mempool_free(ctx->pkt_mbuf_pool_out);
-
-		if (ctx->crypto_op_pool)
-			rte_mempool_free(ctx->crypto_op_pool);
+		if (ctx->pool)
+			rte_mempool_free(ctx->pool);
 
 		rte_free(ctx);
 	}
-}
-
-static struct rte_mbuf *
-cperf_mbuf_create(struct rte_mempool *mempool,
-		uint32_t segments_nb,
-		const struct cperf_options *options,
-		const struct cperf_test_vector *test_vector)
-{
-	struct rte_mbuf *mbuf;
-	uint32_t segment_sz = options->max_buffer_size / segments_nb;
-	uint32_t last_sz = options->max_buffer_size % segments_nb;
-	uint8_t *mbuf_data;
-	uint8_t *test_data =
-			(options->cipher_op == RTE_CRYPTO_CIPHER_OP_ENCRYPT) ?
-					test_vector->plaintext.data :
-					test_vector->ciphertext.data;
-
-	mbuf = rte_pktmbuf_alloc(mempool);
-	if (mbuf == NULL)
-		goto error;
-
-	mbuf_data = (uint8_t *)rte_pktmbuf_append(mbuf, segment_sz);
-	if (mbuf_data == NULL)
-		goto error;
-
-	memcpy(mbuf_data, test_data, segment_sz);
-	test_data += segment_sz;
-	segments_nb--;
-
-	while (segments_nb) {
-		struct rte_mbuf *m;
-
-		m = rte_pktmbuf_alloc(mempool);
-		if (m == NULL)
-			goto error;
-
-		rte_pktmbuf_chain(mbuf, m);
-
-		mbuf_data = (uint8_t *)rte_pktmbuf_append(mbuf, segment_sz);
-		if (mbuf_data == NULL)
-			goto error;
-
-		memcpy(mbuf_data, test_data, segment_sz);
-		test_data += segment_sz;
-		segments_nb--;
-	}
-
-	if (last_sz) {
-		mbuf_data = (uint8_t *)rte_pktmbuf_append(mbuf, last_sz);
-		if (mbuf_data == NULL)
-			goto error;
-
-		memcpy(mbuf_data, test_data, last_sz);
-	}
-
-	if (options->op_type != CPERF_CIPHER_ONLY) {
-		mbuf_data = (uint8_t *)rte_pktmbuf_append(mbuf,
-				options->digest_sz);
-		if (mbuf_data == NULL)
-			goto error;
-	}
-
-	if (options->op_type == CPERF_AEAD) {
-		uint8_t *aead = (uint8_t *)rte_pktmbuf_prepend(mbuf,
-			RTE_ALIGN_CEIL(options->aead_aad_sz, 16));
-
-		if (aead == NULL)
-			goto error;
-
-		memcpy(aead, test_vector->aad.data, test_vector->aad.length);
-	}
-
-	return mbuf;
-error:
-	if (mbuf != NULL)
-		rte_pktmbuf_free(mbuf);
-
-	return NULL;
 }
 
 void *
@@ -188,8 +85,6 @@ cperf_verify_test_constructor(struct rte_mempool *sess_mp,
 		const struct cperf_op_fns *op_fns)
 {
 	struct cperf_verify_ctx *ctx = NULL;
-	unsigned int mbuf_idx = 0;
-	char pool_name[32] = "";
 
 	ctx = rte_malloc(NULL, sizeof(struct cperf_verify_ctx), 0);
 	if (ctx == NULL)
@@ -202,7 +97,7 @@ cperf_verify_test_constructor(struct rte_mempool *sess_mp,
 	ctx->options = options;
 	ctx->test_vector = test_vector;
 
-	/* IV goes at the end of the cryptop operation */
+	/* IV goes at the end of the crypto operation */
 	uint16_t iv_offset = sizeof(struct rte_crypto_op) +
 		sizeof(struct rte_crypto_sym_op);
 
@@ -211,80 +106,14 @@ cperf_verify_test_constructor(struct rte_mempool *sess_mp,
 	if (ctx->sess == NULL)
 		goto err;
 
-	snprintf(pool_name, sizeof(pool_name), "cperf_pool_in_cdev_%d",
-			dev_id);
-
-	ctx->pkt_mbuf_pool_in = rte_pktmbuf_pool_create(pool_name,
-			options->pool_sz * options->segments_nb, 0, 0,
-			RTE_PKTMBUF_HEADROOM +
-			RTE_CACHE_LINE_ROUNDUP(
-				(options->max_buffer_size / options->segments_nb) +
-				(options->max_buffer_size % options->segments_nb) +
-					options->digest_sz),
-			rte_socket_id());
-
-	if (ctx->pkt_mbuf_pool_in == NULL)
-		goto err;
-
-	/* Generate mbufs_in with plaintext populated for test */
-	ctx->mbufs_in = rte_malloc(NULL,
-			(sizeof(struct rte_mbuf *) * ctx->options->pool_sz), 0);
-
-	for (mbuf_idx = 0; mbuf_idx < options->pool_sz; mbuf_idx++) {
-		ctx->mbufs_in[mbuf_idx] = cperf_mbuf_create(
-				ctx->pkt_mbuf_pool_in, options->segments_nb,
-				options, test_vector);
-		if (ctx->mbufs_in[mbuf_idx] == NULL)
-			goto err;
-	}
-
-	if (options->out_of_place == 1)	{
-
-		snprintf(pool_name, sizeof(pool_name), "cperf_pool_out_cdev_%d",
-				dev_id);
-
-		ctx->pkt_mbuf_pool_out = rte_pktmbuf_pool_create(
-				pool_name, options->pool_sz, 0, 0,
-				RTE_PKTMBUF_HEADROOM +
-				RTE_CACHE_LINE_ROUNDUP(
-					options->max_buffer_size +
-					options->digest_sz),
-				rte_socket_id());
-
-		if (ctx->pkt_mbuf_pool_out == NULL)
-			goto err;
-	}
-
-	ctx->mbufs_out = rte_malloc(NULL,
-			(sizeof(struct rte_mbuf *) *
-			ctx->options->pool_sz), 0);
-
-	for (mbuf_idx = 0; mbuf_idx < options->pool_sz; mbuf_idx++) {
-		if (options->out_of_place == 1)	{
-			ctx->mbufs_out[mbuf_idx] = cperf_mbuf_create(
-					ctx->pkt_mbuf_pool_out, 1,
-					options, test_vector);
-			if (ctx->mbufs_out[mbuf_idx] == NULL)
-				goto err;
-		} else {
-			ctx->mbufs_out[mbuf_idx] = NULL;
-		}
-	}
-
-	snprintf(pool_name, sizeof(pool_name), "cperf_op_pool_cdev_%d",
-			dev_id);
-
-	uint16_t priv_size = test_vector->cipher_iv.length +
-		test_vector->auth_iv.length + test_vector->aead_iv.length;
-	ctx->crypto_op_pool = rte_crypto_op_pool_create(pool_name,
-			RTE_CRYPTO_OP_TYPE_SYMMETRIC, options->pool_sz,
-			512, priv_size, rte_socket_id());
-	if (ctx->crypto_op_pool == NULL)
+	if (cperf_alloc_common_memory(options, test_vector, dev_id, qp_id, 0,
+			&ctx->src_buf_offset, &ctx->dst_buf_offset,
+			&ctx->pool) < 0)
 		goto err;
 
 	return ctx;
 err:
-	cperf_verify_test_free(ctx, mbuf_idx);
+	cperf_verify_test_free(ctx);
 
 	return NULL;
 }
@@ -362,10 +191,13 @@ cperf_verify_op(struct rte_crypto_op *op,
 		break;
 	case CPERF_AEAD:
 		cipher = 1;
-		cipher_offset = vector->aad.length;
+		cipher_offset = 0;
 		auth = 1;
-		auth_offset = vector->aad.length + options->test_buffer_size;
+		auth_offset = options->test_buffer_size;
 		break;
+	default:
+		res = 1;
+		goto out;
 	}
 
 	if (cipher == 1) {
@@ -386,7 +218,37 @@ cperf_verify_op(struct rte_crypto_op *op,
 					options->digest_sz);
 	}
 
+out:
+	rte_free(data);
 	return !!res;
+}
+
+static void
+cperf_mbuf_set(struct rte_mbuf *mbuf,
+		const struct cperf_options *options,
+		const struct cperf_test_vector *test_vector)
+{
+	uint32_t segment_sz = options->segment_sz;
+	uint8_t *mbuf_data;
+	uint8_t *test_data =
+			(options->cipher_op == RTE_CRYPTO_CIPHER_OP_ENCRYPT) ?
+					test_vector->plaintext.data :
+					test_vector->ciphertext.data;
+	uint32_t remaining_bytes = options->max_buffer_size;
+
+	while (remaining_bytes) {
+		mbuf_data = rte_pktmbuf_mtod(mbuf, uint8_t *);
+
+		if (remaining_bytes <= segment_sz) {
+			memcpy(mbuf_data, test_data, remaining_bytes);
+			return;
+		}
+
+		memcpy(mbuf_data, test_data, segment_sz);
+		remaining_bytes -= segment_sz;
+		test_data += segment_sz;
+		mbuf = mbuf->next;
+	}
 }
 
 int
@@ -400,7 +262,7 @@ cperf_verify_test_runner(void *test_ctx)
 
 	static int only_once;
 
-	uint64_t i, m_idx = 0;
+	uint64_t i;
 	uint16_t ops_unused = 0;
 
 	struct rte_crypto_op *ops[ctx->options->max_burst_size];
@@ -413,7 +275,7 @@ cperf_verify_test_runner(void *test_ctx)
 	int linearize = 0;
 
 	/* Check if source mbufs require coalescing */
-	if (ctx->options->segments_nb > 1) {
+	if (ctx->options->segment_sz < ctx->options->max_buffer_size) {
 		rte_cryptodev_info_get(ctx->dev_id, &dev_info);
 		if ((dev_info.feature_flags &
 				RTE_CRYPTODEV_FF_MBUF_SCATTER_GATHER) == 0)
@@ -440,11 +302,9 @@ cperf_verify_test_runner(void *test_ctx)
 
 		uint16_t ops_needed = burst_size - ops_unused;
 
-		/* Allocate crypto ops from pool */
-		if (ops_needed != rte_crypto_op_bulk_alloc(
-				ctx->crypto_op_pool,
-				RTE_CRYPTO_OP_TYPE_SYMMETRIC,
-				ops, ops_needed)) {
+		/* Allocate objects containing crypto operations and mbufs */
+		if (rte_mempool_get_bulk(ctx->pool, (void **)ops,
+					ops_needed) != 0) {
 			RTE_LOG(ERR, USER1,
 				"Failed to allocate more crypto operations "
 				"from the the crypto operation pool.\n"
@@ -454,10 +314,17 @@ cperf_verify_test_runner(void *test_ctx)
 		}
 
 		/* Setup crypto op, attach mbuf etc */
-		(ctx->populate_ops)(ops, &ctx->mbufs_in[m_idx],
-				&ctx->mbufs_out[m_idx],
+		(ctx->populate_ops)(ops, ctx->src_buf_offset,
+				ctx->dst_buf_offset,
 				ops_needed, ctx->sess, ctx->options,
 				ctx->test_vector, iv_offset);
+
+
+		/* Populate the mbuf with the test vector, for verification */
+		for (i = 0; i < ops_needed; i++)
+			cperf_mbuf_set(ops[i]->sym->m_src,
+					ctx->options,
+					ctx->test_vector);
 
 #ifdef CPERF_LINEARIZATION_ENABLE
 		if (linearize) {
@@ -488,10 +355,6 @@ cperf_verify_test_runner(void *test_ctx)
 		ops_deqd = rte_cryptodev_dequeue_burst(ctx->dev_id, ctx->qp_id,
 				ops_processed, ctx->options->max_burst_size);
 
-		m_idx += ops_needed;
-		if (m_idx + ctx->options->max_burst_size > ctx->options->pool_sz)
-			m_idx = 0;
-
 		if (ops_deqd == 0) {
 			/**
 			 * Count dequeue polls which didn't return any
@@ -506,13 +369,10 @@ cperf_verify_test_runner(void *test_ctx)
 			if (cperf_verify_op(ops_processed[i], ctx->options,
 						ctx->test_vector))
 				ops_failed++;
-			/* free crypto ops so they can be reused. We don't free
-			 * the mbufs here as we don't want to reuse them as
-			 * the crypto operation will change the data and cause
-			 * failures.
-			 */
-			rte_crypto_op_free(ops_processed[i]);
 		}
+		/* Free crypto ops so they can be reused. */
+		rte_mempool_put_bulk(ctx->pool,
+					(void **)ops_processed, ops_deqd);
 		ops_deqd_total += ops_deqd;
 	}
 
@@ -534,13 +394,10 @@ cperf_verify_test_runner(void *test_ctx)
 			if (cperf_verify_op(ops_processed[i], ctx->options,
 						ctx->test_vector))
 				ops_failed++;
-			/* free crypto ops so they can be reused. We don't free
-			 * the mbufs here as we don't want to reuse them as
-			 * the crypto operation will change the data and cause
-			 * failures.
-			 */
-			rte_crypto_op_free(ops_processed[i]);
 		}
+		/* Free crypto ops so they can be reused. */
+		rte_mempool_put_bulk(ctx->pool,
+					(void **)ops_processed, ops_deqd);
 		ops_deqd_total += ops_deqd;
 	}
 
@@ -594,7 +451,5 @@ cperf_verify_test_destructor(void *arg)
 	if (ctx == NULL)
 		return;
 
-	rte_cryptodev_stop(ctx->dev_id);
-
-	cperf_verify_test_free(ctx, ctx->options->pool_sz);
+	cperf_verify_test_free(ctx);
 }

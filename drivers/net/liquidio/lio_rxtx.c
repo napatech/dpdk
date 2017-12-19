@@ -172,7 +172,7 @@ lio_alloc_info_buffer(struct lio_device *lio_dev,
 	if (droq->info_mz == NULL)
 		return NULL;
 
-	droq->info_list_dma = droq->info_mz->phys_addr;
+	droq->info_list_dma = droq->info_mz->iova;
 	droq->info_alloc_size = droq->info_mz->len;
 	droq->info_base_addr = (size_t)droq->info_mz->addr;
 
@@ -222,7 +222,7 @@ lio_init_droq(struct lio_device *lio_dev, uint32_t q_no,
 		return -1;
 	}
 
-	droq->desc_ring_dma = droq->desc_ring_mz->phys_addr;
+	droq->desc_ring_dma = droq->desc_ring_mz->iova;
 	droq->desc_ring = (struct lio_droq_desc *)droq->desc_ring_mz->addr;
 
 	lio_dev_dbg(lio_dev, "droq[%d]: desc_ring: virt: 0x%p, dma: %lx\n",
@@ -734,7 +734,7 @@ lio_init_instr_queue(struct lio_device *lio_dev,
 		return -1;
 	}
 
-	iq->base_addr_dma = iq->iq_mz->phys_addr;
+	iq->base_addr_dma = iq->iq_mz->iova;
 	iq->base_addr = (uint8_t *)iq->iq_mz->addr;
 
 	iq->max_count = num_descs;
@@ -1298,7 +1298,7 @@ lio_alloc_soft_command(struct lio_device *lio_dev, uint32_t datasize,
 	sc = rte_pktmbuf_mtod(m, struct lio_soft_command *);
 	memset(sc, 0, LIO_SOFT_COMMAND_BUFFER_SIZE);
 	sc->size = LIO_SOFT_COMMAND_BUFFER_SIZE;
-	sc->dma_addr = rte_mbuf_data_dma_addr(m);
+	sc->dma_addr = rte_mbuf_data_iova(m);
 	sc->mbuf = m;
 
 	dma_addr = sc->dma_addr;
@@ -1739,12 +1739,12 @@ lio_dev_xmit_pkts(void *tx_queue, struct rte_mbuf **pkts, uint16_t nb_pkts)
 			cmdsetup.s.u.datasize = pkt_len;
 			lio_prepare_pci_cmd(lio_dev, &ndata.cmd,
 					    &cmdsetup, tag);
-			ndata.cmd.cmd3.dptr = rte_mbuf_data_dma_addr(m);
+			ndata.cmd.cmd3.dptr = rte_mbuf_data_iova(m);
 			ndata.reqtype = LIO_REQTYPE_NORESP_NET;
 		} else {
 			struct lio_buf_free_info *finfo;
 			struct lio_gather *g;
-			phys_addr_t phyaddr;
+			rte_iova_t phyaddr;
 			int i, frags;
 
 			finfo = (struct lio_buf_free_info *)rte_malloc(NULL,
@@ -1771,7 +1771,7 @@ lio_dev_xmit_pkts(void *tx_queue, struct rte_mbuf **pkts, uint16_t nb_pkts)
 					    &cmdsetup, tag);
 
 			memset(g->sg, 0, g->sg_size);
-			g->sg[0].ptr[0] = rte_mbuf_data_dma_addr(m);
+			g->sg[0].ptr[0] = rte_mbuf_data_iova(m);
 			lio_add_sg_size(&g->sg[0], m->data_len, 0);
 			pkt_len = m->data_len;
 			finfo->mbuf = m;
@@ -1782,7 +1782,7 @@ lio_dev_xmit_pkts(void *tx_queue, struct rte_mbuf **pkts, uint16_t nb_pkts)
 			m = m->next;
 			while (frags--) {
 				g->sg[(i >> 2)].ptr[(i & 3)] =
-						rte_mbuf_data_dma_addr(m);
+						rte_mbuf_data_iova(m);
 				lio_add_sg_size(&g->sg[(i >> 2)],
 						m->data_len, (i & 3));
 				pkt_len += m->data_len;
@@ -1790,8 +1790,8 @@ lio_dev_xmit_pkts(void *tx_queue, struct rte_mbuf **pkts, uint16_t nb_pkts)
 				m = m->next;
 			}
 
-			phyaddr = rte_mem_virt2phy(g->sg);
-			if (phyaddr == RTE_BAD_PHYS_ADDR) {
+			phyaddr = rte_mem_virt2iova(g->sg);
+			if (phyaddr == RTE_BAD_IOVA) {
 				PMD_TX_LOG(lio_dev, ERR, "bad phys addr\n");
 				goto xmit_failed;
 			}

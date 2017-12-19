@@ -37,6 +37,7 @@
 #include <rte_memzone.h>
 #include <rte_cryptodev_pmd.h>
 #include <rte_pci.h>
+#include <rte_bus_pci.h>
 #include <rte_atomic.h>
 #include <rte_prefetch.h>
 
@@ -122,14 +123,9 @@ queue_dma_zone_reserve(const char *queue_name, uint32_t queue_size,
 	break;
 	default:
 		memzone_flags = RTE_MEMZONE_SIZE_HINT_ONLY;
-}
-#ifdef RTE_LIBRTE_XEN_DOM0
-	return rte_memzone_reserve_bounded(queue_name, queue_size,
-		socket_id, 0, RTE_CACHE_LINE_SIZE, RTE_PGSIZE_2M);
-#else
+	}
 	return rte_memzone_reserve_aligned(queue_name, queue_size, socket_id,
 		memzone_flags, queue_size);
-#endif
 }
 
 int qat_crypto_sym_qp_setup(struct rte_cryptodev *dev, uint16_t queue_pair_id,
@@ -186,7 +182,7 @@ int qat_crypto_sym_qp_setup(struct rte_cryptodev *dev, uint16_t queue_pair_id,
 			RTE_CACHE_LINE_SIZE);
 
 	qp->mmap_bar_addr = pci_dev->mem_resource[0].addr;
-	rte_atomic16_init(&qp->inflights16);
+	qp->inflights16 = 0;
 
 	if (qat_tx_queue_create(dev, &(qp->tx_q),
 		queue_pair_id, qp_conf->nb_descriptors, socket_id) != 0) {
@@ -232,14 +228,12 @@ int qat_crypto_sym_qp_setup(struct rte_cryptodev *dev, uint16_t queue_pair_id,
 				qp->op_cookies[i];
 
 		sql_cookie->qat_sgl_src_phys_addr =
-				rte_mempool_virt2phy(qp->op_cookie_pool,
-				sql_cookie) +
+				rte_mempool_virt2iova(sql_cookie) +
 				offsetof(struct qat_crypto_op_cookie,
 				qat_sgl_list_src);
 
 		sql_cookie->qat_sgl_dst_phys_addr =
-				rte_mempool_virt2phy(qp->op_cookie_pool,
-				sql_cookie) +
+				rte_mempool_virt2iova(sql_cookie) +
 				offsetof(struct qat_crypto_op_cookie,
 				qat_sgl_list_dst);
 	}
@@ -269,7 +263,7 @@ int qat_crypto_sym_qp_release(struct rte_cryptodev *dev, uint16_t queue_pair_id)
 	}
 
 	/* Don't free memory if there are still responses to be processed */
-	if (rte_atomic16_read(&(qp->inflights16)) == 0) {
+	if (qp->inflights16 == 0) {
 		qat_queue_delete(&(qp->tx_q));
 		qat_queue_delete(&(qp->rx_q));
 	} else {
@@ -377,7 +371,7 @@ qat_queue_create(struct rte_cryptodev *dev, struct qat_queue *queue,
 	}
 
 	queue->base_addr = (char *)qp_mz->addr;
-	queue->base_phys_addr = qp_mz->phys_addr;
+	queue->base_phys_addr = qp_mz->iova;
 	if (qat_qp_check_queue_alignment(queue->base_phys_addr,
 			queue_size_bytes)) {
 		PMD_DRV_LOG(ERR, "Invalid alignment on queue create "

@@ -42,7 +42,9 @@ Supported LiquidIO Adapters
 -----------------------------
 
 - LiquidIO II CN2350 210SV/225SV
+- LiquidIO II CN2350 210SVPT
 - LiquidIO II CN2360 210SV/225SV
+- LiquidIO II CN2360 210SVPT
 
 
 Pre-Installation Configuration
@@ -194,6 +196,14 @@ This section provides instructions to configure SR-IOV with Linux OS.
       Port 1 Link Up - speed 10000 Mbps - full-duplex
       Done
       testpmd>
+
+#. Enabling VF promiscuous mode
+
+   One VF per PF can be marked as trusted for promiscuous mode.
+
+   .. code-block:: console
+
+      ip link set dev <PF iface> vf <VF id> trust on
 
 
 Limitations

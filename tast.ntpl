@@ -1,0 +1,1421 @@
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+delete=198
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=199
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=200
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=201
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+assign[priority=0;Descriptor=DYN3,length=22,colorbits=32;streamid=2;tag=port0]=port==0 and (TunnelType==GTPv0-U) and (InnerLayer3Protocol==IPV4)
+delete=214
+delete=210
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=211
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=212
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=213
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+assign[priority=0;Descriptor=DYN3,length=22,colorbits=32;streamid=2;tag=port0]=port==0 and (TunnelType==GTPv0-U) and (InnerLayer3Protocol==IPV4)
+delete=5
+delete=1
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=2
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=3
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=4
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+assign[priority=0;Descriptor=DYN3,length=22,colorbits=32;streamid=2;tag=port0]=port==0 and (TunnelType==GTPv0-U) and (InnerLayer3Protocol==IPV4)
+delete=10
+delete=6
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=7
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=8
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=9
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+assign[priority=0;Descriptor=DYN3,length=22,colorbits=32;streamid=2;tag=port0]=port==0 and (TunnelType==GTPv1-U) and (InnerLayer3Protocol==IPV4)
+delete=51
+delete=55
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=52
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=53
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=54
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+delete=197
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=198
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=199
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=200
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+delete=201
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=202
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=203
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=204
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+assign[priority=0;Descriptor=DYN3,length=22,colorbits=32;streamid=2;tag=port0]=port==0 and (TunnelType == IPinIP) and (InnerLayer3Protocol==IPV4)
+delete=205
+delete=209
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=206
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=207
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=208
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+Hashmode[priority=62;port=0;Layer3Type=IP;tag=port0]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(0..3);tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+Hashmode[priority=62;port=1;Layer3Type=IP;tag=port1]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(64..67);tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+Hashmode[priority=62;port=2;Layer3Type=IP;tag=port2]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(128..131);tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+Hashmode[priority=62;port=3;Layer3Type=IP;tag=port3]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(192..195);tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+Delete=tag==port0
+Hashmode[priority=62;port=0;Layer3Type=IP;tag=port0]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(0..3);tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+Hashmode[priority=62;port=1;Layer3Type=IP;tag=port1]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(64..67);tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+Hashmode[priority=62;port=2;Layer3Type=IP;tag=port2]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(128..131);tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+Hashmode[priority=62;port=3;Layer3Type=IP;tag=port3]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(192..195);tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+delete=415
+delete=414
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=417
+delete=416
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=419
+delete=418
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=421
+delete=420
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+Hashmode[priority=62;port=0;Layer3Type=IP;tag=port0]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(0..3);tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+Hashmode[priority=62;port=1;Layer3Type=IP;tag=port1]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(64..67);tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+Hashmode[priority=62;port=2;Layer3Type=IP;tag=port2]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(128..131);tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+Hashmode[priority=62;port=3;Layer3Type=IP;tag=port3]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(192..195);tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+KeyType[name=KT3;Access=partial;Bank=0;colorinfo=true;tag=port0]={64}
+KeyDef[name=KDEF3;KeyType=KT3;tag=port0]=(Layer3Header[12]/64)
+KeyList[KeySet=3;KeyType=KT3;color=123;tag=port0]=(0xC0A8146C9F140606)
+assign[priority=0;Descriptor=DYN3,length=22,colorbits=32;streamid=(0..3);tag=port0]=port==0 and (Layer3Protocol==IPV4) and Key(KDEF3)==3
+delete=433
+delete=432
+delete=431
+delete=430
+delete=423
+delete=422
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=425
+delete=424
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=427
+delete=426
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=429
+delete=428
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+Hashmode[priority=62;port=0;Layer3Type=IP;tag=port0]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(0..3);tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+Hashmode[priority=62;port=1;Layer3Type=IP;tag=port1]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(64..67);tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+Hashmode[priority=62;port=2;Layer3Type=IP;tag=port2]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(128..131);tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+Hashmode[priority=62;port=3;Layer3Type=IP;tag=port3]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(192..195);tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+delete=435
+delete=434
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=437
+delete=436
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=439
+delete=438
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=441
+delete=440
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+KeyType[name=KT3;Access=partial;Bank=0;colorinfo=true;tag=port0]={64}
+KeyDef[name=KDEF3;KeyType=KT3;tag=port0]=(Layer3Header[12]/64)
+KeyList[KeySet=3;KeyType=KT3;color=123;tag=port0]=(0xC0A8146C9F140606)
+assign[priority=0;Descriptor=DYN3,length=22,colorbits=32;streamid=(0..3);tag=port0]=port==0 and (Layer3Protocol==IPV4) and Key(KDEF3)==3
+delete=442
+delete=449
+delete=448
+delete=447
+delete=446
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=443
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=444
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=445
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+KeyType[name=KT3;Access=partial;Bank=0;colorinfo=true;tag=port0]={64}
+KeyDef[name=KDEF3;KeyType=KT3;tag=port0]=(Layer3Header[12]/64)
+KeyList[KeySet=3;KeyType=KT3;color=123;tag=port0]=(0xC0A8146C9F140606)
+assign[priority=0;Descriptor=DYN3,length=22,colorbits=32;streamid=(0..3);tag=port0]=port==0 and (Layer3Protocol==IPV4) and Key(KDEF3)==3
+delete=450
+delete=457
+delete=456
+delete=455
+delete=454
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=451
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=452
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=453
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+KeyType[name=KT3;Access=partial;Bank=0;colorinfo=true;tag=port0]={64}
+KeyDef[name=KDEF3;KeyType=KT3;tag=port0]=(Layer3Header[12]/64)
+KeyList[KeySet=3;KeyType=KT3;color=123;tag=port0]=(0xC0A8146C9F140606)
+assign[priority=0;Descriptor=DYN3,length=22,colorbits=32;streamid=(0..3);tag=port0]=port==0 and (Layer3Protocol==IPV4) and Key(KDEF3)==3
+delete=458
+delete=465
+delete=464
+delete=463
+delete=462
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=459
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=460
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=461
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+Hashmode[priority=62;port=0;Layer3Type=IP;tag=port0]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(0..3);tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+Hashmode[priority=62;port=1;Layer3Type=IP;tag=port1]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(64..67);tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+Hashmode[priority=62;port=2;Layer3Type=IP;tag=port2]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(128..131);tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+Hashmode[priority=62;port=3;Layer3Type=IP;tag=port3]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(192..195);tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+KeyType[name=KT3;Access=partial;Bank=0;colorinfo=true;tag=port0]={64}
+KeyDef[name=KDEF3;KeyType=KT3;tag=port0]=(Layer3Header[12]/64)
+KeyList[KeySet=3;KeyType=KT3;color=123;tag=port0]=(0xC0A8146C9F140606)
+assign[priority=0;Descriptor=DYN3,length=22,colorbits=32;streamid=(0..3);tag=port0]=port==0 and (Layer3Protocol==IPV4) and Key(KDEF3)==3
+delete=467
+delete=466
+delete=477
+delete=476
+delete=475
+delete=474
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=469
+delete=468
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=471
+delete=470
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=473
+delete=472
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+Hashmode[priority=62;port=0;Layer3Type=IP;tag=port0]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(0..3);tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+Hashmode[priority=62;port=1;Layer3Type=IP;tag=port1]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(64..67);tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+Hashmode[priority=62;port=2;Layer3Type=IP;tag=port2]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(128..131);tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+Hashmode[priority=62;port=3;Layer3Type=IP;tag=port3]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(192..195);tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+delete=607
+delete=606
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=609
+delete=608
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=611
+delete=610
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=613
+delete=612
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+Hashmode[priority=62;port=0;Layer3Type=IP;tag=port0]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(0..3);tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+Hashmode[priority=62;port=1;Layer3Type=IP;tag=port1]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(64..67);tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+Hashmode[priority=62;port=2;Layer3Type=IP;tag=port2]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(128..131);tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+Hashmode[priority=62;port=3;Layer3Type=IP;tag=port3]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(192..195);tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+delete=615
+delete=614
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=617
+delete=616
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=619
+delete=618
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=621
+delete=620
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+Hashmode[priority=62;port=0;Layer3Type=IP;tag=port0]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(0..3);tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+Hashmode[priority=62;port=1;Layer3Type=IP;tag=port1]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(64..67);tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+Hashmode[priority=62;port=2;Layer3Type=IP;tag=port2]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(128..131);tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+Hashmode[priority=62;port=3;Layer3Type=IP;tag=port3]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(192..195);tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+delete=623
+delete=622
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=625
+delete=624
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=627
+delete=626
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=629
+delete=628
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+delete=630
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=631
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=632
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=633
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+Hashmode[priority=61;port=0;Layer3Type=IP;Layer4Type=TCP;tag=port0]=hash5TupleSorted
+Hashmode[priority=61;port=1;Layer3Type=IP;Layer4Type=TCP;tag=port1]=hash5TupleSorted
+Hashmode[priority=61;port=2;Layer3Type=IP;Layer4Type=TCP;tag=port2]=hash5TupleSorted
+Hashmode[priority=61;port=3;Layer3Type=IP;Layer4Type=TCP;tag=port3]=hash5TupleSorted
+Hashmode[priority=61;port=0;Layer3Type=IP;Layer4Type=UDP;tag=port0]=hash5TupleSorted
+Hashmode[priority=61;port=1;Layer3Type=IP;Layer4Type=UDP;tag=port1]=hash5TupleSorted
+Hashmode[priority=61;port=2;Layer3Type=IP;Layer4Type=UDP;tag=port2]=hash5TupleSorted
+Hashmode[priority=61;port=3;Layer3Type=IP;Layer4Type=UDP;tag=port3]=hash5TupleSorted
+delete=642
+delete=643
+delete=644
+delete=645
+delete=634
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=635
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=636
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=637
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+Hashmode[priority=61;port=0;Layer3Type=IP;Layer4Type=TCP;tag=port0]=hash5TupleSorted
+delete=650
+Hashmode[priority=61;port=1;Layer3Type=IP;Layer4Type=TCP;tag=port1]=hash5TupleSorted
+delete=651
+Hashmode[priority=61;port=2;Layer3Type=IP;Layer4Type=TCP;tag=port2]=hash5TupleSorted
+delete=652
+Hashmode[priority=61;port=3;Layer3Type=IP;Layer4Type=TCP;tag=port3]=hash5TupleSorted
+delete=646
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=647
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=648
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=649
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+Hashmode[priority=61;port=0;Layer3Type=IP;Layer4Type=TCP;tag=port0]=hash5TupleSorted
+Hashmode[priority=61;port=1;Layer3Type=IP;Layer4Type=TCP;tag=port1]=hash5TupleSorted
+Hashmode[priority=61;port=2;Layer3Type=IP;Layer4Type=TCP;tag=port2]=hash5TupleSorted
+Hashmode[priority=61;port=3;Layer3Type=IP;Layer4Type=TCP;tag=port3]=hash5TupleSorted
+delete=658
+Hashmode[priority=61;port=0;Layer3Type=IP;Layer4Type=UDP;tag=port0]=hash5TupleSorted
+delete=659
+Hashmode[priority=61;port=1;Layer3Type=IP;Layer4Type=UDP;tag=port1]=hash5TupleSorted
+delete=660
+Hashmode[priority=61;port=2;Layer3Type=IP;Layer4Type=UDP;tag=port2]=hash5TupleSorted
+delete=661
+Hashmode[priority=61;port=3;Layer3Type=IP;Layer4Type=UDP;tag=port3]=hash5TupleSorted
+delete=662
+delete=663
+delete=664
+delete=665
+Hashmode[priority=61;port=0;Layer3Type=IP;Layer4Type=SCTP;tag=port0]==hash5TupleSCTPSorted
+syntax error, unexpected EQ, expecting '='
+Hashmode[priority=61;port=0;Layer3Type=IP;Layer4Type=SCTP;tag=port0]==hash5TupleSCTPSorted
+....................................................................^^....................
+Hashmode[priority=61;port=1;Layer3Type=IP;Layer4Type=SCTP;tag=port1]==hash5TupleSCTPSorted
+syntax error, unexpected EQ, expecting '='
+Hashmode[priority=61;port=1;Layer3Type=IP;Layer4Type=SCTP;tag=port1]==hash5TupleSCTPSorted
+....................................................................^^....................
+Hashmode[priority=61;port=2;Layer3Type=IP;Layer4Type=SCTP;tag=port2]==hash5TupleSCTPSorted
+syntax error, unexpected EQ, expecting '='
+Hashmode[priority=61;port=2;Layer3Type=IP;Layer4Type=SCTP;tag=port2]==hash5TupleSCTPSorted
+....................................................................^^....................
+Hashmode[priority=61;port=3;Layer3Type=IP;Layer4Type=SCTP;tag=port3]==hash5TupleSCTPSorted
+syntax error, unexpected EQ, expecting '='
+Hashmode[priority=61;port=3;Layer3Type=IP;Layer4Type=SCTP;tag=port3]==hash5TupleSCTPSorted
+....................................................................^^....................
+delete=654
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=655
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=656
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=657
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+delete=666
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=667
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=668
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=669
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+Hashmode[priority=61;port=0;Layer3Type=IP;tag=port0]=hash2TupleSorted
+Hashmode[priority=61;port=1;Layer3Type=IP;tag=port1]=hash2TupleSorted
+Hashmode[priority=61;port=2;Layer3Type=IP;tag=port2]=hash2TupleSorted
+Hashmode[priority=61;port=3;Layer3Type=IP;tag=port3]=hash2TupleSorted
+delete=670
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=671
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=672
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=673
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=0;tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=64;tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=128;tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=192;tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+Hashmode[priority=61;port=0;Layer3Type=IPV4;tag=port0]=hash2TupleSorted
+Hashmode[priority=61;port=1;Layer3Type=IPV4;tag=port1]=hash2TupleSorted
+Hashmode[priority=61;port=2;Layer3Type=IPV4;tag=port2]=hash2TupleSorted
+Hashmode[priority=61;port=3;Layer3Type=IPV4;tag=port3]=hash2TupleSorted
+delete=682
+Hashmode[priority=61;port=0;Layer3Type=IPV4;Layer4Type=TCP;tag=port0]=hash5TupleSorted
+delete=683
+Hashmode[priority=61;port=1;Layer3Type=IPV4;Layer4Type=TCP;tag=port1]=hash5TupleSorted
+delete=684
+Hashmode[priority=61;port=2;Layer3Type=IPV4;Layer4Type=TCP;tag=port2]=hash5TupleSorted
+delete=685
+Hashmode[priority=61;port=3;Layer3Type=IPV4;Layer4Type=TCP;tag=port3]=hash5TupleSorted
+delete=678
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=679
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=680
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=681
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195
+Delete=tag==port0
+Hashmode[priority=62;port=0;Layer3Type=IP;tag=port0]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(0..3);tag=port0]=port==0
+Setup[State=Active] = StreamId == 0
+Setup[State=Active] = StreamId == 1
+Setup[State=Active] = StreamId == 2
+Setup[State=Active] = StreamId == 3
+Delete=tag==port1
+Hashmode[priority=62;port=1;Layer3Type=IP;tag=port1]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(64..67);tag=port1]=port==1
+Setup[State=Active] = StreamId == 64
+Setup[State=Active] = StreamId == 65
+Setup[State=Active] = StreamId == 66
+Setup[State=Active] = StreamId == 67
+Delete=tag==port2
+Hashmode[priority=62;port=2;Layer3Type=IP;tag=port2]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(128..131);tag=port2]=port==2
+Setup[State=Active] = StreamId == 128
+Setup[State=Active] = StreamId == 129
+Setup[State=Active] = StreamId == 130
+Setup[State=Active] = StreamId == 131
+Delete=tag==port3
+Hashmode[priority=62;port=3;Layer3Type=IP;tag=port3]=hash2TupleSorted
+assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;streamid=(192..195);tag=port3]=port==3
+Setup[State=Active] = StreamId == 192
+Setup[State=Active] = StreamId == 193
+Setup[State=Active] = StreamId == 194
+Setup[State=Active] = StreamId == 195
+delete=690
+Hashmode[priority=61;port=0;Layer3Type=IPV4;tag=port0]=hash2TupleSorted
+delete=692
+Hashmode[priority=61;port=1;Layer3Type=IPV4;tag=port1]=hash2TupleSorted
+delete=694
+Hashmode[priority=61;port=2;Layer3Type=IPV4;tag=port2]=hash2TupleSorted
+delete=696
+Hashmode[priority=61;port=3;Layer3Type=IPV4;tag=port3]=hash2TupleSorted
+delete=698
+Hashmode[priority=61;port=0;Layer3Type=IPV4;Layer4Type=TCP;tag=port0]=hash5TupleSorted
+delete=699
+Hashmode[priority=61;port=1;Layer3Type=IPV4;Layer4Type=TCP;tag=port1]=hash5TupleSorted
+delete=700
+Hashmode[priority=61;port=2;Layer3Type=IPV4;Layer4Type=TCP;tag=port2]=hash5TupleSorted
+delete=701
+Hashmode[priority=61;port=3;Layer3Type=IPV4;Layer4Type=TCP;tag=port3]=hash5TupleSorted
+delete=702
+Hashmode[priority=61;port=0;InnerLayer3Type=IPV4;InnerLayer4Type=TCP;tag=port0]=hashInner5TupleSorted
+delete=703
+Hashmode[priority=61;port=1;InnerLayer3Type=IPV4;InnerLayer4Type=TCP;tag=port1]=hashInner5TupleSorted
+delete=704
+Hashmode[priority=61;port=2;InnerLayer3Type=IPV4;InnerLayer4Type=TCP;tag=port2]=hashInner5TupleSorted
+delete=705
+Hashmode[priority=61;port=3;InnerLayer3Type=IPV4;InnerLayer4Type=TCP;tag=port3]=hashInner5TupleSorted
+delete=691
+Setup[State=InActive] = StreamId == 0
+Setup[State=InActive] = StreamId == 1
+Setup[State=InActive] = StreamId == 2
+Setup[State=InActive] = StreamId == 3
+delete=693
+Setup[State=InActive] = StreamId == 64
+Setup[State=InActive] = StreamId == 65
+Setup[State=InActive] = StreamId == 66
+Setup[State=InActive] = StreamId == 67
+delete=695
+Setup[State=InActive] = StreamId == 128
+Setup[State=InActive] = StreamId == 129
+Setup[State=InActive] = StreamId == 130
+Setup[State=InActive] = StreamId == 131
+delete=697
+Setup[State=InActive] = StreamId == 192
+Setup[State=InActive] = StreamId == 193
+Setup[State=InActive] = StreamId == 194
+Setup[State=InActive] = StreamId == 195

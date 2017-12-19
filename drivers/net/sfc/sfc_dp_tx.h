@@ -127,6 +127,12 @@ typedef bool (sfc_dp_tx_qtx_ev_t)(struct sfc_dp_txq *dp_txq, unsigned int id);
  */
 typedef void (sfc_dp_tx_qreap_t)(struct sfc_dp_txq *dp_txq);
 
+/**
+ * Check Tx descriptor status
+ */
+typedef int (sfc_dp_tx_qdesc_status_t)(struct sfc_dp_txq *dp_txq,
+				       uint16_t offset);
+
 /** Transmit datapath definition */
 struct sfc_dp_tx {
 	struct sfc_dp			dp;
@@ -136,12 +142,15 @@ struct sfc_dp_tx {
 #define SFC_DP_TX_FEAT_TSO		0x2
 #define SFC_DP_TX_FEAT_MULTI_SEG	0x4
 #define SFC_DP_TX_FEAT_MULTI_PROCESS	0x8
+#define SFC_DP_TX_FEAT_MULTI_POOL	0x10
+#define SFC_DP_TX_FEAT_REFCNT		0x20
 	sfc_dp_tx_qcreate_t		*qcreate;
 	sfc_dp_tx_qdestroy_t		*qdestroy;
 	sfc_dp_tx_qstart_t		*qstart;
 	sfc_dp_tx_qstop_t		*qstop;
 	sfc_dp_tx_qtx_ev_t		*qtx_ev;
 	sfc_dp_tx_qreap_t		*qreap;
+	sfc_dp_tx_qdesc_status_t	*qdesc_status;
 	eth_tx_burst_t			pkt_burst;
 };
 

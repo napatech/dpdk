@@ -898,8 +898,21 @@ ef10_rx_scatter_enable(
 #if EFSYS_OPT_RX_SCALE
 
 extern	__checkReturn	efx_rc_t
+ef10_rx_scale_context_alloc(
+	__in		efx_nic_t *enp,
+	__in		efx_rx_scale_context_type_t type,
+	__in		uint32_t num_queues,
+	__out		uint32_t *rss_contextp);
+
+extern	__checkReturn	efx_rc_t
+ef10_rx_scale_context_free(
+	__in		efx_nic_t *enp,
+	__in		uint32_t rss_context);
+
+extern	__checkReturn	efx_rc_t
 ef10_rx_scale_mode_set(
 	__in		efx_nic_t *enp,
+	__in		uint32_t rss_context,
 	__in		efx_rx_hash_alg_t alg,
 	__in		efx_rx_hash_type_t type,
 	__in		boolean_t insert);
@@ -907,12 +920,14 @@ ef10_rx_scale_mode_set(
 extern	__checkReturn	efx_rc_t
 ef10_rx_scale_key_set(
 	__in		efx_nic_t *enp,
+	__in		uint32_t rss_context,
 	__in_ecount(n)	uint8_t *key,
 	__in		size_t n);
 
 extern	__checkReturn	efx_rc_t
 ef10_rx_scale_tbl_set(
 	__in		efx_nic_t *enp,
+	__in		uint32_t rss_context,
 	__in_ecount(n)	unsigned int *table,
 	__in		size_t n);
 
@@ -1005,6 +1020,13 @@ typedef struct ef10_filter_entry_s {
 /* Allow for the broadcast address to be added to the multicast list */
 #define	EFX_EF10_FILTER_MULTICAST_FILTERS_MAX	(EFX_MAC_MULTICAST_LIST_MAX + 1)
 
+/*
+ * For encapsulated packets, there is one filter each for each combination of
+ * IPv4 or IPv6 outer frame, VXLAN, GENEVE or NVGRE packet type, and unicast or
+ * multicast inner frames.
+ */
+#define EFX_EF10_FILTER_ENCAP_FILTERS_MAX	12
+
 typedef struct ef10_filter_table_s {
 	ef10_filter_entry_t	eft_entry[EFX_EF10_FILTER_TBL_ROWS];
 	efx_rxq_t		*eft_default_rxq;
@@ -1016,6 +1038,9 @@ typedef struct ef10_filter_table_s {
 	    EFX_EF10_FILTER_MULTICAST_FILTERS_MAX];
 	uint32_t		eft_mulcst_filter_count;
 	boolean_t		eft_using_all_mulcst;
+	uint32_t		eft_encap_filter_indexes[
+	    EFX_EF10_FILTER_ENCAP_FILTERS_MAX];
+	uint32_t		eft_encap_filter_count;
 } ef10_filter_table_t;
 
 	__checkReturn	efx_rc_t

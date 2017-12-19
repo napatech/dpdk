@@ -19,17 +19,12 @@ DPDK_17.05 {
 
 	rte_event_port_default_conf_get;
 	rte_event_port_setup;
-	rte_event_port_dequeue_depth;
-	rte_event_port_enqueue_depth;
-	rte_event_port_count;
 	rte_event_port_link;
 	rte_event_port_unlink;
 	rte_event_port_links_get;
 
 	rte_event_queue_default_conf_get;
 	rte_event_queue_setup;
-	rte_event_queue_count;
-	rte_event_queue_priority;
 
 	rte_event_dequeue_timeout_ticks;
 
@@ -51,3 +46,25 @@ DPDK_17.08 {
 	rte_event_ring_init;
 	rte_event_ring_lookup;
 } DPDK_17.05;
+
+DPDK_17.11 {
+	global:
+
+	rte_event_dev_attr_get;
+	rte_event_dev_service_id_get;
+	rte_event_port_attr_get;
+	rte_event_queue_attr_get;
+
+	rte_event_eth_rx_adapter_caps_get;
+	rte_event_eth_rx_adapter_create;
+	rte_event_eth_rx_adapter_create_ext;
+	rte_event_eth_rx_adapter_free;
+	rte_event_eth_rx_adapter_queue_add;
+	rte_event_eth_rx_adapter_queue_del;
+	rte_event_eth_rx_adapter_service_id_get;
+	rte_event_eth_rx_adapter_start;
+	rte_event_eth_rx_adapter_stats_get;
+	rte_event_eth_rx_adapter_stats_reset;
+	rte_event_eth_rx_adapter_stop;
+
+} DPDK_17.08;

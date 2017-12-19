@@ -59,14 +59,20 @@ endif
 
 
 _BUILD = $(LIB)
-_INSTALL = $(INSTALL-FILES-y) $(SYMLINK-FILES-y) $(RTE_OUTPUT)/lib/$(LIB)
+PREINSTALL = $(SYMLINK-FILES-y)
+_INSTALL = $(INSTALL-FILES-y) $(RTE_OUTPUT)/lib/$(LIB)
 _CLEAN = doclean
 
 .PHONY: all
 all: install
 
 .PHONY: install
+ifeq ($(SYMLINK-FILES-y),)
 install: build _postinstall
+else
+install: _preinstall build _postinstall
+build: _preinstall
+endif
 
 _postinstall: build
 
@@ -83,13 +89,6 @@ override EXTRA_LDFLAGS := $(call linkerprefix,$(EXTRA_LDFLAGS))
 else
 _CPU_LDFLAGS := $(CPU_LDFLAGS)
 endif
-
-# Translate DEPDIRS into LDLIBS
-# Ignore (sub)directory dependencies which do not provide an actual library
-_IGNORE_DIRS = librte_eal/% librte_compat
-_DEPDIRS = $(filter-out $(_IGNORE_DIRS),$(DEPDIRS))
-_LDDIRS = $(subst librte_ether,librte_ethdev,$(_DEPDIRS))
-LDLIBS += $(subst lib,-l,$(_LDDIRS))
 
 O_TO_A = $(AR) crDs $(LIB) $(OBJS-y)
 O_TO_A_STR = $(subst ','\'',$(O_TO_A)) #'# fix syntax highlight

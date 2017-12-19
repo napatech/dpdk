@@ -100,7 +100,7 @@ i40e_rxq_rearm(struct i40e_rx_queue *rxq)
 		p1 = (uintptr_t)&mb1->rearm_data;
 		*(uint64_t *)p1 = rxq->mbuf_initializer;
 
-		/* load buf_addr(lo 64bit) and buf_physaddr(hi 64bit) */
+		/* load buf_addr(lo 64bit) and buf_iova(hi 64bit) */
 		vaddr0 = vec_ld(0, (vector unsigned long *)&mb0->buf_addr);
 		vaddr1 = vec_ld(0, (vector unsigned long *)&mb1->buf_addr);
 
@@ -146,7 +146,7 @@ desc_to_olflags_v(vector unsigned long descs[4], struct rte_mbuf **rx_pkts)
 	/* map rss and vlan type to rss hash and vlan flag */
 	const vector unsigned char vlan_flags = (vector unsigned char){
 			0, 0, 0, 0,
-			PKT_RX_VLAN_PKT | PKT_RX_VLAN_STRIPPED, 0, 0, 0,
+			PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED, 0, 0, 0,
 			0, 0, 0, 0,
 			0, 0, 0, 0};
 
@@ -538,7 +538,7 @@ vtx1(volatile struct i40e_tx_desc *txdp,
 		((uint64_t)pkt->data_len << I40E_TXD_QW1_TX_BUF_SZ_SHIFT));
 
 	vector unsigned long descriptor = (vector unsigned long){
-		pkt->buf_physaddr + pkt->data_off, high_qw};
+		pkt->buf_iova + pkt->data_off, high_qw};
 	*(vector unsigned long *)txdp = descriptor;
 }
 

@@ -37,6 +37,7 @@
 
 #include <rte_dev.h>
 #include <rte_pci.h>
+#include <rte_bus_pci.h>
 #include <rte_ethdev.h>
 #include <rte_ethdev_pci.h>
 #include <rte_string_fns.h>
@@ -142,6 +143,10 @@ enicpmd_dev_filter_ctrl(struct rte_eth_dev *dev,
 static void enicpmd_dev_tx_queue_release(void *txq)
 {
 	ENICPMD_FUNC_TRACE();
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return;
+
 	enic_free_wq(txq);
 }
 
@@ -195,6 +200,9 @@ static int enicpmd_dev_tx_queue_setup(struct rte_eth_dev *eth_dev,
 {
 	int ret;
 	struct enic *enic = pmd_priv(eth_dev);
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return -E_RTE_SECONDARY;
 
 	ENICPMD_FUNC_TRACE();
 	if (queue_idx >= ENIC_WQ_MAX) {
@@ -272,6 +280,10 @@ static int enicpmd_dev_rx_queue_stop(struct rte_eth_dev *eth_dev,
 static void enicpmd_dev_rx_queue_release(void *rxq)
 {
 	ENICPMD_FUNC_TRACE();
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return;
+
 	enic_free_rq(rxq);
 }
 
@@ -310,6 +322,10 @@ static int enicpmd_dev_rx_queue_setup(struct rte_eth_dev *eth_dev,
 	struct enic *enic = pmd_priv(eth_dev);
 
 	ENICPMD_FUNC_TRACE();
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return -E_RTE_SECONDARY;
+
 	/* With Rx scatter support, two RQs are now used on VIC per RQ used
 	 * by the application.
 	 */
@@ -347,7 +363,7 @@ static int enicpmd_vlan_filter_set(struct rte_eth_dev *eth_dev,
 	return err;
 }
 
-static void enicpmd_vlan_offload_set(struct rte_eth_dev *eth_dev, int mask)
+static int enicpmd_vlan_offload_set(struct rte_eth_dev *eth_dev, int mask)
 {
 	struct enic *enic = pmd_priv(eth_dev);
 
@@ -371,12 +387,17 @@ static void enicpmd_vlan_offload_set(struct rte_eth_dev *eth_dev, int mask)
 		dev_warning(enic,
 			"Configuration of extended VLAN is not supported\n");
 	}
+
+	return 0;
 }
 
 static int enicpmd_dev_configure(struct rte_eth_dev *eth_dev)
 {
 	int ret;
 	struct enic *enic = pmd_priv(eth_dev);
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return -E_RTE_SECONDARY;
 
 	ENICPMD_FUNC_TRACE();
 	ret = enic_set_vnic_res(enic);
@@ -392,9 +413,10 @@ static int enicpmd_dev_configure(struct rte_eth_dev *eth_dev)
 			eth_dev->data->dev_conf.rxmode.split_hdr_size);
 	}
 
-	enicpmd_vlan_offload_set(eth_dev, ETH_VLAN_STRIP_MASK);
 	enic->hw_ip_checksum = eth_dev->data->dev_conf.rxmode.hw_ip_checksum;
-	return 0;
+	ret = enicpmd_vlan_offload_set(eth_dev, ETH_VLAN_STRIP_MASK);
+
+	return ret;
 }
 
 /* Start the device.
@@ -403,6 +425,9 @@ static int enicpmd_dev_configure(struct rte_eth_dev *eth_dev)
 static int enicpmd_dev_start(struct rte_eth_dev *eth_dev)
 {
 	struct enic *enic = pmd_priv(eth_dev);
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return -E_RTE_SECONDARY;
 
 	ENICPMD_FUNC_TRACE();
 	return enic_enable(enic);
@@ -415,6 +440,9 @@ static void enicpmd_dev_stop(struct rte_eth_dev *eth_dev)
 {
 	struct rte_eth_link link;
 	struct enic *enic = pmd_priv(eth_dev);
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return;
 
 	ENICPMD_FUNC_TRACE();
 	enic_disable(enic);
@@ -444,13 +472,13 @@ static int enicpmd_dev_link_update(struct rte_eth_dev *eth_dev,
 	return enic_link_update(enic);
 }
 
-static void enicpmd_dev_stats_get(struct rte_eth_dev *eth_dev,
+static int enicpmd_dev_stats_get(struct rte_eth_dev *eth_dev,
 	struct rte_eth_stats *stats)
 {
 	struct enic *enic = pmd_priv(eth_dev);
 
 	ENICPMD_FUNC_TRACE();
-	enic_dev_stats_get(enic, stats);
+	return enic_dev_stats_get(enic, stats);
 }
 
 static void enicpmd_dev_stats_reset(struct rte_eth_dev *eth_dev)
@@ -513,7 +541,11 @@ static void enicpmd_dev_promiscuous_enable(struct rte_eth_dev *eth_dev)
 {
 	struct enic *enic = pmd_priv(eth_dev);
 
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return;
+
 	ENICPMD_FUNC_TRACE();
+
 	enic->promisc = 1;
 	enic_add_packet_filter(enic);
 }
@@ -521,6 +553,9 @@ static void enicpmd_dev_promiscuous_enable(struct rte_eth_dev *eth_dev)
 static void enicpmd_dev_promiscuous_disable(struct rte_eth_dev *eth_dev)
 {
 	struct enic *enic = pmd_priv(eth_dev);
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return;
 
 	ENICPMD_FUNC_TRACE();
 	enic->promisc = 0;
@@ -531,6 +566,9 @@ static void enicpmd_dev_allmulticast_enable(struct rte_eth_dev *eth_dev)
 {
 	struct enic *enic = pmd_priv(eth_dev);
 
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return;
+
 	ENICPMD_FUNC_TRACE();
 	enic->allmulti = 1;
 	enic_add_packet_filter(enic);
@@ -539,6 +577,9 @@ static void enicpmd_dev_allmulticast_enable(struct rte_eth_dev *eth_dev)
 static void enicpmd_dev_allmulticast_disable(struct rte_eth_dev *eth_dev)
 {
 	struct enic *enic = pmd_priv(eth_dev);
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return;
 
 	ENICPMD_FUNC_TRACE();
 	enic->allmulti = 0;
@@ -551,6 +592,9 @@ static int enicpmd_add_mac_addr(struct rte_eth_dev *eth_dev,
 {
 	struct enic *enic = pmd_priv(eth_dev);
 
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return -E_RTE_SECONDARY;
+
 	ENICPMD_FUNC_TRACE();
 	return enic_set_mac_address(enic, mac_addr->addr_bytes);
 }
@@ -558,6 +602,9 @@ static int enicpmd_add_mac_addr(struct rte_eth_dev *eth_dev,
 static void enicpmd_remove_mac_addr(struct rte_eth_dev *eth_dev, uint32_t index)
 {
 	struct enic *enic = pmd_priv(eth_dev);
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return;
 
 	ENICPMD_FUNC_TRACE();
 	enic_del_mac_address(enic, index);

@@ -37,6 +37,7 @@
 #include <rte_ethdev.h>
 #include <rte_log.h>
 #include <rte_pci.h>
+#include <rte_malloc.h>
 #include <nt.h>
 
 #include "rte_eth_ntacc.h"
@@ -101,7 +102,7 @@ static inline int _CheckArray(const uint8_t *addr, uint8_t len)
 
 void pushNtplID(struct rte_flow *flow, uint32_t ntplId)
 {
-  struct filter_flow *filter = malloc(sizeof(struct filter_flow));
+  struct filter_flow *filter = rte_zmalloc("filter", sizeof(struct filter_flow), 0);
   if (!filter) {
     RTE_LOG(ERR, PMD, "Memory allocation failed. Filter clean up is not possible\n");
   }
@@ -124,7 +125,7 @@ loop:
       snprintf(ntpl_buf, 20, "delete=%d", pHash->ntpl_id);
       DoNtpl(ntpl_buf, &ntplInfo, internals);
       RTE_LOG(DEBUG, PMD, "Deleting Hash filter: %s\n", ntpl_buf);
-      free(pHash);
+      rte_free(pHash);
       goto loop;
     }
   }
@@ -141,14 +142,14 @@ void DeleteHash(uint64_t rss_hf, uint8_t port, int priority, struct pmd_internal
       snprintf(ntpl_buf, 20, "delete=%d", pHash->ntpl_id);
       DoNtpl(ntpl_buf, &ntplInfo, internals);
       RTE_LOG(DEBUG, PMD, "Deleting Hash filter: %s\n", ntpl_buf);
-      free(pHash);
+      rte_free(pHash);
     }
   }
 }
 
 static void pushHash(uint32_t ntpl_id, uint64_t rss_hf, struct pmd_internals *internals, int priority)
 {
-  struct filter_hash_s *pHash = malloc(sizeof(struct filter_hash_s));
+  struct filter_hash_s *pHash = rte_zmalloc(internals->name, sizeof(struct filter_hash_s), 0);
   if (!pHash) {
     RTE_LOG(ERR, PMD, "Memory allocation failed. Filter clean up is not possible\n");
   }
@@ -228,9 +229,9 @@ static int PrintHash(const char *str, int priority, struct pmd_internals *intern
   if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
     return -1;
   }
-  priv_lock(internals);
+  rte_spinlock_lock(&internals->lock);
   pushHash(ntplInfo.ntplId, rss_hf, internals, priority);
-  priv_unlock(internals);
+  rte_spinlock_unlock(&internals->lock);
   return 0;
 }
 
@@ -258,14 +259,14 @@ int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow
   flow->rss_hf = rss_hf;
   flow->priority = priority;
 
-  priv_lock(internals);
+  rte_spinlock_lock(&internals->lock);
   if (FindHash(rss_hf, internals, priority)) {
     // Hash is already programmed
-    priv_unlock(internals);
+    rte_spinlock_unlock(&internals->lock);
     return 0;
   }
-  priv_unlock(internals);
-
+  rte_spinlock_unlock(&internals->lock);
+  
   /*****************************/
   /* Inner UDP hash mode setup */
   /*****************************/
@@ -512,6 +513,7 @@ enum layer_e {
   LAYER4,
   VLAN,
   IP,
+  MPLS,
 };
 
 /**
@@ -542,6 +544,11 @@ static const char *GetLayer(enum layer_e layer, bool tunnel)
       return "InnerFirstVLAN";
     else
       return "FirstVLAN";
+  case MPLS:
+    if (tunnel)
+      return "InnerFirstMPLS";
+    else
+      return "FirstMPLS";
   }
   return "UNKNOWN";
 }
@@ -587,7 +594,7 @@ static int SetFilter(int size,
                      const void *lastVal,
                      struct pmd_internals *internals)
 {
-  struct filter_values_s *pFilter_values = malloc(sizeof(struct filter_values_s));
+  struct filter_values_s *pFilter_values = rte_zmalloc(internals->name, sizeof(struct filter_values_s), 0);
   if (!pFilter_values) {
     return -1;
   }
@@ -661,9 +668,9 @@ static int SetFilter(int size,
     }
     break;
   }
-  priv_lock(internals);
+  rte_spinlock_lock(&internals->lock);
   InsertFilterValues(pFilter_values, internals);
-  priv_unlock(internals);
+  rte_spinlock_unlock(&internals->lock);
   return 0;
 }
 
@@ -679,7 +686,7 @@ void DeleteKeyset(int key, struct pmd_internals *internals) {
       DoNtpl(ntpl_buf, &ntplInfo, internals);
       snprintf(ntpl_buf, 20, "delete=%d", key_set->ntpl_id1);
       DoNtpl(ntpl_buf, &ntplInfo, internals);
-      free(key_set);
+      rte_free(key_set);
       return;
     }
   }
@@ -727,33 +734,33 @@ int CreateOptimizedFilter(char *ntpl_buf,
   char *filter_buffer3 = NULL;
   int i;
 
-  priv_lock(internals);
+  rte_spinlock_lock(&internals->lock);
   if (LIST_EMPTY(&internals->filter_values)) {
-    priv_unlock(internals);
+    rte_spinlock_unlock(&internals->lock);
     return 0;
   }
-  pNtplInfo = malloc(sizeof(NtNtplInfo_t));
+  pNtplInfo = rte_malloc(internals->name, sizeof(NtNtplInfo_t), 0);
   if (!pNtplInfo) {
     iRet = -1;
     RTE_LOG(ERR, PMD, "Allocating memory failed\n");
     goto Errors;
   }
-
-  filter_buffer1 = malloc(NTPL_BSIZE + 1);
+  
+  filter_buffer1 = rte_malloc(internals->name, NTPL_BSIZE + 1, 0);
   if (!filter_buffer1) {
     iRet = -1;
     RTE_LOG(ERR, PMD, "Allocating memory failed\n");
     goto Errors;
   }
 
-  filter_buffer2 = malloc(NTPL_BSIZE + 1);
+  filter_buffer2 = rte_malloc(internals->name, NTPL_BSIZE + 1, 0);
   if (!filter_buffer2) {
     iRet = -1;
     RTE_LOG(ERR, PMD, "Allocating memory failed\n");
     goto Errors;
   }
 
-  filter_buffer3 = malloc(NTPL_BSIZE + 1);
+  filter_buffer3 = rte_malloc(internals->name, NTPL_BSIZE + 1, 0);
   if (!filter_buffer3) {
     iRet = -1;
     RTE_LOG(ERR, PMD, "Allocating memory failed\n");
@@ -762,7 +769,7 @@ int CreateOptimizedFilter(char *ntpl_buf,
 
   first = true;
   if (LIST_EMPTY(&internals->filter_keyset) || ((key = FindKeyset(typeMask, plist_queues, nb_queues, internals)) == 0)) {
-    struct filter_keyset_s *key_set = malloc(sizeof(struct filter_keyset_s));
+    struct filter_keyset_s *key_set = rte_zmalloc(internals->name, sizeof(struct filter_keyset_s), 0);
     if (!key_set) {
       iRet = -1;
       RTE_LOG(ERR, PMD, "Allocating memory failed\n");
@@ -770,7 +777,7 @@ int CreateOptimizedFilter(char *ntpl_buf,
     }
     key = GetKeysetValue(internals);
     if (key < 0) {
-      free(key_set);
+      rte_free(key_set);
       iRet = -1;
       RTE_LOG(ERR, PMD, "Internal error: Illegal key set value returned\n");
       goto Errors;
@@ -820,14 +827,14 @@ int CreateOptimizedFilter(char *ntpl_buf,
     snprintf(&filter_buffer2[strlen(filter_buffer2)],  NTPL_BSIZE - strlen(filter_buffer2) - 1, ")");
 
     if (DoNtpl(filter_buffer3, pNtplInfo, internals)) {
-      free(key_set);
+      rte_free(key_set);
       iRet = -1;
       goto Errors;
     }
     key_set->ntpl_id1 = pNtplInfo->ntplId;
 
     if (DoNtpl(filter_buffer2, pNtplInfo, internals)) {
-      free(key_set);
+      rte_free(key_set);
       iRet = -1;
       goto Errors;
     }
@@ -958,7 +965,7 @@ int CreateOptimizedFilter(char *ntpl_buf,
     pFilter_values = LIST_FIRST(&internals->filter_values);
     LIST_REMOVE(pFilter_values, next);
     if (pFilter_values) {
-      free(pFilter_values);
+      rte_free(pFilter_values);
     }
   }
 
@@ -975,19 +982,19 @@ int CreateOptimizedFilter(char *ntpl_buf,
   snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "Key(KDEF%u)==%u", key, key);
 
 Errors:
-  priv_unlock(internals);
+  rte_spinlock_unlock(&internals->lock);
 
   if (pNtplInfo) {
-    free(pNtplInfo);
+    rte_free(pNtplInfo);
   }
   if (filter_buffer1) {
-    free(filter_buffer1);
+    rte_free(filter_buffer1);
   }
   if (filter_buffer2) {
-    free(filter_buffer2);
+    rte_free(filter_buffer2);
   }
   if (filter_buffer3) {
-    free(filter_buffer3);
+    rte_free(filter_buffer3);
   }
 
   return iRet;
@@ -2366,22 +2373,88 @@ int SetVlanFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
   return 0;
 }
 
-int SetTunnelFilter(char *ntpl_buf,
-                    bool *fc,
-                    int version,
+int SetMplsFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask, struct pmd_internals *internals)
+{
+  const struct rte_flow_item_mpls *spec = (const struct rte_flow_item_mpls *)item->spec;
+  const struct rte_flow_item_mpls *mask = (const struct rte_flow_item_mpls *)item->mask;
+  const struct rte_flow_item_mpls *last = (const struct rte_flow_item_mpls *)item->last;
+
+  if (*fc) strcat(ntpl_buf," and ");
+  *fc = true;
+  if (tnl) {
+    strcat(&ntpl_buf[strlen(ntpl_buf)], "(InnerEncapsulation==MPLS)");
+  }
+  else {
+    strcat(&ntpl_buf[strlen(ntpl_buf)], "(Encapsulation==MPLS)");
+  }
+
+  if (!last && !mask && !spec) {
+    return 0;
+  } 
+
+  if (spec) {
+    if (last) {
+      uint32_t vSpec = ((spec->label_tc_s[0] << 24) & 0xFF000000) | ((spec->label_tc_s[1] << 16) & 0xFF0000) | ((spec->label_tc_s[2] << 8) & 0xF000);
+      uint32_t vLast = ((last->label_tc_s[0] << 24) & 0xFF000000) | ((last->label_tc_s[1] << 16) & 0xFF0000) | ((last->label_tc_s[2] << 8) & 0xF000);
+      if (SetFilter(32, 0xFFFFF000, 0, tnl, MPLS, (const void *)&vSpec, NULL, (const void *)&vLast, internals) != 0) {
+        return -1;
+      }
+      *typeMask |= MPLS_LABEL;
+    } 
+    else if (mask) {
+      uint32_t vSpec = ((spec->label_tc_s[0] << 24) & 0xFF000000) | ((spec->label_tc_s[1] << 16) & 0xFF0000) | ((spec->label_tc_s[2] << 8) & 0xF000);
+      uint32_t vMask = ((mask->label_tc_s[0] << 24) & 0xFF000000) | ((mask->label_tc_s[1] << 16) & 0xFF0000) | ((mask->label_tc_s[2] << 8) & 0xF000);
+      if (SetFilter(32, 0xFFFFF000, 0, tnl, MPLS, (const void *)&vSpec, (const void *)&vMask, NULL, internals) != 0) {
+        return -1;
+      }
+      *typeMask |= MPLS_LABEL;
+    }
+    else {
+      uint32_t vSpec = ((spec->label_tc_s[0] << 24) & 0xFF000000) | ((spec->label_tc_s[1] << 16) & 0xFF0000) | ((spec->label_tc_s[2] << 8) & 0xF000);
+      if (SetFilter(32, 0xFFFFF000, 0, tnl, MPLS, (const void *)&vSpec, NULL, NULL, internals) != 0) {
+        return -1;
+      }
+      *typeMask |= MPLS_LABEL;
+    }
+  }
+  return 0;
+}
+
+int SetTunnelFilter(char *ntpl_buf, 
+                    bool *fc, 
                     int type,
                     uint64_t *typeMask)
 {
   if (*fc) strcat(ntpl_buf," and ");
   *fc = true;
   switch (type) {
-  case GTP_TUNNEL_TYPE:
-    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "(TunnelType==GTPv%d-U)", version);
-    *typeMask |= GTP_TUNNEL;
+  case GTPU0_TUNNEL_TYPE:
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "(TunnelType==GTPv0-U)");
+    *typeMask |= GTPU0_TUNNEL;
     break;
-  case GRE_TUNNEL_TYPE:
-    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "(TunnelType==GREv%d)", version);
-    *typeMask |= GRE_TUNNEL;
+  case GTPU1_TUNNEL_TYPE:
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "(TunnelType==GTPv1-U)");
+    *typeMask |= GTPU1_TUNNEL;
+    break;
+  case GTPC2_TUNNEL_TYPE:
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "(TunnelType==GTPv2-C)");
+    *typeMask |= GTPC2_TUNNEL;
+    break;
+  case GTPC1_TUNNEL_TYPE:
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "(TunnelType==GTPv1-C)");
+    *typeMask |= GTPC1_TUNNEL;
+    break;
+  case GTPC1_2_TUNNEL_TYPE:
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "(TunnelType==GTPv1v2-C)");
+    *typeMask |= GTPC1_2_TUNNEL;
+    break;
+  case GREV0_TUNNEL_TYPE:
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "(TunnelType==GREv0)");
+    *typeMask |= GREV0_TUNNEL;
+    break;
+  case GREV1_TUNNEL_TYPE:
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "(TunnelType==GREv1)");
+    *typeMask |= GREV1_TUNNEL;
     break;
   case VXLAN_TUNNEL_TYPE:
     snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "(TunnelType==VXLAN)");
@@ -2403,13 +2476,60 @@ int SetTunnelFilter(char *ntpl_buf,
 int SetGreFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, uint64_t *typeMask)
 {
   const struct rte_flow_item_gre *spec = (const struct rte_flow_item_gre *)item->spec;
-  int version;
+  int type;
 
-  if (spec)
-    version = spec->c_rsvd0_ver & 0x7;
+  if (spec) {
+    switch (spec->c_rsvd0_ver & 0x7) {
+    default:
+    case 0:
+      type = GREV0_TUNNEL_TYPE;
+      break;
+    case 1:
+      type = GREV1_TUNNEL_TYPE;
+      break;
+    }
+  }
   else
-    version = 0;
+    type = GREV0_TUNNEL_TYPE;
 
-  return SetTunnelFilter(ntpl_buf, fc, version, GRE_TUNNEL_TYPE, typeMask);
+  return SetTunnelFilter(ntpl_buf, fc, type, typeMask);
+}
+
+int SetGtpFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, uint64_t *typeMask, int protocol)
+{
+  const struct rte_flow_item_gtp *spec = (const struct rte_flow_item_gtp *)item->spec;
+  int type;
+
+  if (spec) {
+    switch ((spec->v_pt_rsv_flags >> 5) & 0x7) {
+    case 0:
+      if (protocol == 'U')
+        type = GTPU0_TUNNEL_TYPE;
+      else 
+        return -1;
+      break;
+    default:
+    case 1:
+      if (protocol == 'U')
+        type = GTPU1_TUNNEL_TYPE;
+      else 
+        type = GTPC1_TUNNEL_TYPE;
+      break;
+    case 2:
+      if (protocol == 'U')
+        return -1;
+      else 
+        type = GTPC2_TUNNEL_TYPE;
+      break;
+    }
+  }
+  else {
+    if (protocol == 'U')
+      type = GTPU1_TUNNEL_TYPE;
+    else 
+      type = GTPC1_2_TUNNEL_TYPE;
+  }
+
+  return SetTunnelFilter(ntpl_buf, fc, type, typeMask);
 }
 

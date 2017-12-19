@@ -92,21 +92,23 @@ Features
 - Flow director (RTE_FDIR_MODE_PERFECT, RTE_FDIR_MODE_PERFECT_MAC_VLAN and
   RTE_ETH_FDIR_REJECT).
 - Flow API.
-- Secondary process TX is supported.
+- Multiple process.
 - KVM and VMware ESX SR-IOV modes are supported.
 - RSS hash result is supported.
 - Hardware TSO.
 - Hardware checksum TX offload for VXLAN and GRE.
 - RX interrupts.
 - Statistics query including Basic, Extended and per queue.
+- Rx HW timestamp.
 
 Limitations
 -----------
 
 - Inner RSS for VXLAN frames is not supported yet.
-- Port statistics through software counters only.
+- Port statistics through software counters only. Flow statistics are
+  supported by hardware counters.
 - Hardware checksum RX offloads for VXLAN inner header are not supported yet.
-- Secondary process RX is not supported.
+- Forked secondary process not supported.
 - Flow pattern without any specific vlan will match for vlan packets as well:
 
   When VLAN spec is not specified in the pattern, the matching rule will be created with VLAN as a wild card.
@@ -123,6 +125,14 @@ Limitations
         flow create 0 ingress pattern eth / vlan / ipv4 / end ...
 
   Will match any ipv4 packet (VLAN included).
+
+- A multi segment packet must have less than 6 segments in case the Tx burst function
+  is set to multi-packet send or Enhanced multi-packet send. Otherwise it must have
+  less than 50 segments.
+- Count action for RTE flow is only supported in Mellanox OFED 4.2.
+- Flows with a VXLAN Network Identifier equal (or ends to be equal)
+  to 0 are not supported.
+- VXLAN TSO and checksum offloads are not supported on VM.
 
 Configuration
 -------------
@@ -166,6 +176,23 @@ Environment variables
 
   This is disabled by default since this can also decrease performance for
   unaligned packet sizes.
+
+- ``MLX5_SHUT_UP_BF``
+
+  Configures HW Tx doorbell register as IO-mapped.
+
+  By default, the HW Tx doorbell is configured as a write-combining register.
+  The register would be flushed to HW usually when the write-combining buffer
+  becomes full, but it depends on CPU design.
+
+  Except for vectorized Tx burst routines, a write memory barrier is enforced
+  after updating the register so that the update can be immediately visible to
+  HW.
+
+  When vectorized Tx burst is called, the barrier is set only if the burst size
+  is not aligned to MLX5_VPMD_TX_MAX_BURST. However, setting this environmental
+  variable will bring better latency even though the maximum throughput can
+  slightly decline.
 
 Run-time configuration
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -293,7 +320,7 @@ DPDK and must be installed separately:
   This library basically implements send/receive calls to the hardware
   queues.
 
-- **Kernel modules** (mlnx-ofed-kernel)
+- **Kernel modules**
 
   They provide the kernel-side Verbs API and low level device drivers that
   manage actual hardware initialization and resources sharing with user
@@ -320,18 +347,33 @@ DPDK and must be installed separately:
    Both libraries are BSD and GPL licensed. Linux kernel modules are GPL
    licensed.
 
-Currently supported by DPDK:
+Installation
+~~~~~~~~~~~~
 
-- Mellanox OFED version: **4.1**.
+Either RDMA Core library with a recent enough Linux kernel release
+(recommended) or Mellanox OFED, which provides compatibility with older
+releases.
+
+RMDA Core with Linux Kernel
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+- Minimal kernel version : v4.14 or the most recent 4.14-rc (see `Linux installation documentation`_)
+- Minimal rdma-core version: v15+ commit 0c5f5765213a ("Merge pull request #227 from yishaih/tm")
+  (see `RDMA Core installation documentation`_)
+
+.. _`Linux installation documentation`: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git/plain/Documentation/admin-guide/README.rst
+.. _`RDMA Core installation documentation`: https://raw.githubusercontent.com/linux-rdma/rdma-core/master/README.md
+
+Mellanox OFED
+^^^^^^^^^^^^^
+
+- Mellanox OFED version: **4.2**.
 - firmware version:
 
-  - ConnectX-4: **12.20.1010** and above.
-  - ConnectX-4 Lx: **14.20.1010** and above.
-  - ConnectX-5: **16.20.1010** and above.
-  - ConnectX-5 Ex: **16.20.1010** and above.
-
-Getting Mellanox OFED
-~~~~~~~~~~~~~~~~~~~~~
+  - ConnectX-4: **12.21.1000** and above.
+  - ConnectX-4 Lx: **14.21.1000** and above.
+  - ConnectX-5: **16.21.1000** and above.
+  - ConnectX-5 Ex: **16.21.1000** and above.
 
 While these libraries and kernel modules are available on OpenFabrics
 Alliance's `website <https://www.openfabrics.org/>`__ and provided by package
@@ -373,8 +415,8 @@ Supported NICs
 * Mellanox(R) ConnectX(R)-5 100G MCX556A-ECAT (2x100G)
 * Mellanox(R) ConnectX(R)-5 Ex EN 100G MCX516A-CDAT (2x100G)
 
-Quick Start Guide
------------------
+Quick Start Guide on OFED
+-------------------------
 
 1. Download latest Mellanox OFED. For more info check the  `prerequisites`_.
 
@@ -384,7 +426,7 @@ Quick Start Guide
 
    .. code-block:: console
 
-        ./mlnxofedinstall
+        ./mlnxofedinstall --upstream-libs --dpdk
 
 3. Verify the firmware is the correct one:
 

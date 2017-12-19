@@ -39,6 +39,7 @@
 #include <sys/queue.h>
 
 #include <rte_pci.h>
+#include <rte_bus_pci.h>
 #include <rte_ethdev.h>
 #include <rte_memory.h>
 #include <rte_lcore.h>
@@ -126,13 +127,13 @@ struct bnxt_pf_info {
 #define BNXT_FIRST_VF_FID	128
 #define BNXT_PF_RINGS_USED(bp)	bnxt_get_num_queues(bp)
 #define BNXT_PF_RINGS_AVAIL(bp)	(bp->pf.max_cp_rings - BNXT_PF_RINGS_USED(bp))
-	uint8_t			port_id;
+	uint16_t		port_id;
 	uint16_t		first_vf_id;
 	uint16_t		active_vfs;
 	uint16_t		max_vfs;
 	uint32_t		func_cfg_flags;
 	void			*vf_req_buf;
-	phys_addr_t		vf_req_buf_dma_addr;
+	rte_iova_t		vf_req_buf_dma_addr;
 	uint32_t		vf_req_fwd[8];
 	uint16_t		total_vnics;
 	struct bnxt_child_vf_info	*vf_info;
@@ -163,6 +164,8 @@ struct bnxt_link_info {
 	uint16_t		auto_link_speed;
 	uint16_t		auto_link_speed_mask;
 	uint32_t		preemphasis;
+	uint8_t			phy_type;
+	uint8_t			media_type;
 };
 
 #define BNXT_COS_QUEUE_COUNT	8
@@ -171,11 +174,18 @@ struct bnxt_cos_queue_info {
 	uint8_t	profile;
 };
 
+struct rte_flow {
+	STAILQ_ENTRY(rte_flow) next;
+	struct bnxt_filter_info *filter;
+	struct bnxt_vnic_info	*vnic;
+};
+
 #define BNXT_HWRM_SHORT_REQ_LEN		sizeof(struct hwrm_short_input)
 struct bnxt {
 	void				*bar0;
 
 	struct rte_eth_dev		*eth_dev;
+	struct rte_eth_rss_conf		rss_conf;
 	struct rte_pci_device		*pdev;
 
 	uint32_t		flags;
@@ -184,6 +194,7 @@ struct bnxt {
 #define BNXT_FLAG_PORT_STATS	(1 << 2)
 #define BNXT_FLAG_JUMBO		(1 << 3)
 #define BNXT_FLAG_SHORT_CMD	(1 << 4)
+#define BNXT_FLAG_UPDATE_HASH	(1 << 5)
 #define BNXT_PF(bp)		(!((bp)->flags & BNXT_FLAG_VF))
 #define BNXT_VF(bp)		((bp)->flags & BNXT_FLAG_VF)
 #define BNXT_NPAR_ENABLED(bp)	((bp)->port_partition_type)
@@ -194,14 +205,14 @@ struct bnxt {
 	struct bnxt_rx_queue **rx_queues;
 	const void		*rx_mem_zone;
 	struct rx_port_stats    *hw_rx_port_stats;
-	phys_addr_t		hw_rx_port_stats_map;
+	rte_iova_t		hw_rx_port_stats_map;
 
 	unsigned int		tx_nr_rings;
 	unsigned int		tx_cp_nr_rings;
 	struct bnxt_tx_queue **tx_queues;
 	const void		*tx_mem_zone;
 	struct tx_port_stats    *hw_tx_port_stats;
-	phys_addr_t		hw_tx_port_stats_map;
+	rte_iova_t		hw_tx_port_stats_map;
 
 	/* Default completion ring */
 	struct bnxt_cp_ring_info	*def_cp_ring;
@@ -217,7 +228,7 @@ struct bnxt {
 	STAILQ_HEAD(, bnxt_filter_info)	free_filter_list;
 
 	/* VNIC pointer for flow filter (VMDq) pools */
-#define MAX_FF_POOLS	ETH_64_POOLS
+#define MAX_FF_POOLS	256
 	STAILQ_HEAD(, bnxt_vnic_info)	ff_pool[MAX_FF_POOLS];
 
 	struct bnxt_irq         *irq_tbl;
@@ -227,9 +238,9 @@ struct bnxt {
 
 	uint16_t			hwrm_cmd_seq;
 	void				*hwrm_cmd_resp_addr;
-	phys_addr_t			hwrm_cmd_resp_dma_addr;
+	rte_iova_t			hwrm_cmd_resp_dma_addr;
 	void				*hwrm_short_cmd_req_addr;
-	phys_addr_t			hwrm_short_cmd_req_dma_addr;
+	rte_iova_t			hwrm_short_cmd_req_dma_addr;
 	rte_spinlock_t			hwrm_lock;
 	uint16_t			max_req_len;
 	uint16_t			max_resp_len;
@@ -269,4 +280,5 @@ int bnxt_rcv_msg_from_vf(struct bnxt *bp, uint16_t vf_id, void *msg);
 #define RX_PROD_AGG_BD_TYPE_RX_PROD_AGG		0x6
 
 bool is_bnxt_supported(struct rte_eth_dev *dev);
+extern const struct rte_flow_ops bnxt_flow_ops;
 #endif

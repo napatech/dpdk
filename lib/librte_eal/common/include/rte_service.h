@@ -61,9 +61,6 @@ extern "C" {
 
 #include <rte_lcore.h>
 
-/* forward declaration only. Definition in rte_service_private.h */
-struct rte_service_spec;
-
 #define RTE_SERVICE_NAME_MAX 32
 
 /* Capabilities of a service.
@@ -89,40 +86,32 @@ struct rte_service_spec;
  */
 uint32_t rte_service_get_count(void);
 
-
 /**
  * @warning
  * @b EXPERIMENTAL: this API may change without prior notice
  *
- * Return the specification of a service by integer id.
+ * Return the id of a service by name.
  *
- * This function provides the specification of a service. This can be used by
- * the application to understand what the service represents. The service
- * must not be modified by the application directly, only passed to the various
- * rte_service_* functions.
+ * This function provides the id of the service using the service name as
+ * lookup key. The service id is to be passed to other functions in the
+ * rte_service_* API.
  *
- * @param id The integer id of the service to retrieve
- * @retval non-zero A valid pointer to the service_spec
- * @retval NULL Invalid *id* provided.
- */
-struct rte_service_spec *rte_service_get_by_id(uint32_t id);
-
-/**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
- * Return the specification of a service by name.
- *
- * This function provides the specification of a service using the service name
- * as lookup key. This can be used by the application to understand what the
- * service represents. The service must not be modified by the application
- * directly, only passed to the various rte_service_* functions.
+ * Example usage:
+ * @code
+ *      uint32_t service_id;
+ *      int32_t ret = rte_service_get_by_name("service_X", &service_id);
+ *      if (ret) {
+ *              // handle error
+ *      }
+ * @endcode
  *
  * @param name The name of the service to retrieve
- * @retval non-zero A valid pointer to the service_spec
- * @retval NULL Invalid *name* provided.
+ * @param[out] service_id A pointer to a uint32_t, to be filled in with the id.
+ * @retval 0 Success. The service id is provided in *service_id*.
+ * @retval -EINVAL Null *service_id* pointer provided
+ * @retval -ENODEV No such service registered
  */
-struct rte_service_spec *rte_service_get_by_name(const char *name);
+int32_t rte_service_get_by_name(const char *name, uint32_t *service_id);
 
 /**
  * @warning
@@ -133,7 +122,7 @@ struct rte_service_spec *rte_service_get_by_name(const char *name);
  * @return A pointer to the name of the service. The returned pointer remains
  *         in ownership of the service, and the application must not free it.
  */
-const char *rte_service_get_name(const struct rte_service_spec *service);
+const char *rte_service_get_name(uint32_t id);
 
 /**
  * @warning
@@ -146,17 +135,16 @@ const char *rte_service_get_name(const struct rte_service_spec *service);
  * @retval 1 Capability supported by this service instance
  * @retval 0 Capability not supported by this service instance
  */
-int32_t rte_service_probe_capability(const struct rte_service_spec *service,
-				     uint32_t capability);
+int32_t rte_service_probe_capability(uint32_t id, uint32_t capability);
 
 /**
  * @warning
  * @b EXPERIMENTAL: this API may change without prior notice
  *
- * Enable a core to run a service.
+ * Map or unmap a lcore to a service.
  *
- * Each core can be added or removed from running specific services. This
- * functions adds *lcore* to the set of cores that will run *service*.
+ * Each core can be added or removed from running a specific service. This
+ * function enables or disables *lcore* to run *service_id*.
  *
  * If multiple cores are enabled on a service, an atomic is used to ensure that
  * only one cores runs the service at a time. The exception to this is when
@@ -164,82 +152,120 @@ int32_t rte_service_probe_capability(const struct rte_service_spec *service,
  * called RTE_SERVICE_CAP_MT_SAFE. With the multi-thread safe capability set,
  * the service function can be run on multiple threads at the same time.
  *
- * @retval 0 lcore added successfully
+ * @param service_id the service to apply the lcore to
+ * @param lcore The lcore that will be mapped to service
+ * @param enable Zero to unmap or disable the core, non-zero to enable
+ *
+ * @retval 0 lcore map updated successfully
  * @retval -EINVAL An invalid service or lcore was provided.
  */
-int32_t rte_service_enable_on_lcore(struct rte_service_spec *service,
-				   uint32_t lcore);
+int32_t rte_service_map_lcore_set(uint32_t service_id, uint32_t lcore,
+				  uint32_t enable);
 
 /**
  * @warning
  * @b EXPERIMENTAL: this API may change without prior notice
  *
- * Disable a core to run a service.
+ * Retrieve the mapping of an lcore to a service.
  *
- * Each core can be added or removed from running specific services. This
- * functions removes *lcore* to the set of cores that will run *service*.
+ * @param service_id the service to apply the lcore to
+ * @param lcore The lcore that will be mapped to service
  *
- * @retval 0 Lcore removed successfully
+ * @retval 1 lcore is mapped to service
+ * @retval 0 lcore is not mapped to service
  * @retval -EINVAL An invalid service or lcore was provided.
  */
-int32_t rte_service_disable_on_lcore(struct rte_service_spec *service,
-				   uint32_t lcore);
+int32_t rte_service_map_lcore_get(uint32_t service_id, uint32_t lcore);
 
 /**
  * @warning
  * @b EXPERIMENTAL: this API may change without prior notice
  *
- * Return if an lcore is enabled for the service.
+ * Set the runstate of the service.
  *
- * This function allows the application to query if *lcore* is currently set to
- * run *service*.
+ * Each service is either running or stopped. Setting a non-zero runstate
+ * enables the service to run, while setting runstate zero disables it.
  *
- * @retval 1 Lcore enabled on this lcore
- * @retval 0 Lcore disabled on this lcore
- * @retval -EINVAL An invalid service or lcore was provided.
- */
-int32_t rte_service_get_enabled_on_lcore(struct rte_service_spec *service,
-					uint32_t lcore);
-
-
-/**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
+ * @param id The id of the service
+ * @param runstate The run state to apply to the service
  *
- * Enable *service* to run.
- *
- * This function switches on a service during runtime.
  * @retval 0 The service was successfully started
+ * @retval -EINVAL Invalid service id
  */
-int32_t rte_service_start(struct rte_service_spec *service);
+int32_t rte_service_runstate_set(uint32_t id, uint32_t runstate);
 
 /**
  * @warning
  * @b EXPERIMENTAL: this API may change without prior notice
  *
- * Disable *service*.
+ * Get the runstate for the service with *id*. See *rte_service_runstate_set*
+ * for details of runstates. A service can call this function to ensure that
+ * the application has indicated that it will receive CPU cycles. Either a
+ * service-core is mapped (default case), or the application has explicitly
+ * disabled the check that a service-cores is mapped to the service and takes
+ * responsibility to run the service manually using the available function
+ * *rte_service_run_iter_on_app_lcore* to do so.
  *
- * Switch off a service, so it is not run until it is *rte_service_start* is
- * called on it.
- * @retval 0 Service successfully switched off
+ * @retval 1 Service is running
+ * @retval 0 Service is stopped
+ * @retval -EINVAL Invalid service id
  */
-int32_t rte_service_stop(struct rte_service_spec *service);
+int32_t rte_service_runstate_get(uint32_t id);
 
 /**
  * @warning
  * @b EXPERIMENTAL: this API may change without prior notice
  *
- * Returns if *service* is currently running.
+ * Enable or disable the check for a service-core being mapped to the service.
+ * An application can disable the check when takes the responsibility to run a
+ * service itself using *rte_service_run_iter_on_app_lcore*.
  *
- * This function returns true if the service has been started using
- * *rte_service_start*, AND a service core is mapped to the service. This
- * function can be used to ensure that the service will be run.
+ * @param id The id of the service to set the check on
+ * @param enable When zero, the check is disabled. Non-zero enables the check.
  *
- * @retval 1 Service is currently running, and has a service lcore mapped
- * @retval 0 Service is currently stopped, or no service lcore is mapped
- * @retval -EINVAL Invalid service pointer provided
+ * @retval 0 Success
+ * @retval -EINVAL Invalid service ID
  */
-int32_t rte_service_is_running(const struct rte_service_spec *service);
+int32_t rte_service_set_runstate_mapped_check(uint32_t id, int32_t enable);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
+ * This function runs a service callback from a non-service lcore.
+ *
+ * This function is designed to enable gradual porting to service cores, and
+ * to enable unit tests to verify a service behaves as expected.
+ *
+ * When called, this function ensures that the service identified by *id* is
+ * safe to run on this lcore. Multi-thread safe services are invoked even if
+ * other cores are simultaneously running them as they are multi-thread safe.
+ *
+ * Multi-thread unsafe services are handled depending on the variable
+ * *serialize_multithread_unsafe*:
+ * - When set, the function will check if a service is already being invoked
+ *   on another lcore, refusing to run it and returning -EBUSY.
+ * - When zero, the application takes responsibility to ensure that the service
+ *   indicated by *id* is not going to be invoked by another lcore. This setting
+ *   avoids atomic operations, so is likely to be more performant.
+ *
+ * @param id The ID of the service to run
+ * @param serialize_multithread_unsafe This parameter indicates to the service
+ *           cores library if it is required to use atomics to serialize access
+ *           to mult-thread unsafe services. As there is an overhead in using
+ *           atomics, applications can choose to enable or disable this feature
+ *
+ * Note that any thread calling this function MUST be a DPDK EAL thread, as
+ * the *rte_lcore_id* function is used to access internal data structures.
+ *
+ * @retval 0 Service was run on the calling thread successfully
+ * @retval -EBUSY Another lcore is executing the service, and it is not a
+ *         multi-thread safe service, so the service was not run on this lcore
+ * @retval -ENOEXEC Service is not in a run-able state
+ * @retval -EINVAL Invalid service id
+ */
+int32_t rte_service_run_iter_on_app_lcore(uint32_t id,
+		uint32_t serialize_multithread_unsafe);
 
 /**
  * @warning
@@ -341,13 +367,12 @@ int32_t rte_service_lcore_reset_all(void);
  * Enable or disable statistics collection for *service*.
  *
  * This function enables per core, per-service cycle count collection.
- * @param service The service to enable statistics gathering on.
+ * @param id The service to enable statistics gathering on.
  * @param enable Zero to disable statistics, non-zero to enable.
  * @retval 0 Success
  * @retval -EINVAL Invalid service pointer passed
  */
-int32_t rte_service_set_stats_enable(struct rte_service_spec *service,
-				  int32_t enable);
+int32_t rte_service_set_stats_enable(uint32_t id, int32_t enable);
 
 /**
  * @warning
@@ -374,10 +399,26 @@ int32_t rte_service_lcore_list(uint32_t array[], uint32_t n);
  * @warning
  * @b EXPERIMENTAL: this API may change without prior notice
  *
- * Dumps any information available about the service. If service is NULL,
- * dumps info for all services.
+ * Get the numer of services running on the supplied lcore.
+ *
+ * @param lcore Id of the service core.
+ * @retval >=0 Number of services registered to this core.
+ * @retval -EINVAL Invalid lcore provided
+ * @retval -ENOTSUP The provided lcore is not a service core.
  */
-int32_t rte_service_dump(FILE *f, struct rte_service_spec *service);
+int32_t rte_service_lcore_count_services(uint32_t lcore);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
+ * Dumps any information available about the service. When id is UINT32_MAX,
+ * this function dumps info for all services.
+ *
+ * @retval 0 Statistics have been successfully dumped
+ * @retval -EINVAL Invalid service id provided
+ */
+int32_t rte_service_dump(FILE *f, uint32_t id);
 
 #ifdef __cplusplus
 }

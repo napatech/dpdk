@@ -59,7 +59,7 @@
 #include <rte_dev.h>
 
 #include <fslmc_logs.h>
-#include <fslmc_vfio.h>
+#include <rte_fslmc.h>
 #include "dpaa2_hw_pvt.h"
 #include "dpaa2_hw_dpio.h"
 #include <mc/fsl_dpmng.h>
@@ -90,19 +90,21 @@ static int dpaa2_cluster_sz = 2;
  * Cluster 1 (ID = x02) : CPU0, CPU1, CPU2, CPU3;
  * Cluster 2 (ID = x03) : CPU4, CPU5, CPU6, CPU7;
  */
-
-/* Set the STASH Destination depending on Current CPU ID.
- * e.g. Valid values of SDEST are 4,5,6,7. Where,
- * CPU 0-1 will have SDEST 4
- * CPU 2-3 will have SDEST 5.....and so on.
+/* For LX2160 platform There are four clusters with following mapping:
+ * Cluster 1 (ID = x00) : CPU0, CPU1;
+ * Cluster 2 (ID = x01) : CPU2, CPU3;
+ * Cluster 3 (ID = x02) : CPU4, CPU5;
+ * Cluster 4 (ID = x03) : CPU6, CPU7;
+ * Cluster 1 (ID = x04) : CPU8, CPU9;
+ * Cluster 2 (ID = x05) : CPU10, CP11;
+ * Cluster 3 (ID = x06) : CPU12, CPU13;
+ * Cluster 4 (ID = x07) : CPU14, CPU15;
  */
+
 static int
 dpaa2_core_cluster_sdest(int cpu_id)
 {
 	int x = cpu_id / dpaa2_cluster_sz;
-
-	if (x > 3)
-		x = 3;
 
 	return dpaa2_core_cluster_base + x;
 }
@@ -208,7 +210,7 @@ configure_dpio_qbman_swp(struct dpaa2_dpio_dev *dpio_dev)
 		return -1;
 	}
 
-	PMD_DRV_LOG(DEBUG, "\t Allocated  DPIO Portal[%p]", dpio_dev->dpio);
+	PMD_DRV_LOG(DEBUG, "Allocated  DPIO Portal[%p]", dpio_dev->dpio);
 	dpio_dev->dpio->regs = dpio_dev->mc_portal;
 	if (dpio_open(dpio_dev->dpio, CMD_PRI_LOW, dpio_dev->hw_id,
 		      &dpio_dev->token)) {
@@ -239,8 +241,6 @@ configure_dpio_qbman_swp(struct dpaa2_dpio_dev *dpio_dev)
 		free(dpio_dev->dpio);
 		return -1;
 	}
-
-	PMD_INIT_LOG(DEBUG, "Qbman Portal ID %d", attr.qbman_portal_id);
 
 	/* Configure & setup SW portal */
 	p_des.block = NULL;
@@ -278,6 +278,10 @@ dpaa2_configure_stashing(struct dpaa2_dpio_dev *dpio_dev, int cpu_id)
 			dpaa2_core_cluster_base = 0x02;
 			dpaa2_cluster_sz = 4;
 			PMD_INIT_LOG(DEBUG, "\tLS108x (A53) Platform Detected");
+		} else if ((mc_plat_info.svr & 0xffff0000) == SVR_LX2160A) {
+			dpaa2_core_cluster_base = 0x00;
+			dpaa2_cluster_sz = 2;
+			PMD_INIT_LOG(DEBUG, "\tLX2160 Platform Detected");
 		}
 		first_time = 1;
 	}
@@ -428,13 +432,12 @@ dpaa2_affine_qbman_swp_sec(void)
 }
 
 static int
-dpaa2_create_dpio_device(struct fslmc_vfio_device *vdev,
+dpaa2_create_dpio_device(int vdev_fd,
 			 struct vfio_device_info *obj_info,
 			 int object_id)
 {
 	struct dpaa2_dpio_dev *dpio_dev;
 	struct vfio_region_info reg_info = { .argsz = sizeof(reg_info)};
-	int vfio_dev_fd;
 
 	if (obj_info->num_regions < NUM_DPIO_REGIONS) {
 		PMD_INIT_LOG(ERR, "ERROR, Not sufficient number "
@@ -451,14 +454,12 @@ dpaa2_create_dpio_device(struct fslmc_vfio_device *vdev,
 
 	dpio_dev->dpio = NULL;
 	dpio_dev->hw_id = object_id;
-	dpio_dev->intr_handle.vfio_dev_fd = vdev->fd;
 	rte_atomic16_init(&dpio_dev->ref_count);
 	/* Using single portal  for all devices */
 	dpio_dev->mc_portal = rte_mcp_ptr_list[MC_PORTAL_INDEX];
 
 	reg_info.index = 0;
-	vfio_dev_fd = dpio_dev->intr_handle.vfio_dev_fd;
-	if (ioctl(vfio_dev_fd, VFIO_DEVICE_GET_REGION_INFO, &reg_info)) {
+	if (ioctl(vdev_fd, VFIO_DEVICE_GET_REGION_INFO, &reg_info)) {
 		PMD_INIT_LOG(ERR, "vfio: error getting region info\n");
 		rte_free(dpio_dev);
 		return -1;
@@ -467,10 +468,10 @@ dpaa2_create_dpio_device(struct fslmc_vfio_device *vdev,
 	dpio_dev->ce_size = reg_info.size;
 	dpio_dev->qbman_portal_ce_paddr = (uint64_t)mmap(NULL, reg_info.size,
 				PROT_WRITE | PROT_READ, MAP_SHARED,
-				vfio_dev_fd, reg_info.offset);
+				vdev_fd, reg_info.offset);
 
 	reg_info.index = 1;
-	if (ioctl(vfio_dev_fd, VFIO_DEVICE_GET_REGION_INFO, &reg_info)) {
+	if (ioctl(vdev_fd, VFIO_DEVICE_GET_REGION_INFO, &reg_info)) {
 		PMD_INIT_LOG(ERR, "vfio: error getting region info\n");
 		rte_free(dpio_dev);
 		return -1;
@@ -479,7 +480,7 @@ dpaa2_create_dpio_device(struct fslmc_vfio_device *vdev,
 	dpio_dev->ci_size = reg_info.size;
 	dpio_dev->qbman_portal_ci_paddr = (uint64_t)mmap(NULL, reg_info.size,
 				PROT_WRITE | PROT_READ, MAP_SHARED,
-				vfio_dev_fd, reg_info.offset);
+				vdev_fd, reg_info.offset);
 
 	if (configure_dpio_qbman_swp(dpio_dev)) {
 		PMD_INIT_LOG(ERR,
@@ -491,8 +492,15 @@ dpaa2_create_dpio_device(struct fslmc_vfio_device *vdev,
 
 	io_space_count++;
 	dpio_dev->index = io_space_count;
+
+	if (rte_dpaa2_vfio_setup_intr(&dpio_dev->intr_handle, vdev_fd, 1)) {
+		PMD_INIT_LOG(ERR, "Fail to setup interrupt for %d\n",
+			     dpio_dev->hw_id);
+		rte_free(dpio_dev);
+	}
+
 	TAILQ_INSERT_TAIL(&dpio_dev_list, dpio_dev, next);
-	PMD_INIT_LOG(DEBUG, "DPAA2: Added [dpio.%d]", object_id);
+	RTE_LOG(DEBUG, PMD, "DPAA2: Added [dpio.%d]\n", object_id);
 
 	return 0;
 }
@@ -529,7 +537,7 @@ fail:
 }
 
 static struct rte_dpaa2_object rte_dpaa2_dpio_obj = {
-	.object_id = DPAA2_MC_DPIO_DEVID,
+	.dev_type = DPAA2_IO,
 	.create = dpaa2_create_dpio_device,
 };
 

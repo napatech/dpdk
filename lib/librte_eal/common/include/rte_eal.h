@@ -44,7 +44,9 @@
 #include <sched.h>
 
 #include <rte_per_lcore.h>
-#include <rte_config.h>
+#include <rte_bus.h>
+
+#include <rte_pci_dev_feature_defs.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -86,6 +88,9 @@ struct rte_config {
 
 	/** Primary or secondary configuration */
 	enum rte_proc_type_t process_type;
+
+	/** PA or VA mapping mode */
+	enum rte_iova_mode iova_mode;
 
 	/**
 	 * Pointer to memory configuration, which may be shared across multiple
@@ -212,7 +217,7 @@ int rte_eal_primary_proc_alive(const char *config_file_path);
 /**
  * Usage function typedef used by the application usage function.
  *
- * Use this function typedef to define and call rte_set_applcation_usage_hook()
+ * Use this function typedef to define and call rte_set_application_usage_hook()
  * routine.
  */
 typedef void	(*rte_usage_hook_t)(const char * prgname);
@@ -264,6 +269,32 @@ rte_set_application_usage_hook(rte_usage_hook_t usage_func);
 int rte_eal_has_hugepages(void);
 
 /**
+ * Whether EAL is using PCI bus.
+ * Disabled by --no-pci option.
+ *
+ * @return
+ *   Nonzero if the PCI bus is enabled.
+ */
+int rte_eal_has_pci(void);
+
+/**
+ * Whether the EAL was asked to create UIO device.
+ *
+ * @return
+ *   Nonzero if true.
+ */
+int rte_eal_create_uio_dev(void);
+
+/**
+ * The user-configured vfio interrupt mode.
+ *
+ * @return
+ *   Interrupt mode configured with the command line,
+ *   RTE_INTR_MODE_NONE by default.
+ */
+enum rte_intr_mode rte_eal_vfio_intr_mode(void);
+
+/**
  * A wrap API for syscall gettid.
  *
  * @return
@@ -287,11 +318,22 @@ static inline int rte_gettid(void)
 	return RTE_PER_LCORE(_thread_id);
 }
 
-#define RTE_INIT(func) \
-static void __attribute__((constructor, used)) func(void)
+/**
+ * Get the iova mode
+ *
+ * @return
+ *   enum rte_iova_mode value.
+ */
+enum rte_iova_mode rte_eal_iova_mode(void);
 
-#define RTE_INIT_PRIO(func, prio) \
-static void __attribute__((constructor(prio), used)) func(void)
+/**
+ * Get default pool ops name for mbuf
+ *
+ * @return
+ *   returns default pool ops name.
+ */
+const char *
+rte_eal_mbuf_default_mempool_ops(void);
 
 #ifdef __cplusplus
 }

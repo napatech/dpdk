@@ -48,6 +48,8 @@ SRCS-y := testpmd.c
 SRCS-y += parameters.c
 SRCS-$(CONFIG_RTE_LIBRTE_CMDLINE) += cmdline.c
 SRCS-$(CONFIG_RTE_LIBRTE_CMDLINE) += cmdline_flow.c
+SRCS-$(CONFIG_RTE_LIBRTE_CMDLINE) += cmdline_mtr.c
+SRCS-$(CONFIG_RTE_LIBRTE_CMDLINE) += cmdline_tm.c
 SRCS-y += config.c
 SRCS-y += iofwd.c
 SRCS-y += macfwd.c
@@ -58,6 +60,10 @@ SRCS-y += txonly.c
 SRCS-y += csumonly.c
 SRCS-y += icmpecho.c
 SRCS-$(CONFIG_RTE_LIBRTE_IEEE1588) += ieee1588fwd.c
+
+ifeq ($(CONFIG_RTE_LIBRTE_PMD_SOFTNIC)$(CONFIG_RTE_LIBRTE_SCHED),yy)
+SRCS-y += tm.c
+endif
 
 ifeq ($(CONFIG_RTE_BUILD_SHARED_LIB),y)
 
@@ -79,6 +85,10 @@ endif
 
 ifeq ($(CONFIG_RTE_LIBRTE_PMD_XENVIRT),y)
 LDLIBS += -lrte_pmd_xenvirt
+endif
+
+ifeq ($(CONFIG_RTE_LIBRTE_PMD_SOFTNIC),y)
+LDLIBS += -lrte_pmd_softnic
 endif
 
 endif

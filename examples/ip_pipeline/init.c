@@ -49,6 +49,7 @@
 #include <rte_ip.h>
 #include <rte_eal.h>
 #include <rte_malloc.h>
+#include <rte_bus_pci.h>
 
 #include "app.h"
 #include "pipeline.h"
@@ -293,11 +294,6 @@ app_init_eal(struct app_params *app)
 			sizeof(buffer),
 			"--vfio-intr=%s",
 			p->vfio_intr);
-		app->eal_argv[n_args++] = strdup(buffer);
-	}
-
-	if ((p->xen_dom0_present) && (p->xen_dom0)) {
-		snprintf(buffer, sizeof(buffer), "--xen-dom0");
 		app->eal_argv[n_args++] = strdup(buffer);
 	}
 
@@ -1236,7 +1232,7 @@ app_init_tap(struct app_params *app)
 
 #ifdef RTE_LIBRTE_KNI
 static int
-kni_config_network_interface(uint8_t port_id, uint8_t if_up) {
+kni_config_network_interface(uint16_t port_id, uint8_t if_up) {
 	int ret = 0;
 
 	if (port_id >= rte_eth_dev_count())
@@ -1250,7 +1246,7 @@ kni_config_network_interface(uint8_t port_id, uint8_t if_up) {
 }
 
 static int
-kni_change_mtu(uint8_t port_id, unsigned new_mtu) {
+kni_change_mtu(uint16_t port_id, unsigned int new_mtu) {
 	int ret;
 
 	if (port_id >= rte_eth_dev_count())
