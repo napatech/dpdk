@@ -241,7 +241,7 @@ static int PrintHash(const char *str, int priority, struct pmd_internals *intern
 int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow *flow, int priority)
 {
   if (rss_hf == 0) {
-    RTE_LOG(ERR, PMD, "No HASH function is selected. Ignoring hash.\n");
+    PRINT_HASH("Hashmode[priority=%u;port=%u;tag=%s]=%s", 0);
     return 0;
   }
 
@@ -493,7 +493,7 @@ void CreateStreamid(char *ntpl_buf, struct pmd_internals *internals, uint32_t nb
 
   strcat(ntpl_buf, "streamid=");
   if (range) {
-    snprintf(buf, 20, "(%u..%u)", internals->rxq[0].stream_id, internals->rxq[nb_queues - 1].stream_id);
+    snprintf(buf, 20, "(%u..%u)", internals->rxq[list_queues[0]].stream_id, internals->rxq[list_queues[nb_queues - 1]].stream_id);
     strcat(ntpl_buf, buf);
   }
   else {

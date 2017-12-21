@@ -1293,6 +1293,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   struct color_s color = {0, false};
   uint8_t nb_ports = 0;
   uint8_t list_ports[MAX_NTACC_PORTS];
+  uint64_t rss_hf = 0;
 
 
   uint64_t typeMask = 0;
@@ -1356,6 +1357,14 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
           goto FlowError;
         }
         list_queues[nb_queues++] = rss->queue[i];
+
+        // Set hash mode function
+        if (rss->rss_conf) {
+          rss_hf = rss->rss_conf->rss_hf;
+        }
+        else {
+          rss_hf = 0;
+        }
       }
       break;
     case RTE_FLOW_ACTION_TYPE_QUEUE:
@@ -1649,9 +1658,9 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       rte_spinlock_unlock(&internals->lock);
     }
 
-    if (rss && rss->rss_conf) {
+    if (rss) {
       // If RSS is used, then set the Hash mode
-      if (CreateHash(rss->rss_conf->rss_hf, internals, flow, attr->priority + 1) != 0) {
+      if (CreateHash(rss_hf, internals, flow, attr->priority + 1) != 0) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Failed setting up hash mode");
         goto FlowError;
       }
