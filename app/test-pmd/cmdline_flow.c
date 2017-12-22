@@ -198,7 +198,6 @@ enum index {
 	ACTION_RSS,
 	ACTION_RSS_QUEUES,
 	ACTION_RSS_QUEUE,
-  ACTION_RSS_HF,
 	ACTION_PF,
 	ACTION_VF,
 	ACTION_VF_ORIGINAL,
@@ -217,15 +216,10 @@ enum index {
 /** Number of queue[] entries in struct rte_flow_action_rss. */
 #define ACTION_RSS_NUM 32
 
-struct rte_flow_action_test {
-  struct rte_flow_action_rss rss;
-  uint16_t queue[ACTION_RSS_NUM]; 
-  struct rte_eth_rss_conf rss_conf;
-};
-
-/** Storage size for struct rte_flow_action_rss including
- *  queues and rss_conf. */
-#define ACTION_RSS_SIZE sizeof(struct rte_flow_action_test)
+/** Storage size for struct rte_flow_action_rss including queues. */
+#define ACTION_RSS_SIZE \
+	(offsetof(struct rte_flow_action_rss, queue) + \
+	 sizeof(*((struct rte_flow_action_rss *)0)->queue) * ACTION_RSS_NUM)
 
 /** Maximum number of subsequent tokens and arguments on the stack. */
 #define CTX_STACK_SIZE 16
@@ -659,8 +653,7 @@ static const enum index action_dup[] = {
 
 static const enum index action_rss[] = {
 	ACTION_RSS_QUEUES,
-  ACTION_RSS_HF,
-  ACTION_NEXT,
+	ACTION_NEXT,
 	ZERO,
 };
 
@@ -1634,13 +1627,6 @@ static const struct token token_list[] = {
 		.call = parse_vc_action_rss_queue,
 		.comp = comp_vc_action_rss_queue,
 	},
-  [ACTION_RSS_HF] = {
-    .name = "hf",
-    .help = "Hash function for RSS",
-    .next = NEXT(action_rss, NEXT_ENTRY(UNSIGNED)),
-    .args = ARGS(ARGS_ENTRY(struct rte_flow_action_test, rss_conf.rss_hf)),
-    .call = parse_vc_conf,
-  },
 	[ACTION_PF] = {
 		.name = "pf",
 		.help = "redirect packets to physical device function",
@@ -2102,9 +2088,7 @@ parse_vc_action_rss_queue(struct context *ctx, const struct token *token,
 	ctx->next[ctx->next_num++] = next;
 	if (!ctx->object)
 		return len;
-  ((struct rte_flow_action_test *)ctx->object)->rss.num = i;
-  ((struct rte_flow_action_test *)ctx->object)->rss.rss_conf = &((struct rte_flow_action_test *)ctx->object)->rss_conf;
-  ((struct rte_flow_action_test *)ctx->object)->rss_conf.rss_key = NULL;
+	((struct rte_flow_action_rss *)ctx->object)->num = i;
 	return len;
 }
 
