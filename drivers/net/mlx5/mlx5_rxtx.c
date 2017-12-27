@@ -401,6 +401,8 @@ mlx5_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	/* Start processing. */
 	mlx5_tx_complete(txq);
 	max_elts = (elts_n - (elts_head - txq->elts_tail));
+	/* A CQE slot must always be available. */
+	assert((1u << txq->cqe_n) - (txq->cq_pi - txq->cq_ci));
 	max_wqe = (1u << txq->wqe_n) - (txq->wqe_ci - txq->wqe_pi);
 	if (unlikely(!max_wqe))
 		return 0;
@@ -745,6 +747,9 @@ next_wqe:
 		/* Save elts_head in unused "immediate" field of WQE. */
 		last_wqe->ctrl3 = txq->elts_head;
 		txq->elts_comp = 0;
+#ifndef NDEBUG
+		++txq->cq_pi;
+#endif
 	} else {
 		txq->elts_comp = comp;
 	}
@@ -863,6 +868,8 @@ mlx5_tx_burst_mpw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	/* Start processing. */
 	mlx5_tx_complete(txq);
 	max_elts = (elts_n - (elts_head - txq->elts_tail));
+	/* A CQE slot must always be available. */
+	assert((1u << txq->cqe_n) - (txq->cq_pi - txq->cq_ci));
 	max_wqe = (1u << txq->wqe_n) - (txq->wqe_ci - txq->wqe_pi);
 	if (unlikely(!max_wqe))
 		return 0;
@@ -956,6 +963,9 @@ mlx5_tx_burst_mpw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		/* Save elts_head in unused "immediate" field of WQE. */
 		wqe->ctrl[3] = elts_head;
 		txq->elts_comp = 0;
+#ifndef NDEBUG
+		++txq->cq_pi;
+#endif
 	} else {
 		txq->elts_comp = comp;
 	}
@@ -1087,6 +1097,8 @@ mlx5_tx_burst_mpw_inline(void *dpdk_txq, struct rte_mbuf **pkts,
 	/* Start processing. */
 	mlx5_tx_complete(txq);
 	max_elts = (elts_n - (elts_head - txq->elts_tail));
+	/* A CQE slot must always be available. */
+	assert((1u << txq->cqe_n) - (txq->cq_pi - txq->cq_ci));
 	do {
 		struct rte_mbuf *buf = *(pkts++);
 		uintptr_t addr;
@@ -1248,6 +1260,9 @@ mlx5_tx_burst_mpw_inline(void *dpdk_txq, struct rte_mbuf **pkts,
 		/* Save elts_head in unused "immediate" field of WQE. */
 		wqe->ctrl[3] = elts_head;
 		txq->elts_comp = 0;
+#ifndef NDEBUG
+		++txq->cq_pi;
+#endif
 	} else {
 		txq->elts_comp = comp;
 	}
@@ -1590,7 +1605,9 @@ mlx5_tx_burst_empw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		wqe->ctrl[3] = elts_head;
 		txq->elts_comp = 0;
 		txq->mpw_comp = txq->wqe_ci;
-		txq->cq_pi++;
+#ifndef NDEBUG
+		++txq->cq_pi;
+#endif
 	} else {
 		txq->elts_comp += j;
 	}
