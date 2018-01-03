@@ -2687,9 +2687,6 @@ i40evf_set_default_mac_addr(struct rte_eth_dev *dev,
 		return;
 	}
 
-	if (is_same_ether_addr(mac_addr, dev->data->mac_addrs))
-		return;
-
 	if (vf->flags & I40E_FLAG_VF_MAC_BY_PF)
 		return;
 
