@@ -41,14 +41,6 @@ struct filter_flow {
   uint32_t ntpl_id;
 };
 
-struct filter_hash_s {
-  LIST_ENTRY(filter_hash_s) next;
-  uint64_t rss_hf;
-  int priority;
-  uint8_t port;
-  uint32_t ntpl_id;
-};
-
 struct filter_keyset_s {
   LIST_ENTRY(filter_keyset_s) next;
   uint32_t ntpl_id1;
@@ -171,7 +163,6 @@ struct pmd_internals {
   int                   if_index;
   LIST_HEAD(_flows, rte_flow) flows;
   LIST_HEAD(filter_values_t, filter_values_s) filter_values;
-  LIST_HEAD(filter_hash_t, filter_hash_s) filter_hash;
   LIST_HEAD(filter_keyset_t, filter_keyset_s) filter_keyset;
   rte_spinlock_t        lock;
   rte_spinlock_t        statlock;

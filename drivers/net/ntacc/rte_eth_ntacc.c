@@ -306,7 +306,7 @@ static uint16_t eth_ntacc_rx(void *queue,
 
 #ifdef USE_SW_STAT
     rx_q->rx_pkts += mbuf->batch_nb_packet;
-    rx_q->rx_bytes += batchCtl->seg->length - mbuf->batch_nb_packet * hdr->descrLength;
+    rx_q->rx_bytes += batchCtl->pSeg->length - mbuf->batch_nb_packet * hdr->descrLength;
 #endif
     return num_rx;
   }
@@ -1212,29 +1212,6 @@ static const char *ActionErrorString(enum rte_flow_action_type type)
 }
 
 // No lock in this code
-static void _cleanUpHash(struct rte_flow *flow, struct pmd_internals *internals)
-{
-  struct rte_flow *pTmp;
-  bool found = false;
-
-  if (flow->rss_hf == 0) {
-    // No hash => nothing to cleanup
-    return;
-  }
-  LIST_FOREACH(pTmp, &internals->flows, next) {
-    if (pTmp->rss_hf == flow->rss_hf && pTmp->port == flow->port && pTmp->priority == flow->priority) {
-      // Key set is still in use
-      found = true;
-      break;
-    }
-  }
-  if (!found) {
-    // Hash is not in use anymore. delete it.
-    DeleteHash(flow->rss_hf, flow->port, flow->priority, internals);
-  }
-}
-
-// No lock in this code
 static void _cleanUpKeySet(int key, struct pmd_internals *internals)
 {
   struct rte_flow *pTmp;
@@ -1270,7 +1247,6 @@ static void _cleanUpFlow(struct rte_flow *flow, struct pmd_internals *internals)
     rte_free(id);
   }
   _cleanUpKeySet(flow->key, internals);
-  _cleanUpHash(flow, internals);
   rte_free(flow);
 }
 
@@ -1300,10 +1276,17 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   bool reuse;
 
   char *ntpl_buf = NULL;
+  char *filter_buf1 = NULL;
   struct rte_flow *flow = NULL;
   const char *ntpl_str = NULL;
 
   ntpl_buf = rte_malloc(internals->name, NTPL_BSIZE + 1, 0);
+  if (!ntpl_buf) {
+    rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Out of memory");
+    goto FlowError;
+  }
+
+  filter_buf1 = rte_malloc(internals->name, NTPL_BSIZE + 1, 0);
   if (!ntpl_buf) {
     rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Out of memory");
     goto FlowError;
@@ -1415,11 +1398,9 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   // Set the stream IDs
   CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
 
-  // Set the tag name
-  snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ";tag=%s]=", internals->tagName);
-
   // Set the filter expression
   tunnel = false;
+  filter_buf1[0] = 0;
   for (; items->type != RTE_FLOW_ITEM_TYPE_END; ++items) {
     switch (items->type) {
       case RTE_FLOW_ITEM_TYPE_NTPL:
@@ -1451,7 +1432,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       break;
 
       case RTE_FLOW_ITEM_TYPE_IPV4:
-        if (SetIPV4Filter(&ntpl_buf[strlen(ntpl_buf)],
+        if (SetIPV4Filter(&filter_buf1[strlen(filter_buf1)],
                           &filterContinue,
                           items,
                           tunnel,
@@ -1463,7 +1444,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         break;
 
     case RTE_FLOW_ITEM_TYPE_IPV6:
-      if (SetIPV6Filter(&ntpl_buf[strlen(ntpl_buf)],
+      if (SetIPV6Filter(&filter_buf1[strlen(filter_buf1)],
                         &filterContinue,
                         items,
                         tunnel,
@@ -1475,7 +1456,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       break;
 
       case RTE_FLOW_ITEM_TYPE_SCTP:
-        if (SetSCTPFilter(&ntpl_buf[strlen(ntpl_buf)],
+        if (SetSCTPFilter(&filter_buf1[strlen(filter_buf1)],
                           &filterContinue,
                           items,
                           tunnel,
@@ -1487,7 +1468,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         break;
 
       case RTE_FLOW_ITEM_TYPE_TCP:
-        if (SetTCPFilter(&ntpl_buf[strlen(ntpl_buf)],
+        if (SetTCPFilter(&filter_buf1[strlen(filter_buf1)],
                           &filterContinue,
                           items,
                           tunnel,
@@ -1499,7 +1480,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         break;
 
     case RTE_FLOW_ITEM_TYPE_UDP:
-      if (SetUDPFilter(&ntpl_buf[strlen(ntpl_buf)],
+      if (SetUDPFilter(&filter_buf1[strlen(filter_buf1)],
                         &filterContinue,
                         items,
                         tunnel,
@@ -1511,7 +1492,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       break;
 
       case RTE_FLOW_ITEM_TYPE_ICMP:
-        if (SetICMPFilter(&ntpl_buf[strlen(ntpl_buf)],
+        if (SetICMPFilter(&filter_buf1[strlen(filter_buf1)],
                           &filterContinue,
                           items,
                           tunnel,
@@ -1523,7 +1504,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         break;
 
     case RTE_FLOW_ITEM_TYPE_VLAN:
-      if (SetVlanFilter(&ntpl_buf[strlen(ntpl_buf)],
+      if (SetVlanFilter(&filter_buf1[strlen(filter_buf1)],
                         &filterContinue,
                         items,
                         tunnel,
@@ -1535,7 +1516,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       break;
 
     case RTE_FLOW_ITEM_TYPE_MPLS:
-      if (SetMplsFilter(&ntpl_buf[strlen(ntpl_buf)],
+      if (SetMplsFilter(&filter_buf1[strlen(filter_buf1)],
                         &filterContinue,
                         items,
                         tunnel,
@@ -1547,7 +1528,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       break;
 
     case  RTE_FLOW_ITEM_TYPE_GRE:
-      if (SetGreFilter(&ntpl_buf[strlen(ntpl_buf)],
+      if (SetGreFilter(&filter_buf1[strlen(filter_buf1)],
                        &filterContinue,
                        items,
                        &typeMask) != 0) {
@@ -1557,7 +1538,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       tunnel = true;
       break;
     case RTE_FLOW_ITEM_TYPE_GTPU:
-      if (SetGtpFilter(&ntpl_buf[strlen(ntpl_buf)],
+      if (SetGtpFilter(&filter_buf1[strlen(filter_buf1)],
                        &filterContinue,
                        items,
                        &typeMask,
@@ -1568,7 +1549,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       tunnel = true;
       break;
     case 	RTE_FLOW_ITEM_TYPE_GTPC:
-      if (SetGtpFilter(&ntpl_buf[strlen(ntpl_buf)],
+      if (SetGtpFilter(&filter_buf1[strlen(filter_buf1)],
                        &filterContinue,
                        items,
                        &typeMask,
@@ -1598,7 +1579,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         goto FlowError;
       }
 
-      if (SetTunnelFilter(&ntpl_buf[strlen(ntpl_buf)],
+      if (SetTunnelFilter(&filter_buf1[strlen(filter_buf1)],
                         &filterContinue,
                         tunneltype,
                         &typeMask) != 0) {
@@ -1612,67 +1593,77 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Item is not supported");
       goto FlowError;
 
-      }
     }
+  }
 
-    if (ntpl_str) {
-      if (filterContinue) {
-        snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " and");
-      }
-      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " %s", ntpl_str);
-      filterContinue = true;
+  // Create HASH
+  if (rss) {
+    // If RSS is used, then set the Hash mode
+    if (CreateHash(&ntpl_buf[strlen(ntpl_buf)], rss_hf, internals, tunnel) != 0) {
+      rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Failed setting up hash mode");
+      goto FlowError;
     }
-	
+  }
+
+  // Set the tag name
+  snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ";tag=%s]=", internals->tagName);
+
+  // Add the filter created info to the NTPL buffer
+  strncpy(&ntpl_buf[strlen(ntpl_buf)], filter_buf1, NTPL_BSIZE - strlen(ntpl_buf) - 1);
+
+  if (ntpl_str) {
     if (filterContinue) {
       snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " and");
     }
-    if (nb_ports == 0) {
-    // Set the ports
-      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " port==%u", internals->port);
-      filterContinue = true;
-    }
-    else {
-      int ports;
-      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " port==");
-      for (ports = 0; ports < nb_ports;ports++) {
-        snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "%u", list_ports[ports]);
-        if (ports < (nb_ports - 1)) {
-          snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ",");
-        }
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " %s", ntpl_str);
+    filterContinue = true;
+  }
+	
+  if (filterContinue) {
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " and");
+  }
+  if (nb_ports == 0) {
+  // Set the ports
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " port==%u", internals->port);
+    filterContinue = true;
+  }
+  else {
+    int ports;
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " port==");
+    for (ports = 0; ports < nb_ports;ports++) {
+      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "%u", list_ports[ports]);
+      if (ports < (nb_ports - 1)) {
+        snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ",");
       }
-      filterContinue = true;
     }
+    filterContinue = true;
+  }
 
-    if (CreateOptimizedFilter(ntpl_buf, internals, flow, &filterContinue, typeMask, list_queues, nb_queues, &reuse, &color) != 0) {
-      rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Creating filter error");
+  if (CreateOptimizedFilter(ntpl_buf, internals, flow, &filterContinue, typeMask, list_queues, nb_queues, &reuse, &color) != 0) {
+    rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Creating filter error");
+    goto FlowError;
+  }
+
+  if (!reuse) {
+    if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
+      rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Filter error");
       goto FlowError;
     }
-
-    if (!reuse) {
-      if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
-        rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Filter error");
-        goto FlowError;
-      }
-      rte_spinlock_lock(&internals->lock);
-      pushNtplID(flow, ntplInfo.ntplId);
-      rte_spinlock_unlock(&internals->lock);
-    }
-
-    if (rss) {
-      // If RSS is used, then set the Hash mode
-      if (CreateHash(rss_hf, internals, flow, attr->priority + 1) != 0) {
-        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Failed setting up hash mode");
-        goto FlowError;
-      }
-    }
-
-    if (ntpl_buf) {
-      rte_free(ntpl_buf);
-    }
     rte_spinlock_lock(&internals->lock);
-    LIST_INSERT_HEAD(&internals->flows, flow, next);
+    pushNtplID(flow, ntplInfo.ntplId);
     rte_spinlock_unlock(&internals->lock);
-    return flow;
+  }
+
+  if (ntpl_buf) {
+    rte_free(ntpl_buf);
+  }
+  if (filter_buf1) {
+    rte_free(filter_buf1);
+  }
+  rte_spinlock_lock(&internals->lock);
+  LIST_INSERT_HEAD(&internals->flows, flow, next);
+  rte_spinlock_unlock(&internals->lock);
+  return flow;
 
 FlowError:
     if (flow) {
@@ -1680,6 +1671,9 @@ FlowError:
     }
     if (ntpl_buf) {
       rte_free(ntpl_buf);
+    }
+    if (filter_buf1) {
+      rte_free(filter_buf1);
     }
     return NULL;
 }
@@ -1769,7 +1763,6 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       LIST_REMOVE(id, next);
       rte_free(id);
     }
-    _cleanUpHash(internals->defaultFlow, internals);
     rte_spinlock_unlock(&internals->lock);
 
     // Call RxGet in order to activate the delete of the default filter
@@ -1828,7 +1821,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
         // Set the stream IDs
         CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
         // If RSS is used, then set the Hash mode
-        if (CreateHash(internals->rss_hf, internals, defFlow, 62) != 0) {
+        if (CreateHash(&ntpl_buf[strlen(ntpl_buf)], internals->rss_hf, internals, false) != 0) {
           RTE_LOG(ERR, PMD, "Failed to create hash function eth_dev_start\n");
           goto IsolateError;
         }
@@ -1932,36 +1925,6 @@ static int eth_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t 
   }
 }
 
-static int eth_rss_hash_update(struct rte_eth_dev *dev,
-                               struct rte_eth_rss_conf *rss_conf)
-{
-  int ret = 0;
-  struct pmd_internals *internals = dev->data->dev_private;
-
-  if (rss_conf->rss_hf == 0) {
-    // Flush all hash settings
-    rte_spinlock_lock(&internals->lock);
-    FlushHash(internals);
-    rte_spinlock_unlock(&internals->lock);
-  }
-  else {
-    struct rte_flow dummyFlow;
-    memset(&dummyFlow, 0, sizeof(struct rte_flow));
-
-    // Flush all other hash settings first
-    rte_spinlock_lock(&internals->lock);
-    FlushHash(internals);
-    rte_spinlock_unlock(&internals->lock);
-    if (CreateHash(rss_conf->rss_hf, internals, &dummyFlow, 61) != 0) {
-      RTE_LOG(ERR, PMD, "Failed to create hash function eth_rss_hash_update\n");
-      ret = 1;
-      goto UpdateError;
-    }
-  }
-UpdateError:
-  return ret;
-}
-
 static struct eth_dev_ops ops = {
     .dev_start = eth_dev_start,
     .dev_stop = eth_dev_stop,
@@ -1982,7 +1945,6 @@ static struct eth_dev_ops ops = {
     .flow_ctrl_set = _dev_set_flow_ctrl,
     .filter_ctrl = _dev_filter_ctrl,
     .fw_version_get = eth_fw_version_get,
-    .rss_hash_update = eth_rss_hash_update,
 };
 
 static int rte_pmd_init_internals(struct rte_pci_device *dev,

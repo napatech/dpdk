@@ -113,279 +113,121 @@ void pushNtplID(struct rte_flow *flow, uint32_t ntplId)
   }
 }
 
-void FlushHash(struct pmd_internals *internals) 
-{
-  NtNtplInfo_t ntplInfo;
-  char ntpl_buf[21];
-  struct filter_hash_s *pHash;
-loop:
-  LIST_FOREACH(pHash, &internals->filter_hash, next) {
-  if (pHash->port == internals->port) {
-      LIST_REMOVE(pHash, next);
-      snprintf(ntpl_buf, 20, "delete=%d", pHash->ntpl_id);
-      DoNtpl(ntpl_buf, &ntplInfo, internals);
-      RTE_LOG(DEBUG, PMD, "Deleting Hash filter: %s\n", ntpl_buf);
-      rte_free(pHash);
-      goto loop;
-    }
-  }
-}
-
-void DeleteHash(uint64_t rss_hf, uint8_t port, int priority, struct pmd_internals *internals) {
-  NtNtplInfo_t ntplInfo;
-  char ntpl_buf[21];
-  struct filter_hash_s *pHash;
-
-  LIST_FOREACH(pHash, &internals->filter_hash, next) {
-    if (pHash->rss_hf == rss_hf && pHash->port == port && pHash->priority == priority) {
-      LIST_REMOVE(pHash, next);
-      snprintf(ntpl_buf, 20, "delete=%d", pHash->ntpl_id);
-      DoNtpl(ntpl_buf, &ntplInfo, internals);
-      RTE_LOG(DEBUG, PMD, "Deleting Hash filter: %s\n", ntpl_buf);
-      rte_free(pHash);
-    }
-  }
-}
-
-static void pushHash(uint32_t ntpl_id, uint64_t rss_hf, struct pmd_internals *internals, int priority)
-{
-  struct filter_hash_s *pHash = rte_zmalloc(internals->name, sizeof(struct filter_hash_s), 0);
-  if (!pHash) {
-    RTE_LOG(ERR, PMD, "Memory allocation failed. Filter clean up is not possible\n");
-  }
-  else {
-    pHash->ntpl_id = ntpl_id;
-    pHash->port = internals->port;
-    pHash->priority = priority;
-    pHash->rss_hf = rss_hf;
-    LIST_INSERT_HEAD(&internals->filter_hash, pHash, next);
-  }
-}
-
-static int FindHash(uint64_t rss_hf, struct pmd_internals *internals, int priority) {
-  struct filter_hash_s *pHash;
-  LIST_FOREACH(pHash, &internals->filter_hash, next) {
-    if (pHash->rss_hf == rss_hf && pHash->port == internals->port && pHash->priority == priority) {
-      return 1;
-    }
-  }
-  return 0;
-}
-
-#define TMP_BSIZE 200
-#define PRINT_HASH(a,b) { if (PrintHash(a, priority, internals, rss_hf, b) != 0)  return -1; }
-static int PrintHash(const char *str, int priority, struct pmd_internals *internals, uint64_t rss_hf, uint8_t tuple)
-{
-  NtNtplInfo_t ntplInfo;
-  char tmpBuf[TMP_BSIZE + 1];
-  
-  const char *ptrTuple = "hashroundrobin";
-
-  switch (internals->symHashMode) {
-  case SYM_HASH_DIS_PER_PORT:
-    switch (tuple) {
-    case 0x02:
-      ptrTuple = "hash2Tuple";
-      break;
-    case 0x05:
-      ptrTuple = "hash5Tuple";
-      break;
-    case 0x06:
-      ptrTuple = "hash5TupleSCTP";
-      break;
-    case 0x12:
-      ptrTuple = "hashInner2Tuple";
-      break;
-    case 0x15:
-      ptrTuple = "hashInner5Tuple";
-      break;
-    }
-    break;
-  default:
-  case SYM_HASH_ENA_PER_PORT:
-    switch (tuple) {
-    case 0x02:
-      ptrTuple = "hash2TupleSorted";
-      break;
-    case 0x05:
-      ptrTuple = "hash5TupleSorted";
-      break;
-    case 0x06:
-      ptrTuple = "hash5TupleSCTPSorted";
-      break;
-    case 0x12:
-      ptrTuple = "hashInner2TupleSorted";
-      break;
-    case 0x15:
-      ptrTuple = "hashInner5TupleSorted";
-      break;
-    }
-    break;
-  }
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wformat-nonliteral"
-  snprintf(tmpBuf, TMP_BSIZE, str, priority, internals->port, internals->tagName, ptrTuple);
-#pragma GCC diagnostic pop
-  if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
-    return -1;
-  }
-  rte_spinlock_lock(&internals->lock);
-  pushHash(ntplInfo.ntplId, rss_hf, internals, priority);
-  rte_spinlock_unlock(&internals->lock);
-  return 0;
-}
+enum layer_e {
+  LAYER2,
+  LAYER3,
+  LAYER4,
+  VLAN,
+  IP,
+  MPLS,
+  PROTO,
+};
 
 /**
- * Create the hash filter from the DPDK hash function.
+ * Get the layer NTPL keyword. Either an outer or an inner 
+ * version. 
  */
-int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow *flow, int priority)
+static const char *GetLayer(enum layer_e layer, bool tunnel)
 {
-  if (rss_hf == 0) {
-    PRINT_HASH("Hashmode[priority=%u;port=%u;tag=%s]=%s", 0);
+  switch (layer) {
+  case LAYER2:
+    if (tunnel)
+      return "InnerLayer2Header";
+    else
+      return "Layer2Header";
+  case LAYER3:
+  case IP:
+    if (tunnel)
+      return "InnerLayer3Header";
+    else
+      return "Layer3Header";
+  case LAYER4:
+    if (tunnel)
+      return "InnerLayer4Header";
+    else
+      return "Layer4Header";
+  case VLAN:
+    if (tunnel)
+      return "InnerFirstVLAN";
+    else
+      return "FirstVLAN";
+  case MPLS:
+    if (tunnel)
+      return "InnerFirstMPLS";
+    else
+      return "FirstMPLS";
+  case PROTO:
+    if (tunnel)
+      return "InnerIpProtocol";
+    else
+      return "IpProtocol";
+  }
+  return "UNKNOWN";
+}
+
+static const char *GetSorted(struct pmd_internals *internals)
+{
+  if (internals->symHashMode == SYM_HASH_ENA_PER_PORT) {
+    return "XOR=true";
+  }
+  else {
+    return "XOR=false";
+  }
+}
+
+int CreateHash(char *ntpl_buf, uint64_t rss_hf, struct pmd_internals *internals, bool tunnel)
+{
+  if (rss_hf & ETH_RSS_NONFRAG_IPV4_OTHER) {
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, 
+             ";Hash=HashWord0_3=%s[12]/32,HashWord4_7=%s[16]/32,HashWordP=%s,%s", 
+             GetLayer(LAYER3, tunnel), GetLayer(LAYER3, tunnel),
+             GetLayer(PROTO, tunnel), GetSorted(internals));
     return 0;
   }
 
-  // These hash functions is not supported and will cause an error
-  if ((rss_hf & ETH_RSS_L2_PAYLOAD) ||
-      (rss_hf & ETH_RSS_PORT)       ||
-      (rss_hf & ETH_RSS_VXLAN)      ||
-      (rss_hf & ETH_RSS_GENEVE)     ||
-      (rss_hf & ETH_RSS_NVGRE)) {
-    RTE_LOG(ERR, PMD, "One of the selected HASH functions is not supported\n");
-    return -1;
-  }
-
-  flow->port = internals->port;
-  flow->rss_hf = rss_hf;
-  flow->priority = priority;
-
-  rte_spinlock_lock(&internals->lock);
-  if (FindHash(rss_hf, internals, priority)) {
-    // Hash is already programmed
-    rte_spinlock_unlock(&internals->lock);
+  if ((rss_hf & ETH_RSS_NONFRAG_IPV4_TCP) || (rss_hf & ETH_RSS_NONFRAG_IPV4_UDP) || (rss_hf & ETH_RSS_NONFRAG_IPV4_SCTP)) {
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, 
+             ";Hash=HashWord0_3=%s[12]/32,HashWord4_7=%s[16]/32,HashWord8=%s[0]/32,HashWordP=%s,%s", 
+             GetLayer(LAYER3, tunnel), GetLayer(LAYER3, tunnel), GetLayer(LAYER4, tunnel),
+             GetLayer(PROTO, tunnel), GetSorted(internals));
     return 0;
   }
-  rte_spinlock_unlock(&internals->lock);
-  
-  /*****************************/
-  /* Inner UDP hash mode setup */
-  /*****************************/
-  if ((rss_hf & ETH_RSS_INNER_IPV4_UDP) || (rss_hf & ETH_RSS_INNER_IPV6_UDP)) {
-    if ((rss_hf & ETH_RSS_INNER_IPV4_UDP) && (rss_hf & ETH_RSS_INNER_IPV6_UDP)) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IP;InnerLayer4Type=UDP;tag=%s]=%s", 0x15);
-    }
-    else if (rss_hf & ETH_RSS_INNER_IPV4_UDP) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4;InnerLayer4Type=UDP;tag=%s]=%s", 0x15);
-    }
-    else if (rss_hf & ETH_RSS_INNER_IPV6_UDP) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;InnerLayer4Type=UDP;tag=%s]=%s", 0x15);
-    }
+
+  if ((rss_hf & ETH_RSS_IPV4) || (rss_hf & ETH_RSS_FRAG_IPV4)) {
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, 
+             ";Hash=HashWord0_3=%s[12]/32,HashWord4_7=%s[16]/32,%s", 
+             GetLayer(LAYER3, tunnel), GetLayer(LAYER3, tunnel), GetSorted(internals));
+    return 0;
   }
-  /*****************************/
-  /* Inner TCP hash mode setup */
-  /*****************************/
-  if ((rss_hf & ETH_RSS_INNER_IPV4_TCP) || (rss_hf & ETH_RSS_INNER_IPV6_TCP)) {
-    if ((rss_hf & ETH_RSS_INNER_IPV4_TCP) && (rss_hf & ETH_RSS_INNER_IPV6_TCP)) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IP;InnerLayer4Type=TCP;tag=%s]=%s", 0x15);
-    }
-    else if (rss_hf & ETH_RSS_INNER_IPV4_TCP) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4;InnerLayer4Type=TCP;tag=%s]=%s", 0x15);
-    }
-    else if (rss_hf & ETH_RSS_INNER_IPV6_TCP) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;InnerLayer4Type=TCP;tag=%s]=%s", 0x15);
-    }
+
+  if (rss_hf & ETH_RSS_NONFRAG_IPV6_OTHER) {
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, 
+             ";Hash=HashWord0_3=%s[8]/128,HashWord4_7=%s[24]/128,HashWordP=%s,%s", 
+             GetLayer(LAYER3, tunnel), GetLayer(LAYER3, tunnel),
+             GetLayer(PROTO, tunnel), GetSorted(internals));
+    return 0;
   }
-  /******************************/
-  /* Inner SCTP hash mode setup */
-  /******************************/
-  if ((rss_hf & ETH_RSS_INNER_IPV4_SCTP) || (rss_hf & ETH_RSS_INNER_IPV6_SCTP)) {
-    if ((rss_hf & ETH_RSS_INNER_IPV4_SCTP) && (rss_hf & ETH_RSS_INNER_IPV6_SCTP)) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IP;InnerLayer4Type=SCTP;tag=%s]=%s", 0x15);
-    }
-    else if (rss_hf & ETH_RSS_INNER_IPV4_SCTP) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4;InnerLayer4Type=SCTP;tag=%s]=%s", 0x15);
-    }
-    else if (rss_hf & ETH_RSS_INNER_IPV6_SCTP) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;InnerLayer4Type=SCTP;tag=%s]=%s", 0x15);
-    }
+
+  if ((rss_hf & ETH_RSS_NONFRAG_IPV6_TCP) ||
+      (rss_hf & ETH_RSS_IPV6_TCP_EX)      ||
+      (rss_hf & ETH_RSS_NONFRAG_IPV6_UDP) ||
+      (rss_hf & ETH_RSS_IPV6_UDP_EX)      ||
+      (rss_hf & ETH_RSS_NONFRAG_IPV6_SCTP)) {
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, 
+             ";Hash=HashWord0_3=%s[8]/128,HashWord4_7=%s[24]/128,HashWord8=%s[0]/32,HashWordP=%s,%s", 
+             GetLayer(LAYER3, tunnel), GetLayer(LAYER3, tunnel), GetLayer(LAYER4, tunnel),
+             GetLayer(PROTO, tunnel), GetSorted(internals));
+    return 0;
   }
-  /*****************************/
-  /* Outer UDP hash mode setup */
-  /*****************************/
-  if ((rss_hf & ETH_RSS_NONFRAG_IPV4_UDP) || (rss_hf & ETH_RSS_NONFRAG_IPV6_UDP)) {
-    if ((rss_hf & ETH_RSS_NONFRAG_IPV4_UDP) && (rss_hf & ETH_RSS_NONFRAG_IPV6_UDP)) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=UDP;tag=%s]=%s", 0x05);
-    }
-    else if (rss_hf & ETH_RSS_NONFRAG_IPV4_UDP) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=UDP;tag=%s]=%s", 0x05);
-    }
-    else if (rss_hf & ETH_RSS_NONFRAG_IPV6_UDP) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=UDP;tag=%s]=%s", 0x05);
-    }
+
+  if ((rss_hf & ETH_RSS_IPV6) || (rss_hf & ETH_RSS_FRAG_IPV6) || (rss_hf & ETH_RSS_IPV6_EX)) {
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, 
+             ";Hash=HashWord0_3=%s[8]/128,HashWord4_7=%s[24]/128,%s", 
+             GetLayer(LAYER3, tunnel), GetLayer(LAYER3, tunnel), GetSorted(internals));
+    return 0;
   }
-  /*****************************/
-  /* Outer TCP hash mode setup */
-  /*****************************/
-  if ((rss_hf & ETH_RSS_NONFRAG_IPV4_TCP) || (rss_hf & ETH_RSS_NONFRAG_IPV6_TCP)) {
-    if ((rss_hf & ETH_RSS_NONFRAG_IPV4_TCP) && (rss_hf & ETH_RSS_NONFRAG_IPV6_TCP)) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=TCP;tag=%s]=%s", 0x05);
-    }
-    else if (rss_hf & ETH_RSS_NONFRAG_IPV4_TCP) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=TCP;tag=%s]=%s", 0x05);
-    }
-    else if (rss_hf & ETH_RSS_NONFRAG_IPV6_TCP) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=TCP;tag=%s]=%s", 0x05);
-    }
-  }
-  /******************************/
-  /* Outer SCTP hash mode setup */
-  /******************************/
-  if ((rss_hf & ETH_RSS_NONFRAG_IPV4_SCTP) || (rss_hf & ETH_RSS_NONFRAG_IPV6_SCTP)) {
-    if ((rss_hf & ETH_RSS_NONFRAG_IPV4_SCTP) && (rss_hf & ETH_RSS_NONFRAG_IPV6_SCTP)) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=SCTP;tag=%s]=%s", 0x06);
-    }
-    else if (rss_hf & ETH_RSS_NONFRAG_IPV4_SCTP) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=SCTP;tag=%s]=%s", 0x06);
-    }
-    else if (rss_hf & ETH_RSS_NONFRAG_IPV6_SCTP) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=SCTP;tag=%s]=%s", 0x06);
-    }
-  }
-  /****************************/
-  /* Inner IP hash mode setup */
-  /****************************/
-  if (((rss_hf & ETH_RSS_INNER_IPV4) || (rss_hf & ETH_RSS_INNER_IPV6)) || (rss_hf & ETH_RSS_INNER_IPV4_OTHER) || (rss_hf & ETH_RSS_INNER_IPV6_OTHER)) {
-    if (((rss_hf & ETH_RSS_INNER_IPV4) && (rss_hf & ETH_RSS_INNER_IPV6)) || 
-        ((rss_hf & ETH_RSS_INNER_IPV4_OTHER) && (rss_hf & ETH_RSS_INNER_IPV6)) ||
-        ((rss_hf & ETH_RSS_INNER_IPV4_OTHER) && (rss_hf & ETH_RSS_INNER_IPV6_OTHER)) ||
-        ((rss_hf & ETH_RSS_INNER_IPV4) && (rss_hf & ETH_RSS_INNER_IPV6_OTHER))) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IP;tag=%s]=%s", 0x12);
-    }
-    else if (rss_hf & ETH_RSS_INNER_IPV4) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV4;tag=%s]=%s", 0x12);
-    }
-    else if (rss_hf & ETH_RSS_INNER_IPV6) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;InnerLayer3Type=IPV6;tag=%s]=%s", 0x12);
-    }
-  }
-  /****************************/
-  /* Outer IP hash mode setup */
-  /****************************/
-  if ((rss_hf & ETH_RSS_IPV4) || (rss_hf & ETH_RSS_IPV6) || (rss_hf & ETH_RSS_NONFRAG_IPV4_OTHER) || (rss_hf & ETH_RSS_NONFRAG_IPV6_OTHER)) {
-    if (((rss_hf & ETH_RSS_IPV4) && (rss_hf & ETH_RSS_IPV6)) || 
-        ((rss_hf & ETH_RSS_NONFRAG_IPV4_OTHER) && (rss_hf & ETH_RSS_NONFRAG_IPV6_OTHER)) ||
-        ((rss_hf & ETH_RSS_NONFRAG_IPV4_OTHER) && (rss_hf & ETH_RSS_IPV6)) ||
-        ((rss_hf & ETH_RSS_IPV6) && (rss_hf & ETH_RSS_NONFRAG_IPV6_OTHER))) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IP;tag=%s]=%s", 0x02);
-    }
-    else if ((rss_hf & ETH_RSS_IPV4) || (rss_hf & ETH_RSS_NONFRAG_IPV4_OTHER)) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV4;tag=%s]=%s", 0x02);
-    }
-    else if ((rss_hf & ETH_RSS_IPV6)  || (rss_hf & ETH_RSS_NONFRAG_IPV6_OTHER)) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV6;tag=%s]=%s", 0x02);
-    }
-  }
+
+  snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ";Hash=roundrobin");
   return 0;
 }
 
@@ -506,52 +348,6 @@ void CreateStreamid(char *ntpl_buf, struct pmd_internals *internals, uint32_t nb
       }
     }
   }
-}
-
-enum layer_e {
-  LAYER2,
-  LAYER3,
-  LAYER4,
-  VLAN,
-  IP,
-  MPLS,
-};
-
-/**
- * Get the layer NTPL keyword. Either an outer or an inner 
- * version. 
- */
-static const char *GetLayer(enum layer_e layer, bool tunnel)
-{
-  switch (layer) {
-  case LAYER2:
-    if (tunnel)
-      return "InnerLayer2Header";
-    else
-      return "Layer2Header";
-  case LAYER3:
-  case IP:
-    if (tunnel)
-      return "InnerLayer3Header";
-    else
-      return "Layer3Header";
-  case LAYER4:
-    if (tunnel)
-      return "InnerLayer4Header";
-    else
-      return "Layer4Header";
-  case VLAN:
-    if (tunnel)
-      return "InnerFirstVLAN";
-    else
-      return "FirstVLAN";
-  case MPLS:
-    if (tunnel)
-      return "InnerFirstMPLS";
-    else
-      return "FirstMPLS";
-  }
-  return "UNKNOWN";
 }
 
 static void InsertFilterValues(struct filter_values_s *pInsertFilterValues, struct pmd_internals *internals)

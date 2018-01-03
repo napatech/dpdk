@@ -198,6 +198,7 @@ enum index {
 	ACTION_RSS,
 	ACTION_RSS_QUEUES,
 	ACTION_RSS_QUEUE,
+  ACTION_RSS_HF,
 	ACTION_PF,
 	ACTION_VF,
 	ACTION_VF_ORIGINAL,
@@ -219,7 +220,17 @@ enum index {
 /** Storage size for struct rte_flow_action_rss including queues. */
 #define ACTION_RSS_SIZE \
 	(offsetof(struct rte_flow_action_rss, queue) + \
+	 sizeof(*((struct rte_flow_action_rss *)0)->queue) * ACTION_RSS_NUM + \
+   sizeof(struct rte_eth_rss_conf))
+
+#define ACTION_RSS_CONF_OFFSET \
+	(offsetof(struct rte_flow_action_rss, queue) + \
 	 sizeof(*((struct rte_flow_action_rss *)0)->queue) * ACTION_RSS_NUM)
+
+#define ACTION_RSS_HF_OFFSET \
+	(offsetof(struct rte_flow_action_rss, queue) + \
+	 sizeof(*((struct rte_flow_action_rss *)0)->queue) * ACTION_RSS_NUM + \
+   offsetof(struct rte_eth_rss_conf, rss_hf))
 
 /** Maximum number of subsequent tokens and arguments on the stack. */
 #define CTX_STACK_SIZE 16
@@ -306,6 +317,13 @@ struct token {
 	(&(const struct arg){ \
 		.offset = offsetof(s, f), \
 		.size = sizeof(((s *)0)->f), \
+	})
+
+/** Static initializer for ARGS() to target a field. */
+#define ARGS_ENTRY1(s, f) \
+	(&(const struct arg){ \
+		.offset = s, \
+		.size = sizeof(f), \
 	})
 
 /** Static initializer for ARGS() to target a bit-field. */
@@ -653,7 +671,8 @@ static const enum index action_dup[] = {
 
 static const enum index action_rss[] = {
 	ACTION_RSS_QUEUES,
-	ACTION_NEXT,
+  ACTION_RSS_HF,
+  ACTION_NEXT,
 	ZERO,
 };
 
@@ -1627,6 +1646,13 @@ static const struct token token_list[] = {
 		.call = parse_vc_action_rss_queue,
 		.comp = comp_vc_action_rss_queue,
 	},
+  [ACTION_RSS_HF] = {
+    .name = "hf",
+    .help = "Hash function for RSS",
+    .next = NEXT(action_rss, NEXT_ENTRY(UNSIGNED)),
+    .args = ARGS(ARGS_ENTRY1(ACTION_RSS_HF_OFFSET, uint64_t)),
+    .call = parse_vc_conf,
+  },
 	[ACTION_PF] = {
 		.name = "pf",
 		.help = "redirect packets to physical device function",
@@ -2088,7 +2114,10 @@ parse_vc_action_rss_queue(struct context *ctx, const struct token *token,
 	ctx->next[ctx->next_num++] = next;
 	if (!ctx->object)
 		return len;
-	((struct rte_flow_action_rss *)ctx->object)->num = i;
+  ((struct rte_flow_action_rss *)ctx->object)->num = i;
+
+  // Napatech Additions
+  ((struct rte_flow_action_rss *)ctx->object)->rss_conf = (struct rte_eth_rss_conf *)((uint8_t *)ctx->object + ACTION_RSS_CONF_OFFSET);
 	return len;
 }
 
