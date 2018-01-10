@@ -459,7 +459,6 @@ pci_vfio_map_resource_primary(struct rte_pci_device *dev)
 	struct pci_map *maps;
 
 	dev->intr_handle.fd = -1;
-	dev->intr_handle.type = RTE_INTR_HANDLE_UNKNOWN;
 
 	/* store PCI address string */
 	snprintf(pci_addr, sizeof(pci_addr), PCI_PRI_FMT,
@@ -576,7 +575,6 @@ pci_vfio_map_resource_secondary(struct rte_pci_device *dev)
 	struct pci_map *maps;
 
 	dev->intr_handle.fd = -1;
-	dev->intr_handle.type = RTE_INTR_HANDLE_UNKNOWN;
 
 	/* store PCI address string */
 	snprintf(pci_addr, sizeof(pci_addr), PCI_PRI_FMT,
