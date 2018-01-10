@@ -723,7 +723,7 @@ static int dpaa_fc_set_default(struct dpaa_if *dpaa_intf)
 static int dpaa_rx_queue_init(struct qman_fq *fq,
 			      uint32_t fqid)
 {
-	struct qm_mcc_initfq opts;
+	struct qm_mcc_initfq opts = {0};
 	int ret;
 
 	PMD_INIT_FUNC_TRACE();
@@ -769,7 +769,7 @@ static int dpaa_rx_queue_init(struct qman_fq *fq,
 static int dpaa_tx_queue_init(struct qman_fq *fq,
 			      struct fman_if *fman_intf)
 {
-	struct qm_mcc_initfq opts;
+	struct qm_mcc_initfq opts = {0};
 	int ret;
 
 	PMD_INIT_FUNC_TRACE();
@@ -800,7 +800,7 @@ static int dpaa_tx_queue_init(struct qman_fq *fq,
 /* Initialise a DEBUG FQ ([rt]x_error, rx_default). */
 static int dpaa_debug_queue_init(struct qman_fq *fq, uint32_t fqid)
 {
-	struct qm_mcc_initfq opts;
+	struct qm_mcc_initfq opts = {0};
 	int ret;
 
 	PMD_INIT_FUNC_TRACE();
