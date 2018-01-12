@@ -1510,6 +1510,8 @@ cmd_config_rx_tx_parsed(void *parsed_result,
 			printf("Warning: Either rx or tx queues should be non zero\n");
 			return;
 		}
+		if (check_nb_txq(res->value) != 0)
+			return;
 		nb_txq = res->value;
 	}
 	else if (!strcmp(res->name, "rxd")) {
