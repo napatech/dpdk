@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2014 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2014 Intel Corporation
  */
 
 #include <stdio.h>
@@ -280,17 +251,22 @@ test_memzone_reserve_flags(void)
 				printf("MEMZONE FLAG 2MB\n");
 				return -1;
 			}
-			if (rte_memzone_free(mz)) {
-				printf("Fail memzone free\n");
-				return -1;
-			}
 		}
 
 		if (hugepage_2MB_avail && hugepage_1GB_avail) {
 			mz = rte_memzone_reserve("flag_zone_2M_HINT", size, SOCKET_ID_ANY,
 								RTE_MEMZONE_2MB|RTE_MEMZONE_1GB);
-			if (mz != NULL) {
+			if (mz == NULL) {
 				printf("BOTH SIZES SET\n");
+				return -1;
+			}
+			if (mz->hugepage_sz != RTE_PGSIZE_1G &&
+					mz->hugepage_sz != RTE_PGSIZE_2M) {
+				printf("Wrong size when both sizes set\n");
+				return -1;
+			}
+			if (rte_memzone_free(mz)) {
+				printf("Fail memzone free\n");
 				return -1;
 			}
 		}
@@ -321,7 +297,7 @@ test_memzone_reserve_flags(void)
 		mz = rte_memzone_reserve("flag_zone_16M_HINT", size,
 		SOCKET_ID_ANY, RTE_MEMZONE_16MB|RTE_MEMZONE_SIZE_HINT_ONLY);
 		if (mz == NULL) {
-			printf("MEMZONE FLAG 2MB\n");
+			printf("MEMZONE FLAG 16MB\n");
 			return -1;
 		}
 		if (mz->hugepage_sz != RTE_PGSIZE_16M) {
@@ -424,8 +400,17 @@ test_memzone_reserve_flags(void)
 			mz = rte_memzone_reserve("flag_zone_16M_HINT", size,
 				SOCKET_ID_ANY,
 				RTE_MEMZONE_16MB|RTE_MEMZONE_16GB);
-			if (mz != NULL) {
+			if (mz == NULL) {
 				printf("BOTH SIZES SET\n");
+				return -1;
+			}
+			if (mz->hugepage_sz != RTE_PGSIZE_16G &&
+					mz->hugepage_sz != RTE_PGSIZE_16M) {
+				printf("Wrong size when both sizes set\n");
+				return -1;
+			}
+			if (rte_memzone_free(mz)) {
+				printf("Fail memzone free\n");
 				return -1;
 			}
 		}
@@ -775,7 +760,7 @@ test_memzone_bounded(void)
 static int
 test_memzone_free(void)
 {
-	const struct rte_memzone *mz[RTE_MAX_MEMZONE];
+	const struct rte_memzone *mz[RTE_MAX_MEMZONE + 1];
 	int i;
 	char name[20];
 
@@ -948,11 +933,11 @@ test_memzone_basic(void)
 	return 0;
 }
 
-static int memzone_calk_called;
+static int memzone_walk_called;
 static void memzone_walk_clb(const struct rte_memzone *mz __rte_unused,
 			     void *arg __rte_unused)
 {
-	memzone_calk_called = 1;
+	memzone_walk_called = 1;
 }
 
 static int
@@ -996,7 +981,7 @@ test_memzone(void)
 
 	printf("check memzone cleanup\n");
 	rte_memzone_walk(memzone_walk_clb, NULL);
-	if (memzone_calk_called) {
+	if (memzone_walk_called) {
 		printf("there are some memzones left after test\n");
 		rte_memzone_dump(stdout);
 		return -1;

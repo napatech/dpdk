@@ -123,12 +123,13 @@ pkt_burst_flow_gen(struct fwd_stream *fs)
 	struct ipv4_hdr *ip_hdr;
 	struct udp_hdr *udp_hdr;
 	uint16_t vlan_tci, vlan_tci_outer;
-	uint16_t ol_flags;
+	uint64_t ol_flags;
 	uint16_t nb_rx;
 	uint16_t nb_tx;
 	uint16_t nb_pkt;
 	uint16_t i;
 	uint32_t retry;
+	uint64_t tx_offloads;
 #ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
 	uint64_t start_tsc;
 	uint64_t end_tsc;
@@ -151,7 +152,14 @@ pkt_burst_flow_gen(struct fwd_stream *fs)
 	mbp = current_fwd_lcore()->mbp;
 	vlan_tci = ports[fs->tx_port].tx_vlan_id;
 	vlan_tci_outer = ports[fs->tx_port].tx_vlan_id_outer;
-	ol_flags = ports[fs->tx_port].tx_ol_flags;
+
+	tx_offloads = ports[fs->tx_port].dev_conf.txmode.offloads;
+	if (tx_offloads	& DEV_TX_OFFLOAD_VLAN_INSERT)
+		ol_flags = PKT_TX_VLAN_PKT;
+	if (tx_offloads & DEV_TX_OFFLOAD_QINQ_INSERT)
+		ol_flags |= PKT_TX_QINQ_PKT;
+	if (tx_offloads	& DEV_TX_OFFLOAD_MACSEC_INSERT)
+		ol_flags |= PKT_TX_MACSEC;
 
 	for (nb_pkt = 0; nb_pkt < nb_pkt_per_burst; nb_pkt++) {
 		pkt = rte_mbuf_raw_alloc(mbp);

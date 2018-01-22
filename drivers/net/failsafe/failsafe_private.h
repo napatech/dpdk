@@ -38,7 +38,7 @@
 
 #include <rte_atomic.h>
 #include <rte_dev.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_devargs.h>
 
 #define FAILSAFE_DRIVER_NAME "Fail-safe PMD"
@@ -48,6 +48,7 @@
 #define PMD_FAILSAFE_PARAM_STRING	\
 	"dev(<ifc>),"			\
 	"exec(<shell command>),"	\
+	"fd(<fd number>),"		\
 	"mac=mac_addr,"			\
 	"hotplug_poll=u64"		\
 	""
@@ -57,13 +58,15 @@
 #define FAILSAFE_MAX_ETHPORTS 2
 #define FAILSAFE_MAX_ETHADDR 128
 
+#define DEVARGS_MAXLEN 4096
+
 /* TYPES */
 
 struct rxq {
 	struct fs_priv *priv;
 	uint16_t qid;
-	/* id of last sub_device polled */
-	uint8_t last_polled;
+	/* next sub_device to poll */
+	struct sub_device *sdev;
 	unsigned int socket_id;
 	struct rte_eth_rxq_info info;
 	rte_atomic64_t refcnt[];
@@ -100,6 +103,7 @@ struct fs_stats {
 
 struct sub_device {
 	/* Exhaustive DPDK device description */
+	struct sub_device *next;
 	struct rte_devargs devargs;
 	struct rte_bus *bus;
 	struct rte_device *dev;
@@ -111,6 +115,8 @@ struct sub_device {
 	struct fs_stats stats_snapshot;
 	/* Some device are defined as a command line */
 	char *cmdline;
+	/* Others are retrieved through a file descriptor */
+	char *fd_str;
 	/* fail-safe device backreference */
 	struct rte_eth_dev *fs_dev;
 	/* flag calling for recollection */
@@ -269,13 +275,13 @@ extern int mac_from_arg;
  * a: (rte_atomic64_t)
  */
 #define FS_ATOMIC_P(a) \
-	rte_atomic64_add(&(a), 1)
+	rte_atomic64_set(&(a), 1)
 
 /**
  * a: (rte_atomic64_t)
  */
 #define FS_ATOMIC_V(a) \
-	rte_atomic64_sub(&(a), 1)
+	rte_atomic64_set(&(a), 0)
 
 /**
  * s: (struct sub_device *)
@@ -375,4 +381,15 @@ fs_switch_dev(struct rte_eth_dev *dev,
 	rte_wmb();
 }
 
+/*
+ * Adjust error value and rte_errno to the fail-safe actual error value.
+ */
+static inline int
+fs_err(struct sub_device *sdev, int err)
+{
+	/* A device removal shouldn't be reported as an error. */
+	if (sdev->remove == 1 || err == -EIO)
+		return rte_errno = 0;
+	return err;
+}
 #endif /* _RTE_ETH_FAILSAFE_PRIVATE_H_ */

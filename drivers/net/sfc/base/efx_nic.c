@@ -1,31 +1,7 @@
-/*
- * Copyright (c) 2007-2016 Solarflare Communications Inc.
+/* SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 2007-2018 Solarflare Communications Inc.
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
- * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
- * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * The views and conclusions contained in the software and documentation are
- * those of the authors and should not be interpreted as representing official
- * policies, either expressed or implied, of the FreeBSD Project.
  */
 
 #include "efx.h"
@@ -100,78 +76,6 @@ efx_family(
 
 	*efp = EFX_FAMILY_INVALID;
 	return (ENOTSUP);
-}
-
-
-#define	EFX_BIU_MAGIC0	0x01234567
-#define	EFX_BIU_MAGIC1	0xfedcba98
-
-	__checkReturn	efx_rc_t
-efx_nic_biu_test(
-	__in		efx_nic_t *enp)
-{
-	efx_oword_t oword;
-	efx_rc_t rc;
-
-	/*
-	 * Write magic values to scratch registers 0 and 1, then
-	 * verify that the values were written correctly.  Interleave
-	 * the accesses to ensure that the BIU is not just reading
-	 * back the cached value that was last written.
-	 */
-	EFX_POPULATE_OWORD_1(oword, FRF_AZ_DRIVER_DW0, EFX_BIU_MAGIC0);
-	EFX_BAR_TBL_WRITEO(enp, FR_AZ_DRIVER_REG, 0, &oword, B_TRUE);
-
-	EFX_POPULATE_OWORD_1(oword, FRF_AZ_DRIVER_DW0, EFX_BIU_MAGIC1);
-	EFX_BAR_TBL_WRITEO(enp, FR_AZ_DRIVER_REG, 1, &oword, B_TRUE);
-
-	EFX_BAR_TBL_READO(enp, FR_AZ_DRIVER_REG, 0, &oword, B_TRUE);
-	if (EFX_OWORD_FIELD(oword, FRF_AZ_DRIVER_DW0) != EFX_BIU_MAGIC0) {
-		rc = EIO;
-		goto fail1;
-	}
-
-	EFX_BAR_TBL_READO(enp, FR_AZ_DRIVER_REG, 1, &oword, B_TRUE);
-	if (EFX_OWORD_FIELD(oword, FRF_AZ_DRIVER_DW0) != EFX_BIU_MAGIC1) {
-		rc = EIO;
-		goto fail2;
-	}
-
-	/*
-	 * Perform the same test, with the values swapped.  This
-	 * ensures that subsequent tests don't start with the correct
-	 * values already written into the scratch registers.
-	 */
-	EFX_POPULATE_OWORD_1(oword, FRF_AZ_DRIVER_DW0, EFX_BIU_MAGIC1);
-	EFX_BAR_TBL_WRITEO(enp, FR_AZ_DRIVER_REG, 0, &oword, B_TRUE);
-
-	EFX_POPULATE_OWORD_1(oword, FRF_AZ_DRIVER_DW0, EFX_BIU_MAGIC0);
-	EFX_BAR_TBL_WRITEO(enp, FR_AZ_DRIVER_REG, 1, &oword, B_TRUE);
-
-	EFX_BAR_TBL_READO(enp, FR_AZ_DRIVER_REG, 0, &oword, B_TRUE);
-	if (EFX_OWORD_FIELD(oword, FRF_AZ_DRIVER_DW0) != EFX_BIU_MAGIC1) {
-		rc = EIO;
-		goto fail3;
-	}
-
-	EFX_BAR_TBL_READO(enp, FR_AZ_DRIVER_REG, 1, &oword, B_TRUE);
-	if (EFX_OWORD_FIELD(oword, FRF_AZ_DRIVER_DW0) != EFX_BIU_MAGIC0) {
-		rc = EIO;
-		goto fail4;
-	}
-
-	return (0);
-
-fail4:
-	EFSYS_PROBE(fail4);
-fail3:
-	EFSYS_PROBE(fail3);
-fail2:
-	EFSYS_PROBE(fail2);
-fail1:
-	EFSYS_PROBE1(fail1, efx_rc_t, rc);
-
-	return (rc);
 }
 
 #if EFSYS_OPT_SIENA
@@ -637,9 +541,9 @@ efx_nic_get_fw_version(
 		goto fail2;
 
 	rc = efx_mcdi_get_capabilities(enp, NULL,
-				       &enfip->enfi_rx_dpcpu_fw_id,
-				       &enfip->enfi_tx_dpcpu_fw_id,
-				       NULL, NULL);
+	    &enfip->enfi_rx_dpcpu_fw_id,
+	    &enfip->enfi_tx_dpcpu_fw_id,
+	    NULL, NULL);
 	if (rc == 0) {
 		enfip->enfi_dpcpu_fw_ids_valid = B_TRUE;
 	} else if (rc == ENOTSUP) {
@@ -650,7 +554,8 @@ efx_nic_get_fw_version(
 		goto fail3;
 	}
 
-	memcpy(enfip->enfi_mc_fw_version, mc_fw_version, sizeof(mc_fw_version));
+	memcpy(enfip->enfi_mc_fw_version, mc_fw_version,
+	    sizeof (mc_fw_version));
 
 	return (0);
 
@@ -679,139 +584,6 @@ efx_nic_register_test(
 
 	if ((rc = enop->eno_register_test(enp)) != 0)
 		goto fail1;
-
-	return (0);
-
-fail1:
-	EFSYS_PROBE1(fail1, efx_rc_t, rc);
-
-	return (rc);
-}
-
-	__checkReturn	efx_rc_t
-efx_nic_test_registers(
-	__in		efx_nic_t *enp,
-	__in		efx_register_set_t *rsp,
-	__in		size_t count)
-{
-	unsigned int bit;
-	efx_oword_t original;
-	efx_oword_t reg;
-	efx_oword_t buf;
-	efx_rc_t rc;
-
-	while (count > 0) {
-		/* This function is only suitable for registers */
-		EFSYS_ASSERT(rsp->rows == 1);
-
-		/* bit sweep on and off */
-		EFSYS_BAR_READO(enp->en_esbp, rsp->address, &original,
-			    B_TRUE);
-		for (bit = 0; bit < 128; bit++) {
-			/* Is this bit in the mask? */
-			if (~(rsp->mask.eo_u32[bit >> 5]) & (1 << bit))
-				continue;
-
-			/* Test this bit can be set in isolation */
-			reg = original;
-			EFX_AND_OWORD(reg, rsp->mask);
-			EFX_SET_OWORD_BIT(reg, bit);
-
-			EFSYS_BAR_WRITEO(enp->en_esbp, rsp->address, &reg,
-				    B_TRUE);
-			EFSYS_BAR_READO(enp->en_esbp, rsp->address, &buf,
-				    B_TRUE);
-
-			EFX_AND_OWORD(buf, rsp->mask);
-			if (memcmp(&reg, &buf, sizeof (reg))) {
-				rc = EIO;
-				goto fail1;
-			}
-
-			/* Test this bit can be cleared in isolation */
-			EFX_OR_OWORD(reg, rsp->mask);
-			EFX_CLEAR_OWORD_BIT(reg, bit);
-
-			EFSYS_BAR_WRITEO(enp->en_esbp, rsp->address, &reg,
-				    B_TRUE);
-			EFSYS_BAR_READO(enp->en_esbp, rsp->address, &buf,
-				    B_TRUE);
-
-			EFX_AND_OWORD(buf, rsp->mask);
-			if (memcmp(&reg, &buf, sizeof (reg))) {
-				rc = EIO;
-				goto fail2;
-			}
-		}
-
-		/* Restore the old value */
-		EFSYS_BAR_WRITEO(enp->en_esbp, rsp->address, &original,
-			    B_TRUE);
-
-		--count;
-		++rsp;
-	}
-
-	return (0);
-
-fail2:
-	EFSYS_PROBE(fail2);
-fail1:
-	EFSYS_PROBE1(fail1, efx_rc_t, rc);
-
-	/* Restore the old value */
-	EFSYS_BAR_WRITEO(enp->en_esbp, rsp->address, &original, B_TRUE);
-
-	return (rc);
-}
-
-	__checkReturn	efx_rc_t
-efx_nic_test_tables(
-	__in		efx_nic_t *enp,
-	__in		efx_register_set_t *rsp,
-	__in		efx_pattern_type_t pattern,
-	__in		size_t count)
-{
-	efx_sram_pattern_fn_t func;
-	unsigned int index;
-	unsigned int address;
-	efx_oword_t reg;
-	efx_oword_t buf;
-	efx_rc_t rc;
-
-	EFSYS_ASSERT(pattern < EFX_PATTERN_NTYPES);
-	func = __efx_sram_pattern_fns[pattern];
-
-	while (count > 0) {
-		/* Write */
-		address = rsp->address;
-		for (index = 0; index < rsp->rows; ++index) {
-			func(2 * index + 0, B_FALSE, &reg.eo_qword[0]);
-			func(2 * index + 1, B_FALSE, &reg.eo_qword[1]);
-			EFX_AND_OWORD(reg, rsp->mask);
-			EFSYS_BAR_WRITEO(enp->en_esbp, address, &reg, B_TRUE);
-
-			address += rsp->step;
-		}
-
-		/* Read */
-		address = rsp->address;
-		for (index = 0; index < rsp->rows; ++index) {
-			func(2 * index + 0, B_FALSE, &reg.eo_qword[0]);
-			func(2 * index + 1, B_FALSE, &reg.eo_qword[1]);
-			EFX_AND_OWORD(reg, rsp->mask);
-			EFSYS_BAR_READO(enp->en_esbp, address, &buf, B_TRUE);
-			if (memcmp(&reg, &buf, sizeof (reg))) {
-				rc = EIO;
-				goto fail1;
-			}
-
-			address += rsp->step;
-		}
-
-		++rsp;
-		--count;
-	}
 
 	return (0);
 

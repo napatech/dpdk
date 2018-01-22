@@ -32,6 +32,29 @@ It is also worth registering for the DPDK `Patchwork <http://dpdk.org/dev/patchw
 The development process requires some familiarity with the ``git`` version control system.
 Refer to the `Pro Git Book <http://www.git-scm.com/book/>`_ for further information.
 
+Source License
+--------------
+
+The DPDK uses the Open Source BSD-3-Clause license for the core libraries and
+drivers. The kernel components are GPL-2.0 licensed. DPDK uses single line
+reference to Unique License Identifiers in source files as defined by the Linux
+Foundation's `SPDX project <http://spdx.org/>`_.
+
+DPDK uses first line of the file to be SPDX tag. In case of *#!* scripts, SPDX
+tag can be placed in 2nd line of the file.
+
+For example, to label a file as subject to the BSD-3-Clause license,
+the following text would be used:
+
+``SPDX-License-Identifier: BSD-3-Clause``
+
+To label a file as dual-licensed with BSD-3-Clause and GPL-2.0 (e.g., for code
+that is shared between the kernel and userspace), the following text would be
+used:
+
+``SPDX-License-Identifier: (BSD-3-Clause OR GPL-2.0)``
+
+Refer to ``licenses/README`` for more details.
 
 Maintainers and Sub-trees
 -------------------------
@@ -130,7 +153,7 @@ Make your planned changes in the cloned ``dpdk`` repo. Here are some guidelines 
 * Don't break compilation between commits with forward dependencies in a patchset.
   Each commit should compile on its own to allow for ``git bisect`` and continuous integration testing.
 
-* Add tests to the the ``app/test`` unit test framework where possible.
+* Add tests to the ``app/test`` unit test framework where possible.
 
 * Add documentation, if relevant, in the form of Doxygen comments or a User Guide in RST format.
   See the :ref:`Documentation Guidelines <doc_guidelines>`.
@@ -340,7 +363,7 @@ Where the range is a ``git log`` option.
 Checking Compilation
 --------------------
 
-Compilation of patches and changes should be tested using the the ``test-build.sh`` script in the ``devtools``
+Compilation of patches and changes should be tested using the ``test-build.sh`` script in the ``devtools``
 directory of the DPDK repo::
 
   devtools/test-build.sh x86_64-native-linuxapp-gcc+next+shared

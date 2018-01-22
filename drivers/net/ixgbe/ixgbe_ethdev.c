@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2017 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2017 Intel Corporation
  */
 
 #include <sys/queue.h>
@@ -55,7 +26,7 @@
 #include <rte_eal.h>
 #include <rte_alarm.h>
 #include <rte_ether.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_ethdev_pci.h>
 #include <rte_malloc.h>
 #include <rte_random.h>
@@ -94,6 +65,9 @@
 
 /* Timer value included in XOFF frames. */
 #define IXGBE_FC_PAUSE 0x680
+
+/*Default value of Max Rx Queue*/
+#define IXGBE_MAX_RX_QUEUE_NUM 128
 
 #define IXGBE_LINK_DOWN_CHECK_TIMEOUT 4000 /* ms */
 #define IXGBE_LINK_UP_CHECK_TIMEOUT   1000 /* ms */
@@ -426,6 +400,9 @@ static void ixgbe_l2_tunnel_conf(struct rte_eth_dev *dev);
 		uint32_t bit = (q) % (sizeof((h)->bitmap[0]) * NBBY); \
 		(r) = (h)->bitmap[idx] >> bit & 1;\
 	} while (0)
+
+int ixgbe_logtype_init;
+int ixgbe_logtype_driver;
 
 /*
  * The set of PCI devices this driver supports
@@ -2194,9 +2171,10 @@ ixgbe_check_vf_rss_rxq_num(struct rte_eth_dev *dev, uint16_t nb_rx_q)
 		return -EINVAL;
 	}
 
-	RTE_ETH_DEV_SRIOV(dev).nb_q_per_pool = nb_rx_q;
-	RTE_ETH_DEV_SRIOV(dev).def_pool_q_idx = pci_dev->max_vfs * nb_rx_q;
-
+	RTE_ETH_DEV_SRIOV(dev).nb_q_per_pool =
+		IXGBE_MAX_RX_QUEUE_NUM / RTE_ETH_DEV_SRIOV(dev).active;
+	RTE_ETH_DEV_SRIOV(dev).def_pool_q_idx =
+		pci_dev->max_vfs * RTE_ETH_DEV_SRIOV(dev).nb_q_per_pool;
 	return 0;
 }
 
@@ -2236,8 +2214,6 @@ ixgbe_check_mq_mode(struct rte_eth_dev *dev)
 		case ETH_MQ_RX_NONE:
 			/* if nothing mq mode configure, use default scheme */
 			dev->data->dev_conf.rxmode.mq_mode = ETH_MQ_RX_VMDQ_ONLY;
-			if (RTE_ETH_DEV_SRIOV(dev).nb_q_per_pool > 1)
-				RTE_ETH_DEV_SRIOV(dev).nb_q_per_pool = 1;
 			break;
 		default: /* ETH_MQ_RX_DCB, ETH_MQ_RX_DCB_RSS or ETH_MQ_TX_DCB*/
 			/* SRIOV only works in VMDq enable mode */
@@ -4383,12 +4359,12 @@ ixgbe_dev_interrupt_delayed_handler(void *param)
 		intr->flags &= ~IXGBE_FLAG_NEED_LINK_UPDATE;
 		ixgbe_dev_link_status_print(dev);
 		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC,
-					      NULL, NULL);
+					      NULL);
 	}
 
 	if (intr->flags & IXGBE_FLAG_MACSEC) {
 		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_MACSEC,
-					      NULL, NULL);
+					      NULL);
 		intr->flags &= ~IXGBE_FLAG_MACSEC;
 	}
 
@@ -8165,13 +8141,17 @@ static void ixgbevf_mbx_process(struct rte_eth_dev *dev)
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	u32 in_msg = 0;
 
-	if (ixgbe_read_mbx(hw, &in_msg, 1, 0))
-		return;
+	/* peek the message first */
+	in_msg = IXGBE_READ_REG(hw, IXGBE_VFMBMEM);
 
 	/* PF reset VF event */
-	if (in_msg == IXGBE_PF_CONTROL_MSG)
+	if (in_msg == IXGBE_PF_CONTROL_MSG) {
+		/* dummy mbx read to ack pf */
+		if (ixgbe_read_mbx(hw, &in_msg, 1, 0))
+			return;
 		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_RESET,
-					      NULL, NULL);
+					      NULL);
+	}
 }
 
 static int
@@ -8339,6 +8319,18 @@ ixgbe_l2_tn_filter_restore(struct rte_eth_dev *dev)
 	}
 }
 
+/* restore rss filter */
+static inline void
+ixgbe_rss_filter_restore(struct rte_eth_dev *dev)
+{
+	struct ixgbe_filter_info *filter_info =
+		IXGBE_DEV_PRIVATE_TO_FILTER_INFO(dev->data->dev_private);
+
+	if (filter_info->rss_info.num)
+		ixgbe_config_rss_filter(dev,
+			&filter_info->rss_info, TRUE);
+}
+
 static int
 ixgbe_filter_restore(struct rte_eth_dev *dev)
 {
@@ -8347,6 +8339,7 @@ ixgbe_filter_restore(struct rte_eth_dev *dev)
 	ixgbe_syn_filter_restore(dev);
 	ixgbe_fdir_filter_restore(dev);
 	ixgbe_l2_tn_filter_restore(dev);
+	ixgbe_rss_filter_restore(dev);
 
 	return 0;
 }
@@ -8444,3 +8437,15 @@ RTE_PMD_REGISTER_KMOD_DEP(net_ixgbe, "* igb_uio | uio_pci_generic | vfio-pci");
 RTE_PMD_REGISTER_PCI(net_ixgbe_vf, rte_ixgbevf_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_ixgbe_vf, pci_id_ixgbevf_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_ixgbe_vf, "* igb_uio | vfio-pci");
+
+RTE_INIT(ixgbe_init_log);
+static void
+ixgbe_init_log(void)
+{
+	ixgbe_logtype_init = rte_log_register("pmd.ixgbe.init");
+	if (ixgbe_logtype_init >= 0)
+		rte_log_set_level(ixgbe_logtype_init, RTE_LOG_NOTICE);
+	ixgbe_logtype_driver = rte_log_register("pmd.ixgbe.driver");
+	if (ixgbe_logtype_driver >= 0)
+		rte_log_set_level(ixgbe_logtype_driver, RTE_LOG_NOTICE);
+}

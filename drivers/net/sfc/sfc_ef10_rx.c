@@ -1,32 +1,10 @@
-/*-
- *   BSD LICENSE
+/* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2016 Solarflare Communications Inc.
+ * Copyright (c) 2016-2018 Solarflare Communications Inc.
  * All rights reserved.
  *
  * This software was jointly developed between OKTET Labs (under contract
  * for Solarflare) and Solarflare Communications, Inc.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
- * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
- * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 /* EF10 native datapath implementation */
@@ -93,6 +71,7 @@ struct sfc_ef10_rxq {
 	/* Used on refill */
 	uint16_t			buf_size;
 	unsigned int			added;
+	unsigned int			max_fill_level;
 	unsigned int			refill_threshold;
 	struct rte_mempool		*refill_mb_pool;
 	efx_qword_t			*rxq_hw_ring;
@@ -141,8 +120,7 @@ sfc_ef10_rx_qrefill(struct sfc_ef10_rxq *rxq)
 	void *objs[SFC_RX_REFILL_BULK];
 	unsigned int added = rxq->added;
 
-	free_space = SFC_EF10_RXQ_LIMIT(ptr_mask + 1) -
-		(added - rxq->completed);
+	free_space = rxq->max_fill_level - (added - rxq->completed);
 
 	if (free_space < rxq->refill_threshold)
 		return;
@@ -251,6 +229,11 @@ static void
 sfc_ef10_rx_ev_to_offloads(struct sfc_ef10_rxq *rxq, const efx_qword_t rx_ev,
 			   struct rte_mbuf *m)
 {
+	uint32_t tun_ptype = 0;
+	/* Which event bit is mapped to PKT_RX_IP_CKSUM_* */
+	int8_t ip_csum_err_bit;
+	/* Which event bit is mapped to PKT_RX_L4_CKSUM_* */
+	int8_t l4_csum_err_bit;
 	uint32_t l2_ptype = 0;
 	uint32_t l3_ptype = 0;
 	uint32_t l4_ptype = 0;
@@ -259,15 +242,51 @@ sfc_ef10_rx_ev_to_offloads(struct sfc_ef10_rxq *rxq, const efx_qword_t rx_ev,
 	if (unlikely(EFX_TEST_QWORD_BIT(rx_ev, ESF_DZ_RX_PARSE_INCOMPLETE_LBN)))
 		goto done;
 
+	switch (EFX_QWORD_FIELD(rx_ev, ESF_EZ_RX_ENCAP_HDR)) {
+	default:
+		/* Unexpected encapsulation tag class */
+		SFC_ASSERT(false);
+		/* FALLTHROUGH */
+	case ESE_EZ_ENCAP_HDR_NONE:
+		break;
+	case ESE_EZ_ENCAP_HDR_VXLAN:
+		/*
+		 * It is definitely UDP, but we have no information
+		 * about IPv4 vs IPv6 and VLAN tagging.
+		 */
+		tun_ptype = RTE_PTYPE_TUNNEL_VXLAN | RTE_PTYPE_L4_UDP;
+		break;
+	case ESE_EZ_ENCAP_HDR_GRE:
+		/*
+		 * We have no information about IPv4 vs IPv6 and VLAN tagging.
+		 */
+		tun_ptype = RTE_PTYPE_TUNNEL_NVGRE;
+		break;
+	}
+
+	if (tun_ptype == 0) {
+		ip_csum_err_bit = ESF_DZ_RX_IPCKSUM_ERR_LBN;
+		l4_csum_err_bit = ESF_DZ_RX_TCPUDP_CKSUM_ERR_LBN;
+	} else {
+		ip_csum_err_bit = ESF_EZ_RX_IP_INNER_CHKSUM_ERR_LBN;
+		l4_csum_err_bit = ESF_EZ_RX_TCP_UDP_INNER_CHKSUM_ERR_LBN;
+		if (unlikely(EFX_TEST_QWORD_BIT(rx_ev,
+						ESF_DZ_RX_IPCKSUM_ERR_LBN)))
+			ol_flags |= PKT_RX_EIP_CKSUM_BAD;
+	}
+
 	switch (EFX_QWORD_FIELD(rx_ev, ESF_DZ_RX_ETH_TAG_CLASS)) {
 	case ESE_DZ_ETH_TAG_CLASS_NONE:
-		l2_ptype = RTE_PTYPE_L2_ETHER;
+		l2_ptype = (tun_ptype == 0) ? RTE_PTYPE_L2_ETHER :
+			RTE_PTYPE_INNER_L2_ETHER;
 		break;
 	case ESE_DZ_ETH_TAG_CLASS_VLAN1:
-		l2_ptype = RTE_PTYPE_L2_ETHER_VLAN;
+		l2_ptype = (tun_ptype == 0) ? RTE_PTYPE_L2_ETHER_VLAN :
+			RTE_PTYPE_INNER_L2_ETHER_VLAN;
 		break;
 	case ESE_DZ_ETH_TAG_CLASS_VLAN2:
-		l2_ptype = RTE_PTYPE_L2_ETHER_QINQ;
+		l2_ptype = (tun_ptype == 0) ? RTE_PTYPE_L2_ETHER_QINQ :
+			RTE_PTYPE_INNER_L2_ETHER_QINQ;
 		break;
 	default:
 		/* Unexpected Eth tag class */
@@ -276,25 +295,30 @@ sfc_ef10_rx_ev_to_offloads(struct sfc_ef10_rxq *rxq, const efx_qword_t rx_ev,
 
 	switch (EFX_QWORD_FIELD(rx_ev, ESF_DZ_RX_L3_CLASS)) {
 	case ESE_DZ_L3_CLASS_IP4_FRAG:
-		l4_ptype = RTE_PTYPE_L4_FRAG;
+		l4_ptype = (tun_ptype == 0) ? RTE_PTYPE_L4_FRAG :
+			RTE_PTYPE_INNER_L4_FRAG;
 		/* FALLTHROUGH */
 	case ESE_DZ_L3_CLASS_IP4:
-		l3_ptype = RTE_PTYPE_L3_IPV4_EXT_UNKNOWN;
+		l3_ptype = (tun_ptype == 0) ? RTE_PTYPE_L3_IPV4_EXT_UNKNOWN :
+			RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN;
 		ol_flags |= PKT_RX_RSS_HASH |
-			((EFX_TEST_QWORD_BIT(rx_ev,
-					     ESF_DZ_RX_IPCKSUM_ERR_LBN)) ?
+			((EFX_TEST_QWORD_BIT(rx_ev, ip_csum_err_bit)) ?
 			 PKT_RX_IP_CKSUM_BAD : PKT_RX_IP_CKSUM_GOOD);
 		break;
 	case ESE_DZ_L3_CLASS_IP6_FRAG:
-		l4_ptype |= RTE_PTYPE_L4_FRAG;
+		l4_ptype = (tun_ptype == 0) ? RTE_PTYPE_L4_FRAG :
+			RTE_PTYPE_INNER_L4_FRAG;
 		/* FALLTHROUGH */
 	case ESE_DZ_L3_CLASS_IP6:
-		l3_ptype |= RTE_PTYPE_L3_IPV6_EXT_UNKNOWN;
+		l3_ptype = (tun_ptype == 0) ? RTE_PTYPE_L3_IPV6_EXT_UNKNOWN :
+			RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN;
 		ol_flags |= PKT_RX_RSS_HASH;
 		break;
 	case ESE_DZ_L3_CLASS_ARP:
 		/* Override Layer 2 packet type */
-		l2_ptype = RTE_PTYPE_L2_ETHER_ARP;
+		/* There is no ARP classification for inner packets */
+		if (tun_ptype == 0)
+			l2_ptype = RTE_PTYPE_L2_ETHER_ARP;
 		break;
 	default:
 		/* Unexpected Layer 3 class */
@@ -303,17 +327,17 @@ sfc_ef10_rx_ev_to_offloads(struct sfc_ef10_rxq *rxq, const efx_qword_t rx_ev,
 
 	switch (EFX_QWORD_FIELD(rx_ev, ESF_DZ_RX_L4_CLASS)) {
 	case ESE_DZ_L4_CLASS_TCP:
-		l4_ptype = RTE_PTYPE_L4_TCP;
+		l4_ptype = (tun_ptype == 0) ? RTE_PTYPE_L4_TCP :
+			RTE_PTYPE_INNER_L4_TCP;
 		ol_flags |=
-			(EFX_TEST_QWORD_BIT(rx_ev,
-					    ESF_DZ_RX_TCPUDP_CKSUM_ERR_LBN)) ?
+			(EFX_TEST_QWORD_BIT(rx_ev, l4_csum_err_bit)) ?
 			PKT_RX_L4_CKSUM_BAD : PKT_RX_L4_CKSUM_GOOD;
 		break;
 	case ESE_DZ_L4_CLASS_UDP:
-		l4_ptype = RTE_PTYPE_L4_UDP;
+		l4_ptype = (tun_ptype == 0) ? RTE_PTYPE_L4_UDP :
+			RTE_PTYPE_INNER_L4_UDP;
 		ol_flags |=
-			(EFX_TEST_QWORD_BIT(rx_ev,
-					    ESF_DZ_RX_TCPUDP_CKSUM_ERR_LBN)) ?
+			(EFX_TEST_QWORD_BIT(rx_ev, l4_csum_err_bit)) ?
 			PKT_RX_L4_CKSUM_BAD : PKT_RX_L4_CKSUM_GOOD;
 		break;
 	case ESE_DZ_L4_CLASS_UNKNOWN:
@@ -329,7 +353,7 @@ sfc_ef10_rx_ev_to_offloads(struct sfc_ef10_rxq *rxq, const efx_qword_t rx_ev,
 
 done:
 	m->ol_flags = ol_flags;
-	m->packet_type = l2_ptype | l3_ptype | l4_ptype;
+	m->packet_type = tun_ptype | l2_ptype | l3_ptype | l4_ptype;
 }
 
 static uint16_t
@@ -515,7 +539,7 @@ sfc_ef10_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 }
 
 static const uint32_t *
-sfc_ef10_supported_ptypes_get(void)
+sfc_ef10_supported_ptypes_get(uint32_t tunnel_encaps)
 {
 	static const uint32_t ef10_native_ptypes[] = {
 		RTE_PTYPE_L2_ETHER,
@@ -529,8 +553,47 @@ sfc_ef10_supported_ptypes_get(void)
 		RTE_PTYPE_L4_UDP,
 		RTE_PTYPE_UNKNOWN
 	};
+	static const uint32_t ef10_overlay_ptypes[] = {
+		RTE_PTYPE_L2_ETHER,
+		RTE_PTYPE_L2_ETHER_ARP,
+		RTE_PTYPE_L2_ETHER_VLAN,
+		RTE_PTYPE_L2_ETHER_QINQ,
+		RTE_PTYPE_L3_IPV4_EXT_UNKNOWN,
+		RTE_PTYPE_L3_IPV6_EXT_UNKNOWN,
+		RTE_PTYPE_L4_FRAG,
+		RTE_PTYPE_L4_TCP,
+		RTE_PTYPE_L4_UDP,
+		RTE_PTYPE_TUNNEL_VXLAN,
+		RTE_PTYPE_TUNNEL_NVGRE,
+		RTE_PTYPE_INNER_L2_ETHER,
+		RTE_PTYPE_INNER_L2_ETHER_VLAN,
+		RTE_PTYPE_INNER_L2_ETHER_QINQ,
+		RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN,
+		RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN,
+		RTE_PTYPE_INNER_L4_FRAG,
+		RTE_PTYPE_INNER_L4_TCP,
+		RTE_PTYPE_INNER_L4_UDP,
+		RTE_PTYPE_UNKNOWN
+	};
 
-	return ef10_native_ptypes;
+	/*
+	 * The function returns static set of supported packet types,
+	 * so we can't build it dynamically based on supported tunnel
+	 * encapsulations and should limit to known sets.
+	 */
+	switch (tunnel_encaps) {
+	case (1u << EFX_TUNNEL_PROTOCOL_VXLAN |
+	      1u << EFX_TUNNEL_PROTOCOL_GENEVE |
+	      1u << EFX_TUNNEL_PROTOCOL_NVGRE):
+		return ef10_overlay_ptypes;
+	default:
+		RTE_LOG(ERR, PMD,
+			"Unexpected set of supported tunnel encapsulations: %#x\n",
+			tunnel_encaps);
+		/* FALLTHROUGH */
+	case 0:
+		return ef10_native_ptypes;
+	}
 }
 
 static sfc_dp_rx_qdesc_npending_t sfc_ef10_rx_qdesc_npending;
@@ -550,6 +613,43 @@ sfc_ef10_rx_qdesc_status(__rte_unused struct sfc_dp_rxq *dp_rxq,
 			 __rte_unused uint16_t offset)
 {
 	return -ENOTSUP;
+}
+
+
+static sfc_dp_rx_get_dev_info_t sfc_ef10_rx_get_dev_info;
+static void
+sfc_ef10_rx_get_dev_info(struct rte_eth_dev_info *dev_info)
+{
+	/*
+	 * Number of descriptors just defines maximum number of pushed
+	 * descriptors (fill level).
+	 */
+	dev_info->rx_desc_lim.nb_min = SFC_RX_REFILL_BULK;
+	dev_info->rx_desc_lim.nb_align = SFC_RX_REFILL_BULK;
+}
+
+
+static sfc_dp_rx_qsize_up_rings_t sfc_ef10_rx_qsize_up_rings;
+static int
+sfc_ef10_rx_qsize_up_rings(uint16_t nb_rx_desc,
+			   unsigned int *rxq_entries,
+			   unsigned int *evq_entries,
+			   unsigned int *rxq_max_fill_level)
+{
+	/*
+	 * rte_ethdev API guarantees that the number meets min, max and
+	 * alignment requirements.
+	 */
+	if (nb_rx_desc <= EFX_RXQ_MINNDESCS)
+		*rxq_entries = EFX_RXQ_MINNDESCS;
+	else
+		*rxq_entries = rte_align32pow2(nb_rx_desc);
+
+	*evq_entries = *rxq_entries;
+
+	*rxq_max_fill_level = RTE_MIN(nb_rx_desc,
+				      SFC_EF10_RXQ_LIMIT(*evq_entries));
+	return 0;
 }
 
 
@@ -606,6 +706,7 @@ sfc_ef10_rx_qcreate(uint16_t port_id, uint16_t queue_id,
 		rxq->flags |= SFC_EF10_RXQ_RSS_HASH;
 	rxq->ptr_mask = info->rxq_entries - 1;
 	rxq->evq_hw_ring = info->evq_hw_ring;
+	rxq->max_fill_level = info->max_fill_level;
 	rxq->refill_threshold = info->refill_threshold;
 	rxq->rearm_data =
 		sfc_ef10_mk_mbuf_rearm_data(port_id, info->prefix_size);
@@ -707,7 +808,10 @@ struct sfc_dp_rx sfc_ef10_rx = {
 		.type		= SFC_DP_RX,
 		.hw_fw_caps	= SFC_DP_HW_FW_CAP_EF10,
 	},
-	.features		= SFC_DP_RX_FEAT_MULTI_PROCESS,
+	.features		= SFC_DP_RX_FEAT_MULTI_PROCESS |
+				  SFC_DP_RX_FEAT_TUNNELS,
+	.get_dev_info		= sfc_ef10_rx_get_dev_info,
+	.qsize_up_rings		= sfc_ef10_rx_qsize_up_rings,
 	.qcreate		= sfc_ef10_rx_qcreate,
 	.qdestroy		= sfc_ef10_rx_qdestroy,
 	.qstart			= sfc_ef10_rx_qstart,

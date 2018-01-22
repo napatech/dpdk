@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2014 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2014 Intel Corporation
  */
 
 /*
@@ -207,11 +178,9 @@ smp_port_init(uint16_t port, struct rte_mempool *mbuf_pool,
 			.rxmode = {
 				.mq_mode	= ETH_MQ_RX_RSS,
 				.split_hdr_size = 0,
-				.header_split   = 0, /**< Header Split disabled */
-				.hw_ip_checksum = 1, /**< IP checksum offload enabled */
-				.hw_vlan_filter = 0, /**< VLAN filtering disabled */
-				.jumbo_frame    = 0, /**< Jumbo Frame Support disabled */
-				.hw_strip_crc   = 1, /**< CRC stripped by hardware */
+				.ignore_offload_bitfield = 1,
+				.offloads = (DEV_RX_OFFLOAD_CHECKSUM |
+					     DEV_RX_OFFLOAD_CRC_STRIP),
 			},
 			.rx_adv_conf = {
 				.rss_conf = {
@@ -225,6 +194,8 @@ smp_port_init(uint16_t port, struct rte_mempool *mbuf_pool,
 	};
 	const uint16_t rx_rings = num_queues, tx_rings = num_queues;
 	struct rte_eth_dev_info info;
+	struct rte_eth_rxconf rxq_conf;
+	struct rte_eth_txconf txq_conf;
 	int retval;
 	uint16_t q;
 	uint16_t nb_rxd = RX_RING_SIZE;
@@ -242,6 +213,9 @@ smp_port_init(uint16_t port, struct rte_mempool *mbuf_pool,
 	rte_eth_dev_info_get(port, &info);
 	info.default_rxconf.rx_drop_en = 1;
 
+	if (info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
+		port_conf.txmode.offloads |=
+			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
 	retval = rte_eth_dev_configure(port, rx_rings, tx_rings, &port_conf);
 	if (retval < 0)
 		return retval;
@@ -250,19 +224,24 @@ smp_port_init(uint16_t port, struct rte_mempool *mbuf_pool,
 	if (retval < 0)
 		return retval;
 
+	rxq_conf = info.default_rxconf;
+	rxq_conf.offloads = port_conf.rxmode.offloads;
 	for (q = 0; q < rx_rings; q ++) {
 		retval = rte_eth_rx_queue_setup(port, q, nb_rxd,
 				rte_eth_dev_socket_id(port),
-				&info.default_rxconf,
+				&rxq_conf,
 				mbuf_pool);
 		if (retval < 0)
 			return retval;
 	}
 
+	txq_conf = info.default_txconf;
+	txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
+	txq_conf.offloads = port_conf.txmode.offloads;
 	for (q = 0; q < tx_rings; q ++) {
 		retval = rte_eth_tx_queue_setup(port, q, nb_txd,
 				rte_eth_dev_socket_id(port),
-				NULL);
+				&txq_conf);
 		if (retval < 0)
 			return retval;
 	}

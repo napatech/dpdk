@@ -1,33 +1,5 @@
-/*
- *   BSD LICENSE
- *
- *   Copyright (C) Cavium Inc. 2017. All Right reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Cavium networks nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2017 Cavium, Inc
  */
 
 #include <stdlib.h>
@@ -132,6 +104,22 @@ struct octeontx_fpadev {
 };
 
 static struct octeontx_fpadev fpadev;
+
+int octeontx_logtype_fpavf;
+int octeontx_logtype_fpavf_mbox;
+
+RTE_INIT(otx_pool_init_log);
+static void
+otx_pool_init_log(void)
+{
+	octeontx_logtype_fpavf = rte_log_register("pmd.otx.mempool");
+	if (octeontx_logtype_fpavf >= 0)
+		rte_log_set_level(octeontx_logtype_fpavf, RTE_LOG_NOTICE);
+
+	octeontx_logtype_fpavf_mbox = rte_log_register("pmd.otx.mempool.mbox");
+	if (octeontx_logtype_fpavf_mbox >= 0)
+		rte_log_set_level(octeontx_logtype_fpavf_mbox, RTE_LOG_NOTICE);
+}
 
 /* lock is taken by caller */
 static int
@@ -386,8 +374,8 @@ err:
 	return ret;
 }
 
-static int
-octeontx_fpavf_pool_setup(uintptr_t handle, unsigned long memsz,
+int
+octeontx_fpavf_pool_set_range(uintptr_t handle, unsigned long memsz,
 			  void *memva, uint16_t gpool)
 {
 	uint64_t va_end;
@@ -509,21 +497,15 @@ octeontx_fpa_bufpool_free_count(uintptr_t handle)
 
 uintptr_t
 octeontx_fpa_bufpool_create(unsigned int object_size, unsigned int object_count,
-				unsigned int buf_offset, char **va_start,
-				int node_id)
+				unsigned int buf_offset, int node_id)
 {
 	unsigned int gpool;
-	void *memva;
-	unsigned long memsz;
 	uintptr_t gpool_handle;
 	uintptr_t pool_bar;
 	int res;
 
 	RTE_SET_USED(node_id);
 	RTE_BUILD_BUG_ON(sizeof(struct rte_mbuf) > OCTEONTX_FPAVF_BUF_OFFSET);
-
-	if (unlikely(*va_start == NULL))
-		goto error_end;
 
 	object_size = RTE_CACHE_LINE_ROUNDUP(object_size);
 	if (object_size > FPA_MAX_OBJ_SIZE) {
@@ -567,15 +549,6 @@ octeontx_fpa_bufpool_create(unsigned int object_size, unsigned int object_count,
 		goto error_pool_destroy;
 	}
 
-	/* vf pool setup */
-	memsz = object_size * object_count;
-	memva = *va_start;
-	res = octeontx_fpavf_pool_setup(pool_bar, memsz, memva, gpool);
-	if (res < 0) {
-		errno = res;
-		goto error_gaura_detach;
-	}
-
 	/* Release lock */
 	rte_spinlock_unlock(&fpadev.lock);
 
@@ -591,8 +564,6 @@ octeontx_fpa_bufpool_create(unsigned int object_size, unsigned int object_count,
 
 	return gpool_handle;
 
-error_gaura_detach:
-	(void) octeontx_fpapf_aura_detach(gpool);
 error_pool_destroy:
 	octeontx_fpavf_free(gpool);
 	octeontx_fpapf_pool_destroy(gpool);

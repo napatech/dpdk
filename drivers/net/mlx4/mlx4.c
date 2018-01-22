@@ -57,7 +57,7 @@
 #include <rte_common.h>
 #include <rte_dev.h>
 #include <rte_errno.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_ethdev_pci.h>
 #include <rte_ether.h>
 #include <rte_flow.h>
@@ -256,6 +256,7 @@ static const struct eth_dev_ops mlx4_dev_ops = {
 	.filter_ctrl = mlx4_filter_ctrl,
 	.rx_queue_intr_enable = mlx4_rx_intr_enable,
 	.rx_queue_intr_disable = mlx4_rx_intr_disable,
+	.is_removed = mlx4_is_removed,
 };
 
 /**
@@ -426,6 +427,7 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 	int err = 0;
 	struct ibv_context *attr_ctx = NULL;
 	struct ibv_device_attr device_attr;
+	struct ibv_device_attr_ex device_attr_ex;
 	struct mlx4_conf conf = {
 		.ports.present = 0,
 	};
@@ -499,6 +501,12 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 	/* Use all ports when none are defined */
 	if (!conf.ports.enabled)
 		conf.ports.enabled = conf.ports.present;
+	/* Retrieve extended device attributes. */
+	if (ibv_query_device_ex(attr_ctx, NULL, &device_attr_ex)) {
+		rte_errno = ENODEV;
+		goto error;
+	}
+	assert(device_attr.max_sge >= MLX4_MAX_SGE);
 	for (i = 0; i < device_attr.phys_port_cnt; i++) {
 		uint32_t port = i + 1; /* ports are indexed from one */
 		struct ibv_context *ctx = NULL;
@@ -573,6 +581,21 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			 PCI_DEVICE_ID_MELLANOX_CONNECTX3PRO);
 		DEBUG("L2 tunnel checksum offloads are %ssupported",
 		      (priv->hw_csum_l2tun ? "" : "not "));
+		priv->hw_rss_sup = device_attr_ex.rss_caps.rx_hash_fields_mask;
+		if (!priv->hw_rss_sup) {
+			WARN("no RSS capabilities reported; disabling support"
+			     " for UDP RSS and inner VXLAN RSS");
+			/* Fake support for all possible RSS hash fields. */
+			priv->hw_rss_sup = ~UINT64_C(0);
+			priv->hw_rss_sup = mlx4_conv_rss_hf(priv, -1);
+			/* Filter out known unsupported fields. */
+			priv->hw_rss_sup &=
+				~(uint64_t)(IBV_RX_HASH_SRC_PORT_UDP |
+					    IBV_RX_HASH_DST_PORT_UDP |
+					    IBV_RX_HASH_INNER);
+		}
+		DEBUG("supported RSS hash fields mask: %016" PRIx64,
+		      priv->hw_rss_sup);
 		/* Configure the first MAC address by default. */
 		if (mlx4_get_mac(priv, &mac.addr_bytes)) {
 			ERROR("cannot get MAC address, is mlx4_en loaded?"
@@ -707,6 +730,12 @@ RTE_INIT(rte_mlx4_pmd_init);
 static void
 rte_mlx4_pmd_init(void)
 {
+	/*
+	 * MLX4_DEVICE_FATAL_CLEANUP tells ibv_destroy functions we
+	 * want to get success errno value in case of calling them
+	 * when the device was removed.
+	 */
+	setenv("MLX4_DEVICE_FATAL_CLEANUP", "1", 1);
 	/*
 	 * RDMAV_HUGEPAGES_SAFE tells ibv_fork_init() we intend to use
 	 * huge pages. Calling ibv_fork_init() during init allows

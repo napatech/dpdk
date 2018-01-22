@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2014 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2014 Intel Corporation
  */
 
 #include <string.h>
@@ -102,6 +73,8 @@ do_recursive_call(void)
 	return -1;
 }
 
+int last_test_result;
+
 int
 main(int argc, char **argv)
 {
@@ -140,6 +113,20 @@ main(int argc, char **argv)
 	if (cl == NULL) {
 		return -1;
 	}
+
+	char *dpdk_test = getenv("DPDK_TEST");
+	if (dpdk_test && strlen(dpdk_test)) {
+		char buf[1024];
+		snprintf(buf, sizeof(buf), "%s\n", dpdk_test);
+		if (cmdline_in(cl, buf, strlen(buf)) < 0) {
+			printf("error on cmdline input\n");
+			return -1;
+		}
+
+		cmdline_stdin_exit(cl);
+		return last_test_result;
+	}
+	/* if no DPDK_TEST env variable, go interactive */
 	cmdline_interact(cl);
 	cmdline_stdin_exit(cl);
 #endif
@@ -162,8 +149,20 @@ unit_test_suite_runner(struct unit_test_suite *suite)
 	}
 
 	if (suite->setup)
-		if (suite->setup() != 0)
+		if (suite->setup() != 0) {
+			/*
+			 * setup failed, so count all enabled tests and mark
+			 * them as failed
+			 */
+			while (suite->unit_test_cases[total].testcase) {
+				if (!suite->unit_test_cases[total].enabled)
+					skipped++;
+				else
+					failed++;
+				total++;
+			}
 			goto suite_summary;
+		}
 
 	printf(" + ------------------------------------------------------- +\n");
 
@@ -230,6 +229,8 @@ suite_summary:
 	printf(" + Tests Passed :      %2d\n", succeeded);
 	printf(" + Tests Failed :      %2d\n", failed);
 	printf(" + ------------------------------------------------------- +\n");
+
+	last_test_result = failed;
 
 	if (failed)
 		return -1;

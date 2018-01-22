@@ -47,11 +47,16 @@
 #pragma GCC diagnostic error "-Wpedantic"
 #endif
 
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_ether.h>
 #include <rte_interrupts.h>
 #include <rte_mempool.h>
 #include <rte_spinlock.h>
+
+#ifndef IBV_RX_HASH_INNER
+/** This is not necessarily defined by supported RDMA core versions. */
+#define IBV_RX_HASH_INNER (1ull << 31)
+#endif /* IBV_RX_HASH_INNER */
 
 /** Maximum number of simultaneous MAC addresses. This value is arbitrary. */
 #define MLX4_MAX_MAC_ADDRESSES 128
@@ -126,8 +131,9 @@ struct priv {
 	uint32_t vf:1; /**< This is a VF device. */
 	uint32_t intr_alarm:1; /**< An interrupt alarm is scheduled. */
 	uint32_t isolated:1; /**< Toggle isolated mode. */
-	uint32_t hw_csum:1; /* Checksum offload is supported. */
-	uint32_t hw_csum_l2tun:1; /* Checksum support for L2 tunnels. */
+	uint32_t hw_csum:1; /**< Checksum offload is supported. */
+	uint32_t hw_csum_l2tun:1; /**< Checksum support for L2 tunnels. */
+	uint64_t hw_rss_sup; /**< Supported RSS hash fields (Verbs format). */
 	struct rte_intr_handle intr_handle; /**< Port interrupt handle. */
 	struct mlx4_drop *drop; /**< Shared resources for drop flow rules. */
 	LIST_HEAD(, mlx4_rss) rss; /**< Shared targets for Rx flow rules. */
@@ -165,6 +171,7 @@ int mlx4_flow_ctrl_get(struct rte_eth_dev *dev,
 int mlx4_flow_ctrl_set(struct rte_eth_dev *dev,
 		       struct rte_eth_fc_conf *fc_conf);
 const uint32_t *mlx4_dev_supported_ptypes_get(struct rte_eth_dev *dev);
+int mlx4_is_removed(struct rte_eth_dev *dev);
 
 /* mlx4_intr.c */
 

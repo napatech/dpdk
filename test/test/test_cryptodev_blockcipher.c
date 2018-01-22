@@ -1,33 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2015-2017 Intel Corporation. All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *	 * Redistributions of source code must retain the above copyright
- *	   notice, this list of conditions and the following disclaimer.
- *	 * Redistributions in binary form must reproduce the above copyright
- *	   notice, this list of conditions and the following disclaimer in
- *	   the documentation and/or other materials provided with the
- *	   distribution.
- *	 * Neither the name of Intel Corporation nor the names of its
- *	   contributors may be used to endorse or promote products derived
- *	   from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2015-2017 Intel Corporation
  */
 
 #include <rte_common.h>
@@ -362,12 +334,12 @@ test_blockcipher_one_case(const struct blockcipher_test_case *t,
 		rte_crypto_op_attach_sym_session(op, sess);
 	}
 
-	TEST_HEXDUMP(stdout, "m_src(before):",
+	debug_hexdump(stdout, "m_src(before):",
 			sym_op->m_src->buf_addr, sym_op->m_src->buf_len);
 	rte_memcpy(tmp_src_buf, sym_op->m_src->buf_addr,
 						sym_op->m_src->buf_len);
 	if (t->feature_mask & BLOCKCIPHER_TEST_FEATURE_OOP) {
-		TEST_HEXDUMP(stdout, "m_dst(before):",
+		debug_hexdump(stdout, "m_dst(before):",
 			sym_op->m_dst->buf_addr, sym_op->m_dst->buf_len);
 		rte_memcpy(tmp_dst_buf, sym_op->m_dst->buf_addr,
 						sym_op->m_dst->buf_len);
@@ -395,10 +367,10 @@ test_blockcipher_one_case(const struct blockcipher_test_case *t,
 		goto error_exit;
 	}
 
-	TEST_HEXDUMP(stdout, "m_src(after):",
+	debug_hexdump(stdout, "m_src(after):",
 			sym_op->m_src->buf_addr, sym_op->m_src->buf_len);
 	if (t->feature_mask & BLOCKCIPHER_TEST_FEATURE_OOP)
-		TEST_HEXDUMP(stdout, "m_dst(after):",
+		debug_hexdump(stdout, "m_dst(after):",
 			sym_op->m_dst->buf_addr, sym_op->m_dst->buf_len);
 
 	/* Verify results */

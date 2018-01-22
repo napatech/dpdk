@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2016 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2016 Intel Corporation
  */
 
 #include <sys/queue.h>
@@ -45,7 +16,7 @@
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
 #include <rte_ether.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_ethdev_pci.h>
 #include <rte_memory.h>
 #include <rte_eal.h>
@@ -948,6 +919,7 @@ eth_igb_dev_init(struct rte_eth_dev *eth_dev)
 	TAILQ_INIT(&igb_filter_ethertype_list);
 	TAILQ_INIT(&igb_filter_syn_list);
 	TAILQ_INIT(&igb_filter_flex_list);
+	TAILQ_INIT(&igb_filter_rss_list);
 	TAILQ_INIT(&igb_flow_list);
 
 	return 0;
@@ -1006,6 +978,10 @@ eth_igb_dev_uninit(struct rte_eth_dev *eth_dev)
 	filter_info->ethertype_mask = 0;
 	memset(filter_info->ethertype_filters, 0,
 		E1000_MAX_ETQF_FILTERS * sizeof(struct igb_ethertype_filter));
+
+	/* clear the rss filter info */
+	memset(&filter_info->rss_info, 0,
+		sizeof(struct igb_rte_flow_rss_conf));
 
 	/* remove all ntuple filters of the device */
 	igb_ntuple_filter_uninit(eth_dev);
@@ -1212,7 +1188,7 @@ igb_check_mq_mode(struct rte_eth_dev *dev)
 	enum rte_eth_rx_mq_mode rx_mq_mode = dev->data->dev_conf.rxmode.mq_mode;
 	enum rte_eth_tx_mq_mode tx_mq_mode = dev->data->dev_conf.txmode.mq_mode;
 	uint16_t nb_rx_q = dev->data->nb_rx_queues;
-	uint16_t nb_tx_q = dev->data->nb_rx_queues;
+	uint16_t nb_tx_q = dev->data->nb_tx_queues;
 
 	if ((rx_mq_mode & ETH_MQ_RX_DCB_FLAG) ||
 	    tx_mq_mode == ETH_MQ_TX_DCB ||
@@ -1299,6 +1275,31 @@ eth_igb_configure(struct rte_eth_dev *dev)
 	PMD_INIT_FUNC_TRACE();
 
 	return 0;
+}
+
+static void
+eth_igb_rxtx_control(struct rte_eth_dev *dev,
+		     bool enable)
+{
+	struct e1000_hw *hw =
+		E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	uint32_t tctl, rctl;
+
+	tctl = E1000_READ_REG(hw, E1000_TCTL);
+	rctl = E1000_READ_REG(hw, E1000_RCTL);
+
+	if (enable) {
+		/* enable Tx/Rx */
+		tctl |= E1000_TCTL_EN;
+		rctl |= E1000_RCTL_EN;
+	} else {
+		/* disable Tx/Rx */
+		tctl &= ~E1000_TCTL_EN;
+		rctl &= ~E1000_RCTL_EN;
+	}
+	E1000_WRITE_REG(hw, E1000_TCTL, tctl);
+	E1000_WRITE_REG(hw, E1000_RCTL, rctl);
+	E1000_WRITE_FLUSH(hw);
 }
 
 static int
@@ -1504,6 +1505,9 @@ eth_igb_start(struct rte_eth_dev *dev)
 	/* restore all types filter */
 	igb_filter_restore(dev);
 
+	eth_igb_rxtx_control(dev, true);
+	eth_igb_link_update(dev, 0);
+
 	PMD_INIT_LOG(DEBUG, "<<");
 
 	return 0;
@@ -1528,6 +1532,8 @@ eth_igb_stop(struct rte_eth_dev *dev)
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_eth_link link;
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+
+	eth_igb_rxtx_control(dev, false);
 
 	igb_intr_disable(hw);
 
@@ -2435,7 +2441,7 @@ eth_igb_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 		link.link_speed = 0;
 		link.link_duplex = ETH_LINK_HALF_DUPLEX;
 		link.link_status = ETH_LINK_DOWN;
-		link.link_autoneg = ETH_LINK_SPEED_FIXED;
+		link.link_autoneg = ETH_LINK_FIXED;
 	}
 	rte_igb_dev_atomic_write_link_status(dev, &link);
 
@@ -2859,7 +2865,6 @@ eth_igb_interrupt_action(struct rte_eth_dev *dev,
 	struct e1000_interrupt *intr =
 		E1000_DEV_PRIVATE_TO_INTR(dev->data->dev_private);
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	uint32_t tctl, rctl;
 	struct rte_eth_link link;
 	int ret;
 
@@ -2901,22 +2906,8 @@ eth_igb_interrupt_action(struct rte_eth_dev *dev,
 			     pci_dev->addr.bus,
 			     pci_dev->addr.devid,
 			     pci_dev->addr.function);
-		tctl = E1000_READ_REG(hw, E1000_TCTL);
-		rctl = E1000_READ_REG(hw, E1000_RCTL);
-		if (link.link_status) {
-			/* enable Tx/Rx */
-			tctl |= E1000_TCTL_EN;
-			rctl |= E1000_RCTL_EN;
-		} else {
-			/* disable Tx/Rx */
-			tctl &= ~E1000_TCTL_EN;
-			rctl &= ~E1000_RCTL_EN;
-		}
-		E1000_WRITE_REG(hw, E1000_TCTL, tctl);
-		E1000_WRITE_REG(hw, E1000_RCTL, rctl);
-		E1000_WRITE_FLUSH(hw);
 		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC,
-					      NULL, NULL);
+					      NULL);
 	}
 
 	return 0;
@@ -2970,13 +2961,17 @@ void igbvf_mbx_process(struct rte_eth_dev *dev)
 	struct e1000_mbx_info *mbx = &hw->mbx;
 	u32 in_msg = 0;
 
-	if (mbx->ops.read(hw, &in_msg, 1, 0))
-		return;
+	/* peek the message first */
+	in_msg = E1000_READ_REG(hw, E1000_VMBMEM(0));
 
 	/* PF reset VF event */
-	if (in_msg == E1000_PF_CONTROL_MSG)
+	if (in_msg == E1000_PF_CONTROL_MSG) {
+		/* dummy mbx read to ack pf */
+		if (mbx->ops.read(hw, &in_msg, 1, 0))
+			return;
 		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_RESET,
-					      NULL, NULL);
+					      NULL);
+	}
 }
 
 static int
@@ -5628,6 +5623,17 @@ igb_flex_filter_restore(struct rte_eth_dev *dev)
 	}
 }
 
+/* restore rss filter */
+static inline void
+igb_rss_filter_restore(struct rte_eth_dev *dev)
+{
+	struct e1000_filter_info *filter_info =
+		E1000_DEV_PRIVATE_TO_FILTER_INFO(dev->data->dev_private);
+
+	if (filter_info->rss_info.num)
+		igb_config_rss_filter(dev, &filter_info->rss_info, TRUE);
+}
+
 /* restore all types filter */
 static int
 igb_filter_restore(struct rte_eth_dev *dev)
@@ -5636,6 +5642,7 @@ igb_filter_restore(struct rte_eth_dev *dev)
 	igb_ethertype_filter_restore(dev);
 	igb_syn_filter_restore(dev);
 	igb_flex_filter_restore(dev);
+	igb_rss_filter_restore(dev);
 
 	return 0;
 }

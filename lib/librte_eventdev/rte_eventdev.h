@@ -239,6 +239,7 @@ extern "C" {
 #endif
 
 #include <rte_common.h>
+#include <rte_config.h>
 #include <rte_memory.h>
 #include <rte_errno.h>
 
@@ -281,6 +282,38 @@ struct rte_mbuf; /* we just use mbuf pointers; no need to include rte_mbuf.h */
  * PMD accepts only one event at a time.
  *
  * @see rte_event_dequeue_burst() rte_event_enqueue_burst()
+ */
+#define RTE_EVENT_DEV_CAP_IMPLICIT_RELEASE_DISABLE    (1ULL << 5)
+/**< Event device ports support disabling the implicit release feature, in
+ * which the port will release all unreleased events in its dequeue operation.
+ * If this capability is set and the port is configured with implicit release
+ * disabled, the application is responsible for explicitly releasing events
+ * using either the RTE_EVENT_OP_FORWARD or the RTE_EVENT_OP_RELEASE event
+ * enqueue operations.
+ *
+ * @see rte_event_dequeue_burst() rte_event_enqueue_burst()
+ */
+
+#define RTE_EVENT_DEV_CAP_NONSEQ_MODE         (1ULL << 6)
+/**< Event device is capable of operating in none sequential mode. The path
+ * of the event is not necessary to be sequential. Application can change
+ * the path of event at runtime. If the flag is not set, then event each event
+ * will follow a path from queue 0 to queue 1 to queue 2 etc. If the flag is
+ * set, events may be sent to queues in any order. If the flag is not set, the
+ * eventdev will return an error when the application enqueues an event for a
+ * qid which is not the next in the sequence.
+ */
+
+#define RTE_EVENT_DEV_CAP_RUNTIME_PORT_LINK   (1ULL << 7)
+/**< Event device is capable of configuring the queue/port link at runtime.
+ * If the flag is not set, the eventdev queue/port link is only can be
+ * configured during  initialization.
+ */
+
+#define RTE_EVENT_DEV_CAP_MULTIPLE_QUEUE_PORT (1ULL << 8)
+/**< Event device is capable of setting up the link between multiple queue
+ * with single port. If the flag is not set, the eventdev can only map a
+ * single queue to each port or map a single queue to many port.
  */
 
 /* Event device priority levels */
@@ -420,9 +453,9 @@ rte_event_dev_info_get(uint8_t dev_id, struct rte_event_dev_info *dev_info);
  * @param[out] attr_value A pointer that will be filled in with the attribute
  *             value if successful.
  *
- * @retval 0 Successfully retrieved attribute value
- *         -EINVAL Invalid device or  *attr_id* provided, or *attr_value*
- *         is NULL
+ * @return
+ *   - 0: Successfully retrieved attribute value
+ *   - -EINVAL: Invalid device or  *attr_id* provided, or *attr_value* is NULL
  */
 int
 rte_event_dev_attr_get(uint8_t dev_id, uint32_t attr_id,
@@ -640,18 +673,22 @@ rte_event_queue_setup(uint8_t dev_id, uint8_t queue_id,
 /**
  * Get an attribute from a queue.
  *
- * @param dev_id Eventdev id
- * @param queue_id Eventdev queue id
- * @param attr_id The attribute ID to retrieve
- * @param[out] attr_value A pointer that will be filled in with the attribute
- *             value if successful
+ * @param dev_id
+ *   Eventdev id
+ * @param queue_id
+ *   Eventdev queue id
+ * @param attr_id
+ *   The attribute ID to retrieve
+ * @param[out] attr_value
+ *   A pointer that will be filled in with the attribute value if successful
  *
- * @retval 0 Successfully returned value
- *         -EINVAL invalid device, queue or attr_id provided, or attr_value
- *         was NULL
- *         -EOVERFLOW returned when attr_id is set to
- *         RTE_EVENT_QUEUE_ATTR_SCHEDULE_TYPE and event_queue_cfg is set to
- *         RTE_EVENT_QUEUE_CFG_ALL_TYPES
+ * @return
+ *   - 0: Successfully returned value
+ *   - -EINVAL: invalid device, queue or attr_id provided, or attr_value was
+ *		NULL
+ *   - -EOVERFLOW: returned when attr_id is set to
+ *   RTE_EVENT_QUEUE_ATTR_SCHEDULE_TYPE and event_queue_cfg is set to
+ *   RTE_EVENT_QUEUE_CFG_ALL_TYPES
  */
 int
 rte_event_queue_attr_get(uint8_t dev_id, uint8_t queue_id, uint32_t attr_id,
@@ -685,6 +722,13 @@ struct rte_event_port_conf {
 	 * This value cannot exceed the *nb_event_port_enqueue_depth*
 	 * which previously supplied to rte_event_dev_configure().
 	 * Ignored when device is not RTE_EVENT_DEV_CAP_BURST_MODE capable.
+	 */
+	uint8_t disable_implicit_release;
+	/**< Configure the port not to release outstanding events in
+	 * rte_event_dev_dequeue_burst(). If true, all events received through
+	 * the port must be explicitly released with RTE_EVENT_OP_RELEASE or
+	 * RTE_EVENT_OP_FORWARD. Must be false when the device is not
+	 * RTE_EVENT_DEV_CAP_IMPLICIT_RELEASE_DISABLE capable.
 	 */
 };
 
@@ -754,14 +798,18 @@ rte_event_port_setup(uint8_t dev_id, uint8_t port_id,
 /**
  * Get an attribute from a port.
  *
- * @param dev_id Eventdev id
- * @param port_id Eventdev port id
- * @param attr_id The attribute ID to retrieve
- * @param[out] attr_value A pointer that will be filled in with the attribute
- *             value if successful
+ * @param dev_id
+ *   Eventdev id
+ * @param port_id
+ *   Eventdev port id
+ * @param attr_id
+ *   The attribute ID to retrieve
+ * @param[out] attr_value
+ *   A pointer that will be filled in with the attribute value if successful
  *
- * @retval 0 Successfully returned value
- *         -EINVAL Invalid device, port or attr_id, or attr_value was NULL
+ * @return
+ *   - 0: Successfully returned value
+ *   - (-EINVAL) Invalid device, port or attr_id, or attr_value was NULL
  */
 int
 rte_event_port_attr_get(uint8_t dev_id, uint8_t port_id, uint32_t attr_id,
@@ -1381,9 +1429,9 @@ rte_event_dequeue_timeout_ticks(uint8_t dev_id, uint64_t ns,
  *
  * The number of events dequeued is the number of scheduler contexts held by
  * this port. These contexts are automatically released in the next
- * rte_event_dequeue_burst() invocation, or invoking rte_event_enqueue_burst()
- * with RTE_EVENT_OP_RELEASE operation can be used to release the
- * contexts early.
+ * rte_event_dequeue_burst() invocation if the port supports implicit
+ * releases, or invoking rte_event_enqueue_burst() with RTE_EVENT_OP_RELEASE
+ * operation can be used to release the contexts early.
  *
  * Event operations RTE_EVENT_OP_FORWARD and RTE_EVENT_OP_RELEASE must only be
  * enqueued to the same port that their associated events were dequeued from.
@@ -1761,6 +1809,18 @@ rte_event_dev_xstats_reset(uint8_t dev_id,
 			   int16_t queue_port_id,
 			   const uint32_t ids[],
 			   uint32_t nb_ids);
+
+/**
+ * Trigger the eventdev self test.
+ *
+ * @param dev_id
+ *   The identifier of the device
+ * @return
+ *   - 0: Selftest successful
+ *   - -ENOTSUP if the device doesn't support selftest
+ *   - other values < 0 on failure.
+ */
+int rte_event_dev_selftest(uint8_t dev_id);
 
 #ifdef __cplusplus
 }

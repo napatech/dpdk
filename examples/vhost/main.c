@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2017 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2017 Intel Corporation
  */
 
 #include <arpa/inet.h>
@@ -145,21 +116,23 @@ static struct rte_eth_conf vmdq_conf_default = {
 	.rxmode = {
 		.mq_mode        = ETH_MQ_RX_VMDQ_ONLY,
 		.split_hdr_size = 0,
-		.header_split   = 0, /**< Header Split disabled */
-		.hw_ip_checksum = 0, /**< IP checksum offload disabled */
-		.hw_vlan_filter = 0, /**< VLAN filtering disabled */
+		.ignore_offload_bitfield = 1,
 		/*
-		 * It is necessary for 1G NIC such as I350,
+		 * VLAN strip is necessary for 1G NIC such as I350,
 		 * this fixes bug of ipv4 forwarding in guest can't
 		 * forward pakets from one virtio dev to another virtio dev.
 		 */
-		.hw_vlan_strip  = 1, /**< VLAN strip enabled. */
-		.jumbo_frame    = 0, /**< Jumbo Frame Support disabled */
-		.hw_strip_crc   = 1, /**< CRC stripped by hardware */
+		.offloads = (DEV_RX_OFFLOAD_CRC_STRIP |
+			     DEV_RX_OFFLOAD_VLAN_STRIP),
 	},
 
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
+		.offloads = (DEV_TX_OFFLOAD_IPV4_CKSUM |
+			     DEV_TX_OFFLOAD_TCP_CKSUM |
+			     DEV_TX_OFFLOAD_VLAN_INSERT |
+			     DEV_TX_OFFLOAD_MULTI_SEGS |
+			     DEV_TX_OFFLOAD_TCP_TSO),
 	},
 	.rx_adv_conf = {
 		/*
@@ -175,6 +148,7 @@ static struct rte_eth_conf vmdq_conf_default = {
 		},
 	},
 };
+
 
 static unsigned lcore_ids[RTE_MAX_LCORE];
 static uint16_t ports[RTE_MAX_ETHPORTS];
@@ -279,18 +253,10 @@ port_init(uint16_t port)
 	/* The max pool number from dev_info will be used to validate the pool number specified in cmd line */
 	rte_eth_dev_info_get (port, &dev_info);
 
-	if (dev_info.max_rx_queues > MAX_QUEUES) {
-		rte_exit(EXIT_FAILURE,
-			"please define MAX_QUEUES no less than %u in %s\n",
-			dev_info.max_rx_queues, __FILE__);
-	}
-
 	rxconf = &dev_info.default_rxconf;
 	txconf = &dev_info.default_txconf;
 	rxconf->rx_drop_en = 1;
-
-	/* Enable vlan offload */
-	txconf->txq_flags &= ~ETH_TXQ_FLAGS_NOVLANOFFL;
+	txconf->txq_flags = ETH_TXQ_FLAGS_IGNORE;
 
 	/*configure the number of supported virtio devices based on VMDQ limits */
 	num_devices = dev_info.max_vmdq_pools;
@@ -331,6 +297,9 @@ port_init(uint16_t port)
 	if (port >= rte_eth_dev_count()) return -1;
 
 	rx_rings = (uint16_t)dev_info.max_rx_queues;
+	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
+		port_conf.txmode.offloads |=
+			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
 	/* Configure ethernet device. */
 	retval = rte_eth_dev_configure(port, rx_rings, tx_rings, &port_conf);
 	if (retval != 0) {
@@ -353,6 +322,7 @@ port_init(uint16_t port)
 	}
 
 	/* Setup the queues. */
+	rxconf->offloads = port_conf.rxmode.offloads;
 	for (q = 0; q < rx_rings; q ++) {
 		retval = rte_eth_rx_queue_setup(port, q, rx_ring_size,
 						rte_eth_dev_socket_id(port),
@@ -365,6 +335,7 @@ port_init(uint16_t port)
 			return retval;
 		}
 	}
+	txconf->offloads = port_conf.txmode.offloads;
 	for (q = 0; q < tx_rings; q ++) {
 		retval = rte_eth_tx_queue_setup(port, q, tx_ring_size,
 						rte_eth_dev_socket_id(port),
@@ -624,7 +595,8 @@ us_vhost_parse_args(int argc, char **argv)
 				} else {
 					mergeable = !!ret;
 					if (ret) {
-						vmdq_conf_default.rxmode.jumbo_frame = 1;
+						vmdq_conf_default.rxmode.offloads |=
+							DEV_RX_OFFLOAD_JUMBO_FRAME;
 						vmdq_conf_default.rxmode.max_rx_pkt_len
 							= JUMBO_FRAME_MAX_SIZE;
 					}
@@ -964,7 +936,8 @@ virtio_tx_route(struct vhost_dev *vdev, struct rte_mbuf *m, uint16_t vlan_tag)
 		struct vhost_dev *vdev2;
 
 		TAILQ_FOREACH(vdev2, &vhost_dev_list, global_vdev_entry) {
-			virtio_xmit(vdev2, vdev, m);
+			if (vdev2 != vdev)
+				virtio_xmit(vdev2, vdev, m);
 		}
 		goto queue2nic;
 	}

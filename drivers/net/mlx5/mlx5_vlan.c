@@ -36,7 +36,7 @@
 #include <assert.h>
 #include <stdint.h>
 
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_common.h>
 
 #include "mlx5_utils.h"
@@ -127,6 +127,11 @@ priv_vlan_strip_queue_set(struct priv *priv, uint16_t idx, int on)
 
 	DEBUG("set VLAN offloads 0x%x for port %d queue %d",
 	      vlan_offloads, rxq->port_id, idx);
+	if (!rxq_ctrl->ibv) {
+		/* Update related bits in RX queue. */
+		rxq->vlan_strip = !!on;
+		return;
+	}
 	mod = (struct ibv_wq_attr){
 		.attr_mask = IBV_WQ_ATTR_FLAGS,
 		.flags_mask = IBV_WQ_FLAGS_CVLAN_STRIPPING,
@@ -160,7 +165,7 @@ mlx5_vlan_strip_queue_set(struct rte_eth_dev *dev, uint16_t queue, int on)
 	struct priv *priv = dev->data->dev_private;
 
 	/* Validate hw support */
-	if (!priv->hw_vlan_strip) {
+	if (!priv->config.hw_vlan_strip) {
 		ERROR("VLAN stripping is not supported");
 		return;
 	}
@@ -191,9 +196,10 @@ mlx5_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 	unsigned int i;
 
 	if (mask & ETH_VLAN_STRIP_MASK) {
-		int hw_vlan_strip = !!dev->data->dev_conf.rxmode.hw_vlan_strip;
+		int hw_vlan_strip = !!(dev->data->dev_conf.rxmode.offloads &
+				       DEV_RX_OFFLOAD_VLAN_STRIP);
 
-		if (!priv->hw_vlan_strip) {
+		if (!priv->config.hw_vlan_strip) {
 			ERROR("VLAN stripping is not supported");
 			return 0;
 		}

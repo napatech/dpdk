@@ -47,7 +47,7 @@
 #pragma GCC diagnostic error "-Wpedantic"
 #endif
 
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_mbuf.h>
 #include <rte_mempool.h>
 
@@ -105,6 +105,10 @@ struct mlx4_rss {
 /** Tx element. */
 struct txq_elt {
 	struct rte_mbuf *buf; /**< Buffer. */
+	union {
+		volatile struct mlx4_wqe_ctrl_seg *wqe; /**< SQ WQE. */
+		volatile uint32_t *eocb; /**< End of completion burst. */
+	};
 };
 
 /** Rx queue counters. */
@@ -121,7 +125,6 @@ struct txq {
 	struct mlx4_cq mcq; /**< Info for directly manipulating the CQ. */
 	unsigned int elts_head; /**< Current index in (*elts)[]. */
 	unsigned int elts_tail; /**< First element awaiting completion. */
-	unsigned int elts_comp; /**< Number of packets awaiting completion. */
 	int elts_comp_cd; /**< Countdown for next completion. */
 	unsigned int elts_comp_cd_init; /**< Initial value for countdown. */
 	unsigned int elts_n; /**< (*elts)[] length. */
@@ -158,6 +161,8 @@ int mlx4_rss_attach(struct mlx4_rss *rss);
 void mlx4_rss_detach(struct mlx4_rss *rss);
 int mlx4_rxq_attach(struct rxq *rxq);
 void mlx4_rxq_detach(struct rxq *rxq);
+uint64_t mlx4_get_rx_port_offloads(struct priv *priv);
+uint64_t mlx4_get_rx_queue_offloads(struct priv *priv);
 int mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx,
 			uint16_t desc, unsigned int socket,
 			const struct rte_eth_rxconf *conf,
@@ -177,6 +182,7 @@ uint16_t mlx4_rx_burst_removed(void *dpdk_rxq, struct rte_mbuf **pkts,
 
 /* mlx4_txq.c */
 
+uint64_t mlx4_get_tx_port_offloads(struct priv *priv);
 int mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx,
 			uint16_t desc, unsigned int socket,
 			const struct rte_eth_txconf *conf);

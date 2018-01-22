@@ -179,6 +179,9 @@ enum index {
 	ITEM_GTP_TEID,
 	ITEM_GTPC,
 	ITEM_GTPU,
+	ITEM_GENEVE,
+	ITEM_GENEVE_VNI,
+	ITEM_GENEVE_PROTO,
 
 	/* Validate/create actions. */
 	ACTIONS,
@@ -483,6 +486,7 @@ static const enum index next_item[] = {
 	ITEM_GTP,
 	ITEM_GTPC,
 	ITEM_GTPU,
+	ITEM_GENEVE,
 	ZERO,
 };
 
@@ -630,6 +634,13 @@ static const enum index item_gre[] = {
 static const enum index item_gtp[] = {
   ITEM_GTP_VERSION,
   ITEM_GTP_TEID,
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_geneve[] = {
+	ITEM_GENEVE_VNI,
+	ITEM_GENEVE_PROTO,
 	ITEM_NEXT,
 	ZERO,
 };
@@ -1529,6 +1540,26 @@ static const struct token token_list[] = {
 		.priv = PRIV_ITEM(GTPU, sizeof(struct rte_flow_item_gtp)),
 		.next = NEXT(item_gtp),
 		.call = parse_vc,
+	},
+	[ITEM_GENEVE] = {
+		.name = "geneve",
+		.help = "match GENEVE header",
+		.priv = PRIV_ITEM(GENEVE, sizeof(struct rte_flow_item_geneve)),
+		.next = NEXT(item_geneve),
+		.call = parse_vc,
+	},
+	[ITEM_GENEVE_VNI] = {
+		.name = "vni",
+		.help = "virtual network identifier",
+		.next = NEXT(item_geneve, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_geneve, vni)),
+	},
+	[ITEM_GENEVE_PROTO] = {
+		.name = "protocol",
+		.help = "GENEVE protocol type",
+		.next = NEXT(item_geneve, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_geneve,
+					     protocol)),
 	},
 
 	/* Validate/create actions. */

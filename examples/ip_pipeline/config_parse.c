@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2016 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2016 Intel Corporation
  */
 
 #include <stdint.h>
@@ -97,14 +68,8 @@ static const struct app_link_params link_params_default = {
 		.rxmode = {
 			.mq_mode = ETH_MQ_RX_NONE,
 
-			.header_split   = 0, /* Header split */
-			.hw_ip_checksum = 0, /* IP checksum offload */
-			.hw_vlan_filter = 0, /* VLAN filtering */
-			.hw_vlan_strip  = 0, /* VLAN strip */
-			.hw_vlan_extend = 0, /* Extended VLAN */
-			.jumbo_frame    = 0, /* Jumbo frame support */
-			.hw_strip_crc   = 1, /* CRC strip by HW */
-			.enable_scatter = 0, /* Scattered packets RX handler */
+			.ignore_offload_bitfield = 1,
+			.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
 
 			.max_rx_pkt_len = 9000, /* Jumbo frame max packet len */
 			.split_hdr_size = 0, /* Header split buffer size */
@@ -158,8 +123,7 @@ static const struct app_pktq_hwq_out_params default_hwq_out_params = {
 		},
 		.tx_rs_thresh = 0,
 		.tx_free_thresh = 0,
-		.txq_flags = ETH_TXQ_FLAGS_NOMULTSEGS |
-			ETH_TXQ_FLAGS_NOOFFLOADS,
+		.txq_flags = ETH_TXQ_FLAGS_IGNORE,
 		.tx_deferred_start = 0,
 	}
 };

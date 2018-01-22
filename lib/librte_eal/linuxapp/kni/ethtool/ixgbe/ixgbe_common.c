@@ -1,23 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 /*******************************************************************************
 
   Intel 10 Gigabit PCI Express Linux driver
   Copyright(c) 1999 - 2012 Intel Corporation.
-
-  This program is free software; you can redistribute it and/or modify it
-  under the terms and conditions of the GNU General Public License,
-  version 2, as published by the Free Software Foundation.
-
-  This program is distributed in the hope it will be useful, but WITHOUT
-  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
-  more details.
-
-  You should have received a copy of the GNU General Public License along with
-  this program; if not, write to the Free Software Foundation, Inc.,
-  51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
-
-  The full GNU General Public License is included in this distribution in
-  the file called "LICENSE.GPL".
 
   Contact Information:
   e1000-devel Mailing List <e1000-devel@lists.sourceforge.net>
@@ -2415,7 +2400,7 @@ out:
 static s32 ixgbe_negotiate_fc(struct ixgbe_hw *hw, u32 adv_reg, u32 lp_reg,
 			      u32 adv_sym, u32 adv_asm, u32 lp_sym, u32 lp_asm)
 {
-	if ((!(adv_reg)) ||  (!(lp_reg)))
+	if (!adv_reg || !lp_reg)
 		return IXGBE_ERR_FC_NOT_NEGOTIATED;
 
 	if ((adv_reg & adv_sym) && (lp_reg & lp_sym)) {
@@ -3279,7 +3264,7 @@ s32 ixgbe_set_vfta_generic(struct ixgbe_hw *hw, u32 vlan, u32 vind,
 			vfta_changed = true;
 		}
 	} else {
-		if ((vfta & targetbit)) {
+		if (vfta & targetbit) {
 			vfta &= ~targetbit;
 			vfta_changed = true;
 		}
@@ -3392,7 +3377,7 @@ s32 ixgbe_set_vlvf_generic(struct ixgbe_hw *hw, u32 vlan, u32 vind,
 		if (bits) {
 			IXGBE_WRITE_REG(hw, IXGBE_VLVF(vlvf_index),
 					(IXGBE_VLVF_VIEN | vlan));
-			if ((!vlan_on) && (vfta_changed != NULL)) {
+			if (!vlan_on && (vfta_changed != NULL)) {
 				/* someone wants to clear the vfta entry
 				 * but some pools/VFs are still using it.
 				 * Ignore it. */

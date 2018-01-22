@@ -1,38 +1,12 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2016-2017 Intel Corporation
  */
 
 #include <stdio.h>
 #include <unistd.h>
 
+#include <rte_malloc.h>
+#include <rte_random.h>
 #include <rte_eal.h>
 #include <rte_cryptodev.h>
 #ifdef RTE_LIBRTE_PMD_CRYPTO_SCHEDULER
@@ -536,13 +510,45 @@ main(int argc, char **argv)
 		i++;
 	}
 
-	/* Get first size from range or list */
-	if (opts.inc_buffer_size != 0)
-		opts.test_buffer_size = opts.min_buffer_size;
-	else
-		opts.test_buffer_size = opts.buffer_size_list[0];
+	if (opts.imix_distribution_count != 0) {
+		uint8_t buffer_size_count = opts.buffer_size_count;
+		uint16_t distribution_total[buffer_size_count];
+		uint32_t op_idx;
+		uint32_t test_average_size = 0;
+		const uint32_t *buffer_size_list = opts.buffer_size_list;
+		const uint32_t *imix_distribution_list = opts.imix_distribution_list;
 
-	while (opts.test_buffer_size <= opts.max_buffer_size) {
+		opts.imix_buffer_sizes = rte_malloc(NULL,
+					sizeof(uint32_t) * opts.pool_sz,
+					0);
+		/*
+		 * Calculate accumulated distribution of
+		 * probabilities per packet size
+		 */
+		distribution_total[0] = imix_distribution_list[0];
+		for (i = 1; i < buffer_size_count; i++)
+			distribution_total[i] = imix_distribution_list[i] +
+				distribution_total[i-1];
+
+		/* Calculate a random sequence of packet sizes, based on distribution */
+		for (op_idx = 0; op_idx < opts.pool_sz; op_idx++) {
+			uint16_t random_number = rte_rand() %
+				distribution_total[buffer_size_count - 1];
+			for (i = 0; i < buffer_size_count; i++)
+				if (random_number < distribution_total[i])
+					break;
+
+			opts.imix_buffer_sizes[op_idx] = buffer_size_list[i];
+		}
+
+		/* Calculate average buffer size for the IMIX distribution */
+		for (i = 0; i < buffer_size_count; i++)
+			test_average_size += buffer_size_list[i] *
+				imix_distribution_list[i];
+
+		opts.test_buffer_size = test_average_size /
+				distribution_total[buffer_size_count - 1];
+
 		i = 0;
 		RTE_LCORE_FOREACH_SLAVE(lcore_id) {
 
@@ -561,14 +567,45 @@ main(int argc, char **argv)
 			rte_eal_wait_lcore(lcore_id);
 			i++;
 		}
+	} else {
 
 		/* Get next size from range or list */
 		if (opts.inc_buffer_size != 0)
-			opts.test_buffer_size += opts.inc_buffer_size;
-		else {
-			if (++buffer_size_idx == opts.buffer_size_count)
-				break;
-			opts.test_buffer_size = opts.buffer_size_list[buffer_size_idx];
+			opts.test_buffer_size = opts.min_buffer_size;
+		else
+			opts.test_buffer_size = opts.buffer_size_list[0];
+
+		while (opts.test_buffer_size <= opts.max_buffer_size) {
+			i = 0;
+			RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+
+				if (i == nb_cryptodevs)
+					break;
+
+				cdev_id = enabled_cdevs[i];
+
+				rte_eal_remote_launch(cperf_testmap[opts.test].runner,
+					ctx[cdev_id], lcore_id);
+				i++;
+			}
+			i = 0;
+			RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+
+				if (i == nb_cryptodevs)
+					break;
+				rte_eal_wait_lcore(lcore_id);
+				i++;
+			}
+
+			/* Get next size from range or list */
+			if (opts.inc_buffer_size != 0)
+				opts.test_buffer_size += opts.inc_buffer_size;
+			else {
+				if (++buffer_size_idx == opts.buffer_size_count)
+					break;
+				opts.test_buffer_size =
+					opts.buffer_size_list[buffer_size_idx];
+			}
 		}
 	}
 
@@ -607,7 +644,7 @@ err:
 	for (i = 0; i < nb_cryptodevs &&
 			i < RTE_CRYPTO_MAX_DEVS; i++)
 		rte_cryptodev_stop(enabled_cdevs[i]);
-
+	rte_free(opts.imix_buffer_sizes);
 	free_test_vector(t_vec, &opts);
 
 	printf("\n");

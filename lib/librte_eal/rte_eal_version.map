@@ -200,6 +200,15 @@ DPDK_17.11 {
 
 } DPDK_17.08;
 
+DPDK_18.02 {
+	global:
+
+	rte_hypervisor_get;
+	rte_hypervisor_get_name;
+	rte_vfio_clear_group;
+
+} DPDK_17.11;
+
 EXPERIMENTAL {
 	global:
 
@@ -208,6 +217,8 @@ EXPERIMENTAL {
 	rte_eal_devargs_remove;
 	rte_eal_hotplug_add;
 	rte_eal_hotplug_remove;
+	rte_service_attr_get;
+	rte_service_attr_reset_all;
 	rte_service_component_register;
 	rte_service_component_unregister;
 	rte_service_component_runstate_set;
@@ -235,4 +246,4 @@ EXPERIMENTAL {
 	rte_service_set_stats_enable;
 	rte_service_start_with_defaults;
 
-} DPDK_17.11;
+} DPDK_18.02;

@@ -1,32 +1,10 @@
-/*-
- *   BSD LICENSE
+/* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2016-2017 Solarflare Communications Inc.
+ * Copyright (c) 2016-2018 Solarflare Communications Inc.
  * All rights reserved.
  *
  * This software was jointly developed between OKTET Labs (under contract
  * for Solarflare) and Solarflare Communications, Inc.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
- * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
- * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef _SFC_RX_H
@@ -34,7 +12,7 @@
 
 #include <rte_mbuf.h>
 #include <rte_mempool.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 
 #include "efx.h"
 
@@ -121,6 +99,7 @@ struct sfc_efx_rxq {
 	/* Used on refill */
 	unsigned int			added;
 	unsigned int			pushed;
+	unsigned int			max_fill_level;
 	unsigned int			refill_threshold;
 	uint16_t			buf_size;
 	struct rte_mempool		*refill_mb_pool;
@@ -144,6 +123,7 @@ struct sfc_rxq_info {
 	unsigned int		max_entries;
 	unsigned int		entries;
 	efx_rxq_type_t		type;
+	unsigned int		type_flags;
 	struct sfc_rxq		*rxq;
 	boolean_t		deferred_start;
 	boolean_t		deferred_started;
@@ -161,6 +141,9 @@ int sfc_rx_qinit(struct sfc_adapter *sa, unsigned int rx_queue_id,
 void sfc_rx_qfini(struct sfc_adapter *sa, unsigned int sw_index);
 int sfc_rx_qstart(struct sfc_adapter *sa, unsigned int sw_index);
 void sfc_rx_qstop(struct sfc_adapter *sa, unsigned int sw_index);
+
+uint64_t sfc_rx_get_dev_offload_caps(struct sfc_adapter *sa);
+uint64_t sfc_rx_get_queue_offload_caps(struct sfc_adapter *sa);
 
 void sfc_rx_qflush_done(struct sfc_rxq *rxq);
 void sfc_rx_qflush_failed(struct sfc_rxq *rxq);

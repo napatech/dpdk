@@ -36,6 +36,7 @@ M: maintainers@dpdk.org
 
 Documentation (with overlaps)
 M: John McNamara <john.mcnamara@intel.com>
+M: Marko Kovacevic <marko.kovacevic@intel.com>
 F: README
 F: doc/
 
@@ -51,6 +52,7 @@ F: devtools/get-maintainer.sh
 F: devtools/git-log-fixes.sh
 F: devtools/load-devel-config
 F: devtools/test-build.sh
+F: license/
 
 
 Build System
@@ -113,7 +115,7 @@ F: test/test/test_tailq.c
 F: test/test/test_version.c
 
 Memory Allocation
-M: Sergio Gonzalez Monroy <sergio.gonzalez.monroy@intel.com>
+M: Anatoly Burakov <anatoly.burakov@intel.com>
 F: lib/librte_eal/common/include/rte_mem*
 F: lib/librte_eal/common/include/rte_malloc.h
 F: lib/librte_eal/common/*malloc*
@@ -133,7 +135,7 @@ F: examples/l2fwd-keepalive/
 F: doc/guides/sample_app_ug/keep_alive.rst
 
 Secondary process
-M: Sergio Gonzalez Monroy <sergio.gonzalez.monroy@intel.com>
+M: Anatoly Burakov <anatoly.burakov@intel.com>
 K: RTE_PROC_
 F: doc/guides/prog_guide/multi_proc_support.rst
 F: test/test/test_mp_secondary.c
@@ -203,19 +205,16 @@ F: drivers/bus/pci/linux/*vfio*
 
 FreeBSD EAL (with overlaps)
 M: Bruce Richardson <bruce.richardson@intel.com>
-M: Sergio Gonzalez Monroy <sergio.gonzalez.monroy@intel.com>
 F: lib/librte_eal/bsdapp/Makefile
 F: lib/librte_eal/bsdapp/eal/
 F: doc/guides/freebsd_gsg/
 
 FreeBSD contigmem
 M: Bruce Richardson <bruce.richardson@intel.com>
-M: Sergio Gonzalez Monroy <sergio.gonzalez.monroy@intel.com>
 F: lib/librte_eal/bsdapp/contigmem/
 
 FreeBSD UIO
 M: Bruce Richardson <bruce.richardson@intel.com>
-M: Sergio Gonzalez Monroy <sergio.gonzalez.monroy@intel.com>
 F: lib/librte_eal/bsdapp/nic_uio/
 
 
@@ -264,6 +263,17 @@ F: lib/librte_ether/rte_tm*
 Traffic Metering and Policing API - EXPERIMENTAL
 M: Cristian Dumitrescu <cristian.dumitrescu@intel.com>
 F: lib/librte_ether/rte_mtr*
+
+Baseband API - EXPERIMENTAL
+M: Amr Mokhtar <amr.mokhtar@intel.com>
+F: lib/librte_bbdev/
+F: doc/guides/prog_guide/bbdev.rst
+F: drivers/bbdev/
+F: doc/guides/bbdevs/
+F: app/test-bbdev/
+F: doc/guides/tools/testbbdev.rst
+F: examples/bbdev_app/
+F: doc/guides/sample_app_ug/bbdev_app.rst
 
 Crypto API
 M: Declan Doherty <declan.doherty@intel.com>
@@ -356,8 +366,8 @@ F: doc/guides/nics/ark.rst
 F: doc/guides/nics/features/ark.ini
 
 Broadcom bnxt
-M: Stephen Hurd <stephen.hurd@broadcom.com>
 M: Ajit Khaparde <ajit.khaparde@broadcom.com>
+M: Somnath Kotur <somnath.kotur@broadcom.com>
 F: drivers/net/bnxt/
 F: doc/guides/nics/bnxt.rst
 F: doc/guides/nics/features/bnxt.ini
@@ -392,13 +402,14 @@ F: doc/guides/nics/features/cxgbe.ini
 
 Cisco enic
 M: John Daley <johndale@cisco.com>
-M: Nelson Escobar <neescoba@cisco.com>
+M: Hyong Youb Kim <hyonkim@cisco.com>
 F: drivers/net/enic/
 F: doc/guides/nics/enic.rst
 F: doc/guides/nics/features/enic.ini
 
 Intel e1000
 M: Wenzhuo Lu <wenzhuo.lu@intel.com>
+T: git://dpdk.org/next/dpdk-next-net-intel
 F: drivers/net/e1000/
 F: doc/guides/nics/e1000em.rst
 F: doc/guides/nics/intel_vf.rst
@@ -408,14 +419,16 @@ F: doc/guides/nics/features/igb*.ini
 Intel ixgbe
 M: Wenzhuo Lu <wenzhuo.lu@intel.com>
 M: Konstantin Ananyev <konstantin.ananyev@intel.com>
+T: git://dpdk.org/next/dpdk-next-net-intel
 F: drivers/net/ixgbe/
 F: doc/guides/nics/ixgbe.rst
 F: doc/guides/nics/intel_vf.rst
 F: doc/guides/nics/features/ixgbe*.ini
 
 Intel i40e
-M: Jingjing Wu <jingjing.wu@intel.com>
 M: Beilei Xing <beilei.xing@intel.com>
+M: Qi Zhang <qi.z.zhang@intel.com>
+T: git://dpdk.org/next/dpdk-next-net-intel
 F: drivers/net/i40e/
 F: doc/guides/nics/i40e.rst
 F: doc/guides/nics/intel_vf.rst
@@ -424,11 +437,19 @@ F: doc/guides/nics/features/i40e*.ini
 Intel fm10k
 M: Qi Zhang <qi.z.zhang@intel.com>
 M: Xiao Wang <xiao.w.wang@intel.com>
+T: git://dpdk.org/next/dpdk-next-net-intel
 F: drivers/net/fm10k/
 F: doc/guides/nics/features/fm10k*.ini
 
+Intel avf
+M: Jingjing Wu <jingjing.wu@intel.com>
+M: Wenzhuo Lu <wenzhuo.lu@intel.com>
+F: drivers/net/avf/
+F: doc/guides/nics/features/avf*.ini
+
 Mellanox mlx4
 M: Adrien Mazarguil <adrien.mazarguil@6wind.com>
+T: git://dpdk.org/next/dpdk-next-net-mlx
 F: drivers/net/mlx4/
 F: doc/guides/nics/mlx4.rst
 F: doc/guides/nics/features/mlx4.ini
@@ -437,6 +458,7 @@ Mellanox mlx5
 M: Adrien Mazarguil <adrien.mazarguil@6wind.com>
 M: Nelio Laranjeiro <nelio.laranjeiro@6wind.com>
 M: Yongseok Koh <yskoh@mellanox.com>
+T: git://dpdk.org/next/dpdk-next-net-mlx
 F: drivers/net/mlx5/
 F: doc/guides/nics/mlx5.rst
 F: doc/guides/nics/features/mlx5.ini
@@ -450,6 +472,12 @@ M: Jianbo Liu <jianbo.liu@arm.com>
 F: drivers/net/mrvl/
 F: doc/guides/nics/mrvl.rst
 F: doc/guides/nics/features/mrvl.ini
+
+Microsoft vdev_netvsc - EXPERIMENTAL
+M: Matan Azrad <matan@mellanox.com>
+F: drivers/net/vdev_netvsc/
+F: doc/guides/nics/vdev_netvsc.rst
+F: doc/guides/nics/features/vdev_netvsc.ini
 
 Netcope szedata2
 M: Matej Vido <vido@cesnet.cz>
@@ -528,6 +556,7 @@ F: doc/guides/nics/features/vhost.ini
 Virtio PMD
 M: Yuanhan Liu <yliu@fridaylinux.org>
 M: Maxime Coquelin <maxime.coquelin@redhat.com>
+M: Tiwei Bie <tiwei.bie@intel.com>
 T: git://dpdk.org/next/dpdk-next-virtio
 F: drivers/net/virtio/
 F: doc/guides/nics/virtio.rst
@@ -630,7 +659,7 @@ M: Jacek Siuda <jck@semihalf.com>
 M: Tomasz Duszynski <tdu@semihalf.com>
 M: Dmitri Epshtein <dima@marvell.com>
 M: Natalie Samsonov <nsamsono@marvell.com>
-M: Jianbo Liu <jianbo.liu@arm.org>
+M: Jianbo Liu <jianbo.liu@arm.com>
 F: drivers/crypto/mrvl/
 F: doc/guides/cryptodevs/mrvl.rst
 F: doc/guides/cryptodevs/features/mrvl.ini
@@ -683,7 +712,6 @@ Cavium OCTEONTX ssovf
 M: Jerin Jacob <jerin.jacob@caviumnetworks.com>
 M: Santosh Shukla <santosh.shukla@caviumnetworks.com>
 F: drivers/event/octeontx/
-F: test/test/test_eventdev_octeontx.c
 F: doc/guides/eventdevs/octeontx.rst
 
 NXP DPAA2 eventdev
@@ -692,13 +720,24 @@ M: Nipun Gupta <nipun.gupta@nxp.com>
 F: drivers/event/dpaa2/
 F: doc/guides/eventdevs/dpaa2.rst
 
+NXP DPAA eventdev
+M: Hemant Agrawal <hemant.agrawal@nxp.com>
+M: Sunil Kumar Kori <sunil.kori@nxp.com>
+F: drivers/event/dpaa/
+F: doc/guides/eventdevs/dpaa.rst
+
 Software Eventdev PMD
 M: Harry van Haaren <harry.van.haaren@intel.com>
 F: drivers/event/sw/
-F: test/test/test_eventdev_sw.c
 F: doc/guides/eventdevs/sw.rst
-F: examples/eventdev_pipeline_sw_pmd/
-F: doc/guides/sample_app_ug/eventdev_pipeline_sw_pmd.rst
+F: examples/eventdev_pipeline/
+F: doc/guides/sample_app_ug/eventdev_pipeline.rst
+
+Software OPDL Eventdev PMD
+M: Liang Ma <liang.j.ma@intel.com>
+M: Peter Mccarthy <peter.mccarthy@intel.com>
+F: drivers/event/opdl/
+F: doc/guides/eventdevs/opdl.rst
 
 
 Packet processing
@@ -924,6 +963,7 @@ F: test/test/virtual_pmd.c
 F: test/test/virtual_pmd.h
 
 Driver testing tool
+M: Wenzhuo Lu <wenzhuo.lu@intel.com>
 M: Jingjing Wu <jingjing.wu@intel.com>
 F: app/test-pmd/
 F: doc/guides/testpmd_app_ug/
@@ -966,8 +1006,8 @@ M: Pablo de Lara <pablo.de.lara.guarch@intel.com>
 F: examples/helloworld/
 F: doc/guides/sample_app_ug/hello_world.rst
 
-M: Sergio Gonzalez Monroy <sergio.gonzalez.monroy@intel.com>
 M: Radu Nicolau <radu.nicolau@intel.com>
+M: Akhil Goyal <akhil.goyal@nxp.com>
 F: examples/ipsec-secgw/
 F: doc/guides/sample_app_ug/ipsec_secgw.rst
 

@@ -1,32 +1,10 @@
-/*-
- *   BSD LICENSE
+/* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2016-2017 Solarflare Communications Inc.
+ * Copyright (c) 2016-2018 Solarflare Communications Inc.
  * All rights reserved.
  *
  * This software was jointly developed between OKTET Labs (under contract
  * for Solarflare) and Solarflare Communications, Inc.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
- * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
- * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <rte_debug.h>
@@ -565,10 +543,8 @@ void
 sfc_ev_mgmt_qpoll(struct sfc_adapter *sa)
 {
 	if (rte_spinlock_trylock(&sa->mgmt_evq_lock)) {
-		struct sfc_evq *mgmt_evq = sa->mgmt_evq;
-
-		if (mgmt_evq->init_state == SFC_EVQ_STARTED)
-			sfc_ev_qpoll(mgmt_evq);
+		if (sa->mgmt_evq_running)
+			sfc_ev_qpoll(sa->mgmt_evq);
 
 		rte_spinlock_unlock(&sa->mgmt_evq_lock);
 	}
@@ -734,19 +710,25 @@ sfc_ev_start(struct sfc_adapter *sa)
 		goto fail_ev_init;
 
 	/* Start management EVQ used for global events */
-	rte_spinlock_lock(&sa->mgmt_evq_lock);
 
+	/*
+	 * Management event queue start polls the queue, but it cannot
+	 * interfere with other polling contexts since mgmt_evq_running
+	 * is false yet.
+	 */
 	rc = sfc_ev_qstart(sa->mgmt_evq, sa->mgmt_evq_index);
 	if (rc != 0)
 		goto fail_mgmt_evq_start;
 
+	rte_spinlock_lock(&sa->mgmt_evq_lock);
+	sa->mgmt_evq_running = true;
+	rte_spinlock_unlock(&sa->mgmt_evq_lock);
+
 	if (sa->intr.lsc_intr) {
 		rc = sfc_ev_qprime(sa->mgmt_evq);
 		if (rc != 0)
-			goto fail_evq0_prime;
+			goto fail_mgmt_evq_prime;
 	}
-
-	rte_spinlock_unlock(&sa->mgmt_evq_lock);
 
 	/*
 	 * Start management EVQ polling. If interrupts are disabled
@@ -763,11 +745,10 @@ sfc_ev_start(struct sfc_adapter *sa)
 
 	return 0;
 
-fail_evq0_prime:
+fail_mgmt_evq_prime:
 	sfc_ev_qstop(sa->mgmt_evq);
 
 fail_mgmt_evq_start:
-	rte_spinlock_unlock(&sa->mgmt_evq_lock);
 	efx_ev_fini(sa->nic);
 
 fail_ev_init:
@@ -783,8 +764,10 @@ sfc_ev_stop(struct sfc_adapter *sa)
 	sfc_ev_mgmt_periodic_qpoll_stop(sa);
 
 	rte_spinlock_lock(&sa->mgmt_evq_lock);
-	sfc_ev_qstop(sa->mgmt_evq);
+	sa->mgmt_evq_running = false;
 	rte_spinlock_unlock(&sa->mgmt_evq_lock);
+
+	sfc_ev_qstop(sa->mgmt_evq);
 
 	efx_ev_fini(sa->nic);
 }

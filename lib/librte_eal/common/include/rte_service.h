@@ -1,33 +1,5 @@
-/*
- *   BSD LICENSE
- *
- *   Copyright(c) 2017 Intel Corporation. All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2017 Intel Corporation
  */
 
 #ifndef _RTE_SERVICE_H_
@@ -59,6 +31,7 @@ extern "C" {
 #include <stdint.h>
 #include <sys/queue.h>
 
+#include <rte_config.h>
 #include <rte_lcore.h>
 
 #define RTE_SERVICE_NAME_MAX 32
@@ -274,7 +247,9 @@ int32_t rte_service_run_iter_on_app_lcore(uint32_t id,
  * Start a service core.
  *
  * Starting a core makes the core begin polling. Any services assigned to it
- * will be run as fast as possible.
+ * will be run as fast as possible. The application must ensure that the lcore
+ * is in a launchable state: e.g. call *rte_eal_lcore_wait* on the lcore_id
+ * before calling this function.
  *
  * @retval 0 Success
  * @retval -EINVAL Failed to start core. The *lcore_id* passed in is not
@@ -419,6 +394,40 @@ int32_t rte_service_lcore_count_services(uint32_t lcore);
  * @retval -EINVAL Invalid service id provided
  */
 int32_t rte_service_dump(FILE *f, uint32_t id);
+
+/**
+ * Returns the number of cycles that this service has consumed
+ */
+#define RTE_SERVICE_ATTR_CYCLES 0
+
+/**
+ * Returns the count of invocations of this service function
+ */
+#define RTE_SERVICE_ATTR_CALL_COUNT 1
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
+ * Get an attribute from a service.
+ *
+ * @retval 0 Success, the attribute value has been written to *attr_value*.
+ *         -EINVAL Invalid id, attr_id or attr_value was NULL.
+ */
+int32_t rte_service_attr_get(uint32_t id, uint32_t attr_id,
+			     uint32_t *attr_value);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
+ * Reset all attribute values of a service.
+ *
+ * @param id The service to reset all statistics of
+ * @retval 0 Successfully reset attributes
+ *         -EINVAL Invalid service id provided
+ */
+int32_t rte_service_attr_reset_all(uint32_t id);
 
 #ifdef __cplusplus
 }

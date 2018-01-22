@@ -138,18 +138,22 @@ init_port(void)
 	struct rte_eth_conf port_conf = {
 		.rxmode = {
 			.split_hdr_size = 0,
-			/**< Header Split disabled */
-			.header_split   = 0,
-			/**< IP checksum offload disabled */
-			.hw_ip_checksum = 0,
-			/**< VLAN filtering disabled */
-			.hw_vlan_filter = 0,
-			/**< Jumbo Frame Support disabled */
-			.jumbo_frame    = 0,
-			/**< CRC stripped by hardware */
-			.hw_strip_crc   = 1,
+			.ignore_offload_bitfield = 1,
+			.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
+		},
+		.txmode = {
+			.offloads =
+				DEV_TX_OFFLOAD_VLAN_INSERT |
+				DEV_TX_OFFLOAD_IPV4_CKSUM  |
+				DEV_TX_OFFLOAD_UDP_CKSUM   |
+				DEV_TX_OFFLOAD_TCP_CKSUM   |
+				DEV_TX_OFFLOAD_SCTP_CKSUM  |
+				DEV_TX_OFFLOAD_TCP_TSO,
 		},
 	};
+	struct rte_eth_txconf txq_conf;
+	struct rte_eth_rxconf rxq_conf;
+	struct rte_eth_dev_info dev_info;
 
 	printf(":: initializing port: %d\n", port_id);
 	ret = rte_eth_dev_configure(port_id,
@@ -160,15 +164,32 @@ init_port(void)
 			ret, port_id);
 	}
 
+	rte_eth_dev_info_get(port_id, &dev_info);
+	rxq_conf = dev_info.default_rxconf;
+	rxq_conf.offloads = port_conf.rxmode.offloads;
 	/* only set Rx queues: something we care only so far */
 	for (i = 0; i < nr_queues; i++) {
 		ret = rte_eth_rx_queue_setup(port_id, i, 512,
 				     rte_eth_dev_socket_id(port_id),
-				     NULL,
+				     &rxq_conf,
 				     mbuf_pool);
 		if (ret < 0) {
 			rte_exit(EXIT_FAILURE,
 				":: Rx queue setup failed: err=%d, port=%u\n",
+				ret, port_id);
+		}
+	}
+
+	txq_conf = dev_info.default_txconf;
+	txq_conf.offloads = port_conf.txmode.offloads;
+
+	for (i = 0; i < nr_queues; i++) {
+		ret = rte_eth_tx_queue_setup(port_id, i, 512,
+				rte_eth_dev_socket_id(port_id),
+				&txq_conf);
+		if (ret < 0) {
+			rte_exit(EXIT_FAILURE,
+				":: Tx queue setup failed: err=%d, port=%u\n",
 				ret, port_id);
 		}
 	}

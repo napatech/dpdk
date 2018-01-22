@@ -76,6 +76,24 @@ struct arp_hdr {
 	struct arp_ipv4 arp_data;
 } __attribute__((__packed__));
 
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
+ * Make a RARP packet based on MAC addr.
+ *
+ * @param mpool
+ *   Pointer to the rte_mempool
+ * @param mac
+ *   Pointer to the MAC addr
+ *
+ * @return
+ *   - RARP packet pointer on success, or NULL on error
+ */
+struct rte_mbuf *
+rte_net_make_rarp_packet(struct rte_mempool *mpool,
+		const struct ether_addr *mac);
+
 #ifdef __cplusplus
 }
 #endif

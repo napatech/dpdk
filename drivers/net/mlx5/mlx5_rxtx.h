@@ -114,8 +114,7 @@ struct mlx5_rxq_data {
 	unsigned int elts_n:4; /* Log 2 of Mbufs. */
 	unsigned int rss_hash:1; /* RSS hash result is enabled. */
 	unsigned int mark:1; /* Marked flow available on the queue. */
-	unsigned int pending_err:1; /* CQE error needs to be handled. */
-	unsigned int :14; /* Remaining bits. */
+	unsigned int :15; /* Remaining bits. */
 	volatile uint32_t *rq_db;
 	volatile uint32_t *cq_db;
 	uint16_t port_id;
@@ -185,13 +184,14 @@ struct mlx5_txq_data {
 	uint16_t elts_comp; /* Counter since last completion request. */
 	uint16_t mpw_comp; /* WQ index since last completion request. */
 	uint16_t cq_ci; /* Consumer index for completion queue. */
+#ifndef NDEBUG
 	uint16_t cq_pi; /* Producer index for completion queue. */
+#endif
 	uint16_t wqe_ci; /* Consumer index for work queue. */
 	uint16_t wqe_pi; /* Producer index for work queue. */
 	uint16_t elts_n:4; /* (*elts)[] length (in log2). */
 	uint16_t cqe_n:4; /* Number of CQ elements (in log2). */
 	uint16_t wqe_n:4; /* Number of of WQ elements (in log2). */
-	uint16_t inline_en:1; /* When set inline is enabled. */
 	uint16_t tso_en:1; /* When set hardware TSO is enabled. */
 	uint16_t tunnel_en:1;
 	/* When set TX offload for tunneled packets are supported. */
@@ -200,7 +200,7 @@ struct mlx5_txq_data {
 	uint16_t inline_max_packet_sz; /* Max packet size for inlining. */
 	uint16_t mr_cache_idx; /* Index of last hit entry. */
 	uint32_t qp_num_8s; /* QP number shifted by 8. */
-	uint32_t flags; /* Flags for Tx Queue. */
+	uint64_t offloads; /* Offloads for Tx Queue. */
 	volatile struct mlx5_cqe (*cqes)[]; /* Completion queue. */
 	volatile void *wqes; /* Work queue (use volatile to write into). */
 	volatile uint32_t *qp_db; /* Work queue doorbell. */
@@ -252,6 +252,7 @@ int mlx5_priv_rxq_ibv_releasable(struct priv *, struct mlx5_rxq_ibv *);
 int mlx5_priv_rxq_ibv_verify(struct priv *);
 struct mlx5_rxq_ctrl *mlx5_priv_rxq_new(struct priv *, uint16_t,
 					uint16_t, unsigned int,
+					const struct rte_eth_rxconf *,
 					struct rte_mempool *);
 struct mlx5_rxq_ctrl *mlx5_priv_rxq_get(struct priv *, uint16_t);
 int mlx5_priv_rxq_release(struct priv *, uint16_t);
@@ -272,6 +273,8 @@ struct mlx5_hrxq *mlx5_priv_hrxq_get(struct priv *, uint8_t *, uint8_t,
 				     uint64_t, uint16_t [], uint16_t);
 int mlx5_priv_hrxq_release(struct priv *, struct mlx5_hrxq *);
 int mlx5_priv_hrxq_ibv_verify(struct priv *);
+uint64_t mlx5_priv_get_rx_port_offloads(struct priv *);
+uint64_t mlx5_priv_get_rx_queue_offloads(struct priv *);
 
 /* mlx5_txq.c */
 
@@ -292,6 +295,7 @@ int mlx5_priv_txq_release(struct priv *, uint16_t);
 int mlx5_priv_txq_releasable(struct priv *, uint16_t);
 int mlx5_priv_txq_verify(struct priv *);
 void txq_alloc_elts(struct mlx5_txq_ctrl *);
+uint64_t mlx5_priv_get_tx_port_offloads(struct priv *);
 
 /* mlx5_rxtx.c */
 
@@ -309,8 +313,8 @@ int mlx5_rx_descriptor_status(void *, uint16_t);
 int mlx5_tx_descriptor_status(void *, uint16_t);
 
 /* Vectorized version of mlx5_rxtx.c */
-int priv_check_raw_vec_tx_support(struct priv *);
-int priv_check_vec_tx_support(struct priv *);
+int priv_check_raw_vec_tx_support(struct priv *, struct rte_eth_dev *);
+int priv_check_vec_tx_support(struct priv *, struct rte_eth_dev *);
 int rxq_check_vec_support(struct mlx5_rxq_data *);
 int priv_check_vec_rx_support(struct priv *);
 uint16_t mlx5_tx_burst_raw_vec(void *, struct rte_mbuf **, uint16_t);
@@ -615,6 +619,91 @@ static __rte_always_inline void
 mlx5_tx_dbrec(struct mlx5_txq_data *txq, volatile struct mlx5_wqe *wqe)
 {
 	mlx5_tx_dbrec_cond_wmb(txq, wqe, 1);
+}
+
+/**
+ * Convert the Checksum offloads to Verbs.
+ *
+ * @param txq_data
+ *   Pointer to the Tx queue.
+ * @param buf
+ *   Pointer to the mbuf.
+ *
+ * @return
+ *   the converted cs_flags.
+ */
+static __rte_always_inline uint8_t
+txq_ol_cksum_to_cs(struct mlx5_txq_data *txq_data, struct rte_mbuf *buf)
+{
+	uint8_t cs_flags = 0;
+
+	/* Should we enable HW CKSUM offload */
+	if (buf->ol_flags &
+	    (PKT_TX_IP_CKSUM | PKT_TX_TCP_CKSUM | PKT_TX_UDP_CKSUM |
+	     PKT_TX_OUTER_IP_CKSUM)) {
+		if (txq_data->tunnel_en &&
+		    (buf->ol_flags &
+		     (PKT_TX_TUNNEL_GRE | PKT_TX_TUNNEL_VXLAN))) {
+			cs_flags = MLX5_ETH_WQE_L3_INNER_CSUM |
+				   MLX5_ETH_WQE_L4_INNER_CSUM;
+			if (buf->ol_flags & PKT_TX_OUTER_IP_CKSUM)
+				cs_flags |= MLX5_ETH_WQE_L3_CSUM;
+		} else {
+			cs_flags = MLX5_ETH_WQE_L3_CSUM |
+				   MLX5_ETH_WQE_L4_CSUM;
+		}
+	}
+	return cs_flags;
+}
+
+/**
+ * Count the number of contiguous single segment packets.
+ *
+ * @param pkts
+ *   Pointer to array of packets.
+ * @param pkts_n
+ *   Number of packets.
+ *
+ * @return
+ *   Number of contiguous single segment packets.
+ */
+static __rte_always_inline unsigned int
+txq_count_contig_single_seg(struct rte_mbuf **pkts, uint16_t pkts_n)
+{
+	unsigned int pos;
+
+	if (!pkts_n)
+		return 0;
+	/* Count the number of contiguous single segment packets. */
+	for (pos = 0; pos < pkts_n; ++pos)
+		if (NB_SEGS(pkts[pos]) > 1)
+			break;
+	return pos;
+}
+
+/**
+ * Count the number of contiguous multi-segment packets.
+ *
+ * @param pkts
+ *   Pointer to array of packets.
+ * @param pkts_n
+ *   Number of packets.
+ *
+ * @return
+ *   Number of contiguous multi-segment packets.
+ */
+static __rte_always_inline unsigned int
+txq_count_contig_multi_seg(struct rte_mbuf **pkts, uint16_t pkts_n)
+{
+	unsigned int pos;
+
+	if (!pkts_n)
+		return 0;
+	/* Count the number of contiguous multi-segment packets. */
+	for (pos = 0; pos < pkts_n; ++pos)
+		if (NB_SEGS(pkts[pos]) == 1)
+			break;
+	return pos;
 }
 
 #endif /* RTE_PMD_MLX5_RXTX_H_ */

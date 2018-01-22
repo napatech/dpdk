@@ -48,6 +48,8 @@ SFC EFX PMD has support for:
 
 - IPv4/IPv6 TCP/UDP transmit checksum offload
 
+- Inner IPv4/IPv6 TCP/UDP transmit checksum offload
+
 - Port hardware statistics
 
 - Extended statistics (see Solarflare Server Adapter User's Guide for
@@ -68,6 +70,8 @@ SFC EFX PMD has support for:
 - Multicast MAC filter
 
 - IPv4/IPv6 TCP/UDP receive checksum offload
+
+- Inner IPv4/IPv6 TCP/UDP receive checksum offload
 
 - Received packet type information
 
@@ -114,6 +118,26 @@ buffer for the auxiliary packet information provided by the NIC up to
 extra 269 (14 bytes prefix plus up to 255 bytes for end padding) bytes may be
 required in the receive buffer.
 It should be taken into account when mbuf pool for receive is created.
+
+
+Tunnels support
+---------------
+
+NVGRE, VXLAN and GENEVE tunnels are supported on SFN8xxx family adapters
+with full-feature firmware variant running.
+**sfboot** should be used to configure NIC to run full-feature firmware variant.
+See Solarflare Server Adapter User's Guide for details.
+
+SFN8xxx family adapters provide either inner or outer packet classes.
+If adapter firmware advertises support for tunnels then the PMD
+configures the hardware to report inner classes, and outer classes are
+not reported in received packets.
+However, for VXLAN and GENEVE tunnels the PMD does report UDP as the
+outer layer 4 packet type.
+
+SFN8xxx family adapters report GENEVE packets as VXLAN.
+If UDP ports are configured for only one tunnel type then it is safe to
+treat VXLAN packet type indication as the corresponding UDP tunnel type.
 
 
 Flow API support

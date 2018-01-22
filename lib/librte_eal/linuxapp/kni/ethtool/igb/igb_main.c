@@ -1,23 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 /*******************************************************************************
 
   Intel(R) Gigabit Ethernet Linux driver
   Copyright(c) 2007-2013 Intel Corporation.
-
-  This program is free software; you can redistribute it and/or modify it
-  under the terms and conditions of the GNU General Public License,
-  version 2, as published by the Free Software Foundation.
-
-  This program is distributed in the hope it will be useful, but WITHOUT
-  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
-  more details.
-
-  You should have received a copy of the GNU General Public License along with
-  this program; if not, write to the Free Software Foundation, Inc.,
-  51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
-
-  The full GNU General Public License is included in this distribution in
-  the file called "LICENSE.GPL".
 
   Contact Information:
   e1000-devel Mailing List <e1000-devel@lists.sourceforge.net>
@@ -137,11 +122,20 @@ static void igb_clean_all_tx_rings(struct igb_adapter *);
 static void igb_clean_all_rx_rings(struct igb_adapter *);
 static void igb_clean_tx_ring(struct igb_ring *);
 static void igb_set_rx_mode(struct net_device *);
+#ifdef HAVE_TIMER_SETUP
+static void igb_update_phy_info(struct timer_list *);
+static void igb_watchdog(struct timer_list *);
+#else
 static void igb_update_phy_info(unsigned long);
 static void igb_watchdog(unsigned long);
+#endif
 static void igb_watchdog_task(struct work_struct *);
 static void igb_dma_err_task(struct work_struct *);
+#ifdef HAVE_TIMER_SETUP
+static void igb_dma_err_timer(struct timer_list *);
+#else
 static void igb_dma_err_timer(unsigned long data);
+#endif
 static netdev_tx_t igb_xmit_frame(struct sk_buff *skb, struct net_device *);
 static struct net_device_stats *igb_get_stats(struct net_device *);
 static int igb_change_mtu(struct net_device *, int);
@@ -2806,6 +2800,12 @@ static int __devinit igb_probe(struct pci_dev *pdev,
 	/* Check if Media Autosense is enabled */
 	if (hw->mac.type == e1000_82580)
 		igb_init_mas(adapter);
+#ifdef HAVE_TIMER_SETUP
+	timer_setup(&adapter->watchdog_timer, &igb_watchdog, 0);
+	if (adapter->flags & IGB_FLAG_DETECT_BAD_DMA)
+		timer_setup(&adapter->dma_err_timer, &igb_dma_err_timer, 0);
+	timer_setup(&adapter->phy_info_timer, &igb_update_phy_info, 0);
+#else
 	setup_timer(&adapter->watchdog_timer, &igb_watchdog,
 	            (unsigned long) adapter);
 	if (adapter->flags & IGB_FLAG_DETECT_BAD_DMA)
@@ -2813,6 +2813,7 @@ static int __devinit igb_probe(struct pci_dev *pdev,
 			    (unsigned long) adapter);
 	setup_timer(&adapter->phy_info_timer, &igb_update_phy_info,
 	            (unsigned long) adapter);
+#endif
 
 	INIT_WORK(&adapter->reset_task, igb_reset_task);
 	INIT_WORK(&adapter->watchdog_task, igb_watchdog_task);
@@ -2993,7 +2994,7 @@ static int __devinit igb_probe(struct pci_dev *pdev,
 		case e1000_i211:
 			/* Enable EEE for internal copper PHY devices */
 			err = e1000_set_eee_i350(hw);
-			if ((!err) &&
+			if (!err &&
 			    (adapter->flags & IGB_FLAG_EEE))
 				adapter->eee_advert =
 					MDIO_EEE_100TX | MDIO_EEE_1000T;
@@ -4543,9 +4544,15 @@ static void igb_spoof_check(struct igb_adapter *adapter)
 
 /* Need to wait a few seconds after link up to get diagnostic information from
  * the phy */
+#ifdef HAVE_TIMER_SETUP
+static void igb_update_phy_info(struct timer_list *t)
+{
+	struct igb_adapter *adapter = from_timer(adapter, t, phy_info_timer);
+#else
 static void igb_update_phy_info(unsigned long data)
 {
 	struct igb_adapter *adapter = (struct igb_adapter *) data;
+#endif
 	e1000_get_phy_info(&adapter->hw);
 }
 
@@ -4594,9 +4601,15 @@ bool igb_has_link(struct igb_adapter *adapter)
  * igb_watchdog - Timer Call-back
  * @data: pointer to adapter cast into an unsigned long
  **/
+#ifdef HAVE_TIMER_SETUP
+static void igb_watchdog(struct timer_list *t)
+{
+	struct igb_adapter *adapter = from_timer(adapter, t, watchdog_timer);
+#else
 static void igb_watchdog(unsigned long data)
 {
 	struct igb_adapter *adapter = (struct igb_adapter *)data;
+#endif
 	/* Do the rest outside of interrupt context */
 	schedule_work(&adapter->watchdog_task);
 }
@@ -4854,9 +4867,15 @@ dma_timer_reset:
  * igb_dma_err_timer - Timer Call-back
  * @data: pointer to adapter cast into an unsigned long
  **/
+#ifdef HAVE_TIMER_SETUP
+static void igb_dma_err_timer(struct timer_list *t)
+{
+	struct igb_adapter *adapter = from_timer(adapter, t, dma_err_timer);
+#else
 static void igb_dma_err_timer(unsigned long data)
 {
 	struct igb_adapter *adapter = (struct igb_adapter *)data;
+#endif
 	/* Do the rest outside of interrupt context */
 	schedule_work(&adapter->dma_err_task);
 }
@@ -4988,7 +5007,7 @@ static void igb_update_itr(struct igb_q_vector *q_vector,
 				itrval = bulk_latency;
 			} else if ((packets < 10) || ((bytes/packets) > 1200)) {
 				itrval = bulk_latency;
-			} else if ((packets > 35)) {
+			} else if (packets > 35) {
 				itrval = lowest_latency;
 			}
 		} else if (bytes/packets > 2000) {
@@ -10051,6 +10070,12 @@ int igb_kni_probe(struct pci_dev *pdev,
 		igb_init_mas(adapter);
 
 #ifdef NO_KNI
+#ifdef HAVE_TIMER_SETUP
+	timer_setup(&adapter->watchdog_timer, &igb_watchdog, 0);
+	if (adapter->flags & IGB_FLAG_DETECT_BAD_DMA)
+		timer_setup(&adapter->dma_err_timer, &igb_dma_err_timer, 0);
+	timer_setup(&adapter->phy_info_timer, &igb_update_phy_info, 0);
+#else
 	setup_timer(&adapter->watchdog_timer, &igb_watchdog,
 	            (unsigned long) adapter);
 	if (adapter->flags & IGB_FLAG_DETECT_BAD_DMA)
@@ -10058,6 +10083,7 @@ int igb_kni_probe(struct pci_dev *pdev,
 			    (unsigned long) adapter);
 	setup_timer(&adapter->phy_info_timer, &igb_update_phy_info,
 	            (unsigned long) adapter);
+#endif
 
 	INIT_WORK(&adapter->reset_task, igb_reset_task);
 	INIT_WORK(&adapter->watchdog_task, igb_watchdog_task);

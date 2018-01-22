@@ -1,34 +1,8 @@
-/*-
- *   BSD LICENSE
+/* SPDX-License-Identifier: BSD-3-Clause
  *
  *   Copyright (c) 2015-2016 Freescale Semiconductor, Inc. All rights reserved.
- *   Copyright 2016 NXP.
+ *   Copyright 2016 NXP
  *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Freescale Semiconductor, Inc nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <unistd.h>
@@ -48,7 +22,7 @@
 
 #include <eal_filesystem.h>
 #include <rte_mbuf.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_malloc.h>
 #include <rte_memcpy.h>
 #include <rte_string_fns.h>
@@ -249,7 +223,10 @@ int rte_fslmc_vfio_dmamap(void)
 		dma_map.size = memseg[i].len;
 		dma_map.vaddr = memseg[i].addr_64;
 #ifdef RTE_LIBRTE_DPAA2_USE_PHYS_IOVA
-		dma_map.iova = memseg[i].phys_addr;
+		if (rte_eal_iova_mode() == RTE_IOVA_VA)
+			dma_map.iova = dma_map.vaddr;
+		else
+			dma_map.iova = memseg[i].iova;
 #else
 		dma_map.iova = dma_map.vaddr;
 #endif
@@ -660,12 +637,14 @@ fslmc_vfio_setup_group(void)
 	if (ret) {
 		FSLMC_VFIO_LOG(ERR, "VFIO error getting group status");
 		close(vfio_group.fd);
+		rte_vfio_clear_group(vfio_group.fd);
 		return ret;
 	}
 
 	if (!(status.flags & VFIO_GROUP_FLAGS_VIABLE)) {
 		FSLMC_VFIO_LOG(ERR, "VFIO group not viable");
 		close(vfio_group.fd);
+		rte_vfio_clear_group(vfio_group.fd);
 		return -EPERM;
 	}
 	/* Since Group is VIABLE, Store the groupid */
@@ -680,6 +659,7 @@ fslmc_vfio_setup_group(void)
 				"Error connecting container with groupid %d",
 				groupid);
 			close(vfio_group.fd);
+			rte_vfio_clear_group(vfio_group.fd);
 			return ret;
 		}
 	}
@@ -690,6 +670,7 @@ fslmc_vfio_setup_group(void)
 		FSLMC_VFIO_LOG(ERR, "Error getting device %s fd from group %d",
 			       g_container, vfio_group.groupid);
 		close(vfio_group.fd);
+		rte_vfio_clear_group(vfio_group.fd);
 		return ret;
 	}
 	container_device_fd = ret;

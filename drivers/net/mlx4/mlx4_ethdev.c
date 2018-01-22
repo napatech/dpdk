@@ -63,7 +63,7 @@
 
 #include <rte_bus_pci.h>
 #include <rte_errno.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_ether.h>
 #include <rte_flow.h>
 #include <rte_pci.h>
@@ -766,18 +766,10 @@ mlx4_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 	info->max_rx_queues = max;
 	info->max_tx_queues = max;
 	info->max_mac_addrs = RTE_DIM(priv->mac);
-	info->rx_offload_capa = 0;
-	info->tx_offload_capa = 0;
-	if (priv->hw_csum) {
-		info->tx_offload_capa |= (DEV_TX_OFFLOAD_IPV4_CKSUM |
-					  DEV_TX_OFFLOAD_UDP_CKSUM |
-					  DEV_TX_OFFLOAD_TCP_CKSUM);
-		info->rx_offload_capa |= (DEV_RX_OFFLOAD_IPV4_CKSUM |
-					  DEV_RX_OFFLOAD_UDP_CKSUM |
-					  DEV_RX_OFFLOAD_TCP_CKSUM);
-	}
-	if (priv->hw_csum_l2tun)
-		info->tx_offload_capa |= DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM;
+	info->tx_offload_capa = mlx4_get_tx_port_offloads(priv);
+	info->rx_queue_offload_capa = mlx4_get_rx_queue_offloads(priv);
+	info->rx_offload_capa = (mlx4_get_rx_port_offloads(priv) |
+				 info->rx_queue_offload_capa);
 	if (mlx4_get_ifname(priv, &ifname) == 0)
 		info->if_index = if_nametoindex(ifname);
 	info->hash_key_size = MLX4_RSS_HASH_KEY_SIZE;
@@ -1059,4 +1051,24 @@ mlx4_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 			return ptypes;
 	}
 	return NULL;
+}
+
+/**
+ * Check if mlx4 device was removed.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ *
+ * @return
+ *   1 when device is removed, otherwise 0.
+ */
+int
+mlx4_is_removed(struct rte_eth_dev *dev)
+{
+	struct ibv_device_attr device_attr;
+	struct priv *priv = dev->data->dev_private;
+
+	if (ibv_query_device(priv->ctx, &device_attr) == EIO)
+		return 1;
+	return 0;
 }

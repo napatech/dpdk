@@ -63,13 +63,15 @@ void bnxt_free_ring(struct bnxt_ring *ring)
  * Ring groups
  */
 
-void bnxt_init_ring_grps(struct bnxt *bp)
+int bnxt_init_ring_grps(struct bnxt *bp)
 {
 	unsigned int i;
 
 	for (i = 0; i < bp->max_ring_grps; i++)
 		memset(&bp->grp_info[i], (uint8_t)HWRM_NA_SIGNATURE,
 		       sizeof(struct bnxt_ring_grp_info));
+
+	return 0;
 }
 
 /*
@@ -361,9 +363,6 @@ int bnxt_alloc_hwrm_rings(struct bnxt *bp)
 		struct bnxt_tx_ring_info *txr = txq->tx_ring;
 		struct bnxt_ring *ring = txr->tx_ring_struct;
 		unsigned int idx = i + 1 + bp->rx_cp_nr_rings;
-
-		/* Account for AGG Rings. AGG ring cnt = Rx Cmpl ring cnt */
-		idx += bp->rx_cp_nr_rings;
 
 		/* Tx cmpl */
 		rc = bnxt_hwrm_ring_alloc(bp, cp_ring,

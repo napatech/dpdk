@@ -34,7 +34,7 @@
 #include <linux/sockios.h>
 #include <linux/ethtool.h>
 
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_common.h>
 #include <rte_malloc.h>
 
@@ -122,6 +122,22 @@ static const struct mlx5_counter_ctrl mlx5_counters_init[] = {
 		.dpdk_name = "rx_out_of_buffer",
 		.ctr_name = "out_of_buffer",
 	},
+	{
+		.dpdk_name = "tx_packets_phy",
+		.ctr_name = "tx_packets_phy",
+	},
+	{
+		.dpdk_name = "rx_packets_phy",
+		.ctr_name = "rx_packets_phy",
+	},
+	{
+		.dpdk_name = "tx_bytes_phy",
+		.ctr_name = "tx_bytes_phy",
+	},
+	{
+		.dpdk_name = "rx_bytes_phy",
+		.ctr_name = "rx_bytes_phy",
+	},
 };
 
 static const unsigned int xstats_n = RTE_DIM(mlx5_counters_init);
@@ -143,11 +159,9 @@ priv_read_dev_counters(struct priv *priv, uint64_t *stats)
 	struct mlx5_xstats_ctrl *xstats_ctrl = &priv->xstats_ctrl;
 	unsigned int i;
 	struct ifreq ifr;
-	unsigned int stats_sz = (xstats_ctrl->stats_n * sizeof(uint64_t)) +
-				 sizeof(struct ethtool_stats);
-	struct ethtool_stats et_stats[(stats_sz + (
-				      sizeof(struct ethtool_stats) - 1)) /
-				      sizeof(struct ethtool_stats)];
+	unsigned int stats_sz = xstats_ctrl->stats_n * sizeof(uint64_t);
+	unsigned char et_stat_buf[sizeof(struct ethtool_stats) + stats_sz];
+	struct ethtool_stats *et_stats = (struct ethtool_stats *)et_stat_buf;
 
 	et_stats->cmd = ETHTOOL_GSTATS;
 	et_stats->n_stats = xstats_ctrl->stats_n;
@@ -321,7 +335,7 @@ priv_xstats_reset(struct priv *priv)
 int
 mlx5_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 {
-	struct priv *priv = mlx5_get_priv(dev);
+	struct priv *priv = dev->data->dev_private;
 	struct rte_eth_stats tmp = {0};
 	unsigned int i;
 	unsigned int idx;
@@ -427,7 +441,7 @@ int
 mlx5_xstats_get(struct rte_eth_dev *dev,
 		struct rte_eth_xstat *stats, unsigned int n)
 {
-	struct priv *priv = mlx5_get_priv(dev);
+	struct priv *priv = dev->data->dev_private;
 	int ret = xstats_n;
 
 	if (n >= xstats_n && stats) {
@@ -457,7 +471,7 @@ mlx5_xstats_get(struct rte_eth_dev *dev,
 void
 mlx5_xstats_reset(struct rte_eth_dev *dev)
 {
-	struct priv *priv = mlx5_get_priv(dev);
+	struct priv *priv = dev->data->dev_private;
 	struct mlx5_xstats_ctrl *xstats_ctrl = &priv->xstats_ctrl;
 	int stats_n;
 
@@ -489,7 +503,7 @@ int
 mlx5_xstats_get_names(struct rte_eth_dev *dev,
 		struct rte_eth_xstat_name *xstats_names, unsigned int n)
 {
-	struct priv *priv = mlx5_get_priv(dev);
+	struct priv *priv = dev->data->dev_private;
 	unsigned int i;
 
 	if (n >= xstats_n && xstats_names) {

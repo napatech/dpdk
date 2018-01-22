@@ -37,7 +37,8 @@
 #include <rte_malloc.h>
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
-#include <rte_ethdev.h>
+#include <rte_config.h>
+#include <rte_ethdev_driver.h>
 
 /**
  * Copy pci device info to the Ethernet device data.

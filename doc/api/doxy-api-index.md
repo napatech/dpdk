@@ -42,6 +42,7 @@ The public API headers are grouped by topics:
   [rte_flow]           (@ref rte_flow.h),
   [rte_tm]             (@ref rte_tm.h),
   [rte_mtr]            (@ref rte_mtr.h),
+  [bbdev]              (@ref rte_bbdev.h),
   [cryptodev]          (@ref rte_cryptodev.h),
   [security]           (@ref rte_security.h),
   [eventdev]           (@ref rte_eventdev.h),
@@ -60,6 +61,7 @@ The public API headers are grouped by topics:
   [ixgbe]              (@ref rte_pmd_ixgbe.h),
   [i40e]               (@ref rte_pmd_i40e.h),
   [bnxt]               (@ref rte_pmd_bnxt.h),
+  [dpaa]               (@ref rte_pmd_dpaa.h),
   [crypto_scheduler]   (@ref rte_cryptodev_scheduler.h)
 
 - **memory**:

@@ -43,7 +43,7 @@
 #include <rte_common.h>
 #include <rte_log.h>
 #include <rte_debug.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_ethdev_pci.h>
 #include <rte_dev.h>
 #include <rte_ether.h>
@@ -94,6 +94,15 @@ static void nfp_net_stats_reset(struct rte_eth_dev *dev);
 static void nfp_net_stop(struct rte_eth_dev *dev);
 static uint16_t nfp_net_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 				  uint16_t nb_pkts);
+
+static int nfp_net_rss_config_default(struct rte_eth_dev *dev);
+static int nfp_net_rss_hash_update(struct rte_eth_dev *dev,
+				   struct rte_eth_rss_conf *rss_conf);
+static int nfp_net_rss_reta_write(struct rte_eth_dev *dev,
+		    struct rte_eth_rss_reta_entry64 *reta_conf,
+		    uint16_t reta_size);
+static int nfp_net_rss_hash_write(struct rte_eth_dev *dev,
+			struct rte_eth_rss_conf *rss_conf);
 
 /*
  * The offset of the queue controller queues in the PCIe Target. These
@@ -489,12 +498,10 @@ nfp_net_configure(struct rte_eth_dev *dev)
 	}
 
 	if (rxmode->jumbo_frame)
-		/* this is handled in rte_eth_dev_configure */
+		hw->mtu = rxmode->max_rx_pkt_len;
 
-	if (rxmode->hw_strip_crc) {
-		PMD_INIT_LOG(INFO, "strip CRC not supported");
-		return -EINVAL;
-	}
+	if (!rxmode->hw_strip_crc)
+		PMD_INIT_LOG(INFO, "HW does strip CRC and it is not configurable");
 
 	if (rxmode->enable_scatter) {
 		PMD_INIT_LOG(INFO, "Scatter not supported");
@@ -737,6 +744,8 @@ nfp_net_start(struct rte_eth_dev *dev)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_eth_conf *dev_conf;
+	struct rte_eth_rxmode *rxmode;
 	uint32_t new_ctrl, update = 0;
 	struct nfp_net_hw *hw;
 	uint32_t intr_vector;
@@ -786,6 +795,19 @@ nfp_net_start(struct rte_eth_dev *dev)
 
 	rte_intr_enable(intr_handle);
 
+	dev_conf = &dev->data->dev_conf;
+	rxmode = &dev_conf->rxmode;
+
+	/* Checking RX mode */
+	if (rxmode->mq_mode & ETH_MQ_RX_RSS) {
+		if (hw->cap & NFP_NET_CFG_CTRL_RSS) {
+			if (!nfp_net_rss_config_default(dev))
+				update |= NFP_NET_CFG_UPDATE_RSS;
+		} else {
+			PMD_INIT_LOG(INFO, "RSS not supported");
+			return -EINVAL;
+		}
+	}
 	/* Enable device */
 	new_ctrl = hw->ctrl | NFP_NET_CFG_CTRL_ENABLE;
 
@@ -1196,7 +1218,7 @@ nfp_net_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->max_rx_queues = (uint16_t)hw->max_rx_queues;
 	dev_info->max_tx_queues = (uint16_t)hw->max_tx_queues;
 	dev_info->min_rx_bufsize = ETHER_MIN_MTU;
-	dev_info->max_rx_pktlen = hw->mtu;
+	dev_info->max_rx_pktlen = hw->max_mtu;
 	/* Next should change when PF support is implemented */
 	dev_info->max_mac_addrs = 1;
 
@@ -1450,7 +1472,7 @@ nfp_net_dev_interrupt_delayed_handler(void *param)
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
 
 	nfp_net_link_update(dev, 0);
-	_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL, NULL);
+	_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
 
 	nfp_net_dev_link_status_print(dev);
 
@@ -1468,6 +1490,13 @@ nfp_net_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	/* check that mtu is within the allowed range */
 	if ((mtu < ETHER_MIN_MTU) || ((uint32_t)mtu > hw->max_mtu))
 		return -EINVAL;
+
+	/* mtu setting is forbidden if port is started */
+	if (dev->data->dev_started) {
+		PMD_DRV_LOG(ERR, "port %d must be stopped before configuration",
+			    dev->data->port_id);
+		return -EBUSY;
+	}
 
 	/* switch to jumbo mode if needed */
 	if ((uint32_t)mtu > ETHER_MAX_LEN)
@@ -2345,21 +2374,16 @@ nfp_net_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 	return ret;
 }
 
-/* Update Redirection Table(RETA) of Receive Side Scaling of Ethernet device */
 static int
-nfp_net_reta_update(struct rte_eth_dev *dev,
+nfp_net_rss_reta_write(struct rte_eth_dev *dev,
 		    struct rte_eth_rss_reta_entry64 *reta_conf,
 		    uint16_t reta_size)
 {
 	uint32_t reta, mask;
 	int i, j;
 	int idx, shift;
-	uint32_t update;
 	struct nfp_net_hw *hw =
 		NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-
-	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS))
-		return -EINVAL;
 
 	if (reta_size != NFP_NET_CFG_RSS_ITBL_SZ) {
 		RTE_LOG(ERR, PMD, "The size of hash lookup table configured "
@@ -2397,6 +2421,26 @@ nfp_net_reta_update(struct rte_eth_dev *dev,
 		nn_cfg_writel(hw, NFP_NET_CFG_RSS_ITBL + (idx * 64) + shift,
 			      reta);
 	}
+	return 0;
+}
+
+/* Update Redirection Table(RETA) of Receive Side Scaling of Ethernet device */
+static int
+nfp_net_reta_update(struct rte_eth_dev *dev,
+		    struct rte_eth_rss_reta_entry64 *reta_conf,
+		    uint16_t reta_size)
+{
+	struct nfp_net_hw *hw =
+		NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	uint32_t update;
+	int ret;
+
+	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS))
+		return -EINVAL;
+
+	ret = nfp_net_rss_reta_write(dev, reta_conf, reta_size);
+	if (ret != 0)
+		return ret;
 
 	update = NFP_NET_CFG_UPDATE_RSS;
 
@@ -2455,14 +2499,53 @@ nfp_net_reta_query(struct rte_eth_dev *dev,
 }
 
 static int
+nfp_net_rss_hash_write(struct rte_eth_dev *dev,
+			struct rte_eth_rss_conf *rss_conf)
+{
+	struct nfp_net_hw *hw;
+	uint64_t rss_hf;
+	uint32_t cfg_rss_ctrl = 0;
+	uint8_t key;
+	int i;
+
+	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+
+	/* Writing the key byte a byte */
+	for (i = 0; i < rss_conf->rss_key_len; i++) {
+		memcpy(&key, &rss_conf->rss_key[i], 1);
+		nn_cfg_writeb(hw, NFP_NET_CFG_RSS_KEY + i, key);
+	}
+
+	rss_hf = rss_conf->rss_hf;
+
+	if (rss_hf & ETH_RSS_IPV4)
+		cfg_rss_ctrl |= NFP_NET_CFG_RSS_IPV4 |
+				NFP_NET_CFG_RSS_IPV4_TCP |
+				NFP_NET_CFG_RSS_IPV4_UDP;
+
+	if (rss_hf & ETH_RSS_IPV6)
+		cfg_rss_ctrl |= NFP_NET_CFG_RSS_IPV6 |
+				NFP_NET_CFG_RSS_IPV6_TCP |
+				NFP_NET_CFG_RSS_IPV6_UDP;
+
+	cfg_rss_ctrl |= NFP_NET_CFG_RSS_MASK;
+	cfg_rss_ctrl |= NFP_NET_CFG_RSS_TOEPLITZ;
+
+	/* configuring where to apply the RSS hash */
+	nn_cfg_writel(hw, NFP_NET_CFG_RSS_CTRL, cfg_rss_ctrl);
+
+	/* Writing the key size */
+	nn_cfg_writeb(hw, NFP_NET_CFG_RSS_KEY_SZ, rss_conf->rss_key_len);
+
+	return 0;
+}
+
+static int
 nfp_net_rss_hash_update(struct rte_eth_dev *dev,
 			struct rte_eth_rss_conf *rss_conf)
 {
 	uint32_t update;
-	uint32_t cfg_rss_ctrl = 0;
-	uint8_t key;
 	uint64_t rss_hf;
-	int i;
 	struct nfp_net_hw *hw;
 
 	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -2483,30 +2566,7 @@ nfp_net_rss_hash_update(struct rte_eth_dev *dev,
 		return -EINVAL;
 	}
 
-	if (rss_hf & ETH_RSS_IPV4)
-		cfg_rss_ctrl |= NFP_NET_CFG_RSS_IPV4 |
-				NFP_NET_CFG_RSS_IPV4_TCP |
-				NFP_NET_CFG_RSS_IPV4_UDP;
-
-	if (rss_hf & ETH_RSS_IPV6)
-		cfg_rss_ctrl |= NFP_NET_CFG_RSS_IPV6 |
-				NFP_NET_CFG_RSS_IPV6_TCP |
-				NFP_NET_CFG_RSS_IPV6_UDP;
-
-	cfg_rss_ctrl |= NFP_NET_CFG_RSS_MASK;
-	cfg_rss_ctrl |= NFP_NET_CFG_RSS_TOEPLITZ;
-
-	/* configuring where to apply the RSS hash */
-	nn_cfg_writel(hw, NFP_NET_CFG_RSS_CTRL, cfg_rss_ctrl);
-
-	/* Writing the key byte a byte */
-	for (i = 0; i < rss_conf->rss_key_len; i++) {
-		memcpy(&key, &rss_conf->rss_key[i], 1);
-		nn_cfg_writeb(hw, NFP_NET_CFG_RSS_KEY + i, key);
-	}
-
-	/* Writing the key size */
-	nn_cfg_writeb(hw, NFP_NET_CFG_RSS_KEY_SZ, rss_conf->rss_key_len);
+	nfp_net_rss_hash_write(dev, rss_conf);
 
 	update = NFP_NET_CFG_UPDATE_RSS;
 
@@ -2563,6 +2623,47 @@ nfp_net_rss_hash_conf_get(struct rte_eth_dev *dev,
 
 	return 0;
 }
+
+static int
+nfp_net_rss_config_default(struct rte_eth_dev *dev)
+{
+	struct rte_eth_conf *dev_conf;
+	struct rte_eth_rss_conf rss_conf;
+	struct rte_eth_rss_reta_entry64 nfp_reta_conf[2];
+	uint16_t rx_queues = dev->data->nb_rx_queues;
+	uint16_t queue;
+	int i, j, ret;
+
+	RTE_LOG(INFO, PMD, "setting default RSS conf for %u queues\n",
+		rx_queues);
+
+	nfp_reta_conf[0].mask = ~0x0;
+	nfp_reta_conf[1].mask = ~0x0;
+
+	queue = 0;
+	for (i = 0; i < 0x40; i += 8) {
+		for (j = i; j < (i + 8); j++) {
+			nfp_reta_conf[0].reta[j] = queue;
+			nfp_reta_conf[1].reta[j] = queue++;
+			queue %= rx_queues;
+		}
+	}
+	ret = nfp_net_rss_reta_write(dev, nfp_reta_conf, 0x80);
+	if (ret != 0)
+		return ret;
+
+	dev_conf = &dev->data->dev_conf;
+	if (!dev_conf) {
+		RTE_LOG(INFO, PMD, "wrong rss conf");
+		return -EINVAL;
+	}
+	rss_conf = dev_conf->rx_adv_conf.rss_conf;
+
+	ret = nfp_net_rss_hash_write(dev, &rss_conf);
+
+	return ret;
+}
+
 
 /* Initialise and register driver with DPDK Application */
 static const struct eth_dev_ops nfp_net_eth_dev_ops = {
@@ -2774,7 +2875,7 @@ nfp_net_init(struct rte_eth_dev *eth_dev)
 	hw->ver = nn_cfg_readl(hw, NFP_NET_CFG_VERSION);
 	hw->cap = nn_cfg_readl(hw, NFP_NET_CFG_CAP);
 	hw->max_mtu = nn_cfg_readl(hw, NFP_NET_CFG_MAX_MTU);
-	hw->mtu = hw->max_mtu;
+	hw->mtu = ETHER_MTU;
 
 	if (NFD_CFG_MAJOR_VERSION_of(hw->ver) < 2)
 		hw->rx_offset = NFP_NET_RX_OFFSET;
@@ -2984,6 +3085,9 @@ nfpu_error:
 	return ret;
 }
 
+int nfp_logtype_init;
+int nfp_logtype_driver;
+
 static const struct rte_pci_id pci_id_nfp_pf_net_map[] = {
 	{
 		RTE_PCI_DEVICE(PCI_VENDOR_ID_NETRONOME,
@@ -3057,6 +3161,17 @@ RTE_PMD_REGISTER_PCI_TABLE(net_nfp_vf, pci_id_nfp_vf_net_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_nfp_pf, "* igb_uio | uio_pci_generic | vfio");
 RTE_PMD_REGISTER_KMOD_DEP(net_nfp_vf, "* igb_uio | uio_pci_generic | vfio");
 
+RTE_INIT(nfp_init_log);
+static void
+nfp_init_log(void)
+{
+	nfp_logtype_init = rte_log_register("pmd.nfp.init");
+	if (nfp_logtype_init >= 0)
+		rte_log_set_level(nfp_logtype_init, RTE_LOG_NOTICE);
+	nfp_logtype_driver = rte_log_register("pmd.nfp.driver");
+	if (nfp_logtype_driver >= 0)
+		rte_log_set_level(nfp_logtype_driver, RTE_LOG_NOTICE);
+}
 /*
  * Local variables:
  * c-file-style: "Linux"

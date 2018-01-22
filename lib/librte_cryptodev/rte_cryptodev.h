@@ -49,6 +49,7 @@ extern "C" {
 #include "rte_crypto.h"
 #include "rte_dev.h"
 #include <rte_common.h>
+#include <rte_config.h>
 
 extern const char **rte_cyptodev_names;
 
@@ -890,7 +891,10 @@ rte_cryptodev_enqueue_burst(uint8_t dev_id, uint16_t qp_id,
 }
 
 
-/** Cryptodev symmetric crypto session */
+/** Cryptodev symmetric crypto session
+ * Each session is derived from a fixed xform chain. Therefore each session
+ * has a fixed algo, key, op-type, digest_len etc.
+ */
 struct rte_cryptodev_sym_session {
 	__extension__ void *sess_private_data[0];
 	/**< Private session material */

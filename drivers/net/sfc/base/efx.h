@@ -1,31 +1,7 @@
-/*
- * Copyright (c) 2006-2016 Solarflare Communications Inc.
+/* SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 2006-2018 Solarflare Communications Inc.
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
- * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
- * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * The views and conclusions contained in the software and documentation are
- * those of the authors and should not be interpreted as representing official
- * policies, either expressed or implied, of the FreeBSD Project.
  */
 
 #ifndef	_SYS_EFX_H
@@ -40,13 +16,16 @@ extern "C" {
 #endif
 
 #define	EFX_STATIC_ASSERT(_cond)		\
-	((void)sizeof(char[(_cond) ? 1 : -1]))
+	((void)sizeof (char[(_cond) ? 1 : -1]))
 
 #define	EFX_ARRAY_SIZE(_array)			\
-	(sizeof(_array) / sizeof((_array)[0]))
+	(sizeof (_array) / sizeof ((_array)[0]))
 
 #define	EFX_FIELD_OFFSET(_type, _field)		\
-	((size_t) &(((_type *)0)->_field))
+	((size_t)&(((_type *)0)->_field))
+
+/* The macro expands divider twice */
+#define	EFX_DIV_ROUND_UP(_n, _d)		(((_n) + (_d) - 1) / (_d))
 
 /* Return codes */
 
@@ -555,7 +534,7 @@ efx_mac_stats_get_mask(
 
 #define	EFX_MAC_STAT_SUPPORTED(_mask, _stat)	\
 	((_mask)[(_stat) / EFX_MAC_STATS_MASK_BITS_PER_PAGE] &	\
-	 (1ULL << ((_stat) & (EFX_MAC_STATS_MASK_BITS_PER_PAGE - 1))))
+	    (1ULL << ((_stat) & (EFX_MAC_STATS_MASK_BITS_PER_PAGE - 1))))
 
 #define	EFX_MAC_STATS_SIZE 0x400
 
@@ -624,7 +603,7 @@ efx_mon_init(
 #define	EFX_MON_STATS_PAGE_SIZE 0x100
 #define	EFX_MON_MASK_ELEMENT_SIZE 32
 
-/* START MKCONFIG GENERATED MonitorHeaderStatsBlock 5d4ee5185e419abe */
+/* START MKCONFIG GENERATED MonitorHeaderStatsBlock aa0233c80156308e */
 typedef enum efx_mon_stat_e {
 	EFX_MON_STAT_2_5V,
 	EFX_MON_STAT_VCCP1,
@@ -703,6 +682,8 @@ typedef enum efx_mon_stat_e {
 	EFX_MON_STAT_CONTROLLER_TDIODE_TEMP,
 	EFX_MON_STAT_BOARD_FRONT_TEMP,
 	EFX_MON_STAT_BOARD_BACK_TEMP,
+	EFX_MON_STAT_I1V8,
+	EFX_MON_STAT_I2V5,
 	EFX_MON_NSTATS
 } efx_mon_stat_t;
 
@@ -903,7 +884,8 @@ typedef enum efx_phy_media_type_e {
 	EFX_PHY_MEDIA_NTYPES
 } efx_phy_media_type_t;
 
-/* Get the type of medium currently used.  If the board has ports for
+/*
+ * Get the type of medium currently used.  If the board has ports for
  * modules, a module is present, and we recognise the media type of
  * the module, then this will be the media type of the module.
  * Otherwise it will be the media type of the port.
@@ -913,13 +895,13 @@ efx_phy_media_type_get(
 	__in		efx_nic_t *enp,
 	__out		efx_phy_media_type_t *typep);
 
-extern					efx_rc_t
+extern	__checkReturn		efx_rc_t
 efx_phy_module_get_info(
-	__in				efx_nic_t *enp,
-	__in				uint8_t dev_addr,
-	__in				uint8_t offset,
-	__in				uint8_t len,
-	__out_bcount(len)		uint8_t *data);
+	__in			efx_nic_t *enp,
+	__in			uint8_t dev_addr,
+	__in			uint8_t offset,
+	__in			uint8_t len,
+	__out_bcount(len)	uint8_t *data);
 
 #if EFSYS_OPT_PHY_STATS
 
@@ -1004,7 +986,7 @@ typedef enum efx_bist_type_e {
 	EFX_BIST_TYPE_PHY_CABLE_SHORT,
 	EFX_BIST_TYPE_PHY_CABLE_LONG,
 	EFX_BIST_TYPE_MC_MEM,	/* Test the MC DMEM and IMEM */
-	EFX_BIST_TYPE_SAT_MEM,	/* Test the DMEM and IMEM of satellite cpus*/
+	EFX_BIST_TYPE_SAT_MEM,	/* Test the DMEM and IMEM of satellite cpus */
 	EFX_BIST_TYPE_REG,	/* Test the register memories */
 	EFX_BIST_TYPE_NTYPES,
 } efx_bist_type_t;
@@ -1035,8 +1017,10 @@ typedef enum efx_bist_value_e {
 	EFX_BIST_PHY_CABLE_STATUS_C,
 	EFX_BIST_PHY_CABLE_STATUS_D,
 	EFX_BIST_FAULT_CODE,
-	/* Memory BIST specific values. These match to the MC_CMD_BIST_POLL
-	 * response. */
+	/*
+	 * Memory BIST specific values. These match to the MC_CMD_BIST_POLL
+	 * response.
+	 */
 	EFX_BIST_MEM_TEST,
 	EFX_BIST_MEM_ADDR,
 	EFX_BIST_MEM_BUS,
@@ -1197,6 +1181,11 @@ typedef struct efx_nic_cfg_s {
 	boolean_t		enc_pm_and_rxdp_counters;
 	boolean_t		enc_mac_stats_40g_tx_size_bins;
 	uint32_t		enc_tunnel_encapsulations_supported;
+	/*
+	 * NIC global maximum for unique UDP tunnel ports shared by all
+	 * functions.
+	 */
+	uint32_t		enc_tunnel_config_udp_entries_max;
 	/* External port identifier */
 	uint8_t			enc_external_port;
 	uint32_t		enc_mcdi_max_payload_length;
@@ -1206,7 +1195,7 @@ typedef struct efx_nic_cfg_s {
 	uint32_t		enc_required_pcie_bandwidth_mbps;
 	uint32_t		enc_max_pcie_link_gen;
 	/* Firmware verifies integrity of NVRAM updates */
-	uint32_t		enc_fw_verified_nvram_update_required;
+	uint32_t		enc_nvram_update_verify_result_supported;
 } efx_nic_cfg_t;
 
 #define	EFX_PCI_FUNCTION_IS_PF(_encp)	((_encp)->enc_vf == 0xffff)
@@ -1381,6 +1370,7 @@ typedef enum efx_nvram_type_e {
 	EFX_NVRAM_DYNAMIC_CFG,
 	EFX_NVRAM_LICENSE,
 	EFX_NVRAM_UEFIROM,
+	EFX_NVRAM_MUM_FIRMWARE,
 	EFX_NVRAM_NTYPES,
 } efx_nvram_type_t;
 
@@ -1411,7 +1401,8 @@ efx_nvram_rw_start(
 extern	__checkReturn		efx_rc_t
 efx_nvram_rw_finish(
 	__in			efx_nic_t *enp,
-	__in			efx_nvram_type_t type);
+	__in			efx_nvram_type_t type,
+	__out_opt		uint32_t *verify_resultp);
 
 extern	__checkReturn		efx_rc_t
 efx_nvram_get_version(
@@ -1422,6 +1413,14 @@ efx_nvram_get_version(
 
 extern	__checkReturn		efx_rc_t
 efx_nvram_read_chunk(
+	__in			efx_nic_t *enp,
+	__in			efx_nvram_type_t type,
+	__in			unsigned int offset,
+	__out_bcount(size)	caddr_t data,
+	__in			size_t size);
+
+extern	__checkReturn		efx_rc_t
+efx_nvram_read_backup(
 	__in			efx_nic_t *enp,
 	__in			efx_nvram_type_t type,
 	__in			unsigned int offset,
@@ -1488,13 +1487,13 @@ efx_bootcfg_copy_sector(
 extern				efx_rc_t
 efx_bootcfg_read(
 	__in			efx_nic_t *enp,
-	__out_bcount(size)	caddr_t data,
+	__out_bcount(size)	uint8_t *data,
 	__in			size_t size);
 
 extern				efx_rc_t
 efx_bootcfg_write(
 	__in			efx_nic_t *enp,
-	__in_bcount(size)	caddr_t data,
+	__in_bcount(size)	uint8_t *data,
 	__in			size_t size);
 
 #endif	/* EFSYS_OPT_BOOTCFG */
@@ -1621,7 +1620,7 @@ efx_ev_qcreate(
 	__in		efx_nic_t *enp,
 	__in		unsigned int index,
 	__in		efsys_mem_t *esmp,
-	__in		size_t n,
+	__in		size_t ndescs,
 	__in		uint32_t id,
 	__in		uint32_t us,
 	__in		uint32_t flags,
@@ -1778,8 +1777,7 @@ typedef __checkReturn	boolean_t
 typedef __checkReturn	boolean_t
 (*efx_mac_stats_ev_t)(
 	__in_opt	void *arg,
-	__in		uint32_t generation
-	);
+	__in		uint32_t generation);
 
 #endif	/* EFSYS_OPT_MAC_STATS */
 
@@ -1985,14 +1983,25 @@ efx_pseudo_hdr_pkt_length_get(
 
 typedef enum efx_rxq_type_e {
 	EFX_RXQ_TYPE_DEFAULT,
-	EFX_RXQ_TYPE_SCATTER,
-	EFX_RXQ_TYPE_PACKED_STREAM_1M,
-	EFX_RXQ_TYPE_PACKED_STREAM_512K,
-	EFX_RXQ_TYPE_PACKED_STREAM_256K,
-	EFX_RXQ_TYPE_PACKED_STREAM_128K,
-	EFX_RXQ_TYPE_PACKED_STREAM_64K,
+	EFX_RXQ_TYPE_PACKED_STREAM,
 	EFX_RXQ_NTYPES
 } efx_rxq_type_t;
+
+/*
+ * Dummy flag to be used instead of 0 to make it clear that the argument
+ * is receive queue flags.
+ */
+#define	EFX_RXQ_FLAG_NONE		0x0
+#define	EFX_RXQ_FLAG_SCATTER		0x1
+/*
+ * If tunnels are supported and Rx event can provide information about
+ * either outer or inner packet classes (e.g. SFN8xxx adapters with
+ * full-feature firmware variant running), outer classes are requested by
+ * default. However, if the driver supports tunnels, the flag allows to
+ * request inner classes which are required to be able to interpret inner
+ * Rx checksum offload results.
+ */
+#define	EFX_RXQ_FLAG_INNER_CLASSES	0x2
 
 extern	__checkReturn	efx_rc_t
 efx_rx_qcreate(
@@ -2001,10 +2010,32 @@ efx_rx_qcreate(
 	__in		unsigned int label,
 	__in		efx_rxq_type_t type,
 	__in		efsys_mem_t *esmp,
-	__in		size_t n,
+	__in		size_t ndescs,
 	__in		uint32_t id,
+	__in		unsigned int flags,
 	__in		efx_evq_t *eep,
 	__deref_out	efx_rxq_t **erpp);
+
+#if EFSYS_OPT_RX_PACKED_STREAM
+
+#define	EFX_RXQ_PACKED_STREAM_BUF_SIZE_1M	(1U * 1024 * 1024)
+#define	EFX_RXQ_PACKED_STREAM_BUF_SIZE_512K	(512U * 1024)
+#define	EFX_RXQ_PACKED_STREAM_BUF_SIZE_256K	(256U * 1024)
+#define	EFX_RXQ_PACKED_STREAM_BUF_SIZE_128K	(128U * 1024)
+#define	EFX_RXQ_PACKED_STREAM_BUF_SIZE_64K	(64U * 1024)
+
+extern	__checkReturn	efx_rc_t
+efx_rx_qcreate_packed_stream(
+	__in		efx_nic_t *enp,
+	__in		unsigned int index,
+	__in		unsigned int label,
+	__in		uint32_t ps_buf_size,
+	__in		efsys_mem_t *esmp,
+	__in		size_t ndescs,
+	__in		efx_evq_t *eep,
+	__deref_out	efx_rxq_t **erpp);
+
+#endif
 
 typedef struct efx_buffer_s {
 	efsys_dma_addr_t	eb_addr;
@@ -2016,14 +2047,14 @@ typedef struct efx_desc_s {
 	efx_qword_t ed_eq;
 } efx_desc_t;
 
-extern			void
+extern				void
 efx_rx_qpost(
-	__in		efx_rxq_t *erp,
-	__in_ecount(n)	efsys_dma_addr_t *addrp,
-	__in		size_t size,
-	__in		unsigned int n,
-	__in		unsigned int completed,
-	__in		unsigned int added);
+	__in			efx_rxq_t *erp,
+	__in_ecount(ndescs)	efsys_dma_addr_t *addrp,
+	__in			size_t size,
+	__in			unsigned int ndescs,
+	__in			unsigned int completed,
+	__in			unsigned int added);
 
 extern		void
 efx_rx_qpush(
@@ -2033,14 +2064,8 @@ efx_rx_qpush(
 
 #if EFSYS_OPT_RX_PACKED_STREAM
 
-/*
- * Fake length for RXQ descriptors in packed stream mode
- * to make hardware happy
- */
-#define	EFX_RXQ_PACKED_STREAM_FAKE_BUF_SIZE 32
-
 extern			void
-efx_rx_qps_update_credits(
+efx_rx_qpush_ps_credits(
 	__in		efx_rxq_t *erp);
 
 extern	__checkReturn	uint8_t *
@@ -2096,13 +2121,14 @@ efx_tx_fini(
 #define	EFX_TXQ_SIZE(_ndescs)		((_ndescs) * sizeof (efx_qword_t))
 #define	EFX_TXQ_NBUFS(_ndescs)		(EFX_TXQ_SIZE(_ndescs) / EFX_BUF_SIZE)
 #define	EFX_TXQ_LIMIT(_ndescs)		((_ndescs) - 16)
-#define	EFX_TXQ_DC_NDESCS(_dcsize)	(8 << _dcsize)
 
 #define	EFX_TXQ_MAX_BUFS 8 /* Maximum independent of EFX_BUG35388_WORKAROUND. */
 
-#define	EFX_TXQ_CKSUM_IPV4	0x0001
-#define	EFX_TXQ_CKSUM_TCPUDP	0x0002
-#define	EFX_TXQ_FATSOV2		0x0004
+#define	EFX_TXQ_CKSUM_IPV4		0x0001
+#define	EFX_TXQ_CKSUM_TCPUDP		0x0002
+#define	EFX_TXQ_FATSOV2			0x0004
+#define	EFX_TXQ_CKSUM_INNER_IPV4	0x0008
+#define	EFX_TXQ_CKSUM_INNER_TCPUDP	0x0010
 
 extern	__checkReturn	efx_rc_t
 efx_tx_qcreate(
@@ -2117,13 +2143,13 @@ efx_tx_qcreate(
 	__deref_out	efx_txq_t **etpp,
 	__out		unsigned int *addedp);
 
-extern	__checkReturn	efx_rc_t
+extern	__checkReturn		efx_rc_t
 efx_tx_qpost(
-	__in		efx_txq_t *etp,
-	__in_ecount(n)	efx_buffer_t *eb,
-	__in		unsigned int n,
-	__in		unsigned int completed,
-	__inout		unsigned int *addedp);
+	__in			efx_txq_t *etp,
+	__in_ecount(ndescs)	efx_buffer_t *eb,
+	__in			unsigned int ndescs,
+	__in			unsigned int completed,
+	__inout			unsigned int *addedp);
 
 extern	__checkReturn	efx_rc_t
 efx_tx_qpace(
@@ -2260,35 +2286,43 @@ efx_tx_qdestroy(
 /* Filter is for TX */
 #define	EFX_FILTER_FLAG_TX		0x10
 
-typedef unsigned int efx_filter_flags_t;
+typedef uint8_t efx_filter_flags_t;
 
 /*
  * Flags which specify the fields to match on. The values are the same as in the
  * MC_CMD_FILTER_OP/MC_CMD_FILTER_OP_EXT commands.
  */
-typedef enum efx_filter_match_flags_e {
-	EFX_FILTER_MATCH_REM_HOST = 0x0001,	/* Match by remote IP host
-						 * address */
-	EFX_FILTER_MATCH_LOC_HOST = 0x0002,	/* Match by local IP host
-						 * address */
-	EFX_FILTER_MATCH_REM_MAC = 0x0004,	/* Match by remote MAC address */
-	EFX_FILTER_MATCH_REM_PORT = 0x0008,	/* Match by remote TCP/UDP port */
-	EFX_FILTER_MATCH_LOC_MAC = 0x0010,	/* Match by remote TCP/UDP port */
-	EFX_FILTER_MATCH_LOC_PORT = 0x0020,	/* Match by local TCP/UDP port */
-	EFX_FILTER_MATCH_ETHER_TYPE = 0x0040,	/* Match by Ether-type */
-	EFX_FILTER_MATCH_INNER_VID = 0x0080,	/* Match by inner VLAN ID */
-	EFX_FILTER_MATCH_OUTER_VID = 0x0100,	/* Match by outer VLAN ID */
-	EFX_FILTER_MATCH_IP_PROTO = 0x0200,	/* Match by IP transport
-						 * protocol */
-	/* For encapsulated packets, match all multicast inner frames */
-	EFX_FILTER_MATCH_IFRM_UNKNOWN_MCAST_DST = 0x01000000,
-	/* For encapsulated packets, match all unicast inner frames */
-	EFX_FILTER_MATCH_IFRM_UNKNOWN_UCAST_DST = 0x02000000,
-	/* Match otherwise-unmatched multicast and broadcast packets */
-	EFX_FILTER_MATCH_UNKNOWN_MCAST_DST = 0x40000000,
-	/* Match otherwise-unmatched unicast packets */
-	EFX_FILTER_MATCH_UNKNOWN_UCAST_DST = 0x80000000,
-} efx_filter_match_flags_t;
+
+/* Match by remote IP host address */
+#define	EFX_FILTER_MATCH_REM_HOST		0x00000001
+/* Match by local IP host address */
+#define	EFX_FILTER_MATCH_LOC_HOST		0x00000002
+/* Match by remote MAC address */
+#define	EFX_FILTER_MATCH_REM_MAC		0x00000004
+/* Match by remote TCP/UDP port */
+#define	EFX_FILTER_MATCH_REM_PORT		0x00000008
+/* Match by remote TCP/UDP port */
+#define	EFX_FILTER_MATCH_LOC_MAC		0x00000010
+/* Match by local TCP/UDP port */
+#define	EFX_FILTER_MATCH_LOC_PORT		0x00000020
+/* Match by Ether-type */
+#define	EFX_FILTER_MATCH_ETHER_TYPE		0x00000040
+/* Match by inner VLAN ID */
+#define	EFX_FILTER_MATCH_INNER_VID		0x00000080
+/* Match by outer VLAN ID */
+#define	EFX_FILTER_MATCH_OUTER_VID		0x00000100
+/* Match by IP transport protocol */
+#define	EFX_FILTER_MATCH_IP_PROTO		0x00000200
+/* For encapsulated packets, match all multicast inner frames */
+#define	EFX_FILTER_MATCH_IFRM_UNKNOWN_MCAST_DST	0x01000000
+/* For encapsulated packets, match all unicast inner frames */
+#define	EFX_FILTER_MATCH_IFRM_UNKNOWN_UCAST_DST	0x02000000
+/* Match otherwise-unmatched multicast and broadcast packets */
+#define	EFX_FILTER_MATCH_UNKNOWN_MCAST_DST	0x40000000
+/* Match otherwise-unmatched unicast packets */
+#define	EFX_FILTER_MATCH_UNKNOWN_UCAST_DST	0x80000000
+
+typedef uint32_t efx_filter_match_flags_t;
 
 typedef enum efx_filter_priority_s {
 	EFX_FILTER_PRI_HINT = 0,	/* Performance hint */
@@ -2309,22 +2343,22 @@ typedef enum efx_filter_priority_s {
  */
 
 typedef struct efx_filter_spec_s {
-	uint32_t		efs_match_flags;
-	uint32_t		efs_priority:2;
-	uint32_t		efs_flags:6;
-	uint32_t		efs_dmaq_id:12;
-	uint32_t		efs_rss_context;
-	uint16_t		efs_outer_vid;
-	uint16_t		efs_inner_vid;
-	uint8_t			efs_loc_mac[EFX_MAC_ADDR_LEN];
-	uint8_t			efs_rem_mac[EFX_MAC_ADDR_LEN];
-	uint16_t		efs_ether_type;
-	uint8_t			efs_ip_proto;
-	efx_tunnel_protocol_t	efs_encap_type;
-	uint16_t		efs_loc_port;
-	uint16_t		efs_rem_port;
-	efx_oword_t		efs_rem_host;
-	efx_oword_t		efs_loc_host;
+	efx_filter_match_flags_t	efs_match_flags;
+	uint8_t				efs_priority;
+	efx_filter_flags_t		efs_flags;
+	uint16_t			efs_dmaq_id;
+	uint32_t			efs_rss_context;
+	uint16_t			efs_outer_vid;
+	uint16_t			efs_inner_vid;
+	uint8_t				efs_loc_mac[EFX_MAC_ADDR_LEN];
+	uint8_t				efs_rem_mac[EFX_MAC_ADDR_LEN];
+	uint16_t			efs_ether_type;
+	uint8_t				efs_ip_proto;
+	efx_tunnel_protocol_t		efs_encap_type;
+	uint16_t			efs_loc_port;
+	uint16_t			efs_rem_port;
+	efx_oword_t			efs_rem_host;
+	efx_oword_t			efs_loc_host;
 } efx_filter_spec_t;
 
 
@@ -2500,8 +2534,7 @@ efx_lic_find_start(
 	__in_bcount(buffer_size)
 				caddr_t bufferp,
 	__in			size_t buffer_size,
-	__out			uint32_t *startp
-	);
+	__out			uint32_t *startp);
 
 extern	__checkReturn		efx_rc_t
 efx_lic_find_end(
@@ -2510,8 +2543,7 @@ efx_lic_find_end(
 				caddr_t bufferp,
 	__in			size_t buffer_size,
 	__in			uint32_t offset,
-	__out			uint32_t *endp
-	);
+	__out			uint32_t *endp);
 
 extern	__checkReturn	__success(return != B_FALSE)	boolean_t
 efx_lic_find_key(
@@ -2521,15 +2553,13 @@ efx_lic_find_key(
 	__in			size_t buffer_size,
 	__in			uint32_t offset,
 	__out			uint32_t *startp,
-	__out			uint32_t *lengthp
-	);
+	__out			uint32_t *lengthp);
 
 extern	__checkReturn	__success(return != B_FALSE)	boolean_t
 efx_lic_validate_key(
 	__in			efx_nic_t *enp,
 	__in_bcount(length)	caddr_t keyp,
-	__in			uint32_t length
-	);
+	__in			uint32_t length);
 
 extern	__checkReturn		efx_rc_t
 efx_lic_read_key(
@@ -2542,8 +2572,7 @@ efx_lic_read_key(
 	__out_bcount_part(key_max_size, *lengthp)
 				caddr_t keyp,
 	__in			size_t key_max_size,
-	__out			uint32_t *lengthp
-	);
+	__out			uint32_t *lengthp);
 
 extern	__checkReturn		efx_rc_t
 efx_lic_write_key(
@@ -2554,8 +2583,7 @@ efx_lic_write_key(
 	__in			uint32_t offset,
 	__in_bcount(length)	caddr_t keyp,
 	__in			uint32_t length,
-	__out			uint32_t *lengthp
-	);
+	__out			uint32_t *lengthp);
 
 	__checkReturn		efx_rc_t
 efx_lic_delete_key(
@@ -2566,27 +2594,70 @@ efx_lic_delete_key(
 	__in			uint32_t offset,
 	__in			uint32_t length,
 	__in			uint32_t end,
-	__out			uint32_t *deltap
-	);
+	__out			uint32_t *deltap);
 
 extern	__checkReturn		efx_rc_t
 efx_lic_create_partition(
 	__in			efx_nic_t *enp,
 	__in_bcount(buffer_size)
 				caddr_t bufferp,
-	__in			size_t buffer_size
-	);
+	__in			size_t buffer_size);
 
 extern	__checkReturn		efx_rc_t
 efx_lic_finish_partition(
 	__in			efx_nic_t *enp,
 	__in_bcount(buffer_size)
 				caddr_t bufferp,
-	__in			size_t buffer_size
-	);
+	__in			size_t buffer_size);
 
 #endif	/* EFSYS_OPT_LICENSING */
 
+/* TUNNEL */
+
+#if EFSYS_OPT_TUNNEL
+
+extern	__checkReturn	efx_rc_t
+efx_tunnel_init(
+	__in		efx_nic_t *enp);
+
+extern			void
+efx_tunnel_fini(
+	__in		efx_nic_t *enp);
+
+/*
+ * For overlay network encapsulation using UDP, the firmware needs to know
+ * the configured UDP port for the overlay so it can decode encapsulated
+ * frames correctly.
+ * The UDP port/protocol list is global.
+ */
+
+extern	__checkReturn	efx_rc_t
+efx_tunnel_config_udp_add(
+	__in		efx_nic_t *enp,
+	__in		uint16_t port /* host/cpu-endian */,
+	__in		efx_tunnel_protocol_t protocol);
+
+extern	__checkReturn	efx_rc_t
+efx_tunnel_config_udp_remove(
+	__in		efx_nic_t *enp,
+	__in		uint16_t port /* host/cpu-endian */,
+	__in		efx_tunnel_protocol_t protocol);
+
+extern			void
+efx_tunnel_config_clear(
+	__in		efx_nic_t *enp);
+
+/**
+ * Apply tunnel UDP ports configuration to hardware.
+ *
+ * EAGAIN is returned if hardware will be reset (datapath and managment CPU
+ * reboot).
+ */
+extern	__checkReturn	efx_rc_t
+efx_tunnel_reconfigure(
+	__in		efx_nic_t *enp);
+
+#endif /* EFSYS_OPT_TUNNEL */
 
 
 #ifdef	__cplusplus

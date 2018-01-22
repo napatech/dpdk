@@ -1,33 +1,5 @@
-/*
- *   BSD LICENSE
- *
- *   Copyright (C) Cavium, Inc 2017.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Cavium, Inc nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2017 Cavium, Inc
  */
 
 #include <stdio.h>
@@ -55,6 +27,7 @@ evt_options_default(struct evt_options *opt)
 	opt->pool_sz = 16 * 1024;
 	opt->wkr_deq_dep = 16;
 	opt->nb_pkts = (1ULL << 26); /* do ~64M packets */
+	opt->prod_type = EVT_PROD_TYPE_SYNT;
 }
 
 typedef int (*option_parser_t)(struct evt_options *opt,
@@ -103,6 +76,13 @@ static int
 evt_parse_queue_priority(struct evt_options *opt, const char *arg __rte_unused)
 {
 	opt->q_priority = 1;
+	return 0;
+}
+
+static int
+evt_parse_eth_prod_type(struct evt_options *opt, const char *arg __rte_unused)
+{
+	opt->prod_type = EVT_PROD_TYPE_ETH_RX_ADPTR;
 	return 0;
 }
 
@@ -189,6 +169,7 @@ usage(char *program)
 		"\t--worker_deq_depth : dequeue depth of the worker\n"
 		"\t--fwd_latency      : perform fwd_latency measurement\n"
 		"\t--queue_priority   : enable queue priority\n"
+		"\t--prod_type_ethdev : use ethernet device as producer\n."
 		);
 	printf("available tests:\n");
 	evt_test_dump_names();
@@ -249,6 +230,7 @@ static struct option lgopts[] = {
 	{ EVT_SCHED_TYPE_LIST,  1, 0, 0 },
 	{ EVT_FWD_LATENCY,      0, 0, 0 },
 	{ EVT_QUEUE_PRIORITY,   0, 0, 0 },
+	{ EVT_PROD_ETHDEV,      0, 0, 0 },
 	{ EVT_HELP,             0, 0, 0 },
 	{ NULL,                 0, 0, 0 }
 };
@@ -272,6 +254,7 @@ evt_opts_parse_long(int opt_idx, struct evt_options *opt)
 		{ EVT_SCHED_TYPE_LIST, evt_parse_sched_type_list},
 		{ EVT_FWD_LATENCY, evt_parse_fwd_latency},
 		{ EVT_QUEUE_PRIORITY, evt_parse_queue_priority},
+		{ EVT_PROD_ETHDEV, evt_parse_eth_prod_type},
 	};
 
 	for (i = 0; i < RTE_DIM(parsermap); i++) {

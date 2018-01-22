@@ -53,7 +53,7 @@
 
 #include <rte_pci.h>
 #include <rte_ether.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_spinlock.h>
 #include <rte_interrupts.h>
 #include <rte_errno.h>
@@ -90,6 +90,39 @@ struct mlx5_xstats_ctrl {
 /* Flow list . */
 TAILQ_HEAD(mlx5_flows, rte_flow);
 
+/* Default PMD specific parameter value. */
+#define MLX5_ARG_UNSET (-1)
+
+/*
+ * Device configuration structure.
+ *
+ * Merged configuration from:
+ *
+ *  - Device capabilities,
+ *  - User device parameters disabled features.
+ */
+struct mlx5_dev_config {
+	unsigned int hw_csum:1; /* Checksum offload is supported. */
+	unsigned int hw_csum_l2tun:1; /* Same for L2 tunnels. */
+	unsigned int hw_vlan_strip:1; /* VLAN stripping is supported. */
+	unsigned int hw_fcs_strip:1; /* FCS stripping is supported. */
+	unsigned int hw_padding:1; /* End alignment padding is supported. */
+	unsigned int sriov:1; /* This is a VF or PF with VF devices. */
+	unsigned int mps:2; /* Multi-packet send supported mode. */
+	unsigned int tunnel_en:1; /* Whether tunnel is supported. */
+	unsigned int flow_counter_en:1; /* Whether flow counter is supported. */
+	unsigned int cqe_comp:1; /* CQE compression is enabled. */
+	unsigned int tso:1; /* Whether TSO is supported. */
+	unsigned int tx_vec_en:1; /* Tx vector is enabled. */
+	unsigned int rx_vec_en:1; /* Rx vector is enabled. */
+	unsigned int mpw_hdr_dseg:1; /* Enable DSEGs in the title WQEBB. */
+	unsigned int tso_max_payload_sz; /* Maximum TCP payload for TSO. */
+	unsigned int ind_table_max_size; /* Maximum indirection table size. */
+	int txq_inline; /* Maximum packet size for inlining. */
+	int txqs_inline; /* Queue number threshold for inlining. */
+	int inline_max_packet_sz; /* Max packet size for inlining. */
+};
+
 struct priv {
 	struct rte_eth_dev *dev; /* Ethernet device of master process. */
 	struct ibv_context *ctx; /* Verbs context. */
@@ -102,27 +135,8 @@ struct priv {
 	/* Device properties. */
 	uint16_t mtu; /* Configured MTU. */
 	uint8_t port; /* Physical port number. */
-	unsigned int hw_csum:1; /* Checksum offload is supported. */
-	unsigned int hw_csum_l2tun:1; /* Same for L2 tunnels. */
-	unsigned int hw_vlan_strip:1; /* VLAN stripping is supported. */
-	unsigned int hw_fcs_strip:1; /* FCS stripping is supported. */
-	unsigned int hw_padding:1; /* End alignment padding is supported. */
-	unsigned int sriov:1; /* This is a VF or PF with VF devices. */
-	unsigned int mps:2; /* Multi-packet send mode (0: disabled). */
-	unsigned int mpw_hdr_dseg:1; /* Enable DSEGs in the title WQEBB. */
-	unsigned int cqe_comp:1; /* Whether CQE compression is enabled. */
 	unsigned int pending_alarm:1; /* An alarm is pending. */
-	unsigned int tso:1; /* Whether TSO is supported. */
-	unsigned int tunnel_en:1;
 	unsigned int isolated:1; /* Whether isolated mode is enabled. */
-	unsigned int tx_vec_en:1; /* Whether Tx vector is enabled. */
-	unsigned int rx_vec_en:1; /* Whether Rx vector is enabled. */
-	unsigned int counter_set_supported:1; /* Counter set is supported. */
-	/* Whether Tx offloads for tunneled packets are supported. */
-	unsigned int max_tso_payload_sz; /* Maximum TCP payload for TSO. */
-	unsigned int txq_inline; /* Maximum packet size for inlining. */
-	unsigned int txqs_inline; /* Queue number threshold for inlining. */
-	unsigned int inline_max_packet_sz; /* Max packet size for inlining. */
 	/* RX/TX queues. */
 	unsigned int rxqs_n; /* RX queues array size. */
 	unsigned int txqs_n; /* TX queues array size. */
@@ -149,6 +163,7 @@ struct priv {
 	rte_spinlock_t lock; /* Lock for control functions. */
 	int primary_socket; /* Unix socket for primary process. */
 	struct rte_intr_handle intr_handle_socket; /* Interrupt handler. */
+	struct mlx5_dev_config config; /* Device configuration. */
 };
 
 /**
@@ -162,6 +177,22 @@ static inline void
 priv_lock(struct priv *priv)
 {
 	rte_spinlock_lock(&priv->lock);
+}
+
+/**
+ * Try to lock private structure to protect it from concurrent access in the
+ * control path.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ *
+ * @return
+ *   1 if the lock is successfully taken; 0 otherwise.
+ */
+static inline int
+priv_trylock(struct priv *priv)
+{
+	return rte_spinlock_trylock(&priv->lock);
 }
 
 /**
@@ -194,6 +225,7 @@ int priv_set_flags(struct priv *, unsigned int, unsigned int);
 int mlx5_dev_configure(struct rte_eth_dev *);
 void mlx5_dev_infos_get(struct rte_eth_dev *, struct rte_eth_dev_info *);
 const uint32_t *mlx5_dev_supported_ptypes_get(struct rte_eth_dev *dev);
+int priv_link_update(struct priv *, int);
 int mlx5_link_update(struct rte_eth_dev *, int);
 int mlx5_dev_set_mtu(struct rte_eth_dev *, uint16_t);
 int mlx5_dev_get_flow_ctrl(struct rte_eth_dev *, struct rte_eth_fc_conf *);
@@ -206,8 +238,9 @@ void priv_dev_interrupt_handler_uninstall(struct priv *, struct rte_eth_dev *);
 void priv_dev_interrupt_handler_install(struct priv *, struct rte_eth_dev *);
 int mlx5_set_link_down(struct rte_eth_dev *dev);
 int mlx5_set_link_up(struct rte_eth_dev *dev);
-void priv_dev_select_tx_function(struct priv *priv, struct rte_eth_dev *dev);
-void priv_dev_select_rx_function(struct priv *priv, struct rte_eth_dev *dev);
+int mlx5_is_removed(struct rte_eth_dev *dev);
+eth_tx_burst_t priv_select_tx_function(struct priv *, struct rte_eth_dev *);
+eth_rx_burst_t priv_select_rx_function(struct priv *, struct rte_eth_dev *);
 
 /* mlx5_mac.c */
 

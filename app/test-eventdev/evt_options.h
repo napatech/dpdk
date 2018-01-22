@@ -1,33 +1,5 @@
-/*
- *   BSD LICENSE
- *
- *   Copyright (C) Cavium, Inc 2017.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Cavium, Inc nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2017 Cavium, Inc
  */
 
 #ifndef _EVT_OPTIONS_
@@ -58,7 +30,15 @@
 #define EVT_SCHED_TYPE_LIST      ("stlist")
 #define EVT_FWD_LATENCY          ("fwd_latency")
 #define EVT_QUEUE_PRIORITY       ("queue_priority")
+#define EVT_PROD_ETHDEV          ("prod_type_ethdev")
 #define EVT_HELP                 ("help")
+
+enum evt_prod_type {
+	EVT_PROD_TYPE_NONE,
+	EVT_PROD_TYPE_SYNT,          /* Producer type Synthetic i.e. CPU. */
+	EVT_PROD_TYPE_ETH_RX_ADPTR,  /* Producer type Eth Rx Adapter. */
+	EVT_PROD_TYPE_MAX,
+};
 
 struct evt_options {
 #define EVT_TEST_NAME_MAX_LEN     32
@@ -76,6 +56,7 @@ struct evt_options {
 	uint8_t dev_id;
 	uint32_t fwd_latency:1;
 	uint32_t q_priority:1;
+	enum evt_prod_type prod_type;
 };
 
 void evt_options_default(struct evt_options *opt);
@@ -264,6 +245,26 @@ evt_dump_sched_type_list(struct evt_options *opt)
 		printf("%s ", evt_sched_type_2_str(opt->sched_type_list[i]));
 
 	evt_dump_end;
+}
+
+#define EVT_PROD_MAX_NAME_LEN 50
+static inline void
+evt_dump_producer_type(struct evt_options *opt)
+{
+	char name[EVT_PROD_MAX_NAME_LEN];
+
+	switch (opt->prod_type) {
+	default:
+	case EVT_PROD_TYPE_SYNT:
+		snprintf(name, EVT_PROD_MAX_NAME_LEN,
+				"Synthetic producer lcores");
+		break;
+	case EVT_PROD_TYPE_ETH_RX_ADPTR:
+		snprintf(name, EVT_PROD_MAX_NAME_LEN,
+				"Ethdev Rx Adapter producers");
+		break;
+	}
+	evt_dump("prod_type", "%s", name);
 }
 
 #endif /* _EVT_OPTIONS_ */

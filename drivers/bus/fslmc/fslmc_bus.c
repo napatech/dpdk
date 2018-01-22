@@ -1,33 +1,7 @@
-/*-
- *   BSD LICENSE
+/* SPDX-License-Identifier: BSD-3-Clause
  *
- *   Copyright 2016 NXP.
+ *   Copyright 2016 NXP
  *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of NXP nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <string.h>
@@ -40,7 +14,7 @@
 #include <rte_malloc.h>
 #include <rte_devargs.h>
 #include <rte_memcpy.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 
 #include <rte_fslmc.h>
 #include <fslmc_vfio.h>
@@ -51,6 +25,17 @@
 #define VFIO_IOMMU_GROUP_PATH "/sys/kernel/iommu_groups"
 
 struct rte_fslmc_bus rte_fslmc_bus;
+uint8_t dpaa2_virt_mode;
+
+uint32_t
+rte_fslmc_get_device_count(enum rte_dpaa2_dev_type device_type)
+{
+	if (device_type > DPAA2_DEVTYPE_MAX)
+		return 0;
+	return rte_fslmc_bus.device_count[device_type];
+}
+
+RTE_DEFINE_PER_LCORE(struct dpaa2_portal_dqrr, dpaa2_held_bufs);
 
 static void
 cleanup_fslmc_device_list(void)
@@ -162,6 +147,9 @@ scan_one_fslmc_device(char *dev_name)
 		dev->dev_type = DPAA2_MPORTAL;
 	else
 		dev->dev_type = DPAA2_UNKNOWN;
+
+	/* Update the device found into the device_count table */
+	rte_fslmc_bus.device_count[dev->dev_type]++;
 
 	t_ptr = strtok(NULL, ".");
 	if (!t_ptr) {
@@ -300,6 +288,9 @@ rte_fslmc_probe(void)
 		}
 	}
 
+	if (rte_eal_iova_mode() == RTE_IOVA_VA)
+		dpaa2_virt_mode = 1;
+
 	return 0;
 }
 
@@ -347,11 +338,51 @@ rte_fslmc_driver_unregister(struct rte_dpaa2_driver *driver)
 }
 
 /*
+ * All device has iova as va
+ */
+static inline int
+fslmc_all_device_support_iova(void)
+{
+	int ret = 0;
+	struct rte_dpaa2_device *dev;
+	struct rte_dpaa2_driver *drv;
+
+	TAILQ_FOREACH(dev, &rte_fslmc_bus.device_list, next) {
+		TAILQ_FOREACH(drv, &rte_fslmc_bus.driver_list, next) {
+			ret = rte_fslmc_match(drv, dev);
+			if (ret)
+				continue;
+			/* if the driver is not supporting IOVA */
+			if (!(drv->drv_flags & RTE_DPAA2_DRV_IOVA_AS_VA))
+				return 0;
+		}
+	}
+	return 1;
+}
+
+/*
  * Get iommu class of DPAA2 devices on the bus.
  */
 static enum rte_iova_mode
 rte_dpaa2_get_iommu_class(void)
 {
+	bool is_vfio_noiommu_enabled = 1;
+	bool has_iova_va;
+
+	if (TAILQ_EMPTY(&rte_fslmc_bus.device_list))
+		return RTE_IOVA_DC;
+
+	/* check if all devices on the bus support Virtual addressing or not */
+	has_iova_va = fslmc_all_device_support_iova();
+
+#ifdef VFIO_PRESENT
+	is_vfio_noiommu_enabled = rte_vfio_noiommu_is_enabled() == true ?
+						true : false;
+#endif
+
+	if (has_iova_va && !is_vfio_noiommu_enabled)
+		return RTE_IOVA_VA;
+
 	return RTE_IOVA_PA;
 }
 
@@ -364,6 +395,7 @@ struct rte_fslmc_bus rte_fslmc_bus = {
 	},
 	.device_list = TAILQ_HEAD_INITIALIZER(rte_fslmc_bus.device_list),
 	.driver_list = TAILQ_HEAD_INITIALIZER(rte_fslmc_bus.driver_list),
+	.device_count = {0},
 };
 
 RTE_REGISTER_BUS(fslmc, rte_fslmc_bus.bus);

@@ -1,29 +1,7 @@
-/*-
- *   BSD LICENSE
+/* SPDX-License-Identifier: BSD-3-Clause
  *
  * Copyright (C) 2014-2016 Freescale Semiconductor, Inc.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in the
- *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of Freescale Semiconductor nor the
- *       names of its contributors may be used to endorse or promote products
- *       derived from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY Freescale Semiconductor ``AS IS'' AND ANY
- * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL Freescale Semiconductor BE LIABLE FOR ANY
- * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "qbman_portal.h"
@@ -518,6 +496,7 @@ int qbman_swp_enqueue(struct qbman_swp *s, const struct qbman_eq_desc *d,
 int qbman_swp_enqueue_multiple(struct qbman_swp *s,
 			       const struct qbman_eq_desc *d,
 			       const struct qbman_fd *fd,
+			       uint32_t *flags,
 			       int num_frames)
 {
 	uint32_t *p;
@@ -560,6 +539,12 @@ int qbman_swp_enqueue_multiple(struct qbman_swp *s,
 		p = qbman_cena_write_start_wo_shadow(&s->sys,
 					QBMAN_CENA_SWP_EQCR(eqcr_pi & 7));
 		p[0] = cl[0] | s->eqcr.pi_vb;
+		if (flags && (flags[i] & QBMAN_ENQUEUE_FLAG_DCA)) {
+			struct qbman_eq_desc *d = (struct qbman_eq_desc *)p;
+
+			d->eq.dca = (1 << QB_ENQUEUE_CMD_DCA_EN_SHIFT) |
+				((flags[i]) & QBMAN_EQCR_DCA_IDXMASK);
+		}
 		eqcr_pi++;
 		eqcr_pi &= 0xF;
 		if (!(eqcr_pi & 7))
@@ -879,6 +864,13 @@ void qbman_swp_dqrr_consume(struct qbman_swp *s,
 			    const struct qbman_result *dq)
 {
 	qbman_cinh_write(&s->sys, QBMAN_CINH_SWP_DCAP, QBMAN_IDX_FROM_DQRR(dq));
+}
+
+/* Consume DQRR entries previously returned from qbman_swp_dqrr_next(). */
+void qbman_swp_dqrr_idx_consume(struct qbman_swp *s,
+			    uint8_t dqrr_index)
+{
+	qbman_cinh_write(&s->sys, QBMAN_CINH_SWP_DCAP, dqrr_index);
 }
 
 /*********************************/

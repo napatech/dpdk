@@ -36,7 +36,12 @@
 #define _MRVL_ETHDEV_H_
 
 #include <rte_spinlock.h>
+
+#include <env/mv_autogen_comp_flags.h>
+#include <drivers/mv_pp2.h>
+#include <drivers/mv_pp2_bpool.h>
 #include <drivers/mv_pp2_cls.h>
+#include <drivers/mv_pp2_hif.h>
 #include <drivers/mv_pp2_ppio.h>
 
 /** Maximum number of rx queues per port */
@@ -109,8 +114,5 @@ struct mrvl_priv {
 	struct pp2_cls_tbl *qos_tbl;
 	uint16_t nb_rx_queues;
 };
-
-/** Number of ports configured. */
-extern int mrvl_ports_nb;
 
 #endif /* _MRVL_ETHDEV_H_ */

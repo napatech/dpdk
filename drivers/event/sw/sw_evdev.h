@@ -1,33 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2016-2017 Intel Corporation
  */
 
 #ifndef _SW_EVDEV_H_
@@ -48,6 +20,10 @@
 /* allow for lots of over-provisioning */
 #define MAX_SW_PROD_Q_DEPTH 4096
 #define SW_FRAGMENTS_MAX 16
+
+/* Should be power-of-two minus one, to leave room for the next pointer */
+#define SW_EVS_PER_Q_CHUNK 255
+#define SW_Q_CHUNK_SIZE ((SW_EVS_PER_Q_CHUNK + 1) * sizeof(struct rte_event))
 
 /* report dequeue burst sizes in buckets */
 #define SW_DEQ_STAT_BUCKET_SHIFT 2
@@ -130,6 +106,14 @@ struct reorder_buffer_entry {
 	struct rte_event fragments[SW_FRAGMENTS_MAX];
 };
 
+struct sw_iq {
+	struct sw_queue_chunk *head;
+	struct sw_queue_chunk *tail;
+	uint16_t head_idx;
+	uint16_t tail_idx;
+	uint16_t count;
+};
+
 struct sw_qid {
 	/* set when the QID has been initialized */
 	uint8_t initialized;
@@ -142,7 +126,7 @@ struct sw_qid {
 	struct sw_point_stats stats;
 
 	/* Internal priority rings for packets */
-	struct iq_ring *iq[SW_IQS_MAX];
+	struct sw_iq iq[SW_IQS_MAX];
 	uint32_t iq_pkt_mask; /* A mask to indicate packets in an IQ */
 	uint64_t iq_pkt_count[SW_IQS_MAX];
 
@@ -201,6 +185,7 @@ struct sw_port {
 	uint16_t outstanding_releases __rte_cache_aligned;
 	uint16_t inflight_max; /* app requested max inflights for this port */
 	uint16_t inflight_credits; /* num credits this port has right now */
+	uint8_t implicit_release; /* release events before dequeueing */
 
 	uint16_t last_dequeue_burst_sz; /* how big the burst was */
 	uint64_t last_dequeue_ticks; /* used to track burst processing time */
@@ -253,6 +238,8 @@ struct sw_evdev {
 
 	/* Internal queues - one per logical queue */
 	struct sw_qid qids[RTE_EVENT_MAX_QUEUES_PER_DEV] __rte_cache_aligned;
+	struct sw_queue_chunk *chunk_list_head;
+	struct sw_queue_chunk *chunks;
 
 	/* Cache how many packets are in each cq */
 	uint16_t cq_ring_space[SW_PORTS_MAX] __rte_cache_aligned;
@@ -319,5 +306,6 @@ int sw_xstats_reset(struct rte_eventdev *dev,
 		const uint32_t ids[],
 		uint32_t nb_ids);
 
+int test_sw_eventdev(void);
 
 #endif /* _SW_EVDEV_H_ */

@@ -57,7 +57,7 @@
 #include <rte_byteorder.h>
 #include <rte_errno.h>
 #include <rte_eth_ctrl.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_ether.h>
 #include <rte_flow.h>
 #include <rte_flow_driver.h>
@@ -105,6 +105,11 @@ struct mlx4_drop {
 /**
  * Convert DPDK RSS hash fields to their Verbs equivalent.
  *
+ * This function returns the supported (default) set when @p rss_hf has
+ * special value (uint64_t)-1.
+ *
+ * @param priv
+ *   Pointer to private structure.
  * @param rss_hf
  *   Hash fields in DPDK format (see struct rte_eth_rss_conf).
  *
@@ -112,8 +117,8 @@ struct mlx4_drop {
  *   A valid Verbs RSS hash fields mask for mlx4 on success, (uint64_t)-1
  *   otherwise and rte_errno is set.
  */
-static uint64_t
-mlx4_conv_rss_hf(uint64_t rss_hf)
+uint64_t
+mlx4_conv_rss_hf(struct priv *priv, uint64_t rss_hf)
 {
 	enum { IPV4, IPV6, TCP, UDP, };
 	const uint64_t in[] = {
@@ -133,11 +138,9 @@ mlx4_conv_rss_hf(uint64_t rss_hf)
 		[TCP] = (ETH_RSS_NONFRAG_IPV4_TCP |
 			 ETH_RSS_NONFRAG_IPV6_TCP |
 			 ETH_RSS_IPV6_TCP_EX),
-		/*
-		 * UDP support is temporarily disabled due to an
-		 * implementation issue in the kernel.
-		 */
-		[UDP] = 0,
+		[UDP] = (ETH_RSS_NONFRAG_IPV4_UDP |
+			 ETH_RSS_NONFRAG_IPV6_UDP |
+			 ETH_RSS_IPV6_UDP_EX),
 	};
 	const uint64_t out[RTE_DIM(in)] = {
 		[IPV4] = IBV_RX_HASH_SRC_IPV4 | IBV_RX_HASH_DST_IPV4,
@@ -154,8 +157,15 @@ mlx4_conv_rss_hf(uint64_t rss_hf)
 			seen |= rss_hf & in[i];
 			conv |= out[i];
 		}
-	if (!(rss_hf & ~seen))
-		return conv;
+	if ((conv & priv->hw_rss_sup) == conv) {
+		if (rss_hf == (uint64_t)-1) {
+			/* Include inner RSS by default if supported. */
+			conv |= priv->hw_rss_sup & IBV_RX_HASH_INNER;
+			return conv;
+		}
+		if (!(rss_hf & ~seen))
+			return conv;
+	}
 	rte_errno = ENOTSUP;
 	return (uint64_t)-1;
 }
@@ -759,10 +769,7 @@ fill:
 				&(struct rte_eth_rss_conf){
 					.rss_key = mlx4_rss_hash_key_default,
 					.rss_key_len = MLX4_RSS_HASH_KEY_SIZE,
-					.rss_hf = (ETH_RSS_IPV4 |
-						   ETH_RSS_NONFRAG_IPV4_TCP |
-						   ETH_RSS_IPV6 |
-						   ETH_RSS_NONFRAG_IPV6_TCP),
+					.rss_hf = -1,
 				};
 			/* Sanity checks. */
 			for (i = 0; i < rss->num; ++i)
@@ -801,7 +808,8 @@ fill:
 				goto exit_action_not_supported;
 			}
 			flow->rss = mlx4_rss_get
-				(priv, mlx4_conv_rss_hf(rss_conf->rss_hf),
+				(priv,
+				 mlx4_conv_rss_hf(priv, rss_conf->rss_hf),
 				 rss_conf->rss_key, rss->num, rss->queue);
 			if (!flow->rss) {
 				msg = "either invalid parameters or not enough"
@@ -1224,7 +1232,7 @@ mlx4_flow_internal_next_vlan(struct priv *priv, uint16_t vlan)
  * - MAC flow rules are generated from @p dev->data->mac_addrs
  *   (@p priv->mac array).
  * - An additional flow rule for Ethernet broadcasts is also generated.
- * - All these are per-VLAN if @p dev->data->dev_conf.rxmode.hw_vlan_filter
+ * - All these are per-VLAN if @p DEV_RX_OFFLOAD_VLAN_FILTER
  *   is enabled and VLAN filters are configured.
  *
  * @param priv
@@ -1292,7 +1300,8 @@ mlx4_flow_internal(struct priv *priv, struct rte_flow_error *error)
 	};
 	struct ether_addr *rule_mac = &eth_spec.dst;
 	rte_be16_t *rule_vlan =
-		priv->dev->data->dev_conf.rxmode.hw_vlan_filter &&
+		(priv->dev->data->dev_conf.rxmode.offloads &
+		 DEV_RX_OFFLOAD_VLAN_FILTER) &&
 		!priv->dev->data->promiscuous ?
 		&vlan_spec.tci :
 		NULL;

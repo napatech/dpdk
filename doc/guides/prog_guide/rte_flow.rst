@@ -980,11 +980,23 @@ Matches an ESP header.
 - ``hdr``: ESP header definition (``rte_esp.h``).
 - Default ``mask`` matches SPI only.
 
+Item: ``GENEVE``
+^^^^^^^^^^^^^^^^
+
+Matches a GENEVE header.
+
+- ``ver_opt_len_o_c_rsvd0``: version (2b), length of the options fields (6b),
+  OAM packet (1b), critical options present (1b), reserved 0 (6b).
+- ``protocol``: protocol type.
+- ``vni``: virtual network identifier.
+- ``rsvd1``: reserved, normally 0x00.
+- Default ``mask`` matches VNI only.
+
 Actions
 ~~~~~~~
 
 Each possible action is represented by a type. Some have associated
-configuration structures. Several actions combined in a list can be affected
+configuration structures. Several actions combined in a list can be assigned
 to a flow rule. That list is not ordered.
 
 They fall in three categories:

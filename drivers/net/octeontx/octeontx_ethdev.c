@@ -1,34 +1,7 @@
-/*
- *   BSD LICENSE
- *
- *   Copyright (C) Cavium Inc. 2017. All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Cavium networks nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2017 Cavium, Inc
  */
+
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -54,6 +27,9 @@ struct octeontx_vdev_init_params {
 	uint8_t	nr_port;
 };
 
+uint16_t
+rte_octeontx_pchan_map[OCTEONTX_MAX_BGX_PORTS][OCTEONTX_MAX_LMAC_PER_BGX];
+
 enum octeontx_link_speed {
 	OCTEONTX_LINK_SPEED_SGMII,
 	OCTEONTX_LINK_SPEED_XAUI,
@@ -64,6 +40,27 @@ enum octeontx_link_speed {
 	OCTEONTX_LINK_SPEED_QSGMII,
 	OCTEONTX_LINK_SPEED_RESERVE2
 };
+
+int otx_net_logtype_mbox;
+int otx_net_logtype_init;
+int otx_net_logtype_driver;
+
+RTE_INIT(otx_net_init_log);
+static void
+otx_net_init_log(void)
+{
+	otx_net_logtype_mbox = rte_log_register("pmd.otx.ethdev.mbox");
+	if (otx_net_logtype_mbox >= 0)
+		rte_log_set_level(otx_net_logtype_mbox, RTE_LOG_NOTICE);
+
+	otx_net_logtype_init = rte_log_register("pmd.otx.ethdev.init");
+	if (otx_net_logtype_init >= 0)
+		rte_log_set_level(otx_net_logtype_init, RTE_LOG_NOTICE);
+
+	otx_net_logtype_driver = rte_log_register("pmd.otx.ethdev.driver");
+	if (otx_net_logtype_driver >= 0)
+		rte_log_set_level(otx_net_logtype_driver, RTE_LOG_NOTICE);
+}
 
 /* Parse integer from integer argument */
 static int
@@ -572,8 +569,8 @@ octeontx_dev_link_update(struct rte_eth_dev *dev,
 		break;
 	}
 
-	link.link_duplex = ETH_LINK_AUTONEG;
-	link.link_autoneg = ETH_LINK_SPEED_AUTONEG;
+	link.link_duplex = ETH_LINK_FULL_DUPLEX;
+	link.link_autoneg = ETH_LINK_AUTONEG;
 
 	return octeontx_atomic_write_link_status(dev, &link);
 }
@@ -998,6 +995,17 @@ octeontx_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 	return NULL;
 }
 
+static int
+octeontx_pool_ops(struct rte_eth_dev *dev, const char *pool)
+{
+	RTE_SET_USED(dev);
+
+	if (!strcmp(pool, "octeontx_fpavf"))
+		return 0;
+
+	return -ENOTSUP;
+}
+
 /* Initialize and register driver with DPDK Application */
 static const struct eth_dev_ops octeontx_dev_ops = {
 	.dev_configure		 = octeontx_dev_configure,
@@ -1018,6 +1026,7 @@ static const struct eth_dev_ops octeontx_dev_ops = {
 	.rx_queue_setup		 = octeontx_dev_rx_queue_setup,
 	.rx_queue_release	 = octeontx_dev_rx_queue_release,
 	.dev_supported_ptypes_get = octeontx_dev_supported_ptypes_get,
+	.pool_ops_supported      = octeontx_pool_ops,
 };
 
 /* Create Ethdev interface per BGX LMAC ports */
@@ -1132,6 +1141,9 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 				nic->base_ochan, nic->num_ochans,
 				nic->num_tx_queues);
 	PMD_INIT_LOG(DEBUG, "speed %d mtu %d", nic->speed, nic->mtu);
+
+	rte_octeontx_pchan_map[(nic->base_ochan >> 8) & 0x7]
+		[(nic->base_ochan >> 4) & 0xF] = data->port_id;
 
 	return data->port_id;
 

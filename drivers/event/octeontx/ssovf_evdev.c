@@ -1,33 +1,5 @@
-/*
- *   BSD LICENSE
- *
- *   Copyright (C) Cavium, Inc. 2017.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Cavium, Inc nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2017 Cavium, Inc
  */
 
 #include <inttypes.h>
@@ -36,8 +8,9 @@
 #include <rte_debug.h>
 #include <rte_dev.h>
 #include <rte_eal.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_event_eth_rx_adapter.h>
+#include <rte_kvargs.h>
 #include <rte_lcore.h>
 #include <rte_log.h>
 #include <rte_malloc.h>
@@ -45,6 +18,17 @@
 #include <rte_bus_vdev.h>
 
 #include "ssovf_evdev.h"
+
+int otx_logtype_ssovf;
+
+RTE_INIT(otx_ssovf_init_log);
+static void
+otx_ssovf_init_log(void)
+{
+	otx_logtype_ssovf = rte_log_register("pmd.otx.eventdev");
+	if (otx_logtype_ssovf >= 0)
+		rte_log_set_level(otx_logtype_ssovf, RTE_LOG_NOTICE);
+}
 
 /* SSOPF Mailbox messages */
 
@@ -187,7 +171,11 @@ ssovf_info_get(struct rte_eventdev *dev, struct rte_event_dev_info *dev_info)
 	dev_info->max_num_events =  edev->max_num_events;
 	dev_info->event_dev_cap = RTE_EVENT_DEV_CAP_QUEUE_QOS |
 					RTE_EVENT_DEV_CAP_DISTRIBUTED_SCHED |
-					RTE_EVENT_DEV_CAP_QUEUE_ALL_TYPES;
+					RTE_EVENT_DEV_CAP_QUEUE_ALL_TYPES|
+					RTE_EVENT_DEV_CAP_RUNTIME_PORT_LINK |
+					RTE_EVENT_DEV_CAP_MULTIPLE_QUEUE_PORT |
+					RTE_EVENT_DEV_CAP_NONSEQ_MODE;
+
 }
 
 static int
@@ -252,6 +240,7 @@ ssovf_port_def_conf(struct rte_eventdev *dev, uint8_t port_id,
 	port_conf->new_event_threshold = edev->max_num_events;
 	port_conf->dequeue_depth = 1;
 	port_conf->enqueue_depth = 1;
+	port_conf->disable_implicit_release = 0;
 }
 
 static void
@@ -592,6 +581,15 @@ ssovf_close(struct rte_eventdev *dev)
 	return 0;
 }
 
+static int
+ssovf_selftest(const char *key __rte_unused, const char *value,
+		void *opaque)
+{
+	int *flag = opaque;
+	*flag = !!atoi(value);
+	return 0;
+}
+
 /* Initialize and register event driver with DPDK Application */
 static const struct rte_eventdev_ops ssovf_ops = {
 	.dev_infos_get    = ssovf_info_get,
@@ -612,6 +610,8 @@ static const struct rte_eventdev_ops ssovf_ops = {
 	.eth_rx_adapter_start = ssovf_eth_rx_adapter_start,
 	.eth_rx_adapter_stop = ssovf_eth_rx_adapter_stop,
 
+	.dev_selftest = test_eventdev_octeontx,
+
 	.dump             = ssovf_dump,
 	.dev_start        = ssovf_start,
 	.dev_stop         = ssovf_stop,
@@ -627,13 +627,42 @@ ssovf_vdev_probe(struct rte_vdev_device *vdev)
 	struct rte_eventdev *eventdev;
 	static int ssovf_init_once;
 	const char *name;
+	const char *params;
 	int ret;
+	int selftest = 0;
+
+	static const char *const args[] = {
+		SSOVF_SELFTEST_ARG,
+		NULL
+	};
 
 	name = rte_vdev_device_name(vdev);
 	/* More than one instance is not supported */
 	if (ssovf_init_once) {
 		ssovf_log_err("Request to create >1 %s instance", name);
 		return -EINVAL;
+	}
+
+	params = rte_vdev_device_args(vdev);
+	if (params != NULL && params[0] != '\0') {
+		struct rte_kvargs *kvlist = rte_kvargs_parse(params, args);
+
+		if (!kvlist) {
+			ssovf_log_info(
+				"Ignoring unsupported params supplied '%s'",
+				name);
+		} else {
+			int ret = rte_kvargs_process(kvlist,
+					SSOVF_SELFTEST_ARG,
+					ssovf_selftest, &selftest);
+			if (ret != 0) {
+				ssovf_log_err("%s: Error in selftest", name);
+				rte_kvargs_free(kvlist);
+				return ret;
+			}
+		}
+
+		rte_kvargs_free(kvlist);
 	}
 
 	eventdev = rte_event_pmd_vdev_init(name, sizeof(struct ssovf_evdev),
@@ -686,6 +715,8 @@ ssovf_vdev_probe(struct rte_vdev_device *vdev)
 			edev->max_event_ports);
 
 	ssovf_init_once = 1;
+	if (selftest)
+		test_eventdev_octeontx();
 	return 0;
 
 error:

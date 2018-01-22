@@ -1,31 +1,7 @@
-/*
- * Copyright (c) 2012-2016 Solarflare Communications Inc.
+/* SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 2012-2018 Solarflare Communications Inc.
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
- * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
- * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * The views and conclusions contained in the software and documentation are
- * those of the authors and should not be interpreted as representing official
- * policies, either expressed or implied, of the FreeBSD Project.
  */
 
 #include "efx.h"
@@ -463,7 +439,7 @@ ef10_ev_qcreate(
 	__in		efx_nic_t *enp,
 	__in		unsigned int index,
 	__in		efsys_mem_t *esmp,
-	__in		size_t n,
+	__in		size_t ndescs,
 	__in		uint32_t id,
 	__in		uint32_t us,
 	__in		uint32_t flags,
@@ -477,7 +453,8 @@ ef10_ev_qcreate(
 	EFX_STATIC_ASSERT(ISP2(EFX_EVQ_MAXNEVS));
 	EFX_STATIC_ASSERT(ISP2(EFX_EVQ_MINNEVS));
 
-	if (!ISP2(n) || (n < EFX_EVQ_MINNEVS) || (n > EFX_EVQ_MAXNEVS)) {
+	if (!ISP2(ndescs) ||
+	    (ndescs < EFX_EVQ_MINNEVS) || (ndescs > EFX_EVQ_MAXNEVS)) {
 		rc = EINVAL;
 		goto fail1;
 	}
@@ -526,7 +503,8 @@ ef10_ev_qcreate(
 		 * it will choose the best settings for low latency, otherwise
 		 * it will choose the best settings for throughput.
 		 */
-		rc = efx_mcdi_init_evq_v2(enp, index, esmp, n, irq, us, flags);
+		rc = efx_mcdi_init_evq_v2(enp, index, esmp, ndescs, irq, us,
+		    flags);
 		if (rc != 0)
 			goto fail4;
 	} else {
@@ -542,7 +520,7 @@ ef10_ev_qcreate(
 		 * to choose it.)
 		 */
 		boolean_t low_latency = encp->enc_datapath_cap_evb ? 0 : 1;
-		rc = efx_mcdi_init_evq(enp, index, esmp, n, irq, us, flags,
+		rc = efx_mcdi_init_evq(enp, index, esmp, ndescs, irq, us, flags,
 		    low_latency);
 		if (rc != 0)
 			goto fail5;
@@ -573,7 +551,7 @@ ef10_ev_qdestroy(
 	EFSYS_ASSERT(enp->en_family == EFX_FAMILY_HUNTINGTON ||
 	    enp->en_family == EFX_FAMILY_MEDFORD);
 
-	(void) efx_mcdi_fini_evq(eep->ee_enp, eep->ee_index);
+	(void) efx_mcdi_fini_evq(enp, eep->ee_index);
 }
 
 	__checkReturn	efx_rc_t
@@ -774,7 +752,7 @@ ef10_ev_rx_packed_stream(
 	__in_opt	void *arg)
 {
 	uint32_t label;
-	uint32_t next_read_lbits;
+	uint32_t pkt_count_lbits;
 	uint16_t flags;
 	boolean_t should_abort;
 	efx_evq_rxq_state_t *eersp;
@@ -782,23 +760,28 @@ ef10_ev_rx_packed_stream(
 	unsigned int current_id;
 	boolean_t new_buffer;
 
-	next_read_lbits = EFX_QWORD_FIELD(*eqp, ESF_DZ_RX_DSC_PTR_LBITS);
+	pkt_count_lbits = EFX_QWORD_FIELD(*eqp, ESF_DZ_RX_DSC_PTR_LBITS);
 	label = EFX_QWORD_FIELD(*eqp, ESF_DZ_RX_QLABEL);
 	new_buffer = EFX_QWORD_FIELD(*eqp, ESF_DZ_RX_EV_ROTATE);
 
 	flags = 0;
 
 	eersp = &eep->ee_rxq_state[label];
-	pkt_count = (EFX_MASK32(ESF_DZ_RX_DSC_PTR_LBITS) + 1 +
-	    next_read_lbits - eersp->eers_rx_stream_npackets) &
+
+	/*
+	 * RX_DSC_PTR_LBITS has least significant bits of the global
+	 * (not per-buffer) packet counter. It is guaranteed that
+	 * maximum number of completed packets fits in lbits-mask.
+	 * So, modulo lbits-mask arithmetic should be used to calculate
+	 * packet counter increment.
+	 */
+	pkt_count = (pkt_count_lbits - eersp->eers_rx_stream_npackets) &
 	    EFX_MASK32(ESF_DZ_RX_DSC_PTR_LBITS);
 	eersp->eers_rx_stream_npackets += pkt_count;
 
 	if (new_buffer) {
 		flags |= EFX_PKT_PACKED_STREAM_NEW_BUFFER;
-		if (eersp->eers_rx_packed_stream_credits <
-		    EFX_RX_PACKED_STREAM_MAX_CREDITS)
-			eersp->eers_rx_packed_stream_credits++;
+		eersp->eers_rx_packed_stream_credits++;
 		eersp->eers_rx_read_ptr++;
 	}
 	current_id = eersp->eers_rx_read_ptr & eersp->eers_rx_mask;
@@ -1336,10 +1319,14 @@ ef10_ev_rxlabel_init(
 	__in		efx_evq_t *eep,
 	__in		efx_rxq_t *erp,
 	__in		unsigned int label,
-	__in		boolean_t packed_stream)
+	__in		efx_rxq_type_t type)
 {
 	efx_evq_rxq_state_t *eersp;
+#if EFSYS_OPT_RX_PACKED_STREAM
+	boolean_t packed_stream = (type == EFX_RXQ_TYPE_PACKED_STREAM);
+#endif
 
+	_NOTE(ARGUNUSED(type))
 	EFSYS_ASSERT3U(label, <, EFX_ARRAY_SIZE(eep->ee_rxq_state));
 	eersp = &eep->ee_rxq_state[label];
 
@@ -1363,7 +1350,7 @@ ef10_ev_rxlabel_init(
 	eersp->eers_rx_packed_stream = packed_stream;
 	if (packed_stream) {
 		eersp->eers_rx_packed_stream_credits = (eep->ee_mask + 1) /
-		    (EFX_RX_PACKED_STREAM_MEM_PER_CREDIT /
+		    EFX_DIV_ROUND_UP(EFX_RX_PACKED_STREAM_MEM_PER_CREDIT,
 		    EFX_RX_PACKED_STREAM_MIN_PACKET_SPACE);
 		EFSYS_ASSERT3U(eersp->eers_rx_packed_stream_credits, !=, 0);
 		/*
@@ -1377,8 +1364,6 @@ ef10_ev_rxlabel_init(
 		EFSYS_ASSERT3U(eersp->eers_rx_packed_stream_credits, <=,
 		    EFX_RX_PACKED_STREAM_MAX_CREDITS);
 	}
-#else
-	EFSYS_ASSERT(!packed_stream);
 #endif
 }
 

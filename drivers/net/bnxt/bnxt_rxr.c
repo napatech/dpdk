@@ -65,17 +65,17 @@ static inline int bnxt_alloc_rx_data(struct bnxt_rx_queue *rxq,
 {
 	struct rx_prod_pkt_bd *rxbd = &rxr->rx_desc_ring[prod];
 	struct bnxt_sw_rx_bd *rx_buf = &rxr->rx_buf_ring[prod];
-	struct rte_mbuf *data;
+	struct rte_mbuf *mbuf;
 
-	data = __bnxt_alloc_rx_data(rxq->mb_pool);
-	if (!data) {
+	mbuf = __bnxt_alloc_rx_data(rxq->mb_pool);
+	if (!mbuf) {
 		rte_atomic64_inc(&rxq->bp->rx_mbuf_alloc_fail);
 		return -ENOMEM;
 	}
 
-	rx_buf->mbuf = data;
+	rx_buf->mbuf = mbuf;
 
-	rxbd->addr = rte_cpu_to_le_64(RTE_MBUF_DATA_DMA_ADDR(rx_buf->mbuf));
+	rxbd->addr = rte_cpu_to_le_64(rte_mbuf_data_iova_default(mbuf));
 
 	return 0;
 }
@@ -86,10 +86,10 @@ static inline int bnxt_alloc_ag_data(struct bnxt_rx_queue *rxq,
 {
 	struct rx_prod_pkt_bd *rxbd = &rxr->ag_desc_ring[prod];
 	struct bnxt_sw_rx_bd *rx_buf = &rxr->ag_buf_ring[prod];
-	struct rte_mbuf *data;
+	struct rte_mbuf *mbuf;
 
-	data = __bnxt_alloc_rx_data(rxq->mb_pool);
-	if (!data) {
+	mbuf = __bnxt_alloc_rx_data(rxq->mb_pool);
+	if (!mbuf) {
 		rte_atomic64_inc(&rxq->bp->rx_mbuf_alloc_fail);
 		return -ENOMEM;
 	}
@@ -100,9 +100,9 @@ static inline int bnxt_alloc_ag_data(struct bnxt_rx_queue *rxq,
 		RTE_LOG(ERR, PMD, "Jumbo Frame. rx_buf is NULL\n");
 
 
-	rx_buf->mbuf = data;
+	rx_buf->mbuf = mbuf;
 
-	rxbd->addr = rte_cpu_to_le_64(RTE_MBUF_DATA_DMA_ADDR(rx_buf->mbuf));
+	rxbd->addr = rte_cpu_to_le_64(rte_mbuf_data_iova_default(mbuf));
 
 	return 0;
 }
@@ -123,7 +123,7 @@ static inline void bnxt_reuse_rx_mbuf(struct bnxt_rx_ring_info *rxr,
 
 	prod_bd = &rxr->rx_desc_ring[prod];
 
-	prod_bd->addr = rte_cpu_to_le_64(RTE_MBUF_DATA_DMA_ADDR(mbuf));
+	prod_bd->addr = rte_cpu_to_le_64(rte_mbuf_data_iova_default(mbuf));
 
 	rxr->rx_prod = prod;
 }
@@ -442,6 +442,7 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 
 	rte_prefetch0(mbuf);
 
+	mbuf->data_off = RTE_PKTMBUF_HEADROOM;
 	mbuf->nb_segs = 1;
 	mbuf->next = NULL;
 	mbuf->pkt_len = rxcmp->len;
@@ -455,6 +456,10 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 		mbuf->hash.fdir.id = rxcmp1->cfa_code;
 		mbuf->ol_flags |= PKT_RX_FDIR | PKT_RX_FDIR_ID;
 	}
+
+	if ((rxcmp->flags_type & rte_cpu_to_le_16(RX_PKT_CMPL_FLAGS_MASK)) ==
+	     RX_PKT_CMPL_FLAGS_ITYPE_PTP_W_TIMESTAMP)
+		mbuf->ol_flags |= PKT_RX_IEEE1588_PTP;
 
 	if (agg_buf)
 		bnxt_rx_pages(rxq, mbuf, &tmp_raw_cons, agg_buf);

@@ -1,33 +1,5 @@
-/*
- *   BSD LICENSE
- *
- *   Copyright (C) Cavium, Inc 2017.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Cavium, Inc nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2017 Cavium, Inc
  */
 
 #ifndef _TEST_PERF_COMMON_
@@ -38,7 +10,9 @@
 #include <unistd.h>
 
 #include <rte_cycles.h>
+#include <rte_ethdev.h>
 #include <rte_eventdev.h>
+#include <rte_event_eth_rx_adapter.h>
 #include <rte_lcore.h>
 #include <rte_malloc.h>
 #include <rte_mempool.h>
@@ -156,6 +130,7 @@ perf_nb_event_ports(struct evt_options *opt)
 int perf_test_result(struct evt_test *test, struct evt_options *opt);
 int perf_opt_check(struct evt_options *opt, uint64_t nb_queues);
 int perf_test_setup(struct evt_test *test, struct evt_options *opt);
+int perf_ethdev_setup(struct evt_test *test, struct evt_options *opt);
 int perf_mempool_setup(struct evt_test *test, struct evt_options *opt);
 int perf_event_dev_port_setup(struct evt_test *test, struct evt_options *opt,
 				uint8_t stride, uint8_t nb_queues);
@@ -165,6 +140,7 @@ int perf_launch_lcores(struct evt_test *test, struct evt_options *opt,
 void perf_opt_dump(struct evt_options *opt, uint8_t nb_queues);
 void perf_test_destroy(struct evt_test *test, struct evt_options *opt);
 void perf_eventdev_destroy(struct evt_test *test, struct evt_options *opt);
+void perf_ethdev_destroy(struct evt_test *test, struct evt_options *opt);
 void perf_mempool_destroy(struct evt_test *test, struct evt_options *opt);
 
 #endif /* _TEST_PERF_COMMON_ */

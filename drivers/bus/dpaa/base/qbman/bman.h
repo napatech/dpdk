@@ -1,41 +1,8 @@
-/*-
- * This file is provided under a dual BSD/GPLv2 license. When using or
- * redistributing this file, you may do so under either license.
- *
- *   BSD LICENSE
+/* SPDX-License-Identifier: (BSD-3-Clause OR GPL-2.0)
  *
  * Copyright 2010-2016 Freescale Semiconductor Inc.
- * Copyright 2017 NXP.
+ * Copyright 2017 NXP
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- * * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- * notice, this list of conditions and the following disclaimer in the
- * documentation and/or other materials provided with the distribution.
- * * Neither the name of the above-listed copyright holders nor the
- * names of any contributors may be used to endorse or promote products
- * derived from this software without specific prior written permission.
- *
- *   GPL LICENSE SUMMARY
- *
- * ALTERNATIVELY, this software may be distributed under the terms of the
- * GNU General Public License ("GPL") as published by the Free Software
- * Foundation, either version 2 of that License or (at your option) any
- * later version.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef __BMAN_H
@@ -228,7 +195,9 @@ static inline void bm_rcr_finish(struct bm_portal *portal)
 	u8 pi = bm_in(RCR_PI_CINH) & (BM_RCR_SIZE - 1);
 	u8 ci = bm_in(RCR_CI_CINH) & (BM_RCR_SIZE - 1);
 
+#ifdef RTE_LIBRTE_DPAA_HWDEBUG
 	DPAA_ASSERT(!rcr->busy);
+#endif
 	if (pi != RCR_PTR2IDX(rcr->cursor))
 		pr_crit("losing uncommitted RCR entries\n");
 	if (ci != rcr->ci)
@@ -241,7 +210,9 @@ static inline struct bm_rcr_entry *bm_rcr_start(struct bm_portal *portal)
 {
 	register struct bm_rcr *rcr = &portal->rcr;
 
+#ifdef RTE_LIBRTE_DPAA_HWDEBUG
 	DPAA_ASSERT(!rcr->busy);
+#endif
 	if (!rcr->available)
 		return NULL;
 #ifdef RTE_LIBRTE_DPAA_HWDEBUG
@@ -255,8 +226,8 @@ static inline void bm_rcr_abort(struct bm_portal *portal)
 {
 	__maybe_unused register struct bm_rcr *rcr = &portal->rcr;
 
-	DPAA_ASSERT(rcr->busy);
 #ifdef RTE_LIBRTE_DPAA_HWDEBUG
+	DPAA_ASSERT(rcr->busy);
 	rcr->busy = 0;
 #endif
 }
@@ -266,8 +237,10 @@ static inline struct bm_rcr_entry *bm_rcr_pend_and_next(
 {
 	register struct bm_rcr *rcr = &portal->rcr;
 
+#ifdef RTE_LIBRTE_DPAA_HWDEBUG
 	DPAA_ASSERT(rcr->busy);
 	DPAA_ASSERT(rcr->pmode != bm_rcr_pvb);
+#endif
 	if (rcr->available == 1)
 		return NULL;
 	rcr->cursor->__dont_write_directly__verb = myverb | rcr->vbit;
@@ -282,8 +255,10 @@ static inline void bm_rcr_pci_commit(struct bm_portal *portal, u8 myverb)
 {
 	register struct bm_rcr *rcr = &portal->rcr;
 
+#ifdef RTE_LIBRTE_DPAA_HWDEBUG
 	DPAA_ASSERT(rcr->busy);
 	DPAA_ASSERT(rcr->pmode == bm_rcr_pci);
+#endif
 	rcr->cursor->__dont_write_directly__verb = myverb | rcr->vbit;
 	RCR_INC(rcr);
 	rcr->available--;
@@ -298,7 +273,9 @@ static inline void bm_rcr_pce_prefetch(struct bm_portal *portal)
 {
 	__maybe_unused register struct bm_rcr *rcr = &portal->rcr;
 
+#ifdef RTE_LIBRTE_DPAA_HWDEBUG
 	DPAA_ASSERT(rcr->pmode == bm_rcr_pce);
+#endif
 	bm_cl_invalidate(RCR_PI);
 	bm_cl_touch_rw(RCR_PI);
 }
@@ -307,8 +284,10 @@ static inline void bm_rcr_pce_commit(struct bm_portal *portal, u8 myverb)
 {
 	register struct bm_rcr *rcr = &portal->rcr;
 
+#ifdef RTE_LIBRTE_DPAA_HWDEBUG
 	DPAA_ASSERT(rcr->busy);
 	DPAA_ASSERT(rcr->pmode == bm_rcr_pce);
+#endif
 	rcr->cursor->__dont_write_directly__verb = myverb | rcr->vbit;
 	RCR_INC(rcr);
 	rcr->available--;
@@ -324,8 +303,10 @@ static inline void bm_rcr_pvb_commit(struct bm_portal *portal, u8 myverb)
 	register struct bm_rcr *rcr = &portal->rcr;
 	struct bm_rcr_entry *rcursor;
 
+#ifdef RTE_LIBRTE_DPAA_HWDEBUG
 	DPAA_ASSERT(rcr->busy);
 	DPAA_ASSERT(rcr->pmode == bm_rcr_pvb);
+#endif
 	lwsync();
 	rcursor = rcr->cursor;
 	rcursor->__dont_write_directly__verb = myverb | rcr->vbit;
@@ -342,7 +323,9 @@ static inline u8 bm_rcr_cci_update(struct bm_portal *portal)
 	register struct bm_rcr *rcr = &portal->rcr;
 	u8 diff, old_ci = rcr->ci;
 
+#ifdef RTE_LIBRTE_DPAA_HWDEBUG
 	DPAA_ASSERT(rcr->cmode == bm_rcr_cci);
+#endif
 	rcr->ci = bm_in(RCR_CI_CINH) & (BM_RCR_SIZE - 1);
 	diff = bm_cyc_diff(BM_RCR_SIZE, old_ci, rcr->ci);
 	rcr->available += diff;
@@ -353,7 +336,9 @@ static inline void bm_rcr_cce_prefetch(struct bm_portal *portal)
 {
 	__maybe_unused register struct bm_rcr *rcr = &portal->rcr;
 
+#ifdef RTE_LIBRTE_DPAA_HWDEBUG
 	DPAA_ASSERT(rcr->cmode == bm_rcr_cce);
+#endif
 	bm_cl_touch_ro(RCR_CI);
 }
 
@@ -362,7 +347,9 @@ static inline u8 bm_rcr_cce_update(struct bm_portal *portal)
 	register struct bm_rcr *rcr = &portal->rcr;
 	u8 diff, old_ci = rcr->ci;
 
+#ifdef RTE_LIBRTE_DPAA_HWDEBUG
 	DPAA_ASSERT(rcr->cmode == bm_rcr_cce);
+#endif
 	rcr->ci = bm_cl_in(RCR_CI) & (BM_RCR_SIZE - 1);
 	bm_cl_invalidate(RCR_CI);
 	diff = bm_cyc_diff(BM_RCR_SIZE, old_ci, rcr->ci);
@@ -420,8 +407,8 @@ static inline void bm_mc_finish(struct bm_portal *portal)
 {
 	__maybe_unused register struct bm_mc *mc = &portal->mc;
 
-	DPAA_ASSERT(mc->state == mc_idle);
 #ifdef RTE_LIBRTE_DPAA_HWDEBUG
+	DPAA_ASSERT(mc->state == mc_idle);
 	if (mc->state != mc_idle)
 		pr_crit("Losing incomplete MC command\n");
 #endif
@@ -431,8 +418,8 @@ static inline struct bm_mc_command *bm_mc_start(struct bm_portal *portal)
 {
 	register struct bm_mc *mc = &portal->mc;
 
-	DPAA_ASSERT(mc->state == mc_idle);
 #ifdef RTE_LIBRTE_DPAA_HWDEBUG
+	DPAA_ASSERT(mc->state == mc_idle);
 	mc->state = mc_user;
 #endif
 	dcbz_64(mc->cr);
@@ -443,8 +430,8 @@ static inline void bm_mc_abort(struct bm_portal *portal)
 {
 	__maybe_unused register struct bm_mc *mc = &portal->mc;
 
-	DPAA_ASSERT(mc->state == mc_user);
 #ifdef RTE_LIBRTE_DPAA_HWDEBUG
+	DPAA_ASSERT(mc->state == mc_user);
 	mc->state = mc_idle;
 #endif
 }
@@ -454,7 +441,9 @@ static inline void bm_mc_commit(struct bm_portal *portal, u8 myverb)
 	register struct bm_mc *mc = &portal->mc;
 	struct bm_mc_result *rr = mc->rr + mc->rridx;
 
+#ifdef RTE_LIBRTE_DPAA_HWDEBUG
 	DPAA_ASSERT(mc->state == mc_user);
+#endif
 	lwsync();
 	mc->cr->__dont_write_directly__verb = myverb | mc->vbit;
 	dcbf(mc->cr);
@@ -469,7 +458,9 @@ static inline struct bm_mc_result *bm_mc_result(struct bm_portal *portal)
 	register struct bm_mc *mc = &portal->mc;
 	struct bm_mc_result *rr = mc->rr + mc->rridx;
 
+#ifdef RTE_LIBRTE_DPAA_HWDEBUG
 	DPAA_ASSERT(mc->state == mc_hw);
+#endif
 	/* The inactive response register's verb byte always returns zero until
 	 * its command is submitted and completed. This includes the valid-bit,
 	 * in case you were wondering.

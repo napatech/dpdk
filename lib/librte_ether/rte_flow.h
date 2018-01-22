@@ -356,6 +356,13 @@ enum rte_flow_item_type {
 	 * See struct rte_flow_item_esp.
 	 */
 	RTE_FLOW_ITEM_TYPE_ESP,
+
+	/**
+	 * Matches a GENEVE header.
+	 *
+	 * See struct rte_flow_item_geneve.
+	 */
+	RTE_FLOW_ITEM_TYPE_GENEVE,
 };
 
 /**
@@ -878,6 +885,29 @@ static const struct rte_flow_item_esp rte_flow_item_esp_mask = {
 #endif
 
 /**
+ * RTE_FLOW_ITEM_TYPE_GENEVE.
+ *
+ * Matches a GENEVE header.
+ */
+struct rte_flow_item_geneve {
+	/**
+	 * Version (2b), length of the options fields (6b), OAM packet (1b),
+	 * critical options present (1b), reserved 0 (6b).
+	 */
+	rte_be16_t ver_opt_len_o_c_rsvd0;
+	rte_be16_t protocol; /**< Protocol type. */
+	uint8_t vni[3]; /**< Virtual Network Identifier. */
+	uint8_t rsvd1; /**< Reserved, normally 0x00. */
+};
+
+/** Default mask for RTE_FLOW_ITEM_TYPE_GENEVE. */
+#ifndef __cplusplus
+static const struct rte_flow_item_geneve rte_flow_item_geneve_mask = {
+	.vni = "\xff\xff\xff",
+};
+#endif
+
+/**
  * Matching pattern item definition.
  *
  * A pattern is formed by stacking items starting from the lowest protocol
@@ -1301,6 +1331,8 @@ struct rte_flow_error {
  *   otherwise (rte_errno is also set), the following errors are defined:
  *
  *   -ENOSYS: underlying device does not support this functionality.
+ *
+ *   -EIO: underlying device is removed.
  *
  *   -EINVAL: unknown or invalid rule specification.
  *

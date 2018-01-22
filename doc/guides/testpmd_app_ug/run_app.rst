@@ -447,18 +447,6 @@ The commandline options are:
     Set the transmit RS bit threshold of TX rings to N, where 0 <= N <= value of ``--txd``.
     The default value is 0.
 
-*   ``--txqflags=0xXXXXXXXX``
-
-    Set the hexadecimal bitmask of TX queue flags, where 0 <= N <= 0x7FFFFFFF.
-    The default value is 0.
-
-    .. note::
-
-       When using hardware offload functions such as vlan or checksum
-       add ``txqflags=0`` to force the full-featured TX code path.
-       In some PMDs this may already be the default.
-
-
 *   ``--rx-queue-stats-mapping=(port,queue,mapping)[,(port,queue,mapping)]``
 
     Set the RX queues statistics counters mapping 0 <= mapping <= 15.
@@ -492,12 +480,12 @@ The commandline options are:
 
     Set the logical core N to perform bitrate calculation.
 
-*   ``--print-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|all>``
+*   ``--print-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|dev_probed|dev_released|all>``
 
     Enable printing the occurrence of the designated event. Using all will
     enable all of them.
 
-*   ``--mask-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|all>``
+*   ``--mask-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|dev_probed|dev_released|all>``
 
     Disable printing the occurrence of the designated event. Using all will
     disable all of them.
@@ -509,3 +497,8 @@ The commandline options are:
     configured flow rules only (see flow command).
 
     Ports that do not support this mode are automatically discarded.
+
+*   ``--tx-offloads=0xXXXXXXXX``
+
+    Set the hexadecimal bitmask of TX queue offloads.
+    The default value is 0.

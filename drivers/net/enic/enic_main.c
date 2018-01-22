@@ -1,35 +1,6 @@
-/*
- * Copyright 2008-2014 Cisco Systems, Inc.  All rights reserved.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright 2008-2017 Cisco Systems, Inc.  All rights reserved.
  * Copyright 2007 Nuova Systems, Inc.  All rights reserved.
- *
- * Copyright (c) 2014, Cisco Systems, Inc.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- * notice, this list of conditions and the following disclaimer in
- * the documentation and/or other materials provided with the
- * distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- *
  */
 
 #include <stdio.h>
@@ -45,7 +16,7 @@
 #include <rte_malloc.h>
 #include <rte_mbuf.h>
 #include <rte_string_fns.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 
 #include "enic_compat.h"
 #include "enic.h"
@@ -96,11 +67,6 @@ enic_rxmbuf_queue_release(__rte_unused struct enic *enic, struct vnic_rq *rq)
 			rq->mbuf_ring[i] = NULL;
 		}
 	}
-}
-
-void enic_set_hdr_split_size(struct enic *enic, u16 split_hdr_size)
-{
-	vnic_set_hdr_split_size(enic->vdev, split_hdr_size);
 }
 
 static void enic_free_wq_buf(struct vnic_wq_buf *buf)
@@ -434,7 +400,7 @@ enic_intr_handler(void *arg)
 	vnic_intr_return_all_credits(&enic->intr);
 
 	enic_link_update(enic);
-	_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL, NULL);
+	_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
 	enic_log_q_error(enic);
 }
 
@@ -634,7 +600,8 @@ int enic_alloc_rq(struct enic *enic, uint16_t queue_idx,
 	mbuf_size = (uint16_t)(rte_pktmbuf_data_room_size(mp) -
 			       RTE_PKTMBUF_HEADROOM);
 
-	if (enic->rte_dev->data->dev_conf.rxmode.enable_scatter) {
+	if (enic->rte_dev->data->dev_conf.rxmode.offloads &
+	    DEV_RX_OFFLOAD_SCATTER) {
 		dev_info(enic, "Rq %u Scatter rx mode enabled\n", queue_idx);
 		/* ceil((mtu + ETHER_HDR_LEN + 4)/mbuf_size) */
 		mbufs_per_pkt = ((mtu + ETHER_HDR_LEN + 4) +
@@ -1208,7 +1175,8 @@ int enic_set_mtu(struct enic *enic, uint16_t new_mtu)
 	/* The easy case is when scatter is disabled. However if the MTU
 	 * becomes greater than the mbuf data size, packet drops will ensue.
 	 */
-	if (!enic->rte_dev->data->dev_conf.rxmode.enable_scatter) {
+	if (!(enic->rte_dev->data->dev_conf.rxmode.offloads &
+	      DEV_RX_OFFLOAD_SCATTER)) {
 		eth_dev->data->mtu = new_mtu;
 		goto set_mtu_done;
 	}

@@ -68,31 +68,6 @@
 #endif
 
 /**
- * Count the number of continuous single segment packets.
- *
- * @param pkts
- *   Pointer to array of packets.
- * @param pkts_n
- *   Number of packets.
- *
- * @return
- *   Number of continuous single segment packets.
- */
-static inline unsigned int
-txq_check_multiseg(struct rte_mbuf **pkts, uint16_t pkts_n)
-{
-	unsigned int pos;
-
-	if (!pkts_n)
-		return 0;
-	/* Count the number of continuous single segment packets. */
-	for (pos = 0; pos < pkts_n; ++pos)
-		if (NB_SEGS(pkts[pos]) > 1)
-			break;
-	return pos;
-}
-
-/**
  * Count the number of packets having same ol_flags and calculate cs_flags.
  *
  * @param txq
@@ -123,24 +98,7 @@ txq_calc_offload(struct mlx5_txq_data *txq, struct rte_mbuf **pkts,
 	for (pos = 1; pos < pkts_n; ++pos)
 		if ((pkts[pos]->ol_flags ^ pkts[0]->ol_flags) & ol_mask)
 			break;
-	/* Should open another MPW session for the rest. */
-	if (pkts[0]->ol_flags &
-	    (PKT_TX_IP_CKSUM | PKT_TX_TCP_CKSUM | PKT_TX_UDP_CKSUM)) {
-		const uint64_t is_tunneled =
-			pkts[0]->ol_flags &
-			(PKT_TX_TUNNEL_GRE |
-			 PKT_TX_TUNNEL_VXLAN);
-
-		if (is_tunneled && txq->tunnel_en) {
-			*cs_flags = MLX5_ETH_WQE_L3_INNER_CSUM |
-				    MLX5_ETH_WQE_L4_INNER_CSUM;
-			if (pkts[0]->ol_flags & PKT_TX_OUTER_IP_CKSUM)
-				*cs_flags |= MLX5_ETH_WQE_L3_CSUM;
-		} else {
-			*cs_flags = MLX5_ETH_WQE_L3_CSUM |
-				    MLX5_ETH_WQE_L4_CSUM;
-		}
-	}
+	*cs_flags = txq_ol_cksum_to_cs(txq, pkts[0]);
 	return pos;
 }
 
@@ -202,15 +160,15 @@ mlx5_tx_burst_vec(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		uint16_t ret;
 
 		/* Transmit multi-seg packets in the head of pkts list. */
-		if (!(txq->flags & ETH_TXQ_FLAGS_NOMULTSEGS) &&
+		if ((txq->offloads & DEV_TX_OFFLOAD_MULTI_SEGS) &&
 		    NB_SEGS(pkts[nb_tx]) > 1)
 			nb_tx += txq_scatter_v(txq,
 					       &pkts[nb_tx],
 					       pkts_n - nb_tx);
 		n = RTE_MIN((uint16_t)(pkts_n - nb_tx), MLX5_VPMD_TX_MAX_BURST);
-		if (!(txq->flags & ETH_TXQ_FLAGS_NOMULTSEGS))
-			n = txq_check_multiseg(&pkts[nb_tx], n);
-		if (!(txq->flags & ETH_TXQ_FLAGS_NOOFFLOADS))
+		if (txq->offloads & DEV_TX_OFFLOAD_MULTI_SEGS)
+			n = txq_count_contig_single_seg(&pkts[nb_tx], n);
+		if (txq->offloads & MLX5_VEC_TX_CKSUM_OFFLOAD_CAP)
 			n = txq_calc_offload(txq, &pkts[nb_tx], n, &cs_flags);
 		ret = txq_burst_v(txq, &pkts[nb_tx], n, cs_flags);
 		nb_tx += ret;
@@ -261,7 +219,6 @@ rxq_handle_pending_error(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts,
 	rxq->stats.ipackets -= (pkts_n - n);
 	rxq->stats.ibytes -= err_bytes;
 #endif
-	rxq->pending_err = 0;
 	return n;
 }
 
@@ -283,9 +240,10 @@ mlx5_rx_burst_vec(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
 	struct mlx5_rxq_data *rxq = dpdk_rxq;
 	uint16_t nb_rx;
+	uint64_t err = 0;
 
-	nb_rx = rxq_burst_v(rxq, pkts, pkts_n);
-	if (unlikely(rxq->pending_err))
+	nb_rx = rxq_burst_v(rxq, pkts, pkts_n, &err);
+	if (unlikely(err))
 		nb_rx = rxq_handle_pending_error(rxq, pkts, nb_rx);
 	return nb_rx;
 }
@@ -295,24 +253,20 @@ mlx5_rx_burst_vec(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
  *
  * @param priv
  *   Pointer to private structure.
+ * @param dev
+ *   Pointer to rte_eth_dev structure.
  *
  * @return
  *   1 if supported, negative errno value if not.
  */
 int __attribute__((cold))
-priv_check_raw_vec_tx_support(struct priv *priv)
+priv_check_raw_vec_tx_support(__rte_unused struct priv *priv,
+			      struct rte_eth_dev *dev)
 {
-	uint16_t i;
+	uint64_t offloads = dev->data->dev_conf.txmode.offloads;
 
-	/* All the configured queues should support. */
-	for (i = 0; i < priv->txqs_n; ++i) {
-		struct mlx5_txq_data *txq = (*priv->txqs)[i];
-
-		if (!(txq->flags & ETH_TXQ_FLAGS_NOMULTSEGS) ||
-		    !(txq->flags & ETH_TXQ_FLAGS_NOOFFLOADS))
-			break;
-	}
-	if (i != priv->txqs_n)
+	/* Doesn't support any offload. */
+	if (offloads)
 		return -ENOTSUP;
 	return 1;
 }
@@ -322,17 +276,21 @@ priv_check_raw_vec_tx_support(struct priv *priv)
  *
  * @param priv
  *   Pointer to private structure.
+ * @param dev
+ *   Pointer to rte_eth_dev structure.
  *
  * @return
  *   1 if supported, negative errno value if not.
  */
 int __attribute__((cold))
-priv_check_vec_tx_support(struct priv *priv)
+priv_check_vec_tx_support(struct priv *priv, struct rte_eth_dev *dev)
 {
-	if (!priv->tx_vec_en ||
+	uint64_t offloads = dev->data->dev_conf.txmode.offloads;
+
+	if (!priv->config.tx_vec_en ||
 	    priv->txqs_n > MLX5_VPMD_MIN_TXQS ||
-	    priv->mps != MLX5_MPW_ENHANCED ||
-	    priv->tso)
+	    priv->config.mps != MLX5_MPW_ENHANCED ||
+	    offloads & ~MLX5_VEC_TX_OFFLOAD_CAP)
 		return -ENOTSUP;
 	return 1;
 }
@@ -352,7 +310,7 @@ rxq_check_vec_support(struct mlx5_rxq_data *rxq)
 	struct mlx5_rxq_ctrl *ctrl =
 		container_of(rxq, struct mlx5_rxq_ctrl, rxq);
 
-	if (!ctrl->priv->rx_vec_en || rxq->sges_n != 0)
+	if (!ctrl->priv->config.rx_vec_en || rxq->sges_n != 0)
 		return -ENOTSUP;
 	return 1;
 }
@@ -371,7 +329,7 @@ priv_check_vec_rx_support(struct priv *priv)
 {
 	uint16_t i;
 
-	if (!priv->rx_vec_en)
+	if (!priv->config.rx_vec_en)
 		return -ENOTSUP;
 	/* All the configured queues should support. */
 	for (i = 0; i < priv->rxqs_n; ++i) {

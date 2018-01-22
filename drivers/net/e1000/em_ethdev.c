@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2016 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2016 Intel Corporation
  */
 
 #include <sys/queue.h>
@@ -45,7 +16,7 @@
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
 #include <rte_ether.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_ethdev_pci.h>
 #include <rte_memory.h>
 #include <rte_eal.h>
@@ -134,6 +105,9 @@ static int eth_em_set_mc_addr_list(struct rte_eth_dev *dev,
 
 static enum e1000_fc_mode em_fc_setting = e1000_fc_full;
 
+int e1000_logtype_init;
+int e1000_logtype_driver;
+
 /*
  * The set of PCI devices this driver supports
  */
@@ -161,6 +135,7 @@ static const struct rte_pci_id pci_id_em_map[] = {
 	{ RTE_PCI_DEVICE(E1000_INTEL_VENDOR_ID, E1000_DEV_ID_82574L) },
 	{ RTE_PCI_DEVICE(E1000_INTEL_VENDOR_ID, E1000_DEV_ID_82574LA) },
 	{ RTE_PCI_DEVICE(E1000_INTEL_VENDOR_ID, E1000_DEV_ID_82583V) },
+	{ RTE_PCI_DEVICE(E1000_INTEL_VENDOR_ID, E1000_DEV_ID_PCH2_LV_LM) },
 	{ RTE_PCI_DEVICE(E1000_INTEL_VENDOR_ID, E1000_DEV_ID_PCH_LPT_I217_LM) },
 	{ RTE_PCI_DEVICE(E1000_INTEL_VENDOR_ID, E1000_DEV_ID_PCH_LPT_I217_V) },
 	{ RTE_PCI_DEVICE(E1000_INTEL_VENDOR_ID, E1000_DEV_ID_PCH_LPTLP_I218_LM) },
@@ -286,6 +261,7 @@ eth_em_dev_is_ich8(struct e1000_hw *hw)
 	DEBUGFUNC("eth_em_dev_is_ich8");
 
 	switch (hw->device_id) {
+	case E1000_DEV_ID_PCH2_LV_LM:
 	case E1000_DEV_ID_PCH_LPT_I217_LM:
 	case E1000_DEV_ID_PCH_LPT_I217_V:
 	case E1000_DEV_ID_PCH_LPTLP_I218_LM:
@@ -586,6 +562,30 @@ em_set_pba(struct e1000_hw *hw)
 	E1000_WRITE_REG(hw, E1000_PBA, pba);
 }
 
+static void
+eth_em_rxtx_control(struct rte_eth_dev *dev,
+		    bool enable)
+{
+	struct e1000_hw *hw =
+		E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	uint32_t tctl, rctl;
+
+	tctl = E1000_READ_REG(hw, E1000_TCTL);
+	rctl = E1000_READ_REG(hw, E1000_RCTL);
+	if (enable) {
+		/* enable Tx/Rx */
+		tctl |= E1000_TCTL_EN;
+		rctl |= E1000_RCTL_EN;
+	} else {
+		/* disable Tx/Rx */
+		tctl &= ~E1000_TCTL_EN;
+		rctl &= ~E1000_RCTL_EN;
+	}
+	E1000_WRITE_REG(hw, E1000_TCTL, tctl);
+	E1000_WRITE_REG(hw, E1000_RCTL, rctl);
+	E1000_WRITE_FLUSH(hw);
+}
+
 static int
 eth_em_start(struct rte_eth_dev *dev)
 {
@@ -759,6 +759,9 @@ eth_em_start(struct rte_eth_dev *dev)
 
 	adapter->stopped = 0;
 
+	eth_em_rxtx_control(dev, true);
+	eth_em_link_update(dev, 0);
+
 	PMD_INIT_LOG(DEBUG, "<<");
 
 	return 0;
@@ -784,6 +787,7 @@ eth_em_stop(struct rte_eth_dev *dev)
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 
+	eth_em_rxtx_control(dev, false);
 	em_rxq_intr_disable(hw);
 	em_lsc_intr_disable(hw);
 
@@ -1209,7 +1213,7 @@ eth_em_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 		link.link_speed = 0;
 		link.link_duplex = ETH_LINK_HALF_DUPLEX;
 		link.link_status = ETH_LINK_DOWN;
-		link.link_autoneg = ETH_LINK_SPEED_FIXED;
+		link.link_autoneg = ETH_LINK_FIXED;
 	}
 	rte_em_dev_atomic_write_link_status(dev, &link);
 
@@ -1610,7 +1614,6 @@ eth_em_interrupt_action(struct rte_eth_dev *dev,
 		E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct e1000_interrupt *intr =
 		E1000_DEV_PRIVATE_TO_INTR(dev->data->dev_private);
-	uint32_t tctl, rctl;
 	struct rte_eth_link link;
 	int ret;
 
@@ -1642,21 +1645,6 @@ eth_em_interrupt_action(struct rte_eth_dev *dev,
 		     pci_dev->addr.domain, pci_dev->addr.bus,
 		     pci_dev->addr.devid, pci_dev->addr.function);
 
-	tctl = E1000_READ_REG(hw, E1000_TCTL);
-	rctl = E1000_READ_REG(hw, E1000_RCTL);
-	if (link.link_status) {
-		/* enable Tx/Rx */
-		tctl |= E1000_TCTL_EN;
-		rctl |= E1000_RCTL_EN;
-	} else {
-		/* disable Tx/Rx */
-		tctl &= ~E1000_TCTL_EN;
-		rctl &= ~E1000_RCTL_EN;
-	}
-	E1000_WRITE_REG(hw, E1000_TCTL, tctl);
-	E1000_WRITE_REG(hw, E1000_RCTL, rctl);
-	E1000_WRITE_FLUSH(hw);
-
 	return 0;
 }
 
@@ -1678,7 +1666,7 @@ eth_em_interrupt_handler(void *param)
 
 	eth_em_interrupt_get_status(dev);
 	eth_em_interrupt_action(dev, dev->intr_handle);
-	_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL, NULL);
+	_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
 }
 
 static int
@@ -1875,3 +1863,15 @@ eth_em_set_mc_addr_list(struct rte_eth_dev *dev,
 RTE_PMD_REGISTER_PCI(net_e1000_em, rte_em_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_e1000_em, pci_id_em_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_e1000_em, "* igb_uio | uio_pci_generic | vfio-pci");
+
+RTE_INIT(e1000_init_log);
+static void
+e1000_init_log(void)
+{
+	e1000_logtype_init = rte_log_register("pmd.e1000.init");
+	if (e1000_logtype_init >= 0)
+		rte_log_set_level(e1000_logtype_init, RTE_LOG_NOTICE);
+	e1000_logtype_driver = rte_log_register("pmd.e1000.driver");
+	if (e1000_logtype_driver >= 0)
+		rte_log_set_level(e1000_logtype_driver, RTE_LOG_NOTICE);
+}

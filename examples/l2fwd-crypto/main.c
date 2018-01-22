@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2015-2016 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2015-2016 Intel Corporation
  */
 
 #include <time.h>
@@ -235,16 +206,13 @@ struct lcore_queue_conf {
 
 struct lcore_queue_conf lcore_queue_conf[RTE_MAX_LCORE];
 
-static const struct rte_eth_conf port_conf = {
+static struct rte_eth_conf port_conf = {
 	.rxmode = {
 		.mq_mode = ETH_MQ_RX_NONE,
 		.max_rx_pkt_len = ETHER_MAX_LEN,
 		.split_hdr_size = 0,
-		.header_split   = 0, /**< Header Split disabled */
-		.hw_ip_checksum = 0, /**< IP checksum offload disabled */
-		.hw_vlan_filter = 0, /**< VLAN filtering disabled */
-		.jumbo_frame    = 0, /**< Jumbo Frame Support disabled */
-		.hw_strip_crc   = 1, /**< CRC stripped by hardware */
+		.ignore_offload_bitfield = 1,
+		.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
@@ -2356,6 +2324,10 @@ initialize_ports(struct l2fwd_crypto_options *options)
 
 	for (last_portid = 0, portid = 0; portid < nb_ports; portid++) {
 		int retval;
+		struct rte_eth_dev_info dev_info;
+		struct rte_eth_rxconf rxq_conf;
+		struct rte_eth_txconf txq_conf;
+		struct rte_eth_conf local_port_conf = port_conf;
 
 		/* Skip ports that are not enabled */
 		if ((options->portmask & (1 << portid)) == 0)
@@ -2364,7 +2336,11 @@ initialize_ports(struct l2fwd_crypto_options *options)
 		/* init port */
 		printf("Initializing port %u... ", portid);
 		fflush(stdout);
-		retval = rte_eth_dev_configure(portid, 1, 1, &port_conf);
+		rte_eth_dev_info_get(portid, &dev_info);
+		if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
+			local_port_conf.txmode.offloads |=
+				DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+		retval = rte_eth_dev_configure(portid, 1, 1, &local_port_conf);
 		if (retval < 0) {
 			printf("Cannot configure device: err=%d, port=%u\n",
 				  retval, portid);
@@ -2381,9 +2357,11 @@ initialize_ports(struct l2fwd_crypto_options *options)
 
 		/* init one RX queue */
 		fflush(stdout);
+		rxq_conf = dev_info.default_rxconf;
+		rxq_conf.offloads = local_port_conf.rxmode.offloads;
 		retval = rte_eth_rx_queue_setup(portid, 0, nb_rxd,
 					     rte_eth_dev_socket_id(portid),
-					     NULL, l2fwd_pktmbuf_pool);
+					     &rxq_conf, l2fwd_pktmbuf_pool);
 		if (retval < 0) {
 			printf("rte_eth_rx_queue_setup:err=%d, port=%u\n",
 					retval, portid);
@@ -2392,9 +2370,12 @@ initialize_ports(struct l2fwd_crypto_options *options)
 
 		/* init one TX queue on each port */
 		fflush(stdout);
+		txq_conf = dev_info.default_txconf;
+		txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
+		txq_conf.offloads = local_port_conf.txmode.offloads;
 		retval = rte_eth_tx_queue_setup(portid, 0, nb_txd,
 				rte_eth_dev_socket_id(portid),
-				NULL);
+				&txq_conf);
 		if (retval < 0) {
 			printf("rte_eth_tx_queue_setup:err=%d, port=%u\n",
 				retval, portid);

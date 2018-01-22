@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2014 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2014 Intel Corporation
  */
 
 #include <stdint.h>
@@ -100,10 +71,7 @@ static const struct rte_eth_conf vmdq_dcb_conf_default = {
 	.rxmode = {
 		.mq_mode        = ETH_MQ_RX_VMDQ_DCB,
 		.split_hdr_size = 0,
-		.header_split   = 0, /**< Header Split disabled */
-		.hw_ip_checksum = 0, /**< IP checksum offload disabled */
-		.hw_vlan_filter = 0, /**< VLAN filtering disabled */
-		.jumbo_frame    = 0, /**< Jumbo Frame Support disabled */
+		.ignore_offload_bitfield = 1,
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_VMDQ_DCB,
@@ -228,6 +196,7 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 	uint16_t q;
 	uint16_t queues_per_pool;
 	uint32_t max_nb_pools;
+	struct rte_eth_txconf txq_conf;
 
 	/*
 	 * The max pool number from dev_info will be used to validate the pool
@@ -284,6 +253,10 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 	if (retval < 0)
 		return retval;
 
+	rte_eth_dev_info_get(port, &dev_info);
+	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
+		port_conf.txmode.offloads |=
+			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
 	/*
 	 * Though in this example, all queues including pf queues are setup.
 	 * This is because VMDQ queues doesn't always start from zero, and the
@@ -316,10 +289,13 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 		}
 	}
 
+	txq_conf = dev_info.default_txconf;
+	txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
+	txq_conf.offloads = port_conf.txmode.offloads;
 	for (q = 0; q < num_queues; q++) {
 		retval = rte_eth_tx_queue_setup(port, q, txRingSize,
 					rte_eth_dev_socket_id(port),
-					NULL);
+					&txq_conf);
 		if (retval < 0) {
 			printf("initialize tx queue %d failed\n", q);
 			return retval;

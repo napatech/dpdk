@@ -1,33 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2015-2016 Intel Corporation. All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2015-2016 Intel Corporation
  */
 
 #ifndef _RTE_AESNI_MB_PMD_PRIVATE_H_
@@ -71,6 +43,7 @@ static const unsigned auth_blocksize[] = {
 		[SHA_384]	= 128,
 		[SHA_512]	= 128,
 		[AES_XCBC]	= 16,
+		[AES_CCM]	= 16,
 };
 
 /**
@@ -93,6 +66,7 @@ static const unsigned auth_truncated_digest_byte_lengths[] = {
 		[SHA_384]	= 24,
 		[SHA_512]	= 32,
 		[AES_XCBC]	= 12,
+		[AES_CCM]	= 8,
 		[NULL_HASH]     = 0
 };
 
@@ -137,6 +111,8 @@ enum aesni_mb_operation {
 	AESNI_MB_OP_CIPHER_HASH,
 	AESNI_MB_OP_HASH_ONLY,
 	AESNI_MB_OP_CIPHER_ONLY,
+	AESNI_MB_OP_AEAD_HASH_CIPHER,
+	AESNI_MB_OP_AEAD_CIPHER_HASH,
 	AESNI_MB_OP_NOT_SUPPORTED
 };
 
@@ -154,7 +130,7 @@ struct aesni_mb_private {
 struct aesni_mb_qp {
 	uint16_t id;
 	/**< Queue Pair Identifier */
-	char name[RTE_CRYPTODEV_NAME_LEN];
+	char name[RTE_CRYPTODEV_NAME_MAX_LEN];
 	/**< Unique Queue Pair Name */
 	const struct aesni_mb_op_fns *op_fns;
 	/**< Vector mode dependent pointer table of the multi-buffer APIs */
@@ -238,6 +214,12 @@ struct aesni_mb_session {
 			/**< Expanded XCBC authentication keys */
 		};
 	} auth;
+	struct {
+		/** AAD data length */
+		uint16_t aad_len;
+		/** digest size */
+		uint16_t digest_len;
+	} aead;
 } __rte_cache_aligned;
 
 

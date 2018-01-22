@@ -1,32 +1,10 @@
-/*-
- *   BSD LICENSE
+/* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2016-2017 Solarflare Communications Inc.
+ * Copyright (c) 2016-2018 Solarflare Communications Inc.
  * All rights reserved.
  *
  * This software was jointly developed between OKTET Labs (under contract
  * for Solarflare) and Solarflare Communications, Inc.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
- * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
- * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <rte_mempool.h>
@@ -88,8 +66,7 @@ sfc_efx_rx_qrefill(struct sfc_efx_rxq *rxq)
 	struct rte_mbuf *m;
 	uint16_t port_id = rxq->dp.dpq.port_id;
 
-	free_space = EFX_RXQ_LIMIT(rxq->ptr_mask + 1) -
-		(added - rxq->completed);
+	free_space = rxq->max_fill_level - (added - rxq->completed);
 
 	if (free_space < rxq->refill_threshold)
 		return;
@@ -193,7 +170,7 @@ sfc_efx_rx_desc_flags_to_packet_type(const unsigned int desc_flags)
 }
 
 static const uint32_t *
-sfc_efx_supported_ptypes_get(void)
+sfc_efx_supported_ptypes_get(__rte_unused uint32_t tunnel_encaps)
 {
 	static const uint32_t ptypes[] = {
 		RTE_PTYPE_L2_ETHER,
@@ -413,6 +390,19 @@ sfc_rxq_by_dp_rxq(const struct sfc_dp_rxq *dp_rxq)
 	return rxq;
 }
 
+static sfc_dp_rx_qsize_up_rings_t sfc_efx_rx_qsize_up_rings;
+static int
+sfc_efx_rx_qsize_up_rings(uint16_t nb_rx_desc,
+			  unsigned int *rxq_entries,
+			  unsigned int *evq_entries,
+			  unsigned int *rxq_max_fill_level)
+{
+	*rxq_entries = nb_rx_desc;
+	*evq_entries = nb_rx_desc;
+	*rxq_max_fill_level = EFX_RXQ_LIMIT(*rxq_entries);
+	return 0;
+}
+
 static sfc_dp_rx_qcreate_t sfc_efx_rx_qcreate;
 static int
 sfc_efx_rx_qcreate(uint16_t port_id, uint16_t queue_id,
@@ -446,6 +436,7 @@ sfc_efx_rx_qcreate(uint16_t port_id, uint16_t queue_id,
 	rxq->ptr_mask = info->rxq_entries - 1;
 	rxq->batch_max = info->batch_max;
 	rxq->prefix_size = info->prefix_size;
+	rxq->max_fill_level = info->max_fill_level;
 	rxq->refill_threshold = info->refill_threshold;
 	rxq->buf_size = info->buf_size;
 	rxq->refill_mb_pool = info->refill_mb_pool;
@@ -535,6 +526,7 @@ struct sfc_dp_rx sfc_efx_rx = {
 		.hw_fw_caps	= 0,
 	},
 	.features		= SFC_DP_RX_FEAT_SCATTER,
+	.qsize_up_rings		= sfc_efx_rx_qsize_up_rings,
 	.qcreate		= sfc_efx_rx_qcreate,
 	.qdestroy		= sfc_efx_rx_qdestroy,
 	.qstart			= sfc_efx_rx_qstart,
@@ -697,8 +689,8 @@ sfc_rx_qstart(struct sfc_adapter *sa, unsigned int sw_index)
 
 	rc = efx_rx_qcreate(sa->nic, rxq->hw_index, 0, rxq_info->type,
 			    &rxq->mem, rxq_info->entries,
-			    0 /* not used on EF10 */, evq->common,
-			    &rxq->common);
+			    0 /* not used on EF10 */, rxq_info->type_flags,
+			    evq->common, &rxq->common);
 	if (rc != 0)
 		goto fail_rx_qcreate;
 
@@ -770,11 +762,81 @@ sfc_rx_qstop(struct sfc_adapter *sa, unsigned int sw_index)
 	sfc_ev_qstop(rxq->evq);
 }
 
+uint64_t
+sfc_rx_get_dev_offload_caps(struct sfc_adapter *sa)
+{
+	const efx_nic_cfg_t *encp = efx_nic_cfg_get(sa->nic);
+	uint64_t caps = 0;
+
+	caps |= DEV_RX_OFFLOAD_JUMBO_FRAME;
+	caps |= DEV_RX_OFFLOAD_CRC_STRIP;
+	caps |= DEV_RX_OFFLOAD_IPV4_CKSUM;
+	caps |= DEV_RX_OFFLOAD_UDP_CKSUM;
+	caps |= DEV_RX_OFFLOAD_TCP_CKSUM;
+
+	if (encp->enc_tunnel_encapsulations_supported &&
+	    (sa->dp_rx->features & SFC_DP_RX_FEAT_TUNNELS))
+		caps |= DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM;
+
+	return caps;
+}
+
+uint64_t
+sfc_rx_get_queue_offload_caps(struct sfc_adapter *sa)
+{
+	uint64_t caps = 0;
+
+	if (sa->dp_rx->features & SFC_DP_RX_FEAT_SCATTER)
+		caps |= DEV_RX_OFFLOAD_SCATTER;
+
+	return caps;
+}
+
+static void
+sfc_rx_log_offloads(struct sfc_adapter *sa, const char *offload_group,
+		    const char *verdict, uint64_t offloads)
+{
+	unsigned long long bit;
+
+	while ((bit = __builtin_ffsll(offloads)) != 0) {
+		uint64_t flag = (1ULL << --bit);
+
+		sfc_err(sa, "Rx %s offload %s %s", offload_group,
+			rte_eth_dev_rx_offload_name(flag), verdict);
+
+		offloads &= ~flag;
+	}
+}
+
+static boolean_t
+sfc_rx_queue_offloads_mismatch(struct sfc_adapter *sa, uint64_t requested)
+{
+	uint64_t mandatory = sa->eth_dev->data->dev_conf.rxmode.offloads;
+	uint64_t supported = sfc_rx_get_dev_offload_caps(sa) |
+			     sfc_rx_get_queue_offload_caps(sa);
+	uint64_t rejected = requested & ~supported;
+	uint64_t missing = (requested & mandatory) ^ mandatory;
+	boolean_t mismatch = B_FALSE;
+
+	if (rejected) {
+		sfc_rx_log_offloads(sa, "queue", "is unsupported", rejected);
+		mismatch = B_TRUE;
+	}
+
+	if (missing) {
+		sfc_rx_log_offloads(sa, "queue", "must be set", missing);
+		mismatch = B_TRUE;
+	}
+
+	return mismatch;
+}
+
 static int
-sfc_rx_qcheck_conf(struct sfc_adapter *sa, uint16_t nb_rx_desc,
+sfc_rx_qcheck_conf(struct sfc_adapter *sa, unsigned int rxq_max_fill_level,
 		   const struct rte_eth_rxconf *rx_conf)
 {
-	const uint16_t rx_free_thresh_max = EFX_RXQ_LIMIT(nb_rx_desc);
+	uint64_t offloads_supported = sfc_rx_get_dev_offload_caps(sa) |
+				      sfc_rx_get_queue_offload_caps(sa);
 	int rc = 0;
 
 	if (rx_conf->rx_thresh.pthresh != 0 ||
@@ -784,10 +846,10 @@ sfc_rx_qcheck_conf(struct sfc_adapter *sa, uint16_t nb_rx_desc,
 			"RxQ prefetch/host/writeback thresholds are not supported");
 	}
 
-	if (rx_conf->rx_free_thresh > rx_free_thresh_max) {
+	if (rx_conf->rx_free_thresh > rxq_max_fill_level) {
 		sfc_err(sa,
 			"RxQ free threshold too large: %u vs maximum %u",
-			rx_conf->rx_free_thresh, rx_free_thresh_max);
+			rx_conf->rx_free_thresh, rxq_max_fill_level);
 		rc = EINVAL;
 	}
 
@@ -795,6 +857,17 @@ sfc_rx_qcheck_conf(struct sfc_adapter *sa, uint16_t nb_rx_desc,
 		sfc_err(sa, "RxQ drop disable is not supported");
 		rc = EINVAL;
 	}
+
+	if ((rx_conf->offloads & DEV_RX_OFFLOAD_CHECKSUM) !=
+	    DEV_RX_OFFLOAD_CHECKSUM)
+		sfc_warn(sa, "Rx checksum offloads cannot be disabled - always on (IPv4/TCP/UDP)");
+
+	if ((offloads_supported & DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM) &&
+	    (~rx_conf->offloads & DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM))
+		sfc_warn(sa, "Rx outer IPv4 checksum offload cannot be disabled - always on");
+
+	if (sfc_rx_queue_offloads_mismatch(sa, rx_conf->offloads))
+		rc = EINVAL;
 
 	return rc;
 }
@@ -907,13 +980,25 @@ sfc_rx_qinit(struct sfc_adapter *sa, unsigned int sw_index,
 {
 	const efx_nic_cfg_t *encp = efx_nic_cfg_get(sa->nic);
 	int rc;
+	unsigned int rxq_entries;
+	unsigned int evq_entries;
+	unsigned int rxq_max_fill_level;
 	uint16_t buf_size;
 	struct sfc_rxq_info *rxq_info;
 	struct sfc_evq *evq;
 	struct sfc_rxq *rxq;
 	struct sfc_dp_rx_qcreate_info info;
 
-	rc = sfc_rx_qcheck_conf(sa, nb_rx_desc, rx_conf);
+	rc = sa->dp_rx->qsize_up_rings(nb_rx_desc, &rxq_entries, &evq_entries,
+				       &rxq_max_fill_level);
+	if (rc != 0)
+		goto fail_size_up_rings;
+	SFC_ASSERT(rxq_entries >= EFX_RXQ_MINNDESCS);
+	SFC_ASSERT(rxq_entries <= EFX_RXQ_MAXNDESCS);
+	SFC_ASSERT(rxq_entries >= nb_rx_desc);
+	SFC_ASSERT(rxq_max_fill_level <= nb_rx_desc);
+
+	rc = sfc_rx_qcheck_conf(sa, rxq_max_fill_level, rx_conf);
 	if (rc != 0)
 		goto fail_bad_conf;
 
@@ -926,7 +1011,7 @@ sfc_rx_qinit(struct sfc_adapter *sa, unsigned int sw_index,
 	}
 
 	if ((buf_size < sa->port.pdu + encp->enc_rx_prefix_size) &&
-	    !sa->eth_dev->data->dev_conf.rxmode.enable_scatter) {
+	    (~rx_conf->offloads & DEV_RX_OFFLOAD_SCATTER)) {
 		sfc_err(sa, "Rx scatter is disabled and RxQ %u mbuf pool "
 			"object size is too small", sw_index);
 		sfc_err(sa, "RxQ %u calculated Rx buffer size is %u vs "
@@ -940,14 +1025,19 @@ sfc_rx_qinit(struct sfc_adapter *sa, unsigned int sw_index,
 	SFC_ASSERT(sw_index < sa->rxq_count);
 	rxq_info = &sa->rxq_info[sw_index];
 
-	SFC_ASSERT(nb_rx_desc <= rxq_info->max_entries);
-	rxq_info->entries = nb_rx_desc;
-	rxq_info->type =
-		sa->eth_dev->data->dev_conf.rxmode.enable_scatter ?
-		EFX_RXQ_TYPE_SCATTER : EFX_RXQ_TYPE_DEFAULT;
+	SFC_ASSERT(rxq_entries <= rxq_info->max_entries);
+	rxq_info->entries = rxq_entries;
+	rxq_info->type = EFX_RXQ_TYPE_DEFAULT;
+	rxq_info->type_flags =
+		(rx_conf->offloads & DEV_RX_OFFLOAD_SCATTER) ?
+		EFX_RXQ_FLAG_SCATTER : EFX_RXQ_FLAG_NONE;
+
+	if ((encp->enc_tunnel_encapsulations_supported != 0) &&
+	    (sa->dp_rx->features & SFC_DP_RX_FEAT_TUNNELS))
+		rxq_info->type_flags |= EFX_RXQ_FLAG_INNER_CLASSES;
 
 	rc = sfc_ev_qinit(sa, SFC_EVQ_TYPE_RX, sw_index,
-			  rxq_info->entries, socket_id, &evq);
+			  evq_entries, socket_id, &evq);
 	if (rc != 0)
 		goto fail_ev_qinit;
 
@@ -972,6 +1062,7 @@ sfc_rx_qinit(struct sfc_adapter *sa, unsigned int sw_index,
 
 	memset(&info, 0, sizeof(info));
 	info.refill_mb_pool = rxq->refill_mb_pool;
+	info.max_fill_level = rxq_max_fill_level;
 	info.refill_threshold = rxq->refill_threshold;
 	info.buf_size = buf_size;
 	info.batch_max = encp->enc_rx_batch_max;
@@ -984,7 +1075,7 @@ sfc_rx_qinit(struct sfc_adapter *sa, unsigned int sw_index,
 
 	info.rxq_entries = rxq_info->entries;
 	info.rxq_hw_ring = rxq->mem.esm_base;
-	info.evq_entries = rxq_info->entries;
+	info.evq_entries = evq_entries;
 	info.evq_hw_ring = evq->mem.esm_base;
 	info.hw_index = rxq->hw_index;
 	info.mem_bar = sa->mem_bar.esb_base;
@@ -1017,6 +1108,7 @@ fail_ev_qinit:
 	rxq_info->entries = 0;
 
 fail_bad_conf:
+fail_size_up_rings:
 	sfc_log_init(sa, "failed %d", rc);
 	return rc;
 }
@@ -1200,6 +1292,9 @@ sfc_rx_qinit_info(struct sfc_adapter *sa, unsigned int sw_index)
 static int
 sfc_rx_check_mode(struct sfc_adapter *sa, struct rte_eth_rxmode *rxmode)
 {
+	uint64_t offloads_supported = sfc_rx_get_dev_offload_caps(sa) |
+				      sfc_rx_get_queue_offload_caps(sa);
+	uint64_t offloads_rejected = rxmode->offloads & ~offloads_supported;
 	int rc = 0;
 
 	switch (rxmode->mq_mode) {
@@ -1220,43 +1315,16 @@ sfc_rx_check_mode(struct sfc_adapter *sa, struct rte_eth_rxmode *rxmode)
 		rc = EINVAL;
 	}
 
-	if (rxmode->header_split) {
-		sfc_err(sa, "Header split on Rx not supported");
+	if (offloads_rejected) {
+		sfc_rx_log_offloads(sa, "device", "is unsupported",
+				    offloads_rejected);
 		rc = EINVAL;
 	}
 
-	if (rxmode->hw_vlan_filter) {
-		sfc_err(sa, "HW VLAN filtering not supported");
-		rc = EINVAL;
-	}
-
-	if (rxmode->hw_vlan_strip) {
-		sfc_err(sa, "HW VLAN stripping not supported");
-		rc = EINVAL;
-	}
-
-	if (rxmode->hw_vlan_extend) {
-		sfc_err(sa,
-			"Q-in-Q HW VLAN stripping not supported");
-		rc = EINVAL;
-	}
-
-	if (!rxmode->hw_strip_crc) {
-		sfc_warn(sa,
-			 "FCS stripping control not supported - always stripped");
+	if (~rxmode->offloads & DEV_RX_OFFLOAD_CRC_STRIP) {
+		sfc_warn(sa, "FCS stripping cannot be disabled - always on");
+		rxmode->offloads |= DEV_RX_OFFLOAD_CRC_STRIP;
 		rxmode->hw_strip_crc = 1;
-	}
-
-	if (rxmode->enable_scatter &&
-	    (~sa->dp_rx->features & SFC_DP_RX_FEAT_SCATTER)) {
-		sfc_err(sa, "Rx scatter not supported by %s datapath",
-			sa->dp_rx->dp.name);
-		rc = EINVAL;
-	}
-
-	if (rxmode->enable_lro) {
-		sfc_err(sa, "LRO not supported");
-		rc = EINVAL;
 	}
 
 	return rc;

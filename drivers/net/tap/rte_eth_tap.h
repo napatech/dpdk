@@ -41,11 +41,11 @@
 
 #include <linux/if_tun.h>
 
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_ether.h>
 
 #ifdef IFF_MULTI_QUEUE
-#define RTE_PMD_TAP_MAX_QUEUES	16
+#define RTE_PMD_TAP_MAX_QUEUES	TAP_MAX_QUEUES
 #else
 #define RTE_PMD_TAP_MAX_QUEUES	1
 #endif
@@ -76,6 +76,7 @@ struct rx_queue {
 struct tx_queue {
 	int fd;
 	uint16_t *mtu;                  /* Pointer to MTU from dev_data */
+	uint16_t csum:1;                /* Enable checksum offloading */
 	struct pkt_stats stats;         /* Stats for this TX queue */
 };
 
@@ -90,6 +91,13 @@ struct pmd_internals {
 	int ioctl_sock;                   /* socket for ioctl calls */
 	int nlsk_fd;                      /* Netlink socket fd */
 	int flow_isolate;                 /* 1 if flow isolation is enabled */
+	int flower_support;               /* 1 if kernel supports, else 0 */
+	int flower_vlan_support;          /* 1 if kernel supports, else 0 */
+	int rss_enabled;                  /* 1 if RSS is enabled, else 0 */
+	/* implicit rules set when RSS is enabled */
+	int map_fd;                       /* BPF RSS map fd */
+	int bpf_fd[RTE_PMD_TAP_MAX_QUEUES];/* List of bpf fds per queue */
+	LIST_HEAD(tap_rss_flows, rte_flow) rss_flows;
 	LIST_HEAD(tap_flows, rte_flow) flows;        /* rte_flow rules */
 	/* implicit rte_flow rules set when a remote device is active */
 	LIST_HEAD(tap_implicit_flows, rte_flow) implicit_flows;

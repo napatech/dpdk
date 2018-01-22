@@ -60,7 +60,7 @@ extern "C" {
 
 /** IPSec protocol mode */
 enum rte_security_ipsec_sa_mode {
-	RTE_SECURITY_IPSEC_SA_MODE_TRANSPORT,
+	RTE_SECURITY_IPSEC_SA_MODE_TRANSPORT = 1,
 	/**< IPSec Transport mode */
 	RTE_SECURITY_IPSEC_SA_MODE_TUNNEL,
 	/**< IPSec Tunnel mode */
@@ -68,7 +68,7 @@ enum rte_security_ipsec_sa_mode {
 
 /** IPSec Protocol */
 enum rte_security_ipsec_sa_protocol {
-	RTE_SECURITY_IPSEC_SA_PROTO_AH,
+	RTE_SECURITY_IPSEC_SA_PROTO_AH = 1,
 	/**< AH protocol */
 	RTE_SECURITY_IPSEC_SA_PROTO_ESP,
 	/**< ESP protocol */
@@ -76,7 +76,7 @@ enum rte_security_ipsec_sa_protocol {
 
 /** IPSEC tunnel type */
 enum rte_security_ipsec_tunnel_type {
-	RTE_SECURITY_IPSEC_TUNNEL_IPV4,
+	RTE_SECURITY_IPSEC_TUNNEL_IPV4 = 1,
 	/**< Outer header is IPv4 */
 	RTE_SECURITY_IPSEC_TUNNEL_IPV6,
 	/**< Outer header is IPv6 */
@@ -94,7 +94,7 @@ enum rte_security_ipsec_tunnel_type {
 struct rte_security_ctx {
 	void *device;
 	/**< Crypto/ethernet device attached */
-	struct rte_security_ops *ops;
+	const struct rte_security_ops *ops;
 	/**< Pointer to security ops for the device */
 	uint16_t sess_cnt;
 	/**< Number of sessions attached to this context */
@@ -228,6 +228,7 @@ struct rte_security_ipsec_xform {
  */
 struct rte_security_macsec_xform {
 	/** To be Filled */
+	int dummy;
 };
 
 /**
@@ -252,7 +253,7 @@ enum rte_security_session_action_type {
 
 /** Security session protocol definition */
 enum rte_security_session_protocol {
-	RTE_SECURITY_PROTOCOL_IPSEC,
+	RTE_SECURITY_PROTOCOL_IPSEC = 1,
 	/**< IPsec Protocol */
 	RTE_SECURITY_PROTOCOL_MACSEC,
 	/**< MACSec Protocol */
@@ -274,6 +275,8 @@ struct rte_security_session_conf {
 	/**< Configuration parameters for security session */
 	struct rte_crypto_sym_xform *crypto_xform;
 	/**< Security Session Crypto Transformations */
+	void *userdata;
+	/**< Application specific userdata to be saved with session */
 };
 
 struct rte_security_session {
@@ -312,6 +315,18 @@ rte_security_session_update(struct rte_security_ctx *instance,
 			    struct rte_security_session_conf *conf);
 
 /**
+ * Get the size of the security session data for a device.
+ *
+ * @param   instance	security instance.
+ *
+ * @return
+ *   - Size of the private data, if successful
+ *   - 0 if device is invalid or does not support the operation.
+ */
+unsigned int
+rte_security_session_get_size(struct rte_security_ctx *instance);
+
+/**
  * Free security session header and the session private data and
  * return it to its original mempool.
  *
@@ -344,6 +359,24 @@ int
 rte_security_set_pkt_metadata(struct rte_security_ctx *instance,
 			      struct rte_security_session *sess,
 			      struct rte_mbuf *mb, void *params);
+
+/**
+ * Get userdata associated with the security session which processed the
+ * packet. This userdata would be registered while creating the session, and
+ * application can use this to identify the SA etc. Device-specific metadata
+ * in the mbuf would be used for this.
+ *
+ * This is valid only for inline processed ingress packets.
+ *
+ * @param   instance	security instance
+ * @param   md		device-specific metadata set in mbuf
+ *
+ * @return
+ *  - On success, userdata
+ *  - On failure, NULL
+ */
+void *
+rte_security_get_userdata(struct rte_security_ctx *instance, uint64_t md);
 
 /**
  * Attach a session to a symmetric crypto operation
@@ -452,6 +485,7 @@ struct rte_security_capability {
 		/**< IPsec capability */
 		struct {
 			/* To be Filled */
+			int dummy;
 		} macsec;
 		/**< MACsec capability */
 	};

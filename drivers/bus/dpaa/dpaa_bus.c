@@ -1,33 +1,7 @@
-/*-
- *   BSD LICENSE
+/* SPDX-License-Identifier: BSD-3-Clause
  *
- *   Copyright 2017 NXP.
+ *   Copyright 2017 NXP
  *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of NXP nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 /* System headers */
 #include <stdio.h>
@@ -53,7 +27,7 @@
 #include <rte_eal.h>
 #include <rte_alarm.h>
 #include <rte_ether.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_malloc.h>
 #include <rte_ring.h>
 #include <rte_bus.h>
@@ -70,6 +44,7 @@
 int dpaa_logtype_bus;
 int dpaa_logtype_mempool;
 int dpaa_logtype_pmd;
+int dpaa_logtype_eventdev;
 
 struct rte_dpaa_bus rte_dpaa_bus;
 struct netcfg_info *dpaa_netcfg;
@@ -77,7 +52,10 @@ struct netcfg_info *dpaa_netcfg;
 /* define a variable to hold the portal_key, once created.*/
 pthread_key_t dpaa_portal_key;
 
+unsigned int dpaa_svr_family;
+
 RTE_DEFINE_PER_LCORE(bool, _dpaa_io);
+RTE_DEFINE_PER_LCORE(struct dpaa_portal_dqrr, held_bufs);
 
 static inline void
 dpaa_add_to_device_list(struct rte_dpaa_device *dev)
@@ -288,13 +266,40 @@ _dpaa_portal_init(void *arg)
  * rte_dpaa_portal_init - Wrapper over _dpaa_portal_init with thread level check
  * XXX Complete this
  */
-int
-rte_dpaa_portal_init(void *arg)
+int rte_dpaa_portal_init(void *arg)
 {
 	if (unlikely(!RTE_PER_LCORE(_dpaa_io)))
 		return _dpaa_portal_init(arg);
 
 	return 0;
+}
+
+int
+rte_dpaa_portal_fq_init(void *arg, struct qman_fq *fq)
+{
+	/* Affine above created portal with channel*/
+	u32 sdqcr;
+	struct qman_portal *qp;
+
+	if (unlikely(!RTE_PER_LCORE(_dpaa_io)))
+		_dpaa_portal_init(arg);
+
+	/* Initialise qman specific portals */
+	qp = fsl_qman_portal_create();
+	if (!qp) {
+		DPAA_BUS_LOG(ERR, "Unable to alloc fq portal");
+		return -1;
+	}
+	fq->qp = qp;
+	sdqcr = QM_SDQCR_CHANNELS_POOL_CONV(fq->ch_id);
+	qman_static_dequeue_add(sdqcr, qp);
+
+	return 0;
+}
+
+int rte_dpaa_portal_fq_close(struct qman_fq *fq)
+{
+	return fsl_qman_portal_destroy(fq->qp);
 }
 
 void
@@ -443,6 +448,8 @@ rte_dpaa_bus_probe(void)
 	int ret = -1;
 	struct rte_dpaa_device *dev;
 	struct rte_dpaa_driver *drv;
+	FILE *svr_file = NULL;
+	unsigned int svr_ver;
 
 	BUS_INIT_FUNC_TRACE();
 
@@ -462,6 +469,14 @@ rte_dpaa_bus_probe(void)
 			break;
 		}
 	}
+
+	svr_file = fopen(DPAA_SOC_ID_FILE, "r");
+	if (svr_file) {
+		if (fscanf(svr_file, "svr:%x", &svr_ver) > 0)
+			dpaa_svr_family = svr_ver & SVR_MASK;
+		fclose(svr_file);
+	}
+
 	return 0;
 }
 
@@ -522,4 +537,8 @@ dpaa_init_log(void)
 	dpaa_logtype_pmd = rte_log_register("pmd.dpaa");
 	if (dpaa_logtype_pmd >= 0)
 		rte_log_set_level(dpaa_logtype_pmd, RTE_LOG_NOTICE);
+
+	dpaa_logtype_eventdev = rte_log_register("eventdev.dpaa");
+	if (dpaa_logtype_eventdev >= 0)
+		rte_log_set_level(dpaa_logtype_eventdev, RTE_LOG_NOTICE);
 }

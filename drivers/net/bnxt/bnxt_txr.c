@@ -181,7 +181,7 @@ static uint16_t bnxt_start_xmit(struct rte_mbuf *tx_pkt,
 		txbd->flags_type |= TX_BD_LONG_FLAGS_LHINT_GTE2K;
 	else
 		txbd->flags_type |= lhint_arr[txbd->len >> 9];
-	txbd->addr = rte_cpu_to_le_32(RTE_MBUF_DATA_DMA_ADDR(tx_buf->mbuf));
+	txbd->addr = rte_cpu_to_le_32(rte_mbuf_data_iova(tx_buf->mbuf));
 
 	if (long_bd) {
 		txbd->flags_type |= TX_BD_LONG_TYPE_TX_BD_LONG;
@@ -217,23 +217,28 @@ static uint16_t bnxt_start_xmit(struct rte_mbuf *tx_pkt,
 					tx_pkt->outer_l3_len;
 			txbd1->mss = tx_pkt->tso_segsz;
 
-		} else if (tx_pkt->ol_flags & PKT_TX_OIP_IIP_TCP_UDP_CKSUM) {
+		} else if ((tx_pkt->ol_flags & PKT_TX_OIP_IIP_TCP_UDP_CKSUM) ==
+			   PKT_TX_OIP_IIP_TCP_UDP_CKSUM) {
 			/* Outer IP, Inner IP, Inner TCP/UDP CSO */
 			txbd1->lflags |= TX_BD_FLG_TIP_IP_TCP_UDP_CHKSUM;
 			txbd1->mss = 0;
-		} else if (tx_pkt->ol_flags & PKT_TX_IIP_TCP_UDP_CKSUM) {
+		} else if ((tx_pkt->ol_flags & PKT_TX_IIP_TCP_UDP_CKSUM) ==
+			   PKT_TX_IIP_TCP_UDP_CKSUM) {
 			/* (Inner) IP, (Inner) TCP/UDP CSO */
 			txbd1->lflags |= TX_BD_FLG_IP_TCP_UDP_CHKSUM;
 			txbd1->mss = 0;
-		} else if (tx_pkt->ol_flags & PKT_TX_OIP_TCP_UDP_CKSUM) {
+		} else if ((tx_pkt->ol_flags & PKT_TX_OIP_TCP_UDP_CKSUM) ==
+			   PKT_TX_OIP_TCP_UDP_CKSUM) {
 			/* Outer IP, (Inner) TCP/UDP CSO */
 			txbd1->lflags |= TX_BD_FLG_TIP_TCP_UDP_CHKSUM;
 			txbd1->mss = 0;
-		} else if (tx_pkt->ol_flags & PKT_TX_OIP_IIP_CKSUM) {
+		} else if ((tx_pkt->ol_flags & PKT_TX_OIP_IIP_CKSUM) ==
+			   PKT_TX_OIP_IIP_CKSUM) {
 			/* Outer IP, Inner IP CSO */
 			txbd1->lflags |= TX_BD_FLG_TIP_IP_CHKSUM;
 			txbd1->mss = 0;
-		} else if (tx_pkt->ol_flags & PKT_TX_TCP_UDP_CKSUM) {
+		} else if ((tx_pkt->ol_flags & PKT_TX_TCP_UDP_CKSUM) ==
+			   PKT_TX_TCP_UDP_CKSUM) {
 			/* TCP/UDP CSO */
 			txbd1->lflags |= TX_BD_LONG_LFLAGS_TCP_UDP_CHKSUM;
 			txbd1->mss = 0;
@@ -257,7 +262,7 @@ static uint16_t bnxt_start_xmit(struct rte_mbuf *tx_pkt,
 		tx_buf = &txr->tx_buf_ring[txr->tx_prod];
 
 		txbd = &txr->tx_desc_ring[txr->tx_prod];
-		txbd->addr = rte_cpu_to_le_32(RTE_MBUF_DATA_DMA_ADDR(m_seg));
+		txbd->addr = rte_cpu_to_le_32(rte_mbuf_data_iova(m_seg));
 		txbd->flags_type = TX_BD_SHORT_TYPE_TX_BD_SHORT;
 		txbd->len = m_seg->data_len;
 

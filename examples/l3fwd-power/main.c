@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2016 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2016 Intel Corporation
  */
 
 #include <stdio.h>
@@ -79,8 +50,6 @@
 
 #define MIN_ZERO_POLL_COUNT 10
 
-/* around 100ms at 2 Ghz */
-#define TIMER_RESOLUTION_CYCLES           200000000ULL
 /* 100 ms interval */
 #define TIMER_NUMBER_PER_SECOND           10
 /* 100000 us */
@@ -215,11 +184,9 @@ static struct rte_eth_conf port_conf = {
 		.mq_mode        = ETH_MQ_RX_RSS,
 		.max_rx_pkt_len = ETHER_MAX_LEN,
 		.split_hdr_size = 0,
-		.header_split   = 0, /**< Header Split disabled */
-		.hw_ip_checksum = 1, /**< IP checksum offload enabled */
-		.hw_vlan_filter = 0, /**< VLAN filtering disabled */
-		.jumbo_frame    = 0, /**< Jumbo Frame Support disabled */
-		.hw_strip_crc   = 1, /**< CRC stripped by hardware */
+		.ignore_offload_bitfield = 1,
+		.offloads = (DEV_RX_OFFLOAD_CRC_STRIP |
+			     DEV_RX_OFFLOAD_CHECKSUM),
 	},
 	.rx_adv_conf = {
 		.rss_conf = {
@@ -231,7 +198,6 @@ static struct rte_eth_conf port_conf = {
 		.mq_mode = ETH_MQ_TX_NONE,
 	},
 	.intr_conf = {
-		.lsc = 1,
 		.rxq = 1,
 	},
 };
@@ -757,6 +723,7 @@ power_freq_scaleup_heuristic(unsigned lcore_id,
 			     uint16_t port_id,
 			     uint16_t queue_id)
 {
+	uint32_t rxq_count = rte_eth_rx_queue_count(port_id, queue_id);
 /**
  * HW Rx queue size is 128 by default, Rx burst read at maximum 32 entries
  * per iteration
@@ -768,15 +735,12 @@ power_freq_scaleup_heuristic(unsigned lcore_id,
 #define FREQ_UP_TREND2_ACC   100
 #define FREQ_UP_THRESHOLD    10000
 
-	if (likely(rte_eth_rx_descriptor_done(port_id, queue_id,
-			FREQ_GEAR3_RX_PACKET_THRESHOLD) > 0)) {
+	if (likely(rxq_count > FREQ_GEAR3_RX_PACKET_THRESHOLD)) {
 		stats[lcore_id].trend = 0;
 		return FREQ_HIGHEST;
-	} else if (likely(rte_eth_rx_descriptor_done(port_id, queue_id,
-			FREQ_GEAR2_RX_PACKET_THRESHOLD) > 0))
+	} else if (likely(rxq_count > FREQ_GEAR2_RX_PACKET_THRESHOLD))
 		stats[lcore_id].trend += FREQ_UP_TREND2_ACC;
-	else if (likely(rte_eth_rx_descriptor_done(port_id, queue_id,
-			FREQ_GEAR1_RX_PACKET_THRESHOLD) > 0))
+	else if (likely(rxq_count > FREQ_GEAR1_RX_PACKET_THRESHOLD))
 		stats[lcore_id].trend += FREQ_UP_TREND1_ACC;
 
 	if (likely(stats[lcore_id].trend > FREQ_UP_THRESHOLD)) {
@@ -875,7 +839,7 @@ main_loop(__attribute__((unused)) void *dummy)
 {
 	struct rte_mbuf *pkts_burst[MAX_PKT_BURST];
 	unsigned lcore_id;
-	uint64_t prev_tsc, diff_tsc, cur_tsc;
+	uint64_t prev_tsc, diff_tsc, cur_tsc, tim_res_tsc, hz;
 	uint64_t prev_tsc_power = 0, cur_tsc_power, diff_tsc_power;
 	int i, j, nb_rx;
 	uint8_t queueid;
@@ -890,6 +854,8 @@ main_loop(__attribute__((unused)) void *dummy)
 	const uint64_t drain_tsc = (rte_get_tsc_hz() + US_PER_S - 1) / US_PER_S * BURST_TX_DRAIN_US;
 
 	prev_tsc = 0;
+	hz = rte_get_timer_hz();
+	tim_res_tsc = hz/TIMER_NUMBER_PER_SECOND;
 
 	lcore_id = rte_lcore_id();
 	qconf = &lcore_conf[lcore_id];
@@ -935,7 +901,7 @@ main_loop(__attribute__((unused)) void *dummy)
 		}
 
 		diff_tsc_power = cur_tsc_power - prev_tsc_power;
-		if (diff_tsc_power > TIMER_RESOLUTION_CYCLES) {
+		if (diff_tsc_power > tim_res_tsc) {
 			rte_timer_manage();
 			prev_tsc_power = cur_tsc_power;
 		}
@@ -1051,9 +1017,11 @@ start_rx:
 					turn_on_intr(qconf);
 					sleep_until_rx_interrupt(
 						qconf->n_rx_queue);
+					/**
+					 * start receiving packets immediately
+					 */
+					goto start_rx;
 				}
-				/* start receiving packets immediately */
-				goto start_rx;
 			}
 			stats[lcore_id].sleep_time += lcore_idle_hint;
 		}
@@ -1317,7 +1285,10 @@ parse_args(int argc, char **argv)
 									0, 0};
 
 				printf("jumbo frame is enabled \n");
-				port_conf.rxmode.jumbo_frame = 1;
+				port_conf.rxmode.offloads |=
+						DEV_RX_OFFLOAD_JUMBO_FRAME;
+				port_conf.txmode.offloads |=
+						DEV_TX_OFFLOAD_MULTI_SEGS;
 
 				/**
 				 * if no max-pkt-len set, use the default value
@@ -1654,7 +1625,6 @@ main(int argc, char **argv)
 	uint32_t dev_rxq_num, dev_txq_num;
 	uint8_t nb_rx_queue, queue, socketid;
 	uint16_t portid;
-	uint16_t org_rxq_intr = port_conf.intr_conf.rxq;
 
 	/* catch SIGINT and restore cpufreq governor to ondemand */
 	signal(SIGINT, signal_exit_now);
@@ -1690,6 +1660,8 @@ main(int argc, char **argv)
 
 	/* initialize all ports */
 	for (portid = 0; portid < nb_ports; portid++) {
+		struct rte_eth_conf local_port_conf = port_conf;
+
 		/* skip ports that are not enabled */
 		if ((enabled_port_mask & (1 << portid)) == 0) {
 			printf("\nSkipping disabled port %d\n", portid);
@@ -1717,11 +1689,13 @@ main(int argc, char **argv)
 			nb_rx_queue, (unsigned)n_tx_queue );
 		/* If number of Rx queue is 0, no need to enable Rx interrupt */
 		if (nb_rx_queue == 0)
-			port_conf.intr_conf.rxq = 0;
+			local_port_conf.intr_conf.rxq = 0;
+		rte_eth_dev_info_get(portid, &dev_info);
+		if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
+			local_port_conf.txmode.offloads |=
+				DEV_TX_OFFLOAD_MBUF_FAST_FREE;
 		ret = rte_eth_dev_configure(portid, nb_rx_queue,
-					(uint16_t)n_tx_queue, &port_conf);
-		/* Revert to original value */
-		port_conf.intr_conf.rxq = org_rxq_intr;
+					(uint16_t)n_tx_queue, &local_port_conf);
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "Cannot configure device: "
 					"err=%d, port=%d\n", ret, portid);
@@ -1776,10 +1750,9 @@ main(int argc, char **argv)
 			printf("txq=%u,%d,%d ", lcore_id, queueid, socketid);
 			fflush(stdout);
 
-			rte_eth_dev_info_get(portid, &dev_info);
 			txconf = &dev_info.default_txconf;
-			if (port_conf.rxmode.jumbo_frame)
-				txconf->txq_flags = 0;
+			txconf->txq_flags = ETH_TXQ_FLAGS_IGNORE;
+			txconf->offloads = local_port_conf.txmode.offloads;
 			ret = rte_eth_tx_queue_setup(portid, queueid, nb_txd,
 						     socketid, txconf);
 			if (ret < 0)
@@ -1819,8 +1792,14 @@ main(int argc, char **argv)
 		fflush(stdout);
 		/* init RX queues */
 		for(queue = 0; queue < qconf->n_rx_queue; ++queue) {
+			struct rte_eth_rxconf rxq_conf;
+			struct rte_eth_dev *dev;
+			struct rte_eth_conf *conf;
+
 			portid = qconf->rx_queue_list[queue].port_id;
 			queueid = qconf->rx_queue_list[queue].queue_id;
+			dev = &rte_eth_devices[portid];
+			conf = &dev->data->dev_conf;
 
 			if (numa_on)
 				socketid = \
@@ -1831,8 +1810,11 @@ main(int argc, char **argv)
 			printf("rxq=%d,%d,%d ", portid, queueid, socketid);
 			fflush(stdout);
 
+			rte_eth_dev_info_get(portid, &dev_info);
+			rxq_conf = dev_info.default_rxconf;
+			rxq_conf.offloads = conf->rxmode.offloads;
 			ret = rte_eth_rx_queue_setup(portid, queueid, nb_rxd,
-				socketid, NULL,
+				socketid, &rxq_conf,
 				pktmbuf_pool[socketid]);
 			if (ret < 0)
 				rte_exit(EXIT_FAILURE,

@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2016 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2016 Intel Corporation
  */
 
 #include <stdint.h>
@@ -462,6 +433,7 @@ static int
 vhost_user_reconnect_init(void)
 {
 	int ret;
+	char thread_name[RTE_MAX_THREAD_NAME_LEN];
 
 	ret = pthread_mutex_init(&reconn_list.mutex, NULL);
 	if (ret < 0) {
@@ -472,11 +444,19 @@ vhost_user_reconnect_init(void)
 
 	ret = pthread_create(&reconn_tid, NULL,
 			     vhost_user_client_reconnect, NULL);
-	if (ret < 0) {
+	if (ret != 0) {
 		RTE_LOG(ERR, VHOST_CONFIG, "failed to create reconnect thread");
 		if (pthread_mutex_destroy(&reconn_list.mutex)) {
 			RTE_LOG(ERR, VHOST_CONFIG,
 				"failed to destroy reconnect mutex");
+		}
+	} else {
+		snprintf(thread_name, RTE_MAX_THREAD_NAME_LEN,
+			 "vhost-reconn");
+
+		if (rte_thread_setname(reconn_tid, thread_name)) {
+			RTE_LOG(DEBUG, VHOST_CONFIG,
+				"failed to set reconnect thread name");
 		}
 	}
 
@@ -678,9 +658,8 @@ rte_vhost_driver_register(const char *path, uint64_t flags)
 	if ((flags & RTE_VHOST_USER_CLIENT) != 0) {
 		vsocket->reconnect = !(flags & RTE_VHOST_USER_NO_RECONNECT);
 		if (vsocket->reconnect && reconn_tid == 0) {
-			if (vhost_user_reconnect_init() < 0) {
+			if (vhost_user_reconnect_init() != 0)
 				goto out_mutex;
-			}
 		}
 	} else {
 		vsocket->is_server = true;
@@ -837,7 +816,7 @@ rte_vhost_driver_start(const char *path)
 	if (fdset_tid == 0) {
 		int ret = pthread_create(&fdset_tid, NULL, fdset_event_dispatch,
 				     &vhost_user.fdset);
-		if (ret < 0)
+		if (ret != 0)
 			RTE_LOG(ERR, VHOST_CONFIG,
 				"failed to create fdset handling thread");
 	}

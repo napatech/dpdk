@@ -1,31 +1,7 @@
-/*
- * Copyright (c) 2009-2016 Solarflare Communications Inc.
+/* SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 2009-2018 Solarflare Communications Inc.
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
- * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
- * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * The views and conclusions contained in the software and documentation are
- * those of the authors and should not be interpreted as representing official
- * policies, either expressed or implied, of the FreeBSD Project.
  */
 
 #include "efx.h"
@@ -290,7 +266,7 @@ fail1:
 				efx_rc_t
 efx_bootcfg_read(
 	__in			efx_nic_t *enp,
-	__out_bcount(size)	caddr_t data,
+	__out_bcount(size)	uint8_t *data,
 	__in			size_t size)
 {
 	uint8_t *payload = NULL;
@@ -345,18 +321,18 @@ efx_bootcfg_read(
 
 	if ((rc = efx_nvram_read_chunk(enp, EFX_NVRAM_BOOTROM_CFG,
 	    sector_offset, (caddr_t)payload, sector_length)) != 0) {
-		(void) efx_nvram_rw_finish(enp, EFX_NVRAM_BOOTROM_CFG);
+		(void) efx_nvram_rw_finish(enp, EFX_NVRAM_BOOTROM_CFG, NULL);
 		goto fail6;
 	}
 
-	if ((rc = efx_nvram_rw_finish(enp, EFX_NVRAM_BOOTROM_CFG)) != 0)
+	if ((rc = efx_nvram_rw_finish(enp, EFX_NVRAM_BOOTROM_CFG, NULL)) != 0)
 		goto fail7;
 
 	/* Verify that the area is correctly formatted and checksummed */
-	rc = efx_bootcfg_verify(enp, (caddr_t)payload, sector_length,
+	rc = efx_bootcfg_verify(enp, payload, sector_length,
 	    &used_bytes);
 	if (rc != 0 || used_bytes == 0) {
-		payload[0] = (uint8_t)~DHCP_END;
+		payload[0] = (uint8_t)(~DHCP_END & 0xff);
 		payload[1] = DHCP_END;
 		used_bytes = 2;
 	}
@@ -430,7 +406,7 @@ fail1:
 				efx_rc_t
 efx_bootcfg_write(
 	__in			efx_nic_t *enp,
-	__in_bcount(size)	caddr_t data,
+	__in_bcount(size)	uint8_t *data,
 	__in			size_t size)
 {
 	uint8_t *partn_data;
@@ -521,7 +497,7 @@ efx_bootcfg_write(
 		    0, (caddr_t)partn_data, partn_length)) != 0)
 		goto fail11;
 
-	if ((rc = efx_nvram_rw_finish(enp, EFX_NVRAM_BOOTROM_CFG)) != 0)
+	if ((rc = efx_nvram_rw_finish(enp, EFX_NVRAM_BOOTROM_CFG, NULL)) != 0)
 		goto fail12;
 
 	EFSYS_KMEM_FREE(enp->en_esip, partn_length, partn_data);
@@ -537,7 +513,7 @@ fail10:
 fail9:
 	EFSYS_PROBE(fail9);
 
-	(void) efx_nvram_rw_finish(enp, EFX_NVRAM_BOOTROM_CFG);
+	(void) efx_nvram_rw_finish(enp, EFX_NVRAM_BOOTROM_CFG, NULL);
 fail8:
 	EFSYS_PROBE(fail8);
 

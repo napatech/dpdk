@@ -354,8 +354,6 @@ The available information categories are:
   also modify the default hierarchy or specify the new hierarchy through CLI for
   implementing QoS scheduler.  Requires ``CONFIG_RTE_LIBRTE_PMD_SOFTNIC=y`` ``CONFIG_RTE_LIBRTE_SCHED=y``.
 
-Note: TX timestamping is only available in the "Full Featured" TX path. To force ``testpmd`` into this mode set ``--txqflags=0``.
-
 Example::
 
    testpmd> set fwd rxonly
@@ -1091,6 +1089,15 @@ Set the MAC address for a VF from the PF::
 
    testpmd> set vf mac addr (port_id) (vf_id) (XX:XX:XX:XX:XX:XX)
 
+set eth-peer
+~~~~~~~~~~~~
+
+Set the forwarding peer address for certain port::
+
+   testpmd> set eth-peer (port_id) (perr_addr)
+
+This is equivalent to the ``--eth-peer`` command-line option.
+
 set port-uta
 ~~~~~~~~~~~~
 
@@ -1681,15 +1688,6 @@ RX scatter mode is off by default.
 
 The ``on`` option is equivalent to the ``--enable-scatter`` command-line option.
 
-port config - TX queue flags
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Set a hexadecimal bitmap of TX queue flags for all ports::
-
-   testpmd> port config all txqflags value
-
-This command is equivalent to the ``--txqflags`` command-line option.
-
 port config - RX Checksum
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -1849,6 +1847,22 @@ where:
 
 * ``flow_type_id``: software flow type id as the index of the pctype mapping table.
 
+port config input set
+~~~~~~~~~~~~~~~~~~~~~
+
+Config RSS/FDIR/FDIR flexible payload input set for some pctype::
+   testpmd> port config (port_id) pctype (pctype_id) \
+            (hash_inset|fdir_inset|fdir_flx_inset) \
+	    (get|set|clear) field (field_idx)
+
+Clear RSS/FDIR/FDIR flexible payload input set for some pctype::
+   testpmd> port config (port_id) pctype (pctype_id) \
+            (hash_inset|fdir_inset|fdir_flx_inset) clear all
+
+where:
+
+* ``pctype_id``: hardware packet classification types.
+* ``field_idx``: hardware field index.
 
 Link Bonding Functions
 ----------------------
@@ -2068,6 +2082,179 @@ For example, to set the high bit in the register from the example above::
    testpmd> write regbit 0 0xEE00 31 1
    port 0 PCI register at offset 0xEE00: 0x8000000A (2147483658)
 
+Traffic Metering and Policing
+-----------------------------
+
+The following section shows functions for configuring traffic metering and
+policing on the ethernet device through the use of generic ethdev API.
+
+show port traffic management capability
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Show traffic metering and policing capability of the port::
+
+   testpmd> show port meter cap (port_id)
+
+add port meter profile (srTCM rfc2967)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Add meter profile (srTCM rfc2697) to the ethernet device::
+
+   testpmd> add port meter profile srtcm_rfc2697 (port_id) (profile_id) \
+   (cir) (cbs) (ebs)
+
+where:
+
+* ``profile_id``: ID for the meter profile.
+* ``cir``: Committed Information Rate (CIR) (bytes/second).
+* ``cbs``: Committed Burst Size (CBS) (bytes).
+* ``ebs``: Excess Burst Size (EBS) (bytes).
+
+add port meter profile (trTCM rfc2968)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Add meter profile (srTCM rfc2698) to the ethernet device::
+
+   testpmd> add port meter profile trtcm_rfc2698 (port_id) (profile_id) \
+   (cir) (pir) (cbs) (pbs)
+
+where:
+
+* ``profile_id``: ID for the meter profile.
+* ``cir``: Committed information rate (bytes/second).
+* ``pir``: Peak information rate (bytes/second).
+* ``cbs``: Committed burst size (bytes).
+* ``pbs``: Peak burst size (bytes).
+
+add port meter profile (trTCM rfc4115)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Add meter profile (trTCM rfc4115) to the ethernet device::
+
+   testpmd> add port meter profile trtcm_rfc4115 (port_id) (profile_id) \
+   (cir) (eir) (cbs) (ebs)
+
+where:
+
+* ``profile_id``: ID for the meter profile.
+* ``cir``: Committed information rate (bytes/second).
+* ``eir``: Excess information rate (bytes/second).
+* ``cbs``: Committed burst size (bytes).
+* ``ebs``: Excess burst size (bytes).
+
+delete port meter profile
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Delete meter profile from the ethernet device::
+
+   testpmd> del port meter profile (port_id) (profile_id)
+
+create port meter
+~~~~~~~~~~~~~~~~~
+
+Create new meter object for the ethernet device::
+
+   testpmd> create port meter (port_id) (mtr_id) (profile_id) \
+   (meter_enable) (g_action) (y_action) (r_action) (stats_mask) (shared) \
+   (use_pre_meter_color) [(dscp_tbl_entry0) (dscp_tbl_entry1)...\
+   (dscp_tbl_entry63)]
+
+where:
+
+* ``mtr_id``: meter object ID.
+* ``profile_id``: ID for the meter profile.
+* ``meter_enable``: When this parameter has a non-zero value, the meter object
+  gets enabled at the time of creation, otherwise remains disabled.
+* ``g_action``: Policer action for the packet with green color.
+* ``y_action``: Policer action for the packet with yellow color.
+* ``r_action``: Policer action for the packet with red color.
+* ``stats_mask``: Mask of statistics counter types to be enabled for the
+  meter object.
+* ``shared``:  When this parameter has a non-zero value, the meter object is
+  shared by multiple flows. Otherwise, meter object is used by single flow.
+* ``use_pre_meter_color``: When this parameter has a non-zero value, the
+  input color for the current meter object is determined by the latest meter
+  object in the same flow. Otherwise, the current meter object uses the
+  *dscp_table* to determine the input color.
+* ``dscp_tbl_entryx``: DSCP table entry x providing meter providing input
+  color, 0 <= x <= 63.
+
+enable port meter
+~~~~~~~~~~~~~~~~~
+
+Enable meter for the ethernet device::
+
+   testpmd> enable port meter (port_id) (mtr_id)
+
+disable port meter
+~~~~~~~~~~~~~~~~~~
+
+Disable meter for the ethernet device::
+
+   testpmd> disable port meter (port_id) (mtr_id)
+
+delete port meter
+~~~~~~~~~~~~~~~~~
+
+Delete meter for the ethernet device::
+
+   testpmd> del port meter (port_id) (mtr_id)
+
+Set port meter profile
+~~~~~~~~~~~~~~~~~~~~~~
+
+Set meter profile for the ethernet device::
+
+   testpmd> set port meter profile (port_id) (mtr_id) (profile_id)
+
+set port meter dscp table
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Set meter dscp table for the ethernet device::
+
+   testpmd> set port meter dscp table (port_id) (mtr_id) [(dscp_tbl_entry0) \
+   (dscp_tbl_entry1)...(dscp_tbl_entry63)]
+
+set port meter policer action
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Set meter policer action for the ethernet device::
+
+   testpmd> set port meter policer action (port_id) (mtr_id) (action_mask) \
+   (action0) [(action1) (action1)]
+
+where:
+
+* ``action_mask``: Bit mask indicating which policer actions need to be
+  updated. One or more policer actions can be updated in a single function
+  invocation. To update the policer action associated with color C, bit
+  (1 << C) needs to be set in *action_mask* and element at position C
+  in the *actions* array needs to be valid.
+* ``actionx``: Policer action for the color x,
+  RTE_MTR_GREEN <= x < RTE_MTR_COLORS
+
+set port meter stats mask
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Set meter stats mask for the ethernet device::
+
+   testpmd> set port meter stats mask (port_id) (mtr_id) (stats_mask)
+
+where:
+
+* ``stats_mask``: Bit mask indicating statistics counter types to be enabled.
+
+show port meter stats
+~~~~~~~~~~~~~~~~~~~~~
+
+Show meter stats of the ethernet device::
+
+   testpmd> show port meter stats (port_id) (mtr_id) (clear)
+
+where:
+
+* ``clear``: Flag that indicates whether the statistics counters should
+  be cleared (i.e. set to zero) immediately after they have been read or not.
 
 Traffic Management
 ------------------
@@ -2523,11 +2710,21 @@ Perfect-tunnel filters, the match mode is set by the ``--pkt-filter-mode`` comma
   The hardware checks a match between the masked fields of the received packets and the programmed filters.
   The masked fields are for tunnel flow.
 
+* Perfect-raw-flow-type match filters.
+  The hardware checks a match between the masked fields of the received packets and pre-loaded raw (template) packet.
+  The masked fields are specified by input sets.
+
 The Flow Director filters can match the different fields for different type of packet: flow type, specific input set
 per flow type and the flexible payload.
 
 The Flow Director can also mask out parts of all of these fields so that filters
 are only applied to certain fields or parts of the fields.
+
+Note that for raw flow type mode the source and destination fields in the
+raw packet buffer need to be presented in a reversed order with respect
+to the expected received packets.
+For example: IP source and destination addresses or TCP/UDP/SCTP
+source and destination ports
 
 Different NICs may have different capabilities, command show port fdir (port_id) can be used to acquire the information.
 
@@ -2574,6 +2771,10 @@ Different NICs may have different capabilities, command show port fdir (port_id)
                         tunnel (NVGRE|VxLAN) tunnel-id (tunnel_id_value) \
                         flexbytes (flexbytes_value) (drop|fwd) \
                         queue (queue_id) fd_id (fd_id_value)
+
+   flow_director_filter (port_id) mode raw (add|del|update) flow (flow_id) \
+                        (drop|fwd) queue (queue_id) fd_id (fd_id_value) \
+                        packet (packet file name)
 
 For example, to add an ipv4-udp flow type filter::
 
@@ -2689,7 +2890,7 @@ Set the global configurations of hash filters::
 
    set_hash_global_config (port_id) (toeplitz|simple_xor|default) \
    (ipv4|ipv4-frag|ipv4-tcp|ipv4-udp|ipv4-sctp|ipv4-other|ipv6|ipv6-frag| \
-   ipv6-tcp|ipv6-udp|ipv6-sctp|ipv6-other|l2_payload) \
+   ipv6-tcp|ipv6-udp|ipv6-sctp|ipv6-other|l2_payload|<flow_id>) \
    (enable|disable)
 
 For example, to enable simple_xor for flow type of ipv6 on port 2::
@@ -2703,8 +2904,8 @@ Set the input set for hash::
 
    set_hash_input_set (port_id) (ipv4-frag|ipv4-tcp|ipv4-udp|ipv4-sctp| \
    ipv4-other|ipv6-frag|ipv6-tcp|ipv6-udp|ipv6-sctp|ipv6-other| \
-   l2_payload) (ovlan|ivlan|src-ipv4|dst-ipv4|src-ipv6|dst-ipv6|ipv4-tos| \
-   ipv4-proto|ipv6-tc|ipv6-next-header|udp-src-port|udp-dst-port| \
+   l2_payload|<flow_id>) (ovlan|ivlan|src-ipv4|dst-ipv4|src-ipv6|dst-ipv6| \
+   ipv4-tos|ipv4-proto|ipv6-tc|ipv6-next-header|udp-src-port|udp-dst-port| \
    tcp-src-port|tcp-dst-port|sctp-src-port|sctp-dst-port|sctp-veri-tag| \
    udp-key|gre-key|fld-1st|fld-2nd|fld-3rd|fld-4th|fld-5th|fld-6th|fld-7th| \
    fld-8th|none) (select|add)
@@ -2723,8 +2924,8 @@ Set the input set for flow director::
 
    set_fdir_input_set (port_id) (ipv4-frag|ipv4-tcp|ipv4-udp|ipv4-sctp| \
    ipv4-other|ipv6|ipv6-frag|ipv6-tcp|ipv6-udp|ipv6-sctp|ipv6-other| \
-   l2_payload) (ivlan|ethertype|src-ipv4|dst-ipv4|src-ipv6|dst-ipv6|ipv4-tos| \
-   ipv4-proto|ipv4-ttl|ipv6-tc|ipv6-next-header|ipv6-hop-limits| \
+   l2_payload|<flow_id>) (ivlan|ethertype|src-ipv4|dst-ipv4|src-ipv6|dst-ipv6| \
+   ipv4-tos|ipv4-proto|ipv4-ttl|ipv6-tc|ipv6-next-header|ipv6-hop-limits| \
    tudp-src-port|udp-dst-port|cp-src-port|tcp-dst-port|sctp-src-port| \
    sctp-dst-port|sctp-veri-tag|none) (select|add)
 
@@ -3106,6 +3307,11 @@ This section lists supported pattern items and their attributes, if any.
 - ``gtp``, ``gtpc``, ``gtpu``: match GTPv1 header.
 
   - ``teid {unsigned}``: tunnel endpoint identifier.
+
+- ``geneve``: match GENEVE header.
+
+  - ``vni {unsigned}``: virtual network identifier.
+  - ``protocol {unsigned}``: protocol type.
 
 Actions list
 ^^^^^^^^^^^^

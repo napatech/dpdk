@@ -1,35 +1,6 @@
-/*
- * Copyright 2008-2014 Cisco Systems, Inc.  All rights reserved.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright 2008-2017 Cisco Systems, Inc.  All rights reserved.
  * Copyright 2007 Nuova Systems, Inc.  All rights reserved.
- *
- * Copyright (c) 2014, Cisco Systems, Inc.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- * notice, this list of conditions and the following disclaimer in
- * the documentation and/or other materials provided with the
- * distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- *
  */
 
 #include <rte_memzone.h>
@@ -78,7 +49,6 @@ struct vnic_dev {
 	enum vnic_proxy_type proxy;
 	u32 proxy_index;
 	u64 args[VNIC_DEVCMD_NARGS];
-	u16 split_hdr_size;
 	int in_reset;
 	struct vnic_intr_coal_timer_info intr_coal_timer_info;
 	void *(*alloc_consistent)(void *priv, size_t size,
@@ -249,16 +219,6 @@ unsigned int vnic_dev_desc_ring_size(struct vnic_dev_ring *ring,
 	ring->size_unaligned = ring->size + ring->base_align;
 
 	return ring->size_unaligned;
-}
-
-void vnic_set_hdr_split_size(struct vnic_dev *vdev, u16 size)
-{
-	vdev->split_hdr_size = size;
-}
-
-u16 vnic_get_hdr_split_size(struct vnic_dev *vdev)
-{
-	return vdev->split_hdr_size;
 }
 
 void vnic_dev_clear_desc_ring(struct vnic_dev_ring *ring)

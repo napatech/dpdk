@@ -344,15 +344,11 @@ mlx5_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	unsigned int j = 0;
 	unsigned int k = 0;
 	uint16_t max_elts;
-	unsigned int max_inline = txq->max_inline;
-	const unsigned int inline_en = !!max_inline && txq->inline_en;
 	uint16_t max_wqe;
 	unsigned int comp;
-	volatile struct mlx5_wqe_v *wqe = NULL;
 	volatile struct mlx5_wqe_ctrl *last_wqe = NULL;
 	unsigned int segs_n = 0;
-	struct rte_mbuf *buf = NULL;
-	uint8_t *raw;
+	const unsigned int max_inline = txq->max_inline;
 
 	if (unlikely(!pkts_n))
 		return 0;
@@ -361,20 +357,24 @@ mlx5_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	/* Start processing. */
 	mlx5_tx_complete(txq);
 	max_elts = (elts_n - (elts_head - txq->elts_tail));
+	/* A CQE slot must always be available. */
+	assert((1u << txq->cqe_n) - (txq->cq_pi - txq->cq_ci));
 	max_wqe = (1u << txq->wqe_n) - (txq->wqe_ci - txq->wqe_pi);
 	if (unlikely(!max_wqe))
 		return 0;
 	do {
+		struct rte_mbuf *buf = NULL;
+		uint8_t *raw;
+		volatile struct mlx5_wqe_v *wqe = NULL;
 		volatile rte_v128u32_t *dseg = NULL;
 		uint32_t length;
 		unsigned int ds = 0;
 		unsigned int sg = 0; /* counter of additional segs attached. */
 		uintptr_t addr;
-		uint64_t naddr;
 		uint16_t pkt_inline_sz = MLX5_WQE_DWORD_SIZE + 2;
 		uint16_t tso_header_sz = 0;
 		uint16_t ehdr;
-		uint8_t cs_flags = 0;
+		uint8_t cs_flags;
 		uint64_t tso = 0;
 		uint16_t tso_segsz = 0;
 #ifdef MLX5_PMD_SOFT_COUNTERS
@@ -392,7 +392,7 @@ mlx5_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		if (max_elts < segs_n)
 			break;
 		max_elts -= segs_n;
-		--segs_n;
+		sg = --segs_n;
 		if (unlikely(--max_wqe == 0))
 			break;
 		wqe = (volatile struct mlx5_wqe_v *)
@@ -417,23 +417,7 @@ mlx5_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		if (pkts_n - i > 1)
 			rte_prefetch0(
 			    rte_pktmbuf_mtod(*(pkts + 1), volatile void *));
-		/* Should we enable HW CKSUM offload */
-		if (buf->ol_flags &
-		    (PKT_TX_IP_CKSUM | PKT_TX_TCP_CKSUM | PKT_TX_UDP_CKSUM)) {
-			const uint64_t is_tunneled = buf->ol_flags &
-						     (PKT_TX_TUNNEL_GRE |
-						      PKT_TX_TUNNEL_VXLAN);
-
-			if (is_tunneled && txq->tunnel_en) {
-				cs_flags = MLX5_ETH_WQE_L3_INNER_CSUM |
-					   MLX5_ETH_WQE_L4_INNER_CSUM;
-				if (buf->ol_flags & PKT_TX_OUTER_IP_CKSUM)
-					cs_flags |= MLX5_ETH_WQE_L3_CSUM;
-			} else {
-				cs_flags = MLX5_ETH_WQE_L3_CSUM |
-					   MLX5_ETH_WQE_L4_CSUM;
-			}
-		}
+		cs_flags = txq_ol_cksum_to_cs(txq, buf);
 		raw = ((uint8_t *)(uintptr_t)wqe) + 2 * MLX5_WQE_DWORD_SIZE;
 		/* Replace the Ethernet type by the VLAN if necessary. */
 		if (buf->ol_flags & PKT_TX_VLAN_PKT) {
@@ -459,82 +443,72 @@ mlx5_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			addr += pkt_inline_sz;
 		}
 		raw += MLX5_WQE_DWORD_SIZE;
-		if (txq->tso_en) {
-			tso = buf->ol_flags & PKT_TX_TCP_SEG;
-			if (tso) {
-				uintptr_t end = (uintptr_t)
-						(((uintptr_t)txq->wqes) +
-						(1 << txq->wqe_n) *
-						MLX5_WQE_SIZE);
-				unsigned int copy_b;
-				uint8_t vlan_sz = (buf->ol_flags &
-						  PKT_TX_VLAN_PKT) ? 4 : 0;
-				const uint64_t is_tunneled =
-							buf->ol_flags &
-							(PKT_TX_TUNNEL_GRE |
-							 PKT_TX_TUNNEL_VXLAN);
+		tso = txq->tso_en && (buf->ol_flags & PKT_TX_TCP_SEG);
+		if (tso) {
+			uintptr_t end =
+				(uintptr_t)(((uintptr_t)txq->wqes) +
+					    (1 << txq->wqe_n) * MLX5_WQE_SIZE);
+			unsigned int copy_b;
+			uint8_t vlan_sz =
+				(buf->ol_flags & PKT_TX_VLAN_PKT) ? 4 : 0;
+			const uint64_t is_tunneled =
+				buf->ol_flags & (PKT_TX_TUNNEL_GRE |
+						 PKT_TX_TUNNEL_VXLAN);
 
-				tso_header_sz = buf->l2_len + vlan_sz +
-						buf->l3_len + buf->l4_len;
-				tso_segsz = buf->tso_segsz;
-				if (unlikely(tso_segsz == 0)) {
-					txq->stats.oerrors++;
-					break;
-				}
-				if (is_tunneled	&& txq->tunnel_en) {
-					tso_header_sz += buf->outer_l2_len +
-							 buf->outer_l3_len;
-					cs_flags |= MLX5_ETH_WQE_L4_INNER_CSUM;
-				} else {
-					cs_flags |= MLX5_ETH_WQE_L4_CSUM;
-				}
-				if (unlikely(tso_header_sz >
-					     MLX5_MAX_TSO_HEADER)) {
-					txq->stats.oerrors++;
-					break;
-				}
-				copy_b = tso_header_sz - pkt_inline_sz;
-				/* First seg must contain all headers. */
-				assert(copy_b <= length);
-				if (copy_b &&
-				   ((end - (uintptr_t)raw) > copy_b)) {
-					uint16_t n = (MLX5_WQE_DS(copy_b) -
-						      1 + 3) / 4;
+			tso_header_sz = buf->l2_len + vlan_sz +
+					buf->l3_len + buf->l4_len;
+			tso_segsz = buf->tso_segsz;
+			if (unlikely(tso_segsz == 0)) {
+				txq->stats.oerrors++;
+				break;
+			}
+			if (is_tunneled	&& txq->tunnel_en) {
+				tso_header_sz += buf->outer_l2_len +
+						 buf->outer_l3_len;
+				cs_flags |= MLX5_ETH_WQE_L4_INNER_CSUM;
+			} else {
+				cs_flags |= MLX5_ETH_WQE_L4_CSUM;
+			}
+			if (unlikely(tso_header_sz > MLX5_MAX_TSO_HEADER)) {
+				txq->stats.oerrors++;
+				break;
+			}
+			copy_b = tso_header_sz - pkt_inline_sz;
+			/* First seg must contain all headers. */
+			assert(copy_b <= length);
+			if (copy_b && ((end - (uintptr_t)raw) > copy_b)) {
+				uint16_t n = (MLX5_WQE_DS(copy_b) - 1 + 3) / 4;
 
-					if (unlikely(max_wqe < n))
-						break;
-					max_wqe -= n;
-					rte_memcpy((void *)raw,
-						   (void *)addr, copy_b);
-					addr += copy_b;
-					length -= copy_b;
-					/* Include padding for TSO header. */
-					copy_b = MLX5_WQE_DS(copy_b) *
-						 MLX5_WQE_DWORD_SIZE;
-					pkt_inline_sz += copy_b;
-					raw += copy_b;
-				} else {
-					/* NOP WQE. */
-					wqe->ctrl = (rte_v128u32_t){
-						     rte_cpu_to_be_32(
-							txq->wqe_ci << 8),
-						     rte_cpu_to_be_32(
-							txq->qp_num_8s | 1),
-						     0,
-						     0,
-					};
-					ds = 1;
+				if (unlikely(max_wqe < n))
+					break;
+				max_wqe -= n;
+				rte_memcpy((void *)raw, (void *)addr, copy_b);
+				addr += copy_b;
+				length -= copy_b;
+				/* Include padding for TSO header. */
+				copy_b = MLX5_WQE_DS(copy_b) *
+					 MLX5_WQE_DWORD_SIZE;
+				pkt_inline_sz += copy_b;
+				raw += copy_b;
+			} else {
+				/* NOP WQE. */
+				wqe->ctrl = (rte_v128u32_t){
+					rte_cpu_to_be_32(txq->wqe_ci << 8),
+					rte_cpu_to_be_32(txq->qp_num_8s | 1),
+					0,
+					0,
+				};
+				ds = 1;
 #ifdef MLX5_PMD_SOFT_COUNTERS
-					total_length = 0;
+				total_length = 0;
 #endif
-					k++;
-					goto next_wqe;
-				}
+				k++;
+				goto next_wqe;
 			}
 		}
 		/* Inline if enough room. */
-		if (inline_en || tso) {
-			uint32_t inl;
+		if (max_inline || tso) {
+			uint32_t inl = 0;
 			uintptr_t end = (uintptr_t)
 				(((uintptr_t)txq->wqes) +
 				 (1 << txq->wqe_n) * MLX5_WQE_SIZE);
@@ -542,12 +516,14 @@ mlx5_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 						   RTE_CACHE_LINE_SIZE -
 						   (pkt_inline_sz - 2) -
 						   !!tso * sizeof(inl);
-			uintptr_t addr_end = (addr + inline_room) &
-					     ~(RTE_CACHE_LINE_SIZE - 1);
-			unsigned int copy_b = (addr_end > addr) ?
-				RTE_MIN((addr_end - addr), length) :
-				0;
+			uintptr_t addr_end;
+			unsigned int copy_b;
 
+pkt_inline:
+			addr_end = RTE_ALIGN_FLOOR(addr + inline_room,
+						   RTE_CACHE_LINE_SIZE);
+			copy_b = (addr_end > addr) ?
+				 RTE_MIN((addr_end - addr), length) : 0;
 			if (copy_b && ((end - (uintptr_t)raw) > copy_b)) {
 				/*
 				 * One Dseg remains in the current WQE.  To
@@ -559,7 +535,7 @@ mlx5_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 				if (unlikely(max_wqe < n))
 					break;
 				max_wqe -= n;
-				if (tso) {
+				if (tso && !inl) {
 					inl = rte_cpu_to_be_32(copy_b |
 							       MLX5_INLINE_SEG);
 					rte_memcpy((void *)raw,
@@ -594,11 +570,18 @@ mlx5_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			} else if (!segs_n) {
 				goto next_pkt;
 			} else {
-				/* dseg will be advance as part of next_seg */
-				dseg = (volatile rte_v128u32_t *)
-					((uintptr_t)wqe +
-					 ((ds - 1) * MLX5_WQE_DWORD_SIZE));
-				goto next_seg;
+				raw += copy_b;
+				inline_room -= copy_b;
+				--segs_n;
+				buf = buf->next;
+				assert(buf);
+				addr = rte_pktmbuf_mtod(buf, uintptr_t);
+				length = DATA_LEN(buf);
+#ifdef MLX5_PMD_SOFT_COUNTERS
+				total_length += length;
+#endif
+				(*txq->elts)[++elts_head & elts_m] = buf;
+				goto pkt_inline;
 			}
 		} else {
 			/*
@@ -610,12 +593,12 @@ mlx5_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			ds = 3;
 use_dseg:
 			/* Add the remaining packet as a simple ds. */
-			naddr = rte_cpu_to_be_64(addr);
+			addr = rte_cpu_to_be_64(addr);
 			*dseg = (rte_v128u32_t){
 				rte_cpu_to_be_32(length),
 				mlx5_tx_mb2mr(txq, buf),
-				naddr,
-				naddr >> 32,
+				addr,
+				addr >> 32,
 			};
 			++ds;
 			if (!segs_n)
@@ -649,20 +632,16 @@ next_seg:
 		total_length += length;
 #endif
 		/* Store segment information. */
-		naddr = rte_cpu_to_be_64(rte_pktmbuf_mtod(buf, uintptr_t));
+		addr = rte_cpu_to_be_64(rte_pktmbuf_mtod(buf, uintptr_t));
 		*dseg = (rte_v128u32_t){
 			rte_cpu_to_be_32(length),
 			mlx5_tx_mb2mr(txq, buf),
-			naddr,
-			naddr >> 32,
+			addr,
+			addr >> 32,
 		};
 		(*txq->elts)[++elts_head & elts_m] = buf;
-		++sg;
-		/* Advance counter only if all segs are successfully posted. */
-		if (sg < segs_n)
+		if (--segs_n)
 			goto next_seg;
-		else
-			j += sg;
 next_pkt:
 		if (ds > MLX5_DSEG_MAX) {
 			txq->stats.oerrors++;
@@ -671,6 +650,7 @@ next_pkt:
 		++elts_head;
 		++pkts;
 		++i;
+		j += sg;
 		/* Initialize known and common part of the WQE structure. */
 		if (tso) {
 			wqe->ctrl = (rte_v128u32_t){
@@ -722,6 +702,9 @@ next_wqe:
 		/* Save elts_head in unused "immediate" field of WQE. */
 		last_wqe->ctrl3 = txq->elts_head;
 		txq->elts_comp = 0;
+#ifndef NDEBUG
+		++txq->cq_pi;
+#endif
 	} else {
 		txq->elts_comp = comp;
 	}
@@ -840,6 +823,8 @@ mlx5_tx_burst_mpw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	/* Start processing. */
 	mlx5_tx_complete(txq);
 	max_elts = (elts_n - (elts_head - txq->elts_tail));
+	/* A CQE slot must always be available. */
+	assert((1u << txq->cqe_n) - (txq->cq_pi - txq->cq_ci));
 	max_wqe = (1u << txq->wqe_n) - (txq->wqe_ci - txq->wqe_pi);
 	if (unlikely(!max_wqe))
 		return 0;
@@ -847,7 +832,7 @@ mlx5_tx_burst_mpw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		struct rte_mbuf *buf = *(pkts++);
 		uint32_t length;
 		unsigned int segs_n = buf->nb_segs;
-		uint32_t cs_flags = 0;
+		uint32_t cs_flags;
 
 		/*
 		 * Make sure there is enough room to store this packet and
@@ -863,10 +848,7 @@ mlx5_tx_burst_mpw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		}
 		max_elts -= segs_n;
 		--pkts_n;
-		/* Should we enable HW CKSUM offload */
-		if (buf->ol_flags &
-		    (PKT_TX_IP_CKSUM | PKT_TX_TCP_CKSUM | PKT_TX_UDP_CKSUM))
-			cs_flags = MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+		cs_flags = txq_ol_cksum_to_cs(txq, buf);
 		/* Retrieve packet information. */
 		length = PKT_LEN(buf);
 		assert(length);
@@ -936,6 +918,9 @@ mlx5_tx_burst_mpw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		/* Save elts_head in unused "immediate" field of WQE. */
 		wqe->ctrl[3] = elts_head;
 		txq->elts_comp = 0;
+#ifndef NDEBUG
+		++txq->cq_pi;
+#endif
 	} else {
 		txq->elts_comp = comp;
 	}
@@ -1067,12 +1052,14 @@ mlx5_tx_burst_mpw_inline(void *dpdk_txq, struct rte_mbuf **pkts,
 	/* Start processing. */
 	mlx5_tx_complete(txq);
 	max_elts = (elts_n - (elts_head - txq->elts_tail));
+	/* A CQE slot must always be available. */
+	assert((1u << txq->cqe_n) - (txq->cq_pi - txq->cq_ci));
 	do {
 		struct rte_mbuf *buf = *(pkts++);
 		uintptr_t addr;
 		uint32_t length;
 		unsigned int segs_n = buf->nb_segs;
-		uint32_t cs_flags = 0;
+		uint8_t cs_flags;
 
 		/*
 		 * Make sure there is enough room to store this packet and
@@ -1093,10 +1080,7 @@ mlx5_tx_burst_mpw_inline(void *dpdk_txq, struct rte_mbuf **pkts,
 		 * iteration.
 		 */
 		max_wqe = (1u << txq->wqe_n) - (txq->wqe_ci - txq->wqe_pi);
-		/* Should we enable HW CKSUM offload */
-		if (buf->ol_flags &
-		    (PKT_TX_IP_CKSUM | PKT_TX_TCP_CKSUM | PKT_TX_UDP_CKSUM))
-			cs_flags = MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+		cs_flags = txq_ol_cksum_to_cs(txq, buf);
 		/* Retrieve packet information. */
 		length = PKT_LEN(buf);
 		/* Start new session if packet differs. */
@@ -1231,6 +1215,9 @@ mlx5_tx_burst_mpw_inline(void *dpdk_txq, struct rte_mbuf **pkts,
 		/* Save elts_head in unused "immediate" field of WQE. */
 		wqe->ctrl[3] = elts_head;
 		txq->elts_comp = 0;
+#ifndef NDEBUG
+		++txq->cq_pi;
+#endif
 	} else {
 		txq->elts_comp = comp;
 	}
@@ -1317,10 +1304,10 @@ mlx5_empw_close(struct mlx5_txq_data *txq, struct mlx5_mpw *mpw)
 }
 
 /**
- * DPDK callback for TX with Enhanced MPW support.
+ * TX with Enhanced MPW support.
  *
- * @param dpdk_txq
- *   Generic pointer to TX queue structure.
+ * @param txq
+ *   Pointer to TX queue structure.
  * @param[in] pkts
  *   Packets to transmit.
  * @param pkts_n
@@ -1329,10 +1316,10 @@ mlx5_empw_close(struct mlx5_txq_data *txq, struct mlx5_mpw *mpw)
  * @return
  *   Number of packets successfully transmitted (<= pkts_n).
  */
-uint16_t
-mlx5_tx_burst_empw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
+static inline uint16_t
+txq_burst_empw(struct mlx5_txq_data *txq, struct rte_mbuf **pkts,
+	       uint16_t pkts_n)
 {
-	struct mlx5_txq_data *txq = (struct mlx5_txq_data *)dpdk_txq;
 	uint16_t elts_head = txq->elts_head;
 	const uint16_t elts_n = 1 << txq->elts_n;
 	const uint16_t elts_m = elts_n - 1;
@@ -1361,29 +1348,17 @@ mlx5_tx_burst_empw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	do {
 		struct rte_mbuf *buf = *(pkts++);
 		uintptr_t addr;
-		uint64_t naddr;
 		unsigned int n;
 		unsigned int do_inline = 0; /* Whether inline is possible. */
 		uint32_t length;
-		unsigned int segs_n = buf->nb_segs;
-		uint32_t cs_flags = 0;
+		uint8_t cs_flags;
 
-		/*
-		 * Make sure there is enough room to store this packet and
-		 * that one ring entry remains unused.
-		 */
-		assert(segs_n);
-		if (max_elts - j < segs_n)
+		/* Multi-segmented packet is handled in slow-path outside. */
+		assert(NB_SEGS(buf) == 1);
+		/* Make sure there is enough room to store this packet. */
+		if (max_elts - j == 0)
 			break;
-		/* Do not bother with large packets MPW cannot handle. */
-		if (segs_n > MLX5_MPW_DSEG_MAX) {
-			txq->stats.oerrors++;
-			break;
-		}
-		/* Should we enable HW CKSUM offload. */
-		if (buf->ol_flags &
-		    (PKT_TX_IP_CKSUM | PKT_TX_TCP_CKSUM | PKT_TX_UDP_CKSUM))
-			cs_flags = MLX5_ETH_WQE_L3_CSUM | MLX5_ETH_WQE_L4_CSUM;
+		cs_flags = txq_ol_cksum_to_cs(txq, buf);
 		/* Retrieve packet information. */
 		length = PKT_LEN(buf);
 		/* Start new session if:
@@ -1391,50 +1366,35 @@ mlx5_tx_burst_empw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		 * - no space left even for a dseg
 		 * - next packet can be inlined with a new WQE
 		 * - cs_flag differs
-		 * It can't be MLX5_MPW_STATE_OPENED as always have a single
-		 * segmented packet.
 		 */
 		if (mpw.state == MLX5_MPW_ENHANCED_STATE_OPENED) {
-			if ((segs_n != 1) ||
-			    (inl_pad + sizeof(struct mlx5_wqe_data_seg) >
-			      mpw_room) ||
+			if ((inl_pad + sizeof(struct mlx5_wqe_data_seg) >
+			     mpw_room) ||
 			    (length <= txq->inline_max_packet_sz &&
 			     inl_pad + sizeof(inl_hdr) + length >
-			      mpw_room) ||
+			     mpw_room) ||
 			    (mpw.wqe->eseg.cs_flags != cs_flags))
 				max_wqe -= mlx5_empw_close(txq, &mpw);
 		}
 		if (unlikely(mpw.state == MLX5_MPW_STATE_CLOSED)) {
-			if (unlikely(segs_n != 1)) {
-				/* Fall back to legacy MPW.
-				 * A MPW session consumes 2 WQEs at most to
-				 * include MLX5_MPW_DSEG_MAX pointers.
-				 */
-				if (unlikely(max_wqe < 2))
-					break;
-				mlx5_mpw_new(txq, &mpw, length);
-			} else {
-				/* In Enhanced MPW, inline as much as the budget
-				 * is allowed. The remaining space is to be
-				 * filled with dsegs. If the title WQEBB isn't
-				 * padded, it will have 2 dsegs there.
-				 */
-				mpw_room = RTE_MIN(MLX5_WQE_SIZE_MAX,
-					    (max_inline ? max_inline :
-					     pkts_n * MLX5_WQE_DWORD_SIZE) +
-					    MLX5_WQE_SIZE);
-				if (unlikely(max_wqe * MLX5_WQE_SIZE <
-					      mpw_room))
-					break;
-				/* Don't pad the title WQEBB to not waste WQ. */
-				mlx5_empw_new(txq, &mpw, 0);
-				mpw_room -= mpw.total_len;
-				inl_pad = 0;
-				do_inline =
-					length <= txq->inline_max_packet_sz &&
-					sizeof(inl_hdr) + length <= mpw_room &&
-					!txq->mpw_hdr_dseg;
-			}
+			/* In Enhanced MPW, inline as much as the budget is
+			 * allowed. The remaining space is to be filled with
+			 * dsegs. If the title WQEBB isn't padded, it will have
+			 * 2 dsegs there.
+			 */
+			mpw_room = RTE_MIN(MLX5_WQE_SIZE_MAX,
+					   (max_inline ? max_inline :
+					    pkts_n * MLX5_WQE_DWORD_SIZE) +
+					   MLX5_WQE_SIZE);
+			if (unlikely(max_wqe * MLX5_WQE_SIZE < mpw_room))
+				break;
+			/* Don't pad the title WQEBB to not waste WQ. */
+			mlx5_empw_new(txq, &mpw, 0);
+			mpw_room -= mpw.total_len;
+			inl_pad = 0;
+			do_inline = length <= txq->inline_max_packet_sz &&
+				    sizeof(inl_hdr) + length <= mpw_room &&
+				    !txq->mpw_hdr_dseg;
 			mpw.wqe->eseg.cs_flags = cs_flags;
 		} else {
 			/* Evaluate whether the next packet can be inlined.
@@ -1450,41 +1410,7 @@ mlx5_tx_burst_empw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 				(!txq->mpw_hdr_dseg ||
 				 mpw.total_len >= MLX5_WQE_SIZE);
 		}
-		/* Multi-segment packets must be alone in their MPW. */
-		assert((segs_n == 1) || (mpw.pkts_n == 0));
-		if (unlikely(mpw.state == MLX5_MPW_STATE_OPENED)) {
-#if defined(MLX5_PMD_SOFT_COUNTERS) || !defined(NDEBUG)
-			length = 0;
-#endif
-			do {
-				volatile struct mlx5_wqe_data_seg *dseg;
-
-				assert(buf);
-				(*txq->elts)[elts_head++ & elts_m] = buf;
-				dseg = mpw.data.dseg[mpw.pkts_n];
-				addr = rte_pktmbuf_mtod(buf, uintptr_t);
-				*dseg = (struct mlx5_wqe_data_seg){
-					.byte_count = rte_cpu_to_be_32(
-								DATA_LEN(buf)),
-					.lkey = mlx5_tx_mb2mr(txq, buf),
-					.addr = rte_cpu_to_be_64(addr),
-				};
-#if defined(MLX5_PMD_SOFT_COUNTERS) || !defined(NDEBUG)
-				length += DATA_LEN(buf);
-#endif
-				buf = buf->next;
-				++j;
-				++mpw.pkts_n;
-			} while (--segs_n);
-			/* A multi-segmented packet takes one MPW session.
-			 * TODO: Pack more multi-segmented packets if possible.
-			 */
-			mlx5_mpw_close(txq, &mpw);
-			if (mpw.pkts_n < 3)
-				max_wqe--;
-			else
-				max_wqe -= 2;
-		} else if (do_inline) {
+		if (do_inline) {
 			/* Inline packet into WQE. */
 			unsigned int max;
 
@@ -1546,12 +1472,12 @@ mlx5_tx_burst_empw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			for (n = 0; n * RTE_CACHE_LINE_SIZE < length; n++)
 				rte_prefetch2((void *)(addr +
 						n * RTE_CACHE_LINE_SIZE));
-			naddr = rte_cpu_to_be_64(addr);
+			addr = rte_cpu_to_be_64(addr);
 			*dseg = (rte_v128u32_t) {
 				rte_cpu_to_be_32(length),
 				mlx5_tx_mb2mr(txq, buf),
-				naddr,
-				naddr >> 32,
+				addr,
+				addr >> 32,
 			};
 			mpw.data.raw = (volatile void *)(dseg + 1);
 			mpw.total_len += (inl_pad + sizeof(*dseg));
@@ -1581,7 +1507,9 @@ mlx5_tx_burst_empw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		wqe->ctrl[3] = elts_head;
 		txq->elts_comp = 0;
 		txq->mpw_comp = txq->wqe_ci;
-		txq->cq_pi++;
+#ifndef NDEBUG
+		++txq->cq_pi;
+#endif
 	} else {
 		txq->elts_comp += j;
 	}
@@ -1591,12 +1519,51 @@ mlx5_tx_burst_empw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 #endif
 	if (mpw.state == MLX5_MPW_ENHANCED_STATE_OPENED)
 		mlx5_empw_close(txq, &mpw);
-	else if (mpw.state == MLX5_MPW_STATE_OPENED)
-		mlx5_mpw_close(txq, &mpw);
 	/* Ring QP doorbell. */
 	mlx5_tx_dbrec(txq, mpw.wqe);
 	txq->elts_head = elts_head;
 	return i;
+}
+
+/**
+ * DPDK callback for TX with Enhanced MPW support.
+ *
+ * @param dpdk_txq
+ *   Generic pointer to TX queue structure.
+ * @param[in] pkts
+ *   Packets to transmit.
+ * @param pkts_n
+ *   Number of packets in array.
+ *
+ * @return
+ *   Number of packets successfully transmitted (<= pkts_n).
+ */
+uint16_t
+mlx5_tx_burst_empw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
+{
+	struct mlx5_txq_data *txq = (struct mlx5_txq_data *)dpdk_txq;
+	uint16_t nb_tx = 0;
+
+	while (pkts_n > nb_tx) {
+		uint16_t n;
+		uint16_t ret;
+
+		n = txq_count_contig_multi_seg(&pkts[nb_tx], pkts_n - nb_tx);
+		if (n) {
+			ret = mlx5_tx_burst(dpdk_txq, &pkts[nb_tx], n);
+			if (!ret)
+				break;
+			nb_tx += ret;
+		}
+		n = txq_count_contig_single_seg(&pkts[nb_tx], pkts_n - nb_tx);
+		if (n) {
+			ret = txq_burst_empw(txq, &pkts[nb_tx], n);
+			if (!ret)
+				break;
+			nb_tx += ret;
+		}
+	}
+	return nb_tx;
 }
 
 /**
@@ -2027,16 +1994,18 @@ mlx5_rx_burst_vec(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 }
 
 int __attribute__((weak))
-priv_check_raw_vec_tx_support(struct priv *priv)
+priv_check_raw_vec_tx_support(struct priv *priv, struct rte_eth_dev *dev)
 {
 	(void)priv;
+	(void)dev;
 	return -ENOTSUP;
 }
 
 int __attribute__((weak))
-priv_check_vec_tx_support(struct priv *priv)
+priv_check_vec_tx_support(struct priv *priv, struct rte_eth_dev *dev)
 {
 	(void)priv;
+	(void)dev;
 	return -ENOTSUP;
 }
 

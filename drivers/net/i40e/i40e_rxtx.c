@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2016 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2016 Intel Corporation
  */
 
 #include <stdio.h>
@@ -46,7 +17,7 @@
 #include <rte_mbuf.h>
 #include <rte_malloc.h>
 #include <rte_ether.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_tcp.h>
 #include <rte_sctp.h>
 #include <rte_udp.h>
@@ -98,10 +69,6 @@
 
 #define I40E_TX_OFFLOAD_NOTSUP_MASK \
 		(PKT_TX_OFFLOAD_MASK ^ I40E_TX_OFFLOAD_MASK)
-
-static uint16_t i40e_xmit_pkts_simple(void *tx_queue,
-				      struct rte_mbuf **tx_pkts,
-				      uint16_t nb_pkts);
 
 static inline void
 i40e_rxd_to_vlan_tci(struct rte_mbuf *mb, volatile union i40e_rx_desc *rxdp)
@@ -1718,7 +1685,9 @@ i40e_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 #endif
 	    dev->rx_pkt_burst == i40e_recv_scattered_pkts ||
 	    dev->rx_pkt_burst == i40e_recv_scattered_pkts_vec ||
-	    dev->rx_pkt_burst == i40e_recv_pkts_vec)
+	    dev->rx_pkt_burst == i40e_recv_pkts_vec ||
+	    dev->rx_pkt_burst == i40e_recv_scattered_pkts_vec_avx2 ||
+	    dev->rx_pkt_burst == i40e_recv_pkts_vec_avx2)
 		return ptypes;
 	return NULL;
 }
@@ -2316,7 +2285,8 @@ i40e_tx_queue_release_mbufs(struct i40e_tx_queue *txq)
 	 *  vPMD tx will not set sw_ring's mbuf to NULL after free,
 	 *  so need to free remains more carefully.
 	 */
-	if (dev->tx_pkt_burst == i40e_xmit_pkts_vec) {
+	if (dev->tx_pkt_burst == i40e_xmit_pkts_vec_avx2 ||
+			dev->tx_pkt_burst == i40e_xmit_pkts_vec) {
 		i = txq->tx_next_dd - txq->tx_rs_thresh + 1;
 		if (txq->tx_tail < i) {
 			for (; i < txq->nb_tx_desc; i++) {
@@ -2749,6 +2719,7 @@ i40e_fdir_setup_rx_resources(struct i40e_pf *pf)
 	rxq->vsi = pf->fdir.fdir_vsi;
 
 	rxq->rx_ring_phys_addr = rz->iova;
+	memset(rz->addr, 0, I40E_FDIR_NUM_RX_DESC * sizeof(union i40e_rx_desc));
 	rxq->rx_ring = (union i40e_rx_desc *)rz->addr;
 
 	/*
@@ -2839,6 +2810,17 @@ i40e_set_rx_function(struct rte_eth_dev *dev)
 				     dev->data->port_id);
 
 			dev->rx_pkt_burst = i40e_recv_scattered_pkts_vec;
+#ifdef RTE_ARCH_X86
+			/*
+			 * since AVX frequency can be different to base
+			 * frequency, limit use of AVX2 version to later
+			 * plaforms, not all those that could theoretically
+			 * run it.
+			 */
+			if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F))
+				dev->rx_pkt_burst =
+					i40e_recv_scattered_pkts_vec_avx2;
+#endif
 		} else {
 			PMD_INIT_LOG(DEBUG, "Using a Scattered with bulk "
 					   "allocation callback (port=%d).",
@@ -2858,6 +2840,16 @@ i40e_set_rx_function(struct rte_eth_dev *dev)
 			     dev->data->port_id);
 
 		dev->rx_pkt_burst = i40e_recv_pkts_vec;
+#ifdef RTE_ARCH_X86
+		/*
+		 * since AVX frequency can be different to base
+		 * frequency, limit use of AVX2 version to later
+		 * plaforms, not all those that could theoretically
+		 * run it.
+		 */
+		if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F))
+			dev->rx_pkt_burst = i40e_recv_pkts_vec_avx2;
+#endif
 	} else if (ad->rx_bulk_alloc_allowed) {
 		PMD_INIT_LOG(DEBUG, "Rx Burst Bulk Alloc Preconditions are "
 				    "satisfied. Rx Burst Bulk Alloc function "
@@ -2878,7 +2870,9 @@ i40e_set_rx_function(struct rte_eth_dev *dev)
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
 		rx_using_sse =
 			(dev->rx_pkt_burst == i40e_recv_scattered_pkts_vec ||
-			 dev->rx_pkt_burst == i40e_recv_pkts_vec);
+			 dev->rx_pkt_burst == i40e_recv_pkts_vec ||
+			 dev->rx_pkt_burst == i40e_recv_scattered_pkts_vec_avx2 ||
+			 dev->rx_pkt_burst == i40e_recv_pkts_vec_avx2);
 
 		for (i = 0; i < dev->data->nb_rx_queues; i++) {
 			struct i40e_rx_queue *rxq = dev->data->rx_queues[i];
@@ -2935,6 +2929,16 @@ i40e_set_tx_function(struct rte_eth_dev *dev)
 		if (ad->tx_vec_allowed) {
 			PMD_INIT_LOG(DEBUG, "Vector tx finally be used.");
 			dev->tx_pkt_burst = i40e_xmit_pkts_vec;
+#ifdef RTE_ARCH_X86
+			/*
+			 * since AVX frequency can be different to base
+			 * frequency, limit use of AVX2 version to later
+			 * plaforms, not all those that could theoretically
+			 * run it.
+			 */
+			if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F))
+				dev->tx_pkt_burst = i40e_xmit_pkts_vec_avx2;
+#endif
 		} else {
 			PMD_INIT_LOG(DEBUG, "Simple tx finally be used.");
 			dev->tx_pkt_burst = i40e_xmit_pkts_simple;
@@ -3041,6 +3045,22 @@ i40e_recv_scattered_pkts_vec(
 	return 0;
 }
 
+uint16_t __attribute__((weak))
+i40e_recv_pkts_vec_avx2(void __rte_unused *rx_queue,
+			struct rte_mbuf __rte_unused **rx_pkts,
+			uint16_t __rte_unused nb_pkts)
+{
+	return 0;
+}
+
+uint16_t __attribute__((weak))
+i40e_recv_scattered_pkts_vec_avx2(void __rte_unused *rx_queue,
+			struct rte_mbuf __rte_unused **rx_pkts,
+			uint16_t __rte_unused nb_pkts)
+{
+	return 0;
+}
+
 int __attribute__((weak))
 i40e_rxq_vec_setup(struct i40e_rx_queue __rte_unused *rxq)
 {
@@ -3061,6 +3081,14 @@ i40e_rx_queue_release_mbufs_vec(struct i40e_rx_queue __rte_unused*rxq)
 
 uint16_t __attribute__((weak))
 i40e_xmit_fixed_burst_vec(void __rte_unused * tx_queue,
+			  struct rte_mbuf __rte_unused **tx_pkts,
+			  uint16_t __rte_unused nb_pkts)
+{
+	return 0;
+}
+
+uint16_t __attribute__((weak))
+i40e_xmit_pkts_vec_avx2(void __rte_unused * tx_queue,
 			  struct rte_mbuf __rte_unused **tx_pkts,
 			  uint16_t __rte_unused nb_pkts)
 {

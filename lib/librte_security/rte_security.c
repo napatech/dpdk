@@ -70,6 +70,13 @@ rte_security_session_update(struct rte_security_ctx *instance,
 	return instance->ops->session_update(instance->device, sess, conf);
 }
 
+unsigned int
+rte_security_session_get_size(struct rte_security_ctx *instance)
+{
+	RTE_FUNC_PTR_OR_ERR_RET(*instance->ops->session_get_size, 0);
+	return instance->ops->session_get_size(instance->device);
+}
+
 int
 rte_security_session_stats_get(struct rte_security_ctx *instance,
 			       struct rte_security_session *sess,
@@ -106,6 +113,18 @@ rte_security_set_pkt_metadata(struct rte_security_ctx *instance,
 	RTE_FUNC_PTR_OR_ERR_RET(*instance->ops->set_pkt_metadata, -ENOTSUP);
 	return instance->ops->set_pkt_metadata(instance->device,
 					       sess, m, params);
+}
+
+void *
+rte_security_get_userdata(struct rte_security_ctx *instance, uint64_t md)
+{
+	void *userdata = NULL;
+
+	RTE_FUNC_PTR_OR_ERR_RET(*instance->ops->get_userdata, NULL);
+	if (instance->ops->get_userdata(instance->device, md, &userdata))
+		return NULL;
+
+	return userdata;
 }
 
 const struct rte_security_capability *

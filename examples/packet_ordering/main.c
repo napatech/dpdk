@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2016 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2016 Intel Corporation
  */
 
 #include <signal.h>
@@ -64,7 +35,11 @@ volatile uint8_t quit_signal;
 
 static struct rte_mempool *mbuf_pool;
 
-static struct rte_eth_conf port_conf_default;
+static struct rte_eth_conf port_conf_default = {
+	.rxmode = {
+		.ignore_offload_bitfield = 1,
+	},
+};
 
 struct worker_thread_args {
 	struct rte_ring *ring_in;
@@ -293,10 +268,17 @@ configure_eth_port(uint16_t port_id)
 	uint16_t q;
 	uint16_t nb_rxd = RX_DESC_PER_QUEUE;
 	uint16_t nb_txd = TX_DESC_PER_QUEUE;
+	struct rte_eth_dev_info dev_info;
+	struct rte_eth_txconf txconf;
+	struct rte_eth_conf port_conf = port_conf_default;
 
 	if (port_id > nb_ports)
 		return -1;
 
+	rte_eth_dev_info_get(port_id, &dev_info);
+	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
+		port_conf.txmode.offloads |=
+			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
 	ret = rte_eth_dev_configure(port_id, rxRings, txRings, &port_conf_default);
 	if (ret != 0)
 		return ret;
@@ -313,9 +295,12 @@ configure_eth_port(uint16_t port_id)
 			return ret;
 	}
 
+	txconf = dev_info.default_txconf;
+	txconf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
+	txconf.offloads = port_conf.txmode.offloads;
 	for (q = 0; q < txRings; q++) {
 		ret = rte_eth_tx_queue_setup(port_id, q, nb_txd,
-				rte_eth_dev_socket_id(port_id), NULL);
+				rte_eth_dev_socket_id(port_id), &txconf);
 		if (ret < 0)
 			return ret;
 	}

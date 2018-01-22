@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2014 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2014 Intel Corporation
  */
 
 #include <stdio.h>
@@ -107,13 +78,10 @@
  */
 
 /* Options for configuring ethernet port */
-static const struct rte_eth_conf port_conf = {
+static struct rte_eth_conf port_conf = {
 	.rxmode = {
-		.header_split = 0,      /* Header Split disabled */
-		.hw_ip_checksum = 0,    /* IP checksum offload disabled */
-		.hw_vlan_filter = 0,    /* VLAN filtering disabled */
-		.jumbo_frame = 0,       /* Jumbo Frame Support disabled */
-		.hw_strip_crc = 1,      /* CRC stripped by hardware */
+		.ignore_offload_bitfield = 1,
+		.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
@@ -447,11 +415,19 @@ init_port(uint16_t port)
 	int ret;
 	uint16_t nb_rxd = NB_RXD;
 	uint16_t nb_txd = NB_TXD;
+	struct rte_eth_dev_info dev_info;
+	struct rte_eth_rxconf rxq_conf;
+	struct rte_eth_txconf txq_conf;
+	struct rte_eth_conf local_port_conf = port_conf;
 
 	/* Initialise device and RX/TX queues */
 	PRINT_INFO("Initialising port %u ...", port);
 	fflush(stdout);
-	ret = rte_eth_dev_configure(port, 1, 1, &port_conf);
+	rte_eth_dev_info_get(port, &dev_info);
+	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
+		local_port_conf.txmode.offloads |=
+			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+	ret = rte_eth_dev_configure(port, 1, 1, &local_port_conf);
 	if (ret < 0)
 		FATAL_ERROR("Could not configure port%u (%d)", port, ret);
 
@@ -460,17 +436,22 @@ init_port(uint16_t port)
 		FATAL_ERROR("Could not adjust number of descriptors for port%u (%d)",
 			    port, ret);
 
+	rxq_conf = dev_info.default_rxconf;
+	rxq_conf.offloads = local_port_conf.rxmode.offloads;
 	ret = rte_eth_rx_queue_setup(port, 0, nb_rxd,
 				rte_eth_dev_socket_id(port),
-				NULL,
+				&rxq_conf,
 				pktmbuf_pool);
 	if (ret < 0)
 		FATAL_ERROR("Could not setup up RX queue for port%u (%d)",
 				port, ret);
 
+	txq_conf = dev_info.default_txconf;
+	txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
+	txq_conf.offloads = local_port_conf.txmode.offloads;
 	ret = rte_eth_tx_queue_setup(port, 0, nb_txd,
 				rte_eth_dev_socket_id(port),
-				NULL);
+				&txq_conf);
 	if (ret < 0)
 		FATAL_ERROR("Could not setup up TX queue for port%u (%d)",
 				port, ret);

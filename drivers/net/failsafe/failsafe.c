@@ -33,7 +33,7 @@
 
 #include <rte_alarm.h>
 #include <rte_malloc.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_ethdev_vdev.h>
 #include <rte_devargs.h>
 #include <rte_kvargs.h>
@@ -46,7 +46,7 @@ static const struct rte_eth_link eth_link = {
 	.link_speed = ETH_SPEED_NUM_10G,
 	.link_duplex = ETH_LINK_FULL_DUPLEX,
 	.link_status = ETH_LINK_UP,
-	.link_autoneg = ETH_LINK_SPEED_AUTONEG,
+	.link_autoneg = ETH_LINK_AUTONEG,
 };
 
 static int
@@ -55,6 +55,7 @@ fs_sub_device_alloc(struct rte_eth_dev *dev,
 {
 	uint8_t nb_subs;
 	int ret;
+	int i;
 
 	ret = failsafe_args_count_subdevice(dev, params);
 	if (ret)
@@ -72,6 +73,10 @@ fs_sub_device_alloc(struct rte_eth_dev *dev,
 		ERROR("Could not allocate sub_devices");
 		return -ENOMEM;
 	}
+	/* Initiate static sub devices linked list. */
+	for (i = 1; i < nb_subs; i++)
+		PRIV(dev)->subs[i - 1].next = PRIV(dev)->subs + i;
+	PRIV(dev)->subs[i - 1].next = PRIV(dev)->subs;
 	return 0;
 }
 

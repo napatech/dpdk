@@ -34,9 +34,10 @@
 #ifndef _RTE_ETHDEV_VDEV_H_
 #define _RTE_ETHDEV_VDEV_H_
 
+#include <rte_config.h>
 #include <rte_malloc.h>
 #include <rte_bus_vdev.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 
 /**
  * @internal

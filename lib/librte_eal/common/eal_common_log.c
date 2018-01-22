@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2014 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2014 Intel Corporation
  */
 
 #include <stdio.h>
@@ -181,7 +152,7 @@ __rte_log_register(const char *name, int id)
 		return -ENOMEM;
 
 	rte_logs.dynamic_types[id].name = dup_name;
-	rte_logs.dynamic_types[id].loglevel = RTE_LOG_DEBUG;
+	rte_logs.dynamic_types[id].loglevel = RTE_LOG_INFO;
 
 	return id;
 }
@@ -219,26 +190,27 @@ struct logtype {
 };
 
 static const struct logtype logtype_strings[] = {
-	{RTE_LOGTYPE_EAL,        "eal"},
-	{RTE_LOGTYPE_MALLOC,     "malloc"},
-	{RTE_LOGTYPE_RING,       "ring"},
-	{RTE_LOGTYPE_MEMPOOL,    "mempool"},
-	{RTE_LOGTYPE_TIMER,      "timer"},
+	{RTE_LOGTYPE_EAL,        "lib.eal"},
+	{RTE_LOGTYPE_MALLOC,     "lib.malloc"},
+	{RTE_LOGTYPE_RING,       "lib.ring"},
+	{RTE_LOGTYPE_MEMPOOL,    "lib.mempool"},
+	{RTE_LOGTYPE_TIMER,      "lib.timer"},
 	{RTE_LOGTYPE_PMD,        "pmd"},
-	{RTE_LOGTYPE_HASH,       "hash"},
-	{RTE_LOGTYPE_LPM,        "lpm"},
-	{RTE_LOGTYPE_KNI,        "kni"},
-	{RTE_LOGTYPE_ACL,        "acl"},
-	{RTE_LOGTYPE_POWER,      "power"},
-	{RTE_LOGTYPE_METER,      "meter"},
-	{RTE_LOGTYPE_SCHED,      "sched"},
-	{RTE_LOGTYPE_PORT,       "port"},
-	{RTE_LOGTYPE_TABLE,      "table"},
-	{RTE_LOGTYPE_PIPELINE,   "pipeline"},
-	{RTE_LOGTYPE_MBUF,       "mbuf"},
-	{RTE_LOGTYPE_CRYPTODEV,  "cryptodev"},
-	{RTE_LOGTYPE_EFD,        "efd"},
-	{RTE_LOGTYPE_EVENTDEV,   "eventdev"},
+	{RTE_LOGTYPE_HASH,       "lib.hash"},
+	{RTE_LOGTYPE_LPM,        "lib.lpm"},
+	{RTE_LOGTYPE_KNI,        "lib.kni"},
+	{RTE_LOGTYPE_ACL,        "lib.acl"},
+	{RTE_LOGTYPE_POWER,      "lib.power"},
+	{RTE_LOGTYPE_METER,      "lib.meter"},
+	{RTE_LOGTYPE_SCHED,      "lib.sched"},
+	{RTE_LOGTYPE_PORT,       "lib.port"},
+	{RTE_LOGTYPE_TABLE,      "lib.table"},
+	{RTE_LOGTYPE_PIPELINE,   "lib.pipeline"},
+	{RTE_LOGTYPE_MBUF,       "lib.mbuf"},
+	{RTE_LOGTYPE_CRYPTODEV,  "lib.cryptodev"},
+	{RTE_LOGTYPE_EFD,        "lib.efd"},
+	{RTE_LOGTYPE_EVENTDEV,   "lib.eventdev"},
+	{RTE_LOGTYPE_GSO,        "lib.gso"},
 	{RTE_LOGTYPE_USER1,      "user1"},
 	{RTE_LOGTYPE_USER2,      "user2"},
 	{RTE_LOGTYPE_USER3,      "user3"},
@@ -256,11 +228,7 @@ rte_log_init(void)
 {
 	uint32_t i;
 
-#if RTE_LOG_LEVEL >= RTE_LOG_DEBUG
-	rte_log_set_global_level(RTE_LOG_INFO);
-#else
-	rte_log_set_global_level(RTE_LOG_LEVEL);
-#endif
+	rte_log_set_global_level(RTE_LOG_DEBUG);
 
 	rte_logs.dynamic_types = calloc(RTE_LOGTYPE_FIRST_EXT_ID,
 		sizeof(struct rte_log_dynamic_type));

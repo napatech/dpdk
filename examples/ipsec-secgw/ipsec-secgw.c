@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2016 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2016 Intel Corporation
  */
 
 #include <stdio.h>
@@ -89,6 +60,7 @@
 
 #define OPTION_CONFIG		"config"
 #define OPTION_SINGLE_SA	"single-sa"
+#define OPTION_CRYPTODEV_MASK	"cryptodev_mask"
 
 #define BURST_TX_DRAIN_US 100 /* TX drain every ~100us */
 
@@ -154,6 +126,7 @@ struct ethaddr_info ethaddr_tbl[RTE_MAX_ETHPORTS] = {
 
 /* mask of enabled ports */
 static uint32_t enabled_port_mask;
+static uint64_t enabled_cryptodev_mask = UINT64_MAX;
 static uint32_t unprotected_port_mask;
 static int32_t promiscuous_on = 1;
 static int32_t numa_on = 1; /**< NUMA is enabled by default. */
@@ -217,6 +190,8 @@ static struct rte_eth_conf port_conf = {
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
+		.offloads = (DEV_TX_OFFLOAD_IPV4_CKSUM |
+			     DEV_TX_OFFLOAD_MULTI_SEGS),
 	},
 };
 
@@ -264,6 +239,40 @@ prepare_one_packet(struct rte_mbuf *pkt, struct ipsec_traffic *t)
 		/* Unknown/Unsupported type, drop the packet */
 		RTE_LOG(ERR, IPSEC, "Unsupported packet type\n");
 		rte_pktmbuf_free(pkt);
+	}
+
+	/* Check if the packet has been processed inline. For inline protocol
+	 * processed packets, the metadata in the mbuf can be used to identify
+	 * the security processing done on the packet. The metadata will be
+	 * used to retrieve the application registered userdata associated
+	 * with the security session.
+	 */
+
+	if (pkt->ol_flags & PKT_RX_SEC_OFFLOAD) {
+		struct ipsec_sa *sa;
+		struct ipsec_mbuf_metadata *priv;
+		struct rte_security_ctx *ctx = (struct rte_security_ctx *)
+						rte_eth_dev_get_sec_ctx(
+						pkt->port);
+
+		/* Retrieve the userdata registered. Here, the userdata
+		 * registered is the SA pointer.
+		 */
+
+		sa = (struct ipsec_sa *)
+				rte_security_get_userdata(ctx, pkt->udata64);
+
+		if (sa == NULL) {
+			/* userdata could not be retrieved */
+			return;
+		}
+
+		/* Save SA as priv member in mbuf. This will be used in the
+		 * IPsec selector(SP-SA) check.
+		 */
+
+		priv = get_priv(pkt);
+		priv->sa = sa;
 	}
 }
 
@@ -401,13 +410,20 @@ inbound_sp_sa(struct sp_ctx *sp, struct sa_ctx *sa, struct traffic_type *ip,
 			ip->pkts[j++] = m;
 			continue;
 		}
-		if (res & DISCARD || i < lim) {
+		if (res & DISCARD) {
 			rte_pktmbuf_free(m);
 			continue;
 		}
+
 		/* Only check SPI match for processed IPSec packets */
+		if (i < lim && ((m->ol_flags & PKT_RX_SEC_OFFLOAD) == 0)) {
+			rte_pktmbuf_free(m);
+			continue;
+		}
+
 		sa_idx = ip->res[i] & PROTECT_MASK;
-		if (sa_idx == 0 || !inbound_sa_check(sa, m, sa_idx)) {
+		if (sa_idx >= IPSEC_SA_MAX_ENTRIES ||
+				!inbound_sa_check(sa, m, sa_idx)) {
 			rte_pktmbuf_free(m);
 			continue;
 		}
@@ -472,9 +488,9 @@ outbound_sp(struct sp_ctx *sp, struct traffic_type *ip,
 	for (i = 0; i < ip->num; i++) {
 		m = ip->pkts[i];
 		sa_idx = ip->res[i] & PROTECT_MASK;
-		if ((ip->res[i] == 0) || (ip->res[i] & DISCARD))
+		if (ip->res[i] & DISCARD)
 			rte_pktmbuf_free(m);
-		else if (sa_idx != 0) {
+		else if (sa_idx < IPSEC_SA_MAX_ENTRIES) {
 			ipsec->res[ipsec->num] = sa_idx;
 			ipsec->pkts[ipsec->num++] = m;
 		} else /* BYPASS */
@@ -585,31 +601,81 @@ process_pkts_outbound_nosp(struct ipsec_ctx *ipsec_ctx,
 		traffic->ip6.num = nb_pkts_out;
 }
 
+static inline int32_t
+get_hop_for_offload_pkt(struct rte_mbuf *pkt, int is_ipv6)
+{
+	struct ipsec_mbuf_metadata *priv;
+	struct ipsec_sa *sa;
+
+	priv = get_priv(pkt);
+
+	sa = priv->sa;
+	if (unlikely(sa == NULL)) {
+		RTE_LOG(ERR, IPSEC, "SA not saved in private data\n");
+		goto fail;
+	}
+
+	if (is_ipv6)
+		return sa->portid;
+
+	/* else */
+	return (sa->portid | RTE_LPM_LOOKUP_SUCCESS);
+
+fail:
+	if (is_ipv6)
+		return -1;
+
+	/* else */
+	return 0;
+}
+
 static inline void
 route4_pkts(struct rt_ctx *rt_ctx, struct rte_mbuf *pkts[], uint8_t nb_pkts)
 {
 	uint32_t hop[MAX_PKT_BURST * 2];
 	uint32_t dst_ip[MAX_PKT_BURST * 2];
+	int32_t pkt_hop = 0;
 	uint16_t i, offset;
+	uint16_t lpm_pkts = 0;
 
 	if (nb_pkts == 0)
 		return;
 
+	/* Need to do an LPM lookup for non-inline packets. Inline packets will
+	 * have port ID in the SA
+	 */
+
 	for (i = 0; i < nb_pkts; i++) {
-		offset = offsetof(struct ip, ip_dst);
-		dst_ip[i] = *rte_pktmbuf_mtod_offset(pkts[i],
-				uint32_t *, offset);
-		dst_ip[i] = rte_be_to_cpu_32(dst_ip[i]);
+		if (!(pkts[i]->ol_flags & PKT_TX_SEC_OFFLOAD)) {
+			/* Security offload not enabled. So an LPM lookup is
+			 * required to get the hop
+			 */
+			offset = offsetof(struct ip, ip_dst);
+			dst_ip[lpm_pkts] = *rte_pktmbuf_mtod_offset(pkts[i],
+					uint32_t *, offset);
+			dst_ip[lpm_pkts] = rte_be_to_cpu_32(dst_ip[lpm_pkts]);
+			lpm_pkts++;
+		}
 	}
 
-	rte_lpm_lookup_bulk((struct rte_lpm *)rt_ctx, dst_ip, hop, nb_pkts);
+	rte_lpm_lookup_bulk((struct rte_lpm *)rt_ctx, dst_ip, hop, lpm_pkts);
+
+	lpm_pkts = 0;
 
 	for (i = 0; i < nb_pkts; i++) {
-		if ((hop[i] & RTE_LPM_LOOKUP_SUCCESS) == 0) {
+		if (pkts[i]->ol_flags & PKT_TX_SEC_OFFLOAD) {
+			/* Read hop from the SA */
+			pkt_hop = get_hop_for_offload_pkt(pkts[i], 0);
+		} else {
+			/* Need to use hop returned by lookup */
+			pkt_hop = hop[lpm_pkts++];
+		}
+
+		if ((pkt_hop & RTE_LPM_LOOKUP_SUCCESS) == 0) {
 			rte_pktmbuf_free(pkts[i]);
 			continue;
 		}
-		send_single_packet(pkts[i], hop[i] & 0xff);
+		send_single_packet(pkts[i], pkt_hop & 0xff);
 	}
 }
 
@@ -619,26 +685,49 @@ route6_pkts(struct rt_ctx *rt_ctx, struct rte_mbuf *pkts[], uint8_t nb_pkts)
 	int32_t hop[MAX_PKT_BURST * 2];
 	uint8_t dst_ip[MAX_PKT_BURST * 2][16];
 	uint8_t *ip6_dst;
+	int32_t pkt_hop = 0;
 	uint16_t i, offset;
+	uint16_t lpm_pkts = 0;
 
 	if (nb_pkts == 0)
 		return;
 
+	/* Need to do an LPM lookup for non-inline packets. Inline packets will
+	 * have port ID in the SA
+	 */
+
 	for (i = 0; i < nb_pkts; i++) {
-		offset = offsetof(struct ip6_hdr, ip6_dst);
-		ip6_dst = rte_pktmbuf_mtod_offset(pkts[i], uint8_t *, offset);
-		memcpy(&dst_ip[i][0], ip6_dst, 16);
+		if (!(pkts[i]->ol_flags & PKT_TX_SEC_OFFLOAD)) {
+			/* Security offload not enabled. So an LPM lookup is
+			 * required to get the hop
+			 */
+			offset = offsetof(struct ip6_hdr, ip6_dst);
+			ip6_dst = rte_pktmbuf_mtod_offset(pkts[i], uint8_t *,
+					offset);
+			memcpy(&dst_ip[lpm_pkts][0], ip6_dst, 16);
+			lpm_pkts++;
+		}
 	}
 
-	rte_lpm6_lookup_bulk_func((struct rte_lpm6 *)rt_ctx, dst_ip,
-			hop, nb_pkts);
+	rte_lpm6_lookup_bulk_func((struct rte_lpm6 *)rt_ctx, dst_ip, hop,
+			lpm_pkts);
+
+	lpm_pkts = 0;
 
 	for (i = 0; i < nb_pkts; i++) {
-		if (hop[i] == -1) {
+		if (pkts[i]->ol_flags & PKT_TX_SEC_OFFLOAD) {
+			/* Read hop from the SA */
+			pkt_hop = get_hop_for_offload_pkt(pkts[i], 1);
+		} else {
+			/* Need to use hop returned by lookup */
+			pkt_hop = hop[lpm_pkts++];
+		}
+
+		if (pkt_hop == -1) {
 			rte_pktmbuf_free(pkts[i]);
 			continue;
 		}
-		send_single_packet(pkts[i], hop[i] & 0xff);
+		send_single_packet(pkts[i], pkt_hop & 0xff);
 	}
 }
 
@@ -848,6 +937,8 @@ print_usage(const char *prgname)
 		"rx queues configuration\n"
 		"  --single-sa SAIDX: use single SA index for outbound, "
 		"bypassing the SP\n"
+		"  --cryptodev_mask MASK: hexadecimal bitmask of the "
+		"crypto devices to configure\n"
 		"  -f CONFIG_FILE: Configuration file path\n",
 		prgname);
 }
@@ -962,6 +1053,14 @@ parse_args_long_options(struct option *lgopts, int32_t option_index)
 		}
 	}
 
+	if (__STRNCMP(optname, OPTION_CRYPTODEV_MASK)) {
+		ret = parse_portmask(optarg);
+		if (ret != -1) {
+			enabled_cryptodev_mask = ret;
+			ret = 0;
+		}
+	}
+
 	return ret;
 }
 #undef __STRNCMP
@@ -976,6 +1075,7 @@ parse_args(int32_t argc, char **argv)
 	static struct option lgopts[] = {
 		{OPTION_CONFIG, 1, 0, 0},
 		{OPTION_SINGLE_SA, 1, 0, 0},
+		{OPTION_CRYPTODEV_MASK, 1, 0, 0},
 		{NULL, 0, 0, 0}
 	};
 	int32_t f_present = 0;
@@ -1238,13 +1338,23 @@ add_cdev_mapping(struct rte_cryptodev_info *dev_info, uint16_t cdev_id,
 	return ret;
 }
 
+/* Check if the device is enabled by cryptodev_mask */
+static int
+check_cryptodev_mask(uint8_t cdev_id)
+{
+	if (enabled_cryptodev_mask & (1 << cdev_id))
+		return 0;
+
+	return -1;
+}
+
 static int32_t
 cryptodevs_init(void)
 {
 	struct rte_cryptodev_config dev_conf;
 	struct rte_cryptodev_qp_conf qp_conf;
 	uint16_t idx, max_nb_qps, qp, i;
-	int16_t cdev_id;
+	int16_t cdev_id, port_id;
 	struct rte_hash_parameters params = { 0 };
 
 	params.entries = CDEV_MAP_ENTRIES;
@@ -1273,11 +1383,21 @@ cryptodevs_init(void)
 		if (sess_sz > max_sess_sz)
 			max_sess_sz = sess_sz;
 	}
+	for (port_id = 0; port_id < rte_eth_dev_count(); port_id++) {
+		if ((enabled_port_mask & (1 << port_id)) == 0)
+			continue;
+		sess_sz = rte_security_session_get_size(
+				rte_eth_dev_get_sec_ctx(port_id));
+		if (sess_sz > max_sess_sz)
+			max_sess_sz = sess_sz;
+	}
 
 	idx = 0;
-	/* Start from last cdev id to give HW priority */
-	for (cdev_id = rte_cryptodev_count() - 1; cdev_id >= 0; cdev_id--) {
+	for (cdev_id = 0; cdev_id < rte_cryptodev_count(); cdev_id++) {
 		struct rte_cryptodev_info cdev_info;
+
+		if (check_cryptodev_mask((uint8_t)cdev_id))
+			continue;
 
 		rte_cryptodev_info_get(cdev_id, &cdev_info);
 
@@ -1343,6 +1463,38 @@ cryptodevs_init(void)
 					cdev_id);
 	}
 
+	/* create session pools for eth devices that implement security */
+	for (port_id = 0; port_id < rte_eth_dev_count(); port_id++) {
+		if ((enabled_port_mask & (1 << port_id)) &&
+				rte_eth_dev_get_sec_ctx(port_id)) {
+			int socket_id = rte_eth_dev_socket_id(port_id);
+
+			if (!socket_ctx[socket_id].session_pool) {
+				char mp_name[RTE_MEMPOOL_NAMESIZE];
+				struct rte_mempool *sess_mp;
+
+				snprintf(mp_name, RTE_MEMPOOL_NAMESIZE,
+						"sess_mp_%u", socket_id);
+				sess_mp = rte_mempool_create(mp_name,
+						CDEV_MP_NB_OBJS,
+						max_sess_sz,
+						CDEV_MP_CACHE_SZ,
+						0, NULL, NULL, NULL,
+						NULL, socket_id,
+						0);
+				if (sess_mp == NULL)
+					rte_exit(EXIT_FAILURE,
+						"Cannot create session pool "
+						"on socket %d\n", socket_id);
+				else
+					printf("Allocated session pool "
+						"on socket %d\n", socket_id);
+				socket_ctx[socket_id].session_pool = sess_mp;
+			}
+		}
+	}
+
+
 	printf("\n");
 
 	return 0;
@@ -1358,6 +1510,7 @@ port_init(uint16_t portid)
 	int32_t ret, socket_id;
 	struct lcore_conf *qconf;
 	struct ether_addr ethaddr;
+	struct rte_eth_conf local_port_conf = port_conf;
 
 	rte_eth_dev_info_get(portid, &dev_info);
 
@@ -1385,17 +1538,19 @@ port_init(uint16_t portid)
 			nb_rx_queue, nb_tx_queue);
 
 	if (frame_size) {
-		port_conf.rxmode.max_rx_pkt_len = frame_size;
-		port_conf.rxmode.offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
+		local_port_conf.rxmode.max_rx_pkt_len = frame_size;
+		local_port_conf.rxmode.offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
 	}
 
 	if (dev_info.rx_offload_capa & DEV_RX_OFFLOAD_SECURITY)
-		port_conf.rxmode.offloads |= DEV_RX_OFFLOAD_SECURITY;
+		local_port_conf.rxmode.offloads |= DEV_RX_OFFLOAD_SECURITY;
 	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_SECURITY)
-		port_conf.txmode.offloads |= DEV_TX_OFFLOAD_SECURITY;
-
+		local_port_conf.txmode.offloads |= DEV_TX_OFFLOAD_SECURITY;
+	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
+		local_port_conf.txmode.offloads |=
+			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
 	ret = rte_eth_dev_configure(portid, nb_rx_queue, nb_tx_queue,
-			&port_conf);
+			&local_port_conf);
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "Cannot configure device: "
 				"err=%d, port=%d\n", ret, portid);
@@ -1420,7 +1575,8 @@ port_init(uint16_t portid)
 		printf("Setup txq=%u,%d,%d\n", lcore_id, tx_queueid, socket_id);
 
 		txconf = &dev_info.default_txconf;
-		txconf->txq_flags = 0;
+		txconf->txq_flags = ETH_TXQ_FLAGS_IGNORE;
+		txconf->offloads = local_port_conf.txmode.offloads;
 
 		ret = rte_eth_tx_queue_setup(portid, tx_queueid, nb_txd,
 				socket_id, txconf);
@@ -1434,6 +1590,8 @@ port_init(uint16_t portid)
 
 		/* init RX queues */
 		for (queue = 0; queue < qconf->nb_rx_queue; ++queue) {
+			struct rte_eth_rxconf rxq_conf;
+
 			if (portid != qconf->rx_queue_list[queue].port_id)
 				continue;
 
@@ -1442,8 +1600,10 @@ port_init(uint16_t portid)
 			printf("Setup rxq=%d,%d,%d\n", portid, rx_queueid,
 					socket_id);
 
+			rxq_conf = dev_info.default_rxconf;
+			rxq_conf.offloads = local_port_conf.rxmode.offloads;
 			ret = rte_eth_rx_queue_setup(portid, rx_queueid,
-					nb_rxd,	socket_id, NULL,
+					nb_rxd,	socket_id, &rxq_conf,
 					socket_ctx[socket_id].mbuf_pool);
 			if (ret < 0)
 				rte_exit(EXIT_FAILURE,

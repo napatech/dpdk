@@ -1,34 +1,8 @@
-/*-
- *   BSD LICENSE
+/* SPDX-License-Identifier: BSD-3-Clause
  *
  *   Copyright 2016 Freescale Semiconductor, Inc. All rights reserved.
- *   Copyright 2017 NXP.
+ *   Copyright 2017 NXP
  *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of  Freescale Semiconductor, Inc nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 /* System headers */
@@ -52,18 +26,21 @@
 #include <rte_eal.h>
 #include <rte_alarm.h>
 #include <rte_ether.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_malloc.h>
 #include <rte_ring.h>
 #include <rte_ip.h>
 #include <rte_tcp.h>
 #include <rte_udp.h>
+#include <rte_net.h>
+#include <rte_eventdev.h>
 
 #include "dpaa_ethdev.h"
 #include "dpaa_rxtx.h"
 #include <rte_dpaa_bus.h>
 #include <dpaa_mempool.h>
 
+#include <qman.h>
 #include <fsl_usd.h>
 #include <fsl_qman.h>
 #include <fsl_bman.h>
@@ -122,12 +99,6 @@ static inline void dpaa_eth_packet_info(struct rte_mbuf *m,
 	DPAA_DP_LOG(DEBUG, " Parsing mbuf: %p with annotations: %p", m, annot);
 
 	switch (prs) {
-	case DPAA_PKT_TYPE_NONE:
-		m->packet_type = 0;
-		break;
-	case DPAA_PKT_TYPE_ETHER:
-		m->packet_type = RTE_PTYPE_L2_ETHER;
-		break;
 	case DPAA_PKT_TYPE_IPV4:
 		m->packet_type = RTE_PTYPE_L2_ETHER |
 			RTE_PTYPE_L3_IPV4;
@@ -135,6 +106,9 @@ static inline void dpaa_eth_packet_info(struct rte_mbuf *m,
 	case DPAA_PKT_TYPE_IPV6:
 		m->packet_type = RTE_PTYPE_L2_ETHER |
 			RTE_PTYPE_L3_IPV6;
+		break;
+	case DPAA_PKT_TYPE_ETHER:
+		m->packet_type = RTE_PTYPE_L2_ETHER;
 		break;
 	case DPAA_PKT_TYPE_IPV4_FRAG:
 	case DPAA_PKT_TYPE_IPV4_FRAG_UDP:
@@ -198,6 +172,9 @@ static inline void dpaa_eth_packet_info(struct rte_mbuf *m,
 		m->packet_type = RTE_PTYPE_L2_ETHER |
 			RTE_PTYPE_L3_IPV6 | RTE_PTYPE_L4_SCTP;
 		break;
+	case DPAA_PKT_TYPE_NONE:
+		m->packet_type = 0;
+		break;
 	/* More switch cases can be added */
 	default:
 		dpaa_slow_parsing(m, prs);
@@ -208,12 +185,11 @@ static inline void dpaa_eth_packet_info(struct rte_mbuf *m,
 					<< DPAA_PKT_L3_LEN_SHIFT;
 
 	/* Set the hash values */
-	m->hash.rss = (uint32_t)(rte_be_to_cpu_64(annot->hash));
-	m->ol_flags = PKT_RX_RSS_HASH;
+	m->hash.rss = (uint32_t)(annot->hash);
 	/* All packets with Bad checksum are dropped by interface (and
 	 * corresponding notification issued to RX error queues).
 	 */
-	m->ol_flags |= PKT_RX_IP_CKSUM_GOOD;
+	m->ol_flags = PKT_RX_RSS_HASH | PKT_RX_IP_CKSUM_GOOD;
 
 	/* Check if Vlan is present */
 	if (prs & DPAA_PARSE_VLAN_MASK)
@@ -297,8 +273,32 @@ static inline void dpaa_checksum_offload(struct rte_mbuf *mbuf,
 	fd->cmd = DPAA_FD_CMD_RPD | DPAA_FD_CMD_DTC;
 }
 
+static inline void
+dpaa_unsegmented_checksum(struct rte_mbuf *mbuf, struct qm_fd *fd_arr)
+{
+	if (!mbuf->packet_type) {
+		struct rte_net_hdr_lens hdr_lens;
+
+		mbuf->packet_type = rte_net_get_ptype(mbuf, &hdr_lens,
+				RTE_PTYPE_L2_MASK | RTE_PTYPE_L3_MASK
+				| RTE_PTYPE_L4_MASK);
+		mbuf->l2_len = hdr_lens.l2_len;
+		mbuf->l3_len = hdr_lens.l3_len;
+	}
+	if (mbuf->data_off < (DEFAULT_TX_ICEOF +
+	    sizeof(struct dpaa_eth_parse_results_t))) {
+		DPAA_DP_LOG(DEBUG, "Checksum offload Err: "
+			"Not enough Headroom "
+			"space for correct Checksum offload."
+			"So Calculating checksum in Software.");
+		dpaa_checksum(mbuf);
+	} else {
+		dpaa_checksum_offload(mbuf, fd_arr, mbuf->buf_addr);
+	}
+}
+
 struct rte_mbuf *
-dpaa_eth_sg_to_mbuf(struct qm_fd *fd, uint32_t ifid)
+dpaa_eth_sg_to_mbuf(const struct qm_fd *fd, uint32_t ifid)
 {
 	struct dpaa_bp_info *bp_info = DPAA_BPID_TO_POOL_INFO(fd->bpid);
 	struct rte_mbuf *first_seg, *prev_seg, *cur_seg, *temp;
@@ -356,34 +356,31 @@ dpaa_eth_sg_to_mbuf(struct qm_fd *fd, uint32_t ifid)
 	return first_seg;
 }
 
-static inline struct rte_mbuf *dpaa_eth_fd_to_mbuf(struct qm_fd *fd,
-							uint32_t ifid)
+static inline struct rte_mbuf *
+dpaa_eth_fd_to_mbuf(const struct qm_fd *fd, uint32_t ifid)
 {
-	struct dpaa_bp_info *bp_info = DPAA_BPID_TO_POOL_INFO(fd->bpid);
 	struct rte_mbuf *mbuf;
-	void *ptr;
+	struct dpaa_bp_info *bp_info = DPAA_BPID_TO_POOL_INFO(fd->bpid);
+	void *ptr = rte_dpaa_mem_ptov(qm_fd_addr(fd));
 	uint8_t format =
 		(fd->opaque & DPAA_FD_FORMAT_MASK) >> DPAA_FD_FORMAT_SHIFT;
-	uint16_t offset =
-		(fd->opaque & DPAA_FD_OFFSET_MASK) >> DPAA_FD_OFFSET_SHIFT;
-	uint32_t length = fd->opaque & DPAA_FD_LENGTH_MASK;
+	uint16_t offset;
+	uint32_t length;
 
 	DPAA_DP_LOG(DEBUG, " FD--->MBUF");
 
 	if (unlikely(format == qm_fd_sg))
 		return dpaa_eth_sg_to_mbuf(fd, ifid);
 
+	rte_prefetch0((void *)((uint8_t *)ptr + DEFAULT_RX_ICEOF));
+
+	offset = (fd->opaque & DPAA_FD_OFFSET_MASK) >> DPAA_FD_OFFSET_SHIFT;
+	length = fd->opaque & DPAA_FD_LENGTH_MASK;
+
 	/* Ignoring case when format != qm_fd_contig */
 	dpaa_display_frame(fd);
-	ptr = rte_dpaa_mem_ptov(fd->addr);
-	/* Ignoring case when ptr would be NULL. That is only possible incase
-	 * of a corrupted packet
-	 */
 
 	mbuf = (struct rte_mbuf *)((char *)ptr - bp_info->meta_data_size);
-	/* Prefetch the Parse results and packet data to L1 */
-	rte_prefetch0((void *)((uint8_t *)ptr + DEFAULT_RX_ICEOF));
-	rte_prefetch0((void *)((uint8_t *)ptr + offset));
 
 	mbuf->data_off = offset;
 	mbuf->data_len = length;
@@ -399,6 +396,98 @@ static inline struct rte_mbuf *dpaa_eth_fd_to_mbuf(struct qm_fd *fd,
 	return mbuf;
 }
 
+enum qman_cb_dqrr_result dpaa_rx_cb(void *event __always_unused,
+				    struct qman_portal *qm __always_unused,
+				    struct qman_fq *fq,
+				    const struct qm_dqrr_entry *dqrr,
+				    void **bufs)
+{
+	const struct qm_fd *fd = &dqrr->fd;
+
+	*bufs = dpaa_eth_fd_to_mbuf(fd,
+			((struct dpaa_if *)fq->dpaa_intf)->ifid);
+	return qman_cb_dqrr_consume;
+}
+
+static uint16_t
+dpaa_eth_queue_portal_rx(struct qman_fq *fq,
+			 struct rte_mbuf **bufs,
+			 uint16_t nb_bufs)
+{
+	int ret;
+
+	if (unlikely(fq->qp == NULL)) {
+		ret = rte_dpaa_portal_fq_init((void *)0, fq);
+		if (ret) {
+			DPAA_PMD_ERR("Failure in affining portal %d", ret);
+			return 0;
+		}
+	}
+
+	return qman_portal_poll_rx(nb_bufs, (void **)bufs, fq->qp);
+}
+
+enum qman_cb_dqrr_result
+dpaa_rx_cb_parallel(void *event,
+		    struct qman_portal *qm __always_unused,
+		    struct qman_fq *fq,
+		    const struct qm_dqrr_entry *dqrr,
+		    void **bufs)
+{
+	u32 ifid = ((struct dpaa_if *)fq->dpaa_intf)->ifid;
+	struct rte_mbuf *mbuf;
+	struct rte_event *ev = (struct rte_event *)event;
+
+	mbuf = dpaa_eth_fd_to_mbuf(&dqrr->fd, ifid);
+	ev->event_ptr = (void *)mbuf;
+	ev->flow_id = fq->ev.flow_id;
+	ev->sub_event_type = fq->ev.sub_event_type;
+	ev->event_type = RTE_EVENT_TYPE_ETHDEV;
+	ev->op = RTE_EVENT_OP_NEW;
+	ev->sched_type = fq->ev.sched_type;
+	ev->queue_id = fq->ev.queue_id;
+	ev->priority = fq->ev.priority;
+	ev->impl_opaque = (uint8_t)DPAA_INVALID_MBUF_SEQN;
+	mbuf->seqn = DPAA_INVALID_MBUF_SEQN;
+	*bufs = mbuf;
+
+	return qman_cb_dqrr_consume;
+}
+
+enum qman_cb_dqrr_result
+dpaa_rx_cb_atomic(void *event,
+		  struct qman_portal *qm __always_unused,
+		  struct qman_fq *fq,
+		  const struct qm_dqrr_entry *dqrr,
+		  void **bufs)
+{
+	u8 index;
+	u32 ifid = ((struct dpaa_if *)fq->dpaa_intf)->ifid;
+	struct rte_mbuf *mbuf;
+	struct rte_event *ev = (struct rte_event *)event;
+
+	mbuf = dpaa_eth_fd_to_mbuf(&dqrr->fd, ifid);
+	ev->event_ptr = (void *)mbuf;
+	ev->flow_id = fq->ev.flow_id;
+	ev->sub_event_type = fq->ev.sub_event_type;
+	ev->event_type = RTE_EVENT_TYPE_ETHDEV;
+	ev->op = RTE_EVENT_OP_NEW;
+	ev->sched_type = fq->ev.sched_type;
+	ev->queue_id = fq->ev.queue_id;
+	ev->priority = fq->ev.priority;
+
+	/* Save active dqrr entries */
+	index = DQRR_PTR2IDX(dqrr);
+	DPAA_PER_LCORE_DQRR_SIZE++;
+	DPAA_PER_LCORE_DQRR_HELD |= 1 << index;
+	DPAA_PER_LCORE_DQRR_MBUF(index) = mbuf;
+	ev->impl_opaque = index + 1;
+	mbuf->seqn = (uint32_t)index + 1;
+	*bufs = mbuf;
+
+	return qman_cb_dqrr_defer;
+}
+
 uint16_t dpaa_eth_queue_rx(void *q,
 			   struct rte_mbuf **bufs,
 			   uint16_t nb_bufs)
@@ -407,6 +496,9 @@ uint16_t dpaa_eth_queue_rx(void *q,
 	struct qm_dqrr_entry *dq;
 	uint32_t num_rx = 0, ifid = ((struct dpaa_if *)fq->dpaa_intf)->ifid;
 	int ret;
+
+	if (likely(fq->is_static))
+		return dpaa_eth_queue_portal_rx(fq, bufs, nb_bufs);
 
 	ret = rte_dpaa_portal_init((void *)0);
 	if (ret) {
@@ -463,11 +555,11 @@ static struct rte_mbuf *dpaa_get_dmable_mbuf(struct rte_mbuf *mbuf,
 	if (!dpaa_mbuf)
 		return NULL;
 
-	memcpy((uint8_t *)(dpaa_mbuf->buf_addr) + mbuf->data_off, (void *)
+	memcpy((uint8_t *)(dpaa_mbuf->buf_addr) + RTE_PKTMBUF_HEADROOM, (void *)
 		((uint8_t *)(mbuf->buf_addr) + mbuf->data_off), mbuf->pkt_len);
 
 	/* Copy only the required fields */
-	dpaa_mbuf->data_off = mbuf->data_off;
+	dpaa_mbuf->data_off = RTE_PKTMBUF_HEADROOM;
 	dpaa_mbuf->pkt_len = mbuf->pkt_len;
 	dpaa_mbuf->ol_flags = mbuf->ol_flags;
 	dpaa_mbuf->packet_type = mbuf->packet_type;
@@ -504,6 +596,15 @@ dpaa_eth_mbuf_to_sg_fd(struct rte_mbuf *mbuf,
 	fd->opaque_addr = 0;
 
 	if (mbuf->ol_flags & DPAA_TX_CKSUM_OFFLOAD_MASK) {
+		if (!mbuf->packet_type) {
+			struct rte_net_hdr_lens hdr_lens;
+
+			mbuf->packet_type = rte_net_get_ptype(mbuf, &hdr_lens,
+					RTE_PTYPE_L2_MASK | RTE_PTYPE_L3_MASK
+					| RTE_PTYPE_L4_MASK);
+			mbuf->l2_len = hdr_lens.l2_len;
+			mbuf->l3_len = hdr_lens.l3_len;
+		}
 		if (temp->data_off < DEFAULT_TX_ICEOF
 			+ sizeof(struct dpaa_eth_parse_results_t))
 			temp->data_off = DEFAULT_TX_ICEOF
@@ -610,18 +711,8 @@ tx_on_dpaa_pool_unsegmented(struct rte_mbuf *mbuf,
 		rte_pktmbuf_free(mbuf);
 	}
 
-	if (mbuf->ol_flags & DPAA_TX_CKSUM_OFFLOAD_MASK) {
-		if (mbuf->data_off < (DEFAULT_TX_ICEOF +
-		    sizeof(struct dpaa_eth_parse_results_t))) {
-			DPAA_DP_LOG(DEBUG, "Checksum offload Err: "
-				"Not enough Headroom "
-				"space for correct Checksum offload."
-				"So Calculating checksum in Software.");
-			dpaa_checksum(mbuf);
-		} else {
-			dpaa_checksum_offload(mbuf, fd_arr, mbuf->buf_addr);
-		}
-	}
+	if (mbuf->ol_flags & DPAA_TX_CKSUM_OFFLOAD_MASK)
+		dpaa_unsegmented_checksum(mbuf, fd_arr);
 }
 
 /* Handle all mbufs on dpaa BMAN managed pool */
@@ -665,7 +756,7 @@ tx_on_external_pool(struct qman_fq *txq, struct rte_mbuf *mbuf,
 		return 1;
 	}
 
-	DPAA_MBUF_TO_CONTIG_FD(mbuf, fd_arr, dpaa_intf->bp_info->bpid);
+	DPAA_MBUF_TO_CONTIG_FD(dmable_mbuf, fd_arr, dpaa_intf->bp_info->bpid);
 
 	return 0;
 }
@@ -676,10 +767,11 @@ dpaa_eth_queue_tx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
 	struct rte_mbuf *mbuf, *mi = NULL;
 	struct rte_mempool *mp;
 	struct dpaa_bp_info *bp_info;
-	struct qm_fd fd_arr[MAX_TX_RING_SLOTS];
-	uint32_t frames_to_send, loop, i = 0;
+	struct qm_fd fd_arr[DPAA_TX_BURST_SIZE];
+	uint32_t frames_to_send, loop, sent = 0;
 	uint16_t state;
 	int ret;
+	uint32_t seqn, index, flags[DPAA_TX_BURST_SIZE] = {0};
 
 	ret = rte_dpaa_portal_init((void *)0);
 	if (ret) {
@@ -690,11 +782,25 @@ dpaa_eth_queue_tx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
 	DPAA_DP_LOG(DEBUG, "Transmitting %d buffers on queue: %p", nb_bufs, q);
 
 	while (nb_bufs) {
-		frames_to_send = (nb_bufs >> 3) ? MAX_TX_RING_SLOTS : nb_bufs;
-		for (loop = 0; loop < frames_to_send; loop++, i++) {
-			mbuf = bufs[i];
-			if (RTE_MBUF_DIRECT(mbuf)) {
+		frames_to_send = (nb_bufs > DPAA_TX_BURST_SIZE) ?
+				DPAA_TX_BURST_SIZE : nb_bufs;
+		for (loop = 0; loop < frames_to_send; loop++) {
+			mbuf = *(bufs++);
+			if (likely(RTE_MBUF_DIRECT(mbuf))) {
 				mp = mbuf->pool;
+				bp_info = DPAA_MEMPOOL_TO_POOL_INFO(mp);
+				if (likely(mp->ops_index ==
+						bp_info->dpaa_ops_index &&
+					mbuf->nb_segs == 1 &&
+					rte_mbuf_refcnt_read(mbuf) == 1)) {
+					DPAA_MBUF_TO_CONTIG_FD(mbuf,
+						&fd_arr[loop], bp_info->bpid);
+					if (mbuf->ol_flags &
+						DPAA_TX_CKSUM_OFFLOAD_MASK)
+						dpaa_unsegmented_checksum(mbuf,
+							&fd_arr[loop]);
+					continue;
+				}
 			} else {
 				mi = rte_mbuf_from_indirect(mbuf);
 				mp = mi->pool;
@@ -726,20 +832,34 @@ dpaa_eth_queue_tx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
 					goto send_pkts;
 				}
 			}
+			seqn = mbuf->seqn;
+			if (seqn != DPAA_INVALID_MBUF_SEQN) {
+				index = seqn - 1;
+				if (DPAA_PER_LCORE_DQRR_HELD & (1 << index)) {
+					flags[loop] =
+					   ((index & QM_EQCR_DCA_IDXMASK) << 8);
+					flags[loop] |= QMAN_ENQUEUE_FLAG_DCA;
+					DPAA_PER_LCORE_DQRR_SIZE--;
+					DPAA_PER_LCORE_DQRR_HELD &=
+								~(1 << index);
+				}
+			}
 		}
 
 send_pkts:
 		loop = 0;
 		while (loop < frames_to_send) {
 			loop += qman_enqueue_multi(q, &fd_arr[loop],
-					frames_to_send - loop);
+						   &flags[loop],
+						   frames_to_send - loop);
 		}
 		nb_bufs -= frames_to_send;
+		sent += frames_to_send;
 	}
 
-	DPAA_DP_LOG(DEBUG, "Transmitted %d buffers on queue: %p", i, q);
+	DPAA_DP_LOG(DEBUG, "Transmitted %d buffers on queue: %p", sent, q);
 
-	return i;
+	return sent;
 }
 
 uint16_t dpaa_eth_tx_drop_all(void *q  __rte_unused,

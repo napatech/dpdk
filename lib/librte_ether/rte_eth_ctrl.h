@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2015 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2015 Intel Corporation
  */
 
 #ifndef _RTE_ETH_CTRL_H_
@@ -704,9 +675,9 @@ enum rte_fdir_mode {
 	RTE_FDIR_MODE_PERFECT_TUNNEL,   /**< Enable FDIR filter mode - tunnel. */
 };
 
-#define UINT32_BIT (CHAR_BIT * sizeof(uint32_t))
+#define UINT64_BIT (CHAR_BIT * sizeof(uint64_t))
 #define RTE_FLOW_MASK_ARRAY_SIZE \
-	(RTE_ALIGN(RTE_ETH_FLOW_MAX, UINT32_BIT)/UINT32_BIT)
+	(RTE_ALIGN(RTE_ETH_FLOW_MAX, UINT64_BIT)/UINT64_BIT)
 
 /**
  * A structure used to get the information of flow director filter.
@@ -723,7 +694,7 @@ struct rte_eth_fdir_info {
 	uint32_t guarant_spc; /**< Guaranteed spaces.*/
 	uint32_t best_spc; /**< Best effort spaces.*/
 	/** Bit mask for every supported flow type. */
-	uint32_t flow_types_mask[RTE_FLOW_MASK_ARRAY_SIZE];
+	uint64_t flow_types_mask[RTE_FLOW_MASK_ARRAY_SIZE];
 	uint32_t max_flexpayload; /**< Total flex payload in bytes. */
 	/** Flexible payload unit in bytes. Size and alignments of all flex
 	    payload segments should be multiplies of this value. */
@@ -816,7 +787,7 @@ enum rte_eth_hash_function {
 };
 
 #define RTE_SYM_HASH_MASK_ARRAY_SIZE \
-	(RTE_ALIGN(RTE_ETH_FLOW_MAX, UINT32_BIT)/UINT32_BIT)
+	(RTE_ALIGN(RTE_ETH_FLOW_MAX, UINT64_BIT)/UINT64_BIT)
 /**
  * A structure used to set or get global hash function configurations which
  * include symmetric hash enable per flow type and hash function type.
@@ -829,9 +800,9 @@ enum rte_eth_hash_function {
 struct rte_eth_hash_global_conf {
 	enum rte_eth_hash_function hash_func; /**< Hash function type */
 	/** Bit mask for symmetric hash enable per flow type */
-	uint32_t sym_hash_enable_mask[RTE_SYM_HASH_MASK_ARRAY_SIZE];
+	uint64_t sym_hash_enable_mask[RTE_SYM_HASH_MASK_ARRAY_SIZE];
 	/** Bit mask indicates if the corresponding bit is valid */
-	uint32_t valid_bit_mask[RTE_SYM_HASH_MASK_ARRAY_SIZE];
+	uint64_t valid_bit_mask[RTE_SYM_HASH_MASK_ARRAY_SIZE];
 };
 
 /**

@@ -1,38 +1,17 @@
-/*-
- *   BSD LICENSE
+/* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2016-2017 Solarflare Communications Inc.
+ * Copyright (c) 2016-2018 Solarflare Communications Inc.
  * All rights reserved.
  *
  * This software was jointly developed between OKTET Labs (under contract
  * for Solarflare) and Solarflare Communications, Inc.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
- * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
- * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 /* sysconf() */
 #include <unistd.h>
 
 #include <rte_errno.h>
+#include <rte_alarm.h>
 
 #include "efx.h"
 
@@ -270,27 +249,16 @@ sfc_set_drv_limits(struct sfc_adapter *sa)
 	return efx_nic_set_drv_limits(sa->nic, &lim);
 }
 
-int
-sfc_start(struct sfc_adapter *sa)
+static int
+sfc_try_start(struct sfc_adapter *sa)
 {
+	const efx_nic_cfg_t *encp;
 	int rc;
 
 	sfc_log_init(sa, "entry");
 
 	SFC_ASSERT(sfc_adapter_is_locked(sa));
-
-	switch (sa->state) {
-	case SFC_ADAPTER_CONFIGURED:
-		break;
-	case SFC_ADAPTER_STARTED:
-		sfc_info(sa, "already started");
-		return 0;
-	default:
-		rc = EINVAL;
-		goto fail_bad_state;
-	}
-
-	sa->state = SFC_ADAPTER_STARTING;
+	SFC_ASSERT(sa->state == SFC_ADAPTER_STARTING);
 
 	sfc_log_init(sa, "set resource limits");
 	rc = sfc_set_drv_limits(sa);
@@ -301,6 +269,14 @@ sfc_start(struct sfc_adapter *sa)
 	rc = efx_nic_init(sa->nic);
 	if (rc != 0)
 		goto fail_nic_init;
+
+	encp = efx_nic_cfg_get(sa->nic);
+	if (encp->enc_tunnel_encapsulations_supported != 0) {
+		sfc_log_init(sa, "apply tunnel config");
+		rc = efx_tunnel_reconfigure(sa->nic);
+		if (rc != 0)
+			goto fail_tunnel_reconfigure;
+	}
 
 	rc = sfc_intr_start(sa);
 	if (rc != 0)
@@ -326,7 +302,6 @@ sfc_start(struct sfc_adapter *sa)
 	if (rc != 0)
 		goto fail_flows_insert;
 
-	sa->state = SFC_ADAPTER_STARTED;
 	sfc_log_init(sa, "done");
 	return 0;
 
@@ -346,10 +321,51 @@ fail_ev_start:
 	sfc_intr_stop(sa);
 
 fail_intr_start:
+fail_tunnel_reconfigure:
 	efx_nic_fini(sa->nic);
 
 fail_nic_init:
 fail_set_drv_limits:
+	sfc_log_init(sa, "failed %d", rc);
+	return rc;
+}
+
+int
+sfc_start(struct sfc_adapter *sa)
+{
+	unsigned int start_tries = 3;
+	int rc;
+
+	sfc_log_init(sa, "entry");
+
+	SFC_ASSERT(sfc_adapter_is_locked(sa));
+
+	switch (sa->state) {
+	case SFC_ADAPTER_CONFIGURED:
+		break;
+	case SFC_ADAPTER_STARTED:
+		sfc_info(sa, "already started");
+		return 0;
+	default:
+		rc = EINVAL;
+		goto fail_bad_state;
+	}
+
+	sa->state = SFC_ADAPTER_STARTING;
+
+	do {
+		rc = sfc_try_start(sa);
+	} while ((--start_tries > 0) &&
+		 (rc == EIO || rc == EAGAIN || rc == ENOENT || rc == EINVAL));
+
+	if (rc != 0)
+		goto fail_try_start;
+
+	sa->state = SFC_ADAPTER_STARTED;
+	sfc_log_init(sa, "done");
+	return 0;
+
+fail_try_start:
 	sa->state = SFC_ADAPTER_CONFIGURED;
 fail_bad_state:
 	sfc_log_init(sa, "failed %d", rc);
@@ -387,6 +403,58 @@ sfc_stop(struct sfc_adapter *sa)
 
 	sa->state = SFC_ADAPTER_CONFIGURED;
 	sfc_log_init(sa, "done");
+}
+
+static int
+sfc_restart(struct sfc_adapter *sa)
+{
+	int rc;
+
+	SFC_ASSERT(sfc_adapter_is_locked(sa));
+
+	if (sa->state != SFC_ADAPTER_STARTED)
+		return EINVAL;
+
+	sfc_stop(sa);
+
+	rc = sfc_start(sa);
+	if (rc != 0)
+		sfc_err(sa, "restart failed");
+
+	return rc;
+}
+
+static void
+sfc_restart_if_required(void *arg)
+{
+	struct sfc_adapter *sa = arg;
+
+	/* If restart is scheduled, clear the flag and do it */
+	if (rte_atomic32_cmpset((volatile uint32_t *)&sa->restart_required,
+				1, 0)) {
+		sfc_adapter_lock(sa);
+		if (sa->state == SFC_ADAPTER_STARTED)
+			(void)sfc_restart(sa);
+		sfc_adapter_unlock(sa);
+	}
+}
+
+void
+sfc_schedule_restart(struct sfc_adapter *sa)
+{
+	int rc;
+
+	/* Schedule restart alarm if it is not scheduled yet */
+	if (!rte_atomic32_test_and_set(&sa->restart_required))
+		return;
+
+	rc = rte_eal_alarm_set(1, sfc_restart_if_required, sa);
+	if (rc == -ENOTSUP)
+		sfc_warn(sa, "alarms are not supported, restart is pending");
+	else if (rc != 0)
+		sfc_err(sa, "cannot arm restart alarm (rc=%d)", rc);
+	else
+		sfc_info(sa, "restart scheduled");
 }
 
 int
@@ -583,6 +651,16 @@ sfc_attach(struct sfc_adapter *sa)
 	if (rc != 0)
 		goto fail_nic_reset;
 
+	/*
+	 * Probed NIC is sufficient for tunnel init.
+	 * Initialize tunnel support to be able to use libefx
+	 * efx_tunnel_config_udp_{add,remove}() in any state and
+	 * efx_tunnel_reconfigure() on start up.
+	 */
+	rc = efx_tunnel_init(enp);
+	if (rc != 0)
+		goto fail_tunnel_init;
+
 	encp = efx_nic_cfg_get(sa->nic);
 
 	if (sa->dp_tx->features & SFC_DP_TX_FEAT_TSO) {
@@ -644,6 +722,9 @@ fail_intr_attach:
 	efx_nic_fini(sa->nic);
 
 fail_estimate_rsrc_limits:
+fail_tunnel_init:
+	efx_tunnel_fini(sa->nic);
+
 fail_nic_reset:
 
 	sfc_log_init(sa, "failed %d", rc);
@@ -663,6 +744,7 @@ sfc_detach(struct sfc_adapter *sa)
 	sfc_port_detach(sa);
 	sfc_ev_detach(sa);
 	sfc_intr_detach(sa);
+	efx_tunnel_fini(sa->nic);
 
 	sa->state = SFC_ADAPTER_UNINITIALIZED;
 }
@@ -679,6 +761,7 @@ sfc_probe(struct sfc_adapter *sa)
 	SFC_ASSERT(sfc_adapter_is_locked(sa));
 
 	sa->socket_id = rte_socket_id();
+	rte_atomic32_init(&sa->restart_required);
 
 	sfc_log_init(sa, "init mem bar");
 	rc = sfc_mem_bar_init(sa);
@@ -742,6 +825,14 @@ sfc_unprobe(struct sfc_adapter *sa)
 	efx_nic_unprobe(enp);
 
 	sfc_mcdi_fini(sa);
+
+	/*
+	 * Make sure there is no pending alarm to restart since we are
+	 * going to free device private which is passed as the callback
+	 * opaque data. A new alarm cannot be scheduled since MCDI is
+	 * shut down.
+	 */
+	rte_eal_alarm_cancel(sfc_restart_if_required, sa);
 
 	sfc_log_init(sa, "destroy nic");
 	sa->nic = NULL;

@@ -427,12 +427,95 @@ int bnxt_hwrm_set_l2_filter(struct bnxt *bp,
 	return rc;
 }
 
+int bnxt_hwrm_ptp_cfg(struct bnxt *bp)
+{
+	struct hwrm_port_mac_cfg_input req = {.req_type = 0};
+	struct bnxt_ptp_cfg *ptp = bp->ptp_cfg;
+	uint32_t flags = 0;
+	int rc;
+
+	if (!ptp)
+		return 0;
+
+	HWRM_PREP(req, PORT_MAC_CFG);
+
+	if (ptp->rx_filter)
+		flags |= PORT_MAC_CFG_REQ_FLAGS_PTP_RX_TS_CAPTURE_ENABLE;
+	else
+		flags |= PORT_MAC_CFG_REQ_FLAGS_PTP_RX_TS_CAPTURE_DISABLE;
+	if (ptp->tx_tstamp_en)
+		flags |= PORT_MAC_CFG_REQ_FLAGS_PTP_TX_TS_CAPTURE_ENABLE;
+	else
+		flags |= PORT_MAC_CFG_REQ_FLAGS_PTP_TX_TS_CAPTURE_DISABLE;
+	req.flags = rte_cpu_to_le_32(flags);
+	req.enables =
+	rte_cpu_to_le_32(PORT_MAC_CFG_REQ_ENABLES_RX_TS_CAPTURE_PTP_MSG_TYPE);
+	req.rx_ts_capture_ptp_msg_type = rte_cpu_to_le_16(ptp->rxctl);
+
+	rc = bnxt_hwrm_send_message(bp, &req, sizeof(req));
+	HWRM_UNLOCK();
+
+	return rc;
+}
+
+static int bnxt_hwrm_ptp_qcfg(struct bnxt *bp)
+{
+	int rc = 0;
+	struct hwrm_port_mac_ptp_qcfg_input req = {.req_type = 0};
+	struct hwrm_port_mac_ptp_qcfg_output *resp = bp->hwrm_cmd_resp_addr;
+	struct bnxt_ptp_cfg *ptp = bp->ptp_cfg;
+
+/*	if (bp->hwrm_spec_code < 0x10801 || ptp)  TBD  */
+	if (ptp)
+		return 0;
+
+	HWRM_PREP(req, PORT_MAC_PTP_QCFG);
+
+	req.port_id = rte_cpu_to_le_16(bp->pf.port_id);
+
+	rc = bnxt_hwrm_send_message(bp, &req, sizeof(req));
+
+	HWRM_CHECK_RESULT();
+
+	if (!(resp->flags & PORT_MAC_PTP_QCFG_RESP_FLAGS_DIRECT_ACCESS))
+		return 0;
+
+	ptp = rte_zmalloc("ptp_cfg", sizeof(*ptp), 0);
+	if (!ptp)
+		return -ENOMEM;
+
+	ptp->rx_regs[BNXT_PTP_RX_TS_L] =
+		rte_le_to_cpu_32(resp->rx_ts_reg_off_lower);
+	ptp->rx_regs[BNXT_PTP_RX_TS_H] =
+		rte_le_to_cpu_32(resp->rx_ts_reg_off_upper);
+	ptp->rx_regs[BNXT_PTP_RX_SEQ] =
+		rte_le_to_cpu_32(resp->rx_ts_reg_off_seq_id);
+	ptp->rx_regs[BNXT_PTP_RX_FIFO] =
+		rte_le_to_cpu_32(resp->rx_ts_reg_off_fifo);
+	ptp->rx_regs[BNXT_PTP_RX_FIFO_ADV] =
+		rte_le_to_cpu_32(resp->rx_ts_reg_off_fifo_adv);
+	ptp->tx_regs[BNXT_PTP_TX_TS_L] =
+		rte_le_to_cpu_32(resp->tx_ts_reg_off_lower);
+	ptp->tx_regs[BNXT_PTP_TX_TS_H] =
+		rte_le_to_cpu_32(resp->tx_ts_reg_off_upper);
+	ptp->tx_regs[BNXT_PTP_TX_SEQ] =
+		rte_le_to_cpu_32(resp->tx_ts_reg_off_seq_id);
+	ptp->tx_regs[BNXT_PTP_TX_FIFO] =
+		rte_le_to_cpu_32(resp->tx_ts_reg_off_fifo);
+
+	ptp->bp = bp;
+	bp->ptp_cfg = ptp;
+
+	return 0;
+}
+
 int bnxt_hwrm_func_qcaps(struct bnxt *bp)
 {
 	int rc = 0;
 	struct hwrm_func_qcaps_input req = {.req_type = 0 };
 	struct hwrm_func_qcaps_output *resp = bp->hwrm_cmd_resp_addr;
 	uint16_t new_max_vfs;
+	uint32_t flags;
 	int i;
 
 	HWRM_PREP(req, FUNC_QCAPS);
@@ -444,6 +527,7 @@ int bnxt_hwrm_func_qcaps(struct bnxt *bp)
 	HWRM_CHECK_RESULT();
 
 	bp->max_ring_grps = rte_le_to_cpu_32(resp->max_hw_ring_grps);
+	flags = rte_le_to_cpu_32(resp->flags);
 	if (BNXT_PF(bp)) {
 		bp->pf.port_id = resp->port_id;
 		bp->pf.first_vf_id = rte_le_to_cpu_16(resp->first_vf_id);
@@ -500,8 +584,16 @@ int bnxt_hwrm_func_qcaps(struct bnxt *bp)
 		bp->max_vnics = 1;
 	}
 	bp->max_stat_ctx = rte_le_to_cpu_16(resp->max_stat_ctx);
-	if (BNXT_PF(bp))
+	if (BNXT_PF(bp)) {
 		bp->pf.total_vnics = rte_le_to_cpu_16(resp->max_vnics);
+		if (flags & HWRM_FUNC_QCAPS_OUTPUT_FLAGS_PTP_SUPPORTED) {
+			bp->flags |= BNXT_FLAG_PTP_SUPPORTED;
+			RTE_LOG(INFO, PMD, "PTP SUPPORTED");
+			HWRM_UNLOCK();
+			bnxt_hwrm_ptp_qcfg(bp);
+		}
+	}
+
 	HWRM_UNLOCK();
 
 	return rc;
@@ -1046,7 +1138,6 @@ int bnxt_hwrm_stat_ctx_alloc(struct bnxt *bp, struct bnxt_cp_ring_info *cpr,
 	cpr->hw_stats_ctx_id = rte_le_to_cpu_16(resp->stat_ctx_id);
 
 	HWRM_UNLOCK();
-	bp->grp_info[idx].fw_stats_ctx = cpr->hw_stats_ctx_id;
 
 	return rc;
 }
@@ -1569,19 +1660,15 @@ int bnxt_free_all_hwrm_stat_ctxs(struct bnxt *bp)
 
 	for (i = 0; i < bp->rx_cp_nr_rings + bp->tx_cp_nr_rings; i++) {
 
-		if (i >= bp->rx_cp_nr_rings)
+		if (i >= bp->rx_cp_nr_rings) {
 			cpr = bp->tx_queues[i - bp->rx_cp_nr_rings]->cp_ring;
-		else
+		} else {
 			cpr = bp->rx_queues[i]->cp_ring;
+			bp->grp_info[i].fw_stats_ctx = -1;
+		}
 		if (cpr->hw_stats_ctx_id != HWRM_NA_SIGNATURE) {
 			rc = bnxt_hwrm_stat_ctx_free(bp, cpr, i);
 			cpr->hw_stats_ctx_id = HWRM_NA_SIGNATURE;
-			/*
-			 * TODO. Need a better way to reset grp_info.stats_ctx
-			 * for Rx rings only. stats_ctx is not saved for Tx
-			 * in grp_info.
-			 */
-			bp->grp_info[i].fw_stats_ctx = cpr->hw_stats_ctx_id;
 			if (rc)
 				return rc;
 		}
@@ -1641,7 +1728,6 @@ static void bnxt_free_cp_ring(struct bnxt *bp, struct bnxt_cp_ring_info *cpr,
 	bnxt_hwrm_ring_free(bp, cp_ring,
 			HWRM_RING_FREE_INPUT_RING_TYPE_L2_CMPL);
 	cp_ring->fw_ring_id = INVALID_HW_RING_ID;
-	bp->grp_info[idx].cp_fw_ring_id = INVALID_HW_RING_ID;
 	memset(cpr->cp_desc_ring, 0, cpr->cp_ring_struct->ring_size *
 			sizeof(*cpr->cp_desc_ring));
 	cpr->cp_raw_cons = 0;
@@ -1697,10 +1783,17 @@ int bnxt_free_all_hwrm_rings(struct bnxt *bp)
 					rxr->rx_ring_struct->ring_size *
 					sizeof(*rxr->rx_buf_ring));
 			rxr->rx_prod = 0;
+		}
+		ring = rxr->ag_ring_struct;
+		if (ring->fw_ring_id != INVALID_HW_RING_ID) {
+			bnxt_hwrm_ring_free(bp, ring,
+					    HWRM_RING_FREE_INPUT_RING_TYPE_RX);
+			ring->fw_ring_id = INVALID_HW_RING_ID;
 			memset(rxr->ag_buf_ring, 0,
-					rxr->ag_ring_struct->ring_size *
-					sizeof(*rxr->ag_buf_ring));
+			       rxr->ag_ring_struct->ring_size *
+			       sizeof(*rxr->ag_buf_ring));
 			rxr->ag_prod = 0;
+			bp->grp_info[i].ag_fw_ring_id = INVALID_HW_RING_ID;
 		}
 		if (cpr->cp_ring_struct->fw_ring_id != INVALID_HW_RING_ID) {
 			bnxt_free_cp_ring(bp, cpr, idx);
@@ -2107,7 +2200,7 @@ int bnxt_set_hwrm_link_config(struct bnxt *bp, bool link_up)
 	struct bnxt_link_info link_req;
 	uint16_t speed, autoneg;
 
-	if (BNXT_NPAR_PF(bp) || BNXT_VF(bp))
+	if (!BNXT_SINGLE_PF(bp) || BNXT_VF(bp))
 		return 0;
 
 	rc = bnxt_valid_link_speed(dev_conf->link_speeds,
@@ -2163,6 +2256,7 @@ int bnxt_hwrm_func_qcfg(struct bnxt *bp)
 {
 	struct hwrm_func_qcfg_input req = {0};
 	struct hwrm_func_qcfg_output *resp = bp->hwrm_cmd_resp_addr;
+	uint16_t flags;
 	int rc = 0;
 
 	HWRM_PREP(req, FUNC_QCFG);
@@ -2174,6 +2268,9 @@ int bnxt_hwrm_func_qcfg(struct bnxt *bp)
 
 	/* Hard Coded.. 0xfff VLAN ID mask */
 	bp->vlan = rte_le_to_cpu_16(resp->vlan) & 0xfff;
+	flags = rte_le_to_cpu_16(resp->flags);
+	if (BNXT_PF(bp) && (flags & HWRM_FUNC_QCFG_OUTPUT_FLAGS_MULTI_HOST))
+		bp->flags |= BNXT_FLAG_MULTI_HOST;
 
 	switch (resp->port_partition_type) {
 	case HWRM_FUNC_QCFG_OUTPUT_PORT_PARTITION_TYPE_NPAR1_0:
@@ -3575,7 +3672,6 @@ int bnxt_hwrm_clear_ntuple_filter(struct bnxt *bp,
 	HWRM_UNLOCK();
 
 	filter->fw_ntuple_filter_id = -1;
-	filter->fw_l2_filter_id = -1;
 
 	return 0;
 }

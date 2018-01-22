@@ -1,33 +1,5 @@
-/*
- *   BSD LICENSE
- *
- *   Copyright (C) Cavium, Inc 2017.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Cavium, Inc nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2017 Cavium, Inc
  */
 
 #include "test_perf_common.h"
@@ -36,7 +8,19 @@ int
 perf_test_result(struct evt_test *test, struct evt_options *opt)
 {
 	RTE_SET_USED(opt);
+	int i;
+	uint64_t total = 0;
 	struct test_perf *t = evt_test_priv(test);
+
+	printf("Packet distribution across worker cores :\n");
+	for (i = 0; i < t->nb_workers; i++)
+		total += t->worker[i].processed_pkts;
+	for (i = 0; i < t->nb_workers; i++)
+		printf("Worker %d packets: "CLGRN"%"PRIx64" "CLNRM"percentage:"
+				CLGRN" %3.2f\n"CLNRM, i,
+				t->worker[i].processed_pkts,
+				(((double)t->worker[i].processed_pkts)/total)
+				* 100);
 
 	return t->result;
 }
@@ -85,6 +69,17 @@ perf_producer(void *arg)
 		count++;
 	}
 
+	return 0;
+}
+
+static int
+perf_producer_wrapper(void *arg)
+{
+	struct prod_data *p  = arg;
+	struct test_perf *t = p->t;
+	/* Launch the producer function only in case of synthetic producer. */
+	if (t->opt->prod_type == EVT_PROD_TYPE_SYNT)
+		return perf_producer(arg);
 	return 0;
 }
 
@@ -142,8 +137,8 @@ perf_launch_lcores(struct evt_test *test, struct evt_options *opt,
 		if (!(opt->plcores[lcore_id]))
 			continue;
 
-		ret = rte_eal_remote_launch(perf_producer, &t->prod[port_idx],
-					 lcore_id);
+		ret = rte_eal_remote_launch(perf_producer_wrapper,
+				&t->prod[port_idx], lcore_id);
 		if (ret) {
 			evt_err("failed to launch perf_producer %d", lcore_id);
 			return ret;
@@ -193,14 +188,17 @@ perf_launch_lcores(struct evt_test *test, struct evt_options *opt,
 			fflush(stdout);
 
 			if (remaining <= 0) {
-				t->done = true;
 				t->result = EVT_TEST_SUCCESS;
-				rte_smp_wmb();
-				break;
+				if (opt->prod_type == EVT_PROD_TYPE_SYNT) {
+					t->done = true;
+					rte_smp_wmb();
+					break;
+				}
 			}
 		}
 
-		if (new_cycles - dead_lock_cycles > dead_lock_sample) {
+		if (new_cycles - dead_lock_cycles > dead_lock_sample &&
+				opt->prod_type == EVT_PROD_TYPE_SYNT) {
 			remaining = t->outstand_pkts - processed_pkts(t);
 			if (dead_lock_remaining == remaining) {
 				rte_event_dev_dump(opt->dev_id, stdout);
@@ -217,19 +215,91 @@ perf_launch_lcores(struct evt_test *test, struct evt_options *opt,
 	return 0;
 }
 
+static int
+perf_event_rx_adapter_setup(struct evt_options *opt, uint8_t stride,
+		struct rte_event_port_conf prod_conf)
+{
+	int ret = 0;
+	uint16_t prod;
+	struct rte_event_eth_rx_adapter_queue_conf queue_conf;
+
+	memset(&queue_conf, 0,
+			sizeof(struct rte_event_eth_rx_adapter_queue_conf));
+	queue_conf.ev.sched_type = opt->sched_type_list[0];
+	for (prod = 0; prod < rte_eth_dev_count(); prod++) {
+		uint32_t cap;
+
+		ret = rte_event_eth_rx_adapter_caps_get(opt->dev_id,
+				prod, &cap);
+		if (ret) {
+			evt_err("failed to get event rx adapter[%d]"
+					" capabilities",
+					opt->dev_id);
+			return ret;
+		}
+		queue_conf.ev.queue_id = prod * stride;
+		ret = rte_event_eth_rx_adapter_create(prod, opt->dev_id,
+				&prod_conf);
+		if (ret) {
+			evt_err("failed to create rx adapter[%d]", prod);
+			return ret;
+		}
+		ret = rte_event_eth_rx_adapter_queue_add(prod, prod, -1,
+				&queue_conf);
+		if (ret) {
+			evt_err("failed to add rx queues to adapter[%d]", prod);
+			return ret;
+		}
+
+		if (!(cap & RTE_EVENT_ETH_RX_ADAPTER_CAP_INTERNAL_PORT)) {
+			uint32_t service_id;
+
+			rte_event_eth_rx_adapter_service_id_get(prod,
+					&service_id);
+			ret = evt_service_setup(service_id);
+			if (ret) {
+				evt_err("Failed to setup service core"
+						" for Rx adapter\n");
+				return ret;
+			}
+		}
+
+		ret = rte_eth_dev_start(prod);
+		if (ret) {
+			evt_err("Ethernet dev [%d] failed to start."
+					" Using synthetic producer", prod);
+			return ret;
+		}
+
+		ret = rte_event_eth_rx_adapter_start(prod);
+		if (ret) {
+			evt_err("Rx adapter[%d] start failed", prod);
+			return ret;
+		}
+		printf("%s: Port[%d] using Rx adapter[%d] started\n", __func__,
+				prod, prod);
+	}
+
+	return ret;
+}
+
 int
 perf_event_dev_port_setup(struct evt_test *test, struct evt_options *opt,
 				uint8_t stride, uint8_t nb_queues)
 {
 	struct test_perf *t = evt_test_priv(test);
-	uint8_t port, prod;
+	uint16_t port, prod;
 	int ret = -1;
+	struct rte_event_port_conf port_conf;
+
+	memset(&port_conf, 0, sizeof(struct rte_event_port_conf));
+	rte_event_port_default_conf_get(opt->dev_id, 0, &port_conf);
 
 	/* port configuration */
 	const struct rte_event_port_conf wkr_p_conf = {
 			.dequeue_depth = opt->wkr_deq_dep,
-			.enqueue_depth = 64,
-			.new_event_threshold = 4096,
+			.enqueue_depth = port_conf.enqueue_depth,
+			.new_event_threshold = port_conf.new_event_threshold,
 	};
 
 	/* setup one port per worker, linking to all queues */
@@ -257,26 +327,38 @@ perf_event_dev_port_setup(struct evt_test *test, struct evt_options *opt,
 	}
 
 	/* port for producers, no links */
-	const struct rte_event_port_conf prod_conf = {
-			.dequeue_depth = 8,
-			.enqueue_depth = 32,
-			.new_event_threshold = 1200,
+	struct rte_event_port_conf prod_conf = {
+			.dequeue_depth = port_conf.dequeue_depth,
+			.enqueue_depth = port_conf.enqueue_depth,
+			.new_event_threshold = port_conf.new_event_threshold,
 	};
-	prod = 0;
-	for ( ; port < perf_nb_event_ports(opt); port++) {
-		struct prod_data *p = &t->prod[port];
-
-		p->dev_id = opt->dev_id;
-		p->port_id = port;
-		p->queue_id = prod * stride;
-		p->t = t;
-
-		ret = rte_event_port_setup(opt->dev_id, port, &prod_conf);
-		if (ret) {
-			evt_err("failed to setup port %d", port);
-			return ret;
+	if (opt->prod_type == EVT_PROD_TYPE_ETH_RX_ADPTR) {
+		for ( ; port < perf_nb_event_ports(opt); port++) {
+			struct prod_data *p = &t->prod[port];
+			p->t = t;
 		}
-		prod++;
+
+		ret = perf_event_rx_adapter_setup(opt, stride, prod_conf);
+		if (ret)
+			return ret;
+	} else {
+		prod = 0;
+		for ( ; port < perf_nb_event_ports(opt); port++) {
+			struct prod_data *p = &t->prod[port];
+
+			p->dev_id = opt->dev_id;
+			p->port_id = port;
+			p->queue_id = prod * stride;
+			p->t = t;
+
+			ret = rte_event_port_setup(opt->dev_id, port,
+					&prod_conf);
+			if (ret) {
+				evt_err("failed to setup port %d", port);
+				return ret;
+			}
+			prod++;
+		}
 	}
 
 	return ret;
@@ -287,8 +369,10 @@ perf_opt_check(struct evt_options *opt, uint64_t nb_queues)
 {
 	unsigned int lcores;
 
-	/* N producer + N worker + 1 master */
-	lcores = 3;
+	/* N producer + N worker + 1 master when producer cores are used
+	 * Else N worker + 1 master when Rx adapter is used
+	 */
+	lcores = opt->prod_type == EVT_PROD_TYPE_SYNT ? 3 : 2;
 
 	if (rte_lcore_count() < lcores) {
 		evt_err("test need minimum %d lcores", lcores);
@@ -313,18 +397,21 @@ perf_opt_check(struct evt_options *opt, uint64_t nb_queues)
 		return -1;
 	}
 
-	/* Validate producer lcores */
-	if (evt_lcores_has_overlap(opt->plcores, rte_get_master_lcore())) {
-		evt_err("producer lcores overlaps with master lcore");
-		return -1;
-	}
-	if (evt_has_disabled_lcore(opt->plcores)) {
-		evt_err("one or more producer lcores are not enabled");
-		return -1;
-	}
-	if (!evt_has_active_lcore(opt->plcores)) {
-		evt_err("minimum one producer is required");
-		return -1;
+	if (opt->prod_type == EVT_PROD_TYPE_SYNT) {
+		/* Validate producer lcores */
+		if (evt_lcores_has_overlap(opt->plcores,
+					rte_get_master_lcore())) {
+			evt_err("producer lcores overlaps with master lcore");
+			return -1;
+		}
+		if (evt_has_disabled_lcore(opt->plcores)) {
+			evt_err("one or more producer lcores are not enabled");
+			return -1;
+		}
+		if (!evt_has_active_lcore(opt->plcores)) {
+			evt_err("minimum one producer is required");
+			return -1;
+		}
 	}
 
 	if (evt_has_invalid_stage(opt))
@@ -369,6 +456,7 @@ perf_opt_dump(struct evt_options *opt, uint8_t nb_queues)
 	evt_dump("nb_evdev_queues", "%d", nb_queues);
 	evt_dump_queue_priority(opt);
 	evt_dump_sched_type_list(opt);
+	evt_dump_producer_type(opt);
 }
 
 void
@@ -387,18 +475,108 @@ perf_elt_init(struct rte_mempool *mp, void *arg __rte_unused,
 	memset(obj, 0, mp->elt_size);
 }
 
+#define NB_RX_DESC			128
+#define NB_TX_DESC			512
+int
+perf_ethdev_setup(struct evt_test *test, struct evt_options *opt)
+{
+	int i;
+	struct test_perf *t = evt_test_priv(test);
+	struct rte_eth_conf port_conf = {
+		.rxmode = {
+			.mq_mode = ETH_MQ_RX_RSS,
+			.max_rx_pkt_len = ETHER_MAX_LEN,
+			.split_hdr_size = 0,
+			.header_split   = 0,
+			.hw_ip_checksum = 0,
+			.hw_vlan_filter = 0,
+			.hw_vlan_strip  = 0,
+			.hw_vlan_extend = 0,
+			.jumbo_frame    = 0,
+			.hw_strip_crc   = 1,
+		},
+		.rx_adv_conf = {
+			.rss_conf = {
+				.rss_key = NULL,
+				.rss_hf = ETH_RSS_IP,
+			},
+		},
+	};
+
+	if (opt->prod_type == EVT_PROD_TYPE_SYNT)
+		return 0;
+
+	if (!rte_eth_dev_count()) {
+		evt_err("No ethernet ports found.");
+		return -ENODEV;
+	}
+
+	for (i = 0; i < rte_eth_dev_count(); i++) {
+
+		if (rte_eth_dev_configure(i, 1, 1,
+					&port_conf)
+				< 0) {
+			evt_err("Failed to configure eth port [%d]", i);
+			return -EINVAL;
+		}
+
+		if (rte_eth_rx_queue_setup(i, 0, NB_RX_DESC,
+				rte_socket_id(), NULL, t->pool) < 0) {
+			evt_err("Failed to setup eth port [%d] rx_queue: %d.",
+					i, 0);
+			return -EINVAL;
+		}
+
+		if (rte_eth_tx_queue_setup(i, 0, NB_TX_DESC,
+					rte_socket_id(), NULL) < 0) {
+			evt_err("Failed to setup eth port [%d] tx_queue: %d.",
+					i, 0);
+			return -EINVAL;
+		}
+
+		rte_eth_promiscuous_enable(i);
+	}
+
+	return 0;
+}
+
+void perf_ethdev_destroy(struct evt_test *test, struct evt_options *opt)
+{
+	int i;
+	RTE_SET_USED(test);
+
+	if (opt->prod_type == EVT_PROD_TYPE_ETH_RX_ADPTR) {
+		for (i = 0; i < rte_eth_dev_count(); i++) {
+			rte_event_eth_rx_adapter_stop(i);
+			rte_eth_dev_stop(i);
+			rte_eth_dev_close(i);
+		}
+	}
+}
+
 int
 perf_mempool_setup(struct evt_test *test, struct evt_options *opt)
 {
 	struct test_perf *t = evt_test_priv(test);
 
-	t->pool = rte_mempool_create(test->name, /* mempool name */
+	if (opt->prod_type == EVT_PROD_TYPE_SYNT) {
+		t->pool = rte_mempool_create(test->name, /* mempool name */
 				opt->pool_sz, /* number of elements*/
 				sizeof(struct perf_elt), /* element size*/
 				512, /* cache size*/
 				0, NULL, NULL,
 				perf_elt_init, /* obj constructor */
 				NULL, opt->socket_id, 0); /* flags */
+	} else {
+		t->pool = rte_pktmbuf_pool_create(test->name, /* mempool name */
+				opt->pool_sz, /* number of elements*/
+				512, /* cache size*/
+				0,
+				RTE_MBUF_DEFAULT_BUF_SIZE,
+				opt->socket_id); /* flags */
+
+	}
+
 	if (t->pool == NULL) {
 		evt_err("failed to create mempool");
 		return -ENOMEM;

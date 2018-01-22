@@ -1,31 +1,7 @@
-/*
- * Copyright (c) 2012-2016 Solarflare Communications Inc.
+/* SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 2012-2018 Solarflare Communications Inc.
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
- * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
- * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * The views and conclusions contained in the software and documentation are
- * those of the authors and should not be interpreted as representing official
- * policies, either expressed or implied, of the FreeBSD Project.
  */
 
 #include "efx.h"
@@ -1054,7 +1030,7 @@ ef10_get_datapath_caps(
 	 * and version 2 of MC_CMD_NVRAM_UPDATE_FINISH (to verify the updated
 	 * partition and report the result).
 	 */
-	encp->enc_fw_verified_nvram_update_required =
+	encp->enc_nvram_update_verify_result_supported =
 	    CAP_FLAG2(flags2, NVRAM_UPDATE_REPORT_VERIFY_RESULT) ?
 	    B_TRUE : B_FALSE;
 
@@ -1076,11 +1052,19 @@ ef10_get_datapath_caps(
 	 * Check if firmware supports VXLAN and NVGRE tunnels.
 	 * The capability indicates Geneve protocol support as well.
 	 */
-	if (CAP_FLAG(flags, VXLAN_NVGRE))
+	if (CAP_FLAG(flags, VXLAN_NVGRE)) {
 		encp->enc_tunnel_encapsulations_supported =
 		    (1u << EFX_TUNNEL_PROTOCOL_VXLAN) |
 		    (1u << EFX_TUNNEL_PROTOCOL_GENEVE) |
 		    (1u << EFX_TUNNEL_PROTOCOL_NVGRE);
+
+		EFX_STATIC_ASSERT(EFX_TUNNEL_MAXNENTRIES ==
+		    MC_CMD_SET_TUNNEL_ENCAP_UDP_PORTS_IN_ENTRIES_MAXNUM);
+		encp->enc_tunnel_config_udp_entries_max =
+		    EFX_TUNNEL_MAXNENTRIES;
+	} else {
+		encp->enc_tunnel_config_udp_entries_max = 0;
+	}
 
 #undef CAP_FLAG
 #undef CAP_FLAG2
@@ -1159,7 +1143,7 @@ fail1:
  * For the Huntington family, the current port mode cannot be discovered,
  * so the mapping used is instead the last match in the table to the full
  * set of port modes to which the NIC can be configured. Therefore the
- * ordering of entries in the the mapping table is significant.
+ * ordering of entries in the mapping table is significant.
  */
 static struct {
 	efx_family_t	family;

@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2017 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2017 Intel Corporation
  */
 
 #ifndef _RTE_FLOW_CLASSIFY_H_
@@ -70,6 +41,7 @@
  *    with rte_flow_classifier_free()
  */
 
+#include <rte_common.h>
 #include <rte_ethdev.h>
 #include <rte_ether.h>
 #include <rte_flow.h>
@@ -82,9 +54,16 @@ extern "C" {
 
 extern int librte_flow_classify_logtype;
 
-#define RTE_FLOW_CLASSIFY_LOG(level, fmt, args...) \
-rte_log(RTE_LOG_ ## level, librte_flow_classify_logtype, "%s(): " fmt, \
-	__func__, ## args)
+#define RTE_FLOW_CLASSIFY_LOG(level, ...) \
+	rte_log(RTE_LOG_ ## level, \
+		librte_flow_classify_logtype, \
+		RTE_FMT("%s(): " RTE_FMT_HEAD(__VA_ARGS__,), \
+			__func__, \
+			RTE_FMT_TAIL(__VA_ARGS__,)))
+
+#ifndef RTE_FLOW_CLASSIFY_TABLE_MAX
+#define RTE_FLOW_CLASSIFY_TABLE_MAX		32
+#endif
 
 /** Opaque data type for flow classifier */
 struct rte_flow_classifier;
@@ -102,17 +81,16 @@ enum rte_flow_classify_rule_type {
 
 /** Flow classify table type */
 enum rte_flow_classify_table_type {
-	/** no type */
-	RTE_FLOW_CLASSIFY_TABLE_TYPE_NONE,
-	/** ACL type */
-	RTE_FLOW_CLASSIFY_TABLE_TYPE_ACL,
-};
+	/** No type */
+	RTE_FLOW_CLASSIFY_TABLE_TYPE_NONE = 1 << 0,
+	/** ACL IP4 5TUPLE */
+	RTE_FLOW_CLASSIFY_TABLE_ACL_IP4_5TUPLE = 1 << 1,
+	/** ACL VLAN IP4 5TUPLE */
+	RTE_FLOW_CLASSIFY_TABLE_ACL_VLAN_IP4_5TUPLE = 1 << 2,
+	/** ACL QinQ IP4 5TUPLE */
+	RTE_FLOW_CLASSIFY_TABLE_ACL_QINQ_IP4_5TUPLE = 1 << 3,
 
-/**
- * Maximum number of tables allowed for any Flow Classifier instance.
- * The value of this parameter cannot be changed.
- */
-#define RTE_FLOW_CLASSIFY_TABLE_MAX  64
+};
 
 /** Parameters for flow classifier creation */
 struct rte_flow_classifier_params {
@@ -122,9 +100,6 @@ struct rte_flow_classifier_params {
 	/** CPU socket ID where memory for the flow classifier and its */
 	/** elements (tables) should be allocated */
 	int socket_id;
-
-	/** Table type */
-	enum rte_flow_classify_table_type type;
 };
 
 /** Parameters for table creation */
@@ -134,6 +109,9 @@ struct rte_flow_classify_table_params {
 
 	/** Opaque param to be passed to the table create operation */
 	void *arg_create;
+
+	/** Classifier table type */
+	enum rte_flow_classify_table_type type;
 };
 
 /** IPv4 5-tuple data */
@@ -197,26 +175,18 @@ rte_flow_classifier_free(struct rte_flow_classifier *cls);
  *   Handle to flow classifier instance
  * @param params
  *   Parameters for flow_classify table creation
- * @param table_id
- *   Table ID. Valid only within the scope of table IDs of the current
- *   classifier. Only returned after a successful invocation.
  * @return
  *   0 on success, error code otherwise
  */
 int
 rte_flow_classify_table_create(struct rte_flow_classifier *cls,
-		struct rte_flow_classify_table_params *params,
-		uint32_t *table_id);
+		struct rte_flow_classify_table_params *params);
 
 /**
- * Add a flow classify rule to the flow_classifer table.
+ * Flow classify validate
  *
- * @param[in] cls
- *   Flow classifier handle
- * @param[in] table_id
- *   id of table
- * @param[out] key_found
- *  returns 1 if key present already, 0 otherwise.
+ * @param cls
+ *   Handle to flow classifier instance
  * @param[in] attr
  *   Flow rule attributes
  * @param[in] pattern
@@ -227,15 +197,40 @@ rte_flow_classify_table_create(struct rte_flow_classifier *cls,
  *   Perform verbose error reporting if not NULL. Structure
  *   initialised in case of error only.
  * @return
+ *   0 on success, error code otherwise
+ */
+int
+rte_flow_classify_validate(struct rte_flow_classifier *cls,
+		const struct rte_flow_attr *attr,
+		const struct rte_flow_item pattern[],
+		const struct rte_flow_action actions[],
+		struct rte_flow_error *error);
+
+/**
+ * Add a flow classify rule to the flow_classifer table.
+ *
+ * @param[in] cls
+ *   Flow classifier handle
+ * @param[in] attr
+ *   Flow rule attributes
+ * @param[in] pattern
+ *   Pattern specification (list terminated by the END pattern item).
+ * @param[in] actions
+ *   Associated actions (list terminated by the END pattern item).
+ * @param[out] key_found
+ *  returns 1 if rule present already, 0 otherwise.
+ * @param[out] error
+ *   Perform verbose error reporting if not NULL. Structure
+ *   initialised in case of error only.
+ * @return
  *   A valid handle in case of success, NULL otherwise.
  */
 struct rte_flow_classify_rule *
 rte_flow_classify_table_entry_add(struct rte_flow_classifier *cls,
-		uint32_t table_id,
-		int *key_found,
 		const struct rte_flow_attr *attr,
 		const struct rte_flow_item pattern[],
 		const struct rte_flow_action actions[],
+		int *key_found,
 		struct rte_flow_error *error);
 
 /**
@@ -243,8 +238,6 @@ rte_flow_classify_table_entry_add(struct rte_flow_classifier *cls,
  *
  * @param[in] cls
  *   Flow classifier handle
- * @param[in] table_id
- *   id of table
  * @param[in] rule
  *   Flow classify rule
  * @return
@@ -252,7 +245,6 @@ rte_flow_classify_table_entry_add(struct rte_flow_classifier *cls,
  */
 int
 rte_flow_classify_table_entry_delete(struct rte_flow_classifier *cls,
-		uint32_t table_id,
 		struct rte_flow_classify_rule *rule);
 
 /**
@@ -260,8 +252,6 @@ rte_flow_classify_table_entry_delete(struct rte_flow_classifier *cls,
  *
  * @param[in] cls
  *   Flow classifier handle
- * @param[in] table_id
- *   id of table
  * @param[in] pkts
  *   Pointer to packets to process
  * @param[in] nb_pkts
@@ -276,7 +266,6 @@ rte_flow_classify_table_entry_delete(struct rte_flow_classifier *cls,
  */
 int
 rte_flow_classifier_query(struct rte_flow_classifier *cls,
-		uint32_t table_id,
 		struct rte_mbuf **pkts,
 		const uint16_t nb_pkts,
 		struct rte_flow_classify_rule *rule,

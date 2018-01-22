@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2017 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2017 Intel Corporation
  */
 
 #include <rte_malloc.h>
@@ -2082,7 +2053,8 @@ static int check_invalid_pkt_type(uint32_t pkt_type)
 	    l2 != RTE_PTYPE_L2_ETHER_LLDP &&
 	    l2 != RTE_PTYPE_L2_ETHER_NSH &&
 	    l2 != RTE_PTYPE_L2_ETHER_VLAN &&
-	    l2 != RTE_PTYPE_L2_ETHER_QINQ)
+	    l2 != RTE_PTYPE_L2_ETHER_QINQ &&
+	    l2 != RTE_PTYPE_L2_ETHER_PPPOE)
 		return -1;
 
 	if (l3 &&
@@ -2111,7 +2083,8 @@ static int check_invalid_pkt_type(uint32_t pkt_type)
 	    tnl != RTE_PTYPE_TUNNEL_GENEVE &&
 	    tnl != RTE_PTYPE_TUNNEL_GRENAT &&
 	    tnl != RTE_PTYPE_TUNNEL_GTPC &&
-	    tnl != RTE_PTYPE_TUNNEL_GTPU)
+	    tnl != RTE_PTYPE_TUNNEL_GTPU &&
+	    tnl != RTE_PTYPE_TUNNEL_L2TP)
 		return -1;
 
 	if (il2 &&
@@ -2845,22 +2818,23 @@ i40e_flush_queue_region_all_conf(struct rte_eth_dev *dev,
 		return 0;
 	}
 
-	info->queue_region_number = 1;
-	info->region[0].queue_num = main_vsi->nb_used_qps;
-	info->region[0].queue_start_index = 0;
+	if (info->queue_region_number) {
+		info->queue_region_number = 1;
+		info->region[0].queue_num = main_vsi->nb_used_qps;
+		info->region[0].queue_start_index = 0;
 
-	ret = i40e_vsi_update_queue_region_mapping(hw, pf);
-	if (ret != I40E_SUCCESS)
-		PMD_DRV_LOG(INFO, "Failed to flush queue region mapping.");
+		ret = i40e_vsi_update_queue_region_mapping(hw, pf);
+		if (ret != I40E_SUCCESS)
+			PMD_DRV_LOG(INFO, "Failed to flush queue region mapping.");
 
-	ret = i40e_dcb_init_configure(dev, TRUE);
-	if (ret != I40E_SUCCESS) {
-		PMD_DRV_LOG(INFO, "Failed to flush dcb.");
-		pf->flags &= ~I40E_FLAG_DCB;
+		ret = i40e_dcb_init_configure(dev, TRUE);
+		if (ret != I40E_SUCCESS) {
+			PMD_DRV_LOG(INFO, "Failed to flush dcb.");
+			pf->flags &= ~I40E_FLAG_DCB;
+		}
+
+		i40e_init_queue_region_conf(dev);
 	}
-
-	i40e_init_queue_region_conf(dev);
-
 	return 0;
 }
 
@@ -2984,4 +2958,145 @@ int rte_pmd_i40e_flow_add_del_packet_template(
 	filter_conf.action.flex_off = conf->action.flex_off;
 
 	return i40e_flow_add_del_fdir_filter(dev, &filter_conf, add);
+}
+
+int
+rte_pmd_i40e_inset_get(uint16_t port, uint8_t pctype,
+		       struct rte_pmd_i40e_inset *inset,
+		       enum rte_pmd_i40e_inset_type inset_type)
+{
+	struct rte_eth_dev *dev;
+	struct i40e_hw *hw;
+	uint64_t inset_reg;
+	uint32_t mask_reg[2];
+	int i;
+
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port, -ENODEV);
+
+	dev = &rte_eth_devices[port];
+
+	if (!is_i40e_supported(dev))
+		return -ENOTSUP;
+
+	if (pctype > 63)
+		return -EINVAL;
+
+	hw = I40E_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	memset(inset, 0, sizeof(struct rte_pmd_i40e_inset));
+
+	switch (inset_type) {
+	case INSET_HASH:
+		/* Get input set */
+		inset_reg =
+			i40e_read_rx_ctl(hw, I40E_GLQF_HASH_INSET(1, pctype));
+		inset_reg <<= I40E_32_BIT_WIDTH;
+		inset_reg |=
+			i40e_read_rx_ctl(hw, I40E_GLQF_HASH_INSET(0, pctype));
+		/* Get field mask */
+		mask_reg[0] =
+			i40e_read_rx_ctl(hw, I40E_GLQF_HASH_MSK(0, pctype));
+		mask_reg[1] =
+			i40e_read_rx_ctl(hw, I40E_GLQF_HASH_MSK(1, pctype));
+		break;
+	case INSET_FDIR:
+		inset_reg =
+			i40e_read_rx_ctl(hw, I40E_PRTQF_FD_INSET(pctype, 1));
+		inset_reg <<= I40E_32_BIT_WIDTH;
+		inset_reg |=
+			i40e_read_rx_ctl(hw, I40E_PRTQF_FD_INSET(pctype, 0));
+		mask_reg[0] =
+			i40e_read_rx_ctl(hw, I40E_GLQF_FD_MSK(0, pctype));
+		mask_reg[1] =
+			i40e_read_rx_ctl(hw, I40E_GLQF_FD_MSK(1, pctype));
+		break;
+	case INSET_FDIR_FLX:
+		inset_reg =
+			i40e_read_rx_ctl(hw, I40E_PRTQF_FD_FLXINSET(pctype));
+		mask_reg[0] =
+			i40e_read_rx_ctl(hw, I40E_PRTQF_FD_MSK(pctype, 0));
+		mask_reg[1] =
+			i40e_read_rx_ctl(hw, I40E_PRTQF_FD_MSK(pctype, 1));
+		break;
+	default:
+		PMD_DRV_LOG(ERR, "Unsupported input set type.");
+		return -EINVAL;
+	}
+
+	inset->inset = inset_reg;
+
+	for (i = 0; i < 2; i++) {
+		inset->mask[i].field_idx = ((mask_reg[i] >> 16) & 0x3F);
+		inset->mask[i].mask = mask_reg[i] & 0xFFFF;
+	}
+
+	return 0;
+}
+
+int
+rte_pmd_i40e_inset_set(uint16_t port, uint8_t pctype,
+		       struct rte_pmd_i40e_inset *inset,
+		       enum rte_pmd_i40e_inset_type inset_type)
+{
+	struct rte_eth_dev *dev;
+	struct i40e_hw *hw;
+	uint64_t inset_reg;
+	uint32_t mask_reg[2];
+	int i;
+
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port, -ENODEV);
+
+	dev = &rte_eth_devices[port];
+
+	if (!is_i40e_supported(dev))
+		return -ENOTSUP;
+
+	if (pctype > 63)
+		return -EINVAL;
+
+	hw = I40E_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+
+	/* Clear mask first */
+	for (i = 0; i < 2; i++)
+		i40e_check_write_reg(hw, I40E_GLQF_FD_MSK(i, pctype), 0);
+
+	inset_reg = inset->inset;
+	for (i = 0; i < 2; i++)
+		mask_reg[i] = (inset->mask[i].field_idx << 16) |
+			inset->mask[i].mask;
+
+	switch (inset_type) {
+	case INSET_HASH:
+		i40e_check_write_reg(hw, I40E_GLQF_HASH_INSET(0, pctype),
+				     (uint32_t)(inset_reg & UINT32_MAX));
+		i40e_check_write_reg(hw, I40E_GLQF_HASH_INSET(1, pctype),
+				     (uint32_t)((inset_reg >>
+					      I40E_32_BIT_WIDTH) & UINT32_MAX));
+		for (i = 0; i < 2; i++)
+			i40e_check_write_reg(hw, I40E_GLQF_HASH_MSK(i, pctype),
+					     mask_reg[i]);
+		break;
+	case INSET_FDIR:
+		i40e_check_write_reg(hw, I40E_PRTQF_FD_INSET(pctype, 0),
+				     (uint32_t)(inset_reg & UINT32_MAX));
+		i40e_check_write_reg(hw, I40E_PRTQF_FD_INSET(pctype, 1),
+				     (uint32_t)((inset_reg >>
+					      I40E_32_BIT_WIDTH) & UINT32_MAX));
+		for (i = 0; i < 2; i++)
+			i40e_check_write_reg(hw, I40E_GLQF_FD_MSK(i, pctype),
+					     mask_reg[i]);
+		break;
+	case INSET_FDIR_FLX:
+		i40e_check_write_reg(hw, I40E_PRTQF_FD_FLXINSET(pctype),
+				     (uint32_t)(inset_reg & UINT32_MAX));
+		for (i = 0; i < 2; i++)
+			i40e_check_write_reg(hw, I40E_PRTQF_FD_MSK(pctype, i),
+					     mask_reg[i]);
+		break;
+	default:
+		PMD_DRV_LOG(ERR, "Unsupported input set type.");
+		return -EINVAL;
+	}
+
+	I40E_WRITE_FLUSH(hw);
+	return 0;
 }

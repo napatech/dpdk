@@ -1,31 +1,7 @@
-/*
- * Copyright (c) 2007-2016 Solarflare Communications Inc.
+/* SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 2007-2018 Solarflare Communications Inc.
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
- * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
- * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * The views and conclusions contained in the software and documentation are
- * those of the authors and should not be interpreted as representing official
- * policies, either expressed or implied, of the FreeBSD Project.
  */
 
 #include "efx.h"
@@ -995,7 +971,7 @@ ef10_filter_supported_filters(
 	size_t list_length;
 	uint32_t i;
 	efx_rc_t rc;
-	uint32_t all_filter_flags =
+	efx_filter_match_flags_t all_filter_flags =
 	    (EFX_FILTER_MATCH_REM_HOST | EFX_FILTER_MATCH_LOC_HOST |
 	    EFX_FILTER_MATCH_REM_MAC | EFX_FILTER_MATCH_REM_PORT |
 	    EFX_FILTER_MATCH_LOC_MAC | EFX_FILTER_MATCH_LOC_PORT |
@@ -1243,8 +1219,8 @@ typedef struct ef10_filter_encap_entry_s {
 	uint32_t		inner_frame_match;
 } ef10_filter_encap_entry_t;
 
-#define EF10_ENCAP_FILTER_ENTRY(ipv, encap_type, inner_frame_match)	\
-	{ EFX_ETHER_TYPE_##ipv, EFX_TUNNEL_PROTOCOL_##encap_type,		\
+#define	EF10_ENCAP_FILTER_ENTRY(ipv, encap_type, inner_frame_match)	\
+	{ EFX_ETHER_TYPE_##ipv, EFX_TUNNEL_PROTOCOL_##encap_type,	\
 	    EFX_FILTER_INNER_FRAME_MATCH_UNKNOWN_##inner_frame_match }
 
 static ef10_filter_encap_entry_t ef10_filter_encap_list[] = {
@@ -1305,8 +1281,8 @@ ef10_filter_insert_encap_filters(
 		 */
 		if ((mulcst == B_FALSE) &&
 		    (encap_filter->inner_frame_match ==
-		     EFX_FILTER_INNER_FRAME_MATCH_UNKNOWN_MCAST_DST))
-				continue;
+		    EFX_FILTER_INNER_FRAME_MATCH_UNKNOWN_MCAST_DST))
+			continue;
 
 		efx_filter_spec_init_rx(&spec, EFX_FILTER_PRI_AUTO,
 					filter_flags,

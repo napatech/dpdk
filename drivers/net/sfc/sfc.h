@@ -1,32 +1,10 @@
-/*-
- *   BSD LICENSE
+/* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2016-2017 Solarflare Communications Inc.
+ * Copyright (c) 2016-2018 Solarflare Communications Inc.
  * All rights reserved.
  *
  * This software was jointly developed between OKTET Labs (under contract
  * for Solarflare) and Solarflare Communications, Inc.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
- * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
- * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef _SFC_H
@@ -36,9 +14,10 @@
 
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_kvargs.h>
 #include <rte_spinlock.h>
+#include <rte_atomic.h>
 
 #include "efx.h"
 
@@ -158,6 +137,8 @@ struct sfc_port {
 	boolean_t			promisc;
 	boolean_t			allmulti;
 
+	struct ether_addr		default_mac_addr;
+
 	unsigned int			max_mcast_addrs;
 	unsigned int			nb_mcast_addrs;
 	uint8_t				*mcast_addrs;
@@ -195,6 +176,7 @@ struct sfc_adapter {
 	efx_family_t			family;
 	efx_nic_t			*nic;
 	rte_spinlock_t			nic_lock;
+	rte_atomic32_t			restart_required;
 
 	struct sfc_mcdi			mcdi;
 	struct sfc_intr			intr;
@@ -210,7 +192,29 @@ struct sfc_adapter {
 	unsigned int			evq_count;
 
 	unsigned int			mgmt_evq_index;
+	/*
+	 * The lock is used to serialise management event queue polling
+	 * which can be done from different context. Also the lock
+	 * guarantees that mgmt_evq_running is preserved while the lock
+	 * is held. It is used to serialise polling and start/stop
+	 * operations.
+	 *
+	 * Locks which may be held when the lock is acquired:
+	 *  - adapter lock, when:
+	 *    - device start/stop to change mgmt_evq_running
+	 *    - any control operations in client side MCDI proxy handling to
+	 *	poll management event queue waiting for proxy response
+	 *  - MCDI lock, when:
+	 *    - any control operations in client side MCDI proxy handling to
+	 *	poll management event queue waiting for proxy response
+	 *
+	 * Locks which are acquired with the lock held:
+	 *  - nic_lock, when:
+	 *    - MC event processing on management event queue polling
+	 *	(e.g. MC REBOOT or BADASSERT events)
+	 */
 	rte_spinlock_t			mgmt_evq_lock;
+	bool				mgmt_evq_running;
 	struct sfc_evq			*mgmt_evq;
 
 	unsigned int			rxq_count;
@@ -304,6 +308,8 @@ int sfc_attach(struct sfc_adapter *sa);
 void sfc_detach(struct sfc_adapter *sa);
 int sfc_start(struct sfc_adapter *sa);
 void sfc_stop(struct sfc_adapter *sa);
+
+void sfc_schedule_restart(struct sfc_adapter *sa);
 
 int sfc_mcdi_init(struct sfc_adapter *sa);
 void sfc_mcdi_fini(struct sfc_adapter *sa);

@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2016-2017 Intel Corporation
  */
 
 #include <rte_atomic.h>
@@ -36,7 +7,7 @@
 #include <rte_byteorder.h>
 #include <rte_common.h>
 #include <rte_mbuf.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_ethdev_vdev.h>
 #include <rte_malloc.h>
 #include <rte_bus_vdev.h>
@@ -53,6 +24,7 @@
 #include <sys/mman.h>
 #include <errno.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <sys/uio.h>
 #include <unistd.h>
@@ -60,7 +32,6 @@
 #include <net/if.h>
 #include <linux/if_tun.h>
 #include <linux/if_ether.h>
-#include <linux/version.h>
 #include <fcntl.h>
 
 #include <rte_eth_tap.h>
@@ -77,9 +48,6 @@
 #define ETH_TAP_REMOTE_ARG      "remote"
 #define ETH_TAP_MAC_ARG         "mac"
 #define ETH_TAP_MAC_FIXED       "fixed"
-
-#define FLOWER_KERNEL_VERSION KERNEL_VERSION(4, 2, 0)
-#define FLOWER_VLAN_KERNEL_VERSION KERNEL_VERSION(4, 9, 0)
 
 static struct rte_vdev_driver pmd_tap_drv;
 
@@ -99,7 +67,7 @@ static struct rte_eth_link pmd_link = {
 	.link_speed = ETH_SPEED_NUM_10G,
 	.link_duplex = ETH_LINK_FULL_DUPLEX,
 	.link_status = ETH_LINK_DOWN,
-	.link_autoneg = ETH_LINK_SPEED_AUTONEG
+	.link_autoneg = ETH_LINK_AUTONEG
 };
 
 static void
@@ -285,6 +253,43 @@ tap_verify_csum(struct rte_mbuf *mbuf)
 	}
 }
 
+static uint64_t
+tap_rx_offload_get_port_capa(void)
+{
+	/*
+	 * In order to support legacy apps,
+	 * report capabilities also as port capabilities.
+	 */
+	return DEV_RX_OFFLOAD_SCATTER |
+	       DEV_RX_OFFLOAD_IPV4_CKSUM |
+	       DEV_RX_OFFLOAD_UDP_CKSUM |
+	       DEV_RX_OFFLOAD_TCP_CKSUM;
+}
+
+static uint64_t
+tap_rx_offload_get_queue_capa(void)
+{
+	return DEV_RX_OFFLOAD_SCATTER |
+	       DEV_RX_OFFLOAD_IPV4_CKSUM |
+	       DEV_RX_OFFLOAD_UDP_CKSUM |
+	       DEV_RX_OFFLOAD_TCP_CKSUM;
+}
+
+static bool
+tap_rxq_are_offloads_valid(struct rte_eth_dev *dev, uint64_t offloads)
+{
+	uint64_t port_offloads = dev->data->dev_conf.rxmode.offloads;
+	uint64_t queue_supp_offloads = tap_rx_offload_get_queue_capa();
+	uint64_t port_supp_offloads = tap_rx_offload_get_port_capa();
+
+	if ((offloads & (queue_supp_offloads | port_supp_offloads)) !=
+	    offloads)
+		return false;
+	if ((port_offloads ^ offloads) & port_supp_offloads)
+		return false;
+	return true;
+}
+
 /* Callback to handle the rx burst of packets to the correct interface and
  * file descriptor(s) in a multi-queue setup.
  */
@@ -309,8 +314,9 @@ pmd_rx_burst(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		int len;
 
 		len = readv(rxq->fd, *rxq->iovecs,
-			    1 + (rxq->rxmode->enable_scatter ?
-				 rxq->nb_rx_desc : 1));
+			    1 +
+			    (rxq->rxmode->offloads & DEV_RX_OFFLOAD_SCATTER ?
+			     rxq->nb_rx_desc : 1));
 		if (len < (int)sizeof(struct tun_pi))
 			break;
 
@@ -365,7 +371,7 @@ pmd_rx_burst(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		seg->next = NULL;
 		mbuf->packet_type = rte_net_get_ptype(mbuf, NULL,
 						      RTE_PTYPE_ALL_MASK);
-		if (rxq->rxmode->hw_ip_checksum)
+		if (rxq->rxmode->offloads & DEV_RX_OFFLOAD_CHECKSUM)
 			tap_verify_csum(mbuf);
 
 		/* account for the receive frame */
@@ -377,6 +383,42 @@ end:
 	rxq->stats.ibytes += num_rx_bytes;
 
 	return num_rx;
+}
+
+static uint64_t
+tap_tx_offload_get_port_capa(void)
+{
+	/*
+	 * In order to support legacy apps,
+	 * report capabilities also as port capabilities.
+	 */
+	return DEV_TX_OFFLOAD_IPV4_CKSUM |
+	       DEV_TX_OFFLOAD_UDP_CKSUM |
+	       DEV_TX_OFFLOAD_TCP_CKSUM;
+}
+
+static uint64_t
+tap_tx_offload_get_queue_capa(void)
+{
+	return DEV_TX_OFFLOAD_IPV4_CKSUM |
+	       DEV_TX_OFFLOAD_UDP_CKSUM |
+	       DEV_TX_OFFLOAD_TCP_CKSUM;
+}
+
+static bool
+tap_txq_are_offloads_valid(struct rte_eth_dev *dev, uint64_t offloads)
+{
+	uint64_t port_offloads = dev->data->dev_conf.txmode.offloads;
+	uint64_t queue_supp_offloads = tap_tx_offload_get_queue_capa();
+	uint64_t port_supp_offloads = tap_tx_offload_get_port_capa();
+
+	if ((offloads & (queue_supp_offloads | port_supp_offloads)) !=
+	    offloads)
+		return false;
+	/* Verify we have no conflict with port offloads */
+	if ((port_offloads ^ offloads) & port_supp_offloads)
+		return false;
+	return true;
 }
 
 static void
@@ -465,9 +507,10 @@ pmd_tx_burst(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 				rte_pktmbuf_mtod(seg, void *);
 			seg = seg->next;
 		}
-		if (mbuf->ol_flags & (PKT_TX_IP_CKSUM | PKT_TX_IPV4) ||
-		    (mbuf->ol_flags & PKT_TX_L4_MASK) == PKT_TX_UDP_CKSUM ||
-		    (mbuf->ol_flags & PKT_TX_L4_MASK) == PKT_TX_TCP_CKSUM) {
+		if (txq->csum &&
+		    ((mbuf->ol_flags & (PKT_TX_IP_CKSUM | PKT_TX_IPV4) ||
+		     (mbuf->ol_flags & PKT_TX_L4_MASK) == PKT_TX_UDP_CKSUM ||
+		     (mbuf->ol_flags & PKT_TX_L4_MASK) == PKT_TX_TCP_CKSUM))) {
 			/* Support only packets with all data in the same seg */
 			if (mbuf->nb_segs > 1)
 				break;
@@ -605,6 +648,17 @@ tap_dev_stop(struct rte_eth_dev *dev)
 static int
 tap_dev_configure(struct rte_eth_dev *dev)
 {
+	uint64_t supp_tx_offloads = tap_tx_offload_get_port_capa();
+	uint64_t tx_offloads = dev->data->dev_conf.txmode.offloads;
+
+	if ((tx_offloads & supp_tx_offloads) != tx_offloads) {
+		rte_errno = ENOTSUP;
+		RTE_LOG(ERR, PMD,
+			"Some Tx offloads are not supported "
+			"requested 0x%" PRIx64 " supported 0x%" PRIx64 "\n",
+			tx_offloads, supp_tx_offloads);
+		return -rte_errno;
+	}
 	if (dev->data->nb_rx_queues > RTE_PMD_TAP_MAX_QUEUES) {
 		RTE_LOG(ERR, PMD,
 			"%s: number of rx queues %d exceeds max num of queues %d\n",
@@ -678,13 +732,12 @@ tap_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->min_rx_bufsize = 0;
 	dev_info->pci_dev = NULL;
 	dev_info->speed_capa = tap_dev_speed_capa();
-	dev_info->rx_offload_capa = (DEV_RX_OFFLOAD_IPV4_CKSUM |
-				     DEV_RX_OFFLOAD_UDP_CKSUM |
-				     DEV_RX_OFFLOAD_TCP_CKSUM);
-	dev_info->tx_offload_capa =
-		(DEV_TX_OFFLOAD_IPV4_CKSUM |
-		 DEV_TX_OFFLOAD_UDP_CKSUM |
-		 DEV_TX_OFFLOAD_TCP_CKSUM);
+	dev_info->rx_queue_offload_capa = tap_rx_offload_get_queue_capa();
+	dev_info->rx_offload_capa = tap_rx_offload_get_port_capa() |
+				    dev_info->rx_queue_offload_capa;
+	dev_info->tx_queue_offload_capa = tap_tx_offload_get_queue_capa();
+	dev_info->tx_offload_capa = tap_tx_offload_get_port_capa() |
+				    dev_info->tx_queue_offload_capa;
 }
 
 static int
@@ -1000,6 +1053,19 @@ tap_rx_queue_setup(struct rte_eth_dev *dev,
 		return -1;
 	}
 
+	/* Verify application offloads are valid for our port and queue. */
+	if (!tap_rxq_are_offloads_valid(dev, rx_conf->offloads)) {
+		rte_errno = ENOTSUP;
+		RTE_LOG(ERR, PMD,
+			"%p: Rx queue offloads 0x%" PRIx64
+			" don't match port offloads 0x%" PRIx64
+			" or supported offloads 0x%" PRIx64 "\n",
+			(void *)dev, rx_conf->offloads,
+			dev->data->dev_conf.rxmode.offloads,
+			(tap_rx_offload_get_port_capa() |
+			 tap_rx_offload_get_queue_capa()));
+		return -rte_errno;
+	}
 	rxq->mp = mp;
 	rxq->trigger_seen = 1; /* force initial burst */
 	rxq->in_port = dev->data->port_id;
@@ -1058,21 +1124,46 @@ tap_tx_queue_setup(struct rte_eth_dev *dev,
 		   uint16_t tx_queue_id,
 		   uint16_t nb_tx_desc __rte_unused,
 		   unsigned int socket_id __rte_unused,
-		   const struct rte_eth_txconf *tx_conf __rte_unused)
+		   const struct rte_eth_txconf *tx_conf)
 {
 	struct pmd_internals *internals = dev->data->dev_private;
+	struct tx_queue *txq;
 	int ret;
 
 	if (tx_queue_id >= dev->data->nb_tx_queues)
 		return -1;
-
 	dev->data->tx_queues[tx_queue_id] = &internals->txq[tx_queue_id];
+	txq = dev->data->tx_queues[tx_queue_id];
+	/*
+	 * Don't verify port offloads for application which
+	 * use the old API.
+	 */
+	if (tx_conf != NULL &&
+	    !!(tx_conf->txq_flags & ETH_TXQ_FLAGS_IGNORE)) {
+		if (tap_txq_are_offloads_valid(dev, tx_conf->offloads)) {
+			txq->csum = !!(tx_conf->offloads &
+					(DEV_TX_OFFLOAD_IPV4_CKSUM |
+					 DEV_TX_OFFLOAD_UDP_CKSUM |
+					 DEV_TX_OFFLOAD_TCP_CKSUM));
+		} else {
+			rte_errno = ENOTSUP;
+			RTE_LOG(ERR, PMD,
+				"%p: Tx queue offloads 0x%" PRIx64
+				" don't match port offloads 0x%" PRIx64
+				" or supported offloads 0x%" PRIx64,
+				(void *)dev, tx_conf->offloads,
+				dev->data->dev_conf.txmode.offloads,
+				tap_tx_offload_get_port_capa());
+			return -rte_errno;
+		}
+	}
 	ret = tap_setup_queue(dev, internals, tx_queue_id, 0);
 	if (ret == -1)
 		return -1;
-
-	RTE_LOG(DEBUG, PMD, "  TX TAP device name %s, qid %d on fd %d\n",
-		internals->name, tx_queue_id, internals->txq[tx_queue_id].fd);
+	RTE_LOG(DEBUG, PMD,
+		"  TX TAP device name %s, qid %d on fd %d csum %s\n",
+		internals->name, tx_queue_id, internals->txq[tx_queue_id].fd,
+		txq->csum ? "on" : "off");
 
 	return 0;
 }
@@ -1123,7 +1214,7 @@ tap_dev_intr_handler(void *cb_arg)
 	struct rte_eth_dev *dev = cb_arg;
 	struct pmd_internals *pmd = dev->data->dev_private;
 
-	nl_recv(pmd->intr_handle.fd, tap_nl_msg_handler, dev);
+	tap_nl_recv(pmd->intr_handle.fd, tap_nl_msg_handler, dev);
 }
 
 static int
@@ -1134,20 +1225,20 @@ tap_intr_handle_set(struct rte_eth_dev *dev, int set)
 	/* In any case, disable interrupt if the conf is no longer there. */
 	if (!dev->data->dev_conf.intr_conf.lsc) {
 		if (pmd->intr_handle.fd != -1) {
-			nl_final(pmd->intr_handle.fd);
+			tap_nl_final(pmd->intr_handle.fd);
 			rte_intr_callback_unregister(&pmd->intr_handle,
 				tap_dev_intr_handler, dev);
 		}
 		return 0;
 	}
 	if (set) {
-		pmd->intr_handle.fd = nl_init(RTMGRP_LINK);
+		pmd->intr_handle.fd = tap_nl_init(RTMGRP_LINK);
 		if (unlikely(pmd->intr_handle.fd == -1))
 			return -EBADF;
 		return rte_intr_callback_register(
 			&pmd->intr_handle, tap_dev_intr_handler, dev);
 	}
-	nl_final(pmd->intr_handle.fd);
+	tap_nl_final(pmd->intr_handle.fd);
 	return rte_intr_callback_unregister(&pmd->intr_handle,
 					    tap_dev_intr_handler, dev);
 }
@@ -1328,7 +1419,7 @@ eth_dev_tap_create(struct rte_vdev_device *vdev, char *tap_name,
 	 * - rte_flow actual/implicit lists
 	 * - implicit rules
 	 */
-	pmd->nlsk_fd = nl_init(0);
+	pmd->nlsk_fd = tap_nl_init(0);
 	if (pmd->nlsk_fd == -1) {
 		RTE_LOG(WARNING, PMD, "%s: failed to create netlink socket.\n",
 			pmd->name);
@@ -1579,7 +1670,7 @@ rte_pmd_tap_remove(struct rte_vdev_device *dev)
 	if (internals->nlsk_fd) {
 		tap_flow_flush(eth_dev, NULL);
 		tap_flow_implicit_flush(internals, NULL);
-		nl_final(internals->nlsk_fd);
+		tap_nl_final(internals->nlsk_fd);
 	}
 	for (i = 0; i < RTE_PMD_TAP_MAX_QUEUES; i++) {
 		if (internals->rxq[i].fd != -1) {

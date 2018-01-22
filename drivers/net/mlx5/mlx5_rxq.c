@@ -52,7 +52,7 @@
 
 #include <rte_mbuf.h>
 #include <rte_malloc.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_common.h>
 #include <rte_interrupts.h>
 #include <rte_debug.h>
@@ -213,6 +213,78 @@ mlx5_rxq_cleanup(struct mlx5_rxq_ctrl *rxq_ctrl)
 }
 
 /**
+ * Returns the per-queue supported offloads.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ *
+ * @return
+ *   Supported Rx offloads.
+ */
+uint64_t
+mlx5_priv_get_rx_queue_offloads(struct priv *priv)
+{
+	struct mlx5_dev_config *config = &priv->config;
+	uint64_t offloads = (DEV_RX_OFFLOAD_SCATTER |
+			     DEV_RX_OFFLOAD_TIMESTAMP |
+			     DEV_RX_OFFLOAD_JUMBO_FRAME);
+
+	if (config->hw_fcs_strip)
+		offloads |= DEV_RX_OFFLOAD_CRC_STRIP;
+	if (config->hw_csum)
+		offloads |= (DEV_RX_OFFLOAD_IPV4_CKSUM |
+			     DEV_RX_OFFLOAD_UDP_CKSUM |
+			     DEV_RX_OFFLOAD_TCP_CKSUM);
+	if (config->hw_vlan_strip)
+		offloads |= DEV_RX_OFFLOAD_VLAN_STRIP;
+	return offloads;
+}
+
+
+/**
+ * Returns the per-port supported offloads.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ * @return
+ *   Supported Rx offloads.
+ */
+uint64_t
+mlx5_priv_get_rx_port_offloads(struct priv *priv __rte_unused)
+{
+	uint64_t offloads = DEV_RX_OFFLOAD_VLAN_FILTER;
+
+	return offloads;
+}
+
+/**
+ * Checks if the per-queue offload configuration is valid.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ * @param offloads
+ *   Per-queue offloads configuration.
+ *
+ * @return
+ *   1 if the configuration is valid, 0 otherwise.
+ */
+static int
+priv_is_rx_queue_offloads_allowed(struct priv *priv, uint64_t offloads)
+{
+	uint64_t port_offloads = priv->dev->data->dev_conf.rxmode.offloads;
+	uint64_t queue_supp_offloads =
+		mlx5_priv_get_rx_queue_offloads(priv);
+	uint64_t port_supp_offloads = mlx5_priv_get_rx_port_offloads(priv);
+
+	if ((offloads & (queue_supp_offloads | port_supp_offloads)) !=
+	    offloads)
+		return 0;
+	if (((port_offloads ^ offloads) & port_supp_offloads))
+		return 0;
+	return 1;
+}
+
+/**
  *
  * @param dev
  *   Pointer to Ethernet device structure.
@@ -241,9 +313,6 @@ mlx5_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		container_of(rxq, struct mlx5_rxq_ctrl, rxq);
 	int ret = 0;
 
-	(void)conf;
-	if (mlx5_is_secondary())
-		return -E_RTE_SECONDARY;
 	priv_lock(priv);
 	if (!rte_is_power_of_2(desc)) {
 		desc = 1 << log2above(desc);
@@ -259,6 +328,16 @@ mlx5_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		priv_unlock(priv);
 		return -EOVERFLOW;
 	}
+	if (!priv_is_rx_queue_offloads_allowed(priv, conf->offloads)) {
+		ret = ENOTSUP;
+		ERROR("%p: Rx queue offloads 0x%" PRIx64 " don't match port "
+		      "offloads 0x%" PRIx64 " or supported offloads 0x%" PRIx64,
+		      (void *)dev, conf->offloads,
+		      dev->data->dev_conf.rxmode.offloads,
+		      (mlx5_priv_get_rx_port_offloads(priv) |
+		       mlx5_priv_get_rx_queue_offloads(priv)));
+		goto out;
+	}
 	if (!mlx5_priv_rxq_releasable(priv, idx)) {
 		ret = EBUSY;
 		ERROR("%p: unable to release queue index %u",
@@ -266,7 +345,7 @@ mlx5_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		goto out;
 	}
 	mlx5_priv_rxq_release(priv, idx);
-	rxq_ctrl = mlx5_priv_rxq_new(priv, idx, desc, socket, mp);
+	rxq_ctrl = mlx5_priv_rxq_new(priv, idx, desc, socket, conf, mp);
 	if (!rxq_ctrl) {
 		ERROR("%p: unable to allocate queue index %u",
 		      (void *)dev, idx);
@@ -293,9 +372,6 @@ mlx5_rx_queue_release(void *dpdk_rxq)
 	struct mlx5_rxq_data *rxq = (struct mlx5_rxq_data *)dpdk_rxq;
 	struct mlx5_rxq_ctrl *rxq_ctrl;
 	struct priv *priv;
-
-	if (mlx5_is_secondary())
-		return;
 
 	if (rxq == NULL)
 		return;
@@ -327,7 +403,6 @@ priv_rx_intr_vec_enable(struct priv *priv)
 	unsigned int count = 0;
 	struct rte_intr_handle *intr_handle = priv->dev->intr_handle;
 
-	assert(!mlx5_is_secondary());
 	if (!priv->dev->data->dev_conf.intr_conf.rxq)
 		return 0;
 	priv_rx_intr_vec_disable(priv);
@@ -460,7 +535,7 @@ mlx5_arm_cq(struct mlx5_rxq_data *rxq, int sq_n_rxq)
 int
 mlx5_rx_intr_enable(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 {
-	struct priv *priv = mlx5_get_priv(dev);
+	struct priv *priv = dev->data->dev_private;
 	struct mlx5_rxq_data *rxq_data;
 	struct mlx5_rxq_ctrl *rxq_ctrl;
 	int ret = 0;
@@ -504,7 +579,7 @@ exit:
 int
 mlx5_rx_intr_disable(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 {
-	struct priv *priv = mlx5_get_priv(dev);
+	struct priv *priv = dev->data->dev_private;
 	struct mlx5_rxq_data *rxq_data;
 	struct mlx5_rxq_ctrl *rxq_ctrl;
 	struct mlx5_rxq_ibv *rxq_ibv = NULL;
@@ -576,6 +651,7 @@ mlx5_priv_rxq_ibv_new(struct priv *priv, uint16_t idx)
 	unsigned int i;
 	int ret = 0;
 	struct mlx5dv_obj obj;
+	struct mlx5_dev_config *config = &priv->config;
 
 	assert(rxq_data);
 	assert(!rxq_ctrl->ibv);
@@ -612,7 +688,7 @@ mlx5_priv_rxq_ibv_new(struct priv *priv, uint16_t idx)
 	attr.cq.mlx5 = (struct mlx5dv_cq_init_attr){
 		.comp_mask = 0,
 	};
-	if (priv->cqe_comp && !rxq_data->hw_timestamp) {
+	if (config->cqe_comp && !rxq_data->hw_timestamp) {
 		attr.cq.mlx5.comp_mask |=
 			MLX5DV_CQ_INIT_ATTR_MASK_COMPRESSED_CQE;
 		attr.cq.mlx5.cqe_comp_res_format = MLX5DV_CQE_RES_FORMAT_HASH;
@@ -622,7 +698,7 @@ mlx5_priv_rxq_ibv_new(struct priv *priv, uint16_t idx)
 		 */
 		if (rxq_check_vec_support(rxq_data) < 0)
 			attr.cq.ibv.cqe *= 2;
-	} else if (priv->cqe_comp && rxq_data->hw_timestamp) {
+	} else if (config->cqe_comp && rxq_data->hw_timestamp) {
 		DEBUG("Rx CQE compression is disabled for HW timestamp");
 	}
 	tmpl->cq = ibv_cq_ex_to_cq(mlx5dv_create_cq(priv->ctx, &attr.cq.ibv,
@@ -657,7 +733,7 @@ mlx5_priv_rxq_ibv_new(struct priv *priv, uint16_t idx)
 		attr.wq.comp_mask |= IBV_WQ_INIT_ATTR_FLAGS;
 	}
 #ifdef HAVE_IBV_WQ_FLAG_RX_END_PADDING
-	if (priv->hw_padding) {
+	if (config->hw_padding) {
 		attr.wq.create_flags |= IBV_WQ_FLAG_RX_END_PADDING;
 		attr.wq.comp_mask |= IBV_WQ_INIT_ATTR_FLAGS;
 	}
@@ -880,13 +956,19 @@ mlx5_priv_rxq_ibv_releasable(struct priv *priv, struct mlx5_rxq_ibv *rxq_ibv)
  */
 struct mlx5_rxq_ctrl*
 mlx5_priv_rxq_new(struct priv *priv, uint16_t idx, uint16_t desc,
-		  unsigned int socket, struct rte_mempool *mp)
+		  unsigned int socket, const struct rte_eth_rxconf *conf,
+		  struct rte_mempool *mp)
 {
 	struct rte_eth_dev *dev = priv->dev;
 	struct mlx5_rxq_ctrl *tmpl;
-	const uint16_t desc_n =
-		desc + priv->rx_vec_en * MLX5_VPMD_DESCS_PER_LOOP;
 	unsigned int mb_len = rte_pktmbuf_data_room_size(mp);
+	struct mlx5_dev_config *config = &priv->config;
+	/*
+	 * Always allocate extra slots, even if eventually
+	 * the vector Rx will not be used.
+	 */
+	const uint16_t desc_n =
+		desc + config->rx_vec_en * MLX5_VPMD_DESCS_PER_LOOP;
 
 	tmpl = rte_calloc_socket("RXQ", 1,
 				 sizeof(*tmpl) +
@@ -902,7 +984,7 @@ mlx5_priv_rxq_new(struct priv *priv, uint16_t idx, uint16_t desc,
 	if (dev->data->dev_conf.rxmode.max_rx_pkt_len <=
 	    (mb_len - RTE_PKTMBUF_HEADROOM)) {
 		tmpl->rxq.sges_n = 0;
-	} else if (dev->data->dev_conf.rxmode.enable_scatter) {
+	} else if (conf->offloads & DEV_RX_OFFLOAD_SCATTER) {
 		unsigned int size =
 			RTE_PKTMBUF_HEADROOM +
 			dev->data->dev_conf.rxmode.max_rx_pkt_len;
@@ -944,20 +1026,16 @@ mlx5_priv_rxq_new(struct priv *priv, uint16_t idx, uint16_t desc,
 		goto error;
 	}
 	/* Toggle RX checksum offload if hardware supports it. */
-	if (priv->hw_csum)
-		tmpl->rxq.csum = !!dev->data->dev_conf.rxmode.hw_ip_checksum;
-	if (priv->hw_csum_l2tun)
-		tmpl->rxq.csum_l2tun =
-			!!dev->data->dev_conf.rxmode.hw_ip_checksum;
-	tmpl->rxq.hw_timestamp =
-			!!dev->data->dev_conf.rxmode.hw_timestamp;
+	tmpl->rxq.csum = !!(conf->offloads & DEV_RX_OFFLOAD_CHECKSUM);
+	tmpl->rxq.csum_l2tun = (!!(conf->offloads & DEV_RX_OFFLOAD_CHECKSUM) &&
+				priv->config.hw_csum_l2tun);
+	tmpl->rxq.hw_timestamp = !!(conf->offloads & DEV_RX_OFFLOAD_TIMESTAMP);
 	/* Configure VLAN stripping. */
-	tmpl->rxq.vlan_strip = (priv->hw_vlan_strip &&
-			       !!dev->data->dev_conf.rxmode.hw_vlan_strip);
+	tmpl->rxq.vlan_strip = !!(conf->offloads & DEV_RX_OFFLOAD_VLAN_STRIP);
 	/* By default, FCS (CRC) is stripped by hardware. */
-	if (dev->data->dev_conf.rxmode.hw_strip_crc) {
+	if (conf->offloads & DEV_RX_OFFLOAD_CRC_STRIP) {
 		tmpl->rxq.crc_present = 0;
-	} else if (priv->hw_fcs_strip) {
+	} else if (config->hw_fcs_strip) {
 		tmpl->rxq.crc_present = 1;
 	} else {
 		WARN("%p: CRC stripping has been disabled but will still"

@@ -1,37 +1,15 @@
-/*-
- *   BSD LICENSE
+/* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2017 Solarflare Communications Inc.
+ * Copyright (c) 2017-2018 Solarflare Communications Inc.
  * All rights reserved.
  *
  * This software was jointly developed between OKTET Labs (under contract
  * for Solarflare) and Solarflare Communications, Inc.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
- * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
- * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <rte_tailq.h>
 #include <rte_common.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_eth_ctrl.h>
 #include <rte_ether.h>
 #include <rte_flow.h>
@@ -1021,7 +999,7 @@ fail_scale_tbl_set:
 fail_filter_insert:
 fail_scale_key_set:
 fail_scale_mode_set:
-	if (rss != NULL)
+	if (flow->rss)
 		efx_rx_scale_context_free(sa->nic, spec->efs_rss_context);
 
 fail_scale_context_alloc:
@@ -1126,8 +1104,6 @@ sfc_flow_parse(struct rte_eth_dev *dev,
 	struct sfc_adapter *sa = dev->data->dev_private;
 	int rc;
 
-	memset(&flow->spec, 0, sizeof(flow->spec));
-
 	rc = sfc_flow_parse_attr(attr, flow, error);
 	if (rc != 0)
 		goto fail_bad_value;
@@ -1159,6 +1135,8 @@ sfc_flow_validate(struct rte_eth_dev *dev,
 		  struct rte_flow_error *error)
 {
 	struct rte_flow flow;
+
+	memset(&flow, 0, sizeof(flow));
 
 	return sfc_flow_parse(dev, attr, pattern, actions, &flow, error);
 }

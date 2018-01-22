@@ -74,13 +74,14 @@ Sample Applications User Guides
     netmap_compatibility
     ip_pipeline
     test_pipeline
-    eventdev_pipeline_sw_pmd
+    eventdev_pipeline
     dist_app
     vm_power_management
     tep_termination
     ptpclient
     performance_thread
     ipsec_secgw
+    bbdev_app
 
 **Figures**
 

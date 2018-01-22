@@ -37,6 +37,8 @@ application trough the eventdev API.
     :maxdepth: 2
     :numbered:
 
+    dpaa
     dpaa2
     sw
     octeontx
+    opdl

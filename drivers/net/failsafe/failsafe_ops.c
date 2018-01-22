@@ -31,11 +31,12 @@
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include <rte_debug.h>
 #include <rte_atomic.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_malloc.h>
 #include <rte_flow.h>
 #include <rte_cycles.h>
@@ -71,11 +72,38 @@ static struct rte_eth_dev_info default_infos = {
 	 */
 	.rx_offload_capa =
 		DEV_RX_OFFLOAD_VLAN_STRIP |
-		DEV_RX_OFFLOAD_QINQ_STRIP |
 		DEV_RX_OFFLOAD_IPV4_CKSUM |
 		DEV_RX_OFFLOAD_UDP_CKSUM |
 		DEV_RX_OFFLOAD_TCP_CKSUM |
-		DEV_RX_OFFLOAD_TCP_LRO,
+		DEV_RX_OFFLOAD_TCP_LRO |
+		DEV_RX_OFFLOAD_QINQ_STRIP |
+		DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM |
+		DEV_RX_OFFLOAD_MACSEC_STRIP |
+		DEV_RX_OFFLOAD_HEADER_SPLIT |
+		DEV_RX_OFFLOAD_VLAN_FILTER |
+		DEV_RX_OFFLOAD_VLAN_EXTEND |
+		DEV_RX_OFFLOAD_JUMBO_FRAME |
+		DEV_RX_OFFLOAD_CRC_STRIP |
+		DEV_RX_OFFLOAD_SCATTER |
+		DEV_RX_OFFLOAD_TIMESTAMP |
+		DEV_RX_OFFLOAD_SECURITY,
+	.rx_queue_offload_capa =
+		DEV_RX_OFFLOAD_VLAN_STRIP |
+		DEV_RX_OFFLOAD_IPV4_CKSUM |
+		DEV_RX_OFFLOAD_UDP_CKSUM |
+		DEV_RX_OFFLOAD_TCP_CKSUM |
+		DEV_RX_OFFLOAD_TCP_LRO |
+		DEV_RX_OFFLOAD_QINQ_STRIP |
+		DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM |
+		DEV_RX_OFFLOAD_MACSEC_STRIP |
+		DEV_RX_OFFLOAD_HEADER_SPLIT |
+		DEV_RX_OFFLOAD_VLAN_FILTER |
+		DEV_RX_OFFLOAD_VLAN_EXTEND |
+		DEV_RX_OFFLOAD_JUMBO_FRAME |
+		DEV_RX_OFFLOAD_CRC_STRIP |
+		DEV_RX_OFFLOAD_SCATTER |
+		DEV_RX_OFFLOAD_TIMESTAMP |
+		DEV_RX_OFFLOAD_SECURITY,
 	.tx_offload_capa = 0x0,
 	.flow_type_rss_offloads = 0x0,
 };
@@ -84,9 +112,20 @@ static int
 fs_dev_configure(struct rte_eth_dev *dev)
 {
 	struct sub_device *sdev;
+	uint64_t supp_tx_offloads;
+	uint64_t tx_offloads;
 	uint8_t i;
 	int ret;
 
+	supp_tx_offloads = PRIV(dev)->infos.tx_offload_capa;
+	tx_offloads = dev->data->dev_conf.txmode.offloads;
+	if ((tx_offloads & supp_tx_offloads) != tx_offloads) {
+		rte_errno = ENOTSUP;
+		ERROR("Some Tx offloads are not supported, "
+		      "requested 0x%" PRIx64 " supported 0x%" PRIx64,
+		      tx_offloads, supp_tx_offloads);
+		return -rte_errno;
+	}
 	FOREACH_SUBDEV(sdev, i, dev) {
 		int rmv_interrupt = 0;
 		int lsc_interrupt = 0;
@@ -121,6 +160,8 @@ fs_dev_configure(struct rte_eth_dev *dev)
 					dev->data->nb_tx_queues,
 					&dev->data->dev_conf);
 		if (ret) {
+			if (!fs_err(sdev, ret))
+				continue;
 			ERROR("Could not configure sub_device %d", i);
 			return ret;
 		}
@@ -163,8 +204,11 @@ fs_dev_start(struct rte_eth_dev *dev)
 			continue;
 		DEBUG("Starting sub_device %d", i);
 		ret = rte_eth_dev_start(PORT_ID(sdev));
-		if (ret)
+		if (ret) {
+			if (!fs_err(sdev, ret))
+				continue;
 			return ret;
+		}
 		sdev->state = DEV_STARTED;
 	}
 	if (PRIV(dev)->state < DEV_STARTED)
@@ -196,7 +240,7 @@ fs_dev_set_link_up(struct rte_eth_dev *dev)
 	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
 		DEBUG("Calling rte_eth_dev_set_link_up on sub_device %d", i);
 		ret = rte_eth_dev_set_link_up(PORT_ID(sdev));
-		if (ret) {
+		if ((ret = fs_err(sdev, ret))) {
 			ERROR("Operation rte_eth_dev_set_link_up failed for sub_device %d"
 			      " with error %d", i, ret);
 			return ret;
@@ -215,7 +259,7 @@ fs_dev_set_link_down(struct rte_eth_dev *dev)
 	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
 		DEBUG("Calling rte_eth_dev_set_link_down on sub_device %d", i);
 		ret = rte_eth_dev_set_link_down(PORT_ID(sdev));
-		if (ret) {
+		if ((ret = fs_err(sdev, ret))) {
 			ERROR("Operation rte_eth_dev_set_link_down failed for sub_device %d"
 			      " with error %d", i, ret);
 			return ret;
@@ -241,6 +285,25 @@ fs_dev_close(struct rte_eth_dev *dev)
 		sdev->state = DEV_ACTIVE - 1;
 	}
 	fs_dev_free_queues(dev);
+}
+
+static bool
+fs_rxq_offloads_valid(struct rte_eth_dev *dev, uint64_t offloads)
+{
+	uint64_t port_offloads;
+	uint64_t queue_supp_offloads;
+	uint64_t port_supp_offloads;
+
+	port_offloads = dev->data->dev_conf.rxmode.offloads;
+	queue_supp_offloads = PRIV(dev)->infos.rx_queue_offload_capa;
+	port_supp_offloads = PRIV(dev)->infos.rx_offload_capa;
+	if ((offloads & (queue_supp_offloads | port_supp_offloads)) !=
+	     offloads)
+		return false;
+	/* Verify we have no conflict with port offloads */
+	if ((port_offloads ^ offloads) & port_supp_offloads)
+		return false;
+	return true;
 }
 
 static void
@@ -280,6 +343,18 @@ fs_rx_queue_setup(struct rte_eth_dev *dev,
 		fs_rx_queue_release(rxq);
 		dev->data->rx_queues[rx_queue_id] = NULL;
 	}
+	/* Verify application offloads are valid for our port and queue. */
+	if (fs_rxq_offloads_valid(dev, rx_conf->offloads) == false) {
+		rte_errno = ENOTSUP;
+		ERROR("Rx queue offloads 0x%" PRIx64
+		      " don't match port offloads 0x%" PRIx64
+		      " or supported offloads 0x%" PRIx64,
+		      rx_conf->offloads,
+		      dev->data->dev_conf.rxmode.offloads,
+		      PRIV(dev)->infos.rx_offload_capa |
+		      PRIV(dev)->infos.rx_queue_offload_capa);
+		return -rte_errno;
+	}
 	rxq = rte_zmalloc(NULL,
 			  sizeof(*rxq) +
 			  sizeof(rte_atomic64_t) * PRIV(dev)->subs_tail,
@@ -294,13 +369,14 @@ fs_rx_queue_setup(struct rte_eth_dev *dev,
 	rxq->info.conf = *rx_conf;
 	rxq->info.nb_desc = nb_rx_desc;
 	rxq->priv = PRIV(dev);
+	rxq->sdev = PRIV(dev)->subs;
 	dev->data->rx_queues[rx_queue_id] = rxq;
 	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
 		ret = rte_eth_rx_queue_setup(PORT_ID(sdev),
 				rx_queue_id,
 				nb_rx_desc, socket_id,
 				rx_conf, mb_pool);
-		if (ret) {
+		if ((ret = fs_err(sdev, ret))) {
 			ERROR("RX queue setup failed for sub_device %d", i);
 			goto free_rxq;
 		}
@@ -309,6 +385,25 @@ fs_rx_queue_setup(struct rte_eth_dev *dev,
 free_rxq:
 	fs_rx_queue_release(rxq);
 	return ret;
+}
+
+static bool
+fs_txq_offloads_valid(struct rte_eth_dev *dev, uint64_t offloads)
+{
+	uint64_t port_offloads;
+	uint64_t queue_supp_offloads;
+	uint64_t port_supp_offloads;
+
+	port_offloads = dev->data->dev_conf.txmode.offloads;
+	queue_supp_offloads = PRIV(dev)->infos.tx_queue_offload_capa;
+	port_supp_offloads = PRIV(dev)->infos.tx_offload_capa;
+	if ((offloads & (queue_supp_offloads | port_supp_offloads)) !=
+	     offloads)
+		return false;
+	/* Verify we have no conflict with port offloads */
+	if ((port_offloads ^ offloads) & port_supp_offloads)
+		return false;
+	return true;
 }
 
 static void
@@ -347,6 +442,23 @@ fs_tx_queue_setup(struct rte_eth_dev *dev,
 		fs_tx_queue_release(txq);
 		dev->data->tx_queues[tx_queue_id] = NULL;
 	}
+	/*
+	 * Don't verify queue offloads for applications which
+	 * use the old API.
+	 */
+	if (tx_conf != NULL &&
+	    (tx_conf->txq_flags & ETH_TXQ_FLAGS_IGNORE) &&
+	    fs_txq_offloads_valid(dev, tx_conf->offloads) == false) {
+		rte_errno = ENOTSUP;
+		ERROR("Tx queue offloads 0x%" PRIx64
+		      " don't match port offloads 0x%" PRIx64
+		      " or supported offloads 0x%" PRIx64,
+		      tx_conf->offloads,
+		      dev->data->dev_conf.txmode.offloads,
+		      PRIV(dev)->infos.tx_offload_capa |
+		      PRIV(dev)->infos.tx_queue_offload_capa);
+		return -rte_errno;
+	}
 	txq = rte_zmalloc("ethdev TX queue",
 			  sizeof(*txq) +
 			  sizeof(rte_atomic64_t) * PRIV(dev)->subs_tail,
@@ -366,7 +478,7 @@ fs_tx_queue_setup(struct rte_eth_dev *dev,
 				tx_queue_id,
 				nb_tx_desc, socket_id,
 				tx_conf);
-		if (ret) {
+		if ((ret = fs_err(sdev, ret))) {
 			ERROR("TX queue setup failed for sub_device %d", i);
 			goto free_txq;
 		}
@@ -445,7 +557,8 @@ fs_link_update(struct rte_eth_dev *dev,
 	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
 		DEBUG("Calling link_update on sub_device %d", i);
 		ret = (SUBOPS(sdev, link_update))(ETH(sdev), wait_to_complete);
-		if (ret && ret != -1) {
+		if (ret && ret != -1 && sdev->remove == 0 &&
+		    rte_eth_dev_is_removed(PORT_ID(sdev)) == 0) {
 			ERROR("Link update failed for sub_device %d with error %d",
 			      i, ret);
 			return ret;
@@ -469,6 +582,7 @@ static int
 fs_stats_get(struct rte_eth_dev *dev,
 	     struct rte_eth_stats *stats)
 {
+	struct rte_eth_stats backup;
 	struct sub_device *sdev;
 	uint8_t i;
 	int ret;
@@ -478,14 +592,20 @@ fs_stats_get(struct rte_eth_dev *dev,
 		struct rte_eth_stats *snapshot = &sdev->stats_snapshot.stats;
 		uint64_t *timestamp = &sdev->stats_snapshot.timestamp;
 
+		rte_memcpy(&backup, snapshot, sizeof(backup));
 		ret = rte_eth_stats_get(PORT_ID(sdev), snapshot);
 		if (ret) {
+			if (!fs_err(sdev, ret)) {
+				rte_memcpy(snapshot, &backup, sizeof(backup));
+				goto inc;
+			}
 			ERROR("Operation rte_eth_stats_get failed for sub_device %d with error %d",
 				  i, ret);
 			*timestamp = 0;
 			return ret;
 		}
 		*timestamp = rte_rdtsc();
+inc:
 		failsafe_stats_increment(stats, snapshot);
 	}
 	return 0;
@@ -546,19 +666,26 @@ fs_dev_infos_get(struct rte_eth_dev *dev,
 		rte_memcpy(&PRIV(dev)->infos, &default_infos,
 			   sizeof(default_infos));
 	} else {
-		uint32_t rx_offload_capa;
+		uint64_t rx_offload_capa;
+		uint64_t rxq_offload_capa;
 
 		rx_offload_capa = default_infos.rx_offload_capa;
+		rxq_offload_capa = default_infos.rx_queue_offload_capa;
 		FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_PROBED) {
 			rte_eth_dev_info_get(PORT_ID(sdev),
 					&PRIV(dev)->infos);
 			rx_offload_capa &= PRIV(dev)->infos.rx_offload_capa;
+			rxq_offload_capa &=
+					PRIV(dev)->infos.rx_queue_offload_capa;
 		}
 		sdev = TX_SUBDEV(dev);
 		rte_eth_dev_info_get(PORT_ID(sdev), &PRIV(dev)->infos);
 		PRIV(dev)->infos.rx_offload_capa = rx_offload_capa;
+		PRIV(dev)->infos.rx_queue_offload_capa = rxq_offload_capa;
 		PRIV(dev)->infos.tx_offload_capa &=
 					default_infos.tx_offload_capa;
+		PRIV(dev)->infos.tx_queue_offload_capa &=
+					default_infos.tx_queue_offload_capa;
 		PRIV(dev)->infos.flow_type_rss_offloads &=
 					default_infos.flow_type_rss_offloads;
 	}
@@ -598,7 +725,7 @@ fs_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
 		DEBUG("Calling rte_eth_dev_set_mtu on sub_device %d", i);
 		ret = rte_eth_dev_set_mtu(PORT_ID(sdev), mtu);
-		if (ret) {
+		if ((ret = fs_err(sdev, ret))) {
 			ERROR("Operation rte_eth_dev_set_mtu failed for sub_device %d with error %d",
 			      i, ret);
 			return ret;
@@ -617,7 +744,7 @@ fs_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
 		DEBUG("Calling rte_eth_dev_vlan_filter on sub_device %d", i);
 		ret = rte_eth_dev_vlan_filter(PORT_ID(sdev), vlan_id, on);
-		if (ret) {
+		if ((ret = fs_err(sdev, ret))) {
 			ERROR("Operation rte_eth_dev_vlan_filter failed for sub_device %d"
 			      " with error %d", i, ret);
 			return ret;
@@ -651,7 +778,7 @@ fs_flow_ctrl_set(struct rte_eth_dev *dev,
 	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
 		DEBUG("Calling rte_eth_dev_flow_ctrl_set on sub_device %d", i);
 		ret = rte_eth_dev_flow_ctrl_set(PORT_ID(sdev), fc_conf);
-		if (ret) {
+		if ((ret = fs_err(sdev, ret))) {
 			ERROR("Operation rte_eth_dev_flow_ctrl_set failed for sub_device %d"
 			      " with error %d", i, ret);
 			return ret;
@@ -688,7 +815,7 @@ fs_mac_addr_add(struct rte_eth_dev *dev,
 	RTE_ASSERT(index < FAILSAFE_MAX_ETHADDR);
 	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
 		ret = rte_eth_dev_mac_addr_add(PORT_ID(sdev), mac_addr, vmdq);
-		if (ret) {
+		if ((ret = fs_err(sdev, ret))) {
 			ERROR("Operation rte_eth_dev_mac_addr_add failed for sub_device %"
 			      PRIu8 " with error %d", i, ret);
 			return ret;
@@ -730,7 +857,7 @@ fs_filter_ctrl(struct rte_eth_dev *dev,
 	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
 		DEBUG("Calling rte_eth_dev_filter_ctrl on sub_device %d", i);
 		ret = rte_eth_dev_filter_ctrl(PORT_ID(sdev), type, op, arg);
-		if (ret) {
+		if ((ret = fs_err(sdev, ret))) {
 			ERROR("Operation rte_eth_dev_filter_ctrl failed for sub_device %d"
 			      " with error %d", i, ret);
 			return ret;

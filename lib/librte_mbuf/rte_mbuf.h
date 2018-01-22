@@ -62,6 +62,7 @@
 
 #include <stdint.h>
 #include <rte_common.h>
+#include <rte_config.h>
 #include <rte_mempool.h>
 #include <rte_memory.h>
 #include <rte_atomic.h>
@@ -211,6 +212,13 @@ extern "C" {
 #define PKT_BATCH            (1ULL << 43) 
 
 /* add new TX flags here */
+
+/**
+ * UDP Fragmentation Offload flag. This flag is used for enabling UDP
+ * fragmentation in SW or in HW. When use UFO, mbuf->tso_segsz is used
+ * to store the MSS of UDP fragments.
+ */
+#define PKT_TX_UDP_SEG	(1ULL << 42)
 
 /**
  * Request security offload processing on the TX packet.
@@ -771,6 +779,13 @@ rte_mbuf_refcnt_set(struct rte_mbuf *m, uint16_t new_value)
 	rte_atomic16_set(&m->refcnt_atomic, new_value);
 }
 
+/* internal */
+static inline uint16_t
+__rte_mbuf_refcnt_update(struct rte_mbuf *m, int16_t value)
+{
+	return (uint16_t)(rte_atomic16_add_return(&m->refcnt_atomic, value));
+}
+
 /**
  * Adds given value to an mbuf's refcnt and returns its new value.
  * @param m
@@ -795,10 +810,18 @@ rte_mbuf_refcnt_update(struct rte_mbuf *m, int16_t value)
 		return 1 + value;
 	}
 
-	return (uint16_t)(rte_atomic16_add_return(&m->refcnt_atomic, value));
+	return __rte_mbuf_refcnt_update(m, value);
 }
 
 #else /* ! RTE_MBUF_REFCNT_ATOMIC */
+
+/* internal */
+static inline uint16_t
+__rte_mbuf_refcnt_update(struct rte_mbuf *m, int16_t value)
+{
+	m->refcnt = (uint16_t)(m->refcnt + value);
+	return m->refcnt;
+}
 
 /**
  * Adds given value to an mbuf's refcnt and returns its new value.
@@ -806,8 +829,7 @@ rte_mbuf_refcnt_update(struct rte_mbuf *m, int16_t value)
 static inline uint16_t
 rte_mbuf_refcnt_update(struct rte_mbuf *m, int16_t value)
 {
-	m->refcnt = (uint16_t)(m->refcnt + value);
-	return m->refcnt;
+	return __rte_mbuf_refcnt_update(m, value);
 }
 
 /**
@@ -1372,8 +1394,7 @@ rte_pktmbuf_prefree_seg(struct rte_mbuf *m)
 
 		return m;
 
-       } else if (rte_atomic16_add_return(&m->refcnt_atomic, -1) == 0) {
-
+	} else if (__rte_mbuf_refcnt_update(m, -1) == 0) {
 
 		if (RTE_MBUF_INDIRECT(m))
 			rte_pktmbuf_detach(m);
@@ -1552,12 +1573,10 @@ static inline uint16_t rte_pktmbuf_tailroom(const struct rte_mbuf *m)
  */
 static inline struct rte_mbuf *rte_pktmbuf_lastseg(struct rte_mbuf *m)
 {
-	struct rte_mbuf *m2 = (struct rte_mbuf *)m;
-
 	__rte_mbuf_sanity_check(m, 1);
-	while (m2->next != NULL)
-		m2 = m2->next;
-	return m2;
+	while (m->next != NULL)
+		m = m->next;
+	return m;
 }
 
 /**

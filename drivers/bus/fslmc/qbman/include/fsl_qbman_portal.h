@@ -1,29 +1,7 @@
-/*-
- *   BSD LICENSE
+/* SPDX-License-Identifier: BSD-3-Clause
  *
  * Copyright (C) 2014 Freescale Semiconductor, Inc.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in the
- *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of Freescale Semiconductor nor the
- *       names of its contributors may be used to endorse or promote products
- *       derived from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY Freescale Semiconductor ``AS IS'' AND ANY
- * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL Freescale Semiconductor BE LIABLE FOR ANY
- * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 #ifndef _FSL_QBMAN_PORTAL_H
 #define _FSL_QBMAN_PORTAL_H
@@ -411,6 +389,13 @@ const struct qbman_result *qbman_swp_dqrr_next(struct qbman_swp *p);
 void qbman_swp_dqrr_consume(struct qbman_swp *s, const struct qbman_result *dq);
 
 /**
+ * qbman_swp_dqrr_idx_consume() -  Given the DQRR index consume the DQRR entry
+ * @s: the software portal object.
+ * @dqrr_index: the DQRR index entry to be consumed.
+ */
+void qbman_swp_dqrr_idx_consume(struct qbman_swp *s, uint8_t dqrr_index);
+
+/**
  * qbman_get_dqrr_idx() - Get dqrr index from the given dqrr
  * @dqrr: the given dqrr object.
  *
@@ -580,6 +565,9 @@ int qbman_result_is_FQPN(const struct qbman_result *dq);
 #define QBMAN_DQ_STAT_VOLATILE      0x02
 /* volatile dequeue command is expired */
 #define QBMAN_DQ_STAT_EXPIRED       0x01
+
+#define QBMAN_EQCR_DCA_IDXMASK		0x0f
+#define QBMAN_ENQUEUE_FLAG_DCA		(1ULL << 31)
 
 /**
  * qbman_result_DQ_flags() - Get the STAT field of dequeue response
@@ -971,6 +959,7 @@ int qbman_swp_enqueue(struct qbman_swp *s, const struct qbman_eq_desc *d,
 int qbman_swp_enqueue_multiple(struct qbman_swp *s,
 			       const struct qbman_eq_desc *d,
 			       const struct qbman_fd *fd,
+			       uint32_t *flags,
 			       int num_frames);
 /**
  * qbman_swp_enqueue_multiple_desc() - Enqueue multiple frames with
@@ -978,6 +967,7 @@ int qbman_swp_enqueue_multiple(struct qbman_swp *s,
  * @s: the software portal used for enqueue.
  * @d: the enqueue descriptor.
  * @fd: the frame descriptor to be enqueued.
+ * @flags: bit-mask of QBMAN_ENQUEUE_FLAG_*** options
  * @num_frames: the number of the frames to be enqueued.
  *
  * Return the number of enqueued frames, -EBUSY if the EQCR is not ready.

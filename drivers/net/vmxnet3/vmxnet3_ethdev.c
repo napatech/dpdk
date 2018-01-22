@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2015 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2015 Intel Corporation
  */
 
 #include <sys/queue.h>
@@ -56,7 +27,7 @@
 #include <rte_eal.h>
 #include <rte_alarm.h>
 #include <rte_ether.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_ethdev_pci.h>
 #include <rte_string_fns.h>
 #include <rte_malloc.h>
@@ -105,6 +76,9 @@ static int vmxnet3_dev_vlan_offload_set(struct rte_eth_dev *dev, int mask);
 static void vmxnet3_mac_addr_set(struct rte_eth_dev *dev,
 				 struct ether_addr *mac_addr);
 static void vmxnet3_interrupt_handler(void *param);
+
+int vmxnet3_logtype_init;
+int vmxnet3_logtype_driver;
 
 /*
  * The set of PCI devices this driver supports
@@ -1149,7 +1123,6 @@ vmxnet3_mac_addr_set(struct rte_eth_dev *dev, struct ether_addr *mac_addr)
 	struct vmxnet3_hw *hw = dev->data->dev_private;
 
 	ether_addr_copy(mac_addr, (struct ether_addr *)(hw->perm_addr));
-	ether_addr_copy(mac_addr, &dev->data->mac_addrs[0]);
 	vmxnet3_write_mac(hw, mac_addr->addr_bytes);
 }
 
@@ -1172,7 +1145,7 @@ __vmxnet3_dev_link_update(struct rte_eth_dev *dev,
 		link.link_status = ETH_LINK_UP;
 		link.link_duplex = ETH_LINK_FULL_DUPLEX;
 		link.link_speed = ETH_SPEED_NUM_10G;
-		link.link_autoneg = ETH_LINK_SPEED_FIXED;
+		link.link_autoneg = ETH_LINK_AUTONEG;
 	}
 
 	vmxnet3_dev_atomic_write_link_status(dev, &link);
@@ -1332,7 +1305,7 @@ vmxnet3_process_events(struct rte_eth_dev *dev)
 		if (vmxnet3_dev_link_update(dev, 0) == 0)
 			_rte_eth_dev_callback_process(dev,
 						      RTE_ETH_EVENT_INTR_LSC,
-						      NULL, NULL);
+						      NULL);
 	}
 
 	/* Check if there is an error on xmit/recv queues */
@@ -1374,3 +1347,15 @@ vmxnet3_interrupt_handler(void *param)
 RTE_PMD_REGISTER_PCI(net_vmxnet3, rte_vmxnet3_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_vmxnet3, pci_id_vmxnet3_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_vmxnet3, "* igb_uio | uio_pci_generic | vfio-pci");
+
+RTE_INIT(vmxnet3_init_log);
+static void
+vmxnet3_init_log(void)
+{
+	vmxnet3_logtype_init = rte_log_register("pmd.vmxnet3.init");
+	if (vmxnet3_logtype_init >= 0)
+		rte_log_set_level(vmxnet3_logtype_init, RTE_LOG_NOTICE);
+	vmxnet3_logtype_driver = rte_log_register("pmd.vmxnet3.driver");
+	if (vmxnet3_logtype_driver >= 0)
+		rte_log_set_level(vmxnet3_logtype_driver, RTE_LOG_NOTICE);
+}

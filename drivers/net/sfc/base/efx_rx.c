@@ -1,31 +1,7 @@
-/*
- * Copyright (c) 2007-2016 Solarflare Communications Inc.
+/* SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 2007-2018 Solarflare Communications Inc.
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
- * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
- * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * The views and conclusions contained in the software and documentation are
- * those of the authors and should not be interpreted as representing official
- * policies, either expressed or implied, of the FreeBSD Project.
  */
 
 #include "efx.h"
@@ -86,14 +62,14 @@ siena_rx_prefix_pktlen(
 	__in		uint8_t *buffer,
 	__out		uint16_t *lengthp);
 
-static			void
+static				void
 siena_rx_qpost(
-	__in		efx_rxq_t *erp,
-	__in_ecount(n)	efsys_dma_addr_t *addrp,
-	__in		size_t size,
-	__in		unsigned int n,
-	__in		unsigned int completed,
-	__in		unsigned int added);
+	__in			efx_rxq_t *erp,
+	__in_ecount(ndescs)	efsys_dma_addr_t *addrp,
+	__in			size_t size,
+	__in			unsigned int ndescs,
+	__in			unsigned int completed,
+	__in			unsigned int added);
 
 static			void
 siena_rx_qpush(
@@ -103,7 +79,7 @@ siena_rx_qpush(
 
 #if EFSYS_OPT_RX_PACKED_STREAM
 static		void
-siena_rx_qps_update_credits(
+siena_rx_qpush_ps_credits(
 	__in		efx_rxq_t *erp);
 
 static	__checkReturn	uint8_t *
@@ -131,9 +107,11 @@ siena_rx_qcreate(
 	__in		unsigned int index,
 	__in		unsigned int label,
 	__in		efx_rxq_type_t type,
+	__in		uint32_t type_data,
 	__in		efsys_mem_t *esmp,
-	__in		size_t n,
+	__in		size_t ndescs,
 	__in		uint32_t id,
+	__in		unsigned int flags,
 	__in		efx_evq_t *eep,
 	__in		efx_rxq_t *erp);
 
@@ -163,7 +141,7 @@ static const efx_rx_ops_t __efx_rx_siena_ops = {
 	siena_rx_qpost,				/* erxo_qpost */
 	siena_rx_qpush,				/* erxo_qpush */
 #if EFSYS_OPT_RX_PACKED_STREAM
-	siena_rx_qps_update_credits,		/* erxo_qps_update_credits */
+	siena_rx_qpush_ps_credits,		/* erxo_qpush_ps_credits */
 	siena_rx_qps_packet_info,		/* erxo_qps_packet_info */
 #endif
 	siena_rx_qflush,			/* erxo_qflush */
@@ -192,7 +170,7 @@ static const efx_rx_ops_t __efx_rx_ef10_ops = {
 	ef10_rx_qpost,				/* erxo_qpost */
 	ef10_rx_qpush,				/* erxo_qpush */
 #if EFSYS_OPT_RX_PACKED_STREAM
-	ef10_rx_qps_update_credits,		/* erxo_qps_update_credits */
+	ef10_rx_qpush_ps_credits,		/* erxo_qpush_ps_credits */
 	ef10_rx_qps_packet_info,		/* erxo_qps_packet_info */
 #endif
 	ef10_rx_qflush,				/* erxo_qflush */
@@ -512,27 +490,27 @@ fail1:
 }
 #endif	/* EFSYS_OPT_RX_SCALE */
 
-			void
+				void
 efx_rx_qpost(
-	__in		efx_rxq_t *erp,
-	__in_ecount(n)	efsys_dma_addr_t *addrp,
-	__in		size_t size,
-	__in		unsigned int n,
-	__in		unsigned int completed,
-	__in		unsigned int added)
+	__in			efx_rxq_t *erp,
+	__in_ecount(ndescs)	efsys_dma_addr_t *addrp,
+	__in			size_t size,
+	__in			unsigned int ndescs,
+	__in			unsigned int completed,
+	__in			unsigned int added)
 {
 	efx_nic_t *enp = erp->er_enp;
 	const efx_rx_ops_t *erxop = enp->en_erxop;
 
 	EFSYS_ASSERT3U(erp->er_magic, ==, EFX_RXQ_MAGIC);
 
-	erxop->erxo_qpost(erp, addrp, size, n, completed, added);
+	erxop->erxo_qpost(erp, addrp, size, ndescs, completed, added);
 }
 
 #if EFSYS_OPT_RX_PACKED_STREAM
 
 			void
-efx_rx_qps_update_credits(
+efx_rx_qpush_ps_credits(
 	__in		efx_rxq_t *erp)
 {
 	efx_nic_t *enp = erp->er_enp;
@@ -540,7 +518,7 @@ efx_rx_qps_update_credits(
 
 	EFSYS_ASSERT3U(erp->er_magic, ==, EFX_RXQ_MAGIC);
 
-	erxop->erxo_qps_update_credits(erp);
+	erxop->erxo_qpush_ps_credits(erp);
 }
 
 	__checkReturn	uint8_t *
@@ -610,15 +588,17 @@ efx_rx_qenable(
 	erxop->erxo_qenable(erp);
 }
 
-	__checkReturn	efx_rc_t
-efx_rx_qcreate(
+static	__checkReturn	efx_rc_t
+efx_rx_qcreate_internal(
 	__in		efx_nic_t *enp,
 	__in		unsigned int index,
 	__in		unsigned int label,
 	__in		efx_rxq_type_t type,
+	__in		uint32_t type_data,
 	__in		efsys_mem_t *esmp,
-	__in		size_t n,
+	__in		size_t ndescs,
 	__in		uint32_t id,
+	__in		unsigned int flags,
 	__in		efx_evq_t *eep,
 	__deref_out	efx_rxq_t **erpp)
 {
@@ -640,11 +620,11 @@ efx_rx_qcreate(
 	erp->er_magic = EFX_RXQ_MAGIC;
 	erp->er_enp = enp;
 	erp->er_index = index;
-	erp->er_mask = n - 1;
+	erp->er_mask = ndescs - 1;
 	erp->er_esmp = esmp;
 
-	if ((rc = erxop->erxo_qcreate(enp, index, label, type, esmp, n, id,
-	    eep, erp)) != 0)
+	if ((rc = erxop->erxo_qcreate(enp, index, label, type, type_data, esmp,
+	    ndescs, id, flags, eep, erp)) != 0)
 		goto fail2;
 
 	enp->en_rx_qcount++;
@@ -661,6 +641,43 @@ fail1:
 
 	return (rc);
 }
+
+	__checkReturn	efx_rc_t
+efx_rx_qcreate(
+	__in		efx_nic_t *enp,
+	__in		unsigned int index,
+	__in		unsigned int label,
+	__in		efx_rxq_type_t type,
+	__in		efsys_mem_t *esmp,
+	__in		size_t ndescs,
+	__in		uint32_t id,
+	__in		unsigned int flags,
+	__in		efx_evq_t *eep,
+	__deref_out	efx_rxq_t **erpp)
+{
+	return efx_rx_qcreate_internal(enp, index, label, type, 0, esmp, ndescs,
+	    id, flags, eep, erpp);
+}
+
+#if EFSYS_OPT_RX_PACKED_STREAM
+
+	__checkReturn	efx_rc_t
+efx_rx_qcreate_packed_stream(
+	__in		efx_nic_t *enp,
+	__in		unsigned int index,
+	__in		unsigned int label,
+	__in		uint32_t ps_buf_size,
+	__in		efsys_mem_t *esmp,
+	__in		size_t ndescs,
+	__in		efx_evq_t *eep,
+	__deref_out	efx_rxq_t **erpp)
+{
+	return efx_rx_qcreate_internal(enp, index, label,
+	    EFX_RXQ_TYPE_PACKED_STREAM, ps_buf_size, esmp, ndescs,
+	    0 /* id unused on EF10 */, EFX_RXQ_FLAG_NONE, eep, erpp);
+}
+
+#endif
 
 			void
 efx_rx_qdestroy(
@@ -1163,14 +1180,14 @@ siena_rx_prefix_pktlen(
 }
 
 
-static			void
+static				void
 siena_rx_qpost(
-	__in		efx_rxq_t *erp,
-	__in_ecount(n)	efsys_dma_addr_t *addrp,
-	__in		size_t size,
-	__in		unsigned int n,
-	__in		unsigned int completed,
-	__in		unsigned int added)
+	__in			efx_rxq_t *erp,
+	__in_ecount(ndescs)	efsys_dma_addr_t *addrp,
+	__in			size_t size,
+	__in			unsigned int ndescs,
+	__in			unsigned int completed,
+	__in			unsigned int added)
 {
 	efx_qword_t qword;
 	unsigned int i;
@@ -1178,11 +1195,11 @@ siena_rx_qpost(
 	unsigned int id;
 
 	/* The client driver must not overfill the queue */
-	EFSYS_ASSERT3U(added - completed + n, <=,
+	EFSYS_ASSERT3U(added - completed + ndescs, <=,
 	    EFX_RXQ_LIMIT(erp->er_mask + 1));
 
 	id = added & (erp->er_mask);
-	for (i = 0; i < n; i++) {
+	for (i = 0; i < ndescs; i++) {
 		EFSYS_PROBE4(rx_post, unsigned int, erp->er_index,
 		    unsigned int, id, efsys_dma_addr_t, addrp[i],
 		    size_t, size);
@@ -1235,7 +1252,7 @@ siena_rx_qpush(
 
 #if EFSYS_OPT_RX_PACKED_STREAM
 static		void
-siena_rx_qps_update_credits(
+siena_rx_qpush_ps_credits(
 	__in		efx_rxq_t *erp)
 {
 	/* Not supported by Siena hardware */
@@ -1303,19 +1320,22 @@ siena_rx_qcreate(
 	__in		unsigned int index,
 	__in		unsigned int label,
 	__in		efx_rxq_type_t type,
+	__in		uint32_t type_data,
 	__in		efsys_mem_t *esmp,
-	__in		size_t n,
+	__in		size_t ndescs,
 	__in		uint32_t id,
+	__in		unsigned int flags,
 	__in		efx_evq_t *eep,
 	__in		efx_rxq_t *erp)
 {
 	efx_nic_cfg_t *encp = &(enp->en_nic_cfg);
 	efx_oword_t oword;
 	uint32_t size;
-	boolean_t jumbo;
+	boolean_t jumbo = B_FALSE;
 	efx_rc_t rc;
 
 	_NOTE(ARGUNUSED(esmp))
+	_NOTE(ARGUNUSED(type_data))
 
 	EFX_STATIC_ASSERT(EFX_EV_RX_NLABELS ==
 	    (1 << FRF_AZ_RX_DESCQ_LABEL_WIDTH));
@@ -1325,7 +1345,8 @@ siena_rx_qcreate(
 	EFX_STATIC_ASSERT(ISP2(EFX_RXQ_MAXNDESCS));
 	EFX_STATIC_ASSERT(ISP2(EFX_RXQ_MINNDESCS));
 
-	if (!ISP2(n) || (n < EFX_RXQ_MINNDESCS) || (n > EFX_RXQ_MAXNDESCS)) {
+	if (!ISP2(ndescs) ||
+	    (ndescs < EFX_RXQ_MINNDESCS) || (ndescs > EFX_RXQ_MAXNDESCS)) {
 		rc = EINVAL;
 		goto fail1;
 	}
@@ -1335,7 +1356,7 @@ siena_rx_qcreate(
 	}
 	for (size = 0; (1 << size) <= (EFX_RXQ_MAXNDESCS / EFX_RXQ_MINNDESCS);
 	    size++)
-		if ((1 << size) == (int)(n / EFX_RXQ_MINNDESCS))
+		if ((1 << size) == (int)(ndescs / EFX_RXQ_MINNDESCS))
 			break;
 	if (id + (1 << size) >= encp->enc_buftbl_limit) {
 		rc = EINVAL;
@@ -1344,22 +1365,20 @@ siena_rx_qcreate(
 
 	switch (type) {
 	case EFX_RXQ_TYPE_DEFAULT:
-		jumbo = B_FALSE;
 		break;
-
-#if EFSYS_OPT_RX_SCATTER
-	case EFX_RXQ_TYPE_SCATTER:
-		if (enp->en_family < EFX_FAMILY_SIENA) {
-			rc = EINVAL;
-			goto fail4;
-		}
-		jumbo = B_TRUE;
-		break;
-#endif	/* EFSYS_OPT_RX_SCATTER */
 
 	default:
 		rc = EINVAL;
 		goto fail4;
+	}
+
+	if (flags & EFX_RXQ_FLAG_SCATTER) {
+#if EFSYS_OPT_RX_SCATTER
+		jumbo = B_TRUE;
+#else
+		rc = EINVAL;
+		goto fail5;
+#endif	/* EFSYS_OPT_RX_SCATTER */
 	}
 
 	/* Set up the new descriptor queue */
@@ -1377,6 +1396,10 @@ siena_rx_qcreate(
 
 	return (0);
 
+#if !EFSYS_OPT_RX_SCATTER
+fail5:
+	EFSYS_PROBE(fail5);
+#endif
 fail4:
 	EFSYS_PROBE(fail4);
 fail3:

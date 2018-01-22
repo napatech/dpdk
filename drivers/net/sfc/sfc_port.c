@@ -1,32 +1,10 @@
-/*-
- *   BSD LICENSE
+/* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2016-2017 Solarflare Communications Inc.
+ * Copyright (c) 2016-2018 Solarflare Communications Inc.
  * All rights reserved.
  *
  * This software was jointly developed between OKTET Labs (under contract
  * for Solarflare) and Solarflare Communications, Inc.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
- * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
- * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "efx.h"
@@ -188,10 +166,10 @@ sfc_port_start(struct sfc_adapter *sa)
 		goto fail_mac_pdu_set;
 
 	if (!port->isolated) {
-		struct ether_addr *mac_addrs = sa->eth_dev->data->mac_addrs;
+		struct ether_addr *addr = &port->default_mac_addr;
 
 		sfc_log_init(sa, "set MAC address");
-		rc = efx_mac_addr_set(sa->nic, mac_addrs[0].addr_bytes);
+		rc = efx_mac_addr_set(sa->nic, addr->addr_bytes);
 		if (rc != 0)
 			goto fail_mac_addr_set;
 
@@ -279,10 +257,10 @@ fail_port_init_dev_link:
 	(void)efx_mac_drain(sa->nic, B_TRUE);
 
 fail_mac_drain:
+fail_mac_stats_upload:
 	(void)efx_mac_stats_periodic(sa->nic, &port->mac_stats_dma_mem,
 				     0, B_FALSE);
 
-fail_mac_stats_upload:
 fail_mac_stats_periodic:
 fail_mcast_address_list_set:
 fail_mac_filter_set:
@@ -321,11 +299,12 @@ sfc_port_configure(struct sfc_adapter *sa)
 {
 	const struct rte_eth_dev_data *dev_data = sa->eth_dev->data;
 	struct sfc_port *port = &sa->port;
+	const struct rte_eth_rxmode *rxmode = &dev_data->dev_conf.rxmode;
 
 	sfc_log_init(sa, "entry");
 
-	if (dev_data->dev_conf.rxmode.jumbo_frame)
-		port->pdu = dev_data->dev_conf.rxmode.max_rx_pkt_len;
+	if (rxmode->offloads & DEV_RX_OFFLOAD_JUMBO_FRAME)
+		port->pdu = rxmode->max_rx_pkt_len;
 	else
 		port->pdu = EFX_MAC_PDU(dev_data->mtu);
 
@@ -342,6 +321,8 @@ int
 sfc_port_attach(struct sfc_adapter *sa)
 {
 	struct sfc_port *port = &sa->port;
+	const efx_nic_cfg_t *encp = efx_nic_cfg_get(sa->nic);
+	const struct ether_addr *from;
 	long kvarg_stats_update_period_ms;
 	int rc;
 
@@ -352,6 +333,10 @@ sfc_port_attach(struct sfc_adapter *sa)
 	/* Enable flow control by default */
 	port->flow_ctrl = EFX_FCNTL_RESPOND | EFX_FCNTL_GENERATE;
 	port->flow_ctrl_autoneg = B_TRUE;
+
+	RTE_BUILD_BUG_ON(sizeof(encp->enc_mac_addr) != sizeof(*from));
+	from = (const struct ether_addr *)(encp->enc_mac_addr);
+	ether_addr_copy(from, &port->default_mac_addr);
 
 	port->max_mcast_addrs = EFX_MAC_MULTICAST_LIST_MAX;
 	port->nb_mcast_addrs = 0;
@@ -404,9 +389,14 @@ sfc_port_attach(struct sfc_adapter *sa)
 	return 0;
 
 fail_kvarg_stats_update_period_ms:
+	sfc_dma_free(sa, &port->mac_stats_dma_mem);
+
 fail_mac_stats_dma_alloc:
 	rte_free(port->mac_stats_buf);
+
 fail_mac_stats_buf_alloc:
+	rte_free(port->mcast_addrs);
+
 fail_mcast_addr_list_buf_alloc:
 	sfc_log_init(sa, "failed %d", rc);
 	return rc;
@@ -421,6 +411,8 @@ sfc_port_detach(struct sfc_adapter *sa)
 
 	sfc_dma_free(sa, &port->mac_stats_dma_mem);
 	rte_free(port->mac_stats_buf);
+
+	rte_free(port->mcast_addrs);
 
 	sfc_log_init(sa, "done");
 }

@@ -1,34 +1,8 @@
-/*-
- *   BSD LICENSE
+/* SPDX-License-Identifier: BSD-3-Clause
  *
  *   Copyright (c) 2016 Freescale Semiconductor, Inc. All rights reserved.
- *   Copyright 2016 NXP.
+ *   Copyright 2016 NXP
  *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Freescale Semiconductor, Inc nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 /**
@@ -218,6 +192,26 @@ struct dpaa2_annot_hdr {
 #define L3_PROTO_CAPWAN__DATA_PRESENT		BIT_POS(2)
 #define L5_SOFT_PARSING_ERROR			BIT_POS(1)
 #define L3_IPV6_ROUTE_HDR_PRESENT		BIT_POS(0)
+
+#define DPAA2_L3_IPv4 (L3_IPV4_1_PRESENT | L3_IPV4_1_UNICAST | \
+	L3_IP_1_UNKNOWN_PROTOCOL | L3_IP_UNKNOWN_PROTOCOL)
+
+#define DPAA2_L3_IPv6 (L3_IPV6_1_PRESENT | L3_IPV6_1_UNICAST | \
+	L3_IP_1_UNKNOWN_PROTOCOL | L3_IP_UNKNOWN_PROTOCOL)
+
+#define DPAA2_L3_IPv4_TCP (L3_IPV4_1_PRESENT | L3_IPV4_1_UNICAST | \
+	L3_PROTO_TCP_PRESENT | L3_PROTO_TCP_CTRL_BIT_6_TO_11_PRESENT | \
+	L4_UNKNOWN_PROTOCOL)
+
+#define DPAA2_L3_IPv4_UDP (L3_IPV4_1_PRESENT | L3_IPV4_1_UNICAST | \
+	L3_PROTO_UDP_PRESENT | L4_UNKNOWN_PROTOCOL)
+
+#define DPAA2_L3_IPv6_TCP (L3_IPV6_1_PRESENT | L3_IPV6_1_UNICAST | \
+	L3_PROTO_TCP_PRESENT | L3_PROTO_TCP_CTRL_BIT_6_TO_11_PRESENT | \
+	L4_UNKNOWN_PROTOCOL)
+
+#define DPAA2_L3_IPv6_UDP (L3_IPV6_1_PRESENT | L3_IPV6_1_UNICAST | \
+	L3_PROTO_UDP_PRESENT | L4_UNKNOWN_PROTOCOL)
 
 /* Debug frame, otherwise supposed to be discarded */
 #define DPAA2_ETH_FAS_DISC	      0x80000000

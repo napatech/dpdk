@@ -1,37 +1,10 @@
-/*
- * Copyright (c) 2017, Cisco Systems, Inc.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- * notice, this list of conditions and the following disclaimer in
- * the documentation and/or other materials provided with the
- * distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- *
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright 2008-2017 Cisco Systems, Inc.  All rights reserved.
  */
 
 #include <errno.h>
 #include <rte_log.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_flow_driver.h>
 #include <rte_ether.h>
 #include <rte_ip.h>
@@ -42,15 +15,12 @@
 #include "vnic_dev.h"
 #include "vnic_nic.h"
 
-#ifdef RTE_LIBRTE_ENIC_DEBUG_FLOW
 #define FLOW_TRACE() \
-	RTE_LOG(DEBUG, PMD, "%s()\n", __func__)
+	rte_log(RTE_LOG_DEBUG, enicpmd_logtype_flow, \
+		"%s()\n", __func__)
 #define FLOW_LOG(level, fmt, args...) \
-	RTE_LOG(level, PMD, fmt, ## args)
-#else
-#define FLOW_TRACE() do { } while (0)
-#define FLOW_LOG(level, fmt, args...) do { } while (0)
-#endif
+	rte_log(RTE_LOG_ ## level, enicpmd_logtype_flow, \
+		fmt "\n", ##args)
 
 /** Info about how to copy items into enic filters. */
 struct enic_items {

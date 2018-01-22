@@ -1,37 +1,8 @@
-/*
- *   BSD LICENSE
- *
- *   Copyright(c) 2017 Cavium, Inc.. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Cavium, Inc. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER(S) OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2017 Cavium, Inc
  */
 
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_ethdev_pci.h>
 #include <rte_cycles.h>
 #include <rte_malloc.h>
@@ -42,6 +13,9 @@
 #include "lio_23xx_vf.h"
 #include "lio_ethdev.h"
 #include "lio_rxtx.h"
+
+int lio_logtype_init;
+int lio_logtype_driver;
 
 /* Default RSS key in use */
 static uint8_t lio_rss_key[40] = {
@@ -1228,12 +1202,10 @@ lio_dev_rx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t q_no,
 
 	fw_mapped_oq = lio_dev->linfo.rxpciq[q_no].s.q_no;
 
-	if ((lio_dev->droq[fw_mapped_oq]) &&
-	    (num_rx_descs != lio_dev->droq[fw_mapped_oq]->max_count)) {
-		lio_dev_err(lio_dev,
-			    "Reconfiguring Rx descs not supported. Configure descs to same value %u or restart application\n",
-			    lio_dev->droq[fw_mapped_oq]->max_count);
-		return -ENOTSUP;
+	/* Free previous allocation if any */
+	if (eth_dev->data->rx_queues[q_no] != NULL) {
+		lio_dev_rx_queue_release(eth_dev->data->rx_queues[q_no]);
+		eth_dev->data->rx_queues[q_no] = NULL;
 	}
 
 	mbp_priv = rte_mempool_get_priv(mp);
@@ -1267,10 +1239,6 @@ lio_dev_rx_queue_release(void *rxq)
 	int oq_no;
 
 	if (droq) {
-		/* Run time queue deletion not supported */
-		if (droq->lio_dev->port_configured)
-			return;
-
 		oq_no = droq->q_no;
 		lio_delete_droq_queue(droq->lio_dev, oq_no);
 	}
@@ -1314,12 +1282,10 @@ lio_dev_tx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t q_no,
 
 	lio_dev_dbg(lio_dev, "setting up tx queue %u\n", q_no);
 
-	if ((lio_dev->instr_queue[fw_mapped_iq] != NULL) &&
-	    (num_tx_descs != lio_dev->instr_queue[fw_mapped_iq]->max_count)) {
-		lio_dev_err(lio_dev,
-			    "Reconfiguring Tx descs not supported. Configure descs to same value %u or restart application\n",
-			    lio_dev->instr_queue[fw_mapped_iq]->max_count);
-		return -ENOTSUP;
+	/* Free previous allocation if any */
+	if (eth_dev->data->tx_queues[q_no] != NULL) {
+		lio_dev_tx_queue_release(eth_dev->data->tx_queues[q_no]);
+		eth_dev->data->tx_queues[q_no] = NULL;
 	}
 
 	retval = lio_setup_iq(lio_dev, q_no, lio_dev->linfo.txpciq[q_no],
@@ -1331,7 +1297,7 @@ lio_dev_tx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t q_no,
 	}
 
 	retval = lio_setup_sglists(lio_dev, q_no, fw_mapped_iq,
-				lio_dev->instr_queue[fw_mapped_iq]->max_count,
+				lio_dev->instr_queue[fw_mapped_iq]->nb_desc,
 				socket_id);
 
 	if (retval) {
@@ -1362,10 +1328,6 @@ lio_dev_tx_queue_release(void *txq)
 
 
 	if (tq) {
-		/* Run time queue deletion not supported */
-		if (tq->lio_dev->port_configured)
-			return;
-
 		/* Free sg_list */
 		lio_delete_sglist(tq);
 
@@ -1534,6 +1496,8 @@ lio_dev_stop(struct rte_eth_dev *eth_dev)
 
 	lio_send_rx_ctrl_cmd(eth_dev, 0);
 
+	lio_wait_for_instr_fetch(lio_dev);
+
 	/* Clear recorded link status */
 	lio_dev->linfo.link.link_status64 = 0;
 }
@@ -1607,34 +1571,14 @@ static void
 lio_dev_close(struct rte_eth_dev *eth_dev)
 {
 	struct lio_device *lio_dev = LIO_DEV(eth_dev);
-	uint32_t i;
 
 	lio_dev_info(lio_dev, "closing port %d\n", eth_dev->data->port_id);
 
 	if (lio_dev->intf_open)
 		lio_dev_stop(eth_dev);
 
-	lio_wait_for_instr_fetch(lio_dev);
-
-	lio_dev->fn_list.disable_io_queues(lio_dev);
-
-	cn23xx_vf_set_io_queues_off(lio_dev);
-
-	/* Reset iq regs (IQ_DBELL).
-	 * Clear sli_pktx_cnts (OQ_PKTS_SENT).
-	 */
-	for (i = 0; i < lio_dev->nb_rx_queues; i++) {
-		struct lio_droq *droq = lio_dev->droq[i];
-
-		if (droq == NULL)
-			break;
-
-		uint32_t pkt_count = rte_read32(droq->pkts_sent_reg);
-
-		lio_dev_dbg(lio_dev,
-			    "pending oq count %u\n", pkt_count);
-		rte_write32(pkt_count, droq->pkts_sent_reg);
-	}
+	/* Reset ioq regs */
+	lio_dev->fn_list.setup_device_regs(lio_dev);
 
 	if (lio_dev->pci_dev->kdrv == RTE_KDRV_IGB_UIO) {
 		cn23xx_vf_ask_pf_to_do_flr(lio_dev);
@@ -1724,7 +1668,76 @@ lio_enable_hw_tunnel_tx_checksum(struct rte_eth_dev *eth_dev)
 		lio_dev_err(lio_dev, "TNL_TX_CSUM command timed out\n");
 }
 
-static int lio_dev_configure(struct rte_eth_dev *eth_dev)
+static int
+lio_send_queue_count_update(struct rte_eth_dev *eth_dev, int num_txq,
+			    int num_rxq)
+{
+	struct lio_device *lio_dev = LIO_DEV(eth_dev);
+	struct lio_dev_ctrl_cmd ctrl_cmd;
+	struct lio_ctrl_pkt ctrl_pkt;
+
+	if (strcmp(lio_dev->firmware_version, LIO_Q_RECONF_MIN_VERSION) < 0) {
+		lio_dev_err(lio_dev, "Require firmware version >= %s\n",
+			    LIO_Q_RECONF_MIN_VERSION);
+		return -ENOTSUP;
+	}
+
+	/* flush added to prevent cmd failure
+	 * incase the queue is full
+	 */
+	lio_flush_iq(lio_dev, lio_dev->instr_queue[0]);
+
+	memset(&ctrl_pkt, 0, sizeof(struct lio_ctrl_pkt));
+	memset(&ctrl_cmd, 0, sizeof(struct lio_dev_ctrl_cmd));
+
+	ctrl_cmd.eth_dev = eth_dev;
+	ctrl_cmd.cond = 0;
+
+	ctrl_pkt.ncmd.s.cmd = LIO_CMD_QUEUE_COUNT_CTL;
+	ctrl_pkt.ncmd.s.param1 = num_txq;
+	ctrl_pkt.ncmd.s.param2 = num_rxq;
+	ctrl_pkt.ctrl_cmd = &ctrl_cmd;
+
+	if (lio_send_ctrl_pkt(lio_dev, &ctrl_pkt)) {
+		lio_dev_err(lio_dev, "Failed to send queue count control command\n");
+		return -1;
+	}
+
+	if (lio_wait_for_ctrl_cmd(lio_dev, &ctrl_cmd)) {
+		lio_dev_err(lio_dev, "Queue count control command timed out\n");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int
+lio_reconf_queues(struct rte_eth_dev *eth_dev, int num_txq, int num_rxq)
+{
+	struct lio_device *lio_dev = LIO_DEV(eth_dev);
+
+	if (lio_dev->nb_rx_queues != num_rxq ||
+	    lio_dev->nb_tx_queues != num_txq) {
+		if (lio_send_queue_count_update(eth_dev, num_txq, num_rxq))
+			return -1;
+		lio_dev->nb_rx_queues = num_rxq;
+		lio_dev->nb_tx_queues = num_txq;
+	}
+
+	if (lio_dev->intf_open)
+		lio_dev_stop(eth_dev);
+
+	/* Reset ioq registers */
+	if (lio_dev->fn_list.setup_device_regs(lio_dev)) {
+		lio_dev_err(lio_dev, "Failed to configure device registers\n");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int
+lio_dev_configure(struct rte_eth_dev *eth_dev)
 {
 	struct lio_device *lio_dev = LIO_DEV(eth_dev);
 	uint16_t timeout = LIO_MAX_CMD_TIMEOUT;
@@ -1737,21 +1750,20 @@ static int lio_dev_configure(struct rte_eth_dev *eth_dev)
 
 	PMD_INIT_FUNC_TRACE();
 
-	/* Re-configuring firmware not supported.
-	 * Can't change tx/rx queues per port from initial value.
+	/* Inform firmware about change in number of queues to use.
+	 * Disable IO queues and reset registers for re-configuration.
 	 */
-	if (lio_dev->port_configured) {
-		if ((lio_dev->nb_rx_queues != eth_dev->data->nb_rx_queues) ||
-		    (lio_dev->nb_tx_queues != eth_dev->data->nb_tx_queues)) {
-			lio_dev_err(lio_dev,
-				    "rxq/txq re-conf not supported. Restart application with new value.\n");
-			return -ENOTSUP;
-		}
-		return 0;
-	}
+	if (lio_dev->port_configured)
+		return lio_reconf_queues(eth_dev,
+					 eth_dev->data->nb_tx_queues,
+					 eth_dev->data->nb_rx_queues);
 
 	lio_dev->nb_rx_queues = eth_dev->data->nb_rx_queues;
 	lio_dev->nb_tx_queues = eth_dev->data->nb_tx_queues;
+
+	/* Set max number of queues which can be re-configured. */
+	lio_dev->max_rx_queues = eth_dev->data->nb_rx_queues;
+	lio_dev->max_tx_queues = eth_dev->data->nb_tx_queues;
 
 	resp_size = sizeof(struct lio_if_cfg_resp);
 	sc = lio_alloc_soft_command(lio_dev, 0, resp_size, 0);
@@ -1878,9 +1890,6 @@ static int lio_dev_configure(struct rte_eth_dev *eth_dev)
 	lio_dev->port_configured = 1;
 
 	lio_free_soft_command(sc);
-
-	/* Disable iq_0 for reconf */
-	lio_dev->fn_list.disable_io_queues(lio_dev);
 
 	/* Reset ioq regs */
 	lio_dev->fn_list.setup_device_regs(lio_dev);
@@ -2019,11 +2028,6 @@ lio_first_time_init(struct lio_device *lio_dev,
 		cn23xx_vf_ask_pf_to_do_flr(lio_dev);
 		/* FLR wait time doubled as a precaution. */
 		rte_delay_ms(LIO_PCI_FLR_WAIT * 2);
-	}
-
-	if (cn23xx_vf_set_io_queues_off(lio_dev)) {
-		lio_dev_err(lio_dev, "Setting io queues off failed\n");
-		goto error;
 	}
 
 	if (lio_dev->fn_list.setup_device_regs(lio_dev)) {
@@ -2180,3 +2184,15 @@ static struct rte_pci_driver rte_liovf_pmd = {
 RTE_PMD_REGISTER_PCI(net_liovf, rte_liovf_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_liovf, pci_id_liovf_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_liovf, "* igb_uio | vfio-pci");
+
+RTE_INIT(lio_init_log);
+static void
+lio_init_log(void)
+{
+	lio_logtype_init = rte_log_register("pmd.lio.init");
+	if (lio_logtype_init >= 0)
+		rte_log_set_level(lio_logtype_init, RTE_LOG_NOTICE);
+	lio_logtype_driver = rte_log_register("pmd.lio.driver");
+	if (lio_logtype_driver >= 0)
+		rte_log_set_level(lio_logtype_driver, RTE_LOG_NOTICE);
+}

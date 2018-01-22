@@ -1,36 +1,14 @@
-/*-
- *   BSD LICENSE
+/* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2016-2017 Solarflare Communications Inc.
+ * Copyright (c) 2016-2018 Solarflare Communications Inc.
  * All rights reserved.
  *
  * This software was jointly developed between OKTET Labs (under contract
  * for Solarflare) and Solarflare Communications, Inc.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
- * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
- * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <rte_dev.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_ethdev_pci.h>
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
@@ -105,6 +83,7 @@ sfc_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 {
 	struct sfc_adapter *sa = dev->data->dev_private;
 	const efx_nic_cfg_t *encp = efx_nic_cfg_get(sa->nic);
+	uint64_t txq_offloads_def = 0;
 
 	sfc_log_init(sa, "entry");
 
@@ -126,22 +105,35 @@ sfc_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	/* By default packets are dropped if no descriptors are available */
 	dev_info->default_rxconf.rx_drop_en = 1;
 
-	dev_info->rx_offload_capa =
-		DEV_RX_OFFLOAD_IPV4_CKSUM |
-		DEV_RX_OFFLOAD_UDP_CKSUM |
-		DEV_RX_OFFLOAD_TCP_CKSUM;
+	dev_info->rx_queue_offload_capa = sfc_rx_get_queue_offload_caps(sa);
 
-	dev_info->tx_offload_capa =
-		DEV_TX_OFFLOAD_IPV4_CKSUM |
-		DEV_TX_OFFLOAD_UDP_CKSUM |
-		DEV_TX_OFFLOAD_TCP_CKSUM;
+	/*
+	 * rx_offload_capa includes both device and queue offloads since
+	 * the latter may be requested on a per device basis which makes
+	 * sense when some offloads are needed to be set on all queues.
+	 */
+	dev_info->rx_offload_capa = sfc_rx_get_dev_offload_caps(sa) |
+				    dev_info->rx_queue_offload_capa;
+
+	dev_info->tx_queue_offload_capa = sfc_tx_get_queue_offload_caps(sa);
+
+	/*
+	 * tx_offload_capa includes both device and queue offloads since
+	 * the latter may be requested on a per device basis which makes
+	 * sense when some offloads are needed to be set on all queues.
+	 */
+	dev_info->tx_offload_capa = sfc_tx_get_dev_offload_caps(sa) |
+				    dev_info->tx_queue_offload_capa;
+
+	if (dev_info->tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
+		txq_offloads_def |= DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+
+	dev_info->default_txconf.offloads |= txq_offloads_def;
 
 	dev_info->default_txconf.txq_flags = ETH_TXQ_FLAGS_NOXSUMSCTP;
 	if ((~sa->dp_tx->features & SFC_DP_TX_FEAT_VLAN_INSERT) ||
 	    !encp->enc_hw_tx_insert_vlan_enabled)
 		dev_info->default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOVLANOFFL;
-	else
-		dev_info->tx_offload_capa |= DEV_TX_OFFLOAD_VLAN_INSERT;
 
 	if (~sa->dp_tx->features & SFC_DP_TX_FEAT_MULTI_SEG)
 		dev_info->default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOMULTSEGS;
@@ -160,9 +152,7 @@ sfc_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	}
 #endif
 
-	if (sa->tso)
-		dev_info->tx_offload_capa |= DEV_TX_OFFLOAD_TCP_TSO;
-
+	/* Initialize to hardware limits */
 	dev_info->rx_desc_lim.nb_max = EFX_RXQ_MAXNDESCS;
 	dev_info->rx_desc_lim.nb_min = EFX_RXQ_MINNDESCS;
 	/* The RXQ hardware requires that the descriptor count is a power
@@ -170,6 +160,7 @@ sfc_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	 */
 	dev_info->rx_desc_lim.nb_align = EFX_RXQ_MINNDESCS;
 
+	/* Initialize to hardware limits */
 	dev_info->tx_desc_lim.nb_max = sa->txq_max_entries;
 	dev_info->tx_desc_lim.nb_min = EFX_TXQ_MINNDESCS;
 	/*
@@ -177,14 +168,21 @@ sfc_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	 * of 2, but tx_desc_lim cannot properly describe that constraint
 	 */
 	dev_info->tx_desc_lim.nb_align = EFX_TXQ_MINNDESCS;
+
+	if (sa->dp_rx->get_dev_info != NULL)
+		sa->dp_rx->get_dev_info(dev_info);
+	if (sa->dp_tx->get_dev_info != NULL)
+		sa->dp_tx->get_dev_info(dev_info);
 }
 
 static const uint32_t *
 sfc_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 {
 	struct sfc_adapter *sa = dev->data->dev_private;
+	const efx_nic_cfg_t *encp = efx_nic_cfg_get(sa->nic);
+	uint32_t tunnel_encaps = encp->enc_tunnel_encapsulations_supported;
 
-	return sa->dp_rx->supported_ptypes_get();
+	return sa->dp_rx->supported_ptypes_get(tunnel_encaps);
 }
 
 static int
@@ -895,7 +893,13 @@ sfc_dev_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 	 * The driver does not use it, but other PMDs update jumbo_frame
 	 * flag and max_rx_pkt_len when MTU is set.
 	 */
-	dev->data->dev_conf.rxmode.jumbo_frame = (mtu > ETHER_MAX_LEN);
+	if (mtu > ETHER_MAX_LEN) {
+		struct rte_eth_rxmode *rxmode = &dev->data->dev_conf.rxmode;
+
+		rxmode->offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
+		rxmode->jumbo_frame = 1;
+	}
+
 	dev->data->dev_conf.rxmode.max_rx_pkt_len = sa->port.pdu;
 
 	sfc_adapter_unlock(sa);
@@ -925,6 +929,12 @@ sfc_mac_addr_set(struct rte_eth_dev *dev, struct ether_addr *mac_addr)
 	int rc;
 
 	sfc_adapter_lock(sa);
+
+	/*
+	 * Copy the address to the device private data so that
+	 * it could be recalled in the case of adapter restart.
+	 */
+	ether_addr_copy(mac_addr, &port->default_mac_addr);
 
 	if (port->isolated) {
 		sfc_err(sa, "isolated mode is active on the port");
@@ -961,9 +971,9 @@ sfc_mac_addr_set(struct rte_eth_dev *dev, struct ether_addr *mac_addr)
 
 		/*
 		 * Since setting MAC address with filters installed is not
-		 * allowed on the adapter, one needs to simply restart adapter
-		 * so that the new MAC address will be taken from an outer
-		 * storage and set flawlessly by means of sfc_start() call
+		 * allowed on the adapter, the new MAC address will be set
+		 * by means of adapter restart. sfc_start() shall retrieve
+		 * the new address from the device private data and set it.
 		 */
 		sfc_stop(sa);
 		rc = sfc_start(sa);
@@ -972,6 +982,13 @@ sfc_mac_addr_set(struct rte_eth_dev *dev, struct ether_addr *mac_addr)
 	}
 
 unlock:
+	/*
+	 * In the case of failure sa->port->default_mac_addr does not
+	 * need rollback since no error code is returned, and the upper
+	 * API will anyway update the external MAC address storage.
+	 * To be consistent with that new value it is better to keep
+	 * the device private value the same.
+	 */
 	sfc_adapter_unlock(sa);
 }
 
@@ -1045,7 +1062,13 @@ sfc_rx_queue_info_get(struct rte_eth_dev *dev, uint16_t rx_queue_id,
 	qinfo->conf.rx_free_thresh = rxq->refill_threshold;
 	qinfo->conf.rx_drop_en = 1;
 	qinfo->conf.rx_deferred_start = rxq_info->deferred_start;
-	qinfo->scattered_rx = (rxq_info->type == EFX_RXQ_TYPE_SCATTER);
+	qinfo->conf.offloads = DEV_RX_OFFLOAD_IPV4_CKSUM |
+			       DEV_RX_OFFLOAD_UDP_CKSUM |
+			       DEV_RX_OFFLOAD_TCP_CKSUM;
+	if (rxq_info->type_flags & EFX_RXQ_FLAG_SCATTER) {
+		qinfo->conf.offloads |= DEV_RX_OFFLOAD_SCATTER;
+		qinfo->scattered_rx = 1;
+	}
 	qinfo->nb_desc = rxq_info->entries;
 
 	sfc_adapter_unlock(sa);
@@ -1072,6 +1095,7 @@ sfc_tx_queue_info_get(struct rte_eth_dev *dev, uint16_t tx_queue_id,
 	memset(qinfo, 0, sizeof(*qinfo));
 
 	qinfo->conf.txq_flags = txq_info->txq->flags;
+	qinfo->conf.offloads = txq_info->txq->offloads;
 	qinfo->conf.tx_free_thresh = txq_info->txq->free_thresh;
 	qinfo->conf.tx_deferred_start = txq_info->deferred_start;
 	qinfo->nb_desc = txq_info->entries;
@@ -1209,6 +1233,123 @@ sfc_tx_queue_stop(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 
 	sfc_adapter_unlock(sa);
 	return 0;
+}
+
+static efx_tunnel_protocol_t
+sfc_tunnel_rte_type_to_efx_udp_proto(enum rte_eth_tunnel_type rte_type)
+{
+	switch (rte_type) {
+	case RTE_TUNNEL_TYPE_VXLAN:
+		return EFX_TUNNEL_PROTOCOL_VXLAN;
+	case RTE_TUNNEL_TYPE_GENEVE:
+		return EFX_TUNNEL_PROTOCOL_GENEVE;
+	default:
+		return EFX_TUNNEL_NPROTOS;
+	}
+}
+
+enum sfc_udp_tunnel_op_e {
+	SFC_UDP_TUNNEL_ADD_PORT,
+	SFC_UDP_TUNNEL_DEL_PORT,
+};
+
+static int
+sfc_dev_udp_tunnel_op(struct rte_eth_dev *dev,
+		      struct rte_eth_udp_tunnel *tunnel_udp,
+		      enum sfc_udp_tunnel_op_e op)
+{
+	struct sfc_adapter *sa = dev->data->dev_private;
+	efx_tunnel_protocol_t tunnel_proto;
+	int rc;
+
+	sfc_log_init(sa, "%s udp_port=%u prot_type=%u",
+		     (op == SFC_UDP_TUNNEL_ADD_PORT) ? "add" :
+		     (op == SFC_UDP_TUNNEL_DEL_PORT) ? "delete" : "unknown",
+		     tunnel_udp->udp_port, tunnel_udp->prot_type);
+
+	tunnel_proto =
+		sfc_tunnel_rte_type_to_efx_udp_proto(tunnel_udp->prot_type);
+	if (tunnel_proto >= EFX_TUNNEL_NPROTOS) {
+		rc = ENOTSUP;
+		goto fail_bad_proto;
+	}
+
+	sfc_adapter_lock(sa);
+
+	switch (op) {
+	case SFC_UDP_TUNNEL_ADD_PORT:
+		rc = efx_tunnel_config_udp_add(sa->nic,
+					       tunnel_udp->udp_port,
+					       tunnel_proto);
+		break;
+	case SFC_UDP_TUNNEL_DEL_PORT:
+		rc = efx_tunnel_config_udp_remove(sa->nic,
+						  tunnel_udp->udp_port,
+						  tunnel_proto);
+		break;
+	default:
+		rc = EINVAL;
+		goto fail_bad_op;
+	}
+
+	if (rc != 0)
+		goto fail_op;
+
+	if (sa->state == SFC_ADAPTER_STARTED) {
+		rc = efx_tunnel_reconfigure(sa->nic);
+		if (rc == EAGAIN) {
+			/*
+			 * Configuration is accepted by FW and MC reboot
+			 * is initiated to apply the changes. MC reboot
+			 * will be handled in a usual way (MC reboot
+			 * event on management event queue and adapter
+			 * restart).
+			 */
+			rc = 0;
+		} else if (rc != 0) {
+			goto fail_reconfigure;
+		}
+	}
+
+	sfc_adapter_unlock(sa);
+	return 0;
+
+fail_reconfigure:
+	/* Remove/restore entry since the change makes the trouble */
+	switch (op) {
+	case SFC_UDP_TUNNEL_ADD_PORT:
+		(void)efx_tunnel_config_udp_remove(sa->nic,
+						   tunnel_udp->udp_port,
+						   tunnel_proto);
+		break;
+	case SFC_UDP_TUNNEL_DEL_PORT:
+		(void)efx_tunnel_config_udp_add(sa->nic,
+						tunnel_udp->udp_port,
+						tunnel_proto);
+		break;
+	}
+
+fail_op:
+fail_bad_op:
+	sfc_adapter_unlock(sa);
+
+fail_bad_proto:
+	SFC_ASSERT(rc > 0);
+	return -rc;
+}
+
+static int
+sfc_dev_udp_tunnel_port_add(struct rte_eth_dev *dev,
+			    struct rte_eth_udp_tunnel *tunnel_udp)
+{
+	return sfc_dev_udp_tunnel_op(dev, tunnel_udp, SFC_UDP_TUNNEL_ADD_PORT);
+}
+
+static int
+sfc_dev_udp_tunnel_port_del(struct rte_eth_dev *dev,
+			    struct rte_eth_udp_tunnel *tunnel_udp)
+{
+	return sfc_dev_udp_tunnel_op(dev, tunnel_udp, SFC_UDP_TUNNEL_DEL_PORT);
 }
 
 #if EFSYS_OPT_RX_SCALE
@@ -1515,6 +1656,8 @@ static const struct eth_dev_ops sfc_eth_dev_ops = {
 	.flow_ctrl_get			= sfc_flow_ctrl_get,
 	.flow_ctrl_set			= sfc_flow_ctrl_set,
 	.mac_addr_set			= sfc_mac_addr_set,
+	.udp_tunnel_port_add		= sfc_dev_udp_tunnel_port_add,
+	.udp_tunnel_port_del		= sfc_dev_udp_tunnel_port_del,
 #if EFSYS_OPT_RX_SCALE
 	.reta_update			= sfc_dev_rss_reta_update,
 	.reta_query			= sfc_dev_rss_reta_query,
