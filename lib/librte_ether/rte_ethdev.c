@@ -233,7 +233,6 @@ rte_eth_dev_allocate(const char *name)
 		return NULL;
 	}
 
-	memset(&rte_eth_dev_data[port_id], 0, sizeof(struct rte_eth_dev_data));
 	eth_dev = eth_dev_get(port_id);
 	snprintf(eth_dev->data->name, sizeof(eth_dev->data->name), "%s", name);
 	eth_dev->data->port_id = port_id;
@@ -279,6 +278,7 @@ rte_eth_dev_release_port(struct rte_eth_dev *eth_dev)
 	if (eth_dev == NULL)
 		return -EINVAL;
 
+	memset(eth_dev->data, 0, sizeof(struct rte_eth_dev_data));
 	eth_dev->state = RTE_ETH_DEV_UNUSED;
 	return 0;
 }
