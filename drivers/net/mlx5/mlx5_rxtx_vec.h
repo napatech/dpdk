@@ -115,9 +115,13 @@ mlx5_rx_replenish_bulk_mbuf(struct mlx5_rxq_data *rxq, uint16_t n)
 		rxq->stats.rx_nombuf += n;
 		return;
 	}
-	for (i = 0; i < n; ++i)
+	for (i = 0; i < n; ++i) {
 		wq[i].addr = rte_cpu_to_be_64((uintptr_t)elts[i]->buf_addr +
 					      RTE_PKTMBUF_HEADROOM);
+		/* If there's only one MR, no need to replace LKEY in WQEs. */
+		if (unlikely(!IS_SINGLE_MR(rxq->mr_ctrl.bh_n)))
+			wq[i].lkey = mlx5_rx_mb2mr(rxq, elts[i]);
+	}
 	rxq->rq_ci += n;
 	/* Prevent overflowing into consumed mbufs. */
 	elts_idx = rxq->rq_ci & q_mask;

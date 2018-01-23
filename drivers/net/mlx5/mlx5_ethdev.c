@@ -408,6 +408,11 @@ mlx5_dev_configure(struct rte_eth_dev *dev)
 	ret = mlx5_rss_reta_index_resize(dev, reta_idx_n);
 	if (ret)
 		return ret;
+	if (mlx5_mr_register_memseg(dev)) {
+		DRV_LOG(ERR, "%p: MR registration failed", (void *)dev);
+		rte_errno = ENOMEM;
+		return -rte_errno;
+	}
 	/* When the number of RX queues is not a power of two, the remaining
 	 * table entries are padded with reused WQs and hashes are not spread
 	 * uniformly. */

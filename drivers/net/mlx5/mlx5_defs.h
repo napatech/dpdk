@@ -129,6 +129,12 @@
  */
 #define MLX5_UAR_OFFSET (1ULL << 32)
 
+/* Size of per-queue MR cache table. */
+#define MLX5_MR_CACHE_N 8
+
+/* First entry must be NULL for comparison. */
+#define MLX5_MR_LOOKUP_TABLE_PAD 1
+
 /* Definition of static_assert found in /usr/include/assert.h */
 #ifndef HAVE_STATIC_ASSERT
 #define static_assert _Static_assert

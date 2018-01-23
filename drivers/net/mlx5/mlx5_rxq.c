@@ -595,16 +595,6 @@ mlx5_rxq_ibv_new(struct rte_eth_dev *dev, uint16_t idx)
 		goto error;
 	}
 	tmpl->rxq_ctrl = rxq_ctrl;
-	/* Use the entire RX mempool as the memory region. */
-	tmpl->mr = mlx5_mr_get(dev, rxq_data->mp);
-	if (!tmpl->mr) {
-		tmpl->mr = mlx5_mr_new(dev, rxq_data->mp);
-		if (!tmpl->mr) {
-			DRV_LOG(ERR, "port %u: memeroy region creation failure",
-				dev->data->port_id);
-			goto error;
-		}
-	}
 	if (rxq_ctrl->irq) {
 		tmpl->channel = ibv_create_comp_channel(priv->ctx);
 		if (!tmpl->channel) {
@@ -737,14 +727,14 @@ mlx5_rxq_ibv_new(struct rte_eth_dev *dev, uint16_t idx)
 	for (i = 0; (i != (unsigned int)(1 << rxq_data->elts_n)); ++i) {
 		struct rte_mbuf *buf = (*rxq_data->elts)[i];
 		volatile struct mlx5_wqe_data_seg *scat = &(*rxq_data->wqes)[i];
+		uintptr_t addr = rte_pktmbuf_mtod(buf, uintptr_t);
 
 		/* scat->addr must be able to store a pointer. */
 		assert(sizeof(scat->addr) >= sizeof(uintptr_t));
 		*scat = (struct mlx5_wqe_data_seg){
-			.addr = rte_cpu_to_be_64(rte_pktmbuf_mtod(buf,
-								  uintptr_t)),
+			.addr = rte_cpu_to_be_64(addr),
 			.byte_count = rte_cpu_to_be_32(DATA_LEN(buf)),
-			.lkey = tmpl->mr->lkey,
+			.lkey = mlx5_rx_mb2mr(rxq_data, buf)
 		};
 	}
 	rxq_data->rq_db = rwq.dbrec;
@@ -780,8 +770,6 @@ error:
 		claim_zero(ibv_destroy_cq(tmpl->cq));
 	if (tmpl->channel)
 		claim_zero(ibv_destroy_comp_channel(tmpl->channel));
-	if (tmpl->mr)
-		mlx5_mr_release(tmpl->mr);
 	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_NONE;
 	rte_errno = ret; /* Restore rte_errno. */
 	return NULL;
@@ -811,7 +799,6 @@ mlx5_rxq_ibv_get(struct rte_eth_dev *dev, uint16_t idx)
 		return NULL;
 	rxq_ctrl = container_of(rxq_data, struct mlx5_rxq_ctrl, rxq);
 	if (rxq_ctrl->ibv) {
-		mlx5_mr_get(dev, rxq_data->mp);
 		rte_atomic32_inc(&rxq_ctrl->ibv->refcnt);
 		DRV_LOG(DEBUG, "port %u Verbs Rx queue %u: refcnt %d",
 			dev->data->port_id, rxq_ctrl->idx,
@@ -832,15 +819,9 @@ mlx5_rxq_ibv_get(struct rte_eth_dev *dev, uint16_t idx)
 int
 mlx5_rxq_ibv_release(struct mlx5_rxq_ibv *rxq_ibv)
 {
-	int ret;
-
 	assert(rxq_ibv);
 	assert(rxq_ibv->wq);
 	assert(rxq_ibv->cq);
-	assert(rxq_ibv->mr);
-	ret = mlx5_mr_release(rxq_ibv->mr);
-	if (!ret)
-		rxq_ibv->mr = NULL;
 	DRV_LOG(DEBUG, "port %u Verbs Rx queue %u: refcnt %d",
 		PORT_ID(rxq_ibv->rxq_ctrl->priv),
 		rxq_ibv->rxq_ctrl->idx, rte_atomic32_read(&rxq_ibv->refcnt));
@@ -918,10 +899,12 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	const uint16_t desc_n =
 		desc + priv->rx_vec_en * MLX5_VPMD_DESCS_PER_LOOP;
 	unsigned int mb_len = rte_pktmbuf_data_room_size(mp);
+	const unsigned int mr_n = MR_TABLE_SZ(priv->mr_n);
 
 	tmpl = rte_calloc_socket("RXQ", 1,
 				 sizeof(*tmpl) +
-				 desc_n * sizeof(struct rte_mbuf *),
+				 desc_n * sizeof(struct rte_mbuf *) +
+				 mr_n * sizeof(struct mlx5_mr_cache),
 				 0, socket);
 	if (!tmpl) {
 		rte_errno = ENOMEM;
@@ -1023,6 +1006,13 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		MLX5_VPMD_RXQ_RPLNSH_THRESH(1 << tmpl->rxq.elts_n);
 	tmpl->rxq.elts =
 		(struct rte_mbuf *(*)[1 << tmpl->rxq.elts_n])(tmpl + 1);
+	tmpl->rxq.mr_ctrl.cache_bh =
+		(struct mlx5_mr_cache (*)[mr_n])&(*tmpl->rxq.elts)[desc_n];
+	tmpl->rxq.mr_ctrl.bh_n =
+		mlx5_mr_update_mp(dev, *tmpl->rxq.mr_ctrl.cache_bh,
+				  tmpl->rxq.mr_ctrl.bh_n, mp);
+	DRV_LOG(DEBUG, "Rx MR lookup table: %u entires built",
+		MR_N(tmpl->rxq.mr_ctrl.bh_n));
 	tmpl->idx = idx;
 	rte_atomic32_inc(&tmpl->refcnt);
 	DRV_LOG(DEBUG, "port %u Rx queue %u: refcnt %d", dev->data->port_id,

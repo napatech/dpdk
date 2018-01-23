@@ -74,17 +74,10 @@ mlx5_txq_start(struct rte_eth_dev *dev)
 	int ret;
 
 	for (i = 0; i != priv->txqs_n; ++i) {
-		unsigned int idx = 0;
-		struct mlx5_mr *mr;
 		struct mlx5_txq_ctrl *txq_ctrl = mlx5_txq_get(dev, i);
 
 		if (!txq_ctrl)
 			continue;
-		LIST_FOREACH(mr, &priv->mr, next) {
-			mlx5_txq_mp2mr_reg(&txq_ctrl->txq, mr->mp, idx++);
-			if (idx == MLX5_PMD_TX_MP_CACHE)
-				break;
-		}
 		txq_alloc_elts(txq_ctrl);
 		txq_ctrl->ibv = mlx5_txq_ibv_new(dev, i);
 		if (!txq_ctrl->ibv) {
@@ -177,7 +170,6 @@ int
 mlx5_dev_start(struct rte_eth_dev *dev)
 {
 	struct priv *priv = dev->data->dev_private;
-	struct mlx5_mr *mr = NULL;
 	int ret;
 
 	DRV_LOG(DEBUG, "port %u starting device", dev->data->port_id);
@@ -187,7 +179,6 @@ mlx5_dev_start(struct rte_eth_dev *dev)
 			dev->data->port_id, strerror(rte_errno));
 		goto error;
 	}
-	rte_mempool_walk(mlx5_mp2mr_iter, priv);
 	ret = mlx5_txq_start(dev);
 	if (ret) {
 		DRV_LOG(ERR, "port %u Tx queue allocation failed: %s",
@@ -229,8 +220,6 @@ error:
 	ret = rte_errno; /* Save rte_errno before cleanup. */
 	/* Rollback. */
 	dev->data->dev_started = 0;
-	for (mr = LIST_FIRST(&priv->mr); mr; mr = LIST_FIRST(&priv->mr))
-		mlx5_mr_release(mr);
 	mlx5_flow_stop(dev, &priv->flows);
 	mlx5_traffic_disable(dev);
 	mlx5_txq_stop(dev);
@@ -252,7 +241,6 @@ void
 mlx5_dev_stop(struct rte_eth_dev *dev)
 {
 	struct priv *priv = dev->data->dev_private;
-	struct mlx5_mr *mr;
 
 	dev->data->dev_started = 0;
 	/* Prevent crashes when queues are still in use. */
@@ -267,8 +255,6 @@ mlx5_dev_stop(struct rte_eth_dev *dev)
 	mlx5_dev_interrupt_handler_uninstall(dev);
 	mlx5_txq_stop(dev);
 	mlx5_rxq_stop(dev);
-	for (mr = LIST_FIRST(&priv->mr); mr; mr = LIST_FIRST(&priv->mr))
-		mlx5_mr_release(mr);
 	mlx5_flow_delete_drop_queue(dev);
 }
 

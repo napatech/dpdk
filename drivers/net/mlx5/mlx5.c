@@ -243,6 +243,7 @@ mlx5_dev_close(struct rte_eth_dev *dev)
 		priv->txqs_n = 0;
 		priv->txqs = NULL;
 	}
+	mlx5_mr_deregister_memseg(dev);
 	if (priv->pd != NULL) {
 		assert(priv->ctx != NULL);
 		claim_zero(ibv_dealloc_pd(priv->pd));
@@ -282,10 +283,6 @@ mlx5_dev_close(struct rte_eth_dev *dev)
 	ret = mlx5_flow_verify(dev);
 	if (ret)
 		DRV_LOG(WARNING, "port %u some flows still remain",
-			dev->data->port_id);
-	ret = mlx5_mr_verify(dev);
-	if (ret)
-		DRV_LOG(WARNING, "port %u some memory region still remain",
 			dev->data->port_id);
 	memset(priv, 0, sizeof(*priv));
 }

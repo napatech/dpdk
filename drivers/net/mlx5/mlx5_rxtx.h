@@ -82,16 +82,36 @@ struct mlx5_txq_stats {
 
 struct priv;
 
-/* Memory region queue object. */
+/* Memory Region object. */
 struct mlx5_mr {
-	LIST_ENTRY(mlx5_mr) next; /**< Pointer to the next element. */
-	rte_atomic32_t refcnt; /*<< Reference counter. */
-	uint32_t lkey; /*<< rte_cpu_to_be_32(mr->lkey) */
-	uintptr_t start; /* Start address of MR */
-	uintptr_t end; /* End address of MR */
-	struct ibv_mr *mr; /*<< Memory Region. */
-	struct rte_mempool *mp; /*<< Memory Pool. */
+	const struct rte_memseg *memseg;
+	struct ibv_mr *ibv_mr; /* Verbs Memory Region. */
 };
+
+/* Cache entry for Memory Region. */
+struct mlx5_mr_cache {
+	uintptr_t start; /* Start address of MR. */
+	uintptr_t end; /* End address of MR. */
+	uint32_t lkey; /* rte_cpu_to_be_32(ibv_mr->lkey). */
+} __rte_packed;
+
+/* Per-queue MR control descriptor. */
+struct mlx5_mr_ctrl {
+	uint16_t bh_n; /* Size of MR cache table for bottom-half. */
+	uint16_t mru; /* Index of last hit entry. */
+	uint16_t head; /* Index of the oldest entry. */
+	struct mlx5_mr_cache cache[MLX5_MR_CACHE_N]; /* MR cache. */
+	struct mlx5_mr_cache (*cache_bh)[]; /* MR cache for bottom-half. */
+} __rte_packed;
+
+/* MR table size including padding at index 0. */
+#define MR_TABLE_SZ(n) ((n) + MLX5_MR_LOOKUP_TABLE_PAD)
+
+/* Actual table size excluding padding at index 0. */
+#define MR_N(n) ((n) - MLX5_MR_LOOKUP_TABLE_PAD)
+
+/* Whether there's only one entry in MR lookup table. */
+#define IS_SINGLE_MR(n) (MR_N(n) <= 1)
 
 /* Compressed CQE context. */
 struct rxq_zip {
@@ -122,6 +142,7 @@ struct mlx5_rxq_data {
 	uint16_t rq_pi;
 	uint16_t cq_ci;
 	uint16_t rq_repl_thresh; /* Threshold for buffer replenishment. */
+	struct mlx5_mr_ctrl mr_ctrl;
 	volatile struct mlx5_wqe_data_seg(*wqes)[];
 	volatile struct mlx5_cqe(*cqes)[];
 	struct rxq_zip zip; /* Compressed context. */
@@ -143,7 +164,6 @@ struct mlx5_rxq_ibv {
 	struct ibv_cq *cq; /* Completion Queue. */
 	struct ibv_wq *wq; /* Work Queue. */
 	struct ibv_comp_channel *channel;
-	struct mlx5_mr *mr; /* Memory Region (for mp). */
 };
 
 /* RX queue control descriptor. */
@@ -201,15 +221,14 @@ struct mlx5_txq_data {
 	uint16_t mpw_hdr_dseg:1; /* Enable DSEGs in the title WQEBB. */
 	uint16_t max_inline; /* Multiple of RTE_CACHE_LINE_SIZE to inline. */
 	uint16_t inline_max_packet_sz; /* Max packet size for inlining. */
-	uint16_t mr_cache_idx; /* Index of last hit entry. */
 	uint32_t qp_num_8s; /* QP number shifted by 8. */
 	uint32_t flags; /* Flags for Tx Queue. */
+	struct mlx5_mr_ctrl mr_ctrl;
 	volatile struct mlx5_cqe (*cqes)[]; /* Completion queue. */
 	volatile void *wqes; /* Work queue (use volatile to write into). */
 	volatile uint32_t *qp_db; /* Work queue doorbell. */
 	volatile uint32_t *cq_db; /* Completion queue doorbell. */
 	volatile void *bf_reg; /* Blueflame register remapped. */
-	struct mlx5_mr *mp2mr[MLX5_PMD_TX_MP_CACHE]; /* MR translation table. */
 	struct rte_mbuf *(*elts)[]; /* TX elements. */
 	struct mlx5_txq_stats stats; /* TX queue counters. */
 } __rte_cache_aligned;
@@ -338,9 +357,10 @@ uint16_t mlx5_rx_burst_vec(void *dpdk_txq, struct rte_mbuf **pkts,
 
 /* mlx5_mr.c */
 
-void mlx5_mp2mr_iter(struct rte_mempool *mp, void *arg);
-struct mlx5_mr *mlx5_txq_mp2mr_reg(struct mlx5_txq_data *txq,
-				   struct rte_mempool *mp, unsigned int idx);
+int mlx5_mr_update_mp(struct rte_eth_dev *dev, struct mlx5_mr_cache *lkp_tbl,
+		      uint16_t n, struct rte_mempool *mp);
+uint32_t mlx5_rx_mb2mr_bh(struct mlx5_rxq_data *rxq, uintptr_t addr);
+uint32_t mlx5_tx_mb2mr_bh(struct mlx5_txq_data *txq, uintptr_t addr);
 
 #ifndef NDEBUG
 /**
@@ -528,76 +548,101 @@ mlx5_tx_complete(struct mlx5_txq_data *txq)
 }
 
 /**
- * Get Memory Pool (MP) from mbuf. If mbuf is indirect, the pool from which
- * the cloned mbuf is allocated is returned instead.
+ * Look up LKEY from given lookup table by linear search. Firstly look up the
+ * last-hit entry. If miss, the entire array is searched. If found, update the
+ * last-hit index and return LKEY.
  *
- * @param buf
- *   Pointer to mbuf.
+ * @param lkp_tbl
+ *   Pointer to lookup table.
+ * @param[in,out] cached_idx
+ *   Pointer to last-hit index.
+ * @param n
+ *   Size of lookup table.
+ * @param addr
+ *   Search key.
  *
  * @return
- *   Memory pool where data is located for given mbuf.
+ *   Searched LKEY on success, UINT32_MAX on no match.
  */
-static struct rte_mempool *
-mlx5_tx_mb2mp(struct rte_mbuf *buf)
+static __rte_always_inline uint32_t
+mlx5_mr_lookup_cache(struct mlx5_mr_cache *lkp_tbl, uint16_t *cached_idx,
+		     uint16_t n, uintptr_t addr)
 {
-	if (unlikely(RTE_MBUF_INDIRECT(buf)))
-		return rte_mbuf_from_indirect(buf)->pool;
-	return buf->pool;
+	uint16_t idx;
+
+	if (likely(addr >= lkp_tbl[*cached_idx].start &&
+		   addr < lkp_tbl[*cached_idx].end))
+		return lkp_tbl[*cached_idx].lkey;
+	for (idx = 0; idx < n && lkp_tbl[idx].start != 0; ++idx) {
+		if (addr >= lkp_tbl[idx].start &&
+		    addr < lkp_tbl[idx].end) {
+			/* Found. */
+			*cached_idx = idx;
+			return lkp_tbl[idx].lkey;
+		}
+	}
+	return UINT32_MAX;
 }
 
 /**
- * Get Memory Region (MR) <-> rte_mbuf association from txq->mp2mr[].
- * Add MP to txq->mp2mr[] if it's not registered yet. If mp2mr[] is full,
- * remove an entry first.
+ * Query LKEY from address for Rx.
  *
- * @param txq
- *   Pointer to TX queue structure.
- * @param[in] mp
- *   Memory Pool for which a Memory Region lkey must be returned.
+ * @param rxq
+ *   Pointer to Rx queue structure.
+ * @param addr
+ *   Address to search.
  *
  * @return
- *   mr->lkey on success, (uint32_t)-1 on failure.
+ *   LKEY on success.
  */
 static __rte_always_inline uint32_t
-mlx5_tx_mb2mr(struct mlx5_txq_data *txq, struct rte_mbuf *mb)
+mlx5_rx_addr2mr(struct mlx5_rxq_data *rxq, uintptr_t addr)
 {
-	uint16_t i = txq->mr_cache_idx;
-	uintptr_t addr = rte_pktmbuf_mtod(mb, uintptr_t);
-	struct mlx5_mr *mr;
+	uint32_t lkey;
 
-	assert(i < RTE_DIM(txq->mp2mr));
-	if (likely(txq->mp2mr[i]->start <= addr && txq->mp2mr[i]->end > addr))
-		return txq->mp2mr[i]->lkey;
-	for (i = 0; (i != RTE_DIM(txq->mp2mr)); ++i) {
-		if (unlikely(txq->mp2mr[i] == NULL ||
-		    txq->mp2mr[i]->mr == NULL)) {
-			/* Unknown MP, add a new MR for it. */
-			break;
-		}
-		if (txq->mp2mr[i]->start <= addr &&
-		    txq->mp2mr[i]->end > addr) {
-			assert(txq->mp2mr[i]->lkey != (uint32_t)-1);
-			txq->mr_cache_idx = i;
-			return txq->mp2mr[i]->lkey;
-		}
-	}
-	mr = mlx5_txq_mp2mr_reg(txq, mlx5_tx_mb2mp(mb), i);
-	/*
-	 * Request the reference to use in this queue, the original one is
-	 * kept by the control plane.
-	 */
-	if (mr) {
-		rte_atomic32_inc(&mr->refcnt);
-		txq->mr_cache_idx = i >= RTE_DIM(txq->mp2mr) ? i - 1 : i;
-		return mr->lkey;
-	} else {
-		struct rte_mempool *mp = mlx5_tx_mb2mp(mb);
-
-		DRV_LOG(WARNING, "failed to register mempool 0x%p(%s)",
-			(void *)mp, mp->name);
-	}
-	return (uint32_t)-1;
+	/* Linear search on MR cache array. */
+	lkey = mlx5_mr_lookup_cache(rxq->mr_ctrl.cache,
+				    &rxq->mr_ctrl.mru,
+				    MLX5_MR_CACHE_N, addr);
+	if (likely(lkey != UINT32_MAX))
+		return lkey;
+	DEBUG("No found in rxq->mr_cache[], last-hit = %u, head = %u)",
+	      rxq->mr_ctrl.mru, rxq->mr_ctrl.head);
+	/* Take slower bottom-half (binary search) on miss. */
+	return mlx5_rx_mb2mr_bh(rxq, addr);
 }
+
+#define mlx5_rx_mb2mr(rxq, mb) mlx5_rx_addr2mr(rxq, (uintptr_t)((mb)->buf_addr))
+
+/**
+ * Query LKEY from address for Tx.
+ *
+ * @param txq
+ *   Pointer to Tx queue structure.
+ * @param addr
+ *   Address to search.
+ *
+ * @return
+ *   LKEY on success.
+ */
+static __rte_always_inline uint32_t
+mlx5_tx_addr2mr(struct mlx5_txq_data *txq, uintptr_t addr)
+{
+	uint32_t lkey;
+
+	/* Linear search on MR cache array. */
+	lkey = mlx5_mr_lookup_cache(txq->mr_ctrl.cache,
+				    &txq->mr_ctrl.mru,
+				    MLX5_MR_CACHE_N, addr);
+	if (likely(lkey != UINT32_MAX))
+		return lkey;
+	DEBUG("No found in txq->mr_cache[], last-hit = %u, head = %u)",
+	      txq->mr_ctrl.mru, txq->mr_ctrl.head);
+	/* Take slower bottom-half (binary search) on miss. */
+	return mlx5_tx_mb2mr_bh(txq, addr);
+}
+
+#define mlx5_tx_mb2mr(rxq, mb) mlx5_tx_addr2mr(rxq, (uintptr_t)((mb)->buf_addr))
 
 /**
  * Ring TX queue doorbell and flush the update if requested.

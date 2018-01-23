@@ -1920,6 +1920,9 @@ mlx5_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		 * changes.
 		 */
 		wqe->addr = rte_cpu_to_be_64(rte_pktmbuf_mtod(rep, uintptr_t));
+		/* If there's only one MR, no need to replace LKEY in WQEs. */
+		if (unlikely(!IS_SINGLE_MR(rxq->mr_ctrl.bh_n)))
+			wqe->lkey = mlx5_rx_mb2mr(rxq, rep);
 		if (len > DATA_LEN(seg)) {
 			len -= DATA_LEN(seg);
 			++NB_SEGS(pkt);

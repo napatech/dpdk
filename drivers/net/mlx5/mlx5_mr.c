@@ -47,355 +47,398 @@
 #include "mlx5.h"
 #include "mlx5_rxtx.h"
 
-struct mlx5_check_mempool_data {
-	int ret;
-	char *start;
-	char *end;
+struct mr_update_mempool_data {
+	struct rte_eth_dev *dev;
+	struct mlx5_mr_cache *lkp_tbl;
+	uint16_t tbl_sz;
 };
 
-/* Called by mlx5_check_mempool() when iterating the memory chunks. */
-static void
-mlx5_check_mempool_cb(struct rte_mempool *mp __rte_unused,
-		      void *opaque, struct rte_mempool_memhdr *memhdr,
-		      unsigned int mem_idx __rte_unused)
+/**
+ * Look up LKEY from given lookup table by Binary Search, store the last index
+ * and return searched LKEY.
+ *
+ * @param lkp_tbl
+ *   Pointer to lookup table.
+ * @param n
+ *   Size of lookup table.
+ * @param[out] idx
+ *   Pointer to index. Even on searh failure, returns index where it stops
+ *   searching so that index can be used when inserting a new entry.
+ * @param addr
+ *   Search key.
+ *
+ * @return
+ *   Searched LKEY on success, UINT32_MAX on no match.
+ */
+static uint32_t
+mlx5_mr_lookup(struct mlx5_mr_cache *lkp_tbl, uint16_t n, uint16_t *idx,
+	       uintptr_t addr)
 {
-	struct mlx5_check_mempool_data *data = opaque;
+	uint16_t base = 0;
 
-	/* It already failed, skip the next chunks. */
-	if (data->ret != 0)
-		return;
-	/* It is the first chunk. */
-	if (data->start == NULL && data->end == NULL) {
-		data->start = memhdr->addr;
-		data->end = data->start + memhdr->len;
-		return;
-	}
-	if (data->end == memhdr->addr) {
-		data->end += memhdr->len;
-		return;
-	}
-	if (data->start == (char *)memhdr->addr + memhdr->len) {
-		data->start -= memhdr->len;
-		return;
-	}
-	/* Error, mempool is not virtually contiguous. */
-	data->ret = -1;
+	/* First entry must be NULL for comparison. */
+	assert(n == 0 || (lkp_tbl[0].start == 0 &&
+			  lkp_tbl[0].lkey == UINT32_MAX));
+	/* Binary search. */
+	do {
+		register uint16_t delta = n >> 1;
+
+		if (addr < lkp_tbl[base + delta].start) {
+			n = delta;
+		} else {
+			base += delta;
+			n -= delta;
+		}
+	} while (n > 1);
+	assert(addr >= lkp_tbl[base].start);
+	*idx = base;
+	if (addr < lkp_tbl[base].end)
+		return lkp_tbl[base].lkey;
+	/* Not found. */
+	return UINT32_MAX;
 }
 
 /**
- * Check if a mempool can be used: it must be virtually contiguous.
+ * Insert an entry to LKEY lookup table.
  *
- * @param[in] mp
- *   Pointer to memory pool.
- * @param[out] start
- *   Pointer to the start address of the mempool virtual memory area
- * @param[out] end
- *   Pointer to the end address of the mempool virtual memory area
+ * @param lkp_tbl
+ *   Pointer to lookup table. The size of array must be enough to add one more
+ *   entry.
+ * @param n
+ *   Size of lookup table.
+ * @param entry
+ *   Pointer to new entry to insert.
  *
  * @return
- *   0 on success (mempool is virtually contiguous), -1 on error.
+ *   Size of returning lookup table.
  */
 static int
-mlx5_check_mempool(struct rte_mempool *mp, uintptr_t *start,
-		   uintptr_t *end)
+mlx5_mr_insert(struct mlx5_mr_cache *lkp_tbl, uint16_t n,
+	       struct mlx5_mr_cache *entry)
 {
-	struct mlx5_check_mempool_data data;
+	uint16_t idx = 0;
+	size_t shift;
 
-	memset(&data, 0, sizeof(data));
-	rte_mempool_mem_iter(mp, mlx5_check_mempool_cb, &data);
-	*start = (uintptr_t)data.start;
-	*end = (uintptr_t)data.end;
-	return data.ret;
+	/* Check if entry exist. */
+	if (mlx5_mr_lookup(lkp_tbl, n, &idx, entry->start) != UINT32_MAX)
+		return n;
+	/* Insert entry. */
+	++idx;
+	shift = (n - idx) * sizeof(struct mlx5_mr_cache);
+	if (shift)
+		memmove(&lkp_tbl[idx + 1], &lkp_tbl[idx], shift);
+	lkp_tbl[idx] = *entry;
+	DRV_LOG(DEBUG, "%p: inserted lkp_tbl[%u], start = 0x%lx, end = 0x%lx",
+		(void *)lkp_tbl, idx, lkp_tbl[idx].start, lkp_tbl[idx].end);
+	return n + 1;
 }
 
 /**
- * Register a Memory Region (MR) <-> Memory Pool (MP) association in
- * txq->mp2mr[]. If mp2mr[] is full, remove an entry first.
+ * Incrementally update LKEY lookup table for a specific address from registered
+ * Memory Regions.
  *
- * @param txq
- *   Pointer to TX queue structure.
- * @param[in] mp
- *   Memory Pool for which a Memory Region lkey must be returned.
- * @param idx
- *   Index of the next available entry.
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param lkp_tbl
+ *   Pointer to lookup table to fill. The size of array must be at least
+ *   (priv->mr_n + 1).
+ * @param n
+ *   Size of lookup table.
+ * @param addr
+ *   Search key.
  *
  * @return
- *   mr on success, NULL on failure and rte_errno is set.
+ *   Size of returning lookup table.
  */
-struct mlx5_mr *
-mlx5_txq_mp2mr_reg(struct mlx5_txq_data *txq, struct rte_mempool *mp,
-		   unsigned int idx)
+static int
+mlx5_mr_update_addr(struct rte_eth_dev *dev, struct mlx5_mr_cache *lkp_tbl,
+		    uint16_t n, uintptr_t addr)
+{
+	struct priv *priv = dev->data->dev_private;
+	uint16_t idx;
+	uint32_t ret __rte_unused;
+
+	if (n == 0) {
+		/* First entry must be NULL for comparison. */
+		lkp_tbl[n++] = (struct mlx5_mr_cache) {
+			.lkey = UINT32_MAX,
+		};
+	}
+	ret = mlx5_mr_lookup(*priv->mr_cache, MR_TABLE_SZ(priv->mr_n),
+			     &idx, addr);
+	/* Lookup must succeed, the global cache is all-inclusive. */
+	assert(ret != UINT32_MAX);
+	DRV_LOG(DEBUG, "port %u adding LKEY (0x%x) for addr 0x%lx",
+		dev->data->port_id, (*priv->mr_cache)[idx].lkey, addr);
+	return mlx5_mr_insert(lkp_tbl, n, &(*priv->mr_cache)[idx]);
+}
+
+/**
+ * Bottom-half of LKEY search on datapath. Firstly search in cache_bh[] and if
+ * misses, search in the global MR cache table and update the new entry to
+ * per-queue local caches.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param mr_ctrl
+ *   Pointer to per-queue MR control structure.
+ * @param addr
+ *   Search key.
+ *
+ * @return
+ *   LKEY on success.
+ */
+static inline uint32_t
+mlx5_mr_mb2mr_bh(struct rte_eth_dev *dev, struct mlx5_mr_ctrl *mr_ctrl,
+		 uintptr_t addr)
+{
+	uint32_t lkey;
+	uint16_t bh_idx = 0;
+	struct mlx5_mr_cache *mr_cache = &mr_ctrl->cache[mr_ctrl->head];
+
+	/* Binary-search MR translation table. */
+	lkey = mlx5_mr_lookup(*mr_ctrl->cache_bh, mr_ctrl->bh_n, &bh_idx, addr);
+	if (likely(lkey != UINT32_MAX)) {
+		/* Update cache. */
+		*mr_cache = (*mr_ctrl->cache_bh)[bh_idx];
+		mr_ctrl->mru = mr_ctrl->head;
+		/* Point to the next victim, the oldest. */
+		mr_ctrl->head = (mr_ctrl->head + 1) % MLX5_MR_CACHE_N;
+		return lkey;
+	}
+	/* Missed in the per-queue lookup table. Search in the global cache. */
+	mr_ctrl->bh_n = mlx5_mr_update_addr(dev, *mr_ctrl->cache_bh,
+					    mr_ctrl->bh_n, addr);
+	/* Search again with updated entries. */
+	lkey = mlx5_mr_lookup(*mr_ctrl->cache_bh, mr_ctrl->bh_n, &bh_idx, addr);
+	/* Must always succeed. */
+	assert(lkey != UINT32_MAX);
+	/* Update cache. */
+	*mr_cache = (*mr_ctrl->cache_bh)[bh_idx];
+	mr_ctrl->mru = mr_ctrl->head;
+	/* Point to the next victim, the oldest. */
+	mr_ctrl->head = (mr_ctrl->head + 1) % MLX5_MR_CACHE_N;
+	return lkey;
+}
+
+/**
+ * Bottom-half of mlx5_rx_mb2mr() if search on mr_cache_bh[] fails.
+ *
+ * @param rxq
+ *   Pointer to Rx queue structure.
+ * @param addr
+ *   Search key.
+ *
+ * @return
+ *   LKEY on success.
+ */
+uint32_t
+mlx5_rx_mb2mr_bh(struct mlx5_rxq_data *rxq, uintptr_t addr)
+{
+	struct mlx5_rxq_ctrl *rxq_ctrl =
+		container_of(rxq, struct mlx5_rxq_ctrl, rxq);
+
+	DRV_LOG(DEBUG,
+		"port %u not found in rxq->mr_cache[], last-hit=%u, head=%u",
+		PORT_ID(rxq_ctrl->priv), rxq->mr_ctrl.mru, rxq->mr_ctrl.head);
+	return mlx5_mr_mb2mr_bh(ETH_DEV(rxq_ctrl->priv), &rxq->mr_ctrl, addr);
+}
+
+/**
+ * Bottom-half of mlx5_tx_mb2mr() if search on cache_bh[] fails.
+ *
+ * @param txq
+ *   Pointer to Tx queue structure.
+ * @param addr
+ *   Search key.
+ *
+ * @return
+ *   LKEY on success.
+ */
+uint32_t
+mlx5_tx_mb2mr_bh(struct mlx5_txq_data *txq, uintptr_t addr)
 {
 	struct mlx5_txq_ctrl *txq_ctrl =
 		container_of(txq, struct mlx5_txq_ctrl, txq);
-	struct rte_eth_dev *dev;
-	struct mlx5_mr *mr;
 
-	rte_spinlock_lock(&txq_ctrl->priv->mr_lock);
-	/* Add a new entry, register MR first. */
-	DRV_LOG(DEBUG, "port %u discovered new memory pool \"%s\" (%p)",
-		PORT_ID(txq_ctrl->priv), mp->name, (void *)mp);
-	dev = ETH_DEV(txq_ctrl->priv);
-	mr = mlx5_mr_get(dev, mp);
-	if (mr == NULL) {
-		if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
-			DRV_LOG(DEBUG,
-				"port %u using unregistered mempool 0x%p(%s)"
-				" in secondary process, please create mempool"
-				" before rte_eth_dev_start()",
-				PORT_ID(txq_ctrl->priv), (void *)mp, mp->name);
-			rte_spinlock_unlock(&txq_ctrl->priv->mr_lock);
-			rte_errno = ENOTSUP;
-			return NULL;
-		}
-		mr = mlx5_mr_new(dev, mp);
-	}
-	if (unlikely(mr == NULL)) {
-		DRV_LOG(DEBUG,
-			"port %u unable to configure memory region,"
-			" ibv_reg_mr() failed.",
-			PORT_ID(txq_ctrl->priv));
-		rte_spinlock_unlock(&txq_ctrl->priv->mr_lock);
-		return NULL;
-	}
-	if (unlikely(idx == RTE_DIM(txq->mp2mr))) {
-		/* Table is full, remove oldest entry. */
-		DRV_LOG(DEBUG,
-			"port %u memory region <-> memory pool table full, "
-			" dropping oldest entry",
-			PORT_ID(txq_ctrl->priv));
-		--idx;
-		mlx5_mr_release(txq->mp2mr[0]);
-		memmove(&txq->mp2mr[0], &txq->mp2mr[1],
-			(sizeof(txq->mp2mr) - sizeof(txq->mp2mr[0])));
-	}
-	/* Store the new entry. */
-	txq_ctrl->txq.mp2mr[idx] = mr;
 	DRV_LOG(DEBUG,
-		"port %u new memory region lkey for MP \"%s\" (%p): 0x%08"
-		PRIu32,
-		PORT_ID(txq_ctrl->priv), mp->name, (void *)mp,
-		txq_ctrl->txq.mp2mr[idx]->lkey);
-	rte_spinlock_unlock(&txq_ctrl->priv->mr_lock);
-	return mr;
+		"port %u not found in txq->mr_cache[], last-hit=%u, head=%u",
+		PORT_ID(txq_ctrl->priv), txq->mr_ctrl.mru, txq->mr_ctrl.head);
+	return mlx5_mr_mb2mr_bh(ETH_DEV(txq_ctrl->priv), &txq->mr_ctrl, addr);
 }
 
-struct mlx5_mp2mr_mbuf_check_data {
-	int ret;
-};
-
-/**
- * Callback function for rte_mempool_obj_iter() to check whether a given
- * mempool object looks like a mbuf.
- *
- * @param[in] mp
- *   The mempool pointer
- * @param[in] arg
- *   Context data (struct txq_mp2mr_mbuf_check_data). Contains the
- *   return value.
- * @param[in] obj
- *   Object address.
- * @param index
- *   Object index, unused.
- */
+/* Called by mr_update_mempool() when iterating the memory chunks. */
 static void
-txq_mp2mr_mbuf_check(struct rte_mempool *mp, void *arg, void *obj,
-	uint32_t index __rte_unused)
+mr_update_mempool_cb(struct rte_mempool *mp __rte_unused,
+		    void *opaque, struct rte_mempool_memhdr *memhdr,
+		    unsigned int mem_idx __rte_unused)
 {
-	struct mlx5_mp2mr_mbuf_check_data *data = arg;
-	struct rte_mbuf *buf = obj;
+	struct mr_update_mempool_data *data = opaque;
 
-	/*
-	 * Check whether mbuf structure fits element size and whether mempool
-	 * pointer is valid.
-	 */
-	if (sizeof(*buf) > mp->elt_size || buf->pool != mp)
-		data->ret = -1;
+	DRV_LOG(DEBUG, "port %u adding chunk[%u] of %s",
+		data->dev->data->port_id, mem_idx, mp->name);
+	data->tbl_sz =
+		mlx5_mr_update_addr(data->dev, data->lkp_tbl, data->tbl_sz,
+				    (uintptr_t)memhdr->addr);
 }
 
 /**
- * Iterator function for rte_mempool_walk() to register existing mempools and
- * fill the MP to MR cache of a TX queue.
- *
- * @param[in] mp
- *   Memory Pool to register.
- * @param *arg
- *   Pointer to TX queue structure.
- */
-void
-mlx5_mp2mr_iter(struct rte_mempool *mp, void *arg)
-{
-	struct priv *priv = (struct priv *)arg;
-	struct mlx5_mp2mr_mbuf_check_data data = {
-		.ret = 0,
-	};
-	struct mlx5_mr *mr;
-
-	/* Register mempool only if the first element looks like a mbuf. */
-	if (rte_mempool_obj_iter(mp, txq_mp2mr_mbuf_check, &data) == 0 ||
-			data.ret == -1)
-		return;
-	mr = mlx5_mr_get(ETH_DEV(priv), mp);
-	if (mr) {
-		mlx5_mr_release(mr);
-		return;
-	}
-	mr = mlx5_mr_new(ETH_DEV(priv), mp);
-	if (!mr)
-		DRV_LOG(ERR, "port %u cannot create memory region: %s",
-			PORT_ID(priv), strerror(rte_errno));
-}
-
-/**
- * Register a new memory region from the mempool and store it in the memory
- * region list.
+ * Incrementally update LKEY lookup table for a specific Memory Pool from
+ * registered Memory Regions.
  *
  * @param dev
  *   Pointer to Ethernet device.
- * @param mp
- *   Pointer to the memory pool to register.
+ * @param[out] lkp_tbl
+ *   Pointer to lookup table to fill. The size of array must be at least
+ *   (priv->static_mr_n + 1).
+ * @param n
+ *   Size of lookup table.
+ * @param[in] mp
+ *   Pointer to Memory Pool.
  *
  * @return
- *   The memory region on success, NULL on failure and rte_errno is set.
+ *   Size of returning lookup table.
  */
-struct mlx5_mr *
-mlx5_mr_new(struct rte_eth_dev *dev, struct rte_mempool *mp)
+int
+mlx5_mr_update_mp(struct rte_eth_dev *dev, struct mlx5_mr_cache *lkp_tbl,
+		  uint16_t n, struct rte_mempool *mp)
+{
+	struct mr_update_mempool_data data = {
+		.dev = dev,
+		.lkp_tbl = lkp_tbl,
+		.tbl_sz = n
+	};
+
+	rte_mempool_mem_iter(mp, mr_update_mempool_cb, &data);
+	return data.tbl_sz;
+}
+
+/* Called by qsort() to compare MR entries. */
+static int
+mr_comp_addr(const void *m1, const void *m2)
+{
+	const struct mlx5_mr *mi1 = m1;
+	const struct mlx5_mr *mi2 = m2;
+
+	if (mi1->memseg->addr < mi2->memseg->addr)
+		return -1;
+	else if (mi1->memseg->addr > mi2->memseg->addr)
+		return 1;
+	else
+		return 0;
+}
+
+/**
+ * Register entire physical memory to Verbs.
+ *
+ * @param dev
+ *   Pointer to Ethernet device.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+int
+mlx5_mr_register_memseg(struct rte_eth_dev *dev)
 {
 	struct priv *priv = dev->data->dev_private;
 	const struct rte_memseg *ms = rte_eal_get_physmem_layout();
-	uintptr_t start;
-	uintptr_t end;
-	unsigned int i;
 	struct mlx5_mr *mr;
+	struct mlx5_mr_cache *mr_cache;
+	unsigned int i;
 
-	mr = rte_zmalloc_socket(__func__, sizeof(*mr), 0, mp->socket_id);
-	if (!mr) {
-		DRV_LOG(DEBUG,
-			"port %u unable to configure memory region,"
-			" ibv_reg_mr() failed.",
+	if (priv->mr_n != 0)
+		return 0;
+	/* Count the existing memsegs in the system. */
+	for (i = 0; (i < RTE_MAX_MEMSEG) && (ms[i].addr != NULL); ++i)
+		++priv->mr_n;
+	priv->mr = rte_calloc(__func__, priv->mr_n, sizeof(*mr), 0);
+	if (priv->mr == NULL) {
+		DRV_LOG(ERR,
+			"port %u cannot allocate memory for array of static MR",
 			dev->data->port_id);
 		rte_errno = ENOMEM;
-		return NULL;
+		return -rte_errno;
 	}
-	if (mlx5_check_mempool(mp, &start, &end) != 0) {
-		DRV_LOG(ERR, "port %u mempool %p: not virtually contiguous",
-			dev->data->port_id, (void *)mp);
+	priv->mr_cache = rte_calloc(__func__, MR_TABLE_SZ(priv->mr_n),
+				    sizeof(*mr_cache), 0);
+	if (priv->mr_cache == NULL) {
+		DRV_LOG(ERR,
+			"port %u cannot allocate memory for array of MR cache",
+			dev->data->port_id);
+		rte_free(priv->mr);
 		rte_errno = ENOMEM;
-		return NULL;
+		return -rte_errno;
 	}
-	DRV_LOG(DEBUG, "port %u mempool %p area start=%p end=%p size=%zu",
-		dev->data->port_id, (void *)mp, (void *)start, (void *)end,
-		(size_t)(end - start));
-	/* Save original addresses for exact MR lookup. */
-	mr->start = start;
-	mr->end = end;
-	/* Round start and end to page boundary if found in memory segments. */
-	for (i = 0; (i < RTE_MAX_MEMSEG) && (ms[i].addr != NULL); ++i) {
-		uintptr_t addr = (uintptr_t)ms[i].addr;
-		size_t len = ms[i].len;
-		unsigned int align = ms[i].hugepage_sz;
-
-		if ((start > addr) && (start < addr + len))
-			start = RTE_ALIGN_FLOOR(start, align);
-		if ((end > addr) && (end < addr + len))
-			end = RTE_ALIGN_CEIL(end, align);
-	}
-	DRV_LOG(DEBUG,
-		"port %u mempool %p using start=%p end=%p size=%zu for memory"
-		" region",
-		dev->data->port_id, (void *)mp, (void *)start, (void *)end,
-		(size_t)(end - start));
-	mr->mr = ibv_reg_mr(priv->pd, (void *)start, end - start,
-			    IBV_ACCESS_LOCAL_WRITE);
-	if (!mr->mr) {
-		rte_errno = ENOMEM;
-		return NULL;
-	}
-	mr->mp = mp;
-	mr->lkey = rte_cpu_to_be_32(mr->mr->lkey);
-	rte_atomic32_inc(&mr->refcnt);
-	DRV_LOG(DEBUG, "port %u new memory Region %p refcnt: %d",
-		dev->data->port_id, (void *)mr, rte_atomic32_read(&mr->refcnt));
-	LIST_INSERT_HEAD(&priv->mr, mr, next);
-	return mr;
-}
-
-/**
- * Search the memory region object in the memory region list.
- *
- * @param dev
- *   Pointer to Ethernet device.
- * @param mp
- *   Pointer to the memory pool to register.
- *
- * @return
- *   The memory region on success.
- */
-struct mlx5_mr *
-mlx5_mr_get(struct rte_eth_dev *dev, struct rte_mempool *mp)
-{
-	struct priv *priv = dev->data->dev_private;
-	struct mlx5_mr *mr;
-
-	assert(mp);
-	if (LIST_EMPTY(&priv->mr))
-		return NULL;
-	LIST_FOREACH(mr, &priv->mr, next) {
-		if (mr->mp == mp) {
-			rte_atomic32_inc(&mr->refcnt);
-			DRV_LOG(DEBUG, "port %u memory region %p refcnt: %d",
-				dev->data->port_id, (void *)mr,
-				rte_atomic32_read(&mr->refcnt));
-			return mr;
+	for (i = 0; i < priv->mr_n; ++i) {
+		mr = &(*priv->mr)[i];
+		mr->memseg = &ms[i];
+		mr->ibv_mr = ibv_reg_mr(priv->pd,
+					mr->memseg->addr, mr->memseg->len,
+					IBV_ACCESS_LOCAL_WRITE);
+		if (mr->ibv_mr == NULL) {
+			rte_dump_physmem_layout(stderr);
+			DRV_LOG(ERR, "port %u cannot register memseg[%u]",
+				dev->data->port_id, i);
+			goto error;
 		}
 	}
-	return NULL;
-}
-
-/**
- * Release the memory region object.
- *
- * @param  mr
- *   Pointer to memory region to release.
- *
- * @return
- *   1 while a reference on it exists, 0 when freed.
- */
-int
-mlx5_mr_release(struct mlx5_mr *mr)
-{
-	assert(mr);
-	DRV_LOG(DEBUG, "memory region %p refcnt: %d", (void *)mr,
-		rte_atomic32_read(&mr->refcnt));
-	if (rte_atomic32_dec_and_test(&mr->refcnt)) {
-		claim_zero(ibv_dereg_mr(mr->mr));
-		LIST_REMOVE(mr, next);
-		rte_free(mr);
-		return 0;
+	/* Sort by virtual address. */
+	qsort(*priv->mr, priv->mr_n, sizeof(struct mlx5_mr), mr_comp_addr);
+	/* First entry must be NULL for comparison. */
+	(*priv->mr_cache)[0] = (struct mlx5_mr_cache) {
+		.lkey = UINT32_MAX,
+	};
+	/* Compile global all-inclusive MR cache table. */
+	for (i = 0; i < priv->mr_n; ++i) {
+		mr = &(*priv->mr)[i];
+		mr_cache = &(*priv->mr_cache)[i + 1];
+		/* Paranoid, mr[] must be sorted. */
+		assert(i == 0 || mr->memseg->addr > (mr - 1)->memseg->addr);
+		*mr_cache = (struct mlx5_mr_cache) {
+			.start = (uintptr_t)mr->memseg->addr,
+			.end = (uintptr_t)mr->memseg->addr + mr->memseg->len,
+			.lkey = rte_cpu_to_be_32(mr->ibv_mr->lkey)
+		};
 	}
-	return 1;
+	return 0;
+error:
+	for (i = 0; i < priv->mr_n; ++i) {
+		mr = &(*priv->mr)[i];
+		if (mr->ibv_mr != NULL)
+			ibv_dereg_mr(mr->ibv_mr);
+	}
+	rte_free(priv->mr);
+	rte_free(priv->mr_cache);
+	rte_errno = ENOMEM;
+	return -rte_errno;
 }
 
 /**
- * Verify the flow list is empty
+ * Deregister all Memory Regions.
  *
  * @param dev
  *   Pointer to Ethernet device.
- *
- * @return
- *   The number of object not released.
  */
-int
-mlx5_mr_verify(struct rte_eth_dev *dev)
+void
+mlx5_mr_deregister_memseg(struct rte_eth_dev *dev)
 {
 	struct priv *priv = dev->data->dev_private;
-	int ret = 0;
-	struct mlx5_mr *mr;
+	unsigned int i;
 
-	LIST_FOREACH(mr, &priv->mr, next) {
-		DRV_LOG(DEBUG, "port %u memory region %p still referenced",
-			dev->data->port_id, (void *)mr);
-		++ret;
+	if (priv->mr_n == 0)
+		return;
+	for (i = 0; i < priv->mr_n; ++i) {
+		struct mlx5_mr *mr;
+
+		mr = &(*priv->mr)[i];
+		/* Physical memory can't be changed dynamically. */
+		assert(mr->memseg != NULL);
+		assert(mr->ibv_mr != NULL);
+		ibv_dereg_mr(mr->ibv_mr);
 	}
-	return ret;
+	rte_free(priv->mr);
+	rte_free(priv->mr_cache);
+	priv->mr = NULL;
+	priv->mr_cache = NULL;
+	priv->mr_n = 0;
 }

@@ -154,7 +154,9 @@ struct priv {
 	struct mlx5_hrxq_drop *flow_drop_queue; /* Flow drop queue. */
 	struct mlx5_flows flows; /* RTE Flow rules. */
 	struct mlx5_flows ctrl_flows; /* Control flow rules. */
-	LIST_HEAD(mr, mlx5_mr) mr; /* Memory region. */
+	struct mlx5_mr (*mr)[]; /* Static MR table. */
+	struct mlx5_mr_cache (*mr_cache)[]; /* Global MR cache table. */
+	unsigned int mr_n; /* Size of static MR table. */
 	LIST_HEAD(rxq, mlx5_rxq_ctrl) rxqsctrl; /* DPDK Rx queues. */
 	LIST_HEAD(rxqibv, mlx5_rxq_ibv) rxqsibv; /* Verbs Rx queues. */
 	LIST_HEAD(hrxq, mlx5_hrxq) hrxqs; /* Verbs Hash Rx queues. */
@@ -303,16 +305,14 @@ void mlx5_flow_delete_drop_queue(struct rte_eth_dev *dev);
 
 /* mlx5_socket.c */
 
-int mlx5_socket_init(struct rte_eth_dev *priv);
-void mlx5_socket_uninit(struct rte_eth_dev *priv);
-void mlx5_socket_handle(struct rte_eth_dev *priv);
-int mlx5_socket_connect(struct rte_eth_dev *priv);
+int mlx5_socket_init(struct rte_eth_dev *dev);
+void mlx5_socket_uninit(struct rte_eth_dev *dev);
+void mlx5_socket_handle(struct rte_eth_dev *dev);
+int mlx5_socket_connect(struct rte_eth_dev *dev);
 
 /* mlx5_mr.c */
 
-struct mlx5_mr *mlx5_mr_new(struct rte_eth_dev *dev, struct rte_mempool *mp);
-struct mlx5_mr *mlx5_mr_get(struct rte_eth_dev *dev, struct rte_mempool *mp);
-int mlx5_mr_release(struct mlx5_mr *mr);
-int mlx5_mr_verify(struct rte_eth_dev *dev);
+int mlx5_mr_register_memseg(struct rte_eth_dev *dev);
+void mlx5_mr_deregister_memseg(struct rte_eth_dev *dev);
 
 #endif /* RTE_PMD_MLX5_H_ */
