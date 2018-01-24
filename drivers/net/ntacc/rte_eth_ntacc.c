@@ -78,7 +78,7 @@ static struct {
    int32_t major;
    int32_t minor;
    int32_t patch;
-} supportedDriver = {3, 8, 0};
+} supportedDriver = {3, 7, 50};
 
 #define PCI_VENDOR_ID_NAPATECH 0x18F4
 #define PCI_DEVICE_ID_NT200A01 0x01A5
