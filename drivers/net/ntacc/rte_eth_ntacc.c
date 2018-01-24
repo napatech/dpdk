@@ -1242,6 +1242,7 @@ static int eth_stats_get(struct rte_eth_dev *dev,
     (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
     RTE_LOG(ERR, PMD, "ERROR: NT_StatRead failed. Code 0x%x = %s\n", status, errBuf);
     rte_free(pStatData);
+    rte_spinlock_unlock(&internals->statlock);
     return -EIO;
   }
   rte_spinlock_unlock(&internals->statlock);
@@ -1302,6 +1303,7 @@ static void eth_stats_reset(struct rte_eth_dev *dev)
     (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
     RTE_LOG(ERR, PMD, "ERROR: NT_StatRead failed. Code 0x%x = %s\n", status, errBuf);
     rte_free(pStatData);
+    rte_spinlock_unlock(&internals->statlock);
     return;
   }
   rte_spinlock_unlock(&internals->statlock);
