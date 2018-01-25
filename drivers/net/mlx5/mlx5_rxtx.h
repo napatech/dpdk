@@ -564,7 +564,6 @@ mlx5_tx_mb2mr(struct mlx5_txq_data *txq, struct rte_mbuf *mb)
 			return txq->mp2mr[i]->lkey;
 		}
 	}
-	txq->mr_cache_idx = 0;
 	mr = mlx5_txq_mp2mr_reg(txq, mlx5_tx_mb2mp(mb), i);
 	/*
 	 * Request the reference to use in this queue, the original one is
@@ -572,6 +571,7 @@ mlx5_tx_mb2mr(struct mlx5_txq_data *txq, struct rte_mbuf *mb)
 	 */
 	if (mr) {
 		rte_atomic32_inc(&mr->refcnt);
+		txq->mr_cache_idx = i >= RTE_DIM(txq->mp2mr) ? i - 1 : i;
 		return mr->lkey;
 	}
 	return (uint32_t)-1;
