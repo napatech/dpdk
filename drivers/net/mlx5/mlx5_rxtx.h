@@ -547,7 +547,7 @@ mlx5_tx_mb2mr(struct mlx5_txq_data *txq, struct rte_mbuf *mb)
 	struct mlx5_mr *mr;
 
 	assert(i < RTE_DIM(txq->mp2mr));
-	if (likely(txq->mp2mr[i]->start <= addr && txq->mp2mr[i]->end >= addr))
+	if (likely(txq->mp2mr[i]->start <= addr && txq->mp2mr[i]->end > addr))
 		return txq->mp2mr[i]->lkey;
 	for (i = 0; (i != RTE_DIM(txq->mp2mr)); ++i) {
 		if (unlikely(txq->mp2mr[i] == NULL ||
@@ -556,7 +556,7 @@ mlx5_tx_mb2mr(struct mlx5_txq_data *txq, struct rte_mbuf *mb)
 			break;
 		}
 		if (txq->mp2mr[i]->start <= addr &&
-		    txq->mp2mr[i]->end >= addr) {
+		    txq->mp2mr[i]->end > addr) {
 			assert(txq->mp2mr[i]->lkey != (uint32_t)-1);
 			assert(rte_cpu_to_be_32(txq->mp2mr[i]->mr->lkey) ==
 			       txq->mp2mr[i]->lkey);
