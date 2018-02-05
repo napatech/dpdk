@@ -1983,7 +1983,8 @@ rss_fwd_config_setup(void)
 		 * if we are in loopback, simply send stuff out through the
 		 * ingress port
 		 */
-		if (port_topology == PORT_TOPOLOGY_LOOP)
+		if (port_topology == PORT_TOPOLOGY_LOOP ||
+		    txp >= cur_fwd_config.nb_fwd_ports)
 			txp = rxp;
 
 		fs->rx_port = fwd_ports_ids[rxp];
@@ -2000,11 +2001,7 @@ rss_fwd_config_setup(void)
 		 * Restart from RX queue 0 on next RX port
 		 */
 		rxq = 0;
-		if (numa_support && (nb_fwd_ports <= (nb_ports >> 1)))
-			rxp = (portid_t)
-				(rxp + ((nb_ports >> 1) / nb_fwd_ports));
-		else
-			rxp = (portid_t) (rxp + 1);
+		rxp++;
 	}
 }
 
