@@ -873,12 +873,17 @@ dpaa_dev_init(struct rte_eth_dev *eth_dev)
 
 	dpaa_intf->rx_queues = rte_zmalloc(NULL,
 		sizeof(struct qman_fq) * num_rx_fqs, MAX_CACHELINE);
+	if (!dpaa_intf->rx_queues) {
+		DPAA_PMD_ERR("Failed to alloc mem for RX queues\n");
+		return -ENOMEM;
+	}
+
 	for (loop = 0; loop < num_rx_fqs; loop++) {
 		fqid = DPAA_PCD_FQID_START + dpaa_intf->ifid *
 			DPAA_PCD_FQID_MULTIPLIER + loop;
 		ret = dpaa_rx_queue_init(&dpaa_intf->rx_queues[loop], fqid);
 		if (ret)
-			return ret;
+			goto free_rx;
 		dpaa_intf->rx_queues[loop].dpaa_intf = dpaa_intf;
 	}
 	dpaa_intf->nb_rx_queues = num_rx_fqs;
@@ -887,14 +892,17 @@ dpaa_dev_init(struct rte_eth_dev *eth_dev)
 	num_cores = rte_lcore_count();
 	dpaa_intf->tx_queues = rte_zmalloc(NULL, sizeof(struct qman_fq) *
 		num_cores, MAX_CACHELINE);
-	if (!dpaa_intf->tx_queues)
-		return -ENOMEM;
+	if (!dpaa_intf->tx_queues) {
+		DPAA_PMD_ERR("Failed to alloc mem for TX queues\n");
+		ret = -ENOMEM;
+		goto free_rx;
+	}
 
 	for (loop = 0; loop < num_cores; loop++) {
 		ret = dpaa_tx_queue_init(&dpaa_intf->tx_queues[loop],
 					 fman_intf);
 		if (ret)
-			return ret;
+			goto free_tx;
 		dpaa_intf->tx_queues[loop].dpaa_intf = dpaa_intf;
 	}
 	dpaa_intf->nb_tx_queues = num_cores;
@@ -931,13 +939,8 @@ dpaa_dev_init(struct rte_eth_dev *eth_dev)
 		DPAA_PMD_ERR("Failed to allocate %d bytes needed to "
 						"store MAC addresses",
 				ETHER_ADDR_LEN * DPAA_MAX_MAC_FILTER);
-		rte_free(dpaa_intf->rx_queues);
-		rte_free(dpaa_intf->tx_queues);
-		dpaa_intf->rx_queues = NULL;
-		dpaa_intf->tx_queues = NULL;
-		dpaa_intf->nb_rx_queues = 0;
-		dpaa_intf->nb_tx_queues = 0;
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto free_tx;
 	}
 
 	/* copy the primary mac address */
@@ -963,6 +966,17 @@ dpaa_dev_init(struct rte_eth_dev *eth_dev)
 	fman_if_stats_reset(fman_intf);
 
 	return 0;
+
+free_tx:
+	rte_free(dpaa_intf->tx_queues);
+	dpaa_intf->tx_queues = NULL;
+	dpaa_intf->nb_tx_queues = 0;
+
+free_rx:
+	rte_free(dpaa_intf->rx_queues);
+	dpaa_intf->rx_queues = NULL;
+	dpaa_intf->nb_rx_queues = 0;
+	return ret;
 }
 
 static int
