@@ -134,6 +134,17 @@ Driver compilation and testing
 Refer to the document :ref:`compiling and testing a PMD for a NIC <pmd_build_and_test>`
 for details.
 
+- ``Support multiple driver`` (default ``disable``)
+
+  There was a multiple driver support issue during use of 700 series Ethernet
+  Adapter with both Linux kernel and DPDK PMD. To fix this issue, ``devargs``
+  parameter ``support-multi-driver`` is introduced, for example::
+
+    -w 84:00.0,support-multi-driver=1
+
+  With the above configuration, DPDK PMD will not change global registers, and
+  will switch PF interrupt from IntN to Int0 to avoid interrupt conflict between
+  DPDK and Linux Kernel.
 
 SR-IOV: Prerequisites and sample Application Notes
 --------------------------------------------------
