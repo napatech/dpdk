@@ -483,6 +483,18 @@ Vlan strip of VF
 
 The VF vlan strip function is only supported in the i40e kernel driver >= 2.1.26.
 
+Global configuration warning
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+I40E PMD will set some global registers to enable some function or set some
+configure. Then when using different ports of the same NIC with Linux kernel
+and DPDK, the port with Linux kernel will be impacted by the port with DPDK.
+For example, register I40E_GL_SWT_L2TAGCTRL is used to control L2 tag, i40e
+PMD uses I40E_GL_SWT_L2TAGCTRL to set vlan TPID. If setting TPID in port A
+with DPDK, then the configuration will also impact port B in the NIC with
+kernel driver, which don't want to use the TPID.
+So PMD reports warning to clarify what is changed by writing global register.
+
 High Performance of Small Packets on 40G NIC
 --------------------------------------------
 
