@@ -192,8 +192,12 @@ rte_eth_dev_find_free_port(void)
 	unsigned i;
 
 	for (i = 0; i < RTE_MAX_ETHPORTS; i++) {
-		if (rte_eth_devices[i].state == RTE_ETH_DEV_UNUSED)
+		/* Using shared name field to find a free port. */
+		if (rte_eth_dev_data[i].name[0] == '\0') {
+			RTE_ASSERT(rte_eth_devices[i].state ==
+				   RTE_ETH_DEV_UNUSED);
 			return i;
+		}
 	}
 	return RTE_MAX_ETHPORTS;
 }
@@ -218,14 +222,14 @@ rte_eth_dev_allocate(const char *name)
 	uint16_t port_id;
 	struct rte_eth_dev *eth_dev;
 
+	if (rte_eth_dev_data == NULL)
+		rte_eth_dev_data_alloc();
+
 	port_id = rte_eth_dev_find_free_port();
 	if (port_id == RTE_MAX_ETHPORTS) {
 		RTE_PMD_DEBUG_TRACE("Reached maximum number of Ethernet ports\n");
 		return NULL;
 	}
-
-	if (rte_eth_dev_data == NULL)
-		rte_eth_dev_data_alloc();
 
 	if (rte_eth_dev_allocated(name) != NULL) {
 		RTE_PMD_DEBUG_TRACE("Ethernet Device with name %s already allocated!\n",
