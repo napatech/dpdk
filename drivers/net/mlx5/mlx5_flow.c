@@ -2240,23 +2240,33 @@ priv_flow_stop(struct priv *priv, struct mlx5_flows *list)
 
 	TAILQ_FOREACH_REVERSE(flow, list, mlx5_flows, next) {
 		unsigned int i;
+		struct mlx5_ind_table_ibv *ind_tbl = NULL;
 
 		if (flow->drop) {
 			if (!flow->drxq.ibv_flow)
 				continue;
 			claim_zero(ibv_destroy_flow(flow->drxq.ibv_flow));
 			flow->drxq.ibv_flow = NULL;
+			DEBUG("Flow %p removed", (void *)flow);
 			/* Next flow. */
 			continue;
 		}
+		/* Verify the flow has not already been cleaned. */
+		for (i = 0; i != hash_rxq_init_n; ++i) {
+			if (!flow->frxq[i].ibv_flow)
+				continue;
+			/*
+			 * Indirection table may be necessary to remove the
+			 * flags in the Rx queues.
+			 * This helps to speed-up the process by avoiding
+			 * another loop.
+			 */
+			ind_tbl = flow->frxq[i].hrxq->ind_table;
+			break;
+		}
+		if (i == hash_rxq_init_n)
+			return;
 		if (flow->mark) {
-			struct mlx5_ind_table_ibv *ind_tbl = NULL;
-
-			for (i = 0; i != hash_rxq_init_n; ++i) {
-				if (!flow->frxq[i].hrxq)
-					continue;
-				ind_tbl = flow->frxq[i].hrxq->ind_table;
-			}
 			assert(ind_tbl);
 			for (i = 0; i != ind_tbl->queues_n; ++i)
 				(*priv->rxqs)[ind_tbl->queues[i]]->mark = 0;
