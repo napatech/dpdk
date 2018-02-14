@@ -139,19 +139,21 @@ dpaa_mbuf_free_bulk(struct rte_mempool *pool,
 	DPAA_MEMPOOL_DPDEBUG("Request to free %d buffers in bpid = %d",
 			     n, bp_info->bpid);
 
-	ret = rte_dpaa_portal_init((void *)0);
-	if (ret) {
-		DPAA_MEMPOOL_ERR("rte_dpaa_portal_init failed with ret: %d",
-				 ret);
-		return 0;
+	if (unlikely(!RTE_PER_LCORE(dpaa_io))) {
+		ret = rte_dpaa_portal_init((void *)0);
+		if (ret) {
+			DPAA_MEMPOOL_ERR("rte_dpaa_portal_init failed with ret: %d",
+					 ret);
+			return 0;
+		}
 	}
 
 	while (i < n) {
 		uint64_t phy = rte_mempool_virt2iova(obj_table[i]);
 
 		if (unlikely(!bp_info->ptov_off)) {
-			/* buffers are not from multiple memzones */
-			if (!(bp_info->flags & DPAA_MPOOL_MULTI_MEMZONE)) {
+			/* buffers are from single mem segment */
+			if (bp_info->flags & DPAA_MPOOL_SINGLE_SEGMENT) {
 				bp_info->ptov_off
 						= (uint64_t)obj_table[i] - phy;
 				rte_dpaa_bpid_info[bp_info->bpid].ptov_off
@@ -193,11 +195,13 @@ dpaa_mbuf_alloc_bulk(struct rte_mempool *pool,
 		return -1;
 	}
 
-	ret = rte_dpaa_portal_init((void *)0);
-	if (ret) {
-		DPAA_MEMPOOL_ERR("rte_dpaa_portal_init failed with ret: %d",
-				 ret);
-		return -1;
+	if (unlikely(!RTE_PER_LCORE(dpaa_io))) {
+		ret = rte_dpaa_portal_init((void *)0);
+		if (ret) {
+			DPAA_MEMPOOL_ERR("rte_dpaa_portal_init failed with ret: %d",
+					 ret);
+			return -1;
+		}
 	}
 
 	while (n < count) {
@@ -282,15 +286,14 @@ dpaa_register_memory_area(const struct rte_mempool *mp,
 			   len, total_elt_sz * mp->size);
 
 	/* Detect pool area has sufficient space for elements in this memzone */
-	if (len < total_elt_sz * mp->size)
-		/* Else, Memory will be allocated from multiple memzones */
-		bp_info->flags |= DPAA_MPOOL_MULTI_MEMZONE;
+	if (len >= total_elt_sz * mp->size)
+		bp_info->flags |= DPAA_MPOOL_SINGLE_SEGMENT;
 
 	return 0;
 }
 
 struct rte_mempool_ops dpaa_mpool_ops = {
-	.name = "dpaa",
+	.name = DPAA_MEMPOOL_OPS_NAME,
 	.alloc = dpaa_mbuf_create_pool,
 	.free = dpaa_mbuf_free_pool,
 	.enqueue = dpaa_mbuf_free_bulk,

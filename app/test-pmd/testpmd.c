@@ -38,6 +38,7 @@
 #include <rte_mempool.h>
 #include <rte_malloc.h>
 #include <rte_mbuf.h>
+#include <rte_mbuf_pool_ops.h>
 #include <rte_interrupts.h>
 #include <rte_pci.h>
 #include <rte_ether.h>
@@ -89,6 +90,24 @@ uint8_t socket_num = UMA_NO_CONFIG;
  * Use ANONYMOUS mapped memory (might be not physically continuous) for mbufs.
  */
 uint8_t mp_anon = 0;
+
+/*
+ * Store specified sockets on which memory pool to be used by ports
+ * is allocated.
+ */
+uint8_t port_numa[RTE_MAX_ETHPORTS];
+
+/*
+ * Store specified sockets on which RX ring to be used by ports
+ * is allocated.
+ */
+uint8_t rxring_numa[RTE_MAX_ETHPORTS];
+
+/*
+ * Store specified sockets on which TX ring to be used by ports
+ * is allocated.
+ */
+uint8_t txring_numa[RTE_MAX_ETHPORTS];
 
 /*
  * Record the Ethernet address of peer target ports to which packets are
@@ -192,8 +211,8 @@ queueid_t nb_txq = 1; /**< Number of TX queues per port. */
 /*
  * Configurable number of RX/TX ring descriptors.
  */
-#define RTE_TEST_RX_DESC_DEFAULT 128
-#define RTE_TEST_TX_DESC_DEFAULT 512
+#define RTE_TEST_RX_DESC_DEFAULT 1024
+#define RTE_TEST_TX_DESC_DEFAULT 1024
 uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT; /**< Number of RX descriptors. */
 uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT; /**< Number of TX descriptors. */
 
@@ -305,9 +324,7 @@ lcoreid_t latencystats_lcore_id = -1;
  */
 struct rte_eth_rxmode rx_mode = {
 	.max_rx_pkt_len = ETHER_MAX_LEN, /**< Default maximum frame length. */
-	.offloads = (DEV_RX_OFFLOAD_VLAN_FILTER |
-		     DEV_RX_OFFLOAD_VLAN_STRIP |
-		     DEV_RX_OFFLOAD_CRC_STRIP),
+	.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
 	.ignore_offload_bitfield = 1,
 };
 
@@ -499,6 +516,8 @@ mbuf_pool_create(uint16_t mbuf_seg_size, unsigned nb_mbuf,
 		rte_mempool_obj_iter(rte_mp, rte_pktmbuf_init, NULL);
 	} else {
 		/* wrapper to rte_mempool_create() */
+		TESTPMD_LOG(INFO, "preferred mempool ops selected: %s\n",
+				rte_mbuf_best_mempool_ops());
 		rte_mp = rte_pktmbuf_pool_create(pool_name, nb_mbuf,
 			mb_mempool_cache, 0, mbuf_seg_size, socket_id);
 	}
@@ -667,7 +686,7 @@ init_config(void)
 
 	RTE_ETH_FOREACH_DEV(pid) {
 		port = &ports[pid];
-		/* Apply default Tx configuration for all ports */
+		/* Apply default TxRx configuration for all ports */
 		port->dev_conf.txmode = tx_mode;
 		port->dev_conf.rxmode = rx_mode;
 		rte_eth_dev_info_get(pid, &port->dev_info);
@@ -675,7 +694,6 @@ init_config(void)
 		      DEV_TX_OFFLOAD_MBUF_FAST_FREE))
 			port->dev_conf.txmode.offloads &=
 				~DEV_TX_OFFLOAD_MBUF_FAST_FREE;
-
 		if (numa_support) {
 			if (port_numa[pid] != NUMA_NO_CONFIG)
 				port_per_socket[port_numa[pid]]++;
@@ -2026,6 +2044,9 @@ eth_event_callback(portid_t port_id, enum rte_eth_event_type type, void *param,
 		fflush(stdout);
 	}
 
+	if (port_id_is_invalid(port_id, DISABLED_WARN))
+		return 0;
+
 	switch (type) {
 	case RTE_ETH_EVENT_INTR_RMV:
 		if (rte_eal_alarm_set(100000,
@@ -2323,6 +2344,9 @@ init_port_dcb_config(portid_t pid,
 	memset(&port_conf, 0, sizeof(struct rte_eth_conf));
 	/* Enter DCB configuration status */
 	dcb_config = 1;
+
+	port_conf.rxmode = rte_port->dev_conf.rxmode;
+	port_conf.txmode = rte_port->dev_conf.txmode;
 
 	/*set configuration of DCB in vt mode and DCB in non-vt mode*/
 	retval = get_eth_dcb_conf(&port_conf, dcb_mode, num_tcs, pfc_en);

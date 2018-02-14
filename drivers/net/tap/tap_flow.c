@@ -1,34 +1,6 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright 2017 6WIND S.A.
- *   Copyright 2017 Mellanox.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of 6WIND S.A. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright 2017 6WIND S.A.
+ * Copyright 2017 Mellanox.
  */
 
 #include <errno.h>
@@ -211,6 +183,10 @@ tap_flow_create(struct rte_eth_dev *dev,
 		const struct rte_flow_item items[],
 		const struct rte_flow_action actions[],
 		struct rte_flow_error *error);
+
+static void
+tap_flow_free(struct pmd_internals *pmd,
+	struct rte_flow *flow);
 
 static int
 tap_flow_destroy(struct rte_eth_dev *dev,
@@ -1311,6 +1287,38 @@ tap_flow_set_handle(struct rte_flow *flow)
 }
 
 /**
+ * Free the flow opened file descriptors and allocated memory
+ *
+ * @param[in] flow
+ *   Pointer to the flow to free
+ *
+ */
+static void
+tap_flow_free(struct pmd_internals *pmd, struct rte_flow *flow)
+{
+	int i;
+
+	if (!flow)
+		return;
+
+	if (pmd->rss_enabled) {
+		/* Close flow BPF file descriptors */
+		for (i = 0; i < SEC_MAX; i++)
+			if (flow->bpf_fd[i] != 0) {
+				close(flow->bpf_fd[i]);
+				flow->bpf_fd[i] = 0;
+			}
+
+		/* Release the map key for this RSS rule */
+		bpf_rss_key(KEY_CMD_RELEASE, &flow->key_idx);
+		flow->key_idx = 0;
+	}
+
+	/* Free flow allocated memory */
+	rte_free(flow);
+}
+
+/**
  * Create a flow.
  *
  * @see rte_flow_create()
@@ -1428,7 +1436,7 @@ fail:
 	if (remote_flow)
 		rte_free(remote_flow);
 	if (flow)
-		rte_free(flow);
+		tap_flow_free(pmd, flow);
 	return NULL;
 }
 
@@ -1450,7 +1458,6 @@ tap_flow_destroy_pmd(struct pmd_internals *pmd,
 		     struct rte_flow_error *error)
 {
 	struct rte_flow *remote_flow = flow->remote_flow;
-	int i;
 	int ret = 0;
 
 	LIST_REMOVE(flow, next);
@@ -1474,22 +1481,6 @@ tap_flow_destroy_pmd(struct pmd_internals *pmd,
 		rte_flow_error_set(
 			error, ENOTSUP, RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
 			"couldn't receive kernel ack to our request");
-		goto end;
-	}
-	/* Close opened BPF file descriptors of this flow */
-	for (i = 0; i < SEC_MAX; i++)
-		if (flow->bpf_fd[i] != 0) {
-			close(flow->bpf_fd[i]);
-			flow->bpf_fd[i] = 0;
-		}
-
-	/* Release map key for this RSS rule */
-	ret = bpf_rss_key(KEY_CMD_RELEASE, &flow->key_idx);
-	if (ret < 0) {
-		rte_flow_error_set(
-			error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
-			"Failed to release BPF RSS key");
-
 		goto end;
 	}
 
@@ -1520,7 +1511,7 @@ tap_flow_destroy_pmd(struct pmd_internals *pmd,
 end:
 	if (remote_flow)
 		rte_free(remote_flow);
-	rte_free(flow);
+	tap_flow_free(pmd, flow);
 	return ret;
 }
 
@@ -1778,6 +1769,7 @@ tap_flow_implicit_flush(struct pmd_internals *pmd, struct rte_flow_error *error)
 }
 
 #define MAX_RSS_KEYS 256
+#define KEY_IDX_OFFSET (3 * MAX_RSS_KEYS)
 #define SEC_NAME_CLS_Q "cls_q"
 
 const char *sec_name[SEC_MAX] = {
@@ -1934,38 +1926,63 @@ static int rss_enable(struct pmd_internals *pmd,
 static int bpf_rss_key(enum bpf_rss_key_e cmd, __u32 *key_idx)
 {
 	__u32 i;
-	int err = -1;
+	int err = 0;
 	static __u32 num_used_keys;
 	static __u32 rss_keys[MAX_RSS_KEYS] = {KEY_STAT_UNSPEC};
 	static __u32 rss_keys_initialized;
+	__u32 key;
 
 	switch (cmd) {
 	case KEY_CMD_GET:
-		if (!rss_keys_initialized)
+		if (!rss_keys_initialized) {
+			err = -1;
 			break;
+		}
 
-		if (num_used_keys == RTE_DIM(rss_keys))
+		if (num_used_keys == RTE_DIM(rss_keys)) {
+			err = -1;
 			break;
+		}
 
 		*key_idx = num_used_keys % RTE_DIM(rss_keys);
 		while (rss_keys[*key_idx] == KEY_STAT_USED)
 			*key_idx = (*key_idx + 1) % RTE_DIM(rss_keys);
 
 		rss_keys[*key_idx] = KEY_STAT_USED;
+
+		/*
+		 * Add an offset to key_idx in order to handle a case of
+		 * RSS and non RSS flows mixture.
+		 * If a non RSS flow is destroyed it has an eBPF map
+		 * index 0 (initialized on flow creation) and might
+		 * unintentionally remove RSS entry 0 from eBPF map.
+		 * To avoid this issue, add an offset to the real index
+		 * during a KEY_CMD_GET operation and subtract this offset
+		 * during a KEY_CMD_RELEASE operation in order to restore
+		 * the real index.
+		 */
+		*key_idx += KEY_IDX_OFFSET;
 		num_used_keys++;
-		err = 0;
 	break;
 
 	case KEY_CMD_RELEASE:
-		if (!rss_keys_initialized) {
-			err = 0;
+		if (!rss_keys_initialized)
 			break;
-		}
 
-		if (rss_keys[*key_idx] == KEY_STAT_USED) {
-			rss_keys[*key_idx] = KEY_STAT_AVAILABLE;
+		/*
+		 * Subtract offest to restore real key index
+		 * If a non RSS flow is falsely trying to release map
+		 * entry 0 - the offset subtraction will calculate the real
+		 * map index as an out-of-range value and the release operation
+		 * will be silently ignored.
+		 */
+		key = *key_idx - KEY_IDX_OFFSET;
+		if (key >= RTE_DIM(rss_keys))
+			break;
+
+		if (rss_keys[key] == KEY_STAT_USED) {
+			rss_keys[key] = KEY_STAT_AVAILABLE;
 			num_used_keys--;
-			err = 0;
 		}
 	break;
 
@@ -1975,7 +1992,6 @@ static int bpf_rss_key(enum bpf_rss_key_e cmd, __u32 *key_idx)
 
 		rss_keys_initialized = 1;
 		num_used_keys = 0;
-		err = 0;
 	break;
 
 	case KEY_CMD_DEINIT:
@@ -1984,7 +2000,6 @@ static int bpf_rss_key(enum bpf_rss_key_e cmd, __u32 *key_idx)
 
 		rss_keys_initialized = 0;
 		num_used_keys = 0;
-		err = 0;
 	break;
 
 	default:

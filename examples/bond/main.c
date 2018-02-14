@@ -91,8 +91,8 @@
 /*
  * Configurable number of RX/TX ring descriptors
  */
-#define RTE_RX_DESC_DEFAULT 128
-#define RTE_TX_DESC_DEFAULT 512
+#define RTE_RX_DESC_DEFAULT 1024
+#define RTE_TX_DESC_DEFAULT 1024
 
 #define BOND_IP_1	7
 #define BOND_IP_2	0
@@ -212,7 +212,7 @@ bond_port_init(struct rte_mempool *mbuf_pool)
 	struct rte_eth_txconf txq_conf;
 	struct rte_eth_conf local_port_conf = port_conf;
 
-	retval = rte_eth_bond_create("bond0", BONDING_MODE_ALB,
+	retval = rte_eth_bond_create("net_bonding0", BONDING_MODE_ALB,
 			0 /*SOCKET_ID_ANY*/);
 	if (retval < 0)
 		rte_exit(EXIT_FAILURE,
@@ -441,6 +441,11 @@ static void cmd_obj_send_parsed(void *parsed_result,
 				(BOND_IP_3 << 16) | (BOND_IP_4 << 24);
 
 	created_pkt = rte_pktmbuf_alloc(mbuf_pool);
+	if (created_pkt == NULL) {
+		cmdline_printf(cl, "Failed to allocate mbuf\n");
+		return;
+	}
+
 	pkt_size = sizeof(struct ether_hdr) + sizeof(struct arp_hdr);
 	created_pkt->data_len = pkt_size;
 	created_pkt->pkt_len = pkt_size;

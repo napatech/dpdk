@@ -278,6 +278,11 @@ eth_tx_queue_setup(struct rte_eth_dev *dev, uint16_t tx_queue_id,
 	return 0;
 }
 
+static int
+eth_mtu_set(struct rte_eth_dev *dev __rte_unused, uint16_t mtu __rte_unused)
+{
+	return 0;
+}
 
 static void
 eth_dev_info(struct rte_eth_dev *dev,
@@ -456,6 +461,12 @@ eth_rss_hash_conf_get(struct rte_eth_dev *dev,
 	return 0;
 }
 
+static void
+eth_mac_address_set(__rte_unused struct rte_eth_dev *dev,
+		    __rte_unused struct ether_addr *addr)
+{
+}
+
 static const struct eth_dev_ops ops = {
 	.dev_start = eth_dev_start,
 	.dev_stop = eth_dev_stop,
@@ -465,7 +476,9 @@ static const struct eth_dev_ops ops = {
 	.tx_queue_setup = eth_tx_queue_setup,
 	.rx_queue_release = eth_queue_release,
 	.tx_queue_release = eth_queue_release,
+	.mtu_set = eth_mtu_set,
 	.link_update = eth_link_update,
+	.mac_addr_set = eth_mac_address_set,
 	.stats_get = eth_stats_get,
 	.stats_reset = eth_stats_reset,
 	.reta_update = eth_rss_reta_update,

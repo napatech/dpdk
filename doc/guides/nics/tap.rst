@@ -1,37 +1,10 @@
-..  BSD LICENSE
-    Copyright(c) 2016 Intel Corporation. All rights reserved.
-    All rights reserved.
+..  SPDX-License-Identifier: BSD-3-Clause
+    Copyright(c) 2016 Intel Corporation.
 
-    Redistribution and use in source and binary forms, with or without
-    modification, are permitted provided that the following conditions
-    are met:
+Tap Poll Mode Driver
+====================
 
-    * Redistributions of source code must retain the above copyright
-    notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-    notice, this list of conditions and the following disclaimer in
-    the documentation and/or other materials provided with the
-    distribution.
-    * Neither the name of Intel Corporation nor the names of its
-    contributors may be used to endorse or promote products derived
-    from this software without specific prior written permission.
-
-    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-    "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-    A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-    OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-    DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-Tun/Tap Poll Mode Driver
-========================
-
-The ``rte_eth_tap.c`` PMD creates a device using TUN/TAP interfaces on the
+The ``rte_eth_tap.c`` PMD creates a device using TAP interfaces on the
 local host. The PMD allows for DPDK and the host to communicate using a raw
 device interface on the host and in the DPDK application.
 
@@ -52,11 +25,6 @@ and so on.
 The interface name can be changed by adding the ``iface=foo0``, for example::
 
    --vdev=net_tap0,iface=foo0 --vdev=net_tap1,iface=foo1, ...
-
-Also the speed of the interface can be changed from 10G to whatever number
-needed, but the interface does not enforce that speed, for example::
-
-   --vdev=net_tap0,iface=foo0,speed=25000
 
 Normally the PMD will generate a random MAC address, but when testing or with
 a static configuration the developer may need a fixed MAC address style.
@@ -132,7 +100,7 @@ Supported actions:
 - DROP
 - QUEUE
 - PASSTHRU
-- RSS
+- RSS (requires kernel 4.9)
 
 It is generally not possible to provide a "last" item. However, if the "last"
 item, once masked, is identical to the masked spec, then it is supported.
@@ -170,7 +138,7 @@ Distribute IPv4 TCP packets using RSS to a given MAC address over queues 0-3::
 Example
 -------
 
-The following is a simple example of using the TUN/TAP PMD with the Pktgen
+The following is a simple example of using the TAP PMD with the Pktgen
 packet generator. It requires that the ``socat`` utility is installed on the
 test system.
 
@@ -272,4 +240,24 @@ Please refer to ``iproute2`` package file ``lib/bpf.c`` function
 
 An example utility for eBPF instruction generation in the format of C arrays will
 be added in next releases
+
+Systems supporting flow API
+---------------------------
+
+- "tc flower" classifier requires linux kernel above 4.2
+- eBPF/RSS requires linux kernel above 4.9
+
++--------------------+-----------------------+
+| RH7.3              | No flow rule support  |
++--------------------+-----------------------+
+| RH7.4              | No RSS action support |
++--------------------+-----------------------+
+| RH7.5              | No RSS action support |
++--------------------+-----------------------+
+| SLES 15,           | No limitation         |
+| kernel 4.12        |                       |
++--------------------+-----------------------+
+| Azure Ubuntu 16.04,| No limitation         |
+| kernel 4.13        |                       |
++--------------------+-----------------------+
 

@@ -17,6 +17,8 @@
 
 #define FSL_DPAA_BUS_NAME	"FSL_DPAA_BUS"
 
+#define DPAA_MEMPOOL_OPS_NAME	"dpaa"
+
 #define DEV_TO_DPAA_DEVICE(ptr)	\
 		container_of(ptr, struct rte_dpaa_device, device)
 
@@ -30,6 +32,8 @@
 #define SVR_MASK		0xffff0000
 
 extern unsigned int dpaa_svr_family;
+
+extern RTE_DEFINE_PER_LCORE(bool, dpaa_io);
 
 struct rte_dpaa_device;
 struct rte_dpaa_driver;

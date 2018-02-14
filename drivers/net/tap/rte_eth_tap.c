@@ -44,7 +44,6 @@
 #define DEFAULT_TAP_NAME        "dtap"
 
 #define ETH_TAP_IFACE_ARG       "iface"
-#define ETH_TAP_SPEED_ARG       "speed"
 #define ETH_TAP_REMOTE_ARG      "remote"
 #define ETH_TAP_MAC_ARG         "mac"
 #define ETH_TAP_MAC_FIXED       "fixed"
@@ -53,7 +52,6 @@ static struct rte_vdev_driver pmd_tap_drv;
 
 static const char *valid_arguments[] = {
 	ETH_TAP_IFACE_ARG,
-	ETH_TAP_SPEED_ARG,
 	ETH_TAP_REMOTE_ARG,
 	ETH_TAP_MAC_ARG,
 	NULL
@@ -392,7 +390,8 @@ tap_tx_offload_get_port_capa(void)
 	 * In order to support legacy apps,
 	 * report capabilities also as port capabilities.
 	 */
-	return DEV_TX_OFFLOAD_IPV4_CKSUM |
+	return DEV_TX_OFFLOAD_MULTI_SEGS |
+	       DEV_TX_OFFLOAD_IPV4_CKSUM |
 	       DEV_TX_OFFLOAD_UDP_CKSUM |
 	       DEV_TX_OFFLOAD_TCP_CKSUM;
 }
@@ -400,7 +399,8 @@ tap_tx_offload_get_port_capa(void)
 static uint64_t
 tap_tx_offload_get_queue_capa(void)
 {
-	return DEV_TX_OFFLOAD_IPV4_CKSUM |
+	return DEV_TX_OFFLOAD_MULTI_SEGS |
+	       DEV_TX_OFFLOAD_IPV4_CKSUM |
 	       DEV_TX_OFFLOAD_UDP_CKSUM |
 	       DEV_TX_OFFLOAD_TCP_CKSUM;
 }
@@ -1218,7 +1218,7 @@ tap_dev_intr_handler(void *cb_arg)
 }
 
 static int
-tap_intr_handle_set(struct rte_eth_dev *dev, int set)
+tap_lsc_intr_handle_set(struct rte_eth_dev *dev, int set)
 {
 	struct pmd_internals *pmd = dev->data->dev_private;
 
@@ -1241,6 +1241,20 @@ tap_intr_handle_set(struct rte_eth_dev *dev, int set)
 	tap_nl_final(pmd->intr_handle.fd);
 	return rte_intr_callback_unregister(&pmd->intr_handle,
 					    tap_dev_intr_handler, dev);
+}
+
+static int
+tap_intr_handle_set(struct rte_eth_dev *dev, int set)
+{
+	int err;
+
+	err = tap_lsc_intr_handle_set(dev, set);
+	if (err)
+		return err;
+	err = tap_rx_intr_vec_set(dev, set);
+	if (err && set)
+		tap_lsc_intr_handle_set(dev, 0);
+	return err;
 }
 
 static const uint32_t*
@@ -1335,13 +1349,13 @@ eth_dev_tap_create(struct rte_vdev_device *vdev, char *tap_name,
 	data = rte_zmalloc_socket(tap_name, sizeof(*data), 0, numa_node);
 	if (!data) {
 		RTE_LOG(ERR, PMD, "TAP Failed to allocate data\n");
-		goto error_exit;
+		goto error_exit_nodev;
 	}
 
 	dev = rte_eth_vdev_allocate(vdev, sizeof(*pmd));
 	if (!dev) {
 		RTE_LOG(ERR, PMD, "TAP Unable to allocate device struct\n");
-		goto error_exit;
+		goto error_exit_nodev;
 	}
 
 	pmd = dev->data->dev_private;
@@ -1375,6 +1389,7 @@ eth_dev_tap_create(struct rte_vdev_device *vdev, char *tap_name,
 
 	pmd->intr_handle.type = RTE_INTR_HANDLE_EXT;
 	pmd->intr_handle.fd = -1;
+	dev->intr_handle = &pmd->intr_handle;
 
 	/* Presetup the fds to -1 as being not valid */
 	for (i = 0; i < RTE_PMD_TAP_MAX_QUEUES; i++) {
@@ -1511,6 +1526,11 @@ error_remote:
 	tap_flow_implicit_flush(pmd, NULL);
 
 error_exit:
+	if (pmd->ioctl_sock > 0)
+		close(pmd->ioctl_sock);
+	rte_eth_dev_release_port(dev);
+
+error_exit_nodev:
 	RTE_LOG(ERR, PMD, "TAP Unable to initialize %s\n",
 		rte_vdev_device_name(vdev));
 
@@ -1530,16 +1550,6 @@ set_interface_name(const char *key __rte_unused,
 	else
 		snprintf(name, RTE_ETH_NAME_MAX_LEN - 1, "%s%d",
 			 DEFAULT_TAP_NAME, (tap_unit - 1));
-
-	return 0;
-}
-
-static int
-set_interface_speed(const char *key __rte_unused,
-		    const char *value,
-		    void *extra_args)
-{
-	*(int *)extra_args = (value) ? atoi(value) : ETH_SPEED_NUM_10G;
 
 	return 0;
 }
@@ -1594,15 +1604,6 @@ rte_pmd_tap_probe(struct rte_vdev_device *dev)
 
 		kvlist = rte_kvargs_parse(params, valid_arguments);
 		if (kvlist) {
-			if (rte_kvargs_count(kvlist, ETH_TAP_SPEED_ARG) == 1) {
-				ret = rte_kvargs_process(kvlist,
-							 ETH_TAP_SPEED_ARG,
-							 &set_interface_speed,
-							 &speed);
-				if (ret == -1)
-					goto leave;
-			}
-
 			if (rte_kvargs_count(kvlist, ETH_TAP_IFACE_ARG) == 1) {
 				ret = rte_kvargs_process(kvlist,
 							 ETH_TAP_IFACE_ARG,
@@ -1700,6 +1701,5 @@ RTE_PMD_REGISTER_VDEV(net_tap, pmd_tap_drv);
 RTE_PMD_REGISTER_ALIAS(net_tap, eth_tap);
 RTE_PMD_REGISTER_PARAM_STRING(net_tap,
 			      ETH_TAP_IFACE_ARG "=<string> "
-			      ETH_TAP_SPEED_ARG "=<int> "
 			      ETH_TAP_MAC_ARG "=" ETH_TAP_MAC_FIXED " "
 			      ETH_TAP_REMOTE_ARG "=<string>");

@@ -31,6 +31,7 @@
 #include <rte_malloc.h>
 #include <rte_ring.h>
 #include <rte_bus.h>
+#include <rte_mbuf_pool_ops.h>
 
 #include <rte_dpaa_bus.h>
 #include <rte_dpaa_logs.h>
@@ -54,19 +55,61 @@ pthread_key_t dpaa_portal_key;
 
 unsigned int dpaa_svr_family;
 
-RTE_DEFINE_PER_LCORE(bool, _dpaa_io);
+RTE_DEFINE_PER_LCORE(bool, dpaa_io);
 RTE_DEFINE_PER_LCORE(struct dpaa_portal_dqrr, held_bufs);
 
-static inline void
-dpaa_add_to_device_list(struct rte_dpaa_device *dev)
+static int
+compare_dpaa_devices(struct rte_dpaa_device *dev1,
+		     struct rte_dpaa_device *dev2)
 {
-	TAILQ_INSERT_TAIL(&rte_dpaa_bus.device_list, dev, next);
+	int comp = 0;
+
+	/* Segragating ETH from SEC devices */
+	if (dev1->device_type > dev2->device_type)
+		comp = 1;
+	else if (dev1->device_type < dev2->device_type)
+		comp = -1;
+	else
+		comp = 0;
+
+	if ((comp != 0) || (dev1->device_type != FSL_DPAA_ETH))
+		return comp;
+
+	if (dev1->id.fman_id > dev2->id.fman_id) {
+		comp = 1;
+	} else if (dev1->id.fman_id < dev2->id.fman_id) {
+		comp = -1;
+	} else {
+		/* FMAN ids match, check for mac_id */
+		if (dev1->id.mac_id > dev2->id.mac_id)
+			comp = 1;
+		else if (dev1->id.mac_id < dev2->id.mac_id)
+			comp = -1;
+		else
+			comp = 0;
+	}
+
+	return comp;
 }
 
 static inline void
-dpaa_remove_from_device_list(struct rte_dpaa_device *dev)
+dpaa_add_to_device_list(struct rte_dpaa_device *newdev)
 {
-	TAILQ_INSERT_TAIL(&rte_dpaa_bus.device_list, dev, next);
+	int comp, inserted = 0;
+	struct rte_dpaa_device *dev = NULL;
+	struct rte_dpaa_device *tdev = NULL;
+
+	TAILQ_FOREACH_SAFE(dev, &rte_dpaa_bus.device_list, next, tdev) {
+		comp = compare_dpaa_devices(newdev, dev);
+		if (comp < 0) {
+			TAILQ_INSERT_BEFORE(dev, newdev, next);
+			inserted = 1;
+			break;
+		}
+	}
+
+	if (!inserted)
+		TAILQ_INSERT_TAIL(&rte_dpaa_bus.device_list, newdev, next);
 }
 
 /*
@@ -182,9 +225,7 @@ dpaa_clean_device_list(void)
 	}
 }
 
-/** XXX move this function into a separate file */
-static int
-_dpaa_portal_init(void *arg)
+int rte_dpaa_portal_init(void *arg)
 {
 	cpu_set_t cpuset;
 	pthread_t id;
@@ -255,21 +296,9 @@ _dpaa_portal_init(void *arg)
 		return ret;
 	}
 
-	RTE_PER_LCORE(_dpaa_io) = true;
+	RTE_PER_LCORE(dpaa_io) = true;
 
 	DPAA_BUS_LOG(DEBUG, "QMAN thread initialized");
-
-	return 0;
-}
-
-/*
- * rte_dpaa_portal_init - Wrapper over _dpaa_portal_init with thread level check
- * XXX Complete this
- */
-int rte_dpaa_portal_init(void *arg)
-{
-	if (unlikely(!RTE_PER_LCORE(_dpaa_io)))
-		return _dpaa_portal_init(arg);
 
 	return 0;
 }
@@ -281,8 +310,8 @@ rte_dpaa_portal_fq_init(void *arg, struct qman_fq *fq)
 	u32 sdqcr;
 	struct qman_portal *qp;
 
-	if (unlikely(!RTE_PER_LCORE(_dpaa_io)))
-		_dpaa_portal_init(arg);
+	if (unlikely(!RTE_PER_LCORE(dpaa_io)))
+		rte_dpaa_portal_init(arg);
 
 	/* Initialise qman specific portals */
 	qp = fsl_qman_portal_create();
@@ -320,7 +349,7 @@ dpaa_portal_finish(void *arg)
 	rte_free(dpaa_io_portal);
 	dpaa_io_portal = NULL;
 
-	RTE_PER_LCORE(_dpaa_io) = false;
+	RTE_PER_LCORE(dpaa_io) = false;
 }
 
 #define DPAA_DEV_PATH1 "/sys/devices/platform/soc/soc:fsl,dpaa"
@@ -466,9 +495,16 @@ rte_dpaa_bus_probe(void)
 			ret = drv->probe(drv, dev);
 			if (ret)
 				DPAA_BUS_ERR("Unable to probe.\n");
+
 			break;
 		}
 	}
+
+	/* Register DPAA mempool ops only if any DPAA device has
+	 * been detected.
+	 */
+	if (!TAILQ_EMPTY(&rte_dpaa_bus.device_list))
+		rte_mbuf_set_platform_mempool_ops(DPAA_MEMPOOL_OPS_NAME);
 
 	svr_file = fopen(DPAA_SOC_ID_FILE, "r");
 	if (svr_file) {
@@ -505,6 +541,10 @@ rte_dpaa_find_device(const struct rte_device *start, rte_dev_cmp_t cmp,
 static enum rte_iova_mode
 rte_dpaa_get_iommu_class(void)
 {
+	if ((access(DPAA_DEV_PATH1, F_OK) != 0) &&
+	    (access(DPAA_DEV_PATH2, F_OK) != 0)) {
+		return RTE_IOVA_DC;
+	}
 	return RTE_IOVA_PA;
 }
 

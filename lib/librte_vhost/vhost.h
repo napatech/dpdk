@@ -24,6 +24,8 @@
 #define VIRTIO_DEV_RUNNING 1
 /* Used to indicate that the device is ready to operate */
 #define VIRTIO_DEV_READY 2
+/* Used to indicate that the built-in vhost net device backend is enabled */
+#define VIRTIO_DEV_BUILTIN_VIRTIO_NET 4
 
 /* Backend value set by guest. */
 #define VIRTIO_DEV_STOPPED -1
@@ -130,6 +132,10 @@ struct vhost_virtqueue {
  #define VIRTIO_NET_F_MTU 3
 #endif
 
+#ifndef VIRTIO_F_ANY_LAYOUT
+ #define VIRTIO_F_ANY_LAYOUT		27
+#endif
+
 /* Declare IOMMU related bits for older kernels */
 #ifndef VIRTIO_F_IOMMU_PLATFORM
 
@@ -172,6 +178,7 @@ struct vhost_msg {
 
 /* Features supported by this builtin vhost-user net driver. */
 #define VIRTIO_NET_SUPPORTED_FEATURES ((1ULL << VIRTIO_NET_F_MRG_RXBUF) | \
+				(1ULL << VIRTIO_F_ANY_LAYOUT) | \
 				(1ULL << VIRTIO_NET_F_CTRL_VQ) | \
 				(1ULL << VIRTIO_NET_F_CTRL_RX) | \
 				(1ULL << VIRTIO_NET_F_GUEST_ANNOUNCE) | \
@@ -352,6 +359,7 @@ int alloc_vring_queue(struct virtio_net *dev, uint32_t vring_idx);
 
 void vhost_set_ifname(int, const char *if_name, unsigned int if_len);
 void vhost_enable_dequeue_zero_copy(int vid);
+void vhost_set_builtin_virtio_net(int vid, bool enable);
 
 struct vhost_device_ops const *vhost_driver_callback_get(const char *path);
 

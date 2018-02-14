@@ -53,8 +53,8 @@ static int mac_updating = 1;
 /*
  * Configurable number of RX/TX ring descriptors
  */
-#define RTE_TEST_RX_DESC_DEFAULT 128
-#define RTE_TEST_TX_DESC_DEFAULT 512
+#define RTE_TEST_RX_DESC_DEFAULT 1024
+#define RTE_TEST_TX_DESC_DEFAULT 1024
 static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
 static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
 
@@ -548,6 +548,11 @@ main(int argc, char **argv)
 	nb_ports = rte_eth_dev_count();
 	if (nb_ports == 0)
 		rte_exit(EXIT_FAILURE, "No Ethernet ports - bye\n");
+
+	/* check port mask to possible port mask */
+	if (l2fwd_enabled_port_mask & ~((1 << nb_ports) - 1))
+		rte_exit(EXIT_FAILURE, "Invalid portmask; possible (0x%x)\n",
+			(1 << nb_ports) - 1);
 
 	/* reset l2fwd_dst_ports */
 	for (portid = 0; portid < RTE_MAX_ETHPORTS; portid++)

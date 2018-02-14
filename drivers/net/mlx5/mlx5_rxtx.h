@@ -1,34 +1,6 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright 2015 6WIND S.A.
- *   Copyright 2015 Mellanox.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of 6WIND S.A. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright 2015 6WIND S.A.
+ * Copyright 2015 Mellanox.
  */
 
 #ifndef RTE_PMD_MLX5_RXTX_H_
@@ -205,7 +177,7 @@ struct mlx5_txq_data {
 	volatile void *wqes; /* Work queue (use volatile to write into). */
 	volatile uint32_t *qp_db; /* Work queue doorbell. */
 	volatile uint32_t *cq_db; /* Completion queue doorbell. */
-	volatile void *bf_reg; /* Blueflame register. */
+	volatile void *bf_reg; /* Blueflame register remapped. */
 	struct mlx5_mr *mp2mr[MLX5_PMD_TX_MP_CACHE]; /* MR translation table. */
 	struct rte_mbuf *(*elts)[]; /* TX elements. */
 	struct mlx5_txq_stats stats; /* TX queue counters. */
@@ -230,6 +202,7 @@ struct mlx5_txq_ctrl {
 	struct mlx5_txq_ibv *ibv; /* Verbs queue object. */
 	struct mlx5_txq_data txq; /* Data path structure. */
 	off_t uar_mmap_offset; /* UAR mmap offset for non-primary process. */
+	volatile void *bf_reg_orig; /* Blueflame register from verbs. */
 };
 
 /* mlx5_rxq.c */
@@ -552,23 +525,21 @@ mlx5_tx_mb2mr(struct mlx5_txq_data *txq, struct rte_mbuf *mb)
 	struct mlx5_mr *mr;
 
 	assert(i < RTE_DIM(txq->mp2mr));
-	if (likely(txq->mp2mr[i]->start <= addr && txq->mp2mr[i]->end >= addr))
+	if (likely(txq->mp2mr[i]->start <= addr && txq->mp2mr[i]->end > addr))
 		return txq->mp2mr[i]->lkey;
 	for (i = 0; (i != RTE_DIM(txq->mp2mr)); ++i) {
-		if (unlikely(txq->mp2mr[i]->mr == NULL)) {
+		if (unlikely(txq->mp2mr[i] == NULL ||
+		    txq->mp2mr[i]->mr == NULL)) {
 			/* Unknown MP, add a new MR for it. */
 			break;
 		}
 		if (txq->mp2mr[i]->start <= addr &&
-		    txq->mp2mr[i]->end >= addr) {
+		    txq->mp2mr[i]->end > addr) {
 			assert(txq->mp2mr[i]->lkey != (uint32_t)-1);
-			assert(rte_cpu_to_be_32(txq->mp2mr[i]->mr->lkey) ==
-			       txq->mp2mr[i]->lkey);
 			txq->mr_cache_idx = i;
 			return txq->mp2mr[i]->lkey;
 		}
 	}
-	txq->mr_cache_idx = 0;
 	mr = mlx5_txq_mp2mr_reg(txq, mlx5_tx_mb2mp(mb), i);
 	/*
 	 * Request the reference to use in this queue, the original one is
@@ -576,7 +547,13 @@ mlx5_tx_mb2mr(struct mlx5_txq_data *txq, struct rte_mbuf *mb)
 	 */
 	if (mr) {
 		rte_atomic32_inc(&mr->refcnt);
+		txq->mr_cache_idx = i >= RTE_DIM(txq->mp2mr) ? i - 1 : i;
 		return mr->lkey;
+	} else {
+		struct rte_mempool *mp = mlx5_tx_mb2mp(mb);
+
+		WARN("Failed to register mempool 0x%p(%s)",
+		      (void *)mp, mp->name);
 	}
 	return (uint32_t)-1;
 }
@@ -598,7 +575,7 @@ mlx5_tx_dbrec_cond_wmb(struct mlx5_txq_data *txq, volatile struct mlx5_wqe *wqe,
 	uint64_t *dst = (uint64_t *)((uintptr_t)txq->bf_reg);
 	volatile uint64_t *src = ((volatile uint64_t *)wqe);
 
-	rte_io_wmb();
+	rte_cio_wmb();
 	*txq->qp_db = rte_cpu_to_be_32(txq->wqe_ci);
 	/* Ensure ordering between DB record and BF copy. */
 	rte_wmb();

@@ -43,10 +43,10 @@ RTE_INIT(enicpmd_init_log);
 static void
 enicpmd_init_log(void)
 {
-	enicpmd_logtype_init = rte_log_register("pmd.enic.init");
+	enicpmd_logtype_init = rte_log_register("pmd.net.enic.init");
 	if (enicpmd_logtype_init >= 0)
 		rte_log_set_level(enicpmd_logtype_init, RTE_LOG_NOTICE);
-	enicpmd_logtype_flow = rte_log_register("pmd.enic.flow");
+	enicpmd_logtype_flow = rte_log_register("pmd.net.enic.flow");
 	if (enicpmd_logtype_flow >= 0)
 		rte_log_set_level(enicpmd_logtype_flow, RTE_LOG_NOTICE);
 }
@@ -190,13 +190,7 @@ static int enicpmd_dev_tx_queue_setup(struct rte_eth_dev *eth_dev,
 		return -E_RTE_SECONDARY;
 
 	ENICPMD_FUNC_TRACE();
-	if (queue_idx >= ENIC_WQ_MAX) {
-		dev_err(enic,
-			"Max number of TX queues exceeded.  Max is %d\n",
-			ENIC_WQ_MAX);
-		return -EINVAL;
-	}
-
+	RTE_ASSERT(queue_idx < enic->conf_wq_count);
 	eth_dev->data->tx_queues[queue_idx] = (void *)&enic->wq[queue_idx];
 
 	ret = enic_alloc_wq(enic, queue_idx, socket_id, nb_desc);
@@ -310,17 +304,7 @@ static int enicpmd_dev_rx_queue_setup(struct rte_eth_dev *eth_dev,
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return -E_RTE_SECONDARY;
-
-	/* With Rx scatter support, two RQs are now used on VIC per RQ used
-	 * by the application.
-	 */
-	if (queue_idx * 2 >= ENIC_RQ_MAX) {
-		dev_err(enic,
-			"Max number of RX queues exceeded.  Max is %d. This PMD uses 2 RQs on VIC per RQ used by DPDK.\n",
-			ENIC_RQ_MAX);
-		return -EINVAL;
-	}
-
+	RTE_ASSERT(enic_rte_rq_idx_to_sop_idx(queue_idx) < enic->conf_rq_count);
 	eth_dev->data->rx_queues[queue_idx] =
 		(void *)&enic->rq[enic_rte_rq_idx_to_sop_idx(queue_idx)];
 
@@ -657,6 +641,7 @@ static int eth_enicpmd_dev_init(struct rte_eth_dev *eth_dev)
 	eth_dev->dev_ops = &enicpmd_eth_dev_ops;
 	eth_dev->rx_pkt_burst = &enic_recv_pkts;
 	eth_dev->tx_pkt_burst = &enic_xmit_pkts;
+	eth_dev->tx_pkt_prepare = &enic_prep_pkts;
 
 	pdev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	rte_eth_copy_pci_info(eth_dev, pdev);

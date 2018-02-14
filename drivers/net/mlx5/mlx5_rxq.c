@@ -1,34 +1,6 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright 2015 6WIND S.A.
- *   Copyright 2015 Mellanox.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of 6WIND S.A. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright 2015 6WIND S.A.
+ * Copyright 2015 Mellanox.
  */
 
 #include <stddef.h>
@@ -63,6 +35,7 @@
 #include "mlx5_utils.h"
 #include "mlx5_autoconf.h"
 #include "mlx5_defs.h"
+#include "mlx5_glue.h"
 
 /* Default RSS hash key also used for ConnectX-3. */
 uint8_t rss_hash_default_key[] = {
@@ -517,7 +490,6 @@ mlx5_arm_cq(struct mlx5_rxq_data *rxq, int sq_n_rxq)
 	doorbell = (uint64_t)doorbell_hi << 32;
 	doorbell |=  rxq->cqn;
 	rxq->cq_db[MLX5_CQ_ARM_DB] = rte_cpu_to_be_32(doorbell_hi);
-	rte_wmb();
 	rte_write64(rte_cpu_to_be_64(doorbell), cq_db_reg);
 }
 
@@ -601,13 +573,13 @@ mlx5_rx_intr_disable(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 		ret = EINVAL;
 		goto exit;
 	}
-	ret = ibv_get_cq_event(rxq_ibv->channel, &ev_cq, &ev_ctx);
+	ret = mlx5_glue->get_cq_event(rxq_ibv->channel, &ev_cq, &ev_ctx);
 	if (ret || ev_cq != rxq_ibv->cq) {
 		ret = EINVAL;
 		goto exit;
 	}
 	rxq_data->cq_arm_sn++;
-	ibv_ack_cq_events(rxq_ibv->cq, 1);
+	mlx5_glue->ack_cq_events(rxq_ibv->cq, 1);
 exit:
 	if (rxq_ibv)
 		mlx5_priv_rxq_ibv_release(priv, rxq_ibv);
@@ -655,6 +627,8 @@ mlx5_priv_rxq_ibv_new(struct priv *priv, uint16_t idx)
 
 	assert(rxq_data);
 	assert(!rxq_ctrl->ibv);
+	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_RX_QUEUE;
+	priv->verbs_alloc_ctx.obj = rxq_ctrl;
 	tmpl = rte_calloc_socket(__func__, 1, sizeof(*tmpl), 0,
 				 rxq_ctrl->socket);
 	if (!tmpl) {
@@ -673,7 +647,7 @@ mlx5_priv_rxq_ibv_new(struct priv *priv, uint16_t idx)
 		}
 	}
 	if (rxq_ctrl->irq) {
-		tmpl->channel = ibv_create_comp_channel(priv->ctx);
+		tmpl->channel = mlx5_glue->create_comp_channel(priv->ctx);
 		if (!tmpl->channel) {
 			ERROR("%p: Comp Channel creation failure",
 			      (void *)rxq_ctrl);
@@ -701,8 +675,9 @@ mlx5_priv_rxq_ibv_new(struct priv *priv, uint16_t idx)
 	} else if (config->cqe_comp && rxq_data->hw_timestamp) {
 		DEBUG("Rx CQE compression is disabled for HW timestamp");
 	}
-	tmpl->cq = ibv_cq_ex_to_cq(mlx5dv_create_cq(priv->ctx, &attr.cq.ibv,
-						    &attr.cq.mlx5));
+	tmpl->cq = mlx5_glue->cq_ex_to_cq
+		(mlx5_glue->dv_create_cq(priv->ctx, &attr.cq.ibv,
+					 &attr.cq.mlx5));
 	if (tmpl->cq == NULL) {
 		ERROR("%p: CQ creation failure", (void *)rxq_ctrl);
 		goto error;
@@ -738,7 +713,7 @@ mlx5_priv_rxq_ibv_new(struct priv *priv, uint16_t idx)
 		attr.wq.comp_mask |= IBV_WQ_INIT_ATTR_FLAGS;
 	}
 #endif
-	tmpl->wq = ibv_create_wq(priv->ctx, &attr.wq);
+	tmpl->wq = mlx5_glue->create_wq(priv->ctx, &attr.wq);
 	if (tmpl->wq == NULL) {
 		ERROR("%p: WQ creation failure", (void *)rxq_ctrl);
 		goto error;
@@ -762,7 +737,7 @@ mlx5_priv_rxq_ibv_new(struct priv *priv, uint16_t idx)
 		.attr_mask = IBV_WQ_ATTR_STATE,
 		.wq_state = IBV_WQS_RDY,
 	};
-	ret = ibv_modify_wq(tmpl->wq, &mod);
+	ret = mlx5_glue->modify_wq(tmpl->wq, &mod);
 	if (ret) {
 		ERROR("%p: WQ state to IBV_WQS_RDY failed",
 		      (void *)rxq_ctrl);
@@ -772,7 +747,7 @@ mlx5_priv_rxq_ibv_new(struct priv *priv, uint16_t idx)
 	obj.cq.out = &cq_info;
 	obj.rwq.in = tmpl->wq;
 	obj.rwq.out = &rwq;
-	ret = mlx5dv_init_obj(&obj, MLX5DV_OBJ_CQ | MLX5DV_OBJ_RWQ);
+	ret = mlx5_glue->dv_init_obj(&obj, MLX5DV_OBJ_CQ | MLX5DV_OBJ_RWQ);
 	if (ret != 0)
 		goto error;
 	if (cq_info.cqe_size != RTE_CACHE_LINE_SIZE) {
@@ -818,16 +793,18 @@ mlx5_priv_rxq_ibv_new(struct priv *priv, uint16_t idx)
 	DEBUG("%p: Verbs Rx queue %p: refcnt %d", (void *)priv,
 	      (void *)tmpl, rte_atomic32_read(&tmpl->refcnt));
 	LIST_INSERT_HEAD(&priv->rxqsibv, tmpl, next);
+	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_NONE;
 	return tmpl;
 error:
 	if (tmpl->wq)
-		claim_zero(ibv_destroy_wq(tmpl->wq));
+		claim_zero(mlx5_glue->destroy_wq(tmpl->wq));
 	if (tmpl->cq)
-		claim_zero(ibv_destroy_cq(tmpl->cq));
+		claim_zero(mlx5_glue->destroy_cq(tmpl->cq));
 	if (tmpl->channel)
-		claim_zero(ibv_destroy_comp_channel(tmpl->channel));
+		claim_zero(mlx5_glue->destroy_comp_channel(tmpl->channel));
 	if (tmpl->mr)
 		priv_mr_release(priv, tmpl->mr);
+	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_NONE;
 	return NULL;
 }
 
@@ -890,10 +867,11 @@ mlx5_priv_rxq_ibv_release(struct priv *priv, struct mlx5_rxq_ibv *rxq_ibv)
 	      (void *)rxq_ibv, rte_atomic32_read(&rxq_ibv->refcnt));
 	if (rte_atomic32_dec_and_test(&rxq_ibv->refcnt)) {
 		rxq_free_elts(rxq_ibv->rxq_ctrl);
-		claim_zero(ibv_destroy_wq(rxq_ibv->wq));
-		claim_zero(ibv_destroy_cq(rxq_ibv->cq));
+		claim_zero(mlx5_glue->destroy_wq(rxq_ibv->wq));
+		claim_zero(mlx5_glue->destroy_cq(rxq_ibv->cq));
 		if (rxq_ibv->channel)
-			claim_zero(ibv_destroy_comp_channel(rxq_ibv->channel));
+			claim_zero(mlx5_glue->destroy_comp_channel
+				   (rxq_ibv->channel));
 		LIST_REMOVE(rxq_ibv, next);
 		rte_free(rxq_ibv);
 		return 0;
@@ -1199,7 +1177,7 @@ mlx5_priv_ind_table_ibv_new(struct priv *priv, uint16_t queues[],
 	struct mlx5_ind_table_ibv *ind_tbl;
 	const unsigned int wq_n = rte_is_power_of_2(queues_n) ?
 		log2above(queues_n) :
-		log2above(priv->ind_table_max_size);
+		log2above(priv->config.ind_table_max_size);
 	struct ibv_wq *wq[1 << wq_n];
 	unsigned int i;
 	unsigned int j;
@@ -1221,13 +1199,13 @@ mlx5_priv_ind_table_ibv_new(struct priv *priv, uint16_t queues[],
 	/* Finalise indirection table. */
 	for (j = 0; i != (unsigned int)(1 << wq_n); ++i, ++j)
 		wq[i] = wq[j];
-	ind_tbl->ind_table = ibv_create_rwq_ind_table(
-		priv->ctx,
-		&(struct ibv_rwq_ind_table_init_attr){
+	ind_tbl->ind_table = mlx5_glue->create_rwq_ind_table
+		(priv->ctx,
+		 &(struct ibv_rwq_ind_table_init_attr){
 			.log_ind_tbl_size = wq_n,
 			.ind_tbl = wq,
 			.comp_mask = 0,
-		});
+		 });
 	if (!ind_tbl->ind_table)
 		goto error;
 	rte_atomic32_inc(&ind_tbl->refcnt);
@@ -1299,7 +1277,8 @@ mlx5_priv_ind_table_ibv_release(struct priv *priv,
 	DEBUG("%p: Indirection table %p: refcnt %d", (void *)priv,
 	      (void *)ind_tbl, rte_atomic32_read(&ind_tbl->refcnt));
 	if (rte_atomic32_dec_and_test(&ind_tbl->refcnt))
-		claim_zero(ibv_destroy_rwq_ind_table(ind_tbl->ind_table));
+		claim_zero(mlx5_glue->destroy_rwq_ind_table
+			   (ind_tbl->ind_table));
 	for (i = 0; i != ind_tbl->queues_n; ++i)
 		claim_nonzero(mlx5_priv_rxq_release(priv, ind_tbl->queues[i]));
 	if (!rte_atomic32_read(&ind_tbl->refcnt)) {
@@ -1366,9 +1345,9 @@ mlx5_priv_hrxq_new(struct priv *priv, uint8_t *rss_key, uint8_t rss_key_len,
 		ind_tbl = mlx5_priv_ind_table_ibv_new(priv, queues, queues_n);
 	if (!ind_tbl)
 		return NULL;
-	qp = ibv_create_qp_ex(
-		priv->ctx,
-		&(struct ibv_qp_init_attr_ex){
+	qp = mlx5_glue->create_qp_ex
+		(priv->ctx,
+		 &(struct ibv_qp_init_attr_ex){
 			.qp_type = IBV_QPT_RAW_PACKET,
 			.comp_mask =
 				IBV_QP_INIT_ATTR_PD |
@@ -1382,7 +1361,7 @@ mlx5_priv_hrxq_new(struct priv *priv, uint8_t *rss_key, uint8_t rss_key_len,
 			},
 			.rwq_ind_tbl = ind_tbl->ind_table,
 			.pd = priv->pd,
-		});
+		 });
 	if (!qp)
 		goto error;
 	hrxq = rte_calloc(__func__, 1, sizeof(*hrxq) + rss_key_len, 0);
@@ -1401,7 +1380,7 @@ mlx5_priv_hrxq_new(struct priv *priv, uint8_t *rss_key, uint8_t rss_key_len,
 error:
 	mlx5_priv_ind_table_ibv_release(priv, ind_tbl);
 	if (qp)
-		claim_zero(ibv_destroy_qp(qp));
+		claim_zero(mlx5_glue->destroy_qp(qp));
 	return NULL;
 }
 
@@ -1469,7 +1448,7 @@ mlx5_priv_hrxq_release(struct priv *priv, struct mlx5_hrxq *hrxq)
 	DEBUG("%p: Hash Rx queue %p: refcnt %d", (void *)priv,
 	      (void *)hrxq, rte_atomic32_read(&hrxq->refcnt));
 	if (rte_atomic32_dec_and_test(&hrxq->refcnt)) {
-		claim_zero(ibv_destroy_qp(hrxq->qp));
+		claim_zero(mlx5_glue->destroy_qp(hrxq->qp));
 		mlx5_priv_ind_table_ibv_release(priv, hrxq->ind_table);
 		LIST_REMOVE(hrxq, next);
 		rte_free(hrxq);

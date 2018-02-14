@@ -279,17 +279,6 @@ virtio_dev_queue_release(void *queue __rte_unused)
 	/* do nothing */
 }
 
-static int
-virtio_get_queue_type(struct virtio_hw *hw, uint16_t vtpci_queue_idx)
-{
-	if (vtpci_queue_idx == hw->max_queue_pairs * 2)
-		return VTNET_CQ;
-	else if (vtpci_queue_idx % 2 == 0)
-		return VTNET_RQ;
-	else
-		return VTNET_TQ;
-}
-
 static uint16_t
 virtio_get_nr_vq(struct virtio_hw *hw)
 {
@@ -1482,6 +1471,11 @@ virtio_init_device(struct rte_eth_dev *eth_dev, uint64_t req_features)
 	/* Reset the device although not necessary at startup */
 	vtpci_reset(hw);
 
+	if (hw->vqs) {
+		virtio_dev_free_mbufs(eth_dev);
+		virtio_free_queues(hw);
+	}
+
 	/* Tell the host we've noticed this device. */
 	vtpci_set_status(hw, VIRTIO_CONFIG_STATUS_ACK);
 
@@ -1865,7 +1859,7 @@ virtio_dev_configure(struct rte_eth_dev *dev)
 	hw->use_simple_rx = 1;
 	hw->use_simple_tx = 1;
 
-#if defined RTE_ARCH_ARM64 || defined CONFIG_RTE_ARCH_ARM
+#if defined RTE_ARCH_ARM64 || defined RTE_ARCH_ARM
 	if (!rte_cpu_get_flag_enabled(RTE_CPUFLAG_NEON)) {
 		hw->use_simple_rx = 0;
 		hw->use_simple_tx = 0;
@@ -1973,47 +1967,47 @@ virtio_dev_start(struct rte_eth_dev *dev)
 
 static void virtio_dev_free_mbufs(struct rte_eth_dev *dev)
 {
+	struct virtio_hw *hw = dev->data->dev_private;
+	uint16_t nr_vq = virtio_get_nr_vq(hw);
+	const char *type __rte_unused;
+	unsigned int i, mbuf_num = 0;
+	struct virtqueue *vq;
 	struct rte_mbuf *buf;
-	int i, mbuf_num = 0;
+	int queue_type;
 
-	for (i = 0; i < dev->data->nb_rx_queues; i++) {
-		struct virtnet_rx *rxvq = dev->data->rx_queues[i];
+	if (hw->vqs == NULL)
+		return;
+
+	for (i = 0; i < nr_vq; i++) {
+		vq = hw->vqs[i];
+		if (!vq)
+			continue;
+
+		queue_type = virtio_get_queue_type(hw, i);
+		if (queue_type == VTNET_RQ)
+			type = "rxq";
+		else if (queue_type == VTNET_TQ)
+			type = "txq";
+		else
+			continue;
 
 		PMD_INIT_LOG(DEBUG,
-			     "Before freeing rxq[%d] used and unused buf", i);
-		VIRTQUEUE_DUMP(rxvq->vq);
+			"Before freeing %s[%d] used and unused buf",
+			type, i);
+		VIRTQUEUE_DUMP(vq);
 
-		PMD_INIT_LOG(DEBUG, "rx_queues[%d]=%p", i, rxvq);
-		while ((buf = virtqueue_detatch_unused(rxvq->vq)) != NULL) {
+		while ((buf = virtqueue_detach_unused(vq)) != NULL) {
 			rte_pktmbuf_free(buf);
 			mbuf_num++;
 		}
 
-		PMD_INIT_LOG(DEBUG, "free %d mbufs", mbuf_num);
 		PMD_INIT_LOG(DEBUG,
-			     "After freeing rxq[%d] used and unused buf", i);
-		VIRTQUEUE_DUMP(rxvq->vq);
+			"After freeing %s[%d] used and unused buf",
+			type, i);
+		VIRTQUEUE_DUMP(vq);
 	}
 
-	for (i = 0; i < dev->data->nb_tx_queues; i++) {
-		struct virtnet_tx *txvq = dev->data->tx_queues[i];
-
-		PMD_INIT_LOG(DEBUG,
-			     "Before freeing txq[%d] used and unused bufs",
-			     i);
-		VIRTQUEUE_DUMP(txvq->vq);
-
-		mbuf_num = 0;
-		while ((buf = virtqueue_detatch_unused(txvq->vq)) != NULL) {
-			rte_pktmbuf_free(buf);
-			mbuf_num++;
-		}
-
-		PMD_INIT_LOG(DEBUG, "free %d mbufs", mbuf_num);
-		PMD_INIT_LOG(DEBUG,
-			     "After freeing txq[%d] used and unused buf", i);
-		VIRTQUEUE_DUMP(txvq->vq);
-	}
+	PMD_INIT_LOG(DEBUG, "%d mbufs freed", mbuf_num);
 }
 
 /*
@@ -2160,10 +2154,10 @@ RTE_INIT(virtio_init_log);
 static void
 virtio_init_log(void)
 {
-	virtio_logtype_init = rte_log_register("pmd.virtio.init");
+	virtio_logtype_init = rte_log_register("pmd.net.virtio.init");
 	if (virtio_logtype_init >= 0)
 		rte_log_set_level(virtio_logtype_init, RTE_LOG_NOTICE);
-	virtio_logtype_driver = rte_log_register("pmd.virtio.driver");
+	virtio_logtype_driver = rte_log_register("pmd.net.virtio.driver");
 	if (virtio_logtype_driver >= 0)
 		rte_log_set_level(virtio_logtype_driver, RTE_LOG_NOTICE);
 }

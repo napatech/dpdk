@@ -1,34 +1,6 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2014 Intel Corporation. All rights reserved.
- *   Copyright(c) 2014 6WIND S.A.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2014 Intel Corporation.
+ * Copyright(c) 2014 6WIND S.A.
  */
 
 #include <stdlib.h>
@@ -57,6 +29,9 @@
 #include "eal_filesystem.h"
 
 #define BITS_PER_HEX 4
+#define LCORE_OPT_LST 1
+#define LCORE_OPT_MSK 2
+#define LCORE_OPT_MAP 3
 
 const char
 eal_short_options[] =
@@ -218,7 +193,7 @@ eal_reset_internal_config(struct internal_config *internal_cfg)
 #endif
 	internal_cfg->vmware_tsc_map = 0;
 	internal_cfg->create_uio_dev = 0;
-	internal_cfg->mbuf_pool_ops_name = RTE_MBUF_DEFAULT_MEMPOOL_OPS;
+	internal_cfg->user_mbuf_pool_ops_name = NULL;
 }
 
 static int
@@ -1028,7 +1003,16 @@ eal_parse_common_option(int opt, const char *optarg,
 			RTE_LOG(ERR, EAL, "invalid coremask\n");
 			return -1;
 		}
-		core_parsed = 1;
+
+		if (core_parsed) {
+			RTE_LOG(ERR, EAL, "Option -c is ignored, because (%s) is set!\n",
+				(core_parsed == LCORE_OPT_LST) ? "-l" :
+				(core_parsed == LCORE_OPT_MAP) ? "--lcore" :
+				"-c");
+			return -1;
+		}
+
+		core_parsed = LCORE_OPT_MSK;
 		break;
 	/* corelist */
 	case 'l':
@@ -1036,7 +1020,16 @@ eal_parse_common_option(int opt, const char *optarg,
 			RTE_LOG(ERR, EAL, "invalid core list\n");
 			return -1;
 		}
-		core_parsed = 1;
+
+		if (core_parsed) {
+			RTE_LOG(ERR, EAL, "Option -l is ignored, because (%s) is set!\n",
+				(core_parsed == LCORE_OPT_MSK) ? "-c" :
+				(core_parsed == LCORE_OPT_MAP) ? "--lcore" :
+				"-l");
+			return -1;
+		}
+
+		core_parsed = LCORE_OPT_LST;
 		break;
 	/* service coremask */
 	case 's':
@@ -1156,7 +1149,16 @@ eal_parse_common_option(int opt, const char *optarg,
 				OPT_LCORES "\n");
 			return -1;
 		}
-		core_parsed = 1;
+
+		if (core_parsed) {
+			RTE_LOG(ERR, EAL, "Option --lcore is ignored, because (%s) is set!\n",
+				(core_parsed == LCORE_OPT_LST) ? "-l" :
+				(core_parsed == LCORE_OPT_MSK) ? "-c" :
+				"--lcore");
+			return -1;
+		}
+
+		core_parsed = LCORE_OPT_MAP;
 		break;
 
 	/* don't know what to do, leave this to caller */

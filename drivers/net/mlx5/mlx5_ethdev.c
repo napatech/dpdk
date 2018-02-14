@@ -1,34 +1,6 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright 2015 6WIND S.A.
- *   Copyright 2015 Mellanox.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of 6WIND S.A. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright 2015 6WIND S.A.
+ * Copyright 2015 Mellanox.
  */
 
 #define _GNU_SOURCE
@@ -64,6 +36,7 @@
 #include <rte_malloc.h>
 
 #include "mlx5.h"
+#include "mlx5_glue.h"
 #include "mlx5_rxtx.h"
 #include "mlx5_utils.h"
 
@@ -692,6 +665,7 @@ mlx5_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 		priv->reta_idx_n : config->ind_table_max_size;
 	info->hash_key_size = priv->rss_conf.rss_key_len;
 	info->speed_capa = priv->link_speed_capa;
+	info->flow_type_rss_offloads = ~MLX5_RSS_HF_MASK;
 	priv_unlock(priv);
 }
 
@@ -966,6 +940,33 @@ priv_link_update(struct priv *priv, int wait_to_complete)
 }
 
 /**
+ * Querying the link status till it changes to the desired state.
+ * Number of query attempts is bounded by MLX5_MAX_LINK_QUERY_ATTEMPTS.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ * @param status
+ *   Link desired status.
+ *
+ * @return
+ *   0 on success, negative errno value on failure.
+ */
+int
+priv_force_link_status_change(struct priv *priv, int status)
+{
+	int try = 0;
+
+	while (try < MLX5_MAX_LINK_QUERY_ATTEMPTS) {
+		priv_link_update(priv, 0);
+		if (priv->dev->data->dev_link.link_status == status)
+			return 0;
+		try++;
+		sleep(1);
+	}
+	return -EAGAIN;
+}
+
+/**
  * DPDK callback to retrieve physical link information.
  *
  * @param dev
@@ -1233,7 +1234,7 @@ priv_dev_status_handler(struct priv *priv)
 
 	/* Read all message and acknowledge them. */
 	for (;;) {
-		if (ibv_get_async_event(priv->ctx, &event))
+		if (mlx5_glue->get_async_event(priv->ctx, &event))
 			break;
 		if ((event.event_type == IBV_EVENT_PORT_ACTIVE ||
 			event.event_type == IBV_EVENT_PORT_ERR) &&
@@ -1245,7 +1246,7 @@ priv_dev_status_handler(struct priv *priv)
 		else
 			DEBUG("event type %d on port %d not handled",
 			      event.event_type, event.element.port_num);
-		ibv_ack_async_event(&event);
+		mlx5_glue->ack_async_event(&event);
 	}
 	if (ret & (1 << RTE_ETH_EVENT_INTR_LSC))
 		if (priv_link_status_update(priv))
@@ -1531,7 +1532,7 @@ mlx5_is_removed(struct rte_eth_dev *dev)
 	struct ibv_device_attr device_attr;
 	struct priv *priv = dev->data->dev_private;
 
-	if (ibv_query_device(priv->ctx, &device_attr) == EIO)
+	if (mlx5_glue->query_device(priv->ctx, &device_attr) == EIO)
 		return 1;
 	return 0;
 }

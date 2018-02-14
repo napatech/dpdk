@@ -1,38 +1,8 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright 2016 6WIND S.A.
- *   Copyright 2016 Mellanox.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of 6WIND S.A. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright 2016 6WIND S.A.
+ * Copyright 2016 Mellanox.
  */
 
-/* Verbs header. */
-/* ISO C doesn't support unnamed structs/unions, disabling -pedantic. */
 #ifdef PEDANTIC
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
@@ -46,6 +16,7 @@
 
 #include "mlx5.h"
 #include "mlx5_rxtx.h"
+#include "mlx5_glue.h"
 
 struct mlx5_check_mempool_data {
 	int ret;
@@ -141,8 +112,15 @@ priv_txq_mp2mr_reg(struct priv *priv, struct mlx5_txq_data *txq,
 	DEBUG("%p: discovered new memory pool \"%s\" (%p)",
 	      (void *)txq_ctrl, mp->name, (void *)mp);
 	mr = priv_mr_get(priv, mp);
-	if (mr == NULL)
+	if (mr == NULL) {
+		if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+			DEBUG("Using unregistered mempool 0x%p(%s) in secondary process,"
+			     " please create mempool before rte_eth_dev_start()",
+			     (void *)mp, mp->name);
+			return NULL;
+		}
 		mr = priv_mr_new(priv, mp);
+	}
 	if (unlikely(mr == NULL)) {
 		DEBUG("%p: unable to configure MR, ibv_reg_mr() failed.",
 		      (void *)txq_ctrl);
@@ -308,8 +286,8 @@ priv_mr_new(struct priv *priv, struct rte_mempool *mp)
 	DEBUG("mempool %p using start=%p end=%p size=%zu for MR",
 	      (void *)mp, (void *)start, (void *)end,
 	      (size_t)(end - start));
-	mr->mr = ibv_reg_mr(priv->pd, (void *)start, end - start,
-			    IBV_ACCESS_LOCAL_WRITE);
+	mr->mr = mlx5_glue->reg_mr(priv->pd, (void *)start, end - start,
+				   IBV_ACCESS_LOCAL_WRITE);
 	mr->mp = mp;
 	mr->lkey = rte_cpu_to_be_32(mr->mr->lkey);
 	rte_atomic32_inc(&mr->refcnt);
@@ -365,7 +343,7 @@ priv_mr_release(struct priv *priv, struct mlx5_mr *mr)
 	DEBUG("Memory Region %p refcnt: %d",
 	      (void *)mr, rte_atomic32_read(&mr->refcnt));
 	if (rte_atomic32_dec_and_test(&mr->refcnt)) {
-		claim_zero(ibv_dereg_mr(mr->mr));
+		claim_zero(mlx5_glue->dereg_mr(mr->mr));
 		LIST_REMOVE(mr, next);
 		rte_free(mr);
 		return 0;

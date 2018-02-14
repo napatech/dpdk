@@ -41,6 +41,15 @@ New Features
      Also, make sure to start the actual text at the margin.
      =========================================================
 
+* **Add function to allow releasing internal EAL resources on exit**
+
+  During ``rte_eal_init()`` EAL allocates memory from hugepages to enable its
+  core libraries to perform their tasks. The ``rte_eal_cleanup()`` function
+  releases these resources, ensuring that no hugepage memory is leaked. It is
+  expected that all DPDK applications call ``rte_eal_cleanup()`` before
+  exiting. Not calling this function could result in leaking hugepages, leading
+  to failure during initialization of secondary processes.
+
 * **Added the ixgbe ethernet driver to support RSS with flow API.**
 
   Rte_flow actually defined to include RSS, but till now, RSS is out of
@@ -67,6 +76,38 @@ New Features
   rte_flow. This patch is to support i40e NIC with existing RSS
   configuration using rte_flow API.It also enable queue region configuration
   using flow API for i40e.
+
+* **Updated i40e driver to support PPPoE/PPPoL2TP.**
+
+  Updated i40e PMD to support PPPoE/PPPoL2TP with PPPoE/PPPoL2TP supporting
+  profiles which can be programmed by dynamic device personalization (DDP)
+  process.
+
+* **Updated mlx5 driver.**
+
+  Updated the mlx5 driver including the following changes:
+
+  * Enabled compilation as a plugin, thus removed the mandatory dependency with rdma-core.
+    With the special compilation, the rdma-core libraries will be loaded only in case
+    Mellanox device is being used. For binaries creation the PMD can be enabled, still not
+    requiring from every end user to install rdma-core.
+  * Improved multi-segment packet performance.
+  * Changed driver name to use the PCI address to be compatible with OVS-DPDK APIs.
+  * Extended statistics for physical port packet/byte counters.
+  * Converted to the new offloads API.
+  * Supported device removal check operation.
+
+* **Updated mlx4 driver.**
+
+  Updated the mlx4 driver including the following changes:
+
+  * Enabled compilation as a plugin, thus removed the mandatory dependency with rdma-core.
+    With the special compilation, the rdma-core libraries will be loaded only in case
+    Mellanox device is being used. For binaries creation the PMD can be enabled, still not
+    requiring from every end user to install rdma-core.
+  * Improved data path performance.
+  * Converted to the new offloads API.
+  * Supported device removal check operation.
 
 * **Added NVGRE and UDP tunnels support in Solarflare network PMD.**
 
@@ -150,6 +191,51 @@ New Features
   based on the capabilities of the attached event and ethernet devices. Also,
   renamed the application from SW PMD specific ``eventdev_pipeline_sw_pmd``
   to PMD agnostic ``eventdev_pipeline``.
+
+* **Added Rawdev, a generic device support library.**
+
+  Rawdev library provides support for integrating any generic device type with
+  DPDK framework. Generic devices are those which do not have a pre-defined
+  type within DPDK, for example, ethernet, crypto, event etc.
+  A set of northbound APIs have been defined which encompass a generic set of
+  operations by allowing applications to interact with device using opaque
+  structures/buffers. Also, southbound APIs provide APIs for integrating device
+  either as as part of a physical bus (PCI, FSLMC etc) or through ``vdev``.
+
+  See the :doc:`../prog_guide/rawdev` programmer's guide for more details.
+
+* **Added new multi-process communication channel**
+
+  Added a generic channel in EAL for multi-process (primary/secondary) communication.
+  Consumers of this channel need to register an action with an action name to response
+  a message received; the actions will be identified by the action name and executed
+  in the context of a new dedicated thread for this channel. The list of new APIs:
+
+  * ``rte_mp_register`` and ``rte_mp_unregister`` are for action (un)registration.
+  * ``rte_mp_sendmsg`` is for sending a message without blocking for a response.
+  * ``rte_mp_request`` is for sending a request message and will block until
+    it gets a reply message which is sent from the peer by ``rte_mp_reply``.
+
+* **Increased default Rx and Tx ring size in sample applications.**
+
+  Increased the default ``RX_RING_SIZE`` and ``TX_RING_SIZE`` to 1024 entries
+  in testpmd and the sample applications to give better performance in the
+  general case. The user should experiment with various Rx and Tx ring sizes
+  for their specific application to get best performance.
+
+* **Added new DPDK build system using the tools "meson" and "ninja" [EXPERIMENTAL]**
+
+  Added in support for building DPDK using ``meson`` and ``ninja``, which gives
+  additional features, such as automatic build-time configuration, over the
+  current build system using ``make``. For instructions on how to do a DPDK build
+  using the new system, see the instructions in ``doc/build-sdk-meson.txt``.
+
+.. note::
+
+    This new build system support is incomplete at this point and is added
+    as experimental in this release. The existing build system using ``make``
+    is unaffected by these changes, and can continue to be used for this
+    and subsequent releases until such time as it's deprecation is announced.
 
 
 API Changes
@@ -267,6 +353,7 @@ The libraries prepended with a plus sign were incremented in this version.
      librte_pmd_vhost.so.2
      librte_port.so.3
      librte_power.so.1
+   + librte_rawdev.so.1
      librte_reorder.so.1
      librte_ring.so.1
      librte_sched.so.1
@@ -295,3 +382,78 @@ Tested Platforms
    This section is a comment. do not overwrite or remove it.
    Also, make sure to start the actual text at the margin.
    =========================================================
+
+* Intel(R) platforms with Intel(R) NICs combinations
+
+   * CPU
+
+     * Intel(R) Atom(TM) CPU C2758 @ 2.40GHz
+     * Intel(R) Xeon(R) CPU D-1540 @ 2.00GHz
+     * Intel(R) Xeon(R) CPU D-1541 @ 2.10GHz
+     * Intel(R) Xeon(R) CPU E5-4667 v3 @ 2.00GHz
+     * Intel(R) Xeon(R) CPU E5-2680 v2 @ 2.80GHz
+     * Intel(R) Xeon(R) CPU E5-2699 v4 @ 2.20GHz
+     * Intel(R) Xeon(R) CPU E5-2695 v4 @ 2.10GHz
+     * Intel(R) Xeon(R) CPU E5-2658 v2 @ 2.40GHz
+     * Intel(R) Xeon(R) CPU E5-2658 v3 @ 2.20GHz
+     * Intel(R) Xeon(R) Platinum 8180 CPU @ 2.50GHz
+
+   * OS:
+
+     * CentOS 7.2
+     * Fedora 25
+     * Fedora 26
+     * Fedora 27
+     * FreeBSD 11
+     * Red Hat Enterprise Linux Server release 7.3
+     * SUSE Enterprise Linux 12
+     * Wind River Linux 8
+     * Ubantu 14.04
+     * Ubuntu 16.04
+     * Ubuntu 16.10
+     * Ubantu 17.10
+
+   * NICs:
+
+     * Intel(R) 82599ES 10 Gigabit Ethernet Controller
+
+       * Firmware version: 0x61bf0001
+       * Device id (pf/vf): 8086:10fb / 8086:10ed
+       * Driver version: 5.2.3 (ixgbe)
+
+     * Intel(R) Corporation Ethernet Connection X552/X557-AT 10GBASE-T
+
+       * Firmware version: 0x800003e7
+       * Device id (pf/vf): 8086:15ad / 8086:15a8
+       * Driver version: 4.4.6 (ixgbe)
+
+     * Intel(R) Ethernet Converged Network Adapter X710-DA4 (4x10G)
+
+       * Firmware version: 6.01 0x80003221
+       * Device id (pf/vf): 8086:1572 / 8086:154c
+       * Driver version: 2.4.3 (i40e)
+
+     * Intel Corporation Ethernet Connection X722 for 10GBASE-T
+
+       * firmware-version: 6.01 0x80003221
+       * Device id: 8086:37d2 / 8086:154c
+       * Driver version: 2.4.3 (i40e)
+
+     * Intel(R) Ethernet Converged Network Adapter XXV710-DA2 (2x25G)
+
+       * Firmware version: 6.01 0x80003221
+       * Device id (pf/vf): 8086:158b / 8086:154c
+       * Driver version: 2.4.3 (i40e)
+
+     * Intel(R) Ethernet Converged Network Adapter XL710-QDA2 (2X40G)
+
+       * Firmware version: 6.01 0x8000321c
+       * Device id (pf/vf): 8086:1583 / 8086:154c
+       * Driver version: 2.4.3 (i40e)
+
+     * Intel(R) Corporation I350 Gigabit Network Connection
+
+       * Firmware version: 1.63, 0x80000dda
+       * Device id (pf/vf): 8086:1521 / 8086:1520
+       * Driver version: 5.3.0-k (igb)
+

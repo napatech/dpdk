@@ -1,44 +1,18 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright 2015 6WIND S.A.
- *   Copyright 2015 Mellanox.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of 6WIND S.A. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright 2015 6WIND S.A.
+ * Copyright 2015 Mellanox.
  */
 
 #include <stddef.h>
 #include <unistd.h>
 #include <string.h>
 #include <assert.h>
+#include <dlfcn.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <net/if.h>
+#include <sys/mman.h>
 
 /* Verbs header. */
 /* ISO C doesn't support unnamed structs/unions, disabling -pedantic. */
@@ -56,6 +30,8 @@
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
 #include <rte_common.h>
+#include <rte_config.h>
+#include <rte_eal_memconfig.h>
 #include <rte_kvargs.h>
 
 #include "mlx5.h"
@@ -63,6 +39,7 @@
 #include "mlx5_rxtx.h"
 #include "mlx5_autoconf.h"
 #include "mlx5_defs.h"
+#include "mlx5_glue.h"
 
 /* Device parameter to enable RX completion queue compression. */
 #define MLX5_RXQ_CQE_COMP_EN "rxq_cqe_comp_en"
@@ -139,10 +116,20 @@ mlx5_alloc_verbs_buf(size_t size, void *data)
 	struct priv *priv = data;
 	void *ret;
 	size_t alignment = sysconf(_SC_PAGESIZE);
+	unsigned int socket = SOCKET_ID_ANY;
 
+	if (priv->verbs_alloc_ctx.type == MLX5_VERBS_ALLOC_TYPE_TX_QUEUE) {
+		const struct mlx5_txq_ctrl *ctrl = priv->verbs_alloc_ctx.obj;
+
+		socket = ctrl->socket;
+	} else if (priv->verbs_alloc_ctx.type ==
+		   MLX5_VERBS_ALLOC_TYPE_RX_QUEUE) {
+		const struct mlx5_rxq_ctrl *ctrl = priv->verbs_alloc_ctx.obj;
+
+		socket = ctrl->socket;
+	}
 	assert(data != NULL);
-	ret = rte_malloc_socket(__func__, size, alignment,
-				priv->dev->device->numa_node);
+	ret = rte_malloc_socket(__func__, size, alignment, socket);
 	DEBUG("Extern alloc size: %lu, align: %lu: %p", size, alignment, ret);
 	return ret;
 }
@@ -206,8 +193,8 @@ mlx5_dev_close(struct rte_eth_dev *dev)
 	}
 	if (priv->pd != NULL) {
 		assert(priv->ctx != NULL);
-		claim_zero(ibv_dealloc_pd(priv->pd));
-		claim_zero(ibv_close_device(priv->ctx));
+		claim_zero(mlx5_glue->dealloc_pd(priv->pd));
+		claim_zero(mlx5_glue->close_device(priv->ctx));
 	} else
 		assert(priv->ctx == NULL);
 	if (priv->rss_conf.rss_key != NULL)
@@ -468,6 +455,106 @@ mlx5_args(struct mlx5_dev_config *config, struct rte_devargs *devargs)
 
 static struct rte_pci_driver mlx5_driver;
 
+/*
+ * Reserved UAR address space for TXQ UAR(hw doorbell) mapping, process
+ * local resource used by both primary and secondary to avoid duplicate
+ * reservation.
+ * The space has to be available on both primary and secondary process,
+ * TXQ UAR maps to this area using fixed mmap w/o double check.
+ */
+static void *uar_base;
+
+/**
+ * Reserve UAR address space for primary process.
+ *
+ * @param[in] priv
+ *   Pointer to private structure.
+ *
+ * @return
+ *   0 on success, errno value on failure.
+ */
+static int
+priv_uar_init_primary(struct priv *priv)
+{
+	void *addr = (void *)0;
+	int i;
+	const struct rte_mem_config *mcfg;
+	int ret;
+
+	if (uar_base) { /* UAR address space mapped. */
+		priv->uar_base = uar_base;
+		return 0;
+	}
+	/* find out lower bound of hugepage segments */
+	mcfg = rte_eal_get_configuration()->mem_config;
+	for (i = 0; i < RTE_MAX_MEMSEG && mcfg->memseg[i].addr; i++) {
+		if (addr)
+			addr = RTE_MIN(addr, mcfg->memseg[i].addr);
+		else
+			addr = mcfg->memseg[i].addr;
+	}
+	/* keep distance to hugepages to minimize potential conflicts. */
+	addr = RTE_PTR_SUB(addr, MLX5_UAR_OFFSET + MLX5_UAR_SIZE);
+	/* anonymous mmap, no real memory consumption. */
+	addr = mmap(addr, MLX5_UAR_SIZE,
+		    PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (addr == MAP_FAILED) {
+		ERROR("Failed to reserve UAR address space, please adjust "
+		      "MLX5_UAR_SIZE or try --base-virtaddr");
+		ret = ENOMEM;
+		return ret;
+	}
+	/* Accept either same addr or a new addr returned from mmap if target
+	 * range occupied.
+	 */
+	INFO("Reserved UAR address space: %p", addr);
+	priv->uar_base = addr; /* for primary and secondary UAR re-mmap. */
+	uar_base = addr; /* process local, don't reserve again. */
+	return 0;
+}
+
+/**
+ * Reserve UAR address space for secondary process, align with
+ * primary process.
+ *
+ * @param[in] priv
+ *   Pointer to private structure.
+ *
+ * @return
+ *   0 on success, errno value on failure.
+ */
+static int
+priv_uar_init_secondary(struct priv *priv)
+{
+	void *addr;
+	int ret;
+
+	assert(priv->uar_base);
+	if (uar_base) { /* already reserved. */
+		assert(uar_base == priv->uar_base);
+		return 0;
+	}
+	/* anonymous mmap, no real memory consumption. */
+	addr = mmap(priv->uar_base, MLX5_UAR_SIZE,
+		    PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (addr == MAP_FAILED) {
+		ERROR("UAR mmap failed: %p size: %llu",
+		      priv->uar_base, MLX5_UAR_SIZE);
+		ret = ENXIO;
+		return ret;
+	}
+	if (priv->uar_base != addr) {
+		ERROR("UAR address %p size %llu occupied, please adjust "
+		      "MLX5_UAR_OFFSET or try EAL parameter --base-virtaddr",
+		      priv->uar_base, MLX5_UAR_SIZE);
+		ret = ENXIO;
+		return ret;
+	}
+	uar_base = addr; /* process local, don't reserve again */
+	INFO("Reserved UAR address space: %p", addr);
+	return 0;
+}
+
 /**
  * DPDK callback to register a PCI device.
  *
@@ -513,7 +600,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 
 	/* Save PCI address. */
 	mlx5_dev[idx].pci_addr = pci_dev->addr;
-	list = ibv_get_device_list(&i);
+	list = mlx5_glue->get_device_list(&i);
 	if (list == NULL) {
 		assert(errno);
 		if (errno == ENOSYS)
@@ -563,12 +650,12 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		     " (SR-IOV: %s)",
 		     list[i]->name,
 		     sriov ? "true" : "false");
-		attr_ctx = ibv_open_device(list[i]);
+		attr_ctx = mlx5_glue->open_device(list[i]);
 		err = errno;
 		break;
 	}
 	if (attr_ctx == NULL) {
-		ibv_free_device_list(list);
+		mlx5_glue->free_device_list(list);
 		switch (err) {
 		case 0:
 			ERROR("cannot access device, is mlx5_ib loaded?");
@@ -587,7 +674,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 	 * Multi-packet send is supported by ConnectX-4 Lx PF as well
 	 * as all ConnectX-5 devices.
 	 */
-	mlx5dv_query_device(attr_ctx, &attrs_out);
+	mlx5_glue->dv_query_device(attr_ctx, &attrs_out);
 	if (attrs_out.flags & MLX5DV_CONTEXT_FLAGS_MPW_ALLOWED) {
 		if (attrs_out.flags & MLX5DV_CONTEXT_FLAGS_ENHANCED_MPW) {
 			DEBUG("Enhanced MPW is supported");
@@ -605,11 +692,13 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		cqe_comp = 0;
 	else
 		cqe_comp = 1;
-	if (ibv_query_device_ex(attr_ctx, NULL, &device_attr))
+	if (mlx5_glue->query_device_ex(attr_ctx, NULL, &device_attr))
 		goto error;
 	INFO("%u port(s) detected", device_attr.orig_attr.phys_port_cnt);
 
 	for (i = 0; i < device_attr.orig_attr.phys_port_cnt; i++) {
+		char name[RTE_ETH_NAME_MAX_LEN];
+		int len;
 		uint32_t port = i + 1; /* ports are indexed from one */
 		uint32_t test = (1 << i);
 		struct ibv_context *ctx = NULL;
@@ -633,14 +722,15 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			.inline_max_packet_sz = MLX5_ARG_UNSET,
 		};
 
+		len = snprintf(name, sizeof(name), PCI_PRI_FMT,
+			 pci_dev->addr.domain, pci_dev->addr.bus,
+			 pci_dev->addr.devid, pci_dev->addr.function);
+		if (device_attr.orig_attr.phys_port_cnt > 1)
+			snprintf(name + len, sizeof(name), " port %u", i);
+
 		mlx5_dev[idx].ports |= test;
 
 		if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
-			/* from rte_ethdev.c */
-			char name[RTE_ETH_NAME_MAX_LEN];
-
-			snprintf(name, sizeof(name), "%s port %u",
-				 ibv_get_device_name(ibv_dev), port);
 			eth_dev = rte_eth_dev_attach_secondary(name);
 			if (eth_dev == NULL) {
 				ERROR("can not attach rte ethdev");
@@ -650,6 +740,11 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			eth_dev->device = &pci_dev->device;
 			eth_dev->dev_ops = &mlx5_dev_sec_ops;
 			priv = eth_dev->data->dev_private;
+			err = priv_uar_init_secondary(priv);
+			if (err < 0) {
+				err = -err;
+				goto error;
+			}
 			/* Receive command fd from primary process */
 			err = priv_socket_connect(priv);
 			if (err < 0) {
@@ -658,10 +753,8 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			}
 			/* Remap UAR for Tx queues. */
 			err = priv_tx_uar_remap(priv, err);
-			if (err < 0) {
-				err = -err;
+			if (err)
 				goto error;
-			}
 			/*
 			 * Ethdev pointer is still required as input since
 			 * the primary device is not accessible from the
@@ -676,15 +769,15 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 
 		DEBUG("using port %u (%08" PRIx32 ")", port, test);
 
-		ctx = ibv_open_device(ibv_dev);
+		ctx = mlx5_glue->open_device(ibv_dev);
 		if (ctx == NULL) {
 			err = ENODEV;
 			goto port_error;
 		}
 
-		ibv_query_device_ex(ctx, NULL, &device_attr);
+		mlx5_glue->query_device_ex(ctx, NULL, &device_attr);
 		/* Check port status. */
-		err = ibv_query_port(ctx, port, &port_attr);
+		err = mlx5_glue->query_port(ctx, port, &port_attr);
 		if (err) {
 			ERROR("port query failed: %s", strerror(err));
 			goto port_error;
@@ -699,11 +792,11 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 
 		if (port_attr.state != IBV_PORT_ACTIVE)
 			DEBUG("port %d is not active: \"%s\" (%d)",
-			      port, ibv_port_state_str(port_attr.state),
+			      port, mlx5_glue->port_state_str(port_attr.state),
 			      port_attr.state);
 
 		/* Allocate protection domain. */
-		pd = ibv_alloc_pd(ctx);
+		pd = mlx5_glue->alloc_pd(ctx);
 		if (pd == NULL) {
 			ERROR("PD allocation failure");
 			err = ENOMEM;
@@ -735,7 +828,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			      strerror(err));
 			goto port_error;
 		}
-		if (ibv_query_device_ex(ctx, NULL, &device_attr_ex)) {
+		if (mlx5_glue->query_device_ex(ctx, NULL, &device_attr_ex)) {
 			ERROR("ibv_query_device_ex() failed");
 			goto port_error;
 		}
@@ -755,7 +848,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 
 #ifdef HAVE_IBV_DEVICE_COUNTERS_SET_SUPPORT
 		config.flow_counter_en = !!(device_attr.max_counter_sets);
-		ibv_describe_counter_set(ctx, 0, &cs_desc);
+		mlx5_glue->describe_counter_set(ctx, 0, &cs_desc);
 		DEBUG("counter type = %d, num of cs = %ld, attributes = %d",
 		      cs_desc.counter_type, cs_desc.num_of_cs,
 		      cs_desc.attributes);
@@ -774,9 +867,8 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		DEBUG("VLAN stripping is %ssupported",
 		      (config.hw_vlan_strip ? "" : "not "));
 
-		config.hw_fcs_strip =
-				!!(device_attr_ex.orig_attr.device_cap_flags &
-				IBV_WQ_FLAGS_SCATTER_FCS);
+		config.hw_fcs_strip = !!(device_attr_ex.raw_packet_caps &
+					 IBV_RAW_PACKET_CAP_SCATTER_FCS);
 		DEBUG("FCS stripping configuration is %ssupported",
 		      (config.hw_fcs_strip ? "" : "not "));
 
@@ -807,6 +899,9 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			WARN("Rx CQE compression isn't supported");
 			config.cqe_comp = 0;
 		}
+		err = priv_uar_init_primary(priv);
+		if (err)
+			goto port_error;
 		/* Configure the first MAC address by default. */
 		if (priv_get_mac(priv, &mac.addr_bytes)) {
 			ERROR("cannot get MAC address, is mlx5_en loaded?"
@@ -834,14 +929,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		priv_get_mtu(priv, &priv->mtu);
 		DEBUG("port %u MTU is %u", priv->port, priv->mtu);
 
-		/* from rte_ethdev.c */
-		{
-			char name[RTE_ETH_NAME_MAX_LEN];
-
-			snprintf(name, sizeof(name), "%s port %u",
-				 ibv_get_device_name(ibv_dev), port);
-			eth_dev = rte_eth_dev_allocate(name);
-		}
+		eth_dev = rte_eth_dev_allocate(name);
 		if (eth_dev == NULL) {
 			ERROR("can not allocate rte ethdev");
 			err = ENOMEM;
@@ -852,6 +940,11 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		eth_dev->device = &pci_dev->device;
 		rte_eth_copy_pci_info(eth_dev, pci_dev);
 		eth_dev->device->driver = &mlx5_driver.driver;
+		/*
+		 * Initialize burst functions to prevent crashes before link-up.
+		 */
+		eth_dev->rx_pkt_burst = removed_rx_burst;
+		eth_dev->tx_pkt_burst = removed_tx_burst;
 		priv->dev = eth_dev;
 		eth_dev->dev_ops = &mlx5_dev_ops;
 		/* Register MAC address. */
@@ -865,8 +958,9 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			.free = &mlx5_free_verbs_buf,
 			.data = priv,
 		};
-		mlx5dv_set_context_attr(ctx, MLX5DV_CTX_ATTR_BUF_ALLOCATORS,
-					(void *)((uintptr_t)&alctr));
+		mlx5_glue->dv_set_context_attr(ctx,
+					       MLX5DV_CTX_ATTR_BUF_ALLOCATORS,
+					       (void *)((uintptr_t)&alctr));
 
 		/* Bring Ethernet device up. */
 		DEBUG("forcing Ethernet interface up");
@@ -879,9 +973,9 @@ port_error:
 		if (priv)
 			rte_free(priv);
 		if (pd)
-			claim_zero(ibv_dealloc_pd(pd));
+			claim_zero(mlx5_glue->dealloc_pd(pd));
 		if (ctx)
-			claim_zero(ibv_close_device(ctx));
+			claim_zero(mlx5_glue->close_device(ctx));
 		break;
 	}
 
@@ -900,9 +994,9 @@ port_error:
 
 error:
 	if (attr_ctx)
-		claim_zero(ibv_close_device(attr_ctx));
+		claim_zero(mlx5_glue->close_device(attr_ctx));
 	if (list)
-		ibv_free_device_list(list);
+		mlx5_glue->free_device_list(list);
 	assert(err >= 0);
 	return -err;
 }
@@ -954,6 +1048,88 @@ static struct rte_pci_driver mlx5_driver = {
 	.drv_flags = RTE_PCI_DRV_INTR_LSC | RTE_PCI_DRV_INTR_RMV,
 };
 
+#ifdef RTE_LIBRTE_MLX5_DLOPEN_DEPS
+
+/**
+ * Initialization routine for run-time dependency on rdma-core.
+ */
+static int
+mlx5_glue_init(void)
+{
+	const char *path[] = {
+		/*
+		 * A basic security check is necessary before trusting
+		 * MLX5_GLUE_PATH, which may override RTE_EAL_PMD_PATH.
+		 */
+		(geteuid() == getuid() && getegid() == getgid() ?
+		 getenv("MLX5_GLUE_PATH") : NULL),
+		RTE_EAL_PMD_PATH,
+	};
+	unsigned int i = 0;
+	void *handle = NULL;
+	void **sym;
+	const char *dlmsg;
+
+	while (!handle && i != RTE_DIM(path)) {
+		const char *end;
+		size_t len;
+		int ret;
+
+		if (!path[i]) {
+			++i;
+			continue;
+		}
+		end = strpbrk(path[i], ":;");
+		if (!end)
+			end = path[i] + strlen(path[i]);
+		len = end - path[i];
+		ret = 0;
+		do {
+			char name[ret + 1];
+
+			ret = snprintf(name, sizeof(name), "%.*s%s" MLX5_GLUE,
+				       (int)len, path[i],
+				       (!len || *(end - 1) == '/') ? "" : "/");
+			if (ret == -1)
+				break;
+			if (sizeof(name) != (size_t)ret + 1)
+				continue;
+			DEBUG("looking for rdma-core glue as \"%s\"", name);
+			handle = dlopen(name, RTLD_LAZY);
+			break;
+		} while (1);
+		path[i] = end + 1;
+		if (!*end)
+			++i;
+	}
+	if (!handle) {
+		rte_errno = EINVAL;
+		dlmsg = dlerror();
+		if (dlmsg)
+			WARN("cannot load glue library: %s", dlmsg);
+		goto glue_error;
+	}
+	sym = dlsym(handle, "mlx5_glue");
+	if (!sym || !*sym) {
+		rte_errno = EINVAL;
+		dlmsg = dlerror();
+		if (dlmsg)
+			ERROR("cannot resolve glue symbol: %s", dlmsg);
+		goto glue_error;
+	}
+	mlx5_glue = *sym;
+	return 0;
+glue_error:
+	if (handle)
+		dlclose(handle);
+	WARN("cannot initialize PMD due to missing run-time"
+	     " dependency on rdma-core libraries (libibverbs,"
+	     " libmlx5)");
+	return -rte_errno;
+}
+
+#endif
+
 /**
  * Driver initialization routine.
  */
@@ -973,7 +1149,26 @@ rte_mlx5_pmd_init(void)
 	/* Match the size of Rx completion entry to the size of a cacheline. */
 	if (RTE_CACHE_LINE_SIZE == 128)
 		setenv("MLX5_CQE_SIZE", "128", 0);
-	ibv_fork_init();
+#ifdef RTE_LIBRTE_MLX5_DLOPEN_DEPS
+	if (mlx5_glue_init())
+		return;
+	assert(mlx5_glue);
+#endif
+#ifndef NDEBUG
+	/* Glue structure must not contain any NULL pointers. */
+	{
+		unsigned int i;
+
+		for (i = 0; i != sizeof(*mlx5_glue) / sizeof(void *); ++i)
+			assert(((const void *const *)mlx5_glue)[i]);
+	}
+#endif
+	if (strcmp(mlx5_glue->version, MLX5_GLUE_VERSION)) {
+		ERROR("rdma-core glue \"%s\" mismatch: \"%s\" is required",
+		      mlx5_glue->version, MLX5_GLUE_VERSION);
+		return;
+	}
+	mlx5_glue->fork_init();
 	rte_pci_register(&mlx5_driver);
 }
 

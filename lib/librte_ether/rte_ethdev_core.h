@@ -17,6 +17,10 @@
  *
  */
 
+struct rte_eth_dev_callback;
+/** @internal Structure to keep track of registered callbacks */
+TAILQ_HEAD(rte_eth_dev_cb_list, rte_eth_dev_callback);
+
 /*
  * Definitions of all functions exported by an Ethernet driver through the
  * the generic structure of type *eth_dev_ops* supplied in the *rte_eth_dev*
@@ -544,6 +548,7 @@ struct rte_eth_dev {
 } __rte_cache_aligned;
 
 struct rte_eth_dev_sriov;
+struct rte_eth_dev_owner;
 
 /**
  * @internal
@@ -595,6 +600,7 @@ struct rte_eth_dev_data {
 	int numa_node;  /**< NUMA node connection */
 	struct rte_vlan_filter_conf vlan_filter_conf;
 	/**< VLAN filter configuration. */
+	struct rte_eth_dev_owner owner; /**< The port owner. */
 };
 
 /**

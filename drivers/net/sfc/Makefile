@@ -13,6 +13,7 @@ include $(RTE_SDK)/mk/rte.vars.mk
 #
 LIB = librte_pmd_sfc_efx.a
 
+CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -I$(SRCDIR)/base/
 CFLAGS += -I$(SRCDIR)
 CFLAGS += -O3
@@ -59,7 +60,7 @@ BASE_DRIVER_OBJS=$(sort $(patsubst %.c,%.o,$(notdir $(wildcard $(SRCDIR)/base/*.
 $(foreach obj, $(BASE_DRIVER_OBJS), \
   $(eval CFLAGS_$(obj)+=$(CFLAGS_BASE_DRIVER)))
 
-EXPORT_MAP := rte_pmd_sfc_efx_version.map
+EXPORT_MAP := rte_pmd_sfc_version.map
 
 LIBABIVER := 1
 

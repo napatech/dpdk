@@ -282,12 +282,12 @@ print_mac(unsigned int portid, struct ether_addr *bbdev_ports_eth_address)
 {
 	printf("Port %u, MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n\n",
 			(unsigned int) portid,
-			bbdev_ports_eth_address[portid].addr_bytes[0],
-			bbdev_ports_eth_address[portid].addr_bytes[1],
-			bbdev_ports_eth_address[portid].addr_bytes[2],
-			bbdev_ports_eth_address[portid].addr_bytes[3],
-			bbdev_ports_eth_address[portid].addr_bytes[4],
-			bbdev_ports_eth_address[portid].addr_bytes[5]);
+			bbdev_ports_eth_address->addr_bytes[0],
+			bbdev_ports_eth_address->addr_bytes[1],
+			bbdev_ports_eth_address->addr_bytes[2],
+			bbdev_ports_eth_address->addr_bytes[3],
+			bbdev_ports_eth_address->addr_bytes[4],
+			bbdev_ports_eth_address->addr_bytes[5]);
 }
 
 static inline void
@@ -585,21 +585,28 @@ print_stats(struct stats_lcore_params *stats_lcore)
 				"Failed to calloc memory for xstats");
 
 	ret = rte_eth_xstats_get(port_id, xstats, len);
-	if (ret < 0 || ret > len)
+	if (ret < 0 || ret > len) {
+		free(xstats);
 		rte_exit(EXIT_FAILURE,
 				"rte_eth_xstats_get(%u) len%i failed: %d",
 				port_id, len, ret);
+	}
 
 	xstats_names = calloc(len, sizeof(*xstats_names));
-	if (xstats_names == NULL)
+	if (xstats_names == NULL) {
+		free(xstats);
 		rte_exit(EXIT_FAILURE,
 				"Failed to calloc memory for xstats_names");
+	}
 
 	ret = rte_eth_xstats_get_names(port_id, xstats_names, len);
-	if (ret < 0 || ret > len)
+	if (ret < 0 || ret > len) {
+		free(xstats);
+		free(xstats_names);
 		rte_exit(EXIT_FAILURE,
 				"rte_eth_xstats_get_names(%u) len%i failed: %d",
 				port_id, len, ret);
+	}
 
 	for (i = 0; i < len; i++) {
 		if (xstats[i].value > 0)
@@ -609,8 +616,16 @@ print_stats(struct stats_lcore_params *stats_lcore)
 					xstats[i].value);
 	}
 
+	ret = rte_bbdev_stats_get(bbdev_id, &bbstats);
+	if (ret < 0) {
+		free(xstats);
+		free(xstats_names);
+		rte_exit(EXIT_FAILURE,
+				"ERROR(%d): Failure to get BBDEV %u statistics\n",
+				ret, bbdev_id);
+	}
+
 	printf("\nBBDEV STATISTICS:\n=================\n");
-	rte_bbdev_stats_get(bbdev_id, &bbstats);
 	printf("BBDEV %u: %s enqueue count:\t\t%"PRIu64"\n",
 			bbdev_id, stats_border,
 			bbstats.enqueued_count);
@@ -630,6 +645,9 @@ print_stats(struct stats_lcore_params *stats_lcore)
 			continue;
 		print_lcore_stats(stats_lcore->lconf[l_id].lcore_stats, l_id);
 	}
+
+	free(xstats);
+	free(xstats_names);
 }
 
 static int

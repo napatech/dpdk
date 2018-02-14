@@ -1,6 +1,5 @@
-/*-
- * SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2010-2014 Intel Corporation
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2017 Intel Corporation
  */
 
 #include <stdio.h>
@@ -433,7 +432,8 @@ atomic_basic(struct test *t)
 				return -1;
 			}
 
-			for (int j = 0; j < 3; j++) {
+			int j;
+			for (j = 0; j < 3; j++) {
 				deq_ev[j].op = RTE_EVENT_OP_FORWARD;
 				deq_ev[j].queue_id = t->qid[1];
 			}
@@ -495,8 +495,9 @@ static int
 check_statistics(void)
 {
 	int num_ports = 3; /* Hard-coded for this app */
+	int i;
 
-	for (int i = 0; i < num_ports; i++) {
+	for (i = 0; i < num_ports; i++) {
 		int num_stats, num_stats_returned;
 
 		num_stats = rte_event_dev_xstats_names_get(0,
@@ -560,7 +561,6 @@ single_link_w_stats(struct test *t)
 	uint32_t deq_pkts;
 	struct rte_mbuf *mbufs[3];
 	RTE_SET_USED(mbufs);
-	RTE_SET_USED(i);
 
 	/* Create instance with 3 ports */
 	if (init(t, 2, tx_port + 1) < 0 ||
@@ -700,10 +700,8 @@ single_link(struct test *t)
 	/* const uint8_t w3_port = 3; */
 	const uint8_t tx_port = 2;
 	int err;
-	int i;
 	struct rte_mbuf *mbufs[3];
 	RTE_SET_USED(mbufs);
-	RTE_SET_USED(i);
 
 	/* Create instance with 5 ports */
 	if (init(t, 2, tx_port+1) < 0 ||
@@ -1002,11 +1000,13 @@ opdl_selftest(void)
 		/* turn on stats by default */
 		if (rte_vdev_init(eventdev_name, "do_validation=1") < 0) {
 			PMD_DRV_LOG(ERR, "Error creating eventdev\n");
+			free(t);
 			return -1;
 		}
 		evdev = rte_event_dev_get_dev_id(eventdev_name);
 		if (evdev < 0) {
 			PMD_DRV_LOG(ERR, "Error finding newly created eventdev\n");
+			free(t);
 			return -1;
 		}
 	}
@@ -1022,6 +1022,7 @@ opdl_selftest(void)
 				rte_socket_id());
 		if (!eventdev_func_mempool) {
 			PMD_DRV_LOG(ERR, "ERROR creating mempool\n");
+			free(t);
 			return -1;
 		}
 	}
@@ -1044,9 +1045,9 @@ opdl_selftest(void)
 	ret = single_link_w_stats(t);
 
 	/*
-	 * Free test instance, leaving mempool initialized, and a pointer to it
-	 * in static eventdev_func_mempool, as it is re-used on re-runs
+	 * Free test instance, free  mempool
 	 */
+	rte_mempool_free(t->mbuf_pool);
 	free(t);
 
 	if (ret != 0)

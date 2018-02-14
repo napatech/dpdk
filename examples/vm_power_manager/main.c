@@ -33,8 +33,8 @@
 #include <rte_pmd_i40e.h>
 #include <rte_pmd_bnxt.h>
 
-#define RX_RING_SIZE 512
-#define TX_RING_SIZE 512
+#define RX_RING_SIZE 1024
+#define TX_RING_SIZE 1024
 
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
@@ -290,7 +290,7 @@ main(int argc, char **argv)
 	for (portid = 0; portid < nb_ports; portid++) {
 		struct ether_addr eth;
 		int w, j;
-		int ret = -ENOTSUP;
+		int ret;
 
 		if ((enabled_port_mask & (1 << portid)) == 0)
 			continue;
@@ -308,8 +308,7 @@ main(int argc, char **argv)
 		for (w = 0; w < MAX_VFS; w++) {
 			eth.addr_bytes[5] = w + 0xf0;
 
-			if (ret == -ENOTSUP)
-				ret = rte_pmd_ixgbe_set_vf_mac_addr(portid,
+			ret = rte_pmd_ixgbe_set_vf_mac_addr(portid,
 						w, &eth);
 			if (ret == -ENOTSUP)
 				ret = rte_pmd_i40e_set_vf_mac_addr(portid,

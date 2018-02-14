@@ -1147,13 +1147,6 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev)
 		return 0;
 	}
 
-#ifdef RTE_LIBRTE_SECURITY
-	/* Initialize security_ctx only for primary process*/
-	eth_dev->security_ctx = ixgbe_ipsec_ctx_create(eth_dev);
-	if (eth_dev->security_ctx == NULL)
-		return -ENOMEM;
-#endif
-
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
 
 	/* Vendor and Device ID need to be set before init of shared code */
@@ -1179,6 +1172,12 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev)
 
 	/* Unlock any pending hardware semaphore */
 	ixgbe_swfw_lock_reset(hw);
+
+#ifdef RTE_LIBRTE_SECURITY
+	/* Initialize security_ctx only for primary process*/
+	if (ixgbe_ipsec_ctx_create(eth_dev))
+		return -ENOMEM;
+#endif
 
 	/* Initialize DCB configuration*/
 	memset(dcb_config, 0, sizeof(struct ixgbe_dcb_config));
@@ -3652,7 +3651,8 @@ ixgbe_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		DEV_RX_OFFLOAD_VLAN_STRIP |
 		DEV_RX_OFFLOAD_IPV4_CKSUM |
 		DEV_RX_OFFLOAD_UDP_CKSUM  |
-		DEV_RX_OFFLOAD_TCP_CKSUM;
+		DEV_RX_OFFLOAD_TCP_CKSUM  |
+		DEV_RX_OFFLOAD_CRC_STRIP;
 
 	/*
 	 * RSC is only supported by 82599 and x540 PF devices in a non-SR-IOV
@@ -3690,8 +3690,10 @@ ixgbe_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		dev_info->tx_offload_capa |= DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM;
 
 #ifdef RTE_LIBRTE_SECURITY
-	dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_SECURITY;
-	dev_info->tx_offload_capa |= DEV_TX_OFFLOAD_SECURITY;
+	if (dev->security_ctx) {
+		dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_SECURITY;
+		dev_info->tx_offload_capa |= DEV_TX_OFFLOAD_SECURITY;
+	}
 #endif
 
 	dev_info->default_rxconf = (struct rte_eth_rxconf) {
@@ -3797,7 +3799,8 @@ ixgbevf_dev_info_get(struct rte_eth_dev *dev,
 	dev_info->rx_offload_capa = DEV_RX_OFFLOAD_VLAN_STRIP |
 				DEV_RX_OFFLOAD_IPV4_CKSUM |
 				DEV_RX_OFFLOAD_UDP_CKSUM  |
-				DEV_RX_OFFLOAD_TCP_CKSUM;
+				DEV_RX_OFFLOAD_TCP_CKSUM  |
+				DEV_RX_OFFLOAD_CRC_STRIP;
 	dev_info->tx_offload_capa = DEV_TX_OFFLOAD_VLAN_INSERT |
 				DEV_TX_OFFLOAD_IPV4_CKSUM  |
 				DEV_TX_OFFLOAD_UDP_CKSUM   |
@@ -5001,7 +5004,11 @@ ixgbevf_dev_start(struct rte_eth_dev *dev)
 
 	PMD_INIT_FUNC_TRACE();
 
-	hw->mac.ops.reset_hw(hw);
+	err = hw->mac.ops.reset_hw(hw);
+	if (err) {
+		PMD_INIT_LOG(ERR, "Unable to reset vf hardware (%d)", err);
+		return err;
+	}
 	hw->mac.get_link_status = true;
 
 	/* negotiate mailbox API version to use with the PF. */
@@ -5033,7 +5040,8 @@ ixgbevf_dev_start(struct rte_eth_dev *dev)
 	ixgbevf_dev_rxtx_start(dev);
 
 	/* check and configure queue intr-vector mapping */
-	if (dev->data->dev_conf.intr_conf.rxq != 0) {
+	if (rte_intr_cap_multiple(intr_handle) &&
+	    dev->data->dev_conf.intr_conf.rxq) {
 		/* According to datasheet, only vector 0/1/2 can be used,
 		 * now only one vector is used for Rx queue
 		 */
@@ -8442,10 +8450,10 @@ RTE_INIT(ixgbe_init_log);
 static void
 ixgbe_init_log(void)
 {
-	ixgbe_logtype_init = rte_log_register("pmd.ixgbe.init");
+	ixgbe_logtype_init = rte_log_register("pmd.net.ixgbe.init");
 	if (ixgbe_logtype_init >= 0)
 		rte_log_set_level(ixgbe_logtype_init, RTE_LOG_NOTICE);
-	ixgbe_logtype_driver = rte_log_register("pmd.ixgbe.driver");
+	ixgbe_logtype_driver = rte_log_register("pmd.net.ixgbe.driver");
 	if (ixgbe_logtype_driver >= 0)
 		rte_log_set_level(ixgbe_logtype_driver, RTE_LOG_NOTICE);
 }

@@ -1,32 +1,5 @@
-..  BSD LICENSE
-    Copyright(c) 2010-2014 Intel Corporation. All rights reserved.
-    All rights reserved.
-
-    Redistribution and use in source and binary forms, with or without
-    modification, are permitted provided that the following conditions
-    are met:
-
-    * Redistributions of source code must retain the above copyright
-    notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-    notice, this list of conditions and the following disclaimer in
-    the documentation and/or other materials provided with the
-    distribution.
-    * Neither the name of Intel Corporation nor the names of its
-    contributors may be used to endorse or promote products derived
-    from this software without specific prior written permission.
-
-    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-    "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-    A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-    OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-    DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+..  SPDX-License-Identifier: BSD-3-Clause
+    Copyright(c) 2010-2014 Intel Corporation.
 
 Kernel NIC Interface Sample Application
 =======================================
@@ -209,6 +182,12 @@ Dumping the network traffic:
 
     #tcpdump -i vEth0_0
 
+Change the MAC address:
+
+.. code-block:: console
+
+    #ifconfig vEth0_0 hw ether 0C:01:02:03:04:08
+
 When the DPDK userspace application is closed, all the KNI devices are deleted from Linux*.
 
 Explanation
@@ -269,11 +248,15 @@ The code for allocating the kernel NIC interfaces for a specific port is as foll
                     conf.addr = dev_info.pci_dev->addr;
                     conf.id = dev_info.pci_dev->id;
 
+                    /* Get the interface default mac address */
+                    rte_eth_macaddr_get(port_id, (struct ether_addr *)&conf.mac_addr);
+
                     memset(&ops, 0, sizeof(ops));
 
                     ops.port_id = port_id;
                     ops.change_mtu = kni_change_mtu;
                     ops.config_network_if = kni_config_network_interface;
+                    ops.config_mac_address = kni_config_mac_address;
 
                     kni = rte_kni_alloc(pktmbuf_pool, &conf, &ops);
                 } else
@@ -502,13 +485,22 @@ Callbacks for Kernel Requests
 
 To execute specific PMD operations in user space requested by some Linux* commands,
 callbacks must be implemented and filled in the struct rte_kni_ops structure.
-Currently, setting a new MTU and configuring the network interface (up/ down) are supported.
+Currently, setting a new MTU, change in MAC address, configuring promiscusous mode and
+configuring the network interface(up/down) re supported.
+Default implementation for following is available in rte_kni library.
+Application may choose to not implement following callbacks:
+
+- ``config_mac_address``
+- ``config_promiscusity``
+
 
 .. code-block:: c
 
     static struct rte_kni_ops kni_ops = {
         .change_mtu = kni_change_mtu,
         .config_network_if = kni_config_network_interface,
+        .config_mac_address = kni_config_mac_address,
+        .config_promiscusity = kni_config_promiscusity,
     };
 
     /* Callback for request of changing MTU */
@@ -586,4 +578,20 @@ Currently, setting a new MTU and configuring the network interface (up/ down) ar
         if (ret < 0)
             RTE_LOG(ERR, APP, "Failed to start port %d\n", port_id);
         return ret;
+    }
+
+    /* Callback for request of configuring device mac address */
+
+    static int
+    kni_config_mac_address(uint16_t port_id, uint8_t mac_addr[])
+    {
+        .....
+    }
+
+    /* Callback for request of configuring promiscuous mode */
+
+    static int
+    kni_config_promiscusity(uint16_t port_id, uint8_t to_on)
+    {
+        .....
     }

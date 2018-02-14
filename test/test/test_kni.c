@@ -10,6 +10,17 @@
 
 #include "test.h"
 
+#ifndef RTE_LIBRTE_KNI
+
+static int
+test_kni(void)
+{
+	printf("KNI not supported, skipping test\n");
+	return TEST_SKIPPED;
+}
+
+#else
+
 #include <rte_string_fns.h>
 #include <rte_mempool.h>
 #include <rte_ethdev.h>
@@ -23,8 +34,8 @@
 #define PKT_BURST_SZ     32
 #define MEMPOOL_CACHE_SZ PKT_BURST_SZ
 #define SOCKET           0
-#define NB_RXD           128
-#define NB_TXD           512
+#define NB_RXD           1024
+#define NB_TXD           1024
 #define KNI_TIMEOUT_MS   5000 /* ms */
 
 #define IFCONFIG      "/sbin/ifconfig "
@@ -74,6 +85,8 @@ static const struct rte_eth_conf port_conf = {
 static struct rte_kni_ops kni_ops = {
 	.change_mtu = NULL,
 	.config_network_if = NULL,
+	.config_mac_address = NULL,
+	.config_promiscusity = NULL,
 };
 
 static unsigned lcore_master, lcore_ingress, lcore_egress;
@@ -231,6 +244,8 @@ test_kni_register_handler_mp(void)
 		struct rte_kni_ops ops = {
 			.change_mtu = kni_change_mtu,
 			.config_network_if = NULL,
+			.config_mac_address = NULL,
+			.config_promiscusity = NULL,
 		};
 
 		if (!kni) {
@@ -604,5 +619,7 @@ fail:
 
 	return ret;
 }
+
+#endif
 
 REGISTER_TEST_COMMAND(kni_autotest, test_kni);

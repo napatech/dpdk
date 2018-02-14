@@ -191,7 +191,7 @@ avf_init_rss(struct avf_adapter *adapter)
 				   vf->vf_res->rss_key_size));
 
 	/* init RSS LUT table */
-	for (i = 0; i < vf->vf_res->rss_lut_size; i++, j++) {
+	for (i = 0, j = 0; i < vf->vf_res->rss_lut_size; i++, j++) {
 		if (j >= nb_q)
 			j = 0;
 		vf->rss_lut[i] = j;
@@ -292,7 +292,8 @@ static int avf_config_rx_queues_irqs(struct rte_eth_dev *dev,
 	uint16_t interval, i;
 	int vec;
 
-	if (dev->data->dev_conf.intr_conf.rxq != 0) {
+	if (rte_intr_cap_multiple(intr_handle) &&
+	    dev->data->dev_conf.intr_conf.rxq) {
 		if (rte_intr_efd_enable(intr_handle, dev->data->nb_rx_queues))
 			return -1;
 	}
@@ -308,7 +309,8 @@ static int avf_config_rx_queues_irqs(struct rte_eth_dev *dev,
 		}
 	}
 
-	if (!dev->data->dev_conf.intr_conf.rxq) {
+	if (!dev->data->dev_conf.intr_conf.rxq ||
+	    !rte_intr_dp_is_en(intr_handle)) {
 		/* Rx interrupt disabled, Map interrupt only for writeback */
 		vf->nb_msix = 1;
 		if (vf->vf_res->vf_cap_flags &
@@ -609,9 +611,10 @@ avf_dev_link_update(struct rte_eth_dev *dev,
 	new_link.link_autoneg = !!(dev->data->dev_conf.link_speeds &
 				ETH_LINK_SPEED_FIXED);
 
-	rte_atomic64_cmpset((uint64_t *)&dev->data->dev_link,
-			    *(uint64_t *)&dev->data->dev_link,
-			    *(uint64_t *)&new_link);
+	if (rte_atomic64_cmpset((uint64_t *)&dev->data->dev_link,
+				*(uint64_t *)&dev->data->dev_link,
+				*(uint64_t *)&new_link) == 0)
+		return -1;
 
 	return 0;
 }
@@ -760,10 +763,10 @@ avf_dev_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 			err = avf_enable_vlan_strip(adapter);
 		else
 			err = avf_disable_vlan_strip(adapter);
-	}
 
-	if (err)
-		return -EIO;
+		if (err)
+			return -EIO;
+	}
 	return 0;
 }
 
@@ -1340,10 +1343,10 @@ RTE_INIT(avf_init_log);
 static void
 avf_init_log(void)
 {
-	avf_logtype_init = rte_log_register("pmd.avf.init");
+	avf_logtype_init = rte_log_register("pmd.net.avf.init");
 	if (avf_logtype_init >= 0)
 		rte_log_set_level(avf_logtype_init, RTE_LOG_NOTICE);
-	avf_logtype_driver = rte_log_register("pmd.avf.driver");
+	avf_logtype_driver = rte_log_register("pmd.net.avf.driver");
 	if (avf_logtype_driver >= 0)
 		rte_log_set_level(avf_logtype_driver, RTE_LOG_NOTICE);
 }

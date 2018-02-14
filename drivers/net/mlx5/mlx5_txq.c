@@ -1,34 +1,6 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright 2015 6WIND S.A.
- *   Copyright 2015 Mellanox.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of 6WIND S.A. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright 2015 6WIND S.A.
+ * Copyright 2015 Mellanox.
  */
 
 #include <stddef.h>
@@ -59,6 +31,7 @@
 #include "mlx5.h"
 #include "mlx5_rxtx.h"
 #include "mlx5_autoconf.h"
+#include "mlx5_glue.h"
 
 /**
  * Allocate TX queue elements.
@@ -288,7 +261,9 @@ mlx5_tx_queue_release(void *dpdk_txq)
 
 
 /**
- * Map locally UAR used in Tx queues for BlueFlame doorbell.
+ * Mmap TX UAR(HW doorbell) pages into reserved UAR address space.
+ * Both primary and secondary process do mmap to make UAR address
+ * aligned.
  *
  * @param[in] priv
  *   Pointer to private structure.
@@ -305,11 +280,14 @@ priv_tx_uar_remap(struct priv *priv, int fd)
 	uintptr_t pages[priv->txqs_n];
 	unsigned int pages_n = 0;
 	uintptr_t uar_va;
+	uintptr_t off;
 	void *addr;
+	void *ret;
 	struct mlx5_txq_data *txq;
 	struct mlx5_txq_ctrl *txq_ctrl;
 	int already_mapped;
 	size_t page_size = sysconf(_SC_PAGESIZE);
+	int r;
 
 	memset(pages, 0, priv->txqs_n * sizeof(uintptr_t));
 	/*
@@ -318,10 +296,14 @@ priv_tx_uar_remap(struct priv *priv, int fd)
 	 * Ref to libmlx5 function: mlx5_init_context()
 	 */
 	for (i = 0; i != priv->txqs_n; ++i) {
+		if (!(*priv->txqs)[i])
+			continue;
 		txq = (*priv->txqs)[i];
 		txq_ctrl = container_of(txq, struct mlx5_txq_ctrl, txq);
-		uar_va = (uintptr_t)txq_ctrl->txq.bf_reg;
-		uar_va = RTE_ALIGN_FLOOR(uar_va, page_size);
+		/* UAR addr form verbs used to find dup and offset in page. */
+		uar_va = (uintptr_t)txq_ctrl->bf_reg_orig;
+		off = uar_va & (page_size - 1); /* offset in page. */
+		uar_va = RTE_ALIGN_FLOOR(uar_va, page_size); /* page addr. */
 		already_mapped = 0;
 		for (j = 0; j != pages_n; ++j) {
 			if (pages[j] == uar_va) {
@@ -329,16 +311,30 @@ priv_tx_uar_remap(struct priv *priv, int fd)
 				break;
 			}
 		}
-		if (already_mapped)
-			continue;
-		pages[pages_n++] = uar_va;
-		addr = mmap((void *)uar_va, page_size,
-			    PROT_WRITE, MAP_FIXED | MAP_SHARED, fd,
-			    txq_ctrl->uar_mmap_offset);
-		if (addr != (void *)uar_va) {
-			ERROR("call to mmap failed on UAR for txq %d\n", i);
-			return -1;
+		/* new address in reserved UAR address space. */
+		addr = RTE_PTR_ADD(priv->uar_base,
+				   uar_va & (MLX5_UAR_SIZE - 1));
+		if (!already_mapped) {
+			pages[pages_n++] = uar_va;
+			/* fixed mmap to specified address in reserved
+			 * address space.
+			 */
+			ret = mmap(addr, page_size,
+				   PROT_WRITE, MAP_FIXED | MAP_SHARED, fd,
+				   txq_ctrl->uar_mmap_offset);
+			if (ret != addr) {
+				/* fixed mmap have to return same address */
+				ERROR("call to mmap failed on UAR for txq %d\n",
+				      i);
+				r = ENXIO;
+				return r;
+			}
 		}
+		if (rte_eal_process_type() == RTE_PROC_PRIMARY) /* save once */
+			txq_ctrl->txq.bf_reg = RTE_PTR_ADD((void *)addr, off);
+		else
+			assert(txq_ctrl->txq.bf_reg ==
+			       RTE_PTR_ADD((void *)addr, off));
 	}
 	return 0;
 }
@@ -396,6 +392,8 @@ mlx5_priv_txq_ibv_new(struct priv *priv, uint16_t idx)
 	int ret = 0;
 
 	assert(txq_data);
+	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_TX_QUEUE;
+	priv->verbs_alloc_ctx.obj = txq_ctrl;
 	if (mlx5_getenv_int("MLX5_ENABLE_CQE_COMPRESSION")) {
 		ERROR("MLX5_ENABLE_CQE_COMPRESSION must never be set");
 		goto error;
@@ -409,7 +407,7 @@ mlx5_priv_txq_ibv_new(struct priv *priv, uint16_t idx)
 		((desc / MLX5_TX_COMP_THRESH) - 1) : 1;
 	if (is_empw_burst_func(tx_pkt_burst))
 		cqe_n += MLX5_TX_COMP_THRESH_INLINE_DIV;
-	tmpl.cq = ibv_create_cq(priv->ctx, cqe_n, NULL, NULL, 0);
+	tmpl.cq = mlx5_glue->create_cq(priv->ctx, cqe_n, NULL, NULL, 0);
 	if (tmpl.cq == NULL) {
 		ERROR("%p: CQ creation failure", (void *)txq_ctrl);
 		goto error;
@@ -450,7 +448,7 @@ mlx5_priv_txq_ibv_new(struct priv *priv, uint16_t idx)
 		attr.init.max_tso_header = txq_ctrl->max_tso_header;
 		attr.init.comp_mask |= IBV_QP_INIT_ATTR_MAX_TSO_HEADER;
 	}
-	tmpl.qp = ibv_create_qp_ex(priv->ctx, &attr.init);
+	tmpl.qp = mlx5_glue->create_qp_ex(priv->ctx, &attr.init);
 	if (tmpl.qp == NULL) {
 		ERROR("%p: QP creation failure", (void *)txq_ctrl);
 		goto error;
@@ -461,7 +459,8 @@ mlx5_priv_txq_ibv_new(struct priv *priv, uint16_t idx)
 		/* Primary port number. */
 		.port_num = priv->port
 	};
-	ret = ibv_modify_qp(tmpl.qp, &attr.mod, (IBV_QP_STATE | IBV_QP_PORT));
+	ret = mlx5_glue->modify_qp(tmpl.qp, &attr.mod,
+				   (IBV_QP_STATE | IBV_QP_PORT));
 	if (ret) {
 		ERROR("%p: QP state to IBV_QPS_INIT failed", (void *)txq_ctrl);
 		goto error;
@@ -469,13 +468,13 @@ mlx5_priv_txq_ibv_new(struct priv *priv, uint16_t idx)
 	attr.mod = (struct ibv_qp_attr){
 		.qp_state = IBV_QPS_RTR
 	};
-	ret = ibv_modify_qp(tmpl.qp, &attr.mod, IBV_QP_STATE);
+	ret = mlx5_glue->modify_qp(tmpl.qp, &attr.mod, IBV_QP_STATE);
 	if (ret) {
 		ERROR("%p: QP state to IBV_QPS_RTR failed", (void *)txq_ctrl);
 		goto error;
 	}
 	attr.mod.qp_state = IBV_QPS_RTS;
-	ret = ibv_modify_qp(tmpl.qp, &attr.mod, IBV_QP_STATE);
+	ret = mlx5_glue->modify_qp(tmpl.qp, &attr.mod, IBV_QP_STATE);
 	if (ret) {
 		ERROR("%p: QP state to IBV_QPS_RTS failed", (void *)txq_ctrl);
 		goto error;
@@ -490,7 +489,7 @@ mlx5_priv_txq_ibv_new(struct priv *priv, uint16_t idx)
 	obj.cq.out = &cq_info;
 	obj.qp.in = tmpl.qp;
 	obj.qp.out = &qp;
-	ret = mlx5dv_init_obj(&obj, MLX5DV_OBJ_CQ | MLX5DV_OBJ_QP);
+	ret = mlx5_glue->dv_init_obj(&obj, MLX5DV_OBJ_CQ | MLX5DV_OBJ_QP);
 	if (ret != 0)
 		goto error;
 	if (cq_info.cqe_size != RTE_CACHE_LINE_SIZE) {
@@ -503,7 +502,7 @@ mlx5_priv_txq_ibv_new(struct priv *priv, uint16_t idx)
 	txq_data->wqes = qp.sq.buf;
 	txq_data->wqe_n = log2above(qp.sq.wqe_cnt);
 	txq_data->qp_db = &qp.dbrec[MLX5_SND_DBR];
-	txq_data->bf_reg = qp.bf.reg;
+	txq_ctrl->bf_reg_orig = qp.bf.reg;
 	txq_data->cq_db = cq_info.dbrec;
 	txq_data->cqes =
 		(volatile struct mlx5_cqe (*)[])
@@ -526,12 +525,14 @@ mlx5_priv_txq_ibv_new(struct priv *priv, uint16_t idx)
 	DEBUG("%p: Verbs Tx queue %p: refcnt %d", (void *)priv,
 	      (void *)txq_ibv, rte_atomic32_read(&txq_ibv->refcnt));
 	LIST_INSERT_HEAD(&priv->txqsibv, txq_ibv, next);
+	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_NONE;
 	return txq_ibv;
 error:
 	if (tmpl.cq)
-		claim_zero(ibv_destroy_cq(tmpl.cq));
+		claim_zero(mlx5_glue->destroy_cq(tmpl.cq));
 	if (tmpl.qp)
-		claim_zero(ibv_destroy_qp(tmpl.qp));
+		claim_zero(mlx5_glue->destroy_qp(tmpl.qp));
+	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_NONE;
 	return NULL;
 }
 
@@ -584,8 +585,8 @@ mlx5_priv_txq_ibv_release(struct priv *priv, struct mlx5_txq_ibv *txq_ibv)
 	DEBUG("%p: Verbs Tx queue %p: refcnt %d", (void *)priv,
 	      (void *)txq_ibv, rte_atomic32_read(&txq_ibv->refcnt));
 	if (rte_atomic32_dec_and_test(&txq_ibv->refcnt)) {
-		claim_zero(ibv_destroy_qp(txq_ibv->qp));
-		claim_zero(ibv_destroy_cq(txq_ibv->cq));
+		claim_zero(mlx5_glue->destroy_qp(txq_ibv->qp));
+		claim_zero(mlx5_glue->destroy_cq(txq_ibv->cq));
 		LIST_REMOVE(txq_ibv, next);
 		rte_free(txq_ibv);
 		return 0;
@@ -836,6 +837,7 @@ mlx5_priv_txq_release(struct priv *priv, uint16_t idx)
 {
 	unsigned int i;
 	struct mlx5_txq_ctrl *txq;
+	size_t page_size = sysconf(_SC_PAGESIZE);
 
 	if (!(*priv->txqs)[idx])
 		return 0;
@@ -855,6 +857,9 @@ mlx5_priv_txq_release(struct priv *priv, uint16_t idx)
 			txq->txq.mp2mr[i] = NULL;
 		}
 	}
+	if (priv->uar_base)
+		munmap((void *)RTE_ALIGN_FLOOR((uintptr_t)txq->txq.bf_reg,
+		       page_size), page_size);
 	if (rte_atomic32_dec_and_test(&txq->refcnt)) {
 		txq_free_elts(txq);
 		LIST_REMOVE(txq, next);

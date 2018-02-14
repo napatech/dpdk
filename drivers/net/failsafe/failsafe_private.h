@@ -1,34 +1,6 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright 2017 6WIND S.A.
- *   Copyright 2017 Mellanox.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of 6WIND S.A. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright 2017 6WIND S.A.
+ * Copyright 2017 Mellanox.
  */
 
 #ifndef _RTE_ETH_FAILSAFE_PRIVATE_H_
@@ -40,8 +12,10 @@
 #include <rte_dev.h>
 #include <rte_ethdev_driver.h>
 #include <rte_devargs.h>
+#include <rte_interrupts.h>
 
 #define FAILSAFE_DRIVER_NAME "Fail-safe PMD"
+#define FAILSAFE_OWNER_NAME "Fail-safe"
 
 #define PMD_FAILSAFE_MAC_KVARG "mac"
 #define PMD_FAILSAFE_HOTPLUG_POLL_KVARG "hotplug_poll"
@@ -60,7 +34,26 @@
 
 #define DEVARGS_MAXLEN 4096
 
+enum rxp_service_state {
+	SS_NO_SERVICE = 0,
+	SS_REGISTERED,
+	SS_READY,
+	SS_RUNNING,
+};
+
 /* TYPES */
+
+struct rx_proxy {
+	/* epoll file descriptor */
+	int efd;
+	/* event vector to be used by epoll */
+	struct rte_epoll_event *evec;
+	/* rte service id */
+	uint32_t sid;
+	/* service core id */
+	uint32_t scid;
+	enum rxp_service_state sstate;
+};
 
 struct rxq {
 	struct fs_priv *priv;
@@ -68,6 +61,8 @@ struct rxq {
 	/* next sub_device to poll */
 	struct sub_device *sdev;
 	unsigned int socket_id;
+	int event_fd;
+	unsigned int enable_events:1;
 	struct rte_eth_rxq_info info;
 	rte_atomic64_t refcnt[];
 };
@@ -145,6 +140,8 @@ struct fs_priv {
 	uint32_t mac_addr_pool[FAILSAFE_MAX_ETHADDR];
 	/* current capabilities */
 	struct rte_eth_dev_info infos;
+	struct rte_eth_dev_owner my_owner; /* Unique owner. */
+	struct rte_intr_handle intr_handle; /* Port interrupt handle. */
 	/*
 	 * Fail-safe state machine.
 	 * This level will be tracking state of the EAL and eth
@@ -154,10 +151,27 @@ struct fs_priv {
 	 */
 	enum dev_state state;
 	struct rte_eth_stats stats_accumulator;
+	/*
+	 * Rx interrupts/events proxy.
+	 * The PMD issues Rx events to the EAL on behalf of its subdevices,
+	 * it does that by registering an event-fd for each of its queues with
+	 * the EAL. A PMD service thread listens to all the Rx events from the
+	 * subdevices, when an Rx event is issued by a subdevice it will be
+	 * caught by this service with will trigger an Rx event in the
+	 * appropriate failsafe Rx queue.
+	 */
+	struct rx_proxy rxp;
 	unsigned int pending_alarm:1; /* An alarm is pending */
 	/* flow isolation state */
 	int flow_isolated:1;
 };
+
+/* FAILSAFE_INTR */
+
+int failsafe_rx_intr_install(struct rte_eth_dev *dev);
+void failsafe_rx_intr_uninstall(struct rte_eth_dev *dev);
+int failsafe_rx_intr_install_subdevice(struct sub_device *sdev);
+void failsafe_rx_intr_uninstall_subdevice(struct sub_device *sdev);
 
 /* MISC */
 

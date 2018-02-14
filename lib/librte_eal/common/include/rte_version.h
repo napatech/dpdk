@@ -49,7 +49,7 @@ extern "C" {
  *   0-15 = release candidates
  *   16   = release
  */
-#define RTE_VER_RELEASE 1
+#define RTE_VER_RELEASE 4
 
 /**
 * Extra Napatech major version numbers

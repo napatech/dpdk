@@ -1,6 +1,5 @@
-/*-
- * SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2010-2014 Intel Corporation
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2017 Intel Corporation
  */
 
 #include <inttypes.h>
@@ -288,7 +287,8 @@ opdl_queue_setup(struct rte_eventdev *dev,
 		}
 	}
 	/* Check if queue id has been setup already */
-	for (uint32_t i = 0; i < device->nb_q_md; i++) {
+	uint32_t i;
+	for (i = 0; i < device->nb_q_md; i++) {
 		if (device->q_md[i].ext_id == queue_id) {
 			PMD_DRV_LOG(ERR, "DEV_ID:[%02d] : "
 				     "queue id %u already setup\n",
@@ -390,8 +390,8 @@ opdl_dump(struct rte_eventdev *dev, FILE *f)
 
 	fprintf(f,
 		"\n\n -- RING STATISTICS --\n");
-
-	for (uint32_t i = 0; i < device->nb_opdls; i++)
+	uint32_t i;
+	for (i = 0; i < device->nb_opdls; i++)
 		opdl_ring_dump(device->opdl[i], f);
 
 	fprintf(f,
@@ -400,7 +400,7 @@ opdl_dump(struct rte_eventdev *dev, FILE *f)
 		"Av. Grant Size     Av. Cycles PP"
 		"      Empty DEQs   Non Empty DEQs   Pkts Processed\n");
 
-	for (uint32_t i = 0; i < device->max_port_nb; i++) {
+	for (i = 0; i < device->max_port_nb; i++) {
 		char queue_id[64];
 		char total_cyc[64];
 		const char *p_type;
@@ -758,7 +758,7 @@ RTE_INIT(opdl_init_log);
 static void
 opdl_init_log(void)
 {
-	opdl_logtype_driver = rte_log_register("eventdev.opdl.driver");
+	opdl_logtype_driver = rte_log_register("pmd.event.opdl.driver");
 	if (opdl_logtype_driver >= 0)
 		rte_log_set_level(opdl_logtype_driver, RTE_LOG_INFO);
 }

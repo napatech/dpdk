@@ -1,35 +1,8 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright 2015 6WIND S.A.
- *   Copyright 2015 Mellanox.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of 6WIND S.A. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright 2015 6WIND S.A.
+ * Copyright 2015 Mellanox.
  */
+
 #include <unistd.h>
 
 #include <rte_ether.h>
@@ -76,10 +49,13 @@ priv_txq_start(struct priv *priv)
 			goto error;
 		}
 	}
-	return -ret;
+	ret = priv_tx_uar_remap(priv, priv->ctx->cmd_fd);
+	if (ret)
+		goto error;
+	return ret;
 error:
 	priv_txq_stop(priv);
-	return -ret;
+	return ret;
 }
 
 static void
@@ -166,7 +142,13 @@ mlx5_dev_start(struct rte_eth_dev *dev)
 	priv_xstats_init(priv);
 	/* Update link status and Tx/Rx callbacks for the first time. */
 	memset(&dev->data->dev_link, 0, sizeof(struct rte_eth_link));
-	priv_link_update(priv, 1);
+	INFO("Forcing port %u link to be up", dev->data->port_id);
+	err = priv_force_link_status_change(priv, ETH_LINK_UP);
+	if (err) {
+		DEBUG("Failed to set port %u link to be up",
+		      dev->data->port_id);
+		goto error;
+	}
 	priv_dev_interrupt_handler_install(priv, dev);
 	priv_unlock(priv);
 	return 0;
@@ -181,7 +163,7 @@ error:
 	priv_rxq_stop(priv);
 	priv_flow_delete_drop_queue(priv);
 	priv_unlock(priv);
-	return -err;
+	return err;
 }
 
 /**

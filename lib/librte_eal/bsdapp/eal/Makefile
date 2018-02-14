@@ -9,6 +9,7 @@ ARCH_DIR ?= $(RTE_ARCH)
 VPATH += $(RTE_SDK)/lib/librte_eal/common
 VPATH += $(RTE_SDK)/lib/librte_eal/common/arch/$(ARCH_DIR)
 
+CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -I$(SRCDIR)/include
 CFLAGS += -I$(RTE_SDK)/lib/librte_eal/common
 CFLAGS += -I$(RTE_SDK)/lib/librte_eal/common/include
@@ -57,6 +58,7 @@ SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += malloc_elem.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += malloc_heap.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += rte_keepalive.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += rte_service.c
+SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += rte_reciprocal.c
 
 # from arch dir
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += rte_cpuflags.c

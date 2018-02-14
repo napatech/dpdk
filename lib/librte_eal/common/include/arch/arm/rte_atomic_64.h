@@ -15,8 +15,8 @@ extern "C" {
 
 #include "generic/rte_atomic.h"
 
-#define dsb(opt)  { asm volatile("dsb " #opt : : : "memory"); }
-#define dmb(opt)  { asm volatile("dmb " #opt : : : "memory"); }
+#define dsb(opt) asm volatile("dsb " #opt : : : "memory")
+#define dmb(opt) asm volatile("dmb " #opt : : : "memory")
 
 #define rte_mb() dsb(sy)
 
@@ -35,6 +35,10 @@ extern "C" {
 #define rte_io_wmb() rte_wmb()
 
 #define rte_io_rmb() rte_rmb()
+
+#define rte_cio_wmb() dmb(oshst)
+
+#define rte_cio_rmb() dmb(oshld)
 
 #ifdef __cplusplus
 }

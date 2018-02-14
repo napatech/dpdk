@@ -72,11 +72,21 @@ F: doc/guides/prog_guide/build_app.rst
 F: doc/guides/prog_guide/dev_kit_*
 F: doc/guides/prog_guide/ext_app_lib_make_help.rst
 
+Meson build
+M: Bruce Richardson <bruce.richardson@intel.com>
+F: meson.build
+F: lib/librte_eal/bsdapp/BSDmakefile.meson
+F: meson_options.txt
+F: config/rte_config.h
+F: buildtools/gen-pmdinfo-cfile.sh
+F: buildtools/symlink-drivers-solibs.sh
+
 ABI versioning
 M: Neil Horman <nhorman@tuxdriver.com>
 F: lib/librte_compat/
 F: doc/guides/rel_notes/deprecation.rst
 F: devtools/validate-abi.sh
+F: buildtools/check-experimental-syms.sh
 
 Driver information
 F: buildtools/pmdinfogen/
@@ -95,6 +105,7 @@ F: lib/librte_eal/rte_eal_version.map
 F: doc/guides/prog_guide/env_abstraction_layer.rst
 F: test/test/test_alarm.c
 F: test/test/test_atomic.c
+F: test/test/test_barrier.c
 F: test/test/test_byteorder.c
 F: test/test/test_common.c
 F: test/test/test_cpuflags.c
@@ -108,6 +119,7 @@ F: test/test/test_logs.c
 F: test/test/test_memcpy*
 F: test/test/test_per_lcore.c
 F: test/test/test_prefetch.c
+F: test/test/test_reciprocal_division*
 F: test/test/test_rwlock.c
 F: test/test/test_spinlock.c
 F: test/test/test_string_fns.c
@@ -276,6 +288,7 @@ F: examples/bbdev_app/
 F: doc/guides/sample_app_ug/bbdev_app.rst
 
 Crypto API
+M: Pablo de Lara <pablo.de.lara.guarch@intel.com>
 M: Declan Doherty <declan.doherty@intel.com>
 T: git://dpdk.org/next/dpdk-next-crypto
 F: lib/librte_cryptodev/
@@ -301,6 +314,14 @@ T: git://dpdk.org/next/dpdk-next-eventdev
 F: lib/librte_eventdev/*eth_rx_adapter*
 F: test/test/test_event_eth_rx_adapter.c
 F: doc/guides/prog_guide/event_ethernet_rx_adapter.rst
+
+Raw device API - EXPERIMENTAL
+M: Shreyansh Jain <shreyansh.jain@nxp.com>
+M: Hemant Agrawal <hemant.agrawal@nxp.com>
+F: lib/librte_rawdev/
+F: drivers/raw/skeleton_rawdev/
+F: test/test/test_rawdev.c
+F: doc/guides/prog_guide/rawdev.rst
 
 
 Bus Drivers

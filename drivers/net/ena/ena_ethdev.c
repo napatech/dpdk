@@ -275,16 +275,17 @@ static inline void ena_rx_mbuf_prepare(struct rte_mbuf *mbuf,
 				       struct ena_com_rx_ctx *ena_rx_ctx)
 {
 	uint64_t ol_flags = 0;
+	uint32_t packet_type = 0;
 
 	if (ena_rx_ctx->l4_proto == ENA_ETH_IO_L4_PROTO_TCP)
-		ol_flags |= PKT_TX_TCP_CKSUM;
+		packet_type |= RTE_PTYPE_L4_TCP;
 	else if (ena_rx_ctx->l4_proto == ENA_ETH_IO_L4_PROTO_UDP)
-		ol_flags |= PKT_TX_UDP_CKSUM;
+		packet_type |= RTE_PTYPE_L4_UDP;
 
 	if (ena_rx_ctx->l3_proto == ENA_ETH_IO_L3_PROTO_IPV4)
-		ol_flags |= PKT_TX_IPV4;
+		packet_type |= RTE_PTYPE_L3_IPV4;
 	else if (ena_rx_ctx->l3_proto == ENA_ETH_IO_L3_PROTO_IPV6)
-		ol_flags |= PKT_TX_IPV6;
+		packet_type |= RTE_PTYPE_L3_IPV6;
 
 	if (unlikely(ena_rx_ctx->l4_csum_err))
 		ol_flags |= PKT_RX_L4_CKSUM_BAD;
@@ -292,6 +293,7 @@ static inline void ena_rx_mbuf_prepare(struct rte_mbuf *mbuf,
 		ol_flags |= PKT_RX_IP_CKSUM_BAD;
 
 	mbuf->ol_flags = ol_flags;
+	mbuf->packet_type = packet_type;
 }
 
 static inline void ena_tx_mbuf_prepare(struct rte_mbuf *mbuf,
@@ -1561,6 +1563,8 @@ static void ena_infos_get(struct rte_eth_dev *dev,
 			DEV_RX_OFFLOAD_UDP_CKSUM  |
 			DEV_RX_OFFLOAD_TCP_CKSUM;
 
+	rx_feat |= DEV_RX_OFFLOAD_JUMBO_FRAME;
+
 	/* Inform framework about available features */
 	dev_info->rx_offload_capa = rx_feat;
 	dev_info->rx_queue_offload_capa = rx_feat;
@@ -1898,10 +1902,10 @@ RTE_INIT(ena_init_log);
 static void
 ena_init_log(void)
 {
-	ena_logtype_init = rte_log_register("pmd.ena.init");
+	ena_logtype_init = rte_log_register("pmd.net.ena.init");
 	if (ena_logtype_init >= 0)
 		rte_log_set_level(ena_logtype_init, RTE_LOG_NOTICE);
-	ena_logtype_driver = rte_log_register("pmd.ena.driver");
+	ena_logtype_driver = rte_log_register("pmd.net.ena.driver");
 	if (ena_logtype_driver >= 0)
 		rte_log_set_level(ena_logtype_driver, RTE_LOG_NOTICE);
 }

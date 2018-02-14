@@ -1,35 +1,6 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2014 Intel Corporation. All rights reserved.
- *   Copyright 2014 6WIND S.A.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2014 Intel Corporation.
+ * Copyright 2014 6WIND S.A.
  */
 
 #include <string.h>
@@ -42,6 +13,7 @@
 #include <ctype.h>
 #include <sys/queue.h>
 
+#include <rte_compat.h>
 #include <rte_debug.h>
 #include <rte_common.h>
 #include <rte_log.h>
@@ -54,6 +26,7 @@
 #include <rte_branch_prediction.h>
 #include <rte_mempool.h>
 #include <rte_mbuf.h>
+#include <rte_mbuf_pool_ops.h>
 #include <rte_string_fns.h>
 #include <rte_hexdump.h>
 #include <rte_errno.h>
@@ -148,15 +121,15 @@ rte_pktmbuf_init(struct rte_mempool *mp,
 	m->next = NULL;
 }
 
-/* helper to create a mbuf pool */
-struct rte_mempool *
-rte_pktmbuf_pool_create(const char *name, unsigned n,
-	unsigned cache_size, uint16_t priv_size, uint16_t data_room_size,
-	int socket_id)
+/* Helper to create a mbuf pool with given mempool ops name*/
+struct rte_mempool * __rte_experimental
+rte_pktmbuf_pool_create_by_ops(const char *name, unsigned int n,
+	unsigned int cache_size, uint16_t priv_size, uint16_t data_room_size,
+	int socket_id, const char *ops_name)
 {
 	struct rte_mempool *mp;
 	struct rte_pktmbuf_pool_private mbp_priv;
-	const char *mp_ops_name;
+	const char *mp_ops_name = ops_name;
 	unsigned elt_size;
 	int ret;
 
@@ -176,7 +149,8 @@ rte_pktmbuf_pool_create(const char *name, unsigned n,
 	if (mp == NULL)
 		return NULL;
 
-	mp_ops_name = rte_eal_mbuf_default_mempool_ops();
+	if (mp_ops_name == NULL)
+		mp_ops_name = rte_mbuf_best_mempool_ops();
 	ret = rte_mempool_set_ops_byname(mp, mp_ops_name, NULL);
 	if (ret != 0) {
 		RTE_LOG(ERR, MBUF, "error setting mempool handler\n");
@@ -196,6 +170,16 @@ rte_pktmbuf_pool_create(const char *name, unsigned n,
 	rte_mempool_obj_iter(mp, rte_pktmbuf_init, NULL);
 
 	return mp;
+}
+
+/* helper to create a mbuf pool */
+struct rte_mempool *
+rte_pktmbuf_pool_create(const char *name, unsigned int n,
+	unsigned int cache_size, uint16_t priv_size, uint16_t data_room_size,
+	int socket_id)
+{
+	return rte_pktmbuf_pool_create_by_ops(name, n, cache_size, priv_size,
+			data_room_size, socket_id, NULL);
 }
 
 /* do some sanity checks on a mbuf: panic if it fails */

@@ -309,7 +309,7 @@ dpaa_eth_sg_to_mbuf(const struct qm_fd *fd, uint32_t ifid)
 
 	DPAA_DP_LOG(DEBUG, "Received an SG frame");
 
-	vaddr = rte_dpaa_mem_ptov(qm_fd_addr(fd));
+	vaddr = DPAA_MEMPOOL_PTOV(bp_info, qm_fd_addr(fd));
 	if (!vaddr) {
 		DPAA_PMD_ERR("unable to convert physical address");
 		return NULL;
@@ -318,7 +318,7 @@ dpaa_eth_sg_to_mbuf(const struct qm_fd *fd, uint32_t ifid)
 	sg_temp = &sgt[i++];
 	hw_sg_to_cpu(sg_temp);
 	temp = (struct rte_mbuf *)((char *)vaddr - bp_info->meta_data_size);
-	sg_vaddr = rte_dpaa_mem_ptov(qm_sg_entry_get64(sg_temp));
+	sg_vaddr = DPAA_MEMPOOL_PTOV(bp_info, qm_sg_entry_get64(sg_temp));
 
 	first_seg = (struct rte_mbuf *)((char *)sg_vaddr -
 						bp_info->meta_data_size);
@@ -334,7 +334,8 @@ dpaa_eth_sg_to_mbuf(const struct qm_fd *fd, uint32_t ifid)
 	while (i < DPAA_SGT_MAX_ENTRIES) {
 		sg_temp = &sgt[i++];
 		hw_sg_to_cpu(sg_temp);
-		sg_vaddr = rte_dpaa_mem_ptov(qm_sg_entry_get64(sg_temp));
+		sg_vaddr = DPAA_MEMPOOL_PTOV(bp_info,
+					     qm_sg_entry_get64(sg_temp));
 		cur_seg = (struct rte_mbuf *)((char *)sg_vaddr -
 						      bp_info->meta_data_size);
 		cur_seg->data_off = sg_temp->offset;
@@ -361,7 +362,7 @@ dpaa_eth_fd_to_mbuf(const struct qm_fd *fd, uint32_t ifid)
 {
 	struct rte_mbuf *mbuf;
 	struct dpaa_bp_info *bp_info = DPAA_BPID_TO_POOL_INFO(fd->bpid);
-	void *ptr = rte_dpaa_mem_ptov(qm_fd_addr(fd));
+	void *ptr;
 	uint8_t format =
 		(fd->opaque & DPAA_FD_FORMAT_MASK) >> DPAA_FD_FORMAT_SHIFT;
 	uint16_t offset;
@@ -371,6 +372,8 @@ dpaa_eth_fd_to_mbuf(const struct qm_fd *fd, uint32_t ifid)
 
 	if (unlikely(format == qm_fd_sg))
 		return dpaa_eth_sg_to_mbuf(fd, ifid);
+
+	ptr = DPAA_MEMPOOL_PTOV(bp_info, qm_fd_addr(fd));
 
 	rte_prefetch0((void *)((uint8_t *)ptr + DEFAULT_RX_ICEOF));
 
@@ -396,17 +399,80 @@ dpaa_eth_fd_to_mbuf(const struct qm_fd *fd, uint32_t ifid)
 	return mbuf;
 }
 
-enum qman_cb_dqrr_result dpaa_rx_cb(void *event __always_unused,
-				    struct qman_portal *qm __always_unused,
-				    struct qman_fq *fq,
-				    const struct qm_dqrr_entry *dqrr,
-				    void **bufs)
+void
+dpaa_rx_cb(struct qman_fq **fq, struct qm_dqrr_entry **dqrr,
+	   void **bufs, int num_bufs)
 {
-	const struct qm_fd *fd = &dqrr->fd;
+	struct rte_mbuf *mbuf;
+	struct dpaa_bp_info *bp_info;
+	const struct qm_fd *fd;
+	void *ptr;
+	struct dpaa_if *dpaa_intf;
+	uint16_t offset, i;
+	uint32_t length;
+	uint8_t format;
 
-	*bufs = dpaa_eth_fd_to_mbuf(fd,
-			((struct dpaa_if *)fq->dpaa_intf)->ifid);
-	return qman_cb_dqrr_consume;
+	if (dpaa_svr_family != SVR_LS1046A_FAMILY) {
+		bp_info = DPAA_BPID_TO_POOL_INFO(dqrr[0]->fd.bpid);
+		ptr = rte_dpaa_mem_ptov(qm_fd_addr(&dqrr[0]->fd));
+		rte_prefetch0((void *)((uint8_t *)ptr + DEFAULT_RX_ICEOF));
+		bufs[0] = (struct rte_mbuf *)((char *)ptr -
+				bp_info->meta_data_size);
+	}
+
+	for (i = 0; i < num_bufs; i++) {
+		if (dpaa_svr_family != SVR_LS1046A_FAMILY &&
+		    i < num_bufs - 1) {
+			bp_info = DPAA_BPID_TO_POOL_INFO(dqrr[i + 1]->fd.bpid);
+			ptr = rte_dpaa_mem_ptov(qm_fd_addr(&dqrr[i + 1]->fd));
+			rte_prefetch0((void *)((uint8_t *)ptr +
+					DEFAULT_RX_ICEOF));
+			bufs[i + 1] = (struct rte_mbuf *)((char *)ptr -
+					bp_info->meta_data_size);
+		}
+
+		fd = &dqrr[i]->fd;
+		dpaa_intf = fq[i]->dpaa_intf;
+
+		format = (fd->opaque & DPAA_FD_FORMAT_MASK) >>
+				DPAA_FD_FORMAT_SHIFT;
+		if (unlikely(format == qm_fd_sg)) {
+			bufs[i] = dpaa_eth_sg_to_mbuf(fd, dpaa_intf->ifid);
+			continue;
+		}
+
+		offset = (fd->opaque & DPAA_FD_OFFSET_MASK) >>
+				DPAA_FD_OFFSET_SHIFT;
+		length = fd->opaque & DPAA_FD_LENGTH_MASK;
+
+		mbuf = bufs[i];
+		mbuf->data_off = offset;
+		mbuf->data_len = length;
+		mbuf->pkt_len = length;
+		mbuf->port = dpaa_intf->ifid;
+
+		mbuf->nb_segs = 1;
+		mbuf->ol_flags = 0;
+		mbuf->next = NULL;
+		rte_mbuf_refcnt_set(mbuf, 1);
+		dpaa_eth_packet_info(mbuf, (uint64_t)mbuf->buf_addr);
+	}
+}
+
+void dpaa_rx_cb_prepare(struct qm_dqrr_entry *dq, void **bufs)
+{
+	struct dpaa_bp_info *bp_info = DPAA_BPID_TO_POOL_INFO(dq->fd.bpid);
+	void *ptr = rte_dpaa_mem_ptov(qm_fd_addr(&dq->fd));
+
+	/* In case of LS1046, annotation stashing is disabled due to L2 cache
+	 * being bottleneck in case of multicore scanario for this platform.
+	 * So we prefetch the annoation beforehand, so that it is available
+	 * in cache when accessed.
+	 */
+	if (dpaa_svr_family == SVR_LS1046A_FAMILY)
+		rte_prefetch0((void *)((uint8_t *)ptr + DEFAULT_RX_ICEOF));
+
+	*bufs = (struct rte_mbuf *)((char *)ptr - bp_info->meta_data_size);
 }
 
 static uint16_t
@@ -500,10 +566,12 @@ uint16_t dpaa_eth_queue_rx(void *q,
 	if (likely(fq->is_static))
 		return dpaa_eth_queue_portal_rx(fq, bufs, nb_bufs);
 
-	ret = rte_dpaa_portal_init((void *)0);
-	if (ret) {
-		DPAA_PMD_ERR("Failure in affining portal");
-		return 0;
+	if (unlikely(!RTE_PER_LCORE(dpaa_io))) {
+		ret = rte_dpaa_portal_init((void *)0);
+		if (ret) {
+			DPAA_PMD_ERR("Failure in affining portal");
+			return 0;
+		}
 	}
 
 	ret = qman_set_vdq(fq, (nb_bufs > DPAA_MAX_DEQUEUE_NUM_FRAMES) ?
@@ -537,7 +605,8 @@ static void *dpaa_get_pktbuf(struct dpaa_bp_info *bp_info)
 	DPAA_DP_LOG(DEBUG, "got buffer 0x%lx from pool %d",
 		    (uint64_t)bufs.addr, bufs.bpid);
 
-	buf = (uint64_t)rte_dpaa_mem_ptov(bufs.addr) - bp_info->meta_data_size;
+	buf = (uint64_t)DPAA_MEMPOOL_PTOV(bp_info, bufs.addr)
+				- bp_info->meta_data_size;
 	if (!buf)
 		goto out;
 
@@ -773,10 +842,12 @@ dpaa_eth_queue_tx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
 	int ret;
 	uint32_t seqn, index, flags[DPAA_TX_BURST_SIZE] = {0};
 
-	ret = rte_dpaa_portal_init((void *)0);
-	if (ret) {
-		DPAA_PMD_ERR("Failure in affining portal");
-		return 0;
+	if (unlikely(!RTE_PER_LCORE(dpaa_io))) {
+		ret = rte_dpaa_portal_init((void *)0);
+		if (ret) {
+			DPAA_PMD_ERR("Failure in affining portal");
+			return 0;
+		}
 	}
 
 	DPAA_DP_LOG(DEBUG, "Transmitting %d buffers on queue: %p", nb_bufs, q);

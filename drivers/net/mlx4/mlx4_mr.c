@@ -1,34 +1,6 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright 2017 6WIND S.A.
- *   Copyright 2017 Mellanox
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of 6WIND S.A. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright 2017 6WIND S.A.
+ * Copyright 2017 Mellanox
  */
 
 /**
@@ -60,6 +32,7 @@
 #include <rte_mempool.h>
 #include <rte_spinlock.h>
 
+#include "mlx4_glue.h"
 #include "mlx4_rxtx.h"
 #include "mlx4_utils.h"
 
@@ -200,8 +173,8 @@ mlx4_mr_get(struct priv *priv, struct rte_mempool *mp)
 		.end = end,
 		.refcnt = 1,
 		.priv = priv,
-		.mr = ibv_reg_mr(priv->pd, (void *)start, end - start,
-				 IBV_ACCESS_LOCAL_WRITE),
+		.mr = mlx4_glue->reg_mr(priv->pd, (void *)start, end - start,
+					IBV_ACCESS_LOCAL_WRITE),
 		.mp = mp,
 	};
 	if (mr->mr) {
@@ -240,7 +213,7 @@ mlx4_mr_put(struct mlx4_mr *mr)
 	if (--mr->refcnt)
 		goto release;
 	LIST_REMOVE(mr, next);
-	claim_zero(ibv_dereg_mr(mr->mr));
+	claim_zero(mlx4_glue->dereg_mr(mr->mr));
 	rte_free(mr);
 release:
 	rte_spinlock_unlock(&priv->mr_lock);

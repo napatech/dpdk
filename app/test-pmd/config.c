@@ -1,35 +1,6 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2016 Intel Corporation. All rights reserved.
- *   Copyright 2013-2014 6WIND S.A.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2016 Intel Corporation.
+ * Copyright 2013-2014 6WIND S.A.
  */
 
 #include <stdarg.h>
@@ -756,11 +727,14 @@ port_offload_cap_display(portid_t port_id)
 int
 port_id_is_invalid(portid_t port_id, enum print_warning warning)
 {
+	uint16_t pid;
+
 	if (port_id == (portid_t)RTE_PORT_ALL)
 		return 0;
 
-	if (rte_eth_dev_is_valid_port(port_id))
-		return 0;
+	RTE_ETH_FOREACH_DEV(pid)
+		if (port_id == pid)
+			return 0;
 
 	if (warning == ENABLED_WARN)
 		printf("Invalid port %d\n", port_id);
@@ -1060,6 +1034,7 @@ static const struct {
 	MK_FLOW_ACTION(RSS, sizeof(struct rte_flow_action_rss)), /* +queue[] */
 	MK_FLOW_ACTION(PF, 0),
 	MK_FLOW_ACTION(VF, sizeof(struct rte_flow_action_vf)),
+	MK_FLOW_ACTION(METER, sizeof(struct rte_flow_action_meter)),
 };
 
 /** Compute storage space needed by action configuration. */
@@ -1908,23 +1883,40 @@ setup_fwd_config_of_each_lcore(struct fwd_config *cfg)
 	}
 }
 
+static portid_t
+fwd_topology_tx_port_get(portid_t rxp)
+{
+	static int warning_once = 1;
+
+	RTE_ASSERT(rxp < cur_fwd_config.nb_fwd_ports);
+
+	switch (port_topology) {
+	default:
+	case PORT_TOPOLOGY_PAIRED:
+		if ((rxp & 0x1) == 0) {
+			if (rxp + 1 < cur_fwd_config.nb_fwd_ports)
+				return rxp + 1;
+			if (warning_once) {
+				printf("\nWarning! port-topology=paired"
+				       " and odd forward ports number,"
+				       " the last port will pair with"
+				       " itself.\n\n");
+				warning_once = 0;
+			}
+			return rxp;
+		}
+		return rxp - 1;
+	case PORT_TOPOLOGY_CHAINED:
+		return (rxp + 1) % cur_fwd_config.nb_fwd_ports;
+	case PORT_TOPOLOGY_LOOP:
+		return rxp;
+	}
+}
+
 static void
 simple_fwd_config_setup(void)
 {
 	portid_t i;
-	portid_t j;
-	portid_t inc = 2;
-
-	if (port_topology == PORT_TOPOLOGY_CHAINED ||
-	    port_topology == PORT_TOPOLOGY_LOOP) {
-		inc = 1;
-	} else if (nb_fwd_ports % 2) {
-		printf("\nWarning! Cannot handle an odd number of ports "
-		       "with the current port topology. Configuration "
-		       "must be changed to have an even number of ports, "
-		       "or relaunch application with "
-		       "--port-topology=chained\n\n");
-	}
 
 	cur_fwd_config.nb_fwd_ports = (portid_t) nb_fwd_ports;
 	cur_fwd_config.nb_fwd_streams =
@@ -1943,26 +1935,14 @@ simple_fwd_config_setup(void)
 			(lcoreid_t) cur_fwd_config.nb_fwd_ports;
 	setup_fwd_config_of_each_lcore(&cur_fwd_config);
 
-	for (i = 0; i < cur_fwd_config.nb_fwd_ports; i = (portid_t) (i + inc)) {
-		if (port_topology != PORT_TOPOLOGY_LOOP)
-			j = (portid_t) ((i + 1) % cur_fwd_config.nb_fwd_ports);
-		else
-			j = i;
+	for (i = 0; i < cur_fwd_config.nb_fwd_ports; i++) {
 		fwd_streams[i]->rx_port   = fwd_ports_ids[i];
 		fwd_streams[i]->rx_queue  = 0;
-		fwd_streams[i]->tx_port   = fwd_ports_ids[j];
+		fwd_streams[i]->tx_port   =
+				fwd_ports_ids[fwd_topology_tx_port_get(i)];
 		fwd_streams[i]->tx_queue  = 0;
 		fwd_streams[i]->peer_addr = fwd_streams[i]->tx_port;
 		fwd_streams[i]->retry_enabled = retry_enabled;
-
-		if (port_topology == PORT_TOPOLOGY_PAIRED) {
-			fwd_streams[j]->rx_port   = fwd_ports_ids[j];
-			fwd_streams[j]->rx_queue  = 0;
-			fwd_streams[j]->tx_port   = fwd_ports_ids[i];
-			fwd_streams[j]->tx_queue  = 0;
-			fwd_streams[j]->peer_addr = fwd_streams[j]->tx_port;
-			fwd_streams[j]->retry_enabled = retry_enabled;
-		}
 	}
 }
 
@@ -1970,11 +1950,6 @@ simple_fwd_config_setup(void)
  * For the RSS forwarding test all streams distributed over lcores. Each stream
  * being composed of a RX queue to poll on a RX port for input messages,
  * associated with a TX queue of a TX port where to send forwarded packets.
- * All packets received on the RX queue of index "RxQj" of the RX port "RxPi"
- * are sent on the TX queue "TxQl" of the TX port "TxPk" according to the two
- * following rules:
- *    - TxPk = (RxPi + 1) if RxPi is even, (RxPi - 1) if RxPi is odd
- *    - TxQl = RxQj
  */
 static void
 rss_fwd_config_setup(void)
@@ -2006,18 +1981,7 @@ rss_fwd_config_setup(void)
 		struct fwd_stream *fs;
 
 		fs = fwd_streams[sm_id];
-
-		if ((rxp & 0x1) == 0)
-			txp = (portid_t) (rxp + 1);
-		else
-			txp = (portid_t) (rxp - 1);
-		/*
-		 * if we are in loopback, simply send stuff out through the
-		 * ingress port
-		 */
-		if (port_topology == PORT_TOPOLOGY_LOOP)
-			txp = rxp;
-
+		txp = fwd_topology_tx_port_get(rxp);
 		fs->rx_port = fwd_ports_ids[rxp];
 		fs->rx_queue = rxq;
 		fs->tx_port = fwd_ports_ids[txp];
@@ -2032,11 +1996,7 @@ rss_fwd_config_setup(void)
 		 * Restart from RX queue 0 on next RX port
 		 */
 		rxq = 0;
-		if (numa_support && (nb_fwd_ports <= (nb_ports >> 1)))
-			rxp = (portid_t)
-				(rxp + ((nb_ports >> 1) / nb_fwd_ports));
-		else
-			rxp = (portid_t) (rxp + 1);
+		rxp++;
 	}
 }
 

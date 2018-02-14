@@ -47,6 +47,7 @@ The public API headers are grouped by topics:
   [security]           (@ref rte_security.h),
   [eventdev]           (@ref rte_eventdev.h),
   [event_eth_rx_adapter]   (@ref rte_event_eth_rx_adapter.h),
+  [rawdev]             (@ref rte_rawdev.h),
   [metrics]            (@ref rte_metrics.h),
   [bitrate]            (@ref rte_bitrate.h),
   [latency]            (@ref rte_latencystats.h),
@@ -136,6 +137,7 @@ The public API headers are grouped by topics:
 
 - **containers**:
   [mbuf]               (@ref rte_mbuf.h),
+  [mbuf pool ops]      (@ref rte_mbuf_pool_ops.h),
   [ring]               (@ref rte_ring.h),
   [tailq]              (@ref rte_tailq.h),
   [bitmap]             (@ref rte_bitmap.h)

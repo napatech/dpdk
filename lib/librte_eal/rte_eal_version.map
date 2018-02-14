@@ -206,23 +206,33 @@ DPDK_18.02 {
 	rte_hypervisor_get;
 	rte_hypervisor_get_name;
 	rte_vfio_clear_group;
+	rte_reciprocal_value;
+	rte_reciprocal_value_u64;
 
-} DPDK_17.11;
+}  DPDK_17.11;
 
 EXPERIMENTAL {
 	global:
 
+	rte_eal_cleanup;
 	rte_eal_devargs_insert;
 	rte_eal_devargs_parse;
 	rte_eal_devargs_remove;
 	rte_eal_hotplug_add;
 	rte_eal_hotplug_remove;
+	rte_eal_mbuf_user_pool_ops;
+	rte_mp_action_register;
+	rte_mp_action_unregister;
+	rte_mp_sendmsg;
+	rte_mp_request;
+	rte_mp_reply;
 	rte_service_attr_get;
 	rte_service_attr_reset_all;
 	rte_service_component_register;
 	rte_service_component_unregister;
 	rte_service_component_runstate_set;
 	rte_service_dump;
+	rte_service_finalize;
 	rte_service_get_by_id;
 	rte_service_get_by_name;
 	rte_service_get_count;

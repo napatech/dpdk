@@ -106,7 +106,11 @@ Limitations
 
 - Inner RSS for VXLAN frames is not supported yet.
 - Hardware checksum RX offloads for VXLAN inner header are not supported yet.
-- Forked secondary process not supported.
+- For secondary process:
+
+  - Forked secondary process not supported.
+  - All mempools must be initialized before rte_eth_dev_start().
+
 - Flow pattern without any specific vlan will match for vlan packets as well:
 
   When VLAN spec is not specified in the pattern, the matching rule will be created with VLAN as a wild card.
@@ -127,7 +131,7 @@ Limitations
 - A multi segment packet must have less than 6 segments in case the Tx burst function
   is set to multi-packet send or Enhanced multi-packet send. Otherwise it must have
   less than 50 segments.
-- Count action for RTE flow is only supported in Mellanox OFED 4.2.
+- Count action for RTE flow is **only supported in Mellanox OFED**.
 - Flows with a VXLAN Network Identifier equal (or ends to be equal)
   to 0 are not supported.
 - VXLAN TSO and checksum offloads are not supported on VM.
@@ -155,6 +159,24 @@ These options can be modified in the ``.config`` file.
 
   Toggle compilation of librte_pmd_mlx5 itself.
 
+- ``CONFIG_RTE_LIBRTE_MLX5_DLOPEN_DEPS`` (default **n**)
+
+  Build PMD with additional code to make it loadable without hard
+  dependencies on **libibverbs** nor **libmlx5**, which may not be installed
+  on the target system.
+
+  In this mode, their presence is still required for it to run properly,
+  however their absence won't prevent a DPDK application from starting (with
+  ``CONFIG_RTE_BUILD_SHARED_LIB`` disabled) and they won't show up as
+  missing with ``ldd(1)``.
+
+  It works by moving these dependencies to a purpose-built rdma-core "glue"
+  plug-in, which must either be installed in ``CONFIG_RTE_EAL_PMD_PATH`` if
+  set, or in a standard location for the dynamic linker (e.g. ``/lib``) if
+  left to the default empty string (``""``).
+
+  This option has no performance impact.
+
 - ``CONFIG_RTE_LIBRTE_MLX5_DEBUG`` (default **n**)
 
   Toggle debugging code and stricter compilation flags. Enabling this option
@@ -171,6 +193,15 @@ These options can be modified in the ``.config`` file.
 
 Environment variables
 ~~~~~~~~~~~~~~~~~~~~~
+
+- ``MLX5_GLUE_PATH``
+
+  A list of directories in which to search for the rdma-core "glue" plug-in,
+  separated by colons or semi-colons.
+
+  Only matters when compiled with ``CONFIG_RTE_LIBRTE_MLX5_DLOPEN_DEPS``
+  enabled and most useful when ``CONFIG_RTE_EAL_PMD_PATH`` is also set,
+  since ``LD_LIBRARY_PATH`` has no effect in this case.
 
 - ``MLX5_PMD_ENABLE_PADDING``
 
@@ -375,7 +406,7 @@ RMDA Core with Linux Kernel
 Mellanox OFED
 ^^^^^^^^^^^^^
 
-- Mellanox OFED version: **4.2**.
+- Mellanox OFED version: **4.2, 4.3**.
 - firmware version:
 
   - ConnectX-4: **12.21.1000** and above.

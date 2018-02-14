@@ -94,6 +94,17 @@
 /* Memory size (in bytes) for MUSDK dma buffers */
 #define MRVL_MUSDK_DMA_MEMSIZE 41943040
 
+/** Port Rx offload capabilities */
+#define MRVL_RX_OFFLOADS (DEV_RX_OFFLOAD_VLAN_FILTER | \
+			  DEV_RX_OFFLOAD_JUMBO_FRAME | \
+			  DEV_RX_OFFLOAD_CRC_STRIP | \
+			  DEV_RX_OFFLOAD_CHECKSUM)
+
+/** Port Tx offloads capabilities */
+#define MRVL_TX_OFFLOADS (DEV_TX_OFFLOAD_IPV4_CKSUM | \
+			  DEV_TX_OFFLOAD_UDP_CKSUM | \
+			  DEV_TX_OFFLOAD_TCP_CKSUM)
+
 static const char * const valid_args[] = {
 	MRVL_IFACE_NAME_ARG,
 	MRVL_CFG_ARG,
@@ -302,13 +313,13 @@ mrvl_dev_configure(struct rte_eth_dev *dev)
 		return -EINVAL;
 	}
 
-	if (!dev->data->dev_conf.rxmode.hw_strip_crc) {
+	if (!(dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_CRC_STRIP)) {
 		RTE_LOG(INFO, PMD,
 			"L2 CRC stripping is always enabled in hw\n");
-		dev->data->dev_conf.rxmode.hw_strip_crc = 1;
+		dev->data->dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_CRC_STRIP;
 	}
 
-	if (dev->data->dev_conf.rxmode.hw_vlan_strip) {
+	if (dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_VLAN_STRIP) {
 		RTE_LOG(INFO, PMD, "VLAN stripping not supported\n");
 		return -EINVAL;
 	}
@@ -318,17 +329,17 @@ mrvl_dev_configure(struct rte_eth_dev *dev)
 		return -EINVAL;
 	}
 
-	if (dev->data->dev_conf.rxmode.enable_scatter) {
+	if (dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_SCATTER) {
 		RTE_LOG(INFO, PMD, "RX Scatter/Gather not supported\n");
 		return -EINVAL;
 	}
 
-	if (dev->data->dev_conf.rxmode.enable_lro) {
+	if (dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_TCP_LRO) {
 		RTE_LOG(INFO, PMD, "LRO not supported\n");
 		return -EINVAL;
 	}
 
-	if (dev->data->dev_conf.rxmode.jumbo_frame)
+	if (dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_JUMBO_FRAME)
 		dev->data->mtu = dev->data->dev_conf.rxmode.max_rx_pkt_len -
 				 ETHER_HDR_LEN - ETHER_CRC_LEN;
 
@@ -1124,15 +1135,11 @@ mrvl_dev_infos_get(struct rte_eth_dev *dev __rte_unused,
 	info->tx_desc_lim.nb_min = MRVL_PP2_TXD_MIN;
 	info->tx_desc_lim.nb_align = MRVL_PP2_TXD_ALIGN;
 
-	info->rx_offload_capa = DEV_RX_OFFLOAD_JUMBO_FRAME |
-				DEV_RX_OFFLOAD_VLAN_FILTER |
-				DEV_RX_OFFLOAD_IPV4_CKSUM |
-				DEV_RX_OFFLOAD_UDP_CKSUM |
-				DEV_RX_OFFLOAD_TCP_CKSUM;
+	info->rx_offload_capa = MRVL_RX_OFFLOADS;
+	info->rx_queue_offload_capa = MRVL_RX_OFFLOADS;
 
-	info->tx_offload_capa = DEV_TX_OFFLOAD_IPV4_CKSUM |
-				DEV_TX_OFFLOAD_UDP_CKSUM |
-				DEV_TX_OFFLOAD_TCP_CKSUM;
+	info->tx_offload_capa = MRVL_TX_OFFLOADS;
+	info->tx_queue_offload_capa = MRVL_TX_OFFLOADS;
 
 	info->flow_type_rss_offloads = ETH_RSS_IPV4 |
 				       ETH_RSS_NONFRAG_IPV4_TCP |
@@ -1140,6 +1147,7 @@ mrvl_dev_infos_get(struct rte_eth_dev *dev __rte_unused,
 
 	/* By default packets are dropped if no descriptors are available */
 	info->default_rxconf.rx_drop_en = 1;
+	info->default_rxconf.offloads = DEV_RX_OFFLOAD_CRC_STRIP;
 
 	info->max_rx_pktlen = MRVL_PKT_SIZE_MAX;
 }
@@ -1308,6 +1316,42 @@ out:
 }
 
 /**
+ * Check whether requested rx queue offloads match port offloads.
+ *
+ * @param
+ *   dev Pointer to the device.
+ * @param
+ *   requested Bitmap of the requested offloads.
+ *
+ * @return
+ *   1 if requested offloads are okay, 0 otherwise.
+ */
+static int
+mrvl_rx_queue_offloads_okay(struct rte_eth_dev *dev, uint64_t requested)
+{
+	uint64_t mandatory = dev->data->dev_conf.rxmode.offloads;
+	uint64_t supported = MRVL_RX_OFFLOADS;
+	uint64_t unsupported = requested & ~supported;
+	uint64_t missing = mandatory & ~requested;
+
+	if (unsupported) {
+		RTE_LOG(ERR, PMD, "Some Rx offloads are not supported. "
+			"Requested 0x%" PRIx64 " supported 0x%" PRIx64 ".\n",
+			requested, supported);
+		return 0;
+	}
+
+	if (missing) {
+		RTE_LOG(ERR, PMD, "Some Rx offloads are missing. "
+			"Requested 0x%" PRIx64 " missing 0x%" PRIx64 ".\n",
+			requested, missing);
+		return 0;
+	}
+
+	return 1;
+}
+
+/**
  * DPDK callback to configure the receive queue.
  *
  * @param dev
@@ -1319,7 +1363,7 @@ out:
  * @param socket
  *   NUMA socket on which memory must be allocated.
  * @param conf
- *   Thresholds parameters (unused_).
+ *   Thresholds parameters.
  * @param mp
  *   Memory pool for buffer allocations.
  *
@@ -1329,7 +1373,7 @@ out:
 static int
 mrvl_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		    unsigned int socket,
-		    const struct rte_eth_rxconf *conf __rte_unused,
+		    const struct rte_eth_rxconf *conf,
 		    struct rte_mempool *mp)
 {
 	struct mrvl_priv *priv = dev->data->dev_private;
@@ -1337,6 +1381,9 @@ mrvl_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	uint32_t min_size,
 		 max_rx_pkt_len = dev->data->dev_conf.rxmode.max_rx_pkt_len;
 	int ret, tc, inq;
+
+	if (!mrvl_rx_queue_offloads_okay(dev, conf->offloads))
+		return -ENOTSUP;
 
 	if (priv->rxq_map[idx].tc == MRVL_UNKNOWN_TC) {
 		/*
@@ -1369,7 +1416,8 @@ mrvl_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 
 	rxq->priv = priv;
 	rxq->mp = mp;
-	rxq->cksum_enabled = dev->data->dev_conf.rxmode.hw_ip_checksum;
+	rxq->cksum_enabled =
+		dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_IPV4_CKSUM;
 	rxq->queue_id = idx;
 	rxq->port_id = dev->data->port_id;
 	mrvl_port_to_bpool_lookup[rxq->port_id] = priv->bpool;
@@ -1432,6 +1480,42 @@ mrvl_rx_queue_release(void *rxq)
 }
 
 /**
+ * Check whether requested tx queue offloads match port offloads.
+ *
+ * @param
+ *   dev Pointer to the device.
+ * @param
+ *   requested Bitmap of the requested offloads.
+ *
+ * @return
+ *   1 if requested offloads are okay, 0 otherwise.
+ */
+static int
+mrvl_tx_queue_offloads_okay(struct rte_eth_dev *dev, uint64_t requested)
+{
+	uint64_t mandatory = dev->data->dev_conf.txmode.offloads;
+	uint64_t supported = MRVL_TX_OFFLOADS;
+	uint64_t unsupported = requested & ~supported;
+	uint64_t missing = mandatory & ~requested;
+
+	if (unsupported) {
+		RTE_LOG(ERR, PMD, "Some Rx offloads are not supported. "
+			"Requested 0x%" PRIx64 " supported 0x%" PRIx64 ".\n",
+			requested, supported);
+		return 0;
+	}
+
+	if (missing) {
+		RTE_LOG(ERR, PMD, "Some Rx offloads are missing. "
+			"Requested 0x%" PRIx64 " missing 0x%" PRIx64 ".\n",
+			requested, missing);
+		return 0;
+	}
+
+	return 1;
+}
+
+/**
  * DPDK callback to configure the transmit queue.
  *
  * @param dev
@@ -1443,7 +1527,7 @@ mrvl_rx_queue_release(void *rxq)
  * @param socket
  *   NUMA socket on which memory must be allocated.
  * @param conf
- *   Thresholds parameters (unused).
+ *   Thresholds parameters.
  *
  * @return
  *   0 on success, negative error value otherwise.
@@ -1451,10 +1535,13 @@ mrvl_rx_queue_release(void *rxq)
 static int
 mrvl_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		    unsigned int socket,
-		    const struct rte_eth_txconf *conf __rte_unused)
+		    const struct rte_eth_txconf *conf)
 {
 	struct mrvl_priv *priv = dev->data->dev_private;
 	struct mrvl_txq *txq;
+
+	if (!mrvl_tx_queue_offloads_okay(dev, conf->offloads))
+		return -ENOTSUP;
 
 	if (dev->data->tx_queues[idx]) {
 		rte_free(dev->data->tx_queues[idx]);
@@ -2009,8 +2096,9 @@ mrvl_tx_pkt_burst(void *txq, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		sq->ent[sq->head].buff.addr =
 			rte_mbuf_data_iova_default(mbuf);
 		sq->ent[sq->head].bpool =
-			(unlikely(mbuf->port == 0xff || mbuf->refcnt > 1)) ?
-			 NULL : mrvl_port_to_bpool_lookup[mbuf->port];
+			(unlikely(mbuf->port >= RTE_MAX_ETHPORTS ||
+			 mbuf->refcnt > 1)) ? NULL :
+			 mrvl_port_to_bpool_lookup[mbuf->port];
 		sq->head = (sq->head + 1) & MRVL_PP2_TX_SHADOWQ_MASK;
 		sq->size++;
 
@@ -2343,6 +2431,7 @@ rte_pmd_mrvl_probe(struct rte_vdev_device *vdev)
 	}
 
 	memset(mrvl_port_bpool_size, 0, sizeof(mrvl_port_bpool_size));
+	memset(mrvl_port_to_bpool_lookup, 0, sizeof(mrvl_port_to_bpool_lookup));
 
 	mrvl_lcore_first = RTE_MAX_LCORE;
 	mrvl_lcore_last = 0;

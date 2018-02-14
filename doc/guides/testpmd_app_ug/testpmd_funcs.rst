@@ -1,32 +1,5 @@
-..  BSD LICENSE
-    Copyright(c) 2010-2016 Intel Corporation. All rights reserved.
-    All rights reserved.
-
-    Redistribution and use in source and binary forms, with or without
-    modification, are permitted provided that the following conditions
-    are met:
-
-    * Redistributions of source code must retain the above copyright
-    notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-    notice, this list of conditions and the following disclaimer in
-    the documentation and/or other materials provided with the
-    distribution.
-    * Neither the name of Intel Corporation nor the names of its
-    contributors may be used to endorse or promote products derived
-    from this software without specific prior written permission.
-
-    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-    "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-    A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-    OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-    DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+..  SPDX-License-Identifier: BSD-3-Clause
+    Copyright(c) 2010-2016 Intel Corporation.
 
 .. _testpmd_runtime:
 
@@ -447,6 +420,25 @@ Set the debug verbosity level::
    testpmd> set verbose (level)
 
 Currently the only available levels are 0 (silent except for error) and 1 (fully verbose).
+
+set log
+~~~~~~~
+
+Set the log level for a log type::
+
+	testpmd> set log global|(type) (level)
+
+Where:
+
+* ``type`` is the log name.
+
+* ``level`` is the log level.
+
+For example, to change the global log level::
+	testpmd> set log global (level)
+
+Regexes can also be used for type. To change log level of user1, user2 and user3::
+	testpmd> set log user[1-3] (level)
 
 set nbport
 ~~~~~~~~~~
@@ -1404,16 +1396,16 @@ Delete an E-tag forwarding filter on a port::
 ddp add
 ~~~~~~~
 
-Load a dynamic device personalization (DDP) package::
+Load a dynamic device personalization (DDP) profile and store backup profile::
 
-   testpmd> ddp add (port_id) (package_path[,output_path])
+   testpmd> ddp add (port_id) (profile_path[,backup_profile_path])
 
 ddp del
 ~~~~~~~
 
-Delete a dynamic device personalization package::
+Delete a dynamic device personalization profile and restore backup profile::
 
-   testpmd> ddp del (port_id) (package_path)
+   testpmd> ddp del (port_id) (backup_profile_path)
 
 ptype mapping
 ~~~~~~~~~~~~~
@@ -1706,9 +1698,9 @@ Set hardware VLAN on or off for all ports::
 
    testpmd> port config all hw-vlan (on|off)
 
-Hardware VLAN is on by default.
+Hardware VLAN is off by default.
 
-The ``off`` option is equivalent to the ``--disable-hw-vlan`` command-line option.
+The ``on`` option is equivalent to the ``--enable-hw-vlan`` command-line option.
 
 port config - VLAN filter
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1717,9 +1709,9 @@ Set hardware VLAN filter on or off for all ports::
 
    testpmd> port config all hw-vlan-filter (on|off)
 
-Hardware VLAN filter is on by default.
+Hardware VLAN filter is off by default.
 
-The ``off`` option is equivalent to the ``--disable-hw-vlan-filter`` command-line option.
+The ``on`` option is equivalent to the ``--enable-hw-vlan-filter`` command-line option.
 
 port config - VLAN strip
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1728,9 +1720,9 @@ Set hardware VLAN strip on or off for all ports::
 
    testpmd> port config all hw-vlan-strip (on|off)
 
-Hardware VLAN strip is on by default.
+Hardware VLAN strip is off by default.
 
-The ``off`` option is equivalent to the ``--disable-hw-vlan-strip`` command-line option.
+The ``on`` option is equivalent to the ``--enable-hw-vlan-strip`` command-line option.
 
 port config - VLAN extend
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1741,7 +1733,7 @@ Set hardware VLAN extend on or off for all ports::
 
 Hardware VLAN extend is off by default.
 
-The ``off`` option is equivalent to the ``--disable-hw-vlan-extend`` command-line option.
+The ``on`` option is equivalent to the ``--enable-hw-vlan-extend`` command-line option.
 
 port config - Drop Packets
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -2274,14 +2266,14 @@ show port traffic management capability (hierarchy level)
 
 Show traffic management hierarchy level capability of the port::
 
-   testpmd> show port tm cap (port_id) (level_id)
+   testpmd> show port tm level cap (port_id) (level_id)
 
 show port traffic management capability (hierarchy node level)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Show the traffic management hierarchy node capability of the port::
 
-   testpmd> show port tm cap (port_id) (node_id)
+   testpmd> show port tm node cap (port_id) (node_id)
 
 show port traffic management hierarchy node type
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

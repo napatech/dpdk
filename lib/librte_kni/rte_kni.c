@@ -327,6 +327,8 @@ rte_kni_alloc(struct rte_mempool *pktmbuf_pool,
 	memset(ctx, 0, sizeof(struct rte_kni));
 	if (ops)
 		memcpy(&ctx->ops, ops, sizeof(struct rte_kni_ops));
+	else
+		ctx->ops.port_id = UINT16_MAX;
 
 	memset(&dev_info, 0, sizeof(dev_info));
 	dev_info.bus = conf->addr.bus;
@@ -338,6 +340,9 @@ rte_kni_alloc(struct rte_mempool *pktmbuf_pool,
 	dev_info.force_bind = conf->force_bind;
 	dev_info.group_id = conf->group_id;
 	dev_info.mbuf_size = conf->mbuf_size;
+	dev_info.mtu = conf->mtu;
+
+	memcpy(dev_info.mac_addr, conf->mac_addr, ETHER_ADDR_LEN);
 
 	snprintf(ctx->name, RTE_KNI_NAMESIZE, "%s", intf_name);
 	snprintf(dev_info.name, RTE_KNI_NAMESIZE, "%s", intf_name);
@@ -499,6 +504,48 @@ rte_kni_release(struct rte_kni *kni)
 	return 0;
 }
 
+/* default callback for request of configuring device mac address */
+static int
+kni_config_mac_address(uint16_t port_id, uint8_t mac_addr[])
+{
+	int ret = 0;
+
+	if (port_id >= rte_eth_dev_count() || port_id >= RTE_MAX_ETHPORTS) {
+		RTE_LOG(ERR, KNI, "Invalid port id %d\n", port_id);
+		return -EINVAL;
+	}
+
+	RTE_LOG(INFO, KNI, "Configure mac address of %d", port_id);
+
+	ret = rte_eth_dev_default_mac_addr_set(port_id,
+					       (struct ether_addr *)mac_addr);
+	if (ret < 0)
+		RTE_LOG(ERR, KNI, "Failed to config mac_addr for port %d\n",
+			port_id);
+
+	return ret;
+}
+
+/* default callback for request of configuring promiscuous mode */
+static int
+kni_config_promiscusity(uint16_t port_id, uint8_t to_on)
+{
+	if (port_id >= rte_eth_dev_count() || port_id >= RTE_MAX_ETHPORTS) {
+		RTE_LOG(ERR, KNI, "Invalid port id %d\n", port_id);
+		return -EINVAL;
+	}
+
+	RTE_LOG(INFO, KNI, "Configure promiscuous mode of %d to %d\n",
+		port_id, to_on);
+
+	if (to_on)
+		rte_eth_promiscuous_enable(port_id);
+	else
+		rte_eth_promiscuous_disable(port_id);
+
+	return 0;
+}
+
 int
 rte_kni_handle_request(struct rte_kni *kni)
 {
@@ -529,6 +576,22 @@ rte_kni_handle_request(struct rte_kni *kni)
 		if (kni->ops.config_network_if)
 			req->result = kni->ops.config_network_if(\
 					kni->ops.port_id, req->if_up);
+		break;
+	case RTE_KNI_REQ_CHANGE_MAC_ADDR: /* Change MAC Address */
+		if (kni->ops.config_mac_address)
+			req->result = kni->ops.config_mac_address(
+					kni->ops.port_id, req->mac_addr);
+		else if (kni->ops.port_id != UINT16_MAX)
+			req->result = kni_config_mac_address(
+					kni->ops.port_id, req->mac_addr);
+		break;
+	case RTE_KNI_REQ_CHANGE_PROMISC: /* Change PROMISCUOUS MODE */
+		if (kni->ops.config_promiscusity)
+			req->result = kni->ops.config_promiscusity(
+					kni->ops.port_id, req->promiscusity);
+		else if (kni->ops.port_id != UINT16_MAX)
+			req->result = kni_config_promiscusity(
+					kni->ops.port_id, req->promiscusity);
 		break;
 	default:
 		RTE_LOG(ERR, KNI, "Unknown request id %u\n", req->req_id);
@@ -678,7 +741,10 @@ kni_check_request_register(struct rte_kni_ops *ops)
 	if( NULL == ops )
 		return KNI_REQ_NO_REGISTER;
 
-	if((NULL == ops->change_mtu) && (NULL == ops->config_network_if))
+	if ((ops->change_mtu == NULL)
+		&& (ops->config_network_if == NULL)
+		&& (ops->config_mac_address == NULL)
+		&& (ops->config_promiscusity == NULL))
 		return KNI_REQ_NO_REGISTER;
 
 	return KNI_REQ_REGISTERED;
@@ -717,8 +783,8 @@ rte_kni_unregister_handlers(struct rte_kni *kni)
 		return -1;
 	}
 
-	kni->ops.change_mtu = NULL;
-	kni->ops.config_network_if = NULL;
+	memset(&kni->ops, 0, sizeof(struct rte_kni_ops));
+
 	return 0;
 }
 void

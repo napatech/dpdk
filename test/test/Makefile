@@ -61,12 +61,15 @@ SRCS-y += test_prefetch.c
 SRCS-y += test_byteorder.c
 SRCS-y += test_per_lcore.c
 SRCS-y += test_atomic.c
+SRCS-y += test_barrier.c
 SRCS-y += test_malloc.c
 SRCS-y += test_cycles.c
 SRCS-y += test_spinlock.c
 SRCS-y += test_memory.c
 SRCS-y += test_memzone.c
 SRCS-y += test_bitmap.c
+SRCS-y += test_reciprocal_division.c
+SRCS-y += test_reciprocal_division_perf.c
 
 SRCS-y += test_ring.c
 SRCS-y += test_ring_perf.c
@@ -184,7 +187,13 @@ SRCS-y += test_event_ring.c
 SRCS-y += test_event_eth_rx_adapter.c
 endif
 
+ifeq ($(CONFIG_RTE_LIBRTE_RAWDEV),y)
+SRCS-y += test_rawdev.c
+endif
+
 SRCS-$(CONFIG_RTE_LIBRTE_KVARGS) += test_kvargs.c
+
+CFLAGS += -DALLOW_EXPERIMENTAL_API
 
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)

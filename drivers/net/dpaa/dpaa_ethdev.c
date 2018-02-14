@@ -503,7 +503,11 @@ int dpaa_eth_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 				   QM_FQCTRL_CTXASTASHING |
 				   QM_FQCTRL_PREFERINCACHE;
 		opts.fqd.context_a.stashing.exclusive = 0;
-		opts.fqd.context_a.stashing.annotation_cl =
+		/* In muticore scenario stashing becomes a bottleneck on LS1046.
+		 * So do not enable stashing in this case
+		 */
+		if (dpaa_svr_family != SVR_LS1046A_FAMILY)
+			opts.fqd.context_a.stashing.annotation_cl =
 						DPAA_IF_RX_ANNOTATION_STASH;
 		opts.fqd.context_a.stashing.data_cl = DPAA_IF_RX_DATA_STASH;
 		opts.fqd.context_a.stashing.context_cl =
@@ -526,7 +530,8 @@ int dpaa_eth_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 		if (ret)
 			DPAA_PMD_ERR("Channel/Queue association failed. fqid %d"
 				     " ret: %d", rxq->fqid, ret);
-		rxq->cb.dqrr_dpdk_cb = dpaa_rx_cb;
+		rxq->cb.dqrr_dpdk_pull_cb = dpaa_rx_cb;
+		rxq->cb.dqrr_prepare = dpaa_rx_cb_prepare;
 		rxq->is_static = true;
 	}
 	dev->data->rx_queues[queue_idx] = rxq;
@@ -548,8 +553,9 @@ int dpaa_eth_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	return 0;
 }
 
-int dpaa_eth_eventq_attach(const struct rte_eth_dev *dev,
-			   int eth_rx_queue_id,
+int __rte_experimental
+dpaa_eth_eventq_attach(const struct rte_eth_dev *dev,
+		int eth_rx_queue_id,
 		u16 ch_id,
 		const struct rte_event_eth_rx_adapter_queue_conf *queue_conf)
 {
@@ -610,8 +616,9 @@ int dpaa_eth_eventq_attach(const struct rte_eth_dev *dev,
 	return ret;
 }
 
-int dpaa_eth_eventq_detach(const struct rte_eth_dev *dev,
-			   int eth_rx_queue_id)
+int __rte_experimental
+dpaa_eth_eventq_detach(const struct rte_eth_dev *dev,
+		int eth_rx_queue_id)
 {
 	struct qm_mcc_initfq opts;
 	int ret;
@@ -875,7 +882,7 @@ is_dpaa_supported(struct rte_eth_dev *dev)
 	return is_device_supported(dev, &rte_dpaa_pmd);
 }
 
-int
+int __rte_experimental
 rte_pmd_dpaa_set_tx_loopback(uint8_t port, uint8_t on)
 {
 	struct rte_eth_dev *dev;
@@ -1331,10 +1338,12 @@ rte_dpaa_probe(struct rte_dpaa_driver *dpaa_drv,
 		is_global_init = 1;
 	}
 
-	ret = rte_dpaa_portal_init((void *)1);
-	if (ret) {
-		DPAA_PMD_ERR("Unable to initialize portal");
-		return ret;
+	if (unlikely(!RTE_PER_LCORE(dpaa_io))) {
+		ret = rte_dpaa_portal_init((void *)1);
+		if (ret) {
+			DPAA_PMD_ERR("Unable to initialize portal");
+			return ret;
+		}
 	}
 
 	eth_dev = rte_eth_dev_allocate(dpaa_dev->name);

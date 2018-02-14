@@ -36,6 +36,7 @@ SRCS-$(CONFIG_RTE_LIBRTE_PMD_TAP) += tap_flow.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_TAP) += tap_netlink.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_TAP) += tap_tcmsgs.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_TAP) += tap_bpf_api.c
+SRCS-$(CONFIG_RTE_LIBRTE_PMD_TAP) += tap_intr.c
 
 include $(RTE_SDK)/mk/rte.lib.mk
 
@@ -81,11 +82,6 @@ tap_autoconf.h.new: $(RTE_SDK)/buildtools/auto-config-h.sh
 		HAVE_TC_ACT_BPF_FD \
 		linux/tc_act/tc_bpf.h \
 		enum TCA_ACT_BPF_FD \
-		$(AUTOCONF_OUTPUT)
-	$Q sh -- '$<' '$@' \
-		HAVE_BPF_PROG_LOAD \
-		linux/bpf.h \
-		enum BPF_PROG_LOAD \
 		$(AUTOCONF_OUTPUT)
 
 # Create tap_autoconf.h or update it in case it differs from the new one.

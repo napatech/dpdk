@@ -95,9 +95,9 @@ static inline int bnxt_alloc_ag_data(struct bnxt_rx_queue *rxq,
 	}
 
 	if (rxbd == NULL)
-		RTE_LOG(ERR, PMD, "Jumbo Frame. rxbd is NULL\n");
+		PMD_DRV_LOG(ERR, "Jumbo Frame. rxbd is NULL\n");
 	if (rx_buf == NULL)
-		RTE_LOG(ERR, PMD, "Jumbo Frame. rx_buf is NULL\n");
+		PMD_DRV_LOG(ERR, "Jumbo Frame. rx_buf is NULL\n");
 
 
 	rx_buf->mbuf = mbuf;
@@ -234,7 +234,7 @@ static int bnxt_prod_ag_mbuf(struct bnxt_rx_queue *rxq)
 	/* TODO batch allocation for better performance */
 	while (rte_bitmap_get(rxr->ag_bitmap, next)) {
 		if (unlikely(bnxt_alloc_ag_data(rxq, rxr, next))) {
-			RTE_LOG(ERR, PMD,
+			PMD_DRV_LOG(ERR,
 				"agg mbuf alloc failed: prod=0x%x\n", next);
 			break;
 		}
@@ -338,41 +338,57 @@ static inline struct rte_mbuf *bnxt_tpa_end(
 static uint32_t
 bnxt_parse_pkt_type(struct rx_pkt_cmpl *rxcmp, struct rx_pkt_cmpl_hi *rxcmp1)
 {
-	uint32_t pkt_type = 0;
-	uint32_t t_ipcs = 0, ip = 0, ip6 = 0;
-	uint32_t tcp = 0, udp = 0, icmp = 0;
-	uint32_t vlan = 0;
+	uint32_t l3, pkt_type = 0;
+	uint32_t t_ipcs = 0, ip6 = 0, vlan = 0;
+	uint32_t flags_type;
 
 	vlan = !!(rxcmp1->flags2 &
 		rte_cpu_to_le_32(RX_PKT_CMPL_FLAGS2_META_FORMAT_VLAN));
+	pkt_type |= vlan ? RTE_PTYPE_L2_ETHER_VLAN : RTE_PTYPE_L2_ETHER;
+
 	t_ipcs = !!(rxcmp1->flags2 &
 		rte_cpu_to_le_32(RX_PKT_CMPL_FLAGS2_T_IP_CS_CALC));
 	ip6 = !!(rxcmp1->flags2 &
 		 rte_cpu_to_le_32(RX_PKT_CMPL_FLAGS2_IP_TYPE));
-	icmp = !!(rxcmp->flags_type &
-		  rte_cpu_to_le_16(RX_PKT_CMPL_FLAGS_ITYPE_ICMP));
-	tcp = !!(rxcmp->flags_type &
-		 rte_cpu_to_le_16(RX_PKT_CMPL_FLAGS_ITYPE_TCP));
-	udp = !!(rxcmp->flags_type &
-		 rte_cpu_to_le_16(RX_PKT_CMPL_FLAGS_ITYPE_UDP));
-	ip = !!(rxcmp->flags_type &
-		rte_cpu_to_le_16(RX_PKT_CMPL_FLAGS_ITYPE_IP));
 
-	pkt_type |= ((ip || tcp || udp || icmp) && !t_ipcs && !ip6) ?
-		RTE_PTYPE_L3_IPV4_EXT_UNKNOWN : 0;
-	pkt_type |= ((ip || tcp || udp || icmp) && !t_ipcs && ip6) ?
-		RTE_PTYPE_L3_IPV6_EXT_UNKNOWN : 0;
-	pkt_type |= (!t_ipcs &&  icmp) ? RTE_PTYPE_L4_ICMP : 0;
-	pkt_type |= (!t_ipcs &&  udp) ? RTE_PTYPE_L4_UDP : 0;
-	pkt_type |= (!t_ipcs &&  tcp) ? RTE_PTYPE_L4_TCP : 0;
-	pkt_type |= ((ip || tcp || udp || icmp) && t_ipcs && !ip6) ?
-		RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN : 0;
-	pkt_type |= ((ip || tcp || udp || icmp) && t_ipcs && ip6) ?
-		RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN : 0;
-	pkt_type |= (t_ipcs &&  icmp) ? RTE_PTYPE_INNER_L4_ICMP : 0;
-	pkt_type |= (t_ipcs &&  udp) ? RTE_PTYPE_INNER_L4_UDP : 0;
-	pkt_type |= (t_ipcs &&  tcp) ? RTE_PTYPE_INNER_L4_TCP : 0;
-	pkt_type |= vlan ? RTE_PTYPE_L2_ETHER_VLAN : 0;
+	flags_type = rxcmp->flags_type &
+		rte_cpu_to_le_32(RX_PKT_CMPL_FLAGS_ITYPE_MASK);
+
+	if (!t_ipcs && !ip6)
+		l3 = RTE_PTYPE_L3_IPV4_EXT_UNKNOWN;
+	else if (!t_ipcs && ip6)
+		l3 = RTE_PTYPE_L3_IPV6_EXT_UNKNOWN;
+	else if (t_ipcs && !ip6)
+		l3 = RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN;
+	else
+		l3 = RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN;
+
+	switch (flags_type) {
+	case RTE_LE32(RX_PKT_CMPL_FLAGS_ITYPE_ICMP):
+		if (!t_ipcs)
+			pkt_type |= l3 | RTE_PTYPE_L4_ICMP;
+		else
+			pkt_type |= l3 | RTE_PTYPE_INNER_L4_ICMP;
+		break;
+
+	case RTE_LE32(RX_PKT_CMPL_FLAGS_ITYPE_TCP):
+		if (!t_ipcs)
+			pkt_type |= l3 | RTE_PTYPE_L4_TCP;
+		else
+			pkt_type |= l3 | RTE_PTYPE_INNER_L4_TCP;
+		break;
+
+	case RTE_LE32(RX_PKT_CMPL_FLAGS_ITYPE_UDP):
+		if (!t_ipcs)
+			pkt_type |= l3 | RTE_PTYPE_L4_UDP;
+		else
+			pkt_type |= l3 | RTE_PTYPE_INNER_L4_UDP;
+		break;
+
+	case RTE_LE32(RX_PKT_CMPL_FLAGS_ITYPE_IP):
+		pkt_type |= l3;
+		break;
+	}
 
 	return pkt_type;
 }
@@ -459,7 +475,7 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 
 	if ((rxcmp->flags_type & rte_cpu_to_le_16(RX_PKT_CMPL_FLAGS_MASK)) ==
 	     RX_PKT_CMPL_FLAGS_ITYPE_PTP_W_TIMESTAMP)
-		mbuf->ol_flags |= PKT_RX_IEEE1588_PTP;
+		mbuf->ol_flags |= PKT_RX_IEEE1588_PTP | PKT_RX_IEEE1588_TMST;
 
 	if (agg_buf)
 		bnxt_rx_pages(rxq, mbuf, &tmp_raw_cons, agg_buf);
@@ -475,12 +491,12 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 	if (likely(RX_CMP_IP_CS_OK(rxcmp1)))
 		mbuf->ol_flags |= PKT_RX_IP_CKSUM_GOOD;
 	else
-		mbuf->ol_flags |= PKT_RX_IP_CKSUM_NONE;
+		mbuf->ol_flags |= PKT_RX_IP_CKSUM_BAD;
 
 	if (likely(RX_CMP_L4_CS_OK(rxcmp1)))
 		mbuf->ol_flags |= PKT_RX_L4_CKSUM_GOOD;
 	else
-		mbuf->ol_flags |= PKT_RX_L4_CKSUM_NONE;
+		mbuf->ol_flags |= PKT_RX_L4_CKSUM_BAD;
 
 	mbuf->packet_type = bnxt_parse_pkt_type(rxcmp, rxcmp1);
 
@@ -512,7 +528,7 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 	 */
 	prod = RING_NEXT(rxr->rx_ring_struct, prod);
 	if (bnxt_alloc_rx_data(rxq, rxr, prod)) {
-		RTE_LOG(ERR, PMD, "mbuf alloc failed with prod=0x%x\n", prod);
+		PMD_DRV_LOG(ERR, "mbuf alloc failed with prod=0x%x\n", prod);
 		rc = -ENOMEM;
 		goto rx;
 	}
@@ -544,6 +560,10 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	uint16_t prod = rxr->rx_prod;
 	uint16_t ag_prod = rxr->ag_prod;
 	int rc = 0;
+
+	/* If Rx Q was stopped return */
+	if (rxq->rx_deferred_start)
+		return 0;
 
 	/* Handle RX burst request */
 	while (1) {
@@ -601,7 +621,7 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 				rxr->rx_prod = i;
 				B_RX_DB(rxr->rx_doorbell, rxr->rx_prod);
 			} else {
-				RTE_LOG(ERR, PMD, "Alloc  mbuf failed\n");
+				PMD_DRV_LOG(ERR, "Alloc  mbuf failed\n");
 				break;
 			}
 		}
@@ -744,7 +764,7 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 	prod = rxr->rx_prod;
 	for (i = 0; i < ring->ring_size; i++) {
 		if (bnxt_alloc_rx_data(rxq, rxr, prod) != 0) {
-			RTE_LOG(WARNING, PMD,
+			PMD_DRV_LOG(WARNING,
 				"init'ed rx ring %d with %d/%d mbufs only\n",
 				rxq->queue_id, i, ring->ring_size);
 			break;
@@ -752,7 +772,6 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 		rxr->rx_prod = prod;
 		prod = RING_NEXT(rxr->rx_ring_struct, prod);
 	}
-	RTE_LOG(DEBUG, PMD, "%s\n", __func__);
 
 	ring = rxr->ag_ring_struct;
 	type = RX_PROD_AGG_BD_TYPE_RX_PROD_AGG;
@@ -761,7 +780,7 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 
 	for (i = 0; i < ring->ring_size; i++) {
 		if (bnxt_alloc_ag_data(rxq, rxr, prod) != 0) {
-			RTE_LOG(WARNING, PMD,
+			PMD_DRV_LOG(WARNING,
 			"init'ed AG ring %d with %d/%d mbufs only\n",
 			rxq->queue_id, i, ring->ring_size);
 			break;
@@ -769,7 +788,7 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 		rxr->ag_prod = prod;
 		prod = RING_NEXT(rxr->ag_ring_struct, prod);
 	}
-	RTE_LOG(DEBUG, PMD, "%s AGG Done!\n", __func__);
+	PMD_DRV_LOG(DEBUG, "AGG Done!\n");
 
 	if (rxr->tpa_info) {
 		for (i = 0; i < BNXT_TPA_MAX; i++) {
@@ -781,7 +800,7 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 			}
 		}
 	}
-	RTE_LOG(DEBUG, PMD, "%s TPA alloc Done!\n", __func__);
+	PMD_DRV_LOG(DEBUG, "TPA alloc Done!\n");
 
 	return 0;
 }

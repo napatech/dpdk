@@ -1,34 +1,6 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright 2017 6WIND S.A.
- *   Copyright 2017 Mellanox
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of 6WIND S.A. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright 2017 6WIND S.A.
+ * Copyright 2017 Mellanox
  */
 
 /**
@@ -65,6 +37,7 @@
 
 /* PMD headers. */
 #include "mlx4.h"
+#include "mlx4_glue.h"
 #include "mlx4_flow.h"
 #include "mlx4_rxtx.h"
 #include "mlx4_utils.h"
@@ -922,24 +895,25 @@ mlx4_drop_get(struct priv *priv)
 		.priv = priv,
 		.refcnt = 1,
 	};
-	drop->cq = ibv_create_cq(priv->ctx, 1, NULL, NULL, 0);
+	drop->cq = mlx4_glue->create_cq(priv->ctx, 1, NULL, NULL, 0);
 	if (!drop->cq)
 		goto error;
-	drop->qp = ibv_create_qp(priv->pd,
-				 &(struct ibv_qp_init_attr){
-					.send_cq = drop->cq,
-					.recv_cq = drop->cq,
-					.qp_type = IBV_QPT_RAW_PACKET,
-				 });
+	drop->qp = mlx4_glue->create_qp
+		(priv->pd,
+		 &(struct ibv_qp_init_attr){
+			.send_cq = drop->cq,
+			.recv_cq = drop->cq,
+			.qp_type = IBV_QPT_RAW_PACKET,
+		 });
 	if (!drop->qp)
 		goto error;
 	priv->drop = drop;
 	return drop;
 error:
 	if (drop->qp)
-		claim_zero(ibv_destroy_qp(drop->qp));
+		claim_zero(mlx4_glue->destroy_qp(drop->qp));
 	if (drop->cq)
-		claim_zero(ibv_destroy_cq(drop->cq));
+		claim_zero(mlx4_glue->destroy_cq(drop->cq));
 	if (drop)
 		rte_free(drop);
 	rte_errno = ENOMEM;
@@ -959,8 +933,8 @@ mlx4_drop_put(struct mlx4_drop *drop)
 	if (--drop->refcnt)
 		return;
 	drop->priv->drop = NULL;
-	claim_zero(ibv_destroy_qp(drop->qp));
-	claim_zero(ibv_destroy_cq(drop->cq));
+	claim_zero(mlx4_glue->destroy_qp(drop->qp));
+	claim_zero(mlx4_glue->destroy_cq(drop->cq));
 	rte_free(drop);
 }
 
@@ -992,7 +966,7 @@ mlx4_flow_toggle(struct priv *priv,
 	if (!enable) {
 		if (!flow->ibv_flow)
 			return 0;
-		claim_zero(ibv_destroy_flow(flow->ibv_flow));
+		claim_zero(mlx4_glue->destroy_flow(flow->ibv_flow));
 		flow->ibv_flow = NULL;
 		if (flow->drop)
 			mlx4_drop_put(priv->drop);
@@ -1005,7 +979,7 @@ mlx4_flow_toggle(struct priv *priv,
 	    !priv->isolated &&
 	    flow->ibv_attr->priority == MLX4_FLOW_PRIORITY_LAST) {
 		if (flow->ibv_flow) {
-			claim_zero(ibv_destroy_flow(flow->ibv_flow));
+			claim_zero(mlx4_glue->destroy_flow(flow->ibv_flow));
 			flow->ibv_flow = NULL;
 			if (flow->drop)
 				mlx4_drop_put(priv->drop);
@@ -1035,7 +1009,7 @@ mlx4_flow_toggle(struct priv *priv,
 			if (missing ^ !flow->drop)
 				return 0;
 			/* Verbs flow needs updating. */
-			claim_zero(ibv_destroy_flow(flow->ibv_flow));
+			claim_zero(mlx4_glue->destroy_flow(flow->ibv_flow));
 			flow->ibv_flow = NULL;
 			if (flow->drop)
 				mlx4_drop_put(priv->drop);
@@ -1056,6 +1030,8 @@ mlx4_flow_toggle(struct priv *priv,
 		flow->drop = missing;
 	}
 	if (flow->drop) {
+		if (flow->ibv_flow)
+			return 0;
 		mlx4_drop_get(priv);
 		if (!priv->drop) {
 			err = rte_errno;
@@ -1067,7 +1043,7 @@ mlx4_flow_toggle(struct priv *priv,
 	assert(qp);
 	if (flow->ibv_flow)
 		return 0;
-	flow->ibv_flow = ibv_create_flow(qp, flow->ibv_attr);
+	flow->ibv_flow = mlx4_glue->create_flow(qp, flow->ibv_attr);
 	if (flow->ibv_flow)
 		return 0;
 	if (flow->drop)
@@ -1223,9 +1199,12 @@ mlx4_flow_internal_next_vlan(struct priv *priv, uint16_t vlan)
  *
  * Various flow rules are created depending on the mode the device is in:
  *
- * 1. Promiscuous: port MAC + catch-all (VLAN filtering is ignored).
- * 2. All multicast: port MAC/VLAN + catch-all multicast.
- * 3. Otherwise: port MAC/VLAN + broadcast MAC/VLAN.
+ * 1. Promiscuous:
+ *       port MAC + broadcast + catch-all (VLAN filtering is ignored).
+ * 2. All multicast:
+ *       port MAC/VLAN + broadcast + catch-all multicast.
+ * 3. Otherwise:
+ *       port MAC/VLAN + broadcast MAC/VLAN.
  *
  * About MAC flow rules:
  *
@@ -1305,9 +1284,6 @@ mlx4_flow_internal(struct priv *priv, struct rte_flow_error *error)
 		!priv->dev->data->promiscuous ?
 		&vlan_spec.tci :
 		NULL;
-	int broadcast =
-		!priv->dev->data->promiscuous &&
-		!priv->dev->data->all_multicast;
 	uint16_t vlan = 0;
 	struct rte_flow *flow;
 	unsigned int i;
@@ -1341,7 +1317,7 @@ next_vlan:
 			rule_vlan = NULL;
 		}
 	}
-	for (i = 0; i != RTE_DIM(priv->mac) + broadcast; ++i) {
+	for (i = 0; i != RTE_DIM(priv->mac) + 1; ++i) {
 		const struct ether_addr *mac;
 
 		/* Broadcasts are handled by an extra iteration. */
@@ -1405,7 +1381,7 @@ next_vlan:
 			goto next_vlan;
 	}
 	/* Take care of promiscuous and all multicast flow rules. */
-	if (!broadcast) {
+	if (priv->dev->data->promiscuous || priv->dev->data->all_multicast) {
 		for (flow = LIST_FIRST(&priv->flows);
 		     flow && flow->internal;
 		     flow = LIST_NEXT(flow, next)) {

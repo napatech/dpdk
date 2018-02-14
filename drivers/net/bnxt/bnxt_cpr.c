@@ -57,8 +57,17 @@ void bnxt_handle_async_event(struct bnxt *bp,
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_LINK_SPEED_CFG_CHANGE:
 		bnxt_link_update_op(bp->eth_dev, 1);
 		break;
+	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_PF_DRVR_UNLOAD:
+		PMD_DRV_LOG(INFO, "Async event: PF driver unloaded\n");
+		break;
+	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_VF_CFG_CHANGE:
+		PMD_DRV_LOG(INFO, "Async event: VF config changed\n");
+		break;
+	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_PORT_CONN_NOT_ALLOWED:
+		PMD_DRV_LOG(INFO, "Port conn async event\n");
+		break;
 	default:
-		RTE_LOG(DEBUG, PMD, "handle_async_event id = 0x%x\n", event_id);
+		PMD_DRV_LOG(INFO, "handle_async_event id = 0x%x\n", event_id);
 		break;
 	}
 }
@@ -74,7 +83,7 @@ void bnxt_handle_fwd_req(struct bnxt *bp, struct cmpl_base *cmpl)
 	int rc;
 
 	if (bp->pf.active_vfs <= 0) {
-		RTE_LOG(ERR, PMD, "Forwarded VF with no active VFs\n");
+		PMD_DRV_LOG(ERR, "Forwarded VF with no active VFs\n");
 		return;
 	}
 
@@ -93,7 +102,7 @@ void bnxt_handle_fwd_req(struct bnxt *bp, struct cmpl_base *cmpl)
 
 	if (fw_vf_id < bp->pf.first_vf_id ||
 	    fw_vf_id >= (bp->pf.first_vf_id) + bp->pf.active_vfs) {
-		RTE_LOG(ERR, PMD,
+		PMD_DRV_LOG(ERR,
 		"FWD req's source_id 0x%x out of range 0x%x - 0x%x (%d %d)\n",
 			fw_vf_id, bp->pf.first_vf_id,
 			(bp->pf.first_vf_id) + bp->pf.active_vfs - 1,
@@ -130,7 +139,7 @@ void bnxt_handle_fwd_req(struct bnxt *bp, struct cmpl_base *cmpl)
 		/* Forward */
 		rc = bnxt_hwrm_exec_fwd_resp(bp, fw_vf_id, fwd_cmd, req_len);
 		if (rc) {
-			RTE_LOG(ERR, PMD,
+			PMD_DRV_LOG(ERR,
 				"Failed to send FWD req VF 0x%x, type 0x%x.\n",
 				fw_vf_id - bp->pf.first_vf_id,
 				rte_le_to_cpu_16(fwd_cmd->req_type));
@@ -141,7 +150,7 @@ void bnxt_handle_fwd_req(struct bnxt *bp, struct cmpl_base *cmpl)
 reject:
 	rc = bnxt_hwrm_reject_fwd_resp(bp, fw_vf_id, fwd_cmd, req_len);
 	if (rc) {
-		RTE_LOG(ERR, PMD,
+		PMD_DRV_LOG(ERR,
 			"Failed to send REJECT req VF 0x%x, type 0x%x.\n",
 			fw_vf_id - bp->pf.first_vf_id,
 			rte_le_to_cpu_16(fwd_cmd->req_type));

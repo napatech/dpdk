@@ -146,6 +146,7 @@ extern "C" {
 /* Use this macro to check if LRO API is supported */
 #define RTE_ETHDEV_HAS_LRO_SUPPORT
 
+#include <rte_compat.h>
 #include <rte_log.h>
 #include <rte_interrupts.h>
 #include <rte_dev.h>
@@ -1133,10 +1134,6 @@ struct rte_eth_dev;
 
 #define RTE_ETH_ALL RTE_MAX_ETHPORTS
 
-struct rte_eth_dev_callback;
-/** @internal Structure to keep track of registered callbacks */
-TAILQ_HEAD(rte_eth_dev_cb_list, rte_eth_dev_callback);
-
 /* Macros to check for valid port */
 #define RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, retval) do { \
 	if (!rte_eth_dev_is_valid_port(port_id)) { \
@@ -1234,12 +1231,46 @@ struct rte_eth_dev_sriov {
 
 #define RTE_ETH_NAME_MAX_LEN RTE_DEV_NAME_MAX_LEN
 
+#define RTE_ETH_DEV_NO_OWNER 0
+
+#define RTE_ETH_MAX_OWNER_NAME_LEN 64
+
+struct rte_eth_dev_owner {
+	uint64_t id; /**< The owner unique identifier. */
+	char name[RTE_ETH_MAX_OWNER_NAME_LEN]; /**< The owner name. */
+};
+
 /** Device supports link state interrupt */
 #define RTE_ETH_DEV_INTR_LSC     0x0002
 /** Device is a bonded slave */
 #define RTE_ETH_DEV_BONDED_SLAVE 0x0004
 /** Device supports device removal interrupt */
 #define RTE_ETH_DEV_INTR_RMV     0x0008
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Iterates over valid ethdev ports owned by a specific owner.
+ *
+ * @param port_id
+ *   The id of the next possible valid owned port.
+ * @param	owner_id
+ *  The owner identifier.
+ *  RTE_ETH_DEV_NO_OWNER means iterate over all valid ownerless ports.
+ * @return
+ *   Next valid port id owned by owner_id, RTE_MAX_ETHPORTS if there is none.
+ */
+uint64_t __rte_experimental rte_eth_find_next_owned_by(uint16_t port_id,
+		const uint64_t owner_id);
+
+/**
+ * Macro to iterate over all enabled ethdev ports owned by a specific owner.
+ */
+#define RTE_ETH_FOREACH_DEV_OWNED_BY(p, o) \
+	for (p = rte_eth_find_next_owned_by(0, o); \
+	     (unsigned int)p < (unsigned int)RTE_MAX_ETHPORTS; \
+	     p = rte_eth_find_next_owned_by(p + 1, o))
 
 /**
  * Iterates over valid ethdev ports.
@@ -1252,12 +1283,85 @@ struct rte_eth_dev_sriov {
 uint16_t rte_eth_find_next(uint16_t port_id);
 
 /**
- * Macro to iterate over all enabled ethdev ports.
+ * Macro to iterate over all enabled and ownerless ethdev ports.
  */
-#define RTE_ETH_FOREACH_DEV(p)					\
-	for (p = rte_eth_find_next(0);				\
-	     (unsigned int)p < (unsigned int)RTE_MAX_ETHPORTS;	\
-	     p = rte_eth_find_next(p + 1))
+#define RTE_ETH_FOREACH_DEV(p) \
+	RTE_ETH_FOREACH_DEV_OWNED_BY(p, RTE_ETH_DEV_NO_OWNER)
+
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Get a new unique owner identifier.
+ * An owner identifier is used to owns Ethernet devices by only one DPDK entity
+ * to avoid multiple management of device by different entities.
+ *
+ * @param	owner_id
+ *   Owner identifier pointer.
+ * @return
+ *   Negative errno value on error, 0 on success.
+ */
+int __rte_experimental rte_eth_dev_owner_new(uint64_t *owner_id);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Set an Ethernet device owner.
+ *
+ * @param	port_id
+ *  The identifier of the port to own.
+ * @param	owner
+ *  The owner pointer.
+ * @return
+ *  Negative errno value on error, 0 on success.
+ */
+int __rte_experimental rte_eth_dev_owner_set(const uint16_t port_id,
+		const struct rte_eth_dev_owner *owner);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Unset Ethernet device owner to make the device ownerless.
+ *
+ * @param	port_id
+ *  The identifier of port to make ownerless.
+ * @param	owner_id
+ *  The owner identifier.
+ * @return
+ *  0 on success, negative errno value on error.
+ */
+int __rte_experimental rte_eth_dev_owner_unset(const uint16_t port_id,
+		const uint64_t owner_id);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Remove owner from all Ethernet devices owned by a specific owner.
+ *
+ * @param	owner_id
+ *  The owner identifier.
+ */
+void __rte_experimental rte_eth_dev_owner_delete(const uint64_t owner_id);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Get the owner of an Ethernet device.
+ *
+ * @param	port_id
+ *  The port identifier.
+ * @param	owner
+ *  The owner structure pointer to fill.
+ * @return
+ *  0 on success, negative errno value on error..
+ */
+int __rte_experimental rte_eth_dev_owner_get(const uint16_t port_id,
+		struct rte_eth_dev_owner *owner);
 
 /**
  * Get the total number of Ethernet devices that have been successfully
@@ -1326,7 +1430,7 @@ uint32_t rte_eth_speed_bitflag(uint32_t speed, int duplex);
  * @return
  *   Offload name or 'UNKNOWN' if the flag cannot be recognised.
  */
-const char *rte_eth_dev_rx_offload_name(uint64_t offload);
+const char * __rte_experimental rte_eth_dev_rx_offload_name(uint64_t offload);
 
 /**
  * @warning
@@ -1339,7 +1443,7 @@ const char *rte_eth_dev_rx_offload_name(uint64_t offload);
  * @return
  *   Offload name or 'UNKNOWN' if the flag cannot be recognised.
  */
-const char *rte_eth_dev_tx_offload_name(uint64_t offload);
+const char * __rte_experimental rte_eth_dev_tx_offload_name(uint64_t offload);
 
 /**
  * Configure an Ethernet device.
@@ -1387,7 +1491,7 @@ int rte_eth_dev_configure(uint16_t port_id, uint16_t nb_rx_queue,
  * @return
  *   1 when the Ethernet device is removed, otherwise 0.
  */
-int
+int __rte_experimental
 rte_eth_dev_is_removed(uint16_t port_id);
 
 /**

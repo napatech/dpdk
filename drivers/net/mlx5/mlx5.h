@@ -1,34 +1,6 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright 2015 6WIND S.A.
- *   Copyright 2015 Mellanox.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of 6WIND S.A. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright 2015 6WIND S.A.
+ * Copyright 2015 Mellanox.
  */
 
 #ifndef RTE_PMD_MLX5_H_
@@ -123,6 +95,24 @@ struct mlx5_dev_config {
 	int inline_max_packet_sz; /* Max packet size for inlining. */
 };
 
+/**
+ * Type of objet being allocated.
+ */
+enum mlx5_verbs_alloc_type {
+	MLX5_VERBS_ALLOC_TYPE_NONE,
+	MLX5_VERBS_ALLOC_TYPE_TX_QUEUE,
+	MLX5_VERBS_ALLOC_TYPE_RX_QUEUE,
+};
+
+/**
+ * Verbs allocator needs a context to know in the callback which kind of
+ * resources it is allocating.
+ */
+struct mlx5_verbs_alloc_ctx {
+	enum mlx5_verbs_alloc_type type; /* Kind of object being allocated. */
+	const void *obj; /* Pointer to the DPDK object. */
+};
+
 struct priv {
 	struct rte_eth_dev *dev; /* Ethernet device of master process. */
 	struct ibv_context *ctx; /* Verbs context. */
@@ -142,7 +132,6 @@ struct priv {
 	unsigned int txqs_n; /* TX queues array size. */
 	struct mlx5_rxq_data *(*rxqs)[]; /* RX queues. */
 	struct mlx5_txq_data *(*txqs)[]; /* TX queues. */
-	unsigned int ind_table_max_size; /* Maximum indirection table size. */
 	struct rte_eth_rss_conf rss_conf; /* RSS configuration. */
 	struct rte_intr_handle intr_handle; /* Interrupt handler. */
 	unsigned int (*reta_idx)[]; /* RETA index table. */
@@ -162,8 +151,11 @@ struct priv {
 	struct mlx5_xstats_ctrl xstats_ctrl; /* Extended stats control. */
 	rte_spinlock_t lock; /* Lock for control functions. */
 	int primary_socket; /* Unix socket for primary process. */
+	void *uar_base; /* Reserved address space for UAR mapping */
 	struct rte_intr_handle intr_handle_socket; /* Interrupt handler. */
 	struct mlx5_dev_config config; /* Device configuration. */
+	struct mlx5_verbs_alloc_ctx verbs_alloc_ctx;
+	/* Context for Verbs allocator. */
 };
 
 /**
@@ -226,6 +218,7 @@ int mlx5_dev_configure(struct rte_eth_dev *);
 void mlx5_dev_infos_get(struct rte_eth_dev *, struct rte_eth_dev_info *);
 const uint32_t *mlx5_dev_supported_ptypes_get(struct rte_eth_dev *dev);
 int priv_link_update(struct priv *, int);
+int priv_force_link_status_change(struct priv *, int);
 int mlx5_link_update(struct rte_eth_dev *, int);
 int mlx5_dev_set_mtu(struct rte_eth_dev *, uint16_t);
 int mlx5_dev_get_flow_ctrl(struct rte_eth_dev *, struct rte_eth_fc_conf *);

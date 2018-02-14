@@ -1,6 +1,5 @@
-/*-
- * SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2010-2014 Intel Corporation
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2017 Intel Corporation
  */
 
 #include <stdbool.h>
@@ -550,6 +549,10 @@ opdl_stage_claim_multithread(struct opdl_stage *s, void *entries,
 	uint32_t i = 0, offset;
 	uint8_t *entries_offset = (uint8_t *)entries;
 
+	if (seq == NULL) {
+		PMD_DRV_LOG(ERR, "Invalid seq PTR");
+		return 0;
+	}
 	offset = opdl_first_entry_id(*seq, s->nb_instance, s->instance_id);
 	num_entries = offset + (s->nb_instance * num_entries);
 
@@ -561,8 +564,8 @@ opdl_stage_claim_multithread(struct opdl_stage *s, void *entries,
 		entries_offset += t->slot_size;
 		i++;
 	}
-	if (seq != NULL)
-		*seq = old_head;
+
+	*seq = old_head;
 
 	return i;
 }

@@ -9,6 +9,7 @@
 #include <string.h>
 #include <dirent.h>
 
+#include <rte_compat.h>
 #include <rte_service.h>
 #include "include/rte_service_component.h"
 
@@ -82,14 +83,14 @@ int32_t rte_service_init(void)
 			RTE_CACHE_LINE_SIZE);
 	if (!rte_services) {
 		printf("error allocating rte services array\n");
-		return -ENOMEM;
+		goto fail_mem;
 	}
 
 	lcore_states = rte_calloc("rte_service_core_states", RTE_MAX_LCORE,
 			sizeof(struct core_state), RTE_CACHE_LINE_SIZE);
 	if (!lcore_states) {
 		printf("error allocating core states array\n");
-		return -ENOMEM;
+		goto fail_mem;
 	}
 
 	int i;
@@ -106,6 +107,27 @@ int32_t rte_service_init(void)
 
 	rte_service_library_initialized = 1;
 	return 0;
+fail_mem:
+	if (rte_services)
+		rte_free(rte_services);
+	if (lcore_states)
+		rte_free(lcore_states);
+	return -ENOMEM;
+}
+
+void __rte_experimental
+rte_service_finalize(void)
+{
+	if (!rte_service_library_initialized)
+		return;
+
+	if (rte_services)
+		rte_free(rte_services);
+
+	if (lcore_states)
+		rte_free(lcore_states);
+
+	rte_service_library_initialized = 0;
 }
 
 /* returns 1 if service is registered and has not been unregistered
@@ -139,7 +161,8 @@ service_mt_safe(struct rte_service_spec_impl *s)
 	return !!(s->spec.capabilities & RTE_SERVICE_CAP_MT_SAFE);
 }
 
-int32_t rte_service_set_stats_enable(uint32_t id, int32_t enabled)
+int32_t __rte_experimental
+rte_service_set_stats_enable(uint32_t id, int32_t enabled)
 {
 	struct rte_service_spec_impl *s;
 	SERVICE_VALID_GET_OR_ERR_RET(id, s, 0);
@@ -152,7 +175,8 @@ int32_t rte_service_set_stats_enable(uint32_t id, int32_t enabled)
 	return 0;
 }
 
-int32_t rte_service_set_runstate_mapped_check(uint32_t id, int32_t enabled)
+int32_t __rte_experimental
+rte_service_set_runstate_mapped_check(uint32_t id, int32_t enabled)
 {
 	struct rte_service_spec_impl *s;
 	SERVICE_VALID_GET_OR_ERR_RET(id, s, 0);
@@ -165,13 +189,14 @@ int32_t rte_service_set_runstate_mapped_check(uint32_t id, int32_t enabled)
 	return 0;
 }
 
-uint32_t
+uint32_t __rte_experimental
 rte_service_get_count(void)
 {
 	return rte_service_count;
 }
 
-int32_t rte_service_get_by_name(const char *name, uint32_t *service_id)
+int32_t __rte_experimental
+rte_service_get_by_name(const char *name, uint32_t *service_id)
 {
 	if (!service_id)
 		return -EINVAL;
@@ -188,7 +213,7 @@ int32_t rte_service_get_by_name(const char *name, uint32_t *service_id)
 	return -ENODEV;
 }
 
-const char *
+const char * __rte_experimental
 rte_service_get_name(uint32_t id)
 {
 	struct rte_service_spec_impl *s;
@@ -196,7 +221,7 @@ rte_service_get_name(uint32_t id)
 	return s->spec.name;
 }
 
-int32_t
+int32_t __rte_experimental
 rte_service_probe_capability(uint32_t id, uint32_t capability)
 {
 	struct rte_service_spec_impl *s;
@@ -204,7 +229,7 @@ rte_service_probe_capability(uint32_t id, uint32_t capability)
 	return !!(s->spec.capabilities & capability);
 }
 
-int32_t
+int32_t __rte_experimental
 rte_service_component_register(const struct rte_service_spec *spec,
 			       uint32_t *id_ptr)
 {
@@ -237,7 +262,7 @@ rte_service_component_register(const struct rte_service_spec *spec,
 	return 0;
 }
 
-int32_t
+int32_t __rte_experimental
 rte_service_component_unregister(uint32_t id)
 {
 	uint32_t i;
@@ -258,7 +283,7 @@ rte_service_component_unregister(uint32_t id)
 	return 0;
 }
 
-int32_t
+int32_t __rte_experimental
 rte_service_component_runstate_set(uint32_t id, uint32_t runstate)
 {
 	struct rte_service_spec_impl *s;
@@ -273,7 +298,7 @@ rte_service_component_runstate_set(uint32_t id, uint32_t runstate)
 	return 0;
 }
 
-int32_t
+int32_t __rte_experimental
 rte_service_runstate_set(uint32_t id, uint32_t runstate)
 {
 	struct rte_service_spec_impl *s;
@@ -288,7 +313,7 @@ rte_service_runstate_set(uint32_t id, uint32_t runstate)
 	return 0;
 }
 
-int32_t
+int32_t __rte_experimental
 rte_service_runstate_get(uint32_t id)
 {
 	struct rte_service_spec_impl *s;
@@ -349,7 +374,7 @@ service_run(uint32_t i, struct core_state *cs, uint64_t service_mask)
 	return 0;
 }
 
-int32_t rte_service_run_iter_on_app_lcore(uint32_t id,
+int32_t __rte_experimental rte_service_run_iter_on_app_lcore(uint32_t id,
 		uint32_t serialize_mt_unsafe)
 {
 	/* run service on calling core, using all-ones as the service mask */
@@ -405,7 +430,7 @@ rte_service_runner_func(void *arg)
 	return 0;
 }
 
-int32_t
+int32_t __rte_experimental
 rte_service_lcore_count(void)
 {
 	int32_t count = 0;
@@ -415,7 +440,7 @@ rte_service_lcore_count(void)
 	return count;
 }
 
-int32_t
+int32_t __rte_experimental
 rte_service_lcore_list(uint32_t array[], uint32_t n)
 {
 	uint32_t count = rte_service_lcore_count();
@@ -438,7 +463,7 @@ rte_service_lcore_list(uint32_t array[], uint32_t n)
 	return count;
 }
 
-int32_t
+int32_t __rte_experimental
 rte_service_lcore_count_services(uint32_t lcore)
 {
 	if (lcore >= RTE_MAX_LCORE)
@@ -451,7 +476,7 @@ rte_service_lcore_count_services(uint32_t lcore)
 	return __builtin_popcountll(cs->service_mask);
 }
 
-int32_t
+int32_t __rte_experimental
 rte_service_start_with_defaults(void)
 {
 	/* create a default mapping from cores to services, then start the
@@ -537,7 +562,7 @@ service_update(struct rte_service_spec *service, uint32_t lcore,
 	return 0;
 }
 
-int32_t
+int32_t __rte_experimental
 rte_service_map_lcore_set(uint32_t id, uint32_t lcore, uint32_t enabled)
 {
 	struct rte_service_spec_impl *s;
@@ -546,7 +571,7 @@ rte_service_map_lcore_set(uint32_t id, uint32_t lcore, uint32_t enabled)
 	return service_update(&s->spec, lcore, &on, 0);
 }
 
-int32_t
+int32_t __rte_experimental
 rte_service_map_lcore_get(uint32_t id, uint32_t lcore)
 {
 	struct rte_service_spec_impl *s;
@@ -572,7 +597,8 @@ set_lcore_state(uint32_t lcore, int32_t state)
 	lcore_states[lcore].is_service_core = (state == ROLE_SERVICE);
 }
 
-int32_t rte_service_lcore_reset_all(void)
+int32_t __rte_experimental
+rte_service_lcore_reset_all(void)
 {
 	/* loop over cores, reset all to mask 0 */
 	uint32_t i;
@@ -591,7 +617,7 @@ int32_t rte_service_lcore_reset_all(void)
 	return 0;
 }
 
-int32_t
+int32_t __rte_experimental
 rte_service_lcore_add(uint32_t lcore)
 {
 	if (lcore >= RTE_MAX_LCORE)
@@ -610,7 +636,7 @@ rte_service_lcore_add(uint32_t lcore)
 	return rte_eal_wait_lcore(lcore);
 }
 
-int32_t
+int32_t __rte_experimental
 rte_service_lcore_del(uint32_t lcore)
 {
 	if (lcore >= RTE_MAX_LCORE)
@@ -629,7 +655,7 @@ rte_service_lcore_del(uint32_t lcore)
 	return 0;
 }
 
-int32_t
+int32_t __rte_experimental
 rte_service_lcore_start(uint32_t lcore)
 {
 	if (lcore >= RTE_MAX_LCORE)
@@ -652,7 +678,7 @@ rte_service_lcore_start(uint32_t lcore)
 	return ret;
 }
 
-int32_t
+int32_t __rte_experimental
 rte_service_lcore_stop(uint32_t lcore)
 {
 	if (lcore >= RTE_MAX_LCORE)
@@ -682,7 +708,7 @@ rte_service_lcore_stop(uint32_t lcore)
 	return 0;
 }
 
-int32_t
+int32_t __rte_experimental
 rte_service_attr_get(uint32_t id, uint32_t attr_id, uint32_t *attr_value)
 {
 	struct rte_service_spec_impl *s;
@@ -727,7 +753,7 @@ rte_service_dump_one(FILE *f, struct rte_service_spec_impl *s,
 			s->cycles_spent, s->cycles_spent / calls);
 }
 
-int32_t
+int32_t __rte_experimental
 rte_service_attr_reset_all(uint32_t id)
 {
 	struct rte_service_spec_impl *s;
@@ -755,7 +781,7 @@ service_dump_calls_per_lcore(FILE *f, uint32_t lcore, uint32_t reset)
 	fprintf(f, "\n");
 }
 
-int32_t rte_service_dump(FILE *f, uint32_t id)
+int32_t __rte_experimental rte_service_dump(FILE *f, uint32_t id)
 {
 	uint32_t i;
 	int print_one = (id != UINT32_MAX);

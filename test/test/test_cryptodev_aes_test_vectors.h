@@ -1269,7 +1269,9 @@ static const struct blockcipher_test_case aes_chain_test_cases[] = {
 		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_MB |
 			BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
 			BLOCKCIPHER_TEST_TARGET_PMD_QAT |
-			BLOCKCIPHER_TEST_TARGET_PMD_SCHEDULER
+			BLOCKCIPHER_TEST_TARGET_PMD_SCHEDULER |
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA_SEC
 	},
 	{
 		.test_descr = "AES-128-CBC HMAC-SHA1 Decryption Digest "
@@ -1284,6 +1286,15 @@ static const struct blockcipher_test_case aes_chain_test_cases[] = {
 			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC |
 			BLOCKCIPHER_TEST_TARGET_PMD_DPAA_SEC |
 			BLOCKCIPHER_TEST_TARGET_PMD_MRVL
+	},
+	{
+		.test_descr = "AES-128-CBC HMAC-SHA1 Decryption Digest "
+			"Verify Scatter Gather",
+		.test_data = &aes_test_data_4,
+		.op_mask = BLOCKCIPHER_TEST_OP_AUTH_VERIFY_DEC,
+		.feature_mask = BLOCKCIPHER_TEST_FEATURE_SG,
+		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC |
+			    BLOCKCIPHER_TEST_TARGET_PMD_DPAA_SEC
 	},
 	{
 		.test_descr = "AES-128-CBC HMAC-SHA1 Decryption Digest "
@@ -1391,6 +1402,8 @@ static const struct blockcipher_test_case aes_chain_test_cases[] = {
 		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_MB |
 			BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
 			BLOCKCIPHER_TEST_TARGET_PMD_QAT |
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA_SEC |
 			BLOCKCIPHER_TEST_TARGET_PMD_SCHEDULER
 	},
 	{
@@ -1544,7 +1557,9 @@ static const struct blockcipher_test_case aes_cipheronly_test_cases[] = {
 		.op_mask = BLOCKCIPHER_TEST_OP_ENCRYPT,
 		.feature_mask = BLOCKCIPHER_TEST_FEATURE_SG |
 			BLOCKCIPHER_TEST_FEATURE_OOP,
-		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL
+		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC
 	},
 	{
 		.test_descr = "AES-192-CBC Decryption",
@@ -1555,6 +1570,14 @@ static const struct blockcipher_test_case aes_cipheronly_test_cases[] = {
 			BLOCKCIPHER_TEST_TARGET_PMD_MB |
 			BLOCKCIPHER_TEST_TARGET_PMD_SCHEDULER |
 			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA_SEC
+	},
+	{
+		.test_descr = "AES-192-CBC Decryption Scatter Gather",
+		.test_data = &aes_test_data_10,
+		.op_mask = BLOCKCIPHER_TEST_OP_DECRYPT,
+		.feature_mask = BLOCKCIPHER_TEST_FEATURE_SG,
+		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC |
 			BLOCKCIPHER_TEST_TARGET_PMD_DPAA_SEC
 	},
 	{

@@ -1,35 +1,6 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2016 Intel Corporation. All rights reserved.
- *   Copyright(c) 2012-2014 6WIND S.A.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2018 Intel Corporation.
+ * Copyright(c) 2012-2014 6WIND S.A.
  */
 
 #include <stdio.h>
@@ -53,6 +24,7 @@
 #include <sys/io.h>
 #endif
 
+#include <rte_compat.h>
 #include <rte_common.h>
 #include <rte_debug.h>
 #include <rte_memory.h>
@@ -120,11 +92,21 @@ struct internal_config internal_config;
 /* used by rte_rdtsc() */
 int rte_cycles_vmware_tsc_map;
 
+/* Return user provided mbuf pool ops name */
+const char * __rte_experimental
+rte_eal_mbuf_user_pool_ops(void)
+{
+	return internal_config.user_mbuf_pool_ops_name;
+}
+
 /* Return mbuf pool ops name */
 const char *
 rte_eal_mbuf_default_mempool_ops(void)
 {
-	return internal_config.mbuf_pool_ops_name;
+	if (internal_config.user_mbuf_pool_ops_name == NULL)
+		return RTE_MBUF_DEFAULT_MEMPOOL_OPS;
+
+	return internal_config.user_mbuf_pool_ops_name;
 }
 
 /* Return a pointer to the configuration structure */
@@ -609,7 +591,7 @@ eal_parse_args(int argc, char **argv)
 			break;
 
 		case OPT_MBUF_POOL_OPS_NAME_NUM:
-			internal_config.mbuf_pool_ops_name = optarg;
+			internal_config.user_mbuf_pool_ops_name = optarg;
 			break;
 
 		default:
@@ -852,6 +834,14 @@ rte_eal_init(int argc, char **argv)
 		return -1;
 	}
 
+	if (rte_mp_channel_init() < 0) {
+		rte_eal_init_alert("failed to init mp channel\n");
+		if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
+			rte_errno = EFAULT;
+			return -1;
+		}
+	}
+
 #ifdef VFIO_PRESENT
 	if (rte_eal_vfio_setup() < 0) {
 		rte_eal_init_alert("Cannot init VFIO\n");
@@ -972,6 +962,13 @@ rte_eal_init(int argc, char **argv)
 	rte_eal_mcfg_complete();
 
 	return fctret;
+}
+
+int __rte_experimental
+rte_eal_cleanup(void)
+{
+	rte_service_finalize();
+	return 0;
 }
 
 /* get core role */

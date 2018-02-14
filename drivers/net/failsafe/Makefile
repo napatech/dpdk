@@ -46,10 +46,17 @@ SRCS-$(CONFIG_RTE_LIBRTE_PMD_FAILSAFE) += failsafe_ops.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_FAILSAFE) += failsafe_rxtx.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_FAILSAFE) += failsafe_ether.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_FAILSAFE) += failsafe_flow.c
+SRCS-$(CONFIG_RTE_LIBRTE_PMD_FAILSAFE) += failsafe_intr.c
+ifeq ($(CONFIG_RTE_EXEC_ENV_LINUXAPP),y)
+CFLAGS += -DLINUX
+else
+CFLAGS += -DBSD
+endif
 
 # No exported include files
 
 # Basic CFLAGS:
+CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -std=gnu99 -Wextra
 CFLAGS += -O3
 CFLAGS += -I.
