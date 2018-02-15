@@ -280,6 +280,7 @@ fs_dev_remove(struct sub_device *sdev)
 		/* the end */
 		break;
 	}
+	sdev->remove = 0;
 	failsafe_hotplug_alarm_install(sdev->fs_dev);
 }
 
@@ -327,8 +328,11 @@ failsafe_dev_remove(struct rte_eth_dev *dev)
 
 	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE)
 		if (sdev->remove && fs_rxtx_clean(sdev)) {
+			if (fs_lock(dev, 1) != 0)
+				return;
 			fs_dev_stats_save(sdev);
 			fs_dev_remove(sdev);
+			fs_unlock(dev, 1);
 		}
 }
 
@@ -428,6 +432,7 @@ failsafe_eth_rmv_event_callback(uint16_t port_id __rte_unused,
 {
 	struct sub_device *sdev = cb_arg;
 
+	fs_lock(sdev->fs_dev, 0);
 	/* Switch as soon as possible tx_dev. */
 	fs_switch_dev(sdev->fs_dev, sdev);
 	/* Use safe bursts in any case. */
@@ -437,6 +442,7 @@ failsafe_eth_rmv_event_callback(uint16_t port_id __rte_unused,
 	 * the callback at the source of the current thread context.
 	 */
 	sdev->remove = 1;
+	fs_unlock(sdev->fs_dev, 0);
 	return 0;
 }
 

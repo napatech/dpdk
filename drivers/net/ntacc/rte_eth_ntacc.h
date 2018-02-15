@@ -121,7 +121,7 @@ struct filter_values_s {
 	LIST_ENTRY(filter_values_s) next;
   uint64_t mask;
   const char *layerString;
-  uint8_t size; 
+  uint8_t size;
   uint8_t layer;
   uint8_t offset;
   union {
@@ -192,6 +192,11 @@ struct batch_ctrl {
 };
 
 int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo, struct pmd_internals *internals);
+
+extern int ntacc_logtype;
+
+#define PMD_NTACC_LOG(level, fmt, args...) rte_log(RTE_LOG_ ## level, ntacc_logtype, \
+		                                               "%s: " fmt , __func__, ##args)
 
 #endif
 
