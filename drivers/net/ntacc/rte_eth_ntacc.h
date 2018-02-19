@@ -56,6 +56,7 @@ struct filter_keyset_s {
 struct rte_flow {
 	LIST_ENTRY(rte_flow) next;
   LIST_HEAD(_filter_flows, filter_flow) ntpl_id;
+  uint32_t assign_ntpl_id;
   uint8_t port;
   uint8_t  key;
   uint64_t typeMask;

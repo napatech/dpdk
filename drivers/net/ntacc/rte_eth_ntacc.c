@@ -963,6 +963,7 @@ static int eth_stats_get(struct rte_eth_dev *dev,
   rte_spinlock_lock(&internals->statlock);
   if ((status = (*_NT_StatRead)(internals->hStat, pStatData)) != 0) {
     (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
+    rte_spinlock_unlock(&internals->statlock);
     PMD_NTACC_LOG(ERR, "ERROR: NT_StatRead failed. Code 0x%x = %s\n", status, errBuf);
     rte_free(pStatData);
     return -EIO;
@@ -1214,41 +1215,64 @@ static const char *ActionErrorString(enum rte_flow_action_type type)
   }
 }
 
+// Do only release the keyset if it is not in used anymore.
+// This means that is it not referenced in any other flow.
 // No lock in this code
 static void _cleanUpKeySet(int key, struct pmd_internals *internals)
 {
   struct rte_flow *pTmp;
-  bool found = false;
   LIST_FOREACH(pTmp, &internals->flows, next) {
     if (pTmp->key == key) {
       // Key set is still in use
-      found = true;
-      break;
+      return;
     }
   }
-  if (!found) {
-    // Key set is not in use anymore. delete it.
-    DeleteKeyset(key, internals);
-    PMD_NTACC_LOG(DEBUG, "Returning keyset %u: %d\n", internals->adapterNo, key);
-    ReturnKeysetValue(internals, key);
-  }
+  // Key set is not in use anymore. delete it.
+  PMD_NTACC_LOG(DEBUG, "Returning keyset %u: %d\n", internals->adapterNo, key);
+  DeleteKeyset(key, internals);
+  ReturnKeysetValue(internals, key);
 }
 
+// Do only delete the assign command if it is not in used anymore.
+// This means that is it not referenced in any other flow.
+// No lock in this code
+static void _cleanUpAssignNtplId(uint32_t assignNtplID, struct pmd_internals *internals)
+{
+  NtNtplInfo_t ntplInfo;
+  char ntpl_buf[21];
+  struct rte_flow *pFlow;
+  LIST_FOREACH(pFlow, &internals->flows, next) {
+    if (pFlow->assign_ntpl_id == assignNtplID) {
+      // NTPL ID still in use
+      return;
+    }
+  }
+  // NTPL ID not in use
+  PMD_NTACC_LOG(DEBUG, "Deleting assign filter: %u\n", assignNtplID);
+  snprintf(ntpl_buf, 20, "delete=%d", assignNtplID);
+  DoNtpl(ntpl_buf, &ntplInfo, internals);
+}
+
+// Delete a flow by deleting the NTPL command assigned
+// with the flow. Check if some of the shared components
+// like keyset and assign filter is still in use.
 // No lock in this code
 static void _cleanUpFlow(struct rte_flow *flow, struct pmd_internals *internals)
 {
   NtNtplInfo_t ntplInfo;
   char ntpl_buf[21];
+  PMD_NTACC_LOG(DEBUG, "Remove flow %p\n", flow);
   LIST_REMOVE(flow, next);
   while (!LIST_EMPTY(&flow->ntpl_id)) {
     struct filter_flow *id;
     id = LIST_FIRST(&flow->ntpl_id);
     snprintf(ntpl_buf, 20, "delete=%d", id->ntpl_id);
     DoNtpl(ntpl_buf, &ntplInfo, internals);
-    PMD_NTACC_LOG(DEBUG, "Deleting Item filter 1: %s\n", ntpl_buf);
+    PMD_NTACC_LOG(DEBUG, "Deleting Item filter: %s\n", ntpl_buf);
     LIST_REMOVE(id, next);
     rte_free(id);
   }
+  _cleanUpAssignNtplId(flow->assign_ntpl_id, internals);
   _cleanUpKeySet(flow->key, internals);
   rte_free(flow);
 }
@@ -1654,7 +1678,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       goto FlowError;
     }
     rte_spinlock_lock(&internals->lock);
-    pushNtplID(flow, ntplInfo.ntplId);
+    flow->assign_ntpl_id = ntplInfo.ntplId;
     rte_spinlock_unlock(&internals->lock);
   }
 

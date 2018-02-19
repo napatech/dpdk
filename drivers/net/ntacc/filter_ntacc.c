@@ -489,6 +489,19 @@ void DeleteKeyset(int key, struct pmd_internals *internals) {
   }
 }
 
+/******************************************************
+  Find the keyset for multiple shared filter commands.
+
+  A filter command is shared when:
+    typeMask = commands and fields in the different commands
+    plist_queues = Queues used by the commands
+    port = Adapter port
+  are the same. This means that the filter can be
+  optimized to take less space in the FPGA.
+
+  If no match is found then it is the first
+  command or optimization cannot be done.
+ *******************************************************/
 static int FindKeyset(uint64_t typeMask, uint8_t *plist_queues, uint8_t nb_queues, struct pmd_internals *internals)
 {
   struct filter_keyset_s *key_set;
@@ -511,6 +524,67 @@ static int FindKeyset(uint64_t typeMask, uint8_t *plist_queues, uint8_t nb_queue
   return 0;
 }
 
+/******************************************************
+  Find the NTPL ID for the assign command as it is
+  the same assign command used when multiple shared
+  filter commands are used.
+
+  A filter command is shared when:
+    typeMask = commands and fields in the different commands
+    plist_queues = Queues used by the commands
+    port = Adapter port
+  are the same. This means that the filter can be
+  optimized to take less space in the FPGA.
+
+  If no assign NTPL ID is found then it is the first
+  command or optimization cannot be done.
+ *******************************************************/
+static uint32_t FindAssignNtplID(uint64_t typeMask, uint8_t *plist_queues, uint8_t nb_queues, struct pmd_internals *internals)
+{
+  struct rte_flow *pFlow;
+  int match = 0;
+  int i;
+  LIST_FOREACH(pFlow, &internals->flows, next) {
+    if (pFlow->typeMask == typeMask && nb_queues == pFlow->nb_queues && pFlow->port == internals->port) {
+      match = 0;
+      for (i = 0; i < nb_queues; i++) {
+        if (plist_queues[i] == pFlow->list_queues[i]) {
+          match++;
+        }
+      }
+      if (match == nb_queues) {
+        return pFlow->assign_ntpl_id;
+      }
+    }
+  }
+  return 0;
+}
+
+//#define DUMP_FLOWS
+#ifdef DUMP_FLOWS
+static void DumpFlows(struct pmd_internals *internals)
+{
+  struct rte_flow *pFlow;
+  struct filter_flow *pNtlpid;
+  unsigned i = 0;
+  printf("Dump flows\n");
+  printf("----------\n");
+  LIST_FOREACH(pFlow, &internals->flows, next) {
+    unsigned j = 0;
+    printf("Flow no %u\n", i++);
+    printf("P %u, K %u, M %016llX. Queues:", pFlow->port, pFlow->key, (long long unsigned int)pFlow->typeMask);
+    for (j = 0; j < pFlow->nb_queues; j++) {
+      printf(" %u", pFlow->list_queues[j]);
+    }
+    printf("\nNTPL ID: Assign = %u", pFlow->assign_ntpl_id);
+    LIST_FOREACH(pNtlpid, &pFlow->ntpl_id, next) {
+      printf(" %u", pNtlpid->ntpl_id);
+    }
+    printf("\n---------------------------------------------------\n");
+  }
+}
+#endif
+
 int CreateOptimizedFilter(char *ntpl_buf,
                           struct pmd_internals *internals,
                           struct rte_flow *flow,
@@ -530,6 +604,10 @@ int CreateOptimizedFilter(char *ntpl_buf,
   char *filter_buffer2 = NULL;
   char *filter_buffer3 = NULL;
   int i;
+
+#ifdef DUMP_FLOWS
+  DumpFlows(internals);
+#endif
 
   rte_spinlock_lock(&internals->lock);
   if (LIST_EMPTY(&internals->filter_values)) {
@@ -644,12 +722,20 @@ int CreateOptimizedFilter(char *ntpl_buf,
     key_set->port = internals->port;
     LIST_INSERT_HEAD(&internals->filter_keyset, key_set, next);
     *reuse = false;
+    flow->assign_ntpl_id = 0;
   }
   else {
     *reuse = true;
+    flow->assign_ntpl_id = FindAssignNtplID(typeMask, plist_queues, nb_queues, internals);
   }
 
+  for (i = 0; i < nb_queues; i++) {
+    flow->list_queues[i] = plist_queues[i];
+  }
+  flow->nb_queues = nb_queues;
+  flow->port = internals->port;
   flow->key = key;
+  flow->typeMask = typeMask;
   first = true;
   LIST_FOREACH(pFilter_values, &internals->filter_values, next) {
     if (first) {
