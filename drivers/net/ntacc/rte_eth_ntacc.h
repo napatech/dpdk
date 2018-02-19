@@ -64,6 +64,7 @@ struct filter_keyset_s {
 struct rte_flow {
 	LIST_ENTRY(rte_flow) next;
   LIST_HEAD(_filter_flows, filter_flow) ntpl_id;
+  uint32_t assign_ntpl_id;
   uint8_t port;
   uint8_t  key;
   uint64_t typeMask;
@@ -129,7 +130,7 @@ struct filter_values_s {
 	LIST_ENTRY(filter_values_s) next;
   uint64_t mask;
   const char *layerString;
-  uint8_t size; 
+  uint8_t size;
   uint8_t layer;
   uint8_t offset;
   union {
@@ -202,6 +203,8 @@ struct batch_ctrl {
 
 int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo, struct pmd_internals *internals);
 
+#define PMD_NTACC_LOG(level, fmt, args...) rte_log(RTE_LOG_ ## level, RTE_LOGTYPE_PMD, \
+		                                               "%s: " fmt , __func__, ##args)
 #endif
 
 
