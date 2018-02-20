@@ -205,6 +205,8 @@ extern "C" {
 #define PKT_RX_QINQ          (1ULL << 20)
 
 /* add new RX flags here */
+#define PKT_RX_GSO_TCP4      (1ULL << 21)  /**< RX packet with TCPv4 segment offload */
+#define PKT_RX_GSO_TCP6      (1ULL << 22)  /**< RX packet with TCPv6 segment offload */
 
 /* add new TX flags here */
 
