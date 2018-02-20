@@ -157,6 +157,32 @@ static const char *valid_arguments[] = {
 
 static struct ether_addr eth_addr[MAX_NTACC_PORTS];
 
+static uint32_t _log_nt_errors(const uint32_t status, const char *msg, const char *func)
+{
+  char *pErrBuf;
+
+  printf("ERR: %s\n", msg);
+
+  pErrBuf = (char *)rte_malloc(NULL, NT_ERRBUF_SIZE+1, 0);
+  if (!pErrBuf) {
+    PMD_NTACC_LOG(ERR, "Error %s: Out of memory\n", func);
+    return status;
+  }
+
+  (*_NT_ExplainError)(status, pErrBuf, NT_ERRBUF_SIZE);
+  printf("ERR1: %s\n", pErrBuf);
+  PMD_NTACC_LOG(ERR, "Error: %s. Code 0x%x = %s\n", msg, status, pErrBuf);
+
+  rte_free(pErrBuf);
+  return status;
+}
+
+static uint32_t _log_out_of_memory_errors(const char *func)
+{
+  PMD_NTACC_LOG(ERR, "Error %s: Out of memory\n", func);
+  return ENOMEM;
+}
+
 static void _seg_release_cb(struct rte_mbuf *mbuf)
 {
 	struct batch_ctrl *batchCtl = (struct batch_ctrl *)((u_char *)mbuf->userdata);
@@ -176,17 +202,20 @@ static void _write_to_file(int fd, const char *buffer)
   }
 }
 
-int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo, struct pmd_internals *internals)
+int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *internals)
 {
   NtConfigStream_t hCfgStream;      // Config stream
+  NtNtplInfo_t *pNtplInfo;
   int status;
   int fd;
 
   if((status = (*_NT_ConfigOpen)(&hCfgStream, "capture")) != NT_SUCCESS) {
-    // Get the status code as text
-    (*_NT_ExplainError)(status, errorBuffer, sizeof(errorBuffer)-1);
-    fprintf(stderr, "NT_ConfigOpen() failed: %s\n", errorBuffer);
-    return -1;
+    return _log_nt_errors(status, "NT_ConfigOpen() failed", __func__);
+  }
+
+  pNtplInfo = (NtNtplInfo_t *)rte_malloc(internals->name, sizeof(NtNtplInfo_t), 0);
+  if (!pNtplInfo) {
+    return _log_out_of_memory_errors(__func__);
   }
 
   if (internals->ntpl_file) {
@@ -199,14 +228,14 @@ int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo, struct pmd_internals *in
   }
 
   PMD_NTACC_LOG(DEBUG, "NTPL : %s\n", ntplStr);
-  if((status = (*_NT_NTPL)(hCfgStream, ntplStr, ntplInfo, NT_NTPL_PARSER_VALIDATE_NORMAL)) != NT_SUCCESS) {
+  if((status = (*_NT_NTPL)(hCfgStream, ntplStr, pNtplInfo, NT_NTPL_PARSER_VALIDATE_NORMAL)) != NT_SUCCESS) {
     // Get the status code as text
     (*_NT_ExplainError)(status, errorBuffer, sizeof(errorBuffer)-1);
     PMD_NTACC_LOG(ERR, "NT_NTPL() failed: %s\n", errorBuffer);
-    PMD_NTACC_LOG(ERR, ">>> NTPL errorcode: %X\n", ntplInfo->u.errorData.errCode);
-    PMD_NTACC_LOG(ERR, ">>> %s\n", ntplInfo->u.errorData.errBuffer[0]);
-    PMD_NTACC_LOG(ERR, ">>> %s\n", ntplInfo->u.errorData.errBuffer[1]);
-    PMD_NTACC_LOG(ERR, ">>> %s\n", ntplInfo->u.errorData.errBuffer[2]);
+    PMD_NTACC_LOG(ERR, ">>> NTPL errorcode: %X\n", pNtplInfo->u.errorData.errCode);
+    PMD_NTACC_LOG(ERR, ">>> %s\n", pNtplInfo->u.errorData.errBuffer[0]);
+    PMD_NTACC_LOG(ERR, ">>> %s\n", pNtplInfo->u.errorData.errBuffer[1]);
+    PMD_NTACC_LOG(ERR, ">>> %s\n", pNtplInfo->u.errorData.errBuffer[2]);
     (*_NT_ConfigClose)(hCfgStream);
 
     if (internals->ntpl_file) {
@@ -214,15 +243,22 @@ int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo, struct pmd_internals *in
       if (fd == -1) {
         PMD_NTACC_LOG(ERR, "NT_NTPL() dump failed: Unable to open file %s. Error %d\n", internals->ntpl_file, errno);
       }
-      _write_to_file(fd, ntplInfo->u.errorData.errBuffer[0]); _write_to_file(fd, "\n");
-      _write_to_file(fd, ntplInfo->u.errorData.errBuffer[1]); _write_to_file(fd, "\n");
-      _write_to_file(fd, ntplInfo->u.errorData.errBuffer[2]); _write_to_file(fd, "\n");
+      _write_to_file(fd, pNtplInfo->u.errorData.errBuffer[0]); _write_to_file(fd, "\n");
+      _write_to_file(fd, pNtplInfo->u.errorData.errBuffer[1]); _write_to_file(fd, "\n");
+      _write_to_file(fd, pNtplInfo->u.errorData.errBuffer[2]); _write_to_file(fd, "\n");
       close(fd);
     }
+    rte_free(pNtplInfo);
     return -1;
   }
-  PMD_NTACC_LOG(DEBUG, "NTPL : %d\n", ntplInfo->ntplId);
+  // Return ntpl ID
+  if (pNtplID) {
+    *pNtplID = pNtplInfo->ntplId;
+  }
+  PMD_NTACC_LOG(DEBUG, "NTPL : %d\n", pNtplInfo->ntplId);
+
   (*_NT_ConfigClose)(hCfgStream);
+  rte_free(pNtplInfo);
   return 0;
 }
 
@@ -717,11 +753,11 @@ static int eth_dev_start(struct rte_eth_dev *dev)
 
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
     if (rx_q[queue].enabled) {
-      NtNtplInfo_t ntplInfo;
+      uint32_t ntplID;
       char ntpl_buf[21];
       /* Delete all NTPL */
       snprintf(ntpl_buf, 20, "Delete=tag==%s", internals->tagName);
-      if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
+      if (DoNtpl(ntpl_buf, &ntplID, internals) != 0) {
         PMD_NTACC_LOG(ERR, "Failed to create delete filters in eth_dev_start\n");
         goto StartError;
       }
@@ -736,8 +772,7 @@ static int eth_dev_start(struct rte_eth_dev *dev)
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
     if (rx_q[queue].enabled) {
       if ((status = (*_NT_NetRxOpen)(&rx_q[queue].pNetRx, "DPDK", NT_NET_INTERFACE_SEGMENT, rx_q[queue].stream_id, -1)) != NT_SUCCESS) {
-        (*_NT_ExplainError)(status, errorBuffer, sizeof(errorBuffer));
-        PMD_NTACC_LOG(ERR, "NT_NetRxOpen() failed: %s\n", errorBuffer);
+        _log_nt_errors(status, "NT_NetRxOpen() failed", __func__);
         goto StartError;
       }
       eth_rx_queue_start(dev, queue);
@@ -748,8 +783,7 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     if (tx_q[queue].enabled) {
       if ((status = (*_NT_NetTxOpen)(&tx_q[queue].pNetTx, "DPDK", 1 << tx_q[queue].port, -1, 0)) != NT_SUCCESS) {
         if ((status = (*_NT_NetTxOpen)(&tx_q[queue].pNetTx, "DPDK", 1 << tx_q[queue].port, -2, 0)) != NT_SUCCESS) {
-          (*_NT_ExplainError)(status, errorBuffer, sizeof(errorBuffer));
-          PMD_NTACC_LOG(DEBUG, "NT_NetTxOpen(0x%X, -2, 0) failed: %s\n", 1 << tx_q[queue].port, errorBuffer);
+          _log_nt_errors(status, "NT_NetTxOpen() with -2 failed", __func__);
           goto StartError;
         }
         PMD_NTACC_LOG(DEBUG, "NT_NetTxOpen() Not optimal hostbuffer found on a neighbour numa node\n");
@@ -833,7 +867,6 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
   NtInfoStream_t hInfo;
   NtInfo_t *pInfo;
   uint status;
-  char errBuf[NT_ERRBUF_SIZE];
 
   dev_info->if_index = internals->if_index;
   dev_info->driver_name = internals->driverName;
@@ -847,22 +880,21 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
 
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
-    PMD_NTACC_LOG(ERR, "Error %s: Out of memory\n", __func__);
+    _log_out_of_memory_errors(__func__);
     return;
   }
 
   // Read speed capabilities for the port
   if ((status = (*_NT_InfoOpen)(&hInfo, "DPDK Info stream")) != NT_SUCCESS) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-    PMD_NTACC_LOG(ERR, "Error: NT_InfoOpen failed. Code 0x%x = %s\n", status, errBuf);
+    _log_nt_errors(status, "NT_InfoOpen failed", __func__);
     rte_free(pInfo);
     return;
   }
+
   pInfo->cmd = NT_INFO_CMD_READ_PORT_V8;
   pInfo->u.port_v8.portNo = (uint8_t)(internals->txq[0].port);
   if ((status = (*_NT_InfoRead)(hInfo, pInfo)) != 0) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-    PMD_NTACC_LOG(ERR, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
+    _log_nt_errors(status, "NT_InfoRead failed", __func__);
     rte_free(pInfo);
     return;
   }
@@ -943,12 +975,10 @@ static int eth_stats_get(struct rte_eth_dev *dev,
   int status;
   NtStatistics_t *pStatData;
   uint8_t port;
-  char errBuf[NT_ERRBUF_SIZE];
 
   pStatData = (NtStatistics_t *)rte_malloc(internals->name, sizeof(NtStatistics_t), 0);
   if (!pStatData) {
-    PMD_NTACC_LOG(ERR, "Error %s: Out of memory\n", __func__);
-    return -ENOMEM;
+    return _log_out_of_memory_errors(__func__);
   }
 
   memset(igb_stats, 0, sizeof(*igb_stats));
@@ -962,9 +992,8 @@ static int eth_stats_get(struct rte_eth_dev *dev,
   pStatData->u.query_v2.clear=0;
   rte_spinlock_lock(&internals->statlock);
   if ((status = (*_NT_StatRead)(internals->hStat, pStatData)) != 0) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
     rte_spinlock_unlock(&internals->statlock);
-    PMD_NTACC_LOG(ERR, "ERROR: NT_StatRead failed. Code 0x%x = %s\n", status, errBuf);
+    _log_nt_errors(status, "NT_StatRead failed", __func__);
     rte_free(pStatData);
     return -EIO;
   }
@@ -1010,11 +1039,10 @@ static void eth_stats_reset(struct rte_eth_dev *dev)
   struct pmd_internals *internals = dev->data->dev_private;
   int status;
   NtStatistics_t *pStatData;
-  char errBuf[NT_ERRBUF_SIZE];
 
   pStatData = (NtStatistics_t *)rte_malloc(internals->name, sizeof(NtStatistics_t), 0);
   if (!pStatData) {
-    PMD_NTACC_LOG(ERR, "Error %s: Out of memory\n", __func__);
+    _log_out_of_memory_errors(__func__);
     return;
   }
 
@@ -1023,8 +1051,8 @@ static void eth_stats_reset(struct rte_eth_dev *dev)
   pStatData->u.query_v2.clear=1;
   rte_spinlock_lock(&internals->statlock);
   if ((status = (*_NT_StatRead)(internals->hStat, pStatData)) != 0) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-    PMD_NTACC_LOG(ERR, "ERROR: NT_StatRead failed. Code 0x%x = %s\n", status, errBuf);
+    rte_spinlock_unlock(&internals->statlock);
+    _log_nt_errors(status, "NT_StatRead failed", __func__);
     rte_free(pStatData);
     return;
   }
@@ -1061,26 +1089,22 @@ static int eth_link_update(struct rte_eth_dev *dev,
   NtInfoStream_t hInfo;
   NtInfo_t *pInfo;
   uint status;
-  char errBuf[NT_ERRBUF_SIZE];
   struct pmd_internals *internals = dev->data->dev_private;
 
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
-    PMD_NTACC_LOG(ERR, "Error %s: Out of memory\n", __func__);
-    return -ENOMEM;
+    return _log_out_of_memory_errors(__func__);
   }
 
   if ((status = (*_NT_InfoOpen)(&hInfo, "DPDK Info stream")) != NT_SUCCESS) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-    PMD_NTACC_LOG(ERR, "Error: NT_InfoOpen failed. Code 0x%x = %s\n", status, errBuf);
+    _log_nt_errors(status, "NT_InfoOpen failed", __func__);
     rte_free(pInfo);
     return status;
   }
   pInfo->cmd = NT_INFO_CMD_READ_PORT_V8;
   pInfo->u.port_v8.portNo = (uint8_t)(internals->txq[0].port);
   if ((status = (*_NT_InfoRead)(hInfo, pInfo)) != 0) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-    PMD_NTACC_LOG(ERR, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
+    _log_nt_errors(status, "NT_InfoRead failed", __func__);
     rte_free(pInfo);
     return status;
   }
@@ -1147,12 +1171,11 @@ static int eth_rx_queue_setup(struct rte_eth_dev *dev,
 static int eth_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 {
   struct pmd_internals *internals = dev->data->dev_private;
-  NtNtplInfo_t ntplInfo;
   char ntpl_buf[50];
   snprintf(ntpl_buf, sizeof(ntpl_buf),
     "Setup[State=Active] = StreamId == %d",
     internals->rxq[rx_queue_id].stream_id);
-  DoNtpl(ntpl_buf, &ntplInfo, internals);
+  DoNtpl(ntpl_buf, NULL, internals);
   dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
   return 0;
 }
@@ -1160,12 +1183,11 @@ static int eth_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 static int eth_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 {
   struct pmd_internals *internals = dev->data->dev_private;
-  NtNtplInfo_t ntplInfo;
   char ntpl_buf[50];
   snprintf(ntpl_buf, sizeof(ntpl_buf),
     "Setup[State=InActive] = StreamId == %d",
     internals->rxq[rx_queue_id].stream_id);
-  DoNtpl(ntpl_buf, &ntplInfo, internals);
+  DoNtpl(ntpl_buf, NULL, internals);
   dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
   return 0;
 }
@@ -1238,7 +1260,6 @@ static void _cleanUpKeySet(int key, struct pmd_internals *internals)
 // No lock in this code
 static void _cleanUpAssignNtplId(uint32_t assignNtplID, struct pmd_internals *internals)
 {
-  NtNtplInfo_t ntplInfo;
   char ntpl_buf[21];
   struct rte_flow *pFlow;
   LIST_FOREACH(pFlow, &internals->flows, next) {
@@ -1250,7 +1271,7 @@ static void _cleanUpAssignNtplId(uint32_t assignNtplID, struct pmd_internals *in
   // NTPL ID not in use
   PMD_NTACC_LOG(DEBUG, "Deleting assign filter: %u\n", assignNtplID);
   snprintf(ntpl_buf, 20, "delete=%d", assignNtplID);
-  DoNtpl(ntpl_buf, &ntplInfo, internals);
+  DoNtpl(ntpl_buf, NULL, internals);
 }
 
 // Delete a flow by deleting the NTPL command assigned
@@ -1259,7 +1280,6 @@ static void _cleanUpAssignNtplId(uint32_t assignNtplID, struct pmd_internals *in
 // No lock in this code
 static void _cleanUpFlow(struct rte_flow *flow, struct pmd_internals *internals)
 {
-  NtNtplInfo_t ntplInfo;
   char ntpl_buf[21];
   PMD_NTACC_LOG(DEBUG, "Remove flow %p\n", flow);
   LIST_REMOVE(flow, next);
@@ -1267,7 +1287,7 @@ static void _cleanUpFlow(struct rte_flow *flow, struct pmd_internals *internals)
     struct filter_flow *id;
     id = LIST_FIRST(&flow->ntpl_id);
     snprintf(ntpl_buf, 20, "delete=%d", id->ntpl_id);
-    DoNtpl(ntpl_buf, &ntplInfo, internals);
+    DoNtpl(ntpl_buf, NULL, internals);
     PMD_NTACC_LOG(DEBUG, "Deleting Item filter: %s\n", ntpl_buf);
     LIST_REMOVE(id, next);
     rte_free(id);
@@ -1284,7 +1304,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                                   struct rte_flow_error *error)
 {
   struct pmd_internals *internals = dev->data->dev_private;
-  NtNtplInfo_t ntplInfo;
+  uint32_t ntplID;
   uint8_t nb_queues = 0;
   uint8_t list_queues[RTE_ETHDEV_QUEUE_STAT_CNTRS];
   bool filterContinue = false;
@@ -1372,9 +1392,6 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         // Set hash mode function
         if (rss->rss_conf) {
           rss_hf = rss->rss_conf->rss_hf;
-        }
-        else {
-          rss_hf = 0;
         }
       }
       break;
@@ -1625,7 +1642,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   }
 
   // Create HASH
-  if (rss) {
+  if (rss->rss_conf) {
     // If RSS is used, then set the Hash mode
     if (CreateHash(&ntpl_buf[strlen(ntpl_buf)], rss_hf, internals, tunnel) != 0) {
       rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Failed setting up hash mode");
@@ -1673,12 +1690,12 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   }
 
   if (!reuse) {
-    if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
+    if (DoNtpl(ntpl_buf, &ntplID, internals) != 0) {
       rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Filter error");
       goto FlowError;
     }
     rte_spinlock_lock(&internals->lock);
-    flow->assign_ntpl_id = ntplInfo.ntplId;
+    flow->assign_ntpl_id = ntplID;
     rte_spinlock_unlock(&internals->lock);
   }
 
@@ -1774,7 +1791,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
                              int set,
                              struct rte_flow_error *error __rte_unused)
 {
-  NtNtplInfo_t ntplInfo;
+  uint32_t ntplID;
   struct pmd_internals *internals = dev->data->dev_private;
   int status;
   int i;
@@ -1786,7 +1803,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       struct filter_flow *id;
       id = LIST_FIRST(&internals->defaultFlow->ntpl_id);
       snprintf(ntpl_buf, 20, "delete=%d", id->ntpl_id);
-      DoNtpl(ntpl_buf, &ntplInfo, internals);
+      DoNtpl(ntpl_buf, NULL, internals);
       PMD_NTACC_LOG(DEBUG, "Deleting Item filter 0: %s\n", ntpl_buf);
       LIST_REMOVE(id, next);
       rte_free(id);
@@ -1827,14 +1844,14 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
 
     ntpl_buf = rte_malloc(internals->name, NTPL_BSIZE + 1, 0);
     if (!ntpl_buf) {
-      PMD_NTACC_LOG(ERR, "Out of memory in flow_isolate\n");
+      _log_out_of_memory_errors(__func__);
       goto IsolateError;
     }
 
     if (nb_queues > 0 && rx_q[0].enabled) {
       struct rte_flow *defFlow = rte_malloc(internals->name, sizeof(struct rte_flow), 0);
       if (!defFlow) {
-        PMD_NTACC_LOG(ERR, "Out of memory in flow_isolate\n");
+        _log_out_of_memory_errors(__func__);
         goto IsolateError;
       }
       memset(defFlow, 0, sizeof(struct rte_flow));
@@ -1863,7 +1880,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
                ";tag=%s]=port==%u", internals->tagName, internals->port);
 
-      if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
+      if (DoNtpl(ntpl_buf, &ntplID, internals) != 0) {
         PMD_NTACC_LOG(ERR, "Failed to create default filter in flow_isolate\n");
         goto IsolateError;
       }
@@ -1876,7 +1893,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
 
       rte_spinlock_lock(&internals->lock);
       defFlow->priority = 62;
-      pushNtplID(defFlow, ntplInfo.ntplId);
+      pushNtplID(defFlow, ntplID);
       internals->defaultFlow = defFlow;
       rte_spinlock_unlock(&internals->lock);
     }
@@ -1953,6 +1970,36 @@ static int eth_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t 
   }
 }
 
+static int eth_rss_hash_update(struct rte_eth_dev *dev,
+                               struct rte_eth_rss_conf *rss_conf)
+{
+  int ret = 0;
+  struct pmd_internals *internals = dev->data->dev_private;
+
+  if (rss_conf->rss_hf == 0) {
+    // Flush all hash settings
+    rte_spinlock_lock(&internals->lock);
+    FlushHash(internals);
+    rte_spinlock_unlock(&internals->lock);
+  }
+  else {
+    struct rte_flow dummyFlow;
+    memset(&dummyFlow, 0, sizeof(struct rte_flow));
+
+    // Flush all other hash settings first
+    rte_spinlock_lock(&internals->lock);
+    FlushHash(internals);
+    rte_spinlock_unlock(&internals->lock);
+    if (CreateHashModeHash(rss_conf->rss_hf, internals, &dummyFlow, 61) != 0) {
+      PMD_NTACC_LOG(ERR, "Failed to create hash function eth_rss_hash_update\n");
+      ret = 1;
+      goto UpdateError;
+    }
+  }
+UpdateError:
+  return ret;
+}
+
 static struct eth_dev_ops ops = {
     .dev_start = eth_dev_start,
     .dev_stop = eth_dev_stop,
@@ -1973,6 +2020,7 @@ static struct eth_dev_ops ops = {
     .flow_ctrl_set = _dev_set_flow_ctrl,
     .filter_ctrl = _dev_filter_ctrl,
     .fw_version_get = eth_fw_version_get,
+    .rss_hash_update = eth_rss_hash_update,
 };
 
 static int rte_pmd_init_internals(struct rte_pci_device *dev,
@@ -1984,7 +2032,6 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   struct pmd_internals *internals = NULL;
   struct rte_eth_dev *eth_dev = NULL;
   uint i, status;
-  char errBuf[NT_ERRBUF_SIZE];
   NtInfo_t *pInfo = NULL;
   struct rte_eth_link pmd_link;
   char name[NTACC_NAME_LEN];
@@ -1998,15 +2045,13 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
 
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
-    PMD_NTACC_LOG(ERR, "Error %s: Out of memory\n", __func__);
-    iRet = -ENOMEM;
+    iRet = _log_out_of_memory_errors(__func__);
     goto error;
   }
 
   /* Open the information stream */
   if ((status = (*_NT_InfoOpen)(&hInfo, "DPDK Info stream")) != NT_SUCCESS) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-    PMD_NTACC_LOG(ERR, ">>> Error: NT_InfoOpen failed. Code 0x%x = %s\n", status, errBuf);
+    _log_nt_errors(status, "NT_InfoOpen failed", __func__);
     iRet = status;
     goto error;
   }
@@ -2014,8 +2059,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   /* Find driver version */
   pInfo->cmd = NT_INFO_CMD_READ_SYSTEM;
   if ((status = (*_NT_InfoRead)(hInfo, pInfo)) != 0) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-    PMD_NTACC_LOG(ERR, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
+    _log_nt_errors(status, "NT_InfoRead failed", __func__);
     iRet = status;
     goto error;
   }
@@ -2041,8 +2085,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     pInfo->cmd = NT_INFO_CMD_READ_ADAPTER_V6;
     pInfo->u.adapter_v6.adapterNo = i;
     if ((status = (*_NT_InfoRead)(hInfo, pInfo)) != 0) {
-      (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-      PMD_NTACC_LOG(ERR, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
+      _log_nt_errors(status, "NT_InfoRead failed", __func__);
       iRet = status;
       goto error;
     }
@@ -2070,8 +2113,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     pInfo->cmd = NT_INFO_CMD_READ_PORT_V7;
     pInfo->u.port_v7.portNo = (uint8_t)localPort + offset;
     if ((status = (*_NT_InfoRead)(hInfo, pInfo)) != 0) {
-      (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-      PMD_NTACC_LOG(ERR, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
+      _log_nt_errors(status, "NT_InfoRead failed", __func__);
       iRet = status;
       goto error;
     }
@@ -2138,16 +2180,14 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
 
     internals = rte_zmalloc_socket(name, sizeof(struct pmd_internals), RTE_CACHE_LINE_SIZE, dev->device.numa_node);
     if (internals == NULL) {
-      PMD_NTACC_LOG(ERR, "ERROR: Failed to allocate memory\n");
-      iRet = -ENOMEM;
+      iRet = _log_out_of_memory_errors(__func__);
       goto error;
     }
 
     if (strlen(ntpl_file) > 0) {
       internals->ntpl_file  = rte_zmalloc(name, strlen(ntpl_file) + 1, 0);
       if (internals->ntpl_file == NULL) {
-        PMD_NTACC_LOG(ERR, "ERROR: Failed to allocate memory\n");
-        iRet = -ENOMEM;
+        iRet = _log_out_of_memory_errors(__func__);
         goto error;
       }
       strcpy(internals->ntpl_file, ntpl_file);
@@ -2234,8 +2274,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   #ifndef USE_SW_STAT
     /* Open the stat stream */
     if ((status = (*_NT_StatOpen)(&internals->hStat, "DPDK Stat stream")) != NT_SUCCESS) {
-      (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-      PMD_NTACC_LOG(ERR, ">>> Error: NT_StatOpen failed. Code 0x%x = %s\n", status, errBuf);
+      _log_nt_errors(status, "NT_StatOpen failed", __func__);
       iRet = status;
       goto error;
     }
@@ -2535,7 +2574,7 @@ static void rte_ntacc_pmd_init(void)
 	rte_pci_register(&ntacc_driver);
 	ntacc_logtype = rte_log_register("pmd.net.ntacc");
 	if (ntacc_logtype >= 0)
-		rte_log_set_level(ntacc_logtype, RTE_LOG_DEBUG);
+		rte_log_set_level(ntacc_logtype, RTE_LOG_NOTICE);
 }
 
 RTE_PMD_EXPORT_NAME(net_ntacc, __COUNTER__);
