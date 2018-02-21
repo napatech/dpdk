@@ -1704,6 +1704,10 @@ slave_configure(struct rte_eth_dev *bonded_eth_dev,
 
 	slave_eth_dev->data->dev_conf.rxmode.hw_vlan_filter =
 			bonded_eth_dev->data->dev_conf.rxmode.hw_vlan_filter;
+	slave_eth_dev->data->dev_conf.rxmode.max_rx_pkt_len =
+			bonded_eth_dev->data->dev_conf.rxmode.max_rx_pkt_len;
+	slave_eth_dev->data->dev_conf.rxmode.jumbo_frame =
+			bonded_eth_dev->data->dev_conf.rxmode.jumbo_frame;
 
 	nb_rx_queues = bonded_eth_dev->data->nb_rx_queues;
 	nb_tx_queues = bonded_eth_dev->data->nb_tx_queues;
