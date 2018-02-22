@@ -434,6 +434,8 @@ static void bnxt_dev_info_get_op(struct rte_eth_dev *eth_dev,
 	dev_info->hash_key_size = 40;
 	max_vnics = bp->max_vnics;
 
+	dev_info->flow_type_rss_offloads = BNXT_ETH_RSS_SUPPORT;
+
 	/* Fast path specifics */
 	dev_info->min_rx_bufsize = 1;
 	dev_info->max_rx_pktlen = BNXT_MAX_MTU + ETHER_HDR_LEN + ETHER_CRC_LEN
