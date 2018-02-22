@@ -37,6 +37,7 @@
  */
 
 #include <assert.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <stddef.h>
@@ -44,6 +45,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 /* Verbs headers do not support -pedantic. */
 #ifdef PEDANTIC
@@ -55,6 +57,7 @@
 #endif
 
 #include <rte_common.h>
+#include <rte_config.h>
 #include <rte_dev.h>
 #include <rte_errno.h>
 #include <rte_ethdev.h>
@@ -67,6 +70,7 @@
 #include <rte_mbuf.h>
 
 #include "mlx4.h"
+#include "mlx4_glue.h"
 #include "mlx4_flow.h"
 #include "mlx4_rxtx.h"
 #include "mlx4_utils.h"
@@ -218,8 +222,8 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 		mlx4_tx_queue_release(dev->data->tx_queues[i]);
 	if (priv->pd != NULL) {
 		assert(priv->ctx != NULL);
-		claim_zero(ibv_dealloc_pd(priv->pd));
-		claim_zero(ibv_close_device(priv->ctx));
+		claim_zero(mlx4_glue->dealloc_pd(priv->pd));
+		claim_zero(mlx4_glue->close_device(priv->ctx));
 	} else
 		assert(priv->ctx == NULL);
 	mlx4_intr_uninstall(priv);
@@ -434,7 +438,7 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 
 	(void)pci_drv;
 	assert(pci_drv == &mlx4_driver);
-	list = ibv_get_device_list(&i);
+	list = mlx4_glue->get_device_list(&i);
 	if (list == NULL) {
 		rte_errno = errno;
 		assert(rte_errno);
@@ -463,12 +467,12 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		      PCI_DEVICE_ID_MELLANOX_CONNECTX3VF);
 		INFO("PCI information matches, using device \"%s\" (VF: %s)",
 		     list[i]->name, (vf ? "true" : "false"));
-		attr_ctx = ibv_open_device(list[i]);
+		attr_ctx = mlx4_glue->open_device(list[i]);
 		err = errno;
 		break;
 	}
 	if (attr_ctx == NULL) {
-		ibv_free_device_list(list);
+		mlx4_glue->free_device_list(list);
 		switch (err) {
 		case 0:
 			rte_errno = ENODEV;
@@ -485,7 +489,7 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 	}
 	ibv_dev = list[i];
 	DEBUG("device opened");
-	if (ibv_query_device(attr_ctx, &device_attr)) {
+	if (mlx4_glue->query_device(attr_ctx, &device_attr)) {
 		rte_errno = ENODEV;
 		goto error;
 	}
@@ -512,13 +516,13 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		if (!(conf.ports.enabled & (1 << i)))
 			continue;
 		DEBUG("using port %u", port);
-		ctx = ibv_open_device(ibv_dev);
+		ctx = mlx4_glue->open_device(ibv_dev);
 		if (ctx == NULL) {
 			rte_errno = ENODEV;
 			goto port_error;
 		}
 		/* Check port status. */
-		err = ibv_query_port(ctx, port, &port_attr);
+		err = mlx4_glue->query_port(ctx, port, &port_attr);
 		if (err) {
 			rte_errno = err;
 			ERROR("port query failed: %s", strerror(rte_errno));
@@ -532,7 +536,7 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		}
 		if (port_attr.state != IBV_PORT_ACTIVE)
 			DEBUG("port %d is not active: \"%s\" (%d)",
-			      port, ibv_port_state_str(port_attr.state),
+			      port, mlx4_glue->port_state_str(port_attr.state),
 			      port_attr.state);
 		/* Make asynchronous FD non-blocking to handle interrupts. */
 		if (mlx4_fd_set_non_blocking(ctx->async_fd) < 0) {
@@ -541,7 +545,7 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			goto port_error;
 		}
 		/* Allocate protection domain. */
-		pd = ibv_alloc_pd(ctx);
+		pd = mlx4_glue->alloc_pd(ctx);
 		if (pd == NULL) {
 			rte_errno = ENOMEM;
 			ERROR("PD allocation failure");
@@ -605,7 +609,7 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			char name[RTE_ETH_NAME_MAX_LEN];
 
 			snprintf(name, sizeof(name), "%s port %u",
-				 ibv_get_device_name(ibv_dev), port);
+				 mlx4_glue->get_device_name(ibv_dev), port);
 			eth_dev = rte_eth_dev_allocate(name);
 		}
 		if (eth_dev == NULL) {
@@ -648,9 +652,9 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 port_error:
 		rte_free(priv);
 		if (pd)
-			claim_zero(ibv_dealloc_pd(pd));
+			claim_zero(mlx4_glue->dealloc_pd(pd));
 		if (ctx)
-			claim_zero(ibv_close_device(ctx));
+			claim_zero(mlx4_glue->close_device(ctx));
 		if (eth_dev)
 			rte_eth_dev_release_port(eth_dev);
 		break;
@@ -665,9 +669,9 @@ port_error:
 	 */
 error:
 	if (attr_ctx)
-		claim_zero(ibv_close_device(attr_ctx));
+		claim_zero(mlx4_glue->close_device(attr_ctx));
 	if (list)
-		ibv_free_device_list(list);
+		mlx4_glue->free_device_list(list);
 	assert(rte_errno >= 0);
 	return -rte_errno;
 }
@@ -700,6 +704,88 @@ static struct rte_pci_driver mlx4_driver = {
 		     RTE_PCI_DRV_INTR_RMV,
 };
 
+#ifdef RTE_LIBRTE_MLX4_DLOPEN_DEPS
+
+/**
+ * Initialization routine for run-time dependency on rdma-core.
+ */
+static int
+mlx4_glue_init(void)
+{
+	const char *path[] = {
+		/*
+		 * A basic security check is necessary before trusting
+		 * MLX4_GLUE_PATH, which may override RTE_EAL_PMD_PATH.
+		 */
+		(geteuid() == getuid() && getegid() == getgid() ?
+		 getenv("MLX4_GLUE_PATH") : NULL),
+		RTE_EAL_PMD_PATH,
+	};
+	unsigned int i = 0;
+	void *handle = NULL;
+	void **sym;
+	const char *dlmsg;
+
+	while (!handle && i != RTE_DIM(path)) {
+		const char *end;
+		size_t len;
+		int ret;
+
+		if (!path[i]) {
+			++i;
+			continue;
+		}
+		end = strpbrk(path[i], ":;");
+		if (!end)
+			end = path[i] + strlen(path[i]);
+		len = end - path[i];
+		ret = 0;
+		do {
+			char name[ret + 1];
+
+			ret = snprintf(name, sizeof(name), "%.*s%s" MLX4_GLUE,
+				       (int)len, path[i],
+				       (!len || *(end - 1) == '/') ? "" : "/");
+			if (ret == -1)
+				break;
+			if (sizeof(name) != (size_t)ret + 1)
+				continue;
+			DEBUG("looking for rdma-core glue as \"%s\"", name);
+			handle = dlopen(name, RTLD_LAZY);
+			break;
+		} while (1);
+		path[i] = end + 1;
+		if (!*end)
+			++i;
+	}
+	if (!handle) {
+		rte_errno = EINVAL;
+		dlmsg = dlerror();
+		if (dlmsg)
+			WARN("cannot load glue library: %s", dlmsg);
+		goto glue_error;
+	}
+	sym = dlsym(handle, "mlx4_glue");
+	if (!sym || !*sym) {
+		rte_errno = EINVAL;
+		dlmsg = dlerror();
+		if (dlmsg)
+			ERROR("cannot resolve glue symbol: %s", dlmsg);
+		goto glue_error;
+	}
+	mlx4_glue = *sym;
+	return 0;
+glue_error:
+	if (handle)
+		dlclose(handle);
+	WARN("cannot initialize PMD due to missing run-time"
+	     " dependency on rdma-core libraries (libibverbs,"
+	     " libmlx4)");
+	return -rte_errno;
+}
+
+#endif
+
 /**
  * Driver initialization routine.
  */
@@ -714,7 +800,26 @@ rte_mlx4_pmd_init(void)
 	 * using this PMD, which is not supported in forked processes.
 	 */
 	setenv("RDMAV_HUGEPAGES_SAFE", "1", 1);
-	ibv_fork_init();
+#ifdef RTE_LIBRTE_MLX4_DLOPEN_DEPS
+	if (mlx4_glue_init())
+		return;
+	assert(mlx4_glue);
+#endif
+#ifndef NDEBUG
+	/* Glue structure must not contain any NULL pointers. */
+	{
+		unsigned int i;
+
+		for (i = 0; i != sizeof(*mlx4_glue) / sizeof(void *); ++i)
+			assert(((const void *const *)mlx4_glue)[i]);
+	}
+#endif
+	if (strcmp(mlx4_glue->version, MLX4_GLUE_VERSION)) {
+		ERROR("rdma-core glue \"%s\" mismatch: \"%s\" is required",
+		      mlx4_glue->version, MLX4_GLUE_VERSION);
+		return;
+	}
+	mlx4_glue->fork_init();
 	rte_pci_register(&mlx4_driver);
 }
 
