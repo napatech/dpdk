@@ -1650,6 +1650,12 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
     }
   }
 
+  // Set the color
+  if (typeMask == 0 && color.valid) {
+    // No values are used for any filter. Then we need to add color to the assign
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ";color=%u", color.color);
+  }
+
   // Set the tag name
   snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ";tag=%s]=", internals->tagName);
 
