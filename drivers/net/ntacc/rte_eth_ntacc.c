@@ -1320,7 +1320,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
 
 
   uint64_t typeMask = 0;
-  bool reuse;
+  bool reuse = false;
 
   char *ntpl_buf = NULL;
   char *filter_buf1 = NULL;
