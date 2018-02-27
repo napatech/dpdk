@@ -865,7 +865,7 @@ priv_flow_convert_items_validate(struct priv *priv,
 			}
 			parser->inner = IBV_FLOW_SPEC_INNER;
 		}
-		if (parser->drop || parser->queues_n == 1) {
+		if (parser->drop) {
 			parser->queue[HASH_RXQ_ETH].offset += cur_item->dst_sz;
 		} else {
 			for (n = 0; n != hash_rxq_init_n; ++n)
@@ -1097,15 +1097,12 @@ priv_flow_convert(struct priv *priv,
 	 * Second step.
 	 * Allocate the memory space to store verbs specifications.
 	 */
-	if (parser->drop || parser->queues_n == 1) {
-		unsigned int priority =
-			attr->priority +
-			hash_rxq_init[HASH_RXQ_ETH].flow_priority;
-		unsigned int offset = parser->queue[HASH_RXQ_ETH].offset;
-
+	if (parser->drop) {
 		parser->queue[HASH_RXQ_ETH].ibv_attr =
-			priv_flow_convert_allocate(priv, priority,
-						   offset, error);
+			priv_flow_convert_allocate
+			(priv, attr->priority,
+			 parser->queue[HASH_RXQ_ETH].offset,
+			 error);
 		if (!parser->queue[HASH_RXQ_ETH].ibv_attr)
 			return ENOMEM;
 		parser->queue[HASH_RXQ_ETH].offset =
@@ -1159,14 +1156,9 @@ priv_flow_convert(struct priv *priv,
 	 * Last step. Complete missing specification to reach the RSS
 	 * configuration.
 	 */
-	if (parser->queues_n > 1) {
+	if (!parser->drop) {
 		priv_flow_convert_finalise(priv, parser);
 	} else {
-		/*
-		 * Action queue have their priority overridden with
-		 * Ethernet priority, this priority needs to be adjusted to
-		 * their most specific layer priority.
-		 */
 		parser->queue[HASH_RXQ_ETH].ibv_attr->priority =
 			attr->priority +
 			hash_rxq_init[parser->layer].flow_priority;
