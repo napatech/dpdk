@@ -223,6 +223,7 @@ static int PrintHash(const char *str, int priority, struct pmd_internals *intern
     break;
   }
 
+#pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
   snprintf(tmpBuf, TMP_BSIZE, str, priority, internals->port, internals->tagName, ptrTuple);
 #pragma GCC diagnostic pop

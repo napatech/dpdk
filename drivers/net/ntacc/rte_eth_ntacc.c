@@ -78,8 +78,7 @@ static struct {
    int32_t major;
    int32_t minor;
    int32_t patch;
-//} supportedDriver = {3, 7, 2};
-   } supportedDriver = {3, 8, 1};
+} supportedDriver = {3, 8, 1};
 
 #define PCI_VENDOR_ID_NAPATECH 0x18F4
 #define PCI_DEVICE_ID_NT200A01 0x01A5
@@ -98,15 +97,15 @@ struct {
   uint32_t build:10;
 } supportedAdapters[NB_SUPPORTED_FPGAS] =
 {
-  { 200, 9500, 9, 8, 0 },
-  { 200, 9501, 9, 8, 0 },
-  { 200, 9502, 9, 8, 0 },
-  { 200, 9503, 9, 8, 0 },
-  { 200, 9505, 9, 8, 0 },
-  { 200, 9512, 9, 8, 0 },
-  { 200, 9515, 9, 8, 0 },
+  { 200, 9500, 10, 7, 0 },
+  { 200, 9501, 10, 7, 0 },
+  { 200, 9502, 10, 7, 0 },
+  { 200, 9503, 10, 7, 0 },
+  { 200, 9505, 10, 8, 0 },
+  { 200, 9512, 10, 7, 0 },
+  { 200, 9515, 10, 7, 0 },
   { 200, 9517, 9, 8, 0 },
-  { 200, 9519, 10, 6, 0 },
+  { 200, 9519, 10, 7, 0 },
 };
 
 static void *_libnt;
