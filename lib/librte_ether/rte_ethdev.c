@@ -544,7 +544,7 @@ rte_eth_dev_count(void)
 int
 rte_eth_dev_get_name_by_port(uint16_t port_id, char *name)
 {
-	const char *tmp;
+	char *tmp;
 
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -EINVAL);
 
