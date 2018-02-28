@@ -2877,6 +2877,14 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 				return -rte_errno;
 			}
 
+			if (pf->support_multi_driver) {
+				rte_flow_error_set(error, ENOTSUP,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Unsupported flexible payload.");
+				return -rte_errno;
+			}
+
 			ret = i40e_flow_check_raw_item(item, raw_spec, error);
 			if (ret < 0)
 				return ret;
@@ -3608,6 +3616,41 @@ i40e_flow_parse_nvgre_pattern(__rte_unused struct rte_eth_dev *dev,
 						       RTE_FLOW_ERROR_TYPE_ITEM,
 						       item,
 						       "Invalid TNI mask");
+					return -rte_errno;
+				}
+				if (nvgre_mask->protocol &&
+					nvgre_mask->protocol != 0xFFFF) {
+					rte_flow_error_set(error, EINVAL,
+						RTE_FLOW_ERROR_TYPE_ITEM,
+						item,
+						"Invalid NVGRE item");
+					return -rte_errno;
+				}
+				if (nvgre_mask->c_k_s_rsvd0_ver &&
+					nvgre_mask->c_k_s_rsvd0_ver !=
+					rte_cpu_to_be_16(0xFFFF)) {
+					rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Invalid NVGRE item");
+					return -rte_errno;
+				}
+				if (nvgre_spec->c_k_s_rsvd0_ver !=
+					rte_cpu_to_be_16(0x2000) &&
+					nvgre_mask->c_k_s_rsvd0_ver) {
+					rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Invalid NVGRE item");
+					return -rte_errno;
+				}
+				if (nvgre_mask->protocol &&
+					nvgre_spec->protocol !=
+					rte_cpu_to_be_16(0x6558)) {
+					rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Invalid NVGRE item");
 					return -rte_errno;
 				}
 				rte_memcpy(((uint8_t *)&tenant_id_be + 1),
@@ -4406,6 +4449,7 @@ i40e_flow_flush_fdir_filter(struct i40e_pf *pf)
 	struct rte_eth_dev *dev = pf->adapter->eth_dev;
 	struct i40e_fdir_info *fdir_info = &pf->fdir;
 	struct i40e_fdir_filter *fdir_filter;
+	enum i40e_filter_pctype pctype;
 	struct rte_flow *flow;
 	void *temp;
 	int ret;
@@ -4427,6 +4471,10 @@ i40e_flow_flush_fdir_filter(struct i40e_pf *pf)
 				rte_free(flow);
 			}
 		}
+
+		for (pctype = I40E_FILTER_PCTYPE_NONF_IPV4_UDP;
+		     pctype <= I40E_FILTER_PCTYPE_L2_PAYLOAD; pctype++)
+			pf->fdir.inset_flag[pctype] = 0;
 	}
 
 	return ret;

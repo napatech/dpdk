@@ -60,7 +60,6 @@
 #include <net/if.h>
 #include <linux/if_tun.h>
 #include <linux/if_ether.h>
-#include <linux/version.h>
 #include <fcntl.h>
 
 #include <rte_eth_tap.h>
@@ -77,9 +76,6 @@
 #define ETH_TAP_REMOTE_ARG      "remote"
 #define ETH_TAP_MAC_ARG         "mac"
 #define ETH_TAP_MAC_FIXED       "fixed"
-
-#define FLOWER_KERNEL_VERSION KERNEL_VERSION(4, 2, 0)
-#define FLOWER_VLAN_KERNEL_VERSION KERNEL_VERSION(4, 9, 0)
 
 static struct rte_vdev_driver pmd_tap_drv;
 
@@ -99,7 +95,7 @@ static struct rte_eth_link pmd_link = {
 	.link_speed = ETH_SPEED_NUM_10G,
 	.link_duplex = ETH_LINK_FULL_DUPLEX,
 	.link_status = ETH_LINK_DOWN,
-	.link_autoneg = ETH_LINK_SPEED_AUTONEG
+	.link_autoneg = ETH_LINK_AUTONEG
 };
 
 static void
@@ -1244,13 +1240,13 @@ eth_dev_tap_create(struct rte_vdev_device *vdev, char *tap_name,
 	data = rte_zmalloc_socket(tap_name, sizeof(*data), 0, numa_node);
 	if (!data) {
 		RTE_LOG(ERR, PMD, "TAP Failed to allocate data\n");
-		goto error_exit;
+		goto error_exit_nodev;
 	}
 
 	dev = rte_eth_vdev_allocate(vdev, sizeof(*pmd));
 	if (!dev) {
 		RTE_LOG(ERR, PMD, "TAP Unable to allocate device struct\n");
-		goto error_exit;
+		goto error_exit_nodev;
 	}
 
 	pmd = dev->data->dev_private;
@@ -1420,6 +1416,11 @@ error_remote:
 	tap_flow_implicit_flush(pmd, NULL);
 
 error_exit:
+	if (pmd->ioctl_sock > 0)
+		close(pmd->ioctl_sock);
+	rte_eth_dev_release_port(dev);
+
+error_exit_nodev:
 	RTE_LOG(ERR, PMD, "TAP Unable to initialize %s\n",
 		rte_vdev_device_name(vdev));
 

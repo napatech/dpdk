@@ -44,6 +44,7 @@
 #include <rte_udp.h>
 #include <rte_sctp.h>
 #include <rte_arp.h>
+#include <rte_spinlock.h>
 
 #include "iotlb.h"
 #include "vhost.h"
@@ -326,8 +327,11 @@ virtio_dev_rx(struct virtio_net *dev, uint16_t queue_id,
 	}
 
 	vq = dev->virtqueue[queue_id];
+
+	rte_spinlock_lock(&vq->access_lock);
+
 	if (unlikely(vq->enabled == 0))
-		return 0;
+		goto out_access_unlock;
 
 	if (dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM))
 		vhost_user_iotlb_rd_lock(vq);
@@ -418,6 +422,9 @@ virtio_dev_rx(struct virtio_net *dev, uint16_t queue_id,
 out:
 	if (dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM))
 		vhost_user_iotlb_rd_unlock(vq);
+
+out_access_unlock:
+	rte_spinlock_unlock(&vq->access_lock);
 
 	return count;
 }
@@ -651,8 +658,11 @@ virtio_dev_merge_rx(struct virtio_net *dev, uint16_t queue_id,
 	}
 
 	vq = dev->virtqueue[queue_id];
+
+	rte_spinlock_lock(&vq->access_lock);
+
 	if (unlikely(vq->enabled == 0))
-		return 0;
+		goto out_access_unlock;
 
 	if (dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM))
 		vhost_user_iotlb_rd_lock(vq);
@@ -714,6 +724,9 @@ virtio_dev_merge_rx(struct virtio_net *dev, uint16_t queue_id,
 out:
 	if (dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM))
 		vhost_user_iotlb_rd_unlock(vq);
+
+out_access_unlock:
+	rte_spinlock_unlock(&vq->access_lock);
 
 	return pkt_idx;
 }
@@ -977,7 +990,8 @@ copy_desc_to_mbuf(struct virtio_net *dev, struct vhost_virtqueue *vq,
 					desc->addr + desc_offset, cpy_len)))) {
 			cur->data_len = cpy_len;
 			cur->data_off = 0;
-			cur->buf_addr = (void *)(uintptr_t)desc_addr;
+			cur->buf_addr = (void *)(uintptr_t)(desc_addr
+				+ desc_offset);
 			cur->buf_iova = hpa;
 
 			/*
@@ -1156,6 +1170,22 @@ mbuf_is_consumed(struct rte_mbuf *m)
 	return true;
 }
 
+static __rte_always_inline void
+restore_mbuf(struct rte_mbuf *m)
+{
+	uint32_t mbuf_size, priv_size;
+
+	while (m) {
+		priv_size = rte_pktmbuf_priv_size(m->pool);
+		mbuf_size = sizeof(struct rte_mbuf) + priv_size;
+		/* start of buffer is after mbuf structure and priv data */
+
+		m->buf_addr = (char *)m + mbuf_size;
+		m->buf_iova = rte_mempool_virt2iova(m) + mbuf_size;
+		m = m->next;
+	}
+}
+
 uint16_t
 rte_vhost_dequeue_burst(int vid, uint16_t queue_id,
 	struct rte_mempool *mbuf_pool, struct rte_mbuf **pkts, uint16_t count)
@@ -1180,8 +1210,12 @@ rte_vhost_dequeue_burst(int vid, uint16_t queue_id,
 	}
 
 	vq = dev->virtqueue[queue_id];
-	if (unlikely(vq->enabled == 0))
+
+	if (unlikely(rte_spinlock_trylock(&vq->access_lock) == 0))
 		return 0;
+
+	if (unlikely(vq->enabled == 0))
+		goto out_access_unlock;
 
 	vq->batch_copy_nb_elems = 0;
 
@@ -1207,6 +1241,7 @@ rte_vhost_dequeue_burst(int vid, uint16_t queue_id,
 				nr_updated += 1;
 
 				TAILQ_REMOVE(&vq->zmbuf_list, zmbuf, next);
+				restore_mbuf(zmbuf->mbuf);
 				rte_pktmbuf_free(zmbuf->mbuf);
 				put_zmbuf(zmbuf);
 				vq->nr_zmbuf -= 1;
@@ -1355,6 +1390,9 @@ rte_vhost_dequeue_burst(int vid, uint16_t queue_id,
 out:
 	if (dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM))
 		vhost_user_iotlb_rd_unlock(vq);
+
+out_access_unlock:
+	rte_spinlock_unlock(&vq->access_lock);
 
 	if (unlikely(rarp_mbuf != NULL)) {
 		/*

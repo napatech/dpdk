@@ -362,15 +362,11 @@ rte_mempool_populate_iova(struct rte_mempool *mp, char *vaddr,
 	void *opaque)
 {
 	unsigned total_elt_sz;
+	unsigned int mp_capa_flags;
 	unsigned i = 0;
 	size_t off;
 	struct rte_mempool_memhdr *memhdr;
 	int ret;
-
-	/* Notify memory area to mempool */
-	ret = rte_mempool_ops_register_memory_area(mp, vaddr, iova, len);
-	if (ret != -ENOTSUP && ret < 0)
-		return ret;
 
 	/* create the internal ring if not already done */
 	if ((mp->flags & MEMPOOL_F_POOL_CREATED) == 0) {
@@ -380,14 +376,28 @@ rte_mempool_populate_iova(struct rte_mempool *mp, char *vaddr,
 		mp->flags |= MEMPOOL_F_POOL_CREATED;
 	}
 
+	/* Notify memory area to mempool */
+	ret = rte_mempool_ops_register_memory_area(mp, vaddr, iova, len);
+	if (ret != -ENOTSUP && ret < 0)
+		return ret;
+
 	/* mempool is already populated */
 	if (mp->populated_size >= mp->size)
 		return -ENOSPC;
 
 	total_elt_sz = mp->header_size + mp->elt_size + mp->trailer_size;
 
+	/* Get mempool capabilities */
+	mp_capa_flags = 0;
+	ret = rte_mempool_ops_get_capabilities(mp, &mp_capa_flags);
+	if ((ret < 0) && (ret != -ENOTSUP))
+		return ret;
+
+	/* update mempool capabilities */
+	mp->flags |= mp_capa_flags;
+
 	/* Detect pool area has sufficient space for elements */
-	if (mp->flags & MEMPOOL_F_CAPA_PHYS_CONTIG) {
+	if (mp_capa_flags & MEMPOOL_F_CAPA_PHYS_CONTIG) {
 		if (len < total_elt_sz * mp->size) {
 			RTE_LOG(ERR, MEMPOOL,
 				"pool area %" PRIx64 " not enough\n",
@@ -407,7 +417,7 @@ rte_mempool_populate_iova(struct rte_mempool *mp, char *vaddr,
 	memhdr->free_cb = free_cb;
 	memhdr->opaque = opaque;
 
-	if (mp->flags & MEMPOOL_F_CAPA_BLK_ALIGNED_OBJECTS)
+	if (mp_capa_flags & MEMPOOL_F_CAPA_BLK_ALIGNED_OBJECTS)
 		/* align object start address to a multiple of total_elt_sz */
 		off = total_elt_sz - ((uintptr_t)vaddr % total_elt_sz);
 	else if (mp->flags & MEMPOOL_F_NO_CACHE_ALIGN)

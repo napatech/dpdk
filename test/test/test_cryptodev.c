@@ -30,6 +30,8 @@
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <time.h>
+
 #include <rte_common.h>
 #include <rte_hexdump.h>
 #include <rte_mbuf.h>

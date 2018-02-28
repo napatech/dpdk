@@ -34,6 +34,8 @@
 #ifndef RTE_PMD_MLX5_DEFS_H_
 #define RTE_PMD_MLX5_DEFS_H_
 
+#include <rte_ethdev.h>
+
 #include "mlx5_autoconf.h"
 
 /* Reported driver name. */
@@ -104,5 +106,11 @@
 
 /* Number of packets vectorized Rx can simultaneously process in a loop. */
 #define MLX5_VPMD_DESCS_PER_LOOP      4
+
+/* Supported RSS */
+#define MLX5_RSS_HF_MASK (~(ETH_RSS_IP | ETH_RSS_UDP | ETH_RSS_TCP))
+
+/* Maximum number of attempts to query link status before giving up. */
+#define MLX5_MAX_LINK_QUERY_ATTEMPTS 5
 
 #endif /* RTE_PMD_MLX5_DEFS_H_ */

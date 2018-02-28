@@ -89,7 +89,7 @@ struct mbox_ram_hdr {
 };
 
 static inline void
-mbox_msgcpy(uint8_t *d, const uint8_t *s, uint16_t size)
+mbox_msgcpy(volatile uint8_t *d, volatile const uint8_t *s, uint16_t size)
 {
 	uint16_t i;
 
@@ -128,7 +128,7 @@ mbox_send_request(struct mbox *m, struct octeontx_mbox_hdr *hdr,
 
 	/* Write the msg header */
 	rte_write64(new_hdr.u64, ram_mbox_hdr);
-	rte_io_wmb();
+	rte_smp_wmb();
 	/* Notify PF about the new msg - write to MBOX reg generates PF IRQ */
 	rte_write64(0, m->reg);
 }

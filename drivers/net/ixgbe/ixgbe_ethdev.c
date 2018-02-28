@@ -95,6 +95,9 @@
 /* Timer value included in XOFF frames. */
 #define IXGBE_FC_PAUSE 0x680
 
+/*Default value of Max Rx Queue*/
+#define IXGBE_MAX_RX_QUEUE_NUM 128
+
 #define IXGBE_LINK_DOWN_CHECK_TIMEOUT 4000 /* ms */
 #define IXGBE_LINK_UP_CHECK_TIMEOUT   1000 /* ms */
 #define IXGBE_VMDQ_NUM_UC_MAC         4096 /* Maximum nb. of UC MAC addr. */
@@ -2194,9 +2197,10 @@ ixgbe_check_vf_rss_rxq_num(struct rte_eth_dev *dev, uint16_t nb_rx_q)
 		return -EINVAL;
 	}
 
-	RTE_ETH_DEV_SRIOV(dev).nb_q_per_pool = nb_rx_q;
-	RTE_ETH_DEV_SRIOV(dev).def_pool_q_idx = pci_dev->max_vfs * nb_rx_q;
-
+	RTE_ETH_DEV_SRIOV(dev).nb_q_per_pool =
+		IXGBE_MAX_RX_QUEUE_NUM / RTE_ETH_DEV_SRIOV(dev).active;
+	RTE_ETH_DEV_SRIOV(dev).def_pool_q_idx =
+		pci_dev->max_vfs * RTE_ETH_DEV_SRIOV(dev).nb_q_per_pool;
 	return 0;
 }
 
@@ -2236,8 +2240,6 @@ ixgbe_check_mq_mode(struct rte_eth_dev *dev)
 		case ETH_MQ_RX_NONE:
 			/* if nothing mq mode configure, use default scheme */
 			dev->data->dev_conf.rxmode.mq_mode = ETH_MQ_RX_VMDQ_ONLY;
-			if (RTE_ETH_DEV_SRIOV(dev).nb_q_per_pool > 1)
-				RTE_ETH_DEV_SRIOV(dev).nb_q_per_pool = 1;
 			break;
 		default: /* ETH_MQ_RX_DCB, ETH_MQ_RX_DCB_RSS or ETH_MQ_TX_DCB*/
 			/* SRIOV only works in VMDq enable mode */
@@ -5025,7 +5027,11 @@ ixgbevf_dev_start(struct rte_eth_dev *dev)
 
 	PMD_INIT_FUNC_TRACE();
 
-	hw->mac.ops.reset_hw(hw);
+	err = hw->mac.ops.reset_hw(hw);
+	if (err) {
+		PMD_INIT_LOG(ERR, "Unable to reset vf hardware (%d)", err);
+		return err;
+	}
 	hw->mac.get_link_status = true;
 
 	/* negotiate mailbox API version to use with the PF. */
@@ -5057,7 +5063,8 @@ ixgbevf_dev_start(struct rte_eth_dev *dev)
 	ixgbevf_dev_rxtx_start(dev);
 
 	/* check and configure queue intr-vector mapping */
-	if (dev->data->dev_conf.intr_conf.rxq != 0) {
+	if (rte_intr_cap_multiple(intr_handle) &&
+	    dev->data->dev_conf.intr_conf.rxq) {
 		/* According to datasheet, only vector 0/1/2 can be used,
 		 * now only one vector is used for Rx queue
 		 */

@@ -114,8 +114,7 @@ struct mlx5_rxq_data {
 	unsigned int elts_n:4; /* Log 2 of Mbufs. */
 	unsigned int rss_hash:1; /* RSS hash result is enabled. */
 	unsigned int mark:1; /* Marked flow available on the queue. */
-	unsigned int pending_err:1; /* CQE error needs to be handled. */
-	unsigned int :14; /* Remaining bits. */
+	unsigned int :15; /* Remaining bits. */
 	volatile uint32_t *rq_db;
 	volatile uint32_t *cq_db;
 	uint16_t port_id;
@@ -548,15 +547,16 @@ mlx5_tx_mb2mr(struct mlx5_txq_data *txq, struct rte_mbuf *mb)
 	struct mlx5_mr *mr;
 
 	assert(i < RTE_DIM(txq->mp2mr));
-	if (likely(txq->mp2mr[i]->start <= addr && txq->mp2mr[i]->end >= addr))
+	if (likely(txq->mp2mr[i]->start <= addr && txq->mp2mr[i]->end > addr))
 		return txq->mp2mr[i]->lkey;
 	for (i = 0; (i != RTE_DIM(txq->mp2mr)); ++i) {
-		if (unlikely(txq->mp2mr[i]->mr == NULL)) {
+		if (unlikely(txq->mp2mr[i] == NULL ||
+		    txq->mp2mr[i]->mr == NULL)) {
 			/* Unknown MP, add a new MR for it. */
 			break;
 		}
 		if (txq->mp2mr[i]->start <= addr &&
-		    txq->mp2mr[i]->end >= addr) {
+		    txq->mp2mr[i]->end > addr) {
 			assert(txq->mp2mr[i]->lkey != (uint32_t)-1);
 			assert(rte_cpu_to_be_32(txq->mp2mr[i]->mr->lkey) ==
 			       txq->mp2mr[i]->lkey);
@@ -564,7 +564,6 @@ mlx5_tx_mb2mr(struct mlx5_txq_data *txq, struct rte_mbuf *mb)
 			return txq->mp2mr[i]->lkey;
 		}
 	}
-	txq->mr_cache_idx = 0;
 	mr = mlx5_txq_mp2mr_reg(txq, mlx5_tx_mb2mp(mb), i);
 	/*
 	 * Request the reference to use in this queue, the original one is
@@ -572,6 +571,7 @@ mlx5_tx_mb2mr(struct mlx5_txq_data *txq, struct rte_mbuf *mb)
 	 */
 	if (mr) {
 		rte_atomic32_inc(&mr->refcnt);
+		txq->mr_cache_idx = i >= RTE_DIM(txq->mp2mr) ? i - 1 : i;
 		return mr->lkey;
 	}
 	return (uint32_t)-1;
@@ -615,6 +615,41 @@ static __rte_always_inline void
 mlx5_tx_dbrec(struct mlx5_txq_data *txq, volatile struct mlx5_wqe *wqe)
 {
 	mlx5_tx_dbrec_cond_wmb(txq, wqe, 1);
+}
+
+/**
+ * Convert the Checksum offloads to Verbs.
+ *
+ * @param txq_data
+ *   Pointer to the Tx queue.
+ * @param buf
+ *   Pointer to the mbuf.
+ *
+ * @return
+ *   the converted cs_flags.
+ */
+static __rte_always_inline uint8_t
+txq_ol_cksum_to_cs(struct mlx5_txq_data *txq_data, struct rte_mbuf *buf)
+{
+	uint8_t cs_flags = 0;
+
+	/* Should we enable HW CKSUM offload */
+	if (buf->ol_flags &
+	    (PKT_TX_IP_CKSUM | PKT_TX_TCP_CKSUM | PKT_TX_UDP_CKSUM |
+	     PKT_TX_OUTER_IP_CKSUM)) {
+		if (txq_data->tunnel_en &&
+		    (buf->ol_flags &
+		     (PKT_TX_TUNNEL_GRE | PKT_TX_TUNNEL_VXLAN))) {
+			cs_flags = MLX5_ETH_WQE_L3_INNER_CSUM |
+				   MLX5_ETH_WQE_L4_INNER_CSUM;
+			if (buf->ol_flags & PKT_TX_OUTER_IP_CKSUM)
+				cs_flags |= MLX5_ETH_WQE_L3_CSUM;
+		} else {
+			cs_flags = MLX5_ETH_WQE_L3_CSUM |
+				   MLX5_ETH_WQE_L4_CSUM;
+		}
+	}
+	return cs_flags;
 }
 
 #endif /* RTE_PMD_MLX5_RXTX_H_ */

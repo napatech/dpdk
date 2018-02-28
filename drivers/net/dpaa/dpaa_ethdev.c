@@ -212,19 +212,15 @@ dpaa_fw_version_get(struct rte_eth_dev *dev __rte_unused,
 		DPAA_PMD_ERR("Unable to open SoC device");
 		return -ENOTSUP; /* Not supported on this infra */
 	}
-
-	ret = fscanf(svr_file, "svr:%x", &svr_ver);
-	if (ret <= 0) {
+	if (fscanf(svr_file, "svr:%x", &svr_ver) <= 0)
 		DPAA_PMD_ERR("Unable to read SoC device");
-		return -ENOTSUP; /* Not supported on this infra */
-	}
 
-	ret = snprintf(fw_version, fw_size,
-		       "svr:%x-fman-v%x",
-		       svr_ver,
-		       fman_ip_rev);
+	fclose(svr_file);
 
+	ret = snprintf(fw_version, fw_size, "SVR:%x-fman-v%x",
+		       svr_ver, fman_ip_rev);
 	ret += 1; /* add the size of '\0' */
+
 	if (fw_size < (uint32_t)ret)
 		return ret;
 	else
@@ -723,7 +719,7 @@ static int dpaa_fc_set_default(struct dpaa_if *dpaa_intf)
 static int dpaa_rx_queue_init(struct qman_fq *fq,
 			      uint32_t fqid)
 {
-	struct qm_mcc_initfq opts;
+	struct qm_mcc_initfq opts = {0};
 	int ret;
 
 	PMD_INIT_FUNC_TRACE();
@@ -769,7 +765,7 @@ static int dpaa_rx_queue_init(struct qman_fq *fq,
 static int dpaa_tx_queue_init(struct qman_fq *fq,
 			      struct fman_if *fman_intf)
 {
-	struct qm_mcc_initfq opts;
+	struct qm_mcc_initfq opts = {0};
 	int ret;
 
 	PMD_INIT_FUNC_TRACE();
@@ -800,7 +796,7 @@ static int dpaa_tx_queue_init(struct qman_fq *fq,
 /* Initialise a DEBUG FQ ([rt]x_error, rx_default). */
 static int dpaa_debug_queue_init(struct qman_fq *fq, uint32_t fqid)
 {
-	struct qm_mcc_initfq opts;
+	struct qm_mcc_initfq opts = {0};
 	int ret;
 
 	PMD_INIT_FUNC_TRACE();
@@ -877,12 +873,17 @@ dpaa_dev_init(struct rte_eth_dev *eth_dev)
 
 	dpaa_intf->rx_queues = rte_zmalloc(NULL,
 		sizeof(struct qman_fq) * num_rx_fqs, MAX_CACHELINE);
+	if (!dpaa_intf->rx_queues) {
+		DPAA_PMD_ERR("Failed to alloc mem for RX queues\n");
+		return -ENOMEM;
+	}
+
 	for (loop = 0; loop < num_rx_fqs; loop++) {
 		fqid = DPAA_PCD_FQID_START + dpaa_intf->ifid *
 			DPAA_PCD_FQID_MULTIPLIER + loop;
 		ret = dpaa_rx_queue_init(&dpaa_intf->rx_queues[loop], fqid);
 		if (ret)
-			return ret;
+			goto free_rx;
 		dpaa_intf->rx_queues[loop].dpaa_intf = dpaa_intf;
 	}
 	dpaa_intf->nb_rx_queues = num_rx_fqs;
@@ -891,14 +892,17 @@ dpaa_dev_init(struct rte_eth_dev *eth_dev)
 	num_cores = rte_lcore_count();
 	dpaa_intf->tx_queues = rte_zmalloc(NULL, sizeof(struct qman_fq) *
 		num_cores, MAX_CACHELINE);
-	if (!dpaa_intf->tx_queues)
-		return -ENOMEM;
+	if (!dpaa_intf->tx_queues) {
+		DPAA_PMD_ERR("Failed to alloc mem for TX queues\n");
+		ret = -ENOMEM;
+		goto free_rx;
+	}
 
 	for (loop = 0; loop < num_cores; loop++) {
 		ret = dpaa_tx_queue_init(&dpaa_intf->tx_queues[loop],
 					 fman_intf);
 		if (ret)
-			return ret;
+			goto free_tx;
 		dpaa_intf->tx_queues[loop].dpaa_intf = dpaa_intf;
 	}
 	dpaa_intf->nb_tx_queues = num_cores;
@@ -935,13 +939,8 @@ dpaa_dev_init(struct rte_eth_dev *eth_dev)
 		DPAA_PMD_ERR("Failed to allocate %d bytes needed to "
 						"store MAC addresses",
 				ETHER_ADDR_LEN * DPAA_MAX_MAC_FILTER);
-		rte_free(dpaa_intf->rx_queues);
-		rte_free(dpaa_intf->tx_queues);
-		dpaa_intf->rx_queues = NULL;
-		dpaa_intf->tx_queues = NULL;
-		dpaa_intf->nb_rx_queues = 0;
-		dpaa_intf->nb_tx_queues = 0;
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto free_tx;
 	}
 
 	/* copy the primary mac address */
@@ -967,6 +966,17 @@ dpaa_dev_init(struct rte_eth_dev *eth_dev)
 	fman_if_stats_reset(fman_intf);
 
 	return 0;
+
+free_tx:
+	rte_free(dpaa_intf->tx_queues);
+	dpaa_intf->tx_queues = NULL;
+	dpaa_intf->nb_tx_queues = 0;
+
+free_rx:
+	rte_free(dpaa_intf->rx_queues);
+	dpaa_intf->rx_queues = NULL;
+	dpaa_intf->nb_rx_queues = 0;
+	return ret;
 }
 
 static int

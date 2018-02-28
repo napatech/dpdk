@@ -362,6 +362,8 @@ rte_cryptodev_get_feature_name(uint64_t flag)
 		return "CPU_AVX";
 	case RTE_CRYPTODEV_FF_CPU_AVX2:
 		return "CPU_AVX2";
+	case RTE_CRYPTODEV_FF_CPU_AVX512:
+		return "CPU_AVX512";
 	case RTE_CRYPTODEV_FF_CPU_AESNI:
 		return "CPU_AESNI";
 	case RTE_CRYPTODEV_FF_HW_ACCELERATED:
@@ -1120,7 +1122,7 @@ rte_cryptodev_sym_session_create(struct rte_mempool *mp)
 	struct rte_cryptodev_sym_session *sess;
 
 	/* Allocate a session structure from the session pool */
-	if (rte_mempool_get(mp, (void *)&sess)) {
+	if (rte_mempool_get(mp, (void **)&sess)) {
 		CDEV_LOG_ERR("couldn't get object from session mempool");
 		return NULL;
 	}

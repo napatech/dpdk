@@ -738,7 +738,8 @@ static int bnxt_hwrm_port_phy_cfg(struct bnxt *bp, struct bnxt_link_info *conf)
 				HWRM_PORT_PHY_CFG_INPUT_AUTO_MODE_ALL_SPEEDS;
 		}
 		/* AutoNeg - Advertise speeds specified. */
-		if (conf->auto_link_speed_mask) {
+		if (conf->auto_link_speed_mask &&
+		    !(conf->phy_flags & HWRM_PORT_PHY_CFG_INPUT_FLAGS_FORCE)) {
 			req.auto_mode =
 				HWRM_PORT_PHY_CFG_INPUT_AUTO_MODE_SPEED_MASK;
 			req.auto_link_speed_mask =
@@ -801,11 +802,21 @@ static int bnxt_hwrm_port_phy_qcfg(struct bnxt *bp,
 	link_info->support_speeds = rte_le_to_cpu_16(resp->support_speeds);
 	link_info->auto_link_speed = rte_le_to_cpu_16(resp->auto_link_speed);
 	link_info->preemphasis = rte_le_to_cpu_32(resp->preemphasis);
+	link_info->force_link_speed = rte_le_to_cpu_16(resp->force_link_speed);
 	link_info->phy_ver[0] = resp->phy_maj;
 	link_info->phy_ver[1] = resp->phy_min;
 	link_info->phy_ver[2] = resp->phy_bld;
 
 	HWRM_UNLOCK();
+
+	RTE_LOG(DEBUG, PMD, "Link Speed %d\n", link_info->link_speed);
+	RTE_LOG(DEBUG, PMD, "Auto Mode %d\n", link_info->auto_mode);
+	RTE_LOG(DEBUG, PMD, "Support Speeds %x\n", link_info->support_speeds);
+	RTE_LOG(DEBUG, PMD, "Auto Link Speed %x\n", link_info->auto_link_speed);
+	RTE_LOG(DEBUG, PMD, "Auto Link Speed Mask %x\n",
+		    link_info->auto_link_speed_mask);
+	RTE_LOG(DEBUG, PMD, "Forced Link Speed %x\n",
+		    link_info->force_link_speed);
 
 	return rc;
 }
@@ -1046,7 +1057,6 @@ int bnxt_hwrm_stat_ctx_alloc(struct bnxt *bp, struct bnxt_cp_ring_info *cpr,
 	cpr->hw_stats_ctx_id = rte_le_to_cpu_16(resp->stat_ctx_id);
 
 	HWRM_UNLOCK();
-	bp->grp_info[idx].fw_stats_ctx = cpr->hw_stats_ctx_id;
 
 	return rc;
 }
@@ -1569,19 +1579,15 @@ int bnxt_free_all_hwrm_stat_ctxs(struct bnxt *bp)
 
 	for (i = 0; i < bp->rx_cp_nr_rings + bp->tx_cp_nr_rings; i++) {
 
-		if (i >= bp->rx_cp_nr_rings)
+		if (i >= bp->rx_cp_nr_rings) {
 			cpr = bp->tx_queues[i - bp->rx_cp_nr_rings]->cp_ring;
-		else
+		} else {
 			cpr = bp->rx_queues[i]->cp_ring;
+			bp->grp_info[i].fw_stats_ctx = -1;
+		}
 		if (cpr->hw_stats_ctx_id != HWRM_NA_SIGNATURE) {
 			rc = bnxt_hwrm_stat_ctx_free(bp, cpr, i);
 			cpr->hw_stats_ctx_id = HWRM_NA_SIGNATURE;
-			/*
-			 * TODO. Need a better way to reset grp_info.stats_ctx
-			 * for Rx rings only. stats_ctx is not saved for Tx
-			 * in grp_info.
-			 */
-			bp->grp_info[i].fw_stats_ctx = cpr->hw_stats_ctx_id;
 			if (rc)
 				return rc;
 		}
@@ -1641,7 +1647,6 @@ static void bnxt_free_cp_ring(struct bnxt *bp, struct bnxt_cp_ring_info *cpr,
 	bnxt_hwrm_ring_free(bp, cp_ring,
 			HWRM_RING_FREE_INPUT_RING_TYPE_L2_CMPL);
 	cp_ring->fw_ring_id = INVALID_HW_RING_ID;
-	bp->grp_info[idx].cp_fw_ring_id = INVALID_HW_RING_ID;
 	memset(cpr->cp_desc_ring, 0, cpr->cp_ring_struct->ring_size *
 			sizeof(*cpr->cp_desc_ring));
 	cpr->cp_raw_cons = 0;
@@ -1697,10 +1702,17 @@ int bnxt_free_all_hwrm_rings(struct bnxt *bp)
 					rxr->rx_ring_struct->ring_size *
 					sizeof(*rxr->rx_buf_ring));
 			rxr->rx_prod = 0;
+		}
+		ring = rxr->ag_ring_struct;
+		if (ring->fw_ring_id != INVALID_HW_RING_ID) {
+			bnxt_hwrm_ring_free(bp, ring,
+					    HWRM_RING_FREE_INPUT_RING_TYPE_RX);
+			ring->fw_ring_id = INVALID_HW_RING_ID;
 			memset(rxr->ag_buf_ring, 0,
-					rxr->ag_ring_struct->ring_size *
-					sizeof(*rxr->ag_buf_ring));
+			       rxr->ag_ring_struct->ring_size *
+			       sizeof(*rxr->ag_buf_ring));
 			rxr->ag_prod = 0;
+			bp->grp_info[i].ag_fw_ring_id = INVALID_HW_RING_ID;
 		}
 		if (cpr->cp_ring_struct->fw_ring_id != INVALID_HW_RING_ID) {
 			bnxt_free_cp_ring(bp, cpr, idx);
@@ -2123,7 +2135,9 @@ int bnxt_set_hwrm_link_config(struct bnxt *bp, bool link_up)
 	autoneg = bnxt_check_eth_link_autoneg(dev_conf->link_speeds);
 	speed = bnxt_parse_eth_link_speed(dev_conf->link_speeds);
 	link_req.phy_flags = HWRM_PORT_PHY_CFG_INPUT_FLAGS_RESET_PHY;
-	if (autoneg == 1) {
+	/* Autoneg can be done only when the FW allows */
+	if (autoneg == 1 && !(bp->link_info.auto_link_speed ||
+				bp->link_info.force_link_speed)) {
 		link_req.phy_flags |=
 				HWRM_PORT_PHY_CFG_INPUT_FLAGS_RESTART_AUTONEG;
 		link_req.auto_link_speed_mask =
@@ -2141,7 +2155,13 @@ int bnxt_set_hwrm_link_config(struct bnxt *bp, bool link_up)
 		}
 
 		link_req.phy_flags |= HWRM_PORT_PHY_CFG_INPUT_FLAGS_FORCE;
-		link_req.link_speed = speed;
+		/* If user wants a particular speed try that first. */
+		if (speed)
+			link_req.link_speed = speed;
+		else if (bp->link_info.force_link_speed)
+			link_req.link_speed = bp->link_info.force_link_speed;
+		else
+			link_req.link_speed = bp->link_info.auto_link_speed;
 	}
 	link_req.duplex = bnxt_parse_eth_link_duplex(dev_conf->link_speeds);
 	link_req.auto_pause = bp->link_info.auto_pause;
@@ -3575,7 +3595,6 @@ int bnxt_hwrm_clear_ntuple_filter(struct bnxt *bp,
 	HWRM_UNLOCK();
 
 	filter->fw_ntuple_filter_id = -1;
-	filter->fw_l2_filter_id = -1;
 
 	return 0;
 }

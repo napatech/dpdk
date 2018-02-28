@@ -393,7 +393,10 @@ static int bnxt_init_nic(struct bnxt *bp)
 {
 	int rc;
 
-	bnxt_init_ring_grps(bp);
+	rc = bnxt_init_ring_grps(bp);
+	if (rc)
+		return rc;
+
 	bnxt_init_vnics(bp);
 	bnxt_init_filters(bp);
 
@@ -713,7 +716,7 @@ static int bnxt_mac_addr_add_op(struct rte_eth_dev *eth_dev,
 		if (filter->mac_index == index) {
 			RTE_LOG(ERR, PMD,
 				"MAC addr already existed for pool %d\n", pool);
-			return -EINVAL;
+			return 0;
 		}
 	}
 	filter = bnxt_alloc_filter(bp);
@@ -1723,9 +1726,9 @@ bnxt_match_and_validate_ether_filter(struct bnxt *bp,
 	int match = 0;
 	*ret = 0;
 
-	if (efilter->ether_type != ETHER_TYPE_IPv4 &&
-		efilter->ether_type != ETHER_TYPE_IPv6) {
-		RTE_LOG(ERR, PMD, "unsupported ether_type(0x%04x) in"
+	if (efilter->ether_type == ETHER_TYPE_IPv4 ||
+		efilter->ether_type == ETHER_TYPE_IPv6) {
+		RTE_LOG(ERR, PMD, "invalid ether_type(0x%04x) in"
 			" ethertype filter.", efilter->ether_type);
 		*ret = -EINVAL;
 		goto exit;
@@ -1953,7 +1956,8 @@ parse_ntuple_filter(struct bnxt *bp,
 
 static struct bnxt_filter_info*
 bnxt_match_ntuple_filter(struct bnxt *bp,
-			 struct bnxt_filter_info *bfilter)
+			 struct bnxt_filter_info *bfilter,
+			 struct bnxt_vnic_info **mvnic)
 {
 	struct bnxt_filter_info *mfilter = NULL;
 	int i;
@@ -1972,8 +1976,11 @@ bnxt_match_ntuple_filter(struct bnxt *bp,
 			    bfilter->dst_port == mfilter->dst_port &&
 			    bfilter->dst_port_mask == mfilter->dst_port_mask &&
 			    bfilter->flags == mfilter->flags &&
-			    bfilter->enables == mfilter->enables)
+			    bfilter->enables == mfilter->enables) {
+				if (mvnic)
+					*mvnic = vnic;
 				return mfilter;
+			}
 		}
 	}
 	return NULL;
@@ -1985,7 +1992,7 @@ bnxt_cfg_ntuple_filter(struct bnxt *bp,
 		       enum rte_filter_op filter_op)
 {
 	struct bnxt_filter_info *bfilter, *mfilter, *filter1;
-	struct bnxt_vnic_info *vnic, *vnic0;
+	struct bnxt_vnic_info *vnic, *vnic0, *mvnic;
 	int ret;
 
 	if (nfilter->flags != RTE_5TUPLE_FLAGS) {
@@ -2023,11 +2030,21 @@ bnxt_cfg_ntuple_filter(struct bnxt *bp,
 	bfilter->ethertype = 0x800;
 	bfilter->enables |= NTUPLE_FLTR_ALLOC_INPUT_EN_ETHERTYPE;
 
-	mfilter = bnxt_match_ntuple_filter(bp, bfilter);
+	mfilter = bnxt_match_ntuple_filter(bp, bfilter, &mvnic);
 
-	if (mfilter != NULL && filter_op == RTE_ETH_FILTER_ADD) {
-		RTE_LOG(ERR, PMD, "filter exists.");
+	if (mfilter != NULL && filter_op == RTE_ETH_FILTER_ADD &&
+	    bfilter->dst_id == mfilter->dst_id) {
+		RTE_LOG(ERR, PMD, "filter exists.\n");
 		ret = -EEXIST;
+		goto free_filter;
+	} else if (mfilter != NULL && filter_op == RTE_ETH_FILTER_ADD &&
+		   bfilter->dst_id != mfilter->dst_id) {
+		mfilter->dst_id = vnic->fw_vnic_id;
+		ret = bnxt_hwrm_set_ntuple_filter(bp, mfilter->dst_id, mfilter);
+		STAILQ_REMOVE(&mvnic->filter, mfilter, bnxt_filter_info, next);
+		STAILQ_INSERT_TAIL(&vnic->filter, mfilter, next);
+		RTE_LOG(ERR, PMD, "filter with matching pattern exists.\n");
+		RTE_LOG(ERR, PMD, " Updated it to the new destination queue\n");
 		goto free_filter;
 	}
 	if (mfilter == NULL && filter_op == RTE_ETH_FILTER_DELETE) {
@@ -2050,11 +2067,11 @@ bnxt_cfg_ntuple_filter(struct bnxt *bp,
 		}
 		ret = bnxt_hwrm_clear_ntuple_filter(bp, mfilter);
 
-		STAILQ_REMOVE(&vnic->filter, mfilter, bnxt_filter_info,
-			      next);
+		STAILQ_REMOVE(&vnic->filter, mfilter, bnxt_filter_info, next);
 		bnxt_free_filter(bp, mfilter);
-		bfilter->fw_l2_filter_id = -1;
+		mfilter->fw_l2_filter_id = -1;
 		bnxt_free_filter(bp, bfilter);
+		bfilter->fw_l2_filter_id = -1;
 	}
 
 	return 0;
@@ -2939,11 +2956,19 @@ skip_init:
 	/* Copy the permanent MAC from the qcap response address now. */
 	memcpy(bp->mac_addr, bp->dflt_mac_addr, sizeof(bp->mac_addr));
 	memcpy(&eth_dev->data->mac_addrs[0], bp->mac_addr, ETHER_ADDR_LEN);
+
+	if (bp->max_ring_grps < bp->rx_cp_nr_rings) {
+		/* 1 ring is for default completion ring */
+		RTE_LOG(ERR, PMD, "Insufficient resource: Ring Group\n");
+		rc = -ENOSPC;
+		goto error_free;
+	}
+
 	bp->grp_info = rte_zmalloc("bnxt_grp_info",
 				sizeof(*bp->grp_info) * bp->max_ring_grps, 0);
 	if (!bp->grp_info) {
 		RTE_LOG(ERR, PMD,
-			"Failed to alloc %zu bytes needed to store group info table\n",
+			"Failed to alloc %zu bytes to store group info table\n",
 			sizeof(*bp->grp_info) * bp->max_ring_grps);
 		rc = -ENOMEM;
 		goto error_free;

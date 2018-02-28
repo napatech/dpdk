@@ -93,6 +93,7 @@ static const struct rte_eth_xstats_name_off rte_stats_strings[] = {
 	{"tx_good_packets", offsetof(struct rte_eth_stats, opackets)},
 	{"rx_good_bytes", offsetof(struct rte_eth_stats, ibytes)},
 	{"tx_good_bytes", offsetof(struct rte_eth_stats, obytes)},
+	{"rx_missed_errors", offsetof(struct rte_eth_stats, imissed)},
 	{"rx_errors", offsetof(struct rte_eth_stats, ierrors)},
 	{"tx_errors", offsetof(struct rte_eth_stats, oerrors)},
 	{"rx_mbuf_allocation_errors", offsetof(struct rte_eth_stats,
@@ -191,8 +192,12 @@ rte_eth_dev_find_free_port(void)
 	unsigned i;
 
 	for (i = 0; i < RTE_MAX_ETHPORTS; i++) {
-		if (rte_eth_devices[i].state == RTE_ETH_DEV_UNUSED)
+		/* Using shared name field to find a free port. */
+		if (rte_eth_dev_data[i].name[0] == '\0') {
+			RTE_ASSERT(rte_eth_devices[i].state ==
+				   RTE_ETH_DEV_UNUSED);
 			return i;
+		}
 	}
 	return RTE_MAX_ETHPORTS;
 }
@@ -217,14 +222,14 @@ rte_eth_dev_allocate(const char *name)
 	uint16_t port_id;
 	struct rte_eth_dev *eth_dev;
 
+	if (rte_eth_dev_data == NULL)
+		rte_eth_dev_data_alloc();
+
 	port_id = rte_eth_dev_find_free_port();
 	if (port_id == RTE_MAX_ETHPORTS) {
 		RTE_PMD_DEBUG_TRACE("Reached maximum number of Ethernet ports\n");
 		return NULL;
 	}
-
-	if (rte_eth_dev_data == NULL)
-		rte_eth_dev_data_alloc();
 
 	if (rte_eth_dev_allocated(name) != NULL) {
 		RTE_PMD_DEBUG_TRACE("Ethernet Device with name %s already allocated!\n",
@@ -232,7 +237,6 @@ rte_eth_dev_allocate(const char *name)
 		return NULL;
 	}
 
-	memset(&rte_eth_dev_data[port_id], 0, sizeof(struct rte_eth_dev_data));
 	eth_dev = eth_dev_get(port_id);
 	snprintf(eth_dev->data->name, sizeof(eth_dev->data->name), "%s", name);
 	eth_dev->data->port_id = port_id;
@@ -278,6 +282,7 @@ rte_eth_dev_release_port(struct rte_eth_dev *eth_dev)
 	if (eth_dev == NULL)
 		return -EINVAL;
 
+	memset(eth_dev->data, 0, sizeof(struct rte_eth_dev_data));
 	eth_dev->state = RTE_ETH_DEV_UNUSED;
 	return 0;
 }

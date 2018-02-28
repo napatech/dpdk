@@ -134,18 +134,6 @@ mlx5_get_priv(struct rte_eth_dev *dev)
 }
 
 /**
- * Check if running as a secondary process.
- *
- * @return
- *   Nonzero if running as a secondary process.
- */
-inline int
-mlx5_is_secondary(void)
-{
-	return rte_eal_process_type() == RTE_PROC_SECONDARY;
-}
-
-/**
  * Get interface name from private structure.
  *
  * @param[in] priv
@@ -577,7 +565,7 @@ dev_configure(struct rte_eth_dev *dev)
 	unsigned int j;
 	unsigned int reta_idx_n;
 	const uint8_t use_app_rss_key =
-		!!dev->data->dev_conf.rx_adv_conf.rss_conf.rss_key_len;
+		!!dev->data->dev_conf.rx_adv_conf.rss_conf.rss_key;
 
 	if (use_app_rss_key &&
 	    (dev->data->dev_conf.rx_adv_conf.rss_conf.rss_key_len !=
@@ -649,9 +637,6 @@ mlx5_dev_configure(struct rte_eth_dev *dev)
 	struct priv *priv = dev->data->dev_private;
 	int ret;
 
-	if (mlx5_is_secondary())
-		return -E_RTE_SECONDARY;
-
 	priv_lock(priv);
 	ret = dev_configure(dev);
 	assert(ret >= 0);
@@ -720,6 +705,7 @@ mlx5_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 		priv->reta_idx_n : priv->ind_table_max_size;
 	info->hash_key_size = priv->rss_conf.rss_key_len;
 	info->speed_capa = priv->link_speed_capa;
+	info->flow_type_rss_offloads = ~MLX5_RSS_HF_MASK;
 	priv_unlock(priv);
 }
 
@@ -913,6 +899,114 @@ mlx5_link_update_unlocked_gs(struct rte_eth_dev *dev, int wait_to_complete)
 }
 
 /**
+ * Enable receiving and transmitting traffic.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ */
+static void
+priv_link_start(struct priv *priv)
+{
+	struct rte_eth_dev *dev = priv->dev;
+	int err;
+
+	priv_dev_select_tx_function(priv, dev);
+	priv_dev_select_rx_function(priv, dev);
+	err = priv_dev_traffic_enable(priv, dev);
+	if (err)
+		ERROR("%p: error occurred while configuring control flows: %s",
+		      (void *)priv, strerror(err));
+	err = priv_flow_start(priv, &priv->flows);
+	if (err)
+		ERROR("%p: error occurred while configuring flows: %s",
+		      (void *)priv, strerror(err));
+}
+
+/**
+ * Disable receiving and transmitting traffic.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ */
+static void
+priv_link_stop(struct priv *priv)
+{
+	struct rte_eth_dev *dev = priv->dev;
+
+	priv_flow_stop(priv, &priv->flows);
+	priv_dev_traffic_disable(priv, dev);
+	dev->rx_pkt_burst = removed_rx_burst;
+	dev->tx_pkt_burst = removed_tx_burst;
+}
+
+/**
+ * Retrieve physical link information and update rx/tx_pkt_burst callbacks
+ * accordingly.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ * @param wait_to_complete
+ *   Wait for request completion (ignored).
+ */
+int
+priv_link_update(struct priv *priv, int wait_to_complete)
+{
+	struct rte_eth_dev *dev = priv->dev;
+	struct utsname utsname;
+	int ver[3];
+	int ret;
+	struct rte_eth_link dev_link = dev->data->dev_link;
+
+	if (uname(&utsname) == -1 ||
+	    sscanf(utsname.release, "%d.%d.%d",
+		   &ver[0], &ver[1], &ver[2]) != 3 ||
+	    KERNEL_VERSION(ver[0], ver[1], ver[2]) < KERNEL_VERSION(4, 9, 0))
+		ret = mlx5_link_update_unlocked_gset(dev, wait_to_complete);
+	else
+		ret = mlx5_link_update_unlocked_gs(dev, wait_to_complete);
+	/* If lsc interrupt is disabled, should always be ready for traffic. */
+	if (!dev->data->dev_conf.intr_conf.lsc) {
+		priv_link_start(priv);
+		return ret;
+	}
+	/* Re-select burst callbacks only if link status has been changed. */
+	if (!ret && dev_link.link_status != dev->data->dev_link.link_status) {
+		if (dev->data->dev_link.link_status == ETH_LINK_UP)
+			priv_link_start(priv);
+		else
+			priv_link_stop(priv);
+	}
+	return ret;
+}
+
+/**
+ * Querying the link status till it changes to the desired state.
+ * Number of query attempts is bounded by MLX5_MAX_LINK_QUERY_ATTEMPTS.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ * @param status
+ *   Link desired status.
+ *
+ * @return
+ *   0 on success, negative errno value on failure.
+ */
+int
+priv_force_link_status_change(struct priv *priv, int status)
+{
+	int try = 0;
+
+	while (try < MLX5_MAX_LINK_QUERY_ATTEMPTS) {
+		priv_link_update(priv, 0);
+		if (priv->dev->data->dev_link.link_status == status)
+			return 0;
+		try++;
+		sleep(1);
+	}
+	return -EAGAIN;
+}
+
+/**
  * DPDK callback to retrieve physical link information.
  *
  * @param dev
@@ -923,15 +1017,13 @@ mlx5_link_update_unlocked_gs(struct rte_eth_dev *dev, int wait_to_complete)
 int
 mlx5_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 {
-	struct utsname utsname;
-	int ver[3];
+	struct priv *priv = dev->data->dev_private;
+	int ret;
 
-	if (uname(&utsname) == -1 ||
-	    sscanf(utsname.release, "%d.%d.%d",
-		   &ver[0], &ver[1], &ver[2]) != 3 ||
-	    KERNEL_VERSION(ver[0], ver[1], ver[2]) < KERNEL_VERSION(4, 9, 0))
-		return mlx5_link_update_unlocked_gset(dev, wait_to_complete);
-	return mlx5_link_update_unlocked_gs(dev, wait_to_complete);
+	priv_lock(priv);
+	ret = priv_link_update(priv, wait_to_complete);
+	priv_unlock(priv);
+	return ret;
 }
 
 /**
@@ -951,9 +1043,6 @@ mlx5_dev_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 	struct priv *priv = dev->data->dev_private;
 	uint16_t kern_mtu;
 	int ret = 0;
-
-	if (mlx5_is_secondary())
-		return -E_RTE_SECONDARY;
 
 	priv_lock(priv);
 	ret = priv_get_mtu(priv, &kern_mtu);
@@ -1002,9 +1091,6 @@ mlx5_dev_get_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 	};
 	int ret;
 
-	if (mlx5_is_secondary())
-		return -E_RTE_SECONDARY;
-
 	ifr.ifr_data = (void *)&ethpause;
 	priv_lock(priv);
 	if (priv_ifreq(priv, SIOCETHTOOL, &ifr)) {
@@ -1052,9 +1138,6 @@ mlx5_dev_set_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 		.cmd = ETHTOOL_SPAUSEPARAM
 	};
 	int ret;
-
-	if (mlx5_is_secondary())
-		return -E_RTE_SECONDARY;
 
 	ifr.ifr_data = (void *)&ethpause;
 	ethpause.autoneg = fc_conf->autoneg;
@@ -1150,7 +1233,7 @@ priv_link_status_update(struct priv *priv)
 {
 	struct rte_eth_link *link = &priv->dev->data->dev_link;
 
-	mlx5_link_update(priv->dev, 0);
+	priv_link_update(priv, 0);
 	if (((link->link_speed == 0) && link->link_status) ||
 		((link->link_speed != 0) && !link->link_status)) {
 		/*
@@ -1224,8 +1307,12 @@ mlx5_dev_link_status_handler(void *arg)
 	struct priv *priv = dev->data->dev_private;
 	int ret;
 
-	priv_lock(priv);
-	assert(priv->pending_alarm == 1);
+	while (!priv_trylock(priv)) {
+		/* Alarm is being canceled. */
+		if (priv->pending_alarm == 0)
+			return;
+		rte_pause();
+	}
 	priv->pending_alarm = 0;
 	ret = priv_link_status_update(priv);
 	priv_unlock(priv);
@@ -1295,9 +1382,10 @@ priv_dev_interrupt_handler_uninstall(struct priv *priv, struct rte_eth_dev *dev)
 	if (priv->primary_socket)
 		rte_intr_callback_unregister(&priv->intr_handle_socket,
 					     mlx5_dev_handler_socket, dev);
-	if (priv->pending_alarm)
+	if (priv->pending_alarm) {
+		priv->pending_alarm = 0;
 		rte_eal_alarm_cancel(mlx5_dev_link_status_handler, dev);
-	priv->pending_alarm = 0;
+	}
 	priv->intr_handle.fd = 0;
 	priv->intr_handle.type = RTE_INTR_HANDLE_UNKNOWN;
 	priv->intr_handle_socket.fd = 0;
@@ -1317,7 +1405,6 @@ priv_dev_interrupt_handler_install(struct priv *priv, struct rte_eth_dev *dev)
 {
 	int rc, flags;
 
-	assert(!mlx5_is_secondary());
 	assert(priv->ctx->async_fd > 0);
 	flags = fcntl(priv->ctx->async_fd, F_GETFL);
 	rc = fcntl(priv->ctx->async_fd, F_SETFL, flags | O_NONBLOCK);
@@ -1348,8 +1435,6 @@ priv_dev_interrupt_handler_install(struct priv *priv, struct rte_eth_dev *dev)
  *
  * @param priv
  *   Pointer to private data structure.
- * @param dev
- *   Pointer to rte_eth_dev structure.
  * @param up
  *   Nonzero for link up, otherwise link down.
  *
@@ -1357,24 +1442,9 @@ priv_dev_interrupt_handler_install(struct priv *priv, struct rte_eth_dev *dev)
  *   0 on success, errno value on failure.
  */
 static int
-priv_dev_set_link(struct priv *priv, struct rte_eth_dev *dev, int up)
+priv_dev_set_link(struct priv *priv, int up)
 {
-	int err;
-
-	if (up) {
-		err = priv_set_flags(priv, ~IFF_UP, IFF_UP);
-		if (err)
-			return err;
-		priv_dev_select_tx_function(priv, dev);
-		priv_dev_select_rx_function(priv, dev);
-	} else {
-		err = priv_set_flags(priv, ~IFF_UP, ~IFF_UP);
-		if (err)
-			return err;
-		dev->rx_pkt_burst = removed_rx_burst;
-		dev->tx_pkt_burst = removed_tx_burst;
-	}
-	return 0;
+	return priv_set_flags(priv, ~IFF_UP, up ? IFF_UP : ~IFF_UP);
 }
 
 /**
@@ -1393,7 +1463,7 @@ mlx5_set_link_down(struct rte_eth_dev *dev)
 	int err;
 
 	priv_lock(priv);
-	err = priv_dev_set_link(priv, dev, 0);
+	err = priv_dev_set_link(priv, 0);
 	priv_unlock(priv);
 	return err;
 }
@@ -1414,7 +1484,7 @@ mlx5_set_link_up(struct rte_eth_dev *dev)
 	int err;
 
 	priv_lock(priv);
-	err = priv_dev_set_link(priv, dev, 1);
+	err = priv_dev_set_link(priv, 1);
 	priv_unlock(priv);
 	return err;
 }

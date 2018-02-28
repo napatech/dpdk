@@ -67,6 +67,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <rte_common.h>
+#include <rte_config.h>
 
 #ifdef __cplusplus
 extern "C" {

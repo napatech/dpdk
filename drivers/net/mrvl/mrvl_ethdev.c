@@ -115,6 +115,11 @@ struct pp2_bpool *mrvl_port_to_bpool_lookup[RTE_MAX_ETHPORTS];
 int mrvl_port_bpool_size[PP2_NUM_PKT_PROC][PP2_BPOOL_NUM_POOLS][RTE_MAX_LCORE];
 uint64_t cookie_addr_high = MRVL_COOKIE_ADDR_INVALID;
 
+struct mrvl_ifnames {
+	const char *names[PP2_NUM_ETH_PPIO * PP2_NUM_PKT_PROC];
+	int idx;
+};
+
 /*
  * To use buffer harvesting based on loopback port shadow queue structure
  * was introduced for buffers information bookkeeping.
@@ -149,21 +154,17 @@ struct mrvl_txq {
 	int queue_id;
 	int port_id;
 	uint64_t bytes_sent;
+	struct mrvl_shadow_txq shadow_txqs[RTE_MAX_LCORE];
 };
 
-/*
- * Every tx queue should have dedicated shadow tx queue.
- *
- * Ports assigned by DPDK might not start at zero or be continuous so
- * as a workaround define shadow queues for each possible port so that
- * we eventually fit somewhere.
- */
-struct mrvl_shadow_txq shadow_txqs[RTE_MAX_ETHPORTS][RTE_MAX_LCORE];
-
-/** Number of ports configured. */
-int mrvl_ports_nb;
 static int mrvl_lcore_first;
 static int mrvl_lcore_last;
+static int mrvl_dev_num;
+
+static int mrvl_fill_bpool(struct mrvl_rxq *rxq, int num);
+static inline void mrvl_free_sent_buffers(struct pp2_ppio *ppio,
+			struct pp2_hif *hif, unsigned int core_id,
+			struct mrvl_shadow_txq *sq, int qid, int force);
 
 static inline int
 mrvl_get_bpool_size(int pp2_id, int pool_id)
@@ -188,6 +189,59 @@ mrvl_reserve_bit(int *bitmap, int max)
 	*bitmap |= 1 << n;
 
 	return n;
+}
+
+static int
+mrvl_init_hif(int core_id)
+{
+	struct pp2_hif_params params;
+	char match[MRVL_MATCH_LEN];
+	int ret;
+
+	ret = mrvl_reserve_bit(&used_hifs, MRVL_MUSDK_HIFS_MAX);
+	if (ret < 0) {
+		RTE_LOG(ERR, PMD, "Failed to allocate hif %d\n", core_id);
+		return ret;
+	}
+
+	snprintf(match, sizeof(match), "hif-%d", ret);
+	memset(&params, 0, sizeof(params));
+	params.match = match;
+	params.out_size = MRVL_PP2_AGGR_TXQD_MAX;
+	ret = pp2_hif_init(&params, &hifs[core_id]);
+	if (ret) {
+		RTE_LOG(ERR, PMD, "Failed to initialize hif %d\n", core_id);
+		return ret;
+	}
+
+	return 0;
+}
+
+static inline struct pp2_hif*
+mrvl_get_hif(struct mrvl_priv *priv, int core_id)
+{
+	int ret;
+
+	if (likely(hifs[core_id] != NULL))
+		return hifs[core_id];
+
+	rte_spinlock_lock(&priv->lock);
+
+	ret = mrvl_init_hif(core_id);
+	if (ret < 0) {
+		RTE_LOG(ERR, PMD, "Failed to allocate hif %d\n", core_id);
+		goto out;
+	}
+
+	if (core_id < mrvl_lcore_first)
+		mrvl_lcore_first = core_id;
+
+	if (core_id > mrvl_lcore_last)
+		mrvl_lcore_last = core_id;
+out:
+	rte_spinlock_unlock(&priv->lock);
+
+	return hifs[core_id];
 }
 
 /**
@@ -408,19 +462,12 @@ mrvl_dev_start(struct rte_eth_dev *dev)
 {
 	struct mrvl_priv *priv = dev->data->dev_private;
 	char match[MRVL_MATCH_LEN];
-	int ret;
+	int ret = 0, def_init_size;
 
 	snprintf(match, sizeof(match), "ppio-%d:%d",
 		 priv->pp_id, priv->ppio_id);
 	priv->ppio_params.match = match;
 
-	/*
-	 * Calculate the maximum bpool size for refill feature to 1.5 of the
-	 * configured size. In case the bpool size will exceed this value,
-	 * superfluous buffers will be removed
-	 */
-	priv->bpool_max_size = priv->bpool_init_size +
-			      (priv->bpool_init_size >> 1);
 	/*
 	 * Calculate the minimum bpool size for refill feature as follows:
 	 * 2 default burst sizes multiply by number of rx queues.
@@ -428,6 +475,29 @@ mrvl_dev_start(struct rte_eth_dev *dev)
 	 * be added to the pool.
 	 */
 	priv->bpool_min_size = priv->nb_rx_queues * MRVL_BURST_SIZE * 2;
+
+	/* In case initial bpool size configured in queues setup is
+	 * smaller than minimum size add more buffers
+	 */
+	def_init_size = priv->bpool_min_size + MRVL_BURST_SIZE * 2;
+	if (priv->bpool_init_size < def_init_size) {
+		int buffs_to_add = def_init_size - priv->bpool_init_size;
+
+		priv->bpool_init_size += buffs_to_add;
+		ret = mrvl_fill_bpool(dev->data->rx_queues[0], buffs_to_add);
+		if (ret)
+			RTE_LOG(ERR, PMD, "Failed to add buffers to bpool\n");
+	}
+
+	/*
+	 * Calculate the maximum bpool size for refill feature as follows:
+	 * maximum number of descriptors in rx queue multiply by number
+	 * of rx queues plus minimum bpool size.
+	 * In case the bpool size will exceed this value, superfluous buffers
+	 * will be removed
+	 */
+	priv->bpool_max_size = (priv->nb_rx_queues * MRVL_PP2_RXD_MAX) +
+				priv->bpool_min_size;
 
 	ret = pp2_ppio_init(&priv->ppio_params, &priv->ppio);
 	if (ret)
@@ -518,21 +588,32 @@ mrvl_flush_rx_queues(struct rte_eth_dev *dev)
 static void
 mrvl_flush_tx_shadow_queues(struct rte_eth_dev *dev)
 {
-	int i;
+	int i, j;
+	struct mrvl_txq *txq;
 
 	RTE_LOG(INFO, PMD, "Flushing tx shadow queues\n");
-	for (i = 0; i < RTE_MAX_LCORE; i++) {
-		struct mrvl_shadow_txq *sq =
-			&shadow_txqs[dev->data->port_id][i];
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		txq = (struct mrvl_txq *)dev->data->tx_queues[i];
 
-		while (sq->tail != sq->head) {
-			uint64_t addr = cookie_addr_high |
+		for (j = 0; j < RTE_MAX_LCORE; j++) {
+			struct mrvl_shadow_txq *sq;
+
+			if (!hifs[j])
+				continue;
+
+			sq = &txq->shadow_txqs[j];
+			mrvl_free_sent_buffers(txq->priv->ppio,
+				hifs[j], j, sq, txq->queue_id, 1);
+			while (sq->tail != sq->head) {
+				uint64_t addr = cookie_addr_high |
 					sq->ent[sq->tail].buff.cookie;
-			rte_pktmbuf_free((struct rte_mbuf *)addr);
-			sq->tail = (sq->tail + 1) & MRVL_PP2_TX_SHADOWQ_MASK;
+				rte_pktmbuf_free(
+					(struct rte_mbuf *)addr);
+				sq->tail = (sq->tail + 1) &
+					    MRVL_PP2_TX_SHADOWQ_MASK;
+			}
+			memset(sq, 0, sizeof(*sq));
 		}
-
-		memset(sq, 0, sizeof(*sq));
 	}
 }
 
@@ -546,8 +627,15 @@ static void
 mrvl_flush_bpool(struct rte_eth_dev *dev)
 {
 	struct mrvl_priv *priv = dev->data->dev_private;
+	struct pp2_hif *hif;
 	uint32_t num;
 	int ret;
+	unsigned int core_id = rte_lcore_id();
+
+	if (core_id == LCORE_ID_ANY)
+		core_id = 0;
+
+	hif = mrvl_get_hif(priv, core_id);
 
 	ret = pp2_bpool_get_num_buffs(priv->bpool, &num);
 	if (ret) {
@@ -559,8 +647,7 @@ mrvl_flush_bpool(struct rte_eth_dev *dev)
 		struct pp2_buff_inf inf;
 		uint64_t addr;
 
-		ret = pp2_bpool_get_buff(hifs[rte_lcore_id()], priv->bpool,
-					 &inf);
+		ret = pp2_bpool_get_buff(hif, priv->bpool, &inf);
 		if (ret)
 			break;
 
@@ -583,8 +670,10 @@ mrvl_dev_stop(struct rte_eth_dev *dev)
 	mrvl_dev_set_link_down(dev);
 	mrvl_flush_rx_queues(dev);
 	mrvl_flush_tx_shadow_queues(dev);
-	if (priv->qos_tbl)
+	if (priv->qos_tbl) {
 		pp2_cls_qos_tbl_deinit(priv->qos_tbl);
+		priv->qos_tbl = NULL;
+	}
 	pp2_ppio_deinit(priv->ppio);
 	priv->ppio = NULL;
 }
@@ -1131,9 +1220,19 @@ mrvl_fill_bpool(struct mrvl_rxq *rxq, int num)
 	struct buff_release_entry entries[MRVL_PP2_TXD_MAX];
 	struct rte_mbuf *mbufs[MRVL_PP2_TXD_MAX];
 	int i, ret;
-	unsigned int core_id = rte_lcore_id();
-	struct pp2_hif *hif = hifs[core_id];
-	struct pp2_bpool *bpool = rxq->priv->bpool;
+	unsigned int core_id;
+	struct pp2_hif *hif;
+	struct pp2_bpool *bpool;
+
+	core_id = rte_lcore_id();
+	if (core_id == LCORE_ID_ANY)
+		core_id = 0;
+
+	hif = mrvl_get_hif(rxq->priv, core_id);
+	if (!hif)
+		return -1;
+
+	bpool = rxq->priv->bpool;
 
 	ret = rte_pktmbuf_alloc_bulk(rxq->mp, mbufs, num);
 	if (ret)
@@ -1269,8 +1368,15 @@ mrvl_rx_queue_release(void *rxq)
 	struct mrvl_rxq *q = rxq;
 	struct pp2_ppio_tc_params *tc_params;
 	int i, num, tc, inq;
+	struct pp2_hif *hif;
+	unsigned int core_id = rte_lcore_id();
 
-	if (!q)
+	if (core_id == LCORE_ID_ANY)
+		core_id = 0;
+
+	hif = mrvl_get_hif(q->priv, core_id);
+
+	if (!q || !hif)
 		return;
 
 	tc = q->priv->rxq_map[q->queue_id].tc;
@@ -1281,7 +1387,7 @@ mrvl_rx_queue_release(void *rxq)
 		struct pp2_buff_inf inf;
 		uint64_t addr;
 
-		pp2_bpool_get_buff(hifs[rte_lcore_id()], q->priv->bpool, &inf);
+		pp2_bpool_get_buff(hif, q->priv->bpool, &inf);
 		addr = cookie_addr_high | inf.cookie;
 		rte_pktmbuf_free((struct rte_mbuf *)addr);
 	}
@@ -1557,9 +1663,12 @@ mrvl_rx_pkt_burst(void *rxq, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 	struct pp2_bpool *bpool;
 	int i, ret, rx_done = 0;
 	int num;
+	struct pp2_hif *hif;
 	unsigned int core_id = rte_lcore_id();
 
-	if (unlikely(!q->priv->ppio))
+	hif = mrvl_get_hif(q->priv, core_id);
+
+	if (unlikely(!q->priv->ppio || !hif))
 		return 0;
 
 	bpool = q->priv->bpool;
@@ -1602,7 +1711,7 @@ mrvl_rx_pkt_burst(void *rxq, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 				.cookie = (pp2_cookie_t)(uint64_t)mbuf,
 			};
 
-			pp2_bpool_put_buff(hifs[core_id], bpool, &binf);
+			pp2_bpool_put_buff(hif, bpool, &binf);
 			mrvl_port_bpool_size
 				[bpool->pp2_id][bpool->id][core_id]++;
 			q->drop_mac++;
@@ -1648,14 +1757,15 @@ mrvl_rx_pkt_burst(void *rxq, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 				q->priv->bpool_init_size);
 
 			for (i = 0; i < pkt_to_remove; i++) {
-				pp2_bpool_get_buff(hifs[core_id], bpool, &buff);
+				ret = pp2_bpool_get_buff(hif, bpool, &buff);
+				if (ret)
+					break;
 				mbuf = (struct rte_mbuf *)
 					(cookie_addr_high | buff.cookie);
 				rte_pktmbuf_free(mbuf);
 			}
 			mrvl_port_bpool_size
-				[bpool->pp2_id][bpool->id][core_id] -=
-								pkt_to_remove;
+				[bpool->pp2_id][bpool->id][core_id] -= i;
 		}
 		rte_spinlock_unlock(&q->priv->lock);
 	}
@@ -1740,11 +1850,12 @@ mrvl_prepare_proto_info(uint64_t ol_flags, uint32_t packet_type,
  */
 static inline void
 mrvl_free_sent_buffers(struct pp2_ppio *ppio, struct pp2_hif *hif,
-		       struct mrvl_shadow_txq *sq, int qid, int force)
+		       unsigned int core_id, struct mrvl_shadow_txq *sq,
+		       int qid, int force)
 {
 	struct buff_release_entry *entry;
 	uint16_t nb_done = 0, num = 0, skip_bufs = 0;
-	int i, core_id = rte_lcore_id();
+	int i;
 
 	pp2_ppio_get_num_outq_done(ppio, hif, qid, &nb_done);
 
@@ -1791,6 +1902,7 @@ skip:
 		sq->tail = (sq->tail + num) & MRVL_PP2_TX_SHADOWQ_MASK;
 		sq->size -= num;
 		num = 0;
+		skip_bufs = 0;
 	}
 
 	if (likely(num)) {
@@ -1817,18 +1929,23 @@ static uint16_t
 mrvl_tx_pkt_burst(void *txq, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 {
 	struct mrvl_txq *q = txq;
-	struct mrvl_shadow_txq *sq = &shadow_txqs[q->port_id][rte_lcore_id()];
-	struct pp2_hif *hif = hifs[rte_lcore_id()];
+	struct mrvl_shadow_txq *sq;
+	struct pp2_hif *hif;
 	struct pp2_ppio_desc descs[nb_pkts];
+	unsigned int core_id = rte_lcore_id();
 	int i, ret, bytes_sent = 0;
 	uint16_t num, sq_free_size;
 	uint64_t addr;
 
-	if (unlikely(!q->priv->ppio))
+	hif = mrvl_get_hif(q->priv, core_id);
+	sq = &q->shadow_txqs[core_id];
+
+	if (unlikely(!q->priv->ppio || !hif))
 		return 0;
 
 	if (sq->size)
-		mrvl_free_sent_buffers(q->priv->ppio, hif, sq, q->queue_id, 0);
+		mrvl_free_sent_buffers(q->priv->ppio, hif, core_id,
+				       sq, q->queue_id, 0);
 
 	sq_free_size = MRVL_PP2_TX_SHADOWQ_SIZE - sq->size - 1;
 	if (unlikely(nb_pkts > sq_free_size)) {
@@ -2034,6 +2151,7 @@ mrvl_eth_dev_create(struct rte_vdev_device *vdev, const char *name)
 
 	eth_dev->rx_pkt_burst = mrvl_rx_pkt_burst;
 	eth_dev->tx_pkt_burst = mrvl_tx_pkt_burst;
+	eth_dev->data->kdrv = RTE_KDRV_NONE;
 	eth_dev->data->dev_private = priv;
 	eth_dev->device = &vdev->device;
 	eth_dev->dev_ops = &mrvl_ops;
@@ -2067,6 +2185,7 @@ mrvl_eth_dev_destroy(const char *name)
 
 	priv = eth_dev->data->dev_private;
 	pp2_bpool_deinit(priv->bpool);
+	used_bpools[priv->pp_id] &= ~(1 << priv->bpool_bit);
 	rte_free(priv);
 	rte_free(eth_dev->data->mac_addrs);
 	rte_eth_dev_release_port(eth_dev);
@@ -2090,41 +2209,9 @@ static int
 mrvl_get_ifnames(const char *key __rte_unused, const char *value,
 		 void *extra_args)
 {
-	const char **ifnames = extra_args;
+	struct mrvl_ifnames *ifnames = extra_args;
 
-	ifnames[mrvl_ports_nb++] = value;
-
-	return 0;
-}
-
-/**
- * Initialize per-lcore MUSDK hardware interfaces (hifs).
- *
- * @return
- *   0 on success, negative error value otherwise.
- */
-static int
-mrvl_init_hifs(void)
-{
-	struct pp2_hif_params params;
-	char match[MRVL_MATCH_LEN];
-	int i, ret;
-
-	RTE_LCORE_FOREACH(i) {
-		ret = mrvl_reserve_bit(&used_hifs, MRVL_MUSDK_HIFS_MAX);
-		if (ret < 0)
-			return ret;
-
-		snprintf(match, sizeof(match), "hif-%d", ret);
-		memset(&params, 0, sizeof(params));
-		params.match = match;
-		params.out_size = MRVL_PP2_AGGR_TXQD_MAX;
-		ret = pp2_hif_init(&params, &hifs[i]);
-		if (ret) {
-			RTE_LOG(ERR, PMD, "Failed to initialize hif %d\n", i);
-			return ret;
-		}
-	}
+	ifnames->names[ifnames->idx++] = value;
 
 	return 0;
 }
@@ -2137,19 +2224,12 @@ mrvl_deinit_hifs(void)
 {
 	int i;
 
-	RTE_LCORE_FOREACH(i) {
+	for (i = mrvl_lcore_first; i <= mrvl_lcore_last; i++) {
 		if (hifs[i])
 			pp2_hif_deinit(hifs[i]);
 	}
-}
-
-static void mrvl_set_first_last_cores(int core_id)
-{
-	if (core_id < mrvl_lcore_first)
-		mrvl_lcore_first = core_id;
-
-	if (core_id > mrvl_lcore_last)
-		mrvl_lcore_last = core_id;
+	used_hifs = MRVL_MUSDK_HIFS_RESERVED;
+	memset(hifs, 0, sizeof(hifs));
 }
 
 /**
@@ -2165,9 +2245,9 @@ static int
 rte_pmd_mrvl_probe(struct rte_vdev_device *vdev)
 {
 	struct rte_kvargs *kvlist;
-	const char *ifnames[PP2_NUM_ETH_PPIO * PP2_NUM_PKT_PROC];
+	struct mrvl_ifnames ifnames;
 	int ret = -EINVAL;
-	uint32_t i, ifnum, cfgnum, core_id;
+	uint32_t i, ifnum, cfgnum;
 	const char *params;
 
 	params = rte_vdev_device_args(vdev);
@@ -2179,21 +2259,34 @@ rte_pmd_mrvl_probe(struct rte_vdev_device *vdev)
 		return -EINVAL;
 
 	ifnum = rte_kvargs_count(kvlist, MRVL_IFACE_NAME_ARG);
-	if (ifnum > RTE_DIM(ifnames))
+	if (ifnum > RTE_DIM(ifnames.names))
 		goto out_free_kvlist;
 
+	ifnames.idx = 0;
 	rte_kvargs_process(kvlist, MRVL_IFACE_NAME_ARG,
 			   mrvl_get_ifnames, &ifnames);
 
-	cfgnum = rte_kvargs_count(kvlist, MRVL_CFG_ARG);
-	if (cfgnum > 1) {
-		RTE_LOG(ERR, PMD, "Cannot handle more than one config file!\n");
-		goto out_free_kvlist;
-	} else if (cfgnum == 1) {
-		rte_kvargs_process(kvlist, MRVL_CFG_ARG,
-				   mrvl_get_qoscfg, &mrvl_qos_cfg);
+
+	/*
+	 * The below system initialization should be done only once,
+	 * on the first provided configuration file
+	 */
+	if (!mrvl_qos_cfg) {
+		cfgnum = rte_kvargs_count(kvlist, MRVL_CFG_ARG);
+		RTE_LOG(INFO, PMD, "Parsing config file!\n");
+		if (cfgnum > 1) {
+			RTE_LOG(ERR, PMD, "Cannot handle more than one config file!\n");
+			goto out_free_kvlist;
+		} else if (cfgnum == 1) {
+			rte_kvargs_process(kvlist, MRVL_CFG_ARG,
+					   mrvl_get_qoscfg, &mrvl_qos_cfg);
+		}
 	}
 
+	if (mrvl_dev_num)
+		goto init_devices;
+
+	RTE_LOG(INFO, PMD, "Perform MUSDK initializations\n");
 	/*
 	 * ret == -EEXIST is correct, it means DMA
 	 * has been already initialized (by another PMD).
@@ -2213,37 +2306,32 @@ rte_pmd_mrvl_probe(struct rte_vdev_device *vdev)
 		goto out_deinit_dma;
 	}
 
-	ret = mrvl_init_hifs();
-	if (ret)
-		goto out_deinit_hifs;
-
-	for (i = 0; i < ifnum; i++) {
-		RTE_LOG(INFO, PMD, "Creating %s\n", ifnames[i]);
-		ret = mrvl_eth_dev_create(vdev, ifnames[i]);
-		if (ret)
-			goto out_cleanup;
-	}
-
-	rte_kvargs_free(kvlist);
-
 	memset(mrvl_port_bpool_size, 0, sizeof(mrvl_port_bpool_size));
 
 	mrvl_lcore_first = RTE_MAX_LCORE;
 	mrvl_lcore_last = 0;
 
-	RTE_LCORE_FOREACH(core_id) {
-		mrvl_set_first_last_cores(core_id);
+init_devices:
+	for (i = 0; i < ifnum; i++) {
+		RTE_LOG(INFO, PMD, "Creating %s\n", ifnames.names[i]);
+		ret = mrvl_eth_dev_create(vdev, ifnames.names[i]);
+		if (ret)
+			goto out_cleanup;
 	}
+	mrvl_dev_num += ifnum;
+
+	rte_kvargs_free(kvlist);
 
 	return 0;
 out_cleanup:
 	for (; i > 0; i--)
-		mrvl_eth_dev_destroy(ifnames[i]);
-out_deinit_hifs:
-	mrvl_deinit_hifs();
-	mrvl_deinit_pp2();
+		mrvl_eth_dev_destroy(ifnames.names[i]);
+
+	if (mrvl_dev_num == 0)
+		mrvl_deinit_pp2();
 out_deinit_dma:
-	mv_sys_dma_mem_destroy();
+	if (mrvl_dev_num == 0)
+		mv_sys_dma_mem_destroy();
 out_free_kvlist:
 	rte_kvargs_free(kvlist);
 
@@ -2276,11 +2364,15 @@ rte_pmd_mrvl_remove(struct rte_vdev_device *vdev)
 
 		rte_eth_dev_get_name_by_port(i, ifname);
 		mrvl_eth_dev_destroy(ifname);
+		mrvl_dev_num--;
 	}
 
-	mrvl_deinit_hifs();
-	mrvl_deinit_pp2();
-	mv_sys_dma_mem_destroy();
+	if (mrvl_dev_num == 0) {
+		RTE_LOG(INFO, PMD, "Perform MUSDK deinit\n");
+		mrvl_deinit_hifs();
+		mrvl_deinit_pp2();
+		mv_sys_dma_mem_destroy();
+	}
 
 	return 0;
 }

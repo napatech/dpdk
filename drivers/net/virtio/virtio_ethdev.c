@@ -294,17 +294,6 @@ virtio_dev_queue_release(void *queue __rte_unused)
 	/* do nothing */
 }
 
-static int
-virtio_get_queue_type(struct virtio_hw *hw, uint16_t vtpci_queue_idx)
-{
-	if (vtpci_queue_idx == hw->max_queue_pairs * 2)
-		return VTNET_CQ;
-	else if (vtpci_queue_idx % 2 == 0)
-		return VTNET_RQ;
-	else
-		return VTNET_TQ;
-}
-
 static uint16_t
 virtio_get_nr_vq(struct virtio_hw *hw)
 {
@@ -893,7 +882,7 @@ static int virtio_dev_xstats_get_names(struct rte_eth_dev *dev,
 		/* Note: limit checked in rte_eth_xstats_names() */
 
 		for (i = 0; i < dev->data->nb_rx_queues; i++) {
-			struct virtqueue *rxvq = dev->data->rx_queues[i];
+			struct virtnet_rx *rxvq = dev->data->rx_queues[i];
 			if (rxvq == NULL)
 				continue;
 			for (t = 0; t < VIRTIO_NB_RXQ_XSTATS; t++) {
@@ -906,7 +895,7 @@ static int virtio_dev_xstats_get_names(struct rte_eth_dev *dev,
 		}
 
 		for (i = 0; i < dev->data->nb_tx_queues; i++) {
-			struct virtqueue *txvq = dev->data->tx_queues[i];
+			struct virtnet_tx *txvq = dev->data->tx_queues[i];
 			if (txvq == NULL)
 				continue;
 			for (t = 0; t < VIRTIO_NB_TXQ_XSTATS; t++) {
@@ -1405,6 +1394,11 @@ virtio_init_device(struct rte_eth_dev *eth_dev, uint64_t req_features)
 	/* Reset the device although not necessary at startup */
 	vtpci_reset(hw);
 
+	if (hw->vqs) {
+		virtio_dev_free_mbufs(eth_dev);
+		virtio_free_queues(hw);
+	}
+
 	/* Tell the host we've noticed this device. */
 	vtpci_set_status(hw, VIRTIO_CONFIG_STATUS_ACK);
 
@@ -1754,7 +1748,7 @@ virtio_dev_configure(struct rte_eth_dev *dev)
 
 	if (rxmode->enable_lro &&
 		(!vtpci_with_feature(hw, VIRTIO_NET_F_GUEST_TSO4) ||
-			!vtpci_with_feature(hw, VIRTIO_NET_F_GUEST_TSO4))) {
+		 !vtpci_with_feature(hw, VIRTIO_NET_F_GUEST_TSO6))) {
 		PMD_DRV_LOG(ERR,
 			"Large Receive Offload not available on this host");
 		return -ENOTSUP;
@@ -1784,7 +1778,7 @@ virtio_dev_configure(struct rte_eth_dev *dev)
 	hw->use_simple_rx = 1;
 	hw->use_simple_tx = 1;
 
-#if defined RTE_ARCH_ARM64 || defined CONFIG_RTE_ARCH_ARM
+#if defined RTE_ARCH_ARM64 || defined RTE_ARCH_ARM
 	if (!rte_cpu_get_flag_enabled(RTE_CPUFLAG_NEON)) {
 		hw->use_simple_rx = 0;
 		hw->use_simple_tx = 0;
@@ -1860,7 +1854,7 @@ virtio_dev_start(struct rte_eth_dev *dev)
 	for (i = 0; i < dev->data->nb_rx_queues; i++) {
 		rxvq = dev->data->rx_queues[i];
 		/* Flush the old packets */
-		virtqueue_flush(rxvq->vq);
+		virtqueue_rxvq_flush(rxvq->vq);
 		virtqueue_notify(rxvq->vq);
 	}
 
@@ -1898,6 +1892,9 @@ static void virtio_dev_free_mbufs(struct rte_eth_dev *dev)
 	for (i = 0; i < dev->data->nb_rx_queues; i++) {
 		struct virtnet_rx *rxvq = dev->data->rx_queues[i];
 
+		if (rxvq == NULL || rxvq->vq == NULL)
+			continue;
+
 		PMD_INIT_LOG(DEBUG,
 			     "Before freeing rxq[%d] used and unused buf", i);
 		VIRTQUEUE_DUMP(rxvq->vq);
@@ -1916,6 +1913,9 @@ static void virtio_dev_free_mbufs(struct rte_eth_dev *dev)
 
 	for (i = 0; i < dev->data->nb_tx_queues; i++) {
 		struct virtnet_tx *txvq = dev->data->tx_queues[i];
+
+		if (txvq == NULL || txvq->vq == NULL)
+			continue;
 
 		PMD_INIT_LOG(DEBUG,
 			     "Before freeing txq[%d] used and unused bufs",

@@ -489,12 +489,10 @@ nfp_net_configure(struct rte_eth_dev *dev)
 	}
 
 	if (rxmode->jumbo_frame)
-		/* this is handled in rte_eth_dev_configure */
+		hw->mtu = rxmode->max_rx_pkt_len;
 
-	if (rxmode->hw_strip_crc) {
-		PMD_INIT_LOG(INFO, "strip CRC not supported");
-		return -EINVAL;
-	}
+	if (!rxmode->hw_strip_crc)
+		PMD_INIT_LOG(INFO, "HW does strip CRC and it is not configurable");
 
 	if (rxmode->enable_scatter) {
 		PMD_INIT_LOG(INFO, "Scatter not supported");
@@ -1196,7 +1194,7 @@ nfp_net_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->max_rx_queues = (uint16_t)hw->max_rx_queues;
 	dev_info->max_tx_queues = (uint16_t)hw->max_tx_queues;
 	dev_info->min_rx_bufsize = ETHER_MIN_MTU;
-	dev_info->max_rx_pktlen = hw->mtu;
+	dev_info->max_rx_pktlen = hw->max_mtu;
 	/* Next should change when PF support is implemented */
 	dev_info->max_mac_addrs = 1;
 
@@ -1468,6 +1466,13 @@ nfp_net_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	/* check that mtu is within the allowed range */
 	if ((mtu < ETHER_MIN_MTU) || ((uint32_t)mtu > hw->max_mtu))
 		return -EINVAL;
+
+	/* mtu setting is forbidden if port is started */
+	if (dev->data->dev_started) {
+		PMD_DRV_LOG(ERR, "port %d must be stopped before configuration",
+			    dev->data->port_id);
+		return -EBUSY;
+	}
 
 	/* switch to jumbo mode if needed */
 	if ((uint32_t)mtu > ETHER_MAX_LEN)
@@ -2774,7 +2779,7 @@ nfp_net_init(struct rte_eth_dev *eth_dev)
 	hw->ver = nn_cfg_readl(hw, NFP_NET_CFG_VERSION);
 	hw->cap = nn_cfg_readl(hw, NFP_NET_CFG_CAP);
 	hw->max_mtu = nn_cfg_readl(hw, NFP_NET_CFG_MAX_MTU);
-	hw->mtu = hw->max_mtu;
+	hw->mtu = ETHER_MTU;
 
 	if (NFD_CFG_MAJOR_VERSION_of(hw->ver) < 2)
 		hw->rx_offset = NFP_NET_RX_OFFSET;

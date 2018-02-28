@@ -70,6 +70,7 @@
  *    with rte_flow_classifier_free()
  */
 
+#include <rte_common.h>
 #include <rte_ethdev.h>
 #include <rte_ether.h>
 #include <rte_flow.h>
@@ -82,9 +83,12 @@ extern "C" {
 
 extern int librte_flow_classify_logtype;
 
-#define RTE_FLOW_CLASSIFY_LOG(level, fmt, args...) \
-rte_log(RTE_LOG_ ## level, librte_flow_classify_logtype, "%s(): " fmt, \
-	__func__, ## args)
+#define RTE_FLOW_CLASSIFY_LOG(level, ...) \
+	rte_log(RTE_LOG_ ## level, \
+		librte_flow_classify_logtype, \
+		RTE_FMT("%s(): " RTE_FMT_HEAD(__VA_ARGS__,), \
+			__func__, \
+			RTE_FMT_TAIL(__VA_ARGS__,)))
 
 /** Opaque data type for flow classifier */
 struct rte_flow_classifier;

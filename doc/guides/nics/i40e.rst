@@ -134,6 +134,17 @@ Driver compilation and testing
 Refer to the document :ref:`compiling and testing a PMD for a NIC <pmd_build_and_test>`
 for details.
 
+- ``Support multiple driver`` (default ``disable``)
+
+  There was a multiple driver support issue during use of 700 series Ethernet
+  Adapter with both Linux kernel and DPDK PMD. To fix this issue, ``devargs``
+  parameter ``support-multi-driver`` is introduced, for example::
+
+    -w 84:00.0,support-multi-driver=1
+
+  With the above configuration, DPDK PMD will not change global registers, and
+  will switch PF interrupt from IntN to Int0 to avoid interrupt conflict between
+  DPDK and Linux Kernel.
 
 SR-IOV: Prerequisites and sample Application Notes
 --------------------------------------------------
@@ -482,6 +493,18 @@ Vlan strip of VF
 ~~~~~~~~~~~~~~~~
 
 The VF vlan strip function is only supported in the i40e kernel driver >= 2.1.26.
+
+Global configuration warning
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+I40E PMD will set some global registers to enable some function or set some
+configure. Then when using different ports of the same NIC with Linux kernel
+and DPDK, the port with Linux kernel will be impacted by the port with DPDK.
+For example, register I40E_GL_SWT_L2TAGCTRL is used to control L2 tag, i40e
+PMD uses I40E_GL_SWT_L2TAGCTRL to set vlan TPID. If setting TPID in port A
+with DPDK, then the configuration will also impact port B in the NIC with
+kernel driver, which don't want to use the TPID.
+So PMD reports warning to clarify what is changed by writing global register.
 
 High Performance of Small Packets on 40G NIC
 --------------------------------------------

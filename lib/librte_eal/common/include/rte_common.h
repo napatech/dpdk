@@ -51,6 +51,8 @@ extern "C" {
 #include <errno.h>
 #include <limits.h>
 
+#include <rte_config.h>
+
 #ifndef typeof
 #define typeof __typeof__
 #endif

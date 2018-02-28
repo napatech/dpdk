@@ -226,7 +226,7 @@ bond_port_init(struct rte_mempool *mbuf_pool)
 	uint16_t nb_rxd = RTE_RX_DESC_DEFAULT;
 	uint16_t nb_txd = RTE_TX_DESC_DEFAULT;
 
-	retval = rte_eth_bond_create("bond0", BONDING_MODE_ALB,
+	retval = rte_eth_bond_create("net_bonding0", BONDING_MODE_ALB,
 			0 /*SOCKET_ID_ANY*/);
 	if (retval < 0)
 		rte_exit(EXIT_FAILURE,
@@ -446,6 +446,11 @@ static void cmd_obj_send_parsed(void *parsed_result,
 				(BOND_IP_3 << 16) | (BOND_IP_4 << 24);
 
 	created_pkt = rte_pktmbuf_alloc(mbuf_pool);
+	if (created_pkt == NULL) {
+		cmdline_printf(cl, "Failed to allocate mbuf\n");
+		return;
+	}
+
 	pkt_size = sizeof(struct ether_hdr) + sizeof(struct arp_hdr);
 	created_pkt->data_len = pkt_size;
 	created_pkt->pkt_len = pkt_size;

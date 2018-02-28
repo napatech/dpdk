@@ -101,7 +101,7 @@ int bnxt_init_tx_ring_struct(struct bnxt_tx_queue *txq, unsigned int socket_id)
 	if (ring == NULL)
 		return -ENOMEM;
 	txr->tx_ring_struct = ring;
-	ring->ring_size = rte_align32pow2(txq->nb_tx_desc + 1);
+	ring->ring_size = rte_align32pow2(txq->nb_tx_desc);
 	ring->ring_mask = ring->ring_size - 1;
 	ring->bd = (void *)txr->tx_desc_ring;
 	ring->bd_dma = txr->tx_desc_mapping;
@@ -217,23 +217,28 @@ static uint16_t bnxt_start_xmit(struct rte_mbuf *tx_pkt,
 					tx_pkt->outer_l3_len;
 			txbd1->mss = tx_pkt->tso_segsz;
 
-		} else if (tx_pkt->ol_flags & PKT_TX_OIP_IIP_TCP_UDP_CKSUM) {
+		} else if ((tx_pkt->ol_flags & PKT_TX_OIP_IIP_TCP_UDP_CKSUM) ==
+			   PKT_TX_OIP_IIP_TCP_UDP_CKSUM) {
 			/* Outer IP, Inner IP, Inner TCP/UDP CSO */
 			txbd1->lflags |= TX_BD_FLG_TIP_IP_TCP_UDP_CHKSUM;
 			txbd1->mss = 0;
-		} else if (tx_pkt->ol_flags & PKT_TX_IIP_TCP_UDP_CKSUM) {
+		} else if ((tx_pkt->ol_flags & PKT_TX_IIP_TCP_UDP_CKSUM) ==
+			   PKT_TX_IIP_TCP_UDP_CKSUM) {
 			/* (Inner) IP, (Inner) TCP/UDP CSO */
 			txbd1->lflags |= TX_BD_FLG_IP_TCP_UDP_CHKSUM;
 			txbd1->mss = 0;
-		} else if (tx_pkt->ol_flags & PKT_TX_OIP_TCP_UDP_CKSUM) {
+		} else if ((tx_pkt->ol_flags & PKT_TX_OIP_TCP_UDP_CKSUM) ==
+			   PKT_TX_OIP_TCP_UDP_CKSUM) {
 			/* Outer IP, (Inner) TCP/UDP CSO */
 			txbd1->lflags |= TX_BD_FLG_TIP_TCP_UDP_CHKSUM;
 			txbd1->mss = 0;
-		} else if (tx_pkt->ol_flags & PKT_TX_OIP_IIP_CKSUM) {
+		} else if ((tx_pkt->ol_flags & PKT_TX_OIP_IIP_CKSUM) ==
+			   PKT_TX_OIP_IIP_CKSUM) {
 			/* Outer IP, Inner IP CSO */
 			txbd1->lflags |= TX_BD_FLG_TIP_IP_CHKSUM;
 			txbd1->mss = 0;
-		} else if (tx_pkt->ol_flags & PKT_TX_TCP_UDP_CKSUM) {
+		} else if ((tx_pkt->ol_flags & PKT_TX_TCP_UDP_CKSUM) ==
+			   PKT_TX_TCP_UDP_CKSUM) {
 			/* TCP/UDP CSO */
 			txbd1->lflags |= TX_BD_LONG_LFLAGS_TCP_UDP_CHKSUM;
 			txbd1->mss = 0;

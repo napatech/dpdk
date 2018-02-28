@@ -142,9 +142,6 @@ mlx5_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		container_of(txq, struct mlx5_txq_ctrl, txq);
 	int ret = 0;
 
-	if (mlx5_is_secondary())
-		return -E_RTE_SECONDARY;
-
 	priv_lock(priv);
 	if (desc <= MLX5_TX_COMP_THRESH) {
 		WARN("%p: number of descriptors requested for TX queue %u"
@@ -203,9 +200,6 @@ mlx5_tx_queue_release(void *dpdk_txq)
 	struct priv *priv;
 	unsigned int i;
 
-	if (mlx5_is_secondary())
-		return;
-
 	if (txq == NULL)
 		return;
 	txq_ctrl = container_of(txq, struct mlx5_txq_ctrl, txq);
@@ -253,6 +247,8 @@ priv_tx_uar_remap(struct priv *priv, int fd)
 	 * Ref to libmlx5 function: mlx5_init_context()
 	 */
 	for (i = 0; i != priv->txqs_n; ++i) {
+		if (!(*priv->txqs)[i])
+			continue;
 		txq = (*priv->txqs)[i];
 		txq_ctrl = container_of(txq, struct mlx5_txq_ctrl, txq);
 		uar_va = (uintptr_t)txq_ctrl->txq.bf_reg;

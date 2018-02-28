@@ -9,6 +9,7 @@
 #include "qede_ethdev.h"
 #include <rte_alarm.h>
 #include <rte_version.h>
+#include <rte_kvargs.h>
 
 /* Globals */
 static const struct qed_eth_ops *qed_ops;
@@ -385,6 +386,62 @@ static void qede_print_adapter_info(struct qede_dev *qdev)
 }
 #endif
 
+static void qede_reset_queue_stats(struct qede_dev *qdev, bool xstats)
+{
+#ifdef RTE_LIBRTE_QEDE_DEBUG_DRIVER
+	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
+#endif
+	unsigned int i = 0, j = 0, qid;
+	unsigned int rxq_stat_cntrs, txq_stat_cntrs;
+	struct qede_tx_queue *txq;
+
+	DP_VERBOSE(edev, ECORE_MSG_DEBUG, "Clearing queue stats\n");
+
+	rxq_stat_cntrs = RTE_MIN(QEDE_RSS_COUNT(qdev),
+			       RTE_ETHDEV_QUEUE_STAT_CNTRS);
+	txq_stat_cntrs = RTE_MIN(QEDE_TSS_COUNT(qdev),
+			       RTE_ETHDEV_QUEUE_STAT_CNTRS);
+
+	for_each_rss(qid) {
+		OSAL_MEMSET(((char *)(qdev->fp_array[qid].rxq)) +
+			     offsetof(struct qede_rx_queue, rcv_pkts), 0,
+			    sizeof(uint64_t));
+		OSAL_MEMSET(((char *)(qdev->fp_array[qid].rxq)) +
+			     offsetof(struct qede_rx_queue, rx_hw_errors), 0,
+			    sizeof(uint64_t));
+		OSAL_MEMSET(((char *)(qdev->fp_array[qid].rxq)) +
+			     offsetof(struct qede_rx_queue, rx_alloc_errors), 0,
+			    sizeof(uint64_t));
+
+		if (xstats)
+			for (j = 0; j < RTE_DIM(qede_rxq_xstats_strings); j++)
+				OSAL_MEMSET((((char *)
+					      (qdev->fp_array[qid].rxq)) +
+					     qede_rxq_xstats_strings[j].offset),
+					    0,
+					    sizeof(uint64_t));
+
+		i++;
+		if (i == rxq_stat_cntrs)
+			break;
+	}
+
+	i = 0;
+
+	for_each_tss(qid) {
+		txq = qdev->fp_array[qid].txq;
+
+		OSAL_MEMSET((uint64_t *)(uintptr_t)
+				(((uint64_t)(uintptr_t)(txq)) +
+				 offsetof(struct qede_tx_queue, xmit_pkts)), 0,
+			    sizeof(uint64_t));
+
+		i++;
+		if (i == txq_stat_cntrs)
+			break;
+	}
+}
+
 static int
 qede_start_vport(struct qede_dev *qdev, uint16_t mtu)
 {
@@ -410,6 +467,8 @@ qede_start_vport(struct qede_dev *qdev, uint16_t mtu)
 		}
 	}
 	ecore_reset_vport_stats(edev);
+	if (IS_PF(edev))
+		qede_reset_queue_stats(qdev, true);
 	DP_INFO(edev, "VPORT started with MTU = %u\n", mtu);
 
 	return 0;
@@ -453,13 +512,13 @@ int qede_activate_vport(struct rte_eth_dev *eth_dev, bool flg)
 	params.update_vport_active_tx_flg = 1;
 	params.vport_active_rx_flg = flg;
 	params.vport_active_tx_flg = flg;
-#ifndef RTE_LIBRTE_QEDE_VF_TX_SWITCH
-	if (IS_VF(edev)) {
-		params.update_tx_switching_flg = 1;
-		params.tx_switching_flg = !flg;
-		DP_INFO(edev, "VF tx-switching is disabled\n");
+	if (!qdev->enable_tx_switching) {
+		if (IS_VF(edev)) {
+			params.update_tx_switching_flg = 1;
+			params.tx_switching_flg = !flg;
+			DP_INFO(edev, "VF tx-switching is disabled\n");
+		}
 	}
-#endif
 	for_each_hwfn(edev, i) {
 		p_hwfn = &edev->hwfns[i];
 		params.opaque_fid = p_hwfn->hw_info.opaque_fid;
@@ -482,8 +541,8 @@ qede_update_sge_tpa_params(struct ecore_sge_tpa_params *sge_tpa_params,
 	/* Enable LRO in split mode */
 	sge_tpa_params->tpa_ipv4_en_flg = enable;
 	sge_tpa_params->tpa_ipv6_en_flg = enable;
-	sge_tpa_params->tpa_ipv4_tunn_en_flg = false;
-	sge_tpa_params->tpa_ipv6_tunn_en_flg = false;
+	sge_tpa_params->tpa_ipv4_tunn_en_flg = enable;
+	sge_tpa_params->tpa_ipv6_tunn_en_flg = enable;
 	/* set if tpa enable changes */
 	sge_tpa_params->update_tpa_en_flg = 1;
 	/* set if tpa parameters should be handled */
@@ -1208,6 +1267,68 @@ static void qede_dev_stop(struct rte_eth_dev *eth_dev)
 	DP_INFO(edev, "Device is stopped\n");
 }
 
+#define QEDE_TX_SWITCHING		"vf_txswitch"
+
+const char *valid_args[] = {
+	QEDE_TX_SWITCHING,
+	NULL,
+};
+
+static int qede_args_check(const char *key, const char *val, void *opaque)
+{
+	unsigned long tmp;
+	int ret = 0;
+	struct rte_eth_dev *eth_dev = opaque;
+	struct qede_dev *qdev = QEDE_INIT_QDEV(eth_dev);
+#ifdef RTE_LIBRTE_QEDE_DEBUG_INFO
+	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
+#endif
+
+	errno = 0;
+	tmp = strtoul(val, NULL, 0);
+	if (errno) {
+		DP_INFO(edev, "%s: \"%s\" is not a valid integer", key, val);
+		return errno;
+	}
+
+	if (strcmp(QEDE_TX_SWITCHING, key) == 0)
+		qdev->enable_tx_switching = !!tmp;
+
+	return ret;
+}
+
+static int qede_args(struct rte_eth_dev *eth_dev)
+{
+	struct rte_pci_device *pci_dev = RTE_DEV_TO_PCI(eth_dev->device);
+	struct rte_kvargs *kvlist;
+	struct rte_devargs *devargs;
+	int ret;
+	int i;
+
+	devargs = pci_dev->device.devargs;
+	if (!devargs)
+		return 0; /* return success */
+
+	kvlist = rte_kvargs_parse(devargs->args, valid_args);
+	if (kvlist == NULL)
+		return -EINVAL;
+
+	 /* Process parameters. */
+	for (i = 0; (valid_args[i] != NULL); ++i) {
+		if (rte_kvargs_count(kvlist, valid_args[i])) {
+			ret = rte_kvargs_process(kvlist, valid_args[i],
+						 qede_args_check, eth_dev);
+			if (ret != ECORE_SUCCESS) {
+				rte_kvargs_free(kvlist);
+				return ret;
+			}
+		}
+	}
+	rte_kvargs_free(kvlist);
+
+	return 0;
+}
+
 static int qede_dev_configure(struct rte_eth_dev *eth_dev)
 {
 	struct qede_dev *qdev = QEDE_INIT_QDEV(eth_dev);
@@ -1232,6 +1353,21 @@ static int qede_dev_configure(struct rte_eth_dev *eth_dev)
 			return -EINVAL;
 		}
 	}
+
+	/* We need to have min 1 RX queue.There is no min check in
+	 * rte_eth_dev_configure(), so we are checking it here.
+	 */
+	if (eth_dev->data->nb_rx_queues == 0) {
+		DP_ERR(edev, "Minimum one RX queue is required\n");
+		return -EINVAL;
+	}
+
+	/* Enable Tx switching by default */
+	qdev->enable_tx_switching = 1;
+
+	/* Parse devargs and fix up rxmode */
+	if (qede_args(eth_dev))
+		return -ENOTSUP;
 
 	/* Sanity checks and throw warnings */
 	if (rxmode->enable_scatter)
@@ -1269,18 +1405,24 @@ static int qede_dev_configure(struct rte_eth_dev *eth_dev)
 			return -ENOMEM;
 	}
 
+	/* If jumbo enabled adjust MTU */
+	if (eth_dev->data->dev_conf.rxmode.jumbo_frame)
+		eth_dev->data->mtu =
+				eth_dev->data->dev_conf.rxmode.max_rx_pkt_len -
+				ETHER_HDR_LEN - ETHER_CRC_LEN;
+
 	/* VF's MTU has to be set using vport-start where as
 	 * PF's MTU can be updated via vport-update.
 	 */
 	if (IS_VF(edev)) {
-		if (qede_start_vport(qdev, rxmode->max_rx_pkt_len))
+		if (qede_start_vport(qdev, eth_dev->data->mtu))
 			return -1;
 	} else {
-		if (qede_update_mtu(eth_dev, rxmode->max_rx_pkt_len))
+		if (qede_update_mtu(eth_dev, eth_dev->data->mtu))
 			return -1;
 	}
 
-	qdev->mtu = rxmode->max_rx_pkt_len;
+	qdev->mtu = eth_dev->data->mtu;
 	qdev->new_mtu = qdev->mtu;
 
 	/* Enable VLAN offloads by default */
@@ -1733,6 +1875,7 @@ qede_reset_xstats(struct rte_eth_dev *dev)
 	struct ecore_dev *edev = &qdev->edev;
 
 	ecore_reset_vport_stats(edev);
+	qede_reset_queue_stats(qdev, true);
 }
 
 int qede_dev_set_link_state(struct rte_eth_dev *eth_dev, bool link_up)
@@ -1768,6 +1911,7 @@ static void qede_reset_stats(struct rte_eth_dev *eth_dev)
 	struct ecore_dev *edev = &qdev->edev;
 
 	ecore_reset_vport_stats(edev);
+	qede_reset_queue_stats(qdev, false);
 }
 
 static void qede_allmulticast_enable(struct rte_eth_dev *eth_dev)
@@ -2159,16 +2303,23 @@ static int qede_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
 	struct rte_eth_dev_info dev_info = {0};
 	struct qede_fastpath *fp;
+	uint32_t max_rx_pkt_len;
 	uint32_t frame_size;
 	uint16_t rx_buf_size;
 	uint16_t bufsz;
+	bool restart = false;
 	int i;
 
 	PMD_INIT_FUNC_TRACE(edev);
+	if (IS_VF(edev))
+		return -ENOTSUP;
 	qede_dev_info_get(dev, &dev_info);
-	frame_size = mtu + QEDE_ETH_OVERHEAD;
+	max_rx_pkt_len = mtu + ETHER_HDR_LEN + ETHER_CRC_LEN;
+	frame_size = max_rx_pkt_len + QEDE_ETH_OVERHEAD;
 	if ((mtu < ETHER_MIN_MTU) || (frame_size > dev_info.max_rx_pktlen)) {
-		DP_ERR(edev, "MTU %u out of range\n", mtu);
+		DP_ERR(edev, "MTU %u out of range, %u is maximum allowable\n",
+		       mtu, dev_info.max_rx_pktlen - ETHER_HDR_LEN -
+			ETHER_CRC_LEN - QEDE_ETH_OVERHEAD);
 		return -EINVAL;
 	}
 	if (!dev->data->scattered_rx &&
@@ -2182,29 +2333,39 @@ static int qede_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 	 */
 	dev->rx_pkt_burst = qede_rxtx_pkts_dummy;
 	dev->tx_pkt_burst = qede_rxtx_pkts_dummy;
-	qede_dev_stop(dev);
+	if (dev->data->dev_started) {
+		dev->data->dev_started = 0;
+		qede_dev_stop(dev);
+		restart = true;
+	}
 	rte_delay_ms(1000);
-	qdev->mtu = mtu;
+	qdev->new_mtu = mtu;
 	/* Fix up RX buf size for all queues of the port */
 	for_each_rss(i) {
 		fp = &qdev->fp_array[i];
-		bufsz = (uint16_t)rte_pktmbuf_data_room_size(
-			fp->rxq->mb_pool) - RTE_PKTMBUF_HEADROOM;
-		if (dev->data->scattered_rx)
-			rx_buf_size = bufsz + QEDE_ETH_OVERHEAD;
-		else
-			rx_buf_size = mtu + QEDE_ETH_OVERHEAD;
-		rx_buf_size = QEDE_CEIL_TO_CACHE_LINE_SIZE(rx_buf_size);
-		fp->rxq->rx_buf_size = rx_buf_size;
-		DP_INFO(edev, "buf_size adjusted to %u\n", rx_buf_size);
+		if (fp->rxq != NULL) {
+			bufsz = (uint16_t)rte_pktmbuf_data_room_size(
+				fp->rxq->mb_pool) - RTE_PKTMBUF_HEADROOM;
+			if (dev->data->scattered_rx)
+				rx_buf_size = bufsz + ETHER_HDR_LEN +
+					      ETHER_CRC_LEN + QEDE_ETH_OVERHEAD;
+			else
+				rx_buf_size = frame_size;
+			rx_buf_size = QEDE_CEIL_TO_CACHE_LINE_SIZE(rx_buf_size);
+			fp->rxq->rx_buf_size = rx_buf_size;
+			DP_INFO(edev, "buf_size adjusted to %u\n", rx_buf_size);
+		}
 	}
-	qede_dev_start(dev);
-	if (frame_size > ETHER_MAX_LEN)
+	if (max_rx_pkt_len > ETHER_MAX_LEN)
 		dev->data->dev_conf.rxmode.jumbo_frame = 1;
 	else
 		dev->data->dev_conf.rxmode.jumbo_frame = 0;
+	if (!dev->data->dev_started && restart) {
+		qede_dev_start(dev);
+		dev->data->dev_started = 1;
+	}
 	/* update max frame size */
-	dev->data->dev_conf.rxmode.max_rx_pkt_len = frame_size;
+	dev->data->dev_conf.rxmode.max_rx_pkt_len = max_rx_pkt_len;
 	/* Reassign back */
 	dev->rx_pkt_burst = qede_recv_pkts;
 	dev->tx_pkt_burst = qede_xmit_pkts;

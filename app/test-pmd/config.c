@@ -724,11 +724,14 @@ port_offload_cap_display(portid_t port_id)
 int
 port_id_is_invalid(portid_t port_id, enum print_warning warning)
 {
+	uint16_t pid;
+
 	if (port_id == (portid_t)RTE_PORT_ALL)
 		return 0;
 
-	if (rte_eth_dev_is_valid_port(port_id))
-		return 0;
+	RTE_ETH_FOREACH_DEV(pid)
+		if (port_id == pid)
+			return 0;
 
 	if (warning == ENABLED_WARN)
 		printf("Invalid port %d\n", port_id);
@@ -1656,33 +1659,45 @@ fwd_lcores_config_display(void)
 void
 rxtx_config_display(void)
 {
-	printf("  %s packet forwarding%s - CRC stripping %s - "
-	       "packets/burst=%d\n", cur_fwd_eng->fwd_mode_name,
+	portid_t pid;
+
+	printf("  %s packet forwarding%s packets/burst=%d\n",
+	       cur_fwd_eng->fwd_mode_name,
 	       retry_enabled == 0 ? "" : " with retry",
-	       rx_mode.hw_strip_crc ? "enabled" : "disabled",
 	       nb_pkt_per_burst);
 
 	if (cur_fwd_eng == &tx_only_engine || cur_fwd_eng == &flow_gen_engine)
 		printf("  packet len=%u - nb packet segments=%d\n",
 				(unsigned)tx_pkt_length, (int) tx_pkt_nb_segs);
 
-	struct rte_eth_rxconf *rx_conf = &ports[0].rx_conf;
-	struct rte_eth_txconf *tx_conf = &ports[0].tx_conf;
-
 	printf("  nb forwarding cores=%d - nb forwarding ports=%d\n",
 	       nb_fwd_lcores, nb_fwd_ports);
-	printf("  RX queues=%d - RX desc=%d - RX free threshold=%d\n",
-	       nb_rxq, nb_rxd, rx_conf->rx_free_thresh);
-	printf("  RX threshold registers: pthresh=%d hthresh=%d wthresh=%d\n",
-	       rx_conf->rx_thresh.pthresh, rx_conf->rx_thresh.hthresh,
-	       rx_conf->rx_thresh.wthresh);
-	printf("  TX queues=%d - TX desc=%d - TX free threshold=%d\n",
-	       nb_txq, nb_txd, tx_conf->tx_free_thresh);
-	printf("  TX threshold registers: pthresh=%d hthresh=%d wthresh=%d\n",
-	       tx_conf->tx_thresh.pthresh, tx_conf->tx_thresh.hthresh,
-	       tx_conf->tx_thresh.wthresh);
-	printf("  TX RS bit threshold=%d - TXQ flags=0x%"PRIx32"\n",
-	       tx_conf->tx_rs_thresh, tx_conf->txq_flags);
+
+	RTE_ETH_FOREACH_DEV(pid) {
+		struct rte_eth_rxconf *rx_conf = &ports[pid].rx_conf;
+		struct rte_eth_txconf *tx_conf = &ports[pid].tx_conf;
+
+		printf("  port %d:\n", (unsigned int)pid);
+		printf("  CRC stripping %s\n",
+				ports[pid].dev_conf.rxmode.hw_strip_crc ?
+				"enabled" : "disabled");
+		printf("  RX queues=%d - RX desc=%d - RX free threshold=%d\n",
+				nb_rxq, nb_rxd, rx_conf->rx_free_thresh);
+		printf("  RX threshold registers: pthresh=%d hthresh=%d "
+		       " wthresh=%d\n",
+				rx_conf->rx_thresh.pthresh,
+				rx_conf->rx_thresh.hthresh,
+				rx_conf->rx_thresh.wthresh);
+		printf("  TX queues=%d - TX desc=%d - TX free threshold=%d\n",
+				nb_txq, nb_txd, tx_conf->tx_free_thresh);
+		printf("  TX threshold registers: pthresh=%d hthresh=%d "
+		       " wthresh=%d\n",
+				tx_conf->tx_thresh.pthresh,
+				tx_conf->tx_thresh.hthresh,
+				tx_conf->tx_thresh.wthresh);
+		printf("  TX RS bit threshold=%d - TXQ flags=0x%"PRIx32"\n",
+				tx_conf->tx_rs_thresh, tx_conf->txq_flags);
+	}
 }
 
 void
@@ -1862,6 +1877,36 @@ setup_fwd_config_of_each_lcore(struct fwd_config *cfg)
 	}
 }
 
+static portid_t
+fwd_topology_tx_port_get(portid_t rxp)
+{
+	static int warning_once = 1;
+
+	RTE_ASSERT(rxp < cur_fwd_config.nb_fwd_ports);
+
+	switch (port_topology) {
+	default:
+	case PORT_TOPOLOGY_PAIRED:
+		if ((rxp & 0x1) == 0) {
+			if (rxp + 1 < cur_fwd_config.nb_fwd_ports)
+				return rxp + 1;
+			if (warning_once) {
+				printf("\nWarning! port-topology=paired"
+				       " and odd forward ports number,"
+				       " the last port will pair with"
+				       " itself.\n\n");
+				warning_once = 0;
+			}
+			return rxp;
+		}
+		return rxp - 1;
+	case PORT_TOPOLOGY_CHAINED:
+		return (rxp + 1) % cur_fwd_config.nb_fwd_ports;
+	case PORT_TOPOLOGY_LOOP:
+		return rxp;
+	}
+}
+
 static void
 simple_fwd_config_setup(void)
 {
@@ -1924,11 +1969,6 @@ simple_fwd_config_setup(void)
  * For the RSS forwarding test all streams distributed over lcores. Each stream
  * being composed of a RX queue to poll on a RX port for input messages,
  * associated with a TX queue of a TX port where to send forwarded packets.
- * All packets received on the RX queue of index "RxQj" of the RX port "RxPi"
- * are sent on the TX queue "TxQl" of the TX port "TxPk" according to the two
- * following rules:
- *    - TxPk = (RxPi + 1) if RxPi is even, (RxPi - 1) if RxPi is odd
- *    - TxQl = RxQj
  */
 static void
 rss_fwd_config_setup(void)
@@ -1960,18 +2000,7 @@ rss_fwd_config_setup(void)
 		struct fwd_stream *fs;
 
 		fs = fwd_streams[sm_id];
-
-		if ((rxp & 0x1) == 0)
-			txp = (portid_t) (rxp + 1);
-		else
-			txp = (portid_t) (rxp - 1);
-		/*
-		 * if we are in loopback, simply send stuff out through the
-		 * ingress port
-		 */
-		if (port_topology == PORT_TOPOLOGY_LOOP)
-			txp = rxp;
-
+		txp = fwd_topology_tx_port_get(rxp);
 		fs->rx_port = fwd_ports_ids[rxp];
 		fs->rx_queue = rxq;
 		fs->tx_port = fwd_ports_ids[txp];
@@ -1986,11 +2015,7 @@ rss_fwd_config_setup(void)
 		 * Restart from RX queue 0 on next RX port
 		 */
 		rxq = 0;
-		if (numa_support && (nb_fwd_ports <= (nb_ports >> 1)))
-			rxp = (portid_t)
-				(rxp + ((nb_ports >> 1) / nb_fwd_ports));
-		else
-			rxp = (portid_t) (rxp + 1);
+		rxp++;
 	}
 }
 

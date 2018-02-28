@@ -123,24 +123,7 @@ txq_calc_offload(struct mlx5_txq_data *txq, struct rte_mbuf **pkts,
 	for (pos = 1; pos < pkts_n; ++pos)
 		if ((pkts[pos]->ol_flags ^ pkts[0]->ol_flags) & ol_mask)
 			break;
-	/* Should open another MPW session for the rest. */
-	if (pkts[0]->ol_flags &
-	    (PKT_TX_IP_CKSUM | PKT_TX_TCP_CKSUM | PKT_TX_UDP_CKSUM)) {
-		const uint64_t is_tunneled =
-			pkts[0]->ol_flags &
-			(PKT_TX_TUNNEL_GRE |
-			 PKT_TX_TUNNEL_VXLAN);
-
-		if (is_tunneled && txq->tunnel_en) {
-			*cs_flags = MLX5_ETH_WQE_L3_INNER_CSUM |
-				    MLX5_ETH_WQE_L4_INNER_CSUM;
-			if (pkts[0]->ol_flags & PKT_TX_OUTER_IP_CKSUM)
-				*cs_flags |= MLX5_ETH_WQE_L3_CSUM;
-		} else {
-			*cs_flags = MLX5_ETH_WQE_L3_CSUM |
-				    MLX5_ETH_WQE_L4_CSUM;
-		}
-	}
+	*cs_flags = txq_ol_cksum_to_cs(txq, pkts[0]);
 	return pos;
 }
 
@@ -261,7 +244,6 @@ rxq_handle_pending_error(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts,
 	rxq->stats.ipackets -= (pkts_n - n);
 	rxq->stats.ibytes -= err_bytes;
 #endif
-	rxq->pending_err = 0;
 	return n;
 }
 
@@ -283,9 +265,10 @@ mlx5_rx_burst_vec(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
 	struct mlx5_rxq_data *rxq = dpdk_rxq;
 	uint16_t nb_rx;
+	uint64_t err = 0;
 
-	nb_rx = rxq_burst_v(rxq, pkts, pkts_n);
-	if (unlikely(rxq->pending_err))
+	nb_rx = rxq_burst_v(rxq, pkts, pkts_n, &err);
+	if (unlikely(err))
 		nb_rx = rxq_handle_pending_error(rxq, pkts, nb_rx);
 	return nb_rx;
 }

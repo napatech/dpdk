@@ -728,6 +728,11 @@ enum print_warning {
 int port_id_is_invalid(portid_t port_id, enum print_warning warning);
 int new_socket_id(unsigned int socket_id);
 
+queueid_t get_allowed_max_nb_rxq(portid_t *pid);
+int check_nb_rxq(queueid_t rxq);
+queueid_t get_allowed_max_nb_txq(portid_t *pid);
+int check_nb_txq(queueid_t txq);
+
 /*
  * Work-around of a compilation error with ICC on invocations of the
  * rte_be_to_cpu_16() function.

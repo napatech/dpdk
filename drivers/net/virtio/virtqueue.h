@@ -304,12 +304,23 @@ void virtqueue_dump(struct virtqueue *vq);
 struct rte_mbuf *virtqueue_detatch_unused(struct virtqueue *vq);
 
 /* Flush the elements in the used ring. */
-void virtqueue_flush(struct virtqueue *vq);
+void virtqueue_rxvq_flush(struct virtqueue *vq);
 
 static inline int
 virtqueue_full(const struct virtqueue *vq)
 {
 	return vq->vq_free_cnt == 0;
+}
+
+static inline int
+virtio_get_queue_type(struct virtio_hw *hw, uint16_t vtpci_queue_idx)
+{
+	if (vtpci_queue_idx == hw->max_queue_pairs * 2)
+		return VTNET_CQ;
+	else if (vtpci_queue_idx % 2 == 0)
+		return VTNET_RQ;
+	else
+		return VTNET_TQ;
 }
 
 #define VIRTQUEUE_NUSED(vq) ((uint16_t)((vq)->vq_ring.used->idx - (vq)->vq_used_cons_idx))
