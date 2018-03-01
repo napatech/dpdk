@@ -48,22 +48,23 @@ See below for supported drivers and adapters:
 
 |  Supported drivers |
 |-------------------------|
-| 3.7.X                      |
+| 3.8.1                      |
 
 <br>
 
 |  Supported adapters                        | FPGA                        |
 |---------------------------------------------------|---------------------------|
-|  NT40A01-01-SCC-4×1-E3-FF-ANL        |  200-9500-09-08-00 |
-|  NT20E3-2-PTP-ANL                               |  200-9501-09-08-00 |
-|  NT40E3-4-PTP-ANL                               |  200-9502-09-08-00 |
-|  NT80E3-2-PTP-ANL                               |  200-9503-09-08-00 |
-|  NT100E3‐1‐PTP‐ANL                             |  200-9505-09-08-00 |
-|  NT200A01-02-SCC-2×40-E3-FF-ANL    |  200-9512-09-08-00 |
-|  NT200A01-02-SCC-2×100-E3-FF-ANL  |  200-9515-09-08-00 |
+|  NT40A01-01-SCC-4×1-E3-FF-ANL        |  200-9500-10-07-00 |
+|  NT20E3-2-PTP-ANL                               |  200-9501-10-07-00 |
+|  NT40E3-4-PTP-ANL                               |  200-9502-10-07-00 |
+|  NT80E3-2-PTP-ANL                               |  200-9503-10-07-00 |
+|  NT100E3‐1‐PTP‐ANL                             |  200-9505-10-08-00 |
+|  NT200A01-02-SCC-2×40-E3-FF-ANL    |  200-9512-10-07-00 |
+|  NT200A01-02-SCC-2×100-E3-FF-ANL  |  200-9515-10-07-00 |
+|  NT80E3-2-PTP-ANL 8x10G           |  200-9519-10-07-00 |
 
 The complete driver package can be downloaded here:
-[ntanl_package_3gd_linux_10.0.1](https://support.napatech.com/Releases/SmartNICs/10.0.1/ntanl_package_3gd_linux_10.0.1.tar.gz) 
+[ntanl_package_3gd_linux_11.0.1](https://supportportal.napatech.com/index.php?/selfhelp/view-article/capture-software-v1101-linux-for-napatech-smartnics/351)
 
 
 ## Compiling the Napatech NTACC PMD driver <a name="compiling"></a>
@@ -108,10 +109,10 @@ Hostbuffer settings:
 
 | Parameter | Description                                  |                                                                                                                                          |
 |-----------|----------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------|
-| R1        |  Number of RX hostbuffers                    | Must be equal to or larger than the number of RX queues used.<br>Maximum value = 128.                                                    | 
+| R1        |  Number of RX hostbuffers                    | Must be equal to or larger than the number of RX queues used.<br>Maximum value = 128.                                                    |
 | R2        |  Size of a hostbuffer in MB                  | The optimal size depends of the use. The default is usually fine.<br>The value must be a multiple of 4 and larger or equal to 16.        |
 | R3        |  Numa node where the hostbuffer is allocated | Use -1 for NUMA node autodetect. Hostbuffers will be allocated from the NUMA node to which the adapter is connected.                 |
-| T1        |  Number of TX hostbuffers                    | Must be equal to or larger than the number of TX queues used.<br>Maximum value = 128.                                                    | 
+| T1        |  Number of TX hostbuffers                    | Must be equal to or larger than the number of TX queues used.<br>Maximum value = 128.                                                    |
 | T2        |  Size of a hostbuffer in MB                  | The optimal size depends of the use. The default is usually fine.<br>The value must be a multiple of 4 and larger or equal to 16.        |
 | T3        |  Numa node where the hostbuffer is allocated | Use -1 for NUMA node autodetect. Hostbuffers will be allocated from the NUMA node to which the adapter is connected.                 |
 
@@ -187,7 +188,7 @@ The NTACC PMD driver supports a number of generic rte_flow filters including som
 
 Following rte_flow filters are supported:
 
-| rte_flow filter	      | Supported fields                                                                                                                                                            | 
+| rte_flow filter	      | Supported fields                                                                                                                                                            |
 |-------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 |`RTE_FLOW_ITEM_TYPE_END`   |                                                                                                                                                                             |
 |`RTE_FLOW_ITEM_TYPE_VOID`  |                                                                                                                                                                             |
@@ -209,7 +210,7 @@ Following rte_flow filters are supported:
 | `RTE_FLOW_ITEM_TYPE_MPLS` | Label parameter defined in:<br>`label_tc_s[0]`, `label_tc_s[1]`, `label_tc_s[2]` |
 The following rte_flow filters are added by Napatech and are not a part of the main DPDK:
 
-| rte_flow filter	         | Supported fields           | 
+| rte_flow filter	         | Supported fields           |
 |----------------------------|----------------------------|
 |`RTE_FLOW_ITEM_TYPE_IPinIP`   | Only packet type = `IPinIP`  |
 |`RTE_FLOW_ITEM_TYPE_NTPL`   | [see *Use NTPL filters*](#ntplfilter)  |
@@ -238,7 +239,7 @@ The following rte_flow filter attributes are supported:
 |`ingress`      |                                                        |
 
 ## Priority <a name="Priority"></a>
-If multiple filters are used, priority is used to select the order of the filters. The filter with the highest priority will always be the filter to be used. If filters overlap, for example an ethernet filter sending the packets to queue 0 and an IPv4 filter sending the packets to queue 1 (filters overlap as IPv4 packets are also ethernet packets), then the filter with the highest priority is used. 
+If multiple filters are used, priority is used to select the order of the filters. The filter with the highest priority will always be the filter to be used. If filters overlap, for example an ethernet filter sending the packets to queue 0 and an IPv4 filter sending the packets to queue 1 (filters overlap as IPv4 packets are also ethernet packets), then the filter with the highest priority is used.
 
 If the ethernet filter has the highest priority, all packets will go to queue 0 and no packets will go to queue 1.
 
@@ -321,8 +322,8 @@ if (rte_eth_dev_filter_ctrl(0, RTE_ETH_FILTER_HASH, RTE_ETH_FILTER_SET, &info) <
 
 Setting `info.info.enable = 0` disables symmetric hash and setting `info.info.enable = 1` enables symmetric hash.
 
-> `sorted` and `unsorted` is Napatech terms for symmetric and unsymmetric. 
- 
+> `sorted` and `unsorted` is Napatech terms for symmetric and unsymmetric.
+
 
 
 ##### Default RSS/HASH function <a name="DefaultRSS"></a>
@@ -350,7 +351,7 @@ static const struct rte_eth_conf port_conf_default = {
     },
   }
 };
-	
+
 /* Configure the Ethernet device. */
 retval = rte_eth_dev_configure(port, rx_queues, tx_queues, &port_conf_default);
 if (retval != 0)
@@ -363,7 +364,7 @@ See below for information about the consequences of setting a default RSS/HASH f
 ## Default filter <a name="DefaultFilter"></a>
 When starting the NTACC PMD driver, a default catch all filter with priority 62 (lowest priority) is created for each DPDK port. The filter will send all incoming packets to queue 0 for each DPDK port. If rte_flow filters are created with higher priority, then all packets matching these filters will be send to the queues defined by the filters. All packets not matching the filter will be send to queue 0.
 
-If a default RSS (hash) mode is defined using the rte_eth_dev_configure command (mq_mode = ETH_MQ_RX_RSS), a default catch all filter is created, that will send incoming packet to all defined queues using the defined RSS/HASH function. 
+If a default RSS (hash) mode is defined using the rte_eth_dev_configure command (mq_mode = ETH_MQ_RX_RSS), a default catch all filter is created, that will send incoming packet to all defined queues using the defined RSS/HASH function.
 
 > With a default RSS/HASH function, the default filter will collide with any rte_flow filters created, as all non matched packets will be distributed to all defined queues using the default RSS/HASH function. It is recommended not to define a default RSS/HASH function if any rte_flow filters are going to be used.
 
@@ -389,19 +390,19 @@ Setting up an IPV4 filter:
 ```C++
 attr.ingress = 1;
 attr.priority = 1;
-		
+
 struct rte_flow_action_queue flow_queue =  { 0 };
 actions[actionCount].type = RTE_FLOW_ACTION_TYPE_QUEUE;
 actions[actionCount].conf = &flow_queue;
 actionCount++;
-		
+
 struct rte_flow_item_ipv4 ipv4_spec = {
   .hdr = {
     .src_addr = rte_cpu_to_be_32(IPv4(192,168,20,108)),
     .dst_addr = rte_cpu_to_be_32(IPv4(159,20,6,6)),
   }
 };
-		
+
 pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_IPV4;
 pattern[patternCount].spec = &ipv4_spec;
 patternCount++;
@@ -412,12 +413,12 @@ An outer ether filter and an inner IPV4 filter:
 ```C++
 attr.ingress = 1;
 attr.priority = 1;
-	
+
 struct rte_flow_action_queue flow_queue =  { 0 };
 actions[actionCount].type = RTE_FLOW_ACTION_TYPE_QUEUE;
 actions[actionCount].conf = &flow_queue;
 actionCount++;
-	
+
 struct rte_flow_item_eth item_eth_spec = {
   .src = "\x04\xf4\xbc\x04\x26\xa5",
   .dst = "\x22\x33\x44\x55\x66\x77",
@@ -425,11 +426,11 @@ struct rte_flow_item_eth item_eth_spec = {
 pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_ETH;
 pattern[patternCount].spec = &item_eth_spec;
 patternCount++;
-	
+
 pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_GTPV1_U; // The following filters
 	                                                         // are inner filters
 patternCount++;
-	
+
 struct rte_flow_item_ipv4 ipv4_spec	= {
   .hdr = {
     .src_addr = rte_cpu_to_be_32(IPv4(192,168,20,108)),
@@ -492,7 +493,7 @@ static struct rte_flow *SetupFilter(uint8_t portid, uint8_t nbQueues)
 	pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_IPV4;
 	pattern[patternCount].spec = &ipv4_spec;
 	pattern[patternCount].mask = &ipv4_mask;
-	patternCount++; 
+	patternCount++;
 
 	// Create TCP filter
 	const struct rte_flow_item_tcp tcp_spec = {
@@ -511,7 +512,7 @@ static struct rte_flow *SetupFilter(uint8_t portid, uint8_t nbQueues)
 	pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_TCP;
 	pattern[patternCount].spec = &tcp_spec;
 	pattern[patternCount].mask = &tcp_mask;
-	patternCount++; 
+	patternCount++;
 
 	pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_END;
 
@@ -557,7 +558,7 @@ static struct rte_flow *SetupFilter(uint8_t portid, uint8_t nbQueues)
 	actions[actionCount].type = RTE_FLOW_ACTION_TYPE_END;
 	actions[actionCount].conf = NULL;
 
-	// Set symmetric hashing - Note this must be done before 
+	// Set symmetric hashing - Note this must be done before
 	// rte_flow_create is called.
 	memset(&info, 0, sizeof(info));
 	info.info_type = RTE_ETH_HASH_FILTER_SYM_HASH_ENA_PER_PORT;
@@ -587,13 +588,13 @@ static struct rte_flow *SetupFilter(uint8_t portid, uint8_t nbQueues)
 ```
 
 ## Filter creation example - Multiple 5tuple filter (IPv4 addresses and TCP ports) <a name="examples2"></a>
-The following example shows how it is possible to create a 5tuple filter matching on a large number of IPv4 addresses and TCP ports. 
+The following example shows how it is possible to create a 5tuple filter matching on a large number of IPv4 addresses and TCP ports.
 
 The commands used in the loop to program the IP addresses and tcp ports must be the same for all addresses and ports. The only things that must be changed are the values for IP addresses and tcp ports.
 
-The driver is then able to optimize the final filter making it possible to have up to 20.000 filter items. 
+The driver is then able to optimize the final filter making it possible to have up to 20.000 filter items.
 
-> Note: The number of possible filter items depends on the filter made and will vary depending on the complexity of the filter. 
+> Note: The number of possible filter items depends on the filter made and will vary depending on the complexity of the filter.
 
 > Note: The way the filter in this example is made can be used for all rte_flow_items as long as only the filter values are changed.
 
@@ -667,7 +668,7 @@ static int SetupFilter(uint8_t portid, struct rte_flow_error *error)
 		pattern[patternCount].spec = &tcp_spec;
 		patternCount++;
 
-		pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_END; 
+		pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_END;
 		patternCount++;
 
 		uint32_t actionCount = 0;
@@ -706,7 +707,7 @@ static int SetupFilter(uint8_t portid, struct rte_flow_error *error)
 		if (flow == NULL) {
 			return -1;
 		}
-		
+
 	}
 	return 0;
 }
@@ -714,7 +715,7 @@ static int SetupFilter(uint8_t portid, struct rte_flow_error *error)
 ```
 
 ## Copy packet offset to mbuf <a name="copyoffset"></a>
-Normally `mbuf->data_off  = RTE_PKTMBUF_HEADROOM` which is the offset to the beginnig of packet data. 
+Normally `mbuf->data_off  = RTE_PKTMBUF_HEADROOM` which is the offset to the beginnig of packet data.
 When enabling *copy packet offset to mbuf*, a predefined packet offset is copied into `mbuf->data_off` replacing
 the offset to the beginning of packet data.
 
@@ -742,7 +743,7 @@ To enable *copy packet offset to mbuf*, set following in common_base
 - `CONFIG_RTE_LIBRTE_PMD_NTACC_COPY_OFFSET=y`
 - `CONFIG_RTE_LIBRTE_PMD_NTACC_OFFSET0=InnerLayer3Header`
 
-This setting will enable copying of offset to the inner layer3 header to `mbuf->data_off`, so 
+This setting will enable copying of offset to the inner layer3 header to `mbuf->data_off`, so
 `mbuf->data_off  = RTE_PKTMBUF_HEADROOM + "offset to  InnerLayer3Header"`
 
 To access the offset, use the command:
@@ -816,7 +817,7 @@ KeyList[KeySet=3;KeyType=KT3;color=305419896;tag=port0]=(0x0A0000019F140606)
 assign[priority=1;Descriptor=DYN3,length=22,colorbits=32;streamid=0;tag=port0]=(InnerLayer3Protocol==IPV4) and TunnelType==EoMPLS and port==0 and Key(KDEF3)==3
 ```
 The string "TunnelType==EoMPLS" is now embedded into to the NTPL filter expression, and the resulting filter is changed to a ethernet over MPLS filter matching the inner layer3 protocol.
- 
+
 #### tunnel
 This tells the driver whether the following rte_flow filter items should be inner or outer filter items
 
@@ -827,8 +828,8 @@ KeyDef[name=KDEF3;KeyType=KT3;tag=port0]=(Layer3Header[12]/64)
 KeyList[KeySet=3;KeyType=KT3;color=305419896;tag=port0]=(0x0A0000019F140606)
 assign[priority=1;Descriptor=DYN3,length=22,colorbits=32;streamid=0;tag=port0]=(Layer3Protocol==IPV4) and TunnelType==EoMPLS and port==0 and Key(KDEF3)==3
 ```
-`InnerLayer3Header` and `InnerLayer3Protocol` is now changed to `Layer3Header` and `Layer3Protocol`. 
-   
+`InnerLayer3Header` and `InnerLayer3Protocol` is now changed to `Layer3Header` and `Layer3Protocol`.
+
 Other NTPL filter expressions can be used as long as it does not break the resulting NTPL filter expression.
 
 
@@ -863,7 +864,7 @@ When a mbuf that contains a batch buffer is received the following mbuf variable
 | mbuf->userdata | Pointer to the batch control buffer<br>Must not be changed | New function|
 | mbuf->port | DPDK port number |
 | mbuf->batch_release_cb | Pointer to callback function called when the batch buffer is released<br>Must not be changed | Addition |
-  
+
 
 ### Batch buffer<a name="batchbuf"></a>
 The batch buffer is different from the standard mbuf packet buffer as it contains a batch of packets and each packet contain a packet descriptor. When a mbuf that contains a batch buffer is received the `mbuf->buf_addr` variable will point to the beginning of the batch buffer. The number of packets in the batch buffer are given by the variable `mbuf->batch_nb_packet`. The packet descriptor that is placed in front of each packet is shown below.
@@ -893,7 +894,7 @@ The batch buffer can be browsed in two ways:
 
 ### Browsing the batch buffer directly<a name="browbatchbuf"></a>
 The batch buffer can be browsed directly using the packet descriptor to walk through the buffer. A description of the different descriptor variables used are described below.
- 
+
 | Variable | Description |
 |-----------|-----------|
 |mbuf->buf_addr | Pointer to the beginning of the batch buffer |
@@ -909,7 +910,7 @@ The batch buffer can be browsed directly using the packet descriptor to walk thr
 An example of how to browse the batch buffer.
 
 ```
-struct rte_mbuf_batch_pkt_hdr *phdr; 
+struct rte_mbuf_batch_pkt_hdr *phdr;
 
 phdr = mbuf->buf_addr;  // Point to the beginning of the batch buffer
 for (pack = 0; pack < mbuf->batch_nb_packet; pack++) {
@@ -958,7 +959,7 @@ for (pack = 0; pack < mbuf->batch_nb_packet; pack++) {
 
   countOctets += m1.data_len;   // This is the wirelength
   countPakets++;
-                                                    
+
   // Dump the IPV4 addresses
   #define IPV4_ADDRESS(a) ((const char *)&a)[0] & 0xFF, \
                           ((const char *)&a)[1] & 0xFF, \
@@ -966,7 +967,7 @@ for (pack = 0; pack < mbuf->batch_nb_packet; pack++) {
                           ((const char *)&a)[3] & 0xFF
 
   // Point to Layer3 using the data offset
-  struct ipv4_hdr *ipv4hdr = (struct ipv4_hdr *)((uint8_t *)m.buf_addr + m.data_off + ETHER_HDR_LEN); 
+  struct ipv4_hdr *ipv4hdr = (struct ipv4_hdr *)((uint8_t *)m.buf_addr + m.data_off + ETHER_HDR_LEN);
   printf("Src IP: %u.%u.%u.%u - Dst IP: %u.%u.%u.%u\n", IPV4_ADDRESS(ipv4hdr->src_addr),
                                                         IPV4_ADDRESS(ipv4hdr->dst_addr));
 }
@@ -994,8 +995,8 @@ To get the next packet from the batch buffer in a mbuf. The packets are still pl
  *   Number of bytes in returned packet incl. packet descriptor
  */
 static inline int
-rte_pktmbuf_cmbatch_get_next_packet(struct rte_mbuf *m_batch, 
-                                    struct rte_mbuf *m, 
+rte_pktmbuf_cmbatch_get_next_packet(struct rte_mbuf *m_batch,
+                                    struct rte_mbuf *m,
                                     uint32_t *offset)
 ```
 
@@ -1009,9 +1010,9 @@ The returned mbuf must be kept for later analysis, It must be freed after it is 
 /**
  * Copy a packet from a batch buffer to a normal mbuf.
  *
- * This function will copy a packet from a batch buffer 
- * to a normal mbuf. The function will allocate the needed number of 
- * mbufs to hold the packet. 
+ * This function will copy a packet from a batch buffer
+ * to a normal mbuf. The function will allocate the needed number of
+ * mbufs to hold the packet.
  *
  * @param mbuf
  *   hdr:     Pointer to the batch buffer
@@ -1048,14 +1049,14 @@ for (pack = 0; pack < mbuf->batch_nb_packet; pack++) {
 
 #### rte_pktmbuf_cmbatch_copy_packet_from_mbuf - Copy a packet from the batch buffer using mbuf<a name="copymbuf"></a>
 Similar to the above copy function, but instead of using the packet descriptor pointer, the mbuf returned from the rte_pktmbuf_cmbatch_get_next_packet is used. Otherwise there is no difference.
- 
+
 ```
 /**
  * Copy a packet from a mbuf batch buffer to a normal mbuf.
  *
- * This function will copy a packet from a mbuf batch buffer 
- * to a normal mbuf. The function will allocate the needed number of 
- * mbufs to hold the packet. 
+ * This function will copy a packet from a mbuf batch buffer
+ * to a normal mbuf. The function will allocate the needed number of
+ * mbufs to hold the packet.
  *
  * @param mbuf
  *   hdr:     Pointer to the batch buffer
@@ -1155,8 +1156,8 @@ Port 0 - Queue 3: Received                0 pkts
 ```
 The output are:
 
-QX,Y: 0 pk,     0.0 Mbps 
-- X = The port packets is received on. 
+QX,Y: 0 pk,     0.0 Mbps
+- X = The port packets is received on.
 - Y = The queue on port X containing the packets.
 - Z pk = Number of packets received.
-- 0.0 Mbps = RX speed 
+- 0.0 Mbps = RX speed
