@@ -99,15 +99,15 @@ struct {
   uint32_t build:10;
 } supportedAdapters[NB_SUPPORTED_FPGAS] =
 {
-  { 200, 9500, 10, 6, 0 },
-  { 200, 9501, 10, 6, 0 },
-  { 200, 9502, 10, 6, 0 },
-  { 200, 9503, 10, 6, 0 },
-  { 200, 9505, 10, 6, 0 },
-  { 200, 9512, 10, 6, 0 },
-  { 200, 9515, 10, 6, 0 },
+  { 200, 9500, 10, 7, 0 },
+  { 200, 9501, 10, 7, 0 },
+  { 200, 9502, 10, 7, 0 },
+  { 200, 9503, 10, 7, 0 },
+  { 200, 9505, 10, 8, 0 },
+  { 200, 9512, 10, 7, 0 },
+  { 200, 9515, 10, 7, 0 },
   { 200, 9517, 9, 8, 0 },
-  { 200, 9519, 10, 6, 0 },
+  { 200, 9519, 10, 7, 0 },
 };
 
 static void *_libnt;
@@ -1642,7 +1642,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   }
 
   // Create HASH
-  if (rss->rss_conf) {
+  if (rss && rss->rss_conf) {
     // If RSS is used, then set the Hash mode
     if (CreateHash(&ntpl_buf[strlen(ntpl_buf)], rss_hf, internals, tunnel) != 0) {
       rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Failed setting up hash mode");
