@@ -59,7 +59,6 @@ priv_socket_init(struct priv *priv)
 	};
 	int ret;
 	int flags;
-	struct stat file_stat;
 
 	/*
 	 * Initialise the socket to communicate with the secondary
@@ -79,9 +78,7 @@ priv_socket_init(struct priv *priv)
 		goto out;
 	snprintf(sun.sun_path, sizeof(sun.sun_path), "/var/tmp/%s_%d",
 		 MLX5_DRIVER_NAME, priv->primary_socket);
-	ret = stat(sun.sun_path, &file_stat);
-	if (!ret)
-		claim_zero(remove(sun.sun_path));
+	remove(sun.sun_path);
 	ret = bind(priv->primary_socket, (const struct sockaddr *)&sun,
 		   sizeof(sun));
 	if (ret < 0) {
