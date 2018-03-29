@@ -1,0 +1,5 @@
+[gerrit]
+host=review.opencontrail.org
+port=29418
+project=Juniper/contrail-dpdk.git
+defaultbranch=contrail_dpdk_17_11
