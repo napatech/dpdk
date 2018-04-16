@@ -1075,3 +1075,18 @@ Fixes in 17.11 LTS Release
 * vhost: fix mbuf free
 * vhost: protect active rings from async ring changes
 * vhost: remove pending IOTLB entry if miss request failed
+
+17.11.2
+~~~~~~~
+
+* examples/vhost: move to safe GPA translation API
+* examples/vhost_scsi: move to safe GPA translation API
+* vhost: add support for non-contiguous indirect descs tables (fixes CVE-2018-1059)
+* vhost: check all range is mapped when translating GPAs (fixes CVE-2018-1059)
+* vhost: deprecate unsafe GPA translation API (fixes CVE-2018-1059)
+* vhost: ensure all range is mapped when translating QVAs (fixes CVE-2018-1059)
+* vhost: fix indirect descriptors table translation size (fixes CVE-2018-1059)
+* vhost: handle virtually non-contiguous buffers in Rx (fixes CVE-2018-1059)
+* vhost: handle virtually non-contiguous buffers in Rx-mrg (fixes CVE-2018-1059)
+* vhost: handle virtually non-contiguous buffers in Tx (fixes CVE-2018-1059)
+* vhost: introduce safe API for GPA translation (fixes CVE-2018-1059)
