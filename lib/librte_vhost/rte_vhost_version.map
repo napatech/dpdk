@@ -52,3 +52,9 @@ DPDK_17.08 {
 	rte_vhost_rx_queue_count;
 
 } DPDK_17.05;
+
+DPDK_17.11.2 {
+	global;
+
+	rte_vhost_va_from_guest_pa;
+} DPDK_17.08;
