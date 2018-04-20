@@ -400,10 +400,6 @@ static int bnxt_init_nic(struct bnxt *bp)
 	bnxt_init_vnics(bp);
 	bnxt_init_filters(bp);
 
-	rc = bnxt_init_chip(bp);
-	if (rc)
-		return rc;
-
 	return 0;
 }
 
@@ -573,7 +569,7 @@ static int bnxt_dev_start_op(struct rte_eth_dev *eth_dev)
 	}
 	bp->dev_stopped = 0;
 
-	rc = bnxt_init_nic(bp);
+	rc = bnxt_init_chip(bp);
 	if (rc)
 		goto error;
 
@@ -3058,6 +3054,7 @@ skip_init:
 		goto error_free_int;
 
 	bnxt_enable_int(bp);
+	bnxt_init_nic(bp);
 
 	return 0;
 
