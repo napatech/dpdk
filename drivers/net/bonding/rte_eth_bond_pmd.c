@@ -2524,14 +2524,21 @@ bond_ethdev_lsc_event_callback(uint16_t port_id, enum rte_eth_event_type type,
 	if (!valid_slave)
 		return rc;
 
+	/* Synchronize lsc callback parallel calls either by real link event
+	 * from the slaves PMDs or by the bonding PMD itself.
+	 */
+	rte_spinlock_lock(&internals->lsc_lock);
+
 	/* Search for port in active port list */
 	active_pos = find_slave_by_id(internals->active_slaves,
 			internals->active_slave_count, port_id);
 
 	rte_eth_link_get_nowait(port_id, &link);
 	if (link.link_status) {
-		if (active_pos < internals->active_slave_count)
+		if (active_pos < internals->active_slave_count) {
+			rte_spinlock_unlock(&internals->lsc_lock);
 			return rc;
+		}
 
 		/* if no active slave ports then set this port to be primary port */
 		if (internals->active_slave_count < 1) {
@@ -2550,8 +2557,10 @@ bond_ethdev_lsc_event_callback(uint16_t port_id, enum rte_eth_event_type type,
 				internals->primary_port == port_id)
 			bond_ethdev_primary_set(internals, port_id);
 	} else {
-		if (active_pos == internals->active_slave_count)
+		if (active_pos == internals->active_slave_count) {
+			rte_spinlock_unlock(&internals->lsc_lock);
 			return rc;
+		}
 
 		/* Remove from active slave list */
 		deactivate_slave(bonded_eth_dev, port_id);
@@ -2604,6 +2613,9 @@ bond_ethdev_lsc_event_callback(uint16_t port_id, enum rte_eth_event_type type,
 						NULL, NULL);
 		}
 	}
+
+	rte_spinlock_unlock(&internals->lsc_lock);
+
 	return 0;
 }
 
@@ -2771,6 +2783,7 @@ bond_alloc(struct rte_vdev_device *dev, uint8_t mode)
 	eth_dev->data->dev_flags = RTE_ETH_DEV_INTR_LSC;
 
 	rte_spinlock_init(&internals->lock);
+	rte_spinlock_init(&internals->lsc_lock);
 
 	internals->port_id = eth_dev->data->port_id;
 	internals->mode = BONDING_MODE_INVALID;
