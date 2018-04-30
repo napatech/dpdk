@@ -101,8 +101,12 @@ nfpu_open(struct rte_pci_device *pci_dev, nfpu_desc_t *desc, int nfp)
 int
 nfpu_close(nfpu_desc_t *desc)
 {
+	char lockname[30];
+
 	rte_free(desc->nspu);
 	close(desc->lock);
-	unlink("/var/lock/nfp0");
+
+	snprintf(lockname, sizeof(lockname), "/var/lock/nfp%d", desc->nfp);
+	unlink(lockname);
 	return 0;
 }
