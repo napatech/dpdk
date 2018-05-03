@@ -1250,10 +1250,6 @@ start_packet_forwarding(int with_tx_first)
 		return;
 	}
 
-	if (init_fwd_streams() < 0) {
-		printf("Fail from init_fwd_streams()\n");
-		return;
-	}
 
 	if(dcb_test) {
 		for (i = 0; i < nb_fwd_ports; i++) {
@@ -1273,10 +1269,11 @@ start_packet_forwarding(int with_tx_first)
 	}
 	test_done = 0;
 
+	fwd_config_setup();
+
 	if(!no_flush_rx)
 		flush_fwd_rx_queues();
 
-	fwd_config_setup();
 	pkt_fwd_config_display(&cur_fwd_config);
 	rxtx_config_display();
 
