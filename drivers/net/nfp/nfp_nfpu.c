@@ -121,5 +121,6 @@ nfpu_close(nfpu_desc_t *desc)
 	close(desc->lock);
 
 	nspu_get_lockfile_path(lockname, sizeof(lockname), desc);
+	unlink(lockname);
 	return 0;
 }
