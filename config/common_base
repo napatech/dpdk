@@ -104,6 +104,11 @@ CONFIG_RTE_LIBRTE_PCI=y
 CONFIG_RTE_LIBRTE_KVARGS=y
 
 #
+# Napatech cmbatch
+#
+CONFIG_RTE_CONTIGUOUS_MEMORY_BATCHING=n
+
+#
 # Compile generic ethernet library
 #
 CONFIG_RTE_LIBRTE_ETHER=y

@@ -83,7 +83,9 @@ struct ntacc_rx_queue {
   NtNetBuf_t             pSeg;    /* The current segment we are working with */
   NtNetStreamRx_t        pNetRx;
   struct rte_mempool    *mb_pool;
+#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
   uint32_t               cmbatch;
+#endif
   uint32_t               in_port;
   struct NtNetBuf_s      pkt;     /* The current packet */
 #ifdef USE_SW_STAT
@@ -197,11 +199,13 @@ struct pmd_internals {
   struct pmd_shared_mem_s *shm;
 };
 
+#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
 struct batch_ctrl {
 	void      *orig_buf_addr;
 	void      *queue;
 	NtNetBuf_t pSeg;
 };
+#endif
 
 int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *internals);
 

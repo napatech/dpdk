@@ -43,6 +43,8 @@
 #include <rte_malloc.h>
 #include <unistd.h>
 
+//#define CONTIGUOUS_MEMORY_BATCHING  // Define to use contiguous memory batching
+
 #define RX_QUEUE_SIZE 128
 #define TX_QUEUE_SIZE 512
 
@@ -70,7 +72,11 @@ struct worker_data_s workerData[MAX_RX_PORTS][MAX_RX_QUEUES];
 
 static uint32_t number_of_ports = 1;
 static uint32_t number_of_queues = 4;
+#ifdef CONTIGUOUS_MEMORY_BATCHING
 static uint32_t parse_type = 1;
+#else
+static uint32_t parse_type = 2;
+#endif
 static uint32_t useSwStat = 1;
 static uint32_t dstIP[4] = {0};
 static uint32_t srcIP[4] = {0};
@@ -100,9 +106,11 @@ static inline int port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 	// Select Contiguous Memory Batching for this queue. //
 	///////////////////////////////////////////////////////
 	memset(&rx_conf, 0,sizeof(struct rte_eth_rxconf));
+#ifdef CONTIGUOUS_MEMORY_BATCHING
   if (parse_type != 2) {
     rx_conf.rxq_flags = ETH_RXQ_FLAGS_CMBATCH;  // Remove this line if contiguous memory batching
   }
+#endif
 																							// is not wanted for a queue
 
 	if (port >= rte_eth_dev_count())
@@ -147,9 +155,10 @@ static inline int port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 }
 
 /*
- * The lcore_worker. This is the threads that does the work, reading from a port 
+ * The lcore_worker. This is the threads that does the work, reading from a port
  * and a queue.
  */
+#ifdef CONTIGUOUS_MEMORY_BATCHING
 static int lcore_worker_batch_parse(void *p)
 {
 	struct rte_mbuf *bufs[BURST_SIZE];
@@ -198,12 +207,12 @@ static int lcore_worker_batch_parse(void *p)
         // PKT_BATCH is set. The mbuf hold a batch of packets
         //
         // mbuf->buf_addr: Pointer to the batch buffer
-        // 
+        //
         // mbuf->batch_nb_packet: The number of packets in a batch.
-        // 
-        // mbuf->ol_flags: (PKT_BATCH | CTRL_MBUF_FLAG) indicating that the 
+        //
+        // mbuf->ol_flags: (PKT_BATCH | CTRL_MBUF_FLAG) indicating that the
         //                 mbuf contains a batch of packets
-        // 
+        //
         // mbuf->data_off: Not used. Always 0
         //
         // mbuf->data_len: Length of the first packet in the batch buffer
@@ -215,22 +224,22 @@ static int lcore_worker_batch_parse(void *p)
         //
         // mbuf->port: DPDK port number.
         //
-        // mbuf->batch_release_cb: Pointer to callback function called 
+        // mbuf->batch_release_cb: Pointer to callback function called
         //                         when the batch buffer is released
         /////////////////////////////////////////////////////////////////
 
-				if (likely(mbuf->ol_flags & PKT_BATCH)) { 
+				if (likely(mbuf->ol_flags & PKT_BATCH)) {
 					/////////////////////////////////////////////////////////////////
 					// Browse batch of packets directly in the batch buffer
 					//
-					// Note: This batch of packets has to be released before a 
+					// Note: This batch of packets has to be released before a
 					//       new batch of packets is requested.
-					//       If a packet must be kept for later analysis, 
+					//       If a packet must be kept for later analysis,
 					//       it must be copied to a new mbuf with the
 					//       function: rte_pktmbuf_cmbatch_copy_packet_from_batch
 					/////////////////////////////////////////////////////////////////
 
-					struct rte_mbuf_batch_pkt_hdr *phdr; 
+					struct rte_mbuf_batch_pkt_hdr *phdr;
 
 					phdr = mbuf->buf_addr;  // Point to the beginning of the batch buffer
 					for (pack = 0; pack < mbuf->batch_nb_packet; pack++) {
@@ -260,13 +269,13 @@ static int lcore_worker_batch_parse(void *p)
 						/////////////////////////////////////////////////////////////////
 						//
 						// The following values are read from the packet descriptor.
-						// 
+						//
 						// mbuf->buf_addr: Pointer to the beginning of the batch buffer
 						//
 						// phdr->storedLength: The length of the packet including the descriptor
 						//
 						// phdr->wireLength: The length of the packet on the wire
-						// 
+						//
 						// phdr->rxPort: The port number, the packet is received on.
 						//               Note: The port number is the local port number of the adapter
 						//                     It is not the DPDK port number.
@@ -275,16 +284,16 @@ static int lcore_worker_batch_parse(void *p)
 						//
 						// phdr->timestamp: Packet timestamp
 						//
-						// phdr->offset0: Offset to the layer3 header. 
+						// phdr->offset0: Offset to the layer3 header.
 						//                Note: Can be changed in common_base
 						//
 						// phdr->color_hi: Packet hash value. if (phdr->descrLength == 20)
 						//
-						// ((phdr->color_hi << 14) & 0xFFFFC000) | phdr->color_lo: 
+						// ((phdr->color_hi << 14) & 0xFFFFC000) | phdr->color_lo:
 						//              Packet MARK value. if (phdr->descrLength == 22)
 						//
 						/////////////////////////////////////////////////////////////////
-				
+
 	#if 0 // Dump IPV4 header
 						{
 							#define IPV4_ADDRESS(a) ((const char *)&a)[0] & 0xFF, \
@@ -295,7 +304,7 @@ static int lcore_worker_batch_parse(void *p)
 							// Point to Layer3 using the data offset
 							struct ipv4_hdr *ipv4hdr = (struct ipv4_hdr *)((uint8_t *)phdr + phdr->descrLength + phdr->offset0);
 
-							printf("Src IP: %u.%u.%u.%u - Dst IP: %u.%u.%u.%u\n", 
+							printf("Src IP: %u.%u.%u.%u - Dst IP: %u.%u.%u.%u\n",
 										 IPV4_ADDRESS(ipv4hdr->src_addr),
 										 IPV4_ADDRESS(ipv4hdr->dst_addr));
 						}
@@ -316,11 +325,13 @@ static int lcore_worker_batch_parse(void *p)
   }
 	return 0;
 }
+#endif
 
 /*
- * The lcore_worker. This is the threads that does the work, reading from a port 
+ * The lcore_worker. This is the threads that does the work, reading from a port
  * and a queue.
  */
+#ifdef CONTIGUOUS_MEMORY_BATCHING
 static int lcore_worker_parse_helper(void *p)
 {
 	struct rte_mbuf *bufs[BURST_SIZE];
@@ -364,18 +375,18 @@ static int lcore_worker_parse_helper(void *p)
 
 			for (buf = 0; buf < nb_rx; buf++) {
 				struct rte_mbuf *mbuf = bufs[buf];
-				if (likely(mbuf->ol_flags & PKT_BATCH)) { 
+				if (likely(mbuf->ol_flags & PKT_BATCH)) {
 					/////////////////////////////////////////////////////////////////
 					//
 					// PKT_BATCH is set. The mbuf hold a batch of packets
 					//
 					// mbuf->buf_addr: Pointer to the batch buffer
-					// 
+					//
 					// mbuf->batch_nb_packet: The number of packets in a batch.
-					// 
-					// mbuf->ol_flags: (PKT_BATCH | CTRL_MBUF_FLAG) indicating that the 
+					//
+					// mbuf->ol_flags: (PKT_BATCH | CTRL_MBUF_FLAG) indicating that the
 					//                 mbuf contains a batch of packets
-					// 
+					//
 					// mbuf->data_off: Not used. Always 0
 					//
 					// mbuf->data_len: Length of the first packet in the batch buffer
@@ -387,20 +398,20 @@ static int lcore_worker_parse_helper(void *p)
 					//
 					// mbuf->port: DPDK port number.
 					//
-					// mbuf->batch_release_cb: Pointer to callback function called 
+					// mbuf->batch_release_cb: Pointer to callback function called
 					//                         when the batch buffer is released
 					/////////////////////////////////////////////////////////////////
 
 					/////////////////////////////////////////////////////////////////
 					// Using inline function to browse batch of packets
 					//
-					// Note: This batch of packets has to be released before a 
+					// Note: This batch of packets has to be released before a
 					//       new batch of packets is requested.
-					//       If a packet must be kept for later analysis, 
+					//       If a packet must be kept for later analysis,
 					//       it must be copied to a new mbuf with the
 					//       function: rte_pktmbuf_cmbatch_copy_packet_from_mbuf
 					/////////////////////////////////////////////////////////////////
-					
+
 					uint32_t offset;      // Offset in batch buffer
 					struct rte_mbuf m1;    // mbuf act as pointer to a single packet.
 
@@ -432,29 +443,29 @@ static int lcore_worker_parse_helper(void *p)
 
 						/////////////////////////////////////////////////////////////////
 						//
-						// The following values are copied to the local mbuf by the 
+						// The following values are copied to the local mbuf by the
 						// rte_pktmbuf_cmbatch_get_next_packet inline function
-						// 
+						//
 						// m.buf_addr: Pointer to the packet including the packet descriptor
-						// 
+						//
 						// m.port:     The port number, the packet is received on.
 						//             Note: The port number is the local port number of the adapter
 						//                   It is not the DPDK port number.
-						// 
+						//
 						// m.data_len: The length of the packet on the wire
-						// 
+						//
 						// m.pkt_len:  The captured length of the packet
-						// 
+						//
 						// m.data_off: Offset to the layer2 header. After the descriptor.
-						// 
+						//
 						// m.hash.rss: HASH value of the packet. if (m->ol_flags & PKT_RX_RSS_HASH)
-						// 
+						//
 						// m.hash.fdir.hi: The MARK value. if (m->ol_flags & (PKT_RX_FDIR_ID | PKT_RX_FDIR))
-						// 
+						//
 						// m.timestamp: Packet timestamp. if (m->ol_flags & PKT_RX_TIMESTAMP)
 						//
 						/////////////////////////////////////////////////////////////////
-												
+
 	#if 0 //  Dump IPV4 header
 					  {
 						  #define IPV4_ADDRESS(a) ((const char *)&a)[0] & 0xFF, \
@@ -463,9 +474,9 @@ static int lcore_worker_parse_helper(void *p)
 							  											((const char *)&a)[3] & 0xFF
 
 						  // Point to Layer3 using the data offset
-						  struct ipv4_hdr *ipv4hdr = (struct ipv4_hdr *)((uint8_t *)m.buf_addr + m.data_off + ETHER_HDR_LEN); 
+						  struct ipv4_hdr *ipv4hdr = (struct ipv4_hdr *)((uint8_t *)m.buf_addr + m.data_off + ETHER_HDR_LEN);
 
-						  printf("Src IP: %u.%u.%u.%u - Dst IP: %u.%u.%u.%u\n", 
+						  printf("Src IP: %u.%u.%u.%u - Dst IP: %u.%u.%u.%u\n",
 							  		 IPV4_ADDRESS(ipv4hdr->src_addr),
 						  			 IPV4_ADDRESS(ipv4hdr->dst_addr));
 					  }
@@ -483,10 +494,11 @@ static int lcore_worker_parse_helper(void *p)
   }
 	return 0;
 }
+#endif
 
 
 /*
- * The lcore_worker. This is the threads that does the work, reading from a port 
+ * The lcore_worker. This is the threads that does the work, reading from a port
  * and a queue.
  */
 static int lcore_worker_mbuf(void *p)
@@ -512,7 +524,7 @@ static int lcore_worker_mbuf(void *p)
 		printf("WARNING, port %u is on remote NUMA node to polling thread.\n\tPerformance will not be optimal.\n", data->port);
 	}
 
-	printf("Core %u numa %u capturing packets for port %d, Queue %d. Using normal mbufs\n", 
+	printf("Core %u numa %u capturing packets for port %d, Queue %d. Using normal mbufs\n",
 				 rte_lcore_id(), rte_lcore_to_socket_id(rte_lcore_id()), data->port, data->queue);
 
 	data->countOctets = 0;
@@ -535,7 +547,7 @@ static int lcore_worker_mbuf(void *p)
 				// PKT_BATCH is NOT set. Packet based RX (one packets per mbuf
 				/////////////////////////////////////////////////////////////////
 				/////////////////////////////////////////////////////////////////
-        
+
 #if 0 // Dump IPV4 header
 				{
 					#define IPV4_ADDRESS(a) ((const char *)&a)[0] & 0xFF, \
@@ -544,9 +556,9 @@ static int lcore_worker_mbuf(void *p)
 																	((const char *)&a)[3] & 0xFF
 
 					// Point to Layer3 using the data offset
-					struct ipv4_hdr *ipv4hdr = (struct ipv4_hdr *)((uint8_t *)mbuf->buf_addr + mbuf->data_off); 
+					struct ipv4_hdr *ipv4hdr = (struct ipv4_hdr *)((uint8_t *)mbuf->buf_addr + mbuf->data_off);
 
-					printf("Src IP: %u.%u.%u.%u - Dst IP: %u.%u.%u.%u\n", 
+					printf("Src IP: %u.%u.%u.%u - Dst IP: %u.%u.%u.%u\n",
 								 IPV4_ADDRESS(ipv4hdr->src_addr),
 								 IPV4_ADDRESS(ipv4hdr->dst_addr));
 				}
@@ -585,7 +597,7 @@ static void lcore_main(void)
 	uint j;
 
 	sleep(1);
-	printf("Core %u numa %u is handling %s statistics output\n", 
+	printf("Core %u numa %u is handling %s statistics output\n",
          rte_lcore_id(), rte_lcore_to_socket_id(rte_lcore_id()), useSwStat == 0?"hardware":"software");
 	for (j = 0; j < number_of_ports; j++) {
 		for (i = 0; i < number_of_queues; i++) {
@@ -652,7 +664,7 @@ static void lcore_main(void)
 }
 
 /*
- * Setup a rte flow filter 
+ * Setup a rte flow filter
  */
 static int SetupFilter(uint8_t portid, struct rte_flow_error *error)
 {
@@ -671,15 +683,15 @@ static int SetupFilter(uint8_t portid, struct rte_flow_error *error)
 
 	// Use a receive side scaling
 	struct rte_flow_action_rss *rss = rte_zmalloc(
-		"cmbatch", 
-		sizeof(struct rte_flow_action_rss) + sizeof(uint16_t) * number_of_queues, 
+		"cmbatch",
+		sizeof(struct rte_flow_action_rss) + sizeof(uint16_t) * number_of_queues,
 		0);
 
   if (!rss) {
 		printf("Memory allocation failure\n");
 		return -1;
   }
-  
+
 	struct rte_eth_rss_conf rss_conf;
 
 	// Use a single queue
@@ -760,7 +772,7 @@ static int SetupFilter(uint8_t portid, struct rte_flow_error *error)
 		rte_free(rss);
 	 	return -1;
 	}
-	
+
 	// Create the ret flow filter
 	flow = rte_flow_create(portid, &attr, pattern, actions, error);
 	if (flow == NULL) {
@@ -789,8 +801,10 @@ cmbatch_usage(const char *prgname)
 	       "  -p no_ports: Number of ports to use. Always starting with port 0.\n"
 	       "  -q queues_per_port: Number of queue per port \n"
 				 "  -t parse_type: Type of parsing done \n"
+#ifdef CONTIGUOUS_MEMORY_BATCHING
 				 "                 0: Parse packets directly from the batch buffer\n"
 				 "                 1: Parse packets using helper function\n"
+#endif
          "                 2: Normal mbuf\n"
 				 "  -s stat_type:  Type of statistic used\n"
 				 "                 0: Use hardware statistics\n"
@@ -848,7 +862,11 @@ cmbatch_parse_args(int argc, char **argv)
 
 		case 't':
 			parse_type = cmbatch_parse_value(optarg);
+#ifdef CONTIGUOUS_MEMORY_BATCHING
 			if (parse_type != 0 && parse_type != 1 && parse_type != 2) {
+#else
+        if (parse_type != 2) {
+#endif
 				printf("Invalid parse type selected\n");
 				cmbatch_usage(prgname);
 				return -1;
@@ -935,7 +953,7 @@ main(int argc, char *argv[])
 	if (number_of_ports > nb_ports) {
 		rte_exit(EXIT_FAILURE, "To many ports specified %u. Only %u present\n", number_of_ports, nb_ports);
 	}
-	
+
 	/* Creates a new mempool in memory to hold the mbufs. */
 	mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * number_of_ports, MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
 
@@ -969,13 +987,16 @@ main(int argc, char *argv[])
     workerData[portid][queue].port = portid;
     workerData[portid][queue].queue = queue;
     workerData[portid][queue].mbuf_pool = mbuf_pool;
+#ifdef CONTIGUOUS_MEMORY_BATCHING
     if (parse_type == 0) {
       rte_eal_remote_launch((lcore_function_t *)lcore_worker_parse_helper, (void *)&workerData[portid][queue], lcore_id);
     }
     else if (parse_type == 1) {
       rte_eal_remote_launch((lcore_function_t *)lcore_worker_batch_parse, (void *)&workerData[portid][queue], lcore_id);
     }
-    else if (parse_type == 2) {
+    else
+#endif
+    if (parse_type == 2) {
       rte_eal_remote_launch((lcore_function_t *)lcore_worker_mbuf, (void *)&workerData[portid][queue], lcore_id);
     }
     else {

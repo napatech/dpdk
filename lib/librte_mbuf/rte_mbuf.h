@@ -178,11 +178,14 @@ extern "C" {
 #define PKT_RX_QINQ          (1ULL << 20)
 
 /* add new RX flags here */
+
+#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
 /**
  * Napatech additions.
  */
 #define PKT_RX_HAS_HEADER    (1ULL << 30) /**< The packet has a RX header */
 #define PKT_BATCH            (1ULL << 31) /**< The mbuf contains a batch of packets */
+#endif
 
 /* add new TX flags here */
 
@@ -490,7 +493,9 @@ struct rte_mbuf {
 			};
 			uint32_t inner_l4_type:4; /**< Inner L4 type. */
 		};
+#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
 		uint32_t batch_nb_packet; /**< Number of contiguous packet in batch. When ol_flags has PKT_BATCH bit */
+#endif
 	};
 
 	uint32_t pkt_len;         /**< Total pkt len: sum of all segments. */
@@ -575,8 +580,10 @@ struct rte_mbuf {
 	/** Sequence number. See also rte_reorder_insert(). */
 	uint32_t seqn;
 
+#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
 	/** Contiguous Memory Batching callback. Called when releasing the mbuf. */
 	void (*cmbatch_release_cb)(struct rte_mbuf *m);
+#endif
 } __rte_cache_aligned;
 
 /**< Maximum number of nb_segs allowed. */
@@ -1208,7 +1215,9 @@ static inline void rte_pktmbuf_reset(struct rte_mbuf *m)
 	rte_pktmbuf_reset_headroom(m);
 
 	m->data_len = 0;
+#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
 	m->cmbatch_release_cb = NULL;
+#endif
 	__rte_mbuf_sanity_check(m, 1);
 }
 
@@ -1452,8 +1461,10 @@ rte_pktmbuf_free_seg(struct rte_mbuf *m)
 {
 	m = rte_pktmbuf_prefree_seg(m);
 	if (likely(m != NULL)) {
+#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
 		if ((m->ol_flags & PKT_BATCH) && m->cmbatch_release_cb)
 	    m->cmbatch_release_cb(m);
+#endif
 		rte_mbuf_raw_free(m);
 	}
 }
@@ -2003,6 +2014,7 @@ rte_pktmbuf_linearize(struct rte_mbuf *mbuf)
  */
 void rte_pktmbuf_dump(FILE *f, const struct rte_mbuf *m, unsigned dump_len);
 
+#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
 /***********************************************************************
        Napatech Additions to handle contiguous memory batching
  ***********************************************************************/
@@ -2225,7 +2237,7 @@ rte_pktmbuf_cmbatch_copy_packet_from_mbuf(struct rte_mbuf *mbuf,
 		rte_pktmbuf_cmbatch_copy_packet_from_batch(
 			(struct rte_mbuf_batch_pkt_hdr *)mbuf->buf_addr, mp);
 }
-
+#endif
 
 
 #ifdef __cplusplus

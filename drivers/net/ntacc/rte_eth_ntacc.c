@@ -183,6 +183,7 @@ static uint32_t _log_out_of_memory_errors(const char *func)
   return ENOMEM;
 }
 
+#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
 static void _seg_release_cb(struct rte_mbuf *mbuf)
 {
 	struct batch_ctrl *batchCtl = (struct batch_ctrl *)((u_char *)mbuf->userdata);
@@ -193,6 +194,7 @@ static void _seg_release_cb(struct rte_mbuf *mbuf)
 	/* swap poniter back */
 	mbuf->buf_addr = batchCtl->orig_buf_addr;
 }
+#endif
 
 
 static void _write_to_file(int fd, const char *buffer)
@@ -297,6 +299,7 @@ static uint16_t eth_ntacc_rx(void *queue,
     }
   }
 
+#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
   if (rx_q->cmbatch) {
     struct batch_ctrl *batchCtl;
     uint64_t countPackets;
@@ -349,7 +352,9 @@ static uint16_t eth_ntacc_rx(void *queue,
 #endif
     return num_rx;
   }
-  else {
+  else
+#endif
+  {
     NtDyn3Descr_t *dyn3;
     uint16_t i;
     uint16_t mbuf_len;
@@ -1147,7 +1152,11 @@ static int eth_rx_queue_setup(struct rte_eth_dev *dev,
                               uint16_t rx_queue_id,
                               uint16_t nb_rx_desc __rte_unused,
                               unsigned int socket_id __rte_unused,
+#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
                               const struct rte_eth_rxconf *rx_conf,
+#else
+                              const struct rte_eth_rxconf *rx_conf __rte_unused,
+#endif
                               struct rte_mempool *mb_pool)
 {
   struct rte_pktmbuf_pool_private *mbp_priv;
@@ -1160,10 +1169,12 @@ static int eth_rx_queue_setup(struct rte_eth_dev *dev,
   rx_q->local_port = internals->local_port;
   rx_q->tsMultiplier = internals->tsMultiplier;
 
+#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
   // Enable contiguous memory batching for this queue
   if (rx_conf->rxq_flags & ETH_RXQ_FLAGS_CMBATCH) {
     rx_q->cmbatch = 1;
   }
+#endif
 
   mbp_priv =  rte_mempool_get_priv(rx_q->mb_pool);
   rx_q->buf_size = (uint16_t) (mbp_priv->mbuf_data_room_size - RTE_PKTMBUF_HEADROOM);
