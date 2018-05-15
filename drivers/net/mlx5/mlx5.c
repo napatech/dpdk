@@ -733,6 +733,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		case PCI_DEVICE_ID_MELLANOX_CONNECTX5VF:
 		case PCI_DEVICE_ID_MELLANOX_CONNECTX5EX:
 		case PCI_DEVICE_ID_MELLANOX_CONNECTX5EXVF:
+		case PCI_DEVICE_ID_MELLANOX_CONNECTX5BF:
 			tunnel_en = 1;
 			break;
 		default:
@@ -1152,6 +1153,10 @@ static const struct rte_pci_id mlx5_pci_id_map[] = {
 	{
 		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
 			       PCI_DEVICE_ID_MELLANOX_CONNECTX5EXVF)
+	},
+	{
+		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
+			       PCI_DEVICE_ID_MELLANOX_CONNECTX5BF)
 	},
 	{
 		.vendor_id = 0
