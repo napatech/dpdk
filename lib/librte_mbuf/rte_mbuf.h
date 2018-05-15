@@ -178,10 +178,11 @@ extern "C" {
 #define PKT_RX_QINQ          (1ULL << 20)
 
 /* add new RX flags here */
-/**< The packet has a RX header */
-#define PKT_RX_HAS_HEADER    (1ULL << 42) 
-/**< The mbuf contains a batch of packets */
-#define PKT_BATCH            (1ULL << 43) 
+/**
+ * Napatech additions.
+ */
+#define PKT_RX_HAS_HEADER    (1ULL << 30) /**< The packet has a RX header */
+#define PKT_BATCH            (1ULL << 31) /**< The mbuf contains a batch of packets */
 
 /* add new TX flags here */
 
@@ -2002,7 +2003,7 @@ rte_pktmbuf_linearize(struct rte_mbuf *mbuf)
  */
 void rte_pktmbuf_dump(FILE *f, const struct rte_mbuf *m, unsigned dump_len);
 
-/*********************************************************************** 
+/***********************************************************************
        Napatech Additions to handle contiguous memory batching
  ***********************************************************************/
 
@@ -2038,8 +2039,8 @@ struct rte_mbuf_batch_pkt_hdr  {
  *   Number of bytes in returned packet incl, packet descriptor
  */
 static inline int
-rte_pktmbuf_cmbatch_get_next_packet(struct rte_mbuf *m_batch, 
-																	struct rte_mbuf *m, 
+rte_pktmbuf_cmbatch_get_next_packet(struct rte_mbuf *m_batch,
+																	struct rte_mbuf *m,
 																	uint32_t *offset)
 {
 	struct rte_mbuf_batch_pkt_hdr *phdr;    // Packet descriptor
@@ -2053,7 +2054,7 @@ rte_pktmbuf_cmbatch_get_next_packet(struct rte_mbuf *m_batch,
 
 		// Mark mbuf as a special mbuf. The mbuf is a control
 		// mbuf and the packet in this mbuf has a descriptor
-		// header. 
+		// header.
 		m->ol_flags = CTRL_MBUF_FLAG | PKT_RX_HAS_HEADER;
 	}
 
@@ -2101,9 +2102,9 @@ rte_pktmbuf_cmbatch_get_next_packet(struct rte_mbuf *m_batch,
 /**
  * Copy a packet from a batch buffer to a normal mbuf.
  *
- * This function will copy a packet from a batch buffer 
- * to a normal mbuf. The function will allocate the needed number of 
- * mbufs to hold the packet. 
+ * This function will copy a packet from a batch buffer
+ * to a normal mbuf. The function will allocate the needed number of
+ * mbufs to hold the packet.
  *
  * @param mbuf
  *   hdr: 	Pointer to the batch buffer
@@ -2136,12 +2137,12 @@ rte_pktmbuf_cmbatch_copy_packet_from_batch(struct rte_mbuf_batch_pkt_hdr *hdr,
 		mbuf->hash.fdir.hi = ((hdr->color_hi << 14) & 0xFFFFC000) | hdr->color_lo;
 		mbuf->ol_flags |= PKT_RX_FDIR_ID | PKT_RX_FDIR;
 	}
-	
+
 	// Copy the timestamp
 	mbuf->timestamp = hdr->timestamp;
 	mbuf->ol_flags |= PKT_RX_TIMESTAMP;
 
-	// Copy the port number. 
+	// Copy the port number.
 	// Note: This is the local adapter port number.
 	//       Not the DPDK port number as it is unknown here.
 	mbuf->port = hdr->rxPort;
@@ -2153,12 +2154,12 @@ rte_pktmbuf_cmbatch_copy_packet_from_batch(struct rte_mbuf_batch_pkt_hdr *hdr,
 	mbuf_len = rte_pktmbuf_tailroom(mbuf);
 
 	if (data_len <= mbuf_len) {
-		// Packet will fit in the mbuf, go ahead and copy 
+		// Packet will fit in the mbuf, go ahead and copy
 		mbuf->pkt_len = mbuf->data_len = data_len;
 		rte_memcpy((uint8_t *)mbuf->buf_addr + mbuf->data_off, (uint8_t *)hdr + hdr->descrLength, mbuf->data_len);
 	} else {
-		// Packet does not fit in the mbuf. The packets must be copied to a segmented mbuf ie. 
-		// chained mbufs. 
+		// Packet does not fit in the mbuf. The packets must be copied to a segmented mbuf ie.
+		// chained mbufs.
 		struct rte_mbuf *m;
 		const uint8_t *data;
 		uint16_t total_len = data_len;
@@ -2166,7 +2167,7 @@ rte_pktmbuf_cmbatch_copy_packet_from_batch(struct rte_mbuf_batch_pkt_hdr *hdr,
 		// pkt_len contains the complete packets size
 		mbuf->pkt_len = total_len;
 
-		// data_len contains the size of the part of the packets 
+		// data_len contains the size of the part of the packets
 		// contained in this mbuf
 		mbuf->data_len = mbuf_len;
 
@@ -2183,14 +2184,14 @@ rte_pktmbuf_cmbatch_copy_packet_from_batch(struct rte_mbuf_batch_pkt_hdr *hdr,
 				return NULL;
 
 			m = m->next;
-			// Copy next segment. 
+			// Copy next segment.
 			mbuf_len = RTE_MIN(rte_pktmbuf_tailroom(m), data_len);
 			rte_memcpy((uint8_t *)m->buf_addr + m->data_off, data, mbuf_len);
 
 			// pkt_len contains the complete packets size
 			m->pkt_len = total_len;
 
-			// data_len contains the size of the part of the packets 
+			// data_len contains the size of the part of the packets
 			// contained in this mbuf
 			m->data_len = mbuf_len;
 
@@ -2206,9 +2207,9 @@ rte_pktmbuf_cmbatch_copy_packet_from_batch(struct rte_mbuf_batch_pkt_hdr *hdr,
 /**
  * Copy a packet from a mbuf batch buffer to a normal mbuf.
  *
- * This function will copy a packet from a mbuf batch buffer 
- * to a normal mbuf. The function will allocate the needed number of 
- * mbufs to hold the packet. 
+ * This function will copy a packet from a mbuf batch buffer
+ * to a normal mbuf. The function will allocate the needed number of
+ * mbufs to hold the packet.
  *
  * @param mbuf
  *   hdr: 	Pointer to the batch buffer
@@ -2220,7 +2221,7 @@ static inline struct rte_mbuf *
 rte_pktmbuf_cmbatch_copy_packet_from_mbuf(struct rte_mbuf *mbuf,
                                         struct rte_mempool *mp)
 {
-	return 
+	return
 		rte_pktmbuf_cmbatch_copy_packet_from_batch(
 			(struct rte_mbuf_batch_pkt_hdr *)mbuf->buf_addr, mp);
 }

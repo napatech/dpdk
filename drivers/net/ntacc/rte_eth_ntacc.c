@@ -80,7 +80,7 @@ static struct {
    int32_t major;
    int32_t minor;
    int32_t patch;
-} supportedDriver = {3, 8, 1};
+} supportedDriver = {3, 7, 2};
 
 #define PCI_VENDOR_ID_NAPATECH 0x18F4
 #define PCI_DEVICE_ID_NT200A01 0x01A5
@@ -99,13 +99,13 @@ struct {
   uint32_t build:10;
 } supportedAdapters[NB_SUPPORTED_FPGAS] =
 {
-  { 200, 9500, 10, 7, 0 },
-  { 200, 9501, 10, 7, 0 },
-  { 200, 9502, 10, 7, 0 },
-  { 200, 9503, 10, 7, 0 },
-  { 200, 9505, 10, 8, 0 },
-  { 200, 9512, 10, 7, 0 },
-  { 200, 9515, 10, 7, 0 },
+  { 200, 9500, 9, 8, 0 },
+  { 200, 9501, 9, 8, 0 },
+  { 200, 9502, 9, 8, 0 },
+  { 200, 9503, 9, 8, 0 },
+  { 200, 9505, 9, 8, 0 },
+  { 200, 9512, 9, 8, 0 },
+  { 200, 9515, 9, 8, 0 },
   { 200, 9517, 9, 8, 0 },
   { 200, 9519, 10, 7, 0 },
 };
@@ -376,8 +376,10 @@ static uint16_t eth_ntacc_rx(void *queue,
         mbuf->ol_flags |= PKT_RX_FDIR_ID | PKT_RX_FDIR;
       }
 
-      mbuf->timestamp = dyn3->timestamp;
-      mbuf->ol_flags |= PKT_RX_TIMESTAMP;
+      if (rx_q->tsMultiplier) {
+        mbuf->timestamp = dyn3->timestamp * rx_q->tsMultiplier;
+        mbuf->ol_flags |= PKT_RX_TIMESTAMP;
+      }
       mbuf->port = rx_q->in_port + (dyn3->rxPort - rx_q->local_port);
 
       data_len = (uint16_t)(dyn3->capLength - dyn3->descrLength - 4);
@@ -1156,6 +1158,7 @@ static int eth_rx_queue_setup(struct rte_eth_dev *dev,
   dev->data->rx_queues[rx_queue_id] = rx_q;
   rx_q->in_port = dev->data->port_id;
   rx_q->local_port = internals->local_port;
+  rx_q->tsMultiplier = internals->tsMultiplier;
 
   // Enable contiguous memory batching for this queue
   if (rx_conf->rxq_flags & ETH_RXQ_FLAGS_CMBATCH) {
@@ -2077,9 +2080,9 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   version.patch = pInfo->u.system.data.version.patch;
 
   // Check that the driver is supported
-  if (supportedDriver.major != version.major ||
-      supportedDriver.minor != version.minor) {
-    PMD_NTACC_LOG(ERR, "ERROR: NT Driver version %d.%d.%d is not supported. The version must be %d.%d.%d.\n",
+  if (((supportedDriver.major * 100) + supportedDriver.minor)  >
+      ((version.major * 100) + version.minor)) {
+    PMD_NTACC_LOG(ERR, "ERROR: NT Driver version %d.%d.%d is not supported. The version must be %d.%d.%d or newer.\n",
             version.major, version.minor, version.patch,
             supportedDriver.major, supportedDriver.minor, supportedDriver.patch);
     iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
@@ -2135,8 +2138,8 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     for (i = 0; i < NB_SUPPORTED_FPGAS; i++) {
       if (supportedAdapters[i].item == pInfo->u.port_v7.data.adapterInfo.fpgaid.s.item &&
           supportedAdapters[i].product == pInfo->u.port_v7.data.adapterInfo.fpgaid.s.product) {
-        if (supportedAdapters[i].ver != pInfo->u.port_v7.data.adapterInfo.fpgaid.s.ver ||
-            supportedAdapters[i].rev != pInfo->u.port_v7.data.adapterInfo.fpgaid.s.rev) {
+        if (((supportedAdapters[i].ver * 100) + supportedAdapters[i].rev) >
+            ((pInfo->u.port_v7.data.adapterInfo.fpgaid.s.ver * 100) + pInfo->u.port_v7.data.adapterInfo.fpgaid.s.rev)) {
           PMD_NTACC_LOG(ERR, "ERROR: NT adapter firmware %03d-%04d-%02d-%02d-%02d is not supported. The firmware must be %03d-%04d-%02d-%02d-%02d.\n",
                   pInfo->u.port_v7.data.adapterInfo.fpgaid.s.item,
                   pInfo->u.port_v7.data.adapterInfo.fpgaid.s.product,
@@ -2217,6 +2220,17 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     internals->local_port_offset = offset;
     internals->symHashMode = SYM_HASH_ENA_PER_PORT;
     internals->fpgaid.value = pInfo->u.port_v7.data.adapterInfo.fpgaid.value;
+
+    // Check timestamp format
+    if (pInfo->u.port_v7.data.adapterInfo.timestampType == NT_TIMESTAMP_TYPE_NATIVE_UNIX) {
+      internals->tsMultiplier = 10;
+    }
+    else if (pInfo->u.port_v7.data.adapterInfo.timestampType == NT_TIMESTAMP_TYPE_UNIX_NANOTIME) {
+      internals->tsMultiplier = 1;
+    }
+    else {
+      internals->tsMultiplier = 0;
+    }
 
     for (i=0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
       internals->rxq[i].stream_id = STREAMIDS_PER_PORT * internals->port + i;
@@ -2463,7 +2477,7 @@ static int rte_pmd_ntacc_dev_probe(struct rte_pci_driver *drv __rte_unused, stru
   int ret = 0;
   struct rte_kvargs *kvlist;
   unsigned int i;
-  uint32_t mask=0xF;
+  uint32_t mask=0xFF;
 
   char ntplStr[MAX_NTPL_NAME] = { 0 };
 
