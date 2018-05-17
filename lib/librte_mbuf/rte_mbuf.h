@@ -789,8 +789,9 @@ rte_mbuf_refcnt_update(struct rte_mbuf *m, int16_t value)
 	 * reference counter can occur.
 	 */
 	if (likely(rte_mbuf_refcnt_read(m) == 1)) {
-		rte_mbuf_refcnt_set(m, 1 + value);
-		return 1 + value;
+		++value;
+		rte_mbuf_refcnt_set(m, value);
+		return value;
 	}
 
 	return __rte_mbuf_refcnt_update(m, value);
