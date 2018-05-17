@@ -2535,10 +2535,8 @@ bond_ethdev_lsc_event_callback(uint16_t port_id, enum rte_eth_event_type type,
 
 	rte_eth_link_get_nowait(port_id, &link);
 	if (link.link_status) {
-		if (active_pos < internals->active_slave_count) {
-			rte_spinlock_unlock(&internals->lsc_lock);
-			return rc;
-		}
+		if (active_pos < internals->active_slave_count)
+			goto link_update;
 
 		/* if no active slave ports then set this port to be primary port */
 		if (internals->active_slave_count < 1) {
@@ -2557,10 +2555,8 @@ bond_ethdev_lsc_event_callback(uint16_t port_id, enum rte_eth_event_type type,
 				internals->primary_port == port_id)
 			bond_ethdev_primary_set(internals, port_id);
 	} else {
-		if (active_pos == internals->active_slave_count) {
-			rte_spinlock_unlock(&internals->lsc_lock);
-			return rc;
-		}
+		if (active_pos == internals->active_slave_count)
+			goto link_update;
 
 		/* Remove from active slave list */
 		deactivate_slave(bonded_eth_dev, port_id);
@@ -2579,6 +2575,7 @@ bond_ethdev_lsc_event_callback(uint16_t port_id, enum rte_eth_event_type type,
 		}
 	}
 
+link_update:
 	/**
 	 * Update bonded device link properties after any change to active
 	 * slaves
@@ -2616,7 +2613,7 @@ bond_ethdev_lsc_event_callback(uint16_t port_id, enum rte_eth_event_type type,
 
 	rte_spinlock_unlock(&internals->lsc_lock);
 
-	return 0;
+	return rc;
 }
 
 static int
