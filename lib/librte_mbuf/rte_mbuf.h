@@ -1328,7 +1328,7 @@ static inline void rte_pktmbuf_detach(struct rte_mbuf *m)
 	uint32_t mbuf_size, buf_len, priv_size;
 
 	priv_size = rte_pktmbuf_priv_size(mp);
-	mbuf_size = sizeof(struct rte_mbuf) + priv_size;
+	mbuf_size = (uint32_t)(sizeof(struct rte_mbuf) + priv_size);
 	buf_len = rte_pktmbuf_data_room_size(mp);
 
 	m->priv_size = priv_size;
