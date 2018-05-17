@@ -107,7 +107,7 @@ do_flush_shadow_used_ring(struct virtio_net *dev, struct vhost_virtqueue *vq,
 	rte_memcpy(&vq->used->ring[to],
 			&vq->shadow_used_ring[from],
 			size * sizeof(struct vring_used_elem));
-	vhost_log_used_vring(dev, vq,
+	vhost_log_cache_used_vring(dev, vq,
 			offsetof(struct vring_used, ring[to]),
 			size * sizeof(struct vring_used_elem));
 }
@@ -135,6 +135,8 @@ flush_shadow_used_ring(struct virtio_net *dev, struct vhost_virtqueue *vq)
 
 	rte_smp_wmb();
 
+	vhost_log_cache_sync(dev, vq);
+
 	*(volatile uint16_t *)&vq->used->idx += vq->shadow_used_idx;
 	vhost_log_used_vring(dev, vq, offsetof(struct vring_used, idx),
 		sizeof(vq->used->idx));
@@ -159,7 +161,7 @@ do_data_copy_enqueue(struct virtio_net *dev, struct vhost_virtqueue *vq)
 
 	for (i = 0; i < count; i++) {
 		rte_memcpy(elem[i].dst, elem[i].src, elem[i].len);
-		vhost_log_write(dev, elem[i].log_addr, elem[i].len);
+		vhost_log_cache_write(dev, vq, elem[i].log_addr, elem[i].len);
 		PRINT_PACKET(dev, (uintptr_t)elem[i].dst, elem[i].len, 0);
 	}
 }
@@ -275,7 +277,7 @@ copy_mbuf_to_desc(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		virtio_enqueue_offload(m,
 				(struct virtio_net_hdr *)(uintptr_t)desc_addr);
 		PRINT_PACKET(dev, (uintptr_t)desc_addr, dev->vhost_hlen, 0);
-		vhost_log_write(dev, desc_gaddr, dev->vhost_hlen);
+		vhost_log_cache_write(dev, vq, desc_gaddr, dev->vhost_hlen);
 	} else {
 		struct virtio_net_hdr vnet_hdr;
 		uint64_t remain = dev->vhost_hlen;
@@ -298,7 +300,7 @@ copy_mbuf_to_desc(struct virtio_net *dev, struct vhost_virtqueue *vq,
 					(void *)(uintptr_t)src, len);
 
 			PRINT_PACKET(dev, (uintptr_t)dst, (uint32_t)len, 0);
-			vhost_log_write(dev, guest_addr, len);
+			vhost_log_cache_write(dev, vq, guest_addr, len);
 			remain -= len;
 			guest_addr += len;
 			dst += len;
@@ -379,7 +381,8 @@ copy_mbuf_to_desc(struct virtio_net *dev, struct vhost_virtqueue *vq,
 							desc_offset)),
 				rte_pktmbuf_mtod_offset(m, void *, mbuf_offset),
 				cpy_len);
-			vhost_log_write(dev, desc_gaddr + desc_offset, cpy_len);
+			vhost_log_cache_write(dev, vq, desc_gaddr + desc_offset,
+					cpy_len);
 			PRINT_PACKET(dev, (uintptr_t)(desc_addr + desc_offset),
 				     cpy_len, 0);
 		} else {
@@ -468,7 +471,7 @@ virtio_dev_rx(struct virtio_net *dev, uint16_t queue_id,
 		vq->used->ring[used_idx].id = desc_indexes[i];
 		vq->used->ring[used_idx].len = pkts[i]->pkt_len +
 					       dev->vhost_hlen;
-		vhost_log_used_vring(dev, vq,
+		vhost_log_cache_used_vring(dev, vq,
 			offsetof(struct vring_used, ring[used_idx]),
 			sizeof(vq->used->ring[used_idx]));
 	}
@@ -527,6 +530,8 @@ virtio_dev_rx(struct virtio_net *dev, uint16_t queue_id,
 	do_data_copy_enqueue(dev, vq);
 
 	rte_smp_wmb();
+
+	vhost_log_cache_sync(dev, vq);
 
 	*(volatile uint16_t *)&vq->used->idx += count;
 	vq->last_used_idx += count;
@@ -797,7 +802,8 @@ copy_mbuf_to_desc_mergeable(struct virtio_net *dev, struct vhost_virtqueue *vq,
 
 					PRINT_PACKET(dev, (uintptr_t)dst,
 							(uint32_t)len, 0);
-					vhost_log_write(dev, guest_addr, len);
+					vhost_log_cache_write(dev, vq,
+							guest_addr, len);
 
 					remain -= len;
 					guest_addr += len;
@@ -806,7 +812,7 @@ copy_mbuf_to_desc_mergeable(struct virtio_net *dev, struct vhost_virtqueue *vq,
 			} else {
 				PRINT_PACKET(dev, (uintptr_t)hdr_addr,
 						dev->vhost_hlen, 0);
-				vhost_log_write(dev, hdr_phys_addr,
+				vhost_log_cache_write(dev, vq, hdr_phys_addr,
 						dev->vhost_hlen);
 			}
 
@@ -820,7 +826,8 @@ copy_mbuf_to_desc_mergeable(struct virtio_net *dev, struct vhost_virtqueue *vq,
 							desc_offset)),
 				rte_pktmbuf_mtod_offset(m, void *, mbuf_offset),
 				cpy_len);
-			vhost_log_write(dev, desc_gaddr + desc_offset, cpy_len);
+			vhost_log_cache_write(dev, vq, desc_gaddr + desc_offset,
+					cpy_len);
 			PRINT_PACKET(dev, (uintptr_t)(desc_addr + desc_offset),
 				cpy_len, 0);
 		} else {
@@ -1384,7 +1391,7 @@ update_used_ring(struct virtio_net *dev, struct vhost_virtqueue *vq,
 {
 	vq->used->ring[used_idx].id  = desc_idx;
 	vq->used->ring[used_idx].len = 0;
-	vhost_log_used_vring(dev, vq,
+	vhost_log_cache_used_vring(dev, vq,
 			offsetof(struct vring_used, ring[used_idx]),
 			sizeof(vq->used->ring[used_idx]));
 }
@@ -1398,6 +1405,8 @@ update_used_idx(struct virtio_net *dev, struct vhost_virtqueue *vq,
 
 	rte_smp_wmb();
 	rte_smp_rmb();
+
+	vhost_log_cache_sync(dev, vq);
 
 	vq->used->idx += count;
 	vhost_log_used_vring(dev, vq, offsetof(struct vring_used, idx),
