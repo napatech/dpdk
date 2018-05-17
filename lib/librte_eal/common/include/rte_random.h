@@ -60,7 +60,7 @@ extern "C" {
 static inline void
 rte_srand(uint64_t seedval)
 {
-	srand48((long unsigned int)seedval);
+	srand48((long)seedval);
 }
 
 /**
@@ -77,9 +77,9 @@ static inline uint64_t
 rte_rand(void)
 {
 	uint64_t val;
-	val = lrand48();
+	val = (uint64_t)lrand48();
 	val <<= 32;
-	val += lrand48();
+	val += (uint64_t)lrand48();
 	return val;
 }
 
