@@ -136,6 +136,7 @@ int (*_NT_NetTxRead)(NtNetStreamTx_t hStream, NtNetTx_t *cmd);
 int (*_NT_StatClose)(NtStatStream_t);
 int (*_NT_StatOpen)(NtStatStream_t *, const char *);
 int (*_NT_StatRead)(NtStatStream_t, NtStatistics_t *);
+int (*_NT_NetRxRead)(NtNetStreamRx_t, NtNetRx_t *);
 
 static int _dev_flow_flush(struct rte_eth_dev *dev, struct rte_flow_error *error __rte_unused);
 static int eth_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id);
@@ -830,6 +831,7 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
       }
       if (rx_q[queue].pNetRx) {
           (void)(*_NT_NetRxClose)(rx_q[queue].pNetRx);
+          rx_q[queue].pNetRx = NULL;
       }
       eth_rx_queue_stop(dev, queue);
     }
@@ -1186,9 +1188,7 @@ static int eth_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 {
   struct pmd_internals *internals = dev->data->dev_private;
   char ntpl_buf[50];
-  snprintf(ntpl_buf, sizeof(ntpl_buf),
-    "Setup[State=Active] = StreamId == %d",
-    internals->rxq[rx_queue_id].stream_id);
+  snprintf(ntpl_buf, sizeof(ntpl_buf), "Setup[State=Active] = StreamId == %d", internals->rxq[rx_queue_id].stream_id);
   DoNtpl(ntpl_buf, NULL, internals);
   dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
   return 0;
@@ -1198,9 +1198,7 @@ static int eth_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 {
   struct pmd_internals *internals = dev->data->dev_private;
   char ntpl_buf[50];
-  snprintf(ntpl_buf, sizeof(ntpl_buf),
-    "Setup[State=InActive] = StreamId == %d",
-    internals->rxq[rx_queue_id].stream_id);
+  snprintf(ntpl_buf, sizeof(ntpl_buf), "Setup[State=InActive] = StreamId == %d", internals->rxq[rx_queue_id].stream_id);
   DoNtpl(ntpl_buf, NULL, internals);
   dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
   return 0;
@@ -1807,17 +1805,61 @@ static int _hash_filter_ctrl(struct rte_eth_dev *dev,
   return ret;
 }
 
+static unsigned int _checkHostbuffers(struct rte_eth_dev *dev, uint8_t queue)
+{
+  int status;
+  struct pmd_internals *internals = dev->data->dev_private;
+  struct ntacc_rx_queue *rx_q;
+  NtNetRx_t rxInfo;
+  NtNetBuf_t pSeg;
+  rx_q = &internals->rxq[queue];
+
+  PMD_NTACC_LOG(DEBUG, "Get dummy segment: Queue %u streamID %u\n", queue, rx_q->stream_id);
+  status = (*_NT_NetRxGet)(rx_q->pNetRx, &pSeg, 1000);
+  if (status == NT_SUCCESS) {
+    PMD_NTACC_LOG(DEBUG, "Discard dummy segment: Queue %u streamID %u\n", queue, rx_q->stream_id);
+    // We got a segment of data. Discard it and release the segment again
+    (*_NT_NetRxRelease)(rx_q->pNetRx, pSeg);
+  }
+
+  rxInfo.cmd = NT_NETRX_READ_CMD_GET_HB_INFO;
+  status = (*_NT_NetRxRead)(rx_q->pNetRx, &rxInfo);
+  if (status != NT_SUCCESS) {
+    PMD_NTACC_LOG(DEBUG, "Failed to run RxRead\n");
+  }
+  PMD_NTACC_LOG(DEBUG, "Host buffers assigned %u: %u, %u\n", queue, rxInfo.u.hbInfo.numAddedHostBuffers, rxInfo.u.hbInfo.numAssignedHostBuffers);
+
+  return rxInfo.u.hbInfo.numAssignedHostBuffers;
+}
+
 static int _dev_flow_isolate(struct rte_eth_dev *dev,
                              int set,
                              struct rte_flow_error *error __rte_unused)
 {
   uint32_t ntplID;
   struct pmd_internals *internals = dev->data->dev_private;
-  int status;
   int i;
+  int counter;
+  bool found;
+  unsigned int assignedHostbuffers[RTE_ETHDEV_QUEUE_STAT_CNTRS];
 
   if (set == 1 && internals->defaultFlow) {
     char ntpl_buf[21];
+
+    // Check that the hostbuffers are assigned and ready
+    counter = 0;
+    found = false;
+    while (counter < 10 && found == false) {
+      for (i = 0; i < internals->defaultFlow->nb_queues; i++) {
+        assignedHostbuffers[i] = _checkHostbuffers(dev, i);
+        if (assignedHostbuffers[i] != 0) {
+          found = true;
+        }
+        counter++;
+      }
+    }
+
+    // Delete the filter
     rte_spinlock_lock(&internals->lock);
     while (!LIST_EMPTY(&internals->defaultFlow->ntpl_id)) {
       struct filter_flow *id;
@@ -1830,19 +1872,18 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
     }
     rte_spinlock_unlock(&internals->lock);
 
-    // Call RxGet in order to activate the delete of the default filter
-    for (i = 0; i < internals->defaultFlow->nb_queues; i++) {
-      NtNetBuf_t pSeg;
-      struct ntacc_rx_queue *rx_q;
-      rx_q = &internals->rxq[internals->defaultFlow->list_queues[i]];
-      PMD_NTACC_LOG(DEBUG, "Get dummy segment: Queue %u streamID %u\n", internals->defaultFlow->list_queues[i], rx_q->stream_id);
-      status = (*_NT_NetRxGet)(rx_q->pNetRx, &pSeg, 0);
-      if (status == NT_SUCCESS) {
-        PMD_NTACC_LOG(DEBUG, "Discard dummy segment: Queue %u streamID %u\n", internals->defaultFlow->list_queues[i], rx_q->stream_id);
-        // We got a segment of data. Discard it and release the segment again
-        (*_NT_NetRxRelease)(rx_q->pNetRx, pSeg);
+    // Check that the hostbuffers are deleted/changed
+    counter = 0;
+    found = false;
+    while (counter < 10 && found == false) {
+      for (i = 0; i < internals->defaultFlow->nb_queues; i++) {
+        if (_checkHostbuffers(dev, i) != assignedHostbuffers[i]) {
+          found = true;
+        }
+        counter++;
       }
     }
+
     rte_spinlock_lock(&internals->lock);
     rte_free(internals->defaultFlow);
     internals->defaultFlow = NULL;
@@ -1894,6 +1935,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       else {
         // Set the stream IDs
         CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, 1, list_queues);
+        nb_queues = 1;
       }
 
       // Set the port number
@@ -2477,6 +2519,11 @@ static int _nt_lib_open(void)
   _NT_NetTxGet = dlsym(_libnt, "NT_NetTxGet");
   if (_NT_NetTxGet == NULL) {
     fprintf(stderr, "Failed to find \"NT_NetTxGet\" in %s\n", path);
+    return -1;
+  }
+  _NT_NetRxRead = dlsym(_libnt, "NT_NetRxRead");
+  if (_NT_NetRxRead == NULL) {
+    fprintf(stderr, "Failed to find \"NT_NetRxRead\" in %s\n", path);
     return -1;
   }
 
