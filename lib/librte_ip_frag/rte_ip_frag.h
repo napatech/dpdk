@@ -48,7 +48,6 @@ extern "C" {
 #include <stdint.h>
 #include <stdio.h>
 
-#include <rte_config.h>
 #include <rte_malloc.h>
 #include <rte_memory.h>
 #include <rte_ip.h>

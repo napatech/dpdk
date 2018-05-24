@@ -79,7 +79,13 @@ enum {
   SYM_HASH_ENA_PER_PORT,
 };
 
+#define DIRECT_RX_RING_CONTROL
 struct ntacc_rx_queue {
+#ifdef DIRECT_RX_RING_CONTROL
+  uint64_t offW;
+  uint64_t offR;
+  struct NtNetRxHbRing_s ringControl;
+#endif
   NtNetBuf_t             pSeg;    /* The current segment we are working with */
   NtNetStreamRx_t        pNetRx;
   struct rte_mempool    *mb_pool;
@@ -100,7 +106,11 @@ struct ntacc_rx_queue {
   int                    enabled;
 } __rte_cache_aligned;
 
+#define DIRECT_TX_RING_CONTROL
 struct ntacc_tx_queue {
+#ifdef DIRECT_TX_RING_CONTROL
+  struct NtNetTxHbRing_s ringControl;
+#endif
   NtNetStreamTx_t        pNetTx;
 #ifdef USE_SW_STAT
   volatile uint64_t      tx_pkts;
@@ -201,10 +211,13 @@ struct batch_ctrl {
 	NtNetBuf_t pSeg;
 };
 
-int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo, struct pmd_internals *internals);
+int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *internals);
 
-#define PMD_NTACC_LOG(level, fmt, args...) rte_log(RTE_LOG_ ## level, RTE_LOGTYPE_PMD, \
+extern int ntacc_logtype;
+
+#define PMD_NTACC_LOG(level, fmt, args...) rte_log(RTE_LOG_ ## level, ntacc_logtype, \
 		                                               "%s: " fmt , __func__, ##args)
+
 #endif
 
 

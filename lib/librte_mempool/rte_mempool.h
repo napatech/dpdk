@@ -69,7 +69,6 @@
 #include <inttypes.h>
 #include <sys/queue.h>
 
-#include <rte_config.h>
 #include <rte_spinlock.h>
 #include <rte_log.h>
 #include <rte_debug.h>

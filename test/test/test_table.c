@@ -84,14 +84,6 @@ uint64_t pipeline_test_hash(void *key,
 }
 
 static void
-app_free_resources(void) {
-	int i;
-	for (i = 0; i < N_PORTS; i++)
-		rte_ring_free(rings_rx[i]);
-	rte_mempool_free(pool);
-}
-
-static void
 app_init_mbuf_pools(void)
 {
 	/* Init the buffer pool */
@@ -150,20 +142,18 @@ app_init_rings(void)
 static int
 test_table(void)
 {
-	int status, ret;
+	int status, failures;
 	unsigned i;
 
-	ret = TEST_SUCCESS;
+	failures = 0;
 
 	app_init_rings();
 	app_init_mbuf_pools();
 
 	printf("\n\n\n\n************Pipeline tests************\n");
 
-	if (test_table_pipeline() < 0) {
-		ret = TEST_FAILED;
-		goto end;
-	}
+	if (test_table_pipeline() < 0)
+		return -1;
 
 	printf("\n\n\n\n************Port tests************\n");
 	for (i = 0; i < n_port_tests; i++) {
@@ -171,8 +161,8 @@ test_table(void)
 		if (status < 0) {
 			printf("\nPort test number %d failed (%d).\n", i,
 				status);
-			ret = TEST_FAILED;
-			goto end;
+			failures++;
+			return -1;
 		}
 	}
 
@@ -182,8 +172,8 @@ test_table(void)
 		if (status < 0) {
 			printf("\nTable test number %d failed (%d).\n", i,
 				status);
-			ret = TEST_FAILED;
-			goto end;
+			failures++;
+			return -1;
 		}
 	}
 
@@ -193,23 +183,21 @@ test_table(void)
 		if (status < 0) {
 			printf("\nCombined table test number %d failed with "
 				"reason number %d.\n", i, status);
-			ret = TEST_FAILED;
-			goto end;
+			failures++;
+			return -1;
 		}
 	}
 
+	if (failures)
+		return -1;
+
 #ifdef RTE_LIBRTE_ACL
 	printf("\n\n\n\n************ACL tests************\n");
-	if (test_table_acl() < 0) {
-		ret = TEST_FAILED;
-		goto end;
-	}
+	if (test_table_acl() < 0)
+		return -1;
 #endif
 
-end:
-	app_free_resources();
-
-	return ret;
+	return 0;
 }
 
 REGISTER_TEST_COMMAND(table_autotest, test_table);

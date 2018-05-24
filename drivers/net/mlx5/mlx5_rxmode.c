@@ -60,6 +60,8 @@
 void
 mlx5_promiscuous_enable(struct rte_eth_dev *dev)
 {
+	if (mlx5_is_secondary())
+		return;
 	dev->data->promiscuous = 1;
 	mlx5_traffic_restart(dev);
 }
@@ -73,6 +75,8 @@ mlx5_promiscuous_enable(struct rte_eth_dev *dev)
 void
 mlx5_promiscuous_disable(struct rte_eth_dev *dev)
 {
+	if (mlx5_is_secondary())
+		return;
 	dev->data->promiscuous = 0;
 	mlx5_traffic_restart(dev);
 }
@@ -86,6 +90,8 @@ mlx5_promiscuous_disable(struct rte_eth_dev *dev)
 void
 mlx5_allmulticast_enable(struct rte_eth_dev *dev)
 {
+	if (mlx5_is_secondary())
+		return;
 	dev->data->all_multicast = 1;
 	mlx5_traffic_restart(dev);
 }
@@ -99,6 +105,8 @@ mlx5_allmulticast_enable(struct rte_eth_dev *dev)
 void
 mlx5_allmulticast_disable(struct rte_eth_dev *dev)
 {
+	if (mlx5_is_secondary())
+		return;
 	dev->data->all_multicast = 0;
 	mlx5_traffic_restart(dev);
 }

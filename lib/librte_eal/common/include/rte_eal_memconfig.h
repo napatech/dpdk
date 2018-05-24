@@ -34,7 +34,6 @@
 #ifndef _RTE_EAL_MEMCONFIG_H_
 #define _RTE_EAL_MEMCONFIG_H_
 
-#include <rte_config.h>
 #include <rte_tailq.h>
 #include <rte_memory.h>
 #include <rte_memzone.h>

@@ -169,13 +169,9 @@ enum index {
 	ITEM_MPLS_LABEL,
 	ITEM_GRE,
 	ITEM_GRE_PROTO,
-	ITEM_GRE_VERSION,
-	ITEM_IP_IN_IP,
-	ITEM_IP_IN_IP_DUMMY,
 	ITEM_FUZZY,
 	ITEM_FUZZY_THRESH,
 	ITEM_GTP,
-  ITEM_GTP_VERSION,
 	ITEM_GTP_TEID,
 	ITEM_GTPC,
 	ITEM_GTPU,
@@ -460,7 +456,6 @@ static const enum index next_item[] = {
 	ITEM_NVGRE,
 	ITEM_MPLS,
 	ITEM_GRE,
-	ITEM_IP_IN_IP,
 	ITEM_FUZZY,
 	ITEM_GTP,
 	ITEM_GTPC,
@@ -596,22 +591,14 @@ static const enum index item_mpls[] = {
 	ZERO,
 };
 
-static const enum index item_ip_in_ip[] = {
-	ITEM_IP_IN_IP_DUMMY,
-	ITEM_NEXT,
-	ZERO,
-};
-
 static const enum index item_gre[] = {
-	ITEM_GRE_VERSION,
 	ITEM_GRE_PROTO,
 	ITEM_NEXT,
 	ZERO,
 };
 
 static const enum index item_gtp[] = {
-  ITEM_GTP_VERSION,
-  ITEM_GTP_TEID,
+	ITEM_GTP_TEID,
 	ITEM_NEXT,
 	ZERO,
 };
@@ -1427,20 +1414,6 @@ static const struct token token_list[] = {
 						  label_tc_s,
 						  "\xff\xff\xf0")),
 	},
-	[ITEM_IP_IN_IP] = {
-		.name = "ipinip",
-		.help = "match IPinIP header",
-		.priv = PRIV_ITEM(IPinIP, sizeof(struct rte_flow_item_ip_in_ip)),
-		.next = NEXT(item_ip_in_ip),
-		.call = parse_vc,
-	},
-	[ITEM_IP_IN_IP_DUMMY] = {
-		.name = "dummy",
-		.help = "Dummy - not used",
-		.next = NEXT(item_ip_in_ip, NEXT_ENTRY(UNSIGNED), item_param),
-		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_ip_in_ip,
-							 dummy)),
-	},
 	[ITEM_GRE] = {
 		.name = "gre",
 		.help = "match GRE header",
@@ -1454,13 +1427,6 @@ static const struct token token_list[] = {
 		.next = NEXT(item_gre, NEXT_ENTRY(UNSIGNED), item_param),
 		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_gre,
 					     protocol)),
-	},
-	[ITEM_GRE_VERSION] = {
-		.name = "version",
-		.help = "GRE version",
-		.next = NEXT(item_gre, NEXT_ENTRY(UNSIGNED), item_param),
-		.args = ARGS(ARGS_ENTRY_MASK_HTON(struct rte_flow_item_gre,
-							 c_rsvd0_ver, "\x7")),
 	},
 	[ITEM_FUZZY] = {
 		.name = "fuzzy",
@@ -1484,13 +1450,6 @@ static const struct token token_list[] = {
 		.next = NEXT(item_gtp),
 		.call = parse_vc,
 	},
-  [ITEM_GTP_VERSION] = {
-    .name = "version",
-    .help = "GTPU version",
-    .next = NEXT(item_gtp, NEXT_ENTRY(UNSIGNED), item_param),
-    .args = ARGS(ARGS_ENTRY_MASK_HTON(struct rte_flow_item_gtp,
-               v_pt_rsv_flags, "\xE0")),
-  },
 	[ITEM_GTP_TEID] = {
 		.name = "teid",
 		.help = "tunnel endpoint identifier",

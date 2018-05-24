@@ -66,7 +66,6 @@ extern "C" {
 
 #include <string.h>
 #include <rte_common.h>
-#include <rte_config.h>
 #include <rte_debug.h>
 #include <rte_memory.h>
 #include <rte_branch_prediction.h>

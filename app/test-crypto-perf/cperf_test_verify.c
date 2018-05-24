@@ -127,8 +127,8 @@ cperf_verify_op(struct rte_crypto_op *op,
 	uint32_t len;
 	uint16_t nb_segs;
 	uint8_t *data;
-	uint32_t cipher_offset, auth_offset;
-	uint8_t	cipher, auth;
+	uint32_t cipher_offset = 0, auth_offset = 0;
+	uint8_t	cipher = 0, auth = 0;
 	int res = 0;
 
 	if (op->status != RTE_CRYPTO_OP_STATUS_SUCCESS)

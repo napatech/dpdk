@@ -61,6 +61,9 @@
  */
 static const volatile unsigned bulk_sizes[] = { 8, 32 };
 
+/* The ring structure used for tests */
+static struct rte_ring *r;
+
 struct lcore_pair {
 	unsigned c1, c2;
 };
@@ -141,7 +144,7 @@ get_two_sockets(struct lcore_pair *lcp)
 
 /* Get cycle counts for dequeuing from an empty ring. Should be 2 or 3 cycles */
 static void
-test_empty_dequeue(struct rte_ring *r)
+test_empty_dequeue(void)
 {
 	const unsigned iter_shift = 26;
 	const unsigned iterations = 1<<iter_shift;
@@ -169,7 +172,6 @@ test_empty_dequeue(struct rte_ring *r)
  * and return two. Input = burst size, output = cycle average for sp/sc & mp/mc
  */
 struct thread_params {
-	struct rte_ring *r;
 	unsigned size;        /* input value, the burst size */
 	double spsc, mpmc;    /* output value, the single or multi timings */
 };
@@ -184,7 +186,6 @@ enqueue_bulk(void *p)
 	const unsigned iter_shift = 23;
 	const unsigned iterations = 1<<iter_shift;
 	struct thread_params *params = p;
-	struct rte_ring *r = params->r;
 	const unsigned size = params->size;
 	unsigned i;
 	void *burst[MAX_BURST] = {0};
@@ -220,7 +221,6 @@ dequeue_bulk(void *p)
 	const unsigned iter_shift = 23;
 	const unsigned iterations = 1<<iter_shift;
 	struct thread_params *params = p;
-	struct rte_ring *r = params->r;
 	const unsigned size = params->size;
 	unsigned i;
 	void *burst[MAX_BURST] = {0};
@@ -251,7 +251,7 @@ dequeue_bulk(void *p)
  * used to measure ring perf between hyperthreads, cores and sockets.
  */
 static void
-run_on_core_pair(struct lcore_pair *cores, struct rte_ring *r,
+run_on_core_pair(struct lcore_pair *cores,
 		lcore_function_t f1, lcore_function_t f2)
 {
 	struct thread_params param1 = {0}, param2 = {0};
@@ -259,7 +259,6 @@ run_on_core_pair(struct lcore_pair *cores, struct rte_ring *r,
 	for (i = 0; i < sizeof(bulk_sizes)/sizeof(bulk_sizes[0]); i++) {
 		lcore_count = 0;
 		param1.size = param2.size = bulk_sizes[i];
-		param1.r = param2.r = r;
 		if (cores->c1 == rte_get_master_lcore()) {
 			rte_eal_remote_launch(f2, &param2, cores->c2);
 			f1(&param1);
@@ -282,7 +281,7 @@ run_on_core_pair(struct lcore_pair *cores, struct rte_ring *r,
  * takes on a single lcore. Result is for comparison with the bulk enq+deq.
  */
 static void
-test_single_enqueue_dequeue(struct rte_ring *r)
+test_single_enqueue_dequeue(void)
 {
 	const unsigned iter_shift = 24;
 	const unsigned iterations = 1<<iter_shift;
@@ -315,7 +314,7 @@ test_single_enqueue_dequeue(struct rte_ring *r)
  * as for the bulk function called on a single lcore.
  */
 static void
-test_burst_enqueue_dequeue(struct rte_ring *r)
+test_burst_enqueue_dequeue(void)
 {
 	const unsigned iter_shift = 23;
 	const unsigned iterations = 1<<iter_shift;
@@ -353,7 +352,7 @@ test_burst_enqueue_dequeue(struct rte_ring *r)
 
 /* Times enqueue and dequeue on a single lcore */
 static void
-test_bulk_enqueue_dequeue(struct rte_ring *r)
+test_bulk_enqueue_dequeue(void)
 {
 	const unsigned iter_shift = 23;
 	const unsigned iterations = 1<<iter_shift;
@@ -395,35 +394,32 @@ static int
 test_ring_perf(void)
 {
 	struct lcore_pair cores;
-	struct rte_ring *r = NULL;
-
 	r = rte_ring_create(RING_NAME, RING_SIZE, rte_socket_id(), 0);
-	if (r == NULL)
+	if (r == NULL && (r = rte_ring_lookup(RING_NAME)) == NULL)
 		return -1;
 
 	printf("### Testing single element and burst enq/deq ###\n");
-	test_single_enqueue_dequeue(r);
-	test_burst_enqueue_dequeue(r);
+	test_single_enqueue_dequeue();
+	test_burst_enqueue_dequeue();
 
 	printf("\n### Testing empty dequeue ###\n");
-	test_empty_dequeue(r);
+	test_empty_dequeue();
 
 	printf("\n### Testing using a single lcore ###\n");
-	test_bulk_enqueue_dequeue(r);
+	test_bulk_enqueue_dequeue();
 
 	if (get_two_hyperthreads(&cores) == 0) {
 		printf("\n### Testing using two hyperthreads ###\n");
-		run_on_core_pair(&cores, r, enqueue_bulk, dequeue_bulk);
+		run_on_core_pair(&cores, enqueue_bulk, dequeue_bulk);
 	}
 	if (get_two_cores(&cores) == 0) {
 		printf("\n### Testing using two physical cores ###\n");
-		run_on_core_pair(&cores, r, enqueue_bulk, dequeue_bulk);
+		run_on_core_pair(&cores, enqueue_bulk, dequeue_bulk);
 	}
 	if (get_two_sockets(&cores) == 0) {
 		printf("\n### Testing using two NUMA nodes ###\n");
-		run_on_core_pair(&cores, r, enqueue_bulk, dequeue_bulk);
+		run_on_core_pair(&cores, enqueue_bulk, dequeue_bulk);
 	}
-	rte_ring_free(r);
 	return 0;
 }
 

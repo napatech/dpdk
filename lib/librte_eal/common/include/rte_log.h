@@ -51,7 +51,6 @@ extern "C" {
 #include <stdarg.h>
 
 #include <rte_common.h>
-#include <rte_config.h>
 
 struct rte_log_dynamic_type;
 

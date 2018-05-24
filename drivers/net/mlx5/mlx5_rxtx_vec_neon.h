@@ -149,7 +149,7 @@ txq_scatter_v(struct mlx5_txq_data *txq, struct rte_mbuf **pkts,
 			11, 10,  9,  8, /* bswap32 */
 			12, 13, 14, 15
 		};
-		uint8_t cs_flags;
+		uint8_t cs_flags = 0;
 		uint16_t max_elts;
 		uint16_t max_wqe;
 		uint8x16_t *t_wqe;
@@ -168,7 +168,22 @@ txq_scatter_v(struct mlx5_txq_data *txq, struct rte_mbuf **pkts,
 			break;
 		wqe = &((volatile struct mlx5_wqe64 *)
 			 txq->wqes)[wqe_ci & wq_mask].hdr;
-		cs_flags = txq_ol_cksum_to_cs(txq, buf);
+		if (buf->ol_flags &
+		     (PKT_TX_IP_CKSUM | PKT_TX_TCP_CKSUM | PKT_TX_UDP_CKSUM)) {
+			const uint64_t is_tunneled =
+				buf->ol_flags & (PKT_TX_TUNNEL_GRE |
+						 PKT_TX_TUNNEL_VXLAN);
+
+			if (is_tunneled && txq->tunnel_en) {
+				cs_flags = MLX5_ETH_WQE_L3_INNER_CSUM |
+					   MLX5_ETH_WQE_L4_INNER_CSUM;
+				if (buf->ol_flags & PKT_TX_OUTER_IP_CKSUM)
+					cs_flags |= MLX5_ETH_WQE_L3_CSUM;
+			} else {
+				cs_flags = MLX5_ETH_WQE_L3_CSUM |
+					   MLX5_ETH_WQE_L4_CSUM;
+			}
+		}
 		/* Title WQEBB pointer. */
 		t_wqe = (uint8x16_t *)wqe;
 		dseg = (uint8_t *)(wqe + 1);
@@ -575,15 +590,11 @@ rxq_cq_to_ptype_oflags_v(struct mlx5_rxq_data *rxq,
 	if (rxq->mark) {
 		const uint32x4_t ft_def = vdupq_n_u32(MLX5_FLOW_MARK_DEFAULT);
 		const uint32x4_t fdir_flags = vdupq_n_u32(PKT_RX_FDIR);
-		uint32x4_t fdir_id_flags = vdupq_n_u32(PKT_RX_FDIR_ID);
-		uint32x4_t invalid_mask;
+		const uint32x4_t fdir_id_flags = vdupq_n_u32(PKT_RX_FDIR_ID);
 
 		/* Check if flow tag is non-zero then set PKT_RX_FDIR. */
-		invalid_mask = vceqzq_u32(flow_tag);
-		ol_flags = vorrq_u32(ol_flags,
-				     vbicq_u32(fdir_flags, invalid_mask));
-		/* Mask out invalid entries. */
-		fdir_id_flags = vbicq_u32(fdir_id_flags, invalid_mask);
+		ol_flags = vorrq_u32(ol_flags, vbicq_u32(fdir_flags,
+							 vceqzq_u32(flow_tag)));
 		/* Check if flow tag MLX5_FLOW_MARK_DEFAULT. */
 		ol_flags = vorrq_u32(ol_flags,
 				     vbicq_u32(fdir_id_flags,
@@ -654,16 +665,12 @@ rxq_cq_to_ptype_oflags_v(struct mlx5_rxq_data *rxq,
  *   Array to store received packets.
  * @param pkts_n
  *   Maximum number of packets in array.
- * @param[out] err
- *   Pointer to a flag. Set non-zero value if pkts array has at least one error
- *   packet to handle.
  *
  * @return
  *   Number of packets received including errors (<= pkts_n).
  */
 static inline uint16_t
-rxq_burst_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts, uint16_t pkts_n,
-	    uint64_t *err)
+rxq_burst_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
 	const uint16_t q_n = 1 << rxq->cqe_n;
 	const uint16_t q_mask = q_n - 1;
@@ -963,7 +970,8 @@ rxq_burst_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts, uint16_t pkts_n,
 		opcode = vceq_u16(resp_err_check, opcode);
 		opcode = vbic_u16(opcode, invalid_mask);
 		/* D.4 mark if any error is set */
-		*err |= vget_lane_u64(vreinterpret_u64_u16(opcode), 0);
+		rxq->pending_err |=
+			!!vget_lane_u64(vreinterpret_u64_u16(opcode), 0);
 		/* C.4 fill in mbuf - rearm_data and packet_type. */
 		rxq_cq_to_ptype_oflags_v(rxq, ptype_info, flow_tag,
 					 opcode, &elts[pos]);

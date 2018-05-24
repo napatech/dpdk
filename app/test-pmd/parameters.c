@@ -565,7 +565,6 @@ launch_args_parse(int argc, char** argv)
 	int n, opt;
 	char **argvopt;
 	int opt_idx;
-	portid_t pid;
 	enum { TX, RX };
 
 	static struct option lgopts[] = {
@@ -952,21 +951,21 @@ launch_args_parse(int argc, char** argv)
 				rss_hf = ETH_RSS_UDP;
 			if (!strcmp(lgopts[opt_idx].name, "rxq")) {
 				n = atoi(optarg);
-				if (n >= 0 && check_nb_rxq((queueid_t)n) == 0)
+				if (n >= 0 && n <= (int) MAX_QUEUE_ID)
 					nb_rxq = (queueid_t) n;
 				else
 					rte_exit(EXIT_FAILURE, "rxq %d invalid - must be"
-						  " >= 0 && <= %u\n", n,
-						  get_allowed_max_nb_rxq(&pid));
+						  " >= 0 && <= %d\n", n,
+						  (int) MAX_QUEUE_ID);
 			}
 			if (!strcmp(lgopts[opt_idx].name, "txq")) {
 				n = atoi(optarg);
-				if (n >= 0 && check_nb_txq((queueid_t)n) == 0)
+				if (n >= 0 && n <= (int) MAX_QUEUE_ID)
 					nb_txq = (queueid_t) n;
 				else
 					rte_exit(EXIT_FAILURE, "txq %d invalid - must be"
-						  " >= 0 && <= %u\n", n,
-						  get_allowed_max_nb_txq(&pid));
+						  " >= 0 && <= %d\n", n,
+						  (int) MAX_QUEUE_ID);
 			}
 			if (!nb_rxq && !nb_txq) {
 				rte_exit(EXIT_FAILURE, "Either rx or tx queues should "

@@ -70,6 +70,7 @@
 
 #include "mlx4.h"
 #include "mlx4_flow.h"
+#include "mlx4_glue.h"
 #include "mlx4_rxtx.h"
 #include "mlx4_utils.h"
 

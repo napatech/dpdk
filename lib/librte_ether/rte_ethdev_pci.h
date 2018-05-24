@@ -37,7 +37,6 @@
 #include <rte_malloc.h>
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
-#include <rte_config.h>
 #include <rte_ethdev.h>
 
 /**

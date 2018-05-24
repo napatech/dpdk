@@ -40,6 +40,7 @@
 #include <rte_malloc.h>
 #include <nt.h>
 
+#include "nt_compat.h"
 #include "rte_eth_ntacc.h"
 #include "filter_ntacc.h"
 
@@ -113,9 +114,60 @@ void pushNtplID(struct rte_flow *flow, uint32_t ntplId)
   }
 }
 
+enum layer_e {
+  LAYER2,
+  LAYER3,
+  LAYER4,
+  VLAN,
+  IP,
+  MPLS,
+  PROTO,
+};
+
+/**
+ * Get the layer NTPL keyword. Either an outer or an inner
+ * version.
+ */
+static const char *GetLayer(enum layer_e layer, bool tunnel)
+{
+  switch (layer) {
+  case LAYER2:
+    if (tunnel)
+      return "InnerLayer2Header";
+    else
+      return "Layer2Header";
+  case LAYER3:
+  case IP:
+    if (tunnel)
+      return "InnerLayer3Header";
+    else
+      return "Layer3Header";
+  case LAYER4:
+    if (tunnel)
+      return "InnerLayer4Header";
+    else
+      return "Layer4Header";
+  case VLAN:
+    if (tunnel)
+      return "InnerFirstVLAN";
+    else
+      return "FirstVLAN";
+  case MPLS:
+    if (tunnel)
+      return "InnerFirstMPLS";
+    else
+      return "FirstMPLS";
+  case PROTO:
+    if (tunnel)
+      return "InnerIpProtocol";
+    else
+      return "IpProtocol";
+  }
+  return "UNKNOWN";
+}
+
 void FlushHash(struct pmd_internals *internals)
 {
-  NtNtplInfo_t ntplInfo;
   char ntpl_buf[21];
   struct filter_hash_s *pHash;
 loop:
@@ -123,7 +175,7 @@ loop:
   if (pHash->port == internals->port) {
       LIST_REMOVE(pHash, next);
       snprintf(ntpl_buf, 20, "delete=%d", pHash->ntpl_id);
-      DoNtpl(ntpl_buf, &ntplInfo, internals);
+      DoNtpl(ntpl_buf, NULL, internals);
       PMD_NTACC_LOG(DEBUG, "Deleting Hash filter: %s\n", ntpl_buf);
       rte_free(pHash);
       goto loop;
@@ -132,7 +184,6 @@ loop:
 }
 
 void DeleteHash(uint64_t rss_hf, uint8_t port, int priority, struct pmd_internals *internals) {
-  NtNtplInfo_t ntplInfo;
   char ntpl_buf[21];
   struct filter_hash_s *pHash;
 
@@ -140,7 +191,7 @@ void DeleteHash(uint64_t rss_hf, uint8_t port, int priority, struct pmd_internal
     if (pHash->rss_hf == rss_hf && pHash->port == port && pHash->priority == priority) {
       LIST_REMOVE(pHash, next);
       snprintf(ntpl_buf, 20, "delete=%d", pHash->ntpl_id);
-      DoNtpl(ntpl_buf, &ntplInfo, internals);
+      DoNtpl(ntpl_buf, NULL, internals);
       PMD_NTACC_LOG(DEBUG, "Deleting Hash filter: %s\n", ntpl_buf);
       rte_free(pHash);
     }
@@ -176,7 +227,7 @@ static int FindHash(uint64_t rss_hf, struct pmd_internals *internals, int priori
 #define PRINT_HASH(a,b) { if (PrintHash(a, priority, internals, rss_hf, b) != 0)  return -1; }
 static int PrintHash(const char *str, int priority, struct pmd_internals *internals, uint64_t rss_hf, uint8_t tuple)
 {
-  NtNtplInfo_t ntplInfo;
+  uint32_t ntplID;
   char tmpBuf[TMP_BSIZE + 1];
 
   const char *ptrTuple = "hashroundrobin";
@@ -223,15 +274,14 @@ static int PrintHash(const char *str, int priority, struct pmd_internals *intern
     break;
   }
 
-#pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
   snprintf(tmpBuf, TMP_BSIZE, str, priority, internals->port, internals->tagName, ptrTuple);
 #pragma GCC diagnostic pop
-  if (DoNtpl(tmpBuf, &ntplInfo, internals) != 0) {
+  if (DoNtpl(tmpBuf, &ntplID, internals) != 0) {
     return -1;
   }
   rte_spinlock_lock(&internals->lock);
-  pushHash(ntplInfo.ntplId, rss_hf, internals, priority);
+  pushHash(ntplID, rss_hf, internals, priority);
   rte_spinlock_unlock(&internals->lock);
   return 0;
 }
@@ -239,7 +289,7 @@ static int PrintHash(const char *str, int priority, struct pmd_internals *intern
 /**
  * Create the hash filter from the DPDK hash function.
  */
-int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow *flow, int priority)
+int CreateHashModeHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow *flow, int priority)
 {
   if (rss_hf == 0) {
     PMD_NTACC_LOG(ERR, "No HASH function is selected. Ignoring hash.\n");
@@ -389,6 +439,72 @@ int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow
   return 0;
 }
 
+static const char *GetSorted(struct pmd_internals *internals)
+{
+  if (internals->symHashMode == SYM_HASH_ENA_PER_PORT) {
+    return "XOR=true";
+  }
+  else {
+    return "XOR=false";
+  }
+}
+
+int CreateHash(char *ntpl_buf, uint64_t rss_hf, struct pmd_internals *internals, bool tunnel)
+{
+  if (rss_hf & ETH_RSS_NONFRAG_IPV4_OTHER) {
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
+             ";Hash=HashWord0_3=%s[12]/32,HashWord4_7=%s[16]/32,HashWordP=%s,%s",
+             GetLayer(LAYER3, tunnel), GetLayer(LAYER3, tunnel),
+             GetLayer(PROTO, tunnel), GetSorted(internals));
+    return 0;
+  }
+
+  if ((rss_hf & ETH_RSS_NONFRAG_IPV4_TCP) || (rss_hf & ETH_RSS_NONFRAG_IPV4_UDP) || (rss_hf & ETH_RSS_NONFRAG_IPV4_SCTP)) {
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
+             ";Hash=HashWord0_3=%s[12]/32,HashWord4_7=%s[16]/32,HashWord8=%s[0]/32,HashWordP=%s,%s",
+             GetLayer(LAYER3, tunnel), GetLayer(LAYER3, tunnel), GetLayer(LAYER4, tunnel),
+             GetLayer(PROTO, tunnel), GetSorted(internals));
+    return 0;
+  }
+
+  if ((rss_hf & ETH_RSS_IPV4) || (rss_hf & ETH_RSS_FRAG_IPV4)) {
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
+             ";Hash=HashWord0_3=%s[12]/32,HashWord4_7=%s[16]/32,%s",
+             GetLayer(LAYER3, tunnel), GetLayer(LAYER3, tunnel), GetSorted(internals));
+    return 0;
+  }
+
+  if (rss_hf & ETH_RSS_NONFRAG_IPV6_OTHER) {
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
+             ";Hash=HashWord0_3=%s[8]/128,HashWord4_7=%s[24]/128,HashWordP=%s,%s",
+             GetLayer(LAYER3, tunnel), GetLayer(LAYER3, tunnel),
+             GetLayer(PROTO, tunnel), GetSorted(internals));
+    return 0;
+  }
+
+  if ((rss_hf & ETH_RSS_NONFRAG_IPV6_TCP) ||
+      (rss_hf & ETH_RSS_IPV6_TCP_EX)      ||
+      (rss_hf & ETH_RSS_NONFRAG_IPV6_UDP) ||
+      (rss_hf & ETH_RSS_IPV6_UDP_EX)      ||
+      (rss_hf & ETH_RSS_NONFRAG_IPV6_SCTP)) {
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
+             ";Hash=HashWord0_3=%s[8]/128,HashWord4_7=%s[24]/128,HashWord8=%s[0]/32,HashWordP=%s,%s",
+             GetLayer(LAYER3, tunnel), GetLayer(LAYER3, tunnel), GetLayer(LAYER4, tunnel),
+             GetLayer(PROTO, tunnel), GetSorted(internals));
+    return 0;
+  }
+
+  if ((rss_hf & ETH_RSS_IPV6) || (rss_hf & ETH_RSS_FRAG_IPV6) || (rss_hf & ETH_RSS_IPV6_EX)) {
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
+             ";Hash=HashWord0_3=%s[8]/128,HashWord4_7=%s[24]/128,%s",
+             GetLayer(LAYER3, tunnel), GetLayer(LAYER3, tunnel), GetSorted(internals));
+    return 0;
+  }
+
+  snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ";Hash=roundrobin");
+  return 0;
+}
+
 #if 0
 /**
  * Get a keyset value from the keyset pool.
@@ -494,7 +610,7 @@ void CreateStreamid(char *ntpl_buf, struct pmd_internals *internals, uint32_t nb
 
   strcat(ntpl_buf, "streamid=");
   if (range) {
-    snprintf(buf, 20, "(%u..%u)", internals->rxq[0].stream_id, internals->rxq[nb_queues - 1].stream_id);
+    snprintf(buf, 20, "(%u..%u)", internals->rxq[list_queues[0]].stream_id, internals->rxq[list_queues[nb_queues - 1]].stream_id);
     strcat(ntpl_buf, buf);
   }
   else {
@@ -506,52 +622,6 @@ void CreateStreamid(char *ntpl_buf, struct pmd_internals *internals, uint32_t nb
       }
     }
   }
-}
-
-enum layer_e {
-  LAYER2,
-  LAYER3,
-  LAYER4,
-  VLAN,
-  IP,
-  MPLS,
-};
-
-/**
- * Get the layer NTPL keyword. Either an outer or an inner
- * version.
- */
-static const char *GetLayer(enum layer_e layer, bool tunnel)
-{
-  switch (layer) {
-  case LAYER2:
-    if (tunnel)
-      return "InnerLayer2Header";
-    else
-      return "Layer2Header";
-  case LAYER3:
-  case IP:
-    if (tunnel)
-      return "InnerLayer3Header";
-    else
-      return "Layer3Header";
-  case LAYER4:
-    if (tunnel)
-      return "InnerLayer4Header";
-    else
-      return "Layer4Header";
-  case VLAN:
-    if (tunnel)
-      return "InnerFirstVLAN";
-    else
-      return "FirstVLAN";
-  case MPLS:
-    if (tunnel)
-      return "InnerFirstMPLS";
-    else
-      return "FirstMPLS";
-  }
-  return "UNKNOWN";
 }
 
 static void InsertFilterValues(struct filter_values_s *pInsertFilterValues, struct pmd_internals *internals)
@@ -676,7 +746,6 @@ static int SetFilter(int size,
 }
 
 void DeleteKeyset(int key, struct pmd_internals *internals) {
-  NtNtplInfo_t ntplInfo;
   char ntpl_buf[21];
   struct filter_keyset_s *key_set;
 
@@ -684,9 +753,9 @@ void DeleteKeyset(int key, struct pmd_internals *internals) {
     if (key_set->key == key) {
       LIST_REMOVE(key_set, next);
       snprintf(ntpl_buf, 20, "delete=%d", key_set->ntpl_id2);
-      DoNtpl(ntpl_buf, &ntplInfo, internals);
+      DoNtpl(ntpl_buf, NULL, internals);
       snprintf(ntpl_buf, 20, "delete=%d", key_set->ntpl_id1);
-      DoNtpl(ntpl_buf, &ntplInfo, internals);
+      DoNtpl(ntpl_buf, NULL, internals);
       rte_free(key_set);
       return;
     }
@@ -799,7 +868,6 @@ int CreateOptimizedFilter(char *ntpl_buf,
                           bool *reuse,
                           struct color_s *pColor)
 {
-  NtNtplInfo_t *pNtplInfo = NULL;
   struct filter_values_s *pFilter_values;
   int key;
   int iRet = 0;
@@ -808,6 +876,7 @@ int CreateOptimizedFilter(char *ntpl_buf,
   char *filter_buffer2 = NULL;
   char *filter_buffer3 = NULL;
   int i;
+  uint32_t ntplID;
 
 #ifdef DUMP_FLOWS
   DumpFlows(internals);
@@ -817,12 +886,6 @@ int CreateOptimizedFilter(char *ntpl_buf,
   if (LIST_EMPTY(&internals->filter_values)) {
     rte_spinlock_unlock(&internals->lock);
     return 0;
-  }
-  pNtplInfo = rte_malloc(internals->name, sizeof(NtNtplInfo_t), 0);
-  if (!pNtplInfo) {
-    iRet = -1;
-    PMD_NTACC_LOG(ERR, "Allocating memory failed\n");
-    goto Errors;
   }
 
   filter_buffer1 = rte_malloc(internals->name, NTPL_BSIZE + 1, 0);
@@ -905,19 +968,19 @@ int CreateOptimizedFilter(char *ntpl_buf,
     snprintf(&filter_buffer3[strlen(filter_buffer3)],  NTPL_BSIZE - strlen(filter_buffer3) - 1, "}");
     snprintf(&filter_buffer2[strlen(filter_buffer2)],  NTPL_BSIZE - strlen(filter_buffer2) - 1, ")");
 
-    if (DoNtpl(filter_buffer3, pNtplInfo, internals)) {
+    if (DoNtpl(filter_buffer3, &ntplID, internals)) {
       rte_free(key_set);
       iRet = -1;
       goto Errors;
     }
-    key_set->ntpl_id1 = pNtplInfo->ntplId;
+    key_set->ntpl_id1 = ntplID;
 
-    if (DoNtpl(filter_buffer2, pNtplInfo, internals)) {
+    if (DoNtpl(filter_buffer2, &ntplID, internals)) {
       rte_free(key_set);
       iRet = -1;
       goto Errors;
     }
-    key_set->ntpl_id2 = pNtplInfo->ntplId;
+    key_set->ntpl_id2 = ntplID;
 
     for (i = 0; i < nb_queues; i++) {
       key_set->list_queues[i] = plist_queues[i];
@@ -1057,11 +1120,11 @@ int CreateOptimizedFilter(char *ntpl_buf,
   }
 
   // Set keylist filter
-  if (DoNtpl(filter_buffer1, pNtplInfo, internals)) {
+  if (DoNtpl(filter_buffer1, &ntplID, internals)) {
     iRet = -1;
     goto Errors;
   }
-  pushNtplID(flow, pNtplInfo->ntplId);
+  pushNtplID(flow, ntplID);
 
   if (*fc) strcat(ntpl_buf," and ");
   *fc = true;
@@ -1071,9 +1134,6 @@ int CreateOptimizedFilter(char *ntpl_buf,
 Errors:
   rte_spinlock_unlock(&internals->lock);
 
-  if (pNtplInfo) {
-    rte_free(pNtplInfo);
-  }
   if (filter_buffer1) {
     rte_free(filter_buffer1);
   }

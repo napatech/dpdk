@@ -121,7 +121,7 @@ struct rte_crypto_op {
 	rte_iova_t phys_addr;
 	/**< physical address of crypto operation */
 
-	__extension__
+	RTE_STD_C11
 	union {
 		struct rte_crypto_sym_op sym[0];
 		/**< Symmetric operation parameters */

@@ -45,7 +45,6 @@
 #include <string.h>
 #include <rte_vect.h>
 #include <rte_common.h>
-#include <rte_config.h>
 
 #ifdef __cplusplus
 extern "C" {

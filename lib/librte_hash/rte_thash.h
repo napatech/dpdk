@@ -53,7 +53,6 @@ extern "C" {
 
 #include <stdint.h>
 #include <rte_byteorder.h>
-#include <rte_config.h>
 #include <rte_ip.h>
 #include <rte_common.h>
 

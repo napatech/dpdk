@@ -63,7 +63,6 @@
 #else
 #include <stdint.h>
 #include <rte_common.h>
-#include <rte_config.h>
 #include <rte_memory.h>
 #include <rte_ether.h>
 #include <rte_atomic.h>

@@ -113,7 +113,8 @@ enum {
 
 /******************* Function Prototypes ********************/
 
-int CreateHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow *flow, int priority);
+int CreateHash(char *ntpl_buf, uint64_t rss_hf, struct pmd_internals *internals, bool tunnel);
+int CreateHashModeHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow *flow, int priority);
 void CreateStreamid(char *ntpl_buf, struct pmd_internals *internals, uint32_t nb_queues, uint8_t *list_queues);
 int ReturnKeysetValue(struct pmd_internals *internals, int value);
 void pushNtplID(struct rte_flow *flow, uint32_t ntplId);
@@ -131,14 +132,14 @@ int SetGreFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, uin
 int SetGtpFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, uint64_t *typeMask, int protocol);
 int SetTunnelFilter(char *ntpl_buf, bool *fc, int type, uint64_t *typeMask);
 
-int CreateOptimizedFilter(char *ntpl_buf, 
-                          struct pmd_internals *internals, 
-                          struct rte_flow *flow, 
-                          bool *fc, 
-                          uint64_t typeMask, 
-                          uint8_t *plist_queues, 
-                          uint8_t nb_queues, 
-                          bool *reuse, 
+int CreateOptimizedFilter(char *ntpl_buf,
+                          struct pmd_internals *internals,
+                          struct rte_flow *flow,
+                          bool *fc,
+                          uint64_t typeMask,
+                          uint8_t *plist_queues,
+                          uint8_t nb_queues,
+                          bool *reuse,
                           struct color_s *pColor);
 
 void DeleteKeyset(int key, struct pmd_internals *internals);

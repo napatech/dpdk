@@ -40,7 +40,6 @@ extern "C" {
 
 #include <stdint.h>
 #include <rte_common.h>
-#include <rte_config.h>
 #include <emmintrin.h>
 #include "generic/rte_atomic.h"
 

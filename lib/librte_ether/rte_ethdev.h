@@ -181,7 +181,6 @@ extern "C" {
 #include <rte_devargs.h>
 #include <rte_errno.h>
 #include <rte_common.h>
-#include <rte_config.h>
 
 #include "rte_ether.h"
 #include "rte_eth_ctrl.h"
@@ -263,17 +262,17 @@ __extension__
 struct rte_eth_link {
 	uint32_t link_speed;        /**< ETH_SPEED_NUM_ */
 	uint16_t link_duplex  : 1;  /**< ETH_LINK_[HALF/FULL]_DUPLEX */
-	uint16_t link_autoneg : 1;  /**< ETH_LINK_[AUTONEG/FIXED] */
+	uint16_t link_autoneg : 1;  /**< ETH_LINK_SPEED_[AUTONEG/FIXED] */
 	uint16_t link_status  : 1;  /**< ETH_LINK_[DOWN/UP] */
 } __attribute__((aligned(8)));      /**< aligned for atomic64 read/write */
 
 /* Utility constants */
-#define ETH_LINK_HALF_DUPLEX 0 /**< Half-duplex connection (see link_duplex). */
-#define ETH_LINK_FULL_DUPLEX 1 /**< Full-duplex connection (see link_duplex). */
-#define ETH_LINK_DOWN        0 /**< Link is down (see link_status). */
-#define ETH_LINK_UP          1 /**< Link is up (see link_status). */
-#define ETH_LINK_FIXED       0 /**< No autonegotiation (see link_autoneg). */
-#define ETH_LINK_AUTONEG     1 /**< Autonegotiated (see link_autoneg). */
+#define ETH_LINK_HALF_DUPLEX    0 /**< Half-duplex connection. */
+#define ETH_LINK_FULL_DUPLEX    1 /**< Full-duplex connection. */
+#define ETH_LINK_DOWN           0 /**< Link is down. */
+#define ETH_LINK_UP             1 /**< Link is up. */
+#define ETH_LINK_FIXED          0 /**< No autonegotiation. */
+#define ETH_LINK_AUTONEG        1 /**< Autonegotiated. */
 
 /**
  * A structure used to configure the ring threshold registers of an RX/TX
@@ -454,17 +453,6 @@ struct rte_eth_rss_conf {
 #define ETH_RSS_VXLAN              (1ULL << RTE_ETH_FLOW_VXLAN)
 #define ETH_RSS_GENEVE             (1ULL << RTE_ETH_FLOW_GENEVE)
 #define ETH_RSS_NVGRE              (1ULL << RTE_ETH_FLOW_NVGRE)
-	/* Napatech ADD ON */
-#define ETH_RSS_INNER_IPV4				 (1ULL << RTE_ETH_FLOW_INNER_IPV4)
-#define ETH_RSS_INNER_IPV4_TCP     (1ULL << RTE_ETH_FLOW_INNER_IPV4_TCP)
-#define ETH_RSS_INNER_IPV4_UDP     (1ULL << RTE_ETH_FLOW_INNER_IPV4_UDP)
-#define ETH_RSS_INNER_IPV4_SCTP    (1ULL << RTE_ETH_FLOW_INNER_IPV4_SCTP)
-#define ETH_RSS_INNER_IPV4_OTHER   (1ULL << RTE_ETH_FLOW_INNER_IPV4_OTHER)
-#define ETH_RSS_INNER_IPV6         (1ULL << RTE_ETH_FLOW_INNER_IPV6)
-#define ETH_RSS_INNER_IPV6_TCP     (1ULL << RTE_ETH_FLOW_INNER_IPV6_TCP)
-#define ETH_RSS_INNER_IPV6_UDP     (1ULL << RTE_ETH_FLOW_INNER_IPV6_UDP)
-#define ETH_RSS_INNER_IPV6_SCTP    (1ULL << RTE_ETH_FLOW_INNER_IPV6_SCTP)
-#define ETH_RSS_INNER_IPV6_OTHER   (1ULL << RTE_ETH_FLOW_INNER_IPV6_OTHER)
 
 #define ETH_RSS_IP ( \
 	ETH_RSS_IPV4 | \
@@ -726,7 +714,6 @@ struct rte_eth_txmode {
 		/**< If set, enable port based VLAN insertion */
 };
 
-#define ETH_RXQ_FLAGS_CMBATCH 0x0001 /**< RX queue has to use Contiguous Memory Batching */
 /**
  * A structure used to configure an RX ring of an Ethernet port.
  */
@@ -735,7 +722,6 @@ struct rte_eth_rxconf {
 	uint16_t rx_free_thresh; /**< Drives the freeing of RX descriptors. */
 	uint8_t rx_drop_en; /**< Drop packets if no descriptors are available. */
 	uint8_t rx_deferred_start; /**< Do not start queue with rte_eth_dev_start(). */
-	uint32_t rxq_flags; /**< Set flags for the Rx queue */
 	/**
 	 * Per-queue Rx offloads to be set using DEV_RX_OFFLOAD_* flags.
 	 * Only offloads set on rx_queue_offload_capa or rx_offload_capa
@@ -2908,7 +2894,6 @@ rte_eth_rx_burst(uint16_t port_id, uint16_t queue_id,
 		return 0;
 	}
 #endif
-	
 	int16_t nb_rx = (*dev->rx_pkt_burst)(dev->data->rx_queues[queue_id],
 			rx_pkts, nb_pkts);
 

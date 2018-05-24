@@ -55,6 +55,7 @@ static inline struct rte_mbuf *__bnxt_alloc_rx_data(struct rte_mempool *mb)
 	struct rte_mbuf *data;
 
 	data = rte_mbuf_raw_alloc(mb);
+	data->data_off = RTE_PKTMBUF_HEADROOM;
 
 	return data;
 }
@@ -470,12 +471,12 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 	if (likely(RX_CMP_IP_CS_OK(rxcmp1)))
 		mbuf->ol_flags |= PKT_RX_IP_CKSUM_GOOD;
 	else
-		mbuf->ol_flags |= PKT_RX_IP_CKSUM_BAD;
+		mbuf->ol_flags |= PKT_RX_IP_CKSUM_NONE;
 
 	if (likely(RX_CMP_L4_CS_OK(rxcmp1)))
 		mbuf->ol_flags |= PKT_RX_L4_CKSUM_GOOD;
 	else
-		mbuf->ol_flags |= PKT_RX_L4_CKSUM_BAD;
+		mbuf->ol_flags |= PKT_RX_L4_CKSUM_NONE;
 
 	mbuf->packet_type = bnxt_parse_pkt_type(rxcmp, rxcmp1);
 

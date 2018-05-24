@@ -53,7 +53,7 @@ enum {
 /* SSO Operations */
 
 static __rte_always_inline struct rte_mbuf *
-ssovf_octeontx_wqe_to_pkt(uint64_t work, uint16_t port_info)
+ssovf_octeontx_wqe_to_pkt(uint64_t work, uint16_t port_id)
 {
 	struct rte_mbuf *mbuf;
 	octtx_wqe_t *wqe = (octtx_wqe_t *)(uintptr_t)work;
@@ -69,7 +69,7 @@ ssovf_octeontx_wqe_to_pkt(uint64_t work, uint16_t port_info)
 	mbuf->data_len = mbuf->pkt_len;
 	mbuf->nb_segs = 1;
 	mbuf->ol_flags = 0;
-	mbuf->port = rte_octeontx_pchan_map[port_info >> 4][port_info & 0xF];
+	mbuf->port = port_id;
 	rte_mbuf_refcnt_set(mbuf, 1);
 	return mbuf;
 }
@@ -89,7 +89,7 @@ ssows_get_work(struct ssows *ws, struct rte_event *ev)
 	ev->event = sched_type_queue | (get_work0 & 0xffffffff);
 	if (get_work1 && ev->event_type == RTE_EVENT_TYPE_ETHDEV) {
 		ev->mbuf = ssovf_octeontx_wqe_to_pkt(get_work1,
-				(ev->event >> 20) & 0x7F);
+				(ev->event >> 20) & 0xF);
 	} else {
 		ev->u64 = get_work1;
 	}

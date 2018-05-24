@@ -43,7 +43,7 @@
 #include <unistd.h>
 #include <dlfcn.h>
 #include <rte_mbuf.h>
-#include <rte_ethdev.h>
+#include <rte_ethdev_pci.h>
 #include <rte_malloc.h>
 #include <rte_memcpy.h>
 #include <rte_string_fns.h>
@@ -59,6 +59,9 @@
 
 #include "rte_eth_ntacc.h"
 #include "filter_ntacc.h"
+#include "nt_compat.h"
+
+int ntacc_logtype;
 
 #define STRINGIZE(x) #x
 #define STRINGIZE_VALUE_OF(x) STRINGIZE(x)
@@ -78,7 +81,7 @@ static struct {
    int32_t major;
    int32_t minor;
    int32_t patch;
-} supportedDriver = {3, 8, 1};
+} supportedDriver = {3, 7, 2};
 
 #define PCI_VENDOR_ID_NAPATECH 0x18F4
 #define PCI_DEVICE_ID_NT200A01 0x01A5
@@ -88,7 +91,7 @@ static struct {
 #define PCI_DEVICE_ID_NT40A01  0x0185
 #define PCI_DEVICE_ID_NT100E3  0x0155
 
-#define NB_SUPPORTED_FPGAS 9
+#define NB_SUPPORTED_FPGAS 10
 struct {
   uint32_t item:12;
   uint32_t product:16;
@@ -97,13 +100,14 @@ struct {
   uint32_t build:10;
 } supportedAdapters[NB_SUPPORTED_FPGAS] =
 {
-  { 200, 9500, 10, 7, 0 },
-  { 200, 9501, 10, 7, 0 },
-  { 200, 9502, 10, 7, 0 },
-  { 200, 9503, 10, 7, 0 },
-  { 200, 9505, 10, 8, 0 },
-  { 200, 9512, 10, 7, 0 },
-  { 200, 9515, 10, 7, 0 },
+  { 200, 9500, 9, 8, 0 },
+  { 200, 9501, 9, 8, 0 },
+  { 200, 9502, 9, 8, 0 },
+  { 200, 9503, 9, 8, 0 },
+  { 200, 9505, 9, 8, 0 },
+  { 200, 9512, 9, 8, 0 },
+  { 200, 9515, 9, 8, 0 },
+  { 200, 9516, 9, 8, 0 },
   { 200, 9517, 9, 8, 0 },
   { 200, 9519, 10, 7, 0 },
 };
@@ -127,6 +131,7 @@ int (*_NT_ConfigClose)(NtConfigStream_t);
 int (*_NT_NTPL)(NtConfigStream_t, const char *, NtNtplInfo_t *, uint32_t);
 int (*_NT_NetRxGetNextPacket)(NtNetStreamRx_t, NtNetBuf_t *, int);
 int (*_NT_NetRxOpenMulti)(NtNetStreamRx_t *, const char *, enum NtNetInterface_e, uint32_t *, unsigned int, int);
+int (*_NT_NetRxRead)(NtNetStreamRx_t hStream, NtNetRx_t *cmd);
 int (*_NT_NetTxRelease)(NtNetStreamTx_t, NtNetBuf_t);
 int (*_NT_NetTxGet)(NtNetStreamTx_t, NtNetBuf_t *, uint32_t, size_t, enum NtNetTxPacketOption_e, int);
 int (*_NT_NetTxAddPacket)(NtNetStreamTx_t hStream, uint32_t port, NtNetTxFragment_t *fragments, uint32_t fragmentCount, int timeout );
@@ -155,6 +160,33 @@ static const char *valid_arguments[] = {
 
 static struct ether_addr eth_addr[MAX_NTACC_PORTS];
 
+static uint32_t _log_nt_errors(const uint32_t status, const char *msg, const char *func)
+{
+  char *pErrBuf;
+
+  printf("ERR: %s\n", msg);
+
+  pErrBuf = (char *)rte_malloc(NULL, NT_ERRBUF_SIZE+1, 0);
+  if (!pErrBuf) {
+    PMD_NTACC_LOG(ERR, "Error %s: Out of memory\n", func);
+    return status;
+  }
+
+  (*_NT_ExplainError)(status, pErrBuf, NT_ERRBUF_SIZE);
+  printf("ERR1: %s\n", pErrBuf);
+  PMD_NTACC_LOG(ERR, "Error: %s. Code 0x%x = %s\n", msg, status, pErrBuf);
+
+  rte_free(pErrBuf);
+  return status;
+}
+
+static uint32_t _log_out_of_memory_errors(const char *func)
+{
+  PMD_NTACC_LOG(ERR, "Error %s: Out of memory\n", func);
+  return ENOMEM;
+}
+
+#ifndef DIRECT_RX_RING_CONTROL
 static void _seg_release_cb(struct rte_mbuf *mbuf)
 {
 	struct batch_ctrl *batchCtl = (struct batch_ctrl *)((u_char *)mbuf->userdata);
@@ -165,7 +197,7 @@ static void _seg_release_cb(struct rte_mbuf *mbuf)
 	/* swap poniter back */
 	mbuf->buf_addr = batchCtl->orig_buf_addr;
 }
-
+#endif
 
 static void _write_to_file(int fd, const char *buffer)
 {
@@ -174,17 +206,20 @@ static void _write_to_file(int fd, const char *buffer)
   }
 }
 
-int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo, struct pmd_internals *internals)
+int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *internals)
 {
   NtConfigStream_t hCfgStream;      // Config stream
+  NtNtplInfo_t *pNtplInfo;
   int status;
   int fd;
 
   if((status = (*_NT_ConfigOpen)(&hCfgStream, "capture")) != NT_SUCCESS) {
-    // Get the status code as text
-    (*_NT_ExplainError)(status, errorBuffer, sizeof(errorBuffer)-1);
-    fprintf(stderr, "NT_ConfigOpen() failed: %s\n", errorBuffer);
-    return -1;
+    return _log_nt_errors(status, "NT_ConfigOpen() failed", __func__);
+  }
+
+  pNtplInfo = (NtNtplInfo_t *)rte_malloc(internals->name, sizeof(NtNtplInfo_t), 0);
+  if (!pNtplInfo) {
+    return _log_out_of_memory_errors(__func__);
   }
 
   if (internals->ntpl_file) {
@@ -197,14 +232,14 @@ int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo, struct pmd_internals *in
   }
 
   PMD_NTACC_LOG(DEBUG, "NTPL : %s\n", ntplStr);
-  if((status = (*_NT_NTPL)(hCfgStream, ntplStr, ntplInfo, NT_NTPL_PARSER_VALIDATE_NORMAL)) != NT_SUCCESS) {
+  if((status = (*_NT_NTPL)(hCfgStream, ntplStr, pNtplInfo, NT_NTPL_PARSER_VALIDATE_NORMAL)) != NT_SUCCESS) {
     // Get the status code as text
     (*_NT_ExplainError)(status, errorBuffer, sizeof(errorBuffer)-1);
     PMD_NTACC_LOG(ERR, "NT_NTPL() failed: %s\n", errorBuffer);
-    PMD_NTACC_LOG(ERR, ">>> NTPL errorcode: %X\n", ntplInfo->u.errorData.errCode);
-    PMD_NTACC_LOG(ERR, ">>> %s\n", ntplInfo->u.errorData.errBuffer[0]);
-    PMD_NTACC_LOG(ERR, ">>> %s\n", ntplInfo->u.errorData.errBuffer[1]);
-    PMD_NTACC_LOG(ERR, ">>> %s\n", ntplInfo->u.errorData.errBuffer[2]);
+    PMD_NTACC_LOG(ERR, ">>> NTPL errorcode: %X\n", pNtplInfo->u.errorData.errCode);
+    PMD_NTACC_LOG(ERR, ">>> %s\n", pNtplInfo->u.errorData.errBuffer[0]);
+    PMD_NTACC_LOG(ERR, ">>> %s\n", pNtplInfo->u.errorData.errBuffer[1]);
+    PMD_NTACC_LOG(ERR, ">>> %s\n", pNtplInfo->u.errorData.errBuffer[2]);
     (*_NT_ConfigClose)(hCfgStream);
 
     if (internals->ntpl_file) {
@@ -212,18 +247,28 @@ int DoNtpl(const char *ntplStr, NtNtplInfo_t *ntplInfo, struct pmd_internals *in
       if (fd == -1) {
         PMD_NTACC_LOG(ERR, "NT_NTPL() dump failed: Unable to open file %s. Error %d\n", internals->ntpl_file, errno);
       }
-      _write_to_file(fd, ntplInfo->u.errorData.errBuffer[0]); _write_to_file(fd, "\n");
-      _write_to_file(fd, ntplInfo->u.errorData.errBuffer[1]); _write_to_file(fd, "\n");
-      _write_to_file(fd, ntplInfo->u.errorData.errBuffer[2]); _write_to_file(fd, "\n");
+      _write_to_file(fd, pNtplInfo->u.errorData.errBuffer[0]); _write_to_file(fd, "\n");
+      _write_to_file(fd, pNtplInfo->u.errorData.errBuffer[1]); _write_to_file(fd, "\n");
+      _write_to_file(fd, pNtplInfo->u.errorData.errBuffer[2]); _write_to_file(fd, "\n");
       close(fd);
     }
+    rte_free(pNtplInfo);
     return -1;
   }
-  PMD_NTACC_LOG(DEBUG, "NTPL : %d\n", ntplInfo->ntplId);
+  // Return ntpl ID
+  if (pNtplID) {
+    *pNtplID = pNtplInfo->ntplId;
+  }
+  PMD_NTACC_LOG(DEBUG, "NTPL : %d\n", pNtplInfo->ntplId);
+
   (*_NT_ConfigClose)(hCfgStream);
+  rte_free(pNtplInfo);
   return 0;
 }
 
+
+
+#ifndef DIRECT_RX_RING_CONTROL
 static uint16_t eth_ntacc_rx(void *queue,
                              struct rte_mbuf **bufs,
                              uint16_t nb_pkts)
@@ -307,7 +352,7 @@ static uint16_t eth_ntacc_rx(void *queue,
 
 #ifdef USE_SW_STAT
     rx_q->rx_pkts += mbuf->batch_nb_packet;
-    rx_q->rx_bytes += batchCtl->seg->length - mbuf->batch_nb_packet * hdr->descrLength;
+    rx_q->rx_bytes += batchCtl->pSeg->length - mbuf->batch_nb_packet * hdr->descrLength;
 #endif
     return num_rx;
   }
@@ -406,7 +451,168 @@ static uint16_t eth_ntacc_rx(void *queue,
     return num_rx;
   }
 }
+#else
+static int eth_ntacc_rx_jumbo(struct rte_mempool *mb_pool,
+                              struct rte_mbuf *mbuf,
+                              const u_char *data,
+                              uint16_t data_len)
+{
+  struct rte_mbuf *m = mbuf;
 
+  /* Copy the first segment. */
+  uint16_t len = rte_pktmbuf_tailroom(mbuf);
+
+  rte_memcpy(rte_pktmbuf_append(mbuf, len), data, len);
+  data_len -= len;
+  data += len;
+
+  while (data_len > 0) {
+    /* Allocate next mbuf and point to that. */
+    m->next = rte_pktmbuf_alloc(mb_pool);
+
+    if (unlikely(!m->next))
+      return -1;
+
+    m = m->next;
+
+    /* Headroom is not needed in chained mbufs. */
+    rte_pktmbuf_prepend(m, rte_pktmbuf_headroom(m));
+    m->pkt_len = 0;
+    m->data_len = 0;
+
+    /* Copy next segment. */
+    len = RTE_MIN(rte_pktmbuf_tailroom(m), data_len);
+    rte_memcpy(rte_pktmbuf_append(m, len), data, len);
+
+    mbuf->nb_segs++;
+    data_len -= len;
+    data += len;
+  }
+  return mbuf->nb_segs;
+}
+
+static __rte_always_inline uint16_t eth_ntacc_convert_pkt_to_mbuf(NtDyn3Descr_t *dyn3,
+  struct rte_mbuf *mbuf,
+  struct ntacc_rx_queue *rx_q)
+{
+  rte_pktmbuf_reset(mbuf);
+  rte_mbuf_refcnt_set(mbuf, 1);
+
+  if (dyn3->descrLength == 20) {
+    // We do have a hash value defined
+    mbuf->hash.rss = dyn3->color_hi;
+    mbuf->ol_flags |= PKT_RX_RSS_HASH;
+  }
+  else {
+    // We do have a color value defined
+    mbuf->hash.fdir.hi = ((dyn3->color_hi << 14) & 0xFFFFC000) | dyn3->color_lo;
+    mbuf->ol_flags |= PKT_RX_FDIR_ID | PKT_RX_FDIR;
+  }
+
+  mbuf->timestamp = dyn3->timestamp;
+  mbuf->ol_flags |= PKT_RX_TIMESTAMP;
+  mbuf->port = dyn3->rxPort;
+
+  const uint16_t data_len = (uint16_t)(dyn3->capLength - dyn3->descrLength - 4);
+  if (likely(data_len <= rx_q->buf_size)) {
+    /* Packet will fit in the mbuf, go ahead and copy */
+    mbuf->pkt_len = mbuf->data_len = data_len;
+    rte_memcpy((u_char *)mbuf->buf_addr + RTE_PKTMBUF_HEADROOM, (uint8_t*)dyn3 + dyn3->descrLength, mbuf->data_len);
+#ifdef COPY_OFFSET0
+    mbuf->data_off = RTE_PKTMBUF_HEADROOM + dyn3->offset0;
+#endif
+  } else {
+    /* Try read jumbo frame into multi mbufs. */
+    if (unlikely(eth_ntacc_rx_jumbo(rx_q->mb_pool, mbuf, (uint8_t*)dyn3 + dyn3->descrLength, data_len) == -1))
+      return 0;
+  }
+  return data_len + 4;
+}
+
+
+static void eth_ntacc_rx_get_ring(struct ntacc_rx_queue *rx_q)
+{
+  int status;
+  NtNetRx_t cmd;
+  cmd.cmd = NT_NETRX_READ_CMD_GET_RING_CONTROL;
+  if ((status = _NT_NetRxRead(rx_q->pNetRx, &cmd)) != NT_SUCCESS) {
+    if (status != NT_STATUS_TRYAGAIN) {
+      _log_nt_errors(status, "Failed to get ring control of the RX ring", __func__);
+    }
+    return;
+  }
+  rte_memcpy(&rx_q->ringControl, &cmd.u.ringControl, sizeof(rx_q->ringControl));
+  rx_q->offR = *rx_q->ringControl.pRead;
+  rx_q->offW = *rx_q->ringControl.pWrite & rx_q->ringControl.mask;
+}
+
+static uint16_t eth_ntacc_rx(void *queue,
+  struct rte_mbuf **bufs,
+  const uint16_t nb_pkts)
+{
+  struct ntacc_rx_queue *rx_q = queue;
+
+  if (unlikely(rx_q->pNetRx == NULL || nb_pkts == 0)) {
+    return 0;
+  }
+
+  if (unlikely(rx_q->ringControl.ring == NULL)) {
+    eth_ntacc_rx_get_ring(rx_q);
+    return 0;
+  }
+
+  uint64_t offR = rx_q->offR;
+  uint64_t offW = rx_q->offW;
+
+  /* Check if we have packets */
+  if (unlikely(offR == offW)) {
+    rx_q->offW = *rx_q->ringControl.pWrite & rx_q->ringControl.mask;
+    return 0;
+  }
+
+
+  /* Allocate buffers */
+  if (unlikely(rte_mempool_get_bulk(rx_q->mb_pool, (void **)bufs, nb_pkts) != 0)) {
+    return 0;
+  }
+
+  uint16_t num_rx = 0;
+  uint32_t bytes = 0;
+  uint8_t *ring;
+  if (offR > rx_q->ringControl.size) {
+    ring = rx_q->ringControl.ring + (offR - rx_q->ringControl.size);
+  } else {
+    ring = rx_q->ringControl.ring + offR;
+  }
+
+  while((offR != offW) && (num_rx < nb_pkts)) {
+    struct rte_mbuf *mbuf = bufs[num_rx];
+
+    NtDyn3Descr_t *dyn3 = (NtDyn3Descr_t*)(ring);
+    bytes += eth_ntacc_convert_pkt_to_mbuf(dyn3, mbuf, rx_q);
+    num_rx++;
+
+    offR += dyn3->capLength;
+    ring += dyn3->capLength;
+    if (offR >= (2*rx_q->ringControl.size)) {
+      offR -= (2*rx_q->ringControl.size);
+    }
+  }
+  /* Refresh the HW pointer */
+  *rx_q->ringControl.pRead = offR;
+  rx_q->offR = offR;
+
+#ifdef USE_SW_STAT
+  rx_q->rx_pkts+=num_rx;
+  rx_q->rx_bytes+=bytes;
+#endif
+
+  if (unlikely(num_rx < nb_pkts)) {
+    rte_mempool_put_bulk(rx_q->mb_pool, (void * const *)(bufs + num_rx), nb_pkts-num_rx);
+  }
+  return num_rx;
+}
+#endif
 /*
  * Callback to handle sending packets through a real NIC.
  */
@@ -429,9 +635,7 @@ static uint16_t eth_ntacc_tx(void *queue,
     // Get a TX buffer for this packet
     ret = (*_NT_NetTxGet)(tx_q->pNetTx, &hNetBufTx, tx_q->port, MAX(mbuf->data_len + 4, 64), NT_NETTX_PACKET_OPTION_L2, -1);
     if(unlikely(ret != NT_SUCCESS)) {
-      char errorBuffer[NT_ERRBUF_SIZE]; // Error buffer
-      NT_ExplainError(ret, errorBuffer, NT_ERRBUF_SIZE);
-      PMD_NTACC_LOG(ERR, "Failed to get a tx buffer: %s\n", errorBuffer);
+      _log_nt_errors(ret, "NT_NetTxGet() failed", __func__);
 #ifdef USE_SW_STAT
       tx_q->err_pkts += (nb_pkts - i);
 #endif
@@ -443,9 +647,7 @@ static uint16_t eth_ntacc_tx(void *queue,
     // Release the TX buffer and the packet will be transmitted
     ret = (*_NT_NetTxRelease)(tx_q->pNetTx, hNetBufTx);
     if(unlikely(ret != NT_SUCCESS)) {
-      char errorBuffer[NT_ERRBUF_SIZE]; // Error buffer
-      NT_ExplainError(ret, errorBuffer, NT_ERRBUF_SIZE);
-      PMD_NTACC_LOG(ERR, "Failed to tx a packet: %s\n", errorBuffer);
+      _log_nt_errors(ret, "NT_NetTxRelease() failed", __func__);
 #ifdef USE_SW_STAT
       tx_q->err_pkts += (nb_pkts - i);
 #endif
@@ -585,6 +787,102 @@ static uint16_t eth_ntacc_tx(void *queue,
 #endif
   return tx_pkts;
 }
+#elif defined(DIRECT_TX_RING_CONTROL)
+/*
+ * Callback to handle sending packets through a real NIC.
+ */
+static uint16_t eth_ntacc_tx(void *queue,
+                             struct rte_mbuf **bufs,
+                             uint16_t nb_pkts)
+{
+  unsigned i;
+  struct ntacc_tx_queue *tx_q = queue;
+  uint32_t bytes=0;
+  if (unlikely(tx_q == NULL || tx_q->pNetTx == NULL || nb_pkts == 0)) {
+    return 0;
+  }
+  uint64_t spaceLeft;
+  uint64_t offR, offW, off=0;
+  uint8_t *dst, *ring;
+  offR = *tx_q->ringControl.pRead;
+  offW = *tx_q->ringControl.pWrite;
+  ring =  tx_q->ringControl.ring + offW;
+  if (offW >= offR) {
+    spaceLeft = tx_q->ringControl.size - (offW - offR);
+  } else {
+    spaceLeft = tx_q->ringControl.size - ((offW+(2*tx_q->ringControl.size)) - offR);
+  }
+  if (offW >= tx_q->ringControl.size) {
+    ring -= tx_q->ringControl.size; // Rebase the dst pointer
+  }
+
+  for (i = 0; i < nb_pkts; i++) {
+    dst = ring + off;
+    struct rte_mbuf *mbuf = bufs[i];
+    /* Detect packet size */
+    uint16_t sLen;
+    uint16_t wLen = mbuf->data_len + 4; // Make room for FCS
+    if (unlikely(mbuf->nb_segs > 1)) {
+      while (mbuf->next) {
+        mbuf = mbuf->next;
+        wLen += mbuf->data_len;
+      }
+      // Reset the pointer
+      mbuf = bufs[i];
+    }
+    /* Check if packet needs padding or is too big to transmit */
+    if (unlikely(wLen < tx_q->minTxPktSize)) {
+      wLen = tx_q->minTxPktSize; // Add padding
+      //TODO: There is a data leak issue here. If wLen is just extended
+      //the memory in the ring is not zero'ed and padding will contain
+      //data from previous packets. For performance reasons this has not been
+      //addressed, but the fix is to memset() the padding area.
+    }
+    if (unlikely(wLen > tx_q->maxTxPktSize)) {
+      /* Packet is too big. Drop it as an error and continue */
+      tx_q->err_pkts++;
+      rte_pktmbuf_free(bufs[i]);
+      continue;
+    }
+    // 8B align wireLength and add 16B descriptor
+    sLen = ((wLen + 7) & ~7) + 16;
+    // Do we have space for this packet
+    if (likely(spaceLeft >= sLen)) {
+      // Add packet descriptor
+      *((uint64_t*)dst)=0;
+      *((uint64_t*)dst+1)=(0x0100000040100000LL | (uint64_t)wLen<<32 | sLen);
+      // Copy the packet to the destination
+      rte_memcpy(dst + 16, rte_pktmbuf_mtod(mbuf, u_char *), mbuf->data_len);
+      dst += (16 + mbuf->data_len);
+      if (unlikely(mbuf->nb_segs > 1)) {
+        while (mbuf->next) {
+          mbuf = mbuf->next;
+          rte_memcpy(dst, rte_pktmbuf_mtod(mbuf, u_char *), mbuf->data_len);
+          dst += mbuf->data_len;
+        }
+      }
+      off += sLen;
+      bytes += wLen;
+      spaceLeft -= sLen;
+      rte_pktmbuf_free(bufs[i]);
+    } else {
+      // We cannot place more packets
+      break;
+    }
+  }
+  // Update the write offset
+  offW += off;
+  if (offW >= (2*tx_q->ringControl.size)) {
+    offW -= (2*tx_q->ringControl.size);
+  }
+  *tx_q->ringControl.pWrite = offW;
+
+#ifdef USE_SW_STAT
+  tx_q->tx_pkts += i;
+  tx_q->tx_bytes += bytes;
+#endif
+  return i;
+}
 #else
 static uint16_t eth_ntacc_tx(void *queue,
                              struct rte_mbuf **bufs,
@@ -715,11 +1013,11 @@ static int eth_dev_start(struct rte_eth_dev *dev)
 
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
     if (rx_q[queue].enabled) {
-      NtNtplInfo_t ntplInfo;
+      uint32_t ntplID;
       char ntpl_buf[21];
       /* Delete all NTPL */
       snprintf(ntpl_buf, 20, "Delete=tag==%s", internals->tagName);
-      if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
+      if (DoNtpl(ntpl_buf, &ntplID, internals) != 0) {
         PMD_NTACC_LOG(ERR, "Failed to create delete filters in eth_dev_start\n");
         goto StartError;
       }
@@ -734,10 +1032,12 @@ static int eth_dev_start(struct rte_eth_dev *dev)
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
     if (rx_q[queue].enabled) {
       if ((status = (*_NT_NetRxOpen)(&rx_q[queue].pNetRx, "DPDK", NT_NET_INTERFACE_SEGMENT, rx_q[queue].stream_id, -1)) != NT_SUCCESS) {
-        (*_NT_ExplainError)(status, errorBuffer, sizeof(errorBuffer));
-        PMD_NTACC_LOG(ERR, "NT_NetRxOpen() failed: %s\n", errorBuffer);
+        _log_nt_errors(status, "NT_NetRxOpen() failed", __func__);
         goto StartError;
       }
+#ifdef DIRECT_RX_RING_CONTROL
+      memset(&rx_q[queue].ringControl, 0, sizeof(rx_q[queue].ringControl));
+#endif
       eth_rx_queue_start(dev, queue);
     }
   }
@@ -746,12 +1046,22 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     if (tx_q[queue].enabled) {
       if ((status = (*_NT_NetTxOpen)(&tx_q[queue].pNetTx, "DPDK", 1 << tx_q[queue].port, -1, 0)) != NT_SUCCESS) {
         if ((status = (*_NT_NetTxOpen)(&tx_q[queue].pNetTx, "DPDK", 1 << tx_q[queue].port, -2, 0)) != NT_SUCCESS) {
-          (*_NT_ExplainError)(status, errorBuffer, sizeof(errorBuffer));
-          PMD_NTACC_LOG(DEBUG, "NT_NetTxOpen(0x%X, -2, 0) failed: %s\n", 1 << tx_q[queue].port, errorBuffer);
+          _log_nt_errors(status, "NT_NetTxOpen() with -2 failed", __func__);
           goto StartError;
         }
         PMD_NTACC_LOG(DEBUG, "NT_NetTxOpen() Not optimal hostbuffer found on a neighbour numa node\n");
       }
+#ifdef DIRECT_TX_RING_CONTROL
+      /* Get the ring control structure */
+      NtNetTx_t cmd;
+      cmd.cmd = NT_NETTX_READ_CMD_GET_RING_CONTROL;
+      cmd.u.ringControl.port = internals->port;
+      if ((status = _NT_NetTxRead(tx_q[queue].pNetTx, &cmd)) != NT_SUCCESS) {
+        _log_nt_errors(status, "Failed to get ring control of the TX ring.", __func__);
+        goto StartError;
+      }
+      rte_memcpy(&tx_q[queue].ringControl, &cmd.u.ringControl, sizeof(tx_q[queue].ringControl));
+#endif
     }
     tx_q[queue].plock = &port_locks[tx_q[queue].port];
   }
@@ -788,6 +1098,9 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
       if (rx_q[queue].pNetRx) {
           (void)(*_NT_NetRxClose)(rx_q[queue].pNetRx);
       }
+#ifdef DIRECT_RX_RING_CONTROL
+      memset(&rx_q[queue].ringControl, 0, sizeof(rx_q[queue].ringControl));
+#endif
       eth_rx_queue_stop(dev, queue);
     }
   }
@@ -831,7 +1144,6 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
   NtInfoStream_t hInfo;
   NtInfo_t *pInfo;
   uint status;
-  char errBuf[NT_ERRBUF_SIZE];
 
   dev_info->if_index = internals->if_index;
   dev_info->driver_name = internals->driverName;
@@ -845,22 +1157,21 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
 
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
-    PMD_NTACC_LOG(ERR, "Error %s: Out of memory\n", __func__);
+    _log_out_of_memory_errors(__func__);
     return;
   }
 
   // Read speed capabilities for the port
   if ((status = (*_NT_InfoOpen)(&hInfo, "DPDK Info stream")) != NT_SUCCESS) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-    PMD_NTACC_LOG(ERR, "Error: NT_InfoOpen failed. Code 0x%x = %s\n", status, errBuf);
+    _log_nt_errors(status, "NT_InfoOpen failed", __func__);
     rte_free(pInfo);
     return;
   }
+
   pInfo->cmd = NT_INFO_CMD_READ_PORT_V8;
   pInfo->u.port_v8.portNo = (uint8_t)(internals->txq[0].port);
   if ((status = (*_NT_InfoRead)(hInfo, pInfo)) != 0) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-    PMD_NTACC_LOG(ERR, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
+    _log_nt_errors(status, "NT_InfoRead failed", __func__);
     rte_free(pInfo);
     return;
   }
@@ -941,12 +1252,10 @@ static int eth_stats_get(struct rte_eth_dev *dev,
   int status;
   NtStatistics_t *pStatData;
   uint8_t port;
-  char errBuf[NT_ERRBUF_SIZE];
 
   pStatData = (NtStatistics_t *)rte_malloc(internals->name, sizeof(NtStatistics_t), 0);
   if (!pStatData) {
-    PMD_NTACC_LOG(ERR, "Error %s: Out of memory\n", __func__);
-    return -ENOMEM;
+    return _log_out_of_memory_errors(__func__);
   }
 
   memset(igb_stats, 0, sizeof(*igb_stats));
@@ -960,10 +1269,10 @@ static int eth_stats_get(struct rte_eth_dev *dev,
   pStatData->u.query_v2.clear=0;
   rte_spinlock_lock(&internals->statlock);
   if ((status = (*_NT_StatRead)(internals->hStat, pStatData)) != 0) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
     rte_spinlock_unlock(&internals->statlock);
-    PMD_NTACC_LOG(ERR, "ERROR: NT_StatRead failed. Code 0x%x = %s\n", status, errBuf);
+    _log_nt_errors(status, "NT_StatRead failed", __func__);
     rte_free(pStatData);
+    rte_spinlock_unlock(&internals->statlock);
     return -EIO;
   }
   rte_spinlock_unlock(&internals->statlock);
@@ -1008,11 +1317,10 @@ static void eth_stats_reset(struct rte_eth_dev *dev)
   struct pmd_internals *internals = dev->data->dev_private;
   int status;
   NtStatistics_t *pStatData;
-  char errBuf[NT_ERRBUF_SIZE];
 
   pStatData = (NtStatistics_t *)rte_malloc(internals->name, sizeof(NtStatistics_t), 0);
   if (!pStatData) {
-    PMD_NTACC_LOG(ERR, "Error %s: Out of memory\n", __func__);
+    _log_out_of_memory_errors(__func__);
     return;
   }
 
@@ -1021,8 +1329,9 @@ static void eth_stats_reset(struct rte_eth_dev *dev)
   pStatData->u.query_v2.clear=1;
   rte_spinlock_lock(&internals->statlock);
   if ((status = (*_NT_StatRead)(internals->hStat, pStatData)) != 0) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-    PMD_NTACC_LOG(ERR, "ERROR: NT_StatRead failed. Code 0x%x = %s\n", status, errBuf);
+    rte_spinlock_unlock(&internals->statlock);
+    _log_nt_errors(status, "NT_StatRead failed", __func__);
+    rte_spinlock_unlock(&internals->statlock);
     rte_free(pStatData);
     return;
   }
@@ -1059,26 +1368,22 @@ static int eth_link_update(struct rte_eth_dev *dev,
   NtInfoStream_t hInfo;
   NtInfo_t *pInfo;
   uint status;
-  char errBuf[NT_ERRBUF_SIZE];
   struct pmd_internals *internals = dev->data->dev_private;
 
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
-    PMD_NTACC_LOG(ERR, "Error %s: Out of memory\n", __func__);
-    return -ENOMEM;
+    return _log_out_of_memory_errors(__func__);
   }
 
   if ((status = (*_NT_InfoOpen)(&hInfo, "DPDK Info stream")) != NT_SUCCESS) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-    PMD_NTACC_LOG(ERR, "Error: NT_InfoOpen failed. Code 0x%x = %s\n", status, errBuf);
+    _log_nt_errors(status, "NT_InfoOpen failed", __func__);
     rte_free(pInfo);
     return status;
   }
   pInfo->cmd = NT_INFO_CMD_READ_PORT_V8;
   pInfo->u.port_v8.portNo = (uint8_t)(internals->txq[0].port);
   if ((status = (*_NT_InfoRead)(hInfo, pInfo)) != 0) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-    PMD_NTACC_LOG(ERR, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
+    _log_nt_errors(status, "NT_InfoRead failed", __func__);
     rte_free(pInfo);
     return status;
   }
@@ -1119,7 +1424,7 @@ static int eth_rx_queue_setup(struct rte_eth_dev *dev,
                               uint16_t rx_queue_id,
                               uint16_t nb_rx_desc __rte_unused,
                               unsigned int socket_id __rte_unused,
-                              const struct rte_eth_rxconf *rx_conf,
+                              const struct rte_eth_rxconf *rx_conf __rte_unused,
                               struct rte_mempool *mb_pool)
 {
   struct rte_pktmbuf_pool_private *mbp_priv;
@@ -1131,10 +1436,12 @@ static int eth_rx_queue_setup(struct rte_eth_dev *dev,
   rx_q->in_port = dev->data->port_id;
   rx_q->local_port = internals->local_port;
 
+#if 0
   // Enable contiguous memory batching for this queue
   if (rx_conf->rxq_flags & ETH_RXQ_FLAGS_CMBATCH) {
     rx_q->cmbatch = 1;
   }
+#endif
 
   mbp_priv =  rte_mempool_get_priv(rx_q->mb_pool);
   rx_q->buf_size = (uint16_t) (mbp_priv->mbuf_data_room_size - RTE_PKTMBUF_HEADROOM);
@@ -1145,12 +1452,11 @@ static int eth_rx_queue_setup(struct rte_eth_dev *dev,
 static int eth_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 {
   struct pmd_internals *internals = dev->data->dev_private;
-  NtNtplInfo_t ntplInfo;
   char ntpl_buf[50];
   snprintf(ntpl_buf, sizeof(ntpl_buf),
     "Setup[State=Active] = StreamId == %d",
     internals->rxq[rx_queue_id].stream_id);
-  DoNtpl(ntpl_buf, &ntplInfo, internals);
+  DoNtpl(ntpl_buf, NULL, internals);
   dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
   return 0;
 }
@@ -1158,12 +1464,11 @@ static int eth_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 static int eth_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 {
   struct pmd_internals *internals = dev->data->dev_private;
-  NtNtplInfo_t ntplInfo;
   char ntpl_buf[50];
   snprintf(ntpl_buf, sizeof(ntpl_buf),
     "Setup[State=InActive] = StreamId == %d",
     internals->rxq[rx_queue_id].stream_id);
-  DoNtpl(ntpl_buf, &ntplInfo, internals);
+  DoNtpl(ntpl_buf, NULL, internals);
   dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
   return 0;
 }
@@ -1213,29 +1518,6 @@ static const char *ActionErrorString(enum rte_flow_action_type type)
   }
 }
 
-// No lock in this code
-static void _cleanUpHash(struct rte_flow *flow, struct pmd_internals *internals)
-{
-  struct rte_flow *pTmp;
-  bool found = false;
-
-  if (flow->rss_hf == 0) {
-    // No hash => nothing to cleanup
-    return;
-  }
-  LIST_FOREACH(pTmp, &internals->flows, next) {
-    if (pTmp->rss_hf == flow->rss_hf && pTmp->port == flow->port && pTmp->priority == flow->priority) {
-      // Key set is still in use
-      found = true;
-      break;
-    }
-  }
-  if (!found) {
-    // Hash is not in use anymore. delete it.
-    DeleteHash(flow->rss_hf, flow->port, flow->priority, internals);
-  }
-}
-
 // Do only release the keyset if it is not in used anymore.
 // This means that is it not referenced in any other flow.
 // No lock in this code
@@ -1257,22 +1539,20 @@ static void _cleanUpKeySet(int key, struct pmd_internals *internals)
 // Do only delete the assign command if it is not in used anymore.
 // This means that is it not referenced in any other flow.
 // No lock in this code
-static void _cleanUpAssignNtplId(struct rte_flow *flow, struct pmd_internals *internals)
+static void _cleanUpAssignNtplId(uint32_t assignNtplID, struct pmd_internals *internals)
 {
-  NtNtplInfo_t ntplInfo;
   char ntpl_buf[21];
   struct rte_flow *pFlow;
   LIST_FOREACH(pFlow, &internals->flows, next) {
-    if (pFlow->assign_ntpl_id == flow->assign_ntpl_id) {
+    if (pFlow->assign_ntpl_id == assignNtplID) {
       // NTPL ID still in use
       return;
     }
   }
   // NTPL ID not in use
-  PMD_NTACC_LOG(DEBUG, "Deleting assign filter: %u\n", flow->assign_ntpl_id);
-  snprintf(ntpl_buf, 20, "delete=%d", flow->assign_ntpl_id);
-  DoNtpl(ntpl_buf, &ntplInfo, internals);
-  _cleanUpHash(flow, internals);
+  PMD_NTACC_LOG(DEBUG, "Deleting assign filter: %u\n", assignNtplID);
+  snprintf(ntpl_buf, 20, "delete=%d", assignNtplID);
+  DoNtpl(ntpl_buf, NULL, internals);
 }
 
 // Delete a flow by deleting the NTPL command assigned
@@ -1281,7 +1561,6 @@ static void _cleanUpAssignNtplId(struct rte_flow *flow, struct pmd_internals *in
 // No lock in this code
 static void _cleanUpFlow(struct rte_flow *flow, struct pmd_internals *internals)
 {
-  NtNtplInfo_t ntplInfo;
   char ntpl_buf[21];
   PMD_NTACC_LOG(DEBUG, "Remove flow %p\n", flow);
   LIST_REMOVE(flow, next);
@@ -1289,12 +1568,12 @@ static void _cleanUpFlow(struct rte_flow *flow, struct pmd_internals *internals)
     struct filter_flow *id;
     id = LIST_FIRST(&flow->ntpl_id);
     snprintf(ntpl_buf, 20, "delete=%d", id->ntpl_id);
-    DoNtpl(ntpl_buf, &ntplInfo, internals);
+    DoNtpl(ntpl_buf, NULL, internals);
     PMD_NTACC_LOG(DEBUG, "Deleting Item filter: %s\n", ntpl_buf);
     LIST_REMOVE(id, next);
     rte_free(id);
   }
-  _cleanUpAssignNtplId(flow, internals);
+  _cleanUpAssignNtplId(flow->assign_ntpl_id, internals);
   _cleanUpKeySet(flow->key, internals);
   rte_free(flow);
 }
@@ -1306,7 +1585,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                                   struct rte_flow_error *error)
 {
   struct pmd_internals *internals = dev->data->dev_private;
-  NtNtplInfo_t ntplInfo;
+  uint32_t ntplID;
   uint8_t nb_queues = 0;
   uint8_t list_queues[RTE_ETHDEV_QUEUE_STAT_CNTRS];
   bool filterContinue = false;
@@ -1318,16 +1597,24 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   struct color_s color = {0, false};
   uint8_t nb_ports = 0;
   uint8_t list_ports[MAX_NTACC_PORTS];
+  uint64_t rss_hf = 0;
 
 
   uint64_t typeMask = 0;
   bool reuse;
 
   char *ntpl_buf = NULL;
+  char *filter_buf1 = NULL;
   struct rte_flow *flow = NULL;
   const char *ntpl_str = NULL;
 
   ntpl_buf = rte_malloc(internals->name, NTPL_BSIZE + 1, 0);
+  if (!ntpl_buf) {
+    rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Out of memory");
+    goto FlowError;
+  }
+
+  filter_buf1 = rte_malloc(internals->name, NTPL_BSIZE + 1, 0);
   if (!ntpl_buf) {
     rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Out of memory");
     goto FlowError;
@@ -1349,8 +1636,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
     goto FlowError;
   }
   if (!attr->ingress) {
-  	rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ATTR_INGRESS, NULL, "Attribute ingress must be set");
-  	goto FlowError;
+    rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ATTR_INGRESS, NULL, "Attribute ingress must be set");
+    goto FlowError;
   }
 
   for (; actions->type != RTE_FLOW_ACTION_TYPE_END; ++actions) {
@@ -1382,6 +1669,11 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
           goto FlowError;
         }
         list_queues[nb_queues++] = rss->queue[i];
+
+        // Set hash mode function
+        if (rss->rss_conf) {
+          rss_hf = rss->rss_conf->rss_hf;
+        }
       }
       break;
     case RTE_FLOW_ACTION_TYPE_QUEUE:
@@ -1432,13 +1724,11 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   // Set the stream IDs
   CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
 
-  // Set the tag name
-  snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ";tag=%s]=", internals->tagName);
-
   // Set the filter expression
   tunnel = false;
+  filter_buf1[0] = 0;
   for (; items->type != RTE_FLOW_ITEM_TYPE_END; ++items) {
-    switch (items->type) {
+    switch ((int)items->type) {
       case RTE_FLOW_ITEM_TYPE_NTPL:
         ntpl_str = ((const struct rte_flow_item_ntpl*)items->spec)->ntpl_str;
         if (((const struct rte_flow_item_ntpl*)items->spec)->tunnel == RTE_FLOW_NTPL_TUNNEL) {
@@ -1468,7 +1758,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       break;
 
       case RTE_FLOW_ITEM_TYPE_IPV4:
-        if (SetIPV4Filter(&ntpl_buf[strlen(ntpl_buf)],
+        if (SetIPV4Filter(&filter_buf1[strlen(filter_buf1)],
                           &filterContinue,
                           items,
                           tunnel,
@@ -1480,7 +1770,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         break;
 
     case RTE_FLOW_ITEM_TYPE_IPV6:
-      if (SetIPV6Filter(&ntpl_buf[strlen(ntpl_buf)],
+      if (SetIPV6Filter(&filter_buf1[strlen(filter_buf1)],
                         &filterContinue,
                         items,
                         tunnel,
@@ -1492,7 +1782,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       break;
 
       case RTE_FLOW_ITEM_TYPE_SCTP:
-        if (SetSCTPFilter(&ntpl_buf[strlen(ntpl_buf)],
+        if (SetSCTPFilter(&filter_buf1[strlen(filter_buf1)],
                           &filterContinue,
                           items,
                           tunnel,
@@ -1504,7 +1794,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         break;
 
       case RTE_FLOW_ITEM_TYPE_TCP:
-        if (SetTCPFilter(&ntpl_buf[strlen(ntpl_buf)],
+        if (SetTCPFilter(&filter_buf1[strlen(filter_buf1)],
                           &filterContinue,
                           items,
                           tunnel,
@@ -1516,7 +1806,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         break;
 
     case RTE_FLOW_ITEM_TYPE_UDP:
-      if (SetUDPFilter(&ntpl_buf[strlen(ntpl_buf)],
+      if (SetUDPFilter(&filter_buf1[strlen(filter_buf1)],
                         &filterContinue,
                         items,
                         tunnel,
@@ -1528,7 +1818,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       break;
 
       case RTE_FLOW_ITEM_TYPE_ICMP:
-        if (SetICMPFilter(&ntpl_buf[strlen(ntpl_buf)],
+        if (SetICMPFilter(&filter_buf1[strlen(filter_buf1)],
                           &filterContinue,
                           items,
                           tunnel,
@@ -1540,7 +1830,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         break;
 
     case RTE_FLOW_ITEM_TYPE_VLAN:
-      if (SetVlanFilter(&ntpl_buf[strlen(ntpl_buf)],
+      if (SetVlanFilter(&filter_buf1[strlen(filter_buf1)],
                         &filterContinue,
                         items,
                         tunnel,
@@ -1552,7 +1842,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       break;
 
     case RTE_FLOW_ITEM_TYPE_MPLS:
-      if (SetMplsFilter(&ntpl_buf[strlen(ntpl_buf)],
+      if (SetMplsFilter(&filter_buf1[strlen(filter_buf1)],
                         &filterContinue,
                         items,
                         tunnel,
@@ -1564,7 +1854,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       break;
 
     case  RTE_FLOW_ITEM_TYPE_GRE:
-      if (SetGreFilter(&ntpl_buf[strlen(ntpl_buf)],
+      if (SetGreFilter(&filter_buf1[strlen(filter_buf1)],
                        &filterContinue,
                        items,
                        &typeMask) != 0) {
@@ -1574,7 +1864,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       tunnel = true;
       break;
     case RTE_FLOW_ITEM_TYPE_GTPU:
-      if (SetGtpFilter(&ntpl_buf[strlen(ntpl_buf)],
+      if (SetGtpFilter(&filter_buf1[strlen(filter_buf1)],
                        &filterContinue,
                        items,
                        &typeMask,
@@ -1585,7 +1875,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       tunnel = true;
       break;
     case 	RTE_FLOW_ITEM_TYPE_GTPC:
-      if (SetGtpFilter(&ntpl_buf[strlen(ntpl_buf)],
+      if (SetGtpFilter(&filter_buf1[strlen(filter_buf1)],
                        &filterContinue,
                        items,
                        &typeMask,
@@ -1600,7 +1890,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
     case RTE_FLOW_ITEM_TYPE_VXLAN:
     case RTE_FLOW_ITEM_TYPE_NVGRE:
     case RTE_FLOW_ITEM_TYPE_IPinIP:
-      switch (items->type) {
+      switch ((int)items->type) {
       case RTE_FLOW_ITEM_TYPE_VXLAN:
         tunneltype = VXLAN_TUNNEL_TYPE;
         break;
@@ -1615,7 +1905,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         goto FlowError;
       }
 
-      if (SetTunnelFilter(&ntpl_buf[strlen(ntpl_buf)],
+      if (SetTunnelFilter(&filter_buf1[strlen(filter_buf1)],
                         &filterContinue,
                         tunneltype,
                         &typeMask) != 0) {
@@ -1629,67 +1919,77 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Item is not supported");
       goto FlowError;
 
-      }
     }
+  }
 
-    if (ntpl_str) {
-      if (filterContinue) {
-        snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " and");
-      }
-      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " %s", ntpl_str);
-      filterContinue = true;
+  // Create HASH
+  if (rss->rss_conf) {
+    // If RSS is used, then set the Hash mode
+    if (CreateHash(&ntpl_buf[strlen(ntpl_buf)], rss_hf, internals, tunnel) != 0) {
+      rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Failed setting up hash mode");
+      goto FlowError;
     }
+  }
 
+  // Set the tag name
+  snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ";tag=%s]=", internals->tagName);
+
+  // Add the filter created info to the NTPL buffer
+  strncpy(&ntpl_buf[strlen(ntpl_buf)], filter_buf1, NTPL_BSIZE - strlen(ntpl_buf) - 1);
+
+  if (ntpl_str) {
     if (filterContinue) {
       snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " and");
     }
-    if (nb_ports == 0) {
-    // Set the ports
-      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " port==%u", internals->port);
-      filterContinue = true;
-    }
-    else {
-      int ports;
-      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " port==");
-      for (ports = 0; ports < nb_ports;ports++) {
-        snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "%u", list_ports[ports]);
-        if (ports < (nb_ports - 1)) {
-          snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ",");
-        }
-      }
-      filterContinue = true;
-    }
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " %s", ntpl_str);
+    filterContinue = true;
+  }
 
-    if (CreateOptimizedFilter(ntpl_buf, internals, flow, &filterContinue, typeMask, list_queues, nb_queues, &reuse, &color) != 0) {
-      rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Creating filter error");
+  if (filterContinue) {
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " and");
+  }
+  if (nb_ports == 0) {
+  // Set the ports
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " port==%u", internals->port);
+    filterContinue = true;
+  }
+  else {
+    int ports;
+    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " port==");
+    for (ports = 0; ports < nb_ports;ports++) {
+      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "%u", list_ports[ports]);
+      if (ports < (nb_ports - 1)) {
+        snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ",");
+      }
+    }
+    filterContinue = true;
+  }
+
+  if (CreateOptimizedFilter(ntpl_buf, internals, flow, &filterContinue, typeMask, list_queues, nb_queues, &reuse, &color) != 0) {
+    rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Creating filter error");
+    goto FlowError;
+  }
+
+  if (!reuse) {
+    if (DoNtpl(ntpl_buf, &ntplID, internals) != 0) {
+      rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Filter error");
       goto FlowError;
     }
-
-    if (!reuse) {
-      if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
-        rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Filter error");
-        goto FlowError;
-      }
-      rte_spinlock_lock(&internals->lock);
-      flow->assign_ntpl_id = ntplInfo.ntplId;
-      rte_spinlock_unlock(&internals->lock);
-    }
-
-    if (rss && rss->rss_conf) {
-      // If RSS is used, then set the Hash mode
-      if (CreateHash(rss->rss_conf->rss_hf, internals, flow, attr->priority + 1) != 0) {
-        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Failed setting up hash mode");
-        goto FlowError;
-      }
-    }
-
-    if (ntpl_buf) {
-      rte_free(ntpl_buf);
-    }
     rte_spinlock_lock(&internals->lock);
-    LIST_INSERT_HEAD(&internals->flows, flow, next);
+    flow->assign_ntpl_id = ntplID;
     rte_spinlock_unlock(&internals->lock);
-    return flow;
+  }
+
+  if (ntpl_buf) {
+    rte_free(ntpl_buf);
+  }
+  if (filter_buf1) {
+    rte_free(filter_buf1);
+  }
+  rte_spinlock_lock(&internals->lock);
+  LIST_INSERT_HEAD(&internals->flows, flow, next);
+  rte_spinlock_unlock(&internals->lock);
+  return flow;
 
 FlowError:
     if (flow) {
@@ -1697,6 +1997,9 @@ FlowError:
     }
     if (ntpl_buf) {
       rte_free(ntpl_buf);
+    }
+    if (filter_buf1) {
+      rte_free(filter_buf1);
     }
     return NULL;
 }
@@ -1769,7 +2072,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
                              int set,
                              struct rte_flow_error *error __rte_unused)
 {
-  NtNtplInfo_t ntplInfo;
+  uint32_t ntplID;
   struct pmd_internals *internals = dev->data->dev_private;
   int status;
   int i;
@@ -1781,12 +2084,11 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       struct filter_flow *id;
       id = LIST_FIRST(&internals->defaultFlow->ntpl_id);
       snprintf(ntpl_buf, 20, "delete=%d", id->ntpl_id);
-      DoNtpl(ntpl_buf, &ntplInfo, internals);
+      DoNtpl(ntpl_buf, NULL, internals);
       PMD_NTACC_LOG(DEBUG, "Deleting Item filter 0: %s\n", ntpl_buf);
       LIST_REMOVE(id, next);
       rte_free(id);
     }
-    _cleanUpHash(internals->defaultFlow, internals);
     rte_spinlock_unlock(&internals->lock);
 
     // Call RxGet in order to activate the delete of the default filter
@@ -1823,29 +2125,29 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
 
     ntpl_buf = rte_malloc(internals->name, NTPL_BSIZE + 1, 0);
     if (!ntpl_buf) {
-      PMD_NTACC_LOG(ERR, "Out of memory in flow_isolate\n");
+      _log_out_of_memory_errors(__func__);
       goto IsolateError;
     }
 
     if (nb_queues > 0 && rx_q[0].enabled) {
       struct rte_flow *defFlow = rte_malloc(internals->name, sizeof(struct rte_flow), 0);
       if (!defFlow) {
-        PMD_NTACC_LOG(ERR, "Out of memory in flow_isolate\n");
+        _log_out_of_memory_errors(__func__);
         goto IsolateError;
       }
       memset(defFlow, 0, sizeof(struct rte_flow));
 
       // Set the priority
 #ifdef COPY_OFFSET0
-      snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=62;Descriptor=DYN3,length=20,colorbits=14,Offset0=%s[0];", STRINGIZE_VALUE_OF(COPY_OFFSET0));
+      snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=62;Descriptor=DYN3,length=22,colorbits=32,Offset0=%s[0];color=0xFFFFFFFF;", STRINGIZE_VALUE_OF(COPY_OFFSET0));
 #else
-      snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=62;Descriptor=DYN3,length=20,colorbits=14;");
+      snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=62;Descriptor=DYN3,length=22,colorbits=32;color=0xFFFFFFFF;");
 #endif
       if (internals->rss_hf != 0) {
         // Set the stream IDs
         CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
         // If RSS is used, then set the Hash mode
-        if (CreateHash(internals->rss_hf, internals, defFlow, 62) != 0) {
+        if (CreateHash(&ntpl_buf[strlen(ntpl_buf)], internals->rss_hf, internals, false) != 0) {
           PMD_NTACC_LOG(ERR, "Failed to create hash function eth_dev_start\n");
           goto IsolateError;
         }
@@ -1859,7 +2161,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
                ";tag=%s]=port==%u", internals->tagName, internals->port);
 
-      if (DoNtpl(ntpl_buf, &ntplInfo, internals) != 0) {
+      if (DoNtpl(ntpl_buf, &ntplID, internals) != 0) {
         PMD_NTACC_LOG(ERR, "Failed to create default filter in flow_isolate\n");
         goto IsolateError;
       }
@@ -1872,7 +2174,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
 
       rte_spinlock_lock(&internals->lock);
       defFlow->priority = 62;
-      pushNtplID(defFlow, ntplInfo.ntplId);
+      pushNtplID(defFlow, ntplID);
       internals->defaultFlow = defFlow;
       rte_spinlock_unlock(&internals->lock);
     }
@@ -1969,7 +2271,7 @@ static int eth_rss_hash_update(struct rte_eth_dev *dev,
     rte_spinlock_lock(&internals->lock);
     FlushHash(internals);
     rte_spinlock_unlock(&internals->lock);
-    if (CreateHash(rss_conf->rss_hf, internals, &dummyFlow, 61) != 0) {
+    if (CreateHashModeHash(rss_conf->rss_hf, internals, &dummyFlow, 61) != 0) {
       PMD_NTACC_LOG(ERR, "Failed to create hash function eth_rss_hash_update\n");
       ret = 1;
       goto UpdateError;
@@ -2011,7 +2313,6 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   struct pmd_internals *internals = NULL;
   struct rte_eth_dev *eth_dev = NULL;
   uint i, status;
-  char errBuf[NT_ERRBUF_SIZE];
   NtInfo_t *pInfo = NULL;
   struct rte_eth_link pmd_link;
   char name[NTACC_NAME_LEN];
@@ -2025,15 +2326,13 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
 
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
-    PMD_NTACC_LOG(ERR, "Error %s: Out of memory\n", __func__);
-    iRet = -ENOMEM;
+    iRet = _log_out_of_memory_errors(__func__);
     goto error;
   }
 
   /* Open the information stream */
   if ((status = (*_NT_InfoOpen)(&hInfo, "DPDK Info stream")) != NT_SUCCESS) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-    PMD_NTACC_LOG(ERR, ">>> Error: NT_InfoOpen failed. Code 0x%x = %s\n", status, errBuf);
+    _log_nt_errors(status, "NT_InfoOpen failed", __func__);
     iRet = status;
     goto error;
   }
@@ -2041,8 +2340,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   /* Find driver version */
   pInfo->cmd = NT_INFO_CMD_READ_SYSTEM;
   if ((status = (*_NT_InfoRead)(hInfo, pInfo)) != 0) {
-    (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-    PMD_NTACC_LOG(ERR, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
+    _log_nt_errors(status, "NT_InfoRead failed", __func__);
     iRet = status;
     goto error;
   }
@@ -2054,9 +2352,9 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   version.patch = pInfo->u.system.data.version.patch;
 
   // Check that the driver is supported
-  if (supportedDriver.major != version.major ||
-      supportedDriver.minor != version.minor) {
-    PMD_NTACC_LOG(ERR, "ERROR: NT Driver version %d.%d.%d is not supported. The version must be %d.%d.%d.\n",
+  if (((supportedDriver.major * 100) + supportedDriver.minor)  >
+      ((version.major * 100) + version.minor)) {
+    PMD_NTACC_LOG(ERR, "ERROR: NT Driver version %d.%d.%d is not supported. The version must be %d.%d.%d or newer.\n",
             version.major, version.minor, version.patch,
             supportedDriver.major, supportedDriver.minor, supportedDriver.patch);
     iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
@@ -2068,8 +2366,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     pInfo->cmd = NT_INFO_CMD_READ_ADAPTER_V6;
     pInfo->u.adapter_v6.adapterNo = i;
     if ((status = (*_NT_InfoRead)(hInfo, pInfo)) != 0) {
-      (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-      PMD_NTACC_LOG(ERR, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
+      _log_nt_errors(status, "NT_InfoRead failed", __func__);
       iRet = status;
       goto error;
     }
@@ -2097,8 +2394,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     pInfo->cmd = NT_INFO_CMD_READ_PORT_V7;
     pInfo->u.port_v7.portNo = (uint8_t)localPort + offset;
     if ((status = (*_NT_InfoRead)(hInfo, pInfo)) != 0) {
-      (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-      PMD_NTACC_LOG(ERR, "ERROR: NT_InfoRead failed. Code 0x%x = %s\n", status, errBuf);
+      _log_nt_errors(status, "NT_InfoRead failed", __func__);
       iRet = status;
       goto error;
     }
@@ -2114,9 +2410,9 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     for (i = 0; i < NB_SUPPORTED_FPGAS; i++) {
       if (supportedAdapters[i].item == pInfo->u.port_v7.data.adapterInfo.fpgaid.s.item &&
           supportedAdapters[i].product == pInfo->u.port_v7.data.adapterInfo.fpgaid.s.product) {
-        if (supportedAdapters[i].ver != pInfo->u.port_v7.data.adapterInfo.fpgaid.s.ver ||
-            supportedAdapters[i].rev != pInfo->u.port_v7.data.adapterInfo.fpgaid.s.rev) {
-          PMD_NTACC_LOG(ERR, "ERROR: NT adapter firmware %03d-%04d-%02d-%02d-%02d is not supported. The firmware must be %03d-%04d-%02d-%02d-%02d.\n",
+        if (((supportedAdapters[i].ver * 100) + supportedAdapters[i].rev) >
+            ((pInfo->u.port_v7.data.adapterInfo.fpgaid.s.ver * 100) + pInfo->u.port_v7.data.adapterInfo.fpgaid.s.rev)) {
+          PMD_NTACC_LOG(ERR, "ERROR: NT adapter firmware %03d-%04d-%02d-%02d-%02d is not supported. The firmware must be %03d-%04d-%02d-%02d-%02d or newer.\n",
                   pInfo->u.port_v7.data.adapterInfo.fpgaid.s.item,
                   pInfo->u.port_v7.data.adapterInfo.fpgaid.s.product,
                   pInfo->u.port_v7.data.adapterInfo.fpgaid.s.ver,
@@ -2165,16 +2461,14 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
 
     internals = rte_zmalloc_socket(name, sizeof(struct pmd_internals), RTE_CACHE_LINE_SIZE, dev->device.numa_node);
     if (internals == NULL) {
-      PMD_NTACC_LOG(ERR, "ERROR: Failed to allocate memory\n");
-      iRet = -ENOMEM;
+      iRet = _log_out_of_memory_errors(__func__);
       goto error;
     }
 
     if (strlen(ntpl_file) > 0) {
       internals->ntpl_file  = rte_zmalloc(name, strlen(ntpl_file) + 1, 0);
       if (internals->ntpl_file == NULL) {
-        PMD_NTACC_LOG(ERR, "ERROR: Failed to allocate memory\n");
-        iRet = -ENOMEM;
+        iRet = _log_out_of_memory_errors(__func__);
         goto error;
       }
       strcpy(internals->ntpl_file, ntpl_file);
@@ -2261,8 +2555,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   #ifndef USE_SW_STAT
     /* Open the stat stream */
     if ((status = (*_NT_StatOpen)(&internals->hStat, "DPDK Stat stream")) != NT_SUCCESS) {
-      (*_NT_ExplainError)(status, errBuf, sizeof(errBuf));
-      PMD_NTACC_LOG(ERR, ">>> Error: NT_StatOpen failed. Code 0x%x = %s\n", status, errBuf);
+      _log_nt_errors(status, "NT_StatOpen failed", __func__);
       iRet = status;
       goto error;
     }
@@ -2415,6 +2708,12 @@ static int _nt_lib_open(void)
     return -1;
   }
 
+  _NT_NetRxRead = dlsym(_libnt, "NT_NetRxRead");
+  if (_NT_NetRxRead == NULL) {
+    fprintf(stderr, "Failed to find \"NT_NetRxRead\" in %s\n", path);
+    return -1;
+  }
+
   _NT_NetTxRelease = dlsym(_libnt, "NT_NetTxRelease");
   if (_NT_NetTxRelease == NULL) {
     fprintf(stderr, "Failed to find \"NT_NetTxRelease\" in %s\n", path);
@@ -2559,7 +2858,11 @@ static struct rte_pci_driver ntacc_driver = {
 RTE_INIT(rte_ntacc_pmd_init);
 static void rte_ntacc_pmd_init(void)
 {
+  printf("#######################################\n");
 	rte_pci_register(&ntacc_driver);
+	ntacc_logtype = rte_log_register("pmd.net.ntacc");
+	if (ntacc_logtype >= 0)
+		rte_log_set_level(ntacc_logtype, RTE_LOG_DEBUG);//RTE_LOG_NOTICE);
 }
 
 RTE_PMD_EXPORT_NAME(net_ntacc, __COUNTER__);
