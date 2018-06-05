@@ -411,7 +411,6 @@ mlx5_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 	char ifname[IF_NAMESIZE];
 
 	info->pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-
 	priv_lock(priv);
 	/* FIXME: we should ask the device for these values. */
 	info->min_rx_bufsize = 32;
@@ -517,7 +516,6 @@ mlx5_link_update_unlocked_gset(struct rte_eth_dev *dev)
 	int link_speed = 0;
 
 	/* priv_lock() is not taken to allow concurrent calls. */
-
 	if (priv_ifreq(priv, SIOCGIFFLAGS, &ifr)) {
 		WARN("ioctl(SIOCGIFFLAGS) failed: %s", strerror(errno));
 		return -1;
@@ -863,7 +861,6 @@ mlx5_dev_get_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 		     strerror(ret));
 		goto out;
 	}
-
 	fc_conf->autoneg = ethpause.autoneg;
 	if (ethpause.rx_pause && ethpause.tx_pause)
 		fc_conf->mode = RTE_FC_FULL;
@@ -874,7 +871,6 @@ mlx5_dev_get_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 	else
 		fc_conf->mode = RTE_FC_NONE;
 	ret = 0;
-
 out:
 	priv_unlock(priv);
 	assert(ret >= 0);
@@ -915,7 +911,6 @@ mlx5_dev_set_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 		ethpause.tx_pause = 1;
 	else
 		ethpause.tx_pause = 0;
-
 	priv_lock(priv);
 	if (priv_ifreq(priv, SIOCETHTOOL, &ifr)) {
 		ret = errno;
@@ -925,7 +920,6 @@ mlx5_dev_set_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 		goto out;
 	}
 	ret = 0;
-
 out:
 	priv_unlock(priv);
 	assert(ret >= 0);
@@ -1183,7 +1177,6 @@ priv_dev_interrupt_handler_install(struct priv *priv, struct rte_eth_dev *dev)
 		rte_intr_callback_register(&priv->intr_handle,
 					   mlx5_dev_interrupt_handler, dev);
 	}
-
 	rc = priv_socket_init(priv);
 	if (!rc && priv->primary_socket) {
 		priv->intr_handle_socket.fd = priv->primary_socket;
