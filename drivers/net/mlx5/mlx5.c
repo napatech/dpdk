@@ -119,6 +119,10 @@ struct mlx5_args {
 	int tx_vec_en;
 	int rx_vec_en;
 };
+
+/** Driver-specific log messages type. */
+int mlx5_logtype;
+
 /**
  * Retrieve integer value from environment variable.
  *
@@ -207,9 +211,9 @@ mlx5_dev_close(struct rte_eth_dev *dev)
 	unsigned int i;
 	int ret;
 
-	DEBUG("port %u closing device \"%s\"",
-	      dev->data->port_id,
-	      ((priv->ctx != NULL) ? priv->ctx->device->name : ""));
+	DRV_LOG(DEBUG, "port %u closing device \"%s\"",
+		dev->data->port_id,
+		((priv->ctx != NULL) ? priv->ctx->device->name : ""));
 	/* In case mlx5_dev_stop() has not been called. */
 	mlx5_dev_interrupt_handler_uninstall(dev);
 	mlx5_traffic_disable(dev);
@@ -246,35 +250,36 @@ mlx5_dev_close(struct rte_eth_dev *dev)
 		mlx5_socket_uninit(dev);
 	ret = mlx5_hrxq_ibv_verify(dev);
 	if (ret)
-		WARN("port %u some hash Rx queue still remain",
-		     dev->data->port_id);
+		DRV_LOG(WARNING, "port %u some hash Rx queue still remain",
+			dev->data->port_id);
 	ret = mlx5_ind_table_ibv_verify(dev);
 	if (ret)
-		WARN("port %u some indirection table still remain",
-		     dev->data->port_id);
+		DRV_LOG(WARNING, "port %u some indirection table still remain",
+			dev->data->port_id);
 	ret = mlx5_rxq_ibv_verify(dev);
 	if (ret)
-		WARN("port %u some Verbs Rx queue still remain",
-		     dev->data->port_id);
+		DRV_LOG(WARNING, "port %u some Verbs Rx queue still remain",
+			dev->data->port_id);
 	ret = mlx5_rxq_verify(dev);
 	if (ret)
-		WARN("port %u some Rx queues still remain",
-		     dev->data->port_id);
+		DRV_LOG(WARNING, "port %u some Rx queues still remain",
+			dev->data->port_id);
 	ret = mlx5_txq_ibv_verify(dev);
 	if (ret)
-		WARN("port %u some Verbs Tx queue still remain",
-		     dev->data->port_id);
+		DRV_LOG(WARNING, "port %u some Verbs Tx queue still remain",
+			dev->data->port_id);
 	ret = mlx5_txq_verify(dev);
 	if (ret)
-		WARN("port %u some Tx queues still remain",
-		     dev->data->port_id);
+		DRV_LOG(WARNING, "port %u some Tx queues still remain",
+			dev->data->port_id);
 	ret = mlx5_flow_verify(dev);
 	if (ret)
-		WARN("port %u some flows still remain", dev->data->port_id);
+		DRV_LOG(WARNING, "port %u some flows still remain",
+			dev->data->port_id);
 	ret = mlx5_mr_verify(dev);
 	if (ret)
-		WARN("port %u some memory region still remain",
-		     dev->data->port_id);
+		DRV_LOG(WARNING, "port %u some memory region still remain",
+			dev->data->port_id);
 	memset(priv, 0, sizeof(*priv));
 }
 
@@ -424,7 +429,7 @@ mlx5_args_check(const char *key, const char *val, void *opaque)
 	tmp = strtoul(val, NULL, 0);
 	if (errno) {
 		rte_errno = errno;
-		WARN("%s: \"%s\" is not a valid integer", key, val);
+		DRV_LOG(WARNING, "%s: \"%s\" is not a valid integer", key, val);
 		return -rte_errno;
 	}
 	if (strcmp(MLX5_RXQ_CQE_COMP_EN, key) == 0) {
@@ -446,7 +451,7 @@ mlx5_args_check(const char *key, const char *val, void *opaque)
 	} else if (strcmp(MLX5_RX_VEC_EN, key) == 0) {
 		args->rx_vec_en = !!tmp;
 	} else {
-		WARN("%s: unknown parameter", key);
+		DRV_LOG(WARNING, "%s: unknown parameter", key);
 		rte_errno = EINVAL;
 		return -rte_errno;
 	}
@@ -551,17 +556,18 @@ mlx5_uar_init_primary(struct rte_eth_dev *dev)
 	addr = mmap(addr, MLX5_UAR_SIZE,
 		    PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (addr == MAP_FAILED) {
-		ERROR("port %u failed to reserve UAR address space, please"
-		      " adjust MLX5_UAR_SIZE or try --base-virtaddr",
-		      dev->data->port_id);
+		DRV_LOG(ERR,
+			"port %u failed to reserve UAR address space, please"
+			" adjust MLX5_UAR_SIZE or try --base-virtaddr",
+			dev->data->port_id);
 		rte_errno = ENOMEM;
 		return -rte_errno;
 	}
 	/* Accept either same addr or a new addr returned from mmap if target
 	 * range occupied.
 	 */
-	INFO("port %u reserved UAR address space: %p", dev->data->port_id,
-	     addr);
+	DRV_LOG(INFO, "port %u reserved UAR address space: %p",
+		dev->data->port_id, addr);
 	priv->uar_base = addr; /* for primary and secondary UAR re-mmap. */
 	uar_base = addr; /* process local, don't reserve again. */
 	return 0;
@@ -592,21 +598,23 @@ mlx5_uar_init_secondary(struct rte_eth_dev *dev)
 	addr = mmap(priv->uar_base, MLX5_UAR_SIZE,
 		    PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (addr == MAP_FAILED) {
-		ERROR("port %u UAR mmap failed: %p size: %llu",
-		      dev->data->port_id, priv->uar_base, MLX5_UAR_SIZE);
+		DRV_LOG(ERR, "port %u UAR mmap failed: %p size: %llu",
+			dev->data->port_id, priv->uar_base, MLX5_UAR_SIZE);
 		rte_errno = ENXIO;
 		return -rte_errno;
 	}
 	if (priv->uar_base != addr) {
-		ERROR("port %u UAR address %p size %llu occupied, please adjust "
-		      "MLX5_UAR_OFFSET or try EAL parameter --base-virtaddr",
-		      dev->data->port_id, priv->uar_base, MLX5_UAR_SIZE);
+		DRV_LOG(ERR,
+			"port %u UAR address %p size %llu occupied, please"
+			" adjust MLX5_UAR_OFFSET or try EAL parameter"
+			" --base-virtaddr",
+			dev->data->port_id, priv->uar_base, MLX5_UAR_SIZE);
 		rte_errno = ENXIO;
 		return -rte_errno;
 	}
 	uar_base = addr; /* process local, don't reserve again */
-	INFO("port %u reserved UAR address space: %p", dev->data->port_id,
-	     addr);
+	DRV_LOG(INFO, "port %u reserved UAR address space: %p",
+		dev->data->port_id, addr);
 	return 0;
 }
 
@@ -679,11 +687,11 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	/* Get mlx5_dev[] index. */
 	idx = mlx5_dev_idx(&pci_dev->addr);
 	if (idx == -1) {
-		ERROR("this driver cannot support any more adapters");
+		DRV_LOG(ERR, "this driver cannot support any more adapters");
 		err = ENOMEM;
 		goto error;
 	}
-	DEBUG("using driver device index %d", idx);
+	DRV_LOG(DEBUG, "using driver device index %d", idx);
 	/* Save PCI address. */
 	mlx5_dev[idx].pci_addr = pci_dev->addr;
 	list = ibv_get_device_list(&i);
@@ -691,7 +699,8 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		assert(errno);
 		err = errno;
 		if (errno == ENOSYS)
-			ERROR("cannot list devices, is ib_uverbs loaded?");
+			DRV_LOG(ERR,
+				"cannot list devices, is ib_uverbs loaded?");
 		goto error;
 	}
 	assert(i >= 0);
@@ -703,7 +712,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		struct rte_pci_addr pci_addr;
 
 		--i;
-		DEBUG("checking device \"%s\"", list[i]->name);
+		DRV_LOG(DEBUG, "checking device \"%s\"", list[i]->name);
 		if (mlx5_ibv_device_to_pci_addr(list[i], &pci_addr))
 			continue;
 		if ((pci_dev->addr.domain != pci_addr.domain) ||
@@ -725,7 +734,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		default:
 			break;
 		}
-		INFO("PCI information matches, using device \"%s\"",
+		DRV_LOG(INFO, "PCI information matches, using device \"%s\"",
 		     list[i]->name);
 		attr_ctx = ibv_open_device(list[i]);
 		rte_errno = errno;
@@ -736,16 +745,18 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		ibv_free_device_list(list);
 		switch (err) {
 		case 0:
-			ERROR("cannot access device, is mlx5_ib loaded?");
+			DRV_LOG(ERR,
+				"cannot access device, is mlx5_ib loaded?");
 			err = ENODEV;
 			goto error;
 		case EINVAL:
-			ERROR("cannot use device, are drivers up to date?");
+			DRV_LOG(ERR,
+				"cannot use device, are drivers up to date?");
 			goto error;
 		}
 	}
 	ibv_dev = list[i];
-	DEBUG("device opened");
+	DRV_LOG(DEBUG, "device opened");
 	/*
 	 * Multi-packet send is supported by ConnectX-4 Lx PF as well
 	 * as all ConnectX-5 devices.
@@ -753,14 +764,14 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	mlx5dv_query_device(attr_ctx, &attrs_out);
 	if (attrs_out.flags & MLX5DV_CONTEXT_FLAGS_MPW_ALLOWED) {
 		if (attrs_out.flags & MLX5DV_CONTEXT_FLAGS_ENHANCED_MPW) {
-			DEBUG("enhanced MPW is supported");
+			DRV_LOG(DEBUG, "enhanced MPW is supported");
 			mps = MLX5_MPW_ENHANCED;
 		} else {
-			DEBUG("MPW is supported");
+			DRV_LOG(DEBUG, "MPW is supported");
 			mps = MLX5_MPW;
 		}
 	} else {
-		DEBUG("MPW isn't supported");
+		DRV_LOG(DEBUG, "MPW isn't supported");
 		mps = MLX5_MPW_DISABLED;
 	}
 	if (RTE_CACHE_LINE_SIZE == 128 &&
@@ -772,7 +783,8 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		err = errno;
 		goto error;
 	}
-	INFO("%u port(s) detected", device_attr.orig_attr.phys_port_cnt);
+	DRV_LOG(INFO, "%u port(s) detected",
+		device_attr.orig_attr.phys_port_cnt);
 	for (i = 0; i < device_attr.orig_attr.phys_port_cnt; i++) {
 		char name[RTE_ETH_NAME_MAX_LEN];
 		uint32_t port = i + 1; /* ports are indexed from one */
@@ -804,7 +816,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
 			eth_dev = rte_eth_dev_attach_secondary(name);
 			if (eth_dev == NULL) {
-				ERROR("can not attach rte ethdev");
+				DRV_LOG(ERR, "can not attach rte ethdev");
 				rte_errno = ENOMEM;
 				err = rte_errno;
 				goto error;
@@ -826,7 +838,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 			mlx5_select_tx_function(eth_dev);
 			continue;
 		}
-		DEBUG("using port %u (%08" PRIx32 ")", port, test);
+		DRV_LOG(DEBUG, "using port %u (%08" PRIx32 ")", port, test);
 		ctx = ibv_open_device(ibv_dev);
 		if (ctx == NULL) {
 			err = ENODEV;
@@ -836,23 +848,24 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		/* Check port status. */
 		err = ibv_query_port(ctx, port, &port_attr);
 		if (err) {
-			ERROR("port query failed: %s", strerror(err));
+			DRV_LOG(ERR, "port query failed: %s", strerror(err));
 			goto port_error;
 		}
 		if (port_attr.link_layer != IBV_LINK_LAYER_ETHERNET) {
-			ERROR("port %d is not configured in Ethernet mode",
-			      port);
+			DRV_LOG(ERR,
+				"port %d is not configured in Ethernet mode",
+				port);
 			err = EINVAL;
 			goto port_error;
 		}
 		if (port_attr.state != IBV_PORT_ACTIVE)
-			DEBUG("port %d is not active: \"%s\" (%d)",
-			      port, ibv_port_state_str(port_attr.state),
-			      port_attr.state);
+			DRV_LOG(DEBUG, "port %d is not active: \"%s\" (%d)",
+				port, ibv_port_state_str(port_attr.state),
+				port_attr.state);
 		/* Allocate protection domain. */
 		pd = ibv_alloc_pd(ctx);
 		if (pd == NULL) {
-			ERROR("PD allocation failure");
+			DRV_LOG(ERR, "PD allocation failure");
 			err = ENOMEM;
 			goto port_error;
 		}
@@ -862,7 +875,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 				   sizeof(*priv),
 				   RTE_CACHE_LINE_SIZE);
 		if (priv == NULL) {
-			ERROR("priv allocation failure");
+			DRV_LOG(ERR, "priv allocation failure");
 			err = ENOMEM;
 			goto port_error;
 		}
@@ -881,35 +894,36 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		priv->rx_vec_en = 1;
 		err = mlx5_args(&args, pci_dev->device.devargs);
 		if (err) {
-			ERROR("failed to process device arguments: %s",
-			      strerror(err));
+			DRV_LOG(ERR, "failed to process device arguments: %s",
+				strerror(err));
 			goto port_error;
 		}
 		mlx5_args_assign(priv, &args);
 		if (ibv_query_device_ex(ctx, NULL, &device_attr_ex)) {
-			ERROR("ibv_query_device_ex() failed");
+			DRV_LOG(ERR, "ibv_query_device_ex() failed");
 			err = errno;
 			goto port_error;
 		}
 		priv->hw_csum =
 			!!(device_attr_ex.device_cap_flags_ex &
 			   IBV_DEVICE_RAW_IP_CSUM);
-		DEBUG("checksum offloading is %ssupported",
-		      (priv->hw_csum ? "" : "not "));
+		DRV_LOG(DEBUG, "checksum offloading is %ssupported",
+			(priv->hw_csum ? "" : "not "));
 
 #ifdef HAVE_IBV_DEVICE_VXLAN_SUPPORT
 		priv->hw_csum_l2tun = !!(exp_device_attr.exp_device_cap_flags &
 					 IBV_DEVICE_VXLAN_SUPPORT);
 #endif
-		DEBUG("Rx L2 tunnel checksum offloads are %ssupported",
-		      (priv->hw_csum_l2tun ? "" : "not "));
+		DRV_LOG(DEBUG, "Rx L2 tunnel checksum offloads are %ssupported",
+			(priv->hw_csum_l2tun ? "" : "not "));
 
 #ifdef HAVE_IBV_DEVICE_COUNTERS_SET_SUPPORT
 		priv->counter_set_supported = !!(device_attr.max_counter_sets);
 		ibv_describe_counter_set(ctx, 0, &cs_desc);
-		DEBUG("counter type = %d, num of cs = %ld, attributes = %d",
-		      cs_desc.counter_type, cs_desc.num_of_cs,
-		      cs_desc.attributes);
+		DRV_LOG(DEBUG,
+			"counter type = %d, num of cs = %ld, attributes = %d",
+			cs_desc.counter_type, cs_desc.num_of_cs,
+			cs_desc.attributes);
 #endif
 		priv->ind_table_max_size =
 			device_attr_ex.rss_caps.max_rwq_indirection_table_size;
@@ -918,23 +932,24 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		if (priv->ind_table_max_size >
 				(unsigned int)ETH_RSS_RETA_SIZE_512)
 			priv->ind_table_max_size = ETH_RSS_RETA_SIZE_512;
-		DEBUG("maximum Rx indirection table size is %u",
-		      priv->ind_table_max_size);
+		DRV_LOG(DEBUG, "maximum Rx indirection table size is %u",
+			priv->ind_table_max_size);
 		priv->hw_vlan_strip = !!(device_attr_ex.raw_packet_caps &
 					 IBV_RAW_PACKET_CAP_CVLAN_STRIPPING);
-		DEBUG("VLAN stripping is %ssupported",
-		      (priv->hw_vlan_strip ? "" : "not "));
+		DRV_LOG(DEBUG, "VLAN stripping is %ssupported",
+			(priv->hw_vlan_strip ? "" : "not "));
 
 		priv->hw_fcs_strip = !!(device_attr_ex.raw_packet_caps &
 					IBV_RAW_PACKET_CAP_SCATTER_FCS);
-		DEBUG("FCS stripping configuration is %ssupported",
-		      (priv->hw_fcs_strip ? "" : "not "));
+		DRV_LOG(DEBUG, "FCS stripping configuration is %ssupported",
+			(priv->hw_fcs_strip ? "" : "not "));
 
 #ifdef HAVE_IBV_WQ_FLAG_RX_END_PADDING
 		priv->hw_padding = !!device_attr_ex.rx_pad_end_addr_align;
 #endif
-		DEBUG("hardware Rx end alignment padding is %ssupported",
-		      (priv->hw_padding ? "" : "not "));
+		DRV_LOG(DEBUG,
+			"hardware Rx end alignment padding is %ssupported",
+			(priv->hw_padding ? "" : "not "));
 		priv->tso = ((priv->tso) &&
 			    (device_attr_ex.tso_caps.max_tso > 0) &&
 			    (device_attr_ex.tso_caps.supported_qpts &
@@ -943,18 +958,21 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 			priv->max_tso_payload_sz =
 				device_attr_ex.tso_caps.max_tso;
 		if (priv->mps && !mps) {
-			ERROR("multi-packet send not supported on this device"
-			      " (" MLX5_TXQ_MPW_EN ")");
+			DRV_LOG(ERR,
+				"multi-packet send not supported on this device"
+				" (" MLX5_TXQ_MPW_EN ")");
 			err = ENOTSUP;
 			goto port_error;
 		} else if (priv->mps && priv->tso) {
-			WARN("multi-packet send not supported in conjunction "
-			      "with TSO. MPS disabled");
+			DRV_LOG(WARNING,
+				"multi-packet send not supported in conjunction"
+				" with TSO. MPS disabled");
 			priv->mps = 0;
 		}
-		INFO("%s MPS is %s",
-		     priv->mps == MLX5_MPW_ENHANCED ? "enhanced " : "",
-		     priv->mps != MLX5_MPW_DISABLED ? "enabled" : "disabled");
+		DRV_LOG(INFO, "%s MPS is %s",
+			priv->mps == MLX5_MPW_ENHANCED ? "enhanced " : "",
+			priv->mps != MLX5_MPW_DISABLED ? "enabled" :
+							 "disabled");
 		/* Set default values for Enhanced MPW, a.k.a MPWv2. */
 		if (priv->mps == MLX5_MPW_ENHANCED) {
 			if (args.txqs_inline == MLX5_ARG_UNSET)
@@ -967,12 +985,12 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 						   MLX5_WQE_SIZE;
 		}
 		if (priv->cqe_comp && !cqe_comp) {
-			WARN("Rx CQE compression isn't supported");
+			DRV_LOG(WARNING, "Rx CQE compression isn't supported");
 			priv->cqe_comp = 0;
 		}
 		eth_dev = rte_eth_dev_allocate(name);
 		if (eth_dev == NULL) {
-			ERROR("can not allocate rte ethdev");
+			DRV_LOG(ERR, "can not allocate rte ethdev");
 			err = ENOMEM;
 			goto port_error;
 		}
@@ -987,34 +1005,37 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 			goto port_error;
 		/* Configure the first MAC address by default. */
 		if (mlx5_get_mac(eth_dev, &mac.addr_bytes)) {
-			ERROR("port %u cannot get MAC address, is mlx5_en"
-			      " loaded? (errno: %s)", eth_dev->data->port_id,
-			      strerror(errno));
+			DRV_LOG(ERR,
+				"port %u cannot get MAC address, is mlx5_en"
+				" loaded? (errno: %s)",
+				eth_dev->data->port_id, strerror(errno));
 			err = ENODEV;
 			goto port_error;
 		}
-		INFO("port %u MAC address is %02x:%02x:%02x:%02x:%02x:%02x",
-		     eth_dev->data->port_id,
-		     mac.addr_bytes[0], mac.addr_bytes[1],
-		     mac.addr_bytes[2], mac.addr_bytes[3],
-		     mac.addr_bytes[4], mac.addr_bytes[5]);
+		DRV_LOG(INFO,
+			"port %u MAC address is %02x:%02x:%02x:%02x:%02x:%02x",
+			eth_dev->data->port_id,
+			mac.addr_bytes[0], mac.addr_bytes[1],
+			mac.addr_bytes[2], mac.addr_bytes[3],
+			mac.addr_bytes[4], mac.addr_bytes[5]);
 #ifndef NDEBUG
 		{
 			char ifname[IF_NAMESIZE];
 
 			if (mlx5_get_ifname(eth_dev, &ifname) == 0)
-				DEBUG("port %u ifname is \"%s\"",
-				      eth_dev->data->port_id, ifname);
+				DRV_LOG(DEBUG, "port %u ifname is \"%s\"",
+					eth_dev->data->port_id, ifname);
 			else
-				DEBUG("port %u ifname is unknown",
-				      eth_dev->data->port_id);
+				DRV_LOG(DEBUG, "port %u ifname is unknown",
+					eth_dev->data->port_id);
 		}
 #endif
 		/* Get actual MTU if possible. */
 		err = mlx5_get_mtu(eth_dev, &priv->mtu);
 		if (err)
 			goto port_error;
-		DEBUG("port %u MTU is %u", eth_dev->data->port_id, priv->mtu);
+		DRV_LOG(DEBUG, "port %u MTU is %u", eth_dev->data->port_id,
+			priv->mtu);
 		/*
 		 * Initialize burst functions to prevent crashes before link-up.
 		 */
@@ -1034,8 +1055,8 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		mlx5dv_set_context_attr(ctx, MLX5DV_CTX_ATTR_BUF_ALLOCATORS,
 					(void *)((uintptr_t)&alctr));
 		/* Bring Ethernet device up. */
-		DEBUG("port %u forcing Ethernet interface up",
-		      eth_dev->data->port_id);
+		DRV_LOG(DEBUG, "port %u forcing Ethernet interface up",
+			eth_dev->data->port_id);
 		mlx5_set_flags(eth_dev, ~IFF_UP, IFF_UP);
 		continue;
 port_error:
@@ -1143,3 +1164,11 @@ rte_mlx5_pmd_init(void)
 RTE_PMD_EXPORT_NAME(net_mlx5, __COUNTER__);
 RTE_PMD_REGISTER_PCI_TABLE(net_mlx5, mlx5_pci_id_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_mlx5, "* ib_uverbs & mlx5_core & mlx5_ib");
+
+/** Initialize driver log type. */
+RTE_INIT(vdev_netvsc_init_log)
+{
+	mlx5_logtype = rte_log_register("pmd.net.mlx5");
+	if (mlx5_logtype >= 0)
+		rte_log_set_level(mlx5_logtype, RTE_LOG_NOTICE);
+}

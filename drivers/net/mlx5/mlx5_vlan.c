@@ -62,8 +62,8 @@ mlx5_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 	struct priv *priv = dev->data->dev_private;
 	unsigned int i;
 
-	DEBUG("port %u %s VLAN filter ID %" PRIu16,
-	      dev->data->port_id, (on ? "enable" : "disable"), vlan_id);
+	DRV_LOG(DEBUG, "port %u %s VLAN filter ID %" PRIu16,
+		dev->data->port_id, (on ? "enable" : "disable"), vlan_id);
 	assert(priv->vlan_filter_n <= RTE_DIM(priv->vlan_filter));
 	for (i = 0; (i != priv->vlan_filter_n); ++i)
 		if (priv->vlan_filter[i] == vlan_id)
@@ -125,18 +125,18 @@ mlx5_vlan_strip_queue_set(struct rte_eth_dev *dev, uint16_t queue, int on)
 
 	/* Validate hw support */
 	if (!priv->hw_vlan_strip) {
-		ERROR("port %u VLAN stripping is not supported",
-		      dev->data->port_id);
+		DRV_LOG(ERR, "port %u VLAN stripping is not supported",
+			dev->data->port_id);
 		return;
 	}
 	/* Validate queue number */
 	if (queue >= priv->rxqs_n) {
-		ERROR("port %u VLAN stripping, invalid queue number %d",
-		      dev->data->port_id, queue);
+		DRV_LOG(ERR, "port %u VLAN stripping, invalid queue number %d",
+			dev->data->port_id, queue);
 		return;
 	}
-	DEBUG("port %u set VLAN offloads 0x%x for port %uqueue %d",
-	      dev->data->port_id, vlan_offloads, rxq->port_id, queue);
+	DRV_LOG(DEBUG, "port %u set VLAN offloads 0x%x for port %uqueue %d",
+		dev->data->port_id, vlan_offloads, rxq->port_id, queue);
 	if (!rxq_ctrl->ibv) {
 		/* Update related bits in RX queue. */
 		rxq->vlan_strip = !!on;
@@ -149,8 +149,8 @@ mlx5_vlan_strip_queue_set(struct rte_eth_dev *dev, uint16_t queue, int on)
 	};
 	ret = ibv_modify_wq(rxq_ctrl->ibv->wq, &mod);
 	if (ret) {
-		ERROR("port %u failed to modified stripping mode: %s",
-		      dev->data->port_id, strerror(rte_errno));
+		DRV_LOG(ERR, "port %u failed to modified stripping mode: %s",
+			dev->data->port_id, strerror(rte_errno));
 		return;
 	}
 	/* Update related bits in RX queue. */
@@ -178,8 +178,8 @@ mlx5_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 		int hw_vlan_strip = !!dev->data->dev_conf.rxmode.hw_vlan_strip;
 
 		if (!priv->hw_vlan_strip) {
-			ERROR("port %u VLAN stripping is not supported",
-			      dev->data->port_id);
+			DRV_LOG(ERR, "port %u VLAN stripping is not supported",
+				dev->data->port_id);
 			return 0;
 		}
 		/* Run on every RX queue and set/reset VLAN stripping. */
