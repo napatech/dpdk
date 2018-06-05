@@ -1217,9 +1217,12 @@ mlx4_flow_internal_next_vlan(struct priv *priv, uint16_t vlan)
  *
  * Various flow rules are created depending on the mode the device is in:
  *
- * 1. Promiscuous: port MAC + catch-all (VLAN filtering is ignored).
- * 2. All multicast: port MAC/VLAN + catch-all multicast.
- * 3. Otherwise: port MAC/VLAN + broadcast MAC/VLAN.
+ * 1. Promiscuous:
+ *       port MAC + broadcast + catch-all (VLAN filtering is ignored).
+ * 2. All multicast:
+ *       port MAC/VLAN + broadcast + catch-all multicast.
+ * 3. Otherwise:
+ *       port MAC/VLAN + broadcast MAC/VLAN.
  *
  * About MAC flow rules:
  *
@@ -1298,9 +1301,6 @@ mlx4_flow_internal(struct priv *priv, struct rte_flow_error *error)
 		!priv->dev->data->promiscuous ?
 		&vlan_spec.tci :
 		NULL;
-	int broadcast =
-		!priv->dev->data->promiscuous &&
-		!priv->dev->data->all_multicast;
 	uint16_t vlan = 0;
 	struct rte_flow *flow;
 	unsigned int i;
@@ -1334,7 +1334,7 @@ next_vlan:
 			rule_vlan = NULL;
 		}
 	}
-	for (i = 0; i != RTE_DIM(priv->mac) + broadcast; ++i) {
+	for (i = 0; i != RTE_DIM(priv->mac) + 1; ++i) {
 		const struct ether_addr *mac;
 
 		/* Broadcasts are handled by an extra iteration. */
@@ -1398,7 +1398,7 @@ next_vlan:
 			goto next_vlan;
 	}
 	/* Take care of promiscuous and all multicast flow rules. */
-	if (!broadcast) {
+	if (priv->dev->data->promiscuous || priv->dev->data->all_multicast) {
 		for (flow = LIST_FIRST(&priv->flows);
 		     flow && flow->internal;
 		     flow = LIST_NEXT(flow, next)) {
