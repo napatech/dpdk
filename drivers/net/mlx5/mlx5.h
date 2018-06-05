@@ -128,7 +128,6 @@ struct priv {
 	unsigned int mps:2; /* Multi-packet send mode (0: disabled). */
 	unsigned int mpw_hdr_dseg:1; /* Enable DSEGs in the title WQEBB. */
 	unsigned int cqe_comp:1; /* Whether CQE compression is enabled. */
-	unsigned int pending_alarm:1; /* An alarm is pending. */
 	unsigned int tso:1; /* Whether TSO is supported. */
 	unsigned int tunnel_en:1;
 	unsigned int isolated:1; /* Whether isolated mode is enabled. */
