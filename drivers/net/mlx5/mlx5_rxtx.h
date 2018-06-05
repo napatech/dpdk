@@ -571,6 +571,11 @@ mlx5_tx_mb2mr(struct mlx5_txq_data *txq, struct rte_mbuf *mb)
 		rte_atomic32_inc(&mr->refcnt);
 		txq->mr_cache_idx = i >= RTE_DIM(txq->mp2mr) ? i - 1 : i;
 		return mr->lkey;
+	} else {
+		struct rte_mempool *mp = mlx5_tx_mb2mp(mb);
+
+		WARN("Failed to register mempool 0x%p(%s)",
+		      (void *)mp, mp->name);
 	}
 	return (uint32_t)-1;
 }
