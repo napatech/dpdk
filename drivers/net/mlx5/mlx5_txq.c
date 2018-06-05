@@ -504,7 +504,7 @@ mlx5_txq_ibv_get(struct rte_eth_dev *dev, uint16_t idx)
  *   Verbs Tx queue object.
  *
  * @return
- *   0 on success, errno on failure.
+ *   1 while a reference on it exists, 0 when freed.
  */
 int
 mlx5_txq_ibv_release(struct mlx5_txq_ibv *txq_ibv)
@@ -519,7 +519,7 @@ mlx5_txq_ibv_release(struct mlx5_txq_ibv *txq_ibv)
 		rte_free(txq_ibv);
 		return 0;
 	}
-	return EBUSY;
+	return 1;
 }
 
 /**
@@ -723,7 +723,7 @@ mlx5_txq_get(struct rte_eth_dev *dev, uint16_t idx)
  *   TX queue index.
  *
  * @return
- *   0 on success, errno on failure.
+ *   1 while a reference on it exists, 0 when freed.
  */
 int
 mlx5_txq_release(struct rte_eth_dev *dev, uint16_t idx)
@@ -738,13 +738,8 @@ mlx5_txq_release(struct rte_eth_dev *dev, uint16_t idx)
 	txq = container_of((*priv->txqs)[idx], struct mlx5_txq_ctrl, txq);
 	DEBUG("%p: Tx queue %p: refcnt %d", (void *)dev,
 	      (void *)txq, rte_atomic32_read(&txq->refcnt));
-	if (txq->ibv) {
-		int ret;
-
-		ret = mlx5_txq_ibv_release(txq->ibv);
-		if (!ret)
-			txq->ibv = NULL;
-	}
+	if (txq->ibv && !mlx5_txq_ibv_release(txq->ibv))
+		txq->ibv = NULL;
 	for (i = 0; i != MLX5_PMD_TX_MP_CACHE; ++i) {
 		if (txq->txq.mp2mr[i]) {
 			mlx5_mr_release(txq->txq.mp2mr[i]);
@@ -761,7 +756,7 @@ mlx5_txq_release(struct rte_eth_dev *dev, uint16_t idx)
 		(*priv->txqs)[idx] = NULL;
 		return 0;
 	}
-	return EBUSY;
+	return 1;
 }
 
 /**

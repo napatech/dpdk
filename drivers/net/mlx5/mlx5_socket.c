@@ -106,11 +106,8 @@ out:
  *
  * @param[in] dev
  *   Pointer to Ethernet device.
- *
- * @return
- *   0 on success, errno value on failure.
  */
-int
+void
 mlx5_socket_uninit(struct rte_eth_dev *dev)
 {
 	struct priv *priv = dev->data->dev_private;
@@ -119,7 +116,6 @@ mlx5_socket_uninit(struct rte_eth_dev *dev)
 	claim_zero(close(priv->primary_socket));
 	priv->primary_socket = 0;
 	claim_zero(remove(path));
-	return 0;
 }
 
 /**

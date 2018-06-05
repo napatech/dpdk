@@ -787,7 +787,7 @@ mlx5_rxq_ibv_get(struct rte_eth_dev *dev, uint16_t idx)
  *   Verbs Rx queue object.
  *
  * @return
- *   0 on success, errno value on failure.
+ *   1 while a reference on it exists, 0 when freed.
  */
 int
 mlx5_rxq_ibv_release(struct mlx5_rxq_ibv *rxq_ibv)
@@ -813,7 +813,7 @@ mlx5_rxq_ibv_release(struct mlx5_rxq_ibv *rxq_ibv)
 		rte_free(rxq_ibv);
 		return 0;
 	}
-	return EBUSY;
+	return 1;
 }
 
 /**
@@ -1018,7 +1018,7 @@ mlx5_rxq_get(struct rte_eth_dev *dev, uint16_t idx)
  *   TX queue index.
  *
  * @return
- *   0 on success, errno value on failure.
+ *   1 while a reference on it exists, 0 when freed.
  */
 int
 mlx5_rxq_release(struct rte_eth_dev *dev, uint16_t idx)
@@ -1030,13 +1030,8 @@ mlx5_rxq_release(struct rte_eth_dev *dev, uint16_t idx)
 		return 0;
 	rxq_ctrl = container_of((*priv->rxqs)[idx], struct mlx5_rxq_ctrl, rxq);
 	assert(rxq_ctrl->priv);
-	if (rxq_ctrl->ibv) {
-		int ret;
-
-		ret = mlx5_rxq_ibv_release(rxq_ctrl->ibv);
-		if (!ret)
-			rxq_ctrl->ibv = NULL;
-	}
+	if (rxq_ctrl->ibv && !mlx5_rxq_ibv_release(rxq_ctrl->ibv))
+		rxq_ctrl->ibv = NULL;
 	DEBUG("%p: Rx queue %p: refcnt %d", (void *)dev,
 	      (void *)rxq_ctrl, rte_atomic32_read(&rxq_ctrl->refcnt));
 	if (rte_atomic32_dec_and_test(&rxq_ctrl->refcnt)) {
@@ -1045,7 +1040,7 @@ mlx5_rxq_release(struct rte_eth_dev *dev, uint16_t idx)
 		(*priv->rxqs)[idx] = NULL;
 		return 0;
 	}
-	return EBUSY;
+	return 1;
 }
 
 /**
@@ -1205,7 +1200,7 @@ mlx5_ind_table_ibv_get(struct rte_eth_dev *dev, uint16_t queues[],
  *   Indirection table to release.
  *
  * @return
- *   0 on success, errno value on failure.
+ *   1 while a reference on it exists, 0 when freed.
  */
 int
 mlx5_ind_table_ibv_release(struct rte_eth_dev *dev,
@@ -1224,7 +1219,7 @@ mlx5_ind_table_ibv_release(struct rte_eth_dev *dev,
 		rte_free(ind_tbl);
 		return 0;
 	}
-	return EBUSY;
+	return 1;
 }
 
 /**
@@ -1382,7 +1377,7 @@ mlx5_hrxq_get(struct rte_eth_dev *dev, uint8_t *rss_key, uint8_t rss_key_len,
  *   Pointer to Hash Rx queue to release.
  *
  * @return
- *   0 on success, errno value on failure.
+ *   1 while a reference on it exists, 0 when freed.
  */
 int
 mlx5_hrxq_release(struct rte_eth_dev *dev, struct mlx5_hrxq *hrxq)
@@ -1397,7 +1392,7 @@ mlx5_hrxq_release(struct rte_eth_dev *dev, struct mlx5_hrxq *hrxq)
 		return 0;
 	}
 	claim_nonzero(mlx5_ind_table_ibv_release(dev, hrxq->ind_table));
-	return EBUSY;
+	return 1;
 }
 
 /**
