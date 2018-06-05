@@ -1499,7 +1499,7 @@ mlx5_tx_burst_empw(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 				max_wqe--;
 			else
 				max_wqe -= 2;
-		} else if (do_inline) {
+		} else if (max_inline && do_inline) {
 			/* Inline packet into WQE. */
 			unsigned int max;
 
