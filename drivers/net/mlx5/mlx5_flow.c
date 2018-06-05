@@ -44,6 +44,7 @@
 #pragma GCC diagnostic error "-Wpedantic"
 #endif
 
+#include <rte_common.h>
 #include <rte_ethdev.h>
 #include <rte_flow.h>
 #include <rte_flow_driver.h>
@@ -751,6 +752,14 @@ mlx5_flow_convert_actions(struct rte_eth_dev *dev,
 						   " queues");
 					return -rte_errno;
 				}
+			}
+			if (rss->num > RTE_DIM(parser->queues)) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ACTION,
+						   actions,
+						   "too many queues for RSS"
+						   " context");
+				return -rte_errno;
 			}
 			for (n = 0; n < rss->num; ++n) {
 				if (rss->queue[n] >= priv->rxqs_n) {
