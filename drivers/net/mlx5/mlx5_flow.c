@@ -2650,10 +2650,12 @@ priv_fdir_filter_convert(struct priv *priv,
 		attributes->items[1] = (struct rte_flow_item){
 			.type = RTE_FLOW_ITEM_TYPE_IPV4,
 			.spec = &attributes->l3,
+			.mask = &attributes->l3,
 		};
 		attributes->items[2] = (struct rte_flow_item){
 			.type = RTE_FLOW_ITEM_TYPE_UDP,
 			.spec = &attributes->l4,
+			.mask = &attributes->l4,
 		};
 		break;
 	case RTE_ETH_FLOW_NONFRAG_IPV4_TCP:
@@ -2671,10 +2673,12 @@ priv_fdir_filter_convert(struct priv *priv,
 		attributes->items[1] = (struct rte_flow_item){
 			.type = RTE_FLOW_ITEM_TYPE_IPV4,
 			.spec = &attributes->l3,
+			.mask = &attributes->l3,
 		};
 		attributes->items[2] = (struct rte_flow_item){
 			.type = RTE_FLOW_ITEM_TYPE_TCP,
 			.spec = &attributes->l4,
+			.mask = &attributes->l4,
 		};
 		break;
 	case RTE_ETH_FLOW_NONFRAG_IPV4_OTHER:
@@ -2688,6 +2692,7 @@ priv_fdir_filter_convert(struct priv *priv,
 		attributes->items[1] = (struct rte_flow_item){
 			.type = RTE_FLOW_ITEM_TYPE_IPV4,
 			.spec = &attributes->l3,
+			.mask = &attributes->l3,
 		};
 		break;
 	case RTE_ETH_FLOW_NONFRAG_IPV6_UDP:
@@ -2708,10 +2713,12 @@ priv_fdir_filter_convert(struct priv *priv,
 		attributes->items[1] = (struct rte_flow_item){
 			.type = RTE_FLOW_ITEM_TYPE_IPV6,
 			.spec = &attributes->l3,
+			.mask = &attributes->l3,
 		};
 		attributes->items[2] = (struct rte_flow_item){
 			.type = RTE_FLOW_ITEM_TYPE_UDP,
 			.spec = &attributes->l4,
+			.mask = &attributes->l4,
 		};
 		break;
 	case RTE_ETH_FLOW_NONFRAG_IPV6_TCP:
@@ -2732,10 +2739,12 @@ priv_fdir_filter_convert(struct priv *priv,
 		attributes->items[1] = (struct rte_flow_item){
 			.type = RTE_FLOW_ITEM_TYPE_IPV6,
 			.spec = &attributes->l3,
+			.mask = &attributes->l3,
 		};
 		attributes->items[2] = (struct rte_flow_item){
 			.type = RTE_FLOW_ITEM_TYPE_TCP,
 			.spec = &attributes->l4,
+			.mask = &attributes->l4,
 		};
 		break;
 	case RTE_ETH_FLOW_NONFRAG_IPV6_OTHER:
@@ -2752,6 +2761,7 @@ priv_fdir_filter_convert(struct priv *priv,
 		attributes->items[1] = (struct rte_flow_item){
 			.type = RTE_FLOW_ITEM_TYPE_IPV6,
 			.spec = &attributes->l3,
+			.mask = &attributes->l3,
 		};
 		break;
 	default:
