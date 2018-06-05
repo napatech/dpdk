@@ -678,8 +678,8 @@ mlx5_link_start(struct rte_eth_dev *dev)
 	struct priv *priv = dev->data->dev_private;
 	int ret;
 
-	mlx5_select_tx_function(dev);
-	mlx5_select_rx_function(dev);
+	dev->tx_pkt_burst = mlx5_select_tx_function(dev);
+	dev->rx_pkt_burst = mlx5_select_rx_function(dev);
 	ret = mlx5_traffic_enable(dev);
 	if (ret) {
 		DRV_LOG(ERR,
@@ -1198,39 +1198,43 @@ mlx5_set_link_up(struct rte_eth_dev *dev)
  *
  * @param dev
  *   Pointer to rte_eth_dev structure.
+ *
+ * @return
+ *   Pointer to selected Tx burst function.
  */
-void
+eth_tx_burst_t
 mlx5_select_tx_function(struct rte_eth_dev *dev)
 {
 	struct priv *priv = dev->data->dev_private;
+	eth_tx_burst_t tx_pkt_burst = mlx5_tx_burst;
 
-	dev->tx_pkt_burst = mlx5_tx_burst;
 	/* Select appropriate TX function. */
 	if (priv->mps == MLX5_MPW_ENHANCED) {
 		if (mlx5_check_vec_tx_support(dev) > 0) {
 			if (mlx5_check_raw_vec_tx_support(dev) > 0)
-				dev->tx_pkt_burst = mlx5_tx_burst_raw_vec;
+				tx_pkt_burst = mlx5_tx_burst_raw_vec;
 			else
-				dev->tx_pkt_burst = mlx5_tx_burst_vec;
+				tx_pkt_burst = mlx5_tx_burst_vec;
 			DRV_LOG(DEBUG,
 				"port %u selected enhanced MPW Tx vectorized"
 				" function",
 				dev->data->port_id);
 		} else {
-			dev->tx_pkt_burst = mlx5_tx_burst_empw;
+			tx_pkt_burst = mlx5_tx_burst_empw;
 			DRV_LOG(DEBUG,
 				"port %u selected enhanced MPW Tx function",
 				dev->data->port_id);
 		}
 	} else if (priv->mps && priv->txq_inline) {
-		dev->tx_pkt_burst = mlx5_tx_burst_mpw_inline;
+		tx_pkt_burst = mlx5_tx_burst_mpw_inline;
 		DRV_LOG(DEBUG, "port %u selected MPW inline Tx function",
 			dev->data->port_id);
 	} else if (priv->mps) {
-		dev->tx_pkt_burst = mlx5_tx_burst_mpw;
+		tx_pkt_burst = mlx5_tx_burst_mpw;
 		DRV_LOG(DEBUG, "port %u selected MPW Tx function",
 			dev->data->port_id);
 	}
+	return tx_pkt_burst;
 }
 
 /**
@@ -1238,16 +1242,20 @@ mlx5_select_tx_function(struct rte_eth_dev *dev)
  *
  * @param dev
  *   Pointer to rte_eth_dev structure.
+ *
+ * @return
+ *   Pointer to selected Rx burst function.
  */
-void
+eth_rx_burst_t
 mlx5_select_rx_function(struct rte_eth_dev *dev)
 {
+	eth_rx_burst_t rx_pkt_burst = mlx5_rx_burst;
+
 	assert(dev != NULL);
 	if (mlx5_check_vec_rx_support(dev) > 0) {
-		dev->rx_pkt_burst = mlx5_rx_burst_vec;
+		rx_pkt_burst = mlx5_rx_burst_vec;
 		DRV_LOG(DEBUG, "port %u selected Rx vectorized function",
 			dev->data->port_id);
-	} else {
-		dev->rx_pkt_burst = mlx5_rx_burst;
 	}
+	return rx_pkt_burst;
 }

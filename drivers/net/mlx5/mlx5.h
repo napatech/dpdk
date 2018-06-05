@@ -200,8 +200,8 @@ void mlx5_dev_interrupt_handler_uninstall(struct rte_eth_dev *dev);
 void mlx5_dev_interrupt_handler_install(struct rte_eth_dev *dev);
 int mlx5_set_link_down(struct rte_eth_dev *dev);
 int mlx5_set_link_up(struct rte_eth_dev *dev);
-void mlx5_select_tx_function(struct rte_eth_dev *dev);
-void mlx5_select_rx_function(struct rte_eth_dev *dev);
+eth_tx_burst_t mlx5_select_tx_function(struct rte_eth_dev *dev);
+eth_rx_burst_t mlx5_select_rx_function(struct rte_eth_dev *dev);
 
 /* mlx5_mac.c */
 

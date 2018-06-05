@@ -834,8 +834,15 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 			err = mlx5_tx_uar_remap(eth_dev, err);
 			if (err)
 				goto error;
-			mlx5_select_rx_function(eth_dev);
-			mlx5_select_tx_function(eth_dev);
+			/*
+			 * Ethdev pointer is still required as input since
+			 * the primary device is not accessible from the
+			 * secondary process.
+			 */
+			eth_dev->rx_pkt_burst =
+				mlx5_select_rx_function(eth_dev);
+			eth_dev->tx_pkt_burst =
+				mlx5_select_tx_function(eth_dev);
 			continue;
 		}
 		DRV_LOG(DEBUG, "using port %u (%08" PRIx32 ")", port, test);
