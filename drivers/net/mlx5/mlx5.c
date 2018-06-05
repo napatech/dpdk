@@ -1064,7 +1064,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		/* Bring Ethernet device up. */
 		DRV_LOG(DEBUG, "port %u forcing Ethernet interface up",
 			eth_dev->data->port_id);
-		mlx5_set_flags(eth_dev, ~IFF_UP, IFF_UP);
+		mlx5_set_link_up(eth_dev);
 		continue;
 port_error:
 		if (priv)
