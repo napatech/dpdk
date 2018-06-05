@@ -160,7 +160,8 @@ mlx5_read_dev_counters(struct rte_eth_dev *dev, uint64_t *stats)
 	ifr.ifr_data = (caddr_t)et_stats;
 	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr);
 	if (ret) {
-		WARN("unable to read statistic values from device");
+		WARN("port %u unable to read statistic values from device",
+		     dev->data->port_id);
 		return ret;
 	}
 	for (i = 0; i != xstats_n; ++i) {
@@ -206,7 +207,8 @@ mlx5_ethtool_get_stats_n(struct rte_eth_dev *dev) {
 	ifr.ifr_data = (caddr_t)&drvinfo;
 	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr);
 	if (ret) {
-		WARN("unable to query number of statistics");
+		WARN("port %u unable to query number of statistics",
+		     dev->data->port_id);
 		return ret;
 	}
 	return drvinfo.n_stats;
@@ -233,7 +235,8 @@ mlx5_xstats_init(struct rte_eth_dev *dev)
 
 	ret = mlx5_ethtool_get_stats_n(dev);
 	if (ret < 0) {
-		WARN("no extended statistics available");
+		WARN("port %u no extended statistics available",
+		     dev->data->port_id);
 		return;
 	}
 	dev_stats_n = ret;
@@ -244,7 +247,8 @@ mlx5_xstats_init(struct rte_eth_dev *dev)
 		  rte_malloc("xstats_strings",
 			     str_sz + sizeof(struct ethtool_gstrings), 0);
 	if (!strings) {
-		WARN("unable to allocate memory for xstats");
+		WARN("port %u unable to allocate memory for xstats",
+		     dev->data->port_id);
 		return;
 	}
 	strings->cmd = ETHTOOL_GSTRINGS;
@@ -253,7 +257,8 @@ mlx5_xstats_init(struct rte_eth_dev *dev)
 	ifr.ifr_data = (caddr_t)strings;
 	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr);
 	if (ret) {
-		WARN("unable to get statistic names");
+		WARN("port %u unable to get statistic names",
+		     dev->data->port_id);
 		goto free;
 	}
 	for (j = 0; j != xstats_n; ++j)
@@ -274,7 +279,8 @@ mlx5_xstats_init(struct rte_eth_dev *dev)
 		if (mlx5_counters_init[j].ib)
 			continue;
 		if (xstats_ctrl->dev_table_idx[j] >= dev_stats_n) {
-			WARN("counter \"%s\" is not recognized",
+			WARN("port %u counter \"%s\" is not recognized",
+			     dev->data->port_id,
 			     mlx5_counters_init[j].dpdk_name);
 			goto free;
 		}
@@ -283,7 +289,8 @@ mlx5_xstats_init(struct rte_eth_dev *dev)
 	assert(xstats_n <= MLX5_MAX_XSTATS);
 	ret = mlx5_read_dev_counters(dev, xstats_ctrl->base);
 	if (ret)
-		ERROR("cannot read device counters: %s", strerror(rte_errno));
+		ERROR("port %u cannot read device counters: %s",
+		      dev->data->port_id, strerror(rte_errno));
 free:
 	rte_free(strings);
 }
@@ -450,7 +457,7 @@ mlx5_xstats_reset(struct rte_eth_dev *dev)
 
 	stats_n = mlx5_ethtool_get_stats_n(dev);
 	if (stats_n < 0) {
-		ERROR("%p cannot get stats: %s", (void *)dev,
+		ERROR("port %u cannot get stats: %s", dev->data->port_id,
 		      strerror(-stats_n));
 		return;
 	}
@@ -458,8 +465,8 @@ mlx5_xstats_reset(struct rte_eth_dev *dev)
 		mlx5_xstats_init(dev);
 	ret = mlx5_read_dev_counters(dev, counters);
 	if (ret) {
-		ERROR("%p cannot read device counters: %s", (void *)dev,
-		      strerror(rte_errno));
+		ERROR("port %u cannot read device counters: %s",
+		      dev->data->port_id, strerror(rte_errno));
 		return;
 	}
 	for (i = 0; i != n; ++i)
@@ -481,7 +488,7 @@ mlx5_xstats_reset(struct rte_eth_dev *dev)
  */
 int
 mlx5_xstats_get_names(struct rte_eth_dev *dev __rte_unused,
-		struct rte_eth_xstat_name *xstats_names, unsigned int n)
+		      struct rte_eth_xstat_name *xstats_names, unsigned int n)
 {
 	unsigned int i;
 

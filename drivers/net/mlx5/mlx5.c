@@ -174,7 +174,6 @@ mlx5_alloc_verbs_buf(size_t size, void *data)
 	ret = rte_malloc_socket(__func__, size, alignment, socket);
 	if (!ret && size)
 		rte_errno = ENOMEM;
-	DEBUG("Extern alloc size: %lu, align: %lu: %p", size, alignment, ret);
 	return ret;
 }
 
@@ -190,7 +189,6 @@ static void
 mlx5_free_verbs_buf(void *ptr, void *data __rte_unused)
 {
 	assert(data != NULL);
-	DEBUG("Extern free request: %p", ptr);
 	rte_free(ptr);
 }
 
@@ -209,8 +207,8 @@ mlx5_dev_close(struct rte_eth_dev *dev)
 	unsigned int i;
 	int ret;
 
-	DEBUG("%p: closing device \"%s\"",
-	      (void *)dev,
+	DEBUG("port %u closing device \"%s\"",
+	      dev->data->port_id,
 	      ((priv->ctx != NULL) ? priv->ctx->device->name : ""));
 	/* In case mlx5_dev_stop() has not been called. */
 	mlx5_dev_interrupt_handler_uninstall(dev);
@@ -248,28 +246,35 @@ mlx5_dev_close(struct rte_eth_dev *dev)
 		mlx5_socket_uninit(dev);
 	ret = mlx5_hrxq_ibv_verify(dev);
 	if (ret)
-		WARN("%p: some Hash Rx queue still remain", (void *)dev);
+		WARN("port %u some hash Rx queue still remain",
+		     dev->data->port_id);
 	ret = mlx5_ind_table_ibv_verify(dev);
 	if (ret)
-		WARN("%p: some Indirection table still remain", (void *)dev);
+		WARN("port %u some indirection table still remain",
+		     dev->data->port_id);
 	ret = mlx5_rxq_ibv_verify(dev);
 	if (ret)
-		WARN("%p: some Verbs Rx queue still remain", (void *)dev);
+		WARN("port %u some Verbs Rx queue still remain",
+		     dev->data->port_id);
 	ret = mlx5_rxq_verify(dev);
 	if (ret)
-		WARN("%p: some Rx Queues still remain", (void *)dev);
+		WARN("port %u some Rx queues still remain",
+		     dev->data->port_id);
 	ret = mlx5_txq_ibv_verify(dev);
 	if (ret)
-		WARN("%p: some Verbs Tx queue still remain", (void *)dev);
+		WARN("port %u some Verbs Tx queue still remain",
+		     dev->data->port_id);
 	ret = mlx5_txq_verify(dev);
 	if (ret)
-		WARN("%p: some Tx Queues still remain", (void *)dev);
+		WARN("port %u some Tx queues still remain",
+		     dev->data->port_id);
 	ret = mlx5_flow_verify(dev);
 	if (ret)
-		WARN("%p: some flows still remain", (void *)dev);
+		WARN("port %u some flows still remain", dev->data->port_id);
 	ret = mlx5_mr_verify(dev);
 	if (ret)
-		WARN("%p: some Memory Region still remain", (void *)dev);
+		WARN("port %u some memory region still remain",
+		     dev->data->port_id);
 	memset(priv, 0, sizeof(*priv));
 }
 
@@ -546,15 +551,17 @@ mlx5_uar_init_primary(struct rte_eth_dev *dev)
 	addr = mmap(addr, MLX5_UAR_SIZE,
 		    PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (addr == MAP_FAILED) {
-		ERROR("Failed to reserve UAR address space, please adjust "
-		      "MLX5_UAR_SIZE or try --base-virtaddr");
+		ERROR("port %u failed to reserve UAR address space, please"
+		      " adjust MLX5_UAR_SIZE or try --base-virtaddr",
+		      dev->data->port_id);
 		rte_errno = ENOMEM;
 		return -rte_errno;
 	}
 	/* Accept either same addr or a new addr returned from mmap if target
 	 * range occupied.
 	 */
-	INFO("Reserved UAR address space: %p", addr);
+	INFO("port %u reserved UAR address space: %p", dev->data->port_id,
+	     addr);
 	priv->uar_base = addr; /* for primary and secondary UAR re-mmap. */
 	uar_base = addr; /* process local, don't reserve again. */
 	return 0;
@@ -585,20 +592,21 @@ mlx5_uar_init_secondary(struct rte_eth_dev *dev)
 	addr = mmap(priv->uar_base, MLX5_UAR_SIZE,
 		    PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (addr == MAP_FAILED) {
-		ERROR("UAR mmap failed: %p size: %llu",
-		      priv->uar_base, MLX5_UAR_SIZE);
+		ERROR("port %u UAR mmap failed: %p size: %llu",
+		      dev->data->port_id, priv->uar_base, MLX5_UAR_SIZE);
 		rte_errno = ENXIO;
 		return -rte_errno;
 	}
 	if (priv->uar_base != addr) {
-		ERROR("UAR address %p size %llu occupied, please adjust "
+		ERROR("port %u UAR address %p size %llu occupied, please adjust "
 		      "MLX5_UAR_OFFSET or try EAL parameter --base-virtaddr",
-		      priv->uar_base, MLX5_UAR_SIZE);
+		      dev->data->port_id, priv->uar_base, MLX5_UAR_SIZE);
 		rte_errno = ENXIO;
 		return -rte_errno;
 	}
 	uar_base = addr; /* process local, don't reserve again */
-	INFO("Reserved UAR address space: %p", addr);
+	INFO("port %u reserved UAR address space: %p", dev->data->port_id,
+	     addr);
 	return 0;
 }
 
@@ -745,7 +753,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	mlx5dv_query_device(attr_ctx, &attrs_out);
 	if (attrs_out.flags & MLX5DV_CONTEXT_FLAGS_MPW_ALLOWED) {
 		if (attrs_out.flags & MLX5DV_CONTEXT_FLAGS_ENHANCED_MPW) {
-			DEBUG("Enhanced MPW is supported");
+			DEBUG("enhanced MPW is supported");
 			mps = MLX5_MPW_ENHANCED;
 		} else {
 			DEBUG("MPW is supported");
@@ -910,7 +918,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		if (priv->ind_table_max_size >
 				(unsigned int)ETH_RSS_RETA_SIZE_512)
 			priv->ind_table_max_size = ETH_RSS_RETA_SIZE_512;
-		DEBUG("maximum RX indirection table size is %u",
+		DEBUG("maximum Rx indirection table size is %u",
 		      priv->ind_table_max_size);
 		priv->hw_vlan_strip = !!(device_attr_ex.raw_packet_caps &
 					 IBV_RAW_PACKET_CAP_CVLAN_STRIPPING);
@@ -925,7 +933,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 #ifdef HAVE_IBV_WQ_FLAG_RX_END_PADDING
 		priv->hw_padding = !!device_attr_ex.rx_pad_end_addr_align;
 #endif
-		DEBUG("hardware RX end alignment padding is %ssupported",
+		DEBUG("hardware Rx end alignment padding is %ssupported",
 		      (priv->hw_padding ? "" : "not "));
 		priv->tso = ((priv->tso) &&
 			    (device_attr_ex.tso_caps.max_tso > 0) &&
@@ -944,8 +952,8 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 			      "with TSO. MPS disabled");
 			priv->mps = 0;
 		}
-		INFO("%sMPS is %s",
-		     priv->mps == MLX5_MPW_ENHANCED ? "Enhanced " : "",
+		INFO("%s MPS is %s",
+		     priv->mps == MLX5_MPW_ENHANCED ? "enhanced " : "",
 		     priv->mps != MLX5_MPW_DISABLED ? "enabled" : "disabled");
 		/* Set default values for Enhanced MPW, a.k.a MPWv2. */
 		if (priv->mps == MLX5_MPW_ENHANCED) {
@@ -979,13 +987,14 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 			goto port_error;
 		/* Configure the first MAC address by default. */
 		if (mlx5_get_mac(eth_dev, &mac.addr_bytes)) {
-			ERROR("cannot get MAC address, is mlx5_en loaded?"
-			      " (errno: %s)", strerror(errno));
+			ERROR("port %u cannot get MAC address, is mlx5_en"
+			      " loaded? (errno: %s)", eth_dev->data->port_id,
+			      strerror(errno));
 			err = ENODEV;
 			goto port_error;
 		}
 		INFO("port %u MAC address is %02x:%02x:%02x:%02x:%02x:%02x",
-		     priv->port,
+		     eth_dev->data->port_id,
 		     mac.addr_bytes[0], mac.addr_bytes[1],
 		     mac.addr_bytes[2], mac.addr_bytes[3],
 		     mac.addr_bytes[4], mac.addr_bytes[5]);
@@ -995,16 +1004,17 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 
 			if (mlx5_get_ifname(eth_dev, &ifname) == 0)
 				DEBUG("port %u ifname is \"%s\"",
-				      priv->port, ifname);
+				      eth_dev->data->port_id, ifname);
 			else
-				DEBUG("port %u ifname is unknown", priv->port);
+				DEBUG("port %u ifname is unknown",
+				      eth_dev->data->port_id);
 		}
 #endif
 		/* Get actual MTU if possible. */
 		err = mlx5_get_mtu(eth_dev, &priv->mtu);
 		if (err)
 			goto port_error;
-		DEBUG("port %u MTU is %u", priv->port, priv->mtu);
+		DEBUG("port %u MTU is %u", eth_dev->data->port_id, priv->mtu);
 		/*
 		 * Initialize burst functions to prevent crashes before link-up.
 		 */
@@ -1024,7 +1034,8 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		mlx5dv_set_context_attr(ctx, MLX5DV_CTX_ATTR_BUF_ALLOCATORS,
 					(void *)((uintptr_t)&alctr));
 		/* Bring Ethernet device up. */
-		DEBUG("forcing Ethernet interface up");
+		DEBUG("port %u forcing Ethernet interface up",
+		      eth_dev->data->port_id);
 		mlx5_set_flags(eth_dev, ~IFF_UP, IFF_UP);
 		continue;
 port_error:
