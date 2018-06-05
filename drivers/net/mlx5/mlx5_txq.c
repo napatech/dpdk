@@ -662,17 +662,6 @@ mlx5_txq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 					  priv->inline_max_packet_sz) +
 				  (RTE_CACHE_LINE_SIZE - 1)) /
 				 RTE_CACHE_LINE_SIZE) * RTE_CACHE_LINE_SIZE;
-		} else if (priv->tso) {
-			int inline_diff = tmpl->txq.max_inline - max_tso_inline;
-
-			/*
-			 * Adjust inline value as Verbs aggregates
-			 * tso_inline and txq_inline fields.
-			 */
-			tmpl->max_inline_data = inline_diff > 0 ?
-					       inline_diff *
-					       RTE_CACHE_LINE_SIZE :
-					       0;
 		} else {
 			tmpl->max_inline_data =
 				tmpl->txq.max_inline * RTE_CACHE_LINE_SIZE;
