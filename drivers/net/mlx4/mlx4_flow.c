@@ -116,7 +116,7 @@ static uint64_t
 mlx4_conv_rss_hf(uint64_t rss_hf)
 {
 	enum { IPV4, IPV6, TCP, UDP, };
-	const uint64_t in[] = {
+	static const uint64_t in[] = {
 		[IPV4] = (ETH_RSS_IPV4 |
 			  ETH_RSS_FRAG_IPV4 |
 			  ETH_RSS_NONFRAG_IPV4_TCP |
@@ -139,7 +139,7 @@ mlx4_conv_rss_hf(uint64_t rss_hf)
 		 */
 		[UDP] = 0,
 	};
-	const uint64_t out[RTE_DIM(in)] = {
+	static const uint64_t out[RTE_DIM(in)] = {
 		[IPV4] = IBV_RX_HASH_SRC_IPV4 | IBV_RX_HASH_DST_IPV4,
 		[IPV6] = IBV_RX_HASH_SRC_IPV6 | IBV_RX_HASH_DST_IPV6,
 		[TCP] = IBV_RX_HASH_SRC_PORT_TCP | IBV_RX_HASH_DST_PORT_TCP,
