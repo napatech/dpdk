@@ -653,7 +653,6 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 	int err = 0;
 	struct ibv_context *attr_ctx = NULL;
 	struct ibv_device_attr_ex device_attr;
-	unsigned int sriov;
 	unsigned int mps;
 	unsigned int cqe_comp;
 	unsigned int tunnel_en = 0;
@@ -700,14 +699,6 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		    (pci_dev->addr.devid != pci_addr.devid) ||
 		    (pci_dev->addr.function != pci_addr.function))
 			continue;
-		sriov = ((pci_dev->id.device_id ==
-		       PCI_DEVICE_ID_MELLANOX_CONNECTX4VF) ||
-		      (pci_dev->id.device_id ==
-		       PCI_DEVICE_ID_MELLANOX_CONNECTX4LXVF) ||
-		      (pci_dev->id.device_id ==
-		       PCI_DEVICE_ID_MELLANOX_CONNECTX5VF) ||
-		      (pci_dev->id.device_id ==
-		       PCI_DEVICE_ID_MELLANOX_CONNECTX5EXVF));
 		switch (pci_dev->id.device_id) {
 		case PCI_DEVICE_ID_MELLANOX_CONNECTX4:
 			tunnel_en = 1;
@@ -722,10 +713,8 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		default:
 			break;
 		}
-		INFO("PCI information matches, using device \"%s\""
-		     " (SR-IOV: %s)",
-		     list[i]->name,
-		     sriov ? "true" : "false");
+		INFO("PCI information matches, using device \"%s\"",
+		     list[i]->name);
 		attr_ctx = ibv_open_device(list[i]);
 		err = errno;
 		break;
@@ -783,7 +772,6 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		struct rte_eth_dev *eth_dev;
 		struct ibv_device_attr_ex device_attr_ex;
 		struct ether_addr mac;
-		uint16_t num_vfs = 0;
 		struct ibv_device_attr_ex device_attr;
 		struct mlx5_args args = {
 			.cqe_comp = MLX5_ARG_UNSET,
@@ -951,8 +939,6 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		DEBUG("hardware RX end alignment padding is %ssupported",
 		      (priv->hw_padding ? "" : "not "));
 
-		priv_get_num_vfs(priv, &num_vfs);
-		priv->sriov = (num_vfs || sriov);
 		priv->tso = ((priv->tso) &&
 			    (device_attr_ex.tso_caps.max_tso > 0) &&
 			    (device_attr_ex.tso_caps.supported_qpts &
