@@ -340,7 +340,6 @@ mlx5_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	unsigned int i;
 	unsigned int idx;
 
-	priv_lock(priv);
 	/* Add software counters. */
 	for (i = 0; (i != priv->rxqs_n); ++i) {
 		struct mlx5_rxq_data *rxq = (*priv->rxqs)[i];
@@ -386,7 +385,6 @@ mlx5_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	/* FIXME: retrieve and add hardware counters. */
 #endif
 	*stats = tmp;
-	priv_unlock(priv);
 	return 0;
 }
 
@@ -403,7 +401,6 @@ mlx5_stats_reset(struct rte_eth_dev *dev)
 	unsigned int i;
 	unsigned int idx;
 
-	priv_lock(priv);
 	for (i = 0; (i != priv->rxqs_n); ++i) {
 		if ((*priv->rxqs)[i] == NULL)
 			continue;
@@ -421,7 +418,6 @@ mlx5_stats_reset(struct rte_eth_dev *dev)
 #ifndef MLX5_PMD_SOFT_COUNTERS
 	/* FIXME: reset hardware counters. */
 #endif
-	priv_unlock(priv);
 }
 
 /**
@@ -448,16 +444,13 @@ mlx5_xstats_get(struct rte_eth_dev *dev,
 		struct mlx5_xstats_ctrl *xstats_ctrl = &priv->xstats_ctrl;
 		int stats_n;
 
-		priv_lock(priv);
 		stats_n = priv_ethtool_get_stats_n(priv);
 		if (stats_n < 0) {
-			priv_unlock(priv);
 			return -1;
 		}
 		if (xstats_ctrl->stats_n != stats_n)
 			priv_xstats_init(priv);
 		ret = priv_xstats_get(priv, stats);
-		priv_unlock(priv);
 	}
 	return ret;
 }
@@ -475,15 +468,12 @@ mlx5_xstats_reset(struct rte_eth_dev *dev)
 	struct mlx5_xstats_ctrl *xstats_ctrl = &priv->xstats_ctrl;
 	int stats_n;
 
-	priv_lock(priv);
 	stats_n = priv_ethtool_get_stats_n(priv);
 	if (stats_n < 0)
-		goto unlock;
+		return;
 	if (xstats_ctrl->stats_n != stats_n)
 		priv_xstats_init(priv);
 	priv_xstats_reset(priv);
-unlock:
-	priv_unlock(priv);
 }
 
 /**
@@ -503,18 +493,15 @@ int
 mlx5_xstats_get_names(struct rte_eth_dev *dev __rte_unused,
 		struct rte_eth_xstat_name *xstats_names, unsigned int n)
 {
-	struct priv *priv = dev->data->dev_private;
 	unsigned int i;
 
 	if (n >= xstats_n && xstats_names) {
-		priv_lock(priv);
 		for (i = 0; i != xstats_n; ++i) {
 			strncpy(xstats_names[i].name,
 				mlx5_counters_init[i].dpdk_name,
 				RTE_ETH_XSTATS_NAME_SIZE);
 			xstats_names[i].name[RTE_ETH_XSTATS_NAME_SIZE - 1] = 0;
 		}
-		priv_unlock(priv);
 	}
 	return xstats_n;
 }
