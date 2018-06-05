@@ -162,14 +162,14 @@ mlx5_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		      (void *)dev, idx, priv->txqs_n);
 		return -EOVERFLOW;
 	}
-	if (!mlx5_priv_txq_releasable(priv, idx)) {
+	if (!mlx5_txq_releasable(dev, idx)) {
 		ret = EBUSY;
 		ERROR("%p: unable to release queue index %u",
 		      (void *)dev, idx);
 		goto out;
 	}
-	mlx5_priv_txq_release(priv, idx);
-	txq_ctrl = mlx5_priv_txq_new(priv, idx, desc, socket, conf);
+	mlx5_txq_release(dev, idx);
+	txq_ctrl = mlx5_txq_new(dev, idx, desc, socket, conf);
 	if (!txq_ctrl) {
 		ERROR("%p: unable to allocate queue index %u",
 		      (void *)dev, idx);
@@ -205,7 +205,7 @@ mlx5_tx_queue_release(void *dpdk_txq)
 		if ((*priv->txqs)[i] == txq) {
 			DEBUG("%p: removing TX queue %p from list",
 			      (void *)priv->dev, (void *)txq_ctrl);
-			mlx5_priv_txq_release(priv, i);
+			mlx5_txq_release(priv->dev, i);
 			break;
 		}
 }
@@ -216,8 +216,8 @@ mlx5_tx_queue_release(void *dpdk_txq)
  * Both primary and secondary process do mmap to make UAR address
  * aligned.
  *
- * @param[in] priv
- *   Pointer to private structure.
+ * @param[in] dev
+ *   Pointer to Ethernet device.
  * @param fd
  *   Verbs file descriptor to map UAR pages.
  *
@@ -225,8 +225,9 @@ mlx5_tx_queue_release(void *dpdk_txq)
  *   0 on success, errno value on failure.
  */
 int
-priv_tx_uar_remap(struct priv *priv, int fd)
+mlx5_tx_uar_remap(struct rte_eth_dev *dev, int fd)
 {
+	struct priv *priv = dev->data->dev_private;
 	unsigned int i, j;
 	uintptr_t pages[priv->txqs_n];
 	unsigned int pages_n = 0;
@@ -293,8 +294,8 @@ priv_tx_uar_remap(struct priv *priv, int fd)
 /**
  * Create the Tx queue Verbs object.
  *
- * @param priv
- *   Pointer to private structure.
+ * @param dev
+ *   Pointer to Ethernet device.
  * @param idx
  *   Queue index in DPDK Rx queue array
  *
@@ -302,8 +303,9 @@ priv_tx_uar_remap(struct priv *priv, int fd)
  *   The Verbs object initialised if it can be created.
  */
 struct mlx5_txq_ibv *
-mlx5_priv_txq_ibv_new(struct priv *priv, uint16_t idx)
+mlx5_txq_ibv_new(struct rte_eth_dev *dev, uint16_t idx)
 {
+	struct priv *priv = dev->data->dev_private;
 	struct mlx5_txq_data *txq_data = (*priv->txqs)[idx];
 	struct mlx5_txq_ctrl *txq_ctrl =
 		container_of(txq_data, struct mlx5_txq_ctrl, txq);
@@ -450,7 +452,7 @@ mlx5_priv_txq_ibv_new(struct priv *priv, uint16_t idx)
 		ERROR("Failed to retrieve UAR info, invalid libmlx5.so version");
 		goto error;
 	}
-	DEBUG("%p: Verbs Tx queue %p: refcnt %d", (void *)priv,
+	DEBUG("%p: Verbs Tx queue %p: refcnt %d", (void *)dev,
 	      (void *)txq_ibv, rte_atomic32_read(&txq_ibv->refcnt));
 	LIST_INSERT_HEAD(&priv->txqsibv, txq_ibv, next);
 	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_NONE;
@@ -467,8 +469,8 @@ error:
 /**
  * Get an Tx queue Verbs object.
  *
- * @param priv
- *   Pointer to private structure.
+ * @param dev
+ *   Pointer to Ethernet device.
  * @param idx
  *   Queue index in DPDK Rx queue array
  *
@@ -476,8 +478,9 @@ error:
  *   The Verbs object if it exists.
  */
 struct mlx5_txq_ibv *
-mlx5_priv_txq_ibv_get(struct priv *priv, uint16_t idx)
+mlx5_txq_ibv_get(struct rte_eth_dev *dev, uint16_t idx)
 {
+	struct priv *priv = dev->data->dev_private;
 	struct mlx5_txq_ctrl *txq_ctrl;
 
 	if (idx >= priv->txqs_n)
@@ -487,7 +490,7 @@ mlx5_priv_txq_ibv_get(struct priv *priv, uint16_t idx)
 	txq_ctrl = container_of((*priv->txqs)[idx], struct mlx5_txq_ctrl, txq);
 	if (txq_ctrl->ibv) {
 		rte_atomic32_inc(&txq_ctrl->ibv->refcnt);
-		DEBUG("%p: Verbs Tx queue %p: refcnt %d", (void *)priv,
+		DEBUG("%p: Verbs Tx queue %p: refcnt %d", (void *)dev,
 		      (void *)txq_ctrl->ibv,
 		      rte_atomic32_read(&txq_ctrl->ibv->refcnt));
 	}
@@ -497,8 +500,6 @@ mlx5_priv_txq_ibv_get(struct priv *priv, uint16_t idx)
 /**
  * Release an Tx verbs queue object.
  *
- * @param priv
- *   Pointer to private structure.
  * @param txq_ibv
  *   Verbs Tx queue object.
  *
@@ -506,11 +507,10 @@ mlx5_priv_txq_ibv_get(struct priv *priv, uint16_t idx)
  *   0 on success, errno on failure.
  */
 int
-mlx5_priv_txq_ibv_release(struct priv *priv __rte_unused,
-			  struct mlx5_txq_ibv *txq_ibv)
+mlx5_txq_ibv_release(struct mlx5_txq_ibv *txq_ibv)
 {
 	assert(txq_ibv);
-	DEBUG("%p: Verbs Tx queue %p: refcnt %d", (void *)priv,
+	DEBUG("Verbs Tx queue %p: refcnt %d",
 	      (void *)txq_ibv, rte_atomic32_read(&txq_ibv->refcnt));
 	if (rte_atomic32_dec_and_test(&txq_ibv->refcnt)) {
 		claim_zero(ibv_destroy_qp(txq_ibv->qp));
@@ -525,14 +525,11 @@ mlx5_priv_txq_ibv_release(struct priv *priv __rte_unused,
 /**
  * Return true if a single reference exists on the object.
  *
- * @param priv
- *   Pointer to private structure.
  * @param txq_ibv
  *   Verbs Tx queue object.
  */
 int
-mlx5_priv_txq_ibv_releasable(struct priv *priv __rte_unused,
-			     struct mlx5_txq_ibv *txq_ibv)
+mlx5_txq_ibv_releasable(struct mlx5_txq_ibv *txq_ibv)
 {
 	assert(txq_ibv);
 	return (rte_atomic32_read(&txq_ibv->refcnt) == 1);
@@ -541,20 +538,21 @@ mlx5_priv_txq_ibv_releasable(struct priv *priv __rte_unused,
 /**
  * Verify the Verbs Tx queue list is empty
  *
- * @param priv
- *   Pointer to private structure.
+ * @param dev
+ *   Pointer to Ethernet device.
  *
  * @return
  *   The number of object not released.
  */
 int
-mlx5_priv_txq_ibv_verify(struct priv *priv)
+mlx5_txq_ibv_verify(struct rte_eth_dev *dev)
 {
+	struct priv *priv = dev->data->dev_private;
 	int ret = 0;
 	struct mlx5_txq_ibv *txq_ibv;
 
 	LIST_FOREACH(txq_ibv, &priv->txqsibv, next) {
-		DEBUG("%p: Verbs Tx queue %p still referenced", (void *)priv,
+		DEBUG("%p: Verbs Tx queue %p still referenced", (void *)dev,
 		      (void *)txq_ibv);
 		++ret;
 	}
@@ -564,8 +562,8 @@ mlx5_priv_txq_ibv_verify(struct priv *priv)
 /**
  * Create a DPDK Tx queue.
  *
- * @param priv
- *   Pointer to private structure.
+ * @param dev
+ *   Pointer to Ethernet device.
  * @param idx
  *   TX queue index.
  * @param desc
@@ -579,10 +577,10 @@ mlx5_priv_txq_ibv_verify(struct priv *priv)
  *   A DPDK queue object on success.
  */
 struct mlx5_txq_ctrl *
-mlx5_priv_txq_new(struct priv *priv, uint16_t idx, uint16_t desc,
-		  unsigned int socket,
-		  const struct rte_eth_txconf *conf)
+mlx5_txq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
+	     unsigned int socket, const struct rte_eth_txconf *conf)
 {
+	struct priv *priv = dev->data->dev_private;
 	const unsigned int max_tso_inline =
 		((MLX5_MAX_TSO_HEADER + (RTE_CACHE_LINE_SIZE - 1)) /
 		 RTE_CACHE_LINE_SIZE);
@@ -674,7 +672,7 @@ mlx5_priv_txq_new(struct priv *priv, uint16_t idx, uint16_t desc,
 		(struct rte_mbuf *(*)[1 << tmpl->txq.elts_n])(tmpl + 1);
 	tmpl->txq.stats.idx = idx;
 	rte_atomic32_inc(&tmpl->refcnt);
-	DEBUG("%p: Tx queue %p: refcnt %d", (void *)priv,
+	DEBUG("%p: Tx queue %p: refcnt %d", (void *)dev,
 	      (void *)tmpl, rte_atomic32_read(&tmpl->refcnt));
 	LIST_INSERT_HEAD(&priv->txqsctrl, tmpl, next);
 	return tmpl;
@@ -683,8 +681,8 @@ mlx5_priv_txq_new(struct priv *priv, uint16_t idx, uint16_t desc,
 /**
  * Get a Tx queue.
  *
- * @param priv
- *   Pointer to private structure.
+ * @param dev
+ *   Pointer to Ethernet device.
  * @param idx
  *   TX queue index.
  *
@@ -692,8 +690,9 @@ mlx5_priv_txq_new(struct priv *priv, uint16_t idx, uint16_t desc,
  *   A pointer to the queue if it exists.
  */
 struct mlx5_txq_ctrl *
-mlx5_priv_txq_get(struct priv *priv, uint16_t idx)
+mlx5_txq_get(struct rte_eth_dev *dev, uint16_t idx)
 {
+	struct priv *priv = dev->data->dev_private;
 	struct mlx5_txq_ctrl *ctrl = NULL;
 
 	if ((*priv->txqs)[idx]) {
@@ -701,15 +700,15 @@ mlx5_priv_txq_get(struct priv *priv, uint16_t idx)
 				    txq);
 		unsigned int i;
 
-		mlx5_priv_txq_ibv_get(priv, idx);
+		mlx5_txq_ibv_get(dev, idx);
 		for (i = 0; i != MLX5_PMD_TX_MP_CACHE; ++i) {
 			if (ctrl->txq.mp2mr[i])
 				claim_nonzero
-					(priv_mr_get(priv,
+					(mlx5_mr_get(dev,
 						     ctrl->txq.mp2mr[i]->mp));
 		}
 		rte_atomic32_inc(&ctrl->refcnt);
-		DEBUG("%p: Tx queue %p: refcnt %d", (void *)priv,
+		DEBUG("%p: Tx queue %p: refcnt %d", (void *)dev,
 		      (void *)ctrl, rte_atomic32_read(&ctrl->refcnt));
 	}
 	return ctrl;
@@ -718,8 +717,8 @@ mlx5_priv_txq_get(struct priv *priv, uint16_t idx)
 /**
  * Release a Tx queue.
  *
- * @param priv
- *   Pointer to private structure.
+ * @param dev
+ *   Pointer to Ethernet device.
  * @param idx
  *   TX queue index.
  *
@@ -727,8 +726,9 @@ mlx5_priv_txq_get(struct priv *priv, uint16_t idx)
  *   0 on success, errno on failure.
  */
 int
-mlx5_priv_txq_release(struct priv *priv, uint16_t idx)
+mlx5_txq_release(struct rte_eth_dev *dev, uint16_t idx)
 {
+	struct priv *priv = dev->data->dev_private;
 	unsigned int i;
 	struct mlx5_txq_ctrl *txq;
 	size_t page_size = sysconf(_SC_PAGESIZE);
@@ -736,18 +736,18 @@ mlx5_priv_txq_release(struct priv *priv, uint16_t idx)
 	if (!(*priv->txqs)[idx])
 		return 0;
 	txq = container_of((*priv->txqs)[idx], struct mlx5_txq_ctrl, txq);
-	DEBUG("%p: Tx queue %p: refcnt %d", (void *)priv,
+	DEBUG("%p: Tx queue %p: refcnt %d", (void *)dev,
 	      (void *)txq, rte_atomic32_read(&txq->refcnt));
 	if (txq->ibv) {
 		int ret;
 
-		ret = mlx5_priv_txq_ibv_release(priv, txq->ibv);
+		ret = mlx5_txq_ibv_release(txq->ibv);
 		if (!ret)
 			txq->ibv = NULL;
 	}
 	for (i = 0; i != MLX5_PMD_TX_MP_CACHE; ++i) {
 		if (txq->txq.mp2mr[i]) {
-			priv_mr_release(priv, txq->txq.mp2mr[i]);
+			mlx5_mr_release(txq->txq.mp2mr[i]);
 			txq->txq.mp2mr[i] = NULL;
 		}
 	}
@@ -767,8 +767,8 @@ mlx5_priv_txq_release(struct priv *priv, uint16_t idx)
 /**
  * Verify if the queue can be released.
  *
- * @param priv
- *   Pointer to private structure.
+ * @param dev
+ *   Pointer to Ethernet device.
  * @param idx
  *   TX queue index.
  *
@@ -776,8 +776,9 @@ mlx5_priv_txq_release(struct priv *priv, uint16_t idx)
  *   1 if the queue can be released.
  */
 int
-mlx5_priv_txq_releasable(struct priv *priv, uint16_t idx)
+mlx5_txq_releasable(struct rte_eth_dev *dev, uint16_t idx)
 {
+	struct priv *priv = dev->data->dev_private;
 	struct mlx5_txq_ctrl *txq;
 
 	if (!(*priv->txqs)[idx])
@@ -789,20 +790,21 @@ mlx5_priv_txq_releasable(struct priv *priv, uint16_t idx)
 /**
  * Verify the Tx Queue list is empty
  *
- * @param priv
- *   Pointer to private structure.
+ * @param dev
+ *   Pointer to Ethernet device.
  *
  * @return
  *   The number of object not released.
  */
 int
-mlx5_priv_txq_verify(struct priv *priv)
+mlx5_txq_verify(struct rte_eth_dev *dev)
 {
+	struct priv *priv = dev->data->dev_private;
 	struct mlx5_txq_ctrl *txq;
 	int ret = 0;
 
 	LIST_FOREACH(txq, &priv->txqsctrl, next) {
-		DEBUG("%p: Tx Queue %p still referenced", (void *)priv,
+		DEBUG("%p: Tx Queue %p still referenced", (void *)dev,
 		      (void *)txq);
 		++ret;
 	}
