@@ -166,6 +166,7 @@ struct priv {
 	struct mlx5_xstats_ctrl xstats_ctrl; /* Extended stats control. */
 	rte_spinlock_t lock; /* Lock for control functions. */
 	int primary_socket; /* Unix socket for primary process. */
+	void *uar_base; /* Reserved address space for UAR mapping */
 	struct rte_intr_handle intr_handle_socket; /* Interrupt handler. */
 	struct mlx5_verbs_alloc_ctx verbs_alloc_ctx;
 	/* Context for Verbs allocator. */
