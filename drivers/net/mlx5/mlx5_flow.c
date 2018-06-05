@@ -286,7 +286,8 @@ struct mlx5_flow_items {
 	 *   Internal structure to store the conversion.
 	 *
 	 * @return
-	 *   0 on success, negative value otherwise.
+	 *   0 on success, a negative errno value otherwise and rte_errno is
+	 *   set.
 	 */
 	int (*convert)(const struct rte_flow_item *item,
 		       const void *default_mask,
@@ -499,45 +500,52 @@ struct ibv_spec_header {
  *   Bit-Mask size in bytes.
  *
  * @return
- *   0 on success.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_flow_item_validate(const struct rte_flow_item *item,
 			const uint8_t *mask, unsigned int size)
 {
-	int ret = 0;
-
-	if (!item->spec && (item->mask || item->last))
-		return -1;
+	if (!item->spec && (item->mask || item->last)) {
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
 	if (item->spec && !item->mask) {
 		unsigned int i;
 		const uint8_t *spec = item->spec;
 
 		for (i = 0; i < size; ++i)
-			if ((spec[i] | mask[i]) != mask[i])
-				return -1;
+			if ((spec[i] | mask[i]) != mask[i]) {
+				rte_errno = EINVAL;
+				return -rte_errno;
+			}
 	}
 	if (item->last && !item->mask) {
 		unsigned int i;
 		const uint8_t *spec = item->last;
 
 		for (i = 0; i < size; ++i)
-			if ((spec[i] | mask[i]) != mask[i])
-				return -1;
+			if ((spec[i] | mask[i]) != mask[i]) {
+				rte_errno = EINVAL;
+				return -rte_errno;
+			}
 	}
 	if (item->mask) {
 		unsigned int i;
 		const uint8_t *spec = item->spec;
 
 		for (i = 0; i < size; ++i)
-			if ((spec[i] | mask[i]) != mask[i])
-				return -1;
+			if ((spec[i] | mask[i]) != mask[i]) {
+				rte_errno = EINVAL;
+				return -rte_errno;
+			}
 	}
 	if (item->spec && item->last) {
 		uint8_t spec[size];
 		uint8_t last[size];
 		const uint8_t *apply = mask;
 		unsigned int i;
+		int ret;
 
 		if (item->mask)
 			apply = item->mask;
@@ -546,8 +554,12 @@ mlx5_flow_item_validate(const struct rte_flow_item *item,
 			last[i] = ((const uint8_t *)item->last)[i] & apply[i];
 		}
 		ret = memcmp(spec, last, size);
+		if (ret != 0) {
+			rte_errno = EINVAL;
+			return -rte_errno;
+		}
 	}
-	return ret;
+	return 0;
 }
 
 /**
@@ -560,7 +572,7 @@ mlx5_flow_item_validate(const struct rte_flow_item *item,
  *   User RSS configuration to save.
  *
  * @return
- *   0 on success, errno value on failure.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_flow_convert_rss_conf(struct mlx5_flow_parse *parser,
@@ -572,10 +584,14 @@ mlx5_flow_convert_rss_conf(struct mlx5_flow_parse *parser,
 	 * device default RSS configuration.
 	 */
 	if (rss_conf) {
-		if (rss_conf->rss_hf & MLX5_RSS_HF_MASK)
-			return EINVAL;
-		if (rss_conf->rss_key_len != 40)
-			return EINVAL;
+		if (rss_conf->rss_hf & MLX5_RSS_HF_MASK) {
+			rte_errno = EINVAL;
+			return -rte_errno;
+		}
+		if (rss_conf->rss_key_len != 40) {
+			rte_errno = EINVAL;
+			return -rte_errno;
+		}
 		if (rss_conf->rss_key_len && rss_conf->rss_key) {
 			parser->rss_conf.rss_key_len = rss_conf->rss_key_len;
 			memcpy(parser->rss_key, rss_conf->rss_key,
@@ -655,14 +671,17 @@ mlx5_flow_convert_actions(struct rte_eth_dev *dev,
 			  struct mlx5_flow_parse *parser)
 {
 	struct priv *priv = dev->data->dev_private;
+	int ret;
 
 	/*
 	 * Add default RSS configuration necessary for Verbs to create QP even
 	 * if no RSS is necessary.
 	 */
-	mlx5_flow_convert_rss_conf(parser,
-				   (const struct rte_eth_rss_conf *)
-				   &priv->rss_conf);
+	ret = mlx5_flow_convert_rss_conf(parser,
+					 (const struct rte_eth_rss_conf *)
+					 &priv->rss_conf);
+	if (ret)
+		return ret;
 	for (; actions->type != RTE_FLOW_ACTION_TYPE_END; ++actions) {
 		if (actions->type == RTE_FLOW_ACTION_TYPE_VOID) {
 			continue;
@@ -811,6 +830,7 @@ mlx5_flow_convert_items_validate(const struct rte_flow_item items[],
 {
 	const struct mlx5_flow_items *cur_item = mlx5_flow_items;
 	unsigned int i;
+	int ret = 0;
 
 	/* Initialise the offsets to start after verbs attribute. */
 	for (i = 0; i != hash_rxq_init_n; ++i)
@@ -818,7 +838,6 @@ mlx5_flow_convert_items_validate(const struct rte_flow_item items[],
 	for (; items->type != RTE_FLOW_ITEM_TYPE_END; ++items) {
 		const struct mlx5_flow_items *token = NULL;
 		unsigned int n;
-		int err;
 
 		if (items->type == RTE_FLOW_ITEM_TYPE_VOID)
 			continue;
@@ -834,10 +853,10 @@ mlx5_flow_convert_items_validate(const struct rte_flow_item items[],
 		if (!token)
 			goto exit_item_not_supported;
 		cur_item = token;
-		err = mlx5_flow_item_validate(items,
+		ret = mlx5_flow_item_validate(items,
 					      (const uint8_t *)cur_item->mask,
 					      cur_item->mask_sz);
-		if (err)
+		if (ret)
 			goto exit_item_not_supported;
 		if (items->type == RTE_FLOW_ITEM_TYPE_VXLAN) {
 			if (parser->inner) {
@@ -874,9 +893,8 @@ mlx5_flow_convert_items_validate(const struct rte_flow_item items[],
 	}
 	return 0;
 exit_item_not_supported:
-	rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM,
-			   items, "item not supported");
-	return -rte_errno;
+	return rte_flow_error_set(error, -ret, RTE_FLOW_ERROR_TYPE_ITEM,
+				  items, "item not supported");
 }
 
 /**
@@ -890,7 +908,7 @@ exit_item_not_supported:
  *   Perform verbose error reporting if not NULL.
  *
  * @return
- *   A verbs flow attribute on success, NULL otherwise.
+ *   A verbs flow attribute on success, NULL otherwise and rte_errno is set.
  */
 static struct ibv_flow_attr *
 mlx5_flow_convert_allocate(unsigned int priority,
@@ -1092,7 +1110,7 @@ mlx5_flow_convert(struct rte_eth_dev *dev,
 			 parser->queue[HASH_RXQ_ETH].offset,
 			 error);
 		if (!parser->queue[HASH_RXQ_ETH].ibv_attr)
-			return ENOMEM;
+			goto exit_enomem;
 		parser->queue[HASH_RXQ_ETH].offset =
 			sizeof(struct ibv_flow_attr);
 	} else {
@@ -1127,7 +1145,7 @@ mlx5_flow_convert(struct rte_eth_dev *dev,
 					 cur_item->mask),
 					parser);
 		if (ret) {
-			rte_flow_error_set(error, ret,
+			rte_flow_error_set(error, rte_errno,
 					   RTE_FLOW_ERROR_TYPE_ITEM,
 					   items, "item not supported");
 			goto exit_free;
@@ -1169,13 +1187,13 @@ exit_enomem:
 			parser->queue[i].ibv_attr = NULL;
 		}
 	}
-	rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+	rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
 			   NULL, "cannot allocate verbs spec attributes.");
-	return ret;
+	return -rte_errno;
 exit_count_error:
 	rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
 			   NULL, "cannot create counter.");
-	return rte_errno;
+	return -rte_errno;
 }
 
 /**
@@ -1221,6 +1239,9 @@ mlx5_flow_create_copy(struct mlx5_flow_parse *parser, void *src,
  *   Default bit-masks to use when item->mask is not provided.
  * @param data[in, out]
  *   User structure.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_flow_create_eth(const struct rte_flow_item *item,
@@ -1270,6 +1291,9 @@ mlx5_flow_create_eth(const struct rte_flow_item *item,
  *   Default bit-masks to use when item->mask is not provided.
  * @param data[in, out]
  *   User structure.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_flow_create_vlan(const struct rte_flow_item *item,
@@ -1310,6 +1334,9 @@ mlx5_flow_create_vlan(const struct rte_flow_item *item,
  *   Default bit-masks to use when item->mask is not provided.
  * @param data[in, out]
  *   User structure.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_flow_create_ipv4(const struct rte_flow_item *item,
@@ -1362,6 +1389,9 @@ mlx5_flow_create_ipv4(const struct rte_flow_item *item,
  *   Default bit-masks to use when item->mask is not provided.
  * @param data[in, out]
  *   User structure.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_flow_create_ipv6(const struct rte_flow_item *item,
@@ -1418,6 +1448,9 @@ mlx5_flow_create_ipv6(const struct rte_flow_item *item,
  *   Default bit-masks to use when item->mask is not provided.
  * @param data[in, out]
  *   User structure.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_flow_create_udp(const struct rte_flow_item *item,
@@ -1464,6 +1497,9 @@ mlx5_flow_create_udp(const struct rte_flow_item *item,
  *   Default bit-masks to use when item->mask is not provided.
  * @param data[in, out]
  *   User structure.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_flow_create_tcp(const struct rte_flow_item *item,
@@ -1510,6 +1546,9 @@ mlx5_flow_create_tcp(const struct rte_flow_item *item,
  *   Default bit-masks to use when item->mask is not provided.
  * @param data[in, out]
  *   User structure.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_flow_create_vxlan(const struct rte_flow_item *item,
@@ -1549,8 +1588,10 @@ mlx5_flow_create_vxlan(const struct rte_flow_item *item,
 	 * before will also match this rule.
 	 * To avoid such situation, VNI 0 is currently refused.
 	 */
-	if (!vxlan.val.tunnel_id)
-		return EINVAL;
+	if (!vxlan.val.tunnel_id) {
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
 	mlx5_flow_create_copy(parser, &vxlan, size);
 	return 0;
 }
@@ -1562,6 +1603,9 @@ mlx5_flow_create_vxlan(const struct rte_flow_item *item,
  *   Internal parser structure.
  * @param mark_id
  *   Mark identifier.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_flow_create_flag_mark(struct mlx5_flow_parse *parser, uint32_t mark_id)
@@ -1587,7 +1631,7 @@ mlx5_flow_create_flag_mark(struct mlx5_flow_parse *parser, uint32_t mark_id)
  *   Pointer to MLX5 flow parser structure.
  *
  * @return
- *   0 on success, errno value on failure.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_flow_create_count(struct rte_eth_dev *dev __rte_unused,
@@ -1605,8 +1649,10 @@ mlx5_flow_create_count(struct rte_eth_dev *dev __rte_unused,
 
 	init_attr.counter_set_id = 0;
 	parser->cs = ibv_create_counter_set(priv->ctx, &init_attr);
-	if (!parser->cs)
-		return EINVAL;
+	if (!parser->cs) {
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
 	counter.counter_set_handle = parser->cs->handle;
 	mlx5_flow_create_copy(parser, &counter, size);
 #endif
@@ -1626,7 +1672,7 @@ mlx5_flow_create_count(struct rte_eth_dev *dev __rte_unused,
  *   Perform verbose error reporting if not NULL.
  *
  * @return
- *   0 on success, errno value on failure.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_flow_create_action_queue_drop(struct rte_eth_dev *dev,
@@ -1637,7 +1683,6 @@ mlx5_flow_create_action_queue_drop(struct rte_eth_dev *dev,
 	struct priv *priv = dev->data->dev_private;
 	struct ibv_flow_spec_action_drop *drop;
 	unsigned int size = sizeof(struct ibv_flow_spec_action_drop);
-	int err = 0;
 
 	assert(priv->pd);
 	assert(priv->ctx);
@@ -1663,7 +1708,6 @@ mlx5_flow_create_action_queue_drop(struct rte_eth_dev *dev,
 	if (!flow->frxq[HASH_RXQ_ETH].ibv_flow) {
 		rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE,
 				   NULL, "flow rule creation failure");
-		err = ENOMEM;
 		goto error;
 	}
 	return 0;
@@ -1682,7 +1726,7 @@ error:
 		flow->cs = NULL;
 		parser->cs = NULL;
 	}
-	return err;
+	return -rte_errno;
 }
 
 /**
@@ -1698,7 +1742,7 @@ error:
  *   Perform verbose error reporting if not NULL.
  *
  * @return
- *   0 on success, a errno value otherwise and rte_errno is set.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_flow_create_action_queue_rss(struct rte_eth_dev *dev,
@@ -1736,10 +1780,10 @@ mlx5_flow_create_action_queue_rss(struct rte_eth_dev *dev,
 				      parser->queues,
 				      parser->queues_n);
 		if (!flow->frxq[i].hrxq) {
-			rte_flow_error_set(error, ENOMEM,
-					   RTE_FLOW_ERROR_TYPE_HANDLE,
-					   NULL, "cannot create hash rxq");
-			return ENOMEM;
+			return rte_flow_error_set(error, ENOMEM,
+						  RTE_FLOW_ERROR_TYPE_HANDLE,
+						  NULL,
+						  "cannot create hash rxq");
 		}
 	}
 	return 0;
@@ -1758,7 +1802,7 @@ mlx5_flow_create_action_queue_rss(struct rte_eth_dev *dev,
  *   Perform verbose error reporting if not NULL.
  *
  * @return
- *   0 on success, a errno value otherwise and rte_errno is set.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_flow_create_action_queue(struct rte_eth_dev *dev,
@@ -1767,15 +1811,15 @@ mlx5_flow_create_action_queue(struct rte_eth_dev *dev,
 			      struct rte_flow_error *error)
 {
 	struct priv *priv = dev->data->dev_private;
-	int err = 0;
+	int ret;
 	unsigned int i;
 	unsigned int flows_n = 0;
 
 	assert(priv->pd);
 	assert(priv->ctx);
 	assert(!parser->drop);
-	err = mlx5_flow_create_action_queue_rss(dev, parser, flow, error);
-	if (err)
+	ret = mlx5_flow_create_action_queue_rss(dev, parser, flow, error);
+	if (ret)
 		goto error;
 	if (parser->count)
 		flow->cs = parser->cs;
@@ -1791,7 +1835,6 @@ mlx5_flow_create_action_queue(struct rte_eth_dev *dev,
 			rte_flow_error_set(error, ENOMEM,
 					   RTE_FLOW_ERROR_TYPE_HANDLE,
 					   NULL, "flow rule creation failure");
-			err = ENOMEM;
 			goto error;
 		}
 		++flows_n;
@@ -1813,6 +1856,7 @@ mlx5_flow_create_action_queue(struct rte_eth_dev *dev,
 	}
 	return 0;
 error:
+	ret = rte_errno; /* Save rte_errno before cleanup. */
 	assert(flow);
 	for (i = 0; i != hash_rxq_init_n; ++i) {
 		if (flow->frxq[i].ibv_flow) {
@@ -1830,7 +1874,8 @@ error:
 		flow->cs = NULL;
 		parser->cs = NULL;
 	}
-	return err;
+	rte_errno = ret; /* Restore rte_errno. */
+	return -rte_errno;
 }
 
 /**
@@ -1850,7 +1895,7 @@ error:
  *   Perform verbose error reporting if not NULL.
  *
  * @return
- *   A flow on success, NULL otherwise.
+ *   A flow on success, NULL otherwise and rte_errno is set.
  */
 static struct rte_flow *
 mlx5_flow_list_create(struct rte_eth_dev *dev,
@@ -1863,10 +1908,10 @@ mlx5_flow_list_create(struct rte_eth_dev *dev,
 	struct mlx5_flow_parse parser = { .create = 1, };
 	struct rte_flow *flow = NULL;
 	unsigned int i;
-	int err;
+	int ret;
 
-	err = mlx5_flow_convert(dev, attr, items, actions, error, &parser);
-	if (err)
+	ret = mlx5_flow_convert(dev, attr, items, actions, error, &parser);
+	if (ret)
 		goto exit;
 	flow = rte_calloc(__func__, 1,
 			  sizeof(*flow) + parser.queues_n * sizeof(uint16_t),
@@ -1889,11 +1934,11 @@ mlx5_flow_list_create(struct rte_eth_dev *dev,
 	memcpy(flow->rss_key, parser.rss_key, parser.rss_conf.rss_key_len);
 	/* finalise the flow. */
 	if (parser.drop)
-		err = mlx5_flow_create_action_queue_drop(dev, &parser, flow,
+		ret = mlx5_flow_create_action_queue_drop(dev, &parser, flow,
 							 error);
 	else
-		err = mlx5_flow_create_action_queue(dev, &parser, flow, error);
-	if (err)
+		ret = mlx5_flow_create_action_queue(dev, &parser, flow, error);
+	if (ret)
 		goto exit;
 	TAILQ_INSERT_TAIL(list, flow, next);
 	DEBUG("Flow created %p", (void *)flow);
@@ -1920,11 +1965,9 @@ mlx5_flow_validate(struct rte_eth_dev *dev,
 		   const struct rte_flow_action actions[],
 		   struct rte_flow_error *error)
 {
-	int ret;
 	struct mlx5_flow_parse parser = { .create = 0, };
 
-	ret = mlx5_flow_convert(dev, attr, items, actions, error, &parser);
-	return ret;
+	return mlx5_flow_convert(dev, attr, items, actions, error, &parser);
 }
 
 /**
@@ -2047,7 +2090,7 @@ mlx5_flow_list_flush(struct rte_eth_dev *dev, struct mlx5_flows *list)
  *   Pointer to Ethernet device.
  *
  * @return
- *   0 on success.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
 mlx5_flow_create_drop_queue(struct rte_eth_dev *dev)
@@ -2060,11 +2103,13 @@ mlx5_flow_create_drop_queue(struct rte_eth_dev *dev)
 	fdq = rte_calloc(__func__, 1, sizeof(*fdq), 0);
 	if (!fdq) {
 		WARN("cannot allocate memory for drop queue");
-		goto error;
+		rte_errno = ENOMEM;
+		return -rte_errno;
 	}
 	fdq->cq = ibv_create_cq(priv->ctx, 1, NULL, NULL, 0);
 	if (!fdq->cq) {
 		WARN("cannot allocate CQ for drop queue");
+		rte_errno = errno;
 		goto error;
 	}
 	fdq->wq = ibv_create_wq(priv->ctx,
@@ -2077,6 +2122,7 @@ mlx5_flow_create_drop_queue(struct rte_eth_dev *dev)
 			});
 	if (!fdq->wq) {
 		WARN("cannot allocate WQ for drop queue");
+		rte_errno = errno;
 		goto error;
 	}
 	fdq->ind_table = ibv_create_rwq_ind_table(priv->ctx,
@@ -2087,6 +2133,7 @@ mlx5_flow_create_drop_queue(struct rte_eth_dev *dev)
 			});
 	if (!fdq->ind_table) {
 		WARN("cannot allocate indirection table for drop queue");
+		rte_errno = errno;
 		goto error;
 	}
 	fdq->qp = ibv_create_qp_ex(priv->ctx,
@@ -2108,6 +2155,7 @@ mlx5_flow_create_drop_queue(struct rte_eth_dev *dev)
 		});
 	if (!fdq->qp) {
 		WARN("cannot allocate QP for drop queue");
+		rte_errno = errno;
 		goto error;
 	}
 	priv->flow_drop_queue = fdq;
@@ -2124,7 +2172,7 @@ error:
 	if (fdq)
 		rte_free(fdq);
 	priv->flow_drop_queue = NULL;
-	return -1;
+	return -rte_errno;
 }
 
 /**
@@ -2222,7 +2270,7 @@ mlx5_flow_stop(struct rte_eth_dev *dev, struct mlx5_flows *list)
  *   Pointer to a TAILQ flow list.
  *
  * @return
- *   0 on success, a errno value otherwise and rte_errno is set.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
 mlx5_flow_start(struct rte_eth_dev *dev, struct mlx5_flows *list)
@@ -2242,7 +2290,7 @@ mlx5_flow_start(struct rte_eth_dev *dev, struct mlx5_flows *list)
 				DEBUG("Flow %p cannot be applied",
 				      (void *)flow);
 				rte_errno = EINVAL;
-				return rte_errno;
+				return -rte_errno;
 			}
 			DEBUG("Flow %p applied", (void *)flow);
 			/* Next flow. */
@@ -2269,7 +2317,7 @@ mlx5_flow_start(struct rte_eth_dev *dev, struct mlx5_flows *list)
 				DEBUG("Flow %p cannot be applied",
 				      (void *)flow);
 				rte_errno = EINVAL;
-				return rte_errno;
+				return -rte_errno;
 			}
 flow_create:
 			flow->frxq[i].ibv_flow =
@@ -2279,7 +2327,7 @@ flow_create:
 				DEBUG("Flow %p cannot be applied",
 				      (void *)flow);
 				rte_errno = EINVAL;
-				return rte_errno;
+				return -rte_errno;
 			}
 			DEBUG("Flow %p applied", (void *)flow);
 		}
@@ -2329,7 +2377,7 @@ mlx5_flow_verify(struct rte_eth_dev *dev)
  *   A VLAN flow mask to apply.
  *
  * @return
- *   0 on success.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
 mlx5_ctrl_flow_vlan(struct rte_eth_dev *dev,
@@ -2381,8 +2429,10 @@ mlx5_ctrl_flow_vlan(struct rte_eth_dev *dev,
 		} local;
 	} action_rss;
 
-	if (!priv->reta_idx_n)
-		return EINVAL;
+	if (!priv->reta_idx_n) {
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
 	for (i = 0; i != priv->reta_idx_n; ++i)
 		action_rss.local.queue[i] = (*priv->reta_idx)[i];
 	action_rss.local.rss_conf = &priv->rss_conf;
@@ -2391,7 +2441,7 @@ mlx5_ctrl_flow_vlan(struct rte_eth_dev *dev,
 	flow = mlx5_flow_list_create(dev, &priv->ctrl_flows, &attr, items,
 				     actions, &error);
 	if (!flow)
-		return rte_errno;
+		return -rte_errno;
 	return 0;
 }
 
@@ -2406,7 +2456,7 @@ mlx5_ctrl_flow_vlan(struct rte_eth_dev *dev,
  *   An Ethernet flow mask to apply.
  *
  * @return
- *   0 on success.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
 mlx5_ctrl_flow(struct rte_eth_dev *dev,
@@ -2459,7 +2509,7 @@ mlx5_flow_flush(struct rte_eth_dev *dev,
  *   returned data from the counter.
  *
  * @return
- *   0 on success, a errno value otherwise and rte_errno is set.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_flow_query_count(struct ibv_counter_set *cs,
@@ -2476,15 +2526,13 @@ mlx5_flow_query_count(struct ibv_counter_set *cs,
 		.out = counters,
 		.outlen = 2 * sizeof(uint64_t),
 	};
-	int res = ibv_query_counter_set(&query_cs_attr, &query_out);
+	int err = ibv_query_counter_set(&query_cs_attr, &query_out);
 
-	if (res) {
-		rte_flow_error_set(error, -res,
-				   RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
-				   NULL,
-				   "cannot read counter");
-		return -res;
-	}
+	if (err)
+		return rte_flow_error_set(error, err,
+					  RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+					  NULL,
+					  "cannot read counter");
 	query_count->hits_set = 1;
 	query_count->bytes_set = 1;
 	query_count->hits = counters[0] - counter_stats->hits;
@@ -2509,20 +2557,22 @@ mlx5_flow_query(struct rte_eth_dev *dev __rte_unused,
 		void *data,
 		struct rte_flow_error *error)
 {
-	int res = EINVAL;
-
 	if (flow->cs) {
-		res = mlx5_flow_query_count(flow->cs,
-					&flow->counter_stats,
-					(struct rte_flow_query_count *)data,
-					error);
+		int ret;
+
+		ret = mlx5_flow_query_count(flow->cs,
+					    &flow->counter_stats,
+					    (struct rte_flow_query_count *)data,
+					    error);
+		if (ret)
+			return ret;
 	} else {
-		rte_flow_error_set(error, res,
-				   RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
-				   NULL,
-				   "no counter found for flow");
+		return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+					  NULL,
+					  "no counter found for flow");
 	}
-	return -res;
+	return 0;
 }
 #endif
 
@@ -2565,7 +2615,7 @@ mlx5_flow_isolate(struct rte_eth_dev *dev,
  *   Generic flow parameters structure.
  *
  * @return
- *  0 on success, errno value on error.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_fdir_filter_convert(struct rte_eth_dev *dev,
@@ -2578,7 +2628,8 @@ mlx5_fdir_filter_convert(struct rte_eth_dev *dev,
 	/* Validate queue number. */
 	if (fdir_filter->action.rx_queue >= priv->rxqs_n) {
 		ERROR("invalid queue number %d", fdir_filter->action.rx_queue);
-		return EINVAL;
+		rte_errno = EINVAL;
+		return -rte_errno;
 	}
 	attributes->attr.ingress = 1;
 	attributes->items[0] = (struct rte_flow_item) {
@@ -2600,7 +2651,8 @@ mlx5_fdir_filter_convert(struct rte_eth_dev *dev,
 		break;
 	default:
 		ERROR("invalid behavior %d", fdir_filter->action.behavior);
-		return ENOTSUP;
+		rte_errno = ENOTSUP;
+		return -rte_errno;
 	}
 	attributes->queue.index = fdir_filter->action.rx_queue;
 	switch (fdir_filter->input.flow_type) {
@@ -2734,9 +2786,9 @@ mlx5_fdir_filter_convert(struct rte_eth_dev *dev,
 		};
 		break;
 	default:
-		ERROR("invalid flow type%d",
-		      fdir_filter->input.flow_type);
-		return ENOTSUP;
+		ERROR("invalid flow type%d", fdir_filter->input.flow_type);
+		rte_errno = ENOTSUP;
+		return -rte_errno;
 	}
 	return 0;
 }
@@ -2750,7 +2802,7 @@ mlx5_fdir_filter_convert(struct rte_eth_dev *dev,
  *   Flow director filter to add.
  *
  * @return
- *   0 on success, errno value on failure.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_fdir_filter_add(struct rte_eth_dev *dev,
@@ -2774,11 +2826,11 @@ mlx5_fdir_filter_add(struct rte_eth_dev *dev,
 
 	ret = mlx5_fdir_filter_convert(dev, fdir_filter, &attributes);
 	if (ret)
-		return -ret;
+		return ret;
 	ret = mlx5_flow_convert(dev, &attributes.attr, attributes.items,
 				attributes.actions, &error, &parser);
 	if (ret)
-		return -ret;
+		return ret;
 	flow = mlx5_flow_list_create(dev, &priv->flows, &attributes.attr,
 				     attributes.items, attributes.actions,
 				     &error);
@@ -2786,7 +2838,7 @@ mlx5_fdir_filter_add(struct rte_eth_dev *dev,
 		DEBUG("FDIR created %p", (void *)flow);
 		return 0;
 	}
-	return ENOTSUP;
+	return -rte_errno;
 }
 
 /**
@@ -2798,7 +2850,7 @@ mlx5_fdir_filter_add(struct rte_eth_dev *dev,
  *   Filter to be deleted.
  *
  * @return
- *   0 on success, errno value on failure.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_fdir_filter_delete(struct rte_eth_dev *dev,
@@ -2819,7 +2871,7 @@ mlx5_fdir_filter_delete(struct rte_eth_dev *dev,
 
 	ret = mlx5_fdir_filter_convert(dev, fdir_filter, &attributes);
 	if (ret)
-		return -ret;
+		return ret;
 	ret = mlx5_flow_convert(dev, &attributes.attr, attributes.items,
 				attributes.actions, &error, &parser);
 	if (ret)
@@ -2877,6 +2929,7 @@ wrong_flow:
 		/* The flow does not match. */
 		continue;
 	}
+	ret = rte_errno; /* Save rte_errno before cleanup. */
 	if (flow)
 		mlx5_flow_list_destroy(dev, &priv->flows, flow);
 exit:
@@ -2884,7 +2937,8 @@ exit:
 		if (parser.queue[i].ibv_attr)
 			rte_free(parser.queue[i].ibv_attr);
 	}
-	return -ret;
+	rte_errno = ret; /* Restore rte_errno. */
+	return -rte_errno;
 }
 
 /**
@@ -2896,7 +2950,7 @@ exit:
  *   Filter to be updated.
  *
  * @return
- *   0 on success, errno value on failure.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_fdir_filter_update(struct rte_eth_dev *dev,
@@ -2907,8 +2961,7 @@ mlx5_fdir_filter_update(struct rte_eth_dev *dev,
 	ret = mlx5_fdir_filter_delete(dev, fdir_filter);
 	if (ret)
 		return ret;
-	ret = mlx5_fdir_filter_add(dev, fdir_filter);
-	return ret;
+	return mlx5_fdir_filter_add(dev, fdir_filter);
 }
 
 /**
@@ -2962,7 +3015,7 @@ mlx5_fdir_info_get(struct rte_eth_dev *dev, struct rte_eth_fdir_info *fdir_info)
  *   Pointer to operation-specific structure.
  *
  * @return
- *   0 on success, errno value on failure.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 mlx5_fdir_ctrl_func(struct rte_eth_dev *dev, enum rte_filter_op filter_op,
@@ -2971,7 +3024,6 @@ mlx5_fdir_ctrl_func(struct rte_eth_dev *dev, enum rte_filter_op filter_op,
 	struct priv *priv = dev->data->dev_private;
 	enum rte_fdir_mode fdir_mode =
 		priv->dev->data->dev_conf.fdir_conf.mode;
-	int ret = 0;
 
 	if (filter_op == RTE_ETH_FILTER_NOP)
 		return 0;
@@ -2979,18 +3031,16 @@ mlx5_fdir_ctrl_func(struct rte_eth_dev *dev, enum rte_filter_op filter_op,
 	    fdir_mode != RTE_FDIR_MODE_PERFECT_MAC_VLAN) {
 		ERROR("%p: flow director mode %d not supported",
 		      (void *)dev, fdir_mode);
-		return EINVAL;
+		rte_errno = EINVAL;
+		return -rte_errno;
 	}
 	switch (filter_op) {
 	case RTE_ETH_FILTER_ADD:
-		ret = mlx5_fdir_filter_add(dev, arg);
-		break;
+		return mlx5_fdir_filter_add(dev, arg);
 	case RTE_ETH_FILTER_UPDATE:
-		ret = mlx5_fdir_filter_update(dev, arg);
-		break;
+		return mlx5_fdir_filter_update(dev, arg);
 	case RTE_ETH_FILTER_DELETE:
-		ret = mlx5_fdir_filter_delete(dev, arg);
-		break;
+		return mlx5_fdir_filter_delete(dev, arg);
 	case RTE_ETH_FILTER_FLUSH:
 		mlx5_fdir_filter_flush(dev);
 		break;
@@ -2998,12 +3048,11 @@ mlx5_fdir_ctrl_func(struct rte_eth_dev *dev, enum rte_filter_op filter_op,
 		mlx5_fdir_info_get(dev, arg);
 		break;
 	default:
-		DEBUG("%p: unknown operation %u", (void *)dev,
-		      filter_op);
-		ret = EINVAL;
-		break;
+		DEBUG("%p: unknown operation %u", (void *)dev, filter_op);
+		rte_errno = EINVAL;
+		return -rte_errno;
 	}
-	return ret;
+	return 0;
 }
 
 /**
@@ -3019,7 +3068,7 @@ mlx5_fdir_ctrl_func(struct rte_eth_dev *dev, enum rte_filter_op filter_op,
  *   Pointer to operation-specific structure.
  *
  * @return
- *   0 on success, negative errno value on failure.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
 mlx5_dev_filter_ctrl(struct rte_eth_dev *dev,
@@ -3027,21 +3076,21 @@ mlx5_dev_filter_ctrl(struct rte_eth_dev *dev,
 		     enum rte_filter_op filter_op,
 		     void *arg)
 {
-	int ret = EINVAL;
-
 	switch (filter_type) {
 	case RTE_ETH_FILTER_GENERIC:
-		if (filter_op != RTE_ETH_FILTER_GET)
-			return -EINVAL;
+		if (filter_op != RTE_ETH_FILTER_GET) {
+			rte_errno = EINVAL;
+			return -rte_errno;
+		}
 		*(const void **)arg = &mlx5_flow_ops;
 		return 0;
 	case RTE_ETH_FILTER_FDIR:
-		ret = mlx5_fdir_ctrl_func(dev, filter_op, arg);
-		break;
+		return mlx5_fdir_ctrl_func(dev, filter_op, arg);
 	default:
 		ERROR("%p: filter type (%d) not supported",
 		      (void *)dev, filter_type);
-		break;
+		rte_errno = ENOTSUP;
+		return -rte_errno;
 	}
-	return -ret;
+	return 0;
 }

@@ -88,7 +88,7 @@ const size_t rss_hash_default_key_len = sizeof(rss_hash_default_key);
  *   Pointer to RX queue structure.
  *
  * @return
- *   0 on success, errno value on failure.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
 rxq_alloc_elts(struct mlx5_rxq_ctrl *rxq_ctrl)
@@ -96,7 +96,7 @@ rxq_alloc_elts(struct mlx5_rxq_ctrl *rxq_ctrl)
 	const unsigned int sges_n = 1 << rxq_ctrl->rxq.sges_n;
 	unsigned int elts_n = 1 << rxq_ctrl->rxq.elts_n;
 	unsigned int i;
-	int ret = 0;
+	int err;
 
 	/* Iterate on segments. */
 	for (i = 0; (i != elts_n); ++i) {
@@ -105,7 +105,7 @@ rxq_alloc_elts(struct mlx5_rxq_ctrl *rxq_ctrl)
 		buf = rte_pktmbuf_alloc(rxq_ctrl->rxq.mp);
 		if (buf == NULL) {
 			ERROR("%p: empty mbuf pool", (void *)rxq_ctrl);
-			ret = ENOMEM;
+			rte_errno = ENOMEM;
 			goto error;
 		}
 		/* Headroom is reserved by rte_pktmbuf_alloc(). */
@@ -147,9 +147,9 @@ rxq_alloc_elts(struct mlx5_rxq_ctrl *rxq_ctrl)
 	}
 	DEBUG("%p: allocated and configured %u segments (max %u packets)",
 	      (void *)rxq_ctrl, elts_n, elts_n / (1 << rxq_ctrl->rxq.sges_n));
-	assert(ret == 0);
 	return 0;
 error:
+	err = rte_errno; /* Save rte_errno before cleanup. */
 	elts_n = i;
 	for (i = 0; (i != elts_n); ++i) {
 		if ((*rxq_ctrl->rxq.elts)[i] != NULL)
@@ -157,8 +157,8 @@ error:
 		(*rxq_ctrl->rxq.elts)[i] = NULL;
 	}
 	DEBUG("%p: failed, freed everything", (void *)rxq_ctrl);
-	assert(ret > 0);
-	return ret;
+	rte_errno = err; /* Restore rte_errno. */
+	return -rte_errno;
 }
 
 /**
@@ -228,7 +228,7 @@ mlx5_rxq_cleanup(struct mlx5_rxq_ctrl *rxq_ctrl)
  *   Memory pool for buffer allocations.
  *
  * @return
- *   0 on success, negative errno value on failure.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
 mlx5_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
@@ -240,7 +240,6 @@ mlx5_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	struct mlx5_rxq_data *rxq = (*priv->rxqs)[idx];
 	struct mlx5_rxq_ctrl *rxq_ctrl =
 		container_of(rxq, struct mlx5_rxq_ctrl, rxq);
-	int ret = 0;
 
 	if (!rte_is_power_of_2(desc)) {
 		desc = 1 << log2above(desc);
@@ -253,27 +252,27 @@ mlx5_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	if (idx >= priv->rxqs_n) {
 		ERROR("%p: queue index out of range (%u >= %u)",
 		      (void *)dev, idx, priv->rxqs_n);
-		return -EOVERFLOW;
+		rte_errno = EOVERFLOW;
+		return -rte_errno;
 	}
 	if (!mlx5_rxq_releasable(dev, idx)) {
-		ret = EBUSY;
 		ERROR("%p: unable to release queue index %u",
 		      (void *)dev, idx);
-		goto out;
+		rte_errno = EBUSY;
+		return -rte_errno;
 	}
 	mlx5_rxq_release(dev, idx);
 	rxq_ctrl = mlx5_rxq_new(dev, idx, desc, socket, mp);
 	if (!rxq_ctrl) {
 		ERROR("%p: unable to allocate queue index %u",
 		      (void *)dev, idx);
-		ret = ENOMEM;
-		goto out;
+		rte_errno = ENOMEM;
+		return -rte_errno;
 	}
 	DEBUG("%p: adding RX queue %p to list",
 	      (void *)dev, (void *)rxq_ctrl);
 	(*priv->rxqs)[idx] = &rxq_ctrl->rxq;
-out:
-	return -ret;
+	return 0;
 }
 
 /**
@@ -306,7 +305,7 @@ mlx5_rx_queue_release(void *dpdk_rxq)
  *   Pointer to Ethernet device.
  *
  * @return
- *   0 on success, negative on failure.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
 mlx5_rx_intr_vec_enable(struct rte_eth_dev *dev)
@@ -325,7 +324,8 @@ mlx5_rx_intr_vec_enable(struct rte_eth_dev *dev)
 	if (intr_handle->intr_vec == NULL) {
 		ERROR("failed to allocate memory for interrupt vector,"
 		      " Rx interrupts will not be supported");
-		return -ENOMEM;
+		rte_errno = ENOMEM;
+		return -rte_errno;
 	}
 	intr_handle->type = RTE_INTR_HANDLE_EXT;
 	for (i = 0; i != n; ++i) {
@@ -348,16 +348,18 @@ mlx5_rx_intr_vec_enable(struct rte_eth_dev *dev)
 			      " (%d), Rx interrupts cannot be enabled",
 			      RTE_MAX_RXTX_INTR_VEC_ID);
 			mlx5_rx_intr_vec_disable(dev);
-			return -1;
+			rte_errno = ENOMEM;
+			return -rte_errno;
 		}
 		fd = rxq_ibv->channel->fd;
 		flags = fcntl(fd, F_GETFL);
 		rc = fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 		if (rc < 0) {
+			rte_errno = errno;
 			ERROR("failed to make Rx interrupt file descriptor"
 			      " %d non-blocking for queue index %d", fd, i);
 			mlx5_rx_intr_vec_disable(dev);
-			return -1;
+			return -rte_errno;
 		}
 		intr_handle->intr_vec[i] = RTE_INTR_VEC_RXTX_OFFSET + count;
 		intr_handle->efds[count] = fd;
@@ -446,7 +448,7 @@ mlx5_arm_cq(struct mlx5_rxq_data *rxq, int sq_n_rxq)
  *   Rx queue number.
  *
  * @return
- *   0 on success, negative on failure.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
 mlx5_rx_intr_enable(struct rte_eth_dev *dev, uint16_t rx_queue_id)
@@ -454,12 +456,11 @@ mlx5_rx_intr_enable(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	struct priv *priv = dev->data->dev_private;
 	struct mlx5_rxq_data *rxq_data;
 	struct mlx5_rxq_ctrl *rxq_ctrl;
-	int ret = 0;
 
 	rxq_data = (*priv->rxqs)[rx_queue_id];
 	if (!rxq_data) {
-		ret = EINVAL;
-		goto exit;
+		rte_errno = EINVAL;
+		return -rte_errno;
 	}
 	rxq_ctrl = container_of(rxq_data, struct mlx5_rxq_ctrl, rxq);
 	if (rxq_ctrl->irq) {
@@ -467,16 +468,13 @@ mlx5_rx_intr_enable(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 
 		rxq_ibv = mlx5_rxq_ibv_get(dev, rx_queue_id);
 		if (!rxq_ibv) {
-			ret = EINVAL;
-			goto exit;
+			rte_errno = EINVAL;
+			return -rte_errno;
 		}
 		mlx5_arm_cq(rxq_data, rxq_data->cq_arm_sn);
 		mlx5_rxq_ibv_release(rxq_ibv);
 	}
-exit:
-	if (ret)
-		WARN("unable to arm interrupt on rx queue %d", rx_queue_id);
-	return -ret;
+	return 0;
 }
 
 /**
@@ -488,7 +486,7 @@ exit:
  *   Rx queue number.
  *
  * @return
- *   0 on success, negative on failure.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
 mlx5_rx_intr_disable(struct rte_eth_dev *dev, uint16_t rx_queue_id)
@@ -499,35 +497,36 @@ mlx5_rx_intr_disable(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	struct mlx5_rxq_ibv *rxq_ibv = NULL;
 	struct ibv_cq *ev_cq;
 	void *ev_ctx;
-	int ret = 0;
+	int ret;
 
 	rxq_data = (*priv->rxqs)[rx_queue_id];
 	if (!rxq_data) {
-		ret = EINVAL;
-		goto exit;
+		rte_errno = EINVAL;
+		return -rte_errno;
 	}
 	rxq_ctrl = container_of(rxq_data, struct mlx5_rxq_ctrl, rxq);
 	if (!rxq_ctrl->irq)
-		goto exit;
+		return 0;
 	rxq_ibv = mlx5_rxq_ibv_get(dev, rx_queue_id);
 	if (!rxq_ibv) {
-		ret = EINVAL;
-		goto exit;
+		rte_errno = EINVAL;
+		return -rte_errno;
 	}
 	ret = ibv_get_cq_event(rxq_ibv->channel, &ev_cq, &ev_ctx);
 	if (ret || ev_cq != rxq_ibv->cq) {
-		ret = EINVAL;
+		rte_errno = EINVAL;
 		goto exit;
 	}
 	rxq_data->cq_arm_sn++;
 	ibv_ack_cq_events(rxq_ibv->cq, 1);
+	return 0;
 exit:
+	ret = rte_errno; /* Save rte_errno before cleanup. */
 	if (rxq_ibv)
 		mlx5_rxq_ibv_release(rxq_ibv);
-	if (ret)
-		WARN("unable to disable interrupt on rx queue %d",
-		     rx_queue_id);
-	return -ret;
+	WARN("unable to disable interrupt on rx queue %d", rx_queue_id);
+	rte_errno = ret; /* Restore rte_errno. */
+	return -rte_errno;
 }
 
 /**
@@ -539,7 +538,7 @@ exit:
  *   Queue index in DPDK Rx queue array
  *
  * @return
- *   The Verbs object initialised if it can be created.
+ *   The Verbs object initialised, NULL otherwise and rte_errno is set.
  */
 struct mlx5_rxq_ibv *
 mlx5_rxq_ibv_new(struct rte_eth_dev *dev, uint16_t idx)
@@ -574,6 +573,7 @@ mlx5_rxq_ibv_new(struct rte_eth_dev *dev, uint16_t idx)
 	if (!tmpl) {
 		ERROR("%p: cannot allocate verbs resources",
 		       (void *)rxq_ctrl);
+		rte_errno = ENOMEM;
 		goto error;
 	}
 	tmpl->rxq_ctrl = rxq_ctrl;
@@ -591,6 +591,7 @@ mlx5_rxq_ibv_new(struct rte_eth_dev *dev, uint16_t idx)
 		if (!tmpl->channel) {
 			ERROR("%p: Comp Channel creation failure",
 			      (void *)rxq_ctrl);
+			rte_errno = ENOMEM;
 			goto error;
 		}
 	}
@@ -619,6 +620,7 @@ mlx5_rxq_ibv_new(struct rte_eth_dev *dev, uint16_t idx)
 						    &attr.cq.mlx5));
 	if (tmpl->cq == NULL) {
 		ERROR("%p: CQ creation failure", (void *)rxq_ctrl);
+		rte_errno = ENOMEM;
 		goto error;
 	}
 	DEBUG("priv->device_attr.max_qp_wr is %d",
@@ -655,6 +657,7 @@ mlx5_rxq_ibv_new(struct rte_eth_dev *dev, uint16_t idx)
 	tmpl->wq = ibv_create_wq(priv->ctx, &attr.wq);
 	if (tmpl->wq == NULL) {
 		ERROR("%p: WQ creation failure", (void *)rxq_ctrl);
+		rte_errno = ENOMEM;
 		goto error;
 	}
 	/*
@@ -669,6 +672,7 @@ mlx5_rxq_ibv_new(struct rte_eth_dev *dev, uint16_t idx)
 		      ((1 << rxq_data->elts_n) >> rxq_data->sges_n),
 		      (1 << rxq_data->sges_n),
 		      attr.wq.max_wr, attr.wq.max_sge);
+		rte_errno = EINVAL;
 		goto error;
 	}
 	/* Change queue state to ready. */
@@ -680,6 +684,7 @@ mlx5_rxq_ibv_new(struct rte_eth_dev *dev, uint16_t idx)
 	if (ret) {
 		ERROR("%p: WQ state to IBV_WQS_RDY failed",
 		      (void *)rxq_ctrl);
+		rte_errno = ret;
 		goto error;
 	}
 	obj.cq.in = tmpl->cq;
@@ -687,11 +692,14 @@ mlx5_rxq_ibv_new(struct rte_eth_dev *dev, uint16_t idx)
 	obj.rwq.in = tmpl->wq;
 	obj.rwq.out = &rwq;
 	ret = mlx5dv_init_obj(&obj, MLX5DV_OBJ_CQ | MLX5DV_OBJ_RWQ);
-	if (ret != 0)
+	if (ret) {
+		rte_errno = ret;
 		goto error;
+	}
 	if (cq_info.cqe_size != RTE_CACHE_LINE_SIZE) {
 		ERROR("Wrong MLX5_CQE_SIZE environment variable value: "
 		      "it should be set to %u", RTE_CACHE_LINE_SIZE);
+		rte_errno = EINVAL;
 		goto error;
 	}
 	/* Fill the rings. */
@@ -735,6 +743,7 @@ mlx5_rxq_ibv_new(struct rte_eth_dev *dev, uint16_t idx)
 	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_NONE;
 	return tmpl;
 error:
+	ret = rte_errno; /* Save rte_errno before cleanup. */
 	if (tmpl->wq)
 		claim_zero(ibv_destroy_wq(tmpl->wq));
 	if (tmpl->cq)
@@ -744,6 +753,7 @@ error:
 	if (tmpl->mr)
 		mlx5_mr_release(tmpl->mr);
 	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_NONE;
+	rte_errno = ret; /* Restore rte_errno. */
 	return NULL;
 }
 
@@ -866,7 +876,7 @@ mlx5_rxq_ibv_releasable(struct mlx5_rxq_ibv *rxq_ibv)
  *   NUMA socket on which memory must be allocated.
  *
  * @return
- *   A DPDK queue object on success.
+ *   A DPDK queue object on success, NULL otherwise and rte_errno is set.
  */
 struct mlx5_rxq_ctrl *
 mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
@@ -882,8 +892,10 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 				 sizeof(*tmpl) +
 				 desc_n * sizeof(struct rte_mbuf *),
 				 0, socket);
-	if (!tmpl)
+	if (!tmpl) {
+		rte_errno = ENOMEM;
 		return NULL;
+	}
 	tmpl->socket = socket;
 	if (priv->dev->data->dev_conf.intr_conf.rxq)
 		tmpl->irq = 1;
@@ -913,6 +925,7 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 			      (void *)dev,
 			      1 << sges_n,
 			      dev->data->dev_conf.rxmode.max_rx_pkt_len);
+			rte_errno = EOVERFLOW;
 			goto error;
 		}
 	} else {
@@ -931,6 +944,7 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		      (void *)dev,
 		      desc,
 		      1 << tmpl->rxq.sges_n);
+		rte_errno = EINVAL;
 		goto error;
 	}
 	/* Toggle RX checksum offload if hardware supports it. */
@@ -989,7 +1003,7 @@ error:
  *   TX queue index.
  *
  * @return
- *   A pointer to the queue if it exists.
+ *   A pointer to the queue if it exists, NULL otherwise.
  */
 struct mlx5_rxq_ctrl *
 mlx5_rxq_get(struct rte_eth_dev *dev, uint16_t idx)
@@ -1052,7 +1066,8 @@ mlx5_rxq_release(struct rte_eth_dev *dev, uint16_t idx)
  *   TX queue index.
  *
  * @return
- *   1 if the queue can be released.
+ *   1 if the queue can be released, negative errno otherwise and rte_errno is
+ *   set.
  */
 int
 mlx5_rxq_releasable(struct rte_eth_dev *dev, uint16_t idx)
@@ -1060,8 +1075,10 @@ mlx5_rxq_releasable(struct rte_eth_dev *dev, uint16_t idx)
 	struct priv *priv = dev->data->dev_private;
 	struct mlx5_rxq_ctrl *rxq_ctrl;
 
-	if (!(*priv->rxqs)[idx])
-		return -1;
+	if (!(*priv->rxqs)[idx]) {
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
 	rxq_ctrl = container_of((*priv->rxqs)[idx], struct mlx5_rxq_ctrl, rxq);
 	return (rte_atomic32_read(&rxq_ctrl->refcnt) == 1);
 }
@@ -1101,7 +1118,7 @@ mlx5_rxq_verify(struct rte_eth_dev *dev)
  *   Number of queues in the array.
  *
  * @return
- *   A new indirection table.
+ *   The Verbs object initialised, NULL otherwise and rte_errno is set.
  */
 struct mlx5_ind_table_ibv *
 mlx5_ind_table_ibv_new(struct rte_eth_dev *dev, uint16_t queues[],
@@ -1118,8 +1135,10 @@ mlx5_ind_table_ibv_new(struct rte_eth_dev *dev, uint16_t queues[],
 
 	ind_tbl = rte_calloc(__func__, 1, sizeof(*ind_tbl) +
 			     queues_n * sizeof(uint16_t), 0);
-	if (!ind_tbl)
+	if (!ind_tbl) {
+		rte_errno = ENOMEM;
 		return NULL;
+	}
 	for (i = 0; i != queues_n; ++i) {
 		struct mlx5_rxq_ctrl *rxq = mlx5_rxq_get(dev, queues[i]);
 
@@ -1139,8 +1158,10 @@ mlx5_ind_table_ibv_new(struct rte_eth_dev *dev, uint16_t queues[],
 			.ind_tbl = wq,
 			.comp_mask = 0,
 		});
-	if (!ind_tbl->ind_table)
+	if (!ind_tbl->ind_table) {
+		rte_errno = errno;
 		goto error;
+	}
 	rte_atomic32_inc(&ind_tbl->refcnt);
 	LIST_INSERT_HEAD(&priv->ind_tbls, ind_tbl, next);
 	DEBUG("%p: Indirection table %p: refcnt %d", (void *)dev,
@@ -1264,7 +1285,7 @@ mlx5_ind_table_ibv_verify(struct rte_eth_dev *dev)
  *   Number of queues.
  *
  * @return
- *   An hash Rx queue on success.
+ *   The Verbs object initialised, NULL otherwise and rte_errno is set.
  */
 struct mlx5_hrxq *
 mlx5_hrxq_new(struct rte_eth_dev *dev, uint8_t *rss_key, uint8_t rss_key_len,
@@ -1274,13 +1295,16 @@ mlx5_hrxq_new(struct rte_eth_dev *dev, uint8_t *rss_key, uint8_t rss_key_len,
 	struct mlx5_hrxq *hrxq;
 	struct mlx5_ind_table_ibv *ind_tbl;
 	struct ibv_qp *qp;
+	int err;
 
 	queues_n = hash_fields ? queues_n : 1;
 	ind_tbl = mlx5_ind_table_ibv_get(dev, queues, queues_n);
 	if (!ind_tbl)
 		ind_tbl = mlx5_ind_table_ibv_new(dev, queues, queues_n);
-	if (!ind_tbl)
+	if (!ind_tbl) {
+		rte_errno = ENOMEM;
 		return NULL;
+	}
 	qp = ibv_create_qp_ex(
 		priv->ctx,
 		&(struct ibv_qp_init_attr_ex){
@@ -1298,8 +1322,10 @@ mlx5_hrxq_new(struct rte_eth_dev *dev, uint8_t *rss_key, uint8_t rss_key_len,
 			.rwq_ind_tbl = ind_tbl->ind_table,
 			.pd = priv->pd,
 		});
-	if (!qp)
+	if (!qp) {
+		rte_errno = errno;
 		goto error;
+	}
 	hrxq = rte_calloc(__func__, 1, sizeof(*hrxq) + rss_key_len, 0);
 	if (!hrxq)
 		goto error;
@@ -1314,9 +1340,11 @@ mlx5_hrxq_new(struct rte_eth_dev *dev, uint8_t *rss_key, uint8_t rss_key_len,
 	      (void *)hrxq, rte_atomic32_read(&hrxq->refcnt));
 	return hrxq;
 error:
+	err = rte_errno; /* Save rte_errno before cleanup. */
 	mlx5_ind_table_ibv_release(dev, ind_tbl);
 	if (qp)
 		claim_zero(ibv_destroy_qp(qp));
+	rte_errno = err; /* Restore rte_errno. */
 	return NULL;
 }
 
