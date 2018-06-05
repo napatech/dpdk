@@ -271,6 +271,7 @@ mlx5_mp2mr_iter(struct rte_mempool *mp, void *arg)
  *   Pointer to private structure.
  * @param mp
  *   Pointer to the memory pool to register.
+ *
  * @return
  *   The memory region on success.
  */
@@ -331,6 +332,7 @@ priv_mr_new(struct priv *priv, struct rte_mempool *mp)
  *   Pointer to private structure.
  * @param mp
  *   Pointer to the memory pool to register.
+ *
  * @return
  *   The memory region on success.
  */
@@ -381,9 +383,10 @@ priv_mr_release(struct priv *priv __rte_unused, struct mlx5_mr *mr)
  * Verify the flow list is empty
  *
  * @param priv
- *  Pointer to private structure.
+ *   Pointer to private structure.
  *
- * @return the number of object not released.
+ * @return
+ *   The number of object not released.
  */
 int
 priv_mr_verify(struct priv *priv)

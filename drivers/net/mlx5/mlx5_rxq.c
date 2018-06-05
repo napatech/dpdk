@@ -827,9 +827,10 @@ mlx5_priv_rxq_ibv_release(struct priv *priv, struct mlx5_rxq_ibv *rxq_ibv)
  * Verify the Verbs Rx queue list is empty
  *
  * @param priv
- *  Pointer to private structure.
+ *   Pointer to private structure.
  *
- * @return the number of object not released.
+ * @return
+ *   The number of object not released.
  */
 int
 mlx5_priv_rxq_ibv_verify(struct priv *priv)
@@ -1081,9 +1082,10 @@ mlx5_priv_rxq_releasable(struct priv *priv, uint16_t idx)
  * Verify the Rx Queue list is empty
  *
  * @param priv
- *  Pointer to private structure.
+ *   Pointer to private structure.
  *
- * @return the number of object not released.
+ * @return
+ *   The number of object not released.
  */
 int
 mlx5_priv_rxq_verify(struct priv *priv)
@@ -1234,9 +1236,10 @@ mlx5_priv_ind_table_ibv_release(struct priv *priv,
  * Verify the Rx Queue list is empty
  *
  * @param priv
- *  Pointer to private structure.
+ *   Pointer to private structure.
  *
- * @return the number of object not released.
+ * @return
+ *   The number of object not released.
  */
 int
 mlx5_priv_ind_table_ibv_verify(struct priv *priv)
@@ -1403,9 +1406,10 @@ mlx5_priv_hrxq_release(struct priv *priv, struct mlx5_hrxq *hrxq)
  * Verify the Rx Queue list is empty
  *
  * @param priv
- *  Pointer to private structure.
+ *   Pointer to private structure.
  *
- * @return the number of object not released.
+ * @return
+ *   The number of object not released.
  */
 int
 mlx5_priv_hrxq_ibv_verify(struct priv *priv)
