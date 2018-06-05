@@ -75,7 +75,7 @@ txq_alloc_elts(struct mlx5_txq_ctrl *txq_ctrl)
 	for (i = 0; (i != elts_n); ++i)
 		(*txq_ctrl->txq.elts)[i] = NULL;
 	DRV_LOG(DEBUG, "port %u Tx queue %u allocated and configured %u WRs",
-		txq_ctrl->priv->dev->data->port_id, txq_ctrl->idx, elts_n);
+		PORT_ID(txq_ctrl->priv), txq_ctrl->idx, elts_n);
 	txq_ctrl->txq.elts_head = 0;
 	txq_ctrl->txq.elts_tail = 0;
 	txq_ctrl->txq.elts_comp = 0;
@@ -97,7 +97,7 @@ txq_free_elts(struct mlx5_txq_ctrl *txq_ctrl)
 	struct rte_mbuf *(*elts)[elts_n] = txq_ctrl->txq.elts;
 
 	DRV_LOG(DEBUG, "port %u Tx queue %u freeing WRs",
-		txq_ctrl->priv->dev->data->port_id, txq_ctrl->idx);
+		PORT_ID(txq_ctrl->priv), txq_ctrl->idx);
 	txq_ctrl->txq.elts_head = 0;
 	txq_ctrl->txq.elts_tail = 0;
 	txq_ctrl->txq.elts_comp = 0;
@@ -205,9 +205,9 @@ mlx5_tx_queue_release(void *dpdk_txq)
 	priv = txq_ctrl->priv;
 	for (i = 0; (i != priv->txqs_n); ++i)
 		if ((*priv->txqs)[i] == txq) {
-			mlx5_txq_release(priv->dev, i);
+			mlx5_txq_release(ETH_DEV(priv), i);
 			DRV_LOG(DEBUG, "port %u removing Tx queue %u from list",
-				priv->dev->data->port_id, txq_ctrl->idx);
+				PORT_ID(priv), txq_ctrl->idx);
 			break;
 		}
 }
@@ -545,7 +545,7 @@ mlx5_txq_ibv_release(struct mlx5_txq_ibv *txq_ibv)
 {
 	assert(txq_ibv);
 	DRV_LOG(DEBUG, "port %u Verbs Tx queue %u: refcnt %d",
-		txq_ibv->txq_ctrl->priv->dev->data->port_id,
+		PORT_ID(txq_ibv->txq_ctrl->priv),
 		txq_ibv->txq_ctrl->idx, rte_atomic32_read(&txq_ibv->refcnt));
 	if (rte_atomic32_dec_and_test(&txq_ibv->refcnt)) {
 		claim_zero(ibv_destroy_qp(txq_ibv->qp));
@@ -684,8 +684,7 @@ mlx5_txq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 			DRV_LOG(WARNING,
 				"port %u txq inline is too large (%d) setting it"
 				" to the maximum possible: %d\n",
-				priv->dev->data->port_id, priv->txq_inline,
-				max_inline);
+				PORT_ID(priv), priv->txq_inline, max_inline);
 			tmpl->txq.max_inline = max_inline / RTE_CACHE_LINE_SIZE;
 		}
 	}
