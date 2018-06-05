@@ -232,7 +232,8 @@ mlx5_rxq_cleanup(struct mlx5_rxq_ctrl *rxq_ctrl)
  */
 int
 mlx5_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
-		    unsigned int socket, const struct rte_eth_rxconf *conf,
+		    unsigned int socket,
+		    const struct rte_eth_rxconf *conf __rte_unused,
 		    struct rte_mempool *mp)
 {
 	struct priv *priv = dev->data->dev_private;
@@ -241,7 +242,6 @@ mlx5_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		container_of(rxq, struct mlx5_rxq_ctrl, rxq);
 	int ret = 0;
 
-	(void)conf;
 	priv_lock(priv);
 	if (!rte_is_power_of_2(desc)) {
 		desc = 1 << log2above(desc);
@@ -854,9 +854,9 @@ mlx5_priv_rxq_ibv_verify(struct priv *priv)
  *   Verbs Rx queue object.
  */
 int
-mlx5_priv_rxq_ibv_releasable(struct priv *priv, struct mlx5_rxq_ibv *rxq_ibv)
+mlx5_priv_rxq_ibv_releasable(struct priv *priv __rte_unused,
+			     struct mlx5_rxq_ibv *rxq_ibv)
 {
-	(void)priv;
 	assert(rxq_ibv);
 	return (rte_atomic32_read(&rxq_ibv->refcnt) == 1);
 }
