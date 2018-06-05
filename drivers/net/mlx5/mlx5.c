@@ -796,7 +796,6 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		struct rte_eth_dev *eth_dev = NULL;
 		struct ibv_device_attr_ex device_attr_ex;
 		struct ether_addr mac;
-		struct ibv_device_attr_ex device_attr;
 		struct mlx5_args args = {
 			.cqe_comp = MLX5_ARG_UNSET,
 			.txq_inline = MLX5_ARG_UNSET,
@@ -851,7 +850,6 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 			err = ENODEV;
 			goto port_error;
 		}
-		ibv_query_device_ex(ctx, NULL, &device_attr);
 		/* Check port status. */
 		err = ibv_query_port(ctx, port, &port_attr);
 		if (err) {
