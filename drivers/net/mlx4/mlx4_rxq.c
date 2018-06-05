@@ -363,6 +363,8 @@ mlx4_rss_init(struct priv *priv)
 	unsigned int i;
 	int ret;
 
+	if (priv->rss_init)
+		return 0;
 	/* Prepare range for RSS contexts before creating the first WQ. */
 	ret = mlx4dv_set_context_attr(priv->ctx,
 				      MLX4DV_SET_CTX_ATTR_LOG_WQS_RANGE_SZ,
@@ -444,6 +446,7 @@ wq_num_check:
 		}
 		wq_num_prev = wq_num;
 	}
+	priv->rss_init = 1;
 	return 0;
 error:
 	ERROR("cannot initialize common RSS resources (queue %u): %s: %s",
@@ -472,6 +475,8 @@ mlx4_rss_deinit(struct priv *priv)
 {
 	unsigned int i;
 
+	if (!priv->rss_init)
+		return;
 	for (i = 0; i != priv->dev->data->nb_rx_queues; ++i) {
 		struct rxq *rxq = priv->dev->data->rx_queues[i];
 
@@ -480,6 +485,7 @@ mlx4_rss_deinit(struct priv *priv)
 			mlx4_rxq_detach(rxq);
 		}
 	}
+	priv->rss_init = 0;
 }
 
 /**
@@ -622,6 +628,7 @@ error:
 		claim_zero(ibv_destroy_wq(wq));
 	if (cq)
 		claim_zero(ibv_destroy_cq(cq));
+	--rxq->usecnt;
 	rte_errno = ret;
 	ERROR("error while attaching Rx queue %p: %s: %s",
 	      (void *)rxq, msg, strerror(ret));
