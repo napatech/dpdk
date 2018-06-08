@@ -443,38 +443,6 @@ static void qede_reset_queue_stats(struct qede_dev *qdev, bool xstats)
 }
 
 static int
-qede_start_vport(struct qede_dev *qdev, uint16_t mtu)
-{
-	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
-	struct ecore_sp_vport_start_params params;
-	struct ecore_hwfn *p_hwfn;
-	int rc;
-	int i;
-
-	memset(&params, 0, sizeof(params));
-	params.vport_id = 0;
-	params.mtu = mtu;
-	/* @DPDK - Disable FW placement */
-	params.zero_placement_offset = 1;
-	for_each_hwfn(edev, i) {
-		p_hwfn = &edev->hwfns[i];
-		params.concrete_fid = p_hwfn->hw_info.concrete_fid;
-		params.opaque_fid = p_hwfn->hw_info.opaque_fid;
-		rc = ecore_sp_vport_start(p_hwfn, &params);
-		if (rc != ECORE_SUCCESS) {
-			DP_ERR(edev, "Start V-PORT failed %d\n", rc);
-			return rc;
-		}
-	}
-	ecore_reset_vport_stats(edev);
-	if (IS_PF(edev))
-		qede_reset_queue_stats(qdev, true);
-	DP_INFO(edev, "VPORT started with MTU = %u\n", mtu);
-
-	return 0;
-}
-
-static int
 qede_stop_vport(struct ecore_dev *edev)
 {
 	struct ecore_hwfn *p_hwfn;
@@ -492,6 +460,42 @@ qede_stop_vport(struct ecore_dev *edev)
 			return rc;
 		}
 	}
+
+	DP_INFO(edev, "vport stopped\n");
+
+	return 0;
+}
+
+static int
+qede_start_vport(struct qede_dev *qdev, uint16_t mtu)
+{
+	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
+	struct ecore_sp_vport_start_params params;
+	struct ecore_hwfn *p_hwfn;
+	int rc;
+	int i;
+
+	if (qdev->vport_started)
+		qede_stop_vport(edev);
+
+	memset(&params, 0, sizeof(params));
+	params.vport_id = 0;
+	params.mtu = mtu;
+	/* @DPDK - Disable FW placement */
+	params.zero_placement_offset = 1;
+	for_each_hwfn(edev, i) {
+		p_hwfn = &edev->hwfns[i];
+		params.concrete_fid = p_hwfn->hw_info.concrete_fid;
+		params.opaque_fid = p_hwfn->hw_info.opaque_fid;
+		rc = ecore_sp_vport_start(p_hwfn, &params);
+		if (rc != ECORE_SUCCESS) {
+			DP_ERR(edev, "Start V-PORT failed %d\n", rc);
+			return rc;
+		}
+	}
+	ecore_reset_vport_stats(edev);
+	qdev->vport_started = true;
+	DP_INFO(edev, "VPORT started with MTU = %u\n", mtu);
 
 	return 0;
 }
@@ -1101,6 +1105,8 @@ static int qede_vlan_offload_set(struct rte_eth_dev *eth_dev, int mask)
 		DP_INFO(edev, "No offloads are supported with VLAN Q-in-Q"
 			" and classification is based on outer tag only\n");
 
+	qdev->vlan_offload_mask = mask;
+
 	DP_INFO(edev, "vlan offload mask %d vlan-strip %d vlan-filter %d\n",
 		mask, rxmode->hw_vlan_strip, rxmode->hw_vlan_filter);
 
@@ -1176,13 +1182,6 @@ static int qede_dev_start(struct rte_eth_dev *eth_dev)
 
 	PMD_INIT_FUNC_TRACE(edev);
 
-	/* Update MTU only if it has changed */
-	if (qdev->mtu != qdev->new_mtu) {
-		if (qede_update_mtu(eth_dev, qdev->new_mtu))
-			goto err;
-		qdev->mtu = qdev->new_mtu;
-	}
-
 	/* Configure TPA parameters */
 	if (rxmode->enable_lro) {
 		if (qede_enable_tpa(eth_dev, true))
@@ -1196,6 +1195,9 @@ static int qede_dev_start(struct rte_eth_dev *eth_dev)
 	if (qede_start_queues(eth_dev))
 		goto err;
 
+	if (IS_PF(edev))
+		qede_reset_queue_stats(qdev, true);
+
 	/* Newer SR-IOV PF driver expects RX/TX queues to be started before
 	 * enabling RSS. Hence RSS configuration is deferred upto this point.
 	 * Also, we would like to retain similar behavior in PF case, so we
@@ -1208,9 +1210,6 @@ static int qede_dev_start(struct rte_eth_dev *eth_dev)
 	/* Enable vport*/
 	if (qede_activate_vport(eth_dev, true))
 		goto err;
-
-	/* Bring-up the link */
-	qede_dev_set_link_state(eth_dev, true);
 
 	/* Update link status */
 	qede_link_update(eth_dev, 0);
@@ -1245,9 +1244,6 @@ static void qede_dev_stop(struct rte_eth_dev *eth_dev)
 
 	/* Disable traffic */
 	ecore_hw_stop_fastpath(edev); /* TBD - loop */
-
-	/* Bring the link down */
-	qede_dev_set_link_state(eth_dev, false);
 
 	DP_INFO(edev, "Device is stopped\n");
 }
@@ -1375,20 +1371,11 @@ static int qede_dev_configure(struct rte_eth_dev *eth_dev)
 	if (qede_check_fdir_support(eth_dev))
 		return -ENOTSUP;
 
-	/* Deallocate resources if held previously. It is needed only if the
-	 * queue count has been changed from previous configuration. If its
-	 * going to change then it means RX/TX queue setup will be called
-	 * again and the fastpath pointers will be reinitialized there.
-	 */
-	if (qdev->num_tx_queues != eth_dev->data->nb_tx_queues ||
-	    qdev->num_rx_queues != eth_dev->data->nb_rx_queues) {
-		qede_dealloc_fp_resc(eth_dev);
-		/* Proceed with updated queue count */
-		qdev->num_tx_queues = eth_dev->data->nb_tx_queues;
-		qdev->num_rx_queues = eth_dev->data->nb_rx_queues;
-		if (qede_alloc_fp_resc(qdev))
-			return -ENOMEM;
-	}
+	qede_dealloc_fp_resc(eth_dev);
+	qdev->num_tx_queues = eth_dev->data->nb_tx_queues;
+	qdev->num_rx_queues = eth_dev->data->nb_rx_queues;
+	if (qede_alloc_fp_resc(qdev))
+		return -ENOMEM;
 
 	/* If jumbo enabled adjust MTU */
 	if (eth_dev->data->dev_conf.rxmode.jumbo_frame)
@@ -1396,19 +1383,9 @@ static int qede_dev_configure(struct rte_eth_dev *eth_dev)
 				eth_dev->data->dev_conf.rxmode.max_rx_pkt_len -
 				ETHER_HDR_LEN - ETHER_CRC_LEN;
 
-	/* VF's MTU has to be set using vport-start where as
-	 * PF's MTU can be updated via vport-update.
-	 */
-	if (IS_VF(edev)) {
-		if (qede_start_vport(qdev, eth_dev->data->mtu))
-			return -1;
-	} else {
-		if (qede_update_mtu(eth_dev, eth_dev->data->mtu))
-			return -1;
-	}
-
+	if (qede_start_vport(qdev, eth_dev->data->mtu))
+		return -1;
 	qdev->mtu = eth_dev->data->mtu;
-	qdev->new_mtu = qdev->mtu;
 
 	/* Enable VLAN offloads by default */
 	ret = qede_vlan_offload_set(eth_dev, ETH_VLAN_STRIP_MASK  |
@@ -1621,12 +1598,15 @@ static void qede_dev_close(struct rte_eth_dev *eth_dev)
 		qede_dev_stop(eth_dev);
 
 	qede_stop_vport(edev);
+	qdev->vport_started = false;
 	qede_fdir_dealloc_resc(eth_dev);
 	qede_dealloc_fp_resc(eth_dev);
 
 	eth_dev->data->nb_rx_queues = 0;
 	eth_dev->data->nb_tx_queues = 0;
 
+	/* Bring the link down */
+	qede_dev_set_link_state(eth_dev, false);
 	qdev->ops->common->slowpath_stop(edev);
 	qdev->ops->common->remove(edev);
 	rte_intr_disable(&pci_dev->intr_handle);
@@ -2325,8 +2305,6 @@ static int qede_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 	int i;
 
 	PMD_INIT_FUNC_TRACE(edev);
-	if (IS_VF(edev))
-		return -ENOTSUP;
 	qede_dev_info_get(dev, &dev_info);
 	max_rx_pkt_len = mtu + ETHER_HDR_LEN + ETHER_CRC_LEN;
 	frame_size = max_rx_pkt_len + QEDE_ETH_OVERHEAD;
@@ -2353,7 +2331,9 @@ static int qede_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 		restart = true;
 	}
 	rte_delay_ms(1000);
-	qdev->new_mtu = mtu;
+	qede_start_vport(qdev, mtu); /* Recreate vport */
+	qdev->mtu = mtu;
+
 	/* Fix up RX buf size for all queues of the port */
 	for_each_rss(i) {
 		fp = &qdev->fp_array[i];
@@ -2367,17 +2347,33 @@ static int qede_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 				rx_buf_size = frame_size;
 			rx_buf_size = QEDE_CEIL_TO_CACHE_LINE_SIZE(rx_buf_size);
 			fp->rxq->rx_buf_size = rx_buf_size;
-			DP_INFO(edev, "buf_size adjusted to %u\n", rx_buf_size);
+			DP_INFO(edev, "RX buffer size %u\n", rx_buf_size);
 		}
 	}
 	if (max_rx_pkt_len > ETHER_MAX_LEN)
 		dev->data->dev_conf.rxmode.jumbo_frame = 1;
 	else
 		dev->data->dev_conf.rxmode.jumbo_frame = 0;
+
+	/* Restore config lost due to vport stop */
+	qede_mac_addr_set(dev, &qdev->primary_mac);
+	if (dev->data->promiscuous)
+		qede_promiscuous_enable(dev);
+	else
+		qede_promiscuous_disable(dev);
+
+	if (dev->data->all_multicast)
+		qede_allmulticast_enable(dev);
+	else
+		qede_allmulticast_disable(dev);
+
+	qede_vlan_offload_set(dev, qdev->vlan_offload_mask);
+
 	if (!dev->data->dev_started && restart) {
 		qede_dev_start(dev);
 		dev->data->dev_started = 1;
 	}
+
 	/* update max frame size */
 	dev->data->dev_conf.rxmode.max_rx_pkt_len = max_rx_pkt_len;
 	/* Reassign back */
@@ -2973,6 +2969,9 @@ static int qede_common_dev_init(struct rte_eth_dev *eth_dev, bool is_vf)
 		do_once = false;
 	}
 
+	/* Bring-up the link */
+	qede_dev_set_link_state(eth_dev, true);
+
 	adapter->num_tx_queues = 0;
 	adapter->num_rx_queues = 0;
 	SLIST_INIT(&adapter->fdir_info.fdir_list_head);
@@ -2980,10 +2979,14 @@ static int qede_common_dev_init(struct rte_eth_dev *eth_dev, bool is_vf)
 	SLIST_INIT(&adapter->uc_list_head);
 	SLIST_INIT(&adapter->mc_list_head);
 	adapter->mtu = ETHER_MTU;
-	adapter->new_mtu = ETHER_MTU;
-	if (!is_vf)
-		if (qede_start_vport(adapter, adapter->mtu))
-			return -1;
+	adapter->vport_started = false;
+
+	/* VF tunnel offloads is enabled by default in PF driver */
+	adapter->vxlan.enable = true;
+	adapter->vxlan.num_filters = 0;
+	adapter->vxlan.filter_type = ETH_TUNNEL_FILTER_IMAC |
+				     ETH_TUNNEL_FILTER_IVLAN;
+	adapter->vxlan.udp_port = QEDE_VXLAN_DEF_PORT;
 
 	DP_INFO(edev, "MAC address : %02x:%02x:%02x:%02x:%02x:%02x\n",
 		adapter->primary_mac.addr_bytes[0],
