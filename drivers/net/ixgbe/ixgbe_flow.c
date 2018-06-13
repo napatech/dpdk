@@ -2423,10 +2423,8 @@ ixgbe_parse_fdir_filter_tunnel(const struct rte_flow_attr *attr,
 			vxlan_spec = (const struct rte_flow_item_vxlan *)
 					item->spec;
 			rte_memcpy(((uint8_t *)
-				&rule->ixgbe_fdir.formatted.tni_vni + 1),
+				&rule->ixgbe_fdir.formatted.tni_vni),
 				vxlan_spec->vni, RTE_DIM(vxlan_spec->vni));
-			rule->ixgbe_fdir.formatted.tni_vni = rte_be_to_cpu_32(
-				rule->ixgbe_fdir.formatted.tni_vni);
 		}
 	}
 
@@ -2525,7 +2523,6 @@ ixgbe_parse_fdir_filter_tunnel(const struct rte_flow_attr *attr,
 			/* tni is a 24-bits bit field */
 			rte_memcpy(&rule->ixgbe_fdir.formatted.tni_vni,
 			nvgre_spec->tni, RTE_DIM(nvgre_spec->tni));
-			rule->ixgbe_fdir.formatted.tni_vni <<= 8;
 		}
 	}
 
