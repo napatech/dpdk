@@ -1238,9 +1238,6 @@ static void qede_dev_stop(struct rte_eth_dev *eth_dev)
 	/* Disable traffic */
 	ecore_hw_stop_fastpath(edev); /* TBD - loop */
 
-	if (IS_PF(edev))
-		qede_mac_addr_remove(eth_dev, 0);
-
 	DP_INFO(edev, "Device is stopped\n");
 }
 
@@ -1963,8 +1960,6 @@ int qede_update_mtu(struct rte_eth_dev *eth_dev, uint16_t mtu)
 					goto err;
 
 				/* Restore config lost due to vport stop */
-				qede_mac_addr_set(eth_dev, &qdev->primary_mac);
-
 				if (eth_dev->data->promiscuous)
 					qede_promiscuous_enable(eth_dev);
 				else
@@ -2391,9 +2386,6 @@ static int qede_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 		dev->data->dev_started = 0;
 		qede_dev_stop(dev);
 		restart = true;
-	} else {
-		if (IS_PF(edev))
-			qede_mac_addr_remove(dev, 0);
 	}
 	rte_delay_ms(1000);
 	qdev->mtu = mtu;
