@@ -1,34 +1,6 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) Broadcom Limited.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Broadcom Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2014-2018 Broadcom
+ * All rights reserved.
  */
 
 #ifndef _BNXT_H_
@@ -51,6 +23,7 @@
 #define BNXT_MAX_MTU		9500
 #define VLAN_TAG_SIZE		4
 #define BNXT_MAX_LED		4
+#define BNXT_NUM_VLANS		2
 
 struct bnxt_led_info {
 	uint8_t      led_id;
@@ -236,6 +209,7 @@ struct bnxt {
 	struct rte_eth_dev		*eth_dev;
 	struct rte_eth_rss_conf		rss_conf;
 	struct rte_pci_device		*pdev;
+	void				*doorbell_base;
 
 	uint32_t		flags;
 #define BNXT_FLAG_REGISTERED	(1 << 0)
@@ -246,6 +220,7 @@ struct bnxt {
 #define BNXT_FLAG_UPDATE_HASH	(1 << 5)
 #define BNXT_FLAG_PTP_SUPPORTED	(1 << 6)
 #define BNXT_FLAG_MULTI_HOST    (1 << 7)
+#define BNXT_FLAG_NEW_RM	(1 << 30)
 #define BNXT_FLAG_INIT_DONE	(1 << 31)
 #define BNXT_PF(bp)		(!((bp)->flags & BNXT_FLAG_VF))
 #define BNXT_VF(bp)		((bp)->flags & BNXT_FLAG_VF)
@@ -300,6 +275,7 @@ struct bnxt {
 
 	struct bnxt_link_info	link_info;
 	struct bnxt_cos_queue_info	cos_queue[BNXT_COS_QUEUE_COUNT];
+	uint8_t			tx_cosq_id;
 
 	uint16_t		fw_fid;
 	uint8_t			dflt_mac_addr[ETHER_ADDR_LEN];
@@ -321,7 +297,7 @@ struct bnxt {
 	uint16_t		vxlan_fw_dst_port_id;
 	uint16_t		geneve_fw_dst_port_id;
 	uint32_t		fw_ver;
-	rte_atomic64_t		rx_mbuf_alloc_fail;
+	uint32_t		hwrm_spec_code;
 
 	struct bnxt_led_info	leds[BNXT_MAX_LED];
 	uint8_t			num_leds;
@@ -330,8 +306,6 @@ struct bnxt {
 
 int bnxt_link_update_op(struct rte_eth_dev *eth_dev, int wait_to_complete);
 int bnxt_rcv_msg_from_vf(struct bnxt *bp, uint16_t vf_id, void *msg);
-
-#define RX_PROD_AGG_BD_TYPE_RX_PROD_AGG		0x6
 
 bool is_bnxt_supported(struct rte_eth_dev *dev);
 extern const struct rte_flow_ops bnxt_flow_ops;

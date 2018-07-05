@@ -1,7 +1,7 @@
 /*
- * Copyright (c) 2016 QLogic Corporation.
+ * Copyright (c) 2016 - 2018 Cavium Inc.
  * All rights reserved.
- * www.qlogic.com
+ * www.cavium.com
  *
  * See LICENSE.qede_pmd for copyright and licensing details.
  */
@@ -40,6 +40,9 @@
 #define STORM_FW_VERSION						\
 	((FW_MAJOR_VERSION << 24) | (FW_MINOR_VERSION << 16) |	\
 	 (FW_REVISION_VERSION << 8) | FW_ENGINEERING_VERSION)
+
+#define IS_ECORE_PACING(p_hwfn)	\
+	(!!(p_hwfn->b_en_pacing))
 
 #define MAX_HWFNS_PER_DEVICE	2
 #define NAME_SIZE 128 /* @DPDK */
@@ -432,8 +435,10 @@ struct ecore_hw_info {
 #define DMAE_MAX_RW_SIZE	0x2000
 
 struct ecore_dmae_info {
-	/* Mutex for synchronizing access to functions */
-	osal_mutex_t	mutex;
+	/* Spinlock for synchronizing access to functions */
+	osal_spinlock_t lock;
+
+	bool b_mem_ready;
 
 	u8 channel;
 
@@ -534,6 +539,12 @@ enum ecore_mf_mode_bit {
 	ECORE_MF_UFP_SPECIFIC,
 
 	ECORE_MF_DISABLE_ARFS,
+
+	/* Use vlan for steering */
+	ECORE_MF_8021Q_TAGGING,
+
+	/* Use stag for steering */
+	ECORE_MF_8021AD_TAGGING,
 };
 
 enum ecore_ufp_mode {
@@ -671,6 +682,13 @@ struct ecore_hwfn {
 
 	/* Mechanism for recovering from doorbell drop */
 	struct ecore_db_recovery_info	db_recovery_info;
+
+	/* Enable/disable pacing, if request to enable then
+	 * IOV and mcos configuration will be skipped.
+	 * this actually reflects the value requested in
+	 * struct ecore_hw_prepare_params by ecore client.
+	 */
+	bool b_en_pacing;
 
 	/* @DPDK */
 	struct ecore_ptt		*p_arfs_ptt;
@@ -924,12 +942,16 @@ void ecore_set_fw_mac_addr(__le16 *fw_msb, __le16 *fw_mid, __le16 *fw_lsb,
 #define PQ_FLAGS_ACK	(1 << 4)
 #define PQ_FLAGS_OFLD	(1 << 5)
 #define PQ_FLAGS_VFS	(1 << 6)
+#define PQ_FLAGS_LLT	(1 << 7)
 
 /* physical queue index for cm context intialization */
 u16 ecore_get_cm_pq_idx(struct ecore_hwfn *p_hwfn, u32 pq_flags);
 u16 ecore_get_cm_pq_idx_mcos(struct ecore_hwfn *p_hwfn, u8 tc);
 u16 ecore_get_cm_pq_idx_vf(struct ecore_hwfn *p_hwfn, u16 vf);
-u16 ecore_get_cm_pq_idx_rl(struct ecore_hwfn *p_hwfn, u8 qpid);
+u16 ecore_get_cm_pq_idx_rl(struct ecore_hwfn *p_hwfn, u16 rl);
+
+/* qm vport for rate limit configuration */
+u16 ecore_get_qm_vport_idx_rl(struct ecore_hwfn *p_hwfn, u16 rl);
 
 const char *ecore_hw_get_resc_name(enum ecore_resources res_id);
 

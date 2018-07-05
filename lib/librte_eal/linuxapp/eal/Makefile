@@ -10,7 +10,7 @@ ARCH_DIR ?= $(RTE_ARCH)
 EXPORT_MAP := ../../rte_eal_version.map
 VPATH += $(RTE_SDK)/lib/librte_eal/common/arch/$(ARCH_DIR)
 
-LIBABIVER := 6
+LIBABIVER := 7
 
 VPATH += $(RTE_SDK)/lib/librte_eal/common
 
@@ -30,17 +30,20 @@ endif
 
 # specific to linuxapp exec-env
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) := eal.c
+SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_cpuflags.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_hugepage_info.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_memory.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_thread.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_log.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_vfio.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_vfio_mp_sync.c
+SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_memalloc.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_debug.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_lcore.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_timer.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_interrupts.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_alarm.c
+SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_dev.c
 
 # from common dir
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_lcore.c
@@ -48,6 +51,7 @@ SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_timer.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_memzone.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_log.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_launch.c
+SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_memalloc.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_memory.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_tailqs.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_errno.c
@@ -61,9 +65,11 @@ SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_dev.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_options.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_thread.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_proc.c
+SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_fbarray.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += rte_malloc.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += malloc_elem.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += malloc_heap.c
+SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += malloc_mp.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += rte_keepalive.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += rte_service.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += rte_reciprocal.c
@@ -81,6 +87,7 @@ CFLAGS_eal_interrupts.o := -D_GNU_SOURCE
 CFLAGS_eal_vfio_mp_sync.o := -D_GNU_SOURCE
 CFLAGS_eal_timer.o := -D_GNU_SOURCE
 CFLAGS_eal_lcore.o := -D_GNU_SOURCE
+CFLAGS_eal_memalloc.o := -D_GNU_SOURCE
 CFLAGS_eal_thread.o := -D_GNU_SOURCE
 CFLAGS_eal_log.o := -D_GNU_SOURCE
 CFLAGS_eal_common_log.o := -D_GNU_SOURCE

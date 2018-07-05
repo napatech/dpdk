@@ -29,7 +29,7 @@
 #include <rte_event_eth_rx_adapter.h>
 #include <rte_dpaa_bus.h>
 #include <rte_dpaa_logs.h>
-#include <rte_cycles_64.h>
+#include <rte_cycles.h>
 
 #include <dpaa_ethdev.h>
 #include "dpaa_eventdev.h"
@@ -571,7 +571,7 @@ dpaa_event_eth_rx_adapter_stop(const struct rte_eventdev *dev,
 	return 0;
 }
 
-static const struct rte_eventdev_ops dpaa_eventdev_ops = {
+static struct rte_eventdev_ops dpaa_eventdev_ops = {
 	.dev_infos_get    = dpaa_event_dev_info_get,
 	.dev_configure    = dpaa_event_dev_configure,
 	.dev_start        = dpaa_event_dev_start,

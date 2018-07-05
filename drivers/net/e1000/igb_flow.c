@@ -175,7 +175,7 @@ cons_parse_ntuple_filter(const struct rte_flow_attr *attr,
 		return -rte_errno;
 	}
 
-	ipv4_mask = (const struct rte_flow_item_ipv4 *)item->mask;
+	ipv4_mask = item->mask;
 	/**
 	 * Only support src & dst addresses, protocol,
 	 * others should be masked.
@@ -198,7 +198,7 @@ cons_parse_ntuple_filter(const struct rte_flow_attr *attr,
 	filter->src_ip_mask = ipv4_mask->hdr.src_addr;
 	filter->proto_mask  = ipv4_mask->hdr.next_proto_id;
 
-	ipv4_spec = (const struct rte_flow_item_ipv4 *)item->spec;
+	ipv4_spec = item->spec;
 	filter->dst_ip = ipv4_spec->hdr.dst_addr;
 	filter->src_ip = ipv4_spec->hdr.src_addr;
 	filter->proto  = ipv4_spec->hdr.next_proto_id;
@@ -228,7 +228,7 @@ cons_parse_ntuple_filter(const struct rte_flow_attr *attr,
 	/* get the TCP/UDP/SCTP info */
 	if (item->type == RTE_FLOW_ITEM_TYPE_TCP) {
 		if (item->spec && item->mask) {
-			tcp_mask = (const struct rte_flow_item_tcp *)item->mask;
+			tcp_mask = item->mask;
 
 			/**
 			 * Only support src & dst ports, tcp flags,
@@ -263,14 +263,14 @@ cons_parse_ntuple_filter(const struct rte_flow_attr *attr,
 				return -rte_errno;
 			}
 
-			tcp_spec = (const struct rte_flow_item_tcp *)item->spec;
+			tcp_spec = item->spec;
 			filter->dst_port  = tcp_spec->hdr.dst_port;
 			filter->src_port  = tcp_spec->hdr.src_port;
 			filter->tcp_flags = tcp_spec->hdr.tcp_flags;
 		}
 	} else if (item->type == RTE_FLOW_ITEM_TYPE_UDP) {
 		if (item->spec && item->mask) {
-			udp_mask = (const struct rte_flow_item_udp *)item->mask;
+			udp_mask = item->mask;
 
 			/**
 			 * Only support src & dst ports,
@@ -289,14 +289,13 @@ cons_parse_ntuple_filter(const struct rte_flow_attr *attr,
 			filter->dst_port_mask = udp_mask->hdr.dst_port;
 			filter->src_port_mask = udp_mask->hdr.src_port;
 
-			udp_spec = (const struct rte_flow_item_udp *)item->spec;
+			udp_spec = item->spec;
 			filter->dst_port = udp_spec->hdr.dst_port;
 			filter->src_port = udp_spec->hdr.src_port;
 		}
 	} else {
 		if (item->spec && item->mask) {
-			sctp_mask = (const struct rte_flow_item_sctp *)
-					item->mask;
+			sctp_mask = item->mask;
 
 			/**
 			 * Only support src & dst ports,
@@ -377,6 +376,15 @@ cons_parse_ntuple_filter(const struct rte_flow_attr *attr,
 		rte_flow_error_set(error, EINVAL,
 				   RTE_FLOW_ERROR_TYPE_ATTR_EGRESS,
 				   attr, "Not support egress.");
+		return -rte_errno;
+	}
+
+	/* not supported */
+	if (attr->transfer) {
+		memset(filter, 0, sizeof(struct rte_eth_ntuple_filter));
+		rte_flow_error_set(error, EINVAL,
+				   RTE_FLOW_ERROR_TYPE_ATTR_TRANSFER,
+				   attr, "No support for transfer.");
 		return -rte_errno;
 	}
 
@@ -533,8 +541,8 @@ cons_parse_ethertype_filter(const struct rte_flow_attr *attr,
 		return -rte_errno;
 	}
 
-	eth_spec = (const struct rte_flow_item_eth *)item->spec;
-	eth_mask = (const struct rte_flow_item_eth *)item->mask;
+	eth_spec = item->spec;
+	eth_mask = item->mask;
 
 	/* Mask bits of source MAC address must be full of 0.
 	 * Mask bits of destination MAC address must be full
@@ -621,6 +629,14 @@ cons_parse_ethertype_filter(const struct rte_flow_attr *attr,
 		rte_flow_error_set(error, EINVAL,
 				RTE_FLOW_ERROR_TYPE_ATTR_EGRESS,
 				attr, "Not support egress.");
+		return -rte_errno;
+	}
+
+	/* Not supported */
+	if (attr->transfer) {
+		rte_flow_error_set(error, EINVAL,
+				RTE_FLOW_ERROR_TYPE_ATTR_TRANSFER,
+				attr, "No support for transfer.");
 		return -rte_errno;
 	}
 
@@ -848,8 +864,8 @@ cons_parse_syn_filter(const struct rte_flow_attr *attr,
 		return -rte_errno;
 	}
 
-	tcp_spec = (const struct rte_flow_item_tcp *)item->spec;
-	tcp_mask = (const struct rte_flow_item_tcp *)item->mask;
+	tcp_spec = item->spec;
+	tcp_mask = item->mask;
 	if (!(tcp_spec->hdr.tcp_flags & TCP_SYN_FLAG) ||
 	    tcp_mask->hdr.src_port ||
 	    tcp_mask->hdr.dst_port ||
@@ -921,6 +937,15 @@ cons_parse_syn_filter(const struct rte_flow_attr *attr,
 		rte_flow_error_set(error, EINVAL,
 			RTE_FLOW_ERROR_TYPE_ATTR_EGRESS,
 			attr, "Not support egress.");
+		return -rte_errno;
+	}
+
+	/* not supported */
+	if (attr->transfer) {
+		memset(filter, 0, sizeof(struct rte_eth_syn_filter));
+		rte_flow_error_set(error, EINVAL,
+			RTE_FLOW_ERROR_TYPE_ATTR_TRANSFER,
+			attr, "No support for transfer.");
 		return -rte_errno;
 	}
 
@@ -1065,8 +1090,8 @@ item_loop:
 		return -rte_errno;
 	}
 
-	raw_spec = (const struct rte_flow_item_raw *)item->spec;
-	raw_mask = (const struct rte_flow_item_raw *)item->mask;
+	raw_spec = item->spec;
+	raw_mask = item->mask;
 
 	if (!raw_mask->length ||
 	    !raw_mask->relative) {
@@ -1212,6 +1237,15 @@ item_loop:
 		return -rte_errno;
 	}
 
+	/* not supported */
+	if (attr->transfer) {
+		memset(filter, 0, sizeof(struct rte_eth_flex_filter));
+		rte_flow_error_set(error, EINVAL,
+			RTE_FLOW_ERROR_TYPE_ATTR_TRANSFER,
+			attr, "No support for transfer.");
+		return -rte_errno;
+	}
+
 	if (attr->priority > 0xFFFF) {
 		memset(filter, 0, sizeof(struct rte_eth_flex_filter));
 		rte_flow_error_set(error, EINVAL,
@@ -1293,7 +1327,7 @@ igb_parse_rss_filter(struct rte_eth_dev *dev,
 
 	rss = (const struct rte_flow_action_rss *)act->conf;
 
-	if (!rss || !rss->num) {
+	if (!rss || !rss->queue_num) {
 		rte_flow_error_set(error, EINVAL,
 				RTE_FLOW_ERROR_TYPE_ACTION,
 				act,
@@ -1301,7 +1335,7 @@ igb_parse_rss_filter(struct rte_eth_dev *dev,
 		return -rte_errno;
 	}
 
-	for (n = 0; n < rss->num; n++) {
+	for (n = 0; n < rss->queue_num; n++) {
 		if (rss->queue[n] >= dev->data->nb_rx_queues) {
 			rte_flow_error_set(error, EINVAL,
 				   RTE_FLOW_ERROR_TYPE_ACTION,
@@ -1311,14 +1345,26 @@ igb_parse_rss_filter(struct rte_eth_dev *dev,
 		}
 	}
 
-	if (rss->rss_conf)
-		rss_conf->rss_conf = *rss->rss_conf;
-	else
-		rss_conf->rss_conf.rss_hf = IGB_RSS_OFFLOAD_ALL;
-
-	for (n = 0; n < rss->num; ++n)
-		rss_conf->queue[n] = rss->queue[n];
-	rss_conf->num = rss->num;
+	if (rss->func != RTE_ETH_HASH_FUNCTION_DEFAULT)
+		return rte_flow_error_set
+			(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, act,
+			 "non-default RSS hash functions are not supported");
+	if (rss->level)
+		return rte_flow_error_set
+			(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, act,
+			 "a nonzero RSS encapsulation level is not supported");
+	if (rss->key_len && rss->key_len != RTE_DIM(rss_conf->key))
+		return rte_flow_error_set
+			(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, act,
+			 "RSS hash key must be exactly 40 bytes");
+	if (rss->queue_num > RTE_DIM(rss_conf->queue))
+		return rte_flow_error_set
+			(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, act,
+			 "too many queues for RSS context");
+	if (igb_rss_conf_init(rss_conf, rss))
+		return rte_flow_error_set
+			(error, EINVAL, RTE_FLOW_ERROR_TYPE_ACTION, act,
+			 "RSS context initialization failure");
 
 	/* check if the next not void item is END */
 	index++;
@@ -1347,6 +1393,15 @@ igb_parse_rss_filter(struct rte_eth_dev *dev,
 		rte_flow_error_set(error, EINVAL,
 				   RTE_FLOW_ERROR_TYPE_ATTR_EGRESS,
 				   attr, "Not support egress.");
+		return -rte_errno;
+	}
+
+	/* not supported */
+	if (attr->transfer) {
+		memset(rss_conf, 0, sizeof(struct igb_rte_flow_rss_conf));
+		rte_flow_error_set(error, EINVAL,
+				   RTE_FLOW_ERROR_TYPE_ATTR_TRANSFER,
+				   attr, "No support for transfer.");
 		return -rte_errno;
 	}
 
@@ -1519,9 +1574,8 @@ igb_flow_create(struct rte_eth_dev *dev,
 				PMD_DRV_LOG(ERR, "failed to allocate memory");
 				goto out;
 			}
-			rte_memcpy(&rss_filter_ptr->filter_info,
-				&rss_conf,
-				sizeof(struct igb_rte_flow_rss_conf));
+			igb_rss_conf_init(&rss_filter_ptr->filter_info,
+					  &rss_conf.conf);
 			TAILQ_INSERT_TAIL(&igb_filter_rss_list,
 				rss_filter_ptr, entries);
 			flow->rule = rss_filter_ptr;
@@ -1758,7 +1812,7 @@ igb_clear_rss_filter(struct rte_eth_dev *dev)
 	struct e1000_filter_info *filter =
 		E1000_DEV_PRIVATE_TO_FILTER_INFO(dev->data->dev_private);
 
-	if (filter->rss_info.num)
+	if (filter->rss_info.conf.queue_num)
 		igb_config_rss_filter(dev, &filter->rss_info, FALSE);
 }
 

@@ -78,6 +78,8 @@ struct sfc_dp_rx_qcreate_info {
 	 * doorbell
 	 */
 	volatile void		*mem_bar;
+	/** VI window size shift */
+	unsigned int		vi_window_shift;
 };
 
 /**
@@ -88,10 +90,23 @@ struct sfc_dp_rx_qcreate_info {
 typedef void (sfc_dp_rx_get_dev_info_t)(struct rte_eth_dev_info *dev_info);
 
 /**
+ * Test if an Rx datapath supports specific mempool ops.
+ *
+ * @param pool			The name of the pool operations to test.
+ *
+ * @return Check status.
+ * @retval	0		Best mempool ops choice.
+ * @retval	1		Mempool ops are supported.
+ * @retval	-ENOTSUP	Mempool ops not supported.
+ */
+typedef int (sfc_dp_rx_pool_ops_supported_t)(const char *pool);
+
+/**
  * Get size of receive and event queue rings by the number of Rx
- * descriptors.
+ * descriptors and mempool configuration.
  *
  * @param nb_rx_desc		Number of Rx descriptors
+ * @param mb_pool		mbuf pool with Rx buffers
  * @param rxq_entries		Location for number of Rx ring entries
  * @param evq_entries		Location for number of event ring entries
  * @param rxq_max_fill_level	Location for maximum Rx ring fill level
@@ -99,6 +114,7 @@ typedef void (sfc_dp_rx_get_dev_info_t)(struct rte_eth_dev_info *dev_info);
  * @return 0 or positive errno.
  */
 typedef int (sfc_dp_rx_qsize_up_rings_t)(uint16_t nb_rx_desc,
+					 struct rte_mempool *mb_pool,
 					 unsigned int *rxq_entries,
 					 unsigned int *evq_entries,
 					 unsigned int *rxq_max_fill_level);
@@ -146,6 +162,12 @@ typedef void (sfc_dp_rx_qstop_t)(struct sfc_dp_rxq *dp_rxq,
 typedef bool (sfc_dp_rx_qrx_ev_t)(struct sfc_dp_rxq *dp_rxq, unsigned int id);
 
 /**
+ * Packed stream receive event handler used during queue flush only.
+ */
+typedef bool (sfc_dp_rx_qrx_ps_ev_t)(struct sfc_dp_rxq *dp_rxq,
+				     unsigned int id);
+
+/**
  * Receive queue purge function called after queue flush.
  *
  * Should be used to free unused recevie buffers.
@@ -171,13 +193,17 @@ struct sfc_dp_rx {
 #define SFC_DP_RX_FEAT_SCATTER			0x1
 #define SFC_DP_RX_FEAT_MULTI_PROCESS		0x2
 #define SFC_DP_RX_FEAT_TUNNELS			0x4
+#define SFC_DP_RX_FEAT_FLOW_FLAG		0x8
+#define SFC_DP_RX_FEAT_FLOW_MARK		0x10
 	sfc_dp_rx_get_dev_info_t		*get_dev_info;
+	sfc_dp_rx_pool_ops_supported_t		*pool_ops_supported;
 	sfc_dp_rx_qsize_up_rings_t		*qsize_up_rings;
 	sfc_dp_rx_qcreate_t			*qcreate;
 	sfc_dp_rx_qdestroy_t			*qdestroy;
 	sfc_dp_rx_qstart_t			*qstart;
 	sfc_dp_rx_qstop_t			*qstop;
 	sfc_dp_rx_qrx_ev_t			*qrx_ev;
+	sfc_dp_rx_qrx_ps_ev_t			*qrx_ps_ev;
 	sfc_dp_rx_qpurge_t			*qpurge;
 	sfc_dp_rx_supported_ptypes_get_t	*supported_ptypes_get;
 	sfc_dp_rx_qdesc_npending_t		*qdesc_npending;
@@ -203,6 +229,7 @@ sfc_dp_find_rx_by_caps(struct sfc_dp_list *head, unsigned int avail_caps)
 
 extern struct sfc_dp_rx sfc_efx_rx;
 extern struct sfc_dp_rx sfc_ef10_rx;
+extern struct sfc_dp_rx sfc_ef10_essb_rx;
 
 #ifdef __cplusplus
 }

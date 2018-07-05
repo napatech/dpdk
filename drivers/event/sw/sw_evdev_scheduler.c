@@ -508,7 +508,7 @@ sw_event_schedule(struct rte_eventdev *dev)
 	uint32_t i;
 
 	sw->sched_called++;
-	if (!sw->started)
+	if (unlikely(!sw->started))
 		return;
 
 	do {
@@ -532,14 +532,19 @@ sw_event_schedule(struct rte_eventdev *dev)
 		} while (in_pkts > 4 &&
 				(int)in_pkts_this_iteration < sched_quanta);
 
-		out_pkts = 0;
-		out_pkts += sw_schedule_qid_to_cq(sw);
+		out_pkts = sw_schedule_qid_to_cq(sw);
 		out_pkts_total += out_pkts;
 		in_pkts_total += in_pkts_this_iteration;
 
 		if (in_pkts == 0 && out_pkts == 0)
 			break;
 	} while ((int)out_pkts_total < sched_quanta);
+
+	sw->stats.tx_pkts += out_pkts_total;
+	sw->stats.rx_pkts += in_pkts_total;
+
+	sw->sched_no_iq_enqueues += (in_pkts_total == 0);
+	sw->sched_no_cq_enqueues += (out_pkts_total == 0);
 
 	/* push all the internal buffered QEs in port->cq_ring to the
 	 * worker cores: aka, do the ring transfers batched.
@@ -551,11 +556,5 @@ sw_event_schedule(struct rte_eventdev *dev)
 				&sw->cq_ring_space[i]);
 		sw->ports[i].cq_buf_count = 0;
 	}
-
-	sw->stats.tx_pkts += out_pkts_total;
-	sw->stats.rx_pkts += in_pkts_total;
-
-	sw->sched_no_iq_enqueues += (in_pkts_total == 0);
-	sw->sched_no_cq_enqueues += (out_pkts_total == 0);
 
 }

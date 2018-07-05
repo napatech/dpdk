@@ -352,7 +352,7 @@ post_process_gcm_crypto_op(struct aesni_gcm_qp *qp,
 			session->op == AESNI_GMAC_OP_VERIFY) {
 		uint8_t *digest;
 
-		uint8_t *tag = (uint8_t *)&qp->temp_digest;
+		uint8_t *tag = qp->temp_digest;
 
 		if (session->op == AESNI_GMAC_OP_VERIFY)
 			digest = op->sym->auth.digest.data;
@@ -392,7 +392,7 @@ handle_completed_gcm_crypto_op(struct aesni_gcm_qp *qp,
 	if (op->sess_type == RTE_CRYPTO_OP_SESSIONLESS) {
 		memset(sess, 0, sizeof(struct aesni_gcm_session));
 		memset(op->sym->session, 0,
-				rte_cryptodev_get_header_session_size());
+				rte_cryptodev_sym_get_header_session_size());
 		rte_mempool_put(qp->sess_mp, sess);
 		rte_mempool_put(qp->sess_mp, op->sym->session);
 		op->sym->session = NULL;
@@ -570,5 +570,5 @@ RTE_PMD_REGISTER_PARAM_STRING(CRYPTODEV_NAME_AESNI_GCM_PMD,
 	"max_nb_queue_pairs=<int> "
 	"max_nb_sessions=<int> "
 	"socket_id=<int>");
-RTE_PMD_REGISTER_CRYPTO_DRIVER(aesni_gcm_crypto_drv, aesni_gcm_pmd_drv,
+RTE_PMD_REGISTER_CRYPTO_DRIVER(aesni_gcm_crypto_drv, aesni_gcm_pmd_drv.driver,
 		cryptodev_driver_id);

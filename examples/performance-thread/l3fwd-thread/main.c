@@ -1990,17 +1990,18 @@ cpu_load_collector(__rte_unused void *arg) {
  *
  * This loop is used to start empty scheduler on lcore.
  */
-static void
+static void *
 lthread_null(__rte_unused void *args)
 {
 	int lcore_id = rte_lcore_id();
 
 	RTE_LOG(INFO, L3FWD, "Starting scheduler on lcore %d.\n", lcore_id);
 	lthread_exit(NULL);
+	return NULL;
 }
 
 /* main processing loop */
-static void
+static void *
 lthread_tx_per_ring(void *dummy)
 {
 	int nb_rx;
@@ -2045,6 +2046,7 @@ lthread_tx_per_ring(void *dummy)
 			lthread_cond_wait(ready, 0);
 
 	}
+	return NULL;
 }
 
 /*
@@ -2053,7 +2055,7 @@ lthread_tx_per_ring(void *dummy)
  * This lthread is used to spawn one new lthread per ring from producers.
  *
  */
-static void
+static void *
 lthread_tx(void *args)
 {
 	struct lthread *lt;
@@ -2098,9 +2100,10 @@ lthread_tx(void *args)
 		}
 
 	}
+	return NULL;
 }
 
-static void
+static void *
 lthread_rx(void *dummy)
 {
 	int ret;
@@ -2124,7 +2127,7 @@ lthread_rx(void *dummy)
 
 	if (rx_conf->n_rx_queue == 0) {
 		RTE_LOG(INFO, L3FWD, "lcore %u has nothing to do\n", rte_lcore_id());
-		return;
+		return NULL;
 	}
 
 	RTE_LOG(INFO, L3FWD, "Entering main Rx loop on lcore %u\n", rte_lcore_id());
@@ -2196,6 +2199,7 @@ lthread_rx(void *dummy)
 			lthread_yield();
 		}
 	}
+	return NULL;
 }
 
 /*
@@ -2204,8 +2208,9 @@ lthread_rx(void *dummy)
  * This lthread loop spawns all rx and tx lthreads on master lcore
  */
 
-static void
-lthread_spawner(__rte_unused void *arg) {
+static void *
+lthread_spawner(__rte_unused void *arg)
+{
 	struct lthread *lt[MAX_THREAD];
 	int i;
 	int n_thread = 0;
@@ -2246,6 +2251,7 @@ lthread_spawner(__rte_unused void *arg) {
 	for (i = 0; i < n_thread; i++)
 		lthread_join(lt[i], NULL);
 
+	return NULL;
 }
 
 /*
@@ -2491,7 +2497,7 @@ check_lcore_params(void)
 }
 
 static int
-check_port_config(const unsigned nb_ports)
+check_port_config(void)
 {
 	unsigned portid;
 	uint16_t i;
@@ -2502,7 +2508,7 @@ check_port_config(const unsigned nb_ports)
 			printf("port %u is not enabled in port mask\n", portid);
 			return -1;
 		}
-		if (portid >= nb_ports) {
+		if (!rte_eth_dev_is_valid_port(portid)) {
 			printf("port %u is not present on the board\n", portid);
 			return -1;
 		}
@@ -3411,7 +3417,7 @@ init_mem(unsigned nb_mbuf)
 
 /* Check the link status of all ports in up to 9s, and print them finally */
 static void
-check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
+check_all_ports_link_status(uint32_t port_mask)
 {
 #define CHECK_INTERVAL 100 /* 100ms */
 #define MAX_CHECK_TIME 90 /* 9s (90 * 100ms) in total */
@@ -3423,7 +3429,7 @@ check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
 	fflush(stdout);
 	for (count = 0; count <= MAX_CHECK_TIME; count++) {
 		all_ports_up = 1;
-		for (portid = 0; portid < port_num; portid++) {
+		RTE_ETH_FOREACH_DEV(portid) {
 			if ((port_mask & (1 << portid)) == 0)
 				continue;
 			memset(&link, 0, sizeof(link));
@@ -3514,15 +3520,15 @@ main(int argc, char **argv)
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "init_rx_rings failed\n");
 
-	nb_ports = rte_eth_dev_count();
+	nb_ports = rte_eth_dev_count_avail();
 
-	if (check_port_config(nb_ports) < 0)
+	if (check_port_config() < 0)
 		rte_exit(EXIT_FAILURE, "check_port_config failed\n");
 
 	nb_lcores = rte_lcore_count();
 
 	/* initialize all ports */
-	for (portid = 0; portid < nb_ports; portid++) {
+	RTE_ETH_FOREACH_DEV(portid) {
 		struct rte_eth_conf local_port_conf = port_conf;
 
 		/* skip ports that are not enabled */
@@ -3654,7 +3660,7 @@ main(int argc, char **argv)
 	printf("\n");
 
 	/* start ports */
-	for (portid = 0; portid < nb_ports; portid++) {
+	RTE_ETH_FOREACH_DEV(portid) {
 		if ((enabled_port_mask & (1 << portid)) == 0)
 			continue;
 
@@ -3699,7 +3705,7 @@ main(int argc, char **argv)
 		}
 	}
 
-	check_all_ports_link_status((uint8_t)nb_ports, enabled_port_mask);
+	check_all_ports_link_status(enabled_port_mask);
 
 	if (lthreads_on) {
 		printf("Starting L-Threading Model\n");

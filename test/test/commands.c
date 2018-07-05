@@ -132,11 +132,13 @@ static void cmd_dump_parsed(void *parsed_result,
 	else if (!strcmp(res->dump, "dump_mempool"))
 		rte_mempool_list_dump(stdout);
 	else if (!strcmp(res->dump, "dump_devargs"))
-		rte_eal_devargs_dump(stdout);
+		rte_devargs_dump(stdout);
 	else if (!strcmp(res->dump, "dump_log_types"))
 		rte_log_dump(stdout);
 	else if (!strcmp(res->dump, "dump_malloc_stats"))
 		rte_malloc_dump_stats(stdout, NULL);
+	else if (!strcmp(res->dump, "dump_malloc_heaps"))
+		rte_malloc_dump_heaps(stdout);
 }
 
 cmdline_parse_token_string_t cmd_dump_dump =
@@ -147,6 +149,7 @@ cmdline_parse_token_string_t cmd_dump_dump =
 				 "dump_ring#"
 				 "dump_mempool#"
 				 "dump_malloc_stats#"
+				 "dump_malloc_heaps#"
 				 "dump_devargs#"
 				 "dump_log_types");
 

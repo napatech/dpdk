@@ -28,6 +28,9 @@ Features of the OCTEONTX SSOVF PMD are:
 - Open system with configurable amount of outstanding events
 - HW accelerated dequeue timeout support to enable power management
 - SR-IOV VF
+- HW managed event timers support through TIMVF, with high precision and
+  time granularity of 1us.
+- Up to 64 event timer adapters.
 
 Supported OCTEONTX SoCs
 -----------------------
@@ -36,7 +39,7 @@ Supported OCTEONTX SoCs
 Prerequisites
 -------------
 
-See :doc: `../platform/octeontx` for setup information.
+See :doc:`../platform/octeontx` for setup information.
 
 Pre-Installation Configuration
 ------------------------------
@@ -96,6 +99,16 @@ The tests are run once the vdev creation is successfully complete.
     --vdev="event_octeontx,self_test=1"
 
 
+Enable TIMvf stats
+------------------
+TIMvf stats can be enabled by using this option, by default the stats are
+disabled.
+
+.. code-block:: console
+
+    --vdev="event_octeontx,timvf_stats=1"
+
+
 Limitations
 -----------
 
@@ -109,4 +122,20 @@ Rx adapter support
 ~~~~~~~~~~~~~~~~~~
 
 When eth_octeontx is used as Rx adapter event schedule type
+``RTE_SCHED_TYPE_PARALLEL`` is not supported.
+
+Event timer adapter support
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When timvf is used as Event timer adapter the clock source mapping is as
+follows:
+
+.. code-block:: console
+
+        RTE_EVENT_TIMER_ADAPTER_CPU_CLK  = TIM_CLK_SRC_SCLK
+        RTE_EVENT_TIMER_ADAPTER_EXT_CLK0 = TIM_CLK_SRC_GPIO
+        RTE_EVENT_TIMER_ADAPTER_EXT_CLK1 = TIM_CLK_SRC_GTI
+        RTE_EVENT_TIMER_ADAPTER_EXT_CLK2 = TIM_CLK_SRC_PTP
+
+When timvf is used as Event timer adapter event schedule type
 ``RTE_SCHED_TYPE_PARALLEL`` is not supported.

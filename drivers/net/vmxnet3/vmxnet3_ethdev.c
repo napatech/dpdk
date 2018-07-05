@@ -20,7 +20,6 @@
 #include <rte_debug.h>
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
-#include <rte_atomic.h>
 #include <rte_branch_prediction.h>
 #include <rte_memory.h>
 #include <rte_memzone.h>
@@ -42,6 +41,23 @@
 #define PROCESS_SYS_EVENTS 0
 
 #define	VMXNET3_TX_MAX_SEG	UINT8_MAX
+
+#define VMXNET3_TX_OFFLOAD_CAP		\
+	(DEV_TX_OFFLOAD_VLAN_INSERT |	\
+	 DEV_TX_OFFLOAD_IPV4_CKSUM |	\
+	 DEV_TX_OFFLOAD_TCP_CKSUM |	\
+	 DEV_TX_OFFLOAD_UDP_CKSUM |	\
+	 DEV_TX_OFFLOAD_TCP_TSO |	\
+	 DEV_TX_OFFLOAD_MULTI_SEGS)
+
+#define VMXNET3_RX_OFFLOAD_CAP		\
+	(DEV_RX_OFFLOAD_VLAN_STRIP |	\
+	 DEV_RX_OFFLOAD_SCATTER |	\
+	 DEV_RX_OFFLOAD_IPV4_CKSUM |	\
+	 DEV_RX_OFFLOAD_UDP_CKSUM |	\
+	 DEV_RX_OFFLOAD_TCP_CKSUM |	\
+	 DEV_RX_OFFLOAD_TCP_LRO |	\
+	 DEV_RX_OFFLOAD_JUMBO_FRAME)
 
 static int eth_vmxnet3_dev_init(struct rte_eth_dev *eth_dev);
 static int eth_vmxnet3_dev_uninit(struct rte_eth_dev *eth_dev);
@@ -73,7 +89,7 @@ vmxnet3_dev_supported_ptypes_get(struct rte_eth_dev *dev);
 static int vmxnet3_dev_vlan_filter_set(struct rte_eth_dev *dev,
 				       uint16_t vid, int on);
 static int vmxnet3_dev_vlan_offload_set(struct rte_eth_dev *dev, int mask);
-static void vmxnet3_mac_addr_set(struct rte_eth_dev *dev,
+static int vmxnet3_mac_addr_set(struct rte_eth_dev *dev,
 				 struct ether_addr *mac_addr);
 static void vmxnet3_interrupt_handler(void *param);
 
@@ -151,66 +167,14 @@ gpa_zone_reserve(struct rte_eth_dev *dev, uint32_t size,
 		if (mz)
 			rte_memzone_free(mz);
 		return rte_memzone_reserve_aligned(z_name, size, socket_id,
-						   0, align);
+				RTE_MEMZONE_IOVA_CONTIG, align);
 	}
 
 	if (mz)
 		return mz;
 
-	return rte_memzone_reserve_aligned(z_name, size, socket_id, 0, align);
-}
-
-/**
- * Atomically reads the link status information from global
- * structure rte_eth_dev.
- *
- * @param dev
- *   - Pointer to the structure rte_eth_dev to read from.
- *   - Pointer to the buffer to be saved with the link status.
- *
- * @return
- *   - On success, zero.
- *   - On failure, negative value.
- */
-
-static int
-vmxnet3_dev_atomic_read_link_status(struct rte_eth_dev *dev,
-				    struct rte_eth_link *link)
-{
-	struct rte_eth_link *dst = link;
-	struct rte_eth_link *src = &(dev->data->dev_link);
-
-	if (rte_atomic64_cmpset((uint64_t *)dst, *(uint64_t *)dst,
-				*(uint64_t *)src) == 0)
-		return -1;
-
-	return 0;
-}
-
-/**
- * Atomically writes the link status information into global
- * structure rte_eth_dev.
- *
- * @param dev
- *   - Pointer to the structure rte_eth_dev to write to.
- *   - Pointer to the buffer to be saved with the link status.
- *
- * @return
- *   - On success, zero.
- *   - On failure, negative value.
- */
-static int
-vmxnet3_dev_atomic_write_link_status(struct rte_eth_dev *dev,
-				     struct rte_eth_link *link)
-{
-	struct rte_eth_link *dst = &(dev->data->dev_link);
-	struct rte_eth_link *src = link;
-
-	if (rte_atomic64_cmpset((uint64_t *)dst, *(uint64_t *)dst,
-				*(uint64_t *)src) == 0)
-		return -1;
-
-	return 0;
+	return rte_memzone_reserve_aligned(z_name, size, socket_id,
+			RTE_MEMZONE_IOVA_CONTIG, align);
 }
 
 /*
@@ -267,6 +231,7 @@ eth_vmxnet3_dev_init(struct rte_eth_dev *eth_dev)
 	struct rte_pci_device *pci_dev;
 	struct vmxnet3_hw *hw = eth_dev->data->dev_private;
 	uint32_t mac_hi, mac_lo, ver;
+	struct rte_eth_link link;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -368,6 +333,13 @@ eth_vmxnet3_dev_init(struct rte_eth_dev *eth_dev)
 	/* clear shadow stats */
 	memset(hw->saved_tx_stats, 0, sizeof(hw->saved_tx_stats));
 	memset(hw->saved_rx_stats, 0, sizeof(hw->saved_rx_stats));
+
+	/* set the initial link status */
+	memset(&link, 0, sizeof(link));
+	link.link_duplex = ETH_LINK_FULL_DUPLEX;
+	link.link_speed = ETH_SPEED_NUM_10G;
+	link.link_autoneg = ETH_LINK_FIXED;
+	rte_eth_linkstatus_set(eth_dev, &link);
 
 	return 0;
 }
@@ -612,8 +584,11 @@ vmxnet3_setup_driver_shared(struct rte_eth_dev *dev)
 	uint32_t mtu = dev->data->mtu;
 	Vmxnet3_DriverShared *shared = hw->shared;
 	Vmxnet3_DSDevRead *devRead = &shared->devRead;
+	uint64_t rx_offloads = dev->data->dev_conf.rxmode.offloads;
 	uint32_t i;
 	int ret;
+
+	hw->mtu = mtu;
 
 	shared->magic = VMXNET3_REV1_MAGIC;
 	devRead->misc.driverInfo.version = VMXNET3_DRIVER_VERSION_NUM;
@@ -644,6 +619,8 @@ vmxnet3_setup_driver_shared(struct rte_eth_dev *dev)
 		Vmxnet3_TxQueueDesc *tqd = &hw->tqd_start[i];
 		vmxnet3_tx_queue_t *txq  = dev->data->tx_queues[i];
 
+		txq->shared = &hw->tqd_start[i];
+
 		tqd->ctrl.txNumDeferred  = 0;
 		tqd->ctrl.txThreshold    = 1;
 		tqd->conf.txRingBasePA   = txq->cmd_ring.basePA;
@@ -663,6 +640,8 @@ vmxnet3_setup_driver_shared(struct rte_eth_dev *dev)
 	for (i = 0; i < hw->num_rx_queues; i++) {
 		Vmxnet3_RxQueueDesc *rqd  = &hw->rqd_start[i];
 		vmxnet3_rx_queue_t *rxq   = dev->data->rx_queues[i];
+
+		rxq->shared = &hw->rqd_start[i];
 
 		rqd->conf.rxRingBasePA[0] = rxq->cmd_ring[0].basePA;
 		rqd->conf.rxRingBasePA[1] = rxq->cmd_ring[1].basePA;
@@ -685,10 +664,10 @@ vmxnet3_setup_driver_shared(struct rte_eth_dev *dev)
 	devRead->rxFilterConf.rxMode = 0;
 
 	/* Setting up feature flags */
-	if (dev->data->dev_conf.rxmode.hw_ip_checksum)
+	if (rx_offloads & DEV_RX_OFFLOAD_CHECKSUM)
 		devRead->misc.uptFeatures |= VMXNET3_F_RXCSUM;
 
-	if (dev->data->dev_conf.rxmode.enable_lro) {
+	if (rx_offloads & DEV_RX_OFFLOAD_TCP_LRO) {
 		devRead->misc.uptFeatures |= VMXNET3_F_LRO;
 		devRead->misc.maxNumRxSG = 0;
 	}
@@ -853,7 +832,10 @@ vmxnet3_dev_stop(struct rte_eth_dev *dev)
 
 	/* Clear recorded link status */
 	memset(&link, 0, sizeof(link));
-	vmxnet3_dev_atomic_write_link_status(dev, &link);
+	link.link_duplex = ETH_LINK_FULL_DUPLEX;
+	link.link_speed = ETH_SPEED_NUM_10G;
+	link.link_autoneg = ETH_LINK_FIXED;
+	rte_eth_linkstatus_set(dev, &link);
 }
 
 /*
@@ -1054,18 +1036,16 @@ vmxnet3_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 
 		stats->q_errors[i] = rxStats.pktsRxError;
 		stats->ierrors += rxStats.pktsRxError;
-		stats->rx_nombuf += rxStats.pktsRxOutOfBuf;
+		stats->imissed += rxStats.pktsRxOutOfBuf;
 	}
 
 	return 0;
 }
 
 static void
-vmxnet3_dev_info_get(struct rte_eth_dev *dev,
+vmxnet3_dev_info_get(struct rte_eth_dev *dev __rte_unused,
 		     struct rte_eth_dev_info *dev_info)
 {
-	dev_info->pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-
 	dev_info->max_rx_queues = VMXNET3_MAX_RX_QUEUES;
 	dev_info->max_tx_queues = VMXNET3_MAX_TX_QUEUES;
 	dev_info->min_rx_bufsize = 1518 + RTE_PKTMBUF_HEADROOM;
@@ -1090,17 +1070,10 @@ vmxnet3_dev_info_get(struct rte_eth_dev *dev,
 		.nb_mtu_seg_max = VMXNET3_MAX_TXD_PER_PKT,
 	};
 
-	dev_info->rx_offload_capa =
-		DEV_RX_OFFLOAD_VLAN_STRIP |
-		DEV_RX_OFFLOAD_UDP_CKSUM |
-		DEV_RX_OFFLOAD_TCP_CKSUM |
-		DEV_RX_OFFLOAD_TCP_LRO;
-
-	dev_info->tx_offload_capa =
-		DEV_TX_OFFLOAD_VLAN_INSERT |
-		DEV_TX_OFFLOAD_TCP_CKSUM |
-		DEV_TX_OFFLOAD_UDP_CKSUM |
-		DEV_TX_OFFLOAD_TCP_TSO;
+	dev_info->rx_offload_capa = VMXNET3_RX_OFFLOAD_CAP;
+	dev_info->rx_queue_offload_capa = 0;
+	dev_info->tx_offload_capa = VMXNET3_TX_OFFLOAD_CAP;
+	dev_info->tx_queue_offload_capa = 0;
 }
 
 static const uint32_t *
@@ -1117,13 +1090,14 @@ vmxnet3_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 	return NULL;
 }
 
-static void
+static int
 vmxnet3_mac_addr_set(struct rte_eth_dev *dev, struct ether_addr *mac_addr)
 {
 	struct vmxnet3_hw *hw = dev->data->dev_private;
 
 	ether_addr_copy(mac_addr, (struct ether_addr *)(hw->perm_addr));
 	vmxnet3_write_mac(hw, mac_addr->addr_bytes);
+	return 0;
 }
 
 /* return 0 means link status changed, -1 means not changed */
@@ -1132,25 +1106,21 @@ __vmxnet3_dev_link_update(struct rte_eth_dev *dev,
 			  __rte_unused int wait_to_complete)
 {
 	struct vmxnet3_hw *hw = dev->data->dev_private;
-	struct rte_eth_link old = { 0 }, link;
+	struct rte_eth_link link;
 	uint32_t ret;
 
 	memset(&link, 0, sizeof(link));
-	vmxnet3_dev_atomic_read_link_status(dev, &old);
 
 	VMXNET3_WRITE_BAR1_REG(hw, VMXNET3_REG_CMD, VMXNET3_CMD_GET_LINK);
 	ret = VMXNET3_READ_BAR1_REG(hw, VMXNET3_REG_CMD);
 
-	if (ret & 0x1) {
+	if (ret & 0x1)
 		link.link_status = ETH_LINK_UP;
-		link.link_duplex = ETH_LINK_FULL_DUPLEX;
-		link.link_speed = ETH_SPEED_NUM_10G;
-		link.link_autoneg = ETH_LINK_AUTONEG;
-	}
+	link.link_duplex = ETH_LINK_FULL_DUPLEX;
+	link.link_speed = ETH_SPEED_NUM_10G;
+	link.link_autoneg = ETH_LINK_FIXED;
 
-	vmxnet3_dev_atomic_write_link_status(dev, &link);
-
-	return (old.link_status == link.link_status) ? -1 : 0;
+	return rte_eth_linkstatus_set(dev, &link);
 }
 
 static int
@@ -1197,8 +1167,9 @@ vmxnet3_dev_promiscuous_disable(struct rte_eth_dev *dev)
 {
 	struct vmxnet3_hw *hw = dev->data->dev_private;
 	uint32_t *vf_table = hw->shared->devRead.rxFilterConf.vfTable;
+	uint64_t rx_offloads = dev->data->dev_conf.rxmode.offloads;
 
-	if (dev->data->dev_conf.rxmode.hw_vlan_filter)
+	if (rx_offloads & DEV_RX_OFFLOAD_VLAN_FILTER)
 		memcpy(vf_table, hw->shadow_vfta, VMXNET3_VFT_TABLE_SIZE);
 	else
 		memset(vf_table, 0xff, VMXNET3_VFT_TABLE_SIZE);
@@ -1260,9 +1231,10 @@ vmxnet3_dev_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 	struct vmxnet3_hw *hw = dev->data->dev_private;
 	Vmxnet3_DSDevRead *devRead = &hw->shared->devRead;
 	uint32_t *vf_table = devRead->rxFilterConf.vfTable;
+	uint64_t rx_offloads = dev->data->dev_conf.rxmode.offloads;
 
 	if (mask & ETH_VLAN_STRIP_MASK) {
-		if (dev->data->dev_conf.rxmode.hw_vlan_strip)
+		if (rx_offloads & DEV_RX_OFFLOAD_VLAN_STRIP)
 			devRead->misc.uptFeatures |= UPT1_F_RXVLAN;
 		else
 			devRead->misc.uptFeatures &= ~UPT1_F_RXVLAN;
@@ -1272,7 +1244,7 @@ vmxnet3_dev_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 	}
 
 	if (mask & ETH_VLAN_FILTER_MASK) {
-		if (dev->data->dev_conf.rxmode.hw_vlan_filter)
+		if (rx_offloads & DEV_RX_OFFLOAD_VLAN_FILTER)
 			memcpy(vf_table, hw->shadow_vfta, VMXNET3_VFT_TABLE_SIZE);
 		else
 			memset(vf_table, 0xff, VMXNET3_VFT_TABLE_SIZE);

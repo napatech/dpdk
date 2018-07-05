@@ -61,7 +61,7 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 	struct rte_eth_dev_info dev_info;
 	struct rte_eth_txconf txq_conf;
 
-	if (port >= rte_eth_dev_count())
+	if (!rte_eth_dev_is_valid_port(port))
 		return -1;
 
 	rte_eth_dev_info_get(port, &dev_info);
@@ -176,7 +176,7 @@ parse_args(int argc, char **argv)
 }
 
 static void
-check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
+check_all_ports_link_status(uint32_t port_mask)
 {
 #define CHECK_INTERVAL 100 /* 100ms */
 #define MAX_CHECK_TIME 90 /* 9s (90 * 100ms) in total */
@@ -189,7 +189,7 @@ check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
 		if (force_quit)
 			return;
 		all_ports_up = 1;
-		for (portid = 0; portid < port_num; portid++) {
+		RTE_ETH_FOREACH_DEV(portid) {
 			if (force_quit)
 				return;
 			if ((port_mask & (1 << portid)) == 0)
@@ -278,7 +278,7 @@ main(int argc, char **argv)
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "Invalid arguments\n");
 
-	nb_ports = rte_eth_dev_count();
+	nb_ports = rte_eth_dev_count_avail();
 
 	mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
 		MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
@@ -287,7 +287,7 @@ main(int argc, char **argv)
 		rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
 
 	/* Initialize ports. */
-	for (portid = 0; portid < nb_ports; portid++) {
+	RTE_ETH_FOREACH_DEV(portid) {
 		struct ether_addr eth;
 		int w, j;
 		int ret;
@@ -339,7 +339,7 @@ main(int argc, char **argv)
 		return 0;
 	}
 
-	check_all_ports_link_status(nb_ports, enabled_port_mask);
+	check_all_ports_link_status(enabled_port_mask);
 	rte_eal_remote_launch(run_monitor, NULL, lcore_id);
 
 	if (power_manager_init() < 0) {

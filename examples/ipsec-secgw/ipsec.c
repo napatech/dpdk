@@ -36,6 +36,7 @@ set_ipsec_conf(struct ipsec_sa *sa, struct rte_security_ipsec_xform *ipsec)
 		}
 		/* TODO support for Transport and IPV6 tunnel */
 	}
+	ipsec->esn_soft_limit = IPSEC_OFFLOAD_ESN_SOFTLIMIT;
 }
 
 static inline int
@@ -186,14 +187,8 @@ create_session(struct ipsec_ctx *ipsec_ctx, struct ipsec_sa *sa)
 					.rss_key_len = 40,
 				};
 				struct rte_eth_dev *eth_dev;
-				union {
-					struct rte_flow_action_rss rss;
-					struct {
-					const struct rte_eth_rss_conf *rss_conf;
-					uint16_t num;
-					uint16_t queue[RTE_MAX_QUEUES_PER_PORT];
-					} local;
-				} action_rss;
+				uint16_t queue[RTE_MAX_QUEUES_PER_PORT];
+				struct rte_flow_action_rss action_rss;
 				unsigned int i;
 				unsigned int j;
 
@@ -207,9 +202,14 @@ create_session(struct ipsec_ctx *ipsec_ctx, struct ipsec_sa *sa)
 				for (i = 0, j = 0;
 				     i < eth_dev->data->nb_rx_queues; ++i)
 					if (eth_dev->data->rx_queues[i])
-						action_rss.local.queue[j++] = i;
-				action_rss.local.num = j;
-				action_rss.local.rss_conf = &rss_conf;
+						queue[j++] = i;
+				action_rss = (struct rte_flow_action_rss){
+					.types = rss_conf.rss_hf,
+					.key_len = rss_conf.rss_key_len,
+					.queue_num = j,
+					.key = rss_key,
+					.queue = queue,
+				};
 				ret = rte_flow_validate(sa->portid, &sa->attr,
 							sa->pattern, sa->action,
 							&err);
@@ -270,11 +270,14 @@ flow_create_failure:
 			 * the packet is received, this userdata will be
 			 * retrieved using the metadata from the packet.
 			 *
-			 * This is required only for inbound SAs.
+			 * The PMD is expected to set similar metadata for other
+			 * operations, like rte_eth_event, which are tied to
+			 * security session. In such cases, the userdata could
+			 * be obtained to uniquely identify the security
+			 * parameters denoted.
 			 */
 
-			if (sa->direction == RTE_SECURITY_IPSEC_SA_DIR_INGRESS)
-				sess_conf.userdata = (void *) sa;
+			sess_conf.userdata = (void *) sa;
 
 			sa->sec_session = rte_security_session_create(ctx,
 					&sess_conf, ipsec_ctx->session_pool);
@@ -324,18 +327,6 @@ flow_create_failure:
 
 		rte_cryptodev_info_get(ipsec_ctx->tbl[cdev_id_qp].id,
 				&cdev_info);
-		if (cdev_info.sym.max_nb_sessions_per_qp > 0) {
-			ret = rte_cryptodev_queue_pair_attach_sym_session(
-					ipsec_ctx->tbl[cdev_id_qp].id,
-					ipsec_ctx->tbl[cdev_id_qp].qp,
-					sa->crypto_session);
-			if (ret < 0) {
-				RTE_LOG(ERR, IPSEC,
-					"Session cannot be attached to qp %u\n",
-					ipsec_ctx->tbl[cdev_id_qp].qp);
-				return -1;
-			}
-		}
 	}
 	sa->cdev_id_qp = cdev_id_qp;
 
@@ -345,13 +336,19 @@ flow_create_failure:
 static inline void
 enqueue_cop(struct cdev_qp *cqp, struct rte_crypto_op *cop)
 {
-	int32_t ret, i;
+	int32_t ret = 0, i;
 
 	cqp->buf[cqp->len++] = cop;
 
 	if (cqp->len == MAX_PKT_BURST) {
-		ret = rte_cryptodev_enqueue_burst(cqp->id, cqp->qp,
-				cqp->buf, cqp->len);
+		int enq_size = cqp->len;
+		if ((cqp->in_flight + enq_size) > MAX_INFLIGHT)
+			enq_size -=
+			    (int)((cqp->in_flight + enq_size) - MAX_INFLIGHT);
+
+		if (enq_size > 0)
+			ret = rte_cryptodev_enqueue_burst(cqp->id, cqp->qp,
+					cqp->buf, enq_size);
 		if (ret < cqp->len) {
 			RTE_LOG_DP(DEBUG, IPSEC, "Cryptodev %u queue %u:"
 					" enqueued %u crypto ops out of %u\n",
@@ -486,9 +483,12 @@ ipsec_dequeue(ipsec_xform_fn xform_func, struct ipsec_ctx *ipsec_ctx,
 	struct ipsec_sa *sa;
 	struct rte_mbuf *pkt;
 
-	for (i = 0; i < ipsec_ctx->nb_qps && nb_pkts < max_pkts;) {
+	for (i = 0; i < ipsec_ctx->nb_qps && nb_pkts < max_pkts; i++) {
 		struct cdev_qp *cqp;
-		cqp = &ipsec_ctx->tbl[ipsec_ctx->last_qp];
+
+		cqp = &ipsec_ctx->tbl[ipsec_ctx->last_qp++];
+		if (ipsec_ctx->last_qp == ipsec_ctx->nb_qps)
+			ipsec_ctx->last_qp %= ipsec_ctx->nb_qps;
 
 		while (ipsec_ctx->ol_pkts_cnt > 0 && nb_pkts < max_pkts) {
 			pkt = ipsec_ctx->ol_pkts[--ipsec_ctx->ol_pkts_cnt];
@@ -503,13 +503,8 @@ ipsec_dequeue(ipsec_xform_fn xform_func, struct ipsec_ctx *ipsec_ctx,
 			pkts[nb_pkts++] = pkt;
 		}
 
-		if (cqp->in_flight == 0) {
-			ipsec_ctx->last_qp++;
-			if (ipsec_ctx->last_qp == ipsec_ctx->nb_qps)
-				ipsec_ctx->last_qp %= ipsec_ctx->nb_qps;
-			i++;
+		if (cqp->in_flight == 0)
 			continue;
-		}
 
 		nb_cops = rte_cryptodev_dequeue_burst(cqp->id, cqp->qp,
 				cops, max_pkts - nb_pkts);
@@ -533,12 +528,6 @@ ipsec_dequeue(ipsec_xform_fn xform_func, struct ipsec_ctx *ipsec_ctx,
 				}
 			}
 			pkts[nb_pkts++] = pkt;
-			if (cqp->in_flight < max_pkts) {
-				ipsec_ctx->last_qp++;
-				if (ipsec_ctx->last_qp == ipsec_ctx->nb_qps)
-					ipsec_ctx->last_qp %= ipsec_ctx->nb_qps;
-				i++;
-			}
 		}
 	}
 

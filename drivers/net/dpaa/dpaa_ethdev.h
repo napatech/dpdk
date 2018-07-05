@@ -51,6 +51,10 @@
 /*Maximum number of slots available in TX ring*/
 #define DPAA_TX_BURST_SIZE	7
 
+/* Optimal burst size for RX and TX as default */
+#define DPAA_DEF_RX_BURST_SIZE 7
+#define DPAA_DEF_TX_BURST_SIZE DPAA_TX_BURST_SIZE
+
 #ifndef VLAN_TAG_SIZE
 #define VLAN_TAG_SIZE   4 /** < Vlan Header Length */
 #endif
@@ -74,14 +78,10 @@
 #define DPAA_DEBUG_FQ_TX_ERROR   1
 
 #define DPAA_RSS_OFFLOAD_ALL ( \
-	ETH_RSS_FRAG_IPV4 | \
-	ETH_RSS_NONFRAG_IPV4_TCP | \
-	ETH_RSS_NONFRAG_IPV4_UDP | \
-	ETH_RSS_NONFRAG_IPV4_SCTP | \
-	ETH_RSS_FRAG_IPV6 | \
-	ETH_RSS_NONFRAG_IPV6_TCP | \
-	ETH_RSS_NONFRAG_IPV6_UDP | \
-	ETH_RSS_NONFRAG_IPV6_SCTP)
+	ETH_RSS_IP | \
+	ETH_RSS_UDP | \
+	ETH_RSS_TCP | \
+	ETH_RSS_SCTP)
 
 #define DPAA_TX_CKSUM_OFFLOAD_MASK (             \
 		PKT_TX_IP_CKSUM |                \

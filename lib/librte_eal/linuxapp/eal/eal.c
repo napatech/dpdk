@@ -74,8 +74,8 @@ static int mem_cfg_fd = -1;
 static struct flock wr_lock = {
 		.l_type = F_WRLCK,
 		.l_whence = SEEK_SET,
-		.l_start = offsetof(struct rte_mem_config, memseg),
-		.l_len = sizeof(early_mem_config.memseg),
+		.l_start = offsetof(struct rte_mem_config, memsegs),
+		.l_len = sizeof(early_mem_config.memsegs),
 };
 
 /* Address of global and public configuration */
@@ -91,6 +91,68 @@ struct internal_config internal_config;
 
 /* used by rte_rdtsc() */
 int rte_cycles_vmware_tsc_map;
+
+/* platform-specific runtime dir */
+static char runtime_dir[PATH_MAX];
+
+static const char *default_runtime_dir = "/var/run";
+
+int
+eal_create_runtime_dir(void)
+{
+	const char *directory = default_runtime_dir;
+	const char *xdg_runtime_dir = getenv("XDG_RUNTIME_DIR");
+	const char *fallback = "/tmp";
+	char tmp[PATH_MAX];
+	int ret;
+
+	if (getuid() != 0) {
+		/* try XDG path first, fall back to /tmp */
+		if (xdg_runtime_dir != NULL)
+			directory = xdg_runtime_dir;
+		else
+			directory = fallback;
+	}
+	/* create DPDK subdirectory under runtime dir */
+	ret = snprintf(tmp, sizeof(tmp), "%s/dpdk", directory);
+	if (ret < 0 || ret == sizeof(tmp)) {
+		RTE_LOG(ERR, EAL, "Error creating DPDK runtime path name\n");
+		return -1;
+	}
+
+	/* create prefix-specific subdirectory under DPDK runtime dir */
+	ret = snprintf(runtime_dir, sizeof(runtime_dir), "%s/%s",
+			tmp, internal_config.hugefile_prefix);
+	if (ret < 0 || ret == sizeof(runtime_dir)) {
+		RTE_LOG(ERR, EAL, "Error creating prefix-specific runtime path name\n");
+		return -1;
+	}
+
+	/* create the path if it doesn't exist. no "mkdir -p" here, so do it
+	 * step by step.
+	 */
+	ret = mkdir(tmp, 0700);
+	if (ret < 0 && errno != EEXIST) {
+		RTE_LOG(ERR, EAL, "Error creating '%s': %s\n",
+			tmp, strerror(errno));
+		return -1;
+	}
+
+	ret = mkdir(runtime_dir, 0700);
+	if (ret < 0 && errno != EEXIST) {
+		RTE_LOG(ERR, EAL, "Error creating '%s': %s\n",
+			runtime_dir, strerror(errno));
+		return -1;
+	}
+
+	return 0;
+}
+
+const char *
+eal_get_runtime_dir(void)
+{
+	return runtime_dir;
+}
 
 /* Return user provided mbuf pool ops name */
 const char * __rte_experimental
@@ -348,6 +410,8 @@ eal_usage(const char *prgname)
 	       "  --"OPT_BASE_VIRTADDR"     Base virtual address\n"
 	       "  --"OPT_CREATE_UIO_DEV"    Create /dev/uioX (usually done by hotplug)\n"
 	       "  --"OPT_VFIO_INTR"         Interrupt mode for VFIO (legacy|msi|msix)\n"
+	       "  --"OPT_LEGACY_MEM"        Legacy memory mode (no dynamic allocation, contiguous segments)\n"
+	       "  --"OPT_SINGLE_FILE_SEGMENTS" Put all hugepage memory in single files\n"
 	       "\n");
 	/* Allow the application to print its usage message too if hook is set */
 	if ( rte_application_usage_hook ) {
@@ -591,7 +655,8 @@ eal_parse_args(int argc, char **argv)
 			break;
 
 		case OPT_MBUF_POOL_OPS_NAME_NUM:
-			internal_config.user_mbuf_pool_ops_name = optarg;
+			internal_config.user_mbuf_pool_ops_name =
+			    strdup(optarg);
 			break;
 
 		default:
@@ -638,23 +703,23 @@ out:
 	return ret;
 }
 
+static int
+check_socket(const struct rte_memseg_list *msl, void *arg)
+{
+	int *socket_id = arg;
+
+	return *socket_id == msl->socket_id;
+}
+
 static void
 eal_check_mem_on_local_socket(void)
 {
-	const struct rte_memseg *ms;
-	int i, socket_id;
+	int socket_id;
 
 	socket_id = rte_lcore_to_socket_id(rte_config.master_lcore);
 
-	ms = rte_eal_get_physmem_layout();
-
-	for (i = 0; i < RTE_MAX_MEMSEG; i++)
-		if (ms[i].socket_id == socket_id &&
-				ms[i].len > 0)
-			return;
-
-	RTE_LOG(WARNING, EAL, "WARNING: Master core has no "
-			"memory on local socket!\n");
+	if (rte_memseg_list_walk(check_socket, &socket_id) == 0)
+		RTE_LOG(WARNING, EAL, "WARNING: Master core has no memory on local socket!\n");
 }
 
 static int
@@ -669,6 +734,8 @@ rte_eal_mcfg_complete(void)
 	/* ALL shared mem_config related INIT DONE */
 	if (rte_config.process_type == RTE_PROC_PRIMARY)
 		rte_config.mem_config->magic = RTE_MAGIC;
+
+	internal_config.init_complete = 1;
 }
 
 /*
@@ -689,24 +756,8 @@ rte_eal_iopl_init(void)
 #ifdef VFIO_PRESENT
 static int rte_eal_vfio_setup(void)
 {
-	int vfio_enabled = 0;
-
 	if (rte_vfio_enable("vfio"))
 		return -1;
-	vfio_enabled = rte_vfio_is_enabled("vfio");
-
-	if (vfio_enabled) {
-
-		/* if we are primary process, create a thread to communicate with
-		 * secondary processes. the thread will use a socket to wait for
-		 * requests from secondary process to send open file descriptors,
-		 * because VFIO does not allow multiple open descriptors on a group or
-		 * VFIO container.
-		 */
-		if (internal_config.process_type == RTE_PROC_PRIMARY &&
-				vfio_mp_sync_setup() < 0)
-			return -1;
-	}
 
 	return 0;
 }
@@ -766,6 +817,13 @@ rte_eal_init(int argc, char **argv)
 		return -1;
 	}
 
+	/* create runtime data directory */
+	if (eal_create_runtime_dir() < 0) {
+		rte_eal_init_alert("Cannot create runtime directory\n");
+		rte_errno = EACCES;
+		return -1;
+	}
+
 	if (eal_plugins_init() < 0) {
 		rte_eal_init_alert("Cannot init plugins\n");
 		rte_errno = EINVAL;
@@ -777,6 +835,19 @@ rte_eal_init(int argc, char **argv)
 		rte_errno = ENODEV;
 		rte_atomic32_clear(&run_once);
 		return -1;
+	}
+
+	rte_config_init();
+
+	/* Put mp channel init before bus scan so that we can init the vdev
+	 * bus through mp channel in the secondary process before the bus scan.
+	 */
+	if (rte_mp_channel_init() < 0) {
+		rte_eal_init_alert("failed to init mp channel\n");
+		if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
+			rte_errno = EFAULT;
+			return -1;
+		}
 	}
 
 	if (rte_bus_scan()) {
@@ -798,13 +869,17 @@ rte_eal_init(int argc, char **argv)
 			"KNI module inserted\n");
 	}
 
-	if (internal_config.no_hugetlbfs == 0 &&
-			internal_config.process_type != RTE_PROC_SECONDARY &&
-			eal_hugepage_info_init() < 0) {
-		rte_eal_init_alert("Cannot get hugepage information.");
-		rte_errno = EACCES;
-		rte_atomic32_clear(&run_once);
-		return -1;
+	if (internal_config.no_hugetlbfs == 0) {
+		/* rte_config isn't initialized yet */
+		ret = internal_config.process_type == RTE_PROC_PRIMARY ?
+				eal_hugepage_info_init() :
+				eal_hugepage_info_read();
+		if (ret < 0) {
+			rte_eal_init_alert("Cannot get hugepage information.");
+			rte_errno = EACCES;
+			rte_atomic32_clear(&run_once);
+			return -1;
+		}
 	}
 
 	if (internal_config.memory == 0 && internal_config.force_sockets == 0) {
@@ -825,21 +900,11 @@ rte_eal_init(int argc, char **argv)
 
 	rte_srand(rte_rdtsc());
 
-	rte_config_init();
-
 	if (rte_eal_log_init(logid, internal_config.syslog_facility) < 0) {
 		rte_eal_init_alert("Cannot init logging.");
 		rte_errno = ENOMEM;
 		rte_atomic32_clear(&run_once);
 		return -1;
-	}
-
-	if (rte_mp_channel_init() < 0) {
-		rte_eal_init_alert("failed to init mp channel\n");
-		if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-			rte_errno = EFAULT;
-			return -1;
-		}
 	}
 
 #ifdef VFIO_PRESENT
@@ -850,6 +915,15 @@ rte_eal_init(int argc, char **argv)
 		return -1;
 	}
 #endif
+	/* in secondary processes, memory init may allocate additional fbarrays
+	 * not present in primary processes, so to avoid any potential issues,
+	 * initialize memzones first.
+	 */
+	if (rte_eal_memzone_init() < 0) {
+		rte_eal_init_alert("Cannot init memzone\n");
+		rte_errno = ENODEV;
+		return -1;
+	}
 
 	if (rte_eal_memory_init() < 0) {
 		rte_eal_init_alert("Cannot init memory\n");
@@ -860,8 +934,8 @@ rte_eal_init(int argc, char **argv)
 	/* the directories are locked during eal_hugepage_info_init */
 	eal_hugedirs_unlock();
 
-	if (rte_eal_memzone_init() < 0) {
-		rte_eal_init_alert("Cannot init memzone\n");
+	if (rte_eal_malloc_heap_init() < 0) {
+		rte_eal_init_alert("Cannot init malloc heap\n");
 		rte_errno = ENODEV;
 		return -1;
 	}
@@ -888,7 +962,7 @@ rte_eal_init(int argc, char **argv)
 
 	eal_thread_init_master(rte_config.master_lcore);
 
-	ret = eal_thread_dump_affinity(cpuset, RTE_CPU_AFFINITY_STR_LEN);
+	ret = eal_thread_dump_affinity(cpuset, sizeof(cpuset));
 
 	RTE_LOG(DEBUG, EAL, "Master lcore %u is ready (tid=%x;cpuset=[%s%s])\n",
 		rte_config.master_lcore, (int)thread_id, cpuset,
@@ -919,7 +993,7 @@ rte_eal_init(int argc, char **argv)
 			rte_panic("Cannot create thread\n");
 
 		/* Set thread_name for aid in debugging. */
-		snprintf(thread_name, RTE_MAX_THREAD_NAME_LEN,
+		snprintf(thread_name, sizeof(thread_name),
 			"lcore-slave-%d", i);
 		ret = rte_thread_setname(lcore_config[i].thread_id,
 						thread_name);
@@ -949,6 +1023,12 @@ rte_eal_init(int argc, char **argv)
 		rte_errno = ENOTSUP;
 		return -1;
 	}
+
+#ifdef VFIO_PRESENT
+	/* Register mp action after probe() so that we got enough info */
+	if (rte_vfio_is_enabled("vfio") && vfio_mp_sync_setup() < 0)
+		return -1;
+#endif
 
 	/* initialize default service/lcore mappings and start running. Ignore
 	 * -ENOTSUP, as it indicates no service coremask passed to EAL.

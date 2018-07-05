@@ -6,7 +6,9 @@
 # To build this example as a standalone application with an already-installed
 # DPDK instance, use 'make'
 
-ext_deps += cc.find_library('pqos')
+pqos = cc.find_library('pqos', required: false)
+build = pqos.found()
+ext_deps += pqos
 cflags += '-D_GNU_SOURCE'
 cflags += '-I/usr/local/include' # assume pqos lib installed in /usr/local
 sources = files(

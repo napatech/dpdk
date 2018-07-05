@@ -338,13 +338,12 @@ crc32c_1word(uint32_t data, uint32_t init_val)
 static inline uint32_t
 crc32c_2words(uint64_t data, uint32_t init_val)
 {
+	uint32_t crc, term1, term2;
 	union {
 		uint64_t u64;
 		uint32_t u32[2];
 	} d;
 	d.u64 = data;
-
-	uint32_t crc, term1, term2;
 
 	crc = init_val;
 	crc ^= d.u32[0];
@@ -399,9 +398,9 @@ crc32c_sse42_u64_mimic(uint64_t data, uint64_t init_val)
 	} d;
 
 	d.u64 = data;
-	init_val = crc32c_sse42_u32(d.u32[0], init_val);
-	init_val = crc32c_sse42_u32(d.u32[1], init_val);
-	return init_val;
+	init_val = crc32c_sse42_u32(d.u32[0], (uint32_t)init_val);
+	init_val = crc32c_sse42_u32(d.u32[1], (uint32_t)init_val);
+	return (uint32_t)init_val;
 }
 #endif
 
@@ -413,7 +412,7 @@ crc32c_sse42_u64(uint64_t data, uint64_t init_val)
 			"crc32q %[data], %[init_val];"
 			: [init_val] "+r" (init_val)
 			: [data] "rm" (data));
-	return init_val;
+	return (uint32_t)init_val;
 }
 #endif
 

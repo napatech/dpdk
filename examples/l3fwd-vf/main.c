@@ -575,7 +575,7 @@ check_lcore_params(void)
 }
 
 static int
-check_port_config(const unsigned nb_ports)
+check_port_config(void)
 {
 	unsigned portid;
 	uint16_t i;
@@ -586,7 +586,7 @@ check_port_config(const unsigned nb_ports)
 			printf("port %u is not enabled in port mask\n", portid);
 			return -1;
 		}
-		if (portid >= nb_ports) {
+		if (!rte_eth_dev_is_valid_port(portid)) {
 			printf("port %u is not present on the board\n", portid);
 			return -1;
 		}
@@ -648,11 +648,10 @@ static void
 signal_handler(int signum)
 {
 	uint16_t portid;
-	uint16_t nb_ports = rte_eth_dev_count();
 
 	/* When we receive a SIGINT signal */
 	if (signum == SIGINT) {
-		for (portid = 0; portid < nb_ports; portid++) {
+		RTE_ETH_FOREACH_DEV(portid) {
 			/* skip ports that are not enabled */
 			if ((enabled_port_mask & (1 << portid)) == 0)
 				continue;
@@ -950,15 +949,15 @@ main(int argc, char **argv)
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "init_lcore_rx_queues failed\n");
 
-	nb_ports = rte_eth_dev_count();
+	nb_ports = rte_eth_dev_count_avail();
 
-	if (check_port_config(nb_ports) < 0)
+	if (check_port_config() < 0)
 		rte_exit(EXIT_FAILURE, "check_port_config failed\n");
 
 	nb_lcores = rte_lcore_count();
 
 	/* initialize all ports */
-	for (portid = 0; portid < nb_ports; portid++) {
+	RTE_ETH_FOREACH_DEV(portid) {
 		struct rte_eth_conf local_port_conf = port_conf;
 
 		/* skip ports that are not enabled */
@@ -1063,7 +1062,7 @@ main(int argc, char **argv)
 	printf("\n");
 
 	/* start ports */
-	for (portid = 0; portid < nb_ports; portid++) {
+	RTE_ETH_FOREACH_DEV(portid) {
 		if ((enabled_port_mask & (1 << portid)) == 0) {
 			continue;
 		}

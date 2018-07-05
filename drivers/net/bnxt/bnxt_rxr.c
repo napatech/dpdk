@@ -1,34 +1,6 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) Broadcom Limited.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Broadcom Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2014-2018 Broadcom
+ * All rights reserved.
  */
 
 #include <inttypes.h>
@@ -69,13 +41,14 @@ static inline int bnxt_alloc_rx_data(struct bnxt_rx_queue *rxq,
 
 	mbuf = __bnxt_alloc_rx_data(rxq->mb_pool);
 	if (!mbuf) {
-		rte_atomic64_inc(&rxq->bp->rx_mbuf_alloc_fail);
+		rte_atomic64_inc(&rxq->rx_mbuf_alloc_fail);
 		return -ENOMEM;
 	}
 
 	rx_buf->mbuf = mbuf;
+	mbuf->data_off = RTE_PKTMBUF_HEADROOM;
 
-	rxbd->addr = rte_cpu_to_le_64(rte_mbuf_data_iova_default(mbuf));
+	rxbd->address = rte_cpu_to_le_64(rte_mbuf_data_iova_default(mbuf));
 
 	return 0;
 }
@@ -90,7 +63,7 @@ static inline int bnxt_alloc_ag_data(struct bnxt_rx_queue *rxq,
 
 	mbuf = __bnxt_alloc_rx_data(rxq->mb_pool);
 	if (!mbuf) {
-		rte_atomic64_inc(&rxq->bp->rx_mbuf_alloc_fail);
+		rte_atomic64_inc(&rxq->rx_mbuf_alloc_fail);
 		return -ENOMEM;
 	}
 
@@ -101,8 +74,9 @@ static inline int bnxt_alloc_ag_data(struct bnxt_rx_queue *rxq,
 
 
 	rx_buf->mbuf = mbuf;
+	mbuf->data_off = RTE_PKTMBUF_HEADROOM;
 
-	rxbd->addr = rte_cpu_to_le_64(rte_mbuf_data_iova_default(mbuf));
+	rxbd->address = rte_cpu_to_le_64(rte_mbuf_data_iova_default(mbuf));
 
 	return 0;
 }
@@ -123,7 +97,7 @@ static inline void bnxt_reuse_rx_mbuf(struct bnxt_rx_ring_info *rxr,
 
 	prod_bd = &rxr->rx_desc_ring[prod];
 
-	prod_bd->addr = rte_cpu_to_le_64(rte_mbuf_data_iova_default(mbuf));
+	prod_bd->address = rte_cpu_to_le_64(rte_mbuf_data_iova_default(mbuf));
 
 	rxr->rx_prod = prod;
 }
@@ -143,7 +117,7 @@ static void bnxt_reuse_ag_mbuf(struct bnxt_rx_ring_info *rxr, uint16_t cons,
 	prod_bd = &rxr->ag_desc_ring[prod];
 	cons_bd = &rxr->ag_desc_ring[cons];
 
-	prod_bd->addr = cons_bd->addr;
+	prod_bd->address = cons_bd->addr;
 }
 #endif
 
@@ -327,7 +301,7 @@ static inline struct rte_mbuf *bnxt_tpa_end(
 	struct rte_mbuf *new_data = __bnxt_alloc_rx_data(rxq->mb_pool);
 	RTE_ASSERT(new_data != NULL);
 	if (!new_data) {
-		rte_atomic64_inc(&rxq->bp->rx_mbuf_alloc_fail);
+		rte_atomic64_inc(&rxq->rx_mbuf_alloc_fail);
 		return NULL;
 	}
 	tpa_info->mbuf = new_data;
@@ -490,11 +464,15 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 
 	if (likely(RX_CMP_IP_CS_OK(rxcmp1)))
 		mbuf->ol_flags |= PKT_RX_IP_CKSUM_GOOD;
+	else if (likely(RX_CMP_IP_CS_UNKNOWN(rxcmp1)))
+		mbuf->ol_flags |= PKT_RX_IP_CKSUM_UNKNOWN;
 	else
 		mbuf->ol_flags |= PKT_RX_IP_CKSUM_BAD;
 
 	if (likely(RX_CMP_L4_CS_OK(rxcmp1)))
 		mbuf->ol_flags |= PKT_RX_L4_CKSUM_GOOD;
+	else if (likely(RX_CMP_L4_CS_UNKNOWN(rxcmp1)))
+		mbuf->ol_flags |= PKT_RX_L4_CKSUM_UNKNOWN;
 	else
 		mbuf->ol_flags |= PKT_RX_L4_CKSUM_BAD;
 
@@ -560,6 +538,7 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	uint16_t prod = rxr->rx_prod;
 	uint16_t ag_prod = rxr->ag_prod;
 	int rc = 0;
+	bool evt = false;
 
 	/* If Rx Q was stopped return */
 	if (rxq->rx_deferred_start)
@@ -584,14 +563,19 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 				nb_rx_pkts++;
 			if (rc == -EBUSY)	/* partial completion */
 				break;
+		} else {
+			evt =
+			bnxt_event_hwrm_resp_handler(rxq->bp,
+						     (struct cmpl_base *)rxcmp);
 		}
+
 		raw_cons = NEXT_RAW_CMP(raw_cons);
-		if (nb_rx_pkts == nb_pkts)
+		if (nb_rx_pkts == nb_pkts || evt)
 			break;
 	}
 
 	cpr->cp_raw_cons = raw_cons;
-	if (prod == rxr->rx_prod && ag_prod == rxr->ag_prod) {
+	if ((prod == rxr->rx_prod && ag_prod == rxr->ag_prod) && !evt) {
 		/*
 		 * For PMD, there is no need to keep on pushing to REARM
 		 * the doorbell if there are no new completions
@@ -600,9 +584,12 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	}
 
 	B_CP_DIS_DB(cpr, cpr->cp_raw_cons);
-	B_RX_DB(rxr->rx_doorbell, rxr->rx_prod);
+	if (prod != rxr->rx_prod)
+		B_RX_DB(rxr->rx_doorbell, rxr->rx_prod);
+
 	/* Ring the AGG ring DB */
-	B_RX_DB(rxr->ag_doorbell, rxr->ag_prod);
+	if (ag_prod != rxr->ag_prod)
+		B_RX_DB(rxr->ag_doorbell, rxr->ag_prod);
 
 	/* Attempt to alloc Rx buf in case of a previous allocation failure. */
 	if (rc == -ENOMEM) {
@@ -755,7 +742,7 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 	if (rxq->rx_buf_use_size <= size)
 		size = rxq->rx_buf_use_size;
 
-	type = RX_PROD_PKT_BD_TYPE_RX_PROD_PKT;
+	type = RX_PROD_PKT_BD_TYPE_RX_PROD_PKT | RX_PROD_PKT_BD_FLAGS_EOP_PAD;
 
 	rxr = rxq->rx_ring;
 	ring = rxr->rx_ring_struct;
@@ -795,7 +782,7 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 			rxr->tpa_info[i].mbuf =
 				__bnxt_alloc_rx_data(rxq->mb_pool);
 			if (!rxr->tpa_info[i].mbuf) {
-				rte_atomic64_inc(&rxq->bp->rx_mbuf_alloc_fail);
+				rte_atomic64_inc(&rxq->rx_mbuf_alloc_fail);
 				return -ENOMEM;
 			}
 		}

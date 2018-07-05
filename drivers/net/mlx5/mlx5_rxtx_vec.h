@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2017 6WIND S.A.
- * Copyright 2017 Mellanox.
+ * Copyright 2017 Mellanox Technologies, Ltd
  */
 
 #ifndef RTE_PMD_MLX5_RXTX_VEC_H_
@@ -87,7 +87,8 @@ mlx5_rx_replenish_bulk_mbuf(struct mlx5_rxq_data *rxq, uint16_t n)
 	const uint16_t q_mask = q_n - 1;
 	uint16_t elts_idx = rxq->rq_ci & q_mask;
 	struct rte_mbuf **elts = &(*rxq->elts)[elts_idx];
-	volatile struct mlx5_wqe_data_seg *wq = &(*rxq->wqes)[elts_idx];
+	volatile struct mlx5_wqe_data_seg *wq =
+		&((volatile struct mlx5_wqe_data_seg *)rxq->wqes)[elts_idx];
 	unsigned int i;
 
 	assert(n >= MLX5_VPMD_RXQ_RPLNSH_THRESH);
@@ -99,9 +100,13 @@ mlx5_rx_replenish_bulk_mbuf(struct mlx5_rxq_data *rxq, uint16_t n)
 		rxq->stats.rx_nombuf += n;
 		return;
 	}
-	for (i = 0; i < n; ++i)
+	for (i = 0; i < n; ++i) {
 		wq[i].addr = rte_cpu_to_be_64((uintptr_t)elts[i]->buf_addr +
 					      RTE_PKTMBUF_HEADROOM);
+		/* If there's only one MR, no need to replace LKey in WQE. */
+		if (unlikely(mlx5_mr_btree_len(&rxq->mr_ctrl.cache_bh) > 1))
+			wq[i].lkey = mlx5_rx_mb2mr(rxq, elts[i]);
+	}
 	rxq->rq_ci += n;
 	/* Prevent overflowing into consumed mbufs. */
 	elts_idx = rxq->rq_ci & q_mask;

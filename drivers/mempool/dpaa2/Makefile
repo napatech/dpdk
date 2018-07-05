@@ -9,14 +9,8 @@ include $(RTE_SDK)/mk/rte.vars.mk
 #
 LIB = librte_mempool_dpaa2.a
 
-ifeq ($(CONFIG_RTE_LIBRTE_DPAA2_DEBUG_INIT),y)
-CFLAGS += -O0 -g
-CFLAGS += "-Wno-error"
-else
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
-endif
-
 CFLAGS += -I$(RTE_SDK)/drivers/bus/fslmc
 CFLAGS += -I$(RTE_SDK)/drivers/bus/fslmc/qbman/include
 CFLAGS += -I$(RTE_SDK)/lib/librte_eal/linuxapp/eal
@@ -27,11 +21,16 @@ EXPORT_MAP := rte_mempool_dpaa2_version.map
 # Lbrary version
 LIBABIVER := 1
 
+# depends on fslmc bus which uses experimental API
+CFLAGS += -DALLOW_EXPERIMENTAL_API
+
 # all source are stored in SRCS-y
 #
 SRCS-$(CONFIG_RTE_LIBRTE_DPAA2_MEMPOOL) += dpaa2_hw_mempool.c
 
 LDLIBS += -lrte_bus_fslmc
 LDLIBS += -lrte_eal -lrte_mempool -lrte_ring
+
+SYMLINK-$(CONFIG_RTE_LIBRTE_DPAA2_MEMPOOL)-include := rte_dpaa2_mempool.h
 
 include $(RTE_SDK)/mk/rte.lib.mk

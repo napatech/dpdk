@@ -210,7 +210,7 @@ check_lcore_params(void)
 }
 
 static int
-check_port_config(const unsigned nb_ports)
+check_port_config(void)
 {
 	uint16_t portid;
 	uint16_t i;
@@ -221,7 +221,7 @@ check_port_config(const unsigned nb_ports)
 			printf("port %u is not enabled in port mask\n", portid);
 			return -1;
 		}
-		if (portid >= nb_ports) {
+		if (!rte_eth_dev_is_valid_port(portid)) {
 			printf("port %u is not present on the board\n", portid);
 			return -1;
 		}
@@ -694,7 +694,7 @@ init_mem(unsigned nb_mbuf)
 
 /* Check the link status of all ports in up to 9s, and print them finally */
 static void
-check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
+check_all_ports_link_status(uint32_t port_mask)
 {
 #define CHECK_INTERVAL 100 /* 100ms */
 #define MAX_CHECK_TIME 90 /* 9s (90 * 100ms) in total */
@@ -708,7 +708,7 @@ check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
 		if (force_quit)
 			return;
 		all_ports_up = 1;
-		for (portid = 0; portid < port_num; portid++) {
+		RTE_ETH_FOREACH_DEV(portid) {
 			if (force_quit)
 				return;
 			if ((port_mask & (1 << portid)) == 0)
@@ -826,9 +826,9 @@ main(int argc, char **argv)
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "init_lcore_rx_queues failed\n");
 
-	nb_ports = rte_eth_dev_count();
+	nb_ports = rte_eth_dev_count_avail();
 
-	if (check_port_config(nb_ports) < 0)
+	if (check_port_config() < 0)
 		rte_exit(EXIT_FAILURE, "check_port_config failed\n");
 
 	nb_lcores = rte_lcore_count();
@@ -837,7 +837,7 @@ main(int argc, char **argv)
 	setup_l3fwd_lookup_tables();
 
 	/* initialize all ports */
-	for (portid = 0; portid < nb_ports; portid++) {
+	RTE_ETH_FOREACH_DEV(portid) {
 		struct rte_eth_conf local_port_conf = port_conf;
 
 		/* skip ports that are not enabled */
@@ -971,7 +971,7 @@ main(int argc, char **argv)
 	printf("\n");
 
 	/* start ports */
-	for (portid = 0; portid < nb_ports; portid++) {
+	RTE_ETH_FOREACH_DEV(portid) {
 		if ((enabled_port_mask & (1 << portid)) == 0) {
 			continue;
 		}
@@ -1007,7 +1007,7 @@ main(int argc, char **argv)
 	}
 
 
-	check_all_ports_link_status(nb_ports, enabled_port_mask);
+	check_all_ports_link_status(enabled_port_mask);
 
 	ret = 0;
 	/* launch per-lcore init on every lcore */
@@ -1020,7 +1020,7 @@ main(int argc, char **argv)
 	}
 
 	/* stop ports */
-	for (portid = 0; portid < nb_ports; portid++) {
+	RTE_ETH_FOREACH_DEV(portid) {
 		if ((enabled_port_mask & (1 << portid)) == 0)
 			continue;
 		printf("Closing port %d...", portid);

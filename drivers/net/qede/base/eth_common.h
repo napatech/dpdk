@@ -1,7 +1,7 @@
 /*
- * Copyright (c) 2016 QLogic Corporation.
+ * Copyright (c) 2016 - 2018 Cavium Inc.
  * All rights reserved.
- * www.qlogic.com
+ * www.cavium.com
  *
  * See LICENSE.qede_pmd for copyright and licensing details.
  */
@@ -118,6 +118,9 @@
 /* Control frame check constants */
 /* Number of etherType values configured by driver for control frame check */
 #define ETH_CTL_FRAME_ETH_TYPE_NUM              4
+
+/* GFS constants */
+#define ETH_GFT_TRASHCAN_VPORT         0x1FF /* GFT drop flow vport number */
 
 
 

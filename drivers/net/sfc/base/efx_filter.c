@@ -56,7 +56,7 @@ static const efx_filter_ops_t	__efx_filter_siena_ops = {
 };
 #endif /* EFSYS_OPT_SIENA */
 
-#if EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD
+#if EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD || EFSYS_OPT_MEDFORD2
 static const efx_filter_ops_t	__efx_filter_ef10_ops = {
 	ef10_filter_init,		/* efo_init */
 	ef10_filter_fini,		/* efo_fini */
@@ -66,7 +66,7 @@ static const efx_filter_ops_t	__efx_filter_ef10_ops = {
 	ef10_filter_supported_filters,	/* efo_supported_filters */
 	ef10_filter_reconfigure,	/* efo_reconfigure */
 };
-#endif /* EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD */
+#endif /* EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD || EFSYS_OPT_MEDFORD2 */
 
 	__checkReturn	efx_rc_t
 efx_filter_insert(
@@ -74,12 +74,33 @@ efx_filter_insert(
 	__inout		efx_filter_spec_t *spec)
 {
 	const efx_filter_ops_t *efop = enp->en_efop;
+	efx_nic_cfg_t *encp = &(enp->en_nic_cfg);
+	efx_rc_t rc;
 
 	EFSYS_ASSERT3U(enp->en_mod_flags, &, EFX_MOD_FILTER);
 	EFSYS_ASSERT3P(spec, !=, NULL);
 	EFSYS_ASSERT3U(spec->efs_flags, &, EFX_FILTER_FLAG_RX);
 
+	if ((spec->efs_flags & EFX_FILTER_FLAG_ACTION_MARK) &&
+	    !encp->enc_filter_action_mark_supported) {
+		rc = ENOTSUP;
+		goto fail1;
+	}
+
+	if ((spec->efs_flags & EFX_FILTER_FLAG_ACTION_FLAG) &&
+	    !encp->enc_filter_action_flag_supported) {
+		rc = ENOTSUP;
+		goto fail2;
+	}
+
 	return (efop->efo_add(enp, spec, B_FALSE));
+
+fail2:
+	EFSYS_PROBE(fail2);
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+
+	return (rc);
 }
 
 	__checkReturn	efx_rc_t
@@ -144,6 +165,12 @@ efx_filter_init(
 		efop = &__efx_filter_ef10_ops;
 		break;
 #endif /* EFSYS_OPT_MEDFORD */
+
+#if EFSYS_OPT_MEDFORD2
+	case EFX_FAMILY_MEDFORD2:
+		efop = &__efx_filter_ef10_ops;
+		break;
+#endif /* EFSYS_OPT_MEDFORD2 */
 
 	default:
 		EFSYS_ASSERT(0);
@@ -412,7 +439,7 @@ efx_filter_spec_set_encap_type(
 	__in		efx_tunnel_protocol_t encap_type,
 	__in		efx_filter_inner_frame_match_t inner_frame_match)
 {
-	uint32_t match_flags = 0;
+	uint32_t match_flags = EFX_FILTER_MATCH_ENCAP_TYPE;
 	uint8_t ip_proto;
 	efx_rc_t rc;
 
@@ -460,6 +487,43 @@ fail1:
 	EFSYS_PROBE1(fail1, efx_rc_t, rc);
 
 	return (rc);
+}
+
+/*
+ * Specify inner and outer Ethernet address and VXLAN ID in filter
+ * specification.
+ */
+	__checkReturn	efx_rc_t
+efx_filter_spec_set_vxlan_full(
+	__inout		efx_filter_spec_t *spec,
+	__in		const uint8_t *vxlan_id,
+	__in		const uint8_t *inner_addr,
+	__in		const uint8_t *outer_addr)
+{
+	EFSYS_ASSERT3P(spec, !=, NULL);
+	EFSYS_ASSERT3P(vxlan_id, !=, NULL);
+	EFSYS_ASSERT3P(inner_addr, !=, NULL);
+	EFSYS_ASSERT3P(outer_addr, !=, NULL);
+
+	if ((inner_addr == NULL) && (outer_addr == NULL))
+		return (EINVAL);
+
+	if (vxlan_id != NULL) {
+		spec->efs_match_flags |= EFX_FILTER_MATCH_VNI_OR_VSID;
+		memcpy(spec->efs_vni_or_vsid, vxlan_id, EFX_VNI_OR_VSID_LEN);
+	}
+	if (outer_addr != NULL) {
+		spec->efs_match_flags |= EFX_FILTER_MATCH_LOC_MAC;
+		memcpy(spec->efs_loc_mac, outer_addr, EFX_MAC_ADDR_LEN);
+	}
+	if (inner_addr != NULL) {
+		spec->efs_match_flags |= EFX_FILTER_MATCH_IFRM_LOC_MAC;
+		memcpy(spec->efs_ifrm_loc_mac, inner_addr, EFX_MAC_ADDR_LEN);
+	}
+	spec->efs_match_flags |= EFX_FILTER_MATCH_ENCAP_TYPE;
+	spec->efs_encap_type = EFX_TUNNEL_PROTOCOL_VXLAN;
+
+	return (0);
 }
 
 #if EFSYS_OPT_RX_SCALE
@@ -953,6 +1017,7 @@ siena_filter_build(
 
 	default:
 		EFSYS_ASSERT(B_FALSE);
+		EFX_ZERO_OWORD(*filter);
 		return (0);
 	}
 

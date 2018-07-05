@@ -300,7 +300,7 @@ fman_if_init(const struct device_node *dpa_node)
 
 	_errno = fman_get_mac_index(regs_addr_host, &__if->__if.mac_idx);
 	if (_errno) {
-		FMAN_ERR(-EINVAL, "Invalid register address: %lu",
+		FMAN_ERR(-EINVAL, "Invalid register address: %" PRIx64,
 			 regs_addr_host);
 		goto err;
 	}
@@ -442,6 +442,7 @@ fman_if_init(const struct device_node *dpa_node)
 		if (!pool_node) {
 			FMAN_ERR(-ENXIO, "%s: bad fsl,bman-buffer-pools\n",
 				 dname);
+			free(bpool);
 			goto err;
 		}
 		pname = pool_node->full_name;
@@ -449,6 +450,7 @@ fman_if_init(const struct device_node *dpa_node)
 		prop = of_get_property(pool_node, "fsl,bpid", &proplen);
 		if (!prop) {
 			FMAN_ERR(-EINVAL, "%s: no fsl,bpid\n", pname);
+			free(bpool);
 			goto err;
 		}
 		assert(proplen == sizeof(*prop));
@@ -502,7 +504,7 @@ fman_if_init(const struct device_node *dpa_node)
 
 	/* Parsing of the network interface is complete, add it to the list */
 	DPAA_BUS_LOG(DEBUG, "Found %s, Tx Channel = %x, FMAN = %x,"
-		    "Port ID = %x\n",
+		    "Port ID = %x",
 		    dname, __if->__if.tx_channel_id, __if->__if.fman_idx,
 		    __if->__if.mac_idx);
 

@@ -1,38 +1,11 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) Broadcom Limited.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Broadcom Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2014-2018 Broadcom
+ * All rights reserved.
  */
 
 #include <sys/queue.h>
 
+#include <rte_byteorder.h>
 #include <rte_log.h>
 #include <rte_malloc.h>
 #include <rte_flow.h>
@@ -96,9 +69,9 @@ void bnxt_init_filters(struct bnxt *bp)
 	STAILQ_INIT(&bp->free_filter_list);
 	for (i = 0; i < max_filters; i++) {
 		filter = &bp->filter_info[i];
-		filter->fw_l2_filter_id = -1;
-		filter->fw_em_filter_id = -1;
-		filter->fw_ntuple_filter_id = -1;
+		filter->fw_l2_filter_id = UINT64_MAX;
+		filter->fw_em_filter_id = UINT64_MAX;
+		filter->fw_ntuple_filter_id = UINT64_MAX;
 		STAILQ_INSERT_TAIL(&bp->free_filter_list, filter, next);
 	}
 }
@@ -159,6 +132,14 @@ void bnxt_free_filter_mem(struct bnxt *bp)
 
 	rte_free(bp->filter_info);
 	bp->filter_info = NULL;
+
+	for (i = 0; i < bp->pf.max_vfs; i++) {
+		STAILQ_FOREACH(filter, &bp->pf.vf_info[i].filter, next) {
+			rte_free(filter);
+			STAILQ_REMOVE(&bp->pf.vf_info[i].filter, filter,
+				      bnxt_filter_info, next);
+		}
+	}
 }
 
 int bnxt_alloc_filter_mem(struct bnxt *bp)
@@ -250,7 +231,7 @@ nxt_non_void_action(const struct rte_flow_action *cur)
 	}
 }
 
-int check_zero_bytes(const uint8_t *bytes, int len)
+int bnxt_check_zero_bytes(const uint8_t *bytes, int len)
 {
 	int i;
 	for (i = 0; i < len; i++)
@@ -302,6 +283,7 @@ bnxt_filter_type_check(const struct rte_flow_item pattern[],
 
 static int
 bnxt_validate_and_parse_flow_type(struct bnxt *bp,
+				  const struct rte_flow_attr *attr,
 				  const struct rte_flow_item pattern[],
 				  struct rte_flow_error *error,
 				  struct bnxt_filter_info *filter)
@@ -326,6 +308,7 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 	uint32_t vf = 0;
 	int use_ntuple;
 	uint32_t en = 0;
+	uint32_t en_ethertype;
 	int dflt_vnic;
 
 	use_ntuple = bnxt_filter_type_check(pattern, error);
@@ -335,6 +318,9 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 
 	filter->filter_type = use_ntuple ?
 		HWRM_CFA_NTUPLE_FILTER : HWRM_CFA_EM_FILTER;
+	en_ethertype = use_ntuple ?
+		NTUPLE_FLTR_ALLOC_INPUT_EN_ETHERTYPE :
+		EM_FLOW_ALLOC_INPUT_EN_ETHERTYPE;
 
 	while (item->type != RTE_FLOW_ITEM_TYPE_END) {
 		if (item->last) {
@@ -354,8 +340,8 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 		}
 		switch (item->type) {
 		case RTE_FLOW_ITEM_TYPE_ETH:
-			eth_spec = (const struct rte_flow_item_eth *)item->spec;
-			eth_mask = (const struct rte_flow_item_eth *)item->mask;
+			eth_spec = item->spec;
+			eth_mask = item->mask;
 
 			/* Source MAC address mask cannot be partially set.
 			 * Should be All 0's or all 1's.
@@ -374,7 +360,8 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 			}
 
 			/* Mask is not allowed. Only exact matches are */
-			if ((eth_mask->type & UINT16_MAX) != UINT16_MAX) {
+			if (eth_mask->type &&
+			    eth_mask->type != RTE_BE16(0xffff)) {
 				rte_flow_error_set(error, EINVAL,
 						   RTE_FLOW_ERROR_TYPE_ITEM,
 						   item,
@@ -400,41 +387,58 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 			   *  RTE_LOG(ERR, PMD, "Handle this condition\n");
 			   * }
 			   */
-			if (eth_spec->type) {
+			if (eth_mask->type) {
 				filter->ethertype =
 					rte_be_to_cpu_16(eth_spec->type);
-				en |= use_ntuple ?
-					NTUPLE_FLTR_ALLOC_INPUT_EN_ETHERTYPE :
-					EM_FLOW_ALLOC_INPUT_EN_ETHERTYPE;
+				en |= en_ethertype;
 			}
 
 			break;
 		case RTE_FLOW_ITEM_TYPE_VLAN:
-			vlan_spec =
-				(const struct rte_flow_item_vlan *)item->spec;
-			vlan_mask =
-				(const struct rte_flow_item_vlan *)item->mask;
-			if (vlan_mask->tci & 0xFFFF && !vlan_mask->tpid) {
+			vlan_spec = item->spec;
+			vlan_mask = item->mask;
+			if (en & en_ethertype) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "VLAN TPID matching is not"
+						   " supported");
+				return -rte_errno;
+			}
+			if (vlan_mask->tci &&
+			    vlan_mask->tci == RTE_BE16(0x0fff)) {
 				/* Only the VLAN ID can be matched. */
 				filter->l2_ovlan =
 					rte_be_to_cpu_16(vlan_spec->tci &
-							 0xFFF);
+							 RTE_BE16(0x0fff));
 				en |= EM_FLOW_ALLOC_INPUT_EN_OVLAN_VID;
-			} else {
+			} else if (vlan_mask->tci) {
 				rte_flow_error_set(error, EINVAL,
 						   RTE_FLOW_ERROR_TYPE_ITEM,
 						   item,
 						   "VLAN mask is invalid");
 				return -rte_errno;
 			}
+			if (vlan_mask->inner_type &&
+			    vlan_mask->inner_type != RTE_BE16(0xffff)) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "inner ethertype mask not"
+						   " valid");
+				return -rte_errno;
+			}
+			if (vlan_mask->inner_type) {
+				filter->ethertype =
+					rte_be_to_cpu_16(vlan_spec->inner_type);
+				en |= en_ethertype;
+			}
 
 			break;
 		case RTE_FLOW_ITEM_TYPE_IPV4:
 			/* If mask is not involved, we could use EM filters. */
-			ipv4_spec =
-				(const struct rte_flow_item_ipv4 *)item->spec;
-			ipv4_mask =
-				(const struct rte_flow_item_ipv4 *)item->mask;
+			ipv4_spec = item->spec;
+			ipv4_mask = item->mask;
 			/* Only IP DST and SRC fields are maskable. */
 			if (ipv4_mask->hdr.version_ihl ||
 			    ipv4_mask->hdr.type_of_service ||
@@ -483,10 +487,8 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 			}
 			break;
 		case RTE_FLOW_ITEM_TYPE_IPV6:
-			ipv6_spec =
-				(const struct rte_flow_item_ipv6 *)item->spec;
-			ipv6_mask =
-				(const struct rte_flow_item_ipv6 *)item->mask;
+			ipv6_spec = item->spec;
+			ipv6_mask = item->mask;
 
 			/* Only IP DST and SRC fields are maskable. */
 			if (ipv6_mask->hdr.vtc_flow ||
@@ -510,13 +512,15 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 				   ipv6_spec->hdr.src_addr, 16);
 			rte_memcpy(filter->dst_ipaddr,
 				   ipv6_spec->hdr.dst_addr, 16);
-			if (!check_zero_bytes(ipv6_mask->hdr.src_addr, 16)) {
+			if (!bnxt_check_zero_bytes(ipv6_mask->hdr.src_addr,
+						   16)) {
 				rte_memcpy(filter->src_ipaddr_mask,
 					   ipv6_mask->hdr.src_addr, 16);
 				en |= !use_ntuple ? 0 :
 				    NTUPLE_FLTR_ALLOC_INPUT_EN_SRC_IPADDR_MASK;
 			}
-			if (!check_zero_bytes(ipv6_mask->hdr.dst_addr, 16)) {
+			if (!bnxt_check_zero_bytes(ipv6_mask->hdr.dst_addr,
+						   16)) {
 				rte_memcpy(filter->dst_ipaddr_mask,
 					   ipv6_mask->hdr.dst_addr, 16);
 				en |= !use_ntuple ? 0 :
@@ -527,8 +531,8 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 				EM_FLOW_ALLOC_INPUT_IP_ADDR_TYPE_IPV6;
 			break;
 		case RTE_FLOW_ITEM_TYPE_TCP:
-			tcp_spec = (const struct rte_flow_item_tcp *)item->spec;
-			tcp_mask = (const struct rte_flow_item_tcp *)item->mask;
+			tcp_spec = item->spec;
+			tcp_mask = item->mask;
 
 			/* Check TCP mask. Only DST & SRC ports are maskable */
 			if (tcp_mask->hdr.sent_seq ||
@@ -564,8 +568,8 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 			}
 			break;
 		case RTE_FLOW_ITEM_TYPE_UDP:
-			udp_spec = (const struct rte_flow_item_udp *)item->spec;
-			udp_mask = (const struct rte_flow_item_udp *)item->mask;
+			udp_spec = item->spec;
+			udp_mask = item->mask;
 
 			if (udp_mask->hdr.dgram_len ||
 			    udp_mask->hdr.dgram_cksum) {
@@ -597,10 +601,8 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 			}
 			break;
 		case RTE_FLOW_ITEM_TYPE_VXLAN:
-			vxlan_spec =
-				(const struct rte_flow_item_vxlan *)item->spec;
-			vxlan_mask =
-				(const struct rte_flow_item_vxlan *)item->mask;
+			vxlan_spec = item->spec;
+			vxlan_mask = item->mask;
 			/* Check if VXLAN item is used to describe protocol.
 			 * If yes, both spec and mask should be NULL.
 			 * If no, both spec and mask shouldn't be NULL.
@@ -646,10 +648,8 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 			}
 			break;
 		case RTE_FLOW_ITEM_TYPE_NVGRE:
-			nvgre_spec =
-				(const struct rte_flow_item_nvgre *)item->spec;
-			nvgre_mask =
-				(const struct rte_flow_item_nvgre *)item->mask;
+			nvgre_spec = item->spec;
+			nvgre_mask = item->mask;
 			/* Check if NVGRE item is used to describe protocol.
 			 * If yes, both spec and mask should be NULL.
 			 * If no, both spec and mask shouldn't be NULL.
@@ -692,7 +692,7 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 			}
 			break;
 		case RTE_FLOW_ITEM_TYPE_VF:
-			vf_spec = (const struct rte_flow_item_vf *)item->spec;
+			vf_spec = item->spec;
 			vf = vf_spec->id;
 			if (!BNXT_PF(bp)) {
 				rte_flow_error_set(error, EINVAL,
@@ -707,6 +707,16 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 					   RTE_FLOW_ERROR_TYPE_ITEM,
 					   item,
 					   "Incorrect VF id!");
+				return -rte_errno;
+			}
+
+			if (!attr->transfer) {
+				rte_flow_error_set(error, ENOTSUP,
+					   RTE_FLOW_ERROR_TYPE_ITEM,
+					   item,
+					   "Matching VF traffic without"
+					   " affecting it (transfer attribute)"
+					   " is unsupported");
 				return -rte_errno;
 			}
 
@@ -836,7 +846,8 @@ bnxt_validate_and_parse_flow(struct rte_eth_dev *dev,
 		goto ret;
 	}
 
-	rc = bnxt_validate_and_parse_flow_type(bp, pattern, error, filter);
+	rc = bnxt_validate_and_parse_flow_type(bp, attr, pattern, error,
+					       filter);
 	if (rc != 0)
 		goto ret;
 
@@ -844,7 +855,8 @@ bnxt_validate_and_parse_flow(struct rte_eth_dev *dev,
 	if (rc != 0)
 		goto ret;
 	//Since we support ingress attribute only - right now.
-	filter->flags = HWRM_CFA_EM_FLOW_ALLOC_INPUT_FLAGS_PATH_RX;
+	if (filter->filter_type == HWRM_CFA_EM_FILTER)
+		filter->flags = HWRM_CFA_EM_FLOW_ALLOC_INPUT_FLAGS_PATH_RX;
 
 	switch (act->type) {
 	case RTE_FLOW_ACTION_TYPE_QUEUE:
@@ -956,11 +968,6 @@ bnxt_validate_and_parse_flow(struct rte_eth_dev *dev,
 		goto ret;
 	}
 
-	if (filter1) {
-		bnxt_free_filter(bp, filter1);
-		filter1->fw_l2_filter_id = -1;
-	}
-
 	act = nxt_non_void_action(++act);
 	if (act->type != RTE_FLOW_ACTION_TYPE_END) {
 		rte_flow_error_set(error, EINVAL,
@@ -997,7 +1004,7 @@ bnxt_flow_validate(struct rte_eth_dev *dev,
 	ret = bnxt_validate_and_parse_flow(dev, pattern, actions, attr,
 					   error, filter);
 	/* No need to hold on to this filter if we are just validating flow */
-	filter->fw_l2_filter_id = -1;
+	filter->fw_l2_filter_id = UINT64_MAX;
 	bnxt_free_filter(bp, filter);
 
 	return ret;
@@ -1186,8 +1193,8 @@ bnxt_flow_destroy(struct rte_eth_dev *dev,
 		ret = bnxt_hwrm_clear_em_filter(bp, filter);
 	if (filter->filter_type == HWRM_CFA_NTUPLE_FILTER)
 		ret = bnxt_hwrm_clear_ntuple_filter(bp, filter);
-
-	bnxt_hwrm_clear_l2_filter(bp, filter);
+	else
+		ret = bnxt_hwrm_clear_l2_filter(bp, filter);
 	if (!ret) {
 		STAILQ_REMOVE(&vnic->flow_list, flow, rte_flow, next);
 		rte_free(flow);

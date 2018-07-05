@@ -8,7 +8,7 @@
 #include "efx_impl.h"
 
 
-#if EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD
+#if EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD || EFSYS_OPT_MEDFORD2
 
 #if EFSYS_OPT_QSTATS
 #define	EFX_TX_QSTAT_INCR(_etp, _stat)					\
@@ -42,10 +42,15 @@ efx_mcdi_init_txq(
 	EFSYS_ASSERT(EFX_TXQ_MAX_BUFS >=
 	    EFX_TXQ_NBUFS(enp->en_nic_cfg.enc_txq_max_ndescs));
 
+	if ((esmp == NULL) || (EFSYS_MEM_SIZE(esmp) < EFX_TXQ_SIZE(ndescs))) {
+		rc = EINVAL;
+		goto fail1;
+	}
+
 	npages = EFX_TXQ_NBUFS(ndescs);
 	if (MC_CMD_INIT_TXQ_IN_LEN(npages) > sizeof (payload)) {
 		rc = EINVAL;
-		goto fail1;
+		goto fail2;
 	}
 
 	(void) memset(payload, 0, sizeof (payload));
@@ -94,11 +99,13 @@ efx_mcdi_init_txq(
 
 	if (req.emr_rc != 0) {
 		rc = req.emr_rc;
-		goto fail2;
+		goto fail3;
 	}
 
 	return (0);
 
+fail3:
+	EFSYS_PROBE(fail3);
 fail2:
 	EFSYS_PROBE(fail2);
 fail1:
@@ -176,7 +183,7 @@ ef10_tx_qcreate(
 {
 	efx_nic_cfg_t *encp = &enp->en_nic_cfg;
 	uint16_t inner_csum;
-	efx_qword_t desc;
+	efx_desc_t desc;
 	efx_rc_t rc;
 
 	_NOTE(ARGUNUSED(id))
@@ -201,19 +208,9 @@ ef10_tx_qcreate(
 	 * a no-op TX option descriptor. See bug29981 for details.
 	 */
 	*addedp = 1;
-	EFX_POPULATE_QWORD_6(desc,
-	    ESF_DZ_TX_DESC_IS_OPT, 1,
-	    ESF_DZ_TX_OPTION_TYPE, ESE_DZ_TX_OPTION_DESC_CRC_CSUM,
-	    ESF_DZ_TX_OPTION_UDP_TCP_CSUM,
-	    (flags & EFX_TXQ_CKSUM_TCPUDP) ? 1 : 0,
-	    ESF_DZ_TX_OPTION_IP_CSUM,
-	    (flags & EFX_TXQ_CKSUM_IPV4) ? 1 : 0,
-	    ESF_DZ_TX_OPTION_INNER_UDP_TCP_CSUM,
-	    (flags & EFX_TXQ_CKSUM_INNER_TCPUDP) ? 1 : 0,
-	    ESF_DZ_TX_OPTION_INNER_IP_CSUM,
-	    (flags & EFX_TXQ_CKSUM_INNER_IPV4) ? 1 : 0);
+	ef10_tx_qdesc_checksum_create(etp, flags, &desc);
 
-	EFSYS_MEM_WRITEQ(etp->et_esmp, 0, &desc);
+	EFSYS_MEM_WRITEQ(etp->et_esmp, 0, &desc.ed_eq);
 	ef10_tx_qpush(etp, *addedp, 0);
 
 	return (0);
@@ -511,8 +508,8 @@ ef10_tx_qpush(
 		EFX_DMA_SYNC_QUEUE_FOR_DEVICE(etp->et_esmp, etp->et_mask + 1,
 					    wptr, id);
 		EFSYS_PIO_WRITE_BARRIER();
-		EFX_BAR_TBL_DOORBELL_WRITEO(enp, ER_DZ_TX_DESC_UPD_REG,
-					    etp->et_index, &oword);
+		EFX_BAR_VI_DOORBELL_WRITEO(enp, ER_DZ_TX_DESC_UPD_REG,
+		    etp->et_index, &oword);
 	} else {
 		efx_dword_t dword;
 
@@ -527,8 +524,8 @@ ef10_tx_qpush(
 		EFX_DMA_SYNC_QUEUE_FOR_DEVICE(etp->et_esmp, etp->et_mask + 1,
 					    wptr, id);
 		EFSYS_PIO_WRITE_BARRIER();
-		EFX_BAR_TBL_WRITED2(enp, ER_DZ_TX_DESC_UPD_REG,
-				    etp->et_index, &dword, B_FALSE);
+		EFX_BAR_VI_WRITED2(enp, ER_DZ_TX_DESC_UPD_REG,
+		    etp->et_index, &dword, B_FALSE);
 	}
 }
 
@@ -626,6 +623,7 @@ ef10_tx_qdesc_tso_create(
 ef10_tx_qdesc_tso2_create(
 	__in			efx_txq_t *etp,
 	__in			uint16_t ipv4_id,
+	__in			uint16_t outer_ipv4_id,
 	__in			uint32_t tcp_seq,
 	__in			uint16_t tcp_mss,
 	__out_ecount(count)	efx_desc_t *edp,
@@ -639,13 +637,14 @@ ef10_tx_qdesc_tso2_create(
 
 	EFSYS_ASSERT(count >= EFX_TX_FATSOV2_OPT_NDESCS);
 
-	EFX_POPULATE_QWORD_5(edp[0].ed_eq,
+	EFX_POPULATE_QWORD_6(edp[0].ed_eq,
 			    ESF_DZ_TX_DESC_IS_OPT, 1,
 			    ESF_DZ_TX_OPTION_TYPE,
 			    ESE_DZ_TX_OPTION_DESC_TSO,
 			    ESF_DZ_TX_TSO_OPTION_TYPE,
 			    ESE_DZ_TX_TSO_OPTION_DESC_FATSO2A,
 			    ESF_DZ_TX_TSO_IP_ID, ipv4_id,
+			    ESF_DZ_TX_TSO_OUTER_IPID, outer_ipv4_id,
 			    ESF_DZ_TX_TSO_TCP_SEQNO, tcp_seq);
 	EFX_POPULATE_QWORD_4(edp[1].ed_eq,
 			    ESF_DZ_TX_DESC_IS_OPT, 1,
@@ -673,6 +672,30 @@ ef10_tx_qdesc_vlantci_create(
 			    ESE_DZ_TX_OPTION_DESC_VLAN,
 			    ESF_DZ_TX_VLAN_OP, tci ? 1 : 0,
 			    ESF_DZ_TX_VLAN_TAG1, tci);
+}
+
+	void
+ef10_tx_qdesc_checksum_create(
+	__in	efx_txq_t *etp,
+	__in	uint16_t flags,
+	__out	efx_desc_t *edp)
+{
+	_NOTE(ARGUNUSED(etp));
+
+	EFSYS_PROBE2(tx_desc_checksum_create, unsigned int, etp->et_index,
+		    uint32_t, flags);
+
+	EFX_POPULATE_QWORD_6(edp->ed_eq,
+	    ESF_DZ_TX_DESC_IS_OPT, 1,
+	    ESF_DZ_TX_OPTION_TYPE, ESE_DZ_TX_OPTION_DESC_CRC_CSUM,
+	    ESF_DZ_TX_OPTION_UDP_TCP_CSUM,
+	    (flags & EFX_TXQ_CKSUM_TCPUDP) ? 1 : 0,
+	    ESF_DZ_TX_OPTION_IP_CSUM,
+	    (flags & EFX_TXQ_CKSUM_IPV4) ? 1 : 0,
+	    ESF_DZ_TX_OPTION_INNER_UDP_TCP_CSUM,
+	    (flags & EFX_TXQ_CKSUM_INNER_TCPUDP) ? 1 : 0,
+	    ESF_DZ_TX_OPTION_INNER_IP_CSUM,
+	    (flags & EFX_TXQ_CKSUM_INNER_IPV4) ? 1 : 0);
 }
 
 
@@ -752,4 +775,4 @@ ef10_tx_qstats_update(
 
 #endif /* EFSYS_OPT_QSTATS */
 
-#endif /* EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD */
+#endif /* EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD || EFSYS_OPT_MEDFORD2 */

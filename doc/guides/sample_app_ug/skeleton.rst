@@ -81,7 +81,7 @@ The ``main()`` function also initializes all the ports using the user defined
 
 .. code-block:: c
 
-    for (portid = 0; portid < nb_ports; portid++) {
+    RTE_ETH_FOREACH_DEV(portid) {
         if (port_init(portid, mbuf_pool) != 0) {
             rte_exit(EXIT_FAILURE,
                      "Cannot init port %" PRIu8 "\n", portid);
@@ -119,7 +119,7 @@ Forwarding application is shown below:
         int retval;
         uint16_t q;
 
-        if (port >= rte_eth_dev_count())
+        if (!rte_eth_dev_is_valid_port(port))
             return -1;
 
         /* Configure the Ethernet device. */
@@ -192,14 +192,13 @@ looks like the following:
     static __attribute__((noreturn)) void
     lcore_main(void)
     {
-        const uint16_t nb_ports = rte_eth_dev_count();
         uint16_t port;
 
         /*
          * Check that the port is on the same NUMA node as the polling thread
          * for best performance.
          */
-        for (port = 0; port < nb_ports; port++)
+        RTE_ETH_FOREACH_DEV(port)
             if (rte_eth_dev_socket_id(port) > 0 &&
                     rte_eth_dev_socket_id(port) !=
                             (int)rte_socket_id())
@@ -216,7 +215,7 @@ looks like the following:
              * Receive packets on a port and forward them on the paired
              * port. The mapping is 0 -> 1, 1 -> 0, 2 -> 3, 3 -> 2, etc.
              */
-            for (port = 0; port < nb_ports; port++) {
+            RTE_ETH_FOREACH_DEV(port) {
 
                 /* Get burst of RX packets, from first port of pair. */
                 struct rte_mbuf *bufs[BURST_SIZE];
@@ -246,7 +245,7 @@ The main work of the application is done within the loop:
 .. code-block:: c
 
         for (;;) {
-            for (port = 0; port < nb_ports; port++) {
+            RTE_ETH_FOREACH_DEV(port) {
 
                 /* Get burst of RX packets, from first port of pair. */
                 struct rte_mbuf *bufs[BURST_SIZE];

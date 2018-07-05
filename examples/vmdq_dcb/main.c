@@ -246,7 +246,7 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 			num_pools, queues_per_pool);
 	}
 
-	if (port >= rte_eth_dev_count())
+	if (!rte_eth_dev_is_valid_port(port))
 		return -1;
 
 	retval = get_eth_conf(&port_conf);
@@ -599,9 +599,9 @@ static unsigned check_ports_num(unsigned nb_ports)
 	}
 
 	for (portid = 0; portid < num_ports; portid++) {
-		if (ports[portid] >= nb_ports) {
-			printf("\nSpecified port ID(%u) exceeds max system port ID(%u)\n",
-				ports[portid], (nb_ports - 1));
+		if (!rte_eth_dev_is_valid_port(ports[portid])) {
+			printf("\nSpecified port ID(%u) is not valid\n",
+				ports[portid]);
 			ports[portid] = INVALID_PORT_ID;
 			valid_num_ports--;
 		}
@@ -642,7 +642,7 @@ main(int argc, char *argv[])
 				" number of cores(1-%d)\n\n", RTE_MAX_LCORE);
 	}
 
-	nb_ports = rte_eth_dev_count();
+	nb_ports = rte_eth_dev_count_avail();
 
 	/*
 	 * Update the global var NUM_PORTS and global array PORTS
@@ -662,7 +662,7 @@ main(int argc, char *argv[])
 		rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
 
 	/* initialize all ports */
-	for (portid = 0; portid < nb_ports; portid++) {
+	RTE_ETH_FOREACH_DEV(portid) {
 		/* skip ports that are not enabled */
 		if ((enabled_port_mask & (1 << portid)) == 0) {
 			printf("\nSkipping disabled port %d\n", portid);

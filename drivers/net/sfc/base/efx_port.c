@@ -120,7 +120,7 @@ efx_port_loopback_set(
 	EFSYS_ASSERT(link_mode < EFX_LINK_NMODES);
 
 	if (EFX_TEST_QWORD_BIT(encp->enc_loopback_types[link_mode],
-		loopback_type) == 0) {
+		(int)loopback_type) == 0) {
 		rc = ENOTSUP;
 		goto fail1;
 	}
@@ -180,6 +180,9 @@ static const char * const __efx_loopback_type_name[] = {
 	"SD_FEP1_5_WS",
 	"SD_FEP_WS",
 	"SD_FES_WS",
+	"AOE_INT_NEAR",
+	"DATA_WS",
+	"FORCE_EXT_LINK",
 };
 
 	__checkReturn	const char *

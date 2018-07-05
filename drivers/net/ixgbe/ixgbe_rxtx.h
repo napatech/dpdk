@@ -129,6 +129,7 @@ struct ixgbe_rx_queue {
 	uint8_t             rx_deferred_start; /**< not in global dev start. */
 	/** flags to set in mbuf when a vlan is detected. */
 	uint64_t            vlan_flags;
+	uint64_t	    offloads; /**< Rx offloads with DEV_RX_OFFLOAD_* */
 	/** need to alloc dummy mbuf, for wraparound when scanning hw ring */
 	struct rte_mbuf fake_mbuf;
 	/** hold packets to return to application */
@@ -221,7 +222,7 @@ struct ixgbe_tx_queue {
 	uint8_t             pthresh;       /**< Prefetch threshold register. */
 	uint8_t             hthresh;       /**< Host threshold register. */
 	uint8_t             wthresh;       /**< Write-back threshold reg. */
-	uint32_t txq_flags; /**< Holds flags for this TXq */
+	uint64_t offloads; /**< Tx offload flags of DEV_TX_OFFLOAD_* */
 	uint32_t            ctx_curr;      /**< Hardware context states. */
 	/** Hardware context0 history. */
 	struct ixgbe_advctx_info ctx_cache[IXGBE_CTX_NUM];
@@ -238,20 +239,6 @@ struct ixgbe_txq_ops {
 	void (*free_swring)(struct ixgbe_tx_queue *txq);
 	void (*reset)(struct ixgbe_tx_queue *txq);
 };
-
-/*
- * The "simple" TX queue functions require that the following
- * flags are set when the TX queue is configured:
- *  - ETH_TXQ_FLAGS_NOMULTSEGS
- *  - ETH_TXQ_FLAGS_NOVLANOFFL
- *  - ETH_TXQ_FLAGS_NOXSUMSCTP
- *  - ETH_TXQ_FLAGS_NOXSUMUDP
- *  - ETH_TXQ_FLAGS_NOXSUMTCP
- * and that the RS bit threshold (tx_rs_thresh) is at least equal to
- * RTE_PMD_IXGBE_TX_MAX_BURST.
- */
-#define IXGBE_SIMPLE_FLAGS ((uint32_t)ETH_TXQ_FLAGS_NOMULTSEGS | \
-			    ETH_TXQ_FLAGS_NOOFFLOADS)
 
 /*
  * Populate descriptors with the following info:
@@ -305,6 +292,11 @@ extern const uint32_t ptype_table_tn[IXGBE_PACKET_TYPE_TN_MAX];
 uint16_t ixgbe_xmit_fixed_burst_vec(void *tx_queue, struct rte_mbuf **tx_pkts,
 				    uint16_t nb_pkts);
 int ixgbe_txq_vec_setup(struct ixgbe_tx_queue *txq);
-
 #endif /* RTE_IXGBE_INC_VECTOR */
+
+uint64_t ixgbe_get_tx_port_offloads(struct rte_eth_dev *dev);
+uint64_t ixgbe_get_rx_queue_offloads(struct rte_eth_dev *dev);
+uint64_t ixgbe_get_rx_port_offloads(struct rte_eth_dev *dev);
+uint64_t ixgbe_get_tx_queue_offloads(struct rte_eth_dev *dev);
+
 #endif /* _IXGBE_RXTX_H_ */

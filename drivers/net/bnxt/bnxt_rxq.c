@@ -1,34 +1,6 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) Broadcom Limited.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Broadcom Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2014-2018 Broadcom
+ * All rights reserved.
  */
 
 #include <inttypes.h>
@@ -51,10 +23,8 @@
 
 void bnxt_free_rxq_stats(struct bnxt_rx_queue *rxq)
 {
-	struct bnxt_cp_ring_info *cpr = rxq->cp_ring;
-
-	if (cpr->hw_stats)
-		cpr->hw_stats = NULL;
+	if (rxq && rxq->cp_ring && rxq->cp_ring->hw_stats)
+		rxq->cp_ring->hw_stats = NULL;
 }
 
 int bnxt_mq_rx_configure(struct bnxt *bp)
@@ -107,6 +77,7 @@ int bnxt_mq_rx_configure(struct bnxt *bp)
 		switch (dev_conf->rxmode.mq_mode) {
 		case ETH_MQ_RX_VMDQ_RSS:
 		case ETH_MQ_RX_VMDQ_ONLY:
+			/* FALLTHROUGH */
 			/* ETH_8/64_POOLs */
 			pools = conf->nb_queue_pools;
 			/* For each pool, allocate MACVLAN CFA rule & VNIC */
@@ -237,7 +208,8 @@ static void bnxt_rx_queue_release_mbufs(struct bnxt_rx_queue *rxq)
 	if (rxq) {
 		sw_ring = rxq->rx_ring->rx_buf_ring;
 		if (sw_ring) {
-			for (i = 0; i < rxq->nb_rx_desc; i++) {
+			for (i = 0;
+			     i < rxq->rx_ring->rx_ring_struct->ring_size; i++) {
 				if (sw_ring[i].mbuf) {
 					rte_pktmbuf_free_seg(sw_ring[i].mbuf);
 					sw_ring[i].mbuf = NULL;
@@ -247,7 +219,8 @@ static void bnxt_rx_queue_release_mbufs(struct bnxt_rx_queue *rxq)
 		/* Free up mbufs in Agg ring */
 		sw_ring = rxq->rx_ring->ag_buf_ring;
 		if (sw_ring) {
-			for (i = 0; i < rxq->nb_rx_desc; i++) {
+			for (i = 0;
+			     i < rxq->rx_ring->ag_ring_struct->ring_size; i++) {
 				if (sw_ring[i].mbuf) {
 					rte_pktmbuf_free_seg(sw_ring[i].mbuf);
 					sw_ring[i].mbuf = NULL;
@@ -295,6 +268,8 @@ void bnxt_rx_queue_release_op(void *rx_queue)
 		bnxt_free_ring(rxq->cp_ring->cp_ring_struct);
 
 		bnxt_free_rxq_stats(rxq);
+		rte_memzone_free(rxq->mz);
+		rxq->mz = NULL;
 
 		rte_free(rxq);
 	}
@@ -308,6 +283,7 @@ int bnxt_rx_queue_setup_op(struct rte_eth_dev *eth_dev,
 			       struct rte_mempool *mp)
 {
 	struct bnxt *bp = (struct bnxt *)eth_dev->data->dev_private;
+	uint64_t rx_offloads = eth_dev->data->dev_conf.rxmode.offloads;
 	struct bnxt_rx_queue *rxq;
 	int rc = 0;
 
@@ -315,7 +291,7 @@ int bnxt_rx_queue_setup_op(struct rte_eth_dev *eth_dev,
 		PMD_DRV_LOG(ERR,
 			"Cannot create Rx ring %d. Only %d rings available\n",
 			queue_idx, bp->max_rx_rings);
-		return -ENOSPC;
+		return -EINVAL;
 	}
 
 	if (!nb_desc || nb_desc > MAX_RX_DESC_CNT) {
@@ -350,12 +326,12 @@ int bnxt_rx_queue_setup_op(struct rte_eth_dev *eth_dev,
 
 	rxq->queue_id = queue_idx;
 	rxq->port_id = eth_dev->data->port_id;
-	rxq->crc_len = (uint8_t)((eth_dev->data->dev_conf.rxmode.hw_strip_crc) ?
-				0 : ETHER_CRC_LEN);
+	rxq->crc_len = rx_offloads & DEV_RX_OFFLOAD_CRC_STRIP ?
+		0 : ETHER_CRC_LEN;
 
 	eth_dev->data->rx_queues[queue_idx] = rxq;
 	/* Allocate RX ring hardware descriptors */
-	if (bnxt_alloc_rings(bp, queue_idx, NULL, rxq->rx_ring, rxq->cp_ring,
+	if (bnxt_alloc_rings(bp, queue_idx, NULL, rxq, rxq->cp_ring,
 			"rxr")) {
 		PMD_DRV_LOG(ERR,
 			"ring_dma_zone_reserve for rx_ring failed!\n");
@@ -363,6 +339,7 @@ int bnxt_rx_queue_setup_op(struct rte_eth_dev *eth_dev,
 		rc = -ENOMEM;
 		goto out;
 	}
+	rte_atomic64_init(&rxq->rx_mbuf_alloc_fail);
 
 out:
 	return rc;

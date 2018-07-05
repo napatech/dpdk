@@ -79,6 +79,19 @@ struct pkt_burst_stats {
 };
 #endif
 
+/** Information for a given RSS type. */
+struct rss_type_info {
+	const char *str; /**< Type name. */
+	uint64_t rss_type; /**< Type value. */
+};
+
+/**
+ * RSS type information table.
+ *
+ * An entry with a NULL type name terminates the list.
+ */
+extern const struct rss_type_info rss_type_table[];
+
 /**
  * The data structure associated with a forwarding stream between a receive
  * port/queue and a transmit port/queue.
@@ -181,8 +194,10 @@ struct rte_port {
 	uint8_t                 need_reconfig_queues; /**< need reconfiguring queues or not */
 	uint8_t                 rss_flag;   /**< enable rss or not */
 	uint8_t                 dcb_flag;   /**< enable dcb */
-	struct rte_eth_rxconf   rx_conf;    /**< rx configuration */
-	struct rte_eth_txconf   tx_conf;    /**< tx configuration */
+	uint16_t                nb_rx_desc[MAX_QUEUE_ID+1]; /**< per queue rx desc number */
+	uint16_t                nb_tx_desc[MAX_QUEUE_ID+1]; /**< per queue tx desc number */
+	struct rte_eth_rxconf   rx_conf[MAX_QUEUE_ID+1]; /**< per queue rx configuration */
+	struct rte_eth_txconf   tx_conf[MAX_QUEUE_ID+1]; /**< per queue tx configuration */
 	struct ether_addr       *mc_addr_pool; /**< pool of multicast addrs */
 	uint32_t                mc_addr_nb; /**< nb. of addr. in mc_addr_pool */
 	uint8_t                 slave_flag; /**< bonding slave port */
@@ -320,6 +335,8 @@ extern uint8_t lsc_interrupt; /**< disabled by "--no-lsc-interrupt" parameter */
 extern uint8_t rmv_interrupt; /**< disabled by "--no-rmv-interrupt" parameter */
 extern uint32_t event_print_mask;
 /**< set by "--print-event xxxx" and "--mask-event xxxx parameters */
+extern uint8_t hot_plug; /**< enable by "--hot-plug" parameter */
+extern int do_mlockall; /**< set by "--mlockall" or "--no-mlockall" parameter */
 
 #ifdef RTE_LIBRTE_IXGBE_BYPASS
 extern uint32_t bypass_timeout; /**< Store the NIC bypass watchdog timeout */
@@ -433,6 +450,8 @@ extern uint32_t retry_enabled;
 extern struct fwd_lcore  **fwd_lcores;
 extern struct fwd_stream **fwd_streams;
 
+extern uint16_t vxlan_gpe_udp_port; /**< UDP port of tunnel VXLAN-GPE. */
+
 extern portid_t nb_peer_eth_addrs; /**< Number of peer ethernet addresses. */
 extern struct ether_addr peer_eth_addrs[RTE_MAX_ETHPORTS];
 
@@ -500,12 +519,25 @@ mbuf_pool_find(unsigned int sock_id)
 static inline uint32_t
 port_pci_reg_read(struct rte_port *port, uint32_t reg_off)
 {
+	const struct rte_pci_device *pci_dev;
+	const struct rte_bus *bus;
 	void *reg_addr;
 	uint32_t reg_v;
 
-	reg_addr = (void *)
-		((char *)port->dev_info.pci_dev->mem_resource[0].addr +
-			reg_off);
+	if (!port->dev_info.device) {
+		printf("Invalid device\n");
+		return 0;
+	}
+
+	bus = rte_bus_find_by_device(port->dev_info.device);
+	if (bus && !strcmp(bus->name, "pci")) {
+		pci_dev = RTE_DEV_TO_PCI(port->dev_info.device);
+	} else {
+		printf("Not a PCI device\n");
+		return 0;
+	}
+
+	reg_addr = ((char *)pci_dev->mem_resource[0].addr + reg_off);
 	reg_v = *((volatile uint32_t *)reg_addr);
 	return rte_le_to_cpu_32(reg_v);
 }
@@ -516,11 +548,24 @@ port_pci_reg_read(struct rte_port *port, uint32_t reg_off)
 static inline void
 port_pci_reg_write(struct rte_port *port, uint32_t reg_off, uint32_t reg_v)
 {
+	const struct rte_pci_device *pci_dev;
+	const struct rte_bus *bus;
 	void *reg_addr;
 
-	reg_addr = (void *)
-		((char *)port->dev_info.pci_dev->mem_resource[0].addr +
-			reg_off);
+	if (!port->dev_info.device) {
+		printf("Invalid device\n");
+		return;
+	}
+
+	bus = rte_bus_find_by_device(port->dev_info.device);
+	if (bus && !strcmp(bus->name, "pci")) {
+		pci_dev = RTE_DEV_TO_PCI(port->dev_info.device);
+	} else {
+		printf("Not a PCI device\n");
+		return;
+	}
+
+	reg_addr = ((char *)pci_dev->mem_resource[0].addr + reg_off);
 	*((volatile uint32_t *)reg_addr) = rte_cpu_to_le_32(reg_v);
 }
 
@@ -551,6 +596,7 @@ void fwd_config_setup(void);
 void set_def_fwd_config(void);
 void reconfig(portid_t new_port_id, unsigned socket_id);
 int init_fwd_streams(void);
+void update_fwd_ports(portid_t new_pid);
 
 void set_fwd_eth_peer(portid_t port_id, char *peer_addr);
 
@@ -575,7 +621,7 @@ int port_flow_create(portid_t port_id,
 int port_flow_destroy(portid_t port_id, uint32_t n, const uint32_t *rule);
 int port_flow_flush(portid_t port_id);
 int port_flow_query(portid_t port_id, uint32_t rule,
-		    enum rte_flow_action_type action);
+		    const struct rte_flow_action *action);
 void port_flow_list(portid_t port_id, uint32_t n, const uint32_t *group);
 int port_flow_isolate(portid_t port_id, int set);
 
@@ -681,6 +727,7 @@ enum print_warning {
 	DISABLED_WARN
 };
 int port_id_is_invalid(portid_t port_id, enum print_warning warning);
+void print_valid_ports(void);
 int new_socket_id(unsigned int socket_id);
 
 queueid_t get_allowed_max_nb_rxq(portid_t *pid);

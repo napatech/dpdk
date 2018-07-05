@@ -187,7 +187,7 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 	uint16_t nb_rxd = RX_RING_SIZE;
 	uint16_t nb_txd = TX_RING_SIZE;
 
-	if (port >= rte_eth_dev_count())
+	if (!rte_eth_dev_is_valid_port(port))
 		return -1;
 
 	rte_eth_dev_info_get(port, &dev_info);
@@ -727,7 +727,7 @@ main(int argc, char *argv[])
 		rte_exit(EXIT_FAILURE, "Error with PTP initialization\n");
 
 	/* Check that there is an even number of ports to send/receive on. */
-	nb_ports = rte_eth_dev_count();
+	nb_ports = rte_eth_dev_count_avail();
 
 	/* Creates a new mempool in memory to hold the mbufs. */
 	mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
@@ -737,7 +737,7 @@ main(int argc, char *argv[])
 		rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
 
 	/* Initialize all ports. */
-	for (portid = 0; portid < nb_ports; portid++) {
+	RTE_ETH_FOREACH_DEV(portid) {
 		if ((ptp_enabled_port_mask & (1 << portid)) != 0) {
 			if (port_init(portid, mbuf_pool) == 0) {
 				ptp_enabled_ports[ptp_enabled_port_nb] = portid;

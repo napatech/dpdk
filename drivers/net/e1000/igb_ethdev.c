@@ -20,7 +20,6 @@
 #include <rte_ethdev_pci.h>
 #include <rte_memory.h>
 #include <rte_eal.h>
-#include <rte_atomic.h>
 #include <rte_malloc.h>
 #include <rte_dev.h>
 
@@ -41,8 +40,6 @@
 #define IGB_DEFAULT_TX_PTHRESH      ((hw->mac.type == e1000_i354) ? 20 : 8)
 #define IGB_DEFAULT_TX_HTHRESH      1
 #define IGB_DEFAULT_TX_WTHRESH      ((hw->mac.type == e1000_82576) ? 1 : 16)
-
-#define IGB_HKEY_MAX_INDEX 10
 
 /* Bit shift and mask */
 #define IGB_4_BIT_WIDTH  (CHAR_BIT / 2)
@@ -146,7 +143,7 @@ static int eth_igb_rar_set(struct rte_eth_dev *dev,
 			   struct ether_addr *mac_addr,
 			   uint32_t index, uint32_t pool);
 static void eth_igb_rar_clear(struct rte_eth_dev *dev, uint32_t index);
-static void eth_igb_default_mac_addr_set(struct rte_eth_dev *dev,
+static int eth_igb_default_mac_addr_set(struct rte_eth_dev *dev,
 		struct ether_addr *addr);
 
 static void igbvf_intr_disable(struct e1000_hw *hw);
@@ -171,7 +168,7 @@ static int igbvf_vlan_filter_set(struct rte_eth_dev *dev,
 		uint16_t vlan_id, int on);
 static int igbvf_set_vfta(struct e1000_hw *hw, uint16_t vid, bool on);
 static void igbvf_set_vfta_all(struct rte_eth_dev *dev, bool on);
-static void igbvf_default_mac_addr_set(struct rte_eth_dev *dev,
+static int igbvf_default_mac_addr_set(struct rte_eth_dev *dev,
 		struct ether_addr *addr);
 static int igbvf_get_reg_length(struct rte_eth_dev *dev);
 static int igbvf_get_regs(struct rte_eth_dev *dev,
@@ -224,6 +221,10 @@ static int eth_igb_get_eeprom(struct rte_eth_dev *dev,
 		struct rte_dev_eeprom_info *eeprom);
 static int eth_igb_set_eeprom(struct rte_eth_dev *dev,
 		struct rte_dev_eeprom_info *eeprom);
+static int eth_igb_get_module_info(struct rte_eth_dev *dev,
+				   struct rte_eth_dev_module_info *modinfo);
+static int eth_igb_get_module_eeprom(struct rte_eth_dev *dev,
+				     struct rte_dev_eeprom_info *info);
 static int eth_igb_set_mc_addr_list(struct rte_eth_dev *dev,
 				    struct ether_addr *mc_addr_set,
 				    uint32_t nb_mc_addr);
@@ -403,6 +404,8 @@ static const struct eth_dev_ops eth_igb_ops = {
 	.get_eeprom_length    = eth_igb_get_eeprom_length,
 	.get_eeprom           = eth_igb_get_eeprom,
 	.set_eeprom           = eth_igb_set_eeprom,
+	.get_module_info      = eth_igb_get_module_info,
+	.get_module_eeprom    = eth_igb_get_module_eeprom,
 	.timesync_adjust_time = igb_timesync_adjust_time,
 	.timesync_read_time   = igb_timesync_read_time,
 	.timesync_write_time  = igb_timesync_write_time,
@@ -522,57 +525,6 @@ static const struct rte_igb_xstats_name_off rte_igbvf_stats_strings[] = {
 #define IGBVF_NB_XSTATS (sizeof(rte_igbvf_stats_strings) / \
 		sizeof(rte_igbvf_stats_strings[0]))
 
-/**
- * Atomically reads the link status information from global
- * structure rte_eth_dev.
- *
- * @param dev
- *   - Pointer to the structure rte_eth_dev to read from.
- *   - Pointer to the buffer to be saved with the link status.
- *
- * @return
- *   - On success, zero.
- *   - On failure, negative value.
- */
-static inline int
-rte_igb_dev_atomic_read_link_status(struct rte_eth_dev *dev,
-				struct rte_eth_link *link)
-{
-	struct rte_eth_link *dst = link;
-	struct rte_eth_link *src = &(dev->data->dev_link);
-
-	if (rte_atomic64_cmpset((uint64_t *)dst, *(uint64_t *)dst,
-					*(uint64_t *)src) == 0)
-		return -1;
-
-	return 0;
-}
-
-/**
- * Atomically writes the link status information into global
- * structure rte_eth_dev.
- *
- * @param dev
- *   - Pointer to the structure rte_eth_dev to read from.
- *   - Pointer to the buffer to be saved with the link status.
- *
- * @return
- *   - On success, zero.
- *   - On failure, negative value.
- */
-static inline int
-rte_igb_dev_atomic_write_link_status(struct rte_eth_dev *dev,
-				struct rte_eth_link *link)
-{
-	struct rte_eth_link *dst = &(dev->data->dev_link);
-	struct rte_eth_link *src = link;
-
-	if (rte_atomic64_cmpset((uint64_t *)dst, *(uint64_t *)dst,
-					*(uint64_t *)src) == 0)
-		return -1;
-
-	return 0;
-}
 
 static inline void
 igb_intr_enable(struct rte_eth_dev *dev)
@@ -1559,7 +1511,7 @@ eth_igb_stop(struct rte_eth_dev *dev)
 
 	/* clear the recorded link status */
 	memset(&link, 0, sizeof(link));
-	rte_igb_dev_atomic_write_link_status(dev, &link);
+	rte_eth_linkstatus_set(dev, &link);
 
 	if (!rte_intr_allow_others(intr_handle))
 		/* resume to the default handler */
@@ -1635,7 +1587,7 @@ eth_igb_close(struct rte_eth_dev *dev)
 	}
 
 	memset(&link, 0, sizeof(link));
-	rte_igb_dev_atomic_write_link_status(dev, &link);
+	rte_eth_linkstatus_set(dev, &link);
 }
 
 static int
@@ -2196,22 +2148,15 @@ eth_igb_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 {
 	struct e1000_hw *hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
-	dev_info->pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	dev_info->min_rx_bufsize = 256; /* See BSIZE field of RCTL register. */
 	dev_info->max_rx_pktlen  = 0x3FFF; /* See RLPML register. */
 	dev_info->max_mac_addrs = hw->mac.rar_entry_count;
-	dev_info->rx_offload_capa =
-		DEV_RX_OFFLOAD_VLAN_STRIP |
-		DEV_RX_OFFLOAD_IPV4_CKSUM |
-		DEV_RX_OFFLOAD_UDP_CKSUM  |
-		DEV_RX_OFFLOAD_TCP_CKSUM;
-	dev_info->tx_offload_capa =
-		DEV_TX_OFFLOAD_VLAN_INSERT |
-		DEV_TX_OFFLOAD_IPV4_CKSUM  |
-		DEV_TX_OFFLOAD_UDP_CKSUM   |
-		DEV_TX_OFFLOAD_TCP_CKSUM   |
-		DEV_TX_OFFLOAD_SCTP_CKSUM  |
-		DEV_TX_OFFLOAD_TCP_TSO;
+	dev_info->rx_queue_offload_capa = igb_get_rx_queue_offloads_capa(dev);
+	dev_info->rx_offload_capa = igb_get_rx_port_offloads_capa(dev) |
+				    dev_info->rx_queue_offload_capa;
+	dev_info->tx_queue_offload_capa = igb_get_tx_queue_offloads_capa(dev);
+	dev_info->tx_offload_capa = igb_get_tx_port_offloads_capa(dev) |
+				    dev_info->tx_queue_offload_capa;
 
 	switch (hw->mac.type) {
 	case e1000_82575:
@@ -2274,6 +2219,7 @@ eth_igb_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		},
 		.rx_free_thresh = IGB_DEFAULT_RX_FREE_THRESH,
 		.rx_drop_en = 0,
+		.offloads = 0,
 	};
 
 	dev_info->default_txconf = (struct rte_eth_txconf) {
@@ -2282,7 +2228,7 @@ eth_igb_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 			.hthresh = IGB_DEFAULT_TX_HTHRESH,
 			.wthresh = IGB_DEFAULT_TX_WTHRESH,
 		},
-		.txq_flags = 0,
+		.offloads = 0,
 	};
 
 	dev_info->rx_desc_lim = rx_desc_lim;
@@ -2325,14 +2271,9 @@ eth_igbvf_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 {
 	struct e1000_hw *hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
-	dev_info->pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	dev_info->min_rx_bufsize = 256; /* See BSIZE field of RCTL register. */
 	dev_info->max_rx_pktlen  = 0x3FFF; /* See RLPML register. */
 	dev_info->max_mac_addrs = hw->mac.rar_entry_count;
-	dev_info->rx_offload_capa = DEV_RX_OFFLOAD_VLAN_STRIP |
-				DEV_RX_OFFLOAD_IPV4_CKSUM |
-				DEV_RX_OFFLOAD_UDP_CKSUM  |
-				DEV_RX_OFFLOAD_TCP_CKSUM;
 	dev_info->tx_offload_capa = DEV_TX_OFFLOAD_VLAN_INSERT |
 				DEV_TX_OFFLOAD_IPV4_CKSUM  |
 				DEV_TX_OFFLOAD_UDP_CKSUM   |
@@ -2353,6 +2294,13 @@ eth_igbvf_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		break;
 	}
 
+	dev_info->rx_queue_offload_capa = igb_get_rx_queue_offloads_capa(dev);
+	dev_info->rx_offload_capa = igb_get_rx_port_offloads_capa(dev) |
+				    dev_info->rx_queue_offload_capa;
+	dev_info->tx_queue_offload_capa = igb_get_tx_queue_offloads_capa(dev);
+	dev_info->tx_offload_capa = igb_get_tx_port_offloads_capa(dev) |
+				    dev_info->tx_queue_offload_capa;
+
 	dev_info->default_rxconf = (struct rte_eth_rxconf) {
 		.rx_thresh = {
 			.pthresh = IGB_DEFAULT_RX_PTHRESH,
@@ -2361,6 +2309,7 @@ eth_igbvf_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		},
 		.rx_free_thresh = IGB_DEFAULT_RX_FREE_THRESH,
 		.rx_drop_en = 0,
+		.offloads = 0,
 	};
 
 	dev_info->default_txconf = (struct rte_eth_txconf) {
@@ -2369,7 +2318,7 @@ eth_igbvf_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 			.hthresh = IGB_DEFAULT_TX_HTHRESH,
 			.wthresh = IGB_DEFAULT_TX_WTHRESH,
 		},
-		.txq_flags = 0,
+		.offloads = 0,
 	};
 
 	dev_info->rx_desc_lim = rx_desc_lim;
@@ -2382,7 +2331,7 @@ eth_igb_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 {
 	struct e1000_hw *hw =
 		E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct rte_eth_link link, old;
+	struct rte_eth_link link;
 	int link_check, count;
 
 	link_check = 0;
@@ -2423,8 +2372,6 @@ eth_igb_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 		rte_delay_ms(IGB_LINK_UPDATE_CHECK_INTERVAL);
 	}
 	memset(&link, 0, sizeof(link));
-	rte_igb_dev_atomic_read_link_status(dev, &link);
-	old = link;
 
 	/* Now we check if a transition has happened */
 	if (link_check) {
@@ -2443,14 +2390,8 @@ eth_igb_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 		link.link_status = ETH_LINK_DOWN;
 		link.link_autoneg = ETH_LINK_FIXED;
 	}
-	rte_igb_dev_atomic_write_link_status(dev, &link);
 
-	/* not changed */
-	if (old.link_status == link.link_status)
-		return -1;
-
-	/* changed */
-	return 0;
+	return rte_eth_linkstatus_set(dev, &link);
 }
 
 /*
@@ -2704,7 +2645,7 @@ igb_vlan_hw_extend_disable(struct rte_eth_dev *dev)
 	E1000_WRITE_REG(hw, E1000_CTRL_EXT, reg);
 
 	/* Update maximum packet length */
-	if (dev->data->dev_conf.rxmode.jumbo_frame == 1)
+	if (dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_JUMBO_FRAME)
 		E1000_WRITE_REG(hw, E1000_RLPML,
 			dev->data->dev_conf.rxmode.max_rx_pkt_len +
 						VLAN_TAG_SIZE);
@@ -2723,7 +2664,7 @@ igb_vlan_hw_extend_enable(struct rte_eth_dev *dev)
 	E1000_WRITE_REG(hw, E1000_CTRL_EXT, reg);
 
 	/* Update maximum packet length */
-	if (dev->data->dev_conf.rxmode.jumbo_frame == 1)
+	if (dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_JUMBO_FRAME)
 		E1000_WRITE_REG(hw, E1000_RLPML,
 			dev->data->dev_conf.rxmode.max_rx_pkt_len +
 						2 * VLAN_TAG_SIZE);
@@ -2732,22 +2673,25 @@ igb_vlan_hw_extend_enable(struct rte_eth_dev *dev)
 static int
 eth_igb_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 {
+	struct rte_eth_rxmode *rxmode;
+
+	rxmode = &dev->data->dev_conf.rxmode;
 	if(mask & ETH_VLAN_STRIP_MASK){
-		if (dev->data->dev_conf.rxmode.hw_vlan_strip)
+		if (rxmode->offloads & DEV_RX_OFFLOAD_VLAN_STRIP)
 			igb_vlan_hw_strip_enable(dev);
 		else
 			igb_vlan_hw_strip_disable(dev);
 	}
 
 	if(mask & ETH_VLAN_FILTER_MASK){
-		if (dev->data->dev_conf.rxmode.hw_vlan_filter)
+		if (rxmode->offloads & DEV_RX_OFFLOAD_VLAN_FILTER)
 			igb_vlan_hw_filter_enable(dev);
 		else
 			igb_vlan_hw_filter_disable(dev);
 	}
 
 	if(mask & ETH_VLAN_EXTEND_MASK){
-		if (dev->data->dev_conf.rxmode.hw_vlan_extend)
+		if (rxmode->offloads & DEV_RX_OFFLOAD_VLAN_EXTEND)
 			igb_vlan_hw_extend_enable(dev);
 		else
 			igb_vlan_hw_extend_disable(dev);
@@ -2887,8 +2831,7 @@ eth_igb_interrupt_action(struct rte_eth_dev *dev,
 		if (ret < 0)
 			return 0;
 
-		memset(&link, 0, sizeof(link));
-		rte_igb_dev_atomic_read_link_status(dev, &link);
+		rte_eth_linkstatus_get(dev, &link);
 		if (link.link_status) {
 			PMD_INIT_LOG(INFO,
 				     " Port %d: Link Up - speed %u Mbps - %s",
@@ -3146,13 +3089,14 @@ eth_igb_rar_clear(struct rte_eth_dev *dev, uint32_t index)
 	e1000_rar_set(hw, addr, index);
 }
 
-static void
+static int
 eth_igb_default_mac_addr_set(struct rte_eth_dev *dev,
 				struct ether_addr *addr)
 {
 	eth_igb_rar_clear(dev, 0);
-
 	eth_igb_rar_set(dev, (void *)addr, 0, 0);
+
+	return 0;
 }
 /*
  * Virtual Function operations
@@ -3250,14 +3194,14 @@ igbvf_dev_configure(struct rte_eth_dev *dev)
 	 * Keep the persistent behavior the same as Host PF
 	 */
 #ifndef RTE_LIBRTE_E1000_PF_DISABLE_STRIP_CRC
-	if (!conf->rxmode.hw_strip_crc) {
+	if (!(conf->rxmode.offloads & DEV_RX_OFFLOAD_CRC_STRIP)) {
 		PMD_INIT_LOG(NOTICE, "VF can't disable HW CRC Strip");
-		conf->rxmode.hw_strip_crc = 1;
+		conf->rxmode.offloads |= DEV_RX_OFFLOAD_CRC_STRIP;
 	}
 #else
-	if (conf->rxmode.hw_strip_crc) {
+	if (conf->rxmode.offloads & DEV_RX_OFFLOAD_CRC_STRIP) {
 		PMD_INIT_LOG(NOTICE, "VF can't enable HW CRC Strip");
-		conf->rxmode.hw_strip_crc = 0;
+		conf->rxmode.offloads &= ~DEV_RX_OFFLOAD_CRC_STRIP;
 	}
 #endif
 
@@ -3504,7 +3448,7 @@ igbvf_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 	return 0;
 }
 
-static void
+static int
 igbvf_default_mac_addr_set(struct rte_eth_dev *dev, struct ether_addr *addr)
 {
 	struct e1000_hw *hw =
@@ -3512,6 +3456,7 @@ igbvf_default_mac_addr_set(struct rte_eth_dev *dev, struct ether_addr *addr)
 
 	/* index is not used by rar_set() */
 	hw->mac.ops.rar_set(hw, (void *)addr, 0);
+	return 0;
 }
 
 
@@ -4499,10 +4444,12 @@ eth_igb_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 
 	/* switch to jumbo mode if needed */
 	if (frame_size > ETHER_MAX_LEN) {
-		dev->data->dev_conf.rxmode.jumbo_frame = 1;
+		dev->data->dev_conf.rxmode.offloads |=
+			DEV_RX_OFFLOAD_JUMBO_FRAME;
 		rctl |= E1000_RCTL_LPE;
 	} else {
-		dev->data->dev_conf.rxmode.jumbo_frame = 0;
+		dev->data->dev_conf.rxmode.offloads &=
+			~DEV_RX_OFFLOAD_JUMBO_FRAME;
 		rctl &= ~E1000_RCTL_LPE;
 	}
 	E1000_WRITE_REG(hw, E1000_RCTL, rctl);
@@ -5384,6 +5331,86 @@ eth_igb_set_eeprom(struct rte_eth_dev *dev,
 }
 
 static int
+eth_igb_get_module_info(struct rte_eth_dev *dev,
+			struct rte_eth_dev_module_info *modinfo)
+{
+	struct e1000_hw *hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+
+	uint32_t status = 0;
+	uint16_t sff8472_rev, addr_mode;
+	bool page_swap = false;
+
+	if (hw->phy.media_type == e1000_media_type_copper ||
+	    hw->phy.media_type == e1000_media_type_unknown)
+		return -EOPNOTSUPP;
+
+	/* Check whether we support SFF-8472 or not */
+	status = e1000_read_phy_reg_i2c(hw, IGB_SFF_8472_COMP, &sff8472_rev);
+	if (status)
+		return -EIO;
+
+	/* addressing mode is not supported */
+	status = e1000_read_phy_reg_i2c(hw, IGB_SFF_8472_SWAP, &addr_mode);
+	if (status)
+		return -EIO;
+
+	/* addressing mode is not supported */
+	if ((addr_mode & 0xFF) & IGB_SFF_ADDRESSING_MODE) {
+		PMD_DRV_LOG(ERR,
+			    "Address change required to access page 0xA2, "
+			    "but not supported. Please report the module "
+			    "type to the driver maintainers.\n");
+		page_swap = true;
+	}
+
+	if ((sff8472_rev & 0xFF) == IGB_SFF_8472_UNSUP || page_swap) {
+		/* We have an SFP, but it does not support SFF-8472 */
+		modinfo->type = RTE_ETH_MODULE_SFF_8079;
+		modinfo->eeprom_len = RTE_ETH_MODULE_SFF_8079_LEN;
+	} else {
+		/* We have an SFP which supports a revision of SFF-8472 */
+		modinfo->type = RTE_ETH_MODULE_SFF_8472;
+		modinfo->eeprom_len = RTE_ETH_MODULE_SFF_8472_LEN;
+	}
+
+	return 0;
+}
+
+static int
+eth_igb_get_module_eeprom(struct rte_eth_dev *dev,
+			  struct rte_dev_eeprom_info *info)
+{
+	struct e1000_hw *hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+
+	uint32_t status = 0;
+	uint16_t dataword[RTE_ETH_MODULE_SFF_8472_LEN / 2 + 1];
+	u16 first_word, last_word;
+	int i = 0;
+
+	if (info->length == 0)
+		return -EINVAL;
+
+	first_word = info->offset >> 1;
+	last_word = (info->offset + info->length - 1) >> 1;
+
+	/* Read EEPROM block, SFF-8079/SFF-8472, word at a time */
+	for (i = 0; i < last_word - first_word + 1; i++) {
+		status = e1000_read_phy_reg_i2c(hw, (first_word + i) * 2,
+						&dataword[i]);
+		if (status) {
+			/* Error occurred while reading module */
+			return -EIO;
+		}
+
+		dataword[i] = rte_be_to_cpu_16(dataword[i]);
+	}
+
+	memcpy(info->data, (u8 *)dataword + (info->offset & 1), info->length);
+
+	return 0;
+}
+
+static int
 eth_igb_rx_queue_intr_disable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
 	struct e1000_hw *hw =
@@ -5631,7 +5658,7 @@ igb_rss_filter_restore(struct rte_eth_dev *dev)
 	struct e1000_filter_info *filter_info =
 		E1000_DEV_PRIVATE_TO_FILTER_INFO(dev->data->dev_private);
 
-	if (filter_info->rss_info.num)
+	if (filter_info->rss_info.conf.queue_num)
 		igb_config_rss_filter(dev, &filter_info->rss_info, TRUE);
 }
 
@@ -5654,3 +5681,11 @@ RTE_PMD_REGISTER_KMOD_DEP(net_e1000_igb, "* igb_uio | uio_pci_generic | vfio-pci
 RTE_PMD_REGISTER_PCI(net_e1000_igb_vf, rte_igbvf_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_e1000_igb_vf, pci_id_igbvf_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_e1000_igb_vf, "* igb_uio | vfio-pci");
+
+/* see e1000_logs.c */
+RTE_INIT(e1000_init_log);
+static void
+e1000_init_log(void)
+{
+	e1000_igb_init_log();
+}

@@ -1,7 +1,7 @@
 /*
- * Copyright (c) 2016 QLogic Corporation.
+ * Copyright (c) 2016 - 2018 Cavium Inc.
  * All rights reserved.
- * www.qlogic.com
+ * www.cavium.com
  *
  * See LICENSE.qede_pmd for copyright and licensing details.
  */
@@ -148,6 +148,10 @@ ecore_dcbx_set_params(struct ecore_dcbx_results *p_data,
 		p_data->arr[type].dscp_enable = true;
 	}
 	p_data->arr[type].update = UPDATE_DCB_DSCP;
+
+	/* Do not add valn tag 0 when DCB is enabled and port is in UFP mode */
+	if (OSAL_TEST_BIT(ECORE_MF_UFP_SPECIFIC, &p_hwfn->p_dev->mf_bits))
+		p_data->arr[type].dont_add_vlan0 = true;
 
 	/* QM reconf data */
 	if (p_hwfn->hw_info.personality == personality)
@@ -910,7 +914,7 @@ enum _ecore_status_t ecore_dcbx_info_alloc(struct ecore_hwfn *p_hwfn)
 	p_hwfn->p_dcbx_info = OSAL_ZALLOC(p_hwfn->p_dev, GFP_KERNEL,
 					  sizeof(*p_hwfn->p_dcbx_info));
 	if (!p_hwfn->p_dcbx_info) {
-		DP_NOTICE(p_hwfn, true,
+		DP_NOTICE(p_hwfn, false,
 			  "Failed to allocate `struct ecore_dcbx_info'");
 		return ECORE_NOMEM;
 	}
@@ -935,6 +939,7 @@ static void ecore_dcbx_update_protocol_data(struct protocol_dcb_data *p_data,
 	p_data->dcb_tc = p_src->arr[type].tc;
 	p_data->dscp_enable_flag = p_src->arr[type].dscp_enable;
 	p_data->dscp_val = p_src->arr[type].dscp_val;
+	p_data->dcb_dont_add_vlan0 = p_src->arr[type].dont_add_vlan0;
 }
 
 /* Set pf update ramrod command params */

@@ -26,14 +26,11 @@
 #include "sfc_kvargs.h"
 #include "sfc_ef10.h"
 
+#define SFC_EF10_RX_EV_ENCAP_SUPPORT	1
+#include "sfc_ef10_rx_ev.h"
+
 #define sfc_ef10_rx_err(dpq, ...) \
 	SFC_DP_LOG(SFC_KVARG_DATAPATH_EF10, ERR, dpq, __VA_ARGS__)
-
-/**
- * Alignment requirement for value written to RX WPTR:
- * the WPTR must be aligned to an 8 descriptor boundary.
- */
-#define SFC_EF10_RX_WPTR_ALIGN	8
 
 /**
  * Maximum number of descriptors/buffers in the Rx ring.
@@ -88,29 +85,6 @@ sfc_ef10_rxq_by_dp_rxq(struct sfc_dp_rxq *dp_rxq)
 }
 
 static void
-sfc_ef10_rx_qpush(struct sfc_ef10_rxq *rxq)
-{
-	efx_dword_t dword;
-
-	/* Hardware has alignment restriction for WPTR */
-	RTE_BUILD_BUG_ON(SFC_RX_REFILL_BULK % SFC_EF10_RX_WPTR_ALIGN != 0);
-	SFC_ASSERT(RTE_ALIGN(rxq->added, SFC_EF10_RX_WPTR_ALIGN) == rxq->added);
-
-	EFX_POPULATE_DWORD_1(dword, ERF_DZ_RX_DESC_WPTR,
-			     rxq->added & rxq->ptr_mask);
-
-	/* DMA sync to device is not required */
-
-	/*
-	 * rte_write32() has rte_io_wmb() which guarantees that the STORE
-	 * operations (i.e. Rx and event descriptor updates) that precede
-	 * the rte_io_wmb() call are visible to NIC before the STORE
-	 * operations that follow it (i.e. doorbell write).
-	 */
-	rte_write32(dword.ed_u32[0], rxq->doorbell);
-}
-
-static void
 sfc_ef10_rx_qrefill(struct sfc_ef10_rxq *rxq)
 {
 	const unsigned int ptr_mask = rxq->ptr_mask;
@@ -119,6 +93,8 @@ sfc_ef10_rx_qrefill(struct sfc_ef10_rxq *rxq)
 	unsigned int bulks;
 	void *objs[SFC_RX_REFILL_BULK];
 	unsigned int added = rxq->added;
+
+	RTE_BUILD_BUG_ON(SFC_RX_REFILL_BULK % SFC_EF10_RX_WPTR_ALIGN != 0);
 
 	free_space = rxq->max_fill_level - (added - rxq->completed);
 
@@ -178,7 +154,7 @@ sfc_ef10_rx_qrefill(struct sfc_ef10_rxq *rxq)
 
 	SFC_ASSERT(rxq->added != added);
 	rxq->added = added;
-	sfc_ef10_rx_qpush(rxq);
+	sfc_ef10_rx_qpush(rxq->doorbell, added, ptr_mask);
 }
 
 static void
@@ -223,137 +199,6 @@ sfc_ef10_rx_prepared(struct sfc_ef10_rxq *rxq, struct rte_mbuf **rx_pkts,
 		rx_pkts[i] = rxq->sw_ring[completed & rxq->ptr_mask].mbuf;
 
 	return n_rx_pkts;
-}
-
-static void
-sfc_ef10_rx_ev_to_offloads(struct sfc_ef10_rxq *rxq, const efx_qword_t rx_ev,
-			   struct rte_mbuf *m)
-{
-	uint32_t tun_ptype = 0;
-	/* Which event bit is mapped to PKT_RX_IP_CKSUM_* */
-	int8_t ip_csum_err_bit;
-	/* Which event bit is mapped to PKT_RX_L4_CKSUM_* */
-	int8_t l4_csum_err_bit;
-	uint32_t l2_ptype = 0;
-	uint32_t l3_ptype = 0;
-	uint32_t l4_ptype = 0;
-	uint64_t ol_flags = 0;
-
-	if (unlikely(EFX_TEST_QWORD_BIT(rx_ev, ESF_DZ_RX_PARSE_INCOMPLETE_LBN)))
-		goto done;
-
-	switch (EFX_QWORD_FIELD(rx_ev, ESF_EZ_RX_ENCAP_HDR)) {
-	default:
-		/* Unexpected encapsulation tag class */
-		SFC_ASSERT(false);
-		/* FALLTHROUGH */
-	case ESE_EZ_ENCAP_HDR_NONE:
-		break;
-	case ESE_EZ_ENCAP_HDR_VXLAN:
-		/*
-		 * It is definitely UDP, but we have no information
-		 * about IPv4 vs IPv6 and VLAN tagging.
-		 */
-		tun_ptype = RTE_PTYPE_TUNNEL_VXLAN | RTE_PTYPE_L4_UDP;
-		break;
-	case ESE_EZ_ENCAP_HDR_GRE:
-		/*
-		 * We have no information about IPv4 vs IPv6 and VLAN tagging.
-		 */
-		tun_ptype = RTE_PTYPE_TUNNEL_NVGRE;
-		break;
-	}
-
-	if (tun_ptype == 0) {
-		ip_csum_err_bit = ESF_DZ_RX_IPCKSUM_ERR_LBN;
-		l4_csum_err_bit = ESF_DZ_RX_TCPUDP_CKSUM_ERR_LBN;
-	} else {
-		ip_csum_err_bit = ESF_EZ_RX_IP_INNER_CHKSUM_ERR_LBN;
-		l4_csum_err_bit = ESF_EZ_RX_TCP_UDP_INNER_CHKSUM_ERR_LBN;
-		if (unlikely(EFX_TEST_QWORD_BIT(rx_ev,
-						ESF_DZ_RX_IPCKSUM_ERR_LBN)))
-			ol_flags |= PKT_RX_EIP_CKSUM_BAD;
-	}
-
-	switch (EFX_QWORD_FIELD(rx_ev, ESF_DZ_RX_ETH_TAG_CLASS)) {
-	case ESE_DZ_ETH_TAG_CLASS_NONE:
-		l2_ptype = (tun_ptype == 0) ? RTE_PTYPE_L2_ETHER :
-			RTE_PTYPE_INNER_L2_ETHER;
-		break;
-	case ESE_DZ_ETH_TAG_CLASS_VLAN1:
-		l2_ptype = (tun_ptype == 0) ? RTE_PTYPE_L2_ETHER_VLAN :
-			RTE_PTYPE_INNER_L2_ETHER_VLAN;
-		break;
-	case ESE_DZ_ETH_TAG_CLASS_VLAN2:
-		l2_ptype = (tun_ptype == 0) ? RTE_PTYPE_L2_ETHER_QINQ :
-			RTE_PTYPE_INNER_L2_ETHER_QINQ;
-		break;
-	default:
-		/* Unexpected Eth tag class */
-		SFC_ASSERT(false);
-	}
-
-	switch (EFX_QWORD_FIELD(rx_ev, ESF_DZ_RX_L3_CLASS)) {
-	case ESE_DZ_L3_CLASS_IP4_FRAG:
-		l4_ptype = (tun_ptype == 0) ? RTE_PTYPE_L4_FRAG :
-			RTE_PTYPE_INNER_L4_FRAG;
-		/* FALLTHROUGH */
-	case ESE_DZ_L3_CLASS_IP4:
-		l3_ptype = (tun_ptype == 0) ? RTE_PTYPE_L3_IPV4_EXT_UNKNOWN :
-			RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN;
-		ol_flags |= PKT_RX_RSS_HASH |
-			((EFX_TEST_QWORD_BIT(rx_ev, ip_csum_err_bit)) ?
-			 PKT_RX_IP_CKSUM_BAD : PKT_RX_IP_CKSUM_GOOD);
-		break;
-	case ESE_DZ_L3_CLASS_IP6_FRAG:
-		l4_ptype = (tun_ptype == 0) ? RTE_PTYPE_L4_FRAG :
-			RTE_PTYPE_INNER_L4_FRAG;
-		/* FALLTHROUGH */
-	case ESE_DZ_L3_CLASS_IP6:
-		l3_ptype = (tun_ptype == 0) ? RTE_PTYPE_L3_IPV6_EXT_UNKNOWN :
-			RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN;
-		ol_flags |= PKT_RX_RSS_HASH;
-		break;
-	case ESE_DZ_L3_CLASS_ARP:
-		/* Override Layer 2 packet type */
-		/* There is no ARP classification for inner packets */
-		if (tun_ptype == 0)
-			l2_ptype = RTE_PTYPE_L2_ETHER_ARP;
-		break;
-	default:
-		/* Unexpected Layer 3 class */
-		SFC_ASSERT(false);
-	}
-
-	switch (EFX_QWORD_FIELD(rx_ev, ESF_DZ_RX_L4_CLASS)) {
-	case ESE_DZ_L4_CLASS_TCP:
-		l4_ptype = (tun_ptype == 0) ? RTE_PTYPE_L4_TCP :
-			RTE_PTYPE_INNER_L4_TCP;
-		ol_flags |=
-			(EFX_TEST_QWORD_BIT(rx_ev, l4_csum_err_bit)) ?
-			PKT_RX_L4_CKSUM_BAD : PKT_RX_L4_CKSUM_GOOD;
-		break;
-	case ESE_DZ_L4_CLASS_UDP:
-		l4_ptype = (tun_ptype == 0) ? RTE_PTYPE_L4_UDP :
-			RTE_PTYPE_INNER_L4_UDP;
-		ol_flags |=
-			(EFX_TEST_QWORD_BIT(rx_ev, l4_csum_err_bit)) ?
-			PKT_RX_L4_CKSUM_BAD : PKT_RX_L4_CKSUM_GOOD;
-		break;
-	case ESE_DZ_L4_CLASS_UNKNOWN:
-		break;
-	default:
-		/* Unexpected Layer 4 class */
-		SFC_ASSERT(false);
-	}
-
-	/* Remove RSS hash offload flag if RSS is not enabled */
-	if (~rxq->flags & SFC_EF10_RXQ_RSS_HASH)
-		ol_flags &= ~PKT_RX_RSS_HASH;
-
-done:
-	m->ol_flags = ol_flags;
-	m->packet_type = tun_ptype | l2_ptype | l3_ptype | l4_ptype;
 }
 
 static uint16_t
@@ -414,7 +259,10 @@ sfc_ef10_rx_process_event(struct sfc_ef10_rxq *rxq, efx_qword_t rx_ev,
 	m->rearm_data[0] = rxq->rearm_data;
 
 	/* Classify packet based on Rx event */
-	sfc_ef10_rx_ev_to_offloads(rxq, rx_ev, m);
+	/* Mask RSS hash offload flag if RSS is not enabled */
+	sfc_ef10_rx_ev_to_offloads(rx_ev, m,
+				   (rxq->flags & SFC_EF10_RXQ_RSS_HASH) ?
+				   ~0ull : ~PKT_RX_RSS_HASH);
 
 	/* data_off already moved past pseudo header */
 	pseudo_hdr = (uint8_t *)m->buf_addr + RTE_PKTMBUF_HEADROOM;
@@ -538,7 +386,7 @@ sfc_ef10_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 	return n_rx_pkts;
 }
 
-static const uint32_t *
+const uint32_t *
 sfc_ef10_supported_ptypes_get(uint32_t tunnel_encaps)
 {
 	static const uint32_t ef10_native_ptypes[] = {
@@ -587,8 +435,8 @@ sfc_ef10_supported_ptypes_get(uint32_t tunnel_encaps)
 	      1u << EFX_TUNNEL_PROTOCOL_NVGRE):
 		return ef10_overlay_ptypes;
 	default:
-		RTE_LOG(ERR, PMD,
-			"Unexpected set of supported tunnel encapsulations: %#x\n",
+		SFC_GENERIC_LOG(ERR,
+			"Unexpected set of supported tunnel encapsulations: %#x",
 			tunnel_encaps);
 		/* FALLTHROUGH */
 	case 0:
@@ -632,6 +480,7 @@ sfc_ef10_rx_get_dev_info(struct rte_eth_dev_info *dev_info)
 static sfc_dp_rx_qsize_up_rings_t sfc_ef10_rx_qsize_up_rings;
 static int
 sfc_ef10_rx_qsize_up_rings(uint16_t nb_rx_desc,
+			   __rte_unused struct rte_mempool *mb_pool,
 			   unsigned int *rxq_entries,
 			   unsigned int *evq_entries,
 			   unsigned int *rxq_max_fill_level)
@@ -716,7 +565,7 @@ sfc_ef10_rx_qcreate(uint16_t port_id, uint16_t queue_id,
 	rxq->rxq_hw_ring = info->rxq_hw_ring;
 	rxq->doorbell = (volatile uint8_t *)info->mem_bar +
 			ER_DZ_RX_DESC_UPD_REG_OFST +
-			info->hw_index * ER_DZ_RX_DESC_UPD_REG_STEP;
+			(info->hw_index << info->vi_window_shift);
 
 	*dp_rxqp = &rxq->dp;
 	return 0;

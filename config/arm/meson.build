@@ -8,7 +8,7 @@ march_opt = '-march=@0@'.format(machine)
 arm_force_native_march = false
 
 machine_args_generic = [
-	['default', ['-march=armv8-a']],
+	['default', ['-march=armv8-a+crc+crypto']],
 	['native', ['-march=native']],
 	['0xd03', ['-mcpu=cortex-a53']],
 	['0xd04', ['-mcpu=cortex-a35']],
@@ -54,6 +54,17 @@ flags_cavium = [
 	['RTE_MAX_LCORE', 96],
 	['RTE_MAX_VFIO_GROUPS', 128],
 	['RTE_RING_USE_C11_MEM_MODEL', false]]
+flags_dpaa = [
+	['RTE_MACHINE', '"dpaa"'],
+	['RTE_CACHE_LINE_SIZE', 64],
+	['RTE_MAX_NUMA_NODES', 1],
+	['RTE_MAX_LCORE', 16]]
+flags_dpaa2 = [
+	['RTE_MACHINE', '"dpaa2"'],
+	['RTE_CACHE_LINE_SIZE', 64],
+	['RTE_MAX_NUMA_NODES', 1],
+	['RTE_MAX_LCORE', 16],
+	['RTE_LIBRTE_DPAA2_USE_PHYS_IOVA', 'n']]
 
 ## Arm implementer ID (ARM DDI 0487C.a, Section G7.2.106, Page G7-5321)
 impl_generic = ['Generic armv8', flags_generic, machine_args_generic]
@@ -69,15 +80,8 @@ impl_0x51 = ['Qualcomm', flags_generic, machine_args_generic]
 impl_0x53 = ['Samsung', flags_generic, machine_args_generic]
 impl_0x56 = ['Marvell', flags_generic, machine_args_generic]
 impl_0x69 = ['Intel', flags_generic, machine_args_generic]
-
-
-if cc.get_define('__clang__') != ''
-	dpdk_conf.set_quoted('RTE_TOOLCHAIN', 'clang')
-	dpdk_conf.set('RTE_TOOLCHAIN_CLANG', 1)
-else
-	dpdk_conf.set_quoted('RTE_TOOLCHAIN', 'gcc')
-	dpdk_conf.set('RTE_TOOLCHAIN_GCC', 1)
-endif
+impl_dpaa = ['NXP DPAA', flags_dpaa, machine_args_generic]
+impl_dpaa2 = ['NXP DPAA2', flags_dpaa2, machine_args_generic]
 
 dpdk_conf.set('RTE_FORCE_INTRINSICS', 1)
 

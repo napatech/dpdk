@@ -1,34 +1,6 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) Broadcom Limited.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Broadcom Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2014-2018 Broadcom
+ * All rights reserved.
  */
 
 #include <inttypes.h>
@@ -47,16 +19,17 @@
 
 void bnxt_free_txq_stats(struct bnxt_tx_queue *txq)
 {
-	struct bnxt_cp_ring_info *cpr = txq->cp_ring;
-
-	if (cpr->hw_stats)
-		cpr->hw_stats = NULL;
+	if (txq && txq->cp_ring && txq->cp_ring->hw_stats)
+		txq->cp_ring->hw_stats = NULL;
 }
 
 static void bnxt_tx_queue_release_mbufs(struct bnxt_tx_queue *txq)
 {
 	struct bnxt_sw_tx_bd *sw_ring;
 	uint16_t i;
+
+	if (!txq)
+		return;
 
 	sw_ring = txq->tx_ring->tx_buf_ring;
 	if (sw_ring) {
@@ -93,6 +66,8 @@ void bnxt_tx_queue_release_op(void *tx_queue)
 		bnxt_free_ring(txq->cp_ring->cp_ring_struct);
 
 		bnxt_free_txq_stats(txq);
+		rte_memzone_free(txq->mz);
+		txq->mz = NULL;
 
 		rte_free(txq);
 	}
@@ -112,7 +87,7 @@ int bnxt_tx_queue_setup_op(struct rte_eth_dev *eth_dev,
 		PMD_DRV_LOG(ERR,
 			"Cannot create Tx ring %d. Only %d rings available\n",
 			queue_idx, bp->max_tx_rings);
-		return -ENOSPC;
+		return -EINVAL;
 	}
 
 	if (!nb_desc || nb_desc > MAX_TX_DESC_CNT) {
@@ -147,7 +122,7 @@ int bnxt_tx_queue_setup_op(struct rte_eth_dev *eth_dev,
 	txq->port_id = eth_dev->data->port_id;
 
 	/* Allocate TX ring hardware descriptors */
-	if (bnxt_alloc_rings(bp, queue_idx, txq->tx_ring, NULL, txq->cp_ring,
+	if (bnxt_alloc_rings(bp, queue_idx, txq, NULL, txq->cp_ring,
 			"txr")) {
 		PMD_DRV_LOG(ERR, "ring_dma_zone_reserve for tx_ring failed!");
 		bnxt_tx_queue_release_op(txq);

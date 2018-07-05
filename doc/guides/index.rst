@@ -17,7 +17,9 @@ DPDK documentation
    nics/index
    bbdevs/index
    cryptodevs/index
+   compressdevs/index
    eventdevs/index
+   rawdevs/index
    mempool/index
    platform/index
    contributing/index

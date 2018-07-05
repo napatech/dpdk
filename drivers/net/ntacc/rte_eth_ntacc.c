@@ -885,7 +885,6 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
   dev_info->max_tx_queues = STREAMIDS_PER_PORT > RTE_ETHDEV_QUEUE_STAT_CNTRS ? RTE_ETHDEV_QUEUE_STAT_CNTRS : STREAMIDS_PER_PORT;
   dev_info->min_rx_bufsize = 0;
   dev_info->default_txconf.txq_flags = ETH_TXQ_FLAGS_NOMULTSEGS;
-  dev_info->pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
@@ -1242,7 +1241,6 @@ static const char *ActionErrorString(enum rte_flow_action_type type)
   case RTE_FLOW_ACTION_TYPE_FLAG:     return "Action FLAG is not supported";
   case RTE_FLOW_ACTION_TYPE_DROP:     return "Action DROP is not supported";
   case RTE_FLOW_ACTION_TYPE_COUNT:    return "Action COUNT is not supported";
-  case RTE_FLOW_ACTION_TYPE_DUP:      return "Action DUP is not supported";
   case RTE_FLOW_ACTION_TYPE_PF:       return "Action PF is not supported";
   case RTE_FLOW_ACTION_TYPE_VF:       return "Action VF is not supported";
   default:                            return "Action is UNKNOWN";
@@ -1328,8 +1326,6 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   struct color_s color = {0, false};
   uint8_t nb_ports = 0;
   uint8_t list_ports[MAX_NTACC_PORTS];
-  uint64_t rss_hf = 0;
-
 
   uint64_t typeMask = 0;
   bool reuse = false;
@@ -1390,21 +1386,16 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         goto FlowError;
       }
       queueDefined = true;
-      if (rss->num > RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+      if (rss->queue_num > RTE_ETHDEV_QUEUE_STAT_CNTRS) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Number of RSS queues out of range");
         goto FlowError;
       }
-      for (i = 0; i < rss->num; i++) {
-        if (rss->queue[i] >= RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+      for (i = 0; i < rss->queue_num; i++) {
+        if (rss->queue && rss->queue[i] >= RTE_ETHDEV_QUEUE_STAT_CNTRS) {
           rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "RSS queue out of range");
           goto FlowError;
         }
         list_queues[nb_queues++] = rss->queue[i];
-
-        // Set hash mode function
-        if (rss->rss_conf) {
-          rss_hf = rss->rss_conf->rss_hf;
-        }
       }
       break;
     case RTE_FLOW_ACTION_TYPE_QUEUE:
@@ -1468,9 +1459,9 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
         break;
     case RTE_FLOW_ITEM_TYPE_VOID:
       continue;
-    case RTE_FLOW_ITEM_TYPE_PORT:
+    case RTE_FLOW_ITEM_TYPE_PHY_PORT:
       if (nb_ports < MAX_NTACC_PORTS) {
-        const struct rte_flow_item_port *spec = (const struct rte_flow_item_port *)items->spec;
+        const struct rte_flow_item_phy_port *spec = (const struct rte_flow_item_phy_port *)items->spec;
         if (spec->index > internals->nbPortsOnAdapter) {
           rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Illegal port number in port flow. All port numbers must be from the same adapter");
           goto FlowError;
@@ -1654,9 +1645,9 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   }
 
   // Create HASH
-  if (rss && rss->rss_conf) {
+  if (rss) {
     // If RSS is used, then set the Hash mode
-    if (CreateHash(&ntpl_buf[strlen(ntpl_buf)], rss_hf, internals, tunnel) != 0) {
+    if (CreateHash(&ntpl_buf[strlen(ntpl_buf)], rss, internals) != 0) {
       rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Failed setting up hash mode");
       goto FlowError;
     }
@@ -1924,10 +1915,15 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=62;Descriptor=DYN3,length=20,colorbits=14;");
 #endif
       if (internals->rss_hf != 0) {
+        struct rte_flow_action_rss rss;
+        memset(&rss, 0, sizeof(struct rte_flow_action_rss));
         // Set the stream IDs
         CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
         // If RSS is used, then set the Hash mode
-        if (CreateHash(&ntpl_buf[strlen(ntpl_buf)], internals->rss_hf, internals, false) != 0) {
+        rss.types = internals->rss_hf;
+        rss.level = 0;
+        rss.func = RTE_ETH_HASH_FUNCTION_SIMPLE_XOR;
+        if (CreateHash(&ntpl_buf[strlen(ntpl_buf)], &rss, internals) != 0) {
           PMD_NTACC_LOG(ERR, "Failed to create hash function eth_dev_start\n");
           goto IsolateError;
         }
@@ -2271,7 +2267,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     internals->port = offset + localPort;
     internals->local_port = localPort;
     internals->local_port_offset = offset;
-    internals->symHashMode = SYM_HASH_ENA_PER_PORT;
+    internals->symHashMode = SYM_HASH_DIS_PER_PORT;
     internals->fpgaid.value = pInfo->u.port_v7.data.adapterInfo.fpgaid.value;
 
     // Check timestamp format
@@ -2343,6 +2339,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     eth_dev->dev_ops = &ops;
     eth_dev->rx_pkt_burst = eth_ntacc_rx;
     eth_dev->tx_pkt_burst = eth_ntacc_tx;
+    eth_dev->state = RTE_ETH_DEV_ATTACHED;
 
   #ifndef USE_SW_STAT
     /* Open the stat stream */
@@ -2649,13 +2646,14 @@ static struct rte_pci_driver ntacc_driver = {
 RTE_INIT(rte_ntacc_pmd_init);
 static void rte_ntacc_pmd_init(void)
 {
-	rte_pci_register(&ntacc_driver);
 	ntacc_logtype = rte_log_register("pmd.net.ntacc");
 	if (ntacc_logtype >= 0)
 		rte_log_set_level(ntacc_logtype, RTE_LOG_NOTICE);
 }
 
-RTE_PMD_EXPORT_NAME(net_ntacc, __COUNTER__);
+RTE_PMD_REGISTER_PCI(net_ntacc, ntacc_driver);
 RTE_PMD_REGISTER_PCI_TABLE(net_ntacc, ntacc_pci_id_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_ntacc, "* nt3gd");
+
+
 

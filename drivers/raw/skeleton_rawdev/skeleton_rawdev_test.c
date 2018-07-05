@@ -288,6 +288,7 @@ test_rawdev_attr_set_get(void)
 			      "Attribute (Test2) not set correctly (%" PRIu64 ")",
 			      ret_value);
 
+	free(dummy_value);
 	return TEST_SUCCESS;
 }
 
@@ -379,8 +380,6 @@ test_rawdev_enqdeq(void)
 cleanup:
 	if (buffers[0].buf_addr)
 		free(buffers[0].buf_addr);
-	if (deq_buffers)
-		free(deq_buffers);
 
 	return TEST_FAILED;
 }

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2015 6WIND S.A.
- * Copyright 2015 Mellanox.
+ * Copyright 2015 Mellanox Technologies, Ltd
  */
 
 #ifndef RTE_PMD_MLX5_DEFS_H_
@@ -13,8 +13,13 @@
 /* Reported driver name. */
 #define MLX5_DRIVER_NAME "net_mlx5"
 
+/* Maximum number of simultaneous unicast MAC addresses. */
+#define MLX5_MAX_UC_MAC_ADDRESSES 128
+/* Maximum number of simultaneous Multicast MAC addresses. */
+#define MLX5_MAX_MC_MAC_ADDRESSES 128
 /* Maximum number of simultaneous MAC addresses. */
-#define MLX5_MAX_MAC_ADDRESSES 128
+#define MLX5_MAX_MAC_ADDRESSES \
+	(MLX5_MAX_UC_MAC_ADDRESSES + MLX5_MAX_MC_MAC_ADDRESSES)
 
 /* Maximum number of simultaneous VLAN filters. */
 #define MLX5_MAX_VLAN_IDS 128
@@ -32,16 +37,11 @@
  */
 #define MLX5_TX_COMP_THRESH_INLINE_DIV (1 << 3)
 
-/*
- * Maximum number of cached Memory Pools (MPs) per TX queue. Each RTE MP
- * from which buffers are to be transmitted will have to be mapped by this
- * driver to their own Memory Region (MR). This is a slow operation.
- *
- * This value is always 1 for RX queues.
- */
-#ifndef MLX5_PMD_TX_MP_CACHE
-#define MLX5_PMD_TX_MP_CACHE 8
-#endif
+/* Size of per-queue MR cache array for linear search. */
+#define MLX5_MR_CACHE_N 8
+
+/* Size of MR cache table for binary search. */
+#define MLX5_MR_BTREE_CACHE_N 256
 
 /*
  * If defined, only use software counters. The PMD will never ask the hardware
@@ -58,7 +58,7 @@
 #define MLX5_MAX_XSTATS 32
 
 /* Maximum Packet headers size (L2+L3+L4) for TSO. */
-#define MLX5_MAX_TSO_HEADER 128
+#define MLX5_MAX_TSO_HEADER 192
 
 /* Default minimum number of Tx queues for vectorized Tx. */
 #define MLX5_VPMD_MIN_TXQS 4
@@ -82,8 +82,8 @@
 /* Supported RSS */
 #define MLX5_RSS_HF_MASK (~(ETH_RSS_IP | ETH_RSS_UDP | ETH_RSS_TCP))
 
-/* Maximum number of attempts to query link status before giving up. */
-#define MLX5_MAX_LINK_QUERY_ATTEMPTS 5
+/* Timeout in seconds to get a valid link status. */
+#define MLX5_LINK_STATUS_TIMEOUT 10
 
 /* Reserved address space for UAR mapping. */
 #define MLX5_UAR_SIZE (1ULL << 32)
@@ -94,5 +94,23 @@
  * packets invisible to HW.
  */
 #define MLX5_UAR_OFFSET (1ULL << 32)
+
+/* Log 2 of the default number of strides per WQE for Multi-Packet RQ. */
+#define MLX5_MPRQ_STRIDE_NUM_N 4U
+
+/* Two-byte shift is disabled for Multi-Packet RQ. */
+#define MLX5_MPRQ_TWO_BYTE_SHIFT 0
+
+/*
+ * Minimum size of packet to be memcpy'd instead of being attached as an
+ * external buffer.
+ */
+#define MLX5_MPRQ_MEMCPY_DEFAULT_LEN 128
+
+/* Minimum number Rx queues to enable Multi-Packet RQ. */
+#define MLX5_MPRQ_MIN_RXQS 12
+
+/* Cache size of mempool for Multi-Packet RQ. */
+#define MLX5_MPRQ_MP_CACHE_SZ 32
 
 #endif /* RTE_PMD_MLX5_DEFS_H_ */

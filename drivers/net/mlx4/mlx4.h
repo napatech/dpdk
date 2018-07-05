@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2012 6WIND S.A.
- * Copyright 2012 Mellanox
+ * Copyright 2012 Mellanox Technologies, Ltd
  */
 
 #ifndef RTE_PMD_MLX4_H_
@@ -23,7 +23,9 @@
 #include <rte_ether.h>
 #include <rte_interrupts.h>
 #include <rte_mempool.h>
-#include <rte_spinlock.h>
+#include <rte_rwlock.h>
+
+#include "mlx4_mr.h"
 
 #ifndef IBV_RX_HASH_INNER
 /** This is not necessarily defined by supported RDMA core versions. */
@@ -41,17 +43,6 @@
 
 /** Fixed RSS hash key size in bytes. Cannot be modified. */
 #define MLX4_RSS_HASH_KEY_SIZE 40
-
-/**
- * Maximum number of cached Memory Pools (MPs) per TX queue. Each RTE MP
- * from which buffers are to be transmitted will have to be mapped by this
- * driver to their own Memory Region (MR). This is a slow operation.
- *
- * This value is always 1 for RX queues.
- */
-#ifndef MLX4_PMD_TX_MP_CACHE
-#define MLX4_PMD_TX_MP_CACHE 8
-#endif
 
 /** Interrupt alarm timeout value in microseconds. */
 #define MLX4_INTR_ALARM_TIMEOUT 100000
@@ -78,20 +69,12 @@ struct rxq;
 struct txq;
 struct rte_flow;
 
-/** Memory region descriptor. */
-struct mlx4_mr {
-	LIST_ENTRY(mlx4_mr) next; /**< Next entry in list. */
-	uintptr_t start; /**< Base address for memory region. */
-	uintptr_t end; /**< End address for memory region. */
-	uint32_t lkey; /**< L_Key extracted from @p mr. */
-	uint32_t refcnt; /**< Reference count for this object. */
-	struct priv *priv; /**< Back pointer to private data. */
-	struct ibv_mr *mr; /**< Memory region associated with @p mp. */
-	struct rte_mempool *mp; /**< Target memory pool (mempool). */
-};
+LIST_HEAD(mlx4_dev_list, priv);
+LIST_HEAD(mlx4_mr_list, mlx4_mr);
 
 /** Private data structure. */
 struct priv {
+	LIST_ENTRY(priv) mem_event_cb; /* Called by memory event callback. */
 	struct rte_eth_dev *dev; /**< Ethernet device. */
 	struct ibv_context *ctx; /**< Verbs context. */
 	struct ibv_device_attr device_attr; /**< Device properties. */
@@ -103,15 +86,22 @@ struct priv {
 	uint32_t vf:1; /**< This is a VF device. */
 	uint32_t intr_alarm:1; /**< An interrupt alarm is scheduled. */
 	uint32_t isolated:1; /**< Toggle isolated mode. */
+	uint32_t rss_init:1; /**< Common RSS context is initialized. */
 	uint32_t hw_csum:1; /**< Checksum offload is supported. */
 	uint32_t hw_csum_l2tun:1; /**< Checksum support for L2 tunnels. */
+	uint32_t hw_fcs_strip:1; /**< FCS stripping toggling is supported. */
 	uint64_t hw_rss_sup; /**< Supported RSS hash fields (Verbs format). */
 	struct rte_intr_handle intr_handle; /**< Port interrupt handle. */
 	struct mlx4_drop *drop; /**< Shared resources for drop flow rules. */
+	struct {
+		uint32_t dev_gen; /* Generation number to flush local caches. */
+		rte_rwlock_t rwlock; /* MR Lock. */
+		struct mlx4_mr_btree cache; /* Global MR cache table. */
+		struct mlx4_mr_list mr_list; /* Registered MR list. */
+		struct mlx4_mr_list mr_free_list; /* Freed MR list. */
+	} mr;
 	LIST_HEAD(, mlx4_rss) rss; /**< Shared targets for Rx flow rules. */
 	LIST_HEAD(, rte_flow) flows; /**< Configured flow rule handles. */
-	LIST_HEAD(, mlx4_mr) mr; /**< Registered memory regions. */
-	rte_spinlock_t mr_lock; /**< Lock for @p mr access. */
 	struct ether_addr mac[MLX4_MAX_MAC_ADDRESSES];
 	/**< Configured MAC addresses. Unused entries are zeroed. */
 };
@@ -131,7 +121,7 @@ void mlx4_allmulticast_disable(struct rte_eth_dev *dev);
 void mlx4_mac_addr_remove(struct rte_eth_dev *dev, uint32_t index);
 int mlx4_mac_addr_add(struct rte_eth_dev *dev, struct ether_addr *mac_addr,
 		      uint32_t index, uint32_t vmdq);
-void mlx4_mac_addr_set(struct rte_eth_dev *dev, struct ether_addr *mac_addr);
+int mlx4_mac_addr_set(struct rte_eth_dev *dev, struct ether_addr *mac_addr);
 int mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on);
 int mlx4_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats);
 void mlx4_stats_reset(struct rte_eth_dev *dev);
@@ -153,12 +143,5 @@ int mlx4_rxq_intr_enable(struct priv *priv);
 void mlx4_rxq_intr_disable(struct priv *priv);
 int mlx4_rx_intr_disable(struct rte_eth_dev *dev, uint16_t idx);
 int mlx4_rx_intr_enable(struct rte_eth_dev *dev, uint16_t idx);
-
-/* mlx4_mr.c */
-
-struct mlx4_mr *mlx4_mr_get(struct priv *priv, struct rte_mempool *mp);
-void mlx4_mr_put(struct mlx4_mr *mr);
-uint32_t mlx4_txq_add_mr(struct txq *txq, struct rte_mempool *mp,
-			 uint32_t i);
 
 #endif /* RTE_PMD_MLX4_H_ */

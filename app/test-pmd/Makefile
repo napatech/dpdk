@@ -33,6 +33,7 @@ SRCS-y += txonly.c
 SRCS-y += csumonly.c
 SRCS-y += icmpecho.c
 SRCS-$(CONFIG_RTE_LIBRTE_IEEE1588) += ieee1588fwd.c
+SRCS-$(CONFIG_RTE_LIBRTE_BPF) += bpf_cmd.c
 
 ifeq ($(CONFIG_RTE_LIBRTE_PMD_SOFTNIC)$(CONFIG_RTE_LIBRTE_SCHED),yy)
 SRCS-y += tm.c
@@ -44,8 +45,10 @@ ifeq ($(CONFIG_RTE_LIBRTE_PMD_BOND),y)
 LDLIBS += -lrte_pmd_bond
 endif
 
-ifeq ($(CONFIG_RTE_LIBRTE_DPAA_PMD),y)
+ifeq ($(CONFIG_RTE_LIBRTE_DPAA_BUS)$(CONFIG_RTE_LIBRTE_DPAA_PMD),yy)
 LDLIBS += -lrte_pmd_dpaa
+LDLIBS += -lrte_bus_dpaa
+LDLIBS += -lrte_mempool_dpaa
 endif
 
 ifeq ($(CONFIG_RTE_LIBRTE_IXGBE_PMD),y)

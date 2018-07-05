@@ -70,7 +70,7 @@ usage(char* progname)
 	       "--rss-ip | --rss-udp | "
 	       "--rxpt= | --rxht= | --rxwt= | --rxfreet= | "
 	       "--txpt= | --txht= | --txwt= | --txfreet= | "
-	       "--txrst= | --tx-offloads ]\n",
+	       "--txrst= | --tx-offloads= | --vxlan-gpe-port= ]\n",
 	       progname);
 #ifdef RTE_LIBRTE_CMDLINE
 	printf("  --interactive: run in interactive mode.\n");
@@ -186,6 +186,10 @@ usage(char* progname)
 	printf("  --flow-isolate-all: "
 	       "requests flow API isolated mode on all ports at initialization time.\n");
 	printf("  --tx-offloads=0xXXXXXXXX: hexadecimal bitmask of TX queue offloads\n");
+	printf("  --hot-plug: enable hot plug for device.\n");
+	printf("  --vxlan-gpe-port=N: UPD port of tunnel VXLAN-GPE\n");
+	printf("  --mlockall: lock all memory\n");
+	printf("  --no-mlockall: do not lock all memory\n");
 }
 
 #ifdef RTE_LIBRTE_CMDLINE
@@ -373,7 +377,6 @@ parse_portnuma_config(const char *q_arg)
 	};
 	unsigned long int_fld[_NUM_FLD];
 	char *str_fld[_NUM_FLD];
-	portid_t pid;
 
 	/* reset from value set at definition */
 	while ((p = strchr(p0,'(')) != NULL) {
@@ -397,10 +400,7 @@ parse_portnuma_config(const char *q_arg)
 		port_id = (portid_t)int_fld[FLD_PORT];
 		if (port_id_is_invalid(port_id, ENABLED_WARN) ||
 			port_id == (portid_t)RTE_PORT_ALL) {
-			printf("Valid port range is [0");
-			RTE_ETH_FOREACH_DEV(pid)
-				printf(", %d", pid);
-			printf("]\n");
+			print_valid_ports();
 			return -1;
 		}
 		socket_id = (uint8_t)int_fld[FLD_SOCKET];
@@ -431,7 +431,6 @@ parse_ringnuma_config(const char *q_arg)
 	};
 	unsigned long int_fld[_NUM_FLD];
 	char *str_fld[_NUM_FLD];
-	portid_t pid;
 	#define RX_RING_ONLY 0x1
 	#define TX_RING_ONLY 0x2
 	#define RXTX_RING    0x3
@@ -458,10 +457,7 @@ parse_ringnuma_config(const char *q_arg)
 		port_id = (portid_t)int_fld[FLD_PORT];
 		if (port_id_is_invalid(port_id, ENABLED_WARN) ||
 			port_id == (portid_t)RTE_PORT_ALL) {
-			printf("Valid port range is [0");
-			RTE_ETH_FOREACH_DEV(pid)
-				printf(", %d", pid);
-			printf("]\n");
+			print_valid_ports();
 			return -1;
 		}
 		socket_id = (uint8_t)int_fld[FLD_SOCKET];
@@ -512,6 +508,8 @@ parse_event_printing_config(const char *optarg, int enable)
 		mask = UINT32_C(1) << RTE_ETH_EVENT_INTR_RESET;
 	else if (!strcmp(optarg, "vf_mbox"))
 		mask = UINT32_C(1) << RTE_ETH_EVENT_VF_MBOX;
+	else if (!strcmp(optarg, "ipsec"))
+		mask = UINT32_C(1) << RTE_ETH_EVENT_IPSEC;
 	else if (!strcmp(optarg, "macsec"))
 		mask = UINT32_C(1) << RTE_ETH_EVENT_MACSEC;
 	else if (!strcmp(optarg, "intr_rmv"))
@@ -544,6 +542,8 @@ launch_args_parse(int argc, char** argv)
 	/* Default offloads for all ports. */
 	uint64_t rx_offloads = rx_mode.offloads;
 	uint64_t tx_offloads = tx_mode.offloads;
+	struct rte_eth_dev_info dev_info;
+	uint16_t rec_nb_pkts;
 
 	static struct option lgopts[] = {
 		{ "help",			0, 0, 0 },
@@ -621,6 +621,10 @@ launch_args_parse(int argc, char** argv)
 		{ "print-event",		1, 0, 0 },
 		{ "mask-event",			1, 0, 0 },
 		{ "tx-offloads",		1, 0, 0 },
+		{ "hot-plug",			0, 0, 0 },
+		{ "vxlan-gpe-port",		1, 0, 0 },
+		{ "mlockall",			0, 0, 0 },
+		{ "no-mlockall",		0, 0, 0 },
 		{ 0, 0, 0, 0 },
 	};
 
@@ -658,9 +662,8 @@ launch_args_parse(int argc, char** argv)
 			if (!strcmp(lgopts[opt_idx].name, "cmdline-file")) {
 				printf("CLI commands to be read from %s\n",
 				       optarg);
-				snprintf(cmdline_filename,
-					 sizeof(cmdline_filename), "%s",
-					 optarg);
+				strlcpy(cmdline_filename, optarg,
+					sizeof(cmdline_filename));
 			}
 			if (!strcmp(lgopts[opt_idx].name, "auto-start")) {
 				printf("Auto-start selected\n");
@@ -948,12 +951,38 @@ launch_args_parse(int argc, char** argv)
 			}
 			if (!strcmp(lgopts[opt_idx].name, "burst")) {
 				n = atoi(optarg);
-				if ((n >= 1) && (n <= MAX_PKT_BURST))
-					nb_pkt_per_burst = (uint16_t) n;
-				else
+				if (n == 0) {
+					/* A burst size of zero means that the
+					 * PMD should be queried for
+					 * recommended Rx burst size. Since
+					 * testpmd uses a single size for all
+					 * ports, port 0 is queried for the
+					 * value, on the assumption that all
+					 * ports are of the same NIC model.
+					 */
+					rte_eth_dev_info_get(0, &dev_info);
+					rec_nb_pkts = dev_info
+						.default_rxportconf.burst_size;
+
+					if (rec_nb_pkts == 0)
+						rte_exit(EXIT_FAILURE,
+							"PMD does not recommend a burst size. "
+							"Provided value must be between "
+							"1 and %d\n", MAX_PKT_BURST);
+					else if (rec_nb_pkts > MAX_PKT_BURST)
+						rte_exit(EXIT_FAILURE,
+							"PMD recommended burst size of %d"
+							" exceeds maximum value of %d\n",
+							rec_nb_pkts, MAX_PKT_BURST);
+					printf("Using PMD-provided burst value of %d\n",
+						rec_nb_pkts);
+					nb_pkt_per_burst = rec_nb_pkts;
+				} else if (n > MAX_PKT_BURST)
 					rte_exit(EXIT_FAILURE,
-						 "burst must >= 1 and <= %d]",
-						 MAX_PKT_BURST);
+						"burst must be between1 and %d\n",
+						MAX_PKT_BURST);
+				else
+					nb_pkt_per_burst = (uint16_t) n;
 			}
 			if (!strcmp(lgopts[opt_idx].name, "mbcache")) {
 				n = atoi(optarg);
@@ -1092,6 +1121,14 @@ launch_args_parse(int argc, char** argv)
 					rte_exit(EXIT_FAILURE,
 						 "tx-offloads must be >= 0\n");
 			}
+			if (!strcmp(lgopts[opt_idx].name, "vxlan-gpe-port")) {
+				n = atoi(optarg);
+				if (n >= 0)
+					vxlan_gpe_udp_port = (uint16_t)n;
+				else
+					rte_exit(EXIT_FAILURE,
+						 "vxlan-gpe-port must be >= 0\n");
+			}
 			if (!strcmp(lgopts[opt_idx].name, "print-event"))
 				if (parse_event_printing_config(optarg, 1)) {
 					rte_exit(EXIT_FAILURE,
@@ -1102,7 +1139,12 @@ launch_args_parse(int argc, char** argv)
 					rte_exit(EXIT_FAILURE,
 						 "invalid mask-event argument\n");
 				}
-
+			if (!strcmp(lgopts[opt_idx].name, "hot-plug"))
+				hot_plug = 1;
+			if (!strcmp(lgopts[opt_idx].name, "mlockall"))
+				do_mlockall = 1;
+			if (!strcmp(lgopts[opt_idx].name, "no-mlockall"))
+				do_mlockall = 0;
 			break;
 		case 'h':
 			usage(argv[0]);

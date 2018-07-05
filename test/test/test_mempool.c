@@ -327,17 +327,17 @@ test_mempool_sp_sc(void)
 	}
 	if (rte_mempool_lookup("test_mempool_sp_sc") != mp_spsc) {
 		printf("Cannot lookup mempool from its name\n");
-		rte_mempool_free(mp_spsc);
-		RET_ERR();
+		ret = -1;
+		goto err;
 	}
 	lcore_next = rte_get_next_lcore(lcore_id, 0, 1);
 	if (lcore_next >= RTE_MAX_LCORE) {
-		rte_mempool_free(mp_spsc);
-		RET_ERR();
+		ret = -1;
+		goto err;
 	}
 	if (rte_eal_lcore_role(lcore_next) != ROLE_RTE) {
-		rte_mempool_free(mp_spsc);
-		RET_ERR();
+		ret = -1;
+		goto err;
 	}
 	rte_spinlock_init(&scsp_spinlock);
 	memset(scsp_obj_table, 0, sizeof(scsp_obj_table));
@@ -348,7 +348,10 @@ test_mempool_sp_sc(void)
 
 	if (rte_eal_wait_lcore(lcore_next) < 0)
 		ret = -1;
+
+err:
 	rte_mempool_free(mp_spsc);
+	mp_spsc = NULL;
 
 	return ret;
 }
@@ -441,34 +444,6 @@ test_mempool_same_name_twice_creation(void)
 	}
 
 	rte_mempool_free(mp_tc);
-	return 0;
-}
-
-/*
- * Basic test for mempool_xmem functions.
- */
-static int
-test_mempool_xmem_misc(void)
-{
-	uint32_t elt_num, total_size;
-	size_t sz;
-	ssize_t usz;
-
-	elt_num = MAX_KEEP;
-	total_size = rte_mempool_calc_obj_size(MEMPOOL_ELT_SIZE, 0, NULL);
-	sz = rte_mempool_xmem_size(elt_num, total_size, MEMPOOL_PG_SHIFT_MAX,
-					0);
-
-	usz = rte_mempool_xmem_usage(NULL, elt_num, total_size, 0, 1,
-		MEMPOOL_PG_SHIFT_MAX, 0);
-
-	if (sz != (size_t)usz)  {
-		printf("failure @ %s: rte_mempool_xmem_usage(%u, %u) "
-			"returns: %#zx, while expected: %#zx;\n",
-			__func__, elt_num, total_size, sz, (size_t)usz);
-		return -1;
-	}
-
 	return 0;
 }
 
@@ -594,9 +569,6 @@ test_mempool(void)
 		goto err;
 
 	if (test_mempool_same_name_twice_creation() < 0)
-		goto err;
-
-	if (test_mempool_xmem_misc() < 0)
 		goto err;
 
 	/* test the stack handler */

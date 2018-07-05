@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2010-2014 Intel Corporation
+ * Copyright(c) 2010-2018 Intel Corporation
  */
 
 #include <stdio.h>
@@ -98,7 +98,8 @@ test_power_kvm_vm(void)
 		printf("Cannot initialise power management for lcore %u, this "
 				"may occur if environment is not configured "
 				"correctly(KVM VM) or operating in another valid "
-				"Power management environment\n", TEST_POWER_VM_LCORE_ID);
+				"Power management environment\n",
+				TEST_POWER_VM_LCORE_ID);
 		rte_power_unset_env();
 		return -1;
 	}
@@ -172,6 +173,22 @@ test_power_kvm_vm(void)
 	if (ret == 1) {
 		printf("rte_power_freq_max unexpectedly succeeded on invalid lcore "
 				"%u\n", TEST_POWER_VM_LCORE_INVALID);
+		goto fail_all;
+	}
+
+	/* Test KVM_VM Enable Turbo of valid core */
+	ret = rte_power_freq_enable_turbo(TEST_POWER_VM_LCORE_ID);
+	if (ret == -1) {
+		printf("rte_power_freq_enable_turbo failed on valid lcore"
+			"%u\n", TEST_POWER_VM_LCORE_ID);
+		goto fail_all;
+	}
+
+	/* Test KVM_VM Disable Turbo of valid core */
+	ret = rte_power_freq_disable_turbo(TEST_POWER_VM_LCORE_ID);
+	if (ret == -1) {
+		printf("rte_power_freq_disable_turbo failed on valid lcore"
+		"%u\n", TEST_POWER_VM_LCORE_ID);
 		goto fail_all;
 	}
 

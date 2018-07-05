@@ -372,7 +372,9 @@ The commandline options are:
 *   ``--burst=N``
 
     Set the number of packets per burst to N, where 1 <= N <= 512.
-    The default value is 16.
+    The default value is 32.
+    If set to 0, driver default is used if defined. Else, if driver
+    default is not defined, default of 32 is used.
 
 *   ``--mbcache=N``
 
@@ -479,3 +481,20 @@ The commandline options are:
 
     Set the hexadecimal bitmask of TX queue offloads.
     The default value is 0.
+
+*   ``--hot-plug``
+
+    Enable device event monitor machenism for hotplug.
+
+*   ``--vxlan-gpe-port=N``
+
+    Set the UDP port number of tunnel VXLAN-GPE to N.
+    The default value is 4790.
+
+*   ``--mlockall``
+
+    Enable locking all memory.
+
+*   ``--no-mlockall``
+
+    Disable locking all memory.

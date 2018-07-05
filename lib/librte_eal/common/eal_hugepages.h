@@ -22,14 +22,19 @@ struct hugepage_file {
 	size_t size;        /**< the page size */
 	int socket_id;      /**< NUMA socket ID */
 	int file_id;        /**< the '%d' in HUGEFILE_FMT */
-	int memseg_id;      /**< the memory segment to which page belongs */
 	char filepath[MAX_HUGEPAGE_PATH]; /**< path to backing file on filesystem */
 };
 
 /**
- * Read the information from linux on what hugepages are available
- * for the EAL to use
+ * Read the information on what hugepages are available for the EAL to use,
+ * clearing out any unused ones.
  */
 int eal_hugepage_info_init(void);
+
+/**
+ * Read whatever information primary process has shared about hugepages into
+ * secondary process.
+ */
+int eal_hugepage_info_read(void);
 
 #endif /* EAL_HUGEPAGES_H */

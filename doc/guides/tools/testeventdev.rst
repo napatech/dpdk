@@ -123,6 +123,36 @@ The following are the application command-line options:
 
         Use ethernet device as producer.
 
+* ``--prod_type_timerdev``
+
+        Use event timer adapter as producer.
+
+ * ``--prod_type_timerdev_burst``
+
+        Use burst mode event timer adapter as producer.
+
+ * ``--timer_tick_nsec``
+
+        Used to dictate number of nano seconds between bucket traversal of the
+        event timer adapter. Refer `rte_event_timer_adapter_conf`.
+
+ * ``--max_tmo_nsec``
+
+        Used to configure event timer adapter max arm timeout in nano seconds.
+
+ * ``--expiry_nsec``
+
+        Dictate the number of nano seconds after which the event timer expires.
+
+ * ``--nb_timers``
+
+        Number of event timers each producer core will generate.
+
+ * ``--nb_timer_adptrs``
+
+        Number of event timer adapters to be used. Each adapter is used in
+        round robin manner by the producer cores.
+
 Eventdev Tests
 --------------
 
@@ -347,6 +377,13 @@ Supported application command line options are following::
         --fwd_latency
         --queue_priority
         --prod_type_ethdev
+        --prod_type_timerdev_burst
+        --prod_type_timerdev
+        --timer_tick_nsec
+        --max_tmo_nsec
+        --expiry_nsec
+        --nb_timers
+        --nb_timer_adptrs
 
 Example
 ^^^^^^^
@@ -364,6 +401,14 @@ Example command to run perf queue test with ethernet ports:
 
    sudo build/app/dpdk-test-eventdev --vdev=event_sw0 -- \
         --test=perf_queue --plcores=2 --wlcore=3 --stlist=p --prod_type_ethdev
+
+Example command to run perf queue test with event timer adapter:
+
+.. code-block:: console
+
+   sudo  build/app/dpdk-test-eventdev --vdev="event_octeontx" -- \
+                --wlcores 4 --plcores 12 --test perf_queue --stlist=a \
+                --prod_type_timerdev --fwd_latency
 
 PERF_ATQ Test
 ~~~~~~~~~~~~~~~
@@ -431,6 +476,13 @@ Supported application command line options are following::
         --worker_deq_depth
         --fwd_latency
         --prod_type_ethdev
+        --prod_type_timerdev_burst
+        --prod_type_timerdev
+        --timer_tick_nsec
+        --max_tmo_nsec
+        --expiry_nsec
+        --nb_timers
+        --nb_timer_adptrs
 
 Example
 ^^^^^^^
@@ -441,6 +493,14 @@ Example command to run perf ``all types queue`` test:
 
    sudo build/app/dpdk-test-eventdev --vdev=event_octeontx -- \
                 --test=perf_atq --plcores=2 --wlcore=3 --stlist=p --nb_pkts=0
+
+Example command to run perf ``all types queue`` test with event timer adapter:
+
+.. code-block:: console
+
+   sudo  build/app/dpdk-test-eventdev --vdev="event_octeontx" -- \
+                --wlcores 4 --plcores 12 --test perf_atq --verbose 20 \
+                --stlist=a --prod_type_timerdev --fwd_latency
 
 
 PIPELINE_QUEUE Test

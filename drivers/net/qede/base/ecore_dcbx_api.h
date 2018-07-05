@@ -1,7 +1,7 @@
 /*
- * Copyright (c) 2016 QLogic Corporation.
+ * Copyright (c) 2016 - 2018 Cavium Inc.
  * All rights reserved.
- * www.qlogic.com
+ * www.cavium.com
  *
  * See LICENSE.qede_pmd for copyright and licensing details.
  */
@@ -29,6 +29,7 @@ struct ecore_dcbx_app_data {
 	u8 tc;			/* Traffic Class */
 	bool dscp_enable;	/* DSCP enabled */
 	u8 dscp_val;		/* DSCP value */
+	bool dont_add_vlan0;	/* Do not insert a vlan tag with id 0 */
 };
 
 #ifndef __EXTRACT__LINUX__

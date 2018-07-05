@@ -9,21 +9,21 @@
 # given as a dep, no need to mention ring. This is especially true for the
 # core libs which are widely reused, so their deps are kept to a minimum.
 libraries = [ 'compat', # just a header, used for versioning
-	'eal', 'ring', 'mempool', 'mbuf', 'net', 'ether', 'pci', # core
+	'eal', 'ring', 'mempool', 'mbuf', 'net', 'kvargs', 'ethdev', 'pci', # core
 	'metrics', # bitrate/latency stats depends on this
 	'hash',    # efd depends on this
-	'kvargs',  # cryptodev depends on this
+	'timer',   # eventdev depends on this
 	'acl', 'bbdev', 'bitratestats', 'cfgfile',
-	'cmdline', 'cryptodev',
+	'cmdline', 'compressdev', 'cryptodev',
 	'distributor', 'efd', 'eventdev',
 	'gro', 'gso', 'ip_frag', 'jobstats',
 	'kni', 'latencystats', 'lpm', 'member',
-	'meter', 'power', 'pdump',
-	'reorder', 'sched', 'security', 'timer', 'vhost',
+	'meter', 'power', 'pdump', 'rawdev',
+	'reorder', 'sched', 'security', 'vhost',
 	# add pkt framework libs which use other libs from above
 	'port', 'table', 'pipeline',
 	# flow_classify lib depends on pkt framework table lib
-	'flow_classify']
+	'flow_classify', 'bpf']
 
 foreach l:libraries
 	build = true
@@ -95,7 +95,7 @@ foreach l:libraries
 
 			# then use pre-build objects to build shared lib
 			sources = []
-			objs += static_lib.extract_all_objects()
+			objs += static_lib.extract_all_objects(recursive: false)
 			version_map = '@0@/@1@/rte_@2@_version.map'.format(
 					meson.current_source_dir(), dir_name, name)
 			shared_lib = shared_library(libname,

@@ -515,11 +515,10 @@ check_ports_num(unsigned max_nb_ports)
 	}
 
 	for (portid = 0; portid < nb_ports; portid++) {
-		if (ports[portid] >= max_nb_ports) {
+		if (!rte_eth_dev_is_valid_port(ports[portid])) {
 			RTE_LOG(INFO, VHOST_PORT,
-				"\nSpecified port ID(%u) exceeds max "
-				" system port ID(%u)\n",
-				ports[portid], (max_nb_ports - 1));
+				"\nSpecified port ID(%u) is not valid\n",
+				ports[portid]);
 			ports[portid] = INVALID_PORT_ID;
 			valid_nb_ports--;
 		}
@@ -1062,8 +1061,8 @@ static const struct vhost_device_ops virtio_net_device_ops = {
  * This is a thread will wake up after a period to print stats if the user has
  * enabled them.
  */
-static void
-print_stats(void)
+static void *
+print_stats(__rte_unused void *arg)
 {
 	struct virtio_net_data_ll *dev_ll;
 	uint64_t tx_dropped, rx_dropped;
@@ -1120,6 +1119,8 @@ print_stats(void)
 		}
 		printf("\n================================================\n");
 	}
+
+	return NULL;
 }
 
 /**
@@ -1135,7 +1136,6 @@ main(int argc, char *argv[])
 	uint16_t portid;
 	uint16_t queue_id;
 	static pthread_t tid;
-	char thread_name[RTE_MAX_THREAD_NAME_LEN];
 
 	/* init EAL */
 	ret = rte_eal_init(argc, argv);
@@ -1157,7 +1157,7 @@ main(int argc, char *argv[])
 	nb_switching_cores = rte_lcore_count()-1;
 
 	/* Get the number of physical ports. */
-	nb_ports = rte_eth_dev_count();
+	nb_ports = rte_eth_dev_count_avail();
 
 	/*
 	 * Update the global var NB_PORTS and global array PORTS
@@ -1185,7 +1185,7 @@ main(int argc, char *argv[])
 		vpool_array[queue_id].pool = mbuf_pool;
 
 	/* initialize all ports */
-	for (portid = 0; portid < nb_ports; portid++) {
+	RTE_ETH_FOREACH_DEV(portid) {
 		/* skip ports that are not enabled */
 		if ((enabled_port_mask & (1 << portid)) == 0) {
 			RTE_LOG(INFO, VHOST_PORT,
@@ -1206,13 +1206,10 @@ main(int argc, char *argv[])
 
 	/* Enable stats if the user option is set. */
 	if (enable_stats) {
-		ret = pthread_create(&tid, NULL, (void *)print_stats, NULL);
-		if (ret != 0)
+		ret = rte_ctrl_thread_create(&tid, "print-stats", NULL,
+					print_stats, NULL);
+		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "Cannot create print-stats thread\n");
-		snprintf(thread_name, RTE_MAX_THREAD_NAME_LEN, "print-stats");
-		ret = rte_thread_setname(tid, thread_name);
-		if (ret != 0)
-			RTE_LOG(DEBUG, VHOST_CONFIG, "Cannot set print-stats name\n");
 	}
 
 	/* Launch all data cores. */

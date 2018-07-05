@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2017 Mellanox Technologies, Ltd.
+ * Copyright 2017 Mellanox Technologies, Ltd
  */
 
 #ifndef _TAP_RSS_H_
@@ -8,6 +8,12 @@
 #ifndef TAP_MAX_QUEUES
 #define TAP_MAX_QUEUES 16
 #endif
+
+/* Fixed RSS hash key size in bytes. */
+#define TAP_RSS_HASH_KEY_SIZE 40
+
+/* Supported RSS */
+#define TAP_RSS_HF_MASK (~(ETH_RSS_IP | ETH_RSS_UDP | ETH_RSS_TCP))
 
 /* hashed fields for RSS */
 enum hash_field {

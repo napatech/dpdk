@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2017 6WIND S.A.
- * Copyright 2017 Mellanox.
+ * Copyright 2017 Mellanox Technologies, Ltd
  */
 
 #include <rte_alarm.h>
@@ -12,6 +12,8 @@
 #include <rte_bus_vdev.h>
 
 #include "failsafe_private.h"
+
+int failsafe_logtype;
 
 const char pmd_failsafe_driver_name[] = FAILSAFE_DRIVER_NAME;
 static const struct rte_eth_link eth_link = {
@@ -202,16 +204,25 @@ fs_eth_dev_create(struct rte_vdev_device *vdev)
 	}
 	snprintf(priv->my_owner.name, sizeof(priv->my_owner.name),
 		 FAILSAFE_OWNER_NAME);
+	DEBUG("Failsafe port %u owner info: %s_%016"PRIX64, dev->data->port_id,
+	      priv->my_owner.name, priv->my_owner.id);
+	ret = rte_eth_dev_callback_register(RTE_ETH_ALL, RTE_ETH_EVENT_NEW,
+					    failsafe_eth_new_event_callback,
+					    dev);
+	if (ret) {
+		ERROR("Failed to register NEW callback");
+		goto free_args;
+	}
 	ret = failsafe_eal_init(dev);
 	if (ret)
-		goto free_args;
+		goto unregister_new_callback;
 	ret = fs_mutex_init(priv);
 	if (ret)
-		goto free_args;
+		goto unregister_new_callback;
 	ret = failsafe_hotplug_alarm_install(dev);
 	if (ret) {
 		ERROR("Could not set up plug-in event detection");
-		goto free_args;
+		goto unregister_new_callback;
 	}
 	mac = &dev->data->mac_addrs[0];
 	if (mac_from_arg) {
@@ -224,7 +235,7 @@ fs_eth_dev_create(struct rte_vdev_device *vdev)
 							       mac);
 			if (ret) {
 				ERROR("Failed to set default MAC address");
-				goto free_args;
+				goto cancel_alarm;
 			}
 		}
 	} else {
@@ -257,7 +268,13 @@ fs_eth_dev_create(struct rte_vdev_device *vdev)
 		.fd = -1,
 		.type = RTE_INTR_HANDLE_EXT,
 	};
+	rte_eth_dev_probing_finish(dev);
 	return 0;
+cancel_alarm:
+	failsafe_hotplug_alarm_cancel(dev);
+unregister_new_callback:
+	rte_eth_dev_callback_unregister(RTE_ETH_ALL, RTE_ETH_EVENT_NEW,
+					failsafe_eth_new_event_callback, dev);
 free_args:
 	failsafe_args_free(dev);
 free_subs:
@@ -277,6 +294,8 @@ fs_rte_eth_free(const char *name)
 	dev = rte_eth_dev_allocated(name);
 	if (dev == NULL)
 		return -ENODEV;
+	rte_eth_dev_callback_unregister(RTE_ETH_ALL, RTE_ETH_EVENT_NEW,
+					failsafe_eth_new_event_callback, dev);
 	ret = failsafe_eal_uninit(dev);
 	if (ret)
 		ERROR("Error while uninitializing sub-EAL");
@@ -294,10 +313,25 @@ static int
 rte_pmd_failsafe_probe(struct rte_vdev_device *vdev)
 {
 	const char *name;
+	struct rte_eth_dev *eth_dev;
 
 	name = rte_vdev_device_name(vdev);
 	INFO("Initializing " FAILSAFE_DRIVER_NAME " for %s",
 			name);
+
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY &&
+	    strlen(rte_vdev_device_args(vdev)) == 0) {
+		eth_dev = rte_eth_dev_attach_secondary(name);
+		if (!eth_dev) {
+			ERROR("Failed to probe %s", name);
+			return -1;
+		}
+		/* TODO: request info from primary to set up Rx and Tx */
+		eth_dev->dev_ops = &failsafe_ops;
+		rte_eth_dev_probing_finish(eth_dev);
+		return 0;
+	}
+
 	return fs_eth_dev_create(vdev);
 }
 
@@ -318,3 +352,12 @@ static struct rte_vdev_driver failsafe_drv = {
 
 RTE_PMD_REGISTER_VDEV(net_failsafe, failsafe_drv);
 RTE_PMD_REGISTER_PARAM_STRING(net_failsafe, PMD_FAILSAFE_PARAM_STRING);
+
+RTE_INIT(failsafe_init_log);
+static void
+failsafe_init_log(void)
+{
+	failsafe_logtype = rte_log_register("pmd.net.failsafe");
+	if (failsafe_logtype >= 0)
+		rte_log_set_level(failsafe_logtype, RTE_LOG_NOTICE);
+}

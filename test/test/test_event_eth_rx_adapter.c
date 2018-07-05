@@ -51,7 +51,7 @@ port_init(uint8_t port, struct rte_mempool *mp)
 	uint16_t q;
 	struct rte_eth_dev_info dev_info;
 
-	if (port >= rte_eth_dev_count())
+	if (!rte_eth_dev_is_valid_port(port))
 		return -1;
 
 	retval = rte_eth_dev_configure(port, 0, 0, &port_conf);
@@ -107,7 +107,7 @@ port_init(uint8_t port, struct rte_mempool *mp)
 static int
 init_ports(int num_ports)
 {
-	uint8_t portid;
+	uint16_t portid;
 	int retval;
 
 	default_params.mp = rte_pktmbuf_pool_create("packet_pool",
@@ -119,7 +119,7 @@ init_ports(int num_ports)
 	if (!default_params.mp)
 		return -ENOMEM;
 
-	for (portid = 0; portid < num_ports; portid++) {
+	RTE_ETH_FOREACH_DEV(portid) {
 		retval = port_init(portid, default_params.mp);
 		if (retval)
 			return retval;
@@ -164,7 +164,7 @@ testsuite_setup(void)
 	 * so rte_eth_dev_start invokes rte_event_dev_start internally, so
 	 * call init_ports after rte_event_dev_configure
 	 */
-	err = init_ports(rte_eth_dev_count());
+	err = init_ports(rte_eth_dev_count_total());
 	TEST_ASSERT(err == 0, "Port initialization failed err %d\n", err);
 
 	err = rte_event_eth_rx_adapter_caps_get(TEST_DEV_ID, TEST_ETHDEV_ID,
@@ -179,7 +179,7 @@ static void
 testsuite_teardown(void)
 {
 	uint32_t i;
-	for (i = 0; i < rte_eth_dev_count(); i++)
+	RTE_ETH_FOREACH_DEV(i)
 		rte_eth_dev_stop(i);
 
 	rte_mempool_free(default_params.mp);
@@ -273,7 +273,7 @@ adapter_queue_add_del(void)
 	queue_config.servicing_weight = 1;
 
 	err = rte_event_eth_rx_adapter_queue_add(TEST_INST_ID,
-						rte_eth_dev_count(),
+						rte_eth_dev_count_total(),
 						-1, &queue_config);
 	TEST_ASSERT(err == -EINVAL, "Expected -EINVAL got %d", err);
 

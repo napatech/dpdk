@@ -2,7 +2,6 @@ DPDK_17.05 {
 	global:
 
 	dpaa2_affine_qbman_swp;
-	dpaa2_affine_qbman_swp_sec;
 	dpaa2_alloc_dpbp_dev;
 	dpaa2_alloc_dq_storage;
 	dpaa2_free_dpbp_dev;
@@ -101,3 +100,19 @@ DPDK_18.02 {
 	rte_fslmc_get_device_count;
 
 } DPDK_17.11;
+
+DPDK_18.05 {
+	global:
+
+	dpaa2_affine_qbman_ethrx_swp;
+	dpdmai_close;
+	dpdmai_disable;
+	dpdmai_enable;
+	dpdmai_get_attributes;
+	dpdmai_get_rx_queue;
+	dpdmai_get_tx_queue;
+	dpdmai_open;
+	dpdmai_set_rx_queue;
+	rte_dpaa2_free_dpci_dev;
+
+} DPDK_18.02;

@@ -216,10 +216,11 @@ static void
 virtual_ethdev_promiscuous_mode_disable(struct rte_eth_dev *dev __rte_unused)
 {}
 
-static void
+static int
 virtual_ethdev_mac_address_set(__rte_unused struct rte_eth_dev *dev,
 			       __rte_unused struct ether_addr *addr)
 {
+	return 0;
 }
 
 static const struct eth_dev_ops virtual_ethdev_default_dev_ops = {
@@ -588,6 +589,8 @@ virtual_ethdev_create(const char *name, struct ether_addr *mac_addr,
 
 	eth_dev->rx_pkt_burst = virtual_ethdev_rx_burst_success;
 	eth_dev->tx_pkt_burst = virtual_ethdev_tx_burst_success;
+
+	rte_eth_dev_probing_finish(eth_dev);
 
 	return eth_dev->data->port_id;
 

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2017 6WIND S.A.
- * Copyright 2017 Mellanox
+ * Copyright 2017 Mellanox Technologies, Ltd
  */
 
 /**
@@ -39,6 +39,7 @@
 #include <rte_ether.h>
 #include <rte_flow.h>
 #include <rte_pci.h>
+#include <rte_string_fns.h>
 
 #include "mlx4.h"
 #include "mlx4_flow.h"
@@ -120,7 +121,7 @@ try_dev_id:
 			goto try_dev_id;
 		dev_port_prev = dev_port;
 		if (dev_port == (priv->port - 1u))
-			snprintf(match, sizeof(match), "%s", name);
+			strlcpy(match, name, sizeof(match));
 	}
 	closedir(dir);
 	if (match[0] == '\0') {
@@ -128,167 +129,6 @@ try_dev_id:
 		return -rte_errno;
 	}
 	strncpy(*ifname, match, sizeof(*ifname));
-	return 0;
-}
-
-/**
- * Read from sysfs entry.
- *
- * @param[in] priv
- *   Pointer to private structure.
- * @param[in] entry
- *   Entry name relative to sysfs path.
- * @param[out] buf
- *   Data output buffer.
- * @param size
- *   Buffer size.
- *
- * @return
- *   Number of bytes read on success, negative errno value otherwise and
- *   rte_errno is set.
- */
-static int
-mlx4_sysfs_read(const struct priv *priv, const char *entry,
-		char *buf, size_t size)
-{
-	char ifname[IF_NAMESIZE];
-	FILE *file;
-	int ret;
-
-	ret = mlx4_get_ifname(priv, &ifname);
-	if (ret)
-		return ret;
-
-	MKSTR(path, "%s/device/net/%s/%s", priv->ctx->device->ibdev_path,
-	      ifname, entry);
-
-	file = fopen(path, "rb");
-	if (file == NULL) {
-		rte_errno = errno;
-		return -rte_errno;
-	}
-	ret = fread(buf, 1, size, file);
-	if ((size_t)ret < size && ferror(file)) {
-		rte_errno = EIO;
-		ret = -rte_errno;
-	} else {
-		ret = size;
-	}
-	fclose(file);
-	return ret;
-}
-
-/**
- * Write to sysfs entry.
- *
- * @param[in] priv
- *   Pointer to private structure.
- * @param[in] entry
- *   Entry name relative to sysfs path.
- * @param[in] buf
- *   Data buffer.
- * @param size
- *   Buffer size.
- *
- * @return
- *   Number of bytes written on success, negative errno value otherwise and
- *   rte_errno is set.
- */
-static int
-mlx4_sysfs_write(const struct priv *priv, const char *entry,
-		 char *buf, size_t size)
-{
-	char ifname[IF_NAMESIZE];
-	FILE *file;
-	int ret;
-
-	ret = mlx4_get_ifname(priv, &ifname);
-	if (ret)
-		return ret;
-
-	MKSTR(path, "%s/device/net/%s/%s", priv->ctx->device->ibdev_path,
-	      ifname, entry);
-
-	file = fopen(path, "wb");
-	if (file == NULL) {
-		rte_errno = errno;
-		return -rte_errno;
-	}
-	ret = fwrite(buf, 1, size, file);
-	if ((size_t)ret < size || ferror(file)) {
-		rte_errno = EIO;
-		ret = -rte_errno;
-	} else {
-		ret = size;
-	}
-	fclose(file);
-	return ret;
-}
-
-/**
- * Get unsigned long sysfs property.
- *
- * @param priv
- *   Pointer to private structure.
- * @param[in] name
- *   Entry name relative to sysfs path.
- * @param[out] value
- *   Value output buffer.
- *
- * @return
- *   0 on success, negative errno value otherwise and rte_errno is set.
- */
-static int
-mlx4_get_sysfs_ulong(struct priv *priv, const char *name, unsigned long *value)
-{
-	int ret;
-	unsigned long value_ret;
-	char value_str[32];
-
-	ret = mlx4_sysfs_read(priv, name, value_str, (sizeof(value_str) - 1));
-	if (ret < 0) {
-		DEBUG("cannot read %s value from sysfs: %s",
-		      name, strerror(rte_errno));
-		return ret;
-	}
-	value_str[ret] = '\0';
-	errno = 0;
-	value_ret = strtoul(value_str, NULL, 0);
-	if (errno) {
-		rte_errno = errno;
-		DEBUG("invalid %s value `%s': %s", name, value_str,
-		      strerror(rte_errno));
-		return -rte_errno;
-	}
-	*value = value_ret;
-	return 0;
-}
-
-/**
- * Set unsigned long sysfs property.
- *
- * @param priv
- *   Pointer to private structure.
- * @param[in] name
- *   Entry name relative to sysfs path.
- * @param value
- *   Value to set.
- *
- * @return
- *   0 on success, negative errno value otherwise and rte_errno is set.
- */
-static int
-mlx4_set_sysfs_ulong(struct priv *priv, const char *name, unsigned long value)
-{
-	int ret;
-	MKSTR(value_str, "%lu", value);
-
-	ret = mlx4_sysfs_write(priv, name, value_str, (sizeof(value_str) - 1));
-	if (ret < 0) {
-		DEBUG("cannot write %s `%s' (%lu) to sysfs: %s",
-		      name, value_str, value, strerror(rte_errno));
-		return ret;
-	}
 	return 0;
 }
 
@@ -361,12 +201,12 @@ mlx4_get_mac(struct priv *priv, uint8_t (*mac)[ETHER_ADDR_LEN])
 int
 mlx4_mtu_get(struct priv *priv, uint16_t *mtu)
 {
-	unsigned long ulong_mtu = 0;
-	int ret = mlx4_get_sysfs_ulong(priv, "mtu", &ulong_mtu);
+	struct ifreq request;
+	int ret = mlx4_ifreq(priv, SIOCGIFMTU, &request);
 
 	if (ret)
 		return ret;
-	*mtu = ulong_mtu;
+	*mtu = request.ifr_mtu;
 	return 0;
 }
 
@@ -385,20 +225,13 @@ int
 mlx4_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 {
 	struct priv *priv = dev->data->dev_private;
-	uint16_t new_mtu;
-	int ret = mlx4_set_sysfs_ulong(priv, "mtu", mtu);
+	struct ifreq request = { .ifr_mtu = mtu, };
+	int ret = mlx4_ifreq(priv, SIOCSIFMTU, &request);
 
 	if (ret)
 		return ret;
-	ret = mlx4_mtu_get(priv, &new_mtu);
-	if (ret)
-		return ret;
-	if (new_mtu == mtu) {
-		priv->mtu = mtu;
-		return 0;
-	}
-	rte_errno = EINVAL;
-	return -rte_errno;
+	priv->mtu = mtu;
+	return 0;
 }
 
 /**
@@ -417,14 +250,14 @@ mlx4_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 static int
 mlx4_set_flags(struct priv *priv, unsigned int keep, unsigned int flags)
 {
-	unsigned long tmp = 0;
-	int ret = mlx4_get_sysfs_ulong(priv, "flags", &tmp);
+	struct ifreq request;
+	int ret = mlx4_ifreq(priv, SIOCGIFFLAGS, &request);
 
 	if (ret)
 		return ret;
-	tmp &= keep;
-	tmp |= (flags & (~keep));
-	return mlx4_set_sysfs_ulong(priv, "flags", tmp);
+	request.ifr_flags &= keep;
+	request.ifr_flags |= flags & ~keep;
+	return mlx4_ifreq(priv, SIOCSIFFLAGS, &request);
 }
 
 /**
@@ -701,11 +534,14 @@ mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
  *   Pointer to Ethernet device structure.
  * @param mac_addr
  *   MAC address to register.
+ *
+ * @return
+ *   0 on success, negative errno value otherwise and rte_errno is set.
  */
-void
+int
 mlx4_mac_addr_set(struct rte_eth_dev *dev, struct ether_addr *mac_addr)
 {
-	mlx4_mac_addr_add(dev, mac_addr, 0, 0);
+	return mlx4_mac_addr_add(dev, mac_addr, 0, 0);
 }
 
 /**
@@ -723,7 +559,6 @@ mlx4_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 	unsigned int max;
 	char ifname[IF_NAMESIZE];
 
-	info->pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	/* FIXME: we should ask the device for these values. */
 	info->min_rx_bufsize = 32;
 	info->max_rx_pktlen = 65536;
@@ -752,6 +587,7 @@ mlx4_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 			ETH_LINK_SPEED_20G |
 			ETH_LINK_SPEED_40G |
 			ETH_LINK_SPEED_56G;
+	info->flow_type_rss_offloads = mlx4_conv_rss_types(priv, 0, 1);
 }
 
 /**
@@ -878,7 +714,7 @@ mlx4_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 	}
 	link_speed = ethtool_cmd_speed(&edata);
 	if (link_speed == -1)
-		dev_link.link_speed = 0;
+		dev_link.link_speed = ETH_SPEED_NUM_NONE;
 	else
 		dev_link.link_speed = link_speed;
 	dev_link.link_duplex = ((edata.duplex == DUPLEX_HALF) ?

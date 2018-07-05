@@ -1,7 +1,7 @@
 /*
- * Copyright (c) 2016 QLogic Corporation.
+ * Copyright (c) 2016 - 2018 Cavium Inc.
  * All rights reserved.
- * www.qlogic.com
+ * www.cavium.com
  *
  * See LICENSE.qede_pmd for copyright and licensing details.
  */
@@ -254,5 +254,9 @@ enum _ecore_status_t ecore_init_fw_data(struct ecore_dev *p_dev,
 
 void ecore_hw_err_notify(struct ecore_hwfn *p_hwfn,
 			 enum ecore_hw_err_type err_type);
+
+enum _ecore_status_t ecore_dmae_sanity(struct ecore_hwfn *p_hwfn,
+				       struct ecore_ptt *p_ptt,
+				       const char *phase);
 
 #endif /* __ECORE_HW_H__ */

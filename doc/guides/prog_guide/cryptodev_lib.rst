@@ -299,6 +299,33 @@ directly from the devices processed queue, and for virtual device's from a
 enqueue call.
 
 
+Private data
+~~~~~~~~~~~~
+For session-based operations, the set and get API provides a mechanism for an
+application to store and retrieve the private data information stored along with
+the crypto session.
+
+For example, suppose an application is submitting a crypto operation with a session
+associated and wants to indicate private data information which is required to be
+used after completion of the crypto operation. In this case, the application can use
+the set API to set the private data and retrieve it using get API.
+
+.. code-block:: c
+
+	int rte_cryptodev_sym_session_set_private_data(
+		struct rte_cryptodev_sym_session *sess,	void *data, uint16_t size);
+
+	void * rte_cryptodev_sym_session_get_private_data(
+		struct rte_cryptodev_sym_session *sess);
+
+
+For session-less mode, the private data information can be placed along with the
+``struct rte_crypto_op``. The ``rte_crypto_op::private_data_offset`` indicates the
+start of private data information. The offset is counted from the start of the
+rte_crypto_op including other crypto information such as the IVs (since there can
+be an IV also for authentication).
+
+
 Enqueue / Dequeue Burst APIs
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -427,12 +454,12 @@ mempool for all crypto devices (where the mempool object size is big
 enough to hold the private session of any crypto device), as well as having
 multiple session mempools of different sizes for better memory usage.
 
-An application can use ``rte_cryptodev_get_private_session_size()`` to
+An application can use ``rte_cryptodev_sym_get_private_session_size()`` to
 get the private session size of given crypto device. This function would allow
 an application to calculate the max device session size of all crypto devices
 to create a single session mempool.
 If instead an application creates multiple session mempools, the Crypto device
-framework also provides ``rte_cryptodev_get_header_session_size`` to get
+framework also provides ``rte_cryptodev_sym_get_header_session_size`` to get
 the size of an uninitialized session.
 
 Once the session mempools have been created, ``rte_cryptodev_sym_session_create()``
@@ -635,7 +662,7 @@ using one of the crypto PMDs available in DPDK.
     uint8_t cdev_id = rte_cryptodev_get_dev_id(crypto_name);
 
     /* Get private session data size. */
-    session_size = rte_cryptodev_get_private_session_size(cdev_id);
+    session_size = rte_cryptodev_sym_get_private_session_size(cdev_id);
 
     /*
      * Create session mempool, with two objects per session,

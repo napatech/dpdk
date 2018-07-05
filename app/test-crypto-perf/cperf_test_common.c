@@ -3,6 +3,7 @@
  */
 
 #include <rte_malloc.h>
+#include <rte_mbuf_pool_ops.h>
 
 #include "cperf_test_common.h"
 
@@ -91,7 +92,7 @@ mempool_obj_init(struct rte_mempool *mp,
 	op->type = RTE_CRYPTO_OP_TYPE_SYMMETRIC;
 	op->status = RTE_CRYPTO_OP_STATUS_NOT_PROCESSED;
 	op->sess_type = RTE_CRYPTO_OP_WITH_SESSION;
-	op->phys_addr = rte_mem_virt2phy(obj);
+	op->phys_addr = rte_mem_virt2iova(obj);
 	op->mempool = mp;
 
 	/* Set source buffer */
@@ -124,6 +125,7 @@ cperf_alloc_common_memory(const struct cperf_options *options,
 			uint32_t *dst_buf_offset,
 			struct rte_mempool **pool)
 {
+	const char *mp_ops_name;
 	char pool_name[32] = "";
 	int ret;
 
@@ -193,8 +195,10 @@ cperf_alloc_common_memory(const struct cperf_options *options,
 		return -1;
 	}
 
+	mp_ops_name = rte_mbuf_best_mempool_ops();
+
 	ret = rte_mempool_set_ops_byname(*pool,
-		RTE_MBUF_DEFAULT_MEMPOOL_OPS, NULL);
+		mp_ops_name, NULL);
 	if (ret != 0) {
 		RTE_LOG(ERR, USER1,
 			 "Error setting mempool handler for device %u\n",

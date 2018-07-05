@@ -107,6 +107,7 @@ struct i40e_rx_queue {
 	bool rx_deferred_start; /**< don't start this queue in dev start */
 	uint16_t rx_using_sse; /**<flag indicate the usage of vPMD for rx */
 	uint8_t dcb_tc;         /**< Traffic class of rx queue */
+	uint64_t offloads; /**< Rx offload flags of DEV_RX_OFFLOAD_* */
 };
 
 struct i40e_tx_entry {
@@ -141,13 +142,13 @@ struct i40e_tx_queue {
 	uint16_t port_id; /**< Device port identifier. */
 	uint16_t queue_id; /**< TX queue index. */
 	uint16_t reg_idx;
-	uint32_t txq_flags;
 	struct i40e_vsi *vsi; /**< the VSI this queue belongs to */
 	uint16_t tx_next_dd;
 	uint16_t tx_next_rs;
 	bool q_set; /**< indicate if tx queue has been configured */
 	bool tx_deferred_start; /**< don't start this queue in dev start */
 	uint8_t dcb_tc;         /**< Traffic class of tx queue */
+	uint64_t offloads; /**< Tx offload flags of DEV_RX_OFFLOAD_* */
 };
 
 /** Offload features */

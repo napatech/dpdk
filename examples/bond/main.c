@@ -147,7 +147,7 @@ slave_port_init(uint16_t portid, struct rte_mempool *mbuf_pool)
 	struct rte_eth_txconf txq_conf;
 	struct rte_eth_conf local_port_conf = port_conf;
 
-	if (portid >= rte_eth_dev_count())
+	if (!rte_eth_dev_is_valid_port(portid))
 		rte_exit(EXIT_FAILURE, "Invalid port\n");
 
 	rte_eth_dev_info_get(portid, &dev_info);
@@ -738,17 +738,17 @@ int
 main(int argc, char *argv[])
 {
 	int ret;
-	uint8_t nb_ports, i;
+	uint16_t nb_ports, i;
 
 	/* init EAL */
 	ret = rte_eal_init(argc, argv);
-	rte_eal_devargs_dump(stdout);
+	rte_devargs_dump(stdout);
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "Error with EAL initialization\n");
 	argc -= ret;
 	argv += ret;
 
-	nb_ports = rte_eth_dev_count();
+	nb_ports = rte_eth_dev_count_avail();
 	if (nb_ports == 0)
 		rte_exit(EXIT_FAILURE, "Give at least one port\n");
 	else if (nb_ports > MAX_PORTS)
@@ -761,7 +761,7 @@ main(int argc, char *argv[])
 
 	/* initialize all ports */
 	slaves_count = nb_ports;
-	for (i = 0; i < nb_ports; i++) {
+	RTE_ETH_FOREACH_DEV(i) {
 		slave_port_init(i, mbuf_pool);
 		slaves[i] = i;
 	}

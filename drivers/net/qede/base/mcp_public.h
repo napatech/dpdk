@@ -1,7 +1,7 @@
 /*
- * Copyright (c) 2016 QLogic Corporation.
+ * Copyright (c) 2016 - 2018 Cavium Inc.
  * All rights reserved.
- * www.qlogic.com
+ * www.cavium.com
  *
  * See LICENSE.qede_pmd for copyright and licensing details.
  */
@@ -800,6 +800,7 @@ struct public_port {
 #define ETH_TRANSCEIVER_TYPE_4x10G			0x1f
 #define ETH_TRANSCEIVER_TYPE_4x25G_CR			0x20
 #define ETH_TRANSCEIVER_TYPE_1000BASET			0x21
+#define ETH_TRANSCEIVER_TYPE_10G_BASET			0x22
 #define ETH_TRANSCEIVER_TYPE_MULTI_RATE_10G_40G_SR	0x30
 #define ETH_TRANSCEIVER_TYPE_MULTI_RATE_10G_40G_CR	0x31
 #define ETH_TRANSCEIVER_TYPE_MULTI_RATE_10G_40G_LR	0x32
@@ -1777,6 +1778,8 @@ struct public_drv_mb {
 #define FW_MB_PARAM_FEATURE_SUPPORT_SMARTLINQ   0x00000001
 /* MFW supports EEE */
 #define FW_MB_PARAM_FEATURE_SUPPORT_EEE         0x00000002
+/* MFW supports DRV_LOAD Timeout */
+#define FW_MB_PARAM_FEATURE_SUPPORT_DRV_LOAD_TO  0x00000004
 /* MFW supports virtual link */
 #define FW_MB_PARAM_FEATURE_SUPPORT_VLINK       0x00010000
 

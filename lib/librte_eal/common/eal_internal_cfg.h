@@ -21,9 +21,9 @@
  */
 struct hugepage_info {
 	uint64_t hugepage_sz;   /**< size of a huge page */
-	const char *hugedir;    /**< dir where hugetlbfs is mounted */
+	char hugedir[PATH_MAX];    /**< dir where hugetlbfs is mounted */
 	uint32_t num_pages[RTE_MAX_NUMA_NODES];
-				/**< number of hugepages of that size on each socket */
+	/**< number of hugepages of that size on each socket */
 	int lock_descriptor;    /**< file descriptor for hugepage dir */
 };
 
@@ -47,6 +47,14 @@ struct internal_config {
 	volatile unsigned force_sockets;
 	volatile uint64_t socket_mem[RTE_MAX_NUMA_NODES]; /**< amount of memory per socket */
 	uintptr_t base_virtaddr;          /**< base address to try and reserve memory from */
+	volatile unsigned legacy_mem;
+	/**< true to enable legacy memory behavior (no dynamic allocation,
+	 * IOVA-contiguous segments).
+	 */
+	volatile unsigned single_file_segments;
+	/**< true if storing all pages within single files (per-page-size,
+	 * per-node) non-legacy mode only.
+	 */
 	volatile int syslog_facility;	  /**< facility passed to openlog() */
 	/** default interrupt mode for VFIO */
 	volatile enum rte_intr_mode vfio_intr_mode;
@@ -56,6 +64,8 @@ struct internal_config {
 			/**< user defined mbuf pool ops name */
 	unsigned num_hugepage_sizes;      /**< how many sizes on this system */
 	struct hugepage_info hugepage_info[MAX_HUGEPAGE_SIZES];
+	volatile unsigned int init_complete;
+	/**< indicates whether EAL has completed initialization */
 };
 extern struct internal_config internal_config; /**< Global EAL configuration. */
 

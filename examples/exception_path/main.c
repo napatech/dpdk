@@ -41,13 +41,21 @@
 #include <rte_string_fns.h>
 #include <rte_cycles.h>
 
+#ifndef APP_MAX_LCORE
+#if (RTE_MAX_LCORE > 64)
+#define APP_MAX_LCORE 64
+#else
+#define APP_MAX_LCORE RTE_MAX_LCORE
+#endif
+#endif
+
 /* Macros for printing using RTE_LOG */
 #define RTE_LOGTYPE_APP RTE_LOGTYPE_USER1
 #define FATAL_ERROR(fmt, args...)       rte_exit(EXIT_FAILURE, fmt "\n", ##args)
 #define PRINT_INFO(fmt, args...)        RTE_LOG(INFO, APP, fmt "\n", ##args)
 
 /* Max ports than can be used (each port is associated with two lcores) */
-#define MAX_PORTS               (RTE_MAX_LCORE / 2)
+#define MAX_PORTS               (APP_MAX_LCORE / 2)
 
 /* Max size of a single packet */
 #define MAX_PACKET_SZ (2048)
@@ -101,7 +109,7 @@ static uint64_t input_cores_mask = 0;
 static uint64_t output_cores_mask = 0;
 
 /* Array storing port_id that is associated with each lcore */
-static uint16_t port_ids[RTE_MAX_LCORE];
+static uint16_t port_ids[APP_MAX_LCORE];
 
 /* Structure type for recording lcore-specific stats */
 struct stats {
@@ -111,7 +119,7 @@ struct stats {
 } __rte_cache_aligned;
 
 /* Array of lcore-specific stats */
-static struct stats lcore_stats[RTE_MAX_LCORE];
+static struct stats lcore_stats[APP_MAX_LCORE];
 
 /* Print out statistics on packets handled */
 static void
@@ -330,7 +338,9 @@ setup_port_lcore_affinities(void)
 	uint16_t rx_port = 0;
 
 	/* Setup port_ids[] array, and check masks were ok */
-	RTE_LCORE_FOREACH(i) {
+	for (i = 0; i < APP_MAX_LCORE; i++) {
+		if (!rte_lcore_is_enabled(i))
+			continue;
 		if (input_cores_mask & (1ULL << i)) {
 			/* Skip ports that are not enabled */
 			while ((ports_mask & (1 << rx_port)) == 0) {
@@ -465,7 +475,7 @@ init_port(uint16_t port)
 
 /* Check the link status of all ports in up to 9s, and print them finally */
 static void
-check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
+check_all_ports_link_status(uint32_t port_mask)
 {
 #define CHECK_INTERVAL 100 /* 100ms */
 #define MAX_CHECK_TIME 90 /* 9s (90 * 100ms) in total */
@@ -477,7 +487,7 @@ check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
 	fflush(stdout);
 	for (count = 0; count <= MAX_CHECK_TIME; count++) {
 		all_ports_up = 1;
-		for (portid = 0; portid < port_num; portid++) {
+		RTE_ETH_FOREACH_DEV(portid) {
 			if ((port_mask & (1 << portid)) == 0)
 				continue;
 			memset(&link, 0, sizeof(link));
@@ -549,7 +559,7 @@ main(int argc, char** argv)
 	}
 
 	/* Get number of ports found in scan */
-	nb_sys_ports = rte_eth_dev_count();
+	nb_sys_ports = rte_eth_dev_count_avail();
 	if (nb_sys_ports == 0)
 		FATAL_ERROR("No supported Ethernet device found");
 	/* Find highest port set in portmask */
@@ -561,14 +571,14 @@ main(int argc, char** argv)
 		FATAL_ERROR("Port mask requires more ports than available");
 
 	/* Initialise each port */
-	for (port = 0; port < nb_sys_ports; port++) {
+	RTE_ETH_FOREACH_DEV(port) {
 		/* Skip ports that are not enabled */
 		if ((ports_mask & (1 << port)) == 0) {
 			continue;
 		}
 		init_port(port);
 	}
-	check_all_ports_link_status(nb_sys_ports, ports_mask);
+	check_all_ports_link_status(ports_mask);
 
 	/* Launch per-lcore function on every lcore */
 	rte_eal_mp_remote_launch(main_loop, NULL, CALL_MASTER);

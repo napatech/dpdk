@@ -1,6 +1,6 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
     Copyright 2017 6WIND S.A.
-    Copyright 2017 Mellanox Technologies, Ltd.
+    Copyright 2017 Mellanox Technologies, Ltd
 
 VDEV_NETVSC driver
 ==================
@@ -89,12 +89,16 @@ The following device parameters are supported:
 - ``force`` [int]
 
   If nonzero, forces the use of specified interfaces even if not detected as
-  NetVSC or detected as routed NETVSC.
+  NetVSC.
 
 - ``ignore`` [int]
 
   If nonzero, ignores the driver runnig (actually used to disable the
   auto-detection in Hyper-V VM).
 
-Not specifying either ``iface`` or ``mac`` makes this driver attach itself to
-all unrouted NetVSC interfaces found on the system.
+.. note::
+
+   Not specifying either ``iface`` or ``mac`` makes this driver attach itself to
+   all unrouted NetVSC interfaces found on the system.
+   Specifying the device makes this driver attach itself to the device
+   regardless the device routes.

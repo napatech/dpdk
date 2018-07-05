@@ -32,7 +32,7 @@ find_port_id_by_pci_addr(const struct rte_pci_addr *pci_addr)
 	struct rte_pci_addr *eth_pci_addr;
 	unsigned i;
 
-	for (i = 0; i < rte_eth_dev_count(); i++) {
+	RTE_ETH_FOREACH_DEV(i) {
 		pci_dev = RTE_ETH_DEV_TO_PCI(&rte_eth_devices[i]);
 		eth_pci_addr = &pci_dev->addr;
 
@@ -50,7 +50,7 @@ find_port_id_by_dev_name(const char *name)
 {
 	unsigned i;
 
-	for (i = 0; i < rte_eth_dev_count(); i++) {
+	RTE_ETH_FOREACH_DEV(i) {
 		if (rte_eth_devices[i].data == NULL)
 			continue;
 
@@ -92,7 +92,7 @@ parse_port_id(const char *port_str)
 	if (pci_bus->parse(port_str, &dev_addr) == 0) {
 		dev = pci_bus->find_device(NULL, bond_pci_addr_cmp, &dev_addr);
 		if (dev == NULL) {
-			RTE_LOG(ERR, PMD, "unable to find PCI device\n");
+			RTE_BOND_LOG(ERR, "unable to find PCI device");
 			return -1;
 		}
 		port_id = find_port_id_by_pci_addr(&dev_addr);
@@ -134,7 +134,8 @@ bond_ethdev_parse_slave_port_kvarg(const char *key,
 	if (strcmp(key, PMD_BOND_SLAVE_PORT_KVARG) == 0) {
 		int port_id = parse_port_id(value);
 		if (port_id < 0) {
-			RTE_BOND_LOG(ERR, "Invalid slave port value (%s) specified", value);
+			RTE_BOND_LOG(ERR, "Invalid slave port value (%s) specified",
+				     value);
 			return -1;
 		} else
 			slave_ports->slaves[slave_ports->slave_count++] =
@@ -244,7 +245,7 @@ bond_ethdev_parse_primary_slave_port_id_kvarg(const char *key __rte_unused,
 	if (primary_slave_port_id < 0)
 		return -1;
 
-	*(uint8_t *)extra_args = (uint8_t)primary_slave_port_id;
+	*(uint16_t *)extra_args = (uint16_t)primary_slave_port_id;
 
 	return 0;
 }

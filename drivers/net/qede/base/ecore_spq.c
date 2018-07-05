@@ -1,7 +1,7 @@
 /*
- * Copyright (c) 2016 QLogic Corporation.
+ * Copyright (c) 2016 - 2018 Cavium Inc.
  * All rights reserved.
- * www.qlogic.com
+ * www.cavium.com
  *
  * See LICENSE.qede_pmd for copyright and licensing details.
  */
@@ -30,7 +30,7 @@
 
 #define SPQ_BLOCK_DELAY_MAX_ITER	(10)
 #define SPQ_BLOCK_DELAY_US		(10)
-#define SPQ_BLOCK_SLEEP_MAX_ITER	(1000)
+#define SPQ_BLOCK_SLEEP_MAX_ITER	(200)
 #define SPQ_BLOCK_SLEEP_MS		(5)
 
 /***************************************************************************
@@ -60,8 +60,12 @@ static enum _ecore_status_t __ecore_spq_block(struct ecore_hwfn *p_hwfn,
 	u32 iter_cnt;
 
 	comp_done = (struct ecore_spq_comp_done *)p_ent->comp_cb.cookie;
-	iter_cnt = sleep_between_iter ? SPQ_BLOCK_SLEEP_MAX_ITER
+	iter_cnt = sleep_between_iter ? p_hwfn->p_spq->block_sleep_max_iter
 				      : SPQ_BLOCK_DELAY_MAX_ITER;
+#ifndef ASIC_ONLY
+	if (CHIP_REV_IS_EMUL(p_hwfn->p_dev) && sleep_between_iter)
+		iter_cnt *= 5;
+#endif
 
 	while (iter_cnt--) {
 		OSAL_POLL_MODE_DPC(p_hwfn);
@@ -136,6 +140,14 @@ err:
 	ecore_hw_err_notify(p_hwfn, ECORE_HW_ERR_RAMROD_FAIL);
 
 	return ECORE_BUSY;
+}
+
+void ecore_set_spq_block_timeout(struct ecore_hwfn *p_hwfn,
+				 u32 spq_timeout_ms)
+{
+	p_hwfn->p_spq->block_sleep_max_iter = spq_timeout_ms ?
+		spq_timeout_ms / SPQ_BLOCK_SLEEP_MS :
+		SPQ_BLOCK_SLEEP_MAX_ITER;
 }
 
 /***************************************************************************
@@ -389,7 +401,7 @@ enum _ecore_status_t ecore_eq_alloc(struct ecore_hwfn *p_hwfn, u16 num_elem)
 	/* Allocate EQ struct */
 	p_eq = OSAL_ZALLOC(p_hwfn->p_dev, GFP_KERNEL, sizeof(*p_eq));
 	if (!p_eq) {
-		DP_NOTICE(p_hwfn, true,
+		DP_NOTICE(p_hwfn, false,
 			  "Failed to allocate `struct ecore_eq'\n");
 		return ECORE_NOMEM;
 	}
@@ -402,7 +414,7 @@ enum _ecore_status_t ecore_eq_alloc(struct ecore_hwfn *p_hwfn, u16 num_elem)
 			      num_elem,
 			      sizeof(union event_ring_element),
 			      &p_eq->chain, OSAL_NULL) != ECORE_SUCCESS) {
-		DP_NOTICE(p_hwfn, true, "Failed to allocate eq chain\n");
+		DP_NOTICE(p_hwfn, false, "Failed to allocate eq chain\n");
 		goto eq_allocate_fail;
 	}
 
@@ -547,8 +559,7 @@ enum _ecore_status_t ecore_spq_alloc(struct ecore_hwfn *p_hwfn)
 	p_spq =
 	    OSAL_ZALLOC(p_hwfn->p_dev, GFP_KERNEL, sizeof(struct ecore_spq));
 	if (!p_spq) {
-		DP_NOTICE(p_hwfn, true,
-			  "Failed to allocate `struct ecore_spq'\n");
+		DP_NOTICE(p_hwfn, false, "Failed to allocate `struct ecore_spq'\n");
 		return ECORE_NOMEM;
 	}
 
@@ -560,7 +571,7 @@ enum _ecore_status_t ecore_spq_alloc(struct ecore_hwfn *p_hwfn)
 			      0, /* N/A when the mode is SINGLE */
 			      sizeof(struct slow_path_element),
 			      &p_spq->chain, OSAL_NULL)) {
-		DP_NOTICE(p_hwfn, true, "Failed to allocate spq chain\n");
+		DP_NOTICE(p_hwfn, false, "Failed to allocate spq chain\n");
 		goto spq_allocate_fail;
 	}
 
@@ -576,7 +587,8 @@ enum _ecore_status_t ecore_spq_alloc(struct ecore_hwfn *p_hwfn)
 	p_spq->p_phys = p_phys;
 
 #ifdef CONFIG_ECORE_LOCK_ALLOC
-	OSAL_SPIN_LOCK_ALLOC(p_hwfn, &p_spq->lock);
+	if (OSAL_SPIN_LOCK_ALLOC(p_hwfn, &p_spq->lock))
+		goto spq_allocate_fail;
 #endif
 
 	p_hwfn->p_spq = p_spq;
@@ -630,9 +642,7 @@ ecore_spq_get_entry(struct ecore_hwfn *p_hwfn, struct ecore_spq_entry **pp_ent)
 	if (OSAL_LIST_IS_EMPTY(&p_spq->free_pool)) {
 		p_ent = OSAL_ZALLOC(p_hwfn->p_dev, GFP_ATOMIC, sizeof(*p_ent));
 		if (!p_ent) {
-			DP_NOTICE(p_hwfn, true,
-				 "Failed to allocate an SPQ entry for a pending"
-				 " ramrod\n");
+			DP_NOTICE(p_hwfn, false, "Failed to allocate an SPQ entry for a pending ramrod\n");
 			rc = ECORE_NOMEM;
 			goto out_unlock;
 		}
@@ -1013,7 +1023,7 @@ enum _ecore_status_t ecore_consq_alloc(struct ecore_hwfn *p_hwfn)
 	p_consq =
 	    OSAL_ZALLOC(p_hwfn->p_dev, GFP_KERNEL, sizeof(*p_consq));
 	if (!p_consq) {
-		DP_NOTICE(p_hwfn, true,
+		DP_NOTICE(p_hwfn, false,
 			  "Failed to allocate `struct ecore_consq'\n");
 		return ECORE_NOMEM;
 	}
@@ -1026,7 +1036,7 @@ enum _ecore_status_t ecore_consq_alloc(struct ecore_hwfn *p_hwfn)
 			      ECORE_CHAIN_PAGE_SIZE / 0x80,
 			      0x80,
 			      &p_consq->chain, OSAL_NULL) != ECORE_SUCCESS) {
-		DP_NOTICE(p_hwfn, true, "Failed to allocate consq chain");
+		DP_NOTICE(p_hwfn, false, "Failed to allocate consq chain");
 		goto consq_allocate_fail;
 	}
 

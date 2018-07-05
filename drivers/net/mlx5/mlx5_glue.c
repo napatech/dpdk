@@ -1,11 +1,17 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2018 6WIND S.A.
- * Copyright 2018 Mellanox Technologies, Ltd.
+ * Copyright 2018 Mellanox Technologies, Ltd
  */
 
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
+
+/*
+ * Not needed by this file; included to work around the lack of off_t
+ * definition for mlx5dv.h with unpatched rdma-core versions.
+ */
+#include <sys/types.h>
 
 /* Verbs headers do not support -pedantic. */
 #ifdef PEDANTIC
@@ -287,6 +293,21 @@ mlx5_glue_dv_create_cq(struct ibv_context *context,
 	return mlx5dv_create_cq(context, cq_attr, mlx5_cq_attr);
 }
 
+static struct ibv_wq *
+mlx5_glue_dv_create_wq(struct ibv_context *context,
+		       struct ibv_wq_init_attr *wq_attr,
+		       struct mlx5dv_wq_init_attr *mlx5_wq_attr)
+{
+#ifndef HAVE_IBV_DEVICE_STRIDING_RQ_SUPPORT
+	(void)context;
+	(void)wq_attr;
+	(void)mlx5_wq_attr;
+	return NULL;
+#else
+	return mlx5dv_create_wq(context, wq_attr, mlx5_wq_attr);
+#endif
+}
+
 static int
 mlx5_glue_dv_query_device(struct ibv_context *ctx,
 			  struct mlx5dv_context *attrs_out)
@@ -305,6 +326,21 @@ static int
 mlx5_glue_dv_init_obj(struct mlx5dv_obj *obj, uint64_t obj_type)
 {
 	return mlx5dv_init_obj(obj, obj_type);
+}
+
+static struct ibv_qp *
+mlx5_glue_dv_create_qp(struct ibv_context *context,
+		       struct ibv_qp_init_attr_ex *qp_init_attr_ex,
+		       struct mlx5dv_qp_init_attr *dv_qp_init_attr)
+{
+#ifdef HAVE_IBV_DEVICE_TUNNEL_SUPPORT
+	return mlx5dv_create_qp(context, qp_init_attr_ex, dv_qp_init_attr);
+#else
+	(void)context;
+	(void)qp_init_attr_ex;
+	(void)dv_qp_init_attr;
+	return NULL;
+#endif
 }
 
 const struct mlx5_glue *mlx5_glue = &(const struct mlx5_glue){
@@ -347,7 +383,9 @@ const struct mlx5_glue *mlx5_glue = &(const struct mlx5_glue){
 	.port_state_str = mlx5_glue_port_state_str,
 	.cq_ex_to_cq = mlx5_glue_cq_ex_to_cq,
 	.dv_create_cq = mlx5_glue_dv_create_cq,
+	.dv_create_wq = mlx5_glue_dv_create_wq,
 	.dv_query_device = mlx5_glue_dv_query_device,
 	.dv_set_context_attr = mlx5_glue_dv_set_context_attr,
 	.dv_init_obj = mlx5_glue_dv_init_obj,
+	.dv_create_qp = mlx5_glue_dv_create_qp,
 };

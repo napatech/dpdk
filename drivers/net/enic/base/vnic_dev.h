@@ -108,7 +108,7 @@ int vnic_dev_fw_info(struct vnic_dev *vdev,
 int vnic_dev_capable_adv_filters(struct vnic_dev *vdev);
 int vnic_dev_capable(struct vnic_dev *vdev, enum vnic_devcmd_cmd cmd);
 int vnic_dev_capable_filter_mode(struct vnic_dev *vdev, u32 *mode,
-				 u8 *filter_tags);
+				 u8 *filter_actions);
 int vnic_dev_asic_info(struct vnic_dev *vdev, u16 *asic_type, u16 *asic_rev);
 int vnic_dev_spec(struct vnic_dev *vdev, unsigned int offset, size_t size,
 	void *value);
@@ -165,6 +165,7 @@ struct vnic_dev *vnic_dev_register(struct vnic_dev *vdev,
 	void *priv, struct rte_pci_device *pdev, struct vnic_dev_bar *bar,
 	unsigned int num_bars);
 struct rte_pci_device *vnic_dev_get_pdev(struct vnic_dev *vdev);
+int vnic_dev_alloc_stats_mem(struct vnic_dev *vdev);
 int vnic_dev_cmd_init(struct vnic_dev *vdev, int fallback);
 int vnic_dev_get_size(void);
 int vnic_dev_int13(struct vnic_dev *vdev, u64 arg, u32 op);
@@ -177,10 +178,9 @@ int vnic_dev_deinit_done(struct vnic_dev *vdev, int *status);
 int vnic_dev_set_mac_addr(struct vnic_dev *vdev, u8 *mac_addr);
 int vnic_dev_classifier(struct vnic_dev *vdev, u8 cmd, u16 *entry,
 	struct filter_v2 *data, struct filter_action_v2 *action_v2);
-#ifdef ENIC_VXLAN
-int vnic_dev_overlay_offload_enable_disable(struct vnic_dev *vdev,
+int vnic_dev_overlay_offload_ctrl(struct vnic_dev *vdev,
 	u8 overlay, u8 config);
 int vnic_dev_overlay_offload_cfg(struct vnic_dev *vdev, u8 overlay,
 	u16 vxlan_udp_port_number);
-#endif
+int vnic_dev_capable_vxlan(struct vnic_dev *vdev);
 #endif /* _VNIC_DEV_H_ */

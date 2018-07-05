@@ -65,7 +65,7 @@ static int avf_dev_rss_hash_update(struct rte_eth_dev *dev,
 static int avf_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 				     struct rte_eth_rss_conf *rss_conf);
 static int avf_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
-static void avf_dev_set_default_mac_addr(struct rte_eth_dev *dev,
+static int avf_dev_set_default_mac_addr(struct rte_eth_dev *dev,
 					 struct ether_addr *mac_addr);
 static int avf_dev_rx_queue_intr_enable(struct rte_eth_dev *dev,
 					uint16_t queue_id);
@@ -339,17 +339,18 @@ static int avf_config_rx_queues_irqs(struct rte_eth_dev *dev,
 		AVF_WRITE_FLUSH(hw);
 		/* map all queues to the same interrupt */
 		for (i = 0; i < dev->data->nb_rx_queues; i++)
-			vf->rxq_map[0] |= 1 << i;
+			vf->rxq_map[vf->msix_base] |= 1 << i;
 	} else {
 		if (!rte_intr_allow_others(intr_handle)) {
 			vf->nb_msix = 1;
 			vf->msix_base = AVF_MISC_VEC_ID;
 			for (i = 0; i < dev->data->nb_rx_queues; i++) {
-				vf->rxq_map[0] |= 1 << i;
+				vf->rxq_map[vf->msix_base] |= 1 << i;
 				intr_handle->intr_vec[i] = AVF_MISC_VEC_ID;
 			}
 			PMD_DRV_LOG(DEBUG,
-				    "vector 0 are mapping to all Rx queues");
+				    "vector %u are mapping to all Rx queues",
+				    vf->msix_base);
 		} else {
 			/* If Rx interrupt is reuquired, and we can use
 			 * multi interrupts, then the vec is from 1
@@ -474,7 +475,7 @@ avf_dev_stop(struct rte_eth_dev *dev)
 {
 	struct avf_adapter *adapter =
 		AVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
-	struct avf_hw *hw = AVF_DEV_PRIVATE_TO_HW(dev);
+	struct avf_hw *hw = AVF_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = dev->intr_handle;
 	int ret, i;
@@ -507,7 +508,6 @@ avf_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	struct avf_info *vf = AVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
 
 	memset(dev_info, 0, sizeof(*dev_info));
-	dev_info->pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	dev_info->max_rx_queues = vf->vsi_res->num_queue_pairs;
 	dev_info->max_tx_queues = vf->vsi_res->num_queue_pairs;
 	dev_info->min_rx_bufsize = AVF_BUF_SIZE_MIN;
@@ -532,13 +532,13 @@ avf_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->default_rxconf = (struct rte_eth_rxconf) {
 		.rx_free_thresh = AVF_DEFAULT_RX_FREE_THRESH,
 		.rx_drop_en = 0,
+		.offloads = 0,
 	};
 
 	dev_info->default_txconf = (struct rte_eth_txconf) {
 		.tx_free_thresh = AVF_DEFAULT_TX_FREE_THRESH,
 		.tx_rs_thresh = AVF_DEFAULT_TX_RS_THRESH,
-		.txq_flags = ETH_TXQ_FLAGS_NOMULTSEGS |
-				ETH_TXQ_FLAGS_NOOFFLOADS,
+		.offloads = 0,
 	};
 
 	dev_info->rx_desc_lim = (struct rte_eth_desc_lim) {
@@ -608,7 +608,7 @@ avf_dev_link_update(struct rte_eth_dev *dev,
 	new_link.link_duplex = ETH_LINK_FULL_DUPLEX;
 	new_link.link_status = vf->link_up ? ETH_LINK_UP :
 					     ETH_LINK_DOWN;
-	new_link.link_autoneg = !!(dev->data->dev_conf.link_speeds &
+	new_link.link_autoneg = !(dev->data->dev_conf.link_speeds &
 				ETH_LINK_SPEED_FIXED);
 
 	if (rte_atomic64_cmpset((uint64_t *)&dev->data->dev_link,
@@ -759,7 +759,7 @@ avf_dev_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 	/* Vlan stripping setting */
 	if (mask & ETH_VLAN_STRIP_MASK) {
 		/* Enable or disable VLAN stripping */
-		if (dev_conf->rxmode.hw_vlan_strip)
+		if (dev_conf->rxmode.offloads & DEV_RX_OFFLOAD_VLAN_STRIP)
 			err = avf_enable_vlan_strip(adapter);
 		else
 			err = avf_disable_vlan_strip(adapter);
@@ -926,7 +926,7 @@ avf_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	return ret;
 }
 
-static void
+static int
 avf_dev_set_default_mac_addr(struct rte_eth_dev *dev,
 			     struct ether_addr *mac_addr)
 {
@@ -940,11 +940,11 @@ avf_dev_set_default_mac_addr(struct rte_eth_dev *dev,
 	perm_addr = (struct ether_addr *)hw->mac.perm_addr;
 
 	if (is_same_ether_addr(mac_addr, old_addr))
-		return;
+		return 0;
 
 	/* If the MAC address is configured by host, skip the setting */
 	if (is_valid_assigned_ether_addr(perm_addr))
-		return;
+		return -EPERM;
 
 	ret = avf_add_del_eth_addr(adapter, old_addr, FALSE);
 	if (ret)
@@ -968,7 +968,11 @@ avf_dev_set_default_mac_addr(struct rte_eth_dev *dev,
 			    mac_addr->addr_bytes[4],
 			    mac_addr->addr_bytes[5]);
 
+	if (ret)
+		return -EIO;
+
 	ether_addr_copy(mac_addr, (struct ether_addr *)hw->mac.addr);
+	return 0;
 }
 
 static int
@@ -1365,8 +1369,8 @@ avf_allocate_dma_mem_d(__rte_unused struct avf_hw *hw,
 		return AVF_ERR_PARAM;
 
 	snprintf(z_name, sizeof(z_name), "avf_dma_%"PRIu64, rte_rand());
-	mz = rte_memzone_reserve_bounded(z_name, size, SOCKET_ID_ANY, 0,
-					 alignment, RTE_PGSIZE_2M);
+	mz = rte_memzone_reserve_bounded(z_name, size, SOCKET_ID_ANY,
+			RTE_MEMZONE_IOVA_CONTIG, alignment, RTE_PGSIZE_2M);
 	if (!mz)
 		return AVF_ERR_NO_MEMORY;
 

@@ -25,7 +25,23 @@ extern "C" {
 #include <rte_memory.h>
 #include <rte_mempool.h>
 
-#define RTE_BBDEV_MAX_CODE_BLOCKS 64
+/* Number of columns in sub-block interleaver (36.212, section 5.1.4.1.1) */
+#define RTE_BBDEV_C_SUBBLOCK (32)
+/* Maximum size of Transport Block (36.213, Table, Table 7.1.7.2.5-1) */
+#define RTE_BBDEV_MAX_TB_SIZE (391656)
+/* Maximum size of Code Block (36.212, Table 5.1.3-3) */
+#define RTE_BBDEV_MAX_CB_SIZE (6144)
+/* Minimum size of Code Block (36.212, Table 5.1.3-3) */
+#define RTE_BBDEV_MIN_CB_SIZE (40)
+/* Maximum size of circular buffer */
+#define RTE_BBDEV_MAX_KW (18528)
+/*
+ * Maximum number of Code Blocks in Transport Block. It is calculated based on
+ * maximum size of one Code Block and one Transport Block (considering CRC24A
+ * and CRC24B):
+ * (391656 + 24) / (6144 - 24) = 64
+ */
+#define RTE_BBDEV_MAX_CODE_BLOCKS (64)
 
 /** Flags for turbo decoder operation and capability structure */
 enum rte_bbdev_op_td_flag_bitmasks {
@@ -86,7 +102,11 @@ enum rte_bbdev_op_td_flag_bitmasks {
 	 */
 	RTE_BBDEV_TURBO_MAP_DEC = (1ULL << 14),
 	/**< Set if a device supports scatter-gather functionality */
-	RTE_BBDEV_TURBO_DEC_SCATTER_GATHER = (1ULL << 15)
+	RTE_BBDEV_TURBO_DEC_SCATTER_GATHER = (1ULL << 15),
+	/**< Set to keep CRC24B bits appended while decoding. Only usable when
+	 * decoding Transport Blocks (code_block_mode = 0).
+	 */
+	RTE_BBDEV_TURBO_DEC_TB_CRC_24B_KEEP = (1ULL << 16)
 };
 
 /** Flags for turbo encoder operation and capability structure */
@@ -363,6 +383,10 @@ struct rte_bbdev_op_turbo_enc {
 struct rte_bbdev_op_cap_turbo_dec {
 	/**< Flags from rte_bbdev_op_td_flag_bitmasks */
 	uint32_t capability_flags;
+	/** Maximal LLR absolute value. Acceptable LLR values lie in range
+	 * [-max_llr_modulus, max_llr_modulus].
+	 */
+	int8_t max_llr_modulus;
 	uint8_t num_buffers_src;  /**< Num input code block buffers */
 	/**< Num hard output code block buffers */
 	uint8_t num_buffers_hard_out;

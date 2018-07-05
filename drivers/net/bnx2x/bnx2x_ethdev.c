@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2015 Brocade Communications Systems, Inc.
  *
- * Copyright (c) 2015 QLogic Corporation.
+ * Copyright (c) 2015-2018 Cavium Inc.
  * All rights reserved.
- * www.qlogic.com
+ * www.cavium.com
  *
  * See LICENSE.bnx2x_pmd for copyright and licensing details.
  */
@@ -140,11 +140,13 @@ static int
 bnx2x_dev_configure(struct rte_eth_dev *dev)
 {
 	struct bnx2x_softc *sc = dev->data->dev_private;
+	struct rte_eth_rxmode *rxmode = &dev->data->dev_conf.rxmode;
+
 	int mp_ncpus = sysconf(_SC_NPROCESSORS_CONF);
 
 	PMD_INIT_FUNC_TRACE();
 
-	if (dev->data->dev_conf.rxmode.jumbo_frame)
+	if (rxmode->offloads & DEV_RX_OFFLOAD_JUMBO_FRAME)
 		sc->mtu = dev->data->dev_conf.rxmode.max_rx_pkt_len;
 
 	if (dev->data->nb_tx_queues > dev->data->nb_rx_queues) {
@@ -447,13 +449,13 @@ static void
 bnx2x_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 {
 	struct bnx2x_softc *sc = dev->data->dev_private;
-	dev_info->pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	dev_info->max_rx_queues  = sc->max_rx_queues;
 	dev_info->max_tx_queues  = sc->max_tx_queues;
 	dev_info->min_rx_bufsize = BNX2X_MIN_RX_BUF_SIZE;
 	dev_info->max_rx_pktlen  = BNX2X_MAX_RX_PKT_LEN;
 	dev_info->max_mac_addrs  = BNX2X_MAX_MAC_ADDRS;
 	dev_info->speed_capa = ETH_LINK_SPEED_10G | ETH_LINK_SPEED_20G;
+	dev_info->rx_offload_capa = DEV_RX_OFFLOAD_JUMBO_FRAME;
 }
 
 static int
@@ -642,24 +644,14 @@ static struct rte_pci_driver rte_bnx2xvf_pmd;
 static int eth_bnx2x_pci_probe(struct rte_pci_driver *pci_drv,
 	struct rte_pci_device *pci_dev)
 {
-	struct rte_eth_dev *eth_dev;
-	int ret;
-
-	eth_dev = rte_eth_dev_pci_allocate(pci_dev, sizeof(struct bnx2x_softc));
-	if (!eth_dev)
-		return -ENOMEM;
-
 	if (pci_drv == &rte_bnx2x_pmd)
-		ret = eth_bnx2x_dev_init(eth_dev);
+		return rte_eth_dev_pci_generic_probe(pci_dev,
+				sizeof(struct bnx2x_softc), eth_bnx2x_dev_init);
 	else if (pci_drv == &rte_bnx2xvf_pmd)
-		ret = eth_bnx2xvf_dev_init(eth_dev);
+		return rte_eth_dev_pci_generic_probe(pci_dev,
+				sizeof(struct bnx2x_softc), eth_bnx2xvf_dev_init);
 	else
-		ret = -EINVAL;
-
-	if (ret)
-		rte_eth_dev_pci_release(eth_dev);
-
-	return ret;
+		return -EINVAL;
 }
 
 static int eth_bnx2x_pci_remove(struct rte_pci_device *pci_dev)
@@ -695,10 +687,10 @@ RTE_INIT(bnx2x_init_log);
 static void
 bnx2x_init_log(void)
 {
-	bnx2x_logtype_init = rte_log_register("pmd.bnx2x.init");
+	bnx2x_logtype_init = rte_log_register("pmd.net.bnx2x.init");
 	if (bnx2x_logtype_init >= 0)
 		rte_log_set_level(bnx2x_logtype_init, RTE_LOG_NOTICE);
-	bnx2x_logtype_driver = rte_log_register("pmd.bnx2x.driver");
+	bnx2x_logtype_driver = rte_log_register("pmd.net.bnx2x.driver");
 	if (bnx2x_logtype_driver >= 0)
 		rte_log_set_level(bnx2x_logtype_driver, RTE_LOG_NOTICE);
 }

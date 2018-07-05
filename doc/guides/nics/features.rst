@@ -278,6 +278,17 @@ Supports RSS hashing on RX.
 * **[provides] mbuf**: ``mbuf.ol_flags:PKT_RX_RSS_HASH``, ``mbuf.rss``.
 
 
+.. _nic_features_inner_rss:
+
+Inner RSS
+---------
+
+Supports RX RSS hashing on Inner headers.
+
+* **[users]    rte_flow_action_rss**: ``level``.
+* **[provides] mbuf**: ``mbuf.ol_flags:PKT_RX_RSS_HASH``, ``mbuf.rss``.
+
+
 .. _nic_features_rss_key_update:
 
 RSS key update
@@ -749,6 +760,17 @@ Supports getting/setting device eeprom data.
   ``rte_eth_dev_set_eeprom()``.
 
 
+.. _nic_features_module_eeprom_dump:
+
+Module EEPROM dump
+------------------
+
+Supports getting information and data of plugin module eeprom.
+
+* **[implements] eth_dev_ops**: ``get_module_info``, ``get_module_eeprom``.
+* **[related]    API**: ``rte_eth_dev_get_module_info()``, ``rte_eth_dev_get_module_eeprom()``.
+
+
 .. _nic_features_register_dump:
 
 Registers dump
@@ -892,7 +914,25 @@ Documentation describes performance values.
 
 See ``dpdk.org/doc/perf/*``.
 
+.. _nic_features_runtime_rx_queue_setup:
 
+Runtime Rx queue setup
+----------------------
+
+Supports Rx queue setup after device started.
+
+* **[provides] rte_eth_dev_info**: ``dev_capa:RTE_ETH_DEV_CAPA_RUNTIME_RX_QUEUE_SETUP``.
+* **[related]  API**: ``rte_eth_dev_info_get()``.
+
+.. _nic_features_runtime_tx_queue_setup:
+
+Runtime Tx queue setup
+----------------------
+
+Supports Tx queue setup after device started.
+
+* **[provides] rte_eth_dev_info**: ``dev_capa:RTE_ETH_DEV_CAPA_RUNTIME_TX_QUEUE_SETUP``.
+* **[related]  API**: ``rte_eth_dev_info_get()``.
 
 .. _nic_features_other:
 

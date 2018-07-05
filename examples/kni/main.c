@@ -275,7 +275,7 @@ kni_egress(struct kni_port_params *p)
 static int
 main_loop(__rte_unused void *arg)
 {
-	uint8_t i, nb_ports = rte_eth_dev_count();
+	uint16_t i;
 	int32_t f_stop;
 	const unsigned lcore_id = rte_lcore_id();
 	enum lcore_rxtx {
@@ -286,7 +286,7 @@ main_loop(__rte_unused void *arg)
 	};
 	enum lcore_rxtx flag = LCORE_NONE;
 
-	for (i = 0; i < nb_ports; i++) {
+	RTE_ETH_FOREACH_DEV(i) {
 		if (!kni_port_params_array[i])
 			continue;
 		if (kni_port_params_array[i]->lcore_rx == (uint8_t)lcore_id) {
@@ -626,7 +626,7 @@ init_port(uint16_t port)
 
 /* Check the link status of all ports in up to 9s, and print them finally */
 static void
-check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
+check_all_ports_link_status(uint32_t port_mask)
 {
 #define CHECK_INTERVAL 100 /* 100ms */
 #define MAX_CHECK_TIME 90 /* 9s (90 * 100ms) in total */
@@ -638,7 +638,7 @@ check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
 	fflush(stdout);
 	for (count = 0; count <= MAX_CHECK_TIME; count++) {
 		all_ports_up = 1;
-		for (portid = 0; portid < port_num; portid++) {
+		RTE_ETH_FOREACH_DEV(portid) {
 			if ((port_mask & (1 << portid)) == 0)
 				continue;
 			memset(&link, 0, sizeof(link));
@@ -689,7 +689,7 @@ kni_change_mtu(uint16_t port_id, unsigned int new_mtu)
 	struct rte_eth_dev_info dev_info;
 	struct rte_eth_rxconf rxq_conf;
 
-	if (port_id >= rte_eth_dev_count()) {
+	if (!rte_eth_dev_is_valid_port(port_id)) {
 		RTE_LOG(ERR, APP, "Invalid port id %d\n", port_id);
 		return -EINVAL;
 	}
@@ -748,7 +748,7 @@ kni_config_network_interface(uint16_t port_id, uint8_t if_up)
 {
 	int ret = 0;
 
-	if (port_id >= rte_eth_dev_count() || port_id >= RTE_MAX_ETHPORTS) {
+	if (!rte_eth_dev_is_valid_port(port_id)) {
 		RTE_LOG(ERR, APP, "Invalid port id %d\n", port_id);
 		return -EINVAL;
 	}
@@ -782,7 +782,7 @@ kni_config_mac_address(uint16_t port_id, uint8_t mac_addr[])
 {
 	int ret = 0;
 
-	if (port_id >= rte_eth_dev_count() || port_id >= RTE_MAX_ETHPORTS) {
+	if (!rte_eth_dev_is_valid_port(port_id)) {
 		RTE_LOG(ERR, APP, "Invalid port id %d\n", port_id);
 		return -EINVAL;
 	}
@@ -834,13 +834,18 @@ kni_alloc(uint16_t port_id)
 		if (i == 0) {
 			struct rte_kni_ops ops;
 			struct rte_eth_dev_info dev_info;
+			const struct rte_pci_device *pci_dev;
+			const struct rte_bus *bus = NULL;
 
 			memset(&dev_info, 0, sizeof(dev_info));
 			rte_eth_dev_info_get(port_id, &dev_info);
 
-			if (dev_info.pci_dev) {
-				conf.addr = dev_info.pci_dev->addr;
-				conf.id = dev_info.pci_dev->id;
+			if (dev_info.device)
+				bus = rte_bus_find_by_device(dev_info.device);
+			if (bus && !strcmp(bus->name, "pci")) {
+				pci_dev = RTE_DEV_TO_PCI(dev_info.device);
+				conf.addr = pci_dev->addr;
+				conf.id = pci_dev->id;
 			}
 			/* Get the interface default mac address */
 			rte_eth_macaddr_get(port_id,
@@ -921,13 +926,13 @@ main(int argc, char** argv)
 	}
 
 	/* Get number of ports found in scan */
-	nb_sys_ports = rte_eth_dev_count();
+	nb_sys_ports = rte_eth_dev_count_avail();
 	if (nb_sys_ports == 0)
 		rte_exit(EXIT_FAILURE, "No supported Ethernet device found\n");
 
 	/* Check if the configured port ID is valid */
 	for (i = 0; i < RTE_MAX_ETHPORTS; i++)
-		if (kni_port_params_array[i] && i >= nb_sys_ports)
+		if (kni_port_params_array[i] && !rte_eth_dev_is_valid_port(i))
 			rte_exit(EXIT_FAILURE, "Configured invalid "
 						"port ID %u\n", i);
 
@@ -935,7 +940,7 @@ main(int argc, char** argv)
 	init_kni();
 
 	/* Initialise each port */
-	for (port = 0; port < nb_sys_ports; port++) {
+	RTE_ETH_FOREACH_DEV(port) {
 		/* Skip ports that are not enabled */
 		if (!(ports_mask & (1 << port)))
 			continue;
@@ -947,7 +952,7 @@ main(int argc, char** argv)
 
 		kni_alloc(port);
 	}
-	check_all_ports_link_status(nb_sys_ports, ports_mask);
+	check_all_ports_link_status(ports_mask);
 
 	/* Launch per-lcore function on every lcore */
 	rte_eal_mp_remote_launch(main_loop, NULL, CALL_MASTER);
@@ -957,7 +962,7 @@ main(int argc, char** argv)
 	}
 
 	/* Release resources */
-	for (port = 0; port < nb_sys_ports; port++) {
+	RTE_ETH_FOREACH_DEV(port) {
 		if (!(ports_mask & (1 << port)))
 			continue;
 		kni_free_kni(port);

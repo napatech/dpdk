@@ -464,6 +464,33 @@ sw_eth_rx_adapter_caps_get(const struct rte_eventdev *dev,
 	return 0;
 }
 
+static int
+sw_timer_adapter_caps_get(const struct rte_eventdev *dev,
+			  uint64_t flags,
+			  uint32_t *caps,
+			  const struct rte_event_timer_adapter_ops **ops)
+{
+	RTE_SET_USED(dev);
+	RTE_SET_USED(flags);
+	*caps = 0;
+
+	/* Use default SW ops */
+	*ops = NULL;
+
+	return 0;
+}
+
+static int
+sw_crypto_adapter_caps_get(const struct rte_eventdev *dev,
+			   const struct rte_cryptodev *cdev,
+			   uint32_t *caps)
+{
+	RTE_SET_USED(dev);
+	RTE_SET_USED(cdev);
+	*caps = RTE_EVENT_CRYPTO_ADAPTER_SW_CAP;
+	return 0;
+}
+
 static void
 sw_info_get(struct rte_eventdev *dev, struct rte_event_dev_info *info)
 {
@@ -772,7 +799,7 @@ static int32_t sw_sched_service_func(void *args)
 static int
 sw_probe(struct rte_vdev_device *vdev)
 {
-	static const struct rte_eventdev_ops evdev_sw_ops = {
+	static struct rte_eventdev_ops evdev_sw_ops = {
 			.dev_configure = sw_dev_configure,
 			.dev_infos_get = sw_info_get,
 			.dev_close = sw_close,
@@ -790,6 +817,10 @@ sw_probe(struct rte_vdev_device *vdev)
 			.port_unlink = sw_port_unlink,
 
 			.eth_rx_adapter_caps_get = sw_eth_rx_adapter_caps_get,
+
+			.timer_adapter_caps_get = sw_timer_adapter_caps_get,
+
+			.crypto_adapter_caps_get = sw_crypto_adapter_caps_get,
 
 			.xstats_get = sw_xstats_get,
 			.xstats_get_names = sw_xstats_get_names,

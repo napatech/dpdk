@@ -104,28 +104,47 @@ test_memzone_reserving_zone_size_bigger_than_the_maximum(void)
 	return 0;
 }
 
+struct walk_arg {
+	int hugepage_2MB_avail;
+	int hugepage_1GB_avail;
+	int hugepage_16MB_avail;
+	int hugepage_16GB_avail;
+};
+static int
+find_available_pagesz(const struct rte_memseg_list *msl, void *arg)
+{
+	struct walk_arg *wa = arg;
+
+	if (msl->page_sz == RTE_PGSIZE_2M)
+		wa->hugepage_2MB_avail = 1;
+	if (msl->page_sz == RTE_PGSIZE_1G)
+		wa->hugepage_1GB_avail = 1;
+	if (msl->page_sz == RTE_PGSIZE_16M)
+		wa->hugepage_16MB_avail = 1;
+	if (msl->page_sz == RTE_PGSIZE_16G)
+		wa->hugepage_16GB_avail = 1;
+
+	return 0;
+}
+
 static int
 test_memzone_reserve_flags(void)
 {
 	const struct rte_memzone *mz;
-	const struct rte_memseg *ms;
-	int hugepage_2MB_avail = 0;
-	int hugepage_1GB_avail = 0;
-	int hugepage_16MB_avail = 0;
-	int hugepage_16GB_avail = 0;
+	struct walk_arg wa;
+	int hugepage_2MB_avail, hugepage_1GB_avail;
+	int hugepage_16MB_avail, hugepage_16GB_avail;
 	const size_t size = 100;
-	int i = 0;
-	ms = rte_eal_get_physmem_layout();
-	for (i = 0; i < RTE_MAX_MEMSEG; i++) {
-		if (ms[i].hugepage_sz == RTE_PGSIZE_2M)
-			hugepage_2MB_avail = 1;
-		if (ms[i].hugepage_sz == RTE_PGSIZE_1G)
-			hugepage_1GB_avail = 1;
-		if (ms[i].hugepage_sz == RTE_PGSIZE_16M)
-			hugepage_16MB_avail = 1;
-		if (ms[i].hugepage_sz == RTE_PGSIZE_16G)
-			hugepage_16GB_avail = 1;
-	}
+
+	memset(&wa, 0, sizeof(wa));
+
+	rte_memseg_list_walk(find_available_pagesz, &wa);
+
+	hugepage_2MB_avail = wa.hugepage_2MB_avail;
+	hugepage_1GB_avail = wa.hugepage_1GB_avail;
+	hugepage_16MB_avail = wa.hugepage_16MB_avail;
+	hugepage_16GB_avail = wa.hugepage_16GB_avail;
+
 	/* Display the availability of 2MB ,1GB, 16MB, 16GB pages */
 	if (hugepage_2MB_avail)
 		printf("2MB Huge pages available\n");
@@ -890,7 +909,7 @@ test_memzone_basic(void)
 	const struct rte_memzone *mz;
 	int memzone_cnt_after, memzone_cnt_expected;
 	int memzone_cnt_before =
-			rte_eal_get_configuration()->mem_config->memzone_cnt;
+			rte_eal_get_configuration()->mem_config->memzones.count;
 
 	memzone1 = rte_memzone_reserve(TEST_MEMZONE_NAME("testzone1"), 100,
 				SOCKET_ID_ANY, 0);
@@ -914,7 +933,7 @@ test_memzone_basic(void)
 			(memzone3 != NULL) + (memzone4 != NULL);
 
 	memzone_cnt_after =
-			rte_eal_get_configuration()->mem_config->memzone_cnt;
+			rte_eal_get_configuration()->mem_config->memzones.count;
 
 	if (memzone_cnt_after != memzone_cnt_expected)
 		return -1;
@@ -993,7 +1012,7 @@ test_memzone_basic(void)
 	}
 
 	memzone_cnt_after =
-			rte_eal_get_configuration()->mem_config->memzone_cnt;
+			rte_eal_get_configuration()->mem_config->memzones.count;
 	if (memzone_cnt_after != memzone_cnt_before)
 		return -1;
 
@@ -1014,7 +1033,8 @@ static int
 test_memzone(void)
 {
 	/* take note of how many memzones were allocated before running */
-	int memzone_cnt = rte_eal_get_configuration()->mem_config->memzone_cnt;
+	int memzone_cnt =
+			rte_eal_get_configuration()->mem_config->memzones.count;
 
 	printf("test basic memzone API\n");
 	if (test_memzone_basic() < 0)

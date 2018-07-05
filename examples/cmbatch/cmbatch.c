@@ -113,7 +113,7 @@ static inline int port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 #endif
 																							// is not wanted for a queue
 
-	if (port >= rte_eth_dev_count())
+	if (port >= rte_eth_dev_count_avail())
 		return -1;
 
 	/* Configure the Ethernet device. */
@@ -166,7 +166,7 @@ static int lcore_worker_batch_parse(void *p)
 	uint16_t nb_rx;
 
 	// Check that we have a valid port.
-	if (data->port > rte_eth_dev_count()) {
+	if (data->port > rte_eth_dev_count_avail()) {
 		printf("ERROR, Port %u is not present\n", data->port);
 		return -1;
 	}
@@ -508,7 +508,7 @@ static int lcore_worker_mbuf(void *p)
 	uint16_t nb_rx;
 
 	// Check that we have a valid port.
-	if (data->port > rte_eth_dev_count()) {
+	if (data->port > rte_eth_dev_count_avail()) {
 		printf("ERROR, Port %u is not present\n", data->port);
 		return -1;
 	}
@@ -676,23 +676,15 @@ static int SetupFilter(uint8_t portid, struct rte_flow_error *error)
 	uint32_t actionCount = 0;
 	uint32_t patternCount = 0;
 	uint i;
+  uint16_t queues[MAX_RX_QUEUES];
 
 	// Pattern struct
 	struct rte_flow_item_ipv4 ipv4_spec;
 	memset(&ipv4_spec, 0, sizeof(struct rte_flow_item_ipv4));
 
 	// Use a receive side scaling
-	struct rte_flow_action_rss *rss = rte_zmalloc(
-		"cmbatch",
-		sizeof(struct rte_flow_action_rss) + sizeof(uint16_t) * number_of_queues,
-		0);
-
-  if (!rss) {
-		printf("Memory allocation failure\n");
-		return -1;
-  }
-
-	struct rte_eth_rss_conf rss_conf;
+	struct rte_flow_action_rss rss;
+  memset(&rss, 0, sizeof(struct rte_flow_action_rss));
 
 	// Use a single queue
 	struct rte_flow_action_queue queue;
@@ -726,17 +718,16 @@ static int SetupFilter(uint8_t portid, struct rte_flow_error *error)
 
 	if (number_of_queues > 1) {
 		// Use receive side scaling
-		rss_conf.rss_key = NULL;
-		rss_conf.rss_key_len = 0;
-		rss_conf.rss_hf = ETH_RSS_IPV4;
-
-      rss->num = number_of_queues;
+    rss.func = RTE_ETH_HASH_FUNCTION_SIMPLE_XOR;
+    rss.key = NULL;
+    rss.types = ETH_RSS_IPV4;
+    rss.queue_num = number_of_queues;
 		for (i = 0; i < number_of_queues; i++) {
-        rss->queue[i] = i;
+        queues[i] = i;
 		}
-		rss->rss_conf = &rss_conf;
+    rss.queue = queues;
 		actions[actionCount].type = RTE_FLOW_ACTION_TYPE_RSS;
-		actions[actionCount].conf = rss;
+		actions[actionCount].conf = &rss;
 		actionCount++;
 	}
 	else {
@@ -762,24 +753,20 @@ static int SetupFilter(uint8_t portid, struct rte_flow_error *error)
 	info.info.enable = 1;
 	if (rte_eth_dev_filter_ctrl(portid, RTE_ETH_FILTER_HASH, RTE_ETH_FILTER_SET, &info) < 0) {
 	 	printf("Cannot set symmetric hash enable per port on port %u\n", portid);
-		rte_free(rss);
 	 	return -1;
 	}
 
 	// Delete the default filter
 	if (rte_flow_isolate(portid, 1, error) < 0) {
 	 	printf("Isolate failed on port %u\n", portid);
-		rte_free(rss);
 	 	return -1;
 	}
 
 	// Create the ret flow filter
 	flow = rte_flow_create(portid, &attr, pattern, actions, error);
 	if (flow == NULL) {
-		rte_free(rss);
 		return -1;
 	}
-	rte_free(rss);
   return 0;
 }
 
@@ -944,7 +931,7 @@ main(int argc, char *argv[])
   }
 
   /* Check that there is at least one port. */
-	nb_ports = rte_eth_dev_count();
+	nb_ports = rte_eth_dev_count_avail();
 	if (nb_ports < 1) {
 		rte_exit(EXIT_FAILURE, "No ports found\n");
   }

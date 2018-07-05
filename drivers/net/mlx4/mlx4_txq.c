@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2017 6WIND S.A.
- * Copyright 2017 Mellanox
+ * Copyright 2017 Mellanox Technologies, Ltd
  */
 
 /**
@@ -63,64 +63,6 @@ mlx4_txq_free_elts(struct txq *txq)
 	txq->elts_tail = txq->elts_head;
 }
 
-struct txq_mp2mr_mbuf_check_data {
-	int ret;
-};
-
-/**
- * Callback function for rte_mempool_obj_iter() to check whether a given
- * mempool object looks like a mbuf.
- *
- * @param[in] mp
- *   The mempool pointer
- * @param[in] arg
- *   Context data (struct mlx4_txq_mp2mr_mbuf_check_data). Contains the
- *   return value.
- * @param[in] obj
- *   Object address.
- * @param index
- *   Object index, unused.
- */
-static void
-mlx4_txq_mp2mr_mbuf_check(struct rte_mempool *mp, void *arg, void *obj,
-			  uint32_t index)
-{
-	struct txq_mp2mr_mbuf_check_data *data = arg;
-	struct rte_mbuf *buf = obj;
-
-	(void)index;
-	/*
-	 * Check whether mbuf structure fits element size and whether mempool
-	 * pointer is valid.
-	 */
-	if (sizeof(*buf) > mp->elt_size || buf->pool != mp)
-		data->ret = -1;
-}
-
-/**
- * Iterator function for rte_mempool_walk() to register existing mempools and
- * fill the MP to MR cache of a Tx queue.
- *
- * @param[in] mp
- *   Memory Pool to register.
- * @param *arg
- *   Pointer to Tx queue structure.
- */
-static void
-mlx4_txq_mp2mr_iter(struct rte_mempool *mp, void *arg)
-{
-	struct txq *txq = arg;
-	struct txq_mp2mr_mbuf_check_data data = {
-		.ret = 0,
-	};
-
-	/* Register mempool only if the first element looks like a mbuf. */
-	if (rte_mempool_obj_iter(mp, mlx4_txq_mp2mr_mbuf_check, &data) == 0 ||
-			data.ret == -1)
-		return;
-	mlx4_txq_mp2mr(txq, mp);
-}
-
 /**
  * Retrieves information needed in order to directly access the Tx queue.
  *
@@ -144,9 +86,9 @@ mlx4_txq_fill_dv_obj_info(struct txq *txq, struct mlx4dv_obj *mlxdv)
 	uint32_t headroom_size = 2048 + (1 << dqp->sq.wqe_shift);
 	/* Continuous headroom size bytes must always stay freed. */
 	sq->remain_size = sq->size - headroom_size;
-	sq->owner_opcode = MLX4_OPCODE_SEND | (0 << MLX4_SQ_OWNER_BIT);
+	sq->owner_opcode = MLX4_OPCODE_SEND | (0u << MLX4_SQ_OWNER_BIT);
 	sq->stamp = rte_cpu_to_be_32(MLX4_SQ_STAMP_VAL |
-				     (0 << MLX4_SQ_OWNER_BIT));
+				     (0u << MLX4_SQ_OWNER_BIT));
 	sq->db = dqp->sdb;
 	sq->doorbell_qpn = dqp->doorbell_qpn;
 	cq->buf = dcq->buf.buf;
@@ -177,26 +119,6 @@ mlx4_get_tx_port_offloads(struct priv *priv)
 	if (priv->hw_csum_l2tun)
 		offloads |= DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM;
 	return offloads;
-}
-
-/**
- * Checks if the per-queue offload configuration is valid.
- *
- * @param priv
- *   Pointer to private structure.
- * @param requested
- *   Per-queue offloads configuration.
- *
- * @return
- *   Nonzero when configuration is valid.
- */
-static int
-mlx4_check_tx_queue_offloads(struct priv *priv, uint64_t requested)
-{
-	uint64_t mandatory = priv->dev->data->dev_conf.txmode.offloads;
-	uint64_t supported = mlx4_get_tx_port_offloads(priv);
-
-	return !((mandatory ^ requested) & supported);
 }
 
 /**
@@ -246,23 +168,13 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		},
 	};
 	int ret;
+	uint64_t offloads;
+
+	offloads = conf->offloads | dev->data->dev_conf.txmode.offloads;
 
 	DEBUG("%p: configuring queue %u for %u descriptors",
 	      (void *)dev, idx, desc);
-	/*
-	 * Don't verify port offloads for application which
-	 * use the old API.
-	 */
-	if ((conf->txq_flags & ETH_TXQ_FLAGS_IGNORE) &&
-	    !mlx4_check_tx_queue_offloads(priv, conf->offloads)) {
-		rte_errno = ENOTSUP;
-		ERROR("%p: Tx queue offloads 0x%" PRIx64 " don't match port "
-		      "offloads 0x%" PRIx64 " or supported offloads 0x%" PRIx64,
-		      (void *)dev, conf->offloads,
-		      dev->data->dev_conf.txmode.offloads,
-		      mlx4_get_tx_port_offloads(priv));
-		return -rte_errno;
-	}
+
 	if (idx >= dev->data->nb_tx_queues) {
 		rte_errno = EOVERFLOW;
 		ERROR("%p: queue index out of range (%u >= %u)",
@@ -313,11 +225,11 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		.elts_comp_cd_init =
 			RTE_MIN(MLX4_PMD_TX_PER_COMP_REQ, desc / 4),
 		.csum = priv->hw_csum &&
-			(conf->offloads & (DEV_TX_OFFLOAD_IPV4_CKSUM |
+			(offloads & (DEV_TX_OFFLOAD_IPV4_CKSUM |
 					   DEV_TX_OFFLOAD_UDP_CKSUM |
 					   DEV_TX_OFFLOAD_TCP_CKSUM)),
 		.csum_l2tun = priv->hw_csum_l2tun &&
-			      (conf->offloads &
+			      (offloads &
 			       DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM),
 		/* Enable Tx loopback for VF devices. */
 		.lb = !!priv->vf,
@@ -404,8 +316,13 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	/* Save first wqe pointer in the first element. */
 	(&(*txq->elts)[0])->wqe =
 		(volatile struct mlx4_wqe_ctrl_seg *)txq->msq.buf;
-	/* Pre-register known mempools. */
-	rte_mempool_walk(mlx4_txq_mp2mr_iter, txq);
+	if (mlx4_mr_btree_init(&txq->mr_ctrl.cache_bh,
+			       MLX4_MR_BTREE_CACHE_N, socket)) {
+		/* rte_errno is already set. */
+		goto error;
+	}
+	/* Save pointer of global generation number to check memory event. */
+	txq->mr_ctrl.dev_gen_ptr = &priv->mr.dev_gen;
 	DEBUG("%p: adding Tx queue %p to list", (void *)dev, (void *)txq);
 	dev->data->tx_queues[idx] = txq;
 	return 0;
@@ -446,11 +363,6 @@ mlx4_tx_queue_release(void *dpdk_txq)
 		claim_zero(mlx4_glue->destroy_qp(txq->qp));
 	if (txq->cq)
 		claim_zero(mlx4_glue->destroy_cq(txq->cq));
-	for (i = 0; i != RTE_DIM(txq->mp2mr); ++i) {
-		if (!txq->mp2mr[i].mp)
-			break;
-		assert(txq->mp2mr[i].mr);
-		mlx4_mr_put(txq->mp2mr[i].mr);
-	}
+	mlx4_mr_btree_free(&txq->mr_ctrl.cache_bh);
 	rte_free(txq);
 }

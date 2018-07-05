@@ -18,11 +18,6 @@ CONFIG_RTE_TOOLCHAIN_ICC=y
 CONFIG_RTE_LIBRTE_KNI=n
 
 #
-# Vectorized PMD is not supported on 32-bit
-#
-CONFIG_RTE_IXGBE_INC_VECTOR=n
-
-#
 # Solarflare PMD is not supported on 32-bit
 #
 CONFIG_RTE_LIBRTE_SFC_EFX_PMD=n
@@ -51,3 +46,6 @@ CONFIG_RTE_LIBRTE_PMD_ZUC=n
 # AVP PMD is not supported on 32-bit
 #
 CONFIG_RTE_LIBRTE_AVP_PMD=n
+
+# 32-bit doesn't break up memory in lists, but does have VA allocation limit
+CONFIG_RTE_MAX_MEM_MB=2048

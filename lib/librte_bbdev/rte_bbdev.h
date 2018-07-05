@@ -239,6 +239,8 @@ struct rte_bbdev_stats {
 	uint64_t enqueue_err_count;
 	/** Total error count on operations dequeued */
 	uint64_t dequeue_err_count;
+	/** Offload time */
+	uint64_t offload_time;
 };
 
 /**
@@ -279,8 +281,10 @@ struct rte_bbdev_driver_info {
 	uint32_t queue_size_lim;
 	/** Set if device off-loads operation to hardware  */
 	bool hardware_accelerated;
-	/** Max value supported by queue priority */
-	uint8_t max_queue_priority;
+	/** Max value supported by queue priority for DL */
+	uint8_t max_dl_queue_priority;
+	/** Max value supported by queue priority for UL */
+	uint8_t max_ul_queue_priority;
 	/** Set if device supports per-queue interrupts */
 	bool queue_intr_supported;
 	/** Minimum alignment of buffers, in bytes */

@@ -122,7 +122,7 @@ octeontx_port_open(struct octeontx_nic *nic)
 	int res;
 
 	res = 0;
-
+	memset(&bgx_port_conf, 0x0, sizeof(bgx_port_conf));
 	PMD_INIT_FUNC_TRACE();
 
 	res = octeontx_bgx_port_open(nic->port_id, &bgx_port_conf);
@@ -283,34 +283,14 @@ octeontx_dev_configure(struct rte_eth_dev *dev)
 		return -EINVAL;
 	}
 
-	if (!rxmode->hw_strip_crc) {
+	if (!(rxmode->offloads & DEV_RX_OFFLOAD_CRC_STRIP)) {
 		PMD_INIT_LOG(NOTICE, "can't disable hw crc strip");
-		rxmode->hw_strip_crc = 1;
+		rxmode->offloads |= DEV_RX_OFFLOAD_CRC_STRIP;
 	}
 
-	if (rxmode->hw_ip_checksum) {
-		PMD_INIT_LOG(NOTICE, "rxcksum not supported");
-		rxmode->hw_ip_checksum = 0;
-	}
-
-	if (rxmode->split_hdr_size) {
-		octeontx_log_err("rxmode does not support split header");
-		return -EINVAL;
-	}
-
-	if (rxmode->hw_vlan_filter) {
-		octeontx_log_err("VLAN filter not supported");
-		return -EINVAL;
-	}
-
-	if (rxmode->hw_vlan_extend) {
-		octeontx_log_err("VLAN extended not supported");
-		return -EINVAL;
-	}
-
-	if (rxmode->enable_lro) {
-		octeontx_log_err("LRO not supported");
-		return -EINVAL;
+	if (!(txmode->offloads & DEV_TX_OFFLOAD_MT_LOCKFREE)) {
+		PMD_INIT_LOG(NOTICE, "cant disable lockfree tx");
+		txmode->offloads |= DEV_TX_OFFLOAD_MT_LOCKFREE;
 	}
 
 	if (conf->link_speeds & ETH_LINK_SPEED_FIXED) {
@@ -488,20 +468,6 @@ octeontx_dev_promisc_disable(struct rte_eth_dev *dev)
 	octeontx_port_promisc_set(nic, 0);
 }
 
-static inline int
-octeontx_atomic_write_link_status(struct rte_eth_dev *dev,
-				  struct rte_eth_link *link)
-{
-	struct rte_eth_link *dst = &dev->data->dev_link;
-	struct rte_eth_link *src = link;
-
-	if (rte_atomic64_cmpset((uint64_t *)dst, *(uint64_t *)dst,
-		*(uint64_t *)src) == 0)
-		return -1;
-
-	return 0;
-}
-
 static int
 octeontx_port_link_status(struct octeontx_nic *nic)
 {
@@ -532,7 +498,6 @@ octeontx_dev_link_update(struct rte_eth_dev *dev,
 	struct rte_eth_link link;
 	int res;
 
-	res = 0;
 	PMD_INIT_FUNC_TRACE();
 
 	res = octeontx_port_link_status(nic);
@@ -566,6 +531,7 @@ octeontx_dev_link_update(struct rte_eth_dev *dev,
 	case OCTEONTX_LINK_SPEED_RESERVE1:
 	case OCTEONTX_LINK_SPEED_RESERVE2:
 	default:
+		link.link_speed = ETH_SPEED_NUM_NONE;
 		octeontx_log_err("incorrect link speed %d", nic->speed);
 		break;
 	}
@@ -573,7 +539,7 @@ octeontx_dev_link_update(struct rte_eth_dev *dev,
 	link.link_duplex = ETH_LINK_FULL_DUPLEX;
 	link.link_autoneg = ETH_LINK_AUTONEG;
 
-	return octeontx_atomic_write_link_status(dev, &link);
+	return rte_eth_linkstatus_set(dev, &link);
 }
 
 static int
@@ -594,7 +560,7 @@ octeontx_dev_stats_reset(struct rte_eth_dev *dev)
 	octeontx_port_stats_clr(nic);
 }
 
-static void
+static int
 octeontx_dev_default_mac_addr_set(struct rte_eth_dev *dev,
 					struct ether_addr *addr)
 {
@@ -605,6 +571,8 @@ octeontx_dev_default_mac_addr_set(struct rte_eth_dev *dev,
 	if (ret != 0)
 		octeontx_log_err("failed to set MAC address on port %d",
 				nic->port_id);
+
+	return ret;
 }
 
 static void
@@ -619,28 +587,25 @@ octeontx_dev_info(struct rte_eth_dev *dev,
 			ETH_LINK_SPEED_1G | ETH_LINK_SPEED_10G |
 			ETH_LINK_SPEED_40G;
 
-	dev_info->driver_name = RTE_STR(rte_octeontx_pmd);
 	dev_info->max_mac_addrs = 1;
 	dev_info->max_rx_pktlen = PKI_MAX_PKTLEN;
 	dev_info->max_rx_queues = 1;
 	dev_info->max_tx_queues = PKO_MAX_NUM_DQ;
 	dev_info->min_rx_bufsize = 0;
-	dev_info->pci_dev = NULL;
 
 	dev_info->default_rxconf = (struct rte_eth_rxconf) {
 		.rx_free_thresh = 0,
 		.rx_drop_en = 0,
+		.offloads = OCTEONTX_RX_OFFLOADS,
 	};
 
 	dev_info->default_txconf = (struct rte_eth_txconf) {
 		.tx_free_thresh = 0,
-		.txq_flags =
-			ETH_TXQ_FLAGS_NOMULTSEGS |
-			ETH_TXQ_FLAGS_NOOFFLOADS |
-			ETH_TXQ_FLAGS_NOXSUMS,
+		.offloads = OCTEONTX_TX_OFFLOADS,
 	};
 
-	dev_info->tx_offload_capa = DEV_TX_OFFLOAD_MT_LOCKFREE;
+	dev_info->rx_offload_capa = OCTEONTX_RX_OFFLOADS;
+	dev_info->tx_offload_capa = OCTEONTX_TX_OFFLOADS;
 }
 
 static void
@@ -744,7 +709,7 @@ octeontx_dev_tx_queue_release(void *tx_queue)
 static int
 octeontx_dev_tx_queue_setup(struct rte_eth_dev *dev, uint16_t qidx,
 			    uint16_t nb_desc, unsigned int socket_id,
-			    const struct rte_eth_txconf *tx_conf)
+			    const struct rte_eth_txconf *tx_conf __rte_unused)
 {
 	struct octeontx_nic *nic = octeontx_pmd_priv(dev);
 	struct octeontx_txq *txq = NULL;
@@ -753,7 +718,6 @@ octeontx_dev_tx_queue_setup(struct rte_eth_dev *dev, uint16_t qidx,
 
 	RTE_SET_USED(nb_desc);
 	RTE_SET_USED(socket_id);
-	RTE_SET_USED(tx_conf);
 
 	dq_num = (nic->port_id * PKO_VF_NUM_DQ) + qidx;
 
@@ -1039,7 +1003,7 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 	char octtx_name[OCTEONTX_MAX_NAME_LEN];
 	struct octeontx_nic *nic = NULL;
 	struct rte_eth_dev *eth_dev = NULL;
-	struct rte_eth_dev_data *data = NULL;
+	struct rte_eth_dev_data *data;
 	const char *name = rte_vdev_device_name(dev);
 
 	PMD_INIT_FUNC_TRACE();
@@ -1052,14 +1016,8 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 
 		eth_dev->tx_pkt_burst = octeontx_xmit_pkts;
 		eth_dev->rx_pkt_burst = octeontx_recv_pkts;
+		rte_eth_dev_probing_finish(eth_dev);
 		return 0;
-	}
-
-	data = rte_zmalloc_socket(octtx_name, sizeof(*data), 0, socket_id);
-	if (data == NULL) {
-		octeontx_log_err("failed to allocate devdata");
-		res = -ENOMEM;
-		goto err;
 	}
 
 	nic = rte_zmalloc_socket(octtx_name, sizeof(*nic), 0, socket_id);
@@ -1097,11 +1055,9 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 	eth_dev->data->kdrv = RTE_KDRV_NONE;
 	eth_dev->data->numa_node = dev->device.numa_node;
 
-	rte_memcpy(data, (eth_dev)->data, sizeof(*data));
+	data = eth_dev->data;
 	data->dev_private = nic;
-
 	data->port_id = eth_dev->data->port_id;
-	snprintf(data->name, sizeof(data->name), "%s", eth_dev->data->name);
 
 	nic->ev_queues = 1;
 	nic->ev_ports = 1;
@@ -1120,7 +1076,6 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 		goto err;
 	}
 
-	eth_dev->data = data;
 	eth_dev->dev_ops = &octeontx_dev_ops;
 
 	/* Finally save ethdev pointer to the NIC structure */
@@ -1146,10 +1101,11 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 	rte_octeontx_pchan_map[(nic->base_ochan >> 8) & 0x7]
 		[(nic->base_ochan >> 4) & 0xF] = data->port_id;
 
+	rte_eth_dev_probing_finish(eth_dev);
 	return data->port_id;
 
 err:
-	if (port)
+	if (nic)
 		octeontx_port_close(nic);
 
 	if (eth_dev != NULL) {
@@ -1188,7 +1144,6 @@ octeontx_remove(struct rte_vdev_device *dev)
 
 		rte_free(eth_dev->data->mac_addrs);
 		rte_free(eth_dev->data->dev_private);
-		rte_free(eth_dev->data);
 		rte_eth_dev_release_port(eth_dev);
 		rte_event_dev_close(nic->evdev);
 	}
@@ -1210,12 +1165,27 @@ octeontx_probe(struct rte_vdev_device *dev)
 	struct rte_event_dev_config dev_conf;
 	const char *eventdev_name = "event_octeontx";
 	struct rte_event_dev_info info;
+	struct rte_eth_dev *eth_dev;
 
 	struct octeontx_vdev_init_params init_params = {
 		OCTEONTX_VDEV_DEFAULT_MAX_NR_PORT
 	};
 
 	dev_name = rte_vdev_device_name(dev);
+
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY &&
+	    strlen(rte_vdev_device_args(dev)) == 0) {
+		eth_dev = rte_eth_dev_attach_secondary(dev_name);
+		if (!eth_dev) {
+			RTE_LOG(ERR, PMD, "Failed to probe %s\n", dev_name);
+			return -1;
+		}
+		/* TODO: request info from primary to set up Rx and Tx */
+		eth_dev->dev_ops = &octeontx_dev_ops;
+		rte_eth_dev_probing_finish(eth_dev);
+		return 0;
+	}
+
 	res = octeontx_parse_vdev_init_params(&init_params, dev);
 	if (res < 0)
 		return -EINVAL;

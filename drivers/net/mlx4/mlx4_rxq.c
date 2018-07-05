@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2017 6WIND S.A.
- * Copyright 2017 Mellanox
+ * Copyright 2017 Mellanox Technologies, Ltd
  */
 
 /**
@@ -88,7 +88,7 @@ mlx4_rss_hash_key_default[MLX4_RSS_HASH_KEY_SIZE] = {
  */
 struct mlx4_rss *
 mlx4_rss_get(struct priv *priv, uint64_t fields,
-	     uint8_t key[MLX4_RSS_HASH_KEY_SIZE],
+	     const uint8_t key[MLX4_RSS_HASH_KEY_SIZE],
 	     uint16_t queues, const uint16_t queue_id[])
 {
 	struct mlx4_rss *rss;
@@ -336,6 +336,8 @@ mlx4_rss_init(struct priv *priv)
 	unsigned int i;
 	int ret;
 
+	if (priv->rss_init)
+		return 0;
 	/* Prepare range for RSS contexts before creating the first WQ. */
 	ret = mlx4_glue->dv_set_context_attr
 		(priv->ctx,
@@ -418,6 +420,7 @@ wq_num_check:
 		}
 		wq_num_prev = wq_num;
 	}
+	priv->rss_init = 1;
 	return 0;
 error:
 	ERROR("cannot initialize common RSS resources (queue %u): %s: %s",
@@ -446,6 +449,8 @@ mlx4_rss_deinit(struct priv *priv)
 {
 	unsigned int i;
 
+	if (!priv->rss_init)
+		return;
 	for (i = 0; i != priv->dev->data->nb_rx_queues; ++i) {
 		struct rxq *rxq = priv->dev->data->rx_queues[i];
 
@@ -454,6 +459,7 @@ mlx4_rss_deinit(struct priv *priv)
 			mlx4_rxq_detach(rxq);
 		}
 	}
+	priv->rss_init = 0;
 }
 
 /**
@@ -482,6 +488,7 @@ mlx4_rxq_attach(struct rxq *rxq)
 	}
 
 	struct priv *priv = rxq->priv;
+	struct rte_eth_dev *dev = priv->dev;
 	const uint32_t elts_n = 1 << rxq->elts_n;
 	const uint32_t sges_n = 1 << rxq->sges_n;
 	struct rte_mbuf *(*elts)[elts_n] = rxq->elts;
@@ -491,6 +498,8 @@ mlx4_rxq_attach(struct rxq *rxq)
 	const char *msg;
 	struct ibv_cq *cq = NULL;
 	struct ibv_wq *wq = NULL;
+	uint32_t create_flags = 0;
+	uint32_t comp_mask = 0;
 	volatile struct mlx4_wqe_data_seg (*wqes)[];
 	unsigned int i;
 	int ret;
@@ -503,6 +512,11 @@ mlx4_rxq_attach(struct rxq *rxq)
 		msg = "CQ creation failure";
 		goto error;
 	}
+	/* By default, FCS (CRC) is stripped by hardware. */
+	if (rxq->crc_present) {
+		create_flags |= IBV_WQ_FLAGS_SCATTER_FCS;
+		comp_mask |= IBV_WQ_INIT_ATTR_FLAGS;
+	}
 	wq = mlx4_glue->create_wq
 		(priv->ctx,
 		 &(struct ibv_wq_init_attr){
@@ -511,6 +525,8 @@ mlx4_rxq_attach(struct rxq *rxq)
 			.max_sge = sges_n,
 			.pd = priv->pd,
 			.cq = cq,
+			.comp_mask = comp_mask,
+			.create_flags = create_flags,
 		 });
 	if (!wq) {
 		ret = errno ? errno : EINVAL;
@@ -537,6 +553,11 @@ mlx4_rxq_attach(struct rxq *rxq)
 		msg = "failed to obtain device information from WQ/CQ objects";
 		goto error;
 	}
+	/* Pre-register Rx mempool. */
+	DEBUG("port %u Rx queue %u registering mp %s having %u chunks",
+	      priv->dev->data->port_id, rxq->stats.idx,
+	      rxq->mp->name, rxq->mp->nb_mem_chunks);
+	mlx4_mr_update_mp(dev, &rxq->mr_ctrl, rxq->mp);
 	wqes = (volatile struct mlx4_wqe_data_seg (*)[])
 		((uintptr_t)dv_rwq.buf.buf + dv_rwq.rq.offset);
 	for (i = 0; i != RTE_DIM(*elts); ++i) {
@@ -568,7 +589,7 @@ mlx4_rxq_attach(struct rxq *rxq)
 			.addr = rte_cpu_to_be_64(rte_pktmbuf_mtod(buf,
 								  uintptr_t)),
 			.byte_count = rte_cpu_to_be_32(buf->data_len),
-			.lkey = rte_cpu_to_be_32(rxq->mr->lkey),
+			.lkey = mlx4_rx_mb2mr(rxq, buf),
 		};
 		(*elts)[i] = buf;
 	}
@@ -597,6 +618,7 @@ error:
 		claim_zero(mlx4_glue->destroy_wq(wq));
 	if (cq)
 		claim_zero(mlx4_glue->destroy_cq(cq));
+	--rxq->usecnt;
 	rte_errno = ret;
 	ERROR("error while attaching Rx queue %p: %s: %s",
 	      (void *)rxq, msg, strerror(ret));
@@ -676,26 +698,6 @@ mlx4_get_rx_port_offloads(struct priv *priv)
 }
 
 /**
- * Checks if the per-queue offload configuration is valid.
- *
- * @param priv
- *   Pointer to private structure.
- * @param requested
- *   Per-queue offloads configuration.
- *
- * @return
- *   Nonzero when configuration is valid.
- */
-static int
-mlx4_check_rx_queue_offloads(struct priv *priv, uint64_t requested)
-{
-	uint64_t mandatory = priv->dev->data->dev_conf.rxmode.offloads;
-	uint64_t supported = mlx4_get_rx_port_offloads(priv);
-
-	return !((mandatory ^ requested) & supported);
-}
-
-/**
  * DPDK callback to configure a Rx queue.
  *
  * @param dev
@@ -736,20 +738,14 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		},
 	};
 	int ret;
+	uint32_t crc_present;
+	uint64_t offloads;
 
-	(void)conf; /* Thresholds configuration (ignored). */
+	offloads = conf->offloads | dev->data->dev_conf.rxmode.offloads;
+
 	DEBUG("%p: configuring queue %u for %u descriptors",
 	      (void *)dev, idx, desc);
-	if (!mlx4_check_rx_queue_offloads(priv, conf->offloads)) {
-		rte_errno = ENOTSUP;
-		ERROR("%p: Rx queue offloads 0x%" PRIx64 " don't match port "
-		      "offloads 0x%" PRIx64 " or supported offloads 0x%" PRIx64,
-		      (void *)dev, conf->offloads,
-		      dev->data->dev_conf.rxmode.offloads,
-		      (mlx4_get_rx_port_offloads(priv) |
-		       mlx4_get_rx_queue_offloads(priv)));
-		return -rte_errno;
-	}
+
 	if (idx >= dev->data->nb_rx_queues) {
 		rte_errno = EOVERFLOW;
 		ERROR("%p: queue index out of range (%u >= %u)",
@@ -774,6 +770,23 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		     " to the next power of two (%u)",
 		     (void *)dev, idx, desc);
 	}
+	/* By default, FCS (CRC) is stripped by hardware. */
+	if (offloads & DEV_RX_OFFLOAD_CRC_STRIP) {
+		crc_present = 0;
+	} else if (priv->hw_fcs_strip) {
+		crc_present = 1;
+	} else {
+		WARN("%p: CRC stripping has been disabled but will still"
+		     " be performed by hardware, make sure MLNX_OFED and"
+		     " firmware are up to date",
+		     (void *)dev);
+		crc_present = 0;
+	}
+	DEBUG("%p: CRC stripping is %s, %u bytes will be subtracted from"
+	      " incoming frames to hide it",
+	      (void *)dev,
+	      crc_present ? "disabled" : "enabled",
+	      crc_present << 2);
 	/* Allocate and initialize Rx queue. */
 	mlx4_zmallocv_socket("RXQ", vec, RTE_DIM(vec), socket);
 	if (!rxq) {
@@ -790,9 +803,10 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		.elts = elts,
 		/* Toggle Rx checksum offload if hardware supports it. */
 		.csum = priv->hw_csum &&
-			(conf->offloads & DEV_RX_OFFLOAD_CHECKSUM),
+			(offloads & DEV_RX_OFFLOAD_CHECKSUM),
 		.csum_l2tun = priv->hw_csum_l2tun &&
-			      (conf->offloads & DEV_RX_OFFLOAD_CHECKSUM),
+			      (offloads & DEV_RX_OFFLOAD_CHECKSUM),
+		.crc_present = crc_present,
 		.l2tun_offload = priv->hw_csum_l2tun,
 		.stats = {
 			.idx = idx,
@@ -804,7 +818,7 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	if (dev->data->dev_conf.rxmode.max_rx_pkt_len <=
 	    (mb_len - RTE_PKTMBUF_HEADROOM)) {
 		;
-	} else if (conf->offloads & DEV_RX_OFFLOAD_SCATTER) {
+	} else if (offloads & DEV_RX_OFFLOAD_SCATTER) {
 		uint32_t size =
 			RTE_PKTMBUF_HEADROOM +
 			dev->data->dev_conf.rxmode.max_rx_pkt_len;
@@ -847,11 +861,9 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		      1 << rxq->sges_n);
 		goto error;
 	}
-	/* Use the entire Rx mempool as the memory region. */
-	rxq->mr = mlx4_mr_get(priv, mp);
-	if (!rxq->mr) {
-		ERROR("%p: MR creation failure: %s",
-		      (void *)dev, strerror(rte_errno));
+	if (mlx4_mr_btree_init(&rxq->mr_ctrl.cache_bh,
+			       MLX4_MR_BTREE_CACHE_N, socket)) {
+		/* rte_errno is already set. */
 		goto error;
 	}
 	if (dev->data->dev_conf.intr_conf.rxq) {
@@ -911,7 +923,6 @@ mlx4_rx_queue_release(void *dpdk_rxq)
 	assert(!rxq->rq_db);
 	if (rxq->channel)
 		claim_zero(mlx4_glue->destroy_comp_channel(rxq->channel));
-	if (rxq->mr)
-		mlx4_mr_put(rxq->mr);
+	mlx4_mr_btree_free(&rxq->mr_ctrl.cache_bh);
 	rte_free(rxq);
 }

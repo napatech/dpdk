@@ -2,11 +2,14 @@
 # Copyright(c) 2017 Intel Corporation
 
 # Defines the order in which the drivers are buit.
-driver_classes = ['bus',
-	       'mempool', # depends on bus.
-	       'net',     # depends on bus and mempool.
-	       'crypto',  # depenss on bus, mempool (net in future).
-	       'event']   # depends on bus, mempool and net.
+driver_classes = ['common',
+	       'bus',
+	       'mempool', # depends on common and bus.
+	       'net',     # depends on common, bus and mempool.
+	       'crypto',  # depends on common, bus and mempool (net in future).
+	       'compress', # depends on common, bus, mempool.
+	       'event',   # depends on common, bus, mempool and net.
+	       'raw']     # depends on common, bus, mempool, net and event.
 
 foreach class:driver_classes
 	drivers = []

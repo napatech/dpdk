@@ -1,33 +1,5 @@
-/*
- *   BSD LICENSE
- *
- * Copyright (c) 2013-2017, Wind River Systems, Inc.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1) Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- *
- * 2) Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3) Neither the name of Wind River Systems nor the names of its contributors
- * may be used to endorse or promote products derived from this software
- * without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2013-2017 Wind River Systems, Inc.
  */
 
 #include <stdint.h>
@@ -1076,19 +1048,8 @@ static int
 eth_avp_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		  struct rte_pci_device *pci_dev)
 {
-	struct rte_eth_dev *eth_dev;
-	int ret;
-
-	eth_dev = rte_eth_dev_pci_allocate(pci_dev,
-					   sizeof(struct avp_adapter));
-	if (eth_dev == NULL)
-		return -ENOMEM;
-
-	ret = eth_avp_dev_init(eth_dev);
-	if (ret)
-		rte_eth_dev_pci_release(eth_dev);
-
-	return ret;
+	return rte_eth_dev_pci_generic_probe(pci_dev, sizeof(struct avp_adapter),
+			eth_avp_dev_init);
 }
 
 static int
@@ -2074,12 +2035,6 @@ avp_dev_start(struct rte_eth_dev *eth_dev)
 		goto unlock;
 	}
 
-	/* disable features that we do not support */
-	eth_dev->data->dev_conf.rxmode.hw_ip_checksum = 0;
-	eth_dev->data->dev_conf.rxmode.hw_vlan_filter = 0;
-	eth_dev->data->dev_conf.rxmode.hw_vlan_extend = 0;
-	eth_dev->data->dev_conf.rxmode.hw_strip_crc = 0;
-
 	/* update link state */
 	ret = avp_dev_ctrl_set_link_state(eth_dev, 1);
 	if (ret < 0) {
@@ -2206,7 +2161,6 @@ avp_dev_info_get(struct rte_eth_dev *eth_dev,
 {
 	struct avp_dev *avp = AVP_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
 
-	dev_info->pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	dev_info->max_rx_queues = avp->max_rx_queues;
 	dev_info->max_tx_queues = avp->max_tx_queues;
 	dev_info->min_rx_bufsize = AVP_MIN_RX_BUFSIZE;
@@ -2222,10 +2176,12 @@ static int
 avp_vlan_offload_set(struct rte_eth_dev *eth_dev, int mask)
 {
 	struct avp_dev *avp = AVP_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
+	struct rte_eth_conf *dev_conf = &eth_dev->data->dev_conf;
+	uint64_t offloads = dev_conf->rxmode.offloads;
 
 	if (mask & ETH_VLAN_STRIP_MASK) {
 		if (avp->host_features & RTE_AVP_FEATURE_VLAN_OFFLOAD) {
-			if (eth_dev->data->dev_conf.rxmode.hw_vlan_strip)
+			if (offloads & DEV_RX_OFFLOAD_VLAN_STRIP)
 				avp->features |= RTE_AVP_FEATURE_VLAN_OFFLOAD;
 			else
 				avp->features &= ~RTE_AVP_FEATURE_VLAN_OFFLOAD;
@@ -2235,12 +2191,12 @@ avp_vlan_offload_set(struct rte_eth_dev *eth_dev, int mask)
 	}
 
 	if (mask & ETH_VLAN_FILTER_MASK) {
-		if (eth_dev->data->dev_conf.rxmode.hw_vlan_filter)
+		if (offloads & DEV_RX_OFFLOAD_VLAN_FILTER)
 			PMD_DRV_LOG(ERR, "VLAN filter offload not supported\n");
 	}
 
 	if (mask & ETH_VLAN_EXTEND_MASK) {
-		if (eth_dev->data->dev_conf.rxmode.hw_vlan_extend)
+		if (offloads & DEV_RX_OFFLOAD_VLAN_EXTEND)
 			PMD_DRV_LOG(ERR, "VLAN extend offload not supported\n");
 	}
 

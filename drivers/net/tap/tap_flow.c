@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2017 6WIND S.A.
- * Copyright 2017 Mellanox.
+ * Copyright 2017 Mellanox Technologies, Ltd
  */
 
 #include <errno.h>
@@ -270,13 +270,13 @@ static const struct tap_flow_items tap_flow_items[] = {
 		.items = ITEMS(RTE_FLOW_ITEM_TYPE_IPV4,
 			       RTE_FLOW_ITEM_TYPE_IPV6),
 		.mask = &(const struct rte_flow_item_vlan){
-			.tpid = -1,
 			/* DEI matching is not supported */
 #if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
 			.tci = 0xffef,
 #else
 			.tci = 0xefff,
 #endif
+			.inner_type = -1,
 		},
 		.mask_sz = sizeof(struct rte_flow_item_vlan),
 		.default_mask = &rte_flow_item_vlan_mask,
@@ -578,13 +578,19 @@ tap_flow_create_vlan(const struct rte_flow_item *item, void *data)
 	/* use default mask if none provided */
 	if (!mask)
 		mask = tap_flow_items[RTE_FLOW_ITEM_TYPE_VLAN].default_mask;
-	/* TC does not support tpid masking. Only accept if exact match. */
-	if (mask->tpid && mask->tpid != 0xffff)
+	/* Outer TPID cannot be matched. */
+	if (info->eth_type)
 		return -1;
 	/* Double-tagging not supported. */
-	if (spec && mask->tpid && spec->tpid != htons(ETH_P_8021Q))
+	if (info->vlan)
 		return -1;
 	info->vlan = 1;
+	if (mask->inner_type) {
+		/* TC does not support partial eth_type masking */
+		if (mask->inner_type != RTE_BE16(0xffff))
+			return -1;
+		info->eth_type = spec->inner_type;
+	}
 	if (!flow)
 		return 0;
 	msg = &flow->msg;
@@ -1033,6 +1039,12 @@ priv_flow_process(struct pmd_internals *pmd,
 	};
 	int action = 0; /* Only one action authorized for now */
 
+	if (attr->transfer) {
+		rte_flow_error_set(
+			error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ATTR_TRANSFER,
+			NULL, "transfer is not supported");
+		return -rte_errno;
+	}
 	if (attr->group > MAX_GROUP) {
 		rte_flow_error_set(
 			error, EINVAL, RTE_FLOW_ERROR_TYPE_ATTR_GROUP,
@@ -1140,6 +1152,7 @@ priv_flow_process(struct pmd_internals *pmd,
 		else
 			goto end;
 	}
+actions:
 	for (; actions->type != RTE_FLOW_ACTION_TYPE_END; ++actions) {
 		int err = 0;
 
@@ -1214,13 +1227,23 @@ priv_flow_process(struct pmd_internals *pmd,
 				if (err)
 					goto exit_action_not_supported;
 			}
-			if (flow && rss)
+			if (flow)
 				err = rss_add_actions(flow, pmd, rss, error);
 		} else {
 			goto exit_action_not_supported;
 		}
 		if (err)
 			goto exit_action_not_supported;
+	}
+	/* When fate is unknown, drop traffic. */
+	if (!action) {
+		static const struct rte_flow_action drop[] = {
+			{ .type = RTE_FLOW_ACTION_TYPE_DROP, },
+			{ .type = RTE_FLOW_ACTION_TYPE_END, },
+		};
+
+		actions = drop;
+		goto actions;
 	}
 end:
 	if (flow)
@@ -1376,8 +1399,8 @@ tap_flow_create(struct rte_eth_dev *dev,
 	}
 	err = tap_nl_recv_ack(pmd->nlsk_fd);
 	if (err < 0) {
-		RTE_LOG(ERR, PMD,
-			"Kernel refused TC filter rule creation (%d): %s\n",
+		TAP_LOG(ERR,
+			"Kernel refused TC filter rule creation (%d): %s",
 			errno, strerror(errno));
 		rte_flow_error_set(error, EEXIST, RTE_FLOW_ERROR_TYPE_HANDLE,
 				   NULL,
@@ -1421,8 +1444,8 @@ tap_flow_create(struct rte_eth_dev *dev,
 		}
 		err = tap_nl_recv_ack(pmd->nlsk_fd);
 		if (err < 0) {
-			RTE_LOG(ERR, PMD,
-				"Kernel refused TC filter rule creation (%d): %s\n",
+			TAP_LOG(ERR,
+				"Kernel refused TC filter rule creation (%d): %s",
 				errno, strerror(errno));
 			rte_flow_error_set(
 				error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE,
@@ -1476,8 +1499,8 @@ tap_flow_destroy_pmd(struct pmd_internals *pmd,
 	if (ret < 0 && errno == ENOENT)
 		ret = 0;
 	if (ret < 0) {
-		RTE_LOG(ERR, PMD,
-			"Kernel refused TC filter rule deletion (%d): %s\n",
+		TAP_LOG(ERR,
+			"Kernel refused TC filter rule deletion (%d): %s",
 			errno, strerror(errno));
 		rte_flow_error_set(
 			error, ENOTSUP, RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
@@ -1500,8 +1523,8 @@ tap_flow_destroy_pmd(struct pmd_internals *pmd,
 		if (ret < 0 && errno == ENOENT)
 			ret = 0;
 		if (ret < 0) {
-			RTE_LOG(ERR, PMD,
-				"Kernel refused TC filter rule deletion (%d): %s\n",
+			TAP_LOG(ERR,
+				"Kernel refused TC filter rule deletion (%d): %s",
 				errno, strerror(errno));
 			rte_flow_error_set(
 				error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE,
@@ -1545,10 +1568,14 @@ tap_flow_isolate(struct rte_eth_dev *dev,
 {
 	struct pmd_internals *pmd = dev->data->dev_private;
 
+	/* normalize 'set' variable to contain 0 or 1 values */
 	if (set)
-		pmd->flow_isolate = 1;
-	else
-		pmd->flow_isolate = 0;
+		set = 1;
+	/* if already in the right isolation mode - nothing to do */
+	if ((set ^ pmd->flow_isolate) == 0)
+		return 0;
+	/* mark the isolation mode for tap_flow_implicit_create() */
+	pmd->flow_isolate = set;
 	/*
 	 * If netdevice is there, setup appropriate flow rules immediately.
 	 * Otherwise it will be set when bringing up the netdevice (tun_alloc).
@@ -1556,20 +1583,20 @@ tap_flow_isolate(struct rte_eth_dev *dev,
 	if (!pmd->rxq[0].fd)
 		return 0;
 	if (set) {
-		struct rte_flow *flow;
+		struct rte_flow *remote_flow;
 
 		while (1) {
-			flow = LIST_FIRST(&pmd->implicit_flows);
-			if (!flow)
+			remote_flow = LIST_FIRST(&pmd->implicit_flows);
+			if (!remote_flow)
 				break;
 			/*
 			 * Remove all implicit rules on the remote.
 			 * Keep the local rule to redirect packets on TX.
 			 * Keep also the last implicit local rule: ISOLATE.
 			 */
-			if (flow->msg.t.tcm_ifindex == pmd->if_index)
+			if (remote_flow->msg.t.tcm_ifindex == pmd->if_index)
 				break;
-			if (tap_flow_destroy_pmd(pmd, flow, NULL) < 0)
+			if (tap_flow_destroy_pmd(pmd, remote_flow, NULL) < 0)
 				goto error;
 		}
 		/* Switch the TC rule according to pmd->flow_isolate */
@@ -1665,7 +1692,7 @@ int tap_flow_implicit_create(struct pmd_internals *pmd,
 
 	remote_flow = rte_malloc(__func__, sizeof(struct rte_flow), 0);
 	if (!remote_flow) {
-		RTE_LOG(ERR, PMD, "Cannot allocate memory for rte_flow\n");
+		TAP_LOG(ERR, "Cannot allocate memory for rte_flow");
 		goto fail;
 	}
 	msg = &remote_flow->msg;
@@ -1706,21 +1733,21 @@ int tap_flow_implicit_create(struct pmd_internals *pmd,
 		tap_flow_set_handle(remote_flow);
 	if (priv_flow_process(pmd, attr, items, actions, NULL,
 			      remote_flow, implicit_rte_flows[idx].mirred)) {
-		RTE_LOG(ERR, PMD, "rte flow rule validation failed\n");
+		TAP_LOG(ERR, "rte flow rule validation failed");
 		goto fail;
 	}
 	err = tap_nl_send(pmd->nlsk_fd, &msg->nh);
 	if (err < 0) {
-		RTE_LOG(ERR, PMD, "Failure sending nl request\n");
+		TAP_LOG(ERR, "Failure sending nl request");
 		goto fail;
 	}
 	err = tap_nl_recv_ack(pmd->nlsk_fd);
 	if (err < 0) {
-		/* Silently ignore re-entering remote promiscuous rule */
-		if (errno == EEXIST && idx == TAP_REMOTE_PROMISC)
+		/* Silently ignore re-entering existing rule */
+		if (errno == EEXIST)
 			goto success;
-		RTE_LOG(ERR, PMD,
-			"Kernel refused TC filter rule creation (%d): %s\n",
+		TAP_LOG(ERR,
+			"Kernel refused TC filter rule creation (%d): %s",
 			errno, strerror(errno));
 		goto fail;
 	}
@@ -1836,8 +1863,8 @@ static int rss_enable(struct pmd_internals *pmd,
 				sizeof(struct rss_key),
 				MAX_RSS_KEYS);
 	if (pmd->map_fd < 0) {
-		RTE_LOG(ERR, PMD,
-			"Failed to create BPF map (%d): %s\n",
+		TAP_LOG(ERR,
+			"Failed to create BPF map (%d): %s",
 				errno, strerror(errno));
 		rte_flow_error_set(
 			error, ENOTSUP, RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
@@ -1854,7 +1881,7 @@ static int rss_enable(struct pmd_internals *pmd,
 	for (i = 0; i < pmd->dev->data->nb_rx_queues; i++) {
 		pmd->bpf_fd[i] = tap_flow_bpf_cls_q(i);
 		if (pmd->bpf_fd[i] < 0) {
-			RTE_LOG(ERR, PMD,
+			TAP_LOG(ERR,
 				"Failed to load BPF section %s for queue %d",
 				SEC_NAME_CLS_Q, i);
 			rte_flow_error_set(
@@ -1868,7 +1895,7 @@ static int rss_enable(struct pmd_internals *pmd,
 
 		rss_flow = rte_malloc(__func__, sizeof(struct rte_flow), 0);
 		if (!rss_flow) {
-			RTE_LOG(ERR, PMD,
+			TAP_LOG(ERR,
 				"Cannot allocate memory for rte_flow");
 			return -1;
 		}
@@ -1911,8 +1938,8 @@ static int rss_enable(struct pmd_internals *pmd,
 			return -1;
 		err = tap_nl_recv_ack(pmd->nlsk_fd);
 		if (err < 0) {
-			RTE_LOG(ERR, PMD,
-				"Kernel refused TC filter rule creation (%d): %s\n",
+			TAP_LOG(ERR,
+				"Kernel refused TC filter rule creation (%d): %s",
 				errno, strerror(errno));
 			return err;
 		}
@@ -2039,10 +2066,20 @@ static int rss_add_actions(struct rte_flow *flow, struct pmd_internals *pmd,
 			   struct rte_flow_error *error)
 {
 	/* 4096 is the maximum number of instructions for a BPF program */
-	int i;
+	unsigned int i;
 	int err;
 	struct rss_key rss_entry = { .hash_fields = 0,
 				     .key_size = 0 };
+
+	/* Check supported RSS features */
+	if (rss->func != RTE_ETH_HASH_FUNCTION_DEFAULT)
+		return rte_flow_error_set
+			(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
+			 "non-default RSS hash functions are not supported");
+	if (rss->level)
+		return rte_flow_error_set
+			(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
+			 "a nonzero RSS encapsulation level is not supported");
 
 	/* Get a new map key for a new RSS rule */
 	err = bpf_rss_key(KEY_CMD_GET, &flow->key_idx);
@@ -2055,8 +2092,8 @@ static int rss_add_actions(struct rte_flow *flow, struct pmd_internals *pmd,
 	}
 
 	/* Update RSS map entry with queues */
-	rss_entry.nb_queues = rss->num;
-	for (i = 0; i < rss->num; i++)
+	rss_entry.nb_queues = rss->queue_num;
+	for (i = 0; i < rss->queue_num; i++)
 		rss_entry.queues[i] = rss->queue[i];
 	rss_entry.hash_fields =
 		(1 << HASH_FIELD_IPV4_L3_L4) | (1 << HASH_FIELD_IPV6_L3_L4);
@@ -2066,8 +2103,8 @@ static int rss_add_actions(struct rte_flow *flow, struct pmd_internals *pmd,
 				&flow->key_idx, &rss_entry);
 
 	if (err) {
-		RTE_LOG(ERR, PMD,
-			"Failed to update BPF map entry #%u (%d): %s\n",
+		TAP_LOG(ERR,
+			"Failed to update BPF map entry #%u (%d): %s",
 			flow->key_idx, errno, strerror(errno));
 		rte_flow_error_set(
 			error, ENOTSUP, RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
@@ -2085,8 +2122,8 @@ static int rss_add_actions(struct rte_flow *flow, struct pmd_internals *pmd,
 	flow->bpf_fd[SEC_L3_L4] =
 		tap_flow_bpf_calc_l3_l4_hash(flow->key_idx, pmd->map_fd);
 	if (flow->bpf_fd[SEC_L3_L4] < 0) {
-		RTE_LOG(ERR, PMD,
-			"Failed to load BPF section %s (%d): %s\n",
+		TAP_LOG(ERR,
+			"Failed to load BPF section %s (%d): %s",
 				sec_name[SEC_L3_L4], errno, strerror(errno));
 		rte_flow_error_set(
 			error, ENOTSUP, RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
@@ -2147,9 +2184,8 @@ tap_dev_filter_ctrl(struct rte_eth_dev *dev,
 		*(const void **)arg = &tap_flow_ops;
 		return 0;
 	default:
-		RTE_LOG(ERR, PMD, "%p: filter type (%d) not supported\n",
-			(void *)dev, filter_type);
+		TAP_LOG(ERR, "%p: filter type (%d) not supported",
+			dev, filter_type);
 	}
 	return -EINVAL;
 }
-

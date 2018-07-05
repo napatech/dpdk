@@ -339,7 +339,7 @@ process_ops(struct rte_crypto_op **ops, struct snow3g_session *session,
 		if (ops[i]->sess_type == RTE_CRYPTO_OP_SESSIONLESS) {
 			memset(session, 0, sizeof(struct snow3g_session));
 			memset(ops[i]->sym->session, 0,
-					rte_cryptodev_get_header_session_size());
+					rte_cryptodev_sym_get_header_session_size());
 			rte_mempool_put(qp->sess_mp, session);
 			rte_mempool_put(qp->sess_mp, ops[i]->sym->session);
 			ops[i]->sym->session = NULL;
@@ -619,5 +619,5 @@ RTE_PMD_REGISTER_PARAM_STRING(CRYPTODEV_NAME_SNOW3G_PMD,
 	"max_nb_queue_pairs=<int> "
 	"max_nb_sessions=<int> "
 	"socket_id=<int>");
-RTE_PMD_REGISTER_CRYPTO_DRIVER(snow3g_crypto_drv, cryptodev_snow3g_pmd_drv,
-		cryptodev_driver_id);
+RTE_PMD_REGISTER_CRYPTO_DRIVER(snow3g_crypto_drv,
+		cryptodev_snow3g_pmd_drv.driver, cryptodev_driver_id);

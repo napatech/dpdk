@@ -24,6 +24,7 @@
 #include <rte_kvargs.h>
 #include <rte_mempool.h>
 #include <rte_ring.h>
+#include <rte_string_fns.h>
 #include <rte_pdump.h>
 
 #define CMD_LINE_OPT_PDUMP "pdump"
@@ -36,8 +37,6 @@
 #define PDUMP_RING_SIZE_ARG "ring-size"
 #define PDUMP_MSIZE_ARG "mbuf-size"
 #define PDUMP_NUM_MBUFS_ARG "total-num-mbufs"
-#define CMD_LINE_OPT_SER_SOCK_PATH "server-socket-path"
-#define CMD_LINE_OPT_CLI_SOCK_PATH "client-socket-path"
 
 #define VDEV_PCAP "net_pcap_%s_%d,tx_pcap=%s"
 #define VDEV_IFACE "net_pcap_%s_%d,tx_iface=%s"
@@ -139,8 +138,6 @@ struct parse_val {
 int num_tuples;
 static struct rte_eth_conf port_conf_default;
 volatile uint8_t quit_signal;
-static char server_socket_path[PATH_MAX];
-static char client_socket_path[PATH_MAX];
 
 /**< display usage */
 static void
@@ -153,11 +150,7 @@ pdump_usage(const char *prgname)
 			" tx-dev=<iface or pcap file>,"
 			"[ring-size=<ring size>default:16384],"
 			"[mbuf-size=<mbuf data size>default:2176],"
-			"[total-num-mbufs=<number of mbufs>default:65535]'\n"
-			"[--server-socket-path=<server socket dir>"
-				"default:/var/run/.dpdk/ (or) ~/.dpdk/]\n"
-			"[--client-socket-path=<client socket dir>"
-				"default:/var/run/.dpdk/ (or) ~/.dpdk/]\n",
+			"[total-num-mbufs=<number of mbufs>default:65535]'\n",
 			prgname);
 }
 
@@ -382,8 +375,6 @@ launch_args_parse(int argc, char **argv, char *prgname)
 	int option_index;
 	static struct option long_option[] = {
 		{"pdump", 1, 0, 0},
-		{"server-socket-path", 1, 0, 0},
-		{"client-socket-path", 1, 0, 0},
 		{NULL, 0, 0, 0}
 	};
 
@@ -404,23 +395,6 @@ launch_args_parse(int argc, char **argv, char *prgname)
 					return -1;
 				}
 			}
-
-			if (!strncmp(long_option[option_index].name,
-					CMD_LINE_OPT_SER_SOCK_PATH,
-					sizeof(CMD_LINE_OPT_SER_SOCK_PATH))) {
-				snprintf(server_socket_path,
-					sizeof(server_socket_path), "%s",
-					optarg);
-			}
-
-			if (!strncmp(long_option[option_index].name,
-					CMD_LINE_OPT_CLI_SOCK_PATH,
-					sizeof(CMD_LINE_OPT_CLI_SOCK_PATH))) {
-				snprintf(client_socket_path,
-					sizeof(client_socket_path), "%s",
-					optarg);
-			}
-
 			break;
 		default:
 			pdump_usage(prgname);
@@ -554,11 +528,10 @@ configure_vdev(uint16_t port_id)
 {
 	struct ether_addr addr;
 	const uint16_t rxRings = 0, txRings = 1;
-	const uint8_t nb_ports = rte_eth_dev_count();
 	int ret;
 	uint16_t q;
 
-	if (port_id > nb_ports)
+	if (!rte_eth_dev_is_valid_port(port_id))
 		return -1;
 
 	ret = rte_eth_dev_configure(port_id, rxRings, txRings,
@@ -745,22 +718,6 @@ enable_pdump(void)
 	struct pdump_tuples *pt;
 	int ret = 0, ret1 = 0;
 
-	if (server_socket_path[0] != 0)
-		ret = rte_pdump_set_socket_dir(server_socket_path,
-				RTE_PDUMP_SOCKET_SERVER);
-	if (ret == 0 && client_socket_path[0] != 0) {
-		ret = rte_pdump_set_socket_dir(client_socket_path,
-				RTE_PDUMP_SOCKET_CLIENT);
-	}
-	if (ret < 0) {
-		cleanup_pdump_resources();
-		rte_exit(EXIT_FAILURE,
-				"failed to set socket paths of server:%s, "
-				"client:%s\n",
-				server_socket_path,
-				client_socket_path);
-	}
-
 	for (i = 0; i < num_tuples; i++) {
 		pt = &pdump_t[i];
 		if (pt->dir == RTE_PDUMP_FLAG_RXTX) {
@@ -862,6 +819,9 @@ main(int argc, char **argv)
 	diag = rte_eal_init(argc, argp);
 	if (diag < 0)
 		rte_panic("Cannot init EAL\n");
+
+	if (rte_eth_dev_count_avail() == 0)
+		rte_exit(EXIT_FAILURE, "No Ethernet ports - bye\n");
 
 	argc -= diag;
 	argv += (diag - 3);

@@ -46,11 +46,11 @@ else ifeq ($(CONFIG_RTE_TOOLCHAIN_ICC),y)
 CFLAGS_BASE_DRIVER += -Wno-unused-but-set-variable
 # Suppress ICC false positive warning on 'bulk' may be used before its
 # value is set
-CFLAGS_sfc_ef10_tx.o += -wd3656
+CFLAGS_sfc_ef10_tx.o += -diag-disable 3656
 endif
 LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
 LDLIBS += -lrte_ethdev -lrte_net -lrte_kvargs
-LDLIBS += -lrte_bus_pci
+LDLIBS += -lrte_bus_pci -lrte_pci
 
 #
 # List of base driver object files for which
@@ -81,6 +81,7 @@ SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += sfc_filter.c
 SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += sfc_flow.c
 SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += sfc_dp.c
 SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += sfc_ef10_rx.c
+SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += sfc_ef10_essb_rx.c
 SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += sfc_ef10_tx.c
 
 VPATH += $(SRCDIR)/base
@@ -115,6 +116,7 @@ SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += siena_vpd.c
 SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += ef10_ev.c
 SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += ef10_filter.c
 SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += ef10_intr.c
+SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += ef10_image.c
 SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += ef10_mac.c
 SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += ef10_mcdi.c
 SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += ef10_nic.c
@@ -125,5 +127,6 @@ SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += ef10_tx.c
 SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += ef10_vpd.c
 SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += hunt_nic.c
 SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += medford_nic.c
+SRCS-$(CONFIG_RTE_LIBRTE_SFC_EFX_PMD) += medford2_nic.c
 
 include $(RTE_SDK)/mk/rte.lib.mk

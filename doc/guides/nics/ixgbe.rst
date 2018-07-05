@@ -68,15 +68,15 @@ Other features are supported using optional MACRO configuration. They include:
 
 *   HW extend dual VLAN
 
-To guarantee the constraint, configuration flags in dev_conf.rxmode will be checked:
+To guarantee the constraint, capabilities in dev_conf.rxmode.offloads will be checked:
 
-*   hw_vlan_strip
+*   DEV_RX_OFFLOAD_VLAN_STRIP
 
-*   hw_vlan_extend
+*   DEV_RX_OFFLOAD_VLAN_EXTEND
 
-*   hw_ip_checksum
+*   DEV_RX_OFFLOAD_CHECKSUM
 
-*   header_split
+*   DEV_RX_OFFLOAD_HEADER_SPLIT
 
 *   dev_conf
 
@@ -102,20 +102,9 @@ Consequently, by default the tx_rs_thresh value is in the range 32 to 64.
 Feature not Supported by TX Vector PMD
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-TX vPMD only works when txq_flags is set to IXGBE_SIMPLE_FLAGS.
+TX vPMD only works when offloads is set to 0
 
-This means that it does not support TX multi-segment, VLAN offload and TX csum offload.
-The following MACROs are used for these three features:
-
-*   ETH_TXQ_FLAGS_NOMULTSEGS
-
-*   ETH_TXQ_FLAGS_NOVLANOFFL
-
-*   ETH_TXQ_FLAGS_NOXSUMSCTP
-
-*   ETH_TXQ_FLAGS_NOXSUMUDP
-
-*   ETH_TXQ_FLAGS_NOXSUMTCP
+This means that it does not support any TX offload.
 
 Application Programming Interface
 ---------------------------------
@@ -130,13 +119,13 @@ l3fwd
 ~~~~~
 
 When running l3fwd with vPMD, there is one thing to note.
-In the configuration, ensure that port_conf.rxmode.hw_ip_checksum=0.
+In the configuration, ensure that DEV_RX_OFFLOAD_CHECKSUM in port_conf.rxmode.offloads is NOT set.
 Otherwise, by default, RX vPMD is disabled.
 
 load_balancer
 ~~~~~~~~~~~~~
 
-As in the case of l3fwd, set configure port_conf.rxmode.hw_ip_checksum=0 to enable vPMD.
+As in the case of l3fwd, to enable vPMD, do NOT set DEV_RX_OFFLOAD_CHECKSUM in port_conf.rxmode.offloads.
 In addition, for improved performance, use -bsz "(32,32),(64,64),(32,32)" in load_balancer to avoid using the default burst size of 144.
 
 
@@ -227,6 +216,20 @@ ixgbe PMD.
 For more details see the IPsec Security Gateway Sample Application and Security
 library documentation.
 
+
+Virtual Function Port Representors
+----------------------------------
+The IXGBE PF PMD supports the creation of VF port representors for the control
+and monitoring of IXGBE virtual function devices. Each port representor
+corresponds to a single virtual function of that device. Using the ``devargs``
+option ``representor`` the user can specify which virtual functions to create
+port representors for on initialization of the PF PMD by passing the VF IDs of
+the VFs which are required.::
+
+  -w DBDF,representor=[0,1,4]
+
+Currently hot-plugging of representor ports is not supported so all required
+representors must be specified on the creation of the PF.
 
 Supported Chipsets and NICs
 ---------------------------

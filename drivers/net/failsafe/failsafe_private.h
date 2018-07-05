@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2017 6WIND S.A.
- * Copyright 2017 Mellanox.
+ * Copyright 2017 Mellanox Technologies, Ltd
  */
 
 #ifndef _RTE_ETH_FAILSAFE_PRIVATE_H_
@@ -119,6 +119,10 @@ struct sub_device {
 	volatile unsigned int remove:1;
 	/* flow isolation state */
 	int flow_isolated:1;
+	/* RMV callback registration state */
+	unsigned int rmv_callback:1;
+	/* LSC callback registration state */
+	unsigned int lsc_callback:1;
 };
 
 struct fs_priv {
@@ -211,6 +215,7 @@ int failsafe_eal_uninit(struct rte_eth_dev *dev);
 /* ETH_DEV */
 
 int failsafe_eth_dev_state_sync(struct rte_eth_dev *dev);
+void failsafe_eth_dev_unregister_callbacks(struct sub_device *sdev);
 void failsafe_dev_remove(struct rte_eth_dev *dev);
 void failsafe_stats_increment(struct rte_eth_stats *to,
 				struct rte_eth_stats *from);
@@ -218,6 +223,9 @@ int failsafe_eth_rmv_event_callback(uint16_t port_id,
 				    enum rte_eth_event_type type,
 				    void *arg, void *out);
 int failsafe_eth_lsc_event_callback(uint16_t port_id,
+				    enum rte_eth_event_type event,
+				    void *cb_arg, void *out);
+int failsafe_eth_new_event_callback(uint16_t port_id,
 				    enum rte_eth_event_type event,
 				    void *cb_arg, void *out);
 
@@ -326,8 +334,12 @@ extern int mac_from_arg;
 #define FS_THREADID_FMT  "lu"
 #endif
 
-#define LOG__(level, m, ...) \
-	RTE_LOG(level, PMD, "net_failsafe: " m "%c", __VA_ARGS__)
+extern int failsafe_logtype;
+
+#define LOG__(l, m, ...) \
+	rte_log(RTE_LOG_ ## l, failsafe_logtype, \
+		"net_failsafe: " m "%c", __VA_ARGS__)
+
 #define LOG_(level, ...) LOG__(level, __VA_ARGS__, '\n')
 #define DEBUG(...) LOG_(DEBUG, __VA_ARGS__)
 #define INFO(...) LOG_(INFO, __VA_ARGS__)

@@ -96,8 +96,14 @@ static struct rte_eth_link pmd_link = {
 		.link_speed = ETH_SPEED_NUM_10G,
 		.link_duplex = ETH_LINK_FULL_DUPLEX,
 		.link_status = ETH_LINK_DOWN,
-		.link_autoneg = ETH_LINK_AUTONEG,
+		.link_autoneg = ETH_LINK_FIXED,
 };
+
+static int eth_pcap_logtype;
+
+#define PMD_LOG(level, fmt, args...) \
+	rte_log(RTE_LOG_ ## level, eth_pcap_logtype, \
+		"%s(): " fmt "\n", __func__, ##args)
 
 static int
 eth_pcap_rx_jumbo(struct rte_mempool *mb_pool, struct rte_mbuf *mbuf,
@@ -256,8 +262,8 @@ eth_pcap_tx_dumper(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 				pcap_dump((u_char *)dumper_q->dumper, &header,
 					  tx_pcap_data);
 			} else {
-				RTE_LOG(ERR, PMD,
-					"Dropping PCAP packet. Size (%d) > max jumbo size (%d).\n",
+				PMD_LOG(ERR,
+					"Dropping PCAP packet. Size (%d) > max jumbo size (%d).",
 					mbuf->pkt_len,
 					ETHER_MAX_JUMBO_FRAME_LEN);
 
@@ -313,8 +319,8 @@ eth_pcap_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 				ret = pcap_sendpacket(tx_queue->pcap,
 						tx_pcap_data, mbuf->pkt_len);
 			} else {
-				RTE_LOG(ERR, PMD,
-					"Dropping PCAP packet. Size (%d) > max jumbo size (%d).\n",
+				PMD_LOG(ERR,
+					"Dropping PCAP packet. Size (%d) > max jumbo size (%d).",
 					mbuf->pkt_len,
 					ETHER_MAX_JUMBO_FRAME_LEN);
 
@@ -346,7 +352,7 @@ open_iface_live(const char *iface, pcap_t **pcap) {
 			RTE_ETH_PCAP_PROMISC, RTE_ETH_PCAP_TIMEOUT, errbuf);
 
 	if (*pcap == NULL) {
-		RTE_LOG(ERR, PMD, "Couldn't open %s: %s\n", iface, errbuf);
+		PMD_LOG(ERR, "Couldn't open %s: %s", iface, errbuf);
 		return -1;
 	}
 
@@ -357,7 +363,7 @@ static int
 open_single_iface(const char *iface, pcap_t **pcap)
 {
 	if (open_iface_live(iface, pcap) < 0) {
-		RTE_LOG(ERR, PMD, "Couldn't open interface %s\n", iface);
+		PMD_LOG(ERR, "Couldn't open interface %s", iface);
 		return -1;
 	}
 
@@ -376,7 +382,7 @@ open_single_tx_pcap(const char *pcap_filename, pcap_dumper_t **dumper)
 	 */
 	tx_pcap = pcap_open_dead(DLT_EN10MB, RTE_ETH_PCAP_SNAPSHOT_LEN);
 	if (tx_pcap == NULL) {
-		RTE_LOG(ERR, PMD, "Couldn't create dead pcap\n");
+		PMD_LOG(ERR, "Couldn't create dead pcap");
 		return -1;
 	}
 
@@ -384,7 +390,7 @@ open_single_tx_pcap(const char *pcap_filename, pcap_dumper_t **dumper)
 	*dumper = pcap_dump_open(tx_pcap, pcap_filename);
 	if (*dumper == NULL) {
 		pcap_close(tx_pcap);
-		RTE_LOG(ERR, PMD, "Couldn't open %s for writing.\n",
+		PMD_LOG(ERR, "Couldn't open %s for writing.",
 			pcap_filename);
 		return -1;
 	}
@@ -398,7 +404,7 @@ open_single_rx_pcap(const char *pcap_filename, pcap_t **pcap)
 {
 	*pcap = pcap_open_offline(pcap_filename, errbuf);
 	if (*pcap == NULL) {
-		RTE_LOG(ERR, PMD, "Couldn't open %s: %s\n", pcap_filename,
+		PMD_LOG(ERR, "Couldn't open %s: %s", pcap_filename,
 			errbuf);
 		return -1;
 	}
@@ -773,27 +779,16 @@ pmd_init_internals(struct rte_vdev_device *vdev,
 		struct pmd_internals **internals,
 		struct rte_eth_dev **eth_dev)
 {
-	struct rte_eth_dev_data *data = NULL;
+	struct rte_eth_dev_data *data;
 	unsigned int numa_node = vdev->device.numa_node;
-	const char *name;
 
-	name = rte_vdev_device_name(vdev);
-	RTE_LOG(INFO, PMD, "Creating pcap-backed ethdev on numa socket %d\n",
+	PMD_LOG(INFO, "Creating pcap-backed ethdev on numa socket %d",
 		numa_node);
-
-	/* now do all data allocation - for eth_dev structure
-	 * and internal (private) data
-	 */
-	data = rte_zmalloc_socket(name, sizeof(*data), 0, numa_node);
-	if (data == NULL)
-		return -1;
 
 	/* reserve an ethdev entry */
 	*eth_dev = rte_eth_vdev_allocate(vdev, sizeof(**internals));
-	if (*eth_dev == NULL) {
-		rte_free(data);
+	if (!(*eth_dev))
 		return -1;
-	}
 
 	/* now put it all together
 	 * - store queue data in internals,
@@ -802,7 +797,7 @@ pmd_init_internals(struct rte_vdev_device *vdev,
 	 * - and point eth_dev structure to new eth_dev_data structure
 	 */
 	*internals = (*eth_dev)->data->dev_private;
-	rte_memcpy(data, (*eth_dev)->data, sizeof(*data));
+	data = (*eth_dev)->data;
 	data->nb_rx_queues = (uint16_t)nb_rx_queues;
 	data->nb_tx_queues = (uint16_t)nb_tx_queues;
 	data->dev_link = pmd_link;
@@ -812,7 +807,6 @@ pmd_init_internals(struct rte_vdev_device *vdev,
 	 * NOTE: we'll replace the data element, of originally allocated
 	 * eth_dev so the rings are local per-process
 	 */
-	(*eth_dev)->data = data;
 	(*eth_dev)->dev_ops = &ops;
 
 	return 0;
@@ -899,6 +893,7 @@ eth_from_pcaps(struct rte_vdev_device *vdev,
 	else
 		eth_dev->tx_pkt_burst = eth_pcap_tx;
 
+	rte_eth_dev_probing_finish(eth_dev);
 	return 0;
 }
 
@@ -910,15 +905,29 @@ pmd_pcap_probe(struct rte_vdev_device *dev)
 	struct rte_kvargs *kvlist;
 	struct pmd_devargs pcaps = {0};
 	struct pmd_devargs dumpers = {0};
+	struct rte_eth_dev *eth_dev;
 	int single_iface = 0;
 	int ret;
 
 	name = rte_vdev_device_name(dev);
-	RTE_LOG(INFO, PMD, "Initializing pmd_pcap for %s\n", name);
+	PMD_LOG(INFO, "Initializing pmd_pcap for %s", name);
 
 	gettimeofday(&start_time, NULL);
 	start_cycles = rte_get_timer_cycles();
 	hz = rte_get_timer_hz();
+
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY &&
+	    strlen(rte_vdev_device_args(dev)) == 0) {
+		eth_dev = rte_eth_dev_attach_secondary(name);
+		if (!eth_dev) {
+			PMD_LOG(ERR, "Failed to probe %s", name);
+			return -1;
+		}
+		/* TODO: request info from primary to set up Rx and Tx */
+		eth_dev->dev_ops = &ops;
+		rte_eth_dev_probing_finish(eth_dev);
+		return 0;
+	}
 
 	kvlist = rte_kvargs_parse(rte_vdev_device_args(dev), valid_arguments);
 	if (kvlist == NULL)
@@ -1008,7 +1017,7 @@ pmd_pcap_remove(struct rte_vdev_device *dev)
 {
 	struct rte_eth_dev *eth_dev = NULL;
 
-	RTE_LOG(INFO, PMD, "Closing pcap ethdev on numa socket %d\n",
+	PMD_LOG(INFO, "Closing pcap ethdev on numa socket %d",
 			rte_socket_id());
 
 	if (!dev)
@@ -1020,7 +1029,6 @@ pmd_pcap_remove(struct rte_vdev_device *dev)
 		return -1;
 
 	rte_free(eth_dev->data->dev_private);
-	rte_free(eth_dev->data);
 
 	rte_eth_dev_release_port(eth_dev);
 
@@ -1040,3 +1048,12 @@ RTE_PMD_REGISTER_PARAM_STRING(net_pcap,
 	ETH_PCAP_RX_IFACE_ARG "=<ifc> "
 	ETH_PCAP_TX_IFACE_ARG "=<ifc> "
 	ETH_PCAP_IFACE_ARG "=<ifc>");
+
+RTE_INIT(eth_pcap_init_log);
+static void
+eth_pcap_init_log(void)
+{
+	eth_pcap_logtype = rte_log_register("pmd.net.pcap");
+	if (eth_pcap_logtype >= 0)
+		rte_log_set_level(eth_pcap_logtype, RTE_LOG_NOTICE);
+}

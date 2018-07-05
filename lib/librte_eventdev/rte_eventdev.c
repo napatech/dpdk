@@ -29,6 +29,8 @@
 #include <rte_malloc.h>
 #include <rte_errno.h>
 #include <rte_ethdev.h>
+#include <rte_cryptodev.h>
+#include <rte_cryptodev_pmd.h>
 
 #include "rte_eventdev.h"
 #include "rte_eventdev_pmd.h"
@@ -121,6 +123,51 @@ rte_event_eth_rx_adapter_caps_get(uint8_t dev_id, uint8_t eth_port_id,
 						&rte_eth_devices[eth_port_id],
 						caps)
 				: 0;
+}
+
+int __rte_experimental
+rte_event_timer_adapter_caps_get(uint8_t dev_id, uint32_t *caps)
+{
+	struct rte_eventdev *dev;
+	const struct rte_event_timer_adapter_ops *ops;
+
+	RTE_EVENTDEV_VALID_DEVID_OR_ERR_RET(dev_id, -EINVAL);
+
+	dev = &rte_eventdevs[dev_id];
+
+	if (caps == NULL)
+		return -EINVAL;
+	*caps = 0;
+
+	return dev->dev_ops->timer_adapter_caps_get ?
+				(*dev->dev_ops->timer_adapter_caps_get)(dev,
+									0,
+									caps,
+									&ops)
+				: 0;
+}
+
+int __rte_experimental
+rte_event_crypto_adapter_caps_get(uint8_t dev_id, uint8_t cdev_id,
+				  uint32_t *caps)
+{
+	struct rte_eventdev *dev;
+	struct rte_cryptodev *cdev;
+
+	RTE_EVENTDEV_VALID_DEVID_OR_ERR_RET(dev_id, -EINVAL);
+	if (!rte_cryptodev_pmd_is_valid_dev(cdev_id))
+		return -EINVAL;
+
+	dev = &rte_eventdevs[dev_id];
+	cdev = rte_cryptodev_pmd_get_dev(cdev_id);
+
+	if (caps == NULL)
+		return -EINVAL;
+	*caps = 0;
+
+	return dev->dev_ops->crypto_adapter_caps_get ?
+		(*dev->dev_ops->crypto_adapter_caps_get)
+		(dev, cdev, caps) : -ENOTSUP;
 }
 
 static inline int
@@ -1119,6 +1166,23 @@ rte_event_dev_start(uint8_t dev_id)
 		dev->data->dev_started = 1;
 	else
 		return diag;
+
+	return 0;
+}
+
+int
+rte_event_dev_stop_flush_callback_register(uint8_t dev_id,
+		eventdev_stop_flush_t callback, void *userdata)
+{
+	struct rte_eventdev *dev;
+
+	RTE_EDEV_LOG_DEBUG("Stop flush register dev_id=%" PRIu8, dev_id);
+
+	RTE_EVENTDEV_VALID_DEVID_OR_ERR_RET(dev_id, -EINVAL);
+	dev = &rte_eventdevs[dev_id];
+
+	dev->dev_ops->dev_stop_flush = callback;
+	dev->data->dev_stop_flush_arg = userdata;
 
 	return 0;
 }

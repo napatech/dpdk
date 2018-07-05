@@ -11,6 +11,8 @@ LIB = librte_pmd_i40e.a
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS) -DPF_DRIVER -DVF_DRIVER -DINTEGRATED_VF
 CFLAGS += -DX722_A0_SUPPORT
+CFLAGS += -DALLOW_EXPERIMENTAL_API
+
 LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
 LDLIBS += -lrte_ethdev -lrte_net -lrte_kvargs -lrte_hash
 LDLIBS += -lrte_bus_pci
@@ -24,7 +26,7 @@ LIBABIVER := 2
 # to disable warnings
 #
 ifeq ($(CONFIG_RTE_TOOLCHAIN_ICC),y)
-CFLAGS_BASE_DRIVER = -wd593 -wd188
+CFLAGS_BASE_DRIVER = -diag-disable 593
 else ifeq ($(CONFIG_RTE_TOOLCHAIN_CLANG),y)
 CFLAGS_BASE_DRIVER += -Wno-sign-compare
 CFLAGS_BASE_DRIVER += -Wno-unused-value
@@ -85,6 +87,7 @@ SRCS-$(CONFIG_RTE_LIBRTE_I40E_PMD) += i40e_fdir.c
 SRCS-$(CONFIG_RTE_LIBRTE_I40E_PMD) += i40e_flow.c
 SRCS-$(CONFIG_RTE_LIBRTE_I40E_PMD) += rte_pmd_i40e.c
 SRCS-$(CONFIG_RTE_LIBRTE_I40E_PMD) += i40e_tm.c
+SRCS-$(CONFIG_RTE_LIBRTE_I40E_PMD) += i40e_vf_representor.c
 
 ifeq ($(findstring RTE_MACHINE_CPUFLAG_AVX2,$(CFLAGS)),RTE_MACHINE_CPUFLAG_AVX2)
 	CC_AVX2_SUPPORT=1

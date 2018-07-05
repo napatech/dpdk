@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2018 6WIND S.A.
- * Copyright 2018 Mellanox Technologies, Ltd.
+ * Copyright 2018 Mellanox Technologies, Ltd
  */
 
 #ifndef MLX5_GLUE_H_
@@ -29,6 +29,14 @@ struct ibv_counter_set_data;
 struct ibv_counter_set_description;
 struct ibv_counter_set_init_attr;
 struct ibv_query_counter_set_attr;
+#endif
+
+#ifndef HAVE_IBV_DEVICE_TUNNEL_SUPPORT
+struct mlx5dv_qp_init_attr;
+#endif
+
+#ifndef HAVE_IBV_DEVICE_STRIDING_RQ_SUPPORT
+struct mlx5dv_wq_init_attr;
 #endif
 
 /* LIB_GLUE_VERSION must be updated every time this structure is modified. */
@@ -100,12 +108,20 @@ struct mlx5_glue {
 		(struct ibv_context *context,
 		 struct ibv_cq_init_attr_ex *cq_attr,
 		 struct mlx5dv_cq_init_attr *mlx5_cq_attr);
+	struct ibv_wq *(*dv_create_wq)
+		(struct ibv_context *context,
+		 struct ibv_wq_init_attr *wq_attr,
+		 struct mlx5dv_wq_init_attr *mlx5_wq_attr);
 	int (*dv_query_device)(struct ibv_context *ctx_in,
 			       struct mlx5dv_context *attrs_out);
 	int (*dv_set_context_attr)(struct ibv_context *ibv_ctx,
 				   enum mlx5dv_set_ctx_attr_type type,
 				   void *attr);
 	int (*dv_init_obj)(struct mlx5dv_obj *obj, uint64_t obj_type);
+	struct ibv_qp *(*dv_create_qp)
+		(struct ibv_context *context,
+		 struct ibv_qp_init_attr_ex *qp_init_attr_ex,
+		 struct mlx5dv_qp_init_attr *dv_qp_init_attr);
 };
 
 const struct mlx5_glue *mlx5_glue;

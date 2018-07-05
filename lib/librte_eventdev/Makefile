@@ -8,18 +8,21 @@ include $(RTE_SDK)/mk/rte.vars.mk
 LIB = librte_eventdev.a
 
 # library version
-LIBABIVER := 3
+LIBABIVER := 4
 
 # build flags
 CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
-LDLIBS += -lrte_eal -lrte_ring -lrte_ethdev -lrte_hash
+LDLIBS += -lrte_eal -lrte_ring -lrte_ethdev -lrte_hash -lrte_mempool -lrte_timer
+LDLIBS += -lrte_mbuf -lrte_cryptodev
 
 # library source files
 SRCS-y += rte_eventdev.c
 SRCS-y += rte_event_ring.c
 SRCS-y += rte_event_eth_rx_adapter.c
+SRCS-y += rte_event_timer_adapter.c
+SRCS-y += rte_event_crypto_adapter.c
 
 # export include files
 SYMLINK-y-include += rte_eventdev.h
@@ -28,6 +31,9 @@ SYMLINK-y-include += rte_eventdev_pmd_pci.h
 SYMLINK-y-include += rte_eventdev_pmd_vdev.h
 SYMLINK-y-include += rte_event_ring.h
 SYMLINK-y-include += rte_event_eth_rx_adapter.h
+SYMLINK-y-include += rte_event_timer_adapter.h
+SYMLINK-y-include += rte_event_timer_adapter_pmd.h
+SYMLINK-y-include += rte_event_crypto_adapter.h
 
 # versioning export map
 EXPORT_MAP := rte_eventdev_version.map

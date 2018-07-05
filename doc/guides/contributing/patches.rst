@@ -256,6 +256,66 @@ In addition to the ``Signed-off-by:`` name the commit messages can also have
 tags for who reported, suggested, tested and reviewed the patch being
 posted. Please refer to the `Tested, Acked and Reviewed by`_ section.
 
+Patch Fix Related Issues
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+`Coverity <https://scan.coverity.com/projects/dpdk-data-plane-development-kit>`_
+is a tool for static code analysis.
+It is used as a cloud-based service used to scan the DPDK source code,
+and alert developers of any potential defects in the source code.
+When fixing an issue found by Coverity, the patch must contain a Coverity issue ID
+in the body of the commit message. For example::
+
+
+     doc: fix some parameter description
+
+     Update the docs, fixing description of some parameter.
+
+     Coverity issue: 12345
+     Fixes: abcdefgh1234 ("doc: add some parameter")
+     Cc: author@example.com
+
+     Signed-off-by: Alex Smith <alex.smith@example.com>
+
+
+`Bugzilla <https://dpdk.org/tracker>`_
+is a bug- or issue-tracking system.
+Bug-tracking systems allow individual or groups of developers
+effectively to keep track of outstanding problems with their product.
+When fixing an issue raised in Bugzilla, the patch must contain
+a Bugzilla issue ID in the body of the commit message.
+For example::
+
+    doc: fix some parameter description
+
+    Update the docs, fixing description of some parameter.
+
+    Bugzilla ID: 12345
+    Fixes: abcdefgh1234 ("doc: add some parameter")
+    Cc: author@example.com
+
+    Signed-off-by: Alex Smith <alex.smith@example.com>
+
+Patch for Stable Releases
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+All fix patches to the master branch that are candidates for backporting
+should also be CCed to the `stable@dpdk.org <http://dpdk.org/ml/listinfo/stable>`_
+mailing list.
+In the commit message body the Cc: stable@dpdk.org should be inserted as follows::
+
+     doc: fix some parameter description
+
+     Update the docs, fixing description of some parameter.
+
+     Fixes: abcdefgh1234 ("doc: add some parameter")
+     Cc: stable@dpdk.org
+
+     Signed-off-by: Alex Smith <alex.smith@example.com>
+
+For further information on stable contribution you can go to
+:doc:`Stable Contribution Guide <stable>`.
+
 
 Creating Patches
 ----------------
@@ -448,6 +508,20 @@ Once submitted your patches will appear on the mailing list and in Patchwork.
 
 Experienced committers may send patches directly with ``git send-email`` without the ``git format-patch`` step.
 The options ``--annotate`` and ``confirm = always`` are recommended for checking patches before sending.
+
+
+Backporting patches for Stable Releases
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Sometimes a maintainer or contributor wishes, or can be asked, to send a patch
+for a stable release rather than mainline.
+In this case the patch(es) should be sent to ``stable@dpdk.org``,
+not to ``dev@dpdk.org``.
+
+Given that there are multiple stable releases being maintained at the same time,
+please specify exactly which branch(es) the patch is for
+using ``git send-email --subject-prefix='PATCH 16.11' ...``
+and also optionally in the cover letter or in the annotation.
 
 
 The Review Process

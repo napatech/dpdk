@@ -2,7 +2,7 @@
  * Copyright(c) 2015-2017 Intel Corporation
  */
 
-#include <des.h>
+#include <intel-ipsec-mb.h>
 
 #include <rte_common.h>
 #include <rte_hexdump.h>
@@ -123,6 +123,17 @@ aesni_mb_set_session_auth_parameters(const struct aesni_mb_op_fns *mb_ops,
 				sess->auth.xcbc.k2, sess->auth.xcbc.k3);
 		return 0;
 	}
+
+	if (xform->auth.algo == RTE_CRYPTO_AUTH_AES_CMAC) {
+		sess->auth.algo = AES_CMAC;
+		(*mb_ops->aux.keyexp.aes_cmac_expkey)(xform->auth.key.data,
+				sess->auth.cmac.expkey);
+
+		(*mb_ops->aux.keyexp.aes_cmac_subkey)(sess->auth.cmac.expkey,
+				sess->auth.cmac.skey1, sess->auth.cmac.skey2);
+		return 0;
+	}
+
 
 	switch (xform->auth.algo) {
 	case RTE_CRYPTO_AUTH_MD5_HMAC:
@@ -338,16 +349,19 @@ aesni_mb_set_session_parameters(const struct aesni_mb_op_fns *mb_ops,
 		sess->chain_order = HASH_CIPHER;
 		auth_xform = xform;
 		cipher_xform = xform->next;
+		sess->auth.digest_len = xform->auth.digest_length;
 		break;
 	case AESNI_MB_OP_CIPHER_HASH:
 		sess->chain_order = CIPHER_HASH;
 		auth_xform = xform->next;
 		cipher_xform = xform;
+		sess->auth.digest_len = xform->auth.digest_length;
 		break;
 	case AESNI_MB_OP_HASH_ONLY:
 		sess->chain_order = HASH_CIPHER;
 		auth_xform = xform;
 		cipher_xform = NULL;
+		sess->auth.digest_len = xform->auth.digest_length;
 		break;
 	case AESNI_MB_OP_CIPHER_ONLY:
 		/*
@@ -366,13 +380,13 @@ aesni_mb_set_session_parameters(const struct aesni_mb_op_fns *mb_ops,
 	case AESNI_MB_OP_AEAD_CIPHER_HASH:
 		sess->chain_order = CIPHER_HASH;
 		sess->aead.aad_len = xform->aead.aad_length;
-		sess->aead.digest_len = xform->aead.digest_length;
+		sess->auth.digest_len = xform->aead.digest_length;
 		aead_xform = xform;
 		break;
 	case AESNI_MB_OP_AEAD_HASH_CIPHER:
 		sess->chain_order = HASH_CIPHER;
 		sess->aead.aad_len = xform->aead.aad_length;
-		sess->aead.digest_len = xform->aead.digest_length;
+		sess->auth.digest_len = xform->aead.digest_length;
 		aead_xform = xform;
 		break;
 	case AESNI_MB_OP_NOT_SUPPORTED:
@@ -517,15 +531,20 @@ set_mb_job_params(JOB_AES_HMAC *job, struct aesni_mb_qp *qp,
 	/* Set authentication parameters */
 	job->hash_alg = session->auth.algo;
 	if (job->hash_alg == AES_XCBC) {
-		job->_k1_expanded = session->auth.xcbc.k1_expanded;
-		job->_k2 = session->auth.xcbc.k2;
-		job->_k3 = session->auth.xcbc.k3;
+		job->u.XCBC._k1_expanded = session->auth.xcbc.k1_expanded;
+		job->u.XCBC._k2 = session->auth.xcbc.k2;
+		job->u.XCBC._k3 = session->auth.xcbc.k3;
 	} else if (job->hash_alg == AES_CCM) {
 		job->u.CCM.aad = op->sym->aead.aad.data + 18;
 		job->u.CCM.aad_len_in_bytes = session->aead.aad_len;
+	} else if (job->hash_alg == AES_CMAC) {
+		job->u.CMAC._key_expanded = session->auth.cmac.expkey;
+		job->u.CMAC._skey1 = session->auth.cmac.skey1;
+		job->u.CMAC._skey2 = session->auth.cmac.skey2;
+
 	} else {
-		job->hashed_auth_key_xor_ipad = session->auth.pads.inner;
-		job->hashed_auth_key_xor_opad = session->auth.pads.outer;
+		job->u.HMAC._hashed_auth_key_xor_ipad = session->auth.pads.inner;
+		job->u.HMAC._hashed_auth_key_xor_opad = session->auth.pads.outer;
 	}
 
 	/* Mutable crypto operation parameters */
@@ -568,11 +587,11 @@ set_mb_job_params(JOB_AES_HMAC *job, struct aesni_mb_qp *qp,
 	 * Multi-buffer library current only support returning a truncated
 	 * digest length as specified in the relevant IPsec RFCs
 	 */
-	if (job->hash_alg != AES_CCM)
+	if (job->hash_alg != AES_CCM && job->hash_alg != AES_CMAC)
 		job->auth_tag_output_len_in_bytes =
 				get_truncated_digest_byte_length(job->hash_alg);
 	else
-		job->auth_tag_output_len_in_bytes = session->aead.digest_len;
+		job->auth_tag_output_len_in_bytes = session->auth.digest_len;
 
 
 	/* Set IV parameters */
@@ -663,7 +682,7 @@ post_process_mb_job(struct aesni_mb_qp *qp, JOB_AES_HMAC *job)
 	if (op->sess_type == RTE_CRYPTO_OP_SESSIONLESS) {
 		memset(sess, 0, sizeof(struct aesni_mb_session));
 		memset(op->sym->session, 0,
-				rte_cryptodev_get_header_session_size());
+				rte_cryptodev_sym_get_header_session_size());
 		rte_mempool_put(qp->sess_mp, sess);
 		rte_mempool_put(qp->sess_mp, op->sym->session);
 		op->sym->session = NULL;
@@ -931,5 +950,5 @@ RTE_PMD_REGISTER_PARAM_STRING(CRYPTODEV_NAME_AESNI_MB_PMD,
 	"max_nb_sessions=<int> "
 	"socket_id=<int>");
 RTE_PMD_REGISTER_CRYPTO_DRIVER(aesni_mb_crypto_drv,
-		cryptodev_aesni_mb_pmd_drv,
+		cryptodev_aesni_mb_pmd_drv.driver,
 		cryptodev_driver_id);

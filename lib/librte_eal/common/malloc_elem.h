@@ -5,7 +5,11 @@
 #ifndef MALLOC_ELEM_H_
 #define MALLOC_ELEM_H_
 
-#include <rte_memory.h>
+#include <stdbool.h>
+
+#include <rte_eal_memconfig.h>
+
+#define MIN_DATA_SIZE (RTE_CACHE_LINE_SIZE)
 
 /* dummy definition of struct so we can use pointers to it in malloc_elem struct */
 struct malloc_heap;
@@ -18,9 +22,13 @@ enum elem_state {
 
 struct malloc_elem {
 	struct malloc_heap *heap;
-	struct malloc_elem *volatile prev;      /* points to prev elem in memseg */
-	LIST_ENTRY(malloc_elem) free_list;      /* list of free elements in heap */
-	const struct rte_memseg *ms;
+	struct malloc_elem *volatile prev;
+	/**< points to prev elem in memseg */
+	struct malloc_elem *volatile next;
+	/**< points to next elem in memseg */
+	LIST_ENTRY(malloc_elem) free_list;
+	/**< list of free elements in heap */
+	struct rte_memseg_list *msl;
 	volatile enum elem_state state;
 	uint32_t pad;
 	size_t size;
@@ -107,15 +115,11 @@ malloc_elem_from_data(const void *data)
 void
 malloc_elem_init(struct malloc_elem *elem,
 		struct malloc_heap *heap,
-		const struct rte_memseg *ms,
+		struct rte_memseg_list *msl,
 		size_t size);
 
-/*
- * initialise a dummy malloc_elem header for the end-of-memseg marker
- */
 void
-malloc_elem_mkend(struct malloc_elem *elem,
-		struct malloc_elem *prev_free);
+malloc_elem_insert(struct malloc_elem *elem);
 
 /*
  * return true if the current malloc_elem can hold a block of data
@@ -123,7 +127,7 @@ malloc_elem_mkend(struct malloc_elem *elem,
  */
 int
 malloc_elem_can_hold(struct malloc_elem *elem, size_t size,
-		unsigned align, size_t bound);
+		unsigned int align, size_t bound, bool contig);
 
 /*
  * reserve a block of data in an existing malloc_elem. If the malloc_elem
@@ -131,15 +135,18 @@ malloc_elem_can_hold(struct malloc_elem *elem, size_t size,
  */
 struct malloc_elem *
 malloc_elem_alloc(struct malloc_elem *elem, size_t size,
-		unsigned align, size_t bound);
+		unsigned int align, size_t bound, bool contig);
 
 /*
  * free a malloc_elem block by adding it to the free list. If the
  * blocks either immediately before or immediately after newly freed block
  * are also free, the blocks are merged together.
  */
-int
+struct malloc_elem *
 malloc_elem_free(struct malloc_elem *elem);
+
+struct malloc_elem *
+malloc_elem_join_adjacent_free(struct malloc_elem *elem);
 
 /*
  * attempt to resize a malloc_elem by expanding into any free space
@@ -147,6 +154,18 @@ malloc_elem_free(struct malloc_elem *elem);
  */
 int
 malloc_elem_resize(struct malloc_elem *elem, size_t size);
+
+void
+malloc_elem_hide_region(struct malloc_elem *elem, void *start, size_t len);
+
+void
+malloc_elem_free_list_remove(struct malloc_elem *elem);
+
+/*
+ * dump contents of malloc elem to a file.
+ */
+void
+malloc_elem_dump(const struct malloc_elem *elem, FILE *f);
 
 /*
  * Given an element size, compute its freelist index.

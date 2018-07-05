@@ -194,7 +194,8 @@ slave_vlan_filter_set(uint16_t bonded_port_id, uint16_t slave_port_id)
 	uint16_t first;
 
 	bonded_eth_dev = &rte_eth_devices[bonded_port_id];
-	if (bonded_eth_dev->data->dev_conf.rxmode.hw_vlan_filter == 0)
+	if ((bonded_eth_dev->data->dev_conf.rxmode.offloads &
+			DEV_RX_OFFLOAD_VLAN_FILTER) == 0)
 		return 0;
 
 	internals = bonded_eth_dev->data->dev_private;
@@ -211,15 +212,61 @@ slave_vlan_filter_set(uint16_t bonded_port_id, uint16_t slave_port_id)
 		for (i = 0, mask = 1;
 		     i < RTE_BITMAP_SLAB_BIT_SIZE;
 		     i ++, mask <<= 1) {
-			if (unlikely(slab & mask))
+			if (unlikely(slab & mask)) {
+				uint16_t vlan_id = pos + i;
+
 				res = rte_eth_dev_vlan_filter(slave_port_id,
-							      (uint16_t)pos, 1);
+							      vlan_id, 1);
+			}
 		}
 		found = rte_bitmap_scan(internals->vlan_filter_bmp,
 					&pos, &slab);
 	} while (found && first != pos && res == 0);
 
 	return res;
+}
+
+static int
+slave_rte_flow_prepare(uint16_t slave_id, struct bond_dev_private *internals)
+{
+	struct rte_flow *flow;
+	struct rte_flow_error ferror;
+	uint16_t slave_port_id = internals->slaves[slave_id].port_id;
+
+	if (internals->flow_isolated_valid != 0) {
+		rte_eth_dev_stop(slave_port_id);
+		if (rte_flow_isolate(slave_port_id, internals->flow_isolated,
+		    &ferror)) {
+			RTE_BOND_LOG(ERR, "rte_flow_isolate failed for slave"
+				     " %d: %s", slave_id, ferror.message ?
+				     ferror.message : "(no stated reason)");
+			return -1;
+		}
+	}
+	TAILQ_FOREACH(flow, &internals->flow_list, next) {
+		flow->flows[slave_id] = rte_flow_create(slave_port_id,
+							&flow->fd->attr,
+							flow->fd->items,
+							flow->fd->actions,
+							&ferror);
+		if (flow->flows[slave_id] == NULL) {
+			RTE_BOND_LOG(ERR, "Cannot create flow for slave"
+				     " %d: %s", slave_id,
+				     ferror.message ? ferror.message :
+				     "(no stated reason)");
+			/* Destroy successful bond flows from the slave */
+			TAILQ_FOREACH(flow, &internals->flow_list, next) {
+				if (flow->flows[slave_id] != NULL) {
+					rte_flow_destroy(slave_port_id,
+							 flow->flows[slave_id],
+							 &ferror);
+					flow->flows[slave_id] = NULL;
+				}
+			}
+			return -1;
+		}
+	}
+	return 0;
 }
 
 static int
@@ -284,6 +331,8 @@ __eth_bond_slave_add_lock_free(uint16_t bonded_port_id, uint16_t slave_port_id)
 		/* Take the first dev's offload capabilities */
 		internals->rx_offload_capa = dev_info.rx_offload_capa;
 		internals->tx_offload_capa = dev_info.tx_offload_capa;
+		internals->rx_queue_offload_capa = dev_info.rx_queue_offload_capa;
+		internals->tx_queue_offload_capa = dev_info.tx_queue_offload_capa;
 		internals->flow_type_rss_offloads = dev_info.flow_type_rss_offloads;
 
 		/* Inherit first slave's max rx packet size */
@@ -292,6 +341,8 @@ __eth_bond_slave_add_lock_free(uint16_t bonded_port_id, uint16_t slave_port_id)
 	} else {
 		internals->rx_offload_capa &= dev_info.rx_offload_capa;
 		internals->tx_offload_capa &= dev_info.tx_offload_capa;
+		internals->rx_queue_offload_capa &= dev_info.rx_queue_offload_capa;
+		internals->tx_queue_offload_capa &= dev_info.tx_queue_offload_capa;
 		internals->flow_type_rss_offloads &= dev_info.flow_type_rss_offloads;
 
 		if (link_properties_valid(bonded_eth_dev,
@@ -315,6 +366,12 @@ __eth_bond_slave_add_lock_free(uint16_t bonded_port_id, uint16_t slave_port_id)
 
 	bonded_eth_dev->data->dev_conf.rx_adv_conf.rss_conf.rss_hf &=
 			internals->flow_type_rss_offloads;
+
+	if (slave_rte_flow_prepare(internals->slave_count, internals) != 0) {
+		RTE_BOND_LOG(ERR, "Failed to prepare new slave flows: port=%d",
+			     slave_port_id);
+		return -1;
+	}
 
 	internals->slave_count++;
 
@@ -393,6 +450,8 @@ __eth_bond_slave_remove_lock_free(uint16_t bonded_port_id,
 	struct rte_eth_dev *bonded_eth_dev;
 	struct bond_dev_private *internals;
 	struct rte_eth_dev *slave_eth_dev;
+	struct rte_flow_error flow_error;
+	struct rte_flow *flow;
 	int i, slave_idx;
 
 	bonded_eth_dev = &rte_eth_devices[bonded_port_id];
@@ -432,6 +491,18 @@ __eth_bond_slave_remove_lock_free(uint16_t bonded_port_id,
 	rte_eth_dev_default_mac_addr_set(slave_port_id,
 			&(internals->slaves[slave_idx].persisted_mac_addr));
 
+	/*
+	 * Remove bond device flows from slave device.
+	 * Note: don't restore flow isolate mode.
+	 */
+	TAILQ_FOREACH(flow, &internals->flow_list, next) {
+		if (flow->flows[slave_idx] != NULL) {
+			rte_flow_destroy(slave_port_id, flow->flows[slave_idx],
+					 &flow_error);
+			flow->flows[slave_idx] = NULL;
+		}
+	}
+
 	slave_eth_dev = &rte_eth_devices[slave_port_id];
 	slave_remove(internals, slave_eth_dev);
 	slave_eth_dev->data->dev_flags &= (~RTE_ETH_DEV_BONDED_SLAVE);
@@ -458,6 +529,8 @@ __eth_bond_slave_remove_lock_free(uint16_t bonded_port_id,
 	if (internals->slave_count == 0) {
 		internals->rx_offload_capa = 0;
 		internals->tx_offload_capa = 0;
+		internals->rx_queue_offload_capa = 0;
+		internals->tx_queue_offload_capa = 0;
 		internals->flow_type_rss_offloads = ETH_RSS_PROTO_MASK;
 		internals->reta_size = 0;
 		internals->candidate_max_rx_pktlen = 0;

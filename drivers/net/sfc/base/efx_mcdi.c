@@ -45,7 +45,7 @@ static const efx_mcdi_ops_t	__efx_mcdi_siena_ops = {
 
 #endif	/* EFSYS_OPT_SIENA */
 
-#if EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD
+#if EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD || EFSYS_OPT_MEDFORD2
 
 static const efx_mcdi_ops_t	__efx_mcdi_ef10_ops = {
 	ef10_mcdi_init,			/* emco_init */
@@ -58,7 +58,7 @@ static const efx_mcdi_ops_t	__efx_mcdi_ef10_ops = {
 	ef10_mcdi_get_timeout,		/* emco_get_timeout */
 };
 
-#endif	/* EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD */
+#endif	/* EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD || EFSYS_OPT_MEDFORD2 */
 
 
 
@@ -91,6 +91,12 @@ efx_mcdi_init(
 		emcop = &__efx_mcdi_ef10_ops;
 		break;
 #endif	/* EFSYS_OPT_MEDFORD */
+
+#if EFSYS_OPT_MEDFORD2
+	case EFX_FAMILY_MEDFORD2:
+		emcop = &__efx_mcdi_ef10_ops;
+		break;
+#endif	/* EFSYS_OPT_MEDFORD2 */
 
 	default:
 		EFSYS_ASSERT(0);
@@ -1258,13 +1264,21 @@ efx_mcdi_drv_attach(
 	req.emr_out_length = MC_CMD_DRV_ATTACH_EXT_OUT_LEN;
 
 	/*
-	 * Use DONT_CARE for the datapath firmware type to ensure that the
-	 * driver can attach to an unprivileged function. The datapath firmware
-	 * type to use is controlled by the 'sfboot' utility.
+	 * Typically, client drivers use DONT_CARE for the datapath firmware
+	 * type to ensure that the driver can attach to an unprivileged
+	 * function. The datapath firmware type to use is controlled by the
+	 * 'sfboot' utility.
+	 * If a client driver wishes to attach with a specific datapath firmware
+	 * type, that can be passed in second argument of efx_nic_probe API. One
+	 * such example is the ESXi native driver that attempts attaching with
+	 * FULL_FEATURED datapath firmware type first and fall backs to
+	 * DONT_CARE datapath firmware type if MC_CMD_DRV_ATTACH fails.
 	 */
-	MCDI_IN_SET_DWORD(req, DRV_ATTACH_IN_NEW_STATE, attach ? 1 : 0);
+	MCDI_IN_POPULATE_DWORD_2(req, DRV_ATTACH_IN_NEW_STATE,
+	    DRV_ATTACH_IN_ATTACH, attach ? 1 : 0,
+	    DRV_ATTACH_IN_SUBVARIANT_AWARE, EFSYS_OPT_FW_SUBVARIANT_AWARE);
 	MCDI_IN_SET_DWORD(req, DRV_ATTACH_IN_UPDATE, 1);
-	MCDI_IN_SET_DWORD(req, DRV_ATTACH_IN_FIRMWARE_ID, MC_CMD_FW_DONT_CARE);
+	MCDI_IN_SET_DWORD(req, DRV_ATTACH_IN_FIRMWARE_ID, enp->efv);
 
 	efx_mcdi_execute(enp, &req);
 
@@ -1426,6 +1440,11 @@ efx_mcdi_get_phy_cfg(
 	efx_mcdi_req_t req;
 	uint8_t payload[MAX(MC_CMD_GET_PHY_CFG_IN_LEN,
 			    MC_CMD_GET_PHY_CFG_OUT_LEN)];
+#if EFSYS_OPT_NAMES
+	const char *namep;
+	size_t namelen;
+#endif
+	uint32_t phy_media_type;
 	efx_rc_t rc;
 
 	(void) memset(payload, 0, sizeof (payload));
@@ -1449,10 +1468,12 @@ efx_mcdi_get_phy_cfg(
 
 	encp->enc_phy_type = MCDI_OUT_DWORD(req, GET_PHY_CFG_OUT_TYPE);
 #if EFSYS_OPT_NAMES
-	(void) strncpy(encp->enc_phy_name,
-		MCDI_OUT2(req, char, GET_PHY_CFG_OUT_NAME),
-		MIN(sizeof (encp->enc_phy_name) - 1,
-		    MC_CMD_GET_PHY_CFG_OUT_NAME_LEN));
+	namep = MCDI_OUT2(req, char, GET_PHY_CFG_OUT_NAME);
+	namelen = MIN(sizeof (encp->enc_phy_name) - 1,
+		    strnlen(namep, MC_CMD_GET_PHY_CFG_OUT_NAME_LEN));
+	(void) memset(encp->enc_phy_name, 0,
+	    sizeof (encp->enc_phy_name));
+	memcpy(encp->enc_phy_name, namep, namelen);
 #endif	/* EFSYS_OPT_NAMES */
 	(void) memset(encp->enc_phy_revision, 0,
 	    sizeof (encp->enc_phy_revision));
@@ -1474,8 +1495,8 @@ efx_mcdi_get_phy_cfg(
 	EFX_STATIC_ASSERT(MC_CMD_MEDIA_SFP_PLUS == EFX_PHY_MEDIA_SFP_PLUS);
 	EFX_STATIC_ASSERT(MC_CMD_MEDIA_BASE_T == EFX_PHY_MEDIA_BASE_T);
 	EFX_STATIC_ASSERT(MC_CMD_MEDIA_QSFP_PLUS == EFX_PHY_MEDIA_QSFP_PLUS);
-	epp->ep_fixed_port_type =
-		(efx_phy_media_type_t) MCDI_OUT_DWORD(req, GET_PHY_CFG_OUT_MEDIA_TYPE);
+	phy_media_type = MCDI_OUT_DWORD(req, GET_PHY_CFG_OUT_MEDIA_TYPE);
+	epp->ep_fixed_port_type = (efx_phy_media_type_t)phy_media_type;
 	if (epp->ep_fixed_port_type >= EFX_PHY_MEDIA_NTYPES)
 		epp->ep_fixed_port_type = EFX_PHY_MEDIA_INVALID;
 
@@ -1621,7 +1642,7 @@ fail1:
 
 #if EFSYS_OPT_BIST
 
-#if EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD
+#if EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD || EFSYS_OPT_MEDFORD2
 /*
  * Enter bist offline mode. This is a fw mode which puts the NIC into a state
  * where memory BIST tests can be run and not much else can interfere or happen.
@@ -1657,7 +1678,7 @@ fail1:
 
 	return (rc);
 }
-#endif /* EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD */
+#endif /* EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD || EFSYS_OPT_MEDFORD2 */
 
 	__checkReturn		efx_rc_t
 efx_mcdi_bist_start(
@@ -1778,7 +1799,7 @@ efx_mcdi_mac_stats(
 {
 	efx_mcdi_req_t req;
 	uint8_t payload[MAX(MC_CMD_MAC_STATS_IN_LEN,
-			    MC_CMD_MAC_STATS_OUT_DMA_LEN)];
+			    MC_CMD_MAC_STATS_V2_OUT_DMA_LEN)];
 	int clear = (action == EFX_STATS_CLEAR);
 	int upload = (action == EFX_STATS_UPLOAD);
 	int enable = (action == EFX_STATS_ENABLE_NOEVENTS);
@@ -1791,7 +1812,7 @@ efx_mcdi_mac_stats(
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_MAC_STATS_IN_LEN;
 	req.emr_out_buf = payload;
-	req.emr_out_length = MC_CMD_MAC_STATS_OUT_DMA_LEN;
+	req.emr_out_length = MC_CMD_MAC_STATS_V2_OUT_DMA_LEN;
 
 	MCDI_IN_POPULATE_DWORD_6(req, MAC_STATS_IN_CMD,
 	    MAC_STATS_IN_DMA, upload,
@@ -1801,19 +1822,35 @@ efx_mcdi_mac_stats(
 	    MAC_STATS_IN_PERIODIC_NOEVENT, !events,
 	    MAC_STATS_IN_PERIOD_MS, (enable | events) ? period_ms : 0);
 
-	if (esmp != NULL) {
-		int bytes = MC_CMD_MAC_NSTATS * sizeof (uint64_t);
+	if (enable || events || upload) {
+		const efx_nic_cfg_t *encp = &enp->en_nic_cfg;
+		uint32_t bytes;
 
-		EFX_STATIC_ASSERT(MC_CMD_MAC_NSTATS * sizeof (uint64_t) <=
-		    EFX_MAC_STATS_SIZE);
+		/* Periodic stats or stats upload require a DMA buffer */
+		if (esmp == NULL) {
+			rc = EINVAL;
+			goto fail1;
+		}
+
+		if (encp->enc_mac_stats_nstats < MC_CMD_MAC_NSTATS) {
+			/* MAC stats count too small for legacy MAC stats */
+			rc = ENOSPC;
+			goto fail2;
+		}
+
+		bytes = encp->enc_mac_stats_nstats * sizeof (efx_qword_t);
+
+		if (EFSYS_MEM_SIZE(esmp) < bytes) {
+			/* DMA buffer too small */
+			rc = ENOSPC;
+			goto fail3;
+		}
 
 		MCDI_IN_SET_DWORD(req, MAC_STATS_IN_DMA_ADDR_LO,
 			    EFSYS_MEM_ADDR(esmp) & 0xffffffff);
 		MCDI_IN_SET_DWORD(req, MAC_STATS_IN_DMA_ADDR_HI,
 			    EFSYS_MEM_ADDR(esmp) >> 32);
 		MCDI_IN_SET_DWORD(req, MAC_STATS_IN_DMA_LEN, bytes);
-	} else {
-		EFSYS_ASSERT(!upload && !enable && !events);
 	}
 
 	/*
@@ -1831,12 +1868,18 @@ efx_mcdi_mac_stats(
 		if ((req.emr_rc != ENOENT) ||
 		    (enp->en_rx_qcount + enp->en_tx_qcount != 0)) {
 			rc = req.emr_rc;
-			goto fail1;
+			goto fail4;
 		}
 	}
 
 	return (0);
 
+fail4:
+	EFSYS_PROBE(fail4);
+fail3:
+	EFSYS_PROBE(fail3);
+fail2:
+	EFSYS_PROBE(fail2);
 fail1:
 	EFSYS_PROBE1(fail1, efx_rc_t, rc);
 
@@ -1921,7 +1964,7 @@ fail1:
 
 #endif	/* EFSYS_OPT_MAC_STATS */
 
-#if EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD
+#if EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD || EFSYS_OPT_MEDFORD2
 
 /*
  * This function returns the pf and vf number of a function.  If it is a pf the
@@ -2020,7 +2063,7 @@ fail1:
 	return (rc);
 }
 
-#endif /* EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD */
+#endif /* EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD || EFSYS_OPT_MEDFORD2 */
 
 	__checkReturn		efx_rc_t
 efx_mcdi_set_workaround(

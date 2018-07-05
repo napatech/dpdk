@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2012 6WIND S.A.
- * Copyright 2012 Mellanox
+ * Copyright 2012 Mellanox Technologies, Ltd
  */
 
 /**
@@ -44,8 +44,14 @@
 #include "mlx4.h"
 #include "mlx4_glue.h"
 #include "mlx4_flow.h"
+#include "mlx4_mr.h"
 #include "mlx4_rxtx.h"
 #include "mlx4_utils.h"
+
+struct mlx4_dev_list mlx4_mem_event_cb_list =
+	LIST_HEAD_INITIALIZER(mlx4_mem_event_cb_list);
+
+rte_rwlock_t mlx4_mem_event_rwlock = RTE_RWLOCK_INITIALIZER;
 
 /** Configuration structure for device arguments. */
 struct mlx4_conf {
@@ -60,6 +66,8 @@ const char *pmd_mlx4_init_params[] = {
 	MLX4_PMD_PORT_KVARG,
 	NULL,
 };
+
+static void mlx4_dev_stop(struct rte_eth_dev *dev);
 
 /**
  * DPDK callback for Ethernet device configuration.
@@ -123,6 +131,9 @@ mlx4_dev_start(struct rte_eth_dev *dev)
 		      (void *)dev, strerror(-ret));
 		goto err;
 	}
+#ifndef NDEBUG
+	mlx4_mr_dump_dev(dev);
+#endif
 	ret = mlx4_rxq_intr_enable(priv);
 	if (ret) {
 		ERROR("%p: interrupt handler installation failed",
@@ -143,8 +154,7 @@ mlx4_dev_start(struct rte_eth_dev *dev)
 	dev->rx_pkt_burst = mlx4_rx_burst;
 	return 0;
 err:
-	/* Rollback. */
-	priv->started = 0;
+	mlx4_dev_stop(dev);
 	return ret;
 }
 
@@ -194,10 +204,12 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 	dev->tx_pkt_burst = mlx4_tx_burst_removed;
 	rte_wmb();
 	mlx4_flow_clean(priv);
+	mlx4_rss_deinit(priv);
 	for (i = 0; i != dev->data->nb_rx_queues; ++i)
 		mlx4_rx_queue_release(dev->data->rx_queues[i]);
 	for (i = 0; i != dev->data->nb_tx_queues; ++i)
 		mlx4_tx_queue_release(dev->data->tx_queues[i]);
+	mlx4_mr_release(dev);
 	if (priv->pd != NULL) {
 		assert(priv->ctx != NULL);
 		claim_zero(mlx4_glue->dealloc_pd(priv->pd));
@@ -385,6 +397,99 @@ free_kvlist:
 	return ret;
 }
 
+/**
+ * Interpret RSS capabilities reported by device.
+ *
+ * This function returns the set of usable Verbs RSS hash fields, kernel
+ * quirks taken into account.
+ *
+ * @param ctx
+ *   Verbs context.
+ * @param pd
+ *   Verbs protection domain.
+ * @param device_attr_ex
+ *   Extended device attributes to interpret.
+ *
+ * @return
+ *   Usable RSS hash fields mask in Verbs format.
+ */
+static uint64_t
+mlx4_hw_rss_sup(struct ibv_context *ctx, struct ibv_pd *pd,
+		struct ibv_device_attr_ex *device_attr_ex)
+{
+	uint64_t hw_rss_sup = device_attr_ex->rss_caps.rx_hash_fields_mask;
+	struct ibv_cq *cq = NULL;
+	struct ibv_wq *wq = NULL;
+	struct ibv_rwq_ind_table *ind = NULL;
+	struct ibv_qp *qp = NULL;
+
+	if (!hw_rss_sup) {
+		WARN("no RSS capabilities reported; disabling support for UDP"
+		     " RSS and inner VXLAN RSS");
+		return IBV_RX_HASH_SRC_IPV4 | IBV_RX_HASH_DST_IPV4 |
+			IBV_RX_HASH_SRC_IPV6 | IBV_RX_HASH_DST_IPV6 |
+			IBV_RX_HASH_SRC_PORT_TCP | IBV_RX_HASH_DST_PORT_TCP;
+	}
+	if (!(hw_rss_sup & IBV_RX_HASH_INNER))
+		return hw_rss_sup;
+	/*
+	 * Although reported as supported, missing code in some Linux
+	 * versions (v4.15, v4.16) prevents the creation of hash QPs with
+	 * inner capability.
+	 *
+	 * There is no choice but to attempt to instantiate a temporary RSS
+	 * context in order to confirm its support.
+	 */
+	cq = mlx4_glue->create_cq(ctx, 1, NULL, NULL, 0);
+	wq = cq ? mlx4_glue->create_wq
+		(ctx,
+		 &(struct ibv_wq_init_attr){
+			.wq_type = IBV_WQT_RQ,
+			.max_wr = 1,
+			.max_sge = 1,
+			.pd = pd,
+			.cq = cq,
+		 }) : NULL;
+	ind = wq ? mlx4_glue->create_rwq_ind_table
+		(ctx,
+		 &(struct ibv_rwq_ind_table_init_attr){
+			.log_ind_tbl_size = 0,
+			.ind_tbl = &wq,
+			.comp_mask = 0,
+		 }) : NULL;
+	qp = ind ? mlx4_glue->create_qp_ex
+		(ctx,
+		 &(struct ibv_qp_init_attr_ex){
+			.comp_mask =
+				(IBV_QP_INIT_ATTR_PD |
+				 IBV_QP_INIT_ATTR_RX_HASH |
+				 IBV_QP_INIT_ATTR_IND_TABLE),
+			.qp_type = IBV_QPT_RAW_PACKET,
+			.pd = pd,
+			.rwq_ind_tbl = ind,
+			.rx_hash_conf = {
+				.rx_hash_function = IBV_RX_HASH_FUNC_TOEPLITZ,
+				.rx_hash_key_len = MLX4_RSS_HASH_KEY_SIZE,
+				.rx_hash_key = mlx4_rss_hash_key_default,
+				.rx_hash_fields_mask = hw_rss_sup,
+			},
+		 }) : NULL;
+	if (!qp) {
+		WARN("disabling unusable inner RSS capability due to kernel"
+		     " quirk");
+		hw_rss_sup &= ~IBV_RX_HASH_INNER;
+	} else {
+		claim_zero(mlx4_glue->destroy_qp(qp));
+	}
+	if (ind)
+		claim_zero(mlx4_glue->destroy_rwq_ind_table(ind));
+	if (wq)
+		claim_zero(mlx4_glue->destroy_wq(wq));
+	if (cq)
+		claim_zero(mlx4_glue->destroy_cq(cq));
+	return hw_rss_sup;
+}
+
 static struct rte_pci_driver mlx4_driver;
 
 /**
@@ -562,22 +667,15 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			(device_attr.vendor_part_id ==
 			 PCI_DEVICE_ID_MELLANOX_CONNECTX3PRO);
 		DEBUG("L2 tunnel checksum offloads are %ssupported",
-		      (priv->hw_csum_l2tun ? "" : "not "));
-		priv->hw_rss_sup = device_attr_ex.rss_caps.rx_hash_fields_mask;
-		if (!priv->hw_rss_sup) {
-			WARN("no RSS capabilities reported; disabling support"
-			     " for UDP RSS and inner VXLAN RSS");
-			/* Fake support for all possible RSS hash fields. */
-			priv->hw_rss_sup = ~UINT64_C(0);
-			priv->hw_rss_sup = mlx4_conv_rss_hf(priv, -1);
-			/* Filter out known unsupported fields. */
-			priv->hw_rss_sup &=
-				~(uint64_t)(IBV_RX_HASH_SRC_PORT_UDP |
-					    IBV_RX_HASH_DST_PORT_UDP |
-					    IBV_RX_HASH_INNER);
-		}
+		      priv->hw_csum_l2tun ? "" : "not ");
+		priv->hw_rss_sup = mlx4_hw_rss_sup(priv->ctx, priv->pd,
+						   &device_attr_ex);
 		DEBUG("supported RSS hash fields mask: %016" PRIx64,
 		      priv->hw_rss_sup);
+		priv->hw_fcs_strip = !!(device_attr_ex.raw_packet_caps &
+					IBV_RAW_PACKET_CAP_SCATTER_FCS);
+		DEBUG("FCS stripping toggling is %ssupported",
+		      priv->hw_fcs_strip ? "" : "not ");
 		/* Configure the first MAC address by default. */
 		if (mlx4_get_mac(priv, &mac.addr_bytes)) {
 			ERROR("cannot get MAC address, is mlx4_en loaded?"
@@ -649,6 +747,24 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		/* Update link status once if waiting for LSC. */
 		if (eth_dev->data->dev_flags & RTE_ETH_DEV_INTR_LSC)
 			mlx4_link_update(eth_dev, 0);
+		/*
+		 * Once the device is added to the list of memory event
+		 * callback, its global MR cache table cannot be expanded
+		 * on the fly because of deadlock. If it overflows, lookup
+		 * should be done by searching MR list linearly, which is slow.
+		 */
+		err = mlx4_mr_btree_init(&priv->mr.cache,
+					 MLX4_MR_BTREE_CACHE_N * 2,
+					 eth_dev->device->numa_node);
+		if (err) {
+			/* rte_errno is already set. */
+			goto port_error;
+		}
+		/* Add device to memory callback list. */
+		rte_rwlock_write_lock(&mlx4_mem_event_rwlock);
+		LIST_INSERT_HEAD(&mlx4_mem_event_cb_list, priv, mem_event_cb);
+		rte_rwlock_write_unlock(&mlx4_mem_event_rwlock);
+		rte_eth_dev_probing_finish(eth_dev);
 		continue;
 port_error:
 		rte_free(priv);
@@ -708,11 +824,53 @@ static struct rte_pci_driver mlx4_driver = {
 #ifdef RTE_LIBRTE_MLX4_DLOPEN_DEPS
 
 /**
+ * Suffix RTE_EAL_PMD_PATH with "-glue".
+ *
+ * This function performs a sanity check on RTE_EAL_PMD_PATH before
+ * suffixing its last component.
+ *
+ * @param buf[out]
+ *   Output buffer, should be large enough otherwise NULL is returned.
+ * @param size
+ *   Size of @p out.
+ *
+ * @return
+ *   Pointer to @p buf or @p NULL in case suffix cannot be appended.
+ */
+static char *
+mlx4_glue_path(char *buf, size_t size)
+{
+	static const char *const bad[] = { "/", ".", "..", NULL };
+	const char *path = RTE_EAL_PMD_PATH;
+	size_t len = strlen(path);
+	size_t off;
+	int i;
+
+	while (len && path[len - 1] == '/')
+		--len;
+	for (off = len; off && path[off - 1] != '/'; --off)
+		;
+	for (i = 0; bad[i]; ++i)
+		if (!strncmp(path + off, bad[i], (int)(len - off)))
+			goto error;
+	i = snprintf(buf, size, "%.*s-glue", (int)len, path);
+	if (i == -1 || (size_t)i >= size)
+		goto error;
+	return buf;
+error:
+	ERROR("unable to append \"-glue\" to last component of"
+	      " RTE_EAL_PMD_PATH (\"" RTE_EAL_PMD_PATH "\"),"
+	      " please re-configure DPDK");
+	return NULL;
+}
+
+/**
  * Initialization routine for run-time dependency on rdma-core.
  */
 static int
 mlx4_glue_init(void)
 {
+	char glue_path[sizeof(RTE_EAL_PMD_PATH) - 1 + sizeof("-glue")];
 	const char *path[] = {
 		/*
 		 * A basic security check is necessary before trusting
@@ -720,7 +878,13 @@ mlx4_glue_init(void)
 		 */
 		(geteuid() == getuid() && getegid() == getgid() ?
 		 getenv("MLX4_GLUE_PATH") : NULL),
-		RTE_EAL_PMD_PATH,
+		/*
+		 * When RTE_EAL_PMD_PATH is set, use its glue-suffixed
+		 * variant, otherwise let dlopen() look up libraries on its
+		 * own.
+		 */
+		(*RTE_EAL_PMD_PATH ?
+		 mlx4_glue_path(glue_path, sizeof(glue_path)) : ""),
 	};
 	unsigned int i = 0;
 	void *handle = NULL;
@@ -828,6 +992,8 @@ rte_mlx4_pmd_init(void)
 	}
 	mlx4_glue->fork_init();
 	rte_pci_register(&mlx4_driver);
+	rte_mem_event_callback_register("MLX4_MEM_EVENT_CB",
+					mlx4_mr_mem_event_cb, NULL);
 }
 
 RTE_PMD_EXPORT_NAME(net_mlx4, __COUNTER__);

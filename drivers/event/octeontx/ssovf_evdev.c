@@ -18,8 +18,10 @@
 #include <rte_bus_vdev.h>
 
 #include "ssovf_evdev.h"
+#include "timvf_evdev.h"
 
 int otx_logtype_ssovf;
+static uint8_t timvf_enable_stats;
 
 RTE_INIT(otx_ssovf_init_log);
 static void
@@ -49,7 +51,7 @@ ssovf_mbox_dev_info(struct ssovf_mbox_dev_info *info)
 	hdr.vfid = 0;
 
 	memset(info, 0, len);
-	return octeontx_ssovf_mbox_send(&hdr, NULL, 0, info, len);
+	return octeontx_mbox_send(&hdr, NULL, 0, info, len);
 }
 
 struct ssovf_mbox_getwork_wait {
@@ -69,7 +71,7 @@ ssovf_mbox_getwork_tmo_set(uint32_t timeout_ns)
 	hdr.vfid = 0;
 
 	tmo_set.wait_ns = timeout_ns;
-	ret = octeontx_ssovf_mbox_send(&hdr, &tmo_set, len, NULL, 0);
+	ret = octeontx_mbox_send(&hdr, &tmo_set, len, NULL, 0);
 	if (ret)
 		ssovf_log_err("Failed to set getwork timeout(%d)", ret);
 
@@ -99,7 +101,7 @@ ssovf_mbox_priority_set(uint8_t queue, uint8_t prio)
 	grp.affinity = 0xff;
 	grp.priority = prio / 32; /* Normalize to 0 to 7 */
 
-	ret = octeontx_ssovf_mbox_send(&hdr, &grp, len, NULL, 0);
+	ret = octeontx_mbox_send(&hdr, &grp, len, NULL, 0);
 	if (ret)
 		ssovf_log_err("Failed to set grp=%d prio=%d", queue, prio);
 
@@ -125,7 +127,7 @@ ssovf_mbox_timeout_ticks(uint64_t ns, uint64_t *tmo_ticks)
 
 	memset(&ns2iter, 0, len);
 	ns2iter.wait_ns = ns;
-	ret = octeontx_ssovf_mbox_send(&hdr, &ns2iter, len, &ns2iter, len);
+	ret = octeontx_mbox_send(&hdr, &ns2iter, len, &ns2iter, len);
 	if (ret < 0 || (ret != len)) {
 		ssovf_log_err("Failed to get tmo ticks ns=%"PRId64"", ns);
 		return -EIO;
@@ -276,7 +278,7 @@ ssovf_port_setup(struct rte_eventdev *dev, uint8_t port_id,
 		return -ENOMEM;
 	}
 
-	ws->base = octeontx_ssovf_bar(OCTEONTX_SSO_HWS, port_id, 0);
+	ws->base = ssovf_bar(OCTEONTX_SSO_HWS, port_id, 0);
 	if (ws->base == NULL) {
 		rte_free(ws);
 		ssovf_log_err("Failed to get hws base addr port=%d", port_id);
@@ -290,7 +292,7 @@ ssovf_port_setup(struct rte_eventdev *dev, uint8_t port_id,
 	ws->port = port_id;
 
 	for (q = 0; q < edev->nb_event_queues; q++) {
-		ws->grps[q] = octeontx_ssovf_bar(OCTEONTX_SSO_GROUP, q, 2);
+		ws->grps[q] = ssovf_bar(OCTEONTX_SSO_GROUP, q, 2);
 		if (ws->grps[q] == NULL) {
 			rte_free(ws);
 			ssovf_log_err("Failed to get grp%d base addr", q);
@@ -529,15 +531,25 @@ ssovf_start(struct rte_eventdev *dev)
 
 	for (i = 0; i < edev->nb_event_queues; i++) {
 		/* Consume all the events through HWS0 */
-		ssows_flush_events(dev->data->ports[0], i);
+		ssows_flush_events(dev->data->ports[0], i, NULL, NULL);
 
-		base = octeontx_ssovf_bar(OCTEONTX_SSO_GROUP, i, 0);
+		base = ssovf_bar(OCTEONTX_SSO_GROUP, i, 0);
 		base += SSO_VHGRP_QCTL;
 		ssovf_write64(1, base); /* Enable SSO group */
 	}
 
 	ssovf_fastpath_fns_set(dev);
 	return 0;
+}
+
+static void
+ssows_handle_event(void *arg, struct rte_event event)
+{
+	struct rte_eventdev *dev = arg;
+
+	if (dev->dev_ops->dev_stop_flush != NULL)
+		dev->dev_ops->dev_stop_flush(dev->data->dev_id, event,
+					dev->data->dev_stop_flush_arg);
 }
 
 static void
@@ -557,9 +569,10 @@ ssovf_stop(struct rte_eventdev *dev)
 
 	for (i = 0; i < edev->nb_event_queues; i++) {
 		/* Consume all the events through HWS0 */
-		ssows_flush_events(dev->data->ports[0], i);
+		ssows_flush_events(dev->data->ports[0], i,
+				ssows_handle_event, dev);
 
-		base = octeontx_ssovf_bar(OCTEONTX_SSO_GROUP, i, 0);
+		base = ssovf_bar(OCTEONTX_SSO_GROUP, i, 0);
 		base += SSO_VHGRP_QCTL;
 		ssovf_write64(0, base); /* Disable SSO group */
 	}
@@ -590,8 +603,16 @@ ssovf_selftest(const char *key __rte_unused, const char *value,
 	return 0;
 }
 
+static int
+ssovf_timvf_caps_get(const struct rte_eventdev *dev, uint64_t flags,
+		uint32_t *caps, const struct rte_event_timer_adapter_ops **ops)
+{
+	return timvf_timer_adapter_caps_get(dev, flags, caps, ops,
+			timvf_enable_stats);
+}
+
 /* Initialize and register event driver with DPDK Application */
-static const struct rte_eventdev_ops ssovf_ops = {
+static struct rte_eventdev_ops ssovf_ops = {
 	.dev_infos_get    = ssovf_info_get,
 	.dev_configure    = ssovf_configure,
 	.queue_def_conf   = ssovf_queue_def_conf,
@@ -610,6 +631,8 @@ static const struct rte_eventdev_ops ssovf_ops = {
 	.eth_rx_adapter_start = ssovf_eth_rx_adapter_start,
 	.eth_rx_adapter_stop = ssovf_eth_rx_adapter_stop,
 
+	.timer_adapter_caps_get = ssovf_timvf_caps_get,
+
 	.dev_selftest = test_eventdev_octeontx,
 
 	.dump             = ssovf_dump,
@@ -621,7 +644,7 @@ static const struct rte_eventdev_ops ssovf_ops = {
 static int
 ssovf_vdev_probe(struct rte_vdev_device *vdev)
 {
-	struct octeontx_ssovf_info oinfo;
+	struct ssovf_info oinfo;
 	struct ssovf_mbox_dev_info info;
 	struct ssovf_evdev *edev;
 	struct rte_eventdev *eventdev;
@@ -633,6 +656,7 @@ ssovf_vdev_probe(struct rte_vdev_device *vdev)
 
 	static const char *const args[] = {
 		SSOVF_SELFTEST_ARG,
+		TIMVF_ENABLE_STATS_ARG,
 		NULL
 	};
 
@@ -660,6 +684,15 @@ ssovf_vdev_probe(struct rte_vdev_device *vdev)
 				rte_kvargs_free(kvlist);
 				return ret;
 			}
+
+			ret = rte_kvargs_process(kvlist,
+					TIMVF_ENABLE_STATS_ARG,
+					ssovf_selftest, &timvf_enable_stats);
+			if (ret != 0) {
+				ssovf_log_err("%s: Error in timvf stats", name);
+				rte_kvargs_free(kvlist);
+				return ret;
+			}
 		}
 
 		rte_kvargs_free(kvlist);
@@ -679,7 +712,7 @@ ssovf_vdev_probe(struct rte_vdev_device *vdev)
 		return 0;
 	}
 
-	ret = octeontx_ssovf_info(&oinfo);
+	ret = ssovf_info(&oinfo);
 	if (ret) {
 		ssovf_log_err("Failed to probe and validate ssovfs %d", ret);
 		goto error;

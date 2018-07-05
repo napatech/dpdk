@@ -9,6 +9,7 @@
 #include <stdbool.h>
 
 #include <rte_common.h>
+#include <rte_ethdev.h>
 #include <rte_eventdev.h>
 #include <rte_lcore.h>
 
@@ -31,12 +32,20 @@
 #define EVT_FWD_LATENCY          ("fwd_latency")
 #define EVT_QUEUE_PRIORITY       ("queue_priority")
 #define EVT_PROD_ETHDEV          ("prod_type_ethdev")
+#define EVT_PROD_TIMERDEV        ("prod_type_timerdev")
+#define EVT_PROD_TIMERDEV_BURST  ("prod_type_timerdev_burst")
+#define EVT_NB_TIMERS            ("nb_timers")
+#define EVT_NB_TIMER_ADPTRS      ("nb_timer_adptrs")
+#define EVT_TIMER_TICK_NSEC      ("timer_tick_nsec")
+#define EVT_MAX_TMO_NSEC         ("max_tmo_nsec")
+#define EVT_EXPIRY_NSEC          ("expiry_nsec")
 #define EVT_HELP                 ("help")
 
 enum evt_prod_type {
 	EVT_PROD_TYPE_NONE,
 	EVT_PROD_TYPE_SYNT,          /* Producer type Synthetic i.e. CPU. */
 	EVT_PROD_TYPE_ETH_RX_ADPTR,  /* Producer type Eth Rx Adapter. */
+	EVT_PROD_TYPE_EVENT_TIMER_ADPTR,  /* Producer type Timer Adapter. */
 	EVT_PROD_TYPE_MAX,
 };
 
@@ -52,11 +61,19 @@ struct evt_options {
 	int nb_stages;
 	int verbose_level;
 	uint64_t nb_pkts;
+	uint8_t nb_timer_adptrs;
+	uint64_t nb_timers;
+	uint64_t timer_tick_nsec;
+	uint64_t optm_timer_tick_nsec;
+	uint64_t max_tmo_nsec;
+	uint64_t expiry_nsec;
 	uint16_t wkr_deq_dep;
 	uint8_t dev_id;
 	uint32_t fwd_latency:1;
 	uint32_t q_priority:1;
 	enum evt_prod_type prod_type;
+	uint8_t timdev_use_burst;
+	uint8_t timdev_cnt;
 };
 
 void evt_options_default(struct evt_options *opt);
@@ -262,6 +279,24 @@ evt_dump_producer_type(struct evt_options *opt)
 	case EVT_PROD_TYPE_ETH_RX_ADPTR:
 		snprintf(name, EVT_PROD_MAX_NAME_LEN,
 				"Ethdev Rx Adapter producers");
+		evt_dump("nb_ethdev", "%d", rte_eth_dev_count_avail());
+		break;
+	case EVT_PROD_TYPE_EVENT_TIMER_ADPTR:
+		if (opt->timdev_use_burst)
+			snprintf(name, EVT_PROD_MAX_NAME_LEN,
+				"Event timer adapter burst mode producer");
+		else
+			snprintf(name, EVT_PROD_MAX_NAME_LEN,
+				"Event timer adapter producer");
+		evt_dump("nb_timer_adapters", "%d", opt->nb_timer_adptrs);
+		evt_dump("max_tmo_nsec", "%"PRIu64"", opt->max_tmo_nsec);
+		evt_dump("expiry_nsec", "%"PRIu64"", opt->expiry_nsec);
+		if (opt->optm_timer_tick_nsec)
+			evt_dump("optm_timer_tick_nsec", "%"PRIu64"",
+					opt->optm_timer_tick_nsec);
+		else
+			evt_dump("timer_tick_nsec", "%"PRIu64"",
+					opt->timer_tick_nsec);
 		break;
 	}
 	evt_dump("prod_type", "%s", name);

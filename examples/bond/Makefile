@@ -25,6 +25,8 @@ CFLAGS += -O3 $(shell pkg-config --cflags libdpdk)
 LDFLAGS_SHARED = $(shell pkg-config --libs libdpdk)
 LDFLAGS_STATIC = -Wl,-Bstatic $(shell pkg-config --static --libs libdpdk)
 
+CFLAGS += -DALLOW_EXPERIMENTAL_API
+
 build/$(APP)-shared: $(SRCS-y) Makefile $(PC_FILE) | build
 	$(CC) $(CFLAGS) $(SRCS-y) -o $@ $(LDFLAGS) $(LDFLAGS_SHARED)
 
@@ -59,6 +61,7 @@ CFLAGS_main.o += -Wno-return-type
 endif
 
 CFLAGS += -O3
+CFLAGS += -DALLOW_EXPERIMENTAL_API
 
 ifeq ($(CONFIG_RTE_BUILD_SHARED_LIB),y)
 LDLIBS += -lrte_pmd_bond

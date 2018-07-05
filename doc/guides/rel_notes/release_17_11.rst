@@ -56,7 +56,7 @@ New Features
 * **Added a new driver for Marvell Armada 7k/8k devices.**
 
   Added the new ``mrvl`` net driver for Marvell Armada 7k/8k devices. See the
-  :doc:`../nics/mrvl` NIC guide for more details on this new driver.
+  :doc:`../nics/mvpp2` NIC guide for more details on this new driver.
 
 * **Updated mlx4 driver.**
 
@@ -184,7 +184,7 @@ New Features
 
   A new crypto PMD has been added, which provides several ciphering and hashing
   algorithms. All cryptography operations use the MUSDK library crypto API.
-  See the :doc:`../cryptodevs/mrvl` document for more details.
+  See the :doc:`../cryptodevs/mvsam` document for more details.
 
 * **Add new benchmarking mode to dpdk-test-crypto-perf application.**
 

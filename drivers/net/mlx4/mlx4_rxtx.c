@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2017 6WIND S.A.
- * Copyright 2017 Mellanox
+ * Copyright 2017 Mellanox Technologies, Ltd
  */
 
 /**
@@ -263,7 +263,7 @@ mlx4_txq_stamp_freed_wqe(struct mlx4_sq *sq, volatile uint32_t *start,
 		} while (start != (volatile uint32_t *)sq->eob);
 		start = (volatile uint32_t *)sq->buf;
 		/* Flip invalid stamping ownership. */
-		stamp ^= RTE_BE32(0x1 << MLX4_SQ_OWNER_BIT);
+		stamp ^= RTE_BE32(1u << MLX4_SQ_OWNER_BIT);
 		sq->stamp = stamp;
 		if (start == end)
 			return size;
@@ -344,24 +344,6 @@ mlx4_txq_complete(struct txq *txq, const unsigned int elts_m,
 }
 
 /**
- * Get memory pool (MP) from mbuf. If mbuf is indirect, the pool from which
- * the cloned mbuf is allocated is returned instead.
- *
- * @param buf
- *   Pointer to mbuf.
- *
- * @return
- *   Memory pool where data is located for given mbuf.
- */
-static struct rte_mempool *
-mlx4_txq_mb2mp(struct rte_mbuf *buf)
-{
-	if (unlikely(RTE_MBUF_INDIRECT(buf)))
-		return rte_mbuf_from_indirect(buf)->pool;
-	return buf->pool;
-}
-
-/**
  * Write Tx data segment to the SQ.
  *
  * @param dseg
@@ -378,7 +360,7 @@ mlx4_fill_tx_data_seg(volatile struct mlx4_wqe_data_seg *dseg,
 		       uint32_t lkey, uintptr_t addr, rte_be32_t  byte_count)
 {
 	dseg->addr = rte_cpu_to_be_64(addr);
-	dseg->lkey = rte_cpu_to_be_32(lkey);
+	dseg->lkey = lkey;
 #if RTE_CACHE_LINE_SIZE < 64
 	/*
 	 * Need a barrier here before writing the byte_count
@@ -437,7 +419,7 @@ mlx4_tx_burst_segs(struct rte_mbuf *buf, struct txq *txq,
 	goto txbb_tail_segs;
 txbb_head_seg:
 	/* Memory region key (big endian) for this memory pool. */
-	lkey = mlx4_txq_mp2mr(txq, mlx4_txq_mb2mp(sbuf));
+	lkey = mlx4_tx_mb2mr(txq, sbuf);
 	if (unlikely(lkey == (uint32_t)-1)) {
 		DEBUG("%p: unable to get MP <-> MR association",
 		      (void *)txq);
@@ -449,7 +431,7 @@ txbb_head_seg:
 		dseg = (volatile struct mlx4_wqe_data_seg *)
 			sq->buf;
 	dseg->addr = rte_cpu_to_be_64(rte_pktmbuf_mtod(sbuf, uintptr_t));
-	dseg->lkey = rte_cpu_to_be_32(lkey);
+	dseg->lkey = lkey;
 	/*
 	 * This data segment starts at the beginning of a new
 	 * TXBB, so we need to postpone its byte_count writing
@@ -469,7 +451,7 @@ txbb_tail_segs:
 	/* Jump to default if there are more than two segments remaining. */
 	switch (nb_segs) {
 	default:
-		lkey = mlx4_txq_mp2mr(txq, mlx4_txq_mb2mp(sbuf));
+		lkey = mlx4_tx_mb2mr(txq, sbuf);
 		if (unlikely(lkey == (uint32_t)-1)) {
 			DEBUG("%p: unable to get MP <-> MR association",
 			      (void *)txq);
@@ -485,7 +467,7 @@ txbb_tail_segs:
 		nb_segs--;
 		/* fallthrough */
 	case 2:
-		lkey = mlx4_txq_mp2mr(txq, mlx4_txq_mb2mp(sbuf));
+		lkey = mlx4_tx_mb2mr(txq, sbuf);
 		if (unlikely(lkey == (uint32_t)-1)) {
 			DEBUG("%p: unable to get MP <-> MR association",
 			      (void *)txq);
@@ -501,7 +483,7 @@ txbb_tail_segs:
 		nb_segs--;
 		/* fallthrough */
 	case 1:
-		lkey = mlx4_txq_mp2mr(txq, mlx4_txq_mb2mp(sbuf));
+		lkey = mlx4_tx_mb2mr(txq, sbuf);
 		if (unlikely(lkey == (uint32_t)-1)) {
 			DEBUG("%p: unable to get MP <-> MR association",
 			      (void *)txq);
@@ -611,7 +593,7 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 				elt->buf = NULL;
 				break;
 			}
-			lkey = mlx4_txq_mp2mr(txq, mlx4_txq_mb2mp(buf));
+			lkey = mlx4_tx_mb2mr(txq, buf);
 			if (unlikely(lkey == (uint32_t)-1)) {
 				/* MR does not exist. */
 				DEBUG("%p: unable to get MP <-> MR association",
@@ -639,7 +621,7 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			ctrl_next = (volatile struct mlx4_wqe_ctrl_seg *)
 				((volatile uint8_t *)ctrl_next - sq->size);
 			/* Flip HW valid ownership. */
-			sq->owner_opcode ^= 0x1 << MLX4_SQ_OWNER_BIT;
+			sq->owner_opcode ^= 1u << MLX4_SQ_OWNER_BIT;
 		}
 		/*
 		 * For raw Ethernet, the SOLICIT flag is used to indicate
@@ -934,11 +916,14 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 				goto skip;
 			}
 			pkt = seg;
+			assert(len >= (rxq->crc_present << 2));
 			/* Update packet information. */
 			pkt->packet_type =
 				rxq_cq_to_pkt_type(cqe, rxq->l2tun_offload);
 			pkt->ol_flags = PKT_RX_RSS_HASH;
 			pkt->hash.rss = cqe->immed_rss_invalid;
+			if (rxq->crc_present)
+				len -= ETHER_CRC_LEN;
 			pkt->pkt_len = len;
 			if (rxq->csum | rxq->csum_l2tun) {
 				uint32_t flags =
@@ -963,6 +948,9 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		 * changes.
 		 */
 		scat->addr = rte_cpu_to_be_64(rte_pktmbuf_mtod(rep, uintptr_t));
+		/* If there's only one MR, no need to replace LKey in WQE. */
+		if (unlikely(mlx4_mr_btree_len(&rxq->mr_ctrl.cache_bh) > 1))
+			scat->lkey = mlx4_rx_mb2mr(rxq, rep);
 		if (len > seg->data_len) {
 			len -= seg->data_len;
 			++pkt->nb_segs;

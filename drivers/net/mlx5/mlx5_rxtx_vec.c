@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2017 6WIND S.A.
- * Copyright 2017 Mellanox.
+ * Copyright 2017 Mellanox Technologies, Ltd
  */
 
 #include <assert.h>
@@ -42,8 +42,6 @@
 /**
  * Count the number of packets having same ol_flags and calculate cs_flags.
  *
- * @param txq
- *   Pointer to TX queue structure.
  * @param pkts
  *   Pointer to array of packets.
  * @param pkts_n
@@ -55,8 +53,7 @@
  *   Number of packets having same ol_flags.
  */
 static inline unsigned int
-txq_calc_offload(struct mlx5_txq_data *txq, struct rte_mbuf **pkts,
-		 uint16_t pkts_n, uint8_t *cs_flags)
+txq_calc_offload(struct rte_mbuf **pkts, uint16_t pkts_n, uint8_t *cs_flags)
 {
 	unsigned int pos;
 	const uint64_t ol_mask =
@@ -70,7 +67,7 @@ txq_calc_offload(struct mlx5_txq_data *txq, struct rte_mbuf **pkts,
 	for (pos = 1; pos < pkts_n; ++pos)
 		if ((pkts[pos]->ol_flags ^ pkts[0]->ol_flags) & ol_mask)
 			break;
-	*cs_flags = txq_ol_cksum_to_cs(txq, pkts[0]);
+	*cs_flags = txq_ol_cksum_to_cs(pkts[0]);
 	return pos;
 }
 
@@ -141,7 +138,7 @@ mlx5_tx_burst_vec(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		if (txq->offloads & DEV_TX_OFFLOAD_MULTI_SEGS)
 			n = txq_count_contig_single_seg(&pkts[nb_tx], n);
 		if (txq->offloads & MLX5_VEC_TX_CKSUM_OFFLOAD_CAP)
-			n = txq_calc_offload(txq, &pkts[nb_tx], n, &cs_flags);
+			n = txq_calc_offload(&pkts[nb_tx], n, &cs_flags);
 		ret = txq_burst_v(txq, &pkts[nb_tx], n, cs_flags);
 		nb_tx += ret;
 		if (!ret)
@@ -223,17 +220,14 @@ mlx5_rx_burst_vec(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 /**
  * Check Tx queue flags are set for raw vectorized Tx.
  *
- * @param priv
- *   Pointer to private structure.
  * @param dev
- *   Pointer to rte_eth_dev structure.
+ *   Pointer to Ethernet device.
  *
  * @return
  *   1 if supported, negative errno value if not.
  */
 int __attribute__((cold))
-priv_check_raw_vec_tx_support(__rte_unused struct priv *priv,
-			      struct rte_eth_dev *dev)
+mlx5_check_raw_vec_tx_support(struct rte_eth_dev *dev)
 {
 	uint64_t offloads = dev->data->dev_conf.txmode.offloads;
 
@@ -246,17 +240,16 @@ priv_check_raw_vec_tx_support(__rte_unused struct priv *priv,
 /**
  * Check a device can support vectorized TX.
  *
- * @param priv
- *   Pointer to private structure.
  * @param dev
- *   Pointer to rte_eth_dev structure.
+ *   Pointer to Ethernet device.
  *
  * @return
  *   1 if supported, negative errno value if not.
  */
 int __attribute__((cold))
-priv_check_vec_tx_support(struct priv *priv, struct rte_eth_dev *dev)
+mlx5_check_vec_tx_support(struct rte_eth_dev *dev)
 {
+	struct priv *priv = dev->data->dev_private;
 	uint64_t offloads = dev->data->dev_conf.txmode.offloads;
 
 	if (!priv->config.tx_vec_en ||
@@ -277,11 +270,13 @@ priv_check_vec_tx_support(struct priv *priv, struct rte_eth_dev *dev)
  *   1 if supported, negative errno value if not.
  */
 int __attribute__((cold))
-rxq_check_vec_support(struct mlx5_rxq_data *rxq)
+mlx5_rxq_check_vec_support(struct mlx5_rxq_data *rxq)
 {
 	struct mlx5_rxq_ctrl *ctrl =
 		container_of(rxq, struct mlx5_rxq_ctrl, rxq);
 
+	if (mlx5_mprq_enabled(ETH_DEV(ctrl->priv)))
+		return -ENOTSUP;
 	if (!ctrl->priv->config.rx_vec_en || rxq->sges_n != 0)
 		return -ENOTSUP;
 	return 1;
@@ -290,18 +285,21 @@ rxq_check_vec_support(struct mlx5_rxq_data *rxq)
 /**
  * Check a device can support vectorized RX.
  *
- * @param priv
- *   Pointer to private structure.
+ * @param dev
+ *   Pointer to Ethernet device.
  *
  * @return
  *   1 if supported, negative errno value if not.
  */
 int __attribute__((cold))
-priv_check_vec_rx_support(struct priv *priv)
+mlx5_check_vec_rx_support(struct rte_eth_dev *dev)
 {
+	struct priv *priv = dev->data->dev_private;
 	uint16_t i;
 
 	if (!priv->config.rx_vec_en)
+		return -ENOTSUP;
+	if (mlx5_mprq_enabled(dev))
 		return -ENOTSUP;
 	/* All the configured queues should support. */
 	for (i = 0; i < priv->rxqs_n; ++i) {
@@ -309,7 +307,7 @@ priv_check_vec_rx_support(struct priv *priv)
 
 		if (!rxq)
 			continue;
-		if (rxq_check_vec_support(rxq) < 0)
+		if (mlx5_rxq_check_vec_support(rxq) < 0)
 			break;
 	}
 	if (i != priv->rxqs_n)

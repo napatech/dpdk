@@ -21,13 +21,18 @@
 /****** library defines ********/
 
 /* EAL defines */
-#define RTE_MAX_MEMSEG 512
+#define RTE_MAX_MEMSEG_LISTS 128
+#define RTE_MAX_MEMSEG_PER_LIST 8192
+#define RTE_MAX_MEM_MB_PER_LIST 32768
+#define RTE_MAX_MEMSEG_PER_TYPE 32768
+#define RTE_MAX_MEM_MB_PER_TYPE 65536
+#define RTE_MAX_MEM_MB 524288
 #define RTE_MAX_MEMZONE 2560
 #define RTE_MAX_TAILQ 32
-#define RTE_LOG_LEVEL RTE_LOG_INFO
 #define RTE_LOG_DP_LEVEL RTE_LOG_INFO
 #define RTE_BACKTRACE 1
 #define RTE_EAL_VFIO 1
+#define RTE_MAX_VFIO_CONTAINERS 64
 
 /* bsd module defines */
 #define RTE_CONTIGMEM_MAX_NUM_BUFS 64
@@ -52,9 +57,17 @@
 #define RTE_CRYPTO_MAX_DEVS 64
 #define RTE_CRYPTODEV_NAME_LEN 64
 
+/* compressdev defines */
+#define RTE_COMPRESS_MAX_DEVS 64
+
 /* eventdev defines */
 #define RTE_EVENT_MAX_DEVS 16
 #define RTE_EVENT_MAX_QUEUES_PER_DEV 64
+#define RTE_EVENT_TIMER_ADAPTER_NUM_MAX 32
+#define RTE_EVENT_CRYPTO_ADAPTER_MAX_INSTANCE 32
+
+/* rawdev defines */
+#define RTE_RAWDEV_MAX_DEVS 10
 
 /* ip_fragmentation defines */
 #define RTE_LIBRTE_IP_FRAG_MAX_FRAG 4
@@ -74,9 +87,23 @@
 
 /*
  * Number of sessions to create in the session memory pool
- * on a single QuickAssist device.
+ * on a single instance of crypto HW device.
  */
+/* QuickAssist device */
 #define RTE_QAT_PMD_MAX_NB_SESSIONS 2048
+
+/* virtio crypto defines */
+#define RTE_VIRTIO_CRYPTO_PMD_MAX_NB_SESSIONS 1024
+#define RTE_MAX_VIRTIO_CRYPTO 32
+
+/* DPAA2_SEC */
+#define RTE_DPAA2_SEC_PMD_MAX_NB_SESSIONS 2048
+
+/* DPAA_SEC */
+#define RTE_DPAA_SEC_PMD_MAX_NB_SESSIONS 2048
+
+/* DPAA SEC max cryptodev devices*/
+#define RTE_LIBRTE_DPAA_MAX_CRYPTODEV	4
 
 /* fm10k defines */
 #define RTE_LIBRTE_FM10K_RX_OLFLAGS_ENABLE 1

@@ -32,7 +32,7 @@ extern "C" {
 /**
  * Minor version/month number i.e. the mm in yy.mm.z
  */
-#define RTE_VER_MONTH 02
+#define RTE_VER_MONTH 05
 
 /**
  * Patch level number i.e. the z in yy.mm.z
@@ -59,7 +59,7 @@ extern "C" {
 /**
 * Extra Napatech minor version numbers
 */
-#define RTE_NT_MINOR_VER 7
+#define RTE_NT_MINOR_VER 8
 
 /**
 * Extra Napatech string to be appended to version number
@@ -110,7 +110,7 @@ rte_version(void)
 
 	if (strlen(RTE_NT_VER_SUFFIX) == 0) {
 		snprintf(&version[strlen(version)], sizeof(version), "_%d.%d", RTE_NT_MAJOR_VER, RTE_NT_MINOR_VER);
-	} 
+	}
 	else {
 		snprintf(&version[strlen(version)], sizeof(version), "_%d.%d-%s", RTE_NT_MAJOR_VER, RTE_NT_MINOR_VER, RTE_NT_VER_SUFFIX);
 	}

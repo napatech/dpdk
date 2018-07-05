@@ -40,13 +40,13 @@ The lib directory contains::
     +-- librte_cmdline      # Command line interface helper
     +-- librte_distributor  # Packet distributor
     +-- librte_eal          # Environment abstraction layer
-    +-- librte_ether        # Generic interface to poll mode driver
+    +-- librte_ethdev       # Generic interface to poll mode driver
     +-- librte_hash         # Hash library
     +-- librte_ip_frag      # IP fragmentation library
     +-- librte_kni          # Kernel NIC interface
     +-- librte_kvargs       # Argument parsing library
     +-- librte_lpm          # Longest prefix match library
-    +-- librte_mbuf         # Packet and control mbuf manipulation
+    +-- librte_mbuf         # Packet buffer manipulation
     +-- librte_mempool      # Memory pool manager (fixed sized objects)
     +-- librte_meter        # QoS metering library
     +-- librte_net          # Various IP-related headers

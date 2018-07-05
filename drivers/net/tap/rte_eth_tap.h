@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2017 6WIND S.A.
- * Copyright 2017 Mellanox.
+ * Copyright 2017 Mellanox Technologies, Ltd
  */
 
 #ifndef _RTE_ETH_TAP_H_
@@ -15,12 +15,20 @@
 
 #include <rte_ethdev_driver.h>
 #include <rte_ether.h>
+#include "tap_log.h"
 
 #ifdef IFF_MULTI_QUEUE
 #define RTE_PMD_TAP_MAX_QUEUES	TAP_MAX_QUEUES
 #else
 #define RTE_PMD_TAP_MAX_QUEUES	1
 #endif
+
+enum rte_tuntap_type {
+	ETH_TUNTAP_TYPE_UNKNOWN,
+	ETH_TUNTAP_TYPE_TUN,
+	ETH_TUNTAP_TYPE_TAP,
+	ETH_TUNTAP_TYPE_MAX,
+};
 
 struct pkt_stats {
 	uint64_t opackets;              /* Number of output packets */
@@ -47,6 +55,7 @@ struct rx_queue {
 
 struct tx_queue {
 	int fd;
+	int type;                       /* Type field - TUN|TAP */
 	uint16_t *mtu;                  /* Pointer to MTU from dev_data */
 	uint16_t csum:1;                /* Enable checksum offloading */
 	struct pkt_stats stats;         /* Stats for this TX queue */
@@ -56,6 +65,7 @@ struct pmd_internals {
 	struct rte_eth_dev *dev;          /* Ethernet device. */
 	char remote_iface[RTE_ETH_NAME_MAX_LEN]; /* Remote netdevice name */
 	char name[RTE_ETH_NAME_MAX_LEN];  /* Internal Tap device name */
+	int type;                         /* Type field - TUN|TAP */
 	struct ether_addr eth_addr;       /* Mac address of the device port */
 	struct ifreq remote_initial_flags;   /* Remote netdevice flags on init */
 	int remote_if_index;              /* remote netdevice IF_INDEX */
@@ -76,6 +86,7 @@ struct pmd_internals {
 	struct rx_queue rxq[RTE_PMD_TAP_MAX_QUEUES]; /* List of RX queues */
 	struct tx_queue txq[RTE_PMD_TAP_MAX_QUEUES]; /* List of TX queues */
 	struct rte_intr_handle intr_handle;          /* LSC interrupt handle. */
+	int ka_fd;                        /* keep-alive file descriptor */
 };
 
 /* tap_intr.c */

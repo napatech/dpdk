@@ -30,10 +30,6 @@ extra_flags += [
 	'-Wbad-function-cast'
 ]
 
-# Suppress ICC false positive warning on 'bulk' may be used before its
-# value is set
-extra_flags += '-wd3656'
-
 foreach flag: extra_flags
 	if cc.has_argument(flag)
 		cflags += flag
@@ -58,6 +54,7 @@ sources = files(
 	'sfc_flow.c',
 	'sfc_dp.c',
 	'sfc_ef10_rx.c',
+	'sfc_ef10_essb_rx.c',
 	'sfc_ef10_tx.c'
 )
 

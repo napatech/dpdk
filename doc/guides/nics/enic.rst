@@ -114,10 +114,23 @@ Configuration information
 
   - **Interrupts**
 
-    Only one interrupt per vNIC interface should be configured in the UCS
+    At least one interrupt per vNIC interface should be configured in the UCS
     manager regardless of the number receive/transmit queues. The ENIC PMD
     uses this interrupt to get information about link status and errors
     in the fast path.
+
+    In addition to the interrupt for link status and errors, when using Rx queue
+    interrupts, increase the number of configured interrupts so that there is at
+    least one interrupt for each Rx queue. For example, if the app uses 3 Rx
+    queues and wants to use per-queue interrupts, configure 4 (3 + 1) interrupts.
+
+  - **Receive Side Scaling**
+
+    In order to fully utilize RSS in DPDK, enable all RSS related settings in
+    CIMC or UCSM. These include the following items listed under
+    Receive Side Scaling:
+    TCP, IPv4, TCP-IPv4, IPv6, TCP-IPv6, IPv6 Extension, TCP-IPv6 Extension.
+
 
 .. _enic-flow-director:
 
@@ -140,20 +153,21 @@ perfect filtering of the 5-tuple with no masking of fields supported.
 SR-IOV mode utilization
 -----------------------
 
-UCS blade servers configured with dynamic vNIC connection policies in UCS
-manager are capable of supporting assigned devices on virtual machines (VMs)
-through a KVM hypervisor. Assigned devices, also known as 'passthrough'
-devices, are SR-IOV virtual functions (VFs) on the host which are exposed
-to VM instances.
+UCS blade servers configured with dynamic vNIC connection policies in UCSM
+are capable of supporting SR-IOV. SR-IOV virtual functions (VFs) are
+specialized vNICs, distinct from regular Ethernet vNICs. These VFs can be
+directly assigned to virtual machines (VMs) as 'passthrough' devices.
 
-The Cisco Virtual Machine Fabric Extender (VM-FEX) gives the VM a dedicated
+In UCS, SR-IOV VFs require the use of the Cisco Virtual Machine Fabric Extender
+(VM-FEX), which gives the VM a dedicated
 interface on the Fabric Interconnect (FI). Layer 2 switching is done at
 the FI. This may eliminate the requirement for software switching on the
 host to route intra-host VM traffic.
 
 Please refer to `Creating a Dynamic vNIC Connection Policy
 <http://www.cisco.com/c/en/us/td/docs/unified_computing/ucs/sw/vm_fex/vmware/gui/config_guide/b_GUI_VMware_VM-FEX_UCSM_Configuration_Guide/b_GUI_VMware_VM-FEX_UCSM_Configuration_Guide_chapter_010.html#task_433E01651F69464783A68E66DA8A47A5>`_
-for information on configuring SR-IOV adapter policies using UCS manager.
+for information on configuring SR-IOV adapter policies and port profiles
+using UCSM.
 
 Once the policies are in place and the host OS is rebooted, VFs should be
 visible on the host, E.g.:
@@ -170,30 +184,37 @@ visible on the host, E.g.:
      0d:00.6 Ethernet controller: Cisco Systems Inc VIC SR-IOV VF (rev a2)
      0d:00.7 Ethernet controller: Cisco Systems Inc VIC SR-IOV VF (rev a2)
 
-Enable Intel IOMMU on the host and install KVM and libvirt. A VM instance should
-be created with an assigned device. When using libvirt, this configuration can
-be done within the domain (i.e. VM) config file. For example this entry maps
-host VF 0d:00:01 into the VM.
+Enable Intel IOMMU on the host and install KVM and libvirt, and reboot again as
+required. Then, using libvirt, create a VM instance with an assigned device.
+Below is an example ``interface`` block (part of the domain configuration XML)
+that adds the host VF 0d:00:01 to the VM. ``profileid='pp-vlan-25'`` indicates
+the port profile that has been configured in UCSM.
 
 .. code-block:: console
 
     <interface type='hostdev' managed='yes'>
       <mac address='52:54:00:ac:ff:b6'/>
+      <driver name='vfio'/>
       <source>
         <address type='pci' domain='0x0000' bus='0x0d' slot='0x00' function='0x1'/>
       </source>
+      <virtualport type='802.1Qbh'>
+        <parameters profileid='pp-vlan-25'/>
+      </virtualport>
+    </interface>
+
 
 Alternatively, the configuration can be done in a separate file using the
 ``network`` keyword. These methods are described in the libvirt documentation for
 `Network XML format <https://libvirt.org/formatnetwork.html>`_.
 
-When the VM instance is started, the ENIC KVM driver will bind the host VF to
+When the VM instance is started, libvirt will bind the host VF to
 vfio, complete provisioning on the FI and bring up the link.
 
 .. note::
 
     It is not possible to use a VF directly from the host because it is not
-    fully provisioned until the hypervisor brings up the VM that it is assigned
+    fully provisioned until libvirt brings up the VM that it is assigned
     to.
 
 In the VM instance, the VF will now be visible. E.g., here the VF 00:04.0 is
@@ -207,8 +228,26 @@ seen on the VM instance and should be available for binding to a DPDK.
 Follow the normal DPDK install procedure, binding the VF to either ``igb_uio``
 or ``vfio`` in non-IOMMU mode.
 
+In the VM, the kernel enic driver may be automatically bound to the VF during
+boot. Unbinding it currently hangs due to a known issue with the driver. To
+work around the issue, blacklist the enic module as follows.
 Please see :ref:`Limitations <enic_limitations>` for limitations in
 the use of SR-IOV.
+
+.. code-block:: console
+
+     # cat /etc/modprobe.d/enic.conf
+     blacklist enic
+
+     # dracut --force
+
+.. note::
+
+    Passthrough does not require SR-IOV. If VM-FEX is not desired, the user
+    may create as many regular vNICs as necessary and assign them to VMs as
+    passthrough devices. Since these vNICs are not SR-IOV VFs, using them as
+    passthrough devices do not require libvirt, port profiles, and VM-FEX.
+
 
 .. _enic-genic-flow-api:
 
@@ -227,7 +266,7 @@ Generic Flow API is supported. The baseline support is:
   - Actions: queue and void
   - Selectors: 'is'
 
-- **1300 series VICS with advanced filters disabled**
+- **1300 and later series VICS with advanced filters disabled**
 
   With advanced filters disabled, an IPv4 or IPv6 item must be specified
   in the pattern.
@@ -238,16 +277,64 @@ Generic Flow API is supported. The baseline support is:
   - Selectors: 'is', 'spec' and 'mask'. 'last' is not supported
   - In total, up to 64 bytes of mask is allowed across all headers
 
-- **1300 series VICS with advanced filters enabled**
+- **1300 and later series VICS with advanced filters enabled**
 
   - Attributes: ingress
   - Items: eth, ipv4, ipv6, udp, tcp, vxlan, inner eth, ipv4, ipv6, udp, tcp
-  - Actions: queue, mark, flag and void
+  - Actions: queue, mark, drop, flag and void
   - Selectors: 'is', 'spec' and 'mask'. 'last' is not supported
   - In total, up to 64 bytes of mask is allowed across all headers
 
 More features may be added in future firmware and new versions of the VIC.
 Please refer to the release notes.
+
+.. _overlay_offload:
+
+Overlay Offload
+---------------
+
+Recent hardware models support overlay offload. When enabled, the NIC performs
+the following operations for VXLAN, NVGRE, and GENEVE packets. In all cases,
+inner and outer packets can be IPv4 or IPv6.
+
+- TSO for VXLAN and GENEVE packets.
+
+  Hardware supports NVGRE TSO, but DPDK currently has no NVGRE offload flags.
+
+- Tx checksum offloads.
+
+  The NIC fills in IPv4/UDP/TCP checksums for both inner and outer packets.
+
+- Rx checksum offloads.
+
+  The NIC validates IPv4/UDP/TCP checksums of both inner and outer packets.
+  Good checksum flags (e.g. ``PKT_RX_L4_CKSUM_GOOD``) indicate that the inner
+  packet has the correct checksum, and if applicable, the outer packet also
+  has the correct checksum. Bad checksum flags (e.g. ``PKT_RX_L4_CKSUM_BAD``)
+  indicate that the inner and/or outer packets have invalid checksum values.
+
+- Inner Rx packet type classification
+
+  PMD sets inner L3/L4 packet types (e.g. ``RTE_PTYPE_INNER_L4_TCP``), and
+  ``RTE_PTYPE_TUNNEL_GRENAT`` to indicate that the packet is tunneled.
+  PMD does not set L3/L4 packet types for outer packets.
+
+- Inner RSS
+
+  RSS hash calculation, therefore queue selection, is done on inner packets.
+
+In order to enable overlay offload, the 'Enable VXLAN' box should be checked
+via CIMC or UCSM followed by a reboot of the server. When PMD successfully
+enables overlay offload, it prints the following message on the console.
+
+.. code-block:: console
+
+    Overlay offload is enabled
+
+By default, PMD enables overlay offload if hardware supports it. To disable
+it, set ``devargs`` parameter ``disable-overlay=1``. For example::
+
+    -w 12:00.0,disable-overlay=1
 
 .. _enic_limitations:
 
@@ -305,6 +392,20 @@ Limitations
     were added. Since there currently is no grouping or priority support,
     'catch-all' filters should be added last.
 
+- **Statistics**
+
+  - ``rx_good_bytes`` (ibytes) always includes VLAN header (4B) and CRC bytes (4B).
+    This behavior applies to 1300 and older series VIC adapters.
+  - When the NIC drops a packet because the Rx queue has no free buffers,
+    ``rx_good_bytes`` still increments by 4B if the packet is not VLAN tagged or
+    VLAN stripping is disabled, or by 8B if the packet is VLAN tagged and stripping
+    is enabled. This behavior applies to 1300 and older series VIC adapters.
+
+- **RSS Hashing**
+
+  - Hardware enables and disables UDP and TCP RSS hashing together. The driver
+    cannot control UDP and TCP hashing individually.
+
 How to build the suite
 ----------------------
 
@@ -322,17 +423,8 @@ Supported Cisco VIC adapters
 
 ENIC PMD supports all recent generations of Cisco VIC adapters including:
 
-- VIC 1280
-- VIC 1240
-- VIC 1225
-- VIC 1285
-- VIC 1225T
-- VIC 1227
-- VIC 1227T
-- VIC 1380
-- VIC 1340
-- VIC 1385
-- VIC 1387
+- VIC 1200 series
+- VIC 1300 series
 
 Supported Operating Systems
 ---------------------------
@@ -356,10 +448,16 @@ Supported features
 - VLAN filtering (supported via UCSM/CIMC only)
 - Execution of application by unprivileged system users
 - IPV4, IPV6 and TCP RSS hashing
+- UDP RSS hashing (support for upcoming adapters)
 - Scattered Rx
 - MTU update
 - SR-IOV on UCS managed servers connected to Fabric Interconnects
 - Flow API
+- Overlay offload
+
+  - Rx/Tx checksum offloads for VXLAN, NVGRE, GENEVE
+  - TSO for VXLAN and GENEVE packets
+  - Inner RSS
 
 Known bugs and unsupported features in this release
 ---------------------------------------------------
@@ -369,8 +467,8 @@ Known bugs and unsupported features in this release
 - VLAN based flow direction
 - Non-IPV4 flow direction
 - Setting of extended VLAN
-- UDP RSS hashing
 - MTU update only works if Scattered Rx mode is disabled
+- Maximum receive packet length is ignored if Scattered Rx mode is used
 
 Prerequisites
 -------------

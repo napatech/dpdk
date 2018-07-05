@@ -67,6 +67,12 @@ static const struct rte_eth_dev_info pmd_dev_info = {
 	},
 };
 
+static int pmd_softnic_logtype;
+
+#define PMD_LOG(level, fmt, args...) \
+	rte_log(RTE_LOG_ ## level, pmd_softnic_logtype, \
+		"%s(): " fmt "\n", __func__, ##args)
+
 static void
 pmd_dev_infos_get(struct rte_eth_dev *dev __rte_unused,
 	struct rte_eth_dev_info *dev_info)
@@ -522,12 +528,14 @@ pmd_ethdev_register(struct rte_vdev_device *vdev,
 	soft_dev->data->dev_private = dev_private;
 	soft_dev->data->dev_link.link_speed = hard_speed;
 	soft_dev->data->dev_link.link_duplex = ETH_LINK_FULL_DUPLEX;
-	soft_dev->data->dev_link.link_autoneg = ETH_LINK_AUTONEG;
+	soft_dev->data->dev_link.link_autoneg = ETH_LINK_FIXED;
 	soft_dev->data->dev_link.link_status = ETH_LINK_DOWN;
 	soft_dev->data->mac_addrs = &eth_addr;
 	soft_dev->data->promiscuous = 1;
 	soft_dev->data->kdrv = RTE_KDRV_NONE;
 	soft_dev->data->numa_node = numa_node;
+
+	rte_eth_dev_probing_finish(soft_dev);
 
 	return 0;
 }
@@ -725,13 +733,27 @@ pmd_probe(struct rte_vdev_device *vdev)
 	uint16_t hard_port_id;
 	int numa_node;
 	void *dev_private;
+	struct rte_eth_dev *eth_dev;
+	const char *name = rte_vdev_device_name(vdev);
 
-	RTE_LOG(INFO, PMD,
-		"Probing device \"%s\"\n",
-		rte_vdev_device_name(vdev));
+	PMD_LOG(INFO, "Probing device \"%s\"", name);
 
 	/* Parse input arguments */
 	params = rte_vdev_device_args(vdev);
+
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY &&
+	    strlen(params) == 0) {
+		eth_dev = rte_eth_dev_attach_secondary(name);
+		if (!eth_dev) {
+			PMD_LOG(ERR, "Failed to probe %s", name);
+			return -1;
+		}
+		/* TODO: request info from primary to set up Rx and Tx */
+		eth_dev->dev_ops = &pmd_ops;
+		rte_eth_dev_probing_finish(eth_dev);
+		return 0;
+	}
+
 	if (!params)
 		return -EINVAL;
 
@@ -763,8 +785,8 @@ pmd_probe(struct rte_vdev_device *vdev)
 		return -ENOMEM;
 
 	/* Register soft ethdev */
-	RTE_LOG(INFO, PMD,
-		"Creating soft ethdev \"%s\" for hard ethdev \"%s\"\n",
+	PMD_LOG(INFO,
+		"Creating soft ethdev \"%s\" for hard ethdev \"%s\"",
 		p.soft.name, p.hard.name);
 
 	status = pmd_ethdev_register(vdev, &p, dev_private);
@@ -785,7 +807,7 @@ pmd_remove(struct rte_vdev_device *vdev)
 	if (!vdev)
 		return -EINVAL;
 
-	RTE_LOG(INFO, PMD, "Removing device \"%s\"\n",
+	PMD_LOG(INFO, "Removing device \"%s\"",
 		rte_vdev_device_name(vdev));
 
 	/* Find the ethdev entry */
@@ -820,3 +842,12 @@ RTE_PMD_REGISTER_PARAM_STRING(net_softnic,
 	PMD_PARAM_SOFT_TM_DEQ_BSZ "=<int> "
 	PMD_PARAM_HARD_NAME "=<string> "
 	PMD_PARAM_HARD_TX_QUEUE_ID "=<int>");
+
+RTE_INIT(pmd_softnic_init_log);
+static void
+pmd_softnic_init_log(void)
+{
+	pmd_softnic_logtype = rte_log_register("pmd.net.softnic");
+	if (pmd_softnic_logtype >= 0)
+		rte_log_set_level(pmd_softnic_logtype, RTE_LOG_NOTICE);
+}

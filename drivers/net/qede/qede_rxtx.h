@@ -1,7 +1,7 @@
 /*
- * Copyright (c) 2016 QLogic Corporation.
+ * Copyright (c) 2016 - 2018 Cavium Inc.
  * All rights reserved.
- * www.qlogic.com
+ * www.cavium.com
  *
  * See LICENSE.qede_pmd for copyright and licensing details.
  */
@@ -75,8 +75,6 @@
 				 ETH_RSS_NONFRAG_IPV6_UDP	|\
 				 ETH_RSS_VXLAN			|\
 				 ETH_RSS_GENEVE)
-
-#define QEDE_TXQ_FLAGS		((uint32_t)ETH_TXQ_FLAGS_NOMULTSEGS)
 
 #define for_each_rss(i)		for (i = 0; i < qdev->num_rx_queues; i++)
 #define for_each_tss(i)		for (i = 0; i < qdev->num_tx_queues; i++)
@@ -153,7 +151,8 @@
 			      PKT_TX_VLAN_PKT		| \
 			      PKT_TX_TUNNEL_VXLAN	| \
 			      PKT_TX_TUNNEL_GENEVE	| \
-			      PKT_TX_TUNNEL_MPLSINUDP)
+			      PKT_TX_TUNNEL_MPLSINUDP   | \
+			      PKT_TX_TUNNEL_GRE)
 
 #define QEDE_TX_OFFLOAD_NOTSUP_MASK \
 	(PKT_TX_OFFLOAD_MASK ^ QEDE_TX_OFFLOAD_MASK)

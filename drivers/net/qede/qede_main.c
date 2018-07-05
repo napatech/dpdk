@@ -1,7 +1,7 @@
 /*
- * Copyright (c) 2016 QLogic Corporation.
+ * Copyright (c) 2016 - 2018 Cavium Inc.
  * All rights reserved.
- * www.qlogic.com
+ * www.cavium.com
  *
  * See LICENSE.qede_pmd for copyright and licensing details.
  */
@@ -9,6 +9,7 @@
 #include <limits.h>
 #include <time.h>
 #include <rte_alarm.h>
+#include <rte_string_fns.h>
 
 #include "qede_ethdev.h"
 
@@ -19,7 +20,7 @@
 char fw_file[PATH_MAX];
 
 const char *QEDE_DEFAULT_FIRMWARE =
-	"/lib/firmware/qed/qed_init_values-8.30.12.0.bin";
+	"/lib/firmware/qed/qed_init_values-8.33.12.0.bin";
 
 static void
 qed_update_pf_params(struct ecore_dev *edev, struct ecore_pf_params *params)
@@ -62,6 +63,7 @@ qed_probe(struct ecore_dev *edev, struct rte_pci_device *pci_dev,
 	hw_prepare_params.chk_reg_fifo = false;
 	hw_prepare_params.initiate_pf_flr = true;
 	hw_prepare_params.allow_mdump = false;
+	hw_prepare_params.b_en_pacing = false;
 	hw_prepare_params.epoch = (u32)time(NULL);
 	rc = ecore_hw_prepare(edev, &hw_prepare_params);
 	if (rc) {
@@ -302,9 +304,8 @@ static int qed_slowpath_start(struct ecore_dev *edev,
 		drv_version.version = (params->drv_major << 24) |
 		    (params->drv_minor << 16) |
 		    (params->drv_rev << 8) | (params->drv_eng);
-		/* TBD: strlcpy() */
-		strncpy((char *)drv_version.name, (const char *)params->name,
-			MCP_DRV_VER_STR_SIZE - 4);
+		strlcpy((char *)drv_version.name, (const char *)params->name,
+			sizeof(drv_version.name));
 		rc = ecore_mcp_send_drv_version(hwfn, hwfn->p_main_ptt,
 						&drv_version);
 		if (rc) {

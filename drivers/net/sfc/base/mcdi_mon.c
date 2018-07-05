@@ -135,6 +135,10 @@ static const struct mcdi_sensor_map_s {
 	STAT(Px, BOARD_BACK_TEMP),	/* 0x50 BOARD_BACK_TEMP */
 	STAT(Px, I1V8),			/* 0x51 IN_I1V8 */
 	STAT(Px, I2V5),			/* 0x52 IN_I2V5 */
+	STAT(Px, I3V3),			/* 0x53 IN_I3V3 */
+	STAT(Px, I12V0),		/* 0x54 IN_I12V0 */
+	STAT(Px, 1_3V),			/* 0x55 IN_1V3 */
+	STAT(Px, I1V3),			/* 0x56 IN_I1V3 */
 };
 
 #define	MCDI_STATIC_SENSOR_ASSERT(_field)				\
@@ -474,6 +478,11 @@ mcdi_mon_cfg_build(
 #endif
 #if EFSYS_OPT_MEDFORD
 	case EFX_FAMILY_MEDFORD:
+		encp->enc_mon_type = EFX_MON_SFC92X0;
+		break;
+#endif
+#if EFSYS_OPT_MEDFORD2
+	case EFX_FAMILY_MEDFORD2:
 		encp->enc_mon_type = EFX_MON_SFC92X0;
 		break;
 #endif

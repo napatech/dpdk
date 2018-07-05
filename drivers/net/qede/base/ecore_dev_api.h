@@ -1,7 +1,7 @@
 /*
- * Copyright (c) 2016 QLogic Corporation.
+ * Copyright (c) 2016 - 2018 Cavium Inc.
  * All rights reserved.
- * www.qlogic.com
+ * www.cavium.com
  *
  * See LICENSE.qede_pmd for copyright and licensing details.
  */
@@ -32,7 +32,7 @@ void ecore_init_dp(struct ecore_dev *p_dev,
  *
  * @param p_dev
  */
-void ecore_init_struct(struct ecore_dev *p_dev);
+enum _ecore_status_t ecore_init_struct(struct ecore_dev *p_dev);
 
 /**
  * @brief ecore_resc_free -
@@ -57,6 +57,12 @@ enum _ecore_status_t ecore_resc_alloc(struct ecore_dev *p_dev);
  */
 void ecore_resc_setup(struct ecore_dev *p_dev);
 
+enum ecore_mfw_timeout_fallback {
+	ECORE_TO_FALLBACK_TO_NONE,
+	ECORE_TO_FALLBACK_TO_DEFAULT,
+	ECORE_TO_FALLBACK_FAIL_LOAD,
+};
+
 enum ecore_override_force_load {
 	ECORE_OVERRIDE_FORCE_LOAD_NONE,
 	ECORE_OVERRIDE_FORCE_LOAD_ALWAYS,
@@ -78,6 +84,11 @@ struct ecore_drv_load_params {
 	u8 mfw_timeout_val;
 #define ECORE_LOAD_REQ_LOCK_TO_DEFAULT	0
 #define ECORE_LOAD_REQ_LOCK_TO_NONE	255
+
+	/* Action to take in case the MFW doesn't support timeout values other
+	 * than default and none.
+	 */
+	enum ecore_mfw_timeout_fallback mfw_timeout_fallback;
 
 	/* Avoid engine reset when first PF loads on it */
 	bool avoid_eng_reset;
@@ -104,6 +115,9 @@ struct ecore_hw_init_params {
 
 	/* Driver load parameters */
 	struct ecore_drv_load_params *p_drv_load_params;
+
+	/* SPQ block timeout in msec */
+	u32 spq_timeout_ms;
 };
 
 /**
@@ -256,6 +270,9 @@ struct ecore_hw_prepare_params {
 	 */
 	bool b_relaxed_probe;
 	enum ecore_hw_prepare_result p_relaxed_res;
+
+	/* Enable/disable request by ecore client for pacing */
+	bool b_en_pacing;
 };
 
 /**
@@ -363,6 +380,7 @@ struct ecore_eth_stats_common {
 	u64 tx_mac_mc_packets;
 	u64 tx_mac_bc_packets;
 	u64 tx_mac_ctrl_frames;
+	u64 link_change_count;
 };
 
 struct ecore_eth_stats_bb {

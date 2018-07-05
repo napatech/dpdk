@@ -1,11 +1,12 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2010-2014 Intel Corporation
+ * Copyright(c) 2010-2018 Intel Corporation
  */
 
 #ifndef _VHOST_NET_CDEV_H_
 #define _VHOST_NET_CDEV_H_
 #include <stdint.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <sys/types.h>
 #include <sys/queue.h>
 #include <unistd.h>
@@ -19,6 +20,7 @@
 #include <rte_rwlock.h>
 
 #include "rte_vhost.h"
+#include "rte_vdpa.h"
 
 /* Used to indicate that the device is running on a data core */
 #define VIRTIO_DEV_RUNNING 1
@@ -26,11 +28,15 @@
 #define VIRTIO_DEV_READY 2
 /* Used to indicate that the built-in vhost net device backend is enabled */
 #define VIRTIO_DEV_BUILTIN_VIRTIO_NET 4
+/* Used to indicate that the device has its own data path and configured */
+#define VIRTIO_DEV_VDPA_CONFIGURED 8
 
 /* Backend value set by guest. */
 #define VIRTIO_DEV_STOPPED -1
 
 #define BUF_VECTOR_MAX 256
+
+#define VHOST_LOG_CACHE_NR 32
 
 /**
  * Structure contains buffer address, length and descriptor index
@@ -63,6 +69,14 @@ struct batch_copy_elem {
 	void *src;
 	uint32_t len;
 	uint64_t log_addr;
+};
+
+/*
+ * Structure that contains the info for batched dirty logging.
+ */
+struct log_cache_entry {
+	uint32_t offset;
+	unsigned long val;
 };
 
 /**
@@ -107,6 +121,9 @@ struct vhost_virtqueue {
 
 	struct batch_copy_elem	*batch_copy_elems;
 	uint16_t		batch_copy_nb_elems;
+
+	struct log_cache_entry log_cache[VHOST_LOG_CACHE_NR];
+	uint16_t log_cache_nb_elem;
 
 	rte_rwlock_t	iotlb_lock;
 	rte_rwlock_t	iotlb_pending_lock;
@@ -174,8 +191,6 @@ struct vhost_msg {
  #define VIRTIO_F_VERSION_1 32
 #endif
 
-#define VHOST_USER_F_PROTOCOL_FEATURES	30
-
 /* Features supported by this builtin vhost-user net driver. */
 #define VIRTIO_NET_SUPPORTED_FEATURES ((1ULL << VIRTIO_NET_F_MRG_RXBUF) | \
 				(1ULL << VIRTIO_F_ANY_LAYOUT) | \
@@ -210,6 +225,51 @@ struct guest_page {
 };
 
 /**
+ * function prototype for the vhost backend to handler specific vhost user
+ * messages prior to the master message handling
+ *
+ * @param vid
+ *  vhost device id
+ * @param msg
+ *  Message pointer.
+ * @param require_reply
+ *  If the handler requires sending a reply, this varaible shall be written 1,
+ *  otherwise 0.
+ * @param skip_master
+ *  If the handler requires skipping the master message handling, this variable
+ *  shall be written 1, otherwise 0.
+ * @return
+ *  0 on success, -1 on failure
+ */
+typedef int (*vhost_msg_pre_handle)(int vid, void *msg,
+		uint32_t *require_reply, uint32_t *skip_master);
+
+/**
+ * function prototype for the vhost backend to handler specific vhost user
+ * messages after the master message handling is done
+ *
+ * @param vid
+ *  vhost device id
+ * @param msg
+ *  Message pointer.
+ * @param require_reply
+ *  If the handler requires sending a reply, this varaible shall be written 1,
+ *  otherwise 0.
+ * @return
+ *  0 on success, -1 on failure
+ */
+typedef int (*vhost_msg_post_handle)(int vid, void *msg,
+		uint32_t *require_reply);
+
+/**
+ * pre and post vhost user message handlers
+ */
+struct vhost_user_extern_ops {
+	vhost_msg_pre_handle pre_msg_handle;
+	vhost_msg_post_handle post_msg_handle;
+};
+
+/**
  * Device structure contains all configuration information relating
  * to the device.
  */
@@ -241,8 +301,18 @@ struct virtio_net {
 	struct guest_page       *guest_pages;
 
 	int			slave_req_fd;
-} __rte_cache_aligned;
 
+	/*
+	 * Device id to identify a specific backend device.
+	 * It's set to -1 for the default software implementation.
+	 */
+	int			vdpa_dev_id;
+
+	/* private data for virtio device */
+	void			*extern_data;
+	/* pre and post vhost user message handlers for the device */
+	struct vhost_user_extern_ops extern_ops;
+} __rte_cache_aligned;
 
 #define VHOST_LOG_PAGE	4096
 
@@ -252,7 +322,15 @@ struct virtio_net {
 static __rte_always_inline void
 vhost_set_bit(unsigned int nr, volatile uint8_t *addr)
 {
-	__sync_fetch_and_or_8(addr, (1U << nr));
+#if defined(RTE_TOOLCHAIN_GCC) && (GCC_VERSION < 70100)
+	/*
+	 * __sync_ built-ins are deprecated, but __atomic_ ones
+	 * are sub-optimized in older GCC versions.
+	 */
+	__sync_fetch_and_or_1(addr, (1U << nr));
+#else
+	__atomic_fetch_or(addr, (1U << nr), __ATOMIC_RELAXED);
+#endif
 }
 
 static __rte_always_inline void
@@ -284,6 +362,102 @@ vhost_log_write(struct virtio_net *dev, uint64_t addr, uint64_t len)
 }
 
 static __rte_always_inline void
+vhost_log_cache_sync(struct virtio_net *dev, struct vhost_virtqueue *vq)
+{
+	unsigned long *log_base;
+	int i;
+
+	if (likely(((dev->features & (1ULL << VHOST_F_LOG_ALL)) == 0) ||
+		   !dev->log_base))
+		return;
+
+	log_base = (unsigned long *)(uintptr_t)dev->log_base;
+
+	/*
+	 * It is expected a write memory barrier has been issued
+	 * before this function is called.
+	 */
+
+	for (i = 0; i < vq->log_cache_nb_elem; i++) {
+		struct log_cache_entry *elem = vq->log_cache + i;
+
+#if defined(RTE_TOOLCHAIN_GCC) && (GCC_VERSION < 70100)
+		/*
+		 * '__sync' builtins are deprecated, but '__atomic' ones
+		 * are sub-optimized in older GCC versions.
+		 */
+		__sync_fetch_and_or(log_base + elem->offset, elem->val);
+#else
+		__atomic_fetch_or(log_base + elem->offset, elem->val,
+				__ATOMIC_RELAXED);
+#endif
+	}
+
+	rte_smp_wmb();
+
+	vq->log_cache_nb_elem = 0;
+}
+
+static __rte_always_inline void
+vhost_log_cache_page(struct virtio_net *dev, struct vhost_virtqueue *vq,
+			uint64_t page)
+{
+	uint32_t bit_nr = page % (sizeof(unsigned long) << 3);
+	uint32_t offset = page / (sizeof(unsigned long) << 3);
+	int i;
+
+	for (i = 0; i < vq->log_cache_nb_elem; i++) {
+		struct log_cache_entry *elem = vq->log_cache + i;
+
+		if (elem->offset == offset) {
+			elem->val |= (1UL << bit_nr);
+			return;
+		}
+	}
+
+	if (unlikely(i >= VHOST_LOG_CACHE_NR)) {
+		/*
+		 * No more room for a new log cache entry,
+		 * so write the dirty log map directly.
+		 */
+		rte_smp_wmb();
+		vhost_log_page((uint8_t *)(uintptr_t)dev->log_base, page);
+
+		return;
+	}
+
+	vq->log_cache[i].offset = offset;
+	vq->log_cache[i].val = (1UL << bit_nr);
+}
+
+static __rte_always_inline void
+vhost_log_cache_write(struct virtio_net *dev, struct vhost_virtqueue *vq,
+			uint64_t addr, uint64_t len)
+{
+	uint64_t page;
+
+	if (likely(((dev->features & (1ULL << VHOST_F_LOG_ALL)) == 0) ||
+		   !dev->log_base || !len))
+		return;
+
+	if (unlikely(dev->log_size <= ((addr + len - 1) / VHOST_LOG_PAGE / 8)))
+		return;
+
+	page = addr / VHOST_LOG_PAGE;
+	while (page * VHOST_LOG_PAGE < addr + len) {
+		vhost_log_cache_page(dev, vq, page);
+		page += 1;
+	}
+}
+
+static __rte_always_inline void
+vhost_log_cache_used_vring(struct virtio_net *dev, struct vhost_virtqueue *vq,
+			uint64_t offset, uint64_t len)
+{
+	vhost_log_cache_write(dev, vq, vq->log_guest_addr + offset, len);
+}
+
+static __rte_always_inline void
 vhost_log_used_vring(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		     uint64_t offset, uint64_t len)
 {
@@ -296,8 +470,8 @@ vhost_log_used_vring(struct virtio_net *dev, struct vhost_virtqueue *vq,
 
 #ifdef RTE_LIBRTE_VHOST_DEBUG
 #define VHOST_MAX_PRINT_BUFF 6072
-#define LOG_LEVEL RTE_LOG_DEBUG
-#define LOG_DEBUG(log_type, fmt, args...) RTE_LOG(DEBUG, log_type, fmt, ##args)
+#define VHOST_LOG_DEBUG(log_type, fmt, args...) \
+	RTE_LOG(DEBUG, log_type, fmt, ##args)
 #define PRINT_PACKET(device, addr, size, header) do { \
 	char *pkt_addr = (char *)(addr); \
 	unsigned int index; \
@@ -313,11 +487,10 @@ vhost_log_used_vring(struct virtio_net *dev, struct vhost_virtqueue *vq,
 	} \
 	snprintf(packet + strnlen(packet, VHOST_MAX_PRINT_BUFF), VHOST_MAX_PRINT_BUFF - strnlen(packet, VHOST_MAX_PRINT_BUFF), "\n"); \
 	\
-	LOG_DEBUG(VHOST_DATA, "%s", packet); \
+	VHOST_LOG_DEBUG(VHOST_DATA, "%s", packet); \
 } while (0)
 #else
-#define LOG_LEVEL RTE_LOG_INFO
-#define LOG_DEBUG(log_type, fmt, args...) do {} while (0)
+#define VHOST_LOG_DEBUG(log_type, fmt, args...) do {} while (0)
 #define PRINT_PACKET(device, addr, size, header) do {} while (0)
 #endif
 
@@ -345,7 +518,18 @@ gpa_to_hpa(struct virtio_net *dev, uint64_t gpa, uint64_t size)
 	return 0;
 }
 
-struct virtio_net *get_device(int vid);
+static __rte_always_inline struct virtio_net *
+get_device(int vid)
+{
+	struct virtio_net *dev = vhost_devices[vid];
+
+	if (unlikely(!dev)) {
+		RTE_LOG(ERR, VHOST_CONFIG,
+			"(%d) device not found.\n", vid);
+	}
+
+	return dev;
+}
 
 int vhost_new_device(void);
 void cleanup_device(struct virtio_net *dev, int destroy);
@@ -356,6 +540,9 @@ void cleanup_vq(struct vhost_virtqueue *vq, int destroy);
 void free_vq(struct vhost_virtqueue *vq);
 
 int alloc_vring_queue(struct virtio_net *dev, uint32_t vring_idx);
+
+void vhost_attach_vdpa_device(int vid, int did);
+void vhost_detach_vdpa_device(int vid);
 
 void vhost_set_ifname(int, const char *if_name, unsigned int if_len);
 void vhost_enable_dequeue_zero_copy(int vid);
@@ -371,18 +558,18 @@ struct vhost_device_ops const *vhost_driver_callback_get(const char *path);
 void vhost_backend_cleanup(struct virtio_net *dev);
 
 uint64_t __vhost_iova_to_vva(struct virtio_net *dev, struct vhost_virtqueue *vq,
-			uint64_t iova, uint64_t size, uint8_t perm);
+			uint64_t iova, uint64_t *len, uint8_t perm);
 int vring_translate(struct virtio_net *dev, struct vhost_virtqueue *vq);
 void vring_invalidate(struct virtio_net *dev, struct vhost_virtqueue *vq);
 
 static __rte_always_inline uint64_t
 vhost_iova_to_vva(struct virtio_net *dev, struct vhost_virtqueue *vq,
-			uint64_t iova, uint64_t size, uint8_t perm)
+			uint64_t iova, uint64_t *len, uint8_t perm)
 {
 	if (!(dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM)))
-		return rte_vhost_gpa_to_vva(dev->mem, iova);
+		return rte_vhost_va_from_guest_pa(dev->mem, iova, len);
 
-	return __vhost_iova_to_vva(dev, vq, iova, size, perm);
+	return __vhost_iova_to_vva(dev, vq, iova, len, perm);
 }
 
 #define vhost_used_event(vr) \
@@ -411,7 +598,7 @@ vhost_vring_call(struct virtio_net *dev, struct vhost_virtqueue *vq)
 		uint16_t old = vq->signalled_used;
 		uint16_t new = vq->last_used_idx;
 
-		LOG_DEBUG(VHOST_DATA, "%s: used_event_idx=%d, old=%d, new=%d\n",
+		VHOST_LOG_DEBUG(VHOST_DATA, "%s: used_event_idx=%d, old=%d, new=%d\n",
 			__func__,
 			vhost_used_event(vq),
 			old, new);

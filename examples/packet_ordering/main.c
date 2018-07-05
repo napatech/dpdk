@@ -211,11 +211,10 @@ flush_tx_error_callback(struct rte_mbuf **unsent, uint16_t count,
 
 static inline int
 free_tx_buffers(struct rte_eth_dev_tx_buffer *tx_buffer[]) {
-	const uint8_t nb_ports = rte_eth_dev_count();
-	unsigned port_id;
+	uint16_t port_id;
 
 	/* initialize buffers for all ports */
-	for (port_id = 0; port_id < nb_ports; port_id++) {
+	RTE_ETH_FOREACH_DEV(port_id) {
 		/* skip ports that are not enabled */
 		if ((portmask & (1 << port_id)) == 0)
 			continue;
@@ -228,12 +227,11 @@ free_tx_buffers(struct rte_eth_dev_tx_buffer *tx_buffer[]) {
 static inline int
 configure_tx_buffers(struct rte_eth_dev_tx_buffer *tx_buffer[])
 {
-	const uint8_t nb_ports = rte_eth_dev_count();
-	unsigned port_id;
+	uint16_t port_id;
 	int ret;
 
 	/* initialize buffers for all ports */
-	for (port_id = 0; port_id < nb_ports; port_id++) {
+	RTE_ETH_FOREACH_DEV(port_id) {
 		/* skip ports that are not enabled */
 		if ((portmask & (1 << port_id)) == 0)
 			continue;
@@ -263,7 +261,6 @@ configure_eth_port(uint16_t port_id)
 {
 	struct ether_addr addr;
 	const uint16_t rxRings = 1, txRings = 1;
-	const uint8_t nb_ports = rte_eth_dev_count();
 	int ret;
 	uint16_t q;
 	uint16_t nb_rxd = RX_DESC_PER_QUEUE;
@@ -272,7 +269,7 @@ configure_eth_port(uint16_t port_id)
 	struct rte_eth_txconf txconf;
 	struct rte_eth_conf port_conf = port_conf_default;
 
-	if (port_id > nb_ports)
+	if (!rte_eth_dev_is_valid_port(port_id))
 		return -1;
 
 	rte_eth_dev_info_get(port_id, &dev_info);
@@ -325,8 +322,7 @@ configure_eth_port(uint16_t port_id)
 static void
 print_stats(void)
 {
-	const uint8_t nb_ports = rte_eth_dev_count();
-	unsigned i;
+	uint16_t i;
 	struct rte_eth_stats eth_stats;
 
 	printf("\nRX thread stats:\n");
@@ -355,7 +351,7 @@ print_stats(void)
 	printf(" - Pkts tx failed w/o reorder:		%"PRIu64"\n",
 						app_stats.tx.early_pkts_tx_failed_woro);
 
-	for (i = 0; i < nb_ports; i++) {
+	RTE_ETH_FOREACH_DEV(i) {
 		rte_eth_stats_get(i, &eth_stats);
 		printf("\nPort %u stats:\n", i);
 		printf(" - Pkts in:   %"PRIu64"\n", eth_stats.ipackets);
@@ -383,7 +379,6 @@ int_handler(int sig_num)
 static int
 rx_thread(struct rte_ring *ring_out)
 {
-	const uint8_t nb_ports = rte_eth_dev_count();
 	uint32_t seqn = 0;
 	uint16_t i, ret = 0;
 	uint16_t nb_rx_pkts;
@@ -395,7 +390,7 @@ rx_thread(struct rte_ring *ring_out)
 
 	while (!quit_signal) {
 
-		for (port_id = 0; port_id < nb_ports; port_id++) {
+		RTE_ETH_FOREACH_DEV(port_id) {
 			if ((portmask & (1 << port_id)) != 0) {
 
 				/* receive packets */
@@ -435,7 +430,7 @@ rx_thread(struct rte_ring *ring_out)
 static int
 worker_thread(void *args_ptr)
 {
-	const uint8_t nb_ports = rte_eth_dev_count();
+	const uint16_t nb_ports = rte_eth_dev_count_avail();
 	uint16_t i, ret = 0;
 	uint16_t burst_size = 0;
 	struct worker_thread_args *args;
@@ -649,7 +644,7 @@ main(int argc, char **argv)
 				"1 lcore for packet TX\n"
 				"and at least 1 lcore for worker threads\n");
 
-	nb_ports = rte_eth_dev_count();
+	nb_ports = rte_eth_dev_count_avail();
 	if (nb_ports == 0)
 		rte_exit(EXIT_FAILURE, "Error: no ethernet ports detected\n");
 	if (nb_ports != 1 && (nb_ports & 1))
@@ -665,7 +660,7 @@ main(int argc, char **argv)
 	nb_ports_available = nb_ports;
 
 	/* initialize all ports */
-	for (port_id = 0; port_id < nb_ports; port_id++) {
+	RTE_ETH_FOREACH_DEV(port_id) {
 		/* skip ports that are not enabled */
 		if ((portmask & (1 << port_id)) == 0) {
 			printf("\nSkipping disabled port %d\n", port_id);

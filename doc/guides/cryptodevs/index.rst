@@ -13,13 +13,15 @@ Crypto Device Drivers
     aesni_mb
     aesni_gcm
     armv8
+    ccp
     dpaa2_sec
     dpaa_sec
     kasumi
     openssl
-    mrvl
+    mvsam
     null
     scheduler
     snow3g
     qat
+    virtio
     zuc

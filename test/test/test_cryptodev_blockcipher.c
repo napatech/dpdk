@@ -54,6 +54,8 @@ test_blockcipher_one_case(const struct blockcipher_test_case *t,
 
 	int openssl_pmd = rte_cryptodev_driver_id_get(
 			RTE_STR(CRYPTODEV_NAME_OPENSSL_PMD));
+	int ccp_pmd = rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_CCP_PMD));
 	int scheduler_pmd = rte_cryptodev_driver_id_get(
 			RTE_STR(CRYPTODEV_NAME_SCHEDULER_PMD));
 	int armv8_pmd = rte_cryptodev_driver_id_get(
@@ -67,7 +69,9 @@ test_blockcipher_one_case(const struct blockcipher_test_case *t,
 	int dpaa_sec_pmd = rte_cryptodev_driver_id_get(
 			RTE_STR(CRYPTODEV_NAME_DPAA_SEC_PMD));
 	int mrvl_pmd = rte_cryptodev_driver_id_get(
-			RTE_STR(CRYPTODEV_NAME_MRVL_PMD));
+			RTE_STR(CRYPTODEV_NAME_MVSAM_PMD));
+	int virtio_pmd = rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_VIRTIO_PMD));
 
 	int nb_segs = 1;
 
@@ -94,7 +98,9 @@ test_blockcipher_one_case(const struct blockcipher_test_case *t,
 			driver_id == qat_pmd ||
 			driver_id == openssl_pmd ||
 			driver_id == armv8_pmd ||
-			driver_id == mrvl_pmd) { /* Fall through */
+			driver_id == mrvl_pmd ||
+			driver_id == ccp_pmd ||
+			driver_id == virtio_pmd) { /* Fall through */
 		digest_len = tdata->digest.len;
 	} else if (driver_id == aesni_mb_pmd ||
 			driver_id == scheduler_pmd) {
@@ -555,6 +561,8 @@ test_blockcipher_all_tests(struct rte_mempool *mbuf_pool,
 
 	int openssl_pmd = rte_cryptodev_driver_id_get(
 			RTE_STR(CRYPTODEV_NAME_OPENSSL_PMD));
+	int ccp_pmd = rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_CCP_PMD));
 	int dpaa2_sec_pmd = rte_cryptodev_driver_id_get(
 			RTE_STR(CRYPTODEV_NAME_DPAA2_SEC_PMD));
 	int dpaa_sec_pmd = rte_cryptodev_driver_id_get(
@@ -568,7 +576,9 @@ test_blockcipher_all_tests(struct rte_mempool *mbuf_pool,
 	int qat_pmd = rte_cryptodev_driver_id_get(
 			RTE_STR(CRYPTODEV_NAME_QAT_SYM_PMD));
 	int mrvl_pmd = rte_cryptodev_driver_id_get(
-			RTE_STR(CRYPTODEV_NAME_MRVL_PMD));
+			RTE_STR(CRYPTODEV_NAME_MVSAM_PMD));
+	int virtio_pmd = rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_VIRTIO_PMD));
 
 	switch (test_type) {
 	case BLKCIPHER_AES_CHAIN_TYPE:
@@ -627,10 +637,14 @@ test_blockcipher_all_tests(struct rte_mempool *mbuf_pool,
 		target_pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_SCHEDULER;
 	else if (driver_id == dpaa2_sec_pmd)
 		target_pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC;
+	else if (driver_id == ccp_pmd)
+		target_pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_CCP;
 	else if (driver_id == dpaa_sec_pmd)
 		target_pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_DPAA_SEC;
 	else if (driver_id == mrvl_pmd)
-		target_pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_MRVL;
+		target_pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_MVSAM;
+	else if (driver_id == virtio_pmd)
+		target_pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_VIRTIO;
 	else
 		TEST_ASSERT(0, "Unrecognized cryptodev type");
 

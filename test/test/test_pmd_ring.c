@@ -399,7 +399,7 @@ test_pmd_ring(void)
 	int port, cmdl_port0 = -1;
 	uint8_t nb_ports;
 
-	nb_ports = rte_eth_dev_count();
+	nb_ports = rte_eth_dev_count_avail();
 	printf("nb_ports=%d\n", (int)nb_ports);
 
 	/*  create the rings and eth_rings in the test code.
@@ -473,7 +473,7 @@ test_pmd_ring(void)
 		return -1;
 
 	/* find a port created with the --vdev=net_ring0 command line option */
-	for (port = 0; port < nb_ports; port++) {
+	RTE_ETH_FOREACH_DEV(port) {
 		struct rte_eth_dev_info dev_info;
 
 		rte_eth_dev_info_get(port, &dev_info);

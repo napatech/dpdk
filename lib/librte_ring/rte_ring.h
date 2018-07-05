@@ -62,14 +62,6 @@ enum rte_ring_queue_behavior {
 
 struct rte_memzone; /* forward declaration, so as not to require memzone.h */
 
-#if RTE_CACHE_LINE_SIZE < 128
-#define PROD_ALIGN (RTE_CACHE_LINE_SIZE * 2)
-#define CONS_ALIGN (RTE_CACHE_LINE_SIZE * 2)
-#else
-#define PROD_ALIGN RTE_CACHE_LINE_SIZE
-#define CONS_ALIGN RTE_CACHE_LINE_SIZE
-#endif
-
 /* structure to hold a pair of head/tail values and other metadata */
 struct rte_ring_headtail {
 	volatile uint32_t head;  /**< Prod/consumer head. */
@@ -101,11 +93,15 @@ struct rte_ring {
 	uint32_t mask;           /**< Mask (size-1) of ring. */
 	uint32_t capacity;       /**< Usable size of ring */
 
+	char pad0 __rte_cache_aligned; /**< empty cache line */
+
 	/** Ring producer status. */
-	struct rte_ring_headtail prod __rte_aligned(PROD_ALIGN);
+	struct rte_ring_headtail prod __rte_cache_aligned;
+	char pad1 __rte_cache_aligned; /**< empty cache line */
 
 	/** Ring consumer status. */
-	struct rte_ring_headtail cons __rte_aligned(CONS_ALIGN);
+	struct rte_ring_headtail cons __rte_cache_aligned;
+	char pad2 __rte_cache_aligned; /**< empty cache line */
 };
 
 #define RING_F_SP_ENQ 0x0001 /**< The default enqueue is "single-producer". */
@@ -339,7 +335,7 @@ void rte_ring_dump(FILE *f, const struct rte_ring *r);
 static __rte_always_inline unsigned int
 __rte_ring_do_enqueue(struct rte_ring *r, void * const *obj_table,
 		 unsigned int n, enum rte_ring_queue_behavior behavior,
-		 int is_sp, unsigned int *free_space)
+		 unsigned int is_sp, unsigned int *free_space)
 {
 	uint32_t prod_head, prod_next;
 	uint32_t free_entries;
@@ -381,7 +377,7 @@ end:
 static __rte_always_inline unsigned int
 __rte_ring_do_dequeue(struct rte_ring *r, void **obj_table,
 		 unsigned int n, enum rte_ring_queue_behavior behavior,
-		 int is_sc, unsigned int *available)
+		 unsigned int is_sc, unsigned int *available)
 {
 	uint32_t cons_head, cons_next;
 	uint32_t entries;

@@ -11,12 +11,16 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
 
 #include <rte_compat.h>
 #include <rte_dev.h>
 #include <rte_devargs.h>
 #include <rte_tailq.h>
 #include "eal_private.h"
+
+/** user device double-linked queue type definition */
+TAILQ_HEAD(rte_devargs_list, rte_devargs);
 
 /** Global list of user devices */
 struct rte_devargs_list devargs_list =
@@ -59,15 +63,23 @@ bus_name_cmp(const struct rte_bus *bus, const void *name)
 }
 
 int __rte_experimental
-rte_eal_devargs_parse(const char *dev, struct rte_devargs *da)
+rte_devargs_parse(struct rte_devargs *da, const char *format, ...)
 {
 	struct rte_bus *bus = NULL;
+	va_list ap;
+	va_start(ap, format);
+	char dev[vsnprintf(NULL, 0, format, ap) + 1];
 	const char *devname;
 	const size_t maxlen = sizeof(da->name);
 	size_t i;
 
-	if (dev == NULL || da == NULL)
+	va_end(ap);
+	if (da == NULL)
 		return -EINVAL;
+
+	va_start(ap, format);
+	vsnprintf(dev, sizeof(dev), format, ap);
+	va_end(ap);
 	/* Retrieve eventual bus info */
 	do {
 		devname = dev;
@@ -113,11 +125,11 @@ rte_eal_devargs_parse(const char *dev, struct rte_devargs *da)
 }
 
 int __rte_experimental
-rte_eal_devargs_insert(struct rte_devargs *da)
+rte_devargs_insert(struct rte_devargs *da)
 {
 	int ret;
 
-	ret = rte_eal_devargs_remove(da->bus->name, da->name);
+	ret = rte_devargs_remove(da->bus->name, da->name);
 	if (ret < 0)
 		return ret;
 	TAILQ_INSERT_TAIL(&devargs_list, da, next);
@@ -125,8 +137,9 @@ rte_eal_devargs_insert(struct rte_devargs *da)
 }
 
 /* store a whitelist parameter for later parsing */
+__rte_experimental
 int
-rte_eal_devargs_add(enum rte_devtype devtype, const char *devargs_str)
+rte_devargs_add(enum rte_devtype devtype, const char *devargs_str)
 {
 	struct rte_devargs *devargs = NULL;
 	struct rte_bus *bus = NULL;
@@ -137,7 +150,7 @@ rte_eal_devargs_add(enum rte_devtype devtype, const char *devargs_str)
 	if (devargs == NULL)
 		goto fail;
 
-	if (rte_eal_devargs_parse(dev, devargs))
+	if (rte_devargs_parse(devargs, "%s", dev))
 		goto fail;
 	devargs->type = devtype;
 	bus = devargs->bus;
@@ -162,7 +175,7 @@ fail:
 }
 
 int __rte_experimental
-rte_eal_devargs_remove(const char *busname, const char *devname)
+rte_devargs_remove(const char *busname, const char *devname)
 {
 	struct rte_devargs *d;
 	void *tmp;
@@ -180,8 +193,9 @@ rte_eal_devargs_remove(const char *busname, const char *devname)
 }
 
 /* count the number of devices of a specified type */
+__rte_experimental
 unsigned int
-rte_eal_devargs_type_count(enum rte_devtype devtype)
+rte_devargs_type_count(enum rte_devtype devtype)
 {
 	struct rte_devargs *devargs;
 	unsigned int count = 0;
@@ -195,8 +209,9 @@ rte_eal_devargs_type_count(enum rte_devtype devtype)
 }
 
 /* dump the user devices on the console */
+__rte_experimental
 void
-rte_eal_devargs_dump(FILE *f)
+rte_devargs_dump(FILE *f)
 {
 	struct rte_devargs *devargs;
 
@@ -206,4 +221,24 @@ rte_eal_devargs_dump(FILE *f)
 			(devargs->bus ? devargs->bus->name : "??"),
 			devargs->name, devargs->args);
 	}
+}
+
+/* bus-aware rte_devargs iterator. */
+__rte_experimental
+struct rte_devargs *
+rte_devargs_next(const char *busname, const struct rte_devargs *start)
+{
+	struct rte_devargs *da;
+
+	if (start != NULL)
+		da = TAILQ_NEXT(start, next);
+	else
+		da = TAILQ_FIRST(&devargs_list);
+	while (da != NULL) {
+		if (busname == NULL ||
+		    (strcmp(busname, da->bus->name) == 0))
+			return da;
+		da = TAILQ_NEXT(da, next);
+	}
+	return NULL;
 }

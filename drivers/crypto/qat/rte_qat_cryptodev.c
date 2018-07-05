@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2015-2017 Intel Corporation
+ * Copyright(c) 2015-2018 Intel Corporation
  */
 
 #include <rte_bus_pci.h>
@@ -130,7 +130,7 @@ static int crypto_qat_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 {
 	struct rte_cryptodev_pmd_init_params init_params = {
 		.name = "",
-		.socket_id = rte_socket_id(),
+		.socket_id = pci_dev->device.numa_node,
 		.private_data_size = sizeof(struct qat_pmd_private),
 		.max_nb_sessions = RTE_QAT_PMD_MAX_NB_SESSIONS
 	};
@@ -176,5 +176,5 @@ static struct cryptodev_driver qat_crypto_drv;
 
 RTE_PMD_REGISTER_PCI(CRYPTODEV_NAME_QAT_SYM_PMD, rte_qat_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(CRYPTODEV_NAME_QAT_SYM_PMD, pci_id_qat_map);
-RTE_PMD_REGISTER_CRYPTO_DRIVER(qat_crypto_drv, rte_qat_pmd,
+RTE_PMD_REGISTER_CRYPTO_DRIVER(qat_crypto_drv, rte_qat_pmd.driver,
 		cryptodev_qat_driver_id);

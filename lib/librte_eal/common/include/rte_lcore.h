@@ -119,7 +119,7 @@ rte_lcore_index(int lcore_id)
 	if (lcore_id >= RTE_MAX_LCORE)
 		return -1;
 	if (lcore_id < 0)
-		lcore_id = rte_lcore_id();
+		lcore_id = (int)rte_lcore_id();
 	return lcore_config[lcore_id].core_index;
 }
 
@@ -130,6 +130,36 @@ rte_lcore_index(int lcore_id)
  *   the ID of current lcoreid's physical socket
  */
 unsigned rte_socket_id(void);
+
+/**
+ * Return number of physical sockets detected on the system.
+ *
+ * Note that number of nodes may not be correspondent to their physical id's:
+ * for example, a system may report two socket id's, but the actual socket id's
+ * may be 0 and 8.
+ *
+ * @return
+ *   the number of physical sockets as recognized by EAL
+ */
+unsigned int __rte_experimental
+rte_socket_count(void);
+
+/**
+ * Return socket id with a particular index.
+ *
+ * This will return socket id at a particular position in list of all detected
+ * physical socket id's. For example, on a machine with sockets [0, 8], passing
+ * 1 as a parameter will return 8.
+ *
+ * @param idx
+ *   index of physical socket id to return
+ *
+ * @return
+ *   - physical socket id as recognized by EAL
+ *   - -1 on error, with errno set to EINVAL
+ */
+int __rte_experimental
+rte_socket_id_by_idx(unsigned int idx);
 
 /**
  * Get the ID of the physical socket of the specified lcore
@@ -247,6 +277,32 @@ void rte_thread_get_affinity(rte_cpuset_t *cpusetp);
 int rte_thread_setname(pthread_t id, const char *name);
 
 /**
+ * Create a control thread.
+ *
+ * Wrapper to pthread_create(), pthread_setname_np() and
+ * pthread_setaffinity_np(). The dataplane and service lcores are
+ * excluded from the affinity of the new thread.
+ *
+ * @param thread
+ *   Filled with the thread id of the new created thread.
+ * @param name
+ *   The name of the control thread (max 16 characters including '\0').
+ * @param attr
+ *   Attributes for the new thread.
+ * @param start_routine
+ *   Function to be executed by the new thread.
+ * @param arg
+ *   Argument passed to start_routine.
+ * @return
+ *   On success, returns 0; on error, it returns a negative value
+ *   corresponding to the error number.
+ */
+__rte_experimental int
+rte_ctrl_thread_create(pthread_t *thread, const char *name,
+		const pthread_attr_t *attr,
+		void *(*start_routine)(void *), void *arg);
+
+/**
  * Test if the core supplied has a specific role
  *
  * @param lcore_id
@@ -255,7 +311,7 @@ int rte_thread_setname(pthread_t id, const char *name);
  * @param role
  *   The role to be checked against.
  * @return
- *   On success, return 0; otherwise return a negative value.
+ *   Boolean value: positive if test is true; otherwise returns 0.
  */
 int
 rte_lcore_has_role(unsigned int lcore_id, enum rte_lcore_role_t role);

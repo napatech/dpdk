@@ -5,9 +5,12 @@
 #ifndef _RTE_ETH_BOND_PRIVATE_H_
 #define _RTE_ETH_BOND_PRIVATE_H_
 
+#include <sys/queue.h>
+
 #include <rte_ethdev_driver.h>
 #include <rte_spinlock.h>
 #include <rte_bitmap.h>
+#include <rte_flow_driver.h>
 
 #include "rte_eth_bond.h"
 #include "rte_eth_bond_8023ad_private.h"
@@ -28,14 +31,19 @@
 #define PMD_BOND_XMIT_POLICY_LAYER23_KVARG	("l23")
 #define PMD_BOND_XMIT_POLICY_LAYER34_KVARG	("l34")
 
+extern int bond_logtype;
+
 #define RTE_BOND_LOG(lvl, msg, ...)		\
-	RTE_LOG(lvl, PMD, "%s(%d) - " msg "\n", __func__, __LINE__, ##__VA_ARGS__)
+	rte_log(RTE_LOG_ ## lvl, bond_logtype, \
+		"%s(%d) - " msg "\n", __func__, __LINE__, ##__VA_ARGS__)
 
 #define BONDING_MODE_INVALID 0xFF
 
 extern const char *pmd_bond_init_valid_arguments[];
 
 extern struct rte_vdev_driver pmd_bond_drv;
+
+extern const struct rte_flow_ops bond_flow_ops;
 
 /** Port Queue Mapping Structure */
 struct bond_rx_queue {
@@ -80,6 +88,14 @@ struct bond_slave_details {
 	uint16_t reta_size;
 };
 
+struct rte_flow {
+	TAILQ_ENTRY(rte_flow) next;
+	/* Slaves flows */
+	struct rte_flow *flows[RTE_MAX_ETHPORTS];
+	/* Flow description for synchronization */
+	struct rte_flow_desc *fd;
+};
+
 typedef void (*burst_xmit_hash_t)(struct rte_mbuf **buf, uint16_t nb_pkts,
 		uint8_t slave_count, uint16_t *slaves);
 
@@ -89,6 +105,7 @@ struct bond_dev_private {
 	uint8_t mode;						/**< Link Bonding Mode */
 
 	rte_spinlock_t lock;
+	rte_spinlock_t lsc_lock;
 
 	uint16_t primary_port;			/**< Primary Slave Port */
 	uint16_t current_primary_port;		/**< Primary Slave Port */
@@ -128,8 +145,17 @@ struct bond_dev_private {
 	/**< TLB active slaves send order */
 	struct mode_alb_private mode6;
 
-	uint32_t rx_offload_capa;            /** Rx offload capability */
-	uint32_t tx_offload_capa;            /** Tx offload capability */
+	uint64_t rx_offload_capa;       /** Rx offload capability */
+	uint64_t tx_offload_capa;       /** Tx offload capability */
+	uint64_t rx_queue_offload_capa; /** per queue Rx offload capability */
+	uint64_t tx_queue_offload_capa; /** per queue Tx offload capability */
+
+	/**< List of the configured flows */
+	TAILQ_HEAD(sub_flows, rte_flow) flow_list;
+
+	/**< Flow isolation state */
+	int flow_isolated;
+	int flow_isolated_valid;
 
 	/** Bit mask of RSS offloads, the bit offset also means flow type */
 	uint64_t flow_type_rss_offloads;

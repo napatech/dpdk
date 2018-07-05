@@ -17,6 +17,7 @@
 #include "vnic_rss.h"
 #include "enic_res.h"
 #include "cq_enet_desc.h"
+#include <stdbool.h>
 #include <sys/queue.h>
 #include <rte_spinlock.h>
 
@@ -48,6 +49,15 @@
 #define ENIC_MAGIC_FILTER_ID 0xffff
 
 #define ENICPMD_FDIR_MAX           64
+
+/*
+ * Interrupt 0: LSC and errors
+ * Interrupt 1: rx queue 0
+ * Interrupt 2: rx queue 1
+ * ...
+ */
+#define ENICPMD_LSC_INTR_OFFSET 0
+#define ENICPMD_RXQ_INTR_OFFSET 1
 
 struct enic_fdir_node {
 	struct rte_eth_fdir_filter filter;
@@ -92,6 +102,7 @@ struct enic {
 	struct vnic_dev *vdev;
 
 	unsigned int port_id;
+	bool overlay_offload;
 	struct rte_eth_dev *rte_dev;
 	struct enic_fdir fdir;
 	char bdf_name[ENICPMD_BDF_LENGTH];
@@ -109,7 +120,9 @@ struct enic {
 	u16 max_mtu;
 	u8 adv_filters;
 	u32 flow_filter_mode;
-	u8 filter_tags;
+	u8 filter_actions; /* HW supported actions */
+	bool vxlan;
+	bool disable_overlay; /* devargs disable_overlay=1 */
 
 	unsigned int flags;
 	unsigned int priv_flags;
@@ -126,9 +139,9 @@ struct enic {
 	struct vnic_cq *cq;
 	unsigned int cq_count; /* equals rq_count + wq_count */
 
-	/* interrupt resource */
-	struct vnic_intr intr;
-	unsigned int intr_count;
+	/* interrupt vectors (len = conf_intr_count) */
+	struct vnic_intr *intr;
+	unsigned int intr_count; /* equals enabled interrupts (lsc + rxqs) */
 
 	/* software counters */
 	struct enic_soft_stats soft_stats;
@@ -146,7 +159,32 @@ struct enic {
 
 	LIST_HEAD(enic_flows, rte_flow) flows;
 	rte_spinlock_t flows_lock;
+
+	/* RSS */
+	uint16_t reta_size;
+	uint8_t hash_key_size;
+	uint64_t flow_type_rss_offloads; /* 0 indicates RSS not supported */
+	/*
+	 * Keep a copy of current RSS config for queries, as we cannot retrieve
+	 * it from the NIC.
+	 */
+	uint8_t rss_hash_type; /* NIC_CFG_RSS_HASH_TYPE flags */
+	uint8_t rss_enable;
+	uint64_t rss_hf; /* ETH_RSS flags */
+	union vnic_rss_key rss_key;
+	union vnic_rss_cpu rss_cpu;
+
+	uint64_t rx_offload_capa; /* DEV_RX_OFFLOAD flags */
+	uint64_t tx_offload_capa; /* DEV_TX_OFFLOAD flags */
+	uint64_t tx_offload_mask; /* PKT_TX flags accepted */
 };
+
+/* Compute ethdev's max packet size from MTU */
+static inline uint32_t enic_mtu_to_max_rx_pktlen(uint32_t mtu)
+{
+	/* ethdev max size includes eth and crc whereas NIC MTU does not */
+	return mtu + ETHER_HDR_LEN + ETHER_CRC_LEN;
+}
 
 /* Get the CQ index from a Start of Packet(SOP) RQ index */
 static inline unsigned int enic_sop_rq_idx_to_cq_idx(unsigned int sop_idx)
@@ -220,54 +258,58 @@ enic_ring_incr(uint32_t n_descriptors, uint32_t idx)
 	return idx;
 }
 
-extern void enic_fdir_stats_get(struct enic *enic,
-	struct rte_eth_fdir_stats *stats);
-extern int enic_fdir_add_fltr(struct enic *enic,
-	struct rte_eth_fdir_filter *params);
-extern int enic_fdir_del_fltr(struct enic *enic,
-	struct rte_eth_fdir_filter *params);
-extern void enic_free_wq(void *txq);
-extern int enic_alloc_intr_resources(struct enic *enic);
-extern int enic_setup_finish(struct enic *enic);
-extern int enic_alloc_wq(struct enic *enic, uint16_t queue_idx,
-	unsigned int socket_id, uint16_t nb_desc);
-extern void enic_start_wq(struct enic *enic, uint16_t queue_idx);
-extern int enic_stop_wq(struct enic *enic, uint16_t queue_idx);
-extern void enic_start_rq(struct enic *enic, uint16_t queue_idx);
-extern int enic_stop_rq(struct enic *enic, uint16_t queue_idx);
-extern void enic_free_rq(void *rxq);
-extern int enic_alloc_rq(struct enic *enic, uint16_t queue_idx,
-	unsigned int socket_id, struct rte_mempool *mp,
-	uint16_t nb_desc, uint16_t free_thresh);
-extern int enic_set_rss_nic_cfg(struct enic *enic);
-extern int enic_set_vnic_res(struct enic *enic);
-extern int enic_enable(struct enic *enic);
-extern int enic_disable(struct enic *enic);
-extern void enic_remove(struct enic *enic);
-extern int enic_get_link_status(struct enic *enic);
-extern int enic_dev_stats_get(struct enic *enic,
-	struct rte_eth_stats *r_stats);
-extern void enic_dev_stats_clear(struct enic *enic);
-extern void enic_add_packet_filter(struct enic *enic);
+void enic_fdir_stats_get(struct enic *enic,
+			 struct rte_eth_fdir_stats *stats);
+int enic_fdir_add_fltr(struct enic *enic,
+		       struct rte_eth_fdir_filter *params);
+int enic_fdir_del_fltr(struct enic *enic,
+		       struct rte_eth_fdir_filter *params);
+void enic_free_wq(void *txq);
+int enic_alloc_intr_resources(struct enic *enic);
+int enic_setup_finish(struct enic *enic);
+int enic_alloc_wq(struct enic *enic, uint16_t queue_idx,
+		  unsigned int socket_id, uint16_t nb_desc);
+void enic_start_wq(struct enic *enic, uint16_t queue_idx);
+int enic_stop_wq(struct enic *enic, uint16_t queue_idx);
+void enic_start_rq(struct enic *enic, uint16_t queue_idx);
+int enic_stop_rq(struct enic *enic, uint16_t queue_idx);
+void enic_free_rq(void *rxq);
+int enic_alloc_rq(struct enic *enic, uint16_t queue_idx,
+		  unsigned int socket_id, struct rte_mempool *mp,
+		  uint16_t nb_desc, uint16_t free_thresh);
+int enic_set_vnic_res(struct enic *enic);
+int enic_init_rss_nic_cfg(struct enic *enic);
+int enic_set_rss_conf(struct enic *enic,
+		      struct rte_eth_rss_conf *rss_conf);
+int enic_set_rss_reta(struct enic *enic, union vnic_rss_cpu *rss_cpu);
+int enic_set_vlan_strip(struct enic *enic);
+int enic_enable(struct enic *enic);
+int enic_disable(struct enic *enic);
+void enic_remove(struct enic *enic);
+int enic_get_link_status(struct enic *enic);
+int enic_dev_stats_get(struct enic *enic,
+		       struct rte_eth_stats *r_stats);
+void enic_dev_stats_clear(struct enic *enic);
+void enic_add_packet_filter(struct enic *enic);
 int enic_set_mac_address(struct enic *enic, uint8_t *mac_addr);
-void enic_del_mac_address(struct enic *enic, int mac_index);
-extern unsigned int enic_cleanup_wq(struct enic *enic, struct vnic_wq *wq);
-extern void enic_send_pkt(struct enic *enic, struct vnic_wq *wq,
-			  struct rte_mbuf *tx_pkt, unsigned short len,
-			  uint8_t sop, uint8_t eop, uint8_t cq_entry,
-			  uint16_t ol_flags, uint16_t vlan_tag);
+int enic_del_mac_address(struct enic *enic, int mac_index);
+unsigned int enic_cleanup_wq(struct enic *enic, struct vnic_wq *wq);
+void enic_send_pkt(struct enic *enic, struct vnic_wq *wq,
+		   struct rte_mbuf *tx_pkt, unsigned short len,
+		   uint8_t sop, uint8_t eop, uint8_t cq_entry,
+		   uint16_t ol_flags, uint16_t vlan_tag);
 
-extern void enic_post_wq_index(struct vnic_wq *wq);
-extern int enic_probe(struct enic *enic);
-extern int enic_clsf_init(struct enic *enic);
-extern void enic_clsf_destroy(struct enic *enic);
+void enic_post_wq_index(struct vnic_wq *wq);
+int enic_probe(struct enic *enic);
+int enic_clsf_init(struct enic *enic);
+void enic_clsf_destroy(struct enic *enic);
 uint16_t enic_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 			uint16_t nb_pkts);
 uint16_t enic_dummy_recv_pkts(void *rx_queue,
 			      struct rte_mbuf **rx_pkts,
 			      uint16_t nb_pkts);
 uint16_t enic_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
-			       uint16_t nb_pkts);
+			uint16_t nb_pkts);
 uint16_t enic_prep_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 			uint16_t nb_pkts);
 int enic_set_mtu(struct enic *enic, uint16_t new_mtu);

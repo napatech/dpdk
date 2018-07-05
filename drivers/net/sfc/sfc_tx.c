@@ -73,48 +73,10 @@ sfc_tx_get_queue_offload_caps(struct sfc_adapter *sa)
 	return caps;
 }
 
-static void
-sfc_tx_log_offloads(struct sfc_adapter *sa, const char *offload_group,
-		    const char *verdict, uint64_t offloads)
-{
-	unsigned long long bit;
-
-	while ((bit = __builtin_ffsll(offloads)) != 0) {
-		uint64_t flag = (1ULL << --bit);
-
-		sfc_err(sa, "Tx %s offload %s %s", offload_group,
-			rte_eth_dev_tx_offload_name(flag), verdict);
-
-		offloads &= ~flag;
-	}
-}
-
-static int
-sfc_tx_queue_offload_mismatch(struct sfc_adapter *sa, uint64_t requested)
-{
-	uint64_t mandatory = sa->eth_dev->data->dev_conf.txmode.offloads;
-	uint64_t supported = sfc_tx_get_dev_offload_caps(sa) |
-			     sfc_tx_get_queue_offload_caps(sa);
-	uint64_t rejected = requested & ~supported;
-	uint64_t missing = (requested & mandatory) ^ mandatory;
-	boolean_t mismatch = B_FALSE;
-
-	if (rejected) {
-		sfc_tx_log_offloads(sa, "queue", "is unsupported", rejected);
-		mismatch = B_TRUE;
-	}
-
-	if (missing) {
-		sfc_tx_log_offloads(sa, "queue", "must be set", missing);
-		mismatch = B_TRUE;
-	}
-
-	return mismatch;
-}
-
 static int
 sfc_tx_qcheck_conf(struct sfc_adapter *sa, unsigned int txq_max_fill_level,
-		   const struct rte_eth_txconf *tx_conf)
+		   const struct rte_eth_txconf *tx_conf,
+		   uint64_t offloads)
 {
 	int rc = 0;
 
@@ -138,14 +100,11 @@ sfc_tx_qcheck_conf(struct sfc_adapter *sa, unsigned int txq_max_fill_level,
 	}
 
 	/* We either perform both TCP and UDP offload, or no offload at all */
-	if (((tx_conf->offloads & DEV_TX_OFFLOAD_TCP_CKSUM) == 0) !=
-	    ((tx_conf->offloads & DEV_TX_OFFLOAD_UDP_CKSUM) == 0)) {
+	if (((offloads & DEV_TX_OFFLOAD_TCP_CKSUM) == 0) !=
+	    ((offloads & DEV_TX_OFFLOAD_UDP_CKSUM) == 0)) {
 		sfc_err(sa, "TCP and UDP offloads can't be set independently");
 		rc = EINVAL;
 	}
-
-	if (sfc_tx_queue_offload_mismatch(sa, tx_conf->offloads))
-		rc = EINVAL;
 
 	return rc;
 }
@@ -171,6 +130,7 @@ sfc_tx_qinit(struct sfc_adapter *sa, unsigned int sw_index,
 	struct sfc_txq *txq;
 	int rc = 0;
 	struct sfc_dp_tx_qcreate_info info;
+	uint64_t offloads;
 
 	sfc_log_init(sa, "TxQ = %u", sw_index);
 
@@ -183,7 +143,9 @@ sfc_tx_qinit(struct sfc_adapter *sa, unsigned int sw_index,
 	SFC_ASSERT(txq_entries >= nb_tx_desc);
 	SFC_ASSERT(txq_max_fill_level <= nb_tx_desc);
 
-	rc = sfc_tx_qcheck_conf(sa, txq_max_fill_level, tx_conf);
+	offloads = tx_conf->offloads |
+		sa->eth_dev->data->dev_conf.txmode.offloads;
+	rc = sfc_tx_qcheck_conf(sa, txq_max_fill_level, tx_conf, offloads);
 	if (rc != 0)
 		goto fail_bad_conf;
 
@@ -210,7 +172,7 @@ sfc_tx_qinit(struct sfc_adapter *sa, unsigned int sw_index,
 		(tx_conf->tx_free_thresh) ? tx_conf->tx_free_thresh :
 		SFC_TX_DEFAULT_FREE_THRESH;
 	txq->flags = tx_conf->txq_flags;
-	txq->offloads = tx_conf->offloads;
+	txq->offloads = offloads;
 
 	rc = sfc_dma_alloc(sa, "txq", sw_index, EFX_TXQ_SIZE(txq_info->entries),
 			   socket_id, &txq->mem);
@@ -221,7 +183,7 @@ sfc_tx_qinit(struct sfc_adapter *sa, unsigned int sw_index,
 	info.max_fill_level = txq_max_fill_level;
 	info.free_thresh = txq->free_thresh;
 	info.flags = tx_conf->txq_flags;
-	info.offloads = tx_conf->offloads;
+	info.offloads = offloads;
 	info.txq_entries = txq_info->entries;
 	info.dma_desc_size_max = encp->enc_tx_dma_desc_size_max;
 	info.txq_hw_ring = txq->mem.esm_base;
@@ -229,6 +191,7 @@ sfc_tx_qinit(struct sfc_adapter *sa, unsigned int sw_index,
 	info.evq_hw_ring = evq->mem.esm_base;
 	info.hw_index = txq->hw_index;
 	info.mem_bar = sa->mem_bar.esb_base;
+	info.vi_window_shift = encp->enc_vi_window_shift;
 
 	rc = sa->dp_tx->qcreate(sa->eth_dev->data->port_id, sw_index,
 				&RTE_ETH_DEV_TO_PCI(sa->eth_dev)->addr,
@@ -303,9 +266,6 @@ sfc_tx_qinit_info(struct sfc_adapter *sa, unsigned int sw_index)
 static int
 sfc_tx_check_mode(struct sfc_adapter *sa, const struct rte_eth_txmode *txmode)
 {
-	uint64_t offloads_supported = sfc_tx_get_dev_offload_caps(sa) |
-				      sfc_tx_get_queue_offload_caps(sa);
-	uint64_t offloads_rejected = txmode->offloads & ~offloads_supported;
 	int rc = 0;
 
 	switch (txmode->mq_mode) {
@@ -333,12 +293,6 @@ sfc_tx_check_mode(struct sfc_adapter *sa, const struct rte_eth_txmode *txmode)
 
 	if (txmode->hw_vlan_insert_pvid) {
 		sfc_err(sa, "Port-based VLAN insertion not supported");
-		rc = EINVAL;
-	}
-
-	if (offloads_rejected) {
-		sfc_tx_log_offloads(sa, "device", "is unsupported",
-				    offloads_rejected);
 		rc = EINVAL;
 	}
 
@@ -495,8 +449,7 @@ sfc_tx_qstart(struct sfc_adapter *sa, unsigned int sw_index)
 	    (txq->offloads & DEV_TX_OFFLOAD_UDP_CKSUM)) {
 		flags |= EFX_TXQ_CKSUM_TCPUDP;
 
-		if ((~txq->flags & ETH_TXQ_FLAGS_IGNORE) &&
-		    (offloads_supported & DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM))
+		if (offloads_supported & DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM)
 			flags |= EFX_TXQ_CKSUM_INNER_TCPUDP;
 	}
 
@@ -606,7 +559,7 @@ sfc_tx_qstop(struct sfc_adapter *sa, unsigned int sw_index)
 			sfc_err(sa, "TxQ %u flush timed out", sw_index);
 
 		if (txq->state & SFC_TXQ_FLUSHED)
-			sfc_info(sa, "TxQ %u flushed", sw_index);
+			sfc_notice(sa, "TxQ %u flushed", sw_index);
 	}
 
 	sa->dp_tx->qreap(txq->dp);

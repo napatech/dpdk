@@ -21,18 +21,21 @@ LDLIBS += -lgcc_s
 
 EXPORT_MAP := ../../rte_eal_version.map
 
-LIBABIVER := 6
+LIBABIVER := 7
 
 # specific to bsdapp exec-env
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) := eal.c
+SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_cpuflags.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_memory.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_hugepage_info.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_thread.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_debug.c
+SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_memalloc.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_lcore.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_timer.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_interrupts.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_alarm.c
+SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_dev.c
 
 # from common dir
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_common_lcore.c
@@ -40,6 +43,7 @@ SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_common_timer.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_common_memzone.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_common_log.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_common_launch.c
+SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_common_memalloc.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_common_memory.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_common_tailqs.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_common_errno.c
@@ -53,9 +57,11 @@ SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_common_dev.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_common_options.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_common_thread.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_common_proc.c
+SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_common_fbarray.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += rte_malloc.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += malloc_elem.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += malloc_heap.c
+SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += malloc_mp.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += rte_keepalive.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += rte_service.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += rte_reciprocal.c

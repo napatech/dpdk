@@ -23,7 +23,8 @@ print_usage () {
 }
 
 # Requires DPDK_GETMAINTAINER_PATH devel config option set
-if [ ! -x "$DPDK_GETMAINTAINER_PATH" ] ; then
+if [ ! -f "$DPDK_GETMAINTAINER_PATH" ] ||
+   [ ! -x "$DPDK_GETMAINTAINER_PATH" ] ; then
 	print_usage >&2
 	echo
 	echo 'Cannot execute DPDK_GETMAINTAINER_PATH' >&2
@@ -31,7 +32,7 @@ if [ ! -x "$DPDK_GETMAINTAINER_PATH" ] ; then
 fi
 
 FILES="COPYING CREDITS Kbuild"
-FOLDERS="Documentation arch include fs init ipc kernel scripts"
+FOLDERS="Documentation arch include fs init ipc scripts"
 
 # Kernel script checks for some files and folders to run
 workaround () {

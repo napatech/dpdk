@@ -60,6 +60,7 @@ struct sfc_rxq {
 	unsigned int		hw_index;
 	unsigned int		refill_threshold;
 	struct rte_mempool	*refill_mb_pool;
+	uint16_t		buf_size;
 	struct sfc_dp_rxq	*dp;
 	unsigned int		state;
 };
@@ -152,10 +153,12 @@ unsigned int sfc_rx_qdesc_npending(struct sfc_adapter *sa,
 				   unsigned int sw_index);
 int sfc_rx_qdesc_done(struct sfc_dp_rxq *dp_rxq, unsigned int offset);
 
-#if EFSYS_OPT_RX_SCALE
-efx_rx_hash_type_t sfc_rte_to_efx_hash_type(uint64_t rss_hf);
-uint64_t sfc_efx_to_rte_hash_type(efx_rx_hash_type_t efx_hash_types);
-#endif
+int sfc_rx_hash_init(struct sfc_adapter *sa);
+void sfc_rx_hash_fini(struct sfc_adapter *sa);
+int sfc_rx_hf_rte_to_efx(struct sfc_adapter *sa, uint64_t rte,
+			 efx_rx_hash_type_t *efx);
+uint64_t sfc_rx_hf_efx_to_rte(struct sfc_adapter *sa,
+			      efx_rx_hash_type_t efx);
 
 #ifdef __cplusplus
 }

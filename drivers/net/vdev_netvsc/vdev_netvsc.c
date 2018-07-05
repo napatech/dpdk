@@ -1,12 +1,14 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2017 6WIND S.A.
- * Copyright 2017 Mellanox Technologies, Ltd.
+ * Copyright 2017 Mellanox Technologies, Ltd
  */
 
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <linux/sockios.h>
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
 #include <net/if.h>
 #include <net/if_arp.h>
 #include <netinet/ip.h>
@@ -33,9 +35,11 @@
 #include <rte_hypervisor.h>
 #include <rte_kvargs.h>
 #include <rte_log.h>
+#include <rte_string_fns.h>
 
 #define VDEV_NETVSC_DRIVER net_vdev_netvsc
 #define VDEV_NETVSC_DRIVER_NAME RTE_STR(VDEV_NETVSC_DRIVER)
+#define VDEV_NETVSC_DRIVER_NAME_LEN 15
 #define VDEV_NETVSC_ARG_IFACE "iface"
 #define VDEV_NETVSC_ARG_MAC "mac"
 #define VDEV_NETVSC_ARG_FORCE "force"
@@ -96,76 +100,6 @@ vdev_netvsc_ctx_destroy(struct vdev_netvsc_ctx *ctx)
 }
 
 /**
- * Iterate over system network interfaces.
- *
- * This function runs a given callback function for each netdevice found on
- * the system.
- *
- * @param func
- *   Callback function pointer. List traversal is aborted when this function
- *   returns a nonzero value.
- * @param ...
- *   Variable parameter list passed as @p va_list to @p func.
- *
- * @return
- *   0 when the entire list is traversed successfully, a negative error code
- *   in case or failure, or the nonzero value returned by @p func when list
- *   traversal is aborted.
- */
-static int
-vdev_netvsc_foreach_iface(int (*func)(const struct if_nameindex *iface,
-				      const struct ether_addr *eth_addr,
-				      va_list ap), ...)
-{
-	struct if_nameindex *iface = if_nameindex();
-	int s = socket(PF_INET, SOCK_DGRAM, IPPROTO_IP);
-	unsigned int i;
-	int ret = 0;
-
-	if (!iface) {
-		ret = -ENOBUFS;
-		DRV_LOG(ERR, "cannot retrieve system network interfaces");
-		goto error;
-	}
-	if (s == -1) {
-		ret = -errno;
-		DRV_LOG(ERR, "cannot open socket: %s", rte_strerror(errno));
-		goto error;
-	}
-	for (i = 0; iface[i].if_name; ++i) {
-		struct ifreq req;
-		struct ether_addr eth_addr;
-		va_list ap;
-
-		strncpy(req.ifr_name, iface[i].if_name, sizeof(req.ifr_name));
-		if (ioctl(s, SIOCGIFHWADDR, &req) == -1) {
-			DRV_LOG(WARNING, "cannot retrieve information about"
-					 " interface \"%s\": %s",
-					 req.ifr_name, rte_strerror(errno));
-			continue;
-		}
-		if (req.ifr_hwaddr.sa_family != ARPHRD_ETHER) {
-			DRV_LOG(DEBUG, "interface %s is non-ethernet device",
-				req.ifr_name);
-			continue;
-		}
-		memcpy(eth_addr.addr_bytes, req.ifr_hwaddr.sa_data,
-		       RTE_DIM(eth_addr.addr_bytes));
-		va_start(ap, func);
-		ret = func(&iface[i], &eth_addr, ap);
-		va_end(ap);
-		if (ret)
-			break;
-	}
-error:
-	if (s != -1)
-		close(s);
-	if (iface)
-		if_freenameindex(iface);
-	return ret;
-}
-
-/**
  * Determine if a network interface is NetVSC.
  *
  * @param[in] iface
@@ -203,40 +137,176 @@ vdev_netvsc_iface_is_netvsc(const struct if_nameindex *iface)
 }
 
 /**
+ * Iterate over system network interfaces.
+ *
+ * This function runs a given callback function for each netdevice found on
+ * the system.
+ *
+ * @param func
+ *   Callback function pointer. List traversal is aborted when this function
+ *   returns a nonzero value.
+ * @param is_netvsc
+ *   Indicates the device type to iterate - netvsc or non-netvsc.
+ * @param ...
+ *   Variable parameter list passed as @p va_list to @p func.
+ *
+ * @return
+ *   0 when the entire list is traversed successfully, a negative error code
+ *   in case or failure, or the nonzero value returned by @p func when list
+ *   traversal is aborted.
+ */
+static int
+vdev_netvsc_foreach_iface(int (*func)(const struct if_nameindex *iface,
+				      const struct ether_addr *eth_addr,
+				      va_list ap), int is_netvsc, ...)
+{
+	struct if_nameindex *iface = if_nameindex();
+	int s = socket(PF_INET, SOCK_DGRAM, IPPROTO_IP);
+	unsigned int i;
+	int ret = 0;
+
+	if (!iface) {
+		ret = -ENOBUFS;
+		DRV_LOG(ERR, "cannot retrieve system network interfaces");
+		goto error;
+	}
+	if (s == -1) {
+		ret = -errno;
+		DRV_LOG(ERR, "cannot open socket: %s", rte_strerror(errno));
+		goto error;
+	}
+	for (i = 0; iface[i].if_name; ++i) {
+		int is_netvsc_ret;
+		struct ifreq req;
+		struct ether_addr eth_addr;
+		va_list ap;
+
+		is_netvsc_ret = vdev_netvsc_iface_is_netvsc(&iface[i]) ? 1 : 0;
+		if (is_netvsc ^ is_netvsc_ret)
+			continue;
+		strlcpy(req.ifr_name, iface[i].if_name, sizeof(req.ifr_name));
+		if (ioctl(s, SIOCGIFHWADDR, &req) == -1) {
+			DRV_LOG(WARNING, "cannot retrieve information about"
+					 " interface \"%s\": %s",
+					 req.ifr_name, rte_strerror(errno));
+			continue;
+		}
+		if (req.ifr_hwaddr.sa_family != ARPHRD_ETHER) {
+			DRV_LOG(DEBUG, "interface %s is non-ethernet device",
+				req.ifr_name);
+			continue;
+		}
+		memcpy(eth_addr.addr_bytes, req.ifr_hwaddr.sa_data,
+		       RTE_DIM(eth_addr.addr_bytes));
+		va_start(ap, is_netvsc);
+		ret = func(&iface[i], &eth_addr, ap);
+		va_end(ap);
+		if (ret)
+			break;
+	}
+error:
+	if (s != -1)
+		close(s);
+	if (iface)
+		if_freenameindex(iface);
+	return ret;
+}
+
+/**
  * Determine if a network interface has a route.
  *
  * @param[in] name
  *   Network device name.
+ * @param[in] family
+ *   Address family: AF_INET for IPv4 or AF_INET6 for IPv6.
  *
  * @return
- *   A nonzero value when interface has an route. In case of error,
- *   rte_errno is updated and 0 returned.
+ *   1 when interface has a route, negative errno value in case of error and
+ *   0 otherwise.
  */
 static int
-vdev_netvsc_has_route(const char *name)
+vdev_netvsc_has_route(const struct if_nameindex *iface,
+		      const unsigned char family)
 {
-	FILE *fp;
+	/*
+	 * The implementation can be simpler by getifaddrs() function usage but
+	 * it works for IPv6 only starting from glibc 2.3.3.
+	 */
+	char buf[4096];
+	int len;
 	int ret = 0;
-	char route[NETVSC_MAX_ROUTE_LINE_SIZE];
-	char *netdev;
+	int res;
+	int sock;
+	struct nlmsghdr *retmsg = (struct nlmsghdr *)buf;
+	struct sockaddr_nl sa;
+	struct {
+		struct nlmsghdr nlhdr;
+		struct ifaddrmsg addrmsg;
+	} msg;
 
-	fp = fopen("/proc/net/route", "r");
-	if (!fp) {
-		rte_errno = errno;
-		return 0;
+	if (!iface || (family != AF_INET && family != AF_INET6)) {
+		DRV_LOG(ERR, "%s", rte_strerror(EINVAL));
+		return -EINVAL;
 	}
-	while (fgets(route, NETVSC_MAX_ROUTE_LINE_SIZE, fp) != NULL) {
-		netdev = strtok(route, "\t");
-		if (strcmp(netdev, name) == 0) {
-			ret = 1;
-			break;
+	sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+	if (sock == -1) {
+		DRV_LOG(ERR, "cannot open socket: %s", rte_strerror(errno));
+		return -errno;
+	}
+	memset(&sa, 0, sizeof(sa));
+	sa.nl_family = AF_NETLINK;
+	sa.nl_groups = RTMGRP_LINK | RTMGRP_IPV4_IFADDR;
+	res = bind(sock, (struct sockaddr *)&sa, sizeof(sa));
+	if (res == -1) {
+		ret = -errno;
+		DRV_LOG(ERR, "cannot bind socket: %s", rte_strerror(errno));
+		goto close;
+	}
+	memset(&msg, 0, sizeof(msg));
+	msg.nlhdr.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifaddrmsg));
+	msg.nlhdr.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+	msg.nlhdr.nlmsg_type = RTM_GETADDR;
+	msg.nlhdr.nlmsg_pid = getpid();
+	msg.addrmsg.ifa_family = family;
+	msg.addrmsg.ifa_index = iface->if_index;
+	res = send(sock, &msg, msg.nlhdr.nlmsg_len, 0);
+	if (res == -1) {
+		ret = -errno;
+		DRV_LOG(ERR, "cannot send socket message: %s",
+			rte_strerror(errno));
+		goto close;
+	}
+	memset(buf, 0, sizeof(buf));
+	len = recv(sock, buf, sizeof(buf), 0);
+	if (len == -1) {
+		ret = -errno;
+		DRV_LOG(ERR, "cannot receive socket message: %s",
+			rte_strerror(errno));
+		goto close;
+	}
+	while (NLMSG_OK(retmsg, (unsigned int)len)) {
+		struct ifaddrmsg *retaddr =
+				(struct ifaddrmsg *)NLMSG_DATA(retmsg);
+
+		if (retaddr->ifa_family == family &&
+		    retaddr->ifa_index == iface->if_index) {
+			struct rtattr *retrta = IFA_RTA(retaddr);
+			int attlen = IFA_PAYLOAD(retmsg);
+
+			while (RTA_OK(retrta, attlen)) {
+				if (retrta->rta_type == IFA_ADDRESS) {
+					ret = 1;
+					DRV_LOG(DEBUG, "interface %s has IP",
+						iface->if_name);
+					goto close;
+				}
+				retrta = RTA_NEXT(retrta, attlen);
+			}
 		}
-		/* Move file pointer to the next line. */
-		while (strchr(route, '\n') == NULL &&
-		       fgets(route, NETVSC_MAX_ROUTE_LINE_SIZE, fp) != NULL)
-			;
+		retmsg = NLMSG_NEXT(retmsg, len);
 	}
-	fclose(fp);
+close:
+	close(sock);
 	return ret;
 }
 
@@ -259,12 +329,15 @@ static int
 vdev_netvsc_sysfs_readlink(char *buf, size_t size, const char *if_name,
 			   const char *relpath)
 {
+	struct vdev_netvsc_ctx *ctx;
+	char in[RTE_MAX(sizeof(ctx->yield), 256u)];
 	int ret;
 
-	ret = snprintf(buf, size, "/sys/class/net/%s/%s", if_name, relpath);
-	if (ret == -1 || (size_t)ret >= size)
+	ret = snprintf(in, sizeof(in) - 1, "/sys/class/net/%s/%s",
+		       if_name, relpath);
+	if (ret == -1 || (size_t)ret >= sizeof(in))
 		return -ENOBUFS;
-	ret = readlink(buf, buf, size);
+	ret = readlink(in, buf, size);
 	if (ret == -1)
 		return -errno;
 	if ((size_t)ret >= size - 1)
@@ -314,11 +387,9 @@ vdev_netvsc_device_probe(const struct if_nameindex *iface,
 		DRV_LOG(DEBUG,
 			"NetVSC interface \"%s\" (index %u) renamed \"%s\"",
 			ctx->if_name, ctx->if_index, iface->if_name);
-		strncpy(ctx->if_name, iface->if_name, sizeof(ctx->if_name));
+		strlcpy(ctx->if_name, iface->if_name, sizeof(ctx->if_name));
 		return 0;
 	}
-	if (vdev_netvsc_iface_is_netvsc(iface))
-		return 0;
 	if (!is_same_ether_addr(eth_addr, &ctx->if_addr))
 		return 0;
 	/* Look for associated PCI device. */
@@ -387,7 +458,8 @@ vdev_netvsc_alarm(__rte_unused void *arg)
 	int ret;
 
 	LIST_FOREACH(ctx, &vdev_netvsc_ctx_list, entry) {
-		ret = vdev_netvsc_foreach_iface(vdev_netvsc_device_probe, ctx);
+		ret = vdev_netvsc_foreach_iface(vdev_netvsc_device_probe, 0,
+		      ctx);
 		if (ret < 0)
 			break;
 	}
@@ -443,7 +515,6 @@ vdev_netvsc_netvsc_probe(const struct if_nameindex *iface,
 {
 	const char *name = va_arg(ap, const char *);
 	struct rte_kvargs *kvargs = va_arg(ap, struct rte_kvargs *);
-	int force = va_arg(ap, int);
 	unsigned int specified = va_arg(ap, unsigned int);
 	unsigned int *matched = va_arg(ap, unsigned int *);
 	unsigned int i;
@@ -497,18 +568,12 @@ vdev_netvsc_netvsc_probe(const struct if_nameindex *iface,
 			iface->if_name, iface->if_index);
 		return 0;
 	}
-	if (!vdev_netvsc_iface_is_netvsc(iface)) {
-		if (!specified || !force)
-			return 0;
-		DRV_LOG(WARNING,
-			"using non-NetVSC interface \"%s\" (index %u)",
-			iface->if_name, iface->if_index);
-	}
 	/* Routed NetVSC should not be probed. */
-	if (vdev_netvsc_has_route(iface->if_name)) {
-		if (!specified || !force)
+	if (vdev_netvsc_has_route(iface, AF_INET) ||
+	    vdev_netvsc_has_route(iface, AF_INET6)) {
+		if (!specified)
 			return 0;
-		DRV_LOG(WARNING, "using routed NetVSC interface \"%s\""
+		DRV_LOG(WARNING, "probably using routed NetVSC interface \"%s\""
 			" (index %u)", iface->if_name, iface->if_index);
 	}
 	/* Create interface context. */
@@ -520,7 +585,7 @@ vdev_netvsc_netvsc_probe(const struct if_nameindex *iface,
 		goto error;
 	}
 	ctx->id = vdev_netvsc_ctx_count;
-	strncpy(ctx->if_name, iface->if_name, sizeof(ctx->if_name));
+	strlcpy(ctx->if_name, iface->if_name, sizeof(ctx->if_name));
 	ctx->if_index = iface->if_index;
 	ctx->if_addr = *eth_addr;
 	ctx->pipe[0] = -1;
@@ -551,13 +616,13 @@ vdev_netvsc_netvsc_probe(const struct if_nameindex *iface,
 		       name, ctx->id);
 	if (ret == -1 || (size_t)ret >= sizeof(ctx->name))
 		++i;
-	ret = snprintf(ctx->devname, sizeof(ctx->devname), "net_failsafe_%s",
-		       ctx->name);
+	ret = snprintf(ctx->devname, sizeof(ctx->devname), "net_failsafe_vsc%u",
+		       ctx->id);
 	if (ret == -1 || (size_t)ret >= sizeof(ctx->devname))
 		++i;
 	ret = snprintf(ctx->devargs, sizeof(ctx->devargs),
-		       "fd(%d),dev(net_tap_%s,remote=%s)",
-		       ctx->pipe[0], ctx->name, ctx->if_name);
+		       "fd(%d),dev(net_tap_vsc%u,remote=%s)",
+		       ctx->pipe[0], ctx->id, ctx->if_name);
 	if (ret == -1 || (size_t)ret >= sizeof(ctx->devargs))
 		++i;
 	if (i) {
@@ -569,7 +634,7 @@ vdev_netvsc_netvsc_probe(const struct if_nameindex *iface,
 	/* Request virtual device generation. */
 	DRV_LOG(DEBUG, "generating virtual device \"%s\" with arguments \"%s\"",
 		ctx->devname, ctx->devargs);
-	vdev_netvsc_foreach_iface(vdev_netvsc_device_probe, ctx);
+	vdev_netvsc_foreach_iface(vdev_netvsc_device_probe, 0, ctx);
 	ret = rte_eal_hotplug_add("vdev", ctx->devname, ctx->devargs);
 	if (ret)
 		goto error;
@@ -639,16 +704,32 @@ vdev_netvsc_vdev_probe(struct rte_vdev_device *dev)
 			rte_kvargs_free(kvargs);
 		return 0;
 	}
+	if (specified > 1) {
+		DRV_LOG(ERR, "More than one way used to specify the netvsc"
+			" device.");
+		goto error;
+	}
 	rte_eal_alarm_cancel(vdev_netvsc_alarm, NULL);
 	/* Gather interfaces. */
-	ret = vdev_netvsc_foreach_iface(vdev_netvsc_netvsc_probe, name, kvargs,
-					force, specified, &matched);
+	ret = vdev_netvsc_foreach_iface(vdev_netvsc_netvsc_probe, 1, name,
+					kvargs, specified, &matched);
 	if (ret < 0)
 		goto error;
-	if (matched < specified)
-		DRV_LOG(WARNING,
-			"some of the specified parameters did not match"
-			" recognized network interfaces");
+	if (specified && matched < specified) {
+		if (!force) {
+			DRV_LOG(ERR, "Cannot find the specified netvsc device");
+			goto error;
+		}
+		/* Try to force probing on non-netvsc specified device. */
+		if (vdev_netvsc_foreach_iface(vdev_netvsc_netvsc_probe, 0, name,
+					      kvargs, specified, &matched) < 0)
+			goto error;
+		if (matched < specified) {
+			DRV_LOG(ERR, "Cannot find the specified device");
+			goto error;
+		}
+		DRV_LOG(WARNING, "non-netvsc device was probed as netvsc");
+	}
 	ret = rte_eal_alarm_set(VDEV_NETVSC_PROBE_MS * 1000,
 				vdev_netvsc_alarm, NULL);
 	if (ret < 0) {
@@ -718,7 +799,8 @@ static int
 vdev_netvsc_cmp_rte_device(const struct rte_device *dev1,
 			   __rte_unused const void *_dev2)
 {
-	return strcmp(dev1->devargs->name, VDEV_NETVSC_DRIVER_NAME);
+	return strncmp(dev1->devargs->name, VDEV_NETVSC_DRIVER_NAME,
+		       VDEV_NETVSC_DRIVER_NAME_LEN);
 }
 
 /**
@@ -733,14 +815,15 @@ vdev_netvsc_scan_callback(__rte_unused void *arg)
 	struct rte_devargs *devargs;
 	struct rte_bus *vbus = rte_bus_find_by_name("vdev");
 
-	TAILQ_FOREACH(devargs, &devargs_list, next)
-		if (!strcmp(devargs->name, VDEV_NETVSC_DRIVER_NAME))
+	RTE_EAL_DEVARGS_FOREACH("vdev", devargs)
+		if (!strncmp(devargs->name, VDEV_NETVSC_DRIVER_NAME,
+			     VDEV_NETVSC_DRIVER_NAME_LEN))
 			return;
 	dev = (struct rte_vdev_device *)vbus->find_device(NULL,
 		vdev_netvsc_cmp_rte_device, VDEV_NETVSC_DRIVER_NAME);
 	if (dev)
 		return;
-	if (rte_eal_devargs_add(RTE_DEVTYPE_VIRTUAL, VDEV_NETVSC_DRIVER_NAME))
+	if (rte_devargs_add(RTE_DEVTYPE_VIRTUAL, VDEV_NETVSC_DRIVER_NAME))
 		DRV_LOG(ERR, "unable to add netvsc devargs.");
 }
 

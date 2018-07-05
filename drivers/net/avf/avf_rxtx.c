@@ -109,7 +109,7 @@ check_rx_vec_allow(struct avf_rx_queue *rxq)
 static inline bool
 check_tx_vec_allow(struct avf_tx_queue *txq)
 {
-	if ((txq->txq_flags & AVF_SIMPLE_FLAGS) == AVF_SIMPLE_FLAGS &&
+	if (!(txq->offloads & AVF_NO_VECTOR_FLAGS) &&
 	    txq->rs_thresh >= AVF_VPMD_TX_MAX_BURST &&
 	    txq->rs_thresh <= AVF_VPMD_TX_MAX_FREE_BUF) {
 		PMD_INIT_LOG(DEBUG, "Vector tx can be enabled on this txq.");
@@ -435,8 +435,11 @@ avf_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	uint32_t ring_size;
 	uint16_t tx_rs_thresh, tx_free_thresh;
 	uint16_t i, base, bsf, tc_mapping;
+	uint64_t offloads;
 
 	PMD_INIT_FUNC_TRACE();
+
+	offloads = tx_conf->offloads | dev->data->dev_conf.txmode.offloads;
 
 	if (nb_desc % AVF_ALIGN_RING_DESC != 0 ||
 	    nb_desc > AVF_MAX_RING_DESC ||
@@ -474,7 +477,7 @@ avf_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	txq->free_thresh = tx_free_thresh;
 	txq->queue_id = queue_idx;
 	txq->port_id = dev->data->port_id;
-	txq->txq_flags = tx_conf->txq_flags;
+	txq->offloads = offloads;
 	txq->tx_deferred_start = tx_conf->tx_deferred_start;
 
 	/* Allocate software ring */
@@ -1831,7 +1834,7 @@ avf_dev_txq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 
 	qinfo->conf.tx_free_thresh = txq->free_thresh;
 	qinfo->conf.tx_rs_thresh = txq->rs_thresh;
-	qinfo->conf.txq_flags = txq->txq_flags;
+	qinfo->conf.offloads = txq->offloads;
 	qinfo->conf.tx_deferred_start = txq->tx_deferred_start;
 }
 

@@ -1,7 +1,7 @@
 /*
- * Copyright (c) 2017 QLogic Corporation.
+ * Copyright (c) 2017 Cavium Inc.
  * All rights reserved.
- * www.qlogic.com
+ * www.cavium.com
  *
  * See LICENSE.qede_pmd for copyright and licensing details.
  */
@@ -141,8 +141,8 @@ qede_config_cmn_fdir_filter(struct rte_eth_dev *eth_dev,
 	if (add) {
 		SLIST_FOREACH(tmp, &qdev->fdir_info.fdir_list_head, list) {
 			if (memcmp(tmp->mz->addr, pkt, pkt_len) == 0) {
-				DP_ERR(edev, "flowdir filter exist\n");
-				rc = -EEXIST;
+				DP_INFO(edev, "flowdir filter exist\n");
+				rc = 0;
 				goto err2;
 			}
 		}

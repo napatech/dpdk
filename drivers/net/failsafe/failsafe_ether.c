@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2017 6WIND S.A.
- * Copyright 2017 Mellanox.
+ * Copyright 2017 Mellanox Technologies, Ltd
  */
 
 #include <unistd.h>
@@ -260,6 +260,7 @@ fs_dev_remove(struct sub_device *sdev)
 		sdev->state = DEV_ACTIVE;
 		/* fallthrough */
 	case DEV_ACTIVE:
+		failsafe_eth_dev_unregister_callbacks(sdev);
 		rte_eth_dev_close(PORT_ID(sdev));
 		sdev->state = DEV_PROBED;
 		/* fallthrough */
@@ -318,6 +319,35 @@ fs_rxtx_clean(struct sub_device *sdev)
 		if (FS_ATOMIC_TX(sdev, i))
 			return 0;
 	return 1;
+}
+
+void
+failsafe_eth_dev_unregister_callbacks(struct sub_device *sdev)
+{
+	int ret;
+
+	if (sdev == NULL)
+		return;
+	if (sdev->rmv_callback) {
+		ret = rte_eth_dev_callback_unregister(PORT_ID(sdev),
+						RTE_ETH_EVENT_INTR_RMV,
+						failsafe_eth_rmv_event_callback,
+						sdev);
+		if (ret)
+			WARN("Failed to unregister RMV callback for sub_device"
+			     " %d", SUB_ID(sdev));
+		sdev->rmv_callback = 0;
+	}
+	if (sdev->lsc_callback) {
+		ret = rte_eth_dev_callback_unregister(PORT_ID(sdev),
+						RTE_ETH_EVENT_INTR_LSC,
+						failsafe_eth_lsc_event_callback,
+						sdev);
+		if (ret)
+			WARN("Failed to unregister LSC callback for sub_device"
+			     " %d", SUB_ID(sdev));
+		sdev->lsc_callback = 0;
+	}
 }
 
 void
@@ -462,4 +492,27 @@ failsafe_eth_lsc_event_callback(uint16_t port_id __rte_unused,
 						     NULL);
 	else
 		return 0;
+}
+
+/* Take sub-device ownership before it becomes exposed to the application. */
+int
+failsafe_eth_new_event_callback(uint16_t port_id,
+				enum rte_eth_event_type event __rte_unused,
+				void *cb_arg, void *out __rte_unused)
+{
+	struct rte_eth_dev *fs_dev = cb_arg;
+	struct sub_device *sdev;
+	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
+	uint8_t i;
+
+	FOREACH_SUBDEV_STATE(sdev, i, fs_dev, DEV_PARSED) {
+		if (sdev->state >= DEV_PROBED)
+			continue;
+		if (strcmp(sdev->devargs.name, dev->device->name) != 0)
+			continue;
+		rte_eth_dev_owner_set(port_id, &PRIV(fs_dev)->my_owner);
+		/* The actual owner will be checked after the port probing. */
+		break;
+	}
+	return 0;
 }

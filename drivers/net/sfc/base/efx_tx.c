@@ -117,6 +117,7 @@ static const efx_tx_ops_t	__efx_tx_siena_ops = {
 	NULL,					/* etxo_qdesc_tso_create */
 	NULL,					/* etxo_qdesc_tso2_create */
 	NULL,					/* etxo_qdesc_vlantci_create */
+	NULL,					/* etxo_qdesc_checksum_create */
 #if EFSYS_OPT_QSTATS
 	siena_tx_qstats_update,			/* etxo_qstats_update */
 #endif
@@ -143,6 +144,7 @@ static const efx_tx_ops_t	__efx_tx_hunt_ops = {
 	ef10_tx_qdesc_tso_create,		/* etxo_qdesc_tso_create */
 	ef10_tx_qdesc_tso2_create,		/* etxo_qdesc_tso2_create */
 	ef10_tx_qdesc_vlantci_create,		/* etxo_qdesc_vlantci_create */
+	ef10_tx_qdesc_checksum_create,		/* etxo_qdesc_checksum_create */
 #if EFSYS_OPT_QSTATS
 	ef10_tx_qstats_update,			/* etxo_qstats_update */
 #endif
@@ -169,11 +171,40 @@ static const efx_tx_ops_t	__efx_tx_medford_ops = {
 	NULL,					/* etxo_qdesc_tso_create */
 	ef10_tx_qdesc_tso2_create,		/* etxo_qdesc_tso2_create */
 	ef10_tx_qdesc_vlantci_create,		/* etxo_qdesc_vlantci_create */
+	ef10_tx_qdesc_checksum_create,		/* etxo_qdesc_checksum_create */
 #if EFSYS_OPT_QSTATS
 	ef10_tx_qstats_update,			/* etxo_qstats_update */
 #endif
 };
 #endif /* EFSYS_OPT_MEDFORD */
+
+#if EFSYS_OPT_MEDFORD2
+static const efx_tx_ops_t	__efx_tx_medford2_ops = {
+	ef10_tx_init,				/* etxo_init */
+	ef10_tx_fini,				/* etxo_fini */
+	ef10_tx_qcreate,			/* etxo_qcreate */
+	ef10_tx_qdestroy,			/* etxo_qdestroy */
+	ef10_tx_qpost,				/* etxo_qpost */
+	ef10_tx_qpush,				/* etxo_qpush */
+	ef10_tx_qpace,				/* etxo_qpace */
+	ef10_tx_qflush,				/* etxo_qflush */
+	ef10_tx_qenable,			/* etxo_qenable */
+	ef10_tx_qpio_enable,			/* etxo_qpio_enable */
+	ef10_tx_qpio_disable,			/* etxo_qpio_disable */
+	ef10_tx_qpio_write,			/* etxo_qpio_write */
+	ef10_tx_qpio_post,			/* etxo_qpio_post */
+	ef10_tx_qdesc_post,			/* etxo_qdesc_post */
+	ef10_tx_qdesc_dma_create,		/* etxo_qdesc_dma_create */
+	NULL,					/* etxo_qdesc_tso_create */
+	ef10_tx_qdesc_tso2_create,		/* etxo_qdesc_tso2_create */
+	ef10_tx_qdesc_vlantci_create,		/* etxo_qdesc_vlantci_create */
+	ef10_tx_qdesc_checksum_create,		/* etxo_qdesc_checksum_create */
+#if EFSYS_OPT_QSTATS
+	ef10_tx_qstats_update,			/* etxo_qstats_update */
+#endif
+};
+#endif /* EFSYS_OPT_MEDFORD2 */
+
 
 	__checkReturn	efx_rc_t
 efx_tx_init(
@@ -213,6 +244,12 @@ efx_tx_init(
 		etxop = &__efx_tx_medford_ops;
 		break;
 #endif /* EFSYS_OPT_MEDFORD */
+
+#if EFSYS_OPT_MEDFORD2
+	case EFX_FAMILY_MEDFORD2:
+		etxop = &__efx_tx_medford2_ops;
+		break;
+#endif /* EFSYS_OPT_MEDFORD2 */
 
 	default:
 		EFSYS_ASSERT(0);
@@ -588,6 +625,7 @@ efx_tx_qdesc_tso_create(
 efx_tx_qdesc_tso2_create(
 	__in			efx_txq_t *etp,
 	__in			uint16_t ipv4_id,
+	__in			uint16_t outer_ipv4_id,
 	__in			uint32_t tcp_seq,
 	__in			uint16_t mss,
 	__out_ecount(count)	efx_desc_t *edp,
@@ -599,7 +637,8 @@ efx_tx_qdesc_tso2_create(
 	EFSYS_ASSERT3U(etp->et_magic, ==, EFX_TXQ_MAGIC);
 	EFSYS_ASSERT(etxop->etxo_qdesc_tso2_create != NULL);
 
-	etxop->etxo_qdesc_tso2_create(etp, ipv4_id, tcp_seq, mss, edp, count);
+	etxop->etxo_qdesc_tso2_create(etp, ipv4_id, outer_ipv4_id,
+	    tcp_seq, mss, edp, count);
 }
 
 	void
@@ -615,6 +654,21 @@ efx_tx_qdesc_vlantci_create(
 	EFSYS_ASSERT(etxop->etxo_qdesc_vlantci_create != NULL);
 
 	etxop->etxo_qdesc_vlantci_create(etp, tci, edp);
+}
+
+	void
+efx_tx_qdesc_checksum_create(
+	__in	efx_txq_t *etp,
+	__in	uint16_t flags,
+	__out	efx_desc_t *edp)
+{
+	efx_nic_t *enp = etp->et_enp;
+	const efx_tx_ops_t *etxop = enp->en_etxop;
+
+	EFSYS_ASSERT3U(etp->et_magic, ==, EFX_TXQ_MAGIC);
+	EFSYS_ASSERT(etxop->etxo_qdesc_checksum_create != NULL);
+
+	etxop->etxo_qdesc_checksum_create(etp, flags, edp);
 }
 
 

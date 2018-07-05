@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2017 Intel Corporation
 
+version = 2
+
 cflags += ['-DRTE_LIBRTE_IXGBE_BYPASS']
 
 subdir('base')
@@ -17,6 +19,7 @@ sources = files(
 	'ixgbe_pf.c',
 	'ixgbe_rxtx.c',
 	'ixgbe_tm.c',
+	'ixgbe_vf_representor.c',
 	'rte_pmd_ixgbe.c'
 )
 

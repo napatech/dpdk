@@ -33,7 +33,7 @@ parser.add_argument("-p", "--testapp-path",
                     default=dpdk_path + "/" + dpdk_target + "/app/testbbdev")
 parser.add_argument("-e", "--eal-params",
                     help="EAL arguments which are passed to the test app",
-                    default="--vdev=bbdev_null0")
+                    default="--vdev=baseband_null0")
 parser.add_argument("-t", "--timeout",
                     type=int,
                     help="Timeout in seconds",
@@ -45,7 +45,7 @@ parser.add_argument("-v", "--test-vector",
                     nargs="+",
                     help="Specifies paths to the test vector files.",
                     default=[dpdk_path +
-                    "/app/test-bbdev/test_vectors/bbdev_vector_null.data"])
+                    "/app/test-bbdev/test_vectors/bbdev_null.data"])
 parser.add_argument("-n", "--num-ops",
                     type=int,
                     help="Number of operations to process on device.",
