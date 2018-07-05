@@ -393,8 +393,7 @@ static const char *GetSorted(enum rte_eth_hash_function func)
 int CreateHash(char *ntpl_buf, const struct rte_flow_action_rss *rss, struct pmd_internals *internals)
 {
   enum rte_eth_hash_function func;
-  bool tunnel;
-  printf("CreateHash: Func: %u, level: %u, types %llx\n", rss->func, rss->level, (long long unsigned int)rss->types);
+  bool tunnel = false;
 
   // Select either sorted or non-sorted hash
   switch (rss->func)

@@ -2298,7 +2298,7 @@ rte_pktmbuf_cmbatch_get_next_packet(struct rte_mbuf *m_batch,
 		// Mark mbuf as a special mbuf. The mbuf is a control
 		// mbuf and the packet in this mbuf has a descriptor
 		// header.
-		m->ol_flags = CTRL_MBUF_FLAG | PKT_RX_HAS_HEADER;
+		m->ol_flags = PKT_RX_HAS_HEADER;
 	}
 
 	// No more packets in batch buffer

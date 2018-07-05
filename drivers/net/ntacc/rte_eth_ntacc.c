@@ -322,7 +322,7 @@ static uint16_t eth_ntacc_rx(void *queue,
     rx_q->pSeg = NULL;
 
     mbuf->port = rx_q->in_port;
-    mbuf->ol_flags |= PKT_BATCH | CTRL_MBUF_FLAG;
+    mbuf->ol_flags |= PKT_BATCH;
     mbuf->cmbatch_release_cb = _seg_release_cb;
 
     /* let userdata point to original mbuf address where batchCtl is placed */

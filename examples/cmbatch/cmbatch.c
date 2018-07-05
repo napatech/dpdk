@@ -210,7 +210,7 @@ static int lcore_worker_batch_parse(void *p)
         //
         // mbuf->batch_nb_packet: The number of packets in a batch.
         //
-        // mbuf->ol_flags: (PKT_BATCH | CTRL_MBUF_FLAG) indicating that the
+        // mbuf->ol_flags: (PKT_BATCH) indicating that the
         //                 mbuf contains a batch of packets
         //
         // mbuf->data_off: Not used. Always 0
@@ -339,7 +339,7 @@ static int lcore_worker_parse_helper(void *p)
 	uint16_t nb_rx;
 
 	// Check that we have a valid port.
-	if (data->port > rte_eth_dev_count()) {
+	if (data->port > rte_eth_dev_count_avail()) {
 		printf("ERROR, Port %u is not present\n", data->port);
 		return -1;
 	}
@@ -384,7 +384,7 @@ static int lcore_worker_parse_helper(void *p)
 					//
 					// mbuf->batch_nb_packet: The number of packets in a batch.
 					//
-					// mbuf->ol_flags: (PKT_BATCH | CTRL_MBUF_FLAG) indicating that the
+					// mbuf->ol_flags: (PKT_BATCH) indicating that the
 					//                 mbuf contains a batch of packets
 					//
 					// mbuf->data_off: Not used. Always 0
