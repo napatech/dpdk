@@ -44,6 +44,8 @@ The NTACC PMD driver does not need to be bound. This means that the dpdk-devbind
 
 The Napatech driver and adapter must be installed and started before the NTACC PMD can be used. See the installation guide in the Napatech driver package for how to install and start the driver.
 
+> Note: The driver and FPGA version must be the supported version or a newer version.
+
 See below for supported drivers and adapters:
 
 |  Supported drivers |
@@ -199,11 +201,12 @@ Following rte_flow filters are supported:
 |`RTE_FLOW_ITEM_TYPE_TCP`   | `hdr.src_port`<br>`hdr.dst_port`<br>`hdr.data_off`<br>`hdr.tcp_flags`                                                                                                               |
 |`RTE_FLOW_ITEM_TYPE_UDP`   | `hdr.src_port`<br>`hdr.dst_port`                                                                                                                                                |
 |`RTE_FLOW_ITEM_TYPE_ICMP`  | `hdr.icmp_type`<br>`hdr.icmp_code`                                                                                                                                              |
-|`RTE_FLOW_ITEM_TYPE_VLAN`  | `tpid`<br>`tci`                                                                                                                                                                 |
+|`RTE_FLOW_ITEM_TYPE_VLAN`  | `tci`                                                                                                                                                                 |
+|`RTE_FLOW_ITEM_TYPE_MPLS`  | `label_tc_s` |
 |`RTE_FLOW_ITEM_TYPE_NVGRE` | Only packet type = `NVGRE`                                                                                                                                                    |
 |`RTE_FLOW_ITEM_TYPE_VXLAN` | Only packet type = `VXLAN`                                                                                                                                                    |
 | `RTE_FLOW_ITEM_TYPE_GRE`  | `c_rsvd0_ver` (only version = bit b0-b2)|
-| `RTE_FLOW_ITEM_TYPE_PORT`  | `index`<br>The port numbers used must be the local port numbers for the adapter. <br>For a 4 port adapter the port numbers are 0 to 3.|
+| `RTE_FLOW_ITEM_TYPE_PHY_PORT`  | `index`<br>The port numbers used must be the local port numbers for the adapter. <br>For a 4 port adapter the port numbers are 0 to 3.|
 |`RTE_FLOW_ITEM_TYPE_GRE`    | `c_rsvd0_ver=1`: Packet type = `GREv1`<br>`c_rsvd0_ver=0`: Packet type = `GREv0`   |
 |`RTE_FLOW_ITEM_TYPE_GTPU`  | `v_pt_rsv_flags=0`: Packet type = `GTPv0_U`<br>`v_pt_rsv_flags=0x20`: Packet type = `GTPv1_U` |
 |`RTE_FLOW_ITEM_TYPE_GTPC`  | `v_pt_rsv_flags=0x20`: Packet type = `GTPv1_C`<br>`v_pt_rsv_flags=0x40`: Packet type = `GTPv2_C`<br>No parameter:  Packet type = `GTPv1_C` or `GTPv2_C` |
@@ -256,23 +259,21 @@ Following rte_flow filter actions are supported:
 |`RTE_FLOW_ACTION_TYPE_END`   |                                         |
 |`RTE_FLOW_ACTION_TYPE_VOID`  |                                         |
 |`RTE_FLOW_ACTION_TYPE_MARK`  | See description below                   |
-|`RTE_FLOW_ACTION_TYPE_RSS`   | `num`<br>`queue`<br>`rss_conf-> rss_hf` |
+|`RTE_FLOW_ACTION_TYPE_RSS`   | `func`<br>`level`<br>`types`<br>`queue_num`<br>`queue`|
 |`RTE_FLOW_ACTION_TYPE_QUEUE` | `index`                                 |
 
 - `RTE_FLOW_ACTION_TYPE_MARK`
   - If MARK is set and a packet matching the filter is received, the mark value will be copied to mbuf->hash.fdir.hi and the PKT_RX_FDIR_ID flag in mbuf->ol_flags is set.
   - If a packet not matching the filter is received, the HASH value of the packet will be copied to mbuf->hash.rss and the PKT_RX_RSS_HASH flag in mbuf->ol_flags is set.
 
-Note: Currently maximum MARK value is 0x1FFF (13 bit).
-
 - `RTE_FLOW_ACTION_TYPE_RSS`
-The supported HASH function is described below.
+The supported HASH functions are described below.
 
 ## Generic rte_flow RSS/Hash functions <a name="hash"></a>
 
 The following rte_flow filter HASH functions are supported:
 
-| HASH function	| | HASH Keys |
+| HASH function	| | HASH Keys |  | 
 |------|--|------|
 |`ETH_RSS_IPV4`| `2-tuple` | `IPv4: hdr.src_addr`<br>`IPv4: hdr.dst_addr` |
 |`ETH_RSS_NONFRAG_IPV4_TCP`	|`5-tuple`|`IPv4: hdr.src_addr`<br>`IPv4: hdr.dst_addr`<br>`IPv4: hdr.next_proto_id`<br>`TCP: hdr.src_port`<br>`TCP: hdr.dst_port`|
@@ -285,23 +286,26 @@ The following rte_flow filter HASH functions are supported:
 |`ETH_RSS_NONFRAG_IPV6_SCTP`|`5-tuple`|`IPv6: hdr.src_addr`<br>`IPv6: hdr.dst_addr`<br>`IPv6: hdr.proto`<br>`SCTP: hdr.src_port`<br>`SCTP: hdr.dst_port`|
 |`ETH_RSS_NONFRAG_IPV6_OTHER`|`2-tuple`|`IPv6: hdr.src_addr`<br>`IPv6: hdr.dst_addr`|
 
-The following rte_flow filter HASH functions are added by Napatech and is not a part of the main DPDK:
+##### Inner and Outer layer hashing <a name="InnerOuterHashing"></a>
 
-| HASH function | Description |
-|------|------|
-|`ETH_RSS_INNER_IPV4`| As `ETH_RSS_IPV4`, but hashing is done on the inner IPv4.|
-|`ETH_RSS_INNER_IPV4_TCP`| As `ETH_RSS_NONFRAG_IPV4_TCP`, but hashing is done on the inner IPv4 and TCP.|
-|`ETH_RSS_INNER_IPV4_UDP`| As `ETH_RSS_NONFRAG_IPV4_UDP`, but hashing is done on the inner IPv4 and UDP.|
-|`ETH_RSS_INNER_IPV4_SCTP`| As `ETH_RSS_NONFRAG_IPV4_SCTP`, but hashing is done on the inner IPv4 and SCTP.|
-|`ETH_RSS_INNER_IPV4_OTHER`| As `ETH_RSS_NONFRAG_IPV4_OTHER`, but hashing is done on the inner IPv4.|
-|`ETH_RSS_INNER_IPV6`| As `ETH_RSS_IPV6`, but hashing is done on the inner IPv6.|
-|`ETH_RSS_INNER_IPV6_TCP`| As `ETH_RSS_NONFRAG_IPV6_TCP`, but hashing is done on the inner IPv6 and TCP.|
-|`ETH_RSS_INNER_IPV6_UDP`| As `ETH_RSS_NONFRAG_IPV6_UDP`, but hashing is done on the inner IPv6 and UDP.|
-|`ETH_RSS_INNER_IPV6_SCTP`| As `ETH_RSS_NONFRAG_IPV6_SCTP`, but hashing is done on the inner IPv6 and SCTP.|
-|`ETH_RSS_INNER_IPV6_OTHER`| As `ETH_RSS_NONFRAG_IPV6_OTHER`, but hashing is done on the inner IPv6.|
+Inner and Outer layer hashing is controled by the rss command `level`.
+
+| RSS level	| Layer | 
+|------|--|
+| 0 | Outer layer |
+| 1 | Outer layer |
+| 2 | Inner layer |
 
 ##### Symmetric/Unsymmetric hash <a name="Symmetric"></a>
-The key generation can either be symmetric (sorted) or unsymmetric (unsorted). This is selected by the function:
+The key generation can either be symmetric (sorted) or unsymmetric (unsorted). The key generation is controled the RSS command `func` 
+
+| RSS func	| key generation | 
+|------|--|
+| `RTE_ETH_HASH_FUNCTION_DEFAULT` | Unsymmetric (unsorted) |
+| `RTE_ETH_HASH_FUNCTION_SIMPLE_XOR` | Symmetric (sorted) |
+| `RTE_ETH_HASH_FUNCTION_TOEPLITZ` | Not supported |
+
+The default key generation is set to Unsymmetric. It can be changed by the function:
 
 ```
 int rte_eth_dev_filter_ctrl(uint8_t port_id, enum rte_filter_type filter_type, enum rte_filter_op filter_op, void *arg);
@@ -320,11 +324,9 @@ if (rte_eth_dev_filter_ctrl(0, RTE_ETH_FILTER_HASH, RTE_ETH_FILTER_SET, &info) <
 }
 ```
 
-Setting `info.info.enable = 0` disables symmetric hash and setting `info.info.enable = 1` enables symmetric hash.
+Setting `info.info.enable = 0` sets the default to unsymmetric hash and setting `info.info.enable = 1` sets the default to symmetric hash.
 
 > `sorted` and `unsorted` is Napatech terms for symmetric and unsymmetric.
-
-
 
 ##### Default RSS/HASH function <a name="DefaultRSS"></a>
 A default RSS/HASH function can be setup when configuring the ethernet device by using the function:
@@ -458,13 +460,12 @@ static struct rte_flow *SetupFilter(uint8_t portid, uint8_t nbQueues)
 	struct rte_flow_item pattern[10];
 	struct rte_flow_action actions[10];
 	struct rte_flow_error error;
-	struct rte_eth_hash_filter_info info;
 	uint32_t patternCount = 0;
 	uint32_t actionCount = 0;
 
+  	uint16_t *pQueues = NULL;
 	struct rte_flow *flow = NULL;
-	struct rte_flow_action_rss *rss = NULL;
-	struct rte_eth_rss_conf rss_conf;
+  	struct rte_flow_action_rss rss;
 
 	/* Poisoning to make sure PMDs update it in case of error. */
 	memset(&error, 0x22, sizeof(error));
@@ -528,23 +529,23 @@ static struct rte_flow *SetupFilter(uint8_t portid, uint8_t nbQueues)
 	else {
 		// Use RSS (Receive side scaling) to nbQueues queues
 		int i;
-		rss = malloc(sizeof(struct rte_flow_action_rss) + sizeof(uint16_t) * nbQueues);
-		if (!rss) {
+    	pQueues = malloc(sizeof(uint16_t) * nbQueues);
+		if (!pQueues) {
 			printf("Memory allocation error\n");
 			return NULL;
 		}
 
-		rss_conf.rss_key = NULL;   // Not supported
-		rss_conf.rss_key_len = 0;  // Not supported
-		rss_conf.rss_hf = ETH_RSS_IPV4; // IPV4 5tuple hashing
+    	rss.types = ETH_RSS_IPV4;                    // IPV4 5tuple hashing
+    	rss.func = RTE_ETH_HASH_FUNCTION_SIMPLE_XOR; // Set symmetric hashing
+    	rss.level = 0;                               // Set outer layer hashing
 
-		rss->num = nbQueues;
+    	rss.queue_num = nbQueues;
 		for (i = 0; i < nbQueues; i++) {
-			rss->queue[i] = i;
+			pQueues[i] = i;
 		}
-		rss->rss_conf = &rss_conf;
+    	rss.queue = pQueues;
 		actions[actionCount].type = RTE_FLOW_ACTION_TYPE_RSS;
-		actions[actionCount].conf = rss;
+		actions[actionCount].conf = &rss;
 		actionCount++;
 	}
 
@@ -558,30 +559,17 @@ static struct rte_flow *SetupFilter(uint8_t portid, uint8_t nbQueues)
 	actions[actionCount].type = RTE_FLOW_ACTION_TYPE_END;
 	actions[actionCount].conf = NULL;
 
-	// Set symmetric hashing - Note this must be done before
-	// rte_flow_create is called.
-	memset(&info, 0, sizeof(info));
-	info.info_type = RTE_ETH_HASH_FILTER_SYM_HASH_ENA_PER_PORT;
-	info.info.enable = 1;
-	if (rte_eth_dev_filter_ctrl(0, RTE_ETH_FILTER_HASH, RTE_ETH_FILTER_SET, &info) < 0) {
-		printf("Cannot set symmetric hash enable per port on port %u\n", 0);
-		if (rss) {
-			free(rss);
-		}
-		return NULL;
-	}
-
 	flow = rte_flow_create(portid, &attr, pattern, actions, &error);
 	if (!flow) {
 		printf("Filter error: %s\n", error.message);
-		if (rss) {
-			free(rss);
+		if (pQueues) {
+			free(pQueues);
 		}
 		return NULL;
 	}
 
-	if (rss) {
-		free(rss);
+	if (pQueues) {
+		free(pQueues);
 	}
 	return flow;
 }
@@ -600,8 +588,8 @@ The driver is then able to optimize the final filter making it possible to have 
 
 ```C++
 struct ipv4_adresses_s {
-	uint32_t src_addr;		
-	uint32_t dst_addr;		
+	uint32_t src_addr;
+	uint32_t dst_addr;
 	uint16_t tcp_src;
 	uint16_t tcp_dst;
 };
@@ -620,12 +608,11 @@ static struct ipv4_adresses_s ip_table[NB_ADDR] = {
 	{ IPv4(10,10,10,10), IPv4(172,217,19,206), 19634, 80  },
 };
 
-static int SetupFilter(uint8_t portid, struct rte_flow_error *error)
+static int SetupFilterxxx(uint8_t portid, struct rte_flow_error *error)
 {
 	struct rte_flow_attr attr;
 	struct rte_flow_item pattern[100];
 	struct rte_flow_action actions[10];
-	struct rte_eth_hash_filter_info info;
 	struct rte_flow *flow;
 
 	// Pattern struct
@@ -636,13 +623,8 @@ static int SetupFilter(uint8_t portid, struct rte_flow_error *error)
 	memset(&tcp_spec, 0, sizeof(struct rte_flow_item_tcp));
 
 	// Action struct
-	struct rte_eth_rss_conf rss_conf;
-
-	struct {
-		struct rte_flow_action_rss rss;
-		uint16_t queue[4];
-	} test;
-
+  	uint16_t queues[4];
+	struct rte_flow_action_rss rss;
 	static struct rte_flow_action_mark mark;
 
 	/* Poisoning to make sure PMDs update it in case of error. */
@@ -674,18 +656,18 @@ static int SetupFilter(uint8_t portid, struct rte_flow_error *error)
 		uint32_t actionCount = 0;
 		memset(&actions, 0, sizeof(actions));
 
-		rss_conf.rss_key = NULL;
-		rss_conf.rss_key_len = 0;
-		rss_conf.rss_hf = ETH_RSS_NONFRAG_IPV4_TCP;
+    	rss.types = ETH_RSS_NONFRAG_IPV4_TCP;
+    	rss.level = 0;
+    	rss.func = RTE_ETH_HASH_FUNCTION_SIMPLE_XOR;
 
-		test.rss.num = 4;
-		test.rss.queue[0] = 0;
-		test.rss.queue[1] = 1;
-		test.rss.queue[2] = 2;
-		test.rss.queue[3] = 3;
-		test.rss.rss_conf = &rss_conf;
+    	rss.queue_num = 4;
+		queues[0] = 0;
+		queues[1] = 1;
+		queues[2] = 2;
+		queues[3] = 3;
+    	rss.queue = queues;
 		actions[actionCount].type = RTE_FLOW_ACTION_TYPE_RSS;
-		actions[actionCount].conf = &test.rss;
+		actions[actionCount].conf = &rss;
 		actionCount++;
 
 		mark.id = 123;
@@ -696,13 +678,6 @@ static int SetupFilter(uint8_t portid, struct rte_flow_error *error)
 		actions[actionCount].type = RTE_FLOW_ACTION_TYPE_END;
 		actionCount++;
 
-		memset(&info, 0, sizeof(info));
-		info.info_type = RTE_ETH_HASH_FILTER_SYM_HASH_ENA_PER_PORT;
-		info.info.enable = 0;
-		if (rte_eth_dev_filter_ctrl(0, RTE_ETH_FILTER_HASH, RTE_ETH_FILTER_SET, &info) < 0) {
-			printf("Cannot set symmetric hash enable per port on port %u\n", 0);
-			return -1;
-		}
 		flow = rte_flow_create(portid, &attr, pattern, actions, error);
 		if (flow == NULL) {
 			return -1;
@@ -837,6 +812,12 @@ Other NTPL filter expressions can be used as long as it does not break the resul
 Contiguous memory batching is the possibility to receive a batch of packets instead of one packet at a time. The advantage of using contiguous memory batching is that packets are DMA'ed directly from the adapter in to the batch buffer and thereby no copying is required by the host (zero copy). The disadvantage by using Contiguous Memory Batching is that packets cannot be kept for later analysis. If a packet needs to be kept, it must be copied to another buffer. It can be done by using a helper function ([see description below](#helperfunc)). A batch of packets are released when a new batch is requested. The packet data in the previous batch will then be invalid.
 
 > Note: Contiguous memory batching is a Napatech addition to DPDK and is not compatible with any standard applications. Some small changes must be done to utilize contiguous memory batching functionality. See the cmbatch example for how to use contiguous memory batching.
+
+Contiguous Memory Batching is disabled per default.
+
+To enable *Contiguous Memory Batching*, set following in common_base
+
+- `CONFIG_RTE_CONTIGUOUS_MEMORY_BATCHING=y`
 
 ### mbuf changes<a name="mbuf"></a>
 In order to support contiguous memory batching in DPDK, some mbuf changes have been made.
