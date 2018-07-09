@@ -90,7 +90,10 @@ static struct {
 #define PCI_DEVICE_ID_NT40A01  0x0185
 #define PCI_DEVICE_ID_NT100E3  0x0155
 
-#define NB_SUPPORTED_FPGAS 9
+#define PCI_VENDOR_ID_INTEL          0x8086
+#define PCIE_DEVICE_ID_PF_DSC_1_X    0x09C4
+
+#define NB_SUPPORTED_FPGAS 11
 struct {
   uint32_t item:12;
   uint32_t product:16;
@@ -108,6 +111,8 @@ struct {
   { 200, 9515, 9, 8, 0 },
   { 200, 9517, 9, 8, 0 },
   { 200, 9519, 10, 7, 0 },
+  { 200, 7000, 12, 0, 0 },
+  { 200, 7001, 12, 0, 0 },
 };
 
 static void *_libnt;
@@ -2626,6 +2631,9 @@ static const struct rte_pci_id ntacc_pci_id_map[] = {
   },
   {
     RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT100E3)
+  },
+  {
+    RTE_PCI_DEVICE(PCI_VENDOR_ID_INTEL,PCIE_DEVICE_ID_PF_DSC_1_X) // Intel AFU adapter
   },
 	{
 		.vendor_id = 0
