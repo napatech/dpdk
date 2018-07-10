@@ -1,8 +1,8 @@
-# Napatech PCI Poll Mode driver – NTACC PMD.
+# Napatech PCI Poll Mode Driver – NTACC PMD.
 ----------
-The Napatech NTACC PMD enables users to run DPDK on top of the Napatech adapters and driver. The NTACC PMD is a PCI driver.
+The Napatech NTACC PMD enables users to run DPDK on top of the Napatech SmartNics and driver. The NTACC PMD is a PCI driver.
 
-The NTACC PMD driver does not need to be bound. This means that the dpdk-devbind-py script cannot be used to bind the interface. The DPDK app will automatically find and use the NTACC PMD driver when starting, provided that the Napatech driver is started and the Napatech adapter is not blacklisted.
+The NTACC PMD driver does not need to be bound. This means that the dpdk-devbind-py script cannot be used to bind the interface. The DPDK app will automatically find and use the NTACC PMD driver when starting, provided that the Napatech driver is started and the Napatech SmartNic is not blacklisted.
 
 ## Table of Contents
 1. [Napatech Driver](#driver)
@@ -42,11 +42,11 @@ The NTACC PMD driver does not need to be bound. This means that the dpdk-devbind
 
 ## Napatech Driver <a name="driver"></a>
 
-The Napatech driver and adapter must be installed and started before the NTACC PMD can be used. See the installation guide in the Napatech driver package for how to install and start the driver.
+The Napatech driver and SmartNic must be installed and started before the NTACC PMD can be used. See the installation guide in the Napatech driver package for how to install and start the driver.
 
 > Note: The driver and FPGA version must be the supported version or a newer version.
 
-See below for supported drivers and adapters:
+See below for supported drivers and SmartNics:
 
 |  Supported drivers |
 |-------------------------|
@@ -54,7 +54,7 @@ See below for supported drivers and adapters:
 
 <br>
 
-|  Supported adapters                        | FPGA                        |
+|  Supported SmartNics                        | FPGA                        |
 |---------------------------------------------------|---------------------------|
 |  NT40A01-01-SCC-4×1-E3-FF-ANL        |  200-9500-10-07-00 |
 |  NT20E3-2-PTP-ANL                               |  200-9501-10-07-00 |
@@ -69,7 +69,7 @@ The complete driver package can be downloaded here:
 [ntanl_package_3gd_linux_11.0.1](https://supportportal.napatech.com/index.php?/selfhelp/view-article/capture-software-v1101-linux-for-napatech-smartnics/351)
 
 
-## Compiling the Napatech NTACC PMD driver <a name="compiling"></a>
+## Compiling the Napatech NTACC PMD Driver <a name="compiling"></a>
 
 ##### Environment variable <a name="Environment"></a>
 In order to compile the NTACC PMD, the NAPATECH3_PATH environment variable must be set. This tells DPDK where the Napatech driver is installed.
@@ -83,10 +83,10 @@ To enable DPDK to compile NTACC PMD, a configuration setting must be set in the 
 
 `CONFIG_RTE_LIBRTE_PMD_NTACC=y`
 
-Three other configurations settings can be used to change the behaviour of the NTACC PMD:
+Three other configuration settings can be used to change the behaviour of the NTACC PMD:
 
-- Hardware based or software based statistic:
-This setting is used to select between software based and hardware based statistics.
+- Hardware-based or software-based statistic:
+This setting is used to select between software-based and hardware-based statistics.
 <br>`CONFIG_RTE_LIBRTE_PMD_NTACC_USE_SW_STAT=n`
 
 - Disable default filter:
@@ -100,25 +100,25 @@ This setting is used to copy offset to different packets layers into the mbuf. S
 ## Napatech Driver Configuration <a name="driverconfig"></a>
 The Napatech driver is configured using an ini-file – `ntservice.ini`. By default, the ini-file is located in `/opt/napatech3/config`. The following changes must be made to the default ini-file.
 
-The Napatech driver uses hostbuffers to receive and transmit data. The number of hostbuffers must be equal to or larger than the number of RX and TX queues used by the DPDK.
+The Napatech driver uses host buffers to receive and transmit data. The number of host buffers must be equal to or larger than the number of RX and TX queues used by the DPDK.
 
-To change the number of hostbuffers, edit ntservice.ini and change following keys:
+To change the number of host buffers, edit ntservice.ini and change following keys:
 
 	HostBuffersRx = [R1, R2, R3]
 	HostBuffersTx = [T1, T2, T3]
 
-Hostbuffer settings:
+host buffer settings:
 
 | Parameter | Description                                  |                                                                                                                                          |
 |-----------|----------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------|
-| R1        |  Number of RX hostbuffers                    | Must be equal to or larger than the number of RX queues used.<br>Maximum value = 128.                                                    |
-| R2        |  Size of a hostbuffer in MB                  | The optimal size depends of the use. The default is usually fine.<br>The value must be a multiple of 4 and larger or equal to 16.        |
-| R3        |  Numa node where the hostbuffer is allocated | Use -1 for NUMA node autodetect. Hostbuffers will be allocated from the NUMA node to which the adapter is connected.                 |
-| T1        |  Number of TX hostbuffers                    | Must be equal to or larger than the number of TX queues used.<br>Maximum value = 128.                                                    |
-| T2        |  Size of a hostbuffer in MB                  | The optimal size depends of the use. The default is usually fine.<br>The value must be a multiple of 4 and larger or equal to 16.        |
-| T3        |  Numa node where the hostbuffer is allocated | Use -1 for NUMA node autodetect. Hostbuffers will be allocated from the NUMA node to which the adapter is connected.                 |
+| R1        |  Number of RX host buffers                    | Must be equal to or larger than the number of RX queues used.<br>Maximum value = 128.                                                    |
+| R2        |  Size of a host buffer in MB                  | The optimal size depends of the use. The default is usually fine.<br>The value must be a multiple of 4 and larger than or equal to 16.        |
+| R3        |  Numa node where the host buffer is allocated | Use -1 for NUMA node autodetect. host buffers will be allocated from the NUMA node to which the SmartNic is connected.                 |
+| T1        |  Number of TX host buffers                    | Must be equal to or larger than the number of TX queues used.<br>Maximum value = 128.                                                    |
+| T2        |  Size of a host buffer in MB                  | The optimal size depends on the use. The default is usually fine.<br>The value must be a multiple of 4 and larger or equal to 16.        |
+| T3        |  Numa node where the host buffer is allocated | Use -1 for NUMA node autodetect. host buffers will be allocated from the NUMA node to which the SmartNic is connected.                 |
 
-The default setting for adapter X is:
+The default setting for SmartNic X is:
 
 ```
 [AdapterX]
@@ -128,7 +128,7 @@ HostBuffersTx = [4, 16, -1]
 This means that it will be possible to create 4 RX queues and 4 TX queues.
 
 #### Statistics update interval  <a name="statinterval"></a>
-When using hardware based statistics `CONFIG_RTE_LIBRTE_PMD_NTACC_USE_SW_STAT=n`, the default update interval is 500 ms, i.e. the time between each time the statistics is updated by the adapter. In some cases, the update interval is too large. The update interval can be changed by changing the `StatInterval` option in the system section in the ini-file.
+When using hardware-based statistics `CONFIG_RTE_LIBRTE_PMD_NTACC_USE_SW_STAT=n`, the default update interval is 500 ms, i.e. the time between each time the statistics are updated by the SmartNic. In some cases, the update interval is too large. The update interval can be changed by changing the `StatInterval` option in the system section in the ini-file.
 ```
 [System]
 StatInterval=1
@@ -139,13 +139,13 @@ Possible values in milliseconds for StatInterval are:
 
 > Note: Increasing the statistics update frequency requires more CPU cycles.
 
-## Number of RX queues and TX queues available <a name="queues"></a>
+## Number of RX Queues and TX Queues Available <a name="queues"></a>
 
-Up to 128 RX queues are supported. They are distributed between the ports on the Napatech adapter and rte_flow filters on a first-come, first-served basis.
+Up to 128 RX queues are supported. They are distributed between the ports on the Napatech SmartNic and rte_flow filters on a first-come, first-served basis.
 
-Up to 128 TX queues are supported. They are distributed between the ports on the Napatech adapter on a first-come, first-served basis.
+Up to 128 TX queues are supported. They are distributed between the ports on the Napatech SmartNic on a first-come, first-served basis.
 
-The maximum number of RX queues per port are the smallest number of either:
+The maximum number of RX queues per port is the smallest number of either:
 
 - (256 / number of ports)
 - `RTE_ETHDEV_QUEUE_STAT_CNTRS`
@@ -154,39 +154,39 @@ The maximum number of RX queues per port are the smallest number of either:
 
 ## Starting NTACC PMD <a name="starting"></a>
 
-When a DPDK app is starting, the NTACC PMD is automatically found and used by the DPDK. All Napatech adapters installed and activated will appear in the DPDK app. To use only some of the installed Napatech adapters, the whitelist command must be used. The whitelist command is also used to select specific ports on an adapter.
+When a DPDK app is starting, the NTACC PMD is automatically found and used by the DPDK. All Napatech SmartNics installed and activated will appear in the DPDK app. To use only some of the installed Napatech SmartNics, the whitelist command must be used. The whitelist command is also used to select specific ports on an SmartNic.
 
 | whitelist command format |  Description |
 |-----------------------------------|---|
 | `-w <[domain:]bus:devid.func>` | Select a specific PCI adapter |
-| `-w <[domain:]bus:devid.func>,mask=X` | Select a specific PCI adapter, <br>but use only the ports defined by mask<br>The mask command is specific for Napatech adapters |
+| `-w <[domain:]bus:devid.func>,mask=X` | Select a specific PCI adapter, <br>but use only the ports defined by mask<br>The mask command is specific for Napatech SmartNics |
 
 
 
 Example 1:
-A NT40E3-4-PTP-ANL Napatech adapter is installed. We want to use only port 0 and 1.
+An NT40E3-4-PTP-ANL Napatech SmartNic is installed. We want to use only port 0 and 1.
 
 - `DPDKApp  -w 0000:82:00.0,mask=3`
 
 Example 2:
-Two NT40E3-4-PTP-ANL Napatech adapters are installed. We want to use only port 0 and 1 on adapter 1 and only port 2 and 3 on adapter 2.
+Two NT40E3-4-PTP-ANL Napatech SmartNics are installed. We want to use only port 0 and 1 on SmartNic 1 and only port 2 and 3 on SmartNic 2.
 
 - `DPDKApp  -w 0000:82:00.0,mask=3 -w 0000:84:00.0,mask=0xC`
 
 Example 3:
-A NT40E3-4-PTP-ANL Napatech adapter is installed. We want app1 to use only port 0 and 1, and app2 to use only port 2 and 3. In order to start two DPDK applications, we must share the memory between the two applications using --file-prefix and --socket-mem. Note that both applications will get DPDK port number 0 and 1, even though app2 will use port number 2 and 3 on the adapter.
+An NT40E3-4-PTP-ANL Napatech SmartNic is installed. We want app1 to use only port 0 and 1, and app2 to use only port 2 and 3. In order to start two DPDK applications, we must share the memory between the two applications using --file-prefix and --socket-mem. Note that both applications will get DPDK port number 0 and 1, even though app2 will use port number 2 and 3 on the SmartNic.
 
 - `DPDKApp1  -w 0000:82:00.0,mask=3 --file-prefix fc0 --socket-mem 1024,1024`
 - `DPDKApp2  -w 0000:82:00.0,mask=12 --file-prefix fc1 --socket-mem 1024,1024`
 
 <br>
-> Note: When using the whitelist command, all adapters to be used must be included.
+> Note: When using the whitelist command, all SmartNics to be used must be included.
 
-The Napatech adapters can also be disabled by using the blacklist command.
+The Napatech SmartNics can also be disabled by using the blacklist command.
  
-## Generic rte_flow filter items <a name="genericflow"></a>
+## Generic rte_flow Filter Items <a name="genericflow"></a>
 
-The NTACC PMD driver supports a number of generic rte_flow filters including some Napatech defined filters.
+The NTACC PMD driver supports a number of generic rte_flow filters including some Napatech-defined filters.
 
 Following rte_flow filters are supported:
 
@@ -206,7 +206,7 @@ Following rte_flow filters are supported:
 |`RTE_FLOW_ITEM_TYPE_NVGRE` | Only packet type = `NVGRE`                                                                                                                                                    |
 |`RTE_FLOW_ITEM_TYPE_VXLAN` | Only packet type = `VXLAN`                                                                                                                                                    |
 | `RTE_FLOW_ITEM_TYPE_GRE`  | `c_rsvd0_ver` (only version = bit b0-b2)|
-| `RTE_FLOW_ITEM_TYPE_PHY_PORT`  | `index`<br>The port numbers used must be the local port numbers for the adapter. <br>For a 4 port adapter the port numbers are 0 to 3.|
+| `RTE_FLOW_ITEM_TYPE_PHY_PORT`  | `index`<br>The port numbers used must be the local port numbers for the SmartNic. <br>For a 4 port SmartNic the port numbers are 0 to 3.|
 |`RTE_FLOW_ITEM_TYPE_GRE`    | `c_rsvd0_ver=1`: Packet type = `GREv1`<br>`c_rsvd0_ver=0`: Packet type = `GREv0`   |
 |`RTE_FLOW_ITEM_TYPE_GTPU`  | `v_pt_rsv_flags=0`: Packet type = `GTPv0_U`<br>`v_pt_rsv_flags=0x20`: Packet type = `GTPv1_U` |
 |`RTE_FLOW_ITEM_TYPE_GTPC`  | `v_pt_rsv_flags=0x20`: Packet type = `GTPv1_C`<br>`v_pt_rsv_flags=0x40`: Packet type = `GTPv2_C`<br>No parameter:  Packet type = `GTPv1_C` or `GTPv2_C` |
@@ -222,7 +222,7 @@ The following rte_flow filters are added by Napatech and are not a part of the m
 
 **Only packet type**: No fields can be used. The filter will match packets containing this type of tunnel.
 
-## An example of an inner (tunnel) filter
+## An Example of an Inner (Tunnel) Filter
 
 All flow items defined after a tunnel flow item will be an inner filter, as shown below:
 
@@ -232,7 +232,7 @@ All flow items defined after a tunnel flow item will be an inner filter, as show
 4. `RTE_FLOW_ITEM_TYPE_ETH`: Inner ether filter (because of the tunnel filter)
 5. `RTE_FLOW_ITEM_TYPE_IPV4`: Inner IPv4 filter (because of the tunnel filter)
 
-## Generic rte_flow filter Attributes <a name="attributes"></a>
+## Generic rte_flow Filter Attributes <a name="attributes"></a>
 
 The following rte_flow filter attributes are supported:
 
@@ -242,7 +242,7 @@ The following rte_flow filter attributes are supported:
 |`ingress`      |                                                        |
 
 ## Priority <a name="Priority"></a>
-If multiple filters are used, priority is used to select the order of the filters. The filter with the highest priority will always be the filter to be used. If filters overlap, for example an ethernet filter sending the packets to queue 0 and an IPv4 filter sending the packets to queue 1 (filters overlap as IPv4 packets are also ethernet packets), then the filter with the highest priority is used.
+If multiple filters are used, priority is used to select the order of the filters. The filter with the highest priority will always be the filter to be used. If filters overlap, for example an ethernet filter sending the packets to queue 0 and an IPv4 filter sending the packets to queue 1 (filters overlap as IPv4 packets are also ethernet packets), the filter with the highest priority is used.
 
 If the ethernet filter has the highest priority, all packets will go to queue 0 and no packets will go to queue 1.
 
@@ -250,7 +250,7 @@ If the IPv4 filter has the highest priority, all IPv4 packets will go to queue 1
 
 If the filters have the samme priority, the filter entered last is the one to be used.
 
-## Generic rte_flow filter actions <a name="actions"></a>
+## Generic rte_flow Filter Actions <a name="actions"></a>
 
 Following rte_flow filter actions are supported:
 
@@ -269,7 +269,7 @@ Following rte_flow filter actions are supported:
 - `RTE_FLOW_ACTION_TYPE_RSS`
 The supported HASH functions are described below.
 
-## Generic rte_flow RSS/Hash functions <a name="hash"></a>
+## Generic rte_flow RSS/Hash Functions <a name="hash"></a>
 
 The following rte_flow filter HASH functions are supported:
 
@@ -286,9 +286,9 @@ The following rte_flow filter HASH functions are supported:
 |`ETH_RSS_NONFRAG_IPV6_SCTP`|`5-tuple`|`IPv6: hdr.src_addr`<br>`IPv6: hdr.dst_addr`<br>`IPv6: hdr.proto`<br>`SCTP: hdr.src_port`<br>`SCTP: hdr.dst_port`|
 |`ETH_RSS_NONFRAG_IPV6_OTHER`|`2-tuple`|`IPv6: hdr.src_addr`<br>`IPv6: hdr.dst_addr`|
 
-##### Inner and Outer layer hashing <a name="InnerOuterHashing"></a>
+##### Inner and Outer Layer Hashing <a name="InnerOuterHashing"></a>
 
-Inner and Outer layer hashing is controled by the rss command `level`.
+Inner and Outer layer hashing is controlled by the rss command `level`.
 
 | RSS level	| Layer | 
 |------|--|
@@ -296,10 +296,10 @@ Inner and Outer layer hashing is controled by the rss command `level`.
 | 1 | Outer layer |
 | 2 | Inner layer |
 
-##### Symmetric/Unsymmetric hash <a name="Symmetric"></a>
+##### Symmetric/Unsymmetric Hash <a name="Symmetric"></a>
 The key generation can either be symmetric (sorted) or unsymmetric (unsorted). The key generation is controled the RSS command `func` 
 
-| RSS func	| key generation | 
+| RSS func	| Key generation | 
 |------|--|
 | `RTE_ETH_HASH_FUNCTION_DEFAULT` | Unsymmetric (unsorted) |
 | `RTE_ETH_HASH_FUNCTION_SIMPLE_XOR` | Symmetric (sorted) |
@@ -329,7 +329,7 @@ Setting `info.info.enable = 0` sets the default to unsymmetric hash and setting 
 > `sorted` and `unsorted` is Napatech terms for symmetric and unsymmetric.
 
 ##### Default RSS/HASH function <a name="DefaultRSS"></a>
-A default RSS/HASH function can be setup when configuring the ethernet device by using the function:
+A default RSS/HASH function can be set up when configuring the ethernet device by using the function:
 
 	int rte_eth_dev_configure(uint8_t port_id, uint16_t nb_rx_queue, uint16_t nb_tx_queue, const struct rte_eth_conf *eth_conf);
 
@@ -340,7 +340,7 @@ Following two fields of the `struct rte_eth_conf` are supported:
 - `rxmode.mq_mode`
 - `rx_adv_conf.rss_conf.rss_hf`
 
-To setup a default RSS/HASH function use:
+To set up a default RSS/HASH function use:
 
 ```C++
 static const struct rte_eth_conf port_conf_default = {
@@ -360,18 +360,18 @@ if (retval != 0)
 	return retval;
 ```
 
-See below for information about the consequences of setting a default RSS/HASH function
+See below for information about the consequences of setting a default RSS/HASH function.
 
 
-## Default filter <a name="DefaultFilter"></a>
-When starting the NTACC PMD driver, a default catch all filter with priority 62 (lowest priority) is created for each DPDK port. The filter will send all incoming packets to queue 0 for each DPDK port. If rte_flow filters are created with higher priority, then all packets matching these filters will be send to the queues defined by the filters. All packets not matching the filter will be send to queue 0.
+## Default Filter <a name="DefaultFilter"></a>
+When starting the NTACC PMD driver, a default catch all filter with priority 62 (lowest priority) is created for each DPDK port. The filter will send all incoming packets to queue 0 for each DPDK port. If rte_flow filters are created with higher priority, then all packets matching these filters will be sent to the queues defined by the filters. All packets not matching the filter will be sent to queue 0.
 
 If a default RSS (hash) mode is defined using the rte_eth_dev_configure command (mq_mode = ETH_MQ_RX_RSS), a default catch all filter is created, that will send incoming packet to all defined queues using the defined RSS/HASH function.
 
-> With a default RSS/HASH function, the default filter will collide with any rte_flow filters created, as all non matched packets will be distributed to all defined queues using the default RSS/HASH function. It is recommended not to define a default RSS/HASH function if any rte_flow filters are going to be used.
+> With a default RSS/HASH function, the default filter will collide with any rte_flow filters created, as all non-matched packets will be distributed to all defined queues using the default RSS/HASH function. It is recommended not to define a default RSS/HASH function if any rte_flow filters are going to be used.
 
 
-#### Disabling default filter <a name="DisablingDefaultFilter"></a>
+#### Disabling Default Filter <a name="DisablingDefaultFilter"></a>
 The default filter can be disabled either at compile time by setting:
 
 `CONFIG_RTE_LIBRTE_PMD_NTACC_DISABLE_DEFAULT_FILTER=y`
@@ -447,12 +447,12 @@ flow = rte_flow_create(0, &attr, pattern, actions, &error);
 
 All rte_flow filters added in same rte_flow_create will be and’ed together. To create filters that are or’ed together, call rte_flow_create for each filter.
 
-## Limited filter resources <a name="resources"></a>
+## Limited Filter Resources <a name="resources"></a>
 
-The Napatech adapter and driver has a limited number of filter resources when using the generic rte_flow filter. In some cases, a filter cannot be created. In these cases, it will be necessary to simplify the filter.
+The Napatech SmartNic and driver has a limited number of filter resources when using the generic rte_flow filter. In some cases, a filter cannot be created. In these cases, it will be necessary to simplify the filter.
 
-## Filter creation example <a name="Filtercreationexample"></a>
-The following example creates a 5tuple IPv4/TCP filter. If `nbQueues > 1` RSS/Hashing is made to the number of queues using hash function `ETH_RSS_IPV4`. Symmetric hashing is enabled. Packets are marked with 12.
+## Filter Creation Example <a name="Filtercreationexample"></a>
+The following example creates a 5-tuple IPv4/TCP filter. If `nbQueues > 1` RSS/Hashing is made to the number of queues using hash function `ETH_RSS_IPV4`. Symmetric hashing is enabled. Packets are marked with 12.
 ```C++
 static struct rte_flow *SetupFilter(uint8_t portid, uint8_t nbQueues)
 {
@@ -575,8 +575,8 @@ static struct rte_flow *SetupFilter(uint8_t portid, uint8_t nbQueues)
 }
 ```
 
-## Filter creation example - Multiple 5tuple filter (IPv4 addresses and TCP ports) <a name="examples2"></a>
-The following example shows how it is possible to create a 5tuple filter matching on a large number of IPv4 addresses and TCP ports.
+## Filter Creation Example - Multiple 5-tuple Filter (IPv4 Addresses and TCP Ports) <a name="examples2"></a>
+The following example shows how it is possible to create a 5-tuple filter matching on a large number of IPv4 addresses and TCP ports.
 
 The commands used in the loop to program the IP addresses and tcp ports must be the same for all addresses and ports. The only things that must be changed are the values for IP addresses and tcp ports.
 
@@ -689,8 +689,8 @@ static int SetupFilterxxx(uint8_t portid, struct rte_flow_error *error)
 
 ```
 
-## Copy packet offset to mbuf <a name="copyoffset"></a>
-Normally `mbuf->data_off  = RTE_PKTMBUF_HEADROOM` which is the offset to the beginnig of packet data.
+## Copy Packet Offset to mbuf <a name="copyoffset"></a>
+Normally `mbuf->data_off  = RTE_PKTMBUF_HEADROOM`, which is the offset to the beginnig of the packet data.
 When enabling *copy packet offset to mbuf*, a predefined packet offset is copied into `mbuf->data_off` replacing
 the offset to the beginning of packet data.
 
@@ -713,7 +713,7 @@ Supported offsets are:
 |`InnerLayer4Payload`  |
 |`EndOfFrame`             |
 
-To enable *copy packet offset to mbuf*, set following in common_base
+To enable *copy packet offset to mbuf*, set the following in common_base:
 
 - `CONFIG_RTE_LIBRTE_PMD_NTACC_COPY_OFFSET=y`
 - `CONFIG_RTE_LIBRTE_PMD_NTACC_OFFSET0=InnerLayer3Header`
@@ -730,7 +730,7 @@ Other offsets can be chosen by setting `CONFIG_RTE_LIBRTE_PMD_NTACC_OFFSET0` to 
 
 > Note: If a packet does not contain the wanted layer, the offset is undefined. Due to the filter setup, this will normally never happen.
 
-## Use NTPL filters addition (Making an ethernet over MPLS filter) <a name="ntplfilter"></a>
+## Use NTPL Filters Addition (Making an Ethernet over MPLS Filter) <a name="ntplfilter"></a>
 By using the `RTE_FLOW_ITEM_TYPE_NTPL` rte_flow item, it is possible to use some NTPL commands and thereby create filters that are not a part of the DPDK.
 
 The 	`RTE_FLOW_ITEM_TYPE_NTPL` struct:
@@ -747,7 +747,7 @@ struct rte_flow_item_ntpl {
 };
 ```
 #### ntpl_str
-The string that will be embedded into the resulting NTPL filter expression. Ensure that the string will not break the NTPL filter expression. See below for an example.
+This is the string that will be embedded into the resulting NTPL filter expression. Ensure that the string will not break the NTPL filter expression. See below for an example.
 
 Following RTE_FLOW filter without the `RTE_FLOW_ITEM_TYPE_NTPL`:
 ```
@@ -791,12 +791,12 @@ KeyDef[name=KDEF3;KeyType=KT3;tag=port0]=(InnerLayer3Header[12]/64)
 KeyList[KeySet=3;KeyType=KT3;color=305419896;tag=port0]=(0x0A0000019F140606)
 assign[priority=1;Descriptor=DYN3,length=22,colorbits=32;streamid=0;tag=port0]=(InnerLayer3Protocol==IPV4) and TunnelType==EoMPLS and port==0 and Key(KDEF3)==3
 ```
-The string "TunnelType==EoMPLS" is now embedded into to the NTPL filter expression, and the resulting filter is changed to a ethernet over MPLS filter matching the inner layer3 protocol.
+The string "TunnelType==EoMPLS" is now embedded into to the NTPL filter expression, and the resulting filter is changed to an ethernet over MPLS filter matching the inner layer3 protocol.
 
 #### tunnel
-This tells the driver whether the following rte_flow filter items should be inner or outer filter items
+This tells the driver whether the following rte_flow filter items should be inner or outer filter items.
 
-In the above example, tunnel=RTE_FLOW_NTPL_TUNNEL, which makes the filter an inner layer3 filter. If tunnel=RTE_FLOW_NTPL_NO_TUNNEL, the filter is now a outer layer3 filter.
+In the above example, tunnel=RTE_FLOW_NTPL_TUNNEL, which makes the filter an inner layer3 filter. If tunnel=RTE_FLOW_NTPL_NO_TUNNEL, the filter is now an outer layer3 filter.
 ```
 KeyType[name=KT3;Access=partial;Bank=0;colorinfo=true;tag=port0]={64}
 KeyDef[name=KDEF3;KeyType=KT3;tag=port0]=(Layer3Header[12]/64)
@@ -808,18 +808,18 @@ assign[priority=1;Descriptor=DYN3,length=22,colorbits=32;streamid=0;tag=port0]=(
 Other NTPL filter expressions can be used as long as it does not break the resulting NTPL filter expression.
 
 
-## Contiguous Memory Batching - Receive a batch of packets<a name="batching"></a>
-Contiguous memory batching is the possibility to receive a batch of packets instead of one packet at a time. The advantage of using contiguous memory batching is that packets are DMA'ed directly from the adapter in to the batch buffer and thereby no copying is required by the host (zero copy). The disadvantage by using Contiguous Memory Batching is that packets cannot be kept for later analysis. If a packet needs to be kept, it must be copied to another buffer. It can be done by using a helper function ([see description below](#helperfunc)). A batch of packets are released when a new batch is requested. The packet data in the previous batch will then be invalid.
+## Contiguous Memory Batching - Receive a Batch of Packets<a name="batching"></a>
+Contiguous memory batching is the possibility to receive a batch of packets instead of one packet at a time. The advantage of using contiguous memory batching is that packets are DMA'ed directly from the SmartNic into the batch buffer and thereby no copying is required by the host (zero copy). The disadvantage by using Contiguous Memory Batching is that packets cannot be kept for later analysis. If a packet needs to be kept, it must be copied to another buffer. It can be done by using a helper function ([see description below](#helperfunc)). A batch of packets is released when a new batch is requested. The packet data in the previous batch will then be invalid.
 
-> Note: Contiguous memory batching is a Napatech addition to DPDK and is not compatible with any standard applications. Some small changes must be done to utilize contiguous memory batching functionality. See the cmbatch example for how to use contiguous memory batching.
+> Note: Contiguous memory batching is a Napatech addition to DPDK and is not compatible with any standard applications. Some small changes must be done to utilize the contiguous memory batching functionality. See the cmbatch example for how to use contiguous memory batching.
 
 Contiguous Memory Batching is disabled per default.
 
-To enable *Contiguous Memory Batching*, set following in common_base
+To enable *Contiguous Memory Batching*, set following in common_base:
 
 - `CONFIG_RTE_CONTIGUOUS_MEMORY_BATCHING=y`
 
-### mbuf changes<a name="mbuf"></a>
+### mbuf Changes<a name="mbuf"></a>
 In order to support contiguous memory batching in DPDK, some mbuf changes have been made.
 
 A new packet offload features flag `PKT_BATCH` has been added. If this flag is set it means that the mbuf contains a batch buffer and needs special handling.
@@ -833,7 +833,7 @@ else {
 }
 ```
 
-When a mbuf that contains a batch buffer is received the following mbuf variables change their function and the following new mbuf variables are used.
+When an mbuf that contains a batch buffer is received the following mbuf variables change their function and the following new mbuf variables are used.
 
 | mbuf changes (batch) | Description |   |
 |------------------|----------------|----|
@@ -847,8 +847,8 @@ When a mbuf that contains a batch buffer is received the following mbuf variable
 | mbuf->batch_release_cb | Pointer to callback function called when the batch buffer is released<br>Must not be changed | Addition |
 
 
-### Batch buffer<a name="batchbuf"></a>
-The batch buffer is different from the standard mbuf packet buffer as it contains a batch of packets and each packet contain a packet descriptor. When a mbuf that contains a batch buffer is received the `mbuf->buf_addr` variable will point to the beginning of the batch buffer. The number of packets in the batch buffer are given by the variable `mbuf->batch_nb_packet`. The packet descriptor that is placed in front of each packet is shown below.
+### Batch Buffer<a name="batchbuf"></a>
+The batch buffer is different from the standard mbuf packet buffer as it contains a batch of packets and each packet contains a packet descriptor. When an mbuf that contains a batch buffer is received, the `mbuf->buf_addr` variable will point to the beginning of the batch buffer. The number of packets in the batch buffer are given by the variable `mbuf->batch_nb_packet`. The packet descriptor that is placed in front of each packet is shown below.
 
 The packet descriptor:
 ```
@@ -873,7 +873,7 @@ The batch buffer can be browsed in two ways:
 - [Directly](#browbatchbuf)
 - [Using helper function](#browhelper)
 
-### Browsing the batch buffer directly<a name="browbatchbuf"></a>
+### Browsing the Batch Buffer Directly<a name="browbatchbuf"></a>
 The batch buffer can be browsed directly using the packet descriptor to walk through the buffer. A description of the different descriptor variables used are described below.
 
 | Variable | Description |
@@ -881,14 +881,14 @@ The batch buffer can be browsed directly using the packet descriptor to walk thr
 |mbuf->buf_addr | Pointer to the beginning of the batch buffer |
 |phdr->storedLength | The length of the packet including the descriptor |
 | phdr->wireLength | The length of the packet on the wire |
-|phdr->rxPort | The port number, the packet is received on.<br>Note: The port number is the local port number of the adapter<br>It is not the DPDK port number. |
+|phdr->rxPort | The port number, the packet is received on.<br>Note: The port number is the local port number of the SmartNic<br>It is not the DPDK port number. |
 | phdr->descrLength | The length of the descriptor |
-| phdr->timestamp | Packet timestamp |
+| phdr->timestamp | Packet time stamp |
 | phdr->offset0 | Offset to the layer3 header.<br>Note: Can be changed in common_base by setting<br>[`CONFIG_RTE_LIBRTE_PMD_NTACC_COPY_OFFSET`](#copyoffset) and<br>[`CONFIG_RTE_LIBRTE_PMD_NTACC_OFFSET0`](#copyoffset) |
 | phdr->color_hi | Packet hash value<br>if (phdr->descrLength == 20) |
 | phdr->color_hi<br>phdr->color_lo | Packet MARK value<br>if (phdr->descrLength == 22)<br>MARK = ((phdr->color_hi << 14) & 0xFFFFC000) | phdr->color_lo |
 
-An example of how to browse the batch buffer.
+An example of how to browse the batch buffer:
 
 ```
 struct rte_mbuf_batch_pkt_hdr *phdr;
@@ -914,13 +914,13 @@ for (pack = 0; pack < mbuf->batch_nb_packet; pack++) {
 ```
 > Note: It is not allowed to keep packets for further analysis. The packets will be invalid when a new batch buffer is requested. To keep a packet, it must be copied to a local mbuf using the function [`rte_pktmbuf_cmbatch_copy_packet_from_batch`](#copybatch)
 
-### Browsing the batch buffer using mbuf helper function<a name="browhelper"></a>
-The batch buffer can be browsed using a helper function [`rte_pktmbuf_cmbatch_get_next_packet`](#browhelper). The helper function returns packet data in a mbuf. A description of the different mbuf variables used are described below.
+### Browsing the Batch Buffer Using mbuf Helper Function<a name="browhelper"></a>
+The batch buffer can be browsed using a helper function [`rte_pktmbuf_cmbatch_get_next_packet`](#browhelper). The helper function returns packet data in an mbuf. A description of the different mbuf variables used are described below.
 
 | Variable | Description |
 |-----------|-----------|
 | m.buf_addr | Pointer to the packet including the packet descriptor |
-| m.port  | The port number, the packet is received on.<br>Note: The port number is the local port number of the adapter<br>It is not the DPDK port number. |
+| m.port  | The port number, the packet is received on.<br>Note: The port number is the local port number of the SmartNic<br>It is not the DPDK port number. |
 | m.data_len | The length of the packet on the wire |
 | m.pkt_len | The captured length of the packet incl. the packer descriptor |
 | m.data_off | Offset to the layer2 header. After the packet descriptor |
@@ -953,12 +953,12 @@ for (pack = 0; pack < mbuf->batch_nb_packet; pack++) {
                                                         IPV4_ADDRESS(ipv4hdr->dst_addr));
 }
 ```
-> Note: It is not allowed to keep packets for further analysis. The packets will be invalid when a new batch buffer is requested. To keep a packet, it must be copied to a local mbuf using the function [`rte_pktmbuf_cmbatch_copy_packet_from_mbuf`](#copymbuf)
+> Note: It is not allowed to keep packets for further analysis. The packets will be invalid when a new batch buffer is requested. To keep a packet, it must be copied to a local mbuf using the function [`rte_pktmbuf_cmbatch_copy_packet_from_mbuf`](#copymbuf).
 
-### Helper functions<a name="helperfunc"></a>
+### Helper Functions<a name="helperfunc"></a>
 
 #### rte_pktmbuf_cmbatch_get_next_packet - Browse the batch buffer<a name="getnext"></a>
-To get the next packet from the batch buffer in a mbuf. The packets are still placed in the batch buffer and no copying is done. The mbuf->buf_addr points to the packet in the batch buffer.
+Used to get the next packet from the batch buffer in an mbuf. The packets are still placed in the batch buffer and no copying is done. The mbuf->buf_addr points to the packet in the batch buffer.
 
 ```
 /**
@@ -982,10 +982,10 @@ rte_pktmbuf_cmbatch_get_next_packet(struct rte_mbuf *m_batch,
 ```
 
 #### rte_pktmbuf_cmbatch_copy_packet_from_batch - Copy a packet from the batch buffer<a name="copybatch"></a>
-Copy a packet from the batch buffer using the packet descriptor pointer into a new allocated mbuf.
-If the packets is larger than the mbuf buffer size, the packet will be copied into several new allocated linked mbufs.
+Copies a packet from the batch buffer using the packet descriptor pointer into a new allocated mbuf.
+If the packets are larger than the mbuf buffer size, the packet will be copied into several new allocated linked mbufs.
 
-The returned mbuf must be kept for later analysis, It must be freed after it is used.
+The returned mbuf must be kept for later analysis. It must be freed after it is used.
 
 ```
 /**
@@ -1006,7 +1006,7 @@ rte_pktmbuf_cmbatch_copy_packet_from_batch(struct rte_mbuf_batch_pkt_hdr *hdr,
                                          struct rte_mempool *mp)
 ```
 
-An example of how to use the copy packet function.
+An example of how to use the copy packet function:
 ```
 phdr = mbuf->buf_addr;  // Point to the beginning of the batch buffer
 for (pack = 0; pack < mbuf->batch_nb_packet; pack++) {
@@ -1050,14 +1050,14 @@ rte_pktmbuf_cmbatch_copy_packet_from_mbuf(struct rte_mbuf *mbuf,
                                           struct rte_mempool *mp)
 ```
 
-### Contiguous memory batching example<a name="batchexam"></a>
+### Contiguous Memory Batching Example<a name="batchexam"></a>
 An example showing how to use contiguous memory batching is placed in the directory:
 
 `examples/cmbatch`
 
-A number of command line option can be used to control the number of ports to receive data from and the number of queues per port (receive side scaling). The example will setup an IPV4 rte_flow filter in the function `SetupFilter`. This can either be a catch all IPV4 data filter or by using the `-d` and/or `-i` command line options a source and/or destination IP address can be added to the filter to catch only certain IPV4 addresses.
+A number of command line options can be used to control the number of ports to receive data from and the number of queues per port (receive side scaling). The example will set up an IPV4 rte_flow filter in the function `SetupFilter`. This can either be a catch all IPV4 data filter or by using the `-d` and/or `-i` command line options a source and/or destination IP address can be added to the filter to catch only certain IPV4 addresses.
 
-The example can either use SW statistics where the received packets are counted in software or HW statistics where  the number of received packets are returned from the adapter.
+The example can either use SW statistics where the received packets are counted in software or HW statistics where  the number of received packets are returned from the SmartNic.
 
 cmbatch example command line options:
 ```
@@ -1076,7 +1076,7 @@ cmbatch example command line options:
 
   lcores used are equal to no_ports * queues_per_port + 1
 ```    
-> Note: Using the option -e causing the cmbatch example to fail if a non batch mbuf is received.
+> Note: Using the option -e causing the cmbatch example to fail if a non-batch mbuf is received.
 
 Output of the cmbatch example:
 ```
@@ -1135,10 +1135,10 @@ Port 0 - Queue 1: Received                0 pkts
 Port 0 - Queue 2: Received                0 pkts
 Port 0 - Queue 3: Received                0 pkts
 ```
-The output are:
+The output is:
 
 QX,Y: 0 pk,     0.0 Mbps
-- X = The port packets is received on.
+- X = The port packets are received on.
 - Y = The queue on port X containing the packets.
 - Z pk = Number of packets received.
 - 0.0 Mbps = RX speed
