@@ -891,6 +891,12 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
   dev_info->min_rx_bufsize = 0;
   dev_info->default_txconf.txq_flags = ETH_TXQ_FLAGS_NOMULTSEGS;
 
+  dev_info->rx_offload_capa = DEV_RX_OFFLOAD_JUMBO_FRAME;
+  dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_CRC_STRIP;
+  dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_TIMESTAMP;
+  dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_SCATTER;
+  dev_info->rx_queue_offload_capa = dev_info->rx_offload_capa;
+
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
     _log_out_of_memory_errors(__func__);
