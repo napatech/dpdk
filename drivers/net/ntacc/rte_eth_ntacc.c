@@ -897,6 +897,9 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
   dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_SCATTER;
   dev_info->rx_queue_offload_capa = dev_info->rx_offload_capa;
 
+  dev_info->tx_offload_capa = 0;
+  dev_info->tx_queue_offload_capa = 0;
+
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
     _log_out_of_memory_errors(__func__);
