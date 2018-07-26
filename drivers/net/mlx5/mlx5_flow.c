@@ -63,12 +63,6 @@
 #define MLX5_IPV6 6
 
 #ifndef HAVE_IBV_DEVICE_COUNTERS_SET_SUPPORT
-struct ibv_counter_set_init_attr {
-	int dummy;
-};
-struct ibv_flow_spec_counter_action {
-	int dummy;
-};
 struct ibv_counter_set {
 	int dummy;
 };
@@ -885,10 +879,17 @@ mlx5_flow_convert_items_validate(const struct rte_flow_item items[],
 				sizeof(struct ibv_flow_spec_action_tag);
 	}
 	if (parser->count) {
+#ifdef HAVE_IBV_DEVICE_COUNTERS_SET_SUPPORT
 		unsigned int size = sizeof(struct ibv_flow_spec_counter_action);
 
 		for (i = 0; i != hash_rxq_init_n; ++i)
 			parser->queue[i].offset += size;
+#else
+		rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION,
+				   items,
+				   "Count action supported only on "
+				   "MLNX_OFED_4.2 and above");
+#endif
 	}
 	return 0;
 exit_item_not_supported:
