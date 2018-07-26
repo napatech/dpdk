@@ -197,6 +197,10 @@ err_ret:
 		RTE_LOG(ERR, PMD, "%s failed rc:%d\n", \
 			__func__, rc); \
 		rte_spinlock_unlock(&bp->hwrm_lock); \
+		if (rc == HWRM_ERR_CODE_RESOURCE_ACCESS_DENIED) \
+			rc = -EACCES; \
+		else if (rc > 0) \
+			rc = -EINVAL; \
 		return rc; \
 	} \
 	if (resp->error_code) { \
@@ -218,6 +222,10 @@ err_ret:
 				"%s error %d\n", __func__, rc); \
 		} \
 		rte_spinlock_unlock(&bp->hwrm_lock); \
+		if (rc == HWRM_ERR_CODE_RESOURCE_ACCESS_DENIED) \
+			rc = -EACCES; \
+		else if (rc > 0) \
+			rc = -EINVAL; \
 		return rc; \
 	} \
 } while (0)
