@@ -60,9 +60,17 @@
 void
 mlx5_promiscuous_enable(struct rte_eth_dev *dev)
 {
+	struct priv *priv = dev->data->dev_private;
 	int ret;
 
 	dev->data->promiscuous = 1;
+	if (priv->isolated) {
+		DRV_LOG(WARNING,
+			"port %u cannot enable promiscuous mode"
+			" in flow isolation mode",
+			dev->data->port_id);
+		return;
+	}
 	ret = mlx5_traffic_restart(dev);
 	if (ret)
 		DRV_LOG(ERR, "port %u cannot enable promiscuous mode: %s",
