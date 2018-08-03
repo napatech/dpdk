@@ -1478,7 +1478,7 @@ qede_link_update(struct rte_eth_dev *eth_dev, __rte_unused int wait_to_complete)
 {
 	struct qede_dev *qdev = eth_dev->data->dev_private;
 	struct ecore_dev *edev = &qdev->edev;
-	uint16_t link_duplex;
+	uint16_t link_duplex, old_link_status;
 	struct qed_link_output link;
 	struct rte_eth_link *curr = &eth_dev->data->dev_link;
 
@@ -1503,6 +1503,7 @@ qede_link_update(struct rte_eth_dev *eth_dev, __rte_unused int wait_to_complete)
 	curr->link_duplex = link_duplex;
 
 	/* Link Status */
+	old_link_status = curr->link_status;
 	curr->link_status = (link.link_up) ? ETH_LINK_UP : ETH_LINK_DOWN;
 
 	/* AN */
@@ -1514,7 +1515,7 @@ qede_link_update(struct rte_eth_dev *eth_dev, __rte_unused int wait_to_complete)
 		curr->link_autoneg, curr->link_status);
 
 	/* return 0 means link status changed, -1 means not changed */
-	return ((curr->link_status == link.link_up) ? -1 : 0);
+	return ((curr->link_status == old_link_status) ? -1 : 0);
 }
 
 static void qede_promiscuous_enable(struct rte_eth_dev *eth_dev)
