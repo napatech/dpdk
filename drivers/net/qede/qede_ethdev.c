@@ -534,12 +534,9 @@ int qede_activate_vport(struct rte_eth_dev *eth_dev, bool flg)
 	params.update_vport_active_tx_flg = 1;
 	params.vport_active_rx_flg = flg;
 	params.vport_active_tx_flg = flg;
-	if (!qdev->enable_tx_switching) {
-		if (IS_VF(edev)) {
-			params.update_tx_switching_flg = 1;
-			params.tx_switching_flg = !flg;
-			DP_INFO(edev, "VF tx-switching is disabled\n");
-		}
+	if (~qdev->enable_tx_switching & flg) {
+		params.update_tx_switching_flg = 1;
+		params.tx_switching_flg = !flg;
 	}
 	for_each_hwfn(edev, i) {
 		p_hwfn = &edev->hwfns[i];
@@ -1241,10 +1238,10 @@ static void qede_dev_stop(struct rte_eth_dev *eth_dev)
 	DP_INFO(edev, "Device is stopped\n");
 }
 
-#define QEDE_TX_SWITCHING		"vf_txswitch"
+#define QEDE_VF_TX_SWITCHING		"vf_tx_switching"
 
 const char *valid_args[] = {
-	QEDE_TX_SWITCHING,
+	QEDE_VF_TX_SWITCHING,
 	NULL,
 };
 
@@ -1254,9 +1251,7 @@ static int qede_args_check(const char *key, const char *val, void *opaque)
 	int ret = 0;
 	struct rte_eth_dev *eth_dev = opaque;
 	struct qede_dev *qdev = QEDE_INIT_QDEV(eth_dev);
-#ifdef RTE_LIBRTE_QEDE_DEBUG_INFO
 	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
-#endif
 
 	errno = 0;
 	tmp = strtoul(val, NULL, 0);
@@ -1265,8 +1260,10 @@ static int qede_args_check(const char *key, const char *val, void *opaque)
 		return errno;
 	}
 
-	if (strcmp(QEDE_TX_SWITCHING, key) == 0)
+	if (strcmp(QEDE_VF_TX_SWITCHING, key) == 0 && IS_VF(edev)) {
 		qdev->enable_tx_switching = !!tmp;
+		DP_INFO(edev, "Disabling VF tx-switching\n");
+	}
 
 	return ret;
 }
@@ -1341,7 +1338,8 @@ static int qede_dev_configure(struct rte_eth_dev *eth_dev)
 
 	/* Parse devargs and fix up rxmode */
 	if (qede_args(eth_dev))
-		return -ENOTSUP;
+		DP_NOTICE(edev, false,
+			  "Invalid devargs supplied, requested change will not take effect\n");
 
 	/* Sanity checks and throw warnings */
 	if (rxmode->enable_scatter)
