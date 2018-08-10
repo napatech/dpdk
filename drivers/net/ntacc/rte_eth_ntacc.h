@@ -207,6 +207,8 @@ struct batch_ctrl {
 };
 #endif
 
+
+
 int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *internals);
 
 extern int ntacc_logtype;

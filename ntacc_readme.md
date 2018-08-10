@@ -261,6 +261,9 @@ Following rte_flow filter actions are supported:
 |`RTE_FLOW_ACTION_TYPE_MARK`  | See description below                   |
 |`RTE_FLOW_ACTION_TYPE_RSS`   | `func`<br>`level`<br>`types`<br>`queue_num`<br>`queue`|
 |`RTE_FLOW_ACTION_TYPE_QUEUE` | `index`                                 |
+|`RTE_FLOW_ACTION_TYPE_DROP`  |                                         |
+|`RTE_FLOW_ACTION_TYPE_PORT_ID`| `id`                                   |
+|`RTE_FLOW_ACTION_TYPE_PHY_PORT`| `index`                               |
 
 - `RTE_FLOW_ACTION_TYPE_MARK`
   - If MARK is set and a packet matching the filter is received, the mark value will be copied to mbuf->hash.fdir.hi and the PKT_RX_FDIR_ID flag in mbuf->ol_flags is set.
@@ -268,6 +271,13 @@ Following rte_flow filter actions are supported:
 
 - `RTE_FLOW_ACTION_TYPE_RSS`
 The supported HASH functions are described below.
+- `RTE_FLOW_ACTION_TYPE_DROP`
+All packets matching the filter will be dropped by the SmartNIC (HW). The packets will not be sent to the APP.
+- `RTE_FLOW_ACTION_TYPE_PORT_ID`
+All packets matching the filter will be retransmitted on the DPDK port `id`. The packets will not be sent to the APP. The DPDK port must be on the same SmartNIC as the RX port.
+- `RTE_FLOW_ACTION_TYPE_PHY_PORT`
+As `RTE_FLOW_ACTION_TYPE_PORT_ID`, but the port number used must be the physical port number on the SmartNIC.
+If a 4 ported SmartNIC is used. The port number must be 0 to 3.
 
 ## Generic rte_flow RSS/Hash Functions <a name="hash"></a>
 

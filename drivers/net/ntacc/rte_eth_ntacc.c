@@ -94,7 +94,7 @@ static struct {
 #define PCIE_DEVICE_ID_PF_DSC_1_X    0x09C4
 
 #define NB_SUPPORTED_FPGAS 11
-struct {
+static struct {
   uint32_t item:12;
   uint32_t product:16;
   uint32_t ver:8;
@@ -161,7 +161,19 @@ static const char *valid_arguments[] = {
   NULL
 };
 
+enum {
+  ACTION_RSS       = 1 << 0,
+  ACTION_QUEUE     = 1 << 1,
+  ACTION_DROP      = 1 << 2,
+  ACTION_FORWARD   = 1 << 3,
+  ACTION_HASH      = 1 << 4,
+};
+
 static struct ether_addr eth_addr[MAX_NTACC_PORTS];
+
+static struct {
+  struct pmd_internals *pInternals;
+} _PmdInternals[RTE_MAX_ETHPORTS];
 
 static uint32_t _log_nt_errors(const uint32_t status, const char *msg, const char *func)
 {
@@ -897,8 +909,8 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
   dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_SCATTER;
   dev_info->rx_queue_offload_capa = dev_info->rx_offload_capa;
 
-  dev_info->tx_offload_capa = 0;
-  dev_info->tx_queue_offload_capa = 0;
+  dev_info->tx_offload_capa = DEV_TX_OFFLOAD_MULTI_SEGS;
+  dev_info->tx_queue_offload_capa = DEV_TX_OFFLOAD_MULTI_SEGS;
 
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
@@ -1091,6 +1103,11 @@ static void eth_dev_close(struct rte_eth_dev *dev)
   if (internals->ntpl_file) {
     rte_free(internals->ntpl_file);
   }
+
+  if (dev->data->port_id < RTE_MAX_ETHPORTS) {
+    _PmdInternals[dev->data->port_id].pInternals = NULL;
+  }
+
   rte_free(dev->data->dev_private);
   rte_eth_dev_release_port(dev);
 
@@ -1261,9 +1278,11 @@ static const char *ActionErrorString(enum rte_flow_action_type type)
   }
 }
 
-// Do only release the keyset if it is not in used anymore.
-// This means that is it not referenced in any other flow.
-// No lock in this code
+/******************************************************
+ Do only release the keyset if it is not in used anymore.
+ This means that is it not referenced in any other flow.
+ No lock in this code
+ *******************************************************/
 static void _cleanUpKeySet(int key, struct pmd_internals *internals)
 {
   struct rte_flow *pTmp;
@@ -1279,9 +1298,11 @@ static void _cleanUpKeySet(int key, struct pmd_internals *internals)
   ReturnKeysetValue(internals, key);
 }
 
-// Do only delete the assign command if it is not in used anymore.
-// This means that is it not referenced in any other flow.
-// No lock in this code
+/******************************************************
+ Do only delete the assign command if it is not in used anymore.
+ This means that is it not referenced in any other flow.
+ No lock in this code
+ *******************************************************/
 static void _cleanUpAssignNtplId(uint32_t assignNtplID, struct pmd_internals *internals)
 {
   char ntpl_buf[21];
@@ -1298,10 +1319,12 @@ static void _cleanUpAssignNtplId(uint32_t assignNtplID, struct pmd_internals *in
   DoNtpl(ntpl_buf, NULL, internals);
 }
 
-// Delete a flow by deleting the NTPL command assigned
-// with the flow. Check if some of the shared components
-// like keyset and assign filter is still in use.
-// No lock in this code
+/******************************************************
+ Delete a flow by deleting the NTPL command assigned
+ with the flow. Check if some of the shared components
+ like keyset and assign filter is still in use.
+ No lock in this code
+ *******************************************************/
 static void _cleanUpFlow(struct rte_flow *flow, struct pmd_internals *internals)
 {
   char ntpl_buf[21];
@@ -1321,6 +1344,401 @@ static void _cleanUpFlow(struct rte_flow *flow, struct pmd_internals *internals)
   rte_free(flow);
 }
 
+/******************************************************
+ Check that a forward port is on the saame adapter
+ as the rx port. Otherwise it will not be
+ possible to make hardware based forward.
+ *******************************************************/
+static int _checkForwardPort(struct pmd_internals *internals, uint8_t *pPort, bool isDPDKPort, uint8_t dpdkPort, struct rte_flow_error *error)
+{
+  if (isDPDKPort) {
+    // This is a DPDK port. Find the Napatech port.
+    if (dpdkPort >= RTE_MAX_ETHPORTS) {
+      rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "The forward port is out of range");
+      return 1;
+    }
+    if (_PmdInternals[dpdkPort].pInternals == NULL) {
+      rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "The forward port must be on a Napatech SmartNIC");
+      return 2;
+    }
+    *pPort = _PmdInternals[dpdkPort].pInternals->port;
+  }
+
+  // Check that the Napatech port is on the same adapter as the rx port.
+  if (*pPort < internals->local_port_offset || *pPort >= (internals->local_port_offset + internals->nbPortsOnAdapter)) {
+    rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "The forward port must be on the same Napatech SmartNIC as the rx port");
+    return 3;
+  }
+  return 0;
+}
+
+/******************************************************
+ Handle the rte_flow action command
+ *******************************************************/
+static int _handle_actions(const struct rte_flow_action actions[],
+                           const struct rte_flow_attr *attr,
+                           const struct rte_flow_action_rss **pRss,
+                           uint64_t *pTypeMask,
+                           struct color_s *pColor,
+                           uint8_t *pAction,
+                           uint8_t *pNb_queues,
+                           uint8_t *pList_queues,
+                           char *ntpl_buf,
+                           struct pmd_internals *internals,
+                           struct rte_flow_error *error)
+{
+  uint8_t forwardPort = 0;
+  uint32_t i;
+
+  for (; actions->type != RTE_FLOW_ACTION_TYPE_END; ++actions) {
+    switch (actions->type)
+    {
+    default:
+      rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, ActionErrorString(actions->type));
+      return 1;
+    case RTE_FLOW_ACTION_TYPE_VOID:
+      continue;
+    case RTE_FLOW_ACTION_TYPE_MARK:
+      pColor->color = ((const struct rte_flow_action_mark *)actions->conf)->id;
+      pColor->valid = true;
+      break;
+    case RTE_FLOW_ACTION_TYPE_RSS:
+      // Setup RSS - Receive side scaling
+      *pRss = (const struct rte_flow_action_rss *)actions->conf;
+      if (*pAction & (ACTION_RSS | ACTION_QUEUE)) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Queue or RSS already defined");
+        return 1;
+      }
+      if (*pAction & (ACTION_DROP | ACTION_FORWARD)) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "RSS must not be defined for a drop or forward filter");
+        return 1;
+      }
+      *pAction |= ACTION_RSS;
+      if ((*pRss)->queue_num > RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Number of RSS queues out of range");
+        return 1;
+      }
+      for (i = 0; i < (*pRss)->queue_num; i++) {
+        if ((*pRss)->queue && (*pRss)->queue[i] >= RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+          rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "RSS queue out of range");
+          return 1;
+        }
+        pList_queues[(*pNb_queues)++] = (*pRss)->queue[i];
+        *pTypeMask |= RX_FILTER;
+      }
+      break;
+    case RTE_FLOW_ACTION_TYPE_QUEUE:
+      // Setup RX queue - only one RX queue is allowed. Otherwise RSS must be used.
+      if (*pAction & (ACTION_RSS | ACTION_QUEUE)) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Queue or RSS already defined");
+        return 1;
+      }
+      if (*pAction & (ACTION_DROP | ACTION_FORWARD)) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Queue must not be defined for a drop or forward filter");
+        return 1;
+      }
+      *pAction |= ACTION_QUEUE;
+      if (((const struct rte_flow_action_queue *)actions->conf)->index >= RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "queue out of range");
+        return 1;
+      }
+      pList_queues[(*pNb_queues)++] = ((const struct rte_flow_action_queue *)actions->conf)->index;
+      *pTypeMask |= RX_FILTER;
+      break;
+    case RTE_FLOW_ACTION_TYPE_DROP:
+      // The filter must be a drop filter ie. all packets received are discarded
+      if (*pAction & (ACTION_RSS | ACTION_QUEUE | ACTION_FORWARD)) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Queue, RSS or forward must not be defined for a drop filter");
+        return 1;
+      }
+      *pAction |= ACTION_DROP;
+      *pTypeMask |= DROP_FILTER;
+      break;
+    case RTE_FLOW_ACTION_TYPE_PHY_PORT:
+      // Setup packet forward filter - The forward port must be the physical port number on the adapter
+      if (*pAction & (ACTION_RSS | ACTION_QUEUE | ACTION_DROP)) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Queue, RSS or drop must not be defined for a forward filter");
+        return 1;
+      }
+      *pAction |= ACTION_FORWARD;
+      forwardPort = ((const struct rte_flow_action_phy_port *)actions->conf)->index + internals->local_port_offset;
+      if (_checkForwardPort(internals, &forwardPort, false, 0, error)) {
+        return 1;
+      }
+      *pTypeMask |= RETRANSMIT_FILTER;
+      break;
+    case RTE_FLOW_ACTION_TYPE_PORT_ID:
+      // Setup packet forward filter - The forward port must be a DPDK port on the Napatech adapter
+      if (*pAction & (ACTION_RSS | ACTION_QUEUE | ACTION_DROP)) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Queue, RSS or drop must not be defined for a forward filter");
+        return 1;
+      }
+      *pAction |= ACTION_FORWARD;
+      if (_checkForwardPort(internals, &forwardPort, true, ((const struct rte_flow_action_port_id *)actions->conf)->id, error)) {
+        return 1;
+      }
+      *pTypeMask |= RETRANSMIT_FILTER;
+      break;
+    }
+  }
+
+  if (*pAction & (ACTION_RSS | ACTION_QUEUE)) {
+    // This is not a Drop filter or a retransmit filter
+    if (*pNb_queues == 0) {
+      rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "A queue must be defined");
+      return 1;
+    }
+
+    // Check the queues
+    for (i = 0; i < *pNb_queues; i++) {
+      if (!internals->rxq[pList_queues[i]].enabled) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "All defined queues must be enabled");
+        return 1;
+      }
+    }
+
+    if (pColor->valid) {
+  #ifdef COPY_OFFSET0
+      snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN3,length=22,colorbits=32,Offset0=%s[0];", attr->priority, STRINGIZE_VALUE_OF(COPY_OFFSET0));
+  #else
+      snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN3,length=22,colorbits=32;", attr->priority);
+  #endif
+    }
+    else {
+  #ifdef COPY_OFFSET0
+      snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN3,length=20,colorbits=14,Offset0=%s[0];", attr->priority, STRINGIZE_VALUE_OF(COPY_OFFSET0));
+  #else
+      snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN3,length=20,colorbits=14;", attr->priority);
+  #endif
+    }
+    // Set the stream IDs
+    CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, *pNb_queues, pList_queues);
+  }
+  else if (*pAction & ACTION_DROP) {
+    snprintf(ntpl_buf, NTPL_BSIZE, "assign[streamid=drop;priority=%u;", attr->priority);
+    pColor->valid = false;
+  }
+  else if (*pAction & ACTION_FORWARD) {
+    snprintf(ntpl_buf, NTPL_BSIZE, "assign[streamid=drop;priority=%u;DestinationPort=%u", attr->priority, forwardPort);
+    pColor->valid = false;
+  }
+  return 0;
+}
+
+/******************************************************
+ Handle the rte_flow item command
+ *******************************************************/
+static int _handle_items(const struct rte_flow_item items[],
+                         uint64_t *pTypeMask,
+                         bool *pFilterContinue,
+                         uint8_t *pNb_ports,
+                         uint8_t *plist_ports,
+                         const char **ntpl_str,
+                         char *filter_buf1,
+                         struct pmd_internals *internals,
+                         struct rte_flow_error *error)
+{
+  bool tunnel = false;
+  uint32_t tunneltype;
+
+  // Set the filter expression
+  filter_buf1[0] = 0;
+  for (; items->type != RTE_FLOW_ITEM_TYPE_END; ++items) {
+    switch (items->type) {
+      case RTE_FLOW_ITEM_TYPE_NTPL:
+        *ntpl_str = ((const struct rte_flow_item_ntpl*)items->spec)->ntpl_str;
+        if (((const struct rte_flow_item_ntpl*)items->spec)->tunnel == RTE_FLOW_NTPL_TUNNEL) {
+          tunnel = true;
+        }
+        break;
+    case RTE_FLOW_ITEM_TYPE_VOID:
+      continue;
+    case RTE_FLOW_ITEM_TYPE_PHY_PORT:
+      if (*pNb_ports < MAX_NTACC_PORTS) {
+        const struct rte_flow_item_phy_port *spec = (const struct rte_flow_item_phy_port *)items->spec;
+        if (spec->index > internals->nbPortsOnAdapter) {
+          rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Illegal port number in port flow. All port numbers must be from the same adapter");
+          return 1;
+        }
+        plist_ports[(*pNb_ports)++] = spec->index + internals->local_port_offset;
+      }
+      break;
+    case RTE_FLOW_ITEM_TYPE_ETH:
+      if (SetEthernetFilter(items,
+                            tunnel,
+                            pTypeMask,
+                            internals) != 0) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up Ether filter");
+        return 1;
+      }
+      break;
+
+      case RTE_FLOW_ITEM_TYPE_IPV4:
+        if (SetIPV4Filter(&filter_buf1[strlen(filter_buf1)],
+                          pFilterContinue,
+                          items,
+                          tunnel,
+                          pTypeMask,
+                          internals) != 0) {
+          rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up IPV4 filter");
+          return 1;
+        }
+        break;
+
+    case RTE_FLOW_ITEM_TYPE_IPV6:
+      if (SetIPV6Filter(&filter_buf1[strlen(filter_buf1)],
+                        pFilterContinue,
+                        items,
+                        tunnel,
+                        pTypeMask,
+                        internals) != 0) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up IPV6 filter");
+        return 1;
+      }
+      break;
+
+      case RTE_FLOW_ITEM_TYPE_SCTP:
+        if (SetSCTPFilter(&filter_buf1[strlen(filter_buf1)],
+                          pFilterContinue,
+                          items,
+                          tunnel,
+                          pTypeMask,
+                          internals) != 0) {
+          rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up TCP filter");
+          return 1;
+        }
+        break;
+
+      case RTE_FLOW_ITEM_TYPE_TCP:
+        if (SetTCPFilter(&filter_buf1[strlen(filter_buf1)],
+                          pFilterContinue,
+                          items,
+                          tunnel,
+                          pTypeMask,
+                          internals) != 0) {
+          rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up TCP filter");
+          return 1;
+        }
+        break;
+
+    case RTE_FLOW_ITEM_TYPE_UDP:
+      if (SetUDPFilter(&filter_buf1[strlen(filter_buf1)],
+                        pFilterContinue,
+                        items,
+                        tunnel,
+                        pTypeMask,
+                        internals) != 0) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up UDP filter");
+        return 1;
+      }
+      break;
+
+      case RTE_FLOW_ITEM_TYPE_ICMP:
+        if (SetICMPFilter(&filter_buf1[strlen(filter_buf1)],
+                          pFilterContinue,
+                          items,
+                          tunnel,
+                          pTypeMask,
+                          internals) != 0) {
+          rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up ICMP filter");
+          return 1;
+        }
+        break;
+
+    case RTE_FLOW_ITEM_TYPE_VLAN:
+      if (SetVlanFilter(&filter_buf1[strlen(filter_buf1)],
+                        pFilterContinue,
+                        items,
+                        tunnel,
+                        pTypeMask,
+                        internals) != 0) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up VLAN filter");
+        return 1;
+      }
+      break;
+
+    case RTE_FLOW_ITEM_TYPE_MPLS:
+      if (SetMplsFilter(&filter_buf1[strlen(filter_buf1)],
+                        pFilterContinue,
+                        items,
+                        tunnel,
+                        pTypeMask,
+                        internals) != 0) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up MPLS filter");
+        return 1;
+      }
+      break;
+
+    case  RTE_FLOW_ITEM_TYPE_GRE:
+      if (SetGreFilter(&filter_buf1[strlen(filter_buf1)],
+                       pFilterContinue,
+                       items,
+                       pTypeMask) != 0) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up GRE filter");
+        return 1;
+      }
+      tunnel = true;
+      break;
+    case RTE_FLOW_ITEM_TYPE_GTPU:
+      if (SetGtpFilter(&filter_buf1[strlen(filter_buf1)],
+                       pFilterContinue,
+                       items,
+                       pTypeMask,
+                       'U') != 0) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up GTP-U filter");
+        return 1;
+      }
+      tunnel = true;
+      break;
+    case 	RTE_FLOW_ITEM_TYPE_GTPC:
+      if (SetGtpFilter(&filter_buf1[strlen(filter_buf1)],
+                       pFilterContinue,
+                       items,
+                       pTypeMask,
+                       'C') != 0) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up GTP-C filter");
+        return 1;
+      }
+      tunnel = true;
+      break;
+
+
+    case RTE_FLOW_ITEM_TYPE_VXLAN:
+    case RTE_FLOW_ITEM_TYPE_NVGRE:
+    case RTE_FLOW_ITEM_TYPE_IPinIP:
+      switch (items->type) {
+      case RTE_FLOW_ITEM_TYPE_VXLAN:
+        tunneltype = VXLAN_TUNNEL_TYPE;
+        break;
+      case RTE_FLOW_ITEM_TYPE_NVGRE:
+        tunneltype = NVGRE_TUNNEL_TYPE;
+        break;
+      case RTE_FLOW_ITEM_TYPE_IPinIP:
+        tunneltype = IP_IN_IP_TUNNEL_TYPE;
+        break;
+      default:
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up tunnel filter");
+        return 1;
+      }
+
+      if (SetTunnelFilter(&filter_buf1[strlen(filter_buf1)],
+                        pFilterContinue,
+                        tunneltype,
+                        pTypeMask) != 0) {
+        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up tunnel filter");
+        return 1;
+      }
+      tunnel = true;
+      break;
+
+    default:
+      rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Item is not supported");
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                                   const struct rte_flow_attr *attr,
                                   const struct rte_flow_item items[],
@@ -1332,14 +1750,11 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   uint8_t nb_queues = 0;
   uint8_t list_queues[RTE_ETHDEV_QUEUE_STAT_CNTRS];
   bool filterContinue = false;
-  bool queueDefined = false;
   const struct rte_flow_action_rss *rss = NULL;
-  uint32_t i;
-  bool tunnel;
-  int tunneltype;
   struct color_s color = {0, false};
   uint8_t nb_ports = 0;
   uint8_t list_ports[MAX_NTACC_PORTS];
+  uint8_t action = 0;
 
   uint64_t typeMask = 0;
   bool reuse = false;
@@ -1348,6 +1763,9 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   char *filter_buf1 = NULL;
   struct rte_flow *flow = NULL;
   const char *ntpl_str = NULL;
+
+  // Init error struct
+  rte_flow_error_set(error, 0, RTE_FLOW_ERROR_TYPE_NONE, NULL, "No errors");
 
   ntpl_buf = rte_malloc(internals->name, NTPL_BSIZE + 1, 0);
   if (!ntpl_buf) {
@@ -1381,285 +1799,14 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
     goto FlowError;
   }
 
-  for (; actions->type != RTE_FLOW_ACTION_TYPE_END; ++actions) {
-    switch (actions->type)
-    {
-    default:
-      rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, ActionErrorString(actions->type));
-      goto FlowError;
-    case RTE_FLOW_ACTION_TYPE_VOID:
-      continue;
-    case RTE_FLOW_ACTION_TYPE_MARK:
-      color.color = ((const struct rte_flow_action_mark *)actions->conf)->id;
-      color.valid = true;
-      break;
-    case RTE_FLOW_ACTION_TYPE_RSS:
-      rss = (const struct rte_flow_action_rss *)actions->conf;
-      if (queueDefined) {
-        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Queue or RSS already defined");
-        goto FlowError;
-      }
-      queueDefined = true;
-      if (rss->queue_num > RTE_ETHDEV_QUEUE_STAT_CNTRS) {
-        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Number of RSS queues out of range");
-        goto FlowError;
-      }
-      for (i = 0; i < rss->queue_num; i++) {
-        if (rss->queue && rss->queue[i] >= RTE_ETHDEV_QUEUE_STAT_CNTRS) {
-          rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "RSS queue out of range");
-          goto FlowError;
-        }
-        list_queues[nb_queues++] = rss->queue[i];
-      }
-      break;
-    case RTE_FLOW_ACTION_TYPE_QUEUE:
-      if (queueDefined) {
-        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Queue or RSS already defined");
-        goto FlowError;
-      }
-      queueDefined = true;
-      if (((const struct rte_flow_action_queue *)actions->conf)->index >= RTE_ETHDEV_QUEUE_STAT_CNTRS) {
-        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "queue out of range");
-        goto FlowError;
-      }
-      list_queues[nb_queues++] = ((const struct rte_flow_action_queue *)actions->conf)->index;
-      break;
-    }
-  }
-
-  if (nb_queues == 0) {
-    rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "A queue must be defined");
+  if (_handle_actions(actions, attr, &rss, &typeMask, &color, &action, &nb_queues, list_queues, ntpl_buf, internals, error) != 0)
     goto FlowError;
-  }
 
-  // Check the queues
-  for (i = 0; i < nb_queues; i++) {
-    if (!internals->rxq[list_queues[i]].enabled) {
-      rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "All defined queues must be enabled");
-      goto FlowError;
-    }
-  }
-
-  // Set the priority
-
-  if (color.valid) {
-#ifdef COPY_OFFSET0
-    snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN3,length=22,colorbits=32,Offset0=%s[0];", attr->priority, STRINGIZE_VALUE_OF(COPY_OFFSET0));
-#else
-    snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN3,length=22,colorbits=32;", attr->priority);
-#endif
-  }
-  else {
-#ifdef COPY_OFFSET0
-    snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN3,length=20,colorbits=14,Offset0=%s[0];", attr->priority, STRINGIZE_VALUE_OF(COPY_OFFSET0));
-#else
-    snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=%u;Descriptor=DYN3,length=20,colorbits=14;", attr->priority);
-#endif
-  }
-
-  // Set the stream IDs
-  CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
-
-  // Set the filter expression
-  tunnel = false;
-  filter_buf1[0] = 0;
-  for (; items->type != RTE_FLOW_ITEM_TYPE_END; ++items) {
-    switch (items->type) {
-      case RTE_FLOW_ITEM_TYPE_NTPL:
-        ntpl_str = ((const struct rte_flow_item_ntpl*)items->spec)->ntpl_str;
-        if (((const struct rte_flow_item_ntpl*)items->spec)->tunnel == RTE_FLOW_NTPL_TUNNEL) {
-          tunnel = true;
-        }
-        break;
-    case RTE_FLOW_ITEM_TYPE_VOID:
-      continue;
-    case RTE_FLOW_ITEM_TYPE_PHY_PORT:
-      if (nb_ports < MAX_NTACC_PORTS) {
-        const struct rte_flow_item_phy_port *spec = (const struct rte_flow_item_phy_port *)items->spec;
-        if (spec->index > internals->nbPortsOnAdapter) {
-          rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Illegal port number in port flow. All port numbers must be from the same adapter");
-          goto FlowError;
-        }
-        list_ports[nb_ports++] = spec->index + internals->local_port_offset;
-      }
-      break;
-    case RTE_FLOW_ITEM_TYPE_ETH:
-      if (SetEthernetFilter(items,
-                            tunnel,
-                            &typeMask,
-                            internals) != 0) {
-        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up Ether filter");
-        goto FlowError;
-      }
-      break;
-
-      case RTE_FLOW_ITEM_TYPE_IPV4:
-        if (SetIPV4Filter(&filter_buf1[strlen(filter_buf1)],
-                          &filterContinue,
-                          items,
-                          tunnel,
-                          &typeMask,
-                          internals) != 0) {
-          rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up IPV4 filter");
-          goto FlowError;
-        }
-        break;
-
-    case RTE_FLOW_ITEM_TYPE_IPV6:
-      if (SetIPV6Filter(&filter_buf1[strlen(filter_buf1)],
-                        &filterContinue,
-                        items,
-                        tunnel,
-                        &typeMask,
-                        internals) != 0) {
-        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up IPV6 filter");
-        goto FlowError;
-      }
-      break;
-
-      case RTE_FLOW_ITEM_TYPE_SCTP:
-        if (SetSCTPFilter(&filter_buf1[strlen(filter_buf1)],
-                          &filterContinue,
-                          items,
-                          tunnel,
-                          &typeMask,
-                          internals) != 0) {
-          rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up TCP filter");
-          goto FlowError;
-        }
-        break;
-
-      case RTE_FLOW_ITEM_TYPE_TCP:
-        if (SetTCPFilter(&filter_buf1[strlen(filter_buf1)],
-                          &filterContinue,
-                          items,
-                          tunnel,
-                          &typeMask,
-                          internals) != 0) {
-          rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up TCP filter");
-          goto FlowError;
-        }
-        break;
-
-    case RTE_FLOW_ITEM_TYPE_UDP:
-      if (SetUDPFilter(&filter_buf1[strlen(filter_buf1)],
-                        &filterContinue,
-                        items,
-                        tunnel,
-                        &typeMask,
-                        internals) != 0) {
-        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up UDP filter");
-        goto FlowError;
-      }
-      break;
-
-      case RTE_FLOW_ITEM_TYPE_ICMP:
-        if (SetICMPFilter(&filter_buf1[strlen(filter_buf1)],
-                          &filterContinue,
-                          items,
-                          tunnel,
-                          &typeMask,
-                          internals) != 0) {
-          rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up ICMP filter");
-          goto FlowError;
-        }
-        break;
-
-    case RTE_FLOW_ITEM_TYPE_VLAN:
-      if (SetVlanFilter(&filter_buf1[strlen(filter_buf1)],
-                        &filterContinue,
-                        items,
-                        tunnel,
-                        &typeMask,
-                        internals) != 0) {
-        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up VLAN filter");
-        goto FlowError;
-      }
-      break;
-
-    case RTE_FLOW_ITEM_TYPE_MPLS:
-      if (SetMplsFilter(&filter_buf1[strlen(filter_buf1)],
-                        &filterContinue,
-                        items,
-                        tunnel,
-                        &typeMask,
-                        internals) != 0) {
-        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up MPLS filter");
-        goto FlowError;
-      }
-      break;
-
-    case  RTE_FLOW_ITEM_TYPE_GRE:
-      if (SetGreFilter(&filter_buf1[strlen(filter_buf1)],
-                       &filterContinue,
-                       items,
-                       &typeMask) != 0) {
-        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up GRE filter");
-        goto FlowError;
-      }
-      tunnel = true;
-      break;
-    case RTE_FLOW_ITEM_TYPE_GTPU:
-      if (SetGtpFilter(&filter_buf1[strlen(filter_buf1)],
-                       &filterContinue,
-                       items,
-                       &typeMask,
-                       'U') != 0) {
-        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up GTP-U filter");
-        goto FlowError;
-      }
-      tunnel = true;
-      break;
-    case 	RTE_FLOW_ITEM_TYPE_GTPC:
-      if (SetGtpFilter(&filter_buf1[strlen(filter_buf1)],
-                       &filterContinue,
-                       items,
-                       &typeMask,
-                       'C') != 0) {
-        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up GTP-C filter");
-        goto FlowError;
-      }
-      tunnel = true;
-      break;
-
-
-    case RTE_FLOW_ITEM_TYPE_VXLAN:
-    case RTE_FLOW_ITEM_TYPE_NVGRE:
-    case RTE_FLOW_ITEM_TYPE_IPinIP:
-      switch (items->type) {
-      case RTE_FLOW_ITEM_TYPE_VXLAN:
-        tunneltype = VXLAN_TUNNEL_TYPE;
-        break;
-      case RTE_FLOW_ITEM_TYPE_NVGRE:
-        tunneltype = NVGRE_TUNNEL_TYPE;
-        break;
-      case RTE_FLOW_ITEM_TYPE_IPinIP:
-        tunneltype = IP_IN_IP_TUNNEL_TYPE;
-        break;
-      default:
-        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up tunnel filter");
-        goto FlowError;
-      }
-
-      if (SetTunnelFilter(&filter_buf1[strlen(filter_buf1)],
-                        &filterContinue,
-                        tunneltype,
-                        &typeMask) != 0) {
-        rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Failed setting up tunnel filter");
-        goto FlowError;
-      }
-      tunnel = true;
-      break;
-
-    default:
-      rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Item is not supported");
-      goto FlowError;
-
-    }
-  }
+  if (_handle_items(items, &typeMask, &filterContinue, &nb_ports, list_ports, &ntpl_str, filter_buf1, internals, error) != 0)
+    goto FlowError;
 
   // Create HASH
-  if (rss) {
+  if (action == ACTION_RSS) {
     // If RSS is used, then set the Hash mode
     if (CreateHash(&ntpl_buf[strlen(ntpl_buf)], rss, internals) != 0) {
       rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Failed setting up hash mode");
@@ -1690,6 +1837,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   if (filterContinue) {
     snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " and");
   }
+
   if (nb_ports == 0) {
   // Set the ports
     snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, " port==%u", internals->port);
@@ -2343,9 +2491,12 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
 
     internals->if_index = internals->port;
 
+    if (eth_dev->data->port_id < RTE_MAX_ETHPORTS) {
+      _PmdInternals[eth_dev->data->port_id].pInternals = internals;
+    }
+
     eth_dev->device = &dev->device;
     eth_dev->data->dev_private = internals;
-    eth_dev->data->port_id = eth_dev->data->port_id;
     eth_dev->data->dev_link = pmd_link;
     eth_dev->data->mac_addrs = &eth_addr[internals->port];
     eth_dev->data->numa_node = dev->device.numa_node;
@@ -2615,6 +2766,8 @@ static int rte_pmd_ntacc_dev_probe(struct rte_pci_driver *drv __rte_unused, stru
     first++;
   }
 
+  // Reset internals struct.
+  memset(_PmdInternals, 0, sizeof(_PmdInternals));
 
   if (rte_pmd_init_internals(dev, mask, ntplStr) < 0)
     return -1;
