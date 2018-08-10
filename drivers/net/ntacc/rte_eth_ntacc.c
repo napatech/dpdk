@@ -901,13 +901,30 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
   dev_info->max_rx_queues = STREAMIDS_PER_PORT > RTE_ETHDEV_QUEUE_STAT_CNTRS ? RTE_ETHDEV_QUEUE_STAT_CNTRS : STREAMIDS_PER_PORT;
   dev_info->max_tx_queues = STREAMIDS_PER_PORT > RTE_ETHDEV_QUEUE_STAT_CNTRS ? RTE_ETHDEV_QUEUE_STAT_CNTRS : STREAMIDS_PER_PORT;
   dev_info->min_rx_bufsize = 0;
-  dev_info->default_txconf.txq_flags = ETH_TXQ_FLAGS_NOMULTSEGS;
 
-  dev_info->rx_offload_capa = DEV_RX_OFFLOAD_JUMBO_FRAME;
-  dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_CRC_STRIP;
-  dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_TIMESTAMP;
-  dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_SCATTER;
+  dev_info->rx_offload_capa = DEV_RX_OFFLOAD_JUMBO_FRAME |
+                              DEV_RX_OFFLOAD_CRC_STRIP   |
+                              DEV_RX_OFFLOAD_TIMESTAMP   |
+                              DEV_RX_OFFLOAD_SCATTER;
+
   dev_info->rx_queue_offload_capa = dev_info->rx_offload_capa;
+
+  dev_info->flow_type_rss_offloads = ETH_RSS_NONFRAG_IPV4_OTHER |
+                                     ETH_RSS_NONFRAG_IPV4_TCP   |
+                                     ETH_RSS_NONFRAG_IPV4_UDP   |
+                                     ETH_RSS_NONFRAG_IPV4_SCTP  |
+                                     ETH_RSS_IPV4               |
+                                     ETH_RSS_FRAG_IPV4          |
+                                     ETH_RSS_NONFRAG_IPV6_OTHER |
+                                     ETH_RSS_NONFRAG_IPV6_TCP   |
+                                     ETH_RSS_IPV6_TCP_EX        |
+                                     ETH_RSS_NONFRAG_IPV6_UDP   |
+                                     ETH_RSS_IPV6_UDP_EX        |
+                                     ETH_RSS_NONFRAG_IPV6_SCTP  |
+                                     ETH_RSS_IPV6               |
+                                     ETH_RSS_FRAG_IPV6          |
+                                     ETH_RSS_IPV6_EX;
+  dev_info->hash_key_size = 0;
 
   dev_info->tx_offload_capa = DEV_TX_OFFLOAD_MULTI_SEGS;
   dev_info->tx_queue_offload_capa = DEV_TX_OFFLOAD_MULTI_SEGS;
