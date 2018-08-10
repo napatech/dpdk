@@ -25,6 +25,7 @@
 
 #define REORDER_PERIOD_MS 10
 #define DEFAULT_POLLING_INTERVAL_10_MS (10)
+#define BOND_MAX_MAC_ADDRS 16
 
 #define HASH_L4_PORTS(h) ((h)->src_port ^ (h)->dst_port)
 
@@ -1588,6 +1589,61 @@ mac_address_set(struct rte_eth_dev *eth_dev, struct ether_addr *new_mac_addr)
 	return 0;
 }
 
+static const struct ether_addr null_mac_addr;
+
+/*
+ * Add additional MAC addresses to the slave
+ */
+int
+slave_add_mac_addresses(struct rte_eth_dev *bonded_eth_dev,
+		uint16_t slave_port_id)
+{
+	int i, ret;
+	struct ether_addr *mac_addr;
+
+	for (i = 1; i < BOND_MAX_MAC_ADDRS; i++) {
+		mac_addr = &bonded_eth_dev->data->mac_addrs[i];
+		if (is_same_ether_addr(mac_addr, &null_mac_addr))
+			break;
+
+		ret = rte_eth_dev_mac_addr_add(slave_port_id, mac_addr, 0);
+		if (ret < 0) {
+			/* rollback */
+			for (i--; i > 0; i--)
+				rte_eth_dev_mac_addr_remove(slave_port_id,
+					&bonded_eth_dev->data->mac_addrs[i]);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
+/*
+ * Remove additional MAC addresses from the slave
+ */
+int
+slave_remove_mac_addresses(struct rte_eth_dev *bonded_eth_dev,
+		uint16_t slave_port_id)
+{
+	int i, rc, ret;
+	struct ether_addr *mac_addr;
+
+	rc = 0;
+	for (i = 1; i < BOND_MAX_MAC_ADDRS; i++) {
+		mac_addr = &bonded_eth_dev->data->mac_addrs[i];
+		if (is_same_ether_addr(mac_addr, &null_mac_addr))
+			break;
+
+		ret = rte_eth_dev_mac_addr_remove(slave_port_id, mac_addr);
+		/* save only the first error */
+		if (ret < 0 && rc == 0)
+			rc = ret;
+	}
+
+	return rc;
+}
+
 int
 mac_address_slaves_update(struct rte_eth_dev *bonded_eth_dev)
 {
@@ -2057,10 +2113,6 @@ bond_ethdev_start(struct rte_eth_dev *eth_dev)
 		}
 	}
 
-	/* Update all slave devices MACs*/
-	if (mac_address_slaves_update(eth_dev) != 0)
-		goto out_err;
-
 	/* If bonded device is configure in promiscuous mode then re-apply config */
 	if (internals->promiscuous_en)
 		bond_ethdev_promiscuous_enable(eth_dev);
@@ -2100,6 +2152,10 @@ bond_ethdev_start(struct rte_eth_dev *eth_dev)
 			bond_ethdev_slave_link_status_change_monitor,
 			(void *)&rte_eth_devices[internals->port_id]);
 	}
+
+	/* Update all slave devices MACs*/
+	if (mac_address_slaves_update(eth_dev) != 0)
+		goto out_err;
 
 	if (internals->user_defined_primary_port)
 		bond_ethdev_primary_set(internals, internals->primary_port);
@@ -2173,7 +2229,6 @@ bond_ethdev_stop(struct rte_eth_dev *eth_dev)
 			tlb_last_obytets[internals->active_slaves[i]] = 0;
 	}
 
-	internals->active_slave_count = 0;
 	internals->link_status_polling_enabled = 0;
 	for (i = 0; i < internals->slave_count; i++)
 		internals->slaves[i].last_link_status = 0;
@@ -2219,7 +2274,7 @@ bond_ethdev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	uint16_t max_nb_rx_queues = UINT16_MAX;
 	uint16_t max_nb_tx_queues = UINT16_MAX;
 
-	dev_info->max_mac_addrs = 1;
+	dev_info->max_mac_addrs = BOND_MAX_MAC_ADDRS;
 
 	dev_info->max_rx_pktlen = internals->candidate_max_rx_pktlen ?
 			internals->candidate_max_rx_pktlen :
@@ -2664,10 +2719,8 @@ bond_ethdev_lsc_event_callback(uint16_t port_id, enum rte_eth_event_type type,
 
 	rte_eth_link_get_nowait(port_id, &link);
 	if (link.link_status) {
-		if (active_pos < internals->active_slave_count) {
-			rte_spinlock_unlock(&internals->lsc_lock);
-			return rc;
-		}
+		if (active_pos < internals->active_slave_count)
+			goto link_update;
 
 		/* if no active slave ports then set this port to be primary port */
 		if (internals->active_slave_count < 1) {
@@ -2679,6 +2732,17 @@ bond_ethdev_lsc_event_callback(uint16_t port_id, enum rte_eth_event_type type,
 			mac_address_slaves_update(bonded_eth_dev);
 		}
 
+		/* check link state properties if bonded link is up*/
+		if (bonded_eth_dev->data->dev_link.link_status == ETH_LINK_UP) {
+			if (link_properties_valid(bonded_eth_dev, &link) != 0)
+				RTE_BOND_LOG(ERR, "Invalid link properties "
+					     "for slave %d in bonding mode %d",
+					     port_id, internals->mode);
+		} else {
+			/* inherit slave link properties */
+			link_properties_set(bonded_eth_dev, &link);
+		}
+
 		activate_slave(bonded_eth_dev, port_id);
 
 		/* If user has defined the primary port then default to using it */
@@ -2686,10 +2750,8 @@ bond_ethdev_lsc_event_callback(uint16_t port_id, enum rte_eth_event_type type,
 				internals->primary_port == port_id)
 			bond_ethdev_primary_set(internals, port_id);
 	} else {
-		if (active_pos == internals->active_slave_count) {
-			rte_spinlock_unlock(&internals->lsc_lock);
-			return rc;
-		}
+		if (active_pos == internals->active_slave_count)
+			goto link_update;
 
 		/* Remove from active slave list */
 		deactivate_slave(bonded_eth_dev, port_id);
@@ -2708,6 +2770,7 @@ bond_ethdev_lsc_event_callback(uint16_t port_id, enum rte_eth_event_type type,
 		}
 	}
 
+link_update:
 	/**
 	 * Update bonded device link properties after any change to active
 	 * slaves
@@ -2745,7 +2808,7 @@ bond_ethdev_lsc_event_callback(uint16_t port_id, enum rte_eth_event_type type,
 
 	rte_spinlock_unlock(&internals->lsc_lock);
 
-	return 0;
+	return rc;
 }
 
 static int
@@ -2905,6 +2968,68 @@ bond_filter_ctrl(struct rte_eth_dev *dev __rte_unused,
 	return -ENOTSUP;
 }
 
+static int
+bond_ethdev_mac_addr_add(struct rte_eth_dev *dev, struct ether_addr *mac_addr,
+				__rte_unused uint32_t index, uint32_t vmdq)
+{
+	struct rte_eth_dev *slave_eth_dev;
+	struct bond_dev_private *internals = dev->data->dev_private;
+	int ret, i;
+
+	rte_spinlock_lock(&internals->lock);
+
+	for (i = 0; i < internals->slave_count; i++) {
+		slave_eth_dev = &rte_eth_devices[internals->slaves[i].port_id];
+		if (*slave_eth_dev->dev_ops->mac_addr_add == NULL ||
+			 *slave_eth_dev->dev_ops->mac_addr_remove == NULL) {
+			ret = -ENOTSUP;
+			goto end;
+		}
+	}
+
+	for (i = 0; i < internals->slave_count; i++) {
+		ret = rte_eth_dev_mac_addr_add(internals->slaves[i].port_id,
+				mac_addr, vmdq);
+		if (ret < 0) {
+			/* rollback */
+			for (i--; i >= 0; i--)
+				rte_eth_dev_mac_addr_remove(
+					internals->slaves[i].port_id, mac_addr);
+			goto end;
+		}
+	}
+
+	ret = 0;
+end:
+	rte_spinlock_unlock(&internals->lock);
+	return ret;
+}
+
+static void
+bond_ethdev_mac_addr_remove(struct rte_eth_dev *dev, uint32_t index)
+{
+	struct rte_eth_dev *slave_eth_dev;
+	struct bond_dev_private *internals = dev->data->dev_private;
+	int i;
+
+	rte_spinlock_lock(&internals->lock);
+
+	for (i = 0; i < internals->slave_count; i++) {
+		slave_eth_dev = &rte_eth_devices[internals->slaves[i].port_id];
+		if (*slave_eth_dev->dev_ops->mac_addr_remove == NULL)
+			goto end;
+	}
+
+	struct ether_addr *mac_addr = &dev->data->mac_addrs[index];
+
+	for (i = 0; i < internals->slave_count; i++)
+		rte_eth_dev_mac_addr_remove(internals->slaves[i].port_id,
+				mac_addr);
+
+end:
+	rte_spinlock_unlock(&internals->lock);
+}
+
 const struct eth_dev_ops default_dev_ops = {
 	.dev_start            = bond_ethdev_start,
 	.dev_stop             = bond_ethdev_stop,
@@ -2927,6 +3052,8 @@ const struct eth_dev_ops default_dev_ops = {
 	.rss_hash_conf_get    = bond_ethdev_rss_hash_conf_get,
 	.mtu_set              = bond_ethdev_mtu_set,
 	.mac_addr_set         = bond_ethdev_mac_address_set,
+	.mac_addr_add         = bond_ethdev_mac_addr_add,
+	.mac_addr_remove      = bond_ethdev_mac_addr_remove,
 	.filter_ctrl          = bond_filter_ctrl
 };
 
@@ -2954,10 +3081,13 @@ bond_alloc(struct rte_vdev_device *dev, uint8_t mode)
 	eth_dev->data->nb_rx_queues = (uint16_t)1;
 	eth_dev->data->nb_tx_queues = (uint16_t)1;
 
-	eth_dev->data->mac_addrs = rte_zmalloc_socket(name, ETHER_ADDR_LEN, 0,
-			socket_id);
+	/* Allocate memory for storing MAC addresses */
+	eth_dev->data->mac_addrs = rte_zmalloc_socket(name, ETHER_ADDR_LEN *
+			BOND_MAX_MAC_ADDRS, 0, socket_id);
 	if (eth_dev->data->mac_addrs == NULL) {
-		RTE_BOND_LOG(ERR, "Unable to malloc mac_addrs");
+		RTE_BOND_LOG(ERR,
+			     "Failed to allocate %u bytes needed to store MAC addresses",
+			     ETHER_ADDR_LEN * BOND_MAX_MAC_ADDRS);
 		goto err;
 	}
 
@@ -3065,6 +3195,7 @@ bond_probe(struct rte_vdev_device *dev)
 		}
 		/* TODO: request info from primary to set up Rx and Tx */
 		eth_dev->dev_ops = &default_dev_ops;
+		eth_dev->device = &dev->device;
 		rte_eth_dev_probing_finish(eth_dev);
 		return 0;
 	}
@@ -3119,6 +3250,7 @@ bond_probe(struct rte_vdev_device *dev)
 	internals = rte_eth_devices[port_id].data->dev_private;
 	internals->kvlist = kvlist;
 
+	rte_eth_dev_probing_finish(&rte_eth_devices[port_id]);
 
 	if (rte_kvargs_count(kvlist, PMD_BOND_AGG_MODE_KVARG) == 1) {
 		if (rte_kvargs_process(kvlist,
@@ -3138,7 +3270,6 @@ bond_probe(struct rte_vdev_device *dev)
 		rte_eth_bond_8023ad_agg_selection_set(port_id, AGG_STABLE);
 	}
 
-	rte_eth_dev_probing_finish(&rte_eth_devices[port_id]);
 	RTE_BOND_LOG(INFO, "Create bonded device %s on port %d in mode %u on "
 			"socket %u.",	name, port_id, bonding_mode, socket_id);
 	return 0;
@@ -3485,9 +3616,7 @@ RTE_PMD_REGISTER_PARAM_STRING(net_bonding,
 
 int bond_logtype;
 
-RTE_INIT(bond_init_log);
-static void
-bond_init_log(void)
+RTE_INIT(bond_init_log)
 {
 	bond_logtype = rte_log_register("pmd.net.bon");
 	if (bond_logtype >= 0)

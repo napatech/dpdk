@@ -54,6 +54,9 @@ enum fw_memtype {
  ********************************/
 
 enum fw_wr_opcodes {
+	FW_FILTER_WR		= 0x02,
+	FW_ULPTX_WR		= 0x04,
+	FW_TP_WR		= 0x05,
 	FW_ETH_TX_PKT_WR	= 0x08,
 	FW_ETH_TX_PKTS_WR	= 0x09,
 	FW_ETH_TX_PKT_VM_WR	= 0x11,
@@ -76,6 +79,11 @@ struct fw_wr_hdr {
 #define V_FW_WR_OP(x)		((x) << S_FW_WR_OP)
 #define G_FW_WR_OP(x)		(((x) >> S_FW_WR_OP) & M_FW_WR_OP)
 
+/* atomic flag (hi) - firmware encapsulates CPLs in CPL_BARRIER
+ */
+#define S_FW_WR_ATOMIC		23
+#define V_FW_WR_ATOMIC(x)	((x) << S_FW_WR_ATOMIC)
+
 /* work request immediate data length (hi)
  */
 #define S_FW_WR_IMMDLEN	0
@@ -91,6 +99,11 @@ struct fw_wr_hdr {
 #define V_FW_WR_EQUEQ(x)	((x) << S_FW_WR_EQUEQ)
 #define G_FW_WR_EQUEQ(x)	(((x) >> S_FW_WR_EQUEQ) & M_FW_WR_EQUEQ)
 #define F_FW_WR_EQUEQ		V_FW_WR_EQUEQ(1U)
+
+/* flow context identifier (lo)
+ */
+#define S_FW_WR_FLOWID		8
+#define V_FW_WR_FLOWID(x)	((x) << S_FW_WR_FLOWID)
 
 /* length in units of 16-bytes (lo)
  */
@@ -143,6 +156,150 @@ struct fw_eth_tx_pkts_vm_wr {
 	__be16 vlantci;
 };
 
+/* filter wr reply code in cookie in CPL_SET_TCB_RPL */
+enum fw_filter_wr_cookie {
+	FW_FILTER_WR_SUCCESS,
+	FW_FILTER_WR_FLT_ADDED,
+	FW_FILTER_WR_FLT_DELETED,
+	FW_FILTER_WR_SMT_TBL_FULL,
+	FW_FILTER_WR_EINVAL,
+};
+
+struct fw_filter_wr {
+	__be32 op_pkd;
+	__be32 len16_pkd;
+	__be64 r3;
+	__be32 tid_to_iq;
+	__be32 del_filter_to_l2tix;
+	__be16 ethtype;
+	__be16 ethtypem;
+	__u8   frag_to_ovlan_vldm;
+	__u8   smac_sel;
+	__be16 rx_chan_rx_rpl_iq;
+	__be32 maci_to_matchtypem;
+	__u8   ptcl;
+	__u8   ptclm;
+	__u8   ttyp;
+	__u8   ttypm;
+	__be16 ivlan;
+	__be16 ivlanm;
+	__be16 ovlan;
+	__be16 ovlanm;
+	__u8   lip[16];
+	__u8   lipm[16];
+	__u8   fip[16];
+	__u8   fipm[16];
+	__be16 lp;
+	__be16 lpm;
+	__be16 fp;
+	__be16 fpm;
+	__be16 r7;
+	__u8   sma[6];
+};
+
+#define S_FW_FILTER_WR_TID	12
+#define V_FW_FILTER_WR_TID(x)	((x) << S_FW_FILTER_WR_TID)
+
+#define S_FW_FILTER_WR_RQTYPE		11
+#define V_FW_FILTER_WR_RQTYPE(x)	((x) << S_FW_FILTER_WR_RQTYPE)
+
+#define S_FW_FILTER_WR_NOREPLY		10
+#define V_FW_FILTER_WR_NOREPLY(x)	((x) << S_FW_FILTER_WR_NOREPLY)
+
+#define S_FW_FILTER_WR_IQ	0
+#define V_FW_FILTER_WR_IQ(x)	((x) << S_FW_FILTER_WR_IQ)
+
+#define S_FW_FILTER_WR_DEL_FILTER	31
+#define V_FW_FILTER_WR_DEL_FILTER(x)	((x) << S_FW_FILTER_WR_DEL_FILTER)
+#define F_FW_FILTER_WR_DEL_FILTER	V_FW_FILTER_WR_DEL_FILTER(1U)
+
+#define S_FW_FILTER_WR_RPTTID		25
+#define V_FW_FILTER_WR_RPTTID(x)	((x) << S_FW_FILTER_WR_RPTTID)
+
+#define S_FW_FILTER_WR_DROP	24
+#define V_FW_FILTER_WR_DROP(x)	((x) << S_FW_FILTER_WR_DROP)
+
+#define S_FW_FILTER_WR_DIRSTEER		23
+#define V_FW_FILTER_WR_DIRSTEER(x)	((x) << S_FW_FILTER_WR_DIRSTEER)
+
+#define S_FW_FILTER_WR_MASKHASH		22
+#define V_FW_FILTER_WR_MASKHASH(x)	((x) << S_FW_FILTER_WR_MASKHASH)
+
+#define S_FW_FILTER_WR_DIRSTEERHASH	21
+#define V_FW_FILTER_WR_DIRSTEERHASH(x)	((x) << S_FW_FILTER_WR_DIRSTEERHASH)
+
+#define S_FW_FILTER_WR_LPBK	20
+#define V_FW_FILTER_WR_LPBK(x)	((x) << S_FW_FILTER_WR_LPBK)
+
+#define S_FW_FILTER_WR_DMAC	19
+#define V_FW_FILTER_WR_DMAC(x)	((x) << S_FW_FILTER_WR_DMAC)
+
+#define S_FW_FILTER_WR_INSVLAN		17
+#define V_FW_FILTER_WR_INSVLAN(x)	((x) << S_FW_FILTER_WR_INSVLAN)
+
+#define S_FW_FILTER_WR_RMVLAN		16
+#define V_FW_FILTER_WR_RMVLAN(x)	((x) << S_FW_FILTER_WR_RMVLAN)
+
+#define S_FW_FILTER_WR_HITCNTS		15
+#define V_FW_FILTER_WR_HITCNTS(x)	((x) << S_FW_FILTER_WR_HITCNTS)
+
+#define S_FW_FILTER_WR_TXCHAN		13
+#define V_FW_FILTER_WR_TXCHAN(x)	((x) << S_FW_FILTER_WR_TXCHAN)
+
+#define S_FW_FILTER_WR_PRIO	12
+#define V_FW_FILTER_WR_PRIO(x)	((x) << S_FW_FILTER_WR_PRIO)
+
+#define S_FW_FILTER_WR_L2TIX	0
+#define V_FW_FILTER_WR_L2TIX(x)	((x) << S_FW_FILTER_WR_L2TIX)
+
+#define S_FW_FILTER_WR_FRAG	7
+#define V_FW_FILTER_WR_FRAG(x)	((x) << S_FW_FILTER_WR_FRAG)
+
+#define S_FW_FILTER_WR_FRAGM	6
+#define V_FW_FILTER_WR_FRAGM(x)	((x) << S_FW_FILTER_WR_FRAGM)
+
+#define S_FW_FILTER_WR_IVLAN_VLD	5
+#define V_FW_FILTER_WR_IVLAN_VLD(x)	((x) << S_FW_FILTER_WR_IVLAN_VLD)
+
+#define S_FW_FILTER_WR_OVLAN_VLD	4
+#define V_FW_FILTER_WR_OVLAN_VLD(x)	((x) << S_FW_FILTER_WR_OVLAN_VLD)
+
+#define S_FW_FILTER_WR_IVLAN_VLDM	3
+#define V_FW_FILTER_WR_IVLAN_VLDM(x)	((x) << S_FW_FILTER_WR_IVLAN_VLDM)
+
+#define S_FW_FILTER_WR_OVLAN_VLDM	2
+#define V_FW_FILTER_WR_OVLAN_VLDM(x)	((x) << S_FW_FILTER_WR_OVLAN_VLDM)
+
+#define S_FW_FILTER_WR_RX_CHAN		15
+#define V_FW_FILTER_WR_RX_CHAN(x)	((x) << S_FW_FILTER_WR_RX_CHAN)
+
+#define S_FW_FILTER_WR_RX_RPL_IQ	0
+#define V_FW_FILTER_WR_RX_RPL_IQ(x)	((x) << S_FW_FILTER_WR_RX_RPL_IQ)
+
+#define S_FW_FILTER_WR_MACI	23
+#define V_FW_FILTER_WR_MACI(x)	((x) << S_FW_FILTER_WR_MACI)
+
+#define S_FW_FILTER_WR_MACIM	14
+#define V_FW_FILTER_WR_MACIM(x)	((x) << S_FW_FILTER_WR_MACIM)
+
+#define S_FW_FILTER_WR_FCOE	13
+#define V_FW_FILTER_WR_FCOE(x)	((x) << S_FW_FILTER_WR_FCOE)
+
+#define S_FW_FILTER_WR_FCOEM	12
+#define V_FW_FILTER_WR_FCOEM(x)	((x) << S_FW_FILTER_WR_FCOEM)
+
+#define S_FW_FILTER_WR_PORT	9
+#define V_FW_FILTER_WR_PORT(x)	((x) << S_FW_FILTER_WR_PORT)
+
+#define S_FW_FILTER_WR_PORTM	6
+#define V_FW_FILTER_WR_PORTM(x)	((x) << S_FW_FILTER_WR_PORTM)
+
+#define S_FW_FILTER_WR_MATCHTYPE	3
+#define V_FW_FILTER_WR_MATCHTYPE(x)	((x) << S_FW_FILTER_WR_MATCHTYPE)
+
+#define S_FW_FILTER_WR_MATCHTYPEM	0
+#define V_FW_FILTER_WR_MATCHTYPEM(x)	((x) << S_FW_FILTER_WR_MATCHTYPEM)
+
 /******************************************************************************
  *  C O M M A N D s
  *********************/
@@ -178,6 +335,7 @@ enum fw_cmd_opcodes {
 	FW_PFVF_CMD		       = 0x09,
 	FW_IQ_CMD                      = 0x10,
 	FW_EQ_ETH_CMD                  = 0x12,
+	FW_EQ_CTRL_CMD                 = 0x13,
 	FW_VI_CMD                      = 0x14,
 	FW_VI_MAC_CMD                  = 0x15,
 	FW_VI_RXMODE_CMD               = 0x16,
@@ -187,6 +345,7 @@ enum fw_cmd_opcodes {
 	FW_RSS_IND_TBL_CMD             = 0x20,
 	FW_RSS_GLB_CONFIG_CMD	       = 0x22,
 	FW_RSS_VI_CONFIG_CMD           = 0x23,
+	FW_CLIP_CMD                    = 0x28,
 	FW_DEBUG_CMD                   = 0x81,
 };
 
@@ -489,6 +648,10 @@ enum fw_params_mnem {
 enum fw_params_param_dev {
 	FW_PARAMS_PARAM_DEV_CCLK	= 0x00, /* chip core clock in khz */
 	FW_PARAMS_PARAM_DEV_PORTVEC	= 0x01, /* the port vector */
+	FW_PARAMS_PARAM_DEV_NTID        = 0x02, /* reads the number of TIDs
+						 * allocated by the device's
+						 * Lookup Engine
+						 */
 	FW_PARAMS_PARAM_DEV_FWREV	= 0x0B, /* fw version */
 	FW_PARAMS_PARAM_DEV_TPREV	= 0x0C, /* tp version */
 	FW_PARAMS_PARAM_DEV_ULPTX_MEMWRITE_DSGL = 0x17,
@@ -498,6 +661,10 @@ enum fw_params_param_dev {
  * physical and virtual function parameters
  */
 enum fw_params_param_pfvf {
+	FW_PARAMS_PARAM_PFVF_CLIP_START = 0x03,
+	FW_PARAMS_PARAM_PFVF_CLIP_END = 0x04,
+	FW_PARAMS_PARAM_PFVF_FILTER_START = 0x05,
+	FW_PARAMS_PARAM_PFVF_FILTER_END = 0x06,
 	FW_PARAMS_PARAM_PFVF_CPLFW4MSG_ENCAP = 0x31,
 	FW_PARAMS_PARAM_PFVF_PORT_CAPS32 = 0x3A
 };
@@ -577,6 +744,12 @@ struct fw_pfvf_cmd {
 	__be32 r4;
 };
 
+#define S_FW_PFVF_CMD_PFN		8
+#define V_FW_PFVF_CMD_PFN(x)		((x) << S_FW_PFVF_CMD_PFN)
+
+#define S_FW_PFVF_CMD_VFN		0
+#define V_FW_PFVF_CMD_VFN(x)		((x) << S_FW_PFVF_CMD_VFN)
+
 #define S_FW_PFVF_CMD_NIQFLINT          20
 #define M_FW_PFVF_CMD_NIQFLINT          0xfff
 #define G_FW_PFVF_CMD_NIQFLINT(x)       \
@@ -634,6 +807,11 @@ struct fw_pfvf_cmd {
  */
 enum fw_iq_type {
 	FW_IQ_TYPE_FL_INT_CAP,
+};
+
+enum fw_iq_iqtype {
+	FW_IQ_IQTYPE_NIC = 1,
+	FW_IQ_IQTYPE_OFLD,
 };
 
 struct fw_iq_cmd {
@@ -768,6 +946,9 @@ struct fw_iq_cmd {
 #define G_FW_IQ_CMD_IQFLINTCONGEN(x)	\
 	(((x) >> S_FW_IQ_CMD_IQFLINTCONGEN) & M_FW_IQ_CMD_IQFLINTCONGEN)
 #define F_FW_IQ_CMD_IQFLINTCONGEN	V_FW_IQ_CMD_IQFLINTCONGEN(1U)
+
+#define S_FW_IQ_CMD_IQTYPE	24
+#define V_FW_IQ_CMD_IQTYPE(x)	((x) << S_FW_IQ_CMD_IQTYPE)
 
 #define S_FW_IQ_CMD_FL0CNGCHMAP		20
 #define M_FW_IQ_CMD_FL0CNGCHMAP		0xf
@@ -953,6 +1134,75 @@ struct fw_eq_eth_cmd {
 #define V_FW_EQ_ETH_CMD_VIID(x)	((x) << S_FW_EQ_ETH_CMD_VIID)
 #define G_FW_EQ_ETH_CMD_VIID(x)	\
 	(((x) >> S_FW_EQ_ETH_CMD_VIID) & M_FW_EQ_ETH_CMD_VIID)
+
+struct fw_eq_ctrl_cmd {
+	__be32 op_to_vfn;
+	__be32 alloc_to_len16;
+	__be32 cmpliqid_eqid;
+	__be32 physeqid_pkd;
+	__be32 fetchszm_to_iqid;
+	__be32 dcaen_to_eqsize;
+	__be64 eqaddr;
+};
+
+#define S_FW_EQ_CTRL_CMD_PFN		8
+#define V_FW_EQ_CTRL_CMD_PFN(x)		((x) << S_FW_EQ_CTRL_CMD_PFN)
+
+#define S_FW_EQ_CTRL_CMD_VFN		0
+#define V_FW_EQ_CTRL_CMD_VFN(x)		((x) << S_FW_EQ_CTRL_CMD_VFN)
+
+#define S_FW_EQ_CTRL_CMD_ALLOC		31
+#define V_FW_EQ_CTRL_CMD_ALLOC(x)	((x) << S_FW_EQ_CTRL_CMD_ALLOC)
+#define F_FW_EQ_CTRL_CMD_ALLOC		V_FW_EQ_CTRL_CMD_ALLOC(1U)
+
+#define S_FW_EQ_CTRL_CMD_FREE		30
+#define V_FW_EQ_CTRL_CMD_FREE(x)	((x) << S_FW_EQ_CTRL_CMD_FREE)
+#define F_FW_EQ_CTRL_CMD_FREE		V_FW_EQ_CTRL_CMD_FREE(1U)
+
+#define S_FW_EQ_CTRL_CMD_EQSTART	28
+#define V_FW_EQ_CTRL_CMD_EQSTART(x)	((x) << S_FW_EQ_CTRL_CMD_EQSTART)
+#define F_FW_EQ_CTRL_CMD_EQSTART	V_FW_EQ_CTRL_CMD_EQSTART(1U)
+
+#define S_FW_EQ_CTRL_CMD_CMPLIQID	20
+#define V_FW_EQ_CTRL_CMD_CMPLIQID(x)	((x) << S_FW_EQ_CTRL_CMD_CMPLIQID)
+
+#define S_FW_EQ_CTRL_CMD_EQID		0
+#define M_FW_EQ_CTRL_CMD_EQID		0xfffff
+#define V_FW_EQ_CTRL_CMD_EQID(x)	((x) << S_FW_EQ_CTRL_CMD_EQID)
+#define G_FW_EQ_CTRL_CMD_EQID(x)	\
+	(((x) >> S_FW_EQ_CTRL_CMD_EQID) & M_FW_EQ_CTRL_CMD_EQID)
+
+#define S_FW_EQ_CTRL_CMD_PHYSEQID       0
+#define M_FW_EQ_CTRL_CMD_PHYSEQID       0xfffff
+#define V_FW_EQ_CTRL_CMD_PHYSEQID(x)    ((x) << S_FW_EQ_CTRL_CMD_PHYSEQID)
+#define G_FW_EQ_CTRL_CMD_PHYSEQID(x)    \
+	(((x) >> S_FW_EQ_CTRL_CMD_PHYSEQID) & M_FW_EQ_CTRL_CMD_PHYSEQID)
+
+#define S_FW_EQ_CTRL_CMD_FETCHRO	22
+#define V_FW_EQ_CTRL_CMD_FETCHRO(x)	((x) << S_FW_EQ_CTRL_CMD_FETCHRO)
+#define F_FW_EQ_CTRL_CMD_FETCHRO	V_FW_EQ_CTRL_CMD_FETCHRO(1U)
+
+#define S_FW_EQ_CTRL_CMD_HOSTFCMODE	20
+#define M_FW_EQ_CTRL_CMD_HOSTFCMODE	0x3
+#define V_FW_EQ_CTRL_CMD_HOSTFCMODE(x)	((x) << S_FW_EQ_CTRL_CMD_HOSTFCMODE)
+
+#define S_FW_EQ_CTRL_CMD_PCIECHN	16
+#define V_FW_EQ_CTRL_CMD_PCIECHN(x)	((x) << S_FW_EQ_CTRL_CMD_PCIECHN)
+
+#define S_FW_EQ_CTRL_CMD_IQID		0
+#define V_FW_EQ_CTRL_CMD_IQID(x)	((x) << S_FW_EQ_CTRL_CMD_IQID)
+
+#define S_FW_EQ_CTRL_CMD_FBMIN		23
+#define V_FW_EQ_CTRL_CMD_FBMIN(x)	((x) << S_FW_EQ_CTRL_CMD_FBMIN)
+
+#define S_FW_EQ_CTRL_CMD_FBMAX		20
+#define V_FW_EQ_CTRL_CMD_FBMAX(x)	((x) << S_FW_EQ_CTRL_CMD_FBMAX)
+
+#define S_FW_EQ_CTRL_CMD_CIDXFTHRESH	16
+#define V_FW_EQ_CTRL_CMD_CIDXFTHRESH(x)	((x) << S_FW_EQ_CTRL_CMD_CIDXFTHRESH)
+
+#define S_FW_EQ_CTRL_CMD_EQSIZE		0
+#define V_FW_EQ_CTRL_CMD_EQSIZE(x)	((x) << S_FW_EQ_CTRL_CMD_EQSIZE)
 
 enum fw_vi_func {
 	FW_VI_FUNC_ETH,
@@ -1945,6 +2195,22 @@ struct fw_rss_vi_config_cmd {
 #define G_FW_RSS_VI_CONFIG_CMD_UDPEN(x)	\
 	(((x) >> S_FW_RSS_VI_CONFIG_CMD_UDPEN) & M_FW_RSS_VI_CONFIG_CMD_UDPEN)
 #define F_FW_RSS_VI_CONFIG_CMD_UDPEN	V_FW_RSS_VI_CONFIG_CMD_UDPEN(1U)
+
+struct fw_clip_cmd {
+	__be32 op_to_write;
+	__be32 alloc_to_len16;
+	__be64 ip_hi;
+	__be64 ip_lo;
+	__be32 r4[2];
+};
+
+#define S_FW_CLIP_CMD_ALLOC		31
+#define V_FW_CLIP_CMD_ALLOC(x)		((x) << S_FW_CLIP_CMD_ALLOC)
+#define F_FW_CLIP_CMD_ALLOC		V_FW_CLIP_CMD_ALLOC(1U)
+
+#define S_FW_CLIP_CMD_FREE		30
+#define V_FW_CLIP_CMD_FREE(x)		((x) << S_FW_CLIP_CMD_FREE)
+#define F_FW_CLIP_CMD_FREE		V_FW_CLIP_CMD_FREE(1U)
 
 /******************************************************************************
  *   D E B U G   C O M M A N D s

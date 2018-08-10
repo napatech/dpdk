@@ -1080,7 +1080,7 @@ build_sec_fd(struct rte_crypto_op *op,
 	PMD_INIT_FUNC_TRACE();
 
 	if (op->sess_type == RTE_CRYPTO_OP_WITH_SESSION)
-		sess = (dpaa2_sec_session *)get_session_private_data(
+		sess = (dpaa2_sec_session *)get_sym_session_private_data(
 				op->sym->session, cryptodev_driver_id);
 	else if (op->sess_type == RTE_CRYPTO_OP_SECURITY_SESSION)
 		sess = (dpaa2_sec_session *)get_sec_session_private_data(
@@ -1470,26 +1470,6 @@ dpaa2_sec_queue_pair_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 	return retcode;
 }
 
-/** Start queue pair */
-static int
-dpaa2_sec_queue_pair_start(__rte_unused struct rte_cryptodev *dev,
-			   __rte_unused uint16_t queue_pair_id)
-{
-	PMD_INIT_FUNC_TRACE();
-
-	return 0;
-}
-
-/** Stop queue pair */
-static int
-dpaa2_sec_queue_pair_stop(__rte_unused struct rte_cryptodev *dev,
-			  __rte_unused uint16_t queue_pair_id)
-{
-	PMD_INIT_FUNC_TRACE();
-
-	return 0;
-}
-
 /** Return the number of allocated queue pairs */
 static uint32_t
 dpaa2_sec_queue_pair_count(struct rte_cryptodev *dev)
@@ -1501,7 +1481,7 @@ dpaa2_sec_queue_pair_count(struct rte_cryptodev *dev)
 
 /** Returns the size of the aesni gcm session structure */
 static unsigned int
-dpaa2_sec_session_get_size(struct rte_cryptodev *dev __rte_unused)
+dpaa2_sec_sym_session_get_size(struct rte_cryptodev *dev __rte_unused)
 {
 	PMD_INIT_FUNC_TRACE();
 
@@ -2456,7 +2436,7 @@ dpaa2_sec_security_session_destroy(void *dev __rte_unused,
 }
 
 static int
-dpaa2_sec_session_configure(struct rte_cryptodev *dev,
+dpaa2_sec_sym_session_configure(struct rte_cryptodev *dev,
 		struct rte_crypto_sym_xform *xform,
 		struct rte_cryptodev_sym_session *sess,
 		struct rte_mempool *mempool)
@@ -2477,7 +2457,7 @@ dpaa2_sec_session_configure(struct rte_cryptodev *dev,
 		return ret;
 	}
 
-	set_session_private_data(sess, dev->driver_id,
+	set_sym_session_private_data(sess, dev->driver_id,
 		sess_private_data);
 
 	return 0;
@@ -2485,12 +2465,12 @@ dpaa2_sec_session_configure(struct rte_cryptodev *dev,
 
 /** Clear the memory of session so it doesn't leave key material behind */
 static void
-dpaa2_sec_session_clear(struct rte_cryptodev *dev,
+dpaa2_sec_sym_session_clear(struct rte_cryptodev *dev,
 		struct rte_cryptodev_sym_session *sess)
 {
 	PMD_INIT_FUNC_TRACE();
 	uint8_t index = dev->driver_id;
-	void *sess_priv = get_session_private_data(sess, index);
+	void *sess_priv = get_sym_session_private_data(sess, index);
 	dpaa2_sec_session *s = (dpaa2_sec_session *)sess_priv;
 
 	if (sess_priv) {
@@ -2499,7 +2479,7 @@ dpaa2_sec_session_clear(struct rte_cryptodev *dev,
 		rte_free(s->auth_key.data);
 		memset(sess, 0, sizeof(dpaa2_sec_session));
 		struct rte_mempool *sess_mp = rte_mempool_from_obj(sess_priv);
-		set_session_private_data(sess, index, NULL);
+		set_sym_session_private_data(sess, index, NULL);
 		rte_mempool_put(sess_mp, sess_priv);
 	}
 }
@@ -2626,7 +2606,8 @@ dpaa2_sec_dev_infos_get(struct rte_cryptodev *dev,
 		info->max_nb_queue_pairs = internals->max_nb_queue_pairs;
 		info->feature_flags = dev->feature_flags;
 		info->capabilities = dpaa2_sec_capabilities;
-		info->sym.max_nb_sessions = internals->max_nb_sessions;
+		/* No limit of number of sessions */
+		info->sym.max_nb_sessions = 0;
 		info->driver_id = cryptodev_driver_id;
 	}
 }
@@ -2715,12 +2696,10 @@ static struct rte_cryptodev_ops crypto_ops = {
 	.stats_reset	      = dpaa2_sec_stats_reset,
 	.queue_pair_setup     = dpaa2_sec_queue_pair_setup,
 	.queue_pair_release   = dpaa2_sec_queue_pair_release,
-	.queue_pair_start     = dpaa2_sec_queue_pair_start,
-	.queue_pair_stop      = dpaa2_sec_queue_pair_stop,
 	.queue_pair_count     = dpaa2_sec_queue_pair_count,
-	.session_get_size     = dpaa2_sec_session_get_size,
-	.session_configure    = dpaa2_sec_session_configure,
-	.session_clear        = dpaa2_sec_session_clear,
+	.sym_session_get_size     = dpaa2_sec_sym_session_get_size,
+	.sym_session_configure    = dpaa2_sec_sym_session_configure,
+	.sym_session_clear        = dpaa2_sec_sym_session_clear,
 };
 
 static const struct rte_security_capability *
@@ -2783,10 +2762,13 @@ dpaa2_sec_dev_init(struct rte_cryptodev *cryptodev)
 			RTE_CRYPTODEV_FF_HW_ACCELERATED |
 			RTE_CRYPTODEV_FF_SYM_OPERATION_CHAINING |
 			RTE_CRYPTODEV_FF_SECURITY |
-			RTE_CRYPTODEV_FF_MBUF_SCATTER_GATHER;
+			RTE_CRYPTODEV_FF_IN_PLACE_SGL |
+			RTE_CRYPTODEV_FF_OOP_SGL_IN_SGL_OUT |
+			RTE_CRYPTODEV_FF_OOP_SGL_IN_LB_OUT |
+			RTE_CRYPTODEV_FF_OOP_LB_IN_SGL_OUT |
+			RTE_CRYPTODEV_FF_OOP_LB_IN_LB_OUT;
 
 	internals = cryptodev->data->dev_private;
-	internals->max_nb_sessions = RTE_DPAA2_SEC_PMD_MAX_NB_SESSIONS;
 
 	/*
 	 * For secondary processes, we don't initialise any further as primary
@@ -2940,9 +2922,7 @@ RTE_PMD_REGISTER_DPAA2(CRYPTODEV_NAME_DPAA2_SEC_PMD, rte_dpaa2_sec_driver);
 RTE_PMD_REGISTER_CRYPTO_DRIVER(dpaa2_sec_crypto_drv,
 		rte_dpaa2_sec_driver.driver, cryptodev_driver_id);
 
-RTE_INIT(dpaa2_sec_init_log);
-static void
-dpaa2_sec_init_log(void)
+RTE_INIT(dpaa2_sec_init_log)
 {
 	/* Bus level logs */
 	dpaa2_logtype_sec = rte_log_register("pmd.crypto.dpaa2");

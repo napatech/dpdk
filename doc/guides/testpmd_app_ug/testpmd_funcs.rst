@@ -320,12 +320,8 @@ The available information categories are:
 
 * ``ieee1588``: Demonstrate L2 IEEE1588 V2 PTP timestamping for RX and TX. Requires ``CONFIG_RTE_LIBRTE_IEEE1588=y``.
 
-* ``tm``: Traffic Management forwarding mode
-  Demonstrates the use of ethdev traffic management APIs and softnic PMD for
-  QoS traffic management. In this mode, 5-level hierarchical QoS scheduler is
-  available as an default option that can be enabled through CLI. The user can
-  also modify the default hierarchy or specify the new hierarchy through CLI for
-  implementing QoS scheduler.  Requires ``CONFIG_RTE_LIBRTE_PMD_SOFTNIC=y`` ``CONFIG_RTE_LIBRTE_SCHED=y``.
+* ``softnic``: Demonstrates the softnic forwarding operation. In this mode, packet forwarding is
+  similar to I/O mode except for the fact that packets are loopback to the softnic ports only. Therefore, portmask parameter should be set to softnic port only. The various software based custom NIC pipelines specified through the softnic firmware (DPDK packet framework script) can be tested in this mode. Furthermore, it allows to build 5-level hierarchical QoS scheduler as a default option that can be enabled through CLI once testpmd application is initialised. The user can modify the default scheduler hierarchy or can specify the new QoS Scheduler hierarchy through CLI. Requires ``CONFIG_RTE_LIBRTE_PMD_SOFTNIC=y``.
 
 Example::
 
@@ -1059,6 +1055,13 @@ By default, GSO is disabled for all ports.
 
    testpmd> csum set tcp hw <port_id>
 
+   UDP GSO is the same as IP fragmentation, which treats the UDP header
+   as the payload and does not modify it during segmentation. That is,
+   after UDP GSO, only the first output fragment has the original UDP
+   header. Therefore, users need to enable HW IP checksum calculation
+   and SW UDP checksum calculation for GSO-enabled ports, if they want
+   correct checksums for UDP/IPv4 packets.
+
 set gso segsz
 ~~~~~~~~~~~~~
 
@@ -1483,7 +1486,7 @@ Enable or disable a per port Rx offloading on all Rx queues of a port::
                   vlan_strip, ipv4_cksum, udp_cksum, tcp_cksum, tcp_lro,
                   qinq_strip, outer_ipv4_cksum, macsec_strip,
                   header_split, vlan_filter, vlan_extend, jumbo_frame,
-                  crc_strip, scatter, timestamp, security
+                  crc_strip, scatter, timestamp, security, keep_crc
 
 This command should be run when the port is stopped, or else it will fail.
 
@@ -1498,7 +1501,7 @@ Enable or disable a per queue Rx offloading only on a specific Rx queue::
                   vlan_strip, ipv4_cksum, udp_cksum, tcp_cksum, tcp_lro,
                   qinq_strip, outer_ipv4_cksum, macsec_strip,
                   header_split, vlan_filter, vlan_extend, jumbo_frame,
-                  crc_strip, scatter, timestamp, security
+                  crc_strip, scatter, timestamp, security, keep_crc
 
 This command should be run when the port is stopped, or else it will fail.
 
@@ -1510,11 +1513,11 @@ Enable or disable a per port Tx offloading on all Tx queues of a port::
    testpmd> port config (port_id) tx_offload (offloading) on|off
 
 * ``offloading``: can be any of these offloading capability:
-                  vlan_insert, ipv4_cksum, udp_cksum, udp_cksum,
+                  vlan_insert, ipv4_cksum, udp_cksum, tcp_cksum,
                   sctp_cksum, tcp_tso, udp_tso, outer_ipv4_cksum,
                   qinq_insert, vxlan_tnl_tso, gre_tnl_tso,
                   ipip_tnl_tso, geneve_tnl_tso, macsec_insert,
-                  mt_lockfree, multi_segs, fast_free, security
+                  mt_lockfree, multi_segs, mbuf_fast_free, security
 
 This command should be run when the port is stopped, or else it will fail.
 
@@ -1526,14 +1529,46 @@ Enable or disable a per queue Tx offloading only on a specific Tx queue::
    testpmd> port (port_id) txq (queue_id) tx_offload (offloading) on|off
 
 * ``offloading``: can be any of these offloading capability:
-                  vlan_insert, ipv4_cksum, udp_cksum, udp_cksum,
+                  vlan_insert, ipv4_cksum, udp_cksum, tcp_cksum,
                   sctp_cksum, tcp_tso, udp_tso, outer_ipv4_cksum,
                   qinq_insert, vxlan_tnl_tso, gre_tnl_tso,
                   ipip_tnl_tso, geneve_tnl_tso, macsec_insert,
-                  mt_lockfree, multi_segs, fast_free, security
+                  mt_lockfree, multi_segs, mbuf_fast_free, security
 
 This command should be run when the port is stopped, or else it will fail.
 
+Config VXLAN Encap outer layers
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Configure the outer layer to encapsulate a packet inside a VXLAN tunnel::
+
+ set vxlan ip-version (ipv4|ipv6) vni (vni) udp-src (udp-src) \
+ udp-dst (udp-dst) ip-src (ip-src) ip-dst (ip-dst) eth-src (eth-src) \
+ eth-dst (eth-dst)
+
+ set vxlan-with-vlan ip-version (ipv4|ipv6) vni (vni) udp-src (udp-src) \
+ udp-dst (udp-dst) ip-src (ip-src) ip-dst (ip-dst) vlan-tci (vlan-tci) \
+ eth-src (eth-src) eth-dst (eth-dst)
+
+Those command will set an internal configuration inside testpmd, any following
+flow rule using the action vxlan_encap will use the last configuration set.
+To have a different encapsulation header, one of those commands must be called
+before the flow rule creation.
+
+Config NVGRE Encap outer layers
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Configure the outer layer to encapsulate a packet inside a NVGRE tunnel::
+
+ set nvgre ip-version (ipv4|ipv6) tni (tni) ip-src (ip-src) ip-dst (ip-dst) \
+        eth-src (eth-src) eth-dst (eth-dst)
+ set nvgre-with-vlan ip-version (ipv4|ipv6) tni (tni) ip-src (ip-src) \
+        ip-dst (ip-dst) vlan-tci (vlan-tci) eth-src (eth-src) eth-dst (eth-dst)
+
+Those command will set an internal configuration inside testpmd, any following
+flow rule using the action nvgre_encap will use the last configuration set.
+To have a different encapsulation header, one of those commands must be called
+before the flow rule creation.
 
 Port Functions
 --------------
@@ -1986,7 +2021,7 @@ Create a new bonding device::
 
 For example, to create a bonded device in mode 1 on socket 0::
 
-   testpmd> create bonded 1 0
+   testpmd> create bonded device 1 0
    created new bonded device (port X)
 
 add bonding slave
@@ -2621,8 +2656,8 @@ where:
   call failure. On the other hand, hierarchy is preserved when this parameter
   is equal to zero.
 
-Set port traffic management default hierarchy (tm forwarding mode)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Set port traffic management default hierarchy (softnic forwarding mode)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 set the traffic management default hierarchy on the port::
 
@@ -3650,6 +3685,18 @@ This section lists supported actions and their attributes, if any.
 
   - ``ethertype``: Ethertype.
 
+- ``vxlan_encap``: Performs a VXLAN encapsulation, outer layer configuration
+  is done through `Config VXLAN Encap outer layers`_.
+
+- ``vxlan_decap``: Performs a decapsulation action by stripping all headers of
+  the VXLAN tunnel network overlay from the matched flow.
+
+- ``nvgre_encap``: Performs a NVGRE encapsulation, outer layer configuration
+  is done through `Config NVGRE Encap outer layers`_.
+
+- ``nvgre_decap``: Performs a decapsulation action by stripping all headers of
+  the NVGRE tunnel network overlay from the matched flow.
+
 Destroying flow rules
 ~~~~~~~~~~~~~~~~~~~~~
 
@@ -3914,6 +3961,69 @@ Validate and create a QinQ rule on port 0 to steer traffic to a queue on the hos
    ID      Group   Prio    Attr    Rule
    0       0       0       i-      ETH VLAN VLAN=>VF QUEUE
    1       0       0       i-      ETH VLAN VLAN=>PF QUEUE
+
+Sample VXLAN encapsulation rule
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+VXLAN encapsulation outer layer has default value pre-configured in testpmd
+source code, those can be changed by using the following commands
+
+IPv4 VXLAN outer header::
+
+ testpmd> set vxlan ip-version ipv4 vni 4 udp-src 4 udp-dst 4 ip-src 127.0.0.1
+        ip-dst 128.0.0.1 eth-src 11:11:11:11:11:11 eth-dst 22:22:22:22:22:22
+ testpmd> flow create 0 ingress pattern end actions vxlan_encap /
+        queue index 0 / end
+
+ testpmd> set vxlan-with-vlan ip-version ipv4 vni 4 udp-src 4 udp-dst 4 ip-src
+         127.0.0.1 ip-dst 128.0.0.1 vlan-tci 34 eth-src 11:11:11:11:11:11
+         eth-dst 22:22:22:22:22:22
+ testpmd> flow create 0 ingress pattern end actions vxlan_encap /
+         queue index 0 / end
+
+IPv6 VXLAN outer header::
+
+ testpmd> set vxlan ip-version ipv6 vni 4 udp-src 4 udp-dst 4 ip-src ::1
+        ip-dst ::2222 eth-src 11:11:11:11:11:11 eth-dst 22:22:22:22:22:22
+ testpmd> flow create 0 ingress pattern end actions vxlan_encap /
+         queue index 0 / end
+
+ testpmd> set vxlan-with-vlan ip-version ipv6 vni 4 udp-src 4 udp-dst 4
+         ip-src ::1 ip-dst ::2222 vlan-tci 34 eth-src 11:11:11:11:11:11
+         eth-dst 22:22:22:22:22:22
+ testpmd> flow create 0 ingress pattern end actions vxlan_encap /
+         queue index 0 / end
+
+Sample NVGRE encapsulation rule
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+NVGRE encapsulation outer layer has default value pre-configured in testpmd
+source code, those can be changed by using the following commands
+
+IPv4 NVGRE outer header::
+
+ testpmd> set nvgre ip-version ipv4 tni 4 ip-src 127.0.0.1 ip-dst 128.0.0.1
+        eth-src 11:11:11:11:11:11 eth-dst 22:22:22:22:22:22
+ testpmd> flow create 0 ingress pattern end actions nvgre_encap /
+        queue index 0 / end
+
+ testpmd> set nvgre-with-vlan ip-version ipv4 tni 4 ip-src 127.0.0.1
+         ip-dst 128.0.0.1 vlan-tci 34 eth-src 11:11:11:11:11:11
+         eth-dst 22:22:22:22:22:22
+ testpmd> flow create 0 ingress pattern end actions nvgre_encap /
+         queue index 0 / end
+
+IPv6 NVGRE outer header::
+
+ testpmd> set nvgre ip-version ipv6 tni 4 ip-src ::1 ip-dst ::2222
+        eth-src 11:11:11:11:11:11 eth-dst 22:22:22:22:22:22
+ testpmd> flow create 0 ingress pattern end actions nvgre_encap /
+        queue index 0 / end
+
+ testpmd> set nvgre-with-vlan ip-version ipv6 tni 4 ip-src ::1 ip-dst ::2222
+        vlan-tci 34 eth-src 11:11:11:11:11:11 eth-dst 22:22:22:22:22:22
+ testpmd> flow create 0 ingress pattern end actions nvgre_encap /
+        queue index 0 / end
 
 BPF Functions
 --------------

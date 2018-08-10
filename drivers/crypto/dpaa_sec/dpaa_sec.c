@@ -526,12 +526,25 @@ dpaa_sec_deq(struct dpaa_sec_qp *qp, struct rte_crypto_op **ops, int nb_ops)
 {
 	struct qman_fq *fq;
 	unsigned int pkts = 0;
-	int ret;
+	int num_rx_bufs, ret;
 	struct qm_dqrr_entry *dq;
+	uint32_t vdqcr_flags = 0;
 
 	fq = &qp->outq;
-	ret = qman_set_vdq(fq, (nb_ops > DPAA_MAX_DEQUEUE_NUM_FRAMES) ?
-				DPAA_MAX_DEQUEUE_NUM_FRAMES : nb_ops);
+	/*
+	 * Until request for four buffers, we provide exact number of buffers.
+	 * Otherwise we do not set the QM_VDQCR_EXACT flag.
+	 * Not setting QM_VDQCR_EXACT flag can provide two more buffers than
+	 * requested, so we request two less in this case.
+	 */
+	if (nb_ops < 4) {
+		vdqcr_flags = QM_VDQCR_EXACT;
+		num_rx_bufs = nb_ops;
+	} else {
+		num_rx_bufs = nb_ops > DPAA_MAX_DEQUEUE_NUM_FRAMES ?
+			(DPAA_MAX_DEQUEUE_NUM_FRAMES - 2) : (nb_ops - 2);
+	}
+	ret = qman_set_vdq(fq, num_rx_bufs, vdqcr_flags);
 	if (ret)
 		return 0;
 
@@ -1416,7 +1429,7 @@ dpaa_sec_enqueue_burst(void *qp, struct rte_crypto_op **ops,
 			switch (op->sess_type) {
 			case RTE_CRYPTO_OP_WITH_SESSION:
 				ses = (dpaa_sec_session *)
-					get_session_private_data(
+					get_sym_session_private_data(
 							op->sym->session,
 							cryptodev_driver_id);
 				break;
@@ -1585,26 +1598,6 @@ dpaa_sec_queue_pair_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 	return 0;
 }
 
-/** Start queue pair */
-static int
-dpaa_sec_queue_pair_start(__rte_unused struct rte_cryptodev *dev,
-			  __rte_unused uint16_t queue_pair_id)
-{
-	PMD_INIT_FUNC_TRACE();
-
-	return 0;
-}
-
-/** Stop queue pair */
-static int
-dpaa_sec_queue_pair_stop(__rte_unused struct rte_cryptodev *dev,
-			 __rte_unused uint16_t queue_pair_id)
-{
-	PMD_INIT_FUNC_TRACE();
-
-	return 0;
-}
-
 /** Return the number of allocated queue pairs */
 static uint32_t
 dpaa_sec_queue_pair_count(struct rte_cryptodev *dev)
@@ -1616,7 +1609,7 @@ dpaa_sec_queue_pair_count(struct rte_cryptodev *dev)
 
 /** Returns the size of session structure */
 static unsigned int
-dpaa_sec_session_get_size(struct rte_cryptodev *dev __rte_unused)
+dpaa_sec_sym_session_get_size(struct rte_cryptodev *dev __rte_unused)
 {
 	PMD_INIT_FUNC_TRACE();
 
@@ -1755,34 +1748,6 @@ dpaa_sec_attach_sess_q(struct dpaa_sec_qp *qp, dpaa_sec_session *sess)
 }
 
 static int
-dpaa_sec_qp_attach_sess(struct rte_cryptodev *dev __rte_unused,
-			uint16_t qp_id __rte_unused,
-			void *ses __rte_unused)
-{
-	PMD_INIT_FUNC_TRACE();
-	return 0;
-}
-
-static int
-dpaa_sec_qp_detach_sess(struct rte_cryptodev *dev,
-			uint16_t qp_id  __rte_unused,
-			void *ses)
-{
-	dpaa_sec_session *sess = ses;
-	struct dpaa_sec_dev_private *qi = dev->data->dev_private;
-
-	PMD_INIT_FUNC_TRACE();
-
-	if (sess->inq)
-		dpaa_sec_detach_rxq(qi, sess->inq);
-	sess->inq = NULL;
-
-	sess->qp = NULL;
-
-	return 0;
-}
-
-static int
 dpaa_sec_set_session_parameters(struct rte_cryptodev *dev,
 			    struct rte_crypto_sym_xform *xform,	void *sess)
 {
@@ -1859,7 +1824,7 @@ err1:
 }
 
 static int
-dpaa_sec_session_configure(struct rte_cryptodev *dev,
+dpaa_sec_sym_session_configure(struct rte_cryptodev *dev,
 		struct rte_crypto_sym_xform *xform,
 		struct rte_cryptodev_sym_session *sess,
 		struct rte_mempool *mempool)
@@ -1883,7 +1848,7 @@ dpaa_sec_session_configure(struct rte_cryptodev *dev,
 		return ret;
 	}
 
-	set_session_private_data(sess, dev->driver_id,
+	set_sym_session_private_data(sess, dev->driver_id,
 			sess_private_data);
 
 
@@ -1892,12 +1857,12 @@ dpaa_sec_session_configure(struct rte_cryptodev *dev,
 
 /** Clear the memory of session so it doesn't leave key material behind */
 static void
-dpaa_sec_session_clear(struct rte_cryptodev *dev,
+dpaa_sec_sym_session_clear(struct rte_cryptodev *dev,
 		struct rte_cryptodev_sym_session *sess)
 {
 	struct dpaa_sec_dev_private *qi = dev->data->dev_private;
 	uint8_t index = dev->driver_id;
-	void *sess_priv = get_session_private_data(sess, index);
+	void *sess_priv = get_sym_session_private_data(sess, index);
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -1911,7 +1876,7 @@ dpaa_sec_session_clear(struct rte_cryptodev *dev,
 		rte_free(s->cipher_key.data);
 		rte_free(s->auth_key.data);
 		memset(s, 0, sizeof(dpaa_sec_session));
-		set_session_private_data(sess, index, NULL);
+		set_sym_session_private_data(sess, index, NULL);
 		rte_mempool_put(sess_mp, sess_priv);
 	}
 }
@@ -2215,9 +2180,6 @@ dpaa_sec_dev_infos_get(struct rte_cryptodev *dev,
 		info->feature_flags = dev->feature_flags;
 		info->capabilities = dpaa_sec_capabilities;
 		info->sym.max_nb_sessions = internals->max_nb_sessions;
-		info->sym.max_nb_sessions_per_qp =
-			RTE_DPAA_SEC_PMD_MAX_NB_SESSIONS /
-			RTE_DPAA_MAX_NB_SEC_QPS;
 		info->driver_id = cryptodev_driver_id;
 	}
 }
@@ -2230,14 +2192,10 @@ static struct rte_cryptodev_ops crypto_ops = {
 	.dev_infos_get        = dpaa_sec_dev_infos_get,
 	.queue_pair_setup     = dpaa_sec_queue_pair_setup,
 	.queue_pair_release   = dpaa_sec_queue_pair_release,
-	.queue_pair_start     = dpaa_sec_queue_pair_start,
-	.queue_pair_stop      = dpaa_sec_queue_pair_stop,
 	.queue_pair_count     = dpaa_sec_queue_pair_count,
-	.session_get_size     = dpaa_sec_session_get_size,
-	.session_configure    = dpaa_sec_session_configure,
-	.session_clear        = dpaa_sec_session_clear,
-	.qp_attach_session    = dpaa_sec_qp_attach_sess,
-	.qp_detach_session    = dpaa_sec_qp_detach_sess,
+	.sym_session_get_size     = dpaa_sec_sym_session_get_size,
+	.sym_session_configure    = dpaa_sec_sym_session_configure,
+	.sym_session_clear        = dpaa_sec_sym_session_clear
 };
 
 static const struct rte_security_capability *
@@ -2296,7 +2254,11 @@ dpaa_sec_dev_init(struct rte_cryptodev *cryptodev)
 			RTE_CRYPTODEV_FF_HW_ACCELERATED |
 			RTE_CRYPTODEV_FF_SYM_OPERATION_CHAINING |
 			RTE_CRYPTODEV_FF_SECURITY |
-			RTE_CRYPTODEV_FF_MBUF_SCATTER_GATHER;
+			RTE_CRYPTODEV_FF_IN_PLACE_SGL |
+			RTE_CRYPTODEV_FF_OOP_SGL_IN_SGL_OUT |
+			RTE_CRYPTODEV_FF_OOP_SGL_IN_LB_OUT |
+			RTE_CRYPTODEV_FF_OOP_LB_IN_SGL_OUT |
+			RTE_CRYPTODEV_FF_OOP_LB_IN_LB_OUT;
 
 	internals = cryptodev->data->dev_private;
 	internals->max_nb_queue_pairs = RTE_DPAA_MAX_NB_SEC_QPS;
@@ -2449,9 +2411,7 @@ RTE_PMD_REGISTER_DPAA(CRYPTODEV_NAME_DPAA_SEC_PMD, rte_dpaa_sec_driver);
 RTE_PMD_REGISTER_CRYPTO_DRIVER(dpaa_sec_crypto_drv, rte_dpaa_sec_driver.driver,
 		cryptodev_driver_id);
 
-RTE_INIT(dpaa_sec_init_log);
-static void
-dpaa_sec_init_log(void)
+RTE_INIT(dpaa_sec_init_log)
 {
 	dpaa_logtype_sec = rte_log_register("pmd.crypto.dpaa");
 	if (dpaa_logtype_sec >= 0)

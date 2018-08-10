@@ -135,17 +135,7 @@ vhost_user_set_owner(void)
 static int
 vhost_user_reset_owner(struct virtio_net *dev)
 {
-	struct rte_vdpa_device *vdpa_dev;
-	int did = -1;
-
-	if (dev->flags & VIRTIO_DEV_RUNNING) {
-		did = dev->vdpa_dev_id;
-		vdpa_dev = rte_vdpa_get_device(did);
-		if (vdpa_dev && vdpa_dev->ops->dev_close)
-			vdpa_dev->ops->dev_close(dev->vid);
-		dev->flags &= ~VIRTIO_DEV_RUNNING;
-		dev->notify_ops->destroy_device(dev->vid);
-	}
+	vhost_destroy_device_notify(dev);
 
 	cleanup_device(dev, 0);
 	reset_device(dev);
@@ -243,7 +233,7 @@ vhost_user_set_features(struct virtio_net *dev, uint64_t features)
 
 			dev->virtqueue[dev->nr_vring] = NULL;
 			cleanup_vq(vq, 1);
-			free_vq(vq);
+			free_vq(dev, vq);
 		}
 	}
 
@@ -292,13 +282,26 @@ vhost_user_set_vring_num(struct virtio_net *dev,
 		TAILQ_INIT(&vq->zmbuf_list);
 	}
 
-	vq->shadow_used_ring = rte_malloc(NULL,
+	if (vq_is_packed(dev)) {
+		vq->shadow_used_packed = rte_malloc(NULL,
+				vq->size *
+				sizeof(struct vring_used_elem_packed),
+				RTE_CACHE_LINE_SIZE);
+		if (!vq->shadow_used_packed) {
+			RTE_LOG(ERR, VHOST_CONFIG,
+					"failed to allocate memory for shadow used ring.\n");
+			return -1;
+		}
+
+	} else {
+		vq->shadow_used_split = rte_malloc(NULL,
 				vq->size * sizeof(struct vring_used_elem),
 				RTE_CACHE_LINE_SIZE);
-	if (!vq->shadow_used_ring) {
-		RTE_LOG(ERR, VHOST_CONFIG,
-			"failed to allocate memory for shadow used ring.\n");
-		return -1;
+		if (!vq->shadow_used_split) {
+			RTE_LOG(ERR, VHOST_CONFIG,
+					"failed to allocate memory for shadow used ring.\n");
+			return -1;
+		}
 	}
 
 	vq->batch_copy_elems = rte_malloc(NULL,
@@ -325,7 +328,8 @@ numa_realloc(struct virtio_net *dev, int index)
 	struct virtio_net *old_dev;
 	struct vhost_virtqueue *old_vq, *vq;
 	struct zcopy_mbuf *new_zmbuf;
-	struct vring_used_elem *new_shadow_used_ring;
+	struct vring_used_elem *new_shadow_used_split;
+	struct vring_used_elem_packed *new_shadow_used_packed;
 	struct batch_copy_elem *new_batch_copy_elems;
 	int ret;
 
@@ -360,13 +364,26 @@ numa_realloc(struct virtio_net *dev, int index)
 			vq->zmbufs = new_zmbuf;
 		}
 
-		new_shadow_used_ring = rte_malloc_socket(NULL,
-			vq->size * sizeof(struct vring_used_elem),
-			RTE_CACHE_LINE_SIZE,
-			newnode);
-		if (new_shadow_used_ring) {
-			rte_free(vq->shadow_used_ring);
-			vq->shadow_used_ring = new_shadow_used_ring;
+		if (vq_is_packed(dev)) {
+			new_shadow_used_packed = rte_malloc_socket(NULL,
+					vq->size *
+					sizeof(struct vring_used_elem_packed),
+					RTE_CACHE_LINE_SIZE,
+					newnode);
+			if (new_shadow_used_packed) {
+				rte_free(vq->shadow_used_packed);
+				vq->shadow_used_packed = new_shadow_used_packed;
+			}
+		} else {
+			new_shadow_used_split = rte_malloc_socket(NULL,
+					vq->size *
+					sizeof(struct vring_used_elem),
+					RTE_CACHE_LINE_SIZE,
+					newnode);
+			if (new_shadow_used_split) {
+				rte_free(vq->shadow_used_split);
+				vq->shadow_used_split = new_shadow_used_split;
+			}
 		}
 
 		new_batch_copy_elems = rte_malloc_socket(NULL,
@@ -476,6 +493,51 @@ translate_ring_addresses(struct virtio_net *dev, int vq_index)
 	struct vhost_virtqueue *vq = dev->virtqueue[vq_index];
 	struct vhost_vring_addr *addr = &vq->ring_addrs;
 	uint64_t len;
+
+	if (vq_is_packed(dev)) {
+		len = sizeof(struct vring_packed_desc) * vq->size;
+		vq->desc_packed = (struct vring_packed_desc *)(uintptr_t)
+			ring_addr_to_vva(dev, vq, addr->desc_user_addr, &len);
+		vq->log_guest_addr = 0;
+		if (vq->desc_packed == NULL ||
+				len != sizeof(struct vring_packed_desc) *
+				vq->size) {
+			RTE_LOG(DEBUG, VHOST_CONFIG,
+				"(%d) failed to map desc_packed ring.\n",
+				dev->vid);
+			return dev;
+		}
+
+		dev = numa_realloc(dev, vq_index);
+		vq = dev->virtqueue[vq_index];
+		addr = &vq->ring_addrs;
+
+		len = sizeof(struct vring_packed_desc_event);
+		vq->driver_event = (struct vring_packed_desc_event *)
+					(uintptr_t)ring_addr_to_vva(dev,
+					vq, addr->avail_user_addr, &len);
+		if (vq->driver_event == NULL ||
+				len != sizeof(struct vring_packed_desc_event)) {
+			RTE_LOG(DEBUG, VHOST_CONFIG,
+				"(%d) failed to find driver area address.\n",
+				dev->vid);
+			return dev;
+		}
+
+		len = sizeof(struct vring_packed_desc_event);
+		vq->device_event = (struct vring_packed_desc_event *)
+					(uintptr_t)ring_addr_to_vva(dev,
+					vq, addr->used_user_addr, &len);
+		if (vq->device_event == NULL ||
+				len != sizeof(struct vring_packed_desc_event)) {
+			RTE_LOG(DEBUG, VHOST_CONFIG,
+				"(%d) failed to find device area address.\n",
+				dev->vid);
+			return dev;
+		}
+
+		return dev;
+	}
 
 	/* The addresses are converted from QEMU virtual to Vhost virtual. */
 	if (vq->desc && vq->avail && vq->used)
@@ -751,6 +813,11 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *pmsg)
 		dev->mem = NULL;
 	}
 
+	/* Flush IOTLB cache as previous HVAs are now invalid */
+	if (dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM))
+		for (i = 0; i < dev->nr_vring; i++)
+			vhost_user_iotlb_flush_all(dev->virtqueue[i]);
+
 	dev->nr_guest_pages = 0;
 	if (!dev->guest_pages) {
 		dev->max_guest_pages = 8;
@@ -885,10 +952,20 @@ err_mmap:
 	return -1;
 }
 
-static int
-vq_is_ready(struct vhost_virtqueue *vq)
+static bool
+vq_is_ready(struct virtio_net *dev, struct vhost_virtqueue *vq)
 {
-	return vq && vq->desc && vq->avail && vq->used &&
+	bool rings_ok;
+
+	if (!vq)
+		return false;
+
+	if (vq_is_packed(dev))
+		rings_ok = !!vq->desc_packed;
+	else
+		rings_ok = vq->desc && vq->avail && vq->used;
+
+	return rings_ok &&
 	       vq->kickfd != VIRTIO_UNINITIALIZED_EVENTFD &&
 	       vq->callfd != VIRTIO_UNINITIALIZED_EVENTFD;
 }
@@ -905,7 +982,7 @@ virtio_is_ready(struct virtio_net *dev)
 	for (i = 0; i < dev->nr_vring; i++) {
 		vq = dev->virtqueue[i];
 
-		if (!vq_is_ready(vq))
+		if (!vq_is_ready(dev, vq))
 			return 0;
 	}
 
@@ -996,18 +1073,9 @@ vhost_user_get_vring_base(struct virtio_net *dev,
 			  VhostUserMsg *msg)
 {
 	struct vhost_virtqueue *vq = dev->virtqueue[msg->payload.state.index];
-	struct rte_vdpa_device *vdpa_dev;
-	int did = -1;
 
 	/* We have to stop the queue (virtio) if it is running. */
-	if (dev->flags & VIRTIO_DEV_RUNNING) {
-		did = dev->vdpa_dev_id;
-		vdpa_dev = rte_vdpa_get_device(did);
-		if (vdpa_dev && vdpa_dev->ops->dev_close)
-			vdpa_dev->ops->dev_close(dev->vid);
-		dev->flags &= ~VIRTIO_DEV_RUNNING;
-		dev->notify_ops->destroy_device(dev->vid);
-	}
+	vhost_destroy_device_notify(dev);
 
 	dev->flags &= ~VIRTIO_DEV_READY;
 	dev->flags &= ~VIRTIO_DEV_VDPA_CONFIGURED;
@@ -1035,8 +1103,13 @@ vhost_user_get_vring_base(struct virtio_net *dev,
 
 	if (dev->dequeue_zero_copy)
 		free_zmbufs(vq);
-	rte_free(vq->shadow_used_ring);
-	vq->shadow_used_ring = NULL;
+	if (vq_is_packed(dev)) {
+		rte_free(vq->shadow_used_packed);
+		vq->shadow_used_packed = NULL;
+	} else {
+		rte_free(vq->shadow_used_split);
+		vq->shadow_used_split = NULL;
+	}
 
 	rte_free(vq->batch_copy_elems);
 	vq->batch_copy_elems = NULL;
@@ -1384,6 +1457,22 @@ send_vhost_reply(int sockfd, struct VhostUserMsg *msg)
 	return send_vhost_message(sockfd, msg, NULL, 0);
 }
 
+static int
+send_vhost_slave_message(struct virtio_net *dev, struct VhostUserMsg *msg,
+			 int *fds, int fd_num)
+{
+	int ret;
+
+	if (msg->flags & VHOST_USER_NEED_REPLY)
+		rte_spinlock_lock(&dev->slave_req_lock);
+
+	ret = send_vhost_message(dev->slave_req_fd, msg, fds, fd_num);
+	if (ret < 0 && (msg->flags & VHOST_USER_NEED_REPLY))
+		rte_spinlock_unlock(&dev->slave_req_lock);
+
+	return ret;
+}
+
 /*
  * Allocate a queue pair if it hasn't been allocated yet
  */
@@ -1705,9 +1794,43 @@ skip_to_reply:
 		if (vdpa_dev->ops->dev_conf)
 			vdpa_dev->ops->dev_conf(dev->vid);
 		dev->flags |= VIRTIO_DEV_VDPA_CONFIGURED;
+		if (vhost_user_host_notifier_ctrl(dev->vid, true) != 0) {
+			RTE_LOG(INFO, VHOST_CONFIG,
+				"(%d) software relay is used for vDPA, performance may be low.\n",
+				dev->vid);
+		}
 	}
 
 	return 0;
+}
+
+static int process_slave_message_reply(struct virtio_net *dev,
+				       const VhostUserMsg *msg)
+{
+	VhostUserMsg msg_reply;
+	int ret;
+
+	if ((msg->flags & VHOST_USER_NEED_REPLY) == 0)
+		return 0;
+
+	if (read_vhost_message(dev->slave_req_fd, &msg_reply) < 0) {
+		ret = -1;
+		goto out;
+	}
+
+	if (msg_reply.request.slave != msg->request.slave) {
+		RTE_LOG(ERR, VHOST_CONFIG,
+			"Received unexpected msg type (%u), expected %u\n",
+			msg_reply.request.slave, msg->request.slave);
+		ret = -1;
+		goto out;
+	}
+
+	ret = msg_reply.payload.u64 ? -1 : 0;
+
+out:
+	rte_spinlock_unlock(&dev->slave_req_lock);
+	return ret;
 }
 
 int
@@ -1734,4 +1857,102 @@ vhost_user_iotlb_miss(struct virtio_net *dev, uint64_t iova, uint8_t perm)
 	}
 
 	return 0;
+}
+
+static int vhost_user_slave_set_vring_host_notifier(struct virtio_net *dev,
+						    int index, int fd,
+						    uint64_t offset,
+						    uint64_t size)
+{
+	int *fdp = NULL;
+	size_t fd_num = 0;
+	int ret;
+	struct VhostUserMsg msg = {
+		.request.slave = VHOST_USER_SLAVE_VRING_HOST_NOTIFIER_MSG,
+		.flags = VHOST_USER_VERSION | VHOST_USER_NEED_REPLY,
+		.size = sizeof(msg.payload.area),
+		.payload.area = {
+			.u64 = index & VHOST_USER_VRING_IDX_MASK,
+			.size = size,
+			.offset = offset,
+		},
+	};
+
+	if (fd < 0)
+		msg.payload.area.u64 |= VHOST_USER_VRING_NOFD_MASK;
+	else {
+		fdp = &fd;
+		fd_num = 1;
+	}
+
+	ret = send_vhost_slave_message(dev, &msg, fdp, fd_num);
+	if (ret < 0) {
+		RTE_LOG(ERR, VHOST_CONFIG,
+			"Failed to set host notifier (%d)\n", ret);
+		return ret;
+	}
+
+	return process_slave_message_reply(dev, &msg);
+}
+
+int vhost_user_host_notifier_ctrl(int vid, bool enable)
+{
+	struct virtio_net *dev;
+	struct rte_vdpa_device *vdpa_dev;
+	int vfio_device_fd, did, ret = 0;
+	uint64_t offset, size;
+	unsigned int i;
+
+	dev = get_device(vid);
+	if (!dev)
+		return -ENODEV;
+
+	did = dev->vdpa_dev_id;
+	if (did < 0)
+		return -EINVAL;
+
+	if (!(dev->features & (1ULL << VIRTIO_F_VERSION_1)) ||
+	    !(dev->features & (1ULL << VHOST_USER_F_PROTOCOL_FEATURES)) ||
+	    !(dev->protocol_features &
+			(1ULL << VHOST_USER_PROTOCOL_F_SLAVE_REQ)) ||
+	    !(dev->protocol_features &
+			(1ULL << VHOST_USER_PROTOCOL_F_SLAVE_SEND_FD)) ||
+	    !(dev->protocol_features &
+			(1ULL << VHOST_USER_PROTOCOL_F_HOST_NOTIFIER)))
+		return -ENOTSUP;
+
+	vdpa_dev = rte_vdpa_get_device(did);
+	if (!vdpa_dev)
+		return -ENODEV;
+
+	RTE_FUNC_PTR_OR_ERR_RET(vdpa_dev->ops->get_vfio_device_fd, -ENOTSUP);
+	RTE_FUNC_PTR_OR_ERR_RET(vdpa_dev->ops->get_notify_area, -ENOTSUP);
+
+	vfio_device_fd = vdpa_dev->ops->get_vfio_device_fd(vid);
+	if (vfio_device_fd < 0)
+		return -ENOTSUP;
+
+	if (enable) {
+		for (i = 0; i < dev->nr_vring; i++) {
+			if (vdpa_dev->ops->get_notify_area(vid, i, &offset,
+					&size) < 0) {
+				ret = -ENOTSUP;
+				goto disable;
+			}
+
+			if (vhost_user_slave_set_vring_host_notifier(dev, i,
+					vfio_device_fd, offset, size) < 0) {
+				ret = -EFAULT;
+				goto disable;
+			}
+		}
+	} else {
+disable:
+		for (i = 0; i < dev->nr_vring; i++) {
+			vhost_user_slave_set_vring_host_notifier(dev, i, -1,
+					0, 0);
+		}
+	}
+
+	return ret;
 }

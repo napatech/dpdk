@@ -207,6 +207,7 @@ eth_kni_dev_info(struct rte_eth_dev *dev __rte_unused,
 	dev_info->max_rx_queues = KNI_MAX_QUEUE_PER_PORT;
 	dev_info->max_tx_queues = KNI_MAX_QUEUE_PER_PORT;
 	dev_info->min_rx_bufsize = 0;
+	dev_info->rx_offload_capa = DEV_RX_OFFLOAD_CRC_STRIP;
 }
 
 static int
@@ -419,6 +420,7 @@ eth_kni_probe(struct rte_vdev_device *vdev)
 		}
 		/* TODO: request info from primary to set up Rx and Tx */
 		eth_dev->dev_ops = &eth_kni_ops;
+		eth_dev->device = &vdev->device;
 		rte_eth_dev_probing_finish(eth_dev);
 		return 0;
 	}
@@ -487,9 +489,7 @@ static struct rte_vdev_driver eth_kni_drv = {
 RTE_PMD_REGISTER_VDEV(net_kni, eth_kni_drv);
 RTE_PMD_REGISTER_PARAM_STRING(net_kni, ETH_KNI_NO_REQUEST_THREAD_ARG "=<int>");
 
-RTE_INIT(eth_kni_init_log);
-static void
-eth_kni_init_log(void)
+RTE_INIT(eth_kni_init_log)
 {
 	eth_kni_logtype = rte_log_register("pmd.net.kni");
 	if (eth_kni_logtype >= 0)

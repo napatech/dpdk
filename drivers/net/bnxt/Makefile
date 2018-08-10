@@ -29,6 +29,7 @@ EXPORT_MAP := rte_pmd_bnxt_version.map
 SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += bnxt_cpr.c
 SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += bnxt_ethdev.c
 SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += bnxt_filter.c
+SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += bnxt_flow.c
 SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += bnxt_hwrm.c
 SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += bnxt_ring.c
 SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += bnxt_rxq.c
@@ -38,6 +39,7 @@ SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += bnxt_txq.c
 SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += bnxt_txr.c
 SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += bnxt_vnic.c
 SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += bnxt_irq.c
+SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += bnxt_util.c
 SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += rte_pmd_bnxt.c
 
 #

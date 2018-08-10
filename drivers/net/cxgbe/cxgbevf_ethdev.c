@@ -50,6 +50,7 @@ static int cxgbevf_dev_stats_get(struct rte_eth_dev *eth_dev,
 	/* TX Stats */
 	eth_stats->opackets = ps.tx_bcast_frames + ps.tx_mcast_frames +
 			      ps.tx_ucast_frames;
+	eth_stats->obytes = ps.tx_octets;
 	eth_stats->oerrors  = ps.tx_drop;
 
 	for (i = 0; i < pi->n_rx_qsets; i++) {
@@ -85,6 +86,8 @@ static const struct eth_dev_ops cxgbevf_eth_dev_ops = {
 	.dev_infos_get          = cxgbe_dev_info_get,
 	.dev_supported_ptypes_get = cxgbe_dev_supported_ptypes_get,
 	.link_update            = cxgbe_dev_link_update,
+	.dev_set_link_up        = cxgbe_dev_set_link_up,
+	.dev_set_link_down      = cxgbe_dev_set_link_down,
 	.mtu_set                = cxgbe_dev_mtu_set,
 	.tx_queue_setup         = cxgbe_dev_tx_queue_setup,
 	.tx_queue_start         = cxgbe_dev_tx_queue_start,

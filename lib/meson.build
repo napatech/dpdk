@@ -9,7 +9,8 @@
 # given as a dep, no need to mention ring. This is especially true for the
 # core libs which are widely reused, so their deps are kept to a minimum.
 libraries = [ 'compat', # just a header, used for versioning
-	'eal', 'ring', 'mempool', 'mbuf', 'net', 'kvargs', 'ethdev', 'pci', # core
+	'kvargs',
+	'eal', 'ring', 'mempool', 'mbuf', 'net', 'ethdev', 'pci', # core
 	'metrics', # bitrate/latency stats depends on this
 	'hash',    # efd depends on this
 	'timer',   # eventdev depends on this
@@ -25,6 +26,10 @@ libraries = [ 'compat', # just a header, used for versioning
 	# flow_classify lib depends on pkt framework table lib
 	'flow_classify', 'bpf']
 
+default_cflags = machine_args
+if cc.has_argument('-Wno-format-truncation')
+	default_cflags += '-Wno-format-truncation'
+endif
 foreach l:libraries
 	build = true
 	name = l
@@ -33,7 +38,7 @@ foreach l:libraries
 	sources = []
 	headers = []
 	includes = []
-	cflags = machine_args
+	cflags = default_cflags
 	objs = [] # other object files to link against, used e.g. for
 	          # instruction-set optimized versions of code
 
@@ -41,8 +46,11 @@ foreach l:libraries
 	# external package/library requirements
 	ext_deps = []
 	deps = ['eal']   # eal is standard dependency except for itself
-	if l == 'eal'
+	if l == 'kvargs'
 		deps = []
+	endif
+	if l == 'eal'
+		deps = ['kvargs']
 	endif
 
 	dir_name = 'librte_' + l
@@ -63,6 +71,10 @@ foreach l:libraries
 			shared_deps = ext_deps
 			static_deps = ext_deps
 			foreach d:deps
+				if not is_variable('shared_rte_' + d)
+					error('Missing dependency ' + d +
+						' for library ' + lib_name)
+				endif
 				shared_deps += [get_variable('shared_rte_' + d)]
 				static_deps += [get_variable('static_rte_' + d)]
 			endforeach

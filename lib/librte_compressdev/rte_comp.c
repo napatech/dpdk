@@ -14,8 +14,12 @@ rte_comp_get_feature_name(uint64_t flag)
 		return "STATEFUL_COMPRESSION";
 	case RTE_COMP_FF_STATEFUL_DECOMPRESSION:
 		return "STATEFUL_DECOMPRESSION";
-	case RTE_COMP_FF_MBUF_SCATTER_GATHER:
-		return "MBUF_SCATTER_GATHER";
+	case RTE_COMP_FF_OOP_SGL_IN_SGL_OUT:
+		return "OOP_SGL_IN_SGL_OUT";
+	case RTE_COMP_FF_OOP_SGL_IN_LB_OUT:
+		return "OOP_SGL_IN_LB_OUT";
+	case RTE_COMP_FF_OOP_LB_IN_SGL_OUT:
+		return "OOP_LB_IN_SGL_OUT";
 	case RTE_COMP_FF_MULTI_PKT_CHECKSUM:
 		return "MULTI_PKT_CHECKSUM";
 	case RTE_COMP_FF_ADLER32_CHECKSUM:
@@ -32,6 +36,10 @@ rte_comp_get_feature_name(uint64_t flag)
 		return "SHA2_SHA256_HASH";
 	case RTE_COMP_FF_SHAREABLE_PRIV_XFORM:
 		return "SHAREABLE_PRIV_XFORM";
+	case RTE_COMP_FF_HUFFMAN_FIXED:
+		return "HUFFMAN_FIXED";
+	case RTE_COMP_FF_HUFFMAN_DYNAMIC:
+		return "HUFFMAN_DYNAMIC";
 	default:
 		return NULL;
 	}

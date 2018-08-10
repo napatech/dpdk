@@ -985,6 +985,7 @@ rte_dpaa2_qdma_remove(struct rte_dpaa2_device *dpaa2_dev)
 }
 
 static struct rte_dpaa2_driver rte_dpaa2_qdma_pmd = {
+	.drv_flags = RTE_DPAA2_DRV_IOVA_AS_VA,
 	.drv_type = DPAA2_QDMA,
 	.probe = rte_dpaa2_qdma_probe,
 	.remove = rte_dpaa2_qdma_remove,
@@ -992,9 +993,7 @@ static struct rte_dpaa2_driver rte_dpaa2_qdma_pmd = {
 
 RTE_PMD_REGISTER_DPAA2(dpaa2_qdma, rte_dpaa2_qdma_pmd);
 
-RTE_INIT(dpaa2_qdma_init_log);
-static void
-dpaa2_qdma_init_log(void)
+RTE_INIT(dpaa2_qdma_init_log)
 {
 	dpaa2_qdma_logtype = rte_log_register("pmd.raw.dpaa2.qdma");
 	if (dpaa2_qdma_logtype >= 0)

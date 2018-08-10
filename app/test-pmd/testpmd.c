@@ -127,6 +127,8 @@ portid_t nb_ports;             /**< Number of probed ethernet ports. */
 struct fwd_lcore **fwd_lcores; /**< For all probed logical cores. */
 lcoreid_t nb_lcores;           /**< Number of probed logical cores. */
 
+portid_t ports_ids[RTE_MAX_ETHPORTS]; /**< Store all port ids. */
+
 /*
  * Test Forwarding Configuration.
  *    nb_fwd_lcores <= nb_cfg_lcores <= nb_lcores
@@ -155,9 +157,8 @@ struct fwd_engine * fwd_engines[] = {
 	&tx_only_engine,
 	&csum_fwd_engine,
 	&icmp_echo_engine,
-#if defined RTE_LIBRTE_PMD_SOFTNIC && defined RTE_LIBRTE_SCHED
-	&softnic_tm_engine,
-	&softnic_tm_bypass_engine,
+#if defined RTE_LIBRTE_PMD_SOFTNIC
+	&softnic_fwd_engine,
 #endif
 #ifdef RTE_LIBRTE_IEEE1588
 	&ieee1588_fwd_engine,
@@ -334,7 +335,6 @@ lcoreid_t latencystats_lcore_id = -1;
 struct rte_eth_rxmode rx_mode = {
 	.max_rx_pkt_len = ETHER_MAX_LEN, /**< Default maximum frame length. */
 	.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
-	.ignore_offload_bitfield = 1,
 };
 
 struct rte_eth_txmode tx_mode = {
@@ -346,7 +346,7 @@ struct rte_fdir_conf fdir_conf = {
 	.pballoc = RTE_FDIR_PBALLOC_64K,
 	.status = RTE_FDIR_REPORT_STATUS,
 	.mask = {
-		.vlan_tci_mask = 0x0,
+		.vlan_tci_mask = 0xFFEF,
 		.ipv4_mask     = {
 			.src_ip = 0xFFFFFFFF,
 			.dst_ip = 0xFFFFFFFF,
@@ -392,6 +392,38 @@ uint8_t bitrate_enabled;
 
 struct gro_status gro_ports[RTE_MAX_ETHPORTS];
 uint8_t gro_flush_cycles = GRO_DEFAULT_FLUSH_CYCLES;
+
+struct vxlan_encap_conf vxlan_encap_conf = {
+	.select_ipv4 = 1,
+	.select_vlan = 0,
+	.vni = "\x00\x00\x00",
+	.udp_src = 0,
+	.udp_dst = RTE_BE16(4789),
+	.ipv4_src = IPv4(127, 0, 0, 1),
+	.ipv4_dst = IPv4(255, 255, 255, 255),
+	.ipv6_src = "\x00\x00\x00\x00\x00\x00\x00\x00"
+		"\x00\x00\x00\x00\x00\x00\x00\x01",
+	.ipv6_dst = "\x00\x00\x00\x00\x00\x00\x00\x00"
+		"\x00\x00\x00\x00\x00\x00\x11\x11",
+	.vlan_tci = 0,
+	.eth_src = "\x00\x00\x00\x00\x00\x00",
+	.eth_dst = "\xff\xff\xff\xff\xff\xff",
+};
+
+struct nvgre_encap_conf nvgre_encap_conf = {
+	.select_ipv4 = 1,
+	.select_vlan = 0,
+	.tni = "\x00\x00\x00",
+	.ipv4_src = IPv4(127, 0, 0, 1),
+	.ipv4_dst = IPv4(255, 255, 255, 255),
+	.ipv6_src = "\x00\x00\x00\x00\x00\x00\x00\x00"
+		"\x00\x00\x00\x00\x00\x00\x00\x01",
+	.ipv6_dst = "\x00\x00\x00\x00\x00\x00\x00\x00"
+		"\x00\x00\x00\x00\x00\x00\x11\x11",
+	.vlan_tci = 0,
+	.eth_src = "\x00\x00\x00\x00\x00\x00",
+	.eth_dst = "\xff\xff\xff\xff\xff\xff",
+};
 
 /* Forward function declarations */
 static void map_port_queue_stats_mapping_registers(portid_t pi,
@@ -777,7 +809,7 @@ init_config(void)
 	init_port_config();
 
 	gso_types = DEV_TX_OFFLOAD_TCP_TSO | DEV_TX_OFFLOAD_VXLAN_TNL_TSO |
-		DEV_TX_OFFLOAD_GRE_TNL_TSO;
+		DEV_TX_OFFLOAD_GRE_TNL_TSO | DEV_TX_OFFLOAD_UDP_TSO;
 	/*
 	 * Records which Mbuf pool to use by each logical core, if needed.
 	 */
@@ -816,6 +848,19 @@ init_config(void)
 					"rte_gro_ctx_create() failed\n");
 		}
 	}
+
+#if defined RTE_LIBRTE_PMD_SOFTNIC
+	if (strcmp(cur_fwd_eng->fwd_mode_name, "softnic") == 0) {
+		RTE_ETH_FOREACH_DEV(pid) {
+			port = &ports[pid];
+			const char *driver = port->dev_info.driver_name;
+
+			if (strcmp(driver, "net_softnic") == 0)
+				port->softport.fwd_lcore_arg = fwd_lcores;
+		}
+	}
+#endif
+
 }
 
 
@@ -1148,8 +1193,9 @@ run_pkt_fwd_on_lcore(struct fwd_lcore *fc, packet_fwd_t pkt_fwd)
 	uint64_t tics_per_1sec;
 	uint64_t tics_datum;
 	uint64_t tics_current;
-	uint16_t idx_port;
+	uint16_t i, cnt_ports;
 
+	cnt_ports = nb_ports;
 	tics_datum = rte_rdtsc();
 	tics_per_1sec = rte_get_timer_hz();
 #endif
@@ -1164,9 +1210,9 @@ run_pkt_fwd_on_lcore(struct fwd_lcore *fc, packet_fwd_t pkt_fwd)
 			tics_current = rte_rdtsc();
 			if (tics_current - tics_datum >= tics_per_1sec) {
 				/* Periodic bitrate calculation */
-				RTE_ETH_FOREACH_DEV(idx_port)
+				for (i = 0; i < cnt_ports; i++)
 					rte_stats_bitrate_calc(bitrate_data,
-						idx_port);
+						ports_ids[i]);
 				tics_datum = tics_current;
 			}
 		}
@@ -1645,8 +1691,6 @@ start_port(portid_t pid)
 			port->need_reconfig_queues = 0;
 			/* setup tx queues */
 			for (qi = 0; qi < nb_txq; qi++) {
-				port->tx_conf[qi].txq_flags =
-					ETH_TXQ_FLAGS_IGNORE;
 				if ((numa_support) &&
 					(txring_numa[pi] != NUMA_NO_CONFIG))
 					diag = rte_eth_tx_queue_setup(pi, qi,
@@ -1971,6 +2015,7 @@ attach_port(char *identifier)
 	reconfig(pi, socket_id);
 	rte_eth_promiscuous_enable(pi);
 
+	ports_ids[nb_ports] = pi;
 	nb_ports = rte_eth_dev_count_avail();
 
 	ports[pi].port_status = RTE_PORT_STOPPED;
@@ -1985,6 +2030,7 @@ void
 detach_port(portid_t port_id)
 {
 	char name[RTE_ETH_NAME_MAX_LEN];
+	uint16_t i;
 
 	printf("Detaching a port...\n");
 
@@ -2001,6 +2047,13 @@ detach_port(portid_t port_id)
 		return;
 	}
 
+	for (i = 0; i < nb_ports; i++) {
+		if (ports_ids[i] == port_id) {
+			ports_ids[i] = ports_ids[nb_ports-1];
+			ports_ids[nb_ports-1] = 0;
+			break;
+		}
+	}
 	nb_ports = rte_eth_dev_count_avail();
 
 	update_fwd_ports(RTE_MAX_ETHPORTS);
@@ -2355,16 +2408,15 @@ init_port_config(void)
 {
 	portid_t pid;
 	struct rte_port *port;
-	struct rte_eth_dev_info dev_info;
 
 	RTE_ETH_FOREACH_DEV(pid) {
 		port = &ports[pid];
 		port->dev_conf.fdir_conf = fdir_conf;
+		rte_eth_dev_info_get(pid, &port->dev_info);
 		if (nb_rxq > 1) {
-			rte_eth_dev_info_get(pid, &dev_info);
 			port->dev_conf.rx_adv_conf.rss_conf.rss_key = NULL;
 			port->dev_conf.rx_adv_conf.rss_conf.rss_hf =
-				rss_hf & dev_info.flow_type_rss_offloads;
+				rss_hf & port->dev_info.flow_type_rss_offloads;
 		} else {
 			port->dev_conf.rx_adv_conf.rss_conf.rss_key = NULL;
 			port->dev_conf.rx_adv_conf.rss_conf.rss_hf = 0;
@@ -2394,17 +2446,6 @@ init_port_config(void)
 		    (rte_eth_devices[pid].data->dev_flags &
 		     RTE_ETH_DEV_INTR_RMV))
 			port->dev_conf.intr_conf.rmv = 1;
-
-#if defined RTE_LIBRTE_PMD_SOFTNIC && defined RTE_LIBRTE_SCHED
-		/* Detect softnic port */
-		if (!strcmp(port->dev_info.driver_name, "net_softnic")) {
-			port->softnic_enable = 1;
-			memset(&port->softport, 0, sizeof(struct softnic_port));
-
-			if (!strcmp(cur_fwd_eng->fwd_mode_name, "tm"))
-				port->softport.tm_flag = 1;
-		}
-#endif
 	}
 }
 
@@ -2443,12 +2484,14 @@ const uint16_t vlan_tags[] = {
 };
 
 static  int
-get_eth_dcb_conf(struct rte_eth_conf *eth_conf,
+get_eth_dcb_conf(portid_t pid, struct rte_eth_conf *eth_conf,
 		 enum dcb_mode_enable dcb_mode,
 		 enum rte_eth_nb_tcs num_tcs,
 		 uint8_t pfc_en)
 {
 	uint8_t i;
+	int32_t rc;
+	struct rte_eth_rss_conf rss_conf;
 
 	/*
 	 * Builds up the correct configuration for dcb+vt based on the vlan tags array
@@ -2488,6 +2531,10 @@ get_eth_dcb_conf(struct rte_eth_conf *eth_conf,
 		struct rte_eth_dcb_tx_conf *tx_conf =
 				&eth_conf->tx_adv_conf.dcb_tx_conf;
 
+		rc = rte_eth_dev_rss_hash_conf_get(pid, &rss_conf);
+		if (rc != 0)
+			return rc;
+
 		rx_conf->nb_tcs = num_tcs;
 		tx_conf->nb_tcs = num_tcs;
 
@@ -2495,8 +2542,9 @@ get_eth_dcb_conf(struct rte_eth_conf *eth_conf,
 			rx_conf->dcb_tc[i] = i % num_tcs;
 			tx_conf->dcb_tc[i] = i % num_tcs;
 		}
+
 		eth_conf->rxmode.mq_mode = ETH_MQ_RX_DCB_RSS;
-		eth_conf->rx_adv_conf.rss_conf.rss_hf = rss_hf;
+		eth_conf->rx_adv_conf.rss_conf = rss_conf;
 		eth_conf->txmode.mq_mode = ETH_MQ_TX_DCB;
 	}
 
@@ -2530,7 +2578,7 @@ init_port_dcb_config(portid_t pid,
 	port_conf.txmode = rte_port->dev_conf.txmode;
 
 	/*set configuration of DCB in vt mode and DCB in non-vt mode*/
-	retval = get_eth_dcb_conf(&port_conf, dcb_mode, num_tcs, pfc_en);
+	retval = get_eth_dcb_conf(pid, &port_conf, dcb_mode, num_tcs, pfc_en);
 	if (retval < 0)
 		return retval;
 	port_conf.rxmode.offloads |= DEV_RX_OFFLOAD_VLAN_FILTER;
@@ -2653,6 +2701,7 @@ main(int argc, char** argv)
 {
 	int diag;
 	portid_t port_id;
+	uint16_t count;
 	int ret;
 
 	signal(SIGINT, signal_handler);
@@ -2672,7 +2721,12 @@ main(int argc, char** argv)
 	rte_pdump_init(NULL);
 #endif
 
-	nb_ports = (portid_t) rte_eth_dev_count_avail();
+	count = 0;
+	RTE_ETH_FOREACH_DEV(port_id) {
+		ports_ids[count] = port_id;
+		count++;
+	}
+	nb_ports = (portid_t) count;
 	if (nb_ports == 0)
 		TESTPMD_LOG(WARNING, "No probed ethernet devices\n");
 

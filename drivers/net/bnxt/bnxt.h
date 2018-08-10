@@ -22,8 +22,24 @@
 
 #define BNXT_MAX_MTU		9500
 #define VLAN_TAG_SIZE		4
+#define BNXT_VF_RSV_NUM_RSS_CTX	1
+#define BNXT_VF_RSV_NUM_L2_CTX	4
+/* TODO: For now, do not support VMDq/RFS on VFs. */
+#define BNXT_VF_RSV_NUM_VNIC	1
 #define BNXT_MAX_LED		4
 #define BNXT_NUM_VLANS		2
+#define BNXT_MIN_RING_DESC	16
+#define BNXT_MAX_TX_RING_DESC	4096
+#define BNXT_MAX_RX_RING_DESC	8192
+#define BNXT_DB_SIZE		0x80
+
+#define BNXT_INT_LAT_TMR_MIN			75
+#define BNXT_INT_LAT_TMR_MAX			150
+#define BNXT_NUM_CMPL_AGGR_INT			36
+#define BNXT_CMPL_AGGR_DMA_TMR			37
+#define BNXT_NUM_CMPL_DMA_AGGR			36
+#define BNXT_CMPL_AGGR_DMA_TMR_DURING_INT	50
+#define BNXT_NUM_CMPL_DMA_AGGR_DURING_INT	12
 
 struct bnxt_led_info {
 	uint8_t      led_id;
@@ -98,6 +114,7 @@ struct bnxt_child_vf_info {
 struct bnxt_pf_info {
 #define BNXT_FIRST_PF_FID	1
 #define BNXT_MAX_VFS(bp)	(bp->pf.max_vfs)
+#define BNXT_TOTAL_VFS(bp)	((bp)->pf.total_vfs)
 #define BNXT_FIRST_VF_FID	128
 #define BNXT_PF_RINGS_USED(bp)	bnxt_get_num_queues(bp)
 #define BNXT_PF_RINGS_AVAIL(bp)	(bp->pf.max_cp_rings - BNXT_PF_RINGS_USED(bp))
@@ -105,6 +122,9 @@ struct bnxt_pf_info {
 	uint16_t		first_vf_id;
 	uint16_t		active_vfs;
 	uint16_t		max_vfs;
+	uint16_t		total_vfs; /* Total VFs possible.
+					    * Not necessarily enabled.
+					    */
 	uint32_t		func_cfg_flags;
 	void			*vf_req_buf;
 	rte_iova_t		vf_req_buf_dma_addr;
@@ -200,6 +220,16 @@ struct bnxt_ptp_cfg {
 	uint32_t			rx_mapped_regs[BNXT_PTP_RX_REGS];
 	uint32_t			tx_regs[BNXT_PTP_TX_REGS];
 	uint32_t			tx_mapped_regs[BNXT_PTP_TX_REGS];
+};
+
+struct bnxt_coal {
+	uint16_t			num_cmpl_aggr_int;
+	uint16_t			num_cmpl_dma_aggr;
+	uint16_t			num_cmpl_dma_aggr_during_int;
+	uint16_t			int_lat_tmr_max;
+	uint16_t			int_lat_tmr_min;
+	uint16_t			cmpl_aggr_dma_tmr;
+	uint16_t			cmpl_aggr_dma_tmr_during_int;
 };
 
 #define BNXT_HWRM_SHORT_REQ_LEN		sizeof(struct hwrm_short_input)
@@ -302,12 +332,14 @@ struct bnxt {
 	struct bnxt_led_info	leds[BNXT_MAX_LED];
 	uint8_t			num_leds;
 	struct bnxt_ptp_cfg     *ptp_cfg;
+	uint16_t		vf_resv_strategy;
 };
 
 int bnxt_link_update_op(struct rte_eth_dev *eth_dev, int wait_to_complete);
 int bnxt_rcv_msg_from_vf(struct bnxt *bp, uint16_t vf_id, void *msg);
 
 bool is_bnxt_supported(struct rte_eth_dev *dev);
+bool bnxt_stratus_device(struct bnxt *bp);
 extern const struct rte_flow_ops bnxt_flow_ops;
 
 extern int bnxt_logtype_driver;

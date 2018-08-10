@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2016-2017 Intel Corporation
+ * Copyright(c) 2016-2018 Intel Corporation
  */
 
 #include <rte_common.h>
@@ -79,18 +79,20 @@ kasumi_set_session_parameters(struct kasumi_session *sess,
 		break;
 	case KASUMI_OP_NOT_SUPPORTED:
 	default:
-		KASUMI_LOG_ERR("Unsupported operation chain order parameter");
+		KASUMI_LOG(ERR, "Unsupported operation chain order parameter");
 		return -ENOTSUP;
 	}
 
 	if (cipher_xform) {
 		/* Only KASUMI F8 supported */
-		if (cipher_xform->cipher.algo != RTE_CRYPTO_CIPHER_KASUMI_F8)
+		if (cipher_xform->cipher.algo != RTE_CRYPTO_CIPHER_KASUMI_F8) {
+			KASUMI_LOG(ERR, "Unsupported cipher algorithm ");
 			return -ENOTSUP;
+		}
 
 		sess->cipher_iv_offset = cipher_xform->cipher.iv.offset;
 		if (cipher_xform->cipher.iv.length != KASUMI_IV_LENGTH) {
-			KASUMI_LOG_ERR("Wrong IV length");
+			KASUMI_LOG(ERR, "Wrong IV length");
 			return -EINVAL;
 		}
 
@@ -101,11 +103,13 @@ kasumi_set_session_parameters(struct kasumi_session *sess,
 
 	if (auth_xform) {
 		/* Only KASUMI F9 supported */
-		if (auth_xform->auth.algo != RTE_CRYPTO_AUTH_KASUMI_F9)
+		if (auth_xform->auth.algo != RTE_CRYPTO_AUTH_KASUMI_F9) {
+			KASUMI_LOG(ERR, "Unsupported authentication");
 			return -ENOTSUP;
+		}
 
 		if (auth_xform->auth.digest_length != KASUMI_DIGEST_LENGTH) {
-			KASUMI_LOG_ERR("Wrong digest length");
+			KASUMI_LOG(ERR, "Wrong digest length");
 			return -EINVAL;
 		}
 
@@ -131,7 +135,7 @@ kasumi_get_session(struct kasumi_qp *qp, struct rte_crypto_op *op)
 	if (op->sess_type == RTE_CRYPTO_OP_WITH_SESSION) {
 		if (likely(op->sym->session != NULL))
 			sess = (struct kasumi_session *)
-					get_session_private_data(
+					get_sym_session_private_data(
 					op->sym->session,
 					cryptodev_driver_id);
 	} else {
@@ -153,8 +157,8 @@ kasumi_get_session(struct kasumi_qp *qp, struct rte_crypto_op *op)
 			sess = NULL;
 		}
 		op->sym->session = (struct rte_cryptodev_sym_session *)_sess;
-		set_session_private_data(op->sym->session, cryptodev_driver_id,
-			_sess_private_data);
+		set_sym_session_private_data(op->sym->session,
+				cryptodev_driver_id, _sess_private_data);
 	}
 
 	if (unlikely(sess == NULL))
@@ -213,7 +217,7 @@ process_kasumi_cipher_op_bit(struct rte_crypto_op *op,
 	src = rte_pktmbuf_mtod(op->sym->m_src, uint8_t *);
 	if (op->sym->m_dst == NULL) {
 		op->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
-		KASUMI_LOG_ERR("bit-level in-place not supported\n");
+		KASUMI_LOG(ERR, "bit-level in-place not supported");
 		return 0;
 	}
 	dst = rte_pktmbuf_mtod(op->sym->m_dst, uint8_t *);
@@ -244,7 +248,7 @@ process_kasumi_hash_op(struct kasumi_qp *qp, struct rte_crypto_op **ops,
 		/* Data must be byte aligned */
 		if ((ops[i]->sym->auth.data.offset % BYTE_LEN) != 0) {
 			ops[i]->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
-			KASUMI_LOG_ERR("offset");
+			KASUMI_LOG(ERR, "Invalid Offset");
 			break;
 		}
 
@@ -409,9 +413,9 @@ kasumi_pmd_enqueue_burst(void *queue_pair, struct rte_crypto_op **ops,
 				(curr_c_op->sym->m_dst != NULL &&
 				!rte_pktmbuf_is_contiguous(
 						curr_c_op->sym->m_dst))) {
-			KASUMI_LOG_ERR("PMD supports only contiguous mbufs, "
+			KASUMI_LOG(ERR, "PMD supports only contiguous mbufs, "
 				"op (%p) provides noncontiguous mbuf as "
-				"source/destination buffer.\n", curr_c_op);
+				"source/destination buffer.", curr_c_op);
 			curr_c_op->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
 			break;
 		}
@@ -531,7 +535,7 @@ cryptodev_kasumi_create(const char *name,
 
 	dev = rte_cryptodev_pmd_create(name, &vdev->device, init_params);
 	if (dev == NULL) {
-		KASUMI_LOG_ERR("failed to create cryptodev vdev");
+		KASUMI_LOG(ERR, "failed to create cryptodev vdev");
 		goto init_error;
 	}
 
@@ -555,11 +559,10 @@ cryptodev_kasumi_create(const char *name,
 	internals = dev->data->dev_private;
 
 	internals->max_nb_queue_pairs = init_params->max_nb_queue_pairs;
-	internals->max_nb_sessions = init_params->max_nb_sessions;
 
 	return 0;
 init_error:
-	KASUMI_LOG_ERR("driver %s: cryptodev_kasumi_create failed",
+	KASUMI_LOG(ERR, "driver %s: failed",
 			init_params->name);
 
 	cryptodev_kasumi_remove(vdev);
@@ -573,8 +576,7 @@ cryptodev_kasumi_probe(struct rte_vdev_device *vdev)
 		"",
 		sizeof(struct kasumi_private),
 		rte_socket_id(),
-		RTE_CRYPTODEV_PMD_DEFAULT_MAX_NB_QUEUE_PAIRS,
-		RTE_CRYPTODEV_PMD_DEFAULT_MAX_NB_SESSIONS
+		RTE_CRYPTODEV_PMD_DEFAULT_MAX_NB_QUEUE_PAIRS
 	};
 	const char *name;
 	const char *input_args;
@@ -617,7 +619,11 @@ RTE_PMD_REGISTER_VDEV(CRYPTODEV_NAME_KASUMI_PMD, cryptodev_kasumi_pmd_drv);
 RTE_PMD_REGISTER_ALIAS(CRYPTODEV_NAME_KASUMI_PMD, cryptodev_kasumi_pmd);
 RTE_PMD_REGISTER_PARAM_STRING(CRYPTODEV_NAME_KASUMI_PMD,
 	"max_nb_queue_pairs=<int> "
-	"max_nb_sessions=<int> "
 	"socket_id=<int>");
 RTE_PMD_REGISTER_CRYPTO_DRIVER(kasumi_crypto_drv,
 		cryptodev_kasumi_pmd_drv.driver, cryptodev_driver_id);
+
+RTE_INIT(kasumi_init_log)
+{
+	kasumi_logtype_driver = rte_log_register("pmd.crypto.kasumi");
+}

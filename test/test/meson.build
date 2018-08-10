@@ -22,6 +22,7 @@ test_sources = files('commands.c',
 	'test_cpuflags.c',
 	'test_crc.c',
 	'test_cryptodev.c',
+	'test_cryptodev_asym.c',
 	'test_cryptodev_blockcipher.c',
 	'test_cycles.c',
 	'test_debug.c',
@@ -130,6 +131,7 @@ test_names = [
 	'cryptodev_qat_autotest',
 	'cryptodev_aesni_mb_autotest',
 	'cryptodev_openssl_autotest',
+	'cryptodev_openssl_asym_autotest',
 	'cryptodev_aesni_gcm_autotest',
 	'cryptodev_null_autotest',
 	'cryptodev_sw_snow3g_autotest',
@@ -235,6 +237,11 @@ if dpdk_conf.has('RTE_LIBRTE_KNI')
 	test_deps += 'kni'
 endif
 
+cflags = machine_args
+if cc.has_argument('-Wno-format-truncation')
+    cflags += '-Wno-format-truncation'
+endif
+
 test_dep_objs = []
 compress_test_dep = dependency('zlib', required: false)
 if compress_test_dep.found()
@@ -260,7 +267,7 @@ if get_option('tests')
 		test_sources,
 		link_whole: link_libs,
 		dependencies: test_dep_objs,
-		c_args: [machine_args, '-DALLOW_EXPERIMENTAL_API'],
+		c_args: [cflags, '-DALLOW_EXPERIMENTAL_API'],
 		install_rpath: driver_install_path,
 		install: false)
 

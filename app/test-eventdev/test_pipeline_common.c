@@ -223,7 +223,6 @@ pipeline_ethdev_setup(struct evt_test *test, struct evt_options *opt)
 			.mq_mode = ETH_MQ_RX_RSS,
 			.max_rx_pkt_len = ETHER_MAX_LEN,
 			.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
-			.ignore_offload_bitfield = 1,
 		},
 		.rx_adv_conf = {
 			.rss_conf = {
@@ -241,16 +240,27 @@ pipeline_ethdev_setup(struct evt_test *test, struct evt_options *opt)
 
 	RTE_ETH_FOREACH_DEV(i) {
 		struct rte_eth_dev_info dev_info;
+		struct rte_eth_conf local_port_conf = port_conf;
 
-		memset(&dev_info, 0, sizeof(struct rte_eth_dev_info));
 		rte_eth_dev_info_get(i, &dev_info);
 		mt_state = !(dev_info.tx_offload_capa &
 				DEV_TX_OFFLOAD_MT_LOCKFREE);
 		rx_conf = dev_info.default_rxconf;
 		rx_conf.offloads = port_conf.rxmode.offloads;
 
+		local_port_conf.rx_adv_conf.rss_conf.rss_hf &=
+			dev_info.flow_type_rss_offloads;
+		if (local_port_conf.rx_adv_conf.rss_conf.rss_hf !=
+				port_conf.rx_adv_conf.rss_conf.rss_hf) {
+			evt_info("Port %u modified RSS hash function based on hardware support,"
+				"requested:%#"PRIx64" configured:%#"PRIx64"\n",
+				i,
+				port_conf.rx_adv_conf.rss_conf.rss_hf,
+				local_port_conf.rx_adv_conf.rss_conf.rss_hf);
+		}
+
 		if (rte_eth_dev_configure(i, nb_queues, nb_queues,
-					&port_conf)
+					&local_port_conf)
 				< 0) {
 			evt_err("Failed to configure eth port [%d]\n", i);
 			return -EINVAL;
@@ -467,7 +477,6 @@ pipeline_ethdev_destroy(struct evt_test *test, struct evt_options *opt)
 	RTE_ETH_FOREACH_DEV(i) {
 		rte_event_eth_rx_adapter_stop(i);
 		rte_eth_dev_stop(i);
-		rte_eth_dev_close(i);
 	}
 }
 

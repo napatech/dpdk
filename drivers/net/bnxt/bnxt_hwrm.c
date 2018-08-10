@@ -166,10 +166,26 @@ err_ret:
 	req.resp_addr = rte_cpu_to_le_64(bp->hwrm_cmd_resp_dma_addr); \
 } while (0)
 
+#define HWRM_CHECK_RESULT_SILENT() do {\
+	if (rc) { \
+		rte_spinlock_unlock(&bp->hwrm_lock); \
+		return rc; \
+	} \
+	if (resp->error_code) { \
+		rc = rte_le_to_cpu_16(resp->error_code); \
+		rte_spinlock_unlock(&bp->hwrm_lock); \
+		return rc; \
+	} \
+} while (0)
+
 #define HWRM_CHECK_RESULT() do {\
 	if (rc) { \
 		PMD_DRV_LOG(ERR, "failed rc:%d\n", rc); \
 		rte_spinlock_unlock(&bp->hwrm_lock); \
+		if (rc == HWRM_ERR_CODE_RESOURCE_ACCESS_DENIED) \
+			rc = -EACCES; \
+		else if (rc > 0) \
+			rc = -EINVAL; \
 		return rc; \
 	} \
 	if (resp->error_code) { \
@@ -188,6 +204,10 @@ err_ret:
 			PMD_DRV_LOG(ERR, "error %d\n", rc); \
 		} \
 		rte_spinlock_unlock(&bp->hwrm_lock); \
+		if (rc == HWRM_ERR_CODE_RESOURCE_ACCESS_DENIED) \
+			rc = -EACCES; \
+		else if (rc > 0) \
+			rc = -EINVAL; \
 		return rc; \
 	} \
 } while (0)
@@ -376,13 +396,13 @@ int bnxt_hwrm_set_l2_filter(struct bnxt *bp,
 		req.l2_ovlan = filter->l2_ovlan;
 	if (enables &
 	    HWRM_CFA_L2_FILTER_ALLOC_INPUT_ENABLES_L2_IVLAN)
-		req.l2_ovlan = filter->l2_ivlan;
+		req.l2_ivlan = filter->l2_ivlan;
 	if (enables &
 	    HWRM_CFA_L2_FILTER_ALLOC_INPUT_ENABLES_L2_OVLAN_MASK)
 		req.l2_ovlan_mask = filter->l2_ovlan_mask;
 	if (enables &
 	    HWRM_CFA_L2_FILTER_ALLOC_INPUT_ENABLES_L2_IVLAN_MASK)
-		req.l2_ovlan_mask = filter->l2_ivlan_mask;
+		req.l2_ivlan_mask = filter->l2_ivlan_mask;
 	if (enables & HWRM_CFA_L2_FILTER_ALLOC_INPUT_ENABLES_SRC_ID)
 		req.src_id = rte_cpu_to_le_32(filter->src_id);
 	if (enables & HWRM_CFA_L2_FILTER_ALLOC_INPUT_ENABLES_SRC_TYPE)
@@ -506,6 +526,7 @@ static int __bnxt_hwrm_func_qcaps(struct bnxt *bp)
 	if (BNXT_PF(bp)) {
 		bp->pf.port_id = resp->port_id;
 		bp->pf.first_vf_id = rte_le_to_cpu_16(resp->first_vf_id);
+		bp->pf.total_vfs = rte_le_to_cpu_16(resp->max_vfs);
 		new_max_vfs = bp->pdev->max_vfs;
 		if (new_max_vfs != bp->pf.max_vfs) {
 			if (bp->pf.vf_info)
@@ -657,9 +678,19 @@ int bnxt_hwrm_func_driver_register(struct bnxt *bp)
 	return rc;
 }
 
-int bnxt_hwrm_func_reserve_vf_resc(struct bnxt *bp)
+int bnxt_hwrm_check_vf_rings(struct bnxt *bp)
+{
+	if (!(BNXT_VF(bp) && (bp->flags & BNXT_FLAG_NEW_RM)))
+		return 0;
+
+	return bnxt_hwrm_func_reserve_vf_resc(bp, true);
+}
+
+int bnxt_hwrm_func_reserve_vf_resc(struct bnxt *bp, bool test)
 {
 	int rc;
+	uint32_t flags = 0;
+	uint32_t enables;
 	struct hwrm_func_vf_cfg_output *resp = bp->hwrm_cmd_resp_addr;
 	struct hwrm_func_vf_cfg_input req = {0};
 
@@ -670,7 +701,8 @@ int bnxt_hwrm_func_reserve_vf_resc(struct bnxt *bp)
 			HWRM_FUNC_VF_CFG_INPUT_ENABLES_NUM_TX_RINGS   |
 			HWRM_FUNC_VF_CFG_INPUT_ENABLES_NUM_STAT_CTXS  |
 			HWRM_FUNC_VF_CFG_INPUT_ENABLES_NUM_CMPL_RINGS |
-			HWRM_FUNC_VF_CFG_INPUT_ENABLES_NUM_HW_RING_GRPS);
+			HWRM_FUNC_VF_CFG_INPUT_ENABLES_NUM_HW_RING_GRPS |
+			HWRM_FUNC_VF_CFG_INPUT_ENABLES_NUM_VNICS);
 
 	req.num_tx_rings = rte_cpu_to_le_16(bp->tx_nr_rings);
 	req.num_rx_rings = rte_cpu_to_le_16(bp->rx_nr_rings *
@@ -679,10 +711,35 @@ int bnxt_hwrm_func_reserve_vf_resc(struct bnxt *bp)
 	req.num_cmpl_rings = rte_cpu_to_le_16(bp->rx_nr_rings +
 					      bp->tx_nr_rings);
 	req.num_hw_ring_grps = rte_cpu_to_le_16(bp->rx_nr_rings);
+	req.num_vnics = rte_cpu_to_le_16(bp->rx_nr_rings);
+	if (bp->vf_resv_strategy ==
+	    HWRM_FUNC_RESOURCE_QCAPS_OUTPUT_VF_RESV_STRATEGY_MINIMAL_STATIC) {
+		enables = HWRM_FUNC_VF_CFG_INPUT_ENABLES_NUM_VNICS |
+				HWRM_FUNC_VF_CFG_INPUT_ENABLES_NUM_L2_CTXS |
+				HWRM_FUNC_VF_CFG_INPUT_ENABLES_NUM_RSSCOS_CTXS;
+		req.enables |= rte_cpu_to_le_32(enables);
+		req.num_rsscos_ctxs = rte_cpu_to_le_16(BNXT_VF_RSV_NUM_RSS_CTX);
+		req.num_l2_ctxs = rte_cpu_to_le_16(BNXT_VF_RSV_NUM_L2_CTX);
+		req.num_vnics = rte_cpu_to_le_16(BNXT_VF_RSV_NUM_VNIC);
+	}
+
+	if (test)
+		flags = HWRM_FUNC_VF_CFG_INPUT_FLAGS_TX_ASSETS_TEST |
+			HWRM_FUNC_VF_CFG_INPUT_FLAGS_RX_ASSETS_TEST |
+			HWRM_FUNC_VF_CFG_INPUT_FLAGS_CMPL_ASSETS_TEST |
+			HWRM_FUNC_VF_CFG_INPUT_FLAGS_RING_GRP_ASSETS_TEST |
+			HWRM_FUNC_VF_CFG_INPUT_FLAGS_STAT_CTX_ASSETS_TEST |
+			HWRM_FUNC_VF_CFG_INPUT_FLAGS_VNIC_ASSETS_TEST;
+
+	req.flags = rte_cpu_to_le_32(flags);
 
 	rc = bnxt_hwrm_send_message(bp, &req, sizeof(req));
 
-	HWRM_CHECK_RESULT();
+	if (test)
+		HWRM_CHECK_RESULT_SILENT();
+	else
+		HWRM_CHECK_RESULT();
+
 	HWRM_UNLOCK();
 	return rc;
 }
@@ -710,6 +767,11 @@ int bnxt_hwrm_func_resc_qcaps(struct bnxt *bp)
 		bp->max_vnics = rte_le_to_cpu_16(resp->max_vnics);
 		bp->max_stat_ctx = rte_le_to_cpu_16(resp->max_stat_ctx);
 	}
+	bp->vf_resv_strategy = rte_le_to_cpu_16(resp->vf_reservation_strategy);
+	if (bp->vf_resv_strategy >
+	    HWRM_FUNC_RESOURCE_QCAPS_OUTPUT_VF_RESV_STRATEGY_MINIMAL_STATIC)
+		bp->vf_resv_strategy =
+		HWRM_FUNC_RESOURCE_QCAPS_OUTPUT_VF_RESERVATION_STRATEGY_MAXIMAL;
 
 	HWRM_UNLOCK();
 	return rc;
@@ -1265,8 +1327,9 @@ int bnxt_hwrm_vnic_alloc(struct bnxt *bp, struct bnxt_vnic_info *vnic)
 	/* map ring groups to this vnic */
 	PMD_DRV_LOG(DEBUG, "Alloc VNIC. Start %x, End %x\n",
 		vnic->start_grp_id, vnic->end_grp_id);
-	for (i = vnic->start_grp_id, j = 0; i <= vnic->end_grp_id; i++, j++)
+	for (i = vnic->start_grp_id, j = 0; i < vnic->end_grp_id; i++, j++)
 		vnic->fw_grp_ids[j] = bp->grp_info[i].fw_grp_id;
+
 	vnic->dflt_ring_grp = bp->grp_info[vnic->start_grp_id].fw_grp_id;
 	vnic->rss_rule = (uint16_t)HWRM_NA_SIGNATURE;
 	vnic->cos_rule = (uint16_t)HWRM_NA_SIGNATURE;
@@ -1559,6 +1622,11 @@ int bnxt_hwrm_vnic_plcmode_cfg(struct bnxt *bp,
 	struct hwrm_vnic_plcmodes_cfg_output *resp = bp->hwrm_cmd_resp_addr;
 	uint16_t size;
 
+	if (vnic->fw_vnic_id == INVALID_HW_RING_ID) {
+		PMD_DRV_LOG(DEBUG, "VNIC ID %x\n", vnic->fw_vnic_id);
+		return rc;
+	}
+
 	HWRM_PREP(req, VNIC_PLCMODES_CFG);
 
 	req.flags = rte_cpu_to_le_32(
@@ -1816,8 +1884,7 @@ int bnxt_free_all_hwrm_ring_grps(struct bnxt *bp)
 	return rc;
 }
 
-static void bnxt_free_cp_ring(struct bnxt *bp, struct bnxt_cp_ring_info *cpr,
-				unsigned int idx __rte_unused)
+static void bnxt_free_cp_ring(struct bnxt *bp, struct bnxt_cp_ring_info *cpr)
 {
 	struct bnxt_ring *cp_ring = cpr->cp_ring_struct;
 
@@ -1829,17 +1896,52 @@ static void bnxt_free_cp_ring(struct bnxt *bp, struct bnxt_cp_ring_info *cpr,
 	cpr->cp_raw_cons = 0;
 }
 
+void bnxt_free_hwrm_rx_ring(struct bnxt *bp, int queue_index)
+{
+	struct bnxt_rx_queue *rxq = bp->rx_queues[queue_index];
+	struct bnxt_rx_ring_info *rxr = rxq->rx_ring;
+	struct bnxt_ring *ring = rxr->rx_ring_struct;
+	struct bnxt_cp_ring_info *cpr = rxq->cp_ring;
+
+	if (ring->fw_ring_id != INVALID_HW_RING_ID) {
+		bnxt_hwrm_ring_free(bp, ring,
+				    HWRM_RING_FREE_INPUT_RING_TYPE_RX);
+		ring->fw_ring_id = INVALID_HW_RING_ID;
+		bp->grp_info[queue_index].rx_fw_ring_id = INVALID_HW_RING_ID;
+		memset(rxr->rx_desc_ring, 0,
+		       rxr->rx_ring_struct->ring_size *
+		       sizeof(*rxr->rx_desc_ring));
+		memset(rxr->rx_buf_ring, 0,
+		       rxr->rx_ring_struct->ring_size *
+		       sizeof(*rxr->rx_buf_ring));
+		rxr->rx_prod = 0;
+	}
+	ring = rxr->ag_ring_struct;
+	if (ring->fw_ring_id != INVALID_HW_RING_ID) {
+		bnxt_hwrm_ring_free(bp, ring,
+				    HWRM_RING_FREE_INPUT_RING_TYPE_RX);
+		ring->fw_ring_id = INVALID_HW_RING_ID;
+		memset(rxr->ag_buf_ring, 0,
+		       rxr->ag_ring_struct->ring_size *
+		       sizeof(*rxr->ag_buf_ring));
+		rxr->ag_prod = 0;
+		bp->grp_info[queue_index].ag_fw_ring_id = INVALID_HW_RING_ID;
+	}
+	if (cpr->cp_ring_struct->fw_ring_id != INVALID_HW_RING_ID)
+		bnxt_free_cp_ring(bp, cpr);
+
+	bp->grp_info[queue_index].cp_fw_ring_id = INVALID_HW_RING_ID;
+}
+
 int bnxt_free_all_hwrm_rings(struct bnxt *bp)
 {
 	unsigned int i;
-	int rc = 0;
 
 	for (i = 0; i < bp->tx_cp_nr_rings; i++) {
 		struct bnxt_tx_queue *txq = bp->tx_queues[i];
 		struct bnxt_tx_ring_info *txr = txq->tx_ring;
 		struct bnxt_ring *ring = txr->tx_ring_struct;
 		struct bnxt_cp_ring_info *cpr = txq->cp_ring;
-		unsigned int idx = bp->rx_cp_nr_rings + i;
 
 		if (ring->fw_ring_id != INVALID_HW_RING_ID) {
 			bnxt_hwrm_ring_free(bp, ring,
@@ -1855,59 +1957,15 @@ int bnxt_free_all_hwrm_rings(struct bnxt *bp)
 			txr->tx_cons = 0;
 		}
 		if (cpr->cp_ring_struct->fw_ring_id != INVALID_HW_RING_ID) {
-			bnxt_free_cp_ring(bp, cpr, idx);
+			bnxt_free_cp_ring(bp, cpr);
 			cpr->cp_ring_struct->fw_ring_id = INVALID_HW_RING_ID;
 		}
 	}
 
-	for (i = 0; i < bp->rx_cp_nr_rings; i++) {
-		struct bnxt_rx_queue *rxq = bp->rx_queues[i];
-		struct bnxt_rx_ring_info *rxr = rxq->rx_ring;
-		struct bnxt_ring *ring = rxr->rx_ring_struct;
-		struct bnxt_cp_ring_info *cpr = rxq->cp_ring;
+	for (i = 0; i < bp->rx_cp_nr_rings; i++)
+		bnxt_free_hwrm_rx_ring(bp, i);
 
-		if (ring->fw_ring_id != INVALID_HW_RING_ID) {
-			bnxt_hwrm_ring_free(bp, ring,
-					HWRM_RING_FREE_INPUT_RING_TYPE_RX);
-			ring->fw_ring_id = INVALID_HW_RING_ID;
-			bp->grp_info[i].rx_fw_ring_id = INVALID_HW_RING_ID;
-			memset(rxr->rx_desc_ring, 0,
-					rxr->rx_ring_struct->ring_size *
-					sizeof(*rxr->rx_desc_ring));
-			memset(rxr->rx_buf_ring, 0,
-					rxr->rx_ring_struct->ring_size *
-					sizeof(*rxr->rx_buf_ring));
-			rxr->rx_prod = 0;
-		}
-		ring = rxr->ag_ring_struct;
-		if (ring->fw_ring_id != INVALID_HW_RING_ID) {
-			bnxt_hwrm_ring_free(bp, ring,
-					    HWRM_RING_FREE_INPUT_RING_TYPE_RX);
-			ring->fw_ring_id = INVALID_HW_RING_ID;
-			memset(rxr->ag_buf_ring, 0,
-			       rxr->ag_ring_struct->ring_size *
-			       sizeof(*rxr->ag_buf_ring));
-			rxr->ag_prod = 0;
-			bp->grp_info[i].ag_fw_ring_id = INVALID_HW_RING_ID;
-		}
-		if (cpr->cp_ring_struct->fw_ring_id != INVALID_HW_RING_ID) {
-			bnxt_free_cp_ring(bp, cpr, i);
-			bp->grp_info[i].cp_fw_ring_id = INVALID_HW_RING_ID;
-			cpr->cp_ring_struct->fw_ring_id = INVALID_HW_RING_ID;
-		}
-	}
-
-	/* Default completion ring */
-	{
-		struct bnxt_cp_ring_info *cpr = bp->def_cp_ring;
-
-		if (cpr->cp_ring_struct->fw_ring_id != INVALID_HW_RING_ID) {
-			bnxt_free_cp_ring(bp, cpr, 0);
-			cpr->cp_ring_struct->fw_ring_id = INVALID_HW_RING_ID;
-		}
-	}
-
-	return rc;
+	return 0;
 }
 
 int bnxt_alloc_all_hwrm_ring_grps(struct bnxt *bp)
@@ -1970,6 +2028,7 @@ int bnxt_clear_hwrm_vnic_filters(struct bnxt *bp, struct bnxt_vnic_info *vnic)
 			rc = bnxt_hwrm_clear_ntuple_filter(bp, filter);
 		else
 			rc = bnxt_hwrm_clear_l2_filter(bp, filter);
+		STAILQ_REMOVE(&vnic->filter, filter, bnxt_filter_info, next);
 		//if (rc)
 			//break;
 	}
@@ -2057,6 +2116,8 @@ void bnxt_free_all_hwrm_resources(struct bnxt *bp)
 		bnxt_hwrm_vnic_tpa_cfg(bp, vnic, false);
 
 		bnxt_hwrm_vnic_free(bp, vnic);
+
+		rte_free(vnic->fw_grp_ids);
 	}
 	/* Ring resources */
 	bnxt_free_all_hwrm_rings(bp);
@@ -3151,7 +3212,9 @@ int bnxt_hwrm_port_clr_stats(struct bnxt *bp)
 	struct bnxt_pf_info *pf = &bp->pf;
 	int rc;
 
-	if (!(bp->flags & BNXT_FLAG_PORT_STATS))
+	/* Not allowed on NS2 device, NPAR, MultiHost, VF */
+	if (!(bp->flags & BNXT_FLAG_PORT_STATS) || BNXT_VF(bp) ||
+	    BNXT_NPAR(bp) || BNXT_MH(bp) || BNXT_TOTAL_VFS(bp))
 		return 0;
 
 	HWRM_PREP(req, PORT_CLR_STATS);
@@ -3298,13 +3361,12 @@ int bnxt_get_nvram_directory(struct bnxt *bp, uint32_t len, uint8_t *data)
 	req.host_dest_addr = rte_cpu_to_le_64(dma_handle);
 	rc = bnxt_hwrm_send_message(bp, &req, sizeof(req));
 
-	HWRM_CHECK_RESULT();
-	HWRM_UNLOCK();
-
 	if (rc == 0)
 		memcpy(data, buf, len > buflen ? buflen : len);
 
 	rte_free(buf);
+	HWRM_CHECK_RESULT();
+	HWRM_UNLOCK();
 
 	return rc;
 }
@@ -3336,12 +3398,13 @@ int bnxt_hwrm_get_nvram_item(struct bnxt *bp, uint32_t index,
 	req.offset = rte_cpu_to_le_32(offset);
 	req.len = rte_cpu_to_le_32(length);
 	rc = bnxt_hwrm_send_message(bp, &req, sizeof(req));
-	HWRM_CHECK_RESULT();
-	HWRM_UNLOCK();
 	if (rc == 0)
 		memcpy(data, buf, length);
 
 	rte_free(buf);
+	HWRM_CHECK_RESULT();
+	HWRM_UNLOCK();
+
 	return rc;
 }
 
@@ -3372,14 +3435,6 @@ int bnxt_hwrm_flash_nvram(struct bnxt *bp, uint16_t dir_type,
 	rte_iova_t dma_handle;
 	uint8_t *buf;
 
-	HWRM_PREP(req, NVM_WRITE);
-
-	req.dir_type = rte_cpu_to_le_16(dir_type);
-	req.dir_ordinal = rte_cpu_to_le_16(dir_ordinal);
-	req.dir_ext = rte_cpu_to_le_16(dir_ext);
-	req.dir_attr = rte_cpu_to_le_16(dir_attr);
-	req.dir_data_length = rte_cpu_to_le_32(data_len);
-
 	buf = rte_malloc("nvm_write", data_len, 0);
 	rte_mem_lock_page(buf);
 	if (!buf)
@@ -3392,14 +3447,22 @@ int bnxt_hwrm_flash_nvram(struct bnxt *bp, uint16_t dir_type,
 		return -ENOMEM;
 	}
 	memcpy(buf, data, data_len);
+
+	HWRM_PREP(req, NVM_WRITE);
+
+	req.dir_type = rte_cpu_to_le_16(dir_type);
+	req.dir_ordinal = rte_cpu_to_le_16(dir_ordinal);
+	req.dir_ext = rte_cpu_to_le_16(dir_ext);
+	req.dir_attr = rte_cpu_to_le_16(dir_attr);
+	req.dir_data_length = rte_cpu_to_le_32(data_len);
 	req.host_src_addr = rte_cpu_to_le_64(dma_handle);
 
 	rc = bnxt_hwrm_send_message(bp, &req, sizeof(req));
 
+	rte_free(buf);
 	HWRM_CHECK_RESULT();
 	HWRM_UNLOCK();
 
-	rte_free(buf);
 	return rc;
 }
 
@@ -3800,7 +3863,6 @@ int bnxt_hwrm_clear_ntuple_filter(struct bnxt *bp,
 	HWRM_UNLOCK();
 
 	filter->fw_ntuple_filter_id = UINT64_MAX;
-	filter->fw_l2_filter_id = UINT64_MAX;
 
 	return 0;
 }
@@ -3830,5 +3892,56 @@ int bnxt_vnic_rss_configure(struct bnxt *bp, struct bnxt_vnic_info *vnic)
 		}
 		return bnxt_hwrm_vnic_rss_cfg(bp, vnic);
 	}
+	return 0;
+}
+
+static void bnxt_hwrm_set_coal_params(struct bnxt_coal *hw_coal,
+	struct hwrm_ring_cmpl_ring_cfg_aggint_params_input *req)
+{
+	uint16_t flags;
+
+	req->num_cmpl_aggr_int = rte_cpu_to_le_16(hw_coal->num_cmpl_aggr_int);
+
+	/* This is a 6-bit value and must not be 0, or we'll get non stop IRQ */
+	req->num_cmpl_dma_aggr = rte_cpu_to_le_16(hw_coal->num_cmpl_dma_aggr);
+
+	/* This is a 6-bit value and must not be 0, or we'll get non stop IRQ */
+	req->num_cmpl_dma_aggr_during_int =
+		rte_cpu_to_le_16(hw_coal->num_cmpl_dma_aggr_during_int);
+
+	req->int_lat_tmr_max = rte_cpu_to_le_16(hw_coal->int_lat_tmr_max);
+
+	/* min timer set to 1/2 of interrupt timer */
+	req->int_lat_tmr_min = rte_cpu_to_le_16(hw_coal->int_lat_tmr_min);
+
+	/* buf timer set to 1/4 of interrupt timer */
+	req->cmpl_aggr_dma_tmr = rte_cpu_to_le_16(hw_coal->cmpl_aggr_dma_tmr);
+
+	req->cmpl_aggr_dma_tmr_during_int =
+		rte_cpu_to_le_16(hw_coal->cmpl_aggr_dma_tmr_during_int);
+
+	flags = HWRM_RING_CMPL_RING_CFG_AGGINT_PARAMS_INPUT_FLAGS_TIMER_RESET |
+		HWRM_RING_CMPL_RING_CFG_AGGINT_PARAMS_INPUT_FLAGS_RING_IDLE;
+	req->flags = rte_cpu_to_le_16(flags);
+}
+
+int bnxt_hwrm_set_ring_coal(struct bnxt *bp,
+			struct bnxt_coal *coal, uint16_t ring_id)
+{
+	struct hwrm_ring_cmpl_ring_cfg_aggint_params_input req = {0};
+	struct hwrm_ring_cmpl_ring_cfg_aggint_params_output *resp =
+						bp->hwrm_cmd_resp_addr;
+	int rc;
+
+	/* Set ring coalesce parameters only for Stratus 100G NIC */
+	if (!bnxt_stratus_device(bp))
+		return 0;
+
+	HWRM_PREP(req, RING_CMPL_RING_CFG_AGGINT_PARAMS);
+	bnxt_hwrm_set_coal_params(coal, &req);
+	req.ring_id = rte_cpu_to_le_16(ring_id);
+	rc = bnxt_hwrm_send_message(bp, &req, sizeof(req));
+	HWRM_CHECK_RESULT();
+	HWRM_UNLOCK();
 	return 0;
 }

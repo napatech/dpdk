@@ -43,9 +43,6 @@
 #define TX_HTHRESH 0
 #define TX_WTHRESH 0
 #define TX_RSBIT_THRESH 32
-#define TX_Q_FLAGS (ETH_TXQ_FLAGS_NOMULTSEGS | ETH_TXQ_FLAGS_NOVLANOFFL |\
-	ETH_TXQ_FLAGS_NOXSUMSCTP | ETH_TXQ_FLAGS_NOXSUMUDP | \
-	ETH_TXQ_FLAGS_NOXSUMTCP)
 
 #define MBUF_CACHE_SIZE (250)
 #define BURST_SIZE (32)
@@ -135,35 +132,11 @@ static uint16_t dst_port_1 = 2024;
 
 static uint16_t vlan_id = 0x100;
 
-struct rte_eth_rxmode rx_mode = {
-	.max_rx_pkt_len = ETHER_MAX_LEN, /**< Default maximum frame length. */
-	.split_hdr_size = 0,
-	.header_split   = 0, /**< Header Split disabled. */
-	.hw_ip_checksum = 0, /**< IP checksum offload disabled. */
-	.hw_vlan_filter = 1, /**< VLAN filtering enabled. */
-	.hw_vlan_strip  = 1, /**< VLAN strip enabled. */
-	.hw_vlan_extend = 0, /**< Extended VLAN disabled. */
-	.jumbo_frame    = 0, /**< Jumbo Frame Support disabled. */
-	.hw_strip_crc   = 1, /**< CRC stripping by hardware enabled. */
-};
-
-struct rte_fdir_conf fdir_conf = {
-	.mode = RTE_FDIR_MODE_NONE,
-	.pballoc = RTE_FDIR_PBALLOC_64K,
-	.status = RTE_FDIR_REPORT_STATUS,
-	.drop_queue = 127,
-};
-
 static struct rte_eth_conf default_pmd_conf = {
 	.rxmode = {
 		.mq_mode = ETH_MQ_RX_NONE,
-		.max_rx_pkt_len = ETHER_MAX_LEN,
 		.split_hdr_size = 0,
-		.header_split   = 0, /**< Header Split disabled */
-		.hw_ip_checksum = 0, /**< IP checksum offload enabled */
-		.hw_vlan_filter = 0, /**< VLAN filtering disabled */
-		.jumbo_frame    = 0, /**< Jumbo Frame Support disabled */
-		.hw_strip_crc   = 1, /**< CRC stripped by hardware */
+		.max_rx_pkt_len = ETHER_MAX_LEN,
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
@@ -189,8 +162,6 @@ static struct rte_eth_txconf tx_conf_default = {
 	},
 	.tx_free_thresh = TX_FREE_THRESH,
 	.tx_rs_thresh = TX_RSBIT_THRESH,
-	.txq_flags = TX_Q_FLAGS
-
 };
 
 static void free_virtualpmd_tx_queue(void);

@@ -1,9 +1,7 @@
-/*
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2016 - 2018 Cavium Inc.
  * All rights reserved.
  * www.cavium.com
- *
- * See LICENSE.qede_pmd for copyright and licensing details.
  */
 
 #include <rte_string_fns.h>
@@ -233,15 +231,19 @@ static const char *grc_timeout_attn_master_to_str(u8 master)
 
 static enum _ecore_status_t ecore_grc_attn_cb(struct ecore_hwfn *p_hwfn)
 {
+	enum _ecore_status_t rc = ECORE_SUCCESS;
 	u32 tmp, tmp2;
 
 	/* We've already cleared the timeout interrupt register, so we learn
-	 * of interrupts via the validity register
+	 * of interrupts via the validity register.
+	 * Any attention which is not for a timeout event is treated as fatal.
 	 */
 	tmp = ecore_rd(p_hwfn, p_hwfn->p_dpc_ptt,
 		       GRC_REG_TIMEOUT_ATTN_ACCESS_VALID);
-	if (!(tmp & ECORE_GRC_ATTENTION_VALID_BIT))
+	if (!(tmp & ECORE_GRC_ATTENTION_VALID_BIT)) {
+		rc = ECORE_INVAL;
 		goto out;
+	}
 
 	/* Read the GRC timeout information */
 	tmp = ecore_rd(p_hwfn, p_hwfn->p_dpc_ptt,
@@ -265,11 +267,11 @@ static enum _ecore_status_t ecore_grc_attn_cb(struct ecore_hwfn *p_hwfn)
 		  (tmp2 & ECORE_GRC_ATTENTION_VF_MASK) >>
 		  ECORE_GRC_ATTENTION_VF_SHIFT);
 
-out:
-	/* Regardles of anything else, clean the validity bit */
+	/* Clean the validity bit */
 	ecore_wr(p_hwfn, p_hwfn->p_dpc_ptt,
 		 GRC_REG_TIMEOUT_ATTN_ACCESS_VALID, 0);
-	return ECORE_SUCCESS;
+out:
+	return rc;
 }
 
 #define ECORE_PGLUE_ATTENTION_VALID (1 << 29)

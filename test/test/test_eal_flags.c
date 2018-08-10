@@ -221,30 +221,6 @@ get_number_of_sockets(void)
 }
 #endif
 
-static char*
-get_current_prefix(char * prefix, int size)
-{
-	char path[PATH_MAX] = {0};
-	char buf[PATH_MAX] = {0};
-
-	/* get file for config (fd is always 3) */
-	snprintf(path, sizeof(path), "/proc/self/fd/%d", 3);
-
-	/* return NULL on error */
-	if (readlink(path, buf, sizeof(buf)) == -1)
-		return NULL;
-
-	/* get the basename */
-	snprintf(buf, sizeof(buf), "%s", basename(buf));
-
-	/* copy string all the way from second char up to start of _config */
-	snprintf(prefix, size, "%.*s",
-			(int)(strnlen(buf, sizeof(buf)) - sizeof("_config")),
-			&buf[1]);
-
-	return prefix;
-}
-
 /*
  * Test that the app doesn't run with invalid whitelist option.
  * Final tests ensures it does run with valid options as sanity check (one
@@ -376,17 +352,17 @@ test_invalid_vdev_flag(void)
 #endif
 
 	/* Test with invalid vdev option */
-	const char *vdevinval[] = {prgname, prefix, "-n", "1",
+	const char *vdevinval[] = {prgname, prefix, no_huge, "-n", "1",
 				"-c", "1", vdev, "eth_dummy"};
 
 	/* Test with valid vdev option */
-	const char *vdevval1[] = {prgname, prefix, "-n", "1",
+	const char *vdevval1[] = {prgname, prefix, no_huge, "-n", "1",
 	"-c", "1", vdev, "net_ring0"};
 
-	const char *vdevval2[] = {prgname, prefix, "-n", "1",
+	const char *vdevval2[] = {prgname, prefix, no_huge, "-n", "1",
 	"-c", "1", vdev, "net_ring0,args=test"};
 
-	const char *vdevval3[] = {prgname, prefix, "-n", "1",
+	const char *vdevval3[] = {prgname, prefix, no_huge, "-n", "1",
 	"-c", "1", vdev, "net_ring0,nodeaction=r1:0:CREATE"};
 
 	if (launch_proc(vdevinval) == 0) {
@@ -697,16 +673,18 @@ test_invalid_n_flag(void)
 static int
 test_no_hpet_flag(void)
 {
-	char prefix[PATH_MAX], tmp[PATH_MAX];
+	char prefix[PATH_MAX] = "";
 
 #ifdef RTE_EXEC_ENV_BSDAPP
 	return 0;
-#endif
+#else
+	char tmp[PATH_MAX];
 	if (get_current_prefix(tmp, sizeof(tmp)) == NULL) {
 		printf("Error - unable to get current prefix!\n");
 		return -1;
 	}
 	snprintf(prefix, sizeof(prefix), "--file-prefix=%s", tmp);
+#endif
 
 	/* With --no-hpet */
 	const char *argv1[] = {prgname, prefix, mp_flag, no_hpet, "-c", "1", "-n", "2"};
@@ -849,13 +827,10 @@ test_misc_flags(void)
 	const char *argv4[] = {prgname, prefix, mp_flag, "-c", "1", "--syslog"};
 	/* With invalid --syslog */
 	const char *argv5[] = {prgname, prefix, mp_flag, "-c", "1", "--syslog", "error"};
-	/* With no-sh-conf */
+	/* With no-sh-conf, also use no-huge to ensure this test runs on BSD */
 	const char *argv6[] = {prgname, "-c", "1", "-n", "2", "-m", DEFAULT_MEM_SIZE,
-			no_shconf, nosh_prefix };
+			no_shconf, nosh_prefix, no_huge};
 
-#ifdef RTE_EXEC_ENV_BSDAPP
-	return 0;
-#endif
 	/* With --huge-dir */
 	const char *argv7[] = {prgname, "-c", "1", "-n", "2", "-m", DEFAULT_MEM_SIZE,
 			"--file-prefix=hugedir", "--huge-dir", hugepath};
@@ -889,6 +864,7 @@ test_misc_flags(void)
 	const char *argv15[] = {prgname, "--file-prefix=intr",
 			"-c", "1", "-n", "2", "--vfio-intr=invalid"};
 
+	/* run all tests also applicable to FreeBSD first */
 
 	if (launch_proc(argv0) == 0) {
 		printf("Error - process ran ok with invalid flag\n");
@@ -902,6 +878,16 @@ test_misc_flags(void)
 		printf("Error - process did not run ok with -v flag\n");
 		return -1;
 	}
+	if (launch_proc(argv6) != 0) {
+		printf("Error - process did not run ok with --no-shconf flag\n");
+		return -1;
+	}
+
+#ifdef RTE_EXEC_ENV_BSDAPP
+	/* no more tests to be done on FreeBSD */
+	return 0;
+#endif
+
 	if (launch_proc(argv3) != 0) {
 		printf("Error - process did not run ok with --syslog flag\n");
 		return -1;
@@ -914,13 +900,6 @@ test_misc_flags(void)
 		printf("Error - process run ok with invalid --syslog flag\n");
 		return -1;
 	}
-	if (launch_proc(argv6) != 0) {
-		printf("Error - process did not run ok with --no-shconf flag\n");
-		return -1;
-	}
-#ifdef RTE_EXEC_ENV_BSDAPP
-	return 0;
-#endif
 	if (launch_proc(argv7) != 0) {
 		printf("Error - process did not run ok with --huge-dir flag\n");
 		return -1;
@@ -977,9 +956,15 @@ test_file_prefix(void)
 	 * 6. run a primary process with memtest2 prefix
 	 * 7. check that only memtest2 hugefiles are present in the hugedir
 	 */
+	char prefix[PATH_MAX] = "";
 
 #ifdef RTE_EXEC_ENV_BSDAPP
 	return 0;
+#else
+	if (get_current_prefix(prefix, sizeof(prefix)) == NULL) {
+		printf("Error - unable to get current prefix!\n");
+		return -1;
+	}
 #endif
 
 	/* this should fail unless the test itself is run with "memtest" prefix */
@@ -993,12 +978,6 @@ test_file_prefix(void)
 	/* primary process with memtest2 */
 	const char *argv2[] = {prgname, "-c", "1", "-n", "2", "-m", DEFAULT_MEM_SIZE,
 				"--file-prefix=" memtest2 };
-
-	char prefix[32];
-	if (get_current_prefix(prefix, sizeof(prefix)) == NULL) {
-		printf("Error - unable to get current prefix!\n");
-		return -1;
-	}
 
 	/* check if files for current prefix are present */
 	if (process_hugefiles(prefix, HUGEPAGE_CHECK_EXISTS) != 1) {

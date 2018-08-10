@@ -1,9 +1,7 @@
-/*
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2016 - 2018 Cavium Inc.
  * All rights reserved.
  * www.cavium.com
- *
- * See LICENSE.qede_pmd for copyright and licensing details.
  */
 
 #include <rte_net.h>
@@ -192,9 +190,15 @@ static void qede_rx_queue_release_mbufs(struct qede_rx_queue *rxq)
 void qede_rx_queue_release(void *rx_queue)
 {
 	struct qede_rx_queue *rxq = rx_queue;
+	struct qede_dev *qdev = rxq->qdev;
+	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
+
+	PMD_INIT_FUNC_TRACE(edev);
 
 	if (rxq) {
 		qede_rx_queue_release_mbufs(rxq);
+		qdev->ops->common->chain_free(edev, &rxq->rx_bd_ring);
+		qdev->ops->common->chain_free(edev, &rxq->rx_comp_ring);
 		rte_free(rxq->sw_rx_ring);
 		rte_free(rxq);
 	}
@@ -350,9 +354,14 @@ static void qede_tx_queue_release_mbufs(struct qede_tx_queue *txq)
 void qede_tx_queue_release(void *tx_queue)
 {
 	struct qede_tx_queue *txq = tx_queue;
+	struct qede_dev *qdev = txq->qdev;
+	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
+
+	PMD_INIT_FUNC_TRACE(edev);
 
 	if (txq) {
 		qede_tx_queue_release_mbufs(txq);
+		qdev->ops->common->chain_free(edev, &txq->tx_pbl);
 		rte_free(txq->sw_tx_ring);
 		rte_free(txq);
 	}
@@ -441,8 +450,6 @@ void qede_dealloc_fp_resc(struct rte_eth_dev *eth_dev)
 	struct qede_dev *qdev = QEDE_INIT_QDEV(eth_dev);
 	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
 	struct qede_fastpath *fp;
-	struct qede_rx_queue *rxq;
-	struct qede_tx_queue *txq;
 	uint16_t sb_idx;
 	uint8_t i;
 
@@ -467,21 +474,13 @@ void qede_dealloc_fp_resc(struct rte_eth_dev *eth_dev)
 	for (i = 0; i < eth_dev->data->nb_rx_queues; i++) {
 		if (eth_dev->data->rx_queues[i]) {
 			qede_rx_queue_release(eth_dev->data->rx_queues[i]);
-			rxq = eth_dev->data->rx_queues[i];
-			qdev->ops->common->chain_free(edev,
-						      &rxq->rx_bd_ring);
-			qdev->ops->common->chain_free(edev,
-						      &rxq->rx_comp_ring);
 			eth_dev->data->rx_queues[i] = NULL;
 		}
 	}
 
 	for (i = 0; i < eth_dev->data->nb_tx_queues; i++) {
 		if (eth_dev->data->tx_queues[i]) {
-			txq = eth_dev->data->tx_queues[i];
 			qede_tx_queue_release(eth_dev->data->tx_queues[i]);
-			qdev->ops->common->chain_free(edev,
-						      &txq->tx_pbl);
 			eth_dev->data->tx_queues[i] = NULL;
 		}
 	}
@@ -1970,7 +1969,7 @@ qede_xmit_pkts(void *p_txq, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		}
 
 		/* Descriptor based VLAN insertion */
-		if (tx_ol_flags & (PKT_TX_VLAN_PKT | PKT_TX_QINQ_PKT)) {
+		if (tx_ol_flags & PKT_TX_VLAN_PKT) {
 			vlan = rte_cpu_to_le_16(mbuf->vlan_tci);
 			bd1_bd_flags_bf |=
 			    1 << ETH_TX_1ST_BD_FLAGS_VLAN_INSERTION_SHIFT;

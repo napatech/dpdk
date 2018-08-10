@@ -8,6 +8,7 @@ common_objs = []
 common_sources = files(
 	'eal_common_bus.c',
 	'eal_common_cpuflags.c',
+	'eal_common_class.c',
 	'eal_common_devargs.c',
 	'eal_common_dev.c',
 	'eal_common_errno.c',
@@ -25,6 +26,7 @@ common_sources = files(
 	'eal_common_tailqs.c',
 	'eal_common_thread.c',
 	'eal_common_timer.c',
+	'eal_common_uuid.c',
 	'malloc_elem.c',
 	'malloc_heap.c',
 	'malloc_mp.c',
@@ -46,6 +48,7 @@ common_headers = files(
 	'include/rte_branch_prediction.h',
 	'include/rte_bus.h',
 	'include/rte_bitmap.h',
+	'include/rte_class.h',
 	'include/rte_common.h',
 	'include/rte_debug.h',
 	'include/rte_devargs.h',
@@ -75,6 +78,7 @@ common_headers = files(
 	'include/rte_string_fns.h',
 	'include/rte_tailq.h',
 	'include/rte_time.h',
+	'include/rte_uuid.h',
 	'include/rte_version.h')
 
 # special case install the generic headers, since they go in a subdir

@@ -1,9 +1,7 @@
-/*
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2017 Cavium Inc.
  * All rights reserved.
  * www.cavium.com
- *
- * See LICENSE.qede_pmd for copyright and licensing details.
  */
 
 #include <rte_udp.h>
@@ -465,5 +463,8 @@ int qede_ntuple_filter_conf(struct rte_eth_dev *eth_dev,
 		udpv4_flow->src_port = ntuple->src_port;
 		udpv4_flow->dst_port = ntuple->dst_port;
 	}
+
+	fdir_entry.action.rx_queue = ntuple->queue;
+
 	return qede_config_cmn_fdir_filter(eth_dev, &fdir_entry, add);
 }

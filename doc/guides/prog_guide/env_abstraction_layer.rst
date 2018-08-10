@@ -147,6 +147,10 @@ notified about memory allocations above specified threshold (and have a chance
 to deny them), allocation validator callbacks are also available via
 ``rte_mem_alloc_validator_callback_register()`` function.
 
+A default validator callback is provided by EAL, which can be enabled with a
+``--socket-limit`` command-line option, for a simple way to limit maximum amount
+of memory that can be used by DPDK application.
+
 .. note::
 
     In multiprocess scenario, all related processes (i.e. primary process, and
@@ -445,13 +449,17 @@ Known Issues
     Bypassing this constraint may cause the 2nd pthread to spin until the 1st one is scheduled again.
     Moreover, if the 1st pthread is preempted by a context that has an higher priority, it may even cause a dead lock.
 
-  This does not mean it cannot be used, simply, there is a need to narrow down the situation when it is used by multi-pthread on the same core.
+  This means, use cases involving preemptible pthreads should consider using rte_ring carefully.
 
-  1. It CAN be used for any single-producer or single-consumer situation.
+  1. It CAN be used for preemptible single-producer and single-consumer use case.
 
-  2. It MAY be used by multi-producer/consumer pthread whose scheduling policy are all SCHED_OTHER(cfs). User SHOULD be aware of the performance penalty before using it.
+  2. It CAN be used for non-preemptible multi-producer and preemptible single-consumer use case.
 
-  3. It MUST not be used by multi-producer/consumer pthreads, whose scheduling policies are SCHED_FIFO or SCHED_RR.
+  3. It CAN be used for preemptible single-producer and non-preemptible multi-consumer use case.
+
+  4. It MAY be used by preemptible multi-producer and/or preemptible multi-consumer pthreads whose scheduling policy are all SCHED_OTHER(cfs), SCHED_IDLE or SCHED_BATCH. User SHOULD be aware of the performance penalty before using it.
+
+  5. It MUST not be used by multi-producer/consumer pthreads, whose scheduling policies are SCHED_FIFO or SCHED_RR.
 
 + rte_timer
 

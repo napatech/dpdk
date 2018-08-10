@@ -1,5 +1,5 @@
-/*-
- * Copyright (c) 2007-2013 Cavium Inc. All rights reserved.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2007-2013 Broadcom Corporation.
  *
  * Eric Davis        <edavis@broadcom.com>
  * David Christensen <davidch@broadcom.com>
@@ -9,8 +9,6 @@
  * Copyright (c) 2015-2018 Cavium Inc.
  * All rights reserved.
  * www.cavium.com
- *
- * See LICENSE.bnx2x_pmd for copyright and licensing details.
  */
 
 #ifndef BNX2X_STATS_H

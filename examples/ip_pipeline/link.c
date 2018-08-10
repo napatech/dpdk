@@ -36,22 +36,19 @@ link_find(const char *name)
 	return NULL;
 }
 
+struct link *
+link_next(struct link *link)
+{
+	return (link == NULL) ? TAILQ_FIRST(&link_list) : TAILQ_NEXT(link, node);
+}
+
 static struct rte_eth_conf port_conf_default = {
 	.link_speeds = 0,
 	.rxmode = {
 		.mq_mode = ETH_MQ_RX_NONE,
-
-		.header_split   = 0, /* Header split */
-		.hw_ip_checksum = 0, /* IP checksum offload */
-		.hw_vlan_filter = 0, /* VLAN filtering */
-		.hw_vlan_strip  = 0, /* VLAN strip */
-		.hw_vlan_extend = 0, /* Extended VLAN */
-		.jumbo_frame    = 0, /* Jumbo frame support */
-		.hw_strip_crc   = 1, /* CRC strip by HW */
-		.enable_scatter = 0, /* Scattered packets RX handler */
-
 		.max_rx_pkt_len = 9000, /* Jumbo frame max packet len */
 		.split_hdr_size = 0, /* Header split buffer size */
+		.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
 	},
 	.rx_adv_conf = {
 		.rss_conf = {
@@ -162,7 +159,8 @@ link_create(const char *name, struct link_params *params)
 	if (rss) {
 		port_conf.rxmode.mq_mode = ETH_MQ_RX_RSS;
 		port_conf.rx_adv_conf.rss_conf.rss_hf =
-			ETH_RSS_IPV4 | ETH_RSS_IPV6;
+			(ETH_RSS_IP | ETH_RSS_TCP | ETH_RSS_UDP) &
+			port_info.flow_type_rss_offloads;
 	}
 
 	cpu_id = (uint32_t) rte_eth_dev_socket_id(port_id);

@@ -143,7 +143,8 @@ aesni_gcm_pmd_info_get(struct rte_cryptodev *dev,
 		dev_info->capabilities = aesni_gcm_pmd_capabilities;
 
 		dev_info->max_nb_queue_pairs = internals->max_nb_queue_pairs;
-		dev_info->sym.max_nb_sessions = internals->max_nb_sessions;
+		/* No limit of number of sessions */
+		dev_info->sym.max_nb_sessions = 0;
 	}
 }
 
@@ -183,12 +184,11 @@ aesni_gcm_pmd_qp_create_processed_pkts_ring(struct aesni_gcm_qp *qp,
 	r = rte_ring_lookup(qp->name);
 	if (r) {
 		if (rte_ring_get_size(r) >= ring_size) {
-			GCM_LOG_INFO("Reusing existing ring %s for processed"
-					" packets", qp->name);
+			AESNI_GCM_LOG(INFO, "Reusing existing ring %s for processed"
+				" packets", qp->name);
 			return r;
 		}
-
-		GCM_LOG_ERR("Unable to reuse existing ring %s for processed"
+		AESNI_GCM_LOG(ERR, "Unable to reuse existing ring %s for processed"
 				" packets", qp->name);
 		return NULL;
 	}
@@ -242,22 +242,6 @@ qp_setup_cleanup:
 	return -1;
 }
 
-/** Start queue pair */
-static int
-aesni_gcm_pmd_qp_start(__rte_unused struct rte_cryptodev *dev,
-		__rte_unused uint16_t queue_pair_id)
-{
-	return -ENOTSUP;
-}
-
-/** Stop queue pair */
-static int
-aesni_gcm_pmd_qp_stop(__rte_unused struct rte_cryptodev *dev,
-		__rte_unused uint16_t queue_pair_id)
-{
-	return -ENOTSUP;
-}
-
 /** Return the number of allocated queue pairs */
 static uint32_t
 aesni_gcm_pmd_qp_count(struct rte_cryptodev *dev)
@@ -267,14 +251,14 @@ aesni_gcm_pmd_qp_count(struct rte_cryptodev *dev)
 
 /** Returns the size of the aesni gcm session structure */
 static unsigned
-aesni_gcm_pmd_session_get_size(struct rte_cryptodev *dev __rte_unused)
+aesni_gcm_pmd_sym_session_get_size(struct rte_cryptodev *dev __rte_unused)
 {
 	return sizeof(struct aesni_gcm_session);
 }
 
 /** Configure a aesni gcm session from a crypto xform chain */
 static int
-aesni_gcm_pmd_session_configure(struct rte_cryptodev *dev __rte_unused,
+aesni_gcm_pmd_sym_session_configure(struct rte_cryptodev *dev __rte_unused,
 		struct rte_crypto_sym_xform *xform,
 		struct rte_cryptodev_sym_session *sess,
 		struct rte_mempool *mempool)
@@ -284,26 +268,26 @@ aesni_gcm_pmd_session_configure(struct rte_cryptodev *dev __rte_unused,
 	struct aesni_gcm_private *internals = dev->data->dev_private;
 
 	if (unlikely(sess == NULL)) {
-		GCM_LOG_ERR("invalid session struct");
+		AESNI_GCM_LOG(ERR, "invalid session struct");
 		return -EINVAL;
 	}
 
 	if (rte_mempool_get(mempool, &sess_private_data)) {
-		CDEV_LOG_ERR(
-			"Couldn't get object from session mempool");
+		AESNI_GCM_LOG(ERR,
+				"Couldn't get object from session mempool");
 		return -ENOMEM;
 	}
 	ret = aesni_gcm_set_session_parameters(gcm_ops[internals->vector_mode],
 				sess_private_data, xform);
 	if (ret != 0) {
-		GCM_LOG_ERR("failed configure session parameters");
+		AESNI_GCM_LOG(ERR, "failed configure session parameters");
 
 		/* Return session to mempool */
 		rte_mempool_put(mempool, sess_private_data);
 		return ret;
 	}
 
-	set_session_private_data(sess, dev->driver_id,
+	set_sym_session_private_data(sess, dev->driver_id,
 			sess_private_data);
 
 	return 0;
@@ -311,17 +295,17 @@ aesni_gcm_pmd_session_configure(struct rte_cryptodev *dev __rte_unused,
 
 /** Clear the memory of session so it doesn't leave key material behind */
 static void
-aesni_gcm_pmd_session_clear(struct rte_cryptodev *dev,
+aesni_gcm_pmd_sym_session_clear(struct rte_cryptodev *dev,
 		struct rte_cryptodev_sym_session *sess)
 {
 	uint8_t index = dev->driver_id;
-	void *sess_priv = get_session_private_data(sess, index);
+	void *sess_priv = get_sym_session_private_data(sess, index);
 
 	/* Zero out the whole structure */
 	if (sess_priv) {
 		memset(sess_priv, 0, sizeof(struct aesni_gcm_session));
 		struct rte_mempool *sess_mp = rte_mempool_from_obj(sess_priv);
-		set_session_private_data(sess, index, NULL);
+		set_sym_session_private_data(sess, index, NULL);
 		rte_mempool_put(sess_mp, sess_priv);
 	}
 }
@@ -339,13 +323,11 @@ struct rte_cryptodev_ops aesni_gcm_pmd_ops = {
 
 		.queue_pair_setup	= aesni_gcm_pmd_qp_setup,
 		.queue_pair_release	= aesni_gcm_pmd_qp_release,
-		.queue_pair_start	= aesni_gcm_pmd_qp_start,
-		.queue_pair_stop	= aesni_gcm_pmd_qp_stop,
 		.queue_pair_count	= aesni_gcm_pmd_qp_count,
 
-		.session_get_size	= aesni_gcm_pmd_session_get_size,
-		.session_configure	= aesni_gcm_pmd_session_configure,
-		.session_clear		= aesni_gcm_pmd_session_clear
+		.sym_session_get_size	= aesni_gcm_pmd_sym_session_get_size,
+		.sym_session_configure	= aesni_gcm_pmd_sym_session_configure,
+		.sym_session_clear	= aesni_gcm_pmd_sym_session_clear
 };
 
 struct rte_cryptodev_ops *rte_aesni_gcm_pmd_ops = &aesni_gcm_pmd_ops;

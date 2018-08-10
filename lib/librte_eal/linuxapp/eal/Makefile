@@ -10,7 +10,7 @@ ARCH_DIR ?= $(RTE_ARCH)
 EXPORT_MAP := ../../rte_eal_version.map
 VPATH += $(RTE_SDK)/lib/librte_eal/common/arch/$(ARCH_DIR)
 
-LIBABIVER := 7
+LIBABIVER := 8
 
 VPATH += $(RTE_SDK)/lib/librte_eal/common
 
@@ -24,6 +24,7 @@ LDLIBS += -ldl
 LDLIBS += -lpthread
 LDLIBS += -lgcc_s
 LDLIBS += -lrt
+LDLIBS += -lrte_kvargs
 ifeq ($(CONFIG_RTE_EAL_NUMA_AWARE_HUGEPAGES),y)
 LDLIBS += -lnuma
 endif
@@ -60,12 +61,14 @@ SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_hypervisor.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_string_fns.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_hexdump.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_devargs.c
+SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_class.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_bus.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_dev.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_options.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_thread.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_proc.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_fbarray.c
+SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_uuid.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += rte_malloc.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += malloc_elem.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += malloc_heap.c

@@ -127,7 +127,6 @@ static struct rte_eth_conf port_conf = {
 		.mq_mode	= ETH_MQ_RX_RSS,
 		.max_rx_pkt_len = ETHER_MAX_LEN,
 		.split_hdr_size = 0,
-		.ignore_offload_bitfield = 1,
 		.offloads = (DEV_RX_OFFLOAD_CRC_STRIP |
 			     DEV_RX_OFFLOAD_CHECKSUM),
 	},
@@ -1926,6 +1925,18 @@ main(int argc, char **argv)
 		if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 			local_port_conf.txmode.offloads |=
 				DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+
+		local_port_conf.rx_adv_conf.rss_conf.rss_hf &=
+			dev_info.flow_type_rss_offloads;
+		if (local_port_conf.rx_adv_conf.rss_conf.rss_hf !=
+				port_conf.rx_adv_conf.rss_conf.rss_hf) {
+			printf("Port %u modified RSS hash function based on hardware support,"
+				"requested:%#"PRIx64" configured:%#"PRIx64"\n",
+				portid,
+				port_conf.rx_adv_conf.rss_conf.rss_hf,
+				local_port_conf.rx_adv_conf.rss_conf.rss_hf);
+		}
+
 		ret = rte_eth_dev_configure(portid, nb_rx_queue,
 					(uint16_t)n_tx_queue, &local_port_conf);
 		if (ret < 0)
@@ -1982,7 +1993,6 @@ main(int argc, char **argv)
 
 			rte_eth_dev_info_get(portid, &dev_info);
 			txconf = &dev_info.default_txconf;
-			txconf->txq_flags = ETH_TXQ_FLAGS_IGNORE;
 			txconf->offloads = local_port_conf.txmode.offloads;
 			ret = rte_eth_tx_queue_setup(portid, queueid, nb_txd,
 						     socketid, txconf);

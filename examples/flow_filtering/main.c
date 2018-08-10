@@ -121,7 +121,6 @@ init_port(void)
 	struct rte_eth_conf port_conf = {
 		.rxmode = {
 			.split_hdr_size = 0,
-			.ignore_offload_bitfield = 1,
 			.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
 		},
 		.txmode = {
@@ -132,6 +131,22 @@ init_port(void)
 				DEV_TX_OFFLOAD_TCP_CKSUM   |
 				DEV_TX_OFFLOAD_SCTP_CKSUM  |
 				DEV_TX_OFFLOAD_TCP_TSO,
+		},
+		/*
+		 * Initialize fdir_conf of rte_eth_conf.
+		 * Fdir is used in flow filtering for I40e,
+		 * so rte_flow rules involve some fdir
+		 * configurations. In long term it's better
+		 * that drivers don't require any fdir
+		 * configuration for rte_flow, but we need to
+		 * get this workaround so that sample app can
+		 * run on I40e.
+		 */
+		.fdir_conf = {
+			.mode = RTE_FDIR_MODE_PERFECT,
+			.pballoc = RTE_FDIR_PBALLOC_64K,
+			.status = RTE_FDIR_REPORT_STATUS,
+			.drop_queue = 127,
 		},
 	};
 	struct rte_eth_txconf txq_conf;

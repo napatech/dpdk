@@ -24,7 +24,7 @@ Network Interface Controller Drivers
     enic
     fm10k
     i40e
-    ifcvf
+    ifc
     igb
     ixgbe
     intel_vf
@@ -33,10 +33,12 @@ Network Interface Controller Drivers
     mlx4
     mlx5
     mvpp2
+    netvsc
     nfp
     octeontx
     qede
     sfc_efx
+    softnic
     szedata2
     tap
     thunderx

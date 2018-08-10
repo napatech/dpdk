@@ -328,6 +328,7 @@ rte_pmd_failsafe_probe(struct rte_vdev_device *vdev)
 		}
 		/* TODO: request info from primary to set up Rx and Tx */
 		eth_dev->dev_ops = &failsafe_ops;
+		eth_dev->device = &vdev->device;
 		rte_eth_dev_probing_finish(eth_dev);
 		return 0;
 	}
@@ -353,9 +354,7 @@ static struct rte_vdev_driver failsafe_drv = {
 RTE_PMD_REGISTER_VDEV(net_failsafe, failsafe_drv);
 RTE_PMD_REGISTER_PARAM_STRING(net_failsafe, PMD_FAILSAFE_PARAM_STRING);
 
-RTE_INIT(failsafe_init_log);
-static void
-failsafe_init_log(void)
+RTE_INIT(failsafe_init_log)
 {
 	failsafe_logtype = rte_log_register("pmd.net.failsafe");
 	if (failsafe_logtype >= 0)

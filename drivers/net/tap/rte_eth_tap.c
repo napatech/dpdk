@@ -17,6 +17,7 @@
 #include <rte_ip.h>
 #include <rte_string_fns.h>
 
+#include <assert.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -55,6 +56,12 @@
 #define ETH_TAP_CMP_MAC_FMT     "0123456789ABCDEFabcdef"
 #define ETH_TAP_MAC_ARG_FMT     ETH_TAP_MAC_FIXED "|" ETH_TAP_USR_MAC_FMT
 
+#define TAP_GSO_MBUFS_PER_CORE	128
+#define TAP_GSO_MBUF_SEG_SIZE	128
+#define TAP_GSO_MBUF_CACHE_SIZE	4
+#define TAP_GSO_MBUFS_NUM \
+	(TAP_GSO_MBUFS_PER_CORE * TAP_GSO_MBUF_CACHE_SIZE)
+
 static struct rte_vdev_driver pmd_tap_drv;
 static struct rte_vdev_driver pmd_tun_drv;
 
@@ -65,7 +72,7 @@ static const char *valid_arguments[] = {
 	NULL
 };
 
-static int tap_unit;
+static unsigned int tap_unit;
 static unsigned int tun_unit;
 
 static char tuntap_name[8];
@@ -412,12 +419,45 @@ tap_tx_offload_get_queue_capa(void)
 	return DEV_TX_OFFLOAD_MULTI_SEGS |
 	       DEV_TX_OFFLOAD_IPV4_CKSUM |
 	       DEV_TX_OFFLOAD_UDP_CKSUM |
-	       DEV_TX_OFFLOAD_TCP_CKSUM;
+	       DEV_TX_OFFLOAD_TCP_CKSUM |
+	       DEV_TX_OFFLOAD_TCP_TSO;
 }
 
+/* Finalize l4 checksum calculation */
 static void
-tap_tx_offload(char *packet, uint64_t ol_flags, unsigned int l2_len,
-	       unsigned int l3_len)
+tap_tx_l4_cksum(uint16_t *l4_cksum, uint16_t l4_phdr_cksum,
+		uint32_t l4_raw_cksum)
+{
+	if (l4_cksum) {
+		uint32_t cksum;
+
+		cksum = __rte_raw_cksum_reduce(l4_raw_cksum);
+		cksum += l4_phdr_cksum;
+
+		cksum = ((cksum & 0xffff0000) >> 16) + (cksum & 0xffff);
+		cksum = (~cksum) & 0xffff;
+		if (cksum == 0)
+			cksum = 0xffff;
+		*l4_cksum = cksum;
+	}
+}
+
+/* Accumaulate L4 raw checksums */
+static void
+tap_tx_l4_add_rcksum(char *l4_data, unsigned int l4_len, uint16_t *l4_cksum,
+			uint32_t *l4_raw_cksum)
+{
+	if (l4_cksum == NULL)
+		return;
+
+	*l4_raw_cksum = __rte_raw_cksum(l4_data, l4_len, *l4_raw_cksum);
+}
+
+/* L3 and L4 pseudo headers checksum offloads */
+static void
+tap_tx_l3_cksum(char *packet, uint64_t ol_flags, unsigned int l2_len,
+		unsigned int l3_len, unsigned int l4_len, uint16_t **l4_cksum,
+		uint16_t *l4_phdr_cksum, uint32_t *l4_raw_cksum)
 {
 	void *l3_hdr = packet + l2_len;
 
@@ -430,69 +470,50 @@ tap_tx_offload(char *packet, uint64_t ol_flags, unsigned int l2_len,
 		iph->hdr_checksum = (cksum == 0xffff) ? cksum : ~cksum;
 	}
 	if (ol_flags & PKT_TX_L4_MASK) {
-		uint16_t l4_len;
-		uint32_t cksum;
-		uint16_t *l4_cksum;
 		void *l4_hdr;
 
 		l4_hdr = packet + l2_len + l3_len;
 		if ((ol_flags & PKT_TX_L4_MASK) == PKT_TX_UDP_CKSUM)
-			l4_cksum = &((struct udp_hdr *)l4_hdr)->dgram_cksum;
+			*l4_cksum = &((struct udp_hdr *)l4_hdr)->dgram_cksum;
 		else if ((ol_flags & PKT_TX_L4_MASK) == PKT_TX_TCP_CKSUM)
-			l4_cksum = &((struct tcp_hdr *)l4_hdr)->cksum;
+			*l4_cksum = &((struct tcp_hdr *)l4_hdr)->cksum;
 		else
 			return;
-		*l4_cksum = 0;
-		if (ol_flags & PKT_TX_IPV4) {
-			struct ipv4_hdr *iph = l3_hdr;
-
-			l4_len = rte_be_to_cpu_16(iph->total_length) - l3_len;
-			cksum = rte_ipv4_phdr_cksum(l3_hdr, 0);
-		} else {
-			struct ipv6_hdr *ip6h = l3_hdr;
-
-			/* payload_len does not include ext headers */
-			l4_len = rte_be_to_cpu_16(ip6h->payload_len) -
-				l3_len + sizeof(struct ipv6_hdr);
-			cksum = rte_ipv6_phdr_cksum(l3_hdr, 0);
-		}
-		cksum += rte_raw_cksum(l4_hdr, l4_len);
-		cksum = ((cksum & 0xffff0000) >> 16) + (cksum & 0xffff);
-		cksum = (~cksum) & 0xffff;
-		if (cksum == 0)
-			cksum = 0xffff;
-		*l4_cksum = cksum;
+		**l4_cksum = 0;
+		if (ol_flags & PKT_TX_IPV4)
+			*l4_phdr_cksum = rte_ipv4_phdr_cksum(l3_hdr, 0);
+		else
+			*l4_phdr_cksum = rte_ipv6_phdr_cksum(l3_hdr, 0);
+		*l4_raw_cksum = __rte_raw_cksum(l4_hdr, l4_len, 0);
 	}
 }
 
-/* Callback to handle sending packets from the tap interface
- */
-static uint16_t
-pmd_tx_burst(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
+static inline void
+tap_write_mbufs(struct tx_queue *txq, uint16_t num_mbufs,
+			struct rte_mbuf **pmbufs,
+			uint16_t *num_packets, unsigned long *num_tx_bytes)
 {
-	struct tx_queue *txq = queue;
-	uint16_t num_tx = 0;
-	unsigned long num_tx_bytes = 0;
-	uint32_t max_size;
 	int i;
+	uint16_t l234_hlen;
 
-	if (unlikely(nb_pkts == 0))
-		return 0;
-
-	max_size = *txq->mtu + (ETHER_HDR_LEN + ETHER_CRC_LEN + 4);
-	for (i = 0; i < nb_pkts; i++) {
-		struct rte_mbuf *mbuf = bufs[num_tx];
-		struct iovec iovecs[mbuf->nb_segs + 1];
+	for (i = 0; i < num_mbufs; i++) {
+		struct rte_mbuf *mbuf = pmbufs[i];
+		struct iovec iovecs[mbuf->nb_segs + 2];
 		struct tun_pi pi = { .flags = 0, .proto = 0x00 };
 		struct rte_mbuf *seg = mbuf;
 		char m_copy[mbuf->data_len];
+		int proto;
 		int n;
 		int j;
+		int k; /* current index in iovecs for copying segments */
+		uint16_t seg_len; /* length of first segment */
+		uint16_t nb_segs;
+		uint16_t *l4_cksum; /* l4 checksum (pseudo header + payload) */
+		uint32_t l4_raw_cksum = 0; /* TCP/UDP payload raw checksum */
+		uint16_t l4_phdr_cksum = 0; /* TCP/UDP pseudo header checksum */
+		uint16_t is_cksum = 0; /* in case cksum should be offloaded */
 
-		/* stats.errs will be incremented */
-		if (rte_pktmbuf_pkt_len(mbuf) > max_size)
-			break;
-
+		l4_cksum = NULL;
 		if (txq->type == ETH_TUNTAP_TYPE_TUN) {
 			/*
 			 * TUN and TAP are created with IFF_NO_PI disabled.
@@ -505,44 +526,163 @@ pmd_tx_burst(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 			 * is 4 or 6, then protocol field is updated.
 			 */
 			char *buff_data = rte_pktmbuf_mtod(seg, void *);
-			j = (*buff_data & 0xf0);
-			pi.proto = (j == 0x40) ? rte_cpu_to_be_16(ETHER_TYPE_IPv4) :
-				(j == 0x60) ? rte_cpu_to_be_16(ETHER_TYPE_IPv6) : 0x00;
+			proto = (*buff_data & 0xf0);
+			pi.proto = (proto == 0x40) ?
+				rte_cpu_to_be_16(ETHER_TYPE_IPv4) :
+				((proto == 0x60) ?
+					rte_cpu_to_be_16(ETHER_TYPE_IPv6) :
+					0x00);
 		}
 
-		iovecs[0].iov_base = &pi;
-		iovecs[0].iov_len = sizeof(pi);
-		for (j = 1; j <= mbuf->nb_segs; j++) {
-			iovecs[j].iov_len = rte_pktmbuf_data_len(seg);
-			iovecs[j].iov_base =
-				rte_pktmbuf_mtod(seg, void *);
-			seg = seg->next;
-		}
+		k = 0;
+		iovecs[k].iov_base = &pi;
+		iovecs[k].iov_len = sizeof(pi);
+		k++;
+
+		nb_segs = mbuf->nb_segs;
 		if (txq->csum &&
 		    ((mbuf->ol_flags & (PKT_TX_IP_CKSUM | PKT_TX_IPV4) ||
 		     (mbuf->ol_flags & PKT_TX_L4_MASK) == PKT_TX_UDP_CKSUM ||
 		     (mbuf->ol_flags & PKT_TX_L4_MASK) == PKT_TX_TCP_CKSUM))) {
-			/* Support only packets with all data in the same seg */
-			if (mbuf->nb_segs > 1)
+			is_cksum = 1;
+
+			/* Support only packets with at least layer 4
+			 * header included in the first segment
+			 */
+			seg_len = rte_pktmbuf_data_len(mbuf);
+			l234_hlen = mbuf->l2_len + mbuf->l3_len + mbuf->l4_len;
+			if (seg_len < l234_hlen)
 				break;
-			/* To change checksums, work on a copy of data. */
+
+			/* To change checksums, work on a * copy of l2, l3
+			 * headers + l4 pseudo header
+			 */
 			rte_memcpy(m_copy, rte_pktmbuf_mtod(mbuf, void *),
-				   rte_pktmbuf_data_len(mbuf));
-			tap_tx_offload(m_copy, mbuf->ol_flags,
-				       mbuf->l2_len, mbuf->l3_len);
-			iovecs[1].iov_base = m_copy;
+					l234_hlen);
+			tap_tx_l3_cksum(m_copy, mbuf->ol_flags,
+				       mbuf->l2_len, mbuf->l3_len, mbuf->l4_len,
+				       &l4_cksum, &l4_phdr_cksum,
+				       &l4_raw_cksum);
+			iovecs[k].iov_base = m_copy;
+			iovecs[k].iov_len = l234_hlen;
+			k++;
+
+			/* Update next iovecs[] beyond l2, l3, l4 headers */
+			if (seg_len > l234_hlen) {
+				iovecs[k].iov_len = seg_len - l234_hlen;
+				iovecs[k].iov_base =
+					rte_pktmbuf_mtod(seg, char *) +
+						l234_hlen;
+				tap_tx_l4_add_rcksum(iovecs[k].iov_base,
+					iovecs[k].iov_len, l4_cksum,
+					&l4_raw_cksum);
+				k++;
+				nb_segs++;
+			}
+			seg = seg->next;
 		}
+
+		for (j = k; j <= nb_segs; j++) {
+			iovecs[j].iov_len = rte_pktmbuf_data_len(seg);
+			iovecs[j].iov_base = rte_pktmbuf_mtod(seg, void *);
+			if (is_cksum)
+				tap_tx_l4_add_rcksum(iovecs[j].iov_base,
+					iovecs[j].iov_len, l4_cksum,
+					&l4_raw_cksum);
+			seg = seg->next;
+		}
+
+		if (is_cksum)
+			tap_tx_l4_cksum(l4_cksum, l4_phdr_cksum, l4_raw_cksum);
+
 		/* copy the tx frame data */
-		n = writev(txq->fd, iovecs, mbuf->nb_segs + 1);
+		n = writev(txq->fd, iovecs, j);
 		if (n <= 0)
 			break;
+		(*num_packets)++;
+		(*num_tx_bytes) += rte_pktmbuf_pkt_len(mbuf);
+	}
+}
 
+/* Callback to handle sending packets from the tap interface
+ */
+static uint16_t
+pmd_tx_burst(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
+{
+	struct tx_queue *txq = queue;
+	uint16_t num_tx = 0;
+	uint16_t num_packets = 0;
+	unsigned long num_tx_bytes = 0;
+	uint32_t max_size;
+	int i;
+
+	if (unlikely(nb_pkts == 0))
+		return 0;
+
+	struct rte_mbuf *gso_mbufs[MAX_GSO_MBUFS];
+	max_size = *txq->mtu + (ETHER_HDR_LEN + ETHER_CRC_LEN + 4);
+	for (i = 0; i < nb_pkts; i++) {
+		struct rte_mbuf *mbuf_in = bufs[num_tx];
+		struct rte_mbuf **mbuf;
+		uint16_t num_mbufs = 0;
+		uint16_t tso_segsz = 0;
+		int ret;
+		uint16_t hdrs_len;
+		int j;
+		uint64_t tso;
+
+		tso = mbuf_in->ol_flags & PKT_TX_TCP_SEG;
+		if (tso) {
+			struct rte_gso_ctx *gso_ctx = &txq->gso_ctx;
+
+			assert(gso_ctx != NULL);
+
+			/* TCP segmentation implies TCP checksum offload */
+			mbuf_in->ol_flags |= PKT_TX_TCP_CKSUM;
+
+			/* gso size is calculated without ETHER_CRC_LEN */
+			hdrs_len = mbuf_in->l2_len + mbuf_in->l3_len +
+					mbuf_in->l4_len;
+			tso_segsz = mbuf_in->tso_segsz + hdrs_len;
+			if (unlikely(tso_segsz == hdrs_len) ||
+				tso_segsz > *txq->mtu) {
+				txq->stats.errs++;
+				break;
+			}
+			gso_ctx->gso_size = tso_segsz;
+			ret = rte_gso_segment(mbuf_in, /* packet to segment */
+				gso_ctx, /* gso control block */
+				(struct rte_mbuf **)&gso_mbufs, /* out mbufs */
+				RTE_DIM(gso_mbufs)); /* max tso mbufs */
+
+			/* ret contains the number of new created mbufs */
+			if (ret < 0)
+				break;
+
+			mbuf = gso_mbufs;
+			num_mbufs = ret;
+		} else {
+			/* stats.errs will be incremented */
+			if (rte_pktmbuf_pkt_len(mbuf_in) > max_size)
+				break;
+
+			/* ret 0 indicates no new mbufs were created */
+			ret = 0;
+			mbuf = &mbuf_in;
+			num_mbufs = 1;
+		}
+
+		tap_write_mbufs(txq, num_mbufs, mbuf,
+				&num_packets, &num_tx_bytes);
 		num_tx++;
-		num_tx_bytes += mbuf->pkt_len;
-		rte_pktmbuf_free(mbuf);
+		/* free original mbuf */
+		rte_pktmbuf_free(mbuf_in);
+		/* free tso mbufs */
+		for (j = 0; j < ret; j++)
+			rte_pktmbuf_free(mbuf[j]);
 	}
 
-	txq->stats.opackets += num_tx;
+	txq->stats.opackets += num_packets;
 	txq->stats.errs += nb_pkts - num_tx;
 	txq->stats.obytes += num_tx_bytes;
 
@@ -641,12 +781,22 @@ tap_link_set_up(struct rte_eth_dev *dev)
 static int
 tap_dev_start(struct rte_eth_dev *dev)
 {
-	int err;
+	int err, i;
 
 	err = tap_intr_handle_set(dev, 1);
 	if (err)
 		return err;
-	return tap_link_set_up(dev);
+
+	err = tap_link_set_up(dev);
+	if (err)
+		return err;
+
+	for (i = 0; i < dev->data->nb_tx_queues; i++)
+		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
+	for (i = 0; i < dev->data->nb_rx_queues; i++)
+		dev->data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
+
+	return err;
 }
 
 /* This function gets called when the current port gets stopped.
@@ -654,6 +804,13 @@ tap_dev_start(struct rte_eth_dev *dev)
 static void
 tap_dev_stop(struct rte_eth_dev *dev)
 {
+	int i;
+
+	for (i = 0; i < dev->data->nb_tx_queues; i++)
+		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
+	for (i = 0; i < dev->data->nb_rx_queues; i++)
+		dev->data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
+
 	tap_intr_handle_set(dev, 0);
 	tap_link_set_down(dev);
 }
@@ -1004,31 +1161,75 @@ tap_mac_set(struct rte_eth_dev *dev, struct ether_addr *mac_addr)
 }
 
 static int
+tap_gso_ctx_setup(struct rte_gso_ctx *gso_ctx, struct rte_eth_dev *dev)
+{
+	uint32_t gso_types;
+	char pool_name[64];
+
+	/*
+	 * Create private mbuf pool with TAP_GSO_MBUF_SEG_SIZE bytes
+	 * size per mbuf use this pool for both direct and indirect mbufs
+	 */
+
+	struct rte_mempool *mp;      /* Mempool for GSO packets */
+
+	/* initialize GSO context */
+	gso_types = DEV_TX_OFFLOAD_TCP_TSO;
+	snprintf(pool_name, sizeof(pool_name), "mp_%s", dev->device->name);
+	mp = rte_mempool_lookup((const char *)pool_name);
+	if (!mp) {
+		mp = rte_pktmbuf_pool_create(pool_name, TAP_GSO_MBUFS_NUM,
+			TAP_GSO_MBUF_CACHE_SIZE, 0,
+			RTE_PKTMBUF_HEADROOM + TAP_GSO_MBUF_SEG_SIZE,
+			SOCKET_ID_ANY);
+		if (!mp) {
+			struct pmd_internals *pmd = dev->data->dev_private;
+			RTE_LOG(DEBUG, PMD, "%s: failed to create mbuf pool for device %s\n",
+				pmd->name, dev->device->name);
+			return -1;
+		}
+	}
+
+	gso_ctx->direct_pool = mp;
+	gso_ctx->indirect_pool = mp;
+	gso_ctx->gso_types = gso_types;
+	gso_ctx->gso_size = 0; /* gso_size is set in tx_burst() per packet */
+	gso_ctx->flag = 0;
+
+	return 0;
+}
+
+static int
 tap_setup_queue(struct rte_eth_dev *dev,
 		struct pmd_internals *internals,
 		uint16_t qid,
 		int is_rx)
 {
+	int ret;
 	int *fd;
 	int *other_fd;
 	const char *dir;
 	struct pmd_internals *pmd = dev->data->dev_private;
 	struct rx_queue *rx = &internals->rxq[qid];
 	struct tx_queue *tx = &internals->txq[qid];
+	struct rte_gso_ctx *gso_ctx;
 
 	if (is_rx) {
 		fd = &rx->fd;
 		other_fd = &tx->fd;
 		dir = "rx";
+		gso_ctx = NULL;
 	} else {
 		fd = &tx->fd;
 		other_fd = &rx->fd;
 		dir = "tx";
+		gso_ctx = &tx->gso_ctx;
 	}
 	if (*fd != -1) {
 		/* fd for this queue already exists */
 		TAP_LOG(DEBUG, "%s: fd %d for %s queue qid %d exists",
 			pmd->name, *fd, dir, qid);
+		gso_ctx = NULL;
 	} else if (*other_fd != -1) {
 		/* Only other_fd exists. dup it */
 		*fd = dup(*other_fd);
@@ -1053,6 +1254,11 @@ tap_setup_queue(struct rte_eth_dev *dev,
 
 	tx->mtu = &dev->data->mtu;
 	rx->rxmode = &dev->data->dev_conf.rxmode;
+	if (gso_ctx) {
+		ret = tap_gso_ctx_setup(gso_ctx, dev);
+		if (ret)
+			return -1;
+	}
 
 	tx->type = pmd->type;
 
@@ -1342,6 +1548,37 @@ tap_rss_hash_update(struct rte_eth_dev *dev,
 	return 0;
 }
 
+static int
+tap_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
+{
+	dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
+
+	return 0;
+}
+
+static int
+tap_tx_queue_start(struct rte_eth_dev *dev, uint16_t tx_queue_id)
+{
+	dev->data->tx_queue_state[tx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
+
+	return 0;
+}
+
+static int
+tap_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
+{
+	dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
+
+	return 0;
+}
+
+static int
+tap_tx_queue_stop(struct rte_eth_dev *dev, uint16_t tx_queue_id)
+{
+	dev->data->tx_queue_state[tx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
+
+	return 0;
+}
 static const struct eth_dev_ops ops = {
 	.dev_start              = tap_dev_start,
 	.dev_stop               = tap_dev_stop,
@@ -1350,6 +1587,10 @@ static const struct eth_dev_ops ops = {
 	.dev_infos_get          = tap_dev_info,
 	.rx_queue_setup         = tap_rx_queue_setup,
 	.tx_queue_setup         = tap_tx_queue_setup,
+	.rx_queue_start         = tap_rx_queue_start,
+	.tx_queue_start         = tap_tx_queue_start,
+	.rx_queue_stop          = tap_rx_queue_stop,
+	.tx_queue_stop          = tap_tx_queue_stop,
 	.rx_queue_release       = tap_rx_queue_release,
 	.tx_queue_release       = tap_tx_queue_release,
 	.flow_ctrl_get          = tap_flow_ctrl_get,
@@ -1690,6 +1931,8 @@ rte_pmd_tun_probe(struct rte_vdev_device *dev)
 			return -1;
 		}
 		eth_dev->dev_ops = &ops;
+		eth_dev->device = &dev->device;
+		rte_eth_dev_probing_finish(eth_dev);
 		return 0;
 	}
 
@@ -1759,12 +2002,13 @@ rte_pmd_tap_probe(struct rte_vdev_device *dev)
 		}
 		/* TODO: request info from primary to set up Rx and Tx */
 		eth_dev->dev_ops = &ops;
+		eth_dev->device = &dev->device;
 		rte_eth_dev_probing_finish(eth_dev);
 		return 0;
 	}
 
 	speed = ETH_SPEED_NUM_10G;
-	snprintf(tap_name, sizeof(tap_name), "%s%d",
+	snprintf(tap_name, sizeof(tap_name), "%s%u",
 		 DEFAULT_TAP_NAME, tap_unit++);
 	memset(remote_iface, 0, RTE_ETH_NAME_MAX_LEN);
 
@@ -1888,9 +2132,7 @@ RTE_PMD_REGISTER_PARAM_STRING(net_tap,
 			      ETH_TAP_REMOTE_ARG "=<string>");
 int tap_logtype;
 
-RTE_INIT(tap_init_log);
-static void
-tap_init_log(void)
+RTE_INIT(tap_init_log)
 {
 	tap_logtype = rte_log_register("pmd.net.tap");
 	if (tap_logtype >= 0)

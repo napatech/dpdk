@@ -258,6 +258,116 @@ int bnxt_alloc_rings(struct bnxt *bp, uint16_t qidx,
 	return 0;
 }
 
+static void bnxt_init_dflt_coal(struct bnxt_coal *coal)
+{
+	/* Tick values in micro seconds.
+	 * 1 coal_buf x bufs_per_record = 1 completion record.
+	 */
+	coal->num_cmpl_aggr_int = BNXT_NUM_CMPL_AGGR_INT;
+	/* This is a 6-bit value and must not be 0, or we'll get non stop IRQ */
+	coal->num_cmpl_dma_aggr = BNXT_NUM_CMPL_DMA_AGGR;
+	/* This is a 6-bit value and must not be 0, or we'll get non stop IRQ */
+	coal->num_cmpl_dma_aggr_during_int = BNXT_NUM_CMPL_DMA_AGGR_DURING_INT;
+	coal->int_lat_tmr_max = BNXT_INT_LAT_TMR_MAX;
+	/* min timer set to 1/2 of interrupt timer */
+	coal->int_lat_tmr_min = BNXT_INT_LAT_TMR_MIN;
+	/* buf timer set to 1/4 of interrupt timer */
+	coal->cmpl_aggr_dma_tmr = BNXT_CMPL_AGGR_DMA_TMR;
+	coal->cmpl_aggr_dma_tmr_during_int = BNXT_CMPL_AGGR_DMA_TMR_DURING_INT;
+}
+
+int bnxt_alloc_hwrm_rx_ring(struct bnxt *bp, int queue_index)
+{
+	struct rte_pci_device *pci_dev = bp->pdev;
+	struct bnxt_rx_queue *rxq = bp->rx_queues[queue_index];
+	struct bnxt_cp_ring_info *cpr = rxq->cp_ring;
+	struct bnxt_ring *cp_ring = cpr->cp_ring_struct;
+	struct bnxt_rx_ring_info *rxr = rxq->rx_ring;
+	struct bnxt_ring *ring = rxr->rx_ring_struct;
+	unsigned int map_idx = queue_index + bp->rx_cp_nr_rings;
+	int rc = 0;
+
+	bp->grp_info[queue_index].fw_stats_ctx = cpr->hw_stats_ctx_id;
+
+	/* Rx cmpl */
+	rc = bnxt_hwrm_ring_alloc(bp, cp_ring,
+				  HWRM_RING_ALLOC_INPUT_RING_TYPE_L2_CMPL,
+				  queue_index, HWRM_NA_SIGNATURE,
+				  HWRM_NA_SIGNATURE);
+	if (rc)
+		goto err_out;
+
+	cpr->cp_doorbell = (char *)pci_dev->mem_resource[2].addr +
+		queue_index * BNXT_DB_SIZE;
+	bp->grp_info[queue_index].cp_fw_ring_id = cp_ring->fw_ring_id;
+	B_CP_DIS_DB(cpr, cpr->cp_raw_cons);
+
+	if (!queue_index) {
+		/*
+		 * In order to save completion resources, use the first
+		 * completion ring from PF or VF as the default completion ring
+		 * for async event and HWRM forward response handling.
+		 */
+		bp->def_cp_ring = cpr;
+		rc = bnxt_hwrm_set_async_event_cr(bp);
+		if (rc)
+			goto err_out;
+	}
+	/* Rx ring */
+	rc = bnxt_hwrm_ring_alloc(bp, ring, HWRM_RING_ALLOC_INPUT_RING_TYPE_RX,
+				  queue_index, cpr->hw_stats_ctx_id,
+				  cp_ring->fw_ring_id);
+	if (rc)
+		goto err_out;
+
+	rxr->rx_prod = 0;
+	rxr->rx_doorbell = (char *)pci_dev->mem_resource[2].addr +
+		queue_index * BNXT_DB_SIZE;
+	bp->grp_info[queue_index].rx_fw_ring_id = ring->fw_ring_id;
+	B_RX_DB(rxr->rx_doorbell, rxr->rx_prod);
+
+	ring = rxr->ag_ring_struct;
+	/* Agg ring */
+	if (!ring)
+		PMD_DRV_LOG(ERR, "Alloc AGG Ring is NULL!\n");
+
+	rc = bnxt_hwrm_ring_alloc(bp, ring, HWRM_RING_ALLOC_INPUT_RING_TYPE_RX,
+				  map_idx, HWRM_NA_SIGNATURE,
+				  cp_ring->fw_ring_id);
+	if (rc)
+		goto err_out;
+
+	PMD_DRV_LOG(DEBUG, "Alloc AGG Done!\n");
+	rxr->ag_prod = 0;
+	rxr->ag_doorbell = (char *)pci_dev->mem_resource[2].addr +
+		map_idx * BNXT_DB_SIZE;
+	bp->grp_info[queue_index].ag_fw_ring_id = ring->fw_ring_id;
+	B_RX_DB(rxr->ag_doorbell, rxr->ag_prod);
+
+	rxq->rx_buf_use_size = BNXT_MAX_MTU + ETHER_HDR_LEN +
+		ETHER_CRC_LEN + (2 * VLAN_TAG_SIZE);
+
+	if (bp->eth_dev->data->rx_queue_state[queue_index] ==
+	    RTE_ETH_QUEUE_STATE_STARTED) {
+		if (bnxt_init_one_rx_ring(rxq)) {
+			RTE_LOG(ERR, PMD,
+				"bnxt_init_one_rx_ring failed!\n");
+			bnxt_rx_queue_release_op(rxq);
+			rc = -ENOMEM;
+			goto err_out;
+		}
+		B_RX_DB(rxr->rx_doorbell, rxr->rx_prod);
+		B_RX_DB(rxr->ag_doorbell, rxr->ag_prod);
+	}
+	rxq->index = queue_index;
+	PMD_DRV_LOG(INFO,
+		    "queue %d, rx_deferred_start %d, state %d!\n",
+		    queue_index, rxq->rx_deferred_start,
+		    bp->eth_dev->data->rx_queue_state[queue_index]);
+
+err_out:
+	return rc;
+}
 /* ring_grp usage:
  * [0] = default completion ring
  * [1 -> +rx_cp_nr_rings] = rx_cp, rx rings
@@ -265,8 +375,11 @@ int bnxt_alloc_rings(struct bnxt *bp, uint16_t qidx,
  */
 int bnxt_alloc_hwrm_rings(struct bnxt *bp)
 {
+	struct bnxt_coal coal;
 	unsigned int i;
 	int rc = 0;
+
+	bnxt_init_dflt_coal(&coal);
 
 	for (i = 0; i < bp->rx_cp_nr_rings; i++) {
 		struct bnxt_rx_queue *rxq = bp->rx_queues[i];
@@ -291,6 +404,7 @@ int bnxt_alloc_hwrm_rings(struct bnxt *bp)
 		cpr->cp_doorbell = (char *)bp->doorbell_base + i * 0x80;
 		bp->grp_info[i].cp_fw_ring_id = cp_ring->fw_ring_id;
 		B_CP_DIS_DB(cpr, cpr->cp_raw_cons);
+		bnxt_hwrm_set_ring_coal(bp, &coal, cp_ring->fw_ring_id);
 
 		if (!i) {
 			/*
@@ -379,6 +493,7 @@ int bnxt_alloc_hwrm_rings(struct bnxt *bp)
 
 		txr->tx_doorbell = (char *)bp->doorbell_base + idx * 0x80;
 		txq->index = idx;
+		bnxt_hwrm_set_ring_coal(bp, &coal, cp_ring->fw_ring_id);
 	}
 
 err_out:

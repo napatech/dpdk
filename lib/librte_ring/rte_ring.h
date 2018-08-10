@@ -26,8 +26,9 @@
  * - Bulk dequeue.
  * - Bulk enqueue.
  *
- * Note: the ring implementation is not preemptable. A lcore must not
- * be interrupted by another task that uses the same ring.
+ * Note: the ring implementation is not preemptible. Refer to Programmer's
+ * guide/Environment Abstraction Layer/Multiple pthread/Known Issues/rte_ring
+ * for more information.
  *
  */
 
@@ -382,7 +383,7 @@ __rte_ring_do_dequeue(struct rte_ring *r, void **obj_table,
 	uint32_t cons_head, cons_next;
 	uint32_t entries;
 
-	n = __rte_ring_move_cons_head(r, is_sc, n, behavior,
+	n = __rte_ring_move_cons_head(r, (int)is_sc, n, behavior,
 			&cons_head, &cons_next, &entries);
 	if (n == 0)
 		goto end;

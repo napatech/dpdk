@@ -12,7 +12,12 @@
 static const struct rte_compressdev_capabilities isal_pmd_capabilities[] = {
 	{
 		.algo = RTE_COMP_ALGO_DEFLATE,
-		.comp_feature_flags =	RTE_COMP_FF_SHAREABLE_PRIV_XFORM,
+		.comp_feature_flags =	RTE_COMP_FF_OOP_SGL_IN_SGL_OUT |
+					RTE_COMP_FF_OOP_SGL_IN_LB_OUT |
+					RTE_COMP_FF_OOP_LB_IN_SGL_OUT |
+					RTE_COMP_FF_SHAREABLE_PRIV_XFORM |
+					RTE_COMP_FF_HUFFMAN_FIXED |
+					RTE_COMP_FF_HUFFMAN_DYNAMIC,
 		.window_size = {
 			.min = 15,
 			.max = 15,
@@ -165,8 +170,11 @@ isal_comp_pmd_qp_release(struct rte_compressdev *dev, uint16_t qp_id)
 	if (qp->state != NULL)
 		rte_free(qp->state);
 
-	if (dev->data->queue_pairs[qp_id] != NULL)
-		rte_free(dev->data->queue_pairs[qp_id]);
+	if (qp->processed_pkts != NULL)
+		rte_ring_free(qp->processed_pkts);
+
+	rte_free(qp);
+	dev->data->queue_pairs[qp_id] = NULL;
 
 	return 0;
 }

@@ -56,7 +56,6 @@ static struct rte_eth_conf port_conf = {
 		.mq_mode	= ETH_MQ_RX_RSS,
 		.max_rx_pkt_len = ETHER_MAX_LEN,
 		.split_hdr_size = 0,
-		.ignore_offload_bitfield = 1,
 		.offloads = (DEV_RX_OFFLOAD_CHECKSUM |
 			     DEV_RX_OFFLOAD_CRC_STRIP),
 	},
@@ -333,6 +332,17 @@ main(int argc, char **argv)
 	rte_eth_dev_info_get(port_rx, &dev_info);
 	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 		conf.txmode.offloads |= DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+
+	conf.rx_adv_conf.rss_conf.rss_hf &= dev_info.flow_type_rss_offloads;
+	if (conf.rx_adv_conf.rss_conf.rss_hf !=
+			port_conf.rx_adv_conf.rss_conf.rss_hf) {
+		printf("Port %u modified RSS hash function based on hardware support,"
+			"requested:%#"PRIx64" configured:%#"PRIx64"\n",
+			port_rx,
+			port_conf.rx_adv_conf.rss_conf.rss_hf,
+			conf.rx_adv_conf.rss_conf.rss_hf);
+	}
+
 	ret = rte_eth_dev_configure(port_rx, 1, 1, &conf);
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "Port %d configuration error (%d)\n", port_rx, ret);
@@ -351,7 +361,6 @@ main(int argc, char **argv)
 		rte_exit(EXIT_FAILURE, "Port %d RX queue setup error (%d)\n", port_rx, ret);
 
 	txq_conf = dev_info.default_txconf;
-	txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
 	txq_conf.offloads = conf.txmode.offloads;
 	ret = rte_eth_tx_queue_setup(port_rx, NIC_TX_QUEUE, nb_txd,
 				rte_eth_dev_socket_id(port_rx),
@@ -363,6 +372,17 @@ main(int argc, char **argv)
 	rte_eth_dev_info_get(port_tx, &dev_info);
 	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 		conf.txmode.offloads |= DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+
+	conf.rx_adv_conf.rss_conf.rss_hf &= dev_info.flow_type_rss_offloads;
+	if (conf.rx_adv_conf.rss_conf.rss_hf !=
+			port_conf.rx_adv_conf.rss_conf.rss_hf) {
+		printf("Port %u modified RSS hash function based on hardware support,"
+			"requested:%#"PRIx64" configured:%#"PRIx64"\n",
+			port_tx,
+			port_conf.rx_adv_conf.rss_conf.rss_hf,
+			conf.rx_adv_conf.rss_conf.rss_hf);
+	}
+
 	ret = rte_eth_dev_configure(port_tx, 1, 1, &conf);
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "Port %d configuration error (%d)\n", port_tx, ret);
@@ -383,7 +403,6 @@ main(int argc, char **argv)
 		rte_exit(EXIT_FAILURE, "Port %d RX queue setup error (%d)\n", port_tx, ret);
 
 	txq_conf = dev_info.default_txconf;
-	txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
 	txq_conf.offloads = conf.txmode.offloads;
 	ret = rte_eth_tx_queue_setup(port_tx, NIC_TX_QUEUE, nb_txd,
 				rte_eth_dev_socket_id(port_tx),

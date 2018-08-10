@@ -646,6 +646,9 @@ ifcvf_get_vdpa_features(int did, uint64_t *features)
 
 #define VDPA_SUPPORTED_PROTOCOL_FEATURES \
 		(1ULL << VHOST_USER_PROTOCOL_F_REPLY_ACK | \
+		 1ULL << VHOST_USER_PROTOCOL_F_SLAVE_REQ | \
+		 1ULL << VHOST_USER_PROTOCOL_F_SLAVE_SEND_FD | \
+		 1ULL << VHOST_USER_PROTOCOL_F_HOST_NOTIFIER | \
 		 1ULL << VHOST_USER_PROTOCOL_F_LOG_SHMFD)
 static int
 ifcvf_get_protocol_features(int did __rte_unused, uint64_t *features)
@@ -782,9 +785,7 @@ RTE_PMD_REGISTER_PCI(net_ifcvf, rte_ifcvf_vdpa);
 RTE_PMD_REGISTER_PCI_TABLE(net_ifcvf, pci_id_ifcvf_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_ifcvf, "* vfio-pci");
 
-RTE_INIT(ifcvf_vdpa_init_log);
-static void
-ifcvf_vdpa_init_log(void)
+RTE_INIT(ifcvf_vdpa_init_log)
 {
 	ifcvf_vdpa_logtype = rte_log_register("pmd.net.ifcvf_vdpa");
 	if (ifcvf_vdpa_logtype >= 0)

@@ -1,9 +1,7 @@
-/*
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2016 - 2018 Cavium Inc.
  * All rights reserved.
  * www.cavium.com
- *
- * See LICENSE.qede_pmd for copyright and licensing details.
  */
 
 
@@ -147,7 +145,6 @@
 				   PKT_TX_TCP_SEG)
 
 #define QEDE_TX_OFFLOAD_MASK (QEDE_TX_CSUM_OFFLOAD_MASK | \
-			      PKT_TX_QINQ_PKT           | \
 			      PKT_TX_VLAN_PKT		| \
 			      PKT_TX_TUNNEL_VXLAN	| \
 			      PKT_TX_TUNNEL_GENEVE	| \

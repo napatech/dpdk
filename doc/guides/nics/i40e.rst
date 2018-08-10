@@ -58,6 +58,36 @@ Prerequisites
 - Upgrade the NVM/FW version following the `Intel® Ethernet NVM Update Tool Quick Usage Guide for Linux
   <https://www-ssl.intel.com/content/www/us/en/embedded/products/networking/nvm-update-tool-quick-linux-usage-guide.html>`_ and `Intel® Ethernet NVM Update Tool: Quick Usage Guide for EFI <https://www.intel.com/content/www/us/en/embedded/products/networking/nvm-update-tool-quick-efi-usage-guide.html>`_ if needed.
 
+Recommended Matching List
+-------------------------
+
+It is highly recommended to upgrade the i40e kernel driver and firmware to
+avoid the compatibility issues with i40e PMD. Here is the suggested matching
+list which has been tested and verified. The detailed information can refer
+to chapter Tested Platforms/Tested NICs in release notes.
+
+   +--------------+-----------------------+------------------+
+   | DPDK version | Kernel driver version | Firmware version |
+   +==============+=======================+==================+
+   |    18.05     |         2.4.6         |       6.01       |
+   +--------------+-----------------------+------------------+
+   |    18.02     |         2.4.3         |       6.01       |
+   +--------------+-----------------------+------------------+
+   |    17.11     |         2.1.26        |       6.01       |
+   +--------------+-----------------------+------------------+
+   |    17.08     |         2.0.19        |       6.01       |
+   +--------------+-----------------------+------------------+
+   |    17.05     |         1.5.23        |       5.05       |
+   +--------------+-----------------------+------------------+
+   |    17.02     |         1.5.23        |       5.05       |
+   +--------------+-----------------------+------------------+
+   |    16.11     |         1.5.23        |       5.05       |
+   +--------------+-----------------------+------------------+
+   |    16.07     |         1.4.25        |       5.04       |
+   +--------------+-----------------------+------------------+
+   |    16.04     |         1.4.25        |       5.02       |
+   +--------------+-----------------------+------------------+
+
 Pre-Installation Configuration
 ------------------------------
 
@@ -95,11 +125,6 @@ Please note that enabling debugging options may affect system performance.
 - ``CONFIG_RTE_LIBRTE_I40E_QUEUE_NUM_PER_VM`` (default ``4``)
 
   Number of queues reserved for each VMDQ Pool.
-
-- ``CONFIG_RTE_LIBRTE_I40E_ITR_INTERVAL`` (default ``-1``)
-
-  Interrupt Throttling interval.
-
 
 Runtime Config Options
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -594,16 +619,6 @@ Use 16 Bytes RX Descriptor Size
 
 As i40e PMD supports both 16 and 32 bytes RX descriptor sizes, and 16 bytes size can provide helps to high performance of small packets.
 Configuration of ``CONFIG_RTE_LIBRTE_I40E_16BYTE_RX_DESC`` in config files can be changed to use 16 bytes size RX descriptors.
-
-High Performance and per Packet Latency Tradeoff
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Due to the hardware design, the interrupt signal inside NIC is needed for per
-packet descriptor write-back. The minimum interval of interrupts could be set
-at compile time by ``CONFIG_RTE_LIBRTE_I40E_ITR_INTERVAL`` in configuration files.
-Though there is a default configuration, the interval could be tuned by the
-users with that configuration item depends on what the user cares about more,
-performance or per packet latency.
 
 Example of getting best performance with l3fwd example
 ------------------------------------------------------

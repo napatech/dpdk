@@ -182,6 +182,11 @@ linear_dir(struct dt_dir *d)
 				DPAA_BUS_LOG(DEBUG, "Duplicate lphandle in %s",
 					     d->node.node.full_name);
 			d->lphandle = f;
+		} else if (!strcmp(f->node.node.name, "phandle")) {
+			if (d->lphandle)
+				DPAA_BUS_LOG(DEBUG, "Duplicate lphandle in %s",
+					     d->node.node.full_name);
+			d->lphandle = f;
 		} else if (!strcmp(f->node.node.name, "#address-cells")) {
 			if (d->a_cells)
 				DPAA_BUS_LOG(DEBUG, "Duplicate a_cells in %s",
@@ -540,4 +545,43 @@ of_device_is_compatible(const struct device_node *dev_node,
 	if (d->compatible && check_compatible(d->compatible, compatible))
 		return true;
 	return false;
+}
+
+static const void *of_get_mac_addr(const struct device_node *np,
+		const char *name)
+{
+	return of_get_property(np, name, NULL);
+}
+
+/**
+ * Search the device tree for the best MAC address to use.  'mac-address' is
+ * checked first, because that is supposed to contain to "most recent" MAC
+ * address. If that isn't set, then 'local-mac-address' is checked next,
+ * because that is the default address.  If that isn't set, then the obsolete
+ * 'address' is checked, just in case we're using an old device tree.
+ *
+ * Note that the 'address' property is supposed to contain a virtual address of
+ * the register set, but some DTS files have redefined that property to be the
+ * MAC address.
+ *
+ * All-zero MAC addresses are rejected, because those could be properties that
+ * exist in the device tree, but were not set by U-Boot.  For example, the
+ * DTS could define 'mac-address' and 'local-mac-address', with zero MAC
+ * addresses.  Some older U-Boots only initialized 'local-mac-address'.  In
+ * this case, the real MAC is in 'local-mac-address', and 'mac-address' exists
+ * but is all zeros.
+ */
+const void *of_get_mac_address(const struct device_node *np)
+{
+	const void *addr;
+
+	addr = of_get_mac_addr(np, "mac-address");
+	if (addr)
+		return addr;
+
+	addr = of_get_mac_addr(np, "local-mac-address");
+	if (addr)
+		return addr;
+
+	return of_get_mac_addr(np, "address");
 }

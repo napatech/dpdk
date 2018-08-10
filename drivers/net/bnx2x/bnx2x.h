@@ -1,4 +1,4 @@
-/*-
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2007-2013 Broadcom Corporation.
  *
  * Eric Davis        <edavis@broadcom.com>
@@ -9,8 +9,6 @@
  * Copyright (c) 2015-2018 Cavium Inc.
  * All rights reserved.
  * www.cavium.com
- *
- * See LICENSE.bnx2x_pmd for copyright and licensing details.
  */
 
 #ifndef __BNX2X_H__
@@ -1930,6 +1928,7 @@ void bnx2x_link_status_update(struct bnx2x_softc *sc);
 int bnx2x_complete_sp(struct bnx2x_softc *sc);
 int bnx2x_set_storm_rx_mode(struct bnx2x_softc *sc);
 void bnx2x_periodic_callout(struct bnx2x_softc *sc);
+void bnx2x_periodic_stop(void *param);
 
 int bnx2x_vf_get_resources(struct bnx2x_softc *sc, uint8_t tx_count, uint8_t rx_count);
 void bnx2x_vf_close(struct bnx2x_softc *sc);

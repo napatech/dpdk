@@ -64,6 +64,7 @@
 #define RTE_EVENT_MAX_DEVS 16
 #define RTE_EVENT_MAX_QUEUES_PER_DEV 64
 #define RTE_EVENT_TIMER_ADAPTER_NUM_MAX 32
+#define RTE_EVENT_ETH_INTR_RING_SIZE 1024
 #define RTE_EVENT_CRYPTO_ADAPTER_MAX_INSTANCE 32
 
 /* rawdev defines */
@@ -85,22 +86,13 @@
 
 /****** driver defines ********/
 
-/*
- * Number of sessions to create in the session memory pool
- * on a single instance of crypto HW device.
- */
 /* QuickAssist device */
-#define RTE_QAT_PMD_MAX_NB_SESSIONS 2048
+/* Max. number of QuickAssist devices which can be attached */
+#define RTE_PMD_QAT_MAX_PCI_DEVICES 48
+#define RTE_PMD_QAT_COMP_SGL_MAX_SEGMENTS 16
 
 /* virtio crypto defines */
-#define RTE_VIRTIO_CRYPTO_PMD_MAX_NB_SESSIONS 1024
 #define RTE_MAX_VIRTIO_CRYPTO 32
-
-/* DPAA2_SEC */
-#define RTE_DPAA2_SEC_PMD_MAX_NB_SESSIONS 2048
-
-/* DPAA_SEC */
-#define RTE_DPAA_SEC_PMD_MAX_NB_SESSIONS 2048
 
 /* DPAA SEC max cryptodev devices*/
 #define RTE_LIBRTE_DPAA_MAX_CRYPTODEV	4

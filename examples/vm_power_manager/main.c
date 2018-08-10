@@ -29,6 +29,8 @@
 #include "channel_monitor.h"
 #include "power_manager.h"
 #include "vm_power_cli.h"
+#include "oob_monitor.h"
+#include "parse.h"
 #include <rte_pmd_ixgbe.h>
 #include <rte_pmd_i40e.h>
 #include <rte_pmd_bnxt.h>
@@ -47,7 +49,6 @@ static volatile bool force_quit;
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {
 		.max_rx_pkt_len = ETHER_MAX_LEN,
-		.ignore_offload_bitfield = 1,
 	},
 };
 
@@ -83,7 +84,6 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 	}
 
 	txq_conf = dev_info.default_txconf;
-	txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
 	txq_conf.offloads = port_conf.txmode.offloads;
 	/* Allocate and set up 1 TX queue per Ethernet port. */
 	for (q = 0; q < tx_rings; q++) {
@@ -135,18 +135,25 @@ parse_portmask(const char *portmask)
 static int
 parse_args(int argc, char **argv)
 {
-	int opt, ret;
+	int opt, ret, cnt, i;
 	char **argvopt;
+	uint16_t *oob_enable;
 	int option_index;
 	char *prgname = argv[0];
+	struct core_info *ci;
+	float branch_ratio;
 	static struct option lgopts[] = {
 		{ "mac-updating", no_argument, 0, 1},
 		{ "no-mac-updating", no_argument, 0, 0},
+		{ "core-list", optional_argument, 0, 'l'},
+		{ "port-list", optional_argument, 0, 'p'},
+		{ "branch-ratio", optional_argument, 0, 'b'},
 		{NULL, 0, 0, 0}
 	};
 	argvopt = argv;
+	ci = get_core_info();
 
-	while ((opt = getopt_long(argc, argvopt, "p:q:T:",
+	while ((opt = getopt_long(argc, argvopt, "l:p:q:T:b:",
 				  lgopts, &option_index)) != EOF) {
 
 		switch (opt) {
@@ -157,6 +164,39 @@ parse_args(int argc, char **argv)
 				printf("invalid portmask\n");
 				return -1;
 			}
+			break;
+		case 'l':
+			oob_enable = malloc(ci->core_count * sizeof(uint16_t));
+			if (oob_enable == NULL) {
+				printf("Error - Unable to allocate memory\n");
+				return -1;
+			}
+			cnt = parse_set(optarg, oob_enable, ci->core_count);
+			if (cnt < 0) {
+				printf("Invalid core-list - [%s]\n",
+						optarg);
+				break;
+			}
+			for (i = 0; i < ci->core_count; i++) {
+				if (oob_enable[i]) {
+					printf("***Using core %d\n", i);
+					ci->cd[i].oob_enabled = 1;
+					ci->cd[i].global_enabled_cpus = 1;
+				}
+			}
+			free(oob_enable);
+			break;
+		case 'b':
+			branch_ratio = 0.0;
+			if (strlen(optarg))
+				branch_ratio = atof(optarg);
+			if (branch_ratio <= 0.0) {
+				printf("invalid branch ratio specified\n");
+				return -1;
+			}
+			ci->branch_ratio_threshold = branch_ratio;
+			printf("***Setting branch ratio to %f\n",
+					branch_ratio);
 			break;
 		/* long options */
 		case 0:
@@ -243,6 +283,17 @@ run_monitor(__attribute__((unused)) void *arg)
 	return 0;
 }
 
+static int
+run_core_monitor(__attribute__((unused)) void *arg)
+{
+	if (branch_monitor_init() < 0) {
+		printf("Unable to initialize core monitor\n");
+		return -1;
+	}
+	run_branch_monitor();
+	return 0;
+}
+
 static void
 sig_handler(int signo)
 {
@@ -261,7 +312,14 @@ main(int argc, char **argv)
 	unsigned int nb_ports;
 	struct rte_mempool *mbuf_pool;
 	uint16_t portid;
+	struct core_info *ci;
 
+
+	ret = core_info_init();
+	if (ret < 0)
+		rte_panic("Cannot allocate core info\n");
+
+	ci = get_core_info();
 
 	ret = rte_eal_init(argc, argv);
 	if (ret < 0)
@@ -280,51 +338,56 @@ main(int argc, char **argv)
 
 	nb_ports = rte_eth_dev_count_avail();
 
-	mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
-		MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+	if (nb_ports > 0) {
+		mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL",
+				NUM_MBUFS * nb_ports, MBUF_CACHE_SIZE, 0,
+				RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
 
-	if (mbuf_pool == NULL)
-		rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
+		if (mbuf_pool == NULL)
+			rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
 
-	/* Initialize ports. */
-	RTE_ETH_FOREACH_DEV(portid) {
-		struct ether_addr eth;
-		int w, j;
-		int ret;
+		/* Initialize ports. */
+		RTE_ETH_FOREACH_DEV(portid) {
+			struct ether_addr eth;
+			int w, j;
+			int ret;
 
-		if ((enabled_port_mask & (1 << portid)) == 0)
-			continue;
+			if ((enabled_port_mask & (1 << portid)) == 0)
+				continue;
 
-		eth.addr_bytes[0] = 0xe0;
-		eth.addr_bytes[1] = 0xe0;
-		eth.addr_bytes[2] = 0xe0;
-		eth.addr_bytes[3] = 0xe0;
-		eth.addr_bytes[4] = portid + 0xf0;
+			eth.addr_bytes[0] = 0xe0;
+			eth.addr_bytes[1] = 0xe0;
+			eth.addr_bytes[2] = 0xe0;
+			eth.addr_bytes[3] = 0xe0;
+			eth.addr_bytes[4] = portid + 0xf0;
 
-		if (port_init(portid, mbuf_pool) != 0)
-			rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu8 "\n",
+			if (port_init(portid, mbuf_pool) != 0)
+				rte_exit(EXIT_FAILURE,
+					"Cannot init port %"PRIu8 "\n",
 					portid);
 
-		for (w = 0; w < MAX_VFS; w++) {
-			eth.addr_bytes[5] = w + 0xf0;
+			for (w = 0; w < MAX_VFS; w++) {
+				eth.addr_bytes[5] = w + 0xf0;
 
-			ret = rte_pmd_ixgbe_set_vf_mac_addr(portid,
-						w, &eth);
-			if (ret == -ENOTSUP)
-				ret = rte_pmd_i40e_set_vf_mac_addr(portid,
-						w, &eth);
-			if (ret == -ENOTSUP)
-				ret = rte_pmd_bnxt_set_vf_mac_addr(portid,
-						w, &eth);
+				ret = rte_pmd_ixgbe_set_vf_mac_addr(portid,
+							w, &eth);
+				if (ret == -ENOTSUP)
+					ret = rte_pmd_i40e_set_vf_mac_addr(
+							portid, w, &eth);
+				if (ret == -ENOTSUP)
+					ret = rte_pmd_bnxt_set_vf_mac_addr(
+							portid, w, &eth);
 
-			switch (ret) {
-			case 0:
-				printf("Port %d VF %d MAC: ",
-						portid, w);
-				for (j = 0; j < 6; j++) {
-					printf("%02x", eth.addr_bytes[j]);
-					if (j < 5)
-						printf(":");
+				switch (ret) {
+				case 0:
+					printf("Port %d VF %d MAC: ",
+							portid, w);
+					for (j = 0; j < 5; j++) {
+						printf("%02x:",
+							eth.addr_bytes[j]);
+					}
+					printf("%02x\n", eth.addr_bytes[5]);
+					break;
 				}
 				printf("\n");
 				break;
@@ -332,16 +395,23 @@ main(int argc, char **argv)
 		}
 	}
 
+	check_all_ports_link_status(enabled_port_mask);
+
 	lcore_id = rte_get_next_lcore(-1, 1, 0);
 	if (lcore_id == RTE_MAX_LCORE) {
-		RTE_LOG(ERR, EAL, "A minimum of two cores are required to run "
+		RTE_LOG(ERR, EAL, "A minimum of three cores are required to run "
 				"application\n");
 		return 0;
 	}
-
-	check_all_ports_link_status(enabled_port_mask);
+	printf("Running channel monitor on lcore id %d\n", lcore_id);
 	rte_eal_remote_launch(run_monitor, NULL, lcore_id);
 
+	lcore_id = rte_get_next_lcore(lcore_id, 1, 0);
+	if (lcore_id == RTE_MAX_LCORE) {
+		RTE_LOG(ERR, EAL, "A minimum of three cores are required to run "
+				"application\n");
+		return 0;
+	}
 	if (power_manager_init() < 0) {
 		printf("Unable to initialize power manager\n");
 		return -1;
@@ -350,8 +420,17 @@ main(int argc, char **argv)
 		printf("Unable to initialize channel manager\n");
 		return -1;
 	}
+
+	printf("Running core monitor on lcore id %d\n", lcore_id);
+	rte_eal_remote_launch(run_core_monitor, NULL, lcore_id);
+
 	run_cli(NULL);
 
+	branch_monitor_exit();
+
 	rte_eal_mp_wait_lcore();
+
+	free(ci->cd);
+
 	return 0;
 }

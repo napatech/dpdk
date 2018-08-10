@@ -23,9 +23,7 @@
 int otx_logtype_ssovf;
 static uint8_t timvf_enable_stats;
 
-RTE_INIT(otx_ssovf_init_log);
-static void
-otx_ssovf_init_log(void)
+RTE_INIT(otx_ssovf_init_log)
 {
 	otx_logtype_ssovf = rte_log_register("pmd.event.octeontx");
 	if (otx_logtype_ssovf >= 0)
@@ -476,14 +474,9 @@ static int
 ssovf_eth_rx_adapter_start(const struct rte_eventdev *dev,
 					const struct rte_eth_dev *eth_dev)
 {
-	int ret;
-	const struct octeontx_nic *nic = eth_dev->data->dev_private;
 	RTE_SET_USED(dev);
+	RTE_SET_USED(eth_dev);
 
-	ret = strncmp(eth_dev->data->name, "eth_octeontx", 12);
-	if (ret)
-		return 0;
-	octeontx_pki_port_start(nic->port_id);
 	return 0;
 }
 
@@ -492,14 +485,9 @@ static int
 ssovf_eth_rx_adapter_stop(const struct rte_eventdev *dev,
 		const struct rte_eth_dev *eth_dev)
 {
-	int ret;
-	const struct octeontx_nic *nic = eth_dev->data->dev_private;
 	RTE_SET_USED(dev);
+	RTE_SET_USED(eth_dev);
 
-	ret = strncmp(eth_dev->data->name, "eth_octeontx", 12);
-	if (ret)
-		return 0;
-	octeontx_pki_port_stop(nic->port_id);
 	return 0;
 }
 

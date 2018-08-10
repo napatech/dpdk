@@ -178,7 +178,6 @@ smp_port_init(uint16_t port, struct rte_mempool *mbuf_pool,
 			.rxmode = {
 				.mq_mode	= ETH_MQ_RX_RSS,
 				.split_hdr_size = 0,
-				.ignore_offload_bitfield = 1,
 				.offloads = (DEV_RX_OFFLOAD_CHECKSUM |
 					     DEV_RX_OFFLOAD_CRC_STRIP),
 			},
@@ -200,6 +199,7 @@ smp_port_init(uint16_t port, struct rte_mempool *mbuf_pool,
 	uint16_t q;
 	uint16_t nb_rxd = RX_RING_SIZE;
 	uint16_t nb_txd = TX_RING_SIZE;
+	uint64_t rss_hf_tmp;
 
 	if (rte_eal_process_type() == RTE_PROC_SECONDARY)
 		return 0;
@@ -216,6 +216,17 @@ smp_port_init(uint16_t port, struct rte_mempool *mbuf_pool,
 	if (info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 		port_conf.txmode.offloads |=
 			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+
+	rss_hf_tmp = port_conf.rx_adv_conf.rss_conf.rss_hf;
+	port_conf.rx_adv_conf.rss_conf.rss_hf &= info.flow_type_rss_offloads;
+	if (port_conf.rx_adv_conf.rss_conf.rss_hf != rss_hf_tmp) {
+		printf("Port %u modified RSS hash function based on hardware support,"
+			"requested:%#"PRIx64" configured:%#"PRIx64"\n",
+			port,
+			rss_hf_tmp,
+			port_conf.rx_adv_conf.rss_conf.rss_hf);
+	}
+
 	retval = rte_eth_dev_configure(port, rx_rings, tx_rings, &port_conf);
 	if (retval < 0)
 		return retval;
@@ -236,7 +247,6 @@ smp_port_init(uint16_t port, struct rte_mempool *mbuf_pool,
 	}
 
 	txq_conf = info.default_txconf;
-	txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
 	txq_conf.offloads = port_conf.txmode.offloads;
 	for (q = 0; q < tx_rings; q ++) {
 		retval = rte_eth_tx_queue_setup(port, q, nb_txd,

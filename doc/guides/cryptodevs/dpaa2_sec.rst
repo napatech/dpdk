@@ -148,7 +148,6 @@ Where x is the device object id as configured in resource container.
 Limitations
 -----------
 
-* Chained mbufs are not supported.
 * Hash followed by Cipher mode is not supported
 * Only supports the session-oriented API implementation (session-less APIs are not supported).
 
@@ -199,11 +198,6 @@ Please note that enabling debugging options may affect system performance.
 * ``CONFIG_RTE_LIBRTE_PMD_DPAA2_SEC`` (default ``n``)
   By default it is only enabled in defconfig_arm64-dpaa2-* config.
   Toggle compilation of the ``librte_pmd_dpaa2_sec`` driver.
-
-* ``CONFIG_RTE_DPAA2_SEC_PMD_MAX_NB_SESSIONS``
-  By default it is set as 2048 in defconfig_arm64-dpaa2-* config.
-  It indicates Number of sessions to create in the session memory pool
-  on a single DPAA2 SEC device.
 
 Installations
 -------------

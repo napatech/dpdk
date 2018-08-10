@@ -80,7 +80,6 @@ static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {
 		.mq_mode = ETH_MQ_RX_RSS,
 		.max_rx_pkt_len = ETHER_MAX_LEN,
-		.ignore_offload_bitfield = 1,
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
@@ -124,6 +123,17 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 		port_conf.txmode.offloads |=
 			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
 
+	port_conf.rx_adv_conf.rss_conf.rss_hf &=
+		dev_info.flow_type_rss_offloads;
+	if (port_conf.rx_adv_conf.rss_conf.rss_hf !=
+			port_conf_default.rx_adv_conf.rss_conf.rss_hf) {
+		printf("Port %u modified RSS hash function based on hardware support,"
+			"requested:%#"PRIx64" configured:%#"PRIx64"\n",
+			port,
+			port_conf_default.rx_adv_conf.rss_conf.rss_hf,
+			port_conf.rx_adv_conf.rss_conf.rss_hf);
+	}
+
 	retval = rte_eth_dev_configure(port, rxRings, txRings, &port_conf);
 	if (retval != 0)
 		return retval;
@@ -141,7 +151,6 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 	}
 
 	txconf = dev_info.default_txconf;
-	txconf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
 	txconf.offloads = port_conf.txmode.offloads;
 	for (q = 0; q < txRings; q++) {
 		retval = rte_eth_tx_queue_setup(port, q, nb_txd,

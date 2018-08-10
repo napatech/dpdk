@@ -595,32 +595,6 @@ mrvl_crypto_pmd_qp_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 	return -1;
 }
 
-/** Start queue pair (PMD ops callback) - not supported.
- *
- * @param dev Pointer to the device structure.
- * @param qp_id ID of the Queue Pair.
- * @returns -ENOTSUP. Always.
- */
-static int
-mrvl_crypto_pmd_qp_start(__rte_unused struct rte_cryptodev *dev,
-		__rte_unused uint16_t queue_pair_id)
-{
-	return -ENOTSUP;
-}
-
-/** Stop queue pair (PMD ops callback) - not supported.
- *
- * @param dev Pointer to the device structure.
- * @param qp_id ID of the Queue Pair.
- * @returns -ENOTSUP. Always.
- */
-static int
-mrvl_crypto_pmd_qp_stop(__rte_unused struct rte_cryptodev *dev,
-		__rte_unused uint16_t queue_pair_id)
-{
-	return -ENOTSUP;
-}
-
 /** Return the number of allocated queue pairs (PMD ops callback).
  *
  * @param dev Pointer to the device structure.
@@ -638,7 +612,7 @@ mrvl_crypto_pmd_qp_count(struct rte_cryptodev *dev)
  * @returns Size of Marvell crypto session.
  */
 static unsigned
-mrvl_crypto_pmd_session_get_size(__rte_unused struct rte_cryptodev *dev)
+mrvl_crypto_pmd_sym_session_get_size(__rte_unused struct rte_cryptodev *dev)
 {
 	return sizeof(struct mrvl_crypto_session);
 }
@@ -651,7 +625,7 @@ mrvl_crypto_pmd_session_get_size(__rte_unused struct rte_cryptodev *dev)
  * @returns 0 upon success, negative value otherwise.
  */
 static int
-mrvl_crypto_pmd_session_configure(__rte_unused struct rte_cryptodev *dev,
+mrvl_crypto_pmd_sym_session_configure(__rte_unused struct rte_cryptodev *dev,
 		struct rte_crypto_sym_xform *xform,
 		struct rte_cryptodev_sym_session *sess,
 		struct rte_mempool *mp)
@@ -679,7 +653,7 @@ mrvl_crypto_pmd_session_configure(__rte_unused struct rte_cryptodev *dev,
 		return ret;
 	}
 
-	set_session_private_data(sess, dev->driver_id, sess_private_data);
+	set_sym_session_private_data(sess, dev->driver_id, sess_private_data);
 
 	mrvl_sess = (struct mrvl_crypto_session *)sess_private_data;
 	if (sam_session_create(&mrvl_sess->sam_sess_params,
@@ -698,12 +672,12 @@ mrvl_crypto_pmd_session_configure(__rte_unused struct rte_cryptodev *dev,
  * @returns 0. Always.
  */
 static void
-mrvl_crypto_pmd_session_clear(struct rte_cryptodev *dev,
+mrvl_crypto_pmd_sym_session_clear(struct rte_cryptodev *dev,
 		struct rte_cryptodev_sym_session *sess)
 {
 
 	uint8_t index = dev->driver_id;
-	void *sess_priv = get_session_private_data(sess, index);
+	void *sess_priv = get_sym_session_private_data(sess, index);
 
 	/* Zero out the whole structure */
 	if (sess_priv) {
@@ -717,7 +691,7 @@ mrvl_crypto_pmd_session_clear(struct rte_cryptodev *dev,
 
 		memset(sess, 0, sizeof(struct mrvl_crypto_session));
 		struct rte_mempool *sess_mp = rte_mempool_from_obj(sess_priv);
-		set_session_private_data(sess, index, NULL);
+		set_sym_session_private_data(sess, index, NULL);
 		rte_mempool_put(sess_mp, sess_priv);
 	}
 }
@@ -738,13 +712,11 @@ static struct rte_cryptodev_ops mrvl_crypto_pmd_ops = {
 
 		.queue_pair_setup	= mrvl_crypto_pmd_qp_setup,
 		.queue_pair_release	= mrvl_crypto_pmd_qp_release,
-		.queue_pair_start	= mrvl_crypto_pmd_qp_start,
-		.queue_pair_stop	= mrvl_crypto_pmd_qp_stop,
 		.queue_pair_count	= mrvl_crypto_pmd_qp_count,
 
-		.session_get_size	= mrvl_crypto_pmd_session_get_size,
-		.session_configure	= mrvl_crypto_pmd_session_configure,
-		.session_clear		= mrvl_crypto_pmd_session_clear
+		.sym_session_get_size	= mrvl_crypto_pmd_sym_session_get_size,
+		.sym_session_configure	= mrvl_crypto_pmd_sym_session_configure,
+		.sym_session_clear	= mrvl_crypto_pmd_sym_session_clear
 };
 
 struct rte_cryptodev_ops *rte_mrvl_crypto_pmd_ops = &mrvl_crypto_pmd_ops;

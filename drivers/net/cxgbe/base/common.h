@@ -18,6 +18,9 @@ extern "C" {
 
 #define CXGBE_PAGE_SIZE RTE_PGSIZE_4K
 
+#define T4_MEMORY_WRITE 0
+#define T4_MEMORY_READ  1
+
 enum {
 	MAX_NPORTS     = 4,     /* max # of ports */
 };
@@ -46,6 +49,8 @@ enum cc_fec {
 	FEC_RS       = 1 << 1,    /* Reed-Solomon */
 	FEC_BASER_RS = 1 << 2,    /* BaseR/Reed-Solomon */
 };
+
+enum { MEM_EDC0, MEM_EDC1, MEM_MC, MEM_MC0 = MEM_MC, MEM_MC1 };
 
 struct port_stats {
 	u64 tx_octets;            /* total # of octets in good frames */
@@ -151,6 +156,9 @@ struct tp_params {
 	int vnic_shift;
 	int port_shift;
 	int protocol_shift;
+	int ethertype_shift;
+
+	u64 hash_filter_mask;
 };
 
 struct vpd_params {
@@ -203,6 +211,14 @@ struct rss_params {
 };
 
 /*
+ * Maximum resources provisioned for a PCI PF.
+ */
+struct pf_resources {
+	unsigned int neq;      /* N egress Qs */
+	unsigned int niqflint; /* N ingress Qs/w free list(s) & intr */
+};
+
+/*
  * Maximum resources provisioned for a PCI VF.
  */
 struct vf_resources {
@@ -225,6 +241,7 @@ struct adapter_params {
 	struct pci_params pci;
 	struct devlog_params devlog;
 	struct rss_params rss;
+	struct pf_resources pfres;
 	struct vf_resources vfres;
 	enum pcie_memwin drv_memwin;
 
@@ -245,6 +262,8 @@ struct adapter_params {
 
 	unsigned char nports;             /* # of ethernet ports */
 	unsigned char portvec;
+
+	unsigned char hash_filter;
 
 	enum chip_type chip;              /* chip code */
 	struct arch_specific_params arch; /* chip specific params */
@@ -308,6 +327,11 @@ static inline int is_pf4(struct adapter *adap)
 
 #define for_each_port(adapter, iter) \
 	for (iter = 0; iter < (adapter)->params.nports; ++iter)
+
+static inline int is_hashfilter(const struct adapter *adap)
+{
+	return adap->params.hash_filter;
+}
 
 void t4_read_mtu_tbl(struct adapter *adap, u16 *mtus, u8 *mtu_log);
 void t4_tp_wr_bits_indirect(struct adapter *adap, unsigned int addr,
@@ -378,6 +402,8 @@ int t4_iq_free(struct adapter *adap, unsigned int mbox, unsigned int pf,
 	       unsigned int fl0id, unsigned int fl1id);
 int t4_eth_eq_free(struct adapter *adap, unsigned int mbox, unsigned int pf,
 		   unsigned int vf, unsigned int eqid);
+int t4_ctrl_eq_free(struct adapter *adap, unsigned int mbox, unsigned int pf,
+		    unsigned int vf, unsigned int eqid);
 
 static inline unsigned int core_ticks_per_usec(const struct adapter *adap)
 {
@@ -449,6 +475,7 @@ void t4_write_indirect(struct adapter *adap, unsigned int addr_reg,
 		       unsigned int nregs, unsigned int start_idx);
 
 int t4_get_vpd_params(struct adapter *adapter, struct vpd_params *p);
+int t4_get_pfres(struct adapter *adapter);
 int t4_read_flash(struct adapter *adapter, unsigned int addr,
 		  unsigned int nwords, u32 *data, int byte_oriented);
 int t4_flash_cfg_addr(struct adapter *adapter);
@@ -500,5 +527,15 @@ void t4_get_regs(struct adapter *adap, void *buf, size_t buf_size);
 int t4_seeprom_read(struct adapter *adapter, u32 addr, u32 *data);
 int t4_seeprom_write(struct adapter *adapter, u32 addr, u32 data);
 int t4_seeprom_wp(struct adapter *adapter, int enable);
+int t4_memory_rw_addr(struct adapter *adap, int win,
+		      u32 addr, u32 len, void *hbuf, int dir);
+int t4_memory_rw_mtype(struct adapter *adap, int win, int mtype, u32 maddr,
+		       u32 len, void *hbuf, int dir);
+static inline int t4_memory_rw(struct adapter *adap, int win,
+			       int mtype, u32 maddr, u32 len,
+			       void *hbuf, int dir)
+{
+	return t4_memory_rw_mtype(adap, win, mtype, maddr, len, hbuf, dir);
+}
 fw_port_cap32_t fwcaps16_to_caps32(fw_port_cap16_t caps16);
 #endif /* __CHELSIO_COMMON_H */

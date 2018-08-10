@@ -13,6 +13,7 @@ APP = testpmd
 CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
+CFLAGS += -Wno-deprecated-declarations
 
 #
 # all source are stored in SRCS-y
@@ -35,8 +36,8 @@ SRCS-y += icmpecho.c
 SRCS-$(CONFIG_RTE_LIBRTE_IEEE1588) += ieee1588fwd.c
 SRCS-$(CONFIG_RTE_LIBRTE_BPF) += bpf_cmd.c
 
-ifeq ($(CONFIG_RTE_LIBRTE_PMD_SOFTNIC)$(CONFIG_RTE_LIBRTE_SCHED),yy)
-SRCS-y += tm.c
+ifeq ($(CONFIG_RTE_LIBRTE_PMD_SOFTNIC), y)
+SRCS-y += softnicfwd.c
 endif
 
 ifeq ($(CONFIG_RTE_BUILD_SHARED_LIB),y)

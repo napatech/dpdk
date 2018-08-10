@@ -363,7 +363,9 @@ axgbe_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->rx_offload_capa =
 		DEV_RX_OFFLOAD_IPV4_CKSUM |
 		DEV_RX_OFFLOAD_UDP_CKSUM  |
-		DEV_RX_OFFLOAD_TCP_CKSUM;
+		DEV_RX_OFFLOAD_TCP_CKSUM  |
+		DEV_RX_OFFLOAD_CRC_STRIP  |
+		DEV_RX_OFFLOAD_KEEP_CRC;
 
 	dev_info->tx_offload_capa =
 		DEV_TX_OFFLOAD_IPV4_CKSUM  |
@@ -385,8 +387,6 @@ axgbe_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 
 	dev_info->default_txconf = (struct rte_eth_txconf) {
 		.tx_free_thresh = AXGBE_TX_FREE_THRESH,
-		.txq_flags = ETH_TXQ_FLAGS_NOMULTSEGS |
-				ETH_TXQ_FLAGS_NOOFFLOADS,
 	};
 }
 
@@ -759,9 +759,7 @@ RTE_PMD_REGISTER_PCI(net_axgbe, rte_axgbe_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_axgbe, pci_id_axgbe_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_axgbe, "* igb_uio | uio_pci_generic | vfio-pci");
 
-RTE_INIT(axgbe_init_log);
-static void
-axgbe_init_log(void)
+RTE_INIT(axgbe_init_log)
 {
 	axgbe_logtype_init = rte_log_register("pmd.net.axgbe.init");
 	if (axgbe_logtype_init >= 0)

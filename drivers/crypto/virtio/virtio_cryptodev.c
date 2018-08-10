@@ -515,16 +515,12 @@ static struct rte_cryptodev_ops virtio_crypto_dev_ops = {
 
 	.queue_pair_setup                = virtio_crypto_qp_setup,
 	.queue_pair_release              = virtio_crypto_qp_release,
-	.queue_pair_start                = NULL,
-	.queue_pair_stop                 = NULL,
 	.queue_pair_count                = NULL,
 
 	/* Crypto related operations */
-	.session_get_size	= virtio_crypto_sym_get_session_private_size,
-	.session_configure	= virtio_crypto_sym_configure_session,
-	.session_clear		= virtio_crypto_sym_clear_session,
-	.qp_attach_session = NULL,
-	.qp_detach_session = NULL
+	.sym_session_get_size		= virtio_crypto_sym_get_session_private_size,
+	.sym_session_configure		= virtio_crypto_sym_configure_session,
+	.sym_session_clear		= virtio_crypto_sym_clear_session
 };
 
 static void
@@ -962,7 +958,7 @@ virtio_crypto_sym_clear_session(
 
 	hw = dev->data->dev_private;
 	vq = hw->cvq;
-	session = (struct virtio_crypto_session *)get_session_private_data(
+	session = (struct virtio_crypto_session *)get_sym_session_private_data(
 		sess, cryptodev_virtio_driver_id);
 	if (session == NULL) {
 		VIRTIO_CRYPTO_SESSION_LOG_ERR("Invalid session parameter");
@@ -1080,7 +1076,10 @@ virtio_crypto_sym_clear_session(
 	VIRTIO_CRYPTO_SESSION_LOG_INFO("Close session %"PRIu64" successfully ",
 			session->session_id);
 
-	memset(sess, 0, sizeof(struct virtio_crypto_session));
+	memset(session, 0, sizeof(struct virtio_crypto_session));
+	struct rte_mempool *sess_mp = rte_mempool_from_obj(session);
+	set_sym_session_private_data(sess, cryptodev_virtio_driver_id, NULL);
+	rte_mempool_put(sess_mp, session);
 	rte_free(malloc_virt_addr);
 }
 
@@ -1223,6 +1222,12 @@ virtio_crypto_sym_pad_op_ctrl_req(
 	/* Get cipher xform from crypto xform chain */
 	cipher_xform = virtio_crypto_get_cipher_xform(xform);
 	if (cipher_xform) {
+		if (cipher_xform->iv.length > VIRTIO_CRYPTO_MAX_IV_SIZE) {
+			VIRTIO_CRYPTO_SESSION_LOG_ERR(
+				"cipher IV size cannot be longer than %u",
+				VIRTIO_CRYPTO_MAX_IV_SIZE);
+			return -1;
+		}
 		if (is_chainned)
 			ret = virtio_crypto_sym_pad_cipher_param(
 				&ctrl->u.sym_create_session.u.chain.para
@@ -1390,7 +1395,7 @@ virtio_crypto_sym_configure_session(
 		goto error_out;
 	}
 
-	set_session_private_data(sess, dev->driver_id,
+	set_sym_session_private_data(sess, dev->driver_id,
 		session_private);
 
 	return 0;
@@ -1409,11 +1414,10 @@ virtio_crypto_dev_info_get(struct rte_cryptodev *dev,
 
 	if (info != NULL) {
 		info->driver_id = cryptodev_virtio_driver_id;
-		info->pci_dev = RTE_DEV_TO_PCI(dev->device);
 		info->feature_flags = dev->feature_flags;
 		info->max_nb_queue_pairs = hw->max_dataqueues;
-		info->sym.max_nb_sessions =
-			RTE_VIRTIO_CRYPTO_PMD_MAX_NB_SESSIONS;
+		/* No limit of number of sessions */
+		info->sym.max_nb_sessions = 0;
 		info->capabilities = hw->virtio_dev_capabilities;
 	}
 }
@@ -1426,8 +1430,7 @@ crypto_virtio_pci_probe(
 	struct rte_cryptodev_pmd_init_params init_params = {
 		.name = "",
 		.socket_id = rte_socket_id(),
-		.private_data_size = sizeof(struct virtio_crypto_hw),
-		.max_nb_sessions = RTE_VIRTIO_CRYPTO_PMD_MAX_NB_SESSIONS
+		.private_data_size = sizeof(struct virtio_crypto_hw)
 	};
 	char name[RTE_CRYPTODEV_NAME_MAX_LEN];
 
@@ -1475,9 +1478,7 @@ RTE_PMD_REGISTER_CRYPTO_DRIVER(virtio_crypto_drv,
 	rte_virtio_crypto_driver.driver,
 	cryptodev_virtio_driver_id);
 
-RTE_INIT(virtio_crypto_init_log);
-static void
-virtio_crypto_init_log(void)
+RTE_INIT(virtio_crypto_init_log)
 {
 	virtio_crypto_logtype_init = rte_log_register("pmd.crypto.virtio.init");
 	if (virtio_crypto_logtype_init >= 0)

@@ -36,6 +36,7 @@
 
 #include "cxgbe.h"
 #include "cxgbe_pfvf.h"
+#include "cxgbe_flow.h"
 
 /*
  * Macros needed to support the PCI Device ID Table ...
@@ -199,22 +200,87 @@ void cxgbe_dev_allmulticast_disable(struct rte_eth_dev *eth_dev)
 }
 
 int cxgbe_dev_link_update(struct rte_eth_dev *eth_dev,
-			  __rte_unused int wait_to_complete)
+			  int wait_to_complete)
 {
 	struct port_info *pi = (struct port_info *)(eth_dev->data->dev_private);
 	struct adapter *adapter = pi->adapter;
 	struct sge *s = &adapter->sge;
-	struct rte_eth_link new_link;
-	unsigned int work_done, budget = 4;
+	struct rte_eth_link new_link = { 0 };
+	unsigned int i, work_done, budget = 32;
+	u8 old_link = pi->link_cfg.link_ok;
 
-	cxgbe_poll(&s->fw_evtq, NULL, budget, &work_done);
+	for (i = 0; i < CXGBE_LINK_STATUS_POLL_CNT; i++) {
+		cxgbe_poll(&s->fw_evtq, NULL, budget, &work_done);
+
+		/* Exit if link status changed or always forced up */
+		if (pi->link_cfg.link_ok != old_link || force_linkup(adapter))
+			break;
+
+		if (!wait_to_complete)
+			break;
+
+		rte_delay_ms(CXGBE_LINK_STATUS_POLL_MS);
+	}
 
 	new_link.link_status = force_linkup(adapter) ?
 			       ETH_LINK_UP : pi->link_cfg.link_ok;
+	new_link.link_autoneg = pi->link_cfg.autoneg;
 	new_link.link_duplex = ETH_LINK_FULL_DUPLEX;
 	new_link.link_speed = pi->link_cfg.speed;
 
 	return rte_eth_linkstatus_set(eth_dev, &new_link);
+}
+
+/**
+ * Set device link up.
+ */
+int cxgbe_dev_set_link_up(struct rte_eth_dev *dev)
+{
+	struct port_info *pi = (struct port_info *)(dev->data->dev_private);
+	struct adapter *adapter = pi->adapter;
+	unsigned int work_done, budget = 32;
+	struct sge *s = &adapter->sge;
+	int ret;
+
+	/* Flush all link events */
+	cxgbe_poll(&s->fw_evtq, NULL, budget, &work_done);
+
+	/* If link already up, nothing to do */
+	if (pi->link_cfg.link_ok)
+		return 0;
+
+	ret = cxgbe_set_link_status(pi, true);
+	if (ret)
+		return ret;
+
+	cxgbe_dev_link_update(dev, 1);
+	return 0;
+}
+
+/**
+ * Set device link down.
+ */
+int cxgbe_dev_set_link_down(struct rte_eth_dev *dev)
+{
+	struct port_info *pi = (struct port_info *)(dev->data->dev_private);
+	struct adapter *adapter = pi->adapter;
+	unsigned int work_done, budget = 32;
+	struct sge *s = &adapter->sge;
+	int ret;
+
+	/* Flush all link events */
+	cxgbe_poll(&s->fw_evtq, NULL, budget, &work_done);
+
+	/* If link already down, nothing to do */
+	if (!pi->link_cfg.link_ok)
+		return 0;
+
+	ret = cxgbe_set_link_status(pi, false);
+	if (ret)
+		return ret;
+
+	cxgbe_dev_link_update(dev, 0);
+	return 0;
 }
 
 int cxgbe_dev_mtu_set(struct rte_eth_dev *eth_dev, uint16_t mtu)
@@ -352,7 +418,11 @@ int cxgbe_dev_configure(struct rte_eth_dev *eth_dev)
 
 	CXGBE_FUNC_TRACE();
 	configured_offloads = eth_dev->data->dev_conf.rxmode.offloads;
-	if (!(configured_offloads & DEV_RX_OFFLOAD_CRC_STRIP)) {
+
+	/* KEEP_CRC offload flag is not supported by PMD
+	 * can remove the below block when DEV_RX_OFFLOAD_CRC_STRIP removed
+	 */
+	if (rte_eth_dev_must_keep_crc(configured_offloads)) {
 		dev_info(adapter, "can't disable hw crc strip\n");
 		eth_dev->data->dev_conf.rxmode.offloads |=
 			DEV_RX_OFFLOAD_CRC_STRIP;
@@ -363,6 +433,11 @@ int cxgbe_dev_configure(struct rte_eth_dev *eth_dev)
 		if (err)
 			return err;
 		adapter->flags |= FW_QUEUE_BOUND;
+		if (is_pf4(adapter)) {
+			err = setup_sge_ctrl_txq(adapter);
+			if (err)
+				return err;
+		}
 	}
 
 	err = cfg_queue_count(eth_dev);
@@ -794,13 +869,13 @@ static int cxgbe_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 		return err;
 
 	if (flags & F_FW_RSS_VI_CONFIG_CMD_IP6FOURTUPEN) {
-		rss_hf |= ETH_RSS_NONFRAG_IPV6_TCP;
+		rss_hf |= CXGBE_RSS_HF_TCP_IPV6_MASK;
 		if (flags & F_FW_RSS_VI_CONFIG_CMD_UDPEN)
-			rss_hf |= ETH_RSS_NONFRAG_IPV6_UDP;
+			rss_hf |= CXGBE_RSS_HF_UDP_IPV6_MASK;
 	}
 
 	if (flags & F_FW_RSS_VI_CONFIG_CMD_IP6TWOTUPEN)
-		rss_hf |= ETH_RSS_IPV6;
+		rss_hf |= CXGBE_RSS_HF_IPV6_MASK;
 
 	if (flags & F_FW_RSS_VI_CONFIG_CMD_IP4FOURTUPEN) {
 		rss_hf |= ETH_RSS_NONFRAG_IPV4_TCP;
@@ -809,7 +884,7 @@ static int cxgbe_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 	}
 
 	if (flags & F_FW_RSS_VI_CONFIG_CMD_IP4TWOTUPEN)
-		rss_hf |= ETH_RSS_IPV4;
+		rss_hf |= CXGBE_RSS_HF_IPV4_MASK;
 
 	rss_conf->rss_hf = rss_hf;
 
@@ -1026,6 +1101,8 @@ static const struct eth_dev_ops cxgbe_eth_dev_ops = {
 	.dev_infos_get		= cxgbe_dev_info_get,
 	.dev_supported_ptypes_get = cxgbe_dev_supported_ptypes_get,
 	.link_update		= cxgbe_dev_link_update,
+	.dev_set_link_up        = cxgbe_dev_set_link_up,
+	.dev_set_link_down      = cxgbe_dev_set_link_down,
 	.mtu_set		= cxgbe_dev_mtu_set,
 	.tx_queue_setup         = cxgbe_dev_tx_queue_setup,
 	.tx_queue_start		= cxgbe_dev_tx_queue_start,
@@ -1035,6 +1112,7 @@ static const struct eth_dev_ops cxgbe_eth_dev_ops = {
 	.rx_queue_start		= cxgbe_dev_rx_queue_start,
 	.rx_queue_stop		= cxgbe_dev_rx_queue_stop,
 	.rx_queue_release	= cxgbe_dev_rx_queue_release,
+	.filter_ctrl            = cxgbe_dev_filter_ctrl,
 	.stats_get		= cxgbe_dev_stats_get,
 	.stats_reset		= cxgbe_dev_stats_reset,
 	.flow_ctrl_get		= cxgbe_flow_ctrl_get,

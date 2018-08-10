@@ -18,12 +18,13 @@ elif host_machine.system() == 'freebsd'
 	subdir('bsdapp/eal')
 
 else
-	error('unsupported system type @0@'.format(hostmachine.system()))
+	error('unsupported system type "@0@"'.format(host_machine.system()))
 endif
 
-version = 7  # the version of the EAL API
+version = 8  # the version of the EAL API
 allow_experimental_apis = true
 deps += 'compat'
+deps += 'kvargs'
 cflags += '-D_GNU_SOURCE'
 sources = common_sources + env_sources
 objs = common_objs + env_objs

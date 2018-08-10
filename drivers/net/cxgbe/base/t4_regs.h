@@ -458,6 +458,7 @@
 #define F_CRXPKTENC    V_CRXPKTENC(1U)
 
 #define TP_BASE_ADDR 0x7d00
+#define A_TP_CMM_TCB_BASE 0x7d10
 
 #define A_TP_TIMER_RESOLUTION 0x7d90
 
@@ -573,6 +574,21 @@
 
 #define S_RM_OVLAN	9
 #define V_RM_OVLAN(x)	((x) << S_RM_OVLAN)
+
+/* registers for module MA */
+#define A_MA_EDRAM0_BAR 0x77c0
+
+#define S_EDRAM0_SIZE    0
+#define M_EDRAM0_SIZE    0xfffU
+#define V_EDRAM0_SIZE(x) ((x) << S_EDRAM0_SIZE)
+#define G_EDRAM0_SIZE(x) (((x) >> S_EDRAM0_SIZE) & M_EDRAM0_SIZE)
+
+#define A_MA_EXT_MEMORY0_BAR 0x77c8
+
+#define S_EXT_MEM0_SIZE    0
+#define M_EXT_MEM0_SIZE    0xfffU
+#define V_EXT_MEM0_SIZE(x) ((x) << S_EXT_MEM0_SIZE)
+#define G_EXT_MEM0_SIZE(x) (((x) >> S_EXT_MEM0_SIZE) & M_EXT_MEM0_SIZE)
 
 /* registers for module MPS */
 #define MPS_BASE_ADDR 0x9000
@@ -783,8 +799,11 @@
 #define A_MPS_STAT_RX_BG_3_LB_TRUNC_FRAME_L 0x96b8
 #define A_MPS_STAT_RX_BG_3_LB_TRUNC_FRAME_H 0x96bc
 
+#define A_MPS_VF_STAT_TX_VF_BCAST_BYTES_L 0x80
 #define A_MPS_VF_STAT_TX_VF_BCAST_FRAMES_L 0x88
+#define A_MPS_VF_STAT_TX_VF_MCAST_BYTES_L 0x90
 #define A_MPS_VF_STAT_TX_VF_MCAST_FRAMES_L 0x98
+#define A_MPS_VF_STAT_TX_VF_UCAST_BYTES_L 0xa0
 #define A_MPS_VF_STAT_TX_VF_UCAST_FRAMES_L 0xa8
 #define A_MPS_VF_STAT_TX_VF_DROP_FRAMES_L 0xb0
 #define A_MPS_VF_STAT_RX_VF_BCAST_FRAMES_L 0xd0
@@ -921,3 +940,15 @@
 #define M_REV    0xfU
 #define V_REV(x) ((x) << S_REV)
 #define G_REV(x) (((x) >> S_REV) & M_REV)
+
+/* registers for module LE */
+#define A_LE_DB_CONFIG 0x19c04
+
+#define S_HASHEN    20
+#define V_HASHEN(x) ((x) << S_HASHEN)
+#define F_HASHEN    V_HASHEN(1U)
+
+#define A_LE_DB_TID_HASHBASE 0x19df8
+
+#define LE_3_DB_HASH_MASK_GEN_IPV4_T6_A 0x19eac
+#define LE_4_DB_HASH_MASK_GEN_IPV4_T6_A 0x19eb0

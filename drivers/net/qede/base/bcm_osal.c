@@ -1,9 +1,7 @@
-/*
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2016 - 2018 Cavium Inc.
  * All rights reserved.
  * www.cavium.com
- *
- * See LICENSE.qede_pmd for copyright and licensing details.
  */
 
 #include <rte_memzone.h>
@@ -201,6 +199,11 @@ void osal_dma_free_mem(struct ecore_dev *p_dev, dma_addr_t phys)
 			DP_VERBOSE(p_dev, ECORE_MSG_SP,
 				"Free memzone %s\n", ecore_mz_mapping[j]->name);
 			rte_memzone_free(ecore_mz_mapping[j]);
+			while (j < ecore_mz_count - 1) {
+				ecore_mz_mapping[j] = ecore_mz_mapping[j + 1];
+				j++;
+			}
+			ecore_mz_count--;
 			return;
 		}
 	}

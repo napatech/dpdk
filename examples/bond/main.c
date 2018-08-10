@@ -122,7 +122,6 @@ static struct rte_eth_conf port_conf = {
 		.mq_mode = ETH_MQ_RX_NONE,
 		.max_rx_pkt_len = ETHER_MAX_LEN,
 		.split_hdr_size = 0,
-		.ignore_offload_bitfield = 1,
 		.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
 	},
 	.rx_adv_conf = {
@@ -154,6 +153,18 @@ slave_port_init(uint16_t portid, struct rte_mempool *mbuf_pool)
 	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 		local_port_conf.txmode.offloads |=
 			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+
+	local_port_conf.rx_adv_conf.rss_conf.rss_hf &=
+		dev_info.flow_type_rss_offloads;
+	if (local_port_conf.rx_adv_conf.rss_conf.rss_hf !=
+			port_conf.rx_adv_conf.rss_conf.rss_hf) {
+		printf("Port %u modified RSS hash function based on hardware support,"
+			"requested:%#"PRIx64" configured:%#"PRIx64"\n",
+			portid,
+			port_conf.rx_adv_conf.rss_conf.rss_hf,
+			local_port_conf.rx_adv_conf.rss_conf.rss_hf);
+	}
+
 	retval = rte_eth_dev_configure(portid, 1, 1, &local_port_conf);
 	if (retval != 0)
 		rte_exit(EXIT_FAILURE, "port %u: configuration failed (res=%d)\n",
@@ -177,7 +188,6 @@ slave_port_init(uint16_t portid, struct rte_mempool *mbuf_pool)
 
 	/* TX setup */
 	txq_conf = dev_info.default_txconf;
-	txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
 	txq_conf.offloads = local_port_conf.txmode.offloads;
 	retval = rte_eth_tx_queue_setup(portid, 0, nb_txd,
 				rte_eth_dev_socket_id(portid), &txq_conf);
@@ -246,7 +256,6 @@ bond_port_init(struct rte_mempool *mbuf_pool)
 
 	/* TX setup */
 	txq_conf = dev_info.default_txconf;
-	txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
 	txq_conf.offloads = local_port_conf.txmode.offloads;
 	retval = rte_eth_tx_queue_setup(BOND_PORT, 0, nb_txd,
 				rte_eth_dev_socket_id(BOND_PORT), &txq_conf);

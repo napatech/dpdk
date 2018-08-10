@@ -1,11 +1,8 @@
-/*
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2013-2015 Brocade Communications Systems, Inc.
- *
  * Copyright (c) 2015-2018 Cavium Inc.
  * All rights reserved.
  * www.cavium.com
- *
- * See LICENSE.bnx2x_pmd for copyright and licensing details.
  */
 
 #include "bnx2x.h"
@@ -13,6 +10,7 @@
 
 #include <rte_dev.h>
 #include <rte_ethdev_pci.h>
+#include <rte_alarm.h>
 
 int bnx2x_logtype_init;
 int bnx2x_logtype_driver;
@@ -81,26 +79,31 @@ static const struct rte_bnx2x_xstats_name_off bnx2x_xstats_strings[] = {
 		offsetof(struct bnx2x_eth_stats, pfc_frames_received_lo)}
 };
 
-static void
+static int
 bnx2x_link_update(struct rte_eth_dev *dev)
 {
 	struct bnx2x_softc *sc = dev->data->dev_private;
+	struct rte_eth_link link;
 
 	PMD_INIT_FUNC_TRACE();
+
 	bnx2x_link_status_update(sc);
+	memset(&link, 0, sizeof(link));
 	mb();
-	dev->data->dev_link.link_speed = sc->link_vars.line_speed;
+	link.link_speed = sc->link_vars.line_speed;
 	switch (sc->link_vars.duplex) {
 		case DUPLEX_FULL:
-			dev->data->dev_link.link_duplex = ETH_LINK_FULL_DUPLEX;
+			link.link_duplex = ETH_LINK_FULL_DUPLEX;
 			break;
 		case DUPLEX_HALF:
-			dev->data->dev_link.link_duplex = ETH_LINK_HALF_DUPLEX;
+			link.link_duplex = ETH_LINK_HALF_DUPLEX;
 			break;
 	}
-	dev->data->dev_link.link_autoneg = !(dev->data->dev_conf.link_speeds &
+	link.link_autoneg = !(dev->data->dev_conf.link_speeds &
 			ETH_LINK_SPEED_FIXED);
-	dev->data->dev_link.link_status = sc->link_vars.link_up;
+	link.link_status = sc->link_vars.link_up;
+
+	return rte_eth_linkstatus_set(dev, &link);
 }
 
 static void
@@ -108,8 +111,6 @@ bnx2x_interrupt_action(struct rte_eth_dev *dev)
 {
 	struct bnx2x_softc *sc = dev->data->dev_private;
 	uint32_t link_status;
-
-	PMD_DEBUG_PERIODIC_LOG(INFO, "Interrupt handled");
 
 	bnx2x_intr_legacy(sc, 0);
 
@@ -128,8 +129,39 @@ bnx2x_interrupt_handler(void *param)
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
 	struct bnx2x_softc *sc = dev->data->dev_private;
 
+	PMD_DEBUG_PERIODIC_LOG(INFO, "Interrupt handled");
+
 	bnx2x_interrupt_action(dev);
 	rte_intr_enable(&sc->pci_dev->intr_handle);
+}
+
+static void bnx2x_periodic_start(void *param)
+{
+	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
+	struct bnx2x_softc *sc = dev->data->dev_private;
+	int ret = 0;
+
+	atomic_store_rel_long(&sc->periodic_flags, PERIODIC_GO);
+	bnx2x_interrupt_action(dev);
+	if (IS_PF(sc)) {
+		ret = rte_eal_alarm_set(BNX2X_SP_TIMER_PERIOD,
+					bnx2x_periodic_start, (void *)dev);
+		if (ret) {
+			PMD_DRV_LOG(ERR, "Unable to start periodic"
+					 " timer rc %d", ret);
+			assert(false && "Unable to start periodic timer");
+		}
+	}
+}
+
+void bnx2x_periodic_stop(void *param)
+{
+	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
+	struct bnx2x_softc *sc = dev->data->dev_private;
+
+	atomic_store_rel_long(&sc->periodic_flags, PERIODIC_STOP);
+
+	rte_eal_alarm_cancel(bnx2x_periodic_start, (void *)dev);
 }
 
 /*
@@ -187,6 +219,10 @@ bnx2x_dev_start(struct rte_eth_dev *dev)
 
 	PMD_INIT_FUNC_TRACE();
 
+	/* start the periodic callout */
+	if (sc->periodic_flags & PERIODIC_STOP)
+		bnx2x_periodic_start(dev);
+
 	ret = bnx2x_init(sc);
 	if (ret) {
 		PMD_DRV_LOG(DEBUG, "bnx2x_init failed (%d)", ret);
@@ -226,6 +262,9 @@ bnx2x_dev_stop(struct rte_eth_dev *dev)
 		rte_intr_callback_unregister(&sc->pci_dev->intr_handle,
 				bnx2x_interrupt_handler, (void *)dev);
 	}
+
+	/* stop the periodic callout */
+	bnx2x_periodic_stop(dev);
 
 	ret = bnx2x_nic_unload(sc, UNLOAD_NORMAL, FALSE);
 	if (ret) {
@@ -309,20 +348,16 @@ bnx2x_dev_link_update(struct rte_eth_dev *dev, __rte_unused int wait_to_complete
 {
 	PMD_INIT_FUNC_TRACE();
 
-	int old_link_status = dev->data->dev_link.link_status;
-
-	bnx2x_link_update(dev);
-
-	return old_link_status == dev->data->dev_link.link_status ? -1 : 0;
+	return bnx2x_link_update(dev);
 }
 
 static int
 bnx2xvf_dev_link_update(struct rte_eth_dev *dev, __rte_unused int wait_to_complete)
 {
-	int old_link_status = dev->data->dev_link.link_status;
 	struct bnx2x_softc *sc = dev->data->dev_private;
+	int ret = 0;
 
-	bnx2x_link_update(dev);
+	ret = bnx2x_link_update(dev);
 
 	bnx2x_check_bull(sc);
 	if (sc->old_bulletin.valid_bitmap & (1 << CHANNEL_DOWN)) {
@@ -331,7 +366,7 @@ bnx2xvf_dev_link_update(struct rte_eth_dev *dev, __rte_unused int wait_to_comple
 		dev->data->dev_link.link_status = ETH_LINK_DOWN;
 	}
 
-	return old_link_status == dev->data->dev_link.link_status ? -1 : 0;
+	return ret;
 }
 
 static int
@@ -585,6 +620,17 @@ bnx2x_common_dev_init(struct rte_eth_dev *eth_dev, int is_vf)
 		return ret;
 	}
 
+	/* schedule periodic poll for slowpath link events */
+	if (IS_PF(sc)) {
+		ret = rte_eal_alarm_set(BNX2X_SP_TIMER_PERIOD,
+					bnx2x_periodic_start, (void *)eth_dev);
+		if (ret) {
+			PMD_DRV_LOG(ERR, "Unable to start periodic"
+					  " timer rc %d", ret);
+			return -EINVAL;
+		}
+	}
+
 	eth_dev->data->mac_addrs = (struct ether_addr *)sc->link_params.mac_addr;
 
 	PMD_DRV_LOG(INFO, "pcie_bus=%d, pcie_device=%d",
@@ -599,18 +645,20 @@ bnx2x_common_dev_init(struct rte_eth_dev *eth_dev, int is_vf)
 	if (IS_VF(sc)) {
 		rte_spinlock_init(&sc->vf2pf_lock);
 
-		if (bnx2x_dma_alloc(sc, sizeof(struct bnx2x_vf_mbx_msg),
-				    &sc->vf2pf_mbox_mapping, "vf2pf_mbox",
-				    RTE_CACHE_LINE_SIZE) != 0)
-			return -ENOMEM;
+		ret = bnx2x_dma_alloc(sc, sizeof(struct bnx2x_vf_mbx_msg),
+				      &sc->vf2pf_mbox_mapping, "vf2pf_mbox",
+				      RTE_CACHE_LINE_SIZE);
+		if (ret)
+			goto out;
 
 		sc->vf2pf_mbox = (struct bnx2x_vf_mbx_msg *)
 					 sc->vf2pf_mbox_mapping.vaddr;
 
-		if (bnx2x_dma_alloc(sc, sizeof(struct bnx2x_vf_bulletin),
-				    &sc->pf2vf_bulletin_mapping, "vf2pf_bull",
-				    RTE_CACHE_LINE_SIZE) != 0)
-			return -ENOMEM;
+		ret = bnx2x_dma_alloc(sc, sizeof(struct bnx2x_vf_bulletin),
+				      &sc->pf2vf_bulletin_mapping, "vf2pf_bull",
+				      RTE_CACHE_LINE_SIZE);
+		if (ret)
+			goto out;
 
 		sc->pf2vf_bulletin = (struct bnx2x_vf_bulletin *)
 					     sc->pf2vf_bulletin_mapping.vaddr;
@@ -618,10 +666,14 @@ bnx2x_common_dev_init(struct rte_eth_dev *eth_dev, int is_vf)
 		ret = bnx2x_vf_get_resources(sc, sc->max_tx_queues,
 					     sc->max_rx_queues);
 		if (ret)
-			return ret;
+			goto out;
 	}
 
 	return 0;
+
+out:
+	bnx2x_periodic_stop(eth_dev);
+	return ret;
 }
 
 static int
@@ -683,9 +735,7 @@ RTE_PMD_REGISTER_PCI(net_bnx2xvf, rte_bnx2xvf_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_bnx2xvf, pci_id_bnx2xvf_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_bnx2xvf, "* igb_uio | vfio-pci");
 
-RTE_INIT(bnx2x_init_log);
-static void
-bnx2x_init_log(void)
+RTE_INIT(bnx2x_init_log)
 {
 	bnx2x_logtype_init = rte_log_register("pmd.net.bnx2x.init");
 	if (bnx2x_logtype_init >= 0)

@@ -71,7 +71,6 @@ static const struct rte_eth_conf vmdq_dcb_conf_default = {
 	.rxmode = {
 		.mq_mode        = ETH_MQ_RX_VMDQ_DCB,
 		.split_hdr_size = 0,
-		.ignore_offload_bitfield = 1,
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_VMDQ_DCB,
@@ -197,6 +196,7 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 	uint16_t queues_per_pool;
 	uint32_t max_nb_pools;
 	struct rte_eth_txconf txq_conf;
+	uint64_t rss_hf_tmp;
 
 	/*
 	 * The max pool number from dev_info will be used to validate the pool
@@ -257,6 +257,18 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 		port_conf.txmode.offloads |=
 			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+
+	rss_hf_tmp = port_conf.rx_adv_conf.rss_conf.rss_hf;
+	port_conf.rx_adv_conf.rss_conf.rss_hf &=
+		dev_info.flow_type_rss_offloads;
+	if (port_conf.rx_adv_conf.rss_conf.rss_hf != rss_hf_tmp) {
+		printf("Port %u modified RSS hash function based on hardware support,"
+			"requested:%#"PRIx64" configured:%#"PRIx64"\n",
+			port,
+			rss_hf_tmp,
+			port_conf.rx_adv_conf.rss_conf.rss_hf);
+	}
+
 	/*
 	 * Though in this example, all queues including pf queues are setup.
 	 * This is because VMDQ queues doesn't always start from zero, and the
@@ -290,7 +302,6 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 	}
 
 	txq_conf = dev_info.default_txconf;
-	txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
 	txq_conf.offloads = port_conf.txmode.offloads;
 	for (q = 0; q < num_queues; q++) {
 		retval = rte_eth_tx_queue_setup(port, q, txRingSize,

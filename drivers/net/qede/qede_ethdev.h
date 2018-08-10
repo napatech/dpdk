@@ -1,9 +1,7 @@
-/*
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2016 - 2018 Cavium Inc.
  * All rights reserved.
  * www.cavium.com
- *
- * See LICENSE.qede_pmd for copyright and licensing details.
  */
 
 
@@ -34,6 +32,7 @@
 #include "base/nvm_cfg.h"
 #include "base/ecore_sp_commands.h"
 #include "base/ecore_l2.h"
+#include "base/ecore_vf.h"
 
 #include "qede_logs.h"
 #include "qede_if.h"
@@ -45,7 +44,7 @@
 /* Driver versions */
 #define QEDE_PMD_VER_PREFIX		"QEDE PMD"
 #define QEDE_PMD_VERSION_MAJOR		2
-#define QEDE_PMD_VERSION_MINOR	        8
+#define QEDE_PMD_VERSION_MINOR	        9
 #define QEDE_PMD_VERSION_REVISION       0
 #define QEDE_PMD_VERSION_PATCH	        1
 

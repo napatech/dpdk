@@ -11,12 +11,16 @@
 #include <rte_bus_pci.h>
 #include <rte_mbuf.h>
 #include <rte_io.h>
+#include <rte_rwlock.h>
+#include <rte_ethdev.h>
 
 #include "cxgbe_compat.h"
 #include "t4_regs_values.h"
+#include "cxgbe_ofld.h"
 
 enum {
 	MAX_ETH_QSETS = 64,           /* # of Ethernet Tx/Rx queue sets */
+	MAX_CTRL_QUEUES = NCHAN,      /* # of control Tx queues */
 };
 
 struct adapter;
@@ -254,10 +258,20 @@ struct sge_eth_txq {                   /* state for an SGE Ethernet Tx queue */
 	unsigned int flags;            /* flags for state of the queue */
 } __rte_cache_aligned;
 
+struct sge_ctrl_txq {                /* State for an SGE control Tx queue */
+	struct sge_txq q;            /* txq */
+	struct adapter *adapter;     /* adapter associated with this queue */
+	rte_spinlock_t ctrlq_lock;   /* control queue lock */
+	u8 full;                     /* the Tx ring is full */
+	u64 txp;                     /* number of transmits */
+	struct rte_mempool *mb_pool; /* mempool to generate ctrl pkts */
+} __rte_cache_aligned;
+
 struct sge {
 	struct sge_eth_txq ethtxq[MAX_ETH_QSETS];
 	struct sge_eth_rxq ethrxq[MAX_ETH_QSETS];
 	struct sge_rspq fw_evtq __rte_cache_aligned;
+	struct sge_ctrl_txq ctrlq[MAX_CTRL_QUEUES];
 
 	u16 max_ethqsets;           /* # of available Ethernet queue sets */
 	u32 stat_len;               /* length of status page at ring end */
@@ -306,7 +320,52 @@ struct adapter {
 	unsigned int vpd_flag;
 
 	int use_unpacked_mode; /* unpacked rx mode state */
+	rte_spinlock_t win0_lock;
+
+	unsigned int clipt_start; /* CLIP table start */
+	unsigned int clipt_end;   /* CLIP table end */
+	struct clip_tbl *clipt;   /* CLIP table */
+
+	struct tid_info tids;     /* Info used to access TID related tables */
 };
+
+/**
+ * t4_os_rwlock_init - initialize rwlock
+ * @lock: the rwlock
+ */
+static inline void t4_os_rwlock_init(rte_rwlock_t *lock)
+{
+	rte_rwlock_init(lock);
+}
+
+/**
+ * t4_os_write_lock - get a write lock
+ * @lock: the rwlock
+ */
+static inline void t4_os_write_lock(rte_rwlock_t *lock)
+{
+	rte_rwlock_write_lock(lock);
+}
+
+/**
+ * t4_os_write_unlock - unlock a write lock
+ * @lock: the rwlock
+ */
+static inline void t4_os_write_unlock(rte_rwlock_t *lock)
+{
+	rte_rwlock_write_unlock(lock);
+}
+
+/**
+ * ethdev2pinfo - return the port_info structure associated with a rte_eth_dev
+ * @dev: the rte_eth_dev
+ *
+ * Return the struct port_info associated with a rte_eth_dev
+ */
+static inline struct port_info *ethdev2pinfo(const struct rte_eth_dev *dev)
+{
+	return (struct port_info *)dev->data->dev_private;
+}
 
 /**
  * adap2pinfo - return the port_info of a port
@@ -318,6 +377,17 @@ struct adapter {
 static inline struct port_info *adap2pinfo(const struct adapter *adap, int idx)
 {
 	return adap->port[idx];
+}
+
+/**
+ * ethdev2adap - return the adapter structure associated with a rte_eth_dev
+ * @dev: the rte_eth_dev
+ *
+ * Return the struct adapter associated with a rte_eth_dev
+ */
+static inline struct adapter *ethdev2adap(const struct rte_eth_dev *dev)
+{
+	return ethdev2pinfo(dev)->adapter;
 }
 
 #define CXGBE_PCI_REG(reg) rte_read32(reg)
@@ -680,6 +750,38 @@ static inline void t4_os_atomic_list_del(struct mbox_entry *entry,
 	t4_os_unlock(lock);
 }
 
+/**
+ * t4_init_completion - initialize completion
+ * @c: the completion context
+ */
+static inline void t4_init_completion(struct t4_completion *c)
+{
+	c->done = 0;
+	t4_os_lock_init(&c->lock);
+}
+
+/**
+ * t4_complete - set completion as done
+ * @c: the completion context
+ */
+static inline void t4_complete(struct t4_completion *c)
+{
+	t4_os_lock(&c->lock);
+	c->done = 1;
+	t4_os_unlock(&c->lock);
+}
+
+/**
+ * cxgbe_port_viid - get the VI id of a port
+ * @dev: the device for the port
+ *
+ * Return the VI id of the given port.
+ */
+static inline unsigned int cxgbe_port_viid(const struct rte_eth_dev *dev)
+{
+	return ethdev2pinfo(dev)->viid;
+}
+
 void *t4_alloc_mem(size_t size);
 void t4_free_mem(void *addr);
 #define t4_os_alloc(_size)     t4_alloc_mem((_size))
@@ -694,6 +796,7 @@ void t4_sge_tx_monitor_start(struct adapter *adap);
 void t4_sge_tx_monitor_stop(struct adapter *adap);
 int t4_eth_xmit(struct sge_eth_txq *txq, struct rte_mbuf *mbuf,
 		uint16_t nb_pkts);
+int t4_mgmt_tx(struct sge_ctrl_txq *txq, struct rte_mbuf *mbuf);
 int t4_ethrx_handler(struct sge_rspq *q, const __be64 *rsp,
 		     const struct pkt_gl *gl);
 int t4_sge_init(struct adapter *adap);
@@ -701,6 +804,9 @@ int t4vf_sge_init(struct adapter *adap);
 int t4_sge_alloc_eth_txq(struct adapter *adap, struct sge_eth_txq *txq,
 			 struct rte_eth_dev *eth_dev, uint16_t queue_id,
 			 unsigned int iqid, int socket_id);
+int t4_sge_alloc_ctrl_txq(struct adapter *adap, struct sge_ctrl_txq *txq,
+			  struct rte_eth_dev *eth_dev, uint16_t queue_id,
+			  unsigned int iqid, int socket_id);
 int t4_sge_alloc_rxq(struct adapter *adap, struct sge_rspq *rspq, bool fwevtq,
 		     struct rte_eth_dev *eth_dev, int intr_idx,
 		     struct sge_fl *fl, rspq_handler_t handler,

@@ -1056,7 +1056,8 @@ eth_dev_info(struct rte_eth_dev *dev,
 	dev_info->max_rx_queues = internals->max_rx_queues;
 	dev_info->max_tx_queues = internals->max_tx_queues;
 	dev_info->min_rx_bufsize = 0;
-	dev_info->rx_offload_capa = DEV_RX_OFFLOAD_SCATTER;
+	dev_info->rx_offload_capa = DEV_RX_OFFLOAD_SCATTER |
+				    DEV_RX_OFFLOAD_CRC_STRIP;
 	dev_info->tx_offload_capa = 0;
 	dev_info->rx_queue_offload_capa = 0;
 	dev_info->tx_queue_offload_capa = 0;
@@ -1922,9 +1923,7 @@ RTE_PMD_REGISTER_PCI_TABLE(RTE_SZEDATA2_DRIVER_NAME, rte_szedata2_pci_id_table);
 RTE_PMD_REGISTER_KMOD_DEP(RTE_SZEDATA2_DRIVER_NAME,
 	"* combo6core & combov3 & szedata2 & ( szedata2_cv3 | szedata2_cv3_fdt )");
 
-RTE_INIT(szedata2_init_log);
-static void
-szedata2_init_log(void)
+RTE_INIT(szedata2_init_log)
 {
 	szedata2_logtype_init = rte_log_register("pmd.net.szedata2.init");
 	if (szedata2_logtype_init >= 0)

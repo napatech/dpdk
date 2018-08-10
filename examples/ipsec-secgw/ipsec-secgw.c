@@ -199,7 +199,6 @@ static struct rte_eth_conf port_conf = {
 		.split_hdr_size = 0,
 		.offloads = DEV_RX_OFFLOAD_CHECKSUM |
 			    DEV_RX_OFFLOAD_CRC_STRIP,
-		.ignore_offload_bitfield = 1,
 	},
 	.rx_adv_conf = {
 		.rss_conf = {
@@ -331,6 +330,7 @@ prepare_tx_pkt(struct rte_mbuf *pkt, uint16_t port)
 		pkt->l3_len = sizeof(struct ip);
 		pkt->l2_len = ETHER_HDR_LEN;
 
+		ip->ip_sum = 0;
 		ethhdr->ether_type = rte_cpu_to_be_16(ETHER_TYPE_IPv4);
 	} else {
 		pkt->ol_flags |= PKT_TX_IPV6;
@@ -510,11 +510,13 @@ outbound_sp(struct sp_ctx *sp, struct traffic_type *ip,
 		sa_idx = ip->res[i] & PROTECT_MASK;
 		if (ip->res[i] & DISCARD)
 			rte_pktmbuf_free(m);
+		else if (ip->res[i] & BYPASS)
+			ip->pkts[j++] = m;
 		else if (sa_idx < IPSEC_SA_MAX_ENTRIES) {
 			ipsec->res[ipsec->num] = sa_idx;
 			ipsec->pkts[ipsec->num++] = m;
-		} else /* BYPASS */
-			ip->pkts[j++] = m;
+		} else /* invalid SA idx */
+			rte_pktmbuf_free(m);
 	}
 	ip->num = j;
 }
@@ -1440,6 +1442,12 @@ cryptodevs_init(void)
 		dev_conf.socket_id = rte_cryptodev_socket_id(cdev_id);
 		dev_conf.nb_queue_pairs = qp;
 
+		uint32_t dev_max_sess = cdev_info.sym.max_nb_sessions;
+		if (dev_max_sess != 0 && dev_max_sess < (CDEV_MP_NB_OBJS / 2))
+			rte_exit(EXIT_FAILURE,
+				"Device does not support at least %u "
+				"sessions", CDEV_MP_NB_OBJS / 2);
+
 		if (!socket_ctx[dev_conf.socket_id].session_pool) {
 			char mp_name[RTE_MEMPOOL_NAMESIZE];
 			struct rte_mempool *sess_mp;
@@ -1566,6 +1574,18 @@ port_init(uint16_t portid)
 	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 		local_port_conf.txmode.offloads |=
 			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+
+	local_port_conf.rx_adv_conf.rss_conf.rss_hf &=
+		dev_info.flow_type_rss_offloads;
+	if (local_port_conf.rx_adv_conf.rss_conf.rss_hf !=
+			port_conf.rx_adv_conf.rss_conf.rss_hf) {
+		printf("Port %u modified RSS hash function based on hardware support,"
+			"requested:%#"PRIx64" configured:%#"PRIx64"\n",
+			portid,
+			port_conf.rx_adv_conf.rss_conf.rss_hf,
+			local_port_conf.rx_adv_conf.rss_conf.rss_hf);
+	}
+
 	ret = rte_eth_dev_configure(portid, nb_rx_queue, nb_tx_queue,
 			&local_port_conf);
 	if (ret < 0)
@@ -1592,7 +1612,6 @@ port_init(uint16_t portid)
 		printf("Setup txq=%u,%d,%d\n", lcore_id, tx_queueid, socket_id);
 
 		txconf = &dev_info.default_txconf;
-		txconf->txq_flags = ETH_TXQ_FLAGS_IGNORE;
 		txconf->offloads = local_port_conf.txmode.offloads;
 
 		ret = rte_eth_tx_queue_setup(portid, tx_queueid, nb_txd,

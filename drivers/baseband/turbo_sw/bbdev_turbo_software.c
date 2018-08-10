@@ -490,8 +490,8 @@ process_enc_cb(struct turbo_sw_queue *q, struct rte_bbdev_enc_op *op,
 			return;
 		}
 		crc_req.data = in;
-		crc_req.len = (k - 24) >> 3;
-		/* Check if there is a room for CRC bits. If not use
+		crc_req.len = k - 24;
+		/* Check if there is a room for CRC bits if not use
 		 * the temporary buffer.
 		 */
 		if (rte_pktmbuf_append(m_in, 3) == NULL) {
@@ -522,8 +522,8 @@ process_enc_cb(struct turbo_sw_queue *q, struct rte_bbdev_enc_op *op,
 			return;
 		}
 		crc_req.data = in;
-		crc_req.len = (k - 24) >> 3;
-		/* Check if there is a room for CRC bits. If this is the last
+		crc_req.len = k - 24;
+		/* Check if there is a room for CRC bits if this is the last
 		 * CB in TB. If not use temporary buffer.
 		 */
 		if ((c - r == 1) && (rte_pktmbuf_append(m_in, 3) == NULL)) {
@@ -1299,9 +1299,7 @@ RTE_PMD_REGISTER_PARAM_STRING(DRIVER_NAME,
 	TURBO_SW_SOCKET_ID_ARG"=<int>");
 RTE_PMD_REGISTER_ALIAS(DRIVER_NAME, turbo_sw);
 
-RTE_INIT(null_bbdev_init_log);
-static void
-null_bbdev_init_log(void)
+RTE_INIT(turbo_sw_bbdev_init_log)
 {
 	bbdev_turbo_sw_logtype = rte_log_register("pmd.bb.turbo_sw");
 	if (bbdev_turbo_sw_logtype >= 0)

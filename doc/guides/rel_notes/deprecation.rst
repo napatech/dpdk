@@ -1,3 +1,6 @@
+..  SPDX-License-Identifier: BSD-3-Clause
+    Copyright 2018 The DPDK contributors
+
 ABI and API Deprecation
 =======================
 
@@ -8,17 +11,22 @@ API and ABI deprecation notices are to be posted here.
 Deprecation Notices
 -------------------
 
-* eal: DPDK runtime configuration file (located at
-  ``/var/run/.<prefix>_config``) will be moved. The new path will be as follows:
+* eal: certain structures will change in EAL on account of upcoming external
+  memory support. Aside from internal changes leading to an ABI break, the
+  following externally visible changes will also be implemented:
 
-  - if DPDK is running as root, path will be set to
-    ``/var/run/dpdk/<prefix>/config``
-  - if DPDK is not running as root and $XDG_RUNTIME_DIR is set, path will be set
-    to ``$XDG_RUNTIME_DIR/dpdk/<prefix>/config``
-  - if DPDK is not running as root and $XDG_RUNTIME_DIR is not set, path will be
-    set to ``/tmp/dpdk/<prefix>/config``
+  - ``rte_memseg_list`` will change to include a boolean flag indicating
+    whether a particular memseg list is externally allocated. This will have
+    implications for any users of memseg-walk-related functions, as they will
+    now have to skip externally allocated segments in most cases if the intent
+    is to only iterate over internal DPDK memory.
+  - ``socket_id`` parameter across the entire DPDK will gain additional meaning,
+    as some socket ID's will now be representing externally allocated memory. No
+    changes will be required for existing code as backwards compatibility will
+    be kept, and those who do not use this feature will not see these extra
+    socket ID's.
 
-* eal: both declaring and identifying devices will be streamlined in v18.08.
+* eal: both declaring and identifying devices will be streamlined in v18.11.
   New functions will appear to query a specific port from buses, classes of
   device and device drivers. Device declaration will be made coherent with the
   new scheme of device identification.
@@ -28,7 +36,6 @@ Deprecation Notices
   - Functions previously deprecated will change or disappear:
 
     + ``rte_eal_devargs_type_count``
-    + ``rte_eal_devargs_parse`` will change its format and use.
 
 * pci: Several exposed functions are misnamed.
   The following functions are deprecated starting from v17.11 and are replaced:
@@ -36,15 +43,6 @@ Deprecation Notices
   - ``eal_parse_pci_BDF`` replaced by ``rte_pci_addr_parse``
   - ``eal_parse_pci_DomBDF`` replaced by ``rte_pci_addr_parse``
   - ``rte_eal_compare_pci_addr`` replaced by ``rte_pci_addr_cmp``
-
-* eal: a new set of mbuf mempool ops name APIs for user, platform and best
-  mempool names have been defined in ``rte_mbuf`` in v18.02. The uses of
-  ``rte_eal_mbuf_default_mempool_ops`` shall be replaced by
-  ``rte_mbuf_best_mempool_ops``.
-  The following function is deprecated since 18.05, and will be removed
-  in 18.08:
-
-  - ``rte_eal_mbuf_default_mempool_ops``
 
 * mbuf: The opaque ``mbuf->hash.sched`` field will be updated to support generic
   definition in line with the ethdev TM and MTR APIs. Currently, this field
@@ -57,25 +55,6 @@ Deprecation Notices
   can no longer be mutually exclusive with ``RTE_MBUF_DIRECT()`` if the new
   experimental API ``rte_pktmbuf_attach_extbuf()`` is used. Removal of the macro
   is to fix this semantic inconsistency.
-
-* ethdev: a new Tx and Rx offload API was introduced on 17.11.
-  In the new API, offloads are divided into per-port and per-queue offloads.
-  Offloads are disabled by default and enabled per application request.
-
-  In later releases the old offloading API will be deprecated, which will include:
-  - removal of ``ETH_TXQ_FLAGS_NO*`` flags.
-  - removal of ``txq_flags`` field from ``rte_eth_txconf`` struct.
-  - removal of the offloads bit-field from ``rte_eth_rxmode`` struct.
-
-* ethdev: A new offloading flag ``DEV_RX_OFFLOAD_KEEP_CRC`` will be added in v18.08,
-  This will replace the usage of not setting ``DEV_RX_OFFLOAD_CRC_STRIP`` flag
-  and will be implemented in PMDs accordingly.
-  In v18.08 both ``DEV_RX_OFFLOAD_KEEP_CRC`` and ``DEV_RX_OFFLOAD_CRC_STRIP`` flags
-  will be available, usage will be:
-  ``CRC_STRIP``: Strip CRC from packet
-  ``KEEP_CRC``: Keep CRC in packet
-  Both ``CRC_STRIP`` & ``KEEP_CRC``: Invalid
-  No flag: Keep CRC in packet
 
 * ethdev: In v18.11 ``DEV_RX_OFFLOAD_CRC_STRIP`` offload flag will be removed, default
   behavior without any flag will be changed to CRC strip.
@@ -91,6 +70,18 @@ Deprecation Notices
   Target release for removal of the legacy API will be defined once most
   PMDs have switched to rte_flow.
 
+* ethdev: In v18.11 ``rte_eth_dev_attach()`` and ``rte_eth_dev_detach()``
+  will be removed.
+  Hotplug functions ``rte_eal_hotplug_add()`` and ``rte_eal_hotplug_remove()``
+  should be used instread.
+  Function ``rte_eth_dev_get_port_by_name()`` may be used to find
+  identifier of the added port.
+
+* eal: In v18.11 ``rte_eal_dev_attach()`` and ``rte_eal_dev_detach()``
+  will be removed.
+  Hotplug functions ``rte_eal_hotplug_add()`` and ``rte_eal_hotplug_remove()``
+  should be used directly.
+
 * pdump: As we changed to use generic IPC, some changes in APIs and structure
   are expected in subsequent release.
 
@@ -98,27 +89,9 @@ Deprecation Notices
   - The parameter, ``path``, of ``rte_pdump_init`` will be removed;
   - The enum ``rte_pdump_socktype`` will be removed.
 
-* cryptodev: The following changes will be made in the library
-  for 18.08:
+* ethdev: flow API function ``rte_flow_copy()`` will be deprecated in v18.11
+  in favor of ``rte_flow_conv()`` (which will appear in that version) and
+  subsequently removed for v19.02.
 
-  - Removal of ``sym`` structure in ``rte_cryptodev_info`` structure,
-    containing fields not relevant anymore since the session mempool
-    is not internal in the crypto device anymore.
-  - Replacement of ``pci_dev`` field with the more generic ``rte_device``
-    structure.
-  - Functions ``rte_cryptodev_queue_pair_attach_sym_session()`` and
-    ``rte_cryptodev_queue_pair_dettach_sym_session()`` will be deprecated from
-    18.05 and removed in 18.08, as there are no drivers doing anything useful
-    with them.
-  - Functions ``rte_cryptodev_queue_pair_start()`` and
-    ``rte_cryptodev_queue_pair_stop()`` will be deprecated from 18.05
-    and removed in 18.08, as there are no drivers doing anything useful
-    with them.
-  - Some feature flags such as ``RTE_CRYPTODEV_FF_MBUF_SCATTER_GATHER`` are ambiguous,
-    so some will be replaced by more explicit flags.
-  - Function ``rte_cryptodev_get_header_session_size()`` will be deprecated
-    in 18.05, and it gets replaced with ``rte_cryptodev_sym_get_header_session_size()``.
-    It will be removed in 18.08.
-  - Function ``rte_cryptodev_get_private_session_size()`` will be deprecated
-    in 18.05, and it gets replaced with ``rte_cryptodev_sym_get_private_session_size()``.
-    It will be removed in 18.08.
+  This is due to a lack of flexibility and reliance on a type unusable with
+  C++ programs (struct rte_flow_desc).

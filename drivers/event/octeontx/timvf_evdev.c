@@ -6,9 +6,7 @@
 
 int otx_logtype_timvf;
 
-RTE_INIT(otx_timvf_init_log);
-static void
-otx_timvf_init_log(void)
+RTE_INIT(otx_timvf_init_log)
 {
 	otx_logtype_timvf = rte_log_register("pmd.event.octeontx.timer");
 	if (otx_logtype_timvf >= 0)
@@ -174,7 +172,7 @@ timvf_ring_start(const struct rte_event_timer_adapter *adptr)
 	if (use_fpa) {
 		pool = (uintptr_t)((struct rte_mempool *)
 				timr->chunk_pool)->pool_id;
-		ret = octeontx_fpa_bufpool_gpool(pool);
+		ret = octeontx_fpa_bufpool_gaura(pool);
 		if (ret < 0) {
 			timvf_log_dbg("Unable to get gaura id");
 			ret = -ENOMEM;

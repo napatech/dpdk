@@ -1,11 +1,8 @@
-/*
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2013-2015 Brocade Communications Systems, Inc.
- *
  * Copyright (c) 2015-2018 Cavium Inc.
  * All rights reserved.
  * www.cavium.com
- *
- * See LICENSE.bnx2x_pmd for copyright and licensing details.
  */
 
 #ifndef PMD_BNX2X_ETHDEV_H
@@ -58,7 +55,6 @@
 #define wmb()   rte_wmb()
 #define rmb()   rte_rmb()
 
-
 #define MAX_QUEUES sysconf(_SC_NPROCESSORS_CONF)
 
 #define BNX2X_MIN_RX_BUF_SIZE 1024
@@ -71,6 +67,8 @@
 #define BNX2X_TX_TICKS 50
 /* Maximum number of Rx packets to process at a time */
 #define BNX2X_RX_BUDGET 0xffffffff
+
+#define BNX2X_SP_TIMER_PERIOD US_PER_S /* 1 second */
 
 #endif
 

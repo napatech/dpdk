@@ -50,7 +50,7 @@ struct rte_dpaa_bus rte_dpaa_bus;
 struct netcfg_info *dpaa_netcfg;
 
 /* define a variable to hold the portal_key, once created.*/
-pthread_key_t dpaa_portal_key;
+static pthread_key_t dpaa_portal_key;
 
 unsigned int dpaa_svr_family;
 
@@ -539,6 +539,13 @@ rte_dpaa_bus_probe(void)
 	unsigned int svr_ver;
 	int probe_all = rte_dpaa_bus.bus.conf.scan_mode != RTE_BUS_SCAN_WHITELIST;
 
+	svr_file = fopen(DPAA_SOC_ID_FILE, "r");
+	if (svr_file) {
+		if (fscanf(svr_file, "svr:%x", &svr_ver) > 0)
+			dpaa_svr_family = svr_ver & SVR_MASK;
+		fclose(svr_file);
+	}
+
 	/* For each registered driver, and device, call the driver->probe */
 	TAILQ_FOREACH(dev, &rte_dpaa_bus.device_list, next) {
 		TAILQ_FOREACH(drv, &rte_dpaa_bus.driver_list, next) {
@@ -568,13 +575,6 @@ rte_dpaa_bus_probe(void)
 	 */
 	if (!TAILQ_EMPTY(&rte_dpaa_bus.device_list))
 		rte_mbuf_set_platform_mempool_ops(DPAA_MEMPOOL_OPS_NAME);
-
-	svr_file = fopen(DPAA_SOC_ID_FILE, "r");
-	if (svr_file) {
-		if (fscanf(svr_file, "svr:%x", &svr_ver) > 0)
-			dpaa_svr_family = svr_ver & SVR_MASK;
-		fclose(svr_file);
-	}
 
 	return 0;
 }
@@ -626,9 +626,7 @@ struct rte_dpaa_bus rte_dpaa_bus = {
 
 RTE_REGISTER_BUS(FSL_DPAA_BUS_NAME, rte_dpaa_bus.bus);
 
-RTE_INIT(dpaa_init_log);
-static void
-dpaa_init_log(void)
+RTE_INIT(dpaa_init_log)
 {
 	dpaa_logtype_bus = rte_log_register("bus.dpaa");
 	if (dpaa_logtype_bus >= 0)

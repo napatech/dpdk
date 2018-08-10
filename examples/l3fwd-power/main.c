@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2010-2016 Intel Corporation
+ * Copyright(c) 2010-2018 Intel Corporation
  */
 
 #include <stdio.h>
@@ -43,6 +43,9 @@
 #include <rte_timer.h>
 #include <rte_power.h>
 #include <rte_spinlock.h>
+
+#include "perf_core.h"
+#include "main.h"
 
 #define RTE_LOGTYPE_L3FWD_POWER RTE_LOGTYPE_USER1
 
@@ -155,14 +158,7 @@ struct lcore_rx_queue {
 #define MAX_RX_QUEUE_INTERRUPT_PER_PORT 16
 
 
-#define MAX_LCORE_PARAMS 1024
-struct lcore_params {
-	uint16_t port_id;
-	uint8_t queue_id;
-	uint8_t lcore_id;
-} __rte_cache_aligned;
-
-static struct lcore_params lcore_params_array[MAX_LCORE_PARAMS];
+struct lcore_params lcore_params_array[MAX_LCORE_PARAMS];
 static struct lcore_params lcore_params_array_default[] = {
 	{0, 0, 2},
 	{0, 1, 2},
@@ -175,8 +171,8 @@ static struct lcore_params lcore_params_array_default[] = {
 	{3, 1, 3},
 };
 
-static struct lcore_params * lcore_params = lcore_params_array_default;
-static uint16_t nb_lcore_params = sizeof(lcore_params_array_default) /
+struct lcore_params *lcore_params = lcore_params_array_default;
+uint16_t nb_lcore_params = sizeof(lcore_params_array_default) /
 				sizeof(lcore_params_array_default[0]);
 
 static struct rte_eth_conf port_conf = {
@@ -184,7 +180,6 @@ static struct rte_eth_conf port_conf = {
 		.mq_mode        = ETH_MQ_RX_RSS,
 		.max_rx_pkt_len = ETHER_MAX_LEN,
 		.split_hdr_size = 0,
-		.ignore_offload_bitfield = 1,
 		.offloads = (DEV_RX_OFFLOAD_CRC_STRIP |
 			     DEV_RX_OFFLOAD_CHECKSUM),
 	},
@@ -1121,10 +1116,15 @@ print_usage(const char *prgname)
 {
 	printf ("%s [EAL options] -- -p PORTMASK -P"
 		"  [--config (port,queue,lcore)[,(port,queue,lcore]]"
+		"  [--high-perf-cores CORELIST"
+		"  [--perf-config (port,queue,hi_perf,lcore_index)[,(port,queue,hi_perf,lcore_index]]"
 		"  [--enable-jumbo [--max-pkt-len PKTLEN]]\n"
 		"  -p PORTMASK: hexadecimal bitmask of ports to configure\n"
 		"  -P : enable promiscuous mode\n"
 		"  --config (port,queue,lcore): rx queues configuration\n"
+		"  --high-perf-cores CORELIST: list of high performance cores\n"
+		"  --perf-config: similar as config, cores specified as indices"
+		" for bins containing high or regular performance cores\n"
 		"  --no-numa: optional, disable numa awareness\n"
 		"  --enable-jumbo: enable jumbo frame"
 		" which max packet len is PKTLEN in decimal (64-9600)\n"
@@ -1234,6 +1234,8 @@ parse_args(int argc, char **argv)
 	char *prgname = argv[0];
 	static struct option lgopts[] = {
 		{"config", 1, 0, 0},
+		{"perf-config", 1, 0, 0},
+		{"high-perf-cores", 1, 0, 0},
 		{"no-numa", 0, 0, 0},
 		{"enable-jumbo", 0, 0, 0},
 		{CMD_LINE_OPT_PARSE_PTYPE, 0, 0, 0},
@@ -1266,6 +1268,26 @@ parse_args(int argc, char **argv)
 				ret = parse_config(optarg);
 				if (ret) {
 					printf("invalid config\n");
+					print_usage(prgname);
+					return -1;
+				}
+			}
+
+			if (!strncmp(lgopts[option_index].name,
+					"perf-config", 11)) {
+				ret = parse_perf_config(optarg);
+				if (ret) {
+					printf("invalid perf-config\n");
+					print_usage(prgname);
+					return -1;
+				}
+			}
+
+			if (!strncmp(lgopts[option_index].name,
+					"high-perf-cores", 15)) {
+				ret = parse_perf_core_list(optarg);
+				if (ret) {
+					printf("invalid high-perf-cores\n");
 					print_usage(prgname);
 					return -1;
 				}
@@ -1609,6 +1631,23 @@ static int check_ptype(uint16_t portid)
 
 }
 
+static int
+init_power_library(void)
+{
+	int ret = 0, lcore_id;
+	for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++) {
+		if (rte_lcore_is_enabled(lcore_id)) {
+			/* init power management library */
+			ret = rte_power_init(lcore_id);
+			if (ret)
+				RTE_LOG(ERR, POWER,
+				"Library initialization failed on core %u\n",
+				lcore_id);
+		}
+	}
+	return ret;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1642,6 +1681,12 @@ main(int argc, char **argv)
 	ret = parse_args(argc, argv);
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "Invalid L3FWD parameters\n");
+
+	if (init_power_library())
+		rte_exit(EXIT_FAILURE, "init_power_library failed\n");
+
+	if (update_lcore_params() < 0)
+		rte_exit(EXIT_FAILURE, "update_lcore_params failed\n");
 
 	if (check_lcore_params() < 0)
 		rte_exit(EXIT_FAILURE, "check_lcore_params failed\n");
@@ -1693,6 +1738,18 @@ main(int argc, char **argv)
 		if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 			local_port_conf.txmode.offloads |=
 				DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+
+		local_port_conf.rx_adv_conf.rss_conf.rss_hf &=
+			dev_info.flow_type_rss_offloads;
+		if (local_port_conf.rx_adv_conf.rss_conf.rss_hf !=
+				port_conf.rx_adv_conf.rss_conf.rss_hf) {
+			printf("Port %u modified RSS hash function based on hardware support,"
+				"requested:%#"PRIx64" configured:%#"PRIx64"\n",
+				portid,
+				port_conf.rx_adv_conf.rss_conf.rss_hf,
+				local_port_conf.rx_adv_conf.rss_conf.rss_hf);
+		}
+
 		ret = rte_eth_dev_configure(portid, nb_rx_queue,
 					(uint16_t)n_tx_queue, &local_port_conf);
 		if (ret < 0)
@@ -1750,7 +1807,6 @@ main(int argc, char **argv)
 			fflush(stdout);
 
 			txconf = &dev_info.default_txconf;
-			txconf->txq_flags = ETH_TXQ_FLAGS_IGNORE;
 			txconf->offloads = local_port_conf.txmode.offloads;
 			ret = rte_eth_tx_queue_setup(portid, queueid, nb_txd,
 						     socketid, txconf);
@@ -1772,12 +1828,6 @@ main(int argc, char **argv)
 	for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++) {
 		if (rte_lcore_is_enabled(lcore_id) == 0)
 			continue;
-
-		/* init power management library */
-		ret = rte_power_init(lcore_id);
-		if (ret)
-			RTE_LOG(ERR, POWER,
-				"Library initialization failed on core %u\n", lcore_id);
 
 		/* init timer structures for each enabled lcore */
 		rte_timer_init(&power_timers[lcore_id]);

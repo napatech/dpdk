@@ -57,10 +57,10 @@ typedef uint16_t streamid_t;
 
 #define MAX_QUEUE_ID ((1 << (sizeof(queueid_t) * 8)) - 1)
 
-#if defined RTE_LIBRTE_PMD_SOFTNIC && defined RTE_LIBRTE_SCHED
-#define TM_MODE			1
+#if defined RTE_LIBRTE_PMD_SOFTNIC
+#define SOFTNIC			1
 #else
-#define TM_MODE			0
+#define SOFTNIC			0
 #endif
 
 enum {
@@ -135,35 +135,13 @@ struct port_flow {
 	uint8_t data[]; /**< Storage for pattern/actions. */
 };
 
-#ifdef TM_MODE
-/**
- * Soft port tm related parameters
- */
-struct softnic_port_tm {
-	uint32_t default_hierarchy_enable; /**< def hierarchy enable flag */
-	uint32_t hierarchy_config;  /**< set to 1 if hierarchy configured */
-
-	uint32_t n_subports_per_port;  /**< Num of subport nodes per port */
-	uint32_t n_pipes_per_subport;  /**< Num of pipe nodes per subport */
-
-	uint64_t tm_pktfield0_slabpos;	/**< Pkt field position for subport */
-	uint64_t tm_pktfield0_slabmask; /**< Pkt field mask for the subport */
-	uint64_t tm_pktfield0_slabshr;
-	uint64_t tm_pktfield1_slabpos; /**< Pkt field position for the pipe */
-	uint64_t tm_pktfield1_slabmask; /**< Pkt field mask for the pipe */
-	uint64_t tm_pktfield1_slabshr;
-	uint64_t tm_pktfield2_slabpos; /**< Pkt field position table index */
-	uint64_t tm_pktfield2_slabmask;	/**< Pkt field mask for tc table idx */
-	uint64_t tm_pktfield2_slabshr;
-	uint64_t tm_tc_table[64];  /**< TC translation table */
-};
-
+#ifdef SOFTNIC
 /**
  * The data structure associate with softnic port
  */
 struct softnic_port {
-	unsigned int tm_flag;	/**< set to 1 if tm feature is enabled */
-	struct softnic_port_tm tm;	/**< softnic port tm parameters */
+	uint32_t default_tm_hierarchy_enable; /**< default tm hierarchy */
+	struct fwd_lcore **fwd_lcore_arg; /**< softnic fwd core parameters */
 };
 #endif
 
@@ -202,9 +180,8 @@ struct rte_port {
 	uint32_t                mc_addr_nb; /**< nb. of addr. in mc_addr_pool */
 	uint8_t                 slave_flag; /**< bonding slave port */
 	struct port_flow        *flow_list; /**< Associated flows. */
-#ifdef TM_MODE
-	unsigned int			softnic_enable;	/**< softnic flag */
-	struct softnic_port     softport;  /**< softnic port params */
+#ifdef SOFTNIC
+	struct softnic_port     softport;  /**< softnic params */
 #endif
 };
 
@@ -266,9 +243,8 @@ extern struct fwd_engine rx_only_engine;
 extern struct fwd_engine tx_only_engine;
 extern struct fwd_engine csum_fwd_engine;
 extern struct fwd_engine icmp_echo_engine;
-#ifdef TM_MODE
-extern struct fwd_engine softnic_tm_engine;
-extern struct fwd_engine softnic_tm_bypass_engine;
+#ifdef SOFTNIC
+extern struct fwd_engine softnic_fwd_engine;
 #endif
 #ifdef RTE_LIBRTE_IEEE1588
 extern struct fwd_engine ieee1588_fwd_engine;
@@ -478,6 +454,38 @@ struct gso_status {
 };
 extern struct gso_status gso_ports[RTE_MAX_ETHPORTS];
 extern uint16_t gso_max_segment_size;
+
+/* VXLAN encap/decap parameters. */
+struct vxlan_encap_conf {
+	uint32_t select_ipv4:1;
+	uint32_t select_vlan:1;
+	uint8_t vni[3];
+	rte_be16_t udp_src;
+	rte_be16_t udp_dst;
+	rte_be32_t ipv4_src;
+	rte_be32_t ipv4_dst;
+	uint8_t ipv6_src[16];
+	uint8_t ipv6_dst[16];
+	rte_be16_t vlan_tci;
+	uint8_t eth_src[ETHER_ADDR_LEN];
+	uint8_t eth_dst[ETHER_ADDR_LEN];
+};
+struct vxlan_encap_conf vxlan_encap_conf;
+
+/* NVGRE encap/decap parameters. */
+struct nvgre_encap_conf {
+	uint32_t select_ipv4:1;
+	uint32_t select_vlan:1;
+	uint8_t tni[3];
+	rte_be32_t ipv4_src;
+	rte_be32_t ipv4_dst;
+	uint8_t ipv6_src[16];
+	uint8_t ipv6_dst[16];
+	rte_be16_t vlan_tci;
+	uint8_t eth_src[ETHER_ADDR_LEN];
+	uint8_t eth_dst[ETHER_ADDR_LEN];
+};
+struct nvgre_encap_conf nvgre_encap_conf;
 
 static inline unsigned int
 lcore_num(void)

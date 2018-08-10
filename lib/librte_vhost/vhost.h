@@ -43,6 +43,7 @@
  * from vring to do scatter RX.
  */
 struct buf_vector {
+	uint64_t buf_iova;
 	uint64_t buf_addr;
 	uint32_t buf_len;
 	uint32_t desc_idx;
@@ -55,6 +56,7 @@ struct buf_vector {
 struct zcopy_mbuf {
 	struct rte_mbuf *mbuf;
 	uint32_t desc_idx;
+	uint16_t desc_count;
 	uint16_t in_use;
 
 	TAILQ_ENTRY(zcopy_mbuf) next;
@@ -79,19 +81,35 @@ struct log_cache_entry {
 	unsigned long val;
 };
 
+struct vring_used_elem_packed {
+	uint16_t id;
+	uint32_t len;
+	uint32_t count;
+};
+
 /**
  * Structure contains variables relevant to RX/TX virtqueues.
  */
 struct vhost_virtqueue {
-	struct vring_desc	*desc;
-	struct vring_avail	*avail;
-	struct vring_used	*used;
+	union {
+		struct vring_desc	*desc;
+		struct vring_packed_desc   *desc_packed;
+	};
+	union {
+		struct vring_avail	*avail;
+		struct vring_packed_desc_event *driver_event;
+	};
+	union {
+		struct vring_used	*used;
+		struct vring_packed_desc_event *device_event;
+	};
 	uint32_t		size;
 
 	uint16_t		last_avail_idx;
 	uint16_t		last_used_idx;
 	/* Last used index we notify to front end. */
 	uint16_t		signalled_used;
+	bool			signalled_used_valid;
 #define VIRTIO_INVALID_EVENTFD		(-1)
 #define VIRTIO_UNINITIALIZED_EVENTFD	(-2)
 
@@ -115,12 +133,17 @@ struct vhost_virtqueue {
 	struct zcopy_mbuf	*zmbufs;
 	struct zcopy_mbuf_list	zmbuf_list;
 
-	struct vring_used_elem  *shadow_used_ring;
+	union {
+		struct vring_used_elem  *shadow_used_split;
+		struct vring_used_elem_packed *shadow_used_packed;
+	};
 	uint16_t                shadow_used_idx;
 	struct vhost_vring_addr ring_addrs;
 
 	struct batch_copy_elem	*batch_copy_elems;
 	uint16_t		batch_copy_nb_elems;
+	bool			used_wrap_counter;
+	bool			avail_wrap_counter;
 
 	struct log_cache_entry log_cache[VHOST_LOG_CACHE_NR];
 	uint16_t log_cache_nb_elem;
@@ -191,6 +214,42 @@ struct vhost_msg {
  #define VIRTIO_F_VERSION_1 32
 #endif
 
+/* Declare packed ring related bits for older kernels */
+#ifndef VIRTIO_F_RING_PACKED
+
+#define VIRTIO_F_RING_PACKED 34
+
+#define VRING_DESC_F_NEXT	1
+#define VRING_DESC_F_WRITE	2
+#define VRING_DESC_F_INDIRECT	4
+
+#define VRING_DESC_F_AVAIL	(1ULL << 7)
+#define VRING_DESC_F_USED	(1ULL << 15)
+
+struct vring_packed_desc {
+	uint64_t addr;
+	uint32_t len;
+	uint16_t id;
+	uint16_t flags;
+};
+
+#define VRING_EVENT_F_ENABLE 0x0
+#define VRING_EVENT_F_DISABLE 0x1
+#define VRING_EVENT_F_DESC 0x2
+
+struct vring_packed_desc_event {
+	uint16_t off_wrap;
+	uint16_t flags;
+};
+#endif
+
+/*
+ * Available and used descs are in same order
+ */
+#ifndef VIRTIO_F_IN_ORDER
+#define VIRTIO_F_IN_ORDER      35
+#endif
+
 /* Features supported by this builtin vhost-user net driver. */
 #define VIRTIO_NET_SUPPORTED_FEATURES ((1ULL << VIRTIO_NET_F_MRG_RXBUF) | \
 				(1ULL << VIRTIO_F_ANY_LAYOUT) | \
@@ -214,7 +273,8 @@ struct vhost_msg {
 				(1ULL << VIRTIO_NET_F_GUEST_ECN) | \
 				(1ULL << VIRTIO_RING_F_INDIRECT_DESC) | \
 				(1ULL << VIRTIO_RING_F_EVENT_IDX) | \
-				(1ULL << VIRTIO_NET_F_MTU) | \
+				(1ULL << VIRTIO_NET_F_MTU)  | \
+				(1ULL << VIRTIO_F_IN_ORDER) | \
 				(1ULL << VIRTIO_F_IOMMU_PLATFORM))
 
 
@@ -301,6 +361,7 @@ struct virtio_net {
 	struct guest_page       *guest_pages;
 
 	int			slave_req_fd;
+	rte_spinlock_t		slave_req_lock;
 
 	/*
 	 * Device id to identify a specific backend device.
@@ -313,6 +374,19 @@ struct virtio_net {
 	/* pre and post vhost user message handlers for the device */
 	struct vhost_user_extern_ops extern_ops;
 } __rte_cache_aligned;
+
+static __rte_always_inline bool
+vq_is_packed(struct virtio_net *dev)
+{
+	return dev->features & (1ull << VIRTIO_F_RING_PACKED);
+}
+
+static inline bool
+desc_is_avail(struct vring_packed_desc *desc, bool wrap_counter)
+{
+	return wrap_counter == !!(desc->flags & VRING_DESC_F_AVAIL) &&
+		wrap_counter != !!(desc->flags & VRING_DESC_F_USED);
+}
 
 #define VHOST_LOG_PAGE	4096
 
@@ -428,6 +502,7 @@ vhost_log_cache_page(struct virtio_net *dev, struct vhost_virtqueue *vq,
 
 	vq->log_cache[i].offset = offset;
 	vq->log_cache[i].val = (1UL << bit_nr);
+	vq->log_cache_nb_elem++;
 }
 
 static __rte_always_inline void
@@ -535,9 +610,10 @@ int vhost_new_device(void);
 void cleanup_device(struct virtio_net *dev, int destroy);
 void reset_device(struct virtio_net *dev);
 void vhost_destroy_device(int);
+void vhost_destroy_device_notify(struct virtio_net *dev);
 
 void cleanup_vq(struct vhost_virtqueue *vq, int destroy);
-void free_vq(struct vhost_virtqueue *vq);
+void free_vq(struct virtio_net *dev, struct vhost_virtqueue *vq);
 
 int alloc_vring_queue(struct virtio_net *dev, uint32_t vring_idx);
 
@@ -588,10 +664,10 @@ vhost_need_event(uint16_t event_idx, uint16_t new_idx, uint16_t old)
 }
 
 static __rte_always_inline void
-vhost_vring_call(struct virtio_net *dev, struct vhost_virtqueue *vq)
+vhost_vring_call_split(struct virtio_net *dev, struct vhost_virtqueue *vq)
 {
 	/* Flush used->idx update before we read avail->flags. */
-	rte_mb();
+	rte_smp_mb();
 
 	/* Don't kick guest if we don't reach index specified by guest. */
 	if (dev->features & (1ULL << VIRTIO_RING_F_EVENT_IDX)) {
@@ -613,6 +689,57 @@ vhost_vring_call(struct virtio_net *dev, struct vhost_virtqueue *vq)
 				&& (vq->callfd >= 0))
 			eventfd_write(vq->callfd, (eventfd_t)1);
 	}
+}
+
+static __rte_always_inline void
+vhost_vring_call_packed(struct virtio_net *dev, struct vhost_virtqueue *vq)
+{
+	uint16_t old, new, off, off_wrap;
+	bool signalled_used_valid, kick = false;
+
+	/* Flush used desc update. */
+	rte_smp_mb();
+
+	if (!(dev->features & (1ULL << VIRTIO_RING_F_EVENT_IDX))) {
+		if (vq->driver_event->flags !=
+				VRING_EVENT_F_DISABLE)
+			kick = true;
+		goto kick;
+	}
+
+	old = vq->signalled_used;
+	new = vq->last_used_idx;
+	vq->signalled_used = new;
+	signalled_used_valid = vq->signalled_used_valid;
+	vq->signalled_used_valid = true;
+
+	if (vq->driver_event->flags != VRING_EVENT_F_DESC) {
+		if (vq->driver_event->flags != VRING_EVENT_F_DISABLE)
+			kick = true;
+		goto kick;
+	}
+
+	if (unlikely(!signalled_used_valid)) {
+		kick = true;
+		goto kick;
+	}
+
+	rte_smp_rmb();
+
+	off_wrap = vq->driver_event->off_wrap;
+	off = off_wrap & ~(1 << 15);
+
+	if (new <= old)
+		old -= vq->size;
+
+	if (vq->used_wrap_counter != off_wrap >> 15)
+		off -= vq->size;
+
+	if (vhost_need_event(off, new, old))
+		kick = true;
+kick:
+	if (kick)
+		eventfd_write(vq->callfd, (eventfd_t)1);
 }
 
 #endif /* _VHOST_NET_CDEV_H_ */

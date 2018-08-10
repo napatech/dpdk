@@ -198,15 +198,6 @@ static inline int cxgbe_fls(int x)
 	return x ? sizeof(x) * 8 - __builtin_clz(x) : 0;
 }
 
-/**
- * cxgbe_ffs - find first bit set
- * @x: the word to search
- */
-static inline int cxgbe_ffs(int x)
-{
-	return x ? __builtin_ffs(x) : 0;
-}
-
 static inline unsigned long ilog2(unsigned long n)
 {
 	unsigned int e = 0;
@@ -249,5 +240,17 @@ static inline void writel_relaxed(unsigned int val, volatile void __iomem *addr)
 {
 	rte_write32_relaxed(val, addr);
 }
+
+/*
+ * Multiplies an integer by a fraction, while avoiding unnecessary
+ * overflow or loss of precision.
+ */
+#define mult_frac(x, numer, denom)(                     \
+{                                                       \
+	typeof(x) quot = (x) / (denom);                 \
+	typeof(x) rem  = (x) % (denom);                 \
+	(quot * (numer)) + ((rem * (numer)) / (denom)); \
+}                                                       \
+)
 
 #endif /* _CXGBE_COMPAT_H_ */

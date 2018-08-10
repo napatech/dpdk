@@ -11,6 +11,10 @@ driver_classes = ['common',
 	       'event',   # depends on common, bus, mempool and net.
 	       'raw']     # depends on common, bus, mempool, net and event.
 
+default_cflags = machine_args
+if cc.has_argument('-Wno-format-truncation')
+	default_cflags += '-Wno-format-truncation'
+endif
 foreach class:driver_classes
 	drivers = []
 	std_deps = []
@@ -31,7 +35,7 @@ foreach class:driver_classes
 		allow_experimental_apis = false
 		sources = []
 		objs = []
-		cflags = machine_args
+		cflags = default_cflags
 		includes = [include_directories(drv_path)]
 		# set up internal deps. Drivers can append/override as necessary
 		deps = std_deps
@@ -58,6 +62,10 @@ foreach class:driver_classes
 			shared_objs = []
 			static_objs = []
 			foreach d:deps
+				if not is_variable('shared_rte_' + d)
+					error('Missing dependency ' + d +
+						' for driver ' + lib_name)
+				endif
 				shared_objs += [get_variable('shared_rte_' + d)]
 				static_objs += [get_variable('static_rte_' + d)]
 			endforeach

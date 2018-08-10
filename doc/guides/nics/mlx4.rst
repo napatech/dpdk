@@ -142,6 +142,9 @@ Limitations
   The ability to enable/disable CRC stripping requires OFED version
   4.3-1.5.0.0 and above  or rdma-core version v18 and above.
 
+- TSO (Transmit Segmentation Offload) is supported in OFED version
+  4.4 and above.
+
 Prerequisites
 -------------
 
@@ -210,7 +213,7 @@ Current RDMA core package and Linux kernel (recommended)
 Mellanox OFED as a fallback
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- `Mellanox OFED`_ version: **4.3**.
+- `Mellanox OFED`_ version: **4.3, 4.4**.
 - firmware version: **2.42.5000** and above.
 
 .. _`Mellanox OFED`: http://www.mellanox.com/page/products_dyn?product_family=26&mtag=linux_sw_drivers
