@@ -640,8 +640,15 @@ mlx5_args_assign(struct priv *priv, struct mlx5_args *args)
 		priv->txq_inline = args->txq_inline;
 	if (args->txqs_inline != MLX5_ARG_UNSET)
 		priv->txqs_inline = args->txqs_inline;
-	if (args->mps != MLX5_ARG_UNSET)
+	if (args->mps != MLX5_ARG_UNSET) {
 		priv->mps = args->mps ? priv->mps : 0;
+	} else if (priv->mps == MLX5_MPW) {
+		/*
+		 * MPW is disabled by default, while the Enhanced MPW is enabled
+		 * by default.
+		 */
+		priv->mps = MLX5_MPW_DISABLED;
+	}
 	if (args->mpw_hdr_dseg != MLX5_ARG_UNSET)
 		priv->mpw_hdr_dseg = args->mpw_hdr_dseg;
 	if (args->inline_max_packet_sz != MLX5_ARG_UNSET)
