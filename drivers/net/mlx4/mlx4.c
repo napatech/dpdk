@@ -494,14 +494,14 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 	ibv_dev = list[i];
 	DEBUG("device opened");
 	if (ibv_query_device(attr_ctx, &device_attr)) {
-		rte_errno = ENODEV;
+		err = ENODEV;
 		goto error;
 	}
 	INFO("%u port(s) detected", device_attr.phys_port_cnt);
 	conf.ports.present |= (UINT64_C(1) << device_attr.phys_port_cnt) - 1;
 	if (mlx4_args(pci_dev->device.devargs, &conf)) {
 		ERROR("failed to process device arguments");
-		rte_errno = EINVAL;
+		err = EINVAL;
 		goto error;
 	}
 	/* Use all ports when none are defined */
@@ -522,18 +522,18 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		DEBUG("using port %u", port);
 		ctx = ibv_open_device(ibv_dev);
 		if (ctx == NULL) {
-			rte_errno = ENODEV;
+			err = ENODEV;
 			goto port_error;
 		}
 		/* Check port status. */
 		err = ibv_query_port(ctx, port, &port_attr);
 		if (err) {
-			rte_errno = err;
-			ERROR("port query failed: %s", strerror(rte_errno));
+			err = ENODEV;
+			ERROR("port query failed: %s", strerror(err));
 			goto port_error;
 		}
 		if (port_attr.link_layer != IBV_LINK_LAYER_ETHERNET) {
-			rte_errno = ENOTSUP;
+			err = ENOTSUP;
 			ERROR("port %d is not configured in Ethernet mode",
 			      port);
 			goto port_error;
@@ -543,15 +543,16 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			      port, ibv_port_state_str(port_attr.state),
 			      port_attr.state);
 		/* Make asynchronous FD non-blocking to handle interrupts. */
-		if (mlx4_fd_set_non_blocking(ctx->async_fd) < 0) {
+		err = mlx4_fd_set_non_blocking(ctx->async_fd);
+		if (err) {
 			ERROR("cannot make asynchronous FD non-blocking: %s",
-			      strerror(rte_errno));
+			      strerror(err));
 			goto port_error;
 		}
 		/* Allocate protection domain. */
 		pd = ibv_alloc_pd(ctx);
 		if (pd == NULL) {
-			rte_errno = ENOMEM;
+			err = ENOMEM;
 			ERROR("PD allocation failure");
 			goto port_error;
 		}
@@ -560,7 +561,7 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 				   sizeof(*priv),
 				   RTE_CACHE_LINE_SIZE);
 		if (priv == NULL) {
-			rte_errno = ENOMEM;
+			err = ENOMEM;
 			ERROR("priv allocation failure");
 			goto port_error;
 		}
@@ -582,9 +583,10 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		DEBUG("L2 tunnel checksum offloads are %ssupported",
 		      (priv->hw_csum_l2tun ? "" : "not "));
 		/* Configure the first MAC address by default. */
-		if (mlx4_get_mac(priv, &mac.addr_bytes)) {
+		err = mlx4_get_mac(priv, &mac.addr_bytes);
+		if (err) {
 			ERROR("cannot get MAC address, is mlx4_en loaded?"
-			      " (rte_errno: %s)", strerror(rte_errno));
+			      " (error: %s)", strerror(err));
 			goto port_error;
 		}
 		INFO("port %u MAC address is %02x:%02x:%02x:%02x:%02x:%02x",
@@ -617,8 +619,8 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			eth_dev = rte_eth_dev_allocate(name);
 		}
 		if (eth_dev == NULL) {
+			err = ENOMEM;
 			ERROR("can not allocate rte ethdev");
-			rte_errno = ENOMEM;
 			goto port_error;
 		}
 		eth_dev->data->dev_private = priv;
@@ -663,8 +665,6 @@ port_error:
 			rte_eth_dev_release_port(eth_dev);
 		break;
 	}
-	if (i == device_attr.phys_port_cnt)
-		return 0;
 	/*
 	 * XXX if something went wrong in the loop above, there is a resource
 	 * leak (ctx, pd, priv, dpdk ethdev) but we can do nothing about it as
@@ -676,8 +676,9 @@ error:
 		claim_zero(ibv_close_device(attr_ctx));
 	if (list)
 		ibv_free_device_list(list);
-	assert(rte_errno >= 0);
-	return -rte_errno;
+	if (err)
+		rte_errno = err;
+	return -err;
 }
 
 static const struct rte_pci_id mlx4_pci_id_map[] = {
