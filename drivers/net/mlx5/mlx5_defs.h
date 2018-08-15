@@ -124,4 +124,9 @@
  */
 #define MLX5_UAR_OFFSET (1ULL << 32)
 
+/* Definition of static_assert found in /usr/include/assert.h */
+#ifndef HAVE_STATIC_ASSERT
+#define static_assert _Static_assert
+#endif
+
 #endif /* RTE_PMD_MLX5_DEFS_H_ */
