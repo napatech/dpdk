@@ -129,6 +129,7 @@ struct priv {
 	uint32_t rss_init:1; /**< Common RSS context is initialized. */
 	uint32_t hw_csum:1; /* Checksum offload is supported. */
 	uint32_t hw_csum_l2tun:1; /* Checksum support for L2 tunnels. */
+	uint32_t hw_rss_max_qps; /**< Max Rx Queues supported by RSS. */
 	struct rte_intr_handle intr_handle; /**< Port interrupt handle. */
 	struct mlx4_drop *drop; /**< Shared resources for drop flow rules. */
 	LIST_HEAD(, mlx4_rss) rss; /**< Shared targets for Rx flow rules. */

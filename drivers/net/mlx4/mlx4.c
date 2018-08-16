@@ -434,6 +434,7 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 	int err = 0;
 	struct ibv_context *attr_ctx = NULL;
 	struct ibv_device_attr device_attr;
+	struct ibv_device_attr_ex device_attr_ex;
 	struct mlx4_conf conf = {
 		.ports.present = 0,
 	};
@@ -507,6 +508,11 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 	/* Use all ports when none are defined */
 	if (!conf.ports.enabled)
 		conf.ports.enabled = conf.ports.present;
+	/* Retrieve extended device attributes. */
+	if (ibv_query_device_ex(attr_ctx, NULL, &device_attr_ex)) {
+		err = ENODEV;
+		goto error;
+	}
 	for (i = 0; i < device_attr.phys_port_cnt; i++) {
 		uint32_t port = i + 1; /* ports are indexed from one */
 		struct ibv_context *ctx = NULL;
@@ -582,6 +588,9 @@ mlx4_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			 PCI_DEVICE_ID_MELLANOX_CONNECTX3PRO);
 		DEBUG("L2 tunnel checksum offloads are %ssupported",
 		      (priv->hw_csum_l2tun ? "" : "not "));
+		priv->hw_rss_max_qps =
+			device_attr_ex.rss_caps.max_rwq_indirection_table_size;
+		DEBUG("MAX RSS queues %d", priv->hw_rss_max_qps);
 		/* Configure the first MAC address by default. */
 		err = mlx4_get_mac(priv, &mac.addr_bytes);
 		if (err) {
