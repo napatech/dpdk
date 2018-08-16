@@ -3001,9 +3001,11 @@ exit:
 		if (parser.queue[i].ibv_attr)
 			rte_free(parser.queue[i].ibv_attr);
 	}
-	if (ret)
+	if (ret) {
 		rte_errno = ret; /* Restore rte_errno. */
-	return -rte_errno;
+		return -rte_errno;
+	}
+	return 0;
 }
 
 /**
