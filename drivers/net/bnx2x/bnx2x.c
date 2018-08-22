@@ -7062,7 +7062,7 @@ void bnx2x_periodic_callout(struct bnx2x_softc *sc)
 {
 	if ((sc->state != BNX2X_STATE_OPEN) ||
 	    (atomic_load_acq_long(&sc->periodic_flags) == PERIODIC_STOP)) {
-		PMD_DRV_LOG(WARNING, "periodic callout exit (state=0x%x)",
+		PMD_DRV_LOG(INFO, "periodic callout exit (state=0x%x)",
 			    sc->state);
 		return;
 	}

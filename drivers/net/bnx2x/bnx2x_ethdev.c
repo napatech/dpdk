@@ -14,6 +14,7 @@
 #include <rte_dev.h>
 #include <rte_ethdev_pci.h>
 #include <rte_alarm.h>
+#include <rte_atomic.h>
 
 /*
  * The set of PCI devices this driver supports
@@ -79,16 +80,71 @@ static const struct rte_bnx2x_xstats_name_off bnx2x_xstats_strings[] = {
 		offsetof(struct bnx2x_eth_stats, pfc_frames_received_lo)}
 };
 
+/**
+ * Atomically reads the link status information from global
+ * structure rte_eth_dev.
+ *
+ * @param dev
+ *   - Pointer to the structure rte_eth_dev to read from.
+ *   - Pointer to the buffer to be saved with the link status.
+ *
+ * @return
+ *   - On success, zero.
+ *   - On failure, negative value.
+ */
+static inline int
+bnx2x_dev_atomic_read_link_status(struct rte_eth_dev *dev,
+				  struct rte_eth_link *link)
+{
+	struct rte_eth_link *dst = link;
+	struct rte_eth_link *src = &dev->data->dev_link;
+
+	if (rte_atomic64_cmpset((uint64_t *)dst, *(uint64_t *)dst,
+					*(uint64_t *)src) == 0)
+		return -1;
+
+	return 0;
+}
+
+/**
+ * Atomically writes the link status information into global
+ * structure rte_eth_dev.
+ *
+ * @param dev
+ *   - Pointer to the structure rte_eth_dev to read from.
+ *   - Pointer to the buffer to be saved with the link status.
+ *
+ * @return
+ *   - On success, zero.
+ *   - On failure, negative value.
+ */
+static inline int
+bnx2x_dev_atomic_write_link_status(struct rte_eth_dev *dev,
+				   struct rte_eth_link *link)
+{
+	struct rte_eth_link *dst = &dev->data->dev_link;
+	struct rte_eth_link *src = link;
+
+	if (rte_atomic64_cmpset((uint64_t *)dst, *(uint64_t *)dst,
+					*(uint64_t *)src) == 0)
+		return -1;
+
+	return 0;
+}
+
 static int
 bnx2x_link_update(struct rte_eth_dev *dev)
 {
 	struct bnx2x_softc *sc = dev->data->dev_private;
+	struct rte_eth_link orig;
 	struct rte_eth_link link;
 
 	PMD_INIT_FUNC_TRACE();
 
 	bnx2x_link_status_update(sc);
+	memset(&orig, 0, sizeof(orig));
 	memset(&link, 0, sizeof(link));
+	bnx2x_dev_atomic_read_link_status(dev, &orig);
 	mb();
 	link.link_speed = sc->link_vars.line_speed;
 	switch (sc->link_vars.duplex) {
@@ -102,8 +158,9 @@ bnx2x_link_update(struct rte_eth_dev *dev)
 	link.link_autoneg = !(dev->data->dev_conf.link_speeds &
 			ETH_LINK_SPEED_FIXED);
 	link.link_status = sc->link_vars.link_up;
+	bnx2x_dev_atomic_write_link_status(dev, &link);
 
-	return rte_eth_linkstatus_set(dev, &link);
+	return (link.link_status == orig.link_status) ? -1 : 0;
 }
 
 static void
@@ -167,6 +224,34 @@ void bnx2x_periodic_stop(void *param)
 /*
  * Devops - helper functions can be called from user application
  */
+
+static int
+bnx2x_dev_link_update(struct rte_eth_dev *dev,
+		      __rte_unused int wait_to_complete)
+{
+	PMD_INIT_FUNC_TRACE();
+
+	return bnx2x_link_update(dev);
+}
+
+static int
+bnx2xvf_dev_link_update(struct rte_eth_dev *dev,
+			__rte_unused int wait_to_complete)
+{
+	struct bnx2x_softc *sc = dev->data->dev_private;
+	int ret = 0;
+
+	ret = bnx2x_link_update(dev);
+
+	bnx2x_check_bull(sc);
+	if (sc->old_bulletin.valid_bitmap & (1 << CHANNEL_DOWN)) {
+		PMD_DRV_LOG(ERR, "PF indicated channel is down."
+				"VF device is no longer operational");
+		dev->data->dev_link.link_status = ETH_LINK_DOWN;
+	}
+
+	return ret;
+}
 
 static int
 bnx2x_dev_configure(struct rte_eth_dev *dev)
@@ -270,6 +355,12 @@ bnx2x_dev_stop(struct rte_eth_dev *dev)
 		return;
 	}
 
+	/* Update device link status */
+	if (IS_PF(sc))
+		bnx2x_dev_link_update(dev, 0);
+	else
+		bnx2xvf_dev_link_update(dev, 0);
+
 	return;
 }
 
@@ -339,32 +430,6 @@ bnx2x_dev_allmulticast_disable(struct rte_eth_dev *dev)
 	if (rte_eth_promiscuous_get(dev->data->port_id) == 1)
 		sc->rx_mode = BNX2X_RX_MODE_PROMISC;
 	bnx2x_set_rx_mode(sc);
-}
-
-static int
-bnx2x_dev_link_update(struct rte_eth_dev *dev, __rte_unused int wait_to_complete)
-{
-	PMD_INIT_FUNC_TRACE();
-
-	return bnx2x_link_update(dev);
-}
-
-static int
-bnx2xvf_dev_link_update(struct rte_eth_dev *dev, __rte_unused int wait_to_complete)
-{
-	struct bnx2x_softc *sc = dev->data->dev_private;
-	int ret = 0;
-
-	ret = bnx2x_link_update(dev);
-
-	bnx2x_check_bull(sc);
-	if (sc->old_bulletin.valid_bitmap & (1 << CHANNEL_DOWN)) {
-		PMD_DRV_LOG(ERR, "PF indicated channel is down."
-				"VF device is no longer operational");
-		dev->data->dev_link.link_status = ETH_LINK_DOWN;
-	}
-
-	return ret;
 }
 
 static int
