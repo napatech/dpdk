@@ -138,9 +138,9 @@ struct mlx5_rxq_data {
 	volatile uint32_t *rq_db;
 	volatile uint32_t *cq_db;
 	uint16_t port_id;
-	uint16_t rq_ci;
-	uint16_t rq_pi;
-	uint16_t cq_ci;
+	uint32_t rq_ci;
+	uint32_t rq_pi;
+	uint32_t cq_ci;
 	uint16_t rq_repl_thresh; /* Threshold for buffer replenishment. */
 	struct mlx5_mr_ctrl mr_ctrl;
 	volatile struct mlx5_wqe_data_seg(*wqes)[];
