@@ -1566,7 +1566,7 @@ rte_vhost_dequeue_burst(int vid, uint16_t queue_id,
 		if (rarp_mbuf == NULL) {
 			RTE_LOG(ERR, VHOST_DATA,
 				"Failed to allocate memory for mbuf.\n");
-			return 0;
+			goto out;
 		}
 
 		if (make_rarp_packet(rarp_mbuf, &dev->mac)) {
