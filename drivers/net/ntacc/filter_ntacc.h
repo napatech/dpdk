@@ -51,7 +51,12 @@ enum {
 
 struct color_s {
   uint32_t color;
-  bool     valid;
+  uint32_t colorMask;
+  enum {
+    NO_COLOR,
+    ONE_COLOR,
+    COLOR_MASK
+  } type;
 };
 
 enum {

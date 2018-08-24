@@ -172,6 +172,7 @@ struct pmd_internals {
 #ifndef USE_SW_STAT
   NtStatStream_t        hStat;
 #endif
+  NtConfigStream_t      hCfgStream;
   int                   if_index;
   LIST_HEAD(_flows, rte_flow) flows;
   LIST_HEAD(filter_values_t, filter_values_s) filter_values;
@@ -179,6 +180,7 @@ struct pmd_internals {
   LIST_HEAD(filter_keyset_t, filter_keyset_s) filter_keyset;
   rte_spinlock_t        lock;
   rte_spinlock_t        statlock;
+  rte_spinlock_t        configlock;
   uint8_t               port;
   uint8_t               local_port;
   uint8_t               local_port_offset;
@@ -206,8 +208,6 @@ struct batch_ctrl {
 	NtNetBuf_t pSeg;
 };
 #endif
-
-
 
 int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *internals);
 

@@ -903,7 +903,7 @@ int CreateOptimizedFilter(char *ntpl_buf,
 
     LIST_FOREACH(pFilter_values, &internals->filter_values, next) {
       if (first) {
-        if (pColor->valid) {
+        if (pColor->type == ONE_COLOR) {
           snprintf(filter_buffer3, NTPL_BSIZE,
                    "KeyType[name=KT%u;Access=partial;Bank=0;colorinfo=true;tag=%s]={", key, internals->tagName);
         }
@@ -979,7 +979,7 @@ int CreateOptimizedFilter(char *ntpl_buf,
   first = true;
   LIST_FOREACH(pFilter_values, &internals->filter_values, next) {
     if (first) {
-      if (pColor->valid) {
+      if (pColor->type == ONE_COLOR) {
         snprintf(filter_buffer1, NTPL_BSIZE,
                  "KeyList[KeySet=%u;KeyType=KT%u;color=%u;tag=%s]=(", key, key, pColor->color, internals->tagName);
       }
@@ -1572,6 +1572,7 @@ int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bo
       if (SetFilter(64, 0, 12, tnl, LAYER3, (const void *)&vSpec, NULL, NULL, internals) != 0) {
         return -1;
       }
+      *typeMask |= IPV4_SRC_ADDR | IPV4_DST_ADDR;
       singleSetup = false;
       PRINT_IPV4("SRC", rte_bswap32(spec->hdr.src_addr));
       PRINT_IPV4("DST", rte_bswap32(spec->hdr.dst_addr));
