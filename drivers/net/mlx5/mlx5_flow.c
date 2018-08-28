@@ -2960,10 +2960,21 @@ mlx5_fdir_filter_delete(struct rte_eth_dev *dev,
 		struct ibv_spec_header *flow_h;
 		void *flow_spec;
 		unsigned int specs_n;
-		unsigned int queue_id = parser.drop ? HASH_RXQ_ETH :
-						      parser.layer;
+		unsigned int queue_id;
 
-		attr = parser.queue[queue_id].ibv_attr;
+		/*
+		 * Search for a non-empty ibv_attr. There should be only one
+		 * because no RSS action is allowed for FDIR. This should have
+		 * been referenced directly by parser.layer but due to a bug in
+		 * mlx5_flow_convert() as of v17.11.4, parser.layer isn't
+		 * correct. This bug will have to be addressed later.
+		 */
+		for (queue_id = 0; queue_id != hash_rxq_init_n; ++queue_id) {
+			attr = parser.queue[queue_id].ibv_attr;
+			if (attr)
+				break;
+		}
+		assert(!parser.drop || queue_id == HASH_RXQ_ETH);
 		flow_attr = flow->frxq[queue_id].ibv_attr;
 		/* Compare first the attributes. */
 		if (!flow_attr ||
