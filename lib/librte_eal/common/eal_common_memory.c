@@ -109,13 +109,8 @@ rte_dump_physmem_layout(FILE *f)
 	}
 }
 
-#if defined(RTE_ARCH_X86)
-#define X86_VA_WIDTH 47 /* From Documentation/x86/x86_64/mm.txt */
-#define MAX_DMA_MASK_BITS X86_VA_WIDTH
-#else
 /* 63 bits is good enough for a sanity check */
 #define MAX_DMA_MASK_BITS 63
-#endif
 
 /* check memseg iovas are within the required range based on dma mask */
 int
