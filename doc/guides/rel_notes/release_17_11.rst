@@ -1305,3 +1305,160 @@ Fixes in 17.11 LTS Release
 * vhost: fix offset while mmaping log base address
 * vhost: fix realloc failure
 * vhost: fix ring index returned to master on stop
+
+17.11.4
+~~~~~~~
+
+* app/crypto-perf: fix auth IV offset
+* app/testpmd: fix buffer leak in TM command
+* app/testpmd: fix DCB config
+* app/testpmd: fix VLAN TCI mask set error for FDIR
+* bitrate: add sanity check on parameters
+* bus/dpaa: fix buffer offset setting in FMAN
+* bus/dpaa: fix build
+* bus/dpaa: fix phandle support for Linux 4.16
+* bus/pci: use IOVAs check when setting IOVA mode
+* crypto/qat: fix checks for 3GPP algo bit params
+* doc: fix bonding command in testpmd
+* doc: update qede management firmware guide
+* eal: fix bitmap documentation
+* eal: fix return codes on thread naming failure
+* eal/linux: fix invalid syntax in interrupts
+* eal/linux: fix uninitialized value
+* ethdev: fix a doxygen comment for port allocation
+* ethdev: fix queue statistics mapping documentation
+* eventdev: add event buffer flush in Rx adapter
+* eventdev: fix internal port logic in Rx adapter
+* eventdev: fix missing update to Rx adaper WRR position
+* eventdev: fix port in Rx adapter internal function
+* eventdev: fix Rx SW adapter stop
+* event: fix ring init failure handling
+* event/octeontx: remove unnecessary port start and stop
+* examples/exception_path: fix out-of-bounds read
+* examples: fix strncpy error for GCC8
+* examples/flow_filtering: add flow director config for i40e
+* examples/ipsec-secgw: fix bypass rule processing
+* examples/ipsec-secgw: fix IPv4 checksum at Tx
+* examples/l2fwd-crypto: check return value on IV size check
+* examples/l2fwd-crypto: fix digest with AEAD algo
+* examples/l2fwd-crypto: skip device not supporting operation
+* examples/l3fwd: remove useless include
+* hash: fix a multi-writer race condition
+* hash: fix doxygen of return values
+* hash: fix key slot size accuracy
+* hash: fix multiwriter lock memory allocation
+* kni: fix build on RHEL 7.5
+* kni: fix build with gcc 8.1
+* kni: fix crash with null name
+* maintainers: claim maintainership for ARM v7 and v8
+* maintainers: update for Mellanox PMDs
+* mem: add function for checking memsegs IOVAs addresses
+* mem: fix max DMA maskbit size
+* mem: use address hint for mapping hugepages
+* metrics: add check for invalid key
+* metrics: disallow null as metric name
+* metrics: do not fail silently when uninitialised
+* mk: fix cross build
+* mk: fix permissions when using make install
+* mk: remove unnecessary test rules
+* mk: update targets for classified tests
+* net/bnx2x: fix FW command timeout during stop
+* net/bnx2x: fix poll link status
+* net/bnx2x: fix to set device link status
+* net/bnxt: add missing ids in xstats
+* net/bnxt: check access denied for HWRM commands
+* net/bnxt: check for invalid vNIC id
+* net/bnxt: fix filter freeing
+* net/bnxt: fix HW Tx checksum offload check
+* net/bnxt: fix lock release on NVM write failure
+* net/bnxt: fix memory leaks in NVM commands
+* net/bnxt: fix RETA size
+* net/bnxt: fix Rx ring count limitation
+* net/bnxt: fix set MTU
+* net/bnxt: fix to move a flow to a different queue
+* net/bnxt: use correct flags during VLAN configuration
+* net/bonding: always update bonding link status
+* net/bonding: do not clear active slave count
+* net/bonding: fix MAC address reset
+* net/bonding: fix race condition
+* net/cxgbe: fix init failure due to new flash parts
+* net/cxgbe: fix Rx channel map and queue type
+* net/dpaa2: remove loop for unused pool entries
+* net/ena: change memory type
+* net/ena: check pointer before memset
+* net/ena: fix GENMASK_ULL macro
+* net/ena: fix SIGFPE with 0 Rx queue
+* net/ena: set link speed as none
+* net/enic: add devarg to specify ingress VLAN rewrite mode
+* net/enic: do not overwrite admin Tx queue limit
+* net/i40e: fix check of flow director programming status
+* net/i40e: fix link speed
+* net/i40e: fix packet type parsing with DDP
+* net/i40e: fix setting TPID with AQ command
+* net/i40e: fix shifts of 32-bit value
+* net/i40e: revert fix of flow director check
+* net/i40e: workaround performance degradation
+* net/ixgbe: add support for VLAN in IP mode FDIR
+* net/ixgbe: fix mask bits register set error for FDIR
+* net/ixgbe: fix tunnel id format error for FDIR
+* net/ixgbe: fix tunnel type set error for FDIR
+* net/mlx4: check RSS queues number limitation
+* net/mlx4: fix minor resource leak during init
+* net/mlx5: add missing sanity checks for Tx completion queue
+* net/mlx5: fix assert for Tx completion queue count
+* net/mlx5: fix build with old kernels
+* net/mlx5: fix compilation for rdma-core v19
+* net/mlx5: fix crash in device probe
+* net/mlx5: fix error number handling
+* net/mlx5: fix flow search on FDIR deletion
+* net/mlx5: fix queue rollback when starting device
+* net/mlx5: fix return value when deleting fdir filter
+* net/mlx5: fix Rx buffer replenishment threshold
+* net/mlx5: fix secondary process resource leakage
+* net/mlx5: fix TCI mask filter
+* net/mlx5: preserve allmulticast flag for flow isolation mode
+* net/mlx5: preserve promiscuous flag for flow isolation mode
+* net/mvpp2: check pointer before using it
+* net/nfp: check hugepages IOVAs based on DMA mask
+* net/nfp: fix field initialization in Tx descriptor
+* net/nfp: support IOVA VA mode
+* net/octeontx: fix stop clearing Rx/Tx functions
+* net/pcap: fix multiple queues
+* net/qede/base: fix GRC attention callback
+* net/qede/base: fix to clear HW indication
+* net/qede: fix default extended VLAN offload config
+* net/qede: fix for devargs
+* net/qede: fix incorrect link status update
+* net/qede: fix interrupt handler unregister
+* net/qede: fix legacy interrupt mode
+* net/qede: fix link change event notification
+* net/qede: fix MAC address removal failure message
+* net/qede: fix ntuple filter configuration
+* net/qede: fix unicast MAC address handling in VF
+* net/qede: fix VF MTU update
+* net/qede: remove primary MAC removal
+* net/sfc: cut non VLAN ID bits from TCI
+* net/sfc: fix assert in set multicast address list
+* net/sfc: handle unknown L3 packet class in EF10 event parser
+* net/tap: fix zeroed flow mask configurations
+* net/thunderx: avoid sq door bell write on zero packet
+* net/thunderx: fix build with gcc optimization on
+* ring: fix sign conversion warning
+* security: fix crash on destroy null session
+* test/crypto: fix device id when stopping port
+* test: fix code on report
+* test: fix EAL flags autotest on FreeBSD
+* test: fix result printing
+* test: fix uninitialized port configuration
+* test/flow_classify: fix return types
+* test/hash: fix multiwriter with non consecutive cores
+* test/hash: fix potential memory leak
+* test: improve filtering
+* test: make autotest runner python 2/3 compliant
+* test: print autotest categories
+* vfio: fix PCI address comparison
+* vhost: fix missing increment of log cache count
+* vhost: flush IOTLB cache on new mem table handling
+* vhost: improve dirty pages logging performance
+* vhost: release locks on RARP packet failure
+* vhost: retranslate vring addr when memory table changes
