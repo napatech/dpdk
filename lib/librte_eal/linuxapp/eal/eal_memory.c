@@ -396,7 +396,7 @@ map_all_hugepages(struct hugepage_file *hugepg_tbl, struct hugepage_info *hpi,
 	int node_id = -1;
 	int essential_prev = 0;
 	int oldpolicy;
-	struct bitmask *oldmask = numa_allocate_nodemask();
+	struct bitmask *oldmask = NULL;
 	bool have_numa = true;
 	unsigned long maxnode = 0;
 
@@ -408,6 +408,7 @@ map_all_hugepages(struct hugepage_file *hugepg_tbl, struct hugepage_info *hpi,
 
 	if (orig && have_numa) {
 		RTE_LOG(DEBUG, EAL, "Trying to obtain current memory policy.\n");
+		oldmask = numa_allocate_nodemask();
 		if (get_mempolicy(&oldpolicy, oldmask->maskp,
 				  oldmask->size + 1, 0, 0) < 0) {
 			RTE_LOG(ERR, EAL,
@@ -603,7 +604,8 @@ out:
 			numa_set_localalloc();
 		}
 	}
-	numa_free_cpumask(oldmask);
+	if (oldmask != NULL)
+		numa_free_cpumask(oldmask);
 #endif
 	return i;
 }
