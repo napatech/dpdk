@@ -944,12 +944,6 @@ struct rte_eth_conf {
 };
 
 /**
- * A structure used to retrieve the contextual information of
- * an Ethernet device, such as the controlling driver of the device,
- * its PCI context, etc...
- */
-
-/**
  * RX offload capabilities of a device.
  */
 #define DEV_RX_OFFLOAD_VLAN_STRIP  0x00000001
@@ -1009,6 +1003,12 @@ struct rte_pci_device;
 
 /**
  * Ethernet device information
+ */
+
+/**
+ * A structure used to retrieve the contextual information of
+ * an Ethernet device, such as the controlling driver of the
+ * device, etc...
  */
 struct rte_eth_dev_info {
 	struct rte_pci_device *pci_dev; /**< Device PCI information. */
