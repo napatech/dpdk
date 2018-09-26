@@ -34,7 +34,7 @@
 #ifndef __FILTER_NTACC_H__
 #define __FILTER_NTACC_H__
 
-#define NTPL_BSIZE 4096
+#define NTPL_BSIZE 1024
 
 enum {
   GTPC2_TUNNEL_TYPE,
@@ -122,24 +122,85 @@ enum {
 
 /******************* Function Prototypes ********************/
 
-int CreateHash(char *ntpl_buf, const struct rte_flow_action_rss *rss, struct pmd_internals *internals);
+void CreateHash(char *ntpl_buf, const struct rte_flow_action_rss *rss, struct pmd_internals *internals);
 int CreateHashModeHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow *flow, int priority);
 void CreateStreamid(char *ntpl_buf, struct pmd_internals *internals, uint32_t nb_queues, uint8_t *list_queues);
 int ReturnKeysetValue(struct pmd_internals *internals, int value);
 void pushNtplID(struct rte_flow *flow, uint32_t ntplId);
 
-int SetEthernetFilter(const struct rte_flow_item *item, bool tunnel, uint64_t *typeMask, struct pmd_internals *internals);
-int SetIPV4Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnel, uint64_t *typeMask, struct pmd_internals *internals);
-int SetIPV6Filter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnel, uint64_t *typeMask, struct pmd_internals *internals);
-int SetUDPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel, uint64_t *typeMask, struct pmd_internals *internals);
-int SetSCTPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel, uint64_t *typeMask, struct pmd_internals *internals);
-int SetTCPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tunnnel, uint64_t *typeMask, struct pmd_internals *internals);
-int SetICMPFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask, struct pmd_internals *internals);
-int SetVlanFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask, struct pmd_internals *internals);
-int SetMplsFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, bool tnl, uint64_t *typeMask, struct pmd_internals *internals);
-int SetGreFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, uint64_t *typeMask);
-int SetGtpFilter(char *ntpl_buf, bool *fc, const struct rte_flow_item *item, uint64_t *typeMask, int protocol);
-int SetTunnelFilter(char *ntpl_buf, bool *fc, int type, uint64_t *typeMask);
+int SetEthernetFilter(const struct rte_flow_item *item,
+                      bool tunnel,
+                      uint64_t *typeMask,
+                      struct pmd_internals *internals,
+                      struct rte_flow_error *error);
+int SetIPV4Filter(char *ntpl_buf,
+                  bool *fc,
+                  const struct rte_flow_item *item,
+                  bool tunnel, uint64_t *typeMask,
+                  struct pmd_internals *internals,
+                  struct rte_flow_error *error);
+int SetIPV6Filter(char *ntpl_buf,
+                  bool *fc,
+                  const struct rte_flow_item *item,
+                  bool tunnel,
+                  uint64_t *typeMask,
+                  struct pmd_internals *internals,
+                  struct rte_flow_error *error);
+int SetUDPFilter(char *ntpl_buf,
+                 bool *fc,
+                 const struct rte_flow_item *item,
+                 bool tunnnel,
+                 uint64_t *typeMask,
+                 struct pmd_internals *internals,
+                 struct rte_flow_error *error);
+int SetSCTPFilter(char *ntpl_buf,
+                  bool *fc,
+                  const struct rte_flow_item *item,
+                  bool tunnnel,
+                  uint64_t *typeMask,
+                  struct pmd_internals *internals,
+                  struct rte_flow_error *error);
+int SetTCPFilter(char *ntpl_buf,
+                 bool *fc,
+                 const struct rte_flow_item *item,
+                 bool tunnnel,
+                 uint64_t *typeMask,
+                 struct pmd_internals *internals,
+                 struct rte_flow_error *error);
+int SetICMPFilter(char *ntpl_buf,
+                  bool *fc,
+                  const struct rte_flow_item *item,
+                  bool tnl,
+                  uint64_t *typeMask,
+                  struct pmd_internals *internals,
+                  struct rte_flow_error *error);
+int SetVlanFilter(char *ntpl_buf,
+                  bool *fc,
+                  const struct rte_flow_item *item,
+                  bool tnl,
+                  uint64_t *typeMask,
+                  struct pmd_internals *internals,
+                  struct rte_flow_error *error);
+int SetMplsFilter(char *ntpl_buf,
+                  bool *fc,
+                  const struct rte_flow_item *item,
+                  bool tnl,
+                  uint64_t *typeMask,
+                  struct pmd_internals *internals,
+                  struct rte_flow_error *error);
+int SetGreFilter(char *ntpl_buf,
+                 bool *fc,
+                 const struct rte_flow_item *item,
+                 uint64_t *typeMask);
+int SetGtpFilter(char *ntpl_buf,
+                 bool *fc,
+                 const struct rte_flow_item *item,
+                 uint64_t *typeMask,
+                 int protocol);
+int SetTunnelFilter(char *ntpl_buf,
+                    bool *fc,
+                    int type,
+                    uint64_t *typeMask);
 
 int CreateOptimizedFilter(char *ntpl_buf,
                           struct pmd_internals *internals,
@@ -148,12 +209,15 @@ int CreateOptimizedFilter(char *ntpl_buf,
                           uint64_t typeMask,
                           uint8_t *plist_queues,
                           uint8_t nb_queues,
-                          bool *reuse,
-                          struct color_s *pColor);
+                          int key,
+                          struct color_s *pColor,
+                          NtFlow_t *pFlowMatch,
+                          struct rte_flow_error *error);
 
-void DeleteKeyset(int key, struct pmd_internals *internals);
-void DeleteHash(uint64_t rss_hf, uint8_t port, int priority, struct pmd_internals *internals);
+void DeleteKeyset(int key, struct pmd_internals *internals, struct rte_flow_error *error);
+//void DeleteHash(uint64_t rss_hf, uint8_t port, int priority, struct pmd_internals *internals);
 void FlushHash(struct pmd_internals *internals);
+bool IsFilterReuse(struct pmd_internals *internals, uint64_t typeMask, uint8_t *plist_queues, uint8_t nb_queues, int *key);
 
 #endif
 

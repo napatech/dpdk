@@ -36,6 +36,11 @@
 
 #define SEGMENT_LENGTH  (1024*1024)
 
+//#define NTACC_LOCK(a)    { printf(" Req Lock %s(%p) - %u\n", __FILE__, a, __LINE__); rte_spinlock_lock(a); printf(" Got Lock %s(%p) - %u\n", __FILE__, a, __LINE__); }
+//#define NTACC_UNLOCK(a)  { rte_spinlock_unlock(a); printf("Unlocked %s(%p) - %u\n", __FILE__, a, __LINE__); }
+#define NTACC_LOCK(a)    rte_spinlock_lock(a)
+#define NTACC_UNLOCK(a)  rte_spinlock_unlock(a)
+
 struct filter_flow {
   LIST_ENTRY(filter_flow) next;
   uint32_t ntpl_id;
@@ -60,7 +65,6 @@ struct filter_keyset_s {
   uint8_t list_queues[RTE_ETHDEV_QUEUE_STAT_CNTRS];
 };
 
-#define NUM_FLOW_QUEUES 256
 struct rte_flow {
 	LIST_ENTRY(rte_flow) next;
   LIST_HEAD(_filter_flows, filter_flow) ntpl_id;
@@ -71,7 +75,7 @@ struct rte_flow {
   uint64_t rss_hf;
   int priority;
   uint8_t nb_queues;
-  uint8_t list_queues[NUM_FLOW_QUEUES];
+  uint8_t list_queues[RTE_ETHDEV_QUEUE_STAT_CNTRS];
 };
 
 enum {
@@ -136,6 +140,8 @@ struct filter_values_s {
   uint8_t size;
   uint8_t layer;
   uint8_t offset;
+  uint8_t prot;
+  bool tunnel;
   union {
     struct {
       uint16_t specVal;
@@ -199,6 +205,8 @@ struct pmd_internals {
   key_t                 key;
   pthread_mutexattr_t   psharedm;
   struct pmd_shared_mem_s *shm;
+  uint32_t              flowMatcher:1;
+  uint32_t              keyMatcher:1;
 };
 
 #ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
@@ -209,7 +217,7 @@ struct batch_ctrl {
 };
 #endif
 
-int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *internals);
+int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *internals, struct rte_flow_error *error);
 
 extern int ntacc_logtype;
 
