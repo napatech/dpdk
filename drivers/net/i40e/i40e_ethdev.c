@@ -1224,9 +1224,6 @@ eth_i40e_dev_init(struct rte_eth_dev *dev)
 	/* Make sure all is clean before doing PF reset */
 	i40e_clear_hw(hw);
 
-	/* Initialize the hardware */
-	i40e_hw_init(dev);
-
 	/* Reset here to make sure all is clean for each PF */
 	ret = i40e_pf_reset(hw);
 	if (ret) {
@@ -1240,6 +1237,23 @@ eth_i40e_dev_init(struct rte_eth_dev *dev)
 		PMD_INIT_LOG(ERR, "Failed to init shared code (base driver): %d", ret);
 		return ret;
 	}
+
+	/* Initialize the parameters for adminq */
+	i40e_init_adminq_parameter(hw);
+	ret = i40e_init_adminq(hw);
+	if (ret != I40E_SUCCESS) {
+		PMD_INIT_LOG(ERR, "Failed to init adminq: %d", ret);
+		return -EIO;
+	}
+	PMD_INIT_LOG(INFO, "FW %d.%d API %d.%d NVM %02d.%02d.%02d eetrack %04x",
+		     hw->aq.fw_maj_ver, hw->aq.fw_min_ver,
+		     hw->aq.api_maj_ver, hw->aq.api_min_ver,
+		     ((hw->nvm.version >> 12) & 0xf),
+		     ((hw->nvm.version >> 4) & 0xff),
+		     (hw->nvm.version & 0xf), hw->nvm.eetrack);
+
+	/* Initialize the hardware */
+	i40e_hw_init(dev);
 
 	i40e_config_automask(pf);
 
@@ -1256,20 +1270,6 @@ eth_i40e_dev_init(struct rte_eth_dev *dev)
 
 	/* Initialize the input set for filters (hash and fd) to default value */
 	i40e_filter_input_set_init(pf);
-
-	/* Initialize the parameters for adminq */
-	i40e_init_adminq_parameter(hw);
-	ret = i40e_init_adminq(hw);
-	if (ret != I40E_SUCCESS) {
-		PMD_INIT_LOG(ERR, "Failed to init adminq: %d", ret);
-		return -EIO;
-	}
-	PMD_INIT_LOG(INFO, "FW %d.%d API %d.%d NVM %02d.%02d.%02d eetrack %04x",
-		     hw->aq.fw_maj_ver, hw->aq.fw_min_ver,
-		     hw->aq.api_maj_ver, hw->aq.api_min_ver,
-		     ((hw->nvm.version >> 12) & 0xf),
-		     ((hw->nvm.version >> 4) & 0xff),
-		     (hw->nvm.version & 0xf), hw->nvm.eetrack);
 
 	/* initialise the L3_MAP register */
 	if (!pf->support_multi_driver) {
