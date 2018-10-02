@@ -322,13 +322,17 @@ extern "C" {
  * which can be set for packet.
  */
 #define PKT_TX_OFFLOAD_MASK (    \
+		PKT_TX_OUTER_IPV6 |	 \
+		PKT_TX_OUTER_IPV4 |	 \
+		PKT_TX_OUTER_IP_CKSUM |  \
+		PKT_TX_VLAN_PKT |        \
+		PKT_TX_IPV6 |		 \
+		PKT_TX_IPV4 |		 \
 		PKT_TX_IP_CKSUM |        \
 		PKT_TX_L4_MASK |         \
-		PKT_TX_OUTER_IP_CKSUM |  \
-		PKT_TX_TCP_SEG |         \
 		PKT_TX_IEEE1588_TMST |	 \
+		PKT_TX_TCP_SEG |         \
 		PKT_TX_QINQ_PKT |        \
-		PKT_TX_VLAN_PKT |        \
 		PKT_TX_TUNNEL_MASK |	 \
 		PKT_TX_MACSEC |		 \
 		PKT_TX_SEC_OFFLOAD)
