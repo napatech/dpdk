@@ -194,7 +194,7 @@ rte_flow_create(uint16_t port_id,
 }
 
 /* Program a flow match 5 tuple on a given port. */
-int
+int __rte_experimental
 rte_flow_program(uint16_t port_id,
                  uint16_t queue_id,
                  struct rte_flow_5tuple *tuple,
