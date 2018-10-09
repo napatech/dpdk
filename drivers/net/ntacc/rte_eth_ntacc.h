@@ -84,27 +84,28 @@ enum {
 };
 
 struct ntacc_rx_queue {
-  NtNetBuf_t             pSeg;    /* The current segment we are working with */
-  NtNetStreamRx_t        pNetRx;
-  struct rte_mempool    *mb_pool;
+  NtNetBuf_t              pSeg;    /* The current segment we are working with */
+  NtNetStreamRx_t         pNetRx;
+  struct rte_mempool      *mb_pool;
 #ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
-  uint32_t               cmbatch;
+  uint32_t                cmbatch;
 #endif
-  uint32_t               in_port;
-  struct NtNetBuf_s      pkt;     /* The current packet */
+  uint32_t                in_port;
+  struct NtNetBuf_s       pkt;     /* The current packet */
 #ifdef USE_SW_STAT
-  volatile uint64_t      rx_pkts;
-  volatile uint64_t      rx_bytes;
-  volatile uint64_t      err_pkts;
+  volatile uint64_t       rx_pkts;
+  volatile uint64_t       rx_bytes;
+  volatile uint64_t       err_pkts;
 #endif
 
-  uint16_t               buf_size;
-  uint32_t               stream_id;
-  uint8_t                local_port;
-  uint8_t                tsMultiplier;
-  const char             *name;
-  const char             *type;
-  int                    enabled;
+  uint32_t                stream_id;
+  uint16_t                buf_size;
+  int                     enabled;
+  uint8_t                 local_port;
+  uint8_t                 tsMultiplier;
+  const char              *name;
+  const char              *type;
+  NtFlowStream_t          hFlowStream;
 } __rte_cache_aligned;
 
 struct ntacc_tx_queue {
@@ -125,6 +126,7 @@ struct ntacc_tx_queue {
 struct pmd_shared_mem_s {
   pthread_mutex_t mutex;
   int keyset[8][12];
+  int key_id;
 };
 
 struct version_s {
@@ -168,6 +170,15 @@ struct filter_values_s {
 
 #define NTACC_NAME_LEN (PCI_PRI_STR_SIZE + 10)
 
+struct ntacc_flow_match {
+  uint32_t  flowEnable;
+  uint8_t   key[4];
+  uint32_t  ipv4key_id;
+  uint32_t  ipv6key_id;
+  uint32_t  ipv4ntplid[4];
+  uint32_t  ipv6ntplid[4];
+};
+
 struct pmd_internals {
   struct ntacc_rx_queue rxq[RTE_ETHDEV_QUEUE_STAT_CNTRS];
   struct ntacc_tx_queue txq[RTE_ETHDEV_QUEUE_STAT_CNTRS];
@@ -205,6 +216,8 @@ struct pmd_internals {
   key_t                 key;
   pthread_mutexattr_t   psharedm;
   struct pmd_shared_mem_s *shm;
+  struct ntacc_flow_match flow;
+  // Bit field
   uint32_t              flowMatcher:1;
   uint32_t              keyMatcher:1;
 };

@@ -772,6 +772,7 @@ static int eth_dev_start(struct rte_eth_dev *dev)
   uint queue;
   int status;
   char *shm;
+  int i;
 
   // Open or create shared memory
   internals->key = 135546;
@@ -866,6 +867,28 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     tx_q[queue].plock = &port_locks[tx_q[queue].port];
   }
 
+  if (internals->flowMatcher == 1) {
+    for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
+      if (rx_q[queue].enabled) {
+        NtFlowAttr_t attr;
+        (*_NT_FlowOpenAttrInit)(&attr);
+        (*_NT_FlowOpenAttrSetAdapterNo)(&attr, internals->adapterNo);
+        if ((status = (*_NT_FlowOpen_Attr)(&rx_q[queue].hFlowStream, "DPDK", &attr)) != NT_SUCCESS) {
+          _log_nt_errors(status, "NT_NetRxOpen() failed", __func__);
+          goto StartError;
+        }
+      }
+    }
+    for (i = 0; i < 4; i++) {
+      internals->flow.key[i] = GetKeysetValue(internals);
+      internals->flow.ipv4ntplid[i] = 0xFFFFFFFF;
+      internals->flow.ipv6ntplid[i] = 0xFFFFFFFF;
+    }
+    internals->flow.ipv4key_id = internals->shm->key_id++;
+    internals->flow.ipv6key_id = internals->shm->key_id++;
+    internals->flow.flowEnable = 0;
+  }
+
   dev->data->dev_link.link_status = 1;
   return 0;
 
@@ -907,6 +930,31 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
     if (tx_q[queue].enabled) {
       if (tx_q[queue].pNetTx) {
         (void)(*_NT_NetTxClose)(tx_q[queue].pNetTx);
+      }
+    }
+  }
+
+  if (internals->flowMatcher == 1) {
+    char ntpl_buf[21];
+    for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
+      if (rx_q[queue].enabled) {
+        (void)(*_NT_FlowClose)(rx_q[queue].hFlowStream);
+      }
+    }
+    for (i = 0; i < 4; i++) {
+      ReturnKeysetValue(internals, internals->flow.key[i]);
+    }
+    internals->flow.flowEnable = 0;
+    for (i = 0; i < 4; i++) {
+      if (internals->flow.ipv4ntplid[i] != 0xFFFFFFFF) {
+        snprintf(ntpl_buf, 20, "delete=%d", internals->flow.ipv4ntplid[i]);
+        DoNtpl(ntpl_buf, NULL, internals, NULL);
+        internals->flow.ipv4ntplid[i] = 0xFFFFFFFF;
+      }
+      if (internals->flow.ipv6ntplid[i] != 0xFFFFFFFF) {
+        snprintf(ntpl_buf, 20, "delete=%d", internals->flow.ipv6ntplid[i]);
+        DoNtpl(ntpl_buf, NULL, internals, NULL);
+        internals->flow.ipv6ntplid[i] = 0xFFFFFFFF;
       }
     }
   }
@@ -2082,7 +2130,6 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
     NTACC_LOCK(&internals->lock);
     LIST_INSERT_HEAD(&internals->flows, flow, next);
     NTACC_UNLOCK(&internals->lock);
-    printf("return flow %p\n", flow);
     return flow;
   }
 
@@ -2097,6 +2144,131 @@ FlowError:
       rte_free(filter_buf1);
     }
     return NULL;
+}
+
+enum {
+  IPV4_DROP,
+  IPV6_DROP,
+  IPV4_FORWARD,
+  IPV6_FORWARD,
+};
+
+static inline int _programIPv4FlowNtpl(struct pmd_internals *internals, uint8_t dstPort, struct rte_flow_error *error)
+{
+  char ntpl_buf[156];
+  uint32_t id = internals->flow.ipv4key_id;
+
+  snprintf(ntpl_buf, 156, "KeyType[name=KT%u;Access=partial;Bank=0;KeyID=%u;tag=port%u]={32,32,16,16}", id, id, internals->port);
+  if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[3], internals, error) != 0) {
+    return 1;
+  }
+  snprintf(ntpl_buf, 156, "KeyDef[name=KDEF%u;KeyType=KT%u;prot=OUTER;tag=port%u]=(Layer3Header[12]/32,Layer3Header[16]/32,Layer4Header[0]/16,Layer4Header[2]/16)", id, id, internals->port);
+  if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[2], internals, error) != 0) {
+    return 1;
+  }
+  snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;tag=port%u]=(Layer3Protocol==IPV4)and(port==%u)and(Key(KDEF%u)==%u)", internals->port, internals->port, id, internals->flow.key[IPV4_DROP]);
+  if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[1], internals, error) != 0) {
+    return 1;
+  }
+  snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;DestinationPort=%u;tag=port%u]=(Layer3Protocol==IPV4)and(port==%u)and(Key(KDEF%u)==%u)", dstPort, internals->port, internals->port, id, internals->flow.key[IPV4_FORWARD]);
+  if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[0], internals, error) != 0) {
+    return 1;
+  }
+  return 0;
+}
+
+static inline int _programIPv6FlowNtpl(struct pmd_internals *internals, uint8_t dstPort, struct rte_flow_error *error)
+{
+  char ntpl_buf[156];
+  uint32_t id = internals->flow.ipv6key_id;
+
+  snprintf(ntpl_buf, 156, "KeyType[name=KT%u;Access=partial;Bank=0;KeyID=%u;tag=port%u]={128,128,16,16}", id, id, internals->port);
+  if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[3], internals, error) != 0) {
+    return 1;
+  }
+  snprintf(ntpl_buf, 156, "KeyDef[name=KDEF%u;KeyType=KT%u;prot=OUTER;tag=port%u]=(Layer3Header[8]/128,Layer3Header[24]/128,Layer4Header[0]/16,Layer4Header[2]/16)", id, id, internals->port);
+  if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[2], internals, error) != 0) {
+    return 1;
+  }
+  snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;tag=port%u]=(Layer3Protocol==IPV6)and(port==%u)and(Key(KDEF%u)==%u)", internals->port, internals->port, id, internals->flow.key[IPV6_DROP]);
+  if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[1], internals, error) != 0) {
+    return 1;
+  }
+  snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;DestinationPort=%u;tag=port%u]=(Layer3Protocol==IPV6)and(port==%u)and(Key(KDEF%u)==%u)", dstPort, internals->port, internals->port, id, internals->flow.key[IPV6_FORWARD]);
+  if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[0], internals, error) != 0) {
+    return 1;
+  }
+  return 0;
+}
+
+static int _dev_flow_match_program(struct rte_eth_dev *dev,
+                                   void *queue,
+                                   struct rte_flow_5tuple *tuple,
+                                   struct rte_flow_error *error)
+{
+  struct pmd_internals *internals = dev->data->dev_private;
+  struct ntacc_rx_queue *rx_q = queue;
+  NtFlow_t flowMatch;
+
+  if (internals->flowMatcher == 0) {
+    rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Flow Matcher not supported");
+    return 1;
+  }
+
+  if (internals->flow.flowEnable == 0) {
+    NTACC_LOCK(&internals->configlock);
+    if (internals->flow.flowEnable == 0) {
+      if (_programIPv4FlowNtpl(internals, tuple->port, error)) {
+        NTACC_UNLOCK(&internals->configlock);
+        return 1;
+      }
+      if (_programIPv6FlowNtpl(internals, tuple->port, error)) {
+        NTACC_UNLOCK(&internals->configlock);
+        return 1;
+      }
+      internals->flow.flowEnable = 1;
+    }
+    NTACC_UNLOCK(&internals->configlock);
+  }
+
+  memset(&flowMatch, 0, sizeof(NtFlow_t));
+  flowMatch.color = 0;
+  flowMatch.op = 1;
+  flowMatch.prot = tuple->proto;
+
+  if (tuple->flag & RTE_FLOW_PROGRAM_IPV4) {
+    flowMatch.u.ip4tuple4.sa = tuple->u.IPv4.src_addr;
+    flowMatch.u.ip4tuple4.da = tuple->u.IPv4.dst_addr;
+    flowMatch.u.ip4tuple4.sp = tuple->src_port;
+    flowMatch.u.ip4tuple4.dp = tuple->dst_port;
+    if (tuple->flag & RTE_FLOW_PROGRAM_DROP_ACTION) {
+      flowMatch.ft = internals->flow.key[IPV4_DROP];
+      flowMatch.kid = internals->flow.ipv4key_id;
+    }
+    else {
+      flowMatch.ft = internals->flow.key[IPV4_FORWARD];
+      flowMatch.kid = internals->flow.ipv4key_id;
+    }
+  }
+  else {
+    memcpy(&flowMatch.u.ip6tuple4.sa, &tuple->u.IPv6.src_addr, 16);
+    memcpy(&flowMatch.u.ip6tuple4.da, &tuple->u.IPv6.dst_addr, 16);
+    flowMatch.u.ip6tuple4.sp = tuple->src_port;
+    flowMatch.u.ip6tuple4.dp = tuple->dst_port;
+    if (tuple->flag & RTE_FLOW_PROGRAM_DROP_ACTION) {
+      flowMatch.ft = internals->flow.key[IPV6_DROP];
+      flowMatch.kid = internals->flow.ipv6key_id;
+    }
+    else {
+      flowMatch.ft = internals->flow.key[IPV6_FORWARD];
+      flowMatch.kid = internals->flow.ipv6key_id;
+    }
+  }
+
+  if (DoFlow(rx_q->hFlowStream, &flowMatch, error) != 0) {
+    return 1;
+  }
+  return 0;
 }
 
 static int _dev_flow_destroy(struct rte_eth_dev *dev,
@@ -2347,6 +2519,7 @@ static const struct rte_flow_ops _dev_flow_ops = {
   .flush = _dev_flow_flush,
   .query = NULL,
   .isolate = _dev_flow_isolate,
+  .program = _dev_flow_match_program,
 };
 
 static int _dev_filter_ctrl(struct rte_eth_dev *dev __rte_unused,

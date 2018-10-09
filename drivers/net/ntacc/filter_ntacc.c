@@ -524,7 +524,7 @@ int ReturnKeysetValue(struct pmd_internals *internals, int value)
  * Get a keyset value from the keyset pool.
  * Used by the keymatcher command
  */
-static int GetKeysetValue(struct pmd_internals *internals)
+int GetKeysetValue(struct pmd_internals *internals)
 {
   int i;
 

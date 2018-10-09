@@ -96,6 +96,11 @@ struct rte_flow_ops {
 		(struct rte_eth_dev *,
 		 int,
 		 struct rte_flow_error *);
+  int (*program)
+    (struct rte_eth_dev *,
+     void *queue,
+     struct rte_flow_5tuple *,
+     struct rte_flow_error *);
 };
 
 /**

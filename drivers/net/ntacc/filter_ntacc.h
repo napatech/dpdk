@@ -218,6 +218,8 @@ void DeleteKeyset(int key, struct pmd_internals *internals, struct rte_flow_erro
 //void DeleteHash(uint64_t rss_hf, uint8_t port, int priority, struct pmd_internals *internals);
 void FlushHash(struct pmd_internals *internals);
 bool IsFilterReuse(struct pmd_internals *internals, uint64_t typeMask, uint8_t *plist_queues, uint8_t nb_queues, int *key);
+int GetKeysetValue(struct pmd_internals *internals);
+
 
 #endif
 

@@ -193,6 +193,24 @@ rte_flow_create(uint16_t port_id,
 	return NULL;
 }
 
+/* Program a flow match 5 tuple on a given port. */
+int
+rte_flow_program(uint16_t port_id,
+                 uint16_t queue_id,
+                 struct rte_flow_5tuple *tuple,
+                 struct rte_flow_error *error)
+{
+	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
+	const struct rte_flow_ops *ops = rte_flow_ops_get(port_id, error);
+	if (unlikely(!ops))
+    return -rte_errno;
+  if (likely(!!ops->program))
+    return flow_err(port_id, ops->program(dev, dev->data->rx_queues[queue_id], tuple, error), error);
+  return rte_flow_error_set(error, ENOSYS,
+          RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+          NULL, rte_strerror(ENOSYS));
+}
+
 /* Destroy a flow rule on a given port. */
 int
 rte_flow_destroy(uint16_t port_id,

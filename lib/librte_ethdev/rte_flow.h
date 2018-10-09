@@ -897,32 +897,32 @@ static const struct rte_flow_item_fuzzy rte_flow_item_fuzzy_mask = {
 };
 #endif
 
-/** 
- * RTE_FLOW_ITEM_TYPE_NTPL 
- *  
+/**
+ * RTE_FLOW_ITEM_TYPE_NTPL
+ *
  * Insert a NTPL string into the NTPL filtercode.
- *  
- * tunnel defines how following commands are treated. 
- * Setting tunnel=RTE_FLOW_NTPL_TUNNEL makes the following commands to be treated 
- * as inner tunnel commands 
- *  
- * 1. The string is inserted into the filter string with tunnel=RTE_FLOW_NTPL_NO_TUNNEL: 
- *  
- *    assign[xxxxxxxx]=(Layer3Protocol==IPV4) and and "Here is the ntpl item" and port==0 and Key(KDEF4)==4 
- *  
- * 2. The string is inserted into the filter string with tunnel=RTE_FLOW_NTPL_TUNNEL: 
- *  
- *    assign[xxxxxxxx]=(InnerLayer3Protocol==IPV4) and and "Here is the ntpl item" and port==0 and Key(KDEF4)==4 
- *  
- * Note: When setting tunnel=RTE_FLOW_NTPL_TUNNEL the Layer3Protocol command is changed to InnerLayer3Protocol, 
+ *
+ * tunnel defines how following commands are treated.
+ * Setting tunnel=RTE_FLOW_NTPL_TUNNEL makes the following commands to be treated
+ * as inner tunnel commands
+ *
+ * 1. The string is inserted into the filter string with tunnel=RTE_FLOW_NTPL_NO_TUNNEL:
+ *
+ *    assign[xxxxxxxx]=(Layer3Protocol==IPV4) and and "Here is the ntpl item" and port==0 and Key(KDEF4)==4
+ *
+ * 2. The string is inserted into the filter string with tunnel=RTE_FLOW_NTPL_TUNNEL:
+ *
+ *    assign[xxxxxxxx]=(InnerLayer3Protocol==IPV4) and and "Here is the ntpl item" and port==0 and Key(KDEF4)==4
+ *
+ * Note: When setting tunnel=RTE_FLOW_NTPL_TUNNEL the Layer3Protocol command is changed to InnerLayer3Protocol,
  * 			 now matching the inner layers in stead of the outer layers.
- *  
- * Note: When setting tunnel=RTE_FLOW_NTPL_TUNNEL, the commands used before the RTE_FLOW_ITEM_TYPE_NTPL will 
- *       match the outer layers and commands used after will match the inner layers. 
- *  
- * The ntpl item string must have the right syntax in order to prevent a 
- * syntax error and it must break the rest of the ntpl string in order 
- * to prevent a ntpl error. 
+ *
+ * Note: When setting tunnel=RTE_FLOW_NTPL_TUNNEL, the commands used before the RTE_FLOW_ITEM_TYPE_NTPL will
+ *       match the outer layers and commands used after will match the inner layers.
+ *
+ * The ntpl item string must have the right syntax in order to prevent a
+ * syntax error and it must break the rest of the ntpl string in order
+ * to prevent a ntpl error.
  */
 struct rte_flow_item_ntpl {
 	const char *ntpl_str;
@@ -1945,6 +1945,31 @@ struct rte_flow_action {
 	const void *conf; /**< Pointer to action configuration structure. */
 };
 
+enum rte_flow_program_actions {
+  RTE_FLOW_PROGRAM_DROP_ACTION      = 0x1,
+  RTE_FLOW_PROGRAM_FORWARD_ACTION   = 0x2,
+  RTE_FLOW_PROGRAM_IPV4             = 0x4,
+  RTE_FLOW_PROGRAM_IPV6             = 0x8,
+};
+
+struct rte_flow_5tuple {
+  uint8_t port;
+  uint32_t flag;
+  union {
+    struct {
+      uint32_t src_addr;		 /**< source address */
+      uint32_t dst_addr;		 /**< destination address */
+    } IPv4;
+    struct {
+      uint8_t  src_addr[16]; /**< IP address of source host. */
+      uint8_t  dst_addr[16]; /**< IP address of destination host(s). */
+    } IPv6;
+  } u;
+  uint16_t src_port;         /**< Source port. */
+  uint16_t dst_port;         /**< Destination port. */
+  uint8_t proto;             /**< Protocol. */
+};
+
 /**
  * Opaque type returned after successfully creating a flow.
  *
@@ -2081,6 +2106,32 @@ rte_flow_create(uint16_t port_id,
 		const struct rte_flow_item pattern[],
 		const struct rte_flow_action actions[],
 		struct rte_flow_error *error);
+
+/**
+ * Destroy a flow rule on a given port.
+ *
+ * Failure to destroy a flow rule handle may occur when other flow rules
+ * depend on it, and destroying it would result in an inconsistent state.
+ *
+ * This function is only guaranteed to succeed if handles are destroyed in
+ * reverse order of their creation.
+ *
+ * @param port_id
+ *   Port identifier of Ethernet device.
+ * @param flow
+ *   Flow rule handle to destroy.
+ * @param[out] error
+ *   Perform verbose error reporting if not NULL. PMDs initialize this
+ *   structure in case of error only.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+int
+rte_flow_program(uint16_t port_id,
+                 uint16_t queue_id,
+                 struct rte_flow_5tuple *tuple,
+                 struct rte_flow_error *error);
 
 /**
  * Destroy a flow rule on a given port.

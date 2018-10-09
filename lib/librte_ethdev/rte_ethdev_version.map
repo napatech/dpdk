@@ -226,6 +226,7 @@ EXPERIMENTAL {
 	rte_eth_devargs_parse;
 	rte_eth_dev_count_total;
 	rte_eth_dev_create;
+  rte_flow_program;
 	rte_eth_dev_destroy;
 	rte_eth_dev_get_module_eeprom;
 	rte_eth_dev_get_module_info;
