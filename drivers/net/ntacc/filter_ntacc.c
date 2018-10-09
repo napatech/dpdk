@@ -1080,16 +1080,16 @@ int CreateOptimizedFilter(char *ntpl_buf,
 
       switch (pFilter_values->size)
       {
-      case 16:
-        *((uint16_t *)(&pFlowMatch->u.raw[tel])) = pFilter_values->value.v16.specVal;
+	  case 16:
+		memcpy(&pFlowMatch->u.raw[tel], &pFilter_values->value.v16.specVal, sizeof(uint16_t));
         tel += 2;
         break;
       case 32:
-        *((uint32_t *)(&pFlowMatch->u.raw[tel])) = pFilter_values->value.v32.specVal;
+		memcpy(&pFlowMatch->u.raw[tel], &pFilter_values->value.v32.specVal, sizeof(uint32_t));
         tel += 4;
         break;
       case 64:
-        *((uint64_t *)(&pFlowMatch->u.raw[tel])) = pFilter_values->value.v64.specVal;
+		memcpy(&pFlowMatch->u.raw[tel], &pFilter_values->value.v64.specVal, sizeof(uint64_t));
         tel += 8;
         break;
       case 128:
