@@ -142,8 +142,6 @@ struct filter_values_s {
   uint8_t size;
   uint8_t layer;
   uint8_t offset;
-  uint8_t prot;
-  bool tunnel;
   union {
     struct {
       uint16_t specVal;
@@ -229,6 +227,21 @@ struct batch_ctrl {
 	NtNetBuf_t pSeg;
 };
 #endif
+
+enum {
+  ACTION_RSS       = 1 << 0,
+  ACTION_QUEUE     = 1 << 1,
+  ACTION_DROP      = 1 << 2,
+  ACTION_FORWARD   = 1 << 3,
+  ACTION_HASH      = 1 << 4,
+};
+
+enum {
+  IPV4_DROP,
+  IPV6_DROP,
+  IPV4_FORWARD,
+  IPV6_FORWARD,
+};
 
 int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *internals, struct rte_flow_error *error);
 

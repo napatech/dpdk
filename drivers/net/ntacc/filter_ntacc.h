@@ -211,7 +211,6 @@ int CreateOptimizedFilter(char *ntpl_buf,
                           uint8_t nb_queues,
                           int key,
                           struct color_s *pColor,
-                          NtFlow_t *pFlowMatch,
                           struct rte_flow_error *error);
 
 void DeleteKeyset(int key, struct pmd_internals *internals, struct rte_flow_error *error);

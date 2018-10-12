@@ -167,24 +167,11 @@ static const char *valid_arguments[] = {
   NULL
 };
 
-enum {
-  ACTION_RSS       = 1 << 0,
-  ACTION_QUEUE     = 1 << 1,
-  ACTION_DROP      = 1 << 2,
-  ACTION_FORWARD   = 1 << 3,
-  ACTION_HASH      = 1 << 4,
-};
-
 static struct ether_addr eth_addr[MAX_NTACC_PORTS];
 
 static struct {
   struct pmd_internals *pInternals;
 } _PmdInternals[RTE_MAX_ETHPORTS];
-
-static struct _flowhandle_lcore_s {
-  NtFlowStream_t hFlowStream;
-} _flowhandle_lcore[RTE_MAX_LCORE];
-
 
 static uint32_t _log_nt_errors(const uint32_t status, const char *msg, const char *func)
 {
@@ -974,12 +961,6 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
     (*_NT_ConfigClose)(internals->hCfgStream);
     internals->hCfgStream = NULL;
   }
-  for (i = 0; i < RTE_MAX_LCORE; i++) {
-    if (_flowhandle_lcore[i].hFlowStream) {
-      (*_NT_FlowClose)(_flowhandle_lcore[i].hFlowStream);
-      _flowhandle_lcore[i].hFlowStream = NULL;
-    }
-  }
   NTACC_UNLOCK(&internals->configlock);
 
   // Detach shared memory
@@ -1172,8 +1153,7 @@ static int eth_stats_get(struct rte_eth_dev *dev,
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
     igb_stats->q_ipackets[queue] = pStatData->u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].forward.pkts;
     igb_stats->q_ibytes[queue] =  pStatData->u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].forward.octets;
-    igb_stats->q_errors[queue] = internals->txq[queue].err_pkts;
-
+    igb_stats->q_errors[queue] = pStatData->u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].drop.pkts;
   }
   rte_free(pStatData);
   return 0;
@@ -1876,8 +1856,6 @@ static inline int _handle_items(const struct rte_flow_item items[],
   return 0;
 }
 
-static struct rte_flow _dummy_flow;
-
 static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
                                   const struct rte_flow_attr *attr,
                                   const struct rte_flow_item items[],
@@ -1901,15 +1879,10 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   int key;
   int i;
 
-  NtFlow_t flowMatch;
-
   char *ntpl_buf = NULL;
   char *filter_buf1 = NULL;
   struct rte_flow *flow = NULL;
   const char *ntpl_str = NULL;
-
-  // Set no flowmatch
-  flowMatch.op = 0;
 
   // Init error struct
   rte_flow_error_set(error, 0, RTE_FLOW_ERROR_TYPE_NONE, NULL, "No errors");
@@ -2078,7 +2051,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
     }
   }
 
-  if (CreateOptimizedFilter(ntpl_buf, internals, flow, &filterContinue, typeMask, list_queues, nb_queues, key, &color, &flowMatch, error) != 0) {
+  if (CreateOptimizedFilter(ntpl_buf, internals, flow, &filterContinue, typeMask, list_queues, nb_queues, key, &color, error) != 0) {
     NTACC_UNLOCK(&internals->configlock);
     goto FlowError;
   }
@@ -2091,26 +2064,6 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
     flow->assign_ntpl_id = ntplID;
     NTACC_UNLOCK(&internals->lock);
   }
-
-  uint32_t lcore_id = rte_lcore_id();
-  if (internals->flowMatcher == 1 && flowMatch.op) {
-    int status;
-    NtFlowAttr_t attr;
-    if (_flowhandle_lcore[lcore_id].hFlowStream == NULL) {
-      (*_NT_FlowOpenAttrInit)(&attr);
-      (*_NT_FlowOpenAttrSetAdapterNo)(&attr, internals->adapterNo);
-      if ((status = (*_NT_FlowOpen_Attr)(&_flowhandle_lcore[lcore_id].hFlowStream, "DPDK Flow stream", &attr)) != NT_SUCCESS) {
-        rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "NT_FlowOpen() failed");
-        NTACC_UNLOCK(&internals->configlock);
-        goto FlowError;
-      }
-    }
-
-    if (DoFlow(_flowhandle_lcore[lcore_id].hFlowStream, &flowMatch, error) != 0) {
-      NTACC_UNLOCK(&internals->configlock);
-      goto FlowError;
-    }
-  }
   NTACC_UNLOCK(&internals->configlock);
 
   if (ntpl_buf) {
@@ -2120,18 +2073,10 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
     rte_free(filter_buf1);
   }
 
-  if (internals->flowMatcher == 1 && reuse && flowMatch.op) {
-    if (flow) {
-      rte_free(flow);
-    }
-    return &_dummy_flow;
-  }
-  else {
-    NTACC_LOCK(&internals->lock);
-    LIST_INSERT_HEAD(&internals->flows, flow, next);
-    NTACC_UNLOCK(&internals->lock);
-    return flow;
-  }
+  NTACC_LOCK(&internals->lock);
+  LIST_INSERT_HEAD(&internals->flows, flow, next);
+  NTACC_UNLOCK(&internals->lock);
+  return flow;
 
 FlowError:
     if (flow) {
@@ -2145,13 +2090,6 @@ FlowError:
     }
     return NULL;
 }
-
-enum {
-  IPV4_DROP,
-  IPV6_DROP,
-  IPV4_FORWARD,
-  IPV6_FORWARD,
-};
 
 static inline int _programIPv4FlowNtpl(struct pmd_internals *internals, uint8_t dstPort, struct rte_flow_error *error)
 {
@@ -2215,6 +2153,10 @@ static int _dev_flow_match_program(struct rte_eth_dev *dev,
     return 1;
   }
 
+  if (!tuple && internals->flowMatcher == 1) {
+    return 0;
+  }
+
   if (internals->flow.flowEnable == 0) {
     NTACC_LOCK(&internals->configlock);
     if (internals->flow.flowEnable == 0) {
@@ -2276,12 +2218,6 @@ static int _dev_flow_destroy(struct rte_eth_dev *dev,
                              struct rte_flow_error *error)
 {
   struct pmd_internals *internals = dev->data->dev_private;
-
-  if (flow == &_dummy_flow) {
-    printf("Do nothing. Dummy flow\n");
-    return 0;
-  }
-
   NTACC_LOCK(&internals->lock);
   _cleanUpFlow(flow, internals, error);
   NTACC_UNLOCK(&internals->lock);
@@ -2605,6 +2541,92 @@ UpdateError:
   return ret;
 }
 
+static int eth_xstats_get(struct rte_eth_dev *dev __rte_unused, struct rte_eth_xstat *stats, unsigned n)
+{
+  int status;
+  struct pmd_internals *internals = dev->data->dev_private;
+  NtStatistics_t *pStatData;
+  uint64_t learn;
+  uint64_t fail;
+
+  if (internals->flowMatcher == 0) {
+    return -1;
+  }
+
+  if (!stats) {
+    return 2;
+  }
+
+  pStatData = (NtStatistics_t *)rte_malloc(internals->name, sizeof(NtStatistics_t), 0);
+  if (!pStatData) {
+    _log_out_of_memory_errors(__func__);
+    return -1;
+  }
+
+  NTACC_LOCK(&internals->statlock);
+  pStatData->cmd = NT_STATISTICS_READ_CMD_FLOW_V0;
+  pStatData->u.flowData_v0.clear = 0;
+  pStatData->u.flowData_v0.adapterNo = internals->adapterNo;
+  if ((status = NT_StatRead(internals->hStat, pStatData)) != NT_SUCCESS) {
+    _log_nt_errors(status, "NT_StatRead failed", __func__);
+    NTACC_UNLOCK(&internals->statlock);
+    rte_free(pStatData);
+    return -1;
+  }
+  NTACC_UNLOCK(&internals->statlock);
+
+  learn = pStatData->u.flowData_v0.learnTotal;
+  fail = pStatData->u.flowData_v0.learnFail;
+  rte_free(pStatData);
+
+
+  if (n < 1)
+    return 0;
+  else {
+    stats[0].id = 0;
+    stats[0].value = learn;
+  }
+
+  if (n < 2)
+    return 1;
+  else {
+    stats[1].id = 1;
+    stats[1].value = fail;
+  }
+  return 2;
+}
+
+const char *xstatNames[] =
+{
+  "LEARN",
+  "FAIL"
+};
+
+static int eth_xstats_get_names(struct rte_eth_dev *dev __rte_unused, struct rte_eth_xstat_name *xstats_names, unsigned size)
+{
+  struct pmd_internals *internals = dev->data->dev_private;
+
+  if (internals->flowMatcher == 0) {
+    return 0;
+  }
+
+  if (!xstats_names)
+    return 2;
+
+  if (size < 1)
+    return 0;
+  else {
+    memcpy(&xstats_names[0].name, xstatNames[0], strlen(xstatNames[0]));
+  }
+
+  if (size < 2)
+    return 1;
+  else {
+    memcpy(&xstats_names[1].name, xstatNames[1], strlen(xstatNames[1]));
+  }
+  return 2;
+}
+
 static struct eth_dev_ops ops = {
     .dev_start = eth_dev_start,
     .dev_stop = eth_dev_stop,
@@ -2626,6 +2648,8 @@ static struct eth_dev_ops ops = {
     .filter_ctrl = _dev_filter_ctrl,
     .fw_version_get = eth_fw_version_get,
     .rss_hash_update = eth_rss_hash_update,
+    .xstats_get = eth_xstats_get,
+    .xstats_get_names = eth_xstats_get_names,
 };
 
 enum property_type_s {
@@ -3240,9 +3264,6 @@ static int rte_pmd_ntacc_dev_probe(struct rte_pci_driver *drv __rte_unused, stru
     (*_NT_Init)(NTAPI_VERSION);
     first++;
   }
-
-  // Clear the flowhandle table
-  memset(&_flowhandle_lcore, 0, sizeof(_flowhandle_lcore));
 
   if (rte_pmd_init_internals(dev, mask, ntplStr) < 0)
     return -1;
