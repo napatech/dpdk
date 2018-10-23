@@ -34,6 +34,8 @@
 #ifndef __RTE_ETH_NTACC_H__
 #define __RTE_ETH_NTACC_H__
 
+#include <rte_ethdev_pci.h>
+
 #define SEGMENT_LENGTH  (1024*1024)
 
 //#define NTACC_LOCK(a)    { printf(" Req Lock %s(%p) - %u\n", __FILE__, a, __LINE__); rte_spinlock_lock(a); printf(" Got Lock %s(%p) - %u\n", __FILE__, a, __LINE__); }
@@ -243,12 +245,34 @@ enum {
   IPV6_FORWARD,
 };
 
+struct supportedDriver_s {
+   int32_t major;
+   int32_t minor;
+   int32_t patch;
+};
+
+struct supportedAdapters_s {
+  uint32_t item:12;
+  uint32_t product:16;
+  uint32_t ver:8;
+  uint32_t rev:8;
+  uint32_t build:10;
+};
+
+#define NB_SUPPORTED_FPGAS 12
+
 int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *internals, struct rte_flow_error *error);
 
 extern int ntacc_logtype;
 
 #define PMD_NTACC_LOG(level, fmt, args...) rte_log(RTE_LOG_ ## level, ntacc_logtype, \
 		                                               "%s: " fmt , __func__, ##args)
+
+static inline struct pmd_internals *
+ntacc_pmd_priv(const struct rte_eth_dev *dev)
+{
+  return dev->data->dev_private;
+}
 
 #endif
 

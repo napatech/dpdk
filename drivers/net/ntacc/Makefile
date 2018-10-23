@@ -62,6 +62,9 @@ endif
 
 LDLIBS += -ldl -lpthread
 
+#LDLIBS += -lrte_eal -lrte_eventdev
+
+
 EXPORT_MAP := rte_pmd_ntacc_version.map
 
 LIBABIVER := 1
@@ -71,14 +74,17 @@ LIBABIVER := 1
 #
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_NTACC) += rte_eth_ntacc.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_NTACC) += filter_ntacc.c
+SRCS-$(CONFIG_RTE_LIBRTE_PMD_NTACC_EVENTDEV) += ntacc_eventdev.c
 
 #
 # Export include files
 #
 SYMLINK-y-include +=
+SYMLINK-$(CONFIG_RTE_LIBRTE_PMD_NTACC_EVENTDEV)-include := rte_ntacc_event.h
+
 
 # this lib depends upon:
-LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_kvargs 
+LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_kvargs
 LDLIBS += -lrte_ethdev -lrte_bus_pci
 
 include $(RTE_SDK)/mk/rte.lib.mk

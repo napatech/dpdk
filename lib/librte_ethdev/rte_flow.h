@@ -1946,10 +1946,11 @@ struct rte_flow_action {
 };
 
 enum rte_flow_program_actions {
-  RTE_FLOW_PROGRAM_DROP_ACTION      = 0x1,
-  RTE_FLOW_PROGRAM_FORWARD_ACTION   = 0x2,
-  RTE_FLOW_PROGRAM_IPV4             = 0x4,
-  RTE_FLOW_PROGRAM_IPV6             = 0x8,
+  RTE_FLOW_PROGRAM_DROP_ACTION      = 0x01,
+  RTE_FLOW_PROGRAM_FORWARD_ACTION   = 0x02,
+  RTE_FLOW_PROGRAM_IPV4             = 0x04,
+  RTE_FLOW_PROGRAM_IPV6             = 0x08,
+  RTE_FLOW_PROGRAM_INNER            = 0x10,
 };
 
 struct rte_flow_5tuple {
@@ -2127,7 +2128,7 @@ rte_flow_create(uint16_t port_id,
  * @return
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
-int __rte_experimental
+int
 rte_flow_program(uint16_t port_id,
                  uint16_t queue_id,
                  struct rte_flow_5tuple *tuple,

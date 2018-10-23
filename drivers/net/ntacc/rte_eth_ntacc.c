@@ -43,7 +43,6 @@
 #include <unistd.h>
 #include <dlfcn.h>
 #include <rte_mbuf.h>
-#include <rte_ethdev_pci.h>
 #include <rte_malloc.h>
 #include <rte_memcpy.h>
 #include <rte_string_fns.h>
@@ -76,11 +75,7 @@ int ntacc_logtype;
 
 #define MAX_NTPL_NAME 512
 
-static struct {
-   int32_t major;
-   int32_t minor;
-   int32_t patch;
-} supportedDriver = {3, 7, 2};
+struct supportedDriver_s supportedDriver = {3, 7, 2};
 
 #define PCI_VENDOR_ID_NAPATECH 0x18F4
 #define PCI_DEVICE_ID_NT200A01 0x01A5
@@ -93,14 +88,7 @@ static struct {
 #define PCI_VENDOR_ID_INTEL          0x8086
 #define PCIE_DEVICE_ID_PF_DSC_1_X    0x09C4
 
-#define NB_SUPPORTED_FPGAS 12
-static struct {
-  uint32_t item:12;
-  uint32_t product:16;
-  uint32_t ver:8;
-  uint32_t rev:8;
-  uint32_t build:10;
-} supportedAdapters[NB_SUPPORTED_FPGAS] =
+struct supportedAdapters_s supportedAdapters[NB_SUPPORTED_FPGAS] =
 {
   { 200, 9500, 9, 8, 0 },
   { 200, 9501, 9, 8, 0 },
@@ -218,32 +206,6 @@ static void _write_to_file(int fd, const char *buffer)
   if (write(fd, buffer, strlen(buffer)) < 0) {
     PMD_NTACC_LOG(ERR, "NTPL dump failed: Unable to write to file. Error %d\n", errno);
   }
-}
-
-static int DoFlow(NtFlowStream_t hFlowStream, NtFlow_t *flow, struct rte_flow_error *error)
-{
-  int status;
-
-#if 0
-  PMD_NTACC_LOG(DEBUG, "Flow : Color: %u, op %u, FT %u, KID %u, Prot %u\n", flow->color, flow->op, flow->ft, flow->kid, flow->prot);
-  {
-    char buffer[41*2];
-    buffer[0] = 0;
-    for (int i = 0; i < 40; i++) {
-      sprintf(&buffer[strlen(buffer)], "%02X", flow->u.raw[i]);
-    }
-    PMD_NTACC_LOG(DEBUG, "Flow: %s\n", buffer);
-  }
-#endif
-
-  if ((status = (*_NT_FlowWrite)(hFlowStream, flow, 0)) != NT_SUCCESS) {
-    // Get the status code as text
-    (*_NT_ExplainError)(status, errorBuffer, sizeof(errorBuffer) - 1);
-    rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Failed writing flow");
-    PMD_NTACC_LOG(DEBUG, "NT_FlowWrite() failed: %s - %u - %u\n", errorBuffer, rte_lcore_id(), flow->kid);
-    return -1;
-  }
-  return 0;
 }
 
 int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *internals, struct rte_flow_error *error)
@@ -2144,6 +2106,7 @@ static int _dev_flow_match_program(struct rte_eth_dev *dev,
                                    struct rte_flow_5tuple *tuple,
                                    struct rte_flow_error *error)
 {
+  int status;
   struct pmd_internals *internals = dev->data->dev_private;
   struct ntacc_rx_queue *rx_q = queue;
   NtFlow_t flowMatch;
@@ -2207,7 +2170,23 @@ static int _dev_flow_match_program(struct rte_eth_dev *dev,
     }
   }
 
-  if (DoFlow(rx_q->hFlowStream, &flowMatch, error) != 0) {
+#if 0
+  PMD_NTACC_LOG(DEBUG, "Flow : Color: %u, op %u, FT %u, KID %u, Prot %u\n", flow->color, flow->op, flow->ft, flow->kid, flow->prot);
+  {
+    char buffer[41*2];
+    buffer[0] = 0;
+    for (int i = 0; i < 40; i++) {
+      sprintf(&buffer[strlen(buffer)], "%02X", flow->u.raw[i]);
+    }
+    PMD_NTACC_LOG(DEBUG, "Flow: %s\n", buffer);
+  }
+#endif
+
+  if ((status = (*_NT_FlowWrite)(rx_q->hFlowStream, &flowMatch, 0)) != NT_SUCCESS) {
+    // Get the status code as text
+    (*_NT_ExplainError)(status, errorBuffer, sizeof(errorBuffer) - 1);
+    rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Failed writing flow");
+    PMD_NTACC_LOG(DEBUG, "NT_FlowWrite() failed: %s - %u - %u\n", errorBuffer, rte_lcore_id(), flowMatch.kid);
     return 1;
   }
   return 0;
