@@ -36,9 +36,18 @@ enum rxp_service_state {
 struct ntacc_eventdev {
 	uintptr_t reg_base;
   struct ntacc_rx_queue *rxq[RTE_ETHDEV_QUEUE_STAT_CNTRS];
+  struct rte_ring *ring[RTE_ETHDEV_QUEUE_STAT_CNTRS];
 
   uint8_t adapterNo;
   uint8_t portNo;
+
+  uint32_t scid;
+  uint32_t sid;
+  uint32_t service_state;
+
+  uint16_t dequeue_depth;
+
+  uint8_t dev_id;
 
   char name[NTACC_NAME_LEN];
   char driverName[SW_PMD_NAME_MAX];
@@ -48,6 +57,7 @@ struct ntacc_port {
 	uint8_t port_id;
   uint8_t queue_id;
   bool linked;
+  struct rte_ring *ring;
   struct ntacc_rx_queue *rxq;
 } __rte_cache_aligned;
 

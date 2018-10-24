@@ -69,77 +69,32 @@ int (*_NT_FlowOpen_Attr)(NtFlowStream_t *, const char *, NtFlowAttr_t *);
 int (*_NT_FlowClose)(NtFlowStream_t);
 int (*_NT_FlowWrite)(NtFlowStream_t, NtFlow_t *, uint32_t);
 
-static uint16_t
-ntacc_eventdev_enqueue(void *port, const struct rte_event *ev)
-{
-	struct ntacc_port *sp = port;
-
-  PMD_DRV_FUNC_TRACE();
-
-	RTE_SET_USED(sp);
-	RTE_SET_USED(ev);
-	RTE_SET_USED(port);
-
-	return 0;
-}
-
-static uint16_t
-ntacc_eventdev_enqueue_burst(void *port, const struct rte_event ev[],
-			uint16_t nb_events)
-{
-	struct ntacc_port *sp = port;
-
-  PMD_DRV_FUNC_TRACE();
-
-	RTE_SET_USED(sp);
-	RTE_SET_USED(ev);
-	RTE_SET_USED(port);
-	RTE_SET_USED(nb_events);
-
-	return 0;
-}
-
-static uint16_t
-ntacc_eventdev_dequeue(void *port, struct rte_event *ev,
-				uint64_t timeout_ticks)
-{
-	struct ntacc_port *sp = port;
-
-  PMD_DRV_FUNC_TRACE();
-
-	RTE_SET_USED(sp);
-	RTE_SET_USED(ev);
-	RTE_SET_USED(timeout_ticks);
-
-	return 0;
-}
-
+static uint64_t counter = 0;
 static uint16_t
 ntacc_eventdev_dequeue_burst(void *port, struct rte_event ev[],
 		uint16_t nb_events, uint64_t timeout_ticks)
 {
 	struct ntacc_port *sp = port;
-  PMD_DRV_LOG(INFO, "ntacc_eventdev_dequeue_burst (%u): handle: %p - Port: %u - Queue: %u", nb_events, sp->rxq->hFlowStream, sp->port_id, sp->queue_id);
+  uint16_t got_nb_events = 0;
+  unsigned i;
 
-	RTE_SET_USED(ev);
-	RTE_SET_USED(nb_events);
-	RTE_SET_USED(timeout_ticks);
-	return nb_events;
+  RTE_SET_USED(timeout_ticks);
+
+  for (i = 0; i < nb_events; i++) {
+    struct eventData_s *dataPtr = rte_malloc("event_ntacc", sizeof(struct eventData_s), 0);
+    if (dataPtr) {
+      dataPtr->adapterNo = 0;
+      dataPtr->portNo = sp->port_id;
+      dataPtr->dev_id = 0;
+      strcpy(dataPtr->name, "event_ntacc1");
+      dataPtr->counter = counter++;
+      dataPtr->queue_id = sp->queue_id;
+      ev[i].event_ptr = dataPtr;
+      got_nb_events++;
+    }
+  }
+	return got_nb_events;
 }
-
-//uint32_t count = 0;
-//static int32_t ntacc_sched_service_func(void *args)
-//{
-//  struct rte_eventdev *dev = (struct rte_eventdev *)args;
-//  struct ntacc_eventdev *ev_internals = ntacc_evt_priv(dev);
-//
-//  printf("ntacc_sched_service_func %u device %u name %s\n", count++, dev->data->dev_id, ev_internals->service_name);
-//  sleep(1);
-//
-//  RTE_SET_USED(ev_internals);
-//
-//  return 0;
-//}
 
 static void
 ntacc_eventdev_info_get(struct rte_eventdev *dev,
@@ -185,119 +140,6 @@ ntacc_eventdev_configure(const struct rte_eventdev *dev)
 }
 
 static int
-ntacc_eventdev_start(struct rte_eventdev *dev)
-{
-	struct ntacc_eventdev *ev_internals = ntacc_evt_priv(dev);
-//struct rte_service_spec service;
-//int32_t num_service_cores;
-//int ret = 0;
-
-	PMD_DRV_FUNC_TRACE();
-
-  RTE_SET_USED(ev_internals);
-
-//num_service_cores = rte_service_lcore_count();
-//if (num_service_cores <= 0) {
-//  PMD_DRV_ERR("Failed to install Rx interrupts, no service core found");
-//  return -ENOTSUP;
-//}
-//
-///* prepare service info */
-//memset(&service, 0, sizeof(struct rte_service_spec));
-//snprintf(service.name, sizeof(service.name), "%s_service", ev_internals->name);
-//service.socket_id = dev->data->socket_id;
-//service.callback = ntacc_sched_service_func;
-//service.callback_userdata = dev;
-//
-//if (ev_internals->service_state == SS_NO_SERVICE) {
-//  uint32_t service_core_list[num_service_cores];
-//
-//  /* get a service core to work with */
-//  ret = rte_service_lcore_list(service_core_list, num_service_cores);
-//  if (ret <= 0) {
-//    PMD_DRV_ERR("Failed to install Rx interrupts, service core list empty or corrupted");
-//    return -ENOTSUP;
-//  }
-//
-//  ev_internals->scid = service_core_list[0];
-//  ret = rte_service_lcore_add(ev_internals->scid);
-//  if (ret && ret != -EALREADY) {
-//    PMD_DRV_ERR("Failed adding service core");
-//    return ret;
-//  }
-//
-//  /* service core may be in "stopped" state, start it */
-//  ret = rte_service_lcore_start(ev_internals->scid);
-//  if (ret && (ret != -EALREADY)) {
-//    PMD_DRV_ERR("Failed to install Rx interrupts, service core not started");
-//    return ret;
-//  }
-//  /* register our service */
-//  int32_t ret = rte_service_component_register(&service, &ev_internals->sid);
-//  if (ret) {
-//    PMD_DRV_ERR("service register() failed");
-//    return -ENOEXEC;
-//  }
-//
-//  ev_internals->service_state = SS_REGISTERED;
-//  /* run the service */
-//  ret = rte_service_component_runstate_set(ev_internals->sid, 1);
-//  if (ret < 0) {
-//    PMD_DRV_ERR("Failed Setting component runstate\n");
-//    return ret;
-//  }
-//
-//  ret = rte_service_set_stats_enable(ev_internals->sid, 1);
-//  if (ret < 0) {
-//    PMD_DRV_ERR("Failed enabling stats\n");
-//    return ret;
-//  }
-//
-//  ret = rte_service_runstate_set(ev_internals->sid, 1);
-//  if (ret < 0) {
-//    PMD_DRV_ERR("Failed to run service\n");
-//    return ret;
-//  }
-//  ev_internals->service_state = SS_READY;
-//  /* map the service with the service core */
-//  ret = rte_service_map_lcore_set(ev_internals->sid, ev_internals->scid, 1);
-//  if (ret) {
-//    PMD_DRV_ERR("Failed to install Rx interrupts, could not map service core");
-//    return ret;
-//  }
-//  ev_internals->service_state = SS_RUNNING;
-//}
-  return 0;
-}
-
-static void
-ntacc_eventdev_stop(struct rte_eventdev *dev)
-{
-	struct ntacc_eventdev *ev_internals = ntacc_evt_priv(dev);
-
-	PMD_DRV_FUNC_TRACE();
-  RTE_SET_USED(ev_internals);
-
-///* Unregister the event service. */
-//switch (ev_internals->service_state)
-//{
-//case SS_RUNNING:
-//  rte_service_map_lcore_set(ev_internals->sid, ev_internals->scid, 0);
-//  /* fall through */
-//case SS_READY:
-//  rte_service_runstate_set(ev_internals->sid, 0);
-//  rte_service_set_stats_enable(ev_internals->sid, 0);
-//  rte_service_component_runstate_set(ev_internals->sid, 0);
-//  /* fall through */
-//case SS_REGISTERED:
-//  rte_service_component_unregister(ev_internals->sid);
-//  /* fall through */
-//default:
-//  break;
-//}
-}
-
-static int
 ntacc_eventdev_close(struct rte_eventdev *dev)
 {
 	struct ntacc_eventdev *ev_internals = ntacc_evt_priv(dev);
@@ -314,64 +156,6 @@ ntacc_eventdev_close(struct rte_eventdev *dev)
     dlclose(_libnt);
   }
 	return 0;
-}
-
-static void
-ntacc_eventdev_queue_def_conf(struct rte_eventdev *dev, uint8_t queue_id,
-				 struct rte_event_queue_conf *queue_conf)
-{
-	struct ntacc_eventdev *ev_internals = ntacc_evt_priv(dev);
-
-	PMD_DRV_FUNC_TRACE();
-
-	RTE_SET_USED(ev_internals);
-	RTE_SET_USED(queue_id);
-
-	queue_conf->nb_atomic_flows = (1ULL << 20);
-	queue_conf->nb_atomic_order_sequences = (1ULL << 20);
-	queue_conf->event_queue_cfg = RTE_EVENT_QUEUE_CFG_ALL_TYPES;
-	queue_conf->priority = RTE_EVENT_DEV_PRIORITY_NORMAL;
-}
-
-static void
-ntacc_eventdev_queue_release(struct rte_eventdev *dev, uint8_t queue_id)
-{
-	PMD_DRV_FUNC_TRACE();
-
-	RTE_SET_USED(dev);
-	RTE_SET_USED(queue_id);
-}
-
-static int
-ntacc_eventdev_queue_setup(struct rte_eventdev *dev, uint8_t queue_id,
-			      const struct rte_event_queue_conf *queue_conf)
-{
-	struct ntacc_eventdev *ev_internals = ntacc_evt_priv(dev);
-
-	PMD_DRV_FUNC_TRACE();
-
-	RTE_SET_USED(ev_internals);
-	RTE_SET_USED(queue_conf);
-	RTE_SET_USED(queue_id);
-
-	return 0;
-}
-
-static void
-ntacc_eventdev_port_def_conf(struct rte_eventdev *dev, uint8_t port_id,
-				 struct rte_event_port_conf *port_conf)
-{
-	struct ntacc_eventdev *ev_internals = ntacc_evt_priv(dev);
-
-	PMD_DRV_FUNC_TRACE();
-
-	RTE_SET_USED(ev_internals);
-	RTE_SET_USED(port_id);
-
-	port_conf->new_event_threshold = 32 * 1024;
-	port_conf->dequeue_depth = 16;
-	port_conf->enqueue_depth = 16;
-	port_conf->disable_implicit_release = 0;
 }
 
 static void
@@ -493,32 +277,6 @@ ntacc_eventdev_port_unlink(struct rte_eventdev *dev, void *port,
 
 }
 
-static int
-ntacc_eventdev_timeout_ticks(struct rte_eventdev *dev, uint64_t ns,
-				 uint64_t *timeout_ticks)
-{
-	struct ntacc_eventdev *ev_internals = ntacc_evt_priv(dev);
-	uint32_t scale = 1;
-
-	PMD_DRV_FUNC_TRACE();
-
-	RTE_SET_USED(ev_internals);
-	*timeout_ticks = ns * scale;
-
-	return 0;
-}
-
-static void
-ntacc_eventdev_dump(struct rte_eventdev *dev, FILE *f)
-{
-	struct ntacc_eventdev *ev_internals = ntacc_evt_priv(dev);
-
-	PMD_DRV_FUNC_TRACE();
-
-	RTE_SET_USED(ev_internals);
-	RTE_SET_USED(f);
-}
-
 static int ntacc_eventdev_rx_adapter_caps_get(const struct rte_eventdev *dev,
                                               const struct rte_eth_dev *eth_dev,
                                               uint32_t *caps)
@@ -584,24 +342,34 @@ static int ntacc_eventdev_rx_adapter_queue_del(const struct rte_eventdev *dev,
   return 0;
 }
 
+static int ntacc_eventdev_rx_adapter_start(const struct rte_eventdev *dev,
+                                           const struct rte_eth_dev *eth_dev)
+{
+  RTE_SET_USED(dev);
+  RTE_SET_USED(eth_dev);
+  return 0;
+}
+
+static int ntacc_eventdev_rx_adapter_stop(const struct rte_eventdev *dev,
+                                          const struct rte_eth_dev *eth_dev)
+{
+  RTE_SET_USED(dev);
+  RTE_SET_USED(eth_dev);
+  return 0;
+}
+
 /* Initialize and register event driver with DPDK Application */
 static struct rte_eventdev_ops ntacc_eventdev_ops = {
 	.dev_infos_get    = ntacc_eventdev_info_get,
 	.dev_configure    = ntacc_eventdev_configure,
-	.dev_start        = ntacc_eventdev_start,
-	.dev_stop         = ntacc_eventdev_stop,
 	.dev_close        = ntacc_eventdev_close,
-	.queue_def_conf   = ntacc_eventdev_queue_def_conf,
-	.queue_setup      = ntacc_eventdev_queue_setup,
-	.queue_release    = ntacc_eventdev_queue_release,
-	.port_def_conf    = ntacc_eventdev_port_def_conf,
 	.port_setup       = ntacc_eventdev_port_setup,
 	.port_release     = ntacc_eventdev_port_release,
 	.port_link        = ntacc_eventdev_port_link,
 	.port_unlink      = ntacc_eventdev_port_unlink,
-	.timeout_ticks    = ntacc_eventdev_timeout_ticks,
-	.dump             = ntacc_eventdev_dump,
 
+  .eth_rx_adapter_start       = ntacc_eventdev_rx_adapter_start,
+  .eth_rx_adapter_stop        = ntacc_eventdev_rx_adapter_stop,
   .eth_rx_adapter_caps_get    = ntacc_eventdev_rx_adapter_caps_get,
   .eth_rx_adapter_queue_add   = ntacc_eventdev_rx_adapter_queue_add,
   .eth_rx_adapter_queue_del   = ntacc_eventdev_rx_adapter_queue_del,
@@ -616,9 +384,6 @@ ntacc_eventdev_init(struct rte_eventdev *eventdev, uint8_t adapterNo, uint8_t po
 	PMD_DRV_FUNC_TRACE();
 
 	eventdev->dev_ops       = &ntacc_eventdev_ops;
-	eventdev->enqueue       = ntacc_eventdev_enqueue;
-	eventdev->enqueue_burst = ntacc_eventdev_enqueue_burst;
-	eventdev->dequeue       = ntacc_eventdev_dequeue;
 	eventdev->dequeue_burst = ntacc_eventdev_dequeue_burst;
 
 
@@ -968,10 +733,10 @@ error:
 	return -ENXIO;
 }
 
-static struct rte_vdev_driver vdev_eventdev_ntacc_pmd = {
+static struct rte_vdev_driver vdev_eventdev_ntacc1_pmd = {
 	.probe = ntacc_eventdev_probe,
 };
 
-RTE_PMD_REGISTER_VDEV(event_ntacc, vdev_eventdev_ntacc_pmd);
+RTE_PMD_REGISTER_VDEV(event_ntacc1, vdev_eventdev_ntacc1_pmd);
 
 

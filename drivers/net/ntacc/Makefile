@@ -74,7 +74,8 @@ LIBABIVER := 1
 #
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_NTACC) += rte_eth_ntacc.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_NTACC) += filter_ntacc.c
-SRCS-$(CONFIG_RTE_LIBRTE_PMD_NTACC_EVENTDEV) += ntacc_eventdev.c
+SRCS-$(CONFIG_RTE_LIBRTE_PMD_NTACC_EVENTDEV) += ntacc_eventdev1.c
+SRCS-$(CONFIG_RTE_LIBRTE_PMD_NTACC_EVENTDEV) += ntacc_eventdev2.c
 
 #
 # Export include files
