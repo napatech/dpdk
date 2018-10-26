@@ -101,7 +101,7 @@
 		I40E_TX_IEEE1588_TMST)
 
 #define I40E_TX_OFFLOAD_NOTSUP_MASK \
-		(PKT_TX_OFFLOAD_MASK ^ I40E_TX_OFFLOAD_MASK)
+		~(PKT_TX_OFFLOAD_MASK & I40E_TX_OFFLOAD_MASK)
 
 static uint16_t i40e_xmit_pkts_simple(void *tx_queue,
 				      struct rte_mbuf **tx_pkts,
