@@ -34,7 +34,14 @@
 #ifndef __RTE_ETH_NTACC_H__
 #define __RTE_ETH_NTACC_H__
 
+#include <rte_ethdev_pci.h>
+
 #define SEGMENT_LENGTH  (1024*1024)
+
+//#define NTACC_LOCK(a)    { printf(" Req Lock %s(%p) - %u\n", __FILE__, a, __LINE__); rte_spinlock_lock(a); printf(" Got Lock %s(%p) - %u\n", __FILE__, a, __LINE__); }
+//#define NTACC_UNLOCK(a)  { rte_spinlock_unlock(a); printf("Unlocked %s(%p) - %u\n", __FILE__, a, __LINE__); }
+#define NTACC_LOCK(a)    rte_spinlock_lock(a)
+#define NTACC_UNLOCK(a)  rte_spinlock_unlock(a)
 
 struct filter_flow {
   LIST_ENTRY(filter_flow) next;
@@ -60,7 +67,6 @@ struct filter_keyset_s {
   uint8_t list_queues[RTE_ETHDEV_QUEUE_STAT_CNTRS];
 };
 
-#define NUM_FLOW_QUEUES 256
 struct rte_flow {
 	LIST_ENTRY(rte_flow) next;
   LIST_HEAD(_filter_flows, filter_flow) ntpl_id;
@@ -71,7 +77,7 @@ struct rte_flow {
   uint64_t rss_hf;
   int priority;
   uint8_t nb_queues;
-  uint8_t list_queues[NUM_FLOW_QUEUES];
+  uint8_t list_queues[RTE_ETHDEV_QUEUE_STAT_CNTRS];
 };
 
 enum {
@@ -94,13 +100,13 @@ struct ntacc_rx_queue {
   volatile uint64_t      err_pkts;
 #endif
 
+  uint32_t                stream_id;
   uint16_t               buf_size;
-  uint32_t               stream_id;
+  int                     enabled;
   uint8_t                local_port;
   uint8_t                tsMultiplier;
   const char             *name;
   const char             *type;
-  int                    enabled;
 } __rte_cache_aligned;
 
 struct ntacc_tx_queue {
@@ -121,6 +127,7 @@ struct ntacc_tx_queue {
 struct pmd_shared_mem_s {
   pthread_mutex_t mutex;
   int keyset[8][12];
+  int key_id;
 };
 
 struct version_s {
@@ -172,6 +179,7 @@ struct pmd_internals {
 #ifndef USE_SW_STAT
   NtStatStream_t        hStat;
 #endif
+  NtConfigStream_t      hCfgStream;
   int                   if_index;
   LIST_HEAD(_flows, rte_flow) flows;
   LIST_HEAD(filter_values_t, filter_values_s) filter_values;
@@ -179,6 +187,7 @@ struct pmd_internals {
   LIST_HEAD(filter_keyset_t, filter_keyset_s) filter_keyset;
   rte_spinlock_t        lock;
   rte_spinlock_t        statlock;
+  rte_spinlock_t        configlock;
   uint8_t               port;
   uint8_t               local_port;
   uint8_t               local_port_offset;
@@ -197,6 +206,7 @@ struct pmd_internals {
   key_t                 key;
   pthread_mutexattr_t   psharedm;
   struct pmd_shared_mem_s *shm;
+  uint32_t              keyMatcher:1;
 };
 
 #ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
@@ -207,9 +217,32 @@ struct batch_ctrl {
 };
 #endif
 
+enum {
+  ACTION_RSS       = 1 << 0,
+  ACTION_QUEUE     = 1 << 1,
+  ACTION_DROP      = 1 << 2,
+  ACTION_FORWARD   = 1 << 3,
+  ACTION_HASH      = 1 << 4,
+};
 
 
-int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *internals);
+struct supportedDriver_s {
+   int32_t major;
+   int32_t minor;
+   int32_t patch;
+};
+
+struct supportedAdapters_s {
+  uint32_t item:12;
+  uint32_t product:16;
+  uint32_t ver:8;
+  uint32_t rev:8;
+  uint32_t build:10;
+};
+
+#define NB_SUPPORTED_FPGAS 13
+
+int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *internals, struct rte_flow_error *error);
 
 extern int ntacc_logtype;
 

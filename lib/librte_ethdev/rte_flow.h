@@ -425,6 +425,12 @@ enum rte_flow_item_type {
 	 * See struct rte_flow_item_mark.
 	 */
 	RTE_FLOW_ITEM_TYPE_MARK,
+
+  /**
+   * Matches packets containing a tunnel.
+   *
+   */
+  RTE_FLOW_ITEM_TYPE_TUNNEL,
 };
 
 /**
@@ -897,32 +903,32 @@ static const struct rte_flow_item_fuzzy rte_flow_item_fuzzy_mask = {
 };
 #endif
 
-/** 
- * RTE_FLOW_ITEM_TYPE_NTPL 
- *  
+/**
+ * RTE_FLOW_ITEM_TYPE_NTPL
+ *
  * Insert a NTPL string into the NTPL filtercode.
- *  
- * tunnel defines how following commands are treated. 
- * Setting tunnel=RTE_FLOW_NTPL_TUNNEL makes the following commands to be treated 
- * as inner tunnel commands 
- *  
- * 1. The string is inserted into the filter string with tunnel=RTE_FLOW_NTPL_NO_TUNNEL: 
- *  
- *    assign[xxxxxxxx]=(Layer3Protocol==IPV4) and and "Here is the ntpl item" and port==0 and Key(KDEF4)==4 
- *  
- * 2. The string is inserted into the filter string with tunnel=RTE_FLOW_NTPL_TUNNEL: 
- *  
- *    assign[xxxxxxxx]=(InnerLayer3Protocol==IPV4) and and "Here is the ntpl item" and port==0 and Key(KDEF4)==4 
- *  
- * Note: When setting tunnel=RTE_FLOW_NTPL_TUNNEL the Layer3Protocol command is changed to InnerLayer3Protocol, 
+ *
+ * tunnel defines how following commands are treated.
+ * Setting tunnel=RTE_FLOW_NTPL_TUNNEL makes the following commands to be treated
+ * as inner tunnel commands
+ *
+ * 1. The string is inserted into the filter string with tunnel=RTE_FLOW_NTPL_NO_TUNNEL:
+ *
+ *    assign[xxxxxxxx]=(Layer3Protocol==IPV4) and and "Here is the ntpl item" and port==0 and Key(KDEF4)==4
+ *
+ * 2. The string is inserted into the filter string with tunnel=RTE_FLOW_NTPL_TUNNEL:
+ *
+ *    assign[xxxxxxxx]=(InnerLayer3Protocol==IPV4) and and "Here is the ntpl item" and port==0 and Key(KDEF4)==4
+ *
+ * Note: When setting tunnel=RTE_FLOW_NTPL_TUNNEL the Layer3Protocol command is changed to InnerLayer3Protocol,
  * 			 now matching the inner layers in stead of the outer layers.
- *  
- * Note: When setting tunnel=RTE_FLOW_NTPL_TUNNEL, the commands used before the RTE_FLOW_ITEM_TYPE_NTPL will 
- *       match the outer layers and commands used after will match the inner layers. 
- *  
- * The ntpl item string must have the right syntax in order to prevent a 
- * syntax error and it must break the rest of the ntpl string in order 
- * to prevent a ntpl error. 
+ *
+ * Note: When setting tunnel=RTE_FLOW_NTPL_TUNNEL, the commands used before the RTE_FLOW_ITEM_TYPE_NTPL will
+ *       match the outer layers and commands used after will match the inner layers.
+ *
+ * The ntpl item string must have the right syntax in order to prevent a
+ * syntax error and it must break the rest of the ntpl string in order
+ * to prevent a ntpl error.
  */
 struct rte_flow_item_ntpl {
 	const char *ntpl_str;
