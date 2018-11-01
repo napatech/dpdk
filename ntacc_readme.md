@@ -31,9 +31,9 @@ The NTACC PMD driver does not need to be bound. This means that the dpdk-devbind
 16. [Filter creation example - Multiple 5tuple filter (IPv4 addresses and TCP ports)](#examples2)
 17. [Copy packet offset to mbuf](#copyoffset)
 18. [Use NTPL filters addition (Making an ethernet over MPLS filter)](#ntplfilter)
-19. [Hardware packet decoding](#hwdecode)
-	1. [Layer3 and Layer4 packet decoding](#hwl3l4)
-	2. [Inner most Layer3 and Layer4 packet decoding](#hwil3il4)
+19. [Packet decoding offload](#hwdecode)
+	1. [Layer3 and Layer4 packet decoding offload](#hwl3l4)
+	2. [Inner most Layer3 and Layer4 packet decoding offload](#hwil3il4)
 	3. [More packet decoding types](#hwmoredecode) 
 20.  [Contiguous Memory Batching - Receive a batch of packets](#batching)
 	1. [mbuf changes](#mbuf)
@@ -846,7 +846,7 @@ assign[priority=1;Descriptor=DYN3,length=22,colorbits=32;streamid=0;tag=port0]=(
 
 Other NTPL filter expressions can be used as long as it does not break the resulting NTPL filter expression.
 
-## Hardware packet decoding <a name="hwdecode"></a>
+## Packet decoding offload <a name="hwdecode"></a>
 Packet decoding can be made by the SmartNIC hardware by using the action `RTE_FLOW_ACTION_TYPE_FLAG`. This causes the hardware to fill out the packet type field in the mbuf structure and return the offset to layer3 and layer4 or innerlayer3 and innerlayer4.
 
 The mbuf fields set:
@@ -860,7 +860,9 @@ The mbuf fields set:
 
 > Note: `RTE_FLOW_ACTION_TYPE_MARK` cannot be used as the same time as `RTE_FLOW_ACTION_TYPE_FLAG` and no valid hash value is returned.
 
-#### Layer3 and Layer4 packet decoding  <a name="hwl3l4"></a> 
+> Note: The [Copy Packet Offset to mbuf](#copyoffset) feature must not be enabled. `CONFIG_RTE_LIBRTE_PMD_NTACC_COPY_OFFSET=n`
+
+#### Layer3 and Layer4 packet decoding offload <a name="hwl3l4"></a> 
 The following is an example on how layer3 and layer4 hardware decoding is used.
 
 The filter setup:
@@ -990,7 +992,7 @@ case RTE_PTYPE_L4_SCTP:
 }
 ```
 
-#### Inner most Layer3 and Layer4 packet decoding <a name="hwil3il4"></a> 
+#### Inner most Layer3 and Layer4 packet decoding offload <a name="hwil3il4"></a> 
 If the inner most layers are wanted, the following example can be used.
 
 The filter setup:
