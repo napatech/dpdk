@@ -6,6 +6,8 @@ The NTACC PMD driver does not need to be bound. This means that the dpdk-devbind
 
 ## Table of Contents
 1. [Napatech Driver](#driver)
+	1. [SmartNIC 200-9516-10-07-00](#200-9516-10-07-00)
+	2. [Intel PAC A10](#Intel_PAC_A10)
 2. [Compiling the Napatech NTACC PMD driver](#compiling)
 	1. [Environment variable](#Environment)
 	2. [Configuration setting](#configuration)
@@ -29,7 +31,11 @@ The NTACC PMD driver does not need to be bound. This means that the dpdk-devbind
 16. [Filter creation example - Multiple 5tuple filter (IPv4 addresses and TCP ports)](#examples2)
 17. [Copy packet offset to mbuf](#copyoffset)
 18. [Use NTPL filters addition (Making an ethernet over MPLS filter)](#ntplfilter)
-19.  [Contiguous Memory Batching - Receive a batch of packets](#batching)
+19. [Hardware packet decoding](#hwdecode)
+	1. [Layer3 and Layer4 packet decoding](#hwl3l4)
+	2. [Inner most Layer3 and Layer4 packet decoding](#hwil3il4)
+	3. [More packet decoding types](#hwmoredecode) 
+20.  [Contiguous Memory Batching - Receive a batch of packets](#batching)
 	1. [mbuf changes](#mbuf)
 	2. [Batch buffer](#batchbuf)
 	3. [Browsing the batch buffer directly](#browbatchbuf)
@@ -62,12 +68,34 @@ See below for supported drivers and SmartNics:
 |  NT80E3-2-PTP-ANL                               |  200-9503-10-07-00 |
 |  NT100E3‐1‐PTP‐ANL                             |  200-9505-10-08-00 |
 |  NT200A01-02-SCC-2×40-E3-FF-ANL    |  200-9512-10-07-00 |
-|  NT200A01-02-SCC-2×100-E3-FF-ANL  |  200-9515-10-07-00 |
+|  NT200A01-02-SCC-2×100-E3-FF-ANL  |  200-9515-10-07-00<br>200-9516-10-07-00 |
 |  NT80E3-2-PTP-ANL 8x10G           |  200-9519-10-07-00 |
+| Intel PAC A10 GX 4x10             | 200-7000-12-02-00 |
+| Intel PAC A10 GX 1x40             | 200-7001-12-03-00 |
 
 The complete driver package can be downloaded here:
-[ntanl_package_3gd_linux_11.0.1](https://supportportal.napatech.com/index.php?/selfhelp/view-article/capture-software-v1101-linux-for-napatech-smartnics/351)
+[Link™ Capture Software v11.2.2 Linux](https://supportportal.napatech.com/index.php?/selfhelp/view-article/link--capture-software-v1122-linux/519)
 
+#### SmartNIC 200-9516-10-07-00 <a name="200-9516-10-07-00"></a>
+Using this SmartNIC only limited rte_flow filters is supported.
+The rte_flow filters must not contain any spec, mask or last values like below:
+```
+memset(&pattern, 0, sizeof(pattern));
+uint32_t patternCount = 0;
+pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_IPV4;
+pattern[patternCount].spec = NULL;
+pattern[patternCount].mask = NULL;
+pattern[patternCount].last = NULL;
+patternCount++;
+
+pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_END;
+patternCount++;
+```
+
+All item types are supported as well as all actions.
+
+#### Intel PAC A10 <a name="Intel_PAC_A10"></a>
+Intel PAC A10 support requires driver version 3.9.1 or newer. 
 
 ## Compiling the Napatech NTACC PMD Driver <a name="compiling"></a>
 
@@ -215,7 +243,8 @@ The following rte_flow filters are added by Napatech and are not a part of the m
 
 | rte_flow filter	         | Supported fields           |
 |----------------------------|----------------------------|
-|`RTE_FLOW_ITEM_TYPE_IPinIP`   | Only packet type = `IPinIP`  |
+|`RTE_FLOW_ITEM_TYPE_IPinIP` | Only packet type = `IPinIP`  |
+|`RTE_FLOW_ITEM_TYPE_TUNNEL` | Match on inner layers |
 |`RTE_FLOW_ITEM_TYPE_NTPL`   | [see *Use NTPL filters*](#ntplfilter)  |
 
 **Supported fields**: The fields in the different filters that can be used when creating a rte_flow filter.
@@ -817,6 +846,400 @@ assign[priority=1;Descriptor=DYN3,length=22,colorbits=32;streamid=0;tag=port0]=(
 
 Other NTPL filter expressions can be used as long as it does not break the resulting NTPL filter expression.
 
+## Hardware packet decoding <a name="hwdecode"></a>
+Packet decoding can be made by the SmartNIC hardware by using the action `RTE_FLOW_ACTION_TYPE_FLAG`. This causes the hardware to fill out the packet type field in the mbuf structure and return the offset to layer3 and layer4 or innerlayer3 and innerlayer4.
+
+The mbuf fields set:
+
+| mbuf field | description |
+|------------|-------------|
+| mbuf->packet_type | The packet type according to rte_mbuf_ptype.h |
+| mbuf->hash.fdir.lo | Either layer3 or innerlayer3 offset |
+| mbuf->hash.fdir.hi | Either layer4 or innerlayer4 offset |
+| mbuf->ol_flags | PKT_RX_FDIR_FLX and PKT_RX_FDIR<br> if packet_type, hash.fdir.lo and hash.fdir.hi contains valid values |
+
+> Note: `RTE_FLOW_ACTION_TYPE_MARK` cannot be used as the same time as `RTE_FLOW_ACTION_TYPE_FLAG` and no valid hash value is returned.
+
+#### Layer3 and Layer4 packet decoding  <a name="hwl3l4"></a> 
+The following is an example on how layer3 and layer4 hardware decoding is used.
+
+The filter setup:
+```
+memset(&attr, 0, sizeof(attr));
+attr.ingress = 1;
+attr.priority = 10;
+
+for (protoTel = 0; protoTel < 6; protoTel++) {
+  uint32_t actionCount = 0;
+  uint32_t patternCount = 0;
+
+  memset(&pattern, 0, sizeof(pattern));
+  memset(&actions, 0, sizeof(actions));
+
+  switch (protoTel)
+  {
+  case 0:
+    // Creates a filter that will match all other packets, that the ones below
+    break;
+  case 1:
+    pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_IPV4;
+    patternCount++;
+    break;
+  case 2:
+    pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_IPV6;
+    patternCount++;
+    break;
+  case 3:
+    pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_UDP;
+    patternCount++;
+    break;
+  case 4:
+    pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_TCP;
+    patternCount++;
+    break;
+  case 5:
+    pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_SCTP;
+    patternCount++;
+    break;
+  }
+
+  pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_END;
+  patternCount++;
+
+  if (numQueues > 1) {
+    rss.func = RTE_ETH_HASH_FUNCTION_SIMPLE_XOR;
+    rss.level = 0;
+    rss.types  = ETH_RSS_UDP | ETH_RSS_TCP | ETH_RSS_SCTP;
+    rss.queue_num = numQueues;
+    for (i = 0; i < numQueues; i++) {
+      queues[i] = i;
+    }
+    rss.queue = queues;
+    actions[actionCount].type = RTE_FLOW_ACTION_TYPE_RSS;
+    actions[actionCount].conf = &rss;
+    actionCount++;
+  }
+  else {
+    queue.index = 0;
+    actions[actionCount].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+    actions[actionCount].conf = &queue;
+    actionCount++;
+  }
+
+  actions[actionCount].type = RTE_FLOW_ACTION_TYPE_FLAG;
+  actionCount++;
+
+  actions[actionCount].type = RTE_FLOW_ACTION_TYPE_END;
+  actionCount++;
+
+  if (rte_flow_create(port, &attr, pattern, actions, &error) == NULL) {
+    printf("ERROR: %s\n", error.message);
+    return -1;
+  }
+```
+
+The handling of the packet decoding:
+```
+// Packet must be an IP packet
+if (mb->packet_type <= 1) {
+  // No valid packet type is found 
+  return 0; 
+}
+
+switch (mb->packet_type & RTE_PTYPE_L3_MASK)
+{
+case RTE_PTYPE_L3_IPV4:
+  {
+    struct ipv4_hdr *pIPv4_hdr = rte_pktmbuf_mtod_offset(mb, struct ipv4_hdr *, mb->hash.fdir.lo);
+    pIPv4_hdr->src_addr; // Layer3 IPv4 source address 
+    pIPv4_hdr->dst_addr; // Layer3 IPv4 destination address
+    break;
+  }
+case RTE_PTYPE_L3_IPV6:
+  {
+    struct ipv6_hdr *pIPv6_hdr = rte_pktmbuf_mtod_offset(mb, struct ipv6_hdr *, mb->hash.fdir.lo);
+    pIPv6_hdr->src_addr; // Layer3 IPv6 source address
+    pIPv6_hdr->dst_addr; // Layer3 IPv6 destination address
+    break;
+  }
+}
+
+switch (mb->packet_type & RTE_PTYPE_L4_MASK)
+{
+case RTE_PTYPE_L4_UDP:
+  {
+    struct udp_hdr *udp_hdr = rte_pktmbuf_mtod_offset(mb, struct udp_hdr *, mb->hash.fdir.hi);
+    udp_hdr->src_port; // Layer4 UDP source port
+    udp_hdr->dst_port; // Layer4 UDP destination port
+    break;
+  }
+case RTE_PTYPE_L4_TCP:
+  {
+    const struct tcp_hdr *tcp_hdr = rte_pktmbuf_mtod_offset(mb, struct tcp_hdr *, mb->hash.fdir.hi);
+    tcp_hdr->src_port; // Layer4 TCP source port
+    tcp_hdr->dst_port; // Layer4 TCP destination port
+    break;
+  }
+case RTE_PTYPE_L4_SCTP:
+  {
+    const struct sctp_hdr *sctp_hdr = rte_pktmbuf_mtod_offset(mb, struct sctp_hdr *, mb->hash.fdir.hi);
+    sctp_hdr->src_port; // Layer4 SCTP source port
+    sctp_hdr->dst_port; // Layer4 SCTP destination port
+    break;
+  }
+}
+```
+
+#### Inner most Layer3 and Layer4 packet decoding <a name="hwil3il4"></a> 
+If the inner most layers are wanted, the following example can be used.
+
+The filter setup:
+```
+// The filter for the outer layers
+// Note that priority must be lower (higer number) than the filters
+// for the inner layers
+ 
+attr.ingress = 1;
+attr.priority = 2;
+for (int tel = 0; tel < 5; tel++) {
+  memset(&pattern, 0, sizeof(pattern));
+  uint32_t patternCount = 0;
+  switch (tel)
+  {
+  case 0:
+    pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_IPV4;
+    patternCount++;
+    break;
+  case 1:
+    pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_IPV6;
+    patternCount++;
+    break;
+  case 2:
+    pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_TCP;
+    patternCount++;
+    break;
+  case 3:
+    pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_UDP;
+    patternCount++;
+    break;
+  case 4:
+    pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_SCTP;
+    patternCount++;
+    break;
+  }
+
+  pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_END;
+  patternCount++;
+
+  memset(&actions, 0, sizeof(actions));
+  uint32_t actionCount = 0;
+
+  rss.types = ETH_RSS_NONFRAG_IPV4_TCP;
+  rss.level = 0;
+  rss.func = RTE_ETH_HASH_FUNCTION_SIMPLE_XOR;
+
+  rss.queue_num = 2;
+  queues[0] = 0;
+  queues[1] = 1;
+  rss.queue = queues;
+  actions[actionCount].type = RTE_FLOW_ACTION_TYPE_RSS;
+  actions[actionCount].conf = &rss;
+  actionCount++;
+
+  actions[actionCount].type = RTE_FLOW_ACTION_TYPE_FLAG;
+  actionCount++;
+
+  actions[actionCount].type = RTE_FLOW_ACTION_TYPE_END;
+  actionCount++;
+
+  flow = rte_flow_create(portid, &attr, pattern, actions, error);
+  if (flow == NULL) {
+    return -1;
+  }
+}
+
+// The filter for the inner layers
+// Note that priority must be higher (lower number) than the filters
+// for the outer layers
+ 
+attr.ingress = 1;
+attr.priority = 1;
+for (int tel = 0; tel < 5; tel++) {
+  memset(&pattern, 0, sizeof(pattern));
+  uint32_t patternCount = 0;
+
+  // Activate inner layer filters. The type of tunnel is don't care
+  pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_TUNNEL;
+  patternCount++;
+
+  switch (tel)
+  {
+  case 0:
+    pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_IPV4;
+    patternCount++;
+    break;
+  case 1:
+    pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_IPV6;
+    patternCount++;
+    break;
+  case 2:
+    pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_TCP;
+    patternCount++;
+    break;
+  case 3:
+    pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_UDP;
+    patternCount++;
+    break;
+  case 4:
+    pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_SCTP;
+    patternCount++;
+    break;
+  }
+
+  pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_END;
+  patternCount++;
+
+  memset(&actions, 0, sizeof(actions));
+  uint32_t actionCount = 0;
+
+  rss.types = ETH_RSS_NONFRAG_IPV4_TCP;
+  rss.level = 0;
+  rss.func = RTE_ETH_HASH_FUNCTION_SIMPLE_XOR;
+
+  rss.queue_num = 2;
+  queues[0] = 0;
+  queues[1] = 1;
+  rss.queue = queues;
+  actions[actionCount].type = RTE_FLOW_ACTION_TYPE_RSS;
+  actions[actionCount].conf = &rss;
+  actionCount++;
+
+  actions[actionCount].type = RTE_FLOW_ACTION_TYPE_FLAG;
+  actionCount++;
+
+  actions[actionCount].type = RTE_FLOW_ACTION_TYPE_END;
+  actionCount++;
+
+  flow = rte_flow_create(portid, &attr, pattern, actions, error);
+  if (flow == NULL) {
+    return -1;
+  }
+}
+```
+The handling of the packet decoding of the inner most layers:
+```
+if (mb->packet_type & RTE_PTYPE_INNER_L3_MASK) {
+  switch (mb->packet_type & RTE_PTYPE_INNER_L3_MASK)
+  {
+  case RTE_PTYPE_INNER_L3_IPV4:
+    {
+      struct ipv4_hdr *pIPv4_hdr = rte_pktmbuf_mtod_offset(mb, struct ipv4_hdr *, mb->hash.fdir.lo);
+      pIPv4_hdr-src_addr;
+      pIPv4_hdr->dst_addr;
+      break;
+    }
+  case RTE_PTYPE_INNER_L3_IPV6:
+    {
+      struct ipv6_hdr *pIPv6_hdr = rte_pktmbuf_mtod_offset(mb, struct ipv6_hdr *, mb->hash.fdir.lo & 0xFFFF);
+      pIPv6_hdr->src_addr;
+      pIPv6_hdr->dst_addr;
+      break;
+    }
+  }
+}
+else if (mb->packet_type & RTE_PTYPE_L3_MASK) {
+  switch (mb->packet_type & RTE_PTYPE_L3_MASK)
+  {
+  case RTE_PTYPE_L3_IPV4:
+    {
+      struct ipv4_hdr *pIPv4_hdr = rte_pktmbuf_mtod_offset(mb, struct ipv4_hdr *, mb->hash.fdir.lo);
+      pIPv4_hdr->src_addr;
+      pIPv4_hdr->dst_addr;
+      break;
+    }
+  case RTE_PTYPE_L3_IPV6:
+    {
+      struct ipv6_hdr *pIPv6_hdr = rte_pktmbuf_mtod_offset(mb, struct ipv6_hdr *, mb->hash.fdir.lo & 0xFFFF);
+      pIPv6_hdr->src_addr;
+      pIPv6_hdr->dst_addr;
+      break;
+    }
+  }
+}
+
+if (mb->packet_type & RTE_PTYPE_INNER_L4_MASK) {
+  switch (mb->packet_type & RTE_PTYPE_INNER_L4_MASK)
+  {
+   case RTE_PTYPE_INNER_L4_SCTP:
+    {
+      const struct sctp_hdr *sctp_hdr = rte_pktmbuf_mtod_offset(mb, struct sctp_hdr *, mb->hash.fdir.hi);
+      sctp_hdr->src_port;
+      sctp_hdr->dst_port;
+      break;
+    }
+  case RTE_PTYPE_INNER_L4_TCP:
+    {
+      const struct tcp_hdr *tcp_hdr = rte_pktmbuf_mtod_offset(mb, struct tcp_hdr *, mb->hash.fdir.hi);
+      tcp_hdr->src_port;
+      tcp_hdr->dst_port;
+      break;
+    }
+  case RTE_PTYPE_INNER_L4_UDP:
+    {
+      struct udp_hdr *udp_hdr = rte_pktmbuf_mtod_offset(mb, struct udp_hdr *, mb->hash.fdir.hi);
+      udp_hdr->src_port;
+      udp_hdr->dst_port;
+      break;
+    }
+  }
+}
+else if (mb->packet_type & RTE_PTYPE_L4_MASK) {
+  switch (mb->packet_type & RTE_PTYPE_L4_MASK)
+  {
+   case RTE_PTYPE_L4_SCTP:
+    {
+      const struct sctp_hdr *sctp_hdr = rte_pktmbuf_mtod_offset(mb, struct sctp_hdr *, mb->hash.fdir.hi);
+      sctp_hdr->src_port;
+      sctp_hdr->dst_port;
+      break;
+    }
+  case RTE_PTYPE_L4_TCP:
+    {
+      const struct tcp_hdr *tcp_hdr = rte_pktmbuf_mtod_offset(mb, struct tcp_hdr *, mb->hash.fdir.hi);
+      tcp_hdr->src_port;
+      tcp_hdr->dst_port;
+      break;
+    }
+  case RTE_PTYPE_L4_UDP:
+    {
+      struct udp_hdr *udp_hdr = rte_pktmbuf_mtod_offset(mb, struct udp_hdr *, mb->hash.fdir.hi);
+      udp_hdr->src_port;
+      udp_hdr->dst_port;
+      break;
+    }
+  }
+}
+
+```
+#### More packet decoding types  <a name="hwmoredecode"></a>
+It is possible to add more packet decoding types if wanted. The following table shows which packet types that is made available in mbuf->packet_types according to which item filter made.
+
+| Item filter type          | mbuf->packet_type                                        |
+|---------------------------|----------------------------------------------------------|
+| RTE_FLOW_ITEM_TYPE_ETH    | RTE_PTYPE_INNER_L2_ETHER<br>RTE_PTYPE_L2_ETHER           |
+| RTE_FLOW_ITEM_TYPE_IPV4   | RTE_PTYPE_INNER_L3_IPV4<br>RTE_PTYPE_L3_IPV4             |
+| RTE_FLOW_ITEM_TYPE_IPV6   | RTE_PTYPE_INNER_L3_IPV6<br>RTE_PTYPE_L3_IPV6             |
+| RTE_FLOW_ITEM_TYPE_SCTP   | RTE_PTYPE_INNER_L4_SCTP<br>RTE_PTYPE_L4_SCTP             |
+| RTE_FLOW_ITEM_TYPE_TCP    | RTE_PTYPE_INNER_L4_TCP<br>RTE_PTYPE_L4_TCP               |
+| RTE_FLOW_ITEM_TYPE_UDP    | RTE_PTYPE_INNER_L4_UDP<br>RTE_PTYPE_L4_UDP               |
+| RTE_FLOW_ITEM_TYPE_ICMP   | RTE_PTYPE_INNER_L4_ICMP<br>RTE_PTYPE_L4_ICMP             |
+| RTE_FLOW_ITEM_TYPE_VLAN   | RTE_PTYPE_INNER_L2_ETHER_VLAN<br>RTE_PTYPE_L2_ETHER_VLAN | 
+| RTE_FLOW_ITEM_TYPE_GRE    | RTE_PTYPE_TUNNEL_GRE                                     |
+| RTE_FLOW_ITEM_TYPE_GTPU   | RTE_PTYPE_TUNNEL_GTPU                                    | 
+| RTE_FLOW_ITEM_TYPE_GTPC   | RTE_PTYPE_TUNNEL_GTPC                                    |
+| RTE_FLOW_ITEM_TYPE_VXLAN  | RTE_PTYPE_TUNNEL_VXLAN                                   |
+| RTE_FLOW_ITEM_TYPE_NVGRE  | RTE_PTYPE_TUNNEL_NVGRE                                   |  
+| RTE_FLOW_ITEM_TYPE_IPinIP | RTE_PTYPE_TUNNEL_IP                                      |
 
 ## Contiguous Memory Batching - Receive a Batch of Packets<a name="batching"></a>
 Contiguous memory batching is the possibility to receive a batch of packets instead of one packet at a time. The advantage of using contiguous memory batching is that packets are DMA'ed directly from the SmartNic into the batch buffer and thereby no copying is required by the host (zero copy). The disadvantage by using Contiguous Memory Batching is that packets cannot be kept for later analysis. If a packet needs to be kept, it must be copied to another buffer. It can be done by using a helper function ([see description below](#helperfunc)). A batch of packets is released when a new batch is requested. The packet data in the previous batch will then be invalid.
