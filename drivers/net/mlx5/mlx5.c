@@ -78,6 +78,12 @@
  */
 #define MLX5_TXQS_MIN_INLINE "txqs_min_inline"
 
+/*
+ * Device parameter to configure the number of TX queues threshold for
+ * enabling vectorized Tx.
+ */
+#define MLX5_TXQS_MAX_VEC "txqs_max_vec"
+
 /* Device parameter to enable multi-packet send WQEs. */
 #define MLX5_TXQ_MPW_EN "txq_mpw_en"
 
@@ -112,6 +118,7 @@ struct mlx5_args {
 	int cqe_comp;
 	int txq_inline;
 	int txqs_inline;
+	int txqs_vec;
 	int mps;
 	int mpw_hdr_dseg;
 	int inline_max_packet_sz;
@@ -442,6 +449,8 @@ mlx5_args_check(const char *key, const char *val, void *opaque)
 		args->txq_inline = tmp;
 	} else if (strcmp(MLX5_TXQS_MIN_INLINE, key) == 0) {
 		args->txqs_inline = tmp;
+	} else if (strcmp(MLX5_TXQS_MAX_VEC, key) == 0) {
+		args->txqs_vec = tmp;
 	} else if (strcmp(MLX5_TXQ_MPW_EN, key) == 0) {
 		args->mps = !!tmp;
 	} else if (strcmp(MLX5_TXQ_MPW_HDR_DSEG_EN, key) == 0) {
@@ -480,6 +489,7 @@ mlx5_args(struct mlx5_args *args, struct rte_devargs *devargs)
 		MLX5_RXQ_CQE_COMP_EN,
 		MLX5_TXQ_INLINE,
 		MLX5_TXQS_MIN_INLINE,
+		MLX5_TXQS_MAX_VEC,
 		MLX5_TXQ_MPW_EN,
 		MLX5_TXQ_MPW_HDR_DSEG_EN,
 		MLX5_TXQ_MAX_INLINE_LEN,
@@ -640,6 +650,8 @@ mlx5_args_assign(struct priv *priv, struct mlx5_args *args)
 		priv->txq_inline = args->txq_inline;
 	if (args->txqs_inline != MLX5_ARG_UNSET)
 		priv->txqs_inline = args->txqs_inline;
+	if (args->txqs_vec != MLX5_ARG_UNSET)
+		priv->txqs_vec = args->txqs_vec;
 	if (args->mps != MLX5_ARG_UNSET) {
 		priv->mps = args->mps ? priv->mps : 0;
 	} else if (priv->mps == MLX5_MPW) {
@@ -687,6 +699,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	unsigned int mps;
 	unsigned int cqe_comp;
 	unsigned int tunnel_en = 0;
+	unsigned int txqs_vec = MLX5_VPMD_MAX_TXQS;
 	int idx;
 	int i;
 	struct mlx5dv_context attrs_out;
@@ -733,14 +746,15 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 			continue;
 		switch (pci_dev->id.device_id) {
 		case PCI_DEVICE_ID_MELLANOX_CONNECTX4:
-			tunnel_en = 1;
-			break;
 		case PCI_DEVICE_ID_MELLANOX_CONNECTX4LX:
 		case PCI_DEVICE_ID_MELLANOX_CONNECTX5:
 		case PCI_DEVICE_ID_MELLANOX_CONNECTX5VF:
 		case PCI_DEVICE_ID_MELLANOX_CONNECTX5EX:
 		case PCI_DEVICE_ID_MELLANOX_CONNECTX5EXVF:
+			tunnel_en = 1;
+			break;
 		case PCI_DEVICE_ID_MELLANOX_CONNECTX5BF:
+			txqs_vec = MLX5_VPMD_MAX_TXQS_BLUEFIELD;
 			tunnel_en = 1;
 			break;
 		default:
@@ -813,6 +827,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 			.cqe_comp = MLX5_ARG_UNSET,
 			.txq_inline = MLX5_ARG_UNSET,
 			.txqs_inline = MLX5_ARG_UNSET,
+			.txqs_vec = MLX5_ARG_UNSET,
 			.mps = MLX5_ARG_UNSET,
 			.mpw_hdr_dseg = MLX5_ARG_UNSET,
 			.inline_max_packet_sz = MLX5_ARG_UNSET,
@@ -916,6 +931,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		/* Enable vector by default if supported. */
 		priv->tx_vec_en = 1;
 		priv->rx_vec_en = 1;
+		priv->txqs_vec = txqs_vec;
 		err = mlx5_args(&args, pci_dev->device.devargs);
 		if (err) {
 			DRV_LOG(ERR, "failed to process device arguments: %s",

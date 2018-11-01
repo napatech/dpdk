@@ -139,6 +139,7 @@ struct priv {
 	unsigned int max_tso_payload_sz; /* Maximum TCP payload for TSO. */
 	unsigned int txq_inline; /* Maximum packet size for inlining. */
 	unsigned int txqs_inline; /* Queue number threshold for inlining. */
+	unsigned int txqs_vec; /* Queue number threshold for vectorized Tx. */
 	unsigned int inline_max_packet_sz; /* Max packet size for inlining. */
 	/* RX/TX queues. */
 	unsigned int rxqs_n; /* RX queues array size. */

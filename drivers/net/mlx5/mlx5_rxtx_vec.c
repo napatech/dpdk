@@ -316,7 +316,7 @@ mlx5_check_vec_tx_support(struct rte_eth_dev *dev)
 	struct priv *priv = dev->data->dev_private;
 
 	if (!priv->tx_vec_en ||
-	    priv->txqs_n > MLX5_VPMD_MIN_TXQS ||
+	    priv->txqs_n > (unsigned int)priv->txqs_vec ||
 	    priv->mps != MLX5_MPW_ENHANCED ||
 	    priv->tso)
 		return -ENOTSUP;
