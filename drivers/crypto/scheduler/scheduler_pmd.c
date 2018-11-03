@@ -37,6 +37,7 @@
 #include <rte_malloc.h>
 #include <rte_cpuflags.h>
 #include <rte_reorder.h>
+#include <rte_string_fns.h>
 
 #include "rte_cryptodev_scheduler.h"
 #include "scheduler_pmd_private.h"
@@ -342,7 +343,7 @@ parse_name_arg(const char *key __rte_unused,
 		return -EINVAL;
 	}
 
-	strncpy(params->name, value, RTE_CRYPTODEV_NAME_MAX_LEN);
+	strlcpy(params->name, value, RTE_CRYPTODEV_NAME_MAX_LEN);
 
 	return 0;
 }
