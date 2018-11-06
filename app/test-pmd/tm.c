@@ -616,6 +616,7 @@ softport_tm_tc_node_add(portid_t port_id, struct tm_hierarchy *h,
 						error->message,
 						shaper_profile_id);
 
+					free(tnp.shared_shaper_id);
 					return -1;
 				}
 				tnp.shaper_profile_id = shaper_profile_id;
@@ -631,6 +632,7 @@ softport_tm_tc_node_add(portid_t port_id, struct tm_hierarchy *h,
 						error->message,
 						h->tc_node_id[pos][k]);
 
+					free(tnp.shared_shaper_id);
 					return -1;
 				}
 				shaper_profile_id++;
