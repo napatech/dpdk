@@ -32,9 +32,7 @@
 
 include $(RTE_SDK)/mk/rte.vars.mk
 
-ifeq ($(NAPATECH3_PATH),)
-$(error "Please define NAPATECH3_PATH environment variable")
-endif
+NAPATECH3_PATH ?= /opt/napatech3
 
 #
 # library name
@@ -78,7 +76,7 @@ SRCS-$(CONFIG_RTE_LIBRTE_PMD_NTACC) += filter_ntacc.c
 SYMLINK-y-include +=
 
 # this lib depends upon:
-LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_kvargs 
+LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_kvargs
 LDLIBS += -lrte_ethdev -lrte_bus_pci
 
 include $(RTE_SDK)/mk/rte.lib.mk

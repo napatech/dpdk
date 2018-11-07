@@ -62,7 +62,7 @@ struct filter_keyset_s {
 
 #define NUM_FLOW_QUEUES 256
 struct rte_flow {
-	LIST_ENTRY(rte_flow) next;
+  LIST_ENTRY(rte_flow) next;
   LIST_HEAD(_filter_flows, filter_flow) ntpl_id;
   uint32_t assign_ntpl_id;
   uint8_t port;
@@ -72,11 +72,6 @@ struct rte_flow {
   int priority;
   uint8_t nb_queues;
   uint8_t list_queues[NUM_FLOW_QUEUES];
-};
-
-enum {
-  SYM_HASH_DIS_PER_PORT,
-  SYM_HASH_ENA_PER_PORT,
 };
 
 struct ntacc_rx_queue {
@@ -162,12 +157,29 @@ struct filter_values_s {
 
 #define NTACC_NAME_LEN (PCI_PRI_STR_SIZE + 10)
 
+struct pmd_adapter {
+  struct version_s version;
+  union Ntfpgaid_u fpgaid;
+  enum rte_eth_hash_function hash_func;
+  uint32_t supported_hash_funcs;
+  uint16_t stream_table_size;
+  uint8_t ref_count;
+  uint8_t adapter_no;
+  uint8_t port_offset;
+  uint8_t n_ports;
+  uint8_t ts_multiplier;
+};
+
+#define NTACC_RSS_KEY_LEN 40
+
 struct pmd_internals {
   struct ntacc_rx_queue rxq[RTE_ETHDEV_QUEUE_STAT_CNTRS];
   struct ntacc_tx_queue txq[RTE_ETHDEV_QUEUE_STAT_CNTRS];
   uint32_t              nbStreamIDs;
   uint32_t              streamIDOffset;
-  uint64_t              rss_hf;
+  struct rte_eth_rss_conf rss_conf;
+  uint8_t               rss_key[NTACC_RSS_KEY_LEN];
+  uint32_t              stream_table_id;
   struct rte_flow       *defaultFlow;
 #ifndef USE_SW_STAT
   NtStatStream_t        hStat;
@@ -181,22 +193,17 @@ struct pmd_internals {
   rte_spinlock_t        statlock;
   uint8_t               port;
   uint8_t               local_port;
-  uint8_t               local_port_offset;
-  uint8_t               adapterNo;
-  uint8_t               nbPortsOnAdapter;
   uint8_t               nbPortsInSystem;
-  uint8_t               symHashMode;
-  uint8_t               tsMultiplier;
+  uint8_t               symmetric_hash;
   char                  driverName[128];
   char                  tagName[10];
   char                  name[NTACC_NAME_LEN];
-  union Ntfpgaid_u      fpgaid;
-  struct version_s      version;
   char                  *ntpl_file;
   int                   shmid;
   key_t                 key;
   pthread_mutexattr_t   psharedm;
   struct pmd_shared_mem_s *shm;
+  struct pmd_adapter *adapter;
 };
 
 #ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
@@ -206,8 +213,6 @@ struct batch_ctrl {
 	NtNetBuf_t pSeg;
 };
 #endif
-
-
 
 int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *internals);
 

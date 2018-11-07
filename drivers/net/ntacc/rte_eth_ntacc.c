@@ -93,7 +93,7 @@ static struct {
 #define PCI_VENDOR_ID_INTEL          0x8086
 #define PCIE_DEVICE_ID_PF_DSC_1_X    0x09C4
 
-#define NB_SUPPORTED_FPGAS 11
+#define NB_SUPPORTED_FPGAS 12
 static struct {
   uint32_t item:12;
   uint32_t product:16;
@@ -111,6 +111,7 @@ static struct {
   { 200, 9515, 9, 8, 0 },
   { 200, 9517, 9, 8, 0 },
   { 200, 9519, 10, 7, 0 },
+  { 200, 9523, 14, 0, 0 },
   { 200, 7000, 12, 0, 0 },
   { 200, 7001, 12, 0, 0 },
 };
@@ -131,6 +132,8 @@ int (*_NT_InfoRead)(NtInfoStream_t, NtInfo_t *);
 int (*_NT_InfoClose)(NtInfoStream_t);
 int (*_NT_ConfigOpen)(NtConfigStream_t *, const char *);
 int (*_NT_ConfigClose)(NtConfigStream_t);
+int (*_NT_ConfigWrite)(NtConfigStream_t, NtConfig_t *);
+int (*_NT_ConfigRead)(NtConfigStream_t, NtConfig_t *);
 int (*_NT_NTPL)(NtConfigStream_t, const char *, NtNtplInfo_t *, uint32_t);
 int (*_NT_NetRxGetNextPacket)(NtNetStreamRx_t, NtNetBuf_t *, int);
 int (*_NT_NetRxOpenMulti)(NtNetStreamRx_t *, const char *, enum NtNetInterface_e, uint32_t *, unsigned int, int);
@@ -715,6 +718,97 @@ static uint16_t eth_ntacc_tx(void *queue,
 }
 #endif
 
+static int create_stream_table(struct pmd_internals *internals)
+{
+  NtConfigStream_t hCfgStream = NULL;
+  NtConfig_t *config = NULL;
+  struct NtStreamTable *table;
+  struct ntacc_rx_queue *rx_q = internals->rxq;
+  uint16_t i = 0;
+  int status;
+  int ret = 0;
+
+  if((status = (*_NT_ConfigOpen)(&hCfgStream, "dpdk config")) != NT_SUCCESS) {
+    ret = -ENODEV;
+    goto out;
+  }
+
+  config = rte_malloc(internals->name, sizeof(NtConfig_t), 0);
+  if (!config) {
+    ret = -ENOMEM;
+    goto out;
+  }
+
+  config->parm = NT_CONFIG_PARM_STREAM_TABLE;
+  config->u.streamTable.cmd = NT_STREAM_TABLE_CREATE;
+  table = &config->u.streamTable.u.table;
+  strncpy(table->tag, internals->tagName, 10);
+  table->tableSize = internals->adapter->stream_table_size;
+  table->id = NT_STREAM_TABLE_ID_INVALID;
+
+  while (i < table->tableSize) {
+    for (int queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
+      if (rx_q[queue].enabled) {
+        table->table[i++] = rx_q[queue].stream_id;
+        if (i >= table->tableSize)
+          break;
+      }
+    }
+  }
+
+  if ((status = (*_NT_ConfigWrite)(hCfgStream, config)) != NT_SUCCESS) {
+    ret = -EINVAL;
+  }
+
+  internals->stream_table_id = table->id;
+
+out:
+  if (hCfgStream)
+    (*_NT_ConfigClose)(hCfgStream);
+  if (config)
+    rte_free(config);
+
+  return ret;
+}
+
+static int delete_stream_table(struct pmd_internals *internals)
+{
+  NtConfigStream_t hCfgStream = NULL;
+  NtConfig_t *config = NULL;
+  int status;
+  int ret = 0;
+
+
+  if((status = (*_NT_ConfigOpen)(&hCfgStream, "dpdk config")) != NT_SUCCESS) {
+    ret = -ENODEV;
+    goto out;
+  }
+
+  config = rte_malloc(internals->name, sizeof(NtConfig_t), 0);
+  if (!config) {
+    ret = -ENOMEM;
+    goto out;
+  }
+
+  config->parm = NT_CONFIG_PARM_STREAM_TABLE;
+  config->u.streamTable.cmd = NT_STREAM_TABLE_CREATE;
+  config->u.streamTable.u.del.id = internals->stream_table_id;
+
+  if ((status = (*_NT_ConfigWrite)(hCfgStream, config)) != NT_SUCCESS) {
+    ret = -EINVAL;
+  }
+
+  internals->stream_table_id = NT_STREAM_TABLE_ID_INVALID;
+
+out:
+  if (hCfgStream)
+    (*_NT_ConfigClose)(hCfgStream);
+  if (config)
+    rte_free(config);
+
+  return ret;
+}
+
 static int eth_dev_start(struct rte_eth_dev *dev)
 {
   struct pmd_internals *internals = dev->data->dev_private;
@@ -837,9 +931,10 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
   struct rte_flow_error error;
   uint queue;
 
-  PMD_NTACC_LOG(DEBUG, "Stopping port %u (%u) on adapter %u\n", internals->port, deviceCount, internals->adapterNo);
+  PMD_NTACC_LOG(DEBUG, "Stopping port %u (%u) on adapter %u\n", internals->port, deviceCount, internals->adapter->adapter_no);
   _dev_flow_isolate(dev, 1, &error);
   _dev_flow_flush(dev, &error);
+  FlushHash(internals);
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
     if (rx_q[queue].enabled) {
       if (rx_q[queue].pSeg) {
@@ -879,10 +974,32 @@ static int eth_dev_configure(struct rte_eth_dev *dev __rte_unused)
 {
   struct pmd_internals *internals = dev->data->dev_private;
   if (dev->data->dev_conf.rxmode.mq_mode == ETH_MQ_RX_RSS) {
-    internals->rss_hf = dev->data->dev_conf.rx_adv_conf.rss_conf.rss_hf;
+    struct rte_eth_rss_conf *conf = &dev->data->dev_conf.rx_adv_conf.rss_conf;
+    if (conf->rss_key_len > NTACC_RSS_KEY_LEN) {
+      return -EINVAL;
+    }
+    internals->rss_conf.rss_hf = conf->rss_hf;
+    if (conf->rss_key) {
+      internals->rss_conf.rss_key_len = conf->rss_key_len;
+      memcpy(internals->rss_conf.rss_key, conf->rss_key, conf->rss_key_len);
+    } else {
+      internals->rss_conf.rss_key_len = 0;
+    }
+    internals->rss_conf.rss_hf = conf->rss_hf;
+
+    /* Update hash mode filters */
+    rte_spinlock_lock(&internals->lock);
+    FlushHash(internals);
+    rte_spinlock_unlock(&internals->lock);
+    if (CreateHashModeHash(&internals->rss_conf, internals, NULL, 61) != 0) {
+      return -ENOMEM;
+    }
   }
   else {
-    internals->rss_hf = 0;
+    internals->rss_conf.rss_hf = 0;
+    rte_spinlock_lock(&internals->lock);
+    FlushHash(internals);
+    rte_spinlock_unlock(&internals->lock);
   }
   return 0;
 }
@@ -890,6 +1007,7 @@ static int eth_dev_configure(struct rte_eth_dev *dev __rte_unused)
 static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 {
   struct pmd_internals *internals = dev->data->dev_private;
+  struct pmd_adapter *adapter = internals->adapter;
   NtInfoStream_t hInfo;
   NtInfo_t *pInfo;
   uint status;
@@ -928,6 +1046,8 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
 
   dev_info->tx_offload_capa = DEV_TX_OFFLOAD_MULTI_SEGS;
   dev_info->tx_queue_offload_capa = DEV_TX_OFFLOAD_MULTI_SEGS;
+
+  dev_info->reta_size = adapter->stream_table_size;
 
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
@@ -1115,10 +1235,13 @@ static void eth_stats_reset(struct rte_eth_dev *dev)
 static void eth_dev_close(struct rte_eth_dev *dev)
 {
   struct pmd_internals *internals = dev->data->dev_private;
-  PMD_NTACC_LOG(DEBUG, "Closing port %u (%u) on adapter %u\n", internals->port, deviceCount, internals->adapterNo);
+  PMD_NTACC_LOG(DEBUG, "Closing port %u (%u) on adapter %u\n", internals->port, deviceCount, internals->adapter->adapter_no);
 
   if (internals->ntpl_file) {
     rte_free(internals->ntpl_file);
+  }
+  if ((--internals->adapter->ref_count) == 0) {
+    rte_free(internals->adapter);
   }
 
   if (dev->data->port_id < RTE_MAX_ETHPORTS) {
@@ -1216,7 +1339,7 @@ static int eth_rx_queue_setup(struct rte_eth_dev *dev,
   dev->data->rx_queues[rx_queue_id] = rx_q;
   rx_q->in_port = dev->data->port_id;
   rx_q->local_port = internals->local_port;
-  rx_q->tsMultiplier = internals->tsMultiplier;
+  rx_q->tsMultiplier = internals->adapter->ts_multiplier;
 
 #ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
   // Enable contiguous memory batching for this queue
@@ -1310,7 +1433,7 @@ static void _cleanUpKeySet(int key, struct pmd_internals *internals)
     }
   }
   // Key set is not in use anymore. delete it.
-  PMD_NTACC_LOG(DEBUG, "Returning keyset %u: %d\n", internals->adapterNo, key);
+  PMD_NTACC_LOG(DEBUG, "Returning keyset %u: %d\n", internals->adapter->adapter_no, key);
   DeleteKeyset(key, internals);
   ReturnKeysetValue(internals, key);
 }
@@ -1368,6 +1491,8 @@ static void _cleanUpFlow(struct rte_flow *flow, struct pmd_internals *internals)
  *******************************************************/
 static int _checkForwardPort(struct pmd_internals *internals, uint8_t *pPort, bool isDPDKPort, uint8_t dpdkPort, struct rte_flow_error *error)
 {
+  struct pmd_adapter *adapter = internals->adapter;
+
   if (isDPDKPort) {
     // This is a DPDK port. Find the Napatech port.
     if (dpdkPort >= RTE_MAX_ETHPORTS) {
@@ -1382,7 +1507,7 @@ static int _checkForwardPort(struct pmd_internals *internals, uint8_t *pPort, bo
   }
 
   // Check that the Napatech port is on the same adapter as the rx port.
-  if (*pPort < internals->local_port_offset || *pPort >= (internals->local_port_offset + internals->nbPortsOnAdapter)) {
+  if (*pPort < adapter->port_offset || *pPort >= (adapter->port_offset + adapter->n_ports)) {
     rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "The forward port must be on the same Napatech SmartNIC as the rx port");
     return 3;
   }
@@ -1404,6 +1529,7 @@ static int _handle_actions(const struct rte_flow_action actions[],
                            struct pmd_internals *internals,
                            struct rte_flow_error *error)
 {
+  struct pmd_adapter *adapter = internals->adapter;
   uint8_t forwardPort = 0;
   uint32_t i;
 
@@ -1478,7 +1604,7 @@ static int _handle_actions(const struct rte_flow_action actions[],
         return 1;
       }
       *pAction |= ACTION_FORWARD;
-      forwardPort = ((const struct rte_flow_action_phy_port *)actions->conf)->index + internals->local_port_offset;
+      forwardPort = ((const struct rte_flow_action_phy_port *)actions->conf)->index + adapter->port_offset;
       if (_checkForwardPort(internals, &forwardPort, false, 0, error)) {
         return 1;
       }
@@ -1555,6 +1681,7 @@ static int _handle_items(const struct rte_flow_item items[],
                          struct pmd_internals *internals,
                          struct rte_flow_error *error)
 {
+  struct pmd_adapter *adapter = internals->adapter;
   bool tunnel = false;
   uint32_t tunneltype;
 
@@ -1573,11 +1700,11 @@ static int _handle_items(const struct rte_flow_item items[],
     case RTE_FLOW_ITEM_TYPE_PHY_PORT:
       if (*pNb_ports < MAX_NTACC_PORTS) {
         const struct rte_flow_item_phy_port *spec = (const struct rte_flow_item_phy_port *)items->spec;
-        if (spec->index > internals->nbPortsOnAdapter) {
+        if (spec->index > adapter->n_ports) {
           rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Illegal port number in port flow. All port numbers must be from the same adapter");
           return 1;
         }
-        plist_ports[(*pNb_ports)++] = spec->index + internals->local_port_offset;
+        plist_ports[(*pNb_ports)++] = spec->index + adapter->port_offset;
       }
       break;
     case RTE_FLOW_ITEM_TYPE_ETH:
@@ -1943,6 +2070,7 @@ static int _hash_filter_ctrl(struct rte_eth_dev *dev,
                              void *arg)
 {
   struct pmd_internals *internals = dev->data->dev_private;
+  struct pmd_adapter *adapter = internals->adapter;
   struct rte_eth_hash_filter_info *info = (struct rte_eth_hash_filter_info *)arg;
   int ret = 0;
 
@@ -1951,20 +2079,10 @@ static int _hash_filter_ctrl(struct rte_eth_dev *dev,
     break;
   case RTE_ETH_FILTER_SET:
     if (info->info_type == RTE_ETH_HASH_FILTER_SYM_HASH_ENA_PER_PORT) {
-      if (info->info.enable) {
-        if (internals->symHashMode != SYM_HASH_ENA_PER_PORT) {
-          internals->symHashMode = SYM_HASH_ENA_PER_PORT;
-        }
-      }
-      else {
-        if (internals->symHashMode != SYM_HASH_DIS_PER_PORT) {
-          internals->symHashMode = SYM_HASH_DIS_PER_PORT;
-        }
-      }
+      internals->symmetric_hash = info->info.enable;
     }
-    else {
-      PMD_NTACC_LOG(WARNING, ">>> Warning: Filter Hash - info_type (%d) not supported", info->info_type);
-      ret = -ENOTSUP;
+    else if (info->info_type == RTE_ETH_HASH_FILTER_GLOBAL_CONFIG) {
+      adapter->hash_func = info->info.global_conf.hash_func;
     }
     break;
   default:
@@ -2012,6 +2130,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
   int counter;
   bool found;
   unsigned int assignedHostbuffers[RTE_ETHDEV_QUEUE_STAT_CNTRS];
+  int ret = 0;
 
   if (set == 1 && internals->defaultFlow) {
     char ntpl_buf[21];
@@ -2041,6 +2160,8 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       rte_free(id);
     }
     rte_spinlock_unlock(&internals->lock);
+
+    delete_stream_table(internals);
 
     // Check that the hostbuffers are deleted/changed
     counter = 0;
@@ -2093,25 +2214,12 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
 #else
       snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=62;Descriptor=DYN3,length=20,colorbits=14;");
 #endif
-      if (internals->rss_hf != 0) {
-        struct rte_flow_action_rss rss;
-        memset(&rss, 0, sizeof(struct rte_flow_action_rss));
-        // Set the stream IDs
-        CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
-        // If RSS is used, then set the Hash mode
-        rss.types = internals->rss_hf;
-        rss.level = 0;
-        rss.func = RTE_ETH_HASH_FUNCTION_SIMPLE_XOR;
-        if (CreateHash(&ntpl_buf[strlen(ntpl_buf)], &rss, internals) != 0) {
-          PMD_NTACC_LOG(ERR, "Failed to create hash function eth_dev_start\n");
-          goto IsolateError;
-        }
-      }
-      else {
-        // Set the stream IDs
-        CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, 1, list_queues);
-        nb_queues = 1;
-      }
+
+      // Set the stream IDs
+      if ((ret = create_stream_table(internals)) < 0)
+        goto IsolateError;
+      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
+        "streamid=table(%u)", internals->stream_table_id);
 
       // Set the port number
       snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
@@ -2135,14 +2243,14 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       rte_spinlock_unlock(&internals->lock);
     }
 
-    IsolateError:
+IsolateError:
 
     if (ntpl_buf) {
       rte_free(ntpl_buf);
       ntpl_buf = NULL;
     }
   }
-  return 0;
+  return ret;
 }
 
 static const struct rte_flow_ops _dev_flow_ops = {
@@ -2186,14 +2294,14 @@ static int eth_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t 
   char buf[51];
   struct pmd_internals *internals = dev->data->dev_private;
 
-  snprintf(buf, 50, "%d.%d.%d - %03d-%04d-%02d-%02d-%02d", internals->version.major,
-                                                           internals->version.minor,
-                                                           internals->version.patch,
-                                                           internals->fpgaid.s.item,
-                                                           internals->fpgaid.s.product,
-                                                           internals->fpgaid.s.ver,
-                                                           internals->fpgaid.s.rev,
-                                                           internals->fpgaid.s.build);
+  snprintf(buf, 50, "%d.%d.%d - %03d-%04d-%02d-%02d-%02d", internals->adapter->version.major,
+                                                           internals->adapter->version.minor,
+                                                           internals->adapter->version.patch,
+                                                           internals->adapter->fpgaid.s.item,
+                                                           internals->adapter->fpgaid.s.product,
+                                                           internals->adapter->fpgaid.s.ver,
+                                                           internals->adapter->fpgaid.s.rev,
+                                                           internals->adapter->fpgaid.s.build);
   size_t size = strlen(buf);
   strncpy(fw_version, buf, MIN(size+1, fw_size));
   if (fw_size > size) {
@@ -2227,13 +2335,117 @@ static int eth_rss_hash_update(struct rte_eth_dev *dev,
     rte_spinlock_lock(&internals->lock);
     FlushHash(internals);
     rte_spinlock_unlock(&internals->lock);
-    if (CreateHashModeHash(rss_conf->rss_hf, internals, &dummyFlow, 61) != 0) {
+    if (CreateHashModeHash(rss_conf, internals, &dummyFlow, 61) != 0) {
       PMD_NTACC_LOG(ERR, "Failed to create hash function eth_rss_hash_update\n");
       ret = 1;
       goto UpdateError;
     }
   }
 UpdateError:
+  return ret;
+}
+
+static int eth_reta_update(struct rte_eth_dev *dev,
+			               struct rte_eth_rss_reta_entry64 *reta_conf,
+			               uint16_t reta_size)
+{
+  struct pmd_internals *internals = dev->data->dev_private;
+  NtConfigStream_t hCfgStream = NULL;
+  NtConfig_t *config = NULL;
+  struct NtStreamTableEdit *edit;
+  struct ntacc_rx_queue *rx_q = internals->rxq;
+  uint16_t sz, k = 0;
+  int status;
+  int ret = 0;
+
+  if((status = (*_NT_ConfigOpen)(&hCfgStream, "dpdk config")) != NT_SUCCESS) {
+    ret = -ENODEV;
+    goto out;
+  }
+
+  config = rte_malloc(internals->name, sizeof(NtConfig_t), 0);
+  if (!config) {
+    ret = -ENOMEM;
+    goto out;
+  }
+
+  config->parm = NT_CONFIG_PARM_STREAM_TABLE;
+  config->u.streamTable.cmd = NT_STREAM_TABLE_EDIT;
+  edit = &config->u.streamTable.u.edit;
+  edit->tableSize = internals->adapter->stream_table_size;
+  edit->id = internals->stream_table_id;
+
+  sz = (reta_size + RTE_RETA_GROUP_SIZE - 1)/reta_size;
+  for (uint16_t i = 0; i < sz; i++) {
+    edit->editMask[i] = reta_conf[i].mask;
+    for (uint16_t j = 0; j < RTE_RETA_GROUP_SIZE && k < reta_size; j++)
+      edit->table[k++] = rx_q[reta_conf[i].reta[j]].stream_id;
+  }
+
+  if ((status = (*_NT_ConfigWrite)(hCfgStream, config)) != NT_SUCCESS) {
+    ret = -EINVAL;
+  }
+
+out:
+  if (hCfgStream)
+    (*_NT_ConfigClose)(hCfgStream);
+  if (config)
+    rte_free(config);
+
+  return ret;
+}
+
+static int eth_reta_query(struct rte_eth_dev *dev,
+			              struct rte_eth_rss_reta_entry64 *reta_conf,
+			              uint16_t reta_size)
+{
+  struct pmd_internals *internals = dev->data->dev_private;
+  NtConfigStream_t hCfgStream = NULL;
+  NtConfig_t *config = NULL;
+  struct NtStreamTable *table;
+  uint16_t idx, subidx;
+  int ret = 0;
+  int status;
+
+  if (reta_size != internals->adapter->stream_table_size) {
+    return -EINVAL;
+  }
+
+  if((status = (*_NT_ConfigOpen)(&hCfgStream, "dpdk config")) != NT_SUCCESS) {
+    ret = -ENODEV;
+    goto out;
+  }
+
+  config = rte_malloc(internals->name, sizeof(NtConfig_t), 0);
+  if (!config) {
+    ret = -ENOMEM;
+    goto out;
+  }
+
+  config->parm = NT_CONFIG_PARM_STREAM_TABLE;
+  config->u.streamTable.u.table.id = internals->stream_table_id;
+
+  if ((status = (*_NT_ConfigRead)(hCfgStream, config)) != NT_SUCCESS) {
+    ret = -EINVAL;
+    goto out;
+  }
+
+  table = &config->u.streamTable.u.table;
+
+  for (uint16_t i = 0; i < table->tableSize; i++) {
+    idx = i / RTE_RETA_GROUP_SIZE;
+    subidx = i % RTE_RETA_GROUP_SIZE;
+    if (reta_conf[idx].mask & (1 << subidx)) {
+      reta_conf[idx].reta[subidx] = table->table[i] - internals->streamIDOffset;
+    }
+  }
+
+out:
+  if (hCfgStream)
+    (*_NT_ConfigClose)(hCfgStream);
+  if (config)
+    rte_free(config);
+
   return ret;
 }
 
@@ -2258,6 +2470,8 @@ static struct eth_dev_ops ops = {
     .filter_ctrl = _dev_filter_ctrl,
     .fw_version_get = eth_fw_version_get,
     .rss_hash_update = eth_rss_hash_update,
+    .reta_update = eth_reta_update,
+    .reta_query = eth_reta_query,
 };
 
 static int rte_pmd_init_internals(struct rte_pci_device *dev,
@@ -2279,6 +2493,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   uint8_t offset = 0;
   uint8_t localPort = 0;
   struct version_s version;
+  struct pmd_adapter *adapter = NULL;
 
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
@@ -2346,6 +2561,82 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   }
   PMD_NTACC_LOG(INFO, "Found: "PCI_PRI_FMT": Ports %u, Offset %u, Adapter %u\n", dev->addr.domain, dev->addr.bus, dev->addr.devid, dev->addr.function, nbPortsOnAdapter, offset, adapterNo);
 
+  // Check if FPGA is supported
+  for (i = 0; i < NB_SUPPORTED_FPGAS; i++) {
+    if (supportedAdapters[i].item == pInfo->u.adapter_v6.data.fpgaid.s.item &&
+        supportedAdapters[i].product == pInfo->u.adapter_v6.data.fpgaid.s.product) {
+      if (((supportedAdapters[i].ver * 100) + supportedAdapters[i].rev) >
+          ((pInfo->u.adapter_v6.data.fpgaid.s.ver * 100) + pInfo->u.adapter_v6.data.fpgaid.s.rev)) {
+        PMD_NTACC_LOG(ERR, "ERROR: NT adapter firmware %03d-%04d-%02d-%02d-%02d is not supported. The firmware must be %03d-%04d-%02d-%02d-%02d or newer.\n",
+                pInfo->u.adapter_v6.data.fpgaid.s.item,
+                pInfo->u.adapter_v6.data.fpgaid.s.product,
+                pInfo->u.adapter_v6.data.fpgaid.s.ver,
+                pInfo->u.adapter_v6.data.fpgaid.s.rev,
+                pInfo->u.adapter_v6.data.fpgaid.s.build,
+                supportedAdapters[i].item,
+                supportedAdapters[i].product,
+                supportedAdapters[i].ver,
+                supportedAdapters[i].rev,
+                supportedAdapters[i].build);
+        iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
+        goto error;
+      }
+      break;
+    }
+  }
+
+  if (i == NB_SUPPORTED_FPGAS) {
+    // No matching adapter is found
+    PMD_NTACC_LOG(ERR, ">>> ERROR: Not supported NT adapter is found. Following adapters are supported:\n");
+    for (i = 0; i < NB_SUPPORTED_FPGAS; i++) {
+      PMD_NTACC_LOG(ERR, "           %03d-%04d-%02d-%02d-%02d\n",
+              supportedAdapters[i].item,
+              supportedAdapters[i].product,
+              supportedAdapters[i].ver,
+              supportedAdapters[i].rev,
+              supportedAdapters[i].build);
+    }
+    iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
+    goto error;
+  }
+
+  adapter = rte_malloc("pmd_adapter", sizeof(struct pmd_adapter), 0);
+  if (!adapter) {
+    return -ENOMEM;
+  }
+
+  adapter->ref_count = 0;
+  adapter->adapter_no = adapterNo;
+  adapter->port_offset = offset;
+  adapter->n_ports = nbPortsOnAdapter;
+  adapter->version = version;
+  adapter->fpgaid = pInfo->u.adapter_v6.data.fpgaid;
+  adapter->hash_func = RTE_ETH_HASH_FUNCTION_SIMPLE_XOR;
+  adapter->stream_table_size = ETH_RSS_RETA_SIZE_64;
+
+  // Check timestamp format
+  if (pInfo->u.adapter_v6.data.timestampType == NT_TIMESTAMP_TYPE_NATIVE_UNIX) {
+    adapter->ts_multiplier = 10;
+  }
+  else if (pInfo->u.adapter_v6.data.timestampType == NT_TIMESTAMP_TYPE_UNIX_NANOTIME) {
+    adapter->ts_multiplier = 1;
+  }
+  else {
+    adapter->ts_multiplier = 0;
+  }
+
+  adapter->supported_hash_funcs = (1 << RTE_ETH_HASH_FUNCTION_SIMPLE_XOR);
+  pInfo->cmd = NT_INFO_CMD_READ_PROPERTY;
+  snprintf(pInfo->u.property.path, 120, "adapter%u.filter.toeplitz", adapter->adapter_no);
+  if ((status = (*_NT_InfoRead)(hInfo, pInfo)) != 0) {
+   _log_nt_errors(status, "NT_InfoRead failed", __func__);
+    iRet = status;
+    goto error;
+  }
+  if (pInfo->u.property.data.u.u) {
+    adapter->supported_hash_funcs |= (1 << RTE_ETH_HASH_FUNCTION_TOEPLITZ);
+  }
+
   for (localPort = 0; localPort < nbPortsOnAdapter; localPort++) {
     pInfo->cmd = NT_INFO_CMD_READ_PORT_V7;
     pInfo->u.port_v7.portNo = (uint8_t)localPort + offset;
@@ -2362,44 +2653,6 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     snprintf(name, NTACC_NAME_LEN, PCI_PRI_FMT " Port %u", dev->addr.domain, dev->addr.bus, dev->addr.devid, dev->addr.function, localPort);
     PMD_NTACC_LOG(INFO, "Port: %u - %s\n", offset + localPort, name);
 
-    // Check if FPGA is supported
-    for (i = 0; i < NB_SUPPORTED_FPGAS; i++) {
-      if (supportedAdapters[i].item == pInfo->u.port_v7.data.adapterInfo.fpgaid.s.item &&
-          supportedAdapters[i].product == pInfo->u.port_v7.data.adapterInfo.fpgaid.s.product) {
-        if (((supportedAdapters[i].ver * 100) + supportedAdapters[i].rev) >
-            ((pInfo->u.port_v7.data.adapterInfo.fpgaid.s.ver * 100) + pInfo->u.port_v7.data.adapterInfo.fpgaid.s.rev)) {
-          PMD_NTACC_LOG(ERR, "ERROR: NT adapter firmware %03d-%04d-%02d-%02d-%02d is not supported. The firmware must be %03d-%04d-%02d-%02d-%02d.\n",
-                  pInfo->u.port_v7.data.adapterInfo.fpgaid.s.item,
-                  pInfo->u.port_v7.data.adapterInfo.fpgaid.s.product,
-                  pInfo->u.port_v7.data.adapterInfo.fpgaid.s.ver,
-                  pInfo->u.port_v7.data.adapterInfo.fpgaid.s.rev,
-                  pInfo->u.port_v7.data.adapterInfo.fpgaid.s.build,
-                  supportedAdapters[i].item,
-                  supportedAdapters[i].product,
-                  supportedAdapters[i].ver,
-                  supportedAdapters[i].rev,
-                  supportedAdapters[i].build);
-          iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
-          goto error;
-        }
-        break;
-      }
-    }
-
-    if (i == NB_SUPPORTED_FPGAS) {
-      // No matching adapter is found
-      PMD_NTACC_LOG(ERR, ">>> ERROR: Not supported NT adapter is found. Following adapters are supported:\n");
-      for (i = 0; i < NB_SUPPORTED_FPGAS; i++) {
-        PMD_NTACC_LOG(ERR, "           %03d-%04d-%02d-%02d-%02d\n",
-                supportedAdapters[i].item,
-                supportedAdapters[i].product,
-                supportedAdapters[i].ver,
-                supportedAdapters[i].rev,
-                supportedAdapters[i].build);
-      }
-      iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
-      goto error;
-    }
     if (RTE_ETHDEV_QUEUE_STAT_CNTRS > (256 / nbPortsInSystem)) {
       PMD_NTACC_LOG(ERR, ">>> Error: This adapter can only support %u queues\n", STREAMIDS_PER_PORT);
       PMD_NTACC_LOG(ERR, "           Set RTE_ETHDEV_QUEUE_STAT_CNTRS to %u or less\n", STREAMIDS_PER_PORT);
@@ -2431,10 +2684,6 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     }
     deviceCount++;
 
-    internals->version.major = version.major;
-    internals->version.minor = version.minor;
-    internals->version.patch = version.patch;
-    internals->nbPortsOnAdapter = nbPortsOnAdapter;
     internals->nbPortsInSystem = nbPortsInSystem;
     strcpy(internals->name, name);
     strcpy(internals->driverName, "net_ntacc");
@@ -2442,23 +2691,14 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     snprintf(internals->tagName, 9, "port%d", localPort + offset);
     PMD_NTACC_LOG(INFO, "Tagname: %s - %u\n", internals->tagName, localPort + offset);
 
-    internals->adapterNo = pInfo->u.port_v7.data.adapterNo;
     internals->port = offset + localPort;
     internals->local_port = localPort;
-    internals->local_port_offset = offset;
-    internals->symHashMode = SYM_HASH_DIS_PER_PORT;
-    internals->fpgaid.value = pInfo->u.port_v7.data.adapterInfo.fpgaid.value;
 
-    // Check timestamp format
-    if (pInfo->u.port_v7.data.adapterInfo.timestampType == NT_TIMESTAMP_TYPE_NATIVE_UNIX) {
-      internals->tsMultiplier = 10;
-    }
-    else if (pInfo->u.port_v7.data.adapterInfo.timestampType == NT_TIMESTAMP_TYPE_UNIX_NANOTIME) {
-      internals->tsMultiplier = 1;
-    }
-    else {
-      internals->tsMultiplier = 0;
-    }
+    internals->symmetric_hash = 0;
+    internals->rss_conf.rss_hf = 0;
+    internals->rss_conf.rss_key = internals->rss_key;
+    internals->rss_conf.rss_key_len = 0;
+    internals->stream_table_id = NT_STREAM_TABLE_ID_INVALID;
 
     for (i=0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
       internals->rxq[i].stream_id = STREAMIDS_PER_PORT * internals->port + i;
@@ -2512,6 +2752,9 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
       _PmdInternals[eth_dev->data->port_id].pInternals = internals;
     }
 
+    adapter->ref_count += 1;
+    internals->adapter = adapter;
+
     eth_dev->device = &dev->device;
     eth_dev->data->dev_private = internals;
     eth_dev->data->dev_link = pmd_link;
@@ -2542,6 +2785,9 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
 error:
   if (pInfo) {
     rte_free(pInfo);
+  }
+  if (adapter) {
+    rte_free(adapter);
   }
   if (hInfo)
     (void)(*_NT_InfoClose)(hInfo);
@@ -2597,6 +2843,16 @@ static int _nt_lib_open(void)
   _NT_NTPL = dlsym(_libnt, "NT_NTPL");
   if (_NT_NTPL == NULL) {
     fprintf(stderr, "Failed to find \"NT_NTPL\" in %s\n", path);
+    return -1;
+  }
+  _NT_ConfigWrite = dlsym(_libnt, "NT_ConfigWrite");
+  if (_NT_ConfigWrite == NULL) {
+    fprintf(stderr, "Failed to find \"NT_ConfigWrite\" in %s\n", path);
+    return -1;
+  }
+  _NT_ConfigRead = dlsym(_libnt, "NT_ConfigRead");
+  if (_NT_ConfigRead == NULL) {
+    fprintf(stderr, "Failed to find \"NT_ConfigRead\" in %s\n", path);
     return -1;
   }
 
