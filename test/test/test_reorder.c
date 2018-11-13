@@ -298,7 +298,7 @@ test_reorder_drain(void)
 		goto exit;
 	}
 	if (robufs[0] != NULL)
-		rte_pktmbuf_free(robufs[i]);
+		rte_pktmbuf_free(robufs[0]);
 
 	/* Insert more packets
 	 * RB[] = {NULL, NULL, NULL, NULL}
