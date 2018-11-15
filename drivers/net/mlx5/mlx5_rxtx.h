@@ -121,6 +121,7 @@ struct mlx5_rxq_data {
 	uint16_t rq_ci;
 	uint16_t rq_pi;
 	uint16_t cq_ci;
+	uint16_t rq_repl_thresh; /* Threshold for buffer replenishment. */
 	volatile struct mlx5_wqe_data_seg(*wqes)[];
 	volatile struct mlx5_cqe(*cqes)[];
 	struct rxq_zip zip; /* Compressed context. */
