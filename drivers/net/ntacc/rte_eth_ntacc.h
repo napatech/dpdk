@@ -172,11 +172,19 @@ struct filter_values_s {
 
 struct ntacc_flow_match {
   uint32_t  flowEnable;
-  uint8_t   key[4];
-  uint32_t  ipv4key_id;
-  uint32_t  ipv6key_id;
-  uint32_t  ipv4ntplid[4];
-  uint32_t  ipv6ntplid[4];
+  uint32_t  downStream;
+  struct {
+    uint8_t   key[2];
+    uint32_t  ipv4key_id;
+    uint32_t  ipv6key_id;
+  } up;
+  struct {
+    uint8_t   key[2];
+    uint32_t  ipv4key_id;
+    uint32_t  ipv6key_id;
+  } down;
+  uint32_t  ipv4ntplid[7];
+  uint32_t  ipv6ntplid[7];
 };
 
 struct pmd_internals {
@@ -239,10 +247,8 @@ enum {
 };
 
 enum {
-  IPV4_DROP,
-  IPV6_DROP,
-  IPV4_FORWARD,
-  IPV6_FORWARD,
+  DROP,
+  FORWARD,
 };
 
 struct supportedDriver_s {

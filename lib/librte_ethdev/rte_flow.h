@@ -1951,6 +1951,7 @@ enum rte_flow_program_actions {
   RTE_FLOW_PROGRAM_IPV4             = 0x04,
   RTE_FLOW_PROGRAM_IPV6             = 0x08,
   RTE_FLOW_PROGRAM_INNER            = 0x10,
+  RTE_FLOW_PROGRAM_SINGLE_DIR       = 0x20,
 };
 
 struct rte_flow_5tuple {
