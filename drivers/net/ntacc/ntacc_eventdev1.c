@@ -568,7 +568,7 @@ static int _nt_lib_open(void)
 static int ntacc_eventdev_probe(struct rte_vdev_device *dev)
 {
   NtInfoStream_t hInfo = NULL;
-  struct rte_eventdev *eventdev;
+  struct rte_eventdev *eventdev = NULL;
   char name[NTACC_NAME_LEN];
   NtInfo_t *pInfo = NULL;
   uint8_t nbPortsOnAdapter = 0;
@@ -726,7 +726,9 @@ error:
   if (eventdev->data->dev_private)
     rte_free(eventdev->data->dev_private);
 
-  rte_event_pmd_release(eventdev);
+  if (eventdev) {
+    rte_event_pmd_release(eventdev);
+  }
 
 	RTE_EDEV_LOG_ERR("driver %s: failed", name);
 
