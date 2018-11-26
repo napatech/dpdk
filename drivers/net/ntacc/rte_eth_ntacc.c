@@ -31,6 +31,7 @@
  *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+
 #include <time.h>
 #include <linux/limits.h>
 #include <sys/param.h>
@@ -205,19 +206,6 @@ static uint32_t _log_out_of_memory_errors(const char *func)
   return ENOMEM;
 }
 
-#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
-static void _seg_release_cb(struct rte_mbuf *mbuf)
-{
-	struct batch_ctrl *batchCtl = (struct batch_ctrl *)((u_char *)mbuf->userdata);
-	struct ntacc_rx_queue *rx_q = batchCtl->queue;
-
-  (*_NT_NetRxRelease)(rx_q->pNetRx, batchCtl->pSeg);
-
-	/* swap poniter back */
-	mbuf->buf_addr = batchCtl->orig_buf_addr;
-}
-#endif
-
 /**
  * Write buffer to a file
  *
@@ -304,6 +292,146 @@ int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *interna
   return 0;
 }
 
+// 			rte_atomic16_add_return(&buf->refcnt, 1);
+
+
+#ifdef USE_EXTERNAL_BUFFER
+static void eth_ntacc_rx_ext_buffer_release(void *addr __rte_unused, void *opaque)
+{
+  struct ntacc_rx_queue *rx_q = (struct ntacc_rx_queue *)opaque;
+  if (rx_q->pSeg) {
+    //printf("%p: Releasing segment: %u - %p\n", rx_q, rte_mbuf_ext_refcnt_read(&rx_q->shinfo), rx_q->pSeg);
+    (*_NT_NetRxRelease)(rx_q->pNetRx, rx_q->pSeg);
+    rx_q->pSeg = NULL;
+  }
+}
+
+static uint16_t eth_ntacc_rx(void *queue,
+                             struct rte_mbuf **bufs,
+                             uint16_t nb_pkts)
+{
+  struct rte_mbuf *mbuf;
+  struct ntacc_rx_queue *rx_q = queue;
+#ifdef USE_SW_STAT
+  uint32_t bytes = 0;
+#endif
+  uint16_t num_rx = 0;
+
+  if (unlikely(rx_q->pNetRx == NULL || nb_pkts == 0))
+    return 0;
+
+  // Do we have any segment
+  if (rx_q->pSeg == NULL) {
+    int status = (*_NT_NetRxGet)(rx_q->pNetRx, &rx_q->pSeg, 0);
+    if (status != NT_SUCCESS) {
+      if (rx_q->pSeg != NULL) {
+        (*_NT_NetRxRelease)(rx_q->pNetRx, rx_q->pSeg);
+        rx_q->pSeg = NULL;
+      }
+      return 0;
+    }
+
+    if (likely(NT_NET_GET_SEGMENT_LENGTH(rx_q->pSeg))) {
+      _nt_net_build_pkt_netbuf(rx_q->pSeg, &rx_q->pkt);
+    }
+    else {
+      (*_NT_NetRxRelease)(rx_q->pNetRx, rx_q->pSeg);
+      rx_q->pSeg = NULL;
+      return 0;
+    }
+    rx_q->shinfo.fcb_opaque = rx_q;
+    rx_q->shinfo.free_cb = eth_ntacc_rx_ext_buffer_release;
+    rte_mbuf_ext_refcnt_set(&rx_q->shinfo, 1);
+  }
+
+  NtDyn3Descr_t *dyn3;
+  uint16_t i;
+  uint16_t data_len;
+  uint8_t *pData;
+  uint8_t descLen;
+
+
+  if (rte_mempool_get_bulk(rx_q->mb_pool, (void **)bufs, nb_pkts) != 0)
+    return 0;
+
+  for (i = 0; i < nb_pkts; i++) {
+    mbuf = bufs[i];
+    mbuf->next = NULL;
+    mbuf->pkt_len = 0;
+    mbuf->tx_offload = 0;
+    mbuf->vlan_tci = 0;
+    mbuf->vlan_tci_outer = 0;
+    mbuf->nb_segs = 1;
+    mbuf->packet_type = 0;
+
+    dyn3 = _NT_NET_GET_PKT_DESCR_PTR_DYN3(&rx_q->pkt);
+    descLen = dyn3->descrLength;
+
+    switch (descLen)
+    {
+    case 22:
+      // We do have a color value defined
+      mbuf->hash.fdir.hi = ((dyn3->color_hi << 14) & 0xFFFFC000) | dyn3->color_lo;
+      mbuf->ol_flags = PKT_RX_FDIR_ID | PKT_RX_FDIR;
+      break;
+    case 24:
+      // We do have a colormask set for protocol lookup
+      mbuf->packet_type = ((dyn3->color_hi << 14) & 0xFFFFC000) | dyn3->color_lo;
+      if (mbuf->packet_type != 0) {
+        mbuf->hash.fdir.lo = dyn3->offset0;
+        mbuf->hash.fdir.hi = dyn3->offset1;
+        mbuf->ol_flags = PKT_RX_FDIR_FLX | PKT_RX_FDIR;
+      }
+      break;
+    case 26:
+      // We do have a hash value defined
+      mbuf->hash.rss = dyn3->color_hi;
+      mbuf->ol_flags = PKT_RX_RSS_HASH;
+      break;
+    default:
+      mbuf->ol_flags = 0;
+      break;
+    }
+
+    if (rx_q->tsMultiplier) {
+      mbuf->timestamp = dyn3->timestamp * rx_q->tsMultiplier;
+      mbuf->ol_flags |= PKT_RX_TIMESTAMP;
+    }
+    mbuf->port = rx_q->in_port + (dyn3->rxPort - rx_q->local_port);
+    data_len = (uint16_t)(dyn3->capLength - descLen - 4);
+#ifdef USE_SW_STAT
+    bytes += data_len+4;
+#endif
+
+    pData = (uint8_t *)dyn3 + descLen;
+    rte_pktmbuf_attach_extbuf(mbuf, pData, 0, data_len, &rx_q->shinfo);
+    rte_mbuf_ext_refcnt_update(&rx_q->shinfo, 1);
+
+    /* Packet will fit in the mbuf, go ahead and copy */
+    mbuf->pkt_len = mbuf->data_len = data_len;
+
+#ifdef COPY_OFFSET0
+    mbuf->data_off += dyn3->offset0;
+#endif
+    num_rx++;
+
+    /* Get the next packet if any */
+    if (_nt_net_get_next_packet(rx_q->pSeg, NT_NET_GET_SEGMENT_LENGTH(rx_q->pSeg), &rx_q->pkt) == 0 ) {
+      rte_mbuf_ext_refcnt_update(&rx_q->shinfo, -1);
+      break;
+    }
+  }
+
+#ifdef USE_SW_STAT
+  rx_q->rx_pkts+=num_rx;
+  rx_q->rx_bytes+=bytes;
+#endif
+  if (num_rx < nb_pkts) {
+    rte_mempool_put_bulk(rx_q->mb_pool, (void * const *)(bufs + num_rx), nb_pkts-num_rx);
+  }
+  return num_rx;
+}
+#else
 static uint16_t eth_ntacc_rx(void *queue,
                              struct rte_mbuf **bufs,
                              uint16_t nb_pkts)
@@ -338,62 +466,6 @@ static uint16_t eth_ntacc_rx(void *queue,
       return 0;
     }
   }
-
-#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
-  if (rx_q->cmbatch) {
-    struct batch_ctrl *batchCtl;
-    uint64_t countPackets;
-
-    if (unlikely(rte_mempool_get_bulk(rx_q->mb_pool, (void **)bufs, 1) != 0)) {
-      return 0;
-    }
-
-    mbuf = bufs[0];
-
-    rte_mbuf_refcnt_set(mbuf, 1);
-    rte_pktmbuf_reset(mbuf);
-
-    batchCtl = (struct batch_ctrl *)((u_char *)mbuf->buf_addr + RTE_PKTMBUF_HEADROOM);
-    batchCtl->queue = queue;
-    batchCtl->pSeg = rx_q->pSeg;
-
-    /* Hand over release responsibility and ownership */
-    rx_q->pSeg = NULL;
-
-    mbuf->port = rx_q->in_port;
-    mbuf->ol_flags |= PKT_BATCH;
-    mbuf->cmbatch_release_cb = _seg_release_cb;
-
-    /* let userdata point to original mbuf address where batchCtl is placed */
-    mbuf->userdata = (void *)batchCtl;
-
-    /* save buf_addr */
-    batchCtl->orig_buf_addr = mbuf->buf_addr;
-
-    NtDyn3Descr_t *hdr = (NtDyn3Descr_t*)batchCtl->pSeg->hHdr;
-    mbuf->buf_addr = (uint8_t *)batchCtl->pSeg->hHdr;
-    mbuf->data_off = 0;
-
-    mbuf->data_len = hdr->capLength;
-    mbuf->pkt_len = (uint32_t)batchCtl->pSeg->length;
-    num_rx++;
-
-    /* do packet count */
-    mbuf->batch_nb_packet = 0;
-    countPackets = 0;
-    do {
-      countPackets++;
-    } while (_nt_net_get_next_packet(batchCtl->pSeg, NT_NET_GET_SEGMENT_LENGTH(batchCtl->pSeg), &rx_q->pkt)>0);
-    mbuf->batch_nb_packet = countPackets;
-
-#ifdef USE_SW_STAT
-    rx_q->rx_pkts += mbuf->batch_nb_packet;
-    rx_q->rx_bytes += batchCtl->pSeg->length - mbuf->batch_nb_packet * hdr->descrLength;
-#endif
-    return num_rx;
-  }
-  else
-#endif
   {
     NtDyn3Descr_t *dyn3;
     uint16_t i;
@@ -412,6 +484,11 @@ static uint16_t eth_ntacc_rx(void *queue,
 
       switch (dyn3->descrLength)
       {
+      case 20:
+        // We do have a hash value defined
+        mbuf->hash.rss = dyn3->color_hi;
+        mbuf->ol_flags |= PKT_RX_RSS_HASH;
+        break;
       case 22:
         // We do have a color value defined
         mbuf->hash.fdir.hi = ((dyn3->color_hi << 14) & 0xFFFFC000) | dyn3->color_lo;
@@ -425,11 +502,6 @@ static uint16_t eth_ntacc_rx(void *queue,
           mbuf->hash.fdir.hi = dyn3->offset1;
           mbuf->ol_flags |= PKT_RX_FDIR_FLX | PKT_RX_FDIR;
         }
-        break;
-      case 26:
-        // We do have a hash value defined
-        mbuf->hash.rss = dyn3->color_hi;
-        mbuf->ol_flags |= PKT_RX_RSS_HASH;
         break;
       }
 
@@ -503,6 +575,7 @@ static uint16_t eth_ntacc_rx(void *queue,
     return num_rx;
   }
 }
+#endif
 
 /*
  * Callback to handle sending packets through a real NIC.
@@ -1245,11 +1318,7 @@ static int eth_rx_queue_setup(struct rte_eth_dev *dev,
                               uint16_t rx_queue_id,
                               uint16_t nb_rx_desc __rte_unused,
                               unsigned int socket_id __rte_unused,
-#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
-                              const struct rte_eth_rxconf *rx_conf,
-#else
                               const struct rte_eth_rxconf *rx_conf __rte_unused,
-#endif
                               struct rte_mempool *mb_pool)
 {
   struct rte_pktmbuf_pool_private *mbp_priv;
@@ -1261,13 +1330,6 @@ static int eth_rx_queue_setup(struct rte_eth_dev *dev,
   rx_q->in_port = dev->data->port_id;
   rx_q->local_port = internals->local_port;
   rx_q->tsMultiplier = internals->tsMultiplier;
-
-#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
-  // Enable contiguous memory batching for this queue
-  if (rx_conf->rxq_flags & ETH_RXQ_FLAGS_CMBATCH) {
-    rx_q->cmbatch = 1;
-  }
-#endif
 
   mbp_priv =  rte_mempool_get_priv(rx_q->mb_pool);
   rx_q->buf_size = (uint16_t) (mbp_priv->mbuf_data_room_size - RTE_PKTMBUF_HEADROOM);

@@ -86,12 +86,9 @@ enum {
 };
 
 struct ntacc_rx_queue {
-  NtNetBuf_t             pSeg;    /* The current segment we are working with */
+  NtNetBuf_t             pSeg;        /* The current segment we are working with */
   NtNetStreamRx_t        pNetRx;
   struct rte_mempool    *mb_pool;
-#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
-  uint32_t               cmbatch;
-#endif
   uint32_t               in_port;
   struct NtNetBuf_s      pkt;     /* The current packet */
 #ifdef USE_SW_STAT
@@ -107,6 +104,9 @@ struct ntacc_rx_queue {
   uint8_t                tsMultiplier;
   const char             *name;
   const char             *type;
+#ifdef USE_EXTERNAL_BUFFER
+  struct rte_mbuf_ext_shared_info shinfo;
+#endif
 } __rte_cache_aligned;
 
 struct ntacc_tx_queue {
@@ -208,14 +208,6 @@ struct pmd_internals {
   struct pmd_shared_mem_s *shm;
   uint32_t              keyMatcher:1;
 };
-
-#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
-struct batch_ctrl {
-	void      *orig_buf_addr;
-	void      *queue;
-	NtNetBuf_t pSeg;
-};
-#endif
 
 enum {
   ACTION_RSS       = 1 << 0,

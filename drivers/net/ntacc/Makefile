@@ -47,6 +47,10 @@ CFLAGS += $(WERROR_FLAGS)
 # external library include paths
 CFLAGS += -I$(NAPATECH3_PATH)/include
 CFLAGS += -DNAPATECH3_LIB_PATH=\"$(NAPATECH3_PATH)/lib\"
+CFLAGS += -DALLOW_EXPERIMENTAL_API
+CFLAGS += -DUSE_EXTERNAL_BUFFER
+
+
 
 ifeq ($(CONFIG_RTE_LIBRTE_PMD_NTACC_USE_SW_STAT),y)
 CFLAGS += -DUSE_SW_STAT
@@ -78,7 +82,7 @@ SRCS-$(CONFIG_RTE_LIBRTE_PMD_NTACC) += filter_ntacc.c
 SYMLINK-y-include +=
 
 # this lib depends upon:
-LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_kvargs 
+LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_kvargs
 LDLIBS += -lrte_ethdev -lrte_bus_pci
 
 include $(RTE_SDK)/mk/rte.lib.mk
