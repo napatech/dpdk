@@ -2674,7 +2674,7 @@ static int eth_xstats_get(struct rte_eth_dev *dev __rte_unused, struct rte_eth_x
   pStatData->cmd = NT_STATISTICS_READ_CMD_FLOW_V0;
   pStatData->u.flowData_v0.clear = 0;
   pStatData->u.flowData_v0.adapterNo = internals->adapterNo;
-  if ((status = NT_StatRead(internals->hStat, pStatData)) != NT_SUCCESS) {
+  if ((status = (*_NT_StatRead)(internals->hStat, pStatData)) != NT_SUCCESS) {
     _log_nt_errors(status, "NT_StatRead failed", __func__);
     NTACC_UNLOCK(&internals->statlock);
     rte_free(pStatData);
