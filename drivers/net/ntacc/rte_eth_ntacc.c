@@ -884,6 +884,11 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     }
   }
 
+  /* Create hash mode filters */
+  if (CreateHashModeHash(&internals->rss_conf, internals, NULL, 61) != 0) {
+    return -ENOMEM;
+  }
+
 #ifndef DO_NOT_CREATE_DEFAULT_FILTER
   _dev_flow_isolate(dev, 0, &error);
 #endif
@@ -986,14 +991,6 @@ static int eth_dev_configure(struct rte_eth_dev *dev __rte_unused)
       internals->rss_conf.rss_key_len = 0;
     }
     internals->rss_conf.rss_hf = conf->rss_hf;
-
-    /* Update hash mode filters */
-    rte_spinlock_lock(&internals->lock);
-    FlushHash(internals);
-    rte_spinlock_unlock(&internals->lock);
-    if (CreateHashModeHash(&internals->rss_conf, internals, NULL, 61) != 0) {
-      return -ENOMEM;
-    }
   }
   else {
     internals->rss_conf.rss_hf = 0;

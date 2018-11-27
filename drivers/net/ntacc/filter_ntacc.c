@@ -270,10 +270,9 @@ static int PrintHash(const char *str, int priority, struct pmd_internals *intern
     }
   }
 
-
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
-  snprintf(tmpBuf, TMP_BSIZE, str, priority, internals->port, internals->port, thash_config, ptrTuple);
+  snprintf(tmpBuf, TMP_BSIZE, str, priority, internals->port, internals->tagName, thash_config, ptrTuple);
 #pragma GCC diagnostic pop
   if (DoNtpl(tmpBuf, &ntplID, internals) != 0) {
     return -1;
@@ -346,13 +345,13 @@ int CreateHashModeHash(struct rte_eth_rss_conf *rss_conf,
   /*****************************/
   if ((rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV4_UDP) || (rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV6_UDP)) {
     if ((rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV4_UDP) && (rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV6_UDP)) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=UDP;tag=hash%u%s]=%s", 0x05, thash_config);
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=UDP;tag=%s%s]=%s", 0x05, thash_config);
     }
     else if (rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV4_UDP) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=UDP;tag=hash%u%s]=%s", 0x05, thash_config);
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=UDP;tag=%s%s]=%s", 0x05, thash_config);
     }
     else if (rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV6_UDP) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=UDP;tag=hash%u%s]=%s", 0x05, thash_config);
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=UDP;tag=%s%s]=%s", 0x05, thash_config);
     }
   }
   /*****************************/
@@ -360,13 +359,13 @@ int CreateHashModeHash(struct rte_eth_rss_conf *rss_conf,
   /*****************************/
   if ((rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV4_TCP) || (rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV6_TCP)) {
     if ((rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV4_TCP) && (rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV6_TCP)) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=TCP;tag=hash%u%s]=%s", 0x05, thash_config);
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=TCP;tag=%s%s]=%s", 0x05, thash_config);
     }
     else if (rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV4_TCP) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=TCP;tag=hash%u%s]=%s", 0x05, thash_config);
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=TCP;tag=%s%s]=%s", 0x05, thash_config);
     }
     else if (rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV6_TCP) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=TCP;tag=hash%u%s]=%s", 0x05, thash_config);
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=TCP;tag=%s%s]=%s", 0x05, thash_config);
     }
   }
   /******************************/
@@ -374,13 +373,13 @@ int CreateHashModeHash(struct rte_eth_rss_conf *rss_conf,
   /******************************/
   if ((rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV4_SCTP) || (rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV6_SCTP)) {
     if ((rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV4_SCTP) && (rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV6_SCTP)) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=SCTP;tag=hash%u%s]=%s", 0x06, thash_config);
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IP;Layer4Type=SCTP;tag=%s%s]=%s", 0x06, thash_config);
     }
     else if (rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV4_SCTP) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=SCTP;tag=hash%u%s]=%s", 0x06, thash_config);
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV4;Layer4Type=SCTP;tag=%s%s]=%s", 0x06, thash_config);
     }
     else if (rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV6_SCTP) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=SCTP;tag=hash%u%s]=%s", 0x06, thash_config);
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV6;Layer4Type=SCTP;tag=%s%s]=%s", 0x06, thash_config);
     }
   }
   /****************************/
@@ -392,13 +391,13 @@ int CreateHashModeHash(struct rte_eth_rss_conf *rss_conf,
         ((rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV4_OTHER) && (rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV6_OTHER)) ||
         ((rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV4_OTHER) && (rss_conf->rss_hf & ETH_RSS_IPV6)) ||
         ((rss_conf->rss_hf & ETH_RSS_IPV6) && (rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV6_OTHER))) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IP;tag=hash%u%s]=%s", 0x02, thash_config);
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IP;tag=%s%s]=%s", 0x02, thash_config);
     }
     else if ((rss_conf->rss_hf & ETH_RSS_IPV4) || (rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV4_OTHER)) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV4;tag=hash%u%s]=%s", 0x02, thash_config);
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV4;tag=%s%s]=%s", 0x02, thash_config);
     }
     else if ((rss_conf->rss_hf & ETH_RSS_IPV6)  || (rss_conf->rss_hf & ETH_RSS_NONFRAG_IPV6_OTHER)) {
-      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV6;tag=hash%u%s]=%s", 0x02, thash_config);
+      PRINT_HASH("Hashmode[priority=%u;port=%u;Layer3Type=IPV6;tag=%s%s]=%s", 0x02, thash_config);
     }
   }
   return 0;
