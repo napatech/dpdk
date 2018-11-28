@@ -100,6 +100,7 @@ struct supportedAdapters_s supportedAdapters[NB_SUPPORTED_FPGAS] =
   { 200, 9516, 9, 8, 0 },
   { 200, 9517, 9, 8, 0 },
   { 200, 9519, 10, 7, 0 },
+  { 200, 9523, 14, 0, 0 },
   { 200, 7000, 12, 0, 0 },
   { 200, 7001, 12, 0, 0 },
 };
@@ -120,6 +121,8 @@ int (*_NT_InfoRead)(NtInfoStream_t, NtInfo_t *);
 int (*_NT_InfoClose)(NtInfoStream_t);
 int (*_NT_ConfigOpen)(NtConfigStream_t *, const char *);
 int (*_NT_ConfigClose)(NtConfigStream_t);
+int (*_NT_ConfigWrite)(NtConfigStream_t, NtConfig_t *);
+int (*_NT_ConfigRead)(NtConfigStream_t, NtConfig_t *);
 int (*_NT_NTPL)(NtConfigStream_t, const char *, NtNtplInfo_t *, uint32_t);
 int (*_NT_NetRxGetNextPacket)(NtNetStreamRx_t, NtNetBuf_t *, int);
 int (*_NT_NetRxOpenMulti)(NtNetStreamRx_t *, const char *, enum NtNetInterface_e, uint32_t *, unsigned int, int);
@@ -749,6 +752,98 @@ static uint16_t eth_ntacc_tx(void *queue,
 }
 #endif
 
+static int create_stream_table(struct pmd_internals *internals)
+{
+  NtConfig_t *config = NULL;
+  struct NtStreamTable *table;
+  struct ntacc_rx_queue *rx_q = internals->rxq;
+  uint16_t i = 0;
+  int status;
+  int ret = 0;
+
+  config = rte_malloc(internals->name, sizeof(NtConfig_t), 0);
+  if (!config) {
+    ret = -ENOMEM;
+    goto out;
+  }
+
+  if (rte_log_get_level(ntacc_logtype) == RTE_LOG_DEBUG) {
+    printf("Create Stream Table: Size=%u - ", internals->stream_table_size);
+  }
+
+  config->parm = NT_CONFIG_PARM_STREAM_TABLE;
+  config->u.streamTable.cmd = NT_STREAM_TABLE_CREATE;
+  table = &config->u.streamTable.u.table;
+  strncpy(table->tag, internals->tagName, 10);
+  table->tableSize = internals->stream_table_size;
+  table->id = NT_STREAM_TABLE_ID_INVALID;
+
+  while (i < table->tableSize) {
+    for (int queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
+      if (rx_q[queue].enabled) {
+        table->table[i++] = rx_q[queue].stream_id;
+        if (rte_log_get_level(ntacc_logtype) == RTE_LOG_DEBUG) {
+          printf("%u ", rx_q[queue].stream_id);
+        }
+        if (i >= table->tableSize)
+          break;
+      }
+    }
+  }
+
+  if ((status = (*_NT_ConfigWrite)(internals->hCfgStream, config)) != NT_SUCCESS) {
+    ret = -EINVAL;
+  }
+
+  internals->stream_table_id = table->id;
+  if (rte_log_get_level(ntacc_logtype) == RTE_LOG_DEBUG) {
+    printf("- ID=%u\n", internals->stream_table_id);
+  }
+
+out:
+  if (config)
+    rte_free(config);
+
+  return ret;
+}
+
+static int delete_stream_table(struct pmd_internals *internals)
+{
+  NtConfig_t *config = NULL;
+  int status;
+  int ret = 0;
+
+  if (internals->stream_table_id == NT_STREAM_TABLE_ID_INVALID) {
+    return 0;
+  }
+
+  config = rte_malloc(internals->name, sizeof(NtConfig_t), 0);
+  if (!config) {
+    ret = -ENOMEM;
+    goto out;
+  }
+
+  if (rte_log_get_level(ntacc_logtype) == RTE_LOG_DEBUG) {
+    printf("Delete Stream Table: ID=%u\n", internals->stream_table_id);
+  }
+
+  config->parm = NT_CONFIG_PARM_STREAM_TABLE;
+  config->u.streamTable.cmd = NT_STREAM_TABLE_CREATE;
+  config->u.streamTable.u.del.id = internals->stream_table_id;
+
+  if ((status = (*_NT_ConfigWrite)(internals->hCfgStream, config)) != NT_SUCCESS) {
+    ret = -EINVAL;
+  }
+
+  internals->stream_table_id = NT_STREAM_TABLE_ID_INVALID;
+
+out:
+  if (config)
+    rte_free(config);
+
+  return ret;
+}
+
 static int eth_dev_start(struct rte_eth_dev *dev)
 {
   struct pmd_internals *internals = dev->data->dev_private;
@@ -877,6 +972,7 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
   PMD_NTACC_LOG(DEBUG, "Stopping port %u (%u) on adapter %u\n", internals->port, deviceCount, internals->adapterNo);
   _dev_flow_isolate(dev, 1, &error);
   _dev_flow_flush(dev, &error);
+  FlushHash(internals);
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
     if (rx_q[queue].enabled) {
       if (rx_q[queue].pSeg) {
@@ -924,7 +1020,18 @@ static int eth_dev_configure(struct rte_eth_dev *dev __rte_unused)
 {
   struct pmd_internals *internals = dev->data->dev_private;
   if (dev->data->dev_conf.rxmode.mq_mode == ETH_MQ_RX_RSS) {
-    internals->rss_hf = dev->data->dev_conf.rx_adv_conf.rss_conf.rss_hf;
+    struct rte_eth_rss_conf *conf = &dev->data->dev_conf.rx_adv_conf.rss_conf;
+    if (conf->rss_key_len > NTACC_RSS_KEY_LEN) {
+      return -EINVAL;
+    }
+    internals->rss_conf.rss_hf = conf->rss_hf;
+    if (conf->rss_key) {
+      internals->rss_conf.rss_key_len = conf->rss_key_len;
+      memcpy(internals->rss_conf.rss_key, conf->rss_key, conf->rss_key_len);
+    } else {
+      internals->rss_conf.rss_key_len = 0;
+    }
+    internals->rss_conf.rss_hf = conf->rss_hf;
   }
   else {
     internals->rss_hf = 0;
@@ -973,6 +1080,8 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
 
   dev_info->tx_offload_capa = DEV_TX_OFFLOAD_MULTI_SEGS;
   dev_info->tx_queue_offload_capa = DEV_TX_OFFLOAD_MULTI_SEGS;
+
+  dev_info->reta_size = internals->stream_table_size;
 
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
@@ -2099,20 +2208,10 @@ static int _hash_filter_ctrl(struct rte_eth_dev *dev,
     break;
   case RTE_ETH_FILTER_SET:
     if (info->info_type == RTE_ETH_HASH_FILTER_SYM_HASH_ENA_PER_PORT) {
-      if (info->info.enable) {
-        if (internals->symHashMode != SYM_HASH_ENA_PER_PORT) {
-          internals->symHashMode = SYM_HASH_ENA_PER_PORT;
-        }
-      }
-      else {
-        if (internals->symHashMode != SYM_HASH_DIS_PER_PORT) {
-          internals->symHashMode = SYM_HASH_DIS_PER_PORT;
-        }
-      }
+      internals->symmetric_hash = info->info.enable;
     }
-    else {
-      PMD_NTACC_LOG(WARNING, ">>> Warning: Filter Hash - info_type (%d) not supported", info->info_type);
-      ret = -ENOTSUP;
+    else if (info->info_type == RTE_ETH_HASH_FILTER_GLOBAL_CONFIG) {
+      internals->hash_func = info->info.global_conf.hash_func;
     }
     break;
   default:
@@ -2158,6 +2257,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
   struct pmd_internals *internals = dev->data->dev_private;
   int i;
   int counter;
+  int ret;
   bool found;
   unsigned int assignedHostbuffers[RTE_ETHDEV_QUEUE_STAT_CNTRS];
 
@@ -2191,6 +2291,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       rte_free(id);
     }
     NTACC_UNLOCK(&internals->lock);
+    delete_stream_table(internals);
 
     // Check that the hostbuffers are deleted/changed
     counter = 0;
@@ -2244,15 +2345,11 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=62;Descriptor=DYN3,length=26,colorbits=14;");
 #endif
       if (internals->rss_hf != 0) {
-        struct rte_flow_action_rss rss;
-        memset(&rss, 0, sizeof(struct rte_flow_action_rss));
         // Set the stream IDs
-        CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, nb_queues, list_queues);
-        // If RSS is used, then set the Hash mode
-        rss.types = internals->rss_hf;
-        rss.level = 0;
-        rss.func = RTE_ETH_HASH_FUNCTION_SIMPLE_XOR;
-        CreateHash(&ntpl_buf[strlen(ntpl_buf)], &rss, internals);
+        if ((ret = create_stream_table(internals)) < 0)
+          goto IsolateError;
+
+        snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "streamid=table(%u)", internals->stream_table_id);
       }
       else {
         // Set the stream IDs
@@ -2377,13 +2474,117 @@ static int eth_rss_hash_update(struct rte_eth_dev *dev,
     NTACC_LOCK(&internals->lock);
     FlushHash(internals);
     NTACC_UNLOCK(&internals->lock);
-    if (CreateHashModeHash(rss_conf->rss_hf, internals, &dummyFlow, 61) != 0) {
+    if (CreateHashModeHash(rss_conf, internals, &dummyFlow, 61) != 0) {
       PMD_NTACC_LOG(ERR, "Failed to create hash function eth_rss_hash_update\n");
       ret = 1;
       goto UpdateError;
     }
   }
 UpdateError:
+  return ret;
+}
+
+static int eth_reta_update(struct rte_eth_dev *dev,
+			               struct rte_eth_rss_reta_entry64 *reta_conf,
+			               uint16_t reta_size)
+{
+  struct pmd_internals *internals = dev->data->dev_private;
+  NtConfigStream_t hCfgStream = NULL;
+  NtConfig_t *config = NULL;
+  struct NtStreamTableEdit *edit;
+  struct ntacc_rx_queue *rx_q = internals->rxq;
+  uint16_t sz, k = 0;
+  int status;
+  int ret = 0;
+
+  if((status = (*_NT_ConfigOpen)(&hCfgStream, "dpdk config")) != NT_SUCCESS) {
+    ret = -ENODEV;
+    goto out;
+  }
+
+  config = rte_malloc(internals->name, sizeof(NtConfig_t), 0);
+  if (!config) {
+    ret = -ENOMEM;
+    goto out;
+  }
+
+  config->parm = NT_CONFIG_PARM_STREAM_TABLE;
+  config->u.streamTable.cmd = NT_STREAM_TABLE_EDIT;
+  edit = &config->u.streamTable.u.edit;
+  edit->tableSize = internals->stream_table_size;
+  edit->id = internals->stream_table_id;
+
+  sz = (reta_size + RTE_RETA_GROUP_SIZE - 1)/reta_size;
+  for (uint16_t i = 0; i < sz; i++) {
+    edit->editMask[i] = reta_conf[i].mask;
+    for (uint16_t j = 0; j < RTE_RETA_GROUP_SIZE && k < reta_size; j++)
+      edit->table[k++] = rx_q[reta_conf[i].reta[j]].stream_id;
+  }
+
+  if ((status = (*_NT_ConfigWrite)(hCfgStream, config)) != NT_SUCCESS) {
+    ret = -EINVAL;
+  }
+
+out:
+  if (hCfgStream)
+    (*_NT_ConfigClose)(hCfgStream);
+  if (config)
+    rte_free(config);
+
+  return ret;
+}
+
+static int eth_reta_query(struct rte_eth_dev *dev,
+			              struct rte_eth_rss_reta_entry64 *reta_conf,
+			              uint16_t reta_size)
+{
+  struct pmd_internals *internals = dev->data->dev_private;
+  NtConfigStream_t hCfgStream = NULL;
+  NtConfig_t *config = NULL;
+  struct NtStreamTable *table;
+  uint16_t idx, subidx;
+  int ret = 0;
+  int status;
+
+  if (reta_size != internals->stream_table_size) {
+    return -EINVAL;
+  }
+
+  if((status = (*_NT_ConfigOpen)(&hCfgStream, "dpdk config")) != NT_SUCCESS) {
+    ret = -ENODEV;
+    goto out;
+  }
+
+  config = rte_malloc(internals->name, sizeof(NtConfig_t), 0);
+  if (!config) {
+    ret = -ENOMEM;
+    goto out;
+  }
+
+  config->parm = NT_CONFIG_PARM_STREAM_TABLE;
+  config->u.streamTable.u.table.id = internals->stream_table_id;
+
+  if ((status = (*_NT_ConfigRead)(hCfgStream, config)) != NT_SUCCESS) {
+    ret = -EINVAL;
+    goto out;
+  }
+
+  table = &config->u.streamTable.u.table;
+
+  for (uint16_t i = 0; i < table->tableSize; i++) {
+    idx = i / RTE_RETA_GROUP_SIZE;
+    subidx = i % RTE_RETA_GROUP_SIZE;
+    if (reta_conf[idx].mask & (1 << subidx)) {
+      reta_conf[idx].reta[subidx] = table->table[i] - internals->streamIDOffset;
+    }
+  }
+
+out:
+  if (hCfgStream)
+    (*_NT_ConfigClose)(hCfgStream);
+  if (config)
+    rte_free(config);
+
   return ret;
 }
 
@@ -2408,6 +2609,8 @@ static struct eth_dev_ops ops = {
     .filter_ctrl = _dev_filter_ctrl,
     .fw_version_get = eth_fw_version_get,
     .rss_hash_update = eth_rss_hash_update,
+    .reta_update = eth_reta_update,
+    .reta_query = eth_reta_query,
 };
 
 static int rte_pmd_init_internals(struct rte_pci_device *dev,
@@ -2603,7 +2806,6 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     internals->port = offset + localPort;
     internals->local_port = localPort;
     internals->local_port_offset = offset;
-    internals->symHashMode = SYM_HASH_DIS_PER_PORT;
     internals->fpgaid.value = pInfo->u.port_v7.data.adapterInfo.fpgaid.value;
 
     // Check timestamp format
@@ -2617,6 +2819,11 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
       internals->tsMultiplier = 0;
     }
 
+    internals->symmetric_hash = 0;
+    internals->rss_conf.rss_hf = 0;
+    internals->rss_conf.rss_key = internals->rss_key;
+    internals->rss_conf.rss_key_len = 0;
+    internals->stream_table_id = NT_STREAM_TABLE_ID_INVALID;
     for (i=0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
       internals->rxq[i].stream_id = STREAMIDS_PER_PORT * internals->port + i;
       internals->rxq[i].pSeg = NULL;
@@ -2764,6 +2971,16 @@ static int _nt_lib_open(void)
   _NT_NTPL = dlsym(_libnt, "NT_NTPL");
   if (_NT_NTPL == NULL) {
     fprintf(stderr, "Failed to find \"NT_NTPL\" in %s\n", path);
+    return -1;
+  }
+  _NT_ConfigWrite = dlsym(_libnt, "NT_ConfigWrite");
+  if (_NT_ConfigWrite == NULL) {
+    fprintf(stderr, "Failed to find \"NT_ConfigWrite\" in %s\n", path);
+    return -1;
+  }
+  _NT_ConfigRead = dlsym(_libnt, "NT_ConfigRead");
+  if (_NT_ConfigRead == NULL) {
+    fprintf(stderr, "Failed to find \"NT_ConfigRead\" in %s\n", path);
     return -1;
   }
 

@@ -168,12 +168,16 @@ struct filter_values_s {
 };
 
 #define NTACC_NAME_LEN (PCI_PRI_STR_SIZE + 10)
+#define NTACC_RSS_KEY_LEN 40
 
 struct pmd_internals {
   struct ntacc_rx_queue rxq[RTE_ETHDEV_QUEUE_STAT_CNTRS];
   struct ntacc_tx_queue txq[RTE_ETHDEV_QUEUE_STAT_CNTRS];
   uint32_t              nbStreamIDs;
   uint32_t              streamIDOffset;
+  struct rte_eth_rss_conf rss_conf;
+  uint8_t               rss_key[NTACC_RSS_KEY_LEN];
+  uint32_t              stream_table_id;
   uint64_t              rss_hf;
   struct rte_flow       *defaultFlow;
 #ifndef USE_SW_STAT
@@ -194,8 +198,11 @@ struct pmd_internals {
   uint8_t               adapterNo;
   uint8_t               nbPortsOnAdapter;
   uint8_t               nbPortsInSystem;
-  uint8_t               symHashMode;
+  uint8_t               symmetric_hash;
   uint8_t               tsMultiplier;
+  uint16_t              stream_table_size;
+  enum rte_eth_hash_function hash_func;
+  uint32_t              supported_hash_funcs;
   char                  driverName[128];
   char                  tagName[10];
   char                  name[NTACC_NAME_LEN];
@@ -240,7 +247,7 @@ struct supportedAdapters_s {
   uint32_t build:10;
 };
 
-#define NB_SUPPORTED_FPGAS 13
+#define NB_SUPPORTED_FPGAS 14
 
 int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *internals, struct rte_flow_error *error);
 
