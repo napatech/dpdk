@@ -2949,9 +2949,16 @@ bond_probe(struct rte_vdev_device *dev)
 			goto parse_error;
 		}
 
-		if (internals->mode == BONDING_MODE_8023AD)
-			rte_eth_bond_8023ad_agg_selection_set(port_id,
+		if (internals->mode == BONDING_MODE_8023AD) {
+			int ret = rte_eth_bond_8023ad_agg_selection_set(port_id,
 					agg_mode);
+			if (ret < 0) {
+				RTE_BOND_LOG(ERR,
+					"Invalid args for agg selection set "
+					"for bonded device %s", name);
+				return -1;
+			}
+		}
 	} else {
 		rte_eth_bond_8023ad_agg_selection_set(port_id, AGG_STABLE);
 	}
