@@ -97,6 +97,7 @@ struct supportedAdapters_s supportedAdapters[NB_SUPPORTED_FPGAS] =
   { 200, 9505, 9, 8, 0 },
   { 200, 9512, 9, 8, 0 },
   { 200, 9515, 9, 8, 0 },
+  { 200, 9516, 9, 8, 0 },
   { 200, 9517, 9, 8, 0 },
   { 200, 9519, 10, 7, 0 },
   { 200, 7000, 12, 0, 0 },
@@ -218,6 +219,7 @@ int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *interna
   pNtplInfo = (NtNtplInfo_t *)rte_malloc(internals->name, sizeof(NtNtplInfo_t), 0);
   if (!pNtplInfo) {
     rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Allocating memory failed");
+    return 1;
   }
 
   if (internals->ntpl_file) {
@@ -1119,7 +1121,6 @@ static int eth_stats_get(struct rte_eth_dev *dev,
     igb_stats->q_ibytes[queue] =  pStatData->u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].forward.octets;
     igb_stats->q_errors[queue] = pStatData->u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].drop.pkts;
   }
-  rte_free(pStatData);
   return 0;
 }
 #endif
@@ -2238,6 +2239,7 @@ static int _dev_flow_match_program(struct rte_eth_dev *dev,
   flowMatch.color = 0;
   flowMatch.op = 1;
   flowMatch.prot = tuple->proto;
+  flowMatch.id = tuple->flowID;
 
   if (tuple->flag & RTE_FLOW_PROGRAM_IPV4) {
     flowMatch.u.ip4tuple4.sa = tuple->u.IPv4.src_addr;
@@ -2306,12 +2308,6 @@ static int _dev_flow_match_program(struct rte_eth_dev *dev,
 
   if ((status = (*_NT_FlowWrite)(rx_q->hFlowStream, &flowMatch, -1)) != NT_SUCCESS) {
     // Get the status code as text
-    if (internals->flow.downStream) {
-      printf("Downstream IPV4 - FT %u - kid %u\n", flowMatch.ft, flowMatch.kid);
-    }
-    else {
-      printf("Upstream IPV4 - FT %u - kid %u\n", flowMatch.ft, flowMatch.kid);
-    }
     (*_NT_ExplainError)(status, errorBuffer, sizeof(errorBuffer) - 1);
     rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Failed writing flow");
     PMD_NTACC_LOG(ERR, "NT_FlowWrite() failed: %s - %u - %u\n", errorBuffer, rte_lcore_id(), flowMatch.kid);
@@ -2678,7 +2674,7 @@ static int eth_xstats_get(struct rte_eth_dev *dev __rte_unused, struct rte_eth_x
     _log_nt_errors(status, "NT_StatRead failed", __func__);
     NTACC_UNLOCK(&internals->statlock);
     rte_free(pStatData);
-    return -1;
+    return -EIO;
   }
   NTACC_UNLOCK(&internals->statlock);
 

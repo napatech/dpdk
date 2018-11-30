@@ -1957,6 +1957,7 @@ enum rte_flow_program_actions {
 struct rte_flow_5tuple {
   uint8_t port;
   uint32_t flag;
+  uint32_t flowID;
   union {
     struct {
       uint32_t src_addr;		 /**< source address */

@@ -68,8 +68,9 @@ void (*_NT_FlowOpenAttrSetAdapterNo)(NtFlowAttr_t *, uint8_t);
 int (*_NT_FlowOpen_Attr)(NtFlowStream_t *, const char *, NtFlowAttr_t *);
 int (*_NT_FlowClose)(NtFlowStream_t);
 int (*_NT_FlowWrite)(NtFlowStream_t, NtFlow_t *, uint32_t);
+int (*_NT_FlowRead)(NtFlowStream_t, NtFlowInfo_t*, uint32_t);
 
-#define RING_DEPTH 32
+#define RING_DEPTH 256
 
 static uint16_t
 ntacc_eventdev_dequeue_burst(void *port, struct rte_event ev[],
@@ -360,25 +361,23 @@ static int ntacc_eventdev_rx_adapter_queue_del(const struct rte_eventdev *dev,
   return 0;
 }
 
-static uint64_t counter = 0;
 static int32_t ntacc_sched_service_func(void *args)
 {
   struct ntacc_eventdev *ev_internals = (struct ntacc_eventdev *)args;
   unsigned i, j;
+  NtFlowInfo_t flowData;
 
   for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
     if (ev_internals->rxq[i]->enabled && ev_internals->ring[i]) {
-      for (j = 0; j < 11; j++) {
-        struct eventData_s *dataPtr = rte_malloc("event_ntacc", sizeof(struct eventData_s), 0);
+      for (j = 0; j < 10; j++) {
+        if ((*_NT_FlowRead)(ev_internals->rxq[i]->hFlowStream, &flowData, 0) != NT_SUCCESS) {
+          break;
+        }
+        eventData_t *dataPtr = rte_malloc("event_ntacc", sizeof(struct eventData_s), 0);
         if (!dataPtr) {
           return 1;
         }
-        dataPtr->adapterNo = ev_internals->adapterNo;
-        dataPtr->portNo = ev_internals->portNo;
-        dataPtr->dev_id = ev_internals->dev_id;
-        strcpy(dataPtr->name, ev_internals->name);
-        dataPtr->queue_id = ev_internals->rxq[i]->stream_id;
-        dataPtr->counter = counter++;
+        memcpy(dataPtr, &flowData, sizeof(eventData_t));
         if (rte_ring_sp_enqueue(ev_internals->ring[i], dataPtr) != 0) {
           // No room for data. Free data again
           rte_free(dataPtr);
@@ -387,7 +386,6 @@ static int32_t ntacc_sched_service_func(void *args)
       }
     }
   }
-  sleep(1);
   return 0;
 }
 
@@ -724,6 +722,11 @@ static int _nt_lib_open(void)
   _NT_FlowWrite = dlsym(_libnt, "NT_FlowWrite");
   if (_NT_FlowWrite == NULL) {
     fprintf(stderr, "Failed to find \"NT_FlowWrite\" in %s\n", path);
+    return -1;
+  }
+  _NT_FlowRead = dlsym(_libnt, "NT_FlowRead");
+  if (_NT_FlowRead == NULL) {
+    fprintf(stderr, "Failed to find \"NT_FlowRead\" in %s\n", path);
     return -1;
   }
   return 0;

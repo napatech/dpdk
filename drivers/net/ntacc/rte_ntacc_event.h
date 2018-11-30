@@ -34,14 +34,16 @@
 #ifndef __RTE_NTACC_EVENT_H__
 #define __RTE_NTACC_EVENT_H__
 
-struct eventData_s {
-  uint8_t adapterNo;
-  uint8_t portNo;
-  uint8_t dev_id;
-  char name[128];
-  uint64_t counter;
-  uint8_t queue_id;
-};
+typedef struct eventData_s {
+  uint64_t packets_a; /*!< Packet counter for set A */
+  uint64_t octets_a;  /*!< Byte/octet counter for set A */
+  uint64_t packets_b; /*!< Packet counter for set B */
+  uint64_t octets_b;  /*!< Byte/octet counter for set B */
+  uint64_t ts;        /*!< Time stamp in UNIX_NS format of last seen packet */
+  uint32_t id;        /*!< 32-bit user defined ID */
+  uint16_t flags_a;   /*!< Bitwise OR of TCP flags for packets in set A */
+  uint16_t flags_b;   /*!< Bitwise OR of TCP flags for packets in set B */
+} eventData_t;
 
 #endif /* __RTE_NTACC_EVENT_H__ */
 

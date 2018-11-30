@@ -68,27 +68,66 @@ void (*_NT_FlowOpenAttrSetAdapterNo)(NtFlowAttr_t *, uint8_t);
 int (*_NT_FlowOpen_Attr)(NtFlowStream_t *, const char *, NtFlowAttr_t *);
 int (*_NT_FlowClose)(NtFlowStream_t);
 int (*_NT_FlowWrite)(NtFlowStream_t, NtFlow_t *, uint32_t);
+int (*_NT_FlowRead)(NtFlowStream_t, NtFlowInfo_t*, uint32_t);
 
-static uint64_t counter = 0;
+#define ASSERT_CONCAT_(a, b) a##b
+#define ASSERT_CONCAT(a, b) ASSERT_CONCAT_(a, b)
+#define ct_assert(e) enum { ASSERT_CONCAT(assert_line_, __LINE__) = 1/(!!(e)) }
+
+static uint16_t
+ntacc_eventdev_dequeue(void *port, struct rte_event *ev,
+                       uint64_t timeout_ticks)
+{
+  struct ntacc_port *sp = port;
+  NtFlowInfo_t flowData;
+  uint16_t got_nb_events = 0;
+
+  ct_assert(sizeof(eventData_t) == sizeof(NtFlowInfo_t));
+
+  if (sp->rxq->hFlowStream == NULL) {
+    printf("The flow stream has been closed\n");
+    return 0;
+  }
+
+  RTE_SET_USED(timeout_ticks);
+
+  if ((*_NT_FlowRead)(sp->rxq->hFlowStream, &flowData, 0) != NT_SUCCESS) {
+    return got_nb_events;
+  }
+  eventData_t *dataPtr = rte_malloc("event_ntacc", sizeof(struct eventData_s), 0);
+  if (dataPtr) {
+    memcpy(dataPtr, &flowData, sizeof(eventData_t));
+    ev->event_ptr = dataPtr;
+    got_nb_events = 1;
+  }
+  return got_nb_events;
+}
+
 static uint16_t
 ntacc_eventdev_dequeue_burst(void *port, struct rte_event ev[],
-		uint16_t nb_events, uint64_t timeout_ticks)
+                             uint16_t nb_events, uint64_t timeout_ticks)
 {
 	struct ntacc_port *sp = port;
   uint16_t got_nb_events = 0;
   unsigned i;
+  NtFlowInfo_t flowData;
+
+  ct_assert(sizeof(eventData_t) == sizeof(NtFlowInfo_t));
+
+  if (sp->rxq->hFlowStream == NULL) {
+    printf("The flow stream has been closed\n");
+    return 0;
+  }
 
   RTE_SET_USED(timeout_ticks);
 
   for (i = 0; i < nb_events; i++) {
-    struct eventData_s *dataPtr = rte_malloc("event_ntacc", sizeof(struct eventData_s), 0);
+    if ((*_NT_FlowRead)(sp->rxq->hFlowStream, &flowData, 0) != NT_SUCCESS) {
+      break;
+    }
+    eventData_t *dataPtr = rte_malloc("event_ntacc", sizeof(struct eventData_s), 0);
     if (dataPtr) {
-      dataPtr->adapterNo = 0;
-      dataPtr->portNo = sp->port_id;
-      dataPtr->dev_id = 0;
-      strcpy(dataPtr->name, "event_ntacc1");
-      dataPtr->counter = counter++;
-      dataPtr->queue_id = sp->queue_id;
+      memcpy(dataPtr, &flowData, sizeof(eventData_t));
       ev[i].event_ptr = dataPtr;
       got_nb_events++;
     }
@@ -385,6 +424,7 @@ ntacc_eventdev_init(struct rte_eventdev *eventdev, uint8_t adapterNo, uint8_t po
 
 	eventdev->dev_ops       = &ntacc_eventdev_ops;
 	eventdev->dequeue_burst = ntacc_eventdev_dequeue_burst;
+  eventdev->dequeue       = ntacc_eventdev_dequeue;
 
 
   strcpy(ev_internals->name, name);
@@ -562,6 +602,11 @@ static int _nt_lib_open(void)
     fprintf(stderr, "Failed to find \"NT_FlowWrite\" in %s\n", path);
     return -1;
   }
+  _NT_FlowRead = dlsym(_libnt, "NT_FlowRead");
+  if (_NT_FlowRead == NULL) {
+    fprintf(stderr, "Failed to find \"NT_FlowRead\" in %s\n", path);
+    return -1;
+  }
   return 0;
 }
 
@@ -735,10 +780,10 @@ error:
 	return -ENXIO;
 }
 
-static struct rte_vdev_driver vdev_eventdev_ntacc1_pmd = {
+static struct rte_vdev_driver vdev_eventdev_ntacc_pmd = {
 	.probe = ntacc_eventdev_probe,
 };
 
-RTE_PMD_REGISTER_VDEV(event_ntacc1, vdev_eventdev_ntacc1_pmd);
+RTE_PMD_REGISTER_VDEV(event_ntacc, vdev_eventdev_ntacc_pmd);
 
 
