@@ -1112,7 +1112,7 @@ struct rte_event {
  *
  */
 int
-rte_event_eth_rx_adapter_caps_get(uint8_t dev_id, uint8_t eth_port_id,
+rte_event_eth_rx_adapter_caps_get(uint8_t dev_id, uint16_t eth_port_id,
 				uint32_t *caps);
 
 #define RTE_EVENT_TIMER_ADAPTER_CAP_INTERNAL_PORT (1ULL << 0)
@@ -1186,6 +1186,32 @@ int __rte_experimental
 rte_event_crypto_adapter_caps_get(uint8_t dev_id, uint8_t cdev_id,
 				  uint32_t *caps);
 
+/* Ethdev Tx adapter capability bitmap flags */
+#define RTE_EVENT_ETH_TX_ADAPTER_CAP_INTERNAL_PORT	0x1
+/**< This flag is sent when the PMD supports a packet transmit callback
+ */
+
+/**
+ * Retrieve the event device's eth Tx adapter capabilities
+ *
+ * @param dev_id
+ *   The identifier of the device.
+ *
+ * @param eth_port_id
+ *   The identifier of the ethernet device.
+ *
+ * @param[out] caps
+ *   A pointer to memory filled with eth Tx adapter capabilities.
+ *
+ * @return
+ *   - 0: Success, driver provides eth Tx adapter capabilities.
+ *   - <0: Error code returned by the driver function.
+ *
+ */
+int __rte_experimental
+rte_event_eth_tx_adapter_caps_get(uint8_t dev_id, uint16_t eth_port_id,
+				uint32_t *caps);
+
 struct rte_eventdev_ops;
 struct rte_eventdev;
 
@@ -1203,6 +1229,10 @@ typedef uint16_t (*event_dequeue_t)(void *port, struct rte_event *ev,
 typedef uint16_t (*event_dequeue_burst_t)(void *port, struct rte_event ev[],
 		uint16_t nb_events, uint64_t timeout_ticks);
 /**< @internal Dequeue burst of events from port of a device */
+
+typedef uint16_t (*event_tx_adapter_enqueue)(void *port,
+				struct rte_event ev[], uint16_t nb_events);
+/**< @internal Enqueue burst of events on port of a device */
 
 #define RTE_EVENTDEV_NAME_MAX_LEN	(64)
 /**< @internal Max length of name of event PMD */
@@ -1266,7 +1296,8 @@ struct rte_eventdev {
 	/**< Pointer to PMD dequeue function. */
 	event_dequeue_burst_t dequeue_burst;
 	/**< Pointer to PMD dequeue burst function. */
-
+	event_tx_adapter_enqueue txa_enqueue;
+	/**< Pointer to PMD eth Tx adapter enqueue function. */
 	struct rte_eventdev_data *data;
 	/**< Pointer to device data */
 	struct rte_eventdev_ops *dev_ops;
@@ -1656,11 +1687,12 @@ rte_event_port_link(uint8_t dev_id, uint8_t port_id,
  * event port designated by its *port_id* on the event device designated
  * by its *dev_id*.
  *
- * The unlink establishment shall disable the event port *port_id* from
- * receiving events from the specified event queue *queue_id*
- *
+ * The unlink call issues an async request to disable the event port *port_id*
+ * from receiving events from the specified event queue *queue_id*.
  * Event queue(s) to event port unlink establishment can be changed at runtime
  * without re-configuring the device.
+ *
+ * @see rte_event_port_unlinks_in_progress() to poll for completed unlinks.
  *
  * @param dev_id
  *   The identifier of the device.
@@ -1679,20 +1711,46 @@ rte_event_port_link(uint8_t dev_id, uint8_t port_id,
  *   NULL.
  *
  * @return
- * The number of unlinks actually established. The return value can be less
+ * The number of unlinks successfully requested. The return value can be less
  * than the value of the *nb_unlinks* parameter when the implementation has the
  * limitation on specific queue to port unlink establishment or
  * if invalid parameters are specified.
  * If the return value is less than *nb_unlinks*, the remaining queues at the
- * end of queues[] are not established, and the caller has to take care of them.
+ * end of queues[] are not unlinked, and the caller has to take care of them.
  * If return value is less than *nb_unlinks* then implementation shall update
  * the rte_errno accordingly, Possible rte_errno values are
  * (-EINVAL) Invalid parameter
- *
  */
 int
 rte_event_port_unlink(uint8_t dev_id, uint8_t port_id,
 		      uint8_t queues[], uint16_t nb_unlinks);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
+ * Returns the number of unlinks in progress.
+ *
+ * This function provides the application with a method to detect when an
+ * unlink has been completed by the implementation.
+ *
+ * @see rte_event_port_unlink() to issue unlink requests.
+ *
+ * @param dev_id
+ *   The indentifier of the device.
+ *
+ * @param port_id
+ *   Event port identifier to select port to check for unlinks in progress.
+ *
+ * @return
+ * The number of unlinks that are in progress. A return of zero indicates that
+ * there are no outstanding unlink requests. A positive return value indicates
+ * the number of unlinks that are in progress, but are not yet complete.
+ * A negative return value indicates an error, -EINVAL indicates an invalid
+ * parameter passed for *dev_id* or *port_id*.
+ */
+int __rte_experimental
+rte_event_port_unlinks_in_progress(uint8_t dev_id, uint8_t port_id);
 
 /**
  * Retrieve the list of source event queues and its associated service priority

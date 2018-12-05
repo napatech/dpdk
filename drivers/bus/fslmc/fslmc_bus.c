@@ -20,6 +20,8 @@
 #include <fslmc_vfio.h>
 #include "fslmc_logs.h"
 
+#include <dpaax_iova_table.h>
+
 int dpaa2_logtype_bus;
 
 #define VFIO_IOMMU_GROUP_PATH "/sys/kernel/iommu_groups"
@@ -160,6 +162,8 @@ scan_one_fslmc_device(char *dev_name)
 		free(dup_dev_name);
 		return -ENOMEM;
 	}
+
+	dev->device.bus = &rte_fslmc_bus.bus;
 
 	/* Parse the device name and ID */
 	t_ptr = strtok(dup_dev_name, ".");
@@ -375,6 +379,19 @@ rte_fslmc_probe(void)
 
 	probe_all = rte_fslmc_bus.bus.conf.scan_mode != RTE_BUS_SCAN_WHITELIST;
 
+	/* In case of PA, the FD addresses returned by qbman APIs are physical
+	 * addresses, which need conversion into equivalent VA address for
+	 * rte_mbuf. For that, a table (a serial array, in memory) is used to
+	 * increase translation efficiency.
+	 * This has to be done before probe as some device initialization
+	 * (during) probe allocate memory (dpaa2_sec) which needs to be pinned
+	 * to this table.
+	 *
+	 * Error is ignored as relevant logs are handled within dpaax and
+	 * handling for unavailable dpaax table too is transparent to caller.
+	 */
+	dpaax_iova_table_populate();
+
 	TAILQ_FOREACH(dev, &rte_fslmc_bus.device_list, next) {
 		TAILQ_FOREACH(drv, &rte_fslmc_bus.driver_list, next) {
 			ret = rte_fslmc_match(drv, dev);
@@ -382,6 +399,9 @@ rte_fslmc_probe(void)
 				continue;
 
 			if (!drv->probe)
+				continue;
+
+			if (rte_dev_is_probed(&dev->device))
 				continue;
 
 			if (dev->device.devargs &&
@@ -396,8 +416,12 @@ rte_fslmc_probe(void)
 			   dev->device.devargs->policy ==
 			   RTE_DEV_WHITELISTED)) {
 				ret = drv->probe(drv, dev);
-				if (ret)
+				if (ret) {
 					DPAA2_BUS_ERR("Unable to probe");
+				} else {
+					dev->driver = drv;
+					dev->device.driver = &drv->driver;
+				}
 			}
 			break;
 		}
@@ -450,6 +474,11 @@ rte_fslmc_driver_unregister(struct rte_dpaa2_driver *driver)
 
 	fslmc_bus = driver->fslmc_bus;
 
+	/* Cleanup the PA->VA Translation table; From whereever this function
+	 * is called from.
+	 */
+	dpaax_iova_table_depopulate();
+
 	TAILQ_REMOVE(&fslmc_bus->driver_list, driver, next);
 	/* Update Bus references */
 	driver->fslmc_bus = NULL;
@@ -489,6 +518,10 @@ rte_dpaa2_get_iommu_class(void)
 
 	if (TAILQ_EMPTY(&rte_fslmc_bus.device_list))
 		return RTE_IOVA_DC;
+
+#ifdef RTE_LIBRTE_DPAA2_USE_PHYS_IOVA
+	return RTE_IOVA_PA;
+#endif
 
 	/* check if all devices on the bus support Virtual addressing or not */
 	has_iova_va = fslmc_all_device_support_iova();

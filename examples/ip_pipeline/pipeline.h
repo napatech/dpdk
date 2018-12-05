@@ -27,6 +27,7 @@ enum port_in_type {
 	PORT_IN_TAP,
 	PORT_IN_KNI,
 	PORT_IN_SOURCE,
+	PORT_IN_CRYPTODEV,
 };
 
 struct port_in_params {
@@ -48,6 +49,12 @@ struct port_in_params {
 			const char *file_name;
 			uint32_t n_bytes_per_pkt;
 		} source;
+
+		struct {
+			uint16_t queue_id;
+			void *f_callback;
+			void *arg_callback;
+		} cryptodev;
 	};
 	uint32_t burst_size;
 
@@ -62,6 +69,7 @@ enum port_out_type {
 	PORT_OUT_TAP,
 	PORT_OUT_KNI,
 	PORT_OUT_SINK,
+	PORT_OUT_CRYPTODEV,
 };
 
 struct port_out_params {
@@ -76,6 +84,11 @@ struct port_out_params {
 			const char *file_name;
 			uint32_t max_n_pkts;
 		} sink;
+
+		struct {
+			uint16_t queue_id;
+			uint32_t op_offset;
+		} cryptodev;
 	};
 	uint32_t burst_size;
 	int retry;
@@ -130,6 +143,10 @@ struct table_params {
 	const char *action_profile_name;
 };
 
+struct table_rule;
+
+TAILQ_HEAD(table_rule_list, table_rule);
+
 struct port_in {
 	struct port_in_params params;
 	struct port_in_action_profile *ap;
@@ -140,6 +157,8 @@ struct table {
 	struct table_params params;
 	struct table_action_profile *ap;
 	struct rte_table_action *a;
+	struct table_rule_list rules;
+	struct table_rule *rule_default;
 };
 
 struct pipeline {
@@ -268,6 +287,16 @@ struct table_rule_action {
 	struct rte_table_action_ttl_params ttl;
 	struct rte_table_action_stats_params stats;
 	struct rte_table_action_time_params time;
+	struct rte_table_action_sym_crypto_params sym_crypto;
+	struct rte_table_action_tag_params tag;
+	struct rte_table_action_decap_params decap;
+};
+
+struct table_rule {
+	TAILQ_ENTRY(table_rule) node;
+	struct table_rule_match match;
+	struct table_rule_action action;
+	void *data;
 };
 
 int
@@ -300,22 +329,19 @@ int
 pipeline_table_rule_add(const char *pipeline_name,
 	uint32_t table_id,
 	struct table_rule_match *match,
-	struct table_rule_action *action,
-	void **data);
+	struct table_rule_action *action);
 
 int
 pipeline_table_rule_add_bulk(const char *pipeline_name,
 	uint32_t table_id,
-	struct table_rule_match *match,
-	struct table_rule_action *action,
-	void **data,
-	uint32_t *n_rules);
+	struct table_rule_list *list,
+	uint32_t *n_rules_added,
+	uint32_t *n_rules_not_added);
 
 int
 pipeline_table_rule_add_default(const char *pipeline_name,
 	uint32_t table_id,
-	struct table_rule_action *action,
-	void **data);
+	struct table_rule_action *action);
 
 int
 pipeline_table_rule_delete(const char *pipeline_name,
@@ -329,7 +355,7 @@ pipeline_table_rule_delete_default(const char *pipeline_name,
 int
 pipeline_table_rule_stats_read(const char *pipeline_name,
 	uint32_t table_id,
-	void *data,
+	struct table_rule_match *match,
 	struct rte_table_action_stats_counters *stats,
 	int clear);
 
@@ -347,8 +373,7 @@ pipeline_table_mtr_profile_delete(const char *pipeline_name,
 int
 pipeline_table_rule_mtr_read(const char *pipeline_name,
 	uint32_t table_id,
-	void *data,
-	uint32_t tc_mask,
+	struct table_rule_match *match,
 	struct rte_table_action_mtr_counters *stats,
 	int clear);
 
@@ -361,8 +386,38 @@ pipeline_table_dscp_table_update(const char *pipeline_name,
 int
 pipeline_table_rule_ttl_read(const char *pipeline_name,
 	uint32_t table_id,
-	void *data,
+	struct table_rule_match *match,
 	struct rte_table_action_ttl_counters *stats,
 	int clear);
+
+int
+pipeline_table_rule_time_read(const char *pipeline_name,
+	uint32_t table_id,
+	struct table_rule_match *match,
+	uint64_t *timestamp);
+
+struct table_rule *
+table_rule_find(struct table *table,
+	struct table_rule_match *match);
+
+void
+table_rule_add(struct table *table,
+	struct table_rule *rule);
+
+void
+table_rule_add_bulk(struct table *table,
+	struct table_rule_list *list,
+	uint32_t n_rules);
+
+void
+table_rule_delete(struct table *table,
+	struct table_rule_match *match);
+
+void
+table_rule_default_add(struct table *table,
+	struct table_rule *rule);
+
+void
+table_rule_default_delete(struct table *table);
 
 #endif /* _INCLUDE_PIPELINE_H_ */

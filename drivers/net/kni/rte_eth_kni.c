@@ -207,7 +207,6 @@ eth_kni_dev_info(struct rte_eth_dev *dev __rte_unused,
 	dev_info->max_rx_queues = KNI_MAX_QUEUE_PER_PORT;
 	dev_info->max_tx_queues = KNI_MAX_QUEUE_PER_PORT;
 	dev_info->min_rx_bufsize = 0;
-	dev_info->rx_offload_capa = DEV_RX_OFFLOAD_CRC_STRIP;
 }
 
 static int
@@ -411,8 +410,7 @@ eth_kni_probe(struct rte_vdev_device *vdev)
 	params = rte_vdev_device_args(vdev);
 	PMD_LOG(INFO, "Initializing eth_kni for %s", name);
 
-	if (rte_eal_process_type() == RTE_PROC_SECONDARY &&
-	    strlen(params) == 0) {
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
 		eth_dev = rte_eth_dev_attach_secondary(name);
 		if (!eth_dev) {
 			PMD_LOG(ERR, "Failed to probe %s", name);
@@ -465,12 +463,16 @@ eth_kni_remove(struct rte_vdev_device *vdev)
 	if (eth_dev == NULL)
 		return -1;
 
+	/* mac_addrs must not be freed alone because part of dev_private */
+	eth_dev->data->mac_addrs = NULL;
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return rte_eth_dev_release_port(eth_dev);
+
 	eth_kni_dev_stop(eth_dev);
 
 	internals = eth_dev->data->dev_private;
 	rte_kni_release(internals->kni);
-
-	rte_free(internals);
 
 	rte_eth_dev_release_port(eth_dev);
 

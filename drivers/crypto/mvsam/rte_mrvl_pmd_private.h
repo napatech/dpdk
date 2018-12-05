@@ -12,31 +12,20 @@
 #define CRYPTODEV_NAME_MRVL_PMD crypto_mvsam
 /**< Marvell PMD device name */
 
-#define MRVL_CRYPTO_LOG_ERR(fmt, args...) \
-	RTE_LOG(ERR, CRYPTODEV, "[%s] %s() line %u: " fmt "\n",  \
-			RTE_STR(CRYPTODEV_NAME_MRVL_PMD), \
-			__func__, __LINE__, ## args)
+/** MRVL PMD LOGTYPE DRIVER */
+int mrvl_logtype_driver;
 
-#ifdef RTE_LIBRTE_PMD_MRVL_CRYPTO_DEBUG
-#define MRVL_CRYPTO_LOG_INFO(fmt, args...) \
-	RTE_LOG(INFO, CRYPTODEV, "[%s] %s() line %u: " fmt "\n", \
-			RTE_STR(CRYPTODEV_NAME_MRVL_PMD), \
-			__func__, __LINE__, ## args)
-
-#define MRVL_CRYPTO_LOG_DBG(fmt, args...) \
-	RTE_LOG(DEBUG, CRYPTODEV, "[%s] %s() line %u: " fmt "\n", \
-			RTE_STR(CRYPTODEV_NAME_MRVL_PMD), \
-			__func__, __LINE__, ## args)
-
-#else
-#define MRVL_CRYPTO_LOG_INFO(fmt, args...)
-#define MRVL_CRYPTO_LOG_DBG(fmt, args...)
-#endif
+#define MRVL_LOG(level, fmt, ...) \
+	rte_log(RTE_LOG_ ## level, mrvl_logtype_driver, \
+			"%s() line %u: " fmt "\n", __func__, __LINE__, \
+					## __VA_ARGS__)
 
 /**
  * Handy bits->bytes conversion macro.
  */
 #define BITS2BYTES(x) ((x) >> 3)
+
+#define MRVL_MAX_SEGMENTS 16
 
 /** The operation order mode enumerator. */
 enum mrvl_crypto_chain_order {
@@ -82,6 +71,11 @@ struct mrvl_crypto_session {
 
 	/** Cipher IV offset. */
 	uint16_t cipher_iv_offset;
+} __rte_cache_aligned;
+
+struct mrvl_crypto_src_table {
+	uint16_t iter_ops;
+	struct sam_buf_info src_bd[MRVL_MAX_SEGMENTS];
 } __rte_cache_aligned;
 
 /** Set and validate MRVL crypto session parameters */

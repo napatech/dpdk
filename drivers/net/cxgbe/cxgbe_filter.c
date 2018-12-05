@@ -8,6 +8,7 @@
 #include "t4_regs.h"
 #include "cxgbe_filter.h"
 #include "clip_tbl.h"
+#include "l2t.h"
 
 /**
  * Initialize Hash Filters
@@ -65,7 +66,8 @@ int validate_filter(struct adapter *adapter, struct ch_filter_specification *fs)
 #define U(_mask, _field) \
 	(!(fconf & (_mask)) && S(_field))
 
-	if (U(F_PORT, iport) || U(F_ETHERTYPE, ethtype) || U(F_PROTOCOL, proto))
+	if (U(F_PORT, iport) || U(F_ETHERTYPE, ethtype) ||
+	    U(F_PROTOCOL, proto) || U(F_MACMATCH, macidx))
 		return -EOPNOTSUPP;
 
 #undef S
@@ -86,6 +88,12 @@ int validate_filter(struct adapter *adapter, struct ch_filter_specification *fs)
 	 */
 	if (fs->val.iport >= adapter->params.nports)
 		return -ERANGE;
+
+	if (!fs->cap && fs->nat_mode && !adapter->params.filter2_wr_support)
+		return -EOPNOTSUPP;
+
+	if (!fs->cap && fs->swapmac && !adapter->params.filter2_wr_support)
+		return -EOPNOTSUPP;
 
 	return 0;
 }
@@ -162,6 +170,16 @@ static void set_tcb_field(struct adapter *adapter, unsigned int ftid,
 	req->val = cpu_to_be64(val);
 
 	t4_mgmt_tx(ctrlq, mbuf);
+}
+
+/**
+ * Set one of the t_flags bits in the TCB.
+ */
+static void set_tcb_tflag(struct adapter *adap, unsigned int ftid,
+			  unsigned int bit_pos, unsigned int val, int no_reply)
+{
+	set_tcb_field(adap, ftid,  W_TCB_T_FLAGS, 1ULL << bit_pos,
+		      (unsigned long long)val << bit_pos, no_reply);
 }
 
 /**
@@ -245,8 +263,8 @@ static u64 hash_filter_ntuple(const struct filter_entry *f)
 	u64 ntuple = 0;
 	u16 tcp_proto = IPPROTO_TCP; /* TCP Protocol Number */
 
-	if (tp->port_shift >= 0)
-		ntuple |= (u64)f->fs.mask.iport << tp->port_shift;
+	if (tp->port_shift >= 0 && f->fs.mask.iport)
+		ntuple |= (u64)f->fs.val.iport << tp->port_shift;
 
 	if (tp->protocol_shift >= 0) {
 		if (!f->fs.val.proto)
@@ -257,9 +275,8 @@ static u64 hash_filter_ntuple(const struct filter_entry *f)
 
 	if (tp->ethertype_shift >= 0 && f->fs.mask.ethtype)
 		ntuple |= (u64)(f->fs.val.ethtype) << tp->ethertype_shift;
-
-	if (ntuple != tp->hash_filter_mask)
-		return 0;
+	if (tp->macmatch_shift >= 0 && f->fs.mask.macidx)
+		ntuple |= (u64)(f->fs.val.macidx) << tp->macmatch_shift;
 
 	return ntuple;
 }
@@ -425,7 +442,10 @@ static void mk_act_open_req6(struct filter_entry *f, struct rte_mbuf *mbuf,
 	req->local_ip_lo = local_lo;
 	req->peer_ip_hi = peer_hi;
 	req->peer_ip_lo = peer_lo;
-	req->opt0 = cpu_to_be64(V_DELACK(f->fs.hitcnts) |
+	req->opt0 = cpu_to_be64(V_NAGLE(f->fs.newvlan == VLAN_REMOVE ||
+					f->fs.newvlan == VLAN_REWRITE) |
+				V_DELACK(f->fs.hitcnts) |
+				V_L2T_IDX(f->l2t ? f->l2t->idx : 0) |
 				V_SMAC_SEL((cxgbe_port_viid(f->dev) & 0x7F)
 					   << 1) |
 				V_TX_CHAN(f->fs.eport) |
@@ -436,6 +456,7 @@ static void mk_act_open_req6(struct filter_entry *f, struct rte_mbuf *mbuf,
 			    V_RSS_QUEUE(f->fs.iq) |
 			    F_T5_OPT_2_VALID |
 			    F_RX_CHANNEL |
+			    V_SACK_EN(f->fs.swapmac) |
 			    V_CONG_CNTRL((f->fs.action == FILTER_DROP) |
 					 (f->fs.dirsteer << 1)) |
 			    V_CCTRL_ECN(f->fs.action == FILTER_SWITCH));
@@ -468,7 +489,10 @@ static void mk_act_open_req(struct filter_entry *f, struct rte_mbuf *mbuf,
 			f->fs.val.lip[2] << 16 | f->fs.val.lip[3] << 24;
 	req->peer_ip = f->fs.val.fip[0] | f->fs.val.fip[1] << 8 |
 			f->fs.val.fip[2] << 16 | f->fs.val.fip[3] << 24;
-	req->opt0 = cpu_to_be64(V_DELACK(f->fs.hitcnts) |
+	req->opt0 = cpu_to_be64(V_NAGLE(f->fs.newvlan == VLAN_REMOVE ||
+					f->fs.newvlan == VLAN_REWRITE) |
+				V_DELACK(f->fs.hitcnts) |
+				V_L2T_IDX(f->l2t ? f->l2t->idx : 0) |
 				V_SMAC_SEL((cxgbe_port_viid(f->dev) & 0x7F)
 					   << 1) |
 				V_TX_CHAN(f->fs.eport) |
@@ -479,6 +503,7 @@ static void mk_act_open_req(struct filter_entry *f, struct rte_mbuf *mbuf,
 			    V_RSS_QUEUE(f->fs.iq) |
 			    F_T5_OPT_2_VALID |
 			    F_RX_CHANNEL |
+			    V_SACK_EN(f->fs.swapmac) |
 			    V_CONG_CNTRL((f->fs.action == FILTER_DROP) |
 					 (f->fs.dirsteer << 1)) |
 			    V_CCTRL_ECN(f->fs.action == FILTER_SWITCH));
@@ -517,6 +542,22 @@ static int cxgbe_set_hash_filter(struct rte_eth_dev *dev,
 	f->ctx = ctx;
 	f->dev = dev;
 	f->fs.iq = iq;
+
+	/*
+	 * If the new filter requires loopback Destination MAC and/or VLAN
+	 * rewriting then we need to allocate a Layer 2 Table (L2T) entry for
+	 * the filter.
+	 */
+	if (f->fs.newvlan == VLAN_INSERT ||
+	    f->fs.newvlan == VLAN_REWRITE) {
+		/* allocate L2T entry for new filter */
+		f->l2t = cxgbe_l2t_alloc_switching(dev, f->fs.vlan,
+						   f->fs.eport, f->fs.dmac);
+		if (!f->l2t) {
+			ret = -ENOMEM;
+			goto out_err;
+		}
+	}
 
 	atid = cxgbe_alloc_atid(t, f);
 	if (atid < 0)
@@ -591,6 +632,7 @@ void clear_filter(struct filter_entry *f)
 
 /**
  * t4_mk_filtdelwr - create a delete filter WR
+ * @adap: adapter context
  * @ftid: the filter ID
  * @wr: the filter work request to populate
  * @qid: ingress queue to receive the delete notification
@@ -598,10 +640,14 @@ void clear_filter(struct filter_entry *f)
  * Creates a filter work request to delete the supplied filter.  If @qid is
  * negative the delete notification is suppressed.
  */
-static void t4_mk_filtdelwr(unsigned int ftid, struct fw_filter_wr *wr, int qid)
+static void t4_mk_filtdelwr(struct adapter *adap, unsigned int ftid,
+			    struct fw_filter2_wr *wr, int qid)
 {
 	memset(wr, 0, sizeof(*wr));
-	wr->op_pkd = cpu_to_be32(V_FW_WR_OP(FW_FILTER_WR));
+	if (adap->params.filter2_wr_support)
+		wr->op_pkd = cpu_to_be32(V_FW_WR_OP(FW_FILTER2_WR));
+	else
+		wr->op_pkd = cpu_to_be32(V_FW_WR_OP(FW_FILTER_WR));
 	wr->len16_pkd = cpu_to_be32(V_FW_WR_LEN16(sizeof(*wr) / 16));
 	wr->tid_to_iq = cpu_to_be32(V_FW_FILTER_WR_TID(ftid) |
 				    V_FW_FILTER_WR_NOREPLY(qid < 0));
@@ -619,7 +665,7 @@ static int del_filter_wr(struct rte_eth_dev *dev, unsigned int fidx)
 	struct adapter *adapter = ethdev2adap(dev);
 	struct filter_entry *f = &adapter->tids.ftid_tab[fidx];
 	struct rte_mbuf *mbuf;
-	struct fw_filter_wr *fwr;
+	struct fw_filter2_wr *fwr;
 	struct sge_ctrl_txq *ctrlq;
 	unsigned int port_id = ethdev2pinfo(dev)->port_id;
 
@@ -631,8 +677,8 @@ static int del_filter_wr(struct rte_eth_dev *dev, unsigned int fidx)
 	mbuf->data_len = sizeof(*fwr);
 	mbuf->pkt_len = mbuf->data_len;
 
-	fwr = rte_pktmbuf_mtod(mbuf, struct fw_filter_wr *);
-	t4_mk_filtdelwr(f->tid, fwr, adapter->sge.fw_evtq.abs_id);
+	fwr = rte_pktmbuf_mtod(mbuf, struct fw_filter2_wr *);
+	t4_mk_filtdelwr(adapter, f->tid, fwr, adapter->sge.fw_evtq.abs_id);
 
 	/*
 	 * Mark the filter as "pending" and ship off the Filter Work Request.
@@ -648,10 +694,23 @@ int set_filter_wr(struct rte_eth_dev *dev, unsigned int fidx)
 	struct adapter *adapter = ethdev2adap(dev);
 	struct filter_entry *f = &adapter->tids.ftid_tab[fidx];
 	struct rte_mbuf *mbuf;
-	struct fw_filter_wr *fwr;
+	struct fw_filter2_wr *fwr;
 	struct sge_ctrl_txq *ctrlq;
 	unsigned int port_id = ethdev2pinfo(dev)->port_id;
 	int ret;
+
+	/*
+	 * If the new filter requires loopback Destination MAC and/or VLAN
+	 * rewriting then we need to allocate a Layer 2 Table (L2T) entry for
+	 * the filter.
+	 */
+	if (f->fs.newvlan) {
+		/* allocate L2T entry for new filter */
+		f->l2t = cxgbe_l2t_alloc_switching(f->dev, f->fs.vlan,
+						   f->fs.eport, f->fs.dmac);
+		if (!f->l2t)
+			return -ENOMEM;
+	}
 
 	ctrlq = &adapter->sge.ctrlq[port_id];
 	mbuf = rte_pktmbuf_alloc(ctrlq->mb_pool);
@@ -663,13 +722,16 @@ int set_filter_wr(struct rte_eth_dev *dev, unsigned int fidx)
 	mbuf->data_len = sizeof(*fwr);
 	mbuf->pkt_len = mbuf->data_len;
 
-	fwr = rte_pktmbuf_mtod(mbuf, struct fw_filter_wr *);
+	fwr = rte_pktmbuf_mtod(mbuf, struct fw_filter2_wr *);
 	memset(fwr, 0, sizeof(*fwr));
 
 	/*
 	 * Construct the work request to set the filter.
 	 */
-	fwr->op_pkd = cpu_to_be32(V_FW_WR_OP(FW_FILTER_WR));
+	if (adapter->params.filter2_wr_support)
+		fwr->op_pkd = cpu_to_be32(V_FW_WR_OP(FW_FILTER2_WR));
+	else
+		fwr->op_pkd = cpu_to_be32(V_FW_WR_OP(FW_FILTER_WR));
 	fwr->len16_pkd = cpu_to_be32(V_FW_WR_LEN16(sizeof(*fwr) / 16));
 	fwr->tid_to_iq =
 		cpu_to_be32(V_FW_FILTER_WR_TID(f->tid) |
@@ -680,9 +742,16 @@ int set_filter_wr(struct rte_eth_dev *dev, unsigned int fidx)
 		cpu_to_be32(V_FW_FILTER_WR_DROP(f->fs.action == FILTER_DROP) |
 			    V_FW_FILTER_WR_DIRSTEER(f->fs.dirsteer) |
 			    V_FW_FILTER_WR_LPBK(f->fs.action == FILTER_SWITCH) |
+			    V_FW_FILTER_WR_INSVLAN
+				(f->fs.newvlan == VLAN_INSERT ||
+				 f->fs.newvlan == VLAN_REWRITE) |
+			    V_FW_FILTER_WR_RMVLAN
+				(f->fs.newvlan == VLAN_REMOVE ||
+				 f->fs.newvlan == VLAN_REWRITE) |
 			    V_FW_FILTER_WR_HITCNTS(f->fs.hitcnts) |
 			    V_FW_FILTER_WR_TXCHAN(f->fs.eport) |
-			    V_FW_FILTER_WR_PRIO(f->fs.prio));
+			    V_FW_FILTER_WR_PRIO(f->fs.prio) |
+			    V_FW_FILTER_WR_L2TIX(f->l2t ? f->l2t->idx : 0));
 	fwr->ethtype = cpu_to_be16(f->fs.val.ethtype);
 	fwr->ethtypem = cpu_to_be16(f->fs.mask.ethtype);
 	fwr->smac_sel = 0;
@@ -691,7 +760,9 @@ int set_filter_wr(struct rte_eth_dev *dev, unsigned int fidx)
 			    V_FW_FILTER_WR_RX_RPL_IQ(adapter->sge.fw_evtq.abs_id
 						     ));
 	fwr->maci_to_matchtypem =
-		cpu_to_be32(V_FW_FILTER_WR_PORT(f->fs.val.iport) |
+		cpu_to_be32(V_FW_FILTER_WR_MACI(f->fs.val.macidx) |
+			    V_FW_FILTER_WR_MACIM(f->fs.mask.macidx) |
+			    V_FW_FILTER_WR_PORT(f->fs.val.iport) |
 			    V_FW_FILTER_WR_PORTM(f->fs.mask.iport));
 	fwr->ptcl = f->fs.val.proto;
 	fwr->ptclm = f->fs.mask.proto;
@@ -703,6 +774,20 @@ int set_filter_wr(struct rte_eth_dev *dev, unsigned int fidx)
 	fwr->lpm = cpu_to_be16(f->fs.mask.lport);
 	fwr->fp = cpu_to_be16(f->fs.val.fport);
 	fwr->fpm = cpu_to_be16(f->fs.mask.fport);
+
+	if (adapter->params.filter2_wr_support) {
+		fwr->filter_type_swapmac =
+			 V_FW_FILTER2_WR_SWAPMAC(f->fs.swapmac);
+		fwr->natmode_to_ulp_type =
+			V_FW_FILTER2_WR_ULP_TYPE(f->fs.nat_mode ?
+						 ULP_MODE_TCPDDP :
+						 ULP_MODE_NONE) |
+			V_FW_FILTER2_WR_NATMODE(f->fs.nat_mode);
+		memcpy(fwr->newlip, f->fs.nat_lip, sizeof(fwr->newlip));
+		memcpy(fwr->newfip, f->fs.nat_fip, sizeof(fwr->newfip));
+		fwr->newlport = cpu_to_be16(f->fs.nat_lport);
+		fwr->newfport = cpu_to_be16(f->fs.nat_fport);
+	}
 
 	/*
 	 * Mark the filter as "pending" and ship off the Filter Work Request.
@@ -1046,6 +1131,9 @@ void hash_filter_rpl(struct adapter *adap, const struct cpl_act_open_rpl *rpl)
 				      V_TCB_TIMESTAMP(0ULL) |
 				      V_TCB_T_RTT_TS_RECENT_AGE(0ULL),
 				      1);
+		if (f->fs.newvlan == VLAN_INSERT ||
+		    f->fs.newvlan == VLAN_REWRITE)
+			set_tcb_tflag(adap, tid, S_TF_CCTRL_RFR, 1, 1);
 		break;
 	}
 	default:

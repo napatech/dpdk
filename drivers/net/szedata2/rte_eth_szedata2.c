@@ -1056,8 +1056,7 @@ eth_dev_info(struct rte_eth_dev *dev,
 	dev_info->max_rx_queues = internals->max_rx_queues;
 	dev_info->max_tx_queues = internals->max_tx_queues;
 	dev_info->min_rx_bufsize = 0;
-	dev_info->rx_offload_capa = DEV_RX_OFFLOAD_SCATTER |
-				    DEV_RX_OFFLOAD_CRC_STRIP;
+	dev_info->rx_offload_capa = DEV_RX_OFFLOAD_SCATTER;
 	dev_info->tx_offload_capa = 0;
 	dev_info->rx_queue_offload_capa = 0;
 	dev_info->tx_queue_offload_capa = 0;
@@ -1475,7 +1474,7 @@ rte_szedata2_eth_dev_init(struct rte_eth_dev *dev, struct port_info *pi)
 	PMD_INIT_FUNC_TRACE();
 
 	PMD_INIT_LOG(INFO, "Initializing eth_dev %s (driver %s)", data->name,
-			dev->device->driver->name);
+			RTE_STR(RTE_SZEDATA2_DRIVER_NAME));
 
 	/* Fill internal private structure. */
 	internals->dev = dev;
@@ -1526,7 +1525,7 @@ rte_szedata2_eth_dev_init(struct rte_eth_dev *dev, struct port_info *pi)
 	ether_addr_copy(&eth_addr, data->mac_addrs);
 
 	PMD_INIT_LOG(INFO, "%s device %s successfully initialized",
-			dev->device->driver->name, data->name);
+			RTE_STR(RTE_SZEDATA2_DRIVER_NAME), data->name);
 
 	return 0;
 }
@@ -1545,10 +1544,9 @@ rte_szedata2_eth_dev_uninit(struct rte_eth_dev *dev)
 	PMD_INIT_FUNC_TRACE();
 
 	free(internals->sze_dev_path);
-	rte_free(dev->data->mac_addrs);
 
 	PMD_DRV_LOG(INFO, "%s device %s successfully uninitialized",
-			dev->device->driver->name, dev->data->name);
+			RTE_STR(RTE_SZEDATA2_DRIVER_NAME), dev->data->name);
 
 	return 0;
 }

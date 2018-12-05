@@ -39,8 +39,9 @@
 /* Alignment to use for cpu-local structs to avoid coherency problems. */
 #define MAX_CACHELINE			64
 
-#define DPAA_MIN_RX_BUF_SIZE 512
 #define DPAA_MAX_RX_PKT_LEN  10240
+
+#define DPAA_SGT_MAX_ENTRIES 16 /* maximum number of entries in SG Table */
 
 /* RX queue tail drop threshold (CGR Based) in frame count */
 #define CGR_RX_PERFQ_THRESH 256
@@ -63,7 +64,7 @@
 #define DPAA_PCD_FQID_START		0x400
 #define DPAA_PCD_FQID_MULTIPLIER	0x100
 #define DPAA_DEFAULT_NUM_PCD_QUEUES	1
-#define DPAA_MAX_NUM_PCD_QUEUES		32
+#define DPAA_MAX_NUM_PCD_QUEUES		4
 
 #define DPAA_IF_TX_PRIORITY		3
 #define DPAA_IF_RX_PRIORITY		0

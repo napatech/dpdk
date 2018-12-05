@@ -7,6 +7,7 @@
 #include "qat_device.h"
 #include "adf_transport_access_macros.h"
 #include "qat_sym_pmd.h"
+#include "qat_comp_pmd.h"
 
 /* Hardware device information per generation */
 __extension__
@@ -14,11 +15,18 @@ struct qat_gen_hw_data qat_gen_config[] =  {
 	[QAT_GEN1] = {
 		.dev_gen = QAT_GEN1,
 		.qp_hw_data = qat_gen1_qps,
+		.comp_num_im_bufs_required = QAT_NUM_INTERM_BUFS_GEN1
 	},
 	[QAT_GEN2] = {
 		.dev_gen = QAT_GEN2,
 		.qp_hw_data = qat_gen1_qps,
 		/* gen2 has same ring layout as gen1 */
+		.comp_num_im_bufs_required = QAT_NUM_INTERM_BUFS_GEN2
+	},
+	[QAT_GEN3] = {
+		.dev_gen = QAT_GEN3,
+		.qp_hw_data = qat_gen3_qps,
+		.comp_num_im_bufs_required = QAT_NUM_INTERM_BUFS_GEN3
 	},
 };
 
@@ -43,9 +51,11 @@ static const struct rte_pci_id pci_id_qat_map[] = {
 		{
 			RTE_PCI_DEVICE(0x8086, 0x6f55),
 		},
+		{
+			RTE_PCI_DEVICE(0x8086, 0x18a1),
+		},
 		{.device_id = 0},
 };
-
 
 static struct qat_pci_device *
 qat_pci_get_dev(uint8_t dev_id)
@@ -130,6 +140,9 @@ qat_pci_device_allocate(struct rte_pci_device *pci_dev)
 	case 0x6f55:
 		qat_dev->qat_dev_gen = QAT_GEN2;
 		break;
+	case 0x18a1:
+		qat_dev->qat_dev_gen = QAT_GEN3;
+		break;
 	default:
 		QAT_LOG(ERR, "Invalid dev_id, can't determine generation");
 		return NULL;
@@ -187,6 +200,7 @@ static int qat_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		struct rte_pci_device *pci_dev)
 {
 	int ret = 0;
+	int num_pmds_created = 0;
 	struct qat_pci_device *qat_pci_dev;
 
 	QAT_LOG(DEBUG, "Found QAT device at %02x:%02x.%x",
@@ -199,23 +213,33 @@ static int qat_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		return -ENODEV;
 
 	ret = qat_sym_dev_create(qat_pci_dev);
-	if (ret != 0)
-		goto error_out;
+	if (ret == 0)
+		num_pmds_created++;
+	else
+		QAT_LOG(WARNING,
+				"Failed to create QAT SYM PMD on device %s",
+				qat_pci_dev->name);
 
 	ret = qat_comp_dev_create(qat_pci_dev);
-	if (ret != 0)
-		goto error_out;
+	if (ret == 0)
+		num_pmds_created++;
+	else
+		QAT_LOG(WARNING,
+				"Failed to create QAT COMP PMD on device %s",
+				qat_pci_dev->name);
 
 	ret = qat_asym_dev_create(qat_pci_dev);
-	if (ret != 0)
-		goto error_out;
+	if (ret == 0)
+		num_pmds_created++;
+	else
+		QAT_LOG(WARNING,
+				"Failed to create QAT ASYM PMD on device %s",
+				qat_pci_dev->name);
+
+	if (num_pmds_created == 0)
+		qat_pci_dev_destroy(qat_pci_dev, pci_dev);
 
 	return 0;
-
-error_out:
-	qat_pci_dev_destroy(qat_pci_dev, pci_dev);
-	return ret;
-
 }
 
 static int qat_pci_remove(struct rte_pci_device *pci_dev)
@@ -239,37 +263,37 @@ static struct rte_pci_driver rte_qat_pmd = {
 	.remove = qat_pci_remove
 };
 
-__attribute__((weak)) int
+__rte_weak int
 qat_sym_dev_create(struct qat_pci_device *qat_pci_dev __rte_unused)
 {
 	return 0;
 }
 
-__attribute__((weak)) int
+__rte_weak int
 qat_asym_dev_create(struct qat_pci_device *qat_pci_dev __rte_unused)
 {
 	return 0;
 }
 
-__attribute__((weak)) int
+__rte_weak int
 qat_sym_dev_destroy(struct qat_pci_device *qat_pci_dev __rte_unused)
 {
 	return 0;
 }
 
-__attribute__((weak)) int
+__rte_weak int
 qat_asym_dev_destroy(struct qat_pci_device *qat_pci_dev __rte_unused)
 {
 	return 0;
 }
 
-__attribute__((weak)) int
+__rte_weak int
 qat_comp_dev_create(struct qat_pci_device *qat_pci_dev __rte_unused)
 {
 	return 0;
 }
 
-__attribute__((weak)) int
+__rte_weak int
 qat_comp_dev_destroy(struct qat_pci_device *qat_pci_dev __rte_unused)
 {
 	return 0;

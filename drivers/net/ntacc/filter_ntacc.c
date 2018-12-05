@@ -481,45 +481,6 @@ void CreateHash(char *ntpl_buf, const struct rte_flow_action_rss *rss, struct pm
   snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ";Hash=roundrobin");
 }
 
-#if 0
-/**
- * Get a keyset value from the keyset pool.
- * Used by the keymatcher command
- */
-static int GetKeysetValue(struct pmd_internals *internals)
-{
-  int i;
-
-  if (internals->adapterNo >= 8) {
-    return -1;
-  }
-  pthread_mutex_lock(&internals->shm->mutex);
-  for (i = 0; i < 12; i++) {
-    printf(">>>>>>>>>>>>>>>>>> Get key set adapter: %u - Key %u=%u\n", internals->adapterNo, i, internals->shm->keyset[internals->adapterNo][i]);
-    if (internals->shm->keyset[internals->adapterNo][i] == 0) {
-      internals->shm->keyset[internals->adapterNo][i] = 1;
-      pthread_mutex_unlock(&internals->shm->mutex);
-      return (i + 3);
-    }
-  }
-  pthread_mutex_unlock(&internals->shm->mutex);
-  return -1;
-}
-
-/**
- * Return a keyset value to the keyset pool.
- */
-int ReturnKeysetValue(struct pmd_internals *internals, int value)
-{
-  if (internals->adapterNo >= 8 || value < 3 || value > 15) {
-    return -1;
-  }
-  pthread_mutex_lock(&internals->shm->mutex);
-  internals->shm->keyset[internals->adapterNo][value - 3] = 0;
-  pthread_mutex_unlock(&internals->shm->mutex);
-  return 0;
-}
-#else
 /**
  * Get a keyset value from the keyset pool.
  * Used by the keymatcher command
@@ -556,7 +517,6 @@ int ReturnKeysetValue(struct pmd_internals *internals, int value)
   pthread_mutex_unlock(&internals->shm->mutex);
   return 0;
 }
-#endif
 
 /**
  * Create the stream ID part of the NTPL assign command.

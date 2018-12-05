@@ -4,13 +4,6 @@
 #
 
 include $(RTE_SDK)/mk/rte.vars.mk
-
-ifneq ($(MAKECMDGOALS),clean)
-ifneq ($(CONFIG_RTE_LIBRTE_SECURITY),y)
-$(error "RTE_LIBRTE_SECURITY is required to build RTE_LIBRTE_PMD_DPAA2_SEC")
-endif
-endif
-
 #
 # library name
 #
@@ -20,7 +13,6 @@ LIB = librte_pmd_dpaa2_sec.a
 CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
-CFLAGS += -D _GNU_SOURCE
 
 ifeq ($(CONFIG_RTE_TOOLCHAIN_GCC),y)
 ifeq ($(shell test $(GCC_VERSION) -gt 70 && echo 1), 1)
@@ -41,7 +33,7 @@ CFLAGS += -I$(RTE_SDK)/lib/librte_eal/linuxapp/eal
 EXPORT_MAP := rte_pmd_dpaa2_sec_version.map
 
 # library version
-LIBABIVER := 1
+LIBABIVER := 2
 
 # library source files
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_DPAA2_SEC) += dpaa2_sec_dpseci.c
@@ -51,5 +43,6 @@ LDLIBS += -lrte_bus_fslmc
 LDLIBS += -lrte_mempool_dpaa2
 LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
 LDLIBS += -lrte_cryptodev
+LDLIBS += -lrte_common_dpaax
 
 include $(RTE_SDK)/mk/rte.lib.mk

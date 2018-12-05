@@ -247,6 +247,15 @@ Structure Declarations
 * Use of the structures should be by separate variable declarations and those declarations must be extern if they are declared in a header file.
 * Externally visible structure definitions should have the structure name prefixed by ``rte_`` to avoid namespace collisions.
 
+.. note::
+
+    Uses of ``bool`` in structures are not preferred as is wastes space and
+    it's also not clear as to what type size the bool is. A preferred use of
+    ``bool`` is mainly as a return type from functions that return true/false,
+    and maybe local variable functions.
+
+    Ref: `LKML <https://lkml.org/lkml/2017/11/21/384>`_
+
 Queues
 ~~~~~~
 
@@ -741,8 +750,8 @@ A specialization looks like this:
  * PF/VF mailbox output: ``type.section.name.mbox``
 
 A real world example is the i40e poll mode driver which exposes two
-specializations, one for initialization ``pmd.i40e.init`` and the other for
-the remaining driver logs ``pmd.i40e.driver``.
+specializations, one for initialization ``pmd.net.i40e.init`` and the other for
+the remaining driver logs ``pmd.net.i40e.driver``.
 
 Note that specializations have no formatting rules, but please follow
 a precedent if one exists. In order to see all current log topics and

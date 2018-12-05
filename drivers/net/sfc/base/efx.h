@@ -7,6 +7,7 @@
 #ifndef	_SYS_EFX_H
 #define	_SYS_EFX_H
 
+#include "efx_annote.h"
 #include "efsys.h"
 #include "efx_check.h"
 #include "efx_phy_ids.h"
@@ -152,6 +153,14 @@ efx_nic_init(
 
 extern	__checkReturn	efx_rc_t
 efx_nic_reset(
+	__in		efx_nic_t *enp);
+
+extern	__checkReturn	boolean_t
+efx_nic_hw_unavailable(
+	__in		efx_nic_t *enp);
+
+extern			void
+efx_nic_set_hw_unavailable(
 	__in		efx_nic_t *enp);
 
 #if EFSYS_OPT_DIAG
@@ -661,77 +670,74 @@ efx_mon_init(
 #define	EFX_MON_STATS_PAGE_SIZE 0x100
 #define	EFX_MON_MASK_ELEMENT_SIZE 32
 
-/* START MKCONFIG GENERATED MonitorHeaderStatsBlock 400fdb0517af1fca */
+/* START MKCONFIG GENERATED MonitorHeaderStatsBlock 78b65c8d5af9747b */
 typedef enum efx_mon_stat_e {
-	EFX_MON_STAT_2_5V,
-	EFX_MON_STAT_VCCP1,
-	EFX_MON_STAT_VCC,
-	EFX_MON_STAT_5V,
-	EFX_MON_STAT_12V,
-	EFX_MON_STAT_VCCP2,
-	EFX_MON_STAT_EXT_TEMP,
-	EFX_MON_STAT_INT_TEMP,
-	EFX_MON_STAT_AIN1,
-	EFX_MON_STAT_AIN2,
-	EFX_MON_STAT_INT_COOLING,
-	EFX_MON_STAT_EXT_COOLING,
-	EFX_MON_STAT_1V,
-	EFX_MON_STAT_1_2V,
-	EFX_MON_STAT_1_8V,
-	EFX_MON_STAT_3_3V,
-	EFX_MON_STAT_1_2VA,
-	EFX_MON_STAT_VREF,
-	EFX_MON_STAT_VAOE,
+	EFX_MON_STAT_CONTROLLER_TEMP,
+	EFX_MON_STAT_PHY_COMMON_TEMP,
+	EFX_MON_STAT_CONTROLLER_COOLING,
+	EFX_MON_STAT_PHY0_TEMP,
+	EFX_MON_STAT_PHY0_COOLING,
+	EFX_MON_STAT_PHY1_TEMP,
+	EFX_MON_STAT_PHY1_COOLING,
+	EFX_MON_STAT_IN_1V0,
+	EFX_MON_STAT_IN_1V2,
+	EFX_MON_STAT_IN_1V8,
+	EFX_MON_STAT_IN_2V5,
+	EFX_MON_STAT_IN_3V3,
+	EFX_MON_STAT_IN_12V0,
+	EFX_MON_STAT_IN_1V2A,
+	EFX_MON_STAT_IN_VREF,
+	EFX_MON_STAT_OUT_VAOE,
 	EFX_MON_STAT_AOE_TEMP,
 	EFX_MON_STAT_PSU_AOE_TEMP,
 	EFX_MON_STAT_PSU_TEMP,
-	EFX_MON_STAT_FAN0,
-	EFX_MON_STAT_FAN1,
-	EFX_MON_STAT_FAN2,
-	EFX_MON_STAT_FAN3,
-	EFX_MON_STAT_FAN4,
-	EFX_MON_STAT_VAOE_IN,
-	EFX_MON_STAT_IAOE,
-	EFX_MON_STAT_IAOE_IN,
+	EFX_MON_STAT_FAN_0,
+	EFX_MON_STAT_FAN_1,
+	EFX_MON_STAT_FAN_2,
+	EFX_MON_STAT_FAN_3,
+	EFX_MON_STAT_FAN_4,
+	EFX_MON_STAT_IN_VAOE,
+	EFX_MON_STAT_OUT_IAOE,
+	EFX_MON_STAT_IN_IAOE,
 	EFX_MON_STAT_NIC_POWER,
-	EFX_MON_STAT_0_9V,
-	EFX_MON_STAT_I0_9V,
-	EFX_MON_STAT_I1_2V,
-	EFX_MON_STAT_0_9V_ADC,
-	EFX_MON_STAT_INT_TEMP2,
-	EFX_MON_STAT_VREG_TEMP,
-	EFX_MON_STAT_VREG_0_9V_TEMP,
-	EFX_MON_STAT_VREG_1_2V_TEMP,
-	EFX_MON_STAT_INT_VPTAT,
-	EFX_MON_STAT_INT_ADC_TEMP,
-	EFX_MON_STAT_EXT_VPTAT,
-	EFX_MON_STAT_EXT_ADC_TEMP,
+	EFX_MON_STAT_IN_0V9,
+	EFX_MON_STAT_IN_I0V9,
+	EFX_MON_STAT_IN_I1V2,
+	EFX_MON_STAT_IN_0V9_ADC,
+	EFX_MON_STAT_CONTROLLER_2_TEMP,
+	EFX_MON_STAT_VREG_INTERNAL_TEMP,
+	EFX_MON_STAT_VREG_0V9_TEMP,
+	EFX_MON_STAT_VREG_1V2_TEMP,
+	EFX_MON_STAT_CONTROLLER_VPTAT,
+	EFX_MON_STAT_CONTROLLER_INTERNAL_TEMP,
+	EFX_MON_STAT_CONTROLLER_VPTAT_EXTADC,
+	EFX_MON_STAT_CONTROLLER_INTERNAL_TEMP_EXTADC,
 	EFX_MON_STAT_AMBIENT_TEMP,
 	EFX_MON_STAT_AIRFLOW,
 	EFX_MON_STAT_VDD08D_VSS08D_CSR,
 	EFX_MON_STAT_VDD08D_VSS08D_CSR_EXTADC,
 	EFX_MON_STAT_HOTPOINT_TEMP,
-	EFX_MON_STAT_PHY_POWER_SWITCH_PORT0,
-	EFX_MON_STAT_PHY_POWER_SWITCH_PORT1,
+	EFX_MON_STAT_PHY_POWER_PORT0,
+	EFX_MON_STAT_PHY_POWER_PORT1,
 	EFX_MON_STAT_MUM_VCC,
-	EFX_MON_STAT_0V9_A,
-	EFX_MON_STAT_I0V9_A,
-	EFX_MON_STAT_0V9_A_TEMP,
-	EFX_MON_STAT_0V9_B,
-	EFX_MON_STAT_I0V9_B,
-	EFX_MON_STAT_0V9_B_TEMP,
+	EFX_MON_STAT_IN_0V9_A,
+	EFX_MON_STAT_IN_I0V9_A,
+	EFX_MON_STAT_VREG_0V9_A_TEMP,
+	EFX_MON_STAT_IN_0V9_B,
+	EFX_MON_STAT_IN_I0V9_B,
+	EFX_MON_STAT_VREG_0V9_B_TEMP,
 	EFX_MON_STAT_CCOM_AVREG_1V2_SUPPLY,
-	EFX_MON_STAT_CCOM_AVREG_1V2_SUPPLY_EXT_ADC,
+	EFX_MON_STAT_CCOM_AVREG_1V2_SUPPLY_EXTADC,
 	EFX_MON_STAT_CCOM_AVREG_1V8_SUPPLY,
-	EFX_MON_STAT_CCOM_AVREG_1V8_SUPPLY_EXT_ADC,
+	EFX_MON_STAT_CCOM_AVREG_1V8_SUPPLY_EXTADC,
 	EFX_MON_STAT_CONTROLLER_MASTER_VPTAT,
 	EFX_MON_STAT_CONTROLLER_MASTER_INTERNAL_TEMP,
-	EFX_MON_STAT_CONTROLLER_MASTER_VPTAT_EXT_ADC,
-	EFX_MON_STAT_CONTROLLER_MASTER_INTERNAL_TEMP_EXT_ADC,
+	EFX_MON_STAT_CONTROLLER_MASTER_VPTAT_EXTADC,
+	EFX_MON_STAT_CONTROLLER_MASTER_INTERNAL_TEMP_EXTADC,
 	EFX_MON_STAT_CONTROLLER_SLAVE_VPTAT,
 	EFX_MON_STAT_CONTROLLER_SLAVE_INTERNAL_TEMP,
-	EFX_MON_STAT_CONTROLLER_SLAVE_VPTAT_EXT_ADC,
-	EFX_MON_STAT_CONTROLLER_SLAVE_INTERNAL_TEMP_EXT_ADC,
+	EFX_MON_STAT_CONTROLLER_SLAVE_VPTAT_EXTADC,
+	EFX_MON_STAT_CONTROLLER_SLAVE_INTERNAL_TEMP_EXTADC,
 	EFX_MON_STAT_SODIMM_VOUT,
 	EFX_MON_STAT_SODIMM_0_TEMP,
 	EFX_MON_STAT_SODIMM_1_TEMP,
@@ -740,12 +746,12 @@ typedef enum efx_mon_stat_e {
 	EFX_MON_STAT_CONTROLLER_TDIODE_TEMP,
 	EFX_MON_STAT_BOARD_FRONT_TEMP,
 	EFX_MON_STAT_BOARD_BACK_TEMP,
-	EFX_MON_STAT_I1V8,
-	EFX_MON_STAT_I2V5,
-	EFX_MON_STAT_I3V3,
-	EFX_MON_STAT_I12V0,
-	EFX_MON_STAT_1_3V,
-	EFX_MON_STAT_I1V3,
+	EFX_MON_STAT_IN_I1V8,
+	EFX_MON_STAT_IN_I2V5,
+	EFX_MON_STAT_IN_I3V3,
+	EFX_MON_STAT_IN_I12V0,
+	EFX_MON_STAT_IN_1V3,
+	EFX_MON_STAT_IN_I1V3,
 	EFX_MON_NSTATS
 } efx_mon_stat_t;
 
@@ -759,10 +765,39 @@ typedef enum efx_mon_stat_state_e {
 	EFX_MON_STAT_STATE_NO_READING = 4,
 } efx_mon_stat_state_t;
 
+typedef enum efx_mon_stat_unit_e {
+	EFX_MON_STAT_UNIT_UNKNOWN = 0,
+	EFX_MON_STAT_UNIT_BOOL,
+	EFX_MON_STAT_UNIT_TEMP_C,
+	EFX_MON_STAT_UNIT_VOLTAGE_MV,
+	EFX_MON_STAT_UNIT_CURRENT_MA,
+	EFX_MON_STAT_UNIT_POWER_W,
+	EFX_MON_STAT_UNIT_RPM,
+	EFX_MON_NUNITS
+} efx_mon_stat_unit_t;
+
 typedef struct efx_mon_stat_value_s {
-	uint16_t	emsv_value;
-	uint16_t	emsv_state;
+	uint16_t		emsv_value;
+	efx_mon_stat_state_t	emsv_state;
+	efx_mon_stat_unit_t	emsv_unit;
 } efx_mon_stat_value_t;
+
+typedef struct efx_mon_limit_value_s {
+	uint16_t			emlv_warning_min;
+	uint16_t			emlv_warning_max;
+	uint16_t			emlv_fatal_min;
+	uint16_t			emlv_fatal_max;
+} efx_mon_stat_limits_t;
+
+typedef enum efx_mon_stat_portmask_e {
+	EFX_MON_STAT_PORTMAP_NONE = 0,
+	EFX_MON_STAT_PORTMAP_PORT0 = 1,
+	EFX_MON_STAT_PORTMAP_PORT1 = 2,
+	EFX_MON_STAT_PORTMAP_PORT2 = 3,
+	EFX_MON_STAT_PORTMAP_PORT3 = 4,
+	EFX_MON_STAT_PORTMAP_ALL = (-1),
+	EFX_MON_STAT_PORTMAP_UNKNOWN = (-2)
+} efx_mon_stat_portmask_t;
 
 #if EFSYS_OPT_NAMES
 
@@ -771,13 +806,38 @@ efx_mon_stat_name(
 	__in				efx_nic_t *enp,
 	__in				efx_mon_stat_t id);
 
+extern					const char *
+efx_mon_stat_description(
+	__in				efx_nic_t *enp,
+	__in				efx_mon_stat_t id);
+
 #endif	/* EFSYS_OPT_NAMES */
+
+extern	__checkReturn			boolean_t
+efx_mon_mcdi_to_efx_stat(
+	__in				int mcdi_index,
+	__out				efx_mon_stat_t *statp);
+
+extern	__checkReturn			boolean_t
+efx_mon_get_stat_unit(
+	__in				efx_mon_stat_t stat,
+	__out				efx_mon_stat_unit_t *unitp);
+
+extern	__checkReturn			boolean_t
+efx_mon_get_stat_portmap(
+	__in				efx_mon_stat_t stat,
+	__out				efx_mon_stat_portmask_t *maskp);
 
 extern	__checkReturn			efx_rc_t
 efx_mon_stats_update(
 	__in				efx_nic_t *enp,
 	__in				efsys_mem_t *esmp,
 	__inout_ecount(EFX_MON_NSTATS)	efx_mon_stat_value_t *values);
+
+extern	__checkReturn			efx_rc_t
+efx_mon_limits_update(
+	__in				efx_nic_t *enp,
+	__inout_ecount(EFX_MON_NSTATS)	efx_mon_stat_limits_t *values);
 
 #endif	/* EFSYS_OPT_MON_STATS */
 
@@ -970,12 +1030,39 @@ efx_phy_media_type_get(
 	__in		efx_nic_t *enp,
 	__out		efx_phy_media_type_t *typep);
 
+/*
+ * 2-wire device address of the base information in accordance with SFF-8472
+ * Diagnostic Monitoring Interface for Optical Transceivers section
+ * 4 Memory Organization.
+ */
+#define	EFX_PHY_MEDIA_INFO_DEV_ADDR_SFP_BASE	0xA0
+
+/*
+ * 2-wire device address of the digital diagnostics monitoring interface
+ * in accordance with SFF-8472 Diagnostic Monitoring Interface for Optical
+ * Transceivers section 4 Memory Organization.
+ */
+#define	EFX_PHY_MEDIA_INFO_DEV_ADDR_SFP_DDM	0xA2
+
+/*
+ * Hard wired 2-wire device address for QSFP+ in accordance with SFF-8436
+ * QSFP+ 10 Gbs 4X PLUGGABLE TRANSCEIVER section 7.4 Device Addressing and
+ * Operation.
+ */
+#define	EFX_PHY_MEDIA_INFO_DEV_ADDR_QSFP	0xA0
+
+/*
+ * Maximum accessible data offset for PHY module information.
+ */
+#define	EFX_PHY_MEDIA_INFO_MAX_OFFSET		0x100
+
+
 extern	__checkReturn		efx_rc_t
 efx_phy_module_get_info(
 	__in			efx_nic_t *enp,
 	__in			uint8_t dev_addr,
-	__in			uint8_t offset,
-	__in			uint8_t len,
+	__in			size_t offset,
+	__in			size_t len,
 	__out_bcount(len)	uint8_t *data);
 
 #if EFSYS_OPT_PHY_STATS
@@ -1194,6 +1281,7 @@ typedef struct efx_nic_cfg_s {
 	uint32_t		enc_rx_prefix_size;
 	uint32_t		enc_rx_buf_align_start;
 	uint32_t		enc_rx_buf_align_end;
+#if EFSYS_OPT_RX_SCALE
 	uint32_t		enc_rx_scale_max_exclusive_contexts;
 	/*
 	 * Mask of supported hash algorithms.
@@ -1206,6 +1294,7 @@ typedef struct efx_nic_cfg_s {
 	 */
 	boolean_t		enc_rx_scale_l4_hash_supported;
 	boolean_t		enc_rx_scale_additional_modes_supported;
+#endif /* EFSYS_OPT_RX_SCALE */
 #if EFSYS_OPT_LOOPBACK
 	efx_qword_t		enc_loopback_types[EFX_LINK_NMODES];
 #endif	/* EFSYS_OPT_LOOPBACK */
@@ -1240,6 +1329,7 @@ typedef struct efx_nic_cfg_s {
 	boolean_t		enc_bug35388_workaround;
 	boolean_t		enc_bug41750_workaround;
 	boolean_t		enc_bug61265_workaround;
+	boolean_t		enc_bug61297_workaround;
 	boolean_t		enc_rx_batching_enabled;
 	/* Maximum number of descriptors completed in an rx event. */
 	uint32_t		enc_rx_batch_max;
@@ -1483,6 +1573,8 @@ typedef enum efx_nvram_type_e {
 	EFX_NVRAM_LICENSE,
 	EFX_NVRAM_UEFIROM,
 	EFX_NVRAM_MUM_FIRMWARE,
+	EFX_NVRAM_DYNCONFIG_DEFAULTS,
+	EFX_NVRAM_ROMCONFIG_DEFAULTS,
 	EFX_NVRAM_NTYPES,
 } efx_nvram_type_t;
 
@@ -1608,6 +1700,87 @@ efx_bootcfg_write(
 	__in_bcount(size)	uint8_t *data,
 	__in			size_t size);
 
+
+/*
+ * Processing routines for buffers arranged in the DHCP/BOOTP option format
+ * (see https://tools.ietf.org/html/rfc1533)
+ *
+ * Summarising the format: the buffer is a sequence of options. All options
+ * begin with a tag octet, which uniquely identifies the option.  Fixed-
+ * length options without data consist of only a tag octet.  Only options PAD
+ * (0) and END (255) are fixed length.  All other options are variable-length
+ * with a length octet following the tag octet.  The value of the length
+ * octet does not include the two octets specifying the tag and length.  The
+ * length octet is followed by "length" octets of data.
+ *
+ * Option data may be a sequence of sub-options in the same format. The data
+ * content of the encapsulating option is one or more encapsulated sub-options,
+ * with no terminating END tag is required.
+ *
+ * To be valid, the top-level sequence of options should be terminated by an
+ * END tag. The buffer should be padded with the PAD byte.
+ *
+ * When stored to NVRAM, the DHCP option format buffer is preceded by a
+ * checksum octet. The full buffer (including after the END tag) contributes
+ * to the checksum, hence the need to fill the buffer to the end with PAD.
+ */
+
+#define	EFX_DHCP_END ((uint8_t)0xff)
+#define	EFX_DHCP_PAD ((uint8_t)0)
+
+#define	EFX_DHCP_ENCAP_OPT(encapsulator, encapsulated) \
+  (uint16_t)(((encapsulator) << 8) | (encapsulated))
+
+extern	__checkReturn		uint8_t
+efx_dhcp_csum(
+	__in_bcount(size)	uint8_t const *data,
+	__in			size_t size);
+
+extern	__checkReturn		efx_rc_t
+efx_dhcp_verify(
+	__in_bcount(size)	uint8_t const *data,
+	__in			size_t size,
+	__out_opt		size_t *usedp);
+
+extern	__checkReturn	efx_rc_t
+efx_dhcp_find_tag(
+	__in_bcount(buffer_length)	uint8_t *bufferp,
+	__in				size_t buffer_length,
+	__in				uint16_t opt,
+	__deref_out			uint8_t **valuepp,
+	__out				size_t *value_lengthp);
+
+extern	__checkReturn	efx_rc_t
+efx_dhcp_find_end(
+	__in_bcount(buffer_length)	uint8_t *bufferp,
+	__in				size_t buffer_length,
+	__deref_out			uint8_t **endpp);
+
+
+extern	__checkReturn	efx_rc_t
+efx_dhcp_delete_tag(
+	__inout_bcount(buffer_length)	uint8_t *bufferp,
+	__in				size_t buffer_length,
+	__in				uint16_t opt);
+
+extern	__checkReturn	efx_rc_t
+efx_dhcp_add_tag(
+	__inout_bcount(buffer_length)	uint8_t *bufferp,
+	__in				size_t buffer_length,
+	__in				uint16_t opt,
+	__in_bcount_opt(value_length)	uint8_t *valuep,
+	__in				size_t value_length);
+
+extern	__checkReturn	efx_rc_t
+efx_dhcp_update_tag(
+	__inout_bcount(buffer_length)	uint8_t *bufferp,
+	__in				size_t buffer_length,
+	__in				uint16_t opt,
+	__in				uint8_t *value_locationp,
+	__in_bcount_opt(value_length)	uint8_t *valuep,
+	__in				size_t value_length);
+
+
 #endif	/* EFSYS_OPT_BOOTCFG */
 
 #if EFSYS_OPT_IMAGE_LAYOUT
@@ -1689,7 +1862,8 @@ efx_check_reflash_image(
 
 extern	__checkReturn	efx_rc_t
 efx_build_signed_image_write_buffer(
-	__out		uint8_t			*bufferp,
+	__out_bcount(buffer_size)
+			uint8_t			*bufferp,
 	__in		uint32_t		buffer_size,
 	__in		efx_image_info_t	*infop,
 	__out		efx_image_header_t	**headerpp);
@@ -2122,7 +2296,7 @@ typedef enum efx_rx_hash_alg_e {
  *  - a combination of legacy flags
  *  - a combination of EFX_RX_HASH() flags
  */
-typedef unsigned int efx_rx_hash_type_t;
+typedef uint32_t efx_rx_hash_type_t;
 
 typedef enum efx_rx_hash_support_e {
 	EFX_RX_HASH_UNAVAILABLE = 0,	/* Hardware hash not inserted */
@@ -2223,7 +2397,8 @@ extern	__checkReturn				efx_rc_t
 efx_rx_scale_hash_flags_get(
 	__in					efx_nic_t *enp,
 	__in					efx_rx_hash_alg_t hash_alg,
-	__inout_ecount(EFX_RX_HASH_NFLAGS)	unsigned int *flags,
+	__out_ecount_part(max_nflags, *nflagsp)	unsigned int *flagsp,
+	__in					unsigned int max_nflags,
 	__out					unsigned int *nflagsp);
 
 extern	__checkReturn	efx_rc_t
@@ -2703,6 +2878,8 @@ typedef struct efx_filter_spec_s {
 	efx_filter_flags_t		efs_flags;
 	uint16_t			efs_dmaq_id;
 	uint32_t			efs_rss_context;
+	uint32_t			efs_mark;
+	/* Fields below here are hashed for software filter lookup */
 	uint16_t			efs_outer_vid;
 	uint16_t			efs_inner_vid;
 	uint8_t				efs_loc_mac[EFX_MAC_ADDR_LEN];
@@ -2716,7 +2893,6 @@ typedef struct efx_filter_spec_s {
 	efx_oword_t			efs_loc_host;
 	uint8_t				efs_vni_or_vsid[EFX_VNI_OR_VSID_LEN];
 	uint8_t				efs_ifrm_loc_mac[EFX_MAC_ADDR_LEN];
-	uint32_t			efs_mark;
 } efx_filter_spec_t;
 
 
@@ -2813,9 +2989,23 @@ efx_filter_spec_set_encap_type(
 	__in		efx_filter_inner_frame_match_t inner_frame_match);
 
 extern	__checkReturn	efx_rc_t
-efx_filter_spec_set_vxlan_full(
+efx_filter_spec_set_vxlan(
 	__inout		efx_filter_spec_t *spec,
-	__in		const uint8_t *vxlan_id,
+	__in		const uint8_t *vni,
+	__in		const uint8_t *inner_addr,
+	__in		const uint8_t *outer_addr);
+
+extern	__checkReturn	efx_rc_t
+efx_filter_spec_set_geneve(
+	__inout		efx_filter_spec_t *spec,
+	__in		const uint8_t *vni,
+	__in		const uint8_t *inner_addr,
+	__in		const uint8_t *outer_addr);
+
+extern	__checkReturn	efx_rc_t
+efx_filter_spec_set_nvgre(
+	__inout		efx_filter_spec_t *spec,
+	__in		const uint8_t *vsid,
 	__in		const uint8_t *inner_addr,
 	__in		const uint8_t *outer_addr);
 
@@ -3056,6 +3246,32 @@ efx_nic_set_fw_subvariant(
 	__in		efx_nic_fw_subvariant_t subvariant);
 
 #endif	/* EFSYS_OPT_FW_SUBVARIANT_AWARE */
+
+typedef enum efx_phy_fec_type_e {
+	EFX_PHY_FEC_NONE = 0,
+	EFX_PHY_FEC_BASER,
+	EFX_PHY_FEC_RS
+} efx_phy_fec_type_t;
+
+extern	__checkReturn	efx_rc_t
+efx_phy_fec_type_get(
+	__in		efx_nic_t *enp,
+	__out		efx_phy_fec_type_t *typep);
+
+typedef struct efx_phy_link_state_s {
+	uint32_t		epls_adv_cap_mask;
+	uint32_t		epls_lp_cap_mask;
+	uint32_t		epls_ld_cap_mask;
+	unsigned int		epls_fcntl;
+	efx_phy_fec_type_t	epls_fec;
+	efx_link_mode_t		epls_link_mode;
+} efx_phy_link_state_t;
+
+extern	__checkReturn	efx_rc_t
+efx_phy_link_state_get(
+	__in		efx_nic_t *enp,
+	__out		efx_phy_link_state_t  *eplsp);
+
 
 #ifdef	__cplusplus
 }

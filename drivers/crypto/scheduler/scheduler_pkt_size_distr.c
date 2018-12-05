@@ -398,7 +398,7 @@ scheduler_option_get(struct rte_cryptodev *dev, uint32_t option_type,
 	return 0;
 }
 
-struct rte_cryptodev_scheduler_ops scheduler_ps_ops = {
+static struct rte_cryptodev_scheduler_ops scheduler_ps_ops = {
 	slave_attach,
 	slave_detach,
 	scheduler_start,
@@ -409,7 +409,7 @@ struct rte_cryptodev_scheduler_ops scheduler_ps_ops = {
 	scheduler_option_get
 };
 
-struct rte_cryptodev_scheduler psd_scheduler = {
+static struct rte_cryptodev_scheduler psd_scheduler = {
 		.name = "packet-size-based-scheduler",
 		.description = "scheduler which will distribute crypto op "
 				"burst based on the packet size",
@@ -417,4 +417,4 @@ struct rte_cryptodev_scheduler psd_scheduler = {
 		.ops = &scheduler_ps_ops
 };
 
-struct rte_cryptodev_scheduler *pkt_size_based_distr_scheduler = &psd_scheduler;
+struct rte_cryptodev_scheduler *crypto_scheduler_pkt_size_based_distr = &psd_scheduler;

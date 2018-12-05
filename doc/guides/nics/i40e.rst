@@ -163,6 +163,22 @@ Runtime Config Options
   Currently hot-plugging of representor ports is not supported so all required
   representors must be specified on the creation of the PF.
 
+- ``Use latest supported vector`` (default ``disable``)
+
+  Latest supported vector path may not always get the best perf so vector path was
+  recommended to use only on later platform. But users may want the latest vector path
+  since it can get better perf in some real work loading cases. So ``devargs`` param
+  ``use-latest-supported-vec`` is introduced, for example::
+
+  -w 84:00.0,use-latest-supported-vec=1
+
+Vector RX Pre-conditions
+~~~~~~~~~~~~~~~~~~~~~~~~
+For Vector RX it is assumed that the number of descriptor rings will be a power
+of 2. With this pre-condition, the ring pointer can easily scroll back to the
+head after hitting the tail without a conditional check. In addition Vector RX
+can use this assumption to do a bit mask using ``ring_size - 1``.
+
 Driver compilation and testing
 ------------------------------
 
@@ -420,6 +436,12 @@ functionality requires a NIC firmware version of 6.0 or greater.
 
 Current implementation supports GTP-C/GTP-U/PPPoE/PPPoL2TP,
 steering can be used with rte_flow API.
+
+GTPv1 package is released, and it can be downloaded from
+https://downloadcenter.intel.com/download/27587.
+
+PPPoE package is released, and it can be downloaded from
+https://downloadcenter.intel.com/download/28040.
 
 Load a profile which supports GTP and store backup profile:
 

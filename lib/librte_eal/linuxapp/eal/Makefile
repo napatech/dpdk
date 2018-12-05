@@ -10,7 +10,7 @@ ARCH_DIR ?= $(RTE_ARCH)
 EXPORT_MAP := ../../rte_eal_version.map
 VPATH += $(RTE_SDK)/lib/librte_eal/common/arch/$(ARCH_DIR)
 
-LIBABIVER := 8
+LIBABIVER := 9
 
 VPATH += $(RTE_SDK)/lib/librte_eal/common
 
@@ -70,10 +70,12 @@ SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_proc.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_fbarray.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_uuid.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += rte_malloc.c
+SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += hotplug_mp.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += malloc_elem.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += malloc_heap.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += malloc_mp.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += rte_keepalive.c
+SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += rte_option.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += rte_service.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += rte_reciprocal.c
 
@@ -84,22 +86,6 @@ SRCS-$(CONFIG_RTE_ARCH_X86) += rte_spinlock.c
 SRCS-y += rte_cycles.c
 
 CFLAGS_eal_common_cpuflags.o := $(CPUFLAGS_LIST)
-
-CFLAGS_eal.o := -D_GNU_SOURCE
-CFLAGS_eal_interrupts.o := -D_GNU_SOURCE
-CFLAGS_eal_vfio_mp_sync.o := -D_GNU_SOURCE
-CFLAGS_eal_timer.o := -D_GNU_SOURCE
-CFLAGS_eal_lcore.o := -D_GNU_SOURCE
-CFLAGS_eal_memalloc.o := -D_GNU_SOURCE
-CFLAGS_eal_thread.o := -D_GNU_SOURCE
-CFLAGS_eal_log.o := -D_GNU_SOURCE
-CFLAGS_eal_common_log.o := -D_GNU_SOURCE
-CFLAGS_eal_hugepage_info.o := -D_GNU_SOURCE
-CFLAGS_eal_common_whitelist.o := -D_GNU_SOURCE
-CFLAGS_eal_common_options.o := -D_GNU_SOURCE
-CFLAGS_eal_common_thread.o := -D_GNU_SOURCE
-CFLAGS_eal_common_lcore.o := -D_GNU_SOURCE
-CFLAGS_rte_cycles.o := -D_GNU_SOURCE
 
 # workaround for a gcc bug with noreturn attribute
 # http://gcc.gnu.org/bugzilla/show_bug.cgi?id=12603

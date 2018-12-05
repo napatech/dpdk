@@ -19,12 +19,13 @@ CFLAGS += -I$(RTE_SDK)/drivers/bus/fslmc/qbman/include
 CFLAGS += -I$(RTE_SDK)/lib/librte_eal/common
 LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
 LDLIBS += -lrte_ethdev
+LDLIBS += -lrte_common_dpaax
 
 # versioning export map
 EXPORT_MAP := rte_bus_fslmc_version.map
 
 # library version
-LIBABIVER := 1
+LIBABIVER := 2
 
 SRCS-$(CONFIG_RTE_LIBRTE_FSLMC_BUS) += \
         qbman/qbman_portal.c \

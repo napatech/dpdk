@@ -240,6 +240,10 @@ Supported NICs
 
    - Solarflare X2522 Dual Port SFP28 10/25GbE Adapter
 
+   - Solarflare X2541 Single Port QSFP28 10/25G/100G Adapter
+
+   - Solarflare X2542 Dual Port QSFP28 10/25G/100G Adapter
+
 - Solarflare Flareon [Ultra] Server Adapters:
 
    - Solarflare SFN8522 Dual Port SFP+ Server Adapter
@@ -318,7 +322,7 @@ boolean parameters value.
   **efx** chooses libefx-based datapath which supports Rx scatter.
   **ef10** chooses EF10 (SFN7xxx, SFN8xxx, X2xxx) native datapath which is
   more efficient than libefx-based and provides richer packet type
-  classification, but lacks Rx scatter support.
+  classification.
   **ef10_esps** chooses SFNX2xxx equal stride packed stream datapath
   which may be used on DPDK firmware variant only
   (see notes about its limitations above).
@@ -333,8 +337,7 @@ boolean parameters value.
   Mbuf segments may come from different mempools, and mbuf reference
   counters are treated responsibly.
   **ef10** chooses EF10 (SFN7xxx, SFN8xxx, X2xxx) native datapath which is
-  more efficient than libefx-based but has no VLAN insertion and TSO
-  support yet.
+  more efficient than libefx-based but has no VLAN insertion support yet.
   Mbuf segments may come from different mempools, and mbuf reference
   counters are treated responsibly.
   **ef10_simple** chooses EF10 (SFN7xxx, SFN8xxx, X2xxx) native datapath which

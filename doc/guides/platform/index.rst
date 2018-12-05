@@ -10,4 +10,6 @@ The following are platform specific guides and setup information.
     :maxdepth: 2
     :numbered:
 
+    dpaa
+    dpaa2
     octeontx

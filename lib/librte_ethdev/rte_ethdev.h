@@ -167,6 +167,73 @@ extern int rte_eth_dev_logtype;
 struct rte_mbuf;
 
 /**
+ * Initializes a device iterator.
+ *
+ * This iterator allows accessing a list of devices matching some devargs.
+ *
+ * @param iter
+ *   Device iterator handle initialized by the function.
+ *   The fields bus_str and cls_str might be dynamically allocated,
+ *   and could be freed by calling rte_eth_iterator_cleanup().
+ *
+ * @param devargs
+ *   Device description string.
+ *
+ * @return
+ *   0 on successful initialization, negative otherwise.
+ */
+int rte_eth_iterator_init(struct rte_dev_iterator *iter, const char *devargs);
+
+/**
+ * Iterates on devices with devargs filter.
+ * The ownership is not checked.
+ *
+ * The next port id is returned, and the iterator is updated.
+ *
+ * @param iter
+ *   Device iterator handle initialized by rte_eth_iterator_init().
+ *   Some fields bus_str and cls_str might be freed when no more port is found,
+ *   by calling rte_eth_iterator_cleanup().
+ *
+ * @return
+ *   A port id if found, RTE_MAX_ETHPORTS otherwise.
+ */
+uint16_t rte_eth_iterator_next(struct rte_dev_iterator *iter);
+
+/**
+ * Free some allocated fields of the iterator.
+ *
+ * This function is automatically called by rte_eth_iterator_next()
+ * on the last iteration (i.e. when no more matching port is found).
+ *
+ * It is safe to call this function twice; it will do nothing more.
+ *
+ * @param iter
+ *   Device iterator handle initialized by rte_eth_iterator_init().
+ *   The fields bus_str and cls_str are freed if needed.
+ */
+void rte_eth_iterator_cleanup(struct rte_dev_iterator *iter);
+
+/**
+ * Macro to iterate over all ethdev ports matching some devargs.
+ *
+ * If a break is done before the end of the loop,
+ * the function rte_eth_iterator_cleanup() must be called.
+ *
+ * @param id
+ *   Iterated port id of type uint16_t.
+ * @param devargs
+ *   Device parameters input as string of type char*.
+ * @param iter
+ *   Iterator handle of type struct rte_dev_iterator, used internally.
+ */
+#define RTE_ETH_FOREACH_MATCHING_DEV(id, devargs, iter) \
+	for (rte_eth_iterator_init(iter, devargs), \
+	     id = rte_eth_iterator_next(iter); \
+	     id != RTE_MAX_ETHPORTS; \
+	     id = rte_eth_iterator_next(iter))
+
+/**
  * A structure used to retrieve statistics for an Ethernet port.
  * Not all statistics fields in struct rte_eth_stats are supported
  * by any type of network interface card (NIC). If any statistics
@@ -874,12 +941,6 @@ struct rte_eth_conf {
 };
 
 /**
- * A structure used to retrieve the contextual information of
- * an Ethernet device, such as the controlling driver of the device,
- * its PCI context, etc...
- */
-
-/**
  * RX offload capabilities of a device.
  */
 #define DEV_RX_OFFLOAD_VLAN_STRIP  0x00000001
@@ -894,16 +955,13 @@ struct rte_eth_conf {
 #define DEV_RX_OFFLOAD_VLAN_FILTER	0x00000200
 #define DEV_RX_OFFLOAD_VLAN_EXTEND	0x00000400
 #define DEV_RX_OFFLOAD_JUMBO_FRAME	0x00000800
-#define DEV_RX_OFFLOAD_CRC_STRIP	0x00001000
 #define DEV_RX_OFFLOAD_SCATTER		0x00002000
 #define DEV_RX_OFFLOAD_TIMESTAMP	0x00004000
 #define DEV_RX_OFFLOAD_SECURITY         0x00008000
-
-/**
- * Invalid to set both DEV_RX_OFFLOAD_CRC_STRIP and DEV_RX_OFFLOAD_KEEP_CRC
- * No DEV_RX_OFFLOAD_CRC_STRIP flag means keep CRC
- */
 #define DEV_RX_OFFLOAD_KEEP_CRC		0x00010000
+#define DEV_RX_OFFLOAD_SCTP_CKSUM	0x00020000
+#define DEV_RX_OFFLOAD_OUTER_UDP_CKSUM  0x00040000
+
 #define DEV_RX_OFFLOAD_CHECKSUM (DEV_RX_OFFLOAD_IPV4_CKSUM | \
 				 DEV_RX_OFFLOAD_UDP_CKSUM | \
 				 DEV_RX_OFFLOAD_TCP_CKSUM)
@@ -957,6 +1015,13 @@ struct rte_eth_conf {
  * for tunnel TSO.
  */
 #define DEV_TX_OFFLOAD_IP_TNL_TSO       0x00080000
+/** Device supports outer UDP checksum */
+#define DEV_TX_OFFLOAD_OUTER_UDP_CKSUM  0x00100000
+/**
+ * Device supports match on metadata Tx offload..
+ * Application must set PKT_TX_METADATA and mbuf metadata field.
+ */
+#define DEV_TX_OFFLOAD_MATCH_METADATA   0x00200000
 
 #define RTE_ETH_DEV_CAPA_RUNTIME_RX_QUEUE_SETUP 0x00000001
 /**< Device supports Rx queue setup after device started*/
@@ -1013,6 +1078,12 @@ struct rte_eth_switch_info {
 
 /**
  * Ethernet device information
+ */
+
+/**
+ * A structure used to retrieve the contextual information of
+ * an Ethernet device, such as the controlling driver of the
+ * device, etc...
  */
 struct rte_eth_dev_info {
 	struct rte_device *device; /** Generic device information */
@@ -1239,8 +1310,6 @@ enum rte_eth_dev_state {
 	RTE_ETH_DEV_UNUSED = 0,
 	/** Device is attached when allocated in probing. */
 	RTE_ETH_DEV_ATTACHED,
-	/** The deferred state is useless and replaced by ownership. */
-	RTE_ETH_DEV_DEFERRED,
 	/** Device is in removed state when plug-out is detected. */
 	RTE_ETH_DEV_REMOVED,
 };
@@ -1264,6 +1333,11 @@ struct rte_eth_dev_owner {
 	char name[RTE_ETH_MAX_OWNER_NAME_LEN]; /**< The owner name. */
 };
 
+/**
+ * Port is released (i.e. totally freed and data erased) on close.
+ * Temporary flag for PMD migration to new rte_eth_dev_close() behaviour.
+ */
+#define RTE_ETH_DEV_CLOSE_REMOVE 0x0001
 /** Device supports link state interrupt */
 #define RTE_ETH_DEV_INTR_LSC     0x0002
 /** Device is a bonded slave */
@@ -1272,6 +1346,8 @@ struct rte_eth_dev_owner {
 #define RTE_ETH_DEV_INTR_RMV     0x0008
 /** Device is port representor */
 #define RTE_ETH_DEV_REPRESENTOR  0x0010
+/** Device does not support MAC change after started */
+#define RTE_ETH_DEV_NOLIVE_MAC_ADDR  0x0020
 
 /**
  * Iterates over valid ethdev ports owned by a specific owner.
@@ -1424,37 +1500,6 @@ uint16_t rte_eth_dev_count_avail(void);
 uint16_t __rte_experimental rte_eth_dev_count_total(void);
 
 /**
- * Attach a new Ethernet device specified by arguments.
- *
- * @param devargs
- *  A pointer to a strings array describing the new device
- *  to be attached. The strings should be a pci address like
- *  '0000:01:00.0' or virtual device name like 'net_pcap0'.
- * @param port_id
- *  A pointer to a port identifier actually attached.
- * @return
- *  0 on success and port_id is filled, negative on error
- */
-__rte_deprecated
-int rte_eth_dev_attach(const char *devargs, uint16_t *port_id);
-
-/**
- * Detach a Ethernet device specified by port identifier.
- * This function must be called when the device is in the
- * closed state.
- *
- * @param port_id
- *   The port identifier of the device to detach.
- * @param devname
- *   A pointer to a buffer that will be filled with the device name.
- *   This buffer must be at least RTE_DEV_NAME_MAX_LEN long.
- * @return
- *  0 on success and devname is filled, negative on error
- */
-__rte_deprecated
-int rte_eth_dev_detach(uint16_t port_id, char *devname);
-
-/**
  * Convert a numerical speed in Mbps to a bitmap flag that can be used in
  * the bitmap link_speeds of the struct rte_eth_conf
  *
@@ -1468,9 +1513,6 @@ int rte_eth_dev_detach(uint16_t port_id, char *devname);
 uint32_t rte_eth_speed_bitflag(uint32_t speed, int duplex);
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Get DEV_RX_OFFLOAD_* flag name.
  *
  * @param offload
@@ -1478,12 +1520,9 @@ uint32_t rte_eth_speed_bitflag(uint32_t speed, int duplex);
  * @return
  *   Offload name or 'UNKNOWN' if the flag cannot be recognised.
  */
-const char * __rte_experimental rte_eth_dev_rx_offload_name(uint64_t offload);
+const char *rte_eth_dev_rx_offload_name(uint64_t offload);
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Get DEV_TX_OFFLOAD_* flag name.
  *
  * @param offload
@@ -1491,7 +1530,7 @@ const char * __rte_experimental rte_eth_dev_rx_offload_name(uint64_t offload);
  * @return
  *   Offload name or 'UNKNOWN' if the flag cannot be recognised.
  */
-const char * __rte_experimental rte_eth_dev_tx_offload_name(uint64_t offload);
+const char *rte_eth_dev_tx_offload_name(uint64_t offload);
 
 /**
  * Configure an Ethernet device.
@@ -1754,6 +1793,10 @@ int rte_eth_dev_tx_queue_stop(uint16_t port_id, uint16_t tx_queue_id);
  * The device start step is the last one and consists of setting the configured
  * offload features and in starting the transmit and the receive units of the
  * device.
+ *
+ * Device RTE_ETH_DEV_NOLIVE_MAC_ADDR flag causes MAC address to be set before
+ * PMD port start callback function is invoked.
+ *
  * On success, all basic functions exported by the Ethernet API (link status,
  * receive/transmit, and so on) can be invoked.
  *
@@ -1801,8 +1844,8 @@ int rte_eth_dev_set_link_down(uint16_t port_id);
 
 /**
  * Close a stopped Ethernet device. The device cannot be restarted!
- * The function frees all resources except for needed by the
- * closed state. To free these resources, call rte_eth_dev_detach().
+ * The function frees all port resources if the driver supports
+ * the flag RTE_ETH_DEV_CLOSE_REMOVE.
  *
  * @param port_id
  *   The port identifier of the Ethernet device.
@@ -2721,6 +2764,26 @@ int rte_eth_dev_rx_intr_ctl(uint16_t port_id, int epfd, int op, void *data);
  */
 int rte_eth_dev_rx_intr_ctl_q(uint16_t port_id, uint16_t queue_id,
 			      int epfd, int op, void *data);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Get interrupt fd per Rx queue.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param queue_id
+ *   The index of the receive queue from which to retrieve input packets.
+ *   The value must be in the range [0, nb_rx_queue - 1] previously supplied
+ *   to rte_eth_dev_configure().
+ * @return
+ *   - (>=0) the interrupt fd associated to the requested Rx queue if
+ *           successful.
+ *   - (-1) on error.
+ */
+int __rte_experimental
+rte_eth_dev_rx_intr_ctl_q_get_fd(uint16_t port_id, uint16_t queue_id);
 
 /**
  * Turn on the LED on the Ethernet device.

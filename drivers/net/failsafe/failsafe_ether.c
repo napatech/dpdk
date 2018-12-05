@@ -179,6 +179,23 @@ fs_eth_dev_conf_apply(struct rte_eth_dev *dev,
 			return ret;
 		}
 	}
+	/*
+	 * Propagate multicast MAC addresses to sub-devices,
+	 * if non zero number of addresses is set.
+	 * The condition is required to avoid breakage of failsafe
+	 * for sub-devices which do not support the operation
+	 * if the feature is really not used.
+	 */
+	if (PRIV(dev)->nb_mcast_addr > 0) {
+		DEBUG("Configuring multicast MAC addresses");
+		ret = rte_eth_dev_set_mc_addr_list(PORT_ID(sdev),
+						   PRIV(dev)->mcast_addrs,
+						   PRIV(dev)->nb_mcast_addr);
+		if (ret) {
+			ERROR("Failed to apply multicast MAC addresses");
+			return ret;
+		}
+	}
 	/* VLAN filter */
 	vfc1 = &dev->data->vlan_filter_conf;
 	vfc2 = &edev->data->vlan_filter_conf;
@@ -230,9 +247,9 @@ fs_eth_dev_conf_apply(struct rte_eth_dev *dev,
 			DEBUG("Creating flow #%" PRIu32, i++);
 			flow->flows[SUB_ID(sdev)] =
 				rte_flow_create(PORT_ID(sdev),
-						&flow->fd->attr,
-						flow->fd->items,
-						flow->fd->actions,
+						flow->rule.attr,
+						flow->rule.pattern,
+						flow->rule.actions,
 						&ferror);
 			ret = rte_errno;
 			if (ret)
@@ -265,8 +282,7 @@ fs_dev_remove(struct sub_device *sdev)
 		sdev->state = DEV_PROBED;
 		/* fallthrough */
 	case DEV_PROBED:
-		ret = rte_eal_hotplug_remove(sdev->bus->name,
-					     sdev->dev->name);
+		ret = rte_dev_remove(sdev->dev);
 		if (ret) {
 			ERROR("Bus detach failed for sub_device %u",
 			      SUB_ID(sdev));
@@ -366,6 +382,88 @@ failsafe_dev_remove(struct rte_eth_dev *dev)
 		}
 }
 
+static int
+failsafe_eth_dev_rx_queues_sync(struct rte_eth_dev *dev)
+{
+	struct rxq *rxq;
+	int ret;
+	uint16_t i;
+
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		rxq = dev->data->rx_queues[i];
+
+		if (rxq->info.conf.rx_deferred_start &&
+		    dev->data->rx_queue_state[i] ==
+						RTE_ETH_QUEUE_STATE_STARTED) {
+			/*
+			 * The subdevice Rx queue does not launch on device
+			 * start if deferred start flag is set. It needs to be
+			 * started manually in case an appropriate failsafe Rx
+			 * queue has been started earlier.
+			 */
+			ret = dev->dev_ops->rx_queue_start(dev, i);
+			if (ret) {
+				ERROR("Could not synchronize Rx queue %d", i);
+				return ret;
+			}
+		} else if (dev->data->rx_queue_state[i] ==
+						RTE_ETH_QUEUE_STATE_STOPPED) {
+			/*
+			 * The subdevice Rx queue needs to be stopped manually
+			 * in case an appropriate failsafe Rx queue has been
+			 * stopped earlier.
+			 */
+			ret = dev->dev_ops->rx_queue_stop(dev, i);
+			if (ret) {
+				ERROR("Could not synchronize Rx queue %d", i);
+				return ret;
+			}
+		}
+	}
+	return 0;
+}
+
+static int
+failsafe_eth_dev_tx_queues_sync(struct rte_eth_dev *dev)
+{
+	struct txq *txq;
+	int ret;
+	uint16_t i;
+
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		txq = dev->data->tx_queues[i];
+
+		if (txq->info.conf.tx_deferred_start &&
+		    dev->data->tx_queue_state[i] ==
+						RTE_ETH_QUEUE_STATE_STARTED) {
+			/*
+			 * The subdevice Tx queue does not launch on device
+			 * start if deferred start flag is set. It needs to be
+			 * started manually in case an appropriate failsafe Tx
+			 * queue has been started earlier.
+			 */
+			ret = dev->dev_ops->tx_queue_start(dev, i);
+			if (ret) {
+				ERROR("Could not synchronize Tx queue %d", i);
+				return ret;
+			}
+		} else if (dev->data->tx_queue_state[i] ==
+						RTE_ETH_QUEUE_STATE_STOPPED) {
+			/*
+			 * The subdevice Tx queue needs to be stopped manually
+			 * in case an appropriate failsafe Tx queue has been
+			 * stopped earlier.
+			 */
+			ret = dev->dev_ops->tx_queue_stop(dev, i);
+			if (ret) {
+				ERROR("Could not synchronize Tx queue %d", i);
+				return ret;
+			}
+		}
+	}
+	return 0;
+}
+
 int
 failsafe_eth_dev_state_sync(struct rte_eth_dev *dev)
 {
@@ -424,6 +522,12 @@ failsafe_eth_dev_state_sync(struct rte_eth_dev *dev)
 	ret = dev->dev_ops->dev_start(dev);
 	if (ret)
 		goto err_remove;
+	ret = failsafe_eth_dev_rx_queues_sync(dev);
+	if (ret)
+		goto err_remove;
+	ret = failsafe_eth_dev_tx_queues_sync(dev);
+	if (ret)
+		goto err_remove;
 	return 0;
 err_remove:
 	FOREACH_SUBDEV(sdev, i, dev)
@@ -466,7 +570,7 @@ failsafe_eth_rmv_event_callback(uint16_t port_id __rte_unused,
 	/* Switch as soon as possible tx_dev. */
 	fs_switch_dev(sdev->fs_dev, sdev);
 	/* Use safe bursts in any case. */
-	set_burst_fn(sdev->fs_dev, 1);
+	failsafe_set_burst_fn(sdev->fs_dev, 1);
 	/*
 	 * Async removal, the sub-PMD will try to unregister
 	 * the callback at the source of the current thread context.

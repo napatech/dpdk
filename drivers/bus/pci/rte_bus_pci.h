@@ -62,10 +62,12 @@ struct rte_pci_device {
 	struct rte_mem_resource mem_resource[PCI_MAX_RESOURCE];
 					    /**< PCI Memory Resource */
 	struct rte_intr_handle intr_handle; /**< Interrupt handle */
-	struct rte_pci_driver *driver;      /**< Associated driver */
+	struct rte_pci_driver *driver;      /**< PCI driver used in probing */
 	uint16_t max_vfs;                   /**< sriov enable if not zero */
 	enum rte_kernel_driver kdrv;        /**< Kernel driver passthrough */
 	char name[PCI_PRI_STR_SIZE+1];      /**< PCI location (ASCII) */
+	struct rte_intr_handle vfio_req_intr_handle;
+				/**< Handler of VFIO request interrupt */
 };
 
 /**
@@ -121,7 +123,7 @@ struct rte_pci_driver {
 	pci_probe_t *probe;                /**< Device Probe function. */
 	pci_remove_t *remove;              /**< Device Remove function. */
 	const struct rte_pci_id *id_table; /**< ID table, NULL terminated. */
-	uint32_t drv_flags;                /**< Flags contolling handling of device. */
+	uint32_t drv_flags;                /**< Flags RTE_PCI_DRV_*. */
 };
 
 /**
@@ -137,6 +139,8 @@ struct rte_pci_bus {
 #define RTE_PCI_DRV_NEED_MAPPING 0x0001
 /** Device needs PCI BAR mapping with enabled write combining (wc) */
 #define RTE_PCI_DRV_WC_ACTIVATE 0x0002
+/** Device already probed can be probed again to check for new ports. */
+#define RTE_PCI_DRV_PROBE_AGAIN 0x0004
 /** Device driver supports link state interrupt */
 #define RTE_PCI_DRV_INTR_LSC	0x0008
 /** Device driver supports device removal interrupt */
@@ -219,6 +223,8 @@ void rte_pci_unregister(struct rte_pci_driver *driver);
  *   The length of the data buffer.
  * @param offset
  *   The offset into PCI config space
+ * @return
+ *  Number of bytes read on success, negative on error.
  */
 int rte_pci_read_config(const struct rte_pci_device *device,
 		void *buf, size_t len, off_t offset);

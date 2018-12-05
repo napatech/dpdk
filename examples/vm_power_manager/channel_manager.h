@@ -37,7 +37,7 @@ struct sockaddr_un _sockaddr_un;
 #define UNIX_PATH_MAX sizeof(_sockaddr_un.sun_path)
 #endif
 
-#define MAX_VMS 4
+#define MAX_CLIENTS 64
 #define MAX_VCPUS 20
 
 
@@ -47,12 +47,19 @@ struct libvirt_vm_info {
 	uint8_t num_cpus;
 };
 
-struct libvirt_vm_info lvm_info[MAX_VMS];
+struct libvirt_vm_info lvm_info[MAX_CLIENTS];
 /* Communication Channel Status */
 enum channel_status { CHANNEL_MGR_CHANNEL_DISCONNECTED = 0,
 	CHANNEL_MGR_CHANNEL_CONNECTED,
 	CHANNEL_MGR_CHANNEL_DISABLED,
 	CHANNEL_MGR_CHANNEL_PROCESSING};
+
+/* Communication Channel Type */
+enum channel_type {
+	CHANNEL_TYPE_BINARY = 0,
+	CHANNEL_TYPE_INI,
+	CHANNEL_TYPE_JSON
+};
 
 /* VM libvirt(qemu/KVM) connection status */
 enum vm_status { CHANNEL_MGR_VM_INACTIVE = 0, CHANNEL_MGR_VM_ACTIVE};
@@ -66,6 +73,7 @@ struct channel_info {
 	volatile uint32_t status;    /**< Connection status(enum channel_status) */
 	int fd;                      /**< AF_UNIX socket fd */
 	unsigned channel_num;        /**< CHANNEL_MGR_SOCKET_PATH/<vm_name>.channel_num */
+	enum channel_type type;      /**< Binary, ini, json, etc. */
 	void *priv_info;             /**< Pointer to private info, do not modify */
 };
 
@@ -225,6 +233,15 @@ int add_all_channels(const char *vm_name);
  */
 int add_channels(const char *vm_name, unsigned *channel_list,
 		unsigned num_channels);
+
+/**
+ * Set up a fifo by which host applications can send command an policies
+ * through a fifo to the vm_power_manager
+ *
+ * @return
+ *  - 0 for success
+ */
+int add_host_channel(void);
 
 /**
  * Remove a channel definition from the channel manager. This must only be

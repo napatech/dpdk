@@ -17,6 +17,7 @@ DIRS-$(CONFIG_RTE_LIBRTE_DISTRIBUTOR) += distributor
 DIRS-y += ethtool
 DIRS-y += exception_path
 DIRS-$(CONFIG_RTE_LIBRTE_EFD) += server_node_efd
+DIRS-$(CONFIG_RTE_LIBRTE_CRYPTODEV) += fips_validation
 DIRS-$(CONFIG_RTE_LIBRTE_FLOW_CLASSIFY) += flow_classify
 DIRS-y += flow_filtering
 DIRS-y += helloworld
@@ -65,7 +66,7 @@ ifeq ($(CONFIG_RTE_LIBRTE_HASH),y)
 DIRS-$(CONFIG_RTE_LIBRTE_VHOST) += tep_termination
 endif
 DIRS-$(CONFIG_RTE_LIBRTE_TIMER) += timer
-DIRS-$(CONFIG_RTE_LIBRTE_VHOST) += vhost vhost_scsi
+DIRS-$(CONFIG_RTE_LIBRTE_VHOST) += vhost vhost_scsi vdpa
 ifeq ($(CONFIG_RTE_LIBRTE_CRYPTODEV),y)
 DIRS-$(CONFIG_RTE_LIBRTE_VHOST) += vhost_crypto
 endif

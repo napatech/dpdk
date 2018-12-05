@@ -61,6 +61,7 @@ enum fw_wr_opcodes {
 	FW_ETH_TX_PKTS_WR	= 0x09,
 	FW_ETH_TX_PKT_VM_WR	= 0x11,
 	FW_ETH_TX_PKTS_VM_WR	= 0x12,
+	FW_FILTER2_WR		= 0x77,
 	FW_ETH_TX_PKTS2_WR      = 0x78,
 };
 
@@ -165,7 +166,7 @@ enum fw_filter_wr_cookie {
 	FW_FILTER_WR_EINVAL,
 };
 
-struct fw_filter_wr {
+struct fw_filter2_wr {
 	__be32 op_pkd;
 	__be32 len16_pkd;
 	__be64 r3;
@@ -195,6 +196,19 @@ struct fw_filter_wr {
 	__be16 fpm;
 	__be16 r7;
 	__u8   sma[6];
+	__be16 r8;
+	__u8   filter_type_swapmac;
+	__u8   natmode_to_ulp_type;
+	__be16 newlport;
+	__be16 newfport;
+	__u8   newlip[16];
+	__u8   newfip[16];
+	__be32 natseqcheck;
+	__be32 r9;
+	__be64 r10;
+	__be64 r11;
+	__be64 r12;
+	__be64 r13;
 };
 
 #define S_FW_FILTER_WR_TID	12
@@ -299,6 +313,15 @@ struct fw_filter_wr {
 
 #define S_FW_FILTER_WR_MATCHTYPEM	0
 #define V_FW_FILTER_WR_MATCHTYPEM(x)	((x) << S_FW_FILTER_WR_MATCHTYPEM)
+
+#define S_FW_FILTER2_WR_SWAPMAC		0
+#define V_FW_FILTER2_WR_SWAPMAC(x)	((x) << S_FW_FILTER2_WR_SWAPMAC)
+
+#define S_FW_FILTER2_WR_NATMODE		5
+#define V_FW_FILTER2_WR_NATMODE(x)	((x) << S_FW_FILTER2_WR_NATMODE)
+
+#define S_FW_FILTER2_WR_ULP_TYPE	0
+#define V_FW_FILTER2_WR_ULP_TYPE(x)	((x) << S_FW_FILTER2_WR_ULP_TYPE)
 
 /******************************************************************************
  *  C O M M A N D s
@@ -655,6 +678,7 @@ enum fw_params_param_dev {
 	FW_PARAMS_PARAM_DEV_FWREV	= 0x0B, /* fw version */
 	FW_PARAMS_PARAM_DEV_TPREV	= 0x0C, /* tp version */
 	FW_PARAMS_PARAM_DEV_ULPTX_MEMWRITE_DSGL = 0x17,
+	FW_PARAMS_PARAM_DEV_FILTER2_WR	= 0x1D,
 };
 
 /*
@@ -665,6 +689,8 @@ enum fw_params_param_pfvf {
 	FW_PARAMS_PARAM_PFVF_CLIP_END = 0x04,
 	FW_PARAMS_PARAM_PFVF_FILTER_START = 0x05,
 	FW_PARAMS_PARAM_PFVF_FILTER_END = 0x06,
+	FW_PARAMS_PARAM_PFVF_L2T_START = 0x13,
+	FW_PARAMS_PARAM_PFVF_L2T_END = 0x14,
 	FW_PARAMS_PARAM_PFVF_CPLFW4MSG_ENCAP = 0x31,
 	FW_PARAMS_PARAM_PFVF_PORT_CAPS32 = 0x3A
 };
@@ -1280,10 +1306,15 @@ struct fw_vi_cmd {
 /* Special VI_MAC command index ids */
 #define FW_VI_MAC_ADD_MAC		0x3FF
 #define FW_VI_MAC_ADD_PERSIST_MAC	0x3FE
+#define FW_VI_MAC_ID_BASED_FREE         0x3FC
 
 enum fw_vi_mac_smac {
 	FW_VI_MAC_MPS_TCAM_ENTRY,
 	FW_VI_MAC_SMT_AND_MPSTCAM
+};
+
+enum fw_vi_mac_entry_types {
+	FW_VI_MAC_TYPE_RAW = 0x2,
 };
 
 struct fw_vi_mac_cmd {
@@ -1297,6 +1328,13 @@ struct fw_vi_mac_cmd {
 		struct fw_vi_mac_hash {
 			__be64 hashvec;
 		} hash;
+		struct fw_vi_mac_raw {
+			__be32 raw_idx_pkd;
+			__be32 data0_pkd;
+			__be32 data1[2];
+			__be64 data0m_pkd;
+			__be32 data1m[2];
+		} raw;
 	} u;
 };
 
@@ -1305,6 +1343,12 @@ struct fw_vi_mac_cmd {
 #define V_FW_VI_MAC_CMD_VIID(x)	((x) << S_FW_VI_MAC_CMD_VIID)
 #define G_FW_VI_MAC_CMD_VIID(x)	\
 	(((x) >> S_FW_VI_MAC_CMD_VIID) & M_FW_VI_MAC_CMD_VIID)
+
+#define S_FW_VI_MAC_CMD_FREEMACS	31
+#define V_FW_VI_MAC_CMD_FREEMACS(x)	((x) << S_FW_VI_MAC_CMD_FREEMACS)
+
+#define S_FW_VI_MAC_CMD_ENTRY_TYPE      23
+#define V_FW_VI_MAC_CMD_ENTRY_TYPE(x)   ((x) << S_FW_VI_MAC_CMD_ENTRY_TYPE)
 
 #define S_FW_VI_MAC_CMD_VALID		15
 #define M_FW_VI_MAC_CMD_VALID		0x1
@@ -1324,6 +1368,12 @@ struct fw_vi_mac_cmd {
 #define V_FW_VI_MAC_CMD_IDX(x)	((x) << S_FW_VI_MAC_CMD_IDX)
 #define G_FW_VI_MAC_CMD_IDX(x)	\
 	(((x) >> S_FW_VI_MAC_CMD_IDX) & M_FW_VI_MAC_CMD_IDX)
+
+#define S_FW_VI_MAC_CMD_RAW_IDX         16
+#define M_FW_VI_MAC_CMD_RAW_IDX         0xffff
+#define V_FW_VI_MAC_CMD_RAW_IDX(x)      ((x) << S_FW_VI_MAC_CMD_RAW_IDX)
+#define G_FW_VI_MAC_CMD_RAW_IDX(x)      \
+	(((x) >> S_FW_VI_MAC_CMD_RAW_IDX) & M_FW_VI_MAC_CMD_RAW_IDX)
 
 struct fw_vi_rxmode_cmd {
 	__be32 op_to_viid;

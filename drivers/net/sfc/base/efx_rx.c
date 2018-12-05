@@ -298,84 +298,104 @@ fail1:
 efx_rx_scale_hash_flags_get(
 	__in					efx_nic_t *enp,
 	__in					efx_rx_hash_alg_t hash_alg,
-	__inout_ecount(EFX_RX_HASH_NFLAGS)	unsigned int *flags,
+	__out_ecount_part(max_nflags, *nflagsp)	unsigned int *flagsp,
+	__in					unsigned int max_nflags,
 	__out					unsigned int *nflagsp)
 {
 	efx_nic_cfg_t *encp = &enp->en_nic_cfg;
-	boolean_t l4;
-	boolean_t additional_modes;
-	unsigned int *entryp = flags;
+	unsigned int nflags = 0;
 	efx_rc_t rc;
 
-	if (flags == NULL || nflagsp == NULL) {
+	if (flagsp == NULL || nflagsp == NULL) {
 		rc = EINVAL;
 		goto fail1;
 	}
 
-	l4 = encp->enc_rx_scale_l4_hash_supported;
-	additional_modes = encp->enc_rx_scale_additional_modes_supported;
-
-#define	LIST_FLAGS(_entryp, _class, _l4_hashing, _additional_modes)	\
-	do {								\
-		if (_l4_hashing) {					\
-			*(_entryp++) = EFX_RX_HASH(_class, 4TUPLE);	\
-									\
-			if (_additional_modes) {			\
-				*(_entryp++) =				\
-				    EFX_RX_HASH(_class, 2TUPLE_DST);	\
-				*(_entryp++) =				\
-				    EFX_RX_HASH(_class, 2TUPLE_SRC);	\
-			}						\
-		}							\
-									\
-		*(_entryp++) = EFX_RX_HASH(_class, 2TUPLE);		\
-									\
-		if (_additional_modes) {				\
-			*(_entryp++) = EFX_RX_HASH(_class, 1TUPLE_DST);	\
-			*(_entryp++) = EFX_RX_HASH(_class, 1TUPLE_SRC);	\
-		}							\
-									\
-		*(_entryp++) = EFX_RX_HASH(_class, DISABLE);		\
-									\
-		_NOTE(CONSTANTCONDITION)				\
-	} while (B_FALSE)
-
-	switch (hash_alg) {
-	case EFX_RX_HASHALG_PACKED_STREAM:
-		if ((encp->enc_rx_scale_hash_alg_mask & (1U << hash_alg)) == 0)
-			break;
-		/* FALLTHRU */
-	case EFX_RX_HASHALG_TOEPLITZ:
-		if ((encp->enc_rx_scale_hash_alg_mask & (1U << hash_alg)) == 0)
-			break;
-
-		LIST_FLAGS(entryp, IPV4_TCP, l4, additional_modes);
-		LIST_FLAGS(entryp, IPV6_TCP, l4, additional_modes);
-
-		if (additional_modes) {
-			LIST_FLAGS(entryp, IPV4_UDP, l4, additional_modes);
-			LIST_FLAGS(entryp, IPV6_UDP, l4, additional_modes);
-		}
-
-		LIST_FLAGS(entryp, IPV4, B_FALSE, additional_modes);
-		LIST_FLAGS(entryp, IPV6, B_FALSE, additional_modes);
-		break;
-
-	default:
-		rc = EINVAL;
-		goto fail2;
+	if ((encp->enc_rx_scale_hash_alg_mask & (1U << hash_alg)) == 0) {
+		nflags = 0;
+		goto done;
 	}
 
-#undef LIST_FLAGS
+	/* Helper to add flags word to flags array without buffer overflow */
+#define	INSERT_FLAGS(_flags)			\
+	do {					\
+		if (nflags >= max_nflags) {	\
+			rc = E2BIG;		\
+			goto fail2;		\
+		}				\
+		*(flagsp + nflags) = (_flags);	\
+		nflags++;			\
+						\
+		_NOTE(CONSTANTCONDITION)	\
+	} while (B_FALSE)
 
-	*nflagsp = (unsigned int)(entryp - flags);
-	EFSYS_ASSERT3U(*nflagsp, <=, EFX_RX_HASH_NFLAGS);
+	if (encp->enc_rx_scale_l4_hash_supported != B_FALSE) {
+		INSERT_FLAGS(EFX_RX_HASH(IPV4_TCP, 4TUPLE));
+		INSERT_FLAGS(EFX_RX_HASH(IPV6_TCP, 4TUPLE));
+	}
 
+	if ((encp->enc_rx_scale_l4_hash_supported != B_FALSE) &&
+	    (encp->enc_rx_scale_additional_modes_supported != B_FALSE)) {
+		INSERT_FLAGS(EFX_RX_HASH(IPV4_TCP, 2TUPLE_DST));
+		INSERT_FLAGS(EFX_RX_HASH(IPV4_TCP, 2TUPLE_SRC));
+
+		INSERT_FLAGS(EFX_RX_HASH(IPV6_TCP, 2TUPLE_DST));
+		INSERT_FLAGS(EFX_RX_HASH(IPV6_TCP, 2TUPLE_SRC));
+
+		INSERT_FLAGS(EFX_RX_HASH(IPV4_UDP, 4TUPLE));
+		INSERT_FLAGS(EFX_RX_HASH(IPV4_UDP, 2TUPLE_DST));
+		INSERT_FLAGS(EFX_RX_HASH(IPV4_UDP, 2TUPLE_SRC));
+
+		INSERT_FLAGS(EFX_RX_HASH(IPV6_UDP, 4TUPLE));
+		INSERT_FLAGS(EFX_RX_HASH(IPV6_UDP, 2TUPLE_DST));
+		INSERT_FLAGS(EFX_RX_HASH(IPV6_UDP, 2TUPLE_SRC));
+	}
+
+	INSERT_FLAGS(EFX_RX_HASH(IPV4_TCP, 2TUPLE));
+	INSERT_FLAGS(EFX_RX_HASH(IPV6_TCP, 2TUPLE));
+
+	INSERT_FLAGS(EFX_RX_HASH(IPV4, 2TUPLE));
+	INSERT_FLAGS(EFX_RX_HASH(IPV6, 2TUPLE));
+
+	if (encp->enc_rx_scale_additional_modes_supported != B_FALSE) {
+		INSERT_FLAGS(EFX_RX_HASH(IPV4_TCP, 1TUPLE_DST));
+		INSERT_FLAGS(EFX_RX_HASH(IPV4_TCP, 1TUPLE_SRC));
+
+		INSERT_FLAGS(EFX_RX_HASH(IPV6_TCP, 1TUPLE_DST));
+		INSERT_FLAGS(EFX_RX_HASH(IPV6_TCP, 1TUPLE_SRC));
+
+		INSERT_FLAGS(EFX_RX_HASH(IPV4_UDP, 2TUPLE));
+		INSERT_FLAGS(EFX_RX_HASH(IPV4_UDP, 1TUPLE_DST));
+		INSERT_FLAGS(EFX_RX_HASH(IPV4_UDP, 1TUPLE_SRC));
+
+		INSERT_FLAGS(EFX_RX_HASH(IPV6_UDP, 2TUPLE));
+		INSERT_FLAGS(EFX_RX_HASH(IPV6_UDP, 1TUPLE_DST));
+		INSERT_FLAGS(EFX_RX_HASH(IPV6_UDP, 1TUPLE_SRC));
+
+		INSERT_FLAGS(EFX_RX_HASH(IPV4, 1TUPLE_DST));
+		INSERT_FLAGS(EFX_RX_HASH(IPV4, 1TUPLE_SRC));
+
+		INSERT_FLAGS(EFX_RX_HASH(IPV6, 1TUPLE_DST));
+		INSERT_FLAGS(EFX_RX_HASH(IPV6, 1TUPLE_SRC));
+	}
+
+	INSERT_FLAGS(EFX_RX_HASH(IPV4_TCP, DISABLE));
+	INSERT_FLAGS(EFX_RX_HASH(IPV6_TCP, DISABLE));
+
+	INSERT_FLAGS(EFX_RX_HASH(IPV4_UDP, DISABLE));
+	INSERT_FLAGS(EFX_RX_HASH(IPV6_UDP, DISABLE));
+
+	INSERT_FLAGS(EFX_RX_HASH(IPV4, DISABLE));
+	INSERT_FLAGS(EFX_RX_HASH(IPV6, DISABLE));
+
+#undef INSERT_FLAGS
+
+done:
+	*nflagsp = nflags;
 	return (0);
 
 fail2:
 	EFSYS_PROBE(fail2);
-
 fail1:
 	EFSYS_PROBE1(fail1, efx_rc_t, rc);
 
@@ -512,9 +532,8 @@ efx_rx_scale_mode_set(
 	__in		efx_rx_hash_type_t type,
 	__in		boolean_t insert)
 {
+	efx_nic_cfg_t *encp = &enp->en_nic_cfg;
 	const efx_rx_ops_t *erxop = enp->en_erxop;
-	unsigned int type_flags[EFX_RX_HASH_NFLAGS];
-	unsigned int type_nflags;
 	efx_rx_hash_type_t type_check;
 	unsigned int i;
 	efx_rc_t rc;
@@ -533,46 +552,60 @@ efx_rx_scale_mode_set(
 	}
 
 	/*
-	 * Translate legacy flags to the new representation
-	 * so that chip-specific handlers will consider the
-	 * new flags only.
+	 * If RSS hash type is represented by additional bits
+	 * in the value, the latter need to be verified since
+	 * not all bit combinations are valid RSS modes. Also,
+	 * depending on the firmware, some valid combinations
+	 * may be unsupported. Discern additional bits in the
+	 * type value and try to recognise valid combinations.
+	 * If some bits remain unrecognised, report the error.
 	 */
-	if (type & EFX_RX_HASH_IPV4) {
-		type |= EFX_RX_HASH(IPV4, 2TUPLE);
-		type |= EFX_RX_HASH(IPV4_TCP, 2TUPLE);
-		type |= EFX_RX_HASH(IPV4_UDP, 2TUPLE);
+	type_check = type & ~EFX_RX_HASH_LEGACY_MASK;
+	if (type_check != 0) {
+		unsigned int type_flags[EFX_RX_HASH_NFLAGS];
+		unsigned int type_nflags;
+
+		rc = efx_rx_scale_hash_flags_get(enp, alg, type_flags,
+				    EFX_ARRAY_SIZE(type_flags), &type_nflags);
+		if (rc != 0)
+			goto fail2;
+
+		for (i = 0; i < type_nflags; ++i) {
+			if ((type_check & type_flags[i]) == type_flags[i])
+				type_check &= ~(type_flags[i]);
+		}
+
+		if (type_check != 0) {
+			rc = EINVAL;
+			goto fail3;
+		}
 	}
-
-	if (type & EFX_RX_HASH_TCPIPV4)
-		type |= EFX_RX_HASH(IPV4_TCP, 4TUPLE);
-
-	if (type & EFX_RX_HASH_IPV6) {
-		type |= EFX_RX_HASH(IPV6, 2TUPLE);
-		type |= EFX_RX_HASH(IPV6_TCP, 2TUPLE);
-		type |= EFX_RX_HASH(IPV6_UDP, 2TUPLE);
-	}
-
-	if (type & EFX_RX_HASH_TCPIPV6)
-		type |= EFX_RX_HASH(IPV6_TCP, 4TUPLE);
-
-	type &= ~EFX_RX_HASH_LEGACY_MASK;
-	type_check = type;
 
 	/*
-	 * Get the list of supported hash flags and sanitise the input.
+	 * Translate EFX_RX_HASH() flags to their legacy counterparts
+	 * provided that the FW claims no support for additional modes.
 	 */
-	rc = efx_rx_scale_hash_flags_get(enp, alg, type_flags, &type_nflags);
-	if (rc != 0)
-		goto fail2;
+	if (encp->enc_rx_scale_additional_modes_supported == B_FALSE) {
+		efx_rx_hash_type_t t_ipv4 = EFX_RX_HASH(IPV4, 2TUPLE) |
+					    EFX_RX_HASH(IPV4_TCP, 2TUPLE);
+		efx_rx_hash_type_t t_ipv6 = EFX_RX_HASH(IPV6, 2TUPLE) |
+					    EFX_RX_HASH(IPV6_TCP, 2TUPLE);
+		efx_rx_hash_type_t t_ipv4_tcp = EFX_RX_HASH(IPV4_TCP, 4TUPLE);
+		efx_rx_hash_type_t t_ipv6_tcp = EFX_RX_HASH(IPV6_TCP, 4TUPLE);
 
-	for (i = 0; i < type_nflags; ++i) {
-		if ((type_check & type_flags[i]) == type_flags[i])
-			type_check &= ~(type_flags[i]);
-	}
+		if ((type & t_ipv4) == t_ipv4)
+			type |= EFX_RX_HASH_IPV4;
+		if ((type & t_ipv6) == t_ipv6)
+			type |= EFX_RX_HASH_IPV6;
 
-	if (type_check != 0) {
-		rc = EINVAL;
-		goto fail3;
+		if (encp->enc_rx_scale_l4_hash_supported == B_TRUE) {
+			if ((type & t_ipv4_tcp) == t_ipv4_tcp)
+				type |= EFX_RX_HASH_TCPIPV4;
+			if ((type & t_ipv6_tcp) == t_ipv6_tcp)
+				type |= EFX_RX_HASH_TCPIPV6;
+		}
+
+		type &= EFX_RX_HASH_LEGACY_MASK;
 	}
 
 	if (erxop->erxo_scale_mode_set != NULL) {
@@ -831,7 +864,7 @@ efx_rx_qcreate_packed_stream(
 {
 	efx_rxq_type_data_t type_data;
 
-	memset(&type_data, 0, sizeof(type_data));
+	memset(&type_data, 0, sizeof (type_data));
 
 	type_data.ertd_packed_stream.eps_buf_size = ps_buf_size;
 
@@ -867,7 +900,7 @@ efx_rx_qcreate_es_super_buffer(
 		goto fail1;
 	}
 
-	memset(&type_data, 0, sizeof(type_data));
+	memset(&type_data, 0, sizeof (type_data));
 
 	type_data.ertd_es_super_buffer.eessb_bufs_per_desc = n_bufs_per_desc;
 	type_data.ertd_es_super_buffer.eessb_max_dma_len = max_dma_len;
@@ -1090,10 +1123,6 @@ siena_rx_scale_mode_set(
 	__in		efx_rx_hash_type_t type,
 	__in		boolean_t insert)
 {
-	efx_rx_hash_type_t type_ipv4 = EFX_RX_HASH(IPV4, 2TUPLE);
-	efx_rx_hash_type_t type_ipv4_tcp = EFX_RX_HASH(IPV4_TCP, 4TUPLE);
-	efx_rx_hash_type_t type_ipv6 = EFX_RX_HASH(IPV6, 2TUPLE);
-	efx_rx_hash_type_t type_ipv6_tcp = EFX_RX_HASH(IPV6_TCP, 4TUPLE);
 	efx_rc_t rc;
 
 	if (rss_context != EFX_RSS_CONTEXT_DEFAULT) {
@@ -1108,12 +1137,12 @@ siena_rx_scale_mode_set(
 
 	case EFX_RX_HASHALG_TOEPLITZ:
 		EFX_RX_TOEPLITZ_IPV4_HASH(enp, insert,
-		    (type & type_ipv4) == type_ipv4,
-		    (type & type_ipv4_tcp) == type_ipv4_tcp);
+		    (type & EFX_RX_HASH_IPV4) ? B_TRUE : B_FALSE,
+		    (type & EFX_RX_HASH_TCPIPV4) ? B_TRUE : B_FALSE);
 
 		EFX_RX_TOEPLITZ_IPV6_HASH(enp,
-		    (type & type_ipv6) == type_ipv6,
-		    (type & type_ipv6_tcp) == type_ipv6_tcp,
+		    (type & EFX_RX_HASH_IPV6) ? B_TRUE : B_FALSE,
+		    (type & EFX_RX_HASH_TCPIPV6) ? B_TRUE : B_FALSE,
 		    rc);
 		if (rc != 0)
 			goto fail2;

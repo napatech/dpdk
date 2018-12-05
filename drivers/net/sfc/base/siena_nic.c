@@ -18,11 +18,10 @@ siena_nic_get_partn_mask(
 	__out			unsigned int *maskp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_NVRAM_TYPES_IN_LEN,
-			    MC_CMD_NVRAM_TYPES_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_NVRAM_TYPES_IN_LEN,
+		MC_CMD_NVRAM_TYPES_OUT_LEN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_NVRAM_TYPES;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_NVRAM_TYPES_IN_LEN;
@@ -115,6 +114,7 @@ siena_board_cfg(
 	/* Alignment for WPTR updates */
 	encp->enc_rx_push_align = 1;
 
+#if EFSYS_OPT_RX_SCALE
 	/* There is one RSS context per function */
 	encp->enc_rx_scale_max_exclusive_contexts = 1;
 
@@ -129,6 +129,7 @@ siena_board_cfg(
 
 	/* There is no support for additional RSS modes */
 	encp->enc_rx_scale_additional_modes_supported = B_FALSE;
+#endif /* EFSYS_OPT_RX_SCALE */
 
 	encp->enc_tx_dma_desc_size_max = EFX_MASK32(FSF_AZ_TX_KER_BYTE_COUNT);
 	/* Fragments must not span 4k boundaries. */

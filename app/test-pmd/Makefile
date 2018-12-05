@@ -33,8 +33,10 @@ SRCS-y += rxonly.c
 SRCS-y += txonly.c
 SRCS-y += csumonly.c
 SRCS-y += icmpecho.c
+SRCS-y += noisy_vnf.c
 SRCS-$(CONFIG_RTE_LIBRTE_IEEE1588) += ieee1588fwd.c
 SRCS-$(CONFIG_RTE_LIBRTE_BPF) += bpf_cmd.c
+SRCS-y += util.c
 
 ifeq ($(CONFIG_RTE_LIBRTE_PMD_SOFTNIC), y)
 SRCS-y += softnicfwd.c
@@ -69,8 +71,6 @@ LDLIBS += -lrte_pmd_softnic
 endif
 
 endif
-
-CFLAGS_cmdline.o := -D_GNU_SOURCE
 
 include $(RTE_SDK)/mk/rte.app.mk
 

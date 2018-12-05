@@ -342,7 +342,9 @@ cperf_check_test_vector(struct cperf_options *opts,
 				return -1;
 			if (test_vec->ciphertext.length < opts->max_buffer_size)
 				return -1;
-			if (test_vec->cipher_iv.data == NULL)
+			/* Cipher IV is only required for some algorithms */
+			if (opts->cipher_iv_sz &&
+					test_vec->cipher_iv.data == NULL)
 				return -1;
 			if (test_vec->cipher_iv.length != opts->cipher_iv_sz)
 				return -1;
@@ -357,7 +359,9 @@ cperf_check_test_vector(struct cperf_options *opts,
 				return -1;
 			if (test_vec->plaintext.length < opts->max_buffer_size)
 				return -1;
-			if (test_vec->auth_key.data == NULL)
+			/* Auth key is only required for some algorithms */
+			if (opts->auth_key_sz &&
+					test_vec->auth_key.data == NULL)
 				return -1;
 			if (test_vec->auth_key.length != opts->auth_key_sz)
 				return -1;
@@ -420,6 +424,10 @@ cperf_check_test_vector(struct cperf_options *opts,
 		if (test_vec->ciphertext.data == NULL)
 			return -1;
 		if (test_vec->ciphertext.length < opts->max_buffer_size)
+			return -1;
+		if (test_vec->aead_key.data == NULL)
+			return -1;
+		if (test_vec->aead_key.length != opts->aead_key_sz)
 			return -1;
 		if (test_vec->aead_iv.data == NULL)
 			return -1;

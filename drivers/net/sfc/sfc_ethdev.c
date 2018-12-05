@@ -171,6 +171,9 @@ sfc_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		sa->dp_rx->get_dev_info(dev_info);
 	if (sa->dp_tx->get_dev_info != NULL)
 		sa->dp_tx->get_dev_info(dev_info);
+
+	dev_info->dev_capa = RTE_ETH_DEV_CAPA_RUNTIME_RX_QUEUE_SETUP |
+			     RTE_ETH_DEV_CAPA_RUNTIME_TX_QUEUE_SETUP;
 }
 
 static const uint32_t *
@@ -441,8 +444,6 @@ sfc_rx_queue_release(void *queue)
 
 	sfc_log_init(sa, "RxQ=%u", sw_index);
 
-	sa->eth_dev->data->rx_queues[sw_index] = NULL;
-
 	sfc_rx_qfini(sa, sw_index);
 
 	sfc_adapter_unlock(sa);
@@ -496,9 +497,6 @@ sfc_tx_queue_release(void *queue)
 	sfc_log_init(sa, "TxQ = %u", sw_index);
 
 	sfc_adapter_lock(sa);
-
-	SFC_ASSERT(sw_index < sa->eth_dev->data->nb_tx_queues);
-	sa->eth_dev->data->tx_queues[sw_index] = NULL;
 
 	sfc_tx_qfini(sa, sw_index);
 
@@ -1143,6 +1141,9 @@ sfc_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	if (sa->state != SFC_ADAPTER_STARTED)
 		goto fail_not_started;
 
+	if (sa->rxq_info[rx_queue_id].rxq == NULL)
+		goto fail_not_setup;
+
 	rc = sfc_rx_qstart(sa, rx_queue_id);
 	if (rc != 0)
 		goto fail_rx_qstart;
@@ -1154,6 +1155,7 @@ sfc_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	return 0;
 
 fail_rx_qstart:
+fail_not_setup:
 fail_not_started:
 	sfc_adapter_unlock(sa);
 	SFC_ASSERT(rc > 0);
@@ -1191,6 +1193,9 @@ sfc_tx_queue_start(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 	if (sa->state != SFC_ADAPTER_STARTED)
 		goto fail_not_started;
 
+	if (sa->txq_info[tx_queue_id].txq == NULL)
+		goto fail_not_setup;
+
 	rc = sfc_tx_qstart(sa, tx_queue_id);
 	if (rc != 0)
 		goto fail_tx_qstart;
@@ -1202,6 +1207,7 @@ sfc_tx_queue_start(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 
 fail_tx_qstart:
 
+fail_not_setup:
 fail_not_started:
 	sfc_adapter_unlock(sa);
 	SFC_ASSERT(rc > 0);
@@ -1348,13 +1354,9 @@ sfc_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 {
 	struct sfc_adapter *sa = dev->data->dev_private;
 	struct sfc_rss *rss = &sa->rss;
-	struct sfc_port *port = &sa->port;
 
-	if (rss->context_type != EFX_RX_SCALE_EXCLUSIVE || port->isolated)
+	if (rss->context_type != EFX_RX_SCALE_EXCLUSIVE)
 		return -ENOTSUP;
-
-	if (rss->channels == 0)
-		return -EINVAL;
 
 	sfc_adapter_lock(sa);
 
@@ -2032,9 +2034,6 @@ sfc_eth_dev_uninit(struct rte_eth_dev *dev)
 
 	sfc_detach(sa);
 	sfc_unprobe(sa);
-
-	rte_free(dev->data->mac_addrs);
-	dev->data->mac_addrs = NULL;
 
 	sfc_kvargs_cleanup(sa);
 

@@ -58,6 +58,7 @@ eal_long_options[] = {
 	{OPT_HELP,              0, NULL, OPT_HELP_NUM             },
 	{OPT_HUGE_DIR,          1, NULL, OPT_HUGE_DIR_NUM         },
 	{OPT_HUGE_UNLINK,       0, NULL, OPT_HUGE_UNLINK_NUM      },
+	{OPT_IOVA_MODE,	        1, NULL, OPT_IOVA_MODE_NUM        },
 	{OPT_LCORES,            1, NULL, OPT_LCORES_NUM           },
 	{OPT_LOG_LEVEL,         1, NULL, OPT_LOG_LEVEL_NUM        },
 	{OPT_MASTER_LCORE,      1, NULL, OPT_MASTER_LCORE_NUM     },
@@ -205,6 +206,7 @@ eal_reset_internal_config(struct internal_config *internal_cfg)
 #endif
 	internal_cfg->vmware_tsc_map = 0;
 	internal_cfg->create_uio_dev = 0;
+	internal_cfg->iova_mode = RTE_IOVA_DC;
 	internal_cfg->user_mbuf_pool_ops_name = NULL;
 	internal_cfg->init_complete = 0;
 }
@@ -220,7 +222,7 @@ eal_plugin_add(const char *path)
 		return -1;
 	}
 	memset(solib, 0, sizeof(*solib));
-	strncpy(solib->name, path, PATH_MAX-1);
+	strlcpy(solib->name, path, PATH_MAX-1);
 	solib->name[PATH_MAX-1] = 0;
 	TAILQ_INSERT_TAIL(&solib_list, solib, next);
 
@@ -1075,6 +1077,25 @@ eal_parse_proc_type(const char *arg)
 	return RTE_PROC_INVALID;
 }
 
+static int
+eal_parse_iova_mode(const char *name)
+{
+	int mode;
+
+	if (name == NULL)
+		return -1;
+
+	if (!strcmp("pa", name))
+		mode = RTE_IOVA_PA;
+	else if (!strcmp("va", name))
+		mode = RTE_IOVA_VA;
+	else
+		return -1;
+
+	internal_config.iova_mode = mode;
+	return 0;
+}
+
 int
 eal_parse_common_option(int opt, const char *optarg,
 			struct internal_config *conf)
@@ -1281,6 +1302,13 @@ eal_parse_common_option(int opt, const char *optarg,
 	case OPT_SINGLE_FILE_SEGMENTS_NUM:
 		conf->single_file_segments = 1;
 		break;
+	case OPT_IOVA_MODE_NUM:
+		if (eal_parse_iova_mode(optarg) < 0) {
+			RTE_LOG(ERR, EAL, "invalid parameters for --"
+				OPT_IOVA_MODE "\n");
+			return -1;
+		}
+		break;
 
 	/* don't know what to do, leave this to caller */
 	default:
@@ -1384,10 +1412,16 @@ eal_check_common_options(struct internal_config *internal_cfg)
 			" is only supported in non-legacy memory mode\n");
 	}
 	if (internal_cfg->single_file_segments &&
-			internal_cfg->hugepage_unlink) {
+			internal_cfg->hugepage_unlink &&
+			!internal_cfg->in_memory) {
 		RTE_LOG(ERR, EAL, "Option --"OPT_SINGLE_FILE_SEGMENTS" is "
-			"not compatible with neither --"OPT_IN_MEMORY" nor "
-			"--"OPT_HUGE_UNLINK"\n");
+			"not compatible with --"OPT_HUGE_UNLINK"\n");
+		return -1;
+	}
+	if (internal_cfg->legacy_mem &&
+			internal_cfg->in_memory) {
+		RTE_LOG(ERR, EAL, "Option --"OPT_LEGACY_MEM" is not compatible "
+				"with --"OPT_IN_MEMORY"\n");
 		return -1;
 	}
 
@@ -1428,6 +1462,8 @@ eal_common_usage(void)
 	       "  --"OPT_VDEV"              Add a virtual device.\n"
 	       "                      The argument format is <driver><id>[,key=val,...]\n"
 	       "                      (ex: --vdev=net_pcap0,iface=eth2).\n"
+	       "  --"OPT_IOVA_MODE"   Set IOVA mode. 'pa' for IOVA_PA\n"
+	       "                      'va' for IOVA_VA\n"
 	       "  -d LIB.so|DIR       Add a driver or driver directory\n"
 	       "                      (can be used multiple times)\n"
 	       "  --"OPT_VMWARE_TSC_MAP"    Use VMware TSC map instead of native RDTSC\n"

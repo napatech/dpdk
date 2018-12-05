@@ -47,16 +47,15 @@
 
 /* Supported Rx offloads */
 static uint64_t dev_rx_offloads_sup =
-		DEV_RX_OFFLOAD_JUMBO_FRAME;
+		DEV_RX_OFFLOAD_JUMBO_FRAME |
+		DEV_RX_OFFLOAD_SCATTER;
 
 /* Rx offloads which cannot be disabled */
 static uint64_t dev_rx_offloads_nodis =
 		DEV_RX_OFFLOAD_IPV4_CKSUM |
 		DEV_RX_OFFLOAD_UDP_CKSUM |
 		DEV_RX_OFFLOAD_TCP_CKSUM |
-		DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM |
-		DEV_RX_OFFLOAD_CRC_STRIP |
-		DEV_RX_OFFLOAD_SCATTER;
+		DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM;
 
 /* Supported Tx offloads */
 static uint64_t dev_tx_offloads_sup;
@@ -148,11 +147,30 @@ dpaa_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	struct dpaa_if *dpaa_intf = dev->data->dev_private;
 	uint32_t frame_size = mtu + ETHER_HDR_LEN + ETHER_CRC_LEN
 				+ VLAN_TAG_SIZE;
+	uint32_t buffsz = dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM;
 
 	PMD_INIT_FUNC_TRACE();
 
 	if (mtu < ETHER_MIN_MTU || frame_size > DPAA_MAX_RX_PKT_LEN)
 		return -EINVAL;
+	/*
+	 * Refuse mtu that requires the support of scattered packets
+	 * when this feature has not been enabled before.
+	 */
+	if (dev->data->min_rx_buf_size &&
+		!dev->data->scattered_rx && frame_size > buffsz) {
+		DPAA_PMD_ERR("SG not enabled, will not fit in one buffer");
+		return -EINVAL;
+	}
+
+	/* check <seg size> * <max_seg>  >= max_frame */
+	if (dev->data->min_rx_buf_size && dev->data->scattered_rx &&
+		(frame_size > buffsz * DPAA_SGT_MAX_ENTRIES)) {
+		DPAA_PMD_ERR("Too big to fit for Max SG list %d",
+				buffsz * DPAA_SGT_MAX_ENTRIES);
+		return -EINVAL;
+	}
+
 	if (frame_size > ETHER_MAX_LEN)
 		dev->data->dev_conf.rxmode.offloads &=
 						DEV_RX_OFFLOAD_JUMBO_FRAME;
@@ -194,15 +212,32 @@ dpaa_eth_dev_configure(struct rte_eth_dev *dev)
 	}
 
 	if (rx_offloads & DEV_RX_OFFLOAD_JUMBO_FRAME) {
+		uint32_t max_len;
+
+		DPAA_PMD_DEBUG("enabling jumbo");
+
 		if (dev->data->dev_conf.rxmode.max_rx_pkt_len <=
-		    DPAA_MAX_RX_PKT_LEN) {
-			fman_if_set_maxfrm(dpaa_intf->fif,
-				dev->data->dev_conf.rxmode.max_rx_pkt_len);
-			return 0;
-		} else {
-			return -1;
+		    DPAA_MAX_RX_PKT_LEN)
+			max_len = dev->data->dev_conf.rxmode.max_rx_pkt_len;
+		else {
+			DPAA_PMD_INFO("enabling jumbo override conf max len=%d "
+				"supported is %d",
+				dev->data->dev_conf.rxmode.max_rx_pkt_len,
+				DPAA_MAX_RX_PKT_LEN);
+			max_len = DPAA_MAX_RX_PKT_LEN;
 		}
+
+		fman_if_set_maxfrm(dpaa_intf->fif, max_len);
+		dev->data->mtu = max_len
+				- ETHER_HDR_LEN - ETHER_CRC_LEN - VLAN_TAG_SIZE;
 	}
+
+	if (rx_offloads & DEV_RX_OFFLOAD_SCATTER) {
+		DPAA_PMD_DEBUG("enabling scatter mode");
+		fman_if_set_sg(dpaa_intf->fif, 1);
+		dev->data->scattered_rx = 1;
+	}
+
 	return 0;
 }
 
@@ -300,15 +335,21 @@ static void dpaa_eth_dev_info(struct rte_eth_dev *dev,
 
 	dev_info->max_rx_queues = dpaa_intf->nb_rx_queues;
 	dev_info->max_tx_queues = dpaa_intf->nb_tx_queues;
-	dev_info->min_rx_bufsize = DPAA_MIN_RX_BUF_SIZE;
 	dev_info->max_rx_pktlen = DPAA_MAX_RX_PKT_LEN;
 	dev_info->max_mac_addrs = DPAA_MAX_MAC_FILTER;
 	dev_info->max_hash_mac_addrs = 0;
 	dev_info->max_vfs = 0;
 	dev_info->max_vmdq_pools = ETH_16_POOLS;
 	dev_info->flow_type_rss_offloads = DPAA_RSS_OFFLOAD_ALL;
-	dev_info->speed_capa = (ETH_LINK_SPEED_1G |
-				ETH_LINK_SPEED_10G);
+
+	if (dpaa_intf->fif->mac_type == fman_mac_1g)
+		dev_info->speed_capa = ETH_LINK_SPEED_1G;
+	else if (dpaa_intf->fif->mac_type == fman_mac_10g)
+		dev_info->speed_capa = (ETH_LINK_SPEED_1G | ETH_LINK_SPEED_10G);
+	else
+		DPAA_PMD_ERR("invalid link_speed: %s, %d",
+			     dpaa_intf->name, dpaa_intf->fif->mac_type);
+
 	dev_info->rx_offload_capa = dev_rx_offloads_sup |
 					dev_rx_offloads_nodis;
 	dev_info->tx_offload_capa = dev_tx_offloads_sup |
@@ -514,6 +555,7 @@ int dpaa_eth_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	struct qm_mcc_initfq opts = {0};
 	u32 flags = 0;
 	int ret;
+	u32 buffsz = rte_pktmbuf_data_room_size(mp) - RTE_PKTMBUF_HEADROOM;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -526,6 +568,28 @@ int dpaa_eth_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 
 	DPAA_PMD_INFO("Rx queue setup for queue index: %d fq_id (0x%x)",
 			queue_idx, rxq->fqid);
+
+	/* Max packet can fit in single buffer */
+	if (dev->data->dev_conf.rxmode.max_rx_pkt_len <= buffsz) {
+		;
+	} else if (dev->data->dev_conf.rxmode.offloads &
+			DEV_RX_OFFLOAD_SCATTER) {
+		if (dev->data->dev_conf.rxmode.max_rx_pkt_len >
+			buffsz * DPAA_SGT_MAX_ENTRIES) {
+			DPAA_PMD_ERR("max RxPkt size %d too big to fit "
+				"MaxSGlist %d",
+				dev->data->dev_conf.rxmode.max_rx_pkt_len,
+				buffsz * DPAA_SGT_MAX_ENTRIES);
+			rte_errno = EOVERFLOW;
+			return -rte_errno;
+		}
+	} else {
+		DPAA_PMD_WARN("The requested maximum Rx packet size (%u) is"
+		     " larger than a single mbuf (%u) and scattered"
+		     " mode has not been requested",
+		     dev->data->dev_conf.rxmode.max_rx_pkt_len,
+		     buffsz - RTE_PKTMBUF_HEADROOM);
+	}
 
 	if (!dpaa_intf->bp_info || dpaa_intf->bp_info->mp != mp) {
 		struct fman_if_ic_params icp;
@@ -553,10 +617,13 @@ int dpaa_eth_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 		fman_if_set_bp(dpaa_intf->fif, mp->size,
 			       dpaa_intf->bp_info->bpid, bp_size);
 		dpaa_intf->valid = 1;
-		DPAA_PMD_INFO("if =%s - fd_offset = %d offset = %d",
-			    dpaa_intf->name, fd_offset,
-			fman_if_get_fdoff(dpaa_intf->fif));
+		DPAA_PMD_DEBUG("if:%s fd_offset = %d offset = %d",
+				dpaa_intf->name, fd_offset,
+				fman_if_get_fdoff(dpaa_intf->fif));
 	}
+	DPAA_PMD_DEBUG("if:%s sg_on = %d, max_frm =%d", dpaa_intf->name,
+		fman_if_get_sg_enable(dpaa_intf->fif),
+		dev->data->dev_conf.rxmode.max_rx_pkt_len);
 	/* checking if push mode only, no error check for now */
 	if (dpaa_push_mode_max_queue > dpaa_push_queue_idx) {
 		dpaa_push_queue_idx++;
@@ -594,8 +661,13 @@ int dpaa_eth_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 				"ret:%d(%s)", rxq->fqid, ret, strerror(ret));
 			return ret;
 		}
-		rxq->cb.dqrr_dpdk_pull_cb = dpaa_rx_cb;
-		rxq->cb.dqrr_prepare = dpaa_rx_cb_prepare;
+		if (dpaa_svr_family == SVR_LS1043A_FAMILY) {
+			rxq->cb.dqrr_dpdk_pull_cb = dpaa_rx_cb_no_prefetch;
+		} else {
+			rxq->cb.dqrr_dpdk_pull_cb = dpaa_rx_cb;
+			rxq->cb.dqrr_prepare = dpaa_rx_cb_prepare;
+		}
+
 		rxq->is_static = true;
 	}
 	dev->data->rx_queues[queue_idx] = rxq;
@@ -630,7 +702,8 @@ dpaa_eth_eventq_attach(const struct rte_eth_dev *dev,
 	struct qm_mcc_initfq opts = {0};
 
 	if (dpaa_push_mode_max_queue)
-		DPAA_PMD_WARN("PUSH mode already enabled for first %d queues.\n"
+		DPAA_PMD_WARN("PUSH mode q and EVENTDEV are not compatible\n"
+			      "PUSH mode already enabled for first %d queues.\n"
 			      "To disable set DPAA_PUSH_QUEUES_NUMBER to 0\n",
 			      dpaa_push_mode_max_queue);
 
@@ -1012,7 +1085,7 @@ static int dpaa_rx_queue_init(struct qman_fq *fq, struct qman_cgr *cgr_rx,
 {
 	struct qm_mcc_initfq opts = {0};
 	int ret;
-	u32 flags = 0;
+	u32 flags = QMAN_FQ_FLAG_NO_ENQUEUE;
 	struct qm_mcc_initcgr cgr_opts = {
 		.we_mask = QM_CGR_WE_CS_THRES |
 				QM_CGR_WE_CSTD_EN |
@@ -1025,15 +1098,18 @@ static int dpaa_rx_queue_init(struct qman_fq *fq, struct qman_cgr *cgr_rx,
 
 	PMD_INIT_FUNC_TRACE();
 
-	ret = qman_reserve_fqid(fqid);
-	if (ret) {
-		DPAA_PMD_ERR("reserve rx fqid 0x%x failed with ret: %d",
-			     fqid, ret);
-		return -EINVAL;
+	if (fqid) {
+		ret = qman_reserve_fqid(fqid);
+		if (ret) {
+			DPAA_PMD_ERR("reserve rx fqid 0x%x failed with ret: %d",
+				     fqid, ret);
+			return -EINVAL;
+		}
+	} else {
+		flags |= QMAN_FQ_FLAG_DYNAMIC_FQID;
 	}
-
 	DPAA_PMD_DEBUG("creating rx fq %p, fqid 0x%x", fq, fqid);
-	ret = qman_create_fq(fqid, QMAN_FQ_FLAG_NO_ENQUEUE, fq);
+	ret = qman_create_fq(fqid, flags, fq);
 	if (ret) {
 		DPAA_PMD_ERR("create rx fqid 0x%x failed with ret: %d",
 			fqid, ret);
@@ -1052,7 +1128,7 @@ static int dpaa_rx_queue_init(struct qman_fq *fq, struct qman_cgr *cgr_rx,
 		if (ret) {
 			DPAA_PMD_WARN(
 				"rx taildrop init fail on rx fqid 0x%x(ret=%d)",
-				fqid, ret);
+				fq->fqid, ret);
 			goto without_cgr;
 		}
 		opts.we_mask |= QM_INITFQ_WE_CGID;
@@ -1060,7 +1136,7 @@ static int dpaa_rx_queue_init(struct qman_fq *fq, struct qman_cgr *cgr_rx,
 		opts.fqd.fq_ctrl |= QM_FQCTRL_CGE;
 	}
 without_cgr:
-	ret = qman_init_fq(fq, flags, &opts);
+	ret = qman_init_fq(fq, 0, &opts);
 	if (ret)
 		DPAA_PMD_ERR("init rx fqid 0x%x failed with ret:%d", fqid, ret);
 	return ret;
@@ -1213,7 +1289,7 @@ dpaa_dev_init(struct rte_eth_dev *eth_dev)
 		if (default_q)
 			fqid = cfg->rx_def;
 		else
-			fqid = DPAA_PCD_FQID_START + dpaa_intf->ifid *
+			fqid = DPAA_PCD_FQID_START + dpaa_intf->fif->mac_idx *
 				DPAA_PCD_FQID_MULTIPLIER + loop;
 
 		if (dpaa_intf->cgr_rx)
@@ -1304,6 +1380,9 @@ dpaa_dev_init(struct rte_eth_dev *eth_dev)
 	fman_if_reset_mcast_filter_table(fman_intf);
 	/* Reset interface statistics */
 	fman_if_stats_reset(fman_intf);
+	/* Disable SG by default */
+	fman_if_set_sg(fman_intf, 0);
+	fman_if_set_maxfrm(fman_intf, ETHER_MAX_LEN + VLAN_TAG_SIZE);
 
 	return 0;
 
@@ -1360,10 +1439,6 @@ dpaa_dev_uninit(struct rte_eth_dev *dev)
 	rte_free(dpaa_intf->tx_queues);
 	dpaa_intf->tx_queues = NULL;
 
-	/* free memory for storing MAC addresses */
-	rte_free(dev->data->mac_addrs);
-	dev->data->mac_addrs = NULL;
-
 	dev->dev_ops = NULL;
 	dev->rx_pkt_burst = NULL;
 	dev->tx_pkt_burst = NULL;
@@ -1372,7 +1447,7 @@ dpaa_dev_uninit(struct rte_eth_dev *dev)
 }
 
 static int
-rte_dpaa_probe(struct rte_dpaa_driver *dpaa_drv,
+rte_dpaa_probe(struct rte_dpaa_driver *dpaa_drv __rte_unused,
 	       struct rte_dpaa_device *dpaa_dev)
 {
 	int diag;
@@ -1456,7 +1531,6 @@ rte_dpaa_probe(struct rte_dpaa_driver *dpaa_drv,
 	}
 
 	eth_dev->device = &dpaa_dev->device;
-	eth_dev->device->driver = &dpaa_drv->driver;
 	dpaa_dev->eth_dev = eth_dev;
 
 	/* Invoke PMD device initialization function */
@@ -1465,9 +1539,6 @@ rte_dpaa_probe(struct rte_dpaa_driver *dpaa_drv,
 		rte_eth_dev_probing_finish(eth_dev);
 		return 0;
 	}
-
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
-		rte_free(eth_dev->data->dev_private);
 
 	rte_eth_dev_release_port(eth_dev);
 	return diag;
@@ -1482,9 +1553,6 @@ rte_dpaa_remove(struct rte_dpaa_device *dpaa_dev)
 
 	eth_dev = dpaa_dev->eth_dev;
 	dpaa_dev_uninit(eth_dev);
-
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
-		rte_free(eth_dev->data->dev_private);
 
 	rte_eth_dev_release_port(eth_dev);
 

@@ -23,16 +23,16 @@ build_map_changes()
 		# does not end in 'map', indicating we have left the map chunk.
 		# When we hit this, turn off the in_map variable, which
 		# supresses the subordonate rules below
-		/[-+] a\/.*\.^(map)/ {in_map=0}
+		/[-+] a\/.*\.[^map]/ {in_map=0}
 
-		# Triggering this rule, which starts a line with a + and ends it
+		# Triggering this rule, which starts a line and ends it
 		# with a { identifies a versioned section.  The section name is
 		# the rest of the line with the + and { symbols remvoed.
 		# Triggering this rule sets in_sec to 1, which actives the
 		# symbol rule below
-		/+.*{/ {gsub("+","");
+		/^.*{/ {
 			if (in_map == 1) {
-				sec=$1; in_sec=1;
+				sec=$(NF-1); in_sec=1;
 			}
 		}
 
@@ -140,7 +140,7 @@ check_for_rule_violations()
 
 trap clean_and_exit_on_sig EXIT
 
-mapfile=`mktemp mapdb.XXXXXX`
+mapfile=`mktemp -t dpdk.mapdb.XXXXXX`
 patch=$1
 exit_code=1
 
@@ -153,7 +153,6 @@ clean_and_exit_on_sig()
 build_map_changes "$patch" "$mapfile"
 check_for_rule_violations "$mapfile"
 exit_code=$?
-
 rm -f "$mapfile"
 
 exit $exit_code

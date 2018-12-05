@@ -111,7 +111,9 @@ parse_ipv4(struct ipv4_hdr *ipv4_hdr, struct testpmd_offload_info *info)
 	if (info->l4_proto == IPPROTO_TCP) {
 		tcp_hdr = (struct tcp_hdr *)((char *)ipv4_hdr + info->l3_len);
 		info->l4_len = (tcp_hdr->data_off & 0xf0) >> 2;
-	} else
+	} else if (info->l4_proto == IPPROTO_UDP)
+		info->l4_len = sizeof(struct udp_hdr);
+	else
 		info->l4_len = 0;
 }
 
@@ -128,7 +130,9 @@ parse_ipv6(struct ipv6_hdr *ipv6_hdr, struct testpmd_offload_info *info)
 	if (info->l4_proto == IPPROTO_TCP) {
 		tcp_hdr = (struct tcp_hdr *)((char *)ipv6_hdr + info->l3_len);
 		info->l4_len = (tcp_hdr->data_off & 0xf0) >> 2;
-	} else
+	} else if (info->l4_proto == IPPROTO_UDP)
+		info->l4_len = sizeof(struct udp_hdr);
+	else
 		info->l4_len = 0;
 }
 
@@ -468,10 +472,15 @@ process_outer_cksums(void *outer_l3_hdr, struct testpmd_offload_info *info,
 	if (info->outer_l4_proto != IPPROTO_UDP)
 		return ol_flags;
 
+	/* Skip SW outer UDP checksum generation if HW supports it */
+	if (tx_offloads & DEV_TX_OFFLOAD_OUTER_UDP_CKSUM) {
+		ol_flags |= PKT_TX_OUTER_UDP_CKSUM;
+		return ol_flags;
+	}
+
 	udp_hdr = (struct udp_hdr *)((char *)outer_l3_hdr + info->outer_l3_len);
 
-	/* outer UDP checksum is done in software as we have no hardware
-	 * supporting it today, and no API for it. In the other side, for
+	/* outer UDP checksum is done in software. In the other side, for
 	 * UDP tunneling, like VXLAN or Geneve, outer UDP checksum can be
 	 * set to zero.
 	 *
@@ -696,6 +705,7 @@ pkt_burst_checksum_forward(struct fwd_stream *fs)
 	uint32_t retry;
 	uint32_t rx_bad_ip_csum;
 	uint32_t rx_bad_l4_csum;
+	uint32_t rx_bad_outer_l4_csum;
 	struct testpmd_offload_info info;
 	uint16_t nb_segments = 0;
 	int ret;
@@ -721,6 +731,7 @@ pkt_burst_checksum_forward(struct fwd_stream *fs)
 	fs->rx_packets += nb_rx;
 	rx_bad_ip_csum = 0;
 	rx_bad_l4_csum = 0;
+	rx_bad_outer_l4_csum = 0;
 	gro_enable = gro_ports[fs->rx_port].enable;
 
 	txp = &ports[fs->tx_port];
@@ -748,6 +759,8 @@ pkt_burst_checksum_forward(struct fwd_stream *fs)
 			rx_bad_ip_csum += 1;
 		if ((rx_ol_flags & PKT_RX_L4_CKSUM_MASK) == PKT_RX_L4_CKSUM_BAD)
 			rx_bad_l4_csum += 1;
+		if (rx_ol_flags & PKT_RX_OUTER_L4_CKSUM_BAD)
+			rx_bad_outer_l4_csum += 1;
 
 		/* step 1: dissect packet, parsing optional vlan, ip4/ip6, vxlan
 		 * and inner headers */
@@ -826,6 +839,8 @@ pkt_burst_checksum_forward(struct fwd_stream *fs)
 			if (info.tunnel_tso_segsz ||
 			    (tx_offloads &
 			     DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM) ||
+			    (tx_offloads &
+			     DEV_TX_OFFLOAD_OUTER_UDP_CKSUM) ||
 			    (tx_ol_flags & PKT_TX_OUTER_IPV6)) {
 				m->outer_l2_len = info.outer_l2_len;
 				m->outer_l3_len = info.outer_l3_len;
@@ -898,6 +913,8 @@ pkt_burst_checksum_forward(struct fwd_stream *fs)
 			if (info.is_tunnel == 1) {
 				if ((tx_offloads &
 				    DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM) ||
+				    (tx_offloads &
+				    DEV_TX_OFFLOAD_OUTER_UDP_CKSUM) ||
 				    (tx_ol_flags & PKT_TX_OUTER_IPV6))
 					printf("tx: m->outer_l2_len=%d "
 						"m->outer_l3_len=%d\n",
@@ -982,6 +999,7 @@ pkt_burst_checksum_forward(struct fwd_stream *fs)
 	fs->tx_packets += nb_tx;
 	fs->rx_bad_ip_csum += rx_bad_ip_csum;
 	fs->rx_bad_l4_csum += rx_bad_l4_csum;
+	fs->rx_bad_outer_l4_csum += rx_bad_outer_l4_csum;
 
 #ifdef RTE_TEST_PMD_RECORD_BURST_STATS
 	fs->tx_burst_stats.pkt_burst_spread[nb_tx]++;

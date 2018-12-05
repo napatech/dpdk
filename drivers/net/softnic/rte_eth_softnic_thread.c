@@ -1680,6 +1680,8 @@ softnic_pipeline_table_mtr_profile_add(struct pmd_internals *softnic,
 	struct pipeline *p;
 	struct pipeline_msg_req *req;
 	struct pipeline_msg_rsp *rsp;
+	struct softnic_table *table;
+	struct softnic_table_meter_profile *mp;
 	int status;
 
 	/* Check input params */
@@ -1692,20 +1694,40 @@ softnic_pipeline_table_mtr_profile_add(struct pmd_internals *softnic,
 		table_id >= p->n_tables)
 		return -1;
 
-	if (!pipeline_is_running(p)) {
-		struct rte_table_action *a = p->table[table_id].a;
+	table = &p->table[table_id];
+	mp = softnic_pipeline_table_meter_profile_find(table, meter_profile_id);
+	if (mp)
+		return -1;
 
-		status = rte_table_action_meter_profile_add(a,
+	/* Resource Allocation */
+	mp = calloc(1, sizeof(struct softnic_table_meter_profile));
+	if (mp == NULL)
+		return -1;
+
+	mp->meter_profile_id = meter_profile_id;
+	memcpy(&mp->profile, profile, sizeof(mp->profile));
+
+	if (!pipeline_is_running(p)) {
+		status = rte_table_action_meter_profile_add(table->a,
 			meter_profile_id,
 			profile);
+		if (status) {
+			free(mp);
+			return status;
+		}
+
+		/* Add profile to the table. */
+		TAILQ_INSERT_TAIL(&table->meter_profiles, mp, node);
 
 		return status;
 	}
 
 	/* Allocate request */
 	req = pipeline_msg_alloc();
-	if (req == NULL)
+	if (req == NULL) {
+		free(mp);
 		return -1;
+	}
 
 	/* Write request */
 	req->type = PIPELINE_REQ_TABLE_MTR_PROFILE_ADD;
@@ -1715,11 +1737,17 @@ softnic_pipeline_table_mtr_profile_add(struct pmd_internals *softnic,
 
 	/* Send request and wait for response */
 	rsp = pipeline_msg_send_recv(p, req);
-	if (rsp == NULL)
+	if (rsp == NULL) {
+		free(mp);
 		return -1;
+	}
 
 	/* Read response */
 	status = rsp->status;
+	if (status == 0)
+		TAILQ_INSERT_TAIL(&table->meter_profiles, mp, node);
+	else
+		free(mp);
 
 	/* Free response */
 	pipeline_msg_free(rsp);
@@ -1874,6 +1902,11 @@ softnic_pipeline_table_dscp_table_update(struct pmd_internals *softnic,
 				dscp_mask,
 				dscp_table);
 
+		/* Update table dscp table */
+		if (!status)
+			memcpy(&p->table[table_id].dscp_table, dscp_table,
+				sizeof(p->table[table_id].dscp_table));
+
 		return status;
 	}
 
@@ -1896,6 +1929,11 @@ softnic_pipeline_table_dscp_table_update(struct pmd_internals *softnic,
 
 	/* Read response */
 	status = rsp->status;
+
+	/* Update table dscp table */
+	if (!status)
+		memcpy(&p->table[table_id].dscp_table, dscp_table,
+			sizeof(p->table[table_id].dscp_table));
 
 	/* Free response */
 	pipeline_msg_free(rsp);
@@ -2202,29 +2240,37 @@ match_convert(struct softnic_table_rule_match *mh,
 				ml->acl_add.field_value[0].mask_range.u8 =
 					mh->match.acl.proto_mask;
 
-				ml->acl_add.field_value[1].value.u32 = sa32[0];
+				ml->acl_add.field_value[1].value.u32 =
+					rte_be_to_cpu_32(sa32[0]);
 				ml->acl_add.field_value[1].mask_range.u32 =
 					sa32_depth[0];
-				ml->acl_add.field_value[2].value.u32 = sa32[1];
+				ml->acl_add.field_value[2].value.u32 =
+					rte_be_to_cpu_32(sa32[1]);
 				ml->acl_add.field_value[2].mask_range.u32 =
 					sa32_depth[1];
-				ml->acl_add.field_value[3].value.u32 = sa32[2];
+				ml->acl_add.field_value[3].value.u32 =
+					rte_be_to_cpu_32(sa32[2]);
 				ml->acl_add.field_value[3].mask_range.u32 =
 					sa32_depth[2];
-				ml->acl_add.field_value[4].value.u32 = sa32[3];
+				ml->acl_add.field_value[4].value.u32 =
+					rte_be_to_cpu_32(sa32[3]);
 				ml->acl_add.field_value[4].mask_range.u32 =
 					sa32_depth[3];
 
-				ml->acl_add.field_value[5].value.u32 = da32[0];
+				ml->acl_add.field_value[5].value.u32 =
+					rte_be_to_cpu_32(da32[0]);
 				ml->acl_add.field_value[5].mask_range.u32 =
 					da32_depth[0];
-				ml->acl_add.field_value[6].value.u32 = da32[1];
+				ml->acl_add.field_value[6].value.u32 =
+					rte_be_to_cpu_32(da32[1]);
 				ml->acl_add.field_value[6].mask_range.u32 =
 					da32_depth[1];
-				ml->acl_add.field_value[7].value.u32 = da32[2];
+				ml->acl_add.field_value[7].value.u32 =
+					rte_be_to_cpu_32(da32[2]);
 				ml->acl_add.field_value[7].mask_range.u32 =
 					da32_depth[2];
-				ml->acl_add.field_value[8].value.u32 = da32[3];
+				ml->acl_add.field_value[8].value.u32 =
+					rte_be_to_cpu_32(da32[3]);
 				ml->acl_add.field_value[8].mask_range.u32 =
 					da32_depth[3];
 
@@ -2264,36 +2310,36 @@ match_convert(struct softnic_table_rule_match *mh,
 					mh->match.acl.proto_mask;
 
 				ml->acl_delete.field_value[1].value.u32 =
-					sa32[0];
+					rte_be_to_cpu_32(sa32[0]);
 				ml->acl_delete.field_value[1].mask_range.u32 =
 					sa32_depth[0];
 				ml->acl_delete.field_value[2].value.u32 =
-					sa32[1];
+					rte_be_to_cpu_32(sa32[1]);
 				ml->acl_delete.field_value[2].mask_range.u32 =
 					sa32_depth[1];
 				ml->acl_delete.field_value[3].value.u32 =
-					sa32[2];
+					rte_be_to_cpu_32(sa32[2]);
 				ml->acl_delete.field_value[3].mask_range.u32 =
 					sa32_depth[2];
 				ml->acl_delete.field_value[4].value.u32 =
-					sa32[3];
+					rte_be_to_cpu_32(sa32[3]);
 				ml->acl_delete.field_value[4].mask_range.u32 =
 					sa32_depth[3];
 
 				ml->acl_delete.field_value[5].value.u32 =
-					da32[0];
+					rte_be_to_cpu_32(da32[0]);
 				ml->acl_delete.field_value[5].mask_range.u32 =
 					da32_depth[0];
 				ml->acl_delete.field_value[6].value.u32 =
-					da32[1];
+					rte_be_to_cpu_32(da32[1]);
 				ml->acl_delete.field_value[6].mask_range.u32 =
 					da32_depth[1];
 				ml->acl_delete.field_value[7].value.u32 =
-					da32[2];
+					rte_be_to_cpu_32(da32[2]);
 				ml->acl_delete.field_value[7].mask_range.u32 =
 					da32_depth[2];
 				ml->acl_delete.field_value[8].value.u32 =
-					da32[3];
+					rte_be_to_cpu_32(da32[3]);
 				ml->acl_delete.field_value[8].mask_range.u32 =
 					da32_depth[3];
 
@@ -2427,6 +2473,36 @@ action_convert(struct rte_table_action *a,
 			data,
 			RTE_TABLE_ACTION_TIME,
 			&action->time);
+
+		if (status)
+			return status;
+	}
+
+	if (action->action_mask & (1LLU << RTE_TABLE_ACTION_TAG)) {
+		status = rte_table_action_apply(a,
+			data,
+			RTE_TABLE_ACTION_TAG,
+			&action->tag);
+
+		if (status)
+			return status;
+	}
+
+	if (action->action_mask & (1LLU << RTE_TABLE_ACTION_DECAP)) {
+		status = rte_table_action_apply(a,
+			data,
+			RTE_TABLE_ACTION_DECAP,
+			&action->decap);
+
+		if (status)
+			return status;
+	}
+
+	if (action->action_mask & (1LLU << RTE_TABLE_ACTION_SYM_CRYPTO)) {
+		status = rte_table_action_apply(a,
+			data,
+			RTE_TABLE_ACTION_SYM_CRYPTO,
+			&action->sym_crypto);
 
 		if (status)
 			return status;

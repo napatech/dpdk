@@ -8,14 +8,12 @@ DPDK_2.2 {
 	rte_eth_allmulticast_get;
 	rte_eth_dev_allocate;
 	rte_eth_dev_allocated;
-	rte_eth_dev_attach;
 	rte_eth_dev_callback_register;
 	rte_eth_dev_callback_unregister;
 	rte_eth_dev_close;
 	rte_eth_dev_configure;
 	rte_eth_dev_count;
 	rte_eth_dev_default_mac_addr_set;
-	rte_eth_dev_detach;
 	rte_eth_dev_filter_supported;
 	rte_eth_dev_flow_ctrl_get;
 	rte_eth_dev_flow_ctrl_set;
@@ -220,6 +218,17 @@ DPDK_18.08 {
 
 } DPDK_18.05;
 
+DPDK_18.11 {
+	global:
+
+	rte_eth_dev_rx_offload_name;
+	rte_eth_dev_tx_offload_name;
+	rte_eth_iterator_cleanup;
+	rte_eth_iterator_init;
+	rte_eth_iterator_next;
+
+} DPDK_18.08;
+
 EXPERIMENTAL {
 	global:
 
@@ -235,10 +244,10 @@ EXPERIMENTAL {
 	rte_eth_dev_owner_new;
 	rte_eth_dev_owner_set;
 	rte_eth_dev_owner_unset;
-	rte_eth_dev_rx_offload_name;
-	rte_eth_dev_tx_offload_name;
+	rte_eth_dev_rx_intr_ctl_q_get_fd;
 	rte_eth_switch_domain_alloc;
 	rte_eth_switch_domain_free;
+	rte_flow_conv;
 	rte_flow_expand_rss;
 	rte_mtr_capabilities_get;
 	rte_mtr_create;

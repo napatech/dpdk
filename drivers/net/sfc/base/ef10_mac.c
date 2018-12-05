@@ -22,10 +22,10 @@ ef10_mac_poll(
 	if ((rc = ef10_phy_get_link(enp, &els)) != 0)
 		goto fail1;
 
-	epp->ep_adv_cap_mask = els.els_adv_cap_mask;
-	epp->ep_fcntl = els.els_fcntl;
+	epp->ep_adv_cap_mask = els.epls.epls_adv_cap_mask;
+	epp->ep_fcntl = els.epls.epls_fcntl;
 
-	*link_modep = els.els_link_mode;
+	*link_modep = els.epls.epls_link_mode;
 
 	return (0);
 
@@ -75,11 +75,10 @@ efx_mcdi_vadapter_set_mac(
 {
 	efx_port_t *epp = &(enp->en_port);
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_VADAPTOR_SET_MAC_IN_LEN,
-			    MC_CMD_VADAPTOR_SET_MAC_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_VADAPTOR_SET_MAC_IN_LEN,
+		MC_CMD_VADAPTOR_SET_MAC_OUT_LEN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_VADAPTOR_SET_MAC;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_VADAPTOR_SET_MAC_IN_LEN;
@@ -141,11 +140,10 @@ efx_mcdi_mtu_set(
 	__in		uint32_t mtu)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_SET_MAC_EXT_IN_LEN,
-			    MC_CMD_SET_MAC_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_SET_MAC_EXT_IN_LEN,
+		MC_CMD_SET_MAC_OUT_LEN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_SET_MAC;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_SET_MAC_EXT_IN_LEN;
@@ -178,11 +176,10 @@ efx_mcdi_mtu_get(
 	__out		size_t *mtu)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_SET_MAC_EXT_IN_LEN,
-			    MC_CMD_SET_MAC_V2_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_SET_MAC_EXT_IN_LEN,
+		MC_CMD_SET_MAC_V2_OUT_LEN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_SET_MAC;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_SET_MAC_EXT_IN_LEN;
@@ -274,11 +271,10 @@ ef10_mac_reconfigure(
 {
 	efx_port_t *epp = &(enp->en_port);
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_SET_MAC_IN_LEN,
-			    MC_CMD_SET_MAC_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_SET_MAC_IN_LEN,
+		MC_CMD_SET_MAC_OUT_LEN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_SET_MAC;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_SET_MAC_IN_LEN;
@@ -412,7 +408,7 @@ ef10_mac_filter_default_rxq_clear(
 
 	ef10_filter_default_rxq_clear(enp);
 
-	efx_filter_reconfigure(enp, epp->ep_mac_addr,
+	(void) efx_filter_reconfigure(enp, epp->ep_mac_addr,
 				    epp->ep_all_unicst, epp->ep_mulcst,
 				    epp->ep_all_mulcst, epp->ep_brdcst,
 				    epp->ep_mulcst_addr_list,
@@ -654,7 +650,7 @@ ef10_mac_stats_update(
 	EF10_MAC_STAT_READ(esmp, MC_CMD_MAC_TX_LT64_PKTS, &value);
 	EFSYS_STAT_SET_QWORD(&(stat[EFX_MAC_TX_LE_64_PKTS]), &value);
 	EF10_MAC_STAT_READ(esmp, MC_CMD_MAC_TX_64_PKTS, &value);
-	EFSYS_STAT_SET_QWORD(&(stat[EFX_MAC_TX_LE_64_PKTS]), &value);
+	EFSYS_STAT_INCR_QWORD(&(stat[EFX_MAC_TX_LE_64_PKTS]), &value);
 
 	EF10_MAC_STAT_READ(esmp, MC_CMD_MAC_TX_65_TO_127_PKTS, &value);
 	EFSYS_STAT_SET_QWORD(&(stat[EFX_MAC_TX_65_TO_127_PKTS]), &value);

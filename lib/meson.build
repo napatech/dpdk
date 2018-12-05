@@ -9,13 +9,14 @@
 # given as a dep, no need to mention ring. This is especially true for the
 # core libs which are widely reused, so their deps are kept to a minimum.
 libraries = [ 'compat', # just a header, used for versioning
-	'kvargs',
+	'cmdline', # ethdev depends on cmdline for parsing functions
+	'kvargs', # eal depends on kvargs
 	'eal', 'ring', 'mempool', 'mbuf', 'net', 'ethdev', 'pci', # core
 	'metrics', # bitrate/latency stats depends on this
 	'hash',    # efd depends on this
 	'timer',   # eventdev depends on this
 	'acl', 'bbdev', 'bitratestats', 'cfgfile',
-	'cmdline', 'compressdev', 'cryptodev',
+	'compressdev', 'cryptodev',
 	'distributor', 'efd', 'eventdev',
 	'gro', 'gso', 'ip_frag', 'jobstats',
 	'kni', 'latencystats', 'lpm', 'member',
@@ -24,12 +25,18 @@ libraries = [ 'compat', # just a header, used for versioning
 	# add pkt framework libs which use other libs from above
 	'port', 'table', 'pipeline',
 	# flow_classify lib depends on pkt framework table lib
-	'flow_classify', 'bpf']
+	'flow_classify', 'bpf', 'telemetry']
 
 default_cflags = machine_args
 if cc.has_argument('-Wno-format-truncation')
 	default_cflags += '-Wno-format-truncation'
 endif
+
+enabled_libs = [] # used to print summary at the end
+
+# -D_GNU_SOURCE unconditionally
+default_cflags += '-D_GNU_SOURCE'
+
 foreach l:libraries
 	build = true
 	name = l
@@ -45,18 +52,17 @@ foreach l:libraries
 	# use "deps" for internal DPDK dependencies, and "ext_deps" for
 	# external package/library requirements
 	ext_deps = []
-	deps = ['eal']   # eal is standard dependency except for itself
-	if l == 'kvargs'
-		deps = []
-	endif
-	if l == 'eal'
-		deps = ['kvargs']
+	deps = []
+	# eal is standard dependency once built
+	if dpdk_conf.has('RTE_LIBRTE_EAL')
+		deps += ['eal']
 	endif
 
 	dir_name = 'librte_' + l
 	subdir(dir_name)
 
 	if build
+		enabled_libs += name
 		dpdk_conf.set('RTE_LIBRTE_' + name.to_upper(), 1)
 		install_headers(headers)
 
@@ -87,10 +93,8 @@ foreach l:libraries
 				lib_version = '@0@.1'.format(version)
 				so_version = '@0@'.format(version)
 			else
-				prj_ver = meson.project_version().split('.')
-				lib_version = '@0@.@1@'.format(
-						prj_ver.get(0), prj_ver.get(1))
-				so_version = lib_version
+				lib_version = major_version
+				so_version = major_version
 			endif
 
 			# first build static lib
@@ -126,6 +130,7 @@ foreach l:libraries
 					dependencies: shared_deps)
 
 			dpdk_libraries = [shared_lib] + dpdk_libraries
+			dpdk_static_libraries = [static_lib] + dpdk_static_libraries
 		endif # sources.length() > 0
 
 		set_variable('shared_' + libname, shared_dep)

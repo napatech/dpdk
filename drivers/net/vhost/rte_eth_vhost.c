@@ -30,6 +30,7 @@ enum {VIRTIO_RXQ, VIRTIO_TXQ, VIRTIO_QNUM};
 #define ETH_VHOST_CLIENT_ARG		"client"
 #define ETH_VHOST_DEQUEUE_ZERO_COPY	"dequeue-zero-copy"
 #define ETH_VHOST_IOMMU_SUPPORT		"iommu-support"
+#define ETH_VHOST_POSTCOPY_SUPPORT	"postcopy-support"
 #define VHOST_MAX_PKT_BURST 32
 
 static const char *valid_arguments[] = {
@@ -38,6 +39,7 @@ static const char *valid_arguments[] = {
 	ETH_VHOST_CLIENT_ARG,
 	ETH_VHOST_DEQUEUE_ZERO_COPY,
 	ETH_VHOST_IOMMU_SUPPORT,
+	ETH_VHOST_POSTCOPY_SUPPORT,
 	NULL
 };
 
@@ -1070,8 +1072,7 @@ eth_dev_info(struct rte_eth_dev *dev,
 
 	dev_info->tx_offload_capa = DEV_TX_OFFLOAD_MULTI_SEGS |
 				DEV_TX_OFFLOAD_VLAN_INSERT;
-	dev_info->rx_offload_capa = DEV_RX_OFFLOAD_VLAN_STRIP |
-				    DEV_RX_OFFLOAD_CRC_STRIP;
+	dev_info->rx_offload_capa = DEV_RX_OFFLOAD_VLAN_STRIP;
 }
 
 static int
@@ -1221,10 +1222,12 @@ eth_dev_vhost_create(struct rte_vdev_device *dev, char *iface_name,
 	eth_dev = rte_eth_vdev_allocate(dev, sizeof(*internal));
 	if (eth_dev == NULL)
 		goto error;
+	data = eth_dev->data;
 
 	eth_addr = rte_zmalloc_socket(name, sizeof(*eth_addr), 0, numa_node);
 	if (eth_addr == NULL)
 		goto error;
+	data->mac_addrs = eth_addr;
 	*eth_addr = base_eth_addr;
 	eth_addr->addr_bytes[5] = eth_dev->data->port_id;
 
@@ -1254,13 +1257,11 @@ eth_dev_vhost_create(struct rte_vdev_device *dev, char *iface_name,
 	rte_spinlock_init(&vring_state->lock);
 	vring_states[eth_dev->data->port_id] = vring_state;
 
-	data = eth_dev->data;
 	data->nb_rx_queues = queues;
 	data->nb_tx_queues = queues;
 	internal->max_queues = queues;
 	internal->vid = -1;
 	data->dev_link = pmd_link;
-	data->mac_addrs = eth_addr;
 	data->dev_flags = RTE_ETH_DEV_INTR_LSC;
 
 	eth_dev->dev_ops = &ops;
@@ -1292,10 +1293,7 @@ error:
 		free(internal->dev_name);
 	}
 	rte_free(vring_state);
-	rte_free(eth_addr);
-	if (eth_dev)
-		rte_eth_dev_release_port(eth_dev);
-	rte_free(internal);
+	rte_eth_dev_release_port(eth_dev);
 	rte_free(list);
 
 	return -1;
@@ -1340,13 +1338,13 @@ rte_pmd_vhost_probe(struct rte_vdev_device *dev)
 	int client_mode = 0;
 	int dequeue_zero_copy = 0;
 	int iommu_support = 0;
+	int postcopy_support = 0;
 	struct rte_eth_dev *eth_dev;
 	const char *name = rte_vdev_device_name(dev);
 
 	VHOST_LOG(INFO, "Initializing pmd_vhost for %s\n", name);
 
-	if (rte_eal_process_type() == RTE_PROC_SECONDARY &&
-	    strlen(rte_vdev_device_args(dev)) == 0) {
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
 		eth_dev = rte_eth_dev_attach_secondary(name);
 		if (!eth_dev) {
 			VHOST_LOG(ERR, "Failed to probe %s\n", name);
@@ -1412,6 +1410,16 @@ rte_pmd_vhost_probe(struct rte_vdev_device *dev)
 			flags |= RTE_VHOST_USER_IOMMU_SUPPORT;
 	}
 
+	if (rte_kvargs_count(kvlist, ETH_VHOST_POSTCOPY_SUPPORT) == 1) {
+		ret = rte_kvargs_process(kvlist, ETH_VHOST_POSTCOPY_SUPPORT,
+					 &open_int, &postcopy_support);
+		if (ret < 0)
+			goto out_free;
+
+		if (postcopy_support)
+			flags |= RTE_VHOST_USER_POSTCOPY_SUPPORT;
+	}
+
 	if (dev->device.numa_node == SOCKET_ID_ANY)
 		dev->device.numa_node = rte_socket_id();
 
@@ -1437,6 +1445,9 @@ rte_pmd_vhost_remove(struct rte_vdev_device *dev)
 	if (eth_dev == NULL)
 		return -ENODEV;
 
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return rte_eth_dev_release_port(eth_dev);
+
 	eth_dev_close(eth_dev);
 
 	rte_free(vring_states[eth_dev->data->port_id]);
@@ -1456,7 +1467,11 @@ RTE_PMD_REGISTER_VDEV(net_vhost, pmd_vhost_drv);
 RTE_PMD_REGISTER_ALIAS(net_vhost, eth_vhost);
 RTE_PMD_REGISTER_PARAM_STRING(net_vhost,
 	"iface=<ifc> "
-	"queues=<int>");
+	"queues=<int> "
+	"client=<0|1> "
+	"dequeue-zero-copy=<0|1> "
+	"iommu-support=<0|1> "
+	"postcopy-support=<0|1>");
 
 RTE_INIT(vhost_init_log)
 {

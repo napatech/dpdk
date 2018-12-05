@@ -51,6 +51,7 @@ enum {
 	PCI_DEVICE_ID_MELLANOX_CONNECTX5EX = 0x1019,
 	PCI_DEVICE_ID_MELLANOX_CONNECTX5EXVF = 0x101a,
 	PCI_DEVICE_ID_MELLANOX_CONNECTX5BF = 0xa2d2,
+	PCI_DEVICE_ID_MELLANOX_CONNECTX5BFVF = 0xa2d3,
 };
 
 /** Switch information returned by mlx5_nl_switch_info(). */
@@ -71,12 +72,23 @@ struct mlx5_shared_data {
 
 extern struct mlx5_shared_data *mlx5_shared_data;
 
+struct mlx5_counter_ctrl {
+	/* Name of the counter. */
+	char dpdk_name[RTE_ETH_XSTATS_NAME_SIZE];
+	/* Name of the counter on the device table. */
+	char ctr_name[RTE_ETH_XSTATS_NAME_SIZE];
+	uint32_t ib:1; /**< Nonzero for IB counters. */
+};
+
 struct mlx5_xstats_ctrl {
 	/* Number of device stats. */
 	uint16_t stats_n;
+	/* Number of device stats identified by PMD. */
+	uint16_t  mlx5_stats_n;
 	/* Index in the device counters table. */
 	uint16_t dev_table_idx[MLX5_MAX_XSTATS];
 	uint64_t base[MLX5_MAX_XSTATS];
+	struct mlx5_counter_ctrl info[MLX5_MAX_XSTATS];
 };
 
 /* Flow list . */
@@ -99,18 +111,18 @@ struct mlx5_dev_config {
 	unsigned int hw_fcs_strip:1; /* FCS stripping is supported. */
 	unsigned int hw_padding:1; /* End alignment padding is supported. */
 	unsigned int vf:1; /* This is a VF. */
-	unsigned int mps:2; /* Multi-packet send supported mode. */
 	unsigned int tunnel_en:1;
 	/* Whether tunnel stateless offloads are supported. */
 	unsigned int mpls_en:1; /* MPLS over GRE/UDP is enabled. */
-	unsigned int flow_counter_en:1; /* Whether flow counter is supported. */
 	unsigned int cqe_comp:1; /* CQE compression is enabled. */
+	unsigned int cqe_pad:1; /* CQE padding is enabled. */
 	unsigned int tso:1; /* Whether TSO is supported. */
 	unsigned int tx_vec_en:1; /* Tx vector is enabled. */
 	unsigned int rx_vec_en:1; /* Rx vector is enabled. */
 	unsigned int mpw_hdr_dseg:1; /* Enable DSEGs in the title WQEBB. */
 	unsigned int l3_vxlan_en:1; /* Enable L3 VXLAN flow creation. */
 	unsigned int vf_nl_en:1; /* Enable Netlink requests in VF mode. */
+	unsigned int dv_flow_en:1; /* Enable DV flow. */
 	unsigned int swp:1; /* Tx generic tunnel checksum and TSO offload. */
 	struct {
 		unsigned int enabled:1; /* Whether MPRQ is enabled. */
@@ -122,11 +134,13 @@ struct mlx5_dev_config {
 		unsigned int min_rxqs_num;
 		/* Rx queue count threshold to enable MPRQ. */
 	} mprq; /* Configurations for Multi-Packet RQ. */
+	int mps; /* Multi-packet send supported mode. */
 	unsigned int flow_prio; /* Number of flow priorities. */
 	unsigned int tso_max_payload_sz; /* Maximum TCP payload for TSO. */
 	unsigned int ind_table_max_size; /* Maximum indirection table size. */
 	int txq_inline; /* Maximum packet size for inlining. */
 	int txqs_inline; /* Queue number threshold for inlining. */
+	int txqs_vec; /* Queue number threshold for vectorized Tx. */
 	int inline_max_packet_sz; /* Max packet size for inlining. */
 };
 
@@ -156,13 +170,7 @@ struct mlx5_drop {
 	struct mlx5_rxq_ibv *rxq; /* Verbs Rx queue. */
 };
 
-/** DPDK port to network interface index (ifindex) conversion. */
-struct mlx5_nl_flow_ptoi {
-	uint16_t port_id; /**< DPDK port ID. */
-	unsigned int ifindex; /**< Network interface index. */
-};
-
-struct mnl_socket;
+struct mlx5_flow_tcf_context;
 
 struct priv {
 	LIST_ENTRY(priv) mem_event_cb; /* Called by memory event callback. */
@@ -212,6 +220,8 @@ struct priv {
 	LIST_HEAD(txqibv, mlx5_txq_ibv) txqsibv; /* Verbs Tx queues. */
 	/* Verbs Indirection tables. */
 	LIST_HEAD(ind_tables, mlx5_ind_table_ibv) ind_tbls;
+	LIST_HEAD(matchers, mlx5_flow_dv_matcher) matchers;
+	LIST_HEAD(encap_decap, mlx5_flow_dv_encap_decap_resource) encaps_decaps;
 	uint32_t link_speed_capa; /* Link speed capabilities. */
 	struct mlx5_xstats_ctrl xstats_ctrl; /* Extended stats control. */
 	int primary_socket; /* Unix socket for primary process. */
@@ -228,7 +238,7 @@ struct priv {
 	rte_spinlock_t uar_lock[MLX5_UAR_PAGE_NUM_MAX];
 	/* UAR same-page access control required in 32bit implementations. */
 #endif
-	struct mnl_socket *mnl_socket; /* Libmnl socket. */
+	struct mlx5_flow_tcf_context *tcf_context; /* TC flower context. */
 };
 
 #define PORT_ID(priv) ((priv)->dev_data->port_id)
@@ -240,12 +250,9 @@ int mlx5_getenv_int(const char *);
 
 /* mlx5_ethdev.c */
 
-int mlx5_get_master_ifname(const struct rte_eth_dev *dev,
-			   char (*ifname)[IF_NAMESIZE]);
 int mlx5_get_ifname(const struct rte_eth_dev *dev, char (*ifname)[IF_NAMESIZE]);
 unsigned int mlx5_ifindex(const struct rte_eth_dev *dev);
-int mlx5_ifreq(const struct rte_eth_dev *dev, int req, struct ifreq *ifr,
-	       int master);
+int mlx5_ifreq(const struct rte_eth_dev *dev, int req, struct ifreq *ifr);
 int mlx5_get_mtu(struct rte_eth_dev *dev, uint16_t *mtu);
 int mlx5_set_flags(struct rte_eth_dev *dev, unsigned int keep,
 		   unsigned int flags);
@@ -395,24 +402,5 @@ int mlx5_nl_allmulti(struct rte_eth_dev *dev, int enable);
 unsigned int mlx5_nl_ifindex(int nl, const char *name);
 int mlx5_nl_switch_info(int nl, unsigned int ifindex,
 			struct mlx5_switch_info *info);
-
-/* mlx5_nl_flow.c */
-
-int mlx5_nl_flow_transpose(void *buf,
-			   size_t size,
-			   const struct mlx5_nl_flow_ptoi *ptoi,
-			   const struct rte_flow_attr *attr,
-			   const struct rte_flow_item *pattern,
-			   const struct rte_flow_action *actions,
-			   struct rte_flow_error *error);
-void mlx5_nl_flow_brand(void *buf, uint32_t handle);
-int mlx5_nl_flow_create(struct mnl_socket *nl, void *buf,
-			struct rte_flow_error *error);
-int mlx5_nl_flow_destroy(struct mnl_socket *nl, void *buf,
-			 struct rte_flow_error *error);
-int mlx5_nl_flow_init(struct mnl_socket *nl, unsigned int ifindex,
-		      struct rte_flow_error *error);
-struct mnl_socket *mlx5_nl_flow_socket_create(void);
-void mlx5_nl_flow_socket_destroy(struct mnl_socket *nl);
 
 #endif /* RTE_PMD_MLX5_H_ */

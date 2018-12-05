@@ -11,10 +11,10 @@
 #include <rte_bus_vdev.h>
 #include <rte_malloc.h>
 #include <rte_cpuflags.h>
+#include <rte_kvargs.h>
+#include <rte_mvep_common.h>
 
 #include "rte_mrvl_pmd_private.h"
-
-#define MRVL_MUSDK_DMA_MEMSIZE 41943040
 
 #define MRVL_PMD_MAX_NB_SESS_ARG		("max_nb_sessions")
 #define MRVL_PMD_DEFAULT_MAX_NB_SESSIONS	2048
@@ -68,6 +68,9 @@ __rte_aligned(32);
  */
 static const
 struct cipher_params_mapping cipher_map[RTE_CRYPTO_CIPHER_LIST_END] = {
+	[RTE_CRYPTO_CIPHER_NULL] = {
+		.supported = ALGO_SUPPORTED,
+		.cipher_alg = SAM_CIPHER_NONE },
 	[RTE_CRYPTO_CIPHER_3DES_CBC] = {
 		.supported = ALGO_SUPPORTED,
 		.cipher_alg = SAM_CIPHER_3DES,
@@ -93,6 +96,11 @@ struct cipher_params_mapping cipher_map[RTE_CRYPTO_CIPHER_LIST_END] = {
 		.cipher_alg = SAM_CIPHER_AES,
 		.cipher_mode = SAM_CIPHER_CTR,
 		.max_key_len = BITS2BYTES(256) },
+	[RTE_CRYPTO_CIPHER_AES_ECB] = {
+		.supported = ALGO_SUPPORTED,
+		.cipher_alg = SAM_CIPHER_AES,
+		.cipher_mode = SAM_CIPHER_ECB,
+		.max_key_len = BITS2BYTES(256) },
 };
 
 /**
@@ -100,6 +108,9 @@ struct cipher_params_mapping cipher_map[RTE_CRYPTO_CIPHER_LIST_END] = {
  */
 static const
 struct auth_params_mapping auth_map[RTE_CRYPTO_AUTH_LIST_END] = {
+	[RTE_CRYPTO_AUTH_NULL] = {
+		.supported = ALGO_SUPPORTED,
+		.auth_alg = SAM_AUTH_NONE },
 	[RTE_CRYPTO_AUTH_MD5_HMAC] = {
 		.supported = ALGO_SUPPORTED,
 		.auth_alg = SAM_AUTH_HMAC_MD5 },
@@ -112,6 +123,9 @@ struct auth_params_mapping auth_map[RTE_CRYPTO_AUTH_LIST_END] = {
 	[RTE_CRYPTO_AUTH_SHA1] = {
 		.supported = ALGO_SUPPORTED,
 		.auth_alg = SAM_AUTH_HASH_SHA1 },
+	[RTE_CRYPTO_AUTH_SHA224_HMAC] = {
+		.supported = ALGO_SUPPORTED,
+		.auth_alg = SAM_AUTH_HMAC_SHA2_224 },
 	[RTE_CRYPTO_AUTH_SHA224] = {
 		.supported = ALGO_SUPPORTED,
 		.auth_alg = SAM_AUTH_HASH_SHA2_224 },
@@ -210,7 +224,7 @@ mrvl_crypto_set_cipher_session_parameters(struct mrvl_crypto_session *sess,
 {
 	/* Make sure we've got proper struct */
 	if (cipher_xform->type != RTE_CRYPTO_SYM_XFORM_CIPHER) {
-		MRVL_CRYPTO_LOG_ERR("Wrong xform struct provided!");
+		MRVL_LOG(ERR, "Wrong xform struct provided!");
 		return -EINVAL;
 	}
 
@@ -218,7 +232,7 @@ mrvl_crypto_set_cipher_session_parameters(struct mrvl_crypto_session *sess,
 	if ((cipher_xform->cipher.algo > RTE_DIM(cipher_map)) ||
 		(cipher_map[cipher_xform->cipher.algo].supported
 			!= ALGO_SUPPORTED)) {
-		MRVL_CRYPTO_LOG_ERR("Cipher algorithm not supported!");
+		MRVL_LOG(ERR, "Cipher algorithm not supported!");
 		return -EINVAL;
 	}
 
@@ -238,7 +252,7 @@ mrvl_crypto_set_cipher_session_parameters(struct mrvl_crypto_session *sess,
 	/* Get max key length. */
 	if (cipher_xform->cipher.key.length >
 		cipher_map[cipher_xform->cipher.algo].max_key_len) {
-		MRVL_CRYPTO_LOG_ERR("Wrong key length!");
+		MRVL_LOG(ERR, "Wrong key length!");
 		return -EINVAL;
 	}
 
@@ -261,14 +275,14 @@ mrvl_crypto_set_auth_session_parameters(struct mrvl_crypto_session *sess,
 {
 	/* Make sure we've got proper struct */
 	if (auth_xform->type != RTE_CRYPTO_SYM_XFORM_AUTH) {
-		MRVL_CRYPTO_LOG_ERR("Wrong xform struct provided!");
+		MRVL_LOG(ERR, "Wrong xform struct provided!");
 		return -EINVAL;
 	}
 
 	/* See if map data is present and valid */
 	if ((auth_xform->auth.algo > RTE_DIM(auth_map)) ||
 		(auth_map[auth_xform->auth.algo].supported != ALGO_SUPPORTED)) {
-		MRVL_CRYPTO_LOG_ERR("Auth algorithm not supported!");
+		MRVL_LOG(ERR, "Auth algorithm not supported!");
 		return -EINVAL;
 	}
 
@@ -300,7 +314,7 @@ mrvl_crypto_set_aead_session_parameters(struct mrvl_crypto_session *sess,
 {
 	/* Make sure we've got proper struct */
 	if (aead_xform->type != RTE_CRYPTO_SYM_XFORM_AEAD) {
-		MRVL_CRYPTO_LOG_ERR("Wrong xform struct provided!");
+		MRVL_LOG(ERR, "Wrong xform struct provided!");
 		return -EINVAL;
 	}
 
@@ -308,7 +322,7 @@ mrvl_crypto_set_aead_session_parameters(struct mrvl_crypto_session *sess,
 	if ((aead_xform->aead.algo > RTE_DIM(aead_map)) ||
 		(aead_map[aead_xform->aead.algo].supported
 			!= ALGO_SUPPORTED)) {
-		MRVL_CRYPTO_LOG_ERR("AEAD algorithm not supported!");
+		MRVL_LOG(ERR, "AEAD algorithm not supported!");
 		return -EINVAL;
 	}
 
@@ -326,7 +340,7 @@ mrvl_crypto_set_aead_session_parameters(struct mrvl_crypto_session *sess,
 	/* Get max key length. */
 	if (aead_xform->aead.key.length >
 		aead_map[aead_xform->aead.algo].max_key_len) {
-		MRVL_CRYPTO_LOG_ERR("Wrong key length!");
+		MRVL_LOG(ERR, "Wrong key length!");
 		return -EINVAL;
 	}
 
@@ -391,21 +405,21 @@ mrvl_crypto_set_session_parameters(struct mrvl_crypto_session *sess,
 	if ((cipher_xform != NULL) &&
 		(mrvl_crypto_set_cipher_session_parameters(
 			sess, cipher_xform) < 0)) {
-		MRVL_CRYPTO_LOG_ERR("Invalid/unsupported cipher parameters");
+		MRVL_LOG(ERR, "Invalid/unsupported cipher parameters!");
 		return -EINVAL;
 	}
 
 	if ((auth_xform != NULL) &&
 		(mrvl_crypto_set_auth_session_parameters(
 			sess, auth_xform) < 0)) {
-		MRVL_CRYPTO_LOG_ERR("Invalid/unsupported auth parameters");
+		MRVL_LOG(ERR, "Invalid/unsupported auth parameters!");
 		return -EINVAL;
 	}
 
 	if ((aead_xform != NULL) &&
 		(mrvl_crypto_set_aead_session_parameters(
 			sess, aead_xform) < 0)) {
-		MRVL_CRYPTO_LOG_ERR("Invalid/unsupported aead parameters");
+		MRVL_LOG(ERR, "Invalid/unsupported aead parameters!");
 		return -EINVAL;
 	}
 
@@ -437,12 +451,14 @@ mrvl_request_prepare(struct sam_cio_op_params *request,
 		struct rte_crypto_op *op)
 {
 	struct mrvl_crypto_session *sess;
-	struct rte_mbuf *dst_mbuf;
+	struct rte_mbuf *src_mbuf, *dst_mbuf;
+	uint16_t segments_nb;
 	uint8_t *digest;
+	int i;
 
 	if (unlikely(op->sess_type == RTE_CRYPTO_OP_SESSIONLESS)) {
-		MRVL_CRYPTO_LOG_ERR("MRVL CRYPTO PMD only supports session "
-				"oriented requests, op (%p) is sessionless.",
+		MRVL_LOG(ERR, "MRVL CRYPTO PMD only supports session "
+				"oriented requests, op (%p) is sessionless!",
 				op);
 		return -EINVAL;
 	}
@@ -450,39 +466,56 @@ mrvl_request_prepare(struct sam_cio_op_params *request,
 	sess = (struct mrvl_crypto_session *)get_sym_session_private_data(
 			op->sym->session, cryptodev_driver_id);
 	if (unlikely(sess == NULL)) {
-		MRVL_CRYPTO_LOG_ERR("Session was not created for this device");
+		MRVL_LOG(ERR, "Session was not created for this device!");
 		return -EINVAL;
 	}
 
-	/*
+	request->sa = sess->sam_sess;
+	request->cookie = op;
+
+	src_mbuf = op->sym->m_src;
+	segments_nb = src_mbuf->nb_segs;
+	/* The following conditions must be met:
+	 * - Destination buffer is required when segmented source buffer
+	 * - Segmented destination buffer is not supported
+	 */
+	if ((segments_nb > 1) && (!op->sym->m_dst)) {
+		MRVL_LOG(ERR, "op->sym->m_dst = NULL!");
+		return -1;
+	}
+	/* For non SG case:
 	 * If application delivered us null dst buffer, it means it expects
 	 * us to deliver the result in src buffer.
 	 */
 	dst_mbuf = op->sym->m_dst ? op->sym->m_dst : op->sym->m_src;
 
-	request->sa = sess->sam_sess;
-	request->cookie = op;
-
-	/* Single buffers only, sorry. */
-	request->num_bufs = 1;
-	request->src = src_bd;
-	src_bd->vaddr = rte_pktmbuf_mtod(op->sym->m_src, void *);
-	src_bd->paddr = rte_pktmbuf_iova(op->sym->m_src);
-	src_bd->len = rte_pktmbuf_data_len(op->sym->m_src);
-
-	/* Empty source. */
-	if (rte_pktmbuf_data_len(op->sym->m_src) == 0) {
-		/* EIP does not support 0 length buffers. */
-		MRVL_CRYPTO_LOG_ERR("Buffer length == 0 not supported!");
+	if (!rte_pktmbuf_is_contiguous(dst_mbuf)) {
+		MRVL_LOG(ERR, "Segmented destination buffer not supported!");
 		return -1;
 	}
+
+	request->num_bufs = segments_nb;
+	for (i = 0; i < segments_nb; i++) {
+		/* Empty source. */
+		if (rte_pktmbuf_data_len(src_mbuf) == 0) {
+			/* EIP does not support 0 length buffers. */
+			MRVL_LOG(ERR, "Buffer length == 0 not supported!");
+			return -1;
+		}
+		src_bd[i].vaddr = rte_pktmbuf_mtod(src_mbuf, void *);
+		src_bd[i].paddr = rte_pktmbuf_iova(src_mbuf);
+		src_bd[i].len = rte_pktmbuf_data_len(src_mbuf);
+
+		src_mbuf = src_mbuf->next;
+	}
+	request->src = src_bd;
 
 	/* Empty destination. */
 	if (rte_pktmbuf_data_len(dst_mbuf) == 0) {
 		/* Make dst buffer fit at least source data. */
 		if (rte_pktmbuf_append(dst_mbuf,
 			rte_pktmbuf_data_len(op->sym->m_src)) == NULL) {
-			MRVL_CRYPTO_LOG_ERR("Unable to set big enough dst buffer!");
+			MRVL_LOG(ERR, "Unable to set big enough dst buffer!");
 			return -1;
 		}
 	}
@@ -527,7 +560,7 @@ mrvl_request_prepare(struct sam_cio_op_params *request,
 
 	/*
 	 * EIP supports only scenarios where ICV(digest buffer) is placed at
-	 * auth_icv_offset. Any other placement means risking errors.
+	 * auth_icv_offset.
 	 */
 	if (sess->sam_sess_params.dir == SAM_DIR_ENCRYPT) {
 		/*
@@ -536,17 +569,36 @@ mrvl_request_prepare(struct sam_cio_op_params *request,
 		 */
 		if (rte_pktmbuf_mtod_offset(
 				dst_mbuf, uint8_t *,
-				request->auth_icv_offset) == digest) {
+				request->auth_icv_offset) == digest)
 			return 0;
-		}
 	} else {/* sess->sam_sess_params.dir == SAM_DIR_DECRYPT */
 		/*
 		 * EIP will look for digest at auth_icv_offset
-		 * offset in SRC buffer.
+		 * offset in SRC buffer. It must be placed in the last
+		 * segment and the offset must be set to reach digest
+		 * in the last segment
 		 */
-		if (rte_pktmbuf_mtod_offset(
-				op->sym->m_src, uint8_t *,
-				request->auth_icv_offset) == digest) {
+		struct rte_mbuf *last_seg =  op->sym->m_src;
+		uint32_t d_offset = request->auth_icv_offset;
+		u32 d_size = sess->sam_sess_params.u.basic.auth_icv_len;
+		unsigned char *d_ptr;
+
+		/* Find the last segment and the offset for the last segment */
+		while ((last_seg->next != NULL) &&
+				(d_offset >= last_seg->data_len)) {
+			d_offset -= last_seg->data_len;
+			last_seg = last_seg->next;
+		}
+
+		if (rte_pktmbuf_mtod_offset(last_seg, uint8_t *,
+					    d_offset) == digest)
+			return 0;
+
+		/* copy digest to last segment */
+		if (last_seg->buf_len >= (d_size + d_offset)) {
+			d_ptr = (unsigned char *)last_seg->buf_addr +
+				 d_offset;
+			rte_memcpy(d_ptr, digest, d_size);
 			return 0;
 		}
 	}
@@ -582,11 +634,10 @@ mrvl_crypto_pmd_enqueue_burst(void *queue_pair, struct rte_crypto_op **ops,
 	int ret;
 	struct sam_cio_op_params requests[nb_ops];
 	/*
-	 * DPDK uses single fragment buffers, so we can KISS descriptors.
 	 * SAM does not store bd pointers, so on-stack scope will be enough.
 	 */
-	struct sam_buf_info src_bd[nb_ops];
-	struct sam_buf_info dst_bd[nb_ops];
+	struct mrvl_crypto_src_table src_bd[nb_ops];
+	struct sam_buf_info          dst_bd[nb_ops];
 	struct mrvl_crypto_qp *qp = (struct mrvl_crypto_qp *)queue_pair;
 
 	if (nb_ops == 0)
@@ -594,15 +645,17 @@ mrvl_crypto_pmd_enqueue_burst(void *queue_pair, struct rte_crypto_op **ops,
 
 	/* Prepare the burst. */
 	memset(&requests, 0, sizeof(requests));
+	memset(&src_bd, 0, sizeof(src_bd));
 
 	/* Iterate through */
 	for (; iter_ops < nb_ops; ++iter_ops) {
+		/* store the op id for debug */
+		src_bd[iter_ops].iter_ops = iter_ops;
 		if (mrvl_request_prepare(&requests[iter_ops],
-					&src_bd[iter_ops],
+					src_bd[iter_ops].src_bd,
 					&dst_bd[iter_ops],
 					ops[iter_ops]) < 0) {
-			MRVL_CRYPTO_LOG_ERR(
-				"Error while parameters preparation!");
+			MRVL_LOG(ERR, "Error while preparing parameters!");
 			qp->stats.enqueue_err_count++;
 			ops[iter_ops]->status = RTE_CRYPTO_OP_STATUS_ERROR;
 
@@ -680,12 +733,12 @@ mrvl_crypto_pmd_dequeue_burst(void *queue_pair,
 			ops[i]->status = RTE_CRYPTO_OP_STATUS_SUCCESS;
 			break;
 		case SAM_CIO_ERR_ICV:
-			MRVL_CRYPTO_LOG_DBG("CIO returned SAM_CIO_ERR_ICV.");
+			MRVL_LOG(DEBUG, "CIO returned SAM_CIO_ERR_ICV.");
 			ops[i]->status = RTE_CRYPTO_OP_STATUS_AUTH_FAILED;
 			break;
 		default:
-			MRVL_CRYPTO_LOG_DBG(
-				"CIO returned Error: %d", results[i].status);
+			MRVL_LOG(DEBUG,
+				"CIO returned Error: %d.", results[i].status);
 			ops[i]->status = RTE_CRYPTO_OP_STATUS_ERROR;
 			break;
 		}
@@ -711,12 +764,12 @@ cryptodev_mrvl_crypto_create(const char *name,
 	struct rte_cryptodev *dev;
 	struct mrvl_crypto_private *internals;
 	struct sam_init_params	sam_params;
-	int ret;
+	int ret = -EINVAL;
 
 	dev = rte_cryptodev_pmd_create(name, &vdev->device,
 			&init_params->common);
 	if (dev == NULL) {
-		MRVL_CRYPTO_LOG_ERR("failed to create cryptodev vdev");
+		MRVL_LOG(ERR, "Failed to create cryptodev vdev!");
 		goto init_error;
 	}
 
@@ -729,7 +782,9 @@ cryptodev_mrvl_crypto_create(const char *name,
 
 	dev->feature_flags = RTE_CRYPTODEV_FF_SYMMETRIC_CRYPTO |
 			RTE_CRYPTODEV_FF_SYM_OPERATION_CHAINING |
-			RTE_CRYPTODEV_FF_HW_ACCELERATED;
+			RTE_CRYPTODEV_FF_HW_ACCELERATED |
+			RTE_CRYPTODEV_FF_OOP_SGL_IN_LB_OUT |
+			RTE_CRYPTODEV_FF_OOP_LB_IN_LB_OUT;
 
 	/* Set vector instructions mode supported */
 	internals = dev->data->dev_private;
@@ -737,29 +792,26 @@ cryptodev_mrvl_crypto_create(const char *name,
 	internals->max_nb_qpairs = init_params->common.max_nb_queue_pairs;
 	internals->max_nb_sessions = init_params->max_nb_sessions;
 
-	/*
-	 * ret == -EEXIST is correct, it means DMA
-	 * has been already initialized.
-	 */
-	ret = mv_sys_dma_mem_init(MRVL_MUSDK_DMA_MEMSIZE);
-	if (ret < 0) {
-		if (ret != -EEXIST)
-			return ret;
-
-		MRVL_CRYPTO_LOG_INFO(
-			"DMA memory has been already initialized by a different driver.");
-	}
+	ret = rte_mvep_init(MVEP_MOD_T_SAM, NULL);
+	if (ret)
+		goto init_error;
 
 	sam_params.max_num_sessions = internals->max_nb_sessions;
 
-	return sam_init(&sam_params);
+	/* sam_set_debug_flags(3); */
+
+	ret = sam_init(&sam_params);
+	if (ret)
+		goto init_error;
+
+	return 0;
 
 init_error:
-	MRVL_CRYPTO_LOG_ERR(
-		"driver %s: %s failed", init_params->common.name, __func__);
+	MRVL_LOG(ERR,
+		"Driver %s: %s failed!", init_params->common.name, __func__);
 
 	cryptodev_mrvl_crypto_uninit(vdev);
-	return -EFAULT;
+	return ret;
 }
 
 /** Parse integer from integer argument */
@@ -771,7 +823,7 @@ parse_integer_arg(const char *key __rte_unused,
 
 	*i = atoi(value);
 	if (*i < 0) {
-		MRVL_CRYPTO_LOG_ERR("Argument has to be positive.\n");
+		MRVL_LOG(ERR, "Argument has to be positive!");
 		return -EINVAL;
 	}
 
@@ -786,9 +838,8 @@ parse_name_arg(const char *key __rte_unused,
 	struct rte_cryptodev_pmd_init_params *params = extra_args;
 
 	if (strlen(value) >= RTE_CRYPTODEV_NAME_MAX_LEN - 1) {
-		MRVL_CRYPTO_LOG_ERR("Invalid name %s, should be less than "
-				"%u bytes.\n", value,
-				RTE_CRYPTODEV_NAME_MAX_LEN - 1);
+		MRVL_LOG(ERR, "Invalid name %s, should be less than %u bytes!",
+			 value, RTE_CRYPTODEV_NAME_MAX_LEN - 1);
 		return -EINVAL;
 	}
 
@@ -864,7 +915,7 @@ cryptodev_mrvl_crypto_init(struct rte_vdev_device *vdev)
 			.private_data_size =
 				sizeof(struct mrvl_crypto_private),
 			.max_nb_queue_pairs =
-				sam_get_num_inst() * SAM_HW_RING_NUM,
+				sam_get_num_inst() * sam_get_num_cios(0),
 			.socket_id = rte_socket_id()
 		},
 		.max_nb_sessions = MRVL_PMD_DEFAULT_MAX_NB_SESSIONS
@@ -880,9 +931,8 @@ cryptodev_mrvl_crypto_init(struct rte_vdev_device *vdev)
 
 	ret = mrvl_pmd_parse_input_args(&init_params, args);
 	if (ret) {
-		RTE_LOG(ERR, PMD,
-			"Failed to parse initialisation arguments[%s]\n",
-			args);
+		MRVL_LOG(ERR, "Failed to parse initialisation arguments[%s]!",
+			 args);
 		return -EINVAL;
 	}
 
@@ -904,11 +954,11 @@ cryptodev_mrvl_crypto_uninit(struct rte_vdev_device *vdev)
 	if (name == NULL)
 		return -EINVAL;
 
-	RTE_LOG(INFO, PMD,
-		"Closing Marvell crypto device %s on numa socket %u\n",
-		name, rte_socket_id());
+	MRVL_LOG(INFO, "Closing Marvell crypto device %s on numa socket %u.",
+		 name, rte_socket_id());
 
 	sam_deinit();
+	rte_mvep_deinit(MVEP_MOD_T_SAM);
 
 	cryptodev = rte_cryptodev_pmd_get_named_dev(name);
 	if (cryptodev == NULL)
@@ -935,3 +985,8 @@ RTE_PMD_REGISTER_PARAM_STRING(CRYPTODEV_NAME_MRVL_PMD,
 	"socket_id=<int>");
 RTE_PMD_REGISTER_CRYPTO_DRIVER(mrvl_crypto_drv, cryptodev_mrvl_pmd_drv.driver,
 		cryptodev_driver_id);
+
+RTE_INIT(crypto_mrvl_init_log)
+{
+	mrvl_logtype_driver = rte_log_register("pmd.crypto.mvsam");
+}

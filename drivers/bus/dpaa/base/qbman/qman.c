@@ -852,11 +852,9 @@ mr_loop:
 			case QM_MR_VERB_FQPN:
 				/* Parked */
 #ifdef CONFIG_FSL_QMAN_FQ_LOOKUP
-				fq = get_fq_table_entry(
-					be32_to_cpu(msg->fq.contextB));
+				fq = get_fq_table_entry(msg->fq.contextB);
 #else
-				fq = (void *)(uintptr_t)
-					be32_to_cpu(msg->fq.contextB);
+				fq = (void *)(uintptr_t)msg->fq.contextB;
 #endif
 				fq_state_change(p, fq, msg, verb);
 				if (fq->cb.fqs)
@@ -967,7 +965,6 @@ static inline unsigned int __poll_portal_fast(struct qman_portal *p,
 		*shadow = *dq;
 		dq = shadow;
 		shadow->fqid = be32_to_cpu(shadow->fqid);
-		shadow->contextB = be32_to_cpu(shadow->contextB);
 		shadow->seqnum = be16_to_cpu(shadow->seqnum);
 		hw_fd_to_cpu(&shadow->fd);
 #endif
@@ -1040,6 +1037,50 @@ static inline unsigned int __poll_portal_fast(struct qman_portal *p,
 	return limit;
 }
 
+int qman_irqsource_add(u32 bits)
+{
+	struct qman_portal *p = get_affine_portal();
+
+	bits = bits & QM_PIRQ_VISIBLE;
+
+	/* Clear any previously remaining interrupt conditions in
+	 * QCSP_ISR. This prevents raising a false interrupt when
+	 * interrupt conditions are enabled in QCSP_IER.
+	 */
+	qm_isr_status_clear(&p->p, bits);
+	dpaa_set_bits(bits, &p->irq_sources);
+	qm_isr_enable_write(&p->p, p->irq_sources);
+
+
+	return 0;
+}
+
+int qman_irqsource_remove(u32 bits)
+{
+	struct qman_portal *p = get_affine_portal();
+	u32 ier;
+
+	/* Our interrupt handler only processes+clears status register bits that
+	 * are in p->irq_sources. As we're trimming that mask, if one of them
+	 * were to assert in the status register just before we remove it from
+	 * the enable register, there would be an interrupt-storm when we
+	 * release the IRQ lock. So we wait for the enable register update to
+	 * take effect in h/w (by reading it back) and then clear all other bits
+	 * in the status register. Ie. we clear them from ISR once it's certain
+	 * IER won't allow them to reassert.
+	 */
+
+	bits &= QM_PIRQ_VISIBLE;
+	dpaa_clear_bits(bits, &p->irq_sources);
+	qm_isr_enable_write(&p->p, p->irq_sources);
+	ier = qm_isr_enable_read(&p->p);
+	/* Using "~ier" (rather than "bits" or "~p->irq_sources") creates a
+	 * data-dependency, ie. to protect against re-ordering.
+	 */
+	qm_isr_status_clear(&p->p, ~ier);
+	return 0;
+}
+
 u16 qman_affine_channel(int cpu)
 {
 	if (cpu < 0) {
@@ -1092,9 +1133,9 @@ unsigned int qman_portal_poll_rx(unsigned int poll_limit,
 
 		/* SDQCR: context_b points to the FQ */
 #ifdef CONFIG_FSL_QMAN_FQ_LOOKUP
-		fq = qman_fq_lookup_table[be32_to_cpu(dq[rx_number]->contextB)];
+		fq = qman_fq_lookup_table[dq[rx_number]->contextB];
 #else
-		fq = (void *)be32_to_cpu(dq[rx_number]->contextB);
+		fq = (void *)dq[rx_number]->contextB;
 #endif
 		if (fq->cb.dqrr_prepare)
 			fq->cb.dqrr_prepare(shadow[rx_number],
@@ -1112,6 +1153,14 @@ unsigned int qman_portal_poll_rx(unsigned int poll_limit,
 	qm_out(DQRR_DCAP, (1 << 8) | consume);
 
 	return rx_number;
+}
+
+void qman_clear_irq(void)
+{
+	struct qman_portal *p = get_affine_portal();
+	u32 clear = QM_DQAVAIL_MASK | (p->irq_sources &
+		~(QM_PIRQ_CSCI | QM_PIRQ_CCSCI));
+	qm_isr_status_clear(&p->p, clear);
 }
 
 u32 qman_portal_dequeue(struct rte_event ev[], unsigned int poll_limit,
@@ -1143,7 +1192,6 @@ u32 qman_portal_dequeue(struct rte_event ev[], unsigned int poll_limit,
 		*shadow = *dq;
 		dq = shadow;
 		shadow->fqid = be32_to_cpu(shadow->fqid);
-		shadow->contextB = be32_to_cpu(shadow->contextB);
 		shadow->seqnum = be16_to_cpu(shadow->seqnum);
 		hw_fd_to_cpu(&shadow->fd);
 #endif
@@ -1208,7 +1256,6 @@ struct qm_dqrr_entry *qman_dequeue(struct qman_fq *fq)
 	*shadow = *dq;
 	dq = shadow;
 	shadow->fqid = be32_to_cpu(shadow->fqid);
-	shadow->contextB = be32_to_cpu(shadow->contextB);
 	shadow->seqnum = be16_to_cpu(shadow->seqnum);
 	hw_fd_to_cpu(&shadow->fd);
 #endif
@@ -1504,7 +1551,7 @@ int qman_init_fq(struct qman_fq *fq, u32 flags, struct qm_mcc_initfq *opts)
 
 		mcc->initfq.we_mask |= QM_INITFQ_WE_CONTEXTB;
 #ifdef CONFIG_FSL_QMAN_FQ_LOOKUP
-		mcc->initfq.fqd.context_b = fq->key;
+		mcc->initfq.fqd.context_b = cpu_to_be32(fq->key);
 #else
 		mcc->initfq.fqd.context_b = (u32)(uintptr_t)fq;
 #endif
@@ -2186,11 +2233,6 @@ int qman_enqueue_multi(struct qman_fq *fq,
 	/* try to send as many frames as possible */
 	while (eqcr->available && frames_to_send--) {
 		eq->fqid = fq->fqid_le;
-#ifdef CONFIG_FSL_QMAN_FQ_LOOKUP
-		eq->tag = cpu_to_be32(fq->key);
-#else
-		eq->tag = cpu_to_be32((u32)(uintptr_t)fq);
-#endif
 		eq->fd.opaque_addr = fd->opaque_addr;
 		eq->fd.addr = cpu_to_be40(fd->addr);
 		eq->fd.status = cpu_to_be32(fd->status);

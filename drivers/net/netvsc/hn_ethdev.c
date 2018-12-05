@@ -14,7 +14,9 @@
 #include <rte_memcpy.h>
 #include <rte_string_fns.h>
 #include <rte_memzone.h>
+#include <rte_devargs.h>
 #include <rte_malloc.h>
+#include <rte_kvargs.h>
 #include <rte_atomic.h>
 #include <rte_branch_prediction.h>
 #include <rte_ether.h>
@@ -40,8 +42,7 @@
 			    DEV_TX_OFFLOAD_VLAN_INSERT)
 
 #define HN_RX_OFFLOAD_CAPS (DEV_RX_OFFLOAD_CHECKSUM | \
-			    DEV_RX_OFFLOAD_VLAN_STRIP | \
-			    DEV_RX_OFFLOAD_CRC_STRIP)
+			    DEV_RX_OFFLOAD_VLAN_STRIP)
 
 int hn_logtype_init;
 int hn_logtype_driver;
@@ -55,7 +56,7 @@ static const struct hn_xstats_name_off hn_stat_strings[] = {
 	{ "good_packets",           offsetof(struct hn_stats, packets) },
 	{ "good_bytes",             offsetof(struct hn_stats, bytes) },
 	{ "errors",                 offsetof(struct hn_stats, errors) },
-	{ "allocation_failed",      offsetof(struct hn_stats, nomemory) },
+	{ "ring full",              offsetof(struct hn_stats, ring_full) },
 	{ "multicast_packets",      offsetof(struct hn_stats, multicast) },
 	{ "broadcast_packets",      offsetof(struct hn_stats, broadcast) },
 	{ "undersize_packets",      offsetof(struct hn_stats, size_bins[0]) },
@@ -105,6 +106,10 @@ eth_dev_vmbus_allocate(struct rte_vmbus_device *dev, size_t private_data_size)
 	}
 
 	eth_dev->device = &dev->device;
+
+	/* interrupt is simulated */
+	dev->intr_handle.type = RTE_INTR_HANDLE_EXT;
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_INTR_LSC;
 	eth_dev->intr_handle = &dev->intr_handle;
 
 	return eth_dev;
@@ -113,22 +118,66 @@ eth_dev_vmbus_allocate(struct rte_vmbus_device *dev, size_t private_data_size)
 static void
 eth_dev_vmbus_release(struct rte_eth_dev *eth_dev)
 {
+	/* mac_addrs must not be freed alone because part of dev_private */
+	eth_dev->data->mac_addrs = NULL;
 	/* free ether device */
 	rte_eth_dev_release_port(eth_dev);
 
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
-		rte_free(eth_dev->data->dev_private);
-
-	eth_dev->data->dev_private = NULL;
-
-	/*
-	 * Secondary process will check the name to attach.
-	 * Clear this field to avoid attaching a released ports.
-	 */
-	eth_dev->data->name[0] = '\0';
-
 	eth_dev->device = NULL;
 	eth_dev->intr_handle = NULL;
+}
+
+/* handle "latency=X" from devargs */
+static int hn_set_latency(const char *key, const char *value, void *opaque)
+{
+	struct hn_data *hv = opaque;
+	char *endp = NULL;
+	unsigned long lat;
+
+	errno = 0;
+	lat = strtoul(value, &endp, 0);
+
+	if (*value == '\0' || *endp != '\0') {
+		PMD_DRV_LOG(ERR, "invalid parameter %s=%s", key, value);
+		return -EINVAL;
+	}
+
+	PMD_DRV_LOG(DEBUG, "set latency %lu usec", lat);
+
+	hv->latency = lat * 1000;	/* usec to nsec */
+	return 0;
+}
+
+/* Parse device arguments */
+static int hn_parse_args(const struct rte_eth_dev *dev)
+{
+	struct hn_data *hv = dev->data->dev_private;
+	struct rte_devargs *devargs = dev->device->devargs;
+	static const char * const valid_keys[] = {
+		"latency",
+		NULL
+	};
+	struct rte_kvargs *kvlist;
+	int ret;
+
+	if (!devargs)
+		return 0;
+
+	PMD_INIT_LOG(DEBUG, "device args %s %s",
+		     devargs->name, devargs->args);
+
+	kvlist = rte_kvargs_parse(devargs->args, valid_keys);
+	if (!kvlist) {
+		PMD_DRV_LOG(NOTICE, "invalid parameters");
+		return -EINVAL;
+	}
+
+	ret = rte_kvargs_process(kvlist, "latency", hn_set_latency, hv);
+	if (ret)
+		PMD_DRV_LOG(ERR, "Unable to process latency arg\n");
+
+	rte_kvargs_free(kvlist);
+	return ret;
 }
 
 /* Update link status.
@@ -136,9 +185,9 @@ eth_dev_vmbus_release(struct rte_eth_dev *eth_dev)
  *   means block this call until link is up.
  *   which is not worth supporting.
  */
-static int
+int
 hn_dev_link_update(struct rte_eth_dev *dev,
-		   __rte_unused int wait_to_complete)
+		   int wait_to_complete)
 {
 	struct hn_data *hv = dev->data->dev_private;
 	struct rte_eth_link link, old;
@@ -151,6 +200,8 @@ hn_dev_link_update(struct rte_eth_dev *dev,
 		return error;
 
 	hn_rndis_get_linkspeed(hv);
+
+	hn_vf_link_update(dev, wait_to_complete);
 
 	link = (struct rte_eth_link) {
 		.link_duplex = ETH_LINK_FULL_DUPLEX,
@@ -190,6 +241,7 @@ static void hn_dev_info_get(struct rte_eth_dev *dev,
 	dev_info->max_tx_queues = hv->max_queues;
 
 	hn_rndis_get_offload(hv, dev_info);
+	hn_vf_info_get(hv, dev_info);
 }
 
 static void
@@ -198,6 +250,7 @@ hn_dev_promiscuous_enable(struct rte_eth_dev *dev)
 	struct hn_data *hv = dev->data->dev_private;
 
 	hn_rndis_set_rxfilter(hv, NDIS_PACKET_TYPE_PROMISCUOUS);
+	hn_vf_promiscuous_enable(dev);
 }
 
 static void
@@ -210,6 +263,7 @@ hn_dev_promiscuous_disable(struct rte_eth_dev *dev)
 	if (dev->data->all_multicast)
 		filter |= NDIS_PACKET_TYPE_ALL_MULTICAST;
 	hn_rndis_set_rxfilter(hv, filter);
+	hn_vf_promiscuous_disable(dev);
 }
 
 static void
@@ -220,6 +274,7 @@ hn_dev_allmulticast_enable(struct rte_eth_dev *dev)
 	hn_rndis_set_rxfilter(hv, NDIS_PACKET_TYPE_DIRECTED |
 			      NDIS_PACKET_TYPE_ALL_MULTICAST |
 			NDIS_PACKET_TYPE_BROADCAST);
+	hn_vf_allmulticast_enable(dev);
 }
 
 static void
@@ -229,6 +284,16 @@ hn_dev_allmulticast_disable(struct rte_eth_dev *dev)
 
 	hn_rndis_set_rxfilter(hv, NDIS_PACKET_TYPE_DIRECTED |
 			     NDIS_PACKET_TYPE_BROADCAST);
+	hn_vf_allmulticast_disable(dev);
+}
+
+static int
+hn_dev_mc_addr_list(struct rte_eth_dev *dev,
+		     struct ether_addr *mc_addr_set,
+		     uint32_t nb_mc_addr)
+{
+	/* No filtering on the synthetic path, but can do it on VF */
+	return hn_vf_mc_addr_list(dev, mc_addr_set, nb_mc_addr);
 }
 
 /* Setup shared rx/tx queue data */
@@ -263,6 +328,8 @@ static int hn_subchan_configure(struct hn_data *hv,
 				    "open subchannel failed: %d", err);
 			return err;
 		}
+
+		rte_vmbus_set_latency(hv->vmbus, new_sc, hv->latency);
 
 		retry = 0;
 		chn_index = rte_vmbus_sub_channel_index(new_sc);
@@ -338,13 +405,15 @@ static int hn_dev_configure(struct rte_eth_dev *dev)
 		}
 	}
 
-	return 0;
+	return hn_vf_configure(dev, dev_conf);
 }
 
 static int hn_dev_stats_get(struct rte_eth_dev *dev,
 			    struct rte_eth_stats *stats)
 {
 	unsigned int i;
+
+	hn_vf_stats_get(dev, stats);
 
 	for (i = 0; i < dev->data->nb_tx_queues; i++) {
 		const struct hn_tx_queue *txq = dev->data->tx_queues[i];
@@ -354,7 +423,7 @@ static int hn_dev_stats_get(struct rte_eth_dev *dev,
 
 		stats->opackets += txq->stats.packets;
 		stats->obytes += txq->stats.bytes;
-		stats->oerrors += txq->stats.errors + txq->stats.nomemory;
+		stats->oerrors += txq->stats.errors;
 
 		if (i < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
 			stats->q_opackets[i] = txq->stats.packets;
@@ -371,7 +440,7 @@ static int hn_dev_stats_get(struct rte_eth_dev *dev,
 		stats->ipackets += rxq->stats.packets;
 		stats->ibytes += rxq->stats.bytes;
 		stats->ierrors += rxq->stats.errors;
-		stats->imissed += rxq->ring_full;
+		stats->imissed += rxq->stats.ring_full;
 
 		if (i < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
 			stats->q_ipackets[i] = rxq->stats.packets;
@@ -405,22 +474,41 @@ hn_dev_stats_reset(struct rte_eth_dev *dev)
 			continue;
 
 		memset(&rxq->stats, 0, sizeof(struct hn_stats));
-		rxq->ring_full = 0;
 	}
+}
+
+static void
+hn_dev_xstats_reset(struct rte_eth_dev *dev)
+{
+	hn_dev_stats_reset(dev);
+	hn_vf_xstats_reset(dev);
+}
+
+static int
+hn_dev_xstats_count(struct rte_eth_dev *dev)
+{
+	int ret, count;
+
+	count = dev->data->nb_tx_queues * RTE_DIM(hn_stat_strings);
+	count += dev->data->nb_rx_queues * RTE_DIM(hn_stat_strings);
+
+	ret = hn_vf_xstats_get_names(dev, NULL, 0);
+	if (ret < 0)
+		return ret;
+
+	return count + ret;
 }
 
 static int
 hn_dev_xstats_get_names(struct rte_eth_dev *dev,
 			struct rte_eth_xstat_name *xstats_names,
-			__rte_unused unsigned int limit)
+			unsigned int limit)
 {
 	unsigned int i, t, count = 0;
-
-	PMD_INIT_FUNC_TRACE();
+	int ret;
 
 	if (!xstats_names)
-		return dev->data->nb_tx_queues * RTE_DIM(hn_stat_strings)
-			+ dev->data->nb_rx_queues * RTE_DIM(hn_stat_strings);
+		return hn_dev_xstats_count(dev);
 
 	/* Note: limit checked in rte_eth_xstats_names() */
 	for (i = 0; i < dev->data->nb_tx_queues; i++) {
@@ -428,6 +516,9 @@ hn_dev_xstats_get_names(struct rte_eth_dev *dev,
 
 		if (!txq)
 			continue;
+
+		if (count >= limit)
+			break;
 
 		for (t = 0; t < RTE_DIM(hn_stat_strings); t++)
 			snprintf(xstats_names[count++].name,
@@ -441,6 +532,9 @@ hn_dev_xstats_get_names(struct rte_eth_dev *dev,
 		if (!rxq)
 			continue;
 
+		if (count >= limit)
+			break;
+
 		for (t = 0; t < RTE_DIM(hn_stat_strings); t++)
 			snprintf(xstats_names[count++].name,
 				 RTE_ETH_XSTATS_NAME_SIZE,
@@ -448,7 +542,12 @@ hn_dev_xstats_get_names(struct rte_eth_dev *dev,
 				 hn_stat_strings[t].name);
 	}
 
-	return count;
+	ret = hn_vf_xstats_get_names(dev, xstats_names + count,
+				     limit - count);
+	if (ret < 0)
+		return ret;
+
+	return count + ret;
 }
 
 static int
@@ -457,11 +556,9 @@ hn_dev_xstats_get(struct rte_eth_dev *dev,
 		  unsigned int n)
 {
 	unsigned int i, t, count = 0;
-
-	const unsigned int nstats =
-		dev->data->nb_tx_queues * RTE_DIM(hn_stat_strings)
-		+ dev->data->nb_rx_queues * RTE_DIM(hn_stat_strings);
+	const unsigned int nstats = hn_dev_xstats_count(dev);
 	const char *stats;
+	int ret;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -492,26 +589,33 @@ hn_dev_xstats_get(struct rte_eth_dev *dev,
 				(stats + hn_stat_strings[t].offset);
 	}
 
-	return count;
+	ret = hn_vf_xstats_get(dev, xstats + count, n - count);
+	if (ret < 0)
+		return ret;
+
+	return count + ret;
 }
 
 static int
 hn_dev_start(struct rte_eth_dev *dev)
 {
 	struct hn_data *hv = dev->data->dev_private;
+	int error;
 
 	PMD_INIT_FUNC_TRACE();
 
-	/* check if lsc interrupt feature is enabled */
-	if (dev->data->dev_conf.intr_conf.lsc) {
-		PMD_DRV_LOG(ERR, "link status not supported yet");
-		return -ENOTSUP;
-	}
+	error = hn_rndis_set_rxfilter(hv,
+				      NDIS_PACKET_TYPE_BROADCAST |
+				      NDIS_PACKET_TYPE_ALL_MULTICAST |
+				      NDIS_PACKET_TYPE_DIRECTED);
+	if (error)
+		return error;
 
-	return hn_rndis_set_rxfilter(hv,
-				     NDIS_PACKET_TYPE_BROADCAST |
-				     NDIS_PACKET_TYPE_ALL_MULTICAST |
-				     NDIS_PACKET_TYPE_DIRECTED);
+	error = hn_vf_start(dev);
+	if (error)
+		hn_rndis_set_rxfilter(hv, 0);
+
+	return error;
 }
 
 static void
@@ -522,12 +626,15 @@ hn_dev_stop(struct rte_eth_dev *dev)
 	PMD_INIT_FUNC_TRACE();
 
 	hn_rndis_set_rxfilter(hv, 0);
+	hn_vf_stop(dev);
 }
 
 static void
 hn_dev_close(struct rte_eth_dev *dev __rte_unused)
 {
 	PMD_INIT_LOG(DEBUG, "close");
+
+	hn_vf_close(dev);
 }
 
 static const struct eth_dev_ops hn_eth_dev_ops = {
@@ -536,22 +643,23 @@ static const struct eth_dev_ops hn_eth_dev_ops = {
 	.dev_stop		= hn_dev_stop,
 	.dev_close		= hn_dev_close,
 	.dev_infos_get		= hn_dev_info_get,
-	.txq_info_get		= hn_dev_tx_queue_info,
-	.rxq_info_get		= hn_dev_rx_queue_info,
+	.dev_supported_ptypes_get = hn_vf_supported_ptypes,
 	.promiscuous_enable     = hn_dev_promiscuous_enable,
 	.promiscuous_disable    = hn_dev_promiscuous_disable,
 	.allmulticast_enable    = hn_dev_allmulticast_enable,
 	.allmulticast_disable   = hn_dev_allmulticast_disable,
+	.set_mc_addr_list	= hn_dev_mc_addr_list,
 	.tx_queue_setup		= hn_dev_tx_queue_setup,
 	.tx_queue_release	= hn_dev_tx_queue_release,
+	.tx_done_cleanup        = hn_dev_tx_done_cleanup,
 	.rx_queue_setup		= hn_dev_rx_queue_setup,
 	.rx_queue_release	= hn_dev_rx_queue_release,
 	.link_update		= hn_dev_link_update,
 	.stats_get		= hn_dev_stats_get,
+	.stats_reset            = hn_dev_stats_reset,
 	.xstats_get		= hn_dev_xstats_get,
 	.xstats_get_names	= hn_dev_xstats_get_names,
-	.stats_reset            = hn_dev_stats_reset,
-	.xstats_reset		= hn_dev_stats_reset,
+	.xstats_reset		= hn_dev_xstats_reset,
 };
 
 /*
@@ -623,11 +731,26 @@ eth_hn_dev_init(struct rte_eth_dev *eth_dev)
 	hv->rxbuf_res = &vmbus->resource[HV_RECV_BUF_MAP];
 	hv->chim_res  = &vmbus->resource[HV_SEND_BUF_MAP];
 	hv->port_id = eth_dev->data->port_id;
+	hv->latency = HN_CHAN_LATENCY_NS;
+
+	err = hn_parse_args(eth_dev);
+	if (err)
+		return err;
+
+	strlcpy(hv->owner.name, eth_dev->device->name,
+		RTE_ETH_MAX_OWNER_NAME_LEN);
+	err = rte_eth_dev_owner_new(&hv->owner.id);
+	if (err) {
+		PMD_INIT_LOG(ERR, "Can not get owner id");
+		return err;
+	}
 
 	/* Initialize primary channel input for control operations */
 	err = rte_vmbus_chan_open(vmbus, &hv->channels[0]);
 	if (err)
 		return err;
+
+	rte_vmbus_set_latency(hv->vmbus, hv->channels[0], hv->latency);
 
 	hv->primary = hn_rx_queue_alloc(hv, 0,
 					eth_dev->device->numa_node);
@@ -656,6 +779,15 @@ eth_hn_dev_init(struct rte_eth_dev *eth_dev)
 		rxr_cnt = 1;
 
 	hv->max_queues = RTE_MIN(rxr_cnt, (unsigned int)max_chan);
+
+	/* If VF was reported but not added, do it now */
+	if (hv->vf_present && !hv->vf_dev) {
+		PMD_INIT_LOG(DEBUG, "Adding VF device");
+
+		err = hn_vf_add(eth_dev, hv);
+		if (err)
+			goto failed;
+	}
 
 	return 0;
 
@@ -686,8 +818,7 @@ eth_hn_dev_uninit(struct rte_eth_dev *eth_dev)
 	hn_detach(hv);
 	rte_vmbus_chan_close(hv->primary->chan);
 	rte_free(hv->primary);
-
-	eth_dev->data->mac_addrs = NULL;
+	rte_eth_dev_owner_delete(hv->owner.id);
 
 	return 0;
 }
@@ -748,9 +879,7 @@ static struct rte_vmbus_driver rte_netvsc_pmd = {
 RTE_PMD_REGISTER_VMBUS(net_netvsc, rte_netvsc_pmd);
 RTE_PMD_REGISTER_KMOD_DEP(net_netvsc, "* uio_hv_generic");
 
-RTE_INIT(hn_init_log);
-static void
-hn_init_log(void)
+RTE_INIT(hn_init_log)
 {
 	hn_logtype_init = rte_log_register("pmd.net.netvsc.init");
 	if (hn_logtype_init >= 0)

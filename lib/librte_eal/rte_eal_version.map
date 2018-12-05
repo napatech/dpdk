@@ -19,9 +19,6 @@ DPDK_2.0 {
 	rte_dump_tailq;
 	rte_eal_alarm_cancel;
 	rte_eal_alarm_set;
-	rte_eal_devargs_add;
-	rte_eal_devargs_dump;
-	rte_eal_devargs_type_count;
 	rte_eal_get_configuration;
 	rte_eal_get_lcore_state;
 	rte_eal_get_physmem_size;
@@ -32,7 +29,6 @@ DPDK_2.0 {
 	rte_eal_lcore_role;
 	rte_eal_mp_remote_launch;
 	rte_eal_mp_wait_lcore;
-	rte_eal_parse_devargs_str;
 	rte_eal_process_type;
 	rte_eal_remote_launch;
 	rte_eal_tailq_lookup;
@@ -134,8 +130,6 @@ DPDK_16.11 {
 
 	rte_delay_us_block;
 	rte_delay_us_callback_register;
-	rte_eal_dev_attach;
-	rte_eal_dev_detach;
 
 } DPDK_16.07;
 
@@ -262,6 +256,18 @@ DPDK_18.08 {
 
 } DPDK_18.05;
 
+DPDK_18.11 {
+	global:
+
+	rte_dev_probe;
+	rte_dev_remove;
+	rte_eal_get_runtime_dir;
+	rte_eal_hotplug_add;
+	rte_eal_hotplug_remove;
+	rte_strscpy;
+
+} DPDK_18.08;
+
 EXPERIMENTAL {
 	global:
 
@@ -270,10 +276,15 @@ EXPERIMENTAL {
 	rte_class_register;
 	rte_class_unregister;
 	rte_ctrl_thread_create;
+	rte_delay_us_sleep;
+	rte_dev_event_callback_process;
 	rte_dev_event_callback_register;
 	rte_dev_event_callback_unregister;
 	rte_dev_event_monitor_start;
 	rte_dev_event_monitor_stop;
+	rte_dev_hotplug_handle_disable;
+	rte_dev_hotplug_handle_enable;
+	rte_dev_is_probed;
 	rte_dev_iterator_init;
 	rte_dev_iterator_next;
 	rte_devargs_add;
@@ -285,8 +296,6 @@ EXPERIMENTAL {
 	rte_devargs_remove;
 	rte_devargs_type_count;
 	rte_eal_cleanup;
-	rte_eal_hotplug_add;
-	rte_eal_hotplug_remove;
 	rte_fbarray_attach;
 	rte_fbarray_destroy;
 	rte_fbarray_detach;
@@ -311,15 +320,30 @@ EXPERIMENTAL {
 	rte_fbarray_set_used;
 	rte_log_register_type_and_pick_level;
 	rte_malloc_dump_heaps;
+	rte_malloc_heap_create;
+	rte_malloc_heap_destroy;
+	rte_malloc_heap_get_socket;
+	rte_malloc_heap_memory_add;
+	rte_malloc_heap_memory_attach;
+	rte_malloc_heap_memory_detach;
+	rte_malloc_heap_memory_remove;
+	rte_malloc_heap_socket_is_external;
 	rte_mem_alloc_validator_register;
 	rte_mem_alloc_validator_unregister;
+	rte_mem_check_dma_mask;
+	rte_mem_check_dma_mask_thread_unsafe;
 	rte_mem_event_callback_register;
 	rte_mem_event_callback_unregister;
 	rte_mem_iova2virt;
+	rte_mem_set_dma_mask;
 	rte_mem_virt2memseg;
 	rte_mem_virt2memseg_list;
 	rte_memseg_contig_walk;
 	rte_memseg_contig_walk_thread_unsafe;
+	rte_memseg_get_fd;
+	rte_memseg_get_fd_offset;
+	rte_memseg_get_fd_thread_unsafe;
+	rte_memseg_get_fd_offset_thread_unsafe;
 	rte_memseg_list_walk;
 	rte_memseg_list_walk_thread_unsafe;
 	rte_memseg_walk;
@@ -330,6 +354,7 @@ EXPERIMENTAL {
 	rte_mp_request_sync;
 	rte_mp_request_async;
 	rte_mp_sendmsg;
+	rte_option_register;
 	rte_service_lcore_attr_get;
 	rte_service_lcore_attr_reset_all;
 	rte_service_may_be_active;

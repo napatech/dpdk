@@ -7,14 +7,12 @@
 
 #define __CXGBE_FILL_FS(__v, __m, fs, elem, e) \
 do { \
-	if (!((fs)->val.elem || (fs)->mask.elem)) { \
-		(fs)->val.elem = (__v); \
-		(fs)->mask.elem = (__m); \
-	} else { \
+	if ((fs)->mask.elem && ((fs)->val.elem != (__v))) \
 		return rte_flow_error_set(e, EINVAL, RTE_FLOW_ERROR_TYPE_ITEM, \
-					  NULL, "a filter can be specified" \
-					  " only once"); \
-	} \
+					  NULL, "Redefined match item with" \
+					  " different values found"); \
+	(fs)->val.elem = (__v); \
+	(fs)->mask.elem = (__m); \
 } while (0)
 
 #define __CXGBE_FILL_FS_MEMCPY(__v, __m, fs, elem) \
@@ -95,11 +93,53 @@ cxgbe_fill_filter_region(struct adapter *adap,
 		ntuple_mask |= (u64)fs->mask.ethtype << tp->ethertype_shift;
 	if (tp->port_shift >= 0)
 		ntuple_mask |= (u64)fs->mask.iport << tp->port_shift;
+	if (tp->macmatch_shift >= 0)
+		ntuple_mask |= (u64)fs->mask.macidx << tp->macmatch_shift;
 
 	if (ntuple_mask != hash_filter_mask)
 		return;
 
 	fs->cap = 1;	/* use hash region */
+}
+
+static int
+ch_rte_parsetype_eth(const void *dmask, const struct rte_flow_item *item,
+		     struct ch_filter_specification *fs,
+		     struct rte_flow_error *e)
+{
+	const struct rte_flow_item_eth *spec = item->spec;
+	const struct rte_flow_item_eth *umask = item->mask;
+	const struct rte_flow_item_eth *mask;
+
+	/* If user has not given any mask, then use chelsio supported mask. */
+	mask = umask ? umask : (const struct rte_flow_item_eth *)dmask;
+
+	/* we don't support SRC_MAC filtering*/
+	if (!is_zero_ether_addr(&mask->src))
+		return rte_flow_error_set(e, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM,
+					  item,
+					  "src mac filtering not supported");
+
+	if (!is_zero_ether_addr(&mask->dst)) {
+		const u8 *addr = (const u8 *)&spec->dst.addr_bytes[0];
+		const u8 *m = (const u8 *)&mask->dst.addr_bytes[0];
+		struct rte_flow *flow = (struct rte_flow *)fs->private;
+		struct port_info *pi = (struct port_info *)
+					(flow->dev->data->dev_private);
+		int idx;
+
+		idx = cxgbe_mpstcam_alloc(pi, addr, m);
+		if (idx <= 0)
+			return rte_flow_error_set(e, idx,
+						  RTE_FLOW_ERROR_TYPE_ITEM,
+						  NULL, "unable to allocate mac"
+						  " entry in h/w");
+		CXGBE_FILL_FS(idx, 0x1ff, macidx);
+	}
+
+	CXGBE_FILL_FS(be16_to_cpu(spec->type),
+		      be16_to_cpu(mask->type), ethtype);
+	return 0;
 }
 
 static int
@@ -327,16 +367,198 @@ static int cxgbe_get_fidx(struct rte_flow *flow, unsigned int *fidx)
 }
 
 static int
+cxgbe_get_flow_item_index(const struct rte_flow_item items[], u32 type)
+{
+	const struct rte_flow_item *i;
+	int j, index = -ENOENT;
+
+	for (i = items, j = 0; i->type != RTE_FLOW_ITEM_TYPE_END; i++, j++) {
+		if (i->type == type) {
+			index = j;
+			break;
+		}
+	}
+
+	return index;
+}
+
+static int
+ch_rte_parse_nat(uint8_t nmode, struct ch_filter_specification *fs)
+{
+	/* nmode:
+	 * BIT_0 = [src_ip],   BIT_1 = [dst_ip]
+	 * BIT_2 = [src_port], BIT_3 = [dst_port]
+	 *
+	 * Only below cases are supported as per our spec.
+	 */
+	switch (nmode) {
+	case 0:  /* 0000b */
+		fs->nat_mode = NAT_MODE_NONE;
+		break;
+	case 2:  /* 0010b */
+		fs->nat_mode = NAT_MODE_DIP;
+		break;
+	case 5:  /* 0101b */
+		fs->nat_mode = NAT_MODE_SIP_SP;
+		break;
+	case 7:  /* 0111b */
+		fs->nat_mode = NAT_MODE_DIP_SIP_SP;
+		break;
+	case 10: /* 1010b */
+		fs->nat_mode = NAT_MODE_DIP_DP;
+		break;
+	case 11: /* 1011b */
+		fs->nat_mode = NAT_MODE_DIP_DP_SIP;
+		break;
+	case 14: /* 1110b */
+		fs->nat_mode = NAT_MODE_DIP_DP_SP;
+		break;
+	case 15: /* 1111b */
+		fs->nat_mode = NAT_MODE_ALL;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int
 ch_rte_parse_atype_switch(const struct rte_flow_action *a,
+			  const struct rte_flow_item items[],
+			  uint8_t *nmode,
 			  struct ch_filter_specification *fs,
 			  struct rte_flow_error *e)
 {
+	const struct rte_flow_action_of_set_vlan_vid *vlanid;
+	const struct rte_flow_action_of_push_vlan *pushvlan;
+	const struct rte_flow_action_set_ipv4 *ipv4;
+	const struct rte_flow_action_set_ipv6 *ipv6;
+	const struct rte_flow_action_set_tp *tp_port;
 	const struct rte_flow_action_phy_port *port;
+	int item_index;
 
 	switch (a->type) {
+	case RTE_FLOW_ACTION_TYPE_OF_SET_VLAN_VID:
+		vlanid = (const struct rte_flow_action_of_set_vlan_vid *)
+			  a->conf;
+		fs->newvlan = VLAN_REWRITE;
+		fs->vlan = vlanid->vlan_vid;
+		break;
+	case RTE_FLOW_ACTION_TYPE_OF_PUSH_VLAN:
+		pushvlan = (const struct rte_flow_action_of_push_vlan *)
+			    a->conf;
+		if (pushvlan->ethertype != ETHER_TYPE_VLAN)
+			return rte_flow_error_set(e, EINVAL,
+						  RTE_FLOW_ERROR_TYPE_ACTION, a,
+						  "only ethertype 0x8100 "
+						  "supported for push vlan.");
+		fs->newvlan = VLAN_INSERT;
+		break;
+	case RTE_FLOW_ACTION_TYPE_OF_POP_VLAN:
+		fs->newvlan = VLAN_REMOVE;
+		break;
 	case RTE_FLOW_ACTION_TYPE_PHY_PORT:
 		port = (const struct rte_flow_action_phy_port *)a->conf;
 		fs->eport = port->index;
+		break;
+	case RTE_FLOW_ACTION_TYPE_SET_IPV4_SRC:
+		item_index = cxgbe_get_flow_item_index(items,
+						       RTE_FLOW_ITEM_TYPE_IPV4);
+		if (item_index < 0)
+			return rte_flow_error_set(e, EINVAL,
+						  RTE_FLOW_ERROR_TYPE_ACTION, a,
+						  "No RTE_FLOW_ITEM_TYPE_IPV4 "
+						  "found.");
+
+		ipv4 = (const struct rte_flow_action_set_ipv4 *)a->conf;
+		memcpy(fs->nat_fip, &ipv4->ipv4_addr, sizeof(ipv4->ipv4_addr));
+		*nmode |= 1 << 0;
+		break;
+	case RTE_FLOW_ACTION_TYPE_SET_IPV4_DST:
+		item_index = cxgbe_get_flow_item_index(items,
+						       RTE_FLOW_ITEM_TYPE_IPV4);
+		if (item_index < 0)
+			return rte_flow_error_set(e, EINVAL,
+						  RTE_FLOW_ERROR_TYPE_ACTION, a,
+						  "No RTE_FLOW_ITEM_TYPE_IPV4 "
+						  "found.");
+
+		ipv4 = (const struct rte_flow_action_set_ipv4 *)a->conf;
+		memcpy(fs->nat_lip, &ipv4->ipv4_addr, sizeof(ipv4->ipv4_addr));
+		*nmode |= 1 << 1;
+		break;
+	case RTE_FLOW_ACTION_TYPE_SET_IPV6_SRC:
+		item_index = cxgbe_get_flow_item_index(items,
+						       RTE_FLOW_ITEM_TYPE_IPV6);
+		if (item_index < 0)
+			return rte_flow_error_set(e, EINVAL,
+						  RTE_FLOW_ERROR_TYPE_ACTION, a,
+						  "No RTE_FLOW_ITEM_TYPE_IPV6 "
+						  "found.");
+
+		ipv6 = (const struct rte_flow_action_set_ipv6 *)a->conf;
+		memcpy(fs->nat_fip, ipv6->ipv6_addr, sizeof(ipv6->ipv6_addr));
+		*nmode |= 1 << 0;
+		break;
+	case RTE_FLOW_ACTION_TYPE_SET_IPV6_DST:
+		item_index = cxgbe_get_flow_item_index(items,
+						       RTE_FLOW_ITEM_TYPE_IPV6);
+		if (item_index < 0)
+			return rte_flow_error_set(e, EINVAL,
+						  RTE_FLOW_ERROR_TYPE_ACTION, a,
+						  "No RTE_FLOW_ITEM_TYPE_IPV6 "
+						  "found.");
+
+		ipv6 = (const struct rte_flow_action_set_ipv6 *)a->conf;
+		memcpy(fs->nat_lip, ipv6->ipv6_addr, sizeof(ipv6->ipv6_addr));
+		*nmode |= 1 << 1;
+		break;
+	case RTE_FLOW_ACTION_TYPE_SET_TP_SRC:
+		item_index = cxgbe_get_flow_item_index(items,
+						       RTE_FLOW_ITEM_TYPE_TCP);
+		if (item_index < 0) {
+			item_index =
+				cxgbe_get_flow_item_index(items,
+						RTE_FLOW_ITEM_TYPE_UDP);
+			if (item_index < 0)
+				return rte_flow_error_set(e, EINVAL,
+						RTE_FLOW_ERROR_TYPE_ACTION, a,
+						"No RTE_FLOW_ITEM_TYPE_TCP or "
+						"RTE_FLOW_ITEM_TYPE_UDP found");
+		}
+
+		tp_port = (const struct rte_flow_action_set_tp *)a->conf;
+		fs->nat_fport = be16_to_cpu(tp_port->port);
+		*nmode |= 1 << 2;
+		break;
+	case RTE_FLOW_ACTION_TYPE_SET_TP_DST:
+		item_index = cxgbe_get_flow_item_index(items,
+						       RTE_FLOW_ITEM_TYPE_TCP);
+		if (item_index < 0) {
+			item_index =
+				cxgbe_get_flow_item_index(items,
+						RTE_FLOW_ITEM_TYPE_UDP);
+			if (item_index < 0)
+				return rte_flow_error_set(e, EINVAL,
+						RTE_FLOW_ERROR_TYPE_ACTION, a,
+						"No RTE_FLOW_ITEM_TYPE_TCP or "
+						"RTE_FLOW_ITEM_TYPE_UDP found");
+		}
+
+		tp_port = (const struct rte_flow_action_set_tp *)a->conf;
+		fs->nat_lport = be16_to_cpu(tp_port->port);
+		*nmode |= 1 << 3;
+		break;
+	case RTE_FLOW_ACTION_TYPE_MAC_SWAP:
+		item_index = cxgbe_get_flow_item_index(items,
+						       RTE_FLOW_ITEM_TYPE_ETH);
+		if (item_index < 0)
+			return rte_flow_error_set(e, EINVAL,
+						  RTE_FLOW_ERROR_TYPE_ACTION, a,
+						  "No RTE_FLOW_ITEM_TYPE_ETH "
+						  "found");
+		fs->swapmac = 1;
 		break;
 	default:
 		/* We are not supposed to come here */
@@ -350,10 +572,12 @@ ch_rte_parse_atype_switch(const struct rte_flow_action *a,
 
 static int
 cxgbe_rtef_parse_actions(struct rte_flow *flow,
+			 const struct rte_flow_item items[],
 			 const struct rte_flow_action action[],
 			 struct rte_flow_error *e)
 {
 	struct ch_filter_specification *fs = &flow->fs;
+	uint8_t nmode = 0, nat_ipv4 = 0, nat_ipv6 = 0;
 	const struct rte_flow_action_queue *q;
 	const struct rte_flow_action *a;
 	char abit = 0;
@@ -391,7 +615,22 @@ cxgbe_rtef_parse_actions(struct rte_flow *flow,
 		case RTE_FLOW_ACTION_TYPE_COUNT:
 			fs->hitcnts = 1;
 			break;
+		case RTE_FLOW_ACTION_TYPE_OF_SET_VLAN_VID:
+		case RTE_FLOW_ACTION_TYPE_OF_PUSH_VLAN:
+		case RTE_FLOW_ACTION_TYPE_OF_POP_VLAN:
 		case RTE_FLOW_ACTION_TYPE_PHY_PORT:
+		case RTE_FLOW_ACTION_TYPE_MAC_SWAP:
+		case RTE_FLOW_ACTION_TYPE_SET_IPV4_SRC:
+		case RTE_FLOW_ACTION_TYPE_SET_IPV4_DST:
+			nat_ipv4++;
+			goto action_switch;
+		case RTE_FLOW_ACTION_TYPE_SET_IPV6_SRC:
+		case RTE_FLOW_ACTION_TYPE_SET_IPV6_DST:
+			nat_ipv6++;
+			goto action_switch;
+		case RTE_FLOW_ACTION_TYPE_SET_TP_SRC:
+		case RTE_FLOW_ACTION_TYPE_SET_TP_DST:
+action_switch:
 			/* We allow multiple switch actions, but switch is
 			 * not compatible with either queue or drop
 			 */
@@ -399,7 +638,14 @@ cxgbe_rtef_parse_actions(struct rte_flow *flow,
 				return rte_flow_error_set(e, EINVAL,
 						RTE_FLOW_ERROR_TYPE_ACTION, a,
 						"overlapping action specified");
-			ret = ch_rte_parse_atype_switch(a, fs, e);
+			if (nat_ipv4 && nat_ipv6)
+				return rte_flow_error_set(e, EINVAL,
+					RTE_FLOW_ERROR_TYPE_ACTION, a,
+					"Can't have one address ipv4 and the"
+					" other ipv6");
+
+			ret = ch_rte_parse_atype_switch(a, items, &nmode, fs,
+							e);
 			if (ret)
 				return ret;
 			fs->action = FILTER_SWITCH;
@@ -412,11 +658,24 @@ cxgbe_rtef_parse_actions(struct rte_flow *flow,
 		}
 	}
 
+	if (ch_rte_parse_nat(nmode, fs))
+		return rte_flow_error_set(e, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ACTION, a,
+					  "invalid settings for swich action");
 	return 0;
 }
 
-struct chrte_fparse parseitem[] = {
-		[RTE_FLOW_ITEM_TYPE_PHY_PORT] = {
+static struct chrte_fparse parseitem[] = {
+	[RTE_FLOW_ITEM_TYPE_ETH] = {
+		.fptr  = ch_rte_parsetype_eth,
+		.dmask = &(const struct rte_flow_item_eth){
+			.dst.addr_bytes = "\xff\xff\xff\xff\xff\xff",
+			.src.addr_bytes = "\x00\x00\x00\x00\x00\x00",
+			.type = 0xffff,
+		}
+	},
+
+	[RTE_FLOW_ITEM_TYPE_PHY_PORT] = {
 		.fptr = ch_rte_parsetype_port,
 		.dmask = &(const struct rte_flow_item_phy_port){
 			.index = 0x7,
@@ -454,10 +713,10 @@ cxgbe_rtef_parse_items(struct rte_flow *flow,
 	char repeat[ARRAY_SIZE(parseitem)] = {0};
 
 	for (i = items; i->type != RTE_FLOW_ITEM_TYPE_END; i++) {
-		struct chrte_fparse *idx = &flow->item_parser[i->type];
+		struct chrte_fparse *idx;
 		int ret;
 
-		if (i->type > ARRAY_SIZE(parseitem))
+		if (i->type >= ARRAY_SIZE(parseitem))
 			return rte_flow_error_set(e, ENOTSUP,
 						  RTE_FLOW_ERROR_TYPE_ITEM,
 						  i, "Item not supported");
@@ -478,6 +737,7 @@ cxgbe_rtef_parse_items(struct rte_flow *flow,
 			if (ret)
 				return ret;
 
+			idx = &flow->item_parser[i->type];
 			if (!idx || !idx->fptr) {
 				return rte_flow_error_set(e, ENOTSUP,
 						RTE_FLOW_ERROR_TYPE_ITEM, i,
@@ -503,7 +763,6 @@ cxgbe_flow_parse(struct rte_flow *flow,
 		 struct rte_flow_error *e)
 {
 	int ret;
-
 	/* parse user request into ch_filter_specification */
 	ret = cxgbe_rtef_parse_attr(flow, attr, e);
 	if (ret)
@@ -511,7 +770,7 @@ cxgbe_flow_parse(struct rte_flow *flow,
 	ret = cxgbe_rtef_parse_items(flow, item, e);
 	if (ret)
 		return ret;
-	return cxgbe_rtef_parse_actions(flow, action, e);
+	return cxgbe_rtef_parse_actions(flow, item, action, e);
 }
 
 static int __cxgbe_flow_create(struct rte_eth_dev *dev, struct rte_flow *flow)
@@ -538,7 +797,7 @@ static int __cxgbe_flow_create(struct rte_eth_dev *dev, struct rte_flow *flow)
 
 	/* Poll the FW for reply */
 	err = cxgbe_poll_for_completion(&adap->sge.fw_evtq,
-					CXGBE_FLOW_POLL_US,
+					CXGBE_FLOW_POLL_MS,
 					CXGBE_FLOW_POLL_CNT,
 					&ctx.completion);
 	if (err) {
@@ -582,6 +841,7 @@ cxgbe_flow_create(struct rte_eth_dev *dev,
 
 	flow->item_parser = parseitem;
 	flow->dev = dev;
+	flow->fs.private = (void *)flow;
 
 	if (cxgbe_flow_parse(flow, attr, item, action, e)) {
 		t4_os_free(flow);
@@ -623,7 +883,7 @@ static int __cxgbe_flow_destroy(struct rte_eth_dev *dev, struct rte_flow *flow)
 
 	/* Poll the FW for reply */
 	err = cxgbe_poll_for_completion(&adap->sge.fw_evtq,
-					CXGBE_FLOW_POLL_US,
+					CXGBE_FLOW_POLL_MS,
 					CXGBE_FLOW_POLL_CNT,
 					&ctx.completion);
 	if (err) {
@@ -634,6 +894,17 @@ static int __cxgbe_flow_destroy(struct rte_eth_dev *dev, struct rte_flow *flow)
 		dev_err(adap, "Hardware error %d while deleting the filter.\n",
 			ctx.result);
 		return ctx.result;
+	}
+
+	fs = &flow->fs;
+	if (fs->mask.macidx) {
+		struct port_info *pi = (struct port_info *)
+					(dev->data->dev_private);
+		int ret;
+
+		ret = cxgbe_mpstcam_remove(pi, fs->val.macidx);
+		if (!ret)
+			return ret;
 	}
 
 	return 0;

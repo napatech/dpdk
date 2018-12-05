@@ -32,7 +32,7 @@ struct event_eth_rx_adapter_test_params {
 static struct event_eth_rx_adapter_test_params default_params;
 
 static inline int
-port_init_common(uint8_t port, const struct rte_eth_conf *port_conf,
+port_init_common(uint16_t port, const struct rte_eth_conf *port_conf,
 		struct rte_mempool *mp)
 {
 	const uint16_t rx_ring_size = 512, tx_ring_size = 512;
@@ -94,12 +94,11 @@ port_init_common(uint8_t port, const struct rte_eth_conf *port_conf,
 }
 
 static inline int
-port_init_rx_intr(uint8_t port, struct rte_mempool *mp)
+port_init_rx_intr(uint16_t port, struct rte_mempool *mp)
 {
 	static const struct rte_eth_conf port_conf_default = {
 		.rxmode = {
-			.mq_mode = ETH_MQ_RX_RSS,
-			.max_rx_pkt_len = ETHER_MAX_LEN
+			.mq_mode = ETH_MQ_RX_NONE,
 		},
 		.intr_conf = {
 			.rxq = 1,
@@ -110,20 +109,12 @@ port_init_rx_intr(uint8_t port, struct rte_mempool *mp)
 }
 
 static inline int
-port_init(uint8_t port, struct rte_mempool *mp)
+port_init(uint16_t port, struct rte_mempool *mp)
 {
 	static const struct rte_eth_conf port_conf_default = {
 		.rxmode = {
-			.mq_mode = ETH_MQ_RX_RSS,
-			.max_rx_pkt_len = ETHER_MAX_LEN
+			.mq_mode = ETH_MQ_RX_NONE,
 		},
-		.rx_adv_conf = {
-			.rss_conf = {
-				.rss_hf = ETH_RSS_IP |
-					ETH_RSS_TCP |
-					ETH_RSS_UDP,
-			}
-		}
 	};
 
 	return port_init_common(port, &port_conf_default, mp);
@@ -319,6 +310,8 @@ adapter_create(void)
 	struct rte_event_dev_info dev_info;
 	struct rte_event_port_conf rx_p_conf;
 
+	memset(&rx_p_conf, 0, sizeof(rx_p_conf));
+
 	err = rte_event_dev_info_get(TEST_DEV_ID, &dev_info);
 	TEST_ASSERT(err == 0, "Expected 0 got %d", err);
 
@@ -496,14 +489,11 @@ adapter_multi_eth_add_del(void)
 	err = init_ports(rte_eth_dev_count_total());
 	TEST_ASSERT(err == 0, "Port initialization failed err %d\n", err);
 
-	/* creating new instance for all newly added eth devices */
-	adapter_create();
-
 	/* eth_rx_adapter_queue_add for n ports */
 	port_index = 0;
 	for (; port_index < rte_eth_dev_count_total(); port_index += 1) {
 		err = rte_event_eth_rx_adapter_queue_add(TEST_INST_ID,
-				port_index, 0,
+				port_index, -1,
 				&queue_config);
 		TEST_ASSERT(err == 0, "Expected 0 got %d", err);
 	}
@@ -512,11 +502,9 @@ adapter_multi_eth_add_del(void)
 	port_index = 0;
 	for (; port_index < rte_eth_dev_count_total(); port_index += 1) {
 		err = rte_event_eth_rx_adapter_queue_del(TEST_INST_ID,
-				port_index, 0);
+				port_index, -1);
 		TEST_ASSERT(err == 0, "Expected 0 got %d", err);
 	}
-
-	adapter_free();
 
 	return TEST_SUCCESS;
 }
@@ -547,11 +535,13 @@ adapter_intr_queue_add_del(void)
 	/* weight = 0 => interrupt mode */
 	queue_config.servicing_weight = 0;
 
-	/* add queue 0 */
-	err = rte_event_eth_rx_adapter_queue_add(TEST_INST_ID,
-						TEST_ETHDEV_ID, 0,
-						&queue_config);
-	TEST_ASSERT(err == 0, "Expected 0 got %d", err);
+	if (cap & RTE_EVENT_ETH_RX_ADAPTER_CAP_MULTI_EVENTQ) {
+		/* add queue 0 */
+		err = rte_event_eth_rx_adapter_queue_add(TEST_INST_ID,
+							TEST_ETHDEV_ID, 0,
+							&queue_config);
+		TEST_ASSERT(err == 0, "Expected 0 got %d", err);
+	}
 
 	/* add all queues */
 	queue_config.servicing_weight = 0;
@@ -561,11 +551,13 @@ adapter_intr_queue_add_del(void)
 						&queue_config);
 	TEST_ASSERT(err == 0, "Expected 0 got %d", err);
 
-	/* del queue 0 */
-	err = rte_event_eth_rx_adapter_queue_del(TEST_INST_ID,
-						TEST_ETHDEV_ID,
-						0);
-	TEST_ASSERT(err == 0, "Expected 0 got %d", err);
+	if (cap & RTE_EVENT_ETH_RX_ADAPTER_CAP_MULTI_EVENTQ) {
+		/* del queue 0 */
+		err = rte_event_eth_rx_adapter_queue_del(TEST_INST_ID,
+							TEST_ETHDEV_ID,
+							0);
+		TEST_ASSERT(err == 0, "Expected 0 got %d", err);
+	}
 
 	/* del remaining queues */
 	err = rte_event_eth_rx_adapter_queue_del(TEST_INST_ID,
@@ -583,11 +575,14 @@ adapter_intr_queue_add_del(void)
 
 	/* intr -> poll mode queue */
 	queue_config.servicing_weight = 1;
-	err = rte_event_eth_rx_adapter_queue_add(TEST_INST_ID,
-						TEST_ETHDEV_ID,
-						0,
-						&queue_config);
-	TEST_ASSERT(err == 0, "Expected 0 got %d", err);
+
+	if (cap & RTE_EVENT_ETH_RX_ADAPTER_CAP_MULTI_EVENTQ) {
+		err = rte_event_eth_rx_adapter_queue_add(TEST_INST_ID,
+							TEST_ETHDEV_ID,
+							0,
+							&queue_config);
+		TEST_ASSERT(err == 0, "Expected 0 got %d", err);
+	}
 
 	err = rte_event_eth_rx_adapter_queue_add(TEST_INST_ID,
 						TEST_ETHDEV_ID,
@@ -682,7 +677,8 @@ static struct unit_test_suite event_eth_rx_tests = {
 		TEST_CASE_ST(NULL, NULL, adapter_create_free),
 		TEST_CASE_ST(adapter_create, adapter_free,
 					adapter_queue_add_del),
-		TEST_CASE_ST(NULL, NULL, adapter_multi_eth_add_del),
+		TEST_CASE_ST(adapter_create, adapter_free,
+					adapter_multi_eth_add_del),
 		TEST_CASE_ST(adapter_create, adapter_free, adapter_start_stop),
 		TEST_CASE_ST(adapter_create, adapter_free, adapter_stats),
 		TEST_CASES_END() /**< NULL terminate unit test array */

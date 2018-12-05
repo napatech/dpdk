@@ -43,21 +43,19 @@ int bnxt_mq_rx_configure(struct bnxt *bp)
 
 	/* Single queue mode */
 	if (bp->rx_cp_nr_rings < 2) {
-		vnic = bnxt_alloc_vnic(bp);
+		vnic = &bp->vnic_info[0];
 		if (!vnic) {
 			PMD_DRV_LOG(ERR, "VNIC alloc failed\n");
 			rc = -ENOMEM;
 			goto err_out;
 		}
 		vnic->flags |= BNXT_VNIC_INFO_BCAST;
-		STAILQ_INSERT_TAIL(&bp->ff_pool[0], vnic, next);
 		bp->nr_vnics++;
 
 		rxq = bp->eth_dev->data->rx_queues[0];
 		rxq->vnic = vnic;
 
 		vnic->func_default = true;
-		vnic->ff_pool_idx = 0;
 		vnic->start_grp_id = 0;
 		vnic->end_grp_id = vnic->start_grp_id;
 		filter = bnxt_alloc_filter(bp);
@@ -85,6 +83,9 @@ int bnxt_mq_rx_configure(struct bnxt *bp)
 					    RTE_MIN(bp->max_l2_ctx,
 					    RTE_MIN(bp->max_rsscos_ctx,
 						    ETH_64_POOLS)));
+			PMD_DRV_LOG(DEBUG,
+				    "pools = %u max_pools = %u\n",
+				    pools, max_pools);
 			if (pools > max_pools)
 				pools = max_pools;
 			break;
@@ -98,25 +99,27 @@ int bnxt_mq_rx_configure(struct bnxt *bp)
 			goto err_out;
 		}
 	}
-
 	nb_q_per_grp = bp->rx_cp_nr_rings / pools;
+	PMD_DRV_LOG(ERR, "pools = %u nb_q_per_grp = %u\n", pools, nb_q_per_grp);
 	start_grp_id = 0;
 	end_grp_id = nb_q_per_grp;
 
 	for (i = 0; i < pools; i++) {
-		vnic = bnxt_alloc_vnic(bp);
+		vnic = &bp->vnic_info[i];
 		if (!vnic) {
 			PMD_DRV_LOG(ERR, "VNIC alloc failed\n");
 			rc = -ENOMEM;
 			goto err_out;
 		}
 		vnic->flags |= BNXT_VNIC_INFO_BCAST;
-		STAILQ_INSERT_TAIL(&bp->ff_pool[i], vnic, next);
 		bp->nr_vnics++;
 
 		for (j = 0; j < nb_q_per_grp; j++, ring_idx++) {
 			rxq = bp->eth_dev->data->rx_queues[ring_idx];
 			rxq->vnic = vnic;
+			PMD_DRV_LOG(DEBUG,
+				    "rxq[%d] = %p vnic[%d] = %p\n",
+				    ring_idx, rxq, i, vnic);
 		}
 		if (i == 0) {
 			if (dev_conf->rxmode.mq_mode & ETH_MQ_RX_VMDQ_DCB) {
@@ -125,7 +128,6 @@ int bnxt_mq_rx_configure(struct bnxt *bp)
 			}
 			vnic->func_default = true;
 		}
-		vnic->ff_pool_idx = i;
 		vnic->start_grp_id = start_grp_id;
 		vnic->end_grp_id = end_grp_id;
 
@@ -176,7 +178,7 @@ out:
 			hash_type |= HWRM_VNIC_RSS_CFG_INPUT_HASH_TYPE_UDP_IPV6;
 
 		for (i = 0; i < bp->nr_vnics; i++) {
-			STAILQ_FOREACH(vnic, &bp->ff_pool[i], next) {
+			vnic = &bp->vnic_info[i];
 			vnic->hash_type = hash_type;
 
 			/*
@@ -187,7 +189,6 @@ out:
 			    rss->rss_key_len <= HW_HASH_KEY_SIZE)
 				memcpy(vnic->rss_hash_key,
 				       rss->rss_key, rss->rss_key_len);
-			}
 		}
 	}
 
@@ -331,8 +332,10 @@ int bnxt_rx_queue_setup_op(struct rte_eth_dev *eth_dev,
 
 	rxq->queue_id = queue_idx;
 	rxq->port_id = eth_dev->data->port_id;
-	rxq->crc_len = rte_eth_dev_must_keep_crc(rx_offloads) ?
-		ETHER_CRC_LEN : 0;
+	if (rx_offloads & DEV_RX_OFFLOAD_KEEP_CRC)
+		rxq->crc_len = ETHER_CRC_LEN;
+	else
+		rxq->crc_len = 0;
 
 	eth_dev->data->rx_queues[queue_idx] = rxq;
 	/* Allocate RX ring hardware descriptors */

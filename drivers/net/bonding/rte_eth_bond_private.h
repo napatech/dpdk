@@ -5,9 +5,11 @@
 #ifndef _RTE_ETH_BOND_PRIVATE_H_
 #define _RTE_ETH_BOND_PRIVATE_H_
 
+#include <stdint.h>
 #include <sys/queue.h>
 
 #include <rte_ethdev_driver.h>
+#include <rte_flow.h>
 #include <rte_spinlock.h>
 #include <rte_bitmap.h>
 #include <rte_flow_driver.h>
@@ -93,7 +95,8 @@ struct rte_flow {
 	/* Slaves flows */
 	struct rte_flow *flows[RTE_MAX_ETHPORTS];
 	/* Flow description for synchronization */
-	struct rte_flow_desc *fd;
+	struct rte_flow_conv_rule rule;
+	uint8_t rule_data[];
 };
 
 typedef void (*burst_xmit_hash_t)(struct rte_mbuf **buf, uint16_t nb_pkts,
@@ -159,6 +162,11 @@ struct bond_dev_private {
 
 	/** Bit mask of RSS offloads, the bit offset also means flow type */
 	uint64_t flow_type_rss_offloads;
+
+	struct rte_eth_rxconf default_rxconf;	/**< Default RxQ conf. */
+	struct rte_eth_txconf default_txconf;	/**< Default TxQ conf. */
+	struct rte_eth_desc_lim rx_desc_lim;	/**< Rx descriptor limits */
+	struct rte_eth_desc_lim tx_desc_lim;	/**< Tx descriptor limits */
 
 	uint16_t reta_size;
 	struct rte_eth_rss_reta_entry64 reta_conf[ETH_RSS_RETA_SIZE_512 /

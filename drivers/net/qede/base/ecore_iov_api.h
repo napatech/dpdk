@@ -84,6 +84,13 @@ struct ecore_public_vf_info {
 	 */
 	u8 forced_mac[ETH_ALEN];
 	u16 forced_vlan;
+
+	/* Trusted VFs can configure promiscuous mode and
+	 * set MAC address inspite PF has set forced MAC.
+	 * Also store shadow promisc configuration if needed.
+	 */
+	bool is_trusted_configured;
+	bool is_trusted_request;
 };
 
 struct ecore_iov_vf_init_params {
@@ -695,6 +702,16 @@ bool ecore_iov_is_vf_started(struct ecore_hwfn *p_hwfn,
  */
 int ecore_iov_get_vf_min_rate(struct ecore_hwfn *p_hwfn, int vfid);
 
+/**
+ * @brief - Configure min rate for VF's vport.
+ * @param p_dev
+ * @param vfid
+ * @param - rate in Mbps
+ *
+ * @return
+ */
+enum _ecore_status_t ecore_iov_configure_min_tx_rate(struct ecore_dev *p_dev,
+						     int vfid, u32 rate);
 #endif
 
 /**

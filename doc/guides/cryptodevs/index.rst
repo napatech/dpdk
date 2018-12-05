@@ -13,10 +13,12 @@ Crypto Device Drivers
     aesni_mb
     aesni_gcm
     armv8
+    caam_jr
     ccp
     dpaa2_sec
     dpaa_sec
     kasumi
+    octeontx
     openssl
     mvsam
     null

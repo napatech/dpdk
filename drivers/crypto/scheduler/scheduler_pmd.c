@@ -14,7 +14,7 @@
 #include "rte_cryptodev_scheduler.h"
 #include "scheduler_pmd_private.h"
 
-uint8_t cryptodev_driver_id;
+uint8_t cryptodev_scheduler_driver_id;
 
 struct scheduler_init_params {
 	struct rte_cryptodev_pmd_init_params def_p;
@@ -38,7 +38,7 @@ struct scheduler_init_params {
 #define RTE_CRYPTODEV_VDEV_COREMASK		("coremask")
 #define RTE_CRYPTODEV_VDEV_CORELIST		("corelist")
 
-const char *scheduler_valid_params[] = {
+static const char * const scheduler_valid_params[] = {
 	RTE_CRYPTODEV_VDEV_NAME,
 	RTE_CRYPTODEV_VDEV_SLAVE,
 	RTE_CRYPTODEV_VDEV_MODE,
@@ -91,7 +91,7 @@ cryptodev_scheduler_create(const char *name,
 		return -EFAULT;
 	}
 
-	dev->driver_id = cryptodev_driver_id;
+	dev->driver_id = cryptodev_scheduler_driver_id;
 	dev->dev_ops = rte_crypto_scheduler_pmd_ops;
 
 	sched_ctx = dev->data->dev_private;
@@ -369,7 +369,7 @@ parse_name_arg(const char *key __rte_unused,
 		return -EINVAL;
 	}
 
-	strncpy(params->name, value, RTE_CRYPTODEV_NAME_MAX_LEN);
+	strlcpy(params->name, value, RTE_CRYPTODEV_NAME_MAX_LEN);
 
 	return 0;
 }
@@ -569,4 +569,4 @@ RTE_PMD_REGISTER_PARAM_STRING(CRYPTODEV_NAME_SCHEDULER_PMD,
 	"slave=<name>");
 RTE_PMD_REGISTER_CRYPTO_DRIVER(scheduler_crypto_drv,
 		cryptodev_scheduler_pmd_drv.driver,
-		cryptodev_driver_id);
+		cryptodev_scheduler_driver_id);

@@ -123,14 +123,22 @@ static struct rte_mbuf *
 sfc_ef10_essb_next_mbuf(const struct sfc_ef10_essb_rxq *rxq,
 			struct rte_mbuf *mbuf)
 {
-	return (struct rte_mbuf *)((uintptr_t)mbuf + rxq->buf_stride);
+	struct rte_mbuf *m;
+
+	m = (struct rte_mbuf *)((uintptr_t)mbuf + rxq->buf_stride);
+	MBUF_RAW_ALLOC_CHECK(m);
+	return m;
 }
 
 static struct rte_mbuf *
 sfc_ef10_essb_mbuf_by_index(const struct sfc_ef10_essb_rxq *rxq,
 			    struct rte_mbuf *mbuf, unsigned int idx)
 {
-	return (struct rte_mbuf *)((uintptr_t)mbuf + idx * rxq->buf_stride);
+	struct rte_mbuf *m;
+
+	m = (struct rte_mbuf *)((uintptr_t)mbuf + idx * rxq->buf_stride);
+	MBUF_RAW_ALLOC_CHECK(m);
+	return m;
 }
 
 static struct rte_mbuf *
@@ -324,7 +332,7 @@ sfc_ef10_essb_rx_get_pending(struct sfc_ef10_essb_rxq *rxq,
 
 			/* Buffers to be discarded have 0 in packet type */
 			if (unlikely(m->packet_type == 0)) {
-				rte_mempool_put(rxq->refill_mb_pool, m);
+				rte_mbuf_raw_free(m);
 				goto next_buf;
 			}
 
@@ -687,7 +695,7 @@ sfc_ef10_essb_rx_qpurge(struct sfc_dp_rxq *dp_rxq)
 		m = sfc_ef10_essb_mbuf_by_index(rxq, rxd->first_mbuf,
 				rxq->block_size - rxq->left_in_completed);
 		while (rxq->left_in_completed > 0) {
-			rte_mempool_put(rxq->refill_mb_pool, m);
+			rte_mbuf_raw_free(m);
 			m = sfc_ef10_essb_next_mbuf(rxq, m);
 			rxq->left_in_completed--;
 		}

@@ -800,7 +800,7 @@ mp_request_async(const char *dst, struct rte_mp_msg *req,
 {
 	struct rte_mp_msg *reply_msg;
 	struct pending_request *pending_req, *exist;
-	int ret;
+	int ret = -1;
 
 	pending_req = calloc(1, sizeof(*pending_req));
 	reply_msg = calloc(1, sizeof(*reply_msg));
@@ -837,16 +837,17 @@ mp_request_async(const char *dst, struct rte_mp_msg *req,
 		ret = 0;
 		goto fail;
 	}
-	TAILQ_INSERT_TAIL(&pending_requests.requests, pending_req, next);
-
 	param->user_reply.nb_sent++;
 
+	/* if alarm set fails, we simply ignore the reply */
 	if (rte_eal_alarm_set(ts->tv_sec * 1000000 + ts->tv_nsec / 1000,
 			      async_reply_handle, pending_req) < 0) {
 		RTE_LOG(ERR, EAL, "Fail to set alarm for request %s:%s\n",
 			dst, req->name);
-		rte_panic("Fix the above shit to properly free all memory\n");
+		ret = -1;
+		goto fail;
 	}
+	TAILQ_INSERT_TAIL(&pending_requests.requests, pending_req, next);
 
 	return 0;
 fail:
@@ -939,13 +940,17 @@ rte_mp_request_sync(struct rte_mp_msg *req, struct rte_mp_reply *reply,
 	if (check_input(req) == false)
 		return -1;
 
+	reply->nb_sent = 0;
+	reply->nb_received = 0;
+	reply->msgs = NULL;
+
 	if (internal_config.no_shconf) {
 		RTE_LOG(DEBUG, EAL, "No shared files mode enabled, IPC is disabled\n");
 		return 0;
 	}
 
 	if (gettimeofday(&now, NULL) < 0) {
-		RTE_LOG(ERR, EAL, "Faile to get current time\n");
+		RTE_LOG(ERR, EAL, "Failed to get current time\n");
 		rte_errno = errno;
 		return -1;
 	}
@@ -953,10 +958,6 @@ rte_mp_request_sync(struct rte_mp_msg *req, struct rte_mp_reply *reply,
 	end.tv_nsec = (now.tv_usec * 1000 + ts->tv_nsec) % 1000000000;
 	end.tv_sec = now.tv_sec + ts->tv_sec +
 			(now.tv_usec * 1000 + ts->tv_nsec) / 1000000000;
-
-	reply->nb_sent = 0;
-	reply->nb_received = 0;
-	reply->msgs = NULL;
 
 	/* for secondary process, send request to the primary process only */
 	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {

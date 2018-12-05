@@ -48,6 +48,7 @@
 #include <rte_atomic.h>
 #include <malloc_heap.h>
 #include <rte_vfio.h>
+#include <rte_option.h>
 
 #include "eal_private.h"
 #include "eal_thread.h"
@@ -149,7 +150,7 @@ eal_create_runtime_dir(void)
 }
 
 const char *
-eal_get_runtime_dir(void)
+rte_eal_get_runtime_dir(void)
 {
 	return runtime_dir;
 }
@@ -263,6 +264,8 @@ rte_eal_config_create(void)
 	 * processes could later map the config into this exact location */
 	rte_config.mem_config->mem_cfg_addr = (uintptr_t) rte_mem_cfg_addr;
 
+	rte_config.mem_config->dma_maskbits = 0;
+
 }
 
 /* attach to an existing shared memory config */
@@ -352,6 +355,24 @@ eal_proc_type_detect(void)
 	return ptype;
 }
 
+/* copies data from internal config to shared config */
+static void
+eal_update_mem_config(void)
+{
+	struct rte_mem_config *mcfg = rte_eal_get_configuration()->mem_config;
+	mcfg->legacy_mem = internal_config.legacy_mem;
+	mcfg->single_file_segments = internal_config.single_file_segments;
+}
+
+/* copies data from shared config to internal config */
+static void
+eal_update_internal_config(void)
+{
+	struct rte_mem_config *mcfg = rte_eal_get_configuration()->mem_config;
+	internal_config.legacy_mem = mcfg->legacy_mem;
+	internal_config.single_file_segments = mcfg->single_file_segments;
+}
+
 /* Sets up rte_config structure with the pointer to shared memory config.*/
 static void
 rte_config_init(void)
@@ -361,11 +382,13 @@ rte_config_init(void)
 	switch (rte_config.process_type){
 	case RTE_PROC_PRIMARY:
 		rte_eal_config_create();
+		eal_update_mem_config();
 		break;
 	case RTE_PROC_SECONDARY:
 		rte_eal_config_attach();
 		rte_eal_mcfg_wait_complete(rte_config.mem_config);
 		rte_eal_config_reattach();
+		eal_update_internal_config();
 		break;
 	case RTE_PROC_AUTO:
 	case RTE_PROC_INVALID:
@@ -580,12 +603,20 @@ eal_parse_args(int argc, char **argv)
 
 	argvopt = argv;
 	optind = 1;
+	opterr = 0;
 
 	while ((opt = getopt_long(argc, argvopt, eal_short_options,
 				  eal_long_options, &option_index)) != EOF) {
 
-		/* getopt is not happy, stop right now */
+		/*
+		 * getopt didn't recognise the option, lets parse the
+		 * registered options to see if the flag is valid
+		 */
 		if (opt == '?') {
+			ret = rte_option_parse(argv[optind-1]);
+			if (ret == 0)
+				continue;
+
 			eal_usage(prgname);
 			ret = -1;
 			goto out;
@@ -725,6 +756,9 @@ check_socket(const struct rte_memseg_list *msl, void *arg)
 {
 	int *socket_id = arg;
 
+	if (msl->external)
+		return 0;
+
 	return *socket_id == msl->socket_id;
 }
 
@@ -793,7 +827,8 @@ rte_eal_init(int argc, char **argv)
 	int i, fctret, ret;
 	pthread_t thread_id;
 	static rte_atomic32_t run_once = RTE_ATOMIC32_INIT(0);
-	const char *logid;
+	const char *p;
+	static char logid[PATH_MAX];
 	char cpuset[RTE_CPU_AFFINITY_STR_LEN];
 	char thread_name[RTE_MAX_THREAD_NAME_LEN];
 
@@ -810,9 +845,8 @@ rte_eal_init(int argc, char **argv)
 		return -1;
 	}
 
-	logid = strrchr(argv[0], '/');
-	logid = strdup(logid ? logid + 1: argv[0]);
-
+	p = strrchr(argv[0], '/');
+	strlcpy(logid, p ? p + 1 : argv[0], sizeof(logid));
 	thread_id = pthread_self();
 
 	eal_reset_internal_config(&internal_config);
@@ -835,7 +869,7 @@ rte_eal_init(int argc, char **argv)
 	}
 
 	if (eal_plugins_init() < 0) {
-		rte_eal_init_alert("Cannot init plugins\n");
+		rte_eal_init_alert("Cannot init plugins");
 		rte_errno = EINVAL;
 		rte_atomic32_clear(&run_once);
 		return -1;
@@ -850,7 +884,7 @@ rte_eal_init(int argc, char **argv)
 	rte_config_init();
 
 	if (rte_eal_intr_init() < 0) {
-		rte_eal_init_alert("Cannot init interrupt-handling thread\n");
+		rte_eal_init_alert("Cannot init interrupt-handling thread");
 		return -1;
 	}
 
@@ -858,30 +892,43 @@ rte_eal_init(int argc, char **argv)
 	 * bus through mp channel in the secondary process before the bus scan.
 	 */
 	if (rte_mp_channel_init() < 0) {
-		rte_eal_init_alert("failed to init mp channel\n");
+		rte_eal_init_alert("failed to init mp channel");
 		if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
 			rte_errno = EFAULT;
 			return -1;
 		}
 	}
 
+	/* register multi-process action callbacks for hotplug */
+	if (rte_mp_dev_hotplug_init() < 0) {
+		rte_eal_init_alert("failed to register mp callback for hotplug");
+		return -1;
+	}
+
 	if (rte_bus_scan()) {
-		rte_eal_init_alert("Cannot scan the buses for devices\n");
+		rte_eal_init_alert("Cannot scan the buses for devices");
 		rte_errno = ENODEV;
 		rte_atomic32_clear(&run_once);
 		return -1;
 	}
 
-	/* autodetect the iova mapping mode (default is iova_pa) */
-	rte_eal_get_configuration()->iova_mode = rte_bus_get_iommu_class();
+	/* if no EAL option "--iova-mode=<pa|va>", use bus IOVA scheme */
+	if (internal_config.iova_mode == RTE_IOVA_DC) {
+		/* autodetect the IOVA mapping mode (default is RTE_IOVA_PA) */
+		rte_eal_get_configuration()->iova_mode =
+			rte_bus_get_iommu_class();
 
-	/* Workaround for KNI which requires physical address to work */
-	if (rte_eal_get_configuration()->iova_mode == RTE_IOVA_VA &&
-			rte_eal_check_module("rte_kni") == 1) {
-		rte_eal_get_configuration()->iova_mode = RTE_IOVA_PA;
-		RTE_LOG(WARNING, EAL,
-			"Some devices want IOVA as VA but PA will be used because.. "
-			"KNI module inserted\n");
+		/* Workaround for KNI which requires physical address to work */
+		if (rte_eal_get_configuration()->iova_mode == RTE_IOVA_VA &&
+				rte_eal_check_module("rte_kni") == 1) {
+			rte_eal_get_configuration()->iova_mode = RTE_IOVA_PA;
+			RTE_LOG(WARNING, EAL,
+				"Some devices want IOVA as VA but PA will be used because.. "
+				"KNI module inserted\n");
+		}
+	} else {
+		rte_eal_get_configuration()->iova_mode =
+			internal_config.iova_mode;
 	}
 
 	if (internal_config.no_hugetlbfs == 0) {
@@ -924,7 +971,7 @@ rte_eal_init(int argc, char **argv)
 
 #ifdef VFIO_PRESENT
 	if (rte_eal_vfio_setup() < 0) {
-		rte_eal_init_alert("Cannot init VFIO\n");
+		rte_eal_init_alert("Cannot init VFIO");
 		rte_errno = EAGAIN;
 		rte_atomic32_clear(&run_once);
 		return -1;
@@ -935,13 +982,13 @@ rte_eal_init(int argc, char **argv)
 	 * initialize memzones first.
 	 */
 	if (rte_eal_memzone_init() < 0) {
-		rte_eal_init_alert("Cannot init memzone\n");
+		rte_eal_init_alert("Cannot init memzone");
 		rte_errno = ENODEV;
 		return -1;
 	}
 
 	if (rte_eal_memory_init() < 0) {
-		rte_eal_init_alert("Cannot init memory\n");
+		rte_eal_init_alert("Cannot init memory");
 		rte_errno = ENOMEM;
 		return -1;
 	}
@@ -950,25 +997,25 @@ rte_eal_init(int argc, char **argv)
 	eal_hugedirs_unlock();
 
 	if (rte_eal_malloc_heap_init() < 0) {
-		rte_eal_init_alert("Cannot init malloc heap\n");
+		rte_eal_init_alert("Cannot init malloc heap");
 		rte_errno = ENODEV;
 		return -1;
 	}
 
 	if (rte_eal_tailqs_init() < 0) {
-		rte_eal_init_alert("Cannot init tail queues for objects\n");
+		rte_eal_init_alert("Cannot init tail queues for objects");
 		rte_errno = EFAULT;
 		return -1;
 	}
 
 	if (rte_eal_alarm_init() < 0) {
-		rte_eal_init_alert("Cannot init interrupt-handling thread\n");
+		rte_eal_init_alert("Cannot init interrupt-handling thread");
 		/* rte_eal_alarm_init sets rte_errno on failure. */
 		return -1;
 	}
 
 	if (rte_eal_timer_init() < 0) {
-		rte_eal_init_alert("Cannot init HPET or TSC timers\n");
+		rte_eal_init_alert("Cannot init HPET or TSC timers");
 		rte_errno = ENOTSUP;
 		return -1;
 	}
@@ -979,8 +1026,8 @@ rte_eal_init(int argc, char **argv)
 
 	ret = eal_thread_dump_affinity(cpuset, sizeof(cpuset));
 
-	RTE_LOG(DEBUG, EAL, "Master lcore %u is ready (tid=%x;cpuset=[%s%s])\n",
-		rte_config.master_lcore, (int)thread_id, cpuset,
+	RTE_LOG(DEBUG, EAL, "Master lcore %u is ready (tid=%zx;cpuset=[%s%s])\n",
+		rte_config.master_lcore, (uintptr_t)thread_id, cpuset,
 		ret == 0 ? "" : "...");
 
 	RTE_LCORE_FOREACH_SLAVE(i) {
@@ -1022,14 +1069,14 @@ rte_eal_init(int argc, char **argv)
 	/* initialize services so vdevs register service during bus_probe. */
 	ret = rte_service_init();
 	if (ret) {
-		rte_eal_init_alert("rte_service_init() failed\n");
+		rte_eal_init_alert("rte_service_init() failed");
 		rte_errno = ENOEXEC;
 		return -1;
 	}
 
 	/* Probe all the buses and devices/drivers on them */
 	if (rte_bus_probe()) {
-		rte_eal_init_alert("Cannot probe devices\n");
+		rte_eal_init_alert("Cannot probe devices");
 		rte_errno = ENOTSUP;
 		return -1;
 	}
@@ -1051,6 +1098,9 @@ rte_eal_init(int argc, char **argv)
 
 	rte_eal_mcfg_complete();
 
+	/* Call each registered callback, if enabled */
+	rte_option_init();
+
 	return fctret;
 }
 
@@ -1059,7 +1109,12 @@ mark_freeable(const struct rte_memseg_list *msl, const struct rte_memseg *ms,
 		void *arg __rte_unused)
 {
 	/* ms is const, so find this memseg */
-	struct rte_memseg *found = rte_mem_virt2memseg(ms->addr, msl);
+	struct rte_memseg *found;
+
+	if (msl->external)
+		return 0;
+
+	found = rte_mem_virt2memseg(ms->addr, msl);
 
 	found->flags &= ~RTE_MEMSEG_FLAG_DO_NOT_FREE;
 

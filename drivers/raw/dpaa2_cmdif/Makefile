@@ -21,10 +21,11 @@ LDLIBS += -lrte_eal
 LDLIBS += -lrte_kvargs
 LDLIBS += -lrte_mempool_dpaa2
 LDLIBS += -lrte_rawdev
+LDLIBS += -lrte_common_dpaax
 
 EXPORT_MAP := rte_pmd_dpaa2_cmdif_version.map
 
-LIBABIVER := 1
+LIBABIVER := 2
 
 #
 # all source are stored in SRCS-y

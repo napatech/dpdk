@@ -32,8 +32,6 @@
 /* L4 Type field: TCP */
 #define DPAA_L4_PARSE_RESULT_TCP	0x20
 
-#define DPAA_SGT_MAX_ENTRIES 16 /* maximum number of entries in SG Table */
-
 #define DPAA_MAX_DEQUEUE_NUM_FRAMES    63
 	/** <Maximum number of frames to be dequeued in a single rx call*/
 
@@ -272,4 +270,7 @@ void dpaa_rx_cb(struct qman_fq **fq,
 		struct qm_dqrr_entry **dqrr, void **bufs, int num_bufs);
 
 void dpaa_rx_cb_prepare(struct qm_dqrr_entry *dq, void **bufs);
+
+void dpaa_rx_cb_no_prefetch(struct qman_fq **fq,
+		    struct qm_dqrr_entry **dqrr, void **bufs, int num_bufs);
 #endif

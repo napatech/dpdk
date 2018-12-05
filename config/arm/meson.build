@@ -46,6 +46,7 @@ flags_common_default = [
 
 flags_generic = [
 	['RTE_MACHINE', '"armv8a"'],
+	['RTE_MAX_LCORE', 256],
 	['RTE_CACHE_LINE_SIZE', 128]]
 flags_cavium = [
 	['RTE_MACHINE', '"thunderx"'],
@@ -53,7 +54,7 @@ flags_cavium = [
 	['RTE_MAX_NUMA_NODES', 2],
 	['RTE_MAX_LCORE', 96],
 	['RTE_MAX_VFIO_GROUPS', 128],
-	['RTE_RING_USE_C11_MEM_MODEL', false]]
+	['RTE_USE_C11_MEM_MODEL', false]]
 flags_dpaa = [
 	['RTE_MACHINE', '"dpaa"'],
 	['RTE_CACHE_LINE_SIZE', 64],
@@ -89,6 +90,9 @@ if cc.sizeof('void *') != 8
 	dpdk_conf.set('RTE_CACHE_LINE_SIZE', 64)
 	dpdk_conf.set('RTE_ARCH_ARM', 1)
 	dpdk_conf.set('RTE_ARCH_ARMv7', 1)
+	# the minimum architecture supported, armv7-a, needs the following,
+	# mk/machine/armv7a/rte.vars.mk sets it too
+	machine_args += '-mfpu=neon'
 else
 	dpdk_conf.set('RTE_CACHE_LINE_SIZE', 128)
 	dpdk_conf.set('RTE_ARCH_ARM64', 1)
@@ -157,7 +161,8 @@ else
 endif
 message(machine_args)
 
-if cc.get_define('__ARM_NEON', args: machine_args) != ''
+if (cc.get_define('__ARM_NEON', args: machine_args) != '' or
+    cc.get_define('__aarch64__', args: machine_args) != '')
 	dpdk_conf.set('RTE_MACHINE_CPUFLAG_NEON', 1)
 	compile_time_cpuflags += ['RTE_CPUFLAG_NEON']
 endif

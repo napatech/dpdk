@@ -185,6 +185,12 @@ enum ecore_ov_driver_state {
 	ECORE_OV_DRIVER_STATE_ACTIVE
 };
 
+enum ecore_ov_eswitch {
+	ECORE_OV_ESWITCH_NONE,
+	ECORE_OV_ESWITCH_VEB,
+	ECORE_OV_ESWITCH_VEPA
+};
+
 #define ECORE_MAX_NPIV_ENTRIES 128
 #define ECORE_WWN_SIZE 8
 struct ecore_fc_npiv_tbl {
@@ -521,6 +527,10 @@ union ecore_mfw_tlv_data {
 	struct ecore_mfw_tlv_iscsi iscsi;
 };
 
+enum ecore_hw_info_change {
+	ECORE_HW_INFO_CHANGE_OVLAN,
+};
+
 /**
  * @brief - returns the link params of the hw function
  *
@@ -597,6 +607,7 @@ enum _ecore_status_t ecore_mcp_get_media_type(struct ecore_hwfn *p_hwfn,
  *
  * @param p_dev      - ecore dev pointer
  * @param p_ptt
+ * @param p_transceiver_state - transceiver state.
  * @param p_transceiver_type - media type value
  *
  * @return enum _ecore_status_t -
@@ -605,6 +616,7 @@ enum _ecore_status_t ecore_mcp_get_media_type(struct ecore_hwfn *p_hwfn,
  */
 enum _ecore_status_t ecore_mcp_get_transceiver_data(struct ecore_hwfn *p_hwfn,
 						    struct ecore_ptt *p_ptt,
+						    u32 *p_transceiver_state,
 						    u32 *p_tranceiver_type);
 
 /**
@@ -810,6 +822,32 @@ enum _ecore_status_t ecore_mcp_ov_update_mtu(struct ecore_hwfn *p_hwfn,
 					     struct ecore_ptt *p_ptt, u16 mtu);
 
 /**
+ * @brief Send MAC address to MFW
+ *
+ *  @param p_hwfn
+ *  @param p_ptt
+ *  @param mac - MAC address
+ *
+ * @return enum _ecore_status_t - ECORE_SUCCESS - operation was successful.
+ */
+enum _ecore_status_t
+ecore_mcp_ov_update_mac(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt,
+			u8 *mac);
+
+/**
+ * @brief Send eswitch mode to MFW
+ *
+ *  @param p_hwfn
+ *  @param p_ptt
+ *  @param eswitch - eswitch mode
+ *
+ * @return enum _ecore_status_t - ECORE_SUCCESS - operation was successful.
+ */
+enum _ecore_status_t
+ecore_mcp_ov_update_eswitch(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt,
+			    enum ecore_ov_eswitch eswitch);
+
+/**
  * @brief Set LED status
  *
  *  @param p_hwfn
@@ -905,7 +943,7 @@ enum _ecore_status_t ecore_mcp_nvm_resp(struct ecore_dev *p_dev, u8 *p_buf);
  * @return enum _ecore_status_t - ECORE_SUCCESS - operation was successful.
  */
 enum _ecore_status_t ecore_mcp_phy_read(struct ecore_dev *p_dev, u32 cmd,
-					u32 addr, u8 *p_buf, u32 len);
+					u32 addr, u8 *p_buf, u32 *p_len);
 
 /**
  * @brief Read from nvm

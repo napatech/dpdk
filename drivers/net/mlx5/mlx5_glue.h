@@ -23,12 +23,18 @@
 #define MLX5_GLUE_VERSION ""
 #endif
 
-#ifndef HAVE_IBV_DEVICE_COUNTERS_SET_SUPPORT
+#ifndef HAVE_IBV_DEVICE_COUNTERS_SET_V42
 struct ibv_counter_set;
 struct ibv_counter_set_data;
 struct ibv_counter_set_description;
 struct ibv_counter_set_init_attr;
 struct ibv_query_counter_set_attr;
+#endif
+
+#ifndef HAVE_IBV_DEVICE_COUNTERS_SET_V45
+struct ibv_counters;
+struct ibv_counters_init_attr;
+struct ibv_counter_attach_attr;
 #endif
 
 #ifndef HAVE_IBV_DEVICE_TUNNEL_SUPPORT
@@ -37,6 +43,16 @@ struct mlx5dv_qp_init_attr;
 
 #ifndef HAVE_IBV_DEVICE_STRIDING_RQ_SUPPORT
 struct mlx5dv_wq_init_attr;
+#endif
+
+#ifndef HAVE_IBV_FLOW_DV_SUPPORT
+struct mlx5dv_flow_matcher;
+struct mlx5dv_flow_matcher_attr;
+struct mlx5dv_flow_action_attr;
+struct mlx5dv_flow_match_parameters;
+struct ibv_flow_action;
+enum mlx5dv_flow_action_packet_reformat_type { packet_reformat_type = 0, };
+enum mlx5dv_flow_table_type { flow_table_type = 0, };
 #endif
 
 /* LIB_GLUE_VERSION must be updated every time this structure is modified. */
@@ -78,6 +94,7 @@ struct mlx5_glue {
 	struct ibv_flow *(*create_flow)(struct ibv_qp *qp,
 					struct ibv_flow_attr *flow);
 	int (*destroy_flow)(struct ibv_flow *flow_id);
+	int (*destroy_flow_action)(struct ibv_flow_action *action);
 	struct ibv_qp *(*create_qp)(struct ibv_pd *pd,
 				    struct ibv_qp_init_attr *qp_init_attr);
 	struct ibv_qp *(*create_qp_ex)
@@ -99,6 +116,17 @@ struct mlx5_glue {
 		 struct ibv_counter_set_description *cs_desc);
 	int (*query_counter_set)(struct ibv_query_counter_set_attr *query_attr,
 				 struct ibv_counter_set_data *cs_data);
+	struct ibv_counters *(*create_counters)
+		(struct ibv_context *context,
+		 struct ibv_counters_init_attr *init_attr);
+	int (*destroy_counters)(struct ibv_counters *counters);
+	int (*attach_counters)(struct ibv_counters *counters,
+			       struct ibv_counter_attach_attr *attr,
+			       struct ibv_flow *flow);
+	int (*query_counters)(struct ibv_counters *counters,
+			      uint64_t *counters_value,
+			      uint32_t ncounters,
+			      uint32_t flags);
 	void (*ack_async_event)(struct ibv_async_event *event);
 	int (*get_async_event)(struct ibv_context *context,
 			       struct ibv_async_event *event);
@@ -122,6 +150,20 @@ struct mlx5_glue {
 		(struct ibv_context *context,
 		 struct ibv_qp_init_attr_ex *qp_init_attr_ex,
 		 struct mlx5dv_qp_init_attr *dv_qp_init_attr);
+	struct mlx5dv_flow_matcher *(*dv_create_flow_matcher)
+		(struct ibv_context *context,
+		 struct mlx5dv_flow_matcher_attr *matcher_attr);
+	int (*dv_destroy_flow_matcher)(struct mlx5dv_flow_matcher *matcher);
+	struct ibv_flow *(*dv_create_flow)(struct mlx5dv_flow_matcher *matcher,
+			  struct mlx5dv_flow_match_parameters *match_value,
+			  size_t num_actions,
+			  struct mlx5dv_flow_action_attr *actions_attr);
+	struct ibv_flow_action *(*dv_create_flow_action_packet_reformat)
+		(struct ibv_context *ctx,
+		 size_t data_sz,
+		 void *data,
+		 enum mlx5dv_flow_action_packet_reformat_type reformat_type,
+		 enum mlx5dv_flow_table_type ft_type);
 };
 
 const struct mlx5_glue *mlx5_glue;

@@ -229,6 +229,7 @@ vmbus_scan_one(const char *name)
 	if (dev == NULL)
 		return -1;
 
+	dev->device.bus = &rte_vmbus_bus.bus;
 	dev->device.name = strdup(name);
 	if (!dev->device.name)
 		goto error;
@@ -275,6 +276,8 @@ vmbus_scan_one(const char *name)
 		/* if no NUMA support, set default to 0 */
 		dev->device.numa_node = SOCKET_ID_ANY;
 	}
+
+	dev->device.devargs = vmbus_devargs_lookup(dev);
 
 	/* device is valid, add in list (sorted) */
 	VMBUS_LOG(DEBUG, "Adding vmbus device %s", name);

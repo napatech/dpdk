@@ -190,6 +190,8 @@ sfc_tx_qinit(struct sfc_adapter *sa, unsigned int sw_index,
 	info.hw_index = txq->hw_index;
 	info.mem_bar = sa->mem_bar.esb_base;
 	info.vi_window_shift = encp->enc_vi_window_shift;
+	info.tso_tcp_header_offset_limit =
+		encp->enc_tx_tso_tcp_header_offset_limit;
 
 	rc = sa->dp_tx->qcreate(sa->eth_dev->data->port_id, sw_index,
 				&RTE_ETH_DEV_TO_PCI(sa->eth_dev)->addr,
@@ -233,6 +235,8 @@ sfc_tx_qfini(struct sfc_adapter *sa, unsigned int sw_index)
 	sfc_log_init(sa, "TxQ = %u", sw_index);
 
 	SFC_ASSERT(sw_index < sa->txq_count);
+	sa->eth_dev->data->tx_queues[sw_index] = NULL;
+
 	txq_info = &sa->txq_info[sw_index];
 
 	txq = txq_info->txq;
@@ -421,6 +425,7 @@ sfc_tx_qstart(struct sfc_adapter *sa, unsigned int sw_index)
 
 	txq = txq_info->txq;
 
+	SFC_ASSERT(txq != NULL);
 	SFC_ASSERT(txq->state == SFC_TXQ_INITIALIZED);
 
 	evq = txq->evq;
@@ -501,7 +506,7 @@ sfc_tx_qstop(struct sfc_adapter *sa, unsigned int sw_index)
 
 	txq = txq_info->txq;
 
-	if (txq->state == SFC_TXQ_INITIALIZED)
+	if (txq == NULL || txq->state == SFC_TXQ_INITIALIZED)
 		return;
 
 	SFC_ASSERT(txq->state & SFC_TXQ_STARTED);
@@ -578,8 +583,9 @@ sfc_tx_start(struct sfc_adapter *sa)
 		goto fail_efx_tx_init;
 
 	for (sw_index = 0; sw_index < sa->txq_count; ++sw_index) {
-		if (!(sa->txq_info[sw_index].deferred_start) ||
-		    sa->txq_info[sw_index].deferred_started) {
+		if (sa->txq_info[sw_index].txq != NULL &&
+		    (!(sa->txq_info[sw_index].deferred_start) ||
+		     sa->txq_info[sw_index].deferred_started)) {
 			rc = sfc_tx_qstart(sa, sw_index);
 			if (rc != 0)
 				goto fail_tx_qstart;

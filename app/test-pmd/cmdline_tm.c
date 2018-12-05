@@ -771,8 +771,10 @@ struct cmd_add_port_tm_node_shaper_profile_result {
 	cmdline_fixed_string_t profile;
 	uint16_t port_id;
 	uint32_t shaper_id;
-	uint64_t tb_rate;
-	uint64_t tb_size;
+	uint64_t cmit_tb_rate;
+	uint64_t cmit_tb_size;
+	uint64_t peak_tb_rate;
+	uint64_t peak_tb_size;
 	uint32_t pktlen_adjust;
 };
 
@@ -807,14 +809,22 @@ cmdline_parse_token_num_t cmd_add_port_tm_node_shaper_profile_shaper_id =
 	TOKEN_NUM_INITIALIZER(
 		struct cmd_add_port_tm_node_shaper_profile_result,
 			shaper_id, UINT32);
-cmdline_parse_token_num_t cmd_add_port_tm_node_shaper_profile_tb_rate =
+cmdline_parse_token_num_t cmd_add_port_tm_node_shaper_profile_cmit_tb_rate =
 	TOKEN_NUM_INITIALIZER(
 		struct cmd_add_port_tm_node_shaper_profile_result,
-			tb_rate, UINT64);
-cmdline_parse_token_num_t cmd_add_port_tm_node_shaper_profile_tb_size =
+			cmit_tb_rate, UINT64);
+cmdline_parse_token_num_t cmd_add_port_tm_node_shaper_profile_cmit_tb_size =
 	TOKEN_NUM_INITIALIZER(
 		struct cmd_add_port_tm_node_shaper_profile_result,
-			tb_size, UINT64);
+			cmit_tb_size, UINT64);
+cmdline_parse_token_num_t cmd_add_port_tm_node_shaper_profile_peak_tb_rate =
+	TOKEN_NUM_INITIALIZER(
+		struct cmd_add_port_tm_node_shaper_profile_result,
+			peak_tb_rate, UINT64);
+cmdline_parse_token_num_t cmd_add_port_tm_node_shaper_profile_peak_tb_size =
+	TOKEN_NUM_INITIALIZER(
+		struct cmd_add_port_tm_node_shaper_profile_result,
+			peak_tb_size, UINT64);
 cmdline_parse_token_num_t cmd_add_port_tm_node_shaper_profile_pktlen_adjust =
 	TOKEN_NUM_INITIALIZER(
 		struct cmd_add_port_tm_node_shaper_profile_result,
@@ -838,8 +848,10 @@ static void cmd_add_port_tm_node_shaper_profile_parsed(void *parsed_result,
 	/* Private shaper profile params */
 	memset(&sp, 0, sizeof(struct rte_tm_shaper_params));
 	memset(&error, 0, sizeof(struct rte_tm_error));
-	sp.peak.rate = res->tb_rate;
-	sp.peak.size = res->tb_size;
+	sp.committed.rate = res->cmit_tb_rate;
+	sp.committed.size = res->cmit_tb_size;
+	sp.peak.rate = res->peak_tb_rate;
+	sp.peak.size = res->peak_tb_size;
 	sp.pkt_length_adjust = pkt_len_adjust;
 
 	ret = rte_tm_shaper_profile_add(port_id, shaper_id, &sp, &error);
@@ -862,8 +874,10 @@ cmdline_parse_inst_t cmd_add_port_tm_node_shaper_profile = {
 		(void *)&cmd_add_port_tm_node_shaper_profile_profile,
 		(void *)&cmd_add_port_tm_node_shaper_profile_port_id,
 		(void *)&cmd_add_port_tm_node_shaper_profile_shaper_id,
-		(void *)&cmd_add_port_tm_node_shaper_profile_tb_rate,
-		(void *)&cmd_add_port_tm_node_shaper_profile_tb_size,
+		(void *)&cmd_add_port_tm_node_shaper_profile_cmit_tb_rate,
+		(void *)&cmd_add_port_tm_node_shaper_profile_cmit_tb_size,
+		(void *)&cmd_add_port_tm_node_shaper_profile_peak_tb_rate,
+		(void *)&cmd_add_port_tm_node_shaper_profile_peak_tb_size,
 		(void *)&cmd_add_port_tm_node_shaper_profile_pktlen_adjust,
 		NULL,
 	},
@@ -2184,6 +2198,266 @@ cmdline_parse_inst_t cmd_port_tm_hierarchy_commit = {
 		(void *)&cmd_port_tm_hierarchy_commit_commit,
 		(void *)&cmd_port_tm_hierarchy_commit_port_id,
 		(void *)&cmd_port_tm_hierarchy_commit_clean_on_fail,
+		NULL,
+	},
+};
+
+/* *** Port TM Mark IP ECN *** */
+struct cmd_port_tm_mark_ip_ecn_result {
+	cmdline_fixed_string_t set;
+	cmdline_fixed_string_t port;
+	cmdline_fixed_string_t tm;
+	cmdline_fixed_string_t mark;
+	cmdline_fixed_string_t ip_ecn;
+	uint16_t port_id;
+	uint16_t green;
+	uint16_t yellow;
+	uint16_t red;
+};
+
+cmdline_parse_token_string_t cmd_port_tm_mark_ip_ecn_set =
+	TOKEN_STRING_INITIALIZER(struct cmd_port_tm_mark_ip_ecn_result,
+				 set, "set");
+
+cmdline_parse_token_string_t cmd_port_tm_mark_ip_ecn_port =
+	TOKEN_STRING_INITIALIZER(struct cmd_port_tm_mark_ip_ecn_result,
+				 port, "port");
+
+cmdline_parse_token_string_t cmd_port_tm_mark_ip_ecn_tm =
+	TOKEN_STRING_INITIALIZER(struct cmd_port_tm_mark_ip_ecn_result, tm,
+				 "tm");
+
+cmdline_parse_token_string_t cmd_port_tm_mark_ip_ecn_mark =
+	TOKEN_STRING_INITIALIZER(struct cmd_port_tm_mark_ip_ecn_result,
+				 mark, "mark");
+
+cmdline_parse_token_string_t cmd_port_tm_mark_ip_ecn_ip_ecn =
+	TOKEN_STRING_INITIALIZER(struct cmd_port_tm_mark_ip_ecn_result,
+				 ip_ecn, "ip_ecn");
+cmdline_parse_token_num_t cmd_port_tm_mark_ip_ecn_port_id =
+	TOKEN_NUM_INITIALIZER(struct cmd_port_tm_mark_ip_ecn_result,
+			      port_id, UINT16);
+
+cmdline_parse_token_num_t cmd_port_tm_mark_ip_ecn_green =
+	TOKEN_NUM_INITIALIZER(struct cmd_port_tm_mark_ip_ecn_result,
+			      green, UINT16);
+cmdline_parse_token_num_t cmd_port_tm_mark_ip_ecn_yellow =
+	TOKEN_NUM_INITIALIZER(struct cmd_port_tm_mark_ip_ecn_result,
+			      yellow, UINT16);
+cmdline_parse_token_num_t cmd_port_tm_mark_ip_ecn_red =
+	TOKEN_NUM_INITIALIZER(struct cmd_port_tm_mark_ip_ecn_result,
+				red, UINT16);
+
+static void cmd_port_tm_mark_ip_ecn_parsed(void *parsed_result,
+	__attribute__((unused)) struct cmdline *cl,
+	__attribute__((unused)) void *data)
+{
+	struct cmd_port_tm_mark_ip_ecn_result *res = parsed_result;
+	struct rte_tm_error error;
+	portid_t port_id = res->port_id;
+	int green = res->green;
+	int yellow = res->yellow;
+	int red = res->red;
+	int ret;
+	if (port_id_is_invalid(port_id, ENABLED_WARN))
+		return;
+
+	memset(&error, 0, sizeof(struct rte_tm_error));
+	ret = rte_tm_mark_ip_ecn(port_id, green, yellow, red, &error);
+	if (ret != 0) {
+		print_err_msg(&error);
+		return;
+	}
+}
+
+cmdline_parse_inst_t cmd_port_tm_mark_ip_ecn = {
+	.f = cmd_port_tm_mark_ip_ecn_parsed,
+	.data = NULL,
+	.help_str = "set port tm mark ip_ecn <port> <green> <yellow> <red>",
+	.tokens = {
+		(void *)&cmd_port_tm_mark_ip_ecn_set,
+		(void *)&cmd_port_tm_mark_ip_ecn_port,
+		(void *)&cmd_port_tm_mark_ip_ecn_tm,
+		(void *)&cmd_port_tm_mark_ip_ecn_mark,
+		(void *)&cmd_port_tm_mark_ip_ecn_ip_ecn,
+		(void *)&cmd_port_tm_mark_ip_ecn_port_id,
+		(void *)&cmd_port_tm_mark_ip_ecn_green,
+		(void *)&cmd_port_tm_mark_ip_ecn_yellow,
+		(void *)&cmd_port_tm_mark_ip_ecn_red,
+		NULL,
+	},
+};
+
+
+/* *** Port TM Mark IP DSCP *** */
+struct cmd_port_tm_mark_ip_dscp_result {
+	cmdline_fixed_string_t set;
+	cmdline_fixed_string_t port;
+	cmdline_fixed_string_t tm;
+	cmdline_fixed_string_t mark;
+	cmdline_fixed_string_t ip_dscp;
+	uint16_t port_id;
+	uint16_t green;
+	uint16_t yellow;
+	uint16_t red;
+};
+
+cmdline_parse_token_string_t cmd_port_tm_mark_ip_dscp_set =
+	TOKEN_STRING_INITIALIZER(struct cmd_port_tm_mark_ip_dscp_result,
+				 set, "set");
+
+cmdline_parse_token_string_t cmd_port_tm_mark_ip_dscp_port =
+	TOKEN_STRING_INITIALIZER(struct cmd_port_tm_mark_ip_dscp_result,
+				 port, "port");
+
+cmdline_parse_token_string_t cmd_port_tm_mark_ip_dscp_tm =
+	TOKEN_STRING_INITIALIZER(struct cmd_port_tm_mark_ip_dscp_result, tm,
+				 "tm");
+
+cmdline_parse_token_string_t cmd_port_tm_mark_ip_dscp_mark =
+	TOKEN_STRING_INITIALIZER(struct cmd_port_tm_mark_ip_dscp_result,
+				 mark, "mark");
+
+cmdline_parse_token_string_t cmd_port_tm_mark_ip_dscp_ip_dscp =
+	TOKEN_STRING_INITIALIZER(struct cmd_port_tm_mark_ip_dscp_result,
+				 ip_dscp, "ip_dscp");
+cmdline_parse_token_num_t cmd_port_tm_mark_ip_dscp_port_id =
+	TOKEN_NUM_INITIALIZER(struct cmd_port_tm_mark_ip_dscp_result,
+			      port_id, UINT16);
+
+cmdline_parse_token_num_t cmd_port_tm_mark_ip_dscp_green =
+	TOKEN_NUM_INITIALIZER(struct cmd_port_tm_mark_ip_dscp_result,
+				green, UINT16);
+cmdline_parse_token_num_t cmd_port_tm_mark_ip_dscp_yellow =
+	TOKEN_NUM_INITIALIZER(struct cmd_port_tm_mark_ip_dscp_result,
+				yellow, UINT16);
+cmdline_parse_token_num_t cmd_port_tm_mark_ip_dscp_red =
+	TOKEN_NUM_INITIALIZER(struct cmd_port_tm_mark_ip_dscp_result,
+				red, UINT16);
+
+static void cmd_port_tm_mark_ip_dscp_parsed(void *parsed_result,
+	__attribute__((unused)) struct cmdline *cl,
+	__attribute__((unused)) void *data)
+{
+	struct cmd_port_tm_mark_ip_dscp_result *res = parsed_result;
+	struct rte_tm_error error;
+	portid_t port_id = res->port_id;
+	int green = res->green;
+	int yellow = res->yellow;
+	int red = res->red;
+	int ret;
+	if (port_id_is_invalid(port_id, ENABLED_WARN))
+		return;
+
+	memset(&error, 0, sizeof(struct rte_tm_error));
+	ret = rte_tm_mark_ip_dscp(port_id, green, yellow, red, &error);
+	if (ret != 0) {
+		print_err_msg(&error);
+		return;
+	}
+}
+
+cmdline_parse_inst_t cmd_port_tm_mark_ip_dscp = {
+	.f = cmd_port_tm_mark_ip_dscp_parsed,
+	.data = NULL,
+	.help_str = "set port tm mark ip_dscp <port> <green> <yellow> <red>",
+	.tokens = {
+		(void *)&cmd_port_tm_mark_ip_dscp_set,
+		(void *)&cmd_port_tm_mark_ip_dscp_port,
+		(void *)&cmd_port_tm_mark_ip_dscp_tm,
+		(void *)&cmd_port_tm_mark_ip_dscp_mark,
+		(void *)&cmd_port_tm_mark_ip_dscp_ip_dscp,
+		(void *)&cmd_port_tm_mark_ip_dscp_port_id,
+		(void *)&cmd_port_tm_mark_ip_dscp_green,
+		(void *)&cmd_port_tm_mark_ip_dscp_yellow,
+		(void *)&cmd_port_tm_mark_ip_dscp_red,
+		NULL,
+	},
+};
+
+
+/* *** Port TM Mark VLAN_DEI *** */
+struct cmd_port_tm_mark_vlan_dei_result {
+	cmdline_fixed_string_t set;
+	cmdline_fixed_string_t port;
+	cmdline_fixed_string_t tm;
+	cmdline_fixed_string_t mark;
+	cmdline_fixed_string_t vlan_dei;
+	uint16_t port_id;
+	uint16_t green;
+	uint16_t yellow;
+	uint16_t red;
+};
+
+cmdline_parse_token_string_t cmd_port_tm_mark_vlan_dei_set =
+	TOKEN_STRING_INITIALIZER(struct cmd_port_tm_mark_vlan_dei_result,
+				 set, "set");
+
+cmdline_parse_token_string_t cmd_port_tm_mark_vlan_dei_port =
+	TOKEN_STRING_INITIALIZER(struct cmd_port_tm_mark_vlan_dei_result,
+				 port, "port");
+
+cmdline_parse_token_string_t cmd_port_tm_mark_vlan_dei_tm =
+	TOKEN_STRING_INITIALIZER(struct cmd_port_tm_mark_vlan_dei_result, tm,
+				 "tm");
+
+cmdline_parse_token_string_t cmd_port_tm_mark_vlan_dei_mark =
+	TOKEN_STRING_INITIALIZER(struct cmd_port_tm_mark_vlan_dei_result,
+				 mark, "mark");
+
+cmdline_parse_token_string_t cmd_port_tm_mark_vlan_dei_vlan_dei =
+	TOKEN_STRING_INITIALIZER(struct cmd_port_tm_mark_vlan_dei_result,
+				 vlan_dei, "vlan_dei");
+cmdline_parse_token_num_t cmd_port_tm_mark_vlan_dei_port_id =
+	TOKEN_NUM_INITIALIZER(struct cmd_port_tm_mark_vlan_dei_result,
+			      port_id, UINT16);
+
+cmdline_parse_token_num_t cmd_port_tm_mark_vlan_dei_green =
+	TOKEN_NUM_INITIALIZER(struct cmd_port_tm_mark_vlan_dei_result,
+				green, UINT16);
+cmdline_parse_token_num_t cmd_port_tm_mark_vlan_dei_yellow =
+	TOKEN_NUM_INITIALIZER(struct cmd_port_tm_mark_vlan_dei_result,
+				yellow, UINT16);
+cmdline_parse_token_num_t cmd_port_tm_mark_vlan_dei_red =
+	TOKEN_NUM_INITIALIZER(struct cmd_port_tm_mark_vlan_dei_result,
+				red, UINT16);
+
+static void cmd_port_tm_mark_vlan_dei_parsed(void *parsed_result,
+	__attribute__((unused)) struct cmdline *cl,
+	__attribute__((unused)) void *data)
+{
+	struct cmd_port_tm_mark_vlan_dei_result *res = parsed_result;
+	struct rte_tm_error error;
+	portid_t port_id = res->port_id;
+	int green = res->green;
+	int yellow = res->yellow;
+	int red = res->red;
+	int ret;
+	if (port_id_is_invalid(port_id, ENABLED_WARN))
+		return;
+
+	memset(&error, 0, sizeof(struct rte_tm_error));
+	ret = rte_tm_mark_vlan_dei(port_id, green, yellow, red, &error);
+	if (ret != 0) {
+		print_err_msg(&error);
+		return;
+	}
+}
+
+cmdline_parse_inst_t cmd_port_tm_mark_vlan_dei = {
+	.f = cmd_port_tm_mark_vlan_dei_parsed,
+	.data = NULL,
+	.help_str = "set port tm mark vlan_dei <port> <green> <yellow> <red>",
+	.tokens = {
+		(void *)&cmd_port_tm_mark_vlan_dei_set,
+		(void *)&cmd_port_tm_mark_vlan_dei_port,
+		(void *)&cmd_port_tm_mark_vlan_dei_tm,
+		(void *)&cmd_port_tm_mark_vlan_dei_mark,
+		(void *)&cmd_port_tm_mark_vlan_dei_vlan_dei,
+		(void *)&cmd_port_tm_mark_vlan_dei_port_id,
+		(void *)&cmd_port_tm_mark_vlan_dei_green,
+		(void *)&cmd_port_tm_mark_vlan_dei_yellow,
+		(void *)&cmd_port_tm_mark_vlan_dei_red,
 		NULL,
 	},
 };

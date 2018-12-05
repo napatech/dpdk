@@ -20,7 +20,7 @@
 
 #include "bnxt_cpr.h"
 
-#define BNXT_MAX_MTU		9500
+#define BNXT_MAX_MTU		9574
 #define VLAN_TAG_SIZE		4
 #define BNXT_VF_RSV_NUM_RSS_CTX	1
 #define BNXT_VF_RSV_NUM_L2_CTX	4
@@ -32,6 +32,13 @@
 #define BNXT_MAX_TX_RING_DESC	4096
 #define BNXT_MAX_RX_RING_DESC	8192
 #define BNXT_DB_SIZE		0x80
+
+/* Chimp Communication Channel */
+#define GRCPF_REG_CHIMP_CHANNEL_OFFSET		0x0
+#define GRCPF_REG_CHIMP_COMM_TRIGGER		0x100
+/* Kong Communication Channel */
+#define GRCPF_REG_KONG_CHANNEL_OFFSET		0xA00
+#define GRCPF_REG_KONG_COMM_TRIGGER		0xB00
 
 #define BNXT_INT_LAT_TMR_MIN			75
 #define BNXT_INT_LAT_TMR_MAX			150
@@ -250,6 +257,11 @@ struct bnxt {
 #define BNXT_FLAG_UPDATE_HASH	(1 << 5)
 #define BNXT_FLAG_PTP_SUPPORTED	(1 << 6)
 #define BNXT_FLAG_MULTI_HOST    (1 << 7)
+#define BNXT_FLAG_EXT_RX_PORT_STATS	(1 << 8)
+#define BNXT_FLAG_EXT_TX_PORT_STATS	(1 << 9)
+#define BNXT_FLAG_KONG_MB_EN	(1 << 10)
+#define BNXT_FLAG_TRUSTED_VF_EN	(1 << 11)
+#define BNXT_FLAG_DFLT_VNIC_SET	(1 << 12)
 #define BNXT_FLAG_NEW_RM	(1 << 30)
 #define BNXT_FLAG_INIT_DONE	(1 << 31)
 #define BNXT_PF(bp)		(!((bp)->flags & BNXT_FLAG_VF))
@@ -257,6 +269,9 @@ struct bnxt {
 #define BNXT_NPAR(bp)		((bp)->port_partition_type)
 #define BNXT_MH(bp)             ((bp)->flags & BNXT_FLAG_MULTI_HOST)
 #define BNXT_SINGLE_PF(bp)      (BNXT_PF(bp) && !BNXT_NPAR(bp) && !BNXT_MH(bp))
+#define BNXT_USE_CHIMP_MB	0 //For non-CFA commands, everything uses Chimp.
+#define BNXT_USE_KONG(bp)	((bp)->flags & BNXT_FLAG_KONG_MB_EN)
+#define BNXT_VF_IS_TRUSTED(bp)	((bp)->flags & BNXT_FLAG_TRUSTED_VF_EN)
 
 	unsigned int		rx_nr_rings;
 	unsigned int		rx_cp_nr_rings;
@@ -264,6 +279,9 @@ struct bnxt {
 	const void		*rx_mem_zone;
 	struct rx_port_stats    *hw_rx_port_stats;
 	rte_iova_t		hw_rx_port_stats_map;
+	struct rx_port_stats_ext    *hw_rx_port_stats_ext;
+	rte_iova_t		hw_rx_port_stats_ext_map;
+	uint16_t		fw_rx_port_stats_ext_size;
 
 	unsigned int		tx_nr_rings;
 	unsigned int		tx_cp_nr_rings;
@@ -271,6 +289,9 @@ struct bnxt {
 	const void		*tx_mem_zone;
 	struct tx_port_stats    *hw_tx_port_stats;
 	rte_iova_t		hw_tx_port_stats_map;
+	struct tx_port_stats_ext    *hw_tx_port_stats_ext;
+	rte_iova_t		hw_tx_port_stats_ext_map;
+	uint16_t		fw_tx_port_stats_ext_size;
 
 	/* Default completion ring */
 	struct bnxt_cp_ring_info	*def_cp_ring;
@@ -285,16 +306,13 @@ struct bnxt {
 	struct bnxt_filter_info	*filter_info;
 	STAILQ_HEAD(, bnxt_filter_info)	free_filter_list;
 
-	/* VNIC pointer for flow filter (VMDq) pools */
-#define MAX_FF_POOLS	256
-	STAILQ_HEAD(, bnxt_vnic_info)	ff_pool[MAX_FF_POOLS];
-
 	struct bnxt_irq         *irq_tbl;
 
 #define MAX_NUM_MAC_ADDR	32
 	uint8_t			mac_addr[ETHER_ADDR_LEN];
 
 	uint16_t			hwrm_cmd_seq;
+	uint16_t			kong_cmd_seq;
 	void				*hwrm_cmd_resp_addr;
 	rte_iova_t			hwrm_cmd_resp_dma_addr;
 	void				*hwrm_short_cmd_req_addr;

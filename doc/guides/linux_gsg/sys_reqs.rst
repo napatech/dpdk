@@ -64,7 +64,11 @@ Compilation of the DPDK
        x86_x32 ABI is currently supported with distribution packages only on Ubuntu
        higher than 13.10 or recent Debian distribution. The only supported  compiler is gcc 4.9+.
 
-*   libnuma-devel - library for handling NUMA (Non Uniform Memory Access).
+*   Library for handling NUMA (Non Uniform Memory Access).
+
+    * numactl-devel in Red Hat/Fedora;
+
+    * libnuma-dev in Debian/Ubuntu;
 
 *   Python, version 2.7+ or 3.2+, to use various helper scripts included in the DPDK package.
 
@@ -102,6 +106,13 @@ System Software
     The kernel version in use can be checked using the command::
 
         uname -r
+
+.. note::
+
+    Kernel version 3.2 is no longer a kernel.org longterm stable kernel.
+    For DPDK 19.02 the minimum required kernel will be updated to
+    the current kernel.org oldest longterm stable supported kernel 3.16,
+    or recent versions of common distributions, notably RHEL/CentOS 7.
 
 *   glibc >= 2.7 (for features related to cpuset)
 
@@ -182,12 +193,6 @@ On a NUMA machine, pages should be allocated explicitly on separate nodes::
 .. note::
 
     For 1G pages, it is not possible to reserve the hugepage memory after the system has booted.
-
-    On IBM POWER system, the nr_overcommit_hugepages should be set to the same value as nr_hugepages.
-    For example, if the required page number is 128, the following commands are used::
-
-        echo 128 > /sys/kernel/mm/hugepages/hugepages-16384kB/nr_hugepages
-        echo 128 > /sys/kernel/mm/hugepages/hugepages-16384kB/nr_overcommit_hugepages
 
 Using Hugepages with the DPDK
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

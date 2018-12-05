@@ -28,19 +28,16 @@ In this release, the hyper PMD driver provides the basic functionality of packet
 
 *   VLAN tags are always stripped and presented in mbuf tci field.
 
-*   The Hyper-V driver does not use or support Link State or Rx interrupt.
+*   The Hyper-V driver does not use or support interrupts. Link state change
+    callback is done via change events in the packet ring.
 
 *   The maximum number of queues is limited by the host (currently 64).
     When used with 4.16 kernel only a single queue is available.
 
-.. note::
-   This driver is intended for use with **Hyper-V only** and is
-   not recommended for use on Azure because accelerated Networking
-   (SR-IOV) is not supported.
-
-   On Azure, use the :doc:`vdev_netvsc` which
-   automatically configures the necessary TAP and failsave drivers.
-
+*   This driver supports SR-IOV network acceleration.
+    If SR-IOV is enabled then the driver will transparently manage the interface,
+    and send and receive packets using the VF path.
+    The VDEV_NETVSC and FAILSAFE drivers are *not* used when using netvsc PMD.
 
 Installation
 ------------
@@ -103,3 +100,19 @@ The following prerequisites apply:
 *   Linux kernel support for UIO on vmbus is done with the uio_hv_generic driver.
     Full support of multiple queues requires the 4.17 kernel. It is possible
     to use the netvsc PMD with 4.16 kernel but it is limited to a single queue.
+
+
+Netvsc PMD arguments
+--------------------
+
+The user can specify below argument in devargs.
+
+#.  ``latency``:
+
+    A netvsc device uses a mailbox page to indicate to the host that there
+    is something in the transmit queue. The host scans this page at a
+    periodic interval. This parameter allows adjusting the value that
+    is used by the host. Smaller values improve transmit latency, and larger
+    values save CPU cycles. This parameter is in microseconds.
+    If the value is too large or too small it will be
+    ignored by the host. (Default: 50)

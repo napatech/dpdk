@@ -85,7 +85,7 @@ int enic_get_vnic_config(struct enic *enic)
 	vnic_dev_capable_udp_rss_weak(enic->vdev, &enic->nic_cfg_chk,
 				      &enic->udp_rss_weak);
 
-	dev_info(enic, "Flow api filter mode: %s Actions: %s%s%s\n",
+	dev_info(enic, "Flow api filter mode: %s Actions: %s%s%s%s\n",
 		((enic->flow_filter_mode == FILTER_DPDK_1) ? "DPDK" :
 		((enic->flow_filter_mode == FILTER_USNIC_IP) ? "USNIC" :
 		((enic->flow_filter_mode == FILTER_IPV4_5TUPLE) ? "5TUPLE" :
@@ -95,7 +95,9 @@ int enic_get_vnic_config(struct enic *enic)
 		((enic->filter_actions & FILTER_ACTION_FILTER_ID_FLAG) ?
 		 "tag " : ""),
 		((enic->filter_actions & FILTER_ACTION_DROP_FLAG) ?
-		 "drop " : ""));
+		 "drop " : ""),
+		((enic->filter_actions & FILTER_ACTION_COUNTER_FLAG) ?
+		 "count " : ""));
 
 	c->wq_desc_count =
 		min_t(u32, ENIC_MAX_WQ_DESCS,
@@ -195,13 +197,14 @@ int enic_get_vnic_config(struct enic *enic)
 	enic->rx_offload_capa =
 		DEV_RX_OFFLOAD_SCATTER |
 		DEV_RX_OFFLOAD_JUMBO_FRAME |
-		DEV_RX_OFFLOAD_CRC_STRIP |
 		DEV_RX_OFFLOAD_VLAN_STRIP |
 		DEV_RX_OFFLOAD_IPV4_CKSUM |
 		DEV_RX_OFFLOAD_UDP_CKSUM |
 		DEV_RX_OFFLOAD_TCP_CKSUM;
 	enic->tx_offload_mask =
-		PKT_TX_VLAN_PKT |
+		PKT_TX_IPV6 |
+		PKT_TX_IPV4 |
+		PKT_TX_VLAN |
 		PKT_TX_IP_CKSUM |
 		PKT_TX_L4_MASK |
 		PKT_TX_TCP_SEG;

@@ -63,6 +63,9 @@ rte_vdpa_register_device(struct rte_vdpa_dev_addr *addr,
 			break;
 	}
 
+	if (i == MAX_VHOST_DEVICE)
+		return -1;
+
 	sprintf(device_name, "vdpa-dev-%d", i);
 	dev = rte_zmalloc(device_name, sizeof(struct rte_vdpa_device),
 			RTE_CACHE_LINE_SIZE);
@@ -112,4 +115,10 @@ rte_vdpa_get_device(int did)
 		return NULL;
 
 	return vdpa_devices[did];
+}
+
+int
+rte_vdpa_get_device_num(void)
+{
+	return vdpa_device_num;
 }

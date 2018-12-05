@@ -5,6 +5,7 @@
 
 #define _FILE_OFFSET_BITS 64
 #include <errno.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -17,6 +18,7 @@
 #include <sys/stat.h>
 #include <sys/queue.h>
 #include <sys/file.h>
+#include <sys/resource.h>
 #include <unistd.h>
 #include <limits.h>
 #include <sys/ioctl.h>
@@ -263,7 +265,7 @@ map_all_hugepages(struct hugepage_file *hugepg_tbl, struct hugepage_info *hpi,
 	int node_id = -1;
 	int essential_prev = 0;
 	int oldpolicy;
-	struct bitmask *oldmask = numa_allocate_nodemask();
+	struct bitmask *oldmask = NULL;
 	bool have_numa = true;
 	unsigned long maxnode = 0;
 
@@ -275,6 +277,7 @@ map_all_hugepages(struct hugepage_file *hugepg_tbl, struct hugepage_info *hpi,
 
 	if (have_numa) {
 		RTE_LOG(DEBUG, EAL, "Trying to obtain current memory policy.\n");
+		oldmask = numa_allocate_nodemask();
 		if (get_mempolicy(&oldpolicy, oldmask->maskp,
 				  oldmask->size + 1, 0, 0) < 0) {
 			RTE_LOG(ERR, EAL,
@@ -402,7 +405,8 @@ out:
 			numa_set_localalloc();
 		}
 	}
-	numa_free_cpumask(oldmask);
+	if (oldmask != NULL)
+		numa_free_cpumask(oldmask);
 #endif
 	return i;
 }
@@ -584,7 +588,7 @@ unlink_hugepage_files(struct hugepage_file *hugepg_tbl,
 	for (page = 0; page < nrpages; page++) {
 		struct hugepage_file *hp = &hugepg_tbl[page];
 
-		if (hp->final_va != NULL && unlink(hp->filepath)) {
+		if (hp->orig_va != NULL && unlink(hp->filepath)) {
 			RTE_LOG(WARNING, EAL, "%s(): Removing %s failed: %s\n",
 				__func__, hp->filepath, strerror(errno));
 		}
@@ -771,7 +775,10 @@ remap_segment(struct hugepage_file *hugepages, int seg_start, int seg_end)
 
 		rte_fbarray_set_used(arr, ms_idx);
 
-		close(fd);
+		/* store segment fd internally */
+		if (eal_memalloc_set_seg_fd(msl_idx, ms_idx, fd) < 0)
+			RTE_LOG(ERR, EAL, "Could not store segment fd: %s\n",
+				rte_strerror(rte_errno));
 	}
 	RTE_LOG(DEBUG, EAL, "Allocated %" PRIu64 "M on socket %i\n",
 			(seg_len * page_sz) >> 20, socket_id);
@@ -840,10 +847,6 @@ alloc_va_space(struct rte_memseg_list *msl)
 	void *addr;
 	int flags = 0;
 
-#ifdef RTE_ARCH_PPC_64
-	flags |= MAP_HUGETLB;
-#endif
-
 	page_sz = msl->page_sz;
 	mem_sz = page_sz * msl->memseg_arr.len;
 
@@ -857,6 +860,7 @@ alloc_va_space(struct rte_memseg_list *msl)
 		return -1;
 	}
 	msl->base_va = addr;
+	msl->len = mem_sz;
 
 	return 0;
 }
@@ -1365,6 +1369,7 @@ eal_legacy_hugepage_init(void)
 		msl->base_va = addr;
 		msl->page_sz = page_sz;
 		msl->socket_id = 0;
+		msl->len = internal_config.memory;
 
 		/* populate memsegs. each memseg is one page long */
 		for (cur_seg = 0; cur_seg < n_segs; cur_seg++) {
@@ -1383,6 +1388,18 @@ eal_legacy_hugepage_init(void)
 			rte_fbarray_set_used(arr, cur_seg);
 
 			addr = RTE_PTR_ADD(addr, (size_t)page_sz);
+		}
+		if (mcfg->dma_maskbits &&
+		    rte_mem_check_dma_mask_thread_unsafe(mcfg->dma_maskbits)) {
+			RTE_LOG(ERR, EAL,
+				"%s(): couldnt allocate memory due to IOVA exceeding limits of current DMA mask.\n",
+				__func__);
+			if (rte_eal_iova_mode() == RTE_IOVA_VA &&
+			    rte_eal_using_phys_addrs())
+				RTE_LOG(ERR, EAL,
+					"%s(): Please try initializing EAL with --iova-mode=pa parameter.\n",
+					__func__);
+			goto fail;
 		}
 		return 0;
 	}
@@ -1596,6 +1613,7 @@ eal_legacy_hugepage_init(void)
 	tmp_hp = NULL;
 
 	munmap(hugepage, nr_hugefiles * sizeof(struct hugepage_file));
+	hugepage = NULL;
 
 	/* we're not going to allocate more pages, so release VA space for
 	 * unused memseg lists
@@ -1611,12 +1629,20 @@ eal_legacy_hugepage_init(void)
 		if (msl->memseg_arr.count > 0)
 			continue;
 		/* this is an unused list, deallocate it */
-		mem_sz = (size_t)msl->page_sz * msl->memseg_arr.len;
+		mem_sz = msl->len;
 		munmap(msl->base_va, mem_sz);
 		msl->base_va = NULL;
 
 		/* destroy backing fbarray */
 		rte_fbarray_destroy(&msl->memseg_arr);
+	}
+
+	if (mcfg->dma_maskbits &&
+	    rte_mem_check_dma_mask_thread_unsafe(mcfg->dma_maskbits)) {
+		RTE_LOG(ERR, EAL,
+			"%s(): couldn't allocate memory due to IOVA exceeding limits of current DMA mask.\n",
+			__func__);
+		goto fail;
 	}
 
 	return 0;
@@ -1770,6 +1796,7 @@ getFileSize(int fd)
 static int
 eal_legacy_hugepage_attach(void)
 {
+	struct rte_mem_config *mcfg = rte_eal_get_configuration()->mem_config;
 	struct hugepage_file *hp = NULL;
 	unsigned int num_hp = 0;
 	unsigned int i = 0;
@@ -1813,6 +1840,9 @@ eal_legacy_hugepage_attach(void)
 		struct hugepage_file *hf = &hp[i];
 		size_t map_sz = hf->size;
 		void *map_addr = hf->final_va;
+		int msl_idx, ms_idx;
+		struct rte_memseg_list *msl;
+		struct rte_memseg *ms;
 
 		/* if size is zero, no more pages left */
 		if (map_sz == 0)
@@ -1830,25 +1860,50 @@ eal_legacy_hugepage_attach(void)
 		if (map_addr == MAP_FAILED) {
 			RTE_LOG(ERR, EAL, "Could not map %s: %s\n",
 				hf->filepath, strerror(errno));
-			close(fd);
-			goto error;
+			goto fd_error;
 		}
 
 		/* set shared lock on the file. */
 		if (flock(fd, LOCK_SH) < 0) {
 			RTE_LOG(DEBUG, EAL, "%s(): Locking file failed: %s\n",
 				__func__, strerror(errno));
-			close(fd);
-			goto error;
+			goto fd_error;
 		}
 
-		close(fd);
+		/* find segment data */
+		msl = rte_mem_virt2memseg_list(map_addr);
+		if (msl == NULL) {
+			RTE_LOG(DEBUG, EAL, "%s(): Cannot find memseg list\n",
+				__func__);
+			goto fd_error;
+		}
+		ms = rte_mem_virt2memseg(map_addr, msl);
+		if (ms == NULL) {
+			RTE_LOG(DEBUG, EAL, "%s(): Cannot find memseg\n",
+				__func__);
+			goto fd_error;
+		}
+
+		msl_idx = msl - mcfg->memsegs;
+		ms_idx = rte_fbarray_find_idx(&msl->memseg_arr, ms);
+		if (ms_idx < 0) {
+			RTE_LOG(DEBUG, EAL, "%s(): Cannot find memseg idx\n",
+				__func__);
+			goto fd_error;
+		}
+
+		/* store segment fd internally */
+		if (eal_memalloc_set_seg_fd(msl_idx, ms_idx, fd) < 0)
+			RTE_LOG(ERR, EAL, "Could not store segment fd: %s\n",
+				rte_strerror(rte_errno));
 	}
 	/* unmap the hugepage config file, since we are done using it */
 	munmap(hp, size);
 	close(fd_hugepage);
 	return 0;
 
+fd_error:
+	close(fd);
 error:
 	/* map all segments into memory to make sure we get the addrs */
 	cur_seg = 0;
@@ -2093,18 +2148,65 @@ static int __rte_unused
 memseg_primary_init(void)
 {
 	struct rte_mem_config *mcfg = rte_eal_get_configuration()->mem_config;
-	int i, socket_id, hpi_idx, msl_idx = 0;
+	struct memtype {
+		uint64_t page_sz;
+		int socket_id;
+	} *memtypes = NULL;
+	int i, hpi_idx, msl_idx, ret = -1; /* fail unless told to succeed */
 	struct rte_memseg_list *msl;
-	uint64_t max_mem, total_mem;
+	uint64_t max_mem, max_mem_per_type;
+	unsigned int max_seglists_per_type;
+	unsigned int n_memtypes, cur_type;
 
 	/* no-huge does not need this at all */
 	if (internal_config.no_hugetlbfs)
 		return 0;
 
-	max_mem = (uint64_t)RTE_MAX_MEM_MB << 20;
-	total_mem = 0;
+	/*
+	 * figuring out amount of memory we're going to have is a long and very
+	 * involved process. the basic element we're operating with is a memory
+	 * type, defined as a combination of NUMA node ID and page size (so that
+	 * e.g. 2 sockets with 2 page sizes yield 4 memory types in total).
+	 *
+	 * deciding amount of memory going towards each memory type is a
+	 * balancing act between maximum segments per type, maximum memory per
+	 * type, and number of detected NUMA nodes. the goal is to make sure
+	 * each memory type gets at least one memseg list.
+	 *
+	 * the total amount of memory is limited by RTE_MAX_MEM_MB value.
+	 *
+	 * the total amount of memory per type is limited by either
+	 * RTE_MAX_MEM_MB_PER_TYPE, or by RTE_MAX_MEM_MB divided by the number
+	 * of detected NUMA nodes. additionally, maximum number of segments per
+	 * type is also limited by RTE_MAX_MEMSEG_PER_TYPE. this is because for
+	 * smaller page sizes, it can take hundreds of thousands of segments to
+	 * reach the above specified per-type memory limits.
+	 *
+	 * additionally, each type may have multiple memseg lists associated
+	 * with it, each limited by either RTE_MAX_MEM_MB_PER_LIST for bigger
+	 * page sizes, or RTE_MAX_MEMSEG_PER_LIST segments for smaller ones.
+	 *
+	 * the number of memseg lists per type is decided based on the above
+	 * limits, and also taking number of detected NUMA nodes, to make sure
+	 * that we don't run out of memseg lists before we populate all NUMA
+	 * nodes with memory.
+	 *
+	 * we do this in three stages. first, we collect the number of types.
+	 * then, we figure out memory constraints and populate the list of
+	 * would-be memseg lists. then, we go ahead and allocate the memseg
+	 * lists.
+	 */
 
-	/* create memseg lists */
+	/* create space for mem types */
+	n_memtypes = internal_config.num_hugepage_sizes * rte_socket_count();
+	memtypes = calloc(n_memtypes, sizeof(*memtypes));
+	if (memtypes == NULL) {
+		RTE_LOG(ERR, EAL, "Cannot allocate space for memory types\n");
+		return -1;
+	}
+
+	/* populate mem types */
+	cur_type = 0;
 	for (hpi_idx = 0; hpi_idx < (int) internal_config.num_hugepage_sizes;
 			hpi_idx++) {
 		struct hugepage_info *hpi;
@@ -2113,62 +2215,116 @@ memseg_primary_init(void)
 		hpi = &internal_config.hugepage_info[hpi_idx];
 		hugepage_sz = hpi->hugepage_sz;
 
-		for (i = 0; i < (int) rte_socket_count(); i++) {
-			uint64_t max_type_mem, total_type_mem = 0;
-			int type_msl_idx, max_segs, total_segs = 0;
-
-			socket_id = rte_socket_id_by_idx(i);
+		for (i = 0; i < (int) rte_socket_count(); i++, cur_type++) {
+			int socket_id = rte_socket_id_by_idx(i);
 
 #ifndef RTE_EAL_NUMA_AWARE_HUGEPAGES
 			if (socket_id > 0)
 				break;
 #endif
+			memtypes[cur_type].page_sz = hugepage_sz;
+			memtypes[cur_type].socket_id = socket_id;
 
-			if (total_mem >= max_mem)
-				break;
-
-			max_type_mem = RTE_MIN(max_mem - total_mem,
-				(uint64_t)RTE_MAX_MEM_MB_PER_TYPE << 20);
-			max_segs = RTE_MAX_MEMSEG_PER_TYPE;
-
-			type_msl_idx = 0;
-			while (total_type_mem < max_type_mem &&
-					total_segs < max_segs) {
-				uint64_t cur_max_mem, cur_mem;
-				unsigned int n_segs;
-
-				if (msl_idx >= RTE_MAX_MEMSEG_LISTS) {
-					RTE_LOG(ERR, EAL,
-						"No more space in memseg lists, please increase %s\n",
-						RTE_STR(CONFIG_RTE_MAX_MEMSEG_LISTS));
-					return -1;
-				}
-
-				msl = &mcfg->memsegs[msl_idx++];
-
-				cur_max_mem = max_type_mem - total_type_mem;
-
-				cur_mem = get_mem_amount(hugepage_sz,
-						cur_max_mem);
-				n_segs = cur_mem / hugepage_sz;
-
-				if (alloc_memseg_list(msl, hugepage_sz, n_segs,
-						socket_id, type_msl_idx))
-					return -1;
-
-				total_segs += msl->memseg_arr.len;
-				total_type_mem = total_segs * hugepage_sz;
-				type_msl_idx++;
-
-				if (alloc_va_space(msl)) {
-					RTE_LOG(ERR, EAL, "Cannot allocate VA space for memseg list\n");
-					return -1;
-				}
-			}
-			total_mem += total_type_mem;
+			RTE_LOG(DEBUG, EAL, "Detected memory type: "
+				"socket_id:%u hugepage_sz:%" PRIu64 "\n",
+				socket_id, hugepage_sz);
 		}
 	}
-	return 0;
+	/* number of memtypes could have been lower due to no NUMA support */
+	n_memtypes = cur_type;
+
+	/* set up limits for types */
+	max_mem = (uint64_t)RTE_MAX_MEM_MB << 20;
+	max_mem_per_type = RTE_MIN((uint64_t)RTE_MAX_MEM_MB_PER_TYPE << 20,
+			max_mem / n_memtypes);
+	/*
+	 * limit maximum number of segment lists per type to ensure there's
+	 * space for memseg lists for all NUMA nodes with all page sizes
+	 */
+	max_seglists_per_type = RTE_MAX_MEMSEG_LISTS / n_memtypes;
+
+	if (max_seglists_per_type == 0) {
+		RTE_LOG(ERR, EAL, "Cannot accommodate all memory types, please increase %s\n",
+			RTE_STR(CONFIG_RTE_MAX_MEMSEG_LISTS));
+		goto out;
+	}
+
+	/* go through all mem types and create segment lists */
+	msl_idx = 0;
+	for (cur_type = 0; cur_type < n_memtypes; cur_type++) {
+		unsigned int cur_seglist, n_seglists, n_segs;
+		unsigned int max_segs_per_type, max_segs_per_list;
+		struct memtype *type = &memtypes[cur_type];
+		uint64_t max_mem_per_list, pagesz;
+		int socket_id;
+
+		pagesz = type->page_sz;
+		socket_id = type->socket_id;
+
+		/*
+		 * we need to create segment lists for this type. we must take
+		 * into account the following things:
+		 *
+		 * 1. total amount of memory we can use for this memory type
+		 * 2. total amount of memory per memseg list allowed
+		 * 3. number of segments needed to fit the amount of memory
+		 * 4. number of segments allowed per type
+		 * 5. number of segments allowed per memseg list
+		 * 6. number of memseg lists we are allowed to take up
+		 */
+
+		/* calculate how much segments we will need in total */
+		max_segs_per_type = max_mem_per_type / pagesz;
+		/* limit number of segments to maximum allowed per type */
+		max_segs_per_type = RTE_MIN(max_segs_per_type,
+				(unsigned int)RTE_MAX_MEMSEG_PER_TYPE);
+		/* limit number of segments to maximum allowed per list */
+		max_segs_per_list = RTE_MIN(max_segs_per_type,
+				(unsigned int)RTE_MAX_MEMSEG_PER_LIST);
+
+		/* calculate how much memory we can have per segment list */
+		max_mem_per_list = RTE_MIN(max_segs_per_list * pagesz,
+				(uint64_t)RTE_MAX_MEM_MB_PER_LIST << 20);
+
+		/* calculate how many segments each segment list will have */
+		n_segs = RTE_MIN(max_segs_per_list, max_mem_per_list / pagesz);
+
+		/* calculate how many segment lists we can have */
+		n_seglists = RTE_MIN(max_segs_per_type / n_segs,
+				max_mem_per_type / max_mem_per_list);
+
+		/* limit number of segment lists according to our maximum */
+		n_seglists = RTE_MIN(n_seglists, max_seglists_per_type);
+
+		RTE_LOG(DEBUG, EAL, "Creating %i segment lists: "
+				"n_segs:%i socket_id:%i hugepage_sz:%" PRIu64 "\n",
+			n_seglists, n_segs, socket_id, pagesz);
+
+		/* create all segment lists */
+		for (cur_seglist = 0; cur_seglist < n_seglists; cur_seglist++) {
+			if (msl_idx >= RTE_MAX_MEMSEG_LISTS) {
+				RTE_LOG(ERR, EAL,
+					"No more space in memseg lists, please increase %s\n",
+					RTE_STR(CONFIG_RTE_MAX_MEMSEG_LISTS));
+				goto out;
+			}
+			msl = &mcfg->memsegs[msl_idx++];
+
+			if (alloc_memseg_list(msl, pagesz, n_segs,
+					socket_id, cur_seglist))
+				goto out;
+
+			if (alloc_va_space(msl)) {
+				RTE_LOG(ERR, EAL, "Cannot allocate VA space for memseg list\n");
+				goto out;
+			}
+		}
+	}
+	/* we're successful */
+	ret = 0;
+out:
+	free(memtypes);
+	return ret;
 }
 
 static int
@@ -2204,6 +2360,25 @@ memseg_secondary_init(void)
 int
 rte_eal_memseg_init(void)
 {
+	/* increase rlimit to maximum */
+	struct rlimit lim;
+
+	if (getrlimit(RLIMIT_NOFILE, &lim) == 0) {
+		/* set limit to maximum */
+		lim.rlim_cur = lim.rlim_max;
+
+		if (setrlimit(RLIMIT_NOFILE, &lim) < 0) {
+			RTE_LOG(DEBUG, EAL, "Setting maximum number of open files failed: %s\n",
+					strerror(errno));
+		} else {
+			RTE_LOG(DEBUG, EAL, "Setting maximum number of open files to %"
+					PRIu64 "\n",
+					(uint64_t)lim.rlim_cur);
+		}
+	} else {
+		RTE_LOG(ERR, EAL, "Cannot get current resource limits\n");
+	}
+
 	return rte_eal_process_type() == RTE_PROC_PRIMARY ?
 #ifndef RTE_ARCH_64
 			memseg_primary_init_32() :

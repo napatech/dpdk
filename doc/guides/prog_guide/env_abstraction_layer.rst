@@ -9,7 +9,7 @@ Environment Abstraction Layer
 The Environment Abstraction Layer (EAL) is responsible for gaining access to low-level resources such as hardware and memory space.
 It provides a generic interface that hides the environment specifics from the applications and libraries.
 It is the responsibility of the initialization routine to decide how to allocate these resources
-(that is, memory space, PCI devices, timers, consoles, and so on).
+(that is, memory space, devices, timers, consoles, and so on).
 
 Typical services expected from the EAL are:
 
@@ -21,8 +21,6 @@ Typical services expected from the EAL are:
 
 *   System Memory Reservation:
     The EAL facilitates the reservation of different memory zones, for example, physical memory areas for device interactions.
-
-*   PCI Address Abstraction: The EAL provides an interface to access PCI address space.
 
 *   Trace and Debug Functions: Logs, dump_stack, panic and so on.
 
@@ -39,8 +37,6 @@ EAL in a Linux-userland Execution Environment
 ---------------------------------------------
 
 In a Linux user space environment, the DPDK application runs as a user-space application using the pthread library.
-PCI information about devices and address space is discovered through the /sys kernel interface and through kernel modules such as uio_pci_generic, or igb_uio.
-Refer to the UIO: User-space drivers documentation in the Linux kernel. This memory is mmap'd in the application.
 
 The EAL performs physical memory allocation using mmap() in hugetlbfs (using huge page sizes to increase performance).
 This memory is exposed to DPDK service layers such as the :ref:`Mempool Library <Mempool_Library>`.
@@ -213,14 +209,42 @@ Normally, these options do not need to be changed.
     can later be mapped into that preallocated VA space (if dynamic memory mode
     is enabled), and can optionally be mapped into it at startup.
 
-PCI Access
-~~~~~~~~~~
+Support for Externally Allocated Memory
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The EAL uses the /sys/bus/pci utilities provided by the kernel to scan the content on the PCI bus.
-To access PCI memory, a kernel module called uio_pci_generic provides a /dev/uioX device file
-and resource files in /sys
-that can be mmap'd to obtain access to PCI address space from the application.
-The DPDK-specific igb_uio module can also be used for this. Both drivers use the uio kernel feature (userland driver).
+It is possible to use externally allocated memory in DPDK, using a set of malloc
+heap API's. Support for externally allocated memory is implemented through
+overloading the socket ID - externally allocated heaps will have socket ID's
+that would be considered invalid under normal circumstances. Requesting an
+allocation to take place from a specified externally allocated memory is a
+matter of supplying the correct socket ID to DPDK allocator, either directly
+(e.g. through a call to ``rte_malloc``) or indirectly (through data
+structure-specific allocation API's such as ``rte_ring_create``).
+
+Since there is no way DPDK can verify whether memory are is available or valid,
+this responsibility falls on the shoulders of the user. All multiprocess
+synchronization is also user's responsibility, as well as ensuring  that all
+calls to add/attach/detach/remove memory are done in the correct order. It is
+not required to attach to a memory area in all processes - only attach to memory
+areas as needed.
+
+The expected workflow is as follows:
+
+* Get a pointer to memory area
+* Create a named heap
+* Add memory area(s) to the heap
+    - If IOVA table is not specified, IOVA addresses will be assumed to be
+      unavailable, and DMA mappings will not be performed
+    - Other processes must attach to the memory area before they can use it
+* Get socket ID used for the heap
+* Use normal DPDK allocation procedures, using supplied socket ID
+* If memory area is no longer needed, it can be removed from the heap
+    - Other processes must detach from this memory area before it can be removed
+* If heap is no longer needed, remove it
+    - Socket ID will become invalid and will not be reused
+
+For more information, please refer to ``rte_malloc`` API documentation,
+specifically the ``rte_malloc_heap_*`` family of function calls.
 
 Per-lcore and Shared Variables
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -320,6 +344,14 @@ Misc Functions
 ~~~~~~~~~~~~~~
 
 Locks and atomic operations are per-architecture (i686 and x86_64).
+
+IOVA Mode Configuration
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Auto detection of the IOVA mode, based on probing the bus and IOMMU configuration, may not report
+the desired addressing mode when virtual devices that are not directly attached to the bus are present.
+To facilitate forcing the IOVA mode to a specific value the EAL command line option ``--iova-mode`` can
+be used to select either physical addressing('pa') or virtual addressing('va').
 
 Memory Segments and Memory Zones (memzone)
 ------------------------------------------

@@ -6,6 +6,7 @@
 #ifndef _RTE_ETH_FAILSAFE_PRIVATE_H_
 #define _RTE_ETH_FAILSAFE_PRIVATE_H_
 
+#include <stdint.h>
 #include <sys/queue.h>
 #include <pthread.h>
 
@@ -13,6 +14,7 @@
 #include <rte_dev.h>
 #include <rte_ethdev_driver.h>
 #include <rte_devargs.h>
+#include <rte_flow.h>
 #include <rte_interrupts.h>
 
 #define FAILSAFE_DRIVER_NAME "Fail-safe PMD"
@@ -81,7 +83,8 @@ struct rte_flow {
 	/* sub_flows */
 	struct rte_flow *flows[FAILSAFE_MAX_ETHPORTS];
 	/* flow description for synchronization */
-	struct rte_flow_desc *fd;
+	struct rte_flow_conv_rule rule;
+	uint8_t rule_data[];
 };
 
 enum dev_state {
@@ -143,6 +146,8 @@ struct fs_priv {
 	uint32_t nb_mac_addr;
 	struct ether_addr mac_addrs[FAILSAFE_MAX_ETHADDR];
 	uint32_t mac_addr_pool[FAILSAFE_MAX_ETHADDR];
+	uint32_t nb_mcast_addr;
+	struct ether_addr *mcast_addrs;
 	/* current capabilities */
 	struct rte_eth_dev_info infos;
 	struct rte_eth_dev_owner my_owner; /* Unique owner. */
@@ -188,7 +193,7 @@ int failsafe_hotplug_alarm_cancel(struct rte_eth_dev *dev);
 
 /* RX / TX */
 
-void set_burst_fn(struct rte_eth_dev *dev, int force_safe);
+void failsafe_set_burst_fn(struct rte_eth_dev *dev, int force_safe);
 
 uint16_t failsafe_rx_burst(void *rxq,
 		struct rte_mbuf **rx_pkts, uint16_t nb_pkts);
@@ -234,8 +239,8 @@ int failsafe_eth_new_event_callback(uint16_t port_id,
 extern const char pmd_failsafe_driver_name[];
 extern const struct eth_dev_ops failsafe_ops;
 extern const struct rte_flow_ops fs_flow_ops;
-extern uint64_t hotplug_poll;
-extern int mac_from_arg;
+extern uint64_t failsafe_hotplug_poll;
+extern int failsafe_mac_from_arg;
 
 /* HELPERS */
 
@@ -468,7 +473,7 @@ fs_switch_dev(struct rte_eth_dev *dev,
 	} else {
 		return;
 	}
-	set_burst_fn(dev, 0);
+	failsafe_set_burst_fn(dev, 0);
 	rte_wmb();
 }
 

@@ -139,7 +139,6 @@ application is shown below:
            struct rte_eth_conf port_conf = {
                    .rxmode = {
                            .split_hdr_size = 0,
-                           .offloads = DEV_RX_OFFLOAD_CRC_STRIP,
                            },
                    .txmode = {
                            .offloads =
@@ -215,7 +214,6 @@ The Ethernet port is configured with default settings using the
    struct rte_eth_conf port_conf = {
            .rxmode = {
                    .split_hdr_size = 0,
-                   .offloads = DEV_RX_OFFLOAD_CRC_STRIP,
                    },
            .txmode = {
                    .offloads =
@@ -369,7 +367,7 @@ The forwarding loop can be interrupted and the application closed using
 The generate_ipv4_flow function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The generate_ipv4_rule function is responsible for creating the flow rule.
+The generate_ipv4_flow function is responsible for creating the flow rule.
 This function is located in the ``flow_blocks.c`` file.
 
 .. code-block:: c

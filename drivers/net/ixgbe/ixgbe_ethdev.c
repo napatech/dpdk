@@ -217,10 +217,11 @@ static int ixgbe_dev_lsc_interrupt_setup(struct rte_eth_dev *dev, uint8_t on);
 static int ixgbe_dev_macsec_interrupt_setup(struct rte_eth_dev *dev);
 static int ixgbe_dev_rxq_interrupt_setup(struct rte_eth_dev *dev);
 static int ixgbe_dev_interrupt_get_status(struct rte_eth_dev *dev);
-static int ixgbe_dev_interrupt_action(struct rte_eth_dev *dev,
-				      struct rte_intr_handle *handle);
+static int ixgbe_dev_interrupt_action(struct rte_eth_dev *dev);
 static void ixgbe_dev_interrupt_handler(void *param);
 static void ixgbe_dev_interrupt_delayed_handler(void *param);
+static void ixgbe_dev_setup_link_alarm_handler(void *param);
+
 static int ixgbe_add_rar(struct rte_eth_dev *dev, struct ether_addr *mac_addr,
 			 uint32_t index, uint32_t pool);
 static void ixgbe_remove_rar(struct rte_eth_dev *dev, uint32_t index);
@@ -437,7 +438,6 @@ static const struct rte_pci_id pci_id_ixgbe_map[] = {
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_82599EN_SFP) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_82599_XAUI_LOM) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_82599_T3_LOM) },
-	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_82599_LS) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_X540T) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_X540T1) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_X550EM_X_SFP) },
@@ -1119,6 +1119,14 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 		return -EIO;
 	}
 
+	if (hw->mac.ops.fw_recovery_mode && hw->mac.ops.fw_recovery_mode(hw)) {
+		PMD_INIT_LOG(ERR, "\nERROR: "
+			"Firmware recovery mode detected. Limiting functionality.\n"
+			"Refer to the Intel(R) Ethernet Adapters and Devices "
+			"User Guide for details on firmware recovery mode.");
+		return -EIO;
+	}
+
 	/* pick up the PCI bus settings for reporting later */
 	ixgbe_get_bus_info(hw);
 
@@ -1297,7 +1305,7 @@ eth_ixgbe_dev_uninit(struct rte_eth_dev *eth_dev)
 	PMD_INIT_FUNC_TRACE();
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return -EPERM;
+		return 0;
 
 	hw = IXGBE_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
 
@@ -1330,12 +1338,6 @@ eth_ixgbe_dev_uninit(struct rte_eth_dev *eth_dev)
 
 	/* uninitialize PF if max_vfs not zero */
 	ixgbe_pf_host_uninit(eth_dev);
-
-	rte_free(eth_dev->data->mac_addrs);
-	eth_dev->data->mac_addrs = NULL;
-
-	rte_free(eth_dev->data->hash_mac_addrs);
-	eth_dev->data->hash_mac_addrs = NULL;
 
 	/* remove all the fdir filters & hash */
 	ixgbe_fdir_filter_uninit(eth_dev);
@@ -1619,7 +1621,12 @@ eth_ixgbevf_dev_init(struct rte_eth_dev *eth_dev)
 	 */
 	if ((diag != IXGBE_SUCCESS) && (diag != IXGBE_ERR_INVALID_MAC_ADDR)) {
 		PMD_INIT_LOG(ERR, "VF Initialization Failure: %d", diag);
-		return diag;
+		/*
+		 * This error code will be propagated to the app by
+		 * rte_eth_dev_reset, so use a public error code rather than
+		 * the internal-only IXGBE_ERR_RESET_FAILED
+		 */
+		return -EAGAIN;
 	}
 
 	/* negotiate mailbox API version to use with the PF. */
@@ -1697,7 +1704,7 @@ eth_ixgbevf_dev_uninit(struct rte_eth_dev *eth_dev)
 	PMD_INIT_FUNC_TRACE();
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return -EPERM;
+		return 0;
 
 	hw = IXGBE_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
 
@@ -1710,9 +1717,6 @@ eth_ixgbevf_dev_uninit(struct rte_eth_dev *eth_dev)
 
 	/* Disable the interrupts for VF */
 	ixgbevf_intr_disable(eth_dev);
-
-	rte_free(eth_dev->data->mac_addrs);
-	eth_dev->data->mac_addrs = NULL;
 
 	rte_intr_disable(intr_handle);
 	rte_intr_callback_unregister(intr_handle,
@@ -2545,6 +2549,9 @@ ixgbe_dev_start(struct rte_eth_dev *dev)
 		return -EINVAL;
 	}
 
+	/* Stop the link setup handler before resetting the HW. */
+	rte_eal_alarm_cancel(ixgbe_dev_setup_link_alarm_handler, dev);
+
 	/* disable uio/vfio intr/eventfd mapping */
 	rte_intr_disable(intr_handle);
 
@@ -2727,8 +2734,6 @@ ixgbe_dev_start(struct rte_eth_dev *dev)
 	if (err)
 		goto error;
 
-	ixgbe_dev_link_update(dev, 0);
-
 skip_link_setup:
 
 	if (rte_intr_allow_others(intr_handle)) {
@@ -2764,6 +2769,12 @@ skip_link_setup:
 			    "please call hierarchy_commit() "
 			    "before starting the port");
 
+	/*
+	 * Update link status right before return, because it may
+	 * start link configuration process in a separate thread.
+	 */
+	ixgbe_dev_link_update(dev, 0);
+
 	return 0;
 
 error:
@@ -2790,6 +2801,8 @@ ixgbe_dev_stop(struct rte_eth_dev *dev)
 		IXGBE_DEV_PRIVATE_TO_TM_CONF(dev->data->dev_private);
 
 	PMD_INIT_FUNC_TRACE();
+
+	rte_eal_alarm_cancel(ixgbe_dev_setup_link_alarm_handler, dev);
 
 	/* disable interrupts */
 	ixgbe_disable_intr(hw);
@@ -3867,11 +3880,6 @@ static int
 ixgbevf_check_link(struct ixgbe_hw *hw, ixgbe_link_speed *speed,
 		   int *link_up, int wait_to_complete)
 {
-	/**
-	 * for a quick link status checking, wait_to_compelet == 0,
-	 * skip PF link status checking
-	 */
-	bool no_pflink_check = wait_to_complete == 0;
 	struct ixgbe_mbx_info *mbx = &hw->mbx;
 	struct ixgbe_mac_info *mac = &hw->mac;
 	uint32_t links_reg, in_msg;
@@ -3932,14 +3940,6 @@ ixgbevf_check_link(struct ixgbe_hw *hw, ixgbe_link_speed *speed,
 		*speed = IXGBE_LINK_SPEED_UNKNOWN;
 	}
 
-	if (no_pflink_check) {
-		if (*speed == IXGBE_LINK_SPEED_UNKNOWN)
-			mac->get_link_status = true;
-		else
-			mac->get_link_status = false;
-
-		goto out;
-	}
 	/* if the read failed it could just be a mailbox collision, best wait
 	 * until we are called again and don't report an error
 	 */
@@ -3949,7 +3949,7 @@ ixgbevf_check_link(struct ixgbe_hw *hw, ixgbe_link_speed *speed,
 	if (!(in_msg & IXGBE_VT_MSGTYPE_CTS)) {
 		/* msg is not CTS and is NACK we must have lost CTS status */
 		if (in_msg & IXGBE_VT_MSGTYPE_NACK)
-			ret_val = -1;
+			mac->get_link_status = false;
 		goto out;
 	}
 
@@ -3969,6 +3969,25 @@ out:
 	return ret_val;
 }
 
+static void
+ixgbe_dev_setup_link_alarm_handler(void *param)
+{
+	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
+	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct ixgbe_interrupt *intr =
+		IXGBE_DEV_PRIVATE_TO_INTR(dev->data->dev_private);
+	u32 speed;
+	bool autoneg = false;
+
+	speed = hw->phy.autoneg_advertised;
+	if (!speed)
+		ixgbe_get_link_capabilities(hw, &speed, &autoneg);
+
+	ixgbe_setup_link(hw, speed, true);
+
+	intr->flags &= ~IXGBE_FLAG_NEED_LINK_CONFIG;
+}
+
 /* return 0 means link status changed, -1 means not changed */
 int
 ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
@@ -3981,9 +4000,7 @@ ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
 		IXGBE_DEV_PRIVATE_TO_INTR(dev->data->dev_private);
 	int link_up;
 	int diag;
-	u32 speed = 0;
 	int wait = 1;
-	bool autoneg = false;
 
 	memset(&link, 0, sizeof(link));
 	link.link_status = ETH_LINK_DOWN;
@@ -3993,13 +4010,8 @@ ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
 
 	hw->mac.get_link_status = true;
 
-	if ((intr->flags & IXGBE_FLAG_NEED_LINK_CONFIG) &&
-		ixgbe_get_media_type(hw) == ixgbe_media_type_fiber) {
-		speed = hw->phy.autoneg_advertised;
-		if (!speed)
-			ixgbe_get_link_capabilities(hw, &speed, &autoneg);
-		ixgbe_setup_link(hw, speed, true);
-	}
+	if (intr->flags & IXGBE_FLAG_NEED_LINK_CONFIG)
+		return rte_eth_linkstatus_set(dev, &link);
 
 	/* check if it needs to wait to complete, if lsc interrupt is enabled */
 	if (wait_to_complete == 0 || dev->data->dev_conf.intr_conf.lsc != 0)
@@ -4017,11 +4029,14 @@ ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
 	}
 
 	if (link_up == 0) {
-		intr->flags |= IXGBE_FLAG_NEED_LINK_CONFIG;
+		if (ixgbe_get_media_type(hw) == ixgbe_media_type_fiber) {
+			intr->flags |= IXGBE_FLAG_NEED_LINK_CONFIG;
+			rte_eal_alarm_set(10,
+				ixgbe_dev_setup_link_alarm_handler, dev);
+		}
 		return rte_eth_linkstatus_set(dev, &link);
 	}
 
-	intr->flags &= ~IXGBE_FLAG_NEED_LINK_CONFIG;
 	link.link_status = ETH_LINK_UP;
 	link.link_duplex = ETH_LINK_FULL_DUPLEX;
 
@@ -4282,8 +4297,7 @@ ixgbe_dev_link_status_print(struct rte_eth_dev *dev)
  *  - On failure, a negative value.
  */
 static int
-ixgbe_dev_interrupt_action(struct rte_eth_dev *dev,
-			   struct rte_intr_handle *intr_handle)
+ixgbe_dev_interrupt_action(struct rte_eth_dev *dev)
 {
 	struct ixgbe_interrupt *intr =
 		IXGBE_DEV_PRIVATE_TO_INTR(dev->data->dev_private);
@@ -4334,7 +4348,6 @@ ixgbe_dev_interrupt_action(struct rte_eth_dev *dev,
 
 	PMD_DRV_LOG(DEBUG, "enable intr immediately");
 	ixgbe_enable_intr(dev);
-	rte_intr_enable(intr_handle);
 
 	return 0;
 }
@@ -4417,7 +4430,7 @@ ixgbe_dev_interrupt_handler(void *param)
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
 
 	ixgbe_dev_interrupt_get_status(dev);
-	ixgbe_dev_interrupt_action(dev, dev->intr_handle);
+	ixgbe_dev_interrupt_action(dev);
 }
 
 static int
@@ -5008,14 +5021,14 @@ ixgbevf_dev_configure(struct rte_eth_dev *dev)
 	 * Keep the persistent behavior the same as Host PF
 	 */
 #ifndef RTE_LIBRTE_IXGBE_PF_DISABLE_STRIP_CRC
-	if (rte_eth_dev_must_keep_crc(conf->rxmode.offloads)) {
+	if (conf->rxmode.offloads & DEV_RX_OFFLOAD_KEEP_CRC) {
 		PMD_INIT_LOG(NOTICE, "VF can't disable HW CRC Strip");
-		conf->rxmode.offloads |= DEV_RX_OFFLOAD_CRC_STRIP;
+		conf->rxmode.offloads &= ~DEV_RX_OFFLOAD_KEEP_CRC;
 	}
 #else
-	if (!rte_eth_dev_must_keep_crc(conf->rxmode.offloads)) {
+	if (!(conf->rxmode.offloads & DEV_RX_OFFLOAD_KEEP_CRC)) {
 		PMD_INIT_LOG(NOTICE, "VF can't enable HW CRC Strip");
-		conf->rxmode.offloads &= ~DEV_RX_OFFLOAD_CRC_STRIP;
+		conf->rxmode.offloads |= DEV_RX_OFFLOAD_KEEP_CRC;
 	}
 #endif
 
@@ -5041,6 +5054,9 @@ ixgbevf_dev_start(struct rte_eth_dev *dev)
 	int err, mask = 0;
 
 	PMD_INIT_FUNC_TRACE();
+
+	/* Stop the link setup handler before resetting the HW. */
+	rte_eal_alarm_cancel(ixgbe_dev_setup_link_alarm_handler, dev);
 
 	err = hw->mac.ops.reset_hw(hw);
 	if (err) {
@@ -5076,8 +5092,6 @@ ixgbevf_dev_start(struct rte_eth_dev *dev)
 	}
 
 	ixgbevf_dev_rxtx_start(dev);
-
-	ixgbevf_dev_link_update(dev, 0);
 
 	/* check and configure queue intr-vector mapping */
 	if (rte_intr_cap_multiple(intr_handle) &&
@@ -5116,6 +5130,12 @@ ixgbevf_dev_start(struct rte_eth_dev *dev)
 	/* Re-enable interrupt for VF */
 	ixgbevf_intr_enable(dev);
 
+	/*
+	 * Update link status right before return, because it may
+	 * start link configuration process in a separate thread.
+	 */
+	ixgbevf_dev_link_update(dev, 0);
+
 	return 0;
 }
 
@@ -5127,6 +5147,8 @@ ixgbevf_dev_stop(struct rte_eth_dev *dev)
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 
 	PMD_INIT_FUNC_TRACE();
+
+	rte_eal_alarm_cancel(ixgbe_dev_setup_link_alarm_handler, dev);
 
 	ixgbevf_intr_disable(dev);
 

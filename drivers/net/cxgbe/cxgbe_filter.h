@@ -77,6 +77,7 @@ struct ch_filter_tuple {
  * Filter specification
  */
 struct ch_filter_specification {
+	void *private;
 	/* Administrative fields for filter. */
 	uint32_t hitcnts:1;	/* count filter hits in TCB */
 	uint32_t prio:1;	/* filter has priority over active/server */
@@ -99,6 +100,22 @@ struct ch_filter_specification {
 	uint32_t iq:10;		/* ingress queue */
 
 	uint32_t eport:2;	/* egress port to switch packet out */
+	uint32_t swapmac:1;     /* swap SMAC/DMAC for loopback packet */
+	uint32_t newvlan:2;     /* rewrite VLAN Tag */
+	uint8_t dmac[ETHER_ADDR_LEN];   /* new destination MAC address */
+	uint16_t vlan;          /* VLAN Tag to insert */
+
+	/*
+	 * Switch proxy/rewrite fields.  An ingress packet which matches a
+	 * filter with "switch" set will be looped back out as an egress
+	 * packet -- potentially with some header rewriting.
+	 */
+	uint32_t nat_mode:3;	/* specify NAT operation mode */
+
+	uint8_t nat_lip[16];	/* local IP to use after NAT'ing */
+	uint8_t nat_fip[16];	/* foreign IP to use after NAT'ing */
+	uint16_t nat_lport;	/* local port number to use after NAT'ing */
+	uint16_t nat_fport;	/* foreign port number to use after NAT'ing */
 
 	/* Filter rule value/mask pairs. */
 	struct ch_filter_tuple val;
@@ -109,6 +126,23 @@ enum {
 	FILTER_PASS = 0,	/* default */
 	FILTER_DROP,
 	FILTER_SWITCH
+};
+
+enum {
+	VLAN_REMOVE = 1,
+	VLAN_INSERT,
+	VLAN_REWRITE
+};
+
+enum {
+	NAT_MODE_NONE = 0,	/* No NAT performed */
+	NAT_MODE_DIP,		/* NAT on Dst IP */
+	NAT_MODE_DIP_DP,	/* NAT on Dst IP, Dst Port */
+	NAT_MODE_DIP_DP_SIP,	/* NAT on Dst IP, Dst Port and Src IP */
+	NAT_MODE_DIP_DP_SP,	/* NAT on Dst IP, Dst Port and Src Port */
+	NAT_MODE_SIP_SP,	/* NAT on Src IP and Src Port */
+	NAT_MODE_DIP_SIP_SP,	/* NAT on Dst IP, Src IP and Src Port */
+	NAT_MODE_ALL		/* NAT on entire 4-tuple */
 };
 
 enum filter_type {
@@ -145,6 +179,7 @@ struct filter_entry {
 	u32 pending:1;              /* filter action is pending FW reply */
 	struct filter_ctx *ctx;     /* caller's completion hook */
 	struct clip_entry *clipt;   /* CLIP Table entry for IPv6 */
+	struct l2t_entry *l2t;      /* Layer Two Table entry for dmac */
 	struct rte_eth_dev *dev;    /* Port's rte eth device */
 	void *private;              /* For use by apps using filter_entry */
 

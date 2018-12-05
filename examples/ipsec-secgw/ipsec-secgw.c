@@ -54,7 +54,7 @@
 #define NB_MBUF	(32000)
 
 #define CDEV_QUEUE_DESC 2048
-#define CDEV_MAP_ENTRIES 1024
+#define CDEV_MAP_ENTRIES 16384
 #define CDEV_MP_NB_OBJS 2048
 #define CDEV_MP_CACHE_SZ 64
 #define MAX_QUEUE_PAIRS 1
@@ -197,8 +197,7 @@ static struct rte_eth_conf port_conf = {
 		.mq_mode	= ETH_MQ_RX_RSS,
 		.max_rx_pkt_len = ETHER_MAX_LEN,
 		.split_hdr_size = 0,
-		.offloads = DEV_RX_OFFLOAD_CHECKSUM |
-			    DEV_RX_OFFLOAD_CRC_STRIP,
+		.offloads = DEV_RX_OFFLOAD_CHECKSUM,
 	},
 	.rx_adv_conf = {
 		.rss_conf = {
@@ -1392,7 +1391,25 @@ cryptodevs_init(void)
 
 	uint32_t max_sess_sz = 0, sess_sz;
 	for (cdev_id = 0; cdev_id < rte_cryptodev_count(); cdev_id++) {
+		void *sec_ctx;
+
+		/* Get crypto priv session size */
 		sess_sz = rte_cryptodev_sym_get_private_session_size(cdev_id);
+		if (sess_sz > max_sess_sz)
+			max_sess_sz = sess_sz;
+
+		/*
+		 * If crypto device is security capable, need to check the
+		 * size of security session as well.
+		 */
+
+		/* Get security context of the crypto device */
+		sec_ctx = rte_cryptodev_get_sec_ctx(cdev_id);
+		if (sec_ctx == NULL)
+			continue;
+
+		/* Get size of security session */
+		sess_sz = rte_security_session_get_size(sec_ctx);
 		if (sess_sz > max_sess_sz)
 			max_sess_sz = sess_sz;
 	}

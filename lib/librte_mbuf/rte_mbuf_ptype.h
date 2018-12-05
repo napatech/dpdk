@@ -131,6 +131,20 @@ extern "C" {
  */
 #define RTE_PTYPE_L2_ETHER_PPPOE            0x00000008
 /**
+ * FCoE packet type.
+ *
+ * Packet format:
+ * <'ether type'=[0x8906]>
+ */
+#define RTE_PTYPE_L2_ETHER_FCOE             0x00000009
+/**
+ * MPLS packet type.
+ *
+ * Packet format:
+ * <'ether type'=[0x8847|0x8848]>
+ */
+#define RTE_PTYPE_L2_ETHER_MPLS             0x0000000a
+/**
  * Mask of layer 2 packet types.
  * It is used for outer packet for tunneling cases.
  */
@@ -286,6 +300,14 @@ extern "C" {
  * | 'version'=6, 'next header'!=[6|17|44|132|1]>
  */
 #define RTE_PTYPE_L4_NONFRAG                0x00000600
+/**
+ * IGMP (Internet Group Management Protocol) packet type.
+ *
+ * Packet format:
+ * <'ether type'=0x0800
+ * | 'version'=4, 'protocol'=2, 'MF'=0, 'frag_offset'=0>
+ */
+#define RTE_PTYPE_L4_IGMP                   0x00000700
 /**
  * Mask of layer 4 packet types.
  * It is used for outer packet for tunneling cases.

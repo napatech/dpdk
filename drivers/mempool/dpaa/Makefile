@@ -10,7 +10,6 @@ LIB = librte_mempool_dpaa.a
 
 CFLAGS := -I$(SRCDIR) $(CFLAGS)
 CFLAGS += -O3 $(WERROR_FLAGS)
-CFLAGS += -D _GNU_SOURCE
 CFLAGS += -I$(RTE_SDK)/drivers/bus/dpaa
 CFLAGS += -I$(RTE_SDK)/drivers/bus/dpaa/include/
 CFLAGS += -I$(RTE_SDK)/drivers/mempool/dpaa
@@ -31,5 +30,6 @@ SRCS-$(CONFIG_RTE_LIBRTE_DPAA_MEMPOOL) += dpaa_mempool.c
 
 LDLIBS += -lrte_bus_dpaa
 LDLIBS += -lrte_eal -lrte_mempool -lrte_ring
+LDLIBS += -lrte_common_dpaax
 
 include $(RTE_SDK)/mk/rte.lib.mk

@@ -223,6 +223,8 @@ pci_scan_one(int dev_pci_fd, struct pci_conf *conf)
 	}
 
 	memset(dev, 0, sizeof(*dev));
+	dev->device.bus = &rte_pci_bus.bus;
+
 	dev->addr.domain = conf->pc_sel.pc_domain;
 	dev->addr.bus = conf->pc_sel.pc_bus;
 	dev->addr.devid = conf->pc_sel.pc_dev;
@@ -439,6 +441,8 @@ int rte_pci_read_config(const struct rte_pci_device *dev,
 {
 	int fd = -1;
 	int size;
+	/* Copy Linux implementation's behaviour */
+	const int return_len = len;
 	struct pci_io pi = {
 		.pi_sel = {
 			.pc_domain = dev->addr.domain,
@@ -469,7 +473,7 @@ int rte_pci_read_config(const struct rte_pci_device *dev,
 	}
 	close(fd);
 
-	return 0;
+	return return_len;
 
  error:
 	if (fd >= 0)

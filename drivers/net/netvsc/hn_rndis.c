@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <unistd.h>
 
+#include <rte_ethdev_driver.h>
 #include <rte_ethdev.h>
 #include <rte_string_fns.h>
 #include <rte_memzone.h>
@@ -281,7 +282,7 @@ static int hn_nvs_send_rndis_ctrl(struct vmbus_channel *chan,
 				  &nvs_rndis, sizeof(nvs_rndis), 0U, NULL);
 }
 
-void hn_rndis_link_status(struct hn_data *hv __rte_unused, const void *msg)
+void hn_rndis_link_status(struct rte_eth_dev *dev, const void *msg)
 {
 	const struct rndis_status_msg *indicate = msg;
 
@@ -290,15 +291,19 @@ void hn_rndis_link_status(struct hn_data *hv __rte_unused, const void *msg)
 	PMD_DRV_LOG(DEBUG, "link status %#x", indicate->status);
 
 	switch (indicate->status) {
-	case RNDIS_STATUS_LINK_SPEED_CHANGE:
 	case RNDIS_STATUS_NETWORK_CHANGE:
 	case RNDIS_STATUS_TASK_OFFLOAD_CURRENT_CONFIG:
 		/* ignore not in DPDK API */
 		break;
 
+	case RNDIS_STATUS_LINK_SPEED_CHANGE:
 	case RNDIS_STATUS_MEDIA_CONNECT:
 	case RNDIS_STATUS_MEDIA_DISCONNECT:
-		/* TODO handle as LSC interrupt  */
+		if (dev->data->dev_conf.intr_conf.lsc &&
+		    hn_dev_link_update(dev, 0) == 0)
+			_rte_eth_dev_callback_process(dev,
+						      RTE_ETH_EVENT_INTR_LSC,
+						      NULL);
 		break;
 	default:
 		PMD_DRV_LOG(NOTICE, "unknown RNDIS indication: %#x",
@@ -382,7 +387,7 @@ static int hn_rndis_exec1(struct hn_data *hv,
 	if (comp) {
 		/* Poll primary channel until response received */
 		while (hv->rndis_pending == rid)
-			hn_process_events(hv, 0);
+			hn_process_events(hv, 0, 1);
 
 		memcpy(comp, hv->rndis_resp, comp_len);
 	}
@@ -892,8 +897,7 @@ int hn_rndis_get_offload(struct hn_data *hv,
 	    == HN_NDIS_LSOV2_CAP_IP6)
 		dev_info->tx_offload_capa |= DEV_TX_OFFLOAD_TCP_TSO;
 
-	dev_info->rx_offload_capa = DEV_RX_OFFLOAD_VLAN_STRIP |
-				    DEV_RX_OFFLOAD_CRC_STRIP;
+	dev_info->rx_offload_capa = DEV_RX_OFFLOAD_VLAN_STRIP;
 
 	if (hwcaps.ndis_csum.ndis_ip4_rxcsum & NDIS_RXCSUM_CAP_IP4)
 		dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_IPV4_CKSUM;
@@ -907,6 +911,37 @@ int hn_rndis_get_offload(struct hn_data *hv,
 		dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_UDP_CKSUM;
 
 	return 0;
+}
+
+uint32_t
+hn_rndis_get_ptypes(struct hn_data *hv)
+{
+	struct ndis_offload hwcaps;
+	uint32_t ptypes;
+	int error;
+
+	memset(&hwcaps, 0, sizeof(hwcaps));
+
+	error = hn_rndis_query_hwcaps(hv, &hwcaps);
+	if (error) {
+		PMD_DRV_LOG(ERR, "hwcaps query failed: %d", error);
+		return RTE_PTYPE_L2_ETHER;
+	}
+
+	ptypes = RTE_PTYPE_L2_ETHER;
+
+	if (hwcaps.ndis_csum.ndis_ip4_rxcsum & NDIS_RXCSUM_CAP_IP4)
+		ptypes |= RTE_PTYPE_L3_IPV4;
+
+	if ((hwcaps.ndis_csum.ndis_ip4_rxcsum & NDIS_RXCSUM_CAP_TCP4) ||
+	    (hwcaps.ndis_csum.ndis_ip6_rxcsum & NDIS_RXCSUM_CAP_TCP6))
+		ptypes |= RTE_PTYPE_L4_TCP;
+
+	if ((hwcaps.ndis_csum.ndis_ip4_rxcsum & NDIS_RXCSUM_CAP_UDP4) ||
+	    (hwcaps.ndis_csum.ndis_ip6_rxcsum & NDIS_RXCSUM_CAP_UDP6))
+		ptypes |= RTE_PTYPE_L4_UDP;
+
+	return ptypes;
 }
 
 int

@@ -85,7 +85,6 @@ vmbus_match(const struct rte_vmbus_driver *dr,
 
 	return false;
 }
-
 /*
  * If device ID match, call the devinit() function of the driver.
  */
@@ -112,7 +111,6 @@ vmbus_probe_one_driver(struct rte_vmbus_driver *dr,
 
 	/* reference driver structure */
 	dev->driver = dr;
-	dev->device.driver = &dr->driver;
 
 	if (dev->device.numa_node < 0) {
 		VMBUS_LOG(WARNING, "  Invalid NUMA socket, default to 0");
@@ -125,6 +123,8 @@ vmbus_probe_one_driver(struct rte_vmbus_driver *dr,
 	if (ret) {
 		dev->driver = NULL;
 		rte_vmbus_unmap_device(dev);
+	} else {
+		dev->device.driver = &dr->driver;
 	}
 
 	return ret;
@@ -143,7 +143,7 @@ vmbus_probe_all_drivers(struct rte_vmbus_device *dev)
 	int rc;
 
 	/* Check if a driver is already loaded */
-	if (dev->driver != NULL) {
+	if (rte_dev_is_probed(&dev->device)) {
 		VMBUS_LOG(DEBUG, "VMBUS driver already loaded");
 		return 0;
 	}
@@ -202,6 +202,27 @@ vmbus_parse(const char *name, void *addr)
 		memcpy(addr, &guid, sizeof(guid));
 
 	return ret;
+}
+
+/*
+ * scan for matching device args on command line
+ * example:
+ *	-w 'vmbus:635a7ae3-091e-4410-ad59-667c4f8c04c3,latency=20'
+ */
+struct rte_devargs *
+vmbus_devargs_lookup(struct rte_vmbus_device *dev)
+{
+	struct rte_devargs *devargs;
+	rte_uuid_t addr;
+
+	RTE_EAL_DEVARGS_FOREACH("vmbus", devargs) {
+		vmbus_parse(devargs->name, &addr);
+
+		if (rte_uuid_compare(dev->device_id, addr) == 0)
+			return devargs;
+	}
+	return NULL;
+
 }
 
 /* register vmbus driver */

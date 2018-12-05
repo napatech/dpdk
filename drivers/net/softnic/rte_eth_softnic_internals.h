@@ -18,8 +18,11 @@
 #include <rte_table_action.h>
 #include <rte_pipeline.h>
 
+#include <rte_ethdev_core.h>
 #include <rte_ethdev_driver.h>
 #include <rte_tm_driver.h>
+#include <rte_flow_driver.h>
+#include <rte_mtr_driver.h>
 
 #include "rte_eth_softnic.h"
 #include "conn.h"
@@ -41,6 +44,57 @@ struct pmd_params {
 		uint32_t n_queues; /**< Number of queues */
 		uint16_t qsize[RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE];
 	} tm;
+};
+
+/**
+ * Ethdev Flow API
+ */
+struct rte_flow;
+
+TAILQ_HEAD(flow_list, rte_flow);
+
+struct flow_attr_map {
+	char pipeline_name[NAME_SIZE];
+	uint32_t table_id;
+	int valid;
+};
+
+#ifndef SOFTNIC_FLOW_MAX_GROUPS
+#define SOFTNIC_FLOW_MAX_GROUPS                            64
+#endif
+
+struct flow_internals {
+	struct flow_attr_map ingress_map[SOFTNIC_FLOW_MAX_GROUPS];
+	struct flow_attr_map egress_map[SOFTNIC_FLOW_MAX_GROUPS];
+};
+
+/**
+ * Meter
+ */
+
+/* MTR meter profile */
+struct softnic_mtr_meter_profile {
+	TAILQ_ENTRY(softnic_mtr_meter_profile) node;
+	uint32_t meter_profile_id;
+	struct rte_mtr_meter_profile params;
+	uint32_t n_users;
+};
+
+TAILQ_HEAD(softnic_mtr_meter_profile_list, softnic_mtr_meter_profile);
+
+/* MTR meter object */
+struct softnic_mtr {
+	TAILQ_ENTRY(softnic_mtr) node;
+	uint32_t mtr_id;
+	struct rte_mtr_params params;
+	struct rte_flow *flow;
+};
+
+TAILQ_HEAD(softnic_mtr_list, softnic_mtr);
+
+struct mtr_internals {
+	struct softnic_mtr_meter_profile_list meter_profiles;
+	struct softnic_mtr_list mtrs;
 };
 
 /**
@@ -225,6 +279,25 @@ struct softnic_tap {
 TAILQ_HEAD(softnic_tap_list, softnic_tap);
 
 /**
+ * Cryptodev
+ */
+struct softnic_cryptodev_params {
+	const char *dev_name;
+	uint32_t dev_id; /**< Valid only when *dev_name* is NULL. */
+	uint32_t n_queues;
+	uint32_t queue_size;
+};
+
+struct softnic_cryptodev {
+	TAILQ_ENTRY(softnic_cryptodev) node;
+	char name[NAME_SIZE];
+	uint16_t dev_id;
+	uint32_t n_queues;
+};
+
+TAILQ_HEAD(softnic_cryptodev_list, softnic_cryptodev);
+
+/**
  * Input port action
  */
 struct softnic_port_in_action_profile_params {
@@ -255,6 +328,7 @@ struct softnic_table_action_profile_params {
 	struct rte_table_action_nat_config nat;
 	struct rte_table_action_ttl_config ttl;
 	struct rte_table_action_stats_config stats;
+	struct rte_table_action_sym_crypto_config sym_crypto;
 };
 
 struct softnic_table_action_profile {
@@ -265,6 +339,15 @@ struct softnic_table_action_profile {
 };
 
 TAILQ_HEAD(softnic_table_action_profile_list, softnic_table_action_profile);
+
+struct softnic_table_meter_profile {
+	TAILQ_ENTRY(softnic_table_meter_profile) node;
+	uint32_t meter_profile_id;
+	struct rte_table_action_meter_profile profile;
+};
+
+TAILQ_HEAD(softnic_table_meter_profile_list,
+	softnic_table_meter_profile);
 
 /**
  * Pipeline
@@ -280,12 +363,13 @@ enum softnic_port_in_type {
 	PORT_IN_TMGR,
 	PORT_IN_TAP,
 	PORT_IN_SOURCE,
+	PORT_IN_CRYPTODEV,
 };
 
 struct softnic_port_in_params {
 	/* Read */
 	enum softnic_port_in_type type;
-	const char *dev_name;
+	char dev_name[NAME_SIZE];
 	union {
 		struct {
 			uint16_t queue_id;
@@ -301,11 +385,17 @@ struct softnic_port_in_params {
 			const char *file_name;
 			uint32_t n_bytes_per_pkt;
 		} source;
+
+		struct {
+			uint16_t queue_id;
+			void *f_callback;
+			void *arg_callback;
+		} cryptodev;
 	};
 	uint32_t burst_size;
 
 	/* Action */
-	const char *action_profile_name;
+	char action_profile_name[NAME_SIZE];
 };
 
 enum softnic_port_out_type {
@@ -314,11 +404,12 @@ enum softnic_port_out_type {
 	PORT_OUT_TMGR,
 	PORT_OUT_TAP,
 	PORT_OUT_SINK,
+	PORT_OUT_CRYPTODEV,
 };
 
 struct softnic_port_out_params {
 	enum softnic_port_out_type type;
-	const char *dev_name;
+	char dev_name[NAME_SIZE];
 	union {
 		struct {
 			uint16_t queue_id;
@@ -328,6 +419,11 @@ struct softnic_port_out_params {
 			const char *file_name;
 			uint32_t max_n_pkts;
 		} sink;
+
+		struct {
+			uint16_t queue_id;
+			uint32_t op_offset;
+		} cryptodev;
 	};
 	uint32_t burst_size;
 	int retry;
@@ -353,11 +449,15 @@ struct softnic_table_array_params {
 	uint32_t key_offset;
 };
 
+#ifndef TABLE_RULE_MATCH_SIZE_MAX
+#define TABLE_RULE_MATCH_SIZE_MAX                          256
+#endif
+
 struct softnic_table_hash_params {
 	uint32_t n_keys;
 	uint32_t key_offset;
 	uint32_t key_size;
-	uint8_t *key_mask;
+	uint8_t key_mask[TABLE_RULE_MATCH_SIZE_MAX];
 	uint32_t n_buckets;
 	int extendable_bucket;
 };
@@ -379,7 +479,7 @@ struct softnic_table_params {
 	} match;
 
 	/* Action */
-	const char *action_profile_name;
+	char action_profile_name[NAME_SIZE];
 };
 
 struct softnic_port_in {
@@ -388,10 +488,17 @@ struct softnic_port_in {
 	struct rte_port_in_action *a;
 };
 
+struct softnic_port_out {
+	struct softnic_port_out_params params;
+};
+
 struct softnic_table {
 	struct softnic_table_params params;
 	struct softnic_table_action_profile *ap;
 	struct rte_table_action *a;
+	struct flow_list flows;
+	struct rte_table_action_dscp_table dscp_table;
+	struct softnic_table_meter_profile_list meter_profiles;
 };
 
 struct pipeline {
@@ -399,7 +506,9 @@ struct pipeline {
 	char name[NAME_SIZE];
 
 	struct rte_pipeline *p;
+	struct pipeline_params params;
 	struct softnic_port_in port_in[RTE_PIPELINE_PORT_IN_MAX];
+	struct softnic_port_out port_out[RTE_PIPELINE_PORT_OUT_MAX];
 	struct softnic_table table[RTE_PIPELINE_TABLE_MAX];
 	uint32_t n_ports_in;
 	uint32_t n_ports_out;
@@ -489,18 +598,74 @@ struct pmd_internals {
 		struct tm_internals tm; /**< Traffic Management */
 	} soft;
 
+	struct flow_internals flow;
+	struct mtr_internals mtr;
+
 	struct softnic_conn *conn;
 	struct softnic_mempool_list mempool_list;
 	struct softnic_swq_list swq_list;
 	struct softnic_link_list link_list;
 	struct softnic_tmgr_port_list tmgr_port_list;
 	struct softnic_tap_list tap_list;
+	struct softnic_cryptodev_list cryptodev_list;
 	struct softnic_port_in_action_profile_list port_in_action_profile_list;
 	struct softnic_table_action_profile_list table_action_profile_list;
 	struct pipeline_list pipeline_list;
 	struct softnic_thread thread[RTE_MAX_LCORE];
 	struct softnic_thread_data thread_data[RTE_MAX_LCORE];
 };
+
+static inline struct rte_eth_dev *
+ETHDEV(struct pmd_internals *softnic)
+{
+	uint16_t port_id;
+	int status;
+
+	if (softnic == NULL)
+		return NULL;
+
+	status = rte_eth_dev_get_port_by_name(softnic->params.name, &port_id);
+	if (status)
+		return NULL;
+
+	return &rte_eth_devices[port_id];
+}
+
+/**
+ * Ethdev Flow API
+ */
+int
+flow_attr_map_set(struct pmd_internals *softnic,
+		uint32_t group_id,
+		int ingress,
+		const char *pipeline_name,
+		uint32_t table_id);
+
+struct flow_attr_map *
+flow_attr_map_get(struct pmd_internals *softnic,
+		uint32_t group_id,
+		int ingress);
+
+extern const struct rte_flow_ops pmd_flow_ops;
+
+/**
+ * Meter
+ */
+int
+softnic_mtr_init(struct pmd_internals *p);
+
+void
+softnic_mtr_free(struct pmd_internals *p);
+
+struct softnic_mtr *
+softnic_mtr_find(struct pmd_internals *p,
+	uint32_t mtr_id);
+
+struct softnic_mtr_meter_profile *
+softnic_mtr_meter_profile_find(struct pmd_internals *p,
+	uint32_t meter_profile_id);
+
+extern const struct rte_mtr_ops pmd_mtr_ops;
 
 /**
  * MEMPOOL
@@ -610,6 +775,24 @@ softnic_tap_create(struct pmd_internals *p,
 	const char *name);
 
 /**
+ * Sym Crypto
+ */
+int
+softnic_cryptodev_init(struct pmd_internals *p);
+
+void
+softnic_cryptodev_free(struct pmd_internals *p);
+
+struct softnic_cryptodev *
+softnic_cryptodev_find(struct pmd_internals *p,
+	const char *name);
+
+struct softnic_cryptodev *
+softnic_cryptodev_create(struct pmd_internals *p,
+	const char *name,
+	struct softnic_cryptodev_params *params);
+
+/**
  * Input port action
  */
 int
@@ -644,6 +827,9 @@ struct softnic_table_action_profile *
 softnic_table_action_profile_create(struct pmd_internals *p,
 	const char *name,
 	struct softnic_table_action_profile_params *params);
+
+enum rte_table_action_policer
+softnic_table_action_policer(enum rte_mtr_policer_action action);
 
 /**
  * Pipeline
@@ -683,9 +869,19 @@ softnic_pipeline_port_out_create(struct pmd_internals *p,
 	struct softnic_port_out_params *params);
 
 int
+softnic_pipeline_port_out_find(struct pmd_internals *softnic,
+		const char *pipeline_name,
+		const char *name,
+		uint32_t *port_id);
+
+int
 softnic_pipeline_table_create(struct pmd_internals *p,
 	const char *pipeline_name,
 	struct softnic_table_params *params);
+
+struct softnic_table_meter_profile *
+softnic_pipeline_table_meter_profile_find(struct softnic_table *table,
+	uint32_t meter_profile_id);
 
 struct softnic_table_rule_match_acl {
 	int ip_version;
@@ -717,10 +913,6 @@ struct softnic_table_rule_match_acl {
 struct softnic_table_rule_match_array {
 	uint32_t pos;
 };
-
-#ifndef TABLE_RULE_MATCH_SIZE_MAX
-#define TABLE_RULE_MATCH_SIZE_MAX                          256
-#endif
 
 struct softnic_table_rule_match_hash {
 	uint8_t key[TABLE_RULE_MATCH_SIZE_MAX];
@@ -760,6 +952,18 @@ struct softnic_table_rule_action {
 	struct rte_table_action_ttl_params ttl;
 	struct rte_table_action_stats_params stats;
 	struct rte_table_action_time_params time;
+	struct rte_table_action_tag_params tag;
+	struct rte_table_action_decap_params decap;
+	struct rte_table_action_sym_crypto_params sym_crypto;
+};
+
+struct rte_flow {
+	TAILQ_ENTRY(rte_flow) node;
+	struct softnic_table_rule_match match;
+	struct softnic_table_rule_action action;
+	void *data;
+	struct pipeline *pipeline;
+	uint32_t table_id;
 };
 
 int

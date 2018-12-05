@@ -7,10 +7,11 @@
 #include <unistd.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <dirent.h>
 
 #include "test.h"
 
-#ifndef RTE_LIBRTE_KNI
+#if !defined(RTE_EXEC_ENV_LINUXAPP) || !defined(RTE_LIBRTE_KNI)
 
 static int
 test_kni(void)
@@ -40,6 +41,8 @@ test_kni(void)
 
 #define IFCONFIG      "/sbin/ifconfig "
 #define TEST_KNI_PORT "test_kni_port"
+#define KNI_MODULE_PATH "/sys/module/rte_kni"
+#define KNI_MODULE_PARAM_LO KNI_MODULE_PATH"/parameters/lo_mode"
 #define KNI_TEST_MAX_PORTS 4
 /* The threshold number of mbufs to be transmitted or received. */
 #define KNI_NUM_MBUF_THRESHOLD 100
@@ -70,9 +73,6 @@ static const struct rte_eth_txconf tx_conf = {
 };
 
 static const struct rte_eth_conf port_conf = {
-	.rxmode = {
-		.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
-	},
 	.txmode = {
 		.mq_mode = ETH_DCB_NONE,
 	},
@@ -120,6 +120,79 @@ kni_change_mtu(uint16_t port_id, unsigned int new_mtu)
 	printf("Change MTU of port %d to %i successfully.\n",
 					 port_id, kni_pkt_mtu);
 	return 0;
+}
+
+static int
+test_kni_link_change(void)
+{
+	int ret;
+	int pid;
+
+	pid = fork();
+	if (pid < 0) {
+		printf("Error: Failed to fork a process\n");
+		return -1;
+	}
+
+	if (pid == 0) {
+		printf("Starting KNI Link status change tests.\n");
+		if (system(IFCONFIG TEST_KNI_PORT" up") == -1) {
+			ret = -1;
+			goto error;
+		}
+
+		ret = rte_kni_update_link(test_kni_ctx, 1);
+		if (ret < 0) {
+			printf("Failed to change link state to Up ret=%d.\n",
+				ret);
+			goto error;
+		}
+		rte_delay_ms(1000);
+		printf("KNI: Set LINKUP, previous state=%d\n", ret);
+
+		ret = rte_kni_update_link(test_kni_ctx, 0);
+		if (ret != 1) {
+			printf(
+		"Failed! Previous link state should be 1, returned %d.\n",
+				ret);
+			goto error;
+		}
+		rte_delay_ms(1000);
+		printf("KNI: Set LINKDOWN, previous state=%d\n", ret);
+
+		ret = rte_kni_update_link(test_kni_ctx, 1);
+		if (ret != 0) {
+			printf(
+		"Failed! Previous link state should be 0, returned %d.\n",
+				ret);
+			goto error;
+		}
+		printf("KNI: Set LINKUP, previous state=%d\n", ret);
+
+		ret = 0;
+		rte_delay_ms(1000);
+
+error:
+		if (system(IFCONFIG TEST_KNI_PORT" down") == -1)
+			ret = -1;
+
+		printf("KNI: Link status change tests: %s.\n",
+			(ret == 0) ? "Passed" : "Failed");
+		exit(ret);
+	} else {
+		int p_ret, status;
+
+		while (1) {
+			p_ret = waitpid(pid, &status, WNOHANG);
+			if (p_ret != 0) {
+				if (WIFEXITED(status))
+					return WEXITSTATUS(status);
+				return -1;
+			}
+			rte_delay_ms(10);
+			rte_kni_handle_request(test_kni_ctx);
+		}
+	}
 }
 /**
  * This loop fully tests the basic functions of KNI. e.g. transmitting,
@@ -404,6 +477,10 @@ test_kni_processing(uint16_t port_id, struct rte_mempool *mp)
 		goto fail_kni;
 	}
 
+	ret = test_kni_link_change();
+	if (ret != 0)
+		goto fail_kni;
+
 	rte_eal_mp_remote_launch(test_kni_loop, NULL, CALL_MASTER);
 	RTE_LCORE_FOREACH_SLAVE(i) {
 		if (rte_eal_wait_lcore(i) < 0) {
@@ -428,12 +505,6 @@ test_kni_processing(uint16_t port_id, struct rte_mempool *mp)
 		return -1;
 	}
 	test_kni_ctx = NULL;
-
-	/* test of releasing a released kni device */
-	if (rte_kni_release(kni) == 0) {
-		printf("should not release a released kni device\n");
-		return -1;
-	}
 
 	/* test of reusing memzone */
 	kni = rte_kni_alloc(mp, &conf, &ops);
@@ -462,7 +533,7 @@ static int
 test_kni(void)
 {
 	int ret = -1;
-	uint16_t nb_ports, port_id;
+	uint16_t port_id;
 	struct rte_kni *kni;
 	struct rte_mempool *mp;
 	struct rte_kni_conf conf;
@@ -470,6 +541,20 @@ test_kni(void)
 	struct rte_kni_ops ops;
 	const struct rte_pci_device *pci_dev;
 	const struct rte_bus *bus;
+	FILE *fd;
+	DIR *dir;
+	char buf[16];
+
+	dir = opendir(KNI_MODULE_PATH);
+	if (!dir) {
+		if (errno == ENOENT) {
+			printf("Cannot run UT due to missing rte_kni module\n");
+			return TEST_SKIPPED;
+		}
+		printf("opendir: %s", strerror(errno));
+		return -1;
+	}
+	closedir(dir);
 
 	/* Initialize KNI subsytem */
 	rte_kni_init(KNI_TEST_MAX_PORTS);
@@ -482,12 +567,6 @@ test_kni(void)
 	mp = test_kni_create_mempool();
 	if (!mp) {
 		printf("fail to create mempool for kni\n");
-		return -1;
-	}
-
-	nb_ports = rte_eth_dev_count_avail();
-	if (nb_ports == 0) {
-		printf("no supported nic port found\n");
 		return -1;
 	}
 
@@ -519,9 +598,25 @@ test_kni(void)
 	rte_eth_promiscuous_enable(port_id);
 
 	/* basic test of kni processing */
-	ret = test_kni_processing(port_id, mp);
-	if (ret < 0)
-		goto fail;
+	fd = fopen(KNI_MODULE_PARAM_LO, "r");
+	if (fd == NULL) {
+		printf("fopen: %s", strerror(errno));
+		return -1;
+	}
+	memset(&buf, 0, sizeof(buf));
+	if (fgets(buf, sizeof(buf), fd)) {
+		if (!strncmp(buf, "lo_mode_fifo", strlen("lo_mode_fifo")) ||
+			!strncmp(buf, "lo_mode_fifo_skb",
+				  strlen("lo_mode_fifo_skb"))) {
+			ret = test_kni_processing(port_id, mp);
+			if (ret < 0) {
+				fclose(fd);
+				goto fail;
+			}
+		} else
+			printf("test_kni_processing skipped because of missing rte_kni module lo_mode argument\n");
+	}
+	fclose(fd);
 
 	/* test of allocating KNI with NULL mempool pointer */
 	memset(&info, 0, sizeof(info));

@@ -11,59 +11,14 @@
 
 #include <arpa/inet.h>
 
-#ifdef container_of
-#undef container_of
-#endif
-
-#include "mrvl_ethdev.h"
+#include "mrvl_flow.h"
 #include "mrvl_qos.h"
-#include "env/mv_common.h" /* for BIT() */
 
 /** Number of rules in the classifier table. */
 #define MRVL_CLS_MAX_NUM_RULES 20
 
 /** Size of the classifier key and mask strings. */
 #define MRVL_CLS_STR_SIZE_MAX 40
-
-/** Parsed fields in processed rte_flow_item. */
-enum mrvl_parsed_fields {
-	/* eth flags */
-	F_DMAC =         BIT(0),
-	F_SMAC =         BIT(1),
-	F_TYPE =         BIT(2),
-	/* vlan flags */
-	F_VLAN_ID =      BIT(3),
-	F_VLAN_PRI =     BIT(4),
-	F_VLAN_TCI =     BIT(5), /* not supported by MUSDK yet */
-	/* ip4 flags */
-	F_IP4_TOS =      BIT(6),
-	F_IP4_SIP =      BIT(7),
-	F_IP4_DIP =      BIT(8),
-	F_IP4_PROTO =    BIT(9),
-	/* ip6 flags */
-	F_IP6_TC =       BIT(10), /* not supported by MUSDK yet */
-	F_IP6_SIP =      BIT(11),
-	F_IP6_DIP =      BIT(12),
-	F_IP6_FLOW =     BIT(13),
-	F_IP6_NEXT_HDR = BIT(14),
-	/* tcp flags */
-	F_TCP_SPORT =    BIT(15),
-	F_TCP_DPORT =    BIT(16),
-	/* udp flags */
-	F_UDP_SPORT =    BIT(17),
-	F_UDP_DPORT =    BIT(18),
-};
-
-/** PMD-specific definition of a flow rule handle. */
-struct rte_flow {
-	LIST_ENTRY(rte_flow) next;
-
-	enum mrvl_parsed_fields pattern;
-
-	struct pp2_cls_tbl_rule rule;
-	struct pp2_cls_cos_desc cos;
-	struct pp2_cls_tbl_action action;
-};
 
 static const enum rte_flow_item_type pattern_eth[] = {
 	RTE_FLOW_ITEM_TYPE_ETH,
@@ -394,7 +349,8 @@ mrvl_parse_init(const struct rte_flow_item *item,
  *
  * @param spec Pointer to the specific flow item.
  * @param mask Pointer to the specific flow item's mask.
- * @param mask Pointer to the flow.
+ * @param parse_dst Parse either destination or source mac address.
+ * @param flow Pointer to the flow.
  * @return 0 in case of success, negative error value otherwise.
  */
 static int
@@ -613,6 +569,7 @@ mrvl_parse_ip4_dscp(const struct rte_flow_item_ipv4 *spec,
  *
  * @param spec Pointer to the specific flow item.
  * @param mask Pointer to the specific flow item's mask.
+ * @param parse_dst Parse either destination or source ip address.
  * @param flow Pointer to the flow.
  * @return 0 in case of success, negative error value otherwise.
  */
@@ -726,6 +683,7 @@ mrvl_parse_ip4_proto(const struct rte_flow_item_ipv4 *spec,
  *
  * @param spec Pointer to the specific flow item.
  * @param mask Pointer to the specific flow item's mask.
+ * @param parse_dst Parse either destination or source ipv6 address.
  * @param flow Pointer to the flow.
  * @return 0 in case of success, negative error value otherwise.
  */
@@ -874,6 +832,7 @@ mrvl_parse_ip6_next_hdr(const struct rte_flow_item_ipv6 *spec,
  *
  * @param spec Pointer to the specific flow item.
  * @param mask Pointer to the specific flow item's mask.
+ * @param parse_dst Parse either destination or source port.
  * @param flow Pointer to the flow.
  * @return 0 in case of success, negative error value otherwise.
  */
@@ -949,6 +908,7 @@ mrvl_parse_tcp_dport(const struct rte_flow_item_tcp *spec,
  *
  * @param spec Pointer to the specific flow item.
  * @param mask Pointer to the specific flow item's mask.
+ * @param parse_dst Parse either destination or source port.
  * @param flow Pointer to the flow.
  * @return 0 in case of success, negative error value otherwise.
  */
@@ -1022,7 +982,6 @@ mrvl_parse_udp_dport(const struct rte_flow_item_udp *spec,
  * @param item Pointer to the flow item.
  * @param flow Pointer to the flow.
  * @param error Pointer to the flow error.
- * @param fields Pointer to the parsed parsed fields enum.
  * @returns 0 on success, negative value otherwise.
  */
 static int
@@ -1073,7 +1032,6 @@ out:
  * @param item Pointer to the flow item.
  * @param flow Pointer to the flow.
  * @param error Pointer to the flow error.
- * @param fields Pointer to the parsed parsed fields enum.
  * @returns 0 on success, negative value otherwise.
  */
 static int
@@ -1139,7 +1097,6 @@ out:
  * @param item Pointer to the flow item.
  * @param flow Pointer to the flow.
  * @param error Pointer to the flow error.
- * @param fields Pointer to the parsed parsed fields enum.
  * @returns 0 on success, negative value otherwise.
  */
 static int
@@ -1205,7 +1162,6 @@ out:
  * @param item Pointer to the flow item.
  * @param flow Pointer to the flow.
  * @param error Pointer to the flow error.
- * @param fields Pointer to the parsed parsed fields enum.
  * @returns 0 on success, negative value otherwise.
  */
 static int
@@ -1276,7 +1232,6 @@ out:
  * @param item Pointer to the flow item.
  * @param flow Pointer to the flow.
  * @param error Pointer to the flow error.
- * @param fields Pointer to the parsed parsed fields enum.
  * @returns 0 on success, negative value otherwise.
  */
 static int
@@ -1332,7 +1287,6 @@ out:
  * @param item Pointer to the flow item.
  * @param flow Pointer to the flow.
  * @param error Pointer to the flow error.
- * @param fields Pointer to the parsed parsed fields enum.
  * @returns 0 on success, negative value otherwise.
  */
 static int
@@ -1981,6 +1935,7 @@ mrvl_parse_pattern_ip6_tcp(const struct rte_flow_item pattern[],
  * @param pattern Pointer to the flow pattern table.
  * @param flow Pointer to the flow.
  * @param error Pointer to the flow error.
+ * @param ip6 1 to parse ip6 item, 0 to parse ip4 item.
  * @returns 0 in case of success, negative value otherwise.
  */
 static int
@@ -2300,19 +2255,59 @@ mrvl_flow_parse_actions(struct mrvl_priv *priv,
 			flow->action.type = PP2_CLS_TBL_ACT_DONE;
 			flow->action.cos = &flow->cos;
 			specified++;
+		} else if (action->type == RTE_FLOW_ACTION_TYPE_METER) {
+			const struct rte_flow_action_meter *meter;
+			struct mrvl_mtr *mtr;
+
+			meter = action->conf;
+			if (!meter)
+				return -rte_flow_error_set(error, EINVAL,
+						RTE_FLOW_ERROR_TYPE_ACTION,
+						NULL, "Invalid meter\n");
+
+			LIST_FOREACH(mtr, &priv->mtrs, next)
+				if (mtr->mtr_id == meter->mtr_id)
+					break;
+
+			if (!mtr)
+				return -rte_flow_error_set(error, EINVAL,
+						RTE_FLOW_ERROR_TYPE_ACTION,
+						NULL,
+						"Meter id does not exist\n");
+
+			if (!mtr->shared && mtr->refcnt)
+				return -rte_flow_error_set(error, EPERM,
+						RTE_FLOW_ERROR_TYPE_ACTION,
+						NULL,
+						"Meter cannot be shared\n");
+
+			/*
+			 * In case cos has already been set
+			 * do not modify it.
+			 */
+			if (!flow->cos.ppio) {
+				flow->cos.ppio = priv->ppio;
+				flow->cos.tc = 0;
+			}
+
+			flow->action.type = PP2_CLS_TBL_ACT_DONE;
+			flow->action.cos = &flow->cos;
+			flow->action.plcr = mtr->enabled ? mtr->plcr : NULL;
+			flow->mtr = mtr;
+			mtr->refcnt++;
+			specified++;
 		} else {
 			rte_flow_error_set(error, ENOTSUP,
 					   RTE_FLOW_ERROR_TYPE_ACTION, NULL,
 					   "Action not supported");
 			return -rte_errno;
 		}
-
 	}
 
 	if (!specified) {
 		rte_flow_error_set(error, EINVAL,
-				   RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
-				   NULL, "Action not specified");
+				   RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
+				   "Action not specified");
 		return -rte_errno;
 	}
 
@@ -2350,6 +2345,12 @@ mrvl_flow_parse(struct mrvl_priv *priv, const struct rte_flow_attr *attr,
 	return mrvl_flow_parse_actions(priv, actions, flow, error);
 }
 
+/**
+ * Get engine type for the given flow.
+ *
+ * @param field Pointer to the flow.
+ * @returns The type of the engine.
+ */
 static inline enum pp2_cls_tbl_type
 mrvl_engine_type(const struct rte_flow *flow)
 {
@@ -2369,6 +2370,13 @@ mrvl_engine_type(const struct rte_flow *flow)
 	return PP2_CLS_TBL_MASKABLE;
 }
 
+/**
+ * Create classifier table.
+ *
+ * @param dev Pointer to the device.
+ * @param flow Pointer to the very first flow.
+ * @returns 0 in case of success, negative value otherwise.
+ */
 static int
 mrvl_create_cls_table(struct rte_eth_dev *dev, struct rte_flow *first_flow)
 {
@@ -2429,7 +2437,8 @@ mrvl_create_cls_table(struct rte_eth_dev *dev, struct rte_flow *first_flow)
 
 	if (first_flow->pattern & F_IP4_TOS) {
 		key->proto_field[key->num_fields].proto = MV_NET_PROTO_IP4;
-		key->proto_field[key->num_fields].field.ipv4 = MV_NET_IP4_F_TOS;
+		key->proto_field[key->num_fields].field.ipv4 =
+							MV_NET_IP4_F_DSCP;
 		key->key_size += 1;
 		key->num_fields += 1;
 	}
@@ -2649,13 +2658,18 @@ mrvl_flow_remove(struct mrvl_priv *priv, struct rte_flow *flow,
 
 	mrvl_free_all_key_mask(&flow->rule);
 
+	if (flow->mtr) {
+		flow->mtr->refcnt--;
+		flow->mtr = NULL;
+	}
+
 	return 0;
 }
 
 /**
  * DPDK flow destroy callback called when flow is to be removed.
  *
- * @param priv Pointer to the port's private data.
+ * @param dev Pointer to the device.
  * @param flow Pointer to the flow.
  * @param error Pointer to the flow error.
  * @returns 0 in case of success, negative value otherwise.
@@ -2777,3 +2791,34 @@ const struct rte_flow_ops mrvl_flow_ops = {
 	.flush = mrvl_flow_flush,
 	.isolate = mrvl_flow_isolate
 };
+
+/**
+ * Initialize flow resources.
+ *
+ * @param dev Pointer to the device.
+ */
+void
+mrvl_flow_init(struct rte_eth_dev *dev)
+{
+	struct mrvl_priv *priv = dev->data->dev_private;
+
+	LIST_INIT(&priv->flows);
+}
+
+/**
+ * Cleanup flow resources.
+ *
+ * @param dev Pointer to the device.
+ */
+void
+mrvl_flow_deinit(struct rte_eth_dev *dev)
+{
+	struct mrvl_priv *priv = dev->data->dev_private;
+
+	mrvl_flow_flush(dev, NULL);
+
+	if (priv->cls_tbl) {
+		pp2_cls_tbl_deinit(priv->cls_tbl);
+		priv->cls_tbl = NULL;
+	}
+}

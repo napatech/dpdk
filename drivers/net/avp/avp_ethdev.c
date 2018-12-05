@@ -1036,11 +1036,6 @@ eth_avp_dev_uninit(struct rte_eth_dev *eth_dev)
 		return ret;
 	}
 
-	if (eth_dev->data->mac_addrs != NULL) {
-		rte_free(eth_dev->data->mac_addrs);
-		eth_dev->data->mac_addrs = NULL;
-	}
-
 	return 0;
 }
 
@@ -2170,7 +2165,6 @@ avp_dev_info_get(struct rte_eth_dev *eth_dev,
 		dev_info->rx_offload_capa = DEV_RX_OFFLOAD_VLAN_STRIP;
 		dev_info->tx_offload_capa = DEV_TX_OFFLOAD_VLAN_INSERT;
 	}
-	dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_CRC_STRIP;
 }
 
 static int

@@ -94,9 +94,6 @@ static struct kni_port_params *kni_port_params_array[RTE_MAX_ETHPORTS];
 
 /* Options for configuring ethernet port */
 static struct rte_eth_conf port_conf = {
-	.rxmode = {
-		.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
-	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
 	},
@@ -109,6 +106,8 @@ static struct rte_mempool * pktmbuf_pool = NULL;
 static uint32_t ports_mask = 0;
 /* Ports set in promiscuous mode off by default. */
 static int promiscuous_on = 0;
+/* Monitor link status continually. off by default. */
+static int monitor_links;
 
 /* Structure type for recording kni interface specific stats */
 struct kni_interface_stats {
@@ -172,14 +171,13 @@ signal_handler(int signum)
 	/* When we receive a USR2 signal, reset stats */
 	if (signum == SIGUSR2) {
 		memset(&kni_stats, 0, sizeof(kni_stats));
-		printf("\n**Statistics have been reset**\n");
+		printf("\n** Statistics have been reset **\n");
 		return;
 	}
 
 	/* When we receive a RTMIN or SIGINT signal, stop kni processing */
 	if (signum == SIGRTMIN || signum == SIGINT){
-		printf("SIGRTMIN is received, and the KNI processing is "
-							"going to stop\n");
+		printf("\nSIGRTMIN/SIGINT received. KNI processing stopping.\n");
 		rte_atomic32_inc(&kni_stop);
 		return;
         }
@@ -225,7 +223,8 @@ kni_ingress(struct kni_port_params *p)
 		}
 		/* Burst tx to kni */
 		num = rte_kni_tx_burst(p->kni[i], pkts_burst, nb_rx);
-		kni_stats[port_id].rx_packets += num;
+		if (num)
+			kni_stats[port_id].rx_packets += num;
 
 		rte_kni_handle_request(p->kni[i]);
 		if (unlikely(num < nb_rx)) {
@@ -262,7 +261,8 @@ kni_egress(struct kni_port_params *p)
 		}
 		/* Burst tx to eth */
 		nb_tx = rte_eth_tx_burst(port_id, 0, pkts_burst, (uint16_t)num);
-		kni_stats[port_id].tx_packets += nb_tx;
+		if (nb_tx)
+			kni_stats[port_id].tx_packets += nb_tx;
 		if (unlikely(nb_tx < num)) {
 			/* Free mbufs not tx to NIC */
 			kni_burst_free_mbufs(&pkts_burst[nb_tx], num - nb_tx);
@@ -328,11 +328,12 @@ main_loop(__rte_unused void *arg)
 static void
 print_usage(const char *prgname)
 {
-	RTE_LOG(INFO, APP, "\nUsage: %s [EAL options] -- -p PORTMASK -P "
+	RTE_LOG(INFO, APP, "\nUsage: %s [EAL options] -- -p PORTMASK -P -m "
 		   "[--config (port,lcore_rx,lcore_tx,lcore_kthread...)"
 		   "[,(port,lcore_rx,lcore_tx,lcore_kthread...)]]\n"
 		   "    -p PORTMASK: hex bitmask of ports to use\n"
 		   "    -P : enable promiscuous mode\n"
+		   "    -m : enable monitoring of port carrier state\n"
 		   "    --config (port,lcore_rx,lcore_tx,lcore_kthread...): "
 		   "port and lcore configurations\n",
 	           prgname);
@@ -513,7 +514,7 @@ parse_args(int argc, char **argv)
 	opterr = 0;
 
 	/* Parse command line */
-	while ((opt = getopt_long(argc, argv, "p:P", longopts,
+	while ((opt = getopt_long(argc, argv, "p:Pm", longopts,
 						&longindex)) != EOF) {
 		switch (opt) {
 		case 'p':
@@ -521,6 +522,9 @@ parse_args(int argc, char **argv)
 			break;
 		case 'P':
 			promiscuous_on = 1;
+			break;
+		case 'm':
+			monitor_links = 1;
 			break;
 		case 0:
 			if (!strncmp(longopts[longindex].name,
@@ -675,6 +679,55 @@ check_all_ports_link_status(uint32_t port_mask)
 			printf("done\n");
 		}
 	}
+}
+
+static void
+log_link_state(struct rte_kni *kni, int prev, struct rte_eth_link *link)
+{
+	if (kni == NULL || link == NULL)
+		return;
+
+	if (prev == ETH_LINK_DOWN && link->link_status == ETH_LINK_UP) {
+		RTE_LOG(INFO, APP, "%s NIC Link is Up %d Mbps %s %s.\n",
+			rte_kni_get_name(kni),
+			link->link_speed,
+			link->link_autoneg ?  "(AutoNeg)" : "(Fixed)",
+			link->link_duplex ?  "Full Duplex" : "Half Duplex");
+	} else if (prev == ETH_LINK_UP && link->link_status == ETH_LINK_DOWN) {
+		RTE_LOG(INFO, APP, "%s NIC Link is Down.\n",
+			rte_kni_get_name(kni));
+	}
+}
+
+/*
+ * Monitor the link status of all ports and update the
+ * corresponding KNI interface(s)
+ */
+static void *
+monitor_all_ports_link_status(void *arg)
+{
+	uint16_t portid;
+	struct rte_eth_link link;
+	unsigned int i;
+	struct kni_port_params **p = kni_port_params_array;
+	int prev;
+	(void) arg;
+
+	while (monitor_links) {
+		rte_delay_ms(500);
+		RTE_ETH_FOREACH_DEV(portid) {
+			if ((ports_mask & (1 << portid)) == 0)
+				continue;
+			memset(&link, 0, sizeof(link));
+			rte_eth_link_get_nowait(portid, &link);
+			for (i = 0; i < p[portid]->nb_kni; i++) {
+				prev = rte_kni_update_link(p[portid]->kni[i],
+						link.link_status);
+				log_link_state(p[portid]->kni[i], prev, &link);
+			}
+		}
+	}
+	return NULL;
 }
 
 /* Callback for request of changing MTU */
@@ -896,6 +949,9 @@ main(int argc, char** argv)
 	int ret;
 	uint16_t nb_sys_ports, port;
 	unsigned i;
+	void *retval;
+	pthread_t kni_link_tid;
+	int pid;
 
 	/* Associate signal_hanlder function with USR signals */
 	signal(SIGUSR1, signal_handler);
@@ -952,12 +1008,31 @@ main(int argc, char** argv)
 	}
 	check_all_ports_link_status(ports_mask);
 
+	pid = getpid();
+	RTE_LOG(INFO, APP, "========================\n");
+	RTE_LOG(INFO, APP, "KNI Running\n");
+	RTE_LOG(INFO, APP, "kill -SIGUSR1 %d\n", pid);
+	RTE_LOG(INFO, APP, "    Show KNI Statistics.\n");
+	RTE_LOG(INFO, APP, "kill -SIGUSR2 %d\n", pid);
+	RTE_LOG(INFO, APP, "    Zero KNI Statistics.\n");
+	RTE_LOG(INFO, APP, "========================\n");
+	fflush(stdout);
+
+	ret = rte_ctrl_thread_create(&kni_link_tid,
+				     "KNI link status check", NULL,
+				     monitor_all_ports_link_status, NULL);
+	if (ret < 0)
+		rte_exit(EXIT_FAILURE,
+			"Could not create link status thread!\n");
+
 	/* Launch per-lcore function on every lcore */
 	rte_eal_mp_remote_launch(main_loop, NULL, CALL_MASTER);
 	RTE_LCORE_FOREACH_SLAVE(i) {
 		if (rte_eal_wait_lcore(i) < 0)
 			return -1;
 	}
+	monitor_links = 0;
+	pthread_join(kni_link_tid, &retval);
 
 	/* Release resources */
 	RTE_ETH_FOREACH_DEV(port) {

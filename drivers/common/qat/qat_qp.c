@@ -90,6 +90,44 @@ const struct qat_qp_hw_data qat_gen1_qps[QAT_MAX_SERVICES]
 	}
 };
 
+__extension__
+const struct qat_qp_hw_data qat_gen3_qps[QAT_MAX_SERVICES]
+					 [ADF_MAX_QPS_ON_ANY_SERVICE] = {
+	/* queue pairs which provide an asymmetric crypto service */
+	[QAT_SERVICE_ASYMMETRIC] = {
+		{
+			.service_type = QAT_SERVICE_ASYMMETRIC,
+			.hw_bundle_num = 0,
+			.tx_ring_num = 0,
+			.rx_ring_num = 4,
+			.tx_msg_size = 64,
+			.rx_msg_size = 32,
+		}
+	},
+	/* queue pairs which provide a symmetric crypto service */
+	[QAT_SERVICE_SYMMETRIC] = {
+		{
+			.service_type = QAT_SERVICE_SYMMETRIC,
+			.hw_bundle_num = 0,
+			.tx_ring_num = 1,
+			.rx_ring_num = 5,
+			.tx_msg_size = 128,
+			.rx_msg_size = 32,
+		}
+	},
+	/* queue pairs which provide a compression service */
+	[QAT_SERVICE_COMPRESSION] = {
+		{
+			.service_type = QAT_SERVICE_COMPRESSION,
+			.hw_bundle_num = 0,
+			.tx_ring_num = 3,
+			.rx_ring_num = 7,
+			.tx_msg_size = 128,
+			.rx_msg_size = 32,
+		}
+	}
+};
+
 static int qat_qp_check_queue_alignment(uint64_t phys_addr,
 	uint32_t queue_size_bytes);
 static void qat_queue_delete(struct qat_queue *queue);
@@ -596,14 +634,22 @@ qat_dequeue_op_burst(void *qp, void **ops, uint16_t nb_ops)
 	uint32_t head;
 	uint32_t resp_counter = 0;
 	uint8_t *resp_msg;
+	uint8_t hdr_flags;
 
 	rx_queue = &(tmp_qp->rx_q);
 	tx_queue = &(tmp_qp->tx_q);
 	head = rx_queue->head;
 	resp_msg = (uint8_t *)rx_queue->base_addr + rx_queue->head;
+	hdr_flags = ((struct icp_qat_fw_comn_resp_hdr *)resp_msg)->hdr_flags;
 
 	while (*(uint32_t *)resp_msg != ADF_RING_EMPTY_SIG &&
 			resp_counter != nb_ops) {
+
+		if (unlikely(!ICP_QAT_FW_COMN_VALID_FLAG_GET(hdr_flags))) {
+			/* Fatal firmware error */
+			QAT_LOG(ERR, "QAT Firmware returned invalid response");
+			return 0;
+		}
 
 		if (tmp_qp->service_type == QAT_SERVICE_SYMMETRIC)
 			qat_sym_process_response(ops, resp_msg);
@@ -635,7 +681,7 @@ qat_dequeue_op_burst(void *qp, void **ops, uint16_t nb_ops)
 	return resp_counter;
 }
 
-__attribute__((weak)) int
+__rte_weak int
 qat_comp_process_response(void **op __rte_unused, uint8_t *resp __rte_unused)
 {
 	return  0;

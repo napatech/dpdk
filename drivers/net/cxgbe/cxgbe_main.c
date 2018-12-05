@@ -38,6 +38,8 @@
 #include "t4_msg.h"
 #include "cxgbe.h"
 #include "clip_tbl.h"
+#include "l2t.h"
+#include "mps_tcam.h"
 
 /**
  * Allocate a chunk of memory. The allocated memory is cleared.
@@ -99,6 +101,10 @@ static int fwevtq_handler(struct sge_rspq *q, const __be64 *rsp,
 		const struct cpl_act_open_rpl *p = (const void *)rsp;
 
 		hash_filter_rpl(q->adapter, p);
+	} else if (opcode == CPL_L2T_WRITE_RPL) {
+		const struct cpl_l2t_write_rpl *p = (const void *)rsp;
+
+		do_l2t_write_rpl(q->adapter, p);
 	} else {
 		dev_err(adapter, "unexpected CPL %#x on FW event queue\n",
 			opcode);
@@ -151,18 +157,18 @@ out:
 /**
  * cxgbe_poll_for_completion: Poll rxq for completion
  * @q: rxq to poll
- * @us: microseconds to delay
+ * @ms: milliseconds to delay
  * @cnt: number of times to poll
  * @c: completion to check for 'done' status
  *
  * Polls the rxq for reples until completion is done or the count
  * expires.
  */
-int cxgbe_poll_for_completion(struct sge_rspq *q, unsigned int us,
+int cxgbe_poll_for_completion(struct sge_rspq *q, unsigned int ms,
 			      unsigned int cnt, struct t4_completion *c)
 {
 	unsigned int i;
-	unsigned int work_done, budget = 4;
+	unsigned int work_done, budget = 32;
 
 	if (!c)
 		return -EINVAL;
@@ -175,7 +181,7 @@ int cxgbe_poll_for_completion(struct sge_rspq *q, unsigned int us,
 			return 0;
 		}
 		t4_os_unlock(&c->lock);
-		udelay(us);
+		rte_delay_ms(ms);
 	}
 	return -ETIMEDOUT;
 }
@@ -1135,13 +1141,17 @@ static int adap_init0(struct adapter *adap)
 	 V_FW_PARAMS_PARAM_Y(0) | \
 	 V_FW_PARAMS_PARAM_Z(0))
 
-	params[0] = FW_PARAM_PFVF(FILTER_START);
-	params[1] = FW_PARAM_PFVF(FILTER_END);
-	ret = t4_query_params(adap, adap->mbox, adap->pf, 0, 2, params, val);
+	params[0] = FW_PARAM_PFVF(L2T_START);
+	params[1] = FW_PARAM_PFVF(L2T_END);
+	params[2] = FW_PARAM_PFVF(FILTER_START);
+	params[3] = FW_PARAM_PFVF(FILTER_END);
+	ret = t4_query_params(adap, adap->mbox, adap->pf, 0, 4, params, val);
 	if (ret < 0)
 		goto bye;
-	adap->tids.ftid_base = val[0];
-	adap->tids.nftids = val[1] - val[0] + 1;
+	adap->l2t_start = val[0];
+	adap->l2t_end = val[1];
+	adap->tids.ftid_base = val[2];
+	adap->tids.nftids = val[3] - val[2] + 1;
 
 	params[0] = FW_PARAM_PFVF(CLIP_START);
 	params[1] = FW_PARAM_PFVF(CLIP_END);
@@ -1168,6 +1178,16 @@ static int adap_init0(struct adapter *adap)
 	    is_t6(adap->params.chip)) {
 		if (init_hash_filter(adap) < 0)
 			goto bye;
+	}
+
+	/* See if FW supports FW_FILTER2 work request */
+	if (is_t4(adap->params.chip)) {
+		adap->params.filter2_wr_support = 0;
+	} else {
+		params[0] = FW_PARAM_DEV(FILTER2_WR);
+		ret = t4_query_params(adap, adap->mbox, adap->pf, 0,
+				      1, params, val);
+		adap->params.filter2_wr_support = (ret == 0 && val[0] != 0);
 	}
 
 	/* query tid-related parameters */
@@ -1319,23 +1339,25 @@ inline bool force_linkup(struct adapter *adap)
 int link_start(struct port_info *pi)
 {
 	struct adapter *adapter = pi->adapter;
-	int ret;
+	u64 conf_offloads;
 	unsigned int mtu;
+	int ret;
 
 	mtu = pi->eth_dev->data->dev_conf.rxmode.max_rx_pkt_len -
 	      (ETHER_HDR_LEN + ETHER_CRC_LEN);
+
+	conf_offloads = pi->eth_dev->data->dev_conf.rxmode.offloads;
 
 	/*
 	 * We do not set address filters and promiscuity here, the stack does
 	 * that step explicitly.
 	 */
-	ret = t4_set_rxmode(adapter, adapter->mbox, pi->viid, mtu, -1, -1,
-			    -1, 1, true);
+	ret = t4_set_rxmode(adapter, adapter->mbox, pi->viid, mtu, -1, -1, -1,
+			    !!(conf_offloads & DEV_RX_OFFLOAD_VLAN_STRIP),
+			    true);
 	if (ret == 0) {
-		ret = t4_change_mac(adapter, adapter->mbox, pi->viid,
-				    pi->xact_addr_filt,
-				    (u8 *)&pi->eth_dev->data->mac_addrs[0],
-				    true, true);
+		ret = cxgbe_mpstcam_modify(pi, (int)pi->xact_addr_filt,
+				(u8 *)&pi->eth_dev->data->mac_addrs[0]);
 		if (ret >= 0) {
 			pi->xact_addr_filt = ret;
 			ret = 0;
@@ -1679,10 +1701,12 @@ void cxgbe_close(struct adapter *adapter)
 	int i;
 
 	if (adapter->flags & FULL_INIT_DONE) {
+		tid_free(&adapter->tids);
+		t4_cleanup_mpstcam(adapter);
+		t4_cleanup_clip_tbl(adapter);
+		t4_cleanup_l2t(adapter);
 		if (is_pf4(adapter))
 			t4_intr_disable(adapter);
-		tid_free(&adapter->tids);
-		t4_cleanup_clip_tbl(adapter);
 		t4_sge_tx_monitor_stop(adapter);
 		t4_free_sge_resources(adapter);
 		for_each_port(adapter, i) {
@@ -1690,12 +1714,7 @@ void cxgbe_close(struct adapter *adapter)
 			if (pi->viid != 0)
 				t4_free_vi(adapter, adapter->mbox,
 					   adapter->pf, 0, pi->viid);
-			rte_free(pi->eth_dev->data->mac_addrs);
-			/* Skip first port since it'll be freed by DPDK stack */
-			if (i) {
-				rte_free(pi->eth_dev->data->dev_private);
-				rte_eth_dev_release_port(pi->eth_dev);
-			}
+			rte_eth_dev_release_port(pi->eth_dev);
 		}
 		adapter->flags &= ~FULL_INIT_DONE;
 	}
@@ -1855,11 +1874,22 @@ allocate_mac:
 		dev_warn(adapter, "could not allocate CLIP. Continuing\n");
 	}
 
+	adapter->l2t = t4_init_l2t(adapter->l2t_start, adapter->l2t_end);
+	if (!adapter->l2t) {
+		/* We tolerate a lack of L2T, giving up some functionality */
+		dev_warn(adapter, "could not allocate L2T. Continuing\n");
+	}
+
 	if (tid_init(&adapter->tids) < 0) {
 		/* Disable filtering support */
 		dev_warn(adapter, "could not allocate TID table, "
 			 "filter support disabled. Continuing\n");
 	}
+
+	adapter->mpstcam = t4_init_mpstcam(adapter);
+	if (!adapter->mpstcam)
+		dev_warn(adapter, "could not allocate mps tcam table."
+			 " Continuing\n");
 
 	if (is_hashfilter(adapter)) {
 		if (t4_read_reg(adapter, A_LE_DB_CONFIG) & F_HASHEN) {
@@ -1887,14 +1917,7 @@ out_free:
 		if (pi->viid != 0)
 			t4_free_vi(adapter, adapter->mbox, adapter->pf,
 				   0, pi->viid);
-		/* Skip first port since it'll be de-allocated by DPDK */
-		if (i == 0)
-			continue;
-		if (pi->eth_dev) {
-			if (pi->eth_dev->data->dev_private)
-				rte_free(pi->eth_dev->data->dev_private);
-			rte_eth_dev_release_port(pi->eth_dev);
-		}
+		rte_eth_dev_release_port(pi->eth_dev);
 	}
 
 	if (adapter->flags & FW_OK)

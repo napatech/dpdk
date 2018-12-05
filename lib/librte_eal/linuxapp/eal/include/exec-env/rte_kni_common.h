@@ -8,6 +8,7 @@
 
 #ifdef __KERNEL__
 #include <linux/if.h>
+#include <asm/barrier.h>
 #define RTE_STD_C11
 #else
 #include <rte_common.h>
@@ -54,8 +55,13 @@ struct rte_kni_request {
  * Writing should never overwrite the read position
  */
 struct rte_kni_fifo {
+#ifdef RTE_USE_C11_MEM_MODEL
+	unsigned write;              /**< Next position to be written*/
+	unsigned read;               /**< Next position to be read */
+#else
 	volatile unsigned write;     /**< Next position to be written*/
 	volatile unsigned read;      /**< Next position to be read */
+#endif
 	unsigned len;                /**< Circular buffer length */
 	unsigned elem_size;          /**< Pointer size - for 32/64 bit OS */
 	void *volatile buffer[];     /**< The buffer contains mbuf pointers */

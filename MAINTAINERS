@@ -81,6 +81,7 @@ M: Thomas Monjalon <thomas@monjalon.net>
 F: MAINTAINERS
 F: devtools/check-dup-includes.sh
 F: devtools/check-maintainers.sh
+F: devtools/check-forbidden-tokens.awk
 F: devtools/check-git-log.sh
 F: devtools/check-includes.sh
 F: devtools/check-symbol-maps.sh
@@ -177,6 +178,7 @@ F: lib/librte_eal/common/eal_hugepages.h
 F: lib/librte_eal/linuxapp/eal/eal_mem*
 F: lib/librte_eal/bsdapp/eal/eal_mem*
 F: doc/guides/prog_guide/env_abstraction_layer.rst
+F: test/test/test_external_mem.c
 F: test/test/test_func_reentrancy.c
 F: test/test/test_fbarray.c
 F: test/test/test_malloc.c
@@ -231,7 +233,7 @@ F: drivers/net/ixgbe/ixgbe_rxtx_vec_neon.c
 F: drivers/net/i40e/i40e_rxtx_vec_neon.c
 F: drivers/net/virtio/virtio_rxtx_simple_neon.c
 
-IBM POWER
+IBM POWER (alpha)
 M: Chao Zhu <chaozhu@linux.vnet.ibm.com>
 F: lib/librte_eal/common/arch/ppc_64/
 F: lib/librte_eal/common/include/arch/ppc_64/
@@ -345,7 +347,7 @@ F: lib/librte_cryptodev/
 F: test/test/test_cryptodev*
 F: examples/l2fwd-crypto/
 
-Security API - EXPERIMENTAL
+Security API
 M: Akhil Goyal <akhil.goyal@nxp.com>
 M: Declan Doherty <declan.doherty@intel.com>
 T: git://dpdk.org/next/dpdk-next-crypto
@@ -376,6 +378,13 @@ T: git://dpdk.org/next/dpdk-next-eventdev
 F: lib/librte_eventdev/*eth_rx_adapter*
 F: test/test/test_event_eth_rx_adapter.c
 F: doc/guides/prog_guide/event_ethernet_rx_adapter.rst
+
+Eventdev Ethdev Tx Adapter API - EXPERIMENTAL
+M: Nikhil Rao <nikhil.rao@intel.com>
+T: git://dpdk.org/next/dpdk-next-eventdev
+F: lib/librte_eventdev/*eth_tx_adapter*
+F: test/test/test_event_eth_tx_adapter.c
+F: doc/guides/prog_guide/event_ethernet_tx_adapter.rst
 
 Eventdev Timer Adapter API - EXPERIMENTAL
 M: Erik Gabriel Carrillo <erik.g.carrillo@intel.com>
@@ -419,6 +428,7 @@ F: drivers/bus/ifpga/
 NXP buses
 M: Hemant Agrawal <hemant.agrawal@nxp.com>
 M: Shreyansh Jain <shreyansh.jain@nxp.com>
+F: drivers/common/dpaax/
 F: drivers/bus/dpaa/
 F: drivers/bus/fslmc/
 
@@ -477,6 +487,13 @@ F: drivers/net/axgbe/
 F: doc/guides/nics/axgbe.rst
 F: doc/guides/nics/features/axgbe.ini
 
+Aquantia atlantic
+M: Igor Russkikh <igor.russkikh@aquantia.com>
+M: Pavel Belous <pavel.belous@aquantia.com>
+F: drivers/net/atlantic/
+F: doc/guides/nics/atlantic.rst
+F: doc/guides/nics/features/atlantic.ini
+
 Atomic Rules ARK
 M: Shepard Siegel <shepard.siegel@atomicrules.com>
 M: Ed Czeck <ed.czeck@atomicrules.com>
@@ -506,8 +523,7 @@ F: drivers/net/liquidio/
 F: doc/guides/nics/liquidio.rst
 F: doc/guides/nics/features/liquidio.ini
 
-Cavium OcteonTX
-M: Santosh Shukla <santosh.shukla@caviumnetworks.com>
+Cavium OCTEON TX
 M: Jerin Jacob <jerin.jacob@caviumnetworks.com>
 F: drivers/common/octeontx/
 F: drivers/mempool/octeontx/
@@ -581,9 +597,18 @@ Marvell mvpp2
 M: Tomasz Duszynski <tdu@semihalf.com>
 M: Dmitri Epshtein <dima@marvell.com>
 M: Natalie Samsonov <nsamsono@marvell.com>
+F: drivers/common/mvep/
 F: drivers/net/mvpp2/
 F: doc/guides/nics/mvpp2.rst
 F: doc/guides/nics/features/mvpp2.ini
+
+Marvell mvneta
+M: Zyta Szpak <zr@semihalf.com>
+M: Dmitri Epshtein <dima@marvell.com>
+M: Natalie Samsonov <nsamsono@marvell.com>
+F: drivers/net/mvneta/
+F: doc/guides/nics/mvneta.rst
+F: doc/guides/nics/features/mvneta.ini
 
 Mellanox mlx4
 M: Matan Azrad <matan@mellanox.com>
@@ -643,6 +668,13 @@ F: drivers/net/dpaa2/
 F: doc/guides/nics/dpaa2.rst
 F: doc/guides/nics/features/dpaa2.ini
 
+NXP enetc
+M: Gagandeep Singh <g.singh@nxp.com>
+M: Pankaj Chauhan <pankaj.chauhan@nxp.com>
+F: drivers/net/enetc/
+F: doc/guides/nics/enetc.rst
+F: doc/guides/nics/features/enetc.ini
+
 QLogic bnx2x
 M: Harish Patil <harish.patil@cavium.com>
 M: Rasesh Mody <rasesh.mody@cavium.com>
@@ -682,6 +714,8 @@ F: doc/guides/sample_app_ug/vhost.rst
 F: examples/vhost_scsi/
 F: doc/guides/sample_app_ug/vhost_scsi.rst
 F: examples/vhost_crypto/
+F: examples/vdpa/
+F: doc/guides/sample_app_ug/vdpa.rst
 
 Vhost PMD
 M: Maxime Coquelin <maxime.coquelin@redhat.com>
@@ -771,6 +805,13 @@ F: drivers/crypto/armv8/
 F: doc/guides/cryptodevs/armv8.rst
 F: doc/guides/cryptodevs/features/armv8.ini
 
+Cavium OCTEON TX crypto
+M: Anoob Joseph <anoob.joseph@caviumnetworks.com>
+F: drivers/common/cpt/
+F: drivers/crypto/octeontx/
+F: doc/guides/cryptodevs/octeontx.rst
+F: doc/guides/cryptodevs/features/octeontx.ini
+
 Crypto Scheduler
 M: Fan Zhang <roy.fan.zhang@intel.com>
 F: drivers/crypto/scheduler/
@@ -817,6 +858,13 @@ F: drivers/crypto/null/
 F: doc/guides/cryptodevs/null.rst
 F: doc/guides/cryptodevs/features/null.ini
 
+NXP CAAM JR
+M: Gagandeep Singh <g.singh@nxp.com>
+M: Hemant Agrawal <hemant.agrawal@nxp.com>
+F: drivers/crypto/caam_jr/
+F: doc/guides/cryptodevs/caam_jr.rst
+F: doc/guides/cryptodevs/features/caam_jr.ini
+
 NXP DPAA_SEC
 M: Akhil Goyal <akhil.goyal@nxp.com>
 M: Hemant Agrawal <hemant.agrawal@nxp.com>
@@ -861,7 +909,7 @@ Compression Drivers
 M: Pablo de Lara <pablo.de.lara.guarch@intel.com>
 T: git://dpdk.org/next/dpdk-next-crypto
 
-Cavium OCTEONTX zipvf
+Cavium OCTEON TX zipvf
 M: Ashish Gupta <ashish.gupta@cavium.com>
 F: drivers/compress/octeontx/
 F: doc/guides/compressdevs/octeontx.rst
@@ -890,13 +938,12 @@ Eventdev Drivers
 M: Jerin Jacob <jerin.jacob@caviumnetworks.com>
 T: git://dpdk.org/next/dpdk-next-eventdev
 
-Cavium OCTEONTX ssovf
+Cavium OCTEON TX ssovf
 M: Jerin Jacob <jerin.jacob@caviumnetworks.com>
-M: Santosh Shukla <santosh.shukla@caviumnetworks.com>
 F: drivers/event/octeontx/
 F: doc/guides/eventdevs/octeontx.rst
 
-Cavium OCTEONTX timvf
+Cavium OCTEON TX timvf
 M: Pavan Nikhilesh <pbhagavatula@caviumnetworks.com>
 F: drivers/event/octeontx/timvf_*
 
@@ -918,6 +965,11 @@ F: drivers/event/sw/
 F: doc/guides/eventdevs/sw.rst
 F: examples/eventdev_pipeline/
 F: doc/guides/sample_app_ug/eventdev_pipeline.rst
+
+Distributed Software Eventdev PMD
+M: Mattias Rönnblom <mattias.ronnblom@ericsson.com>
+F: drivers/event/dsw/
+F: doc/guides/eventdevs/dsw.rst
 
 Software OPDL Eventdev PMD
 M: Liang Ma <liang.j.ma@intel.com>
@@ -1140,6 +1192,7 @@ F: doc/guides/sample_app_ug/l2_forward_job_stats.rst
 Metrics
 M: Remy Horton <remy.horton@intel.com>
 F: lib/librte_metrics/
+F: test/test/test_metrics.c
 
 Bit-rate statistics
 M: Remy Horton <remy.horton@intel.com>
@@ -1148,6 +1201,12 @@ F: lib/librte_bitratestats/
 Latency statistics
 M: Reshma Pattan <reshma.pattan@intel.com>
 F: lib/librte_latencystats/
+
+Telemetry - EXPERIMENTAL
+M: Kevin Laatz <kevin.laatz@intel.com>
+F: lib/librte_telemetry/
+F: usertools/dpdk-telemetry-client.py
+F: doc/guides/howto/telemetry.rst
 
 BPF - EXPERIMENTAL
 M: Konstantin Ananyev <konstantin.ananyev@intel.com>
@@ -1211,6 +1270,10 @@ F: doc/guides/sample_app_ug/ethtool.rst
 
 F: examples/exception_path/
 F: doc/guides/sample_app_ug/exception_path.rst
+
+M: Marko Kovacevic <marko.kovacevic@intel.com>
+F: examples/fips_validation/
+F: doc/guides/sample_app_ug/fips_validation.rst
 
 M: Ori Kam <orika@mellanox.com>
 F: examples/flow_filtering/

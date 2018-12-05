@@ -17,14 +17,6 @@
 #include "mlx5_rxtx.h"
 #include "mlx5_defs.h"
 
-struct mlx5_counter_ctrl {
-	/* Name of the counter. */
-	char dpdk_name[RTE_ETH_XSTATS_NAME_SIZE];
-	/* Name of the counter on the device table. */
-	char ctr_name[RTE_ETH_XSTATS_NAME_SIZE];
-	uint32_t ib:1; /**< Nonzero for IB counters. */
-};
-
 static const struct mlx5_counter_ctrl mlx5_counters_init[] = {
 	{
 		.dpdk_name = "rx_port_unicast_bytes",
@@ -115,6 +107,23 @@ static const struct mlx5_counter_ctrl mlx5_counters_init[] = {
 		.dpdk_name = "rx_bytes_phy",
 		.ctr_name = "rx_bytes_phy",
 	},
+	/* Representor only */
+	{
+		.dpdk_name = "rx_packets",
+		.ctr_name = "vport_rx_packets",
+	},
+	{
+		.dpdk_name = "rx_bytes",
+		.ctr_name = "vport_rx_bytes",
+	},
+	{
+		.dpdk_name = "tx_packets",
+		.ctr_name = "vport_tx_packets",
+	},
+	{
+		.dpdk_name = "tx_bytes",
+		.ctr_name = "vport_tx_bytes",
+	},
 };
 
 static const unsigned int xstats_n = RTE_DIM(mlx5_counters_init);
@@ -146,19 +155,19 @@ mlx5_read_dev_counters(struct rte_eth_dev *dev, uint64_t *stats)
 	et_stats->cmd = ETHTOOL_GSTATS;
 	et_stats->n_stats = xstats_ctrl->stats_n;
 	ifr.ifr_data = (caddr_t)et_stats;
-	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr, 1);
+	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr);
 	if (ret) {
 		DRV_LOG(WARNING,
 			"port %u unable to read statistic values from device",
 			dev->data->port_id);
 		return ret;
 	}
-	for (i = 0; i != xstats_n; ++i) {
-		if (mlx5_counters_init[i].ib) {
+	for (i = 0; i != xstats_ctrl->mlx5_stats_n; ++i) {
+		if (xstats_ctrl->info[i].ib) {
 			FILE *file;
 			MKSTR(path, "%s/ports/1/hw_counters/%s",
 			      priv->ibdev_path,
-			      mlx5_counters_init[i].ctr_name);
+			      xstats_ctrl->info[i].ctr_name);
 
 			file = fopen(path, "rb");
 			if (file) {
@@ -194,7 +203,7 @@ mlx5_ethtool_get_stats_n(struct rte_eth_dev *dev) {
 
 	drvinfo.cmd = ETHTOOL_GDRVINFO;
 	ifr.ifr_data = (caddr_t)&drvinfo;
-	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr, 1);
+	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr);
 	if (ret) {
 		DRV_LOG(WARNING, "port %u unable to query number of statistics",
 			dev->data->port_id);
@@ -222,6 +231,8 @@ mlx5_xstats_init(struct rte_eth_dev *dev)
 	unsigned int str_sz;
 	int ret;
 
+	/* So that it won't aggregate for each init. */
+	xstats_ctrl->mlx5_stats_n = 0;
 	ret = mlx5_ethtool_get_stats_n(dev);
 	if (ret < 0) {
 		DRV_LOG(WARNING, "port %u no extended statistics available",
@@ -229,7 +240,6 @@ mlx5_xstats_init(struct rte_eth_dev *dev)
 		return;
 	}
 	dev_stats_n = ret;
-	xstats_ctrl->stats_n = dev_stats_n;
 	/* Allocate memory to grab stat names and values. */
 	str_sz = dev_stats_n * ETH_GSTRING_LEN;
 	strings = (struct ethtool_gstrings *)
@@ -244,14 +254,12 @@ mlx5_xstats_init(struct rte_eth_dev *dev)
 	strings->string_set = ETH_SS_STATS;
 	strings->len = dev_stats_n;
 	ifr.ifr_data = (caddr_t)strings;
-	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr, 1);
+	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr);
 	if (ret) {
 		DRV_LOG(WARNING, "port %u unable to get statistic names",
 			dev->data->port_id);
 		goto free;
 	}
-	for (j = 0; j != xstats_n; ++j)
-		xstats_ctrl->dev_table_idx[j] = dev_stats_n;
 	for (i = 0; i != dev_stats_n; ++i) {
 		const char *curr_string = (const char *)
 			&strings->data[i * ETH_GSTRING_LEN];
@@ -259,24 +267,25 @@ mlx5_xstats_init(struct rte_eth_dev *dev)
 		for (j = 0; j != xstats_n; ++j) {
 			if (!strcmp(mlx5_counters_init[j].ctr_name,
 				    curr_string)) {
-				xstats_ctrl->dev_table_idx[j] = i;
+				unsigned int idx = xstats_ctrl->mlx5_stats_n++;
+
+				xstats_ctrl->dev_table_idx[idx] = i;
+				xstats_ctrl->info[idx] = mlx5_counters_init[j];
 				break;
 			}
 		}
 	}
-	for (j = 0; j != xstats_n; ++j) {
-		if (mlx5_counters_init[j].ib)
-			continue;
-		if (xstats_ctrl->dev_table_idx[j] >= dev_stats_n) {
-			DRV_LOG(WARNING,
-				"port %u counter \"%s\" is not recognized",
-				dev->data->port_id,
-				mlx5_counters_init[j].dpdk_name);
-			goto free;
+	/* Add IB counters. */
+	for (i = 0; i != xstats_n; ++i) {
+		if (mlx5_counters_init[i].ib) {
+			unsigned int idx = xstats_ctrl->mlx5_stats_n++;
+
+			xstats_ctrl->info[idx] = mlx5_counters_init[i];
 		}
 	}
+	assert(xstats_ctrl->mlx5_stats_n <= MLX5_MAX_XSTATS);
+	xstats_ctrl->stats_n = dev_stats_n;
 	/* Copy to base at first time. */
-	assert(xstats_n <= MLX5_MAX_XSTATS);
 	ret = mlx5_read_dev_counters(dev, xstats_ctrl->base);
 	if (ret)
 		DRV_LOG(ERR, "port %u cannot read device counters: %s",
@@ -306,9 +315,10 @@ mlx5_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *stats,
 	struct priv *priv = dev->data->dev_private;
 	unsigned int i;
 	uint64_t counters[n];
+	struct mlx5_xstats_ctrl *xstats_ctrl = &priv->xstats_ctrl;
+	uint16_t mlx5_stats_n = xstats_ctrl->mlx5_stats_n;
 
-	if (n >= xstats_n && stats) {
-		struct mlx5_xstats_ctrl *xstats_ctrl = &priv->xstats_ctrl;
+	if (n >= mlx5_stats_n && stats) {
 		int stats_n;
 		int ret;
 
@@ -320,12 +330,12 @@ mlx5_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *stats,
 		ret = mlx5_read_dev_counters(dev, counters);
 		if (ret)
 			return ret;
-		for (i = 0; i != xstats_n; ++i) {
+		for (i = 0; i != mlx5_stats_n; ++i) {
 			stats[i].id = i;
 			stats[i].value = (counters[i] - xstats_ctrl->base[i]);
 		}
 	}
-	return xstats_n;
+	return mlx5_stats_n;
 }
 
 /**
@@ -344,10 +354,11 @@ int
 mlx5_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 {
 	struct priv *priv = dev->data->dev_private;
-	struct rte_eth_stats tmp = {0};
+	struct rte_eth_stats tmp;
 	unsigned int i;
 	unsigned int idx;
 
+	memset(&tmp, 0, sizeof(tmp));
 	/* Add software counters. */
 	for (i = 0; (i != priv->rxqs_n); ++i) {
 		struct mlx5_rxq_data *rxq = (*priv->rxqs)[i];
@@ -441,7 +452,7 @@ mlx5_xstats_reset(struct rte_eth_dev *dev)
 	struct mlx5_xstats_ctrl *xstats_ctrl = &priv->xstats_ctrl;
 	int stats_n;
 	unsigned int i;
-	unsigned int n = xstats_n;
+	unsigned int n = xstats_ctrl->mlx5_stats_n;
 	uint64_t counters[n];
 	int ret;
 
@@ -481,14 +492,17 @@ mlx5_xstats_get_names(struct rte_eth_dev *dev __rte_unused,
 		      struct rte_eth_xstat_name *xstats_names, unsigned int n)
 {
 	unsigned int i;
+	struct priv *priv = dev->data->dev_private;
+	struct mlx5_xstats_ctrl *xstats_ctrl = &priv->xstats_ctrl;
+	unsigned int mlx5_xstats_n = xstats_ctrl->mlx5_stats_n;
 
-	if (n >= xstats_n && xstats_names) {
-		for (i = 0; i != xstats_n; ++i) {
+	if (n >= mlx5_xstats_n && xstats_names) {
+		for (i = 0; i != mlx5_xstats_n; ++i) {
 			strncpy(xstats_names[i].name,
-				mlx5_counters_init[i].dpdk_name,
+				xstats_ctrl->info[i].dpdk_name,
 				RTE_ETH_XSTATS_NAME_SIZE);
 			xstats_names[i].name[RTE_ETH_XSTATS_NAME_SIZE - 1] = 0;
 		}
 	}
-	return xstats_n;
+	return mlx5_xstats_n;
 }

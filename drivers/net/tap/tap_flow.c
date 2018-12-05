@@ -1567,6 +1567,7 @@ tap_flow_isolate(struct rte_eth_dev *dev,
 		 struct rte_flow_error *error __rte_unused)
 {
 	struct pmd_internals *pmd = dev->data->dev_private;
+	struct pmd_process_private *process_private = dev->process_private;
 
 	/* normalize 'set' variable to contain 0 or 1 values */
 	if (set)
@@ -1580,7 +1581,7 @@ tap_flow_isolate(struct rte_eth_dev *dev,
 	 * If netdevice is there, setup appropriate flow rules immediately.
 	 * Otherwise it will be set when bringing up the netdevice (tun_alloc).
 	 */
-	if (!pmd->rxq[0].fd)
+	if (!process_private->rxq_fds[0])
 		return 0;
 	if (set) {
 		struct rte_flow *remote_flow;
@@ -1810,7 +1811,7 @@ tap_flow_implicit_flush(struct pmd_internals *pmd, struct rte_flow_error *error)
 #define KEY_IDX_OFFSET (3 * MAX_RSS_KEYS)
 #define SEC_NAME_CLS_Q "cls_q"
 
-const char *sec_name[SEC_MAX] = {
+static const char *sec_name[SEC_MAX] = {
 	[SEC_L3_L4] = "l3_l4",
 };
 

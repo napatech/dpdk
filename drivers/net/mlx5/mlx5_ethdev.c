@@ -3,8 +3,6 @@
  * Copyright 2015 Mellanox Technologies, Ltd
  */
 
-#define _GNU_SOURCE
-
 #include <stddef.h>
 #include <assert.h>
 #include <inttypes.h>
@@ -129,7 +127,7 @@ struct ethtool_link_settings {
  * @return
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
-int
+static int
 mlx5_get_master_ifname(const struct rte_eth_dev *dev,
 		       char (*ifname)[IF_NAMESIZE])
 {
@@ -270,16 +268,12 @@ mlx5_ifindex(const struct rte_eth_dev *dev)
  *   Request number to pass to ioctl().
  * @param[out] ifr
  *   Interface request structure output buffer.
- * @param master
- *   When device is a port representor, perform request on master device
- *   instead.
  *
  * @return
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
-mlx5_ifreq(const struct rte_eth_dev *dev, int req, struct ifreq *ifr,
-	   int master)
+mlx5_ifreq(const struct rte_eth_dev *dev, int req, struct ifreq *ifr)
 {
 	int sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_IP);
 	int ret = 0;
@@ -288,10 +282,7 @@ mlx5_ifreq(const struct rte_eth_dev *dev, int req, struct ifreq *ifr,
 		rte_errno = errno;
 		return -rte_errno;
 	}
-	if (master)
-		ret = mlx5_get_master_ifname(dev, &ifr->ifr_name);
-	else
-		ret = mlx5_get_ifname(dev, &ifr->ifr_name);
+	ret = mlx5_get_ifname(dev, &ifr->ifr_name);
 	if (ret)
 		goto error;
 	ret = ioctl(sock, req, ifr);
@@ -321,7 +312,7 @@ int
 mlx5_get_mtu(struct rte_eth_dev *dev, uint16_t *mtu)
 {
 	struct ifreq request;
-	int ret = mlx5_ifreq(dev, SIOCGIFMTU, &request, 0);
+	int ret = mlx5_ifreq(dev, SIOCGIFMTU, &request);
 
 	if (ret)
 		return ret;
@@ -345,7 +336,7 @@ mlx5_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 {
 	struct ifreq request = { .ifr_mtu = mtu, };
 
-	return mlx5_ifreq(dev, SIOCSIFMTU, &request, 0);
+	return mlx5_ifreq(dev, SIOCSIFMTU, &request);
 }
 
 /**
@@ -365,13 +356,13 @@ int
 mlx5_set_flags(struct rte_eth_dev *dev, unsigned int keep, unsigned int flags)
 {
 	struct ifreq request;
-	int ret = mlx5_ifreq(dev, SIOCGIFFLAGS, &request, 0);
+	int ret = mlx5_ifreq(dev, SIOCGIFFLAGS, &request);
 
 	if (ret)
 		return ret;
 	request.ifr_flags &= keep;
 	request.ifr_flags |= flags & ~keep;
-	return mlx5_ifreq(dev, SIOCSIFFLAGS, &request, 0);
+	return mlx5_ifreq(dev, SIOCSIFFLAGS, &request);
 }
 
 /**
@@ -627,17 +618,20 @@ mlx5_link_update_unlocked_gset(struct rte_eth_dev *dev,
 	int link_speed = 0;
 	int ret;
 
-	ret = mlx5_ifreq(dev, SIOCGIFFLAGS, &ifr, 1);
+	ret = mlx5_ifreq(dev, SIOCGIFFLAGS, &ifr);
 	if (ret) {
 		DRV_LOG(WARNING, "port %u ioctl(SIOCGIFFLAGS) failed: %s",
 			dev->data->port_id, strerror(rte_errno));
 		return ret;
 	}
-	memset(&dev_link, 0, sizeof(dev_link));
-	dev_link.link_status = ((ifr.ifr_flags & IFF_UP) &&
-				(ifr.ifr_flags & IFF_RUNNING));
-	ifr.ifr_data = (void *)&edata;
-	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr, 1);
+	dev_link = (struct rte_eth_link) {
+		.link_status = ((ifr.ifr_flags & IFF_UP) &&
+				(ifr.ifr_flags & IFF_RUNNING)),
+	};
+	ifr = (struct ifreq) {
+		.ifr_data = (void *)&edata,
+	};
+	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr);
 	if (ret) {
 		DRV_LOG(WARNING,
 			"port %u ioctl(SIOCETHTOOL, ETHTOOL_GSET) failed: %s",
@@ -666,8 +660,8 @@ mlx5_link_update_unlocked_gset(struct rte_eth_dev *dev,
 				ETH_LINK_HALF_DUPLEX : ETH_LINK_FULL_DUPLEX);
 	dev_link.link_autoneg = !(dev->data->dev_conf.link_speeds &
 			ETH_LINK_SPEED_FIXED);
-	if ((dev_link.link_speed && !dev_link.link_status) ||
-	    (!dev_link.link_speed && dev_link.link_status)) {
+	if (((dev_link.link_speed && !dev_link.link_status) ||
+	     (!dev_link.link_speed && dev_link.link_status))) {
 		rte_errno = EAGAIN;
 		return -rte_errno;
 	}
@@ -698,17 +692,20 @@ mlx5_link_update_unlocked_gs(struct rte_eth_dev *dev,
 	uint64_t sc;
 	int ret;
 
-	ret = mlx5_ifreq(dev, SIOCGIFFLAGS, &ifr, 1);
+	ret = mlx5_ifreq(dev, SIOCGIFFLAGS, &ifr);
 	if (ret) {
 		DRV_LOG(WARNING, "port %u ioctl(SIOCGIFFLAGS) failed: %s",
 			dev->data->port_id, strerror(rte_errno));
 		return ret;
 	}
-	memset(&dev_link, 0, sizeof(dev_link));
-	dev_link.link_status = ((ifr.ifr_flags & IFF_UP) &&
-				(ifr.ifr_flags & IFF_RUNNING));
-	ifr.ifr_data = (void *)&gcmd;
-	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr, 1);
+	dev_link = (struct rte_eth_link) {
+		.link_status = ((ifr.ifr_flags & IFF_UP) &&
+				(ifr.ifr_flags & IFF_RUNNING)),
+	};
+	ifr = (struct ifreq) {
+		.ifr_data = (void *)&gcmd,
+	};
+	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr);
 	if (ret) {
 		DRV_LOG(DEBUG,
 			"port %u ioctl(SIOCETHTOOL, ETHTOOL_GLINKSETTINGS)"
@@ -725,7 +722,7 @@ mlx5_link_update_unlocked_gs(struct rte_eth_dev *dev,
 
 	*ecmd = gcmd;
 	ifr.ifr_data = (void *)ecmd;
-	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr, 1);
+	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr);
 	if (ret) {
 		DRV_LOG(DEBUG,
 			"port %u ioctl(SIOCETHTOOL, ETHTOOL_GLINKSETTINGS)"
@@ -775,8 +772,8 @@ mlx5_link_update_unlocked_gs(struct rte_eth_dev *dev,
 				ETH_LINK_HALF_DUPLEX : ETH_LINK_FULL_DUPLEX);
 	dev_link.link_autoneg = !(dev->data->dev_conf.link_speeds &
 				  ETH_LINK_SPEED_FIXED);
-	if ((dev_link.link_speed && !dev_link.link_status) ||
-	    (!dev_link.link_speed && dev_link.link_status)) {
+	if (((dev_link.link_speed && !dev_link.link_status) ||
+	     (!dev_link.link_speed && dev_link.link_status))) {
 		rte_errno = EAGAIN;
 		return -rte_errno;
 	}
@@ -888,7 +885,7 @@ mlx5_dev_get_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 	int ret;
 
 	ifr.ifr_data = (void *)&ethpause;
-	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr, 1);
+	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr);
 	if (ret) {
 		DRV_LOG(WARNING,
 			"port %u ioctl(SIOCETHTOOL, ETHTOOL_GPAUSEPARAM) failed:"
@@ -941,7 +938,7 @@ mlx5_dev_set_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 		ethpause.tx_pause = 1;
 	else
 		ethpause.tx_pause = 0;
-	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr, 0);
+	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr);
 	if (ret) {
 		DRV_LOG(WARNING,
 			"port %u ioctl(SIOCETHTOOL, ETHTOOL_SPAUSEPARAM)"
@@ -1306,10 +1303,7 @@ mlx5_dev_to_port_id(const struct rte_device *dev, uint16_t *port_list,
 	RTE_ETH_FOREACH_DEV(id) {
 		struct rte_eth_dev *ldev = &rte_eth_devices[id];
 
-		if (!ldev->device ||
-		    !ldev->device->driver ||
-		    strcmp(ldev->device->driver->name, MLX5_DRIVER_NAME) ||
-		    ldev->device != dev)
+		if (ldev->device != dev)
 			continue;
 		if (n < port_list_n)
 			port_list[n] = id;

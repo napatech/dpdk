@@ -58,9 +58,6 @@
 /* Max number of devices. Limited by vmdq. */
 #define MAX_DEVICES 64
 
-/* Size of buffers used for snprintfs. */
-#define MAX_PRINT_BUFF 6072
-
 /* Maximum long option length for option parsing. */
 #define MAX_LONG_OPT_SZ 64
 
@@ -121,8 +118,7 @@ static struct rte_eth_conf vmdq_conf_default = {
 		 * this fixes bug of ipv4 forwarding in guest can't
 		 * forward pakets from one virtio dev to another virtio dev.
 		 */
-		.offloads = (DEV_RX_OFFLOAD_CRC_STRIP |
-			     DEV_RX_OFFLOAD_VLAN_STRIP),
+		.offloads = DEV_RX_OFFLOAD_VLAN_STRIP,
 	},
 
 	.txmode = {

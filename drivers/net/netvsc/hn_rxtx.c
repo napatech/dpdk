@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <strings.h>
+#include <malloc.h>
 
 #include <rte_ethdev.h>
 #include <rte_memcpy.h>
@@ -216,6 +217,7 @@ hn_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	struct hn_data *hv = dev->data->dev_private;
 	struct hn_tx_queue *txq;
 	uint32_t tx_free_thresh;
+	int err;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -245,8 +247,14 @@ hn_dev_tx_queue_setup(struct rte_eth_dev *dev,
 
 	hn_reset_txagg(txq);
 
-	dev->data->tx_queues[queue_idx] = txq;
+	err = hn_vf_tx_queue_setup(dev, queue_idx, nb_desc,
+				     socket_id, tx_conf);
+	if (err) {
+		rte_free(txq);
+		return err;
+	}
 
+	dev->data->tx_queues[queue_idx] = txq;
 	return 0;
 }
 
@@ -267,17 +275,6 @@ hn_dev_tx_queue_release(void *arg)
 		rte_mempool_put(txq->hv->tx_pool, txd);
 
 	rte_free(txq);
-}
-
-void
-hn_dev_tx_queue_info(struct rte_eth_dev *dev, uint16_t queue_idx,
-		     struct rte_eth_txq_info *qinfo)
-{
-	struct hn_data *hv = dev->data->dev_private;
-	struct hn_tx_queue *txq = dev->data->rx_queues[queue_idx];
-
-	qinfo->conf.tx_free_thresh = txq->free_thresh;
-	qinfo->nb_desc = hv->tx_pool->size;
 }
 
 static void
@@ -533,7 +530,7 @@ static void hn_rxpkt(struct hn_rx_queue *rxq, struct hn_rx_bufinfo *rxb,
 	hn_update_packet_stats(&rxq->stats, m);
 
 	if (unlikely(rte_ring_sp_enqueue(rxq->rx_ring, m) != 0)) {
-		++rxq->ring_full;
+		++rxq->stats.ring_full;
 		rte_pktmbuf_free(m);
 	}
 }
@@ -600,7 +597,7 @@ error:
 }
 
 static void
-hn_rndis_receive(const struct rte_eth_dev *dev, struct hn_rx_queue *rxq,
+hn_rndis_receive(struct rte_eth_dev *dev, struct hn_rx_queue *rxq,
 		 struct hn_rx_bufinfo *rxb, void *buf, uint32_t len)
 {
 	const struct rndis_msghdr *hdr = buf;
@@ -612,7 +609,7 @@ hn_rndis_receive(const struct rte_eth_dev *dev, struct hn_rx_queue *rxq,
 		break;
 
 	case RNDIS_INDICATE_STATUS_MSG:
-		hn_rndis_link_status(rxq->hv, buf);
+		hn_rndis_link_status(dev, buf);
 		break;
 
 	case RNDIS_INITIALIZE_CMPLT:
@@ -712,22 +709,59 @@ hn_nvs_handle_rxbuf(struct rte_eth_dev *dev,
 	hn_rx_buf_release(rxb);
 }
 
+/*
+ * Called when NVS inband events are received.
+ * Send up a two part message with port_id and the NVS message
+ * to the pipe to the netvsc-vf-event control thread.
+ */
+static void hn_nvs_handle_notify(struct rte_eth_dev *dev,
+				 const struct vmbus_chanpkt_hdr *pkt,
+				 const void *data)
+{
+	const struct hn_nvs_hdr *hdr = data;
+
+	switch (hdr->type) {
+	case NVS_TYPE_TXTBL_NOTE:
+		/* Transmit indirection table has locking problems
+		 * in DPDK and therefore not implemented
+		 */
+		PMD_DRV_LOG(DEBUG, "host notify of transmit indirection table");
+		break;
+
+	case NVS_TYPE_VFASSOC_NOTE:
+		hn_nvs_handle_vfassoc(dev, pkt, data);
+		break;
+
+	default:
+		PMD_DRV_LOG(INFO,
+			    "got notify, nvs type %u", hdr->type);
+	}
+}
+
 struct hn_rx_queue *hn_rx_queue_alloc(struct hn_data *hv,
 				      uint16_t queue_id,
 				      unsigned int socket_id)
 {
 	struct hn_rx_queue *rxq;
 
-	rxq = rte_zmalloc_socket("HN_RXQ",
-				 sizeof(*rxq) + HN_RXQ_EVENT_DEFAULT,
+	rxq = rte_zmalloc_socket("HN_RXQ", sizeof(*rxq),
 				 RTE_CACHE_LINE_SIZE, socket_id);
-	if (rxq) {
-		rxq->hv = hv;
-		rxq->chan = hv->channels[queue_id];
-		rte_spinlock_init(&rxq->ring_lock);
-		rxq->port_id = hv->port_id;
-		rxq->queue_id = queue_id;
+	if (!rxq)
+		return NULL;
+
+	rxq->hv = hv;
+	rxq->chan = hv->channels[queue_id];
+	rte_spinlock_init(&rxq->ring_lock);
+	rxq->port_id = hv->port_id;
+	rxq->queue_id = queue_id;
+	rxq->event_sz = HN_RXQ_EVENT_DEFAULT;
+	rxq->event_buf = rte_malloc_socket("HN_EVENTS", HN_RXQ_EVENT_DEFAULT,
+					   RTE_CACHE_LINE_SIZE, socket_id);
+	if (!rxq->event_buf) {
+		rte_free(rxq);
+		return NULL;
 	}
+
 	return rxq;
 }
 
@@ -735,13 +769,14 @@ int
 hn_dev_rx_queue_setup(struct rte_eth_dev *dev,
 		      uint16_t queue_idx, uint16_t nb_desc,
 		      unsigned int socket_id,
-		      const struct rte_eth_rxconf *rx_conf __rte_unused,
+		      const struct rte_eth_rxconf *rx_conf,
 		      struct rte_mempool *mp)
 {
 	struct hn_data *hv = dev->data->dev_private;
 	char ring_name[RTE_RING_NAMESIZE];
 	struct hn_rx_queue *rxq;
 	unsigned int count;
+	int error = -ENOMEM;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -771,6 +806,11 @@ hn_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	if (!rxq->rx_ring)
 		goto fail;
 
+	error = hn_vf_rx_queue_setup(dev, queue_idx, nb_desc,
+				     socket_id, rx_conf, mp);
+	if (error)
+		goto fail;
+
 	dev->data->rx_queues[queue_idx] = rxq;
 	return 0;
 
@@ -778,7 +818,7 @@ fail:
 	rte_ring_free(rxq->rx_ring);
 	rte_free(rxq->event_buf);
 	rte_free(rxq);
-	return -ENOMEM;
+	return error;
 }
 
 void
@@ -795,77 +835,79 @@ hn_dev_rx_queue_release(void *arg)
 	rxq->rx_ring = NULL;
 	rxq->mb_pool = NULL;
 
+	hn_vf_rx_queue_release(rxq->hv, rxq->queue_id);
+
+	/* Keep primary queue to allow for control operations */
 	if (rxq != rxq->hv->primary) {
 		rte_free(rxq->event_buf);
 		rte_free(rxq);
 	}
 }
 
-void
-hn_dev_rx_queue_info(struct rte_eth_dev *dev, uint16_t queue_idx,
-		     struct rte_eth_rxq_info *qinfo)
+int
+hn_dev_tx_done_cleanup(void *arg, uint32_t free_cnt)
 {
-	struct hn_rx_queue *rxq = dev->data->rx_queues[queue_idx];
+	struct hn_tx_queue *txq = arg;
 
-	qinfo->mp = rxq->mb_pool;
-	qinfo->scattered_rx = 1;
-	qinfo->nb_desc = rte_ring_get_capacity(rxq->rx_ring);
-}
-
-static void
-hn_nvs_handle_notify(const struct vmbus_chanpkt_hdr *pkthdr,
-		     const void *data)
-{
-	const struct hn_nvs_hdr *hdr = data;
-
-	if (unlikely(vmbus_chanpkt_datalen(pkthdr) < sizeof(*hdr))) {
-		PMD_DRV_LOG(ERR, "invalid nvs notify");
-		return;
-	}
-
-	PMD_DRV_LOG(INFO,
-		    "got notify, nvs type %u", hdr->type);
+	return hn_process_events(txq->hv, txq->queue_id, free_cnt);
 }
 
 /*
  * Process pending events on the channel.
  * Called from both Rx queue poll and Tx cleanup
  */
-void hn_process_events(struct hn_data *hv, uint16_t queue_id)
+uint32_t hn_process_events(struct hn_data *hv, uint16_t queue_id,
+			   uint32_t tx_limit)
 {
 	struct rte_eth_dev *dev = &rte_eth_devices[hv->port_id];
 	struct hn_rx_queue *rxq;
 	uint32_t bytes_read = 0;
+	uint32_t tx_done = 0;
 	int ret = 0;
 
 	rxq = queue_id == 0 ? hv->primary : dev->data->rx_queues[queue_id];
 
 	/* If no pending data then nothing to do */
 	if (rte_vmbus_chan_rx_empty(rxq->chan))
-		return;
+		return 0;
 
 	/*
 	 * Since channel is shared between Rx and TX queue need to have a lock
 	 * since DPDK does not force same CPU to be used for Rx/Tx.
 	 */
 	if (unlikely(!rte_spinlock_trylock(&rxq->ring_lock)))
-		return;
+		return 0;
 
 	for (;;) {
 		const struct vmbus_chanpkt_hdr *pkt;
-		uint32_t len = HN_RXQ_EVENT_DEFAULT;
+		uint32_t len = rxq->event_sz;
 		const void *data;
 
+retry:
 		ret = rte_vmbus_chan_recv_raw(rxq->chan, rxq->event_buf, &len);
 		if (ret == -EAGAIN)
 			break;	/* ring is empty */
 
-		else if (ret == -ENOBUFS)
-			rte_exit(EXIT_FAILURE, "event buffer not big enough (%u < %u)",
-				 HN_RXQ_EVENT_DEFAULT, len);
-		else if (ret <= 0)
+		if (unlikely(ret == -ENOBUFS)) {
+			/* event buffer not large enough to read ring */
+
+			PMD_DRV_LOG(DEBUG,
+				    "event buffer expansion (need %u)", len);
+			rxq->event_sz = len + len / 4;
+			rxq->event_buf = rte_realloc(rxq->event_buf, rxq->event_sz,
+						     RTE_CACHE_LINE_SIZE);
+			if (rxq->event_buf)
+				goto retry;
+			/* out of memory, no more events now */
+			rxq->event_sz = 0;
+			break;
+		}
+
+		if (unlikely(ret <= 0)) {
+			/* This indicates a failure to communicate (or worse) */
 			rte_exit(EXIT_FAILURE,
 				 "vmbus ring buffer error: %d", ret);
+		}
 
 		bytes_read += ret;
 		pkt = (const struct vmbus_chanpkt_hdr *)rxq->event_buf;
@@ -873,6 +915,7 @@ void hn_process_events(struct hn_data *hv, uint16_t queue_id)
 
 		switch (pkt->type) {
 		case VMBUS_CHANPKT_TYPE_COMP:
+			++tx_done;
 			hn_nvs_handle_comp(dev, queue_id, pkt, data);
 			break;
 
@@ -881,13 +924,16 @@ void hn_process_events(struct hn_data *hv, uint16_t queue_id)
 			break;
 
 		case VMBUS_CHANPKT_TYPE_INBAND:
-			hn_nvs_handle_notify(pkt, data);
+			hn_nvs_handle_notify(dev, pkt, data);
 			break;
 
 		default:
 			PMD_DRV_LOG(ERR, "unknown chan pkt %u", pkt->type);
 			break;
 		}
+
+		if (tx_limit && tx_done >= tx_limit)
+			break;
 
 		if (rxq->rx_ring && rte_ring_full(rxq->rx_ring))
 			break;
@@ -897,6 +943,8 @@ void hn_process_events(struct hn_data *hv, uint16_t queue_id)
 		rte_vmbus_chan_signal_read(rxq->chan, bytes_read);
 
 	rte_spinlock_unlock(&rxq->ring_lock);
+
+	return tx_done;
 }
 
 static void hn_append_to_chim(struct hn_tx_queue *txq,
@@ -967,7 +1015,7 @@ static struct hn_txdesc *hn_new_txd(struct hn_data *hv,
 	struct hn_txdesc *txd;
 
 	if (rte_mempool_get(hv->tx_pool, (void **)&txd)) {
-		++txq->stats.nomemory;
+		++txq->stats.ring_full;
 		PMD_TX_LOG(DEBUG, "tx pool exhausted!");
 		return NULL;
 	}
@@ -1235,7 +1283,9 @@ uint16_t
 hn_xmit_pkts(void *ptxq, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 {
 	struct hn_tx_queue *txq = ptxq;
+	uint16_t queue_id = txq->queue_id;
 	struct hn_data *hv = txq->hv;
+	struct rte_eth_dev *vf_dev;
 	bool need_sig = false;
 	uint16_t nb_tx;
 	int ret;
@@ -1243,8 +1293,17 @@ hn_xmit_pkts(void *ptxq, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 	if (unlikely(hv->closed))
 		return 0;
 
+	/* Transmit over VF if present and up */
+	vf_dev = hv->vf_dev;
+	rte_compiler_barrier();
+	if (vf_dev && vf_dev->data->dev_started) {
+		void *sub_q = vf_dev->data->tx_queues[queue_id];
+
+		return (*vf_dev->tx_pkt_burst)(sub_q, tx_pkts, nb_pkts);
+	}
+
 	if (rte_mempool_avail_count(hv->tx_pool) <= txq->free_thresh)
-		hn_process_events(hv, txq->queue_id);
+		hn_process_events(hv, txq->queue_id, 0);
 
 	for (nb_tx = 0; nb_tx < nb_pkts; nb_tx++) {
 		struct rte_mbuf *m = tx_pkts[nb_tx];
@@ -1264,7 +1323,7 @@ hn_xmit_pkts(void *ptxq, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 			if (unlikely(!pkt))
 				break;
 
-			hn_encap(pkt, txq->queue_id, m);
+			hn_encap(pkt, queue_id, m);
 			hn_append_to_chim(txq, pkt, m);
 
 			rte_pktmbuf_free(m);
@@ -1291,7 +1350,7 @@ hn_xmit_pkts(void *ptxq, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 			txd->data_size += m->pkt_len;
 			++txd->packets;
 
-			hn_encap(pkt, txq->queue_id, m);
+			hn_encap(pkt, queue_id, m);
 
 			ret = hn_xmit_sg(txq, txd, m, &need_sig);
 			if (unlikely(ret != 0)) {
@@ -1320,15 +1379,36 @@ hn_recv_pkts(void *prxq, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 {
 	struct hn_rx_queue *rxq = prxq;
 	struct hn_data *hv = rxq->hv;
+	struct rte_eth_dev *vf_dev;
+	uint16_t nb_rcv;
 
 	if (unlikely(hv->closed))
 		return 0;
 
-	/* If ring is empty then process more */
-	if (rte_ring_count(rxq->rx_ring) < nb_pkts)
-		hn_process_events(hv, rxq->queue_id);
+	vf_dev = hv->vf_dev;
+	rte_compiler_barrier();
 
-	/* Get mbufs off staging ring */
-	return rte_ring_sc_dequeue_burst(rxq->rx_ring, (void **)rx_pkts,
-					 nb_pkts, NULL);
+	if (vf_dev && vf_dev->data->dev_started) {
+		/* Normally, with SR-IOV the ring buffer will be empty */
+		hn_process_events(hv, rxq->queue_id, 0);
+
+		/* Get mbufs some bufs off of staging ring */
+		nb_rcv = rte_ring_sc_dequeue_burst(rxq->rx_ring,
+						   (void **)rx_pkts,
+						   nb_pkts / 2, NULL);
+		/* And rest off of VF */
+		nb_rcv += rte_eth_rx_burst(vf_dev->data->port_id,
+					   rxq->queue_id,
+					   rx_pkts + nb_rcv, nb_pkts - nb_rcv);
+	} else {
+		/* If receive ring is not full then get more */
+		if (rte_ring_count(rxq->rx_ring) < nb_pkts)
+			hn_process_events(hv, rxq->queue_id, 0);
+
+		nb_rcv = rte_ring_sc_dequeue_burst(rxq->rx_ring,
+						   (void **)rx_pkts,
+						   nb_pkts, NULL);
+	}
+
+	return nb_rcv;
 }

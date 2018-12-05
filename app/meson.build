@@ -11,20 +11,25 @@ apps = ['pdump',
 # for BSD only
 lib_execinfo = cc.find_library('execinfo', required: false)
 
+default_cflags = machine_args
+
+# specify -D_GNU_SOURCE unconditionally
+default_cflags += '-D_GNU_SOURCE'
+
 foreach app:apps
 	build = true
 	name = app
 	allow_experimental_apis = false
 	sources = []
 	includes = []
-	cflags = machine_args
+	cflags = default_cflags
 	objs = [] # other object files to link against, used e.g. for
 	          # instruction-set optimized versions of code
 
 	# use "deps" for internal DPDK dependencies, and "ext_deps" for
 	# external package/library requirements
 	ext_deps = []
-	deps = []
+	deps = dpdk_app_link_libraries
 
 	subdir(name)
 
@@ -38,7 +43,7 @@ foreach app:apps
 
 		link_libs = []
 		if get_option('default_library') == 'static'
-			link_libs = dpdk_drivers
+			link_libs = dpdk_static_libraries + dpdk_drivers
 		endif
 
 		if allow_experimental_apis

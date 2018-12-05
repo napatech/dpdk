@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright 2018 NXP
 
+version = 2
+
 if host_machine.system() != 'linux'
         build = false
 endif
 
-deps += ['eventdev']
+deps += ['common_dpaax', 'eventdev']
 sources = files('base/fman/fman.c',
 		'base/fman/fman_hw.c',
 		'base/fman/netcfg_layer.c',
@@ -26,4 +28,3 @@ if cc.has_argument('-Wno-cast-qual')
 endif
 
 includes += include_directories('include', 'base/qbman')
-cflags += ['-D_GNU_SOURCE']

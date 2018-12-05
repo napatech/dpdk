@@ -2,6 +2,7 @@
  * Copyright(c) 2017-2018 Intel Corporation
  */
 
+#include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <sys/mman.h>
@@ -877,6 +878,10 @@ rte_fbarray_destroy(struct rte_fbarray *arr)
 	ret = rte_fbarray_detach(arr);
 	if (ret)
 		return ret;
+
+	/* with no shconf, there were never any files to begin with */
+	if (internal_config.no_shconf)
+		return 0;
 
 	/* try deleting the file */
 	eal_get_fbarray_path(path, sizeof(path), arr->name);

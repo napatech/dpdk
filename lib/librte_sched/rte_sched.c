@@ -329,7 +329,7 @@ rte_sched_port_check_params(struct rte_sched_port_params *params)
 		return -1;
 
 	/* socket */
-	if ((params->socket < 0) || (params->socket >= RTE_MAX_NUMA_NODES))
+	if (params->socket < 0)
 		return -3;
 
 	/* rate */
@@ -633,7 +633,8 @@ rte_sched_port_config(struct rte_sched_port_params *params)
 		return NULL;
 
 	/* Allocate memory to store the data structures */
-	port = rte_zmalloc("qos_params", mem_size, RTE_CACHE_LINE_SIZE);
+	port = rte_zmalloc_socket("qos_params", mem_size, RTE_CACHE_LINE_SIZE,
+		params->socket);
 	if (port == NULL)
 		return NULL;
 

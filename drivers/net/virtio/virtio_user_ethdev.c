@@ -28,7 +28,6 @@ static int
 virtio_user_server_reconnect(struct virtio_user_dev *dev)
 {
 	int ret;
-	int flag;
 	int connectfd;
 	struct rte_eth_dev *eth_dev = &rte_eth_devices[dev->port_id];
 
@@ -44,13 +43,12 @@ virtio_user_server_reconnect(struct virtio_user_dev *dev)
 		return -1;
 	}
 
+	dev->device_features |= dev->frontend_features;
+
 	/* umask vhost-user unsupported features */
 	dev->device_features &= ~(dev->unsupported_features);
 
 	dev->features &= dev->device_features;
-
-	flag = fcntl(connectfd, F_GETFD);
-	fcntl(connectfd, F_SETFL, flag | O_NONBLOCK);
 
 	ret = virtio_user_start_device(dev);
 	if (ret < 0)
@@ -331,7 +329,6 @@ virtio_user_notify_queue(struct virtio_hw *hw, struct virtqueue *vq)
 const struct virtio_pci_ops virtio_user_ops = {
 	.read_dev_cfg	= virtio_user_read_dev_config,
 	.write_dev_cfg	= virtio_user_write_dev_config,
-	.reset		= virtio_user_reset,
 	.get_status	= virtio_user_get_status,
 	.set_status	= virtio_user_set_status,
 	.get_features	= virtio_user_get_features,
@@ -422,7 +419,6 @@ virtio_user_eth_dev_alloc(struct rte_vdev_device *vdev)
 	if (!dev) {
 		PMD_INIT_LOG(ERR, "malloc virtio_user_dev failed");
 		rte_eth_dev_release_port(eth_dev);
-		rte_free(hw);
 		return NULL;
 	}
 
@@ -449,7 +445,6 @@ virtio_user_eth_dev_free(struct rte_eth_dev *eth_dev)
 	struct virtio_hw *hw = data->dev_private;
 
 	rte_free(hw->virtio_user_dev);
-	rte_free(hw);
 	rte_eth_dev_release_port(eth_dev);
 }
 
@@ -489,7 +484,7 @@ virtio_user_pmd_probe(struct rte_vdev_device *dev)
 		}
 	} else {
 		PMD_INIT_LOG(ERR, "arg %s is mandatory for virtio_user",
-			  VIRTIO_USER_ARG_QUEUE_SIZE);
+			     VIRTIO_USER_ARG_PATH);
 		goto end;
 	}
 
@@ -637,7 +632,6 @@ end:
 	return ret;
 }
 
-/** Called by rte_eth_dev_detach() */
 static int
 virtio_user_pmd_remove(struct rte_vdev_device *vdev)
 {
@@ -662,7 +656,6 @@ virtio_user_pmd_remove(struct rte_vdev_device *vdev)
 	dev = hw->virtio_user_dev;
 	virtio_user_dev_uninit(dev);
 
-	rte_free(eth_dev->data->dev_private);
 	rte_eth_dev_release_port(eth_dev);
 
 	return 0;

@@ -18,12 +18,14 @@
 
 #define RTE_RWTEST_FAIL 0
 
-#define TOTAL_ENTRY (16*1024*1024)
-#define TOTAL_INSERT (15*1024*1024)
+#define TOTAL_ENTRY (5*1024*1024)
+#define TOTAL_INSERT (4.5*1024*1024)
+#define TOTAL_INSERT_EXT (5*1024*1024)
 
 #define NUM_TEST 3
 unsigned int core_cnt[NUM_TEST] = {2, 4, 8};
 
+unsigned int slave_core_ids[RTE_MAX_LCORE];
 struct perf {
 	uint32_t single_read;
 	uint32_t single_write;
@@ -58,14 +60,19 @@ test_hash_readwrite_worker(__attribute__((unused)) void *arg)
 	uint64_t i, offset;
 	uint32_t lcore_id = rte_lcore_id();
 	uint64_t begin, cycles;
-	int ret;
+	int *ret;
 
-	offset = (lcore_id - rte_get_master_lcore())
-			* tbl_rw_test_param.num_insert;
+	ret = rte_malloc(NULL, sizeof(int) *
+				tbl_rw_test_param.num_insert, 0);
+	for (i = 0; i < rte_lcore_count(); i++) {
+		if (slave_core_ids[i] == lcore_id)
+			break;
+	}
+	offset = tbl_rw_test_param.num_insert * i;
 
 	printf("Core #%d inserting and reading %d: %'"PRId64" - %'"PRId64"\n",
 	       lcore_id, tbl_rw_test_param.num_insert,
-	       offset, offset + tbl_rw_test_param.num_insert);
+	       offset, offset + tbl_rw_test_param.num_insert - 1);
 
 	begin = rte_rdtsc_precise();
 
@@ -75,13 +82,30 @@ test_hash_readwrite_worker(__attribute__((unused)) void *arg)
 				tbl_rw_test_param.keys + i) > 0)
 			break;
 
-		ret = rte_hash_add_key(tbl_rw_test_param.h,
+		ret[i - offset] = rte_hash_add_key(tbl_rw_test_param.h,
 				     tbl_rw_test_param.keys + i);
-		if (ret < 0)
+		if (ret[i - offset] < 0)
+			break;
+
+		/* lookup a random key */
+		uint32_t rand = rte_rand() % (i + 1 - offset);
+
+		if (rte_hash_lookup(tbl_rw_test_param.h,
+				tbl_rw_test_param.keys + rand) != ret[rand])
+			break;
+
+
+		if (rte_hash_del_key(tbl_rw_test_param.h,
+				tbl_rw_test_param.keys + rand) != ret[rand])
+			break;
+
+		ret[rand] = rte_hash_add_key(tbl_rw_test_param.h,
+					tbl_rw_test_param.keys + rand);
+		if (ret[rand] < 0)
 			break;
 
 		if (rte_hash_lookup(tbl_rw_test_param.h,
-				tbl_rw_test_param.keys + i) != ret)
+			tbl_rw_test_param.keys + rand) != ret[rand])
 			break;
 	}
 
@@ -92,11 +116,12 @@ test_hash_readwrite_worker(__attribute__((unused)) void *arg)
 	for (; i < offset + tbl_rw_test_param.num_insert; i++)
 		tbl_rw_test_param.keys[i] = RTE_RWTEST_FAIL;
 
+	rte_free(ret);
 	return 0;
 }
 
 static int
-init_params(int use_htm, int use_jhash)
+init_params(int use_ext, int use_htm, int use_jhash)
 {
 	unsigned int i;
 
@@ -118,10 +143,19 @@ init_params(int use_htm, int use_jhash)
 	if (use_htm)
 		hash_params.extra_flag =
 			RTE_HASH_EXTRA_FLAGS_TRANS_MEM_SUPPORT |
-			RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY;
+			RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY |
+			RTE_HASH_EXTRA_FLAGS_MULTI_WRITER_ADD;
 	else
 		hash_params.extra_flag =
-			RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY;
+			RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY |
+			RTE_HASH_EXTRA_FLAGS_MULTI_WRITER_ADD;
+
+	if (use_ext)
+		hash_params.extra_flag |=
+			RTE_HASH_EXTRA_FLAGS_EXT_TABLE;
+	else
+		hash_params.extra_flag &=
+		       ~RTE_HASH_EXTRA_FLAGS_EXT_TABLE;
 
 	hash_params.name = "tests";
 
@@ -161,7 +195,7 @@ err:
 }
 
 static int
-test_hash_readwrite_functional(int use_htm)
+test_hash_readwrite_functional(int use_ext, int use_htm)
 {
 	unsigned int i;
 	const void *next_key;
@@ -171,6 +205,8 @@ test_hash_readwrite_functional(int use_htm)
 	uint32_t duplicated_keys = 0;
 	uint32_t lost_keys = 0;
 	int use_jhash = 1;
+	int slave_cnt = rte_lcore_count() - 1;
+	uint32_t tot_insert = 0;
 
 	rte_atomic64_init(&gcycles);
 	rte_atomic64_clear(&gcycles);
@@ -178,21 +214,26 @@ test_hash_readwrite_functional(int use_htm)
 	rte_atomic64_init(&ginsertions);
 	rte_atomic64_clear(&ginsertions);
 
-	if (init_params(use_htm, use_jhash) != 0)
+	if (init_params(use_ext, use_htm, use_jhash) != 0)
 		goto err;
 
+	if (use_ext)
+		tot_insert = TOTAL_INSERT_EXT;
+	else
+		tot_insert = TOTAL_INSERT;
+
 	tbl_rw_test_param.num_insert =
-		TOTAL_INSERT / rte_lcore_count();
+		tot_insert / slave_cnt;
 
 	tbl_rw_test_param.rounded_tot_insert =
 		tbl_rw_test_param.num_insert
-		* rte_lcore_count();
+		* slave_cnt;
 
 	printf("++++++++Start function tests:+++++++++\n");
 
 	/* Fire all threads. */
 	rte_eal_mp_remote_launch(test_hash_readwrite_worker,
-				 NULL, CALL_MASTER);
+				 NULL, SKIP_MASTER);
 	rte_eal_mp_wait_lcore();
 
 	while (rte_hash_iterate(tbl_rw_test_param.h, &next_key,
@@ -249,7 +290,7 @@ err:
 }
 
 static int
-test_rw_reader(__attribute__((unused)) void *arg)
+test_rw_reader(void *arg)
 {
 	uint64_t i;
 	uint64_t begin, cycles;
@@ -276,7 +317,7 @@ test_rw_reader(__attribute__((unused)) void *arg)
 }
 
 static int
-test_rw_writer(__attribute__((unused)) void *arg)
+test_rw_writer(void *arg)
 {
 	uint64_t i;
 	uint32_t lcore_id = rte_lcore_id();
@@ -285,8 +326,13 @@ test_rw_writer(__attribute__((unused)) void *arg)
 	uint64_t start_coreid = (uint64_t)(uintptr_t)arg;
 	uint64_t offset;
 
-	offset = TOTAL_INSERT / 2 + (lcore_id - start_coreid)
-					* tbl_rw_test_param.num_insert;
+	for (i = 0; i < rte_lcore_count(); i++) {
+		if (slave_core_ids[i] == lcore_id)
+			break;
+	}
+
+	offset = TOTAL_INSERT / 2 + (i - (start_coreid)) *
+				tbl_rw_test_param.num_insert;
 	begin = rte_rdtsc_precise();
 	for (i = offset; i < offset + tbl_rw_test_param.num_insert; i++) {
 		ret = rte_hash_add_key_data(tbl_rw_test_param.h,
@@ -333,7 +379,7 @@ test_hash_readwrite_perf(struct perf *perf_results, int use_htm,
 	rte_atomic64_init(&gwrite_cycles);
 	rte_atomic64_clear(&gwrite_cycles);
 
-	if (init_params(use_htm, use_jhash) != 0)
+	if (init_params(0, use_htm, use_jhash) != 0)
 		goto err;
 
 	/*
@@ -384,8 +430,8 @@ test_hash_readwrite_perf(struct perf *perf_results, int use_htm,
 	perf_results->single_read = end / i;
 
 	for (n = 0; n < NUM_TEST; n++) {
-		unsigned int tot_lcore = rte_lcore_count();
-		if (tot_lcore < core_cnt[n] * 2 + 1)
+		unsigned int tot_slave_lcore = rte_lcore_count() - 1;
+		if (tot_slave_lcore < core_cnt[n] * 2)
 			goto finish;
 
 		rte_atomic64_clear(&greads);
@@ -415,17 +461,19 @@ test_hash_readwrite_perf(struct perf *perf_results, int use_htm,
 		 */
 
 		/* Test only reader cases */
-		for (i = 1; i <= core_cnt[n]; i++)
+		for (i = 0; i < core_cnt[n]; i++)
 			rte_eal_remote_launch(test_rw_reader,
-					(void *)(uintptr_t)read_cnt, i);
+					(void *)(uintptr_t)read_cnt,
+					slave_core_ids[i]);
 
 		rte_eal_mp_wait_lcore();
 
 		start_coreid = i;
 		/* Test only writer cases */
-		for (; i <= core_cnt[n] * 2; i++)
+		for (; i < core_cnt[n] * 2; i++)
 			rte_eal_remote_launch(test_rw_writer,
-					(void *)((uintptr_t)start_coreid), i);
+					(void *)((uintptr_t)start_coreid),
+					slave_core_ids[i]);
 
 		rte_eal_mp_wait_lcore();
 
@@ -464,22 +512,26 @@ test_hash_readwrite_perf(struct perf *perf_results, int use_htm,
 			}
 		}
 
-		start_coreid = core_cnt[n] + 1;
+		start_coreid = core_cnt[n];
 
 		if (reader_faster) {
-			for (i = core_cnt[n] + 1; i <= core_cnt[n] * 2; i++)
+			for (i = core_cnt[n]; i < core_cnt[n] * 2; i++)
 				rte_eal_remote_launch(test_rw_writer,
-					(void *)((uintptr_t)start_coreid), i);
-			for (i = 1; i <= core_cnt[n]; i++)
+					(void *)((uintptr_t)start_coreid),
+					slave_core_ids[i]);
+			for (i = 0; i < core_cnt[n]; i++)
 				rte_eal_remote_launch(test_rw_reader,
-					(void *)(uintptr_t)read_cnt, i);
+					(void *)(uintptr_t)read_cnt,
+					slave_core_ids[i]);
 		} else {
-			for (i = 1; i <= core_cnt[n]; i++)
+			for (i = 0; i < core_cnt[n]; i++)
 				rte_eal_remote_launch(test_rw_reader,
-					(void *)(uintptr_t)read_cnt, i);
-			for (; i <= core_cnt[n] * 2; i++)
+					(void *)(uintptr_t)read_cnt,
+					slave_core_ids[i]);
+			for (; i < core_cnt[n] * 2; i++)
 				rte_eal_remote_launch(test_rw_writer,
-					(void *)((uintptr_t)start_coreid), i);
+					(void *)((uintptr_t)start_coreid),
+					slave_core_ids[i]);
 		}
 
 		rte_eal_mp_wait_lcore();
@@ -561,12 +613,18 @@ test_hash_readwrite_main(void)
 	 * than writer threads. This is to timing either reader threads or
 	 * writer threads for performance numbers.
 	 */
-	int use_htm, reader_faster;
+	int use_htm, use_ext,  reader_faster;
+	unsigned int i = 0, core_id = 0;
 
-	if (rte_lcore_count() == 1) {
-		printf("More than one lcore is required "
+	if (rte_lcore_count() <= 2) {
+		printf("More than two lcores are required "
 			"to do read write test\n");
 		return 0;
+	}
+
+	RTE_LCORE_FOREACH_SLAVE(core_id) {
+		slave_core_ids[i] = core_id;
+		i++;
 	}
 
 	setlocale(LC_NUMERIC, "");
@@ -578,7 +636,13 @@ test_hash_readwrite_main(void)
 		printf("Test read-write with Hardware transactional memory\n");
 
 		use_htm = 1;
-		if (test_hash_readwrite_functional(use_htm) < 0)
+		use_ext = 0;
+
+		if (test_hash_readwrite_functional(use_ext, use_htm) < 0)
+			return -1;
+
+		use_ext = 1;
+		if (test_hash_readwrite_functional(use_ext, use_htm) < 0)
 			return -1;
 
 		reader_faster = 1;
@@ -597,8 +661,14 @@ test_hash_readwrite_main(void)
 
 	printf("Test read-write without Hardware transactional memory\n");
 	use_htm = 0;
-	if (test_hash_readwrite_functional(use_htm) < 0)
+	use_ext = 0;
+	if (test_hash_readwrite_functional(use_ext, use_htm) < 0)
 		return -1;
+
+	use_ext = 1;
+	if (test_hash_readwrite_functional(use_ext, use_htm) < 0)
+		return -1;
+
 	reader_faster = 1;
 	if (test_hash_readwrite_perf(&non_htm_results, use_htm,
 							reader_faster) < 0)
@@ -608,26 +678,26 @@ test_hash_readwrite_main(void)
 							reader_faster) < 0)
 		return -1;
 
+	printf("================\n");
 	printf("Results summary:\n");
-
-	int i;
+	printf("================\n");
 
 	printf("single read: %u\n", htm_results.single_read);
 	printf("single write: %u\n", htm_results.single_write);
 	for (i = 0; i < NUM_TEST; i++) {
-		printf("core_cnt: %u\n", core_cnt[i]);
+		printf("+++ core_cnt: %u +++\n", core_cnt[i]);
 		printf("HTM:\n");
-		printf("read only: %u\n", htm_results.read_only[i]);
-		printf("write only: %u\n", htm_results.write_only[i]);
-		printf("read-write read: %u\n", htm_results.read_write_r[i]);
-		printf("read-write write: %u\n", htm_results.read_write_w[i]);
+		printf("  read only: %u\n", htm_results.read_only[i]);
+		printf("  write only: %u\n", htm_results.write_only[i]);
+		printf("  read-write read: %u\n", htm_results.read_write_r[i]);
+		printf("  read-write write: %u\n", htm_results.read_write_w[i]);
 
 		printf("non HTM:\n");
-		printf("read only: %u\n", non_htm_results.read_only[i]);
-		printf("write only: %u\n", non_htm_results.write_only[i]);
-		printf("read-write read: %u\n",
+		printf("  read only: %u\n", non_htm_results.read_only[i]);
+		printf("  write only: %u\n", non_htm_results.write_only[i]);
+		printf("  read-write read: %u\n",
 			non_htm_results.read_write_r[i]);
-		printf("read-write write: %u\n",
+		printf("  read-write write: %u\n",
 			non_htm_results.read_write_w[i]);
 	}
 

@@ -14,7 +14,7 @@ How to obtain ENIC PMD integrated DPDK
 --------------------------------------
 
 ENIC PMD support is integrated into the DPDK suite. dpdk-<version>.tar.gz
-should be downloaded from http://dpdk.org
+should be downloaded from http://core.dpdk.org/download/
 
 
 Configuration information
@@ -260,6 +260,12 @@ Generic Flow API is supported. The baseline support is:
   - Selectors: 'is', 'spec' and 'mask'. 'last' is not supported
   - In total, up to 64 bytes of mask is allowed across all headers
 
+- **1400 and later series VICS with advanced filters enabled**
+
+  All the above plus:
+
+  - Action: count
+
 More features may be added in future firmware and new versions of the VIC.
 Please refer to the release notes.
 
@@ -344,6 +350,41 @@ suitable for others. Such applications may change the mode by setting
   default VLAN becomes `untagged`. This mode can be useful for
   applications such as OVS-DPDK performance benchmarks that utilize
   only the default VLAN and want to see only untagged packets.
+
+
+Vectorized Rx Handler
+---------------------
+
+ENIC PMD includes a version of the receive handler that is vectorized using
+AVX2 SIMD instructions. It is meant for bulk, throughput oriented workloads
+where reducing cycles/packet in PMD is a priority. In order to use the
+vectorized handler, take the following steps.
+
+- Use a recent version of gcc, icc, or clang and build 64-bit DPDK. If
+  the compiler is known to support AVX2, DPDK build system
+  automatically compiles the vectorized handler. Otherwise, the
+  handler is not available.
+
+- Set ``devargs`` parameter ``enable-avx2-rx=1`` to explicitly request that
+  PMD consider the vectorized handler when selecting the receive handler.
+  For example::
+
+    -w 12:00.0,enable-avx2-rx=1
+
+  As the current implementation is intended for field trials, by default, the
+  vectorized handler is not considered (``enable-avx2-rx=0``).
+
+- Run on a UCS M4 or later server with CPUs that support AVX2.
+
+PMD selects the vectorized handler when the handler is compiled into
+the driver, the user requests its use via ``enable-avx2-rx=1``, CPU
+supports AVX2, and scatter Rx is not used. To verify that the
+vectorized handler is selected, enable debug logging
+(``--log-level=pmd,debug``) and check the following message.
+
+.. code-block:: console
+
+    enic_use_vector_rx_handler use the non-scatter avx2 Rx handler
 
 .. _enic_limitations:
 

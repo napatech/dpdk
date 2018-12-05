@@ -39,7 +39,6 @@ static uint64_t dev_rx_offloads_sup =
 
 /* Rx offloads which cannot be disabled */
 static uint64_t dev_rx_offloads_nodis =
-		DEV_RX_OFFLOAD_CRC_STRIP |
 		DEV_RX_OFFLOAD_SCATTER;
 
 /* Supported Tx offloads */
@@ -292,6 +291,35 @@ fail:
 	return -1;
 }
 
+static void
+dpaa2_free_rx_tx_queues(struct rte_eth_dev *dev)
+{
+	struct dpaa2_dev_priv *priv = dev->data->dev_private;
+	struct dpaa2_queue *dpaa2_q;
+	int i;
+
+	PMD_INIT_FUNC_TRACE();
+
+	/* Queue allocation base */
+	if (priv->rx_vq[0]) {
+		/* cleaning up queue storage */
+		for (i = 0; i < priv->nb_rx_queues; i++) {
+			dpaa2_q = (struct dpaa2_queue *)priv->rx_vq[i];
+			if (dpaa2_q->q_storage)
+				rte_free(dpaa2_q->q_storage);
+		}
+		/* cleanup tx queue cscn */
+		for (i = 0; i < priv->nb_tx_queues; i++) {
+			dpaa2_q = (struct dpaa2_queue *)priv->tx_vq[i];
+			if (!dpaa2_q->cscn)
+				rte_free(dpaa2_q->cscn);
+		}
+		/*free memory for all queues (RX+TX) */
+		rte_free(priv->rx_vq[0]);
+		priv->rx_vq[0] = NULL;
+	}
+}
+
 static int
 dpaa2_eth_dev_configure(struct rte_eth_dev *dev)
 {
@@ -406,7 +434,8 @@ dpaa2_eth_dev_configure(struct rte_eth_dev *dev)
 		}
 	}
 
-	dpaa2_vlan_offload_set(dev, ETH_VLAN_FILTER_MASK);
+	if (rx_offloads & DEV_RX_OFFLOAD_VLAN_FILTER)
+		dpaa2_vlan_offload_set(dev, ETH_VLAN_FILTER_MASK);
 
 	/* update the current status */
 	dpaa2_dev_link_update(dev, 0);
@@ -569,7 +598,8 @@ dpaa2_dev_tx_queue_setup(struct rte_eth_dev *dev,
 		 */
 		cong_notif_cfg.threshold_exit = CONG_EXIT_TX_THRESHOLD;
 		cong_notif_cfg.message_ctx = 0;
-		cong_notif_cfg.message_iova = (size_t)dpaa2_q->cscn;
+		cong_notif_cfg.message_iova =
+				(size_t)DPAA2_VADDR_TO_IOVA(dpaa2_q->cscn);
 		cong_notif_cfg.dest_cfg.dest_type = DPNI_DEST_NONE;
 		cong_notif_cfg.notification_mode =
 					 DPNI_CONG_OPT_WRITE_MEM_ON_ENTER |
@@ -867,22 +897,12 @@ dpaa2_dev_stop(struct rte_eth_dev *dev)
 static void
 dpaa2_dev_close(struct rte_eth_dev *dev)
 {
-	struct rte_eth_dev_data *data = dev->data;
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
 	struct fsl_mc_io *dpni = (struct fsl_mc_io *)priv->hw;
-	int i, ret;
+	int ret;
 	struct rte_eth_link link;
-	struct dpaa2_queue *dpaa2_q;
 
 	PMD_INIT_FUNC_TRACE();
-
-	for (i = 0; i < data->nb_tx_queues; i++) {
-		dpaa2_q = (struct dpaa2_queue *)data->tx_queues[i];
-		if (!dpaa2_q->cscn) {
-			rte_free(dpaa2_q->cscn);
-			dpaa2_q->cscn = NULL;
-		}
-	}
 
 	/* Clean the device first */
 	ret = dpni_reset(dpni, CMD_PRI_LOW, priv->token);
@@ -1117,6 +1137,8 @@ int dpaa2_dev_stats_get(struct rte_eth_dev *dev,
 	int32_t  retcode;
 	uint8_t page0 = 0, page1 = 1, page2 = 2;
 	union dpni_statistics value;
+	int i;
+	struct dpaa2_queue *dpaa2_rxq, *dpaa2_txq;
 
 	memset(&value, 0, sizeof(union dpni_statistics));
 
@@ -1163,6 +1185,21 @@ int dpaa2_dev_stats_get(struct rte_eth_dev *dev,
 
 	stats->oerrors = value.page_2.egress_discarded_frames;
 	stats->imissed = value.page_2.ingress_nobuffer_discards;
+
+	/* Fill in per queue stats */
+	for (i = 0; (i < RTE_ETHDEV_QUEUE_STAT_CNTRS) &&
+		(i < priv->nb_rx_queues || i < priv->nb_tx_queues); ++i) {
+		dpaa2_rxq = (struct dpaa2_queue *)priv->rx_vq[i];
+		dpaa2_txq = (struct dpaa2_queue *)priv->tx_vq[i];
+		if (dpaa2_rxq)
+			stats->q_ipackets[i] = dpaa2_rxq->rx_pkts;
+		if (dpaa2_txq)
+			stats->q_opackets[i] = dpaa2_txq->tx_pkts;
+
+		/* Byte counting is not implemented */
+		stats->q_ibytes[i]   = 0;
+		stats->q_obytes[i]   = 0;
+	}
 
 	return 0;
 
@@ -1323,6 +1360,8 @@ dpaa2_dev_stats_reset(struct rte_eth_dev *dev)
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
 	struct fsl_mc_io *dpni = (struct fsl_mc_io *)priv->hw;
 	int32_t  retcode;
+	int i;
+	struct dpaa2_queue *dpaa2_q;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -1334,6 +1373,19 @@ dpaa2_dev_stats_reset(struct rte_eth_dev *dev)
 	retcode =  dpni_reset_statistics(dpni, CMD_PRI_LOW, priv->token);
 	if (retcode)
 		goto error;
+
+	/* Reset the per queue stats in dpaa2_queue structure */
+	for (i = 0; i < priv->nb_rx_queues; i++) {
+		dpaa2_q = (struct dpaa2_queue *)priv->rx_vq[i];
+		if (dpaa2_q)
+			dpaa2_q->rx_pkts = 0;
+	}
+
+	for (i = 0; i < priv->nb_tx_queues; i++) {
+		dpaa2_q = (struct dpaa2_queue *)priv->tx_vq[i];
+		if (dpaa2_q)
+			dpaa2_q->tx_pkts = 0;
+	}
 
 	return;
 
@@ -1360,7 +1412,7 @@ dpaa2_dev_link_update(struct rte_eth_dev *dev,
 
 	ret = dpni_get_link_state(dpni, CMD_PRI_LOW, priv->token, &state);
 	if (ret < 0) {
-		DPAA2_PMD_ERR("error: dpni_get_link_state %d", ret);
+		DPAA2_PMD_DEBUG("error: dpni_get_link_state %d", ret);
 		return -1;
 	}
 
@@ -1422,7 +1474,7 @@ dpaa2_dev_set_link_up(struct rte_eth_dev *dev)
 	}
 	ret = dpni_get_link_state(dpni, CMD_PRI_LOW, priv->token, &state);
 	if (ret < 0) {
-		DPAA2_PMD_ERR("Unable to get link state (%d)", ret);
+		DPAA2_PMD_DEBUG("Unable to get link state (%d)", ret);
 		return -1;
 	}
 
@@ -1785,6 +1837,74 @@ static struct eth_dev_ops dpaa2_ethdev_ops = {
 	.rss_hash_conf_get    = dpaa2_dev_rss_hash_conf_get,
 };
 
+/* Populate the mac address from physically available (u-boot/firmware) and/or
+ * one set by higher layers like MC (restool) etc.
+ * Returns the table of MAC entries (multiple entries)
+ */
+static int
+populate_mac_addr(struct fsl_mc_io *dpni_dev, struct dpaa2_dev_priv *priv,
+		  struct ether_addr *mac_entry)
+{
+	int ret;
+	struct ether_addr phy_mac, prime_mac;
+
+	memset(&phy_mac, 0, sizeof(struct ether_addr));
+	memset(&prime_mac, 0, sizeof(struct ether_addr));
+
+	/* Get the physical device MAC address */
+	ret = dpni_get_port_mac_addr(dpni_dev, CMD_PRI_LOW, priv->token,
+				     phy_mac.addr_bytes);
+	if (ret) {
+		DPAA2_PMD_ERR("DPNI get physical port MAC failed: %d", ret);
+		goto cleanup;
+	}
+
+	ret = dpni_get_primary_mac_addr(dpni_dev, CMD_PRI_LOW, priv->token,
+					prime_mac.addr_bytes);
+	if (ret) {
+		DPAA2_PMD_ERR("DPNI get Prime port MAC failed: %d", ret);
+		goto cleanup;
+	}
+
+	/* Now that both MAC have been obtained, do:
+	 *  if not_empty_mac(phy) && phy != Prime, overwrite prime with Phy
+	 *     and return phy
+	 *  If empty_mac(phy), return prime.
+	 *  if both are empty, create random MAC, set as prime and return
+	 */
+	if (!is_zero_ether_addr(&phy_mac)) {
+		/* If the addresses are not same, overwrite prime */
+		if (!is_same_ether_addr(&phy_mac, &prime_mac)) {
+			ret = dpni_set_primary_mac_addr(dpni_dev, CMD_PRI_LOW,
+							priv->token,
+							phy_mac.addr_bytes);
+			if (ret) {
+				DPAA2_PMD_ERR("Unable to set MAC Address: %d",
+					      ret);
+				goto cleanup;
+			}
+			memcpy(&prime_mac, &phy_mac, sizeof(struct ether_addr));
+		}
+	} else if (is_zero_ether_addr(&prime_mac)) {
+		/* In case phys and prime, both are zero, create random MAC */
+		eth_random_addr(prime_mac.addr_bytes);
+		ret = dpni_set_primary_mac_addr(dpni_dev, CMD_PRI_LOW,
+						priv->token,
+						prime_mac.addr_bytes);
+		if (ret) {
+			DPAA2_PMD_ERR("Unable to set MAC Address: %d", ret);
+			goto cleanup;
+		}
+	}
+
+	/* prime_mac the final MAC address */
+	memcpy(mac_entry, &prime_mac, sizeof(struct ether_addr));
+	return 0;
+
+cleanup:
+	return -1;
+}
+
 static int
 dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 {
@@ -1867,7 +1987,10 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 		goto init_err;
 	}
 
-	/* Allocate memory for storing MAC addresses */
+	/* Allocate memory for storing MAC addresses.
+	 * Table of mac_filter_entries size is allocated so that RTE ether lib
+	 * can add MAC entries when rte_eth_dev_mac_addr_add is called.
+	 */
 	eth_dev->data->mac_addrs = rte_zmalloc("dpni",
 		ETHER_ADDR_LEN * attr.mac_filter_entries, 0);
 	if (eth_dev->data->mac_addrs == NULL) {
@@ -1878,12 +2001,11 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 		goto init_err;
 	}
 
-	ret = dpni_get_primary_mac_addr(dpni_dev, CMD_PRI_LOW,
-					priv->token,
-			(uint8_t *)(eth_dev->data->mac_addrs[0].addr_bytes));
+	ret = populate_mac_addr(dpni_dev, priv, &eth_dev->data->mac_addrs[0]);
 	if (ret) {
-		DPAA2_PMD_ERR("DPNI get mac address failed:Err Code = %d",
-			     ret);
+		DPAA2_PMD_ERR("Unable to fetch MAC Address for device");
+		rte_free(eth_dev->data->mac_addrs);
+		eth_dev->data->mac_addrs = NULL;
 		goto init_err;
 	}
 
@@ -1927,8 +2049,7 @@ dpaa2_dev_uninit(struct rte_eth_dev *eth_dev)
 {
 	struct dpaa2_dev_priv *priv = eth_dev->data->dev_private;
 	struct fsl_mc_io *dpni = (struct fsl_mc_io *)priv->hw;
-	int i, ret;
-	struct dpaa2_queue *dpaa2_q;
+	int ret;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -1942,23 +2063,7 @@ dpaa2_dev_uninit(struct rte_eth_dev *eth_dev)
 
 	dpaa2_dev_close(eth_dev);
 
-	if (priv->rx_vq[0]) {
-		/* cleaning up queue storage */
-		for (i = 0; i < priv->nb_rx_queues; i++) {
-			dpaa2_q = (struct dpaa2_queue *)priv->rx_vq[i];
-			if (dpaa2_q->q_storage)
-				rte_free(dpaa2_q->q_storage);
-		}
-		/*free the all queue memory */
-		rte_free(priv->rx_vq[0]);
-		priv->rx_vq[0] = NULL;
-	}
-
-	/* free memory for storing MAC addresses */
-	if (eth_dev->data->mac_addrs) {
-		rte_free(eth_dev->data->mac_addrs);
-		eth_dev->data->mac_addrs = NULL;
-	}
+	dpaa2_free_rx_tx_queues(eth_dev);
 
 	/* Close the device at underlying layer*/
 	ret = dpni_close(dpni, CMD_PRI_LOW, priv->token);
@@ -2008,7 +2113,6 @@ rte_dpaa2_probe(struct rte_dpaa2_driver *dpaa2_drv,
 	}
 
 	eth_dev->device = &dpaa2_dev->device;
-	eth_dev->device->driver = &dpaa2_drv->driver;
 
 	dpaa2_dev->eth_dev = eth_dev;
 	eth_dev->data->rx_mbuf_alloc_failed = 0;
@@ -2023,8 +2127,6 @@ rte_dpaa2_probe(struct rte_dpaa2_driver *dpaa2_drv,
 		return 0;
 	}
 
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
-		rte_free(eth_dev->data->dev_private);
 	rte_eth_dev_release_port(eth_dev);
 	return diag;
 }
@@ -2037,8 +2139,6 @@ rte_dpaa2_remove(struct rte_dpaa2_device *dpaa2_dev)
 	eth_dev = dpaa2_dev->eth_dev;
 	dpaa2_dev_uninit(eth_dev);
 
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
-		rte_free(eth_dev->data->dev_private);
 	rte_eth_dev_release_port(eth_dev);
 
 	return 0;

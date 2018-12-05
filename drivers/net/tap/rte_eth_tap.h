@@ -46,7 +46,7 @@ struct rx_queue {
 	struct rte_mempool *mp;         /* Mempool for RX packets */
 	uint32_t trigger_seen;          /* Last seen Rx trigger value */
 	uint16_t in_port;               /* Port ID */
-	int fd;
+	uint16_t queue_id;		/* queue ID*/
 	struct pkt_stats stats;         /* Stats for this RX queue */
 	uint16_t nb_rx_desc;            /* max number of mbufs available */
 	struct rte_eth_rxmode *rxmode;  /* RX features */
@@ -56,12 +56,13 @@ struct rx_queue {
 };
 
 struct tx_queue {
-	int fd;
 	int type;                       /* Type field - TUN|TAP */
 	uint16_t *mtu;                  /* Pointer to MTU from dev_data */
 	uint16_t csum:1;                /* Enable checksum offloading */
 	struct pkt_stats stats;         /* Stats for this TX queue */
 	struct rte_gso_ctx gso_ctx;     /* GSO context */
+	uint16_t out_port;              /* Port ID */
+	uint16_t queue_id;		/* queue ID*/
 };
 
 struct pmd_internals {
@@ -90,6 +91,11 @@ struct pmd_internals {
 	struct tx_queue txq[RTE_PMD_TAP_MAX_QUEUES]; /* List of TX queues */
 	struct rte_intr_handle intr_handle;          /* LSC interrupt handle. */
 	int ka_fd;                        /* keep-alive file descriptor */
+};
+
+struct pmd_process_private {
+	int rxq_fds[RTE_PMD_TAP_MAX_QUEUES];
+	int txq_fds[RTE_PMD_TAP_MAX_QUEUES];
 };
 
 /* tap_intr.c */

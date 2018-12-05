@@ -190,6 +190,17 @@ usage(char* progname)
 	printf("  --vxlan-gpe-port=N: UPD port of tunnel VXLAN-GPE\n");
 	printf("  --mlockall: lock all memory\n");
 	printf("  --no-mlockall: do not lock all memory\n");
+	printf("  --mp-alloc <native|anon|xmem|xmemhuge>: mempool allocation method.\n"
+	       "    native: use regular DPDK memory to create and populate mempool\n"
+	       "    anon: use regular DPDK memory to create and anonymous memory to populate mempool\n"
+	       "    xmem: use anonymous memory to create and populate mempool\n"
+	       "    xmemhuge: use anonymous hugepage memory to create and populate mempool\n");
+	printf("  --noisy-tx-sw-buffer-size=N: size of FIFO buffer\n");
+	printf("  --noisy-tx-sw-buffer-flushtime=N: flush FIFO after N ms\n");
+	printf("  --noisy-lkup-memory=N: allocate N MB of VNF memory\n");
+	printf("  --noisy-lkup-num-writes=N: do N random writes per packet\n");
+	printf("  --noisy-lkup-num-reads=N: do N random reads per packet\n");
+	printf("  --noisy-lkup-num-writes=N: do N random reads and writes per packet\n");
 }
 
 #ifdef RTE_LIBRTE_CMDLINE
@@ -405,8 +416,11 @@ parse_portnuma_config(const char *q_arg)
 		}
 		socket_id = (uint8_t)int_fld[FLD_SOCKET];
 		if (new_socket_id(socket_id)) {
-			print_invalid_socket_id_error();
-			return -1;
+			if (num_sockets >= RTE_MAX_NUMA_NODES) {
+				print_invalid_socket_id_error();
+				return -1;
+			}
+			socket_ids[num_sockets++] = socket_id;
 		}
 		port_numa[port_id] = socket_id;
 	}
@@ -462,8 +476,11 @@ parse_ringnuma_config(const char *q_arg)
 		}
 		socket_id = (uint8_t)int_fld[FLD_SOCKET];
 		if (new_socket_id(socket_id)) {
-			print_invalid_socket_id_error();
-			return -1;
+			if (num_sockets >= RTE_MAX_NUMA_NODES) {
+				print_invalid_socket_id_error();
+				return -1;
+			}
+			socket_ids[num_sockets++] = socket_id;
 		}
 		ring_flag = (uint8_t)int_fld[FLD_FLAG];
 		if ((ring_flag < RX_RING_ONLY) || (ring_flag > RXTX_RING)) {
@@ -625,6 +642,13 @@ launch_args_parse(int argc, char** argv)
 		{ "vxlan-gpe-port",		1, 0, 0 },
 		{ "mlockall",			0, 0, 0 },
 		{ "no-mlockall",		0, 0, 0 },
+		{ "mp-alloc",			1, 0, 0 },
+		{ "noisy-tx-sw-buffer-size",	1, 0, 0 },
+		{ "noisy-tx-sw-buffer-flushtime", 1, 0, 0 },
+		{ "noisy-lkup-memory",		1, 0, 0 },
+		{ "noisy-lkup-num-writes",	1, 0, 0 },
+		{ "noisy-lkup-num-reads",	1, 0, 0 },
+		{ "noisy-lkup-num-reads-writes", 1, 0, 0 },
 		{ 0, 0, 0, 0 },
 	};
 
@@ -743,7 +767,22 @@ launch_args_parse(int argc, char** argv)
 			if (!strcmp(lgopts[opt_idx].name, "numa"))
 				numa_support = 1;
 			if (!strcmp(lgopts[opt_idx].name, "mp-anon")) {
-				mp_anon = 1;
+				mp_alloc_type = MP_ALLOC_ANON;
+			}
+			if (!strcmp(lgopts[opt_idx].name, "mp-alloc")) {
+				if (!strcmp(optarg, "native"))
+					mp_alloc_type = MP_ALLOC_NATIVE;
+				else if (!strcmp(optarg, "anon"))
+					mp_alloc_type = MP_ALLOC_ANON;
+				else if (!strcmp(optarg, "xmem"))
+					mp_alloc_type = MP_ALLOC_XMEM;
+				else if (!strcmp(optarg, "xmemhuge"))
+					mp_alloc_type = MP_ALLOC_XMEM_HUGE;
+				else
+					rte_exit(EXIT_FAILURE,
+						"mp-alloc %s invalid - must be: "
+						"native, anon, xmem or xmemhuge\n",
+						 optarg);
 			}
 			if (!strcmp(lgopts[opt_idx].name, "port-numa-config")) {
 				if (parse_portnuma_config(optarg))
@@ -878,10 +917,8 @@ launch_args_parse(int argc, char** argv)
 						 " must be >= 0\n", n);
 			}
 #endif
-			if (!strcmp(lgopts[opt_idx].name, "disable-crc-strip")) {
-				rx_offloads &= ~DEV_RX_OFFLOAD_CRC_STRIP;
+			if (!strcmp(lgopts[opt_idx].name, "disable-crc-strip"))
 				rx_offloads |= DEV_RX_OFFLOAD_KEEP_CRC;
-			}
 			if (!strcmp(lgopts[opt_idx].name, "enable-lro"))
 				rx_offloads |= DEV_RX_OFFLOAD_TCP_LRO;
 			if (!strcmp(lgopts[opt_idx].name, "enable-scatter"))
@@ -1147,6 +1184,60 @@ launch_args_parse(int argc, char** argv)
 				do_mlockall = 1;
 			if (!strcmp(lgopts[opt_idx].name, "no-mlockall"))
 				do_mlockall = 0;
+			if (!strcmp(lgopts[opt_idx].name,
+				    "noisy-tx-sw-buffer-size")) {
+				n = atoi(optarg);
+				if (n >= 0)
+					noisy_tx_sw_bufsz = n;
+				else
+					rte_exit(EXIT_FAILURE,
+						"noisy-tx-sw-buffer-size must be >= 0\n");
+			}
+			if (!strcmp(lgopts[opt_idx].name,
+				    "noisy-tx-sw-buffer-flushtime")) {
+				n = atoi(optarg);
+				if (n >= 0)
+					noisy_tx_sw_buf_flush_time = n;
+				else
+					rte_exit(EXIT_FAILURE,
+						 "noisy-tx-sw-buffer-flushtime must be >= 0\n");
+			}
+			if (!strcmp(lgopts[opt_idx].name,
+				    "noisy-lkup-memory")) {
+				n = atoi(optarg);
+				if (n >= 0)
+					noisy_lkup_mem_sz = n;
+				else
+					rte_exit(EXIT_FAILURE,
+						 "noisy-lkup-memory must be >= 0\n");
+			}
+			if (!strcmp(lgopts[opt_idx].name,
+				    "noisy-lkup-num-writes")) {
+				n = atoi(optarg);
+				if (n >= 0)
+					noisy_lkup_num_writes = n;
+				else
+					rte_exit(EXIT_FAILURE,
+						 "noisy-lkup-num-writes must be >= 0\n");
+			}
+			if (!strcmp(lgopts[opt_idx].name,
+				    "noisy-lkup-num-reads")) {
+				n = atoi(optarg);
+				if (n >= 0)
+					noisy_lkup_num_reads = n;
+				else
+					rte_exit(EXIT_FAILURE,
+						 "noisy-lkup-num-reads must be >= 0\n");
+			}
+			if (!strcmp(lgopts[opt_idx].name,
+				    "noisy-lkup-num-reads-writes")) {
+				n = atoi(optarg);
+				if (n >= 0)
+					noisy_lkup_num_reads_writes = n;
+				else
+					rte_exit(EXIT_FAILURE,
+						 "noisy-lkup-num-reads-writes must be >= 0\n");
+			}
 			break;
 		case 'h':
 			usage(argv[0]);

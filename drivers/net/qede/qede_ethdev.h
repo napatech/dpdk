@@ -44,7 +44,7 @@
 /* Driver versions */
 #define QEDE_PMD_VER_PREFIX		"QEDE PMD"
 #define QEDE_PMD_VERSION_MAJOR		2
-#define QEDE_PMD_VERSION_MINOR	        9
+#define QEDE_PMD_VERSION_MINOR	        10
 #define QEDE_PMD_VERSION_REVISION       0
 #define QEDE_PMD_VERSION_PATCH	        1
 
@@ -118,7 +118,7 @@
 
 
 
-extern char fw_file[];
+extern char qede_fw_file[];
 
 /* Number of PF connections - 32 RX + 32 TX */
 #define QEDE_PF_NUM_CONNS		(64)
@@ -151,18 +151,48 @@ struct qede_ucast_entry {
 	SLIST_ENTRY(qede_ucast_entry) list;
 };
 
-struct qede_fdir_entry {
+#ifndef IPV6_ADDR_LEN
+#define IPV6_ADDR_LEN				(16)
+#endif
+
+struct qede_arfs_tuple {
+	union {
+		uint32_t src_ipv4;
+		uint8_t src_ipv6[IPV6_ADDR_LEN];
+	};
+
+	union {
+		uint32_t dst_ipv4;
+		uint8_t dst_ipv6[IPV6_ADDR_LEN];
+	};
+
+	uint16_t	src_port;
+	uint16_t	dst_port;
+	uint16_t	eth_proto;
+	uint8_t		ip_proto;
+
+	/* Describe filtering mode needed for this kind of filter */
+	enum ecore_filter_config_mode mode;
+};
+
+struct qede_arfs_entry {
 	uint32_t soft_id; /* unused for now */
 	uint16_t pkt_len; /* actual packet length to match */
 	uint16_t rx_queue; /* queue to be steered to */
 	const struct rte_memzone *mz; /* mz used to hold L2 frame */
-	SLIST_ENTRY(qede_fdir_entry) list;
+	struct qede_arfs_tuple tuple;
+	SLIST_ENTRY(qede_arfs_entry) list;
 };
 
-struct qede_fdir_info {
+/* Opaque handle for rte flow managed by PMD */
+struct rte_flow {
+	struct qede_arfs_entry entry;
+};
+
+struct qede_arfs_info {
 	struct ecore_arfs_config_params arfs;
 	uint16_t filter_count;
-	SLIST_HEAD(fdir_list_head, qede_fdir_entry)fdir_list_head;
+	SLIST_HEAD(arfs_list_head, qede_arfs_entry)arfs_list_head;
 };
 
 /* IANA assigned default UDP ports for encapsulation protocols */
@@ -207,13 +237,22 @@ struct qede_dev {
 	struct qede_tunn_params vxlan;
 	struct qede_tunn_params geneve;
 	struct qede_tunn_params ipgre;
-	struct qede_fdir_info fdir_info;
+	struct qede_arfs_info arfs_info;
 	bool vlan_strip_flg;
 	char drv_ver[QEDE_PMD_DRV_VER_STR_SIZE];
 	bool vport_started;
 	int vlan_offload_mask;
 	void *ethdev;
 };
+
+static inline void qede_set_ucast_cmn_params(struct ecore_filter_ucast *ucast)
+{
+	memset(ucast, 0, sizeof(struct ecore_filter_ucast));
+	ucast->is_rx_filter = true;
+	ucast->is_tx_filter = true;
+	/* ucast->assert_on_error = true; - For debug */
+}
+
 
 /* Non-static functions */
 int qede_config_rss(struct rte_eth_dev *eth_dev);
@@ -235,9 +274,6 @@ int qede_link_update(struct rte_eth_dev *eth_dev,
 int qede_dev_filter_ctrl(struct rte_eth_dev *dev, enum rte_filter_type type,
 			 enum rte_filter_op op, void *arg);
 
-int qede_fdir_filter_conf(struct rte_eth_dev *eth_dev,
-			  enum rte_filter_op filter_op, void *arg);
-
 int qede_ntuple_filter_conf(struct rte_eth_dev *eth_dev,
 			    enum rte_filter_op filter_op, void *arg);
 
@@ -255,5 +291,16 @@ int qede_activate_vport(struct rte_eth_dev *eth_dev, bool flg);
 int qede_update_mtu(struct rte_eth_dev *eth_dev, uint16_t mtu);
 
 int qede_enable_tpa(struct rte_eth_dev *eth_dev, bool flg);
+int qede_udp_dst_port_del(struct rte_eth_dev *eth_dev,
+			  struct rte_eth_udp_tunnel *tunnel_udp);
+int qede_udp_dst_port_add(struct rte_eth_dev *eth_dev,
+			  struct rte_eth_udp_tunnel *tunnel_udp);
 
+enum _ecore_status_t
+qede_mac_int_ops(struct rte_eth_dev *eth_dev, struct ecore_filter_ucast *ucast,
+		 bool add);
+void qede_config_accept_any_vlan(struct qede_dev *qdev, bool flg);
+int qede_ucast_filter(struct rte_eth_dev *eth_dev,
+		      struct ecore_filter_ucast *ucast,
+		      bool add);
 #endif /* _QEDE_ETHDEV_H_ */

@@ -164,7 +164,6 @@ eth_dev_info(struct rte_eth_dev *dev,
 	dev_info->max_rx_queues = (uint16_t)internals->max_rx_queues;
 	dev_info->max_tx_queues = (uint16_t)internals->max_tx_queues;
 	dev_info->min_rx_bufsize = 0;
-	dev_info->rx_offload_capa = DEV_RX_OFFLOAD_CRC_STRIP;
 }
 
 static int
@@ -667,10 +666,8 @@ rte_pmd_ring_remove(struct rte_vdev_device *dev)
 		}
 	}
 
-	rte_free(eth_dev->data->rx_queues);
-	rte_free(eth_dev->data->tx_queues);
-	rte_free(eth_dev->data->dev_private);
-
+	/* mac_addrs must not be freed alone because part of dev_private */
+	eth_dev->data->mac_addrs = NULL;
 	rte_eth_dev_release_port(eth_dev);
 	return 0;
 }

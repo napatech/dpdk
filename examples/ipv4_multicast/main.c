@@ -109,8 +109,7 @@ static struct rte_eth_conf port_conf = {
 	.rxmode = {
 		.max_rx_pkt_len = JUMBO_FRAME_MAX_SIZE,
 		.split_hdr_size = 0,
-		.offloads = (DEV_RX_OFFLOAD_JUMBO_FRAME |
-			     DEV_RX_OFFLOAD_CRC_STRIP),
+		.offloads = DEV_RX_OFFLOAD_JUMBO_FRAME,
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
@@ -266,8 +265,6 @@ mcast_out_pkt(struct rte_mbuf *pkt, int use_clone)
 	hdr->vlan_tci_outer = pkt->vlan_tci_outer;
 	hdr->tx_offload = pkt->tx_offload;
 	hdr->hash = pkt->hash;
-
-	hdr->ol_flags = pkt->ol_flags;
 
 	__rte_mbuf_sanity_check(hdr, 1);
 	return hdr;
@@ -774,7 +771,7 @@ main(int argc, char **argv)
 			qconf->tx_queue_id[portid] = queueid;
 			queueid++;
 		}
-
+		rte_eth_allmulticast_enable(portid);
 		/* Start device */
 		ret = rte_eth_dev_start(portid);
 		if (ret < 0)

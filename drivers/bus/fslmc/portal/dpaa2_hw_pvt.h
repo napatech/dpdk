@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
  *   Copyright (c) 2016 Freescale Semiconductor, Inc. All rights reserved.
- *   Copyright 2016 NXP
+ *   Copyright 2016-2018 NXP
  *
  */
 
@@ -9,6 +9,7 @@
 #define _DPAA2_HW_PVT_H_
 
 #include <rte_eventdev.h>
+#include <dpaax_iova_table.h>
 
 #include <mc/fsl_mc_sys.h>
 #include <fsl_qbman_portal.h>
@@ -31,11 +32,27 @@
 #define VLAN_TAG_SIZE   4 /** < Vlan Header Length */
 #endif
 
-#define MAX_TX_RING_SLOTS	8
-	/** <Maximum number of slots available in TX ring*/
+/* Maximum number of slots available in TX ring */
+#define MAX_TX_RING_SLOTS			32
 
-#define DPAA2_DQRR_RING_SIZE	16
-	/** <Maximum number of slots available in RX ring*/
+/* Maximum number of slots available in RX ring */
+#define DPAA2_EQCR_RING_SIZE		8
+/* Maximum number of slots available in RX ring on LX2 */
+#define DPAA2_LX2_EQCR_RING_SIZE	32
+
+/* Maximum number of slots available in RX ring */
+#define DPAA2_DQRR_RING_SIZE		16
+/* Maximum number of slots available in RX ring on LX2 */
+#define DPAA2_LX2_DQRR_RING_SIZE	32
+
+/* EQCR shift to get EQCR size (2 >> 3) = 8 for LS2/LS2 */
+#define DPAA2_EQCR_SHIFT		3
+/* EQCR shift to get EQCR size for LX2 (2 >> 5) = 32 for LX2 */
+#define DPAA2_LX2_EQCR_SHIFT		5
+
+#define DPAA2_SWP_CENA_REGION		0
+#define DPAA2_SWP_CINH_REGION		1
+#define DPAA2_SWP_CENA_MEM_REGION	2
 
 #define MC_PORTAL_INDEX		0
 #define NUM_DPIO_REGIONS	2
@@ -193,6 +210,12 @@ enum qbman_fd_format {
 #define DPAA2_RESET_FD_CTRL(fd)	 ((fd)->simple.ctrl = 0)
 
 #define	DPAA2_SET_FD_ASAL(fd, asal)	((fd)->simple.ctrl |= (asal << 16))
+
+#define DPAA2_RESET_FD_FLC(fd)	do {	\
+	(fd)->simple.flc_lo = 0;	\
+	(fd)->simple.flc_hi = 0;	\
+} while (0)
+
 #define DPAA2_SET_FD_FLC(fd, addr)	do { \
 	(fd)->simple.flc_lo = lower_32_bits((size_t)(addr));	\
 	(fd)->simple.flc_hi = upper_32_bits((uint64_t)(addr));	\
@@ -275,28 +298,26 @@ extern struct dpaa2_memseg_list rte_dpaa2_memsegs;
 #ifdef RTE_LIBRTE_DPAA2_USE_PHYS_IOVA
 extern uint8_t dpaa2_virt_mode;
 static void *dpaa2_mem_ptov(phys_addr_t paddr) __attribute__((unused));
-/* todo - this is costly, need to write a fast coversion routine */
+
 static void *dpaa2_mem_ptov(phys_addr_t paddr)
 {
-	struct dpaa2_memseg *ms;
+	void *va;
 
 	if (dpaa2_virt_mode)
 		return (void *)(size_t)paddr;
 
-	/* Check if the address is already part of the memseg list internally
-	 * maintained by the dpaa2 driver.
-	 */
-	TAILQ_FOREACH(ms, &rte_dpaa2_memsegs, next) {
-		if (paddr >= ms->iova && paddr <
-			ms->iova + ms->len)
-			return RTE_PTR_ADD(ms->vaddr, (uintptr_t)(paddr - ms->iova));
-	}
+	va = (void *)dpaax_iova_table_get_va(paddr);
+	if (likely(va != NULL))
+		return va;
 
 	/* If not, Fallback to full memseg list searching */
-	return rte_mem_iova2virt(paddr);
+	va = rte_mem_iova2virt(paddr);
+
+	return va;
 }
 
 static phys_addr_t dpaa2_mem_vtop(uint64_t vaddr) __attribute__((unused));
+
 static phys_addr_t dpaa2_mem_vtop(uint64_t vaddr)
 {
 	const struct rte_memseg *memseg;

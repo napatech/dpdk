@@ -71,7 +71,7 @@ failsafe_hotplug_alarm_install(struct rte_eth_dev *dev)
 		return -EINVAL;
 	if (PRIV(dev)->pending_alarm)
 		return 0;
-	ret = rte_eal_alarm_set(hotplug_poll * 1000,
+	ret = rte_eal_alarm_set(failsafe_hotplug_poll * 1000,
 				fs_hotplug_alarm,
 				dev);
 	if (ret) {
@@ -225,7 +225,7 @@ fs_eth_dev_create(struct rte_vdev_device *vdev)
 		goto unregister_new_callback;
 	}
 	mac = &dev->data->mac_addrs[0];
-	if (mac_from_arg) {
+	if (failsafe_mac_from_arg) {
 		/*
 		 * If MAC address was provided as a parameter,
 		 * apply to all probed slaves.
@@ -280,7 +280,8 @@ free_args:
 free_subs:
 	fs_sub_device_free(dev);
 free_dev:
-	rte_free(PRIV(dev));
+	/* mac_addrs must not be freed alone because part of dev_private */
+	dev->data->mac_addrs = NULL;
 	rte_eth_dev_release_port(dev);
 	return -1;
 }
@@ -304,7 +305,9 @@ fs_rte_eth_free(const char *name)
 	ret = pthread_mutex_destroy(&PRIV(dev)->hotplug_mutex);
 	if (ret)
 		ERROR("Error while destroying hotplug mutex");
-	rte_free(PRIV(dev));
+	rte_free(PRIV(dev)->mcast_addrs);
+	/* mac_addrs must not be freed alone because part of dev_private */
+	dev->data->mac_addrs = NULL;
 	rte_eth_dev_release_port(dev);
 	return ret;
 }

@@ -57,7 +57,6 @@ static struct rte_eth_dev_info default_infos = {
 		DEV_RX_OFFLOAD_VLAN_FILTER |
 		DEV_RX_OFFLOAD_VLAN_EXTEND |
 		DEV_RX_OFFLOAD_JUMBO_FRAME |
-		DEV_RX_OFFLOAD_CRC_STRIP |
 		DEV_RX_OFFLOAD_SCATTER |
 		DEV_RX_OFFLOAD_TIMESTAMP |
 		DEV_RX_OFFLOAD_SECURITY,
@@ -74,7 +73,6 @@ static struct rte_eth_dev_info default_infos = {
 		DEV_RX_OFFLOAD_VLAN_FILTER |
 		DEV_RX_OFFLOAD_VLAN_EXTEND |
 		DEV_RX_OFFLOAD_JUMBO_FRAME |
-		DEV_RX_OFFLOAD_CRC_STRIP |
 		DEV_RX_OFFLOAD_SCATTER |
 		DEV_RX_OFFLOAD_TIMESTAMP |
 		DEV_RX_OFFLOAD_SECURITY,
@@ -88,6 +86,9 @@ static struct rte_eth_dev_info default_infos = {
 			ETH_RSS_IP |
 			ETH_RSS_UDP |
 			ETH_RSS_TCP,
+	.dev_capa =
+		RTE_ETH_DEV_CAPA_RUNTIME_RX_QUEUE_SETUP |
+		RTE_ETH_DEV_CAPA_RUNTIME_TX_QUEUE_SETUP,
 };
 
 static int
@@ -170,6 +171,27 @@ fs_dev_configure(struct rte_eth_dev *dev)
 	return 0;
 }
 
+static void
+fs_set_queues_state_start(struct rte_eth_dev *dev)
+{
+	struct rxq *rxq;
+	struct txq *txq;
+	uint16_t i;
+
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		rxq = dev->data->rx_queues[i];
+		if (rxq != NULL && !rxq->info.conf.rx_deferred_start)
+			dev->data->rx_queue_state[i] =
+						RTE_ETH_QUEUE_STATE_STARTED;
+	}
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		txq = dev->data->tx_queues[i];
+		if (txq != NULL && !txq->info.conf.tx_deferred_start)
+			dev->data->tx_queue_state[i] =
+						RTE_ETH_QUEUE_STATE_STARTED;
+	}
+}
+
 static int
 fs_dev_start(struct rte_eth_dev *dev)
 {
@@ -204,11 +226,28 @@ fs_dev_start(struct rte_eth_dev *dev)
 		}
 		sdev->state = DEV_STARTED;
 	}
-	if (PRIV(dev)->state < DEV_STARTED)
+	if (PRIV(dev)->state < DEV_STARTED) {
 		PRIV(dev)->state = DEV_STARTED;
+		fs_set_queues_state_start(dev);
+	}
 	fs_switch_dev(dev, NULL);
 	fs_unlock(dev, 0);
 	return 0;
+}
+
+static void
+fs_set_queues_state_stop(struct rte_eth_dev *dev)
+{
+	uint16_t i;
+
+	for (i = 0; i < dev->data->nb_rx_queues; i++)
+		if (dev->data->rx_queues[i] != NULL)
+			dev->data->rx_queue_state[i] =
+						RTE_ETH_QUEUE_STATE_STOPPED;
+	for (i = 0; i < dev->data->nb_tx_queues; i++)
+		if (dev->data->tx_queues[i] != NULL)
+			dev->data->tx_queue_state[i] =
+						RTE_ETH_QUEUE_STATE_STOPPED;
 }
 
 static void
@@ -225,6 +264,7 @@ fs_dev_stop(struct rte_eth_dev *dev)
 		sdev->state = DEV_STARTED - 1;
 	}
 	failsafe_rx_intr_uninstall(dev);
+	fs_set_queues_state_stop(dev);
 	fs_unlock(dev, 0);
 }
 
@@ -294,6 +334,112 @@ fs_dev_close(struct rte_eth_dev *dev)
 	fs_unlock(dev, 0);
 }
 
+static int
+fs_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
+{
+	struct sub_device *sdev;
+	uint8_t i;
+	int ret;
+	int err = 0;
+	bool failure = true;
+
+	fs_lock(dev, 0);
+	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
+		uint16_t port_id = ETH(sdev)->data->port_id;
+
+		ret = rte_eth_dev_rx_queue_stop(port_id, rx_queue_id);
+		ret = fs_err(sdev, ret);
+		if (ret) {
+			ERROR("Rx queue stop failed for subdevice %d", i);
+			err = ret;
+		} else {
+			failure = false;
+		}
+	}
+	dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
+	fs_unlock(dev, 0);
+	/* Return 0 in case of at least one successful queue stop */
+	return (failure) ? err : 0;
+}
+
+static int
+fs_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
+{
+	struct sub_device *sdev;
+	uint8_t i;
+	int ret;
+
+	fs_lock(dev, 0);
+	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
+		uint16_t port_id = ETH(sdev)->data->port_id;
+
+		ret = rte_eth_dev_rx_queue_start(port_id, rx_queue_id);
+		ret = fs_err(sdev, ret);
+		if (ret) {
+			ERROR("Rx queue start failed for subdevice %d", i);
+			fs_rx_queue_stop(dev, rx_queue_id);
+			fs_unlock(dev, 0);
+			return ret;
+		}
+	}
+	dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
+	fs_unlock(dev, 0);
+	return 0;
+}
+
+static int
+fs_tx_queue_stop(struct rte_eth_dev *dev, uint16_t tx_queue_id)
+{
+	struct sub_device *sdev;
+	uint8_t i;
+	int ret;
+	int err = 0;
+	bool failure = true;
+
+	fs_lock(dev, 0);
+	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
+		uint16_t port_id = ETH(sdev)->data->port_id;
+
+		ret = rte_eth_dev_tx_queue_stop(port_id, tx_queue_id);
+		ret = fs_err(sdev, ret);
+		if (ret) {
+			ERROR("Tx queue stop failed for subdevice %d", i);
+			err = ret;
+		} else {
+			failure = false;
+		}
+	}
+	dev->data->tx_queue_state[tx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
+	fs_unlock(dev, 0);
+	/* Return 0 in case of at least one successful queue stop */
+	return (failure) ? err : 0;
+}
+
+static int
+fs_tx_queue_start(struct rte_eth_dev *dev, uint16_t tx_queue_id)
+{
+	struct sub_device *sdev;
+	uint8_t i;
+	int ret;
+
+	fs_lock(dev, 0);
+	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
+		uint16_t port_id = ETH(sdev)->data->port_id;
+
+		ret = rte_eth_dev_tx_queue_start(port_id, tx_queue_id);
+		ret = fs_err(sdev, ret);
+		if (ret) {
+			ERROR("Tx queue start failed for subdevice %d", i);
+			fs_tx_queue_stop(dev, tx_queue_id);
+			fs_unlock(dev, 0);
+			return ret;
+		}
+	}
+	dev->data->tx_queue_state[tx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
+	fs_unlock(dev, 0);
+	return 0;
+}
+
 static void
 fs_rx_queue_release(void *queue)
 {
@@ -309,9 +455,13 @@ fs_rx_queue_release(void *queue)
 	fs_lock(dev, 0);
 	if (rxq->event_fd > 0)
 		close(rxq->event_fd);
-	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE)
-		SUBOPS(sdev, rx_queue_release)
-			(ETH(sdev)->data->rx_queues[rxq->qid]);
+	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
+		if (ETH(sdev)->data->rx_queues != NULL &&
+		    ETH(sdev)->data->rx_queues[rxq->qid] != NULL) {
+			SUBOPS(sdev, rx_queue_release)
+				(ETH(sdev)->data->rx_queues[rxq->qid]);
+		}
+	}
 	dev->data->rx_queues[rxq->qid] = NULL;
 	rte_free(rxq);
 	fs_unlock(dev, 0);
@@ -341,6 +491,16 @@ fs_rx_queue_setup(struct rte_eth_dev *dev,
 	int ret;
 
 	fs_lock(dev, 0);
+	if (rx_conf->rx_deferred_start) {
+		FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_PROBED) {
+			if (SUBOPS(sdev, rx_queue_start) == NULL) {
+				ERROR("Rx queue deferred start is not "
+					"supported for subdevice %d", i);
+				fs_unlock(dev, 0);
+				return -EINVAL;
+			}
+		}
+	}
 	rxq = dev->data->rx_queues[rx_queue_id];
 	if (rxq != NULL) {
 		fs_rx_queue_release(rxq);
@@ -477,9 +637,13 @@ fs_tx_queue_release(void *queue)
 	txq = queue;
 	dev = txq->priv->dev;
 	fs_lock(dev, 0);
-	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE)
-		SUBOPS(sdev, tx_queue_release)
-			(ETH(sdev)->data->tx_queues[txq->qid]);
+	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
+		if (ETH(sdev)->data->tx_queues != NULL &&
+		    ETH(sdev)->data->tx_queues[txq->qid] != NULL) {
+			SUBOPS(sdev, tx_queue_release)
+				(ETH(sdev)->data->tx_queues[txq->qid]);
+		}
+	}
 	dev->data->tx_queues[txq->qid] = NULL;
 	rte_free(txq);
 	fs_unlock(dev, 0);
@@ -498,6 +662,16 @@ fs_tx_queue_setup(struct rte_eth_dev *dev,
 	int ret;
 
 	fs_lock(dev, 0);
+	if (tx_conf->tx_deferred_start) {
+		FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_PROBED) {
+			if (SUBOPS(sdev, tx_queue_start) == NULL) {
+				ERROR("Tx queue deferred start is not "
+					"supported for subdevice %d", i);
+				fs_unlock(dev, 0);
+				return -EINVAL;
+			}
+		}
+	}
 	txq = dev->data->tx_queues[tx_queue_id];
 	if (txq != NULL) {
 		fs_tx_queue_release(txq);
@@ -716,6 +890,8 @@ fs_stats_reset(struct rte_eth_dev *dev)
  *      all sub_devices and the default capabilities.
  *      Uses a logical AND of TX capabilities among
  *      the active probed sub_device and the default capabilities.
+ *      Uses a logical AND of device capabilities among
+ *      all sub_devices and the default capabilities.
  *
  */
 static void
@@ -734,10 +910,12 @@ fs_dev_infos_get(struct rte_eth_dev *dev,
 		uint64_t rx_offload_capa;
 		uint64_t rxq_offload_capa;
 		uint64_t rss_hf_offload_capa;
+		uint64_t dev_capa;
 
 		rx_offload_capa = default_infos.rx_offload_capa;
 		rxq_offload_capa = default_infos.rx_queue_offload_capa;
 		rss_hf_offload_capa = default_infos.flow_type_rss_offloads;
+		dev_capa = default_infos.dev_capa;
 		FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_PROBED) {
 			rte_eth_dev_info_get(PORT_ID(sdev),
 					&PRIV(dev)->infos);
@@ -746,12 +924,14 @@ fs_dev_infos_get(struct rte_eth_dev *dev,
 					PRIV(dev)->infos.rx_queue_offload_capa;
 			rss_hf_offload_capa &=
 					PRIV(dev)->infos.flow_type_rss_offloads;
+			dev_capa &= PRIV(dev)->infos.dev_capa;
 		}
 		sdev = TX_SUBDEV(dev);
 		rte_eth_dev_info_get(PORT_ID(sdev), &PRIV(dev)->infos);
 		PRIV(dev)->infos.rx_offload_capa = rx_offload_capa;
 		PRIV(dev)->infos.rx_queue_offload_capa = rxq_offload_capa;
 		PRIV(dev)->infos.flow_type_rss_offloads = rss_hf_offload_capa;
+		PRIV(dev)->infos.dev_capa = dev_capa;
 		PRIV(dev)->infos.tx_offload_capa &=
 					default_infos.tx_offload_capa;
 		PRIV(dev)->infos.tx_queue_offload_capa &=
@@ -953,6 +1133,55 @@ fs_mac_addr_set(struct rte_eth_dev *dev, struct ether_addr *mac_addr)
 }
 
 static int
+fs_set_mc_addr_list(struct rte_eth_dev *dev,
+		    struct ether_addr *mc_addr_set, uint32_t nb_mc_addr)
+{
+	struct sub_device *sdev;
+	uint8_t i;
+	int ret;
+	void *mcast_addrs;
+
+	fs_lock(dev, 0);
+
+	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
+		ret = rte_eth_dev_set_mc_addr_list(PORT_ID(sdev),
+						   mc_addr_set, nb_mc_addr);
+		if (ret != 0) {
+			ERROR("Operation rte_eth_dev_set_mc_addr_list failed for sub_device %d with error %d",
+			      i, ret);
+			goto rollback;
+		}
+	}
+
+	mcast_addrs = rte_realloc(PRIV(dev)->mcast_addrs,
+		nb_mc_addr * sizeof(PRIV(dev)->mcast_addrs[0]), 0);
+	if (mcast_addrs == NULL && nb_mc_addr > 0) {
+		ret = -ENOMEM;
+		goto rollback;
+	}
+	rte_memcpy(mcast_addrs, mc_addr_set,
+		   nb_mc_addr * sizeof(PRIV(dev)->mcast_addrs[0]));
+	PRIV(dev)->nb_mcast_addr = nb_mc_addr;
+	PRIV(dev)->mcast_addrs = mcast_addrs;
+
+	fs_unlock(dev, 0);
+	return 0;
+
+rollback:
+	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
+		int rc = rte_eth_dev_set_mc_addr_list(PORT_ID(sdev),
+			PRIV(dev)->mcast_addrs,	PRIV(dev)->nb_mcast_addr);
+		if (rc != 0) {
+			ERROR("Multicast MAC address list rollback for sub_device %d failed with error %d",
+			      i, rc);
+		}
+	}
+
+	fs_unlock(dev, 0);
+	return ret;
+}
+
+static int
 fs_rss_hash_update(struct rte_eth_dev *dev,
 			struct rte_eth_rss_conf *rss_conf)
 {
@@ -1025,6 +1254,10 @@ const struct eth_dev_ops failsafe_ops = {
 	.dev_supported_ptypes_get = fs_dev_supported_ptypes_get,
 	.mtu_set = fs_mtu_set,
 	.vlan_filter_set = fs_vlan_filter_set,
+	.rx_queue_start = fs_rx_queue_start,
+	.rx_queue_stop = fs_rx_queue_stop,
+	.tx_queue_start = fs_tx_queue_start,
+	.tx_queue_stop = fs_tx_queue_stop,
 	.rx_queue_setup = fs_rx_queue_setup,
 	.tx_queue_setup = fs_tx_queue_setup,
 	.rx_queue_release = fs_rx_queue_release,
@@ -1036,6 +1269,7 @@ const struct eth_dev_ops failsafe_ops = {
 	.mac_addr_remove = fs_mac_addr_remove,
 	.mac_addr_add = fs_mac_addr_add,
 	.mac_addr_set = fs_mac_addr_set,
+	.set_mc_addr_list = fs_set_mc_addr_list,
 	.rss_hash_update = fs_rss_hash_update,
 	.filter_ctrl = fs_filter_ctrl,
 };

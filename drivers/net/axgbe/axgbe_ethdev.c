@@ -364,7 +364,6 @@ axgbe_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		DEV_RX_OFFLOAD_IPV4_CKSUM |
 		DEV_RX_OFFLOAD_UDP_CKSUM  |
 		DEV_RX_OFFLOAD_TCP_CKSUM  |
-		DEV_RX_OFFLOAD_CRC_STRIP  |
 		DEV_RX_OFFLOAD_KEEP_CRC;
 
 	dev_info->tx_offload_capa =
@@ -719,9 +718,6 @@ eth_axgbe_dev_uninit(struct rte_eth_dev *eth_dev)
 		return 0;
 
 	pci_dev = RTE_DEV_TO_PCI(eth_dev->device);
-	/*Free macaddres*/
-	rte_free(eth_dev->data->mac_addrs);
-	eth_dev->data->mac_addrs = NULL;
 	eth_dev->dev_ops = NULL;
 	eth_dev->rx_pkt_burst = NULL;
 	eth_dev->tx_pkt_burst = NULL;

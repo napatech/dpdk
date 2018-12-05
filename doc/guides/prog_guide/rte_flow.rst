@@ -1191,6 +1191,27 @@ Normally preceded by any of:
 - `Item: ICMP6_ND_NS`_
 - `Item: ICMP6_ND_OPT`_
 
+Item: ``META``
+^^^^^^^^^^^^^^
+
+Matches an application specific 32 bit metadata item.
+
+- Default ``mask`` matches the specified metadata value.
+
+.. _table_rte_flow_item_meta:
+
+.. table:: META
+
+   +----------+----------+---------------------------------------+
+   | Field    | Subfield | Value                                 |
+   +==========+==========+=======================================+
+   | ``spec`` | ``data`` | 32 bit metadata value                 |
+   +----------+--------------------------------------------------+
+   | ``last`` | ``data`` | upper range value                     |
+   +----------+----------+---------------------------------------+
+   | ``mask`` | ``data`` | bit-mask applies to "spec" and "last" |
+   +----------+----------+---------------------------------------+
+
 Actions
 ~~~~~~~
 
@@ -2076,6 +2097,250 @@ RTE_FLOW_ERROR_TYPE_ACTION error should be returned.
 
 This action modifies the payload of matched flows.
 
+Action: ``RAW_ENCAP``
+^^^^^^^^^^^^^^^^^^^^^
+
+Adds outer header whose template is provided in its data buffer,
+as defined in the ``rte_flow_action_raw_encap`` definition.
+
+This action modifies the payload of matched flows. The data supplied must
+be a valid header, either holding layer 2 data in case of adding layer 2 after
+decap layer 3 tunnel (for example MPLSoGRE) or complete tunnel definition
+starting from layer 2 and moving to the tunnel item itself. When applied to
+the original packet the resulting packet must be a valid packet.
+
+.. _table_rte_flow_action_raw_encap:
+
+.. table:: RAW_ENCAP
+
+   +----------------+----------------------------------------+
+   | Field          | Value                                  |
+   +================+========================================+
+   | ``data``       | Encapsulation data                     |
+   +----------------+----------------------------------------+
+   | ``preserve``   | Bit-mask of data to preserve on output |
+   +----------------+----------------------------------------+
+   | ``size``       | Size of data and preserve              |
+   +----------------+----------------------------------------+
+
+Action: ``RAW_DECAP``
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Remove outer header whose template is provided in its data buffer,
+as defined in the ``rte_flow_action_raw_decap``
+
+This action modifies the payload of matched flows. The data supplied must
+be a valid header, either holding layer 2 data in case of removing layer 2
+before eincapsulation of layer 3 tunnel (for example MPLSoGRE) or complete
+tunnel definition starting from layer 2 and moving to the tunnel item itself.
+When applied to the original packet the resulting packet must be a
+valid packet.
+
+.. _table_rte_flow_action_raw_decap:
+
+.. table:: RAW_DECAP
+
+   +----------------+----------------------------------------+
+   | Field          | Value                                  |
+   +================+========================================+
+   | ``data``       | Decapsulation data                     |
+   +----------------+----------------------------------------+
+   | ``size``       | Size of data                           |
+   +----------------+----------------------------------------+
+
+Action: ``SET_IPV4_SRC``
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Set a new IPv4 source address in the outermost IPv4 header.
+
+It must be used with a valid RTE_FLOW_ITEM_TYPE_IPV4 flow pattern item.
+Otherwise, RTE_FLOW_ERROR_TYPE_ACTION error will be returned.
+
+.. _table_rte_flow_action_set_ipv4_src:
+
+.. table:: SET_IPV4_SRC
+
+   +-----------------------------------------+
+   | Field         | Value                   |
+   +===============+=========================+
+   | ``ipv4_addr`` | new IPv4 source address |
+   +---------------+-------------------------+
+
+Action: ``SET_IPV4_DST``
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Set a new IPv4 destination address in the outermost IPv4 header.
+
+It must be used with a valid RTE_FLOW_ITEM_TYPE_IPV4 flow pattern item.
+Otherwise, RTE_FLOW_ERROR_TYPE_ACTION error will be returned.
+
+.. _table_rte_flow_action_set_ipv4_dst:
+
+.. table:: SET_IPV4_DST
+
+   +---------------+------------------------------+
+   | Field         | Value                        |
+   +===============+==============================+
+   | ``ipv4_addr`` | new IPv4 destination address |
+   +---------------+------------------------------+
+
+Action: ``SET_IPV6_SRC``
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Set a new IPv6 source address in the outermost IPv6 header.
+
+It must be used with a valid RTE_FLOW_ITEM_TYPE_IPV6 flow pattern item.
+Otherwise, RTE_FLOW_ERROR_TYPE_ACTION error will be returned.
+
+.. _table_rte_flow_action_set_ipv6_src:
+
+.. table:: SET_IPV6_SRC
+
+   +---------------+-------------------------+
+   | Field         | Value                   |
+   +===============+=========================+
+   | ``ipv6_addr`` | new IPv6 source address |
+   +---------------+-------------------------+
+
+Action: ``SET_IPV6_DST``
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Set a new IPv6 destination address in the outermost IPv6 header.
+
+It must be used with a valid RTE_FLOW_ITEM_TYPE_IPV6 flow pattern item.
+Otherwise, RTE_FLOW_ERROR_TYPE_ACTION error will be returned.
+
+.. _table_rte_flow_action_set_ipv6_dst:
+
+.. table:: SET_IPV6_DST
+
+   +---------------+------------------------------+
+   | Field         | Value                        |
+   +===============+==============================+
+   | ``ipv6_addr`` | new IPv6 destination address |
+   +---------------+------------------------------+
+
+Action: ``SET_TP_SRC``
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Set a new source port number in the outermost TCP/UDP header.
+
+It must be used with a valid RTE_FLOW_ITEM_TYPE_TCP or RTE_FLOW_ITEM_TYPE_UDP
+flow pattern item. Otherwise, RTE_FLOW_ERROR_TYPE_ACTION error will be returned.
+
+.. _table_rte_flow_action_set_tp_src:
+
+.. table:: SET_TP_SRC
+
+   +----------+-------------------------+
+   | Field    | Value                   |
+   +==========+=========================+
+   | ``port`` | new TCP/UDP source port |
+   +---------------+--------------------+
+
+Action: ``SET_TP_DST``
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Set a new destination port number in the outermost TCP/UDP header.
+
+It must be used with a valid RTE_FLOW_ITEM_TYPE_TCP or RTE_FLOW_ITEM_TYPE_UDP
+flow pattern item. Otherwise, RTE_FLOW_ERROR_TYPE_ACTION error will be returned.
+
+.. _table_rte_flow_action_set_tp_dst:
+
+.. table:: SET_TP_DST
+
+   +----------+------------------------------+
+   | Field    | Value                        |
+   +==========+==============================+
+   | ``port`` | new TCP/UDP destination port |
+   +---------------+-------------------------+
+
+Action: ``MAC_SWAP``
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Swap the source and destination MAC addresses in the outermost Ethernet
+header.
+
+It must be used with a valid RTE_FLOW_ITEM_TYPE_ETH flow pattern item.
+Otherwise, RTE_FLOW_ERROR_TYPE_ACTION error will be returned.
+
+.. _table_rte_flow_action_mac_swap:
+
+.. table:: MAC_SWAP
+
+   +---------------+
+   | Field         |
+   +===============+
+   | no properties |
+   +---------------+
+
+Action: ``DEC_TTL``
+^^^^^^^^^^^^^^^^^^^
+
+Decrease TTL value.
+
+If there is no valid RTE_FLOW_ITEM_TYPE_IPV4 or RTE_FLOW_ITEM_TYPE_IPV6
+in pattern, Some PMDs will reject rule because behaviour will be undefined.
+
+.. _table_rte_flow_action_dec_ttl:
+
+.. table:: DEC_TTL
+
+   +---------------+
+   | Field         |
+   +===============+
+   | no properties |
+   +---------------+
+
+Action: ``SET_TTL``
+^^^^^^^^^^^^^^^^^^^
+
+Assigns a new TTL value.
+
+If there is no valid RTE_FLOW_ITEM_TYPE_IPV4 or RTE_FLOW_ITEM_TYPE_IPV6
+in pattern, Some PMDs will reject rule because behaviour will be undefined.
+
+.. _table_rte_flow_action_set_ttl:
+
+.. table:: SET_TTL
+
+   +---------------+--------------------+
+   | Field         | Value              |
+   +===============+====================+
+   | ``ttl_value`` | new TTL value      |
+   +---------------+--------------------+
+
+Action: ``SET_MAC_SRC``
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Set source MAC address
+
+.. _table_rte_flow_action_set_mac_src:
+
+.. table:: SET_MAC_SRC
+
+   +--------------+---------------+
+   | Field        | Value         |
+   +==============+===============+
+   | ``mac_addr`` | MAC address   |
+   +--------------+---------------+
+
+Action: ``SET_MAC_DST``
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Set source MAC address
+
+.. _table_rte_flow_action_set_mac_dst:
+
+.. table:: SET_MAC_DST
+
+   +--------------+---------------+
+   | Field        | Value         |
+   +==============+===============+
+   | ``mac_addr`` | MAC address   |
+   +--------------+---------------+
+
 Negative types
 ~~~~~~~~~~~~~~
 
@@ -2418,6 +2683,26 @@ Error initializer
 This function initializes ``error`` (if non-NULL) with the provided
 parameters and sets ``rte_errno`` to ``code``. A negative error ``code`` is
 then returned.
+
+Object conversion
+~~~~~~~~~~~~~~~~~
+
+.. code-block:: c
+
+   int
+   rte_flow_conv(enum rte_flow_conv_op op,
+                 void *dst,
+                 size_t size,
+                 const void *src,
+                 struct rte_flow_error *error);
+
+Convert ``src`` to ``dst`` according to operation ``op``. Possible
+operations include:
+
+- Attributes, pattern item or action duplication.
+- Duplication of an entire pattern or list of actions.
+- Duplication of a complete flow rule description.
+- Pattern item or action name retrieval.
 
 Caveats
 -------

@@ -7,15 +7,6 @@
 
 #include "aesni_mb_ops.h"
 
-/*
- * IMB_VERSION_NUM macro was introduced in version Multi-buffer 0.50,
- * so if macro is not defined, it means that the version is 0.49.
- */
-#if !defined(IMB_VERSION_NUM)
-#define IMB_VERSION(a, b, c) (((a) << 16) + ((b) << 8) + (c))
-#define IMB_VERSION_NUM IMB_VERSION(0, 49, 0)
-#endif
-
 #define CRYPTODEV_NAME_AESNI_MB_PMD	crypto_aesni_mb
 /**< AES-NI Multi buffer PMD device name */
 
@@ -31,8 +22,8 @@ int aesni_mb_logtype_driver;
 #define HMAC_IPAD_VALUE			(0x36)
 #define HMAC_OPAD_VALUE			(0x5C)
 
-/* Maximum length for digest (SHA-512 truncated needs 32 bytes) */
-#define DIGEST_LENGTH_MAX 32
+/* Maximum length for digest */
+#define DIGEST_LENGTH_MAX 64
 static const unsigned auth_blocksize[] = {
 		[MD5]		= 64,
 		[SHA1]		= 64,
@@ -64,7 +55,7 @@ static const unsigned auth_truncated_digest_byte_lengths[] = {
 		[SHA_384]	= 24,
 		[SHA_512]	= 32,
 		[AES_XCBC]	= 12,
-		[AES_CMAC]	= 16,
+		[AES_CMAC]	= 12,
 		[AES_CCM]	= 8,
 		[NULL_HASH]	= 0
 };
@@ -91,11 +82,13 @@ static const unsigned auth_digest_byte_lengths[] = {
 		[SHA_512]	= 64,
 		[AES_XCBC]	= 16,
 		[AES_CMAC]	= 16,
+		[AES_GMAC]	= 12,
 		[NULL_HASH]		= 0
 };
 
 /**
- * Get the output digest size in bytes for a specified authentication algorithm
+ * Get the full digest size in bytes for a specified authentication algorithm
+ * (if available in the Multi-buffer library)
  *
  * @Note: this function will not return a valid value for a non-valid
  * authentication algorithm
@@ -180,6 +173,8 @@ struct aesni_mb_session {
 				const void *ks_ptr[3];
 				uint64_t key[3][16];
 			} exp_3des_keys;
+
+			struct gcm_key_data gcm_key;
 		};
 		/**< Expanded AES keys - Allocating space to
 		 * contain the maximum expanded key size which
@@ -226,8 +221,10 @@ struct aesni_mb_session {
 			} cmac;
 			/**< Expanded XCBC authentication keys */
 		};
-	/** digest size */
-	uint16_t digest_len;
+	/** Generated digest size by the Multi-buffer library */
+	uint16_t gen_digest_len;
+	/** Requested digest size from Cryptodev */
+	uint16_t req_digest_len;
 
 	} auth;
 	struct {

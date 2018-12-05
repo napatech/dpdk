@@ -79,6 +79,7 @@ rte_eal_hugepage_init(void)
 		}
 		msl->base_va = addr;
 		msl->page_sz = page_sz;
+		msl->len = internal_config.memory;
 		msl->socket_id = 0;
 
 		/* populate memsegs. each memseg is 1 page long */
@@ -235,11 +236,14 @@ struct attach_walk_args {
 	int seg_idx;
 };
 static int
-attach_segment(const struct rte_memseg_list *msl __rte_unused,
-		const struct rte_memseg *ms, void *arg)
+attach_segment(const struct rte_memseg_list *msl, const struct rte_memseg *ms,
+		void *arg)
 {
 	struct attach_walk_args *wa = arg;
 	void *addr;
+
+	if (msl->external)
+		return 0;
 
 	addr = mmap(ms->addr, ms->len, PROT_READ | PROT_WRITE,
 			MAP_SHARED | MAP_FIXED, wa->fd_hugepage,
@@ -370,6 +374,7 @@ alloc_va_space(struct rte_memseg_list *msl)
 		return -1;
 	}
 	msl->base_va = addr;
+	msl->len = mem_sz;
 
 	return 0;
 }

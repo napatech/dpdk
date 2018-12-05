@@ -16,6 +16,7 @@ extern "C" {
 #endif
 
 #include <stdio.h>
+#include <string.h>
 
 /**
  * Takes string "string" parameter and splits it at character "delim"
@@ -60,11 +61,9 @@ rte_strlcpy(char *dst, const char *src, size_t size)
 
 /* pull in a strlcpy function */
 #ifdef RTE_EXEC_ENV_BSDAPP
-#include <string.h>
 #ifndef __BSD_VISIBLE /* non-standard functions are hidden */
 #define strlcpy(dst, src, size) rte_strlcpy(dst, src, size)
 #endif
-
 
 #else /* non-BSD platforms */
 #ifdef RTE_USE_LIBBSD
@@ -75,6 +74,29 @@ rte_strlcpy(char *dst, const char *src, size_t size)
 
 #endif /* RTE_USE_LIBBSD */
 #endif /* BSDAPP */
+
+/**
+ * Copy string src to buffer dst of size dsize.
+ * At most dsize-1 chars will be copied.
+ * Always NUL-terminates, unless (dsize == 0).
+ * Returns number of bytes copied (terminating NUL-byte excluded) on success ;
+ * negative errno on error.
+ *
+ * @param dst
+ *   The destination string.
+ *
+ * @param src
+ *   The input string to be copied.
+ *
+ * @param dsize
+ *   Length in bytes of the destination buffer.
+ *
+ * @return
+ *   The number of bytes copied on success
+ *   -E2BIG if the destination buffer is too small.
+ */
+ssize_t
+rte_strscpy(char *dst, const char *src, size_t dsize);
 
 #ifdef __cplusplus
 }

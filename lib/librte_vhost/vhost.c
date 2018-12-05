@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #ifdef RTE_LIBRTE_VHOST_NUMA
+#include <numa.h>
 #include <numaif.h>
 #endif
 
@@ -343,6 +344,7 @@ vhost_new_device(void)
 	dev->flags = VIRTIO_DEV_BUILTIN_VIRTIO_NET;
 	dev->slave_req_fd = -1;
 	dev->vdpa_dev_id = -1;
+	dev->postcopy_ufd = -1;
 	rte_spinlock_init(&dev->slave_req_lock);
 
 	return i;
@@ -480,7 +482,7 @@ rte_vhost_get_numa_node(int vid)
 	int numa_node;
 	int ret;
 
-	if (dev == NULL)
+	if (dev == NULL || numa_available() != 0)
 		return -1;
 
 	ret = get_mempolicy(&numa_node, NULL, 0, dev,
@@ -646,12 +648,18 @@ rte_vhost_avail_entries(int vid, uint16_t queue_id)
 }
 
 static inline void
-vhost_enable_notify_split(struct vhost_virtqueue *vq, int enable)
+vhost_enable_notify_split(struct virtio_net *dev,
+		struct vhost_virtqueue *vq, int enable)
 {
-	if (enable)
-		vq->used->flags &= ~VRING_USED_F_NO_NOTIFY;
-	else
-		vq->used->flags |= VRING_USED_F_NO_NOTIFY;
+	if (!(dev->features & (1ULL << VIRTIO_RING_F_EVENT_IDX))) {
+		if (enable)
+			vq->used->flags &= ~VRING_USED_F_NO_NOTIFY;
+		else
+			vq->used->flags |= VRING_USED_F_NO_NOTIFY;
+	} else {
+		if (enable)
+			vhost_avail_event(vq) = vq->last_avail_idx;
+	}
 }
 
 static inline void
@@ -660,8 +668,10 @@ vhost_enable_notify_packed(struct virtio_net *dev,
 {
 	uint16_t flags;
 
-	if (!enable)
+	if (!enable) {
 		vq->device_event->flags = VRING_EVENT_F_DISABLE;
+		return;
+	}
 
 	flags = VRING_EVENT_F_ENABLE;
 	if (dev->features & (1ULL << VIRTIO_RING_F_EVENT_IDX)) {
@@ -689,7 +699,7 @@ rte_vhost_enable_guest_notification(int vid, uint16_t queue_id, int enable)
 	if (vq_is_packed(dev))
 		vhost_enable_notify_packed(dev, vq, enable);
 	else
-		vhost_enable_notify_split(vq, enable);
+		vhost_enable_notify_split(dev, vq, enable);
 
 	return 0;
 }

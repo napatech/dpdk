@@ -75,31 +75,72 @@ do_recursive_call(void)
 
 int last_test_result;
 
+#define MAX_EXTRA_ARGS 32
+
 int
 main(int argc, char **argv)
 {
 #ifdef RTE_LIBRTE_CMDLINE
 	struct cmdline *cl;
 #endif
+	char *extra_args;
 	int ret;
 
-	ret = rte_eal_init(argc, argv);
-	if (ret < 0)
-		return -1;
+	extra_args = getenv("DPDK_TEST_PARAMS");
+	if (extra_args != NULL && strlen(extra_args) > 0) {
+		char **all_argv;
+		char *eargv[MAX_EXTRA_ARGS];
+		int all_argc;
+		int eargc;
+		int i;
+
+		RTE_LOG(INFO, APP, "Using additional DPDK_TEST_PARAMS: '%s'\n",
+				extra_args);
+		eargc = rte_strsplit(extra_args, strlen(extra_args),
+				eargv, MAX_EXTRA_ARGS, ' ');
+
+		/* merge argc/argv and the environment args */
+		all_argc = argc + eargc;
+		all_argv = malloc(sizeof(*all_argv) * (all_argc + 1));
+		if (all_argv == NULL) {
+			ret = -1;
+			goto out;
+		}
+
+		for (i = 0; i < argc; i++)
+			all_argv[i] = argv[i];
+		for (i = 0; i < eargc; i++)
+			all_argv[argc + i] = eargv[i];
+		all_argv[all_argc] = NULL;
+
+		/* call eal_init with combined args */
+		ret = rte_eal_init(all_argc, all_argv);
+		free(all_argv);
+	} else
+		ret = rte_eal_init(argc, argv);
+	if (ret < 0) {
+		ret = -1;
+		goto out;
+	}
 
 #ifdef RTE_LIBRTE_TIMER
 	rte_timer_subsystem_init();
 #endif
 
-	if (commands_init() < 0)
-		return -1;
+	if (commands_init() < 0) {
+		ret = -1;
+		goto out;
+	}
 
 	argv += ret;
 
 	prgname = argv[0];
 
-	if ((recursive_call = getenv(RECURSIVE_ENV_VAR)) != NULL)
-		return do_recursive_call();
+	recursive_call = getenv(RECURSIVE_ENV_VAR);
+	if (recursive_call != NULL) {
+		ret = do_recursive_call();
+		goto out;
+	}
 
 #ifdef RTE_LIBEAL_USE_HPET
 	if (rte_eal_hpet_init(1) < 0)
@@ -111,7 +152,8 @@ main(int argc, char **argv)
 #ifdef RTE_LIBRTE_CMDLINE
 	cl = cmdline_stdin_new(main_ctx, "RTE>>");
 	if (cl == NULL) {
-		return -1;
+		ret = -1;
+		goto out;
 	}
 
 	char *dpdk_test = getenv("DPDK_TEST");
@@ -120,18 +162,23 @@ main(int argc, char **argv)
 		snprintf(buf, sizeof(buf), "%s\n", dpdk_test);
 		if (cmdline_in(cl, buf, strlen(buf)) < 0) {
 			printf("error on cmdline input\n");
-			return -1;
+			ret = -1;
+			goto out;
 		}
 
 		cmdline_stdin_exit(cl);
-		return last_test_result;
+		ret = last_test_result;
+		goto out;
 	}
 	/* if no DPDK_TEST env variable, go interactive */
 	cmdline_interact(cl);
 	cmdline_stdin_exit(cl);
 #endif
+	ret = 0;
 
-	return 0;
+out:
+	rte_eal_cleanup();
+	return ret;
 }
 
 

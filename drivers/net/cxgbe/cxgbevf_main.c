@@ -11,6 +11,7 @@
 #include "t4_regs.h"
 #include "t4_msg.h"
 #include "cxgbe.h"
+#include "mps_tcam.h"
 
 /*
  * Figure out how many Ports and Queue Sets we can support.  This depends on
@@ -271,6 +272,11 @@ allocate_mac:
 	print_adapter_info(adapter);
 	print_port_info(adapter);
 
+	adapter->mpstcam = t4_init_mpstcam(adapter);
+	if (!adapter->mpstcam)
+		dev_warn(adapter,
+			 "VF could not allocate mps tcam table. Continuing\n");
+
 	err = init_rss(adapter);
 	if (err)
 		goto out_free;
@@ -282,14 +288,7 @@ out_free:
 		if (pi->viid != 0)
 			t4_free_vi(adapter, adapter->mbox, adapter->pf,
 				   0, pi->viid);
-		/* Skip first port since it'll be de-allocated by DPDK */
-		if (i == 0)
-			continue;
-		if (pi->eth_dev) {
-			if (pi->eth_dev->data->dev_private)
-				rte_free(pi->eth_dev->data->dev_private);
-			rte_eth_dev_release_port(pi->eth_dev);
-		}
+		rte_eth_dev_release_port(pi->eth_dev);
 	}
 	return -err;
 }

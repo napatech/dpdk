@@ -133,6 +133,10 @@ kni_net_open(struct net_device *dev)
 	struct kni_dev *kni = netdev_priv(dev);
 
 	netif_start_queue(dev);
+	if (dflt_carrier == 1)
+		netif_carrier_on(dev);
+	else
+		netif_carrier_off(dev);
 
 	memset(&req, 0, sizeof(req));
 	req.req_id = RTE_KNI_REQ_CFG_NETWORK_IF;
@@ -152,6 +156,7 @@ kni_net_release(struct net_device *dev)
 	struct kni_dev *kni = netdev_priv(dev);
 
 	netif_stop_queue(dev); /* can't transmit any more */
+	netif_carrier_off(dev);
 
 	memset(&req, 0, sizeof(req));
 	req.req_id = RTE_KNI_REQ_CFG_NETWORK_IF;
@@ -597,7 +602,7 @@ kni_net_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 	pr_debug("kni_net_ioctl group:%d cmd:%d\n",
 		((struct kni_dev *)netdev_priv(dev))->group_id, cmd);
 
-	return 0;
+	return -EOPNOTSUPP;
 }
 
 static void

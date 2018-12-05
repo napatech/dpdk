@@ -96,13 +96,12 @@ sfc_efx_rx_qrefill(struct sfc_efx_rxq *rxq)
 		     ++i, id = (id + 1) & rxq->ptr_mask) {
 			m = objs[i];
 
+			MBUF_RAW_ALLOC_CHECK(m);
+
 			rxd = &rxq->sw_desc[id];
 			rxd->mbuf = m;
 
-			SFC_ASSERT(rte_mbuf_refcnt_read(m) == 1);
 			m->data_off = RTE_PKTMBUF_HEADROOM;
-			SFC_ASSERT(m->next == NULL);
-			SFC_ASSERT(m->nb_segs == 1);
 			m->port = port_id;
 
 			addr[i] = rte_pktmbuf_iova(m);
@@ -296,7 +295,7 @@ sfc_efx_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 
 discard:
 		discard_next = ((desc_flags & EFX_PKT_CONT) != 0);
-		rte_mempool_put(rxq->refill_mb_pool, m);
+		rte_mbuf_raw_free(m);
 		rxd->mbuf = NULL;
 	}
 
@@ -498,7 +497,7 @@ sfc_efx_rx_qpurge(struct sfc_dp_rxq *dp_rxq)
 
 	for (i = rxq->completed; i != rxq->added; ++i) {
 		rxd = &rxq->sw_desc[i & rxq->ptr_mask];
-		rte_mempool_put(rxq->refill_mb_pool, rxd->mbuf);
+		rte_mbuf_raw_free(rxd->mbuf);
 		rxd->mbuf = NULL;
 		/* Packed stream relies on 0 in inactive SW desc.
 		 * Rx queue stop is not performance critical, so
@@ -673,6 +672,7 @@ sfc_rx_qstart(struct sfc_adapter *sa, unsigned int sw_index)
 
 	rxq_info = &sa->rxq_info[sw_index];
 	rxq = rxq_info->rxq;
+	SFC_ASSERT(rxq != NULL);
 	SFC_ASSERT(rxq->state == SFC_RXQ_INITIALIZED);
 
 	evq = rxq->evq;
@@ -763,7 +763,7 @@ sfc_rx_qstop(struct sfc_adapter *sa, unsigned int sw_index)
 	rxq_info = &sa->rxq_info[sw_index];
 	rxq = rxq_info->rxq;
 
-	if (rxq->state == SFC_RXQ_INITIALIZED)
+	if (rxq == NULL || rxq->state == SFC_RXQ_INITIALIZED)
 		return;
 	SFC_ASSERT(rxq->state & SFC_RXQ_STARTED);
 
@@ -792,7 +792,6 @@ sfc_rx_get_dev_offload_caps(struct sfc_adapter *sa)
 	uint64_t caps = 0;
 
 	caps |= DEV_RX_OFFLOAD_JUMBO_FRAME;
-	caps |= DEV_RX_OFFLOAD_CRC_STRIP;
 
 	if (sa->dp_rx->features & SFC_DP_RX_FEAT_CHECKSUM) {
 		caps |= DEV_RX_OFFLOAD_IPV4_CKSUM;
@@ -1103,6 +1102,7 @@ sfc_rx_qfini(struct sfc_adapter *sa, unsigned int sw_index)
 	struct sfc_rxq *rxq;
 
 	SFC_ASSERT(sw_index < sa->rxq_count);
+	sa->eth_dev->data->rx_queues[sw_index] = NULL;
 
 	rxq_info = &sa->rxq_info[sw_index];
 
@@ -1126,7 +1126,7 @@ sfc_rx_qfini(struct sfc_adapter *sa, unsigned int sw_index)
 /*
  * Mapping between RTE RSS hash functions and their EFX counterparts.
  */
-struct sfc_rss_hf_rte_to_efx sfc_rss_hf_map[] = {
+static const struct sfc_rss_hf_rte_to_efx sfc_rss_hf_map[] = {
 	{ ETH_RSS_NONFRAG_IPV4_TCP,
 	  EFX_RX_HASH(IPV4_TCP, 4TUPLE) },
 	{ ETH_RSS_NONFRAG_IPV4_UDP,
@@ -1200,7 +1200,7 @@ sfc_rx_hash_init(struct sfc_adapter *sa)
 		return EINVAL;
 
 	rc = efx_rx_scale_hash_flags_get(sa->nic, alg, flags_supp,
-					 &nb_flags_supp);
+					 RTE_DIM(flags_supp), &nb_flags_supp);
 	if (rc != 0)
 		return rc;
 
@@ -1363,7 +1363,8 @@ sfc_rx_start(struct sfc_adapter *sa)
 		goto fail_rss_config;
 
 	for (sw_index = 0; sw_index < sa->rxq_count; ++sw_index) {
-		if ((!sa->rxq_info[sw_index].deferred_start ||
+		if (sa->rxq_info[sw_index].rxq != NULL &&
+		    (!sa->rxq_info[sw_index].deferred_start ||
 		     sa->rxq_info[sw_index].deferred_started)) {
 			rc = sfc_rx_qstart(sa, sw_index);
 			if (rc != 0)
@@ -1439,14 +1440,6 @@ sfc_rx_check_mode(struct sfc_adapter *sa, struct rte_eth_rxmode *rxmode)
 		rc = EINVAL;
 	}
 
-	/* KEEP_CRC offload flag is not supported by PMD
-	 * can remove the below block when DEV_RX_OFFLOAD_CRC_STRIP removed
-	 */
-	if (rte_eth_dev_must_keep_crc(rxmode->offloads)) {
-		sfc_warn(sa, "FCS stripping cannot be disabled - always on");
-		rxmode->offloads |= DEV_RX_OFFLOAD_CRC_STRIP;
-	}
-
 	/*
 	 * Requested offloads are validated against supported by ethdev,
 	 * so unsupported offloads cannot be added as the result of
@@ -1511,7 +1504,7 @@ sfc_rx_configure(struct sfc_adapter *sa)
 		goto fail_check_mode;
 
 	if (nb_rx_queues == sa->rxq_count)
-		goto done;
+		goto configure_rss;
 
 	if (sa->rxq_info == NULL) {
 		rc = ENOMEM;
@@ -1548,6 +1541,7 @@ sfc_rx_configure(struct sfc_adapter *sa)
 		sa->rxq_count++;
 	}
 
+configure_rss:
 	rss->channels = (dev_conf->rxmode.mq_mode == ETH_MQ_RX_RSS) ?
 			 MIN(sa->rxq_count, EFX_MAXRSS) : 0;
 
@@ -1564,7 +1558,6 @@ sfc_rx_configure(struct sfc_adapter *sa)
 			goto fail_rx_process_adv_conf_rss;
 	}
 
-done:
 	return 0;
 
 fail_rx_process_adv_conf_rss:

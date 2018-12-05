@@ -59,19 +59,6 @@
  */
 #include "t4_pci_id_tbl.h"
 
-#define CXGBE_TX_OFFLOADS (DEV_TX_OFFLOAD_VLAN_INSERT |\
-			   DEV_TX_OFFLOAD_IPV4_CKSUM |\
-			   DEV_TX_OFFLOAD_UDP_CKSUM |\
-			   DEV_TX_OFFLOAD_TCP_CKSUM |\
-			   DEV_TX_OFFLOAD_TCP_TSO)
-
-#define CXGBE_RX_OFFLOADS (DEV_RX_OFFLOAD_VLAN_STRIP |\
-			   DEV_RX_OFFLOAD_CRC_STRIP |\
-			   DEV_RX_OFFLOAD_IPV4_CKSUM |\
-			   DEV_RX_OFFLOAD_JUMBO_FRAME |\
-			   DEV_RX_OFFLOAD_UDP_CKSUM |\
-			   DEV_RX_OFFLOAD_TCP_CKSUM)
-
 uint16_t cxgbe_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 			 uint16_t nb_pkts)
 {
@@ -341,6 +328,7 @@ void cxgbe_dev_close(struct rte_eth_dev *eth_dev)
 int cxgbe_dev_start(struct rte_eth_dev *eth_dev)
 {
 	struct port_info *pi = (struct port_info *)(eth_dev->data->dev_private);
+	struct rte_eth_rxmode *rx_conf = &eth_dev->data->dev_conf.rxmode;
 	struct adapter *adapter = pi->adapter;
 	int err = 0, i;
 
@@ -360,6 +348,11 @@ int cxgbe_dev_start(struct rte_eth_dev *eth_dev)
 		if (err < 0)
 			goto out;
 	}
+
+	if (rx_conf->offloads & DEV_RX_OFFLOAD_SCATTER)
+		eth_dev->data->scattered_rx = 1;
+	else
+		eth_dev->data->scattered_rx = 0;
 
 	cxgbe_enable_rx_queues(pi);
 
@@ -407,26 +400,16 @@ void cxgbe_dev_stop(struct rte_eth_dev *eth_dev)
 	 *  have been disabled
 	 */
 	t4_sge_eth_clear_queues(pi);
+	eth_dev->data->scattered_rx = 0;
 }
 
 int cxgbe_dev_configure(struct rte_eth_dev *eth_dev)
 {
 	struct port_info *pi = (struct port_info *)(eth_dev->data->dev_private);
 	struct adapter *adapter = pi->adapter;
-	uint64_t configured_offloads;
 	int err;
 
 	CXGBE_FUNC_TRACE();
-	configured_offloads = eth_dev->data->dev_conf.rxmode.offloads;
-
-	/* KEEP_CRC offload flag is not supported by PMD
-	 * can remove the below block when DEV_RX_OFFLOAD_CRC_STRIP removed
-	 */
-	if (rte_eth_dev_must_keep_crc(configured_offloads)) {
-		dev_info(adapter, "can't disable hw crc strip\n");
-		eth_dev->data->dev_conf.rxmode.offloads |=
-			DEV_RX_OFFLOAD_CRC_STRIP;
-	}
 
 	if (!(adapter->flags & FW_QUEUE_BOUND)) {
 		err = setup_sge_fwevtq(adapter);
@@ -1075,11 +1058,9 @@ static int cxgbe_get_regs(struct rte_eth_dev *eth_dev,
 int cxgbe_mac_addr_set(struct rte_eth_dev *dev, struct ether_addr *addr)
 {
 	struct port_info *pi = (struct port_info *)(dev->data->dev_private);
-	struct adapter *adapter = pi->adapter;
 	int ret;
 
-	ret = t4_change_mac(adapter, adapter->mbox, pi->viid,
-			    pi->xact_addr_filt, (u8 *)addr, true, true);
+	ret = cxgbe_mpstcam_modify(pi, (int)pi->xact_addr_filt, (u8 *)addr);
 	if (ret < 0) {
 		dev_err(adapter, "failed to set mac addr; err = %d\n",
 			ret);

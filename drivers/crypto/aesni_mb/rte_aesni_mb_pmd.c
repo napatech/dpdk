@@ -14,6 +14,9 @@
 
 #include "rte_aesni_mb_pmd_private.h"
 
+#define AES_CCM_DIGEST_MIN_LEN 4
+#define AES_CCM_DIGEST_MAX_LEN 16
+#define HMAC_MAX_BLOCK_SIZE 128
 static uint8_t cryptodev_driver_id;
 
 typedef void (*hash_one_block_t)(const void *data, void *digest);
@@ -83,7 +86,8 @@ aesni_mb_get_chain_order(const struct rte_crypto_sym_xform *xform)
 	}
 
 	if (xform->type == RTE_CRYPTO_SYM_XFORM_AEAD) {
-		if (xform->aead.algo == RTE_CRYPTO_AEAD_AES_CCM) {
+		if (xform->aead.algo == RTE_CRYPTO_AEAD_AES_CCM ||
+				xform->aead.algo == RTE_CRYPTO_AEAD_AES_GCM) {
 			if (xform->aead.op == RTE_CRYPTO_AEAD_OP_ENCRYPT)
 				return AESNI_MB_OP_AEAD_CIPHER_HASH;
 			else
@@ -101,6 +105,8 @@ aesni_mb_set_session_auth_parameters(const struct aesni_mb_op_fns *mb_ops,
 		const struct rte_crypto_sym_xform *xform)
 {
 	hash_one_block_t hash_oneblock_fn;
+	unsigned int key_larger_block_size = 0;
+	uint8_t hashed_key[HMAC_MAX_BLOCK_SIZE] = { 0 };
 
 	if (xform == NULL) {
 		sess->auth.algo = NULL_HASH;
@@ -112,12 +118,23 @@ aesni_mb_set_session_auth_parameters(const struct aesni_mb_op_fns *mb_ops,
 		return -1;
 	}
 
+	/* Set the request digest size */
+	sess->auth.req_digest_len = xform->auth.digest_length;
+
 	/* Select auth generate/verify */
 	sess->auth.operation = xform->auth.op;
 
 	/* Set Authentication Parameters */
 	if (xform->auth.algo == RTE_CRYPTO_AUTH_AES_XCBC_MAC) {
 		sess->auth.algo = AES_XCBC;
+
+		uint16_t xcbc_mac_digest_len =
+			get_truncated_digest_byte_length(AES_XCBC);
+		if (sess->auth.req_digest_len != xcbc_mac_digest_len) {
+			AESNI_MB_LOG(ERR, "Invalid digest size\n");
+			return -EINVAL;
+		}
+		sess->auth.gen_digest_len = sess->auth.req_digest_len;
 		(*mb_ops->aux.keyexp.aes_xcbc)(xform->auth.key.data,
 				sess->auth.xcbc.k1_expanded,
 				sess->auth.xcbc.k2, sess->auth.xcbc.k3);
@@ -126,6 +143,32 @@ aesni_mb_set_session_auth_parameters(const struct aesni_mb_op_fns *mb_ops,
 
 	if (xform->auth.algo == RTE_CRYPTO_AUTH_AES_CMAC) {
 		sess->auth.algo = AES_CMAC;
+
+		uint16_t cmac_digest_len = get_digest_byte_length(AES_CMAC);
+
+		if (sess->auth.req_digest_len > cmac_digest_len) {
+			AESNI_MB_LOG(ERR, "Invalid digest size\n");
+			return -EINVAL;
+		}
+		/*
+		 * Multi-buffer lib supports digest sizes from 4 to 16 bytes
+		 * in version 0.50 and sizes of 12 and 16 bytes,
+		 * in version 0.49.
+		 * If size requested is different, generate the full digest
+		 * (16 bytes) in a temporary location and then memcpy
+		 * the requested number of bytes.
+		 */
+#if IMB_VERSION_NUM >= IMB_VERSION(0, 50, 0)
+		if (sess->auth.req_digest_len < 4)
+#else
+		uint16_t cmac_trunc_digest_len =
+				get_truncated_digest_byte_length(AES_CMAC);
+		if (sess->auth.req_digest_len != cmac_digest_len &&
+				sess->auth.req_digest_len != cmac_trunc_digest_len)
+#endif
+			sess->auth.gen_digest_len = cmac_digest_len;
+		else
+			sess->auth.gen_digest_len = sess->auth.req_digest_len;
 		(*mb_ops->aux.keyexp.aes_cmac_expkey)(xform->auth.key.data,
 				sess->auth.cmac.expkey);
 
@@ -133,7 +176,6 @@ aesni_mb_set_session_auth_parameters(const struct aesni_mb_op_fns *mb_ops,
 				sess->auth.cmac.skey1, sess->auth.cmac.skey2);
 		return 0;
 	}
-
 
 	switch (xform->auth.algo) {
 	case RTE_CRYPTO_AUTH_MD5_HMAC:
@@ -143,34 +185,107 @@ aesni_mb_set_session_auth_parameters(const struct aesni_mb_op_fns *mb_ops,
 	case RTE_CRYPTO_AUTH_SHA1_HMAC:
 		sess->auth.algo = SHA1;
 		hash_oneblock_fn = mb_ops->aux.one_block.sha1;
+#if IMB_VERSION_NUM >= IMB_VERSION(0, 50, 0)
+		if (xform->auth.key.length > get_auth_algo_blocksize(SHA1)) {
+			mb_ops->aux.multi_block.sha1(
+				xform->auth.key.data,
+				xform->auth.key.length,
+				hashed_key);
+			key_larger_block_size = 1;
+		}
+#endif
 		break;
 	case RTE_CRYPTO_AUTH_SHA224_HMAC:
 		sess->auth.algo = SHA_224;
 		hash_oneblock_fn = mb_ops->aux.one_block.sha224;
+#if IMB_VERSION_NUM >= IMB_VERSION(0, 50, 0)
+		if (xform->auth.key.length > get_auth_algo_blocksize(SHA_224)) {
+			mb_ops->aux.multi_block.sha224(
+				xform->auth.key.data,
+				xform->auth.key.length,
+				hashed_key);
+			key_larger_block_size = 1;
+		}
+#endif
 		break;
 	case RTE_CRYPTO_AUTH_SHA256_HMAC:
 		sess->auth.algo = SHA_256;
 		hash_oneblock_fn = mb_ops->aux.one_block.sha256;
+#if IMB_VERSION_NUM >= IMB_VERSION(0, 50, 0)
+		if (xform->auth.key.length > get_auth_algo_blocksize(SHA_256)) {
+			mb_ops->aux.multi_block.sha256(
+				xform->auth.key.data,
+				xform->auth.key.length,
+				hashed_key);
+			key_larger_block_size = 1;
+		}
+#endif
 		break;
 	case RTE_CRYPTO_AUTH_SHA384_HMAC:
 		sess->auth.algo = SHA_384;
 		hash_oneblock_fn = mb_ops->aux.one_block.sha384;
+#if IMB_VERSION_NUM >= IMB_VERSION(0, 50, 0)
+		if (xform->auth.key.length > get_auth_algo_blocksize(SHA_384)) {
+			mb_ops->aux.multi_block.sha384(
+				xform->auth.key.data,
+				xform->auth.key.length,
+				hashed_key);
+			key_larger_block_size = 1;
+		}
+#endif
 		break;
 	case RTE_CRYPTO_AUTH_SHA512_HMAC:
 		sess->auth.algo = SHA_512;
 		hash_oneblock_fn = mb_ops->aux.one_block.sha512;
+#if IMB_VERSION_NUM >= IMB_VERSION(0, 50, 0)
+		if (xform->auth.key.length > get_auth_algo_blocksize(SHA_512)) {
+			mb_ops->aux.multi_block.sha512(
+				xform->auth.key.data,
+				xform->auth.key.length,
+				hashed_key);
+			key_larger_block_size = 1;
+		}
+#endif
 		break;
 	default:
 		AESNI_MB_LOG(ERR, "Unsupported authentication algorithm selection");
 		return -ENOTSUP;
 	}
+	uint16_t trunc_digest_size =
+			get_truncated_digest_byte_length(sess->auth.algo);
+	uint16_t full_digest_size =
+			get_digest_byte_length(sess->auth.algo);
+
+#if IMB_VERSION_NUM >= IMB_VERSION(0, 50, 0)
+	if (sess->auth.req_digest_len > full_digest_size ||
+			sess->auth.req_digest_len == 0) {
+#else
+	if (sess->auth.req_digest_len != trunc_digest_size) {
+#endif
+		AESNI_MB_LOG(ERR, "Invalid digest size\n");
+		return -EINVAL;
+	}
+
+	if (sess->auth.req_digest_len != trunc_digest_size &&
+			sess->auth.req_digest_len != full_digest_size)
+		sess->auth.gen_digest_len = full_digest_size;
+	else
+		sess->auth.gen_digest_len = sess->auth.req_digest_len;
 
 	/* Calculate Authentication precomputes */
-	calculate_auth_precomputes(hash_oneblock_fn,
+	if (key_larger_block_size) {
+		calculate_auth_precomputes(hash_oneblock_fn,
+			sess->auth.pads.inner, sess->auth.pads.outer,
+			hashed_key,
+			xform->auth.key.length,
+			get_auth_algo_blocksize(sess->auth.algo));
+	} else {
+		calculate_auth_precomputes(hash_oneblock_fn,
 			sess->auth.pads.inner, sess->auth.pads.outer,
 			xform->auth.key.data,
 			xform->auth.key.length,
 			get_auth_algo_blocksize(sess->auth.algo));
+	}
 
 	return 0;
 }
@@ -330,7 +445,10 @@ aesni_mb_set_session_aead_parameters(const struct aesni_mb_op_fns *mb_ops,
 		struct aesni_mb_session *sess,
 		const struct rte_crypto_sym_xform *xform)
 {
-	aes_keyexp_t aes_keyexp_fn;
+	union {
+		aes_keyexp_t aes_keyexp_fn;
+		aes_gcm_keyexp_t aes_gcm_keyexp_fn;
+	} keyexp;
 
 	switch (xform->aead.op) {
 	case RTE_CRYPTO_AEAD_OP_ENCRYPT:
@@ -350,7 +468,53 @@ aesni_mb_set_session_aead_parameters(const struct aesni_mb_op_fns *mb_ops,
 	case RTE_CRYPTO_AEAD_AES_CCM:
 		sess->cipher.mode = CCM;
 		sess->auth.algo = AES_CCM;
+
+		/* Check key length and choose key expansion function for AES */
+		switch (xform->aead.key.length) {
+		case AES_128_BYTES:
+			sess->cipher.key_length_in_bytes = AES_128_BYTES;
+			keyexp.aes_keyexp_fn = mb_ops->aux.keyexp.aes128;
+			break;
+		default:
+			AESNI_MB_LOG(ERR, "Invalid cipher key length");
+			return -EINVAL;
+		}
+
+		/* Expanded cipher keys */
+		(*keyexp.aes_keyexp_fn)(xform->aead.key.data,
+				sess->cipher.expanded_aes_keys.encode,
+				sess->cipher.expanded_aes_keys.decode);
 		break;
+
+	case RTE_CRYPTO_AEAD_AES_GCM:
+		sess->cipher.mode = GCM;
+		sess->auth.algo = AES_GMAC;
+
+		switch (xform->aead.key.length) {
+		case AES_128_BYTES:
+			sess->cipher.key_length_in_bytes = AES_128_BYTES;
+			keyexp.aes_gcm_keyexp_fn =
+					mb_ops->aux.keyexp.aes_gcm_128;
+			break;
+		case AES_192_BYTES:
+			sess->cipher.key_length_in_bytes = AES_192_BYTES;
+			keyexp.aes_gcm_keyexp_fn =
+					mb_ops->aux.keyexp.aes_gcm_192;
+			break;
+		case AES_256_BYTES:
+			sess->cipher.key_length_in_bytes = AES_256_BYTES;
+			keyexp.aes_gcm_keyexp_fn =
+					mb_ops->aux.keyexp.aes_gcm_256;
+			break;
+		default:
+			AESNI_MB_LOG(ERR, "Invalid cipher key length");
+			return -EINVAL;
+		}
+
+		(keyexp.aes_gcm_keyexp_fn)(xform->aead.key.data,
+				&sess->cipher.gcm_key);
+		break;
+
 	default:
 		AESNI_MB_LOG(ERR, "Unsupported aead mode parameter");
 		return -ENOTSUP;
@@ -360,22 +524,15 @@ aesni_mb_set_session_aead_parameters(const struct aesni_mb_op_fns *mb_ops,
 	sess->iv.offset = xform->aead.iv.offset;
 	sess->iv.length = xform->aead.iv.length;
 
-	/* Check key length and choose key expansion function for AES */
-
-	switch (xform->aead.key.length) {
-	case AES_128_BYTES:
-		sess->cipher.key_length_in_bytes = AES_128_BYTES;
-		aes_keyexp_fn = mb_ops->aux.keyexp.aes128;
-		break;
-	default:
-		AESNI_MB_LOG(ERR, "Invalid cipher key length");
+	sess->auth.req_digest_len = xform->aead.digest_length;
+	/* CCM digests must be between 4 and 16 and an even number */
+	if (sess->auth.req_digest_len < AES_CCM_DIGEST_MIN_LEN ||
+			sess->auth.req_digest_len > AES_CCM_DIGEST_MAX_LEN ||
+			(sess->auth.req_digest_len & 1) == 1) {
+		AESNI_MB_LOG(ERR, "Invalid digest size\n");
 		return -EINVAL;
 	}
-
-	/* Expanded cipher keys */
-	(*aes_keyexp_fn)(xform->aead.key.data,
-			sess->cipher.expanded_aes_keys.encode,
-			sess->cipher.expanded_aes_keys.decode);
+	sess->auth.gen_digest_len = sess->auth.req_digest_len;
 
 	return 0;
 }
@@ -397,19 +554,16 @@ aesni_mb_set_session_parameters(const struct aesni_mb_op_fns *mb_ops,
 		sess->chain_order = HASH_CIPHER;
 		auth_xform = xform;
 		cipher_xform = xform->next;
-		sess->auth.digest_len = xform->auth.digest_length;
 		break;
 	case AESNI_MB_OP_CIPHER_HASH:
 		sess->chain_order = CIPHER_HASH;
 		auth_xform = xform->next;
 		cipher_xform = xform;
-		sess->auth.digest_len = xform->auth.digest_length;
 		break;
 	case AESNI_MB_OP_HASH_ONLY:
 		sess->chain_order = HASH_CIPHER;
 		auth_xform = xform;
 		cipher_xform = NULL;
-		sess->auth.digest_len = xform->auth.digest_length;
 		break;
 	case AESNI_MB_OP_CIPHER_ONLY:
 		/*
@@ -428,13 +582,11 @@ aesni_mb_set_session_parameters(const struct aesni_mb_op_fns *mb_ops,
 	case AESNI_MB_OP_AEAD_CIPHER_HASH:
 		sess->chain_order = CIPHER_HASH;
 		sess->aead.aad_len = xform->aead.aad_length;
-		sess->auth.digest_len = xform->aead.digest_length;
 		aead_xform = xform;
 		break;
 	case AESNI_MB_OP_AEAD_HASH_CIPHER:
 		sess->chain_order = HASH_CIPHER;
 		sess->aead.aad_len = xform->aead.aad_length;
-		sess->auth.digest_len = xform->aead.digest_length;
 		aead_xform = xform;
 		break;
 	case AESNI_MB_OP_NOT_SUPPORTED:
@@ -573,38 +725,62 @@ set_mb_job_params(JOB_AES_HMAC *job, struct aesni_mb_qp *qp,
 
 	job->aes_key_len_in_bytes = session->cipher.key_length_in_bytes;
 
-	if (job->cipher_mode == DES3) {
-		job->aes_enc_key_expanded =
-			session->cipher.exp_3des_keys.ks_ptr;
-		job->aes_dec_key_expanded =
-			session->cipher.exp_3des_keys.ks_ptr;
-	} else {
-		job->aes_enc_key_expanded =
-			session->cipher.expanded_aes_keys.encode;
-		job->aes_dec_key_expanded =
-			session->cipher.expanded_aes_keys.decode;
-	}
-
-
-
-
 	/* Set authentication parameters */
 	job->hash_alg = session->auth.algo;
-	if (job->hash_alg == AES_XCBC) {
+
+	switch (job->hash_alg) {
+	case AES_XCBC:
 		job->u.XCBC._k1_expanded = session->auth.xcbc.k1_expanded;
 		job->u.XCBC._k2 = session->auth.xcbc.k2;
 		job->u.XCBC._k3 = session->auth.xcbc.k3;
-	} else if (job->hash_alg == AES_CCM) {
+
+		job->aes_enc_key_expanded =
+				session->cipher.expanded_aes_keys.encode;
+		job->aes_dec_key_expanded =
+				session->cipher.expanded_aes_keys.decode;
+		break;
+
+	case AES_CCM:
 		job->u.CCM.aad = op->sym->aead.aad.data + 18;
 		job->u.CCM.aad_len_in_bytes = session->aead.aad_len;
-	} else if (job->hash_alg == AES_CMAC) {
+		job->aes_enc_key_expanded =
+				session->cipher.expanded_aes_keys.encode;
+		job->aes_dec_key_expanded =
+				session->cipher.expanded_aes_keys.decode;
+		break;
+
+	case AES_CMAC:
 		job->u.CMAC._key_expanded = session->auth.cmac.expkey;
 		job->u.CMAC._skey1 = session->auth.cmac.skey1;
 		job->u.CMAC._skey2 = session->auth.cmac.skey2;
+		job->aes_enc_key_expanded =
+				session->cipher.expanded_aes_keys.encode;
+		job->aes_dec_key_expanded =
+				session->cipher.expanded_aes_keys.decode;
+		break;
 
-	} else {
+	case AES_GMAC:
+		job->u.GCM.aad = op->sym->aead.aad.data;
+		job->u.GCM.aad_len_in_bytes = session->aead.aad_len;
+		job->aes_enc_key_expanded = &session->cipher.gcm_key;
+		job->aes_dec_key_expanded = &session->cipher.gcm_key;
+		break;
+
+	default:
 		job->u.HMAC._hashed_auth_key_xor_ipad = session->auth.pads.inner;
 		job->u.HMAC._hashed_auth_key_xor_opad = session->auth.pads.outer;
+
+		if (job->cipher_mode == DES3) {
+			job->aes_enc_key_expanded =
+				session->cipher.exp_3des_keys.ks_ptr;
+			job->aes_dec_key_expanded =
+				session->cipher.exp_3des_keys.ks_ptr;
+		} else {
+			job->aes_enc_key_expanded =
+				session->cipher.expanded_aes_keys.encode;
+			job->aes_dec_key_expanded =
+				session->cipher.expanded_aes_keys.decode;
+		}
 	}
 
 	/* Mutable crypto operation parameters */
@@ -625,7 +801,7 @@ set_mb_job_params(JOB_AES_HMAC *job, struct aesni_mb_qp *qp,
 				rte_pktmbuf_data_len(op->sym->m_src));
 	} else {
 		m_dst = m_src;
-		if (job->hash_alg == AES_CCM)
+		if (job->hash_alg == AES_CCM || job->hash_alg == AES_GMAC)
 			m_offset = op->sym->aead.data.offset;
 		else
 			m_offset = op->sym->cipher.data.offset;
@@ -637,32 +813,33 @@ set_mb_job_params(JOB_AES_HMAC *job, struct aesni_mb_qp *qp,
 		job->auth_tag_output = qp->temp_digests[*digest_idx];
 		*digest_idx = (*digest_idx + 1) % MAX_JOBS;
 	} else {
-		if (job->hash_alg == AES_CCM)
+		if (job->hash_alg == AES_CCM || job->hash_alg == AES_GMAC)
 			job->auth_tag_output = op->sym->aead.digest.data;
 		else
 			job->auth_tag_output = op->sym->auth.digest.data;
-	}
 
+		if (session->auth.req_digest_len != session->auth.gen_digest_len) {
+			job->auth_tag_output = qp->temp_digests[*digest_idx];
+			*digest_idx = (*digest_idx + 1) % MAX_JOBS;
+		}
+	}
 	/*
 	 * Multi-buffer library current only support returning a truncated
 	 * digest length as specified in the relevant IPsec RFCs
 	 */
-	if (job->hash_alg != AES_CCM && job->hash_alg != AES_CMAC)
-		job->auth_tag_output_len_in_bytes =
-				get_truncated_digest_byte_length(job->hash_alg);
-	else
-		job->auth_tag_output_len_in_bytes = session->auth.digest_len;
 
+	/* Set digest length */
+	job->auth_tag_output_len_in_bytes = session->auth.gen_digest_len;
 
 	/* Set IV parameters */
-
 	job->iv_len_in_bytes = session->iv.length;
 
 	/* Data  Parameter */
 	job->src = rte_pktmbuf_mtod(m_src, uint8_t *);
 	job->dst = rte_pktmbuf_mtod_offset(m_dst, uint8_t *, m_offset);
 
-	if (job->hash_alg == AES_CCM) {
+	switch (job->hash_alg) {
+	case AES_CCM:
 		job->cipher_start_src_offset_in_bytes =
 				op->sym->aead.data.offset;
 		job->msg_len_to_cipher_in_bytes = op->sym->aead.data.length;
@@ -671,7 +848,19 @@ set_mb_job_params(JOB_AES_HMAC *job, struct aesni_mb_qp *qp,
 
 		job->iv = rte_crypto_op_ctod_offset(op, uint8_t *,
 			session->iv.offset + 1);
-	} else {
+		break;
+
+	case AES_GMAC:
+		job->cipher_start_src_offset_in_bytes =
+				op->sym->aead.data.offset;
+		job->hash_start_src_offset_in_bytes = op->sym->aead.data.offset;
+		job->msg_len_to_cipher_in_bytes = op->sym->aead.data.length;
+		job->msg_len_to_hash_in_bytes = job->msg_len_to_cipher_in_bytes;
+		job->iv = rte_crypto_op_ctod_offset(op, uint8_t *,
+				session->iv.offset);
+		break;
+
+	default:
 		job->cipher_start_src_offset_in_bytes =
 				op->sym->cipher.data.offset;
 		job->msg_len_to_cipher_in_bytes = op->sym->cipher.data.length;
@@ -690,18 +879,35 @@ set_mb_job_params(JOB_AES_HMAC *job, struct aesni_mb_qp *qp,
 }
 
 static inline void
-verify_digest(struct aesni_mb_qp *qp __rte_unused, JOB_AES_HMAC *job,
-		struct rte_crypto_op *op) {
+verify_digest(JOB_AES_HMAC *job, struct rte_crypto_op *op,
+		struct aesni_mb_session *sess)
+{
 	/* Verify digest if required */
-	if (job->hash_alg == AES_CCM) {
+	if (job->hash_alg == AES_CCM || job->hash_alg == AES_GMAC) {
 		if (memcmp(job->auth_tag_output, op->sym->aead.digest.data,
-				job->auth_tag_output_len_in_bytes) != 0)
+				sess->auth.req_digest_len) != 0)
 			op->status = RTE_CRYPTO_OP_STATUS_AUTH_FAILED;
 	} else {
 		if (memcmp(job->auth_tag_output, op->sym->auth.digest.data,
-				job->auth_tag_output_len_in_bytes) != 0)
+				sess->auth.req_digest_len) != 0)
 			op->status = RTE_CRYPTO_OP_STATUS_AUTH_FAILED;
 	}
+}
+
+static inline void
+generate_digest(JOB_AES_HMAC *job, struct rte_crypto_op *op,
+		struct aesni_mb_session *sess)
+{
+	/* No extra copy neeed */
+	if (likely(sess->auth.req_digest_len == sess->auth.gen_digest_len))
+		return;
+
+	/*
+	 * This can only happen for HMAC, so only digest
+	 * for authentication algos is required
+	 */
+	memcpy(op->sym->auth.digest.data, job->auth_tag_output,
+			sess->auth.req_digest_len);
 }
 
 /**
@@ -730,7 +936,9 @@ post_process_mb_job(struct aesni_mb_qp *qp, JOB_AES_HMAC *job)
 			if (job->hash_alg != NULL_HASH) {
 				if (sess->auth.operation ==
 						RTE_CRYPTO_AUTH_OP_VERIFY)
-					verify_digest(qp, job, op);
+					verify_digest(job, op, sess);
+				else
+					generate_digest(job, op, sess);
 			}
 			break;
 		default:
@@ -833,21 +1041,29 @@ aesni_mb_pmd_dequeue_burst(void *queue_pair, struct rte_crypto_op **ops,
 
 	uint8_t digest_idx = qp->digest_idx;
 	do {
-		/* Get next operation to process from ingress queue */
-		retval = rte_ring_dequeue(qp->ingress_queue, (void **)&op);
-		if (retval < 0)
-			break;
-
 		/* Get next free mb job struct from mb manager */
 		job = (*qp->op_fns->job.get_next)(qp->mb_mgr);
 		if (unlikely(job == NULL)) {
 			/* if no free mb job structs we need to flush mb_mgr */
 			processed_jobs += flush_mb_mgr(qp,
 					&ops[processed_jobs],
-					(nb_ops - processed_jobs) - 1);
+					nb_ops - processed_jobs);
+
+			if (nb_ops == processed_jobs)
+				break;
 
 			job = (*qp->op_fns->job.get_next)(qp->mb_mgr);
 		}
+
+		/*
+		 * Get next operation to process from ingress queue.
+		 * There is no need to return the job to the MB_MGR
+		 * if there are no more operations to process, since the MB_MGR
+		 * can use that pointer again in next get_next calls.
+		 */
+		retval = rte_ring_dequeue(qp->ingress_queue, (void **)&op);
+		if (retval < 0)
+			break;
 
 		retval = set_mb_job_params(job, qp, op, &digest_idx);
 		if (unlikely(retval != 0)) {

@@ -177,10 +177,16 @@ enum _ecore_status_t ecore_mcp_free(struct ecore_hwfn *p_hwfn)
 	return ECORE_SUCCESS;
 }
 
+/* Maximum of 1 sec to wait for the SHMEM ready indication */
+#define ECORE_MCP_SHMEM_RDY_MAX_RETRIES	20
+#define ECORE_MCP_SHMEM_RDY_ITER_MS	50
+
 static enum _ecore_status_t ecore_load_mcp_offsets(struct ecore_hwfn *p_hwfn,
 						   struct ecore_ptt *p_ptt)
 {
 	struct ecore_mcp_info *p_info = p_hwfn->mcp_info;
+	u8 cnt = ECORE_MCP_SHMEM_RDY_MAX_RETRIES;
+	u8 msec = ECORE_MCP_SHMEM_RDY_ITER_MS;
 	u32 drv_mb_offsize, mfw_mb_offsize;
 	u32 mcp_pf_id = MCP_PF_ID(p_hwfn);
 
@@ -198,6 +204,35 @@ static enum _ecore_status_t ecore_load_mcp_offsets(struct ecore_hwfn *p_hwfn,
 
 	p_info->public_base |= GRCBASE_MCP;
 
+	/* Get the MFW MB address and number of supported messages */
+	mfw_mb_offsize = ecore_rd(p_hwfn, p_ptt,
+				  SECTION_OFFSIZE_ADDR(p_info->public_base,
+				  PUBLIC_MFW_MB));
+	p_info->mfw_mb_addr = SECTION_ADDR(mfw_mb_offsize, mcp_pf_id);
+	p_info->mfw_mb_length = (u16)ecore_rd(p_hwfn, p_ptt,
+					      p_info->mfw_mb_addr);
+
+	/* @@@TBD:
+	 * The driver can notify that there was an MCP reset, and read the SHMEM
+	 * values before the MFW has completed initializing them.
+	 * As a temporary solution, the "sup_msgs" field is used as a data ready
+	 * indication.
+	 * This should be replaced with an actual indication when it is provided
+	 * by the MFW.
+	 */
+	while (!p_info->mfw_mb_length && cnt--) {
+		OSAL_MSLEEP(msec);
+		p_info->mfw_mb_length = (u16)ecore_rd(p_hwfn, p_ptt,
+						      p_info->mfw_mb_addr);
+	}
+
+	if (!cnt) {
+		DP_NOTICE(p_hwfn, false,
+			  "Failed to get the SHMEM ready notification after %d msec\n",
+			  ECORE_MCP_SHMEM_RDY_MAX_RETRIES * msec);
+		return ECORE_TIMEOUT;
+	}
+
 	/* Calculate the driver and MFW mailbox address */
 	drv_mb_offsize = ecore_rd(p_hwfn, p_ptt,
 				  SECTION_OFFSIZE_ADDR(p_info->public_base,
@@ -207,14 +242,6 @@ static enum _ecore_status_t ecore_load_mcp_offsets(struct ecore_hwfn *p_hwfn,
 		   "drv_mb_offsiz = 0x%x, drv_mb_addr = 0x%x"
 		   " mcp_pf_id = 0x%x\n",
 		   drv_mb_offsize, p_info->drv_mb_addr, mcp_pf_id);
-
-	/* Set the MFW MB address */
-	mfw_mb_offsize = ecore_rd(p_hwfn, p_ptt,
-				  SECTION_OFFSIZE_ADDR(p_info->public_base,
-						       PUBLIC_MFW_MB));
-	p_info->mfw_mb_addr = SECTION_ADDR(mfw_mb_offsize, mcp_pf_id);
-	p_info->mfw_mb_length = (u16)ecore_rd(p_hwfn, p_ptt,
-					       p_info->mfw_mb_addr);
 
 	/* Get the current driver mailbox sequence before sending
 	 * the first command
@@ -1656,6 +1683,49 @@ ecore_mcp_update_bw(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt)
 		      &param);
 }
 
+static void ecore_mcp_update_stag(struct ecore_hwfn *p_hwfn,
+				  struct ecore_ptt *p_ptt)
+{
+	struct public_func shmem_info;
+	u32 resp = 0, param = 0;
+
+	ecore_mcp_get_shmem_func(p_hwfn, p_ptt, &shmem_info,
+				 MCP_PF_ID(p_hwfn));
+
+	p_hwfn->mcp_info->func_info.ovlan = (u16)shmem_info.ovlan_stag &
+						 FUNC_MF_CFG_OV_STAG_MASK;
+	p_hwfn->hw_info.ovlan = p_hwfn->mcp_info->func_info.ovlan;
+	if (OSAL_TEST_BIT(ECORE_MF_OVLAN_CLSS, &p_hwfn->p_dev->mf_bits)) {
+		if (p_hwfn->hw_info.ovlan != ECORE_MCP_VLAN_UNSET) {
+			ecore_wr(p_hwfn, p_ptt, NIG_REG_LLH_FUNC_TAG_VALUE,
+				 p_hwfn->hw_info.ovlan);
+			ecore_wr(p_hwfn, p_ptt, NIG_REG_LLH_FUNC_TAG_EN, 1);
+
+			/* Configure DB to add external vlan to EDPM packets */
+			ecore_wr(p_hwfn, p_ptt, DORQ_REG_TAG1_OVRD_MODE, 1);
+			ecore_wr(p_hwfn, p_ptt, DORQ_REG_PF_EXT_VID_BB_K2,
+				 p_hwfn->hw_info.ovlan);
+		} else {
+			ecore_wr(p_hwfn, p_ptt, NIG_REG_LLH_FUNC_TAG_EN, 0);
+			ecore_wr(p_hwfn, p_ptt, NIG_REG_LLH_FUNC_TAG_VALUE, 0);
+
+			/* Configure DB to add external vlan to EDPM packets */
+			ecore_wr(p_hwfn, p_ptt, DORQ_REG_TAG1_OVRD_MODE, 0);
+			ecore_wr(p_hwfn, p_ptt, DORQ_REG_PF_EXT_VID_BB_K2, 0);
+		}
+
+		ecore_sp_pf_update_stag(p_hwfn);
+	}
+
+	DP_VERBOSE(p_hwfn, ECORE_MSG_SP, "ovlan  = %d hw_mode = 0x%x\n",
+		   p_hwfn->mcp_info->func_info.ovlan, p_hwfn->hw_info.hw_mode);
+	OSAL_HW_INFO_CHANGE(p_hwfn, ECORE_HW_INFO_CHANGE_OVLAN);
+
+	/* Acknowledge the MFW */
+	ecore_mcp_cmd(p_hwfn, p_ptt, DRV_MSG_CODE_S_TAG_UPDATE_ACK, 0,
+		      &resp, &param);
+}
+
 static void ecore_mcp_handle_fan_failure(struct ecore_hwfn *p_hwfn)
 {
 	/* A single notification should be sent to upper driver in CMT mode */
@@ -1946,7 +2016,7 @@ ecore_mcp_read_ufp_config(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt)
 		DP_NOTICE(p_hwfn, false, "Unknown Host priority control %d\n",
 			  val);
 
-	DP_VERBOSE(p_hwfn, ECORE_MSG_DCB,
+	DP_VERBOSE(p_hwfn, ECORE_MSG_SP,
 		   "UFP shmem config: mode = %d tc = %d pri_type = %d\n",
 		   p_hwfn->ufp_info.mode, p_hwfn->ufp_info.tc,
 		   p_hwfn->ufp_info.pri_type);
@@ -2040,6 +2110,9 @@ enum _ecore_status_t ecore_mcp_handle_events(struct ecore_hwfn *p_hwfn,
 			break;
 		case MFW_DRV_MSG_BW_UPDATE:
 			ecore_mcp_update_bw(p_hwfn, p_ptt);
+			break;
+		case MFW_DRV_MSG_S_TAG_UPDATE:
+			ecore_mcp_update_stag(p_hwfn, p_ptt);
 			break;
 		case MFW_DRV_MSG_FAILURE_DETECTED:
 			ecore_mcp_handle_fan_failure(p_hwfn);
@@ -2155,8 +2228,10 @@ enum _ecore_status_t ecore_mcp_get_media_type(struct ecore_hwfn *p_hwfn,
 
 enum _ecore_status_t ecore_mcp_get_transceiver_data(struct ecore_hwfn *p_hwfn,
 						    struct ecore_ptt *p_ptt,
-						    u32 *p_tranceiver_type)
+						    u32 *p_transceiver_state,
+						    u32 *p_transceiver_type)
 {
+	u32 transceiver_info;
 	enum _ecore_status_t rc = ECORE_SUCCESS;
 
 	/* TODO - Add support for VFs */
@@ -2167,14 +2242,23 @@ enum _ecore_status_t ecore_mcp_get_transceiver_data(struct ecore_hwfn *p_hwfn,
 		DP_NOTICE(p_hwfn, false, "MFW is not initialized!\n");
 		return ECORE_BUSY;
 	}
-	if (!p_ptt) {
-		*p_tranceiver_type = ETH_TRANSCEIVER_TYPE_NONE;
-		rc = ECORE_INVAL;
+
+	*p_transceiver_type = ETH_TRANSCEIVER_TYPE_NONE;
+	*p_transceiver_state = ETH_TRANSCEIVER_STATE_UPDATING;
+
+	transceiver_info = ecore_rd(p_hwfn, p_ptt,
+				    p_hwfn->mcp_info->port_addr +
+				    offsetof(struct public_port,
+				    transceiver_data));
+
+	*p_transceiver_state = GET_MFW_FIELD(transceiver_info,
+					     ETH_TRANSCEIVER_STATE);
+
+	if (*p_transceiver_state == ETH_TRANSCEIVER_STATE_PRESENT) {
+		*p_transceiver_type = GET_MFW_FIELD(transceiver_info,
+					    ETH_TRANSCEIVER_TYPE);
 	} else {
-		*p_tranceiver_type = ecore_rd(p_hwfn, p_ptt,
-				p_hwfn->mcp_info->port_addr +
-				offsetof(struct public_port,
-					transceiver_data));
+		*p_transceiver_type = ETH_TRANSCEIVER_TYPE_UNKNOWN;
 	}
 
 	return rc;
@@ -2194,15 +2278,11 @@ enum _ecore_status_t ecore_mcp_trans_speed_mask(struct ecore_hwfn *p_hwfn,
 						struct ecore_ptt *p_ptt,
 						u32 *p_speed_mask)
 {
-	u32 transceiver_data, transceiver_type, transceiver_state;
+	u32 transceiver_type, transceiver_state;
 
-	ecore_mcp_get_transceiver_data(p_hwfn, p_ptt, &transceiver_data);
+	ecore_mcp_get_transceiver_data(p_hwfn, p_ptt, &transceiver_state,
+				       &transceiver_type);
 
-	transceiver_state = GET_MFW_FIELD(transceiver_data,
-			    ETH_TRANSCEIVER_STATE);
-
-	transceiver_type = GET_MFW_FIELD(transceiver_data,
-			   ETH_TRANSCEIVER_TYPE);
 
 	if (is_transceiver_ready(transceiver_state, transceiver_type) == 0)
 		return ECORE_INVAL;
@@ -2823,10 +2903,72 @@ ecore_mcp_ov_get_fc_npiv(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt,
 }
 
 enum _ecore_status_t
-ecore_mcp_ov_update_mtu(struct ecore_hwfn *p_hwfn,
-			struct ecore_ptt *p_ptt, u16 mtu)
+ecore_mcp_ov_update_mtu(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt,
+			u16 mtu)
 {
-	return 0;
+	u32 resp = 0, param = 0, drv_mb_param = 0;
+	enum _ecore_status_t rc;
+
+	SET_MFW_FIELD(drv_mb_param, DRV_MB_PARAM_OV_MTU_SIZE, (u32)mtu);
+	rc = ecore_mcp_cmd(p_hwfn, p_ptt, DRV_MSG_CODE_OV_UPDATE_MTU,
+			   drv_mb_param, &resp, &param);
+	if (rc != ECORE_SUCCESS)
+		DP_ERR(p_hwfn, "Failed to send mtu value, rc = %d\n", rc);
+
+	return rc;
+}
+
+enum _ecore_status_t
+ecore_mcp_ov_update_mac(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt,
+			u8 *mac)
+{
+	struct ecore_mcp_mb_params mb_params;
+	union drv_union_data union_data;
+	enum _ecore_status_t rc;
+
+	OSAL_MEM_ZERO(&mb_params, sizeof(mb_params));
+	mb_params.cmd = DRV_MSG_CODE_SET_VMAC;
+	SET_MFW_FIELD(mb_params.param, DRV_MSG_CODE_VMAC_TYPE,
+		      DRV_MSG_CODE_VMAC_TYPE_MAC);
+	mb_params.param |= MCP_PF_ID(p_hwfn);
+	OSAL_MEMCPY(&union_data.raw_data, mac, ETH_ALEN);
+	mb_params.p_data_src = &union_data;
+	rc = ecore_mcp_cmd_and_union(p_hwfn, p_ptt, &mb_params);
+	if (rc != ECORE_SUCCESS)
+		DP_ERR(p_hwfn, "Failed to send mac address, rc = %d\n", rc);
+
+	return rc;
+}
+
+enum _ecore_status_t
+ecore_mcp_ov_update_eswitch(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt,
+			    enum ecore_ov_eswitch eswitch)
+{
+	enum _ecore_status_t rc;
+	u32 resp = 0, param = 0;
+	u32 drv_mb_param;
+
+	switch (eswitch) {
+	case ECORE_OV_ESWITCH_NONE:
+		drv_mb_param = DRV_MB_PARAM_ESWITCH_MODE_NONE;
+		break;
+	case ECORE_OV_ESWITCH_VEB:
+		drv_mb_param = DRV_MB_PARAM_ESWITCH_MODE_VEB;
+		break;
+	case ECORE_OV_ESWITCH_VEPA:
+		drv_mb_param = DRV_MB_PARAM_ESWITCH_MODE_VEPA;
+		break;
+	default:
+		DP_ERR(p_hwfn, "Invalid eswitch mode %d\n", eswitch);
+		return ECORE_INVAL;
+	}
+
+	rc = ecore_mcp_cmd(p_hwfn, p_ptt, DRV_MSG_CODE_OV_UPDATE_ESWITCH_MODE,
+			   drv_mb_param, &resp, &param);
+	if (rc != ECORE_SUCCESS)
+		DP_ERR(p_hwfn, "Failed to send eswitch mode, rc = %d\n", rc);
+
+	return rc;
 }
 
 enum _ecore_status_t ecore_mcp_set_led(struct ecore_hwfn *p_hwfn,
@@ -2938,11 +3080,11 @@ enum _ecore_status_t ecore_mcp_nvm_read(struct ecore_dev *p_dev, u32 addr,
 }
 
 enum _ecore_status_t ecore_mcp_phy_read(struct ecore_dev *p_dev, u32 cmd,
-					u32 addr, u8 *p_buf, u32 len)
+					u32 addr, u8 *p_buf, u32 *p_len)
 {
 	struct ecore_hwfn *p_hwfn = ECORE_LEADING_HWFN(p_dev);
 	struct ecore_ptt *p_ptt;
-	u32 resp, param;
+	u32 resp = 0, param;
 	enum _ecore_status_t rc;
 
 	p_ptt = ecore_ptt_acquire(p_hwfn);
@@ -2953,7 +3095,7 @@ enum _ecore_status_t ecore_mcp_phy_read(struct ecore_dev *p_dev, u32 cmd,
 				  (cmd == ECORE_PHY_CORE_READ) ?
 				  DRV_MSG_CODE_PHY_CORE_READ :
 				  DRV_MSG_CODE_PHY_RAW_READ,
-				  addr, &resp, &param, &len, (u32 *)p_buf);
+				  addr, &resp, &param, p_len, (u32 *)p_buf);
 	if (rc != ECORE_SUCCESS)
 		DP_NOTICE(p_dev, false, "MCP command rc = %d\n", rc);
 
@@ -2982,7 +3124,7 @@ enum _ecore_status_t ecore_mcp_nvm_del_file(struct ecore_dev *p_dev, u32 addr)
 {
 	struct ecore_hwfn *p_hwfn = ECORE_LEADING_HWFN(p_dev);
 	struct ecore_ptt *p_ptt;
-	u32 resp, param;
+	u32 resp = 0, param;
 	enum _ecore_status_t rc;
 
 	p_ptt = ecore_ptt_acquire(p_hwfn);
@@ -3001,7 +3143,7 @@ enum _ecore_status_t ecore_mcp_nvm_put_file_begin(struct ecore_dev *p_dev,
 {
 	struct ecore_hwfn *p_hwfn = ECORE_LEADING_HWFN(p_dev);
 	struct ecore_ptt *p_ptt;
-	u32 resp, param;
+	u32 resp = 0, param;
 	enum _ecore_status_t rc;
 
 	p_ptt = ecore_ptt_acquire(p_hwfn);
@@ -3095,8 +3237,8 @@ enum _ecore_status_t ecore_mcp_phy_write(struct ecore_dev *p_dev, u32 cmd,
 					 u32 addr, u8 *p_buf, u32 len)
 {
 	struct ecore_hwfn *p_hwfn = ECORE_LEADING_HWFN(p_dev);
+	u32 resp = 0, param, nvm_cmd;
 	struct ecore_ptt *p_ptt;
-	u32 resp, param, nvm_cmd;
 	enum _ecore_status_t rc;
 
 	p_ptt = ecore_ptt_acquire(p_hwfn);
@@ -4002,13 +4144,83 @@ ecore_mcp_drv_attribute(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt,
 	return ECORE_SUCCESS;
 }
 
+enum _ecore_status_t ecore_mcp_get_engine_config(struct ecore_hwfn *p_hwfn,
+						 struct ecore_ptt *p_ptt)
+{
+	struct ecore_dev *p_dev = p_hwfn->p_dev;
+	struct ecore_mcp_mb_params mb_params;
+	u8 fir_valid, l2_valid;
+	enum _ecore_status_t rc;
+
+	OSAL_MEM_ZERO(&mb_params, sizeof(mb_params));
+	mb_params.cmd = DRV_MSG_CODE_GET_ENGINE_CONFIG;
+	rc = ecore_mcp_cmd_and_union(p_hwfn, p_ptt, &mb_params);
+	if (rc != ECORE_SUCCESS)
+		return rc;
+
+	if (mb_params.mcp_resp == FW_MSG_CODE_UNSUPPORTED) {
+		DP_INFO(p_hwfn,
+			"The get_engine_config command is unsupported by the MFW\n");
+		return ECORE_NOTIMPL;
+	}
+
+	fir_valid = GET_MFW_FIELD(mb_params.mcp_param,
+				  FW_MB_PARAM_ENG_CFG_FIR_AFFIN_VALID);
+	if (fir_valid)
+		p_dev->fir_affin =
+			GET_MFW_FIELD(mb_params.mcp_param,
+				      FW_MB_PARAM_ENG_CFG_FIR_AFFIN_VALUE);
+
+	l2_valid = GET_MFW_FIELD(mb_params.mcp_param,
+				 FW_MB_PARAM_ENG_CFG_L2_AFFIN_VALID);
+	if (l2_valid)
+		p_dev->l2_affin_hint =
+			GET_MFW_FIELD(mb_params.mcp_param,
+				      FW_MB_PARAM_ENG_CFG_L2_AFFIN_VALUE);
+
+	DP_INFO(p_hwfn,
+		"Engine affinity config: FIR={valid %hhd, value %hhd}, L2_hint={valid %hhd, value %hhd}\n",
+		fir_valid, p_dev->fir_affin, l2_valid, p_dev->l2_affin_hint);
+
+	return ECORE_SUCCESS;
+}
+
+enum _ecore_status_t ecore_mcp_get_ppfid_bitmap(struct ecore_hwfn *p_hwfn,
+						struct ecore_ptt *p_ptt)
+{
+	struct ecore_dev *p_dev = p_hwfn->p_dev;
+	struct ecore_mcp_mb_params mb_params;
+	enum _ecore_status_t rc;
+
+	OSAL_MEM_ZERO(&mb_params, sizeof(mb_params));
+	mb_params.cmd = DRV_MSG_CODE_GET_PPFID_BITMAP;
+	rc = ecore_mcp_cmd_and_union(p_hwfn, p_ptt, &mb_params);
+	if (rc != ECORE_SUCCESS)
+		return rc;
+
+	if (mb_params.mcp_resp == FW_MSG_CODE_UNSUPPORTED) {
+		DP_INFO(p_hwfn,
+			"The get_ppfid_bitmap command is unsupported by the MFW\n");
+		return ECORE_NOTIMPL;
+	}
+
+	p_dev->ppfid_bitmap = GET_MFW_FIELD(mb_params.mcp_param,
+					    FW_MB_PARAM_PPFID_BITMAP);
+
+	DP_VERBOSE(p_hwfn, ECORE_MSG_SP, "PPFID bitmap 0x%hhx\n",
+		   p_dev->ppfid_bitmap);
+
+	return ECORE_SUCCESS;
+}
+
 void ecore_mcp_wol_wr(struct ecore_hwfn *p_hwfn, struct ecore_ptt *p_ptt,
 		      u32 offset, u32 val)
 {
-	struct ecore_mcp_mb_params mb_params = {0};
 	enum _ecore_status_t	   rc = ECORE_SUCCESS;
 	u32			   dword = val;
+	struct ecore_mcp_mb_params mb_params;
 
+	OSAL_MEMSET(&mb_params, 0, sizeof(struct ecore_mcp_mb_params));
 	mb_params.cmd = DRV_MSG_CODE_WRITE_WOL_REG;
 	mb_params.param = offset;
 	mb_params.p_data_src = &dword;

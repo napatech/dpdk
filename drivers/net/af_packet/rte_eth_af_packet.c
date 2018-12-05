@@ -305,7 +305,6 @@ eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->max_rx_queues = (uint16_t)internals->nb_queues;
 	dev_info->max_tx_queues = (uint16_t)internals->nb_queues;
 	dev_info->min_rx_bufsize = 0;
-	dev_info->rx_offload_capa = DEV_RX_OFFLOAD_CRC_STRIP;
 }
 
 static int
@@ -927,8 +926,7 @@ rte_pmd_af_packet_probe(struct rte_vdev_device *dev)
 
 	PMD_LOG(INFO, "Initializing pmd_af_packet for %s", name);
 
-	if (rte_eal_process_type() == RTE_PROC_SECONDARY &&
-	    strlen(rte_vdev_device_args(dev)) == 0) {
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
 		eth_dev = rte_eth_dev_attach_secondary(name);
 		if (!eth_dev) {
 			PMD_LOG(ERR, "Failed to probe %s", name);
@@ -988,14 +986,18 @@ rte_pmd_af_packet_remove(struct rte_vdev_device *dev)
 	if (eth_dev == NULL)
 		return -1;
 
+	/* mac_addrs must not be freed alone because part of dev_private */
+	eth_dev->data->mac_addrs = NULL;
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return rte_eth_dev_release_port(eth_dev);
+
 	internals = eth_dev->data->dev_private;
 	for (q = 0; q < internals->nb_queues; q++) {
 		rte_free(internals->rx_queue[q].rd);
 		rte_free(internals->tx_queue[q].rd);
 	}
 	free(internals->if_name);
-
-	rte_free(eth_dev->data->dev_private);
 
 	rte_eth_dev_release_port(eth_dev);
 

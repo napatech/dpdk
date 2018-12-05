@@ -345,46 +345,13 @@ get_vfio_cfg_by_group_num(int iommu_group_num)
 	return NULL;
 }
 
-static struct vfio_config *
-get_vfio_cfg_by_group_fd(int vfio_group_fd)
-{
-	struct vfio_config *vfio_cfg;
-	int i, j;
-
-	for (i = 0; i < VFIO_MAX_CONTAINERS; i++) {
-		vfio_cfg = &vfio_cfgs[i];
-		for (j = 0; j < VFIO_MAX_GROUPS; j++)
-			if (vfio_cfg->vfio_groups[j].fd == vfio_group_fd)
-				return vfio_cfg;
-	}
-
-	return NULL;
-}
-
-static struct vfio_config *
-get_vfio_cfg_by_container_fd(int container_fd)
-{
-	int i;
-
-	for (i = 0; i < VFIO_MAX_CONTAINERS; i++) {
-		if (vfio_cfgs[i].vfio_container_fd == container_fd)
-			return &vfio_cfgs[i];
-	}
-
-	return NULL;
-}
-
-int
-rte_vfio_get_group_fd(int iommu_group_num)
+static int
+vfio_get_group_fd(struct vfio_config *vfio_cfg,
+		int iommu_group_num)
 {
 	int i;
 	int vfio_group_fd;
 	struct vfio_group *cur_grp;
-	struct vfio_config *vfio_cfg;
-
-	/* get the vfio_config it belongs to */
-	vfio_cfg = get_vfio_cfg_by_group_num(iommu_group_num);
-	vfio_cfg = vfio_cfg ? vfio_cfg : default_vfio_cfg;
 
 	/* check if we already have the group descriptor open */
 	for (i = 0; i < VFIO_MAX_GROUPS; i++)
@@ -421,6 +388,47 @@ rte_vfio_get_group_fd(int iommu_group_num)
 	vfio_cfg->vfio_active_groups++;
 
 	return vfio_group_fd;
+}
+
+static struct vfio_config *
+get_vfio_cfg_by_group_fd(int vfio_group_fd)
+{
+	struct vfio_config *vfio_cfg;
+	int i, j;
+
+	for (i = 0; i < VFIO_MAX_CONTAINERS; i++) {
+		vfio_cfg = &vfio_cfgs[i];
+		for (j = 0; j < VFIO_MAX_GROUPS; j++)
+			if (vfio_cfg->vfio_groups[j].fd == vfio_group_fd)
+				return vfio_cfg;
+	}
+
+	return NULL;
+}
+
+static struct vfio_config *
+get_vfio_cfg_by_container_fd(int container_fd)
+{
+	int i;
+
+	for (i = 0; i < VFIO_MAX_CONTAINERS; i++) {
+		if (vfio_cfgs[i].vfio_container_fd == container_fd)
+			return &vfio_cfgs[i];
+	}
+
+	return NULL;
+}
+
+int
+rte_vfio_get_group_fd(int iommu_group_num)
+{
+	struct vfio_config *vfio_cfg;
+
+	/* get the vfio_config it belongs to */
+	vfio_cfg = get_vfio_cfg_by_group_num(iommu_group_num);
+	vfio_cfg = vfio_cfg ? vfio_cfg : default_vfio_cfg;
+
+	return vfio_get_group_fd(vfio_cfg, iommu_group_num);
 }
 
 static int
@@ -509,7 +517,7 @@ vfio_mem_event_callback(enum rte_mem_event type, const void *addr, size_t len,
 	msl = rte_mem_virt2memseg_list(addr);
 
 	/* for IOVA as VA mode, no need to care for IOVA addresses */
-	if (rte_eal_iova_mode() == RTE_IOVA_VA) {
+	if (rte_eal_iova_mode() == RTE_IOVA_VA && msl->external == 0) {
 		uint64_t vfio_va = (uint64_t)(uintptr_t)addr;
 		if (type == RTE_MEM_EVENT_ALLOC)
 			vfio_dma_mem_map(default_vfio_cfg, vfio_va, vfio_va,
@@ -523,13 +531,19 @@ vfio_mem_event_callback(enum rte_mem_event type, const void *addr, size_t len,
 	/* memsegs are contiguous in memory */
 	ms = rte_mem_virt2memseg(addr, msl);
 	while (cur_len < len) {
+		/* some memory segments may have invalid IOVA */
+		if (ms->iova == RTE_BAD_IOVA) {
+			RTE_LOG(DEBUG, EAL, "Memory segment at %p has bad IOVA, skipping\n",
+					ms->addr);
+			goto next;
+		}
 		if (type == RTE_MEM_EVENT_ALLOC)
 			vfio_dma_mem_map(default_vfio_cfg, ms->addr_64,
 					ms->iova, ms->len, 1);
 		else
 			vfio_dma_mem_map(default_vfio_cfg, ms->addr_64,
 					ms->iova, ms->len, 0);
-
+next:
 		cur_len += ms->len;
 		++ms;
 	}
@@ -896,7 +910,15 @@ rte_vfio_enable(const char *modname)
 		return 0;
 	}
 
-	default_vfio_cfg->vfio_container_fd = rte_vfio_get_container_fd();
+	if (internal_config.process_type == RTE_PROC_PRIMARY) {
+		/* open a new container */
+		default_vfio_cfg->vfio_container_fd =
+				rte_vfio_get_container_fd();
+	} else {
+		/* get the default container from the primary process */
+		default_vfio_cfg->vfio_container_fd =
+				vfio_get_default_container_fd();
+	}
 
 	/* check if we have VFIO driver enabled */
 	if (default_vfio_cfg->vfio_container_fd != -1) {
@@ -914,6 +936,45 @@ rte_vfio_is_enabled(const char *modname)
 {
 	const int mod_available = rte_eal_check_module(modname) > 0;
 	return default_vfio_cfg->vfio_enabled && mod_available;
+}
+
+int
+vfio_get_default_container_fd(void)
+{
+	struct rte_mp_msg mp_req, *mp_rep;
+	struct rte_mp_reply mp_reply;
+	struct timespec ts = {.tv_sec = 5, .tv_nsec = 0};
+	struct vfio_mp_param *p = (struct vfio_mp_param *)mp_req.param;
+
+	if (default_vfio_cfg->vfio_enabled)
+		return default_vfio_cfg->vfio_container_fd;
+
+	if (internal_config.process_type == RTE_PROC_PRIMARY) {
+		/* if we were secondary process we would try requesting
+		 * container fd from the primary, but we're the primary
+		 * process so just exit here
+		 */
+		return -1;
+	}
+
+	p->req = SOCKET_REQ_DEFAULT_CONTAINER;
+	strcpy(mp_req.name, EAL_VFIO_MP);
+	mp_req.len_param = sizeof(*p);
+	mp_req.num_fds = 0;
+
+	if (rte_mp_request_sync(&mp_req, &mp_reply, &ts) == 0 &&
+	    mp_reply.nb_received == 1) {
+		mp_rep = &mp_reply.msgs[0];
+		p = (struct vfio_mp_param *)mp_rep->param;
+		if (p->result == SOCKET_OK && mp_rep->num_fds == 1) {
+			free(mp_reply.msgs);
+			return mp_rep->fds[0];
+		}
+		free(mp_reply.msgs);
+	}
+
+	RTE_LOG(ERR, EAL, "  cannot request default container fd\n");
+	return -1;
 }
 
 const struct vfio_iommu_type *
@@ -1028,8 +1089,9 @@ rte_vfio_get_container_fd(void)
 		mp_rep = &mp_reply.msgs[0];
 		p = (struct vfio_mp_param *)mp_rep->param;
 		if (p->result == SOCKET_OK && mp_rep->num_fds == 1) {
+			vfio_container_fd = mp_rep->fds[0];
 			free(mp_reply.msgs);
-			return mp_rep->fds[0];
+			return vfio_container_fd;
 		}
 		free(mp_reply.msgs);
 	}
@@ -1082,10 +1144,13 @@ rte_vfio_get_group_num(const char *sysfs_base,
 }
 
 static int
-type1_map(const struct rte_memseg_list *msl __rte_unused,
-		const struct rte_memseg *ms, void *arg)
+type1_map(const struct rte_memseg_list *msl, const struct rte_memseg *ms,
+		void *arg)
 {
 	int *vfio_container_fd = arg;
+
+	if (msl->external)
+		return 0;
 
 	return vfio_type1_dma_mem_map(*vfio_container_fd, ms->addr_64, ms->iova,
 			ms->len, 1);
@@ -1145,8 +1210,22 @@ vfio_spapr_dma_do_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 	struct vfio_iommu_type1_dma_map dma_map;
 	struct vfio_iommu_type1_dma_unmap dma_unmap;
 	int ret;
+	struct vfio_iommu_spapr_register_memory reg = {
+		.argsz = sizeof(reg),
+		.flags = 0
+	};
+	reg.vaddr = (uintptr_t) vaddr;
+	reg.size = len;
 
 	if (do_map != 0) {
+		ret = ioctl(vfio_container_fd,
+				VFIO_IOMMU_SPAPR_REGISTER_MEMORY, &reg);
+		if (ret) {
+			RTE_LOG(ERR, EAL, "  cannot register vaddr for IOMMU, "
+				"error %i (%s)\n", errno, strerror(errno));
+			return -1;
+		}
+
 		memset(&dma_map, 0, sizeof(dma_map));
 		dma_map.argsz = sizeof(struct vfio_iommu_type1_dma_map);
 		dma_map.vaddr = vaddr;
@@ -1163,13 +1242,6 @@ vfio_spapr_dma_do_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 		}
 
 	} else {
-		struct vfio_iommu_spapr_register_memory reg = {
-			.argsz = sizeof(reg),
-			.flags = 0
-		};
-		reg.vaddr = (uintptr_t) vaddr;
-		reg.size = len;
-
 		ret = ioctl(vfio_container_fd,
 				VFIO_IOMMU_SPAPR_UNREGISTER_MEMORY, &reg);
 		if (ret) {
@@ -1196,12 +1268,15 @@ vfio_spapr_dma_do_map(int vfio_container_fd, uint64_t vaddr, uint64_t iova,
 }
 
 static int
-vfio_spapr_map_walk(const struct rte_memseg_list *msl __rte_unused,
+vfio_spapr_map_walk(const struct rte_memseg_list *msl,
 		const struct rte_memseg *ms, void *arg)
 {
 	int *vfio_container_fd = arg;
 
-	return vfio_spapr_dma_mem_map(*vfio_container_fd, ms->addr_64, ms->iova,
+	if (msl->external)
+		return 0;
+
+	return vfio_spapr_dma_do_map(*vfio_container_fd, ms->addr_64, ms->iova,
 			ms->len, 1);
 }
 
@@ -1210,11 +1285,14 @@ struct spapr_walk_param {
 	uint64_t hugepage_sz;
 };
 static int
-vfio_spapr_window_size_walk(const struct rte_memseg_list *msl __rte_unused,
+vfio_spapr_window_size_walk(const struct rte_memseg_list *msl,
 		const struct rte_memseg *ms, void *arg)
 {
 	struct spapr_walk_param *param = arg;
 	uint64_t max = ms->iova + ms->len;
+
+	if (msl->external)
+		return 0;
 
 	if (max > param->window_size) {
 		param->hugepage_sz = ms->hugepage_sz;
@@ -1670,9 +1748,6 @@ int
 rte_vfio_container_group_bind(int container_fd, int iommu_group_num)
 {
 	struct vfio_config *vfio_cfg;
-	struct vfio_group *cur_grp;
-	int vfio_group_fd;
-	int i;
 
 	vfio_cfg = get_vfio_cfg_by_container_fd(container_fd);
 	if (vfio_cfg == NULL) {
@@ -1680,36 +1755,7 @@ rte_vfio_container_group_bind(int container_fd, int iommu_group_num)
 		return -1;
 	}
 
-	/* Check room for new group */
-	if (vfio_cfg->vfio_active_groups == VFIO_MAX_GROUPS) {
-		RTE_LOG(ERR, EAL, "Maximum number of VFIO groups reached!\n");
-		return -1;
-	}
-
-	/* Get an index for the new group */
-	for (i = 0; i < VFIO_MAX_GROUPS; i++)
-		if (vfio_cfg->vfio_groups[i].group_num == -1) {
-			cur_grp = &vfio_cfg->vfio_groups[i];
-			break;
-		}
-
-	/* This should not happen */
-	if (i == VFIO_MAX_GROUPS) {
-		RTE_LOG(ERR, EAL, "No VFIO group free slot found\n");
-		return -1;
-	}
-
-	vfio_group_fd = vfio_open_group_fd(iommu_group_num);
-	if (vfio_group_fd < 0) {
-		RTE_LOG(ERR, EAL, "Failed to open group %d\n", iommu_group_num);
-		return -1;
-	}
-	cur_grp->group_num = iommu_group_num;
-	cur_grp->fd = vfio_group_fd;
-	cur_grp->devices = 0;
-	vfio_cfg->vfio_active_groups++;
-
-	return vfio_group_fd;
+	return vfio_get_group_fd(vfio_cfg, iommu_group_num);
 }
 
 int

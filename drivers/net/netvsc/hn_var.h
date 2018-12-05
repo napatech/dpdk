@@ -20,6 +20,9 @@
 /* Retry interval */
 #define HN_CHAN_INTERVAL_US	100
 
+/* Host monitor interval */
+#define HN_CHAN_LATENCY_NS	50000
+
 /* Buffers need to be aligned */
 #ifndef PAGE_SIZE
 #define PAGE_SIZE 4096
@@ -36,7 +39,7 @@ struct hn_stats {
 	uint64_t	packets;
 	uint64_t	bytes;
 	uint64_t	errors;
-	uint64_t	nomemory;
+	uint64_t	ring_full;
 	uint64_t	multicast;
 	uint64_t	broadcast;
 	/* Size bins in array as RFC 2819, undersized [0], 64 [1], etc */
@@ -75,9 +78,8 @@ struct hn_rx_queue {
 	uint16_t port_id;
 	uint16_t queue_id;
 	struct hn_stats stats;
-	uint64_t ring_full;
 
-	uint8_t	event_buf[];
+	void *event_buf;
 };
 
 
@@ -92,8 +94,11 @@ struct hn_rx_bufinfo {
 struct hn_data {
 	struct rte_vmbus_device *vmbus;
 	struct hn_rx_queue *primary;
+	struct rte_eth_dev *vf_dev;		/* Subordinate device */
+	rte_spinlock_t  vf_lock;
 	uint16_t	port_id;
 	bool		closed;
+	bool		vf_present;
 	uint32_t	link_status;
 	uint32_t	link_speed;
 
@@ -110,6 +115,7 @@ struct hn_data {
 	uint32_t	chim_szmax;		/* Max size per buffer */
 	uint32_t	chim_cnt;		/* Max packets per buffer */
 
+	uint32_t	latency;
 	uint32_t	nvs_ver;
 	uint32_t	ndis_ver;
 	uint32_t	rndis_agg_size;
@@ -121,6 +127,10 @@ struct hn_data {
 	uint8_t		rndis_resp[256];
 
 	struct ether_addr mac_addr;
+
+	struct rte_eth_dev_owner owner;
+	struct rte_intr_handle vf_intr;
+
 	struct vmbus_channel *channels[HN_MAX_CHANNELS];
 };
 
@@ -130,7 +140,8 @@ hn_primary_chan(const struct hn_data *hv)
 	return hv->channels[0];
 }
 
-void hn_process_events(struct hn_data *hv, uint16_t queue_id);
+uint32_t hn_process_events(struct hn_data *hv, uint16_t queue_id,
+		       uint32_t tx_limit);
 
 uint16_t hn_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 		      uint16_t nb_pkts);
@@ -138,12 +149,14 @@ uint16_t hn_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		      uint16_t nb_pkts);
 
 int	hn_tx_pool_init(struct rte_eth_dev *dev);
+int	hn_dev_link_update(struct rte_eth_dev *dev, int wait);
 int	hn_dev_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 			      uint16_t nb_desc, unsigned int socket_id,
 			      const struct rte_eth_txconf *tx_conf);
 void	hn_dev_tx_queue_release(void *arg);
 void	hn_dev_tx_queue_info(struct rte_eth_dev *dev, uint16_t queue_idx,
 			     struct rte_eth_txq_info *qinfo);
+int	hn_dev_tx_done_cleanup(void *arg, uint32_t free_cnt);
 
 struct hn_rx_queue *hn_rx_queue_alloc(struct hn_data *hv,
 				      uint16_t queue_id,
@@ -154,5 +167,46 @@ int	hn_dev_rx_queue_setup(struct rte_eth_dev *dev,
 			      const struct rte_eth_rxconf *rx_conf,
 			      struct rte_mempool *mp);
 void	hn_dev_rx_queue_release(void *arg);
-void	hn_dev_rx_queue_info(struct rte_eth_dev *dev, uint16_t queue_idx,
-			     struct rte_eth_rxq_info *qinfo);
+
+void	hn_vf_info_get(struct hn_data *hv,
+		       struct rte_eth_dev_info *info);
+int	hn_vf_add(struct rte_eth_dev *dev, struct hn_data *hv);
+int	hn_vf_configure(struct rte_eth_dev *dev,
+			const struct rte_eth_conf *dev_conf);
+const uint32_t *hn_vf_supported_ptypes(struct rte_eth_dev *dev);
+int	hn_vf_start(struct rte_eth_dev *dev);
+void	hn_vf_reset(struct rte_eth_dev *dev);
+void	hn_vf_stop(struct rte_eth_dev *dev);
+void	hn_vf_close(struct rte_eth_dev *dev);
+
+void	hn_vf_allmulticast_enable(struct rte_eth_dev *dev);
+void	hn_vf_allmulticast_disable(struct rte_eth_dev *dev);
+void	hn_vf_promiscuous_enable(struct rte_eth_dev *dev);
+void	hn_vf_promiscuous_disable(struct rte_eth_dev *dev);
+int	hn_vf_mc_addr_list(struct rte_eth_dev *dev,
+			   struct ether_addr *mc_addr_set,
+			   uint32_t nb_mc_addr);
+
+int	hn_vf_link_update(struct rte_eth_dev *dev,
+			  int wait_to_complete);
+int	hn_vf_tx_queue_setup(struct rte_eth_dev *dev,
+			     uint16_t queue_idx, uint16_t nb_desc,
+			     unsigned int socket_id,
+			     const struct rte_eth_txconf *tx_conf);
+void	hn_vf_tx_queue_release(struct hn_data *hv, uint16_t queue_id);
+int	hn_vf_rx_queue_setup(struct rte_eth_dev *dev,
+			     uint16_t queue_idx, uint16_t nb_desc,
+			     unsigned int socket_id,
+			     const struct rte_eth_rxconf *rx_conf,
+			     struct rte_mempool *mp);
+void	hn_vf_rx_queue_release(struct hn_data *hv, uint16_t queue_id);
+
+int	hn_vf_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats);
+void	hn_vf_stats_reset(struct rte_eth_dev *dev);
+int	hn_vf_xstats_get_names(struct rte_eth_dev *dev,
+			       struct rte_eth_xstat_name *xstats_names,
+			       unsigned int size);
+int	hn_vf_xstats_get(struct rte_eth_dev *dev,
+			 struct rte_eth_xstat *xstats,
+			 unsigned int n);
+void	hn_vf_xstats_reset(struct rte_eth_dev *dev);
