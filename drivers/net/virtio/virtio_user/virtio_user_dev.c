@@ -166,17 +166,27 @@ error:
 
 int virtio_user_stop_device(struct virtio_user_dev *dev)
 {
+	struct vhost_vring_state state;
 	uint32_t i;
+	int error = 0;
 
 	for (i = 0; i < dev->max_queue_pairs; ++i)
 		dev->ops->enable_qp(dev, i, 0);
 
-	if (dev->ops->send_request(dev, VHOST_USER_RESET_OWNER, NULL) < 0) {
-		PMD_DRV_LOG(INFO, "Failed to reset the device\n");
-		return -1;
+	/* Stop the backend. */
+	for (i = 0; i < dev->max_queue_pairs * 2; ++i) {
+		state.index = i;
+		if (dev->ops->send_request(dev, VHOST_USER_GET_VRING_BASE,
+					   &state) < 0) {
+			PMD_DRV_LOG(ERR, "get_vring_base failed, index=%u\n",
+				    i);
+			error = -1;
+			goto out;
+		}
 	}
 
-	return 0;
+out:
+	return error;
 }
 
 static inline void
