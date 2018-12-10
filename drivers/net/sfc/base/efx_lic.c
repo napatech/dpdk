@@ -1035,26 +1035,14 @@ efx_mcdi_licensing_v3_get_id(
 {
 	efx_mcdi_req_t req;
 	uint8_t payload[MAX(MC_CMD_LICENSING_GET_ID_V3_IN_LEN,
-			    MC_CMD_LICENSING_GET_ID_V3_OUT_LENMIN)];
+			    MC_CMD_LICENSING_GET_ID_V3_OUT_LENMAX)];
 	efx_rc_t rc;
 
 	req.emr_cmd = MC_CMD_LICENSING_GET_ID_V3;
-
-	if (bufferp == NULL) {
-		/* Request id type and length only */
-		req.emr_in_buf = bufferp;
-		req.emr_in_length = MC_CMD_LICENSING_GET_ID_V3_IN_LEN;
-		req.emr_out_buf = bufferp;
-		req.emr_out_length = MC_CMD_LICENSING_GET_ID_V3_OUT_LENMIN;
-		(void) memset(payload, 0, sizeof (payload));
-	} else {
-		/* Request full buffer */
-		req.emr_in_buf = bufferp;
-		req.emr_in_length = MC_CMD_LICENSING_GET_ID_V3_IN_LEN;
-		req.emr_out_buf = bufferp;
-		req.emr_out_length = MIN(buffer_size, MC_CMD_LICENSING_GET_ID_V3_OUT_LENMAX);
-		(void) memset(bufferp, 0, req.emr_out_length);
-	}
+	req.emr_in_buf = payload;
+	req.emr_in_length = MC_CMD_LICENSING_GET_ID_V3_IN_LEN;
+	req.emr_out_buf = payload;
+	req.emr_out_length = MC_CMD_LICENSING_GET_ID_V3_OUT_LENMAX;
 
 	efx_mcdi_execute_quiet(enp, &req);
 
@@ -1071,18 +1059,10 @@ efx_mcdi_licensing_v3_get_id(
 	*typep = MCDI_OUT_DWORD(req, LICENSING_GET_ID_V3_OUT_LICENSE_TYPE);
 	*lengthp = MCDI_OUT_DWORD(req, LICENSING_GET_ID_V3_OUT_LICENSE_ID_LENGTH);
 
-	if (bufferp == NULL) {
-		/* modify length requirements to indicate to caller the extra buffering
-		** needed to read the complete output.
-		*/
-		*lengthp += MC_CMD_LICENSING_GET_ID_V3_OUT_LENMIN;
-	} else {
-		/* Shift ID down to start of buffer */
-		memmove(bufferp,
-		    bufferp + MC_CMD_LICENSING_GET_ID_V3_OUT_LICENSE_ID_OFST,
-		    *lengthp);
-		memset(bufferp + (*lengthp), 0,
-		    MC_CMD_LICENSING_GET_ID_V3_OUT_LICENSE_ID_OFST);
+	if (bufferp != NULL) {
+		memcpy(bufferp,
+		    payload + MC_CMD_LICENSING_GET_ID_V3_OUT_LICENSE_ID_OFST,
+		    MIN(buffer_size, *lengthp));
 	}
 
 	return (0);
