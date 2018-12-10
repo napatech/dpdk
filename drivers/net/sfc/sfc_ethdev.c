@@ -1229,9 +1229,6 @@ sfc_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 	if (sa->rss_support != EFX_RX_SCALE_EXCLUSIVE)
 		return -ENOTSUP;
 
-	if (sa->rss_channels == 0)
-		return -EINVAL;
-
 	sfc_adapter_lock(sa);
 
 	/*
