@@ -260,9 +260,13 @@ fs_rx_queue_release(void *queue)
 		return;
 	rxq = queue;
 	dev = rxq->priv->dev;
-	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE)
-		SUBOPS(sdev, rx_queue_release)
-			(ETH(sdev)->data->rx_queues[rxq->qid]);
+	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
+		if (ETH(sdev)->data->rx_queues != NULL &&
+		    ETH(sdev)->data->rx_queues[rxq->qid] != NULL) {
+			SUBOPS(sdev, rx_queue_release)
+				(ETH(sdev)->data->rx_queues[rxq->qid]);
+		}
+	}
 	dev->data->rx_queues[rxq->qid] = NULL;
 	rte_free(rxq);
 }
@@ -328,9 +332,13 @@ fs_tx_queue_release(void *queue)
 		return;
 	txq = queue;
 	dev = txq->priv->dev;
-	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE)
-		SUBOPS(sdev, tx_queue_release)
-			(ETH(sdev)->data->tx_queues[txq->qid]);
+	FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_ACTIVE) {
+		if (ETH(sdev)->data->tx_queues != NULL &&
+		    ETH(sdev)->data->tx_queues[txq->qid] != NULL) {
+			SUBOPS(sdev, tx_queue_release)
+				(ETH(sdev)->data->tx_queues[txq->qid]);
+		}
+	}
 	dev->data->tx_queues[txq->qid] = NULL;
 	rte_free(txq);
 }
