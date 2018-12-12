@@ -101,6 +101,7 @@ struct supportedAdapters_s supportedAdapters[NB_SUPPORTED_FPGAS] =
   { 200, 9516, 9, 8, 0 },
   { 200, 9517, 9, 8, 0 },
   { 200, 9519, 10, 7, 0 },
+  { 200, 9523, 10, 7, 0 },
   { 200, 7000, 12, 0, 0 },
   { 200, 7001, 12, 0, 0 },
 };
@@ -295,7 +296,7 @@ int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *interna
 // 			rte_atomic16_add_return(&buf->refcnt, 1);
 
 
-#ifdef USE_EXTERNAL_BUFFER
+#ifdef USE_EXTERNAL_BUFFER_V0
 static void eth_ntacc_rx_ext_buffer_release(void *addr __rte_unused, void *opaque)
 {
   struct ntacc_rx_queue *rx_q = (struct ntacc_rx_queue *)opaque;
@@ -431,7 +432,146 @@ static uint16_t eth_ntacc_rx(void *queue,
   }
   return num_rx;
 }
+#elif defined(USE_EXTERNAL_BUFFER_V1)
+static void eth_ntacc_rx_ext_buffer_release(void *addr __rte_unused, void *opaque)
+{
+  struct externalBufferInfo_s *pInfo = (struct externalBufferInfo_s *)opaque;
+  if (pInfo->pSeg) {
+    (*_NT_NetRxRelease)(pInfo->pNetRx, pInfo->pSeg);
+  }
+  rte_ring_sp_enqueue(pInfo->ring, pInfo);
+}
+
+static uint16_t eth_ntacc_rx(void *queue,
+                             struct rte_mbuf **bufs,
+                             uint16_t nb_pkts)
+{
+  struct rte_mbuf *mbuf;
+  struct ntacc_rx_queue *rx_q = queue;
+  NtDyn3Descr_t *dyn3;
+  uint16_t i;
+  uint16_t data_len;
+  uint8_t *pData;
+  uint8_t descLen;
+  struct externalBufferInfo_s *pInfo[SH_RING_COUNT];
+#ifdef USE_SW_STAT
+  uint32_t bytes = 0;
+#endif
+  uint16_t num_rx = 0;
+
+  if (unlikely(rx_q->pNetRx == NULL || nb_pkts == 0))
+    return 0;
+
+  // Do we have any segment
+  if (unlikely(rx_q->pSeg == NULL)) {
+    int status = (*_NT_NetRxGet)(rx_q->pNetRx, &rx_q->pSeg, 0);
+    if (status != NT_SUCCESS) {
+      if (rx_q->pSeg != NULL) {
+        (*_NT_NetRxRelease)(rx_q->pNetRx, rx_q->pSeg);
+        rx_q->pSeg = NULL;
+      }
+      return 0;
+    }
+
+    if (likely(NT_NET_GET_SEGMENT_LENGTH(rx_q->pSeg))) {
+      _nt_net_build_pkt_netbuf(rx_q->pSeg, &rx_q->pkt);
+    }
+    else {
+      (*_NT_NetRxRelease)(rx_q->pNetRx, rx_q->pSeg);
+      rx_q->pSeg = NULL;
+      return 0;
+    }
+  }
+
+  nb_pkts = rte_ring_sc_dequeue_burst(rx_q->ring, (void *)&pInfo, nb_pkts, NULL);
+  if (nb_pkts == 0) {
+    return 0;
+  }
+
+  if (rte_mempool_get_bulk(rx_q->mb_pool, (void **)bufs, nb_pkts) != 0)
+    return 0;
+
+  for (i = 0; i < nb_pkts; i++) {
+    mbuf = bufs[i];
+    mbuf->next = NULL;
+    mbuf->pkt_len = 0;
+    mbuf->tx_offload = 0;
+    mbuf->vlan_tci = 0;
+    mbuf->vlan_tci_outer = 0;
+    mbuf->nb_segs = 1;
+    mbuf->packet_type = 0;
+
+    dyn3 = _NT_NET_GET_PKT_DESCR_PTR_DYN3(&rx_q->pkt);
+    descLen = dyn3->descrLength;
+
+    switch (descLen)
+    {
+    case 22:
+      // We do have a color value defined
+      mbuf->hash.fdir.hi = ((dyn3->color_hi << 14) & 0xFFFFC000) | dyn3->color_lo;
+      mbuf->ol_flags = PKT_RX_FDIR_ID | PKT_RX_FDIR;
+      break;
+    case 24:
+      // We do have a colormask set for protocol lookup
+      mbuf->packet_type = ((dyn3->color_hi << 14) & 0xFFFFC000) | dyn3->color_lo;
+      if (mbuf->packet_type != 0) {
+        mbuf->hash.fdir.lo = dyn3->offset0;
+        mbuf->hash.fdir.hi = dyn3->offset1;
+        mbuf->ol_flags = PKT_RX_FDIR_FLX | PKT_RX_FDIR;
+      }
+      break;
+    case 26:
+      // We do have a hash value defined
+      mbuf->hash.rss = dyn3->color_hi;
+      mbuf->ol_flags = PKT_RX_RSS_HASH;
+      break;
+    default:
+      mbuf->ol_flags = 0;
+      break;
+    }
+
+    if (rx_q->tsMultiplier) {
+      mbuf->timestamp = dyn3->timestamp * rx_q->tsMultiplier;
+      mbuf->ol_flags |= PKT_RX_TIMESTAMP;
+    }
+    mbuf->port = rx_q->in_port + (dyn3->rxPort - rx_q->local_port);
+    data_len = (uint16_t)(dyn3->capLength - descLen - 4);
+#ifdef USE_SW_STAT
+    bytes += data_len+4;
+#endif
+    pData = (uint8_t *)dyn3 + descLen;
+    rte_mbuf_ext_refcnt_set(&pInfo[num_rx]->shinfo, 1);
+    rte_pktmbuf_attach_extbuf(mbuf, pData, 0, data_len, &pInfo[num_rx]->shinfo);
+
+    /* Packet will fit in the mbuf, go ahead and copy */
+    mbuf->pkt_len = mbuf->data_len = data_len;
+
+#ifdef COPY_OFFSET0
+    mbuf->data_off += dyn3->offset0;
+#endif
+
+    /* Get the next packet if any */
+    if (_nt_net_get_next_packet(rx_q->pSeg, NT_NET_GET_SEGMENT_LENGTH(rx_q->pSeg), &rx_q->pkt) == 0 ) {
+      pInfo[num_rx]->pSeg = rx_q->pSeg;
+      rx_q->pSeg = NULL;
+      num_rx++;
+      break;
+    }
+    num_rx++;
+  }
+
+#ifdef USE_SW_STAT
+  rx_q->rx_pkts+=num_rx;
+  rx_q->rx_bytes+=bytes;
+#endif
+  if (num_rx < nb_pkts) {
+    rte_mempool_put_bulk(rx_q->mb_pool, (void * const *)(bufs + num_rx), nb_pkts-num_rx);
+    rte_ring_sp_enqueue_bulk(rx_q->ring, (void * const *)&pInfo[num_rx], nb_pkts-num_rx, NULL);
+  }
+  return num_rx;
+}
 #else
+// Use segment interface
 static uint16_t eth_ntacc_rx(void *queue,
                              struct rte_mbuf **bufs,
                              uint16_t nb_pkts)
@@ -914,6 +1054,40 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     }
   }
 
+#ifdef USE_EXTERNAL_BUFFER_V1
+  for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
+    if (rx_q[queue].enabled) {
+      int i;
+      char name[RTE_MEMZONE_NAMESIZE];
+
+      snprintf(name, RTE_MEMZONE_NAMESIZE, "ntacc_%u_%u", internals->port, queue);
+      rx_q[queue].ring = rte_ring_create(name, SH_RING_COUNT, dev->device->numa_node, RING_F_SP_ENQ | RING_F_SC_DEQ);
+      printf(">>>>>>>>>>>>>>>>>>>>> Creating ring: %s - Size %u - Used %u -  %p\n", name, rte_ring_get_capacity(rx_q[queue].ring), rte_ring_count(rx_q[queue].ring), rx_q[queue].ring);
+
+      for (i = 0; i < SH_RING_COUNT - 1; i++) {
+        struct externalBufferInfo_s *pInfo = (struct externalBufferInfo_s *)rte_zmalloc_socket(internals->name, sizeof(struct externalBufferInfo_s), 0, dev->device->numa_node);
+        pInfo->shinfo.free_cb = eth_ntacc_rx_ext_buffer_release;
+        pInfo->shinfo.fcb_opaque = pInfo;
+        pInfo->pNetRx = rx_q[queue].pNetRx;
+        pInfo->pSeg = NULL;
+        pInfo->ring = rx_q[queue].ring;
+        if (rte_ring_sp_enqueue(rx_q[queue].ring, pInfo) != 0) {
+          printf(">>>>>>>>>>>>>>>>>>>>> Error pushing to ring: %s\n", name);
+          // Error - Clean up ring again
+          rte_free(pInfo);
+          while (rte_ring_sc_dequeue(rx_q[queue].ring, (void *)&pInfo) == 0) {
+            rte_free(pInfo);
+          }
+          rte_ring_free(rx_q[queue].ring);
+          goto StartError;
+        }
+      }
+      printf(">>>>>>>>>>>>>>>>>>>>> Ring: %s - Size %u - Used %u\n", name, rte_ring_get_capacity(rx_q[queue].ring), rte_ring_count(rx_q[queue].ring)
+             );
+    }
+  }
+#endif
+
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
     if (tx_q[queue].enabled) {
       if ((status = (*_NT_NetTxOpen)(&tx_q[queue].pNetTx, "DPDK", 1 << tx_q[queue].port, -1, 0)) != NT_SUCCESS) {
@@ -928,6 +1102,7 @@ static int eth_dev_start(struct rte_eth_dev *dev)
   }
 
   dev->data->dev_link.link_status = 1;
+
   return 0;
 
 StartError:
@@ -991,6 +1166,19 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
   // Detach shared memory
   shmdt(internals->shm);
   shmctl(internals->shmid, IPC_RMID, NULL);
+
+#ifdef USE_EXTERNAL_BUFFER_V1
+  for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
+    if (rx_q[queue].enabled) {
+      printf(">>>>>>>>>>>>>>>>>>>>> Free ring: %s - %u\n", rx_q[queue].ring->name, rte_ring_count(rx_q[queue].ring));
+      struct externalBufferInfo_s *pInfo;
+      while (rte_ring_sc_dequeue(rx_q[queue].ring, (void *)&pInfo) == 0) {
+        rte_free(pInfo);
+      }
+      rte_ring_free(rx_q[queue].ring);
+    }
+  }
+#endif
 }
 
 static int eth_dev_configure(struct rte_eth_dev *dev __rte_unused)
@@ -2769,134 +2957,134 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   return iRet;
 
 error:
-  if (pInfo) {
-    rte_free(pInfo);
-  }
-  if (hInfo)
-    (void)(*_NT_InfoClose)(hInfo);
-  if (internals)
-    rte_free(internals);
-  return iRet;
+if (pInfo) {
+rte_free(pInfo);
+}
+if (hInfo)
+(void)(*_NT_InfoClose)(hInfo);
+if (internals)
+rte_free(internals);
+return iRet;
 }
 
 /*
- * convert ascii to int
- */
+* convert ascii to int
+*/
 static inline int ascii_to_u32(const char *key __rte_unused, const char *value, void *extra_args)
 {
-  *(uint32_t*)extra_args = atoi(value);
-  return 0;
+*(uint32_t*)extra_args = atoi(value);
+return 0;
 }
 
 static inline int ascii_to_ascii(const char *key __rte_unused, const char *value, void *extra_args)
 {
-  strncpy((char *)extra_args, value, MAX_NTPL_NAME);
-  return 0;
+strncpy((char *)extra_args, value, MAX_NTPL_NAME);
+return 0;
 }
 
 static int _nt_lib_open(void)
 {
-  char path[128];
-  strcpy(path, NAPATECH3_LIB_PATH);
-  strcat(path, "/libntapi.so");
+char path[128];
+strcpy(path, NAPATECH3_LIB_PATH);
+strcat(path, "/libntapi.so");
 
-  /* Load the library */
-  _libnt = dlopen(path, RTLD_NOW);
-  if (_libnt == NULL) {
-    /* Library does not exist. */
-    fprintf(stderr, "Failed to find needed library : %s\n", path);
-    return -1;
-  }
-  _NT_Init = dlsym(_libnt, "NT_Init");
-  if (_NT_Init == NULL) {
-    fprintf(stderr, "Failed to find \"NT_Init\" in %s\n", path);
-    return -1;
-  }
+/* Load the library */
+_libnt = dlopen(path, RTLD_NOW);
+if (_libnt == NULL) {
+/* Library does not exist. */
+fprintf(stderr, "Failed to find needed library : %s\n", path);
+return -1;
+}
+_NT_Init = dlsym(_libnt, "NT_Init");
+if (_NT_Init == NULL) {
+fprintf(stderr, "Failed to find \"NT_Init\" in %s\n", path);
+return -1;
+}
 
-  _NT_ConfigOpen = dlsym(_libnt, "NT_ConfigOpen");
-  if (_NT_ConfigOpen == NULL) {
-    fprintf(stderr, "Failed to find \"NT_ConfigOpen\" in %s\n", path);
-    return -1;
-  }
-  _NT_ConfigClose = dlsym(_libnt, "NT_ConfigClose");
-  if (_NT_ConfigClose == NULL) {
-    fprintf(stderr, "Failed to find \"NT_ConfigClose\" in %s\n", path);
-    return -1;
-  }
-  _NT_NTPL = dlsym(_libnt, "NT_NTPL");
-  if (_NT_NTPL == NULL) {
-    fprintf(stderr, "Failed to find \"NT_NTPL\" in %s\n", path);
-    return -1;
-  }
+_NT_ConfigOpen = dlsym(_libnt, "NT_ConfigOpen");
+if (_NT_ConfigOpen == NULL) {
+fprintf(stderr, "Failed to find \"NT_ConfigOpen\" in %s\n", path);
+return -1;
+}
+_NT_ConfigClose = dlsym(_libnt, "NT_ConfigClose");
+if (_NT_ConfigClose == NULL) {
+fprintf(stderr, "Failed to find \"NT_ConfigClose\" in %s\n", path);
+return -1;
+}
+_NT_NTPL = dlsym(_libnt, "NT_NTPL");
+if (_NT_NTPL == NULL) {
+fprintf(stderr, "Failed to find \"NT_NTPL\" in %s\n", path);
+return -1;
+}
 
-  _NT_InfoOpen = dlsym(_libnt, "NT_InfoOpen");
-  if (_NT_InfoOpen == NULL) {
-    fprintf(stderr, "Failed to find \"NT_InfoOpen\" in %s\n", path);
-    return -1;
-  }
-  _NT_InfoRead = dlsym(_libnt, "NT_InfoRead");
-  if (_NT_InfoRead == NULL) {
-    fprintf(stderr, "Failed to find \"NT_InfoRead\" in %s\n", path);
-    return -1;
-  }
-  _NT_InfoClose = dlsym(_libnt, "NT_InfoClose");
-  if (_NT_InfoClose == NULL) {
-    fprintf(stderr, "Failed to find \"NT_InfoClose\" in %s\n", path);
-    return -1;
-  }
-  _NT_StatClose = dlsym(_libnt, "NT_StatClose");
-  if (_NT_StatClose == NULL) {
-    fprintf(stderr, "Failed to find \"NT_StatClose\" in %s\n", path);
-    return -1;
-  }
-  _NT_StatOpen = dlsym(_libnt, "NT_StatOpen");
-  if (_NT_StatOpen == NULL) {
-    fprintf(stderr, "Failed to find \"NT_StatOpen\" in %s\n", path);
-    return -1;
-  }
-  _NT_StatRead = dlsym(_libnt, "NT_StatRead");
-  if (_NT_StatRead == NULL) {
-    fprintf(stderr, "Failed to find \"NT_StatRead\" in %s\n", path);
-    return -1;
-  }
-  _NT_ExplainError = dlsym(_libnt, "NT_ExplainError");
-  if (_NT_ExplainError == NULL) {
-    fprintf(stderr, "Failed to find \"NT_ExplainError\" in %s\n", path);
-    return -1;
-  }
-  _NT_NetTxOpen = dlsym(_libnt, "NT_NetTxOpen");
-  if (_NT_NetTxOpen == NULL) {
-    fprintf(stderr, "Failed to find \"NT_NetTxOpen\" in %s\n", path);
-    return -1;
-  }
-  _NT_NetTxClose = dlsym(_libnt, "NT_NetTxClose");
-  if (_NT_NetTxClose == NULL) {
-    fprintf(stderr, "Failed to find \"NT_NetTxClose\" in %s\n", path);
-    return -1;
-  }
+_NT_InfoOpen = dlsym(_libnt, "NT_InfoOpen");
+if (_NT_InfoOpen == NULL) {
+fprintf(stderr, "Failed to find \"NT_InfoOpen\" in %s\n", path);
+return -1;
+}
+_NT_InfoRead = dlsym(_libnt, "NT_InfoRead");
+if (_NT_InfoRead == NULL) {
+fprintf(stderr, "Failed to find \"NT_InfoRead\" in %s\n", path);
+return -1;
+}
+_NT_InfoClose = dlsym(_libnt, "NT_InfoClose");
+if (_NT_InfoClose == NULL) {
+fprintf(stderr, "Failed to find \"NT_InfoClose\" in %s\n", path);
+return -1;
+}
+_NT_StatClose = dlsym(_libnt, "NT_StatClose");
+if (_NT_StatClose == NULL) {
+fprintf(stderr, "Failed to find \"NT_StatClose\" in %s\n", path);
+return -1;
+}
+_NT_StatOpen = dlsym(_libnt, "NT_StatOpen");
+if (_NT_StatOpen == NULL) {
+fprintf(stderr, "Failed to find \"NT_StatOpen\" in %s\n", path);
+return -1;
+}
+_NT_StatRead = dlsym(_libnt, "NT_StatRead");
+if (_NT_StatRead == NULL) {
+fprintf(stderr, "Failed to find \"NT_StatRead\" in %s\n", path);
+return -1;
+}
+_NT_ExplainError = dlsym(_libnt, "NT_ExplainError");
+if (_NT_ExplainError == NULL) {
+fprintf(stderr, "Failed to find \"NT_ExplainError\" in %s\n", path);
+return -1;
+}
+_NT_NetTxOpen = dlsym(_libnt, "NT_NetTxOpen");
+if (_NT_NetTxOpen == NULL) {
+fprintf(stderr, "Failed to find \"NT_NetTxOpen\" in %s\n", path);
+return -1;
+}
+_NT_NetTxClose = dlsym(_libnt, "NT_NetTxClose");
+if (_NT_NetTxClose == NULL) {
+fprintf(stderr, "Failed to find \"NT_NetTxClose\" in %s\n", path);
+return -1;
+}
 
-  _NT_NetRxOpen = dlsym(_libnt, "NT_NetRxOpen");
-  if (_NT_NetRxOpen == NULL) {
-    fprintf(stderr, "Failed to find \"NT_NetRxOpen\" in %s\n", path);
-    return -1;
-  }
-  _NT_NetRxGet = dlsym(_libnt, "NT_NetRxGet");
-  if (_NT_NetRxGet == NULL) {
-    fprintf(stderr, "Failed to find \"NT_NetRxGet\" in %s\n", path);
-    return -1;
-  }
-  _NT_NetRxRelease = dlsym(_libnt, "NT_NetRxRelease");
-  if (_NT_NetRxRelease == NULL) {
-    fprintf(stderr, "Failed to find \"NT_NetRxRelease\" in %s\n", path);
-    return -1;
-  }
-  _NT_NetRxClose = dlsym(_libnt, "NT_NetRxClose");
-  if (_NT_NetRxClose == NULL) {
-    fprintf(stderr, "Failed to find \"NT_NetRxClose\" in %s\n", path);
-    return -1;
-  }
+_NT_NetRxOpen = dlsym(_libnt, "NT_NetRxOpen");
+if (_NT_NetRxOpen == NULL) {
+fprintf(stderr, "Failed to find \"NT_NetRxOpen\" in %s\n", path);
+return -1;
+}
+_NT_NetRxGet = dlsym(_libnt, "NT_NetRxGet");
+if (_NT_NetRxGet == NULL) {
+fprintf(stderr, "Failed to find \"NT_NetRxGet\" in %s\n", path);
+return -1;
+}
+_NT_NetRxRelease = dlsym(_libnt, "NT_NetRxRelease");
+if (_NT_NetRxRelease == NULL) {
+fprintf(stderr, "Failed to find \"NT_NetRxRelease\" in %s\n", path);
+return -1;
+}
+_NT_NetRxClose = dlsym(_libnt, "NT_NetRxClose");
+if (_NT_NetRxClose == NULL) {
+fprintf(stderr, "Failed to find \"NT_NetRxClose\" in %s\n", path);
+return -1;
+}
 
-  _NT_NetRxGetNextPacket = dlsym(_libnt, "NT_NetRxGetNextPacket");
+_NT_NetRxGetNextPacket = dlsym(_libnt, "NT_NetRxGetNextPacket");
   if (_NT_NetRxGetNextPacket == NULL) {
     fprintf(stderr, "Failed to find \"NT_NetRxGetNextPacket\" in %s\n", path);
     return -1;

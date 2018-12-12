@@ -37,6 +37,8 @@
 #include <rte_ethdev_pci.h>
 
 #define SEGMENT_LENGTH  (1024*1024)
+#define SH_RING_COUNT 128
+
 
 //#define NTACC_LOCK(a)    { printf(" Req Lock %s(%p) - %u\n", __FILE__, a, __LINE__); rte_spinlock_lock(a); printf(" Got Lock %s(%p) - %u\n", __FILE__, a, __LINE__); }
 //#define NTACC_UNLOCK(a)  { rte_spinlock_unlock(a); printf("Unlocked %s(%p) - %u\n", __FILE__, a, __LINE__); }
@@ -87,10 +89,10 @@ enum {
 
 struct ntacc_rx_queue {
   NtNetBuf_t             pSeg;        /* The current segment we are working with */
+  struct NtNetBuf_s      pkt;     /* The current packet */
   NtNetStreamRx_t        pNetRx;
   struct rte_mempool    *mb_pool;
   uint32_t               in_port;
-  struct NtNetBuf_s      pkt;     /* The current packet */
 #ifdef USE_SW_STAT
   volatile uint64_t      rx_pkts;
   volatile uint64_t      rx_bytes;
@@ -104,8 +106,11 @@ struct ntacc_rx_queue {
   uint8_t                tsMultiplier;
   const char             *name;
   const char             *type;
-#ifdef USE_EXTERNAL_BUFFER
+#ifdef USE_EXTERNAL_BUFFER_V0
   struct rte_mbuf_ext_shared_info shinfo;
+#endif
+#ifdef USE_EXTERNAL_BUFFER_V1
+  struct rte_ring       *ring;
 #endif
 } __rte_cache_aligned;
 
@@ -232,7 +237,14 @@ struct supportedAdapters_s {
   uint32_t build:10;
 };
 
-#define NB_SUPPORTED_FPGAS 13
+struct externalBufferInfo_s {
+  NtNetBuf_t                      pSeg;
+  NtNetStreamRx_t                 pNetRx;
+  struct rte_ring                 *ring;
+  struct rte_mbuf_ext_shared_info shinfo;
+};
+
+#define NB_SUPPORTED_FPGAS 14
 
 int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *internals, struct rte_flow_error *error);
 
