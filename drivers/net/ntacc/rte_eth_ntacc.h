@@ -237,12 +237,24 @@ struct supportedAdapters_s {
   uint32_t build:10;
 };
 
+#ifdef USE_EXTERNAL_BUFFER_V1
 struct externalBufferInfo_s {
   NtNetBuf_t                      pSeg;
   NtNetStreamRx_t                 pNetRx;
   struct rte_ring                 *ring;
   struct rte_mbuf_ext_shared_info shinfo;
 };
+#endif
+
+#ifdef USE_EXTERNAL_BUFFER_V2
+struct externalBufferInfo_s {
+  struct ntacc_rx_queue           *rx_q;
+  NtNetBuf_t                      pSeg;
+  struct rte_mbuf_ext_shared_info shinfo;
+};
+#endif
+
+
 
 #define NB_SUPPORTED_FPGAS 14
 

@@ -570,6 +570,144 @@ static uint16_t eth_ntacc_rx(void *queue,
   }
   return num_rx;
 }
+#elif defined(USE_EXTERNAL_BUFFER_V2)
+static void eth_ntacc_rx_ext_buffer_release(void *addr __rte_unused, void *opaque)
+{
+  struct externalBufferInfo_s *pInfo = (struct externalBufferInfo_s *)opaque;
+  if (pInfo->pSeg) {
+    (*_NT_NetRxRelease)(pInfo->rx_q->pNetRx, pInfo->pSeg);
+  }
+}
+
+static uint16_t eth_ntacc_rx(void *queue,
+                             struct rte_mbuf **bufs,
+                             uint16_t nb_pkts)
+{
+  struct rte_mbuf *mbuf;
+  struct ntacc_rx_queue *rx_q = queue;
+  NtDyn3Descr_t *dyn3;
+  uint16_t i;
+  uint16_t data_len;
+  uint8_t *pData;
+  uint8_t descLen;
+  struct externalBufferInfo_s *pInfo;
+#ifdef USE_SW_STAT
+  uint32_t bytes = 0;
+#endif
+  uint16_t num_rx = 0;
+
+  if (unlikely(rx_q->pNetRx == NULL || nb_pkts == 0))
+    return 0;
+
+  // Do we have any segment
+  if (unlikely(rx_q->pSeg == NULL)) {
+    int status = (*_NT_NetRxGet)(rx_q->pNetRx, &rx_q->pSeg, 0);
+    if (status != NT_SUCCESS) {
+      if (rx_q->pSeg != NULL) {
+        (*_NT_NetRxRelease)(rx_q->pNetRx, rx_q->pSeg);
+        rx_q->pSeg = NULL;
+      }
+      return 0;
+    }
+
+    if (likely(NT_NET_GET_SEGMENT_LENGTH(rx_q->pSeg))) {
+      _nt_net_build_pkt_netbuf(rx_q->pSeg, &rx_q->pkt);
+    }
+    else {
+      (*_NT_NetRxRelease)(rx_q->pNetRx, rx_q->pSeg);
+      rx_q->pSeg = NULL;
+      return 0;
+    }
+  }
+
+  if (rte_mempool_get_bulk(rx_q->mb_pool, (void **)bufs, nb_pkts) != 0)
+    return 0;
+
+  for (i = 0; i < nb_pkts; i++) {
+    mbuf = bufs[i];
+    mbuf->next = NULL;
+    mbuf->pkt_len = 0;
+    mbuf->tx_offload = 0;
+    mbuf->vlan_tci = 0;
+    mbuf->vlan_tci_outer = 0;
+    mbuf->nb_segs = 1;
+    mbuf->packet_type = 0;
+
+    dyn3 = _NT_NET_GET_PKT_DESCR_PTR_DYN3(&rx_q->pkt);
+    descLen = dyn3->descrLength;
+
+    switch (descLen)
+    {
+    case 22:
+      // We do have a color value defined
+      mbuf->hash.fdir.hi = ((dyn3->color_hi << 14) & 0xFFFFC000) | dyn3->color_lo;
+      mbuf->ol_flags = PKT_RX_FDIR_ID | PKT_RX_FDIR;
+      break;
+    case 24:
+      // We do have a colormask set for protocol lookup
+      mbuf->packet_type = ((dyn3->color_hi << 14) & 0xFFFFC000) | dyn3->color_lo;
+      if (mbuf->packet_type != 0) {
+        mbuf->hash.fdir.lo = dyn3->offset0;
+        mbuf->hash.fdir.hi = dyn3->offset1;
+        mbuf->ol_flags = PKT_RX_FDIR_FLX | PKT_RX_FDIR;
+      }
+      break;
+    case 26:
+      // We do have a hash value defined
+      mbuf->hash.rss = dyn3->color_hi;
+      mbuf->ol_flags = PKT_RX_RSS_HASH;
+      break;
+    default:
+      mbuf->ol_flags = 0;
+      break;
+    }
+
+    if (rx_q->tsMultiplier) {
+      mbuf->timestamp = dyn3->timestamp * rx_q->tsMultiplier;
+      mbuf->ol_flags |= PKT_RX_TIMESTAMP;
+    }
+    mbuf->port = rx_q->in_port + (dyn3->rxPort - rx_q->local_port);
+    data_len = (uint16_t)(dyn3->capLength - descLen - 4);
+#ifdef USE_SW_STAT
+    bytes += data_len+4;
+#endif
+
+    pData = (uint8_t *)dyn3 + descLen;
+
+    pInfo = mbuf->buf_addr;
+    pInfo->shinfo.free_cb = eth_ntacc_rx_ext_buffer_release;
+    pInfo->shinfo.fcb_opaque = pInfo;
+    pInfo->pSeg = NULL;
+
+    rte_mbuf_ext_refcnt_set(&pInfo->shinfo, 1);
+    rte_pktmbuf_attach_extbuf(mbuf, pData, 0, data_len, &pInfo->shinfo);
+
+    /* Packet will fit in the mbuf, go ahead and copy */
+    mbuf->pkt_len = mbuf->data_len = data_len;
+
+#ifdef COPY_OFFSET0
+    mbuf->data_off += dyn3->offset0;
+#endif
+
+    num_rx++;
+    /* Get the next packet if any */
+    if (_nt_net_get_next_packet(rx_q->pSeg, NT_NET_GET_SEGMENT_LENGTH(rx_q->pSeg), &rx_q->pkt) == 0 ) {
+      pInfo->pSeg = rx_q->pSeg;
+      pInfo->rx_q = rx_q;
+      rx_q->pSeg = NULL;
+      break;
+    }
+  }
+
+#ifdef USE_SW_STAT
+  rx_q->rx_pkts+=num_rx;
+  rx_q->rx_bytes+=bytes;
+#endif
+  if (num_rx < nb_pkts) {
+    rte_mempool_put_bulk(rx_q->mb_pool, (void * const *)(bufs + num_rx), nb_pkts-num_rx);
+  }
+  return num_rx;
+}
 #else
 // Use segment interface
 static uint16_t eth_ntacc_rx(void *queue,
