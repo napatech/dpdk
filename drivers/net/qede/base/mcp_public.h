@@ -1777,6 +1777,8 @@ struct public_drv_mb {
 #define FW_MB_PARAM_FEATURE_SUPPORT_SMARTLINQ   0x00000001
 /* MFW supports EEE */
 #define FW_MB_PARAM_FEATURE_SUPPORT_EEE         0x00000002
+/* MFW support complete IGU cleanup upon FLR */
+#define FW_MB_PARAM_FEATURE_SUPPORT_IGU_CLEANUP	0x00000080
 /* MFW supports virtual link */
 #define FW_MB_PARAM_FEATURE_SUPPORT_VLINK       0x00010000
 
