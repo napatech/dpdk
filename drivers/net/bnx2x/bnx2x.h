@@ -805,6 +805,10 @@ struct bnx2x_mf_info {
 
 /* Device information data structure. */
 struct bnx2x_devinfo {
+#if 1
+#define NAME_SIZE 128
+	char name[NAME_SIZE];
+#endif
 	/* PCIe info */
 	uint16_t vendor_id;
 	uint16_t device_id;
@@ -1420,7 +1424,7 @@ struct bnx2x_func_init_params {
 static inline void
 bnx2x_reg_write8(struct bnx2x_softc *sc, size_t offset, uint8_t val)
 {
-	PMD_DEBUG_PERIODIC_LOG(DEBUG, "offset=0x%08lx val=0x%02x",
+	PMD_DEBUG_PERIODIC_LOG(DEBUG, sc, "offset=0x%08lx val=0x%02x",
 			       (unsigned long)offset, val);
 	rte_write8(val, ((uint8_t *)sc->bar[BAR0].base_addr + offset));
 }
@@ -1430,10 +1434,10 @@ bnx2x_reg_write16(struct bnx2x_softc *sc, size_t offset, uint16_t val)
 {
 #ifdef RTE_LIBRTE_BNX2X_DEBUG_PERIODIC
 	if ((offset % 2) != 0)
-		PMD_DRV_LOG(NOTICE, "Unaligned 16-bit write to 0x%08lx",
+		PMD_DRV_LOG(NOTICE, sc, "Unaligned 16-bit write to 0x%08lx",
 			    (unsigned long)offset);
 #endif
-	PMD_DEBUG_PERIODIC_LOG(DEBUG, "offset=0x%08lx val=0x%04x",
+	PMD_DEBUG_PERIODIC_LOG(DEBUG, sc, "offset=0x%08lx val=0x%04x",
 			       (unsigned long)offset, val);
 	rte_write16(val, ((uint8_t *)sc->bar[BAR0].base_addr + offset));
 
@@ -1444,11 +1448,11 @@ bnx2x_reg_write32(struct bnx2x_softc *sc, size_t offset, uint32_t val)
 {
 #ifdef RTE_LIBRTE_BNX2X_DEBUG_PERIODIC
 	if ((offset % 4) != 0)
-		PMD_DRV_LOG(NOTICE, "Unaligned 32-bit write to 0x%08lx",
+		PMD_DRV_LOG(NOTICE, sc, "Unaligned 32-bit write to 0x%08lx",
 			    (unsigned long)offset);
 #endif
 
-	PMD_DEBUG_PERIODIC_LOG(DEBUG, "offset=0x%08lx val=0x%08x",
+	PMD_DEBUG_PERIODIC_LOG(DEBUG, sc, "offset=0x%08lx val=0x%08x",
 			       (unsigned long)offset, val);
 	rte_write32(val, ((uint8_t *)sc->bar[BAR0].base_addr + offset));
 }
@@ -1459,7 +1463,7 @@ bnx2x_reg_read8(struct bnx2x_softc *sc, size_t offset)
 	uint8_t val;
 
 	val = rte_read8((uint8_t *)sc->bar[BAR0].base_addr + offset);
-	PMD_DEBUG_PERIODIC_LOG(DEBUG, "offset=0x%08lx val=0x%02x",
+	PMD_DEBUG_PERIODIC_LOG(DEBUG, sc, "offset=0x%08lx val=0x%02x",
 			       (unsigned long)offset, val);
 
 	return val;
@@ -1472,12 +1476,12 @@ bnx2x_reg_read16(struct bnx2x_softc *sc, size_t offset)
 
 #ifdef RTE_LIBRTE_BNX2X_DEBUG_PERIODIC
 	if ((offset % 2) != 0)
-		PMD_DRV_LOG(NOTICE, "Unaligned 16-bit read from 0x%08lx",
+		PMD_DRV_LOG(NOTICE, sc, "Unaligned 16-bit read from 0x%08lx",
 			    (unsigned long)offset);
 #endif
 
 	val = rte_read16(((uint8_t *)sc->bar[BAR0].base_addr + offset));
-	PMD_DEBUG_PERIODIC_LOG(DEBUG, "offset=0x%08lx val=0x%08x",
+	PMD_DEBUG_PERIODIC_LOG(DEBUG, sc, "offset=0x%08lx val=0x%08x",
 			       (unsigned long)offset, val);
 
 	return val;
@@ -1490,12 +1494,12 @@ bnx2x_reg_read32(struct bnx2x_softc *sc, size_t offset)
 
 #ifdef RTE_LIBRTE_BNX2X_DEBUG_PERIODIC
 	if ((offset % 4) != 0)
-		PMD_DRV_LOG(NOTICE, "Unaligned 32-bit read from 0x%08lx",
+		PMD_DRV_LOG(NOTICE, sc, "Unaligned 32-bit read from 0x%08lx",
 			    (unsigned long)offset);
 #endif
 
 	val = rte_read32(((uint8_t *)sc->bar[BAR0].base_addr + offset));
-	PMD_DEBUG_PERIODIC_LOG(DEBUG, "offset=0x%08lx val=0x%08x",
+	PMD_DEBUG_PERIODIC_LOG(DEBUG, sc, "offset=0x%08lx val=0x%08x",
 			       (unsigned long)offset, val);
 
 	return val;
@@ -1972,7 +1976,7 @@ bnx2x_set_rx_mode(struct bnx2x_softc *sc)
 			bnx2x_vf_set_rx_mode(sc);
 		}
 	} else {
-		PMD_DRV_LOG(NOTICE, "Card is not ready to change mode");
+		PMD_DRV_LOG(NOTICE, sc, "Card is not ready to change mode");
 	}
 }
 
@@ -1980,7 +1984,7 @@ static inline int pci_read(struct bnx2x_softc *sc, size_t addr,
 			   void *val, uint8_t size)
 {
 	if (rte_pci_read_config(sc->pci_dev, val, size, addr) <= 0) {
-		PMD_DRV_LOG(ERR, "Can't read from PCI config space");
+		PMD_DRV_LOG(ERR, sc, "Can't read from PCI config space");
 		return ENXIO;
 	}
 
@@ -1993,7 +1997,7 @@ static inline int pci_write_word(struct bnx2x_softc *sc, size_t addr, off_t val)
 
 	if (rte_pci_write_config(sc->pci_dev, &val16,
 				     sizeof(val16), addr) <= 0) {
-		PMD_DRV_LOG(ERR, "Can't write to PCI config space");
+		PMD_DRV_LOG(ERR, sc, "Can't write to PCI config space");
 		return ENXIO;
 	}
 
@@ -2005,7 +2009,7 @@ static inline int pci_write_long(struct bnx2x_softc *sc, size_t addr, off_t val)
 	uint32_t val32 = val;
 	if (rte_pci_write_config(sc->pci_dev, &val32,
 				     sizeof(val32), addr) <= 0) {
-		PMD_DRV_LOG(ERR, "Can't write to PCI config space");
+		PMD_DRV_LOG(ERR, sc, "Can't write to PCI config space");
 		return ENXIO;
 	}
 
