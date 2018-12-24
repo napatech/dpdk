@@ -144,7 +144,7 @@ flush_shadow_used_ring(struct virtio_net *dev, struct vhost_virtqueue *vq)
 
 static __rte_always_inline void
 update_shadow_used_ring(struct vhost_virtqueue *vq,
-			 uint16_t desc_idx, uint16_t len)
+			 uint16_t desc_idx, uint32_t len)
 {
 	uint16_t i = vq->shadow_used_idx++;
 
@@ -560,7 +560,7 @@ static __rte_always_inline int
 fill_vec_buf(struct virtio_net *dev, struct vhost_virtqueue *vq,
 			 uint32_t avail_idx, uint32_t *vec_idx,
 			 struct buf_vector *buf_vec, uint16_t *desc_chain_head,
-			 uint16_t *desc_chain_len)
+			 uint32_t *desc_chain_len)
 {
 	uint16_t idx = vq->avail->ring[avail_idx & (vq->size - 1)];
 	uint32_t vec_id = *vec_idx;
@@ -635,7 +635,7 @@ reserve_avail_buf_mergeable(struct virtio_net *dev, struct vhost_virtqueue *vq,
 	uint16_t tries = 0;
 
 	uint16_t head_idx = 0;
-	uint16_t len = 0;
+	uint32_t len = 0;
 
 	*num_buffers = 0;
 	cur_idx  = vq->last_avail_idx;
