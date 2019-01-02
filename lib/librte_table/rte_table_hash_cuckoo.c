@@ -136,7 +136,7 @@ rte_table_hash_cuckoo_create(void *params,
 	struct rte_hash_parameters hash_cuckoo_params = {
 		.entries = p->n_keys,
 		.key_len = p->key_size,
-		.hash_func = (rte_hash_function)(p->f_hash),
+		.hash_func = (rte_hash_function)(void *)(p->f_hash),
 		.hash_func_init_val = p->seed,
 		.socket_id = socket_id,
 		.name = p->name
