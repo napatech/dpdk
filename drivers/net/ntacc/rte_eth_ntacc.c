@@ -78,6 +78,7 @@ int ntacc_logtype;
 struct supportedDriver_s supportedDriver = {3, 7, 2};
 
 #define PCI_VENDOR_ID_NAPATECH 0x18F4
+#define PCI_DEVICE_ID_NT200A02 0x01C5
 #define PCI_DEVICE_ID_NT200A01 0x01A5
 #define PCI_DEVICE_ID_NT80E3   0x0165
 #define PCI_DEVICE_ID_NT20E3   0x0175
@@ -103,6 +104,7 @@ struct supportedAdapters_s supportedAdapters[NB_SUPPORTED_FPGAS] =
   { 200, 7000, 12, 0, 0 },
   { 200, 7001, 12, 0, 0 },
   { 200, 9523, 14, 0, 0 },
+  { 200, 9524, 14, 0, 0 },
 };
 
 static void *_libnt;
@@ -3384,6 +3386,9 @@ static int rte_pmd_ntacc_dev_probe(struct rte_pci_driver *drv __rte_unused, stru
 }
 
 static const struct rte_pci_id ntacc_pci_id_map[] = {
+  {
+		RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT200A02)
+	},
 	{
 		RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT200A01)
 	},
