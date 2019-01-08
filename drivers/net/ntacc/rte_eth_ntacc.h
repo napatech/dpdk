@@ -226,8 +226,8 @@ struct pmd_internals {
   struct pmd_shared_mem_s *shm;
   struct ntacc_flow_match flow;
   // Bit field
-  uint32_t              flowMatcher:1;
-  uint32_t              keyMatcher:1;
+  int                   flowMatcher;
+  int                   keyMatcher;
 };
 
 #ifdef RTE_CONTIGUOUS_MEMORY_BATCHING

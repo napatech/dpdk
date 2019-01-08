@@ -819,13 +819,17 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     tx_q[queue].plock = &port_locks[tx_q[queue].port];
   }
 
-  if (internals->flowMatcher == 1) {
+  if (internals->flowMatcher > 0) {
     for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
       if (rx_q[queue].enabled) {
         NtFlowAttr_t attr;
+        uint32_t flags = NT_FLOW_STREAM_WR;
+        if (internals->flowMatcher > 1) {
+          flags |= NT_FLOW_STREAM_RD;
+        }
         (*_NT_FlowOpenAttrInit)(&attr);
         (*_NT_FlowOpenAttrSetAdapterNo)(&attr, internals->adapterNo);
-        (*_NT_FlowOpenAttrSetFlags)(&attr, NT_FLOW_STREAM_WR | NT_FLOW_STREAM_RD);
+        (*_NT_FlowOpenAttrSetFlags)(&attr, flags);
         if ((status = (*_NT_FlowOpen_Attr)(&rx_q[queue].hFlowStream, "DPDK", &attr)) != NT_SUCCESS) {
           _log_nt_errors(status, "NT_NetRxOpen() failed", __func__);
           goto StartError;
@@ -888,7 +892,7 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
     }
   }
 
-  if (internals->flowMatcher == 1) {
+  if (internals->flowMatcher > 0) {
     char ntpl_buf[21];
     for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
       if (rx_q[queue].enabled) {
@@ -2195,7 +2199,7 @@ static int _dev_flow_match_program(struct rte_eth_dev *dev,
     return 1;
   }
 
-  if (!tuple && internals->flowMatcher == 1) {
+  if (!tuple && internals->flowMatcher > 0) {
     return 0;
   }
 
@@ -2678,7 +2682,7 @@ static int eth_xstats_get(struct rte_eth_dev *dev __rte_unused, struct rte_eth_x
   }
   NTACC_UNLOCK(&internals->statlock);
 
-  learn = pStatData->u.flowData_v0.learnTotal;
+  learn = pStatData->u.flowData_v0.learnDone;
   fail = pStatData->u.flowData_v0.learnFail;
   rte_free(pStatData);
 
@@ -2981,7 +2985,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     internals->version.patch = version.patch;
     internals->nbPortsOnAdapter = nbPortsOnAdapter;
     internals->nbPortsInSystem = nbPortsInSystem;
-;
+
     strcpy(internals->name, name);
     strcpy(internals->driverName, "net_ntacc");
 
