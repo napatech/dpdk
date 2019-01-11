@@ -54,12 +54,12 @@ extern "C" {
 /**
 * Extra Napatech major version numbers
 */
-#define RTE_NT_MAJOR_VER 1
+#define RTE_NT_MAJOR_VER 2
 
 /**
 * Extra Napatech minor version numbers
 */
-#define RTE_NT_MINOR_VER 10
+#define RTE_NT_MINOR_VER 0
 
 /**
 * Extra Napatech string to be appended to version number
