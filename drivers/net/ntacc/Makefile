@@ -60,6 +60,11 @@ ifneq ($(CONFIG_RTE_LIBRTE_PMD_NTACC_COPY_OFFSET),n)
 CFLAGS += -DCOPY_OFFSET0=$(CONFIG_RTE_LIBRTE_PMD_NTACC_OFFSET0)
 endif
 
+ifneq ($(CONFIG_RTE_LIBRTE_PMD_NTACC_USE_EXTERNAL_BUFFER),n)
+CFLAGS += -DUSE_EXTERNAL_BUFFER
+CFLAGS += -DALLOW_EXPERIMENTAL_API
+endif
+
 LDLIBS += -ldl -lpthread
 
 EXPORT_MAP := rte_pmd_ntacc_version.map
@@ -78,7 +83,7 @@ SRCS-$(CONFIG_RTE_LIBRTE_PMD_NTACC) += filter_ntacc.c
 SYMLINK-y-include +=
 
 # this lib depends upon:
-LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_kvargs 
+LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_kvargs
 LDLIBS += -lrte_ethdev -lrte_bus_pci
 
 include $(RTE_SDK)/mk/rte.lib.mk

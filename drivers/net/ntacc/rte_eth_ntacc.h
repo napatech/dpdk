@@ -86,12 +86,12 @@ enum {
 };
 
 struct ntacc_rx_queue {
+  uint64_t offW;
+  uint64_t offR;
+  struct NtNetRxHbRing_s ringControl;
   NtNetBuf_t             pSeg;    /* The current segment we are working with */
   NtNetStreamRx_t        pNetRx;
   struct rte_mempool    *mb_pool;
-#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
-  uint32_t               cmbatch;
-#endif
   uint32_t               in_port;
   struct NtNetBuf_s      pkt;     /* The current packet */
 #ifdef USE_SW_STAT
@@ -110,6 +110,7 @@ struct ntacc_rx_queue {
 } __rte_cache_aligned;
 
 struct ntacc_tx_queue {
+  struct NtNetTxHbRing_s ringControl;
   NtNetStreamTx_t        pNetTx;
 #ifdef USE_SW_STAT
   volatile uint64_t      tx_pkts;
@@ -167,7 +168,7 @@ struct filter_values_s {
   } value;
 };
 
-#define NTACC_NAME_LEN (PCI_PRI_STR_SIZE + 10)
+#define NTACC_NAME_LEN (PCI_PRI_STR_SIZE + 20)
 
 struct pmd_internals {
   struct ntacc_rx_queue rxq[RTE_ETHDEV_QUEUE_STAT_CNTRS];
@@ -209,14 +210,6 @@ struct pmd_internals {
   uint32_t              keyMatcher:1;
 };
 
-#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
-struct batch_ctrl {
-	void      *orig_buf_addr;
-	void      *queue;
-	NtNetBuf_t pSeg;
-};
-#endif
-
 enum {
   ACTION_RSS       = 1 << 0,
   ACTION_QUEUE     = 1 << 1,
@@ -240,7 +233,16 @@ struct supportedAdapters_s {
   uint32_t build:10;
 };
 
-#define NB_SUPPORTED_FPGAS 13
+#ifdef USE_EXTERNAL_BUFFER
+struct externalBufferInfo_s {
+  struct ntacc_rx_queue           *rx_q;
+  uint64_t                        offR;
+  struct rte_mbuf_ext_shared_info shinfo;
+};
+#endif
+
+
+#define NB_SUPPORTED_FPGAS 14
 
 int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *internals, struct rte_flow_error *error);
 
