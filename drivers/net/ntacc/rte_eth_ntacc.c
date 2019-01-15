@@ -2243,7 +2243,8 @@ static int _dev_flow_match_program(struct rte_eth_dev *dev,
 
   memset(&flowMatch, 0, sizeof(NtFlow_t));
   flowMatch.color = 0;
-  flowMatch.op = 1;
+  flowMatch.op = tuple->flag & RTE_FLOW_PROGRAM_DELETE ? 0 : 1;
+  flowMatch.gfi = 1;
   flowMatch.prot = tuple->proto;
   flowMatch.id = tuple->flowID;
 
