@@ -900,7 +900,7 @@ rte_event_eth_rx_adapter_create_ext(uint8_t id, uint8_t dev_id,
 	rx_adapter->conf_arg = conf_arg;
 	strcpy(rx_adapter->mem_name, mem_name);
 	rx_adapter->eth_devices = rte_zmalloc_socket(rx_adapter->mem_name,
-					rte_eth_dev_count() *
+					RTE_MAX_ETHPORTS *
 					sizeof(struct eth_device_info), 0,
 					socket_id);
 	rte_convert_rss_key((const uint32_t *)default_rss_key,
@@ -913,7 +913,7 @@ rte_event_eth_rx_adapter_create_ext(uint8_t id, uint8_t dev_id,
 		return -ENOMEM;
 	}
 	rte_spinlock_init(&rx_adapter->rx_lock);
-	for (i = 0; i < rte_eth_dev_count(); i++)
+	for (i = 0; i < RTE_MAX_ETHPORTS; i++)
 		rx_adapter->eth_devices[i].dev = &rte_eth_devices[i];
 
 	event_eth_rx_adapter[id] = rx_adapter;
