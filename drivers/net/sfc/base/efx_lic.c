@@ -340,12 +340,11 @@ efx_mcdi_fc_license_update_license(
 	__in		efx_nic_t *enp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MC_CMD_FC_IN_LICENSE_LEN];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_FC_IN_LICENSE_LEN, 0);
 	efx_rc_t rc;
 
 	EFSYS_ASSERT(enp->en_family == EFX_FAMILY_SIENA);
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_FC;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_FC_IN_LICENSE_LEN;
@@ -386,13 +385,12 @@ efx_mcdi_fc_license_get_key_stats(
 	__out		efx_key_stats_t *eksp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_FC_IN_LICENSE_LEN,
-			    MC_CMD_FC_OUT_LICENSE_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_FC_IN_LICENSE_LEN,
+		MC_CMD_FC_OUT_LICENSE_LEN);
 	efx_rc_t rc;
 
 	EFSYS_ASSERT(enp->en_family == EFX_FAMILY_SIENA);
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_FC;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_FC_IN_LICENSE_LEN;
@@ -711,8 +709,8 @@ efx_mcdi_licensed_app_state(
 	__out		boolean_t *licensedp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_GET_LICENSED_APP_STATE_IN_LEN,
-			    MC_CMD_GET_LICENSED_APP_STATE_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_GET_LICENSED_APP_STATE_IN_LEN,
+		MC_CMD_GET_LICENSED_APP_STATE_OUT_LEN);
 	uint32_t app_state;
 	efx_rc_t rc;
 
@@ -724,7 +722,6 @@ efx_mcdi_licensed_app_state(
 		goto fail1;
 	}
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_GET_LICENSED_APP_STATE;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_GET_LICENSED_APP_STATE_IN_LEN;
@@ -770,12 +767,11 @@ efx_mcdi_licensing_update_licenses(
 	__in		efx_nic_t *enp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MC_CMD_LICENSING_IN_LEN];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_LICENSING_IN_LEN, 0);
 	efx_rc_t rc;
 
 	EFSYS_ASSERT(enp->en_family == EFX_FAMILY_HUNTINGTON);
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_LICENSING;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_LICENSING_IN_LEN;
@@ -813,13 +809,12 @@ efx_mcdi_licensing_get_key_stats(
 	__out		efx_key_stats_t *eksp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_LICENSING_IN_LEN,
-			    MC_CMD_LICENSING_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_LICENSING_IN_LEN,
+		MC_CMD_LICENSING_OUT_LEN);
 	efx_rc_t rc;
 
 	EFSYS_ASSERT(enp->en_family == EFX_FAMILY_HUNTINGTON);
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_LICENSING;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_LICENSING_IN_LEN;
@@ -877,12 +872,11 @@ efx_mcdi_licensing_v3_update_licenses(
 	__in		efx_nic_t *enp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MC_CMD_LICENSING_V3_IN_LEN];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_LICENSING_V3_IN_LEN, 0);
 	efx_rc_t rc;
 
 	EFSYS_ASSERT(enp->en_family == EFX_FAMILY_MEDFORD);
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_LICENSING_V3;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_LICENSING_V3_IN_LEN;
@@ -913,13 +907,12 @@ efx_mcdi_licensing_v3_report_license(
 	__out		efx_key_stats_t *eksp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_LICENSING_V3_IN_LEN,
-			    MC_CMD_LICENSING_V3_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_LICENSING_V3_IN_LEN,
+		MC_CMD_LICENSING_V3_OUT_LEN);
 	efx_rc_t rc;
 
 	EFSYS_ASSERT(enp->en_family == EFX_FAMILY_MEDFORD);
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_LICENSING_V3;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_LICENSING_V3_IN_LEN;
@@ -976,14 +969,13 @@ efx_mcdi_licensing_v3_app_state(
 	__out		boolean_t *licensedp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_GET_LICENSED_V3_APP_STATE_IN_LEN,
-			    MC_CMD_GET_LICENSED_V3_APP_STATE_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_GET_LICENSED_V3_APP_STATE_IN_LEN,
+		MC_CMD_GET_LICENSED_V3_APP_STATE_OUT_LEN);
 	uint32_t app_state;
 	efx_rc_t rc;
 
 	EFSYS_ASSERT(enp->en_family == EFX_FAMILY_MEDFORD);
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_GET_LICENSED_V3_APP_STATE;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_GET_LICENSED_V3_APP_STATE_IN_LEN;
@@ -1034,8 +1026,8 @@ efx_mcdi_licensing_v3_get_id(
 			uint8_t *bufferp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_LICENSING_GET_ID_V3_IN_LEN,
-			    MC_CMD_LICENSING_GET_ID_V3_OUT_LENMAX)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_LICENSING_GET_ID_V3_IN_LEN,
+		MC_CMD_LICENSING_GET_ID_V3_OUT_LENMAX);
 	efx_rc_t rc;
 
 	req.emr_cmd = MC_CMD_LICENSING_GET_ID_V3;
