@@ -2533,6 +2533,9 @@ ixgbe_dev_start(struct rte_eth_dev *dev)
 		return -EINVAL;
 	}
 
+	/* Stop the link setup handler before resetting the HW. */
+	rte_eal_alarm_cancel(ixgbe_dev_setup_link_alarm_handler, dev);
+
 	/* disable uio/vfio intr/eventfd mapping */
 	rte_intr_disable(intr_handle);
 
@@ -2733,6 +2736,12 @@ skip_link_setup:
 		PMD_DRV_LOG(WARNING,
 			    "please call hierarchy_commit() "
 			    "before starting the port");
+
+	/*
+	 * Update link status right before return, because it may
+	 * start link configuration process in a separate thread.
+	 */
+	ixgbe_dev_link_update(dev, 0);
 
 	return 0;
 
@@ -5042,6 +5051,9 @@ ixgbevf_dev_start(struct rte_eth_dev *dev)
 
 	PMD_INIT_FUNC_TRACE();
 
+	/* Stop the link setup handler before resetting the HW. */
+	rte_eal_alarm_cancel(ixgbe_dev_setup_link_alarm_handler, dev);
+
 	err = hw->mac.ops.reset_hw(hw);
 	if (err) {
 		PMD_INIT_LOG(ERR, "Unable to reset vf hardware (%d)", err);
@@ -5113,6 +5125,12 @@ ixgbevf_dev_start(struct rte_eth_dev *dev)
 
 	/* Re-enable interrupt for VF */
 	ixgbevf_intr_enable(hw);
+
+	/*
+	 * Update link status right before return, because it may
+	 * start link configuration process in a separate thread.
+	 */
+	ixgbevf_dev_link_update(dev, 0);
 
 	return 0;
 }
