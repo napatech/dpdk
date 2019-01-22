@@ -254,6 +254,8 @@ static int ixgbe_dev_interrupt_action(struct rte_eth_dev *dev,
 				      struct rte_intr_handle *handle);
 static void ixgbe_dev_interrupt_handler(void *param);
 static void ixgbe_dev_interrupt_delayed_handler(void *param);
+static void ixgbe_dev_setup_link_alarm_handler(void *param);
+
 static int ixgbe_add_rar(struct rte_eth_dev *dev, struct ether_addr *mac_addr,
 			 uint32_t index, uint32_t pool);
 static void ixgbe_remove_rar(struct rte_eth_dev *dev, uint32_t index);
@@ -2759,6 +2761,8 @@ ixgbe_dev_stop(struct rte_eth_dev *dev)
 
 	PMD_INIT_FUNC_TRACE();
 
+	rte_eal_alarm_cancel(ixgbe_dev_setup_link_alarm_handler, dev);
+
 	/* disable interrupts */
 	ixgbe_disable_intr(hw);
 
@@ -3954,6 +3958,25 @@ out:
 	return ret_val;
 }
 
+static void
+ixgbe_dev_setup_link_alarm_handler(void *param)
+{
+	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
+	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct ixgbe_interrupt *intr =
+		IXGBE_DEV_PRIVATE_TO_INTR(dev->data->dev_private);
+	u32 speed;
+	bool autoneg = false;
+
+	speed = hw->phy.autoneg_advertised;
+	if (!speed)
+		ixgbe_get_link_capabilities(hw, &speed, &autoneg);
+
+	ixgbe_setup_link(hw, speed, true);
+
+	intr->flags &= ~IXGBE_FLAG_NEED_LINK_CONFIG;
+}
+
 /* return 0 means link status changed, -1 means not changed */
 static int
 ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
@@ -3966,9 +3989,7 @@ ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
 		IXGBE_DEV_PRIVATE_TO_INTR(dev->data->dev_private);
 	int link_up;
 	int diag;
-	u32 speed = 0;
 	int wait = 1;
-	bool autoneg = false;
 
 	link.link_status = ETH_LINK_DOWN;
 	link.link_speed = 0;
@@ -3979,12 +4000,11 @@ ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
 
 	hw->mac.get_link_status = true;
 
-	if ((intr->flags & IXGBE_FLAG_NEED_LINK_CONFIG) &&
-		ixgbe_get_media_type(hw) == ixgbe_media_type_fiber) {
-		speed = hw->phy.autoneg_advertised;
-		if (!speed)
-			ixgbe_get_link_capabilities(hw, &speed, &autoneg);
-		ixgbe_setup_link(hw, speed, true);
+	if (intr->flags & IXGBE_FLAG_NEED_LINK_CONFIG) {
+		rte_ixgbe_dev_atomic_write_link_status(dev, &link);
+		if (link.link_status == old.link_status)
+			return -1;
+		return 0;
 	}
 
 	/* check if it needs to wait to complete, if lsc interrupt is enabled */
@@ -4007,12 +4027,16 @@ ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
 
 	if (link_up == 0) {
 		rte_ixgbe_dev_atomic_write_link_status(dev, &link);
-		intr->flags |= IXGBE_FLAG_NEED_LINK_CONFIG;
+		if (ixgbe_get_media_type(hw) == ixgbe_media_type_fiber) {
+			intr->flags |= IXGBE_FLAG_NEED_LINK_CONFIG;
+			rte_eal_alarm_set(10,
+				ixgbe_dev_setup_link_alarm_handler, dev);
+		}
 		if (link.link_status == old.link_status)
 			return -1;
 		return 0;
 	}
-	intr->flags &= ~IXGBE_FLAG_NEED_LINK_CONFIG;
+
 	link.link_status = ETH_LINK_UP;
 	link.link_duplex = ETH_LINK_FULL_DUPLEX;
 
@@ -5101,6 +5125,8 @@ ixgbevf_dev_stop(struct rte_eth_dev *dev)
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 
 	PMD_INIT_FUNC_TRACE();
+
+	rte_eal_alarm_cancel(ixgbe_dev_setup_link_alarm_handler, dev);
 
 	ixgbevf_intr_disable(hw);
 
