@@ -56,6 +56,9 @@ static uint64_t dev_tx_offloads_nodis =
 		DEV_TX_OFFLOAD_MT_LOCKFREE |
 		DEV_TX_OFFLOAD_MBUF_FAST_FREE;
 
+/* enable timestamp in mbuf */
+enum pmd_dpaa2_ts dpaa2_enable_ts;
+
 struct rte_dpaa2_xstats_name_off {
 	char name[RTE_ETH_XSTATS_NAME_SIZE];
 	uint8_t page_id; /* dpni statistics page id */
@@ -87,6 +90,12 @@ static int dpaa2_dev_set_link_down(struct rte_eth_dev *dev);
 static int dpaa2_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
 
 int dpaa2_logtype_pmd;
+
+__rte_experimental void
+rte_pmd_dpaa2_set_timestamp(enum pmd_dpaa2_ts enable)
+{
+	dpaa2_enable_ts = enable;
+}
 
 static int
 dpaa2_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
@@ -235,7 +244,7 @@ dpaa2_alloc_rx_tx_queues(struct rte_eth_dev *dev)
 	}
 
 	for (i = 0; i < priv->nb_rx_queues; i++) {
-		mc_q->dev = dev;
+		mc_q->eth_data = dev->data;
 		priv->rx_vq[i] = mc_q++;
 		dpaa2_q = (struct dpaa2_queue *)priv->rx_vq[i];
 		dpaa2_q->q_storage = rte_malloc("dq_storage",
@@ -251,7 +260,7 @@ dpaa2_alloc_rx_tx_queues(struct rte_eth_dev *dev)
 	}
 
 	for (i = 0; i < priv->nb_tx_queues; i++) {
-		mc_q->dev = dev;
+		mc_q->eth_data = dev->data;
 		mc_q->flow_id = 0xffff;
 		priv->tx_vq[i] = mc_q++;
 		dpaa2_q = (struct dpaa2_queue *)priv->tx_vq[i];
@@ -311,8 +320,7 @@ dpaa2_free_rx_tx_queues(struct rte_eth_dev *dev)
 		/* cleanup tx queue cscn */
 		for (i = 0; i < priv->nb_tx_queues; i++) {
 			dpaa2_q = (struct dpaa2_queue *)priv->tx_vq[i];
-			if (!dpaa2_q->cscn)
-				rte_free(dpaa2_q->cscn);
+			rte_free(dpaa2_q->cscn);
 		}
 		/*free memory for all queues (RX+TX) */
 		rte_free(priv->rx_vq[0]);
@@ -477,6 +485,7 @@ dpaa2_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	}
 	dpaa2_q = (struct dpaa2_queue *)priv->rx_vq[rx_queue_id];
 	dpaa2_q->mb_pool = mb_pool; /**< mbuf pool to populate RX ring. */
+	dpaa2_q->bp_array = rte_dpaa2_bpid_info;
 
 	/*Get the flow id from given VQ id*/
 	flow_id = rx_queue_id % priv->nb_rx_queues;
@@ -1919,8 +1928,15 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	PMD_INIT_FUNC_TRACE();
 
 	/* For secondary processes, the primary has done all the work */
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+		/* In case of secondary, only burst and ops API need to be
+		 * plugged.
+		 */
+		eth_dev->dev_ops = &dpaa2_ethdev_ops;
+		eth_dev->rx_pkt_burst = dpaa2_dev_prefetch_rx;
+		eth_dev->tx_pkt_burst = dpaa2_dev_tx;
 		return 0;
+	}
 
 	dpaa2_dev = container_of(dev, struct rte_dpaa2_device, device);
 

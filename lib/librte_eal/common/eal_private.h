@@ -255,8 +255,12 @@ struct rte_bus *rte_bus_find_by_device_name(const char *str);
  *   0 on success;
  *   (<0) on failure.
  */
-
 int rte_mp_channel_init(void);
+
+/**
+ * Primary/secondary communication cleanup.
+ */
+void rte_mp_channel_cleanup(void);
 
 /**
  * @internal
@@ -369,5 +373,12 @@ rte_option_parse(const char *opt);
  */
 void
 rte_option_init(void);
+
+/**
+ * Iterate through the registered options and show the associated
+ * usage string.
+ */
+void
+rte_option_usage(void);
 
 #endif /* _EAL_PRIVATE_H_ */

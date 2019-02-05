@@ -33,9 +33,9 @@
 #include <rte_random.h>
 #include <rte_dev.h>
 
-#include "common.h"
-#include "t4_regs.h"
-#include "t4_msg.h"
+#include "base/common.h"
+#include "base/t4_regs.h"
+#include "base/t4_msg.h"
 #include "cxgbe.h"
 
 static inline void ship_tx_pkt_coalesce_wr(struct adapter *adap,
@@ -397,7 +397,8 @@ static unsigned int refill_fl_usembufs(struct adapter *adap, struct sge_fl *q,
 
 		rte_mbuf_refcnt_set(mbuf, 1);
 		mbuf->data_off =
-			(uint16_t)(RTE_PTR_ALIGN((char *)mbuf->buf_addr +
+			(uint16_t)((char *)
+				   RTE_PTR_ALIGN((char *)mbuf->buf_addr +
 						 RTE_PKTMBUF_HEADROOM,
 						 adap->sge.fl_align) -
 				   (char *)mbuf->buf_addr);

@@ -97,8 +97,9 @@ struct hn_data {
 	struct rte_eth_dev *vf_dev;		/* Subordinate device */
 	rte_spinlock_t  vf_lock;
 	uint16_t	port_id;
-	bool		closed;
-	bool		vf_present;
+	uint8_t		closed;
+	uint8_t		vf_present;
+	uint8_t		vlan_strip;
 	uint32_t	link_status;
 	uint32_t	link_speed;
 
@@ -149,6 +150,7 @@ uint16_t hn_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		      uint16_t nb_pkts);
 
 int	hn_tx_pool_init(struct rte_eth_dev *dev);
+void	hn_tx_pool_uninit(struct rte_eth_dev *dev);
 int	hn_dev_link_update(struct rte_eth_dev *dev, int wait);
 int	hn_dev_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 			      uint16_t nb_desc, unsigned int socket_id,

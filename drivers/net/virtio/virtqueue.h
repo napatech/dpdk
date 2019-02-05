@@ -19,15 +19,40 @@
 struct rte_mbuf;
 
 /*
- * Per virtio_config.h in Linux.
+ * Per virtio_ring.h in Linux.
  *     For virtio_pci on SMP, we don't need to order with respect to MMIO
  *     accesses through relaxed memory I/O windows, so smp_mb() et al are
  *     sufficient.
  *
+ *     For using virtio to talk to real devices (eg. vDPA) we do need real
+ *     barriers.
  */
-#define virtio_mb()	rte_smp_mb()
-#define virtio_rmb()	rte_smp_rmb()
-#define virtio_wmb()	rte_smp_wmb()
+static inline void
+virtio_mb(uint8_t weak_barriers)
+{
+	if (weak_barriers)
+		rte_smp_mb();
+	else
+		rte_mb();
+}
+
+static inline void
+virtio_rmb(uint8_t weak_barriers)
+{
+	if (weak_barriers)
+		rte_smp_rmb();
+	else
+		rte_cio_rmb();
+}
+
+static inline void
+virtio_wmb(uint8_t weak_barriers)
+{
+	if (weak_barriers)
+		rte_smp_wmb();
+	else
+		rte_cio_wmb();
+}
 
 #ifdef RTE_PMD_PACKET_PREFETCH
 #define rte_packet_prefetch(p)  rte_prefetch1(p)
@@ -161,11 +186,17 @@ struct virtio_pmd_ctrl {
 struct vq_desc_extra {
 	void *cookie;
 	uint16_t ndescs;
+	uint16_t next;
 };
 
 struct virtqueue {
 	struct virtio_hw  *hw; /**< virtio_hw structure pointer. */
 	struct vring vq_ring;  /**< vring keeping desc, used and avail */
+	struct vring_packed ring_packed;  /**< vring keeping descs */
+	bool avail_wrap_counter;
+	bool used_wrap_counter;
+	uint16_t event_flags_shadow;
+	uint16_t avail_used_flags;
 	/**
 	 * Last consumed descriptor in the used table,
 	 * trails vq_ring.used->idx.
@@ -241,13 +272,41 @@ struct virtio_net_hdr_mrg_rxbuf {
 #define VIRTIO_MAX_TX_INDIRECT 8
 struct virtio_tx_region {
 	struct virtio_net_hdr_mrg_rxbuf tx_hdr;
-	struct vring_desc tx_indir[VIRTIO_MAX_TX_INDIRECT]
-			   __attribute__((__aligned__(16)));
+	union {
+		struct vring_desc tx_indir[VIRTIO_MAX_TX_INDIRECT]
+			__attribute__((__aligned__(16)));
+		struct vring_packed_desc tx_indir_pq[VIRTIO_MAX_TX_INDIRECT]
+			__attribute__((__aligned__(16)));
+	};
 };
+
+static inline int
+desc_is_used(struct vring_packed_desc *desc, struct virtqueue *vq)
+{
+	uint16_t used, avail, flags;
+
+	flags = desc->flags;
+	used = !!(flags & VRING_DESC_F_USED(1));
+	avail = !!(flags & VRING_DESC_F_AVAIL(1));
+
+	return avail == used && used == vq->used_wrap_counter;
+}
+
+static inline void
+vring_desc_init_packed(struct virtqueue *vq, int n)
+{
+	int i;
+	for (i = 0; i < n - 1; i++) {
+		vq->ring_packed.desc_packed[i].id = i;
+		vq->vq_descx[i].next = i + 1;
+	}
+	vq->ring_packed.desc_packed[i].id = i;
+	vq->vq_descx[i].next = VQ_RING_DESC_CHAIN_END;
+}
 
 /* Chain all the descriptors in the ring with an END */
 static inline void
-vring_desc_init(struct vring_desc *dp, uint16_t n)
+vring_desc_init_split(struct vring_desc *dp, uint16_t n)
 {
 	uint16_t i;
 
@@ -260,9 +319,48 @@ vring_desc_init(struct vring_desc *dp, uint16_t n)
  * Tell the backend not to interrupt us.
  */
 static inline void
+virtqueue_disable_intr_packed(struct virtqueue *vq)
+{
+	uint16_t *event_flags = &vq->ring_packed.driver_event->desc_event_flags;
+
+	*event_flags = RING_EVENT_FLAGS_DISABLE;
+}
+
+
+/**
+ * Tell the backend not to interrupt us.
+ */
+static inline void
 virtqueue_disable_intr(struct virtqueue *vq)
 {
-	vq->vq_ring.avail->flags |= VRING_AVAIL_F_NO_INTERRUPT;
+	if (vtpci_packed_queue(vq->hw))
+		virtqueue_disable_intr_packed(vq);
+	else
+		vq->vq_ring.avail->flags |= VRING_AVAIL_F_NO_INTERRUPT;
+}
+
+/**
+ * Tell the backend to interrupt. Implementation for packed virtqueues.
+ */
+static inline void
+virtqueue_enable_intr_packed(struct virtqueue *vq)
+{
+	uint16_t *event_flags = &vq->ring_packed.driver_event->desc_event_flags;
+
+	if (vq->event_flags_shadow == RING_EVENT_FLAGS_DISABLE) {
+		virtio_wmb(vq->hw->weak_barriers);
+		vq->event_flags_shadow = RING_EVENT_FLAGS_ENABLE;
+		*event_flags = vq->event_flags_shadow;
+	}
+}
+
+/**
+ * Tell the backend to interrupt. Implementation for split virtqueues.
+ */
+static inline void
+virtqueue_enable_intr_split(struct virtqueue *vq)
+{
+	vq->vq_ring.avail->flags &= (~VRING_AVAIL_F_NO_INTERRUPT);
 }
 
 /**
@@ -271,7 +369,10 @@ virtqueue_disable_intr(struct virtqueue *vq)
 static inline void
 virtqueue_enable_intr(struct virtqueue *vq)
 {
-	vq->vq_ring.avail->flags &= (~VRING_AVAIL_F_NO_INTERRUPT);
+	if (vtpci_packed_queue(vq->hw))
+		virtqueue_enable_intr_packed(vq);
+	else
+		virtqueue_enable_intr_split(vq);
 }
 
 /**
@@ -306,13 +407,14 @@ virtio_get_queue_type(struct virtio_hw *hw, uint16_t vtpci_queue_idx)
 #define VIRTQUEUE_NUSED(vq) ((uint16_t)((vq)->vq_ring.used->idx - (vq)->vq_used_cons_idx))
 
 void vq_ring_free_chain(struct virtqueue *vq, uint16_t desc_idx);
+void vq_ring_free_chain_packed(struct virtqueue *vq, uint16_t used_idx);
 void vq_ring_free_inorder(struct virtqueue *vq, uint16_t desc_idx,
 			  uint16_t num);
 
 static inline void
 vq_update_avail_idx(struct virtqueue *vq)
 {
-	virtio_wmb();
+	virtio_wmb(vq->hw->weak_barriers);
 	vq->vq_ring.avail->idx = vq->vq_avail_idx;
 }
 
@@ -336,17 +438,35 @@ vq_update_avail_ring(struct virtqueue *vq, uint16_t desc_idx)
 static inline int
 virtqueue_kick_prepare(struct virtqueue *vq)
 {
+	/*
+	 * Ensure updated avail->idx is visible to vhost before reading
+	 * the used->flags.
+	 */
+	virtio_mb(vq->hw->weak_barriers);
 	return !(vq->vq_ring.used->flags & VRING_USED_F_NO_NOTIFY);
 }
 
+static inline int
+virtqueue_kick_prepare_packed(struct virtqueue *vq)
+{
+	uint16_t flags;
+
+	/*
+	 * Ensure updated data is visible to vhost before reading the flags.
+	 */
+	virtio_mb(vq->hw->weak_barriers);
+	flags = vq->ring_packed.device_event->desc_event_flags;
+
+	return flags != RING_EVENT_FLAGS_DISABLE;
+}
+
+/*
+ * virtqueue_kick_prepare*() or the virtio_wmb() should be called
+ * before this function to be sure that all the data is visible to vhost.
+ */
 static inline void
 virtqueue_notify(struct virtqueue *vq)
 {
-	/*
-	 * Ensure updated avail->idx is visible to host.
-	 * For virtio on IA, the notificaiton is through io port operation
-	 * which is a serialization instruction itself.
-	 */
 	VTPCI_OPS(vq->hw)->notify_queue(vq->hw, vq);
 }
 
@@ -355,6 +475,15 @@ virtqueue_notify(struct virtqueue *vq)
 	uint16_t used_idx, nused; \
 	used_idx = (vq)->vq_ring.used->idx; \
 	nused = (uint16_t)(used_idx - (vq)->vq_used_cons_idx); \
+	if (vtpci_packed_queue((vq)->hw)) { \
+		PMD_INIT_LOG(DEBUG, \
+		"VQ: - size=%d; free=%d; used_cons_idx=%d; avail_idx=%d;" \
+		"VQ: - avail_wrap_counter=%d; used_wrap_counter=%d", \
+		(vq)->vq_nentries, (vq)->vq_free_cnt, (vq)->vq_used_cons_idx, \
+		(vq)->vq_avail_idx, (vq)->avail_wrap_counter, \
+		(vq)->used_wrap_counter); \
+		break; \
+	} \
 	PMD_INIT_LOG(DEBUG, \
 	  "VQ: - size=%d; free=%d; used=%d; desc_head_idx=%d;" \
 	  " avail.idx=%d; used_cons_idx=%d; used.idx=%d;" \

@@ -310,7 +310,7 @@ struct rte_comp_op {
 	struct rte_mbuf *m_src;
 	/**< source mbuf
 	 * The total size of the input buffer(s) can be retrieved using
-	 * rte_pktmbuf_data_len(m_src). The max data size which can fit in a
+	 * rte_pktmbuf_pkt_len(m_src). The max data size which can fit in a
 	 * single mbuf is limited by the uint16_t rte_mbuf.data_len to 64k-1.
 	 * If the input data is bigger than this it can be passed to the PMD in
 	 * a chain of mbufs if the PMD's capabilities indicate it supports this.
@@ -318,7 +318,7 @@ struct rte_comp_op {
 	struct rte_mbuf *m_dst;
 	/**< destination mbuf
 	 * The total size of the output buffer(s) can be retrieved using
-	 * rte_pktmbuf_data_len(m_dst). The max data size which can fit in a
+	 * rte_pktmbuf_pkt_len(m_dst). The max data size which can fit in a
 	 * single mbuf is limited by the uint16_t rte_mbuf.data_len to 64k-1.
 	 * If the output data is expected to be bigger than this a chain of
 	 * mbufs can be passed to the PMD if the PMD's capabilities indicate
@@ -465,6 +465,20 @@ rte_comp_op_bulk_alloc(struct rte_mempool *mempool,
  */
 void __rte_experimental
 rte_comp_op_free(struct rte_comp_op *op);
+
+/**
+ * Bulk free operation structures
+ * If operations have been allocated from an rte_mempool, then the operations
+ * will be returned to the mempool.
+ * The array entry will be cleared.
+ *
+ * @param ops
+ *   Array of Compress operations
+ * @param nb_ops
+ *   Number of operations to free
+ */
+void __rte_experimental
+rte_comp_op_bulk_free(struct rte_comp_op **ops, uint16_t nb_ops);
 
 /**
  * Get the name of a compress service feature flag

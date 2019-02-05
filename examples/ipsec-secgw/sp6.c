@@ -34,7 +34,7 @@ enum {
 
 #define IP6_ADDR_SIZE 16
 
-struct rte_acl_field_def ip6_defs[IP6_NUM] = {
+static struct rte_acl_field_def ip6_defs[IP6_NUM] = {
 	{
 	.type = RTE_ACL_FIELD_TYPE_BITMASK,
 	.size = sizeof(uint8_t),
@@ -116,11 +116,11 @@ struct rte_acl_field_def ip6_defs[IP6_NUM] = {
 
 RTE_ACL_RULE_DEF(acl6_rules, RTE_DIM(ip6_defs));
 
-struct acl6_rules acl6_rules_out[MAX_ACL_RULE_NUM];
-uint32_t nb_acl6_rules_out;
+static struct acl6_rules acl6_rules_out[MAX_ACL_RULE_NUM];
+static uint32_t nb_acl6_rules_out;
 
-struct acl6_rules acl6_rules_in[MAX_ACL_RULE_NUM];
-uint32_t nb_acl6_rules_in;
+static struct acl6_rules acl6_rules_in[MAX_ACL_RULE_NUM];
+static uint32_t nb_acl6_rules_in;
 
 void
 parse_sp6_tokens(char **tokens, uint32_t n_tokens,
@@ -617,4 +617,29 @@ sp6_init(struct socket_ctx *ctx, int32_t socket_id)
 	} else
 		RTE_LOG(WARNING, IPSEC, "No IPv6 SP Outbound rule "
 			"specified\n");
+}
+
+/*
+ * Search though SP rules for given SPI.
+ */
+int
+sp6_spi_present(uint32_t spi, int inbound)
+{
+	uint32_t i, num;
+	const struct acl6_rules *acr;
+
+	if (inbound != 0) {
+		acr = acl6_rules_in;
+		num = nb_acl6_rules_in;
+	} else {
+		acr = acl6_rules_out;
+		num = nb_acl6_rules_out;
+	}
+
+	for (i = 0; i != num; i++) {
+		if (acr[i].data.userdata == PROTECT(spi))
+			return i;
+	}
+
+	return -ENOENT;
 }

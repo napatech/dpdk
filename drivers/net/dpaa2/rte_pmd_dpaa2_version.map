@@ -10,3 +10,11 @@ DPDK_17.11 {
 	dpaa2_eth_eventq_detach;
 
 } DPDK_17.05;
+
+EXPERIMENTAL {
+	global:
+
+	rte_pmd_dpaa2_mux_flow_create;
+	rte_pmd_dpaa2_set_custom_hash;
+	rte_pmd_dpaa2_set_timestamp;
+} DPDK_17.11;

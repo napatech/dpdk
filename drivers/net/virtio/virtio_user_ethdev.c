@@ -271,10 +271,41 @@ virtio_user_get_queue_num(struct virtio_hw *hw, uint16_t queue_id __rte_unused)
 	return dev->queue_size;
 }
 
-static int
-virtio_user_setup_queue(struct virtio_hw *hw, struct virtqueue *vq)
+static void
+virtio_user_setup_queue_packed(struct virtqueue *vq,
+			       struct virtio_user_dev *dev)
 {
-	struct virtio_user_dev *dev = virtio_user_get_dev(hw);
+	uint16_t queue_idx = vq->vq_queue_index;
+	struct vring_packed *vring;
+	uint64_t desc_addr;
+	uint64_t avail_addr;
+	uint64_t used_addr;
+	uint16_t i;
+
+	vring  = &dev->packed_vrings[queue_idx];
+	desc_addr = (uintptr_t)vq->vq_ring_virt_mem;
+	avail_addr = desc_addr + vq->vq_nentries *
+		sizeof(struct vring_packed_desc);
+	used_addr = RTE_ALIGN_CEIL(avail_addr +
+			   sizeof(struct vring_packed_desc_event),
+			   VIRTIO_PCI_VRING_ALIGN);
+	vring->num = vq->vq_nentries;
+	vring->desc_packed =
+		(void *)(uintptr_t)desc_addr;
+	vring->driver_event =
+		(void *)(uintptr_t)avail_addr;
+	vring->device_event =
+		(void *)(uintptr_t)used_addr;
+	dev->packed_queues[queue_idx].avail_wrap_counter = true;
+	dev->packed_queues[queue_idx].used_wrap_counter = true;
+
+	for (i = 0; i < vring->num; i++)
+		vring->desc_packed[i].flags = 0;
+}
+
+static void
+virtio_user_setup_queue_split(struct virtqueue *vq, struct virtio_user_dev *dev)
+{
 	uint16_t queue_idx = vq->vq_queue_index;
 	uint64_t desc_addr, avail_addr, used_addr;
 
@@ -288,6 +319,17 @@ virtio_user_setup_queue(struct virtio_hw *hw, struct virtqueue *vq)
 	dev->vrings[queue_idx].desc = (void *)(uintptr_t)desc_addr;
 	dev->vrings[queue_idx].avail = (void *)(uintptr_t)avail_addr;
 	dev->vrings[queue_idx].used = (void *)(uintptr_t)used_addr;
+}
+
+static int
+virtio_user_setup_queue(struct virtio_hw *hw, struct virtqueue *vq)
+{
+	struct virtio_user_dev *dev = virtio_user_get_dev(hw);
+
+	if (vtpci_packed_queue(hw))
+		virtio_user_setup_queue_packed(vq, dev);
+	else
+		virtio_user_setup_queue_split(vq, dev);
 
 	return 0;
 }
@@ -317,7 +359,10 @@ virtio_user_notify_queue(struct virtio_hw *hw, struct virtqueue *vq)
 	struct virtio_user_dev *dev = virtio_user_get_dev(hw);
 
 	if (hw->cvq && (hw->cvq->vq == vq)) {
-		virtio_user_handle_cq(dev, vq->vq_queue_index);
+		if (vtpci_packed_queue(vq->hw))
+			virtio_user_handle_cq_packed(dev, vq->vq_queue_index);
+		else
+			virtio_user_handle_cq(dev, vq->vq_queue_index);
 		return;
 	}
 
@@ -361,6 +406,8 @@ static const char *valid_args[] = {
 	VIRTIO_USER_ARG_MRG_RXBUF,
 #define VIRTIO_USER_ARG_IN_ORDER       "in_order"
 	VIRTIO_USER_ARG_IN_ORDER,
+#define VIRTIO_USER_ARG_PACKED_VQ      "packed_vq"
+	VIRTIO_USER_ARG_PACKED_VQ,
 	NULL
 };
 
@@ -464,6 +511,7 @@ virtio_user_pmd_probe(struct rte_vdev_device *dev)
 	uint64_t server_mode = VIRTIO_USER_DEF_SERVER_MODE;
 	uint64_t mrg_rxbuf = 1;
 	uint64_t in_order = 1;
+	uint64_t packed_vq = 0;
 	char *path = NULL;
 	char *ifname = NULL;
 	char *mac_addr = NULL;
@@ -551,6 +599,15 @@ virtio_user_pmd_probe(struct rte_vdev_device *dev)
 		cq = 1;
 	}
 
+	if (rte_kvargs_count(kvlist, VIRTIO_USER_ARG_PACKED_VQ) == 1) {
+		if (rte_kvargs_process(kvlist, VIRTIO_USER_ARG_PACKED_VQ,
+				       &get_integer_arg, &packed_vq) < 0) {
+			PMD_INIT_LOG(ERR, "error to parse %s",
+				     VIRTIO_USER_ARG_PACKED_VQ);
+			goto end;
+		}
+	}
+
 	if (queues > 1 && cq == 0) {
 		PMD_INIT_LOG(ERR, "multi-q requires ctrl-q");
 		goto end;
@@ -598,7 +655,7 @@ virtio_user_pmd_probe(struct rte_vdev_device *dev)
 			vu_dev->is_server = false;
 		if (virtio_user_dev_init(hw->virtio_user_dev, path, queues, cq,
 				 queue_size, mac_addr, &ifname, mrg_rxbuf,
-				 in_order) < 0) {
+				 in_order, packed_vq) < 0) {
 			PMD_INIT_LOG(ERR, "virtio_user_dev_init fails");
 			virtio_user_eth_dev_free(eth_dev);
 			goto end;
@@ -677,4 +734,5 @@ RTE_PMD_REGISTER_PARAM_STRING(net_virtio_user,
 	"iface=<string> "
 	"server=<0|1> "
 	"mrg_rxbuf=<0|1> "
-	"in_order=<0|1>");
+	"in_order=<0|1> "
+	"packed_vq=<0|1>");

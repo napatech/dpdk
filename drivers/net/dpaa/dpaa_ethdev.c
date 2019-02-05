@@ -245,12 +245,15 @@ static const uint32_t *
 dpaa_supported_ptypes_get(struct rte_eth_dev *dev)
 {
 	static const uint32_t ptypes[] = {
-		/*todo -= add more types */
 		RTE_PTYPE_L2_ETHER,
-		RTE_PTYPE_L3_IPV4,
-		RTE_PTYPE_L3_IPV4_EXT,
-		RTE_PTYPE_L3_IPV6,
-		RTE_PTYPE_L3_IPV6_EXT,
+		RTE_PTYPE_L2_ETHER_VLAN,
+		RTE_PTYPE_L2_ETHER_ARP,
+		RTE_PTYPE_L3_IPV4_EXT_UNKNOWN,
+		RTE_PTYPE_L3_IPV6_EXT_UNKNOWN,
+		RTE_PTYPE_L4_ICMP,
+		RTE_PTYPE_L4_TCP,
+		RTE_PTYPE_L4_UDP,
+		RTE_PTYPE_L4_FRAG,
 		RTE_PTYPE_L4_TCP,
 		RTE_PTYPE_L4_UDP,
 		RTE_PTYPE_L4_SCTP
@@ -1223,8 +1226,12 @@ dpaa_dev_init(struct rte_eth_dev *eth_dev)
 	PMD_INIT_FUNC_TRACE();
 
 	/* For secondary processes, the primary has done all the work */
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+		eth_dev->dev_ops = &dpaa_devops;
+		/* Plugging of UCODE burst API not supported in Secondary */
+		eth_dev->rx_pkt_burst = dpaa_eth_queue_rx;
 		return 0;
+	}
 
 	dpaa_device = DEV_TO_DPAA_DEVICE(eth_dev->device);
 	dev_id = dpaa_device->id.dev_id;

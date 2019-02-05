@@ -54,6 +54,9 @@
 /* Device parameter to enable RX completion entry padding to 128B. */
 #define MLX5_RXQ_CQE_PAD_EN "rxq_cqe_pad_en"
 
+/* Device parameter to enable padding Rx packet to cacheline size. */
+#define MLX5_RXQ_PKT_PAD_EN "rxq_pkt_pad_en"
+
 /* Device parameter to enable Multi-Packet Rx queue. */
 #define MLX5_RX_MPRQ_EN "mprq_en"
 
@@ -486,6 +489,8 @@ mlx5_args_check(const char *key, const char *val, void *opaque)
 		config->cqe_comp = !!tmp;
 	} else if (strcmp(MLX5_RXQ_CQE_PAD_EN, key) == 0) {
 		config->cqe_pad = !!tmp;
+	} else if (strcmp(MLX5_RXQ_PKT_PAD_EN, key) == 0) {
+		config->hw_padding = !!tmp;
 	} else if (strcmp(MLX5_RX_MPRQ_EN, key) == 0) {
 		config->mprq.enabled = !!tmp;
 	} else if (strcmp(MLX5_RX_MPRQ_LOG_STRIDE_NUM, key) == 0) {
@@ -541,6 +546,7 @@ mlx5_args(struct mlx5_dev_config *config, struct rte_devargs *devargs)
 	const char **params = (const char *[]){
 		MLX5_RXQ_CQE_COMP_EN,
 		MLX5_RXQ_CQE_PAD_EN,
+		MLX5_RXQ_PKT_PAD_EN,
 		MLX5_RX_MPRQ_EN,
 		MLX5_RX_MPRQ_LOG_STRIDE_NUM,
 		MLX5_RX_MPRQ_MAX_MEMCPY_LEN,
@@ -727,7 +733,7 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 	       struct mlx5_dev_config config,
 	       const struct mlx5_switch_info *switch_info)
 {
-	struct ibv_context *ctx;
+	struct ibv_context *ctx = NULL;
 	struct ibv_device_attr_ex attr;
 	struct ibv_port_attr port_attr;
 	struct ibv_pd *pd = NULL;
@@ -735,6 +741,7 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 	struct rte_eth_dev *eth_dev = NULL;
 	struct priv *priv = NULL;
 	int err = 0;
+	unsigned int hw_padding = 0;
 	unsigned int mps;
 	unsigned int cqe_comp;
 	unsigned int cqe_pad = 0;
@@ -786,10 +793,16 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 	/* Prepare shared data between primary and secondary process. */
 	mlx5_prepare_shared_data();
 	errno = 0;
-	ctx = mlx5_glue->open_device(ibv_dev);
-	if (!ctx) {
-		rte_errno = errno ? errno : ENODEV;
-		return NULL;
+	ctx = mlx5_glue->dv_open_device(ibv_dev);
+	if (ctx) {
+		config.devx = 1;
+		DRV_LOG(DEBUG, "DEVX is supported");
+	} else {
+		ctx = mlx5_glue->open_device(ibv_dev);
+		if (!ctx) {
+			rte_errno = errno ? errno : ENODEV;
+			return NULL;
+		}
 	}
 #ifdef HAVE_IBV_MLX5_MOD_SWP
 	dv_attr.comp_mask |= MLX5DV_CONTEXT_MASK_SWP;
@@ -1053,11 +1066,18 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 				 IBV_RAW_PACKET_CAP_SCATTER_FCS);
 	DRV_LOG(DEBUG, "FCS stripping configuration is %ssupported",
 		(config.hw_fcs_strip ? "" : "not "));
-#ifdef HAVE_IBV_WQ_FLAG_RX_END_PADDING
-	config.hw_padding = !!attr.rx_pad_end_addr_align;
+#if defined(HAVE_IBV_WQ_FLAG_RX_END_PADDING)
+	hw_padding = !!attr.rx_pad_end_addr_align;
+#elif defined(HAVE_IBV_WQ_FLAGS_PCI_WRITE_END_PADDING)
+	hw_padding = !!(attr.device_cap_flags_ex &
+			IBV_DEVICE_PCI_WRITE_END_PADDING);
 #endif
-	DRV_LOG(DEBUG, "hardware Rx end alignment padding is %ssupported",
-		(config.hw_padding ? "" : "not "));
+	if (config.hw_padding && !hw_padding) {
+		DRV_LOG(DEBUG, "Rx end alignment padding isn't supported");
+		config.hw_padding = 0;
+	} else if (config.hw_padding) {
+		DRV_LOG(DEBUG, "Rx end alignment padding is enabled");
+	}
 	config.tso = (attr.tso_caps.max_tso > 0 &&
 		      (attr.tso_caps.supported_qpts &
 		       (1 << IBV_QPT_RAW_PACKET)));
@@ -1434,6 +1454,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		qsort(list, n, sizeof(*list), mlx5_dev_spawn_data_cmp);
 	/* Default configuration. */
 	dev_config = (struct mlx5_dev_config){
+		.hw_padding = 0,
 		.mps = MLX5_ARG_UNSET,
 		.tx_vec_en = 1,
 		.rx_vec_en = 1,
@@ -1586,6 +1607,14 @@ static const struct rte_pci_id mlx5_pci_id_map[] = {
 			       PCI_DEVICE_ID_MELLANOX_CONNECTX5BFVF)
 	},
 	{
+		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
+				PCI_DEVICE_ID_MELLANOX_CONNECTX6)
+	},
+	{
+		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
+				PCI_DEVICE_ID_MELLANOX_CONNECTX6VF)
+	},
+	{
 		.vendor_id = 0
 	}
 };
@@ -1601,7 +1630,7 @@ static struct rte_pci_driver mlx5_driver = {
 		      RTE_PCI_DRV_PROBE_AGAIN),
 };
 
-#ifdef RTE_LIBRTE_MLX5_DLOPEN_DEPS
+#ifdef RTE_IBVERBS_LINK_DLOPEN
 
 /**
  * Suffix RTE_EAL_PMD_PATH with "-glue".
@@ -1762,7 +1791,7 @@ RTE_INIT(rte_mlx5_pmd_init)
 	 * cleanup all the Verbs resources even when the device was removed.
 	 */
 	setenv("MLX5_DEVICE_FATAL_CLEANUP", "1", 1);
-#ifdef RTE_LIBRTE_MLX5_DLOPEN_DEPS
+#ifdef RTE_IBVERBS_LINK_DLOPEN
 	if (mlx5_glue_init())
 		return;
 	assert(mlx5_glue);

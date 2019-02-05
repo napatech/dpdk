@@ -13,6 +13,7 @@
 #include <rte_common.h>
 #include <rte_debug.h>
 #include <rte_eal.h>
+#include <rte_eal_memconfig.h>
 #include <rte_errno.h>
 #include <rte_malloc.h>
 #include <rte_ring.h>
@@ -23,7 +24,45 @@
 #define EXTERNAL_MEM_SZ (RTE_PGSIZE_4K << 10) /* 4M of data */
 
 static int
-test_invalid_param(void *addr, size_t len, size_t pgsz, rte_iova_t *iova,
+check_mem(void *addr, rte_iova_t *iova, size_t pgsz, int n_pages)
+{
+	int i;
+
+	/* check that we can get this memory from EAL now */
+	for (i = 0; i < n_pages; i++) {
+		const struct rte_memseg_list *msl;
+		const struct rte_memseg *ms;
+		void *cur = RTE_PTR_ADD(addr, pgsz * i);
+		rte_iova_t expected_iova;
+
+		msl = rte_mem_virt2memseg_list(cur);
+		if (!msl->external) {
+			printf("%s():%i: Memseg list is not marked as external\n",
+				__func__, __LINE__);
+			return -1;
+		}
+
+		ms = rte_mem_virt2memseg(cur, msl);
+		if (ms == NULL) {
+			printf("%s():%i: Failed to retrieve memseg for external mem\n",
+				__func__, __LINE__);
+			return -1;
+		}
+		if (ms->addr != cur) {
+			printf("%s():%i: VA mismatch\n", __func__, __LINE__);
+			return -1;
+		}
+		expected_iova = (iova == NULL) ? RTE_BAD_IOVA : iova[i];
+		if (ms->iova != expected_iova) {
+			printf("%s():%i: IOVA mismatch\n", __func__, __LINE__);
+			return -1;
+		}
+	}
+	return 0;
+}
+
+static int
+test_malloc_invalid_param(void *addr, size_t len, size_t pgsz, rte_iova_t *iova,
 		int n_pages)
 {
 	static const char * const names[] = {
@@ -190,24 +229,29 @@ test_invalid_param(void *addr, size_t len, size_t pgsz, rte_iova_t *iova,
 		goto fail;
 	}
 
-	/* wrong page count */
-	if (rte_malloc_heap_memory_add(valid_name, addr, len,
-			iova, 0, pgsz) >= 0 || rte_errno != EINVAL) {
-		printf("%s():%i: Added memory with invalid parameters\n",
-			__func__, __LINE__);
-		goto fail;
-	}
-	if (rte_malloc_heap_memory_add(valid_name, addr, len,
-			iova, n_pages - 1, pgsz) >= 0 || rte_errno != EINVAL) {
-		printf("%s():%i: Added memory with invalid parameters\n",
-			__func__, __LINE__);
-		goto fail;
-	}
-	if (rte_malloc_heap_memory_add(valid_name, addr, len,
-			iova, n_pages + 1, pgsz) >= 0 || rte_errno != EINVAL) {
-		printf("%s():%i: Added memory with invalid parameters\n",
-			__func__, __LINE__);
-		goto fail;
+	/* the following tests are only valid if IOVA table is not NULL */
+	if (iova != NULL) {
+		/* wrong page count */
+		if (rte_malloc_heap_memory_add(valid_name, addr, len,
+				iova, 0, pgsz) >= 0 || rte_errno != EINVAL) {
+			printf("%s():%i: Added memory with invalid parameters\n",
+				__func__, __LINE__);
+			goto fail;
+		}
+		if (rte_malloc_heap_memory_add(valid_name, addr, len,
+				iova, n_pages - 1, pgsz) >= 0 ||
+				rte_errno != EINVAL) {
+			printf("%s():%i: Added memory with invalid parameters\n",
+				__func__, __LINE__);
+			goto fail;
+		}
+		if (rte_malloc_heap_memory_add(valid_name, addr, len,
+				iova, n_pages + 1, pgsz) >= 0 ||
+				rte_errno != EINVAL) {
+			printf("%s():%i: Added memory with invalid parameters\n",
+				__func__, __LINE__);
+			goto fail;
+		}
 	}
 
 	/* tests passed, destroy heap */
@@ -223,12 +267,13 @@ fail:
 }
 
 static int
-test_basic(void *addr, size_t len, size_t pgsz, rte_iova_t *iova, int n_pages)
+test_malloc_basic(void *addr, size_t len, size_t pgsz, rte_iova_t *iova,
+		int n_pages)
 {
 	const char *heap_name = "heap";
 	void *ptr = NULL;
-	int socket_id, i;
-	const struct rte_memzone *mz = NULL;
+	int socket_id;
+	const struct rte_memzone *mz = NULL, *contig_mz = NULL;
 
 	/* create heap */
 	if (rte_malloc_heap_create(heap_name) != 0) {
@@ -261,26 +306,9 @@ test_basic(void *addr, size_t len, size_t pgsz, rte_iova_t *iova, int n_pages)
 		goto fail;
 	}
 
-	/* check that we can get this memory from EAL now */
-	for (i = 0; i < n_pages; i++) {
-		const struct rte_memseg *ms;
-		void *cur = RTE_PTR_ADD(addr, pgsz * i);
-
-		ms = rte_mem_virt2memseg(cur, NULL);
-		if (ms == NULL) {
-			printf("%s():%i: Failed to retrieve memseg for external mem\n",
-				__func__, __LINE__);
-			goto fail;
-		}
-		if (ms->addr != cur) {
-			printf("%s():%i: VA mismatch\n", __func__, __LINE__);
-			goto fail;
-		}
-		if (ms->iova != iova[i]) {
-			printf("%s():%i: IOVA mismatch\n", __func__, __LINE__);
-			goto fail;
-		}
-	}
+	/* check if memory is accessible from EAL */
+	if (check_mem(addr, iova, pgsz, n_pages) < 0)
+		goto fail;
 
 	/* allocate - this now should succeed */
 	ptr = rte_malloc_socket("EXTMEM", 64, 0, socket_id);
@@ -310,12 +338,19 @@ test_basic(void *addr, size_t len, size_t pgsz, rte_iova_t *iova, int n_pages)
 		goto fail;
 	}
 
-	/* try allocating an IOVA-contiguous memzone - this should succeed
-	 * because we've set up a contiguous IOVA table.
-	 */
-	mz = rte_memzone_reserve("heap_test", pgsz * 2, socket_id,
-			RTE_MEMZONE_IOVA_CONTIG);
+	/* try allocating a memzone */
+	mz = rte_memzone_reserve("heap_test", pgsz * 2, socket_id, 0);
 	if (mz == NULL) {
+		printf("%s():%i: Failed to reserve memzone\n",
+			__func__, __LINE__);
+		goto fail;
+	}
+	/* try allocating an IOVA-contiguous memzone - this should succeed
+	 * if we've set up a contiguous IOVA table, and fail if we haven't.
+	 */
+	contig_mz = rte_memzone_reserve("heap_test_contig", pgsz * 2, socket_id,
+			RTE_MEMZONE_IOVA_CONTIG);
+	if ((iova == NULL) != (contig_mz == NULL)) {
 		printf("%s():%i: Failed to reserve memzone\n",
 			__func__, __LINE__);
 		goto fail;
@@ -330,6 +365,8 @@ test_basic(void *addr, size_t len, size_t pgsz, rte_iova_t *iova, int n_pages)
 
 	rte_memzone_free(mz);
 	mz = NULL;
+	rte_memzone_free(contig_mz);
+	contig_mz = NULL;
 
 	if (rte_malloc_heap_memory_remove(heap_name, addr, len) != 0) {
 		printf("%s():%i: Removing memory from heap failed\n",
@@ -344,11 +381,150 @@ test_basic(void *addr, size_t len, size_t pgsz, rte_iova_t *iova, int n_pages)
 
 	return 0;
 fail:
+	rte_memzone_free(contig_mz);
 	rte_memzone_free(mz);
 	rte_free(ptr);
 	/* even if something failed, attempt to clean up */
 	rte_malloc_heap_memory_remove(heap_name, addr, len);
 	rte_malloc_heap_destroy(heap_name);
+
+	return -1;
+}
+
+static int
+test_extmem_invalid_param(void *addr, size_t len, size_t pgsz, rte_iova_t *iova,
+		int n_pages)
+{
+	/* these calls may fail for other reasons, so check errno */
+	if (rte_extmem_unregister(addr, len) >= 0 ||
+			rte_errno != ENOENT) {
+		printf("%s():%i: Unregistered non-existent memory\n",
+			__func__, __LINE__);
+		return -1;
+	}
+
+	if (rte_extmem_attach(addr, len) >= 0 ||
+			rte_errno != ENOENT) {
+		printf("%s():%i: Attached to non-existent memory\n",
+			__func__, __LINE__);
+		return -1;
+	}
+	if (rte_extmem_attach(addr, len) >= 0 ||
+			rte_errno != ENOENT) {
+		printf("%s():%i: Detached from non-existent memory\n",
+			__func__, __LINE__);
+		return -1;
+	}
+
+	/* zero length */
+	if (rte_extmem_register(addr, 0, NULL, 0, pgsz) >= 0 ||
+			rte_errno != EINVAL) {
+		printf("%s():%i: Registered memory with invalid parameters\n",
+			__func__, __LINE__);
+		return -1;
+	}
+
+	if (rte_extmem_unregister(addr, 0) >= 0 ||
+			rte_errno != EINVAL) {
+		printf("%s():%i: Unregistered memory with invalid parameters\n",
+			__func__, __LINE__);
+		return -1;
+	}
+
+	if (rte_extmem_attach(addr, 0) >= 0 ||
+			rte_errno != EINVAL) {
+		printf("%s():%i: Attached memory with invalid parameters\n",
+			__func__, __LINE__);
+		return -1;
+	}
+	if (rte_extmem_attach(addr, 0) >= 0 ||
+			rte_errno != EINVAL) {
+		printf("%s():%i: Detached memory with invalid parameters\n",
+			__func__, __LINE__);
+		return -1;
+	}
+
+	/* zero address */
+	if (rte_extmem_register(NULL, len, NULL, 0, pgsz) >= 0 ||
+			rte_errno != EINVAL) {
+		printf("%s():%i: Registered memory with invalid parameters\n",
+			__func__, __LINE__);
+		return -1;
+	}
+
+	if (rte_extmem_unregister(NULL, len) >= 0 ||
+			rte_errno != EINVAL) {
+		printf("%s():%i: Unregistered memory with invalid parameters\n",
+			__func__, __LINE__);
+		return -1;
+	}
+
+	if (rte_extmem_attach(NULL, len) >= 0 ||
+			rte_errno != EINVAL) {
+		printf("%s():%i: Attached memory with invalid parameters\n",
+			__func__, __LINE__);
+		return -1;
+	}
+	if (rte_extmem_attach(NULL, len) >= 0 ||
+			rte_errno != EINVAL) {
+		printf("%s():%i: Detached memory with invalid parameters\n",
+			__func__, __LINE__);
+		return -1;
+	}
+
+	/* the following tests are only valid if IOVA table is not NULL */
+	if (iova != NULL) {
+		/* wrong page count */
+		if (rte_extmem_register(addr, len,
+				iova, 0, pgsz) >= 0 || rte_errno != EINVAL) {
+			printf("%s():%i: Registered memory with invalid parameters\n",
+				__func__, __LINE__);
+			return -1;
+		}
+		if (rte_extmem_register(addr, len,
+				iova, n_pages - 1, pgsz) >= 0 ||
+				rte_errno != EINVAL) {
+			printf("%s():%i: Registered memory with invalid parameters\n",
+				__func__, __LINE__);
+			return -1;
+		}
+		if (rte_extmem_register(addr, len,
+				iova, n_pages + 1, pgsz) >= 0 ||
+				rte_errno != EINVAL) {
+			printf("%s():%i: Registered memory with invalid parameters\n",
+				__func__, __LINE__);
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+static int
+test_extmem_basic(void *addr, size_t len, size_t pgsz, rte_iova_t *iova,
+		int n_pages)
+{
+	/* register memory */
+	if (rte_extmem_register(addr, len, iova, n_pages, pgsz) != 0) {
+		printf("%s():%i: Failed to register memory\n",
+			__func__, __LINE__);
+		goto fail;
+	}
+
+	/* check if memory is accessible from EAL */
+	if (check_mem(addr, iova, pgsz, n_pages) < 0)
+		goto fail;
+
+	if (rte_extmem_unregister(addr, len) != 0) {
+		printf("%s():%i: Removing memory from heap failed\n",
+			__func__, __LINE__);
+		goto fail;
+	}
+
+	return 0;
+fail:
+	/* even if something failed, attempt to clean up */
+	rte_extmem_unregister(addr, len);
 
 	return -1;
 }
@@ -379,8 +555,19 @@ test_external_mem(void)
 		iova[i] = tmp;
 	}
 
-	ret = test_invalid_param(addr, len, pgsz, iova, n_pages);
-	ret |= test_basic(addr, len, pgsz, iova, n_pages);
+	/* test external heap memory */
+	ret = test_malloc_invalid_param(addr, len, pgsz, iova, n_pages);
+	ret |= test_malloc_basic(addr, len, pgsz, iova, n_pages);
+	/* when iova table is NULL, everything should still work */
+	ret |= test_malloc_invalid_param(addr, len, pgsz, NULL, n_pages);
+	ret |= test_malloc_basic(addr, len, pgsz, NULL, n_pages);
+
+	/* test non-heap memory */
+	ret |= test_extmem_invalid_param(addr, len, pgsz, iova, n_pages);
+	ret |= test_extmem_basic(addr, len, pgsz, iova, n_pages);
+	/* when iova table is NULL, everything should still work */
+	ret |= test_extmem_invalid_param(addr, len, pgsz, NULL, n_pages);
+	ret |= test_extmem_basic(addr, len, pgsz, NULL, n_pages);
 
 	munmap(addr, len);
 

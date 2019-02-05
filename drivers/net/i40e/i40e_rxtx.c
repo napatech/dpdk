@@ -69,7 +69,7 @@
 		I40E_TX_IEEE1588_TMST)
 
 #define I40E_TX_OFFLOAD_NOTSUP_MASK \
-		~(PKT_TX_OFFLOAD_MASK & I40E_TX_OFFLOAD_MASK)
+		(PKT_TX_OFFLOAD_MASK ^ I40E_TX_OFFLOAD_MASK)
 
 static inline void
 i40e_rxd_to_vlan_tci(struct rte_mbuf *mb, volatile union i40e_rx_desc *rxdp)
@@ -2753,7 +2753,6 @@ i40e_dev_free_queues(struct rte_eth_dev *dev)
 		i40e_dev_rx_queue_release(dev->data->rx_queues[i]);
 		dev->data->rx_queues[i] = NULL;
 	}
-	dev->data->nb_rx_queues = 0;
 
 	for (i = 0; i < dev->data->nb_tx_queues; i++) {
 		if (!dev->data->tx_queues[i])
@@ -2761,7 +2760,6 @@ i40e_dev_free_queues(struct rte_eth_dev *dev)
 		i40e_dev_tx_queue_release(dev->data->tx_queues[i]);
 		dev->data->tx_queues[i] = NULL;
 	}
-	dev->data->nb_tx_queues = 0;
 }
 
 #define I40E_FDIR_NUM_TX_DESC  I40E_MIN_RING_DESC
@@ -3184,7 +3182,7 @@ i40e_set_default_pctype_table(struct rte_eth_dev *dev)
 	}
 }
 
-/* Stubs needed for linkage when CONFIG_RTE_I40E_INC_VECTOR is set to 'n' */
+/* Stubs needed for linkage when CONFIG_RTE_LIBRTE_I40E_INC_VECTOR is set to 'n' */
 __rte_weak int
 i40e_rx_vec_dev_conf_condition_check(struct rte_eth_dev __rte_unused *dev)
 {

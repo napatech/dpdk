@@ -50,6 +50,7 @@
 #define IFCVF_LM_ENABLE_VF		0x1
 #define IFCVF_LM_ENABLE_PF		0x3
 #define IFCVF_LOG_BASE			0x100000000000
+#define IFCVF_MEDIATED_VRING		0x200000000000
 
 #define IFCVF_32_BIT_MASK		0xffffffff
 
@@ -121,7 +122,7 @@ struct ifcvf_hw {
 	u8     notify_region;
 	u32    notify_off_multiplier;
 	struct ifcvf_pci_common_cfg *common_cfg;
-	struct ifcvf_net_device_config *dev_cfg;
+	struct ifcvf_net_config *dev_cfg;
 	u8     *isr;
 	u16    *notify_base;
 	u16    *notify_addr[IFCVF_MAX_QUEUES * 2];

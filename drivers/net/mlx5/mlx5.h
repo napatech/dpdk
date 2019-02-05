@@ -52,6 +52,8 @@ enum {
 	PCI_DEVICE_ID_MELLANOX_CONNECTX5EXVF = 0x101a,
 	PCI_DEVICE_ID_MELLANOX_CONNECTX5BF = 0xa2d2,
 	PCI_DEVICE_ID_MELLANOX_CONNECTX5BFVF = 0xa2d3,
+	PCI_DEVICE_ID_MELLANOX_CONNECTX6 = 0x101b,
+	PCI_DEVICE_ID_MELLANOX_CONNECTX6VF = 0x101c,
 };
 
 /** Switch information returned by mlx5_nl_switch_info(). */
@@ -91,6 +93,17 @@ struct mlx5_xstats_ctrl {
 	struct mlx5_counter_ctrl info[MLX5_MAX_XSTATS];
 };
 
+struct mlx5_stats_ctrl {
+	/* Base for imissed counter. */
+	uint64_t imissed_base;
+};
+
+/* devx counter object */
+struct mlx5_devx_counter_set {
+	struct mlx5dv_devx_obj *obj;
+	int id; /* Flow counter ID */
+};
+
 /* Flow list . */
 TAILQ_HEAD(mlx5_flows, rte_flow);
 
@@ -124,6 +137,7 @@ struct mlx5_dev_config {
 	unsigned int vf_nl_en:1; /* Enable Netlink requests in VF mode. */
 	unsigned int dv_flow_en:1; /* Enable DV flow. */
 	unsigned int swp:1; /* Tx generic tunnel checksum and TSO offload. */
+	unsigned int devx:1; /* Whether devx interface is available or not. */
 	struct {
 		unsigned int enabled:1; /* Whether MPRQ is enabled. */
 		unsigned int stride_num_n; /* Number of strides. */
@@ -222,8 +236,10 @@ struct priv {
 	LIST_HEAD(ind_tables, mlx5_ind_table_ibv) ind_tbls;
 	LIST_HEAD(matchers, mlx5_flow_dv_matcher) matchers;
 	LIST_HEAD(encap_decap, mlx5_flow_dv_encap_decap_resource) encaps_decaps;
+	LIST_HEAD(modify_cmd, mlx5_flow_dv_modify_hdr_resource) modify_cmds;
 	uint32_t link_speed_capa; /* Link speed capabilities. */
 	struct mlx5_xstats_ctrl xstats_ctrl; /* Extended stats control. */
+	struct mlx5_stats_ctrl stats_ctrl; /* Stats control. */
 	int primary_socket; /* Unix socket for primary process. */
 	void *uar_base; /* Reserved address space for UAR mapping */
 	struct rte_intr_handle intr_handle_socket; /* Interrupt handler. */
@@ -316,7 +332,7 @@ void mlx5_allmulticast_disable(struct rte_eth_dev *dev);
 
 /* mlx5_stats.c */
 
-void mlx5_xstats_init(struct rte_eth_dev *dev);
+void mlx5_stats_init(struct rte_eth_dev *dev);
 int mlx5_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats);
 void mlx5_stats_reset(struct rte_eth_dev *dev);
 int mlx5_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *stats,
@@ -403,4 +419,12 @@ unsigned int mlx5_nl_ifindex(int nl, const char *name);
 int mlx5_nl_switch_info(int nl, unsigned int ifindex,
 			struct mlx5_switch_info *info);
 
+/* mlx5_devx_cmds.c */
+
+int mlx5_devx_cmd_flow_counter_alloc(struct ibv_context *ctx,
+				     struct mlx5_devx_counter_set *dcx);
+int mlx5_devx_cmd_flow_counter_free(struct mlx5dv_devx_obj *obj);
+int mlx5_devx_cmd_flow_counter_query(struct mlx5_devx_counter_set *dcx,
+				     int clear,
+				     uint64_t *pkts, uint64_t *bytes);
 #endif /* RTE_PMD_MLX5_H_ */

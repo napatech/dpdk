@@ -137,6 +137,9 @@ SRCS-y += test_func_reentrancy.c
 
 SRCS-y += test_service_cores.c
 
+SRCS-$(CONFIG_RTE_LIBRTE_BITRATE) += test_bitratestats.c
+SRCS-$(CONFIG_RTE_LIBRTE_LATENCY_STATS) += test_latencystats.c
+
 SRCS-$(CONFIG_RTE_LIBRTE_CMDLINE) += test_cmdline.c
 SRCS-$(CONFIG_RTE_LIBRTE_CMDLINE) += test_cmdline_num.c
 SRCS-$(CONFIG_RTE_LIBRTE_CMDLINE) += test_cmdline_etheraddr.c
@@ -164,8 +167,11 @@ SRCS-$(CONFIG_RTE_LIBRTE_DISTRIBUTOR) += test_distributor_perf.c
 
 SRCS-$(CONFIG_RTE_LIBRTE_REORDER) += test_reorder.c
 
+SRCS-$(CONFIG_RTE_LIBRTE_PDUMP) += test_pdump.c
+
 SRCS-y += virtual_pmd.c
 SRCS-y += packet_burst_generator.c
+SRCS-y += sample_packet_forward.c
 SRCS-$(CONFIG_RTE_LIBRTE_ACL) += test_acl.c
 
 ifeq ($(CONFIG_RTE_LIBRTE_PMD_RING),y)
@@ -207,12 +213,22 @@ SRCS-$(CONFIG_RTE_LIBRTE_KVARGS) += test_kvargs.c
 
 SRCS-$(CONFIG_RTE_LIBRTE_BPF) += test_bpf.c
 
+SRCS-$(CONFIG_RTE_LIBRTE_IPSEC) += test_ipsec.c
+ifeq ($(CONFIG_RTE_LIBRTE_IPSEC),y)
+LDLIBS += -lrte_ipsec
+endif
+
 CFLAGS += -DALLOW_EXPERIMENTAL_API
 
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
 
 LDLIBS += -lm
+
+ifeq ($(CONFIG_RTE_LIBRTE_PDUMP),y)
+LDLIBS += -lpthread
+endif
+
 ifeq ($(CONFIG_RTE_COMPRESSDEV_TEST),y)
 ifeq ($(CONFIG_RTE_LIBRTE_COMPRESSDEV),y)
 LDLIBS += -lz

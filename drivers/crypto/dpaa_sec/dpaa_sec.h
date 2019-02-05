@@ -10,6 +10,7 @@
 #define CRYPTODEV_NAME_DPAA_SEC_PMD	crypto_dpaa_sec
 /**< NXP DPAA - SEC PMD device name */
 
+#define MAX_DPAA_CORES		4
 #define NUM_POOL_CHANNELS	4
 #define DPAA_SEC_BURST		7
 #define DPAA_SEC_ALG_UNSUPPORT	(-1)
@@ -26,7 +27,7 @@
 #define CTX_POOL_NUM_BUFS	32000
 #define CTX_POOL_BUF_SIZE	sizeof(struct dpaa_sec_op_ctx)
 #define CTX_POOL_CACHE_SIZE	512
-#define RTE_DPAA_SEC_PMD_MAX_NB_SESSIONS 2048
+#define RTE_DPAA_SEC_PMD_MAX_NB_SESSIONS 1024
 
 #define DIR_ENC                 1
 #define DIR_DEC                 0
@@ -91,6 +92,20 @@ struct sec_cdb {
 	uint32_t sh_desc[DPAA_SEC_MAX_DESC_SIZE];
 };
 
+/*!
+ * The structure is to be filled by user as a part of
+ * dpaa_sec_proto_ctxt for PDCP Protocol
+ */
+struct sec_pdcp_ctxt {
+	enum rte_security_pdcp_domain domain; /*!< Data/Control mode*/
+	int8_t bearer;	/*!< PDCP bearer ID */
+	int8_t pkt_dir;/*!< PDCP Frame Direction 0:UL 1:DL*/
+	int8_t hfn_ovd;/*!< Overwrite HFN per packet*/
+	uint32_t hfn;	/*!< Hyper Frame Number */
+	uint32_t hfn_threshold;	/*!< HFN Threashold for key renegotiation */
+	uint8_t sn_size;	/*!< Sequence number size, 7/12/15 */
+};
+
 typedef struct dpaa_sec_session_entry {
 	uint8_t dir;         /*!< Operation Direction */
 	enum rte_crypto_cipher_algorithm cipher_alg; /*!< Cipher Algorithm*/
@@ -113,17 +128,23 @@ typedef struct dpaa_sec_session_entry {
 			} auth_key;
 		};
 	};
-	struct {
-		uint16_t length;
-		uint16_t offset;
-	} iv;	/**< Initialisation vector parameters */
-	uint16_t auth_only_len; /*!< Length of data for Auth only */
-	uint32_t digest_length;
-	struct ipsec_encap_pdb encap_pdb;
-	struct ip ip4_hdr;
-	struct ipsec_decap_pdb decap_pdb;
-	struct dpaa_sec_qp *qp;
-	struct qman_fq *inq;
+	union {
+		struct {
+			struct {
+				uint16_t length;
+				uint16_t offset;
+			} iv;	/**< Initialisation vector parameters */
+			uint16_t auth_only_len;
+					/*!< Length of data for Auth only */
+			uint32_t digest_length;
+			struct ipsec_decap_pdb decap_pdb;
+			struct ipsec_encap_pdb encap_pdb;
+			struct ip ip4_hdr;
+		};
+		struct sec_pdcp_ctxt pdcp;
+	};
+	struct dpaa_sec_qp *qp[MAX_DPAA_CORES];
+	struct qman_fq *inq[MAX_DPAA_CORES];
 	struct sec_cdb cdb;	/**< cmd block associated with qp */
 	struct rte_mempool *ctx_pool; /* session mempool for dpaa_sec_op_ctx */
 } dpaa_sec_session;
@@ -138,7 +159,7 @@ struct dpaa_sec_qp {
 };
 
 #define RTE_DPAA_MAX_NB_SEC_QPS 2
-#define RTE_DPAA_MAX_RX_QUEUE RTE_DPAA_SEC_PMD_MAX_NB_SESSIONS
+#define RTE_DPAA_MAX_RX_QUEUE (MAX_DPAA_CORES * RTE_DPAA_SEC_PMD_MAX_NB_SESSIONS)
 #define DPAA_MAX_DEQUEUE_NUM_FRAMES 63
 
 /* internal sec queue interface */
@@ -366,7 +387,7 @@ static const struct rte_cryptodev_capabilities dpaa_sec_capabilities[] = {
 					.min = 16,
 					.max = 16,
 					.increment = 0
-				}
+				},
 			}, }
 		}, }
 	},
@@ -385,6 +406,162 @@ static const struct rte_cryptodev_capabilities dpaa_sec_capabilities[] = {
 				.iv_size = {
 					.min = 8,
 					.max = 8,
+					.increment = 0
+				}
+			}, }
+		}, }
+	},
+
+	RTE_CRYPTODEV_END_OF_CAPABILITIES_LIST()
+};
+
+static const struct rte_cryptodev_capabilities dpaa_pdcp_capabilities[] = {
+	{	/* SNOW 3G (UIA2) */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
+			{.auth = {
+				.algo = RTE_CRYPTO_AUTH_SNOW3G_UIA2,
+				.block_size = 16,
+				.key_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				},
+				.digest_size = {
+					.min = 4,
+					.max = 4,
+					.increment = 0
+				},
+				.iv_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				}
+			}, }
+		}, }
+	},
+	{	/* SNOW 3G (UEA2) */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
+			{.cipher = {
+				.algo = RTE_CRYPTO_CIPHER_SNOW3G_UEA2,
+				.block_size = 16,
+				.key_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				},
+				.iv_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				}
+			}, }
+		}, }
+	},
+	{	/* AES CTR */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
+			{.cipher = {
+				.algo = RTE_CRYPTO_CIPHER_AES_CTR,
+				.block_size = 16,
+				.key_size = {
+					.min = 16,
+					.max = 32,
+					.increment = 8
+				},
+				.iv_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				}
+			}, }
+		}, }
+	},
+	{	/* NULL (AUTH) */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
+			{.auth = {
+				.algo = RTE_CRYPTO_AUTH_NULL,
+				.block_size = 1,
+				.key_size = {
+					.min = 0,
+					.max = 0,
+					.increment = 0
+				},
+				.digest_size = {
+					.min = 0,
+					.max = 0,
+					.increment = 0
+				},
+				.iv_size = { 0 }
+			}, },
+		}, },
+	},
+	{	/* NULL (CIPHER) */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
+			{.cipher = {
+				.algo = RTE_CRYPTO_CIPHER_NULL,
+				.block_size = 1,
+				.key_size = {
+					.min = 0,
+					.max = 0,
+					.increment = 0
+				},
+				.iv_size = {
+					.min = 0,
+					.max = 0,
+					.increment = 0
+				}
+			}, },
+		}, }
+	},
+	{	/* ZUC (EEA3) */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
+			{.cipher = {
+				.algo = RTE_CRYPTO_CIPHER_ZUC_EEA3,
+				.block_size = 16,
+				.key_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				},
+				.iv_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				}
+			}, }
+		}, }
+	},
+	{	/* ZUC (EIA3) */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
+			{.auth = {
+				.algo = RTE_CRYPTO_AUTH_ZUC_EIA3,
+				.block_size = 16,
+				.key_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				},
+				.digest_size = {
+					.min = 4,
+					.max = 4,
+					.increment = 0
+				},
+				.iv_size = {
+					.min = 16,
+					.max = 16,
 					.increment = 0
 				}
 			}, }
@@ -416,6 +593,22 @@ static const struct rte_security_capability dpaa_sec_security_cap[] = {
 			.options = { 0 }
 		},
 		.crypto_capabilities = dpaa_sec_capabilities
+	},
+	{ /* PDCP Lookaside Protocol offload Data */
+		.action = RTE_SECURITY_ACTION_TYPE_LOOKASIDE_PROTOCOL,
+		.protocol = RTE_SECURITY_PROTOCOL_PDCP,
+		.pdcp = {
+			.domain = RTE_SECURITY_PDCP_MODE_DATA,
+		},
+		.crypto_capabilities = dpaa_pdcp_capabilities
+	},
+	{ /* PDCP Lookaside Protocol offload Control */
+		.action = RTE_SECURITY_ACTION_TYPE_LOOKASIDE_PROTOCOL,
+		.protocol = RTE_SECURITY_PROTOCOL_PDCP,
+		.pdcp = {
+			.domain = RTE_SECURITY_PDCP_MODE_CONTROL,
+		},
+		.crypto_capabilities = dpaa_pdcp_capabilities
 	},
 	{
 		.action = RTE_SECURITY_ACTION_TYPE_NONE

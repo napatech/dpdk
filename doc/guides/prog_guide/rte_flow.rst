@@ -2,8 +2,6 @@
     Copyright 2016 6WIND S.A.
     Copyright 2016 Mellanox Technologies, Ltd
 
-.. _Generic_flow_API:
-
 Generic flow API (rte_flow)
 ===========================
 
@@ -2314,7 +2312,10 @@ in pattern, Some PMDs will reject rule because behaviour will be undefined.
 Action: ``SET_MAC_SRC``
 ^^^^^^^^^^^^^^^^^^^^^^^
 
-Set source MAC address
+Set source MAC address.
+
+It must be used with a valid RTE_FLOW_ITEM_TYPE_ETH flow pattern item.
+Otherwise, RTE_FLOW_ERROR_TYPE_ACTION error will be returned.
 
 .. _table_rte_flow_action_set_mac_src:
 
@@ -2329,7 +2330,10 @@ Set source MAC address
 Action: ``SET_MAC_DST``
 ^^^^^^^^^^^^^^^^^^^^^^^
 
-Set source MAC address
+Set destination MAC address.
+
+It must be used with a valid RTE_FLOW_ITEM_TYPE_ETH flow pattern item.
+Otherwise, RTE_FLOW_ERROR_TYPE_ACTION error will be returned.
 
 .. _table_rte_flow_action_set_mac_dst:
 
@@ -2553,8 +2557,10 @@ Return values:
 
 - 0 on success, a negative errno value otherwise and ``rte_errno`` is set.
 
-Isolated mode
--------------
+.. _flow_isolated_mode:
+
+Flow isolated mode
+------------------
 
 The general expectation for ingress traffic is that flow rules process it
 first; the remaining unmatched or pass-through traffic usually ends up in a

@@ -11,6 +11,7 @@
 #include <rte_crypto.h>
 #include <rte_security.h>
 #include <rte_flow.h>
+#include <rte_ipsec.h>
 
 #define RTE_LOGTYPE_IPSEC       RTE_LOGTYPE_USER1
 #define RTE_LOGTYPE_IPSEC_ESP   RTE_LOGTYPE_USER2
@@ -70,7 +71,20 @@ struct ip_addr {
 
 #define MAX_KEY_SIZE		32
 
+/*
+ * application wide SA parameters
+ */
+struct app_sa_prm {
+	uint32_t enable; /* use librte_ipsec API for ipsec pkt processing */
+	uint32_t window_size; /* replay window size */
+	uint32_t enable_esn;  /* enable/disable ESN support */
+	uint64_t flags;       /* rte_ipsec_sa_prm.flags */
+};
+
+extern struct app_sa_prm app_sa_prm;
+
 struct ipsec_sa {
+	struct rte_ipsec_session ips; /* one session per sa for now */
 	uint32_t spi;
 	uint32_t cdev_id_qp;
 	uint64_t seq;
@@ -144,8 +158,11 @@ struct ipsec_ctx {
 	uint16_t last_qp;
 	struct cdev_qp tbl[MAX_QP_PER_LCORE];
 	struct rte_mempool *session_pool;
+	struct rte_mempool *session_priv_pool;
 	struct rte_mbuf *ol_pkts[MAX_PKT_BURST] __rte_aligned(sizeof(void *));
 	uint16_t ol_pkts_cnt;
+	uint64_t ipv4_offloads;
+	uint64_t ipv6_offloads;
 };
 
 struct cdev_key {
@@ -166,6 +183,7 @@ struct socket_ctx {
 	struct rt_ctx *rt_ip6;
 	struct rte_mempool *mbuf_pool;
 	struct rte_mempool *session_pool;
+	struct rte_mempool *session_priv_pool;
 };
 
 struct cnt_blk {
@@ -174,6 +192,20 @@ struct cnt_blk {
 	uint32_t cnt;
 } __attribute__((packed));
 
+struct traffic_type {
+	const uint8_t *data[MAX_PKT_BURST * 2];
+	struct rte_mbuf *pkts[MAX_PKT_BURST * 2];
+	struct ipsec_sa *saptr[MAX_PKT_BURST * 2];
+	uint32_t res[MAX_PKT_BURST * 2];
+	uint32_t num;
+};
+
+struct ipsec_traffic {
+	struct traffic_type ipsec;
+	struct traffic_type ip4;
+	struct traffic_type ip6;
+};
+
 uint16_t
 ipsec_inbound(struct ipsec_ctx *ctx, struct rte_mbuf *pkts[],
 		uint16_t nb_pkts, uint16_t len);
@@ -181,6 +213,20 @@ ipsec_inbound(struct ipsec_ctx *ctx, struct rte_mbuf *pkts[],
 uint16_t
 ipsec_outbound(struct ipsec_ctx *ctx, struct rte_mbuf *pkts[],
 		uint32_t sa_idx[], uint16_t nb_pkts, uint16_t len);
+
+uint16_t
+ipsec_inbound_cqp_dequeue(struct ipsec_ctx *ctx, struct rte_mbuf *pkts[],
+		uint16_t len);
+
+uint16_t
+ipsec_outbound_cqp_dequeue(struct ipsec_ctx *ctx, struct rte_mbuf *pkts[],
+		uint16_t len);
+
+void
+ipsec_process(struct ipsec_ctx *ctx, struct ipsec_traffic *trf);
+
+void
+ipsec_cqp_process(struct ipsec_ctx *ctx, struct ipsec_traffic *trf);
 
 static inline uint16_t
 ipsec_metadata_size(void)
@@ -233,10 +279,33 @@ sp4_init(struct socket_ctx *ctx, int32_t socket_id);
 void
 sp6_init(struct socket_ctx *ctx, int32_t socket_id);
 
+/*
+ * Search through SP rules for given SPI.
+ * Returns first rule index if found(greater or equal then zero),
+ * or -ENOENT otherwise.
+ */
+int
+sp4_spi_present(uint32_t spi, int inbound);
+int
+sp6_spi_present(uint32_t spi, int inbound);
+
 void
 sa_init(struct socket_ctx *ctx, int32_t socket_id);
 
 void
 rt_init(struct socket_ctx *ctx, int32_t socket_id);
+
+int
+sa_check_offloads(uint16_t port_id, uint64_t *rx_offloads,
+		uint64_t *tx_offloads);
+
+int
+add_dst_ethaddr(uint16_t port, const struct ether_addr *addr);
+
+void
+enqueue_cop_burst(struct cdev_qp *cqp);
+
+int
+create_session(struct ipsec_ctx *ipsec_ctx, struct ipsec_sa *sa);
 
 #endif /* __IPSEC_H__ */

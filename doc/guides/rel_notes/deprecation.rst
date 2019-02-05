@@ -11,19 +11,18 @@ API and ABI deprecation notices are to be posted here.
 Deprecation Notices
 -------------------
 
-* linux: Linux kernel version 3.2 (which is the current minimum required
-  version for the DPDK) is not maintained anymore. Therefore the planned
-  minimum required kernel version for DPDK 19.02 will be the next oldest
-  Long Term Stable (LTS) version which is 3.16, but compatibility for
-  recent distribution kernels will be kept.
+* meson: The minimum supported version of meson for configuring and building
+  DPDK will be increased to v0.47.1 (from 0.41) from DPDK 19.05 onwards. For
+  those users with a version earlier than 0.47.1, an updated copy of meson
+  can be got using the ``pip``, or ``pip3``, tool for downloading python
+  packages.
 
 * kvargs: The function ``rte_kvargs_process`` will get a new parameter
   for returning key match count. It will ease handling of no-match case.
 
-* eal: function ``rte_bsf64`` in ``rte_bitmap.h`` has been renamed to
-  ``rte_bsf64_safe`` and moved to ``rte_common.h``. A new ``rte_bsf64`` function
-  will be added in the next release in ``rte_common.h`` that follows convention
-  set by existing ``rte_bsf32`` function.
+* eal: The ``attr_value`` parameter of ``rte_service_attr_get()``
+  will be changed from ``uint32_t *`` to ``uint64_t *``
+  as the attributes are of type ``uint64_t``.
 
 * eal: both declaring and identifying devices will be streamlined in v18.11.
   New functions will appear to query a specific port from buses, classes of
@@ -49,23 +48,6 @@ Deprecation Notices
   structure would be made internal (or removed if all dependencies are cleared)
   in future releases.
 
-* mbuf: The opaque ``mbuf->hash.sched`` field will be updated to support generic
-  definition in line with the ethdev TM and MTR APIs. Currently, this field
-  is defined in librte_sched in a non-generic way. The new generic format
-  will contain: queue ID, traffic class, color. Field size will not change.
-
-* sched: Some API functions will change prototype due to the above
-  deprecation note for mbuf->hash.sched, e.g. ``rte_sched_port_pkt_write()``
-  and ``rte_sched_port_pkt_read()`` will likely have an additional parameter
-  of type ``struct rte_sched_port``.
-
-* mbuf: the macro ``RTE_MBUF_INDIRECT()`` will be removed in v18.08 or later and
-  replaced with ``RTE_MBUF_CLONED()`` which is already added in v18.05. As
-  ``EXT_ATTACHED_MBUF`` is newly introduced in v18.05, ``RTE_MBUF_INDIRECT()``
-  can no longer be mutually exclusive with ``RTE_MBUF_DIRECT()`` if the new
-  experimental API ``rte_pktmbuf_attach_extbuf()`` is used. Removal of the macro
-  is to fix this semantic inconsistency.
-
 * ethdev: the legacy filter API, including
   ``rte_eth_dev_filter_supported()``, ``rte_eth_dev_filter_ctrl()`` as well
   as filter types MACVLAN, ETHERTYPE, FLEXIBLE, SYN, NTUPLE, TUNNEL, FDIR,
@@ -86,22 +68,10 @@ Deprecation Notices
   - Member ``uint16_t min_mtu`` the minimum MTU allowed.
   - Member ``uint16_t max_mtu`` the maximum MTU allowed.
 
-* security: New field ``uint64_t opaque_data`` is planned to be added into
-  ``rte_security_session`` structure. That would allow upper layer to easily
-  associate/de-associate some user defined data with the security session.
+* meter: New ``rte_color`` definition will be added in 19.02 and that will
+  replace ``enum rte_meter_color`` in meter library in 19.05. This will help
+  to consolidate color definition, which is currently replicated in many places,
+  such as: rte_meter.h, rte_mtr.h, rte_tm.h.
 
-* cryptodev: several API and ABI changes are planned for rte_cryptodev
-  in v19.02:
-
-  - The size and layout of ``rte_cryptodev_sym_session`` will change
-    to fix existing issues.
-  - The size and layout of ``rte_cryptodev_qp_conf`` and syntax of
-    ``rte_cryptodev_queue_pair_setup`` will change to to allow to use
-    two different mempools for crypto and device private sessions.
-
-* pdump: As we changed to use generic IPC, some changes in APIs and structure
-  are expected in subsequent release.
-
-  - ``rte_pdump_set_socket_dir`` will be removed;
-  - The parameter, ``path``, of ``rte_pdump_init`` will be removed;
-  - The enum ``rte_pdump_socktype`` will be removed.
+* crypto/aesni_mb: the minimum supported intel-ipsec-mb library version will be
+  changed from 0.49.0 to 0.52.0.

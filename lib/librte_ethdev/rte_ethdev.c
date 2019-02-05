@@ -1594,7 +1594,7 @@ rte_eth_rx_queue_setup(uint16_t port_id, uint16_t rx_queue_id,
 			nb_rx_desc % dev_info.rx_desc_lim.nb_align != 0) {
 
 		RTE_ETHDEV_LOG(ERR,
-			"Invalid value for nb_rx_desc(=%hu), should be: <= %hu, = %hu, and a product of %hu\n",
+			"Invalid value for nb_rx_desc(=%hu), should be: <= %hu, >= %hu, and a product of %hu\n",
 			nb_rx_desc, dev_info.rx_desc_lim.nb_max,
 			dev_info.rx_desc_lim.nb_min,
 			dev_info.rx_desc_lim.nb_align);
@@ -1698,7 +1698,7 @@ rte_eth_tx_queue_setup(uint16_t port_id, uint16_t tx_queue_id,
 	    nb_tx_desc < dev_info.tx_desc_lim.nb_min ||
 	    nb_tx_desc % dev_info.tx_desc_lim.nb_align != 0) {
 		RTE_ETHDEV_LOG(ERR,
-			"Invalid value for nb_tx_desc(=%hu), should be: <= %hu, = %hu, and a product of %hu\n",
+			"Invalid value for nb_tx_desc(=%hu), should be: <= %hu, >= %hu, and a product of %hu\n",
 			nb_tx_desc, dev_info.tx_desc_lim.nb_max,
 			dev_info.tx_desc_lim.nb_min,
 			dev_info.tx_desc_lim.nb_align);
@@ -3588,9 +3588,15 @@ rte_eth_dma_zone_reserve(const struct rte_eth_dev *dev, const char *ring_name,
 {
 	char z_name[RTE_MEMZONE_NAMESIZE];
 	const struct rte_memzone *mz;
+	int rc;
 
-	snprintf(z_name, sizeof(z_name), "eth_p%d_q%d_%s",
-		 dev->data->port_id, queue_id, ring_name);
+	rc = snprintf(z_name, sizeof(z_name), "eth_p%d_q%d_%s",
+		      dev->data->port_id, queue_id, ring_name);
+	if (rc >= RTE_MEMZONE_NAMESIZE) {
+		RTE_ETHDEV_LOG(ERR, "ring name too long\n");
+		rte_errno = ENAMETOOLONG;
+		return NULL;
+	}
 
 	mz = rte_memzone_lookup(z_name);
 	if (mz)

@@ -11,6 +11,7 @@ Network Interface Controller Drivers
     overview
     features
     build_and_test
+    af_packet
     ark
     atlantic
     avp
@@ -26,6 +27,7 @@ Network Interface Controller Drivers
     enic
     fm10k
     i40e
+    ice
     ifc
     igb
     ixgbe

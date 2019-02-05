@@ -199,6 +199,17 @@ hn_tx_pool_init(struct rte_eth_dev *dev)
 	return 0;
 }
 
+void
+hn_tx_pool_uninit(struct rte_eth_dev *dev)
+{
+	struct hn_data *hv = dev->data->dev_private;
+
+	if (hv->tx_pool) {
+		rte_mempool_free(hv->tx_pool);
+		hv->tx_pool = NULL;
+	}
+}
+
 static void hn_reset_txagg(struct hn_tx_queue *txq)
 {
 	txq->agg_szleft = txq->agg_szmax;
@@ -501,6 +512,14 @@ static void hn_rxpkt(struct hn_rx_queue *rxq, struct hn_rx_bufinfo *rxb,
 	if (info->vlan_info != HN_NDIS_VLAN_INFO_INVALID) {
 		m->vlan_tci = info->vlan_info;
 		m->ol_flags |= PKT_RX_VLAN_STRIPPED | PKT_RX_VLAN;
+
+		/* NDIS always strips tag, put it back if necessary */
+		if (!hv->vlan_strip && rte_vlan_insert(&m)) {
+			PMD_DRV_LOG(DEBUG, "vlan insert failed");
+			++rxq->stats.errors;
+			rte_pktmbuf_free(m);
+			return;
+		}
 	}
 
 	if (info->csum_info != HN_NDIS_RXCSUM_INFO_INVALID) {

@@ -846,6 +846,10 @@ mlx5_flow_validate_action_queue(const struct rte_flow_action *action,
 					  RTE_FLOW_ERROR_TYPE_ACTION, NULL,
 					  "can't have 2 fate actions in"
 					  " same flow");
+	if (!priv->rxqs_n)
+		return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ACTION_CONF,
+					  NULL, "No Rx queues configured");
 	if (queue->index >= priv->rxqs_n)
 		return rte_flow_error_set(error, EINVAL,
 					  RTE_FLOW_ERROR_TYPE_ACTION_CONF,
@@ -939,6 +943,14 @@ mlx5_flow_validate_action_rss(const struct rte_flow_action *action,
 					  &rss->types,
 					  "some RSS protocols are not"
 					  " supported");
+	if (!priv->rxqs_n)
+		return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ACTION_CONF,
+					  NULL, "No Rx queues configured");
+	if (!rss->queue_num)
+		return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ACTION_CONF,
+					  NULL, "No queues configured");
 	for (i = 0; i != rss->queue_num; ++i) {
 		if (!(*priv->rxqs)[rss->queue[i]])
 			return rte_flow_error_set
@@ -1141,6 +1153,9 @@ mlx5_flow_validate_item_vlan(const struct rte_flow_item *item,
  *   Item specification.
  * @param[in] item_flags
  *   Bit-fields that holds the items detected until now.
+ * @param[in] acc_mask
+ *   Acceptable mask, if NULL default internal default mask
+ *   will be used to check whether item fields are supported.
  * @param[out] error
  *   Pointer to error structure.
  *
@@ -1150,6 +1165,7 @@ mlx5_flow_validate_item_vlan(const struct rte_flow_item *item,
 int
 mlx5_flow_validate_item_ipv4(const struct rte_flow_item *item,
 			     uint64_t item_flags,
+			     const struct rte_flow_item_ipv4 *acc_mask,
 			     struct rte_flow_error *error)
 {
 	const struct rte_flow_item_ipv4 *mask = item->mask;
@@ -1185,7 +1201,8 @@ mlx5_flow_validate_item_ipv4(const struct rte_flow_item *item,
 					  "partial mask is not supported"
 					  " for protocol");
 	ret = mlx5_flow_item_acceptable(item, (const uint8_t *)mask,
-					(const uint8_t *)&nic_mask,
+					acc_mask ? (const uint8_t *)acc_mask
+						 : (const uint8_t *)&nic_mask,
 					sizeof(struct rte_flow_item_ipv4),
 					error);
 	if (ret < 0)
@@ -1200,6 +1217,9 @@ mlx5_flow_validate_item_ipv4(const struct rte_flow_item *item,
  *   Item specification.
  * @param[in] item_flags
  *   Bit-fields that holds the items detected until now.
+ * @param[in] acc_mask
+ *   Acceptable mask, if NULL default internal default mask
+ *   will be used to check whether item fields are supported.
  * @param[out] error
  *   Pointer to error structure.
  *
@@ -1209,6 +1229,7 @@ mlx5_flow_validate_item_ipv4(const struct rte_flow_item *item,
 int
 mlx5_flow_validate_item_ipv6(const struct rte_flow_item *item,
 			     uint64_t item_flags,
+			     const struct rte_flow_item_ipv6 *acc_mask,
 			     struct rte_flow_error *error)
 {
 	const struct rte_flow_item_ipv6 *mask = item->mask;
@@ -1243,7 +1264,8 @@ mlx5_flow_validate_item_ipv6(const struct rte_flow_item *item,
 	if (!mask)
 		mask = &rte_flow_item_ipv6_mask;
 	ret = mlx5_flow_item_acceptable(item, (const uint8_t *)mask,
-					(const uint8_t *)&nic_mask,
+					acc_mask ? (const uint8_t *)acc_mask
+						 : (const uint8_t *)&nic_mask,
 					sizeof(struct rte_flow_item_ipv6),
 					error);
 	if (ret < 0)
@@ -2314,9 +2336,8 @@ mlx5_ctrl_flow_vlan(struct rte_eth_dev *dev,
 	struct rte_flow_error error;
 	unsigned int i;
 
-	if (!priv->reta_idx_n) {
-		rte_errno = EINVAL;
-		return -rte_errno;
+	if (!priv->reta_idx_n || !priv->rxqs_n) {
+		return 0;
 	}
 	for (i = 0; i != priv->reta_idx_n; ++i)
 		queue[i] = (*priv->reta_idx)[i];

@@ -13,12 +13,18 @@
 #include <rte_string_fns.h>
 
 #include "fips_validation.h"
+#include "fips_dev_self_test.h"
 
 #define REQ_FILE_PATH_KEYWORD	"req-file"
 #define RSP_FILE_PATH_KEYWORD	"rsp-file"
 #define FOLDER_KEYWORD		"path-is-folder"
 #define CRYPTODEV_KEYWORD	"cryptodev"
 #define CRYPTODEV_ID_KEYWORD	"cryptodev-id"
+#define CRYPTODEV_ST_KEYWORD	"self-test"
+#define CRYPTODEV_BK_ID_KEYWORD	"broken-test-id"
+#define CRYPTODEV_BK_DIR_KEY	"broken-test-dir"
+#define CRYPTODEV_ENC_KEYWORD	"enc"
+#define CRYPTODEV_DEC_KEYWORD	"dec"
 
 struct fips_test_vector vec;
 struct fips_test_interim_info info;
@@ -29,18 +35,36 @@ struct cryptodev_fips_validate_env {
 	uint32_t is_path_folder;
 	uint32_t dev_id;
 	struct rte_mempool *mpool;
+	struct rte_mempool *sess_mpool;
+	struct rte_mempool *sess_priv_mpool;
 	struct rte_mempool *op_pool;
 	struct rte_mbuf *mbuf;
 	struct rte_crypto_op *op;
 	struct rte_cryptodev_sym_session *sess;
+	uint32_t self_test;
+	struct fips_dev_broken_test_config *broken_test_config;
 } env;
 
 static int
 cryptodev_fips_validate_app_int(void)
 {
 	struct rte_cryptodev_config conf = {rte_socket_id(), 1};
-	struct rte_cryptodev_qp_conf qp_conf = {128};
+	struct rte_cryptodev_qp_conf qp_conf = {128, NULL, NULL};
+	uint32_t sess_sz = rte_cryptodev_sym_get_private_session_size(
+			env.dev_id);
 	int ret;
+
+	if (env.self_test) {
+		ret = fips_dev_self_test(env.dev_id, env.broken_test_config);
+		if (ret < 0) {
+			struct rte_cryptodev *cryptodev =
+					rte_cryptodev_pmd_get_dev(env.dev_id);
+
+			rte_cryptodev_pmd_destroy(cryptodev);
+
+			return ret;
+		}
+	}
 
 	ret = rte_cryptodev_configure(env.dev_id, &conf);
 	if (ret < 0)
@@ -52,11 +76,22 @@ cryptodev_fips_validate_app_int(void)
 		return ret;
 
 	ret = rte_cryptodev_queue_pair_setup(env.dev_id, 0, &qp_conf,
-			rte_socket_id(), env.mpool);
+			rte_socket_id());
 	if (ret < 0)
 		return ret;
 
 	ret = -ENOMEM;
+
+	env.sess_mpool = rte_cryptodev_sym_session_pool_create(
+			"FIPS_SESS_MEMPOOL", 16, 0, 0, 0, rte_socket_id());
+	if (!env.sess_mpool)
+		goto error_exit;
+
+	env.sess_priv_mpool = rte_mempool_create("FIPS_SESS_PRIV_MEMPOOL",
+			16, sess_sz, 0, 0, NULL, NULL, NULL,
+			NULL, rte_socket_id(), 0);
+	if (!env.sess_priv_mpool)
+		goto error_exit;
 
 	env.op_pool = rte_crypto_op_pool_create(
 			"FIPS_OP_POOL",
@@ -75,10 +110,23 @@ cryptodev_fips_validate_app_int(void)
 	if (!env.op)
 		goto error_exit;
 
+	qp_conf.mp_session = env.sess_mpool;
+	qp_conf.mp_session_private = env.sess_priv_mpool;
+
+	ret = rte_cryptodev_queue_pair_setup(env.dev_id, 0, &qp_conf,
+			rte_socket_id());
+	if (ret < 0)
+		goto error_exit;
+
 	return 0;
 
 error_exit:
+
 	rte_mempool_free(env.mpool);
+	if (env.sess_mpool)
+		rte_mempool_free(env.sess_mpool);
+	if (env.sess_priv_mpool)
+		rte_mempool_free(env.sess_priv_mpool);
 	if (env.op_pool)
 		rte_mempool_free(env.op_pool);
 
@@ -93,6 +141,8 @@ cryptodev_fips_validate_app_uninit(void)
 	rte_cryptodev_sym_session_clear(env.dev_id, env.sess);
 	rte_cryptodev_sym_session_free(env.sess);
 	rte_mempool_free(env.mpool);
+	rte_mempool_free(env.sess_mpool);
+	rte_mempool_free(env.sess_priv_mpool);
 	rte_mempool_free(env.op_pool);
 }
 
@@ -146,9 +196,14 @@ cryptodev_fips_validate_usage(const char *prgname)
 		"  --%s: RESPONSE-FILE-PATH\n"
 		"  --%s: indicating both paths are folders\n"
 		"  --%s: CRYPTODEV-NAME\n"
-		"  --%s: CRYPTODEV-ID-NAME\n",
+		"  --%s: CRYPTODEV-ID-NAME\n"
+		"  --%s: self test indicator\n"
+		"  --%s: self broken test ID\n"
+		"  --%s: self broken test direction\n",
 		prgname, REQ_FILE_PATH_KEYWORD, RSP_FILE_PATH_KEYWORD,
-		FOLDER_KEYWORD, CRYPTODEV_KEYWORD, CRYPTODEV_ID_KEYWORD);
+		FOLDER_KEYWORD, CRYPTODEV_KEYWORD, CRYPTODEV_ID_KEYWORD,
+		CRYPTODEV_ST_KEYWORD, CRYPTODEV_BK_ID_KEYWORD,
+		CRYPTODEV_BK_DIR_KEY);
 }
 
 static int
@@ -164,6 +219,9 @@ cryptodev_fips_validate_parse_args(int argc, char **argv)
 			{FOLDER_KEYWORD, no_argument, 0, 0},
 			{CRYPTODEV_KEYWORD, required_argument, 0, 0},
 			{CRYPTODEV_ID_KEYWORD, required_argument, 0, 0},
+			{CRYPTODEV_ST_KEYWORD, no_argument, 0, 0},
+			{CRYPTODEV_BK_ID_KEYWORD, required_argument, 0, 0},
+			{CRYPTODEV_BK_DIR_KEY, required_argument, 0, 0},
 			{NULL, 0, 0, 0}
 	};
 
@@ -194,6 +252,56 @@ cryptodev_fips_validate_parse_args(int argc, char **argv)
 					CRYPTODEV_ID_KEYWORD) == 0) {
 				ret = parse_cryptodev_id_arg(optarg);
 				if (ret < 0) {
+					cryptodev_fips_validate_usage(prgname);
+					return -EINVAL;
+				}
+			} else if (strcmp(lgopts[option_index].name,
+					CRYPTODEV_ST_KEYWORD) == 0) {
+				env.self_test = 1;
+			} else if (strcmp(lgopts[option_index].name,
+					CRYPTODEV_BK_ID_KEYWORD) == 0) {
+				if (!env.broken_test_config) {
+					env.broken_test_config = rte_malloc(
+						NULL,
+						sizeof(*env.broken_test_config),
+						0);
+					if (!env.broken_test_config)
+						return -ENOMEM;
+
+					env.broken_test_config->expect_fail_dir =
+						self_test_dir_enc_auth_gen;
+				}
+
+				if (parser_read_uint32(
+					&env.broken_test_config->expect_fail_test_idx,
+						optarg) < 0) {
+					rte_free(env.broken_test_config);
+					cryptodev_fips_validate_usage(prgname);
+					return -EINVAL;
+				}
+			} else if (strcmp(lgopts[option_index].name,
+					CRYPTODEV_BK_DIR_KEY) == 0) {
+				if (!env.broken_test_config) {
+					env.broken_test_config = rte_malloc(
+						NULL,
+						sizeof(*env.broken_test_config),
+						0);
+					if (!env.broken_test_config)
+						return -ENOMEM;
+
+					env.broken_test_config->
+						expect_fail_test_idx = 0;
+				}
+
+				if (strcmp(optarg, CRYPTODEV_ENC_KEYWORD) == 0)
+					env.broken_test_config->expect_fail_dir =
+						self_test_dir_enc_auth_gen;
+				else if (strcmp(optarg, CRYPTODEV_DEC_KEYWORD)
+						== 0)
+					env.broken_test_config->expect_fail_dir =
+						self_test_dir_dec_auth_verify;
+				else {
+					rte_free(env.broken_test_config);
 					cryptodev_fips_validate_usage(prgname);
 					return -EINVAL;
 				}
@@ -797,12 +905,12 @@ fips_run_test(void)
 	if (ret < 0)
 		return ret;
 
-	env.sess = rte_cryptodev_sym_session_create(env.mpool);
+	env.sess = rte_cryptodev_sym_session_create(env.sess_mpool);
 	if (!env.sess)
 		return -ENOMEM;
 
 	ret = rte_cryptodev_sym_session_init(env.dev_id,
-			env.sess, &xform, env.mpool);
+			env.sess, &xform, env.sess_priv_mpool);
 	if (ret < 0) {
 		RTE_LOG(ERR, USER1, "Error %i: Init session\n",
 				ret);

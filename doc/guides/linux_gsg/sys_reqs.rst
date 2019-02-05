@@ -70,6 +70,15 @@ Compilation of the DPDK
 
     * libnuma-dev in Debian/Ubuntu;
 
+    .. note::
+
+        On systems with NUMA support, `libnuma-dev` (aka `numactl-devel`)
+        is a recommended dependency when `--legacy-mem` switch is used,
+        and a *required* dependency if default memory mode is used.
+        While DPDK will compile and run without `libnuma`
+        even on NUMA-enabled systems,
+        both usability and performance will be degraded.
+
 *   Python, version 2.7+ or 3.2+, to use various helper scripts included in the DPDK package.
 
 
@@ -98,21 +107,15 @@ System Software
 
 **Required:**
 
-*   Kernel version >= 3.2
+*   Kernel version >= 3.16
 
     The kernel version required is based on the oldest long term stable kernel available
     at kernel.org when the DPDK version is in development.
+    Compatibility for recent distribution kernels will be kept, notably RHEL/CentOS 7.
 
     The kernel version in use can be checked using the command::
 
         uname -r
-
-.. note::
-
-    Kernel version 3.2 is no longer a kernel.org longterm stable kernel.
-    For DPDK 19.02 the minimum required kernel will be updated to
-    the current kernel.org oldest longterm stable supported kernel 3.16,
-    or recent versions of common distributions, notably RHEL/CentOS 7.
 
 *   glibc >= 2.7 (for features related to cpuset)
 

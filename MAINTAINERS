@@ -51,7 +51,7 @@ M: Akhil Goyal <akhil.goyal@nxp.com>
 T: git://dpdk.org/next/dpdk-next-crypto
 
 Next-eventdev Tree
-M: Jerin Jacob <jerin.jacob@caviumnetworks.com>
+M: Jerin Jacob <jerinj@marvell.com>
 T: git://dpdk.org/next/dpdk-next-eventdev
 
 Next-qos Tree
@@ -101,7 +101,6 @@ F: GNUmakefile
 F: Makefile
 F: config/
 F: mk/
-F: pkg/
 F: buildtools/auto-config-h.sh
 F: buildtools/gen-build-mk.sh
 F: buildtools/gen-config-h.sh
@@ -220,7 +219,7 @@ F: lib/librte_eal/common/arch/arm/
 F: lib/librte_eal/common/include/arch/arm/
 
 ARM v8
-M: Jerin Jacob <jerin.jacob@caviumnetworks.com>
+M: Jerin Jacob <jerinj@marvell.com>
 M: Gavin Hu <gavin.hu@arm.com>
 F: lib/librte_eal/common/include/arch/arm/*_64.h
 F: lib/librte_net/net_crc_neon.h
@@ -357,7 +356,7 @@ F: doc/guides/prog_guide/rte_security.rst
 Compression API - EXPERIMENTAL
 M: Fiona Trahe <fiona.trahe@intel.com>
 M: Pablo de Lara <pablo.de.lara.guarch@intel.com>
-M: Ashish Gupta <ashish.gupta@caviumnetworks.com>
+M: Ashish Gupta <ashish.gupta@marvell.com>
 T: git://dpdk.org/next/dpdk-next-crypto
 F: lib/librte_compressdev/
 F: drivers/compress/
@@ -366,7 +365,7 @@ F: doc/guides/prog_guide/compressdev.rst
 F: doc/guides/compressdevs/features/default.ini
 
 Eventdev API
-M: Jerin Jacob <jerin.jacob@caviumnetworks.com>
+M: Jerin Jacob <jerinj@marvell.com>
 T: git://dpdk.org/next/dpdk-next-eventdev
 F: lib/librte_eventdev/
 F: drivers/event/skeleton/
@@ -450,7 +449,6 @@ T: git://dpdk.org/next/dpdk-next-net
 F: doc/guides/nics/features/default.ini
 
 Link bonding
-M: Declan Doherty <declan.doherty@intel.com>
 M: Chas Williams <chas3@att.com>
 F: drivers/net/bonding/
 F: doc/guides/prog_guide/link_bonding_poll_mode_drv_lib.rst
@@ -510,21 +508,21 @@ F: doc/guides/nics/bnxt.rst
 F: doc/guides/nics/features/bnxt.ini
 
 Cavium ThunderX nicvf
-M: Jerin Jacob <jerin.jacob@caviumnetworks.com>
-M: Maciej Czekaj <maciej.czekaj@caviumnetworks.com>
+M: Jerin Jacob <jerinj@marvell.com>
+M: Maciej Czekaj <mczekaj@marvell.com>
 F: drivers/net/thunderx/
 F: doc/guides/nics/thunderx.rst
 F: doc/guides/nics/features/thunderx.ini
 
 Cavium LiquidIO
-M: Shijith Thotton <shijith.thotton@cavium.com>
-M: Srisivasubramanian Srinivasan <ssrinivasan@cavium.com>
+M: Shijith Thotton <sthotton@marvell.com>
+M: Srisivasubramanian Srinivasan <srinivasan@marvell.com>
 F: drivers/net/liquidio/
 F: doc/guides/nics/liquidio.rst
 F: doc/guides/nics/features/liquidio.ini
 
 Cavium OCTEON TX
-M: Jerin Jacob <jerin.jacob@caviumnetworks.com>
+M: Jerin Jacob <jerinj@marvell.com>
 F: drivers/common/octeontx/
 F: drivers/mempool/octeontx/
 F: drivers/net/octeontx/
@@ -593,6 +591,14 @@ F: drivers/net/ifc/
 F: doc/guides/nics/ifc.rst
 F: doc/guides/nics/features/ifc*.ini
 
+Intel ice
+M: Qiming Yang <qiming.yang@intel.com>
+M: Wenzhuo Lu <wenzhuo.lu@intel.com>
+T: git://dpdk.org/next/dpdk-next-net-intel
+F: drivers/net/ice/
+F: doc/guides/nics/ice.rst
+F: doc/guides/nics/features/ice.ini
+
 Marvell mvpp2
 M: Tomasz Duszynski <tdu@semihalf.com>
 M: Dmitri Epshtein <dima@marvell.com>
@@ -623,6 +629,7 @@ M: Shahaf Shuler <shahafs@mellanox.com>
 M: Yongseok Koh <yskoh@mellanox.com>
 T: git://dpdk.org/next/dpdk-next-net-mlx
 F: drivers/net/mlx5/
+F: buildtools/options-ibverbs-static.sh
 F: doc/guides/nics/mlx5.rst
 F: doc/guides/nics/features/mlx5.ini
 
@@ -676,16 +683,15 @@ F: doc/guides/nics/enetc.rst
 F: doc/guides/nics/features/enetc.ini
 
 QLogic bnx2x
-M: Harish Patil <harish.patil@cavium.com>
-M: Rasesh Mody <rasesh.mody@cavium.com>
+M: Rasesh Mody <rmody@marvell.com>
+M: Shahed Shaikh <shshaikh@marvell.com>
 F: drivers/net/bnx2x/
 F: doc/guides/nics/bnx2x.rst
 F: doc/guides/nics/features/bnx2x*.ini
 
 QLogic qede PMD
-M: Rasesh Mody <rasesh.mody@cavium.com>
-M: Harish Patil <harish.patil@cavium.com>
-M: Shahed Shaikh <shahed.shaikh@cavium.com>
+M: Rasesh Mody <rmody@marvell.com>
+M: Shahed Shaikh <shshaikh@marvell.com>
 F: drivers/net/qede/
 F: doc/guides/nics/qede.rst
 F: doc/guides/nics/features/qede*.ini
@@ -800,13 +806,13 @@ F: doc/guides/cryptodevs/ccp.rst
 F: doc/guides/cryptodevs/features/ccp.ini
 
 ARMv8 Crypto
-M: Jerin Jacob <jerin.jacob@caviumnetworks.com>
+M: Jerin Jacob <jerinj@marvell.com>
 F: drivers/crypto/armv8/
 F: doc/guides/cryptodevs/armv8.rst
 F: doc/guides/cryptodevs/features/armv8.ini
 
 Cavium OCTEON TX crypto
-M: Anoob Joseph <anoob.joseph@caviumnetworks.com>
+M: Anoob Joseph <anoobj@marvell.com>
 F: drivers/common/cpt/
 F: drivers/crypto/octeontx/
 F: doc/guides/cryptodevs/octeontx.rst
@@ -910,7 +916,7 @@ M: Pablo de Lara <pablo.de.lara.guarch@intel.com>
 T: git://dpdk.org/next/dpdk-next-crypto
 
 Cavium OCTEON TX zipvf
-M: Ashish Gupta <ashish.gupta@cavium.com>
+M: Ashish Gupta <ashish.gupta@marvell.com>
 F: drivers/compress/octeontx/
 F: doc/guides/compressdevs/octeontx.rst
 F: doc/guides/compressdevs/features/octeontx.ini
@@ -927,7 +933,7 @@ F: doc/guides/compressdevs/isal.rst
 F: doc/guides/compressdevs/features/isal.ini
 
 ZLIB
-M: Sunila Sahu <sunila.sahu@caviumnetworks.com>
+M: Sunila Sahu <ssahu@marvell.com>
 F: drivers/compress/zlib/
 F: doc/guides/compressdevs/zlib.rst
 F: doc/guides/compressdevs/features/zlib.ini
@@ -935,16 +941,16 @@ F: doc/guides/compressdevs/features/zlib.ini
 
 Eventdev Drivers
 ----------------
-M: Jerin Jacob <jerin.jacob@caviumnetworks.com>
+M: Jerin Jacob <jerinj@marvell.com>
 T: git://dpdk.org/next/dpdk-next-eventdev
 
 Cavium OCTEON TX ssovf
-M: Jerin Jacob <jerin.jacob@caviumnetworks.com>
+M: Jerin Jacob <jerinj@marvell.com>
 F: drivers/event/octeontx/
 F: doc/guides/eventdevs/octeontx.rst
 
 Cavium OCTEON TX timvf
-M: Pavan Nikhilesh <pbhagavatula@caviumnetworks.com>
+M: Pavan Nikhilesh <pbhagavatula@marvell.com>
 F: drivers/event/octeontx/timvf_*
 
 NXP DPAA eventdev
@@ -1030,6 +1036,14 @@ M: Jiayu Hu <jiayu.hu@intel.com>
 F: lib/librte_gso/
 F: doc/guides/prog_guide/generic_segmentation_offload_lib.rst
 
+IPsec - EXPERIMENTAL
+M: Konstantin Ananyev <konstantin.ananyev@intel.com>
+T: git://dpdk.org/next/dpdk-next-crypto
+F: lib/librte_ipsec/
+M: Bernard Iremonger <bernard.iremonger@intel.com>
+F: test/test/test_ipsec.c
+F: doc/guides/prog_guide/ipsec_lib.rst
+
 Flow Classify - EXPERIMENTAL
 M: Bernard Iremonger <bernard.iremonger@intel.com>
 F: lib/librte_flow_classify/
@@ -1039,7 +1053,6 @@ F: examples/flow_classify/
 F: doc/guides/sample_app_ug/flow_classify.rst
 
 Distributor
-M: Bruce Richardson <bruce.richardson@intel.com>
 M: David Hunt <david.hunt@intel.com>
 F: lib/librte_distributor/
 F: doc/guides/prog_guide/packet_distrib_lib.rst
@@ -1068,6 +1081,7 @@ Packet capture
 M: Reshma Pattan <reshma.pattan@intel.com>
 F: lib/librte_pdump/
 F: doc/guides/prog_guide/pdump_lib.rst
+F: test/test/test_pdump.*
 F: app/pdump/
 F: doc/guides/tools/pdump.rst
 
@@ -1108,6 +1122,8 @@ F: examples/server_node_efd/
 F: doc/guides/sample_app_ug/server_node_efd.rst
 
 Hashes
+M: Yipeng Wang <yipeng1.wang@intel.com>
+M: Sameh Gobriel <sameh.gobriel@intel.com>
 M: Bruce Richardson <bruce.richardson@intel.com>
 M: Pablo de Lara <pablo.de.lara.guarch@intel.com>
 F: lib/librte_hash/
@@ -1197,10 +1213,12 @@ F: test/test/test_metrics.c
 Bit-rate statistics
 M: Remy Horton <remy.horton@intel.com>
 F: lib/librte_bitratestats/
+F: test/test/test_bitratestats.c
 
 Latency statistics
 M: Reshma Pattan <reshma.pattan@intel.com>
 F: lib/librte_latencystats/
+F: test/test/test_latencystats.c
 
 Telemetry - EXPERIMENTAL
 M: Kevin Laatz <kevin.laatz@intel.com>
@@ -1235,6 +1253,11 @@ F: test/test/test_resource.c
 F: test/test/virtual_pmd.c
 F: test/test/virtual_pmd.h
 
+Sample packet helper functions for unit test
+M: Reshma Pattan <reshma.pattan@intel.com>
+F: test/test/sample_packet_forward.c
+F: test/test/sample_packet_forward.h
+
 Driver testing tool
 M: Wenzhuo Lu <wenzhuo.lu@intel.com>
 M: Jingjing Wu <jingjing.wu@intel.com>
@@ -1242,13 +1265,18 @@ M: Bernard Iremonger <bernard.iremonger@intel.com>
 F: app/test-pmd/
 F: doc/guides/testpmd_app_ug/
 
+Compression performance test application
+M: Pablo De Lara Guarch <pablo.de.lara.guarch@intel.com>
+F: app/test-compress-perf/
+F: doc/guides/tools/comp_perf.rst
+
 Crypto performance test application
 M: Declan Doherty <declan.doherty@intel.com>
 F: app/test-crypto-perf/
 F: doc/guides/tools/cryptoperf.rst
 
 Eventdev test application
-M: Jerin Jacob <jerin.jacob@caviumnetworks.com>
+M: Jerin Jacob <jerinj@marvell.com>
 F: app/test-eventdev/
 F: doc/guides/tools/testeventdev.rst
 F: doc/guides/tools/img/eventdev_*

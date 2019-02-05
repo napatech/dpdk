@@ -468,6 +468,17 @@ __extension__
 typedef uint64_t MARKER64[0]; /**< marker that allows us to overwrite 8 bytes
                                * with a single assignment */
 
+struct rte_mbuf_sched {
+	uint32_t queue_id;   /**< Queue ID. */
+	uint8_t traffic_class;
+	/**< Traffic class ID. Traffic class 0
+	 * is the highest priority traffic class.
+	 */
+	uint8_t color;
+	/**< Color. @see enum rte_color.*/
+	uint16_t reserved;   /**< Reserved. */
+}; /**< Hierarchical scheduler */
+
 /**
  * The generic rte_mbuf, containing a packet mbuf.
  */
@@ -574,14 +585,17 @@ struct rte_mbuf {
 				 * on PKT_RX_FDIR_* flag in ol_flags.
 				 */
 			} fdir;	/**< Filter identifier if FDIR enabled */
+			struct rte_mbuf_sched sched;
+			/**< Hierarchical scheduler : 8 bytes */
 			struct {
-				uint32_t lo;
-				uint32_t hi;
+				uint32_t reserved1;
+				uint16_t reserved2;
+				uint16_t txq;
 				/**< The event eth Tx adapter uses this field
 				 * to store Tx queue id.
 				 * @see rte_event_eth_tx_adapter_txq_set()
 				 */
-			} sched;          /**< Hierarchical scheduler */
+			} txadapter; /**< Eventdev ethdev Tx adapter */
 			/**< User defined tags. See rte_distributor_process() */
 			uint32_t usr;
 		} hash;                   /**< hash information */
@@ -776,7 +790,55 @@ rte_mbuf_from_indirect(struct rte_mbuf *mi)
 }
 
 /**
- * Return the buffer address embedded in the given mbuf.
+ * Return address of buffer embedded in the given mbuf.
+ *
+ * The return value shall be same as mb->buf_addr if the mbuf is already
+ * initialized and direct. However, this API is useful if mempool of the
+ * mbuf is already known because it doesn't need to access mbuf contents in
+ * order to get the mempool pointer.
+ *
+ * @warning
+ * @b EXPERIMENTAL: This API may change without prior notice.
+ * This will be used by rte_mbuf_to_baddr() which has redundant code once
+ * experimental tag is removed.
+ *
+ * @param mb
+ *   The pointer to the mbuf.
+ * @param mp
+ *   The pointer to the mempool of the mbuf.
+ * @return
+ *   The pointer of the mbuf buffer.
+ */
+static inline char * __rte_experimental
+rte_mbuf_buf_addr(struct rte_mbuf *mb, struct rte_mempool *mp)
+{
+	return (char *)mb + sizeof(*mb) + rte_pktmbuf_priv_size(mp);
+}
+
+/**
+ * Return the default address of the beginning of the mbuf data.
+ *
+ * @warning
+ * @b EXPERIMENTAL: This API may change without prior notice.
+ *
+ * @param mb
+ *   The pointer to the mbuf.
+ * @return
+ *   The pointer of the beginning of the mbuf data.
+ */
+static inline char * __rte_experimental
+rte_mbuf_data_addr_default(struct rte_mbuf *mb)
+{
+	return rte_mbuf_buf_addr(mb, mb->pool) + RTE_PKTMBUF_HEADROOM;
+}
+
+/**
+ * Return address of buffer embedded in the given mbuf.
+ *
+ * @note: Accessing mempool pointer of a mbuf is expensive because the
+ * pointer is stored in the 2nd cache line of mbuf. If mempool is known, it
+ * is better not to reference the mempool pointer in mbuf but calling
+ * rte_mbuf_buf_addr() would be more efficient.
  *
  * @param md
  *   The pointer to the mbuf.
@@ -786,9 +848,13 @@ rte_mbuf_from_indirect(struct rte_mbuf *mi)
 static inline char *
 rte_mbuf_to_baddr(struct rte_mbuf *md)
 {
+#ifdef ALLOW_EXPERIMENTAL_API
+	return rte_mbuf_buf_addr(md, md->pool);
+#else
 	char *buffer_addr;
 	buffer_addr = (char *)md + sizeof(*md) + rte_pktmbuf_priv_size(md->pool);
 	return buffer_addr;
+#endif
 }
 
 /**
@@ -817,12 +883,6 @@ rte_mbuf_to_priv(struct rte_mbuf *m)
  * indirection, this mbuf can be defined as a cloned mbuf.
  */
 #define RTE_MBUF_CLONED(mb)     ((mb)->ol_flags & IND_ATTACHED_MBUF)
-
-/**
- * Deprecated.
- * Use RTE_MBUF_CLONED().
- */
-#define RTE_MBUF_INDIRECT(mb)   RTE_MBUF_CLONED(mb)
 
 /**
  * Returns TRUE if given mbuf has an external buffer, or FALSE otherwise.
@@ -1039,6 +1099,29 @@ rte_mbuf_ext_refcnt_update(struct rte_mbuf_ext_shared_info *shinfo,
  */
 void
 rte_mbuf_sanity_check(const struct rte_mbuf *m, int is_header);
+
+/**
+ * Sanity checks on a mbuf.
+ *
+ * Almost like rte_mbuf_sanity_check(), but this function gives the reason
+ * if corruption is detected rather than panic.
+ *
+ * @param m
+ *   The mbuf to be checked.
+ * @param is_header
+ *   True if the mbuf is a packet header, false if it is a sub-segment
+ *   of a packet (in this case, some fields like nb_segs are not checked)
+ * @param reason
+ *   A reference to a string pointer where to store the reason why a mbuf is
+ *   considered invalid.
+ * @return
+ *   - 0 if no issue has been found, reason is left untouched.
+ *   - -1 if a problem is detected, reason then points to a string describing
+ *     the reason why the mbuf is deemed invalid.
+ */
+__rte_experimental
+int rte_mbuf_check(const struct rte_mbuf *m, int is_header,
+		   const char **reason);
 
 #define MBUF_RAW_ALLOC_CHECK(m) do {				\
 	RTE_ASSERT(rte_mbuf_refcnt_read(m) == 1);		\
@@ -1483,13 +1566,6 @@ rte_pktmbuf_ext_shinfo_init_helper(void *buf_addr, uint16_t *buf_len,
  *   attached with appropriate free callback and its IO address.
  * - Smaller metadata is required to maintain shared data such as refcnt.
  *
- * @warning
- * @b EXPERIMENTAL: This API may change without prior notice.
- * Once external buffer is enabled by allowing experimental API,
- * ``RTE_MBUF_DIRECT()`` and ``RTE_MBUF_INDIRECT()`` are no longer
- * exclusive. A mbuf can be considered direct if it is neither indirect nor
- * having external buffer.
- *
  * @param m
  *   The pointer to the mbuf.
  * @param buf_addr
@@ -1501,7 +1577,7 @@ rte_pktmbuf_ext_shinfo_init_helper(void *buf_addr, uint16_t *buf_len,
  * @param shinfo
  *   User-provided memory for shared data of the external buffer.
  */
-static inline void __rte_experimental
+static inline void
 rte_pktmbuf_attach_extbuf(struct rte_mbuf *m, void *buf_addr,
 	rte_iova_t buf_iova, uint16_t buf_len,
 	struct rte_mbuf_ext_shared_info *shinfo)
@@ -1617,7 +1693,7 @@ __rte_pktmbuf_free_direct(struct rte_mbuf *m)
 {
 	struct rte_mbuf *md;
 
-	RTE_ASSERT(RTE_MBUF_INDIRECT(m));
+	RTE_ASSERT(RTE_MBUF_CLONED(m));
 
 	md = rte_mbuf_from_indirect(m);
 
@@ -2288,6 +2364,109 @@ rte_pktmbuf_linearize(struct rte_mbuf *mbuf)
  *   the packet.
  */
 void rte_pktmbuf_dump(FILE *f, const struct rte_mbuf *m, unsigned dump_len);
+
+/**
+ * Get the value of mbuf sched queue_id field.
+ */
+static inline uint32_t
+rte_mbuf_sched_queue_get(const struct rte_mbuf *m)
+{
+	return m->hash.sched.queue_id;
+}
+
+/**
+ * Get the value of mbuf sched traffic_class field.
+ */
+static inline uint8_t
+rte_mbuf_sched_traffic_class_get(const struct rte_mbuf *m)
+{
+	return m->hash.sched.traffic_class;
+}
+
+/**
+ * Get the value of mbuf sched color field.
+ */
+static inline uint8_t
+rte_mbuf_sched_color_get(const struct rte_mbuf *m)
+{
+	return m->hash.sched.color;
+}
+
+/**
+ * Get the values of mbuf sched queue_id, traffic_class and color.
+ *
+ * @param m
+ *   Mbuf to read
+ * @param queue_id
+ *  Returns the queue id
+ * @param traffic_class
+ *  Returns the traffic class id
+ * @param color
+ *  Returns the colour id
+ */
+static inline void
+rte_mbuf_sched_get(const struct rte_mbuf *m, uint32_t *queue_id,
+			uint8_t *traffic_class,
+			uint8_t *color)
+{
+	struct rte_mbuf_sched sched = m->hash.sched;
+
+	*queue_id = sched.queue_id;
+	*traffic_class = sched.traffic_class;
+	*color = sched.color;
+}
+
+/**
+ * Set the mbuf sched queue_id to the defined value.
+ */
+static inline void
+rte_mbuf_sched_queue_set(struct rte_mbuf *m, uint32_t queue_id)
+{
+	m->hash.sched.queue_id = queue_id;
+}
+
+/**
+ * Set the mbuf sched traffic_class id to the defined value.
+ */
+static inline void
+rte_mbuf_sched_traffic_class_set(struct rte_mbuf *m, uint8_t traffic_class)
+{
+	m->hash.sched.traffic_class = traffic_class;
+}
+
+/**
+ * Set the mbuf sched color id to the defined value.
+ */
+static inline void
+rte_mbuf_sched_color_set(struct rte_mbuf *m, uint8_t color)
+{
+	m->hash.sched.color = color;
+}
+
+/**
+ * Set the mbuf sched queue_id, traffic_class and color.
+ *
+ * @param m
+ *   Mbuf to set
+ * @param queue_id
+ *  Queue id value to be set
+ * @param traffic_class
+ *  Traffic class id value to be set
+ * @param color
+ *  Color id to be set
+ */
+static inline void
+rte_mbuf_sched_set(struct rte_mbuf *m, uint32_t queue_id,
+			uint8_t traffic_class,
+			uint8_t color)
+{
+	m->hash.sched = (struct rte_mbuf_sched){
+				.queue_id = queue_id,
+				.traffic_class = traffic_class,
+				.color = color,
+				.reserved = 0,
+			};
+}
 
 #ifdef __cplusplus
 }

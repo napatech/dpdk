@@ -2,7 +2,7 @@
 # Copyright(c) 2017 Intel Corporation
 
 project('DPDK', 'C',
-	version: '18.11.0',
+	version: '19.02.0',
 	license: 'BSD',
 	default_options: ['buildtype=release', 'default_library=static'],
 	meson_version: '>= 0.41'
@@ -81,9 +81,11 @@ pkg.generate(name: meson.project_name(),
 	filebase: 'lib' + meson.project_name().to_lower(),
 	version: meson.project_version(),
 	libraries: dpdk_libraries,
-	libraries_private: dpdk_drivers + dpdk_libraries +
+	libraries_private: dpdk_drivers + dpdk_static_libraries +
 			['-Wl,-Bdynamic'] + dpdk_extra_ldflags,
-	description: 'The Data Plane Development Kit (DPDK)',
+	description: '''The Data Plane Development Kit (DPDK).
+Note that CFLAGS might contain an -march flag higher than typical baseline.
+This is required for a number of static inline functions in the public headers.''',
 	subdirs: [get_option('include_subdir_arch'), '.'],
 	extra_cflags: ['-include', 'rte_config.h'] + machine_args
 )

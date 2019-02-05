@@ -2,12 +2,12 @@
 # Copyright 2018 6WIND S.A.
 # Copyright 2018 Mellanox Technologies, Ltd
 
-pmd_dlopen = get_option('enable_driver_mlx_glue')
+pmd_dlopen = (get_option('ibverbs_link') == 'dlopen')
 LIB_GLUE_BASE = 'librte_pmd_mlx5_glue.so'
-LIB_GLUE_VERSION = '18.11.0'
+LIB_GLUE_VERSION = '19.02.0'
 LIB_GLUE = LIB_GLUE_BASE + '.' + LIB_GLUE_VERSION
 if pmd_dlopen
-	dpdk_conf.set('RTE_LIBRTE_MLX5_DLOPEN_DEPS', 1)
+	dpdk_conf.set('RTE_IBVERBS_LINK_DLOPEN', 1)
 	cflags += [
 		'-DMLX5_GLUE="@0@"'.format(LIB_GLUE),
 		'-DMLX5_GLUE_VERSION="@0@"'.format(LIB_GLUE_VERSION),
@@ -46,6 +46,7 @@ if build
 		'mlx5_trigger.c',
 		'mlx5_txq.c',
 		'mlx5_vlan.c',
+		'mlx5_devx_cmds.c',
 	)
 	if dpdk_conf.has('RTE_ARCH_X86_64') or dpdk_conf.has('RTE_ARCH_ARM64')
 		sources += files('mlx5_rxtx_vec.c')
@@ -102,8 +103,14 @@ if build
 		'mlx5dv_create_flow_action_packet_reformat' ],
 		[ 'HAVE_IBV_DEVICE_MPLS_SUPPORT', 'infiniband/verbs.h',
 		'IBV_FLOW_SPEC_MPLS' ],
+		[ 'HAVE_IBV_WQ_FLAGS_PCI_WRITE_END_PADDING', 'infiniband/verbs.h',
+		'IBV_WQ_FLAGS_PCI_WRITE_END_PADDING' ],
 		[ 'HAVE_IBV_WQ_FLAG_RX_END_PADDING', 'infiniband/verbs.h',
 		'IBV_WQ_FLAG_RX_END_PADDING' ],
+		[ 'HAVE_IBV_DEVX_OBJ', 'infiniband/mlx5dv.h',
+		'mlx5dv_devx_obj_create' ],
+		[ 'HAVE_IBV_FLOW_DEVX_COUNTERS', 'infiniband/mlx5dv.h',
+		'MLX5DV_FLOW_ACTION_COUNTER_DEVX' ],
 		[ 'HAVE_SUPPORTED_40000baseKR4_Full', 'linux/ethtool.h',
 		'SUPPORTED_40000baseKR4_Full' ],
 		[ 'HAVE_SUPPORTED_40000baseCR4_Full', 'linux/ethtool.h',
@@ -192,6 +199,14 @@ if build
 		'TCA_FLOWER_KEY_TCP_FLAGS' ],
 		[ 'HAVE_TCA_FLOWER_KEY_TCP_FLAGS_MASK', 'linux/pkt_cls.h',
 		'TCA_FLOWER_KEY_TCP_FLAGS_MASK' ],
+		[ 'HAVE_TCA_FLOWER_KEY_IP_TOS', 'linux/pkt_cls.h',
+		'TCA_FLOWER_KEY_IP_TOS' ],
+		[ 'HAVE_TCA_FLOWER_KEY_IP_TOS_MASK', 'linux/pkt_cls.h',
+		'TCA_FLOWER_KEY_IP_TOS_MASK' ],
+		[ 'HAVE_TCA_FLOWER_KEY_IP_TTL', 'linux/pkt_cls.h',
+		'TCA_FLOWER_KEY_IP_TTL' ],
+		[ 'HAVE_TCA_FLOWER_KEY_IP_TTL_MASK', 'linux/pkt_cls.h',
+		'TCA_FLOWER_KEY_IP_TTL_MASK' ],
 		[ 'HAVE_TC_ACT_GOTO_CHAIN', 'linux/pkt_cls.h',
 		'TC_ACT_GOTO_CHAIN' ],
 		[ 'HAVE_TC_ACT_VLAN', 'linux/tc_act/tc_vlan.h',
@@ -222,10 +237,22 @@ if build
 		'TCA_FLOWER_KEY_ENC_UDP_DST_PORT' ],
 		[ 'HAVE_TCA_FLOWER_KEY_ENC_UDP_DST_PORT_MASK', 'linux/pkt_cls.h',
 		'TCA_FLOWER_KEY_ENC_UDP_DST_PORT_MASK' ],
+		[ 'HAVE_TCA_FLOWER_KEY_ENC_IP_TOS', 'linux/pkt_cls.h',
+		'TCA_FLOWER_KEY_ENC_IP_TOS' ],
+		[ 'HAVE_TCA_FLOWER_KEY_ENC_IP_TOS_MASK', 'linux/pkt_cls.h',
+		'TCA_FLOWER_KEY_ENC_IP_TOS_MASK' ],
+		[ 'HAVE_TCA_FLOWER_KEY_ENC_IP_TTL', 'linux/pkt_cls.h',
+		'TCA_FLOWER_KEY_ENC_IP_TTL' ],
+		[ 'HAVE_TCA_FLOWER_KEY_ENC_IP_TTL_MASK', 'linux/pkt_cls.h',
+		'TCA_FLOWER_KEY_ENC_IP_TTL_MASK' ],
 		[ 'HAVE_TC_ACT_TUNNEL_KEY', 'linux/tc_act/tc_tunnel_key.h',
 		'TCA_ACT_TUNNEL_KEY' ],
 		[ 'HAVE_TCA_TUNNEL_KEY_ENC_DST_PORT', 'linux/tc_act/tc_tunnel_key.h',
 		'TCA_TUNNEL_KEY_ENC_DST_PORT' ],
+		[ 'HAVE_TCA_TUNNEL_KEY_ENC_TOS', 'linux/tc_act/tc_tunnel_key.h',
+		'TCA_TUNNEL_KEY_ENC_TOS' ],
+		[ 'HAVE_TCA_TUNNEL_KEY_ENC_TTL', 'linux/tc_act/tc_tunnel_key.h',
+		'TCA_TUNNEL_KEY_ENC_TTL' ],
 		[ 'HAVE_TCA_TUNNEL_KEY_NO_CSUM', 'linux/tc_act/tc_tunnel_key.h',
 		'TCA_TUNNEL_KEY_NO_CSUM' ],
 		[ 'HAVE_TC_ACT_PEDIT', 'linux/tc_act/tc_pedit.h',

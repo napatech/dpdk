@@ -37,6 +37,7 @@ static int mp_fd = -1;
 static char mp_filter[PATH_MAX];   /* Filter for secondary process sockets */
 static char mp_dir_path[PATH_MAX]; /* The directory path for all mp sockets */
 static pthread_mutex_t mp_mutex_action = PTHREAD_MUTEX_INITIALIZER;
+static char peer_name[PATH_MAX];
 
 struct action_entry {
 	TAILQ_ENTRY(action_entry) next;
@@ -511,9 +512,9 @@ async_reply_handle(void *arg)
 static int
 open_socket_fd(void)
 {
-	char peer_name[PATH_MAX] = {0};
 	struct sockaddr_un un;
 
+	peer_name[0] = '\0';
 	if (rte_eal_process_type() == RTE_PROC_SECONDARY)
 		snprintf(peer_name, sizeof(peer_name),
 				"%d_%"PRIx64, getpid(), rte_rdtsc());
@@ -542,27 +543,17 @@ open_socket_fd(void)
 	return mp_fd;
 }
 
-static int
-unlink_sockets(const char *filter)
+static void
+close_socket_fd(void)
 {
-	int dir_fd;
-	DIR *mp_dir;
-	struct dirent *ent;
+	char path[PATH_MAX];
 
-	mp_dir = opendir(mp_dir_path);
-	if (!mp_dir) {
-		RTE_LOG(ERR, EAL, "Unable to open directory %s\n", mp_dir_path);
-		return -1;
-	}
-	dir_fd = dirfd(mp_dir);
+	if (mp_fd < 0)
+		return;
 
-	while ((ent = readdir(mp_dir))) {
-		if (fnmatch(filter, ent->d_name, 0) == 0)
-			unlinkat(dir_fd, ent->d_name, 0);
-	}
-
-	closedir(mp_dir);
-	return 0;
+	close(mp_fd);
+	create_socket_path(peer_name, path, sizeof(path));
+	unlink(path);
 }
 
 int
@@ -603,13 +594,6 @@ rte_mp_channel_init(void)
 		return -1;
 	}
 
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY &&
-			unlink_sockets(mp_filter)) {
-		RTE_LOG(ERR, EAL, "failed to unlink mp sockets\n");
-		close(dir_fd);
-		return -1;
-	}
-
 	if (open_socket_fd() < 0) {
 		close(dir_fd);
 		return -1;
@@ -630,6 +614,12 @@ rte_mp_channel_init(void)
 	close(dir_fd);
 
 	return 0;
+}
+
+void
+rte_mp_channel_cleanup(void)
+{
+	close_socket_fd();
 }
 
 /**

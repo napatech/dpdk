@@ -149,6 +149,8 @@ struct sfc_port {
 	uint64_t			mac_stats_last_request_timestamp;
 
 	uint32_t		mac_stats_mask[EFX_MAC_STATS_MASK_NPAGES];
+
+	uint64_t			ipackets;
 };
 
 struct sfc_rss_hf_rte_to_efx {
@@ -251,7 +253,7 @@ struct sfc_adapter {
 
 	/*
 	 * Shared memory copy of the Tx datapath name to be used by
-	 * the secondary process to find Rx datapath to be used.
+	 * the secondary process to find Tx datapath to be used.
 	 */
 	char				*dp_tx_name;
 	const struct sfc_dp_tx		*dp_tx;

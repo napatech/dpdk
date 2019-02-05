@@ -69,6 +69,12 @@ to chapter Tested Platforms/Tested NICs in release notes.
    +--------------+-----------------------+------------------+
    | DPDK version | Kernel driver version | Firmware version |
    +==============+=======================+==================+
+   |    19.02     |         2.7.26        |       6.80       |
+   +--------------+-----------------------+------------------+
+   |    18.11     |         2.4.6         |       6.01       |
+   +--------------+-----------------------+------------------+
+   |    18.08     |         2.4.6         |       6.01       |
+   +--------------+-----------------------+------------------+
    |    18.05     |         2.4.6         |       6.01       |
    +--------------+-----------------------+------------------+
    |    18.02     |         2.4.3         |       6.01       |
@@ -129,13 +135,16 @@ Please note that enabling debugging options may affect system performance.
 Runtime Config Options
 ~~~~~~~~~~~~~~~~~~~~~~
 
-- ``Number of Queues per VF`` (default ``4``)
+- ``Reserved number of Queues per VF`` (default ``4``)
 
-  The number of queue per VF is determined by its host PF. If the PCI address
-  of an i40e PF is aaaa:bb.cc, the number of queues per VF can be configured
-  with EAL parameter like -w aaaa:bb.cc,queue-num-per-vf=n. The value n can be
-  1, 2, 4, 8 or 16. If no such parameter is configured, the number of queues
-  per VF is 4 by default.
+  The number of reserved queue per VF is determined by its host PF. If the
+  PCI address of an i40e PF is aaaa:bb.cc, the number of reserved queues per
+  VF can be configured with EAL parameter like -w aaaa:bb.cc,queue-num-per-vf=n.
+  The value n can be 1, 2, 4, 8 or 16. If no such parameter is configured, the
+  number of reserved queues per VF is 4 by default. If VF request more than
+  reserved queues per VF, PF will able to allocate max to 16 queues after a VF
+  reset.
+
 
 - ``Support multiple driver`` (default ``disable``)
 
@@ -695,3 +704,9 @@ See :numref:`figure_intel_perf_test_setup` for the performance test setup.
    * Start creating a stream on packet generator.
 
    * Set the Ethernet II type to 0x0800.
+
+Tx bytes affected by the link status change
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For firmware versions prior to 6.01 for X710 series and 3.33 for X722 series, the tx_bytes statistics data is affected by
+the link down event. Each time the link status changes to down, the tx_bytes decreases 110 bytes.

@@ -451,7 +451,7 @@ sfc_tx_qstart(struct sfc_adapter *sa, unsigned int sw_index)
 	if (txq->offloads & DEV_TX_OFFLOAD_TCP_TSO)
 		flags |= EFX_TXQ_FATSOV2;
 
-	rc = efx_tx_qcreate(sa->nic, sw_index, 0, &txq->mem,
+	rc = efx_tx_qcreate(sa->nic, txq->hw_index, 0, &txq->mem,
 			    txq_info->entries, 0 /* not used on EF10 */,
 			    flags, evq->common,
 			    &txq->common, &desc_index);
@@ -712,6 +712,7 @@ sfc_efx_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 	for (pkts_sent = 0, pktp = &tx_pkts[0];
 	     (pkts_sent < nb_pkts) && (fill_level <= soft_max_fill);
 	     pkts_sent++, pktp++) {
+		uint16_t		hw_vlan_tci_prev = txq->hw_vlan_tci;
 		struct rte_mbuf		*m_seg = *pktp;
 		size_t			pkt_len = m_seg->pkt_len;
 		unsigned int		pkt_descs = 0;
@@ -750,6 +751,7 @@ sfc_efx_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 				 * mbuf shouldn't be orphaned
 				 */
 				pend -= pkt_descs;
+				txq->hw_vlan_tci = hw_vlan_tci_prev;
 
 				rte_pktmbuf_free(*pktp);
 
@@ -819,10 +821,12 @@ sfc_efx_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 				fill_level = added - txq->completed;
 				if (fill_level > hard_max_fill) {
 					pend -= pkt_descs;
+					txq->hw_vlan_tci = hw_vlan_tci_prev;
 					break;
 				}
 			} else {
 				pend -= pkt_descs;
+				txq->hw_vlan_tci = hw_vlan_tci_prev;
 				break;
 			}
 		}

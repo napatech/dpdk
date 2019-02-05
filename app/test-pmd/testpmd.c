@@ -649,28 +649,13 @@ calc_mem_size(uint32_t nb_mbufs, uint32_t mbuf_sz, size_t pgsz, size_t *out)
 	return 0;
 }
 
-static inline uint32_t
-bsf64(uint64_t v)
-{
-	return (uint32_t)__builtin_ctzll(v);
-}
-
-static inline uint32_t
-log2_u64(uint64_t v)
-{
-	if (v == 0)
-		return 0;
-	v = rte_align64pow2(v);
-	return bsf64(v);
-}
-
 static int
 pagesz_flags(uint64_t page_sz)
 {
 	/* as per mmap() manpage, all page sizes are log2 of page size
 	 * shifted by MAP_HUGE_SHIFT
 	 */
-	int log2 = log2_u64(page_sz);
+	int log2 = rte_log2_u64(page_sz);
 
 	return (log2 << HUGE_SHIFT);
 }
@@ -2406,9 +2391,13 @@ pmd_test_exit(void)
 	if (ports != NULL) {
 		no_link_check = 1;
 		RTE_ETH_FOREACH_DEV(pt_id) {
-			printf("\nShutting down port %d...\n", pt_id);
+			printf("\nStopping port %d...\n", pt_id);
 			fflush(stdout);
 			stop_port(pt_id);
+		}
+		RTE_ETH_FOREACH_DEV(pt_id) {
+			printf("\nShutting down port %d...\n", pt_id);
+			fflush(stdout);
 			close_port(pt_id);
 
 			/*
@@ -3104,7 +3093,7 @@ main(int argc, char** argv)
 
 #ifdef RTE_LIBRTE_PDUMP
 	/* initialize packet capture framework */
-	rte_pdump_init(NULL);
+	rte_pdump_init();
 #endif
 
 	count = 0;

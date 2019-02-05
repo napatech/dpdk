@@ -18,6 +18,7 @@
 #include <rte_log.h>
 #include <rte_ether.h>
 #include <rte_rwlock.h>
+#include <rte_malloc.h>
 
 #include "rte_vhost.h"
 #include "rte_vdpa.h"
@@ -393,8 +394,10 @@ vq_is_packed(struct virtio_net *dev)
 static inline bool
 desc_is_avail(struct vring_packed_desc *desc, bool wrap_counter)
 {
-	return wrap_counter == !!(desc->flags & VRING_DESC_F_AVAIL) &&
-		wrap_counter != !!(desc->flags & VRING_DESC_F_USED);
+	uint16_t flags = *((volatile uint16_t *) &desc->flags);
+
+	return wrap_counter == !!(flags & VRING_DESC_F_AVAIL) &&
+		wrap_counter != !!(flags & VRING_DESC_F_USED);
 }
 
 #define VHOST_LOG_PAGE	4096
@@ -454,12 +457,9 @@ vhost_log_cache_sync(struct virtio_net *dev, struct vhost_virtqueue *vq)
 		   !dev->log_base))
 		return;
 
-	log_base = (unsigned long *)(uintptr_t)dev->log_base;
+	rte_smp_wmb();
 
-	/*
-	 * It is expected a write memory barrier has been issued
-	 * before this function is called.
-	 */
+	log_base = (unsigned long *)(uintptr_t)dev->log_base;
 
 	for (i = 0; i < vq->log_cache_nb_elem; i++) {
 		struct log_cache_entry *elem = vq->log_cache + i;
@@ -627,7 +627,6 @@ void free_vq(struct virtio_net *dev, struct vhost_virtqueue *vq);
 int alloc_vring_queue(struct virtio_net *dev, uint32_t vring_idx);
 
 void vhost_attach_vdpa_device(int vid, int did);
-void vhost_detach_vdpa_device(int vid);
 
 void vhost_set_ifname(int, const char *if_name, unsigned int if_len);
 void vhost_enable_dequeue_zero_copy(int vid);
@@ -751,6 +750,45 @@ vhost_vring_call_packed(struct virtio_net *dev, struct vhost_virtqueue *vq)
 kick:
 	if (kick)
 		eventfd_write(vq->callfd, (eventfd_t)1);
+}
+
+static __rte_always_inline void *
+alloc_copy_ind_table(struct virtio_net *dev, struct vhost_virtqueue *vq,
+		uint64_t desc_addr, uint64_t desc_len)
+{
+	void *idesc;
+	uint64_t src, dst;
+	uint64_t len, remain = desc_len;
+
+	idesc = rte_malloc(__func__, desc_len, 0);
+	if (unlikely(!idesc))
+		return 0;
+
+	dst = (uint64_t)(uintptr_t)idesc;
+
+	while (remain) {
+		len = remain;
+		src = vhost_iova_to_vva(dev, vq, desc_addr, &len,
+				VHOST_ACCESS_RO);
+		if (unlikely(!src || !len)) {
+			rte_free(idesc);
+			return 0;
+		}
+
+		rte_memcpy((void *)(uintptr_t)dst, (void *)(uintptr_t)src, len);
+
+		remain -= len;
+		dst += len;
+		desc_addr += len;
+	}
+
+	return idesc;
+}
+
+static __rte_always_inline void
+free_ind_table(void *idesc)
+{
+	rte_free(idesc);
 }
 
 #endif /* _VHOST_NET_CDEV_H_ */

@@ -304,7 +304,7 @@ The available information categories are:
 * ``mac``: Changes the source and the destination Ethernet addresses of packets before forwarding them.
   Default application behaviour is to set source Ethernet address to that of the transmitting interface, and destination
   address to a dummy value (set during init). The user may specify a target destination Ethernet address via the 'eth-peer' or
-  'eth-peer-configfile' command-line options. It is not currently possible to specify a specific source Ethernet address.
+  'eth-peers-configfile' command-line options. It is not currently possible to specify a specific source Ethernet address.
 
 * ``macswap``: MAC swap forwarding mode.
   Swaps the source and the destination Ethernet addresses of packets before forwarding them.
@@ -318,7 +318,7 @@ The available information categories are:
 
 * ``csum``: Changes the checksum field with hardware or software methods depending on the offload flags on the packet.
 
-* ``icmpecho``: Receives a burst of packets, lookup for IMCP echo requests and, if any, send back ICMP echo replies.
+* ``icmpecho``: Receives a burst of packets, lookup for ICMP echo requests and, if any, send back ICMP echo replies.
 
 * ``ieee1588``: Demonstrate L2 IEEE1588 V2 PTP timestamping for RX and TX. Requires ``CONFIG_RTE_LIBRTE_IEEE1588=y``.
 
@@ -1149,7 +1149,7 @@ set eth-peer
 
 Set the forwarding peer address for certain port::
 
-   testpmd> set eth-peer (port_id) (perr_addr)
+   testpmd> set eth-peer (port_id) (peer_addr)
 
 This is equivalent to the ``--eth-peer`` command-line option.
 
@@ -3931,12 +3931,12 @@ This section lists supported actions and their attributes, if any.
 
   - ``ipv6_addr``: New IPv6 destination address.
 
-- ``of_set_tp_src``: Set a new source port number in the outermost TCP/UDP
+- ``set_tp_src``: Set a new source port number in the outermost TCP/UDP
   header.
 
   - ``port``: New TCP/UDP source port number.
 
-- ``of_set_tp_dst``: Set a new destination port number in the outermost TCP/UDP
+- ``set_tp_dst``: Set a new destination port number in the outermost TCP/UDP
   header.
 
   - ``port``: New TCP/UDP destination port number.

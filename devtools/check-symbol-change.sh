@@ -31,6 +31,7 @@ build_map_changes()
 		# Triggering this rule sets in_sec to 1, which actives the
 		# symbol rule below
 		/^.*{/ {
+			gsub("+", "");
 			if (in_map == 1) {
 				sec=$(NF-1); in_sec=1;
 			}
@@ -115,8 +116,9 @@ check_for_rule_violations()
 				if [ $? -ne 0 ]
 				then
 					echo -n "ERROR: symbol $symname "
-					echo -n "is added in a section "
-					echo -n "other than the EXPERIMENTAL "
+					echo -n "is added in the $secname "
+					echo -n "section, but is expected to "
+					echo -n "be added in the EXPERIMENTAL "
 					echo "section of the version map"
 					ret=1
 				fi

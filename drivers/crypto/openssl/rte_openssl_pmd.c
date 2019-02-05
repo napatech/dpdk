@@ -768,7 +768,8 @@ get_session(struct openssl_qp *qp, struct rte_crypto_op *op)
 		if (rte_mempool_get(qp->sess_mp, (void **)&_sess))
 			return NULL;
 
-		if (rte_mempool_get(qp->sess_mp, (void **)&_sess_private_data))
+		if (rte_mempool_get(qp->sess_mp_priv,
+				(void **)&_sess_private_data))
 			return NULL;
 
 		sess = (struct openssl_session *)_sess_private_data;
@@ -776,7 +777,7 @@ get_session(struct openssl_qp *qp, struct rte_crypto_op *op)
 		if (unlikely(openssl_set_session_parameters(sess,
 				op->sym->xform) != 0)) {
 			rte_mempool_put(qp->sess_mp, _sess);
-			rte_mempool_put(qp->sess_mp, _sess_private_data);
+			rte_mempool_put(qp->sess_mp_priv, _sess_private_data);
 			sess = NULL;
 		}
 		op->sym->session = (struct rte_cryptodev_sym_session *)_sess;
@@ -1605,12 +1606,9 @@ process_openssl_dsa_verify_op(struct rte_crypto_op *cop,
 			op->y.length,
 			pub_key);
 	if (!r || !s || !pub_key) {
-		if (r)
-			BN_free(r);
-		if (s)
-			BN_free(s);
-		if (pub_key)
-			BN_free(pub_key);
+		BN_free(r);
+		BN_free(s);
+		BN_free(pub_key);
 
 		cop->status = RTE_CRYPTO_OP_STATUS_NOT_PROCESSED;
 		return -1;
@@ -1781,10 +1779,8 @@ process_openssl_modinv_op(struct rte_crypto_op *cop,
 	BIGNUM *res = BN_CTX_get(sess->u.m.ctx);
 
 	if (unlikely(base == NULL || res == NULL)) {
-		if (base)
-			BN_free(base);
-		if (res)
-			BN_free(res);
+		BN_free(base);
+		BN_free(res);
 		cop->status = RTE_CRYPTO_OP_STATUS_NOT_PROCESSED;
 		return -1;
 	}
@@ -1812,10 +1808,8 @@ process_openssl_modexp_op(struct rte_crypto_op *cop,
 	BIGNUM *res = BN_CTX_get(sess->u.e.ctx);
 
 	if (unlikely(base == NULL || res == NULL)) {
-		if (base)
-			BN_free(base);
-		if (res)
-			BN_free(res);
+		BN_free(base);
+		BN_free(res);
 		cop->status = RTE_CRYPTO_OP_STATUS_NOT_PROCESSED;
 		return -1;
 	}
@@ -2026,8 +2020,9 @@ process_op(struct openssl_qp *qp, struct rte_crypto_op *op,
 		openssl_reset_session(sess);
 		memset(sess, 0, sizeof(struct openssl_session));
 		memset(op->sym->session, 0,
-				rte_cryptodev_sym_get_header_session_size());
-		rte_mempool_put(qp->sess_mp, sess);
+			rte_cryptodev_sym_get_existing_header_session_size(
+				op->sym->session));
+		rte_mempool_put(qp->sess_mp_priv, sess);
 		rte_mempool_put(qp->sess_mp, op->sym->session);
 		op->sym->session = NULL;
 	}

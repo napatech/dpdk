@@ -1,5 +1,5 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
-    Copyright(c) 2015-2017 Intel Corporation.
+    Copyright(c) 2015-2018 Intel Corporation.
 
 AESN-NI Multi Buffer Crypto Poll Mode Driver
 ============================================
@@ -40,6 +40,12 @@ Hash algorithms:
 * RTE_CRYPTO_HASH_SHA512_HMAC
 * RTE_CRYPTO_HASH_AES_XCBC_HMAC
 * RTE_CRYPTO_HASH_AES_CMAC
+* RTE_CRYPTO_HASH_AES_GMAC
+* RTE_CRYPTO_HASH_SHA1
+* RTE_CRYPTO_HASH_SHA224
+* RTE_CRYPTO_HASH_SHA256
+* RTE_CRYPTO_HASH_SHA384
+* RTE_CRYPTO_HASH_SHA512
 
 AEAD algorithms:
 
@@ -51,6 +57,10 @@ Limitations
 
 * Chained mbufs are not supported.
 * Only in-place is currently supported (destination address is the same as source address).
+* RTE_CRYPTO_AEAD_AES_GCM only works properly when the multi-buffer library is
+  0.51.0 or newer.
+* RTE_CRYPTO_HASH_AES_GMAC is supported by library version v0.51 or later.
+* RTE_CRYPTO_HASH_SHA* is supported by library version v0.52 or later.
 
 
 Installation
@@ -59,8 +69,8 @@ Installation
 To build DPDK with the AESNI_MB_PMD the user is required to download the multi-buffer
 library from `here <https://github.com/01org/intel-ipsec-mb>`_
 and compile it on their user system before building DPDK.
-The latest version of the library supported by this PMD is v0.50, which
-can be downloaded from `<https://github.com/01org/intel-ipsec-mb/archive/v0.50.zip>`_.
+The latest version of the library supported by this PMD is v0.52, which
+can be downloaded from `<https://github.com/01org/intel-ipsec-mb/archive/v0.52.zip>`.
 
 .. code-block:: console
 

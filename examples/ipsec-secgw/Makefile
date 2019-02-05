@@ -13,6 +13,7 @@ SRCS-y += sp4.c
 SRCS-y += sp6.c
 SRCS-y += sa.c
 SRCS-y += rt.c
+SRCS-y += ipsec_process.c
 SRCS-y += ipsec-secgw.c
 
 CFLAGS += -gdwarf-2
@@ -61,8 +62,8 @@ RTE_TARGET ?= x86_64-native-linuxapp-gcc
 include $(RTE_SDK)/mk/rte.vars.mk
 
 ifneq ($(MAKECMDGOALS),clean)
-ifneq ($(CONFIG_RTE_LIBRTE_SECURITY),y)
-$(error "RTE_LIBRTE_SECURITY is required to build ipsec-secgw")
+ifneq ($(CONFIG_RTE_LIBRTE_IPSEC),y)
+$(error "RTE_LIBRTE_IPSEC is required to build ipsec-secgw")
 endif
 endif
 

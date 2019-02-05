@@ -2,7 +2,7 @@
  * Copyright(c) 2018 Chelsio Communications.
  * All rights reserved.
  */
-#include "common.h"
+#include "base/common.h"
 #include "cxgbe_flow.h"
 
 #define __CXGBE_FILL_FS(__v, __m, fs, elem, e) \
@@ -732,6 +732,10 @@ cxgbe_rtef_parse_items(struct rte_flow *flow,
 						"parse items cannot be repeated (except void)");
 			repeat[i->type] = 1;
 
+			/* No spec found for this pattern item. Skip it */
+			if (!i->spec)
+				break;
+
 			/* validate the item */
 			ret = cxgbe_validate_item(i, e);
 			if (ret)
@@ -943,6 +947,7 @@ cxgbe_flow_query(struct rte_eth_dev *dev, struct rte_flow *flow,
 		 const struct rte_flow_action *action, void *data,
 		 struct rte_flow_error *e)
 {
+	struct adapter *adap = ethdev2adap(flow->dev);
 	struct ch_filter_specification fs;
 	struct rte_flow_query_count *c;
 	struct filter_entry *f;
@@ -981,6 +986,8 @@ cxgbe_flow_query(struct rte_eth_dev *dev, struct rte_flow *flow,
 	/* Query was successful */
 	c->bytes_set = 1;
 	c->hits_set = 1;
+	if (c->reset)
+		cxgbe_clear_filter_count(adap, flow->fidx, f->fs.cap, true);
 
 	return 0; /* success / partial_success */
 }

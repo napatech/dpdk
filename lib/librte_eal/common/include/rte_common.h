@@ -448,6 +448,30 @@ rte_bsf32(uint32_t v)
 }
 
 /**
+ * Searches the input parameter for the least significant set bit
+ * (starting from zero). Safe version (checks for input parameter being zero).
+ *
+ * @warning ``pos`` must be a valid pointer. It is not checked!
+ *
+ * @param v
+ *     The input parameter.
+ * @param pos
+ *     If ``v`` was not 0, this value will contain position of least significant
+ *     bit within the input parameter.
+ * @return
+ *     Returns 0 if ``v`` was 0, otherwise returns 1.
+ */
+static inline int
+rte_bsf32_safe(uint64_t v, uint32_t *pos)
+{
+	if (v == 0)
+		return 0;
+
+	*pos = rte_bsf32(v);
+	return 1;
+}
+
+/**
  * Return the rounded-up log2 of a integer.
  *
  * @param v
@@ -484,6 +508,23 @@ rte_fls_u32(uint32_t x)
 
 /**
  * Searches the input parameter for the least significant set bit
+ * (starting from zero).
+ * If a least significant 1 bit is found, its bit index is returned.
+ * If the content of the input parameter is zero, then the content of the return
+ * value is undefined.
+ * @param v
+ *     input parameter, should not be zero.
+ * @return
+ *     least significant set bit in the input parameter.
+ */
+static inline int
+rte_bsf64(uint64_t v)
+{
+	return (uint32_t)__builtin_ctzll(v);
+}
+
+/**
+ * Searches the input parameter for the least significant set bit
  * (starting from zero). Safe version (checks for input parameter being zero).
  *
  * @warning ``pos`` must be a valid pointer. It is not checked!
@@ -502,8 +543,44 @@ rte_bsf64_safe(uint64_t v, uint32_t *pos)
 	if (v == 0)
 		return 0;
 
-	*pos = __builtin_ctzll(v);
+	*pos = rte_bsf64(v);
 	return 1;
+}
+
+/**
+ * Return the last (most-significant) bit set.
+ *
+ * @note The last (most significant) bit is at position 64.
+ * @note rte_fls_u64(0) = 0, rte_fls_u64(1) = 1,
+ *       rte_fls_u64(0x8000000000000000) = 64
+ *
+ * @param x
+ *     The input parameter.
+ * @return
+ *     The last (most-significant) bit set, or 0 if the input is 0.
+ */
+static inline int
+rte_fls_u64(uint64_t x)
+{
+	return (x == 0) ? 0 : 64 - __builtin_clzll(x);
+}
+
+/**
+ * Return the rounded-up log2 of a 64-bit integer.
+ *
+ * @param v
+ *     The input parameter.
+ * @return
+ *     The rounded-up log2 of the input, or 0 if the input is 0.
+ */
+static inline uint32_t
+rte_log2_u64(uint64_t v)
+{
+	if (v == 0)
+		return 0;
+	v = rte_align64pow2(v);
+	/* we checked for v being 0 already, so no undefined behavior */
+	return rte_bsf64(v);
 }
 
 #ifndef offsetof

@@ -56,6 +56,13 @@
 #define	IPV6_MTU_DEFAULT	ETHER_MTU
 
 /*
+ * The overhead from max frame size to MTU.
+ * We have to consider the max possible overhead.
+ */
+#define MTU_OVERHEAD	\
+	(ETHER_HDR_LEN + ETHER_CRC_LEN + 2 * sizeof(struct vlan_hdr))
+
+/*
  * Default payload in bytes for the IPv6 packet.
  */
 #define	IPV4_DEFAULT_PAYLOAD	(IPV4_MTU_DEFAULT - sizeof(struct ipv4_hdr))
@@ -141,6 +148,7 @@ static struct rte_eth_conf port_conf = {
 		.max_rx_pkt_len = JUMBO_FRAME_MAX_SIZE,
 		.split_hdr_size = 0,
 		.offloads = (DEV_RX_OFFLOAD_CHECKSUM |
+			     DEV_RX_OFFLOAD_SCATTER |
 			     DEV_RX_OFFLOAD_JUMBO_FRAME),
 	},
 	.txmode = {
@@ -933,6 +941,16 @@ main(int argc, char **argv)
 			rte_exit(EXIT_FAILURE, "Cannot configure device: "
 				"err=%d, port=%d\n",
 				ret, portid);
+		}
+
+		/* set the mtu to the maximum received packet size */
+		ret = rte_eth_dev_set_mtu(portid,
+			local_port_conf.rxmode.max_rx_pkt_len - MTU_OVERHEAD);
+		if (ret < 0) {
+			printf("\n");
+			rte_exit(EXIT_FAILURE, "Set MTU failed: "
+				"err=%d, port=%d\n",
+			ret, portid);
 		}
 
 		ret = rte_eth_dev_adjust_nb_rx_tx_desc(portid, &nb_rxd,

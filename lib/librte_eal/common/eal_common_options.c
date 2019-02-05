@@ -79,6 +79,7 @@ eal_long_options[] = {
 	{OPT_VMWARE_TSC_MAP,    0, NULL, OPT_VMWARE_TSC_MAP_NUM   },
 	{OPT_LEGACY_MEM,        0, NULL, OPT_LEGACY_MEM_NUM       },
 	{OPT_SINGLE_FILE_SEGMENTS, 0, NULL, OPT_SINGLE_FILE_SEGMENTS_NUM},
+	{OPT_MATCH_ALLOCATIONS, 0, NULL, OPT_MATCH_ALLOCATIONS_NUM},
 	{0,                     0, NULL, 0                        }
 };
 
@@ -168,6 +169,14 @@ eal_option_device_parse(void)
 	return ret;
 }
 
+const char *
+eal_get_hugefile_prefix(void)
+{
+	if (internal_config.hugefile_prefix != NULL)
+		return internal_config.hugefile_prefix;
+	return HUGEFILE_PREFIX_DEFAULT;
+}
+
 void
 eal_reset_internal_config(struct internal_config *internal_cfg)
 {
@@ -176,7 +185,7 @@ eal_reset_internal_config(struct internal_config *internal_cfg)
 	internal_cfg->memory = 0;
 	internal_cfg->force_nrank = 0;
 	internal_cfg->force_nchannel = 0;
-	internal_cfg->hugefile_prefix = HUGEFILE_PREFIX_DEFAULT;
+	internal_cfg->hugefile_prefix = NULL;
 	internal_cfg->hugepage_dir = NULL;
 	internal_cfg->force_sockets = 0;
 	/* zero out the NUMA config */
@@ -591,7 +600,9 @@ eal_parse_corelist(const char *corelist)
 		if (*corelist == '\0')
 			return -1;
 		errno = 0;
-		idx = strtoul(corelist, &end, 10);
+		idx = strtol(corelist, &end, 10);
+		if (idx < 0 || idx >= (int)cfg->lcore_count)
+			return -1;
 		if (errno || end == NULL)
 			return -1;
 		while (isblank(*end))
@@ -1102,6 +1113,7 @@ eal_parse_common_option(int opt, const char *optarg,
 {
 	static int b_used;
 	static int w_used;
+	struct rte_config *cfg = rte_eal_get_configuration();
 
 	switch (opt) {
 	/* blacklist */
@@ -1144,7 +1156,9 @@ eal_parse_common_option(int opt, const char *optarg,
 	/* corelist */
 	case 'l':
 		if (eal_parse_corelist(optarg) < 0) {
-			RTE_LOG(ERR, EAL, "invalid core list\n");
+			RTE_LOG(ERR, EAL,
+				"invalid core list, please check core numbers are in [0, %u] range\n",
+					cfg->lcore_count-1);
 			return -1;
 		}
 
@@ -1347,6 +1361,19 @@ eal_auto_detect_cores(struct rte_config *cfg)
 }
 
 int
+eal_cleanup_config(struct internal_config *internal_cfg)
+{
+	if (internal_cfg->hugefile_prefix != NULL)
+		free(internal_cfg->hugefile_prefix);
+	if (internal_cfg->hugepage_dir != NULL)
+		free(internal_cfg->hugepage_dir);
+	if (internal_cfg->user_mbuf_pool_ops_name != NULL)
+		free(internal_cfg->user_mbuf_pool_ops_name);
+
+	return 0;
+}
+
+int
 eal_adjust_config(struct internal_config *internal_cfg)
 {
 	int i;
@@ -1361,6 +1388,8 @@ eal_adjust_config(struct internal_config *internal_cfg)
 	/* default master lcore is the first one */
 	if (!master_lcore_parsed) {
 		cfg->master_lcore = rte_get_next_lcore(-1, 0, 0);
+		if (cfg->master_lcore >= RTE_MAX_LCORE)
+			return -1;
 		lcore_config[cfg->master_lcore].core_role = ROLE_RTE;
 	}
 
@@ -1386,7 +1415,22 @@ eal_check_common_options(struct internal_config *internal_cfg)
 		RTE_LOG(ERR, EAL, "Invalid process type specified\n");
 		return -1;
 	}
-	if (index(internal_cfg->hugefile_prefix, '%') != NULL) {
+	if (internal_cfg->hugefile_prefix != NULL &&
+			strlen(internal_cfg->hugefile_prefix) < 1) {
+		RTE_LOG(ERR, EAL, "Invalid length of --" OPT_FILE_PREFIX " option\n");
+		return -1;
+	}
+	if (internal_cfg->hugepage_dir != NULL &&
+			strlen(internal_cfg->hugepage_dir) < 1) {
+		RTE_LOG(ERR, EAL, "Invalid length of --" OPT_HUGE_DIR" option\n");
+		return -1;
+	}
+	if (internal_cfg->user_mbuf_pool_ops_name != NULL &&
+			strlen(internal_cfg->user_mbuf_pool_ops_name) < 1) {
+		RTE_LOG(ERR, EAL, "Invalid length of --" OPT_MBUF_POOL_OPS_NAME" option\n");
+		return -1;
+	}
+	if (index(eal_get_hugefile_prefix(), '%') != NULL) {
 		RTE_LOG(ERR, EAL, "Invalid char, '%%', in --"OPT_FILE_PREFIX" "
 			"option\n");
 		return -1;
@@ -1422,6 +1466,16 @@ eal_check_common_options(struct internal_config *internal_cfg)
 			internal_cfg->in_memory) {
 		RTE_LOG(ERR, EAL, "Option --"OPT_LEGACY_MEM" is not compatible "
 				"with --"OPT_IN_MEMORY"\n");
+		return -1;
+	}
+	if (internal_cfg->legacy_mem && internal_cfg->match_allocations) {
+		RTE_LOG(ERR, EAL, "Option --"OPT_LEGACY_MEM" is not compatible "
+				"with --"OPT_MATCH_ALLOCATIONS"\n");
+		return -1;
+	}
+	if (internal_cfg->no_hugetlbfs && internal_cfg->match_allocations) {
+		RTE_LOG(ERR, EAL, "Option --"OPT_NO_HUGE" is not compatible "
+				"with --"OPT_MATCH_ALLOCATIONS"\n");
 		return -1;
 	}
 
@@ -1483,4 +1537,5 @@ eal_common_usage(void)
 	       "  --"OPT_NO_HPET"           Disable HPET\n"
 	       "  --"OPT_NO_SHCONF"         No shared config (mmap'd files)\n"
 	       "\n", RTE_MAX_LCORE);
+	rte_option_usage();
 }

@@ -8,11 +8,11 @@ include $(RTE_SDK)/mk/rte.vars.mk
 LIB = librte_pmd_mlx5.a
 LIB_GLUE = $(LIB_GLUE_BASE).$(LIB_GLUE_VERSION)
 LIB_GLUE_BASE = librte_pmd_mlx5_glue.so
-LIB_GLUE_VERSION = 18.11.0
+LIB_GLUE_VERSION = 19.02.0
 
 # Sources.
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5.c
-ifneq ($(CONFIG_RTE_LIBRTE_MLX5_DLOPEN_DEPS),y)
+ifneq ($(CONFIG_RTE_IBVERBS_LINK_DLOPEN),y)
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_glue.c
 endif
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_rxq.c
@@ -36,8 +36,9 @@ SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_flow_tcf.c
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_flow_verbs.c
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_socket.c
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_nl.c
+SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_devx_cmds.c
 
-ifeq ($(CONFIG_RTE_LIBRTE_MLX5_DLOPEN_DEPS),y)
+ifeq ($(CONFIG_RTE_IBVERBS_LINK_DLOPEN),y)
 INSTALL-$(CONFIG_RTE_LIBRTE_MLX5_PMD)-lib += $(LIB_GLUE)
 endif
 
@@ -52,11 +53,13 @@ CFLAGS += -D_XOPEN_SOURCE=600
 CFLAGS += $(WERROR_FLAGS)
 CFLAGS += -Wno-strict-prototypes
 CFLAGS += $(shell command -v pkg-config > /dev/null 2>&1 && pkg-config --cflags libmnl)
-ifeq ($(CONFIG_RTE_LIBRTE_MLX5_DLOPEN_DEPS),y)
+ifeq ($(CONFIG_RTE_IBVERBS_LINK_DLOPEN),y)
 CFLAGS += -DMLX5_GLUE='"$(LIB_GLUE)"'
 CFLAGS += -DMLX5_GLUE_VERSION='"$(LIB_GLUE_VERSION)"'
 CFLAGS_mlx5_glue.o += -fPIC
 LDLIBS += -ldl
+else ifeq ($(CONFIG_RTE_IBVERBS_LINK_STATIC),y)
+LDLIBS += $(shell $(RTE_SDK)/buildtools/options-ibverbs-static.sh)
 else
 LDLIBS += -libverbs -lmlx5
 endif
@@ -118,6 +121,11 @@ mlx5_autoconf.h.new: $(RTE_SDK)/buildtools/auto-config-h.sh
 		enum IBV_FLOW_SPEC_MPLS \
 		$(AUTOCONF_OUTPUT)
 	$Q sh -- '$<' '$@' \
+		HAVE_IBV_WQ_FLAGS_PCI_WRITE_END_PADDING \
+		infiniband/verbs.h \
+		enum IBV_WQ_FLAGS_PCI_WRITE_END_PADDING \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
 		HAVE_IBV_WQ_FLAG_RX_END_PADDING \
 		infiniband/verbs.h \
 		enum IBV_WQ_FLAG_RX_END_PADDING \
@@ -146,6 +154,16 @@ mlx5_autoconf.h.new: $(RTE_SDK)/buildtools/auto-config-h.sh
 		HAVE_IBV_FLOW_DV_SUPPORT \
 		infiniband/mlx5dv.h \
 		func mlx5dv_create_flow_action_packet_reformat \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
+		HAVE_IBV_DEVX_OBJ \
+		infiniband/mlx5dv.h \
+		func mlx5dv_devx_obj_create \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
+		HAVE_IBV_FLOW_DEVX_COUNTERS \
+		infiniband/mlx5dv.h \
+		enum MLX5DV_FLOW_ACTION_COUNTER_DEVX \
 		$(AUTOCONF_OUTPUT)
 	$Q sh -- '$<' '$@' \
 		HAVE_ETHTOOL_LINK_MODE_25G \
@@ -373,6 +391,26 @@ mlx5_autoconf.h.new: $(RTE_SDK)/buildtools/auto-config-h.sh
 		enum TCA_FLOWER_KEY_TCP_FLAGS_MASK \
 		$(AUTOCONF_OUTPUT)
 	$Q sh -- '$<' '$@' \
+		HAVE_TCA_FLOWER_KEY_IP_TOS \
+		linux/pkt_cls.h \
+		enum TCA_FLOWER_KEY_IP_TOS \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
+		HAVE_TCA_FLOWER_KEY_IP_TOS_MASK \
+		linux/pkt_cls.h \
+		enum TCA_FLOWER_KEY_IP_TOS_MASK \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
+		HAVE_TCA_FLOWER_KEY_IP_TTL \
+		linux/pkt_cls.h \
+		enum TCA_FLOWER_KEY_IP_TTL \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
+		HAVE_TCA_FLOWER_KEY_IP_TTL_MASK \
+		linux/pkt_cls.h \
+		enum TCA_FLOWER_KEY_IP_TTL_MASK \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
 		HAVE_TC_ACT_GOTO_CHAIN \
 		linux/pkt_cls.h \
 		define TC_ACT_GOTO_CHAIN \
@@ -448,6 +486,26 @@ mlx5_autoconf.h.new: $(RTE_SDK)/buildtools/auto-config-h.sh
 		enum TCA_FLOWER_KEY_ENC_UDP_DST_PORT_MASK \
 		$(AUTOCONF_OUTPUT)
 	$Q sh -- '$<' '$@' \
+		HAVE_TCA_FLOWER_KEY_ENC_IP_TOS \
+		linux/pkt_cls.h \
+		enum TCA_FLOWER_KEY_ENC_IP_TOS \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
+		HAVE_TCA_FLOWER_KEY_ENC_IP_TOS_MASK \
+		linux/pkt_cls.h \
+		enum TCA_FLOWER_KEY_ENC_IP_TOS_MASK \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
+		HAVE_TCA_FLOWER_KEY_ENC_IP_TTL \
+		linux/pkt_cls.h \
+		enum TCA_FLOWER_KEY_ENC_IP_TTL \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
+		HAVE_TCA_FLOWER_KEY_ENC_IP_TTL_MASK \
+		linux/pkt_cls.h \
+		enum TCA_FLOWER_KEY_ENC_IP_TTL_MASK \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
 		HAVE_TC_ACT_TUNNEL_KEY \
 		linux/tc_act/tc_tunnel_key.h \
 		define TCA_ACT_TUNNEL_KEY \
@@ -456,6 +514,16 @@ mlx5_autoconf.h.new: $(RTE_SDK)/buildtools/auto-config-h.sh
 		HAVE_TCA_TUNNEL_KEY_ENC_DST_PORT \
 		linux/tc_act/tc_tunnel_key.h \
 		enum TCA_TUNNEL_KEY_ENC_DST_PORT \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
+		HAVE_TCA_TUNNEL_KEY_ENC_TOS \
+		linux/tc_act/tc_tunnel_key.h \
+		enum TCA_TUNNEL_KEY_ENC_TOS \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
+		HAVE_TCA_TUNNEL_KEY_ENC_TTL \
+		linux/tc_act/tc_tunnel_key.h \
+		enum TCA_TUNNEL_KEY_ENC_TTL \
 		$(AUTOCONF_OUTPUT)
 	$Q sh -- '$<' '$@' \
 		HAVE_TCA_TUNNEL_KEY_NO_CSUM \
@@ -525,7 +593,7 @@ $(SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD):.c=.o): mlx5_autoconf.h
 # Generate dependency plug-in for rdma-core when the PMD must not be linked
 # directly, so that applications do not inherit this dependency.
 
-ifeq ($(CONFIG_RTE_LIBRTE_MLX5_DLOPEN_DEPS),y)
+ifeq ($(CONFIG_RTE_IBVERBS_LINK_DLOPEN),y)
 
 $(LIB): $(LIB_GLUE)
 

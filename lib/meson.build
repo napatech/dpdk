@@ -11,7 +11,7 @@
 libraries = [ 'compat', # just a header, used for versioning
 	'cmdline', # ethdev depends on cmdline for parsing functions
 	'kvargs', # eal depends on kvargs
-	'eal', 'ring', 'mempool', 'mbuf', 'net', 'ethdev', 'pci', # core
+	'eal', 'ring', 'mempool', 'mbuf', 'net', 'meter', 'ethdev', 'pci', # core
 	'metrics', # bitrate/latency stats depends on this
 	'hash',    # efd depends on this
 	'timer',   # eventdev depends on this
@@ -20,8 +20,10 @@ libraries = [ 'compat', # just a header, used for versioning
 	'distributor', 'efd', 'eventdev',
 	'gro', 'gso', 'ip_frag', 'jobstats',
 	'kni', 'latencystats', 'lpm', 'member',
-	'meter', 'power', 'pdump', 'rawdev',
+	'power', 'pdump', 'rawdev',
 	'reorder', 'sched', 'security', 'vhost',
+	#ipsec lib depends on crypto and security
+	'ipsec',
 	# add pkt framework libs which use other libs from above
 	'port', 'table', 'pipeline',
 	# flow_classify lib depends on pkt framework table lib
@@ -79,7 +81,7 @@ foreach l:libraries
 			foreach d:deps
 				if not is_variable('shared_rte_' + d)
 					error('Missing dependency ' + d +
-						' for library ' + lib_name)
+						' for library ' + libname)
 				endif
 				shared_deps += [get_variable('shared_rte_' + d)]
 				static_deps += [get_variable('static_rte_' + d)]

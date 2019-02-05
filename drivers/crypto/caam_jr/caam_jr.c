@@ -1540,8 +1540,7 @@ static int
 caam_jr_queue_pair_setup(
 		struct rte_cryptodev *dev, uint16_t qp_id,
 		__rte_unused const struct rte_cryptodev_qp_conf *qp_conf,
-		__rte_unused int socket_id,
-		__rte_unused struct rte_mempool *session_pool)
+		__rte_unused int socket_id)
 {
 	struct sec_job_ring_t *internals;
 	struct caam_jr_qp *qp = NULL;
@@ -2012,7 +2011,7 @@ caam_jr_dev_configure(struct rte_cryptodev *dev,
 	PMD_INIT_FUNC_TRACE();
 
 	internals = dev->data->dev_private;
-	sprintf(str, "ctx_pool_%d", dev->data->dev_id);
+	snprintf(str, sizeof(str), "ctx_pool_%d", dev->data->dev_id);
 	if (!internals->ctx_pool) {
 		internals->ctx_pool = rte_mempool_create((const char *)str,
 						CTX_POOL_NUM_BUFS,

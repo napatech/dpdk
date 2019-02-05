@@ -8,7 +8,6 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <fcntl.h>
-#include <libgen.h>
 
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
@@ -1379,12 +1378,10 @@ int enic_get_link_status(struct enic *enic)
 
 static void enic_dev_deinit(struct enic *enic)
 {
-	struct rte_eth_dev *eth_dev = enic->rte_dev;
-
 	/* stop link status checking */
 	vnic_dev_notify_unset(enic->vdev);
 
-	rte_free(eth_dev->data->mac_addrs);
+	/* mac_addrs is freed by rte_eth_dev_release_port() */
 	rte_free(enic->cq);
 	rte_free(enic->intr);
 	rte_free(enic->rq);
@@ -1669,8 +1666,9 @@ static int enic_dev_init(struct enic *enic)
 	/* Get the supported filters */
 	enic_fdir_info(enic);
 
-	eth_dev->data->mac_addrs = rte_zmalloc("enic_mac_addr", ETH_ALEN
-						* ENIC_MAX_MAC_ADDR, 0);
+	eth_dev->data->mac_addrs = rte_zmalloc("enic_mac_addr",
+					sizeof(struct ether_addr) *
+					ENIC_UNICAST_PERFECT_FILTERS, 0);
 	if (!eth_dev->data->mac_addrs) {
 		dev_err(enic, "mac addr storage alloc failed, aborting.\n");
 		return -1;

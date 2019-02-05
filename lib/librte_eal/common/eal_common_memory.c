@@ -24,6 +24,7 @@
 #include "eal_memalloc.h"
 #include "eal_private.h"
 #include "eal_internal_cfg.h"
+#include "malloc_heap.h"
 
 /*
  * Try to mmap *size bytes in /dev/zero. If it is successful, return the
@@ -704,6 +705,12 @@ rte_memseg_get_fd_thread_unsafe(const struct rte_memseg *ms)
 		return -1;
 	}
 
+	/* segment fd API is not supported for external segments */
+	if (msl->external) {
+		rte_errno = ENOTSUP;
+		return -1;
+	}
+
 	ret = eal_memalloc_get_seg_fd(msl_idx, seg_idx);
 	if (ret < 0) {
 		rte_errno = -ret;
@@ -754,6 +761,12 @@ rte_memseg_get_fd_offset_thread_unsafe(const struct rte_memseg *ms,
 		return -1;
 	}
 
+	/* segment fd API is not supported for external segments */
+	if (msl->external) {
+		rte_errno = ENOTSUP;
+		return -1;
+	}
+
 	ret = eal_memalloc_get_seg_fd_offset(msl_idx, seg_idx, offset);
 	if (ret < 0) {
 		rte_errno = -ret;
@@ -773,6 +786,124 @@ rte_memseg_get_fd_offset(const struct rte_memseg *ms, size_t *offset)
 	rte_rwlock_read_unlock(&mcfg->memory_hotplug_lock);
 
 	return ret;
+}
+
+int __rte_experimental
+rte_extmem_register(void *va_addr, size_t len, rte_iova_t iova_addrs[],
+		unsigned int n_pages, size_t page_sz)
+{
+	struct rte_mem_config *mcfg = rte_eal_get_configuration()->mem_config;
+	unsigned int socket_id, n;
+	int ret = 0;
+
+	if (va_addr == NULL || page_sz == 0 || len == 0 ||
+			!rte_is_power_of_2(page_sz) ||
+			RTE_ALIGN(len, page_sz) != len ||
+			((len / page_sz) != n_pages && iova_addrs != NULL) ||
+			!rte_is_aligned(va_addr, page_sz)) {
+		rte_errno = EINVAL;
+		return -1;
+	}
+	rte_rwlock_write_lock(&mcfg->memory_hotplug_lock);
+
+	/* make sure the segment doesn't already exist */
+	if (malloc_heap_find_external_seg(va_addr, len) != NULL) {
+		rte_errno = EEXIST;
+		ret = -1;
+		goto unlock;
+	}
+
+	/* get next available socket ID */
+	socket_id = mcfg->next_socket_id;
+	if (socket_id > INT32_MAX) {
+		RTE_LOG(ERR, EAL, "Cannot assign new socket ID's\n");
+		rte_errno = ENOSPC;
+		ret = -1;
+		goto unlock;
+	}
+
+	/* we can create a new memseg */
+	n = len / page_sz;
+	if (malloc_heap_create_external_seg(va_addr, iova_addrs, n,
+			page_sz, "extmem", socket_id) == NULL) {
+		ret = -1;
+		goto unlock;
+	}
+
+	/* memseg list successfully created - increment next socket ID */
+	mcfg->next_socket_id++;
+unlock:
+	rte_rwlock_write_unlock(&mcfg->memory_hotplug_lock);
+	return ret;
+}
+
+int __rte_experimental
+rte_extmem_unregister(void *va_addr, size_t len)
+{
+	struct rte_mem_config *mcfg = rte_eal_get_configuration()->mem_config;
+	struct rte_memseg_list *msl;
+	int ret = 0;
+
+	if (va_addr == NULL || len == 0) {
+		rte_errno = EINVAL;
+		return -1;
+	}
+	rte_rwlock_write_lock(&mcfg->memory_hotplug_lock);
+
+	/* find our segment */
+	msl = malloc_heap_find_external_seg(va_addr, len);
+	if (msl == NULL) {
+		rte_errno = ENOENT;
+		ret = -1;
+		goto unlock;
+	}
+
+	ret = malloc_heap_destroy_external_seg(msl);
+unlock:
+	rte_rwlock_write_unlock(&mcfg->memory_hotplug_lock);
+	return ret;
+}
+
+static int
+sync_memory(void *va_addr, size_t len, bool attach)
+{
+	struct rte_mem_config *mcfg = rte_eal_get_configuration()->mem_config;
+	struct rte_memseg_list *msl;
+	int ret = 0;
+
+	if (va_addr == NULL || len == 0) {
+		rte_errno = EINVAL;
+		return -1;
+	}
+	rte_rwlock_write_lock(&mcfg->memory_hotplug_lock);
+
+	/* find our segment */
+	msl = malloc_heap_find_external_seg(va_addr, len);
+	if (msl == NULL) {
+		rte_errno = ENOENT;
+		ret = -1;
+		goto unlock;
+	}
+	if (attach)
+		ret = rte_fbarray_attach(&msl->memseg_arr);
+	else
+		ret = rte_fbarray_detach(&msl->memseg_arr);
+
+unlock:
+	rte_rwlock_write_unlock(&mcfg->memory_hotplug_lock);
+	return ret;
+}
+
+int __rte_experimental
+rte_extmem_attach(void *va_addr, size_t len)
+{
+	return sync_memory(va_addr, len, true);
+}
+
+int __rte_experimental
+rte_extmem_detach(void *va_addr, size_t len)
+{
+	return sync_memory(va_addr, len, false);
 }
 
 /* init memory subsystem */

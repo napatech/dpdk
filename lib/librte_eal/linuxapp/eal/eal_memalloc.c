@@ -23,6 +23,10 @@
 #include <sys/time.h>
 #include <signal.h>
 #include <setjmp.h>
+#ifdef F_ADD_SEALS /* if file sealing is supported, so is memfd */
+#include <linux/memfd.h>
+#define MEMFD_SUPPORTED
+#endif
 #ifdef RTE_EAL_NUMA_AWARE_HUGEPAGES
 #include <numa.h>
 #include <numaif.h>
@@ -53,8 +57,8 @@ const int anonymous_hugepages_supported =
 #endif
 
 /*
- * we don't actually care if memfd itself is supported - we only need to check
- * if memfd supports hugetlbfs, as that already implies memfd support.
+ * we've already checked memfd support at compile-time, but we also need to
+ * check if we can create hugepage files with memfd.
  *
  * also, this is not a constant, because while we may be *compiled* with memfd
  * hugetlbfs support, we might not be *running* on a system that supports memfd
@@ -63,10 +67,11 @@ const int anonymous_hugepages_supported =
  */
 static int memfd_create_supported =
 #ifdef MFD_HUGETLB
-#define MEMFD_SUPPORTED
 		1;
+#define RTE_MFD_HUGETLB MFD_HUGETLB
 #else
 		0;
+#define RTE_MFD_HUGETLB 4U
 #endif
 
 /*
@@ -171,7 +176,7 @@ prepare_numa(int *oldpolicy, struct bitmask *oldmask, int socket_id)
 		RTE_LOG(ERR, EAL,
 			"Failed to get current mempolicy: %s. "
 			"Assuming MPOL_DEFAULT.\n", strerror(errno));
-		oldpolicy = MPOL_DEFAULT;
+		*oldpolicy = MPOL_DEFAULT;
 	}
 	RTE_LOG(DEBUG, EAL,
 		"Setting policy MPOL_PREFERRED for socket %d\n",
@@ -208,28 +213,13 @@ get_file_size(int fd)
 	return st.st_size;
 }
 
-static inline uint32_t
-bsf64(uint64_t v)
-{
-	return (uint32_t)__builtin_ctzll(v);
-}
-
-static inline uint32_t
-log2_u64(uint64_t v)
-{
-	if (v == 0)
-		return 0;
-	v = rte_align64pow2(v);
-	return bsf64(v);
-}
-
 static int
 pagesz_flags(uint64_t page_sz)
 {
 	/* as per mmap() manpage, all page sizes are log2 of page size
 	 * shifted by MAP_HUGE_SHIFT
 	 */
-	int log2 = log2_u64(page_sz);
+	int log2 = rte_log2_u64(page_sz);
 	return log2 << RTE_MAP_HUGE_SHIFT;
 }
 
@@ -338,12 +328,12 @@ get_seg_memfd(struct hugepage_info *hi __rte_unused,
 	int fd;
 	char segname[250]; /* as per manpage, limit is 249 bytes plus null */
 
+	int flags = RTE_MFD_HUGETLB | pagesz_flags(hi->hugepage_sz);
+
 	if (internal_config.single_file_segments) {
 		fd = fd_list[list_idx].memseg_list_fd;
 
 		if (fd < 0) {
-			int flags = MFD_HUGETLB | pagesz_flags(hi->hugepage_sz);
-
 			snprintf(segname, sizeof(segname), "seg_%i", list_idx);
 			fd = memfd_create(segname, flags);
 			if (fd < 0) {
@@ -357,8 +347,6 @@ get_seg_memfd(struct hugepage_info *hi __rte_unused,
 		fd = fd_list[list_idx].fds[seg_idx];
 
 		if (fd < 0) {
-			int flags = MFD_HUGETLB | pagesz_flags(hi->hugepage_sz);
-
 			snprintf(segname, sizeof(segname), "seg_%i-%i",
 					list_idx, seg_idx);
 			fd = memfd_create(segname, flags);
@@ -633,13 +621,13 @@ alloc_seg(struct rte_memseg *ms, void *addr, int socket_id,
 	int mmap_flags;
 
 	if (internal_config.in_memory && !memfd_create_supported) {
-		int pagesz_flag, flags;
+		const int in_memory_flags = MAP_HUGETLB | MAP_FIXED |
+				MAP_PRIVATE | MAP_ANONYMOUS;
+		int pagesz_flag;
 
 		pagesz_flag = pagesz_flags(alloc_sz);
-		flags = pagesz_flag | MAP_HUGETLB | MAP_FIXED |
-				MAP_PRIVATE | MAP_ANONYMOUS;
 		fd = -1;
-		mmap_flags = flags;
+		mmap_flags = in_memory_flags | pagesz_flag;
 
 		/* single-file segments codepath will never be active
 		 * here because in-memory mode is incompatible with the
@@ -1526,6 +1514,10 @@ eal_memalloc_set_seg_fd(int list_idx, int seg_idx, int fd)
 {
 	struct rte_mem_config *mcfg = rte_eal_get_configuration()->mem_config;
 
+	/* single file segments mode doesn't support individual segment fd's */
+	if (internal_config.single_file_segments)
+		return -ENOTSUP;
+
 	/* if list is not allocated, allocate it */
 	if (fd_list[list_idx].len == 0) {
 		int len = mcfg->memsegs[list_idx].memseg_arr.len;
@@ -1539,9 +1531,42 @@ eal_memalloc_set_seg_fd(int list_idx, int seg_idx, int fd)
 }
 
 int
+eal_memalloc_set_seg_list_fd(int list_idx, int fd)
+{
+	struct rte_mem_config *mcfg = rte_eal_get_configuration()->mem_config;
+
+	/* non-single file segment mode doesn't support segment list fd's */
+	if (!internal_config.single_file_segments)
+		return -ENOTSUP;
+
+	/* if list is not allocated, allocate it */
+	if (fd_list[list_idx].len == 0) {
+		int len = mcfg->memsegs[list_idx].memseg_arr.len;
+
+		if (alloc_list(list_idx, len) < 0)
+			return -ENOMEM;
+	}
+
+	fd_list[list_idx].memseg_list_fd = fd;
+
+	return 0;
+}
+
+int
 eal_memalloc_get_seg_fd(int list_idx, int seg_idx)
 {
 	int fd;
+
+	if (internal_config.in_memory || internal_config.no_hugetlbfs) {
+#ifndef MEMFD_SUPPORTED
+		/* in in-memory or no-huge mode, we rely on memfd support */
+		return -ENOTSUP;
+#endif
+		/* memfd supported, but hugetlbfs memfd may not be */
+		if (!internal_config.no_hugetlbfs && !memfd_create_supported)
+			return -ENOTSUP;
+	}
+
 	if (internal_config.single_file_segments) {
 		fd = fd_list[list_idx].memseg_list_fd;
 	} else if (fd_list[list_idx].len == 0) {
@@ -1565,7 +1590,7 @@ test_memfd_create(void)
 		int pagesz_flag = pagesz_flags(pagesz);
 		int flags;
 
-		flags = pagesz_flag | MFD_HUGETLB;
+		flags = pagesz_flag | RTE_MFD_HUGETLB;
 		int fd = memfd_create("test", flags);
 		if (fd < 0) {
 			/* we failed - let memalloc know this isn't working */
@@ -1588,6 +1613,16 @@ int
 eal_memalloc_get_seg_fd_offset(int list_idx, int seg_idx, size_t *offset)
 {
 	struct rte_mem_config *mcfg = rte_eal_get_configuration()->mem_config;
+
+	if (internal_config.in_memory || internal_config.no_hugetlbfs) {
+#ifndef MEMFD_SUPPORTED
+		/* in in-memory or no-huge mode, we rely on memfd support */
+		return -ENOTSUP;
+#endif
+		/* memfd supported, but hugetlbfs memfd may not be */
+		if (!internal_config.no_hugetlbfs && !memfd_create_supported)
+			return -ENOTSUP;
+	}
 
 	/* fd_list not initialized? */
 	if (fd_list[list_idx].len == 0)

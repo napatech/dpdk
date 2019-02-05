@@ -33,9 +33,9 @@
 #include <rte_dev.h>
 #include <rte_kvargs.h>
 
-#include "common.h"
-#include "t4_regs.h"
-#include "t4_msg.h"
+#include "base/common.h"
+#include "base/t4_regs.h"
+#include "base/t4_msg.h"
 #include "cxgbe.h"
 #include "clip_tbl.h"
 #include "l2t.h"
@@ -122,6 +122,7 @@ int setup_sge_ctrl_txq(struct adapter *adapter)
 	int err = 0, i = 0;
 
 	for_each_port(adapter, i) {
+		struct port_info *pi = adap2pinfo(adapter, i);
 		char name[RTE_ETH_NAME_MAX_LEN];
 		struct sge_ctrl_txq *q = &s->ctrlq[i];
 
@@ -135,16 +136,19 @@ int setup_sge_ctrl_txq(struct adapter *adapter)
 				err);
 			goto out;
 		}
-		snprintf(name, sizeof(name), "cxgbe_ctrl_pool_%d", i);
+		snprintf(name, sizeof(name), "%s_ctrl_pool_%d",
+			 pi->eth_dev->device->driver->name,
+			 pi->eth_dev->data->port_id);
 		q->mb_pool = rte_pktmbuf_pool_create(name, s->ctrlq[i].q.size,
 						     RTE_CACHE_LINE_SIZE,
 						     RTE_MBUF_PRIV_ALIGN,
 						     RTE_MBUF_DEFAULT_BUF_SIZE,
 						     SOCKET_ID_ANY);
 		if (!q->mb_pool) {
-			dev_err(adapter, "Can't create ctrl pool for port: %d",
-				i);
-			err = -ENOMEM;
+			err = -rte_errno;
+			dev_err(adapter,
+				"Can't create ctrl pool for port %d. Err: %d\n",
+				pi->eth_dev->data->port_id, err);
 			goto out;
 		}
 	}
@@ -411,7 +415,7 @@ static int tid_init(struct tid_info *t)
 		return -ENOMEM;
 
 	t->atid_tab = (union aopen_entry *)&t->tid_tab[t->ntids];
-	t->ftid_tab = (struct filter_entry *)&t->tid_tab[t->natids];
+	t->ftid_tab = (struct filter_entry *)&t->atid_tab[t->natids];
 	t->ftid_bmap_array = t4_os_alloc(ftid_bmap_size);
 	if (!t->ftid_bmap_array) {
 		tid_free(t);

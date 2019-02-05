@@ -239,8 +239,13 @@ struct rte_bbdev_stats {
 	uint64_t enqueue_err_count;
 	/** Total error count on operations dequeued */
 	uint64_t dequeue_err_count;
-	/** Offload time */
-	uint64_t offload_time;
+	/** CPU cycles consumed by the (HW/SW) accelerator device to offload
+	 *  the enqueue request to its internal queues.
+	 *  - For a HW device this is the cycles consumed in MMIO write
+	 *  - For a SW (vdev) device, this is the processing time of the
+	 *     bbdev operation
+	 */
+	uint64_t acc_offload_cycles;
 };
 
 /**
@@ -461,7 +466,7 @@ extern struct rte_bbdev rte_bbdev_devices[];
  *   The number of operations actually enqueued (this is the number of processed
  *   entries in the @p ops array).
  */
-static inline uint16_t
+static inline uint16_t __rte_experimental
 rte_bbdev_enqueue_enc_ops(uint16_t dev_id, uint16_t queue_id,
 		struct rte_bbdev_enc_op **ops, uint16_t num_ops)
 {
@@ -491,7 +496,7 @@ rte_bbdev_enqueue_enc_ops(uint16_t dev_id, uint16_t queue_id,
  *   The number of operations actually enqueued (this is the number of processed
  *   entries in the @p ops array).
  */
-static inline uint16_t
+static inline uint16_t __rte_experimental
 rte_bbdev_enqueue_dec_ops(uint16_t dev_id, uint16_t queue_id,
 		struct rte_bbdev_dec_op **ops, uint16_t num_ops)
 {
@@ -521,7 +526,7 @@ rte_bbdev_enqueue_dec_ops(uint16_t dev_id, uint16_t queue_id,
  *   The number of operations actually dequeued (this is the number of entries
  *   copied into the @p ops array).
  */
-static inline uint16_t
+static inline uint16_t __rte_experimental
 rte_bbdev_dequeue_enc_ops(uint16_t dev_id, uint16_t queue_id,
 		struct rte_bbdev_enc_op **ops, uint16_t num_ops)
 {
@@ -552,7 +557,7 @@ rte_bbdev_dequeue_enc_ops(uint16_t dev_id, uint16_t queue_id,
  *   copied into the @p ops array).
  */
 
-static inline uint16_t
+static inline uint16_t __rte_experimental
 rte_bbdev_dequeue_dec_ops(uint16_t dev_id, uint16_t queue_id,
 		struct rte_bbdev_dec_op **ops, uint16_t num_ops)
 {

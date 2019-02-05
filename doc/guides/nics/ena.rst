@@ -1,6 +1,6 @@
 .. BSD LICENSE
 
-    Copyright (c) 2015-2016 Amazon.com, Inc. or its affiliates.
+    Copyright (c) 2015-2018 Amazon.com, Inc. or its affiliates.
     All rights reserved.
 
     Redistribution and use in source and binary forms, with or without
@@ -164,20 +164,18 @@ section of :ref:`the DPDK documentation <linux_gsg>` or refer to *DPDK Release N
 Supported features
 ------------------
 
+* MTU configuration
 * Jumbo frames up to 9K
-* Port Hardware Statistics
 * IPv4/TCP/UDP checksum offload
 * TSO offload
 * Multiple receive and transmit queues
-* RSS
+* RSS hash
+* RSS indirection table configuration
 * Low Latency Queue for Tx
-
-Unsupported features
---------------------
-
-The features supported by the device and not yet supported by this PMD include:
-
-* Asynchronous Event Notification Queue (AENQ)
+* Basic and extended statistics
+* LSC event notification
+* Watchdog (requires handling of timers in the application)
+* Device reset upon failure
 
 Prerequisites
 -------------
@@ -185,10 +183,22 @@ Prerequisites
 #. Prepare the system as recommended by DPDK suite.  This includes environment
    variables, hugepages configuration, tool-chains and configuration.
 
-#. ENA PMD can operate with ``vfio-pci`` or ``igb_uio`` driver.
+#. ENA PMD can operate with ``vfio-pci``(*) or ``igb_uio`` driver.
+
+   (*) ENAv2 hardware supports Low Latency Queue v2 (LLQv2). This feature
+   reduces the latency of the packets by pushing the header directly through
+   the PCI to the device, before the DMA is even triggered. For proper work
+   kernel PCI driver must support write combining (WC). In mainline version of
+   ``igb_uio`` (in DPDK repo) it must be enabled by loding module with
+   ``wc_activate=1`` flag (example below). However, mainline's vfio-pci
+   driver in kernel doesn't have WC support yet (planed to be added).
+   If vfio-pci used user should be either turn off ENAv2 (to avoid performance
+   impact) or recompile vfio-pci driver with patch provided in
+   `amzn-github <https://github.com/amzn/amzn-drivers/tree/master/userspace/dpdk/enav2-vfio-patch>`_.
 
 #. Insert ``vfio-pci`` or ``igb_uio`` kernel module using the command
-   ``modprobe vfio-pci`` or ``modprobe igb_uio`` respectively.
+   ``modprobe vfio-pci`` or ``modprobe uio; insmod igb_uio.ko wc_activate=1``
+   respectively.
 
 #. For ``vfio-pci`` users only:
    Please make sure that ``IOMMU`` is enabled in your system,
@@ -214,14 +224,17 @@ Example output:
 .. code-block:: console
 
    [...]
-   EAL: PCI device 0000:02:00.1 on NUMA socket -1
-   EAL:   probe driver: 1d0f:ec20 rte_ena_pmd
-   EAL:   PCI memory mapped at 0x7f9b6c400000
-   PMD: eth_ena_dev_init(): Initializing 0:2:0.1
+   EAL: PCI device 0000:00:06.0 on NUMA socket -1
+   EAL:   Invalid NUMA socket, default to 0
+   EAL:   probe driver: 1d0f:ec20 net_ena
+
    Interactive-mode selected
+   testpmd: create a new mbuf pool <mbuf_pool_socket_0>: n=171456, size=2176, socket=0
+   testpmd: preferred mempool ops selected: ring_mp_mc
+   Warning! port-topology=paired and odd forward ports number, the last port will pair with itself.
    Configuring Port 0 (socket 0)
    Port 0: 00:00:00:11:00:01
    Checking link statuses...
-   Port 0 Link Up - speed 10000 Mbps - full-duplex
+
    Done
    testpmd>

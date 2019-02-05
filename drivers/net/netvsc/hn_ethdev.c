@@ -378,6 +378,8 @@ static int hn_dev_configure(struct rte_eth_dev *dev)
 		return -EINVAL;
 	}
 
+	hv->vlan_strip = !!(rxmode->offloads & DEV_RX_OFFLOAD_VLAN_STRIP);
+
 	err = hn_rndis_conf_offload(hv, txmode->offloads,
 				    rxmode->offloads);
 	if (err) {
@@ -732,6 +734,7 @@ eth_hn_dev_init(struct rte_eth_dev *eth_dev)
 	hv->chim_res  = &vmbus->resource[HV_SEND_BUF_MAP];
 	hv->port_id = eth_dev->data->port_id;
 	hv->latency = HN_CHAN_LATENCY_NS;
+	hv->max_queues = 1;
 
 	err = hn_parse_args(eth_dev);
 	if (err)
@@ -770,6 +773,10 @@ eth_hn_dev_init(struct rte_eth_dev *eth_dev)
 	if (err)
 		goto failed;
 
+	/* Multi queue requires later versions of windows server */
+	if (hv->nvs_ver < NVS_VERSION_5)
+		return 0;
+
 	max_chan = rte_vmbus_max_channels(vmbus);
 	PMD_INIT_LOG(DEBUG, "VMBus max channels %d", max_chan);
 	if (max_chan <= 0)
@@ -786,7 +793,7 @@ eth_hn_dev_init(struct rte_eth_dev *eth_dev)
 
 		err = hn_vf_add(eth_dev, hv);
 		if (err)
-			goto failed;
+			hv->vf_present = 0;
 	}
 
 	return 0;
@@ -794,6 +801,7 @@ eth_hn_dev_init(struct rte_eth_dev *eth_dev)
 failed:
 	PMD_INIT_LOG(NOTICE, "device init failed");
 
+	hn_tx_pool_uninit(eth_dev);
 	hn_detach(hv);
 	return err;
 }
@@ -816,6 +824,7 @@ eth_hn_dev_uninit(struct rte_eth_dev *eth_dev)
 	eth_dev->rx_pkt_burst = NULL;
 
 	hn_detach(hv);
+	hn_tx_pool_uninit(eth_dev);
 	rte_vmbus_chan_close(hv->primary->chan);
 	rte_free(hv->primary);
 	rte_eth_dev_owner_delete(hv->owner.id);

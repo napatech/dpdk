@@ -1347,6 +1347,9 @@ remove_entry(const struct rte_hash *h, struct rte_hash_bucket *bkt, unsigned i)
 			n_slots = rte_ring_mp_enqueue_burst(h->free_slots,
 						cached_free_slots->objs,
 						LCORE_CACHE_SIZE, NULL);
+			ERR_IF_TRUE((n_slots == 0),
+				"%s: could not enqueue free slots in global ring\n",
+				__func__);
 			cached_free_slots->len -= n_slots;
 		}
 		/* Put index of new free slot in cache. */
@@ -1552,6 +1555,7 @@ rte_hash_free_key_with_position(const struct rte_hash *h,
 			n_slots = rte_ring_mp_enqueue_burst(h->free_slots,
 						cached_free_slots->objs,
 						LCORE_CACHE_SIZE, NULL);
+			RETURN_IF_TRUE((n_slots == 0), -EFAULT);
 			cached_free_slots->len -= n_slots;
 		}
 		/* Put index of new free slot in cache. */
@@ -2022,11 +2026,11 @@ __rte_hash_lookup_bulk(const struct rte_hash *h, const void **keys,
 			uint64_t *hit_mask, void *data[])
 {
 	if (h->readwrite_concur_lf_support)
-		return __rte_hash_lookup_bulk_lf(h, keys, num_keys,
-						positions, hit_mask, data);
+		__rte_hash_lookup_bulk_lf(h, keys, num_keys, positions,
+					  hit_mask, data);
 	else
-		return __rte_hash_lookup_bulk_l(h, keys, num_keys,
-						positions, hit_mask, data);
+		__rte_hash_lookup_bulk_l(h, keys, num_keys, positions,
+					 hit_mask, data);
 }
 
 int

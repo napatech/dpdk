@@ -115,7 +115,7 @@ eal_create_runtime_dir(void)
 
 	/* create prefix-specific subdirectory under DPDK runtime dir */
 	ret = snprintf(runtime_dir, sizeof(runtime_dir), "%s/%s",
-			tmp, internal_config.hugefile_prefix);
+			tmp, eal_get_hugefile_prefix());
 	if (ret < 0 || ret == sizeof(runtime_dir)) {
 		RTE_LOG(ERR, EAL, "Error creating prefix-specific runtime path name\n");
 		return -1;
@@ -140,6 +140,16 @@ eal_create_runtime_dir(void)
 
 	return 0;
 }
+
+int
+eal_clean_runtime_dir(void)
+{
+	/* FreeBSD doesn't need this implemented for now, because, unlike Linux,
+	 * FreeBSD doesn't create per-process files, so no need to clean up.
+	 */
+	return 0;
+}
+
 
 const char *
 rte_eal_get_runtime_dir(void)
@@ -447,9 +457,21 @@ eal_parse_args(int argc, char **argv)
 
 		switch (opt) {
 		case OPT_MBUF_POOL_OPS_NAME_NUM:
-			internal_config.user_mbuf_pool_ops_name =
-			    strdup(optarg);
+		{
+			char *ops_name = strdup(optarg);
+			if (ops_name == NULL)
+				RTE_LOG(ERR, EAL, "Could not store mbuf pool ops name\n");
+			else {
+				/* free old ops name */
+				if (internal_config.user_mbuf_pool_ops_name !=
+						NULL)
+					free(internal_config.user_mbuf_pool_ops_name);
+
+				internal_config.user_mbuf_pool_ops_name =
+						ops_name;
+			}
 			break;
+		}
 		case 'h':
 			eal_usage(prgname);
 			exit(EXIT_SUCCESS);
@@ -807,6 +829,21 @@ rte_eal_init(int argc, char **argv)
 		return -1;
 	}
 
+	/*
+	 * Clean up unused files in runtime directory. We do this at the end of
+	 * init and not at the beginning because we want to clean stuff up
+	 * whether we are primary or secondary process, but we cannot remove
+	 * primary process' files because secondary should be able to run even
+	 * if primary process is dead.
+	 *
+	 * In no_shconf mode, no runtime directory is created in the first
+	 * place, so no cleanup needed.
+	 */
+	if (!internal_config.no_shconf && eal_clean_runtime_dir() < 0) {
+		rte_eal_init_alert("Cannot clear runtime directory\n");
+		return -1;
+	}
+
 	rte_eal_mcfg_complete();
 
 	/* Call each registered callback, if enabled */
@@ -819,6 +856,8 @@ int __rte_experimental
 rte_eal_cleanup(void)
 {
 	rte_service_finalize();
+	rte_mp_channel_cleanup();
+	eal_cleanup_config(&internal_config);
 	return 0;
 }
 

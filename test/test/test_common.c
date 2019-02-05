@@ -51,11 +51,47 @@ test_macros(int __rte_unused unused_parm)
 }
 
 static int
+test_bsf(void)
+{
+	uint32_t shift, pos;
+
+	/* safe versions should be able to handle 0 */
+	if (rte_bsf32_safe(0, &pos) != 0)
+		FAIL("rte_bsf32_safe");
+	if (rte_bsf64_safe(0, &pos) != 0)
+		FAIL("rte_bsf64_safe");
+
+	for (shift = 0; shift < 63; shift++) {
+		uint32_t val32;
+		uint64_t val64;
+
+		val64 = 1ULL << shift;
+		if ((uint32_t)rte_bsf64(val64) != shift)
+			FAIL("rte_bsf64");
+		if (rte_bsf64_safe(val64, &pos) != 1)
+			FAIL("rte_bsf64_safe");
+		if (pos != shift)
+			FAIL("rte_bsf64_safe");
+
+		if (shift > 31)
+			continue;
+
+		val32 = 1U << shift;
+		if ((uint32_t)rte_bsf32(val32) != shift)
+			FAIL("rte_bsf32");
+		if (rte_bsf32_safe(val32, &pos) != 1)
+			FAIL("rte_bsf32_safe");
+		if (pos != shift)
+			FAIL("rte_bsf32_safe");
+	}
+
+	return 0;
+}
+
+static int
 test_misc(void)
 {
 	char memdump[] = "memdump_test";
-	if (rte_bsf32(129))
-		FAIL("rte_bsf32");
 
 	rte_memdump(stdout, "test", memdump, sizeof(memdump));
 	rte_hexdump(stdout, "test", memdump, sizeof(memdump));
@@ -177,10 +213,28 @@ test_log2(void)
 	const uint32_t step = 1;
 
 	for (i = 0; i < max; i = i + step) {
+		uint64_t i64;
+
+		/* extend range for 64-bit */
+		i64 = (uint64_t)i << 32;
+		base = (uint32_t)ceilf(log2(i64));
+		compare = rte_log2_u64(i64);
+		if (base != compare) {
+			printf("Wrong rte_log2_u64(%" PRIx64 ") val %x, expected %x\n",
+				i64, compare, base);
+			return TEST_FAILED;
+		}
+
 		base = (uint32_t)ceilf(log2((uint32_t)i));
-		compare = rte_log2_u32(i);
+		compare = rte_log2_u32((uint32_t)i);
 		if (base != compare) {
 			printf("Wrong rte_log2_u32(%x) val %x, expected %x\n",
+				i, compare, base);
+			return TEST_FAILED;
+		}
+		compare = rte_log2_u64((uint64_t)i);
+		if (base != compare) {
+			printf("Wrong rte_log2_u64(%x) val %x, expected %x\n",
 				i, compare, base);
 			return TEST_FAILED;
 		}
@@ -206,12 +260,33 @@ test_fls(void)
 	};
 
 	for (i = 0; i < RTE_DIM(test); i++) {
+		uint64_t arg64;
+
 		arg = test[i].arg;
 		rc = rte_fls_u32(arg);
 		expected = test[i].rc;
 		if (rc != expected) {
 			printf("Wrong rte_fls_u32(0x%x) rc=%d, expected=%d\n",
 				arg, rc, expected);
+			return TEST_FAILED;
+		}
+		/* 64-bit version */
+		arg = test[i].arg;
+		rc = rte_fls_u64(arg);
+		expected = test[i].rc;
+		if (rc != expected) {
+			printf("Wrong rte_fls_u64(0x%x) rc=%d, expected=%d\n",
+				arg, rc, expected);
+			return TEST_FAILED;
+		}
+		/* 64-bit version shifted by 32 bits */
+		arg64 = (uint64_t)test[i].arg << 32;
+		rc = rte_fls_u64(arg64);
+		/* don't shift zero */
+		expected = test[i].rc == 0 ? 0 : test[i].rc + 32;
+		if (rc != expected) {
+			printf("Wrong rte_fls_u64(0x%" PRIx64 ") rc=%d, expected=%d\n",
+				arg64, rc, expected);
 			return TEST_FAILED;
 		}
 	}
@@ -226,6 +301,7 @@ test_common(void)
 	ret |= test_align();
 	ret |= test_macros(0);
 	ret |= test_misc();
+	ret |= test_bsf();
 	ret |= test_log2();
 	ret |= test_fls();
 

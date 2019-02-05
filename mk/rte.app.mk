@@ -67,6 +67,8 @@ ifeq ($(CONFIG_RTE_LIBRTE_BPF_ELF),y)
 _LDLIBS-$(CONFIG_RTE_LIBRTE_BPF)            += -lelf
 endif
 
+_LDLIBS-$(CONFIG_RTE_LIBRTE_IPSEC)            += -lrte_ipsec
+
 _LDLIBS-y += --whole-archive
 
 _LDLIBS-$(CONFIG_RTE_LIBRTE_CFGFILE)        += -lrte_cfgfile
@@ -163,20 +165,24 @@ _LDLIBS-$(CONFIG_RTE_LIBRTE_ENIC_PMD)       += -lrte_pmd_enic
 _LDLIBS-$(CONFIG_RTE_LIBRTE_FM10K_PMD)      += -lrte_pmd_fm10k
 _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_FAILSAFE)   += -lrte_pmd_failsafe
 _LDLIBS-$(CONFIG_RTE_LIBRTE_I40E_PMD)       += -lrte_pmd_i40e
+_LDLIBS-$(CONFIG_RTE_LIBRTE_ICE_PMD)        += -lrte_pmd_ice
 _LDLIBS-$(CONFIG_RTE_LIBRTE_IXGBE_PMD)      += -lrte_pmd_ixgbe
 ifeq ($(CONFIG_RTE_LIBRTE_KNI),y)
 _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_KNI)        += -lrte_pmd_kni
 endif
 _LDLIBS-$(CONFIG_RTE_LIBRTE_LIO_PMD)        += -lrte_pmd_lio
-ifeq ($(CONFIG_RTE_LIBRTE_MLX4_DLOPEN_DEPS),y)
-_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX4_PMD)       += -lrte_pmd_mlx4 -ldl
+_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX4_PMD)       += -lrte_pmd_mlx4
+_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX5_PMD)       += -lrte_pmd_mlx5 -lmnl
+ifeq ($(CONFIG_RTE_IBVERBS_LINK_DLOPEN),y)
+_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX4_PMD)       += -ldl
+_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX5_PMD)       += -ldl
+else ifeq ($(CONFIG_RTE_IBVERBS_LINK_STATIC),y)
+LIBS_IBVERBS_STATIC = $(shell $(RTE_SDK)/buildtools/options-ibverbs-static.sh)
+_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX4_PMD)       += $(LIBS_IBVERBS_STATIC)
+_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX5_PMD)       += $(LIBS_IBVERBS_STATIC)
 else
-_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX4_PMD)       += -lrte_pmd_mlx4 -libverbs -lmlx4
-endif
-ifeq ($(CONFIG_RTE_LIBRTE_MLX5_DLOPEN_DEPS),y)
-_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX5_PMD)       += -lrte_pmd_mlx5 -ldl -lmnl
-else
-_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX5_PMD)       += -lrte_pmd_mlx5 -libverbs -lmlx5 -lmnl
+_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX4_PMD)       += -libverbs -lmlx4
+_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX5_PMD)       += -libverbs -lmlx5
 endif
 _LDLIBS-$(CONFIG_RTE_LIBRTE_MVPP2_PMD)      += -lrte_pmd_mvpp2
 _LDLIBS-$(CONFIG_RTE_LIBRTE_MVNETA_PMD)     += -lrte_pmd_mvneta

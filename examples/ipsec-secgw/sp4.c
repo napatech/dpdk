@@ -44,7 +44,7 @@ enum {
 	RTE_ACL_IPV4_NUM
 };
 
-struct rte_acl_field_def ip4_defs[NUM_FIELDS_IPV4] = {
+static struct rte_acl_field_def ip4_defs[NUM_FIELDS_IPV4] = {
 	{
 	.type = RTE_ACL_FIELD_TYPE_BITMASK,
 	.size = sizeof(uint8_t),
@@ -85,11 +85,11 @@ struct rte_acl_field_def ip4_defs[NUM_FIELDS_IPV4] = {
 
 RTE_ACL_RULE_DEF(acl4_rules, RTE_DIM(ip4_defs));
 
-struct acl4_rules acl4_rules_out[MAX_ACL_RULE_NUM];
-uint32_t nb_acl4_rules_out;
+static struct acl4_rules acl4_rules_out[MAX_ACL_RULE_NUM];
+static uint32_t nb_acl4_rules_out;
 
-struct acl4_rules acl4_rules_in[MAX_ACL_RULE_NUM];
-uint32_t nb_acl4_rules_in;
+static struct acl4_rules acl4_rules_in[MAX_ACL_RULE_NUM];
+static uint32_t nb_acl4_rules_in;
 
 void
 parse_sp4_tokens(char **tokens, uint32_t n_tokens,
@@ -503,4 +503,29 @@ sp4_init(struct socket_ctx *ctx, int32_t socket_id)
 	} else
 		RTE_LOG(WARNING, IPSEC, "No IPv4 SP Outbound rule "
 			"specified\n");
+}
+
+/*
+ * Search though SP rules for given SPI.
+ */
+int
+sp4_spi_present(uint32_t spi, int inbound)
+{
+	uint32_t i, num;
+	const struct acl4_rules *acr;
+
+	if (inbound != 0) {
+		acr = acl4_rules_in;
+		num = nb_acl4_rules_in;
+	} else {
+		acr = acl4_rules_out;
+		num = nb_acl4_rules_out;
+	}
+
+	for (i = 0; i != num; i++) {
+		if (acr[i].data.userdata == PROTECT(spi))
+			return i;
+	}
+
+	return -ENOENT;
 }

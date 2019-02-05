@@ -37,45 +37,6 @@ is_valid_virt_queue_idx(uint32_t idx, int is_tx, uint32_t nr_vring)
 	return (is_tx ^ (idx & 1)) == 0 && idx < nr_vring;
 }
 
-static __rte_always_inline void *
-alloc_copy_ind_table(struct virtio_net *dev, struct vhost_virtqueue *vq,
-		uint64_t desc_addr, uint64_t desc_len)
-{
-	void *idesc;
-	uint64_t src, dst;
-	uint64_t len, remain = desc_len;
-
-	idesc = rte_malloc(__func__, desc_len, 0);
-	if (unlikely(!idesc))
-		return 0;
-
-	dst = (uint64_t)(uintptr_t)idesc;
-
-	while (remain) {
-		len = remain;
-		src = vhost_iova_to_vva(dev, vq, desc_addr, &len,
-				VHOST_ACCESS_RO);
-		if (unlikely(!src || !len)) {
-			rte_free(idesc);
-			return 0;
-		}
-
-		rte_memcpy((void *)(uintptr_t)dst, (void *)(uintptr_t)src, len);
-
-		remain -= len;
-		dst += len;
-		desc_addr += len;
-	}
-
-	return idesc;
-}
-
-static __rte_always_inline void
-free_ind_table(void *idesc)
-{
-	rte_free(idesc);
-}
-
 static __rte_always_inline void
 do_flush_shadow_used_ring_split(struct virtio_net *dev,
 			struct vhost_virtqueue *vq,
@@ -136,6 +97,8 @@ flush_shadow_used_ring_packed(struct virtio_net *dev,
 {
 	int i;
 	uint16_t used_idx = vq->last_used_idx;
+	uint16_t head_idx = vq->last_used_idx;
+	uint16_t head_flags = 0;
 
 	/* Split loop in two to save memory barriers */
 	for (i = 0; i < vq->shadow_used_idx; i++) {
@@ -165,12 +128,17 @@ flush_shadow_used_ring_packed(struct virtio_net *dev,
 			flags &= ~VRING_DESC_F_AVAIL;
 		}
 
-		vq->desc_packed[vq->last_used_idx].flags = flags;
+		if (i > 0) {
+			vq->desc_packed[vq->last_used_idx].flags = flags;
 
-		vhost_log_cache_used_vring(dev, vq,
+			vhost_log_cache_used_vring(dev, vq,
 					vq->last_used_idx *
 					sizeof(struct vring_packed_desc),
 					sizeof(struct vring_packed_desc));
+		} else {
+			head_idx = vq->last_used_idx;
+			head_flags = flags;
+		}
 
 		vq->last_used_idx += vq->shadow_used_packed[i].count;
 		if (vq->last_used_idx >= vq->size) {
@@ -179,7 +147,13 @@ flush_shadow_used_ring_packed(struct virtio_net *dev,
 		}
 	}
 
-	rte_smp_wmb();
+	vq->desc_packed[head_idx].flags = head_flags;
+
+	vhost_log_cache_used_vring(dev, vq,
+				head_idx *
+				sizeof(struct vring_packed_desc),
+				sizeof(struct vring_packed_desc));
+
 	vq->shadow_used_idx = 0;
 	vhost_log_cache_sync(dev, vq);
 }
@@ -335,13 +309,22 @@ fill_vec_buf_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 	uint16_t vec_id = *vec_idx;
 	uint32_t len    = 0;
 	uint64_t dlen;
+	uint32_t nr_descs = vq->size;
+	uint32_t cnt    = 0;
 	struct vring_desc *descs = vq->desc;
 	struct vring_desc *idesc = NULL;
+
+	if (unlikely(idx >= vq->size))
+		return -1;
 
 	*desc_chain_head = idx;
 
 	if (vq->desc[idx].flags & VRING_DESC_F_INDIRECT) {
 		dlen = vq->desc[idx].len;
+		nr_descs = dlen / sizeof(struct vring_desc);
+		if (unlikely(nr_descs > vq->size))
+			return -1;
+
 		descs = (struct vring_desc *)(uintptr_t)
 			vhost_iova_to_vva(dev, vq, vq->desc[idx].addr,
 						&dlen,
@@ -366,7 +349,7 @@ fill_vec_buf_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 	}
 
 	while (1) {
-		if (unlikely(idx >= vq->size)) {
+		if (unlikely(idx >= nr_descs || cnt++ >= nr_descs)) {
 			free_ind_table(idesc);
 			return -1;
 		}
@@ -520,11 +503,20 @@ fill_vec_buf_packed(struct virtio_net *dev, struct vhost_virtqueue *vq,
 	if (unlikely(!desc_is_avail(&descs[avail_idx], wrap_counter)))
 		return -1;
 
+	/*
+	 * The ordering between desc flags and desc
+	 * content reads need to be enforced.
+	 */
+	rte_smp_rmb();
+
 	*desc_count = 0;
 	*len = 0;
 
 	while (1) {
 		if (unlikely(vec_id >= BUF_VECTOR_MAX))
+			return -1;
+
+		if (unlikely(*desc_count >= vq->size))
 			return -1;
 
 		*desc_count += 1;
@@ -788,8 +780,15 @@ virtio_dev_rx_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 	struct buf_vector buf_vec[BUF_VECTOR_MAX];
 	uint16_t avail_head;
 
-	rte_prefetch0(&vq->avail->ring[vq->last_avail_idx & (vq->size - 1)]);
 	avail_head = *((volatile uint16_t *)&vq->avail->idx);
+
+	/*
+	 * The ordering between avail index and
+	 * desc reads needs to be enforced.
+	 */
+	rte_smp_rmb();
+
+	rte_prefetch0(&vq->avail->ring[vq->last_avail_idx & (vq->size - 1)]);
 
 	for (pkt_idx = 0; pkt_idx < count; pkt_idx++) {
 		uint32_t pkt_len = pkts[pkt_idx]->pkt_len + dev->vhost_hlen;
@@ -1366,12 +1365,18 @@ virtio_dev_tx_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		}
 	}
 
-	rte_prefetch0(&vq->avail->ring[vq->last_avail_idx & (vq->size - 1)]);
-
 	free_entries = *((volatile uint16_t *)&vq->avail->idx) -
 			vq->last_avail_idx;
 	if (free_entries == 0)
 		return 0;
+
+	/*
+	 * The ordering between avail index and
+	 * desc reads needs to be enforced.
+	 */
+	rte_smp_rmb();
+
+	rte_prefetch0(&vq->avail->ring[vq->last_avail_idx & (vq->size - 1)]);
 
 	VHOST_LOG_DEBUG(VHOST_DATA, "(%d) %s\n", dev->vid, __func__);
 
@@ -1456,8 +1461,6 @@ virtio_dev_tx_packed(struct virtio_net *dev, struct vhost_virtqueue *vq,
 	struct rte_mempool *mbuf_pool, struct rte_mbuf **pkts, uint16_t count)
 {
 	uint16_t i;
-
-	rte_prefetch0(&vq->desc_packed[vq->last_avail_idx]);
 
 	if (unlikely(dev->dequeue_zero_copy)) {
 		struct zcopy_mbuf *zmbuf, *next;

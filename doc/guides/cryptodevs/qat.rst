@@ -79,9 +79,8 @@ Limitations
 * SNOW 3G (UIA2) and ZUC (EIA3) supported only if hash length and offset fields are byte-multiple.
 * No BSD support as BSD QAT kernel driver not available.
 * ZUC EEA3/EIA3 is not supported by dh895xcc devices
-* Maximum additional authenticated data (AAD) for GCM is 240 bytes long.
+* Maximum additional authenticated data (AAD) for GCM is 240 bytes long and must be passed to the device in a buffer rounded up to the nearest block-size multiple (x16) and padded with zeros.
 * Queue pairs are not thread-safe (that is, within a single queue pair, RX and TX from different lcores is not supported).
-
 
 Extra notes on KASUMI F9
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -145,6 +144,8 @@ Quick instructions for QAT compressdev PMD are as follows:
 	make
 
 
+.. _building_qat_config:
+
 Build Configuration
 ~~~~~~~~~~~~~~~~~~~
 
@@ -180,8 +181,8 @@ An extra (max_inflight_ops x 16) bytes per queue_pair will be used for every inc
 QAT compression PMD needs intermediate buffers to support Deflate compression
 with Dynamic Huffman encoding. CONFIG_RTE_PMD_QAT_COMP_IM_BUFFER_SIZE
 specifies the size of a single buffer, the PMD will allocate a multiple of these,
-plus some extra space for associated meta-data. For GEN2 devices, 20 buffers plus
-1472 bytes are allocated.
+plus some extra space for associated meta-data. For GEN2 devices, 20 buffers are
+allocated while for GEN1 devices, 12 buffers are allocated, plus 1472 bytes overhead.
 
 .. Note::
 
