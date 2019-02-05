@@ -68,7 +68,7 @@ See below for supported drivers and SmartNics:
 | Intel PAC A10 GX 1x40             | 200-7001-12-03-00 |
 
 The complete driver package can be downloaded here:
-[Link™ Capture Software v11.2.2 Linux](https://supportportal.napatech.com/index.php?/selfhelp/view-article/link--capture-software-v1122-linux/519)
+[Link™ Capture Software v11.3.2 Linux](https://supportportal.napatech.com/index.php?/selfhelp/view-article/link--capture-software-v1132-linux/541)
 
 #### SmartNIC 200-9516-10-07-00 <a name="200-9516-10-07-00"></a>
 Using this SmartNIC only limited rte_flow filters is supported.
