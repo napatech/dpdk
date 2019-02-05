@@ -2667,7 +2667,7 @@ static int eth_xstats_get(struct rte_eth_dev *dev __rte_unused, struct rte_eth_x
     return 2;
   }
 
-  pStatData = (NtStatistics_t *)rte_malloc(internals->name, sizeof(NtStatistics_t), 0);
+  pStatData = (NtStatistics_t *)malloc(sizeof(NtStatistics_t));
   if (!pStatData) {
     _log_out_of_memory_errors(__func__);
     return -1;
@@ -2680,14 +2680,14 @@ static int eth_xstats_get(struct rte_eth_dev *dev __rte_unused, struct rte_eth_x
   if ((status = (*_NT_StatRead)(internals->hStat, pStatData)) != NT_SUCCESS) {
     _log_nt_errors(status, "NT_StatRead failed", __func__);
     NTACC_UNLOCK(&internals->statlock);
-    rte_free(pStatData);
+    free(pStatData);
     return -EIO;
   }
   NTACC_UNLOCK(&internals->statlock);
 
   learn = pStatData->u.flowData_v0.learnDone;
   fail = pStatData->u.flowData_v0.learnFail;
-  rte_free(pStatData);
+  free(pStatData);
 
 
   if (n < 1)
