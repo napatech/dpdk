@@ -1104,7 +1104,7 @@ static int eth_stats_get(struct rte_eth_dev *dev,
 
   /* Get stat data */
   pStatData->cmd = NT_STATISTICS_READ_CMD_QUERY_V2;
-  pStatData->u.query_v2.poll=0;
+  pStatData->u.query_v2.poll=1;
   pStatData->u.query_v2.clear=0;
   NTACC_LOCK(&internals->statlock);
   if ((status = (*_NT_StatRead)(internals->hStat, pStatData)) != 0) {
