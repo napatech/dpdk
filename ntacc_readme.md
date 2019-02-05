@@ -35,7 +35,7 @@ The NTACC PMD driver does not need to be bound. This means that the dpdk-devbind
 	1. [Layer3 and Layer4 packet decoding offload](#hwl3l4)
 	2. [Inner most Layer3 and Layer4 packet decoding offload](#hwil3il4)
 	3. [More packet decoding types](#hwmoredecode) 
-20.  [Use External Buffers (Zero copy)](#externalbuffer)
+20. [Use External Buffers (Zero copy)](#externalbuffer)
 	1. [Limitation using external buffers](#limitexternalbuffer)
 	2. [Enable external buffers](#enableexternalbuffer)
 	3. [Using/detecting external buffers](#detectexternalbuffer)
