@@ -670,6 +670,7 @@ struct rte_mbuf {
 	 * rte_pktmbuf_attach_extbuf().
 	 */
 	struct rte_mbuf_ext_shared_info *shinfo;
+
 } __rte_cache_aligned;
 
 /**
@@ -1802,9 +1803,8 @@ static __rte_always_inline void
 rte_pktmbuf_free_seg(struct rte_mbuf *m)
 {
 	m = rte_pktmbuf_prefree_seg(m);
-	if (likely(m != NULL)) {
+	if (likely(m != NULL))
 		rte_mbuf_raw_free(m);
-	}
 }
 
 /**

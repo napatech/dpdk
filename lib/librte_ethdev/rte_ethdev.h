@@ -731,9 +731,6 @@ struct rte_eth_txmode {
 		/**< If set, enable port based VLAN insertion */
 };
 
-#ifdef RTE_CONTIGUOUS_MEMORY_BATCHING
-#define ETH_RXQ_FLAGS_CMBATCH 0x0001 /**< RX queue has to use Contiguous Memory Batching */
-#endif
 /**
  * A structure used to configure an RX ring of an Ethernet port.
  */
@@ -742,7 +739,6 @@ struct rte_eth_rxconf {
 	uint16_t rx_free_thresh; /**< Drives the freeing of RX descriptors. */
 	uint8_t rx_drop_en; /**< Drop packets if no descriptors are available. */
 	uint8_t rx_deferred_start; /**< Do not start queue with rte_eth_dev_start(). */
-	uint32_t rxq_flags; /**< Set flags for the Rx queue */
 	/**
 	 * Per-queue Rx offloads to be set using DEV_RX_OFFLOAD_* flags.
 	 * Only offloads set on rx_queue_offload_capa or rx_offload_capa
