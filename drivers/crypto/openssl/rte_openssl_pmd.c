@@ -1799,6 +1799,9 @@ process_openssl_modinv_op(struct rte_crypto_op *cop,
 		cop->status = RTE_CRYPTO_OP_STATUS_ERROR;
 	}
 
+	BN_clear(res);
+	BN_clear(base);
+
 	return 0;
 }
 
@@ -1830,6 +1833,9 @@ process_openssl_modexp_op(struct rte_crypto_op *cop,
 	} else {
 		cop->status = RTE_CRYPTO_OP_STATUS_ERROR;
 	}
+
+	BN_clear(res);
+	BN_clear(base);
 
 	return 0;
 }
