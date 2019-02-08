@@ -1305,8 +1305,8 @@ hn_xmit_pkts(void *ptxq, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		return 0;
 
 	/* Transmit over VF if present and up */
-	vf_dev = hv->vf_dev;
-	rte_compiler_barrier();
+	vf_dev = hn_get_vf_dev(hv);
+
 	if (vf_dev && vf_dev->data->dev_started) {
 		void *sub_q = vf_dev->data->tx_queues[queue_id];
 
@@ -1396,8 +1396,8 @@ hn_recv_pkts(void *prxq, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 	if (unlikely(hv->closed))
 		return 0;
 
-	vf_dev = hv->vf_dev;
-	rte_compiler_barrier();
+	/* Transmit over VF if present and up */
+	vf_dev = hn_get_vf_dev(hv);
 
 	if (vf_dev && vf_dev->data->dev_started) {
 		/* Normally, with SR-IOV the ring buffer will be empty */
