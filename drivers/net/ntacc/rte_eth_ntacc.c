@@ -627,7 +627,7 @@ static uint16_t eth_ntacc_rx(void *queue,
 /*
  * Callback to handle sending packets through a real NIC.
  */
-static uint16_t eth_ntacc_tx(void *queue,
+static uint16_t eth_ntacc_tx_mode1(void *queue,
                              struct rte_mbuf **bufs,
                              uint16_t nb_pkts)
 {
@@ -717,6 +717,71 @@ static uint16_t eth_ntacc_tx(void *queue,
   tx_q->tx_pkts += i;
   tx_q->tx_bytes += bytes;
 #endif
+  return i;
+}
+
+static uint16_t eth_ntacc_tx_mode2(void *queue,
+                                   struct rte_mbuf **bufs,
+                                   uint16_t nb_pkts)
+{
+  unsigned i;
+  int ret;
+  struct ntacc_tx_queue *tx_q = queue;
+#ifdef USE_SW_STAT
+  uint32_t bytes=0;
+#endif
+
+  if (unlikely(tx_q == NULL || tx_q->pNetTx == NULL || nb_pkts == 0)) {
+    return 0;
+  }
+
+  for (i = 0; i < nb_pkts; i++) {
+    uint16_t wLen;
+    struct rte_mbuf *mbuf = bufs[i];
+    struct NtNetTxFragment_s frag[10]; // Need fragments enough for a jumbo packet */
+    uint8_t fragCnt = 0;
+    frag[fragCnt].data = rte_pktmbuf_mtod(mbuf, u_char *);
+    frag[fragCnt++].size = mbuf->data_len;
+    wLen = mbuf->data_len + 4;
+    if (unlikely(mbuf->nb_segs > 1)) {
+      while (mbuf->next) {
+        mbuf = mbuf->next;
+        frag[fragCnt].data = rte_pktmbuf_mtod(mbuf, u_char *);
+        frag[fragCnt++].size = mbuf->data_len;
+        wLen += mbuf->data_len;
+      }
+    }
+    /* Check if packet needs padding or is too big to transmit */
+    if (unlikely(wLen < tx_q->minTxPktSize)) {
+      frag[fragCnt].data = rte_pktmbuf_mtod(mbuf, u_char *);
+      frag[fragCnt++].size = tx_q->minTxPktSize - wLen;
+    }
+    if (unlikely(wLen > tx_q->maxTxPktSize)) {
+      /* Packet is too big. Drop it as an error and continue */
+#ifdef USE_SW_STAT
+      tx_q->err_pkts++;
+#endif
+      rte_pktmbuf_free(bufs[i]);
+      continue;
+    }
+    ret = (*_NT_NetTxAddPacket)(tx_q->pNetTx, tx_q->port, frag, fragCnt, 0);
+    if (unlikely(ret != NT_SUCCESS)) {
+      /* unsent packets is not expected to be freed */
+#ifdef USE_SW_STAT
+      tx_q->err_pkts++;
+#endif
+      break;
+    }
+#ifdef USE_SW_STAT
+    bytes += wLen;
+#endif
+    rte_pktmbuf_free(bufs[i]);
+  }
+#ifdef USE_SW_STAT
+  tx_q->tx_pkts += i;
+  tx_q->tx_bytes += bytes;
+#endif
+
   return i;
 }
 
@@ -822,15 +887,17 @@ static int eth_dev_start(struct rte_eth_dev *dev)
         }
         PMD_NTACC_LOG(DEBUG, "NT_NetTxOpen() Not optimal hostbuffer found on a neighbour numa node\n");
       }
-      /* Get the ring control structure */
-      NtNetTx_t cmd;
-      cmd.cmd = NT_NETTX_READ_CMD_GET_RING_CONTROL;
-      cmd.u.ringControl.port = internals->port;
-      if ((status = _NT_NetTxRead(tx_q[queue].pNetTx, &cmd)) != NT_SUCCESS) {
-        _log_nt_errors(status, "Failed to get ring control of the TX ring.", __func__);
-        goto StartError;
+      if (!internals->mode2Tx) {
+        /* Get the ring control structure */
+        NtNetTx_t cmd;
+        cmd.cmd = NT_NETTX_READ_CMD_GET_RING_CONTROL;
+        cmd.u.ringControl.port = internals->port;
+        if ((status = _NT_NetTxRead(tx_q[queue].pNetTx, &cmd)) != NT_SUCCESS) {
+          _log_nt_errors(status, "Failed to get ring control of the TX ring.", __func__);
+          goto StartError;
+        }
+        rte_memcpy(&tx_q[queue].ringControl, &cmd.u.ringControl, sizeof(tx_q[queue].ringControl));
       }
-      rte_memcpy(&tx_q[queue].ringControl, &cmd.u.ringControl, sizeof(tx_q[queue].ringControl));
     }
     tx_q[queue].plock = &port_locks[tx_q[queue].port];
   }
@@ -2615,6 +2682,13 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
       internals->keyMatcher = 1;
     }
 
+    if (pInfo->u.port_v7.data.adapterInfo.fpgaid.s.product == 9515) {
+      internals->mode2Tx = 1;
+    }
+    else {
+      internals->mode2Tx = 0;
+    }
+
     internals->version.major = version.major;
     internals->version.minor = version.minor;
     internals->version.patch = version.patch;
@@ -2705,7 +2779,14 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
 
     eth_dev->dev_ops = &ops;
     eth_dev->rx_pkt_burst = eth_ntacc_rx;
-    eth_dev->tx_pkt_burst = eth_ntacc_tx;
+
+    if (internals->mode2Tx) {
+      eth_dev->tx_pkt_burst = eth_ntacc_tx_mode2;
+    }
+    else {
+      eth_dev->tx_pkt_burst = eth_ntacc_tx_mode1;
+    }
+
     eth_dev->state = RTE_ETH_DEV_ATTACHED;
 
   #ifndef USE_SW_STAT
