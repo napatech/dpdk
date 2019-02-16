@@ -1462,3 +1462,227 @@ Fixes in 17.11 LTS Release
 * vhost: improve dirty pages logging performance
 * vhost: release locks on RARP packet failure
 * vhost: retranslate vring addr when memory table changes
+
+17.11.5
+~~~~~~~
+
+* acl: forbid rule with priority zero
+* app/pdump: fix port id storage size
+* app/procinfo: fix sprintf overrun
+* app/test-crypto-perf: fix check for auth key
+* app/test-crypto-perf: fix check for cipher IV
+* app/test-crypto-perf: fix double allocation of memory
+* app/testpmd: check Rx VLAN offload flag to print VLAN TCI
+* app/testpmd: fix csum parse-tunnel command invocation
+* app/testpmd: fix duplicate exit
+* app/testpmd: fix L4 length for UDP checksum
+* app/testpmd: fix memory leak for TM object
+* app/testpmd: fix metering and policing commands
+* app/testpmd: fix physical port socket initialization
+* app/testpmd: fix printf format in event callback
+* app/testpmd: fix RED byte stats
+* app/testpmd: fix shaper profile parameters
+* app/testpmd: fix vdev socket initialization
+* app/testpmd: optimize mbuf pool allocation
+* app/testpmd: reserve NUMA node per port and per ring
+* build: enable ARM NEON flag when __aarch64__ defined
+* bus/dpaa: fix build with gcc 9.0
+* bus/dpaa: fix inconsistent struct alignment
+* bus/pci: compare kernel driver instead of interrupt handler
+* bus/pci: fix allocation of device path
+* bus/pci: fix config r/w access
+* bus/pci: replace strncpy by strlcpy
+* crypto/aesni_mb: fix possible array overrun
+* crypto/mvsam: update hash digest sizes
+* crypto/scheduler: fix build with gcc 8.2
+* devtools: provide more generic grep in git check
+* doc: add cross-compilation in sample apps guide
+* doc: add VFIO in ENA guide
+* doc: clarify L3 Tx checksum prerequisite
+* doc: clarify L4 Tx checksum prerequisite
+* doc: clarify TSO Tx offload prerequisite
+* doc: fix formatting in IP reassembly app guide
+* doc: fix missing CCM to QAT feature list
+* doc: fix NUMA library name in Linux guide
+* doc: fix spelling in PMD guides
+* doc: fix style and syntax in flow API guide
+* doc: fix typo in testpmd guide
+* doc: fix typos in the flow API guide
+* doc: fix wrong usage of bind command
+* eal/arm64: fix instrinsic for GCC < 4.9
+* eal: declare trace buffer at top of own block
+* eal: explicit cast in constant byte swap
+* eal: explicit cast in rwlock functions
+* eal: explicit cast of builtin for bsf32
+* eal: explicit cast of core id when getting index
+* eal: explicit cast of strlcpy return
+* eal: fix build
+* eal: fix build with gcc 9.0
+* eal: fix build with -O1
+* eal: fix casts in random functions
+* eal: introduce rte version of fls
+* eal/linux: fix memory leak of logid
+* eal/linux: handle UIO read failure in interrupt handler
+* eal: support strlcpy function
+* eal: use correct data type for bitmap slab operations
+* eal/x86: fix type of variable in memcpy function
+* eal/x86: remove unused memcpy file
+* efd: fix write unlock during ring creation
+* ethdev: explicit cast of buffered Tx number
+* ethdev: explicit cast of queue count return
+* ethdev: fix doxygen comment to be with structure
+* ethdev: fix queue start and stop
+* ethdev: fix type and scope of variables in Rx burst
+* eventdev: fix eth Rx adapter hotplug incompatibility
+* eventdev: fix unlock in Rx adapter
+* event/sw: fix cq index check for unlink usecases
+* examples/flow_filtering: remove VLAN item
+* examples/ipv4_multicast: fix leak of cloned packets
+* examples/vhost: remove unnecessary constant
+* fix dpdk.org URLs
+* gro: fix overflow of TCP payload calculation
+* hash: explicit casts for truncation in CRC32c
+* hash: move stack declaration at top of CRC32c function
+* igb_uio: fix refcount if open returns error
+* ip_frag: fix overflow in key comparison
+* ip_frag: use key length for key comparison
+* kni: fix build on Linux < 3.14
+* kni: fix build on Linux 4.19
+* kni: fix kernel FIFO synchronization
+* kni: fix possible uninitialized variable
+* kvargs: fix processing a null list
+* latency: fix timestamp marking and latency calculation
+* mbuf: avoid implicit demotion in 64-bit arithmetic
+* mbuf: avoid integer promotion in prepend/adj/chain
+* mbuf: explicit cast of headroom on reset
+* mbuf: explicit cast of size on detach
+* mbuf: explicit casts of reference counter
+* mbuf: fix reference counter integer promotion
+* mbuf: fix Tx offload mask
+* mbuf: fix type of private size in detach
+* mbuf: fix type of variables in linearize function
+* mem: fix memory initialization time
+* mem: fix undefined behavior in NUMA-aware mapping
+* mk: disable gcc AVX512F support
+* net/bnx2x: fix call to link handling periodic function
+* net/bnx2x: fix logging to include device name
+* net/bnx2x: fix to add PHY lock
+* net/bnx2x: fix to disable further interrupts
+* net/bnx2x: fix VF link state update
+* net/bnxt: fix registration of VF async event completion ring
+* net/bnxt: fix uninitialized pointer access in Tx
+* net/bnxt: set MAC filtering as outer for non tunnel frames
+* net/bnxt: set VLAN strip mode before default VNIC cfg
+* net/bonding: do not ignore RSS key on device config
+* net/bonding: fix crash when stopping mode 4 port
+* net/bonding: fix possible silent failure in config
+* net/bonding: fix Rx slave fairness
+* net/bonding: stop and deactivate slaves on stop
+* net/bonding: support matching QinQ ethertype
+* net/bonding: use evenly distributed default RSS RETA
+* net/e1000/base: fix uninitialized variable
+* net/e1000: do not error out if Rx drop enable is set
+* net/ena: fix passing RSS hash to mbuf
+* net/enic: do not use non-standard integer types
+* net/enic: fix flow API memory leak
+* net/enic: set Rx VLAN offload flag for non-stripped packets
+* net: explicit cast in L4 checksum
+* net: explicit cast of IP checksum to 16-bit
+* net: explicit cast of multicast bit clearing
+* net: explicit cast of protocol in IPv6 checksum
+* net/failsafe: add checks for deferred queue setup
+* net/failsafe: fix crash on slave queue release
+* net/failsafe: remove not supported multicast MAC filter
+* net: fix build with pedantic
+* net: fix Intel prepare function for IP checksum offload
+* net/i40e/base: correct global reset timeout calculation
+* net/i40e/base: fix comment referencing internal data
+* net/i40e/base: gracefully clean the resources
+* net/i40e/base: properly clean resources
+* net/i40e: enable loopback function for X722 MAC
+* net/i40e: fix link status update
+* net/i40e: fix offload not supported mask
+* net/i40e: fix send admin queue command before init
+* net/i40e: fix X710 Rx after reading some registers
+* net/i40e: keep promiscuous on if allmulticast is enabled
+* net/i40e: update Tx offload mask
+* net/igb: update Tx offload mask
+* net/ixgbe: fix busy polling while fiber link update
+* net/ixgbe: fix maximum wait time in comment
+* net/ixgbe: stop link setup alarm handler before device start
+* net/ixgbe: update Tx offload mask
+* net/ixgbevf: fix link state
+* net/ixgbe: wait longer for link after fiber MAC setup
+* net/mlx4: fix possible uninitialized variable
+* net/mlx5: add Bluefield device id
+* net/mlx5: disable ConnectX-4 Lx Multi Packet Send by default
+* net/mlx5: fix initialization of struct members
+* net/mlx5: fix interrupt completion queue index wrapping
+* net/mlx5: fix multi-chunk mempool support
+* net/mlx5: make vectorized Tx threshold configurable
+* net/mlx5: optimize Rx buffer replenishment threshold
+* net: move stack variable at top of VLAN strip function
+* net/mvpp2: fix array initialization
+* net/nfp: fix mbuf flags with checksum good
+* net/nfp: fix memcpy out of source range
+* net/nfp: fix misuse of strlcpy
+* net/nfp: fix RSS
+* net/nfp: replace strncpy by strlcpy
+* net/octeontx: fix failures when available ports > queues
+* net/octeontx: fix mbuf corruption with large private sizes
+* net/octeontx: fix packet corruption on Tx
+* net/qede/base: fix MFW FLR flow
+* net/qede/base: fix to handle stag update event
+* net/qede: fix crash when configure fails
+* net/qede: fix ethernet type in HW registers
+* net/qede: fix flow director for IPv6 filter
+* net/qede: fix Rx buffer size calculation
+* net/qede: fix strncpy
+* net/qede: fix Tx offload mask
+* net/qede: fix Tx tunnel offload support mask
+* net/qede: replace strncpy by strlcpy
+* net/sfc: allow to query RSS key and HF in isolated mode
+* net/sfc: allow to query RSS key and HF when RSS is disabled
+* net/sfc/base: avoid usage of too big arrays on stack
+* net/sfc/base: check size of memory to read sensors data to
+* net/sfc/base: fix a typo in unicast filter insertion comment
+* net/sfc/base: fix build because of no declaration
+* net/sfc/base: fix ID retrieval in v3 licensing
+* net/sfc/base: fix MAC Tx stats for less or equal to 64 bytes
+* net/sfc/base: fix out of bounds read when dereferencing sdup
+* net/sfc/base: fix PreFAST warnings because of unused return
+* net/sfc/base: fix SAL annotation for input buffers
+* net/sfc/base: make last byte of module information available
+* net/sfc/base: prevent access to the NIC config before probe
+* net/sfc/base: properly align on line continuation
+* net/sfc/base: remove Falcon-specific concurrency check
+* net/sfc: do not skip RSS configuration step on reconfigure
+* net/sfc: fix an Rx queue double release possibility
+* net/sfc: fix a Tx queue double release possibility
+* net/sfc: make sure that stats name is nul-terminated
+* net/sfc: receive prepared packets even in Rx exception case
+* net/softnic: fix undefined dev info fields
+* net/tap: fix file descriptor check
+* net/thunderx: fix Tx desc corruption in scatter-gather mode
+* net/vhost: fix parameters string
+* net/virtio: fix PCI config error handling
+* net/virtio: fix unchecked return value
+* net/virtio: register/unregister intr handler on start/stop
+* net/virtio-user: check negotiated features before set
+* net/virtio-user: do not reset owner when driver resets
+* net/virtio-user: fix typo in error message
+* pci: fix parsing of address without function number
+* ring: remove signed type flip-flopping
+* ring: remove useless variables
+* spinlock/x86: move stack declaration before code
+* table: fix casting cuckoo hash function
+* test/crypto: fix number of queue pairs
+* test/event: check burst mode capability
+* test/hash: fix bucket size in perf test
+* test/hash: fix build
+* test: release ring resources after PMD perf test
+* test/reorder: fix out of bound access
+* usertools: check for lspci dependency
+* vfio: do not needlessly setup device in secondary process
+* vhost: fix corner case for enqueue operation
+* vhost: remove unneeded null pointer check
