@@ -379,7 +379,7 @@ static __rte_always_inline uint16_t eth_ntacc_convert_pkt_to_mbuf(NtDyn3Descr_t 
     mbuf->ol_flags |= PKT_RX_TIMESTAMP;
   }
   mbuf->port = rx_q->in_port + (dyn3->rxPort - rx_q->local_port);
-  const uint16_t data_len = (uint16_t)(dyn3->capLength - dyn3->descrLength - 4);
+  const uint16_t data_len = (uint16_t)(dyn3->capLength - dyn3->descrLength);
 
 #ifdef USE_EXTERNAL_BUFFER
   uint8_t *pData = (uint8_t *)dyn3 + dyn3->descrLength;
@@ -397,7 +397,6 @@ static __rte_always_inline uint16_t eth_ntacc_convert_pkt_to_mbuf(NtDyn3Descr_t 
   mbuf->data_off = dyn3->offset0;
 #endif
 #else
-  const uint16_t data_len = (uint16_t)(dyn3->capLength - dyn3->descrLength - 4);
   if (likely(data_len <= rx_q->buf_size)) {
     /* Packet will fit in the mbuf, go ahead and copy */
     mbuf->pkt_len = mbuf->data_len = data_len;
@@ -411,7 +410,7 @@ static __rte_always_inline uint16_t eth_ntacc_convert_pkt_to_mbuf(NtDyn3Descr_t 
       return 0;
   }
 #endif
-  return data_len + 4;
+  return data_len;
 }
 
 
@@ -483,8 +482,8 @@ static uint16_t eth_ntacc_rx(void *queue,
       offR -= (2*rx_q->ringControl.size);
     }
 #ifdef USE_EXTERNAL_BUFFER
-  struct externalBufferInfo_s *pInfo = mbuf->buf_addr;
-  pInfo->offR = offR;
+    struct externalBufferInfo_s *pInfo = mbuf->shinfo->fcb_opaque;
+    pInfo->offR = offR;
 #endif
   }
 #ifndef USE_EXTERNAL_BUFFER
