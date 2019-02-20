@@ -297,156 +297,11 @@ static void eth_ntacc_rx_ext_buffer_release(void *addr __rte_unused, void *opaqu
 {
   struct externalBufferInfo_s *pInfo = (struct externalBufferInfo_s *)opaque;
 
-  if (pInfo->rx_q) {
-    *(pInfo->rx_q->ringControl.pRead) = pInfo->offR;
-    pInfo->rx_q->offR = pInfo->offR;;
+  if (pInfo->rx_q->oCnt++ != pInfo->cnt) {
+    PMD_NTACC_LOG(ERR, "Out of order release detected while running ext buffer mode.\n");
+    abort();
   }
-  pInfo->rx_q = NULL;
-}
-
-static __rte_always_inline uint16_t eth_ntacc_convert_pkt_to_mbuf(NtDyn3Descr_t *dyn3,
-                                                                  struct rte_mbuf *mbuf,
-                                                                  struct ntacc_rx_queue *rx_q,
-                                                                  struct externalBufferInfo_s **pInfo)
-{
-  uint16_t data_len;
-  uint8_t *pData;
-  uint8_t descLen;
-
-  rte_pktmbuf_reset(mbuf);
-  rte_mbuf_refcnt_set(mbuf, 1);
-
-  descLen = dyn3->descrLength;
-
-  switch (descLen)
-  {
-  case 22:
-    // We do have a color value defined
-    mbuf->hash.fdir.hi = ((dyn3->color_hi << 14) & 0xFFFFC000) | dyn3->color_lo;
-    mbuf->ol_flags |= PKT_RX_FDIR_ID | PKT_RX_FDIR;
-    break;
-  case 24:
-    // We do have a colormask set for protocol lookup
-    mbuf->packet_type = ((dyn3->color_hi << 14) & 0xFFFFC000) | dyn3->color_lo;
-    if (mbuf->packet_type != 0) {
-      mbuf->hash.fdir.lo = dyn3->offset0;
-      mbuf->hash.fdir.hi = dyn3->offset1;
-      mbuf->ol_flags |= PKT_RX_FDIR_FLX | PKT_RX_FDIR;
-    }
-    break;
-  case 26:
-    // We do have a hash value defined
-    mbuf->hash.rss = dyn3->color_hi;
-    mbuf->ol_flags |= PKT_RX_RSS_HASH;
-    break;
-  }
-
-  if (rx_q->tsMultiplier) {
-    mbuf->timestamp = dyn3->timestamp * rx_q->tsMultiplier;
-    mbuf->ol_flags |= PKT_RX_TIMESTAMP;
-  }
-  mbuf->port = rx_q->in_port + (dyn3->rxPort - rx_q->local_port);
-  data_len = (uint16_t)(dyn3->capLength - descLen - 4);
-
-  pData = (uint8_t *)dyn3 + descLen;
-  *pInfo = mbuf->buf_addr;
-  (*pInfo)->shinfo.free_cb = eth_ntacc_rx_ext_buffer_release;
-  (*pInfo)->shinfo.fcb_opaque = *pInfo;
-  (*pInfo)->rx_q = NULL;
-
-  rte_mbuf_ext_refcnt_set(&(*pInfo)->shinfo, 1);
-  rte_pktmbuf_attach_extbuf(mbuf, pData, 0, data_len, &(*pInfo)->shinfo);
-
-  mbuf->pkt_len = mbuf->data_len = data_len;
-
-#ifdef COPY_OFFSET0
-  mbuf->data_off = dyn3->offset0;
-#endif
-  return data_len + 4;
-}
-
-static __rte_always_inline void eth_ntacc_rx_get_ring(struct ntacc_rx_queue *rx_q)
-{
-  int status;
-  NtNetRx_t cmd;
-  cmd.cmd = NT_NETRX_READ_CMD_GET_RING_CONTROL;
-  if ((status = _NT_NetRxRead(rx_q->pNetRx, &cmd)) != NT_SUCCESS) {
-    if (status != NT_STATUS_TRYAGAIN) {
-      _log_nt_errors(status, "Failed to get ring control of the RX ring", __func__);
-    }
-    return;
-  }
-  rte_memcpy(&rx_q->ringControl, &cmd.u.ringControl, sizeof(rx_q->ringControl));
-  rx_q->offR = *rx_q->ringControl.pRead;
-  rx_q->offW = *rx_q->ringControl.pWrite & rx_q->ringControl.mask;
-}
-
-static uint16_t eth_ntacc_rx(void *queue,
-                           struct rte_mbuf **bufs,
-                           const uint16_t nb_pkts)
-{
-  struct ntacc_rx_queue *rx_q = queue;
-  struct externalBufferInfo_s *pInfo = NULL;
-
-  if (unlikely(rx_q->pNetRx == NULL || nb_pkts == 0)) {
-    return 0;
-  }
-
-  if (unlikely(rx_q->ringControl.ring == NULL)) {
-    eth_ntacc_rx_get_ring(rx_q);
-    return 0;
-  }
-
-  uint64_t offR = rx_q->offR;
-  uint64_t offW = rx_q->offW;
-
-  /* Check if we have packets */
-  if (unlikely(offR == offW)) {
-    rx_q->offW = *rx_q->ringControl.pWrite & rx_q->ringControl.mask;
-    return 0;
-  }
-
-  /* Allocate buffers */
-  if (unlikely(rte_mempool_get_bulk(rx_q->mb_pool, (void **)bufs, nb_pkts) != 0)) {
-    return 0;
-  }
-
-  uint16_t num_rx = 0;
-  uint32_t bytes = 0;
-  uint8_t *ring;
-  if (offR > rx_q->ringControl.size) {
-    ring = rx_q->ringControl.ring + (offR - rx_q->ringControl.size);
-  }
-  else {
-    ring = rx_q->ringControl.ring + offR;
-  }
-
-  while((offR != offW) && (num_rx < nb_pkts)) {
-    struct rte_mbuf *mbuf = bufs[num_rx];
-    NtDyn3Descr_t *dyn3 = (NtDyn3Descr_t*)(ring);
-    bytes += eth_ntacc_convert_pkt_to_mbuf(dyn3, mbuf, rx_q, &pInfo);
-    num_rx++;
-
-    offR += dyn3->capLength;
-    ring += dyn3->capLength;
-    if (offR >= (2*rx_q->ringControl.size)) {
-      offR -= (2*rx_q->ringControl.size);
-    }
-  }
-
-  /* Set the HW pointers to be refreshed when the packet is released */
-  pInfo->rx_q = rx_q;
-  pInfo->offR = offR;
-
-  #ifdef USE_SW_STAT
-  rx_q->rx_pkts+=num_rx;
-  rx_q->rx_bytes+=bytes;
-  #endif
-
-  if (unlikely(num_rx < nb_pkts)) {
-    rte_mempool_put_bulk(rx_q->mb_pool, (void * const *)(bufs + num_rx), nb_pkts-num_rx);
-  }
-  return num_rx;
+  *(pInfo->rx_q->ringControl.pRead) = pInfo->offR;
 }
 #else
 static int eth_ntacc_rx_jumbo(struct rte_mempool *mb_pool,
@@ -487,6 +342,7 @@ static int eth_ntacc_rx_jumbo(struct rte_mempool *mb_pool,
   }
   return mbuf->nb_segs;
 }
+#endif
 
 static __rte_always_inline uint16_t eth_ntacc_convert_pkt_to_mbuf(NtDyn3Descr_t *dyn3,
                                                                   struct rte_mbuf *mbuf,
@@ -523,7 +379,24 @@ static __rte_always_inline uint16_t eth_ntacc_convert_pkt_to_mbuf(NtDyn3Descr_t 
     mbuf->ol_flags |= PKT_RX_TIMESTAMP;
   }
   mbuf->port = rx_q->in_port + (dyn3->rxPort - rx_q->local_port);
+  const uint16_t data_len = (uint16_t)(dyn3->capLength - dyn3->descrLength - 4);
 
+#ifdef USE_EXTERNAL_BUFFER
+  uint8_t *pData = (uint8_t *)dyn3 + dyn3->descrLength;
+  struct externalBufferInfo_s *pInfo = mbuf->buf_addr;
+  pInfo->shinfo.free_cb = eth_ntacc_rx_ext_buffer_release;
+  pInfo->shinfo.fcb_opaque = pInfo;
+  pInfo->rx_q = rx_q;
+  pInfo->cnt = rx_q->iCnt++;
+
+  rte_mbuf_ext_refcnt_set(&pInfo->shinfo, 1);
+  rte_pktmbuf_attach_extbuf(mbuf, pData, 0, data_len, &pInfo->shinfo);
+
+  mbuf->pkt_len = mbuf->data_len = data_len;
+#ifdef COPY_OFFSET0
+  mbuf->data_off = dyn3->offset0;
+#endif
+#else
   const uint16_t data_len = (uint16_t)(dyn3->capLength - dyn3->descrLength - 4);
   if (likely(data_len <= rx_q->buf_size)) {
     /* Packet will fit in the mbuf, go ahead and copy */
@@ -537,6 +410,7 @@ static __rte_always_inline uint16_t eth_ntacc_convert_pkt_to_mbuf(NtDyn3Descr_t 
     if (unlikely(eth_ntacc_rx_jumbo(rx_q->mb_pool, mbuf, (uint8_t*)dyn3 + dyn3->descrLength, data_len) == -1))
       return 0;
   }
+#endif
   return data_len + 4;
 }
 
@@ -608,9 +482,16 @@ static uint16_t eth_ntacc_rx(void *queue,
     if (offR >= (2*rx_q->ringControl.size)) {
       offR -= (2*rx_q->ringControl.size);
     }
+#ifdef USE_EXTERNAL_BUFFER
+  struct externalBufferInfo_s *pInfo = mbuf->buf_addr;
+  pInfo->offR = offR;
+#endif
   }
+#ifndef USE_EXTERNAL_BUFFER
   /* Refresh the HW pointer */
   *rx_q->ringControl.pRead = offR;
+#endif
+
   rx_q->offR = offR;
 
 #ifdef USE_SW_STAT
@@ -623,7 +504,7 @@ static uint16_t eth_ntacc_rx(void *queue,
   }
   return num_rx;
 }
-#endif
+
 /*
  * Callback to handle sending packets through a real NIC.
  */
@@ -969,7 +850,7 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
   shmctl(internals->shmid, IPC_RMID, NULL);
 }
 
-static int eth_dev_configure(struct rte_eth_dev *dev __rte_unused)
+static int eth_dev_configure(struct rte_eth_dev *dev)
 {
   struct pmd_internals *internals = dev->data->dev_private;
   if (dev->data->dev_conf.rxmode.mq_mode == ETH_MQ_RX_RSS) {
@@ -998,6 +879,8 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
 
   dev_info->rx_offload_capa = DEV_RX_OFFLOAD_JUMBO_FRAME |
                               DEV_RX_OFFLOAD_TIMESTAMP   |
+                              DEV_RX_OFFLOAD_CRC_STRIP |
+                              DEV_RX_OFFLOAD_KEEP_CRC |
                               DEV_RX_OFFLOAD_SCATTER;
 
   dev_info->rx_queue_offload_capa = dev_info->rx_offload_capa;
@@ -2040,6 +1923,11 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
     case NO_COLOR:
       // do nothing
       break;
+    }
+
+	  if (rte_eth_dev_must_keep_crc(dev->data->dev_conf.rxmode.offloads) == 0) {
+      // Remove FCS
+      snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ";Slice=EndOfFrame[-4]");
     }
 
     // Set the tag name

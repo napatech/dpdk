@@ -86,6 +86,8 @@ enum {
 };
 
 struct ntacc_rx_queue {
+  uint64_t iCnt;
+  uint64_t oCnt;
   uint64_t offW;
   uint64_t offR;
   struct NtNetRxHbRing_s ringControl;
@@ -239,6 +241,7 @@ struct externalBufferInfo_s {
   struct ntacc_rx_queue           *rx_q;
   uint64_t                        offR;
   struct rte_mbuf_ext_shared_info shinfo;
+  uint64_t cnt;
 };
 #endif
 
