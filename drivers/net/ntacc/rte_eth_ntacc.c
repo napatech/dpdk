@@ -2229,6 +2229,12 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
 #else
       snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=62;Descriptor=DYN3,length=26,colorbits=14;");
 #endif
+
+      if ((dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_KEEP_CRC) == 0) {
+        // Remove FCS
+        snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "Slice=EndOfFrame[-4];");
+      }
+      
       if (internals->rss_hf != 0) {
         struct rte_flow_action_rss rss;
         memset(&rss, 0, sizeof(struct rte_flow_action_rss));
