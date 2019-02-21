@@ -209,6 +209,7 @@ struct pmd_internals {
   key_t                 key;
   pthread_mutexattr_t   psharedm;
   struct pmd_shared_mem_s *shm;
+  uint32_t              dropId;
   uint32_t              keyMatcher:1;
   uint32_t              mode2Tx:1;
 };

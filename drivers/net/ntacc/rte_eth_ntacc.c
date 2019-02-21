@@ -665,6 +665,44 @@ static uint16_t eth_ntacc_tx_mode2(void *queue,
   return i;
 }
 
+
+static int _create_drop_errored_packets_filter(struct pmd_internals *internals) {
+  /* Create a default filter to drop all error packets */
+  char *ntpl_buf = rte_malloc(internals->name, NTPL_BSIZE + 1, 0);
+  if (!ntpl_buf) {
+    _log_out_of_memory_errors(__func__);
+    return -ENOMEM;
+  }
+  snprintf(ntpl_buf, NTPL_BSIZE, "Assign[streamid=Drop;priority=0;tag=%s] = ((CvError == True) OR (CrcError == True) OR (Truncated == True)) AND port == %d", internals->tagName, internals->port);
+  NTACC_LOCK(&internals->configlock);
+  internals->dropId = ~0;
+  int status = DoNtpl(ntpl_buf, &internals->dropId, internals, NULL);
+  NTACC_UNLOCK(&internals->configlock);
+  rte_free(ntpl_buf);
+  if (status != 0) {
+    _log_nt_errors(status, "Failed to create error drop filter", __func__);
+    return -1;
+  }
+  return 0;
+}
+
+static int _destroy_drop_errored_packets_filter(struct pmd_internals *internals) {
+  /* Create a default filter to drop all error packets */
+  char *ntpl_buf = rte_malloc(internals->name, NTPL_BSIZE + 1, 0);
+  if (!ntpl_buf) {
+    _log_out_of_memory_errors(__func__);
+    return -ENOMEM;
+  }
+  if (internals->dropId != (uint32_t)~0) {
+    snprintf(ntpl_buf, NTPL_BSIZE, "Delete=%d", internals->dropId);
+    NTACC_LOCK(&internals->configlock);
+    DoNtpl(ntpl_buf, NULL, internals, NULL);
+    NTACC_UNLOCK(&internals->configlock);
+    rte_free(ntpl_buf);
+  }
+  return 0;
+}
+
 static int eth_dev_start(struct rte_eth_dev *dev)
 {
   struct pmd_internals *internals = dev->data->dev_private;
@@ -747,6 +785,8 @@ static int eth_dev_start(struct rte_eth_dev *dev)
   _dev_flow_isolate(dev, 0, &error);
 #endif
 
+  _create_drop_errored_packets_filter(internals);
+
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
     if (rx_q[queue].enabled) {
       if ((status = (*_NT_NetRxOpen)(&rx_q[queue].pNetRx, "DPDK", NT_NET_INTERFACE_SEGMENT, rx_q[queue].stream_id, -1)) != NT_SUCCESS) {
@@ -805,6 +845,8 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
   PMD_NTACC_LOG(DEBUG, "Stopping port %u (%u) on adapter %u\n", internals->port, deviceCount, internals->adapterNo);
   _dev_flow_isolate(dev, 1, &error);
   _dev_flow_flush(dev, &error);
+  _destroy_drop_errored_packets_filter(internals);
+
   for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
     if (rx_q[queue].enabled) {
       if (rx_q[queue].pSeg) {
@@ -878,7 +920,6 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
 
   dev_info->rx_offload_capa = DEV_RX_OFFLOAD_JUMBO_FRAME |
                               DEV_RX_OFFLOAD_TIMESTAMP   |
-                              DEV_RX_OFFLOAD_CRC_STRIP |
                               DEV_RX_OFFLOAD_KEEP_CRC |
                               DEV_RX_OFFLOAD_SCATTER;
 
@@ -1924,7 +1965,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       break;
     }
 
-	  if (rte_eth_dev_must_keep_crc(dev->data->dev_conf.rxmode.offloads) == 0) {
+	  if ((dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_KEEP_CRC) == 0) {
       // Remove FCS
       snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ";Slice=EndOfFrame[-4]");
     }
