@@ -1128,7 +1128,7 @@ int SetEthernetFilter(const struct rte_flow_item *item,
   const struct rte_flow_item_eth *mask = (const struct rte_flow_item_eth *)item->mask;
   const struct rte_flow_item_eth *last = (const struct rte_flow_item_eth *)item->last;
 
-  if (internals->keyMatcher == 0) {
+  if ((spec || mask || last) && internals->keyMatcher == 0) {
     rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL, "Ethernet filter not supported for this adapter");
     return -1;
   }
