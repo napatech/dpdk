@@ -2128,7 +2128,7 @@ static inline int _programFlowNtpl(struct pmd_internals *internals, struct rte_f
     if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[5], internals, error) != 0) {
       return 1;
     }
-    snprintf(ntpl_buf, 156, "KeyDef[name=DOWN%u;KeyType=KT%u;prot=OUTER;tag=port%u]=(Layer3Header[16]/32,Layer3Header[12]/32,Layer4Header[2]/16,Layer4Header[0]/16)", idv4, idv4, port);
+    snprintf(ntpl_buf, 156, "KeyDef[name=DOWN%u;KeyType=KT%u;prot=OUTER;tag=port%u]=(Layer3Header[16]/32,Layer3Header[12]/32,Layer4Header[2]/16,Layer4Header[0]/16)", idv4, idv4, internals->port);
     if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[4], internals, error) != 0) {
       return 1;
     }
@@ -2137,7 +2137,7 @@ static inline int _programFlowNtpl(struct pmd_internals *internals, struct rte_f
     if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[3], internals, error) != 0) {
       return 1;
     }
-    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;tag=port%u]=(Layer3Protocol==IPV4)and(port==%u)and(Key(DOWN%u,KeyID=%u,Counterset=CSB)==%u)", port, port, idv4, idv4, internals->flow.up.key[DROP]);
+    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;tag=port%u]=(Layer3Protocol==IPV4)and(port==%u)and(Key(DOWN%u,KeyID=%u,Counterset=CSB)==%u)", internals->port, port, idv4, idv4, internals->flow.up.key[DROP]);
     if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[2], internals, error) != 0) {
       return 1;
     }
@@ -2146,7 +2146,7 @@ static inline int _programFlowNtpl(struct pmd_internals *internals, struct rte_f
     if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[1], internals, error) != 0) {
       return 1;
     }
-    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;DestinationPort=%u;tag=port%u]=(Layer3Protocol==IPV4)and(port==%u)and(Key(DOWN%u,KeyID=%u,Counterset=CSB)==%u)", internals->port, port, port, idv4, idv4, internals->flow.up.key[FORWARD]);
+    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;DestinationPort=%u;tag=port%u]=(Layer3Protocol==IPV4)and(port==%u)and(Key(DOWN%u,KeyID=%u,Counterset=CSB)==%u)", internals->port, internals->port, port, idv4, idv4, internals->flow.up.key[FORWARD]);
     if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[0], internals, error) != 0) {
       return 1;
     }
@@ -2160,7 +2160,7 @@ static inline int _programFlowNtpl(struct pmd_internals *internals, struct rte_f
     if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[5], internals, error) != 0) {
       return 1;
     }
-    snprintf(ntpl_buf, 156, "KeyDef[name=DOWN%u;KeyType=KT%u;prot=OUTER;tag=port%u]=(Layer3Header[24]/128,Layer3Header[8]/128,Layer4Header[2]/16,Layer4Header[0]/16)", idv6, idv6, port);
+    snprintf(ntpl_buf, 156, "KeyDef[name=DOWN%u;KeyType=KT%u;prot=OUTER;tag=port%u]=(Layer3Header[24]/128,Layer3Header[8]/128,Layer4Header[2]/16,Layer4Header[0]/16)", idv6, idv6, internals->port);
     if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[4], internals, error) != 0) {
       return 1;
     }
@@ -2169,7 +2169,7 @@ static inline int _programFlowNtpl(struct pmd_internals *internals, struct rte_f
     if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[3], internals, error) != 0) {
       return 1;
     }
-    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;tag=port%u]=(Layer3Protocol==IPV6)and(port==%u)and(Key(DOWN%u,KeyID=%u,Counterset=CSB)==%u)", port, port, idv6, idv6, internals->flow.up.key[DROP]);
+    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;tag=port%u]=(Layer3Protocol==IPV6)and(port==%u)and(Key(DOWN%u,KeyID=%u,Counterset=CSB)==%u)", internals->port, port, idv6, idv6, internals->flow.up.key[DROP]);
     if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[2], internals, error) != 0) {
       return 1;
     }
@@ -2178,7 +2178,7 @@ static inline int _programFlowNtpl(struct pmd_internals *internals, struct rte_f
     if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[1], internals, error) != 0) {
       return 1;
     }
-    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;DestinationPort=%u;tag=port%u]=(Layer3Protocol==IPV6)and(port==%u)and(Key(DOWN%u,KeyID=%u,Counterset=CSB)==%u)", internals->port, port, port, idv6, idv6, internals->flow.up.key[FORWARD]);
+    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;DestinationPort=%u;tag=port%u]=(Layer3Protocol==IPV6)and(port==%u)and(Key(DOWN%u,KeyID=%u,Counterset=CSB)==%u)", internals->port, internals->port, port, idv6, idv6, internals->flow.up.key[FORWARD]);
     if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[0], internals, error) != 0) {
       return 1;
     }
