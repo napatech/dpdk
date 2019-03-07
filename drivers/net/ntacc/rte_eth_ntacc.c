@@ -75,7 +75,7 @@ int ntacc_logtype;
 
 #define MAX_NTPL_NAME 512
 
-struct supportedDriver_s supportedDriver = {3, 7, 2};
+struct supportedDriver_s supportedDriver = {3, 11, 0};
 
 #define PCI_VENDOR_ID_NAPATECH 0x18F4
 #define PCI_DEVICE_ID_NT200A01 0x01A5
@@ -103,6 +103,8 @@ struct supportedAdapters_s supportedAdapters[NB_SUPPORTED_FPGAS] =
   { 200, 9523, 10, 7, 0 },
   { 200, 7000, 12, 0, 0 },
   { 200, 7001, 12, 0, 0 },
+  { 200, 9521, 18, 11, 0 },
+  { 200, 9526, 18, 10, 0 },
 };
 
 static void *_libnt;
@@ -917,6 +919,16 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
   dev_info->max_rx_queues = STREAMIDS_PER_PORT > RTE_ETHDEV_QUEUE_STAT_CNTRS ? RTE_ETHDEV_QUEUE_STAT_CNTRS : STREAMIDS_PER_PORT;
   dev_info->max_tx_queues = STREAMIDS_PER_PORT > RTE_ETHDEV_QUEUE_STAT_CNTRS ? RTE_ETHDEV_QUEUE_STAT_CNTRS : STREAMIDS_PER_PORT;
   dev_info->min_rx_bufsize = 64;
+
+  // Not used by the Napatech adapter
+  // but necessary in order to get ethtool
+  // example to work
+  dev_info->rx_desc_lim.nb_max = 8192;
+  dev_info->rx_desc_lim.nb_min = 32;
+  dev_info->rx_desc_lim.nb_align = 32;
+  dev_info->tx_desc_lim.nb_max = 8192;
+  dev_info->tx_desc_lim.nb_min = 32;
+  dev_info->tx_desc_lim.nb_align = 32;
 
   dev_info->rx_offload_capa = DEV_RX_OFFLOAD_JUMBO_FRAME |
                               DEV_RX_OFFLOAD_TIMESTAMP   |
@@ -2287,8 +2299,19 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
   return 0;
 }
 
+static int _dev_flow_validate(struct rte_eth_dev *dev __rte_unused, 
+                         		  const struct rte_flow_attr *attr __rte_unused,
+                        		  const struct rte_flow_item items[] __rte_unused,
+                        		  const struct rte_flow_action actions[] __rte_unused,
+                        		  struct rte_flow_error *error __rte_unused)
+{
+  // As many of the examples uses this function
+  // it is added as a dummy function. No validation is done
+  return 0;
+}
+
 static const struct rte_flow_ops _dev_flow_ops = {
-  .validate = NULL,
+  .validate = _dev_flow_validate,
   .create = _dev_flow_create,
   .destroy = _dev_flow_destroy,
   .flush = _dev_flow_flush,

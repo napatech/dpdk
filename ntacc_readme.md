@@ -15,27 +15,28 @@ The NTACC PMD driver does not need to be bound. This means that the dpdk-devbind
 	1. [Statistics update interval](#statinterval)
 4. [Number of RX queues and TX queues available](#queues)
 5. [Starting NTACC PMD](#starting)
-6. [Priority](#Priority)
-7. [Generic rte_flow filter items](#genericflow)
-8. [Generic rte_flow RSS/Hash functions](#hash)
-9. [Generic rte_flow filter Attributes](#attributes)
-10. [Generic rte_flow filter actions](#actions)
-11. [Generic rte_flow RSS/Hash functions](#hash)
+6. [DPDK Sample applications supported by the Napatech adapter](#sampleapps)
+7. [Priority](#Priority)
+8. [Generic rte_flow filter items](#genericflow)
+9. [Generic rte_flow RSS/Hash functions](#hash)
+10. [Generic rte_flow filter Attributes](#attributes)
+11. [Generic rte_flow filter actions](#actions)
+12. [Generic rte_flow RSS/Hash functions](#hash)
 	1. [Symmetric/Unsymmetric hash](#Symmetric)
 	2. [Default RSS/HASH function](#DefaultRSS)
-12. [Default filter](#DefaultFilter)
+13. [Default filter](#DefaultFilter)
 	1. [Disabling default filter](#DisablingDefaultFilter)
-13. [Examples of generic rte_flow filters](#examples1)
-14. [Limited filter resources](#resources)
-15. [Filter creation example -  5tuple filter](#Filtercreationexample)
-16. [Filter creation example - Multiple 5tuple filter (IPv4 addresses and TCP ports)](#examples2)
-17. [Copy packet offset to mbuf](#copyoffset)
-18. [Use NTPL filters addition (Making an ethernet over MPLS filter)](#ntplfilter)
-19. [Packet decoding offload](#hwdecode)
+14. [Examples of generic rte_flow filters](#examples1)
+15. [Limited filter resources](#resources)
+16. [Filter creation example -  5tuple filter](#Filtercreationexample)
+17. [Filter creation example - Multiple 5tuple filter (IPv4 addresses and TCP ports)](#examples2)
+18. [Copy packet offset to mbuf](#copyoffset)
+19. [Use NTPL filters addition (Making an ethernet over MPLS filter)](#ntplfilter)
+20. [Packet decoding offload](#hwdecode)
 	1. [Layer3 and Layer4 packet decoding offload](#hwl3l4)
 	2. [Inner most Layer3 and Layer4 packet decoding offload](#hwil3il4)
 	3. [More packet decoding types](#hwmoredecode) 
-20. [Use External Buffers (Zero copy)](#externalbuffer)
+21. [Use External Buffers (Zero copy)](#externalbuffer)
 	1. [Limitation using external buffers](#limitexternalbuffer)
 	2. [Enable external buffers](#enableexternalbuffer)
 	3. [Using/detecting external buffers](#detectexternalbuffer)
@@ -50,7 +51,7 @@ See below for supported drivers and SmartNics:
 
 |  Supported drivers |
 |-------------------------|
-| 3.8.1                      |
+| 3.11.0                      |
 
 <br>
 
@@ -64,11 +65,13 @@ See below for supported drivers and SmartNics:
 |  NT200A01-02-SCC-2×40-E3-FF-ANL    |  200-9512-10-07-00 |
 |  NT200A01-02-SCC-2×100-E3-FF-ANL  |  200-9515-10-07-00<br>200-9516-10-07-00 |
 |  NT80E3-2-PTP-ANL 8x10G           |  200-9519-10-07-00 |
+|  NT200A02-01-SCC-2×100/40-E3-FF-ANL | 200-9521-18-11-00 |
+|  NT200A02-01-SCC-2×100/40-E3-FF-ANL | 200-9526-18-10-00 |
 | Intel PAC A10 GX 4x10             | 200-7000-12-02-00 |
 | Intel PAC A10 GX 1x40             | 200-7001-12-03-00 |
 
 The complete driver package can be downloaded here:
-[Link™ Capture Software v11.3.2 Linux](https://supportportal.napatech.com/index.php?/selfhelp/view-article/link--capture-software-v1132-linux/541)
+[Link™ Capture Software v11.4.0 Linux](https://supportportal.napatech.com/index.php?/selfhelp/view-article/link--capture-software-v1132-linux/541)
 
 #### SmartNIC 200-9516-10-07-00 <a name="200-9516-10-07-00"></a>
 Using this SmartNIC only limited rte_flow filters is supported.
@@ -205,6 +208,33 @@ An NT40E3-4-PTP-ANL Napatech SmartNic is installed. We want app1 to use only por
 > Note: When using the whitelist command, all SmartNics to be used must be included.
 
 The Napatech SmartNics can also be disabled by using the blacklist command.
+
+## DPDK Sample applications supported by the Napatech adapter<a name="sampleapps"></a>
+In order to test the Napatech SmartNics a limited number of the DPDK sample tools listed below can be used. 
+
+| User guide title | Application name | Example directory |
+|------------------|------------------|-------------------|
+| Basic Forwarding Sample Application | basicfwd | skeleton |
+| RX/TX Callbacks Sample Application | rxtx_callbacks | rxtx_callbacks |
+| Basic RTE Flow Filtering Sample Application | flow_filtering | flow_filtering |
+| L2 Forwarding Sample Application (in Real and Virtualized Environments) | l2fwd | l2fwd |
+| L2 Forwarding Sample Application (in Real and Virtualized Environments) with core load statistics | l2fwd-jobstats | l2fwd-jobstats |
+| Packet Ordering Application | packet_ordering | packet_ordering |
+| Ethtool Sample Application | Ethtool |
+
+> Note: flow_filtering - When using this sample application,[the default filter](#DefaultFilter) should be disabled.
+
+#### Ethtool Sample Application
+The following Ethtool commands are supported by the Napatech SmartNics.
+
+| command | parameter |
+|---------|-----------|
+| `portstats` | `<port>`  |
+| `drvinfo` |           |
+| `link`    |           |
+| `macaddr` | `<port>`    |
+| `mtu`     | `<port>` `<value>` |
+
  
 ## Generic rte_flow Filter Items <a name="genericflow"></a>
 
@@ -306,7 +336,7 @@ If a 4 ported SmartNIC is used. The port number must be 0 to 3.
 
 The following rte_flow filter HASH functions are supported:
 
-| HASH function	| | HASH Keys |  | 
+| HASH function	| HASH Keys |  | 
 |------|--|------|
 |`ETH_RSS_IPV4`| `2-tuple` | `IPv4: hdr.src_addr`<br>`IPv4: hdr.dst_addr` |
 |`ETH_RSS_NONFRAG_IPV4_TCP`	|`5-tuple`|`IPv4: hdr.src_addr`<br>`IPv4: hdr.dst_addr`<br>`IPv4: hdr.next_proto_id`<br>`TCP: hdr.src_port`<br>`TCP: hdr.dst_port`|
