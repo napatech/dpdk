@@ -255,7 +255,8 @@ prepare_one_packet(struct rte_mbuf *pkt, struct ipsec_traffic *t)
 		}
 	} else {
 		/* Unknown/Unsupported type, drop the packet */
-		RTE_LOG(ERR, IPSEC, "Unsupported packet type\n");
+		RTE_LOG(ERR, IPSEC, "Unsupported packet type 0x%x\n",
+			rte_be_to_cpu_16(eth->ether_type));
 		rte_pktmbuf_free(pkt);
 	}
 
@@ -932,7 +933,8 @@ main_loop(__attribute__((unused)) void *dummy)
 	qconf->outbound.session_pool = socket_ctx[socket_id].session_pool;
 
 	if (qconf->nb_rx_queue == 0) {
-		RTE_LOG(INFO, IPSEC, "lcore %u has nothing to do\n", lcore_id);
+		RTE_LOG(DEBUG, IPSEC, "lcore %u has nothing to do\n",
+			lcore_id);
 		return 0;
 	}
 
