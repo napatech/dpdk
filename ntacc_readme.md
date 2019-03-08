@@ -91,9 +91,6 @@ patternCount++;
 
 All item types are supported as well as all actions.
 
-#### Intel PAC A10 <a name="Intel_PAC_A10"></a>
-Intel PAC A10 support requires driver version 3.9.1 or newer. 
-
 ## Compiling the Napatech NTACC PMD Driver <a name="compiling"></a>
 
 ##### Environment variable <a name="Environment"></a>
