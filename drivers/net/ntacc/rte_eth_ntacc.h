@@ -212,6 +212,7 @@ struct pmd_internals {
   uint32_t              dropId;
   uint32_t              keyMatcher:1;
   uint32_t              mode2Tx:1;
+  uint32_t              mode2Rx:1;
 };
 
 enum {

@@ -432,7 +432,7 @@ static __rte_always_inline void eth_ntacc_rx_get_ring(struct ntacc_rx_queue *rx_
   rx_q->offW = *rx_q->ringControl.pWrite & rx_q->ringControl.mask;
 }
 
-static uint16_t eth_ntacc_rx(void *queue,
+static uint16_t eth_ntacc_rx_mode1(void *queue,
   struct rte_mbuf **bufs,
   const uint16_t nb_pkts)
 {
@@ -505,6 +505,150 @@ static uint16_t eth_ntacc_rx(void *queue,
   }
   return num_rx;
 }
+
+static uint16_t eth_ntacc_rx_mode2(void *queue,
+                                   struct rte_mbuf **bufs,
+                                   uint16_t nb_pkts)
+{
+  struct rte_mbuf *mbuf;
+  struct ntacc_rx_queue *rx_q = queue;
+#ifdef USE_SW_STAT
+  uint32_t bytes = 0;
+#endif
+  uint16_t num_rx = 0;
+
+  if (unlikely(rx_q->pNetRx == NULL || nb_pkts == 0))
+    return 0;
+
+  // Do we have any segment
+  if (rx_q->pSeg == NULL) {
+    int status = (*_NT_NetRxGet)(rx_q->pNetRx, &rx_q->pSeg, 0);
+    if (status != NT_SUCCESS) {
+      if (rx_q->pSeg != NULL) {
+        (*_NT_NetRxRelease)(rx_q->pNetRx, rx_q->pSeg);
+        rx_q->pSeg = NULL;
+      }
+      return 0;
+    }
+
+    if (likely(NT_NET_GET_SEGMENT_LENGTH(rx_q->pSeg))) {
+      _nt_net_build_pkt_netbuf(rx_q->pSeg, &rx_q->pkt);
+    }
+    else {
+      (*_NT_NetRxRelease)(rx_q->pNetRx, rx_q->pSeg);
+      rx_q->pSeg = NULL;
+      return 0;
+    }
+  }
+  
+  NtDyn3Descr_t *dyn3;
+  uint16_t i;
+  uint16_t mbuf_len;
+  uint16_t data_len;
+
+  if (rte_mempool_get_bulk(rx_q->mb_pool, (void **)bufs, nb_pkts) != 0)
+    return 0;
+
+  for (i = 0; i < nb_pkts; i++) {
+    mbuf = bufs[i];
+    rte_mbuf_refcnt_set(mbuf, 1);
+    rte_pktmbuf_reset(mbuf);
+
+    dyn3 = _NT_NET_GET_PKT_DESCR_PTR_DYN3(&rx_q->pkt);
+
+    switch (dyn3->descrLength)
+    {
+    case 20:
+      // We do have a hash value defined
+      mbuf->hash.rss = dyn3->color_hi;
+      mbuf->ol_flags |= PKT_RX_RSS_HASH;
+      break;
+    case 22:
+      // We do have a color value defined
+      mbuf->hash.fdir.hi = ((dyn3->color_hi << 14) & 0xFFFFC000) | dyn3->color_lo;
+      mbuf->ol_flags |= PKT_RX_FDIR_ID | PKT_RX_FDIR;
+      break;
+    case 24:
+      // We do have a colormask set for protocol lookup
+      mbuf->packet_type = ((dyn3->color_hi << 14) & 0xFFFFC000) | dyn3->color_lo;
+      if (mbuf->packet_type != 0) {
+        mbuf->hash.fdir.lo = dyn3->offset0;
+        mbuf->hash.fdir.hi = dyn3->offset1;
+        mbuf->ol_flags |= PKT_RX_FDIR_FLX | PKT_RX_FDIR;
+      }
+      break;
+    }
+
+    if (rx_q->tsMultiplier) {
+      mbuf->timestamp = dyn3->timestamp * rx_q->tsMultiplier;
+      mbuf->ol_flags |= PKT_RX_TIMESTAMP;
+    }
+    mbuf->port = rx_q->in_port + (dyn3->rxPort - rx_q->local_port);
+
+    data_len = (uint16_t)(dyn3->capLength - dyn3->descrLength - 4);
+    mbuf_len = rte_pktmbuf_tailroom(mbuf);
+#ifdef USE_SW_STAT
+    bytes += data_len+4;
+#endif
+    if (data_len <= mbuf_len) {
+      /* Packet will fit in the mbuf, go ahead and copy */
+      mbuf->pkt_len = mbuf->data_len = data_len;
+		  rte_memcpy((u_char *)mbuf->buf_addr + mbuf->data_off, (uint8_t *)dyn3 + dyn3->descrLength, mbuf->data_len);
+#ifdef COPY_OFFSET0
+      mbuf->data_off += dyn3->offset0;
+#endif
+  } else {
+      /* Try read jumbo frame into multi mbufs. */
+      struct rte_mbuf *m;
+      const u_char *data;
+      uint16_t total_len = data_len;
+
+      mbuf->pkt_len = total_len;
+      mbuf->data_len = mbuf_len;
+      data = (u_char *)dyn3 + dyn3->descrLength;
+      rte_memcpy((u_char *)mbuf->buf_addr + mbuf->data_off, data, mbuf_len);
+      data_len -= mbuf_len;
+      data += mbuf_len;
+
+      m = mbuf;
+      while (data_len > 0) {
+        /* Allocate next mbuf and point to that. */
+        m->next = rte_pktmbuf_alloc(rx_q->mb_pool);
+        if (unlikely(!m->next))
+          return 0;
+
+        m = m->next;
+        /* Copy next segment. */
+        mbuf_len = RTE_MIN(rte_pktmbuf_tailroom(m), data_len);
+        rte_memcpy((u_char *)m->buf_addr + m->data_off, data, mbuf_len);
+
+        m->pkt_len = total_len;
+        m->data_len = mbuf_len;
+
+        mbuf->nb_segs++;
+        data_len -= mbuf_len;
+        data += mbuf_len;
+      }
+    }
+    num_rx++;
+
+    /* Get the next packet if any */
+    if (_nt_net_get_next_packet(rx_q->pSeg, NT_NET_GET_SEGMENT_LENGTH(rx_q->pSeg), &rx_q->pkt) == 0 ) {
+      (*_NT_NetRxRelease)(rx_q->pNetRx, rx_q->pSeg);
+      rx_q->pSeg = NULL;
+      break;
+    }
+  }
+#ifdef USE_SW_STAT
+  rx_q->rx_pkts+=num_rx;
+  rx_q->rx_bytes+=bytes;
+#endif
+  if (num_rx < nb_pkts) {
+    rte_mempool_put_bulk(rx_q->mb_pool, (void * const *)(bufs + num_rx), nb_pkts-num_rx);
+  }
+  return num_rx;
+}
+
 
 /*
  * Callback to handle sending packets through a real NIC.
@@ -2457,6 +2601,60 @@ static struct eth_dev_ops ops = {
     .dev_supported_ptypes_get = _dev_supported_ptypes_get
 };
 
+enum property_type_s {
+  KEY_MATCH,
+  ZERO_COPY_TX,
+  RX_SEGMENT_SIZE,
+  TX_SEGMENT_SIZE,
+};
+
+static int _readProperty(uint8_t adapterNo, enum property_type_s type, int *pValue)
+{
+  NtInfo_t *pInfo = NULL;
+  NtInfoStream_t hInfo = NULL;
+  int status;
+
+  pInfo = (NtInfo_t *)rte_malloc("ntacc", sizeof(NtInfo_t), 0);
+  if (!pInfo) {
+    return _log_out_of_memory_errors(__func__);
+  }
+
+  /* Open the information stream */
+  if ((status = (*_NT_InfoOpen)(&hInfo, "DPDKReadProperty")) != NT_SUCCESS) {
+    rte_free(pInfo);
+    return _log_nt_errors(status, "NT_InfoOpen failed", __func__);
+  }
+
+  pInfo->cmd = NT_INFO_CMD_READ_PROPERTY;
+  switch (type)
+  {
+  case KEY_MATCH:
+    snprintf(pInfo->u.property.path, sizeof(pInfo->u.property.path), "Adapter%d.filter.keymatch", adapterNo);
+    break;
+  case ZERO_COPY_TX:
+    snprintf(pInfo->u.property.path, sizeof(pInfo->u.property.path), "Adapter%d.Tx.ZeroCopyTransmit", adapterNo);
+    break;
+  case RX_SEGMENT_SIZE:
+    snprintf(pInfo->u.property.path, sizeof(pInfo->u.property.path), "ini.Adapter%d.HostBufferSegmentSizeRx", adapterNo);
+    break;
+  case TX_SEGMENT_SIZE:
+    snprintf(pInfo->u.property.path, sizeof(pInfo->u.property.path), "ini.Adapter%d.HostBufferSegmentSizeTx", adapterNo);
+    break;
+  default:
+    rte_free(pInfo);
+    return 0;
+  }
+  if ((status = (*_NT_InfoRead)(hInfo, pInfo)) != NT_SUCCESS) {
+    rte_free(pInfo);
+    return _log_nt_errors(status, "NT_InfoRead failed", __func__);
+  }
+  *pValue = pInfo->u.property.data.u.i;
+  PMD_NTACC_LOG(INFO, "Property: %s = %d\n", pInfo->u.property.path, *pValue);
+  (void)(*_NT_InfoClose)(hInfo);
+  rte_free(pInfo);
+  return 0;
+}
+
 static int rte_pmd_init_internals(struct rte_pci_device *dev,
                                   const uint32_t mask,
                                   const char     *ntpl_file)
@@ -2632,20 +2830,6 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     }
     deviceCount++;
 
-    if (pInfo->u.port_v7.data.adapterInfo.fpgaid.s.product == 9516) {
-      internals->keyMatcher = 0;
-    }
-    else {
-      internals->keyMatcher = 1;
-    }
-
-    if (pInfo->u.port_v7.data.adapterInfo.fpgaid.s.product == 9515) {
-      internals->mode2Tx = 1;
-    }
-    else {
-      internals->mode2Tx = 0;
-    }
-
     internals->version.major = version.major;
     internals->version.minor = version.minor;
     internals->version.patch = version.patch;
@@ -2735,14 +2919,72 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     eth_dev->data->numa_node = dev->device.numa_node;
 
     eth_dev->dev_ops = &ops;
-    eth_dev->rx_pkt_burst = eth_ntacc_rx;
 
-    if (internals->mode2Tx) {
-      eth_dev->tx_pkt_burst = eth_ntacc_tx_mode2;
+    if (pInfo->u.port_v7.data.adapterInfo.fpgaid.s.product == 7000 ||
+        pInfo->u.port_v7.data.adapterInfo.fpgaid.s.product == 7001) {
+      // Intel PAC adapters cannot use direct ring
+      internals->mode2Tx = 1; // Use old tx mode
+      internals->mode2Rx = 1; // Use old rx mode
+      internals->keyMatcher = 1;
     }
     else {
-      eth_dev->tx_pkt_burst = eth_ntacc_tx_mode1;
+      int value;
+      // Check the capability of the adapter/port
+      // Do we have the key matcher
+      if ((status = _readProperty(pInfo->u.port_v7.data.adapterNo, KEY_MATCH, &value)) != 0) {
+        iRet = status;
+        goto error;
+      }
+      if (value == 0) {
+        internals->keyMatcher = 0;
+        PMD_NTACC_LOG(INFO, "keyMatcher is not supported\n");
+      } else 
+        internals->keyMatcher = 1;
+
+      // Do we have 4GA zero copy
+      if ((status = _readProperty(pInfo->u.port_v7.data.adapterNo, ZERO_COPY_TX, &value)) != 0) {
+        iRet = status;
+        goto error;
+      }
+      if (value == 0) {
+        internals->mode2Tx = 1; // No - use old tx mode
+        PMD_NTACC_LOG(INFO, "Using old TX mode\n");
+      } else
+        internals->mode2Tx = 0; // Yes - use direct ring tx mode
+
+      // Is the RX segement emulation enabled?
+      if ((status = _readProperty(pInfo->u.port_v7.data.adapterNo, RX_SEGMENT_SIZE, &value)) != 0) {
+        iRet = status;
+        goto error;
+      }
+      if (value >= 1) {
+        internals->mode2Rx = 1; // Yes - use old rx mode
+        PMD_NTACC_LOG(INFO, "Using old RX mode due to RX segment emulation\n");
+      }
+      else
+        internals->mode2Rx = 0;
+
+      // Is the TX segement emulation enabled?
+      if ((status = _readProperty(pInfo->u.port_v7.data.adapterNo, TX_SEGMENT_SIZE, &value)) != 0) {
+        iRet = status;
+        goto error;
+      }
+      if (value >= 1) {
+        internals->mode2Tx = 1; // Yes - use old tx mode
+        PMD_NTACC_LOG(INFO, "Using old TX mode due to TX segment emulation\n");
+      }
     }
+
+    // Set rx and tx mode according to the adapter capability
+    if (internals->mode2Rx) 
+      eth_dev->rx_pkt_burst = eth_ntacc_rx_mode2;
+    else
+      eth_dev->rx_pkt_burst = eth_ntacc_rx_mode1;
+
+    if (internals->mode2Tx) 
+      eth_dev->tx_pkt_burst = eth_ntacc_tx_mode2;
+    else 
+      eth_dev->tx_pkt_burst = eth_ntacc_tx_mode1;
 
     eth_dev->state = RTE_ETH_DEV_ATTACHED;
 
@@ -2756,16 +2998,17 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
 		rte_spinlock_init(&internals->statlock);
   #endif
 
-  /* Open the config stream */
-  if ((status = (*_NT_ConfigOpen)(&internals->hCfgStream, "DPDK Config stream")) != NT_SUCCESS) {
-    _log_nt_errors(status, "NT_ConfigOpen() failed", __func__);
-    iRet = status;
-    goto error;
+    /* Open the config stream */
+    if ((status = (*_NT_ConfigOpen)(&internals->hCfgStream, "DPDK Config stream")) != NT_SUCCESS) {
+      _log_nt_errors(status, "NT_ConfigOpen() failed", __func__);
+      iRet = status;
+      goto error;
+    }
+
+    rte_spinlock_init(&internals->lock);
+    rte_spinlock_init(&internals->configlock);
   }
 
-  rte_spinlock_init(&internals->lock);
-  rte_spinlock_init(&internals->configlock);
-  }
   (void)(*_NT_InfoClose)(hInfo);
 
   rte_free(pInfo);
