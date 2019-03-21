@@ -84,6 +84,7 @@ struct supportedDriver_s supportedDriver = {3, 11, 0};
 #define PCI_DEVICE_ID_NT40E3   0x0145
 #define PCI_DEVICE_ID_NT40A01  0x0185
 #define PCI_DEVICE_ID_NT100E3  0x0155
+#define PCI_DEVICE_ID_NT200A02 0x01C5
 
 #define PCI_VENDOR_ID_INTEL          0x8086
 #define PCIE_DEVICE_ID_PF_DSC_1_X    0x09C4
@@ -3189,6 +3190,7 @@ static int rte_pmd_ntacc_dev_probe(struct rte_pci_driver *drv __rte_unused, stru
   case PCI_DEVICE_ID_NT20E3:
   case PCI_DEVICE_ID_NT40E3:
   case PCI_DEVICE_ID_NT40A01:
+  case PCI_DEVICE_ID_NT200A02:
     break;
   case PCI_DEVICE_ID_NT200A01:
   case PCI_DEVICE_ID_NT80E3:
@@ -3262,6 +3264,9 @@ static int rte_pmd_ntacc_dev_probe(struct rte_pci_driver *drv __rte_unused, stru
 static const struct rte_pci_id ntacc_pci_id_map[] = {
 	{
 		RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT200A01)
+	},
+	{
+		RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT200A02)
 	},
   {
     RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT80E3)
