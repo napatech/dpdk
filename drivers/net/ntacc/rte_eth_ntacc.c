@@ -683,15 +683,7 @@ static uint16_t eth_ntacc_tx_mode1(void *queue,
     struct rte_mbuf *mbuf = bufs[i];
     /* Detect packet size */
     uint16_t sLen;
-    uint16_t wLen = mbuf->data_len + 4; // Make room for FCS
-    if (unlikely(mbuf->nb_segs > 1)) {
-      while (mbuf->next) {
-        mbuf = mbuf->next;
-        wLen += mbuf->data_len;
-      }
-      // Reset the pointer
-      mbuf = bufs[i];
-    }
+    uint16_t wLen = mbuf->pkt_len + 4; // Make room for FCS
     /* Check if packet needs padding or is too big to transmit */
     if (unlikely(wLen < tx_q->minTxPktSize)) {
       wLen = tx_q->minTxPktSize; // Add padding
