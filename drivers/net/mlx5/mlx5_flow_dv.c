@@ -764,7 +764,7 @@ flow_dv_validate_attributes(struct rte_eth_dev *dev,
  *   Pointer to the error structure.
  *
  * @return
- *   0 on success, a negative errno value otherwise and rte_ernno is set.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 flow_dv_validate(struct rte_eth_dev *dev, const struct rte_flow_attr *attr,
@@ -1043,7 +1043,7 @@ flow_dv_validate(struct rte_eth_dev *dev, const struct rte_flow_attr *attr,
  *
  * @return
  *   Pointer to mlx5_flow object on success,
- *   otherwise NULL and rte_ernno is set.
+ *   otherwise NULL and rte_errno is set.
  */
 static struct mlx5_flow *
 flow_dv_prepare(const struct rte_flow_attr *attr __rte_unused,
@@ -1873,7 +1873,7 @@ flow_dv_matcher_register(struct rte_eth_dev *dev,
  *   Pointer to the error structure.
  *
  * @return
- *   0 on success, a negative errno value otherwise and rte_ernno is set.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
 flow_dv_translate(struct rte_eth_dev *dev,

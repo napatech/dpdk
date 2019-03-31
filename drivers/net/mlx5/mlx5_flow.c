@@ -786,7 +786,7 @@ mlx5_flow_validate_action_mark(const struct rte_flow_action *action,
  *   Pointer to error structure.
  *
  * @return
- *   0 on success, a negative errno value otherwise and rte_ernno is set.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
 mlx5_flow_validate_action_drop(uint64_t action_flags,
@@ -829,7 +829,7 @@ mlx5_flow_validate_action_drop(uint64_t action_flags,
  *   Pointer to error structure.
  *
  * @return
- *   0 on success, a negative errno value otherwise and rte_ernno is set.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
 mlx5_flow_validate_action_queue(const struct rte_flow_action *action,
@@ -879,7 +879,7 @@ mlx5_flow_validate_action_queue(const struct rte_flow_action *action,
  *   Pointer to error structure.
  *
  * @return
- *   0 on success, a negative errno value otherwise and rte_ernno is set.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
 mlx5_flow_validate_action_rss(const struct rte_flow_action *action,
@@ -964,7 +964,7 @@ mlx5_flow_validate_action_rss(const struct rte_flow_action *action,
  *   Pointer to error structure.
  *
  * @return
- *   0 on success, a negative errno value otherwise and rte_ernno is set.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
 mlx5_flow_validate_action_count(struct rte_eth_dev *dev __rte_unused,
@@ -1776,7 +1776,7 @@ flow_get_drv_type(struct rte_eth_dev *dev, const struct rte_flow_attr *attr)
  *   Pointer to the error structure.
  *
  * @return
- *   0 on success, a negative errno value otherwise and rte_ernno is set.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static inline int
 flow_drv_validate(struct rte_eth_dev *dev,
@@ -1815,7 +1815,7 @@ flow_drv_validate(struct rte_eth_dev *dev,
  *   Pointer to the error structure.
  *
  * @return
- *   Pointer to device flow on success, otherwise NULL and rte_ernno is set.
+ *   Pointer to device flow on success, otherwise NULL and rte_errno is set.
  */
 static inline struct mlx5_flow *
 flow_drv_prepare(const struct rte_flow *flow,
@@ -1859,7 +1859,7 @@ flow_drv_prepare(const struct rte_flow *flow,
  *   Pointer to the error structure.
  *
  * @return
- *   0 on success, a negative errno value otherwise and rte_ernno is set.
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static inline int
 flow_drv_translate(struct rte_eth_dev *dev, struct mlx5_flow *dev_flow,
