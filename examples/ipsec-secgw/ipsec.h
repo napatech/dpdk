@@ -40,10 +40,8 @@
 #define SPI2IDX(spi) (spi & (IPSEC_SA_MAX_ENTRIES - 1))
 #define INVALID_SPI (0)
 
-#define DISCARD (0x80000000)
-#define BYPASS (0x40000000)
-#define PROTECT_MASK (0x3fffffff)
-#define PROTECT(sa_idx) (SPI2IDX(sa_idx) & PROTECT_MASK) /* SA idx 30 bits */
+#define DISCARD	INVALID_SPI
+#define BYPASS	UINT32_MAX
 
 #define IPSEC_XFORM_MAX 2
 
@@ -240,6 +238,14 @@ sp4_init(struct socket_ctx *ctx, int32_t socket_id);
 
 void
 sp6_init(struct socket_ctx *ctx, int32_t socket_id);
+
+/*
+ * Search through SA entries for given SPI.
+ * Returns first entry index if found(greater or equal then zero),
+ * or -ENOENT otherwise.
+ */
+int
+sa_spi_present(uint32_t spi, int inbound);
 
 void
 sa_init(struct socket_ctx *ctx, int32_t socket_id);
