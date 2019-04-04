@@ -1349,6 +1349,9 @@ static int eth_link_update(struct rte_eth_dev *dev,
   case NT_LINK_SPEED_10G:
     dev->data->dev_link.link_speed = ETH_SPEED_NUM_10G;
     break;
+  case NT_LINK_SPEED_25G:
+    dev->data->dev_link.link_speed = ETH_SPEED_NUM_25G;
+    break;
   case NT_LINK_SPEED_40G:
     dev->data->dev_link.link_speed = ETH_SPEED_NUM_40G;
     break;
@@ -1849,6 +1852,10 @@ static inline int _handle_items(const struct rte_flow_item items[],
                         error) != 0) {
         return 1;
       }
+      if (*pTunnel)
+        pColor->colorMask |= 0x000a0000;
+      else
+        pColor->colorMask |= RTE_PTYPE_L2_ETHER_MPLS;
       break;
 
     case RTE_FLOW_ITEM_TYPE_TUNNEL:
@@ -2881,6 +2888,9 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
       break;
     case NT_LINK_SPEED_10G:
       pmd_link.link_speed = ETH_SPEED_NUM_10G;
+      break;
+    case NT_LINK_SPEED_25G:
+      pmd_link.link_speed = ETH_SPEED_NUM_25G;
       break;
     case NT_LINK_SPEED_40G:
       pmd_link.link_speed = ETH_SPEED_NUM_40G;
