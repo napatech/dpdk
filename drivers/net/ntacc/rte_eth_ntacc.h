@@ -64,7 +64,7 @@ struct filter_keyset_s {
   uint8_t  key;
   uint8_t  port;
   uint8_t nb_queues;
-  uint8_t list_queues[RTE_ETHDEV_QUEUE_STAT_CNTRS];
+  uint8_t list_queues[256];
 };
 
 struct rte_flow {
@@ -77,7 +77,7 @@ struct rte_flow {
   uint64_t rss_hf;
   int priority;
   uint8_t nb_queues;
-  uint8_t list_queues[RTE_ETHDEV_QUEUE_STAT_CNTRS];
+  uint8_t list_queues[256];
 };
 
 enum {
@@ -173,8 +173,8 @@ struct filter_values_s {
 #define NTACC_NAME_LEN (PCI_PRI_STR_SIZE + 20)
 
 struct pmd_internals {
-  struct ntacc_rx_queue rxq[RTE_ETHDEV_QUEUE_STAT_CNTRS];
-  struct ntacc_tx_queue txq[RTE_ETHDEV_QUEUE_STAT_CNTRS];
+  struct ntacc_rx_queue *rxq;
+  struct ntacc_tx_queue *txq;
   uint32_t              nbStreamIDs;
   uint32_t              streamIDOffset;
   uint64_t              rss_hf;
@@ -207,6 +207,8 @@ struct pmd_internals {
   char                  *ntpl_file;
   int                   shmid;
   key_t                 key;
+  uint16_t              minTxPktSize;
+  uint16_t              maxTxPktSize;
   pthread_mutexattr_t   psharedm;
   struct pmd_shared_mem_s *shm;
   uint32_t              dropId;

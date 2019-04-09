@@ -178,8 +178,6 @@ static uint32_t _log_nt_errors(const uint32_t status, const char *msg, const cha
 {
   char *pErrBuf;
 
-  printf("ERR: %s\n", msg);
-
   pErrBuf = (char *)rte_malloc(NULL, NT_ERRBUF_SIZE+1, 0);
   if (!pErrBuf) {
     PMD_NTACC_LOG(ERR, "Error %s: Out of memory\n", func);
@@ -187,7 +185,6 @@ static uint32_t _log_nt_errors(const uint32_t status, const char *msg, const cha
   }
 
   (*_NT_ExplainError)(status, pErrBuf, NT_ERRBUF_SIZE);
-  printf("ERR1: %s\n", pErrBuf);
   PMD_NTACC_LOG(ERR, "Error: %s. Code 0x%x = %s\n", msg, status, pErrBuf);
 
   rte_free(pErrBuf);
@@ -903,7 +900,7 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     goto StartError;
   }
 
-  for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
+  for (queue = 0; queue < dev->data->nb_rx_queues; queue++) {
     if (rx_q[queue].enabled) {
       uint32_t ntplID;
       char ntpl_buf[21];
@@ -926,7 +923,7 @@ static int eth_dev_start(struct rte_eth_dev *dev)
 
   _create_drop_errored_packets_filter(internals);
 
-  for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
+  for (queue = 0; queue < dev->data->nb_rx_queues; queue++) {
     if (rx_q[queue].enabled) {
       if ((status = (*_NT_NetRxOpen)(&rx_q[queue].pNetRx, "DPDK", NT_NET_INTERFACE_SEGMENT, rx_q[queue].stream_id, -1)) != NT_SUCCESS) {
         _log_nt_errors(status, "NT_NetRxOpen() failed", __func__);
@@ -937,7 +934,7 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     }
   }
 
-  for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
+  for (queue = 0; queue < dev->data->nb_tx_queues; queue++) {
     if (tx_q[queue].enabled) {
       if ((status = (*_NT_NetTxOpen)(&tx_q[queue].pNetTx, "DPDK", 1 << tx_q[queue].port, -1, 0)) != NT_SUCCESS) {
         if ((status = (*_NT_NetTxOpen)(&tx_q[queue].pNetTx, "DPDK", 1 << tx_q[queue].port, -2, 0)) != NT_SUCCESS) {
@@ -986,7 +983,7 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
   _dev_flow_flush(dev, &error);
   _destroy_drop_errored_packets_filter(internals);
 
-  for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
+  for (queue = 0; queue < dev->data->nb_rx_queues; queue++) {
     if (rx_q[queue].enabled) {
       if (rx_q[queue].pSeg) {
         (*_NT_NetRxRelease)(rx_q[queue].pNetRx, rx_q[queue].pSeg);
@@ -1000,7 +997,7 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
       eth_rx_queue_stop(dev, queue);
     }
   }
-  for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
+  for (queue = 0; queue < dev->data->nb_tx_queues; queue++) {
     if (tx_q[queue].enabled) {
       if (tx_q[queue].pNetTx) {
         (void)(*_NT_NetTxClose)(tx_q[queue].pNetTx);
@@ -1033,12 +1030,62 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
 static int eth_dev_configure(struct rte_eth_dev *dev)
 {
   struct pmd_internals *internals = dev->data->dev_private;
+  uint i;
+
   if (dev->data->dev_conf.rxmode.mq_mode == ETH_MQ_RX_RSS) {
     internals->rss_hf = dev->data->dev_conf.rx_adv_conf.rss_conf.rss_hf;
   }
   else {
     internals->rss_hf = 0;
   }
+
+  if (dev->data->nb_rx_queues > STREAMIDS_PER_PORT) {
+    PMD_NTACC_LOG(ERR, "To many queues requested. %u queues available", STREAMIDS_PER_PORT);
+    return -ENOMEM;
+  }
+
+  if (internals->rxq) {
+    // This must be second time configure is called. Free the queue memory
+    rte_free(internals->rxq);
+  }
+  
+  if (internals->txq) {
+    // This must be second time configure is called. Free the queue memory
+    rte_free(internals->txq);
+  }
+
+  internals->rxq = (struct ntacc_rx_queue *)rte_zmalloc_socket(internals->name,
+                                                               sizeof(struct ntacc_rx_queue) * dev->data->nb_rx_queues, 
+                                                               RTE_CACHE_LINE_SIZE, 
+                                                               dev->device->numa_node);
+  if (internals->rxq == NULL) {
+    PMD_NTACC_LOG(ERR, "Failed to allocate memory for RX queues");
+    return -ENOMEM;
+  }
+  
+  for (i=0; i < dev->data->nb_rx_queues; i++) {
+    internals->rxq[i].stream_id = STREAMIDS_PER_PORT * internals->port + i;
+    internals->rxq[i].pSeg = NULL;
+    internals->rxq[i].enabled = 0;
+  }
+
+  internals->txq = (struct ntacc_tx_queue *)rte_zmalloc_socket(internals->name,
+                                                               sizeof(struct ntacc_tx_queue) * dev->data->nb_tx_queues, 
+                                                               RTE_CACHE_LINE_SIZE, 
+                                                               dev->device->numa_node);
+  if (internals->txq == NULL) {
+    PMD_NTACC_LOG(ERR, "Failed to allocate memory for TX queues");
+    return -ENOMEM;
+  }
+
+  for (i = 0; i < dev->data->nb_tx_queues; i++) {
+    internals->txq[i].port = internals->port;
+    internals->txq[i].local_port = internals->local_port;
+    internals->txq[i].enabled = 0;
+    internals->txq[i].minTxPktSize = internals->minTxPktSize;
+    internals->txq[i].maxTxPktSize = internals->maxTxPktSize;
+  }
+
   return 0;
 }
 
@@ -1053,8 +1100,8 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
   dev_info->driver_name = internals->driverName;
   dev_info->max_mac_addrs = 1;
   dev_info->max_rx_pktlen = HW_MTU;
-  dev_info->max_rx_queues = STREAMIDS_PER_PORT > RTE_ETHDEV_QUEUE_STAT_CNTRS ? RTE_ETHDEV_QUEUE_STAT_CNTRS : STREAMIDS_PER_PORT;
-  dev_info->max_tx_queues = STREAMIDS_PER_PORT > RTE_ETHDEV_QUEUE_STAT_CNTRS ? RTE_ETHDEV_QUEUE_STAT_CNTRS : STREAMIDS_PER_PORT;
+  dev_info->max_rx_queues = STREAMIDS_PER_PORT;
+  dev_info->max_tx_queues = STREAMIDS_PER_PORT;
   dev_info->min_rx_bufsize = 64;
 
   // Not used by the Napatech adapter
@@ -1108,7 +1155,7 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
   }
 
   pInfo->cmd = NT_INFO_CMD_READ_PORT_V8;
-  pInfo->u.port_v8.portNo = (uint8_t)(internals->txq[0].port);
+  pInfo->u.port_v8.portNo = (uint8_t)(internals->port);
   if ((status = (*_NT_InfoRead)(hInfo, pInfo)) != 0) {
     _log_nt_errors(status, "NT_InfoRead failed", __func__);
     rte_free(pInfo);
@@ -1155,23 +1202,32 @@ static int eth_stats_get(struct rte_eth_dev *dev,
   const struct pmd_internals *internal = dev->data->dev_private;
 
   memset(igb_stats, 0, sizeof(*igb_stats));
-  for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
+  for (i = 0; i < dev->data->nb_rx_queues; i++) {
     if (internal->rxq[i].enabled) {
-      igb_stats->q_ipackets[i] = internal->rxq[i].rx_pkts;
-      igb_stats->q_ibytes[i] = internal->rxq[i].rx_bytes;
-      rx_total += igb_stats->q_ipackets[i];
-      rx_total_bytes += igb_stats->q_ibytes[i];
+      uint64_t pkts = internal->rxq[i].rx_pkts;
+      uint64_t bytes = internal->rxq[i].rx_bytes;
+      if (i < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+        igb_stats->q_ipackets[i] = pkts;
+        igb_stats->q_ibytes[i] = bytes;
+      }
+      rx_total += pkts;
+      rx_total_bytes += bytes;
     }
   }
 
-  for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
+  for (i = 0; i < dev->data->nb_tx_queues; i++) {
     if (internal->txq[i].enabled) {
-      igb_stats->q_opackets[i] = internal->txq[i].tx_pkts;
-      igb_stats->q_obytes[i] = internal->txq[i].tx_bytes;
-      igb_stats->q_errors[i] = internal->txq[i].err_pkts;
-      tx_total += igb_stats->q_opackets[i];
-      tx_total_bytes += igb_stats->q_obytes[i];
-      tx_err_total += igb_stats->q_errors[i];
+      uint64_t pkts = internal->txq[i].tx_pkts;
+      uint64_t bytes = internal->txq[i].tx_bytes;
+      uint64_t err_pkts = internal->txq[i].err_pkts;
+      if (i < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+        igb_stats->q_opackets[i] = pkts;
+        igb_stats->q_obytes[i] = bytes;
+        igb_stats->q_errors[i] = err_pkts;
+      }
+      tx_total += pkts;
+      tx_total_bytes += bytes;
+      tx_err_total += err_pkts;
     }
   }
 
@@ -1222,7 +1278,7 @@ static int eth_stats_get(struct rte_eth_dev *dev,
   igb_stats->ierrors = pStatData->u.query_v2.data.port.aPorts[port].rx.RMON1.crcAlignErrors;
   igb_stats->oerrors = pStatData->u.query_v2.data.port.aPorts[port].tx.RMON1.crcAlignErrors;
 
-  for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
+  for (queue = 0; queue < dev->data->nb_rx_queues && queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
     igb_stats->q_ipackets[queue] = pStatData->u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].forward.pkts;
     igb_stats->q_ibytes[queue] =  pStatData->u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].forward.octets;
     igb_stats->q_errors[queue] = pStatData->u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].drop.pkts;
@@ -1238,11 +1294,11 @@ static void eth_stats_reset(struct rte_eth_dev *dev)
   unsigned i;
   struct pmd_internals *internal = dev->data->dev_private;
 
-  for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
+  for (i = 0; i < dev->data->nb_rx_queues; i++) {
     internal->rxq[i].rx_pkts = 0;
     internal->rxq[i].rx_bytes = 0;
   }
-  for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
+  for (i = 0; i < dev->data->nb_tx_queues; i++) {
     internal->txq[i].tx_pkts = 0;
     internal->txq[i].tx_bytes = 0;
     internal->txq[i].err_pkts = 0;
@@ -1282,6 +1338,16 @@ static void eth_dev_close(struct rte_eth_dev *dev)
   PMD_NTACC_LOG(DEBUG, "Closing port %u (%u) on adapter %u\n", internals->port, deviceCount, internals->adapterNo);
   if (internals->ntpl_file) {
     rte_free(internals->ntpl_file);
+  }
+
+  if (internals->rxq) {
+    rte_free(internals->rxq);
+    internals->rxq = NULL;
+  }
+
+  if (internals->txq) {
+    rte_free(internals->txq);
+    internals->txq = NULL;
   }
 
   if (dev->data->port_id < RTE_MAX_ETHPORTS) {
@@ -1393,6 +1459,7 @@ static int eth_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 {
   struct pmd_internals *internals = dev->data->dev_private;
   char ntpl_buf[50];
+
   snprintf(ntpl_buf, sizeof(ntpl_buf), "Setup[State=Active] = StreamId == %d", internals->rxq[rx_queue_id].stream_id);
   NTACC_LOCK(&internals->configlock);
   DoNtpl(ntpl_buf, NULL, internals, NULL);
@@ -1405,6 +1472,7 @@ static int eth_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 {
   struct pmd_internals *internals = dev->data->dev_private;
   char ntpl_buf[50];
+
   snprintf(ntpl_buf, sizeof(ntpl_buf), "Setup[State=InActive] = StreamId == %d", internals->rxq[rx_queue_id].stream_id);
   NTACC_LOCK(&internals->configlock);
   DoNtpl(ntpl_buf, NULL, internals, NULL);
@@ -1420,6 +1488,7 @@ static int eth_tx_queue_setup(struct rte_eth_dev *dev,
                               const struct rte_eth_txconf *tx_conf __rte_unused)
 {
   struct pmd_internals *internals = dev->data->dev_private;
+
   dev->data->tx_queues[tx_queue_id] = &internals->txq[tx_queue_id];
   internals->txq[tx_queue_id].enabled = 1;
   return 0;
@@ -1558,7 +1627,8 @@ static inline int _checkForwardPort(struct pmd_internals *internals, uint8_t *pP
 /******************************************************
  Handle the rte_flow action command
  *******************************************************/
-static inline int _handle_actions(const struct rte_flow_action actions[],
+static inline int _handle_actions(struct rte_eth_dev *dev,
+                                  const struct rte_flow_action actions[],
                                   const struct rte_flow_action_rss **pRss,
                                   uint8_t *pForwardPort,
                                   uint64_t *pTypeMask,
@@ -1607,12 +1677,12 @@ static inline int _handle_actions(const struct rte_flow_action actions[],
         return 1;
       }
       *pAction |= ACTION_RSS;
-      if ((*pRss)->queue_num > RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+      if ((*pRss)->queue_num > dev->data->nb_rx_queues) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Number of RSS queues out of range");
         return 1;
       }
       for (i = 0; i < (*pRss)->queue_num; i++) {
-        if ((*pRss)->queue && (*pRss)->queue[i] >= RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+        if ((*pRss)->queue && (*pRss)->queue[i] >= dev->data->nb_rx_queues) {
           rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "RSS queue out of range");
           return 1;
         }
@@ -1631,7 +1701,7 @@ static inline int _handle_actions(const struct rte_flow_action actions[],
         return 1;
       }
       *pAction |= ACTION_QUEUE;
-      if (((const struct rte_flow_action_queue *)actions->conf)->index >= RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+      if (((const struct rte_flow_action_queue *)actions->conf)->index >= dev->data->nb_rx_queues) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "queue out of range");
         return 1;
       }
@@ -1946,7 +2016,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
   struct pmd_internals *internals = dev->data->dev_private;
   uint32_t ntplID;
   uint8_t nb_queues = 0;
-  uint8_t list_queues[RTE_ETHDEV_QUEUE_STAT_CNTRS];
+  uint8_t list_queues[256];
   bool filterContinue = false;
   const struct rte_flow_action_rss *rss = NULL;
   struct color_s color = {0, 0, false};
@@ -1984,7 +2054,8 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
 
   NTACC_LOCK(&internals->configlock);
 
-  if (_handle_actions(actions,
+  if (_handle_actions(dev,
+                      actions,
                       &rss,
                       &forwardPort,
                       &typeMask,
@@ -2301,7 +2372,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
   int i;
   int counter;
   bool found;
-  unsigned int assignedHostbuffers[RTE_ETHDEV_QUEUE_STAT_CNTRS];
+  unsigned int assignedHostbuffers[256];
 
   if (set == 1 && internals->defaultFlow) {
     char ntpl_buf[21];
@@ -2356,10 +2427,10 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
     uint queue;
     uint8_t nb_queues = 0;
     char *ntpl_buf = NULL;
-    uint8_t list_queues[RTE_ETHDEV_QUEUE_STAT_CNTRS];
+    uint8_t list_queues[256];
 
     // Build default flow
-    for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
+    for (queue = 0; queue < dev->data->nb_rx_queues; queue++) {
       if (rx_q[queue].enabled) {
         list_queues[nb_queues++] = queue;
       }
@@ -2421,7 +2492,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       NTACC_UNLOCK(&internals->configlock);
 
       // Store the used queues for the default flow
-      for (i = 0; i < nb_queues && i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
+      for (i = 0; i < nb_queues && i < dev->data->nb_rx_queues; i++) {
         defFlow->list_queues[i] = list_queues[i];
         defFlow->nb_queues++;
       }
@@ -2799,12 +2870,6 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
       iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
       goto error;
     }
-    if (RTE_ETHDEV_QUEUE_STAT_CNTRS > (256 / nbPortsInSystem)) {
-      PMD_NTACC_LOG(ERR, ">>> Error: This adapter can only support %u queues\n", STREAMIDS_PER_PORT);
-      PMD_NTACC_LOG(ERR, "           Set RTE_ETHDEV_QUEUE_STAT_CNTRS to %u or less\n", STREAMIDS_PER_PORT);
-      iRet = NT_ERROR_STREAMID_OUT_OF_RANGE;
-      goto error;
-    }
 
     /* reserve an ethdev entry */
     eth_dev = rte_eth_dev_allocate(name);
@@ -2847,6 +2912,8 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     internals->local_port_offset = offset;
     internals->symHashMode = SYM_HASH_DIS_PER_PORT;
     internals->fpgaid.value = pInfo->u.port_v7.data.adapterInfo.fpgaid.value;
+    internals->minTxPktSize = pInfo->u.port_v7.data.capabilities.minTxPktSize;
+    internals->maxTxPktSize = pInfo->u.port_v7.data.capabilities.maxTxPktSize;
 
     // Check timestamp format
     if (pInfo->u.port_v7.data.adapterInfo.timestampType == NT_TIMESTAMP_TYPE_NATIVE_UNIX) {
@@ -2857,20 +2924,6 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     }
     else {
       internals->tsMultiplier = 0;
-    }
-
-    for (i=0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
-      internals->rxq[i].stream_id = STREAMIDS_PER_PORT * internals->port + i;
-      internals->rxq[i].pSeg = NULL;
-      internals->rxq[i].enabled = 0;
-    }
-
-    for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
-      internals->txq[i].port = internals->port;
-      internals->txq[i].local_port = localPort;
-      internals->txq[i].enabled = 0;
-      internals->txq[i].minTxPktSize = pInfo->u.port_v7.data.capabilities.minTxPktSize;
-      internals->txq[i].maxTxPktSize = pInfo->u.port_v7.data.capabilities.maxTxPktSize;
     }
 
     switch (pInfo->u.port_v7.data.speed) {
@@ -3013,6 +3066,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   }
 
   (void)(*_NT_InfoClose)(hInfo);
+
 
   rte_free(pInfo);
   return iRet;
