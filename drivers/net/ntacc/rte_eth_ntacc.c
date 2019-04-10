@@ -2054,9 +2054,9 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   version.patch = pInfo->u.system.data.version.patch;
 
   // Check that the driver is supported
-  if (supportedDriver.major != version.major ||
-      supportedDriver.minor != version.minor) {
-    PMD_NTACC_LOG(ERR, "ERROR: NT Driver version %d.%d.%d is not supported. The version must be %d.%d.%d.\n",
+  if (((supportedDriver.major * 100) + supportedDriver.minor)  >
+      ((version.major * 100) + version.minor)) {
+    PMD_NTACC_LOG(ERR, "ERROR: NT Driver version %d.%d.%d is not supported. The version must be %d.%d.%d or newer.\n",
             version.major, version.minor, version.patch,
             supportedDriver.major, supportedDriver.minor, supportedDriver.patch);
     iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
@@ -2114,9 +2114,9 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     for (i = 0; i < NB_SUPPORTED_FPGAS; i++) {
       if (supportedAdapters[i].item == pInfo->u.port_v7.data.adapterInfo.fpgaid.s.item &&
           supportedAdapters[i].product == pInfo->u.port_v7.data.adapterInfo.fpgaid.s.product) {
-        if (supportedAdapters[i].ver != pInfo->u.port_v7.data.adapterInfo.fpgaid.s.ver ||
-            supportedAdapters[i].rev != pInfo->u.port_v7.data.adapterInfo.fpgaid.s.rev) {
-          PMD_NTACC_LOG(ERR, "ERROR: NT adapter firmware %03d-%04d-%02d-%02d-%02d is not supported. The firmware must be %03d-%04d-%02d-%02d-%02d.\n",
+        if (((supportedAdapters[i].ver * 100) + supportedAdapters[i].rev) >
+            ((pInfo->u.port_v7.data.adapterInfo.fpgaid.s.ver * 100) + pInfo->u.port_v7.data.adapterInfo.fpgaid.s.rev)) {
+          PMD_NTACC_LOG(ERR, "ERROR: NT adapter firmware %03d-%04d-%02d-%02d-%02d is not supported. The firmware must be %03d-%04d-%02d-%02d-%02d or newer.\n",
                   pInfo->u.port_v7.data.adapterInfo.fpgaid.s.item,
                   pInfo->u.port_v7.data.adapterInfo.fpgaid.s.product,
                   pInfo->u.port_v7.data.adapterInfo.fpgaid.s.ver,
