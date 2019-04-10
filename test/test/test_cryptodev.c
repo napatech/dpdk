@@ -567,7 +567,7 @@ test_device_configure_invalid_dev_id(void)
 	dev_id = ts_params->valid_devs[ts_params->valid_dev_count - 1];
 
 	/* Stop the device in case it's started so it can be configured */
-	rte_cryptodev_stop(ts_params->valid_devs[dev_id]);
+	rte_cryptodev_stop(dev_id);
 
 	TEST_ASSERT_SUCCESS(rte_cryptodev_configure(dev_id, &ts_params->conf),
 			"Failed test for rte_cryptodev_configure: "
@@ -608,7 +608,7 @@ test_device_configure_invalid_queue_pair_ids(void)
 
 
 	/* valid - max value queue pairs */
-	ts_params->conf.nb_queue_pairs = MAX_NUM_QPS_PER_QAT_DEVICE;
+	ts_params->conf.nb_queue_pairs = orig_nb_qps;
 
 	TEST_ASSERT_SUCCESS(rte_cryptodev_configure(ts_params->valid_devs[0],
 			&ts_params->conf),
@@ -640,7 +640,7 @@ test_device_configure_invalid_queue_pair_ids(void)
 
 
 	/* invalid - max value + 1 queue pairs */
-	ts_params->conf.nb_queue_pairs = MAX_NUM_QPS_PER_QAT_DEVICE + 1;
+	ts_params->conf.nb_queue_pairs = orig_nb_qps + 1;
 
 	TEST_ASSERT_FAIL(rte_cryptodev_configure(ts_params->valid_devs[0],
 			&ts_params->conf),
@@ -792,7 +792,7 @@ test_queue_pair_descriptor_setup(void)
 	/* test invalid queue pair id */
 	qp_conf.nb_descriptors = DEFAULT_NUM_OPS_INFLIGHT;	/*valid */
 
-	qp_id = DEFAULT_NUM_QPS_PER_QAT_DEVICE;		/*invalid */
+	qp_id = ts_params->conf.nb_queue_pairs;		/*invalid */
 
 	TEST_ASSERT_FAIL(rte_cryptodev_queue_pair_setup(
 			ts_params->valid_devs[0],
@@ -6484,7 +6484,7 @@ test_multi_session_random_usage(void)
 		sessions[i] = rte_cryptodev_sym_session_create(
 				ts_params->session_mpool);
 
-		rte_memcpy(&ut_paramz[i].ut_params, &testsuite_params,
+		rte_memcpy(&ut_paramz[i].ut_params, &unittest_params,
 				sizeof(struct crypto_unittest_params));
 
 		test_AES_CBC_HMAC_SHA512_decrypt_create_session_params(

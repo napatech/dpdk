@@ -79,28 +79,13 @@ static const char *pmd_valid_args[] = {
 	NULL
 };
 
-static const struct rte_eth_dev_info pmd_dev_info = {
-	.min_rx_bufsize = 0,
-	.max_rx_pktlen = UINT32_MAX,
-	.max_rx_queues = UINT16_MAX,
-	.max_tx_queues = UINT16_MAX,
-	.rx_desc_lim = {
-		.nb_max = UINT16_MAX,
-		.nb_min = 0,
-		.nb_align = 1,
-	},
-	.tx_desc_lim = {
-		.nb_max = UINT16_MAX,
-		.nb_min = 0,
-		.nb_align = 1,
-	},
-};
-
 static void
 pmd_dev_infos_get(struct rte_eth_dev *dev __rte_unused,
 	struct rte_eth_dev_info *dev_info)
 {
-	memcpy(dev_info, &pmd_dev_info, sizeof(*dev_info));
+	dev_info->max_rx_pktlen = UINT32_MAX;
+	dev_info->max_rx_queues = UINT16_MAX;
+	dev_info->max_tx_queues = UINT16_MAX;
 }
 
 static int
@@ -551,7 +536,7 @@ pmd_ethdev_register(struct rte_vdev_device *vdev,
 	soft_dev->data->dev_private = dev_private;
 	soft_dev->data->dev_link.link_speed = hard_speed;
 	soft_dev->data->dev_link.link_duplex = ETH_LINK_FULL_DUPLEX;
-	soft_dev->data->dev_link.link_autoneg = ETH_LINK_AUTONEG;
+	soft_dev->data->dev_link.link_autoneg = ETH_LINK_FIXED;
 	soft_dev->data->dev_link.link_status = ETH_LINK_DOWN;
 	soft_dev->data->mac_addrs = &eth_addr;
 	soft_dev->data->promiscuous = 1;

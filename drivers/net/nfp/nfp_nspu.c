@@ -9,6 +9,7 @@
 
 #include <rte_log.h>
 #include <rte_byteorder.h>
+#include <rte_string_fns.h>
 
 #include "nfp_nfpu.h"
 
@@ -423,7 +424,9 @@ nfp_nspu_set_bar_from_symbl(nspu_desc_t *desc, const char *symbl,
 	if (!sym_buf)
 		return -ENOMEM;
 
-	strncpy(sym_buf, symbl, strlen(symbl));
+	memset(sym_buf, 0, desc->buf_size);
+	memcpy(sym_buf, symbl, strlen(symbl));
+
 	ret = nspu_command(desc, NSP_CMD_GET_SYMBOL, 1, 1, sym_buf,
 			   NFP_SYM_DESC_LEN, strlen(symbl));
 	if (ret) {

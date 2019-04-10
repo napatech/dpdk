@@ -957,12 +957,6 @@ struct rte_eth_conf {
 };
 
 /**
- * A structure used to retrieve the contextual information of
- * an Ethernet device, such as the controlling driver of the device,
- * its PCI context, etc...
- */
-
-/**
  * RX offload capabilities of a device.
  */
 #define DEV_RX_OFFLOAD_VLAN_STRIP  0x00000001
@@ -1022,6 +1016,12 @@ struct rte_pci_device;
 
 /**
  * Ethernet device information
+ */
+
+/**
+ * A structure used to retrieve the contextual information of
+ * an Ethernet device, such as the controlling driver of the
+ * device, etc...
  */
 struct rte_eth_dev_info {
 	struct rte_pci_device *pci_dev; /**< Device PCI information. */
@@ -1890,7 +1890,6 @@ struct rte_eth_dev *rte_eth_dev_allocated(const char *name);
  * to that slot for the driver to use.
  *
  * @param	name	Unique identifier name for each Ethernet device
- * @param	type	Device type of this Ethernet device
  * @return
  *   - Slot in the rte_dev_devices array for a new device;
  */
@@ -2556,7 +2555,7 @@ void rte_eth_xstats_reset(uint16_t port_id);
  * @param stat_idx
  *   The per-queue packet statistics functionality number that the transmit
  *   queue is to be assigned.
- *   The value must be in the range [0, RTE_MAX_ETHPORT_QUEUE_STATS_MAPS - 1].
+ *   The value must be in the range [0, RTE_ETHDEV_QUEUE_STAT_CNTRS - 1].
  * @return
  *   Zero if successful. Non-zero otherwise.
  */
@@ -2576,7 +2575,7 @@ int rte_eth_dev_set_tx_queue_stats_mapping(uint16_t port_id,
  * @param stat_idx
  *   The per-queue packet statistics functionality number that the receive
  *   queue is to be assigned.
- *   The value must be in the range [0, RTE_MAX_ETHPORT_QUEUE_STATS_MAPS - 1].
+ *   The value must be in the range [0, RTE_ETHDEV_QUEUE_STAT_CNTRS - 1].
  * @return
  *   Zero if successful. Non-zero otherwise.
  */
@@ -2898,6 +2897,7 @@ rte_eth_rx_burst(uint16_t port_id, uint16_t queue_id,
 		 struct rte_mbuf **rx_pkts, const uint16_t nb_pkts)
 {
 	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
+	uint16_t nb_rx;
 
 #ifdef RTE_LIBRTE_ETHDEV_DEBUG
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, 0);
@@ -2908,14 +2908,14 @@ rte_eth_rx_burst(uint16_t port_id, uint16_t queue_id,
 		return 0;
 	}
 #endif
-	
-	int16_t nb_rx = (*dev->rx_pkt_burst)(dev->data->rx_queues[queue_id],
-			rx_pkts, nb_pkts);
+	nb_rx = (*dev->rx_pkt_burst)(dev->data->rx_queues[queue_id],
+				     rx_pkts, nb_pkts);
 
 #ifdef RTE_ETHDEV_RXTX_CALLBACKS
-	struct rte_eth_rxtx_callback *cb = dev->post_rx_burst_cbs[queue_id];
+	if (unlikely(dev->post_rx_burst_cbs[queue_id] != NULL)) {
+		struct rte_eth_rxtx_callback *cb =
+			dev->post_rx_burst_cbs[queue_id];
 
-	if (unlikely(cb != NULL)) {
 		do {
 			nb_rx = cb->fn.rx(port_id, queue_id, rx_pkts, nb_rx,
 						nb_pkts, cb->param);
@@ -2950,7 +2950,7 @@ rte_eth_rx_queue_count(uint16_t port_id, uint16_t queue_id)
 	if (queue_id >= dev->data->nb_rx_queues)
 		return -EINVAL;
 
-	return (*dev->dev_ops->rx_queue_count)(dev, queue_id);
+	return (int)(*dev->dev_ops->rx_queue_count)(dev, queue_id);
 }
 
 /**
@@ -3138,6 +3138,9 @@ static inline int rte_eth_tx_descriptor_status(uint16_t port_id,
  * If the PMD is DEV_TX_OFFLOAD_MT_LOCKFREE capable, multiple threads can
  * invoke this function concurrently on the same tx queue without SW lock.
  * @see rte_eth_dev_info_get, struct rte_eth_txconf::txq_flags
+ *
+ * @see rte_eth_tx_prepare to perform some prior checks or adjustments
+ * for offloads.
  *
  * @param port_id
  *   The port identifier of the Ethernet device.
@@ -3373,8 +3376,9 @@ rte_eth_tx_buffer_flush(uint16_t port_id, uint16_t queue_id,
 
 	/* All packets sent, or to be dealt with by callback below */
 	if (unlikely(sent != to_send))
-		buffer->error_callback(&buffer->pkts[sent], to_send - sent,
-				buffer->error_userdata);
+		buffer->error_callback(&buffer->pkts[sent],
+				       (uint16_t)(to_send - sent),
+				       buffer->error_userdata);
 
 	return sent;
 }

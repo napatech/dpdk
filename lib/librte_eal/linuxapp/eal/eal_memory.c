@@ -88,6 +88,23 @@
 
 static uint64_t baseaddr_offset;
 
+#ifdef RTE_ARCH_64
+/*
+ * Linux kernel uses a really high address as starting address for serving
+ * mmaps calls. If there exists addressing limitations and IOVA mode is VA,
+ * this starting address is likely too high for those devices. However, it
+ * is possible to use a lower address in the process virtual address space
+ * as with 64 bits there is a lot of available space.
+ *
+ * Current known limitations are 39 or 40 bits. Setting the starting address
+ * at 4GB implies there are 508GB or 1020GB for mapping the available
+ * hugepages. This is likely enough for most systems, although a device with
+ * addressing limitations should call rte_dev_check_dma_mask for ensuring all
+ * memory is within supported range.
+ */
+static uint64_t baseaddr = 0x100000000;
+#endif
+
 static bool phys_addrs_available = true;
 
 #define RANDOMIZE_VA_SPACE_FILE "/proc/sys/kernel/randomize_va_space"
@@ -95,7 +112,7 @@ static bool phys_addrs_available = true;
 static void
 test_phys_addrs_available(void)
 {
-	uint64_t tmp;
+	uint64_t tmp = 0;
 	phys_addr_t physaddr;
 
 	if (!rte_eal_has_hugepages()) {
@@ -250,6 +267,23 @@ aslr_enabled(void)
 	}
 }
 
+static void *
+get_addr_hint(void)
+{
+	if (internal_config.base_virtaddr != 0) {
+		return (void *) (uintptr_t)
+			    (internal_config.base_virtaddr +
+			     baseaddr_offset);
+	} else {
+#ifdef RTE_ARCH_64
+		return (void *) (uintptr_t) (baseaddr +
+				baseaddr_offset);
+#else
+		return NULL;
+#endif
+	}
+}
+
 /*
  * Try to mmap *size bytes in /dev/zero. If it is successful, return the
  * pointer to the mmap'd area and keep *size unmodified. Else, retry
@@ -260,15 +294,9 @@ aslr_enabled(void)
 static void *
 get_virtual_area(size_t *size, size_t hugepage_sz)
 {
-	void *addr;
+	void *addr, *addr_hint;
 	int fd;
 	long aligned_addr;
-
-	if (internal_config.base_virtaddr != 0) {
-		addr = (void*) (uintptr_t) (internal_config.base_virtaddr +
-				baseaddr_offset);
-	}
-	else addr = NULL;
 
 	RTE_LOG(DEBUG, EAL, "Ask a virtual area of 0x%zx bytes\n", *size);
 
@@ -278,7 +306,9 @@ get_virtual_area(size_t *size, size_t hugepage_sz)
 		return NULL;
 	}
 	do {
-		addr = mmap(addr,
+		addr_hint = get_addr_hint();
+
+		addr = mmap(addr_hint,
 				(*size) + hugepage_sz, PROT_READ,
 #ifdef RTE_ARCH_PPC_64
 				MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB,
@@ -286,8 +316,15 @@ get_virtual_area(size_t *size, size_t hugepage_sz)
 				MAP_PRIVATE,
 #endif
 				fd, 0);
-		if (addr == MAP_FAILED)
+		if (addr == MAP_FAILED) {
+			/* map failed. Let's try with less memory */
 			*size -= hugepage_sz;
+		} else if (addr_hint && addr != addr_hint) {
+			/* hint was not used. Try with another offset */
+			munmap(addr, (*size) + hugepage_sz);
+			addr = MAP_FAILED;
+			baseaddr_offset += 0x100000000;
+		}
 	} while (addr == MAP_FAILED && *size > 0);
 
 	if (addr == MAP_FAILED) {
@@ -359,7 +396,7 @@ map_all_hugepages(struct hugepage_file *hugepg_tbl, struct hugepage_info *hpi,
 	int node_id = -1;
 	int essential_prev = 0;
 	int oldpolicy;
-	struct bitmask *oldmask = numa_allocate_nodemask();
+	struct bitmask *oldmask = NULL;
 	bool have_numa = true;
 	unsigned long maxnode = 0;
 
@@ -371,6 +408,7 @@ map_all_hugepages(struct hugepage_file *hugepg_tbl, struct hugepage_info *hpi,
 
 	if (orig && have_numa) {
 		RTE_LOG(DEBUG, EAL, "Trying to obtain current memory policy.\n");
+		oldmask = numa_allocate_nodemask();
 		if (get_mempolicy(&oldpolicy, oldmask->maskp,
 				  oldmask->size + 1, 0, 0) < 0) {
 			RTE_LOG(ERR, EAL,
@@ -384,6 +422,21 @@ map_all_hugepages(struct hugepage_file *hugepg_tbl, struct hugepage_info *hpi,
 	}
 #endif
 
+#ifdef RTE_ARCH_64
+	/*
+	 * Hugepages are first mmaped individually and then re-mmapped to
+	 * another region for having contiguous physical pages in contiguous
+	 * virtual addresses. Setting here vma_addr for the first hugepage
+	 * mapped to a virtual address which will not collide with the second
+	 * mmaping later. The next hugepages will use increments of this
+	 * initial address.
+	 *
+	 * The final virtual address will be based on baseaddr which is
+	 * 0x100000000. We use a hint here starting at 0x200000000, leaving
+	 * another 4GB just in case, plus the total available hugepages memory.
+	 */
+	vma_addr = (char *)0x200000000 + (hpi->hugepage_sz * hpi->num_pages[0]);
+#endif
 	for (i = 0; i < hpi->num_pages[0]; i++) {
 		uint64_t hugepage_sz = hpi->hugepage_sz;
 
@@ -491,6 +544,9 @@ map_all_hugepages(struct hugepage_file *hugepg_tbl, struct hugepage_info *hpi,
 			hugepg_tbl[i].orig_va = virtaddr;
 		}
 		else {
+			/* rewrite physical addresses in IOVA as VA mode */
+			if (rte_eal_iova_mode() == RTE_IOVA_VA)
+				hugepg_tbl[i].physaddr = (uintptr_t)virtaddr;
 			hugepg_tbl[i].final_va = virtaddr;
 		}
 
@@ -548,7 +604,8 @@ out:
 			numa_set_localalloc();
 		}
 	}
-	numa_free_cpumask(oldmask);
+	if (oldmask != NULL)
+		numa_free_cpumask(oldmask);
 #endif
 	return i;
 }
@@ -1109,7 +1166,8 @@ rte_eal_hugepage_init(void)
 				continue;
 		}
 
-		if (phys_addrs_available) {
+		if (phys_addrs_available &&
+				rte_eal_iova_mode() != RTE_IOVA_VA) {
 			/* find physical addresses for each hugepage */
 			if (find_physaddrs(&tmp_hp[hp_offset], hpi) < 0) {
 				RTE_LOG(DEBUG, EAL, "Failed to find phys addr "

@@ -55,8 +55,8 @@ efx_mcdi_init_txq(
 	__in		efsys_mem_t *esmp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_INIT_TXQ_IN_LEN(EFX_TXQ_MAX_BUFS),
-			    MC_CMD_INIT_TXQ_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_INIT_TXQ_IN_LEN(EFX_TXQ_MAX_BUFS),
+		MC_CMD_INIT_TXQ_OUT_LEN);
 	efx_qword_t *dma_addr;
 	uint64_t addr;
 	int npages;
@@ -72,7 +72,6 @@ efx_mcdi_init_txq(
 		goto fail1;
 	}
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_INIT_TXQ;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_INIT_TXQ_IN_LEN(npages);
@@ -133,11 +132,10 @@ efx_mcdi_fini_txq(
 	__in		uint32_t instance)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_FINI_TXQ_IN_LEN,
-			    MC_CMD_FINI_TXQ_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_FINI_TXQ_IN_LEN,
+		MC_CMD_FINI_TXQ_OUT_LEN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_FINI_TXQ;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_FINI_TXQ_IN_LEN;
@@ -286,7 +284,7 @@ ef10_tx_qpio_enable(
 
 fail3:
 	EFSYS_PROBE(fail3);
-	ef10_nic_pio_free(enp, etp->et_pio_bufnum, etp->et_pio_blknum);
+	(void) ef10_nic_pio_free(enp, etp->et_pio_bufnum, etp->et_pio_blknum);
 fail2:
 	EFSYS_PROBE(fail2);
 	etp->et_pio_size = 0;
@@ -304,10 +302,12 @@ ef10_tx_qpio_disable(
 
 	if (etp->et_pio_size != 0) {
 		/* Unlink the piobuf from this TXQ */
-		ef10_nic_pio_unlink(enp, etp->et_index);
+		if (ef10_nic_pio_unlink(enp, etp->et_index) != 0)
+			return;
 
 		/* Free the sub-allocated PIO block */
-		ef10_nic_pio_free(enp, etp->et_pio_bufnum, etp->et_pio_blknum);
+		(void) ef10_nic_pio_free(enp, etp->et_pio_bufnum,
+		    etp->et_pio_blknum);
 		etp->et_pio_size = 0;
 		etp->et_pio_write_offset = 0;
 	}

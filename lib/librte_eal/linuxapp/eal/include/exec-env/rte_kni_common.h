@@ -61,6 +61,7 @@
 
 #ifdef __KERNEL__
 #include <linux/if.h>
+#include <asm/barrier.h>
 #define RTE_STD_C11
 #else
 #include <rte_common.h>

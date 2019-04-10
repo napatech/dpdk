@@ -100,7 +100,7 @@ rte_rwlock_read_lock(rte_rwlock_t *rwl)
 			continue;
 		}
 		success = rte_atomic32_cmpset((volatile uint32_t *)&rwl->cnt,
-					      x, x + 1);
+					      (uint32_t)x, (uint32_t)(x + 1));
 	}
 }
 
@@ -136,7 +136,7 @@ rte_rwlock_write_lock(rte_rwlock_t *rwl)
 			continue;
 		}
 		success = rte_atomic32_cmpset((volatile uint32_t *)&rwl->cnt,
-					      0, -1);
+					      0, (uint32_t)-1);
 	}
 }
 

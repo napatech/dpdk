@@ -173,6 +173,7 @@ static const char ixgbe_gstrings_test[][ETH_GSTRING_LEN] = {
 #define IXGBE_TEST_LEN	(sizeof(ixgbe_gstrings_test) / ETH_GSTRING_LEN)
 #endif /* ETHTOOL_TEST */
 
+#ifndef ETHTOOL_GLINKSETTINGS
 int ixgbe_get_settings(struct net_device *netdev,
 		       struct ethtool_cmd *ecmd)
 {
@@ -362,7 +363,9 @@ int ixgbe_get_settings(struct net_device *netdev,
 
 	return 0;
 }
+#endif
 
+#ifndef ETHTOOL_SLINKSETTINGS
 static int ixgbe_set_settings(struct net_device *netdev,
 			      struct ethtool_cmd *ecmd)
 {
@@ -406,6 +409,7 @@ static int ixgbe_set_settings(struct net_device *netdev,
 	}
 	return err;
 }
+#endif
 
 static void ixgbe_get_pauseparam(struct net_device *netdev,
 				 struct ethtool_pauseparam *pause)
@@ -2830,8 +2834,12 @@ static int ixgbe_set_rxnfc(struct net_device *dev, struct ethtool_rxnfc *cmd)
 #endif /* ETHTOOL_GRXRINGS */
 //static
 struct ethtool_ops ixgbe_ethtool_ops = {
+#ifndef ETHTOOL_GLINKSETTINGS
 	.get_settings		= ixgbe_get_settings,
+#endif
+#ifndef ETHTOOL_SLINKSETTINGS
 	.set_settings		= ixgbe_set_settings,
+#endif
 	.get_drvinfo		= ixgbe_get_drvinfo,
 	.get_regs_len		= ixgbe_get_regs_len,
 	.get_regs		= ixgbe_get_regs,

@@ -367,7 +367,7 @@ i40e_vsi_set_tx_loopback(struct i40e_vsi *vsi, uint8_t on)
 	hw = I40E_VSI_TO_HW(vsi);
 
 	/* Use the FW API if FW >= v5.0 */
-	if (hw->aq.fw_maj_ver < 5) {
+	if (hw->aq.fw_maj_ver < 5 && hw->mac.type != I40E_MAC_X722) {
 		PMD_INIT_LOG(ERR, "FW < v5.0, cannot enable loopback");
 		return -ENOTSUP;
 	}
@@ -1632,8 +1632,6 @@ rte_pmd_i40e_process_ddp_package(uint16_t port, uint8_t *buff,
 		return -EINVAL;
 	}
 
-	i40e_update_customized_info(dev, buff, size);
-
 	/* Find metadata segment */
 	metadata_seg_hdr = i40e_find_segment_in_package(SEGMENT_TYPE_METADATA,
 							pkg_hdr);
@@ -1690,6 +1688,7 @@ rte_pmd_i40e_process_ddp_package(uint16_t port, uint8_t *buff,
 				PMD_DRV_LOG(ERR, "Profile of group 0 already exists.");
 			else if (is_exist == 3)
 				PMD_DRV_LOG(ERR, "Profile of different group already exists");
+			i40e_update_customized_info(dev, buff, size, op);
 			rte_free(profile_info_sec);
 			return -EEXIST;
 		}
@@ -1736,6 +1735,10 @@ rte_pmd_i40e_process_ddp_package(uint16_t port, uint8_t *buff,
 				PMD_DRV_LOG(ERR, "Failed to delete profile from info list.");
 		}
 	}
+
+	if (op == RTE_PMD_I40E_PKG_OP_WR_ADD ||
+	    op == RTE_PMD_I40E_PKG_OP_WR_DEL)
+		i40e_update_customized_info(dev, buff, size, op);
 
 	rte_free(profile_info_sec);
 	return status;

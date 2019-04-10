@@ -82,16 +82,36 @@ struct mlx5_txq_stats {
 
 struct priv;
 
-/* Memory region queue object. */
+/* Memory Region object. */
 struct mlx5_mr {
-	LIST_ENTRY(mlx5_mr) next; /**< Pointer to the next element. */
-	rte_atomic32_t refcnt; /*<< Reference counter. */
-	uint32_t lkey; /*<< rte_cpu_to_be_32(mr->lkey) */
-	uintptr_t start; /* Start address of MR */
-	uintptr_t end; /* End address of MR */
-	struct ibv_mr *mr; /*<< Memory Region. */
-	struct rte_mempool *mp; /*<< Memory Pool. */
+	const struct rte_memseg *memseg;
+	struct ibv_mr *ibv_mr; /* Verbs Memory Region. */
 };
+
+/* Cache entry for Memory Region. */
+struct mlx5_mr_cache {
+	uintptr_t start; /* Start address of MR. */
+	uintptr_t end; /* End address of MR. */
+	uint32_t lkey; /* rte_cpu_to_be_32(ibv_mr->lkey). */
+} __rte_packed;
+
+/* Per-queue MR control descriptor. */
+struct mlx5_mr_ctrl {
+	uint16_t bh_n; /* Size of MR cache table for bottom-half. */
+	uint16_t mru; /* Index of last hit entry. */
+	uint16_t head; /* Index of the oldest entry. */
+	struct mlx5_mr_cache cache[MLX5_MR_CACHE_N]; /* MR cache. */
+	struct mlx5_mr_cache (*cache_bh)[]; /* MR cache for bottom-half. */
+} __rte_packed;
+
+/* MR table size including padding at index 0. */
+#define MR_TABLE_SZ(n) ((n) + MLX5_MR_LOOKUP_TABLE_PAD)
+
+/* Actual table size excluding padding at index 0. */
+#define MR_N(n) ((n) - MLX5_MR_LOOKUP_TABLE_PAD)
+
+/* Whether there's only one entry in MR lookup table. */
+#define IS_SINGLE_MR(n) (MR_N(n) <= 1)
 
 /* Compressed CQE context. */
 struct rxq_zip {
@@ -118,9 +138,11 @@ struct mlx5_rxq_data {
 	volatile uint32_t *rq_db;
 	volatile uint32_t *cq_db;
 	uint16_t port_id;
-	uint16_t rq_ci;
-	uint16_t rq_pi;
-	uint16_t cq_ci;
+	uint32_t rq_ci;
+	uint32_t rq_pi;
+	uint32_t cq_ci;
+	uint16_t rq_repl_thresh; /* Threshold for buffer replenishment. */
+	struct mlx5_mr_ctrl mr_ctrl;
 	volatile struct mlx5_wqe_data_seg(*wqes)[];
 	volatile struct mlx5_cqe(*cqes)[];
 	struct rxq_zip zip; /* Compressed context. */
@@ -142,7 +164,6 @@ struct mlx5_rxq_ibv {
 	struct ibv_cq *cq; /* Completion Queue. */
 	struct ibv_wq *wq; /* Work Queue. */
 	struct ibv_comp_channel *channel;
-	struct mlx5_mr *mr; /* Memory Region (for mp). */
 };
 
 /* RX queue control descriptor. */
@@ -154,6 +175,7 @@ struct mlx5_rxq_ctrl {
 	struct mlx5_rxq_data rxq; /* Data path structure. */
 	unsigned int socket; /* CPU socket ID for allocations. */
 	unsigned int irq:1; /* Whether IRQ is enabled. */
+	uint16_t idx; /* Queue index. */
 };
 
 /* Indirection table. */
@@ -184,7 +206,9 @@ struct mlx5_txq_data {
 	uint16_t elts_comp; /* Counter since last completion request. */
 	uint16_t mpw_comp; /* WQ index since last completion request. */
 	uint16_t cq_ci; /* Consumer index for completion queue. */
+#ifndef NDEBUG
 	uint16_t cq_pi; /* Producer index for completion queue. */
+#endif
 	uint16_t wqe_ci; /* Consumer index for work queue. */
 	uint16_t wqe_pi; /* Producer index for work queue. */
 	uint16_t elts_n:4; /* (*elts)[] length (in log2). */
@@ -197,15 +221,14 @@ struct mlx5_txq_data {
 	uint16_t mpw_hdr_dseg:1; /* Enable DSEGs in the title WQEBB. */
 	uint16_t max_inline; /* Multiple of RTE_CACHE_LINE_SIZE to inline. */
 	uint16_t inline_max_packet_sz; /* Max packet size for inlining. */
-	uint16_t mr_cache_idx; /* Index of last hit entry. */
 	uint32_t qp_num_8s; /* QP number shifted by 8. */
 	uint32_t flags; /* Flags for Tx Queue. */
+	struct mlx5_mr_ctrl mr_ctrl;
 	volatile struct mlx5_cqe (*cqes)[]; /* Completion queue. */
 	volatile void *wqes; /* Work queue (use volatile to write into). */
 	volatile uint32_t *qp_db; /* Work queue doorbell. */
 	volatile uint32_t *cq_db; /* Completion queue doorbell. */
-	volatile void *bf_reg; /* Blueflame register. */
-	struct mlx5_mr *mp2mr[MLX5_PMD_TX_MP_CACHE]; /* MR translation table. */
+	volatile void *bf_reg; /* Blueflame register remapped. */
 	struct rte_mbuf *(*elts)[]; /* TX elements. */
 	struct mlx5_txq_stats stats; /* TX queue counters. */
 } __rte_cache_aligned;
@@ -214,6 +237,7 @@ struct mlx5_txq_data {
 struct mlx5_txq_ibv {
 	LIST_ENTRY(mlx5_txq_ibv) next; /* Pointer to the next element. */
 	rte_atomic32_t refcnt; /* Reference counter. */
+	struct mlx5_txq_ctrl *txq_ctrl; /* Pointer to the control queue. */
 	struct ibv_cq *cq; /* Completion Queue. */
 	struct ibv_qp *qp; /* Queue Pair. */
 };
@@ -229,6 +253,8 @@ struct mlx5_txq_ctrl {
 	struct mlx5_txq_ibv *ibv; /* Verbs queue object. */
 	struct mlx5_txq_data txq; /* Data path structure. */
 	off_t uar_mmap_offset; /* UAR mmap offset for non-primary process. */
+	volatile void *bf_reg_orig; /* Blueflame register from verbs. */
+	uint16_t idx; /* Queue index. */
 };
 
 /* mlx5_rxq.c */
@@ -236,93 +262,105 @@ struct mlx5_txq_ctrl {
 extern uint8_t rss_hash_default_key[];
 extern const size_t rss_hash_default_key_len;
 
-void mlx5_rxq_cleanup(struct mlx5_rxq_ctrl *);
-int mlx5_rx_queue_setup(struct rte_eth_dev *, uint16_t, uint16_t, unsigned int,
-			const struct rte_eth_rxconf *, struct rte_mempool *);
-void mlx5_rx_queue_release(void *);
-int priv_rx_intr_vec_enable(struct priv *priv);
-void priv_rx_intr_vec_disable(struct priv *priv);
+void mlx5_rxq_cleanup(struct mlx5_rxq_ctrl *rxq_ctrl);
+int mlx5_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
+			unsigned int socket, const struct rte_eth_rxconf *conf,
+			struct rte_mempool *mp);
+void mlx5_rx_queue_release(void *dpdk_rxq);
+int mlx5_rx_intr_vec_enable(struct rte_eth_dev *dev);
+void mlx5_rx_intr_vec_disable(struct rte_eth_dev *dev);
 int mlx5_rx_intr_enable(struct rte_eth_dev *dev, uint16_t rx_queue_id);
 int mlx5_rx_intr_disable(struct rte_eth_dev *dev, uint16_t rx_queue_id);
-struct mlx5_rxq_ibv *mlx5_priv_rxq_ibv_new(struct priv *, uint16_t);
-struct mlx5_rxq_ibv *mlx5_priv_rxq_ibv_get(struct priv *, uint16_t);
-int mlx5_priv_rxq_ibv_release(struct priv *, struct mlx5_rxq_ibv *);
-int mlx5_priv_rxq_ibv_releasable(struct priv *, struct mlx5_rxq_ibv *);
-int mlx5_priv_rxq_ibv_verify(struct priv *);
-struct mlx5_rxq_ctrl *mlx5_priv_rxq_new(struct priv *, uint16_t,
-					uint16_t, unsigned int,
-					struct rte_mempool *);
-struct mlx5_rxq_ctrl *mlx5_priv_rxq_get(struct priv *, uint16_t);
-int mlx5_priv_rxq_release(struct priv *, uint16_t);
-int mlx5_priv_rxq_releasable(struct priv *, uint16_t);
-int mlx5_priv_rxq_verify(struct priv *);
-int rxq_alloc_elts(struct mlx5_rxq_ctrl *);
-struct mlx5_ind_table_ibv *mlx5_priv_ind_table_ibv_new(struct priv *,
-						       uint16_t [],
-						       uint16_t);
-struct mlx5_ind_table_ibv *mlx5_priv_ind_table_ibv_get(struct priv *,
-						       uint16_t [],
-						       uint16_t);
-int mlx5_priv_ind_table_ibv_release(struct priv *, struct mlx5_ind_table_ibv *);
-int mlx5_priv_ind_table_ibv_verify(struct priv *);
-struct mlx5_hrxq *mlx5_priv_hrxq_new(struct priv *, uint8_t *, uint8_t,
-				     uint64_t, uint16_t [], uint16_t);
-struct mlx5_hrxq *mlx5_priv_hrxq_get(struct priv *, uint8_t *, uint8_t,
-				     uint64_t, uint16_t [], uint16_t);
-int mlx5_priv_hrxq_release(struct priv *, struct mlx5_hrxq *);
-int mlx5_priv_hrxq_ibv_verify(struct priv *);
+struct mlx5_rxq_ibv *mlx5_rxq_ibv_new(struct rte_eth_dev *dev, uint16_t idx);
+struct mlx5_rxq_ibv *mlx5_rxq_ibv_get(struct rte_eth_dev *dev, uint16_t idx);
+int mlx5_rxq_ibv_release(struct mlx5_rxq_ibv *rxq_ibv);
+int mlx5_rxq_ibv_releasable(struct mlx5_rxq_ibv *rxq_ibv);
+int mlx5_rxq_ibv_verify(struct rte_eth_dev *dev);
+struct mlx5_rxq_ctrl *mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx,
+				   uint16_t desc, unsigned int socket,
+				   struct rte_mempool *mp);
+struct mlx5_rxq_ctrl *mlx5_rxq_get(struct rte_eth_dev *dev, uint16_t idx);
+int mlx5_rxq_release(struct rte_eth_dev *dev, uint16_t idx);
+int mlx5_rxq_releasable(struct rte_eth_dev *dev, uint16_t idx);
+int mlx5_rxq_verify(struct rte_eth_dev *dev);
+int rxq_alloc_elts(struct mlx5_rxq_ctrl *rxq_ctrl);
+struct mlx5_ind_table_ibv *mlx5_ind_table_ibv_new(struct rte_eth_dev *dev,
+						  uint16_t queues[],
+						  uint16_t queues_n);
+struct mlx5_ind_table_ibv *mlx5_ind_table_ibv_get(struct rte_eth_dev *dev,
+						  uint16_t queues[],
+						  uint16_t queues_n);
+int mlx5_ind_table_ibv_release(struct rte_eth_dev *dev,
+			       struct mlx5_ind_table_ibv *ind_tbl);
+int mlx5_ind_table_ibv_verify(struct rte_eth_dev *dev);
+struct mlx5_hrxq *mlx5_hrxq_new(struct rte_eth_dev *dev, uint8_t *rss_key,
+				uint8_t rss_key_len, uint64_t hash_fields,
+				uint16_t queues[], uint16_t queues_n);
+struct mlx5_hrxq *mlx5_hrxq_get(struct rte_eth_dev *dev, uint8_t *rss_key,
+				uint8_t rss_key_len, uint64_t hash_fields,
+				uint16_t queues[], uint16_t queues_n);
+int mlx5_hrxq_release(struct rte_eth_dev *dev, struct mlx5_hrxq *hxrq);
+int mlx5_hrxq_ibv_verify(struct rte_eth_dev *dev);
 
 /* mlx5_txq.c */
 
-int mlx5_tx_queue_setup(struct rte_eth_dev *, uint16_t, uint16_t, unsigned int,
-			const struct rte_eth_txconf *);
-void mlx5_tx_queue_release(void *);
-int priv_tx_uar_remap(struct priv *priv, int fd);
-struct mlx5_txq_ibv *mlx5_priv_txq_ibv_new(struct priv *, uint16_t);
-struct mlx5_txq_ibv *mlx5_priv_txq_ibv_get(struct priv *, uint16_t);
-int mlx5_priv_txq_ibv_release(struct priv *, struct mlx5_txq_ibv *);
-int mlx5_priv_txq_ibv_releasable(struct priv *, struct mlx5_txq_ibv *);
-int mlx5_priv_txq_ibv_verify(struct priv *);
-struct mlx5_txq_ctrl *mlx5_priv_txq_new(struct priv *, uint16_t,
-					uint16_t, unsigned int,
-					const struct rte_eth_txconf *);
-struct mlx5_txq_ctrl *mlx5_priv_txq_get(struct priv *, uint16_t);
-int mlx5_priv_txq_release(struct priv *, uint16_t);
-int mlx5_priv_txq_releasable(struct priv *, uint16_t);
-int mlx5_priv_txq_verify(struct priv *);
-void txq_alloc_elts(struct mlx5_txq_ctrl *);
+int mlx5_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
+			unsigned int socket, const struct rte_eth_txconf *conf);
+void mlx5_tx_queue_release(void *dpdk_txq);
+int mlx5_tx_uar_remap(struct rte_eth_dev *dev, int fd);
+struct mlx5_txq_ibv *mlx5_txq_ibv_new(struct rte_eth_dev *dev, uint16_t idx);
+struct mlx5_txq_ibv *mlx5_txq_ibv_get(struct rte_eth_dev *dev, uint16_t idx);
+int mlx5_txq_ibv_release(struct mlx5_txq_ibv *txq_ibv);
+int mlx5_txq_ibv_releasable(struct mlx5_txq_ibv *txq_ibv);
+int mlx5_txq_ibv_verify(struct rte_eth_dev *dev);
+struct mlx5_txq_ctrl *mlx5_txq_new(struct rte_eth_dev *dev, uint16_t idx,
+				   uint16_t desc, unsigned int socket,
+				   const struct rte_eth_txconf *conf);
+struct mlx5_txq_ctrl *mlx5_txq_get(struct rte_eth_dev *dev, uint16_t idx);
+int mlx5_txq_release(struct rte_eth_dev *dev, uint16_t idx);
+int mlx5_txq_releasable(struct rte_eth_dev *dev, uint16_t idx);
+int mlx5_txq_verify(struct rte_eth_dev *dev);
+void txq_alloc_elts(struct mlx5_txq_ctrl *txq_ctrl);
 
 /* mlx5_rxtx.c */
 
 extern uint32_t mlx5_ptype_table[];
 
 void mlx5_set_ptype_table(void);
-uint16_t mlx5_tx_burst(void *, struct rte_mbuf **, uint16_t);
-uint16_t mlx5_tx_burst_mpw(void *, struct rte_mbuf **, uint16_t);
-uint16_t mlx5_tx_burst_mpw_inline(void *, struct rte_mbuf **, uint16_t);
-uint16_t mlx5_tx_burst_empw(void *, struct rte_mbuf **, uint16_t);
-uint16_t mlx5_rx_burst(void *, struct rte_mbuf **, uint16_t);
-uint16_t removed_tx_burst(void *, struct rte_mbuf **, uint16_t);
-uint16_t removed_rx_burst(void *, struct rte_mbuf **, uint16_t);
-int mlx5_rx_descriptor_status(void *, uint16_t);
-int mlx5_tx_descriptor_status(void *, uint16_t);
+uint16_t mlx5_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts,
+		       uint16_t pkts_n);
+uint16_t mlx5_tx_burst_mpw(void *dpdk_txq, struct rte_mbuf **pkts,
+			   uint16_t pkts_n);
+uint16_t mlx5_tx_burst_mpw_inline(void *dpdk_txq, struct rte_mbuf **pkts,
+				  uint16_t pkts_n);
+uint16_t mlx5_tx_burst_empw(void *dpdk_txq, struct rte_mbuf **pkts,
+			    uint16_t pkts_n);
+uint16_t mlx5_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n);
+uint16_t removed_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts,
+			  uint16_t pkts_n);
+uint16_t removed_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts,
+			  uint16_t pkts_n);
+int mlx5_rx_descriptor_status(void *rx_queue, uint16_t offset);
+int mlx5_tx_descriptor_status(void *tx_queue, uint16_t offset);
 
 /* Vectorized version of mlx5_rxtx.c */
-int priv_check_raw_vec_tx_support(struct priv *);
-int priv_check_vec_tx_support(struct priv *);
-int rxq_check_vec_support(struct mlx5_rxq_data *);
-int priv_check_vec_rx_support(struct priv *);
-uint16_t mlx5_tx_burst_raw_vec(void *, struct rte_mbuf **, uint16_t);
-uint16_t mlx5_tx_burst_vec(void *, struct rte_mbuf **, uint16_t);
-uint16_t mlx5_rx_burst_vec(void *, struct rte_mbuf **, uint16_t);
+int mlx5_check_raw_vec_tx_support(struct rte_eth_dev *dev);
+int mlx5_check_vec_tx_support(struct rte_eth_dev *dev);
+int mlx5_rxq_check_vec_support(struct mlx5_rxq_data *rxq_data);
+int mlx5_check_vec_rx_support(struct rte_eth_dev *dev);
+uint16_t mlx5_tx_burst_raw_vec(void *dpdk_txq, struct rte_mbuf **pkts,
+			       uint16_t pkts_n);
+uint16_t mlx5_tx_burst_vec(void *dpdk_txq, struct rte_mbuf **pkts,
+			   uint16_t pkts_n);
+uint16_t mlx5_rx_burst_vec(void *dpdk_txq, struct rte_mbuf **pkts,
+			   uint16_t pkts_n);
 
 /* mlx5_mr.c */
 
-void mlx5_mp2mr_iter(struct rte_mempool *, void *);
-struct mlx5_mr *priv_txq_mp2mr_reg(struct priv *priv, struct mlx5_txq_data *,
-				   struct rte_mempool *, unsigned int);
-struct mlx5_mr *mlx5_txq_mp2mr_reg(struct mlx5_txq_data *, struct rte_mempool *,
-				   unsigned int);
+int mlx5_mr_update_mp(struct rte_eth_dev *dev, struct mlx5_mr_cache *lkp_tbl,
+		      uint16_t n, struct rte_mempool *mp);
+uint32_t mlx5_rx_mb2mr_bh(struct mlx5_rxq_data *rxq, uintptr_t addr);
+uint32_t mlx5_tx_mb2mr_bh(struct mlx5_txq_data *txq, uintptr_t addr);
 
 #ifndef NDEBUG
 /**
@@ -385,9 +423,10 @@ check_cqe(volatile struct mlx5_cqe *cqe,
 		    (syndrome == MLX5_CQE_SYNDROME_REMOTE_ABORTED_ERR))
 			return 0;
 		if (!check_cqe_seen(cqe)) {
-			ERROR("unexpected CQE error %u (0x%02x)"
-			      " syndrome 0x%02x",
-			      op_code, op_code, syndrome);
+			DRV_LOG(ERR,
+				"unexpected CQE error %u (0x%02x) syndrome"
+				" 0x%02x",
+				op_code, op_code, syndrome);
 			rte_hexdump(stderr, "MLX5 Error CQE:",
 				    (const void *)((uintptr_t)err_cqe),
 				    sizeof(*err_cqe));
@@ -396,8 +435,8 @@ check_cqe(volatile struct mlx5_cqe *cqe,
 	} else if ((op_code != MLX5_CQE_RESP_SEND) &&
 		   (op_code != MLX5_CQE_REQ)) {
 		if (!check_cqe_seen(cqe)) {
-			ERROR("unexpected CQE opcode %u (0x%02x)",
-			      op_code, op_code);
+			DRV_LOG(ERR, "unexpected CQE opcode %u (0x%02x)",
+				op_code, op_code);
 			rte_hexdump(stderr, "MLX5 CQE:",
 				    (const void *)((uintptr_t)cqe),
 				    sizeof(*cqe));
@@ -457,7 +496,7 @@ mlx5_tx_complete(struct mlx5_txq_data *txq)
 	if ((MLX5_CQE_OPCODE(cqe->op_own) == MLX5_CQE_RESP_ERR) ||
 	    (MLX5_CQE_OPCODE(cqe->op_own) == MLX5_CQE_REQ_ERR)) {
 		if (!check_cqe_seen(cqe)) {
-			ERROR("unexpected error CQE, TX stopped");
+			DRV_LOG(ERR, "unexpected error CQE, Tx stopped");
 			rte_hexdump(stderr, "MLX5 TXQ:",
 				    (const void *)((uintptr_t)txq->wqes),
 				    ((1 << txq->wqe_n) *
@@ -509,73 +548,101 @@ mlx5_tx_complete(struct mlx5_txq_data *txq)
 }
 
 /**
- * Get Memory Pool (MP) from mbuf. If mbuf is indirect, the pool from which
- * the cloned mbuf is allocated is returned instead.
+ * Look up LKEY from given lookup table by linear search. Firstly look up the
+ * last-hit entry. If miss, the entire array is searched. If found, update the
+ * last-hit index and return LKEY.
  *
- * @param buf
- *   Pointer to mbuf.
+ * @param lkp_tbl
+ *   Pointer to lookup table.
+ * @param[in,out] cached_idx
+ *   Pointer to last-hit index.
+ * @param n
+ *   Size of lookup table.
+ * @param addr
+ *   Search key.
  *
  * @return
- *   Memory pool where data is located for given mbuf.
+ *   Searched LKEY on success, UINT32_MAX on no match.
  */
-static struct rte_mempool *
-mlx5_tx_mb2mp(struct rte_mbuf *buf)
+static __rte_always_inline uint32_t
+mlx5_mr_lookup_cache(struct mlx5_mr_cache *lkp_tbl, uint16_t *cached_idx,
+		     uint16_t n, uintptr_t addr)
 {
-	if (unlikely(RTE_MBUF_INDIRECT(buf)))
-		return rte_mbuf_from_indirect(buf)->pool;
-	return buf->pool;
+	uint16_t idx;
+
+	if (likely(addr >= lkp_tbl[*cached_idx].start &&
+		   addr < lkp_tbl[*cached_idx].end))
+		return lkp_tbl[*cached_idx].lkey;
+	for (idx = 0; idx < n && lkp_tbl[idx].start != 0; ++idx) {
+		if (addr >= lkp_tbl[idx].start &&
+		    addr < lkp_tbl[idx].end) {
+			/* Found. */
+			*cached_idx = idx;
+			return lkp_tbl[idx].lkey;
+		}
+	}
+	return UINT32_MAX;
 }
 
 /**
- * Get Memory Region (MR) <-> rte_mbuf association from txq->mp2mr[].
- * Add MP to txq->mp2mr[] if it's not registered yet. If mp2mr[] is full,
- * remove an entry first.
+ * Query LKEY from address for Rx.
  *
- * @param txq
- *   Pointer to TX queue structure.
- * @param[in] mp
- *   Memory Pool for which a Memory Region lkey must be returned.
+ * @param rxq
+ *   Pointer to Rx queue structure.
+ * @param addr
+ *   Address to search.
  *
  * @return
- *   mr->lkey on success, (uint32_t)-1 on failure.
+ *   LKEY on success.
  */
 static __rte_always_inline uint32_t
-mlx5_tx_mb2mr(struct mlx5_txq_data *txq, struct rte_mbuf *mb)
+mlx5_rx_addr2mr(struct mlx5_rxq_data *rxq, uintptr_t addr)
 {
-	uint16_t i = txq->mr_cache_idx;
-	uintptr_t addr = rte_pktmbuf_mtod(mb, uintptr_t);
-	struct mlx5_mr *mr;
+	uint32_t lkey;
 
-	assert(i < RTE_DIM(txq->mp2mr));
-	if (likely(txq->mp2mr[i]->start <= addr && txq->mp2mr[i]->end > addr))
-		return txq->mp2mr[i]->lkey;
-	for (i = 0; (i != RTE_DIM(txq->mp2mr)); ++i) {
-		if (unlikely(txq->mp2mr[i] == NULL ||
-		    txq->mp2mr[i]->mr == NULL)) {
-			/* Unknown MP, add a new MR for it. */
-			break;
-		}
-		if (txq->mp2mr[i]->start <= addr &&
-		    txq->mp2mr[i]->end > addr) {
-			assert(txq->mp2mr[i]->lkey != (uint32_t)-1);
-			assert(rte_cpu_to_be_32(txq->mp2mr[i]->mr->lkey) ==
-			       txq->mp2mr[i]->lkey);
-			txq->mr_cache_idx = i;
-			return txq->mp2mr[i]->lkey;
-		}
-	}
-	mr = mlx5_txq_mp2mr_reg(txq, mlx5_tx_mb2mp(mb), i);
-	/*
-	 * Request the reference to use in this queue, the original one is
-	 * kept by the control plane.
-	 */
-	if (mr) {
-		rte_atomic32_inc(&mr->refcnt);
-		txq->mr_cache_idx = i >= RTE_DIM(txq->mp2mr) ? i - 1 : i;
-		return mr->lkey;
-	}
-	return (uint32_t)-1;
+	/* Linear search on MR cache array. */
+	lkey = mlx5_mr_lookup_cache(rxq->mr_ctrl.cache,
+				    &rxq->mr_ctrl.mru,
+				    MLX5_MR_CACHE_N, addr);
+	if (likely(lkey != UINT32_MAX))
+		return lkey;
+	DEBUG("No found in rxq->mr_cache[], last-hit = %u, head = %u)",
+	      rxq->mr_ctrl.mru, rxq->mr_ctrl.head);
+	/* Take slower bottom-half (binary search) on miss. */
+	return mlx5_rx_mb2mr_bh(rxq, addr);
 }
+
+#define mlx5_rx_mb2mr(rxq, mb) mlx5_rx_addr2mr(rxq, (uintptr_t)((mb)->buf_addr))
+
+/**
+ * Query LKEY from address for Tx.
+ *
+ * @param txq
+ *   Pointer to Tx queue structure.
+ * @param addr
+ *   Address to search.
+ *
+ * @return
+ *   LKEY on success.
+ */
+static __rte_always_inline uint32_t
+mlx5_tx_addr2mr(struct mlx5_txq_data *txq, uintptr_t addr)
+{
+	uint32_t lkey;
+
+	/* Linear search on MR cache array. */
+	lkey = mlx5_mr_lookup_cache(txq->mr_ctrl.cache,
+				    &txq->mr_ctrl.mru,
+				    MLX5_MR_CACHE_N, addr);
+	if (likely(lkey != UINT32_MAX))
+		return lkey;
+	DEBUG("No found in txq->mr_cache[], last-hit = %u, head = %u)",
+	      txq->mr_ctrl.mru, txq->mr_ctrl.head);
+	/* Take slower bottom-half (binary search) on miss. */
+	return mlx5_tx_mb2mr_bh(txq, addr);
+}
+
+#define mlx5_tx_mb2mr(rxq, mb) mlx5_tx_addr2mr(rxq, (uintptr_t)((mb)->buf_addr))
 
 /**
  * Ring TX queue doorbell and flush the update if requested.

@@ -709,7 +709,7 @@ static int ena_link_update(struct rte_eth_dev *dev,
 	struct rte_eth_link *link = &dev->data->dev_link;
 
 	link->link_status = 1;
-	link->link_speed = ETH_SPEED_NUM_10G;
+	link->link_speed = ETH_SPEED_NUM_NONE;
 	link->link_duplex = ETH_LINK_FULL_DUPLEX;
 
 	return 0;
@@ -907,7 +907,7 @@ static int ena_start(struct rte_eth_dev *dev)
 		return rc;
 
 	if (adapter->rte_dev->data->dev_conf.rxmode.mq_mode &
-	    ETH_MQ_RX_RSS_FLAG) {
+	    ETH_MQ_RX_RSS_FLAG && adapter->rte_dev->data->nb_rx_queues > 0) {
 		rc = ena_rss_init_default(adapter);
 		if (rc)
 			return rc;
@@ -1573,7 +1573,7 @@ static uint16_t eth_ena_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 
 		/* fill mbuf attributes if any */
 		ena_rx_mbuf_prepare(mbuf_head, &ena_rx_ctx);
-		mbuf_head->hash.rss = (uint32_t)rx_ring->id;
+		mbuf_head->hash.rss = ena_rx_ctx.hash;
 
 		/* pass to DPDK application head mbuf */
 		rx_pkts[recv_idx] = mbuf_head;

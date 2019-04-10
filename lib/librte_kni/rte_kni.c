@@ -532,7 +532,7 @@ int
 rte_kni_handle_request(struct rte_kni *kni)
 {
 	unsigned ret;
-	struct rte_kni_request *req;
+	struct rte_kni_request *req = NULL;
 
 	if (kni == NULL)
 		return -1;
@@ -680,6 +680,9 @@ rte_kni_get(const char *name)
 	uint32_t i;
 	struct rte_kni_memzone_slot *it;
 	struct rte_kni *kni;
+
+	if (name == NULL || name[0] == '\0')
+		return NULL;
 
 	/* Note: could be improved perf-wise if necessary */
 	for (i = 0; i < kni_memzone_pool.max_ifaces; i++) {

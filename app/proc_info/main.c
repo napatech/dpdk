@@ -188,7 +188,7 @@ proc_info_preparse_args(int argc, char **argv)
 				proc_info_usage(prgname);
 				return -1;
 			}
-			strncpy(host_id, argv[i+1], sizeof(host_id));
+			snprintf(host_id, sizeof(host_id), "%s", argv[i+1]);
 		}
 	}
 
@@ -517,14 +517,18 @@ nic_xstats_display(uint16_t port_id)
 		if (enable_collectd_format) {
 			char counter_type[MAX_STRING_LEN];
 			char buf[MAX_STRING_LEN];
+			size_t n;
 
 			collectd_resolve_cnt_type(counter_type,
 						  sizeof(counter_type),
 						  xstats_names[i].name);
-			sprintf(buf, "PUTVAL %s/dpdkstat-port.%u/%s-%s N:%"
+			n = snprintf(buf, MAX_STRING_LEN,
+				"PUTVAL %s/dpdkstat-port.%u/%s-%s N:%"
 				PRIu64"\n", host_id, port_id, counter_type,
 				xstats_names[i].name, values[i]);
-			ret = write(stdout_fd, buf, strlen(buf));
+			if (n > sizeof(buf) - 1)
+				n = sizeof(buf) - 1;
+			ret = write(stdout_fd, buf, n);
 			if (ret < 0)
 				goto err;
 		} else {

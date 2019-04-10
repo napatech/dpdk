@@ -729,7 +729,8 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"    show all queue region related configuration info\n\n"
 
 			"add port tm node shaper profile (port_id) (shaper_profile_id)"
-			" (tb_rate) (tb_size) (packet_length_adjust)\n"
+			" (cmit_tb_rate) (cmit_tb_size) (peak_tb_rate) (peak_tb_size)"
+			" (packet_length_adjust)\n"
 			"	Add port tm node private shaper profile.\n\n"
 
 			"del port tm node shaper profile (port_id) (shaper_profile_id)\n"
@@ -2172,7 +2173,7 @@ cmdline_parse_inst_t cmd_config_rxtx_queue = {
 	.data = NULL,
 	.help_str = "port <port_id> rxq|txq <queue_id> start|stop",
 	.tokens = {
-		(void *)&cmd_config_speed_all_port,
+		(void *)&cmd_config_rxtx_queue_port,
 		(void *)&cmd_config_rxtx_queue_portid,
 		(void *)&cmd_config_rxtx_queue_rxtxq,
 		(void *)&cmd_config_rxtx_queue_qid,
@@ -3841,7 +3842,7 @@ cmdline_parse_token_string_t cmd_csum_tunnel_csum =
 				csum, "csum");
 cmdline_parse_token_string_t cmd_csum_tunnel_parse =
 	TOKEN_STRING_INITIALIZER(struct cmd_csum_tunnel_result,
-				parse, "parse_tunnel");
+				parse, "parse-tunnel");
 cmdline_parse_token_string_t cmd_csum_tunnel_onoff =
 	TOKEN_STRING_INITIALIZER(struct cmd_csum_tunnel_result,
 				onoff, "on#off");
@@ -3852,7 +3853,7 @@ cmdline_parse_token_num_t cmd_csum_tunnel_portid =
 cmdline_parse_inst_t cmd_csum_tunnel = {
 	.f = cmd_csum_tunnel_parsed,
 	.data = NULL,
-	.help_str = "csum parse_tunnel on|off <port_id>: "
+	.help_str = "csum parse-tunnel on|off <port_id>: "
 		"Enable/Disable parsing of tunnels for csum engine",
 	.tokens = {
 		(void *)&cmd_csum_tunnel_csum,
@@ -7097,7 +7098,6 @@ static void cmd_quit_parsed(__attribute__((unused)) void *parsed_result,
 			    struct cmdline *cl,
 			    __attribute__((unused)) void *data)
 {
-	pmd_test_exit();
 	cmdline_quit(cl);
 }
 

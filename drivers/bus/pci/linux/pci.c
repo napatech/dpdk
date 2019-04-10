@@ -43,6 +43,7 @@
 #include <rte_devargs.h>
 #include <rte_memcpy.h>
 #include <rte_vfio.h>
+#include <rte_memory.h>
 
 #include "eal_private.h"
 #include "eal_filesystem.h"
@@ -62,7 +63,8 @@
 extern struct rte_pci_bus rte_pci_bus;
 
 static int
-pci_get_kernel_driver_by_path(const char *filename, char *dri_name)
+pci_get_kernel_driver_by_path(const char *filename, char *dri_name,
+			      size_t len)
 {
 	int count;
 	char path[PATH_MAX];
@@ -83,7 +85,7 @@ pci_get_kernel_driver_by_path(const char *filename, char *dri_name)
 
 	name = strrchr(path, '/');
 	if (name) {
-		strncpy(dri_name, name + 1, strlen(name + 1) + 1);
+		strlcpy(dri_name, name + 1, len);
 		return 0;
 	}
 
@@ -339,7 +341,7 @@ pci_scan_one(const char *dirname, const struct rte_pci_addr *addr)
 
 	/* parse driver */
 	snprintf(filename, sizeof(filename), "%s/driver", dirname);
-	ret = pci_get_kernel_driver_by_path(filename, driver);
+	ret = pci_get_kernel_driver_by_path(filename, driver, sizeof(driver));
 	if (ret < 0) {
 		RTE_LOG(ERR, EAL, "Fail to get kernel driver\n");
 		free(dev);
@@ -582,7 +584,6 @@ pci_one_device_iommu_support_va(struct rte_pci_device *dev)
 {
 #define VTD_CAP_MGAW_SHIFT	16
 #define VTD_CAP_MGAW_MASK	(0x3fULL << VTD_CAP_MGAW_SHIFT)
-#define X86_VA_WIDTH 47 /* From Documentation/x86/x86_64/mm.txt */
 	struct rte_pci_addr *addr = &dev->addr;
 	char filename[PATH_MAX];
 	FILE *fp;
@@ -613,10 +614,12 @@ pci_one_device_iommu_support_va(struct rte_pci_device *dev)
 	fclose(fp);
 
 	mgaw = ((vtd_cap_reg & VTD_CAP_MGAW_MASK) >> VTD_CAP_MGAW_SHIFT) + 1;
-	if (mgaw < X86_VA_WIDTH)
+
+	if (!rte_eal_check_dma_mask(mgaw))
+		return true;
+	else
 		return false;
 
-	return true;
 }
 #elif defined(RTE_ARCH_PPC_64)
 static bool
@@ -640,13 +643,17 @@ pci_devices_iommu_support_va(void)
 {
 	struct rte_pci_device *dev = NULL;
 	struct rte_pci_driver *drv = NULL;
+	int iommu_dma_mask_check_done = 0;
 
 	FOREACH_DRIVER_ON_PCIBUS(drv) {
 		FOREACH_DEVICE_ON_PCIBUS(dev) {
 			if (!rte_pci_match(drv, dev))
 				continue;
-			if (!pci_one_device_iommu_support_va(dev))
-				return false;
+			if (!iommu_dma_mask_check_done) {
+				if (!pci_one_device_iommu_support_va(dev))
+					return false;
+				iommu_dma_mask_check_done  = 1;
+			}
 		}
 	}
 	return true;
@@ -697,23 +704,22 @@ rte_pci_get_iommu_class(void)
 int rte_pci_read_config(const struct rte_pci_device *device,
 		void *buf, size_t len, off_t offset)
 {
+	char devname[RTE_DEV_NAME_MAX_LEN] = "";
 	const struct rte_intr_handle *intr_handle = &device->intr_handle;
 
-	switch (intr_handle->type) {
-	case RTE_INTR_HANDLE_UIO:
-	case RTE_INTR_HANDLE_UIO_INTX:
+	switch (device->kdrv) {
+	case RTE_KDRV_IGB_UIO:
+	case RTE_KDRV_UIO_GENERIC:
 		return pci_uio_read_config(intr_handle, buf, len, offset);
-
 #ifdef VFIO_PRESENT
-	case RTE_INTR_HANDLE_VFIO_MSIX:
-	case RTE_INTR_HANDLE_VFIO_MSI:
-	case RTE_INTR_HANDLE_VFIO_LEGACY:
+	case RTE_KDRV_VFIO:
 		return pci_vfio_read_config(intr_handle, buf, len, offset);
 #endif
 	default:
+		rte_pci_device_name(&device->addr, devname,
+				    RTE_DEV_NAME_MAX_LEN);
 		RTE_LOG(ERR, EAL,
-			"Unknown handle type of fd %d\n",
-					intr_handle->fd);
+			"Unknown driver type for %s\n", devname);
 		return -1;
 	}
 }
@@ -722,23 +728,22 @@ int rte_pci_read_config(const struct rte_pci_device *device,
 int rte_pci_write_config(const struct rte_pci_device *device,
 		const void *buf, size_t len, off_t offset)
 {
+	char devname[RTE_DEV_NAME_MAX_LEN] = "";
 	const struct rte_intr_handle *intr_handle = &device->intr_handle;
 
-	switch (intr_handle->type) {
-	case RTE_INTR_HANDLE_UIO:
-	case RTE_INTR_HANDLE_UIO_INTX:
+	switch (device->kdrv) {
+	case RTE_KDRV_IGB_UIO:
+	case RTE_KDRV_UIO_GENERIC:
 		return pci_uio_write_config(intr_handle, buf, len, offset);
-
 #ifdef VFIO_PRESENT
-	case RTE_INTR_HANDLE_VFIO_MSIX:
-	case RTE_INTR_HANDLE_VFIO_MSI:
-	case RTE_INTR_HANDLE_VFIO_LEGACY:
+	case RTE_KDRV_VFIO:
 		return pci_vfio_write_config(intr_handle, buf, len, offset);
 #endif
 	default:
+		rte_pci_device_name(&device->addr, devname,
+				    RTE_DEV_NAME_MAX_LEN);
 		RTE_LOG(ERR, EAL,
-			"Unknown handle type of fd %d\n",
-					intr_handle->fd);
+			"Unknown driver type for %s\n", devname);
 		return -1;
 	}
 }

@@ -284,7 +284,7 @@ rte_raw_cksum_mbuf(const struct rte_mbuf *m, uint32_t off, uint32_t len,
 	for (;;) {
 		tmp = __rte_raw_cksum(buf, seglen, 0);
 		if (done & 1)
-			tmp = rte_bswap16(tmp);
+			tmp = rte_bswap16((uint16_t)tmp);
 		sum += tmp;
 		done += seglen;
 		if (done == len)
@@ -315,7 +315,7 @@ rte_ipv4_cksum(const struct ipv4_hdr *ipv4_hdr)
 {
 	uint16_t cksum;
 	cksum = rte_raw_cksum(ipv4_hdr, sizeof(struct ipv4_hdr));
-	return (cksum == 0xffff) ? cksum : ~cksum;
+	return (cksum == 0xffff) ? cksum : (uint16_t)~cksum;
 }
 
 /**
@@ -380,8 +380,8 @@ rte_ipv4_udptcp_cksum(const struct ipv4_hdr *ipv4_hdr, const void *l4_hdr)
 	uint32_t cksum;
 	uint32_t l4_len;
 
-	l4_len = rte_be_to_cpu_16(ipv4_hdr->total_length) -
-		sizeof(struct ipv4_hdr);
+	l4_len = (uint32_t)(rte_be_to_cpu_16(ipv4_hdr->total_length) -
+		sizeof(struct ipv4_hdr));
 
 	cksum = rte_raw_cksum(l4_hdr, l4_len);
 	cksum += rte_ipv4_phdr_cksum(ipv4_hdr, 0);
@@ -391,7 +391,7 @@ rte_ipv4_udptcp_cksum(const struct ipv4_hdr *ipv4_hdr, const void *l4_hdr)
 	if (cksum == 0)
 		cksum = 0xffff;
 
-	return cksum;
+	return (uint16_t)cksum;
 }
 
 /**
@@ -405,6 +405,12 @@ struct ipv6_hdr {
 	uint8_t  src_addr[16]; /**< IP address of source host. */
 	uint8_t  dst_addr[16]; /**< IP address of destination host(s). */
 } __attribute__((__packed__));
+
+/* IPv6 vtc_flow: IPv / TC / flow_label */
+#define IPV6_HDR_FL_SHIFT 0
+#define IPV6_HDR_TC_SHIFT 20
+#define IPV6_HDR_FL_MASK ((1u << IPV6_HDR_TC_SHIFT) - 1)
+#define IPV6_HDR_TC_MASK (0xf << IPV6_HDR_TC_SHIFT)
 
 /**
  * Process the pseudo-header checksum of an IPv6 header.
@@ -431,7 +437,7 @@ rte_ipv6_phdr_cksum(const struct ipv6_hdr *ipv6_hdr, uint64_t ol_flags)
 		uint32_t proto; /* L4 protocol - top 3 bytes must be zero */
 	} psd_hdr;
 
-	psd_hdr.proto = (ipv6_hdr->proto << 24);
+	psd_hdr.proto = (uint32_t)(ipv6_hdr->proto << 24);
 	if (ol_flags & PKT_TX_TCP_SEG) {
 		psd_hdr.len = 0;
 	} else {
@@ -474,7 +480,7 @@ rte_ipv6_udptcp_cksum(const struct ipv6_hdr *ipv6_hdr, const void *l4_hdr)
 	if (cksum == 0)
 		cksum = 0xffff;
 
-	return cksum;
+	return (uint16_t)cksum;
 }
 
 #ifdef __cplusplus

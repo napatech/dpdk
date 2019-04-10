@@ -254,6 +254,8 @@ static int ixgbe_dev_interrupt_action(struct rte_eth_dev *dev,
 				      struct rte_intr_handle *handle);
 static void ixgbe_dev_interrupt_handler(void *param);
 static void ixgbe_dev_interrupt_delayed_handler(void *param);
+static void ixgbe_dev_setup_link_alarm_handler(void *param);
+
 static int ixgbe_add_rar(struct rte_eth_dev *dev, struct ether_addr *mac_addr,
 			 uint32_t index, uint32_t pool);
 static void ixgbe_remove_rar(struct rte_eth_dev *dev, uint32_t index);
@@ -1366,6 +1368,8 @@ eth_ixgbe_dev_uninit(struct rte_eth_dev *eth_dev)
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	struct ixgbe_hw *hw;
+	int retries = 0;
+	int ret;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -1386,8 +1390,20 @@ eth_ixgbe_dev_uninit(struct rte_eth_dev *eth_dev)
 
 	/* disable uio intr before callback unregister */
 	rte_intr_disable(intr_handle);
-	rte_intr_callback_unregister(intr_handle,
-				     ixgbe_dev_interrupt_handler, eth_dev);
+
+	do {
+		ret = rte_intr_callback_unregister(intr_handle,
+				ixgbe_dev_interrupt_handler, eth_dev);
+		if (ret >= 0) {
+			break;
+		} else if (ret != -EAGAIN) {
+			PMD_INIT_LOG(ERR,
+				"intr callback unregister failed: %d",
+				ret);
+			return ret;
+		}
+		rte_delay_ms(100);
+	} while (retries++ < (10 + IXGBE_LINK_UP_TIME));
 
 	/* uninitialize PF if max_vfs not zero */
 	ixgbe_pf_host_uninit(eth_dev);
@@ -2316,11 +2332,6 @@ ixgbe_check_mq_mode(struct rte_eth_dev *dev)
 		if (dev_conf->rxmode.mq_mode == ETH_MQ_RX_DCB) {
 			const struct rte_eth_dcb_rx_conf *conf;
 
-			if (nb_rx_q != IXGBE_DCB_NB_QUEUES) {
-				PMD_INIT_LOG(ERR, "DCB selected, nb_rx_q != %d.",
-						 IXGBE_DCB_NB_QUEUES);
-				return -EINVAL;
-			}
 			conf = &dev_conf->rx_adv_conf.dcb_rx_conf;
 			if (!(conf->nb_tcs == ETH_4_TCS ||
 			       conf->nb_tcs == ETH_8_TCS)) {
@@ -2334,11 +2345,6 @@ ixgbe_check_mq_mode(struct rte_eth_dev *dev)
 		if (dev_conf->txmode.mq_mode == ETH_MQ_TX_DCB) {
 			const struct rte_eth_dcb_tx_conf *conf;
 
-			if (nb_tx_q != IXGBE_DCB_NB_QUEUES) {
-				PMD_INIT_LOG(ERR, "DCB, nb_tx_q != %d.",
-						 IXGBE_DCB_NB_QUEUES);
-				return -EINVAL;
-			}
 			conf = &dev_conf->tx_adv_conf.dcb_tx_conf;
 			if (!(conf->nb_tcs == ETH_4_TCS ||
 			       conf->nb_tcs == ETH_8_TCS)) {
@@ -2526,6 +2532,9 @@ ixgbe_dev_start(struct rte_eth_dev *dev)
 				dev->data->port_id);
 		return -EINVAL;
 	}
+
+	/* Stop the link setup handler before resetting the HW. */
+	rte_eal_alarm_cancel(ixgbe_dev_setup_link_alarm_handler, dev);
 
 	/* disable uio/vfio intr/eventfd mapping */
 	rte_intr_disable(intr_handle);
@@ -2728,6 +2737,12 @@ skip_link_setup:
 			    "please call hierarchy_commit() "
 			    "before starting the port");
 
+	/*
+	 * Update link status right before return, because it may
+	 * start link configuration process in a separate thread.
+	 */
+	ixgbe_dev_link_update(dev, 0);
+
 	return 0;
 
 error:
@@ -2754,6 +2769,8 @@ ixgbe_dev_stop(struct rte_eth_dev *dev)
 		IXGBE_DEV_PRIVATE_TO_TM_CONF(dev->data->dev_private);
 
 	PMD_INIT_FUNC_TRACE();
+
+	rte_eal_alarm_cancel(ixgbe_dev_setup_link_alarm_handler, dev);
 
 	/* disable interrupts */
 	ixgbe_disable_intr(hw);
@@ -3861,11 +3878,6 @@ static int
 ixgbevf_check_link(struct ixgbe_hw *hw, ixgbe_link_speed *speed,
 		   int *link_up, int wait_to_complete)
 {
-	/**
-	 * for a quick link status checking, wait_to_compelet == 0,
-	 * skip PF link status checking
-	 */
-	bool no_pflink_check = wait_to_complete == 0;
 	struct ixgbe_mbx_info *mbx = &hw->mbx;
 	struct ixgbe_mac_info *mac = &hw->mac;
 	uint32_t links_reg, in_msg;
@@ -3886,7 +3898,7 @@ ixgbevf_check_link(struct ixgbe_hw *hw, ixgbe_link_speed *speed,
 	/* for SFP+ modules and DA cables on 82599 it can take up to 500usecs
 	 * before the link status is correct
 	 */
-	if (mac->type == ixgbe_mac_82599_vf) {
+	if (mac->type == ixgbe_mac_82599_vf && wait_to_complete) {
 		int i;
 
 		for (i = 0; i < 5; i++) {
@@ -3926,14 +3938,6 @@ ixgbevf_check_link(struct ixgbe_hw *hw, ixgbe_link_speed *speed,
 		*speed = IXGBE_LINK_SPEED_UNKNOWN;
 	}
 
-	if (no_pflink_check) {
-		if (*speed == IXGBE_LINK_SPEED_UNKNOWN)
-			mac->get_link_status = true;
-		else
-			mac->get_link_status = false;
-
-		goto out;
-	}
 	/* if the read failed it could just be a mailbox collision, best wait
 	 * until we are called again and don't report an error
 	 */
@@ -3943,7 +3947,7 @@ ixgbevf_check_link(struct ixgbe_hw *hw, ixgbe_link_speed *speed,
 	if (!(in_msg & IXGBE_VT_MSGTYPE_CTS)) {
 		/* msg is not CTS and is NACK we must have lost CTS status */
 		if (in_msg & IXGBE_VT_MSGTYPE_NACK)
-			ret_val = -1;
+			mac->get_link_status = false;
 		goto out;
 	}
 
@@ -3963,6 +3967,25 @@ out:
 	return ret_val;
 }
 
+static void
+ixgbe_dev_setup_link_alarm_handler(void *param)
+{
+	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
+	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct ixgbe_interrupt *intr =
+		IXGBE_DEV_PRIVATE_TO_INTR(dev->data->dev_private);
+	u32 speed;
+	bool autoneg = false;
+
+	speed = hw->phy.autoneg_advertised;
+	if (!speed)
+		ixgbe_get_link_capabilities(hw, &speed, &autoneg);
+
+	ixgbe_setup_link(hw, speed, true);
+
+	intr->flags &= ~IXGBE_FLAG_NEED_LINK_CONFIG;
+}
+
 /* return 0 means link status changed, -1 means not changed */
 static int
 ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
@@ -3975,9 +3998,7 @@ ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
 		IXGBE_DEV_PRIVATE_TO_INTR(dev->data->dev_private);
 	int link_up;
 	int diag;
-	u32 speed = 0;
 	int wait = 1;
-	bool autoneg = false;
 
 	link.link_status = ETH_LINK_DOWN;
 	link.link_speed = 0;
@@ -3988,12 +4009,11 @@ ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
 
 	hw->mac.get_link_status = true;
 
-	if ((intr->flags & IXGBE_FLAG_NEED_LINK_CONFIG) &&
-		ixgbe_get_media_type(hw) == ixgbe_media_type_fiber) {
-		speed = hw->phy.autoneg_advertised;
-		if (!speed)
-			ixgbe_get_link_capabilities(hw, &speed, &autoneg);
-		ixgbe_setup_link(hw, speed, true);
+	if (intr->flags & IXGBE_FLAG_NEED_LINK_CONFIG) {
+		rte_ixgbe_dev_atomic_write_link_status(dev, &link);
+		if (link.link_status == old.link_status)
+			return -1;
+		return 0;
 	}
 
 	/* check if it needs to wait to complete, if lsc interrupt is enabled */
@@ -4016,12 +4036,16 @@ ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
 
 	if (link_up == 0) {
 		rte_ixgbe_dev_atomic_write_link_status(dev, &link);
-		intr->flags |= IXGBE_FLAG_NEED_LINK_CONFIG;
+		if (ixgbe_get_media_type(hw) == ixgbe_media_type_fiber) {
+			intr->flags |= IXGBE_FLAG_NEED_LINK_CONFIG;
+			rte_eal_alarm_set(10,
+				ixgbe_dev_setup_link_alarm_handler, dev);
+		}
 		if (link.link_status == old.link_status)
 			return -1;
 		return 0;
 	}
-	intr->flags &= ~IXGBE_FLAG_NEED_LINK_CONFIG;
+
 	link.link_status = ETH_LINK_UP;
 	link.link_duplex = ETH_LINK_FULL_DUPLEX;
 
@@ -5027,6 +5051,9 @@ ixgbevf_dev_start(struct rte_eth_dev *dev)
 
 	PMD_INIT_FUNC_TRACE();
 
+	/* Stop the link setup handler before resetting the HW. */
+	rte_eal_alarm_cancel(ixgbe_dev_setup_link_alarm_handler, dev);
+
 	err = hw->mac.ops.reset_hw(hw);
 	if (err) {
 		PMD_INIT_LOG(ERR, "Unable to reset vf hardware (%d)", err);
@@ -5099,6 +5126,12 @@ ixgbevf_dev_start(struct rte_eth_dev *dev)
 	/* Re-enable interrupt for VF */
 	ixgbevf_intr_enable(hw);
 
+	/*
+	 * Update link status right before return, because it may
+	 * start link configuration process in a separate thread.
+	 */
+	ixgbevf_dev_link_update(dev, 0);
+
 	return 0;
 }
 
@@ -5110,6 +5143,8 @@ ixgbevf_dev_stop(struct rte_eth_dev *dev)
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 
 	PMD_INIT_FUNC_TRACE();
+
+	rte_eal_alarm_cancel(ixgbe_dev_setup_link_alarm_handler, dev);
 
 	ixgbevf_intr_disable(hw);
 
@@ -5822,8 +5857,12 @@ ixgbe_configure_msix(struct rte_eth_dev *dev)
 
 	/* won't configure msix register if no mapping is done
 	 * between intr vector and event fd
+	 * but if misx has been enabled already, need to configure
+	 * auto clean, auto mask and throttling.
 	 */
-	if (!rte_intr_dp_is_en(intr_handle))
+	gpie = IXGBE_READ_REG(hw, IXGBE_GPIE);
+	if (!rte_intr_dp_is_en(intr_handle) &&
+	    !(gpie & (IXGBE_GPIE_MSIX_MODE | IXGBE_GPIE_PBA_SUPPORT)))
 		return;
 
 	if (rte_intr_allow_others(intr_handle))
@@ -5847,27 +5886,30 @@ ixgbe_configure_msix(struct rte_eth_dev *dev)
 	/* Populate the IVAR table and set the ITR values to the
 	 * corresponding register.
 	 */
-	for (queue_id = 0; queue_id < dev->data->nb_rx_queues;
-	     queue_id++) {
-		/* by default, 1:1 mapping */
-		ixgbe_set_ivar_map(hw, 0, queue_id, vec);
-		intr_handle->intr_vec[queue_id] = vec;
-		if (vec < base + intr_handle->nb_efd - 1)
-			vec++;
-	}
+	if (rte_intr_dp_is_en(intr_handle)) {
+		for (queue_id = 0; queue_id < dev->data->nb_rx_queues;
+			queue_id++) {
+			/* by default, 1:1 mapping */
+			ixgbe_set_ivar_map(hw, 0, queue_id, vec);
+			intr_handle->intr_vec[queue_id] = vec;
+			if (vec < base + intr_handle->nb_efd - 1)
+				vec++;
+		}
 
-	switch (hw->mac.type) {
-	case ixgbe_mac_82598EB:
-		ixgbe_set_ivar_map(hw, -1, IXGBE_IVAR_OTHER_CAUSES_INDEX,
-				   IXGBE_MISC_VEC_ID);
-		break;
-	case ixgbe_mac_82599EB:
-	case ixgbe_mac_X540:
-	case ixgbe_mac_X550:
-		ixgbe_set_ivar_map(hw, -1, 1, IXGBE_MISC_VEC_ID);
-		break;
-	default:
-		break;
+		switch (hw->mac.type) {
+		case ixgbe_mac_82598EB:
+			ixgbe_set_ivar_map(hw, -1,
+					   IXGBE_IVAR_OTHER_CAUSES_INDEX,
+					   IXGBE_MISC_VEC_ID);
+			break;
+		case ixgbe_mac_82599EB:
+		case ixgbe_mac_X540:
+		case ixgbe_mac_X550:
+			ixgbe_set_ivar_map(hw, -1, 1, IXGBE_MISC_VEC_ID);
+			break;
+		default:
+			break;
+		}
 	}
 	IXGBE_WRITE_REG(hw, IXGBE_EITR(IXGBE_MISC_VEC_ID),
 			IXGBE_MIN_INTER_INTERRUPT_INTERVAL_DEFAULT & 0xFFF);

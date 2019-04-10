@@ -87,6 +87,10 @@
 		PKT_TX_OUTER_IP_CKSUM)
 
 #define I40E_TX_OFFLOAD_MASK (  \
+		PKT_TX_OUTER_IPV4 |	\
+		PKT_TX_OUTER_IPV6 |	\
+		PKT_TX_IPV4 |		\
+		PKT_TX_IPV6 |		\
 		PKT_TX_IP_CKSUM |       \
 		PKT_TX_L4_MASK |        \
 		PKT_TX_OUTER_IP_CKSUM | \
@@ -97,7 +101,7 @@
 		I40E_TX_IEEE1588_TMST)
 
 #define I40E_TX_OFFLOAD_NOTSUP_MASK \
-		(PKT_TX_OFFLOAD_MASK ^ I40E_TX_OFFLOAD_MASK)
+		~(PKT_TX_OFFLOAD_MASK & I40E_TX_OFFLOAD_MASK)
 
 static uint16_t i40e_xmit_pkts_simple(void *tx_queue,
 				      struct rte_mbuf **tx_pkts,

@@ -107,8 +107,7 @@ static const char * const valid_args[] = {
 static int used_hifs = MRVL_MUSDK_HIFS_RESERVED;
 static struct pp2_hif *hifs[RTE_MAX_LCORE];
 static int used_bpools[PP2_NUM_PKT_PROC] = {
-	MRVL_MUSDK_BPOOLS_RESERVED,
-	MRVL_MUSDK_BPOOLS_RESERVED
+	[0 ... PP2_NUM_PKT_PROC - 1] = MRVL_MUSDK_BPOOLS_RESERVED
 };
 
 struct pp2_bpool *mrvl_port_to_bpool_lookup[RTE_MAX_ETHPORTS];
@@ -674,7 +673,8 @@ mrvl_dev_stop(struct rte_eth_dev *dev)
 		pp2_cls_qos_tbl_deinit(priv->qos_tbl);
 		priv->qos_tbl = NULL;
 	}
-	pp2_ppio_deinit(priv->ppio);
+	if (priv->ppio)
+		pp2_ppio_deinit(priv->ppio);
 	priv->ppio = NULL;
 }
 
@@ -1217,8 +1217,8 @@ mrvl_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 static int
 mrvl_fill_bpool(struct mrvl_rxq *rxq, int num)
 {
-	struct buff_release_entry entries[MRVL_PP2_TXD_MAX];
-	struct rte_mbuf *mbufs[MRVL_PP2_TXD_MAX];
+	struct buff_release_entry entries[MRVL_PP2_RXD_MAX];
+	struct rte_mbuf *mbufs[MRVL_PP2_RXD_MAX];
 	int i, ret;
 	unsigned int core_id;
 	struct pp2_hif *hif;
@@ -1374,9 +1374,12 @@ mrvl_rx_queue_release(void *rxq)
 	if (core_id == LCORE_ID_ANY)
 		core_id = 0;
 
+	if (!q)
+		return;
+
 	hif = mrvl_get_hif(q->priv, core_id);
 
-	if (!q || !hif)
+	if (!hif)
 		return;
 
 	tc = q->priv->rxq_map[q->queue_id].tc;

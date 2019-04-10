@@ -152,7 +152,7 @@ typedef uint64_t rte_le64_t; /**< 64-bit little-endian value. */
 static inline uint16_t
 rte_constant_bswap16(uint16_t x)
 {
-	return RTE_STATIC_BSWAP16(x);
+	return (uint16_t)RTE_STATIC_BSWAP16(x);
 }
 
 /*
@@ -164,7 +164,7 @@ rte_constant_bswap16(uint16_t x)
 static inline uint32_t
 rte_constant_bswap32(uint32_t x)
 {
-	return RTE_STATIC_BSWAP32(x);
+	return (uint32_t)RTE_STATIC_BSWAP32(x);
 }
 
 /*
@@ -176,7 +176,7 @@ rte_constant_bswap32(uint32_t x)
 static inline uint64_t
 rte_constant_bswap64(uint64_t x)
 {
-	return RTE_STATIC_BSWAP64(x);
+	return (uint64_t)RTE_STATIC_BSWAP64(x);
 }
 
 

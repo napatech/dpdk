@@ -296,7 +296,6 @@ typedef struct efx_port_s {
 	uint32_t		ep_default_adv_cap_mask;
 	uint32_t		ep_phy_cap_mask;
 	boolean_t		ep_mac_drain;
-	boolean_t		ep_mac_stats_pending;
 #if EFSYS_OPT_BIST
 	efx_bist_type_t		ep_current_bist;
 #endif
@@ -556,7 +555,7 @@ efx_mcdi_nvram_write(
 	__in			efx_nic_t *enp,
 	__in			uint32_t partn,
 	__in			uint32_t offset,
-	__out_bcount(size)	caddr_t data,
+	__in_bcount(size)	caddr_t data,
 	__in			size_t size);
 
 	__checkReturn		efx_rc_t

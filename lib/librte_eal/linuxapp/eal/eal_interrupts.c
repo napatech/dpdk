@@ -449,7 +449,7 @@ rte_intr_callback_register(const struct rte_intr_handle *intr_handle,
 	TAILQ_FOREACH(src, &intr_sources, next) {
 		if (src->intr_handle.fd == intr_handle->fd) {
 			/* we had no interrupts for this */
-			if TAILQ_EMPTY(&src->callbacks)
+			if (TAILQ_EMPTY(&src->callbacks))
 				wake_thread = 1;
 
 			TAILQ_INSERT_TAIL(&(src->callbacks), callback, next);
@@ -652,7 +652,7 @@ eal_intr_process_interrupts(struct epoll_event *events, int nfds)
 	bool call = false;
 	int n, bytes_read;
 	struct rte_intr_source *src;
-	struct rte_intr_callback *cb;
+	struct rte_intr_callback *cb, *next;
 	union rte_intr_read_buffer buf;
 	struct rte_intr_callback active_cb;
 
@@ -723,6 +723,23 @@ eal_intr_process_interrupts(struct epoll_event *events, int nfds)
 					"descriptor %d: %s\n",
 					events[n].data.fd,
 					strerror(errno));
+				/*
+				 * The device is unplugged or buggy, remove
+				 * it as an interrupt source and return to
+				 * force the wait list to be rebuilt.
+				 */
+				rte_spinlock_lock(&intr_lock);
+				TAILQ_REMOVE(&intr_sources, src, next);
+				rte_spinlock_unlock(&intr_lock);
+
+				for (cb = TAILQ_FIRST(&src->callbacks); cb;
+							cb = next) {
+					next = TAILQ_NEXT(cb, next);
+					TAILQ_REMOVE(&src->callbacks, cb, next);
+					free(cb);
+				}
+				free(src);
+				return -1;
 			} else if (bytes_read == 0)
 				RTE_LOG(ERR, EAL, "Read nothing from file "
 					"descriptor %d\n", events[n].data.fd);

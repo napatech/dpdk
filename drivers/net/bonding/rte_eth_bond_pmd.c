@@ -64,7 +64,8 @@ get_vlan_offset(struct ether_hdr *eth_hdr, uint16_t *proto)
 {
 	size_t vlan_offset = 0;
 
-	if (rte_cpu_to_be_16(ETHER_TYPE_VLAN) == *proto) {
+	if (rte_cpu_to_be_16(ETHER_TYPE_VLAN) == *proto ||
+		rte_cpu_to_be_16(ETHER_TYPE_QINQ) == *proto) {
 		struct vlan_hdr *vlan_hdr = (struct vlan_hdr *)(eth_hdr + 1);
 
 		vlan_offset = sizeof(struct vlan_hdr);
@@ -84,28 +85,34 @@ bond_ethdev_rx_burst(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 {
 	struct bond_dev_private *internals;
 
-	uint16_t num_rx_slave = 0;
 	uint16_t num_rx_total = 0;
-
+	uint16_t slave_count;
+	uint16_t active_slave;
 	int i;
 
 	/* Cast to structure, containing bonded device's port id and queue id */
 	struct bond_rx_queue *bd_rx_q = (struct bond_rx_queue *)queue;
-
 	internals = bd_rx_q->dev_private;
+	slave_count = internals->active_slave_count;
+	active_slave = internals->active_slave;
 
+	for (i = 0; i < slave_count && nb_pkts; i++) {
+		uint16_t num_rx_slave;
 
-	for (i = 0; i < internals->active_slave_count && nb_pkts; i++) {
 		/* Offset of pointer to *bufs increases as packets are received
 		 * from other slaves */
-		num_rx_slave = rte_eth_rx_burst(internals->active_slaves[i],
-				bd_rx_q->queue_id, bufs + num_rx_total, nb_pkts);
-		if (num_rx_slave) {
-			num_rx_total += num_rx_slave;
-			nb_pkts -= num_rx_slave;
-		}
+		num_rx_slave =
+			rte_eth_rx_burst(internals->active_slaves[active_slave],
+					 bd_rx_q->queue_id,
+					 bufs + num_rx_total, nb_pkts);
+		num_rx_total += num_rx_slave;
+		nb_pkts -= num_rx_slave;
+		if (++active_slave == slave_count)
+			active_slave = 0;
 	}
 
+	if (++internals->active_slave == slave_count)
+		internals->active_slave = 0;
 	return num_rx_total;
 }
 
@@ -284,25 +291,32 @@ bond_ethdev_rx_burst_8023ad_fast_queue(void *queue, struct rte_mbuf **bufs,
 	uint16_t num_rx_total = 0;	/* Total number of received packets */
 	uint16_t slaves[RTE_MAX_ETHPORTS];
 	uint16_t slave_count;
-
-	uint16_t i, idx;
+	uint16_t active_slave;
+	uint16_t i;
 
 	/* Copy slave list to protect against slave up/down changes during tx
 	 * bursting */
 	slave_count = internals->active_slave_count;
+	active_slave = internals->active_slave;
 	memcpy(slaves, internals->active_slaves,
 			sizeof(internals->active_slaves[0]) * slave_count);
 
-	for (i = 0, idx = internals->active_slave;
-			i < slave_count && num_rx_total < nb_pkts; i++, idx++) {
-		idx = idx % slave_count;
+	for (i = 0; i < slave_count && nb_pkts; i++) {
+		uint16_t num_rx_slave;
 
 		/* Read packets from this slave */
-		num_rx_total += rte_eth_rx_burst(slaves[idx], bd_rx_q->queue_id,
-				&bufs[num_rx_total], nb_pkts - num_rx_total);
+		num_rx_slave = rte_eth_rx_burst(slaves[active_slave],
+						bd_rx_q->queue_id,
+						bufs + num_rx_total, nb_pkts);
+		num_rx_total += num_rx_slave;
+		nb_pkts -= num_rx_slave;
+
+		if (++active_slave == slave_count)
+			active_slave = 0;
 	}
 
-	internals->active_slave = idx;
+	if (++internals->active_slave == slave_count)
+		internals->active_slave = 0;
 
 	return num_rx_total;
 }
@@ -480,7 +494,9 @@ bond_ethdev_rx_burst_8023ad(void *queue, struct rte_mbuf **bufs,
 			idx = 0;
 	}
 
-	internals->active_slave = idx;
+	if (++internals->active_slave == slave_count)
+		internals->active_slave = 0;
+
 	return num_rx_total;
 }
 
@@ -1688,12 +1704,11 @@ slave_configure(struct rte_eth_dev *bonded_eth_dev,
 
 	/* If RSS is enabled for bonding, try to enable it for slaves  */
 	if (bonded_eth_dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG) {
-		if (bonded_eth_dev->data->dev_conf.rx_adv_conf.rss_conf.rss_key_len
-				!= 0) {
+		if (internals->rss_key_len != 0) {
 			slave_eth_dev->data->dev_conf.rx_adv_conf.rss_conf.rss_key_len =
-					bonded_eth_dev->data->dev_conf.rx_adv_conf.rss_conf.rss_key_len;
+					internals->rss_key_len;
 			slave_eth_dev->data->dev_conf.rx_adv_conf.rss_conf.rss_key =
-					bonded_eth_dev->data->dev_conf.rx_adv_conf.rss_conf.rss_key;
+					internals->rss_key;
 		} else {
 			slave_eth_dev->data->dev_conf.rx_adv_conf.rss_conf.rss_key = NULL;
 		}
@@ -1912,7 +1927,7 @@ bond_ethdev_start(struct rte_eth_dev *eth_dev)
 
 	if (internals->slave_count == 0) {
 		RTE_BOND_LOG(ERR, "Cannot start port since there are no slave devices");
-		return -1;
+		goto out_err;
 	}
 
 	if (internals->user_defined_mac == 0) {
@@ -1923,18 +1938,14 @@ bond_ethdev_start(struct rte_eth_dev *eth_dev)
 				new_mac_addr = &internals->slaves[i].persisted_mac_addr;
 
 		if (new_mac_addr == NULL)
-			return -1;
+			goto out_err;
 
 		if (mac_address_set(eth_dev, new_mac_addr) != 0) {
 			RTE_BOND_LOG(ERR, "bonded port (%d) failed to update MAC address",
 					eth_dev->data->port_id);
-			return -1;
+			goto out_err;
 		}
 	}
-
-	/* Update all slave devices MACs*/
-	if (mac_address_slaves_update(eth_dev) != 0)
-		return -1;
 
 	/* If bonded device is configure in promiscuous mode then re-apply config */
 	if (internals->promiscuous_en)
@@ -1959,7 +1970,7 @@ bond_ethdev_start(struct rte_eth_dev *eth_dev)
 				"bonded port (%d) failed to reconfigure slave device (%d)",
 				eth_dev->data->port_id,
 				internals->slaves[i].port_id);
-			return -1;
+			goto out_err;
 		}
 		/* We will need to poll for link status if any slave doesn't
 		 * support interrupts
@@ -1967,6 +1978,7 @@ bond_ethdev_start(struct rte_eth_dev *eth_dev)
 		if (internals->slaves[i].link_status_poll_enabled)
 			internals->link_status_polling_enabled = 1;
 	}
+
 	/* start polling if needed */
 	if (internals->link_status_polling_enabled) {
 		rte_eal_alarm_set(
@@ -1974,6 +1986,10 @@ bond_ethdev_start(struct rte_eth_dev *eth_dev)
 			bond_ethdev_slave_link_status_change_monitor,
 			(void *)&rte_eth_devices[internals->port_id]);
 	}
+
+	/* Update all slave devices MACs*/
+	if (mac_address_slaves_update(eth_dev) != 0)
+		goto out_err;
 
 	if (internals->user_defined_primary_port)
 		bond_ethdev_primary_set(internals, internals->primary_port);
@@ -1986,6 +2002,10 @@ bond_ethdev_start(struct rte_eth_dev *eth_dev)
 		bond_tlb_enable(internals);
 
 	return 0;
+
+out_err:
+	eth_dev->data->dev_started = 0;
+	return -1;
 }
 
 static void
@@ -2043,13 +2063,20 @@ bond_ethdev_stop(struct rte_eth_dev *eth_dev)
 			tlb_last_obytets[internals->active_slaves[i]] = 0;
 	}
 
-	internals->active_slave_count = 0;
-	internals->link_status_polling_enabled = 0;
-	for (i = 0; i < internals->slave_count; i++)
-		internals->slaves[i].last_link_status = 0;
-
 	eth_dev->data->dev_link.link_status = ETH_LINK_DOWN;
 	eth_dev->data->dev_started = 0;
+
+	internals->link_status_polling_enabled = 0;
+	for (i = 0; i < internals->slave_count; i++) {
+		uint16_t slave_id = internals->slaves[i].port_id;
+		if (find_slave_by_id(internals->active_slaves,
+				internals->active_slave_count, slave_id) !=
+						internals->active_slave_count) {
+			internals->slaves[i].last_link_status = 0;
+			rte_eth_dev_stop(slave_id);
+			deactivate_slave(eth_dev, slave_id);
+		}
+	}
 }
 
 void
@@ -2519,6 +2546,11 @@ bond_ethdev_lsc_event_callback(uint16_t port_id, enum rte_eth_event_type type,
 	if (!valid_slave)
 		return rc;
 
+	/* Synchronize lsc callback parallel calls either by real link event
+	 * from the slaves PMDs or by the bonding PMD itself.
+	 */
+	rte_spinlock_lock(&internals->lsc_lock);
+
 	/* Search for port in active port list */
 	active_pos = find_slave_by_id(internals->active_slaves,
 			internals->active_slave_count, port_id);
@@ -2526,7 +2558,7 @@ bond_ethdev_lsc_event_callback(uint16_t port_id, enum rte_eth_event_type type,
 	rte_eth_link_get_nowait(port_id, &link);
 	if (link.link_status) {
 		if (active_pos < internals->active_slave_count)
-			return rc;
+			goto link_update;
 
 		/* if no active slave ports then set this port to be primary port */
 		if (internals->active_slave_count < 1) {
@@ -2546,7 +2578,7 @@ bond_ethdev_lsc_event_callback(uint16_t port_id, enum rte_eth_event_type type,
 			bond_ethdev_primary_set(internals, port_id);
 	} else {
 		if (active_pos == internals->active_slave_count)
-			return rc;
+			goto link_update;
 
 		/* Remove from active slave list */
 		deactivate_slave(bonded_eth_dev, port_id);
@@ -2565,6 +2597,7 @@ bond_ethdev_lsc_event_callback(uint16_t port_id, enum rte_eth_event_type type,
 		}
 	}
 
+link_update:
 	/**
 	 * Update bonded device link properties after any change to active
 	 * slaves
@@ -2599,7 +2632,10 @@ bond_ethdev_lsc_event_callback(uint16_t port_id, enum rte_eth_event_type type,
 						NULL, NULL);
 		}
 	}
-	return 0;
+
+	rte_spinlock_unlock(&internals->lsc_lock);
+
+	return rc;
 }
 
 static int
@@ -2766,6 +2802,7 @@ bond_alloc(struct rte_vdev_device *dev, uint8_t mode)
 	eth_dev->data->dev_flags = RTE_ETH_DEV_INTR_LSC;
 
 	rte_spinlock_init(&internals->lock);
+	rte_spinlock_init(&internals->lsc_lock);
 
 	internals->port_id = eth_dev->data->port_id;
 	internals->mode = BONDING_MODE_INVALID;
@@ -2912,9 +2949,16 @@ bond_probe(struct rte_vdev_device *dev)
 			goto parse_error;
 		}
 
-		if (internals->mode == BONDING_MODE_8023AD)
-			rte_eth_bond_8023ad_agg_selection_set(port_id,
+		if (internals->mode == BONDING_MODE_8023AD) {
+			int ret = rte_eth_bond_8023ad_agg_selection_set(port_id,
 					agg_mode);
+			if (ret < 0) {
+				RTE_BOND_LOG(ERR,
+					"Invalid args for agg selection set "
+					"for bonded device %s", name);
+				return -1;
+			}
+		}
 	} else {
 		rte_eth_bond_8023ad_agg_selection_set(port_id, AGG_STABLE);
 	}
@@ -2967,6 +3011,10 @@ bond_remove(struct rte_vdev_device *dev)
 	eth_dev->tx_pkt_burst = NULL;
 
 	internals = eth_dev->data->dev_private;
+	/* Try to release mempool used in mode6. If the bond
+	 * device is not mode6, free the NULL is not problem.
+	 */
+	rte_mempool_free(internals->mode6.mempool);
 	rte_bitmap_free(internals->vlan_filter_bmp);
 	rte_free(internals->vlan_filter_bmpmem);
 	rte_free(eth_dev->data->dev_private);
@@ -2998,16 +3046,30 @@ bond_ethdev_configure(struct rte_eth_dev *dev)
 
 	unsigned i, j;
 
-	/* If RSS is enabled, fill table and key with default values */
+	/*
+	 * If RSS is enabled, fill table with default values and
+	 * set key to the the value specified in port RSS configuration.
+	 * Fall back to default RSS key if the key is not specified
+	 */
 	if (dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS) {
-		dev->data->dev_conf.rx_adv_conf.rss_conf.rss_key = internals->rss_key;
-		dev->data->dev_conf.rx_adv_conf.rss_conf.rss_key_len = 0;
-		memcpy(internals->rss_key, default_rss_key, 40);
+		if (dev->data->dev_conf.rx_adv_conf.rss_conf.rss_key != NULL) {
+			internals->rss_key_len =
+				dev->data->dev_conf.rx_adv_conf.rss_conf.rss_key_len;
+			memcpy(internals->rss_key,
+			       dev->data->dev_conf.rx_adv_conf.rss_conf.rss_key,
+			       internals->rss_key_len);
+		} else {
+			internals->rss_key_len = sizeof(default_rss_key);
+			memcpy(internals->rss_key, default_rss_key,
+			       internals->rss_key_len);
+		}
 
 		for (i = 0; i < RTE_DIM(internals->reta_conf); i++) {
 			internals->reta_conf[i].mask = ~0LL;
 			for (j = 0; j < RTE_RETA_GROUP_SIZE; j++)
-				internals->reta_conf[i].reta[j] = j % dev->data->nb_rx_queues;
+				internals->reta_conf[i].reta[j] =
+						(i * RTE_RETA_GROUP_SIZE + j) %
+						dev->data->nb_rx_queues;
 		}
 	}
 

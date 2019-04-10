@@ -202,11 +202,10 @@ ef10_phy_get_link(
 	__out		ef10_link_state_t *elsp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_GET_LINK_IN_LEN,
-			    MC_CMD_GET_LINK_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_GET_LINK_IN_LEN,
+		MC_CMD_GET_LINK_OUT_LEN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_GET_LINK;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_GET_LINK_IN_LEN;
@@ -277,8 +276,8 @@ ef10_phy_reconfigure(
 {
 	efx_port_t *epp = &(enp->en_port);
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_SET_LINK_IN_LEN,
-			    MC_CMD_SET_LINK_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_SET_LINK_IN_LEN,
+		MC_CMD_SET_LINK_OUT_LEN);
 	uint32_t cap_mask;
 	unsigned int led_mode;
 	unsigned int speed;
@@ -290,7 +289,6 @@ ef10_phy_reconfigure(
 	if (supported == B_FALSE)
 		goto out;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_SET_LINK;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_SET_LINK_IN_LEN;
@@ -404,12 +402,11 @@ ef10_phy_verify(
 	__in		efx_nic_t *enp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_GET_PHY_STATE_IN_LEN,
-			    MC_CMD_GET_PHY_STATE_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_GET_PHY_STATE_IN_LEN,
+		MC_CMD_GET_PHY_STATE_OUT_LEN);
 	uint32_t state;
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_GET_PHY_STATE;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_GET_PHY_STATE_IN_LEN;
@@ -523,22 +520,34 @@ ef10_bist_poll(
 	unsigned long *valuesp,
 	__in			size_t count)
 {
+	/*
+	 * MCDI_CTL_SDU_LEN_MAX_V1 is large enough cover all BIST results,
+	 * whilst not wasting stack.
+	 */
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_POLL_BIST_IN_LEN,
+		MCDI_CTL_SDU_LEN_MAX_V1);
 	efx_nic_cfg_t *encp = &(enp->en_nic_cfg);
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_POLL_BIST_IN_LEN,
-			    MCDI_CTL_SDU_LEN_MAX)];
 	uint32_t value_mask = 0;
 	uint32_t result;
 	efx_rc_t rc;
 
+	EFX_STATIC_ASSERT(MC_CMD_POLL_BIST_OUT_LEN <=
+	    MCDI_CTL_SDU_LEN_MAX_V1);
+	EFX_STATIC_ASSERT(MC_CMD_POLL_BIST_OUT_SFT9001_LEN <=
+	    MCDI_CTL_SDU_LEN_MAX_V1);
+	EFX_STATIC_ASSERT(MC_CMD_POLL_BIST_OUT_MRSFP_LEN <=
+	    MCDI_CTL_SDU_LEN_MAX_V1);
+	EFX_STATIC_ASSERT(MC_CMD_POLL_BIST_OUT_MEM_LEN <=
+	    MCDI_CTL_SDU_LEN_MAX_V1);
+
 	_NOTE(ARGUNUSED(type))
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_POLL_BIST;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_POLL_BIST_IN_LEN;
 	req.emr_out_buf = payload;
-	req.emr_out_length = MCDI_CTL_SDU_LEN_MAX;
+	req.emr_out_length = MCDI_CTL_SDU_LEN_MAX_V1;
 
 	efx_mcdi_execute(enp, &req);
 

@@ -88,14 +88,20 @@
 /* Maximum Packet headers size (L2+L3+L4) for TSO. */
 #define MLX5_MAX_TSO_HEADER 128
 
-/* Default minimum number of Tx queues for vectorized Tx. */
-#define MLX5_VPMD_MIN_TXQS 4
+/* Default maximum number of Tx queues for vectorized Tx. */
+#if defined(RTE_ARCH_ARM64)
+#define MLX5_VPMD_MAX_TXQS 8
+#else
+#define MLX5_VPMD_MAX_TXQS 4
+#endif
+#define MLX5_VPMD_MAX_TXQS_BLUEFIELD 16
 
 /* Threshold of buffer replenishment for vectorized Rx. */
-#define MLX5_VPMD_RXQ_RPLNSH_THRESH   64U
+#define MLX5_VPMD_RXQ_RPLNSH_THRESH(n) \
+	(RTE_MIN(MLX5_VPMD_RX_MAX_BURST, (unsigned int)(n) >> 2))
 
 /* Maximum size of burst for vectorized Rx. */
-#define MLX5_VPMD_RX_MAX_BURST        MLX5_VPMD_RXQ_RPLNSH_THRESH
+#define MLX5_VPMD_RX_MAX_BURST 64U
 
 /*
  * Maximum size of burst for vectorized Tx. This is related to the maximum size
@@ -110,7 +116,28 @@
 /* Supported RSS */
 #define MLX5_RSS_HF_MASK (~(ETH_RSS_IP | ETH_RSS_UDP | ETH_RSS_TCP))
 
-/* Maximum number of attempts to query link status before giving up. */
-#define MLX5_MAX_LINK_QUERY_ATTEMPTS 5
+/* Timeout in seconds to get a valid link status. */
+#define MLX5_LINK_STATUS_TIMEOUT 10
+
+/* Reserved address space for UAR mapping. */
+#define MLX5_UAR_SIZE (1ULL << 32)
+
+/* Offset of reserved UAR address space to hugepage memory. Offset is used here
+ * to minimize possibility of address next to hugepage being used by other code
+ * in either primary or secondary process, failing to map TX UAR would make TX
+ * packets invisible to HW.
+ */
+#define MLX5_UAR_OFFSET (1ULL << 32)
+
+/* Size of per-queue MR cache table. */
+#define MLX5_MR_CACHE_N 8
+
+/* First entry must be NULL for comparison. */
+#define MLX5_MR_LOOKUP_TABLE_PAD 1
+
+/* Definition of static_assert found in /usr/include/assert.h */
+#ifndef HAVE_STATIC_ASSERT
+#define static_assert _Static_assert
+#endif
 
 #endif /* RTE_PMD_MLX5_DEFS_H_ */

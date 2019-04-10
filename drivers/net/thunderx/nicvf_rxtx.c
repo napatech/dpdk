@@ -89,6 +89,14 @@ fill_sq_desc_header(union sq_entry_t *entry, struct rte_mbuf *pkt)
 	entry->buff[0] = sqe.buff[0];
 }
 
+static inline void __hot
+fill_sq_desc_header_zero_w1(union sq_entry_t *entry,
+				struct rte_mbuf *pkt)
+{
+	fill_sq_desc_header(entry, pkt);
+	entry->buff[1] = 0ULL;
+}
+
 void __hot
 nicvf_single_pool_free_xmited_buffers(struct nicvf_txq *sq)
 {
@@ -190,12 +198,14 @@ nicvf_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		free_desc -= TX_DESC_PER_PKT;
 	}
 
-	sq->tail = tail;
-	sq->xmit_bufs += i;
-	rte_wmb();
+	if (likely(i)) {
+		sq->tail = tail;
+		sq->xmit_bufs += i;
+		rte_wmb();
 
-	/* Inform HW to xmit the packets */
-	nicvf_addr_write(sq->sq_door, i * TX_DESC_PER_PKT);
+		/* Inform HW to xmit the packets */
+		nicvf_addr_write(sq->sq_door, i * TX_DESC_PER_PKT);
+	}
 	return i;
 }
 
@@ -230,7 +240,7 @@ nicvf_xmit_pkts_multiseg(void *tx_queue, struct rte_mbuf **tx_pkts,
 		used_bufs += nb_segs;
 
 		txbuffs[tail] = NULL;
-		fill_sq_desc_header(desc_ptr + tail, pkt);
+		fill_sq_desc_header_zero_w1(desc_ptr + tail, pkt);
 		tail = (tail + 1) & qlen_mask;
 
 		txbuffs[tail] = pkt;
@@ -246,12 +256,14 @@ nicvf_xmit_pkts_multiseg(void *tx_queue, struct rte_mbuf **tx_pkts,
 		}
 	}
 
-	sq->tail = tail;
-	sq->xmit_bufs += used_bufs;
-	rte_wmb();
+	if (likely(used_desc)) {
+		sq->tail = tail;
+		sq->xmit_bufs += used_bufs;
+		rte_wmb();
 
-	/* Inform HW to xmit the packets */
-	nicvf_addr_write(sq->sq_door, used_desc);
+		/* Inform HW to xmit the packets */
+		nicvf_addr_write(sq->sq_door, used_desc);
+	}
 	return i;
 }
 

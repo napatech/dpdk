@@ -47,8 +47,8 @@ efx_mcdi_init_rxq(
 	__in		uint32_t ps_bufsize)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_INIT_RXQ_EXT_IN_LEN,
-			    MC_CMD_INIT_RXQ_EXT_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_INIT_RXQ_EXT_IN_LEN,
+		MC_CMD_INIT_RXQ_EXT_OUT_LEN);
 	int npages = EFX_RXQ_NBUFS(size);
 	int i;
 	efx_qword_t *dma_addr;
@@ -65,7 +65,6 @@ efx_mcdi_init_rxq(
 	else
 		dma_mode = MC_CMD_INIT_RXQ_EXT_IN_SINGLE_PACKET;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_INIT_RXQ;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_INIT_RXQ_EXT_IN_LEN;
@@ -122,11 +121,10 @@ efx_mcdi_fini_rxq(
 	__in		uint32_t instance)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_FINI_RXQ_IN_LEN,
-			    MC_CMD_FINI_RXQ_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_FINI_RXQ_IN_LEN,
+		MC_CMD_FINI_RXQ_OUT_LEN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_FINI_RXQ;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_FINI_RXQ_IN_LEN;
@@ -164,8 +162,8 @@ efx_mcdi_rss_context_alloc(
 	__out		uint32_t *rss_contextp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_RSS_CONTEXT_ALLOC_IN_LEN,
-			    MC_CMD_RSS_CONTEXT_ALLOC_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_RSS_CONTEXT_ALLOC_IN_LEN,
+		MC_CMD_RSS_CONTEXT_ALLOC_OUT_LEN);
 	uint32_t rss_context;
 	uint32_t context_type;
 	efx_rc_t rc;
@@ -187,7 +185,6 @@ efx_mcdi_rss_context_alloc(
 		goto fail2;
 	}
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_RSS_CONTEXT_ALLOC;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_RSS_CONTEXT_ALLOC_IN_LEN;
@@ -244,8 +241,8 @@ efx_mcdi_rss_context_free(
 	__in		uint32_t rss_context)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_RSS_CONTEXT_FREE_IN_LEN,
-			    MC_CMD_RSS_CONTEXT_FREE_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_RSS_CONTEXT_FREE_IN_LEN,
+		MC_CMD_RSS_CONTEXT_FREE_OUT_LEN);
 	efx_rc_t rc;
 
 	if (rss_context == EF10_RSS_CONTEXT_INVALID) {
@@ -253,7 +250,6 @@ efx_mcdi_rss_context_free(
 		goto fail1;
 	}
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_RSS_CONTEXT_FREE;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_RSS_CONTEXT_FREE_IN_LEN;
@@ -288,8 +284,8 @@ efx_mcdi_rss_context_set_flags(
 	__in		efx_rx_hash_type_t type)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_RSS_CONTEXT_SET_FLAGS_IN_LEN,
-			    MC_CMD_RSS_CONTEXT_SET_FLAGS_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_RSS_CONTEXT_SET_FLAGS_IN_LEN,
+		MC_CMD_RSS_CONTEXT_SET_FLAGS_OUT_LEN);
 	efx_rc_t rc;
 
 	if (rss_context == EF10_RSS_CONTEXT_INVALID) {
@@ -297,7 +293,6 @@ efx_mcdi_rss_context_set_flags(
 		goto fail1;
 	}
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_RSS_CONTEXT_SET_FLAGS;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_RSS_CONTEXT_SET_FLAGS_IN_LEN;
@@ -344,8 +339,8 @@ efx_mcdi_rss_context_set_key(
 	__in		size_t n)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_RSS_CONTEXT_SET_KEY_IN_LEN,
-			    MC_CMD_RSS_CONTEXT_SET_KEY_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_RSS_CONTEXT_SET_KEY_IN_LEN,
+		MC_CMD_RSS_CONTEXT_SET_KEY_OUT_LEN);
 	efx_rc_t rc;
 
 	if (rss_context == EF10_RSS_CONTEXT_INVALID) {
@@ -353,7 +348,6 @@ efx_mcdi_rss_context_set_key(
 		goto fail1;
 	}
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_RSS_CONTEXT_SET_KEY;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_RSS_CONTEXT_SET_KEY_IN_LEN;
@@ -401,8 +395,8 @@ efx_mcdi_rss_context_set_table(
 	__in		size_t n)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_RSS_CONTEXT_SET_TABLE_IN_LEN,
-			    MC_CMD_RSS_CONTEXT_SET_TABLE_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_RSS_CONTEXT_SET_TABLE_IN_LEN,
+		MC_CMD_RSS_CONTEXT_SET_TABLE_OUT_LEN);
 	uint8_t *req_table;
 	int i, rc;
 
@@ -411,7 +405,6 @@ efx_mcdi_rss_context_set_table(
 		goto fail1;
 	}
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_RSS_CONTEXT_SET_TABLE;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_RSS_CONTEXT_SET_TABLE_IN_LEN;

@@ -106,18 +106,22 @@ mlx5_rx_replenish_bulk_mbuf(struct mlx5_rxq_data *rxq, uint16_t n)
 	volatile struct mlx5_wqe_data_seg *wq = &(*rxq->wqes)[elts_idx];
 	unsigned int i;
 
-	assert(n >= MLX5_VPMD_RXQ_RPLNSH_THRESH);
+	assert(n >= MLX5_VPMD_RXQ_RPLNSH_THRESH(q_n));
 	assert(n <= (uint16_t)(q_n - (rxq->rq_ci - rxq->rq_pi)));
-	assert(MLX5_VPMD_RXQ_RPLNSH_THRESH > MLX5_VPMD_DESCS_PER_LOOP);
+	assert(MLX5_VPMD_RXQ_RPLNSH_THRESH(q_n) > MLX5_VPMD_DESCS_PER_LOOP);
 	/* Not to cross queue end. */
 	n = RTE_MIN(n - MLX5_VPMD_DESCS_PER_LOOP, q_n - elts_idx);
 	if (rte_mempool_get_bulk(rxq->mp, (void *)elts, n) < 0) {
 		rxq->stats.rx_nombuf += n;
 		return;
 	}
-	for (i = 0; i < n; ++i)
+	for (i = 0; i < n; ++i) {
 		wq[i].addr = rte_cpu_to_be_64((uintptr_t)elts[i]->buf_addr +
 					      RTE_PKTMBUF_HEADROOM);
+		/* If there's only one MR, no need to replace LKEY in WQEs. */
+		if (unlikely(!IS_SINGLE_MR(rxq->mr_ctrl.bh_n)))
+			wq[i].lkey = mlx5_rx_mb2mr(rxq, elts[i]);
+	}
 	rxq->rq_ci += n;
 	/* Prevent overflowing into consumed mbufs. */
 	elts_idx = rxq->rq_ci & q_mask;

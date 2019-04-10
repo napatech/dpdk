@@ -235,7 +235,7 @@ Supports TCP Segmentation Offloading.
 
 * **[uses]       rte_eth_txconf,rte_eth_txmode**: ``offloads:DEV_TX_OFFLOAD_TCP_TSO``.
 * **[uses]       rte_eth_desc_lim**: ``nb_seg_max``, ``nb_mtu_seg_max``.
-* **[uses]       mbuf**: ``mbuf.ol_flags:PKT_TX_TCP_SEG``.
+* **[uses]       mbuf**: ``mbuf.ol_flags:`` ``PKT_TX_TCP_SEG``, ``PKT_TX_IPV4``, ``PKT_TX_IPV6``, ``PKT_TX_IP_CKSUM``.
 * **[uses]       mbuf**: ``mbuf.tso_segsz``, ``mbuf.l2_len``, ``mbuf.l3_len``, ``mbuf.l4_len``.
 * **[implements] datapath**: ``TSO functionality``.
 * **[provides]   rte_eth_dev_info**: ``tx_offload_capa,tx_queue_offload_capa:DEV_TX_OFFLOAD_TCP_TSO,DEV_TX_OFFLOAD_UDP_TSO``.
@@ -577,6 +577,7 @@ Supports L3 checksum offload.
 * **[uses]     rte_eth_txconf,rte_eth_txmode**: ``offloads:DEV_TX_OFFLOAD_IPV4_CKSUM``.
 * **[uses]     mbuf**: ``mbuf.ol_flags:PKT_TX_IP_CKSUM``,
   ``mbuf.ol_flags:PKT_TX_IPV4`` | ``PKT_TX_IPV6``.
+* **[uses]     mbuf**: ``mbuf.l2_len``, ``mbuf.l3_len``.
 * **[provides] mbuf**: ``mbuf.ol_flags:PKT_RX_IP_CKSUM_UNKNOWN`` |
   ``PKT_RX_IP_CKSUM_BAD`` | ``PKT_RX_IP_CKSUM_GOOD`` |
   ``PKT_RX_IP_CKSUM_NONE``.
@@ -597,6 +598,7 @@ Supports L4 checksum offload.
 * **[uses]     mbuf**: ``mbuf.ol_flags:PKT_TX_IPV4`` | ``PKT_TX_IPV6``,
   ``mbuf.ol_flags:PKT_TX_L4_NO_CKSUM`` | ``PKT_TX_TCP_CKSUM`` |
   ``PKT_TX_SCTP_CKSUM`` | ``PKT_TX_UDP_CKSUM``.
+* **[uses]     mbuf**: ``mbuf.l2_len``, ``mbuf.l3_len``.
 * **[provides] mbuf**: ``mbuf.ol_flags:PKT_RX_L4_CKSUM_UNKNOWN`` |
   ``PKT_RX_L4_CKSUM_BAD`` | ``PKT_RX_L4_CKSUM_GOOD`` |
   ``PKT_RX_L4_CKSUM_NONE``.

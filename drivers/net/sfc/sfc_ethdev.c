@@ -35,6 +35,7 @@
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
 #include <rte_errno.h>
+#include <rte_string_fns.h>
 
 #include "efx.h"
 
@@ -458,8 +459,6 @@ sfc_rx_queue_release(void *queue)
 
 	sfc_log_init(sa, "RxQ=%u", sw_index);
 
-	sa->eth_dev->data->rx_queues[sw_index] = NULL;
-
 	sfc_rx_qfini(sa, sw_index);
 
 	sfc_adapter_unlock(sa);
@@ -513,9 +512,6 @@ sfc_tx_queue_release(void *queue)
 	sfc_log_init(sa, "TxQ = %u", sw_index);
 
 	sfc_adapter_lock(sa);
-
-	SFC_ASSERT(sw_index < sa->eth_dev->data->nb_tx_queues);
-	sa->eth_dev->data->tx_queues[sw_index] = NULL;
 
 	sfc_tx_qfini(sa, sw_index);
 
@@ -666,7 +662,7 @@ sfc_xstats_get_names(struct rte_eth_dev *dev,
 	for (i = 0; i < EFX_MAC_NSTATS; ++i) {
 		if (EFX_MAC_STAT_SUPPORTED(port->mac_stats_mask, i)) {
 			if (xstats_names != NULL && nstats < xstats_count)
-				strncpy(xstats_names[nstats].name,
+				strlcpy(xstats_names[nstats].name,
 					efx_mac_stat_name(sa->nic, i),
 					sizeof(xstats_names[0].name));
 			nstats++;
@@ -744,9 +740,8 @@ sfc_xstats_get_names_by_id(struct rte_eth_dev *dev,
 		if ((ids == NULL) || (ids[nb_written] == nb_supported)) {
 			char *name = xstats_names[nb_written++].name;
 
-			strncpy(name, efx_mac_stat_name(sa->nic, i),
+			strlcpy(name, efx_mac_stat_name(sa->nic, i),
 				sizeof(xstats_names[0].name));
-			name[sizeof(xstats_names[0].name) - 1] = '\0';
 		}
 
 		++nb_supported;
@@ -1030,7 +1025,7 @@ sfc_set_mc_addr_list(struct rte_eth_dev *dev, struct ether_addr *mc_addr_set,
 	if (rc != 0)
 		sfc_err(sa, "cannot set multicast address list (rc = %u)", rc);
 
-	SFC_ASSERT(rc > 0);
+	SFC_ASSERT(rc >= 0);
 	return -rc;
 }
 
@@ -1230,13 +1225,9 @@ sfc_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 			  struct rte_eth_rss_conf *rss_conf)
 {
 	struct sfc_adapter *sa = dev->data->dev_private;
-	struct sfc_port *port = &sa->port;
 
-	if ((sa->rss_support != EFX_RX_SCALE_EXCLUSIVE) || port->isolated)
+	if (sa->rss_support != EFX_RX_SCALE_EXCLUSIVE)
 		return -ENOTSUP;
-
-	if (sa->rss_channels == 0)
-		return -EINVAL;
 
 	sfc_adapter_lock(sa);
 

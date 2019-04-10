@@ -1259,6 +1259,7 @@ struct public_drv_mb {
  */
 #define DRV_MSG_GET_RESOURCE_ALLOC_MSG		0x34000000
 #define DRV_MSG_SET_RESOURCE_VALUE_MSG		0x35000000
+#define DRV_MSG_CODE_S_TAG_UPDATE_ACK		0x3b000000
 
 /*deprecated don't use*/
 #define DRV_MSG_CODE_INITIATE_FLR_DEPRECATED    0x02000000
@@ -1777,6 +1778,8 @@ struct public_drv_mb {
 #define FW_MB_PARAM_FEATURE_SUPPORT_SMARTLINQ   0x00000001
 /* MFW supports EEE */
 #define FW_MB_PARAM_FEATURE_SUPPORT_EEE         0x00000002
+/* MFW support complete IGU cleanup upon FLR */
+#define FW_MB_PARAM_FEATURE_SUPPORT_IGU_CLEANUP	0x00000080
 /* MFW supports virtual link */
 #define FW_MB_PARAM_FEATURE_SUPPORT_VLINK       0x00010000
 

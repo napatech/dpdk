@@ -343,7 +343,8 @@ gro_tcp4_reassemble(struct rte_mbuf *pkt,
 	struct ipv4_hdr *ipv4_hdr;
 	struct tcp_hdr *tcp_hdr;
 	uint32_t sent_seq;
-	uint16_t tcp_dl, ip_id;
+	uint16_t ip_id;
+	int32_t tcp_dl;
 
 	struct tcp4_key key;
 	uint32_t cur_idx, prev_idx, item_idx;
@@ -360,10 +361,10 @@ gro_tcp4_reassemble(struct rte_mbuf *pkt,
 	 */
 	if (tcp_hdr->tcp_flags != TCP_ACK_FLAG)
 		return -1;
-	/* if payload length is 0, return immediately */
+	/* if payload length is less than or equal to 0, return immediately */
 	tcp_dl = rte_be_to_cpu_16(ipv4_hdr->total_length) - pkt->l3_len -
 		pkt->l4_len;
-	if (tcp_dl == 0)
+	if (tcp_dl <= 0)
 		return -1;
 
 	ip_id = rte_be_to_cpu_16(ipv4_hdr->packet_id);

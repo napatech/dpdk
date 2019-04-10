@@ -60,10 +60,10 @@ Code
 .. code-block:: c
 
   /* create the attribute structure */
-  struct rte_flow_attr attr = {.ingress = 1};
+  struct rte_flow_attr attr = { .ingress = 1 };
   struct rte_flow_item pattern[MAX_PATTERN_IN_FLOW];
   struct rte_flow_action actions[MAX_ACTIONS_IN_FLOW];
-  struct rte_flow_item_etc eth;
+  struct rte_flow_item_eth eth;
   struct rte_flow_item_vlan vlan;
   struct rte_flow_item_ipv4 ipv4;
   struct rte_flow *flow;
@@ -83,15 +83,15 @@ Code
   pattern[2].spec = &ipv4;
 
   /* end the pattern array */
-  pattern[3].type = RTE_FLOW_ITEM)TYPE_END;
+  pattern[3].type = RTE_FLOW_ITEM_TYPE_END;
 
   /* create the drop action */
   actions[0].type = RTE_FLOW_ACTION_TYPE_DROP;
   actions[1].type = RTE_FLOW_ACTION_TYPE_END;
 
   /* validate and create the flow rule */
-  if (!rte_flow_validate(port_id, &attr, pattern, actions, &error)
-      flow = rte_flow_create(port_id, &attr, pattern, actions, &error)
+  if (!rte_flow_validate(port_id, &attr, pattern, actions, &error))
+      flow = rte_flow_create(port_id, &attr, pattern, actions, &error);
 
 Output
 ~~~~~~
@@ -148,7 +148,7 @@ clarity)::
 
   tpmd> flow create 0 ingress pattern eth / vlan /
                     ipv4 dst spec 192.168.3.0 dst mask 255.255.255.0 /
-	            end actions drop / end
+                    end actions drop / end
 
 Code
 ~~~~
@@ -158,7 +158,7 @@ Code
   struct rte_flow_attr attr = {.ingress = 1};
   struct rte_flow_item pattern[MAX_PATTERN_IN_FLOW];
   struct rte_flow_action actions[MAX_ACTIONS_IN_FLOW];
-  struct rte_flow_item_etc eth;
+  struct rte_flow_item_eth eth;
   struct rte_flow_item_vlan vlan;
   struct rte_flow_item_ipv4 ipv4;
   struct rte_flow_item_ipv4 ipv4_mask;
@@ -181,15 +181,15 @@ Code
   pattern[2].mask = &ipv4_mask;
 
   /* end the pattern array */
-  pattern[3].type = RTE_FLOW_ITEM)TYPE_END;
+  pattern[3].type = RTE_FLOW_ITEM_TYPE_END;
 
   /* create the drop action */
   actions[0].type = RTE_FLOW_ACTION_TYPE_DROP;
   actions[1].type = RTE_FLOW_ACTION_TYPE_END;
 
   /* validate and create the flow rule */
-  if (!rte_flow_validate(port_id, &attr, pattern, actions, &error)
-      flow = rte_flow_create(port_id, &attr, pattern, actions, &error)
+  if (!rte_flow_validate(port_id, &attr, pattern, actions, &error))
+      flow = rte_flow_create(port_id, &attr, pattern, actions, &error);
 
 Output
 ~~~~~~
@@ -255,10 +255,10 @@ Code
 
 .. code-block:: c
 
-  struct rte_flow_attr attr = {.ingress = 1};
+  struct rte_flow_attr attr = { .ingress = 1 };
   struct rte_flow_item pattern[MAX_PATTERN_IN_FLOW];
   struct rte_flow_action actions[MAX_ACTIONS_IN_FLOW];
-  struct rte_flow_item_etc eth;
+  struct rte_flow_item_eth eth;
   struct rte_flow_item_vlan vlan;
   struct rte_flow_action_queue queue = { .index = 3 };
   struct rte_flow *flow;
@@ -274,16 +274,16 @@ Code
   pattern[1].spec = &vlan;
 
   /* end the pattern array */
-  pattern[2].type = RTE_FLOW_ITEM)TYPE_END;
+  pattern[2].type = RTE_FLOW_ITEM_TYPE_END;
 
   /* create the drop action */
   actions[0].type = RTE_FLOW_ACTION_TYPE_QUEUE;
-  actions[0].conf = &queue
+  actions[0].conf = &queue;
   actions[1].type = RTE_FLOW_ACTION_TYPE_END;
 
   /* validate and create the flow rule */
-  if (!rte_flow_validate(port_id, &attr, pattern, actions, &error)
-      flow = rte_flow_create(port_id, &attr, pattern, actions, &error)
+  if (!rte_flow_validate(port_id, &attr, pattern, actions, &error))
+      flow = rte_flow_create(port_id, &attr, pattern, actions, &error);
 
 Output
 ~~~~~~
