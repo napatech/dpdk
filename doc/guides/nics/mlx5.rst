@@ -168,7 +168,7 @@ Limitations
   - must specify the VXLAN item with tunnel outer parameters.
   - must specify the tunnel outer VNI in the VXLAN item.
   - must specify the tunnel outer remote (destination) UDP port in the VXLAN item.
-  - must specify the tunnel outer local (source) IPv4 or IPv6 in the , this address will locally (with scope link) assigned to the outer network interace, wildcards not allowed.
+  - must specify the tunnel outer local (source) IPv4 or IPv6 in the , this address will locally (with scope link) assigned to the outer network interface, wildcards not allowed.
   - must specify the tunnel outer remote (destination) IPv4 or IPv6 in the VXLAN item, group IPs allowed.
   - must specify the tunnel outer destination MAC address in the VXLAN item, this address will be used to create neigh rule.
 
