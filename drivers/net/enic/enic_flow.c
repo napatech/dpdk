@@ -30,11 +30,15 @@
  * filter: Partially filled in NIC filter structure.
  * inner_ofst: If zero, this is an outer header. If non-zero, this is
  *   the offset into L5 where the header begins.
+ * l2_proto_off: offset to EtherType eth or vlan header.
+ * l3_proto_off: offset to next protocol field in IPv4 or 6 header.
  */
 struct copy_item_args {
 	const struct rte_flow_item *item;
 	struct filter_v2 *filter;
 	uint8_t *inner_ofst;
+	uint8_t l2_proto_off;
+	uint8_t l3_proto_off;
 };
 
 /* functions for copying items into enic filters */
@@ -50,6 +54,8 @@ struct enic_items {
 	 * versions, it's invalid to start the stack above layer 3.
 	 */
 	const u8 valid_start_item;
+	/* Inner packet version of copy_item. */
+	enic_copy_item_fn *inner_copy_item;
 };
 
 /** Filtering capabilities for various NIC and firmware versions. */
@@ -85,6 +91,12 @@ static enic_copy_item_fn enic_copy_item_udp_v2;
 static enic_copy_item_fn enic_copy_item_tcp_v2;
 static enic_copy_item_fn enic_copy_item_sctp_v2;
 static enic_copy_item_fn enic_copy_item_vxlan_v2;
+static enic_copy_item_fn enic_copy_item_inner_eth_v2;
+static enic_copy_item_fn enic_copy_item_inner_vlan_v2;
+static enic_copy_item_fn enic_copy_item_inner_ipv4_v2;
+static enic_copy_item_fn enic_copy_item_inner_ipv6_v2;
+static enic_copy_item_fn enic_copy_item_inner_udp_v2;
+static enic_copy_item_fn enic_copy_item_inner_tcp_v2;
 static copy_action_fn enic_copy_action_v1;
 static copy_action_fn enic_copy_action_v2;
 
@@ -99,6 +111,7 @@ static const struct enic_items enic_items_v1[] = {
 		.prev_items = (const enum rte_flow_item_type[]) {
 			       RTE_FLOW_ITEM_TYPE_END,
 		},
+		.inner_copy_item = NULL,
 	},
 	[RTE_FLOW_ITEM_TYPE_UDP] = {
 		.copy_item = enic_copy_item_udp_v1,
@@ -107,6 +120,7 @@ static const struct enic_items enic_items_v1[] = {
 			       RTE_FLOW_ITEM_TYPE_IPV4,
 			       RTE_FLOW_ITEM_TYPE_END,
 		},
+		.inner_copy_item = NULL,
 	},
 	[RTE_FLOW_ITEM_TYPE_TCP] = {
 		.copy_item = enic_copy_item_tcp_v1,
@@ -115,6 +129,7 @@ static const struct enic_items enic_items_v1[] = {
 			       RTE_FLOW_ITEM_TYPE_IPV4,
 			       RTE_FLOW_ITEM_TYPE_END,
 		},
+		.inner_copy_item = NULL,
 	},
 };
 
@@ -130,6 +145,7 @@ static const struct enic_items enic_items_v2[] = {
 			       RTE_FLOW_ITEM_TYPE_VXLAN,
 			       RTE_FLOW_ITEM_TYPE_END,
 		},
+		.inner_copy_item = enic_copy_item_inner_eth_v2,
 	},
 	[RTE_FLOW_ITEM_TYPE_VLAN] = {
 		.copy_item = enic_copy_item_vlan_v2,
@@ -138,6 +154,7 @@ static const struct enic_items enic_items_v2[] = {
 			       RTE_FLOW_ITEM_TYPE_ETH,
 			       RTE_FLOW_ITEM_TYPE_END,
 		},
+		.inner_copy_item = enic_copy_item_inner_vlan_v2,
 	},
 	[RTE_FLOW_ITEM_TYPE_IPV4] = {
 		.copy_item = enic_copy_item_ipv4_v2,
@@ -147,6 +164,7 @@ static const struct enic_items enic_items_v2[] = {
 			       RTE_FLOW_ITEM_TYPE_VLAN,
 			       RTE_FLOW_ITEM_TYPE_END,
 		},
+		.inner_copy_item = enic_copy_item_inner_ipv4_v2,
 	},
 	[RTE_FLOW_ITEM_TYPE_IPV6] = {
 		.copy_item = enic_copy_item_ipv6_v2,
@@ -156,6 +174,7 @@ static const struct enic_items enic_items_v2[] = {
 			       RTE_FLOW_ITEM_TYPE_VLAN,
 			       RTE_FLOW_ITEM_TYPE_END,
 		},
+		.inner_copy_item = enic_copy_item_inner_ipv6_v2,
 	},
 	[RTE_FLOW_ITEM_TYPE_UDP] = {
 		.copy_item = enic_copy_item_udp_v2,
@@ -165,6 +184,7 @@ static const struct enic_items enic_items_v2[] = {
 			       RTE_FLOW_ITEM_TYPE_IPV6,
 			       RTE_FLOW_ITEM_TYPE_END,
 		},
+		.inner_copy_item = enic_copy_item_inner_udp_v2,
 	},
 	[RTE_FLOW_ITEM_TYPE_TCP] = {
 		.copy_item = enic_copy_item_tcp_v2,
@@ -174,6 +194,7 @@ static const struct enic_items enic_items_v2[] = {
 			       RTE_FLOW_ITEM_TYPE_IPV6,
 			       RTE_FLOW_ITEM_TYPE_END,
 		},
+		.inner_copy_item = enic_copy_item_inner_tcp_v2,
 	},
 	[RTE_FLOW_ITEM_TYPE_SCTP] = {
 		.copy_item = enic_copy_item_sctp_v2,
@@ -183,6 +204,7 @@ static const struct enic_items enic_items_v2[] = {
 			       RTE_FLOW_ITEM_TYPE_IPV6,
 			       RTE_FLOW_ITEM_TYPE_END,
 		},
+		.inner_copy_item = NULL,
 	},
 	[RTE_FLOW_ITEM_TYPE_VXLAN] = {
 		.copy_item = enic_copy_item_vxlan_v2,
@@ -191,6 +213,7 @@ static const struct enic_items enic_items_v2[] = {
 			       RTE_FLOW_ITEM_TYPE_UDP,
 			       RTE_FLOW_ITEM_TYPE_END,
 		},
+		.inner_copy_item = NULL,
 	},
 };
 
@@ -203,6 +226,7 @@ static const struct enic_items enic_items_v3[] = {
 			       RTE_FLOW_ITEM_TYPE_VXLAN,
 			       RTE_FLOW_ITEM_TYPE_END,
 		},
+		.inner_copy_item = enic_copy_item_inner_eth_v2,
 	},
 	[RTE_FLOW_ITEM_TYPE_VLAN] = {
 		.copy_item = enic_copy_item_vlan_v2,
@@ -211,6 +235,7 @@ static const struct enic_items enic_items_v3[] = {
 			       RTE_FLOW_ITEM_TYPE_ETH,
 			       RTE_FLOW_ITEM_TYPE_END,
 		},
+		.inner_copy_item = enic_copy_item_inner_vlan_v2,
 	},
 	[RTE_FLOW_ITEM_TYPE_IPV4] = {
 		.copy_item = enic_copy_item_ipv4_v2,
@@ -220,6 +245,7 @@ static const struct enic_items enic_items_v3[] = {
 			       RTE_FLOW_ITEM_TYPE_VLAN,
 			       RTE_FLOW_ITEM_TYPE_END,
 		},
+		.inner_copy_item = enic_copy_item_inner_ipv4_v2,
 	},
 	[RTE_FLOW_ITEM_TYPE_IPV6] = {
 		.copy_item = enic_copy_item_ipv6_v2,
@@ -229,6 +255,7 @@ static const struct enic_items enic_items_v3[] = {
 			       RTE_FLOW_ITEM_TYPE_VLAN,
 			       RTE_FLOW_ITEM_TYPE_END,
 		},
+		.inner_copy_item = enic_copy_item_inner_ipv6_v2,
 	},
 	[RTE_FLOW_ITEM_TYPE_UDP] = {
 		.copy_item = enic_copy_item_udp_v2,
@@ -238,6 +265,7 @@ static const struct enic_items enic_items_v3[] = {
 			       RTE_FLOW_ITEM_TYPE_IPV6,
 			       RTE_FLOW_ITEM_TYPE_END,
 		},
+		.inner_copy_item = enic_copy_item_inner_udp_v2,
 	},
 	[RTE_FLOW_ITEM_TYPE_TCP] = {
 		.copy_item = enic_copy_item_tcp_v2,
@@ -247,6 +275,7 @@ static const struct enic_items enic_items_v3[] = {
 			       RTE_FLOW_ITEM_TYPE_IPV6,
 			       RTE_FLOW_ITEM_TYPE_END,
 		},
+		.inner_copy_item = enic_copy_item_inner_tcp_v2,
 	},
 	[RTE_FLOW_ITEM_TYPE_SCTP] = {
 		.copy_item = enic_copy_item_sctp_v2,
@@ -256,6 +285,7 @@ static const struct enic_items enic_items_v3[] = {
 			       RTE_FLOW_ITEM_TYPE_IPV6,
 			       RTE_FLOW_ITEM_TYPE_END,
 		},
+		.inner_copy_item = NULL,
 	},
 	[RTE_FLOW_ITEM_TYPE_VXLAN] = {
 		.copy_item = enic_copy_item_vxlan_v2,
@@ -264,6 +294,7 @@ static const struct enic_items enic_items_v3[] = {
 			       RTE_FLOW_ITEM_TYPE_UDP,
 			       RTE_FLOW_ITEM_TYPE_END,
 		},
+		.inner_copy_item = NULL,
 	},
 };
 
@@ -351,7 +382,6 @@ enic_copy_item_ipv4_v1(struct copy_item_args *arg)
 {
 	const struct rte_flow_item *item = arg->item;
 	struct filter_v2 *enic_filter = arg->filter;
-	uint8_t *inner_ofst = arg->inner_ofst;
 	const struct rte_flow_item_ipv4 *spec = item->spec;
 	const struct rte_flow_item_ipv4 *mask = item->mask;
 	struct filter_ipv4_5tuple *enic_5tup = &enic_filter->u.ipv4;
@@ -361,9 +391,6 @@ enic_copy_item_ipv4_v1(struct copy_item_args *arg)
 	};
 
 	FLOW_TRACE();
-
-	if (*inner_ofst)
-		return ENOTSUP;
 
 	if (!mask)
 		mask = &rte_flow_item_ipv4_mask;
@@ -393,7 +420,6 @@ enic_copy_item_udp_v1(struct copy_item_args *arg)
 {
 	const struct rte_flow_item *item = arg->item;
 	struct filter_v2 *enic_filter = arg->filter;
-	uint8_t *inner_ofst = arg->inner_ofst;
 	const struct rte_flow_item_udp *spec = item->spec;
 	const struct rte_flow_item_udp *mask = item->mask;
 	struct filter_ipv4_5tuple *enic_5tup = &enic_filter->u.ipv4;
@@ -403,9 +429,6 @@ enic_copy_item_udp_v1(struct copy_item_args *arg)
 	};
 
 	FLOW_TRACE();
-
-	if (*inner_ofst)
-		return ENOTSUP;
 
 	if (!mask)
 		mask = &rte_flow_item_udp_mask;
@@ -436,7 +459,6 @@ enic_copy_item_tcp_v1(struct copy_item_args *arg)
 {
 	const struct rte_flow_item *item = arg->item;
 	struct filter_v2 *enic_filter = arg->filter;
-	uint8_t *inner_ofst = arg->inner_ofst;
 	const struct rte_flow_item_tcp *spec = item->spec;
 	const struct rte_flow_item_tcp *mask = item->mask;
 	struct filter_ipv4_5tuple *enic_5tup = &enic_filter->u.ipv4;
@@ -446,9 +468,6 @@ enic_copy_item_tcp_v1(struct copy_item_args *arg)
 	};
 
 	FLOW_TRACE();
-
-	if (*inner_ofst)
-		return ENOTSUP;
 
 	if (!mask)
 		mask = &rte_flow_item_tcp_mask;
@@ -474,12 +493,150 @@ enic_copy_item_tcp_v1(struct copy_item_args *arg)
 	return 0;
 }
 
+/*
+ * The common 'copy' function for all inner packet patterns. Patterns are
+ * first appended to the L5 pattern buffer. Then, since the NIC filter
+ * API has no special support for inner packet matching at the moment,
+ * we set EtherType and IP proto as necessary.
+ */
+static int
+copy_inner_common(struct filter_generic_1 *gp, uint8_t *inner_ofst,
+		  const void *val, const void *mask, uint8_t val_size,
+		  uint8_t proto_off, uint16_t proto_val, uint8_t proto_size)
+{
+	uint8_t *l5_mask, *l5_val;
+	uint8_t start_off;
+
+	/* No space left in the L5 pattern buffer. */
+	start_off = *inner_ofst;
+	if ((start_off + val_size) > FILTER_GENERIC_1_KEY_LEN)
+		return ENOTSUP;
+	l5_mask = gp->layer[FILTER_GENERIC_1_L5].mask;
+	l5_val = gp->layer[FILTER_GENERIC_1_L5].val;
+	/* Copy the pattern into the L5 buffer. */
+	if (val) {
+		memcpy(l5_mask + start_off, mask, val_size);
+		memcpy(l5_val + start_off, val, val_size);
+	}
+	/* Set the protocol field in the previous header. */
+	if (proto_off) {
+		void *m, *v;
+
+		m = l5_mask + proto_off;
+		v = l5_val + proto_off;
+		if (proto_size == 1) {
+			*(uint8_t *)m = 0xff;
+			*(uint8_t *)v = (uint8_t)proto_val;
+		} else if (proto_size == 2) {
+			*(uint16_t *)m = 0xffff;
+			*(uint16_t *)v = proto_val;
+		}
+	}
+	/* All inner headers land in L5 buffer even if their spec is null. */
+	*inner_ofst += val_size;
+	return 0;
+}
+
+static int
+enic_copy_item_inner_eth_v2(struct copy_item_args *arg)
+{
+	const void *mask = arg->item->mask;
+	uint8_t *off = arg->inner_ofst;
+
+	FLOW_TRACE();
+	if (!mask)
+		mask = &rte_flow_item_eth_mask;
+	arg->l2_proto_off = *off + offsetof(struct ether_hdr, ether_type);
+	return copy_inner_common(&arg->filter->u.generic_1, off,
+		arg->item->spec, mask, sizeof(struct ether_hdr),
+		0 /* no previous protocol */, 0, 0);
+}
+
+static int
+enic_copy_item_inner_vlan_v2(struct copy_item_args *arg)
+{
+	const void *mask = arg->item->mask;
+	uint8_t *off = arg->inner_ofst;
+	uint8_t eth_type_off;
+
+	FLOW_TRACE();
+	if (!mask)
+		mask = &rte_flow_item_vlan_mask;
+	/* Append vlan header to L5 and set ether type = TPID */
+	eth_type_off = arg->l2_proto_off;
+	arg->l2_proto_off = *off + offsetof(struct vlan_hdr, eth_proto);
+	return copy_inner_common(&arg->filter->u.generic_1, off,
+		arg->item->spec, mask, sizeof(struct vlan_hdr),
+		eth_type_off, rte_cpu_to_be_16(ETHER_TYPE_VLAN), 2);
+}
+
+static int
+enic_copy_item_inner_ipv4_v2(struct copy_item_args *arg)
+{
+	const void *mask = arg->item->mask;
+	uint8_t *off = arg->inner_ofst;
+
+	FLOW_TRACE();
+	if (!mask)
+		mask = &rte_flow_item_ipv4_mask;
+	/* Append ipv4 header to L5 and set ether type = ipv4 */
+	arg->l3_proto_off = *off + offsetof(struct ipv4_hdr, next_proto_id);
+	return copy_inner_common(&arg->filter->u.generic_1, off,
+		arg->item->spec, mask, sizeof(struct ipv4_hdr),
+		arg->l2_proto_off, rte_cpu_to_be_16(ETHER_TYPE_IPv4), 2);
+}
+
+static int
+enic_copy_item_inner_ipv6_v2(struct copy_item_args *arg)
+{
+	const void *mask = arg->item->mask;
+	uint8_t *off = arg->inner_ofst;
+
+	FLOW_TRACE();
+	if (!mask)
+		mask = &rte_flow_item_ipv6_mask;
+	/* Append ipv6 header to L5 and set ether type = ipv6 */
+	arg->l3_proto_off = *off + offsetof(struct ipv6_hdr, proto);
+	return copy_inner_common(&arg->filter->u.generic_1, off,
+		arg->item->spec, mask, sizeof(struct ipv6_hdr),
+		arg->l2_proto_off, rte_cpu_to_be_16(ETHER_TYPE_IPv6), 2);
+}
+
+static int
+enic_copy_item_inner_udp_v2(struct copy_item_args *arg)
+{
+	const void *mask = arg->item->mask;
+	uint8_t *off = arg->inner_ofst;
+
+	FLOW_TRACE();
+	if (!mask)
+		mask = &rte_flow_item_udp_mask;
+	/* Append udp header to L5 and set ip proto = udp */
+	return copy_inner_common(&arg->filter->u.generic_1, off,
+		arg->item->spec, mask, sizeof(struct udp_hdr),
+		arg->l3_proto_off, IPPROTO_UDP, 1);
+}
+
+static int
+enic_copy_item_inner_tcp_v2(struct copy_item_args *arg)
+{
+	const void *mask = arg->item->mask;
+	uint8_t *off = arg->inner_ofst;
+
+	FLOW_TRACE();
+	if (!mask)
+		mask = &rte_flow_item_tcp_mask;
+	/* Append tcp header to L5 and set ip proto = tcp */
+	return copy_inner_common(&arg->filter->u.generic_1, off,
+		arg->item->spec, mask, sizeof(struct tcp_hdr),
+		arg->l3_proto_off, IPPROTO_TCP, 1);
+}
+
 static int
 enic_copy_item_eth_v2(struct copy_item_args *arg)
 {
 	const struct rte_flow_item *item = arg->item;
 	struct filter_v2 *enic_filter = arg->filter;
-	uint8_t *inner_ofst = arg->inner_ofst;
 	struct ether_hdr enic_spec;
 	struct ether_hdr enic_mask;
 	const struct rte_flow_item_eth *spec = item->spec;
@@ -507,24 +664,11 @@ enic_copy_item_eth_v2(struct copy_item_args *arg)
 	enic_spec.ether_type = spec->type;
 	enic_mask.ether_type = mask->type;
 
-	if (*inner_ofst == 0) {
-		/* outer header */
-		memcpy(gp->layer[FILTER_GENERIC_1_L2].mask, &enic_mask,
-		       sizeof(struct ether_hdr));
-		memcpy(gp->layer[FILTER_GENERIC_1_L2].val, &enic_spec,
-		       sizeof(struct ether_hdr));
-	} else {
-		/* inner header */
-		if ((*inner_ofst + sizeof(struct ether_hdr)) >
-		     FILTER_GENERIC_1_KEY_LEN)
-			return ENOTSUP;
-		/* Offset into L5 where inner Ethernet header goes */
-		memcpy(&gp->layer[FILTER_GENERIC_1_L5].mask[*inner_ofst],
-		       &enic_mask, sizeof(struct ether_hdr));
-		memcpy(&gp->layer[FILTER_GENERIC_1_L5].val[*inner_ofst],
-		       &enic_spec, sizeof(struct ether_hdr));
-		*inner_ofst += sizeof(struct ether_hdr);
-	}
+	/* outer header */
+	memcpy(gp->layer[FILTER_GENERIC_1_L2].mask, &enic_mask,
+	       sizeof(struct ether_hdr));
+	memcpy(gp->layer[FILTER_GENERIC_1_L2].val, &enic_spec,
+	       sizeof(struct ether_hdr));
 	return 0;
 }
 
@@ -533,10 +677,11 @@ enic_copy_item_vlan_v2(struct copy_item_args *arg)
 {
 	const struct rte_flow_item *item = arg->item;
 	struct filter_v2 *enic_filter = arg->filter;
-	uint8_t *inner_ofst = arg->inner_ofst;
 	const struct rte_flow_item_vlan *spec = item->spec;
 	const struct rte_flow_item_vlan *mask = item->mask;
 	struct filter_generic_1 *gp = &enic_filter->u.generic_1;
+	struct ether_hdr *eth_mask;
+	struct ether_hdr *eth_val;
 
 	FLOW_TRACE();
 
@@ -547,36 +692,21 @@ enic_copy_item_vlan_v2(struct copy_item_args *arg)
 	if (!mask)
 		mask = &rte_flow_item_vlan_mask;
 
-	if (*inner_ofst == 0) {
-		struct ether_hdr *eth_mask =
-			(void *)gp->layer[FILTER_GENERIC_1_L2].mask;
-		struct ether_hdr *eth_val =
-			(void *)gp->layer[FILTER_GENERIC_1_L2].val;
-
-		/* Outer TPID cannot be matched */
-		if (eth_mask->ether_type)
-			return ENOTSUP;
-		/*
-		 * When packet matching, the VIC always compares vlan-stripped
-		 * L2, regardless of vlan stripping settings. So, the inner type
-		 * from vlan becomes the ether type of the eth header.
-		 */
-		eth_mask->ether_type = mask->inner_type;
-		eth_val->ether_type = spec->inner_type;
-		/* For TCI, use the vlan mask/val fields (little endian). */
-		gp->mask_vlan = rte_be_to_cpu_16(mask->tci);
-		gp->val_vlan = rte_be_to_cpu_16(spec->tci);
-	} else {
-		/* Inner header. Mask/Val start at *inner_ofst into L5 */
-		if ((*inner_ofst + sizeof(struct vlan_hdr)) >
-		     FILTER_GENERIC_1_KEY_LEN)
-			return ENOTSUP;
-		memcpy(&gp->layer[FILTER_GENERIC_1_L5].mask[*inner_ofst],
-		       mask, sizeof(struct vlan_hdr));
-		memcpy(&gp->layer[FILTER_GENERIC_1_L5].val[*inner_ofst],
-		       spec, sizeof(struct vlan_hdr));
-		*inner_ofst += sizeof(struct vlan_hdr);
-	}
+	eth_mask = (void *)gp->layer[FILTER_GENERIC_1_L2].mask;
+	eth_val = (void *)gp->layer[FILTER_GENERIC_1_L2].val;
+	/* Outer TPID cannot be matched */
+	if (eth_mask->ether_type)
+		return ENOTSUP;
+	/*
+	 * When packet matching, the VIC always compares vlan-stripped
+	 * L2, regardless of vlan stripping settings. So, the inner type
+	 * from vlan becomes the ether type of the eth header.
+	 */
+	eth_mask->ether_type = mask->inner_type;
+	eth_val->ether_type = spec->inner_type;
+	/* For TCI, use the vlan mask/val fields (little endian). */
+	gp->mask_vlan = rte_be_to_cpu_16(mask->tci);
+	gp->val_vlan = rte_be_to_cpu_16(spec->tci);
 	return 0;
 }
 
@@ -585,40 +715,27 @@ enic_copy_item_ipv4_v2(struct copy_item_args *arg)
 {
 	const struct rte_flow_item *item = arg->item;
 	struct filter_v2 *enic_filter = arg->filter;
-	uint8_t *inner_ofst = arg->inner_ofst;
 	const struct rte_flow_item_ipv4 *spec = item->spec;
 	const struct rte_flow_item_ipv4 *mask = item->mask;
 	struct filter_generic_1 *gp = &enic_filter->u.generic_1;
 
 	FLOW_TRACE();
 
-	if (*inner_ofst == 0) {
-		/* Match IPv4 */
-		gp->mask_flags |= FILTER_GENERIC_1_IPV4;
-		gp->val_flags |= FILTER_GENERIC_1_IPV4;
+	/* Match IPv4 */
+	gp->mask_flags |= FILTER_GENERIC_1_IPV4;
+	gp->val_flags |= FILTER_GENERIC_1_IPV4;
 
-		/* Match all if no spec */
-		if (!spec)
-			return 0;
+	/* Match all if no spec */
+	if (!spec)
+		return 0;
 
-		if (!mask)
-			mask = &rte_flow_item_ipv4_mask;
+	if (!mask)
+		mask = &rte_flow_item_ipv4_mask;
 
-		memcpy(gp->layer[FILTER_GENERIC_1_L3].mask, &mask->hdr,
-		       sizeof(struct ipv4_hdr));
-		memcpy(gp->layer[FILTER_GENERIC_1_L3].val, &spec->hdr,
-		       sizeof(struct ipv4_hdr));
-	} else {
-		/* Inner IPv4 header. Mask/Val start at *inner_ofst into L5 */
-		if ((*inner_ofst + sizeof(struct ipv4_hdr)) >
-		     FILTER_GENERIC_1_KEY_LEN)
-			return ENOTSUP;
-		memcpy(&gp->layer[FILTER_GENERIC_1_L5].mask[*inner_ofst],
-		       mask, sizeof(struct ipv4_hdr));
-		memcpy(&gp->layer[FILTER_GENERIC_1_L5].val[*inner_ofst],
-		       spec, sizeof(struct ipv4_hdr));
-		*inner_ofst += sizeof(struct ipv4_hdr);
-	}
+	memcpy(gp->layer[FILTER_GENERIC_1_L3].mask, &mask->hdr,
+	       sizeof(struct ipv4_hdr));
+	memcpy(gp->layer[FILTER_GENERIC_1_L3].val, &spec->hdr,
+	       sizeof(struct ipv4_hdr));
 	return 0;
 }
 
@@ -627,7 +744,6 @@ enic_copy_item_ipv6_v2(struct copy_item_args *arg)
 {
 	const struct rte_flow_item *item = arg->item;
 	struct filter_v2 *enic_filter = arg->filter;
-	uint8_t *inner_ofst = arg->inner_ofst;
 	const struct rte_flow_item_ipv6 *spec = item->spec;
 	const struct rte_flow_item_ipv6 *mask = item->mask;
 	struct filter_generic_1 *gp = &enic_filter->u.generic_1;
@@ -645,22 +761,10 @@ enic_copy_item_ipv6_v2(struct copy_item_args *arg)
 	if (!mask)
 		mask = &rte_flow_item_ipv6_mask;
 
-	if (*inner_ofst == 0) {
-		memcpy(gp->layer[FILTER_GENERIC_1_L3].mask, &mask->hdr,
-		       sizeof(struct ipv6_hdr));
-		memcpy(gp->layer[FILTER_GENERIC_1_L3].val, &spec->hdr,
-		       sizeof(struct ipv6_hdr));
-	} else {
-		/* Inner IPv6 header. Mask/Val start at *inner_ofst into L5 */
-		if ((*inner_ofst + sizeof(struct ipv6_hdr)) >
-		     FILTER_GENERIC_1_KEY_LEN)
-			return ENOTSUP;
-		memcpy(&gp->layer[FILTER_GENERIC_1_L5].mask[*inner_ofst],
-		       mask, sizeof(struct ipv6_hdr));
-		memcpy(&gp->layer[FILTER_GENERIC_1_L5].val[*inner_ofst],
-		       spec, sizeof(struct ipv6_hdr));
-		*inner_ofst += sizeof(struct ipv6_hdr);
-	}
+	memcpy(gp->layer[FILTER_GENERIC_1_L3].mask, &mask->hdr,
+	       sizeof(struct ipv6_hdr));
+	memcpy(gp->layer[FILTER_GENERIC_1_L3].val, &spec->hdr,
+	       sizeof(struct ipv6_hdr));
 	return 0;
 }
 
@@ -669,7 +773,6 @@ enic_copy_item_udp_v2(struct copy_item_args *arg)
 {
 	const struct rte_flow_item *item = arg->item;
 	struct filter_v2 *enic_filter = arg->filter;
-	uint8_t *inner_ofst = arg->inner_ofst;
 	const struct rte_flow_item_udp *spec = item->spec;
 	const struct rte_flow_item_udp *mask = item->mask;
 	struct filter_generic_1 *gp = &enic_filter->u.generic_1;
@@ -687,22 +790,10 @@ enic_copy_item_udp_v2(struct copy_item_args *arg)
 	if (!mask)
 		mask = &rte_flow_item_udp_mask;
 
-	if (*inner_ofst == 0) {
-		memcpy(gp->layer[FILTER_GENERIC_1_L4].mask, &mask->hdr,
-		       sizeof(struct udp_hdr));
-		memcpy(gp->layer[FILTER_GENERIC_1_L4].val, &spec->hdr,
-		       sizeof(struct udp_hdr));
-	} else {
-		/* Inner IPv6 header. Mask/Val start at *inner_ofst into L5 */
-		if ((*inner_ofst + sizeof(struct udp_hdr)) >
-		     FILTER_GENERIC_1_KEY_LEN)
-			return ENOTSUP;
-		memcpy(&gp->layer[FILTER_GENERIC_1_L5].mask[*inner_ofst],
-		       mask, sizeof(struct udp_hdr));
-		memcpy(&gp->layer[FILTER_GENERIC_1_L5].val[*inner_ofst],
-		       spec, sizeof(struct udp_hdr));
-		*inner_ofst += sizeof(struct udp_hdr);
-	}
+	memcpy(gp->layer[FILTER_GENERIC_1_L4].mask, &mask->hdr,
+	       sizeof(struct udp_hdr));
+	memcpy(gp->layer[FILTER_GENERIC_1_L4].val, &spec->hdr,
+	       sizeof(struct udp_hdr));
 	return 0;
 }
 
@@ -711,7 +802,6 @@ enic_copy_item_tcp_v2(struct copy_item_args *arg)
 {
 	const struct rte_flow_item *item = arg->item;
 	struct filter_v2 *enic_filter = arg->filter;
-	uint8_t *inner_ofst = arg->inner_ofst;
 	const struct rte_flow_item_tcp *spec = item->spec;
 	const struct rte_flow_item_tcp *mask = item->mask;
 	struct filter_generic_1 *gp = &enic_filter->u.generic_1;
@@ -729,22 +819,10 @@ enic_copy_item_tcp_v2(struct copy_item_args *arg)
 	if (!mask)
 		return ENOTSUP;
 
-	if (*inner_ofst == 0) {
-		memcpy(gp->layer[FILTER_GENERIC_1_L4].mask, &mask->hdr,
-		       sizeof(struct tcp_hdr));
-		memcpy(gp->layer[FILTER_GENERIC_1_L4].val, &spec->hdr,
-		       sizeof(struct tcp_hdr));
-	} else {
-		/* Inner IPv6 header. Mask/Val start at *inner_ofst into L5 */
-		if ((*inner_ofst + sizeof(struct tcp_hdr)) >
-		     FILTER_GENERIC_1_KEY_LEN)
-			return ENOTSUP;
-		memcpy(&gp->layer[FILTER_GENERIC_1_L5].mask[*inner_ofst],
-		       mask, sizeof(struct tcp_hdr));
-		memcpy(&gp->layer[FILTER_GENERIC_1_L5].val[*inner_ofst],
-		       spec, sizeof(struct tcp_hdr));
-		*inner_ofst += sizeof(struct tcp_hdr);
-	}
+	memcpy(gp->layer[FILTER_GENERIC_1_L4].mask, &mask->hdr,
+	       sizeof(struct tcp_hdr));
+	memcpy(gp->layer[FILTER_GENERIC_1_L4].val, &spec->hdr,
+	       sizeof(struct tcp_hdr));
 	return 0;
 }
 
@@ -753,7 +831,6 @@ enic_copy_item_sctp_v2(struct copy_item_args *arg)
 {
 	const struct rte_flow_item *item = arg->item;
 	struct filter_v2 *enic_filter = arg->filter;
-	uint8_t *inner_ofst = arg->inner_ofst;
 	const struct rte_flow_item_sctp *spec = item->spec;
 	const struct rte_flow_item_sctp *mask = item->mask;
 	struct filter_generic_1 *gp = &enic_filter->u.generic_1;
@@ -761,9 +838,6 @@ enic_copy_item_sctp_v2(struct copy_item_args *arg)
 	uint8_t *ip_proto = NULL;
 
 	FLOW_TRACE();
-
-	if (*inner_ofst)
-		return ENOTSUP;
 
 	/*
 	 * The NIC filter API has no flags for "match sctp", so explicitly set
@@ -814,9 +888,6 @@ enic_copy_item_vxlan_v2(struct copy_item_args *arg)
 	struct udp_hdr *udp;
 
 	FLOW_TRACE();
-
-	if (*inner_ofst)
-		return EINVAL;
 
 	/*
 	 * The NIC filter API has no flags for "match vxlan". Set UDP port to
@@ -929,6 +1000,7 @@ enic_copy_filter(const struct rte_flow_item pattern[],
 	enum rte_flow_item_type prev_item;
 	const struct enic_items *item_info;
 	struct copy_item_args args;
+	enic_copy_item_fn *copy_fn;
 	u8 is_first_item = 1;
 
 	FLOW_TRACE();
@@ -946,7 +1018,8 @@ enic_copy_filter(const struct rte_flow_item pattern[],
 
 		item_info = &cap->item_info[item->type];
 		if (item->type > cap->max_item_type ||
-		    item_info->copy_item == NULL) {
+		    item_info->copy_item == NULL ||
+		    (inner_ofst > 0 && item_info->inner_copy_item == NULL)) {
 			rte_flow_error_set(error, ENOTSUP,
 				RTE_FLOW_ERROR_TYPE_ITEM,
 				NULL, "Unsupported item.");
@@ -958,7 +1031,9 @@ enic_copy_filter(const struct rte_flow_item pattern[],
 			goto stacking_error;
 
 		args.item = item;
-		ret = item_info->copy_item(&args);
+		copy_fn = inner_ofst > 0 ? item_info->inner_copy_item :
+			item_info->copy_item;
+		ret = copy_fn(&args);
 		if (ret)
 			goto item_not_supported;
 		prev_item = item->type;
