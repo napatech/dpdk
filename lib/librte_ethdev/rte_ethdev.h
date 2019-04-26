@@ -2101,7 +2101,7 @@ rte_eth_xstats_get_names_by_id(uint16_t port_id,
  *   A pointer to an ids array passed by application. This tells which
  *   statistics values function should retrieve. This parameter
  *   can be set to NULL if size is 0. In this case function will retrieve
- *   all avalible statistics.
+ *   all available statistics.
  * @param values
  *   A pointer to a table to be filled with device statistics values.
  * @param size
@@ -2542,7 +2542,7 @@ rte_eth_tx_buffer_count_callback(struct rte_mbuf **pkts, uint16_t unsent,
 /**
  * Request the driver to free mbufs currently cached by the driver. The
  * driver will only free the mbuf if it is no longer in use. It is the
- * application's responsibity to ensure rte_eth_tx_buffer_flush(..) is
+ * application's responsibility to ensure rte_eth_tx_buffer_flush(..) is
  * called if needed.
  *
  * @param port_id

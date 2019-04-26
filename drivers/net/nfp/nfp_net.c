@@ -761,7 +761,7 @@ nfp_net_start(struct rte_eth_dev *dev)
 		return -EIO;
 
 	/*
-	 * Allocating rte mbuffs for configured rx queues.
+	 * Allocating rte mbufs for configured rx queues.
 	 * This requires queues being enabled before
 	 */
 	if (nfp_net_rx_freelist_setup(dev) < 0) {
@@ -1490,7 +1490,7 @@ nfp_net_rx_queue_setup(struct rte_eth_dev *dev,
 	if (rxq == NULL)
 		return -ENOMEM;
 
-	/* Hw queues mapping based on firmware confifguration */
+	/* Hw queues mapping based on firmware configuration */
 	rxq->qidx = queue_idx;
 	rxq->fl_qcidx = queue_idx * hw->stride_rx;
 	rxq->rx_qcidx = rxq->fl_qcidx + (hw->stride_rx - 1);
@@ -1522,7 +1522,7 @@ nfp_net_rx_queue_setup(struct rte_eth_dev *dev,
 				   socket_id);
 
 	if (tz == NULL) {
-		PMD_DRV_LOG(ERR, "Error allocatig rx dma");
+		PMD_DRV_LOG(ERR, "Error allocating rx dma");
 		nfp_net_rx_queue_release(rxq);
 		return -ENOMEM;
 	}
@@ -1909,7 +1909,7 @@ nfp_net_mbuf_alloc_failed(struct nfp_net_rxq *rxq)
 /*
  * RX path design:
  *
- * There are some decissions to take:
+ * There are some decisions to take:
  * 1) How to check DD RX descriptors bit
  * 2) How and when to allocate new mbufs
  *
@@ -1979,7 +1979,7 @@ nfp_net_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		rte_rmb();
 
 		/*
-		 * We got a packet. Let's alloc a new mbuff for refilling the
+		 * We got a packet. Let's alloc a new mbuf for refilling the
 		 * free descriptor ring as soon as possible
 		 */
 		new_mb = rte_pktmbuf_alloc(rxq->mem_pool);
@@ -1994,8 +1994,8 @@ nfp_net_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		nb_hold++;
 
 		/*
-		 * Grab the mbuff and refill the descriptor with the
-		 * previously allocated mbuff
+		 * Grab the mbuf and refill the descriptor with the
+		 * previously allocated mbuf
 		 */
 		mb = rxb->mbuf;
 		rxb->mbuf = new_mb;
@@ -2027,7 +2027,7 @@ nfp_net_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 			return -EINVAL;
 		}
 
-		/* Filling the received mbuff with packet info */
+		/* Filling the received mbuf with packet info */
 		if (hw->rx_offset)
 			mb->data_off = RTE_PKTMBUF_HEADROOM + hw->rx_offset;
 		else
@@ -2052,7 +2052,7 @@ nfp_net_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 			mb->ol_flags |= PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED;
 		}
 
-		/* Adding the mbuff to the mbuff array passed by the app */
+		/* Adding the mbuf to the mbuf array passed by the app */
 		rx_pkts[avail++] = mb;
 
 		/* Now resetting and updating the descriptor */
