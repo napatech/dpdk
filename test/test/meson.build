@@ -154,7 +154,6 @@ test_names = [
 	'cycles_autotest',
 	'debug_autotest',
 	'delay_us_sleep_autotest',
-	'devargs_autotest',
 	'distributor_autotest',
 	'distributor_perf_autotest',
 	'eal_flags_autotest',
