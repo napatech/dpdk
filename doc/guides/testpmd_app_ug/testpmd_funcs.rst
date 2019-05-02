@@ -526,9 +526,11 @@ Where:
 * ``level`` is the log level.
 
 For example, to change the global log level::
+
 	testpmd> set log global (level)
 
 Regexes can also be used for type. To change log level of user1, user2 and user3::
+
 	testpmd> set log user[1-3] (level)
 
 set nbport
@@ -980,11 +982,12 @@ Flush all queue region related configuration on a port::
 
 where:
 
-* "on"is just an enable function which server for other configuration,
+* ``on``: is just an enable function which server for other configuration,
   it is for all configuration about queue region from up layer,
   at first will only keep in DPDK software stored in driver,
   only after "flush on", it commit all configuration to HW.
-  "off" is just clean all configuration about queue region just now,
+
+* ``off``: is just clean all configuration about queue region just now,
   and restore all to DPDK i40e driver default config when start up.
 
 Show all queue region related configuration info on a port::
@@ -2193,11 +2196,13 @@ port config input set
 ~~~~~~~~~~~~~~~~~~~~~
 
 Config RSS/FDIR/FDIR flexible payload input set for some pctype::
+
    testpmd> port config (port_id) pctype (pctype_id) \
             (hash_inset|fdir_inset|fdir_flx_inset) \
 	    (get|set|clear) field (field_idx)
 
 Clear RSS/FDIR/FDIR flexible payload input set for some pctype::
+
    testpmd> port config (port_id) pctype (pctype_id) \
             (hash_inset|fdir_inset|fdir_flx_inset) clear all
 
@@ -2210,6 +2215,7 @@ port config udp_tunnel_port
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Add/remove UDP tunnel port for VXLAN/GENEVE tunneling protocols::
+
     testpmd> port config (port_id) udp_tunnel_port add|rm vxlan|geneve (udp_port)
 
 port config tx_metadata
@@ -4590,13 +4596,13 @@ For example:
    cd test/bpf
    clang -O2 -target bpf -c t1.c
 
-Then to load (and JIT compile) t1.o at RX queue 0, port 1::
+Then to load (and JIT compile) t1.o at RX queue 0, port 1:
 
 .. code-block:: console
 
    testpmd> bpf-load rx 1 0 J ./dpdk.org/test/bpf/t1.o
 
-To load (not JITed) t1.o at TX queue 0, port 0::
+To load (not JITed) t1.o at TX queue 0, port 0:
 
 .. code-block:: console
 
