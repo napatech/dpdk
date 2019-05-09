@@ -1536,14 +1536,17 @@ int __rte_experimental
 rte_hash_free_key_with_position(const struct rte_hash *h,
 				const int32_t position)
 {
-	RETURN_IF_TRUE(((h == NULL) || (position == EMPTY_SLOT)), -EINVAL);
+	/* Key index where key is stored, adding the first dummy index */
+	uint32_t key_idx = position + 1;
+
+	RETURN_IF_TRUE(((h == NULL) || (key_idx == EMPTY_SLOT)), -EINVAL);
 
 	unsigned int lcore_id, n_slots;
 	struct lcore_cache *cached_free_slots;
-	const int32_t total_entries = h->num_buckets * RTE_HASH_BUCKET_ENTRIES;
+	const uint32_t total_entries = h->num_buckets * RTE_HASH_BUCKET_ENTRIES;
 
 	/* Out of bounds */
-	if (position >= total_entries)
+	if (key_idx >= total_entries)
 		return -EINVAL;
 
 	if (h->use_local_cache) {
@@ -1560,11 +1563,11 @@ rte_hash_free_key_with_position(const struct rte_hash *h,
 		}
 		/* Put index of new free slot in cache. */
 		cached_free_slots->objs[cached_free_slots->len] =
-					(void *)((uintptr_t)position);
+					(void *)((uintptr_t)key_idx);
 		cached_free_slots->len++;
 	} else {
 		rte_ring_sp_enqueue(h->free_slots,
-				(void *)((uintptr_t)position));
+				(void *)((uintptr_t)key_idx));
 	}
 
 	return 0;
