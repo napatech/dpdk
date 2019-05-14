@@ -135,3 +135,11 @@ install_headers('rte_config.h', subdir: get_option('include_subdir_arch'))
 
 # enable VFIO only if it is linux OS
 dpdk_conf.set('RTE_EAL_VFIO', host_machine.system() == 'linux')
+
+# specify -D_GNU_SOURCE unconditionally
+add_project_arguments('-D_GNU_SOURCE', language: 'c')
+
+# specify -D__BSD_VISIBLE for FreeBSD
+if host_machine.system() == 'freebsd'
+	add_project_arguments('-D__BSD_VISIBLE', language: 'c')
+endif
