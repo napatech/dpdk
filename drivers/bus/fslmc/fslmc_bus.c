@@ -252,7 +252,7 @@ rte_fslmc_parse(const char *name, void *addr)
 
 	t_ptr = strchr(name, '.');
 	if (!t_ptr) {
-		DPAA2_BUS_ERR("Incorrect device string observed (%s)", t_ptr);
+		DPAA2_BUS_ERR("Incorrect device string observed (null)");
 		goto err_out;
 	}
 
