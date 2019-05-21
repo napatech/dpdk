@@ -34,7 +34,6 @@
 #define HAL_ATLANTIC_WOL_FILTERS_COUNT     8
 #define HAL_ATLANTIC_UTILS_FW2X_MSG_WOL    0x0E
 
-#define HW_ATL_FW_FEATURE_EEPROM 0x03010025
 #define HW_ATL_FW_FEATURE_LED 0x03010026
 
 struct fw2x_msg_wol_pattern {
@@ -62,6 +61,7 @@ static int aq_fw2x_set_state(struct aq_hw_s *self,
 static int aq_fw2x_init(struct aq_hw_s *self)
 {
 	int err = 0;
+	struct hw_aq_atl_utils_mbox mbox;
 
 	/* check 10 times by 1ms */
 	AQ_HW_WAIT_FOR(0U != (self->mbox_addr =
@@ -70,6 +70,12 @@ static int aq_fw2x_init(struct aq_hw_s *self)
 	AQ_HW_WAIT_FOR(0U != (self->rpc_addr =
 		       aq_hw_read_reg(self, HW_ATL_FW2X_MPI_RPC_ADDR)),
 		       1000U, 100U);
+
+	/* Read caps */
+	hw_atl_utils_mpi_read_stats(self, &mbox);
+
+	self->caps_lo = mbox.info.caps_lo;
+
 	return err;
 }
 
@@ -502,7 +508,7 @@ static int aq_fw2x_get_eeprom(struct aq_hw_s *self, int dev_addr,
 	u32 mpi_opts;
 	int err = 0;
 
-	if (self->fw_ver_actual < HW_ATL_FW_FEATURE_EEPROM)
+	if ((self->caps_lo & BIT(CAPS_LO_SMBUS_READ)) == 0)
 		return -EOPNOTSUPP;
 
 	request.msg_id = 0;
@@ -580,7 +586,7 @@ static int aq_fw2x_set_eeprom(struct aq_hw_s *self, int dev_addr,
 	u32 mpi_opts, result = 0;
 	int err = 0;
 
-	if (self->fw_ver_actual < HW_ATL_FW_FEATURE_EEPROM)
+	if ((self->caps_lo & BIT(CAPS_LO_SMBUS_WRITE)) == 0)
 		return -EOPNOTSUPP;
 
 	request.msg_id = 0;
