@@ -878,6 +878,7 @@ atl_dev_link_update(struct rte_eth_dev *dev, int wait __rte_unused)
 	struct atl_interrupt *intr =
 		ATL_DEV_PRIVATE_TO_INTR(dev->data->dev_private);
 	struct rte_eth_link link, old;
+	u32 fc = AQ_NIC_FC_OFF;
 	int err = 0;
 
 	link.link_status = ETH_LINK_DOWN;
@@ -913,6 +914,15 @@ atl_dev_link_update(struct rte_eth_dev *dev, int wait __rte_unused)
 
 	if (link.link_status == old.link_status)
 		return -1;
+
+	/* Driver has to update flow control settings on RX block
+	 * on any link event.
+	 * We should query FW whether it negotiated FC.
+	 */
+	if (hw->aq_fw_ops->get_flow_control) {
+		hw->aq_fw_ops->get_flow_control(hw, &fc);
+		hw_atl_b0_set_fc(hw, fc, 0U);
+	}
 
 	return 0;
 }
@@ -1175,16 +1185,21 @@ static int
 atl_flow_ctrl_get(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 {
 	struct aq_hw_s *hw = ATL_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	u32 fc = AQ_NIC_FC_OFF;
 
-	if (hw->aq_nic_cfg->flow_control == AQ_NIC_FC_OFF)
+	if (hw->aq_fw_ops->get_flow_control == NULL)
+		return -ENOTSUP;
+
+	hw->aq_fw_ops->get_flow_control(hw, &fc);
+
+	if (fc == AQ_NIC_FC_OFF)
 		fc_conf->mode = RTE_FC_NONE;
-	else if (hw->aq_nic_cfg->flow_control & (AQ_NIC_FC_RX | AQ_NIC_FC_TX))
+	else if ((fc & AQ_NIC_FC_RX) && (fc & AQ_NIC_FC_TX))
 		fc_conf->mode = RTE_FC_FULL;
-	else if (hw->aq_nic_cfg->flow_control & AQ_NIC_FC_RX)
+	else if (fc & AQ_NIC_FC_RX)
 		fc_conf->mode = RTE_FC_RX_PAUSE;
-	else if (hw->aq_nic_cfg->flow_control & AQ_NIC_FC_RX)
+	else if (fc & AQ_NIC_FC_TX)
 		fc_conf->mode = RTE_FC_TX_PAUSE;
-
 	return 0;
 }
 
