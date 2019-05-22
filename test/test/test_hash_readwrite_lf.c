@@ -75,7 +75,6 @@ static rte_atomic64_t gread_cycles;
 static rte_atomic64_t greads;
 
 static volatile uint8_t writer_done;
-static volatile uint8_t multi_writer_done[4];
 
 uint16_t enabled_core_ids[RTE_MAX_LCORE];
 
@@ -571,7 +570,6 @@ test_rwc_multi_writer(__attribute__((unused)) void *arg)
 	for (i = offset; i < offset + tbl_rwc_test_param.single_insert; i++)
 		rte_hash_add_key(tbl_rwc_test_param.h,
 				 tbl_rwc_test_param.keys_ks + i);
-	multi_writer_done[pos_core] = 1;
 	return 0;
 }
 
@@ -619,10 +617,9 @@ test_hash_add_no_ks_lookup_hit(struct rwc_perf *rwc_perf_results, int rwc_lf,
 				rte_eal_remote_launch(test_rwc_reader,
 						(void *)(uintptr_t)read_type,
 							enabled_core_ids[i]);
-			rte_eal_mp_wait_lcore();
 
 			for (i = 1; i <= rwc_core_cnt[n]; i++)
-				if (lcore_config[i].ret < 0)
+				if (rte_eal_wait_lcore(i) < 0)
 					goto err;
 
 			unsigned long long cycles_per_lookup =
@@ -639,6 +636,7 @@ finish:
 	return 0;
 
 err:
+	rte_eal_mp_wait_lcore();
 	rte_hash_free(tbl_rwc_test_param.h);
 	return -1;
 }
@@ -689,12 +687,11 @@ test_hash_add_no_ks_lookup_miss(struct rwc_perf *rwc_perf_results, int rwc_lf,
 							enabled_core_ids[i]);
 			ret = write_keys(key_shift);
 			writer_done = 1;
-			rte_eal_mp_wait_lcore();
 
 			if (ret < 0)
 				goto err;
 			for (i = 1; i <= rwc_core_cnt[n]; i++)
-				if (lcore_config[i].ret < 0)
+				if (rte_eal_wait_lcore(i) < 0)
 					goto err;
 
 			unsigned long long cycles_per_lookup =
@@ -711,6 +708,7 @@ finish:
 	return 0;
 
 err:
+	rte_eal_mp_wait_lcore();
 	rte_hash_free(tbl_rwc_test_param.h);
 	return -1;
 }
@@ -765,12 +763,11 @@ test_hash_add_ks_lookup_hit_non_sp(struct rwc_perf *rwc_perf_results,
 			key_shift = 1;
 			ret = write_keys(key_shift);
 			writer_done = 1;
-			rte_eal_mp_wait_lcore();
 
 			if (ret < 0)
 				goto err;
 			for (i = 1; i <= rwc_core_cnt[n]; i++)
-				if (lcore_config[i].ret < 0)
+				if (rte_eal_wait_lcore(i) < 0)
 					goto err;
 
 			unsigned long long cycles_per_lookup =
@@ -787,6 +784,7 @@ finish:
 	return 0;
 
 err:
+	rte_eal_mp_wait_lcore();
 	rte_hash_free(tbl_rwc_test_param.h);
 	return -1;
 }
@@ -841,12 +839,11 @@ test_hash_add_ks_lookup_hit_sp(struct rwc_perf *rwc_perf_results, int rwc_lf,
 			key_shift = 1;
 			ret = write_keys(key_shift);
 			writer_done = 1;
-			rte_eal_mp_wait_lcore();
 
 			if (ret < 0)
 				goto err;
 			for (i = 1; i <= rwc_core_cnt[n]; i++)
-				if (lcore_config[i].ret < 0)
+				if (rte_eal_wait_lcore(i) < 0)
 					goto err;
 
 			unsigned long long cycles_per_lookup =
@@ -863,6 +860,7 @@ finish:
 	return 0;
 
 err:
+	rte_eal_mp_wait_lcore();
 	rte_hash_free(tbl_rwc_test_param.h);
 	return -1;
 }
@@ -916,12 +914,11 @@ test_hash_add_ks_lookup_miss(struct rwc_perf *rwc_perf_results, int rwc_lf, int
 			key_shift = 1;
 			ret = write_keys(key_shift);
 			writer_done = 1;
-			rte_eal_mp_wait_lcore();
 
 			if (ret < 0)
 				goto err;
 			for (i = 1; i <= rwc_core_cnt[n]; i++)
-				if (lcore_config[i].ret < 0)
+				if (rte_eal_wait_lcore(i) < 0)
 					goto err;
 
 			unsigned long long cycles_per_lookup =
@@ -937,6 +934,7 @@ finish:
 	return 0;
 
 err:
+	rte_eal_mp_wait_lcore();
 	rte_hash_free(tbl_rwc_test_param.h);
 	return -1;
 }
@@ -989,8 +987,6 @@ test_hash_multi_add_lookup(struct rwc_perf *rwc_perf_results, int rwc_lf,
 
 				rte_hash_reset(tbl_rwc_test_param.h);
 				writer_done = 0;
-				for (i = 0; i < 4; i++)
-					multi_writer_done[i] = 0;
 				key_shift = 0;
 				if (write_keys(key_shift) < 0)
 					goto err;
@@ -1014,15 +1010,15 @@ test_hash_multi_add_lookup(struct rwc_perf *rwc_perf_results, int rwc_lf,
 				}
 
 				/* Wait for writers to complete */
-				for (i = 0; i < rwc_core_cnt[m]; i++)
-					while
-						(multi_writer_done[i] == 0);
+				for (i = rwc_core_cnt[n] + 1;
+				     i <= rwc_core_cnt[m] + rwc_core_cnt[n];
+				     i++)
+					rte_eal_wait_lcore(i);
+
 				writer_done = 1;
 
-				rte_eal_mp_wait_lcore();
-
 				for (i = 1; i <= rwc_core_cnt[n]; i++)
-					if (lcore_config[i].ret < 0)
+					if (rte_eal_wait_lcore(i) < 0)
 						goto err;
 
 				unsigned long long cycles_per_lookup =
@@ -1041,6 +1037,7 @@ finish:
 	return 0;
 
 err:
+	rte_eal_mp_wait_lcore();
 	rte_hash_free(tbl_rwc_test_param.h);
 	return -1;
 }
