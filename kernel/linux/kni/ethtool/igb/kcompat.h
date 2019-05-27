@@ -3922,7 +3922,8 @@ skb_set_hash(struct sk_buff *skb, __u32 hash, __always_unused int type)
      (SLE_VERSION_CODE && SLE_VERSION_CODE >= SLE_VERSION(12, 3, 0)) || \
      (RHEL_RELEASE_CODE >= RHEL_RELEASE_VERSION(7, 4)))
 #define HAVE_VF_VLAN_PROTO
-#if (RHEL_RELEASE_CODE >= RHEL_RELEASE_VERSION(7, 4))
+#if ((RHEL_RELEASE_CODE >= RHEL_RELEASE_VERSION(7, 4)) && \
+	(RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8, 0)))
 /* In RHEL/Centos 7.4, the "new" version of ndo_set_vf_vlan
  * is in the struct net_device_ops_extended */
 #define ndo_set_vf_vlan extended.ndo_set_vf_vlan
