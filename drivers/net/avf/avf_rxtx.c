@@ -1698,31 +1698,31 @@ avf_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 		/* Check condition for nb_segs > AVF_TX_MAX_MTU_SEG. */
 		if (!(ol_flags & PKT_TX_TCP_SEG)) {
 			if (m->nb_segs > AVF_TX_MAX_MTU_SEG) {
-				rte_errno = -EINVAL;
+				rte_errno = EINVAL;
 				return i;
 			}
 		} else if ((m->tso_segsz < AVF_MIN_TSO_MSS) ||
 			   (m->tso_segsz > AVF_MAX_TSO_MSS)) {
 			/* MSS outside the range are considered malicious */
-			rte_errno = -EINVAL;
+			rte_errno = EINVAL;
 			return i;
 		}
 
 		if (ol_flags & AVF_TX_OFFLOAD_NOTSUP_MASK) {
-			rte_errno = -ENOTSUP;
+			rte_errno = ENOTSUP;
 			return i;
 		}
 
 #ifdef RTE_LIBRTE_ETHDEV_DEBUG
 		ret = rte_validate_tx_offload(m);
 		if (ret != 0) {
-			rte_errno = ret;
+			rte_errno = -ret;
 			return i;
 		}
 #endif
 		ret = rte_net_intel_cksum_prepare(m);
 		if (ret != 0) {
-			rte_errno = ret;
+			rte_errno = -ret;
 			return i;
 		}
 	}
