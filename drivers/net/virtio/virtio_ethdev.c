@@ -1593,6 +1593,7 @@ virtio_init_device(struct rte_eth_dev *eth_dev, uint64_t req_features)
 	if (eth_dev->data->dev_conf.intr_conf.rxq) {
 		if (virtio_configure_intr(eth_dev) < 0) {
 			PMD_INIT_LOG(ERR, "failed to configure interrupt");
+			virtio_free_queues(hw);
 			return -1;
 		}
 	}
