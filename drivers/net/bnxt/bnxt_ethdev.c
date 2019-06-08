@@ -3220,7 +3220,7 @@ init_err_disable:
 
 #define ALLOW_FUNC(x)	\
 	{ \
-		typeof(x) arg = (x); \
+		uint32_t arg = (x); \
 		bp->pf.vf_req_fwd[((arg) >> 5)] &= \
 		~rte_cpu_to_le_32(1 << ((arg) & 0x1f)); \
 	}
