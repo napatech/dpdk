@@ -1341,6 +1341,7 @@ set_rxtx_funcs(struct rte_eth_dev *eth_dev)
 {
 	struct virtio_hw *hw = eth_dev->data->dev_private;
 
+	eth_dev->tx_pkt_prepare = virtio_xmit_pkts_prepare;
 	if (hw->use_simple_rx) {
 		PMD_INIT_LOG(INFO, "virtio: using simple Rx path on port %u",
 			eth_dev->data->port_id);
