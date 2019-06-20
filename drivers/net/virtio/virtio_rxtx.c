@@ -1117,7 +1117,7 @@ virtio_recv_mergeable_pkts_inorder(void *rx_queue,
 		} else {
 			PMD_RX_LOG(ERR,
 					"No enough segments for packet.");
-			virtio_discard_rxbuf_inorder(vq, prev);
+			rte_pktmbuf_free(rx_pkts[nb_rx]);
 			rxvq->stats.errors++;
 			break;
 		}
