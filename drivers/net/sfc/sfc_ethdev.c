@@ -2091,6 +2091,8 @@ sfc_eth_dev_uninit(struct rte_eth_dev *dev)
 		return 0;
 	}
 
+	sfc_dev_close(dev);
+
 	sa = dev->data->dev_private;
 	sfc_log_init(sa, "entry");
 
