@@ -352,7 +352,7 @@ struct ipv6_hdr {
 #define IPV6_HDR_FL_SHIFT 0
 #define IPV6_HDR_TC_SHIFT 20
 #define IPV6_HDR_FL_MASK ((1u << IPV6_HDR_TC_SHIFT) - 1)
-#define IPV6_HDR_TC_MASK (0xf << IPV6_HDR_TC_SHIFT)
+#define IPV6_HDR_TC_MASK (0xff << IPV6_HDR_TC_SHIFT)
 
 /**
  * Process the pseudo-header checksum of an IPv6 header.
