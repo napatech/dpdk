@@ -1670,19 +1670,20 @@ flow_null_validate(struct rte_eth_dev *dev __rte_unused,
 		   const struct rte_flow_attr *attr __rte_unused,
 		   const struct rte_flow_item items[] __rte_unused,
 		   const struct rte_flow_action actions[] __rte_unused,
-		   struct rte_flow_error *error __rte_unused)
+		   struct rte_flow_error *error)
 {
-	rte_errno = ENOTSUP;
-	return -rte_errno;
+	return rte_flow_error_set(error, ENOTSUP,
+				  RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL, NULL);
 }
 
 static struct mlx5_flow *
 flow_null_prepare(const struct rte_flow_attr *attr __rte_unused,
 		  const struct rte_flow_item items[] __rte_unused,
 		  const struct rte_flow_action actions[] __rte_unused,
-		  struct rte_flow_error *error __rte_unused)
+		  struct rte_flow_error *error)
 {
-	rte_errno = ENOTSUP;
+	rte_flow_error_set(error, ENOTSUP,
+			   RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL, NULL);
 	return NULL;
 }
 
@@ -1692,19 +1693,19 @@ flow_null_translate(struct rte_eth_dev *dev __rte_unused,
 		    const struct rte_flow_attr *attr __rte_unused,
 		    const struct rte_flow_item items[] __rte_unused,
 		    const struct rte_flow_action actions[] __rte_unused,
-		    struct rte_flow_error *error __rte_unused)
+		    struct rte_flow_error *error)
 {
-	rte_errno = ENOTSUP;
-	return -rte_errno;
+	return rte_flow_error_set(error, ENOTSUP,
+				  RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL, NULL);
 }
 
 static int
 flow_null_apply(struct rte_eth_dev *dev __rte_unused,
 		struct rte_flow *flow __rte_unused,
-		struct rte_flow_error *error __rte_unused)
+		struct rte_flow_error *error)
 {
-	rte_errno = ENOTSUP;
-	return -rte_errno;
+	return rte_flow_error_set(error, ENOTSUP,
+				  RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL, NULL);
 }
 
 static void
@@ -1724,10 +1725,10 @@ flow_null_query(struct rte_eth_dev *dev __rte_unused,
 		struct rte_flow *flow __rte_unused,
 		const struct rte_flow_action *actions __rte_unused,
 		void *data __rte_unused,
-		struct rte_flow_error *error __rte_unused)
+		struct rte_flow_error *error)
 {
-	rte_errno = ENOTSUP;
-	return -rte_errno;
+	return rte_flow_error_set(error, ENOTSUP,
+				  RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL, NULL);
 }
 
 /* Void driver to protect from null pointer reference. */
