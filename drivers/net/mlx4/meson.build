@@ -2,6 +2,13 @@
 # Copyright 2018 6WIND S.A.
 # Copyright 2018 Mellanox Technologies, Ltd
 
+if host_machine.system() != 'linux'
+	build = false
+	reason = 'only supported on Linux'
+	subdir_done()
+endif
+build = true
+
 pmd_dlopen = get_option('enable_driver_mlx_glue')
 LIB_GLUE_BASE = 'librte_pmd_mlx4_glue.so'
 LIB_GLUE_VERSION = '18.02.0'
@@ -13,17 +20,17 @@ if pmd_dlopen
 		'-DMLX4_GLUE_VERSION="@0@"'.format(LIB_GLUE_VERSION),
 	]
 endif
+
 libs = [
 	cc.find_library('mlx4', required:false),
 	cc.find_library('ibverbs', required:false),
 ]
-build = true
 foreach lib:libs
 	if not lib.found()
 		build = false
 	endif
 endforeach
-# Compile PMD
+
 if build
 	allow_experimental_apis = true
 	ext_deps += libs
