@@ -908,8 +908,6 @@ select_phy_mac(const char *key __rte_unused, const char *value,
 	return 0;
 }
 
-static struct rte_vdev_driver pmd_pcap_drv;
-
 static int
 pmd_init_internals(struct rte_vdev_device *vdev,
 		const unsigned int nb_rx_queues,
