@@ -40,6 +40,7 @@
 #include <rte_udp.h>
 #include <rte_string_fns.h>
 #include <rte_pause.h>
+#include <rte_timer.h>
 
 #include <cmdline_parse.h>
 #include <cmdline_parse_etheraddr.h>
@@ -3485,6 +3486,8 @@ main(int argc, char **argv)
 		rte_exit(EXIT_FAILURE, "Invalid EAL parameters\n");
 	argc -= ret;
 	argv += ret;
+
+	rte_timer_subsystem_init();
 
 	/* pre-init dst MACs for all ports to 02:00:00:00:00:xx */
 	for (portid = 0; portid < RTE_MAX_ETHPORTS; portid++) {
