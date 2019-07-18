@@ -233,15 +233,18 @@ l3fwd_simple_forward(struct rte_mbuf *m, struct lcore_queue_conf *qconf,
 {
 	struct rx_queue *rxq;
 	uint32_t i, len, next_hop;
-	uint8_t ipv6;
-	uint16_t port_out;
+	uint16_t port_out, ether_type;
 	int32_t len2;
+	const struct ether_hdr *eth;
 
-	ipv6 = 0;
 	rxq = &qconf->rx_queue_list[queueid];
 
 	/* by default, send everything back to the source port */
 	port_out = port_in;
+
+	/* save ether type of the incoming packet */
+	eth = rte_pktmbuf_mtod(m, const struct ether_hdr *);
+	ether_type = eth->ether_type;
 
 	/* Remove the Ethernet header and trailer from the input packet */
 	rte_pktmbuf_adj(m, (uint16_t)sizeof(struct ether_hdr));
@@ -287,8 +290,6 @@ l3fwd_simple_forward(struct rte_mbuf *m, struct lcore_queue_conf *qconf,
 	} else if (RTE_ETH_IS_IPV6_HDR(m->packet_type)) {
 		/* if this is an IPv6 packet */
 		struct ipv6_hdr *ip_hdr;
-
-		ipv6 = 1;
 
 		/* Read the lookup key (i.e. ip_dst) from the input packet */
 		ip_hdr = rte_pktmbuf_mtod(m, struct ipv6_hdr *);
@@ -346,10 +347,7 @@ l3fwd_simple_forward(struct rte_mbuf *m, struct lcore_queue_conf *qconf,
 
 		/* src addr */
 		ether_addr_copy(&ports_eth_addr[port_out], &eth_hdr->s_addr);
-		if (ipv6)
-			eth_hdr->ether_type = rte_be_to_cpu_16(ETHER_TYPE_IPv6);
-		else
-			eth_hdr->ether_type = rte_be_to_cpu_16(ETHER_TYPE_IPv4);
+		eth_hdr->ether_type = ether_type;
 	}
 
 	len += len2;
