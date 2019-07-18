@@ -3551,11 +3551,11 @@ skip_ext_stats:
 	if (rc)
 		goto error_free;
 
+	bnxt_init_nic(bp);
+
 	rc = bnxt_request_int(bp);
 	if (rc)
 		goto error_free;
-
-	bnxt_init_nic(bp);
 
 	return 0;
 
