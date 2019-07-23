@@ -6,6 +6,7 @@
 #define _RTE_INTERRUPTS_H_
 
 #include <rte_common.h>
+#include <rte_compat.h>
 
 /**
  * @file
@@ -84,6 +85,26 @@ int rte_intr_enable(const struct rte_intr_handle *intr_handle);
  *  - On failure, a negative value.
  */
 int rte_intr_disable(const struct rte_intr_handle *intr_handle);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
+ * It acknowledges an interrupt raised for the specified handle.
+ *
+ * This function should be called at the end of each interrupt handler either
+ * from application or driver, so that currently raised interrupt is acked and
+ * further new interrupts are raised.
+ *
+ * @param intr_handle
+ *  pointer to the interrupt handle.
+ *
+ * @return
+ *  - On success, zero.
+ *  - On failure, a negative value.
+ */
+__rte_experimental
+int rte_intr_ack(const struct rte_intr_handle *intr_handle);
 
 #ifdef __cplusplus
 }
