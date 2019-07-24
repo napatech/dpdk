@@ -1096,12 +1096,12 @@ ef10_rx_qcreate(
 			rc = ENOTSUP;
 			goto fail7;
 		}
-		if (!IS_P2ALIGNED(es_max_dma_len,
+		if (!EFX_IS_P2ALIGNED(uint32_t, es_max_dma_len,
 			    EFX_RX_ES_SUPER_BUFFER_BUF_ALIGNMENT)) {
 			rc = EINVAL;
 			goto fail8;
 		}
-		if (!IS_P2ALIGNED(es_buf_stride,
+		if (!EFX_IS_P2ALIGNED(uint32_t, es_buf_stride,
 			    EFX_RX_ES_SUPER_BUFFER_BUF_ALIGNMENT)) {
 			rc = EINVAL;
 			goto fail9;
