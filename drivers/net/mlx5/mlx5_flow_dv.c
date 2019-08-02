@@ -1176,10 +1176,6 @@ flow_dv_translate_item_vlan(void *matcher, void *key,
 {
 	const struct rte_flow_item_vlan *vlan_m = item->mask;
 	const struct rte_flow_item_vlan *vlan_v = item->spec;
-	const struct rte_flow_item_vlan nic_mask = {
-		.tci = RTE_BE16(0x0fff),
-		.inner_type = RTE_BE16(0xffff),
-	};
 	void *headers_m;
 	void *headers_v;
 	uint16_t tci_m;
@@ -1188,7 +1184,7 @@ flow_dv_translate_item_vlan(void *matcher, void *key,
 	if (!vlan_v)
 		return;
 	if (!vlan_m)
-		vlan_m = &nic_mask;
+		vlan_m = &rte_flow_item_vlan_mask;
 	if (inner) {
 		headers_m = MLX5_ADDR_OF(fte_match_param, matcher,
 					 inner_headers);
@@ -1208,6 +1204,10 @@ flow_dv_translate_item_vlan(void *matcher, void *key,
 	MLX5_SET(fte_match_set_lyr_2_4, headers_v, first_cfi, tci_v >> 12);
 	MLX5_SET(fte_match_set_lyr_2_4, headers_m, first_prio, tci_m >> 13);
 	MLX5_SET(fte_match_set_lyr_2_4, headers_v, first_prio, tci_v >> 13);
+	MLX5_SET(fte_match_set_lyr_2_4, headers_m, ethertype,
+		 rte_be_to_cpu_16(vlan_m->inner_type));
+	MLX5_SET(fte_match_set_lyr_2_4, headers_v, ethertype,
+		 rte_be_to_cpu_16(vlan_m->inner_type & vlan_v->inner_type));
 }
 
 /**
