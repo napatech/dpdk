@@ -23,6 +23,9 @@ extra_packages: &extra_packages
   - *required_packages
   - [libbsd-dev, libpcap-dev, libcrypto++-dev, libjansson4]
 
+doc_packages: &doc_packages
+  - [doxygen, graphviz, python3-sphinx]
+
 before_install: ./.ci/${TRAVIS_OS_NAME}-setup.sh
 
 env:
@@ -51,12 +54,13 @@ matrix:
       apt:
         packages:
           - *extra_packages
-  - env: DEF_LIB="shared" EXTRA_PACKAGES=1
+  - env: DEF_LIB="shared" EXTRA_PACKAGES=1 BUILD_DOCS=1
     compiler: gcc
     addons:
       apt:
         packages:
           - *extra_packages
+          - *doc_packages
   - env: DEF_LIB="static" OPTS="-Denable_kmods=false" EXTRA_PACKAGES=1
     compiler: gcc
     addons:
@@ -81,6 +85,7 @@ matrix:
       apt:
         packages:
           - *extra_packages
+          - *doc_packages
   - env: DEF_LIB="static" OPTS="-Denable_kmods=false" EXTRA_PACKAGES=1
     compiler: clang
     addons:

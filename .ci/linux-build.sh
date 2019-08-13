@@ -19,6 +19,10 @@ if [ "$AARCH64" = "1" ]; then
     OPTS="$OPTS --cross-file config/arm/arm64_armv8_linuxapp_gcc"
 fi
 
+if [ "$BUILD_DOCS" = "1" ]; then
+    OPTS="$OPTS -Denable_docs=true"
+fi
+
 OPTS="$OPTS --default-library=$DEF_LIB"
 meson build --werror -Dexamples=all $OPTS
 ninja -C build
