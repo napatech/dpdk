@@ -194,7 +194,7 @@ vring_translate(struct virtio_net *dev, struct vhost_virtqueue *vq)
 {
 
 	if (!(dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM)))
-		goto out;
+		return -1;
 
 	if (vq_is_packed(dev)) {
 		if (vring_translate_packed(dev, vq) < 0)
@@ -203,7 +203,6 @@ vring_translate(struct virtio_net *dev, struct vhost_virtqueue *vq)
 		if (vring_translate_split(dev, vq) < 0)
 			return -1;
 	}
-out:
 	vq->access_ok = 1;
 
 	return 0;
