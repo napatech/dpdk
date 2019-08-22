@@ -318,13 +318,13 @@ eperm_fail:
 static int32_t
 rte_telemetry_json_format_port(struct telemetry_impl *telemetry,
 	uint32_t port_id, json_t *ports, uint32_t *metric_ids,
-	uint32_t num_metric_ids)
+	int num_metric_ids)
 {
 	struct rte_metric_value *metrics = 0;
 	struct rte_metric_name *names = 0;
 	int num_metrics, ret, err_ret;
 	json_t *port, *stats;
-	uint32_t i;
+	int i;
 
 	num_metrics = rte_metrics_get_names(NULL, 0);
 	if (num_metrics < 0) {
@@ -449,12 +449,12 @@ einval_fail:
 
 static int32_t
 rte_telemetry_encode_json_format(struct telemetry_impl *telemetry,
-	uint32_t *port_ids, uint32_t num_port_ids, uint32_t *metric_ids,
-	uint32_t num_metric_ids, char **json_buffer)
+	uint32_t *port_ids, int num_port_ids, uint32_t *metric_ids,
+	int num_metric_ids, char **json_buffer)
 {
 	int ret;
 	json_t *root, *ports;
-	uint32_t i;
+	int i;
 
 	if (num_port_ids <= 0 || num_metric_ids <= 0) {
 		TELEMETRY_LOG_ERR("Please provide port and metric ids to query");
