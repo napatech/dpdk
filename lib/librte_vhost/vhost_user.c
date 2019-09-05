@@ -1672,6 +1672,9 @@ vhost_user_set_req_fd(struct virtio_net **pdev, struct VhostUserMsg *msg,
 		return VH_RESULT_ERR;
 	}
 
+	if (dev->slave_req_fd >= 0)
+		close(dev->slave_req_fd);
+
 	dev->slave_req_fd = fd;
 
 	return VH_RESULT_OK;
