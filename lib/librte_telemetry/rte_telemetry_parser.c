@@ -18,7 +18,7 @@
 typedef int (*command_func)(struct telemetry_impl *, int, json_t *);
 
 struct rte_telemetry_command {
-	char *text;
+	const char *text;
 	command_func fn;
 } command;
 
@@ -252,7 +252,7 @@ eperm_fail:
 	return -1;
 }
 
-int32_t
+static int32_t
 rte_telemetry_command_ports_all_stat_values(struct telemetry_impl *telemetry,
 	 int action, json_t *data)
 {
@@ -351,7 +351,7 @@ fail:
 	return -1;
 }
 
-int32_t
+static int32_t
 rte_telemetry_command_ports_stats_values_by_name(struct telemetry_impl
 	*telemetry, int action, json_t *data)
 {
