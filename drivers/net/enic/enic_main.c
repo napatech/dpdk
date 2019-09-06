@@ -518,14 +518,14 @@ static void enic_prep_wq_for_simple_tx(struct enic *enic, uint16_t queue_idx)
  * used when that file is not compiled.
  */
 __rte_weak bool
-enic_use_vector_rx_handler(__rte_unused struct enic *enic)
+enic_use_vector_rx_handler(__rte_unused struct rte_eth_dev *eth_dev)
 {
 	return false;
 }
 
-static void pick_rx_handler(struct enic *enic)
+void enic_pick_rx_handler(struct rte_eth_dev *eth_dev)
 {
-	struct rte_eth_dev *eth_dev;
+	struct enic *enic = pmd_priv(eth_dev);
 
 	/*
 	 * Preference order:
@@ -533,8 +533,7 @@ static void pick_rx_handler(struct enic *enic)
 	 * 2. The non-scatter, simplified handler if scatter Rx is not used.
 	 * 3. The default handler as a fallback.
 	 */
-	eth_dev = enic->rte_dev;
-	if (enic_use_vector_rx_handler(enic))
+	if (enic_use_vector_rx_handler(eth_dev))
 		return;
 	if (enic->rq_count > 0 && enic->rq[0].data_queue_enable == 0) {
 		PMD_INIT_LOG(DEBUG, " use the non-scatter Rx handler");
@@ -542,6 +541,20 @@ static void pick_rx_handler(struct enic *enic)
 	} else {
 		PMD_INIT_LOG(DEBUG, " use the normal Rx handler");
 		eth_dev->rx_pkt_burst = &enic_recv_pkts;
+	}
+}
+
+/* Secondary process uses this to set the Tx handler */
+void enic_pick_tx_handler(struct rte_eth_dev *eth_dev)
+{
+	struct enic *enic = pmd_priv(eth_dev);
+
+	if (enic->use_simple_tx_handler) {
+		PMD_INIT_LOG(DEBUG, " use the simple tx handler");
+		eth_dev->tx_pkt_burst = &enic_simple_xmit_pkts;
+	} else {
+		PMD_INIT_LOG(DEBUG, " use the default tx handler");
+		eth_dev->tx_pkt_burst = &enic_xmit_pkts;
 	}
 }
 
@@ -622,12 +635,13 @@ int enic_enable(struct enic *enic)
 		eth_dev->tx_pkt_burst = &enic_simple_xmit_pkts;
 		for (index = 0; index < enic->wq_count; index++)
 			enic_prep_wq_for_simple_tx(enic, index);
+		enic->use_simple_tx_handler = 1;
 	} else {
 		PMD_INIT_LOG(DEBUG, " use the default tx handler");
 		eth_dev->tx_pkt_burst = &enic_xmit_pkts;
 	}
 
-	pick_rx_handler(enic);
+	enic_pick_rx_handler(eth_dev);
 
 	for (index = 0; index < enic->wq_count; index++)
 		enic_start_wq(enic, index);
@@ -1600,7 +1614,7 @@ int enic_set_mtu(struct enic *enic, uint16_t new_mtu)
 
 	/* put back the real receive function */
 	rte_mb();
-	pick_rx_handler(enic);
+	enic_pick_rx_handler(eth_dev);
 	rte_mb();
 
 	/* restart Rx traffic */
