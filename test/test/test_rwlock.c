@@ -7,6 +7,7 @@
 #include <inttypes.h>
 #include <unistd.h>
 #include <sys/queue.h>
+#include <string.h>
 
 #include <rte_common.h>
 #include <rte_memory.h>
@@ -69,9 +70,9 @@ test_rwlock_per_core(__attribute__((unused)) void *arg)
 
 static rte_rwlock_t lk = RTE_RWLOCK_INITIALIZER;
 static volatile uint64_t rwlock_data;
-static uint64_t lock_count[RTE_MAX_LCORE] = {0};
+static uint64_t time_count[RTE_MAX_LCORE] = {0};
 
-#define TIME_MS 100
+#define MAX_LOOP 10000
 #define TEST_RWLOCK_DEBUG 0
 
 static int
@@ -88,7 +89,7 @@ load_loop_fn(__attribute__((unused)) void *arg)
 			;
 
 	begin = rte_rdtsc_precise();
-	while (time_diff < hz * TIME_MS / 1000) {
+	while (lcount < MAX_LOOP) {
 		rte_rwlock_write_lock(&lk);
 		++rwlock_data;
 		rte_rwlock_write_unlock(&lk);
@@ -102,10 +103,10 @@ load_loop_fn(__attribute__((unused)) void *arg)
 		lcount++;
 		/* delay to make lock duty cycle slightly realistic */
 		rte_pause();
-		time_diff = rte_rdtsc_precise() - begin;
 	}
 
-	lock_count[lcore] = lcount;
+	time_diff = rte_rdtsc_precise() - begin;
+	time_count[lcore] = time_diff * 1000000 / hz;
 	return 0;
 }
 
@@ -129,11 +130,13 @@ test_rwlock_perf(void)
 	rte_eal_mp_wait_lcore();
 
 	RTE_LCORE_FOREACH(i) {
-		printf("Core [%u] count = %"PRIu64"\n", i, lock_count[i]);
-		total += lock_count[i];
+		printf("Core [%u] cost time = %"PRIu64" us\n",
+		       i, time_count[i]);
+		total += time_count[i];
 	}
 
-	printf("Total count = %"PRIu64"\n", total);
+	printf("Total cost time = %"PRIu64" us\n", total);
+	memset(time_count, 0, sizeof(time_count));
 
 	return 0;
 }
