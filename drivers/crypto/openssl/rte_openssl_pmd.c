@@ -1289,6 +1289,7 @@ process_openssl_combined_op
 	int srclen, aadlen, status = -1;
 	uint32_t offset;
 	uint8_t taglen;
+	EVP_CIPHER_CTX *ctx_copy;
 
 	/*
 	 * Segmented destination buffer is not supported for
@@ -1325,6 +1326,8 @@ process_openssl_combined_op
 	}
 
 	taglen = sess->auth.digest_length;
+	ctx_copy = EVP_CIPHER_CTX_new();
+	EVP_CIPHER_CTX_copy(ctx_copy, sess->cipher.ctx);
 
 	if (sess->cipher.direction == RTE_CRYPTO_CIPHER_OP_ENCRYPT) {
 		if (sess->auth.algo == RTE_CRYPTO_AUTH_AES_GMAC ||
@@ -1332,12 +1335,12 @@ process_openssl_combined_op
 			status = process_openssl_auth_encryption_gcm(
 					mbuf_src, offset, srclen,
 					aad, aadlen, iv,
-					dst, tag, sess->cipher.ctx);
+					dst, tag, ctx_copy);
 		else
 			status = process_openssl_auth_encryption_ccm(
 					mbuf_src, offset, srclen,
 					aad, aadlen, iv,
-					dst, tag, taglen, sess->cipher.ctx);
+					dst, tag, taglen, ctx_copy);
 
 	} else {
 		if (sess->auth.algo == RTE_CRYPTO_AUTH_AES_GMAC ||
@@ -1345,14 +1348,15 @@ process_openssl_combined_op
 			status = process_openssl_auth_decryption_gcm(
 					mbuf_src, offset, srclen,
 					aad, aadlen, iv,
-					dst, tag, sess->cipher.ctx);
+					dst, tag, ctx_copy);
 		else
 			status = process_openssl_auth_decryption_ccm(
 					mbuf_src, offset, srclen,
 					aad, aadlen, iv,
-					dst, tag, taglen, sess->cipher.ctx);
+					dst, tag, taglen, ctx_copy);
 	}
 
+	EVP_CIPHER_CTX_free(ctx_copy);
 	if (status != 0) {
 		if (status == (-EFAULT) &&
 				sess->auth.operation ==
@@ -1371,6 +1375,7 @@ process_openssl_cipher_op
 {
 	uint8_t *dst, *iv;
 	int srclen, status;
+	EVP_CIPHER_CTX *ctx_copy;
 
 	/*
 	 * Segmented destination buffer is not supported for
@@ -1387,22 +1392,25 @@ process_openssl_cipher_op
 
 	iv = rte_crypto_op_ctod_offset(op, uint8_t *,
 			sess->iv.offset);
+	ctx_copy = EVP_CIPHER_CTX_new();
+	EVP_CIPHER_CTX_copy(ctx_copy, sess->cipher.ctx);
 
 	if (sess->cipher.mode == OPENSSL_CIPHER_LIB)
 		if (sess->cipher.direction == RTE_CRYPTO_CIPHER_OP_ENCRYPT)
 			status = process_openssl_cipher_encrypt(mbuf_src, dst,
 					op->sym->cipher.data.offset, iv,
-					srclen, sess->cipher.ctx);
+					srclen, ctx_copy);
 		else
 			status = process_openssl_cipher_decrypt(mbuf_src, dst,
 					op->sym->cipher.data.offset, iv,
-					srclen, sess->cipher.ctx);
+					srclen, ctx_copy);
 	else
 		status = process_openssl_cipher_des3ctr(mbuf_src, dst,
 				op->sym->cipher.data.offset, iv,
 				sess->cipher.key.data, srclen,
-				sess->cipher.ctx);
+				ctx_copy);
 
+	EVP_CIPHER_CTX_free(ctx_copy);
 	if (status != 0)
 		op->status = RTE_CRYPTO_OP_STATUS_ERROR;
 }
@@ -1506,6 +1514,8 @@ process_openssl_auth_op(struct openssl_qp *qp, struct rte_crypto_op *op,
 {
 	uint8_t *dst;
 	int srclen, status;
+	EVP_MD_CTX *ctx_a;
+	HMAC_CTX *ctx_h;
 
 	srclen = op->sym->auth.data.length;
 
@@ -1513,14 +1523,20 @@ process_openssl_auth_op(struct openssl_qp *qp, struct rte_crypto_op *op,
 
 	switch (sess->auth.mode) {
 	case OPENSSL_AUTH_AS_AUTH:
+		ctx_a = EVP_MD_CTX_create();
+		EVP_MD_CTX_copy_ex(ctx_a, sess->auth.auth.ctx);
 		status = process_openssl_auth(mbuf_src, dst,
 				op->sym->auth.data.offset, NULL, NULL, srclen,
-				sess->auth.auth.ctx, sess->auth.auth.evp_algo);
+				ctx_a, sess->auth.auth.evp_algo);
+		EVP_MD_CTX_destroy(ctx_a);
 		break;
 	case OPENSSL_AUTH_AS_HMAC:
+		ctx_h = HMAC_CTX_new();
+		HMAC_CTX_copy(ctx_h, sess->auth.hmac.ctx);
 		status = process_openssl_auth_hmac(mbuf_src, dst,
 				op->sym->auth.data.offset, srclen,
-				sess->auth.hmac.ctx);
+				ctx_h);
+		HMAC_CTX_free(ctx_h);
 		break;
 	default:
 		status = -1;
