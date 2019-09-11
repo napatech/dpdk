@@ -755,7 +755,7 @@ virtio_discard_rxbuf_inorder(struct virtqueue *vq, struct rte_mbuf *m)
 	}
 }
 
-static void
+void
 virtio_update_packet_stats(struct virtnet_stats *stats, struct rte_mbuf *mbuf)
 {
 	uint32_t s = mbuf->pkt_len;
