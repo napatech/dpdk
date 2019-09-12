@@ -900,7 +900,6 @@ kni_alloc(uint16_t port_id)
 			const struct rte_pci_device *pci_dev;
 			const struct rte_bus *bus = NULL;
 
-			memset(&dev_info, 0, sizeof(dev_info));
 			rte_eth_dev_info_get(port_id, &dev_info);
 
 			if (dev_info.device)

@@ -40,7 +40,6 @@ rte_ethtool_get_drvinfo(uint16_t port_id, struct ethtool_drvinfo *drvinfo)
 		printf("Insufficient fw version buffer size, "
 		       "the minimum size should be %d\n", ret);
 
-	memset(&dev_info, 0, sizeof(dev_info));
 	rte_eth_dev_info_get(port_id, &dev_info);
 
 	snprintf(drvinfo->driver, sizeof(drvinfo->driver), "%s",
@@ -372,7 +371,6 @@ rte_ethtool_net_set_rx_mode(uint16_t port_id)
 	struct rte_eth_dev_info dev_info;
 	uint16_t vf;
 
-	memset(&dev_info, 0, sizeof(dev_info));
 	rte_eth_dev_info_get(port_id, &dev_info);
 	num_vfs = dev_info.max_vfs;
 
