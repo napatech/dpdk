@@ -23,6 +23,10 @@ headers = files(
 	'rte_port_sym_crypto.h')
 deps += ['ethdev', 'sched', 'ip_frag', 'cryptodev']
 
+if dpdk_conf.has('RTE_PORT_PCAP')
+	ext_deps += pcap_dep # dependency provided in config/meson.build
+endif
+
 if dpdk_conf.has('RTE_LIBRTE_KNI')
 	sources += files('rte_port_kni.c')
 	headers += files('rte_port_kni.h')
