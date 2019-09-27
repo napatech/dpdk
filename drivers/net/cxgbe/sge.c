@@ -1152,7 +1152,6 @@ out_free:
 				txq->stats.mapping_err++;
 				goto out_free;
 			}
-			rte_prefetch0((volatile void *)addr);
 			return tx_do_packet_coalesce(txq, mbuf, cflits, adap,
 						     pi, addr, nb_pkts);
 		} else {
