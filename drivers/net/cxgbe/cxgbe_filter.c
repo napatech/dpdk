@@ -13,7 +13,7 @@
 /**
  * Initialize Hash Filters
  */
-int init_hash_filter(struct adapter *adap)
+int cxgbe_init_hash_filter(struct adapter *adap)
 {
 	unsigned int n_user_filters;
 	unsigned int user_filter_perc;
@@ -52,7 +52,8 @@ int init_hash_filter(struct adapter *adap)
  * Validate if the requested filter specification can be set by checking
  * if the requested features have been enabled
  */
-int validate_filter(struct adapter *adapter, struct ch_filter_specification *fs)
+int cxgbe_validate_filter(struct adapter *adapter,
+			  struct ch_filter_specification *fs)
 {
 	u32 fconf;
 
@@ -132,7 +133,7 @@ static unsigned int get_filter_steerq(struct rte_eth_dev *dev,
 }
 
 /* Return an error number if the indicated filter isn't writable ... */
-int writable_filter(struct filter_entry *f)
+static int writable_filter(struct filter_entry *f)
 {
 	if (f->locked)
 		return -EPERM;
@@ -213,7 +214,7 @@ static inline void mk_set_tcb_field_ulp(struct filter_entry *f,
 /**
  * Check if entry already filled.
  */
-bool is_filter_set(struct tid_info *t, int fidx, int family)
+bool cxgbe_is_filter_set(struct tid_info *t, int fidx, int family)
 {
 	bool result = FALSE;
 	int i, max;
@@ -526,7 +527,7 @@ static int cxgbe_set_hash_filter(struct rte_eth_dev *dev,
 	int atid, size;
 	int ret = 0;
 
-	ret = validate_filter(adapter, fs);
+	ret = cxgbe_validate_filter(adapter, fs);
 	if (ret)
 		return ret;
 
@@ -617,7 +618,7 @@ out_err:
  * Clear a filter and release any of its resources that we own.  This also
  * clears the filter's "pending" status.
  */
-void clear_filter(struct filter_entry *f)
+static void clear_filter(struct filter_entry *f)
 {
 	if (f->clipt)
 		cxgbe_clip_release(f->dev, f->clipt);
@@ -689,7 +690,7 @@ static int del_filter_wr(struct rte_eth_dev *dev, unsigned int fidx)
 	return 0;
 }
 
-int set_filter_wr(struct rte_eth_dev *dev, unsigned int fidx)
+static int set_filter_wr(struct rte_eth_dev *dev, unsigned int fidx)
 {
 	struct adapter *adapter = ethdev2adap(dev);
 	struct filter_entry *f = &adapter->tids.ftid_tab[fidx];
@@ -867,7 +868,7 @@ int cxgbe_del_filter(struct rte_eth_dev *dev, unsigned int filter_id,
 
 	chip_ver = CHELSIO_CHIP_VERSION(adapter->params.chip);
 
-	ret = is_filter_set(&adapter->tids, filter_id, fs->type);
+	ret = cxgbe_is_filter_set(&adapter->tids, filter_id, fs->type);
 	if (!ret) {
 		dev_warn(adap, "%s: could not find filter entry: %u\n",
 			 __func__, filter_id);
@@ -939,7 +940,7 @@ int cxgbe_set_filter(struct rte_eth_dev *dev, unsigned int filter_id,
 
 	chip_ver = CHELSIO_CHIP_VERSION(adapter->params.chip);
 
-	ret = validate_filter(adapter, fs);
+	ret = cxgbe_validate_filter(adapter, fs);
 	if (ret)
 		return ret;
 
@@ -950,7 +951,7 @@ int cxgbe_set_filter(struct rte_eth_dev *dev, unsigned int filter_id,
 	if (fs->type)
 		filter_id &= ~(0x3);
 
-	ret = is_filter_set(&adapter->tids, filter_id, fs->type);
+	ret = cxgbe_is_filter_set(&adapter->tids, filter_id, fs->type);
 	if (ret)
 		return -EBUSY;
 
@@ -1090,7 +1091,8 @@ free_tid:
 /**
  * Handle a Hash filter write reply.
  */
-void hash_filter_rpl(struct adapter *adap, const struct cpl_act_open_rpl *rpl)
+void cxgbe_hash_filter_rpl(struct adapter *adap,
+			   const struct cpl_act_open_rpl *rpl)
 {
 	struct tid_info *t = &adap->tids;
 	struct filter_entry *f;
@@ -1158,7 +1160,7 @@ void hash_filter_rpl(struct adapter *adap, const struct cpl_act_open_rpl *rpl)
 /**
  * Handle a LE-TCAM filter write/deletion reply.
  */
-void filter_rpl(struct adapter *adap, const struct cpl_set_tcb_rpl *rpl)
+void cxgbe_filter_rpl(struct adapter *adap, const struct cpl_set_tcb_rpl *rpl)
 {
 	struct filter_entry *f = NULL;
 	unsigned int tid = GET_TID(rpl);
@@ -1307,8 +1309,8 @@ get_count:
 /**
  * Handle a Hash filter delete reply.
  */
-void hash_del_filter_rpl(struct adapter *adap,
-			 const struct cpl_abort_rpl_rss *rpl)
+void cxgbe_hash_del_filter_rpl(struct adapter *adap,
+			       const struct cpl_abort_rpl_rss *rpl)
 {
 	struct tid_info *t = &adap->tids;
 	struct filter_entry *f;
