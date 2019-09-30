@@ -2125,7 +2125,6 @@ cryptodev_openssl_create(const char *name,
 			RTE_CRYPTODEV_FF_OOP_LB_IN_LB_OUT |
 			RTE_CRYPTODEV_FF_ASYMMETRIC_CRYPTO;
 
-	/* Set vector instructions mode supported */
 	internals = dev->data->dev_private;
 
 	internals->max_nb_qpairs = init_params->max_nb_queue_pairs;
