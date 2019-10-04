@@ -850,6 +850,7 @@ cxgbe_flow_create(struct rte_eth_dev *dev,
 		  const struct rte_flow_action action[],
 		  struct rte_flow_error *e)
 {
+	struct adapter *adap = ethdev2adap(dev);
 	struct rte_flow *flow;
 	int ret;
 
@@ -870,8 +871,10 @@ cxgbe_flow_create(struct rte_eth_dev *dev,
 		return NULL;
 	}
 
+	t4_os_lock(&adap->flow_lock);
 	/* go, interact with cxgbe_filter */
 	ret = __cxgbe_flow_create(dev, flow);
+	t4_os_unlock(&adap->flow_lock);
 	if (ret) {
 		rte_flow_error_set(e, ret, RTE_FLOW_ERROR_TYPE_HANDLE,
 				   NULL, "Unable to create flow rule");
@@ -936,9 +939,12 @@ static int
 cxgbe_flow_destroy(struct rte_eth_dev *dev, struct rte_flow *flow,
 		   struct rte_flow_error *e)
 {
+	struct adapter *adap = ethdev2adap(dev);
 	int ret;
 
+	t4_os_lock(&adap->flow_lock);
 	ret = __cxgbe_flow_destroy(dev, flow);
+	t4_os_unlock(&adap->flow_lock);
 	if (ret)
 		return rte_flow_error_set(e, ret, RTE_FLOW_ERROR_TYPE_HANDLE,
 					  flow, "error destroying filter.");
@@ -965,6 +971,7 @@ cxgbe_flow_query(struct rte_eth_dev *dev, struct rte_flow *flow,
 		 const struct rte_flow_action *action, void *data,
 		 struct rte_flow_error *e)
 {
+	struct adapter *adap = ethdev2adap(flow->dev);
 	struct ch_filter_specification fs;
 	struct rte_flow_query_count *c;
 	struct filter_entry *f;
@@ -994,17 +1001,22 @@ cxgbe_flow_query(struct rte_eth_dev *dev, struct rte_flow *flow,
 					  " enabled during filter creation");
 
 	c = (struct rte_flow_query_count *)data;
+
+	t4_os_lock(&adap->flow_lock);
 	ret = __cxgbe_flow_query(flow, &c->hits, &c->bytes);
-	if (ret)
-		return rte_flow_error_set(e, -ret, RTE_FLOW_ERROR_TYPE_ACTION,
-					  f, "cxgbe pmd failed to"
-					  " perform query");
+	if (ret) {
+		rte_flow_error_set(e, -ret, RTE_FLOW_ERROR_TYPE_ACTION,
+				   f, "cxgbe pmd failed to perform query");
+		goto out;
+	}
 
 	/* Query was successful */
 	c->bytes_set = 1;
 	c->hits_set = 1;
 
-	return 0; /* success / partial_success */
+out:
+	t4_os_unlock(&adap->flow_lock);
+	return ret;
 }
 
 static int
@@ -1017,7 +1029,7 @@ cxgbe_flow_validate(struct rte_eth_dev *dev,
 	struct adapter *adap = ethdev2adap(dev);
 	struct rte_flow *flow;
 	unsigned int fidx;
-	int ret;
+	int ret = 0;
 
 	flow = t4_os_alloc(sizeof(struct rte_flow));
 	if (!flow)
@@ -1041,20 +1053,23 @@ cxgbe_flow_validate(struct rte_eth_dev *dev,
 				"validation failed. Check f/w config file.");
 	}
 
+	t4_os_lock(&adap->flow_lock);
 	if (cxgbe_get_fidx(flow, &fidx)) {
-		t4_os_free(flow);
-		return rte_flow_error_set(e, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE,
-					  NULL, "no memory in tcam.");
+		ret = rte_flow_error_set(e, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE,
+					 NULL, "no memory in tcam.");
+		goto out;
 	}
 
 	if (cxgbe_verify_fidx(flow, fidx, 0)) {
-		t4_os_free(flow);
-		return rte_flow_error_set(e, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE,
-					  NULL, "validation failed");
+		ret = rte_flow_error_set(e, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE,
+					 NULL, "validation failed");
+		goto out;
 	}
 
+out:
+	t4_os_unlock(&adap->flow_lock);
 	t4_os_free(flow);
-	return 0;
+	return ret;
 }
 
 /*
@@ -1063,14 +1078,12 @@ cxgbe_flow_validate(struct rte_eth_dev *dev,
  *        == 1 filter not active / not found
  */
 static int
-cxgbe_check_n_destroy(struct filter_entry *f, struct rte_eth_dev *dev,
-		      struct rte_flow_error *e)
+cxgbe_check_n_destroy(struct filter_entry *f, struct rte_eth_dev *dev)
 {
 	if (f && (f->valid || f->pending) &&
 	    f->dev == dev && /* Only if user has asked for this port */
 	     f->private) /* We (rte_flow) created this filter */
-		return cxgbe_flow_destroy(dev, (struct rte_flow *)f->private,
-					  e);
+		return __cxgbe_flow_destroy(dev, (struct rte_flow *)f->private);
 	return 1;
 }
 
@@ -1080,13 +1093,20 @@ static int cxgbe_flow_flush(struct rte_eth_dev *dev, struct rte_flow_error *e)
 	unsigned int i;
 	int ret = 0;
 
+	t4_os_lock(&adap->flow_lock);
 	if (adap->tids.ftid_tab) {
 		struct filter_entry *f = &adap->tids.ftid_tab[0];
 
 		for (i = 0; i < adap->tids.nftids; i++, f++) {
-			ret = cxgbe_check_n_destroy(f, dev, e);
-			if (ret < 0)
+			ret = cxgbe_check_n_destroy(f, dev);
+			if (ret < 0) {
+				rte_flow_error_set(e, ret,
+						   RTE_FLOW_ERROR_TYPE_HANDLE,
+						   f->private,
+						   "error destroying TCAM "
+						   "filter.");
 				goto out;
+			}
 		}
 	}
 
@@ -1096,13 +1116,20 @@ static int cxgbe_flow_flush(struct rte_eth_dev *dev, struct rte_flow_error *e)
 		for (i = adap->tids.hash_base; i <= adap->tids.ntids; i++) {
 			f = (struct filter_entry *)adap->tids.tid_tab[i];
 
-			ret = cxgbe_check_n_destroy(f, dev, e);
-			if (ret < 0)
+			ret = cxgbe_check_n_destroy(f, dev);
+			if (ret < 0) {
+				rte_flow_error_set(e, ret,
+						   RTE_FLOW_ERROR_TYPE_HANDLE,
+						   f->private,
+						   "error destroying HASH "
+						   "filter.");
 				goto out;
+			}
 		}
 	}
 
 out:
+	t4_os_unlock(&adap->flow_lock);
 	return ret >= 0 ? 0 : ret;
 }
 
