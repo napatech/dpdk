@@ -64,9 +64,9 @@ static int page_roundup(size_t size)
 
 /*
  * HWRM Functions (sent to HWRM)
- * These are named bnxt_hwrm_*() and return -1 if bnxt_hwrm_send_message()
- * fails (ie: a timeout), and a positive non-zero HWRM error code if the HWRM
- * command was failed by the ChiMP.
+ * These are named bnxt_hwrm_*() and return 0 on success or -110 if the
+ * HWRM command times out, or a negative error code if the HWRM
+ * command was failed by the FW.
  */
 
 static int bnxt_hwrm_send_message(struct bnxt *bp, void *msg,
@@ -150,11 +150,11 @@ static int bnxt_hwrm_send_message(struct bnxt *bp, void *msg,
 }
 
 /*
- * HWRM_PREP() should be used to prepare *ALL* HWRM commands.  It grabs the
+ * HWRM_PREP() should be used to prepare *ALL* HWRM commands. It grabs the
  * spinlock, and does initial processing.
  *
  * HWRM_CHECK_RESULT() returns errors on failure and may not be used.  It
- * releases the spinlock only if it returns.  If the regular int return codes
+ * releases the spinlock only if it returns. If the regular int return codes
  * are not used by the function, HWRM_CHECK_RESULT() should not be used
  * directly, rather it should be copied and modified to suit the function.
  *
@@ -464,7 +464,6 @@ static int bnxt_hwrm_ptp_qcfg(struct bnxt *bp)
 	struct hwrm_port_mac_ptp_qcfg_output *resp = bp->hwrm_cmd_resp_addr;
 	struct bnxt_ptp_cfg *ptp = bp->ptp_cfg;
 
-/*	if (bp->hwrm_spec_code < 0x10801 || ptp)  TBD  */
 	if (ptp)
 		return 0;
 
@@ -1799,10 +1798,6 @@ int bnxt_hwrm_func_clr_stats(struct bnxt *bp, uint16_t fid)
 	return rc;
 }
 
-/*
- * HWRM utility functions
- */
-
 int bnxt_clear_all_hwrm_stat_ctxs(struct bnxt *bp)
 {
 	unsigned int i;
@@ -1994,6 +1989,10 @@ int bnxt_alloc_all_hwrm_ring_grps(struct bnxt *bp)
 	return rc;
 }
 
+/*
+ * HWRM utility functions
+ */
+
 void bnxt_free_hwrm_resources(struct bnxt *bp)
 {
 	/* Release memzone */
@@ -2042,8 +2041,6 @@ int bnxt_clear_hwrm_vnic_filters(struct bnxt *bp, struct bnxt_vnic_info *vnic)
 		else
 			rc = bnxt_hwrm_clear_l2_filter(bp, filter);
 		STAILQ_REMOVE(&vnic->filter, filter, bnxt_filter_info, next);
-		//if (rc)
-			//break;
 	}
 	return rc;
 }
@@ -2067,8 +2064,6 @@ bnxt_clear_hwrm_vnic_flows(struct bnxt *bp, struct bnxt_vnic_info *vnic)
 
 		STAILQ_REMOVE(&vnic->flow_list, flow, rte_flow, next);
 		rte_free(flow);
-		//if (rc)
-			//break;
 	}
 	return rc;
 }
@@ -3808,10 +3803,6 @@ int bnxt_hwrm_set_ntuple_filter(struct bnxt *bp,
 	    HWRM_CFA_NTUPLE_FILTER_ALLOC_INPUT_ENABLES_SRC_MACADDR)
 		memcpy(req.src_macaddr, filter->src_macaddr,
 		       ETHER_ADDR_LEN);
-	//if (enables &
-	    //HWRM_CFA_NTUPLE_FILTER_ALLOC_INPUT_ENABLES_DST_MACADDR)
-		//memcpy(req.dst_macaddr, filter->dst_macaddr,
-		       //ETHER_ADDR_LEN);
 	if (enables &
 	    HWRM_CFA_NTUPLE_FILTER_ALLOC_INPUT_ENABLES_ETHERTYPE)
 		req.ethertype = rte_cpu_to_be_16(filter->ethertype);
