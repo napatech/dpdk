@@ -2413,13 +2413,17 @@ static inline int _kc_skb_is_gso_v6(const struct sk_buff *skb)
 
 extern void _kc_pci_disable_link_state(struct pci_dev *dev, int state);
 #define pci_disable_link_state(p, s) _kc_pci_disable_link_state(p, s)
-#else /* < 2.6.26 */
+#else /* < 2.6.26 or > 5.4 */
+#if ( LINUX_VERSION_CODE >= KERNEL_VERSION(5,4,0) )
+#include <linux/pci.h>
+#else
 #include <linux/pci-aspm.h>
+#endif
 #define HAVE_NETDEV_VLAN_FEATURES
 #ifndef PCI_EXP_LNKCAP_ASPMS
 #define PCI_EXP_LNKCAP_ASPMS 0x00000c00 /* ASPM Support */
 #endif /* PCI_EXP_LNKCAP_ASPMS */
-#endif /* < 2.6.26 */
+#endif /* < 2.6.26 or > 5.4 */
 /*****************************************************************************/
 #if ( LINUX_VERSION_CODE < KERNEL_VERSION(2,6,27) )
 static inline void _kc_ethtool_cmd_speed_set(struct ethtool_cmd *ep,
