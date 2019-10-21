@@ -218,8 +218,10 @@ struct msix_entry {
 #define node_online(node) ((node) == 0)
 #endif
 
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(5,4,0) )
 #ifndef num_online_cpus
 #define num_online_cpus() smp_num_cpus
+#endif
 #endif
 
 #ifndef cpu_online
