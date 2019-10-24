@@ -472,6 +472,9 @@ process_outer_cksums(void *outer_l3_hdr, struct testpmd_offload_info *info,
 	if (info->outer_l4_proto != IPPROTO_UDP)
 		return ol_flags;
 
+	if (tso_enabled)
+		ol_flags |= PKT_TX_TCP_SEG;
+
 	/* Skip SW outer UDP checksum generation if HW supports it */
 	if (tx_offloads & DEV_TX_OFFLOAD_OUTER_UDP_CKSUM) {
 		ol_flags |= PKT_TX_OUTER_UDP_CKSUM;
