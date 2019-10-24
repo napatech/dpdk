@@ -2529,7 +2529,8 @@ static int bnxt_hwrm_pf_func_cfg(struct bnxt *bp, int tx_rings)
 			HWRM_FUNC_CFG_INPUT_ENABLES_NUM_VNICS |
 			HWRM_FUNC_CFG_INPUT_ENABLES_NUM_HW_RING_GRPS);
 	req.flags = rte_cpu_to_le_32(bp->pf.func_cfg_flags);
-	req.mtu = rte_cpu_to_le_16(BNXT_MAX_MTU);
+	req.mtu = rte_cpu_to_le_16(RTE_MIN(bp->eth_dev->data->mtu,
+					   BNXT_MAX_MTU)); //FW adds hdr sizes
 	req.mru = rte_cpu_to_le_16(BNXT_VNIC_MRU(bp->eth_dev->data->mtu));
 	req.num_rsscos_ctxs = rte_cpu_to_le_16(bp->max_rsscos_ctx);
 	req.num_stat_ctxs = rte_cpu_to_le_16(bp->max_stat_ctx);
