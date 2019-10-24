@@ -701,7 +701,7 @@ int bnxt_hwrm_func_reserve_vf_resc(struct bnxt *bp, bool test)
 
 	HWRM_PREP(req, FUNC_VF_CFG, BNXT_USE_CHIMP_MB);
 
-	req.enables = rte_cpu_to_le_32
+	enables = rte_cpu_to_le_32
 			(HWRM_FUNC_VF_CFG_INPUT_ENABLES_NUM_RX_RINGS  |
 			HWRM_FUNC_VF_CFG_INPUT_ENABLES_NUM_TX_RINGS   |
 			HWRM_FUNC_VF_CFG_INPUT_ENABLES_NUM_STAT_CTXS  |
@@ -722,10 +722,13 @@ int bnxt_hwrm_func_reserve_vf_resc(struct bnxt *bp, bool test)
 		enables = HWRM_FUNC_VF_CFG_INPUT_ENABLES_NUM_VNICS |
 				HWRM_FUNC_VF_CFG_INPUT_ENABLES_NUM_L2_CTXS |
 				HWRM_FUNC_VF_CFG_INPUT_ENABLES_NUM_RSSCOS_CTXS;
-		req.enables |= rte_cpu_to_le_32(enables);
 		req.num_rsscos_ctxs = rte_cpu_to_le_16(BNXT_VF_RSV_NUM_RSS_CTX);
 		req.num_l2_ctxs = rte_cpu_to_le_16(BNXT_VF_RSV_NUM_L2_CTX);
 		req.num_vnics = rte_cpu_to_le_16(BNXT_VF_RSV_NUM_VNIC);
+	} else if (bp->vf_resv_strategy ==
+		   HWRM_FUNC_RESOURCE_QCAPS_OUTPUT_VF_RESV_STRATEGY_MAXIMAL) {
+		enables |= HWRM_FUNC_VF_CFG_INPUT_ENABLES_NUM_RSSCOS_CTXS;
+		req.num_rsscos_ctxs = rte_cpu_to_le_16(bp->max_rsscos_ctx);
 	}
 
 	if (test)
@@ -737,6 +740,7 @@ int bnxt_hwrm_func_reserve_vf_resc(struct bnxt *bp, bool test)
 			HWRM_FUNC_VF_CFG_INPUT_FLAGS_VNIC_ASSETS_TEST;
 
 	req.flags = rte_cpu_to_le_32(flags);
+	req.enables |= rte_cpu_to_le_32(enables);
 
 	rc = bnxt_hwrm_send_message(bp, &req, sizeof(req), BNXT_USE_CHIMP_MB);
 
