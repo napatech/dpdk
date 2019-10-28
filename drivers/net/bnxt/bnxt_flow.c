@@ -1074,7 +1074,7 @@ bnxt_flow_create(struct rte_eth_dev *dev,
 			ret = -EXDEV;
 			goto free_flow;
 		}
-		PMD_DRV_LOG(ERR, "Successfully created flow.\n");
+		PMD_DRV_LOG(DEBUG, "Successfully created flow.\n");
 		STAILQ_INSERT_TAIL(&vnic->flow_list, flow, next);
 		return flow;
 	}
