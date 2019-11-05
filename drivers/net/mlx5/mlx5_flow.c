@@ -1068,11 +1068,17 @@ mlx5_flow_validate_item_eth(const struct rte_flow_item *item,
 		return rte_flow_error_set(error, ENOTSUP,
 					  RTE_FLOW_ERROR_TYPE_ITEM, item,
 					  "multiple L2 layers not supported");
-	if (tunnel && (item_flags & MLX5_FLOW_LAYER_INNER_L3))
+	if ((!tunnel && (item_flags & MLX5_FLOW_LAYER_OUTER_L3)) ||
+	    (tunnel && (item_flags & MLX5_FLOW_LAYER_INNER_L3)))
 		return rte_flow_error_set(error, EINVAL,
 					  RTE_FLOW_ERROR_TYPE_ITEM, item,
-					  "inner L2 layer should not "
-					  "follow inner L3 layers");
+					  "L2 layer should not follow "
+					  "L3 layers");
+	if ((!tunnel && (item_flags & MLX5_FLOW_LAYER_OUTER_VLAN)) ||
+	    (tunnel && (item_flags & MLX5_FLOW_LAYER_INNER_VLAN)))
+		return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ITEM, item,
+					  "L2 layer should not follow VLAN");
 	if (!mask)
 		mask = &rte_flow_item_eth_mask;
 	ret = mlx5_flow_item_acceptable(item, (const uint8_t *)mask,
@@ -1116,8 +1122,6 @@ mlx5_flow_validate_item_vlan(const struct rte_flow_item *item,
 	const uint64_t vlanm = tunnel ? MLX5_FLOW_LAYER_INNER_VLAN :
 					MLX5_FLOW_LAYER_OUTER_VLAN;
 
-	const uint64_t l2m = tunnel ? MLX5_FLOW_LAYER_INNER_L2 :
-				      MLX5_FLOW_LAYER_OUTER_L2;
 	if (item_flags & vlanm)
 		return rte_flow_error_set(error, EINVAL,
 					  RTE_FLOW_ERROR_TYPE_ITEM, item,
@@ -1125,11 +1129,7 @@ mlx5_flow_validate_item_vlan(const struct rte_flow_item *item,
 	else if ((item_flags & l34m) != 0)
 		return rte_flow_error_set(error, EINVAL,
 					  RTE_FLOW_ERROR_TYPE_ITEM, item,
-					  "L2 layer cannot follow L3/L4 layer");
-	else if ((item_flags & l2m) == 0)
-		return rte_flow_error_set(error, EINVAL,
-					  RTE_FLOW_ERROR_TYPE_ITEM, item,
-					  "no L2 layer before VLAN");
+					  "VLAN cannot follow L3/L4 layer");
 	if (!mask)
 		mask = &rte_flow_item_vlan_mask;
 	ret = mlx5_flow_item_acceptable(item, (const uint8_t *)mask,
@@ -1196,10 +1196,6 @@ mlx5_flow_validate_item_ipv4(const struct rte_flow_item *item,
 		return rte_flow_error_set(error, EINVAL,
 					  RTE_FLOW_ERROR_TYPE_ITEM, item,
 					  "L3 cannot follow an L4 layer.");
-	else if (!tunnel && !(item_flags & MLX5_FLOW_LAYER_OUTER_L2))
-		return rte_flow_error_set(error, EINVAL,
-					  RTE_FLOW_ERROR_TYPE_ITEM, item,
-					  "no L2 layer before IPV4");
 	if (!mask)
 		mask = &rte_flow_item_ipv4_mask;
 	else if (mask->hdr.next_proto_id != 0 &&
@@ -1264,10 +1260,6 @@ mlx5_flow_validate_item_ipv6(const struct rte_flow_item *item,
 		return rte_flow_error_set(error, EINVAL,
 					  RTE_FLOW_ERROR_TYPE_ITEM, item,
 					  "L3 cannot follow an L4 layer.");
-	else if (!tunnel && !(item_flags & MLX5_FLOW_LAYER_OUTER_L2))
-		return rte_flow_error_set(error, EINVAL,
-					  RTE_FLOW_ERROR_TYPE_ITEM, item,
-					  "no L2 layer before IPV6");
 	if (!mask)
 		mask = &rte_flow_item_ipv6_mask;
 	ret = mlx5_flow_item_acceptable(item, (const uint8_t *)mask,
