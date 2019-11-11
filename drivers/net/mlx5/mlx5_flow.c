@@ -944,6 +944,11 @@ mlx5_flow_validate_action_rss(const struct rte_flow_action *action,
 					  "some RSS protocols are not"
 					  " supported");
 	for (i = 0; i != rss->queue_num; ++i) {
+		if (rss->queue[i] >= priv->rxqs_n)
+			return rte_flow_error_set
+				(error, EINVAL,
+				 RTE_FLOW_ERROR_TYPE_ACTION_CONF,
+				 &rss->queue[i], "queue index out of range");
 		if (!(*priv->rxqs)[rss->queue[i]])
 			return rte_flow_error_set
 				(error, EINVAL, RTE_FLOW_ERROR_TYPE_ACTION_CONF,
