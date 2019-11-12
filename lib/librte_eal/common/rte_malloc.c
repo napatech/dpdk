@@ -130,7 +130,8 @@ rte_realloc(void *ptr, size_t size, unsigned align)
 	void *new_ptr = rte_malloc(NULL, size, align);
 	if (new_ptr == NULL)
 		return NULL;
-	const unsigned old_size = elem->size - MALLOC_ELEM_OVERHEAD;
+	/* elem: |pad|data_elem|data|trailer| */
+	const size_t old_size = elem->size - elem->pad - MALLOC_ELEM_OVERHEAD;
 	rte_memcpy(new_ptr, ptr, old_size < size ? old_size : size);
 	rte_free(ptr);
 
