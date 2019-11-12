@@ -220,7 +220,7 @@ matter of supplying the correct socket ID to DPDK allocator, either directly
 (e.g. through a call to ``rte_malloc``) or indirectly (through data
 structure-specific allocation API's such as ``rte_ring_create``).
 
-Since there is no way DPDK can verify whether memory are is available or valid,
+Since there is no way DPDK can verify whether memory is available or valid,
 this responsibility falls on the shoulders of the user. All multiprocess
 synchronization is also user's responsibility, as well as ensuring  that all
 calls to add/attach/detach/remove memory are done in the correct order. It is
