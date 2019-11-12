@@ -37,7 +37,7 @@ extern "C" {
 /**
  * Patch level number i.e. the z in yy.mm.z
  */
-#define RTE_VER_MINOR 3
+#define RTE_VER_MINOR 4
 
 /**
  * Extra string to be appended to version number
