@@ -2219,3 +2219,47 @@ Fixes skipped and status unresolved
 * dbda2092d net/i40e: fix request queue in VF
 * 721c95301 net/mlx5: fix Rx scatter mode validation
 * aa2c00702 net/bnxt: fix traffic stall on Rx queue stop/start
+
+18.11.5 Release Notes
+---------------------
+
+18.11.5 Fixes
+~~~~~~~~~~~~~
+
+* vhost: fix vring requests validation broken if no FD
+
+18.11.5 Validation
+~~~~~~~~~~~~~~~~~~
+
+* The fix was tested by Intel via the virtio/vhost regression tests
+
+   * http://doc.dpdk.org/dts/test_plans/virtio_pvp_regression_test_plan.html
+   * http://doc.dpdk.org/dts/test_plans/vhost_dequeue_zero_copy_test_plan.html
+   * http://doc.dpdk.org/dts/test_plans/vm2vm_virtio_pmd_test_plan.html
+
+18.11.5 Known Issues
+~~~~~~~~~~~~~~~~~~~~
+
+* DPDK 18.11.5 contains fixes up to DPDK v19.08 plus a security fix for CVE-2019-14818. Issues identified/fixed in DPDK master branch after DPDK v19.08 may be present in DPDK 18.11.5
+
+18.11.5 Fixes skipped and status unresolved
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* dcfbc594f net/iavf: fix queue interrupt for ice
+* 281bd1aa3 net/iavf: fix stats reset
+* b149a7064 eal/freebsd: add config reattach in secondary process
+* 6f43682e0 test/hash: init parameters in the correct function
+* a135e050a examples/ipsec-secgw: fix packet length
+* b0437f8b0 hash: load value after full key compare
+* 9d10f53e4 test/metrics: fix second run
+* 2967612f4 test/crypto: fix session init failure for wireless case
+* 96b0931d5 net/bnxt: fix extended port counter statistics
+* 72aaa312e net/bnxt: fix VF probe when MAC address is zero
+* fe7848521 net/bnxt: fix doorbell register offset for Tx ring
+* 1f3cea004 net/bnxt: fix check of address mapping
+* 324c56551 net/bnxt: fix error checking of FW commands
+* b4e190d55 net/bnxt: fix MAC/VLAN filter allocation
+* ea81c1b81 net/mlx5: fix NVGRE matching
+* dbda2092d net/i40e: fix request queue in VF
+* 721c95301 net/mlx5: fix Rx scatter mode validation
+* aa2c00702 net/bnxt: fix traffic stall on Rx queue stop/start
