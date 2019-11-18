@@ -611,7 +611,12 @@ int bnxt_hwrm_func_qcaps(struct bnxt *bp)
 			bp->flags |= BNXT_FLAG_NEW_RM;
 	}
 
-	return rc;
+	/* On older FW,
+	 * bnxt_hwrm_func_resc_qcaps can fail and cause init failure.
+	 * But the error can be ignored. Return success.
+	 */
+
+	return 0;
 }
 
 int bnxt_hwrm_func_reset(struct bnxt *bp)
@@ -764,7 +769,7 @@ int bnxt_hwrm_func_resc_qcaps(struct bnxt *bp)
 
 	rc = bnxt_hwrm_send_message(bp, &req, sizeof(req), BNXT_USE_CHIMP_MB);
 
-	HWRM_CHECK_RESULT();
+	HWRM_CHECK_RESULT_SILENT();
 
 	if (BNXT_VF(bp)) {
 		bp->max_rsscos_ctx = rte_le_to_cpu_16(resp->max_rsscos_ctx);
