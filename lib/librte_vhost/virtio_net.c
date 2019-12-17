@@ -37,39 +37,6 @@ is_valid_virt_queue_idx(uint32_t idx, int is_tx, uint32_t nr_vring)
 	return (is_tx ^ (idx & 1)) == 0 && idx < nr_vring;
 }
 
-static __rte_always_inline void *
-alloc_copy_ind_table(struct virtio_net *dev, struct vhost_virtqueue *vq,
-		uint64_t desc_addr, uint64_t desc_len)
-{
-	void *idesc;
-	uint64_t src, dst;
-	uint64_t len, remain = desc_len;
-
-	idesc = rte_malloc(__func__, desc_len, 0);
-	if (unlikely(!idesc))
-		return 0;
-
-	dst = (uint64_t)(uintptr_t)idesc;
-
-	while (remain) {
-		len = remain;
-		src = vhost_iova_to_vva(dev, vq, desc_addr, &len,
-				VHOST_ACCESS_RO);
-		if (unlikely(!src || !len)) {
-			rte_free(idesc);
-			return 0;
-		}
-
-		rte_memcpy((void *)(uintptr_t)dst, (void *)(uintptr_t)src, len);
-
-		remain -= len;
-		dst += len;
-		desc_addr += len;
-	}
-
-	return idesc;
-}
-
 static __rte_always_inline void
 free_ind_table(void *idesc)
 {
@@ -377,7 +344,7 @@ fill_vec_buf_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 			 * The indirect desc table is not contiguous
 			 * in process VA space, we have to copy it.
 			 */
-			idesc = alloc_copy_ind_table(dev, vq,
+			idesc = vhost_alloc_copy_ind_table(dev, vq,
 					vq->desc[idx].addr, vq->desc[idx].len);
 			if (unlikely(!idesc))
 				return -1;
@@ -494,7 +461,8 @@ fill_vec_buf_packed_indirect(struct virtio_net *dev,
 		 * The indirect desc table is not contiguous
 		 * in process VA space, we have to copy it.
 		 */
-		idescs = alloc_copy_ind_table(dev, vq, desc->addr, desc->len);
+		idescs = vhost_alloc_copy_ind_table(dev,
+				vq, desc->addr, desc->len);
 		if (unlikely(!idescs))
 			return -1;
 
@@ -650,6 +618,36 @@ reserve_avail_buf_packed(struct virtio_net *dev, struct vhost_virtqueue *vq,
 	return 0;
 }
 
+static __rte_noinline void
+copy_vnet_hdr_to_desc(struct virtio_net *dev, struct vhost_virtqueue *vq,
+		struct buf_vector *buf_vec,
+		struct virtio_net_hdr_mrg_rxbuf *hdr)
+{
+	uint64_t len;
+	uint64_t remain = dev->vhost_hlen;
+	uint64_t src = (uint64_t)(uintptr_t)hdr, dst;
+	uint64_t iova = buf_vec->buf_iova;
+
+	while (remain) {
+		len = RTE_MIN(remain,
+				buf_vec->buf_len);
+		dst = buf_vec->buf_addr;
+		rte_memcpy((void *)(uintptr_t)dst,
+				(void *)(uintptr_t)src,
+				len);
+
+		PRINT_PACKET(dev, (uintptr_t)dst,
+				(uint32_t)len, 0);
+		vhost_log_cache_write(dev, vq,
+				iova, len);
+
+		remain -= len;
+		iova += len;
+		src += len;
+		buf_vec++;
+	}
+}
+
 static __rte_always_inline int
 copy_mbuf_to_desc(struct virtio_net *dev, struct vhost_virtqueue *vq,
 			    struct rte_mbuf *m, struct buf_vector *buf_vec,
@@ -743,30 +741,7 @@ copy_mbuf_to_desc(struct virtio_net *dev, struct vhost_virtqueue *vq,
 						num_buffers);
 
 			if (unlikely(hdr == &tmp_hdr)) {
-				uint64_t len;
-				uint64_t remain = dev->vhost_hlen;
-				uint64_t src = (uint64_t)(uintptr_t)hdr, dst;
-				uint64_t iova = buf_vec[0].buf_iova;
-				uint16_t hdr_vec_idx = 0;
-
-				while (remain) {
-					len = RTE_MIN(remain,
-						buf_vec[hdr_vec_idx].buf_len);
-					dst = buf_vec[hdr_vec_idx].buf_addr;
-					rte_memcpy((void *)(uintptr_t)dst,
-							(void *)(uintptr_t)src,
-							len);
-
-					PRINT_PACKET(dev, (uintptr_t)dst,
-							(uint32_t)len, 0);
-					vhost_log_cache_write(dev, vq,
-							iova, len);
-
-					remain -= len;
-					iova += len;
-					src += len;
-					hdr_vec_idx++;
-				}
+				copy_vnet_hdr_to_desc(dev, vq, buf_vec, hdr);
 			} else {
 				PRINT_PACKET(dev, (uintptr_t)hdr_addr,
 						dev->vhost_hlen, 0);
@@ -1102,6 +1077,27 @@ vhost_dequeue_offload(struct virtio_net_hdr *hdr, struct rte_mbuf *m)
 	}
 }
 
+static __rte_noinline void
+copy_vnet_hdr_from_desc(struct virtio_net_hdr *hdr,
+		struct buf_vector *buf_vec)
+{
+	uint64_t len;
+	uint64_t remain = sizeof(struct virtio_net_hdr);
+	uint64_t src;
+	uint64_t dst = (uint64_t)(uintptr_t)hdr;
+
+	while (remain) {
+		len = RTE_MIN(remain, buf_vec->buf_len);
+		src = buf_vec->buf_addr;
+		rte_memcpy((void *)(uintptr_t)dst,
+				(void *)(uintptr_t)src, len);
+
+		remain -= len;
+		dst += len;
+		buf_vec++;
+	}
+}
+
 static __rte_always_inline int
 copy_desc_to_mbuf(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		  struct buf_vector *buf_vec, uint16_t nr_vec,
@@ -1133,28 +1129,11 @@ copy_desc_to_mbuf(struct virtio_net *dev, struct vhost_virtqueue *vq,
 
 	if (virtio_net_with_host_offload(dev)) {
 		if (unlikely(buf_len < sizeof(struct virtio_net_hdr))) {
-			uint64_t len;
-			uint64_t remain = sizeof(struct virtio_net_hdr);
-			uint64_t src;
-			uint64_t dst = (uint64_t)(uintptr_t)&tmp_hdr;
-			uint16_t hdr_vec_idx = 0;
-
 			/*
 			 * No luck, the virtio-net header doesn't fit
 			 * in a contiguous virtual area.
 			 */
-			while (remain) {
-				len = RTE_MIN(remain,
-					buf_vec[hdr_vec_idx].buf_len);
-				src = buf_vec[hdr_vec_idx].buf_addr;
-				rte_memcpy((void *)(uintptr_t)dst,
-						   (void *)(uintptr_t)src, len);
-
-				remain -= len;
-				dst += len;
-				hdr_vec_idx++;
-			}
-
+			copy_vnet_hdr_from_desc(&tmp_hdr, buf_vec);
 			hdr = &tmp_hdr;
 		} else {
 			hdr = (struct virtio_net_hdr *)((uintptr_t)buf_addr);

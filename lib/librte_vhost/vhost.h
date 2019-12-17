@@ -558,6 +558,9 @@ void vhost_backend_cleanup(struct virtio_net *dev);
 
 uint64_t __vhost_iova_to_vva(struct virtio_net *dev, struct vhost_virtqueue *vq,
 			uint64_t iova, uint64_t *len, uint8_t perm);
+void *vhost_alloc_copy_ind_table(struct virtio_net *dev,
+			struct vhost_virtqueue *vq,
+			uint64_t desc_addr, uint64_t desc_len);
 int vring_translate(struct virtio_net *dev, struct vhost_virtqueue *vq);
 void vring_invalidate(struct virtio_net *dev, struct vhost_virtqueue *vq);
 
