@@ -293,6 +293,8 @@ map_one_desc(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		if (unlikely(!desc_addr))
 			return -1;
 
+		rte_prefetch0((void *)(uintptr_t)desc_addr);
+
 		buf_vec[vec_id].buf_iova = desc_iova;
 		buf_vec[vec_id].buf_addr = desc_addr;
 		buf_vec[vec_id].buf_len  = desc_chunck_len;
@@ -673,9 +675,6 @@ copy_mbuf_to_desc(struct virtio_net *dev, struct vhost_virtqueue *vq,
 	buf_iova = buf_vec[vec_idx].buf_iova;
 	buf_len = buf_vec[vec_idx].buf_len;
 
-	if (nr_vec > 1)
-		rte_prefetch0((void *)(uintptr_t)buf_vec[1].buf_addr);
-
 	if (unlikely(buf_len < dev->vhost_hlen && nr_vec <= 1)) {
 		error = -1;
 		goto out;
@@ -718,10 +717,6 @@ copy_mbuf_to_desc(struct virtio_net *dev, struct vhost_virtqueue *vq,
 			buf_iova = buf_vec[vec_idx].buf_iova;
 			buf_len = buf_vec[vec_idx].buf_len;
 
-			/* Prefetch next buffer address. */
-			if (vec_idx + 1 < nr_vec)
-				rte_prefetch0((void *)(uintptr_t)
-						buf_vec[vec_idx + 1].buf_addr);
 			buf_offset = 0;
 			buf_avail  = buf_len;
 		}
@@ -818,8 +813,6 @@ virtio_dev_rx_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 			break;
 		}
 
-		rte_prefetch0((void *)(uintptr_t)buf_vec[0].buf_addr);
-
 		VHOST_LOG_DEBUG(VHOST_DATA, "(%d) current index %d | end index %d\n",
 			dev->vid, vq->last_avail_idx,
 			vq->last_avail_idx + num_buffers);
@@ -866,8 +859,6 @@ virtio_dev_rx_packed(struct virtio_net *dev, struct vhost_virtqueue *vq,
 			vq->shadow_used_idx -= num_buffers;
 			break;
 		}
-
-		rte_prefetch0((void *)(uintptr_t)buf_vec[0].buf_addr);
 
 		VHOST_LOG_DEBUG(VHOST_DATA, "(%d) current index %d | end index %d\n",
 			dev->vid, vq->last_avail_idx,
@@ -1124,9 +1115,6 @@ copy_desc_to_mbuf(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		goto out;
 	}
 
-	if (likely(nr_vec > 1))
-		rte_prefetch0((void *)(uintptr_t)buf_vec[1].buf_addr);
-
 	if (virtio_net_with_host_offload(dev)) {
 		if (unlikely(buf_len < sizeof(struct virtio_net_hdr))) {
 			/*
@@ -1137,7 +1125,6 @@ copy_desc_to_mbuf(struct virtio_net *dev, struct vhost_virtqueue *vq,
 			hdr = &tmp_hdr;
 		} else {
 			hdr = (struct virtio_net_hdr *)((uintptr_t)buf_addr);
-			rte_prefetch0(hdr);
 		}
 	}
 
@@ -1166,9 +1153,6 @@ copy_desc_to_mbuf(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		buf_offset = dev->vhost_hlen;
 		buf_avail = buf_vec[vec_idx].buf_len - dev->vhost_hlen;
 	}
-
-	rte_prefetch0((void *)(uintptr_t)
-			(buf_addr + buf_offset));
 
 	PRINT_PACKET(dev,
 			(uintptr_t)(buf_addr + buf_offset),
@@ -1234,14 +1218,6 @@ copy_desc_to_mbuf(struct virtio_net *dev, struct vhost_virtqueue *vq,
 			buf_addr = buf_vec[vec_idx].buf_addr;
 			buf_iova = buf_vec[vec_idx].buf_iova;
 			buf_len = buf_vec[vec_idx].buf_len;
-
-			/*
-			 * Prefecth desc n + 1 buffer while
-			 * desc n buffer is processed.
-			 */
-			if (vec_idx + 1 < nr_vec)
-				rte_prefetch0((void *)(uintptr_t)
-						buf_vec[vec_idx + 1].buf_addr);
 
 			buf_offset = 0;
 			buf_avail  = buf_len;
@@ -1386,8 +1362,6 @@ virtio_dev_tx_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		if (likely(dev->dequeue_zero_copy == 0))
 			update_shadow_used_ring_split(vq, head_idx, 0);
 
-		rte_prefetch0((void *)(uintptr_t)buf_vec[0].buf_addr);
-
 		pkts[i] = rte_pktmbuf_alloc(mbuf_pool);
 		if (unlikely(pkts[i] == NULL)) {
 			RTE_LOG(ERR, VHOST_DATA,
@@ -1498,8 +1472,6 @@ virtio_dev_tx_packed(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		if (likely(dev->dequeue_zero_copy == 0))
 			update_shadow_used_ring_packed(vq, buf_id, 0,
 					desc_count);
-
-		rte_prefetch0((void *)(uintptr_t)buf_vec[0].buf_addr);
 
 		pkts[i] = rte_pktmbuf_alloc(mbuf_pool);
 		if (unlikely(pkts[i] == NULL)) {
