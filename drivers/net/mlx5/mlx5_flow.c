@@ -1175,6 +1175,8 @@ mlx5_flow_validate_item_vlan(const struct rte_flow_item *item,
 int
 mlx5_flow_validate_item_ipv4(const struct rte_flow_item *item,
 			     uint64_t item_flags,
+			     uint64_t last_item,
+			     uint16_t ether_type,
 			     struct rte_flow_error *error)
 {
 	const struct rte_flow_item_ipv4 *mask = item->mask;
@@ -1192,7 +1194,16 @@ mlx5_flow_validate_item_ipv4(const struct rte_flow_item *item,
 	const uint64_t l4m = tunnel ? MLX5_FLOW_LAYER_INNER_L4 :
 				      MLX5_FLOW_LAYER_OUTER_L4;
 	int ret;
+	const uint64_t l2_vlan = (MLX5_FLOW_LAYER_L2 |
+				  MLX5_FLOW_LAYER_OUTER_VLAN |
+				  MLX5_FLOW_LAYER_INNER_VLAN);
 
+	if ((last_item & l2_vlan) && ether_type &&
+	    ether_type != ETHER_TYPE_IPv4)
+		return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ITEM, item,
+					  "IPv4 cannot follow L2/VLAN layer "
+					  "which ether type is not IPv4");
 	if (item_flags & l3m)
 		return rte_flow_error_set(error, ENOTSUP,
 					  RTE_FLOW_ERROR_TYPE_ITEM, item,
@@ -1234,6 +1245,8 @@ mlx5_flow_validate_item_ipv4(const struct rte_flow_item *item,
 int
 mlx5_flow_validate_item_ipv6(const struct rte_flow_item *item,
 			     uint64_t item_flags,
+			     uint64_t last_item,
+			     uint16_t ether_type,
 			     struct rte_flow_error *error)
 {
 	const struct rte_flow_item_ipv6 *mask = item->mask;
@@ -1256,7 +1269,16 @@ mlx5_flow_validate_item_ipv6(const struct rte_flow_item *item,
 	const uint64_t l4m = tunnel ? MLX5_FLOW_LAYER_INNER_L4 :
 				      MLX5_FLOW_LAYER_OUTER_L4;
 	int ret;
+	const uint64_t l2_vlan = (MLX5_FLOW_LAYER_L2 |
+				  MLX5_FLOW_LAYER_OUTER_VLAN |
+				  MLX5_FLOW_LAYER_INNER_VLAN);
 
+	if ((last_item & l2_vlan) && ether_type &&
+	    ether_type != ETHER_TYPE_IPv6)
+		return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ITEM, item,
+					  "IPv6 cannot follow L2/VLAN layer "
+					  "which ether type is not IPv6");
 	if (item_flags & l3m)
 		return rte_flow_error_set(error, ENOTSUP,
 					  RTE_FLOW_ERROR_TYPE_ITEM, item,

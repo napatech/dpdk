@@ -1529,7 +1529,7 @@ flow_tcf_validate_vxlan_encap(const struct rte_flow_action *action,
 		break;
 		case RTE_FLOW_ITEM_TYPE_IPV4:
 			ret = mlx5_flow_validate_item_ipv4(items, item_flags,
-							   error);
+							   0, 0, error);
 			if (ret < 0)
 				return ret;
 			ret = flow_tcf_validate_vxlan_encap_ipv4(items, error);
@@ -1539,7 +1539,7 @@ flow_tcf_validate_vxlan_encap(const struct rte_flow_action *action,
 			break;
 		case RTE_FLOW_ITEM_TYPE_IPV6:
 			ret = mlx5_flow_validate_item_ipv6(items, item_flags,
-							   error);
+							   0, 0, error);
 			if (ret < 0)
 				return ret;
 			ret = flow_tcf_validate_vxlan_encap_ipv6(items, error);
@@ -2059,7 +2059,7 @@ flow_tcf_validate(struct rte_eth_dev *dev,
 			break;
 		case RTE_FLOW_ITEM_TYPE_IPV4:
 			ret = mlx5_flow_validate_item_ipv4(items, item_flags,
-							   error);
+							   0, 0, error);
 			if (ret < 0)
 				return ret;
 			item_flags |= (item_flags & MLX5_FLOW_LAYER_TUNNEL) ?
@@ -2119,7 +2119,7 @@ flow_tcf_validate(struct rte_eth_dev *dev,
 			break;
 		case RTE_FLOW_ITEM_TYPE_IPV6:
 			ret = mlx5_flow_validate_item_ipv6(items, item_flags,
-							   error);
+							   0, 0, error);
 			if (ret < 0)
 				return ret;
 			item_flags |= (item_flags & MLX5_FLOW_LAYER_TUNNEL) ?

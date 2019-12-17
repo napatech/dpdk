@@ -69,6 +69,10 @@
 	(MLX5_FLOW_LAYER_INNER_L2 | MLX5_FLOW_LAYER_INNER_L3 | \
 	 MLX5_FLOW_LAYER_INNER_L4)
 
+/* Layer Masks. */
+#define MLX5_FLOW_LAYER_L2 \
+	(MLX5_FLOW_LAYER_OUTER_L2 | MLX5_FLOW_LAYER_INNER_L2)
+
 /* Actions */
 #define MLX5_FLOW_ACTION_DROP (1u << 0)
 #define MLX5_FLOW_ACTION_QUEUE (1u << 1)
@@ -382,9 +386,13 @@ int mlx5_flow_validate_item_gre(const struct rte_flow_item *item,
 				struct rte_flow_error *error);
 int mlx5_flow_validate_item_ipv4(const struct rte_flow_item *item,
 				 uint64_t item_flags,
+				 uint64_t last_item,
+				 uint16_t ether_type,
 				 struct rte_flow_error *error);
 int mlx5_flow_validate_item_ipv6(const struct rte_flow_item *item,
 				 uint64_t item_flags,
+				 uint64_t last_item,
+				 uint16_t ether_type,
 				 struct rte_flow_error *error);
 int mlx5_flow_validate_item_mpls(struct rte_eth_dev *dev,
 				 const struct rte_flow_item *item,
