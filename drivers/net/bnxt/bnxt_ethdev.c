@@ -1548,7 +1548,7 @@ bnxt_set_default_mac_addr_op(struct rte_eth_dev *dev, struct ether_addr *addr)
 		if (filter->mac_index != 0)
 			continue;
 
-		memcpy(filter->l2_addr, bp->mac_addr, ETHER_ADDR_LEN);
+		memcpy(filter->l2_addr, addr, ETHER_ADDR_LEN);
 		memset(filter->l2_addr_mask, 0xff, ETHER_ADDR_LEN);
 		filter->flags |= HWRM_CFA_L2_FILTER_ALLOC_INPUT_FLAGS_PATH_RX;
 		filter->enables |=
@@ -1556,8 +1556,10 @@ bnxt_set_default_mac_addr_op(struct rte_eth_dev *dev, struct ether_addr *addr)
 			HWRM_CFA_L2_FILTER_ALLOC_INPUT_ENABLES_L2_ADDR_MASK;
 
 		rc = bnxt_hwrm_set_l2_filter(bp, vnic->fw_vnic_id, filter);
-		if (rc)
+		if (rc) {
+			memcpy(filter->l2_addr, bp->mac_addr, ETHER_ADDR_LEN);
 			return rc;
+		}
 
 		memcpy(bp->mac_addr, addr, ETHER_ADDR_LEN);
 		PMD_DRV_LOG(DEBUG, "Set MAC addr\n");
