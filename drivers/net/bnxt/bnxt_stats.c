@@ -387,7 +387,7 @@ int bnxt_stats_get_op(struct rte_eth_dev *eth_dev,
 	memset(bnxt_stats, 0, sizeof(*bnxt_stats));
 	if (!(bp->flags & BNXT_FLAG_INIT_DONE)) {
 		PMD_DRV_LOG(ERR, "Device Initialization not complete!\n");
-		return -1;
+		return -EIO;
 	}
 
 	num_q_stats = RTE_MIN(bp->rx_cp_nr_rings,
@@ -418,8 +418,6 @@ int bnxt_stats_get_op(struct rte_eth_dev *eth_dev,
 			return rc;
 	}
 	rc = bnxt_hwrm_func_qstats(bp, 0xffff, bnxt_stats);
-	if (unlikely(rc))
-		return rc;
 	return rc;
 }
 
@@ -585,16 +583,20 @@ int bnxt_dev_xstats_get_names_op(__rte_unused struct rte_eth_dev *eth_dev,
 void bnxt_dev_xstats_reset_op(struct rte_eth_dev *eth_dev)
 {
 	struct bnxt *bp = eth_dev->data->dev_private;
+	int ret;
 
-	if (bp->flags & BNXT_FLAG_PORT_STATS && BNXT_SINGLE_PF(bp))
-		bnxt_hwrm_port_clr_stats(bp);
-
-	if (BNXT_VF(bp))
-		PMD_DRV_LOG(ERR, "Operation not supported on a VF device\n");
-	if (!BNXT_SINGLE_PF(bp))
-		PMD_DRV_LOG(ERR, "Operation not supported on a MF device\n");
-	if (!(bp->flags & BNXT_FLAG_PORT_STATS))
+	if (BNXT_VF(bp) || !BNXT_SINGLE_PF(bp) ||
+	    !(bp->flags & BNXT_FLAG_PORT_STATS)) {
 		PMD_DRV_LOG(ERR, "Operation not supported\n");
+		return;
+	}
+
+	ret = bnxt_hwrm_port_clr_stats(bp);
+	if (ret != 0)
+		PMD_DRV_LOG(ERR, "Failed to reset xstats: %s\n",
+			    strerror(-ret));
+
+	return;
 }
 
 int bnxt_dev_xstats_get_by_id_op(struct rte_eth_dev *dev, const uint64_t *ids,
@@ -616,7 +618,7 @@ int bnxt_dev_xstats_get_by_id_op(struct rte_eth_dev *dev, const uint64_t *ids,
 	for (i = 0; i < limit; i++) {
 		if (ids[i] >= stat_cnt) {
 			PMD_DRV_LOG(ERR, "id value isn't valid");
-			return -1;
+			return -EINVAL;
 		}
 		values[i] = values_copy[ids[i]];
 	}
@@ -644,7 +646,7 @@ int bnxt_dev_xstats_get_names_by_id_op(struct rte_eth_dev *dev,
 	for (i = 0; i < limit; i++) {
 		if (ids[i] >= stat_cnt) {
 			PMD_DRV_LOG(ERR, "id value isn't valid");
-			return -1;
+			return -EINVAL;
 		}
 		strcpy(xstats_names[i].name,
 				xstats_names_copy[ids[i]].name);
