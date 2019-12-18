@@ -115,7 +115,6 @@ static const struct rte_pci_id bnxt_pci_id_map[] = {
 
 static int bnxt_vlan_offload_set_op(struct rte_eth_dev *dev, int mask);
 static void bnxt_print_link_info(struct rte_eth_dev *eth_dev);
-static int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu);
 static int bnxt_dev_uninit(struct rte_eth_dev *eth_dev);
 
 /***********************/
@@ -587,6 +586,11 @@ static int bnxt_dev_start_op(struct rte_eth_dev *eth_dev)
 	uint64_t rx_offloads = eth_dev->data->dev_conf.rxmode.offloads;
 	int vlan_mask = 0;
 	int rc;
+
+	if (!eth_dev->data->nb_tx_queues || !eth_dev->data->nb_rx_queues) {
+		PMD_DRV_LOG(ERR, "Queues are not configured yet!\n");
+		return -EINVAL;
+	}
 
 	if (bp->rx_cp_nr_rings > RTE_ETHDEV_QUEUE_STAT_CNTRS) {
 		PMD_DRV_LOG(ERR,
@@ -1577,13 +1581,17 @@ bnxt_txq_info_get_op(struct rte_eth_dev *dev, uint16_t queue_id,
 	qinfo->conf.tx_deferred_start = txq->tx_deferred_start;
 }
 
-static int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu)
+int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu)
 {
 	struct bnxt *bp = eth_dev->data->dev_private;
 	struct rte_eth_dev_info dev_info;
 	uint32_t new_pkt_size;
 	uint32_t rc = 0;
 	uint32_t i;
+
+	/* Exit if receive queues are not configured yet */
+	if (!eth_dev->data->nb_rx_queues)
+		return rc;
 
 	bnxt_dev_info_get_op(eth_dev, &dev_info);
 
@@ -1605,7 +1613,9 @@ static int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu)
 		bp->flags &= ~BNXT_FLAG_JUMBO;
 	}
 
-	eth_dev->data->dev_conf.rxmode.max_rx_pkt_len = new_pkt_size;
+	/* Is there a change in mtu setting? */
+	if (eth_dev->data->dev_conf.rxmode.max_rx_pkt_len == new_pkt_size)
+		return rc;
 
 	for (i = 0; i < bp->nr_vnics; i++) {
 		struct bnxt_vnic_info *vnic = &bp->vnic_info[i];
@@ -1626,8 +1636,11 @@ static int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu)
 		}
 	}
 
-	eth_dev->data->mtu = new_mtu;
-	PMD_DRV_LOG(INFO, "New MTU is %d\n", new_mtu);
+	if (!rc) {
+		eth_dev->data->mtu = new_mtu;
+		eth_dev->data->dev_conf.rxmode.max_rx_pkt_len = new_pkt_size;
+		PMD_DRV_LOG(INFO, "New MTU is %d\n", new_mtu);
+	}
 
 	return rc;
 }
