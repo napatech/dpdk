@@ -3186,6 +3186,45 @@ static int bnxt_init_board(struct rte_eth_dev *eth_dev)
 	return 0;
 }
 
+static int bnxt_setup_mac_addr(struct rte_eth_dev *eth_dev)
+{
+	struct bnxt *bp = eth_dev->data->dev_private;
+	int rc = 0;
+
+	eth_dev->data->mac_addrs = rte_zmalloc("bnxt_mac_addr_tbl",
+					       ETHER_ADDR_LEN *
+					       bp->max_l2_ctx,
+					       0);
+	if (eth_dev->data->mac_addrs == NULL) {
+		PMD_DRV_LOG(ERR, "Failed to alloc MAC addr tbl\n");
+		return -ENOMEM;
+	}
+
+	if (bnxt_check_zero_bytes(bp->dflt_mac_addr, ETHER_ADDR_LEN)) {
+		if (BNXT_PF(bp))
+			return -EINVAL;
+
+		/* Generate a random MAC address, if none was assigned by PF */
+		PMD_DRV_LOG(INFO, "VF MAC address not assigned by Host PF\n");
+		bnxt_eth_hw_addr_random(bp->mac_addr);
+		PMD_DRV_LOG(INFO,
+			    "Assign random MAC:%02X:%02X:%02X:%02X:%02X:%02X\n",
+			    bp->mac_addr[0], bp->mac_addr[1], bp->mac_addr[2],
+			    bp->mac_addr[3], bp->mac_addr[4], bp->mac_addr[5]);
+
+		rc = bnxt_hwrm_set_mac(bp);
+		if (!rc)
+			memcpy(&bp->eth_dev->data->mac_addrs[0], bp->mac_addr,
+			       ETHER_ADDR_LEN);
+		return rc;
+	}
+
+	/* Copy the permanent MAC from the FUNC_QCAPS response */
+	memcpy(bp->mac_addr, bp->dflt_mac_addr, ETHER_ADDR_LEN);
+	memcpy(&eth_dev->data->mac_addrs[0], bp->mac_addr, ETHER_ADDR_LEN);
+
+	return rc;
+}
 
 #define ALLOW_FUNC(x)	\
 	{ \
@@ -3383,28 +3422,10 @@ bnxt_dev_init(struct rte_eth_dev *eth_dev)
 		rc = -EBUSY;
 		goto error_free;
 	}
-	eth_dev->data->mac_addrs = rte_zmalloc("bnxt_mac_addr_tbl",
-					ETHER_ADDR_LEN * bp->max_l2_ctx, 0);
-	if (eth_dev->data->mac_addrs == NULL) {
-		PMD_DRV_LOG(ERR,
-			"Failed to alloc %u bytes needed to store MAC addr tbl",
-			ETHER_ADDR_LEN * bp->max_l2_ctx);
-		rc = -ENOMEM;
-		goto error_free;
-	}
 
-	if (bnxt_check_zero_bytes(bp->dflt_mac_addr, ETHER_ADDR_LEN)) {
-		PMD_DRV_LOG(ERR,
-			    "Invalid MAC addr %02X:%02X:%02X:%02X:%02X:%02X\n",
-			    bp->dflt_mac_addr[0], bp->dflt_mac_addr[1],
-			    bp->dflt_mac_addr[2], bp->dflt_mac_addr[3],
-			    bp->dflt_mac_addr[4], bp->dflt_mac_addr[5]);
-		rc = -EINVAL;
+	rc = bnxt_setup_mac_addr(eth_dev);
+	if (rc)
 		goto error_free;
-	}
-	/* Copy the permanent MAC from the qcap response address now. */
-	memcpy(bp->mac_addr, bp->dflt_mac_addr, sizeof(bp->mac_addr));
-	memcpy(&eth_dev->data->mac_addrs[0], bp->mac_addr, ETHER_ADDR_LEN);
 
 	if (bp->max_ring_grps < bp->rx_cp_nr_rings) {
 		/* 1 ring is for default completion ring */

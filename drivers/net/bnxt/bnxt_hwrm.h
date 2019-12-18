@@ -181,4 +181,5 @@ int bnxt_hwrm_set_ring_coal(struct bnxt *bp,
 			struct bnxt_coal *coal, uint16_t ring_id);
 int bnxt_hwrm_check_vf_rings(struct bnxt *bp);
 int bnxt_hwrm_ext_port_qstats(struct bnxt *bp);
+int bnxt_hwrm_set_mac(struct bnxt *bp);
 #endif
