@@ -550,7 +550,7 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	bool evt = false;
 
 	/* If Rx Q was stopped return. RxQ0 cannot be stopped. */
-	if (unlikely(((rxq->rx_deferred_start ||
+	if (unlikely(((!rxq->rx_started ||
 		       !rte_spinlock_trylock(&rxq->lock)) &&
 		      rxq->queue_id)))
 		return 0;
