@@ -2300,6 +2300,7 @@ create_wireless_algo_hash_session(uint8_t dev_id,
 	enum rte_crypto_auth_algorithm algo)
 {
 	uint8_t hash_key[key_len];
+	int status;
 
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
@@ -2322,8 +2323,9 @@ create_wireless_algo_hash_session(uint8_t dev_id,
 	ut_params->sess = rte_cryptodev_sym_session_create(
 			ts_params->session_mpool);
 
-	rte_cryptodev_sym_session_init(dev_id, ut_params->sess,
+	status = rte_cryptodev_sym_session_init(dev_id, ut_params->sess,
 			&ut_params->auth_xform, ts_params->session_mpool);
+	TEST_ASSERT_EQUAL(status, 0, "session init failed");
 	TEST_ASSERT_NOT_NULL(ut_params->sess, "Session creation failed");
 	return 0;
 }
@@ -2336,7 +2338,7 @@ create_wireless_algo_cipher_session(uint8_t dev_id,
 			uint8_t iv_len)
 {
 	uint8_t cipher_key[key_len];
-
+	int status;
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
 
@@ -2359,8 +2361,9 @@ create_wireless_algo_cipher_session(uint8_t dev_id,
 	ut_params->sess = rte_cryptodev_sym_session_create(
 			ts_params->session_mpool);
 
-	rte_cryptodev_sym_session_init(dev_id, ut_params->sess,
+	status = rte_cryptodev_sym_session_init(dev_id, ut_params->sess,
 			&ut_params->cipher_xform, ts_params->session_mpool);
+	TEST_ASSERT_EQUAL(status, 0, "session init failed");
 	TEST_ASSERT_NOT_NULL(ut_params->sess, "Session creation failed");
 	return 0;
 }
@@ -2438,6 +2441,7 @@ create_wireless_algo_cipher_auth_session(uint8_t dev_id,
 
 {
 	uint8_t cipher_auth_key[key_len];
+	int status;
 
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
@@ -2475,9 +2479,10 @@ create_wireless_algo_cipher_auth_session(uint8_t dev_id,
 	ut_params->sess = rte_cryptodev_sym_session_create(
 			ts_params->session_mpool);
 
-	rte_cryptodev_sym_session_init(dev_id, ut_params->sess,
+	status = rte_cryptodev_sym_session_init(dev_id, ut_params->sess,
 			&ut_params->cipher_xform, ts_params->session_mpool);
 
+	TEST_ASSERT_EQUAL(status, 0, "session init failed");
 	TEST_ASSERT_NOT_NULL(ut_params->sess, "Session creation failed");
 	return 0;
 }
@@ -2492,6 +2497,7 @@ create_wireless_cipher_auth_session(uint8_t dev_id,
 {
 	const uint8_t key_len = tdata->key.len;
 	uint8_t cipher_auth_key[key_len];
+	int status;
 
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
@@ -2534,9 +2540,10 @@ create_wireless_cipher_auth_session(uint8_t dev_id,
 	ut_params->sess = rte_cryptodev_sym_session_create(
 			ts_params->session_mpool);
 
-	rte_cryptodev_sym_session_init(dev_id, ut_params->sess,
+	status = rte_cryptodev_sym_session_init(dev_id, ut_params->sess,
 			&ut_params->cipher_xform, ts_params->session_mpool);
 
+	TEST_ASSERT_EQUAL(status, 0, "session init failed");
 	TEST_ASSERT_NOT_NULL(ut_params->sess, "Session creation failed");
 	return 0;
 }
@@ -2562,7 +2569,7 @@ create_wireless_algo_auth_cipher_session(uint8_t dev_id,
 		uint8_t cipher_iv_len)
 {
 	uint8_t auth_cipher_key[key_len];
-
+	int status;
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
 
@@ -2596,9 +2603,10 @@ create_wireless_algo_auth_cipher_session(uint8_t dev_id,
 	ut_params->sess = rte_cryptodev_sym_session_create(
 			ts_params->session_mpool);
 
-	rte_cryptodev_sym_session_init(dev_id, ut_params->sess,
+	status = rte_cryptodev_sym_session_init(dev_id, ut_params->sess,
 			&ut_params->auth_xform, ts_params->session_mpool);
 
+	TEST_ASSERT_EQUAL(status, 0, "session init failed");
 	TEST_ASSERT_NOT_NULL(ut_params->sess, "Session creation failed");
 
 	return 0;
