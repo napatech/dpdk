@@ -25,7 +25,6 @@
 #include "bnxt_vnic.h"
 #include "hsi_struct_def_dpdk.h"
 
-#define HWRM_CMD_TIMEOUT		6000000
 #define HWRM_SPEC_CODE_1_8_3		0x10803
 #define HWRM_VERSION_1_9_1		0x10901
 
@@ -83,6 +82,13 @@ static int bnxt_hwrm_send_message(struct bnxt *bp, void *msg,
 		GRCPF_REG_KONG_CHANNEL_OFFSET : GRCPF_REG_CHIMP_CHANNEL_OFFSET;
 	uint16_t mb_trigger_offset = use_kong_mb ?
 		GRCPF_REG_KONG_COMM_TRIGGER : GRCPF_REG_CHIMP_COMM_TRIGGER;
+	uint32_t timeout;
+
+	/* For VER_GET command, set timeout as 50ms */
+	if (rte_cpu_to_le_16(req->req_type) == HWRM_VER_GET)
+		timeout = HWRM_CMD_TIMEOUT;
+	else
+		timeout = bp->hwrm_cmd_timeout;
 
 	if (bp->flags & BNXT_FLAG_SHORT_CMD) {
 		void *short_cmd_req = bp->hwrm_short_cmd_req_addr;
@@ -127,7 +133,7 @@ static int bnxt_hwrm_send_message(struct bnxt *bp, void *msg,
 	rte_io_mb();
 
 	/* Poll for the valid bit */
-	for (i = 0; i < HWRM_CMD_TIMEOUT; i++) {
+	for (i = 0; i < timeout; i++) {
 		/* Sanity check on the resp->resp_len */
 		rte_cio_rmb();
 		if (resp->resp_len && resp->resp_len <=
@@ -140,7 +146,7 @@ static int bnxt_hwrm_send_message(struct bnxt *bp, void *msg,
 		rte_delay_us(1);
 	}
 
-	if (i >= HWRM_CMD_TIMEOUT) {
+	if (i >= timeout) {
 		PMD_DRV_LOG(ERR, "Error(timeout) sending msg 0x%04x\n",
 			    req->req_type);
 		return -ETIMEDOUT;
@@ -831,6 +837,13 @@ int bnxt_hwrm_ver_get(struct bnxt *bp)
 	fw_version |= resp->hwrm_intf_min_8b << 8;
 	fw_version |= resp->hwrm_intf_upd_8b;
 	bp->hwrm_spec_code = fw_version;
+
+	/* def_req_timeout value is in milliseconds */
+	bp->hwrm_cmd_timeout = rte_le_to_cpu_16(resp->def_req_timeout);
+	/* convert timeout to usec */
+	bp->hwrm_cmd_timeout *= 1000;
+	if (!bp->hwrm_cmd_timeout)
+		bp->hwrm_cmd_timeout = HWRM_CMD_TIMEOUT;
 
 	if (resp->hwrm_intf_maj_8b != HWRM_VERSION_MAJOR) {
 		PMD_DRV_LOG(ERR, "Unsupported firmware API version\n");
