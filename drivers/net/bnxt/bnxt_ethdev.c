@@ -3301,7 +3301,7 @@ bnxt_dev_init(struct rte_eth_dev *eth_dev)
 			PMD_DRV_LOG(INFO,
 				"Memzone physical address same as virtual using rte_mem_virt2iova()\n");
 			mz_phys_addr = rte_mem_virt2iova(mz->addr);
-			if (mz_phys_addr == 0) {
+			if (mz_phys_addr == RTE_BAD_IOVA) {
 				PMD_DRV_LOG(ERR,
 				"unable to map address to physical memory\n");
 				return -ENOMEM;
@@ -3340,7 +3340,7 @@ bnxt_dev_init(struct rte_eth_dev *eth_dev)
 			PMD_DRV_LOG(WARNING,
 				"Using rte_mem_virt2iova()\n");
 			mz_phys_addr = rte_mem_virt2iova(mz->addr);
-			if (mz_phys_addr == 0) {
+			if (mz_phys_addr == RTE_BAD_IOVA) {
 				PMD_DRV_LOG(ERR,
 				"unable to map address to physical memory\n");
 				return -ENOMEM;
