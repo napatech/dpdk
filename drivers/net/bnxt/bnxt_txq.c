@@ -113,6 +113,7 @@ int bnxt_tx_queue_setup_op(struct rte_eth_dev *eth_dev,
 	txq->bp = bp;
 	txq->nb_tx_desc = nb_desc;
 	txq->tx_free_thresh = tx_conf->tx_free_thresh;
+	txq->tx_deferred_start = tx_conf->tx_deferred_start;
 
 	rc = bnxt_init_tx_ring_struct(txq, socket_id);
 	if (rc)
@@ -138,6 +139,11 @@ int bnxt_tx_queue_setup_op(struct rte_eth_dev *eth_dev,
 	}
 
 	eth_dev->data->tx_queues[queue_idx] = txq;
+
+	if (txq->tx_deferred_start)
+		txq->tx_started = false;
+	else
+		txq->tx_started = true;
 
 out:
 	return rc;

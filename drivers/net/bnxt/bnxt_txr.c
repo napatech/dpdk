@@ -418,7 +418,7 @@ uint16_t bnxt_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 	bnxt_handle_tx_cp(txq);
 
 	/* Tx queue was stopped; wait for it to be restarted */
-	if (txq->tx_deferred_start) {
+	if (unlikely(!txq->tx_started)) {
 		PMD_DRV_LOG(DEBUG, "Tx q stopped;return\n");
 		return 0;
 	}
@@ -448,7 +448,7 @@ int bnxt_tx_queue_start(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 	struct bnxt_tx_queue *txq = bp->tx_queues[tx_queue_id];
 
 	dev->data->tx_queue_state[tx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
-	txq->tx_deferred_start = false;
+	txq->tx_started = true;
 	PMD_DRV_LOG(DEBUG, "Tx queue started\n");
 
 	return 0;
@@ -463,7 +463,7 @@ int bnxt_tx_queue_stop(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 	bnxt_handle_tx_cp(txq);
 
 	dev->data->tx_queue_state[tx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
-	txq->tx_deferred_start = true;
+	txq->tx_started = false;
 	PMD_DRV_LOG(DEBUG, "Tx queue stopped\n");
 
 	return 0;
