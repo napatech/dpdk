@@ -67,6 +67,10 @@
 
 #define BNXT_MAX_MTU		9574
 #define VLAN_TAG_SIZE		4
+#define BNXT_NUM_VLANS		2
+#define BNXT_MAX_PKT_LEN	(BNXT_MAX_MTU + ETHER_HDR_LEN +	\
+				 ETHER_CRC_LEN + \
+				 (BNXT_NUM_VLANS * VLAN_TAG_SIZE))
 /* FW adds extra 4 bytes for FCS */
 #define BNXT_VNIC_MRU(mtu)\
 	((mtu) + ETHER_HDR_LEN + VLAN_TAG_SIZE * BNXT_NUM_VLANS)
@@ -75,7 +79,6 @@
 /* TODO: For now, do not support VMDq/RFS on VFs. */
 #define BNXT_VF_RSV_NUM_VNIC	1
 #define BNXT_MAX_LED		4
-#define BNXT_NUM_VLANS		2
 #define BNXT_MIN_RING_DESC	16
 #define BNXT_MAX_TX_RING_DESC	4096
 #define BNXT_MAX_RX_RING_DESC	8192

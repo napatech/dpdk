@@ -426,8 +426,7 @@ static void bnxt_dev_info_get_op(struct rte_eth_dev *eth_dev,
 
 	/* Fast path specifics */
 	dev_info->min_rx_bufsize = 1;
-	dev_info->max_rx_pktlen = BNXT_MAX_MTU + ETHER_HDR_LEN + ETHER_CRC_LEN
-				  + VLAN_TAG_SIZE * 2;
+	dev_info->max_rx_pktlen = BNXT_MAX_PKT_LEN;
 
 	dev_info->rx_offload_capa = BNXT_DEV_RX_OFFLOAD_SUPPORT;
 	if (bp->flags & BNXT_FLAG_PTP_SUPPORTED)
@@ -1582,6 +1581,7 @@ static int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu)
 {
 	struct bnxt *bp = eth_dev->data->dev_private;
 	struct rte_eth_dev_info dev_info;
+	uint32_t new_pkt_size;
 	uint32_t rc = 0;
 	uint32_t i;
 
@@ -1592,6 +1592,8 @@ static int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu)
 			ETHER_MIN_MTU, BNXT_MAX_MTU);
 		return -EINVAL;
 	}
+	new_pkt_size = new_mtu + ETHER_HDR_LEN + ETHER_CRC_LEN +
+		       VLAN_TAG_SIZE * BNXT_NUM_VLANS;
 
 	if (new_mtu > ETHER_MTU) {
 		bp->flags |= BNXT_FLAG_JUMBO;
@@ -1603,11 +1605,7 @@ static int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu)
 		bp->flags &= ~BNXT_FLAG_JUMBO;
 	}
 
-	eth_dev->data->dev_conf.rxmode.max_rx_pkt_len =
-		new_mtu + ETHER_HDR_LEN + ETHER_CRC_LEN + VLAN_TAG_SIZE * 2;
-
-	eth_dev->data->mtu = new_mtu;
-	PMD_DRV_LOG(INFO, "New MTU is %d\n", eth_dev->data->mtu);
+	eth_dev->data->dev_conf.rxmode.max_rx_pkt_len = new_pkt_size;
 
 	for (i = 0; i < bp->nr_vnics; i++) {
 		struct bnxt_vnic_info *vnic = &bp->vnic_info[i];
@@ -1627,6 +1625,9 @@ static int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu)
 				return rc;
 		}
 	}
+
+	eth_dev->data->mtu = new_mtu;
+	PMD_DRV_LOG(INFO, "New MTU is %d\n", new_mtu);
 
 	return rc;
 }

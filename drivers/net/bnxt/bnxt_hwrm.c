@@ -1666,6 +1666,7 @@ int bnxt_hwrm_vnic_plcmode_cfg(struct bnxt *bp,
 
 	size = rte_pktmbuf_data_room_size(bp->rx_queues[0]->mb_pool);
 	size -= RTE_PKTMBUF_HEADROOM;
+	size = RTE_MIN(BNXT_MAX_PKT_LEN, size);
 
 	req.jumbo_thresh = rte_cpu_to_le_16(size);
 	req.vnic_id = rte_cpu_to_le_16(vnic->fw_vnic_id);
