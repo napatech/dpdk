@@ -486,12 +486,12 @@ int bnxt_alloc_hwrm_rings(struct bnxt *bp)
 		/* Tx ring */
 		rc = bnxt_hwrm_ring_alloc(bp, ring,
 					HWRM_RING_ALLOC_INPUT_RING_TYPE_TX,
-					idx, cpr->hw_stats_ctx_id,
+					i, cpr->hw_stats_ctx_id,
 					cp_ring->fw_ring_id);
 		if (rc)
 			goto err_out;
 
-		txr->tx_doorbell = (char *)bp->doorbell_base + idx * 0x80;
+		txr->tx_doorbell = (char *)bp->doorbell_base + i * 0x80;
 		txq->index = idx;
 		bnxt_hwrm_set_ring_coal(bp, &coal, cp_ring->fw_ring_id);
 	}
