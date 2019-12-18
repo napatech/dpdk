@@ -3533,16 +3533,8 @@ static int bnxt_hwrm_func_vf_vnic_query(struct bnxt *bp, uint16_t vf,
 		return -ENOMEM;
 	}
 	rc = bnxt_hwrm_send_message(bp, &req, sizeof(req), BNXT_USE_CHIMP_MB);
-	if (rc) {
-		HWRM_UNLOCK();
-		PMD_DRV_LOG(ERR, "hwrm_func_vf_vnic_query failed rc:%d\n", rc);
-		return -1;
-	} else if (resp->error_code) {
-		rc = rte_le_to_cpu_16(resp->error_code);
-		HWRM_UNLOCK();
-		PMD_DRV_LOG(ERR, "hwrm_func_vf_vnic_query error %d\n", rc);
-		return -1;
-	}
+	HWRM_CHECK_RESULT();
+
 	rc = rte_le_to_cpu_32(resp->vnic_id_cnt);
 
 	HWRM_UNLOCK();
