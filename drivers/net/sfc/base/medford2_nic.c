@@ -69,9 +69,6 @@ medford2_board_cfg(
 		encp->enc_bug41750_workaround = B_TRUE;
 	}
 
-	/* Chained multicast is always enabled on Medford2 */
-	encp->enc_bug26807_workaround = B_TRUE;
-
 	/*
 	 * If the bug61265 workaround is enabled, then interrupt holdoff timers
 	 * cannot be controlled by timer table writes, so MCDI must be used
@@ -101,6 +98,10 @@ medford2_board_cfg(
 	encp->enc_evq_timer_max_us = (encp->enc_evq_timer_quantum_ns <<
 		    FRF_CZ_TC_TIMER_VAL_WIDTH) / 1000;
 
+	encp->enc_ev_desc_size = EF10_EVQ_DESC_SIZE;
+	encp->enc_rx_desc_size = EF10_RXQ_DESC_SIZE;
+	encp->enc_tx_desc_size = EF10_TXQ_DESC_SIZE;
+
 	/* Alignment for receive packet DMA buffers */
 	encp->enc_rx_buf_align_start = 1;
 
@@ -114,12 +115,19 @@ medford2_board_cfg(
 	}
 	encp->enc_rx_buf_align_end = end_padding;
 
+	encp->enc_evq_max_nevs = EF10_EVQ_MAXNEVS;
+	encp->enc_evq_min_nevs = EF10_EVQ_MINNEVS;
+
+	encp->enc_rxq_max_ndescs = EF10_RXQ_MAXNDESCS;
+	encp->enc_rxq_min_ndescs = EF10_RXQ_MINNDESCS;
+
 	/*
 	 * The maximum supported transmit queue size is 2048. TXQs with 4096
 	 * descriptors are not supported as the top bit is used for vfifo
 	 * stuffing.
 	 */
-	encp->enc_txq_max_ndescs = 2048;
+	encp->enc_txq_max_ndescs = MEDFORD2_TXQ_MAXNDESCS;
+	encp->enc_txq_min_ndescs = EF10_TXQ_MINNDESCS;
 
 	EFX_STATIC_ASSERT(MEDFORD2_PIOBUF_NBUFS <= EF10_MAX_PIOBUF_NBUFS);
 	encp->enc_piobuf_limit = MEDFORD2_PIOBUF_NBUFS;

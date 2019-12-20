@@ -278,7 +278,8 @@ qat_sym_dev_create(struct qat_pci_device *qat_pci_dev)
 			RTE_CRYPTODEV_FF_OOP_SGL_IN_SGL_OUT |
 			RTE_CRYPTODEV_FF_OOP_SGL_IN_LB_OUT |
 			RTE_CRYPTODEV_FF_OOP_LB_IN_SGL_OUT |
-			RTE_CRYPTODEV_FF_OOP_LB_IN_LB_OUT;
+			RTE_CRYPTODEV_FF_OOP_LB_IN_LB_OUT |
+			RTE_CRYPTODEV_FF_DIGEST_ENCRYPTED;
 
 	internals = cryptodev->data->dev_private;
 	internals->qat_dev = qat_pci_dev;
@@ -324,7 +325,6 @@ qat_sym_dev_destroy(struct qat_pci_device *qat_pci_dev)
 
 	return 0;
 }
-
 
 static struct cryptodev_driver qat_crypto_drv;
 RTE_PMD_REGISTER_CRYPTO_DRIVER(qat_crypto_drv,

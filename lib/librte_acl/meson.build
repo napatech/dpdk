@@ -1,12 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2017 Intel Corporation
 
-version = 2
 sources = files('acl_bld.c', 'acl_gen.c', 'acl_run_scalar.c',
 		'rte_acl.c', 'tb_mem.c')
 headers = files('rte_acl.h', 'rte_acl_osdep.h')
 
-if arch_subdir == 'x86'
+if dpdk_conf.has('RTE_ARCH_X86')
 	sources += files('acl_run_sse.c')
 
 	# compile AVX2 version if either:
@@ -23,9 +22,14 @@ if arch_subdir == 'x86'
 		avx2_tmplib = static_library('avx2_tmp',
 				'acl_run_avx2.c',
 				dependencies: static_rte_eal,
-				c_args: '-mavx2')
+				c_args: cflags + ['-mavx2'])
 		objs += avx2_tmplib.extract_objects('acl_run_avx2.c')
 		cflags += '-DCC_AVX2_SUPPORT'
 	endif
 
+elif dpdk_conf.has('RTE_ARCH_ARM') or dpdk_conf.has('RTE_ARCH_ARM64')
+	cflags += '-flax-vector-conversions'
+	sources += files('acl_run_neon.c')
+elif dpdk_conf.has('RTE_ARCH_PPC_64')
+	sources += files('acl_run_altivec.c')
 endif

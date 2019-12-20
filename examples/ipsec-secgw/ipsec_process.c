@@ -18,7 +18,6 @@
 	(((t) & RTE_IPSEC_SATP_IPV_MASK) == RTE_IPSEC_SATP_IPV4)) || \
 	((t) & RTE_IPSEC_SATP_MODE_MASK) == RTE_IPSEC_SATP_MODE_TUNLV4)
 
-
 /* helper routine to free bulk of packets */
 static inline void
 free_pkts(struct rte_mbuf *mb[], uint32_t n)
@@ -94,23 +93,18 @@ fill_ipsec_session(struct rte_ipsec_session *ss, struct ipsec_ctx *ctx,
 
 	/* setup crypto section */
 	if (ss->type == RTE_SECURITY_ACTION_TYPE_NONE) {
-		if (sa->crypto_session == NULL) {
-			rc = create_session(ctx, sa);
-			if (rc != 0)
-				return rc;
-		}
-		ss->crypto.ses = sa->crypto_session;
+		RTE_ASSERT(ss->crypto.ses == NULL);
+		rc = create_lookaside_session(ctx, sa, ss);
+		if (rc != 0)
+			return rc;
 	/* setup session action type */
-	} else {
-		if (sa->sec_session == NULL) {
-			rc = create_session(ctx, sa);
-			if (rc != 0)
-				return rc;
-		}
-		ss->security.ses = sa->sec_session;
-		ss->security.ctx = sa->security_ctx;
-		ss->security.ol_flags = sa->ol_flags;
-	}
+	} else if (ss->type == RTE_SECURITY_ACTION_TYPE_LOOKASIDE_PROTOCOL) {
+		RTE_ASSERT(ss->security.ses == NULL);
+		rc = create_lookaside_session(ctx, sa, ss);
+		if (rc != 0)
+			return rc;
+	} else
+		RTE_ASSERT(0);
 
 	rc = rte_ipsec_session_prepare(ss);
 	if (rc != 0)
@@ -123,7 +117,7 @@ fill_ipsec_session(struct rte_ipsec_session *ss, struct ipsec_ctx *ctx,
  * group input packets byt the SA they belong to.
  */
 static uint32_t
-sa_group(struct ipsec_sa *sa_ptr[], struct rte_mbuf *pkts[],
+sa_group(void *sa_ptr[], struct rte_mbuf *pkts[],
 	struct rte_ipsec_group grp[], uint32_t num)
 {
 	uint32_t i, n, spi;
@@ -190,6 +184,37 @@ copy_to_trf(struct ipsec_traffic *trf, uint64_t satp, struct rte_mbuf *mb[],
 	out->num += num;
 }
 
+static uint32_t
+ipsec_prepare_crypto_group(struct ipsec_ctx *ctx, struct ipsec_sa *sa,
+		struct rte_ipsec_session *ips, struct rte_mbuf **m,
+		unsigned int cnt)
+{
+	struct cdev_qp *cqp;
+	struct rte_crypto_op *cop[cnt];
+	uint32_t j, k;
+	struct ipsec_mbuf_metadata *priv;
+
+	cqp = &ctx->tbl[sa->cdev_id_qp];
+
+	/* for that app each mbuf has it's own crypto op */
+	for (j = 0; j != cnt; j++) {
+		priv = get_priv(m[j]);
+		cop[j] = &priv->cop;
+		/*
+		 * this is just to satisfy inbound_sa_check()
+		 * should be removed in future.
+		 */
+		priv->sa = sa;
+	}
+
+	/* prepare and enqueue crypto ops */
+	k = rte_ipsec_pkt_crypto_prepare(ips, m, cop, cnt);
+	if (k != 0)
+		enqueue_cop_bulk(cqp, cop, k);
+
+	return k;
+}
+
 /*
  * Process ipsec packets.
  * If packet belong to SA that is subject of inline-crypto,
@@ -206,33 +231,28 @@ ipsec_process(struct ipsec_ctx *ctx, struct ipsec_traffic *trf)
 	struct ipsec_mbuf_metadata *priv;
 	struct rte_ipsec_group *pg;
 	struct rte_ipsec_session *ips;
-	struct cdev_qp *cqp;
-	struct rte_crypto_op *cop[RTE_DIM(trf->ipsec.pkts)];
 	struct rte_ipsec_group grp[RTE_DIM(trf->ipsec.pkts)];
 
 	n = sa_group(trf->ipsec.saptr, trf->ipsec.pkts, grp, trf->ipsec.num);
 
 	for (i = 0; i != n; i++) {
-
 		pg = grp + i;
-		sa = pg->id.ptr;
+		sa = ipsec_mask_saptr(pg->id.ptr);
 
-		/* no valid SA found */
-		if (sa == NULL)
-			k = 0;
-
-		ips = &sa->ips;
-		satp = rte_ipsec_sa_type(ips->sa);
+		ips = ipsec_get_primary_session(sa);
 
 		/* no valid HW session for that SA, try to create one */
-		if (ips->crypto.ses == NULL &&
-				fill_ipsec_session(ips, ctx, sa) != 0)
+		if (sa == NULL || (ips->crypto.ses == NULL &&
+				fill_ipsec_session(ips, ctx, sa) != 0))
 			k = 0;
 
 		/* process packets inline */
-		else if (sa->type == RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO ||
-				sa->type ==
+		else if (ips->type == RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO ||
+				ips->type ==
 				RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL) {
+
+			/* get SA type */
+			satp = rte_ipsec_sa_type(ips->sa);
 
 			/*
 			 * This is just to satisfy inbound_sa_check()
@@ -244,30 +264,33 @@ ipsec_process(struct ipsec_ctx *ctx, struct ipsec_traffic *trf)
 				priv->sa = sa;
 			}
 
-			k = rte_ipsec_pkt_process(ips, pg->m, pg->cnt);
-			copy_to_trf(trf, satp, pg->m, k);
+			/* fallback to cryptodev with RX packets which inline
+			 * processor was unable to process
+			 */
+			if (pg->id.val & IPSEC_SA_OFFLOAD_FALLBACK_FLAG) {
+				/* offload packets to cryptodev */
+				struct rte_ipsec_session *fallback;
 
+				fallback = ipsec_get_fallback_session(sa);
+				if (fallback->crypto.ses == NULL &&
+					fill_ipsec_session(fallback, ctx, sa)
+					!= 0)
+					k = 0;
+				else
+					k = ipsec_prepare_crypto_group(ctx, sa,
+						fallback, pg->m, pg->cnt);
+			} else {
+				/* finish processing of packets successfully
+				 * decrypted by an inline processor
+				 */
+				k = rte_ipsec_pkt_process(ips, pg->m, pg->cnt);
+				copy_to_trf(trf, satp, pg->m, k);
+
+			}
 		/* enqueue packets to crypto dev */
 		} else {
-
-			cqp = &ctx->tbl[sa->cdev_id_qp];
-
-			/* for that app each mbuf has it's own crypto op */
-			for (j = 0; j != pg->cnt; j++) {
-				priv = get_priv(pg->m[j]);
-				cop[j] = &priv->cop;
-				/*
-				 * this is just to satisfy inbound_sa_check()
-				 * should be removed in future.
-				 */
-				priv->sa = sa;
-			}
-
-			/* prepare and enqueue crypto ops */
-			k = rte_ipsec_pkt_crypto_prepare(ips, pg->m, cop,
+			k = ipsec_prepare_crypto_group(ctx, sa, ips, pg->m,
 				pg->cnt);
-			if (k != 0)
-				enqueue_cop_bulk(cqp, cop, k);
 		}
 
 		/* drop packets that cannot be enqueued/processed */

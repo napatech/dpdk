@@ -46,6 +46,14 @@ Supported AEAD algorithms:
 * ``RTE_CRYPTO_AEAD_AES_GCM``
 * ``RTE_CRYPTO_AEAD_AES_CCM``
 
+Supported Asymmetric Crypto algorithms:
+
+* ``RTE_CRYPTO_ASYM_XFORM_RSA``
+* ``RTE_CRYPTO_ASYM_XFORM_DSA``
+* ``RTE_CRYPTO_ASYM_XFORM_DH``
+* ``RTE_CRYPTO_ASYM_XFORM_MODINV``
+* ``RTE_CRYPTO_ASYM_XFORM_MODEX``
+
 
 Installation
 ------------
@@ -67,7 +75,7 @@ For Ubuntu 14.04 LTS these packages have to be installed in the build system:
 .. code-block:: console
 
     sudo apt-get install openssl
-    sudo apt-get install libc6-dev-i386 # for i686-native-linuxapp-gcc target
+    sudo apt-get install libc6-dev-i386 # for i686-native-linux-gcc target
 
 This code was also verified on Fedora 24.
 This code has NOT been verified on FreeBSD yet.
@@ -79,7 +87,6 @@ User can use app/test application to check how to use this pmd and to verify
 crypto processing.
 
 Test name is cryptodev_openssl_autotest.
-For performance test cryptodev_openssl_perftest can be used.
 For asymmetric crypto operations testing, run cryptodev_openssl_asym_autotest.
 
 To verify real traffic l2fwd-crypto example can be used with this command:

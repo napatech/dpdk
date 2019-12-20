@@ -12,7 +12,7 @@
 #include <rte_malloc.h>
 #include <rte_cpuflags.h>
 
-#include "rte_aesni_mb_pmd_private.h"
+#include "aesni_mb_pmd_private.h"
 
 #define AES_CCM_DIGEST_MIN_LEN 4
 #define AES_CCM_DIGEST_MAX_LEN 16
@@ -35,7 +35,7 @@ typedef void (*aes_keyexp_t)(const void *key, void *enc_exp_keys, void *dec_exp_
 static void
 calculate_auth_precomputes(hash_one_block_t one_block_hash,
 		uint8_t *ipad, uint8_t *opad,
-		uint8_t *hkey, uint16_t hkey_len,
+		const uint8_t *hkey, uint16_t hkey_len,
 		uint16_t blocksize)
 {
 	unsigned i, length;
@@ -84,7 +84,25 @@ aesni_mb_get_chain_order(const struct rte_crypto_sym_xform *xform)
 		if (xform->next->type == RTE_CRYPTO_SYM_XFORM_CIPHER)
 			return AESNI_MB_OP_HASH_CIPHER;
 	}
-
+#if IMB_VERSION_NUM > IMB_VERSION(0, 52, 0)
+	if (xform->type == RTE_CRYPTO_SYM_XFORM_AEAD) {
+		if (xform->aead.op == RTE_CRYPTO_AEAD_OP_ENCRYPT) {
+			/*
+			 * CCM requires to hash first and cipher later
+			 * when encrypting
+			 */
+			if (xform->aead.algo == RTE_CRYPTO_AEAD_AES_CCM)
+				return AESNI_MB_OP_AEAD_HASH_CIPHER;
+			else
+				return AESNI_MB_OP_AEAD_CIPHER_HASH;
+		} else {
+			if (xform->aead.algo == RTE_CRYPTO_AEAD_AES_CCM)
+				return AESNI_MB_OP_AEAD_CIPHER_HASH;
+			else
+				return AESNI_MB_OP_AEAD_HASH_CIPHER;
+		}
+	}
+#else
 	if (xform->type == RTE_CRYPTO_SYM_XFORM_AEAD) {
 		if (xform->aead.algo == RTE_CRYPTO_AEAD_AES_CCM ||
 				xform->aead.algo == RTE_CRYPTO_AEAD_AES_GCM) {
@@ -94,6 +112,7 @@ aesni_mb_get_chain_order(const struct rte_crypto_sym_xform *xform)
 				return AESNI_MB_OP_AEAD_HASH_CIPHER;
 		}
 	}
+#endif
 
 	return AESNI_MB_OP_NOT_SUPPORTED;
 }
@@ -104,7 +123,7 @@ aesni_mb_set_session_auth_parameters(const MB_MGR *mb_mgr,
 		struct aesni_mb_session *sess,
 		const struct rte_crypto_sym_xform *xform)
 {
-	hash_one_block_t hash_oneblock_fn;
+	hash_one_block_t hash_oneblock_fn = NULL;
 	unsigned int key_larger_block_size = 0;
 	uint8_t hashed_key[HMAC_MAX_BLOCK_SIZE] = { 0 };
 	uint32_t auth_precompute = 1;
@@ -739,6 +758,56 @@ get_session(struct aesni_mb_qp *qp, struct rte_crypto_op *op)
 	return sess;
 }
 
+static inline uint64_t
+auth_start_offset(struct rte_crypto_op *op, struct aesni_mb_session *session,
+		uint32_t oop)
+{
+	struct rte_mbuf *m_src, *m_dst;
+	uint8_t *p_src, *p_dst;
+	uintptr_t u_src, u_dst;
+	uint32_t cipher_end, auth_end;
+
+	/* Only cipher then hash needs special calculation. */
+	if (!oop || session->chain_order != CIPHER_HASH)
+		return op->sym->auth.data.offset;
+
+	m_src = op->sym->m_src;
+	m_dst = op->sym->m_dst;
+
+	p_src = rte_pktmbuf_mtod(m_src, uint8_t *);
+	p_dst = rte_pktmbuf_mtod(m_dst, uint8_t *);
+	u_src = (uintptr_t)p_src;
+	u_dst = (uintptr_t)p_dst + op->sym->auth.data.offset;
+
+	/**
+	 * Copy the content between cipher offset and auth offset for generating
+	 * correct digest.
+	 */
+	if (op->sym->cipher.data.offset > op->sym->auth.data.offset)
+		memcpy(p_dst + op->sym->auth.data.offset,
+				p_src + op->sym->auth.data.offset,
+				op->sym->cipher.data.offset -
+				op->sym->auth.data.offset);
+
+	/**
+	 * Copy the content between (cipher offset + length) and (auth offset +
+	 * length) for generating correct digest
+	 */
+	cipher_end = op->sym->cipher.data.offset + op->sym->cipher.data.length;
+	auth_end = op->sym->auth.data.offset + op->sym->auth.data.length;
+	if (cipher_end < auth_end)
+		memcpy(p_dst + cipher_end, p_src + cipher_end,
+				auth_end - cipher_end);
+
+	/**
+	 * Since intel-ipsec-mb only supports positive values,
+	 * we need to deduct the correct offset between src and dst.
+	 */
+
+	return u_src < u_dst ? (u_dst - u_src) :
+			(UINT64_MAX - u_src + u_dst + 1);
+}
+
 /**
  * Process a crypto operation and complete a JOB_AES_HMAC job structure for
  * submission to the multi buffer library for processing.
@@ -757,7 +826,7 @@ set_mb_job_params(JOB_AES_HMAC *job, struct aesni_mb_qp *qp,
 {
 	struct rte_mbuf *m_src = op->sym->m_src, *m_dst;
 	struct aesni_mb_session *session;
-	uint16_t m_offset = 0;
+	uint32_t m_offset, oop;
 
 	session = get_session(qp, op);
 	if (session == NULL) {
@@ -840,30 +909,25 @@ set_mb_job_params(JOB_AES_HMAC *job, struct aesni_mb_qp *qp,
 		}
 	}
 
-	/* Mutable crypto operation parameters */
-	if (op->sym->m_dst) {
-		m_src = m_dst = op->sym->m_dst;
-
-		/* append space for output data to mbuf */
-		char *odata = rte_pktmbuf_append(m_dst,
-				rte_pktmbuf_data_len(op->sym->m_src));
-		if (odata == NULL) {
-			AESNI_MB_LOG(ERR, "failed to allocate space in destination "
-					"mbuf for source data");
-			op->status = RTE_CRYPTO_OP_STATUS_ERROR;
-			return -1;
-		}
-
-		memcpy(odata, rte_pktmbuf_mtod(op->sym->m_src, void*),
-				rte_pktmbuf_data_len(op->sym->m_src));
-	} else {
+	if (!op->sym->m_dst) {
+		/* in-place operation */
 		m_dst = m_src;
-		if (job->hash_alg == AES_CCM || (job->hash_alg == AES_GMAC &&
-				session->cipher.mode == GCM))
-			m_offset = op->sym->aead.data.offset;
-		else
-			m_offset = op->sym->cipher.data.offset;
+		oop = 0;
+	} else if (op->sym->m_dst == op->sym->m_src) {
+		/* in-place operation */
+		m_dst = m_src;
+		oop = 0;
+	} else {
+		/* out-of-place operation */
+		m_dst = op->sym->m_dst;
+		oop = 1;
 	}
+
+	if (job->hash_alg == AES_CCM || (job->hash_alg == AES_GMAC &&
+			session->cipher.mode == GCM))
+		m_offset = op->sym->aead.data.offset;
+	else
+		m_offset = op->sym->cipher.data.offset;
 
 	/* Set digest output location */
 	if (job->hash_alg != NULL_HASH &&
@@ -893,7 +957,7 @@ set_mb_job_params(JOB_AES_HMAC *job, struct aesni_mb_qp *qp,
 	/* Set IV parameters */
 	job->iv_len_in_bytes = session->iv.length;
 
-	/* Data  Parameter */
+	/* Data Parameters */
 	job->src = rte_pktmbuf_mtod(m_src, uint8_t *);
 	job->dst = rte_pktmbuf_mtod_offset(m_dst, uint8_t *, m_offset);
 
@@ -937,7 +1001,8 @@ set_mb_job_params(JOB_AES_HMAC *job, struct aesni_mb_qp *qp,
 				op->sym->cipher.data.offset;
 		job->msg_len_to_cipher_in_bytes = op->sym->cipher.data.length;
 
-		job->hash_start_src_offset_in_bytes = op->sym->auth.data.offset;
+		job->hash_start_src_offset_in_bytes = auth_start_offset(op,
+				session, oop);
 		job->msg_len_to_hash_in_bytes = op->sym->auth.data.length;
 
 		job->iv = rte_crypto_op_ctod_offset(op, uint8_t *,
@@ -962,7 +1027,7 @@ static inline void
 generate_digest(JOB_AES_HMAC *job, struct rte_crypto_op *op,
 		struct aesni_mb_session *sess)
 {
-	/* No extra copy neeed */
+	/* No extra copy needed */
 	if (likely(sess->auth.req_digest_len == sess->auth.gen_digest_len))
 		return;
 
@@ -1186,12 +1251,6 @@ cryptodev_aesni_mb_create(const char *name,
 	enum aesni_mb_vector_mode vector_mode;
 	MB_MGR *mb_mgr;
 
-	/* Check CPU for support for AES instruction set */
-	if (!rte_cpu_get_flag_enabled(RTE_CPUFLAG_AES)) {
-		AESNI_MB_LOG(ERR, "AES instructions not supported by CPU");
-		return -EFAULT;
-	}
-
 	dev = rte_cryptodev_pmd_create(name, &vdev->device, init_params);
 	if (dev == NULL) {
 		AESNI_MB_LOG(ERR, "failed to create cryptodev vdev");
@@ -1217,7 +1276,13 @@ cryptodev_aesni_mb_create(const char *name,
 
 	dev->feature_flags = RTE_CRYPTODEV_FF_SYMMETRIC_CRYPTO |
 			RTE_CRYPTODEV_FF_SYM_OPERATION_CHAINING |
-			RTE_CRYPTODEV_FF_CPU_AESNI;
+			RTE_CRYPTODEV_FF_OOP_LB_IN_LB_OUT;
+
+	/* Check CPU for support for AES instruction set */
+	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AES))
+		dev->feature_flags |= RTE_CRYPTODEV_FF_CPU_AESNI;
+	else
+		AESNI_MB_LOG(WARNING, "AES instructions not supported by CPU");
 
 	mb_mgr = alloc_mb_mgr(0);
 	if (mb_mgr == NULL)

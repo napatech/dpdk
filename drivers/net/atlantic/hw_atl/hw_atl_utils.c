@@ -305,6 +305,10 @@ int hw_atl_utils_fw_downld_dwords(struct aq_hw_s *self, u32 a,
 			AQ_HW_WAIT_FOR(!(0x100 & aq_hw_read_reg(self,
 							   HW_ATL_MIF_CMD)),
 				       1, 1000U);
+		if (err) {
+			err = -ETIMEDOUT;
+			goto err_exit;
+		}
 
 		*(p++) = aq_hw_read_reg(self, HW_ATL_MIF_VAL);
 		a += 4;
@@ -328,12 +332,13 @@ int hw_atl_utils_fw_upload_dwords(struct aq_hw_s *self, u32 a, u32 *p,
 		goto err_exit;
 	}
 	if (IS_CHIP_FEATURE(REVISION_B1)) {
-		u32 offset = 0;
+		u32 mbox_offset = (a - self->rpc_addr) / sizeof(u32);
+		u32 data_offset = 0;
 
-		for (; offset < cnt; ++offset) {
-			aq_hw_write_reg(self, 0x328, p[offset]);
+		for (; data_offset < cnt; ++mbox_offset, ++data_offset) {
+			aq_hw_write_reg(self, 0x328, p[data_offset]);
 			aq_hw_write_reg(self, 0x32C,
-				(0x80000000 | (0xFFFF & (offset * 4))));
+				(0x80000000 | (0xFFFF & (mbox_offset * 4))));
 			hw_atl_mcp_up_force_intr_set(self, 1);
 			/* 1000 times by 10us = 10ms */
 			AQ_HW_WAIT_FOR((aq_hw_read_reg(self,
@@ -462,8 +467,6 @@ int hw_atl_utils_fw_rpc_wait(struct aq_hw_s *self,
 				goto err_exit;
 		}
 	} while (sw.tid != fw.tid || 0xFFFFU == fw.len);
-	if (err < 0)
-		goto err_exit;
 
 	if (rpc) {
 		if (fw.len) {
@@ -654,8 +657,8 @@ static int hw_atl_utils_get_mac_permanent(struct aq_hw_s *self,
 		mac_addr[1] = rte_constant_bswap32(mac_addr[1]);
 	}
 
-	ether_addr_copy((struct ether_addr *)mac_addr,
-			(struct ether_addr *)mac);
+	rte_ether_addr_copy((struct rte_ether_addr *)mac_addr,
+			(struct rte_ether_addr *)mac);
 
 	if ((mac[0] & 0x01U) || ((mac[0] | mac[1] | mac[2]) == 0x00U)) {
 		/* chip revision */
@@ -865,8 +868,8 @@ static int aq_fw1x_set_wol(struct aq_hw_s *self, bool wol_enabled, u8 *mac)
 		prpc->msg_wol.pattern_id = 1U;
 		prpc->msg_wol.wol_packet_type = 2U; /* Magic Packet */
 
-		ether_addr_copy((struct ether_addr *)mac,
-			(struct ether_addr *)&prpc->msg_wol.wol_pattern);
+		rte_ether_addr_copy((struct rte_ether_addr *)mac,
+			(struct rte_ether_addr *)&prpc->msg_wol.wol_pattern);
 	} else {
 		rpc_size = sizeof(prpc->msg_id) + sizeof(prpc->msg_del_id);
 
@@ -875,8 +878,7 @@ static int aq_fw1x_set_wol(struct aq_hw_s *self, bool wol_enabled, u8 *mac)
 	}
 
 	err = hw_atl_utils_fw_rpc_call(self, rpc_size);
-	if (err < 0)
-		goto err_exit;
+
 err_exit:
 	return err;
 }

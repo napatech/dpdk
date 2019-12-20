@@ -27,10 +27,11 @@
 #include <rte_ethdev_driver.h>
 #include <rte_common.h>
 
-#include "mlx5_utils.h"
 #include "mlx5.h"
 #include "mlx5_autoconf.h"
 #include "mlx5_glue.h"
+#include "mlx5_rxtx.h"
+#include "mlx5_utils.h"
 
 /**
  * DPDK callback to configure a VLAN filter.
@@ -48,7 +49,7 @@
 int
 mlx5_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx5_priv *priv = dev->data->dev_private;
 	unsigned int i;
 
 	DRV_LOG(DEBUG, "port %u %s VLAN filter ID %" PRIu16,
@@ -102,7 +103,7 @@ out:
 void
 mlx5_vlan_strip_queue_set(struct rte_eth_dev *dev, uint16_t queue, int on)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_rxq_data *rxq = (*priv->rxqs)[queue];
 	struct mlx5_rxq_ctrl *rxq_ctrl =
 		container_of(rxq, struct mlx5_rxq_ctrl, rxq);
@@ -110,7 +111,7 @@ mlx5_vlan_strip_queue_set(struct rte_eth_dev *dev, uint16_t queue, int on)
 	uint16_t vlan_offloads =
 		(on ? IBV_WQ_FLAGS_CVLAN_STRIPPING : 0) |
 		0;
-	int ret;
+	int ret = 0;
 
 	/* Validate hw support */
 	if (!priv->config.hw_vlan_strip) {
@@ -126,20 +127,32 @@ mlx5_vlan_strip_queue_set(struct rte_eth_dev *dev, uint16_t queue, int on)
 	}
 	DRV_LOG(DEBUG, "port %u set VLAN offloads 0x%x for port %uqueue %d",
 		dev->data->port_id, vlan_offloads, rxq->port_id, queue);
-	if (!rxq_ctrl->ibv) {
+	if (!rxq_ctrl->obj) {
 		/* Update related bits in RX queue. */
 		rxq->vlan_strip = !!on;
 		return;
 	}
-	mod = (struct ibv_wq_attr){
-		.attr_mask = IBV_WQ_ATTR_FLAGS,
-		.flags_mask = IBV_WQ_FLAGS_CVLAN_STRIPPING,
-		.flags = vlan_offloads,
-	};
-	ret = mlx5_glue->modify_wq(rxq_ctrl->ibv->wq, &mod);
+	if (rxq_ctrl->obj->type == MLX5_RXQ_OBJ_TYPE_IBV) {
+		mod = (struct ibv_wq_attr){
+			.attr_mask = IBV_WQ_ATTR_FLAGS,
+			.flags_mask = IBV_WQ_FLAGS_CVLAN_STRIPPING,
+			.flags = vlan_offloads,
+		};
+		ret = mlx5_glue->modify_wq(rxq_ctrl->obj->wq, &mod);
+	} else if (rxq_ctrl->obj->type == MLX5_RXQ_OBJ_TYPE_DEVX_RQ) {
+		struct mlx5_devx_modify_rq_attr rq_attr;
+
+		memset(&rq_attr, 0, sizeof(rq_attr));
+		rq_attr.rq_state = MLX5_RQC_STATE_RDY;
+		rq_attr.state = MLX5_RQC_STATE_RDY;
+		rq_attr.vsd = (on ? 0 : 1);
+		rq_attr.modify_bitmask = MLX5_MODIFY_RQ_IN_MODIFY_BITMASK_VSD;
+		ret = mlx5_devx_cmd_modify_rq(rxq_ctrl->obj->rq, &rq_attr);
+	}
 	if (ret) {
-		DRV_LOG(ERR, "port %u failed to modified stripping mode: %s",
-			dev->data->port_id, strerror(rte_errno));
+		DRV_LOG(ERR, "port %u failed to modify object %d stripping "
+			"mode: %s", dev->data->port_id,
+			rxq_ctrl->obj->type, strerror(rte_errno));
 		return;
 	}
 	/* Update related bits in RX queue. */
@@ -160,7 +173,7 @@ mlx5_vlan_strip_queue_set(struct rte_eth_dev *dev, uint16_t queue, int on)
 int
 mlx5_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx5_priv *priv = dev->data->dev_private;
 	unsigned int i;
 
 	if (mask & ETH_VLAN_STRIP_MASK) {

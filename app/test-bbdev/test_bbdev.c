@@ -768,7 +768,7 @@ test_bbdev_driver_init(void)
 {
 	struct rte_bbdev *dev1, *dev2;
 	const char *name = "dev_name";
-	char name_tmp[16];
+	char name_tmp[32];
 	int num_devs, num_devs_tmp;
 
 	dev1 = rte_bbdev_allocate(NULL);

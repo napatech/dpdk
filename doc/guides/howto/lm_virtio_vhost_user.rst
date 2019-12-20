@@ -243,7 +243,7 @@ On host_server_2: Terminal 1
 
 .. code-block:: console
 
-   testomd> show port info all
+   testpmd> show port info all
    testpmd> show port stats all
 
 Virtio traffic is seen at P0 and P1.
@@ -338,7 +338,7 @@ reset_vf_on_212_131.sh
    #!/bin/sh
    # This script is run on the host 10.237.212.131 to reset SRIOV
 
-   # BDF for Ninatic NIC is 0000:06:00.0
+   # BDF for Niantic NIC is 0000:06:00.0
    cat /sys/bus/pci/devices/0000\:06\:00.0/max_vfs
    echo 0 > /sys/bus/pci/devices/0000\:06\:00.0/max_vfs
    cat /sys/bus/pci/devices/0000\:06\:00.0/max_vfs
@@ -421,7 +421,7 @@ setup_dpdk_virtio_in_vm.sh
    rmmod virtio-pci
 
    modprobe uio
-   insmod /root/dpdk/x86_64-default-linuxapp-gcc/kmod/igb_uio.ko
+   insmod /root/dpdk/x86_64-default-linux-gcc/kmod/igb_uio.ko
 
    /root/dpdk/usertools/dpdk-devbind.py -b igb_uio 0000:00:03.0
    /root/dpdk/usertools/dpdk-devbind.py -b igb_uio 0000:00:04.0
@@ -437,5 +437,5 @@ run_testpmd_in_vm.sh
    # Run testpmd for use with vhost_user sample app.
    # test system has 8 cpus (0-7), use cpus 2-7 for VM
 
-   /root/dpdk/x86_64-default-linuxapp-gcc/app/testpmd \
+   /root/dpdk/x86_64-default-linux-gcc/app/testpmd \
    -l 0-5 -n 4 --socket-mem 350 -- --burst=64 --i

@@ -161,13 +161,15 @@ TAILQ_HEAD(softnic_link_list, softnic_link);
 #define TM_MAX_PIPES_PER_SUBPORT			4096
 #endif
 
+#ifndef TM_MAX_PIPE_PROFILE
+#define TM_MAX_PIPE_PROFILE				256
+#endif
 struct tm_params {
 	struct rte_sched_port_params port_params;
 
 	struct rte_sched_subport_params subport_params[TM_MAX_SUBPORTS];
 
-	struct rte_sched_pipe_params
-		pipe_profiles[RTE_SCHED_PIPE_PROFILES_PER_PORT];
+	struct rte_sched_pipe_params pipe_profiles[TM_MAX_PIPE_PROFILE];
 	uint32_t n_pipe_profiles;
 	uint32_t pipe_to_profile[TM_MAX_SUBPORTS * TM_MAX_PIPES_PER_SUBPORT];
 };
@@ -948,6 +950,9 @@ struct softnic_table_rule_match {
 	} match;
 };
 
+#ifndef SYM_CRYPTO_MAX_KEY_SIZE
+#define SYM_CRYPTO_MAX_KEY_SIZE		(256)
+#endif
 struct softnic_table_rule_action {
 	uint64_t action_mask;
 	struct rte_table_action_fwd_params fwd;
@@ -962,6 +967,7 @@ struct softnic_table_rule_action {
 	struct rte_table_action_tag_params tag;
 	struct rte_table_action_decap_params decap;
 	struct rte_table_action_sym_crypto_params sym_crypto;
+	uint8_t sym_crypto_key[SYM_CRYPTO_MAX_KEY_SIZE];
 };
 
 struct rte_flow {

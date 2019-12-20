@@ -7,7 +7,7 @@ include $(RTE_SDK)/mk/rte.vars.mk
 LIB = librte_telemetry.a
 
 CFLAGS += -O3
-CFLAGS += -I$(SRCDIR)
+CFLAGS += $(WERROR_FLAGS) -I$(SRCDIR)
 CFLAGS += -DALLOW_EXPERIMENTAL_API
 
 LDLIBS += -lrte_eal -lrte_ethdev
@@ -16,8 +16,6 @@ LDLIBS += -lpthread
 LDLIBS += -ljansson
 
 EXPORT_MAP := rte_telemetry_version.map
-
-LIBABIVER := 1
 
 # library source files
 SRCS-$(CONFIG_RTE_LIBRTE_TELEMETRY) := rte_telemetry.c

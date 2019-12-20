@@ -39,7 +39,7 @@ extern "C" {
 /** Flag to support reader writer concurrency */
 #define RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY 0x04
 
-/** Flag to indicate the extendabe bucket table feature should be used */
+/** Flag to indicate the extendable bucket table feature should be used */
 #define RTE_HASH_EXTRA_FLAGS_EXT_TABLE 0x08
 
 /** Flag to disable freeing of key index on hash delete.
@@ -366,7 +366,8 @@ rte_hash_get_key_with_position(const struct rte_hash *h, const int32_t position,
  *   - 0 if freed successfully
  *   - -EINVAL if the parameters are invalid.
  */
-int __rte_experimental
+__rte_experimental
+int
 rte_hash_free_key_with_position(const struct rte_hash *h,
 				const int32_t position);
 
@@ -463,7 +464,7 @@ rte_hash_lookup_with_hash(const struct rte_hash *h,
 
 /**
  * Calc a hash value by key.
- * This operation is not multi-thread safe.
+ * This operation is not multi-process safe.
  *
  * @param h
  *   Hash table to look in.

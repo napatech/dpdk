@@ -55,7 +55,8 @@ configuration:
 
         Interface name: kni#
         force bind kernel thread to a core : NO
-        mbuf size: MAX_PACKET_SZ
+        mbuf size: (rte_pktmbuf_data_room_size(pktmbuf_pool) - RTE_PKTMBUF_HEADROOM)
+        mtu: (conf.mbuf_size - RTE_ETHER_HDR_LEN)
 
 KNI control path is not supported with the PMD, since there is no physical
 backend device by default.
@@ -64,7 +65,7 @@ backend device by default.
 PMD arguments
 -------------
 
-``no_request_thread``, by default PMD creates a phtread for each KNI interface
+``no_request_thread``, by default PMD creates a pthread for each KNI interface
 to handle Linux network interface control commands, like ``ifconfig kni0 up``
 
 With ``no_request_thread`` option, pthread is not created and control commands
@@ -167,4 +168,3 @@ It is possible to test PMD quickly using KNI kernel module loopback feature:
         RX-packets: 71275820       RX-dropped: 0             RX-total: 71275820
         TX-packets: 71275884       TX-dropped: 0             TX-total: 71275884
         ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-

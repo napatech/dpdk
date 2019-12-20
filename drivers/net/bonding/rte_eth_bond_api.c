@@ -12,8 +12,8 @@
 #include <rte_kvargs.h>
 
 #include "rte_eth_bond.h"
-#include "rte_eth_bond_private.h"
-#include "rte_eth_bond_8023ad_private.h"
+#include "eth_bond_private.h"
+#include "eth_bond_8023ad_private.h"
 
 int
 check_for_bonded_ethdev(const struct rte_eth_dev *eth_dev)
@@ -76,7 +76,7 @@ void
 activate_slave(struct rte_eth_dev *eth_dev, uint16_t port_id)
 {
 	struct bond_dev_private *internals = eth_dev->data->dev_private;
-	uint8_t active_count = internals->active_slave_count;
+	uint16_t active_count = internals->active_slave_count;
 
 	if (internals->mode == BONDING_MODE_8023AD)
 		bond_mode_8023ad_activate_slave(eth_dev, port_id);
@@ -128,6 +128,12 @@ deactivate_slave(struct rte_eth_dev *eth_dev, uint16_t port_id)
 
 	RTE_ASSERT(active_count < RTE_DIM(internals->active_slaves));
 	internals->active_slave_count = active_count;
+
+	/* Resetting active_slave when reaches to max
+	 * no of slaves in active list
+	 */
+	if (internals->active_slave >= active_count)
+		internals->active_slave = 0;
 
 	if (eth_dev->data->dev_started) {
 		if (internals->mode == BONDING_MODE_8023AD) {
@@ -446,6 +452,7 @@ __eth_bond_slave_add_lock_free(uint16_t bonded_port_id, uint16_t slave_port_id)
 	struct bond_dev_private *internals;
 	struct rte_eth_link link_props;
 	struct rte_eth_dev_info dev_info;
+	int ret;
 
 	bonded_eth_dev = &rte_eth_devices[bonded_port_id];
 	internals = bonded_eth_dev->data->dev_private;
@@ -459,7 +466,14 @@ __eth_bond_slave_add_lock_free(uint16_t bonded_port_id, uint16_t slave_port_id)
 		return -1;
 	}
 
-	rte_eth_dev_info_get(slave_port_id, &dev_info);
+	ret = rte_eth_dev_info_get(slave_port_id, &dev_info);
+	if (ret != 0) {
+		RTE_BOND_LOG(ERR,
+			"%s: Error during getting device (port %u) info: %s\n",
+			__func__, slave_port_id, strerror(-ret));
+
+		return ret;
+	}
 	if (dev_info.max_rx_pktlen < internals->max_rx_pktlen) {
 		RTE_BOND_LOG(ERR, "Slave (port %u) max_rx_pktlen too small",
 			     slave_port_id);
@@ -483,10 +497,6 @@ __eth_bond_slave_add_lock_free(uint16_t bonded_port_id, uint16_t slave_port_id)
 				return -1;
 			}
 		}
-
-		/* Inherit eth dev link properties from first slave */
-		link_properties_set(bonded_eth_dev,
-				&(slave_eth_dev->data->dev_link));
 
 		/* Make primary slave */
 		internals->primary_port = slave_port_id;
@@ -547,9 +557,6 @@ __eth_bond_slave_add_lock_free(uint16_t bonded_port_id, uint16_t slave_port_id)
 		}
 	}
 
-	/* Add slave details to bonded device */
-	slave_eth_dev->data->dev_flags |= RTE_ETH_DEV_BONDED_SLAVE;
-
 	/* Update all slave devices MACs */
 	mac_address_slaves_update(bonded_eth_dev);
 
@@ -561,7 +568,18 @@ __eth_bond_slave_add_lock_free(uint16_t bonded_port_id, uint16_t slave_port_id)
 	/* If bonded device is started then we can add the slave to our active
 	 * slave array */
 	if (bonded_eth_dev->data->dev_started) {
-		rte_eth_link_get_nowait(slave_port_id, &link_props);
+		ret = rte_eth_link_get_nowait(slave_port_id, &link_props);
+		if (ret < 0) {
+			rte_eth_dev_callback_unregister(slave_port_id,
+					RTE_ETH_EVENT_INTR_LSC,
+					bond_ethdev_lsc_event_callback,
+					&bonded_eth_dev->data->port_id);
+			internals->slave_count--;
+			RTE_BOND_LOG(ERR,
+				"Slave (port %u) link get failed: %s\n",
+				slave_port_id, rte_strerror(-ret));
+			return -1;
+		}
 
 		 if (link_props.link_status == ETH_LINK_UP) {
 			if (internals->active_slave_count == 0 &&
@@ -570,6 +588,9 @@ __eth_bond_slave_add_lock_free(uint16_t bonded_port_id, uint16_t slave_port_id)
 							slave_port_id);
 		}
 	}
+
+	/* Add slave details to bonded device */
+	slave_eth_dev->data->dev_flags |= RTE_ETH_DEV_BONDED_SLAVE;
 
 	slave_vlan_filter_set(bonded_port_id, slave_port_id);
 
@@ -794,7 +815,7 @@ rte_eth_bond_slaves_get(uint16_t bonded_port_id, uint16_t slaves[],
 			uint16_t len)
 {
 	struct bond_dev_private *internals;
-	uint8_t i;
+	uint16_t i;
 
 	if (valid_bonded_port_id(bonded_port_id) != 0)
 		return -1;
@@ -838,7 +859,7 @@ rte_eth_bond_active_slaves_get(uint16_t bonded_port_id, uint16_t slaves[],
 
 int
 rte_eth_bond_mac_address_set(uint16_t bonded_port_id,
-		struct ether_addr *mac_addr)
+		struct rte_ether_addr *mac_addr)
 {
 	struct rte_eth_dev *bonded_eth_dev;
 	struct bond_dev_private *internals;

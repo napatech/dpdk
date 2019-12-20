@@ -90,11 +90,10 @@ cryptodev_create(const char *name, struct cryptodev_params *params)
 
 	if (dev_info.max_nb_queue_pairs < params->n_queues)
 		return NULL;
-	if (dev_info.feature_flags & RTE_CRYPTODEV_FF_HW_ACCELERATED)
-		return NULL;
 
 	dev_conf.socket_id = socket_id;
 	dev_conf.nb_queue_pairs = params->n_queues;
+	dev_conf.ff_disable = 0;
 
 	status = rte_cryptodev_configure(dev_id, &dev_conf);
 	if (status < 0)

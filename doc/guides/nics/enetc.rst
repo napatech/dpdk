@@ -46,6 +46,13 @@ ENETC Features
 
 - Link Status
 - Packet type information
+- Basic stats
+- Promiscuous
+- Multicast
+- Jumbo packets
+- Queue Start/Stop
+- Deferred Queue Start
+- CRC offload
 
 NIC Driver (PMD)
 ~~~~~~~~~~~~~~~~
@@ -69,7 +76,7 @@ Supported ENETC SoCs
 Prerequisites
 ~~~~~~~~~~~~~
 
-There are three main pre-requisities for executing ENETC PMD on a ENETC
+There are three main pre-requisites for executing ENETC PMD on a ENETC
 compatible board:
 
 1. **ARM 64 Tool Chain**

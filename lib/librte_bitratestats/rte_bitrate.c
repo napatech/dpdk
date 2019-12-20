@@ -8,8 +8,6 @@
 #include <rte_metrics.h>
 #include <rte_bitrate.h>
 
-#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
-
 /*
  * Persistent bit-rate data.
  * @internal
@@ -50,7 +48,7 @@ rte_stats_bitrate_reg(struct rte_stats_bitrates *bitrate_data)
 	if (bitrate_data == NULL)
 		return -EINVAL;
 
-	return_value = rte_metrics_reg_names(&names[0], ARRAY_SIZE(names));
+	return_value = rte_metrics_reg_names(&names[0], RTE_DIM(names));
 	if (return_value >= 0)
 		bitrate_data->id_stats_set = return_value;
 	return return_value;
@@ -67,6 +65,7 @@ rte_stats_bitrate_calc(struct rte_stats_bitrates *bitrate_data,
 	int64_t delta;
 	const int64_t alpha_percent = 20;
 	uint64_t values[6];
+	int ret;
 
 	if (bitrate_data == NULL)
 		return -EINVAL;
@@ -124,7 +123,10 @@ rte_stats_bitrate_calc(struct rte_stats_bitrates *bitrate_data,
 	values[3] = port_data->mean_obits;
 	values[4] = port_data->peak_ibits;
 	values[5] = port_data->peak_obits;
-	rte_metrics_update_values(port_id, bitrate_data->id_stats_set,
-		values, ARRAY_SIZE(values));
+	ret = rte_metrics_update_values(port_id, bitrate_data->id_stats_set,
+		values, RTE_DIM(values));
+	if (ret < 0)
+		return ret;
+
 	return 0;
 }

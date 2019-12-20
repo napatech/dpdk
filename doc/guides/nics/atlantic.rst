@@ -18,7 +18,13 @@ Supported features
 - Port statistics
 - RSS (Receive Side Scaling)
 - Checksum offload
-- Jumbo Frame upto 16K
+- Jumbo Frame up to 16K
+- MACSEC offload
+
+Experimental API features
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+- MACSEC PMD API is considered as experimental and is subject to change/removal in next DPDK releases.
 
 Configuration Information
 ^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -7,9 +7,6 @@ include $(RTE_SDK)/mk/rte.vars.mk
 # library name
 LIB = librte_pmd_octeontx_crypto.a
 
-# library version
-LIBABIVER := 1
-
 # build flags
 CFLAGS += $(WERROR_FLAGS)
 
@@ -20,8 +17,9 @@ LDLIBS += -lrte_common_cpt
 
 VPATH += $(RTE_SDK)/drivers/crypto/octeontx
 
-CFLAGS += -O3 -DCPT_MODEL=CRYPTO_OCTEONTX
+CFLAGS += -O3
 CFLAGS += -I$(RTE_SDK)/drivers/common/cpt
+CFLAGS += -DALLOW_EXPERIMENTAL_API
 
 # PMD code
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_OCTEONTX_CRYPTO) += otx_cryptodev.c

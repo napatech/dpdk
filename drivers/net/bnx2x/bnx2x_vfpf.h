@@ -115,7 +115,7 @@ struct vf_resc {
 	uint8_t num_vlan_filters;
 	uint8_t num_mc_filters;
 	uint8_t permanent_mac_addr[ETH_ALEN];
-	struct ether_addr current_mac_addr;
+	struct rte_ether_addr current_mac_addr;
 	uint16_t pf_link_speed;
 	uint32_t pf_link_supported;
 };
@@ -328,6 +328,7 @@ struct bnx2x_vf_mbx_msg {
 	union resp_tlvs resp;
 };
 
+int bnx2x_vf_teardown_queue(struct bnx2x_softc *sc, int qid);
 int bnx2x_vf_set_mac(struct bnx2x_softc *sc, int set);
 int bnx2x_vf_config_rss(struct bnx2x_softc *sc, struct ecore_config_rss_params *params);
 

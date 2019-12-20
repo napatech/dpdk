@@ -101,7 +101,7 @@ where,
 
 *   --[no-]mac-updating: Enable or disable MAC addresses updating (enabled by default).
 
-To run the application in linuxapp environment with 4 lcores, 16 ports and 8 RX queues per lcore and MAC address
+To run the application in linux environment with 4 lcores, 16 ports and 8 RX queues per lcore and MAC address
 updating enabled, issue the command:
 
 .. code-block:: console
@@ -281,18 +281,6 @@ The list of queues that must be polled for a given lcore is stored in a private 
 The values n_rx_port and rx_port_list[] are used in the main packet processing loop
 (see :ref:`l2_fwd_app_rx_tx_packets`).
 
-The global configuration for the RX queues is stored in a static structure:
-
-.. code-block:: c
-
-    static const struct rte_eth_rxconf rx_conf = {
-        .rx_thresh = {
-            .pthresh = RX_PTHRESH,
-            .hthresh = RX_HTHRESH,
-            .wthresh = RX_WTHRESH,
-        },
-    };
-
 .. _l2_fwd_app_tx_init:
 
 TX Queue Initialization
@@ -367,13 +355,13 @@ Naturally, the number of ports in the portmask must be even, otherwise, the appl
     static void
     l2fwd_simple_forward(struct rte_mbuf *m, unsigned portid)
     {
-        struct ether_hdr *eth;
+        struct rte_ether_hdr *eth;
         void *tmp;
         unsigned dst_port;
 
         dst_port = l2fwd_dst_ports[portid];
 
-        eth = rte_pktmbuf_mtod(m, struct ether_hdr *);
+        eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 
         /* 02:00:00:00:00:xx */
 
@@ -383,7 +371,7 @@ Naturally, the number of ports in the portmask must be even, otherwise, the appl
 
         /* src addr */
 
-        ether_addr_copy(&l2fwd_ports_eth_addr[dst_port], &eth->s_addr);
+        rte_ether_addr_copy(&l2fwd_ports_eth_addr[dst_port], &eth->s_addr);
 
         l2fwd_send_packet(m, (uint8_t) dst_port);
     }

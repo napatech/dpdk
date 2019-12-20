@@ -1,15 +1,22 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2018
+ * Copyright(c) 2001-2019
  */
 
 #ifndef _ICE_FLEX_TYPE_H_
 #define _ICE_FLEX_TYPE_H_
 
+#define ICE_FV_OFFSET_INVAL	0x1FF
+
+#pragma pack(1)
 /* Extraction Sequence (Field Vector) Table */
 struct ice_fv_word {
 	u8 prot_id;
-	u8 off;		/* Offset within the protocol header */
+	u16 off;		/* Offset within the protocol header */
+	u8 resvrd;
 };
+#pragma pack()
+
+#define ICE_MAX_NUM_PROFILES 256
 
 #define ICE_MAX_FV_WORDS 48
 struct ice_fv {
@@ -271,6 +278,69 @@ enum ice_sect {
 #define ICE_PTYPE_IPV6_TCP_PAY		92
 #define ICE_PTYPE_IPV6_SCTP_PAY		93
 #define ICE_PTYPE_IPV6_ICMP_PAY		94
+#define ICE_MAC_IPV4_GTPC_TEID		325
+#define ICE_MAC_IPV6_GTPC_TEID		326
+#define ICE_MAC_IPV4_GTPC		327
+#define ICE_MAC_IPV6_GTPC		328
+#define ICE_MAC_IPV4_GTPU		329
+#define ICE_MAC_IPV6_GTPU		330
+#define ICE_MAC_IPV4_GTPU_IPV4_FRAG	331
+#define ICE_MAC_IPV4_GTPU_IPV4_PAY	332
+#define ICE_MAC_IPV4_GTPU_IPV4_UDP_PAY	333
+#define ICE_MAC_IPV4_GTPU_IPV4_TCP	334
+#define ICE_MAC_IPV4_GTPU_IPV4_ICMP	335
+#define ICE_MAC_IPV6_GTPU_IPV4_FRAG	336
+#define ICE_MAC_IPV6_GTPU_IPV4_PAY	337
+#define ICE_MAC_IPV6_GTPU_IPV4_UDP_PAY	338
+#define ICE_MAC_IPV6_GTPU_IPV4_TCP	339
+#define ICE_MAC_IPV6_GTPU_IPV4_ICMP	340
+#define ICE_MAC_IPV4_GTPU_IPV6_FRAG	341
+#define ICE_MAC_IPV4_GTPU_IPV6_PAY	342
+#define ICE_MAC_IPV4_GTPU_IPV6_UDP_PAY	343
+#define ICE_MAC_IPV4_GTPU_IPV6_TCP	344
+#define ICE_MAC_IPV4_GTPU_IPV6_ICMPV6	345
+#define ICE_MAC_IPV6_GTPU_IPV6_FRAG	346
+#define ICE_MAC_IPV6_GTPU_IPV6_PAY	347
+#define ICE_MAC_IPV6_GTPU_IPV6_UDP_PAY	348
+#define ICE_MAC_IPV6_GTPU_IPV6_TCP	349
+#define ICE_MAC_IPV6_GTPU_IPV6_ICMPV6	350
+
+/* Attributes that can modify PTYPE definitions.
+ *
+ * These values will represent special attributes for PTYPES, which will
+ * resolve into metadata packet flags definitions that can be used in the TCAM
+ * for identifying a PTYPE with specific characteristics.
+ */
+enum ice_ptype_attrib_type {
+	/* GTP PTYPES */
+	ICE_PTYPE_ATTR_GTP_PDU_EH,
+	ICE_PTYPE_ATTR_GTP_SESSION,
+	ICE_PTYPE_ATTR_GTP_DOWNLINK,
+	ICE_PTYPE_ATTR_GTP_UPLINK,
+};
+
+struct ice_ptype_attrib_info {
+	u16 flags;
+	u16 mask;
+};
+
+/* TCAM flag definitions */
+#define ICE_GTP_PDU			BIT(14)
+#define ICE_GTP_PDU_LINK		BIT(13)
+
+/* GTP attributes */
+#define ICE_GTP_PDU_FLAG_MASK		(ICE_GTP_PDU)
+#define ICE_GTP_PDU_EH			ICE_GTP_PDU
+
+#define ICE_GTP_FLAGS_MASK		(ICE_GTP_PDU | ICE_GTP_PDU_LINK)
+#define ICE_GTP_SESSION			0
+#define ICE_GTP_DOWNLINK		ICE_GTP_PDU
+#define ICE_GTP_UPLINK			(ICE_GTP_PDU | ICE_GTP_PDU_LINK)
+
+struct ice_ptype_attributes {
+	u16 ptype;
+	enum ice_ptype_attrib_type attrib;
+};
 
 /* Packet Type Groups (PTG) - Inner Most fields (IM) */
 #define ICE_PTG_IM_IPV4_TCP		16
@@ -350,7 +420,7 @@ struct ice_sw_fv_list_entry {
 };
 
 #pragma pack(1)
-/* The BOOST tcam stores the match packet header in reverse order, meaning
+/* The BOOST TCAM stores the match packet header in reverse order, meaning
  * the fields are reversed; in addition, this means that the normally big endian
  * fields of the packet are now little endian.
  */
@@ -361,7 +431,6 @@ struct ice_boost_key_value {
 	__le16 hv_src_port_key;
 	u8 tcam_search_key;
 };
-
 #pragma pack()
 
 struct ice_boost_key {
@@ -400,7 +469,6 @@ struct ice_xlt1_section {
 	__le16 offset;
 	u8 value[1];
 };
-
 #pragma pack()
 
 #define ICE_XLT1_SIZE(n)	(sizeof(struct ice_xlt1_section) + \
@@ -449,17 +517,7 @@ struct ice_pkg_enum {
 
 enum ice_tunnel_type {
 	TNL_VXLAN = 0,
-	TNL_GTPC,
-	TNL_GTPC_TEID,
-	TNL_GTPU,
-	TNL_GTPU_TEID,
-	TNL_VXLAN_GPE,
 	TNL_GENEVE,
-	TNL_NAT,
-	TNL_ROCE_V2,
-	TNL_MPLSO_UDP,
-	TNL_UDP2_END,
-	TNL_UPD_END,
 	TNL_LAST = 0xFF,
 	TNL_ALL = 0xFF,
 };
@@ -471,19 +529,19 @@ struct ice_tunnel_type_scan {
 
 struct ice_tunnel_entry {
 	enum ice_tunnel_type type;
-	u8 valid;
-	u8 in_use;
-	u8 marked;
 	u16 boost_addr;
 	u16 port;
 	struct ice_boost_tcam_entry *boost_entry;
+	u8 valid;
+	u8 in_use;
+	u8 marked;
 };
 
 #define ICE_TUNNEL_MAX_ENTRIES	16
 
 struct ice_tunnel_table {
-	u16 count;
 	struct ice_tunnel_entry tbl[ICE_TUNNEL_MAX_ENTRIES];
+	u16 count;
 };
 
 struct ice_pkg_es {
@@ -497,10 +555,12 @@ struct ice_es {
 	u16 count;
 	u16 fvw;
 	u16 *ref_count;
-	u8 reverse; /* set to true to reverse FV order */
+	u32 *mask_ena;
 	struct LIST_HEAD_TYPE prof_map;
 	struct ice_fv_word *t;
-	u8 *resource_used_hack; /* hack for testing */
+	struct ice_lock prof_map_lock;	/* protect access to profiles list */
+	u8 *written;
+	u8 reverse; /* set to true to reverse FV order */
 };
 
 /* PTYPE Group management */
@@ -514,33 +574,35 @@ struct ice_es {
 #define ICE_DEFAULT_PTG	0
 
 struct ice_ptg_entry {
-	u8 in_use;
 	struct ice_ptg_ptype *first_ptype;
+	u8 in_use;
 };
 
 struct ice_ptg_ptype {
-	u8 ptg;
 	struct ice_ptg_ptype *next_ptype;
+	u8 ptg;
 };
 
-#define ICE_MAX_TCAM_PER_PROFILE	8
-#define ICE_MAX_PTYPE_PER_PROFILE	8
+#define ICE_MAX_TCAM_PER_PROFILE	32
+#define ICE_MAX_PTG_PER_PROFILE		32
 
 struct ice_prof_map {
 	struct LIST_ENTRY_TYPE list;
 	u64 profile_cookie;
 	u64 context;
 	u8 prof_id;
-	u8 ptype_count;
-	u8 ptype[ICE_MAX_PTYPE_PER_PROFILE];
+	u8 ptg_cnt;
+	u8 ptg[ICE_MAX_PTG_PER_PROFILE];
+	struct ice_ptype_attrib_info attr[ICE_MAX_PTG_PER_PROFILE];
 };
 
 #define ICE_INVALID_TCAM	0xFFFF
 
 struct ice_tcam_inf {
+	u16 tcam_idx;
+	struct ice_ptype_attrib_info attr;
 	u8 ptg;
 	u8 prof_id;
-	u16 tcam_idx;
 	u8 in_use;
 };
 
@@ -553,16 +615,16 @@ struct ice_vsig_prof {
 };
 
 struct ice_vsig_entry {
-	u8 in_use;
 	struct LIST_HEAD_TYPE prop_lst;
 	struct ice_vsig_vsi *first_vsi;
+	u8 in_use;
 };
 
 struct ice_vsig_vsi {
+	struct ice_vsig_vsi *next_vsi;
+	u32 prop_mask;
 	u16 changed;
 	u16 vsig;
-	u32 prop_mask;
-	struct ice_vsig_vsi *next_vsi;
 };
 
 #define ICE_XLT1_CNT	1024
@@ -570,11 +632,11 @@ struct ice_vsig_vsi {
 
 /* XLT1 Table */
 struct ice_xlt1 {
-	u32 sid;
-	u16 count;
 	struct ice_ptg_entry *ptg_tbl;
 	struct ice_ptg_ptype *ptypes;
 	u8 *t;
+	u32 sid;
+	u16 count;
 };
 
 #define ICE_XLT2_CNT	768
@@ -582,7 +644,7 @@ struct ice_xlt1 {
 
 /* Vsig bit layout:
  * [0:12]: incremental vsig index 1 to ICE_MAX_VSIGS
- * [13:15]: pf number of device
+ * [13:15]: PF number of device
  */
 #define ICE_VSIG_IDX_M	(0x1FFF)
 #define ICE_PF_NUM_S	13
@@ -594,15 +656,15 @@ struct ice_xlt1 {
 
 /* XLT2 Table */
 struct ice_xlt2 {
-	u32 sid;
-	u16 count;
 	struct ice_vsig_entry *vsig_tbl;
 	struct ice_vsig_vsi *vsis;
 	u16 *t;
+	u32 sid;
+	u16 count;
 };
 
 /* Extraction sequence - list of match fields:
- * protocol id, offset, profile length
+ * protocol ID, offset, profile length
  */
 union ice_match_fld {
 	struct {
@@ -644,22 +706,35 @@ struct ice_prof_id_section {
 	__le16 count;
 	struct ice_prof_tcam_entry entry[1];
 };
-
 #pragma pack()
 
 struct ice_prof_tcam {
 	u32 sid;
 	u16 count;
 	u16 max_prof_id;
-	u8 cdid_bits; /* # cdid bits to use in key, 0, 2, 4, or 8 */
 	struct ice_prof_tcam_entry *t;
-	u8 *resource_used_hack;
+	u8 cdid_bits; /* # cdid bits to use in key, 0, 2, 4, or 8 */
 };
 
 struct ice_prof_redir {
+	u8 *t;
 	u32 sid;
 	u16 count;
-	u8 *t;
+};
+
+struct ice_mask {
+	u16 mask;	/* 16-bit mask */
+	u16 idx;	/* index */
+	u16 ref;	/* reference count */
+	u8 in_use;	/* non-zero if used */
+};
+
+struct ice_masks {
+	struct ice_lock lock;  /* lock to protect this structure */
+	u16 first;	/* first mask owned by the PF */
+	u16 count;	/* number of masks owned by the PF */
+#define ICE_PROF_MASK_COUNT 32
+	struct ice_mask masks[ICE_PROF_MASK_COUNT];
 };
 
 /* Tables per block */
@@ -669,14 +744,15 @@ struct ice_blk_info {
 	struct ice_prof_tcam prof;
 	struct ice_prof_redir prof_redir;
 	struct ice_es es;
+	struct ice_masks masks;
 	u8 overwrite; /* set to true to allow overwrite of table entries */
+	u8 is_list_init;
 };
 
 enum ice_chg_type {
 	ICE_TCAM_NONE = 0,
 	ICE_PTG_ES_ADD,
 	ICE_TCAM_ADD,
-	ICE_TCAM_REM,
 	ICE_VSIG_ADD,
 	ICE_VSIG_REM,
 	ICE_VSI_MOVE,
@@ -697,9 +773,17 @@ struct ice_chs_chg {
 	u16 vsig;
 	u16 orig_vsig;
 	u16 tcam_idx;
-	struct ice_prof_tcam_entry orig_ent;
+	struct ice_ptype_attrib_info attr;
 };
 
 #define ICE_FLOW_PTYPE_MAX		ICE_XLT1_CNT
 
+enum ice_prof_type {
+	ICE_PROF_NON_TUN = 0x1,
+	ICE_PROF_TUN_UDP = 0x2,
+	ICE_PROF_TUN_GRE = 0x4,
+	ICE_PROF_TUN_PPPOE = 0x8,
+	ICE_PROF_TUN_ALL = 0xE,
+	ICE_PROF_ALL = 0xFF,
+};
 #endif /* _ICE_FLEX_TYPE_H_ */

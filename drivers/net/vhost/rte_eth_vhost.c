@@ -31,6 +31,7 @@ enum {VIRTIO_RXQ, VIRTIO_TXQ, VIRTIO_QNUM};
 #define ETH_VHOST_DEQUEUE_ZERO_COPY	"dequeue-zero-copy"
 #define ETH_VHOST_IOMMU_SUPPORT		"iommu-support"
 #define ETH_VHOST_POSTCOPY_SUPPORT	"postcopy-support"
+#define ETH_VHOST_VIRTIO_NET_F_HOST_TSO "tso"
 #define VHOST_MAX_PKT_BURST 32
 
 static const char *valid_arguments[] = {
@@ -40,10 +41,11 @@ static const char *valid_arguments[] = {
 	ETH_VHOST_DEQUEUE_ZERO_COPY,
 	ETH_VHOST_IOMMU_SUPPORT,
 	ETH_VHOST_POSTCOPY_SUPPORT,
+	ETH_VHOST_VIRTIO_NET_F_HOST_TSO,
 	NULL
 };
 
-static struct ether_addr base_eth_addr = {
+static struct rte_ether_addr base_eth_addr = {
 	.addr_bytes = {
 		0x56 /* V */,
 		0x48 /* H */,
@@ -216,7 +218,7 @@ static const struct vhost_xstats_name_off vhost_txport_stat_strings[] = {
 #define VHOST_NB_XSTATS_TXPORT (sizeof(vhost_txport_stat_strings) / \
 				sizeof(vhost_txport_stat_strings[0]))
 
-static void
+static int
 vhost_dev_xstats_reset(struct rte_eth_dev *dev)
 {
 	struct vhost_queue *vq = NULL;
@@ -234,6 +236,8 @@ vhost_dev_xstats_reset(struct rte_eth_dev *dev)
 			continue;
 		memset(&vq->stats, 0, sizeof(vq->stats));
 	}
+
+	return 0;
 }
 
 static int
@@ -325,12 +329,12 @@ static inline void
 vhost_count_multicast_broadcast(struct vhost_queue *vq,
 				struct rte_mbuf *mbuf)
 {
-	struct ether_addr *ea = NULL;
+	struct rte_ether_addr *ea = NULL;
 	struct vhost_stats *pstats = &vq->stats;
 
-	ea = rte_pktmbuf_mtod(mbuf, struct ether_addr *);
-	if (is_multicast_ether_addr(ea)) {
-		if (is_broadcast_ether_addr(ea))
+	ea = rte_pktmbuf_mtod(mbuf, struct rte_ether_addr *);
+	if (rte_is_multicast_ether_addr(ea)) {
+		if (rte_is_broadcast_ether_addr(ea))
 			pstats->xstats[VHOST_BROADCAST_PKT]++;
 		else
 			pstats->xstats[VHOST_MULTICAST_PKT]++;
@@ -851,6 +855,10 @@ vring_state_changed(int vid, uint16_t vring, int enable)
 	/* won't be NULL */
 	state = vring_states[eth_dev->data->port_id];
 	rte_spinlock_lock(&state->lock);
+	if (state->cur[vring] == enable) {
+		rte_spinlock_unlock(&state->lock);
+		return 0;
+	}
 	state->cur[vring] = enable;
 	state->max_vring = RTE_MAX(vring, state->max_vring);
 	rte_spinlock_unlock(&state->lock);
@@ -1005,6 +1013,9 @@ eth_dev_close(struct rte_eth_dev *dev)
 	rte_free(internal);
 
 	dev->data->dev_private = NULL;
+
+	rte_free(vring_states[dev->data->port_id]);
+	vring_states[dev->data->port_id] = NULL;
 }
 
 static int
@@ -1051,7 +1062,7 @@ eth_tx_queue_setup(struct rte_eth_dev *dev, uint16_t tx_queue_id,
 	return 0;
 }
 
-static void
+static int
 eth_dev_info(struct rte_eth_dev *dev,
 	     struct rte_eth_dev_info *dev_info)
 {
@@ -1060,7 +1071,7 @@ eth_dev_info(struct rte_eth_dev *dev,
 	internal = dev->data->dev_private;
 	if (internal == NULL) {
 		VHOST_LOG(ERR, "Invalid device specified\n");
-		return;
+		return -ENODEV;
 	}
 
 	dev_info->max_mac_addrs = 1;
@@ -1072,13 +1083,15 @@ eth_dev_info(struct rte_eth_dev *dev,
 	dev_info->tx_offload_capa = DEV_TX_OFFLOAD_MULTI_SEGS |
 				DEV_TX_OFFLOAD_VLAN_INSERT;
 	dev_info->rx_offload_capa = DEV_RX_OFFLOAD_VLAN_STRIP;
+
+	return 0;
 }
 
 static int
 eth_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 {
 	unsigned i;
-	unsigned long rx_total = 0, tx_total = 0, tx_missed_total = 0;
+	unsigned long rx_total = 0, tx_total = 0;
 	unsigned long rx_total_bytes = 0, tx_total_bytes = 0;
 	struct vhost_queue *vq;
 
@@ -1100,7 +1113,6 @@ eth_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 			continue;
 		vq = dev->data->tx_queues[i];
 		stats->q_opackets[i] = vq->stats.pkts;
-		tx_missed_total += vq->stats.missed_pkts;
 		tx_total += stats->q_opackets[i];
 
 		stats->q_obytes[i] = vq->stats.bytes;
@@ -1109,14 +1121,13 @@ eth_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 
 	stats->ipackets = rx_total;
 	stats->opackets = tx_total;
-	stats->oerrors = tx_missed_total;
 	stats->ibytes = rx_total_bytes;
 	stats->obytes = tx_total_bytes;
 
 	return 0;
 }
 
-static void
+static int
 eth_stats_reset(struct rte_eth_dev *dev)
 {
 	struct vhost_queue *vq;
@@ -1137,6 +1148,8 @@ eth_stats_reset(struct rte_eth_dev *dev)
 		vq->stats.bytes = 0;
 		vq->stats.missed_pkts = 0;
 	}
+
+	return 0;
 }
 
 static void
@@ -1196,17 +1209,16 @@ static const struct eth_dev_ops ops = {
 	.rx_queue_intr_disable = eth_rxq_intr_disable,
 };
 
-static struct rte_vdev_driver pmd_vhost_drv;
-
 static int
 eth_dev_vhost_create(struct rte_vdev_device *dev, char *iface_name,
-	int16_t queues, const unsigned int numa_node, uint64_t flags)
+	int16_t queues, const unsigned int numa_node, uint64_t flags,
+	uint64_t disable_flags)
 {
 	const char *name = rte_vdev_device_name(dev);
 	struct rte_eth_dev_data *data;
 	struct pmd_internal *internal = NULL;
 	struct rte_eth_dev *eth_dev = NULL;
-	struct ether_addr *eth_addr = NULL;
+	struct rte_ether_addr *eth_addr = NULL;
 	struct rte_vhost_vring_state *vring_state = NULL;
 	struct internal_list *list = NULL;
 
@@ -1261,7 +1273,7 @@ eth_dev_vhost_create(struct rte_vdev_device *dev, char *iface_name,
 	internal->max_queues = queues;
 	internal->vid = -1;
 	data->dev_link = pmd_link;
-	data->dev_flags = RTE_ETH_DEV_INTR_LSC;
+	data->dev_flags = RTE_ETH_DEV_INTR_LSC | RTE_ETH_DEV_CLOSE_REMOVE;
 
 	eth_dev->dev_ops = &ops;
 
@@ -1271,6 +1283,12 @@ eth_dev_vhost_create(struct rte_vdev_device *dev, char *iface_name,
 
 	if (rte_vhost_driver_register(iface_name, flags))
 		goto error;
+
+	if (disable_flags) {
+		if (rte_vhost_driver_disable_features(iface_name,
+					disable_flags))
+			goto error;
+	}
 
 	if (rte_vhost_driver_callback_register(iface_name, &vhost_ops) < 0) {
 		VHOST_LOG(ERR, "Can't register callbacks\n");
@@ -1334,10 +1352,12 @@ rte_pmd_vhost_probe(struct rte_vdev_device *dev)
 	char *iface_name;
 	uint16_t queues;
 	uint64_t flags = 0;
+	uint64_t disable_flags = 0;
 	int client_mode = 0;
 	int dequeue_zero_copy = 0;
 	int iommu_support = 0;
 	int postcopy_support = 0;
+	int tso = 0;
 	struct rte_eth_dev *eth_dev;
 	const char *name = rte_vdev_device_name(dev);
 
@@ -1419,11 +1439,24 @@ rte_pmd_vhost_probe(struct rte_vdev_device *dev)
 			flags |= RTE_VHOST_USER_POSTCOPY_SUPPORT;
 	}
 
+	if (rte_kvargs_count(kvlist, ETH_VHOST_VIRTIO_NET_F_HOST_TSO) == 1) {
+		ret = rte_kvargs_process(kvlist,
+				ETH_VHOST_VIRTIO_NET_F_HOST_TSO,
+				&open_int, &tso);
+		if (ret < 0)
+			goto out_free;
+
+		if (tso == 0) {
+			disable_flags |= (1ULL << VIRTIO_NET_F_HOST_TSO4);
+			disable_flags |= (1ULL << VIRTIO_NET_F_HOST_TSO6);
+		}
+	}
+
 	if (dev->device.numa_node == SOCKET_ID_ANY)
 		dev->device.numa_node = rte_socket_id();
 
 	eth_dev_vhost_create(dev, iface_name, queues, dev->device.numa_node,
-		flags);
+		flags, disable_flags);
 
 out_free:
 	rte_kvargs_free(kvlist);
@@ -1442,15 +1475,12 @@ rte_pmd_vhost_remove(struct rte_vdev_device *dev)
 	/* find an ethdev entry */
 	eth_dev = rte_eth_dev_allocated(name);
 	if (eth_dev == NULL)
-		return -ENODEV;
+		return 0;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return rte_eth_dev_release_port(eth_dev);
 
 	eth_dev_close(eth_dev);
-
-	rte_free(vring_states[eth_dev->data->port_id]);
-	vring_states[eth_dev->data->port_id] = NULL;
 
 	rte_eth_dev_release_port(eth_dev);
 
@@ -1470,7 +1500,8 @@ RTE_PMD_REGISTER_PARAM_STRING(net_vhost,
 	"client=<0|1> "
 	"dequeue-zero-copy=<0|1> "
 	"iommu-support=<0|1> "
-	"postcopy-support=<0|1>");
+	"postcopy-support=<0|1> "
+	"tso=<0|1>");
 
 RTE_INIT(vhost_init_log)
 {

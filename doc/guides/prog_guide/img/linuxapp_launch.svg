@@ -17,9 +17,9 @@
    id="svg2"
    sodipodi:version="0.32"
    inkscape:version="0.48.4 r9939"
-   sodipodi:docname="linuxapp_launch.svg"
+   sodipodi:docname="linux_launch.svg"
    inkscape:output_extension="org.inkscape.output.svg.inkscape"
-   inkscape:export-filename="/home/matz/rapports/doc/intel/architecture_docs/linuxapp_launch.png"
+   inkscape:export-filename="/home/matz/rapports/doc/intel/architecture_docs/linux_launch.png"
    inkscape:export-xdpi="90"
    inkscape:export-ydpi="90"
    version="1.1">
@@ -659,7 +659,7 @@
          sodipodi:role="line"
          id="tspan11522"
          x="69.303398"
-         y="858.42419">rte_eal_remote_lauch(app)</tspan></text>
+         y="858.42419">rte_eal_remote_launch(app)</tspan></text>
     <path
        style="fill:none;stroke:#000000;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
        d="m 176.30173,890.61234 0,15.67127"
@@ -692,7 +692,7 @@
          sodipodi:role="line"
          id="tspan11522-1"
          x="87.641663"
-         y="644.07324">rte_eal_remote_lauch(</tspan><tspan
+         y="644.07324">rte_eal_remote_launch(</tspan><tspan
          sodipodi:role="line"
          x="87.641663"
          y="664.07324"

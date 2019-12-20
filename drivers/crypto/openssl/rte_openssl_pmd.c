@@ -13,7 +13,7 @@
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
 
-#include "rte_openssl_pmd_private.h"
+#include "openssl_pmd_private.h"
 #include "compat.h"
 
 #define DES_BLOCK_SIZE 8
@@ -92,14 +92,14 @@ openssl_get_chain_order(const struct rte_crypto_sym_xform *xform)
 
 /** Get session cipher key from input cipher key */
 static void
-get_cipher_key(uint8_t *input_key, int keylen, uint8_t *session_key)
+get_cipher_key(const uint8_t *input_key, int keylen, uint8_t *session_key)
 {
 	memcpy(session_key, input_key, keylen);
 }
 
 /** Get key ede 24 bytes standard from input key */
 static int
-get_cipher_key_ede(uint8_t *key, int keylen, uint8_t *key_ede)
+get_cipher_key_ede(const uint8_t *key, int keylen, uint8_t *key_ede)
 {
 	int res = 0;
 
@@ -292,7 +292,7 @@ get_aead_algo(enum rte_crypto_aead_algorithm sess_algo, size_t keylen,
 static int
 openssl_set_sess_aead_enc_param(struct openssl_session *sess,
 		enum rte_crypto_aead_algorithm algo,
-		uint8_t tag_len, uint8_t *key)
+		uint8_t tag_len, const uint8_t *key)
 {
 	int iv_type = 0;
 	unsigned int do_ccm;
@@ -352,7 +352,7 @@ openssl_set_sess_aead_enc_param(struct openssl_session *sess,
 static int
 openssl_set_sess_aead_dec_param(struct openssl_session *sess,
 		enum rte_crypto_aead_algorithm algo,
-		uint8_t tag_len, uint8_t *key)
+		uint8_t tag_len, const uint8_t *key)
 {
 	int iv_type = 0;
 	unsigned int do_ccm = 0;
@@ -798,12 +798,12 @@ get_session(struct openssl_qp *qp, struct rte_crypto_op *op)
  */
 static inline int
 process_openssl_encryption_update(struct rte_mbuf *mbuf_src, int offset,
-		uint8_t **dst, int srclen, EVP_CIPHER_CTX *ctx)
+		uint8_t **dst, int srclen, EVP_CIPHER_CTX *ctx, uint8_t inplace)
 {
 	struct rte_mbuf *m;
 	int dstlen;
 	int l, n = srclen;
-	uint8_t *src;
+	uint8_t *src, temp[EVP_CIPHER_CTX_block_size(ctx)];
 
 	for (m = mbuf_src; m != NULL && offset > rte_pktmbuf_data_len(m);
 			m = m->next)
@@ -813,6 +813,8 @@ process_openssl_encryption_update(struct rte_mbuf *mbuf_src, int offset,
 		return -1;
 
 	src = rte_pktmbuf_mtod_offset(m, uint8_t *, offset);
+	if (inplace)
+		*dst = src;
 
 	l = rte_pktmbuf_data_len(m) - offset;
 	if (srclen <= l) {
@@ -829,8 +831,24 @@ process_openssl_encryption_update(struct rte_mbuf *mbuf_src, int offset,
 	n -= l;
 
 	for (m = m->next; (m != NULL) && (n > 0); m = m->next) {
+		uint8_t diff = l - dstlen, rem;
+
 		src = rte_pktmbuf_mtod(m, uint8_t *);
-		l = rte_pktmbuf_data_len(m) < n ? rte_pktmbuf_data_len(m) : n;
+		l = RTE_MIN(rte_pktmbuf_data_len(m), n);
+		if (diff && inplace) {
+			rem = RTE_MIN(l,
+				(EVP_CIPHER_CTX_block_size(ctx) - diff));
+			if (EVP_EncryptUpdate(ctx, temp,
+						&dstlen, src, rem) <= 0)
+				return -1;
+			n -= rem;
+			rte_memcpy(*dst, temp, diff);
+			rte_memcpy(src, temp + diff, rem);
+			src += rem;
+			l -= rem;
+		}
+		if (inplace)
+			*dst = src;
 		if (EVP_EncryptUpdate(ctx, *dst, &dstlen, src, l) <= 0)
 			return -1;
 		*dst += dstlen;
@@ -842,12 +860,12 @@ process_openssl_encryption_update(struct rte_mbuf *mbuf_src, int offset,
 
 static inline int
 process_openssl_decryption_update(struct rte_mbuf *mbuf_src, int offset,
-		uint8_t **dst, int srclen, EVP_CIPHER_CTX *ctx)
+		uint8_t **dst, int srclen, EVP_CIPHER_CTX *ctx, uint8_t inplace)
 {
 	struct rte_mbuf *m;
 	int dstlen;
 	int l, n = srclen;
-	uint8_t *src;
+	uint8_t *src, temp[EVP_CIPHER_CTX_block_size(ctx)];
 
 	for (m = mbuf_src; m != NULL && offset > rte_pktmbuf_data_len(m);
 			m = m->next)
@@ -857,6 +875,8 @@ process_openssl_decryption_update(struct rte_mbuf *mbuf_src, int offset,
 		return -1;
 
 	src = rte_pktmbuf_mtod_offset(m, uint8_t *, offset);
+	if (inplace)
+		*dst = src;
 
 	l = rte_pktmbuf_data_len(m) - offset;
 	if (srclen <= l) {
@@ -873,8 +893,24 @@ process_openssl_decryption_update(struct rte_mbuf *mbuf_src, int offset,
 	n -= l;
 
 	for (m = m->next; (m != NULL) && (n > 0); m = m->next) {
+		uint8_t diff = l - dstlen, rem;
+
 		src = rte_pktmbuf_mtod(m, uint8_t *);
-		l = rte_pktmbuf_data_len(m) < n ? rte_pktmbuf_data_len(m) : n;
+		l = RTE_MIN(rte_pktmbuf_data_len(m), n);
+		if (diff && inplace) {
+			rem = RTE_MIN(l,
+				(EVP_CIPHER_CTX_block_size(ctx) - diff));
+			if (EVP_DecryptUpdate(ctx, temp,
+						&dstlen, src, rem) <= 0)
+				return -1;
+			n -= rem;
+			rte_memcpy(*dst, temp, diff);
+			rte_memcpy(src, temp + diff, rem);
+			src += rem;
+			l -= rem;
+		}
+		if (inplace)
+			*dst = src;
 		if (EVP_DecryptUpdate(ctx, *dst, &dstlen, src, l) <= 0)
 			return -1;
 		*dst += dstlen;
@@ -887,7 +923,8 @@ process_openssl_decryption_update(struct rte_mbuf *mbuf_src, int offset,
 /** Process standard openssl cipher encryption */
 static int
 process_openssl_cipher_encrypt(struct rte_mbuf *mbuf_src, uint8_t *dst,
-		int offset, uint8_t *iv, int srclen, EVP_CIPHER_CTX *ctx)
+		int offset, uint8_t *iv, int srclen, EVP_CIPHER_CTX *ctx,
+		uint8_t inplace)
 {
 	int totlen;
 
@@ -897,7 +934,7 @@ process_openssl_cipher_encrypt(struct rte_mbuf *mbuf_src, uint8_t *dst,
 	EVP_CIPHER_CTX_set_padding(ctx, 0);
 
 	if (process_openssl_encryption_update(mbuf_src, offset, &dst,
-			srclen, ctx))
+			srclen, ctx, inplace))
 		goto process_cipher_encrypt_err;
 
 	if (EVP_EncryptFinal_ex(ctx, dst, &totlen) <= 0)
@@ -936,7 +973,8 @@ process_cipher_encrypt_err:
 /** Process standard openssl cipher decryption */
 static int
 process_openssl_cipher_decrypt(struct rte_mbuf *mbuf_src, uint8_t *dst,
-		int offset, uint8_t *iv, int srclen, EVP_CIPHER_CTX *ctx)
+		int offset, uint8_t *iv, int srclen, EVP_CIPHER_CTX *ctx,
+		uint8_t inplace)
 {
 	int totlen;
 
@@ -946,7 +984,7 @@ process_openssl_cipher_decrypt(struct rte_mbuf *mbuf_src, uint8_t *dst,
 	EVP_CIPHER_CTX_set_padding(ctx, 0);
 
 	if (process_openssl_decryption_update(mbuf_src, offset, &dst,
-			srclen, ctx))
+			srclen, ctx, inplace))
 		goto process_cipher_decrypt_err;
 
 	if (EVP_DecryptFinal_ex(ctx, dst, &totlen) <= 0)
@@ -1033,7 +1071,7 @@ process_openssl_auth_encryption_gcm(struct rte_mbuf *mbuf_src, int offset,
 
 	if (srclen > 0)
 		if (process_openssl_encryption_update(mbuf_src, offset, &dst,
-				srclen, ctx))
+				srclen, ctx, 0))
 			goto process_auth_encryption_gcm_err;
 
 	/* Workaround open ssl bug in version less then 1.0.1f */
@@ -1078,7 +1116,7 @@ process_openssl_auth_encryption_ccm(struct rte_mbuf *mbuf_src, int offset,
 
 	if (srclen > 0)
 		if (process_openssl_encryption_update(mbuf_src, offset, &dst,
-				srclen, ctx))
+				srclen, ctx, 0))
 			goto process_auth_encryption_ccm_err;
 
 	if (EVP_EncryptFinal_ex(ctx, dst, &len) <= 0)
@@ -1115,7 +1153,7 @@ process_openssl_auth_decryption_gcm(struct rte_mbuf *mbuf_src, int offset,
 
 	if (srclen > 0)
 		if (process_openssl_decryption_update(mbuf_src, offset, &dst,
-				srclen, ctx))
+				srclen, ctx, 0))
 			goto process_auth_decryption_gcm_err;
 
 	/* Workaround open ssl bug in version less then 1.0.1f */
@@ -1161,7 +1199,7 @@ process_openssl_auth_decryption_ccm(struct rte_mbuf *mbuf_src, int offset,
 
 	if (srclen > 0)
 		if (process_openssl_decryption_update(mbuf_src, offset, &dst,
-				srclen, ctx))
+				srclen, ctx, 0))
 			return -EFAULT;
 
 	return 0;
@@ -1290,6 +1328,7 @@ process_openssl_combined_op
 	int srclen, aadlen, status = -1;
 	uint32_t offset;
 	uint8_t taglen;
+	EVP_CIPHER_CTX *ctx_copy;
 
 	/*
 	 * Segmented destination buffer is not supported for
@@ -1326,6 +1365,8 @@ process_openssl_combined_op
 	}
 
 	taglen = sess->auth.digest_length;
+	ctx_copy = EVP_CIPHER_CTX_new();
+	EVP_CIPHER_CTX_copy(ctx_copy, sess->cipher.ctx);
 
 	if (sess->cipher.direction == RTE_CRYPTO_CIPHER_OP_ENCRYPT) {
 		if (sess->auth.algo == RTE_CRYPTO_AUTH_AES_GMAC ||
@@ -1333,12 +1374,12 @@ process_openssl_combined_op
 			status = process_openssl_auth_encryption_gcm(
 					mbuf_src, offset, srclen,
 					aad, aadlen, iv,
-					dst, tag, sess->cipher.ctx);
+					dst, tag, ctx_copy);
 		else
 			status = process_openssl_auth_encryption_ccm(
 					mbuf_src, offset, srclen,
 					aad, aadlen, iv,
-					dst, tag, taglen, sess->cipher.ctx);
+					dst, tag, taglen, ctx_copy);
 
 	} else {
 		if (sess->auth.algo == RTE_CRYPTO_AUTH_AES_GMAC ||
@@ -1346,14 +1387,15 @@ process_openssl_combined_op
 			status = process_openssl_auth_decryption_gcm(
 					mbuf_src, offset, srclen,
 					aad, aadlen, iv,
-					dst, tag, sess->cipher.ctx);
+					dst, tag, ctx_copy);
 		else
 			status = process_openssl_auth_decryption_ccm(
 					mbuf_src, offset, srclen,
 					aad, aadlen, iv,
-					dst, tag, taglen, sess->cipher.ctx);
+					dst, tag, taglen, ctx_copy);
 	}
 
+	EVP_CIPHER_CTX_free(ctx_copy);
 	if (status != 0) {
 		if (status == (-EFAULT) &&
 				sess->auth.operation ==
@@ -1372,12 +1414,16 @@ process_openssl_cipher_op
 {
 	uint8_t *dst, *iv;
 	int srclen, status;
+	uint8_t inplace = (mbuf_src == mbuf_dst) ? 1 : 0;
+	EVP_CIPHER_CTX *ctx_copy;
 
 	/*
-	 * Segmented destination buffer is not supported for
-	 * encryption/decryption
+	 * Segmented OOP destination buffer is not supported for encryption/
+	 * decryption. In case of des3ctr, even inplace segmented buffers are
+	 * not supported.
 	 */
-	if (!rte_pktmbuf_is_contiguous(mbuf_dst)) {
+	if (!rte_pktmbuf_is_contiguous(mbuf_dst) &&
+			(!inplace || sess->cipher.mode != OPENSSL_CIPHER_LIB)) {
 		op->status = RTE_CRYPTO_OP_STATUS_ERROR;
 		return;
 	}
@@ -1388,22 +1434,25 @@ process_openssl_cipher_op
 
 	iv = rte_crypto_op_ctod_offset(op, uint8_t *,
 			sess->iv.offset);
+	ctx_copy = EVP_CIPHER_CTX_new();
+	EVP_CIPHER_CTX_copy(ctx_copy, sess->cipher.ctx);
 
 	if (sess->cipher.mode == OPENSSL_CIPHER_LIB)
 		if (sess->cipher.direction == RTE_CRYPTO_CIPHER_OP_ENCRYPT)
 			status = process_openssl_cipher_encrypt(mbuf_src, dst,
 					op->sym->cipher.data.offset, iv,
-					srclen, sess->cipher.ctx);
+					srclen, ctx_copy, inplace);
 		else
 			status = process_openssl_cipher_decrypt(mbuf_src, dst,
 					op->sym->cipher.data.offset, iv,
-					srclen, sess->cipher.ctx);
+					srclen, ctx_copy, inplace);
 	else
 		status = process_openssl_cipher_des3ctr(mbuf_src, dst,
 				op->sym->cipher.data.offset, iv,
 				sess->cipher.key.data, srclen,
-				sess->cipher.ctx);
+				ctx_copy);
 
+	EVP_CIPHER_CTX_free(ctx_copy);
 	if (status != 0)
 		op->status = RTE_CRYPTO_OP_STATUS_ERROR;
 }
@@ -1441,7 +1490,7 @@ process_openssl_docsis_bpi_op(struct rte_crypto_op *op,
 			/* Encrypt with the block aligned stream with CBC mode */
 			status = process_openssl_cipher_encrypt(mbuf_src, dst,
 					op->sym->cipher.data.offset, iv,
-					srclen, sess->cipher.ctx);
+					srclen, sess->cipher.ctx, 0);
 			if (last_block_len) {
 				/* Point at last block */
 				dst += srclen;
@@ -1491,7 +1540,7 @@ process_openssl_docsis_bpi_op(struct rte_crypto_op *op,
 			/* Decrypt with CBC mode */
 			status |= process_openssl_cipher_decrypt(mbuf_src, dst,
 					op->sym->cipher.data.offset, iv,
-					srclen, sess->cipher.ctx);
+					srclen, sess->cipher.ctx, 0);
 		}
 	}
 
@@ -1507,6 +1556,8 @@ process_openssl_auth_op(struct openssl_qp *qp, struct rte_crypto_op *op,
 {
 	uint8_t *dst;
 	int srclen, status;
+	EVP_MD_CTX *ctx_a;
+	HMAC_CTX *ctx_h;
 
 	srclen = op->sym->auth.data.length;
 
@@ -1514,14 +1565,20 @@ process_openssl_auth_op(struct openssl_qp *qp, struct rte_crypto_op *op,
 
 	switch (sess->auth.mode) {
 	case OPENSSL_AUTH_AS_AUTH:
+		ctx_a = EVP_MD_CTX_create();
+		EVP_MD_CTX_copy_ex(ctx_a, sess->auth.auth.ctx);
 		status = process_openssl_auth(mbuf_src, dst,
 				op->sym->auth.data.offset, NULL, NULL, srclen,
-				sess->auth.auth.ctx, sess->auth.auth.evp_algo);
+				ctx_a, sess->auth.auth.evp_algo);
+		EVP_MD_CTX_destroy(ctx_a);
 		break;
 	case OPENSSL_AUTH_AS_HMAC:
+		ctx_h = HMAC_CTX_new();
+		HMAC_CTX_copy(ctx_h, sess->auth.hmac.ctx);
 		status = process_openssl_auth_hmac(mbuf_src, dst,
 				op->sym->auth.data.offset, srclen,
-				sess->auth.hmac.ctx);
+				ctx_h);
+		HMAC_CTX_free(ctx_h);
 		break;
 	default:
 		status = -1;
@@ -1529,7 +1586,7 @@ process_openssl_auth_op(struct openssl_qp *qp, struct rte_crypto_op *op,
 	}
 
 	if (sess->auth.operation == RTE_CRYPTO_AUTH_OP_VERIFY) {
-		if (memcmp(dst, op->sym->auth.digest.data,
+		if (CRYPTO_memcmp(dst, op->sym->auth.digest.data,
 				sess->auth.digest_length) != 0) {
 			op->status = RTE_CRYPTO_OP_STATUS_AUTH_FAILED;
 		}
@@ -1790,10 +1847,13 @@ process_openssl_modinv_op(struct rte_crypto_op *cop,
 
 	if (BN_mod_inverse(res, base, sess->u.m.modulus, sess->u.m.ctx)) {
 		cop->status = RTE_CRYPTO_OP_STATUS_SUCCESS;
-		op->modinv.base.length = BN_bn2bin(res, op->modinv.base.data);
+		op->modinv.result.length = BN_bn2bin(res, op->modinv.result.data);
 	} else {
 		cop->status = RTE_CRYPTO_OP_STATUS_ERROR;
 	}
+
+	BN_clear(res);
+	BN_clear(base);
 
 	return 0;
 }
@@ -1814,16 +1874,19 @@ process_openssl_modexp_op(struct rte_crypto_op *cop,
 		return -1;
 	}
 
-	base = BN_bin2bn((const unsigned char *)op->modinv.base.data,
-			op->modinv.base.length, base);
+	base = BN_bin2bn((const unsigned char *)op->modex.base.data,
+			op->modex.base.length, base);
 
 	if (BN_mod_exp(res, base, sess->u.e.exp,
 				sess->u.e.mod, sess->u.e.ctx)) {
-		op->modinv.base.length = BN_bn2bin(res, op->modinv.base.data);
+		op->modex.result.length = BN_bn2bin(res, op->modex.result.data);
 		cop->status = RTE_CRYPTO_OP_STATUS_SUCCESS;
 	} else {
 		cop->status = RTE_CRYPTO_OP_STATUS_ERROR;
 	}
+
+	BN_clear(res);
+	BN_clear(base);
 
 	return 0;
 }
@@ -1842,9 +1905,7 @@ process_openssl_rsa_op(struct rte_crypto_op *cop,
 	cop->status = RTE_CRYPTO_OP_STATUS_SUCCESS;
 
 	switch (pad) {
-	case RTE_CRYPTO_RSA_PKCS1_V1_5_BT0:
-	case RTE_CRYPTO_RSA_PKCS1_V1_5_BT1:
-	case RTE_CRYPTO_RSA_PKCS1_V1_5_BT2:
+	case RTE_CRYPTO_RSA_PADDING_PKCS1_5:
 		pad = RSA_PKCS1_PADDING;
 		break;
 	case RTE_CRYPTO_RSA_PADDING_NONE:
@@ -1861,19 +1922,19 @@ process_openssl_rsa_op(struct rte_crypto_op *cop,
 	case RTE_CRYPTO_ASYM_OP_ENCRYPT:
 		ret = RSA_public_encrypt(op->rsa.message.length,
 				op->rsa.message.data,
-				op->rsa.message.data,
+				op->rsa.cipher.data,
 				rsa,
 				pad);
 
 		if (ret > 0)
-			op->rsa.message.length = ret;
+			op->rsa.cipher.length = ret;
 		OPENSSL_LOG(DEBUG,
 				"length of encrypted text %d\n", ret);
 		break;
 
 	case RTE_CRYPTO_ASYM_OP_DECRYPT:
-		ret = RSA_private_decrypt(op->rsa.message.length,
-				op->rsa.message.data,
+		ret = RSA_private_decrypt(op->rsa.cipher.length,
+				op->rsa.cipher.data,
 				op->rsa.message.data,
 				rsa,
 				pad);
@@ -1908,7 +1969,7 @@ process_openssl_rsa_op(struct rte_crypto_op *cop,
 				"Length of public_decrypt %d "
 				"length of message %zd\n",
 				ret, op->rsa.message.length);
-		if ((ret <= 0) || (memcmp(tmp, op->rsa.message.data,
+		if ((ret <= 0) || (CRYPTO_memcmp(tmp, op->rsa.message.data,
 				op->rsa.message.length))) {
 			OPENSSL_LOG(ERR, "RSA sign Verification failed");
 			cop->status = RTE_CRYPTO_OP_STATUS_ERROR;
@@ -2117,11 +2178,13 @@ cryptodev_openssl_create(const char *name,
 	dev->feature_flags = RTE_CRYPTODEV_FF_SYMMETRIC_CRYPTO |
 			RTE_CRYPTODEV_FF_SYM_OPERATION_CHAINING |
 			RTE_CRYPTODEV_FF_CPU_AESNI |
+			RTE_CRYPTODEV_FF_IN_PLACE_SGL |
 			RTE_CRYPTODEV_FF_OOP_SGL_IN_LB_OUT |
 			RTE_CRYPTODEV_FF_OOP_LB_IN_LB_OUT |
-			RTE_CRYPTODEV_FF_ASYMMETRIC_CRYPTO;
+			RTE_CRYPTODEV_FF_ASYMMETRIC_CRYPTO |
+			RTE_CRYPTODEV_FF_RSA_PRIV_OP_KEY_EXP |
+			RTE_CRYPTODEV_FF_RSA_PRIV_OP_KEY_QT;
 
-	/* Set vector instructions mode supported */
 	internals = dev->data->dev_private;
 
 	internals->max_nb_qpairs = init_params->max_nb_queue_pairs;

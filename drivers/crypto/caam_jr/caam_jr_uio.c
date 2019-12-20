@@ -23,11 +23,6 @@
 #include <caam_jr_pvt.h>
 #include <caam_jr_log.h>
 
-/* RTA header files */
-#include <hw/desc/common.h>
-#include <hw/desc/algo.h>
-#include <hw/desc/ipsec.h>
-
 /* Prefix path to sysfs directory where UIO device attributes are exported.
  * Path for UIO device X is /sys/class/uio/uioX
  */
@@ -362,8 +357,8 @@ free_job_ring(uint32_t uio_fd)
 			job_ring->register_base_addr,
 			(unsigned long)job_ring->map_size, strerror(errno));
 	} else
-		CAAM_JR_DEBUG("  JR UIO memory unmapped at %p",
-				job_ring->register_base_addr);
+		CAAM_JR_DEBUG("JR UIO memory is unmapped");
+
 	job_ring->register_base_addr = NULL;
 }
 
@@ -445,7 +440,11 @@ sec_configure(void)
 			ret = file_read_first_line(SEC_UIO_DEVICE_SYS_ATTR_PATH,
 					dir->d_name, "name", uio_name);
 			CAAM_JR_INFO("sec device uio name: %s", uio_name);
-			SEC_ASSERT(ret == 0, -1, "file_read_first_line failed");
+			if (ret != 0) {
+				CAAM_JR_ERR("file_read_first_line failed\n");
+				closedir(d);
+				return -1;
+			}
 
 			if (file_name_match_extract(uio_name,
 						SEC_UIO_DEVICE_NAME,

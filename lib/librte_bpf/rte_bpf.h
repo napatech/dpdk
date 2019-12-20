@@ -32,7 +32,7 @@ enum rte_bpf_arg_type {
 	RTE_BPF_ARG_RAW,        /**< scalar value */
 	RTE_BPF_ARG_PTR = 0x10, /**< pointer to data buffer */
 	RTE_BPF_ARG_PTR_MBUF,   /**< pointer to rte_mbuf */
-	RTE_BPF_ARG_PTR_STACK,
+	RTE_BPF_ARG_RESERVED,   /**< reserved for internal use */
 };
 
 /**
@@ -113,14 +113,15 @@ struct rte_bpf;
  * @param bpf
  *   BPF handle to destroy.
  */
-void __rte_experimental
+__rte_experimental
+void
 rte_bpf_destroy(struct rte_bpf *bpf);
 
 /**
  * Create a new eBPF execution context and load given BPF code into it.
  *
  * @param prm
- *  Parameters used to create and initialise the BPF exeution context.
+ *  Parameters used to create and initialise the BPF execution context.
  * @return
  *   BPF handle that is used in future BPF operations,
  *   or NULL on error, with error code set in rte_errno.
@@ -128,15 +129,19 @@ rte_bpf_destroy(struct rte_bpf *bpf);
  *   - EINVAL - invalid parameter passed to function
  *   - ENOMEM - can't reserve enough memory
  */
-struct rte_bpf * __rte_experimental
+__rte_experimental
+struct rte_bpf *
 rte_bpf_load(const struct rte_bpf_prm *prm);
 
 /**
  * Create a new eBPF execution context and load BPF code from given ELF
  * file into it.
+ * Note that if the function will encounter EBPF_PSEUDO_CALL instruction
+ * that references external symbol, it will treat is as standard BPF_CALL
+ * to the external helper function.
  *
  * @param prm
- *  Parameters used to create and initialise the BPF exeution context.
+ *  Parameters used to create and initialise the BPF execution context.
  * @param fname
  *  Pathname for a ELF file.
  * @param sname
@@ -148,7 +153,8 @@ rte_bpf_load(const struct rte_bpf_prm *prm);
  *   - EINVAL - invalid parameter passed to function
  *   - ENOMEM - can't reserve enough memory
  */
-struct rte_bpf * __rte_experimental
+__rte_experimental
+struct rte_bpf *
 rte_bpf_elf_load(const struct rte_bpf_prm *prm, const char *fname,
 		const char *sname);
 /**
@@ -161,7 +167,8 @@ rte_bpf_elf_load(const struct rte_bpf_prm *prm, const char *fname,
  * @return
  *   BPF execution return value.
  */
-uint64_t __rte_experimental
+__rte_experimental
+uint64_t
 rte_bpf_exec(const struct rte_bpf *bpf, void *ctx);
 
 /**
@@ -178,12 +185,13 @@ rte_bpf_exec(const struct rte_bpf *bpf, void *ctx);
  * @return
  *   number of successfully processed inputs.
  */
-uint32_t __rte_experimental
+__rte_experimental
+uint32_t
 rte_bpf_exec_burst(const struct rte_bpf *bpf, void *ctx[], uint64_t rc[],
 		uint32_t num);
 
 /**
- * Provide information about natively compield code for given BPF handle.
+ * Provide information about natively compiled code for given BPF handle.
  *
  * @param bpf
  *   handle for the BPF code.
@@ -193,7 +201,8 @@ rte_bpf_exec_burst(const struct rte_bpf *bpf, void *ctx[], uint64_t rc[],
  *   - -EINVAL if the parameters are invalid.
  *   - Zero if operation completed successfully.
  */
-int __rte_experimental
+__rte_experimental
+int
 rte_bpf_get_jit(const struct rte_bpf *bpf, struct rte_bpf_jit *jit);
 
 #ifdef __cplusplus

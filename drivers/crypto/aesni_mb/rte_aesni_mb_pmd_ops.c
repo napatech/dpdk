@@ -4,11 +4,12 @@
 
 #include <string.h>
 
+#include <rte_string_fns.h>
 #include <rte_common.h>
 #include <rte_malloc.h>
 #include <rte_cryptodev_pmd.h>
 
-#include "rte_aesni_mb_pmd_private.h"
+#include "aesni_mb_pmd_private.h"
 
 
 static const struct rte_cryptodev_capabilities aesni_mb_pmd_capabilities[] = {
@@ -614,7 +615,7 @@ aesni_mb_pmd_qp_create_processed_ops_ring(struct aesni_mb_qp *qp,
 	struct rte_ring *r;
 	char ring_name[RTE_CRYPTODEV_NAME_MAX_LEN];
 
-	unsigned int n = snprintf(ring_name, sizeof(ring_name), "%s", qp->name);
+	unsigned int n = strlcpy(ring_name, qp->name, sizeof(ring_name));
 
 	if (n >= sizeof(ring_name))
 		return NULL;

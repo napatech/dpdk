@@ -45,7 +45,8 @@ enum {
  * @param queue
  *   The identifier of the RX queue on the given port
  */
-void __rte_experimental
+__rte_experimental
+void
 rte_bpf_eth_rx_unload(uint16_t port, uint16_t queue);
 
 /**
@@ -57,7 +58,8 @@ rte_bpf_eth_rx_unload(uint16_t port, uint16_t queue);
  * @param queue
  *   The identifier of the TX queue on the given port
  */
-void __rte_experimental
+__rte_experimental
+void
 rte_bpf_eth_tx_unload(uint16_t port, uint16_t queue);
 
 /**
@@ -73,14 +75,15 @@ rte_bpf_eth_tx_unload(uint16_t port, uint16_t queue);
  * @param sname
  *  Name of the executable section within the file to load.
  * @param prm
- *  Parameters used to create and initialise the BPF exeution context.
+ *  Parameters used to create and initialise the BPF execution context.
  * @param flags
  *  Flags that define expected behavior of the loaded filter
  *  (i.e. jited/non-jited version to use).
  * @return
  *   Zero on successful completion or negative error code otherwise.
  */
-int __rte_experimental
+__rte_experimental
+int
 rte_bpf_eth_rx_elf_load(uint16_t port, uint16_t queue,
 	const struct rte_bpf_prm *prm, const char *fname, const char *sname,
 	uint32_t flags);
@@ -98,14 +101,15 @@ rte_bpf_eth_rx_elf_load(uint16_t port, uint16_t queue,
  * @param sname
  *  Name of the executable section within the file to load.
  * @param prm
- *  Parameters used to create and initialise the BPF exeution context.
+ *  Parameters used to create and initialise the BPF execution context.
  * @param flags
  *  Flags that define expected expected behavior of the loaded filter
  *  (i.e. jited/non-jited version to use).
  * @return
  *   Zero on successful completion or negative error code otherwise.
  */
-int __rte_experimental
+__rte_experimental
+int
 rte_bpf_eth_tx_elf_load(uint16_t port, uint16_t queue,
 	const struct rte_bpf_prm *prm, const char *fname, const char *sname,
 	uint32_t flags);

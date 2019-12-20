@@ -48,6 +48,7 @@
 #include <rte_string_fns.h>
 #include <rte_cycles.h>
 #include <rte_kvargs.h>
+#include <rte_ether.h>
 #include <rte_flow.h>
 #include <rte_flow_driver.h>
 #include <rte_version.h>
@@ -68,7 +69,7 @@ int ntacc_logtype;
 #define ETH_NTACC_NTPL_ARG "ntpl"
 
 #define HW_MAX_PKT_LEN  10000
-#define HW_MTU    (HW_MAX_PKT_LEN - ETHER_HDR_LEN - ETHER_CRC_LEN) /**< MTU */
+#define HW_MTU    (HW_MAX_PKT_LEN - RTE_ETHER_HDR_LEN - RTE_ETHER_CRC_LEN) /**< MTU */
 
 #define MAX_NTACC_PORTS 32
 #define STREAMIDS_PER_PORT  (256 / internals->nbPortsInSystem)
@@ -91,7 +92,7 @@ struct supportedDriver_s supportedDriver = {3, 11, 0};
 
 struct supportedAdapters_s supportedAdapters[NB_SUPPORTED_FPGAS] =
 {
-  { 200, 9500, 9, 8, 0 },
+  { 200, 9500, 9, 8, 0 },  
   { 200, 9501, 9, 8, 0 },
   { 200, 9502, 9, 8, 0 },
   { 200, 9503, 9, 8, 0 },
@@ -106,6 +107,7 @@ struct supportedAdapters_s supportedAdapters[NB_SUPPORTED_FPGAS] =
   { 200, 7001, 12, 0, 0 },
   { 200, 9521, 18, 11, 0 },
   { 200, 9526, 18, 10, 0 },
+  { 200, 9534, 21, 28, 0 },
 };
 
 static void *_libnt;
@@ -154,7 +156,7 @@ static const char *valid_arguments[] = {
   NULL
 };
 
-static struct ether_addr eth_addr[MAX_NTACC_PORTS];
+static struct rte_ether_addr eth_addr[MAX_NTACC_PORTS];
 
 static struct {
   struct pmd_internals *pInternals;
@@ -1089,7 +1091,7 @@ static int eth_dev_configure(struct rte_eth_dev *dev)
   return 0;
 }
 
-static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
+static int eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 {
   struct pmd_internals *internals = dev->data->dev_private;
   NtInfoStream_t hInfo;
@@ -1143,23 +1145,20 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
 
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
-    _log_out_of_memory_errors(__func__);
-    return;
+    return _log_out_of_memory_errors(__func__);
   }
 
   // Read speed capabilities for the port
   if ((status = (*_NT_InfoOpen)(&hInfo, "DPDK Info stream")) != NT_SUCCESS) {
-    _log_nt_errors(status, "NT_InfoOpen failed", __func__);
     rte_free(pInfo);
-    return;
+    return _log_nt_errors(status, "NT_InfoOpen failed", __func__);
   }
 
   pInfo->cmd = NT_INFO_CMD_READ_PORT_V8;
   pInfo->u.port_v8.portNo = (uint8_t)(internals->port);
   if ((status = (*_NT_InfoRead)(hInfo, pInfo)) != 0) {
-    _log_nt_errors(status, "NT_InfoRead failed", __func__);
     rte_free(pInfo);
-    return;
+    return _log_nt_errors(status, "NT_InfoRead failed", __func__);
   }
   (void)(*_NT_InfoClose)(hInfo);
 
@@ -1187,6 +1186,7 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
     dev_info->speed_capa |= ETH_LINK_SPEED_50G;
   }
   rte_free(pInfo);
+  return 0;
 }
 
 #ifdef USE_SW_STAT
@@ -1289,7 +1289,7 @@ static int eth_stats_get(struct rte_eth_dev *dev,
 #endif
 
 #ifdef USE_SW_STAT
-static void eth_stats_reset(struct rte_eth_dev *dev)
+static int eth_stats_reset(struct rte_eth_dev *dev)
 {
   unsigned i;
   struct pmd_internals *internal = dev->data->dev_private;
@@ -1303,9 +1303,10 @@ static void eth_stats_reset(struct rte_eth_dev *dev)
     internal->txq[i].tx_bytes = 0;
     internal->txq[i].err_pkts = 0;
   }
+  return 0;
 }
 #else
-static void eth_stats_reset(struct rte_eth_dev *dev)
+static int eth_stats_reset(struct rte_eth_dev *dev)
 {
   struct pmd_internals *internals = dev->data->dev_private;
   int status;
@@ -1313,8 +1314,7 @@ static void eth_stats_reset(struct rte_eth_dev *dev)
 
   pStatData = (NtStatistics_t *)rte_malloc(internals->name, sizeof(NtStatistics_t), 0);
   if (!pStatData) {
-    _log_out_of_memory_errors(__func__);
-    return;
+    return _log_out_of_memory_errors(__func__);
   }
 
   pStatData->cmd = NT_STATISTICS_READ_CMD_QUERY_V2;
@@ -1323,12 +1323,12 @@ static void eth_stats_reset(struct rte_eth_dev *dev)
   NTACC_LOCK(&internals->statlock);
   if ((status = (*_NT_StatRead)(internals->hStat, pStatData)) != 0) {
     NTACC_UNLOCK(&internals->statlock);
-    _log_nt_errors(status, "NT_StatRead failed", __func__);
     rte_free(pStatData);
-    return;
+    return _log_nt_errors(status, "NT_StatRead failed", __func__);
   }
   NTACC_UNLOCK(&internals->statlock);
   rte_free(pStatData);
+  return 0;
 }
 #endif
 

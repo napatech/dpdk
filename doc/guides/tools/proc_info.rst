@@ -44,7 +44,7 @@ If no port mask is specified xstats are reset for all DPDK ports.
 **-m**: Print DPDK memory information.
 
 **--show-port**
-The show-port parameter displays port level various configuration informationi
+The show-port parameter displays port level various configuration information
 associated to RX port queue pair.
 
 **--show-tm**
@@ -56,14 +56,14 @@ The show-crypto parameter displays available cryptodev configurations,
 settings and stats per node.
 
 **--show-ring[=name]**
-The show-ring pararmeter display current allocation of all ring with
+The show-ring parameter display current allocation of all ring with
 debug information. Specifying the name allows to display details for specific
 ring. For invalid or no ring name, whole list is dump.
 
 **--show-mempool[=name]**
 The show-mempool parameter display current allocation of all mempool
 debug information. Specifying the name allows to display details for specific
-specific mempool. For invalid or no mempool name, whole list is dump.
+mempool. For invalid or no mempool name, whole list is dump.
 
 **--iter-mempool=name**
 The iter-mempool parameter iterates and displays mempool elements specified
@@ -76,7 +76,7 @@ Limitations
 
 * When running ``dpdk-procinfo`` with shared library mode, it is required to
   pass the same NIC PMD libraries as used for the primary application. Any
-  mismatch in PMD library arguments can lead to undefined behaviour and results
+  mismatch in PMD library arguments can lead to undefined behavior and results
   affecting primary application too.
 
 * Stats retrieval using ``dpdk-procinfo`` is not supported for virtual devices like PCAP and TAP.

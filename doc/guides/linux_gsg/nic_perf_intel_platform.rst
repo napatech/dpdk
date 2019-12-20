@@ -133,7 +133,7 @@ Configurations before running DPDK
 
       # Build DPDK target.
       cd dpdk_folder
-      make install T=x86_64-native-linuxapp-gcc -j
+      make install T=x86_64-native-linux-gcc -j
 
       # Get the hugepage size.
       awk '/Hugepagesize/ {print $2}' /proc/meminfo
@@ -150,7 +150,7 @@ Configurations before running DPDK
       # Mount to the specific folder.
       mount -t hugetlbfs nodev /mnt/huge
 
-2. Check the CPU layout using using the DPDK ``cpu_layout`` utility:
+2. Check the CPU layout using the DPDK ``cpu_layout`` utility:
 
    .. code-block:: console
 

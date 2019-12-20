@@ -20,38 +20,6 @@ extern "C" {
 #include <rte_common.h>
 
 /**
- * String that appears before the version number
- */
-#define RTE_VER_PREFIX "DPDK"
-
-/**
- * Major version/year number i.e. the yy in yy.mm.z
- */
-#define RTE_VER_YEAR 19
-
-/**
- * Minor version/month number i.e. the mm in yy.mm.z
- */
-#define RTE_VER_MONTH 2
-
-/**
- * Patch level number i.e. the z in yy.mm.z
- */
-#define RTE_VER_MINOR 0
-
-/**
- * Extra string to be appended to version number
- */
-#define RTE_VER_SUFFIX ""
-
-/**
- * Patch release number
- *   0-15 = release candidates
- *   16   = release
- */
-#define RTE_VER_RELEASE 16
-
-/**
 * Extra Napatech major version numbers
 */
 #define RTE_NT_MAJOR_VER 2
@@ -104,9 +72,7 @@ rte_version(void)
 			RTE_VER_MONTH,
 			RTE_VER_MINOR,
 			RTE_VER_SUFFIX,
-			RTE_VER_RELEASE < 16 ?
-				RTE_VER_RELEASE :
-				RTE_VER_RELEASE - 16);
+			RTE_VER_RELEASE);
 
 	if (strlen(RTE_NT_VER_SUFFIX) == 0) {
 		snprintf(&version[strlen(version)], sizeof(version), "_%d.%d", RTE_NT_MAJOR_VER, RTE_NT_MINOR_VER);
@@ -114,7 +80,6 @@ rte_version(void)
 	else {
 		snprintf(&version[strlen(version)], sizeof(version), "_%d.%d-%s", RTE_NT_MAJOR_VER, RTE_NT_MINOR_VER, RTE_NT_VER_SUFFIX);
 	}
-
 	return version;
 }
 

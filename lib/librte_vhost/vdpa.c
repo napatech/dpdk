@@ -49,7 +49,7 @@ rte_vdpa_register_device(struct rte_vdpa_dev_addr *addr,
 	char device_name[MAX_VDPA_NAME_LEN];
 	int i;
 
-	if (vdpa_device_num >= MAX_VHOST_DEVICE)
+	if (vdpa_device_num >= MAX_VHOST_DEVICE || addr == NULL || ops == NULL)
 		return -1;
 
 	for (i = 0; i < MAX_VHOST_DEVICE; i++) {
@@ -66,7 +66,7 @@ rte_vdpa_register_device(struct rte_vdpa_dev_addr *addr,
 	if (i == MAX_VHOST_DEVICE)
 		return -1;
 
-	sprintf(device_name, "vdpa-dev-%d", i);
+	snprintf(device_name, sizeof(device_name), "vdpa-dev-%d", i);
 	dev = rte_zmalloc(device_name, sizeof(struct rte_vdpa_device),
 			RTE_CACHE_LINE_SIZE);
 	if (!dev)
@@ -99,6 +99,9 @@ rte_vdpa_find_device_id(struct rte_vdpa_dev_addr *addr)
 	struct rte_vdpa_device *dev;
 	int i;
 
+	if (addr == NULL)
+		return -1;
+
 	for (i = 0; i < MAX_VHOST_DEVICE; ++i) {
 		dev = vdpa_devices[i];
 		if (dev && is_same_vdpa_device(&dev->addr, addr))
@@ -123,133 +126,7 @@ rte_vdpa_get_device_num(void)
 	return vdpa_device_num;
 }
 
-static bool
-invalid_desc_check(struct virtio_net *dev, struct vhost_virtqueue *vq,
-		uint64_t desc_iova, uint64_t desc_len, uint8_t perm)
-{
-	uint64_t desc_addr, desc_chunck_len;
-
-	while (desc_len) {
-		desc_chunck_len = desc_len;
-		desc_addr = vhost_iova_to_vva(dev, vq,
-				desc_iova,
-				&desc_chunck_len,
-				perm);
-
-		if (!desc_addr)
-			return true;
-
-		desc_len -= desc_chunck_len;
-		desc_iova += desc_chunck_len;
-	}
-
-	return false;
-}
-
-int __rte_experimental
-rte_vdpa_relay_vring_avail(int vid, uint16_t qid, void *vring_m)
-{
-	struct virtio_net *dev = get_device(vid);
-	uint16_t idx, idx_m, desc_id;
-	struct vring_desc desc;
-	struct vhost_virtqueue *vq;
-	struct vring_desc *desc_ring;
-	struct vring_desc *idesc = NULL;
-	struct vring *s_vring;
-	uint64_t dlen;
-	uint32_t nr_descs;
-	int ret;
-	uint8_t perm;
-
-	if (!dev || !vring_m)
-		return -1;
-
-	if (qid >= dev->nr_vring)
-		return -1;
-
-	if (vq_is_packed(dev))
-		return -1;
-
-	s_vring = (struct vring *)vring_m;
-	vq = dev->virtqueue[qid];
-	idx = vq->avail->idx;
-	idx_m = s_vring->avail->idx;
-	ret = (uint16_t)(idx - idx_m);
-
-	while (idx_m != idx) {
-		/* avail entry copy */
-		desc_id = vq->avail->ring[idx_m & (vq->size - 1)];
-		if (unlikely(desc_id >= vq->size))
-			return -1;
-
-		s_vring->avail->ring[idx_m & (vq->size - 1)] = desc_id;
-		desc_ring = vq->desc;
-		nr_descs = vq->size;
-
-		if (vq->desc[desc_id].flags & VRING_DESC_F_INDIRECT) {
-			dlen = vq->desc[desc_id].len;
-			nr_descs = dlen / sizeof(struct vring_desc);
-			if (unlikely(nr_descs > vq->size))
-				return -1;
-
-			desc_ring = (struct vring_desc *)(uintptr_t)
-				vhost_iova_to_vva(dev, vq,
-						vq->desc[desc_id].addr, &dlen,
-						VHOST_ACCESS_RO);
-			if (unlikely(!desc_ring))
-				return -1;
-
-			if (unlikely(dlen < vq->desc[desc_id].len)) {
-				idesc = alloc_copy_ind_table(dev, vq,
-						vq->desc[desc_id].addr,
-						vq->desc[desc_id].len);
-				if (unlikely(!idesc))
-					return -1;
-
-				desc_ring = idesc;
-			}
-
-			desc_id = 0;
-		}
-
-		/* check if the buf addr is within the guest memory */
-		do {
-			if (unlikely(desc_id >= vq->size))
-				goto fail;
-			if (unlikely(nr_descs-- == 0))
-				goto fail;
-			desc = desc_ring[desc_id];
-			perm = desc.flags & VRING_DESC_F_WRITE ?
-				VHOST_ACCESS_WO : VHOST_ACCESS_RO;
-			if (invalid_desc_check(dev, vq, desc.addr, desc.len,
-						perm))
-				goto fail;
-			desc_id = desc.next;
-		} while (desc.flags & VRING_DESC_F_NEXT);
-
-		if (unlikely(idesc)) {
-			free_ind_table(idesc);
-			idesc = NULL;
-		}
-
-		idx_m++;
-	}
-
-	rte_smp_wmb();
-	s_vring->avail->idx = idx;
-
-	if (dev->features & (1ULL << VIRTIO_RING_F_EVENT_IDX))
-		vhost_avail_event(vq) = idx;
-
-	return ret;
-
-fail:
-	if (unlikely(idesc))
-		free_ind_table(idesc);
-	return -1;
-}
-
-int __rte_experimental
+int
 rte_vdpa_relay_vring_used(int vid, uint16_t qid, void *vring_m)
 {
 	struct virtio_net *dev = get_device(vid);
@@ -304,7 +181,7 @@ rte_vdpa_relay_vring_used(int vid, uint16_t qid, void *vring_m)
 				return -1;
 
 			if (unlikely(dlen < vq->desc[desc_id].len)) {
-				idesc = alloc_copy_ind_table(dev, vq,
+				idesc = vhost_alloc_copy_ind_table(dev, vq,
 						vq->desc[desc_id].addr,
 						vq->desc[desc_id].len);
 				if (unlikely(!idesc))
@@ -324,7 +201,8 @@ rte_vdpa_relay_vring_used(int vid, uint16_t qid, void *vring_m)
 				goto fail;
 			desc = desc_ring[desc_id];
 			if (desc.flags & VRING_DESC_F_WRITE)
-				vhost_log_write(dev, desc.addr, desc.len);
+				vhost_log_write_iova(dev, vq, desc.addr,
+						     desc.len);
 			desc_id = desc.next;
 		} while (desc.flags & VRING_DESC_F_NEXT);
 

@@ -62,6 +62,18 @@ endif
 # process cpu flags
 include $(RTE_SDK)/mk/toolchain/$(RTE_TOOLCHAIN)/rte.toolchain-compat.mk
 
+ifeq ($(CONFIG_RTE_ENABLE_LTO),y)
+# 'fat-lto' is used since pmdinfogen needs to have 'this_pmd_nameX'
+# exported in symbol table and without this option only internal
+# representation is present.
+TOOLCHAIN_CFLAGS += -flto -ffat-lto-objects
+TOOLCHAIN_LDFLAGS += -flto
+# workaround for GCC bug 81440
+ifeq ($(shell test $(GCC_VERSION) -lt 80 && echo 1), 1)
+WERROR_FLAGS += -Wno-lto-type-mismatch
+endif
+endif
+
 # workaround GCC bug with warning "missing initializer" for "= {0}"
 ifeq ($(shell test $(GCC_VERSION) -lt 47 && echo 1), 1)
 WERROR_FLAGS += -Wno-missing-field-initializers
@@ -86,6 +98,9 @@ WERROR_FLAGS += -Wimplicit-fallthrough=2
 # Ignore errors for snprintf truncation
 WERROR_FLAGS += -Wno-format-truncation
 endif
+
+# disable packed member unalign warnings
+WERROR_FLAGS += -Wno-address-of-packed-member
 
 export CC AS AR LD OBJCOPY OBJDUMP STRIP READELF
 export TOOLCHAIN_CFLAGS TOOLCHAIN_LDFLAGS TOOLCHAIN_ASFLAGS

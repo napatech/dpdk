@@ -57,11 +57,9 @@ enum rte_ring_queue_behavior {
 };
 
 #define RTE_RING_MZ_PREFIX "RG_"
-/**< The maximum length of a ring name. */
+/** The maximum length of a ring name. */
 #define RTE_RING_NAMESIZE (RTE_MEMZONE_NAMESIZE - \
 			   sizeof(RTE_RING_MZ_PREFIX) + 1)
-
-struct rte_memzone; /* forward declaration, so as not to require memzone.h */
 
 /* structure to hold a pair of head/tail values and other metadata */
 struct rte_ring_headtail {
@@ -302,7 +300,7 @@ void rte_ring_dump(FILE *f, const struct rte_ring *r);
  * (powerpc/arm).
  * There are 2 choices for the users
  * 1.use rmb() memory barrier
- * 2.use one-direcion load_acquire/store_release barrier,defined by
+ * 2.use one-direction load_acquire/store_release barrier,defined by
  * CONFIG_RTE_USE_C11_MEM_MODEL=y
  * It depends on performance test results.
  * By default, move common functions to rte_ring_generic.h
@@ -669,6 +667,23 @@ rte_ring_dequeue(struct rte_ring *r, void **obj_p)
 {
 	return rte_ring_dequeue_bulk(r, obj_p, 1, NULL) ? 0 : -ENOENT;
 }
+
+/**
+ * Flush a ring.
+ *
+ * This function flush all the elements in a ring
+ *
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
+ * @warning
+ * Make sure the ring is not in use while calling this function.
+ *
+ * @param r
+ *   A pointer to the ring structure.
+ */
+__rte_experimental
+void
+rte_ring_reset(struct rte_ring *r);
 
 /**
  * Return the number of entries in a ring.

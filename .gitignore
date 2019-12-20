@@ -1,9 +1,16 @@
+# ignore hidden files
+.*
+
+# ignore generated documentation tables
 doc/guides/nics/overview_table.txt
 doc/guides/cryptodevs/overview_feature_table.txt
 doc/guides/cryptodevs/overview_cipher_table.txt
 doc/guides/cryptodevs/overview_auth_table.txt
 doc/guides/cryptodevs/overview_aead_table.txt
+doc/guides/cryptodevs/overview_asym_table.txt
 doc/guides/compressdevs/overview_feature_table.txt
+
+# ignore generated ctags/cscope files
 cscope.out.po
 cscope.out.in
 cscope.out
@@ -22,3 +29,13 @@ build/
 *.vtg
 *.project
 *.workspace
+
+# ignore python bytecode files
+*.pyc
+
+# ignore default build directory, and directories from test-meson-builds.sh
+build
+build-*
+# ignore other build directory patterns
+*-gcc*
+*-clang*

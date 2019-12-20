@@ -26,6 +26,7 @@
 
 #include <rte_branch_prediction.h>
 #include <rte_common.h>
+#include <rte_eal_memconfig.h>
 #include <rte_errno.h>
 #include <rte_malloc.h>
 #include <rte_memory.h>
@@ -348,7 +349,7 @@ mr_find_next_chunk(struct mlx4_mr *mr, struct mlx4_mr_cache *entry,
 static int
 mr_insert_dev_cache(struct rte_eth_dev *dev, struct mlx4_mr *mr)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx4_priv *priv = dev->data->dev_private;
 	unsigned int n;
 
 	DEBUG("port %u inserting MR(%p) to global cache",
@@ -389,7 +390,7 @@ static struct mlx4_mr *
 mr_lookup_dev_list(struct rte_eth_dev *dev, struct mlx4_mr_cache *entry,
 		   uintptr_t addr)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx4_priv *priv = dev->data->dev_private;
 	struct mlx4_mr *mr;
 
 	/* Iterate all the existing MRs. */
@@ -430,7 +431,7 @@ static uint32_t
 mr_lookup_dev(struct rte_eth_dev *dev, struct mlx4_mr_cache *entry,
 	      uintptr_t addr)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx4_priv *priv = dev->data->dev_private;
 	uint16_t idx;
 	uint32_t lkey = UINT32_MAX;
 	struct mlx4_mr *mr;
@@ -477,7 +478,7 @@ mr_free(struct mlx4_mr *mr)
 }
 
 /**
- * Releass resources of detached MR having no online entry.
+ * Release resources of detached MR having no online entry.
  *
  * @param dev
  *   Pointer to Ethernet device.
@@ -485,10 +486,12 @@ mr_free(struct mlx4_mr *mr)
 static void
 mlx4_mr_garbage_collect(struct rte_eth_dev *dev)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx4_priv *priv = dev->data->dev_private;
 	struct mlx4_mr *mr_next;
 	struct mlx4_mr_list free_list = LIST_HEAD_INITIALIZER(free_list);
 
+	/* Must be called from the primary process. */
+	assert(rte_eal_process_type() == RTE_PROC_PRIMARY);
 	/*
 	 * MR can't be freed with holding the lock because rte_free() could call
 	 * memory free callback function. This will be a deadlock situation.
@@ -525,8 +528,11 @@ mr_find_contig_memsegs_cb(const struct rte_memseg_list *msl,
 }
 
 /**
- * Create a new global Memroy Region (MR) for a missing virtual address.
- * Register entire virtually contiguous memory chunk around the address.
+ * Create a new global Memory Region (MR) for a missing virtual address.
+ * This API should be called on a secondary process, then a request is sent to
+ * the primary process in order to create a MR for the address. As the global MR
+ * list is on the shared memory, following LKey lookup should succeed unless the
+ * request fails.
  *
  * @param dev
  *   Pointer to Ethernet device.
@@ -540,11 +546,54 @@ mr_find_contig_memsegs_cb(const struct rte_memseg_list *msl,
  *   Searched LKey on success, UINT32_MAX on failure and rte_errno is set.
  */
 static uint32_t
-mlx4_mr_create(struct rte_eth_dev *dev, struct mlx4_mr_cache *entry,
-	       uintptr_t addr)
+mlx4_mr_create_secondary(struct rte_eth_dev *dev, struct mlx4_mr_cache *entry,
+			 uintptr_t addr)
 {
-	struct priv *priv = dev->data->dev_private;
-	struct rte_mem_config *mcfg = rte_eal_get_configuration()->mem_config;
+	struct mlx4_priv *priv = dev->data->dev_private;
+	int ret;
+
+	DEBUG("port %u requesting MR creation for address (%p)",
+	      dev->data->port_id, (void *)addr);
+	ret = mlx4_mp_req_mr_create(dev, addr);
+	if (ret) {
+		DEBUG("port %u fail to request MR creation for address (%p)",
+		      dev->data->port_id, (void *)addr);
+		return UINT32_MAX;
+	}
+	rte_rwlock_read_lock(&priv->mr.rwlock);
+	/* Fill in output data. */
+	mr_lookup_dev(dev, entry, addr);
+	/* Lookup can't fail. */
+	assert(entry->lkey != UINT32_MAX);
+	rte_rwlock_read_unlock(&priv->mr.rwlock);
+	DEBUG("port %u MR CREATED by primary process for %p:\n"
+	      "  [0x%" PRIxPTR ", 0x%" PRIxPTR "), lkey=0x%x",
+	      dev->data->port_id, (void *)addr,
+	      entry->start, entry->end, entry->lkey);
+	return entry->lkey;
+}
+
+/**
+ * Create a new global Memory Region (MR) for a missing virtual address.
+ * Register entire virtually contiguous memory chunk around the address.
+ * This must be called from the primary process.
+ *
+ * @param dev
+ *   Pointer to Ethernet device.
+ * @param[out] entry
+ *   Pointer to returning MR cache entry, found in the global cache or newly
+ *   created. If failed to create one, this will not be updated.
+ * @param addr
+ *   Target virtual address to register.
+ *
+ * @return
+ *   Searched LKey on success, UINT32_MAX on failure and rte_errno is set.
+ */
+uint32_t
+mlx4_mr_create_primary(struct rte_eth_dev *dev, struct mlx4_mr_cache *entry,
+		       uintptr_t addr)
+{
+	struct mlx4_priv *priv = dev->data->dev_private;
 	const struct rte_memseg_list *msl;
 	const struct rte_memseg *ms;
 	struct mlx4_mr *mr = NULL;
@@ -570,14 +619,24 @@ mlx4_mr_create(struct rte_eth_dev *dev, struct mlx4_mr_cache *entry,
 	 */
 	mlx4_mr_garbage_collect(dev);
 	/*
-	 * Find out a contiguous virtual address chunk in use, to which the
-	 * given address belongs, in order to register maximum range. In the
-	 * best case where mempools are not dynamically recreated and
+	 * If enabled, find out a contiguous virtual address chunk in use, to
+	 * which the given address belongs, in order to register maximum range.
+	 * In the best case where mempools are not dynamically recreated and
 	 * '--socket-mem' is specified as an EAL option, it is very likely to
 	 * have only one MR(LKey) per a socket and per a hugepage-size even
-	 * though the system memory is highly fragmented.
+	 * though the system memory is highly fragmented. As the whole memory
+	 * chunk will be pinned by kernel, it can't be reused unless entire
+	 * chunk is freed from EAL.
+	 *
+	 * If disabled, just register one memseg (page). Then, memory
+	 * consumption will be minimized but it may drop performance if there
+	 * are many MRs to lookup on the datapath.
 	 */
-	if (!rte_memseg_contig_walk(mr_find_contig_memsegs_cb, &data)) {
+	if (!priv->mr_ext_memseg_en) {
+		data.msl = rte_mem_virt2memseg_list((void *)addr);
+		data.start = RTE_ALIGN_FLOOR(addr, data.msl->page_sz);
+		data.end = data.start + data.msl->page_sz;
+	} else if (!rte_memseg_contig_walk(mr_find_contig_memsegs_cb, &data)) {
 		WARN("port %u unable to find virtually contiguous"
 		     " chunk for address (%p)."
 		     " rte_memseg_contig_walk() failed.",
@@ -623,7 +682,7 @@ alloc_resources:
 	bmp_mem = RTE_PTR_ALIGN_CEIL(mr + 1, RTE_CACHE_LINE_SIZE);
 	mr->ms_bmp = rte_bitmap_init(ms_n, bmp_mem, bmp_size);
 	if (mr->ms_bmp == NULL) {
-		WARN("port %u unable to initialize bitamp for a new MR of"
+		WARN("port %u unable to initialize bitmap for a new MR of"
 		     " address (%p).",
 		     dev->data->port_id, (void *)addr);
 		rte_errno = EINVAL;
@@ -637,7 +696,7 @@ alloc_resources:
 	 * just single page. If not, go on with the big chunk atomically from
 	 * here.
 	 */
-	rte_rwlock_read_lock(&mcfg->memory_hotplug_lock);
+	rte_mcfg_mem_read_lock();
 	data_re = data;
 	if (len > msl->page_sz &&
 	    !rte_memseg_contig_walk(mr_find_contig_memsegs_cb, &data_re)) {
@@ -655,7 +714,7 @@ alloc_resources:
 		 */
 		data.start = RTE_ALIGN_FLOOR(addr, msl->page_sz);
 		data.end = data.start + msl->page_sz;
-		rte_rwlock_read_unlock(&mcfg->memory_hotplug_lock);
+		rte_mcfg_mem_read_unlock();
 		mr_free(mr);
 		goto alloc_resources;
 	}
@@ -675,7 +734,7 @@ alloc_resources:
 		DEBUG("port %u found MR for %p on final lookup, abort",
 		      dev->data->port_id, (void *)addr);
 		rte_rwlock_write_unlock(&priv->mr.rwlock);
-		rte_rwlock_read_unlock(&mcfg->memory_hotplug_lock);
+		rte_mcfg_mem_read_unlock();
 		/*
 		 * Must be unlocked before calling rte_free() because
 		 * mlx4_mr_mem_event_free_cb() can be called inside.
@@ -743,12 +802,12 @@ alloc_resources:
 	/* Lookup can't fail. */
 	assert(entry->lkey != UINT32_MAX);
 	rte_rwlock_write_unlock(&priv->mr.rwlock);
-	rte_rwlock_read_unlock(&mcfg->memory_hotplug_lock);
+	rte_mcfg_mem_read_unlock();
 	return entry->lkey;
 err_mrlock:
 	rte_rwlock_write_unlock(&priv->mr.rwlock);
 err_memlock:
-	rte_rwlock_read_unlock(&mcfg->memory_hotplug_lock);
+	rte_mcfg_mem_read_unlock();
 err_nolock:
 	/*
 	 * In case of error, as this can be called in a datapath, a warning
@@ -761,6 +820,40 @@ err_nolock:
 }
 
 /**
+ * Create a new global Memory Region (MR) for a missing virtual address.
+ * This can be called from primary and secondary process.
+ *
+ * @param dev
+ *   Pointer to Ethernet device.
+ * @param[out] entry
+ *   Pointer to returning MR cache entry, found in the global cache or newly
+ *   created. If failed to create one, this will not be updated.
+ * @param addr
+ *   Target virtual address to register.
+ *
+ * @return
+ *   Searched LKey on success, UINT32_MAX on failure and rte_errno is set.
+ */
+static uint32_t
+mlx4_mr_create(struct rte_eth_dev *dev, struct mlx4_mr_cache *entry,
+	       uintptr_t addr)
+{
+	uint32_t ret = 0;
+
+	switch (rte_eal_process_type()) {
+	case RTE_PROC_PRIMARY:
+		ret = mlx4_mr_create_primary(dev, entry, addr);
+		break;
+	case RTE_PROC_SECONDARY:
+		ret = mlx4_mr_create_secondary(dev, entry, addr);
+		break;
+	default:
+		break;
+	}
+	return ret;
+}
+
+/**
  * Rebuild the global B-tree cache of device from the original MR list.
  *
  * @param dev
@@ -769,7 +862,7 @@ err_nolock:
 static void
 mr_rebuild_dev_cache(struct rte_eth_dev *dev)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx4_priv *priv = dev->data->dev_private;
 	struct mlx4_mr *mr;
 
 	DEBUG("port %u rebuild dev cache[]", dev->data->port_id);
@@ -801,7 +894,7 @@ mr_rebuild_dev_cache(struct rte_eth_dev *dev)
 static void
 mlx4_mr_mem_event_free_cb(struct rte_eth_dev *dev, const void *addr, size_t len)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx4_priv *priv = dev->data->dev_private;
 	const struct rte_memseg_list *msl;
 	struct mlx4_mr *mr;
 	int ms_n;
@@ -889,15 +982,18 @@ void
 mlx4_mr_mem_event_cb(enum rte_mem_event event_type, const void *addr,
 		     size_t len, void *arg __rte_unused)
 {
-	struct priv *priv;
+	struct mlx4_priv *priv;
+	struct mlx4_dev_list *dev_list = &mlx4_shared_data->mem_event_cb_list;
 
+	/* Must be called from the primary process. */
+	assert(rte_eal_process_type() == RTE_PROC_PRIMARY);
 	switch (event_type) {
 	case RTE_MEM_EVENT_FREE:
-		rte_rwlock_read_lock(&mlx4_mem_event_rwlock);
+		rte_rwlock_read_lock(&mlx4_shared_data->mem_event_rwlock);
 		/* Iterate all the existing mlx4 devices. */
-		LIST_FOREACH(priv, &mlx4_mem_event_cb_list, mem_event_cb)
-			mlx4_mr_mem_event_free_cb(priv->dev, addr, len);
-		rte_rwlock_read_unlock(&mlx4_mem_event_rwlock);
+		LIST_FOREACH(priv, dev_list, mem_event_cb)
+			mlx4_mr_mem_event_free_cb(ETH_DEV(priv), addr, len);
+		rte_rwlock_read_unlock(&mlx4_shared_data->mem_event_rwlock);
 		break;
 	case RTE_MEM_EVENT_ALLOC:
 	default:
@@ -926,7 +1022,7 @@ static uint32_t
 mlx4_mr_lookup_dev(struct rte_eth_dev *dev, struct mlx4_mr_ctrl *mr_ctrl,
 		   struct mlx4_mr_cache *entry, uintptr_t addr)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx4_priv *priv = dev->data->dev_private;
 	struct mlx4_mr_btree *bt = &mr_ctrl->cache_bh;
 	uint16_t idx;
 	uint32_t lkey;
@@ -1024,11 +1120,9 @@ uint32_t
 mlx4_rx_addr2mr_bh(struct rxq *rxq, uintptr_t addr)
 {
 	struct mlx4_mr_ctrl *mr_ctrl = &rxq->mr_ctrl;
-	struct priv *priv = rxq->priv;
+	struct mlx4_priv *priv = rxq->priv;
 
-	DEBUG("Rx queue %u: miss on top-half, mru=%u, head=%u, addr=%p",
-	      rxq->stats.idx, mr_ctrl->mru, mr_ctrl->head, (void *)addr);
-	return mlx4_mr_addr2mr_bh(priv->dev, mr_ctrl, addr);
+	return mlx4_mr_addr2mr_bh(ETH_DEV(priv), mr_ctrl, addr);
 }
 
 /**
@@ -1046,11 +1140,9 @@ static uint32_t
 mlx4_tx_addr2mr_bh(struct txq *txq, uintptr_t addr)
 {
 	struct mlx4_mr_ctrl *mr_ctrl = &txq->mr_ctrl;
-	struct priv *priv = txq->priv;
+	struct mlx4_priv *priv = txq->priv;
 
-	DEBUG("Tx queue %u: miss on top-half, mru=%u, head=%u, addr=%p",
-	      txq->stats.idx, mr_ctrl->mru, mr_ctrl->head, (void *)addr);
-	return mlx4_mr_addr2mr_bh(priv->dev, mr_ctrl, addr);
+	return mlx4_mr_addr2mr_bh(ETH_DEV(priv), mr_ctrl, addr);
 }
 
 /**
@@ -1122,7 +1214,7 @@ mlx4_mr_update_ext_mp_cb(struct rte_mempool *mp, void *opaque,
 {
 	struct mr_update_mp_data *data = opaque;
 	struct rte_eth_dev *dev = data->dev;
-	struct priv *priv = dev->data->dev_private;
+	struct mlx4_priv *priv = dev->data->dev_private;
 	struct mlx4_mr_ctrl *mr_ctrl = data->mr_ctrl;
 	struct mlx4_mr *mr = NULL;
 	uintptr_t addr = (uintptr_t)memhdr->addr;
@@ -1130,6 +1222,7 @@ mlx4_mr_update_ext_mp_cb(struct rte_mempool *mp, void *opaque,
 	struct mlx4_mr_cache entry;
 	uint32_t lkey;
 
+	assert(rte_eal_process_type() == RTE_PROC_PRIMARY);
 	/* If already registered, it should return. */
 	rte_rwlock_read_lock(&priv->mr.rwlock);
 	lkey = mr_lookup_dev(dev, &entry, addr);
@@ -1223,9 +1316,17 @@ uint32_t
 mlx4_tx_update_ext_mp(struct txq *txq, uintptr_t addr, struct rte_mempool *mp)
 {
 	struct mlx4_mr_ctrl *mr_ctrl = &txq->mr_ctrl;
-	struct priv *priv = txq->priv;
+	struct mlx4_priv *priv = txq->priv;
 
-	mlx4_mr_update_ext_mp(priv->dev, mr_ctrl, mp);
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+		WARN("port %u using address (%p) from unregistered mempool"
+		     " having externally allocated memory"
+		     " in secondary process, please create mempool"
+		     " prior to rte_eth_dev_start()",
+		     PORT_ID(priv), (void *)addr);
+		return UINT32_MAX;
+	}
+	mlx4_mr_update_ext_mp(ETH_DEV(priv), mr_ctrl, mp);
 	return mlx4_tx_addr2mr_bh(txq, addr);
 }
 
@@ -1289,7 +1390,7 @@ mlx4_mr_update_mp(struct rte_eth_dev *dev, struct mlx4_mr_ctrl *mr_ctrl,
 void
 mlx4_mr_dump_dev(struct rte_eth_dev *dev)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx4_priv *priv = dev->data->dev_private;
 	struct mlx4_mr *mr;
 	int mr_n = 0;
 	int chunk_n = 0;
@@ -1332,18 +1433,19 @@ mlx4_mr_dump_dev(struct rte_eth_dev *dev)
 void
 mlx4_mr_release(struct rte_eth_dev *dev)
 {
-	struct priv *priv = dev->data->dev_private;
-	struct mlx4_mr *mr_next = LIST_FIRST(&priv->mr.mr_list);
+	struct mlx4_priv *priv = dev->data->dev_private;
+	struct mlx4_mr *mr_next;
 
 	/* Remove from memory callback device list. */
-	rte_rwlock_write_lock(&mlx4_mem_event_rwlock);
+	rte_rwlock_write_lock(&mlx4_shared_data->mem_event_rwlock);
 	LIST_REMOVE(priv, mem_event_cb);
-	rte_rwlock_write_unlock(&mlx4_mem_event_rwlock);
+	rte_rwlock_write_unlock(&mlx4_shared_data->mem_event_rwlock);
 #ifndef NDEBUG
 	mlx4_mr_dump_dev(dev);
 #endif
 	rte_rwlock_write_lock(&priv->mr.rwlock);
 	/* Detach from MR list and move to free list. */
+	mr_next = LIST_FIRST(&priv->mr.mr_list);
 	while (mr_next != NULL) {
 		struct mlx4_mr *mr = mr_next;
 

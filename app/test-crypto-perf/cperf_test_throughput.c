@@ -32,17 +32,27 @@ struct cperf_throughput_ctx {
 static void
 cperf_throughput_test_free(struct cperf_throughput_ctx *ctx)
 {
-	if (ctx) {
-		if (ctx->sess) {
+	if (!ctx)
+		return;
+	if (ctx->sess) {
+#ifdef RTE_LIBRTE_SECURITY
+		if (ctx->options->op_type == CPERF_PDCP) {
+			struct rte_security_ctx *sec_ctx =
+				(struct rte_security_ctx *)
+				rte_cryptodev_get_sec_ctx(ctx->dev_id);
+			rte_security_session_destroy(sec_ctx,
+				(struct rte_security_session *)ctx->sess);
+		} else
+#endif
+		{
 			rte_cryptodev_sym_session_clear(ctx->dev_id, ctx->sess);
 			rte_cryptodev_sym_session_free(ctx->sess);
 		}
-
-		if (ctx->pool)
-			rte_mempool_free(ctx->pool);
-
-		rte_free(ctx);
 	}
+	if (ctx->pool)
+		rte_mempool_free(ctx->pool);
+
+	rte_free(ctx);
 }
 
 void *
@@ -95,7 +105,7 @@ cperf_throughput_test_runner(void *test_ctx)
 	uint8_t burst_size_idx = 0;
 	uint32_t imix_idx = 0;
 
-	static int only_once;
+	static rte_atomic16_t display_once = RTE_ATOMIC16_INIT(0);
 
 	struct rte_crypto_op *ops[ctx->options->max_burst_size];
 	struct rte_crypto_op *ops_processed[ctx->options->max_burst_size];
@@ -262,13 +272,12 @@ cperf_throughput_test_runner(void *test_ctx)
 				ctx->options->total_ops);
 
 		if (!ctx->options->csv) {
-			if (!only_once)
+			if (rte_atomic16_test_and_set(&display_once))
 				printf("%12s%12s%12s%12s%12s%12s%12s%12s%12s%12s\n\n",
 					"lcore id", "Buf Size", "Burst Size",
 					"Enqueued", "Dequeued", "Failed Enq",
 					"Failed Deq", "MOps", "Gbps",
 					"Cycles/Buf");
-			only_once = 1;
 
 			printf("%12u%12u%12u%12"PRIu64"%12"PRIu64"%12"PRIu64
 					"%12"PRIu64"%12.4f%12.4f%12.2f\n",
@@ -283,12 +292,11 @@ cperf_throughput_test_runner(void *test_ctx)
 					throughput_gbps,
 					cycles_per_packet);
 		} else {
-			if (!only_once)
+			if (rte_atomic16_test_and_set(&display_once))
 				printf("#lcore id,Buffer Size(B),"
 					"Burst Size,Enqueued,Dequeued,Failed Enq,"
 					"Failed Deq,Ops(Millions),Throughput(Gbps),"
 					"Cycles/Buf\n\n");
-			only_once = 1;
 
 			printf("%u;%u;%u;%"PRIu64";%"PRIu64";%"PRIu64";%"PRIu64";"
 					"%.3f;%.3f;%.3f\n",

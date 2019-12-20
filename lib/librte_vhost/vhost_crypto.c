@@ -46,116 +46,107 @@
 	((t)(uintptr_t)vhost_iova_to_vva(r->dev, r->vq, a, l, p))
 
 static int
-cipher_algo_transform(uint32_t virtio_cipher_algo)
+cipher_algo_transform(uint32_t virtio_cipher_algo,
+		enum rte_crypto_cipher_algorithm *algo)
 {
-	int ret;
-
 	switch (virtio_cipher_algo) {
 	case VIRTIO_CRYPTO_CIPHER_AES_CBC:
-		ret = RTE_CRYPTO_CIPHER_AES_CBC;
+		*algo = RTE_CRYPTO_CIPHER_AES_CBC;
 		break;
 	case VIRTIO_CRYPTO_CIPHER_AES_CTR:
-		ret = RTE_CRYPTO_CIPHER_AES_CTR;
+		*algo = RTE_CRYPTO_CIPHER_AES_CTR;
 		break;
 	case VIRTIO_CRYPTO_CIPHER_DES_ECB:
-		ret = -VIRTIO_CRYPTO_NOTSUPP;
+		*algo = -VIRTIO_CRYPTO_NOTSUPP;
 		break;
 	case VIRTIO_CRYPTO_CIPHER_DES_CBC:
-		ret = RTE_CRYPTO_CIPHER_DES_CBC;
+		*algo = RTE_CRYPTO_CIPHER_DES_CBC;
 		break;
 	case VIRTIO_CRYPTO_CIPHER_3DES_ECB:
-		ret = RTE_CRYPTO_CIPHER_3DES_ECB;
+		*algo = RTE_CRYPTO_CIPHER_3DES_ECB;
 		break;
 	case VIRTIO_CRYPTO_CIPHER_3DES_CBC:
-		ret = RTE_CRYPTO_CIPHER_3DES_CBC;
+		*algo = RTE_CRYPTO_CIPHER_3DES_CBC;
 		break;
 	case VIRTIO_CRYPTO_CIPHER_3DES_CTR:
-		ret = RTE_CRYPTO_CIPHER_3DES_CTR;
+		*algo = RTE_CRYPTO_CIPHER_3DES_CTR;
 		break;
 	case VIRTIO_CRYPTO_CIPHER_KASUMI_F8:
-		ret = RTE_CRYPTO_CIPHER_KASUMI_F8;
+		*algo = RTE_CRYPTO_CIPHER_KASUMI_F8;
 		break;
 	case VIRTIO_CRYPTO_CIPHER_SNOW3G_UEA2:
-		ret = RTE_CRYPTO_CIPHER_SNOW3G_UEA2;
+		*algo = RTE_CRYPTO_CIPHER_SNOW3G_UEA2;
 		break;
 	case VIRTIO_CRYPTO_CIPHER_AES_F8:
-		ret = RTE_CRYPTO_CIPHER_AES_F8;
+		*algo = RTE_CRYPTO_CIPHER_AES_F8;
 		break;
 	case VIRTIO_CRYPTO_CIPHER_AES_XTS:
-		ret = RTE_CRYPTO_CIPHER_AES_XTS;
+		*algo = RTE_CRYPTO_CIPHER_AES_XTS;
 		break;
 	case VIRTIO_CRYPTO_CIPHER_ZUC_EEA3:
-		ret = RTE_CRYPTO_CIPHER_ZUC_EEA3;
+		*algo = RTE_CRYPTO_CIPHER_ZUC_EEA3;
 		break;
 	default:
-		ret = -VIRTIO_CRYPTO_BADMSG;
+		return -VIRTIO_CRYPTO_BADMSG;
 		break;
 	}
 
-	return ret;
+	return 0;
 }
 
 static int
-auth_algo_transform(uint32_t virtio_auth_algo)
+auth_algo_transform(uint32_t virtio_auth_algo,
+		enum rte_crypto_auth_algorithm *algo)
 {
-	int ret;
-
 	switch (virtio_auth_algo) {
-
 	case VIRTIO_CRYPTO_NO_MAC:
-		ret = RTE_CRYPTO_AUTH_NULL;
+		*algo = RTE_CRYPTO_AUTH_NULL;
 		break;
 	case VIRTIO_CRYPTO_MAC_HMAC_MD5:
-		ret = RTE_CRYPTO_AUTH_MD5_HMAC;
+		*algo = RTE_CRYPTO_AUTH_MD5_HMAC;
 		break;
 	case VIRTIO_CRYPTO_MAC_HMAC_SHA1:
-		ret = RTE_CRYPTO_AUTH_SHA1_HMAC;
+		*algo = RTE_CRYPTO_AUTH_SHA1_HMAC;
 		break;
 	case VIRTIO_CRYPTO_MAC_HMAC_SHA_224:
-		ret = RTE_CRYPTO_AUTH_SHA224_HMAC;
+		*algo = RTE_CRYPTO_AUTH_SHA224_HMAC;
 		break;
 	case VIRTIO_CRYPTO_MAC_HMAC_SHA_256:
-		ret = RTE_CRYPTO_AUTH_SHA256_HMAC;
+		*algo = RTE_CRYPTO_AUTH_SHA256_HMAC;
 		break;
 	case VIRTIO_CRYPTO_MAC_HMAC_SHA_384:
-		ret = RTE_CRYPTO_AUTH_SHA384_HMAC;
+		*algo = RTE_CRYPTO_AUTH_SHA384_HMAC;
 		break;
 	case VIRTIO_CRYPTO_MAC_HMAC_SHA_512:
-		ret = RTE_CRYPTO_AUTH_SHA512_HMAC;
-		break;
-	case VIRTIO_CRYPTO_MAC_CMAC_3DES:
-		ret = -VIRTIO_CRYPTO_NOTSUPP;
+		*algo = RTE_CRYPTO_AUTH_SHA512_HMAC;
 		break;
 	case VIRTIO_CRYPTO_MAC_CMAC_AES:
-		ret = RTE_CRYPTO_AUTH_AES_CMAC;
+		*algo = RTE_CRYPTO_AUTH_AES_CMAC;
 		break;
 	case VIRTIO_CRYPTO_MAC_KASUMI_F9:
-		ret = RTE_CRYPTO_AUTH_KASUMI_F9;
+		*algo = RTE_CRYPTO_AUTH_KASUMI_F9;
 		break;
 	case VIRTIO_CRYPTO_MAC_SNOW3G_UIA2:
-		ret = RTE_CRYPTO_AUTH_SNOW3G_UIA2;
+		*algo = RTE_CRYPTO_AUTH_SNOW3G_UIA2;
 		break;
 	case VIRTIO_CRYPTO_MAC_GMAC_AES:
-		ret = RTE_CRYPTO_AUTH_AES_GMAC;
-		break;
-	case VIRTIO_CRYPTO_MAC_GMAC_TWOFISH:
-		ret = -VIRTIO_CRYPTO_NOTSUPP;
+		*algo = RTE_CRYPTO_AUTH_AES_GMAC;
 		break;
 	case VIRTIO_CRYPTO_MAC_CBCMAC_AES:
-		ret = RTE_CRYPTO_AUTH_AES_CBC_MAC;
-		break;
-	case VIRTIO_CRYPTO_MAC_CBCMAC_KASUMI_F9:
-		ret = -VIRTIO_CRYPTO_NOTSUPP;
+		*algo = RTE_CRYPTO_AUTH_AES_CBC_MAC;
 		break;
 	case VIRTIO_CRYPTO_MAC_XCBC_AES:
-		ret = RTE_CRYPTO_AUTH_AES_XCBC_MAC;
+		*algo = RTE_CRYPTO_AUTH_AES_XCBC_MAC;
 		break;
+	case VIRTIO_CRYPTO_MAC_CMAC_3DES:
+	case VIRTIO_CRYPTO_MAC_GMAC_TWOFISH:
+	case VIRTIO_CRYPTO_MAC_CBCMAC_KASUMI_F9:
+		return -VIRTIO_CRYPTO_NOTSUPP;
 	default:
-		ret = -VIRTIO_CRYPTO_BADMSG;
-		break;
+		return -VIRTIO_CRYPTO_BADMSG;
 	}
 
-	return ret;
+	return 0;
 }
 
 static int get_iv_len(enum rte_crypto_cipher_algorithm algo)
@@ -242,12 +233,11 @@ transform_cipher_param(struct rte_crypto_sym_xform *xform,
 {
 	int ret;
 
-	ret = cipher_algo_transform(param->cipher_algo);
+	ret = cipher_algo_transform(param->cipher_algo, &xform->cipher.algo);
 	if (unlikely(ret < 0))
 		return ret;
 
 	xform->type = RTE_CRYPTO_SYM_XFORM_CIPHER;
-	xform->cipher.algo = (enum rte_crypto_cipher_algorithm)ret;
 	xform->cipher.key.length = param->cipher_key_len;
 	if (xform->cipher.key.length > 0)
 		xform->cipher.key.data = param->cipher_key_buf;
@@ -293,11 +283,11 @@ transform_chain_param(struct rte_crypto_sym_xform *xforms,
 	}
 
 	/* cipher */
-	ret = cipher_algo_transform(param->cipher_algo);
+	ret = cipher_algo_transform(param->cipher_algo,
+			&xform_cipher->cipher.algo);
 	if (unlikely(ret < 0))
 		return ret;
 	xform_cipher->type = RTE_CRYPTO_SYM_XFORM_CIPHER;
-	xform_cipher->cipher.algo = (enum rte_crypto_cipher_algorithm)ret;
 	xform_cipher->cipher.key.length = param->cipher_key_len;
 	xform_cipher->cipher.key.data = param->cipher_key_buf;
 	ret = get_iv_len(xform_cipher->cipher.algo);
@@ -308,10 +298,9 @@ transform_chain_param(struct rte_crypto_sym_xform *xforms,
 
 	/* auth */
 	xform_auth->type = RTE_CRYPTO_SYM_XFORM_AUTH;
-	ret = auth_algo_transform(param->hash_algo);
+	ret = auth_algo_transform(param->hash_algo, &xform_auth->auth.algo);
 	if (unlikely(ret < 0))
 		return ret;
-	xform_auth->auth.algo = (enum rte_crypto_auth_algorithm)ret;
 	xform_auth->auth.digest_length = param->digest_len;
 	xform_auth->auth.key.length = param->auth_key_len;
 	xform_auth->auth.key.data = param->auth_key_buf;
@@ -434,33 +423,39 @@ vhost_crypto_close_sess(struct vhost_crypto *vcrypto, uint64_t session_id)
 	return 0;
 }
 
-static enum vh_result
+static enum rte_vhost_msg_result
 vhost_crypto_msg_post_handler(int vid, void *msg)
 {
 	struct virtio_net *dev = get_device(vid);
 	struct vhost_crypto *vcrypto;
 	VhostUserMsg *vmsg = msg;
-	enum vh_result ret = VH_RESULT_OK;
+	enum rte_vhost_msg_result ret = RTE_VHOST_MSG_RESULT_OK;
 
 	if (dev == NULL) {
 		VC_LOG_ERR("Invalid vid %i", vid);
-		return VH_RESULT_ERR;
+		return RTE_VHOST_MSG_RESULT_ERR;
 	}
 
 	vcrypto = dev->extern_data;
 	if (vcrypto == NULL) {
 		VC_LOG_ERR("Cannot find required data, is it initialized?");
-		return VH_RESULT_ERR;
+		return RTE_VHOST_MSG_RESULT_ERR;
 	}
 
-	if (vmsg->request.master == VHOST_USER_CRYPTO_CREATE_SESS) {
+	switch (vmsg->request.master) {
+	case VHOST_USER_CRYPTO_CREATE_SESS:
 		vhost_crypto_create_sess(vcrypto,
 				&vmsg->payload.crypto_session);
 		vmsg->fd_num = 0;
-		ret = VH_RESULT_REPLY;
-	} else if (vmsg->request.master == VHOST_USER_CRYPTO_CLOSE_SESS) {
+		ret = RTE_VHOST_MSG_RESULT_REPLY;
+		break;
+	case VHOST_USER_CRYPTO_CLOSE_SESS:
 		if (vhost_crypto_close_sess(vcrypto, vmsg->payload.u64))
-			ret = VH_RESULT_ERR;
+			ret = RTE_VHOST_MSG_RESULT_ERR;
+		break;
+	default:
+		ret = RTE_VHOST_MSG_RESULT_NOT_HANDLED;
+		break;
 	}
 
 	return ret;
@@ -1018,7 +1013,7 @@ prepare_sym_chain_op(struct vhost_crypto *vcrypto, struct rte_crypto_op *op,
 		}
 		if (unlikely(copy_data(rte_pktmbuf_mtod(m_src, uint8_t *),
 				vc_req, &desc, chain->para.src_data_len,
-				nb_descs, vq_size)) < 0) {
+				nb_descs, vq_size) < 0)) {
 			ret = VIRTIO_CRYPTO_BADMSG;
 			goto error_exit;
 		}
@@ -1103,7 +1098,7 @@ prepare_sym_chain_op(struct vhost_crypto *vcrypto, struct rte_crypto_op *op,
 
 		if (unlikely(copy_data(digest_addr, vc_req, &digest_desc,
 				chain->para.hash_result_len,
-				nb_descs, vq_size)) < 0) {
+				nb_descs, vq_size) < 0)) {
 			ret = VIRTIO_CRYPTO_BADMSG;
 			goto error_exit;
 		}
@@ -1352,7 +1347,7 @@ vhost_crypto_complete_one_vm_requests(struct rte_crypto_op **ops,
 	return processed;
 }
 
-int __rte_experimental
+int
 rte_vhost_crypto_create(int vid, uint8_t cryptodev_id,
 		struct rte_mempool *sess_pool,
 		struct rte_mempool *sess_priv_pool,
@@ -1445,7 +1440,7 @@ error_exit:
 	return ret;
 }
 
-int __rte_experimental
+int
 rte_vhost_crypto_free(int vid)
 {
 	struct virtio_net *dev = get_device(vid);
@@ -1474,7 +1469,7 @@ rte_vhost_crypto_free(int vid)
 	return 0;
 }
 
-int __rte_experimental
+int
 rte_vhost_crypto_set_zero_copy(int vid, enum rte_vhost_crypto_zero_copy option)
 {
 	struct virtio_net *dev = get_device(vid);
@@ -1529,7 +1524,7 @@ rte_vhost_crypto_set_zero_copy(int vid, enum rte_vhost_crypto_zero_copy option)
 	return 0;
 }
 
-uint16_t __rte_experimental
+uint16_t
 rte_vhost_crypto_fetch_requests(int vid, uint32_t qid,
 		struct rte_crypto_op **ops, uint16_t nb_ops)
 {
@@ -1592,7 +1587,7 @@ rte_vhost_crypto_fetch_requests(int vid, uint32_t qid,
 			op->sym->m_dst->data_off = 0;
 
 			if (unlikely(vhost_crypto_process_one_req(vcrypto, vq,
-					op, head, desc_idx)) < 0)
+					op, head, desc_idx) < 0))
 				break;
 		}
 
@@ -1621,7 +1616,7 @@ rte_vhost_crypto_fetch_requests(int vid, uint32_t qid,
 			op->sym->m_src->data_off = 0;
 
 			if (unlikely(vhost_crypto_process_one_req(vcrypto, vq,
-					op, head, desc_idx)) < 0)
+					op, head, desc_idx) < 0))
 				break;
 		}
 
@@ -1639,7 +1634,7 @@ rte_vhost_crypto_fetch_requests(int vid, uint32_t qid,
 	return i;
 }
 
-uint16_t __rte_experimental
+uint16_t
 rte_vhost_crypto_finalize_requests(struct rte_crypto_op **ops,
 		uint16_t nb_ops, int *callfds, uint16_t *nb_callfds)
 {

@@ -47,12 +47,6 @@ struct rte_ipsec_sa_prm {
 			uint8_t proto;  /**< next header protocol */
 		} trs; /**< transport mode related parameters */
 	};
-
-	/**
-	 * window size to enable sequence replay attack handling.
-	 * replay checking is disabled if the window size is 0.
-	 */
-	uint32_t replay_win_sz;
 };
 
 /**
@@ -95,6 +89,8 @@ enum {
 	RTE_SATP_LOG2_MODE,
 	RTE_SATP_LOG2_SQN = RTE_SATP_LOG2_MODE + 2,
 	RTE_SATP_LOG2_ESN,
+	RTE_SATP_LOG2_ECN,
+	RTE_SATP_LOG2_DSCP,
 	RTE_SATP_LOG2_NUM
 };
 
@@ -123,23 +119,33 @@ enum {
 #define RTE_IPSEC_SATP_ESN_DISABLE	(0ULL << RTE_SATP_LOG2_ESN)
 #define RTE_IPSEC_SATP_ESN_ENABLE	(1ULL << RTE_SATP_LOG2_ESN)
 
+#define RTE_IPSEC_SATP_ECN_MASK		(1ULL << RTE_SATP_LOG2_ECN)
+#define RTE_IPSEC_SATP_ECN_DISABLE	(0ULL << RTE_SATP_LOG2_ECN)
+#define RTE_IPSEC_SATP_ECN_ENABLE	(1ULL << RTE_SATP_LOG2_ECN)
+
+#define RTE_IPSEC_SATP_DSCP_MASK	(1ULL << RTE_SATP_LOG2_DSCP)
+#define RTE_IPSEC_SATP_DSCP_DISABLE	(0ULL << RTE_SATP_LOG2_DSCP)
+#define RTE_IPSEC_SATP_DSCP_ENABLE	(1ULL << RTE_SATP_LOG2_DSCP)
+
 /**
  * get type of given SA
  * @return
  *   SA type value.
  */
-uint64_t __rte_experimental
+__rte_experimental
+uint64_t
 rte_ipsec_sa_type(const struct rte_ipsec_sa *sa);
 
 /**
  * Calculate required SA size based on provided input parameters.
  * @param prm
- *   Parameters that wil be used to initialise SA object.
+ *   Parameters that will be used to initialise SA object.
  * @return
  *   - Actual size required for SA with given parameters.
  *   - -EINVAL if the parameters are invalid.
  */
-int __rte_experimental
+__rte_experimental
+int
 rte_ipsec_sa_size(const struct rte_ipsec_sa_prm *prm);
 
 /**
@@ -155,7 +161,8 @@ rte_ipsec_sa_size(const struct rte_ipsec_sa_prm *prm);
  *   - -EINVAL if the parameters are invalid.
  *   - -ENOSPC if the size of the provided buffer is not big enough.
  */
-int __rte_experimental
+__rte_experimental
+int
 rte_ipsec_sa_init(struct rte_ipsec_sa *sa, const struct rte_ipsec_sa_prm *prm,
 	uint32_t size);
 
@@ -164,7 +171,8 @@ rte_ipsec_sa_init(struct rte_ipsec_sa *sa, const struct rte_ipsec_sa_prm *prm,
  * @param sa
  *   Pointer to SA object to de-initialize.
  */
-void __rte_experimental
+__rte_experimental
+void
 rte_ipsec_sa_fini(struct rte_ipsec_sa *sa);
 
 #ifdef __cplusplus

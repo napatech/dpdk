@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <fcntl.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <sys/epoll.h>
 #include <linux/virtio_net.h>
@@ -66,6 +67,8 @@ struct ifcvf_internal {
 	bool sw_fallback_running;
 	/* mediated vring for sw fallback */
 	struct vring m_vring[IFCVF_MAX_QUEUES * 2];
+	/* eventfd for used ring interrupt */
+	int intr_fd[IFCVF_MAX_QUEUES * 2];
 };
 
 struct internal_list {
@@ -78,6 +81,8 @@ static struct internal_list_head internal_list =
 	TAILQ_HEAD_INITIALIZER(internal_list);
 
 static pthread_mutex_t internal_list_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void update_used_ring(struct ifcvf_internal *internal, uint16_t qid);
 
 static struct internal_list *
 find_internal_resource_by_did(int did)
@@ -131,15 +136,19 @@ ifcvf_vfio_setup(struct ifcvf_internal *internal)
 	struct rte_pci_device *dev = internal->pdev;
 	char devname[RTE_DEV_NAME_MAX_LEN] = {0};
 	int iommu_group_num;
-	int i;
+	int i, ret;
 
 	internal->vfio_dev_fd = -1;
 	internal->vfio_group_fd = -1;
 	internal->vfio_container_fd = -1;
 
 	rte_pci_device_name(&dev->addr, devname, RTE_DEV_NAME_MAX_LEN);
-	rte_vfio_get_group_num(rte_pci_get_sysfs_path(), devname,
+	ret = rte_vfio_get_group_num(rte_pci_get_sysfs_path(), devname,
 			&iommu_group_num);
+	if (ret <= 0) {
+		DRV_LOG(ERR, "%s failed to get IOMMU group", devname);
+		return -1;
+	}
 
 	internal->vfio_container_fd = rte_vfio_container_create();
 	if (internal->vfio_container_fd < 0)
@@ -300,8 +309,8 @@ vdpa_ifcvf_stop(struct ifcvf_internal *internal)
 	struct ifcvf_hw *hw = &internal->hw;
 	uint32_t i;
 	int vid;
-	uint64_t features;
-	uint64_t log_base, log_size;
+	uint64_t features = 0;
+	uint64_t log_base = 0, log_size = 0;
 	uint64_t len;
 
 	vid = internal->vid;
@@ -334,7 +343,7 @@ vdpa_ifcvf_stop(struct ifcvf_internal *internal)
 #define MSIX_IRQ_SET_BUF_LEN (sizeof(struct vfio_irq_set) + \
 		sizeof(int) * (IFCVF_MAX_QUEUES * 2 + 1))
 static int
-vdpa_enable_vfio_intr(struct ifcvf_internal *internal)
+vdpa_enable_vfio_intr(struct ifcvf_internal *internal, bool m_rx)
 {
 	int ret;
 	uint32_t i, nr_vring;
@@ -342,6 +351,9 @@ vdpa_enable_vfio_intr(struct ifcvf_internal *internal)
 	struct vfio_irq_set *irq_set;
 	int *fd_ptr;
 	struct rte_vhost_vring vring;
+	int fd;
+
+	vring.callfd = -1;
 
 	nr_vring = rte_vhost_get_vring_num(internal->vid);
 
@@ -355,9 +367,22 @@ vdpa_enable_vfio_intr(struct ifcvf_internal *internal)
 	fd_ptr = (int *)&irq_set->data;
 	fd_ptr[RTE_INTR_VEC_ZERO_OFFSET] = internal->pdev->intr_handle.fd;
 
+	for (i = 0; i < nr_vring; i++)
+		internal->intr_fd[i] = -1;
+
 	for (i = 0; i < nr_vring; i++) {
 		rte_vhost_get_vhost_vring(internal->vid, i, &vring);
 		fd_ptr[RTE_INTR_VEC_RXTX_OFFSET + i] = vring.callfd;
+		if ((i & 1) == 0 && m_rx == true) {
+			fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+			if (fd < 0) {
+				DRV_LOG(ERR, "can't setup eventfd: %s",
+					strerror(errno));
+				return -1;
+			}
+			internal->intr_fd[i] = fd;
+			fd_ptr[RTE_INTR_VEC_RXTX_OFFSET + i] = fd;
+		}
 	}
 
 	ret = ioctl(internal->vfio_dev_fd, VFIO_DEVICE_SET_IRQS, irq_set);
@@ -374,6 +399,7 @@ static int
 vdpa_disable_vfio_intr(struct ifcvf_internal *internal)
 {
 	int ret;
+	uint32_t i, nr_vring;
 	char irq_set_buf[MSIX_IRQ_SET_BUF_LEN];
 	struct vfio_irq_set *irq_set;
 
@@ -383,6 +409,13 @@ vdpa_disable_vfio_intr(struct ifcvf_internal *internal)
 	irq_set->flags = VFIO_IRQ_SET_DATA_NONE | VFIO_IRQ_SET_ACTION_TRIGGER;
 	irq_set->index = VFIO_PCI_MSIX_IRQ_INDEX;
 	irq_set->start = 0;
+
+	nr_vring = rte_vhost_get_vring_num(internal->vid);
+	for (i = 0; i < nr_vring; i++) {
+		if (internal->intr_fd[i] >= 0)
+			close(internal->intr_fd[i]);
+		internal->intr_fd[i] = -1;
+	}
 
 	ret = ioctl(internal->vfio_dev_fd, VFIO_DEVICE_SET_IRQS, irq_set);
 	if (ret) {
@@ -416,6 +449,7 @@ notify_relay(void *arg)
 	}
 	internal->epfd = epfd;
 
+	vring.kickfd = -1;
 	for (qid = 0; qid < q_num; qid++) {
 		ev.events = EPOLLIN | EPOLLPRI;
 		rte_vhost_get_vhost_vring(internal->vid, qid, &vring);
@@ -505,7 +539,7 @@ update_datapath(struct ifcvf_internal *internal)
 		if (ret)
 			goto err;
 
-		ret = vdpa_enable_vfio_intr(internal);
+		ret = vdpa_enable_vfio_intr(internal, 0);
 		if (ret)
 			goto err;
 
@@ -557,6 +591,7 @@ m_ifcvf_start(struct ifcvf_internal *internal)
 	uint64_t size;
 	uint64_t gpa;
 
+	memset(&vq, 0, sizeof(vq));
 	vid = internal->vid;
 	nr_vring = rte_vhost_get_vring_num(vid);
 	rte_vhost_get_negotiated_features(vid, &hw->req_features);
@@ -584,15 +619,32 @@ m_ifcvf_start(struct ifcvf_internal *internal)
 		}
 		hw->vring[i].desc = gpa;
 
-		hw->vring[i].avail = m_vring_iova +
-			(char *)internal->m_vring[i].avail -
-			(char *)internal->m_vring[i].desc;
+		gpa = hva_to_gpa(vid, (uint64_t)(uintptr_t)vq.avail);
+		if (gpa == 0) {
+			DRV_LOG(ERR, "Fail to get GPA for available ring.");
+			return -1;
+		}
+		hw->vring[i].avail = gpa;
 
-		hw->vring[i].used = m_vring_iova +
-			(char *)internal->m_vring[i].used -
-			(char *)internal->m_vring[i].desc;
+		/* Direct I/O for Tx queue, relay for Rx queue */
+		if (i & 1) {
+			gpa = hva_to_gpa(vid, (uint64_t)(uintptr_t)vq.used);
+			if (gpa == 0) {
+				DRV_LOG(ERR, "Fail to get GPA for used ring.");
+				return -1;
+			}
+			hw->vring[i].used = gpa;
+		} else {
+			hw->vring[i].used = m_vring_iova +
+				(char *)internal->m_vring[i].used -
+				(char *)internal->m_vring[i].desc;
+		}
 
 		hw->vring[i].size = vq.size;
+
+		rte_vhost_get_vring_base(vid, i,
+				&internal->m_vring[i].avail->idx,
+				&internal->m_vring[i].used->idx);
 
 		rte_vhost_get_vring_base(vid, i, &hw->vring[i].last_avail_idx,
 				&hw->vring[i].last_used_idx);
@@ -625,6 +677,10 @@ m_ifcvf_stop(struct ifcvf_internal *internal)
 	ifcvf_stop_hw(hw);
 
 	for (i = 0; i < hw->nr_vring; i++) {
+		/* synchronize remaining new used entries if any */
+		if ((i & 1) == 0)
+			update_used_ring(internal, i);
+
 		rte_vhost_get_vhost_vring(vid, i, &vq);
 		len = IFCVF_USED_RING_LEN(vq.size);
 		rte_vhost_log_used_vring(vid, i, 0, len);
@@ -644,42 +700,6 @@ m_ifcvf_stop(struct ifcvf_internal *internal)
 	return 0;
 }
 
-static int
-m_enable_vfio_intr(struct ifcvf_internal *internal)
-{
-	uint32_t nr_vring;
-	struct rte_intr_handle *intr_handle = &internal->pdev->intr_handle;
-	int ret;
-
-	nr_vring = rte_vhost_get_vring_num(internal->vid);
-
-	ret = rte_intr_efd_enable(intr_handle, nr_vring);
-	if (ret)
-		return -1;
-
-	ret = rte_intr_enable(intr_handle);
-	if (ret)
-		return -1;
-
-	return 0;
-}
-
-static void
-m_disable_vfio_intr(struct ifcvf_internal *internal)
-{
-	struct rte_intr_handle *intr_handle = &internal->pdev->intr_handle;
-
-	rte_intr_efd_disable(intr_handle);
-	rte_intr_disable(intr_handle);
-}
-
-static void
-update_avail_ring(struct ifcvf_internal *internal, uint16_t qid)
-{
-	rte_vdpa_relay_vring_avail(internal->vid, qid, &internal->m_vring[qid]);
-	ifcvf_notify_queue(&internal->hw, qid);
-}
-
 static void
 update_used_ring(struct ifcvf_internal *internal, uint16_t qid)
 {
@@ -693,7 +713,6 @@ vring_relay(void *arg)
 	int i, vid, epfd, fd, nfds;
 	struct ifcvf_internal *internal = (struct ifcvf_internal *)arg;
 	struct rte_vhost_vring vring;
-	struct rte_intr_handle *intr_handle;
 	uint16_t qid, q_num;
 	struct epoll_event events[IFCVF_MAX_QUEUES * 4];
 	struct epoll_event ev;
@@ -702,13 +721,6 @@ vring_relay(void *arg)
 
 	vid = internal->vid;
 	q_num = rte_vhost_get_vring_num(vid);
-	/* prepare the mediated vring */
-	for (qid = 0; qid < q_num; qid++) {
-		rte_vhost_get_vring_base(vid, qid,
-				&internal->m_vring[qid].avail->idx,
-				&internal->m_vring[qid].used->idx);
-		rte_vdpa_relay_vring_avail(vid, qid, &internal->m_vring[qid]);
-	}
 
 	/* add notify fd and interrupt fd to epoll */
 	epfd = epoll_create(IFCVF_MAX_QUEUES * 2);
@@ -718,6 +730,7 @@ vring_relay(void *arg)
 	}
 	internal->epfd = epfd;
 
+	vring.kickfd = -1;
 	for (qid = 0; qid < q_num; qid++) {
 		ev.events = EPOLLIN | EPOLLPRI;
 		rte_vhost_get_vhost_vring(vid, qid, &vring);
@@ -728,16 +741,17 @@ vring_relay(void *arg)
 		}
 	}
 
-	intr_handle = &internal->pdev->intr_handle;
-	for (qid = 0; qid < q_num; qid++) {
+	for (qid = 0; qid < q_num; qid += 2) {
 		ev.events = EPOLLIN | EPOLLPRI;
+		/* leave a flag to mark it's for interrupt */
 		ev.data.u64 = 1 | qid << 1 |
-			(uint64_t)intr_handle->efds[qid] << 32;
-		if (epoll_ctl(epfd, EPOLL_CTL_ADD, intr_handle->efds[qid], &ev)
+			(uint64_t)internal->intr_fd[qid] << 32;
+		if (epoll_ctl(epfd, EPOLL_CTL_ADD, internal->intr_fd[qid], &ev)
 				< 0) {
 			DRV_LOG(ERR, "epoll add error: %s", strerror(errno));
 			return NULL;
 		}
+		update_used_ring(internal, qid);
 	}
 
 	/* start relay with a first kick */
@@ -775,7 +789,7 @@ vring_relay(void *arg)
 			if (events[i].data.u32 & 1)
 				update_used_ring(internal, qid);
 			else
-				update_avail_ring(internal, qid);
+				ifcvf_notify_queue(&internal->hw, qid);
 		}
 	}
 
@@ -818,18 +832,19 @@ static int
 ifcvf_sw_fallback_switchover(struct ifcvf_internal *internal)
 {
 	int ret;
+	int vid = internal->vid;
 
 	/* stop the direct IO data path */
 	unset_notify_relay(internal);
 	vdpa_ifcvf_stop(internal);
 	vdpa_disable_vfio_intr(internal);
 
-	ret = rte_vhost_host_notifier_ctrl(internal->vid, false);
+	ret = rte_vhost_host_notifier_ctrl(vid, false);
 	if (ret && ret != -ENOTSUP)
 		goto error;
 
 	/* set up interrupt for interrupt relay */
-	ret = m_enable_vfio_intr(internal);
+	ret = vdpa_enable_vfio_intr(internal, 1);
 	if (ret)
 		goto unmap;
 
@@ -843,6 +858,8 @@ ifcvf_sw_fallback_switchover(struct ifcvf_internal *internal)
 	if (ret)
 		goto stop_vf;
 
+	rte_vhost_host_notifier_ctrl(vid, true);
+
 	internal->sw_fallback_running = true;
 
 	return 0;
@@ -850,7 +867,7 @@ ifcvf_sw_fallback_switchover(struct ifcvf_internal *internal)
 stop_vf:
 	m_ifcvf_stop(internal);
 unset_intr:
-	m_disable_vfio_intr(internal);
+	vdpa_disable_vfio_intr(internal);
 unmap:
 	ifcvf_dma_map(internal, 0);
 error:
@@ -906,7 +923,7 @@ ifcvf_dev_close(int vid)
 		m_ifcvf_stop(internal);
 
 		/* remove interrupt setting */
-		m_disable_vfio_intr(internal);
+		vdpa_disable_vfio_intr(internal);
 
 		/* unset DMA map for guest memory */
 		ifcvf_dma_map(internal, 0);
@@ -923,11 +940,11 @@ ifcvf_dev_close(int vid)
 static int
 ifcvf_set_features(int vid)
 {
-	uint64_t features;
+	uint64_t features = 0;
 	int did;
 	struct internal_list *list;
 	struct ifcvf_internal *internal;
-	uint64_t log_base, log_size;
+	uint64_t log_base = 0, log_size = 0;
 
 	did = rte_vhost_get_vdpa_device_id(vid);
 	list = find_internal_resource_by_did(did);
@@ -1106,6 +1123,9 @@ ifcvf_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
+
+	if (!pci_dev->device.devargs)
+		return 1;
 
 	kvlist = rte_kvargs_parse(pci_dev->device.devargs->args,
 			ifcvf_valid_arguments);

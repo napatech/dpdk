@@ -19,7 +19,15 @@
 static void
 rte_meter_get_tb_params(uint64_t hz, uint64_t rate, uint64_t *tb_period, uint64_t *tb_bytes_per_period)
 {
-	double period = ((double) hz) / ((double) rate);
+	double period;
+
+	if (rate == 0) {
+		*tb_bytes_per_period = 0;
+		*tb_period = RTE_METER_TB_PERIOD_MIN;
+		return;
+	}
+
+	period = ((double) hz) / ((double) rate);
 
 	if (period >= RTE_METER_TB_PERIOD_MIN) {
 		*tb_bytes_per_period = 1;
@@ -111,7 +119,7 @@ rte_meter_trtcm_config(struct rte_meter_trtcm *m,
 	return 0;
 }
 
-int __rte_experimental
+int
 rte_meter_trtcm_rfc4115_profile_config(
 	struct rte_meter_trtcm_rfc4115_profile *p,
 	struct rte_meter_trtcm_rfc4115_params *params)
@@ -136,7 +144,7 @@ rte_meter_trtcm_rfc4115_profile_config(
 	return 0;
 }
 
-int __rte_experimental
+int
 rte_meter_trtcm_rfc4115_config(
 	struct rte_meter_trtcm_rfc4115 *m,
 	struct rte_meter_trtcm_rfc4115_profile *p)

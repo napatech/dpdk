@@ -10,6 +10,7 @@
 #include "bcm_osal.h"
 #include "ecore.h"
 #include "ecore_hw.h"
+#include "ecore_dev_api.h"
 #include "ecore_iov_api.h"
 #include "ecore_mcp_api.h"
 #include "ecore_l2_api.h"
@@ -128,7 +129,7 @@ void *osal_dma_alloc_coherent(struct ecore_dev *p_dev,
 	}
 
 	OSAL_MEM_ZERO(mz_name, sizeof(*mz_name));
-	snprintf(mz_name, sizeof(mz_name) - 1, "%lx",
+	snprintf(mz_name, sizeof(mz_name), "%lx",
 					(unsigned long)rte_get_timer_cycles());
 	if (core_id == (unsigned int)LCORE_ID_ANY)
 		core_id = rte_get_master_lcore();
@@ -167,7 +168,7 @@ void *osal_dma_alloc_coherent_aligned(struct ecore_dev *p_dev,
 	}
 
 	OSAL_MEM_ZERO(mz_name, sizeof(*mz_name));
-	snprintf(mz_name, sizeof(mz_name) - 1, "%lx",
+	snprintf(mz_name, sizeof(mz_name), "%lx",
 					(unsigned long)rte_get_timer_cycles());
 	if (core_id == (unsigned int)LCORE_ID_ANY)
 		core_id = rte_get_master_lcore();

@@ -143,10 +143,11 @@ vdev_probe_all_drivers(struct rte_vdev_device *dev)
 	struct rte_vdev_driver *driver;
 	int ret;
 
-	name = rte_vdev_device_name(dev);
+	if (rte_dev_is_probed(&dev->device))
+		return -EEXIST;
 
-	VDEV_LOG(DEBUG, "Search driver %s to probe device %s", name,
-		rte_vdev_device_name(dev));
+	name = rte_vdev_device_name(dev);
+	VDEV_LOG(DEBUG, "Search driver to probe device %s", name);
 
 	if (vdev_parse(name, &driver))
 		return -1;
@@ -191,7 +192,7 @@ alloc_devargs(const char *name, const char *args)
 	else
 		devargs->args = strdup("");
 
-	ret = snprintf(devargs->name, sizeof(devargs->name), "%s", name);
+	ret = strlcpy(devargs->name, name, sizeof(devargs->name));
 	if (ret < 0 || ret >= (int)sizeof(devargs->name)) {
 		free(devargs->args);
 		free(devargs);
@@ -408,6 +409,10 @@ vdev_scan(void)
 
 	if (rte_mp_action_register(VDEV_MP_KEY, vdev_action) < 0 &&
 	    rte_errno != EEXIST) {
+		/* for primary, unsupported IPC is not an error */
+		if (rte_eal_process_type() == RTE_PROC_PRIMARY &&
+				rte_errno == ENOTSUP)
+			goto scan;
 		VDEV_LOG(ERR, "Failed to add vdev mp action");
 		return -1;
 	}
@@ -435,6 +440,7 @@ vdev_scan(void)
 		/* Fall through to allow private vdevs in secondary process */
 	}
 
+scan:
 	/* call custom scan callbacks if any */
 	rte_spinlock_lock(&vdev_custom_scan_lock);
 	TAILQ_FOREACH(custom_scan, &vdev_custom_scans, next) {
@@ -482,7 +488,7 @@ static int
 vdev_probe(void)
 {
 	struct rte_vdev_device *dev;
-	int ret = 0;
+	int r, ret = 0;
 
 	/* call the init function for each virtual device */
 	TAILQ_FOREACH(dev, &vdev_device_list, next) {
@@ -491,10 +497,10 @@ vdev_probe(void)
 		 * we call each driver probe.
 		 */
 
-		if (rte_dev_is_probed(&dev->device))
-			continue;
-
-		if (vdev_probe_all_drivers(dev)) {
+		r = vdev_probe_all_drivers(dev);
+		if (r != 0) {
+			if (r == -EEXIST)
+				continue;
 			VDEV_LOG(ERR, "failed to initialize %s device",
 				rte_vdev_device_name(dev));
 			ret = -1;

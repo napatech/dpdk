@@ -48,7 +48,7 @@ struct cryptodev_fips_validate_env {
 static int
 cryptodev_fips_validate_app_int(void)
 {
-	struct rte_cryptodev_config conf = {rte_socket_id(), 1};
+	struct rte_cryptodev_config conf = {rte_socket_id(), 1, 0};
 	struct rte_cryptodev_qp_conf qp_conf = {128, NULL, NULL};
 	uint32_t sess_sz = rte_cryptodev_sym_get_private_session_size(
 			env.dev_id);
@@ -512,6 +512,7 @@ static int
 prepare_auth_op(void)
 {
 	struct rte_crypto_sym_op *sym = env.op->sym;
+	uint8_t *pt;
 
 	__rte_crypto_op_reset(env.op, RTE_CRYPTO_OP_TYPE_SYMMETRIC);
 	rte_pktmbuf_reset(env.mbuf);
@@ -519,52 +520,25 @@ prepare_auth_op(void)
 	sym->m_src = env.mbuf;
 	sym->auth.data.offset = 0;
 
-	if (info.op == FIPS_TEST_ENC_AUTH_GEN) {
-		uint8_t *pt;
+	pt = (uint8_t *)rte_pktmbuf_append(env.mbuf, vec.pt.len +
+			vec.cipher_auth.digest.len);
 
-		if (vec.pt.len > RTE_MBUF_MAX_NB_SEGS) {
-			RTE_LOG(ERR, USER1, "PT len %u\n", vec.pt.len);
-			return -EPERM;
-		}
-
-		pt = (uint8_t *)rte_pktmbuf_append(env.mbuf, vec.pt.len +
-				vec.cipher_auth.digest.len);
-
-		if (!pt) {
-			RTE_LOG(ERR, USER1, "Error %i: MBUF too small\n",
-					-ENOMEM);
-			return -ENOMEM;
-		}
-
-		memcpy(pt, vec.pt.val, vec.pt.len);
-		sym->auth.data.length = vec.pt.len;
-		sym->auth.digest.data = pt + vec.pt.len;
-		sym->auth.digest.phys_addr = rte_pktmbuf_mtophys_offset(
-				env.mbuf, vec.pt.len);
-
-	} else {
-		uint8_t *ct;
-
-		if (vec.ct.len > RTE_MBUF_MAX_NB_SEGS) {
-			RTE_LOG(ERR, USER1, "CT len %u\n", vec.ct.len);
-			return -EPERM;
-		}
-
-		ct = (uint8_t *)rte_pktmbuf_append(env.mbuf,
-				vec.ct.len + vec.cipher_auth.digest.len);
-
-		if (!ct) {
-			RTE_LOG(ERR, USER1, "Error %i: MBUF too small\n",
-					-ENOMEM);
-			return -ENOMEM;
-		}
-
-		memcpy(ct, vec.ct.val, vec.ct.len);
-		sym->auth.data.length = vec.ct.len;
-		sym->auth.digest.data = vec.cipher_auth.digest.val;
-		sym->auth.digest.phys_addr = rte_malloc_virt2iova(
-				sym->auth.digest.data);
+	if (!pt) {
+		RTE_LOG(ERR, USER1, "Error %i: MBUF too small\n",
+				-ENOMEM);
+		return -ENOMEM;
 	}
+
+	sym->auth.data.length = vec.pt.len;
+	sym->auth.digest.data = pt + vec.pt.len;
+	sym->auth.digest.phys_addr = rte_pktmbuf_mtophys_offset(
+			env.mbuf, vec.pt.len);
+
+	memcpy(pt, vec.pt.val, vec.pt.len);
+
+	if (info.op == FIPS_TEST_DEC_AUTH_VERIF)
+		memcpy(pt + vec.pt.len, vec.cipher_auth.digest.val,
+				vec.cipher_auth.digest.len);
 
 	rte_crypto_op_attach_sym_session(env.op, env.sess);
 
@@ -649,16 +623,24 @@ prepare_aes_xform(struct rte_crypto_sym_xform *xform)
 
 	xform->type = RTE_CRYPTO_SYM_XFORM_CIPHER;
 
-	cipher_xform->algo = RTE_CRYPTO_CIPHER_AES_CBC;
+	if (info.interim_info.aes_data.cipher_algo == RTE_CRYPTO_CIPHER_AES_CBC)
+		cipher_xform->algo = RTE_CRYPTO_CIPHER_AES_CBC;
+	else
+		cipher_xform->algo = RTE_CRYPTO_CIPHER_AES_ECB;
+
 	cipher_xform->op = (info.op == FIPS_TEST_ENC_AUTH_GEN) ?
 			RTE_CRYPTO_CIPHER_OP_ENCRYPT :
 			RTE_CRYPTO_CIPHER_OP_DECRYPT;
 	cipher_xform->key.data = vec.cipher_auth.key.val;
 	cipher_xform->key.length = vec.cipher_auth.key.len;
-	cipher_xform->iv.length = vec.iv.len;
-	cipher_xform->iv.offset = IV_OFF;
-
-	cap_idx.algo.cipher = RTE_CRYPTO_CIPHER_AES_CBC;
+	if (cipher_xform->algo == RTE_CRYPTO_CIPHER_AES_CBC) {
+		cipher_xform->iv.length = vec.iv.len;
+		cipher_xform->iv.offset = IV_OFF;
+	} else {
+		cipher_xform->iv.length = 0;
+		cipher_xform->iv.offset = 0;
+	}
+	cap_idx.algo.cipher = cipher_xform->algo;
 	cap_idx.type = RTE_CRYPTO_SYM_XFORM_CIPHER;
 
 	cap = rte_cryptodev_sym_capability_get(env.dev_id, &cap_idx);
@@ -689,16 +671,24 @@ prepare_tdes_xform(struct rte_crypto_sym_xform *xform)
 
 	xform->type = RTE_CRYPTO_SYM_XFORM_CIPHER;
 
-	cipher_xform->algo = RTE_CRYPTO_CIPHER_3DES_CBC;
+	if (info.interim_info.tdes_data.test_mode == TDES_MODE_CBC)
+		cipher_xform->algo = RTE_CRYPTO_CIPHER_3DES_CBC;
+	else
+		cipher_xform->algo = RTE_CRYPTO_CIPHER_3DES_ECB;
 	cipher_xform->op = (info.op == FIPS_TEST_ENC_AUTH_GEN) ?
 			RTE_CRYPTO_CIPHER_OP_ENCRYPT :
 			RTE_CRYPTO_CIPHER_OP_DECRYPT;
 	cipher_xform->key.data = vec.cipher_auth.key.val;
 	cipher_xform->key.length = vec.cipher_auth.key.len;
-	cipher_xform->iv.length = vec.iv.len;
-	cipher_xform->iv.offset = IV_OFF;
 
-	cap_idx.algo.cipher = RTE_CRYPTO_CIPHER_3DES_CBC;
+	if (cipher_xform->algo == RTE_CRYPTO_CIPHER_3DES_CBC) {
+		cipher_xform->iv.length = vec.iv.len;
+		cipher_xform->iv.offset = IV_OFF;
+	} else {
+		cipher_xform->iv.length = 0;
+		cipher_xform->iv.offset = 0;
+	}
+	cap_idx.algo.cipher = cipher_xform->algo;
 	cap_idx.type = RTE_CRYPTO_SYM_XFORM_CIPHER;
 
 	cap = rte_cryptodev_sym_capability_get(env.dev_id, &cap_idx);
@@ -887,6 +877,41 @@ prepare_ccm_xform(struct rte_crypto_sym_xform *xform)
 	return 0;
 }
 
+static int
+prepare_sha_xform(struct rte_crypto_sym_xform *xform)
+{
+	const struct rte_cryptodev_symmetric_capability *cap;
+	struct rte_cryptodev_sym_capability_idx cap_idx;
+	struct rte_crypto_auth_xform *auth_xform = &xform->auth;
+
+	xform->type = RTE_CRYPTO_SYM_XFORM_AUTH;
+
+	auth_xform->algo = info.interim_info.sha_data.algo;
+	auth_xform->op = RTE_CRYPTO_AUTH_OP_GENERATE;
+	auth_xform->digest_length = vec.cipher_auth.digest.len;
+
+	cap_idx.algo.auth = auth_xform->algo;
+	cap_idx.type = RTE_CRYPTO_SYM_XFORM_AUTH;
+
+	cap = rte_cryptodev_sym_capability_get(env.dev_id, &cap_idx);
+	if (!cap) {
+		RTE_LOG(ERR, USER1, "Failed to get capability for cdev %u\n",
+				env.dev_id);
+		return -EINVAL;
+	}
+
+	if (rte_cryptodev_sym_capability_check_auth(cap,
+			auth_xform->key.length,
+			auth_xform->digest_length, 0) != 0) {
+		RTE_LOG(ERR, USER1, "PMD %s key length %u digest length %u\n",
+				info.device_name, auth_xform->key.length,
+				auth_xform->digest_length);
+		return -EPERM;
+	}
+
+	return 0;
+}
+
 static void
 get_writeback_data(struct fips_val *val)
 {
@@ -914,19 +939,20 @@ fips_run_test(void)
 	if (ret < 0) {
 		RTE_LOG(ERR, USER1, "Error %i: Init session\n",
 				ret);
-		return ret;
+		goto exit;
 	}
 
 	ret = test_ops.prepare_op();
 	if (ret < 0) {
 		RTE_LOG(ERR, USER1, "Error %i: Prepare op\n",
 				ret);
-		return ret;
+		goto exit;
 	}
 
 	if (rte_cryptodev_enqueue_burst(env.dev_id, 0, &env.op, 1) < 1) {
 		RTE_LOG(ERR, USER1, "Error: Failed enqueue\n");
-		return ret;
+		ret = -1;
+		goto exit;
 	}
 
 	do {
@@ -938,6 +964,7 @@ fips_run_test(void)
 
 	vec.status = env.op->status;
 
+exit:
 	rte_cryptodev_sym_session_clear(env.dev_id, env.sess);
 	rte_cryptodev_sym_session_free(env.sess);
 	env.sess = NULL;
@@ -1000,6 +1027,7 @@ fips_mct_tdes_test(void)
 	uint8_t prev_in[TDES_BLOCK_SIZE] = {0};
 	uint32_t i, j, k;
 	int ret;
+	int test_mode = info.interim_info.tdes_data.test_mode;
 
 	for (i = 0; i < TDES_EXTERN_ITER; i++) {
 		if (i != 0)
@@ -1014,7 +1042,6 @@ fips_mct_tdes_test(void)
 					fprintf(info.fp_wr, "Bypass\n");
 					return 0;
 				}
-
 				return ret;
 			}
 
@@ -1027,25 +1054,50 @@ fips_mct_tdes_test(void)
 				memcpy(prev_out, val.val, TDES_BLOCK_SIZE);
 
 				if (info.op == FIPS_TEST_ENC_AUTH_GEN) {
-					memcpy(vec.pt.val, vec.iv.val,
-							TDES_BLOCK_SIZE);
-					memcpy(vec.iv.val, val.val,
-							TDES_BLOCK_SIZE);
+					if (test_mode == TDES_MODE_ECB) {
+						memcpy(vec.pt.val, val.val,
+							   TDES_BLOCK_SIZE);
+					} else {
+						memcpy(vec.pt.val, vec.iv.val,
+							   TDES_BLOCK_SIZE);
+						memcpy(vec.iv.val, val.val,
+							   TDES_BLOCK_SIZE);
+					}
+
 				} else {
-					memcpy(vec.iv.val, vec.ct.val,
-							TDES_BLOCK_SIZE);
-					memcpy(vec.ct.val, val.val,
-							TDES_BLOCK_SIZE);
+					if (test_mode == TDES_MODE_ECB) {
+						memcpy(vec.ct.val, val.val,
+							   TDES_BLOCK_SIZE);
+					} else {
+						memcpy(vec.iv.val, vec.ct.val,
+							   TDES_BLOCK_SIZE);
+						memcpy(vec.ct.val, val.val,
+							   TDES_BLOCK_SIZE);
+					}
 				}
 				continue;
 			}
 
 			if (info.op == FIPS_TEST_ENC_AUTH_GEN) {
-				memcpy(vec.iv.val, val.val, TDES_BLOCK_SIZE);
-				memcpy(vec.pt.val, prev_out, TDES_BLOCK_SIZE);
+				if (test_mode == TDES_MODE_ECB) {
+					memcpy(vec.pt.val, val.val,
+						   TDES_BLOCK_SIZE);
+				} else {
+					memcpy(vec.iv.val, val.val,
+						   TDES_BLOCK_SIZE);
+					memcpy(vec.pt.val, prev_out,
+						   TDES_BLOCK_SIZE);
+				}
 			} else {
-				memcpy(vec.iv.val, vec.ct.val, TDES_BLOCK_SIZE);
-				memcpy(vec.ct.val, val.val, TDES_BLOCK_SIZE);
+				if (test_mode == TDES_MODE_ECB) {
+					memcpy(vec.ct.val, val.val,
+						   TDES_BLOCK_SIZE);
+				} else {
+					memcpy(vec.iv.val, vec.ct.val,
+						   TDES_BLOCK_SIZE);
+					memcpy(vec.ct.val, val.val,
+						   TDES_BLOCK_SIZE);
+				}
 			}
 
 			if (j == TDES_INTERN_ITER - 1)
@@ -1104,17 +1156,99 @@ fips_mct_tdes_test(void)
 					val_key.val[k] : (val_key.val[k] ^ 0x1);
 
 		if (info.op == FIPS_TEST_ENC_AUTH_GEN) {
-			memcpy(vec.iv.val, val.val, TDES_BLOCK_SIZE);
-			memcpy(vec.pt.val, prev_out, TDES_BLOCK_SIZE);
+			if (test_mode == TDES_MODE_ECB) {
+				memcpy(vec.pt.val, val.val, TDES_BLOCK_SIZE);
+			} else {
+				memcpy(vec.iv.val, val.val, TDES_BLOCK_SIZE);
+				memcpy(vec.pt.val, prev_out, TDES_BLOCK_SIZE);
+			}
 		} else {
-			memcpy(vec.iv.val, prev_out, TDES_BLOCK_SIZE);
-			memcpy(vec.ct.val, val.val, TDES_BLOCK_SIZE);
+			if (test_mode == TDES_MODE_ECB) {
+				memcpy(vec.ct.val, val.val, TDES_BLOCK_SIZE);
+			} else {
+				memcpy(vec.iv.val, prev_out, TDES_BLOCK_SIZE);
+				memcpy(vec.ct.val, val.val, TDES_BLOCK_SIZE);
+			}
 		}
 	}
 
 	return 0;
 }
 
+static int
+fips_mct_aes_ecb_test(void)
+{
+#define AES_BLOCK_SIZE	16
+#define AES_EXTERN_ITER	100
+#define AES_INTERN_ITER	1000
+	struct fips_val val, val_key;
+	uint8_t prev_out[AES_BLOCK_SIZE] = {0};
+	uint32_t i, j, k;
+	int ret;
+
+	for (i = 0; i < AES_EXTERN_ITER; i++) {
+		if (i != 0)
+			update_info_vec(i);
+
+		fips_test_write_one_case();
+
+		for (j = 0; j < AES_INTERN_ITER; j++) {
+			ret = fips_run_test();
+			if (ret < 0) {
+				if (ret == -EPERM) {
+					fprintf(info.fp_wr, "Bypass\n");
+					return 0;
+				}
+
+				return ret;
+			}
+
+			get_writeback_data(&val);
+
+			if (info.op == FIPS_TEST_ENC_AUTH_GEN)
+				memcpy(vec.pt.val, val.val, AES_BLOCK_SIZE);
+			else
+				memcpy(vec.ct.val, val.val, AES_BLOCK_SIZE);
+
+			if (j == AES_INTERN_ITER - 1)
+				continue;
+
+			memcpy(prev_out, val.val, AES_BLOCK_SIZE);
+		}
+
+		info.parse_writeback(&val);
+		fprintf(info.fp_wr, "\n");
+
+		if (i == AES_EXTERN_ITER - 1)
+			continue;
+
+		/** update key */
+		memcpy(&val_key, &vec.cipher_auth.key, sizeof(val_key));
+		for (k = 0; k < vec.cipher_auth.key.len; k++) {
+			switch (vec.cipher_auth.key.len) {
+			case 16:
+				val_key.val[k] ^= val.val[k];
+				break;
+			case 24:
+				if (k < 8)
+					val_key.val[k] ^= prev_out[k + 8];
+				else
+					val_key.val[k] ^= val.val[k - 8];
+				break;
+			case 32:
+				if (k < 16)
+					val_key.val[k] ^= prev_out[k];
+				else
+					val_key.val[k] ^= val.val[k - 16];
+				break;
+			default:
+				return -1;
+			}
+		}
+	}
+
+	return 0;
+}
 static int
 fips_mct_aes_test(void)
 {
@@ -1126,6 +1260,9 @@ fips_mct_aes_test(void)
 	uint8_t prev_in[AES_BLOCK_SIZE] = {0};
 	uint32_t i, j, k;
 	int ret;
+
+	if (info.interim_info.aes_data.cipher_algo == RTE_CRYPTO_CIPHER_AES_ECB)
+		return fips_mct_aes_ecb_test();
 
 	for (i = 0; i < AES_EXTERN_ITER; i++) {
 		if (i != 0)
@@ -1218,6 +1355,90 @@ fips_mct_aes_test(void)
 }
 
 static int
+fips_mct_sha_test(void)
+{
+#define SHA_EXTERN_ITER	100
+#define SHA_INTERN_ITER	1000
+#define SHA_MD_BLOCK	3
+	struct fips_val val, md[SHA_MD_BLOCK];
+	char temp[MAX_DIGEST_SIZE*2];
+	int ret;
+	uint32_t i, j;
+
+	val.val = rte_malloc(NULL, (MAX_DIGEST_SIZE*SHA_MD_BLOCK), 0);
+	for (i = 0; i < SHA_MD_BLOCK; i++)
+		md[i].val = rte_malloc(NULL, (MAX_DIGEST_SIZE*2), 0);
+
+	rte_free(vec.pt.val);
+	vec.pt.val = rte_malloc(NULL, (MAX_DIGEST_SIZE*SHA_MD_BLOCK), 0);
+
+	fips_test_write_one_case();
+	fprintf(info.fp_wr, "\n");
+
+	for (j = 0; j < SHA_EXTERN_ITER; j++) {
+
+		memcpy(md[0].val, vec.cipher_auth.digest.val,
+			vec.cipher_auth.digest.len);
+		md[0].len = vec.cipher_auth.digest.len;
+		memcpy(md[1].val, vec.cipher_auth.digest.val,
+			vec.cipher_auth.digest.len);
+		md[1].len = vec.cipher_auth.digest.len;
+		memcpy(md[2].val, vec.cipher_auth.digest.val,
+			vec.cipher_auth.digest.len);
+		md[2].len = vec.cipher_auth.digest.len;
+
+		for (i = 0; i < (SHA_INTERN_ITER); i++) {
+
+			memcpy(vec.pt.val, md[0].val,
+				(size_t)md[0].len);
+			memcpy((vec.pt.val + md[0].len), md[1].val,
+				(size_t)md[1].len);
+			memcpy((vec.pt.val + md[0].len + md[1].len),
+				md[2].val,
+				(size_t)md[2].len);
+			vec.pt.len = md[0].len + md[1].len + md[2].len;
+
+			ret = fips_run_test();
+			if (ret < 0) {
+				if (ret == -EPERM) {
+					fprintf(info.fp_wr, "Bypass\n\n");
+					return 0;
+				}
+				return ret;
+			}
+
+			get_writeback_data(&val);
+
+			memcpy(md[0].val, md[1].val, md[1].len);
+			md[0].len = md[1].len;
+			memcpy(md[1].val, md[2].val, md[2].len);
+			md[1].len = md[2].len;
+
+			memcpy(md[2].val, (val.val + vec.pt.len),
+				vec.cipher_auth.digest.len);
+			md[2].len = vec.cipher_auth.digest.len;
+		}
+
+		memcpy(vec.cipher_auth.digest.val, md[2].val, md[2].len);
+		vec.cipher_auth.digest.len = md[2].len;
+
+		fprintf(info.fp_wr, "COUNT = %u\n", j);
+
+		writeback_hex_str("", temp, &vec.cipher_auth.digest);
+
+		fprintf(info.fp_wr, "MD = %s\n\n", temp);
+	}
+
+	for (i = 0; i < (SHA_MD_BLOCK); i++)
+		rte_free(md[i].val);
+
+	rte_free(vec.pt.val);
+
+	return 0;
+}
+
+
+static int
 init_test_ops(void)
 {
 	switch (info.algo) {
@@ -1257,7 +1478,26 @@ init_test_ops(void)
 		test_ops.prepare_xform = prepare_ccm_xform;
 		test_ops.test = fips_generic_test;
 		break;
+	case FIPS_TEST_ALGO_SHA:
+		test_ops.prepare_op = prepare_auth_op;
+		test_ops.prepare_xform = prepare_sha_xform;
+		if (info.interim_info.sha_data.test_type == SHA_MCT)
+			test_ops.test = fips_mct_sha_test;
+		else
+			test_ops.test = fips_generic_test;
+		break;
 	default:
+		if (strstr(info.file_name, "TECB") ||
+				strstr(info.file_name, "TCBC")) {
+			info.algo = FIPS_TEST_ALGO_TDES;
+			test_ops.prepare_op = prepare_cipher_op;
+			test_ops.prepare_xform	= prepare_tdes_xform;
+			if (info.interim_info.tdes_data.test_type == TDES_MCT)
+				test_ops.test = fips_mct_tdes_test;
+			else
+				test_ops.test = fips_generic_test;
+			break;
+		}
 		return -1;
 	}
 

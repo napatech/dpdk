@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
  *   Copyright (c) 2016 Freescale Semiconductor, Inc. All rights reserved.
- *   Copyright 2016-2018 NXP
+ *   Copyright 2016-2019 NXP
  *
  */
 
@@ -23,7 +23,7 @@
 
 #include "../dpaa2_ethdev.h"
 
-static int
+int
 dpaa2_distset_to_dpkg_profile_cfg(
 		uint64_t req_dist_set,
 		struct dpkg_profile_cfg *kg_cfg);
@@ -51,6 +51,7 @@ rte_pmd_dpaa2_set_custom_hash(uint16_t port_id,
 	kg_cfg.extracts[0].type = DPKG_EXTRACT_FROM_DATA;
 	kg_cfg.extracts[0].extract.from_data.offset = offset;
 	kg_cfg.extracts[0].extract.from_data.size = size;
+	kg_cfg.extracts[0].num_of_byte_masks = 0;
 	kg_cfg.num_extracts = 1;
 
 	ret = dpkg_prepare_key_cfg(&kg_cfg, p_params);
@@ -170,7 +171,7 @@ int dpaa2_remove_flow_dist(
 	return ret;
 }
 
-static int
+int
 dpaa2_distset_to_dpkg_profile_cfg(
 		uint64_t req_dist_set,
 		struct dpkg_profile_cfg *kg_cfg)
@@ -365,6 +366,7 @@ dpaa2_attach_bp_list(struct dpaa2_dev_priv *priv,
 	}
 
 	/*Attach buffer pool to the network interface as described by the user*/
+	memset(&bpool_cfg, 0, sizeof(struct dpni_pools_cfg));
 	bpool_cfg.num_dpbp = 1;
 	bpool_cfg.pools[0].dpbp_id = bp_list->buf_pool.dpbp_node->dpbp_id;
 	bpool_cfg.pools[0].backup_pool = 0;

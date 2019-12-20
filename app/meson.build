@@ -1,21 +1,27 @@
 # SPDX-License-Identifier: BSD-3-Clause
-# Copyright(c) 2017 Intel Corporation
+# Copyright(c) 2017-2019 Intel Corporation
 
-apps = ['pdump',
+if is_windows
+	subdir_done()
+endif
+
+apps = [
+	'pdump',
 	'proc-info',
+	'test-acl',
 	'test-bbdev',
+	'test-cmdline',
 	'test-compress-perf',
 	'test-crypto-perf',
 	'test-eventdev',
-	'test-pmd']
+	'test-pipeline',
+	'test-pmd',
+	'test-sad']
 
 # for BSD only
 lib_execinfo = cc.find_library('execinfo', required: false)
 
 default_cflags = machine_args
-
-# specify -D_GNU_SOURCE unconditionally
-default_cflags += '-D_GNU_SOURCE'
 
 foreach app:apps
 	build = true
@@ -61,3 +67,6 @@ foreach app:apps
 				install: true)
 	endif
 endforeach
+
+# special case the autotests
+subdir('test')

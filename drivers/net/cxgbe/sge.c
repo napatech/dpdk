@@ -73,7 +73,7 @@ static inline unsigned int fl_mtu_bufsize(struct adapter *adapter,
 {
 	struct sge *s = &adapter->sge;
 
-	return CXGBE_ALIGN(s->pktshift + ETHER_HDR_LEN + VLAN_HLEN + mtu,
+	return CXGBE_ALIGN(s->pktshift + RTE_ETHER_HDR_LEN + VLAN_HLEN + mtu,
 			   s->fl_align);
 }
 
@@ -1004,12 +1004,6 @@ static inline int tx_do_packet_coalesce(struct sge_eth_txq *txq,
 	struct cpl_tx_pkt_core *cpl;
 	struct tx_sw_desc *sd;
 	unsigned int idx = q->coalesce.idx, len = mbuf->pkt_len;
-	unsigned int max_coal_pkt_num = is_pf4(adap) ? ETH_COALESCE_PKT_NUM :
-						       ETH_COALESCE_VF_PKT_NUM;
-
-#ifdef RTE_LIBRTE_CXGBE_TPUT
-	RTE_SET_USED(nb_pkts);
-#endif
 
 	if (q->coalesce.type == 0) {
 		mc = (struct ulp_txpkt *)q->coalesce.ptr;
@@ -1082,13 +1076,15 @@ static inline int tx_do_packet_coalesce(struct sge_eth_txq *txq,
 	sd->coalesce.sgl[idx & 1] = (struct ulptx_sgl *)(cpl + 1);
 	sd->coalesce.idx = (idx & 1) + 1;
 
-	/* send the coaelsced work request if max reached */
-	if (++q->coalesce.idx == max_coal_pkt_num
-#ifndef RTE_LIBRTE_CXGBE_TPUT
-	    || q->coalesce.idx >= nb_pkts
-#endif
-	    )
+	/* Send the coalesced work request, only if max reached. However,
+	 * if lower latency is preferred over throughput, then don't wait
+	 * for coalescing the next Tx burst and send the packets now.
+	 */
+	q->coalesce.idx++;
+	if (q->coalesce.idx == adap->params.max_tx_coalesce_num ||
+	    (adap->devargs.tx_mode_latency && q->coalesce.idx >= nb_pkts))
 		ship_tx_pkt_coalesce_wr(adap, txq);
+
 	return 0;
 }
 
@@ -1128,7 +1124,7 @@ int t4_eth_xmit(struct sge_eth_txq *txq, struct rte_mbuf *mbuf,
 	 * The chip min packet length is 10 octets but play safe and reject
 	 * anything shorter than an Ethernet header.
 	 */
-	if (unlikely(m->pkt_len < ETHER_HDR_LEN)) {
+	if (unlikely(m->pkt_len < RTE_ETHER_HDR_LEN)) {
 out_free:
 		rte_pktmbuf_free(m);
 		return 0;
@@ -1138,14 +1134,15 @@ out_free:
 	    (unlikely(m->pkt_len > max_pkt_len)))
 		goto out_free;
 
-	pi = (struct port_info *)txq->data->dev_private;
+	pi = txq->data->dev_private;
 	adap = pi->adapter;
 
 	cntrl = F_TXPKT_L4CSUM_DIS | F_TXPKT_IPCSUM_DIS;
 	/* align the end of coalesce WR to a 512 byte boundary */
 	txq->q.coalesce.max = (8 - (txq->q.pidx & 7)) * 8;
 
-	if (!((m->ol_flags & PKT_TX_TCP_SEG) || (m->pkt_len > ETHER_MAX_LEN))) {
+	if (!((m->ol_flags & PKT_TX_TCP_SEG) ||
+			m->pkt_len > RTE_ETHER_MAX_LEN)) {
 		if (should_tx_packet_coalesce(txq, mbuf, &cflits, adap)) {
 			if (unlikely(map_mbuf(mbuf, addr) < 0)) {
 				dev_warn(adap, "%s: mapping err for coalesce\n",
@@ -1153,7 +1150,6 @@ out_free:
 				txq->stats.mapping_err++;
 				goto out_free;
 			}
-			rte_prefetch0((volatile void *)addr);
 			return tx_do_packet_coalesce(txq, mbuf, cflits, adap,
 						     pi, addr, nb_pkts);
 		} else {
@@ -1230,7 +1226,7 @@ out_free:
 		v6 = (m->ol_flags & PKT_TX_IPV6) != 0;
 		l3hdr_len = m->l3_len;
 		l4hdr_len = m->l4_len;
-		eth_xtra_len = m->l2_len - ETHER_HDR_LEN;
+		eth_xtra_len = m->l2_len - RTE_ETHER_HDR_LEN;
 		len += sizeof(*lso);
 		wr->op_immdlen = htonl(V_FW_WR_OP(is_pf4(adap) ?
 						  FW_ETH_TX_PKT_WR :
@@ -1495,98 +1491,6 @@ alloc_sw_ring:
 	return tz->addr;
 }
 
-/**
- * t4_pktgl_to_mbuf_usembufs - build an mbuf from a packet gather list
- * @gl: the gather list
- *
- * Builds an mbuf from the given packet gather list.  Returns the mbuf or
- * %NULL if mbuf allocation failed.
- */
-static struct rte_mbuf *t4_pktgl_to_mbuf_usembufs(const struct pkt_gl *gl)
-{
-	/*
-	 * If there's only one mbuf fragment, just return that.
-	 */
-	if (likely(gl->nfrags == 1))
-		return gl->mbufs[0];
-
-	return NULL;
-}
-
-/**
- * t4_pktgl_to_mbuf - build an mbuf from a packet gather list
- * @gl: the gather list
- *
- * Builds an mbuf from the given packet gather list.  Returns the mbuf or
- * %NULL if mbuf allocation failed.
- */
-static struct rte_mbuf *t4_pktgl_to_mbuf(const struct pkt_gl *gl)
-{
-	return t4_pktgl_to_mbuf_usembufs(gl);
-}
-
-/**
- * t4_ethrx_handler - process an ingress ethernet packet
- * @q: the response queue that received the packet
- * @rsp: the response queue descriptor holding the RX_PKT message
- * @si: the gather list of packet fragments
- *
- * Process an ingress ethernet packet and deliver it to the stack.
- */
-int t4_ethrx_handler(struct sge_rspq *q, const __be64 *rsp,
-		     const struct pkt_gl *si)
-{
-	struct rte_mbuf *mbuf;
-	const struct cpl_rx_pkt *pkt;
-	const struct rss_header *rss_hdr;
-	bool csum_ok;
-	struct sge_eth_rxq *rxq = container_of(q, struct sge_eth_rxq, rspq);
-	u16 err_vec;
-
-	rss_hdr = (const void *)rsp;
-	pkt = (const void *)&rsp[1];
-	/* Compressed error vector is enabled for T6 only */
-	if (q->adapter->params.tp.rx_pkt_encap)
-		err_vec = G_T6_COMPR_RXERR_VEC(ntohs(pkt->err_vec));
-	else
-		err_vec = ntohs(pkt->err_vec);
-	csum_ok = pkt->csum_calc && !err_vec;
-
-	mbuf = t4_pktgl_to_mbuf(si);
-	if (unlikely(!mbuf)) {
-		rxq->stats.rx_drops++;
-		return 0;
-	}
-
-	mbuf->port = pkt->iff;
-	if (pkt->l2info & htonl(F_RXF_IP)) {
-		mbuf->packet_type = RTE_PTYPE_L3_IPV4;
-		if (unlikely(!csum_ok))
-			mbuf->ol_flags |= PKT_RX_IP_CKSUM_BAD;
-
-		if ((pkt->l2info & htonl(F_RXF_UDP | F_RXF_TCP)) && !csum_ok)
-			mbuf->ol_flags |= PKT_RX_L4_CKSUM_BAD;
-	} else if (pkt->l2info & htonl(F_RXF_IP6)) {
-		mbuf->packet_type = RTE_PTYPE_L3_IPV6;
-	}
-
-	mbuf->port = pkt->iff;
-
-	if (!rss_hdr->filter_tid && rss_hdr->hash_type) {
-		mbuf->ol_flags |= PKT_RX_RSS_HASH;
-		mbuf->hash.rss = ntohl(rss_hdr->hash_val);
-	}
-
-	if (pkt->vlan_ex) {
-		mbuf->ol_flags |= PKT_RX_VLAN;
-		mbuf->vlan_tci = ntohs(pkt->vlan);
-	}
-	rxq->stats.pkts++;
-	rxq->stats.rx_bytes += mbuf->pkt_len;
-
-	return 0;
-}
-
 #define CXGB4_MSG_AN ((void *)1)
 
 /**
@@ -1603,6 +1507,52 @@ static inline void rspq_next(struct sge_rspq *q)
 		q->gen ^= 1;
 		q->cur_desc = q->desc;
 	}
+}
+
+static inline void cxgbe_set_mbuf_info(struct rte_mbuf *pkt, uint32_t ptype,
+				       uint64_t ol_flags)
+{
+	pkt->packet_type |= ptype;
+	pkt->ol_flags |= ol_flags;
+}
+
+static inline void cxgbe_fill_mbuf_info(struct adapter *adap,
+					const struct cpl_rx_pkt *cpl,
+					struct rte_mbuf *pkt)
+{
+	bool csum_ok;
+	u16 err_vec;
+
+	if (adap->params.tp.rx_pkt_encap)
+		err_vec = G_T6_COMPR_RXERR_VEC(ntohs(cpl->err_vec));
+	else
+		err_vec = ntohs(cpl->err_vec);
+
+	csum_ok = cpl->csum_calc && !err_vec;
+
+	if (cpl->vlan_ex)
+		cxgbe_set_mbuf_info(pkt, RTE_PTYPE_L2_ETHER_VLAN,
+				    PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED);
+	else
+		cxgbe_set_mbuf_info(pkt, RTE_PTYPE_L2_ETHER, 0);
+
+	if (cpl->l2info & htonl(F_RXF_IP))
+		cxgbe_set_mbuf_info(pkt, RTE_PTYPE_L3_IPV4,
+				    csum_ok ? PKT_RX_IP_CKSUM_GOOD :
+					      PKT_RX_IP_CKSUM_BAD);
+	else if (cpl->l2info & htonl(F_RXF_IP6))
+		cxgbe_set_mbuf_info(pkt, RTE_PTYPE_L3_IPV6,
+				    csum_ok ? PKT_RX_IP_CKSUM_GOOD :
+					      PKT_RX_IP_CKSUM_BAD);
+
+	if (cpl->l2info & htonl(F_RXF_TCP))
+		cxgbe_set_mbuf_info(pkt, RTE_PTYPE_L4_TCP,
+				    csum_ok ? PKT_RX_L4_CKSUM_GOOD :
+					      PKT_RX_L4_CKSUM_BAD);
+	else if (cpl->l2info & htonl(F_RXF_UDP))
+		cxgbe_set_mbuf_info(pkt, RTE_PTYPE_L4_UDP,
+				    csum_ok ? PKT_RX_L4_CKSUM_GOOD :
+					      PKT_RX_L4_CKSUM_BAD);
 }
 
 /**
@@ -1656,8 +1606,6 @@ static int process_responses(struct sge_rspq *q, int budget,
 					(const void *)&q->cur_desc[1];
 				struct rte_mbuf *pkt, *npkt;
 				u32 len, bufsz;
-				bool csum_ok;
-				u16 err_vec;
 
 				rc = (const struct rsp_ctrl *)
 				     ((const char *)q->cur_desc +
@@ -1673,16 +1621,6 @@ static int process_responses(struct sge_rspq *q, int budget,
 				npkt = pkt;
 				len = G_RSPD_LEN(len);
 				pkt->pkt_len = len;
-
-				/* Compressed error vector is enabled for
-				 * T6 only
-				 */
-				if (q->adapter->params.tp.rx_pkt_encap)
-					err_vec = G_T6_COMPR_RXERR_VEC(
-							ntohs(cpl->err_vec));
-				else
-					err_vec = ntohs(cpl->err_vec);
-				csum_ok = cpl->csum_calc && !err_vec;
 
 				/* Chain mbufs into len if necessary */
 				while (len) {
@@ -1701,20 +1639,7 @@ static int process_responses(struct sge_rspq *q, int budget,
 				npkt->next = NULL;
 				pkt->nb_segs--;
 
-				if (cpl->l2info & htonl(F_RXF_IP)) {
-					pkt->packet_type = RTE_PTYPE_L3_IPV4;
-					if (unlikely(!csum_ok))
-						pkt->ol_flags |=
-							PKT_RX_IP_CKSUM_BAD;
-
-					if ((cpl->l2info &
-					     htonl(F_RXF_UDP | F_RXF_TCP)) &&
-					    !csum_ok)
-						pkt->ol_flags |=
-							PKT_RX_L4_CKSUM_BAD;
-				} else if (cpl->l2info & htonl(F_RXF_IP6)) {
-					pkt->packet_type = RTE_PTYPE_L3_IPV6;
-				}
+				cxgbe_fill_mbuf_info(q->adapter, cpl, pkt);
 
 				if (!rss_hdr->filter_tid &&
 				    rss_hdr->hash_type) {
@@ -1723,11 +1648,8 @@ static int process_responses(struct sge_rspq *q, int budget,
 						ntohl(rss_hdr->hash_val);
 				}
 
-				if (cpl->vlan_ex) {
-					pkt->ol_flags |= PKT_RX_VLAN |
-							 PKT_RX_VLAN_STRIPPED;
+				if (cpl->vlan_ex)
 					pkt->vlan_tci = ntohs(cpl->vlan);
-				}
 
 				rte_pktmbuf_adj(pkt, s->pktshift);
 				rxq->stats.pkts++;
@@ -1865,7 +1787,7 @@ int t4_sge_alloc_rxq(struct adapter *adap, struct sge_rspq *iq, bool fwevtq,
 	int ret, flsz = 0;
 	struct fw_iq_cmd c;
 	struct sge *s = &adap->sge;
-	struct port_info *pi = (struct port_info *)(eth_dev->data->dev_private);
+	struct port_info *pi = eth_dev->data->dev_private;
 	char z_name[RTE_MEMZONE_NAMESIZE];
 	char z_name_sw[RTE_MEMZONE_NAMESIZE];
 	unsigned int nb_refill;
@@ -2135,7 +2057,7 @@ int t4_sge_alloc_eth_txq(struct adapter *adap, struct sge_eth_txq *txq,
 	int ret, nentries;
 	struct fw_eq_eth_cmd c;
 	struct sge *s = &adap->sge;
-	struct port_info *pi = (struct port_info *)(eth_dev->data->dev_private);
+	struct port_info *pi = eth_dev->data->dev_private;
 	char z_name[RTE_MEMZONE_NAMESIZE];
 	char z_name_sw[RTE_MEMZONE_NAMESIZE];
 	u8 pciechan;
@@ -2214,7 +2136,7 @@ int t4_sge_alloc_ctrl_txq(struct adapter *adap, struct sge_ctrl_txq *txq,
 	int ret, nentries;
 	struct fw_eq_ctrl_cmd c;
 	struct sge *s = &adap->sge;
-	struct port_info *pi = (struct port_info *)(eth_dev->data->dev_private);
+	struct port_info *pi = eth_dev->data->dev_private;
 	char z_name[RTE_MEMZONE_NAMESIZE];
 	char z_name_sw[RTE_MEMZONE_NAMESIZE];
 

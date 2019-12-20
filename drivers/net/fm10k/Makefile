@@ -10,10 +10,9 @@ LIB = librte_pmd_fm10k.a
 
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
+CFLAGS += -DALLOW_EXPERIMENTAL_API
 
 EXPORT_MAP := rte_pmd_fm10k_version.map
-
-LIBABIVER := 1
 
 ifeq ($(CONFIG_RTE_TOOLCHAIN_ICC),y)
 #

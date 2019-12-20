@@ -20,13 +20,11 @@
  * QoS parameters are encoded as follows:
  *		Outer VLAN ID defines subport
  *		Inner VLAN ID defines pipe
- *		Destination IP 0.0.XXX.0 defines traffic class
  *		Destination IP host (0.0.0.XXX) defines queue
  * Values below define offset to each field from start of frame
  */
 #define SUBPORT_OFFSET	7
 #define PIPE_OFFSET		9
-#define TC_OFFSET		20
 #define QUEUE_OFFSET	20
 #define COLOR_OFFSET	19
 
@@ -35,16 +33,27 @@ get_pkt_sched(struct rte_mbuf *m, uint32_t *subport, uint32_t *pipe,
 			uint32_t *traffic_class, uint32_t *queue, uint32_t *color)
 {
 	uint16_t *pdata = rte_pktmbuf_mtod(m, uint16_t *);
+	uint16_t pipe_queue;
 
+	/* Outer VLAN ID*/
 	*subport = (rte_be_to_cpu_16(pdata[SUBPORT_OFFSET]) & 0x0FFF) &
-			(port_params.n_subports_per_port - 1); /* Outer VLAN ID*/
+		(port_params.n_subports_per_port - 1);
+
+	/* Inner VLAN ID */
 	*pipe = (rte_be_to_cpu_16(pdata[PIPE_OFFSET]) & 0x0FFF) &
-			(port_params.n_pipes_per_subport - 1); /* Inner VLAN ID */
-	*traffic_class = (pdata[QUEUE_OFFSET] & 0x0F) &
-			(RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE - 1); /* Destination IP */
-	*queue = ((pdata[QUEUE_OFFSET] >> 8) & 0x0F) &
-			(RTE_SCHED_QUEUES_PER_TRAFFIC_CLASS - 1) ; /* Destination IP */
-	*color = pdata[COLOR_OFFSET] & 0x03; 	/* Destination IP */
+		(subport_params[*subport].n_pipes_per_subport_enabled - 1);
+
+	pipe_queue = active_queues[(pdata[QUEUE_OFFSET] >> 8) % n_active_queues];
+
+	/* Traffic class (Destination IP) */
+	*traffic_class = pipe_queue > RTE_SCHED_TRAFFIC_CLASS_BE ?
+			RTE_SCHED_TRAFFIC_CLASS_BE : pipe_queue;
+
+	/* Traffic class queue (Destination IP) */
+	*queue = pipe_queue - *traffic_class;
+
+	/* Color (Destination IP) */
+	*color = pdata[COLOR_OFFSET] & 0x03;
 
 	return 0;
 }
@@ -77,7 +86,7 @@ app_rx_thread(struct thread_conf **confs)
 						rx_mbufs[i],
 						subport, pipe,
 						traffic_class, queue,
-						(enum rte_meter_color) color);
+						(enum rte_color) color);
 			}
 
 			if (unlikely(rte_ring_sp_enqueue_bulk(conf->rx_ring,

@@ -9,7 +9,7 @@
  * This new interface is designed to provide a user-space shim layer for
  * Ethtool and Netdevice op API.
  *
- * rte_ethtool_get_driver:          ethtool_ops::get_driverinfo
+ * rte_ethtool_get_driver:          ethtool_ops::get_drvinfo
  * rte_ethtool_get_link:            ethtool_ops::get_link
  * rte_ethtool_get_regs_len:        ethtool_ops::get_regs_len
  * rte_ethtool_get_regs:            ethtool_ops::get_regs
@@ -23,7 +23,7 @@
  * rte_ethtool_net_stop:            net_device_ops::ndo_stop
  * rte_ethtool_net_set_mac_addr:    net_device_ops::ndo_set_mac_address
  * rte_ethtool_net_validate_addr:   net_device_ops::ndo_validate_addr
- * rte_ethtool_net_change_mtu:      net_device_ops::rte_net_change_mtu
+ * rte_ethtool_net_change_mtu:      net_device_ops::ndo_change_mtu
  * rte_ethtool_net_get_stats64:     net_device_ops::ndo_get_stats64
  * rte_ethtool_net_vlan_rx_add_vid  net_device_ops::ndo_vlan_rx_add_vid
  * rte_ethtool_net_vlan_rx_kill_vid net_device_ops::ndo_vlan_rx_kill_vid
@@ -260,7 +260,7 @@ int rte_ethtool_net_stop(uint16_t port_id);
  *   - (0) if successful.
  *   - (-ENODEV) if *port_id* invalid.
  */
-int rte_ethtool_net_get_mac_addr(uint16_t port_id, struct ether_addr *addr);
+int rte_ethtool_net_get_mac_addr(uint16_t port_id, struct rte_ether_addr *addr);
 
 /**
  * Setting the Ethernet device MAC address.
@@ -276,7 +276,7 @@ int rte_ethtool_net_get_mac_addr(uint16_t port_id, struct ether_addr *addr);
  *   - (-EINVAL) if parameters invalid.
  *   - others depends on the specific operations implementation.
  */
-int rte_ethtool_net_set_mac_addr(uint16_t port_id, struct ether_addr *addr);
+int rte_ethtool_net_set_mac_addr(uint16_t port_id, struct rte_ether_addr *addr);
 
 /**
  * Validate if the provided MAC address is valid unicast address
@@ -292,7 +292,8 @@ int rte_ethtool_net_set_mac_addr(uint16_t port_id, struct ether_addr *addr);
  *   - (-EINVAL) if parameters invalid.
  *   - others depends on the specific operations implementation.
  */
-int rte_ethtool_net_validate_addr(uint16_t port_id, struct ether_addr *addr);
+int rte_ethtool_net_validate_addr(uint16_t port_id,
+				struct rte_ether_addr *addr);
 
 /**
  * Setting the Ethernet device maximum Tx unit.

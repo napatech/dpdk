@@ -19,6 +19,12 @@
 #define CHKSUM_SZ_CRC 8
 #define CHKSUM_SZ_ADLER 4
 
+#define STRINGIFY(s) #s
+#define ISAL_TOSTRING(maj, min, patch) \
+	STRINGIFY(maj)"."STRINGIFY(min)"."STRINGIFY(patch)
+#define ISAL_VERSION_STRING \
+	ISAL_TOSTRING(ISAL_MAJOR_VERSION, ISAL_MINOR_VERSION, ISAL_PATCH_VERSION)
+
 int isal_logtype_driver;
 
 /* Verify and set private xform parameters */
@@ -348,12 +354,6 @@ chained_mbuf_decompression(struct rte_comp_op *op, struct isal_comp_qp *qp)
 
 		ret = isal_inflate(qp->state);
 
-		if (ret != ISAL_DECOMP_OK) {
-			ISAL_PMD_LOG(ERR, "Decompression operation failed\n");
-			op->status = RTE_COMP_OP_STATUS_ERROR;
-			return ret;
-		}
-
 		/* Check for first segment, offset needs to be accounted for */
 		if (remaining_data == op->src.length) {
 			consumed_data = src->data_len - src_remaining_offset;
@@ -372,6 +372,20 @@ chained_mbuf_decompression(struct rte_comp_op *op, struct isal_comp_qp *qp)
 				qp->state->avail_in =
 					RTE_MIN(remaining_data, src->data_len);
 			}
+		}
+
+		if (ret == ISAL_OUT_OVERFLOW) {
+			ISAL_PMD_LOG(ERR, "Decompression operation ran "
+				"out of space, but can be recovered.\n%d bytes "
+				"consumed\t%d bytes produced\n",
+				consumed_data, qp->state->total_out);
+				op->status =
+				RTE_COMP_OP_STATUS_OUT_OF_SPACE_RECOVERABLE;
+			return ret;
+		} else if (ret < 0) {
+			ISAL_PMD_LOG(ERR, "Decompression operation failed\n");
+			op->status = RTE_COMP_OP_STATUS_ERROR;
+			return ret;
 		}
 
 		if (qp->state->avail_out == 0 &&
@@ -406,7 +420,7 @@ process_isal_deflate(struct rte_comp_op *op, struct isal_comp_qp *qp,
 	uint8_t *temp_level_buf = qp->stream->level_buf;
 
 	/* Initialize compression stream */
-	isal_deflate_stateless_init(qp->stream);
+	isal_deflate_init(qp->stream);
 
 	qp->stream->level_buf = temp_level_buf;
 
@@ -508,8 +522,6 @@ process_isal_deflate(struct rte_comp_op *op, struct isal_comp_qp *qp,
 		op->output_chksum = qp->stream->internal_state.crc;
 	}
 
-	isal_deflate_reset(qp->stream);
-
 	return ret;
 }
 
@@ -591,8 +603,6 @@ process_isal_inflate(struct rte_comp_op *op, struct isal_comp_qp *qp,
 	}
 	op->produced = qp->state->total_out;
 	op->output_chksum = qp->state->crc;
-
-	isal_inflate_reset(qp->state);
 
 	return ret;
 }
@@ -683,6 +693,8 @@ compdev_isal_create(const char *name, struct rte_vdev_device *vdev,
 	/* register rx/tx burst functions for data path */
 	dev->dequeue_burst = isal_comp_pmd_dequeue_burst;
 	dev->enqueue_burst = isal_comp_pmd_enqueue_burst;
+
+	ISAL_PMD_LOG(INFO, "\nISA-L library version used: "ISAL_VERSION_STRING);
 
 	return 0;
 }

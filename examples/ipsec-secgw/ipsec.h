@@ -41,10 +41,8 @@
 #define SPI2IDX(spi) (spi & (IPSEC_SA_MAX_ENTRIES - 1))
 #define INVALID_SPI (0)
 
-#define DISCARD (0x80000000)
-#define BYPASS (0x40000000)
-#define PROTECT_MASK (0x3fffffff)
-#define PROTECT(sa_idx) (SPI2IDX(sa_idx) & PROTECT_MASK) /* SA idx 30 bits */
+#define DISCARD	INVALID_SPI
+#define BYPASS	UINT32_MAX
 
 #define IPSEC_XFORM_MAX 2
 
@@ -83,16 +81,32 @@ struct app_sa_prm {
 
 extern struct app_sa_prm app_sa_prm;
 
+enum {
+	IPSEC_SESSION_PRIMARY = 0,
+	IPSEC_SESSION_FALLBACK = 1,
+	IPSEC_SESSION_MAX
+};
+
+#define IPSEC_SA_OFFLOAD_FALLBACK_FLAG (1)
+
+static inline struct ipsec_sa *
+ipsec_mask_saptr(void *ptr)
+{
+	uintptr_t i = (uintptr_t)ptr;
+	static const uintptr_t mask = IPSEC_SA_OFFLOAD_FALLBACK_FLAG;
+
+	i &= ~mask;
+
+	return (struct ipsec_sa *)i;
+}
+
 struct ipsec_sa {
-	struct rte_ipsec_session ips; /* one session per sa for now */
+	struct rte_ipsec_session sessions[IPSEC_SESSION_MAX];
 	uint32_t spi;
 	uint32_t cdev_id_qp;
 	uint64_t seq;
 	uint32_t salt;
-	union {
-		struct rte_cryptodev_sym_session *crypto_session;
-		struct rte_security_session *sec_session;
-	};
+	uint32_t fallback_sessions;
 	enum rte_crypto_cipher_algorithm cipher_algo;
 	enum rte_crypto_auth_algorithm auth_algo;
 	enum rte_crypto_aead_algorithm aead_algo;
@@ -103,6 +117,8 @@ struct ipsec_sa {
 #define IP4_TUNNEL (1 << 0)
 #define IP6_TUNNEL (1 << 1)
 #define TRANSPORT  (1 << 2)
+#define IP4_TRANSPORT (1 << 3)
+#define IP6_TRANSPORT (1 << 4)
 	struct ip_addr src;
 	struct ip_addr dst;
 	uint8_t cipher_key[MAX_KEY_SIZE];
@@ -114,11 +130,8 @@ struct ipsec_sa {
 		struct rte_crypto_sym_xform *xforms;
 		struct rte_security_ipsec_xform *sec_xform;
 	};
-	enum rte_security_session_action_type type;
 	enum rte_security_ipsec_sa_direction direction;
 	uint16_t portid;
-	struct rte_security_ctx *security_ctx;
-	uint32_t ol_flags;
 
 #define MAX_RTE_FLOW_PATTERN (4)
 #define MAX_RTE_FLOW_ACTIONS (3)
@@ -140,6 +153,27 @@ struct ipsec_mbuf_metadata {
 	struct rte_crypto_sym_op sym_cop;
 	uint8_t buf[32];
 } __rte_cache_aligned;
+
+#define IS_TRANSPORT(flags) ((flags) & TRANSPORT)
+
+#define IS_TUNNEL(flags) ((flags) & (IP4_TUNNEL | IP6_TUNNEL))
+
+#define IS_IP4(flags) ((flags) & (IP4_TUNNEL | IP4_TRANSPORT))
+
+#define IS_IP6(flags) ((flags) & (IP6_TUNNEL | IP6_TRANSPORT))
+
+#define IS_IP4_TUNNEL(flags) ((flags) & IP4_TUNNEL)
+
+#define IS_IP6_TUNNEL(flags) ((flags) & IP6_TUNNEL)
+
+/*
+ * Macro for getting ipsec_sa flags statuses without version of protocol
+ * used for transport (IP4_TRANSPORT and IP6_TRANSPORT flags).
+ */
+#define WITHOUT_TRANSPORT_VERSION(flags) \
+		((flags) & (IP4_TUNNEL | \
+			IP6_TUNNEL | \
+			TRANSPORT))
 
 struct cdev_qp {
 	uint16_t id;
@@ -182,6 +216,7 @@ struct socket_ctx {
 	struct rt_ctx *rt_ip4;
 	struct rt_ctx *rt_ip6;
 	struct rte_mempool *mbuf_pool;
+	struct rte_mempool *mbuf_pool_indir;
 	struct rte_mempool *session_pool;
 	struct rte_mempool *session_priv_pool;
 };
@@ -195,7 +230,7 @@ struct cnt_blk {
 struct traffic_type {
 	const uint8_t *data[MAX_PKT_BURST * 2];
 	struct rte_mbuf *pkts[MAX_PKT_BURST * 2];
-	struct ipsec_sa *saptr[MAX_PKT_BURST * 2];
+	void *saptr[MAX_PKT_BURST * 2];
 	uint32_t res[MAX_PKT_BURST * 2];
 	uint32_t num;
 };
@@ -262,16 +297,36 @@ get_sym_cop(struct rte_crypto_op *cop)
 	return (cop + 1);
 }
 
+static inline struct rte_ipsec_session *
+ipsec_get_primary_session(struct ipsec_sa *sa)
+{
+	return &sa->sessions[IPSEC_SESSION_PRIMARY];
+}
+
+static inline struct rte_ipsec_session *
+ipsec_get_fallback_session(struct ipsec_sa *sa)
+{
+	return &sa->sessions[IPSEC_SESSION_FALLBACK];
+}
+
+static inline enum rte_security_session_action_type
+ipsec_get_action_type(struct ipsec_sa *sa)
+{
+	struct rte_ipsec_session *ips;
+	ips = ipsec_get_primary_session(sa);
+	return ips->type;
+}
+
 int
 inbound_sa_check(struct sa_ctx *sa_ctx, struct rte_mbuf *m, uint32_t sa_idx);
 
 void
 inbound_sa_lookup(struct sa_ctx *sa_ctx, struct rte_mbuf *pkts[],
-		struct ipsec_sa *sa[], uint16_t nb_pkts);
+		void *sa[], uint16_t nb_pkts);
 
 void
 outbound_sa_lookup(struct sa_ctx *sa_ctx, uint32_t sa_idx[],
-		struct ipsec_sa *sa[], uint16_t nb_pkts);
+		void *sa[], uint16_t nb_pkts);
 
 void
 sp4_init(struct socket_ctx *ctx, int32_t socket_id);
@@ -285,9 +340,19 @@ sp6_init(struct socket_ctx *ctx, int32_t socket_id);
  * or -ENOENT otherwise.
  */
 int
-sp4_spi_present(uint32_t spi, int inbound);
+sp4_spi_present(uint32_t spi, int inbound, struct ip_addr ip_addr[2],
+			uint32_t mask[2]);
 int
-sp6_spi_present(uint32_t spi, int inbound);
+sp6_spi_present(uint32_t spi, int inbound, struct ip_addr ip_addr[2],
+			uint32_t mask[2]);
+
+/*
+ * Search through SA entries for given SPI.
+ * Returns first entry index if found(greater or equal then zero),
+ * or -ENOENT otherwise.
+ */
+int
+sa_spi_present(uint32_t spi, int inbound);
 
 void
 sa_init(struct socket_ctx *ctx, int32_t socket_id);
@@ -300,12 +365,17 @@ sa_check_offloads(uint16_t port_id, uint64_t *rx_offloads,
 		uint64_t *tx_offloads);
 
 int
-add_dst_ethaddr(uint16_t port, const struct ether_addr *addr);
+add_dst_ethaddr(uint16_t port, const struct rte_ether_addr *addr);
 
 void
 enqueue_cop_burst(struct cdev_qp *cqp);
 
 int
-create_session(struct ipsec_ctx *ipsec_ctx, struct ipsec_sa *sa);
+create_lookaside_session(struct ipsec_ctx *ipsec_ctx, struct ipsec_sa *sa,
+		struct rte_ipsec_session *ips);
+
+int
+create_inline_session(struct socket_ctx *skt_ctx, struct ipsec_sa *sa,
+		struct rte_ipsec_session *ips);
 
 #endif /* __IPSEC_H__ */

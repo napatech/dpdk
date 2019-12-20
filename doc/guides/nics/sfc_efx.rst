@@ -1,30 +1,9 @@
-..  BSD LICENSE
-    Copyright (c) 2016 Solarflare Communications Inc.
+..  SPDX-License-Identifier: BSD-3-Clause
+    Copyright (c) 2016-2019 Solarflare Communications Inc.
     All rights reserved.
 
     This software was jointly developed between OKTET Labs (under contract
     for Solarflare) and Solarflare Communications, Inc.
-
-    Redistribution and use in source and binary forms, with or without
-    modification, are permitted provided that the following conditions are met:
-
-    1. Redistributions of source code must retain the above copyright notice,
-       this list of conditions and the following disclaimer.
-    2. Redistributions in binary form must reproduce the above copyright notice,
-       this list of conditions and the following disclaimer in the documentation
-       and/or other materials provided with the distribution.
-
-    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-    AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
-    THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-    PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
-    CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-    EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
-    OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
-    WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-    OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
-    EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Solarflare libefx-based Poll Mode Driver
 ========================================
@@ -66,7 +45,7 @@ SFC EFX PMD has support for:
 
 - Allmulticast mode
 
-- TCP segmentation offload (TSO)
+- TCP segmentation offload (TSO) including VXLAN and GENEVE encapsulated
 
 - Multicast MAC filter
 
@@ -82,6 +61,8 @@ SFC EFX PMD has support for:
 
 - Scattered Rx DMA for packet that are larger that a single Rx descriptor
 
+- Receive queue interrupts
+
 - Deferred receive and transmit queue start
 
 - Transmit VLAN insertion (if running firmware variant supports it)
@@ -95,8 +76,6 @@ Non-supported Features
 ----------------------
 
 The features not yet supported include:
-
-- Receive queue interupts
 
 - Priority-based flow control
 
@@ -209,12 +188,12 @@ Validating flow rules depends on the firmware variant.
 
 The :ref:`flow_isolated_mode` is supported.
 
-Ethernet destinaton individual/group match
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Ethernet destination individual/group match
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Ethernet item supports I/G matching, if only the corresponding bit is set
-in the mask of destination address. If destinaton address in the spec is
-multicast, it matches all multicast (and broadcast) packets, oherwise it
+in the mask of destination address. If destination address in the spec is
+multicast, it matches all multicast (and broadcast) packets, otherwise it
 matches unicast packets that are not filtered by other flow rules.
 
 Exceptions to flow rules
@@ -348,10 +327,10 @@ boolean parameters value.
 
 - ``perf_profile`` [auto|throughput|low-latency] (default **throughput**)
 
-  Choose hardware tunning to be optimized for either throughput or
+  Choose hardware tuning to be optimized for either throughput or
   low-latency.
   **auto** allows NIC firmware to make a choice based on
-  installed licences and firmware variant configured using **sfboot**.
+  installed licenses and firmware variant configured using **sfboot**.
 
 - ``stats_update_period_ms`` [long] (default **1000**)
 

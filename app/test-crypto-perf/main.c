@@ -38,7 +38,8 @@ const char *cperf_op_type_strs[] = {
 	[CPERF_AUTH_ONLY] = "auth-only",
 	[CPERF_CIPHER_THEN_AUTH] = "cipher-then-auth",
 	[CPERF_AUTH_THEN_CIPHER] = "auth-then-cipher",
-	[CPERF_AEAD] = "aead"
+	[CPERF_AEAD] = "aead",
+	[CPERF_PDCP] = "pdcp"
 };
 
 const struct cperf_test cperf_testmap[] = {
@@ -183,6 +184,11 @@ cperf_initialize_cryptodev(struct cperf_options *opts, uint8_t *enabled_cdevs)
 
 		struct rte_cryptodev_info cdev_info;
 		uint8_t socket_id = rte_cryptodev_socket_id(cdev_id);
+		/* range check the socket_id - negative values become big
+		 * positive ones due to use of unsigned value
+		 */
+		if (socket_id >= RTE_MAX_NUMA_NODES)
+			socket_id = 0;
 
 		rte_cryptodev_info_get(cdev_id, &cdev_info);
 		if (opts->nb_qps > cdev_info.max_nb_queue_pairs) {
@@ -195,7 +201,9 @@ cperf_initialize_cryptodev(struct cperf_options *opts, uint8_t *enabled_cdevs)
 		}
 		struct rte_cryptodev_config conf = {
 			.nb_queue_pairs = opts->nb_qps,
-			.socket_id = socket_id
+			.socket_id = socket_id,
+			.ff_disable = RTE_CRYPTODEV_FF_SECURITY |
+				      RTE_CRYPTODEV_FF_ASYMMETRIC_CRYPTO,
 		};
 
 		struct rte_cryptodev_qp_conf qp_conf = {
@@ -659,9 +667,12 @@ main(int argc, char **argv)
 
 			if (i == total_nb_qps)
 				break;
-			rte_eal_wait_lcore(lcore_id);
+			ret |= rte_eal_wait_lcore(lcore_id);
 			i++;
 		}
+
+		if (ret != EXIT_SUCCESS)
+			goto err;
 	} else {
 
 		/* Get next size from range or list */
@@ -686,9 +697,12 @@ main(int argc, char **argv)
 
 				if (i == total_nb_qps)
 					break;
-				rte_eal_wait_lcore(lcore_id);
+				ret |= rte_eal_wait_lcore(lcore_id);
 				i++;
 			}
+
+			if (ret != EXIT_SUCCESS)
+				goto err;
 
 			/* Get next size from range or list */
 			if (opts.inc_buffer_size != 0)

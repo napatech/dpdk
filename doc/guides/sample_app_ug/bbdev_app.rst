@@ -46,7 +46,7 @@ Compiling the Application
 
     .. code-block:: console
 
-        export RTE_TARGET=x86_64-native-linuxapp-gcc
+        export RTE_TARGET=x86_64-native-linux-gcc
 
     See the *DPDK Getting Started Guide* for possible RTE_TARGET values.
 
@@ -68,7 +68,7 @@ The application accepts a number of command line options:
 
 where:
 
-* ``e ENCODING_CORES``: hexmask for encoding lcored (default = 0x2)
+* ``e ENCODING_CORES``: hexmask for encoding lcores (default = 0x2)
 * ``d DECODING_CORES``: hexmask for decoding lcores (default = 0x4)
 * ``p ETH_PORT_ID``: ethernet port ID (default = 0)
 * ``b BBDEV_ID``: BBDev ID (default = 0)
@@ -78,7 +78,7 @@ the specified baseband operation are available on application initialization.
 This means that HW baseband device/s must be bound to a DPDK driver or
 a SW baseband device/s (virtual BBdev) must be created (using --vdev).
 
-To run the application in linuxapp environment with the turbo_sw baseband device
+To run the application in linux environment with the turbo_sw baseband device
 using the whitelisted port running on 1 encoding lcore and 1 decoding lcore
 issue the command:
 
@@ -87,7 +87,7 @@ issue the command:
     $ ./build/bbdev --vdev='baseband_turbo_sw' -w <NIC0PCIADDR> -c 0x38 --socket-mem=2,2 \
     --file-prefix=bbdev -- -e 0x10 -d 0x20
 
-where, NIC0PCIADDR is the PCI addresse of the Rx port
+where, NIC0PCIADDR is the PCI address of the Rx port
 
 This command creates one virtual bbdev devices ``baseband_turbo_sw`` where the
 device gets linked to a corresponding ethernet port as whitelisted by
@@ -116,7 +116,7 @@ ports.
 
 .. code-block:: console
 
-    $ ./pktgen-3.4.0/app/x86_64-native-linuxapp-gcc/pktgen -c 0x3 \
+    $ ./pktgen-3.4.0/app/x86_64-native-linux-gcc/pktgen -c 0x3 \
     --socket-mem=1,1 --file-prefix=pg -w <NIC1PCIADDR> -- -m 1.0 -P
 
 where:

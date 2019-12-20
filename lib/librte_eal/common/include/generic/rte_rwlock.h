@@ -64,14 +64,14 @@ rte_rwlock_read_lock(rte_rwlock_t *rwl)
 	int success = 0;
 
 	while (success == 0) {
-		x = rwl->cnt;
+		x = __atomic_load_n(&rwl->cnt, __ATOMIC_RELAXED);
 		/* write lock is held */
 		if (x < 0) {
 			rte_pause();
 			continue;
 		}
-		success = rte_atomic32_cmpset((volatile uint32_t *)&rwl->cnt,
-					      (uint32_t)x, (uint32_t)(x + 1));
+		success = __atomic_compare_exchange_n(&rwl->cnt, &x, x + 1, 1,
+					__ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
 	}
 }
 
@@ -88,20 +88,22 @@ rte_rwlock_read_lock(rte_rwlock_t *rwl)
  *   - -EBUSY if lock could not be acquired for reading because a
  *     writer holds the lock
  */
-static inline __rte_experimental int
+__rte_experimental
+static inline int
 rte_rwlock_read_trylock(rte_rwlock_t *rwl)
 {
 	int32_t x;
 	int success = 0;
 
 	while (success == 0) {
-		x = rwl->cnt;
+		x = __atomic_load_n(&rwl->cnt, __ATOMIC_RELAXED);
 		/* write lock is held */
 		if (x < 0)
 			return -EBUSY;
-		success = rte_atomic32_cmpset((volatile uint32_t *)&rwl->cnt,
-					      (uint32_t)x, (uint32_t)(x + 1));
+		success = __atomic_compare_exchange_n(&rwl->cnt, &x, x + 1, 1,
+					__ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
 	}
+
 	return 0;
 }
 
@@ -114,7 +116,7 @@ rte_rwlock_read_trylock(rte_rwlock_t *rwl)
 static inline void
 rte_rwlock_read_unlock(rte_rwlock_t *rwl)
 {
-	rte_atomic32_dec((rte_atomic32_t *)(intptr_t)&rwl->cnt);
+	__atomic_fetch_sub(&rwl->cnt, 1, __ATOMIC_RELEASE);
 }
 
 /**
@@ -130,14 +132,15 @@ rte_rwlock_read_unlock(rte_rwlock_t *rwl)
  *   - -EBUSY if lock could not be acquired for writing because
  *     it was already locked for reading or writing
  */
-static inline __rte_experimental int
+__rte_experimental
+static inline int
 rte_rwlock_write_trylock(rte_rwlock_t *rwl)
 {
 	int32_t x;
 
-	x = rwl->cnt;
-	if (x != 0 || rte_atomic32_cmpset((volatile uint32_t *)&rwl->cnt,
-				0, (uint32_t)-1) == 0)
+	x = __atomic_load_n(&rwl->cnt, __ATOMIC_RELAXED);
+	if (x != 0 || __atomic_compare_exchange_n(&rwl->cnt, &x, -1, 1,
+			      __ATOMIC_ACQUIRE, __ATOMIC_RELAXED) == 0)
 		return -EBUSY;
 
 	return 0;
@@ -156,14 +159,14 @@ rte_rwlock_write_lock(rte_rwlock_t *rwl)
 	int success = 0;
 
 	while (success == 0) {
-		x = rwl->cnt;
+		x = __atomic_load_n(&rwl->cnt, __ATOMIC_RELAXED);
 		/* a lock is held */
 		if (x != 0) {
 			rte_pause();
 			continue;
 		}
-		success = rte_atomic32_cmpset((volatile uint32_t *)&rwl->cnt,
-					      0, (uint32_t)-1);
+		success = __atomic_compare_exchange_n(&rwl->cnt, &x, -1, 1,
+					__ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
 	}
 }
 
@@ -176,7 +179,7 @@ rte_rwlock_write_lock(rte_rwlock_t *rwl)
 static inline void
 rte_rwlock_write_unlock(rte_rwlock_t *rwl)
 {
-	rte_atomic32_inc((rte_atomic32_t *)(intptr_t)&rwl->cnt);
+	__atomic_store_n(&rwl->cnt, 0, __ATOMIC_RELEASE);
 }
 
 /**

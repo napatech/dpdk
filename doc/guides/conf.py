@@ -62,11 +62,11 @@ latex_documents = [
 
 # Latex directives to be included directly in the latex/pdf docs.
 custom_latex_preamble = r"""
-\usepackage[utf8]{inputenc}
-\usepackage[T1]{fontenc}
-\usepackage{helvet}
-\renewcommand{\familydefault}{\sfdefault}
+\usepackage{textalpha}
 \RecustomVerbatimEnvironment{Verbatim}{Verbatim}{xleftmargin=5mm}
+\usepackage{etoolbox}
+\robustify\(
+\robustify\)
 """
 
 # Configuration for the latex/pdf docs.
@@ -391,6 +391,11 @@ def setup(app):
                             'AEAD',
                             'AEAD algorithms in crypto drivers',
                             'AEAD algorithm')
+    table_file = dirname(__file__) + '/cryptodevs/overview_asym_table.txt'
+    generate_overview_table(table_file, 5,
+                            'Asymmetric',
+                            'Asymmetric algorithms in crypto drivers',
+                            'Asymmetric algorithm')
     table_file = dirname(__file__) + '/compressdevs/overview_feature_table.txt'
     generate_overview_table(table_file, 1,
                             'Features',

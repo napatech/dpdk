@@ -37,7 +37,7 @@ struct rte_logs {
 	struct rte_log_dynamic_type *dynamic_types;
 };
 
-/** Global log informations */
+/** Global log information */
 extern struct rte_logs rte_logs;
 
 /* SDK log type */
@@ -100,6 +100,19 @@ extern struct rte_logs rte_logs;
  *   - Negative on error.
  */
 int rte_openlog_stream(FILE *f);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
+ * Retrieve the stream used by the logging system (see rte_openlog_stream()
+ * to change it).
+ *
+ * @return
+ *   Pointer to the stream.
+ */
+__rte_experimental
+FILE *rte_log_get_stream(void);
 
 /**
  * Set the global log level.

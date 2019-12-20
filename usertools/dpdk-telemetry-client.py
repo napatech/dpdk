@@ -1,6 +1,8 @@
 #! /usr/bin/env python
-# SPDK-License-Identifier: BSD-3-Clause
+# SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2018 Intel Corporation
+
+from __future__ import print_function
 
 import socket
 import os
@@ -12,7 +14,13 @@ BUFFER_SIZE = 200000
 METRICS_REQ = "{\"action\":0,\"command\":\"ports_all_stat_values\",\"data\":null}"
 API_REG = "{\"action\":1,\"command\":\"clients\",\"data\":{\"client_path\":\""
 API_UNREG = "{\"action\":2,\"command\":\"clients\",\"data\":{\"client_path\":\""
+GLOBAL_METRICS_REQ = "{\"action\":0,\"command\":\"global_stat_values\",\"data\":null}"
 DEFAULT_FP = "/var/run/dpdk/default_client"
+
+try:
+    raw_input  # Python 2
+except NameError:
+    raw_input = input  # Python 3
 
 class Socket:
 
@@ -68,26 +76,32 @@ class Client:
     def requestMetrics(self): # Requests metrics for given client
         self.socket.client_fd.send(METRICS_REQ)
         data = self.socket.client_fd.recv(BUFFER_SIZE)
-        print "\nResponse: \n", str(data)
+        print("\nResponse: \n", str(data))
 
     def repeatedlyRequestMetrics(self, sleep_time): # Recursively requests metrics for given client
         print("\nPlease enter the number of times you'd like to continuously request Metrics:")
-        n_requests = int(input("\n:"))
+        n_requests = int(raw_input("\n:"))
         print("\033[F") #Removes the user input from screen, cleans it up
         print("\033[K")
         for i in range(n_requests):
             self.requestMetrics()
             time.sleep(sleep_time)
 
+    def requestGlobalMetrics(self): #Requests global metrics for given client
+        self.socket.client_fd.send(GLOBAL_METRICS_REQ)
+        data = self.socket.client_fd.recv(BUFFER_SIZE)
+        print("\nResponse: \n", str(data))
+
     def interactiveMenu(self, sleep_time): # Creates Interactive menu within the script
-        while self.choice != 3:
+        while self.choice != 4:
             print("\nOptions Menu")
             print("[1] Send for Metrics for all ports")
             print("[2] Send for Metrics for all ports recursively")
-            print("[3] Unregister client")
+            print("[3] Send for global Metrics")
+            print("[4] Unregister client")
 
             try:
-                self.choice = int(input("\n:"))
+                self.choice = int(raw_input("\n:"))
                 print("\033[F") #Removes the user input for screen, cleans it up
                 print("\033[K")
                 if self.choice == 1:
@@ -95,6 +109,8 @@ class Client:
                 elif self.choice == 2:
                     self.repeatedlyRequestMetrics(sleep_time)
                 elif self.choice == 3:
+                    self.requestGlobalMetrics()
+                elif self.choice == 4:
                     self.unregister()
                     self.unregistered = 1
                 else:
@@ -107,10 +123,10 @@ if __name__ == "__main__":
     sleep_time = 1
     file_path = ""
     if (len(sys.argv) == 2):
-	file_path = sys.argv[1]
+        file_path = sys.argv[1]
     else:
         print("Warning - No filepath passed, using default (" + DEFAULT_FP + ").")
-	file_path = DEFAULT_FP
+        file_path = DEFAULT_FP
     client = Client()
     client.getFilepath(file_path)
     client.register()

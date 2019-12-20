@@ -56,11 +56,6 @@ Limitations
 -----------
 
 * Chained mbufs are not supported.
-* Only in-place is currently supported (destination address is the same as source address).
-* RTE_CRYPTO_AEAD_AES_GCM only works properly when the multi-buffer library is
-  0.51.0 or newer.
-* RTE_CRYPTO_HASH_AES_GMAC is supported by library version v0.51 or later.
-* RTE_CRYPTO_HASH_SHA* is supported by library version v0.52 or later.
 
 
 Installation
@@ -69,8 +64,8 @@ Installation
 To build DPDK with the AESNI_MB_PMD the user is required to download the multi-buffer
 library from `here <https://github.com/01org/intel-ipsec-mb>`_
 and compile it on their user system before building DPDK.
-The latest version of the library supported by this PMD is v0.52, which
-can be downloaded from `<https://github.com/01org/intel-ipsec-mb/archive/v0.52.zip>`.
+The latest version of the library supported by this PMD is v0.53, which
+can be downloaded from `<https://github.com/01org/intel-ipsec-mb/archive/v0.53.zip>`_.
 
 .. code-block:: console
 
@@ -92,7 +87,9 @@ and the Multi-Buffer library version supported by them:
    17.05 - 17.08   0.45 - 0.48
    17.11           0.47 - 0.48
    18.02           0.48
-   18.05+          0.49+
+   18.05 - 19.02   0.49 - 0.52
+   19.05 - 19.08   0.52
+   19.11+          0.52 - 0.53
    ==============  ============================
 
 
@@ -133,7 +130,7 @@ Extra notes
 For AES Counter mode (AES-CTR), the library supports two different sizes for Initialization
 Vector (IV):
 
-* 12 bytes: used mainly for IPSec, as it requires 12 bytes from the user, which internally
+* 12 bytes: used mainly for IPsec, as it requires 12 bytes from the user, which internally
   are appended the counter block (4 bytes), which is set to 1 for the first block
   (no padding required from the user)
 

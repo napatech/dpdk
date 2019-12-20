@@ -1,8 +1,9 @@
 #! /bin/bash
+# SPDX-License-Identifier: BSD-3-Clause
 
 . ${DIR}/trs_aesgcm_common_defs.sh
 
-SGW_CMD_XPRM='-e -w 300'
+SGW_CMD_XPRM='-e -w 300 -l'
 
 config_remote_xfrm()
 {

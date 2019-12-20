@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2018
+ * Copyright(c) 2001-2019
  */
 
 #ifndef _ICE_SCHED_H_
@@ -13,14 +13,16 @@
 #define ICE_SCHED_INVAL_LAYER_NUM	0xFF
 /* Burst size is a 12 bits register that is configured while creating the RL
  * profile(s). MSB is a granularity bit and tells the granularity type
- * 0 - LSB bits are in bytes granularity
+ * 0 - LSB bits are in 64 bytes granularity
  * 1 - LSB bits are in 1K bytes granularity
  */
-#define ICE_BYTE_GRANULARITY			0
-#define ICE_KBYTE_GRANULARITY			0x800
-#define ICE_MIN_BURST_SIZE_ALLOWED		1 /* In Bytes */
-#define ICE_MAX_BURST_SIZE_ALLOWED		(2047 * 1024) /* In Bytes */
-#define ICE_MAX_BURST_SIZE_BYTE_GRANULARITY	2047 /* In Bytes */
+#define ICE_64_BYTE_GRANULARITY			0
+#define ICE_KBYTE_GRANULARITY			BIT(11)
+#define ICE_MIN_BURST_SIZE_ALLOWED		64 /* In Bytes */
+#define ICE_MAX_BURST_SIZE_ALLOWED \
+	((BIT(11) - 1) * 1024) /* In Bytes */
+#define ICE_MAX_BURST_SIZE_64_BYTE_GRANULARITY \
+	((BIT(11) - 1) * 64) /* In Bytes */
 #define ICE_MAX_BURST_SIZE_KBYTE_GRANULARITY	ICE_MAX_BURST_SIZE_ALLOWED
 
 #define ICE_RL_PROF_FREQUENCY 446000000
@@ -43,14 +45,14 @@ struct ice_aqc_rl_profile_info {
 	struct ice_aqc_rl_profile_elem profile;
 	struct LIST_ENTRY_TYPE list_entry;
 	u32 bw;			/* requested */
-	u16 prof_id_ref;	/* profile id to node association ref count */
+	u16 prof_id_ref;	/* profile ID to node association ref count */
 };
 
 struct ice_sched_agg_vsi_info {
 	struct LIST_ENTRY_TYPE list_entry;
 	ice_declare_bitmap(tc_bitmap, ICE_MAX_TRAFFIC_CLASS);
 	u16 vsi_handle;
-	/* save agg vsi TC bitmap */
+	/* save aggregator VSI TC bitmap */
 	ice_declare_bitmap(replay_tc_bitmap, ICE_MAX_TRAFFIC_CLASS);
 };
 
@@ -60,9 +62,9 @@ struct ice_sched_agg_info {
 	ice_declare_bitmap(tc_bitmap, ICE_MAX_TRAFFIC_CLASS);
 	u32 agg_id;
 	enum ice_agg_type agg_type;
-	/* bw_t_info saves agg bw information */
+	/* bw_t_info saves aggregator BW information */
 	struct ice_bw_type_info bw_t_info[ICE_MAX_TRAFFIC_CLASS];
-	/* save agg TC bitmap */
+	/* save aggregator TC bitmap */
 	ice_declare_bitmap(replay_tc_bitmap, ICE_MAX_TRAFFIC_CLASS);
 };
 
@@ -75,10 +77,6 @@ enum ice_status
 ice_aq_cfg_l2_node_cgd(struct ice_hw *hw, u16 num_nodes,
 		       struct ice_aqc_cfg_l2_node_cgd_data *buf, u16 buf_size,
 		       struct ice_sq_cd *cd);
-enum ice_status
-ice_aq_move_sched_elems(struct ice_hw *hw, u16 grps_req,
-			struct ice_aqc_move_elem *buf, u16 buf_size,
-			u16 *grps_movd, struct ice_sq_cd *cd);
 enum ice_status
 ice_aq_query_sched_elems(struct ice_hw *hw, u16 elems_req,
 			 struct ice_aqc_get_elem *buf, u16 buf_size,
@@ -109,10 +107,7 @@ ice_sched_cfg_vsi(struct ice_port_info *pi, u16 vsi_handle, u8 tc, u16 maxqs,
 		  u8 owner, bool enable);
 enum ice_status ice_rm_vsi_lan_cfg(struct ice_port_info *pi, u16 vsi_handle);
 struct ice_sched_node *
-ice_sched_get_agg_node(struct ice_hw *hw, struct ice_sched_node *tc_node,
-		       u32 agg_id);
-struct ice_sched_node *
-ice_sched_get_vsi_node(struct ice_hw *hw, struct ice_sched_node *tc_node,
+ice_sched_get_vsi_node(struct ice_port_info *pi, struct ice_sched_node *tc_node,
 		       u16 vsi_handle);
 bool ice_sched_is_tree_balanced(struct ice_hw *hw, struct ice_sched_node *node);
 enum ice_status
@@ -129,11 +124,11 @@ ice_move_vsi_to_agg(struct ice_port_info *pi, u32 agg_id, u16 vsi_handle,
 		    u8 tc_bitmap);
 enum ice_status ice_rm_agg_cfg(struct ice_port_info *pi, u32 agg_id);
 enum ice_status
-ice_cfg_q_bw_lmt(struct ice_port_info *pi, u32 q_id, enum ice_rl_type rl_type,
-		 u32 bw);
+ice_cfg_q_bw_lmt(struct ice_port_info *pi, u16 vsi_handle, u8 tc,
+		 u16 q_handle, enum ice_rl_type rl_type, u32 bw);
 enum ice_status
-ice_cfg_q_bw_dflt_lmt(struct ice_port_info *pi, u32 q_id,
-		      enum ice_rl_type rl_type);
+ice_cfg_q_bw_dflt_lmt(struct ice_port_info *pi, u16 vsi_handle, u8 tc,
+		      u16 q_handle, enum ice_rl_type rl_type);
 enum ice_status
 ice_cfg_tc_node_bw_lmt(struct ice_port_info *pi, u8 tc,
 		       enum ice_rl_type rl_type, u32 bw);
@@ -177,9 +172,6 @@ bool
 ice_sched_find_node_in_subtree(struct ice_hw *hw, struct ice_sched_node *base,
 			       struct ice_sched_node *node);
 enum ice_status
-ice_sched_set_node_bw_lmt(struct ice_port_info *pi, struct ice_sched_node *node,
-			  enum ice_rl_type rl_type, u32 bw);
-enum ice_status
 ice_sched_set_agg_bw_dflt_lmt(struct ice_port_info *pi, u16 vsi_handle);
 enum ice_status
 ice_sched_set_node_bw_lmt_per_tc(struct ice_port_info *pi, u32 id,
@@ -191,20 +183,10 @@ ice_sched_set_vsi_bw_shared_lmt(struct ice_port_info *pi, u16 vsi_handle,
 enum ice_status
 ice_sched_set_agg_bw_shared_lmt(struct ice_port_info *pi, u32 agg_id, u32 bw);
 enum ice_status
-ice_sched_cfg_sibl_node_prio(struct ice_hw *hw, struct ice_sched_node *node,
-			     u8 priority);
+ice_sched_cfg_sibl_node_prio(struct ice_port_info *pi,
+			     struct ice_sched_node *node, u8 priority);
 enum ice_status
-ice_sched_cfg_node_bw_alloc(struct ice_hw *hw, struct ice_sched_node *node,
-			    enum ice_rl_type rl_type, u8 bw_alloc);
-enum ice_status
-ice_sched_add_agg_cfg(struct ice_port_info *pi, u32 agg_id, u8 tc);
-enum ice_status
-ice_sched_rm_agg_cfg(struct ice_port_info *pi, u32 agg_id, u8 tc);
-enum ice_status
-ice_sched_move_vsi_to_agg(struct ice_port_info *pi, u16 vsi_handle, u32 agg_id,
-			  u8 tc);
-enum ice_status
-ice_sched_del_rl_profile(struct ice_hw *hw,
-			 struct ice_aqc_rl_profile_info *rl_info);
-void ice_sched_rm_unused_rl_prof(struct ice_port_info *pi);
+ice_cfg_tc_node_bw_alloc(struct ice_port_info *pi, u8 tc,
+			 enum ice_rl_type rl_type, u8 bw_alloc);
+enum ice_status ice_cfg_rl_burst_size(struct ice_hw *hw, u32 bytes);
 #endif /* _ICE_SCHED_H_ */

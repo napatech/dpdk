@@ -30,7 +30,9 @@
 #include <rte_string_fns.h>
 #include <rte_metrics.h>
 #include <rte_cycles.h>
+#ifdef RTE_LIBRTE_SECURITY
 #include <rte_security.h>
+#endif
 #include <rte_cryptodev.h>
 #include <rte_tm.h>
 #include <rte_hexdump.h>
@@ -193,7 +195,7 @@ proc_info_preparse_args(int argc, char **argv)
 				proc_info_usage(prgname);
 				return -1;
 			}
-			snprintf(host_id, sizeof(host_id), "%s", argv[i+1]);
+			strlcpy(host_id, argv[i + 1], sizeof(host_id));
 		}
 	}
 
@@ -201,7 +203,7 @@ proc_info_preparse_args(int argc, char **argv)
 		int err = gethostname(host_id, MAX_LONG_OPT_SZ-1);
 
 		if (err)
-			strcpy(host_id, "unknown");
+			strlcpy(host_id, "unknown", sizeof(host_id));
 	}
 
 	return 0;
@@ -396,50 +398,50 @@ static void collectd_resolve_cnt_type(char *cnt_type, size_t cnt_type_len,
 	if ((type_end != NULL) &&
 	    (strncmp(cnt_name, "rx_", strlen("rx_")) == 0)) {
 		if (strncmp(type_end, "_errors", strlen("_errors")) == 0)
-			strncpy(cnt_type, "if_rx_errors", cnt_type_len);
+			strlcpy(cnt_type, "if_rx_errors", cnt_type_len);
 		else if (strncmp(type_end, "_dropped", strlen("_dropped")) == 0)
-			strncpy(cnt_type, "if_rx_dropped", cnt_type_len);
+			strlcpy(cnt_type, "if_rx_dropped", cnt_type_len);
 		else if (strncmp(type_end, "_bytes", strlen("_bytes")) == 0)
-			strncpy(cnt_type, "if_rx_octets", cnt_type_len);
+			strlcpy(cnt_type, "if_rx_octets", cnt_type_len);
 		else if (strncmp(type_end, "_packets", strlen("_packets")) == 0)
-			strncpy(cnt_type, "if_rx_packets", cnt_type_len);
+			strlcpy(cnt_type, "if_rx_packets", cnt_type_len);
 		else if (strncmp(type_end, "_placement",
 				 strlen("_placement")) == 0)
-			strncpy(cnt_type, "if_rx_errors", cnt_type_len);
+			strlcpy(cnt_type, "if_rx_errors", cnt_type_len);
 		else if (strncmp(type_end, "_buff", strlen("_buff")) == 0)
-			strncpy(cnt_type, "if_rx_errors", cnt_type_len);
+			strlcpy(cnt_type, "if_rx_errors", cnt_type_len);
 		else
 			/* Does not fit obvious type: use a more generic one */
-			strncpy(cnt_type, "derive", cnt_type_len);
+			strlcpy(cnt_type, "derive", cnt_type_len);
 	} else if ((type_end != NULL) &&
 		(strncmp(cnt_name, "tx_", strlen("tx_"))) == 0) {
 		if (strncmp(type_end, "_errors", strlen("_errors")) == 0)
-			strncpy(cnt_type, "if_tx_errors", cnt_type_len);
+			strlcpy(cnt_type, "if_tx_errors", cnt_type_len);
 		else if (strncmp(type_end, "_dropped", strlen("_dropped")) == 0)
-			strncpy(cnt_type, "if_tx_dropped", cnt_type_len);
+			strlcpy(cnt_type, "if_tx_dropped", cnt_type_len);
 		else if (strncmp(type_end, "_bytes", strlen("_bytes")) == 0)
-			strncpy(cnt_type, "if_tx_octets", cnt_type_len);
+			strlcpy(cnt_type, "if_tx_octets", cnt_type_len);
 		else if (strncmp(type_end, "_packets", strlen("_packets")) == 0)
-			strncpy(cnt_type, "if_tx_packets", cnt_type_len);
+			strlcpy(cnt_type, "if_tx_packets", cnt_type_len);
 		else
 			/* Does not fit obvious type: use a more generic one */
-			strncpy(cnt_type, "derive", cnt_type_len);
+			strlcpy(cnt_type, "derive", cnt_type_len);
 	} else if ((type_end != NULL) &&
 		   (strncmp(cnt_name, "flow_", strlen("flow_"))) == 0) {
 		if (strncmp(type_end, "_filters", strlen("_filters")) == 0)
-			strncpy(cnt_type, "operations", cnt_type_len);
+			strlcpy(cnt_type, "operations", cnt_type_len);
 		else if (strncmp(type_end, "_errors", strlen("_errors")) == 0)
-			strncpy(cnt_type, "errors", cnt_type_len);
+			strlcpy(cnt_type, "errors", cnt_type_len);
 		else if (strncmp(type_end, "_filters", strlen("_filters")) == 0)
-			strncpy(cnt_type, "filter_result", cnt_type_len);
+			strlcpy(cnt_type, "filter_result", cnt_type_len);
 	} else if ((type_end != NULL) &&
 		   (strncmp(cnt_name, "mac_", strlen("mac_"))) == 0) {
 		if (strncmp(type_end, "_errors", strlen("_errors")) == 0)
-			strncpy(cnt_type, "errors", cnt_type_len);
+			strlcpy(cnt_type, "errors", cnt_type_len);
 	} else {
 		/* Does not fit obvious type, or strrchr error: */
 		/* use a more generic type */
-		strncpy(cnt_type, "derive", cnt_type_len);
+		strlcpy(cnt_type, "derive", cnt_type_len);
 	}
 }
 
@@ -580,8 +582,16 @@ err:
 static void
 nic_xstats_clear(uint16_t port_id)
 {
+	int ret;
+
 	printf("\n Clearing NIC xstats for port %d\n", port_id);
-	rte_eth_xstats_reset(port_id);
+	ret = rte_eth_xstats_reset(port_id);
+	if (ret != 0) {
+		printf("\n Error clearing xstats for port %d: %s\n", port_id,
+		       strerror(-ret));
+		return;
+	}
+
 	printf("\n  NIC extended statistics for port %d cleared\n", port_id);
 }
 
@@ -670,20 +680,30 @@ show_port(void)
 		printf("  - generic config\n");
 
 		printf("\t  -- Socket %d\n", rte_eth_dev_socket_id(i));
-		rte_eth_link_get(i, &link);
-		printf("\t  -- link speed %d duplex %d,"
-				" auto neg %d status %d\n",
-				link.link_speed,
-				link.link_duplex,
-				link.link_autoneg,
-				link.link_status);
+		ret = rte_eth_link_get(i, &link);
+		if (ret < 0) {
+			printf("Link get failed (port %u): %s\n",
+			       i, rte_strerror(-ret));
+		} else {
+			printf("\t  -- link speed %d duplex %d,"
+					" auto neg %d status %d\n",
+					link.link_speed,
+					link.link_duplex,
+					link.link_autoneg,
+					link.link_status);
+		}
 		printf("\t  -- promiscuous (%d)\n",
 				rte_eth_promiscuous_get(i));
 		ret = rte_eth_dev_get_mtu(i, &mtu);
 		if (ret == 0)
 			printf("\t  -- mtu (%d)\n", mtu);
 
-		rte_eth_dev_info_get(i, &dev_info);
+		ret = rte_eth_dev_info_get(i, &dev_info);
+		if (ret != 0) {
+			printf("Error during getting device (port %u) info: %s\n",
+				i, strerror(-ret));
+			return;
+		}
 
 		printf("  - queue\n");
 		for (j = 0; j < dev_info.nb_rx_queues; j++) {
@@ -715,6 +735,7 @@ show_port(void)
 		}
 
 		printf("  - cyrpto context\n");
+#ifdef RTE_LIBRTE_SECURITY
 		void *p_ctx = rte_eth_dev_get_sec_ctx(i);
 		printf("\t  -- security context - %p\n", p_ctx);
 
@@ -733,6 +754,7 @@ show_port(void)
 						s_cap->crypto_capabilities->op);
 			}
 		}
+#endif
 	}
 
 	STATS_BDR_STR(50, "");
@@ -836,7 +858,13 @@ show_tm(void)
 		memset(&cap, 0, sizeof(cap));
 		memset(&error, 0, sizeof(error));
 
-		rte_eth_dev_info_get(i, &dev_info);
+		ret = rte_eth_dev_info_get(i, &dev_info);
+		if (ret != 0) {
+			printf("Error during getting device (port %u) info: %s\n",
+				i, strerror(-ret));
+			return;
+		}
+
 		printf("  - Generic for port (%u)\n"
 			"\t  -- driver name %s\n"
 			"\t  -- max vf (%u)\n"
@@ -873,21 +901,21 @@ show_tm(void)
 
 		printf("  - mark support:\n");
 		printf("\t  -- vlan dei: GREEN (%d) YELLOW (%d) RED (%d)\n",
-			cap.mark_vlan_dei_supported[RTE_TM_GREEN],
-			cap.mark_vlan_dei_supported[RTE_TM_YELLOW],
-			cap.mark_vlan_dei_supported[RTE_TM_RED]);
+			cap.mark_vlan_dei_supported[RTE_COLOR_GREEN],
+			cap.mark_vlan_dei_supported[RTE_COLOR_YELLOW],
+			cap.mark_vlan_dei_supported[RTE_COLOR_RED]);
 		printf("\t  -- ip ecn tcp: GREEN (%d) YELLOW (%d) RED (%d)\n",
-			cap.mark_ip_ecn_tcp_supported[RTE_TM_GREEN],
-			cap.mark_ip_ecn_tcp_supported[RTE_TM_YELLOW],
-			cap.mark_ip_ecn_tcp_supported[RTE_TM_RED]);
+			cap.mark_ip_ecn_tcp_supported[RTE_COLOR_GREEN],
+			cap.mark_ip_ecn_tcp_supported[RTE_COLOR_YELLOW],
+			cap.mark_ip_ecn_tcp_supported[RTE_COLOR_RED]);
 		printf("\t  -- ip ecn sctp: GREEN (%d) YELLOW (%d) RED (%d)\n",
-			cap.mark_ip_ecn_sctp_supported[RTE_TM_GREEN],
-			cap.mark_ip_ecn_sctp_supported[RTE_TM_YELLOW],
-			cap.mark_ip_ecn_sctp_supported[RTE_TM_RED]);
+			cap.mark_ip_ecn_sctp_supported[RTE_COLOR_GREEN],
+			cap.mark_ip_ecn_sctp_supported[RTE_COLOR_YELLOW],
+			cap.mark_ip_ecn_sctp_supported[RTE_COLOR_RED]);
 		printf("\t  -- ip dscp: GREEN (%d) YELLOW (%d) RED (%d)\n",
-			cap.mark_ip_dscp_supported[RTE_TM_GREEN],
-			cap.mark_ip_dscp_supported[RTE_TM_YELLOW],
-			cap.mark_ip_dscp_supported[RTE_TM_RED]);
+			cap.mark_ip_dscp_supported[RTE_COLOR_GREEN],
+			cap.mark_ip_dscp_supported[RTE_COLOR_YELLOW],
+			cap.mark_ip_dscp_supported[RTE_COLOR_RED]);
 
 		printf("  - mask stats (0x%"PRIx64")"
 			" dynamic update (0x%"PRIx64")\n",
@@ -1004,12 +1032,12 @@ show_tm(void)
 				" pkts (%"PRIu64") bytes (%"PRIu64")\n"
 				"\t  -- RED:"
 				" pkts (%"PRIu64") bytes (%"PRIu64")\n",
-				stats.leaf.n_pkts_dropped[RTE_TM_GREEN],
-				stats.leaf.n_bytes_dropped[RTE_TM_GREEN],
-				stats.leaf.n_pkts_dropped[RTE_TM_YELLOW],
-				stats.leaf.n_bytes_dropped[RTE_TM_YELLOW],
-				stats.leaf.n_pkts_dropped[RTE_TM_RED],
-				stats.leaf.n_bytes_dropped[RTE_TM_RED]);
+				stats.leaf.n_pkts_dropped[RTE_COLOR_GREEN],
+				stats.leaf.n_bytes_dropped[RTE_COLOR_GREEN],
+				stats.leaf.n_pkts_dropped[RTE_COLOR_YELLOW],
+				stats.leaf.n_bytes_dropped[RTE_COLOR_YELLOW],
+				stats.leaf.n_pkts_dropped[RTE_COLOR_RED],
+				stats.leaf.n_bytes_dropped[RTE_COLOR_RED]);
 		}
 	}
 
@@ -1321,7 +1349,7 @@ main(int argc, char **argv)
 	if (ret)
 		printf("Error from rte_eal_cleanup(), %d\n", ret);
 
-	snprintf(bdr_str, MAX_STRING_LEN, " ");
+	strlcpy(bdr_str, " ", MAX_STRING_LEN);
 	STATS_BDR_STR(50, bdr_str);
 
 	return 0;

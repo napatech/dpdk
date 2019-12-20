@@ -118,8 +118,6 @@ int vnic_dev_spec(struct vnic_dev *vdev, unsigned int offset, size_t size,
 	void *value);
 int vnic_dev_stats_clear(struct vnic_dev *vdev);
 int vnic_dev_stats_dump(struct vnic_dev *vdev, struct vnic_stats **stats);
-int vnic_dev_counter_dma_cfg(struct vnic_dev *vdev, u32 period,
-			     u32 num_counters);
 int vnic_dev_hang_notify(struct vnic_dev *vdev);
 int vnic_dev_packet_filter(struct vnic_dev *vdev, int directed, int multicast,
 	int broadcast, int promisc, int allmulti);
@@ -172,7 +170,6 @@ struct vnic_dev *vnic_dev_register(struct vnic_dev *vdev,
 	unsigned int num_bars);
 struct rte_pci_device *vnic_dev_get_pdev(struct vnic_dev *vdev);
 int vnic_dev_alloc_stats_mem(struct vnic_dev *vdev);
-int vnic_dev_alloc_counter_mem(struct vnic_dev *vdev);
 int vnic_dev_cmd_init(struct vnic_dev *vdev, int fallback);
 int vnic_dev_get_size(void);
 int vnic_dev_int13(struct vnic_dev *vdev, u64 arg, u32 op);
@@ -185,14 +182,11 @@ int vnic_dev_deinit_done(struct vnic_dev *vdev, int *status);
 int vnic_dev_set_mac_addr(struct vnic_dev *vdev, u8 *mac_addr);
 int vnic_dev_classifier(struct vnic_dev *vdev, u8 cmd, u16 *entry,
 	struct filter_v2 *data, struct filter_action_v2 *action_v2);
+int vnic_dev_flowman_cmd(struct vnic_dev *vdev, u64 *args, int nargs);
 int vnic_dev_overlay_offload_ctrl(struct vnic_dev *vdev,
 	u8 overlay, u8 config);
 int vnic_dev_overlay_offload_cfg(struct vnic_dev *vdev, u8 overlay,
 	u16 vxlan_udp_port_number);
 int vnic_dev_capable_vxlan(struct vnic_dev *vdev);
-bool vnic_dev_counter_alloc(struct vnic_dev *vdev, uint32_t *idx);
-bool vnic_dev_counter_free(struct vnic_dev *vdev, uint32_t idx);
-bool vnic_dev_counter_query(struct vnic_dev *vdev, uint32_t idx,
-			    bool reset, uint64_t *packets, uint64_t *bytes);
-
+int vnic_dev_capable_geneve(struct vnic_dev *vdev);
 #endif /* _VNIC_DEV_H_ */

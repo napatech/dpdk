@@ -25,7 +25,7 @@ individual device. Since the metrics library is self-contained, the only
 restriction on port numbers is that they are less than ``RTE_MAX_ETHPORTS``
 - there is no requirement for the ports to actually exist.
 
-Initialising the library
+Initializing the library
 ------------------------
 
 Before the library can be used, it has to be initialized by calling
@@ -153,6 +153,20 @@ print out all metrics for a given port:
         free(names);
     }
 
+
+Deinitialising the library
+--------------------------
+
+Once the library usage is done, it must be deinitialized by calling
+``rte_metrics_deinit()`` which will free the shared memory reserved
+during initialization.
+
+.. code-block:: c
+
+    err = rte_metrics_deinit(void);
+
+If the return value is negative, it means deinitialization failed.
+This function **must** be called from a primary process.
 
 Bit-rate statistics library
 ---------------------------

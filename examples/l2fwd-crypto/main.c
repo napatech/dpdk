@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <rte_string_fns.h>
 #include <rte_atomic.h>
 #include <rte_branch_prediction.h>
 #include <rte_common.h>
@@ -78,7 +79,7 @@ static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
 static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
 
 /* ethernet addresses of ports */
-static struct ether_addr l2fwd_ports_eth_addr[RTE_MAX_ETHPORTS];
+static struct rte_ether_addr l2fwd_ports_eth_addr[RTE_MAX_ETHPORTS];
 
 /* mask of enabled ports */
 static uint64_t l2fwd_enabled_port_mask;
@@ -135,6 +136,7 @@ struct l2fwd_crypto_options {
 	struct rte_crypto_sym_xform cipher_xform;
 	unsigned ckey_param;
 	int ckey_random_size;
+	uint8_t cipher_key[MAX_KEY_SIZE];
 
 	struct l2fwd_iv cipher_iv;
 	unsigned int cipher_iv_param;
@@ -143,6 +145,7 @@ struct l2fwd_crypto_options {
 	struct rte_crypto_sym_xform auth_xform;
 	uint8_t akey_param;
 	int akey_random_size;
+	uint8_t auth_key[MAX_KEY_SIZE];
 
 	struct l2fwd_iv auth_iv;
 	unsigned int auth_iv_param;
@@ -151,6 +154,7 @@ struct l2fwd_crypto_options {
 	struct rte_crypto_sym_xform aead_xform;
 	unsigned int aead_key_param;
 	int aead_key_random_size;
+	uint8_t aead_key[MAX_KEY_SIZE];
 
 	struct l2fwd_iv aead_iv;
 	unsigned int aead_iv_param;
@@ -211,7 +215,7 @@ struct lcore_queue_conf lcore_queue_conf[RTE_MAX_LCORE];
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
 		.mq_mode = ETH_MQ_RX_NONE,
-		.max_rx_pkt_len = ETHER_MAX_LEN,
+		.max_rx_pkt_len = RTE_ETHER_MAX_LEN,
 		.split_hdr_size = 0,
 	},
 	.txmode = {
@@ -386,25 +390,25 @@ l2fwd_simple_crypto_enqueue(struct rte_mbuf *m,
 		struct rte_crypto_op *op,
 		struct l2fwd_crypto_params *cparams)
 {
-	struct ether_hdr *eth_hdr;
-	struct ipv4_hdr *ip_hdr;
+	struct rte_ether_hdr *eth_hdr;
+	struct rte_ipv4_hdr *ip_hdr;
 
 	uint32_t ipdata_offset, data_len;
 	uint32_t pad_len = 0;
 	char *padding;
 
-	eth_hdr = rte_pktmbuf_mtod(m, struct ether_hdr *);
+	eth_hdr = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 
-	if (eth_hdr->ether_type != rte_cpu_to_be_16(ETHER_TYPE_IPv4))
+	if (eth_hdr->ether_type != rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4))
 		return -1;
 
-	ipdata_offset = sizeof(struct ether_hdr);
+	ipdata_offset = sizeof(struct rte_ether_hdr);
 
-	ip_hdr = (struct ipv4_hdr *)(rte_pktmbuf_mtod(m, char *) +
+	ip_hdr = (struct rte_ipv4_hdr *)(rte_pktmbuf_mtod(m, char *) +
 			ipdata_offset);
 
-	ipdata_offset += (ip_hdr->version_ihl & IPV4_HDR_IHL_MASK)
-			* IPV4_IHL_MULTIPLIER;
+	ipdata_offset += (ip_hdr->version_ihl & RTE_IPV4_HDR_IHL_MASK)
+			* RTE_IPV4_IHL_MULTIPLIER;
 
 
 	/* Zero pad data to be crypto'd so it is block aligned */
@@ -592,17 +596,17 @@ l2fwd_send_packet(struct rte_mbuf *m, uint16_t port)
 static void
 l2fwd_mac_updating(struct rte_mbuf *m, uint16_t dest_portid)
 {
-	struct ether_hdr *eth;
+	struct rte_ether_hdr *eth;
 	void *tmp;
 
-	eth = rte_pktmbuf_mtod(m, struct ether_hdr *);
+	eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 
 	/* 02:00:00:00:00:xx */
 	tmp = &eth->d_addr.addr_bytes[0];
 	*((uint64_t *)tmp) = 0x000000000002 + ((uint64_t)dest_portid << 40);
 
 	/* src addr */
-	ether_addr_copy(&l2fwd_ports_eth_addr[dest_portid], &eth->s_addr);
+	rte_ether_addr_copy(&l2fwd_ports_eth_addr[dest_portid], &eth->s_addr);
 }
 
 static void
@@ -1199,8 +1203,7 @@ l2fwd_crypto_parse_args_long_options(struct l2fwd_crypto_options *options,
 	if (strcmp(lgopts[option_index].name, "cdev_type") == 0) {
 		retval = parse_cryptodev_type(&options->type, optarg);
 		if (retval == 0)
-			snprintf(options->string_type, MAX_STR_LEN,
-				"%s", optarg);
+			strlcpy(options->string_type, optarg, MAX_STR_LEN);
 		return retval;
 	}
 
@@ -1219,8 +1222,7 @@ l2fwd_crypto_parse_args_long_options(struct l2fwd_crypto_options *options,
 	else if (strcmp(lgopts[option_index].name, "cipher_key") == 0) {
 		options->ckey_param = 1;
 		options->cipher_xform.cipher.key.length =
-			parse_bytes(options->cipher_xform.cipher.key.data, optarg,
-					MAX_KEY_SIZE);
+			parse_bytes(options->cipher_key, optarg, MAX_KEY_SIZE);
 		if (options->cipher_xform.cipher.key.length > 0)
 			return 0;
 		else
@@ -1256,8 +1258,7 @@ l2fwd_crypto_parse_args_long_options(struct l2fwd_crypto_options *options,
 	else if (strcmp(lgopts[option_index].name, "auth_key") == 0) {
 		options->akey_param = 1;
 		options->auth_xform.auth.key.length =
-			parse_bytes(options->auth_xform.auth.key.data, optarg,
-					MAX_KEY_SIZE);
+			parse_bytes(options->auth_key, optarg, MAX_KEY_SIZE);
 		if (options->auth_xform.auth.key.length > 0)
 			return 0;
 		else
@@ -1294,8 +1295,7 @@ l2fwd_crypto_parse_args_long_options(struct l2fwd_crypto_options *options,
 	else if (strcmp(lgopts[option_index].name, "aead_key") == 0) {
 		options->aead_key_param = 1;
 		options->aead_xform.aead.key.length =
-			parse_bytes(options->aead_xform.aead.key.data, optarg,
-					MAX_KEY_SIZE);
+			parse_bytes(options->aead_key, optarg, MAX_KEY_SIZE);
 		if (options->aead_xform.aead.key.length > 0)
 			return 0;
 		else
@@ -1731,6 +1731,7 @@ check_all_ports_link_status(uint32_t port_mask)
 	uint16_t portid;
 	uint8_t count, all_ports_up, print_flag = 0;
 	struct rte_eth_link link;
+	int ret;
 
 	printf("\nChecking link status");
 	fflush(stdout);
@@ -1740,7 +1741,14 @@ check_all_ports_link_status(uint32_t port_mask)
 			if ((port_mask & (1 << portid)) == 0)
 				continue;
 			memset(&link, 0, sizeof(link));
-			rte_eth_link_get_nowait(portid, &link);
+			ret = rte_eth_link_get_nowait(portid, &link);
+			if (ret < 0) {
+				all_ports_up = 0;
+				if (print_flag == 1)
+					printf("Port %u link get failed: %s\n",
+						portid, rte_strerror(-ret));
+				continue;
+			}
 			/* print link status if flag set */
 			if (print_flag == 1) {
 				if (link.link_status)
@@ -2256,6 +2264,7 @@ initialize_cryptodevs(struct l2fwd_crypto_options *options, unsigned nb_ports,
 		struct rte_cryptodev_config conf = {
 			.nb_queue_pairs = 1,
 			.socket_id = socket_id,
+			.ff_disable = RTE_CRYPTODEV_FF_SECURITY,
 		};
 
 		rte_cryptodev_info_get(cdev_id, &dev_info);
@@ -2348,8 +2357,7 @@ initialize_cryptodevs(struct l2fwd_crypto_options *options, unsigned nb_ports,
 					options->aead_xform.aead.key.length =
 						cap->sym.aead.key_size.min;
 
-				generate_random_key(
-					options->aead_xform.aead.key.data,
+				generate_random_key(options->aead_key,
 					options->aead_xform.aead.key.length);
 			}
 
@@ -2406,8 +2414,7 @@ initialize_cryptodevs(struct l2fwd_crypto_options *options, unsigned nb_ports,
 					options->cipher_xform.cipher.key.length =
 						cap->sym.cipher.key_size.min;
 
-				generate_random_key(
-					options->cipher_xform.cipher.key.data,
+				generate_random_key(options->cipher_key,
 					options->cipher_xform.cipher.key.length);
 			}
 		}
@@ -2440,8 +2447,7 @@ initialize_cryptodevs(struct l2fwd_crypto_options *options, unsigned nb_ports,
 					options->auth_xform.auth.key.length =
 						cap->sym.auth.key_size.min;
 
-				generate_random_key(
-					options->auth_xform.auth.key.data,
+				generate_random_key(options->auth_key,
 					options->auth_xform.auth.key.length);
 			}
 
@@ -2515,7 +2521,14 @@ initialize_ports(struct l2fwd_crypto_options *options)
 		/* init port */
 		printf("Initializing port %u... ", portid);
 		fflush(stdout);
-		rte_eth_dev_info_get(portid, &dev_info);
+
+		retval = rte_eth_dev_info_get(portid, &dev_info);
+		if (retval != 0) {
+			printf("Error during getting device (port %u) info: %s\n",
+					portid, strerror(-retval));
+			return retval;
+		}
+
 		if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 			local_port_conf.txmode.offloads |=
 				DEV_TX_OFFLOAD_MBUF_FAST_FREE;
@@ -2569,9 +2582,20 @@ initialize_ports(struct l2fwd_crypto_options *options)
 			return -1;
 		}
 
-		rte_eth_promiscuous_enable(portid);
+		retval = rte_eth_promiscuous_enable(portid);
+		if (retval != 0) {
+			printf("rte_eth_promiscuous_enable:err=%s, port=%u\n",
+				rte_strerror(-retval), portid);
+			return -1;
+		}
 
-		rte_eth_macaddr_get(portid, &l2fwd_ports_eth_addr[portid]);
+		retval = rte_eth_macaddr_get(portid,
+					     &l2fwd_ports_eth_addr[portid]);
+		if (retval < 0) {
+			printf("rte_eth_macaddr_get :err=%d, port=%u\n",
+					retval, portid);
+			return -1;
+		}
 
 		printf("Port %u, MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n\n",
 				portid,
@@ -2612,20 +2636,11 @@ initialize_ports(struct l2fwd_crypto_options *options)
 static void
 reserve_key_memory(struct l2fwd_crypto_options *options)
 {
-	options->cipher_xform.cipher.key.data = rte_malloc("crypto key",
-						MAX_KEY_SIZE, 0);
-	if (options->cipher_xform.cipher.key.data == NULL)
-		rte_exit(EXIT_FAILURE, "Failed to allocate memory for cipher key");
+	options->cipher_xform.cipher.key.data = options->cipher_key;
 
-	options->auth_xform.auth.key.data = rte_malloc("auth key",
-						MAX_KEY_SIZE, 0);
-	if (options->auth_xform.auth.key.data == NULL)
-		rte_exit(EXIT_FAILURE, "Failed to allocate memory for auth key");
+	options->auth_xform.auth.key.data = options->auth_key;
 
-	options->aead_xform.aead.key.data = rte_malloc("aead key",
-						MAX_KEY_SIZE, 0);
-	if (options->aead_xform.aead.key.data == NULL)
-		rte_exit(EXIT_FAILURE, "Failed to allocate memory for AEAD key");
+	options->aead_xform.aead.key.data = options->aead_key;
 
 	options->cipher_iv.data = rte_malloc("cipher iv", MAX_KEY_SIZE, 0);
 	if (options->cipher_iv.data == NULL)

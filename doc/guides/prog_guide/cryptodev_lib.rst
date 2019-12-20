@@ -14,7 +14,7 @@ and AEAD symmetric and asymmetric Crypto operations.
 Design Principles
 -----------------
 
-The cryptodev library follows the same basic principles as those used in DPDKs
+The cryptodev library follows the same basic principles as those used in DPDK's
 Ethernet Device framework. The Crypto framework provides a generic Crypto device
 framework which supports both physical (hardware) and virtual (software) Crypto
 devices as well as a generic Crypto API which allows Crypto devices to be
@@ -48,11 +48,11 @@ From the command line using the --vdev EAL option
    * If DPDK application requires multiple software crypto PMD devices then required
      number of ``--vdev`` with appropriate libraries are to be added.
 
-   * An Application with crypto PMD instaces sharing the same library requires unique ID.
+   * An Application with crypto PMD instances sharing the same library requires unique ID.
 
    Example: ``--vdev  'crypto_aesni_mb0' --vdev  'crypto_aesni_mb1'``
 
-Our using the rte_vdev_init API within the application code.
+Or using the rte_vdev_init API within the application code.
 
 .. code-block:: c
 
@@ -304,7 +304,7 @@ Crypto operations is usually completed during the enqueue call to the Crypto
 device. The dequeue burst API will retrieve any processed operations available
 from the queue pair on the Crypto device, from physical devices this is usually
 directly from the devices processed queue, and for virtual device's from a
-``rte_ring`` where processed operations are place after being processed on the
+``rte_ring`` where processed operations are placed after being processed on the
 enqueue call.
 
 
@@ -396,7 +396,7 @@ Operation Management and Allocation
 
 The cryptodev library provides an API set for managing Crypto operations which
 utilize the Mempool Library to allocate operation buffers. Therefore, it ensures
-that the crytpo operation is interleaved optimally across the channels and
+that the crypto operation is interleaved optimally across the channels and
 ranks for optimal processing.
 A ``rte_crypto_op`` contains a field indicating the pool that it originated from.
 When calling ``rte_crypto_op_free(op)``, the operation returns to its original pool.
@@ -497,7 +497,10 @@ Symmetric Crypto transforms (``rte_crypto_sym_xform``) are the mechanism used
 to specify the details of the Crypto operation. For chaining of symmetric
 operations such as cipher encrypt and authentication generate, the next pointer
 allows transform to be chained together. Crypto devices which support chaining
-must publish the chaining of symmetric Crypto operations feature flag.
+must publish the chaining of symmetric Crypto operations feature flag. Allocation of the
+xform structure is in the application domain. To allow future API extensions in a
+backwardly compatible manner, e.g. addition of a new parameter, the application should
+zero the full xform struct before populating it.
 
 Currently there are three transforms types cipher, authentication and AEAD.
 Also it is important to note that the order in which the
@@ -602,7 +605,7 @@ Sample code
 
 There are various sample applications that show how to use the cryptodev library,
 such as the L2fwd with Crypto sample application (L2fwd-crypto) and
-the IPSec Security Gateway application (ipsec-secgw).
+the IPsec Security Gateway application (ipsec-secgw).
 
 While these applications demonstrate how an application can be created to perform
 generic crypto operation, the required complexity hides the basic steps of
@@ -807,7 +810,7 @@ using one of the crypto PMDs available in DPDK.
 
     /*
      * Dequeue the crypto operations until all the operations
-     * are proccessed in the crypto device.
+     * are processed in the crypto device.
      */
     uint16_t num_dequeued_ops, total_num_dequeued_ops = 0;
     do {
@@ -873,7 +876,15 @@ private asymmetric session data. Once this is done, session should be freed usin
 
 Asymmetric Sessionless Support
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Currently asymmetric crypto framework does not support sessionless.
+
+Asymmetric crypto framework supports session-less operations as well.
+
+Fields that should be set by user are:
+
+Member xform of struct rte_crypto_asym_op should point to the user created rte_crypto_asym_xform.
+Note that rte_crypto_asym_xform should be immutable for the lifetime of associated crypto_op.
+
+Member sess_type of rte_crypto_op should also be set to RTE_CRYPTO_OP_SESSIONLESS.
 
 Transforms and Transform Chaining
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -881,12 +892,15 @@ Transforms and Transform Chaining
 Asymmetric Crypto transforms (``rte_crypto_asym_xform``) are the mechanism used
 to specify the details of the asymmetric Crypto operation. Next pointer within
 xform allows transform to be chained together. Also it is important to note that
-the order in which the transforms are passed indicates the order of the chaining.
+the order in which the transforms are passed indicates the order of the chaining. Allocation
+of the xform structure is in the application domain. To allow future API extensions in a
+backwardly compatible manner, e.g. addition of a new parameter, the application should
+zero the full xform struct before populating it.
 
 Not all asymmetric crypto xforms are supported for chaining. Currently supported
 asymmetric crypto chaining is Diffie-Hellman private key generation followed by
 public generation. Also, currently API does not support chaining of symmetric and
-asymmetric crypto xfroms.
+asymmetric crypto xforms.
 
 Each xform defines specific asymmetric crypto algo. Currently supported are:
 * RSA

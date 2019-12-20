@@ -61,10 +61,10 @@ int enic_get_vnic_config(struct enic *enic)
 	 * and will be 0 for legacy firmware and VICs
 	 */
 	if (c->max_pkt_size > ENIC_DEFAULT_RX_MAX_PKT_SIZE)
-		enic->max_mtu = c->max_pkt_size - (ETHER_HDR_LEN + 4);
+		enic->max_mtu = c->max_pkt_size - RTE_ETHER_HDR_LEN;
 	else
-		enic->max_mtu = ENIC_DEFAULT_RX_MAX_PKT_SIZE
-				- (ETHER_HDR_LEN + 4);
+		enic->max_mtu = ENIC_DEFAULT_RX_MAX_PKT_SIZE -
+			RTE_ETHER_HDR_LEN;
 	if (c->mtu == 0)
 		c->mtu = 1500;
 
@@ -86,10 +86,11 @@ int enic_get_vnic_config(struct enic *enic)
 				      &enic->udp_rss_weak);
 
 	dev_info(enic, "Flow api filter mode: %s Actions: %s%s%s%s\n",
+		((enic->flow_filter_mode == FILTER_FLOWMAN) ? "FLOWMAN" :
 		((enic->flow_filter_mode == FILTER_DPDK_1) ? "DPDK" :
 		((enic->flow_filter_mode == FILTER_USNIC_IP) ? "USNIC" :
 		((enic->flow_filter_mode == FILTER_IPV4_5TUPLE) ? "5TUPLE" :
-		"NONE"))),
+		"NONE")))),
 		((enic->filter_actions & FILTER_ACTION_RQ_STEERING_FLAG) ?
 		 "steer " : ""),
 		((enic->filter_actions & FILTER_ACTION_FILTER_ID_FLAG) ?
@@ -181,6 +182,10 @@ int enic_get_vnic_config(struct enic *enic)
 
 	enic->vxlan = ENIC_SETTING(enic, VXLAN) &&
 		vnic_dev_capable_vxlan(enic->vdev);
+	if (vnic_dev_capable_geneve(enic->vdev)) {
+		dev_info(NULL, "Geneve with options offload available\n");
+		enic->geneve_opt_avail = 1;
+	}
 	/*
 	 * Default hardware capabilities. enic_dev_init() may add additional
 	 * flags if it enables overlay offloads.
@@ -200,7 +205,8 @@ int enic_get_vnic_config(struct enic *enic)
 		DEV_RX_OFFLOAD_VLAN_STRIP |
 		DEV_RX_OFFLOAD_IPV4_CKSUM |
 		DEV_RX_OFFLOAD_UDP_CKSUM |
-		DEV_RX_OFFLOAD_TCP_CKSUM;
+		DEV_RX_OFFLOAD_TCP_CKSUM |
+		DEV_RX_OFFLOAD_RSS_HASH;
 	enic->tx_offload_mask =
 		PKT_TX_IPV6 |
 		PKT_TX_IPV4 |
@@ -210,32 +216,6 @@ int enic_get_vnic_config(struct enic *enic)
 		PKT_TX_TCP_SEG;
 
 	return 0;
-}
-
-int enic_add_vlan(struct enic *enic, u16 vlanid)
-{
-	u64 a0 = vlanid, a1 = 0;
-	int wait = 1000;
-	int err;
-
-	err = vnic_dev_cmd(enic->vdev, CMD_VLAN_ADD, &a0, &a1, wait);
-	if (err)
-		dev_err(enic_get_dev(enic), "Can't add vlan id, %d\n", err);
-
-	return err;
-}
-
-int enic_del_vlan(struct enic *enic, u16 vlanid)
-{
-	u64 a0 = vlanid, a1 = 0;
-	int wait = 1000;
-	int err;
-
-	err = vnic_dev_cmd(enic->vdev, CMD_VLAN_DEL, &a0, &a1, wait);
-	if (err)
-		dev_err(enic_get_dev(enic), "Can't delete vlan id, %d\n", err);
-
-	return err;
 }
 
 int enic_set_nic_cfg(struct enic *enic, u8 rss_default_cpu, u8 rss_hash_type,

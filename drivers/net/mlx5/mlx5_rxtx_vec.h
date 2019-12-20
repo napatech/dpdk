@@ -19,12 +19,6 @@
 	 DEV_TX_OFFLOAD_TCP_CKSUM | \
 	 DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM)
 
-/* HW offload capabilities of vectorized Tx. */
-#define MLX5_VEC_TX_OFFLOAD_CAP \
-	(MLX5_VEC_TX_CKSUM_OFFLOAD_CAP | \
-	 DEV_TX_OFFLOAD_MATCH_METADATA | \
-	 DEV_TX_OFFLOAD_MULTI_SEGS)
-
 /*
  * Compile time sanity check for vectorized functions.
  */
@@ -60,13 +54,11 @@ S_ASSERT_MLX5_CQE(offsetof(struct mlx5_cqe, pkt_info) == 0);
 #endif
 S_ASSERT_MLX5_CQE(offsetof(struct mlx5_cqe, rx_hash_res) ==
 		  offsetof(struct mlx5_cqe, pkt_info) + 12);
-S_ASSERT_MLX5_CQE(offsetof(struct mlx5_cqe, rsvd1) +
-		  sizeof(((struct mlx5_cqe *)0)->rsvd1) ==
+S_ASSERT_MLX5_CQE(offsetof(struct mlx5_cqe, rsvd1) + 11 ==
 		  offsetof(struct mlx5_cqe, hdr_type_etc));
 S_ASSERT_MLX5_CQE(offsetof(struct mlx5_cqe, vlan_info) ==
 		  offsetof(struct mlx5_cqe, hdr_type_etc) + 2);
-S_ASSERT_MLX5_CQE(offsetof(struct mlx5_cqe, rsvd2) +
-		  sizeof(((struct mlx5_cqe *)0)->rsvd2) ==
+S_ASSERT_MLX5_CQE(offsetof(struct mlx5_cqe, lro_num_seg) + 12 ==
 		  offsetof(struct mlx5_cqe, byte_cnt));
 S_ASSERT_MLX5_CQE(offsetof(struct mlx5_cqe, sop_drop_qpn) ==
 		  RTE_ALIGN(offsetof(struct mlx5_cqe, sop_drop_qpn), 8));
@@ -102,9 +94,21 @@ mlx5_rx_replenish_bulk_mbuf(struct mlx5_rxq_data *rxq, uint16_t n)
 		return;
 	}
 	for (i = 0; i < n; ++i) {
-		void *buf_addr = rte_mbuf_buf_addr(elts[i], rxq->mp);
+		void *buf_addr;
 
+		/*
+		 * Load the virtual address for Rx WQE. non-x86 processors
+		 * (mostly RISC such as ARM and Power) are more vulnerable to
+		 * load stall. For x86, reducing the number of instructions
+		 * seems to matter most.
+		 */
+#ifdef RTE_ARCH_X86_64
+		buf_addr = elts[i]->buf_addr;
+		assert(buf_addr == rte_mbuf_buf_addr(elts[i], rxq->mp));
+#else
+		buf_addr = rte_mbuf_buf_addr(elts[i], rxq->mp);
 		assert(buf_addr == elts[i]->buf_addr);
+#endif
 		wq[i].addr = rte_cpu_to_be_64((uintptr_t)buf_addr +
 					      RTE_PKTMBUF_HEADROOM);
 		/* If there's only one MR, no need to replace LKey in WQE. */

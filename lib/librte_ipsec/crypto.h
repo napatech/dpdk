@@ -11,6 +11,16 @@
  * by ipsec library.
  */
 
+/*
+ * AES-CTR counter block format.
+ */
+
+struct aesctr_cnt_blk {
+	uint32_t nonce;
+	uint64_t iv;
+	uint32_t cnt;
+} __attribute__((packed));
+
  /*
   * AES-GCM devices have some specific requirements for IV and AAD formats.
   * Ideally that to be done by the driver itself.
@@ -37,10 +47,17 @@ struct aead_gcm_aad {
 } __attribute__((packed));
 
 struct gcm_esph_iv {
-	struct esp_hdr esph;
+	struct rte_esp_hdr esph;
 	uint64_t iv;
 } __attribute__((packed));
 
+static inline void
+aes_ctr_cnt_blk_fill(struct aesctr_cnt_blk *ctr, uint64_t iv, uint32_t nonce)
+{
+	ctr->nonce = nonce;
+	ctr->iv = iv;
+	ctr->cnt = rte_cpu_to_be_32(1);
+}
 
 static inline void
 aead_gcm_iv_fill(struct aead_gcm_iv *gcm, uint64_t iv, uint32_t salt)
@@ -78,7 +95,7 @@ gen_iv(uint64_t iv[IPSEC_MAX_IV_QWORD], rte_be64_t sqn)
 
 /*
  * Helper routine to copy IV
- * Righ now we support only algorithms with IV length equals 0/8/16 bytes.
+ * Right now we support only algorithms with IV length equals 0/8/16 bytes.
  */
 static inline void
 copy_iv(uint64_t dst[IPSEC_MAX_IV_QWORD],
@@ -143,6 +160,23 @@ remove_sqh(void *picv, uint32_t icv_len)
 	icv_len = icv_len / sizeof(uint32_t);
 	for (i = 0; i != icv_len; i++)
 		icv[i] = icv[i + 1];
+}
+
+/*
+ * setup crypto ops for LOOKASIDE_NONE (pure crypto) type of devices.
+ */
+static inline void
+lksd_none_cop_prepare(struct rte_crypto_op *cop,
+	struct rte_cryptodev_sym_session *cs, struct rte_mbuf *mb)
+{
+	struct rte_crypto_sym_op *sop;
+
+	sop = cop->sym;
+	cop->type = RTE_CRYPTO_OP_TYPE_SYMMETRIC;
+	cop->status = RTE_CRYPTO_OP_STATUS_NOT_PROCESSED;
+	cop->sess_type = RTE_CRYPTO_OP_WITH_SESSION;
+	sop->m_src = mb;
+	__rte_crypto_sym_op_attach_sym_session(sop, cs);
 }
 
 #endif /* _CRYPTO_H_ */
