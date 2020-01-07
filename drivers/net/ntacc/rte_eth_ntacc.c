@@ -92,6 +92,8 @@ struct supportedDriver_s supportedDriver = {3, 11, 0};
 
 struct supportedAdapters_s supportedAdapters[NB_SUPPORTED_FPGAS] =
 {
+  { 200, 7000, 12, 0, 0 },
+  { 200, 7001, 12, 0, 0 },
   { 200, 9500, 9, 8, 0 },  
   { 200, 9501, 9, 8, 0 },
   { 200, 9502, 9, 8, 0 },
@@ -102,12 +104,17 @@ struct supportedAdapters_s supportedAdapters[NB_SUPPORTED_FPGAS] =
   { 200, 9516, 9, 8, 0 },
   { 200, 9517, 9, 8, 0 },
   { 200, 9519, 10, 7, 0 },
+  { 200, 9521, 18, 00, 0 },
+  { 200, 9522, 20, 00, 0 },
   { 200, 9523, 10, 7, 0 },
-  { 200, 7000, 12, 0, 0 },
-  { 200, 7001, 12, 0, 0 },
-  { 200, 9521, 18, 11, 0 },
-  { 200, 9526, 18, 10, 0 },
+  { 200, 9526, 18, 00, 0 },
+  { 200, 9528, 18, 00, 0 },
+  { 200, 9531, 20, 00, 0 },
+  { 200, 9532, 27, 00, 0 },
+  { 200, 9533, 22, 00, 0 },
   { 200, 9534, 21, 28, 0 },
+  { 200, 9535, 21, 28, 0 },
+  { 200, 9537, 22, 00, 0 },
 };
 
 static void *_libnt;
@@ -902,6 +909,14 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     goto StartError;
   }
 
+  if (!internals->hCfgStream) {
+    /* If the config stream is closed, then open it again */
+    if ((status = (*_NT_ConfigOpen)(&internals->hCfgStream, "DPDK Config stream")) != NT_SUCCESS) {
+      _log_nt_errors(status, "NT_ConfigOpen() failed", __func__);
+      goto StartError;
+    }
+  }
+
   for (queue = 0; queue < dev->data->nb_rx_queues; queue++) {
     if (rx_q[queue].enabled) {
       uint32_t ntplID;
@@ -959,6 +974,17 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     }
     tx_q[queue].plock = &port_locks[tx_q[queue].port];
   }
+
+#ifndef USE_SW_STAT
+  /* Open the stat stream */
+  NTACC_LOCK(&internals->statlock);
+  if ((status = (*_NT_StatOpen)(&internals->hStat, "DPDK Stat stream")) != NT_SUCCESS) {
+    NTACC_UNLOCK(&internals->statlock);
+    _log_nt_errors(status, "NT_StatOpen failed", __func__);
+    goto StartError;
+  }
+  NTACC_UNLOCK(&internals->statlock);
+#endif
 
   dev->data->dev_link.link_status = 1;
   return 0;
@@ -1117,8 +1143,9 @@ static int eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_in
   dev_info->tx_desc_lim.nb_align = 32;
 
   dev_info->rx_offload_capa = DEV_RX_OFFLOAD_JUMBO_FRAME |
+                              DEV_RX_OFFLOAD_RSS_HASH    | 
                               DEV_RX_OFFLOAD_TIMESTAMP   |
-                              DEV_RX_OFFLOAD_KEEP_CRC |
+                              DEV_RX_OFFLOAD_KEEP_CRC    |
                               DEV_RX_OFFLOAD_SCATTER;
 
   dev_info->rx_queue_offload_capa = dev_info->rx_offload_capa;
@@ -3045,12 +3072,6 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     eth_dev->state = RTE_ETH_DEV_ATTACHED;
 
   #ifndef USE_SW_STAT
-    /* Open the stat stream */
-    if ((status = (*_NT_StatOpen)(&internals->hStat, "DPDK Stat stream")) != NT_SUCCESS) {
-      _log_nt_errors(status, "NT_StatOpen failed", __func__);
-      iRet = status;
-      goto error;
-    }
 		rte_spinlock_init(&internals->statlock);
   #endif
 
