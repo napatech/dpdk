@@ -27,7 +27,7 @@ extern "C" {
 /**
 * Extra Napatech minor version numbers
 */
-#define RTE_NT_MINOR_VER 4
+#define RTE_NT_MINOR_VER 5
 
 /**
 * Extra Napatech string to be appended to version number
@@ -86,5 +86,4 @@ rte_version(void)
 #ifdef __cplusplus
 }
 #endif
-
 #endif /* RTE_VERSION_H */
