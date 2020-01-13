@@ -6978,28 +6978,23 @@ test_null_cipher_only_operation(void)
 
 	return TEST_SUCCESS;
 }
-uint8_t orig_data[] = {0xab, 0xab, 0xab, 0xab,
-			0xab, 0xab, 0xab, 0xab,
-			0xab, 0xab, 0xab, 0xab,
-			0xab, 0xab, 0xab, 0xab};
+
+#define CRYPTO_NULL_DIGEST_LEN		4
+
 static int
 test_null_auth_only_operation(void)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
+	const char ver_vector[CRYPTO_NULL_DIGEST_LEN] = { 0 };
 	uint8_t *digest;
 
 	/* Generate test mbuf data and space for digest */
 	ut_params->ibuf = setup_test_string(ts_params->mbuf_pool,
 			catch_22_quote, QUOTE_512_BYTES, 0);
-
-	/* create a pointer for digest, but don't expect anything to be written
-	 * here in a NULL auth algo so no mbuf append done.
-	 */
-	digest = rte_pktmbuf_mtod_offset(ut_params->ibuf, uint8_t *,
-			QUOTE_512_BYTES);
-	/* prefill the memory pointed to by digest */
-	memcpy(digest, orig_data, sizeof(orig_data));
+	digest = (uint8_t *)rte_pktmbuf_append(ut_params->ibuf, CRYPTO_NULL_DIGEST_LEN);
+	memset(digest, 0, CRYPTO_NULL_DIGEST_LEN);
+	ut_params->auth_xform.auth.digest_length = CRYPTO_NULL_DIGEST_LEN;
 
 	/* Setup HMAC Parameters */
 	ut_params->auth_xform.type = RTE_CRYPTO_SYM_XFORM_AUTH;
@@ -7045,10 +7040,10 @@ test_null_auth_only_operation(void)
 			"crypto operation processing failed");
 	/* Make sure memory pointed to by digest hasn't been overwritten */
 	TEST_ASSERT_BUFFERS_ARE_EQUAL(
-			orig_data,
+			ver_vector,
 			digest,
-			sizeof(orig_data),
-			"Memory at digest ptr overwritten unexpectedly");
+			CRYPTO_NULL_DIGEST_LEN,
+			"Digest not as expected");
 
 	return TEST_SUCCESS;
 }
@@ -7059,19 +7054,16 @@ test_null_cipher_auth_operation(void)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
+	const char ver_vector[CRYPTO_NULL_DIGEST_LEN] = { 0 };
 	uint8_t *digest;
 
 	/* Generate test mbuf data and space for digest */
 	ut_params->ibuf = setup_test_string(ts_params->mbuf_pool,
 			catch_22_quote, QUOTE_512_BYTES, 0);
 
-	/* create a pointer for digest, but don't expect anything to be written
-	 * here in a NULL auth algo so no mbuf append done.
-	 */
-	digest = rte_pktmbuf_mtod_offset(ut_params->ibuf, uint8_t *,
-			QUOTE_512_BYTES);
-	/* prefill the memory pointed to by digest */
-	memcpy(digest, orig_data, sizeof(orig_data));
+	digest = (uint8_t *)rte_pktmbuf_append(ut_params->ibuf, CRYPTO_NULL_DIGEST_LEN);
+	memset(digest, 0, CRYPTO_NULL_DIGEST_LEN);
+	ut_params->auth_xform.auth.digest_length = CRYPTO_NULL_DIGEST_LEN;
 
 	/* Setup Cipher Parameters */
 	ut_params->cipher_xform.type = RTE_CRYPTO_SYM_XFORM_CIPHER;
@@ -7134,10 +7126,10 @@ test_null_cipher_auth_operation(void)
 			"Ciphertext data not as expected");
 	/* Make sure memory pointed to by digest hasn't been overwritten */
 	TEST_ASSERT_BUFFERS_ARE_EQUAL(
-			orig_data,
+			ver_vector,
 			digest,
-			sizeof(orig_data),
-			"Memory at digest ptr overwritten unexpectedly");
+			CRYPTO_NULL_DIGEST_LEN,
+			"Digest not as expected");
 
 	return TEST_SUCCESS;
 }
@@ -7147,19 +7139,16 @@ test_null_auth_cipher_operation(void)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
+	const char ver_vector[CRYPTO_NULL_DIGEST_LEN] = { 0 };
 	uint8_t *digest;
 
-	/* Generate test mbuf data */
+	/* Generate test mbuf data and space for digest */
 	ut_params->ibuf = setup_test_string(ts_params->mbuf_pool,
 			catch_22_quote, QUOTE_512_BYTES, 0);
 
-	/* create a pointer for digest, but don't expect anything to be written
-	 * here in a NULL auth algo so no mbuf append done.
-	 */
-	digest = rte_pktmbuf_mtod_offset(ut_params->ibuf, uint8_t *,
-				QUOTE_512_BYTES);
-	/* prefill the memory pointed to by digest */
-	memcpy(digest, orig_data, sizeof(orig_data));
+	digest = (uint8_t *)rte_pktmbuf_append(ut_params->ibuf, CRYPTO_NULL_DIGEST_LEN);
+	memset(digest, 0, CRYPTO_NULL_DIGEST_LEN);
+	ut_params->auth_xform.auth.digest_length = CRYPTO_NULL_DIGEST_LEN;
 
 	/* Setup Cipher Parameters */
 	ut_params->cipher_xform.type = RTE_CRYPTO_SYM_XFORM_CIPHER;
@@ -7222,10 +7211,10 @@ test_null_auth_cipher_operation(void)
 			"Ciphertext data not as expected");
 	/* Make sure memory pointed to by digest hasn't been overwritten */
 	TEST_ASSERT_BUFFERS_ARE_EQUAL(
-			orig_data,
+			ver_vector,
 			digest,
-			sizeof(orig_data),
-			"Memory at digest ptr overwritten unexpectedly");
+			CRYPTO_NULL_DIGEST_LEN,
+			"Digest not as expected");
 
 	return TEST_SUCCESS;
 }
