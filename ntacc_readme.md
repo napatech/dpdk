@@ -6,8 +6,7 @@ The NTACC PMD driver does not need to be bound. This means that the dpdk-devbind
 
 ## Table of Contents
 1. [Napatech Driver](#driver)
-	1. [SmartNIC 200-9516-10-07-00](#200-9516-10-07-00)
-	2. [Intel PAC A10](#Intel_PAC_A10)
+	1. [SmartNic with Limited filter support](#LimitedFilter)
 2. [Compiling the Napatech NTACC PMD driver](#compiling)
 	1. [Environment variable](#Environment)
 	2. [Configuration setting](#configuration)
@@ -49,32 +48,35 @@ The Napatech driver and SmartNic must be installed and started before the NTACC 
 
 See below for supported drivers and SmartNics:
 
-|  Supported drivers |
-|-------------------------|
-| 3.11.0                      |
-
 <br>
 
-|  Supported SmartNics                        | FPGA                        |
-|---------------------------------------------------|---------------------------|
-|  NT40A01-01-SCC-4×1-E3-FF-ANL        |  200-9500-10-07-00 |
-|  NT20E3-2-PTP-ANL                               |  200-9501-10-07-00 |
-|  NT40E3-4-PTP-ANL                               |  200-9502-10-07-00 |
-|  NT80E3-2-PTP-ANL                               |  200-9503-10-07-00 |
-|  NT100E3‐1‐PTP‐ANL                             |  200-9505-10-08-00 |
-|  NT200A01-02-SCC-2×40-E3-FF-ANL    |  200-9512-10-07-00 |
-|  NT200A01-02-SCC-2×100-E3-FF-ANL  |  200-9515-10-07-00<br>200-9516-10-07-00 |
-|  NT80E3-2-PTP-ANL 8x10G           |  200-9519-10-07-00 |
-|  NT200A02-01-SCC-2×100/40-E3-FF-ANL | 200-9521-18-11-00 |
-|  NT200A02-01-SCC-2×100/40-E3-FF-ANL | 200-9526-18-10-00 |
-| Intel PAC A10 GX 4x10             | 200-7000-12-02-00 |
-| Intel PAC A10 GX 1x40             | 200-7001-12-03-00 |
+|  Supported SmartNics                        | FPGA                        |  Supported driver  | Filter support |
+|---------------------------------------------------|---------------------------|------|-----|
+|  NT40A01-01-SCC-4×1-E3-FF-ANL               |  200-9500-10-07-00 | 3.11.0 | Full|
+|  NT20E3-2-PTP-ANL                                          |  200-9501-10-07-00 | 3.11.0 | Full|
+|  NT40E3-4-PTP-ANL                                          |  200-9502-10-07-00 | 3.11.0 | Full|
+|  NT80E3-2-PTP-ANL                                          |  200-9503-10-07-00 | 3.11.0 | Full|
+|  NT100E3‐1‐PTP‐ANL                                        |  200-9505-10-08-00 | 3.11.0 | Full|
+|  NT200A01-02-SCC-2×40-E3-FF-ANL           |  200-9512-10-07-00 | 3.11.0| Full|
+|  NT200A01-02-SCC-2×100-E3-FF-ANL        |  200-9515-10-07-00<br>200-9516-10-07-00 | 3.11.0| Full<br>[limited](#LimitedFilter)|
+|  NT80E3-2-PTP-ANL 8x10G                             |  200-9519-10-07-00 | 3.11.0| Full|
+|  NT200A02-01-SCC-2×100-E3-FF-ANL | 200-9521-18-11-00 |3.11.0 | Full|
+| NT200A01‐02‐SCC‐8x10‐E3‐FF‐ANL | 200-9522-20-01-00 | 3.19.0 | Full |
+|  NT200A02-01-SCC-2×100/40-E3-FF-ANL | 200-9526-18-10-00 | 3.11.0| Full|
+| NT200A01‐02‐SCC‐2x25/10/2x40‐E3‐FF‐ANL | 200-9531-20-01-00 | 3.19.0| Full |
+| NT200A02‐01‐SCC‐2x25/10/2x40‐E3‐FF‐ANL | 200-9532-27-01-00| 3.19.0| Full |
+| NT200A02‐01‐SCC‐8x10‐E3‐FF‐ANL | 200-9533-22-01-00 |  3.19.0| Full |
+| NT200A02‐01‐SCC‐8x10‐E3‐FF‐ANL | 200-9534-21-28-00 |  3.19.0| [limited](#LimitedFilter) |
+| NT200A02‐01‐SCC‐2x40‐E3‐FF‐ANL | 200-9535-21-28-00 |  3.19.0| [limited](#LimitedFilter) |
+|  NT40E3-4-PTP-ANL                                          |  200-9537-22-01-00 | 3.19.0 | Full|
+| Intel PAC A10 GX 4x10                                      | 200-7000-12-02-00 | 3.11.0| Full|
+| Intel PAC A10 GX 1x40                                      | 200-7001-12-03-00 | 3.11.0| Full|
 
 The complete driver package can be downloaded here:
-[Link™ Capture Software v11.4.0 Linux](https://supportportal.napatech.com/index.php?/selfhelp/view-article/link--capture-software-v1132-linux/541)
+[Link™ Capture Software 12.1 Linux](https://supportportal.napatech.com/index.php?/selfhelp/view-article/Link%E2%84%A2-Capture-Software-12.1.2-for-Linux/590)
 
-#### SmartNIC 200-9516-10-07-00 <a name="200-9516-10-07-00"></a>
-Using this SmartNIC only limited rte_flow filters is supported.
+#### SmartNic with Limited filter support <a name="LimitedFilter"></a>
+When using a SmartNIC with limited filter support only a limited number of rte_flow filters is supported.
 The rte_flow filters must not contain any spec, mask or last values like below:
 ```
 memset(&pattern, 0, sizeof(pattern));
