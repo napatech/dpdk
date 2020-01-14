@@ -63,12 +63,12 @@ See below for supported drivers and SmartNics:
 |  NT200A02-01-SCC-2×100-E3-FF-ANL | 200-9521-18-11-00 |3.11.0 | Full|
 | NT200A01‐02‐SCC‐8x10‐E3‐FF‐ANL | 200-9522-20-01-00 | 3.19.0 | Full |
 |  NT200A02-01-SCC-2×100/40-E3-FF-ANL | 200-9526-18-10-00 | 3.11.0| Full|
-| NT200A01‐02‐SCC‐2x25/10/2x40‐E3‐FF‐ANL | 200-9531-20-01-00 | 3.19.0| Full |
-| NT200A02‐01‐SCC‐2x25/10/2x40‐E3‐FF‐ANL | 200-9532-27-01-00| 3.19.0| Full |
-| NT200A02‐01‐SCC‐8x10‐E3‐FF‐ANL | 200-9533-22-01-00 |  3.19.0| Full |
+| NT200A01‐02‐SCC‐2x25/10/2x40‐E3‐FF‐ANL | 200-9531-20-10-00 | 3.19.0| Full |
+| NT200A02‐01‐SCC‐2x25/10/2x40‐E3‐FF‐ANL | 200-9532-27-02-00| 3.19.0| Full |
+| NT200A02‐01‐SCC‐8x10‐E3‐FF‐ANL | 200-9533-22-05-00 |  3.19.0| Full |
 | NT200A02‐01‐SCC‐8x10‐E3‐FF‐ANL | 200-9534-21-28-00 |  3.19.0| [limited](#LimitedFilter) |
 | NT200A02‐01‐SCC‐2x40‐E3‐FF‐ANL | 200-9535-21-28-00 |  3.19.0| [limited](#LimitedFilter) |
-|  NT40E3-4-PTP-ANL                                          |  200-9537-22-01-00 | 3.19.0 | Full|
+|  NT40E3-4-PTP-ANL                                          |  200-9537-22-03-00 | 3.19.0 | Full|
 | Intel PAC A10 GX 4x10                                      | 200-7000-12-02-00 | 3.11.0| Full|
 | Intel PAC A10 GX 1x40                                      | 200-7001-12-03-00 | 3.11.0| Full|
 
