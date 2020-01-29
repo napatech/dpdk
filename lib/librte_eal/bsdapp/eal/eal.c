@@ -253,11 +253,6 @@ rte_eal_config_create(void)
 	}
 	memcpy(rte_mem_cfg_addr, &early_mem_config, sizeof(early_mem_config));
 	rte_config.mem_config = rte_mem_cfg_addr;
-
-	/* store address of the config in the config itself so that secondary
-	 * processes could later map the config into this exact location
-	 */
-	rte_config.mem_config->mem_cfg_addr = (uintptr_t) rte_mem_cfg_addr;
 }
 
 /* attach to an existing shared memory config */
