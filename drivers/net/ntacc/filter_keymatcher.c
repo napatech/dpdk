@@ -41,46 +41,10 @@
 #include <nt.h>
 
 #include "rte_eth_ntacc.h"
-#include "filter_ntacc.h"
+#include "ntacc_shared.h"
+#include "filter_keymatcher.h"
 
 #define USE_KEY_MATCH
-
-#define NON_ZERO2(a)  (*a != 0 || *(a + 1) != 0)
-#define NON_ZERO4(a)  (*a != 0 || *(a + 1) != 0 || *(a + 2) != 0 || *(a + 3) != 0)
-#define NON_ZERO6(a)  (a[0] != 0  || a[1] != 0  || a[2] != 0  || a[3] != 0 || a[4] != 0  || a[5] != 0)
-#define NON_ZERO16(a) (a[0] != 0  || a[1] != 0  || a[2] != 0  || a[3] != 0 ||  \
-                       a[4] != 0  || a[5] != 0  || a[6] != 0  || a[7] != 0 ||  \
-                       a[8] != 0  || a[9] != 0  || a[10] != 0 || a[11] != 0 || \
-                       a[12] != 0 || a[13] != 0 || a[14] != 0 || a[15] != 0)
-
-#define IPV4_ADDRESS(a) ((const char *)&a)[3] & 0xFF, ((const char *)&a)[2] & 0xFF, \
-                        ((const char *)&a)[1] & 0xFF, ((const char *)&a)[0] & 0xFF
-
-#define IPV6_ADDRESS(a) a[0] & 0xFF, a[1] & 0xFF, a[2] & 0xFF, a[3] & 0xFF,    \
-                        a[4] & 0xFF, a[5] & 0xFF, a[6] & 0xFF, a[7] & 0xFF,    \
-                        a[8] & 0xFF, a[9] & 0xFF, a[10] & 0xFF, a[11] & 0xFF,  \
-                        a[12] & 0xFF, a[13] & 0xFF, a[14] & 0xFF, a[15] & 0xFF
-
-#define MAC_ADDRESS2(a) a[5] & 0xFF, a[4] & 0xFF, a[3] & 0xFF, a[2] & 0xFF, a[1] & 0xFF, a[0] & 0xFF,    \
-                        a[11] & 0xFF, a[10] & 0xFF, a[9] & 0xFF, a[8] & 0xFF, a[7] & 0xFF, a[6] & 0xFF,  \
-                        a[12] & 0xFF, a[13] & 0xFF, a[14] & 0xFF, a[15] & 0xFF
-
-#define MAC_ADDRESS(a)  a[0] & 0xFF, a[1] & 0xFF, a[2] & 0xFF, a[3] & 0xFF, a[4] & 0xFF, a[5] & 0xFF
-
-#define MAC_ADDRESS_SWAP(a,b)  {b[5]=a[0];b[4]=a[1];b[3]=a[2];b[2]=a[3];b[1]=a[4];b[0]=a[5];}
-
-#if 0
-#define PRINT_IPV4(a, b) { uint32_t c = b; printf("%s: %d.%d.%d.%d\n", a, IPV4_ADDRESS(c)); }
-#else
-#define PRINT_IPV4(a, b)
-#endif
-
-#define CHECK8(a, b)   (a != NULL && (a->b != 0 && a->b != 0xFF))
-#define CHECK16(a, b)  (a != NULL && (a->b != 0 && a->b != 0xFFFF))
-#define CHECK32(a, b)  (a != NULL && (a->b != 0 && a->b != 0xFFFFFFFF))
-#define CHECK64(a, b)  (a != NULL && (a->b != 0 && a->b != 0xFFFFFFFFFFFFFFFF))
-#define CHECKIPV6(a)   _CheckArray(a, 16)
-#define CHECKETHER(a)  _CheckArray(a, 6)
 
 static inline int _CheckArray(const uint8_t *addr, uint8_t len)
 {
@@ -111,58 +75,6 @@ void pushNtplID(struct rte_flow *flow, uint32_t ntplId)
     filter->ntpl_id = ntplId;
     LIST_INSERT_HEAD(&flow->ntpl_id, filter, next);
   }
-}
-
-enum layer_e {
-  LAYER2,
-  LAYER3,
-  LAYER4,
-  VLAN,
-  IP,
-  MPLS,
-  PROTO,
-};
-
-/**
- * Get the layer NTPL keyword. Either an outer or an inner
- * version.
- */
-static const char *GetLayer(enum layer_e layer, bool tunnel)
-{
-  switch (layer) {
-  case LAYER2:
-    if (tunnel)
-      return "InnerLayer2Header";
-    else
-      return "Layer2Header";
-  case LAYER3:
-  case IP:
-    if (tunnel)
-      return "InnerLayer3Header";
-    else
-      return "Layer3Header";
-  case LAYER4:
-    if (tunnel)
-      return "InnerLayer4Header";
-    else
-      return "Layer4Header";
-  case VLAN:
-    if (tunnel)
-      return "InnerFirstVLAN";
-    else
-      return "FirstVLAN";
-  case MPLS:
-    if (tunnel)
-      return "InnerFirstMPLS";
-    else
-      return "FirstMPLS";
-  case PROTO:
-    if (tunnel)
-      return "InnerIpProtocol";
-    else
-      return "IpProtocol";
-  }
-  return "UNKNOWN";
 }
 
 void FlushHash(struct pmd_internals *internals)
@@ -385,107 +297,11 @@ int CreateHashModeHash(uint64_t rss_hf, struct pmd_internals *internals, struct 
   return 0;
 }
 
-static const char *GetSorted(enum rte_eth_hash_function func)
-{
-  if (func == RTE_ETH_HASH_FUNCTION_SIMPLE_XOR) {
-    return "XOR=true";
-  }
-  else {
-    return "XOR=false";
-  }
-}
-
-void CreateHash(char *ntpl_buf, const struct rte_flow_action_rss *rss, struct pmd_internals *internals)
-{
-  enum rte_eth_hash_function func;
-  bool tunnel = false;
-
-  // Select either sorted or non-sorted hash
-  switch (rss->func)
-  {
-  case RTE_ETH_HASH_FUNCTION_DEFAULT:
-    if (internals->symHashMode == SYM_HASH_ENA_PER_PORT)
-      func = RTE_ETH_HASH_FUNCTION_SIMPLE_XOR;
-    else
-      func = RTE_ETH_HASH_FUNCTION_DEFAULT;
-    break;
-  case RTE_ETH_HASH_FUNCTION_SIMPLE_XOR:
-    func = RTE_ETH_HASH_FUNCTION_SIMPLE_XOR;
-    break;
-  default:
-    return;
-  }
-
-  // Select either inner tunnel or outer tunnel hash
-  switch (rss->level)
-  {
-  case 0:
-  case 1:
-    tunnel = false;
-    break;
-  case 2:
-    tunnel = true;
-    break;
-  }
-
-  if (rss->types & ETH_RSS_NONFRAG_IPV4_OTHER) {
-    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
-             ";Hash=HashWord0_3=%s[12]/32,HashWord4_7=%s[16]/32,HashWordP=%s,%s",
-             GetLayer(LAYER3, tunnel), GetLayer(LAYER3, tunnel),
-             GetLayer(PROTO, tunnel), GetSorted(func));
-    return;
-  }
-
-  if ((rss->types & ETH_RSS_NONFRAG_IPV4_TCP) || (rss->types & ETH_RSS_NONFRAG_IPV4_UDP) || (rss->types & ETH_RSS_NONFRAG_IPV4_SCTP)) {
-    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
-             ";Hash=HashWord0_3=%s[12]/32,HashWord4_7=%s[16]/32,HashWord8=%s[0]/32,HashWordP=%s,%s",
-             GetLayer(LAYER3, tunnel), GetLayer(LAYER3, tunnel), GetLayer(LAYER4, tunnel),
-             GetLayer(PROTO, tunnel), GetSorted(func));
-    return;
-  }
-
-  if ((rss->types & ETH_RSS_IPV4) || (rss->types & ETH_RSS_FRAG_IPV4)) {
-    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
-             ";Hash=HashWord0_3=%s[12]/32,HashWord4_7=%s[16]/32,%s",
-             GetLayer(LAYER3, tunnel), GetLayer(LAYER3, tunnel), GetSorted(func));
-    return;
-  }
-
-  if (rss->types & ETH_RSS_NONFRAG_IPV6_OTHER) {
-    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
-             ";Hash=HashWord0_3=%s[8]/128,HashWord4_7=%s[24]/128,HashWordP=%s,%s",
-             GetLayer(LAYER3, tunnel), GetLayer(LAYER3, tunnel),
-             GetLayer(PROTO, tunnel), GetSorted(func));
-    return;
-  }
-
-  if ((rss->types & ETH_RSS_NONFRAG_IPV6_TCP) ||
-      (rss->types & ETH_RSS_IPV6_TCP_EX)      ||
-      (rss->types & ETH_RSS_NONFRAG_IPV6_UDP) ||
-      (rss->types & ETH_RSS_IPV6_UDP_EX)      ||
-      (rss->types & ETH_RSS_NONFRAG_IPV6_SCTP)) {
-    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
-             ";Hash=HashWord0_3=%s[8]/128,HashWord4_7=%s[24]/128,HashWord8=%s[0]/32,HashWordP=%s,%s",
-             GetLayer(LAYER3, tunnel), GetLayer(LAYER3, tunnel), GetLayer(LAYER4, tunnel),
-             GetLayer(PROTO, tunnel), GetSorted(func));
-    return;
-  }
-
-  if ((rss->types & ETH_RSS_IPV6) || (rss->types & ETH_RSS_FRAG_IPV6) || (rss->types & ETH_RSS_IPV6_EX)) {
-    snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
-             ";Hash=HashWord0_3=%s[8]/128,HashWord4_7=%s[24]/128,%s",
-             GetLayer(LAYER3, tunnel), GetLayer(LAYER3, tunnel), GetSorted(func));
-    return;
-  }
-
-  snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ";Hash=roundrobin");
-}
-
 /**
  * Get a keyset value from the keyset pool.
  * Used by the keymatcher command
  */
-int GetKeysetValue(struct pmd_internals *internals)
+static int GetKeysetValueKeymatcher(struct pmd_internals *internals)
 {
   int i;
 
@@ -494,8 +310,8 @@ int GetKeysetValue(struct pmd_internals *internals)
   }
   pthread_mutex_lock(&internals->shm->mutex);
   for (i = 0; i < 12; i++) {
-    if (internals->shm->keyset[0][i] == 0) {
-      internals->shm->keyset[0][i] = 1;
+    if (internals->shm->keySetID[i] == 0) {
+      internals->shm->keySetID[i] = 1;
       pthread_mutex_unlock(&internals->shm->mutex);
       return (i + 3);
     }
@@ -513,51 +329,9 @@ int ReturnKeysetValue(struct pmd_internals *internals, int value)
     return -1;
   }
   pthread_mutex_lock(&internals->shm->mutex);
-  internals->shm->keyset[0][value - 3] = 0;
+  internals->shm->keySetID[value - 3] = 0;
   pthread_mutex_unlock(&internals->shm->mutex);
   return 0;
-}
-
-/**
- * Create the stream ID part of the NTPL assign command.
- *
- * The stream ID is created form the number of queues as a range
- * or if only one queue as a single value
- */
-void CreateStreamid(char *ntpl_buf, struct pmd_internals *internals, uint32_t nb_queues, uint8_t *list_queues)
-{
-  bool range = true;
-  char buf[21];
-  uint32_t i;
-
-  if (nb_queues > 1) {
-    // We need to check whether we can set it up as a range or list
-    for (i = 0; i < nb_queues - 1; i++) {
-      if (list_queues[i] != (list_queues[i + 1] - 1)) {
-        // The queues are not contigous, so we need to use a list
-        range = false;
-        break;
-      }
-    }
-  }
-  else {
-    range = false;
-  }
-
-  strcat(ntpl_buf, "streamid=");
-  if (range) {
-    snprintf(buf, 20, "(%u..%u)", internals->rxq[list_queues[0]].stream_id, internals->rxq[list_queues[nb_queues - 1]].stream_id);
-    strcat(ntpl_buf, buf);
-  }
-  else {
-    for (i = 0; i < nb_queues; i++) {
-      snprintf(buf, 20, "%u", internals->rxq[list_queues[i]].stream_id);
-      strcat(ntpl_buf, buf);
-      if (i < nb_queues - 1) {
-        strcat(ntpl_buf, ",");
-      }
-    }
-  }
 }
 
 static void InsertFilterValues(struct filter_values_s *pInsertFilterValues, struct pmd_internals *internals)
@@ -613,6 +387,7 @@ static int SetFilter(int size,
   pFilter_values->offset = offset;
   pFilter_values->size = size;
   pFilter_values->layerString = GetLayer(layer, tunnel);
+  pFilter_values->tunnel = tunnel;
   pFilter_values->layer = layer;
   pFilter_values->mask = mask;
 
@@ -800,11 +575,11 @@ static void DumpFlows(struct pmd_internals *internals)
 }
 #endif
 
-bool IsFilterReuse(struct pmd_internals *internals,
-                   uint64_t typeMask,
-                   uint8_t *plist_queues,
-                   uint8_t nb_queues,
-                   int *key)
+bool IsFilterReuseKeymatcher(struct pmd_internals *internals,
+                             uint64_t typeMask,
+                             uint8_t *plist_queues,
+                             uint8_t nb_queues,
+                             int *key)
 {
   if (LIST_EMPTY(&internals->filter_keyset)) {
     *key = 0;
@@ -818,16 +593,16 @@ bool IsFilterReuse(struct pmd_internals *internals,
     return true;
 }
 
-int CreateOptimizedFilter(char *ntpl_buf,
-                          struct pmd_internals *internals,
-                          struct rte_flow *flow,
-                          bool *fc,
-                          uint64_t typeMask,
-                          uint8_t *plist_queues,
-                          uint8_t nb_queues,
-                          int key,
-                          struct color_s *pColor,
-                          struct rte_flow_error *error)
+int CreateOptimizedFilterKeymatcher(char *ntpl_buf,
+                                    struct pmd_internals *internals,
+                                    struct rte_flow *flow,
+                                    bool *fc,
+                                    uint64_t typeMask,
+                                    uint8_t *plist_queues,
+                                    uint8_t nb_queues,
+                                    int key,
+                                    struct color_s *pColor,
+                                    struct rte_flow_error *error)
 {
   struct filter_values_s *pFilter_values;
   int iRet = 0;
@@ -861,7 +636,7 @@ int CreateOptimizedFilter(char *ntpl_buf,
       goto Errors;
     }
 
-    key = GetKeysetValue(internals);
+    key = GetKeysetValueKeymatcher(internals);
     if (key < 0) {
       rte_free(key_set);
       iRet = -1;
@@ -1128,7 +903,7 @@ int SetEthernetFilter(const struct rte_flow_item *item,
   const struct rte_flow_item_eth *mask = (const struct rte_flow_item_eth *)item->mask;
   const struct rte_flow_item_eth *last = (const struct rte_flow_item_eth *)item->last;
 
-  if ((spec || mask || last) && internals->keyMatcher == 0) {
+  if ((spec || mask || last) && internals->keyMatcher == 0 && internals->flowMatcher == 0) {
     rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL, "Ethernet filter not supported for this adapter");
     return -1;
   }
@@ -1315,7 +1090,7 @@ int SetIPV4Filter(char *ntpl_buf,
     return 0;
   }
 
-  if (internals->keyMatcher == 0) {
+  if (internals->keyMatcher == 0 && internals->flowMatcher == 0) {
     rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL, "Only IPv4 flow without values supported for this adapter");
     return -1;
   }
@@ -1676,7 +1451,7 @@ int SetIPV6Filter(char *ntpl_buf,
     return 0;
   }
 
-  if (internals->keyMatcher == 0) {
+  if (internals->keyMatcher == 0 && internals->flowMatcher == 0) {
     rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL, "Only IPv6 flow without values supported for this adapter");
     return -1;
   }
@@ -1858,7 +1633,7 @@ int SetTCPFilter(char *ntpl_buf,
     return 0;
   }
 
-  if (internals->keyMatcher == 0) {
+  if (internals->keyMatcher == 0 && internals->flowMatcher == 0) {
     rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL, "Only TCP flow without values supported for this adapter");
     return -1;
   }
@@ -2044,7 +1819,7 @@ int SetUDPFilter(char *ntpl_buf,
     return 0;
   }
 
-  if (internals->keyMatcher == 0) {
+  if (internals->keyMatcher == 0 && internals->flowMatcher == 0) {
     rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL, "Only UDP flow without values supported for this adapter");
     return -1;
   }
@@ -2152,7 +1927,7 @@ int SetSCTPFilter(char *ntpl_buf,
     return 0;
   }
 
-  if (internals->keyMatcher == 0) {
+  if (internals->keyMatcher == 0 && internals->flowMatcher == 0) {
     rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL, "Only SCTP flow without values supported for this adapter");
     return -1;
   }
@@ -2261,7 +2036,7 @@ int SetICMPFilter(char *ntpl_buf,
     return 0;
   }
 
-  if (internals->keyMatcher == 0) {
+  if (internals->keyMatcher == 0 && internals->flowMatcher == 0) {
     rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL, "Only ICMP flow without values supported for this adapter");
     return -1;
   }
@@ -2397,7 +2172,7 @@ int SetVlanFilter(char *ntpl_buf,
     return 0;
   }
 
-  if (internals->keyMatcher == 0) {
+  if (internals->keyMatcher == 0 && internals->flowMatcher == 0) {
     rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL, "Only VLAN flow without values supported for this adapter");
     return -1;
   }
@@ -2455,7 +2230,7 @@ int SetMplsFilter(char *ntpl_buf,
     return 0;
   }
 
-  if (internals->keyMatcher == 0) {
+  if (internals->keyMatcher == 0 && internals->flowMatcher == 0) {
     rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL, "Only MPLS flow without values supported for this adapter");
     return -1;
   }

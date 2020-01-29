@@ -75,7 +75,11 @@ LIBABIVER := 1
 # all source are stored in SRCS-y
 #
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_NTACC) += rte_eth_ntacc.c
-SRCS-$(CONFIG_RTE_LIBRTE_PMD_NTACC) += filter_ntacc.c
+SRCS-$(CONFIG_RTE_LIBRTE_PMD_NTACC) += filter_keymatcher.c
+SRCS-$(CONFIG_RTE_LIBRTE_PMD_NTACC) += filter_flowmatcher.c
+SRCS-$(CONFIG_RTE_LIBRTE_PMD_NTACC) += keymatcher.c
+SRCS-$(CONFIG_RTE_LIBRTE_PMD_NTACC) += flowmatcher.c
+SRCS-$(CONFIG_RTE_LIBRTE_PMD_NTACC) += ntacc_shared.c
 
 #
 # Export include files

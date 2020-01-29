@@ -31,100 +31,65 @@
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __FILTER_NTACC_H__
-#define __FILTER_NTACC_H__
+#ifndef __FILTER_KEYMATCHER_H__
+#define __FILTER_KEYMATCHER_H__
 
-#define NTPL_BSIZE 1024
-
-enum {
-  GTPC2_TUNNEL_TYPE,
-  GTPC1_TUNNEL_TYPE,
-  GTPC1_2_TUNNEL_TYPE,
-  GTPU0_TUNNEL_TYPE,
-  GTPU1_TUNNEL_TYPE,
-  GREV0_TUNNEL_TYPE,
-  GREV1_TUNNEL_TYPE,
-  VXLAN_TUNNEL_TYPE,
-  NVGRE_TUNNEL_TYPE,
-  IP_IN_IP_TUNNEL_TYPE,
+struct rte_flow {
+	LIST_ENTRY(rte_flow) next;
+  LIST_HEAD(_filter_flows, filter_flow) ntpl_id;
+  uint32_t assign_ntpl_id;
+  uint8_t port;
+  uint8_t forwardPort;
+  uint8_t  key;
+  uint64_t typeMask;
+  uint64_t rss_hf;
+  int priority;
+  uint8_t nb_queues;
+  uint8_t list_queues[NUMBER_OF_QUEUES];
 };
 
-struct color_s {
-  uint32_t color;
-  uint32_t colorMask;
-  enum {
-    NO_COLOR,
-    ONE_COLOR,
-    COLOR_MASK
-  } type;
-};
+/******************* Macros ********************/
 
-enum {
-  RX_FILTER            = (1ULL << 0),
-  DROP_FILTER          = (1ULL << 1),
-  RETRANSMIT_FILTER    = (1ULL << 2),
-  DUMMY_FILTER         = (1ULL << 3),
-  // Protokoller
-  ETHER_ADDR_DST       = (1ULL << 4),
-  ETHER_ADDR_SRC       = (1ULL << 5),
-  ETHER_TYPE           = (1ULL << 6),
-  IPV4_VERSION_IHL     = (1ULL << 7),
-  IPV4_TYPE_OF_SERVICE = (1ULL << 9),
-  IPV4_TOTAL_LENGTH    = (1ULL << 10),
-  IPV4_PACKET_ID       = (1ULL << 11),
-  IPV4_FRAGMENT_OFFSET = (1ULL << 12),
-  IPV4_TIME_TO_LIVE    = (1ULL << 13),
-  IPV4_NEXT_PROTO_ID   = (1ULL << 14),
-  IPV4_HDR_CHECKSUM    = (1ULL << 15),
-  IPV4_SRC_ADDR        = (1ULL << 16),
-  IPV4_DST_ADDR        = (1ULL << 17),
-  IPV6_VTC_FLOW        = (1ULL << 18),
-  IPV6_PAYLOAD_LEN     = (1ULL << 19),
-  IPV6_PROTO           = (1ULL << 20),
-  IPV6_HOP_LIMITS      = (1ULL << 21),
-  IPV6_SRC_ADDR        = (1ULL << 22),
-  IPV6_DST_ADDR        = (1ULL << 23),
-  TCP_SRC_PORT         = (1ULL << 24),
-  TCP_DST_PORT         = (1ULL << 25),
-  TCP_SENT_SEQ         = (1ULL << 26),
-  TCP_RECV_ACK         = (1ULL << 27),
-  TCP_DATA_OFF         = (1ULL << 28),
-  TCP_FLAGS            = (1ULL << 29),
-  TCP_RX_WIN           = (1ULL << 30),
-  TCP_CKSUM            = (1ULL << 31),
-  TCP_URP              = (1ULL << 32),
-  UDP_SRC_PORT         = (1ULL << 33),
-  UDP_DST_PORT         = (1ULL << 34),
-  UDP_DGRAM_LEN        = (1ULL << 35),
-  UDP_DGRAM_CKSUM      = (1ULL << 36),
-  SCTP_SRC_PORT        = (1ULL << 37),
-  SCTP_DST_PORT        = (1ULL << 38),
-  SCTP_TAG             = (1ULL << 39),
-  SCTP_CKSUM           = (1ULL << 40),
-  ICMP_TYPE            = (1ULL << 41),
-  ICMP_CODE            = (1ULL << 42),
-  ICMP_CKSUM           = (1ULL << 43),
-  ICMP_IDENT           = (1ULL << 44),
-  ICMP_SEQ_NB          = (1ULL << 45),
-  VLAN_TCI             = (1ULL << 46),
-  GTPU0_TUNNEL         = (1ULL << 47),
-  GTPU1_TUNNEL         = (1ULL << 48),
-  GREV0_TUNNEL         = (1ULL << 49),
-  VXLAN_TUNNEL         = (1ULL << 50),
-  NVGRE_TUNNEL         = (1ULL << 52),
-  IP_IN_IP_TUNNEL      = (1ULL << 52),
-  GTPC2_TUNNEL         = (1ULL << 53),
-  GTPC1_TUNNEL         = (1ULL << 54),
-  GTPC1_2_TUNNEL       = (1ULL << 55),
-  GREV1_TUNNEL         = (1ULL << 56),
-  MPLS_LABEL           = (1ULL << 57),
-};
+#define NON_ZERO2(a)  (*a != 0 || *(a + 1) != 0)
+#define NON_ZERO4(a)  (*a != 0 || *(a + 1) != 0 || *(a + 2) != 0 || *(a + 3) != 0)
+#define NON_ZERO6(a)  (a[0] != 0  || a[1] != 0  || a[2] != 0  || a[3] != 0 || a[4] != 0  || a[5] != 0)
+#define NON_ZERO16(a) (a[0] != 0  || a[1] != 0  || a[2] != 0  || a[3] != 0 ||  \
+                       a[4] != 0  || a[5] != 0  || a[6] != 0  || a[7] != 0 ||  \
+                       a[8] != 0  || a[9] != 0  || a[10] != 0 || a[11] != 0 || \
+                       a[12] != 0 || a[13] != 0 || a[14] != 0 || a[15] != 0)
+
+#define IPV4_ADDRESS(a) ((const char *)&a)[3] & 0xFF, ((const char *)&a)[2] & 0xFF, \
+                        ((const char *)&a)[1] & 0xFF, ((const char *)&a)[0] & 0xFF
+
+#define IPV6_ADDRESS(a) a[0] & 0xFF, a[1] & 0xFF, a[2] & 0xFF, a[3] & 0xFF,    \
+                        a[4] & 0xFF, a[5] & 0xFF, a[6] & 0xFF, a[7] & 0xFF,    \
+                        a[8] & 0xFF, a[9] & 0xFF, a[10] & 0xFF, a[11] & 0xFF,  \
+                        a[12] & 0xFF, a[13] & 0xFF, a[14] & 0xFF, a[15] & 0xFF
+
+#define MAC_ADDRESS2(a) a[5] & 0xFF, a[4] & 0xFF, a[3] & 0xFF, a[2] & 0xFF, a[1] & 0xFF, a[0] & 0xFF,    \
+                        a[11] & 0xFF, a[10] & 0xFF, a[9] & 0xFF, a[8] & 0xFF, a[7] & 0xFF, a[6] & 0xFF,  \
+                        a[12] & 0xFF, a[13] & 0xFF, a[14] & 0xFF, a[15] & 0xFF
+
+#define MAC_ADDRESS(a)  a[0] & 0xFF, a[1] & 0xFF, a[2] & 0xFF, a[3] & 0xFF, a[4] & 0xFF, a[5] & 0xFF
+
+#define MAC_ADDRESS_SWAP(a,b)  {b[5]=a[0];b[4]=a[1];b[3]=a[2];b[2]=a[3];b[1]=a[4];b[0]=a[5];}
+
+#if 0
+#define PRINT_IPV4(a, b) { uint32_t c = b; printf("%s: %d.%d.%d.%d\n", a, IPV4_ADDRESS(c)); }
+#else
+#define PRINT_IPV4(a, b)
+#endif
+
+#define CHECK8(a, b)   (a != NULL && (a->b != 0 && a->b != 0xFF))
+#define CHECK16(a, b)  (a != NULL && (a->b != 0 && a->b != 0xFFFF))
+#define CHECK32(a, b)  (a != NULL && (a->b != 0 && a->b != 0xFFFFFFFF))
+#define CHECK64(a, b)  (a != NULL && (a->b != 0 && a->b != 0xFFFFFFFFFFFFFFFF))
+#define CHECKIPV6(a)   _CheckArray(a, 16)
+#define CHECKETHER(a)  _CheckArray(a, 6)
 
 /******************* Function Prototypes ********************/
 
-void CreateHash(char *ntpl_buf, const struct rte_flow_action_rss *rss, struct pmd_internals *internals);
 int CreateHashModeHash(uint64_t rss_hf, struct pmd_internals *internals, struct rte_flow *flow, int priority);
-void CreateStreamid(char *ntpl_buf, struct pmd_internals *internals, uint32_t nb_queues, uint8_t *list_queues);
 int ReturnKeysetValue(struct pmd_internals *internals, int value);
 void pushNtplID(struct rte_flow *flow, uint32_t ntplId);
 
@@ -202,22 +167,21 @@ int SetTunnelFilter(char *ntpl_buf,
                     int type,
                     uint64_t *typeMask);
 
-int CreateOptimizedFilter(char *ntpl_buf,
-                          struct pmd_internals *internals,
-                          struct rte_flow *flow,
-                          bool *fc,
-                          uint64_t typeMask,
-                          uint8_t *plist_queues,
-                          uint8_t nb_queues,
-                          int key,
-                          struct color_s *pColor,
-                          struct rte_flow_error *error);
+int CreateOptimizedFilterKeymatcher(char *ntpl_buf,
+                                    struct pmd_internals *internals,
+                                    struct rte_flow *flow,
+                                    bool *fc,
+                                    uint64_t typeMask,
+                                    uint8_t *plist_queues,
+                                    uint8_t nb_queues,
+                                    int key,
+                                    struct color_s *pColor,
+                                    struct rte_flow_error *error);
 
 void DeleteKeyset(int key, struct pmd_internals *internals, struct rte_flow_error *error);
 //void DeleteHash(uint64_t rss_hf, uint8_t port, int priority, struct pmd_internals *internals);
 void FlushHash(struct pmd_internals *internals);
-bool IsFilterReuse(struct pmd_internals *internals, uint64_t typeMask, uint8_t *plist_queues, uint8_t nb_queues, int *key);
-int GetKeysetValue(struct pmd_internals *internals);
+bool IsFilterReuseKeymatcher(struct pmd_internals *internals, uint64_t typeMask, uint8_t *plist_queues, uint8_t nb_queues, int *key);
 
 #endif
 

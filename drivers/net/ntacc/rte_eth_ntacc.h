@@ -36,12 +36,12 @@
 
 #include <rte_ethdev_pci.h>
 
-#define SEGMENT_LENGTH  (1024*1024)
-
 //#define NTACC_LOCK(a)    { printf(" Req Lock %s(%p) - %u\n", __FILE__, a, __LINE__); rte_spinlock_lock(a); printf(" Got Lock %s(%p) - %u\n", __FILE__, a, __LINE__); }
 //#define NTACC_UNLOCK(a)  { rte_spinlock_unlock(a); printf("Unlocked %s(%p) - %u\n", __FILE__, a, __LINE__); }
 #define NTACC_LOCK(a)    rte_spinlock_lock(a)
 #define NTACC_UNLOCK(a)  rte_spinlock_unlock(a)
+
+#define NUMBER_OF_QUEUES 256
 
 struct filter_flow {
   LIST_ENTRY(filter_flow) next;
@@ -62,22 +62,11 @@ struct filter_keyset_s {
   uint32_t ntpl_id2;
   uint64_t typeMask;
   uint8_t  key;
+  uint8_t  keySetID;
   uint8_t  port;
-  uint8_t nb_queues;
-  uint8_t list_queues[256];
-};
-
-struct rte_flow {
-	LIST_ENTRY(rte_flow) next;
-  LIST_HEAD(_filter_flows, filter_flow) ntpl_id;
-  uint32_t assign_ntpl_id;
-  uint8_t port;
-  uint8_t  key;
-  uint64_t typeMask;
-  uint64_t rss_hf;
-  int priority;
-  uint8_t nb_queues;
-  uint8_t list_queues[256];
+  uint8_t  forwardPort;
+  uint8_t  nb_queues;
+  uint8_t  list_queues[NUMBER_OF_QUEUES];
 };
 
 enum {
@@ -128,9 +117,8 @@ struct ntacc_tx_queue {
 } __rte_cache_aligned;
 
 struct pmd_shared_mem_s {
-  pthread_mutex_t mutex;
-  int keyset[8][12];
-  int key_id;
+  pthread_mutex_t    mutex;
+  uint8_t keySetID[15];
 };
 
 struct version_s {
@@ -143,6 +131,7 @@ struct filter_values_s {
 	LIST_ENTRY(filter_values_s) next;
   uint64_t mask;
   const char *layerString;
+  bool tunnel;
   uint8_t size;
   uint8_t layer;
   uint8_t offset;
@@ -183,6 +172,7 @@ struct pmd_internals {
   NtStatStream_t        hStat;
 #endif
   NtConfigStream_t      hCfgStream;
+  NtFlowStream_t        hFlowStream;
   int                   if_index;
   LIST_HEAD(_flows, rte_flow) flows;
   LIST_HEAD(filter_values_t, filter_values_s) filter_values;
@@ -213,6 +203,7 @@ struct pmd_internals {
   struct pmd_shared_mem_s *shm;
   uint32_t              dropId;
   uint32_t              keyMatcher:1;
+  uint32_t              flowMatcher:1;
   uint32_t              mode2Tx:1;
   uint32_t              mode2Rx:1;
 };
@@ -249,10 +240,44 @@ struct externalBufferInfo_s {
 };
 #endif
 
+struct color_s {
+  uint32_t color;
+  uint32_t colorMask;
+  enum {
+    NO_COLOR,
+    ONE_COLOR,
+    COLOR_MASK
+  } type;
+};
 
 #define NB_SUPPORTED_FPGAS 23
 
 int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *internals, struct rte_flow_error *error);
+
+int handle_actions(struct rte_eth_dev *dev,
+                   const struct rte_flow_action actions[],
+                   const struct rte_flow_action_rss **pRss,
+                   uint8_t *pForwardPort,
+                   uint64_t *pTypeMask,
+                   struct color_s *pColor,
+                   uint8_t *pAction,
+                   uint8_t *pNb_queues,
+                   uint8_t *pList_queues,
+                   struct pmd_internals *internals,
+                   struct rte_flow_error *error);
+
+int handle_items(const struct rte_flow_item items[],
+                 uint64_t *pTypeMask,
+                 bool *pTunnel,
+                 struct color_s *pColor,
+                 bool *pFilterContinue,
+                 uint8_t *pNb_ports,
+                 uint8_t *plist_ports,
+                 const char **ntpl_str,
+                 char *filter_buf1,
+                 struct pmd_internals *internals,
+                 struct rte_flow_error *error);
+
 
 extern int ntacc_logtype;
 

@@ -10,7 +10,7 @@ endif
 #cflags += '-DCOPY_OFFSET0=InnerLayer3Header'
 #cflags += '-DUSE_EXTERNAL_BUFFER'
 
-sources = files('rte_eth_ntacc.c', 'filter_ntacc.c')
+sources = files('rte_eth_ntacc.c', 'filter_ntacc_keymatcher.c')
 
 cmd = run_command('sh', '-c', 'echo $NAPATECH3_PATH')
 PATH = cmd.stdout().strip()
