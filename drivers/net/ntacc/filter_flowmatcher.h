@@ -54,16 +54,21 @@ int CreateOptimizedFilterFlowmatcher2(struct pmd_internals *internals,
                                       struct color_s *pColor,
                                       struct rte_flow_error *error);
 
+int UnlearnFlowFlowmatcher(struct pmd_internals *internals, struct rte_flow *flow);
 void UpdateNtplIDFlowmatcher(uint32_t ntplID, uint8_t port, uint8_t priority, uint8_t keyID, uint8_t keySetID);
 int GetKeySetID(uint8_t *pList_queues, uint8_t nb_queues, uint8_t forwardPort, uint8_t *keySetID);
 int GetKeyID(uint64_t typeMask, uint8_t *keyID);
 void DumpFlow(struct rte_flow *pFlow);
+int ReleaseNtplID(struct pmd_internals *internals, struct rte_flow *flow);
+int ReleaseKeySetID(struct pmd_internals *internals, struct rte_flow *flow);
+int ReleaseKeyID(struct pmd_internals *internals, struct rte_flow *flow);
 
 struct rte_flow {
 	LIST_ENTRY(rte_flow) next;
   uint32_t ntplID;
   uint8_t  keyID;
   uint8_t  keySetID;
+  uint8_t  ipProto;
   uint8_t  keyData[40];
 };
 

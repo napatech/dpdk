@@ -331,31 +331,78 @@ FlowError:
   return NULL;
 }
 
-int dev_flow_destroy_flowmatcher(struct rte_eth_dev *dev,
-                                struct rte_flow *flow __rte_unused,
-                                struct rte_flow_error *error __rte_unused)
+static int _cleanFlowFlowmatcher(struct pmd_internals *internals, struct rte_flow *flow) 
 {
-  //char ntpl_buf[21];
-  struct pmd_internals *internals = dev->data->dev_private;
+  int error = 0;
 
-  NTACC_LOCK(&internals->lock);
+  LIST_REMOVE(flow, next);
+  // Unlearn flow
+  if (flow->keyID && flow->keySetID) {
+    DumpFlow(flow);
+    if (UnlearnFlowFlowmatcher(internals, flow) != 0) {
+      error = 1;
+    }
+    // Release NtplID
+    if (ReleaseNtplID(internals, flow) != 0) {
+      error = 1;
+    }
+    // Release KeySetID
+    if (ReleaseKeySetID(internals, flow) != 0) {
+      error = 1;
+    }
+    // Release Key ID
+    if (ReleaseKeyID(internals, flow) != 0) {
+      error = 1;
+    }
+  }
+  else {
+    // Release NtplID
+    if (ReleaseNtplID(internals, flow) != 0) {
+      error = 1;
+    }
+  }
+  rte_free(flow);
+  if (error) {
+    return -1;
+  }
+  return 0;
+}
+
+int dev_flow_destroy_flowmatcher(struct rte_eth_dev *dev,
+                                struct rte_flow *flow ,
+                                struct rte_flow_error *error)
+{
+  struct pmd_internals *internals = dev->data->dev_private;
+  int retError;
+
   printf("Remove flow %p\n", flow);
-  DumpFlow(flow);
+  NTACC_LOCK(&internals->lock);
+  retError = _cleanFlowFlowmatcher(internals, flow);
   NTACC_UNLOCK(&internals->lock);
+
+  if (retError != 0) {
+    rte_flow_error_set(error, EIO, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Failed to destroy flow correctly");
+    return -1;
+  }
   return 0;
 }
 
 int dev_flow_flush_flowmatcher(struct rte_eth_dev *dev,
-                               struct rte_flow_error *error __rte_unused)
+                               struct rte_flow_error *error)
 {
   struct pmd_internals *internals = dev->data->dev_private;
+  int retError = 0;
 
   NTACC_LOCK(&internals->lock);
   while (!LIST_EMPTY(&internals->flows)) {
-    //struct rte_flow *flow;
-    //flow = LIST_FIRST(&internals->flows);
+    retError |= _cleanFlowFlowmatcher(internals, LIST_FIRST(&internals->flows));
   }
   NTACC_UNLOCK(&internals->lock);
+
+  if (retError != 0) {
+    rte_flow_error_set(error, EIO, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Failed to flush flows correctly");
+    return -1;
+  }
   return 0;
 }
 

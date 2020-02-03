@@ -137,6 +137,22 @@ enum layer_e {
   PROTO,
 };
 
+#define NON_ZERO2(a)  (*a != 0 || *(a + 1) != 0)
+#define NON_ZERO4(a)  (*a != 0 || *(a + 1) != 0 || *(a + 2) != 0 || *(a + 3) != 0)
+#define NON_ZERO6(a)  (a[0] != 0  || a[1] != 0  || a[2] != 0  || a[3] != 0 || a[4] != 0  || a[5] != 0)
+#define NON_ZERO16(a) (a[0] != 0  || a[1] != 0  || a[2] != 0  || a[3] != 0 ||  \
+                       a[4] != 0  || a[5] != 0  || a[6] != 0  || a[7] != 0 ||  \
+                       a[8] != 0  || a[9] != 0  || a[10] != 0 || a[11] != 0 || \
+                       a[12] != 0 || a[13] != 0 || a[14] != 0 || a[15] != 0)
+
+#define IPV4_ADDRESS(a) ((const char *)&a)[3] & 0xFF, ((const char *)&a)[2] & 0xFF, \
+                        ((const char *)&a)[1] & 0xFF, ((const char *)&a)[0] & 0xFF
+
+#define IPV6_ADDRESS(a) a[0] & 0xFF, a[1] & 0xFF, a[2] & 0xFF, a[3] & 0xFF,    \
+                        a[4] & 0xFF, a[5] & 0xFF, a[6] & 0xFF, a[7] & 0xFF,    \
+                        a[8] & 0xFF, a[9] & 0xFF, a[10] & 0xFF, a[11] & 0xFF,  \
+                        a[12] & 0xFF, a[13] & 0xFF, a[14] & 0xFF, a[15] & 0xFF
+
 void CreateStreamid(char *ntpl_buf, struct pmd_internals *internals, uint32_t nb_queues, uint8_t *list_queues);
 void CreateHash(char *ntpl_buf, const struct rte_flow_action_rss *rss, struct pmd_internals *internals);
 const char *GetLayer(enum layer_e layer, bool tunnel);

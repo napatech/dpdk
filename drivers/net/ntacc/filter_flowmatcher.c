@@ -83,6 +83,11 @@ void initFlowmatcher(void)
   memset(sharedNtplID, 0, sizeof(sharedNtplID));
 }
 
+#define IPV6_ADDRESS(a) a[0] & 0xFF, a[1] & 0xFF, a[2] & 0xFF, a[3] & 0xFF,    \
+                        a[4] & 0xFF, a[5] & 0xFF, a[6] & 0xFF, a[7] & 0xFF,    \
+                        a[8] & 0xFF, a[9] & 0xFF, a[10] & 0xFF, a[11] & 0xFF,  \
+                        a[12] & 0xFF, a[13] & 0xFF, a[14] & 0xFF, a[15] & 0xFF
+
 static void dumpMask(uint64_t mask)
 {
   printf("===============================================\n");
@@ -260,6 +265,16 @@ static void dumpMask(uint64_t mask)
   printf("\n");
 }
 
+static int DeleteNtplID(struct pmd_internals *internals, uint32_t ntplID)
+{
+  char buf[20];
+  snprintf(buf, 20, "delete=%u", ntplID);
+  if (DoNtpl(buf, NULL, internals, NULL)) {
+    return -1;
+  }
+  return 0;
+}
+
 /**
  * Get a KeyID value from the KeyID pool. Used by the 
  * flowmatcher command 
@@ -269,7 +284,6 @@ int GetKeyID(uint64_t typeMask, uint8_t *keyID)
   int i;
 
   // We need a new key ID
-  dumpMask(typeMask);
   for (i = 1; i < NUMBER_OF_KEY_IDS; i++) {
     if (sharedKeyID[i].refCount == 0) {
       sharedKeyID[i].refCount = 1;
@@ -321,13 +335,36 @@ static void UpdateKeyIDNtplID(uint8_t keyID, uint32_t ntplID1, uint32_t ntplID2)
  * Release a KeyID value to the KeyID pool. Used by the 
  * flowmatcher command 
  */
-//static void PutKeyID(struct pmd_internals *internals)
-//{
-//  int i;
-//  pthread_mutex_lock(&internals->shm->mutex);
-//  internals->shm->keyID[i] = 0;
-//  pthread_mutex_unlock(&internals->shm->mutex);
-//}
+int ReleaseKeyID(struct pmd_internals *internals, struct rte_flow *flow)
+{
+  if (flow->keyID >= NUMBER_OF_KEY_IDS) {
+    printf("Failed destroying flow - KeyID %u illegal\n", flow->keyID);
+    return -1;
+  }
+  
+  if (sharedKeyID[flow->keyID].refCount == 0) {
+    printf("Failed destroying flow - KeyID %u not in use\n", flow->keyID);
+    return -1;
+  }
+
+  sharedKeyID[flow->keyID].refCount--;
+  if (sharedKeyID[flow->keyID].refCount == 0) {
+    printf("ReleaseKeyID: KeyID %u released\n", flow->keyID);
+
+    // NTPL no longer needed. Delete them
+    printf("ReleaseKeyID: Deleting NTPL2 %u\n", sharedKeyID[flow->keyID].ntplID2);
+    if (DeleteNtplID(internals, sharedKeyID[flow->keyID].ntplID2) != 0)
+      return -1;
+
+    printf("ReleaseKeyID: Deleting NTPL1 %u\n", sharedKeyID[flow->keyID].ntplID1);
+    if (DeleteNtplID(internals, sharedKeyID[flow->keyID].ntplID1) != 0)
+      return -1;
+  }
+  else {
+    printf("ReleaseKeyID: Ref %u, KeyID %u\n", sharedKeyID[flow->keyID].refCount, flow->keyID);
+  }
+  return 0;
+}
 
 /**
  * Get a KeySetID value from the KeySetID pool. Used by the 
@@ -366,7 +403,7 @@ int ReuseKeySetID(uint8_t *pList_queues, uint8_t nb_queues, uint8_t forwardPort,
     //printf("ReuseKeySetID: %u, nb %u = %u, fport %u = %u\n", i, nb_queues, sharedKeySetID[i].nb_queues, forwardPort, sharedKeySetID[i].forwardPort);
     if (sharedKeySetID[i].refCount > 0 && sharedKeySetID[i].forwardPort == forwardPort && sharedKeySetID[i].nb_queues == nb_queues) {
       for (j = 0; j < nb_queues; j++) {
-        //printf("Queues %u = %u\n", sharedKeySetID[i].list_queues[j], pList_queues[j]);
+        printf("Queues %u = %u\n", sharedKeySetID[i].list_queues[j], pList_queues[j]);
         if (sharedKeySetID[i].list_queues[j] != pList_queues[j]) {
           break;
         }
@@ -384,6 +421,29 @@ int ReuseKeySetID(uint8_t *pList_queues, uint8_t nb_queues, uint8_t forwardPort,
   printf("No KeySetID for reuse\n");
   *keySetID = 0;
   return -1;
+}
+
+int ReleaseKeySetID(struct pmd_internals *internals __rte_unused, struct rte_flow *flow)
+{
+  if (flow->keySetID >= NUMBER_OF_KEY_SET_IDS) {
+    printf("Failed destroying flow - KeySetID %u illegal\n", flow->keySetID);
+    return -1;
+  }
+  
+  if (sharedKeySetID[flow->keySetID].refCount == 0) {
+    printf("Failed destroying flow - KeySetID %u not in use\n", flow->keySetID);
+    return -1;
+  }
+
+  sharedKeySetID[flow->keySetID].refCount--;
+
+  if (sharedKeySetID[flow->keySetID].refCount == 0) {
+    printf("ReleaseKeySetID: KeySetID %u released\n", flow->keySetID);
+  }
+  else {
+    printf("ReleaseKeySetID: Ref %u, KeySetID %u\n", sharedKeySetID[flow->keySetID].refCount, flow->keySetID);
+  }
+  return 0;
 }
 
 int ReuseNtplID(uint8_t port, uint8_t priority, uint8_t keyID, uint8_t keySetID, uint32_t *ntplID)
@@ -415,6 +475,32 @@ int ReuseNtplID(uint8_t port, uint8_t priority, uint8_t keyID, uint8_t keySetID,
   printf("No NTPL ID for reuse\n");
   *ntplID = 0;
   return -1;
+}
+
+int ReleaseNtplID(struct pmd_internals *internals, struct rte_flow *flow)
+{
+  int i;
+  for (i = 0; i < NUMBER_OF_NTPL_IDS; i++) {
+    if (sharedNtplID[i].ntplID == flow->ntplID) {
+      if (sharedNtplID[i].refCount == 0) {
+        printf("ReleaseNtplID: %u is not active - ????????\n", flow->ntplID);
+        return -i;
+      }
+      sharedNtplID[i].refCount--;
+      if (sharedNtplID[i].refCount == 0) {
+        // NTPL ID is not in use anymore
+        printf("ReleaseNtplID: Deleting %u\n", flow->ntplID);
+        if (DeleteNtplID(internals, flow->ntplID) != 0)
+          return -1;
+        sharedNtplID[i].ntplID = 0;
+        return 0;
+      }
+      printf("ReleaseNtplID: Releasing Ref: %u %u\n", sharedNtplID[i].refCount, flow->ntplID);
+      return 0;
+    }
+  }
+  printf("ReleaseNtplID: %u is not found - ????????\n", flow->ntplID);
+  return -i;
 }
 
 void UpdateNtplIDFlowmatcher(uint32_t ntplID, uint8_t port, uint8_t priority, uint8_t keyID, uint8_t keySetID)
@@ -485,10 +571,11 @@ void DumpFlow(struct rte_flow *pFlow)
 {
   int i;
 
-  printf("Flow: NTPL %u, KeyID %u, KeySetID %u: ", 
+  printf("Flow: NTPL %u, KeyID %u, KeySetID %u, ipProto %u: ", 
          pFlow->ntplID,
          pFlow->keyID,
-         pFlow->keySetID);
+         pFlow->keySetID, 
+         pFlow->ipProto);
   for (i = 0; i < 40; i++) {
     printf("%02X", pFlow->keyData[i]);
   }
@@ -520,16 +607,30 @@ inline void fillKeyData(uint8_t *pKeyData, uint8_t *pData, int offset, int size)
 }
 #define FILL_KEYDATA(a, b, c) { fillKeyData(a, (uint8_t *)&b, c, sizeof(b)); c += sizeof(b); }
 
-static void dumpIPv4(uint64_t ipv4)
+inline void fillKeyData128(uint8_t *pKeyData, uint8_t *pData, int offset)
+{
+  int i;
+  for (i = 0; i < 16; i++) {
+      pKeyData[offset+i] = pData[i];
+  }
+}
+#define FILL_KEYDATA128(a, b, c) { fillKeyData128(a, b, c); c += 16; }
+
+
+static void dumpIPv4(const char *str, uint32_t ipv4)
 {
   uint8_t *ptr = (uint8_t *)&ipv4;
-  printf("IPv4: %u.%u.%u.%u - %u.%u.%u.%u\n", ptr[7], ptr[6], ptr[5], ptr[4], ptr[3], ptr[2], ptr[1], ptr[0]);
+  printf("IPv4 %s: %u.%u.%u.%u\n", str, ptr[3], ptr[2], ptr[1], ptr[0]);
 }
 
-static void dumpPort(uint32_t port)
+static void dumpIPv6(const char *str, uint8_t *p)
 {
-  uint16_t *ptr = (uint16_t *)&port;
-  printf("Port: port %u - %u\n", ptr[1], ptr[0]);
+  printf("IPv6 %s: [%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X]\n", str, IPV6_ADDRESS(p));
+}
+
+static void dumpPort(const char *str, uint16_t port)
+{
+  printf("Port %s: %u\n", str, port);
 }
 
 static void dumpFlowMatcher(NtFlow_t *pFlow)
@@ -542,7 +643,7 @@ static void dumpFlowMatcher(NtFlow_t *pFlow)
   //printf("GFI %u, ", pFlow->gfi);
   //printf("TAU %u, ", pFlow->tau);
   printf("color %u, ", pFlow->color);
-  printf("ipProtocolField %u: ", pFlow->ipProtocolField);
+  printf("ipProto %u: ", pFlow->ipProtocolField);
   for (i = 0; i < 40; i++) {
     printf("%02X", pFlow->keyData[i]);
   }
@@ -628,12 +729,43 @@ int CreateOptimizedFilterFlowmatcher1(struct pmd_internals *internals,
       snprintf(&filter_buffer[strlen(filter_buffer)], NTPL_BSIZE - strlen(filter_buffer) - 1, ",");
     }
 
-    if (pFilter_values->size == 128 && pFilter_values->layer == LAYER2) {
-      // This is an ethernet address
-      snprintf(&filter_buffer[strlen(filter_buffer)], NTPL_BSIZE - strlen(filter_buffer) - 1,
-              "{0xFFFFFFFFFFFFFFFFFFFFFFFF00000000:%s[%u]/%u}", pFilter_values->layerString, pFilter_values->offset, pFilter_values->size);
+    if (pFilter_values->size == 128) {
+      if (pFilter_values->layer == LAYER2) {
+        // This is an ethernet address
+        snprintf(&filter_buffer[strlen(filter_buffer)], NTPL_BSIZE - strlen(filter_buffer) - 1,
+                "{0xFFFFFFFFFFFFFFFFFFFFFFFF00000000:%s[%u]/%u}", pFilter_values->layerString, pFilter_values->offset, pFilter_values->size);
+      }
+      if (NON_ZERO16(pFilter_values->value.v128.maskVal)) {
+        snprintf(&filter_buffer[strlen(filter_buffer)], NTPL_BSIZE - strlen(filter_buffer) - 1,
+                "{0x%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X:%s[%u]/%u}", 
+                 IPV6_ADDRESS(pFilter_values->value.v128.maskVal), pFilter_values->layerString, pFilter_values->offset, pFilter_values->size);
+      }
+      else {
+        snprintf(&filter_buffer[strlen(filter_buffer)],  NTPL_BSIZE - strlen(filter_buffer) - 1,
+                "%s[%u]/%u", pFilter_values->layerString, pFilter_values->offset, pFilter_values->size);
+      }
     }
     else {
+      if (pFilter_values->mask == 0) {
+        switch (pFilter_values->size)
+        {
+        case 16:
+          if (pFilter_values->value.v16.maskVal) {
+            pFilter_values->mask = pFilter_values->value.v16.maskVal;
+          }
+          break;
+        case 32:
+          if (pFilter_values->value.v32.maskVal) {
+            pFilter_values->mask = pFilter_values->value.v32.maskVal;
+          }
+          break;
+        case 64:
+          if (pFilter_values->value.v64.maskVal) {
+            pFilter_values->mask = pFilter_values->value.v64.maskVal;
+          }
+          break;
+        }
+      }
       if (pFilter_values->mask != 0) {
         snprintf(&filter_buffer[strlen(filter_buffer)],  NTPL_BSIZE - strlen(filter_buffer) - 1,
                  "{0x%llX:%s[%u]/%u}", (const long long unsigned int)pFilter_values->mask, pFilter_values->layerString, pFilter_values->offset, pFilter_values->size);
@@ -663,7 +795,7 @@ Errors:
 }
 
 int CreateOptimizedFilterFlowmatcher2(struct pmd_internals *internals,
-                                      struct rte_flow *flow __rte_unused,
+                                      struct rte_flow *flow,
                                       uint8_t keyID,
                                       uint8_t keySetID,
                                       uint64_t typeMask,
@@ -723,8 +855,15 @@ int CreateOptimizedFilterFlowmatcher2(struct pmd_internals *internals,
         iRet = -1;
         break;
       }
+      if (pFilter_values->layer == LAYER4) {
+        if (pFilter_values->offset == 0) {
+          dumpPort("SRC", pFilter_values->value.v16.specVal);
+        }
+        else {
+          dumpPort("DST", pFilter_values->value.v16.specVal);
+        }
+      }
       FILL_KEYDATA(flowMatcher.keyData, pFilter_values->value.v16.specVal, dataIndex);
-      dumpFlowMatcher(&flowMatcher);
       break;
     case 32:
       if (dataIndex > 36) {
@@ -732,9 +871,15 @@ int CreateOptimizedFilterFlowmatcher2(struct pmd_internals *internals,
         iRet = -1;
         break;
       }
-      dumpPort(pFilter_values->value.v32.specVal);
+      if (pFilter_values->layer == LAYER3) {
+        if (pFilter_values->offset == 12) {
+          dumpIPv4("SRC", pFilter_values->value.v32.specVal);
+        }
+        else {
+          dumpIPv4("DST", pFilter_values->value.v32.specVal);
+        }
+      }
       FILL_KEYDATA(flowMatcher.keyData, pFilter_values->value.v32.specVal, dataIndex);
-      dumpFlowMatcher(&flowMatcher);
       break;
     case 64:
       if (dataIndex > 32) {
@@ -742,9 +887,7 @@ int CreateOptimizedFilterFlowmatcher2(struct pmd_internals *internals,
         iRet = -1;
         break;
       }
-      dumpIPv4(pFilter_values->value.v64.specVal);
       FILL_KEYDATA(flowMatcher.keyData, pFilter_values->value.v64.specVal, dataIndex);
-      dumpFlowMatcher(&flowMatcher);
       break;
     case 128:
       if (dataIndex > 24) {
@@ -757,8 +900,15 @@ int CreateOptimizedFilterFlowmatcher2(struct pmd_internals *internals,
         //         MAC_ADDRESS2(pFilter_values->value.v128.specVal));
       }
       else {
-        //snprintf(&filter_buffer1[strlen(filter_buffer1)], NTPL_BSIZE - strlen(filter_buffer1) - 1, "[%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X]",
-        //           IPV6_ADDRESS(pFilter_values->value.v128.specVal));
+        if (pFilter_values->layer == LAYER3) {
+          if (pFilter_values->offset == 8) {
+            dumpIPv6("SRC", pFilter_values->value.v128.specVal);
+          }
+          else {
+            dumpIPv6("DST", pFilter_values->value.v128.specVal);
+          }
+        }
+        FILL_KEYDATA128(flowMatcher.keyData, pFilter_values->value.v128.specVal, dataIndex);
       }
       break;
     }
@@ -768,6 +918,7 @@ int CreateOptimizedFilterFlowmatcher2(struct pmd_internals *internals,
   }
   //dumpFlowMatcher(&flowMatcher);
 
+  dumpFlowMatcher(&flowMatcher);
   if (NT_FlowWrite(internals->hFlowStream, &flowMatcher, 1000) != NT_SUCCESS) {
     rte_flow_error_set(error, EIO, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Flow manager programming failed");
     printf("<==error error error error error error error error error error error error==>\n");
@@ -775,6 +926,50 @@ int CreateOptimizedFilterFlowmatcher2(struct pmd_internals *internals,
   }
 
   memcpy(flow->keyData, flowMatcher.keyData, 40);
+  flow->ipProto = flowMatcher.ipProtocolField;
   NTACC_UNLOCK(&internals->lock);
   return iRet;
 }
+
+int UnlearnFlowFlowmatcher(struct pmd_internals *internals,
+                           struct rte_flow *flow)
+{
+  NtFlow_t flowMatcher;
+
+  memset(&flowMatcher, 0, sizeof(NtFlow_t));
+
+  // Delete flow in FPGA
+  flowMatcher.keyId = flow->keyID;
+  flowMatcher.keySetId = flow->keySetID;
+  flowMatcher.ipProtocolField = flow->ipProto;
+  flowMatcher.op = 0;
+  memcpy(flowMatcher.keyData, flow->keyData, 40);
+
+  if (NT_FlowWrite(internals->hFlowStream, &flowMatcher, 1000) != NT_SUCCESS) {
+    printf("<==error error error error error error error error error error error error==>\n");
+    return -1;
+  }
+
+  //{
+  //  NtFlowStatus_t flowStatus;
+  //  if (NT_FlowStatusRead(internals->hFlowStream, &flowStatus) == NT_SUCCESS) {
+  //    switch (flowStatus.flags) {
+  //    case NT_FLOW_STAT_LFS:  /*< Learn fail status flag */
+  //      printf("===========> Learn failed\n");
+  //      break;
+  //    case NT_FLOW_STAT_LIS:  /*< Learn ignore status flag */
+  //      printf("===========> Learn ignore\n");
+  //      break;
+  //    case NT_FLOW_STAT_UIS:  /*< Un-learn ignore status flag */
+  //      printf("===========> Unlearn ignore\n");
+  //      break;
+  //    default:
+  //      break;
+  //    }
+  //  }
+  //}
+
+  return 0;
+}
+
+

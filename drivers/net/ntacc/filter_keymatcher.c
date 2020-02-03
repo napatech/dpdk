@@ -1337,7 +1337,7 @@ int SetIPV4Filter(char *ntpl_buf,
   }
 
   bool singleSetup = true;
-  if (spec && spec->hdr.src_addr && spec->hdr.dst_addr) {
+  if (internals->flowMatcher == 0 && spec && spec->hdr.src_addr && spec->hdr.dst_addr) {
     if (last && (last->hdr.src_addr || last->hdr.dst_addr)) {
       singleSetup = true;
     }
@@ -1638,7 +1638,7 @@ int SetTCPFilter(char *ntpl_buf,
     return -1;
   }
 
-  if (spec && spec->hdr.src_port && spec && spec->hdr.dst_port)  {
+  if (internals->flowMatcher == 0 && spec && spec->hdr.src_port && spec && spec->hdr.dst_port)  {
     if (last && (last->hdr.src_port || last->hdr.dst_port)) {
       singleSetup = true;
     }
@@ -1824,7 +1824,7 @@ int SetUDPFilter(char *ntpl_buf,
     return -1;
   }
 
-  if (spec && spec->hdr.src_port && spec->hdr.dst_port) {
+  if (internals->flowMatcher == 0 && spec && spec->hdr.src_port && spec->hdr.dst_port) {
     if (last && (last->hdr.src_port || last->hdr.dst_port)) {
       singleSetup = true;
     }
@@ -1932,7 +1932,7 @@ int SetSCTPFilter(char *ntpl_buf,
     return -1;
   }
 
-  if (spec && spec->hdr.src_port && spec->hdr.dst_port) {
+  if (internals->flowMatcher == 0 && spec && spec->hdr.src_port && spec->hdr.dst_port) {
     if (last && (last->hdr.src_port || last->hdr.dst_port)) {
       singleSetup = true;
     }
