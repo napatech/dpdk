@@ -321,13 +321,14 @@ static int eth_ntacc_rx_jumbo(struct rte_mempool *mb_pool,
   struct rte_mbuf *m = mbuf;
 
   /* Copy the first segment. */
-  uint16_t len = rte_pktmbuf_tailroom(mbuf);
+  uint16_t len = RTE_MIN(rte_pktmbuf_tailroom(mbuf), data_len);
   uint16_t total_len = data_len;
 
   rte_memcpy((u_char *)mbuf->buf_addr + mbuf->data_off, data, len);
   data_len -= len;
   data += len;
   mbuf->pkt_len = total_len;
+  mbuf->data_len = len;
 
   while (data_len > 0) {
     /* Allocate next mbuf and point to that. */
@@ -592,7 +593,7 @@ static uint16_t eth_ntacc_rx_mode2(void *queue,
     }
     mbuf->port = rx_q->in_port + (dyn3->rxPort - rx_q->local_port);
 
-    data_len = (uint16_t)(dyn3->capLength - dyn3->descrLength - 4);
+    data_len = (uint16_t)(dyn3->capLength - dyn3->descrLength);
     mbuf_len = rte_pktmbuf_tailroom(mbuf);
 #ifdef USE_SW_STAT
     bytes += data_len+4;
@@ -612,6 +613,7 @@ static uint16_t eth_ntacc_rx_mode2(void *queue,
 
       mbuf->pkt_len = total_len;
       mbuf->data_len = mbuf_len;
+
       data = (u_char *)dyn3 + dyn3->descrLength;
       rte_memcpy((u_char *)mbuf->buf_addr + mbuf->data_off, data, mbuf_len);
       data_len -= mbuf_len;
