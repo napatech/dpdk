@@ -32,33 +32,15 @@
 #include <rte_errno.h>
 #include <rte_flow.h>
 
+#include <mlx5_glue.h>
+#include <mlx5_devx_cmds.h>
+#include <mlx5_prm.h>
+#include <mlx5_nl.h>
+
+#include "mlx5_defs.h"
 #include "mlx5_utils.h"
 #include "mlx5_mr.h"
 #include "mlx5_autoconf.h"
-#include "mlx5_defs.h"
-#include "mlx5_glue.h"
-#include "mlx5_prm.h"
-
-enum {
-	PCI_VENDOR_ID_MELLANOX = 0x15b3,
-};
-
-enum {
-	PCI_DEVICE_ID_MELLANOX_CONNECTX4 = 0x1013,
-	PCI_DEVICE_ID_MELLANOX_CONNECTX4VF = 0x1014,
-	PCI_DEVICE_ID_MELLANOX_CONNECTX4LX = 0x1015,
-	PCI_DEVICE_ID_MELLANOX_CONNECTX4LXVF = 0x1016,
-	PCI_DEVICE_ID_MELLANOX_CONNECTX5 = 0x1017,
-	PCI_DEVICE_ID_MELLANOX_CONNECTX5VF = 0x1018,
-	PCI_DEVICE_ID_MELLANOX_CONNECTX5EX = 0x1019,
-	PCI_DEVICE_ID_MELLANOX_CONNECTX5EXVF = 0x101a,
-	PCI_DEVICE_ID_MELLANOX_CONNECTX5BF = 0xa2d2,
-	PCI_DEVICE_ID_MELLANOX_CONNECTX5BFVF = 0xa2d3,
-	PCI_DEVICE_ID_MELLANOX_CONNECTX6 = 0x101b,
-	PCI_DEVICE_ID_MELLANOX_CONNECTX6VF = 0x101c,
-	PCI_DEVICE_ID_MELLANOX_CONNECTX6DX = 0x101d,
-	PCI_DEVICE_ID_MELLANOX_CONNECTX6DXVF = 0x101e,
-};
 
 /* Request types for IPC. */
 enum mlx5_mp_req_type {
@@ -94,24 +76,6 @@ struct mlx5_mp_param {
 /** Key string for IPC. */
 #define MLX5_MP_NAME "net_mlx5_mp"
 
-/* Recognized Infiniband device physical port name types. */
-enum mlx5_phys_port_name_type {
-	MLX5_PHYS_PORT_NAME_TYPE_NOTSET = 0, /* Not set. */
-	MLX5_PHYS_PORT_NAME_TYPE_LEGACY, /* before kernel ver < 5.0 */
-	MLX5_PHYS_PORT_NAME_TYPE_UPLINK, /* p0, kernel ver >= 5.0 */
-	MLX5_PHYS_PORT_NAME_TYPE_PFVF, /* pf0vf0, kernel ver >= 5.0 */
-	MLX5_PHYS_PORT_NAME_TYPE_UNKNOWN, /* Unrecognized. */
-};
-
-/** Switch information returned by mlx5_nl_switch_info(). */
-struct mlx5_switch_info {
-	uint32_t master:1; /**< Master device. */
-	uint32_t representor:1; /**< Representor device. */
-	enum mlx5_phys_port_name_type name_type; /** < Port name type. */
-	int32_t pf_num; /**< PF number (valid for pfxvfx format only). */
-	int32_t port_name; /**< Representor port name. */
-	uint64_t switch_id; /**< Switch identifier. */
-};
 
 LIST_HEAD(mlx5_dev_list, mlx5_ibv_shared);
 
@@ -156,59 +120,6 @@ struct mlx5_stats_ctrl {
 	uint64_t imissed_base;
 };
 
-/* devX creation object */
-struct mlx5_devx_obj {
-	struct mlx5dv_devx_obj *obj; /* The DV object. */
-	int id; /* The object ID. */
-};
-
-struct mlx5_devx_mkey_attr {
-	uint64_t addr;
-	uint64_t size;
-	uint32_t umem_id;
-	uint32_t pd;
-};
-
-/* HCA qos attributes. */
-struct mlx5_hca_qos_attr {
-	uint32_t sup:1;	/* Whether QOS is supported. */
-	uint32_t srtcm_sup:1; /* Whether srTCM mode is supported. */
-	uint8_t log_max_flow_meter;
-	/* Power of the maximum supported meters. */
-	uint8_t flow_meter_reg_c_ids;
-	/* Bitmap of the reg_Cs available for flow meter to use. */
-
-};
-
-/* HCA supports this number of time periods for LRO. */
-#define MLX5_LRO_NUM_SUPP_PERIODS 4
-
-/* HCA attributes. */
-struct mlx5_hca_attr {
-	uint32_t eswitch_manager:1;
-	uint32_t flow_counters_dump:1;
-	uint8_t flow_counter_bulk_alloc_bitmap;
-	uint32_t eth_net_offloads:1;
-	uint32_t eth_virt:1;
-	uint32_t wqe_vlan_insert:1;
-	uint32_t wqe_inline_mode:2;
-	uint32_t vport_inline_mode:3;
-	uint32_t tunnel_stateless_geneve_rx:1;
-	uint32_t geneve_max_opt_len:1; /* 0x0: 14DW, 0x1: 63DW */
-	uint32_t lro_cap:1;
-	uint32_t tunnel_lro_gre:1;
-	uint32_t tunnel_lro_vxlan:1;
-	uint32_t lro_max_msg_sz_mode:2;
-	uint32_t lro_timer_supported_periods[MLX5_LRO_NUM_SUPP_PERIODS];
-	uint32_t flex_parser_protocols;
-	uint32_t hairpin:1;
-	uint32_t log_max_hairpin_queues:5;
-	uint32_t log_max_hairpin_wq_data_sz:5;
-	uint32_t log_max_hairpin_num_packets:5;
-	uint32_t vhca_id:16;
-	struct mlx5_hca_qos_attr qos;
-};
-
 /* Flow list . */
 TAILQ_HEAD(mlx5_flows, rte_flow);
 
@@ -218,8 +129,11 @@ TAILQ_HEAD(mlx5_flows, rte_flow);
 #define MLX5_LRO_SUPPORTED(dev) \
 	(((struct mlx5_priv *)((dev)->data->dev_private))->config.lro.supported)
 
+/* Maximal size of coalesced segment for LRO is set in chunks of 256 Bytes. */
+#define MLX5_LRO_SEG_CHUNK_SIZE	256u
+
 /* Maximal size of aggregated LRO packet. */
-#define MLX5_MAX_LRO_SIZE (UINT8_MAX * 256u)
+#define MLX5_MAX_LRO_SIZE (UINT8_MAX * MLX5_LRO_SEG_CHUNK_SIZE)
 
 /* LRO configurations structure. */
 struct mlx5_lro_config {
@@ -285,133 +199,6 @@ struct mlx5_dev_config {
 	struct mlx5_lro_config lro; /* LRO configuration. */
 };
 
-struct mlx5_devx_wq_attr {
-	uint32_t wq_type:4;
-	uint32_t wq_signature:1;
-	uint32_t end_padding_mode:2;
-	uint32_t cd_slave:1;
-	uint32_t hds_skip_first_sge:1;
-	uint32_t log2_hds_buf_size:3;
-	uint32_t page_offset:5;
-	uint32_t lwm:16;
-	uint32_t pd:24;
-	uint32_t uar_page:24;
-	uint64_t dbr_addr;
-	uint32_t hw_counter;
-	uint32_t sw_counter;
-	uint32_t log_wq_stride:4;
-	uint32_t log_wq_pg_sz:5;
-	uint32_t log_wq_sz:5;
-	uint32_t dbr_umem_valid:1;
-	uint32_t wq_umem_valid:1;
-	uint32_t log_hairpin_num_packets:5;
-	uint32_t log_hairpin_data_sz:5;
-	uint32_t single_wqe_log_num_of_strides:4;
-	uint32_t two_byte_shift_en:1;
-	uint32_t single_stride_log_num_of_bytes:3;
-	uint32_t dbr_umem_id;
-	uint32_t wq_umem_id;
-	uint64_t wq_umem_offset;
-};
-
-/* Create RQ attributes structure, used by create RQ operation. */
-struct mlx5_devx_create_rq_attr {
-	uint32_t rlky:1;
-	uint32_t delay_drop_en:1;
-	uint32_t scatter_fcs:1;
-	uint32_t vsd:1;
-	uint32_t mem_rq_type:4;
-	uint32_t state:4;
-	uint32_t flush_in_error_en:1;
-	uint32_t hairpin:1;
-	uint32_t user_index:24;
-	uint32_t cqn:24;
-	uint32_t counter_set_id:8;
-	uint32_t rmpn:24;
-	struct mlx5_devx_wq_attr wq_attr;
-};
-
-/* Modify RQ attributes structure, used by modify RQ operation. */
-struct mlx5_devx_modify_rq_attr {
-	uint32_t rqn:24;
-	uint32_t rq_state:4; /* Current RQ state. */
-	uint32_t state:4; /* Required RQ state. */
-	uint32_t scatter_fcs:1;
-	uint32_t vsd:1;
-	uint32_t counter_set_id:8;
-	uint32_t hairpin_peer_sq:24;
-	uint32_t hairpin_peer_vhca:16;
-	uint64_t modify_bitmask;
-	uint32_t lwm:16; /* Contained WQ lwm. */
-};
-
-struct mlx5_rx_hash_field_select {
-	uint32_t l3_prot_type:1;
-	uint32_t l4_prot_type:1;
-	uint32_t selected_fields:30;
-};
-
-/* TIR attributes structure, used by TIR operations. */
-struct mlx5_devx_tir_attr {
-	uint32_t disp_type:4;
-	uint32_t lro_timeout_period_usecs:16;
-	uint32_t lro_enable_mask:4;
-	uint32_t lro_max_msg_sz:8;
-	uint32_t inline_rqn:24;
-	uint32_t rx_hash_symmetric:1;
-	uint32_t tunneled_offload_en:1;
-	uint32_t indirect_table:24;
-	uint32_t rx_hash_fn:4;
-	uint32_t self_lb_block:2;
-	uint32_t transport_domain:24;
-	uint32_t rx_hash_toeplitz_key[10];
-	struct mlx5_rx_hash_field_select rx_hash_field_selector_outer;
-	struct mlx5_rx_hash_field_select rx_hash_field_selector_inner;
-};
-
-/* RQT attributes structure, used by RQT operations. */
-struct mlx5_devx_rqt_attr {
-	uint32_t rqt_max_size:16;
-	uint32_t rqt_actual_size:16;
-	uint32_t rq_list[];
-};
-
-/* TIS attributes structure. */
-struct mlx5_devx_tis_attr {
-	uint32_t strict_lag_tx_port_affinity:1;
-	uint32_t tls_en:1;
-	uint32_t lag_tx_port_affinity:4;
-	uint32_t prio:4;
-	uint32_t transport_domain:24;
-};
-
-/* SQ attributes structure, used by SQ create operation. */
-struct mlx5_devx_create_sq_attr {
-	uint32_t rlky:1;
-	uint32_t cd_master:1;
-	uint32_t fre:1;
-	uint32_t flush_in_error_en:1;
-	uint32_t allow_multi_pkt_send_wqe:1;
-	uint32_t min_wqe_inline_mode:3;
-	uint32_t state:4;
-	uint32_t reg_umr:1;
-	uint32_t allow_swp:1;
-	uint32_t hairpin:1;
-	uint32_t user_index:24;
-	uint32_t cqn:24;
-	uint32_t packet_pacing_rate_limit_index:16;
-	uint32_t tis_lst_sz:16;
-	uint32_t tis_num:24;
-	struct mlx5_devx_wq_attr wq_attr;
-};
-
-/* SQ attributes structure, used by SQ modify operation. */
-struct mlx5_devx_modify_sq_attr {
-	uint32_t sq_state:4;
-	uint32_t state:4;
-	uint32_t hairpin_peer_rq:24;
-	uint32_t hairpin_peer_vhca:16;
-};
 
 /**
  * Type of object being allocated.
@@ -422,28 +209,10 @@ enum mlx5_verbs_alloc_type {
 	MLX5_VERBS_ALLOC_TYPE_RX_QUEUE,
 };
 
-/* VLAN netdev for VLAN workaround. */
-struct mlx5_vlan_dev {
-	uint32_t refcnt;
-	uint32_t ifindex; /**< Own interface index. */
-};
-
 /* Structure for VF VLAN workaround. */
 struct mlx5_vf_vlan {
 	uint32_t tag:12;
 	uint32_t created:1;
-};
-
-/*
- * Array of VLAN devices created on the base of VF
- * used for workaround in virtual environments.
- */
-struct mlx5_vlan_vmwa_context {
-	int nl_socket;
-	uint32_t nl_sn;
-	uint32_t vf_ifindex;
-	struct rte_eth_dev *dev;
-	struct mlx5_vlan_dev vlan_dev[4096];
 };
 
 /**
@@ -626,6 +395,7 @@ struct mlx5_flow_id_pool {
 	/**< The next index that can be used without any free elements. */
 	uint32_t *curr; /**< Pointer to the index to pop. */
 	uint32_t *last; /**< Pointer to the last element in the empty arrray. */
+	uint32_t max_id; /**< Maximum id can be allocated from the pool. */
 };
 
 /*
@@ -727,6 +497,7 @@ struct mlx5_priv {
 	unsigned int dr_shared:1; /* DV/DR data is shared. */
 	unsigned int counter_fallback:1; /* Use counter fallback management. */
 	unsigned int mtr_en:1; /* Whether support meter. */
+	unsigned int mtr_reg_share:1; /* Whether support meter REG_C share. */
 	uint16_t domain_id; /* Switch domain identifier. */
 	uint16_t vport_id; /* Associated VF vport index (if any). */
 	uint32_t vport_meta_tag; /* Used for vport index match ove VF LAG. */
@@ -768,9 +539,8 @@ struct mlx5_priv {
 	/* Context for Verbs allocator. */
 	int nl_socket_rdma; /* Netlink socket (NETLINK_RDMA). */
 	int nl_socket_route; /* Netlink socket (NETLINK_ROUTE). */
-	uint32_t nl_sn; /* Netlink message sequence number. */
 	LIST_HEAD(dbrpage, mlx5_devx_dbr_page) dbrpgs; /* Door-bell pages. */
-	struct mlx5_vlan_vmwa_context *vmwa_context; /* VLAN WA context. */
+	struct mlx5_nl_vlan_vmwa_context *vmwa_context; /* VLAN WA context. */
 	struct mlx5_flow_id_pool *qrss_id_pool;
 	struct mlx5_hlist *mreg_cp_tbl;
 	/* Hash table of Rx metadata register copy table. */
@@ -784,6 +554,7 @@ struct mlx5_priv {
 	/* UAR same-page access control required in 32bit implementations. */
 #endif
 	uint8_t skip_default_rss_reta; /* Skip configuration of default reta. */
+	uint8_t fdb_def_rule; /* Whether fdb jump to table 1 is configured. */
 };
 
 #define PORT_ID(priv) ((priv)->dev_data->port_id)
@@ -828,8 +599,6 @@ int mlx5_dev_get_flow_ctrl(struct rte_eth_dev *dev,
 			   struct rte_eth_fc_conf *fc_conf);
 int mlx5_dev_set_flow_ctrl(struct rte_eth_dev *dev,
 			   struct rte_eth_fc_conf *fc_conf);
-int mlx5_dev_to_pci_addr(const char *dev_path,
-			 struct rte_pci_addr *pci_addr);
 void mlx5_dev_link_status_handler(void *arg);
 void mlx5_dev_interrupt_handler(void *arg);
 void mlx5_dev_interrupt_handler_devx(void *arg);
@@ -848,8 +617,6 @@ int mlx5_sysfs_switch_info(unsigned int ifindex,
 			   struct mlx5_switch_info *info);
 void mlx5_sysfs_check_switch_info(bool device_dir,
 				  struct mlx5_switch_info *switch_info);
-void mlx5_nl_check_switch_info(bool nun_vf_set,
-			       struct mlx5_switch_info *switch_info);
 void mlx5_translate_port_name(const char *port_name_in,
 			      struct mlx5_switch_info *port_info_out);
 void mlx5_intr_callback_unregister(const struct rte_intr_handle *handle,
@@ -868,6 +635,8 @@ int mlx5_get_mac(struct rte_eth_dev *dev, uint8_t (*mac)[RTE_ETHER_ADDR_LEN]);
 void mlx5_mac_addr_remove(struct rte_eth_dev *dev, uint32_t index);
 int mlx5_mac_addr_add(struct rte_eth_dev *dev, struct rte_ether_addr *mac,
 		      uint32_t index, uint32_t vmdq);
+struct mlx5_nl_vlan_vmwa_context *mlx5_vlan_vmwa_init
+				    (struct rte_eth_dev *dev, uint32_t ifindex);
 int mlx5_mac_addr_set(struct rte_eth_dev *dev, struct rte_ether_addr *mac_addr);
 int mlx5_set_mc_addr_list(struct rte_eth_dev *dev,
 			struct rte_ether_addr *mc_addr_set,
@@ -911,6 +680,11 @@ int mlx5_xstats_get_names(struct rte_eth_dev *dev __rte_unused,
 int mlx5_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on);
 void mlx5_vlan_strip_queue_set(struct rte_eth_dev *dev, uint16_t queue, int on);
 int mlx5_vlan_offload_set(struct rte_eth_dev *dev, int mask);
+void mlx5_vlan_vmwa_exit(struct mlx5_nl_vlan_vmwa_context *ctx);
+void mlx5_vlan_vmwa_release(struct rte_eth_dev *dev,
+			    struct mlx5_vf_vlan *vf_vlan);
+void mlx5_vlan_vmwa_acquire(struct rte_eth_dev *dev,
+			    struct mlx5_vf_vlan *vf_vlan);
 
 /* mlx5_trigger.c */
 
@@ -972,6 +746,8 @@ struct mlx5_flow_counter *mlx5_counter_alloc(struct rte_eth_dev *dev);
 void mlx5_counter_free(struct rte_eth_dev *dev, struct mlx5_flow_counter *cnt);
 int mlx5_counter_query(struct rte_eth_dev *dev, struct mlx5_flow_counter *cnt,
 		       bool clear, uint64_t *pkts, uint64_t *bytes);
+int mlx5_flow_dev_dump(struct rte_eth_dev *dev, FILE *file,
+		       struct rte_flow_error *error);
 
 /* mlx5_mp.c */
 void mlx5_mp_req_start_rxtx(struct rte_eth_dev *dev);
@@ -985,66 +761,10 @@ void mlx5_mp_uninit_primary(void);
 int mlx5_mp_init_secondary(void);
 void mlx5_mp_uninit_secondary(void);
 
-/* mlx5_nl.c */
+/* mlx5_socket.c */
 
-int mlx5_nl_init(int protocol);
-int mlx5_nl_mac_addr_add(struct rte_eth_dev *dev, struct rte_ether_addr *mac,
-			 uint32_t index);
-int mlx5_nl_mac_addr_remove(struct rte_eth_dev *dev, struct rte_ether_addr *mac,
-			    uint32_t index);
-void mlx5_nl_mac_addr_sync(struct rte_eth_dev *dev);
-void mlx5_nl_mac_addr_flush(struct rte_eth_dev *dev);
-int mlx5_nl_promisc(struct rte_eth_dev *dev, int enable);
-int mlx5_nl_allmulti(struct rte_eth_dev *dev, int enable);
-unsigned int mlx5_nl_portnum(int nl, const char *name);
-unsigned int mlx5_nl_ifindex(int nl, const char *name, uint32_t pindex);
-int mlx5_nl_vf_mac_addr_modify(struct rte_eth_dev *dev,
-			       struct rte_ether_addr *mac, int vf_index);
-int mlx5_nl_switch_info(int nl, unsigned int ifindex,
-			struct mlx5_switch_info *info);
-
-struct mlx5_vlan_vmwa_context *mlx5_vlan_vmwa_init(struct rte_eth_dev *dev,
-						   uint32_t ifindex);
-void mlx5_vlan_vmwa_exit(struct mlx5_vlan_vmwa_context *ctx);
-void mlx5_vlan_vmwa_release(struct rte_eth_dev *dev,
-			    struct mlx5_vf_vlan *vf_vlan);
-void mlx5_vlan_vmwa_acquire(struct rte_eth_dev *dev,
-			    struct mlx5_vf_vlan *vf_vlan);
-
-/* mlx5_devx_cmds.c */
-
-struct mlx5_devx_obj *mlx5_devx_cmd_flow_counter_alloc(struct ibv_context *ctx,
-						       uint32_t bulk_sz);
-int mlx5_devx_cmd_destroy(struct mlx5_devx_obj *obj);
-int mlx5_devx_cmd_flow_counter_query(struct mlx5_devx_obj *dcs,
-				     int clear, uint32_t n_counters,
-				     uint64_t *pkts, uint64_t *bytes,
-				     uint32_t mkey, void *addr,
-				     struct mlx5dv_devx_cmd_comp *cmd_comp,
-				     uint64_t async_id);
-int mlx5_devx_cmd_query_hca_attr(struct ibv_context *ctx,
-				 struct mlx5_hca_attr *attr);
-struct mlx5_devx_obj *mlx5_devx_cmd_mkey_create(struct ibv_context *ctx,
-					     struct mlx5_devx_mkey_attr *attr);
-int mlx5_devx_get_out_command_status(void *out);
-int mlx5_devx_cmd_qp_query_tis_td(struct ibv_qp *qp, uint32_t tis_num,
-				  uint32_t *tis_td);
-struct mlx5_devx_obj *mlx5_devx_cmd_create_rq(struct ibv_context *ctx,
-				struct mlx5_devx_create_rq_attr *rq_attr,
-				int socket);
-int mlx5_devx_cmd_modify_rq(struct mlx5_devx_obj *rq,
-			    struct mlx5_devx_modify_rq_attr *rq_attr);
-struct mlx5_devx_obj *mlx5_devx_cmd_create_tir(struct ibv_context *ctx,
-					struct mlx5_devx_tir_attr *tir_attr);
-struct mlx5_devx_obj *mlx5_devx_cmd_create_rqt(struct ibv_context *ctx,
-					struct mlx5_devx_rqt_attr *rqt_attr);
-struct mlx5_devx_obj *mlx5_devx_cmd_create_sq
-	(struct ibv_context *ctx, struct mlx5_devx_create_sq_attr *sq_attr);
-int mlx5_devx_cmd_modify_sq
-	(struct mlx5_devx_obj *sq, struct mlx5_devx_modify_sq_attr *sq_attr);
-struct mlx5_devx_obj *mlx5_devx_cmd_create_tis
-	(struct ibv_context *ctx, struct mlx5_devx_tis_attr *tis_attr);
-struct mlx5_devx_obj *mlx5_devx_cmd_create_td(struct ibv_context *ctx);
+int mlx5_pmd_socket_init(void);
+void mlx5_pmd_socket_uninit(void);
 
 /* mlx5_flow_meter.c */
 

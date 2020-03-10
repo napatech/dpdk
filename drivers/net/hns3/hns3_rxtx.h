@@ -5,7 +5,7 @@
 #ifndef _HNS3_RXTX_H_
 #define _HNS3_RXTX_H_
 
-#define	HNS3_MIN_RING_DESC	32
+#define	HNS3_MIN_RING_DESC	64
 #define	HNS3_MAX_RING_DESC	32768
 #define HNS3_DEFAULT_RING_DESC  1024
 #define	HNS3_ALIGN_RING_DESC	32
@@ -245,7 +245,6 @@ struct hns3_rx_queue {
 	bool rx_deferred_start; /* don't start this queue in dev start */
 	bool configured;        /* indicate if rx queue has been configured */
 
-	uint64_t non_vld_descs; /* num of non valid rx descriptors */
 	uint64_t l2_errors;
 	uint64_t pkt_len_errors;
 	uint64_t l3_csum_erros;
@@ -273,6 +272,14 @@ struct hns3_tx_queue {
 	bool configured;        /* indicate if tx queue has been configured */
 };
 
+struct hns3_queue_info {
+	const char *type;   /* point to queue memory name */
+	const char *ring_name;  /* point to hardware ring name */
+	uint16_t idx;
+	uint16_t nb_desc;
+	unsigned int socket_id;
+};
+
 #define HNS3_TX_CKSUM_OFFLOAD_MASK ( \
 	PKT_TX_OUTER_IPV6 | \
 	PKT_TX_OUTER_IPV4 | \
@@ -295,6 +302,8 @@ void hns3_dev_rx_queue_release(void *queue);
 void hns3_dev_tx_queue_release(void *queue);
 void hns3_free_all_queues(struct rte_eth_dev *dev);
 int hns3_reset_all_queues(struct hns3_adapter *hns);
+int hns3_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id);
+int hns3_dev_rx_queue_intr_disable(struct rte_eth_dev *dev, uint16_t queue_id);
 int hns3_start_queues(struct hns3_adapter *hns, bool reset_queue);
 int hns3_stop_queues(struct hns3_adapter *hns, bool reset_queue);
 void hns3_dev_release_mbufs(struct hns3_adapter *hns);
@@ -311,4 +320,8 @@ uint16_t hns3_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 			uint16_t nb_pkts);
 const uint32_t *hns3_dev_supported_ptypes_get(struct rte_eth_dev *dev);
 void hns3_set_rxtx_function(struct rte_eth_dev *eth_dev);
+void hns3_tqp_intr_enable(struct hns3_hw *hw, uint16_t tpq_int_num, bool en);
+int hns3_set_fake_rx_or_tx_queues(struct rte_eth_dev *dev, uint16_t nb_rx_q,
+				  uint16_t nb_tx_q);
+
 #endif /* _HNS3_RXTX_H_ */

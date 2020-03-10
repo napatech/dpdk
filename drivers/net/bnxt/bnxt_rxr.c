@@ -488,10 +488,10 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 	if (flags_type & RX_PKT_CMPL_FLAGS_RSS_VALID) {
 		mbuf->hash.rss = rxcmp->rss_hash;
 		mbuf->ol_flags |= PKT_RX_RSS_HASH;
-	} else {
-		mbuf->hash.fdir.id = rxcmp1->cfa_code;
-		mbuf->ol_flags |= PKT_RX_FDIR | PKT_RX_FDIR_ID;
 	}
+
+	bnxt_set_mark_in_mbuf(rxq->bp, rxcmp1, mbuf);
+
 #ifdef RTE_LIBRTE_IEEE1588
 	if (unlikely((flags_type & RX_PKT_CMPL_FLAGS_MASK) ==
 		     RX_PKT_CMPL_FLAGS_ITYPE_PTP_W_TIMESTAMP)) {
@@ -678,10 +678,11 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 
 	/* Attempt to alloc Rx buf in case of a previous allocation failure. */
 	if (rc == -ENOMEM) {
-		int i;
+		int i = RING_NEXT(rxr->rx_ring_struct, prod);
+		int cnt = nb_rx_pkts;
 
-		for (i = prod; i <= nb_rx_pkts;
-			i = RING_NEXT(rxr->rx_ring_struct, i)) {
+		for (; cnt;
+			i = RING_NEXT(rxr->rx_ring_struct, i), cnt--) {
 			struct bnxt_sw_rx_bd *rx_buf = &rxr->rx_buf_ring[i];
 
 			/* Buffer already allocated for this index. */
@@ -894,4 +895,45 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 	PMD_DRV_LOG(DEBUG, "TPA alloc Done!\n");
 
 	return 0;
+}
+
+void bnxt_set_mark_in_mbuf(struct bnxt *bp,
+			   struct rx_pkt_cmpl_hi *rxcmp1,
+			   struct rte_mbuf *mbuf)
+{
+	uint32_t cfa_code = 0;
+	uint8_t meta_fmt =  0;
+	uint16_t flags2 = 0;
+	uint32_t meta =  0;
+
+	cfa_code = rte_le_to_cpu_16(rxcmp1->cfa_code);
+	if (!cfa_code)
+		return;
+
+	if (cfa_code && !bp->mark_table[cfa_code].valid)
+		return;
+
+	flags2 = rte_le_to_cpu_16(rxcmp1->flags2);
+	meta = rte_le_to_cpu_32(rxcmp1->metadata);
+	if (meta) {
+		meta >>= BNXT_RX_META_CFA_CODE_SHIFT;
+
+		/*
+		 * The flags field holds extra bits of info from [6:4]
+		 * which indicate if the flow is in TCAM or EM or EEM
+		 */
+		meta_fmt = (flags2 & BNXT_CFA_META_FMT_MASK) >>
+			   BNXT_CFA_META_FMT_SHFT;
+
+		/*
+		 * meta_fmt == 4 => 'b100 => 'b10x => EM.
+		 * meta_fmt == 5 => 'b101 => 'b10x => EM + VLAN
+		 * meta_fmt == 6 => 'b110 => 'b11x => EEM
+		 * meta_fmt == 7 => 'b111 => 'b11x => EEM + VLAN.
+		 */
+		meta_fmt >>= BNXT_CFA_META_FMT_EM_EEM_SHFT;
+	}
+
+	mbuf->hash.fdir.hi = bp->mark_table[cfa_code].mark_id;
+	mbuf->ol_flags |= PKT_RX_FDIR | PKT_RX_FDIR_ID;
 }

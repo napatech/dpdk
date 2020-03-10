@@ -1,19 +1,21 @@
 # Please keep these options sorted alphabetically.
 
+option('armv8_crypto_dir', type: 'string', value: '',
+	description: 'path to the armv8_crypto library installation directory')
 option('disable_drivers', type: 'string', value: '',
 	description: 'Comma-separated list of drivers to explicitly disable.')
 option('drivers_install_subdir', type: 'string', value: 'dpdk/pmds-<VERSION>',
 	description: 'Subdirectory of libdir where to install PMDs. Defaults to using a versioned subdirectory.')
 option('enable_docs', type: 'boolean', value: false,
 	description: 'build documentation')
-option('enable_kmods', type: 'boolean', value: true,
+option('enable_kmods', type: 'boolean', value: false,
 	description: 'build kernel modules')
 option('examples', type: 'string', value: '',
 	description: 'Comma-separated list of examples to build by default')
 option('flexran_sdk', type: 'string', value: '',
 	description: 'Path to FlexRAN SDK optional Libraries for BBDEV device')
-option('ibverbs_link', type: 'combo', choices : ['shared', 'dlopen'], value: 'shared',
-	description: 'Linkage method (shared/dlopen) for Mellanox PMDs with ibverbs dependencies.')
+option('ibverbs_link', type: 'combo', choices : ['static', 'shared', 'dlopen'], value: 'shared',
+	description: 'Linkage method (static/shared/dlopen) for Mellanox PMDs with ibverbs dependencies.')
 option('include_subdir_arch', type: 'string', value: '',
 	description: 'subdirectory where to install arch-dependent headers')
 option('kernel_dir', type: 'string', value: '',

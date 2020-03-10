@@ -6,8 +6,6 @@
 #include <stddef.h>
 #include <unistd.h>
 #include <string.h>
-#include <assert.h>
-#include <dlfcn.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -31,21 +29,24 @@
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
 #include <rte_common.h>
-#include <rte_config.h>
 #include <rte_kvargs.h>
 #include <rte_rwlock.h>
 #include <rte_spinlock.h>
 #include <rte_string_fns.h>
 #include <rte_alarm.h>
 
+#include <mlx5_glue.h>
+#include <mlx5_devx_cmds.h>
+#include <mlx5_common.h>
+
+#include "mlx5_defs.h"
 #include "mlx5.h"
 #include "mlx5_utils.h"
 #include "mlx5_rxtx.h"
 #include "mlx5_autoconf.h"
-#include "mlx5_defs.h"
-#include "mlx5_glue.h"
 #include "mlx5_mr.h"
 #include "mlx5_flow.h"
+#include "rte_pmd_mlx5.h"
 
 /* Device parameter to enable RX completion queue compression. */
 #define MLX5_RXQ_CQE_COMP_EN "rxq_cqe_comp_en"
@@ -196,11 +197,14 @@ static pthread_mutex_t mlx5_ibv_list_mutex = PTHREAD_MUTEX_INITIALIZER;
 /**
  * Allocate ID pool structure.
  *
+ * @param[in] max_id
+ *   The maximum id can be allocated from the pool.
+ *
  * @return
  *   Pointer to pool object, NULL value otherwise.
  */
 struct mlx5_flow_id_pool *
-mlx5_flow_id_pool_alloc(void)
+mlx5_flow_id_pool_alloc(uint32_t max_id)
 {
 	struct mlx5_flow_id_pool *pool;
 	void *mem;
@@ -223,6 +227,7 @@ mlx5_flow_id_pool_alloc(void)
 	pool->curr = pool->free_arr;
 	pool->last = pool->free_arr + MLX5_FLOW_MIN_ID_POOL_SIZE;
 	pool->base_index = 0;
+	pool->max_id = max_id;
 	return pool;
 error:
 	rte_free(pool);
@@ -257,7 +262,7 @@ uint32_t
 mlx5_flow_id_get(struct mlx5_flow_id_pool *pool, uint32_t *id)
 {
 	if (pool->curr == pool->free_arr) {
-		if (pool->base_index == UINT32_MAX) {
+		if (pool->base_index == pool->max_id) {
 			rte_errno  = ENOMEM;
 			DRV_LOG(ERR, "no free id");
 			return -rte_errno;
@@ -290,7 +295,7 @@ mlx5_flow_id_release(struct mlx5_flow_id_pool *pool, uint32_t id)
 	if (pool->curr == pool->last) {
 		size = pool->curr - pool->free_arr;
 		size2 = size * MLX5_ID_GENERATION_ARRAY_FACTOR;
-		assert(size2 > size);
+		MLX5_ASSERT(size2 > size);
 		mem = rte_malloc("", size2 * sizeof(uint32_t), 0);
 		if (!mem) {
 			DRV_LOG(ERR, "can't allocate mem for id pool");
@@ -436,7 +441,7 @@ mlx5_config_doorbell_mapping_env(const struct mlx5_dev_config *config)
 	char *env;
 	int value;
 
-	assert(rte_eal_process_type() == RTE_PROC_PRIMARY);
+	MLX5_ASSERT(rte_eal_process_type() == RTE_PROC_PRIMARY);
 	/* Get environment variable to store. */
 	env = getenv(MLX5_SHUT_UP_BF);
 	value = env ? !!strcmp(env, "0") : MLX5_ARG_UNSET;
@@ -451,7 +456,7 @@ mlx5_config_doorbell_mapping_env(const struct mlx5_dev_config *config)
 static void
 mlx5_restore_doorbell_mapping_env(int value)
 {
-	assert(rte_eal_process_type() == RTE_PROC_PRIMARY);
+	MLX5_ASSERT(rte_eal_process_type() == RTE_PROC_PRIMARY);
 	/* Restore the original environment variable state. */
 	if (value == MLX5_ARG_UNSET)
 		unsetenv(MLX5_SHUT_UP_BF);
@@ -491,9 +496,9 @@ mlx5_alloc_shared_ibctx(const struct mlx5_dev_spawn_data *spawn,
 	struct mlx5_devx_tis_attr tis_attr = { 0 };
 #endif
 
-	assert(spawn);
+	MLX5_ASSERT(spawn);
 	/* Secondary process should not create the shared context. */
-	assert(rte_eal_process_type() == RTE_PROC_PRIMARY);
+	MLX5_ASSERT(rte_eal_process_type() == RTE_PROC_PRIMARY);
 	pthread_mutex_lock(&mlx5_ibv_list_mutex);
 	/* Search for IB context by device name. */
 	LIST_FOREACH(sh, &mlx5_ibv_list, next) {
@@ -503,7 +508,7 @@ mlx5_alloc_shared_ibctx(const struct mlx5_dev_spawn_data *spawn,
 		}
 	}
 	/* No device found, we have to create new shared context. */
-	assert(spawn->max_port);
+	MLX5_ASSERT(spawn->max_port);
 	sh = rte_zmalloc("ethdev shared ib context",
 			 sizeof(struct mlx5_ibv_shared) +
 			 spawn->max_port *
@@ -590,7 +595,7 @@ mlx5_alloc_shared_ibctx(const struct mlx5_dev_spawn_data *spawn,
 			goto error;
 		}
 	}
-	sh->flow_id_pool = mlx5_flow_id_pool_alloc();
+	sh->flow_id_pool = mlx5_flow_id_pool_alloc(UINT32_MAX);
 	if (!sh->flow_id_pool) {
 		DRV_LOG(ERR, "can't create flow id pool");
 		err = ENOMEM;
@@ -626,7 +631,7 @@ exit:
 	return sh;
 error:
 	pthread_mutex_unlock(&mlx5_ibv_list_mutex);
-	assert(sh);
+	MLX5_ASSERT(sh);
 	if (sh->tis)
 		claim_zero(mlx5_devx_cmd_destroy(sh->tis));
 	if (sh->td)
@@ -638,7 +643,7 @@ error:
 	if (sh->flow_id_pool)
 		mlx5_flow_id_pool_release(sh->flow_id_pool);
 	rte_free(sh);
-	assert(err > 0);
+	MLX5_ASSERT(err > 0);
 	rte_errno = err;
 	return NULL;
 }
@@ -654,31 +659,31 @@ static void
 mlx5_free_shared_ibctx(struct mlx5_ibv_shared *sh)
 {
 	pthread_mutex_lock(&mlx5_ibv_list_mutex);
-#ifndef NDEBUG
+#ifdef RTE_LIBRTE_MLX5_DEBUG
 	/* Check the object presence in the list. */
 	struct mlx5_ibv_shared *lctx;
 
 	LIST_FOREACH(lctx, &mlx5_ibv_list, next)
 		if (lctx == sh)
 			break;
-	assert(lctx);
+	MLX5_ASSERT(lctx);
 	if (lctx != sh) {
 		DRV_LOG(ERR, "Freeing non-existing shared IB context");
 		goto exit;
 	}
 #endif
-	assert(sh);
-	assert(sh->refcnt);
+	MLX5_ASSERT(sh);
+	MLX5_ASSERT(sh->refcnt);
 	/* Secondary process should not free the shared context. */
-	assert(rte_eal_process_type() == RTE_PROC_PRIMARY);
+	MLX5_ASSERT(rte_eal_process_type() == RTE_PROC_PRIMARY);
 	if (--sh->refcnt)
 		goto exit;
-	/* Release created Memory Regions. */
-	mlx5_mr_release(sh);
 	/* Remove from memory callback device list. */
 	rte_rwlock_write_lock(&mlx5_shared_data->mem_event_rwlock);
 	LIST_REMOVE(sh, mem_event_cb);
 	rte_rwlock_write_unlock(&mlx5_shared_data->mem_event_rwlock);
+	/* Release created Memory Regions. */
+	mlx5_mr_release(sh);
 	/* Remove context from the global device list. */
 	LIST_REMOVE(sh, next);
 	/*
@@ -686,7 +691,7 @@ mlx5_free_shared_ibctx(struct mlx5_ibv_shared *sh)
 	 *  Only primary process handles async device events.
 	 **/
 	mlx5_flow_counters_mng_close(sh);
-	assert(!sh->intr_cnt);
+	MLX5_ASSERT(!sh->intr_cnt);
 	if (sh->intr_cnt)
 		mlx5_intr_callback_unregister
 			(&sh->intr_handle, mlx5_dev_interrupt_handler, sh);
@@ -742,7 +747,7 @@ mlx5_free_table_hash_list(struct mlx5_priv *priv)
 	if (pos) {
 		tbl_data = container_of(pos, struct mlx5_flow_tbl_data_entry,
 					entry);
-		assert(tbl_data);
+		MLX5_ASSERT(tbl_data);
 		mlx5_hlist_remove(sh->flow_tbls, pos);
 		rte_free(tbl_data);
 	}
@@ -751,7 +756,7 @@ mlx5_free_table_hash_list(struct mlx5_priv *priv)
 	if (pos) {
 		tbl_data = container_of(pos, struct mlx5_flow_tbl_data_entry,
 					entry);
-		assert(tbl_data);
+		MLX5_ASSERT(tbl_data);
 		mlx5_hlist_remove(sh->flow_tbls, pos);
 		rte_free(tbl_data);
 	}
@@ -761,7 +766,7 @@ mlx5_free_table_hash_list(struct mlx5_priv *priv)
 	if (pos) {
 		tbl_data = container_of(pos, struct mlx5_flow_tbl_data_entry,
 					entry);
-		assert(tbl_data);
+		MLX5_ASSERT(tbl_data);
 		mlx5_hlist_remove(sh->flow_tbls, pos);
 		rte_free(tbl_data);
 	}
@@ -785,7 +790,7 @@ mlx5_alloc_table_hash_list(struct mlx5_priv *priv)
 	char s[MLX5_HLIST_NAMESIZE];
 	int err = 0;
 
-	assert(sh);
+	MLX5_ASSERT(sh);
 	snprintf(s, sizeof(s), "%s_flow_table", priv->sh->ibdev_name);
 	sh->flow_tbls = mlx5_hlist_create(s, MLX5_FLOW_TABLE_HLIST_ARRAY_SIZE);
 	if (!sh->flow_tbls) {
@@ -868,8 +873,13 @@ mlx5_alloc_shared_dr(struct mlx5_priv *priv)
 {
 	struct mlx5_ibv_shared *sh = priv->sh;
 	char s[MLX5_HLIST_NAMESIZE];
-	int err = mlx5_alloc_table_hash_list(priv);
+	int err = 0;
 
+	if (!sh->flow_tbls)
+		err = mlx5_alloc_table_hash_list(priv);
+	else
+		DRV_LOG(DEBUG, "sh->flow_tbls[%p] already created, reuse\n",
+			(void *)sh->flow_tbls);
 	if (err)
 		return err;
 	/* Create tags hash list table. */
@@ -971,9 +981,9 @@ mlx5_free_shared_dr(struct mlx5_priv *priv)
 		return;
 	priv->dr_shared = 0;
 	sh = priv->sh;
-	assert(sh);
+	MLX5_ASSERT(sh);
 #ifdef HAVE_MLX5DV_DR
-	assert(sh->dv_refcnt);
+	MLX5_ASSERT(sh->dv_refcnt);
 	if (sh->dv_refcnt && --sh->dv_refcnt)
 		return;
 	if (sh->rx_domain) {
@@ -1108,7 +1118,7 @@ mlx5_alloc_verbs_buf(size_t size, void *data)
 
 		socket = ctrl->socket;
 	}
-	assert(data != NULL);
+	MLX5_ASSERT(data != NULL);
 	ret = rte_malloc_socket(__func__, size, alignment, socket);
 	if (!ret && size)
 		rte_errno = ENOMEM;
@@ -1126,7 +1136,7 @@ mlx5_alloc_verbs_buf(size_t size, void *data)
 static void
 mlx5_free_verbs_buf(void *ptr, void *data __rte_unused)
 {
-	assert(data != NULL);
+	MLX5_ASSERT(data != NULL);
 	rte_free(ptr);
 }
 
@@ -1145,7 +1155,7 @@ int
 mlx5_udp_tunnel_port_add(struct rte_eth_dev *dev __rte_unused,
 			 struct rte_eth_udp_tunnel *udp_tunnel)
 {
-	assert(udp_tunnel != NULL);
+	MLX5_ASSERT(udp_tunnel != NULL);
 	if (udp_tunnel->prot_type == RTE_TUNNEL_TYPE_VXLAN &&
 	    udp_tunnel->udp_port == 4789)
 		return 0;
@@ -1259,7 +1269,9 @@ mlx5_dev_close(struct rte_eth_dev *dev)
 	if (priv->reta_idx != NULL)
 		rte_free(priv->reta_idx);
 	if (priv->config.vf)
-		mlx5_nl_mac_addr_flush(dev);
+		mlx5_nl_mac_addr_flush(priv->nl_socket_route, mlx5_ifindex(dev),
+				       dev->data->mac_addrs,
+				       MLX5_MAX_MAC_ADDRESSES, priv->mac_own);
 	if (priv->nl_socket_route >= 0)
 		close(priv->nl_socket_route);
 	if (priv->nl_socket_rdma >= 0)
@@ -1376,6 +1388,10 @@ const struct eth_dev_ops mlx5_dev_ops = {
 	.filter_ctrl = mlx5_dev_filter_ctrl,
 	.rx_descriptor_status = mlx5_rx_descriptor_status,
 	.tx_descriptor_status = mlx5_tx_descriptor_status,
+	.rxq_info_get = mlx5_rxq_info_get,
+	.txq_info_get = mlx5_txq_info_get,
+	.rx_burst_mode_get = mlx5_rx_burst_mode_get,
+	.tx_burst_mode_get = mlx5_tx_burst_mode_get,
 	.rx_queue_count = mlx5_rx_queue_count,
 	.rx_queue_intr_enable = mlx5_rx_intr_enable,
 	.rx_queue_intr_disable = mlx5_rx_intr_disable,
@@ -1398,6 +1414,10 @@ static const struct eth_dev_ops mlx5_dev_sec_ops = {
 	.dev_infos_get = mlx5_dev_infos_get,
 	.rx_descriptor_status = mlx5_rx_descriptor_status,
 	.tx_descriptor_status = mlx5_tx_descriptor_status,
+	.rxq_info_get = mlx5_rxq_info_get,
+	.txq_info_get = mlx5_txq_info_get,
+	.rx_burst_mode_get = mlx5_rx_burst_mode_get,
+	.tx_burst_mode_get = mlx5_tx_burst_mode_get,
 	.get_module_info = mlx5_get_module_info,
 	.get_module_eeprom = mlx5_get_module_eeprom,
 };
@@ -1442,6 +1462,10 @@ const struct eth_dev_ops mlx5_dev_ops_isolate = {
 	.filter_ctrl = mlx5_dev_filter_ctrl,
 	.rx_descriptor_status = mlx5_rx_descriptor_status,
 	.tx_descriptor_status = mlx5_tx_descriptor_status,
+	.rxq_info_get = mlx5_rxq_info_get,
+	.txq_info_get = mlx5_txq_info_get,
+	.rx_burst_mode_get = mlx5_rx_burst_mode_get,
+	.tx_burst_mode_get = mlx5_tx_burst_mode_get,
 	.rx_queue_intr_enable = mlx5_rx_intr_enable,
 	.rx_queue_intr_disable = mlx5_rx_intr_disable,
 	.is_removed = mlx5_is_removed,
@@ -1554,6 +1578,8 @@ mlx5_args_check(const char *key, const char *val, void *opaque)
 		config->max_dump_files_num = tmp;
 	} else if (strcmp(MLX5_LRO_TIMEOUT_USEC, key) == 0) {
 		config->lro.timeout = tmp;
+	} else if (strcmp(MLX5_CLASS_ARG_NAME, key) == 0) {
+		DRV_LOG(DEBUG, "class argument is %s.", val);
 	} else {
 		DRV_LOG(WARNING, "%s: unknown parameter", key);
 		rte_errno = EINVAL;
@@ -1605,6 +1631,7 @@ mlx5_args(struct mlx5_dev_config *config, struct rte_devargs *devargs)
 		MLX5_REPRESENTOR,
 		MLX5_MAX_DUMP_FILES_NUM,
 		MLX5_LRO_TIMEOUT_USEC,
+		MLX5_CLASS_ARG_NAME,
 		NULL,
 	};
 	struct rte_kvargs *kvlist;
@@ -1657,7 +1684,7 @@ mlx5_init_once(void)
 	if (mlx5_init_shared_data())
 		return -rte_errno;
 	sd = mlx5_shared_data;
-	assert(sd);
+	MLX5_ASSERT(sd);
 	rte_spinlock_lock(&sd->lock);
 	switch (rte_eal_process_type()) {
 	case RTE_PROC_PRIMARY:
@@ -1697,7 +1724,7 @@ out:
  *   key is specified in devargs
  * - if DevX is enabled the inline mode is queried from the
  *   device (HCA attributes and NIC vport context if needed).
- * - otherwise L2 mode (18 bytes) is assumed for ConnectX-4/4LX
+ * - otherwise L2 mode (18 bytes) is assumed for ConnectX-4/4 Lx
  *   and none (0 bytes) for other NICs
  *
  * @param spawn
@@ -1839,7 +1866,7 @@ mlx5_set_metadata_mask(struct rte_eth_dev *dev)
 	default:
 		meta = 0;
 		mark = 0;
-		assert(false);
+		MLX5_ASSERT(false);
 		break;
 	}
 	if (sh->dv_mark_mask && sh->dv_mark_mask != mark)
@@ -1932,7 +1959,7 @@ mlx5_get_dbr(struct rte_eth_dev *dev, struct mlx5_devx_dbr_page **dbr_page)
 		; /* Empty. */
 	/* Find the first clear bit. */
 	j = rte_bsf64(~page->dbr_bitmap[i]);
-	assert(i < (MLX5_DBR_PER_PAGE / 64));
+	MLX5_ASSERT(i < (MLX5_DBR_PER_PAGE / 64));
 	page->dbr_bitmap[i] |= (1 << j);
 	page->dbr_count++;
 	*dbr_page = page;
@@ -1983,6 +2010,25 @@ mlx5_release_dbr(struct rte_eth_dev *dev, uint32_t umem_id, uint64_t offset)
 	return ret;
 }
 
+int
+rte_pmd_mlx5_get_dyn_flag_names(char *names[], unsigned int n)
+{
+	static const char *const dynf_names[] = {
+		RTE_PMD_MLX5_FINE_GRANULARITY_INLINE,
+		RTE_MBUF_DYNFLAG_METADATA_NAME
+	};
+	unsigned int i;
+
+	if (n < RTE_DIM(dynf_names))
+		return -ENOMEM;
+	for (i = 0; i < RTE_DIM(dynf_names); i++) {
+		if (names[i] == NULL)
+			return -EINVAL;
+		strcpy(names[i], dynf_names[i]);
+	}
+	return RTE_DIM(dynf_names);
+}
+
 /**
  * Check sibling device configurations.
  *
@@ -2006,7 +2052,7 @@ mlx5_dev_check_sibling_config(struct mlx5_priv *priv,
 	struct mlx5_dev_config *sh_conf = NULL;
 	uint16_t port_id;
 
-	assert(sh);
+	MLX5_ASSERT(sh);
 	/* Nothing to compare for the single/first device. */
 	if (sh->refcnt == 1)
 		return 0;
@@ -2316,7 +2362,6 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 	/* Some internal functions rely on Netlink sockets, open them now. */
 	priv->nl_socket_rdma = mlx5_nl_init(NETLINK_RDMA);
 	priv->nl_socket_route =	mlx5_nl_init(NETLINK_ROUTE);
-	priv->nl_sn = 0;
 	priv->representor = !!switch_info->representor;
 	priv->master = !!switch_info->master;
 	priv->domain_id = RTE_ETH_DEV_SWITCH_DOMAIN_ID_INVALID;
@@ -2543,6 +2588,8 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 				priv->mtr_color_reg = ffs(reg_c_mask) - 1 +
 						      REG_C_0;
 				priv->mtr_en = 1;
+				priv->mtr_reg_share =
+				      config.hca_attr.qos.flow_meter_reg_share;
 				DRV_LOG(DEBUG, "The REG_C meter uses is %d",
 					priv->mtr_color_reg);
 			}
@@ -2586,7 +2633,7 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 	 * is permanent throughout the lifetime of device. So, we may store
 	 * the ifindex here and use the cached value further.
 	 */
-	assert(spawn->ifindex);
+	MLX5_ASSERT(spawn->ifindex);
 	priv->if_index = spawn->ifindex;
 	eth_dev->data->dev_private = priv;
 	priv->dev_data = eth_dev->data;
@@ -2607,7 +2654,7 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 		mac.addr_bytes[0], mac.addr_bytes[1],
 		mac.addr_bytes[2], mac.addr_bytes[3],
 		mac.addr_bytes[4], mac.addr_bytes[5]);
-#ifndef NDEBUG
+#ifdef RTE_LIBRTE_MLX5_DEBUG
 	{
 		char ifname[IF_NAMESIZE];
 
@@ -2634,7 +2681,10 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 	/* Register MAC address. */
 	claim_zero(mlx5_mac_addr_add(eth_dev, &mac, 0, 0));
 	if (config.vf && config.vf_nl_en)
-		mlx5_nl_mac_addr_sync(eth_dev);
+		mlx5_nl_mac_addr_sync(priv->nl_socket_route,
+				      mlx5_ifindex(eth_dev),
+				      eth_dev->data->mac_addrs,
+				      MLX5_MAX_MAC_ADDRESSES);
 	TAILQ_INIT(&priv->flows);
 	TAILQ_INIT(&priv->ctrl_flows);
 	TAILQ_INIT(&priv->flow_meters);
@@ -2675,7 +2725,12 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 		err = mlx5_alloc_shared_dr(priv);
 		if (err)
 			goto error;
-		priv->qrss_id_pool = mlx5_flow_id_pool_alloc();
+		/*
+		 * RSS id is shared with meter flow id. Meter flow id can only
+		 * use the 24 MSB of the register.
+		 */
+		priv->qrss_id_pool = mlx5_flow_id_pool_alloc(UINT32_MAX >>
+				     MLX5_MTR_COLOR_BITS);
 		if (!priv->qrss_id_pool) {
 			DRV_LOG(ERR, "can't create flow id pool");
 			err = ENOMEM;
@@ -2761,7 +2816,7 @@ error:
 	}
 	if (sh)
 		mlx5_free_shared_ibctx(sh);
-	assert(err > 0);
+	MLX5_ASSERT(err > 0);
 	rte_errno = err;
 	return NULL;
 }
@@ -2864,7 +2919,7 @@ mlx5_device_bond_pci_match(const struct ibv_device *ibv_dev,
 	if (!file)
 		return -1;
 	/* Use safe format to check maximal buffer length. */
-	assert(atol(RTE_STR(IF_NAMESIZE)) == IF_NAMESIZE);
+	MLX5_ASSERT(atol(RTE_STR(IF_NAMESIZE)) == IF_NAMESIZE);
 	while (fscanf(file, "%" RTE_STR(IF_NAMESIZE) "s", ifname) == 1) {
 		char tmp_str[IF_NAMESIZE + 32];
 		struct rte_pci_addr pci_addr;
@@ -2949,13 +3004,20 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	struct mlx5_dev_config dev_config;
 	int ret;
 
+	if (mlx5_class_get(pci_dev->device.devargs) != MLX5_CLASS_NET) {
+		DRV_LOG(DEBUG, "Skip probing - should be probed by other mlx5"
+			" driver.");
+		return 1;
+	}
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
+		mlx5_pmd_socket_init();
 	ret = mlx5_init_once();
 	if (ret) {
 		DRV_LOG(ERR, "unable to init PMD global data: %s",
 			strerror(rte_errno));
 		return -rte_errno;
 	}
-	assert(pci_drv == &mlx5_driver);
+	MLX5_ASSERT(pci_drv == &mlx5_driver);
 	errno = 0;
 	ibv_list = mlx5_glue->get_device_list(&ret);
 	if (!ibv_list) {
@@ -3076,10 +3138,10 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		 * it may be E-Switch master device and representors.
 		 * We have to perform identification trough the ports.
 		 */
-		assert(nl_rdma >= 0);
-		assert(ns == 0);
-		assert(nd == 1);
-		assert(np);
+		MLX5_ASSERT(nl_rdma >= 0);
+		MLX5_ASSERT(ns == 0);
+		MLX5_ASSERT(nd == 1);
+		MLX5_ASSERT(np);
 		for (i = 1; i <= np; ++i) {
 			list[ns].max_port = np;
 			list[ns].ibv_port = i;
@@ -3254,7 +3316,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 			goto exit;
 		}
 	}
-	assert(ns);
+	MLX5_ASSERT(ns);
 	/*
 	 * Sort list to probe devices in natural order for users convenience
 	 * (i.e. master first, then representors from lowest to highest ID).
@@ -3349,7 +3411,7 @@ exit:
 		close(nl_route);
 	if (list)
 		rte_free(list);
-	assert(ibv_list);
+	MLX5_ASSERT(ibv_list);
 	mlx5_glue->free_device_list(ibv_list);
 	return ret;
 }
@@ -3468,6 +3530,10 @@ static const struct rte_pci_id mlx5_pci_id_map[] = {
 				PCI_DEVICE_ID_MELLANOX_CONNECTX6DXVF)
 	},
 	{
+		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
+				PCI_DEVICE_ID_MELLANOX_CONNECTX6DXBF)
+	},
+	{
 		.vendor_id = 0
 	}
 };
@@ -3485,138 +3551,6 @@ static struct rte_pci_driver mlx5_driver = {
 		     RTE_PCI_DRV_PROBE_AGAIN,
 };
 
-#ifdef RTE_IBVERBS_LINK_DLOPEN
-
-/**
- * Suffix RTE_EAL_PMD_PATH with "-glue".
- *
- * This function performs a sanity check on RTE_EAL_PMD_PATH before
- * suffixing its last component.
- *
- * @param buf[out]
- *   Output buffer, should be large enough otherwise NULL is returned.
- * @param size
- *   Size of @p out.
- *
- * @return
- *   Pointer to @p buf or @p NULL in case suffix cannot be appended.
- */
-static char *
-mlx5_glue_path(char *buf, size_t size)
-{
-	static const char *const bad[] = { "/", ".", "..", NULL };
-	const char *path = RTE_EAL_PMD_PATH;
-	size_t len = strlen(path);
-	size_t off;
-	int i;
-
-	while (len && path[len - 1] == '/')
-		--len;
-	for (off = len; off && path[off - 1] != '/'; --off)
-		;
-	for (i = 0; bad[i]; ++i)
-		if (!strncmp(path + off, bad[i], (int)(len - off)))
-			goto error;
-	i = snprintf(buf, size, "%.*s-glue", (int)len, path);
-	if (i == -1 || (size_t)i >= size)
-		goto error;
-	return buf;
-error:
-	DRV_LOG(ERR,
-		"unable to append \"-glue\" to last component of"
-		" RTE_EAL_PMD_PATH (\"" RTE_EAL_PMD_PATH "\"),"
-		" please re-configure DPDK");
-	return NULL;
-}
-
-/**
- * Initialization routine for run-time dependency on rdma-core.
- */
-static int
-mlx5_glue_init(void)
-{
-	char glue_path[sizeof(RTE_EAL_PMD_PATH) - 1 + sizeof("-glue")];
-	const char *path[] = {
-		/*
-		 * A basic security check is necessary before trusting
-		 * MLX5_GLUE_PATH, which may override RTE_EAL_PMD_PATH.
-		 */
-		(geteuid() == getuid() && getegid() == getgid() ?
-		 getenv("MLX5_GLUE_PATH") : NULL),
-		/*
-		 * When RTE_EAL_PMD_PATH is set, use its glue-suffixed
-		 * variant, otherwise let dlopen() look up libraries on its
-		 * own.
-		 */
-		(*RTE_EAL_PMD_PATH ?
-		 mlx5_glue_path(glue_path, sizeof(glue_path)) : ""),
-	};
-	unsigned int i = 0;
-	void *handle = NULL;
-	void **sym;
-	const char *dlmsg;
-
-	while (!handle && i != RTE_DIM(path)) {
-		const char *end;
-		size_t len;
-		int ret;
-
-		if (!path[i]) {
-			++i;
-			continue;
-		}
-		end = strpbrk(path[i], ":;");
-		if (!end)
-			end = path[i] + strlen(path[i]);
-		len = end - path[i];
-		ret = 0;
-		do {
-			char name[ret + 1];
-
-			ret = snprintf(name, sizeof(name), "%.*s%s" MLX5_GLUE,
-				       (int)len, path[i],
-				       (!len || *(end - 1) == '/') ? "" : "/");
-			if (ret == -1)
-				break;
-			if (sizeof(name) != (size_t)ret + 1)
-				continue;
-			DRV_LOG(DEBUG, "looking for rdma-core glue as \"%s\"",
-				name);
-			handle = dlopen(name, RTLD_LAZY);
-			break;
-		} while (1);
-		path[i] = end + 1;
-		if (!*end)
-			++i;
-	}
-	if (!handle) {
-		rte_errno = EINVAL;
-		dlmsg = dlerror();
-		if (dlmsg)
-			DRV_LOG(WARNING, "cannot load glue library: %s", dlmsg);
-		goto glue_error;
-	}
-	sym = dlsym(handle, "mlx5_glue");
-	if (!sym || !*sym) {
-		rte_errno = EINVAL;
-		dlmsg = dlerror();
-		if (dlmsg)
-			DRV_LOG(ERR, "cannot resolve glue symbol: %s", dlmsg);
-		goto glue_error;
-	}
-	mlx5_glue = *sym;
-	return 0;
-glue_error:
-	if (handle)
-		dlclose(handle);
-	DRV_LOG(WARNING,
-		"cannot initialize PMD due to missing run-time dependency on"
-		" rdma-core libraries (libibverbs, libmlx5)");
-	return -rte_errno;
-}
-
-#endif
-
 /**
  * Driver initialization routine.
  */
@@ -3631,43 +3565,8 @@ RTE_INIT(rte_mlx5_pmd_init)
 	mlx5_set_ptype_table();
 	mlx5_set_cksum_table();
 	mlx5_set_swp_types_table();
-	/*
-	 * RDMAV_HUGEPAGES_SAFE tells ibv_fork_init() we intend to use
-	 * huge pages. Calling ibv_fork_init() during init allows
-	 * applications to use fork() safely for purposes other than
-	 * using this PMD, which is not supported in forked processes.
-	 */
-	setenv("RDMAV_HUGEPAGES_SAFE", "1", 1);
-	/* Match the size of Rx completion entry to the size of a cacheline. */
-	if (RTE_CACHE_LINE_SIZE == 128)
-		setenv("MLX5_CQE_SIZE", "128", 0);
-	/*
-	 * MLX5_DEVICE_FATAL_CLEANUP tells ibv_destroy functions to
-	 * cleanup all the Verbs resources even when the device was removed.
-	 */
-	setenv("MLX5_DEVICE_FATAL_CLEANUP", "1", 1);
-#ifdef RTE_IBVERBS_LINK_DLOPEN
-	if (mlx5_glue_init())
-		return;
-	assert(mlx5_glue);
-#endif
-#ifndef NDEBUG
-	/* Glue structure must not contain any NULL pointers. */
-	{
-		unsigned int i;
-
-		for (i = 0; i != sizeof(*mlx5_glue) / sizeof(void *); ++i)
-			assert(((const void *const *)mlx5_glue)[i]);
-	}
-#endif
-	if (strcmp(mlx5_glue->version, MLX5_GLUE_VERSION)) {
-		DRV_LOG(ERR,
-			"rdma-core glue \"%s\" mismatch: \"%s\" is required",
-			mlx5_glue->version, MLX5_GLUE_VERSION);
-		return;
-	}
-	mlx5_glue->fork_init();
-	rte_pci_register(&mlx5_driver);
+	if (mlx5_glue)
+		rte_pci_register(&mlx5_driver);
 }
 
 RTE_PMD_EXPORT_NAME(net_mlx5, __COUNTER__);

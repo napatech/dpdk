@@ -424,7 +424,7 @@ ice_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	/* Init the RX tail register. */
 	ICE_PCI_REG_WRITE(rxq->qrx_tail, rxq->nb_rx_desc - 1);
 
-	err = ice_switch_rx_queue(hw, rxq->reg_idx, TRUE);
+	err = ice_switch_rx_queue(hw, rxq->reg_idx, true);
 	if (err) {
 		PMD_DRV_LOG(ERR, "Failed to switch RX queue %u on",
 			    rx_queue_id);
@@ -450,7 +450,7 @@ ice_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	if (rx_queue_id < dev->data->nb_rx_queues) {
 		rxq = dev->data->rx_queues[rx_queue_id];
 
-		err = ice_switch_rx_queue(hw, rxq->reg_idx, FALSE);
+		err = ice_switch_rx_queue(hw, rxq->reg_idx, false);
 		if (err) {
 			PMD_DRV_LOG(ERR, "Failed to switch RX queue %u off",
 				    rx_queue_id);
@@ -630,7 +630,7 @@ ice_fdir_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	/* Init the RX tail register. */
 	ICE_PCI_REG_WRITE(rxq->qrx_tail, rxq->nb_rx_desc - 1);
 
-	err = ice_switch_rx_queue(hw, rxq->reg_idx, TRUE);
+	err = ice_switch_rx_queue(hw, rxq->reg_idx, true);
 	if (err) {
 		PMD_DRV_LOG(ERR, "Failed to switch FDIR RX queue %u on",
 			    rx_queue_id);
@@ -816,7 +816,7 @@ ice_fdir_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 
 	rxq = pf->fdir.rxq;
 
-	err = ice_switch_rx_queue(hw, rxq->reg_idx, FALSE);
+	err = ice_switch_rx_queue(hw, rxq->reg_idx, false);
 	if (err) {
 		PMD_DRV_LOG(ERR, "Failed to switch FDIR RX queue %u off",
 			    rx_queue_id);
@@ -970,7 +970,7 @@ ice_rx_queue_setup(struct rte_eth_dev *dev,
 	}
 
 	ice_reset_rx_queue(rxq);
-	rxq->q_set = TRUE;
+	rxq->q_set = true;
 	dev->data->rx_queues[queue_idx] = rxq;
 	rxq->rx_rel_mbufs = _ice_rx_queue_release_mbufs;
 
@@ -1183,7 +1183,7 @@ ice_tx_queue_setup(struct rte_eth_dev *dev,
 	}
 
 	ice_reset_tx_queue(txq);
-	txq->q_set = TRUE;
+	txq->q_set = true;
 	dev->data->tx_queues[queue_idx] = txq;
 	txq->tx_rel_mbufs = _ice_tx_queue_release_mbufs;
 	ice_set_tx_function_flag(dev, txq);
@@ -2040,7 +2040,7 @@ ice_fdir_setup_tx_resources(struct ice_pf *pf)
 	 * don't need to allocate software ring and reset for the fdir
 	 * program queue just set the queue has been configured.
 	 */
-	txq->q_set = TRUE;
+	txq->q_set = true;
 	pf->fdir.txq = txq;
 
 	txq->tx_rel_mbufs = _ice_tx_queue_release_mbufs;
@@ -2101,7 +2101,7 @@ ice_fdir_setup_rx_resources(struct ice_pf *pf)
 	 * Don't need to allocate software ring and reset for the fdir
 	 * rx queue, just set the queue has been configured.
 	 */
-	rxq->q_set = TRUE;
+	rxq->q_set = true;
 	pf->fdir.rxq = rxq;
 
 	rxq->rx_rel_mbufs = _ice_rx_queue_release_mbufs;
@@ -2421,6 +2421,24 @@ ice_set_tso_ctx(struct rte_mbuf *mbuf, union ice_tx_offload tx_offload)
 	return ctx_desc;
 }
 
+/* HW requires that TX buffer size ranges from 1B up to (16K-1)B. */
+#define ICE_MAX_DATA_PER_TXD \
+	(ICE_TXD_QW1_TX_BUF_SZ_M >> ICE_TXD_QW1_TX_BUF_SZ_S)
+/* Calculate the number of TX descriptors needed for each pkt */
+static inline uint16_t
+ice_calc_pkt_desc(struct rte_mbuf *tx_pkt)
+{
+	struct rte_mbuf *txd = tx_pkt;
+	uint16_t count = 0;
+
+	while (txd != NULL) {
+		count += DIV_ROUND_UP(txd->data_len, ICE_MAX_DATA_PER_TXD);
+		txd = txd->next;
+	}
+
+	return count;
+}
+
 uint16_t
 ice_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 {
@@ -2440,6 +2458,7 @@ ice_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 	uint32_t td_offset = 0;
 	uint32_t td_tag = 0;
 	uint16_t tx_last;
+	uint16_t slen;
 	uint64_t buf_dma_addr;
 	uint64_t ol_flags;
 	union ice_tx_offload tx_offload = {0};
@@ -2452,7 +2471,7 @@ ice_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
 	/* Check if the descriptor ring needs to be cleaned. */
 	if (txq->nb_tx_free < txq->tx_free_thresh)
-		ice_xmit_cleanup(txq);
+		(void)ice_xmit_cleanup(txq);
 
 	for (nb_tx = 0; nb_tx < nb_pkts; nb_tx++) {
 		tx_pkt = *tx_pkts++;
@@ -2471,8 +2490,15 @@ ice_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		/* The number of descriptors that must be allocated for
 		 * a packet equals to the number of the segments of that
 		 * packet plus the number of context descriptor if needed.
+		 * Recalculate the needed tx descs when TSO enabled in case
+		 * the mbuf data size exceeds max data size that hw allows
+		 * per tx desc.
 		 */
-		nb_used = (uint16_t)(tx_pkt->nb_segs + nb_ctx);
+		if (ol_flags & PKT_TX_TCP_SEG)
+			nb_used = (uint16_t)(ice_calc_pkt_desc(tx_pkt) +
+					     nb_ctx);
+		else
+			nb_used = (uint16_t)(tx_pkt->nb_segs + nb_ctx);
 		tx_last = (uint16_t)(tx_id + nb_used - 1);
 
 		/* Circular ring */
@@ -2562,15 +2588,37 @@ ice_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 			txe->mbuf = m_seg;
 
 			/* Setup TX Descriptor */
+			slen = m_seg->data_len;
 			buf_dma_addr = rte_mbuf_data_iova(m_seg);
+
+			while ((ol_flags & PKT_TX_TCP_SEG) &&
+				unlikely(slen > ICE_MAX_DATA_PER_TXD)) {
+				txd->buf_addr = rte_cpu_to_le_64(buf_dma_addr);
+				txd->cmd_type_offset_bsz =
+				rte_cpu_to_le_64(ICE_TX_DESC_DTYPE_DATA |
+				((uint64_t)td_cmd << ICE_TXD_QW1_CMD_S) |
+				((uint64_t)td_offset << ICE_TXD_QW1_OFFSET_S) |
+				((uint64_t)ICE_MAX_DATA_PER_TXD <<
+				 ICE_TXD_QW1_TX_BUF_SZ_S) |
+				((uint64_t)td_tag << ICE_TXD_QW1_L2TAG1_S));
+
+				buf_dma_addr += ICE_MAX_DATA_PER_TXD;
+				slen -= ICE_MAX_DATA_PER_TXD;
+
+				txe->last_id = tx_last;
+				tx_id = txe->next_id;
+				txe = txn;
+				txd = &tx_ring[tx_id];
+				txn = &sw_ring[txe->next_id];
+			}
+
 			txd->buf_addr = rte_cpu_to_le_64(buf_dma_addr);
 			txd->cmd_type_offset_bsz =
 				rte_cpu_to_le_64(ICE_TX_DESC_DTYPE_DATA |
-				((uint64_t)td_cmd  << ICE_TXD_QW1_CMD_S) |
+				((uint64_t)td_cmd << ICE_TXD_QW1_CMD_S) |
 				((uint64_t)td_offset << ICE_TXD_QW1_OFFSET_S) |
-				((uint64_t)m_seg->data_len  <<
-				 ICE_TXD_QW1_TX_BUF_SZ_S) |
-				((uint64_t)td_tag  << ICE_TXD_QW1_L2TAG1_S));
+				((uint64_t)slen << ICE_TXD_QW1_TX_BUF_SZ_S) |
+				((uint64_t)td_tag << ICE_TXD_QW1_L2TAG1_S));
 
 			txe->last_id = tx_last;
 			tx_id = txe->next_id;
@@ -2641,6 +2689,116 @@ ice_tx_free_bufs(struct ice_tx_queue *txq)
 		txq->tx_next_dd = (uint16_t)(txq->tx_rs_thresh - 1);
 
 	return txq->tx_rs_thresh;
+}
+
+static int
+ice_tx_done_cleanup_full(struct ice_tx_queue *txq,
+			uint32_t free_cnt)
+{
+	struct ice_tx_entry *swr_ring = txq->sw_ring;
+	uint16_t i, tx_last, tx_id;
+	uint16_t nb_tx_free_last;
+	uint16_t nb_tx_to_clean;
+	uint32_t pkt_cnt;
+
+	/* Start free mbuf from the next of tx_tail */
+	tx_last = txq->tx_tail;
+	tx_id  = swr_ring[tx_last].next_id;
+
+	if (txq->nb_tx_free == 0 && ice_xmit_cleanup(txq))
+		return 0;
+
+	nb_tx_to_clean = txq->nb_tx_free;
+	nb_tx_free_last = txq->nb_tx_free;
+	if (!free_cnt)
+		free_cnt = txq->nb_tx_desc;
+
+	/* Loop through swr_ring to count the amount of
+	 * freeable mubfs and packets.
+	 */
+	for (pkt_cnt = 0; pkt_cnt < free_cnt; ) {
+		for (i = 0; i < nb_tx_to_clean &&
+			pkt_cnt < free_cnt &&
+			tx_id != tx_last; i++) {
+			if (swr_ring[tx_id].mbuf != NULL) {
+				rte_pktmbuf_free_seg(swr_ring[tx_id].mbuf);
+				swr_ring[tx_id].mbuf = NULL;
+
+				/*
+				 * last segment in the packet,
+				 * increment packet count
+				 */
+				pkt_cnt += (swr_ring[tx_id].last_id == tx_id);
+			}
+
+			tx_id = swr_ring[tx_id].next_id;
+		}
+
+		if (txq->tx_rs_thresh > txq->nb_tx_desc -
+			txq->nb_tx_free || tx_id == tx_last)
+			break;
+
+		if (pkt_cnt < free_cnt) {
+			if (ice_xmit_cleanup(txq))
+				break;
+
+			nb_tx_to_clean = txq->nb_tx_free - nb_tx_free_last;
+			nb_tx_free_last = txq->nb_tx_free;
+		}
+	}
+
+	return (int)pkt_cnt;
+}
+
+#ifdef RTE_ARCH_X86
+static int
+ice_tx_done_cleanup_vec(struct ice_tx_queue *txq __rte_unused,
+			uint32_t free_cnt __rte_unused)
+{
+	return -ENOTSUP;
+}
+#endif
+
+static int
+ice_tx_done_cleanup_simple(struct ice_tx_queue *txq,
+			uint32_t free_cnt)
+{
+	int i, n, cnt;
+
+	if (free_cnt == 0 || free_cnt > txq->nb_tx_desc)
+		free_cnt = txq->nb_tx_desc;
+
+	cnt = free_cnt - free_cnt % txq->tx_rs_thresh;
+
+	for (i = 0; i < cnt; i += n) {
+		if (txq->nb_tx_desc - txq->nb_tx_free < txq->tx_rs_thresh)
+			break;
+
+		n = ice_tx_free_bufs(txq);
+
+		if (n == 0)
+			break;
+	}
+
+	return i;
+}
+
+int
+ice_tx_done_cleanup(void *txq, uint32_t free_cnt)
+{
+	struct ice_tx_queue *q = (struct ice_tx_queue *)txq;
+	struct rte_eth_dev *dev = &rte_eth_devices[q->port_id];
+	struct ice_adapter *ad =
+		ICE_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+
+#ifdef RTE_ARCH_X86
+	if (ad->tx_vec_allowed)
+		return ice_tx_done_cleanup_vec(q, free_cnt);
+#endif
+	if (ad->tx_simple_allowed)
+		return ice_tx_done_cleanup_simple(q, free_cnt);
+	else
+		return ice_tx_done_cleanup_full(q, free_cnt);
 }
 
 /* Populate 4 descriptors with data from 4 mbufs */
@@ -3268,7 +3426,7 @@ ice_get_default_pkt_type(uint16_t ptype)
 		       RTE_PTYPE_L4_TCP,
 		[93] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
 		       RTE_PTYPE_L4_SCTP,
-		[94] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		[94] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
 		       RTE_PTYPE_L4_ICMP,
 
 		/* IPv6 --> IPv4 */

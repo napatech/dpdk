@@ -92,6 +92,10 @@ These options can be modified in the ``.config`` file.
   adds additional run-time checks and debugging messages at the cost of
   lower performance.
 
+This option is available in meson:
+
+- ``ibverbs_link`` can be ``static``, ``shared``, or ``dlopen``.
+
 Environment variables
 ~~~~~~~~~~~~~~~~~~~~~
 
@@ -293,11 +297,6 @@ Installing Mellanox OFED
         connectx_port_config
 
 5. Continue with :ref:`section 2 of the Quick Start Guide <QSG_2>`.
-
-Supported NICs
---------------
-
-* Mellanox(R) ConnectX(R)-3 Pro 40G MCX354A-FCC_Ax (2*40G)
 
 .. _qsg:
 

@@ -1,5 +1,5 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
-    Copyright(c) 2016-2019 Intel Corporation.
+    Copyright(c) 2016-2020 Intel Corporation.
 
 AES-NI GCM Crypto Poll Mode Driver
 ==================================
@@ -8,6 +8,11 @@ AES-NI GCM Crypto Poll Mode Driver
 The AES-NI GCM PMD (**librte_pmd_aesni_gcm**) provides poll mode crypto driver
 support for utilizing Intel multi buffer library (see AES-NI Multi-buffer PMD documentation
 to learn more about it, including installation).
+
+The AES-NI GCM PMD supports synchronous mode of operation with
+``rte_cryptodev_sym_cpu_crypto_process`` function call for both AES-GCM and
+GMAC, however GMAC support is limited to one segment per operation. Please
+refer to ``rte_crypto`` programmer's guide for more detail.
 
 Features
 --------
@@ -44,6 +49,13 @@ can be downloaded in `<https://github.com/01org/intel-ipsec-mb/archive/v0.53.zip
 
     make
     make install
+
+.. note::
+
+   Compilation of the Multi-Buffer library is broken when GCC < 5.0, if library <= v0.53.
+   If a lower GCC version than 5.0, the workaround proposed by the following link
+   should be used: `<https://github.com/intel/intel-ipsec-mb/issues/40>`_.
+
 
 As a reference, the following table shows a mapping between the past DPDK versions
 and the external crypto libraries supported by them:

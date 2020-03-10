@@ -16,7 +16,7 @@
 #include "otx2_mempool.h"
 #include "otx2_tim_evdev.h"
 
-#define EVENTDEV_NAME_OCTEONTX2_PMD otx2_eventdev
+#define EVENTDEV_NAME_OCTEONTX2_PMD event_octeontx2
 
 #define sso_func_trace otx2_sso_dbg
 
@@ -278,7 +278,7 @@ uint16_t otx2_ssogws_dual_enq_fwd_burst(void *port, const struct rte_event ev[],
 					uint16_t nb_events);
 
 /* Auto generated API's */
-#define R(name, f5, f4, f3, f2, f1, f0, flags)				       \
+#define R(name, f6, f5, f4, f3, f2, f1, f0, flags)			       \
 uint16_t otx2_ssogws_deq_ ##name(void *port, struct rte_event *ev,	       \
 				 uint64_t timeout_ticks);		       \
 uint16_t otx2_ssogws_deq_burst_ ##name(void *port, struct rte_event ev[],      \
@@ -335,7 +335,7 @@ uint16_t otx2_ssogws_dual_deq_seg_timeout_burst_ ##name(void *port,	       \
 SSO_RX_ADPTR_ENQ_FASTPATH_FUNC
 #undef R
 
-#define T(name, f5, f4, f3, f2, f1, f0, sz, flags)			     \
+#define T(name, f6, f5, f4, f3, f2, f1, f0, sz, flags)			     \
 uint16_t otx2_ssogws_tx_adptr_enq_ ## name(void *port, struct rte_event ev[],\
 					   uint16_t nb_events);		     \
 uint16_t otx2_ssogws_tx_adptr_enq_seg_ ## name(void *port,		     \

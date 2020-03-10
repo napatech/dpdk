@@ -5,6 +5,7 @@
 #ifndef __L3_FWD_H__
 #define __L3_FWD_H__
 
+#include <rte_ethdev.h>
 #include <rte_vect.h>
 
 #define DO_RFC_1812_CHECKS
@@ -15,9 +16,16 @@
 #define NO_HASH_MULTI_LOOKUP 1
 #endif
 
+/*
+ * Configurable number of RX/TX ring descriptors
+ */
+#define RTE_TEST_RX_DESC_DEFAULT 1024
+#define RTE_TEST_TX_DESC_DEFAULT 1024
+
 #define MAX_PKT_BURST     32
 #define BURST_TX_DRAIN_US 100 /* TX drain every ~100us */
 
+#define MEMPOOL_CACHE_SIZE 256
 #define MAX_RX_QUEUE_PER_LCORE 16
 
 /*
@@ -169,6 +177,9 @@ is_valid_ipv4_pkt(struct rte_ipv4_hdr *pkt, uint32_t link_len)
 }
 #endif /* DO_RFC_1812_CHECKS */
 
+int
+init_mem(uint16_t portid, unsigned int nb_mbuf);
+
 /* Function pointers for LPM or EM functionality. */
 void
 setup_lpm(const int socketid);
@@ -195,6 +206,25 @@ em_main_loop(__attribute__((unused)) void *dummy);
 
 int
 lpm_main_loop(__attribute__((unused)) void *dummy);
+
+int
+lpm_event_main_loop_tx_d(__attribute__((unused)) void *dummy);
+int
+lpm_event_main_loop_tx_d_burst(__attribute__((unused)) void *dummy);
+int
+lpm_event_main_loop_tx_q(__attribute__((unused)) void *dummy);
+int
+lpm_event_main_loop_tx_q_burst(__attribute__((unused)) void *dummy);
+
+int
+em_event_main_loop_tx_d(__attribute__((unused)) void *dummy);
+int
+em_event_main_loop_tx_d_burst(__attribute__((unused)) void *dummy);
+int
+em_event_main_loop_tx_q(__attribute__((unused)) void *dummy);
+int
+em_event_main_loop_tx_q_burst(__attribute__((unused)) void *dummy);
+
 
 /* Return ipv4/ipv6 fwd lookup struct for LPM or EM. */
 void *

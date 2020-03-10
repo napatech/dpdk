@@ -38,11 +38,37 @@ Deprecation Notices
   remove it from the externally visible ABI and allow it to be updated in the
   future.
 
+* igb_uio: In the view of reducing the kernel dependency from the main tree,
+  as a first step, the Technical Board decided to move ``igb_uio``
+  kernel module to the dpdk-kmods repository in the /linux/igb_uio/ directory
+  in 20.11.
+  Minutes of Technical Board Meeting of `2019-11-06
+  <http://mails.dpdk.org/archives/dev/2019-November/151763.html>`_.
+
+* lib: will fix extending some enum/define breaking the ABI. There are multiple
+  samples in DPDK that enum/define terminated with a ``.*MAX.*`` value which is
+  used by iterators, and arrays holding these values are sized with this
+  ``.*MAX.*`` value. So extending this enum/define increases the ``.*MAX.*``
+  value which increases the size of the array and depending on how/where the
+  array is used this may break the ABI.
+  ``RTE_ETH_FLOW_MAX`` is one sample of the mentioned case, adding a new flow
+  type will break the ABI because of ``flex_mask[RTE_ETH_FLOW_MAX]`` array
+  usage in following public struct hierarchy:
+  ``rte_eth_fdir_flex_conf -> rte_fdir_conf -> rte_eth_conf (in the middle)``.
+  Need to identify this kind of usages and fix in 20.11, otherwise this blocks
+  us extending existing enum/define.
+  One solution can be using a fixed size array instead of ``.*MAX.*`` value.
+
 * dpaa2: removal of ``rte_dpaa2_memsegs`` structure which has been replaced
   by a pa-va search library. This structure was earlier being used for holding
   memory segments used by dpaa2 driver for faster pa->va translation. This
   structure would be made internal (or removed if all dependencies are cleared)
   in future releases.
+
+* mempool: starting from v20.05, the API of rte_mempool_populate_iova()
+  and rte_mempool_populate_virt() will change to return 0 instead
+  of -EINVAL when there is not enough room to store one object. The ABI
+  will be preserved until 20.11.
 
 * ethdev: the legacy filter API, including
   ``rte_eth_dev_filter_supported()``, ``rte_eth_dev_filter_ctrl()`` as well
@@ -86,3 +112,9 @@ Deprecation Notices
   to set new power environment if power environment was already initialized.
   In this case the function will return -1 unless the environment is unset first
   (using ``rte_power_unset_env``). Other function usage scenarios will not change.
+
+* python: Since the beginning of 2020, Python 2 has officially reached
+  end-of-support: https://www.python.org/doc/sunset-python-2/.
+  Python 2 support will be completely removed in 20.11.
+  In 20.08, explicit deprecation warnings will be displayed when running
+  scripts with Python 2.

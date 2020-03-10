@@ -76,8 +76,10 @@ enum {
 	/**< allocate mempool natively, but populate using anonymous memory */
 	MP_ALLOC_XMEM,
 	/**< allocate and populate mempool using anonymous memory */
-	MP_ALLOC_XMEM_HUGE
+	MP_ALLOC_XMEM_HUGE,
 	/**< allocate and populate mempool using anonymous hugepage memory */
+	MP_ALLOC_XBUF
+	/**< allocate mempool natively, use rte_pktmbuf_pool_create_extbuf */
 };
 
 #ifdef RTE_TEST_PMD_RECORD_BURST_STATS
@@ -102,6 +104,13 @@ struct rss_type_info {
  * An entry with a NULL type name terminates the list.
  */
 extern const struct rss_type_info rss_type_table[];
+
+/**
+ * Dynf name array.
+ *
+ * Array that holds the name for each dynf.
+ */
+extern char dynf_names[64][RTE_MBUF_DYN_NAMESIZE];
 
 /**
  * The data structure associated with a forwarding stream between a receive
@@ -193,6 +202,9 @@ struct rte_port {
 	/**< metadata value to insert in Tx packets. */
 	uint32_t		tx_metadata;
 	const struct rte_eth_rxtx_callback *tx_set_md_cb[RTE_MAX_QUEUES_PER_PORT+1];
+	/**< dynamic flags. */
+	uint64_t		mbuf_dynf;
+	const struct rte_eth_rxtx_callback *tx_set_dynf_cb[RTE_MAX_QUEUES_PER_PORT+1];
 };
 
 /**
@@ -602,6 +614,9 @@ lcore_num(void)
 	rte_panic("lcore_id of current thread not found in fwd_lcores_cpuids\n");
 }
 
+void
+parse_fwd_portlist(const char *port);
+
 static inline struct fwd_lcore *
 current_fwd_lcore(void)
 {
@@ -734,6 +749,7 @@ int port_flow_create(portid_t port_id,
 		     const struct rte_flow_action *actions);
 int port_flow_destroy(portid_t port_id, uint32_t n, const uint32_t *rule);
 int port_flow_flush(portid_t port_id);
+int port_flow_dump(portid_t port_id, const char *file_name);
 int port_flow_query(portid_t port_id, uint32_t rule,
 		    const struct rte_flow_action *action);
 void port_flow_list(portid_t port_id, uint32_t n, const uint32_t *group);
@@ -797,7 +813,7 @@ void stop_port(portid_t pid);
 void close_port(portid_t pid);
 void reset_port(portid_t pid);
 void attach_port(char *identifier);
-void detach_device(char *identifier);
+void detach_devargs(char *identifier);
 void detach_port_device(portid_t port_id);
 int all_ports_stopped(void);
 int port_is_stopped(portid_t port_id);
@@ -835,6 +851,9 @@ int eth_link_get_nowait_print_err(uint16_t port_id, struct rte_eth_link *link);
 int eth_macaddr_get_print_err(uint16_t port_id,
 			struct rte_ether_addr *mac_addr);
 
+/* Functions to display the set of MAC addresses added to a port*/
+void show_macs(portid_t port_id);
+void show_mcast_macs(portid_t port_id);
 
 /* Functions to manage the set of filtered Multicast MAC addresses */
 void mcast_addr_add(portid_t port_id, struct rte_ether_addr *mc_addr);
@@ -880,6 +899,12 @@ uint16_t tx_pkt_set_md(uint16_t port_id, __rte_unused uint16_t queue,
 		       __rte_unused void *user_param);
 void add_tx_md_callback(portid_t portid);
 void remove_tx_md_callback(portid_t portid);
+
+uint16_t tx_pkt_set_dynf(uint16_t port_id, __rte_unused uint16_t queue,
+			 struct rte_mbuf *pkts[], uint16_t nb_pkts,
+			 __rte_unused void *user_param);
+void add_tx_dynf_callback(portid_t portid);
+void remove_tx_dynf_callback(portid_t portid);
 
 /*
  * Work-around of a compilation error with ICC on invocations of the

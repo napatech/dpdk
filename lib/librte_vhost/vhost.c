@@ -27,6 +27,9 @@
 
 struct virtio_net *vhost_devices[MAX_VHOST_DEVICE];
 
+int vhost_config_log_level;
+int vhost_data_log_level;
+
 /* Called with iotlb_lock read-locked */
 uint64_t
 __vhost_iova_to_vva(struct virtio_net *dev, struct vhost_virtqueue *vq,
@@ -57,7 +60,7 @@ __vhost_iova_to_vva(struct virtio_net *dev, struct vhost_virtqueue *vq,
 
 		vhost_user_iotlb_pending_insert(vq, iova, perm);
 		if (vhost_user_iotlb_miss(dev, iova, perm)) {
-			RTE_LOG(ERR, VHOST_CONFIG,
+			VHOST_LOG_CONFIG(ERR,
 				"IOTLB miss req failed for IOVA 0x%" PRIx64 "\n",
 				iova);
 			vhost_user_iotlb_pending_remove(vq, iova, 1, perm);
@@ -124,7 +127,7 @@ __vhost_log_write_iova(struct virtio_net *dev, struct vhost_virtqueue *vq,
 
 	hva = __vhost_iova_to_vva(dev, vq, iova, &map_len, VHOST_ACCESS_RW);
 	if (map_len != len) {
-		RTE_LOG(ERR, VHOST_CONFIG,
+		VHOST_LOG_DATA(ERR,
 			"Failed to write log for IOVA 0x%" PRIx64 ". No IOTLB entry found\n",
 			iova);
 		return;
@@ -229,7 +232,7 @@ __vhost_log_cache_write_iova(struct virtio_net *dev, struct vhost_virtqueue *vq,
 
 	hva = __vhost_iova_to_vva(dev, vq, iova, &map_len, VHOST_ACCESS_RW);
 	if (map_len != len) {
-		RTE_LOG(ERR, VHOST_CONFIG,
+		VHOST_LOG_DATA(ERR,
 			"Failed to write log for IOVA 0x%" PRIx64 ". No IOTLB entry found\n",
 			iova);
 		return;
@@ -350,6 +353,57 @@ free_device(struct virtio_net *dev)
 	rte_free(dev);
 }
 
+static __rte_always_inline int
+log_translate(struct virtio_net *dev, struct vhost_virtqueue *vq)
+{
+	if (likely(!(vq->ring_addrs.flags & (1 << VHOST_VRING_F_LOG))))
+		return 0;
+
+	vq->log_guest_addr = translate_log_addr(dev, vq,
+						vq->ring_addrs.log_guest_addr);
+	if (vq->log_guest_addr == 0)
+		return -1;
+
+	return 0;
+}
+
+/*
+ * Converts vring log address to GPA
+ * If IOMMU is enabled, the log address is IOVA
+ * If IOMMU not enabled, the log address is already GPA
+ *
+ * Caller should have iotlb_lock read-locked
+ */
+uint64_t
+translate_log_addr(struct virtio_net *dev, struct vhost_virtqueue *vq,
+		uint64_t log_addr)
+{
+	if (dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM)) {
+		const uint64_t exp_size = sizeof(uint64_t);
+		uint64_t hva, gpa;
+		uint64_t size = exp_size;
+
+		hva = vhost_iova_to_vva(dev, vq, log_addr,
+					&size, VHOST_ACCESS_RW);
+
+		if (size != exp_size)
+			return 0;
+
+		gpa = hva_to_gpa(dev, hva, exp_size);
+		if (!gpa) {
+			VHOST_LOG_CONFIG(ERR,
+				"VQ: Failed to find GPA for log_addr: 0x%"
+				PRIx64 " hva: 0x%" PRIx64 "\n",
+				log_addr, hva);
+			return 0;
+		}
+		return gpa;
+
+	} else
+		return log_addr;
+}
+
+/* Caller should have iotlb_lock read-locked */
 static int
 vring_translate_split(struct virtio_net *dev, struct vhost_virtqueue *vq)
 {
@@ -388,6 +442,7 @@ vring_translate_split(struct virtio_net *dev, struct vhost_virtqueue *vq)
 	return 0;
 }
 
+/* Caller should have iotlb_lock read-locked */
 static int
 vring_translate_packed(struct virtio_net *dev, struct vhost_virtqueue *vq)
 {
@@ -434,6 +489,10 @@ vring_translate(struct virtio_net *dev, struct vhost_virtqueue *vq)
 		if (vring_translate_split(dev, vq) < 0)
 			return -1;
 	}
+
+	if (log_translate(dev, vq) < 0)
+		return -1;
+
 	vq->access_ok = 1;
 
 	return 0;
@@ -461,7 +520,7 @@ init_vring_queue(struct virtio_net *dev, uint32_t vring_idx)
 	struct vhost_virtqueue *vq;
 
 	if (vring_idx >= VHOST_MAX_VRING) {
-		RTE_LOG(ERR, VHOST_CONFIG,
+		VHOST_LOG_CONFIG(ERR,
 				"Failed not init vring, out of bound (%d)\n",
 				vring_idx);
 		return;
@@ -488,7 +547,7 @@ reset_vring_queue(struct virtio_net *dev, uint32_t vring_idx)
 	int callfd;
 
 	if (vring_idx >= VHOST_MAX_VRING) {
-		RTE_LOG(ERR, VHOST_CONFIG,
+		VHOST_LOG_CONFIG(ERR,
 				"Failed not init vring, out of bound (%d)\n",
 				vring_idx);
 		return;
@@ -507,7 +566,7 @@ alloc_vring_queue(struct virtio_net *dev, uint32_t vring_idx)
 
 	vq = rte_malloc(NULL, sizeof(struct vhost_virtqueue), 0);
 	if (vq == NULL) {
-		RTE_LOG(ERR, VHOST_CONFIG,
+		VHOST_LOG_CONFIG(ERR,
 			"Failed to allocate memory for vring:%u.\n", vring_idx);
 		return -1;
 	}
@@ -558,14 +617,14 @@ vhost_new_device(void)
 	}
 
 	if (i == MAX_VHOST_DEVICE) {
-		RTE_LOG(ERR, VHOST_CONFIG,
+		VHOST_LOG_CONFIG(ERR,
 			"Failed to find a free slot for new device.\n");
 		return -1;
 	}
 
 	dev = rte_zmalloc(NULL, sizeof(struct virtio_net), 0);
 	if (dev == NULL) {
-		RTE_LOG(ERR, VHOST_CONFIG,
+		VHOST_LOG_CONFIG(ERR,
 			"Failed to allocate memory for new dev.\n");
 		return -1;
 	}
@@ -728,7 +787,7 @@ rte_vhost_get_numa_node(int vid)
 	ret = get_mempolicy(&numa_node, NULL, 0, dev,
 			    MPOL_F_NODE | MPOL_F_ADDR);
 	if (ret < 0) {
-		RTE_LOG(ERR, VHOST_CONFIG,
+		VHOST_LOG_CONFIG(ERR,
 			"(%d) failed to query numa node: %s\n",
 			vid, rte_strerror(errno));
 		return -1;
@@ -1322,7 +1381,7 @@ rte_vhost_rx_queue_count(int vid, uint16_t qid)
 		return 0;
 
 	if (unlikely(qid >= dev->nr_vring || (qid & 1) == 0)) {
-		RTE_LOG(ERR, VHOST_DATA, "(%d) %s: invalid virtqueue idx %d.\n",
+		VHOST_LOG_DATA(ERR, "(%d) %s: invalid virtqueue idx %d.\n",
 			dev->vid, __func__, qid);
 		return 0;
 	}
@@ -1456,4 +1515,15 @@ int rte_vhost_extern_callback_register(int vid,
 	dev->extern_ops = *ops;
 	dev->extern_data = ctx;
 	return 0;
+}
+
+RTE_INIT(vhost_log_init)
+{
+	vhost_config_log_level = rte_log_register("lib.vhost.config");
+	if (vhost_config_log_level >= 0)
+		rte_log_set_level(vhost_config_log_level, RTE_LOG_INFO);
+
+	vhost_data_log_level = rte_log_register("lib.vhost.data");
+	if (vhost_data_log_level >= 0)
+		rte_log_set_level(vhost_data_log_level, RTE_LOG_WARNING);
 }

@@ -53,7 +53,9 @@ do_recursive_call(void)
 	} actions[] =  {
 			{ "run_secondary_instances", test_mp_secondary },
 #ifdef RTE_LIBRTE_PDUMP
+#ifdef RTE_LIBRTE_RING_PMD
 			{ "run_pdump_server_tests", test_pdump },
+#endif
 #endif
 			{ "test_missing_c_flag", no_action },
 			{ "test_master_lcore_flag", no_action },
@@ -74,7 +76,7 @@ do_recursive_call(void)
 
 	if (recursive_call == NULL)
 		return -1;
-	for (i = 0; i < sizeof(actions)/sizeof(actions[0]); i++) {
+	for (i = 0; i < RTE_DIM(actions); i++) {
 		if (strcmp(actions[i].env_var, recursive_call) == 0)
 			return (actions[i].action_fn)();
 	}

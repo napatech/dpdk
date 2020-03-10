@@ -260,7 +260,8 @@ struct rte_mempool {
 #endif
 }  __rte_cache_aligned;
 
-#define MEMPOOL_F_NO_SPREAD      0x0001 /**< Do not spread among memory channels. */
+#define MEMPOOL_F_NO_SPREAD      0x0001
+		/**< Spreading among memory channels not required. */
 #define MEMPOOL_F_NO_CACHE_ALIGN 0x0002 /**< Do not align objs on cache lines.*/
 #define MEMPOOL_F_SP_PUT         0x0004 /**< Default put is "single-producer".*/
 #define MEMPOOL_F_SC_GET         0x0008 /**< Default get is "single-consumer".*/
@@ -1167,8 +1168,8 @@ int rte_mempool_populate_default(struct rte_mempool *mp);
  *   A pointer to the mempool structure.
  * @return
  *   The number of objects added on success.
- *   On error, the chunk is not added in the memory list of the
- *   mempool and a negative errno is returned.
+ *   On error, 0 is returned, rte_errno is set, and the chunk is not added in
+ *   the memory list of the mempool.
  */
 int rte_mempool_populate_anon(struct rte_mempool *mp);
 
@@ -1653,7 +1654,7 @@ rte_mempool_in_use_count(const struct rte_mempool *mp);
 static inline int
 rte_mempool_full(const struct rte_mempool *mp)
 {
-	return !!(rte_mempool_avail_count(mp) == mp->size);
+	return rte_mempool_avail_count(mp) == mp->size;
 }
 
 /**
@@ -1672,7 +1673,7 @@ rte_mempool_full(const struct rte_mempool *mp)
 static inline int
 rte_mempool_empty(const struct rte_mempool *mp)
 {
-	return !!(rte_mempool_avail_count(mp) == 0);
+	return rte_mempool_avail_count(mp) == 0;
 }
 
 /**

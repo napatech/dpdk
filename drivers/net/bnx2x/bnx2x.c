@@ -1167,6 +1167,10 @@ static int bnx2x_has_rx_work(struct bnx2x_fastpath *fp)
 	if (unlikely((rx_cq_cons_sb & MAX_RCQ_ENTRIES(rxq)) ==
 		     MAX_RCQ_ENTRIES(rxq)))
 		rx_cq_cons_sb++;
+
+	PMD_RX_LOG(DEBUG, "hw CQ cons = %d, sw CQ cons = %d",
+		   rx_cq_cons_sb, rxq->rx_cq_head);
+
 	return rxq->rx_cq_head != rx_cq_cons_sb;
 }
 
@@ -1249,9 +1253,12 @@ static uint8_t bnx2x_rxeof(struct bnx2x_softc *sc, struct bnx2x_fastpath *fp)
 	uint16_t bd_cons, bd_prod, bd_prod_fw, comp_ring_cons;
 	uint16_t hw_cq_cons, sw_cq_cons, sw_cq_prod;
 
+	rte_spinlock_lock(&(fp)->rx_mtx);
+
 	rxq = sc->rx_queues[fp->index];
 	if (!rxq) {
 		PMD_RX_LOG(ERR, "RX queue %d is NULL", fp->index);
+		rte_spinlock_unlock(&(fp)->rx_mtx);
 		return 0;
 	}
 
@@ -1321,8 +1328,13 @@ next_cqe:
 	rxq->rx_cq_head = sw_cq_cons;
 	rxq->rx_cq_tail = sw_cq_prod;
 
+	PMD_RX_LOG(DEBUG, "BD prod = %d, sw CQ prod = %d",
+		   bd_prod_fw, sw_cq_prod);
+
 	/* Update producers */
 	bnx2x_update_rx_prod(sc, fp, bd_prod_fw, sw_cq_prod);
+
+	rte_spinlock_unlock(&(fp)->rx_mtx);
 
 	return sw_cq_cons != hw_cq_cons;
 }
@@ -4577,10 +4589,10 @@ static void bnx2x_handle_fp_tq(struct bnx2x_fastpath *fp)
 			bnx2x_handle_fp_tq(fp);
 			return;
 		}
+		/* We have completed slow path completion, clear the flag */
+		rte_atomic32_set(&sc->scan_fp, 0);
 	}
 
-	/* Assuming we have completed slow path completion, clear the flag */
-	rte_atomic32_set(&sc->scan_fp, 0);
 	bnx2x_ack_sb(sc, fp->igu_sb_id, USTORM_ID,
 		   le16toh(fp->fp_hc_idx), IGU_INT_ENABLE, 1);
 }

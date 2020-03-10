@@ -19,11 +19,6 @@
 #include <rte_ethdev_driver.h>
 #include <rte_dev.h>
 
-#include "iavf_log.h"
-#include "base/iavf_prototype.h"
-#include "base/iavf_adminq_cmd.h"
-#include "base/iavf_type.h"
-
 #include "iavf.h"
 #include "iavf_rxtx.h"
 
@@ -31,7 +26,7 @@
 #define ASQ_DELAY_MS  10
 
 /* Read data in admin queue to get msg from pf driver */
-static enum iavf_status_code
+static enum iavf_status
 iavf_read_msg_from_pf(struct iavf_adapter *adapter, uint16_t buf_len,
 		     uint8_t *buf)
 {
@@ -69,7 +64,7 @@ iavf_execute_vf_cmd(struct iavf_adapter *adapter, struct iavf_cmd_info *args)
 {
 	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(adapter);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
-	enum iavf_status_code ret;
+	enum iavf_status ret;
 	int err = 0;
 	int i = 0;
 
@@ -175,7 +170,7 @@ iavf_handle_virtchnl_msg(struct rte_eth_dev *dev)
 	struct iavf_arq_event_info info;
 	uint16_t pending, aq_opc;
 	enum virtchnl_ops msg_opc;
-	enum iavf_status_code msg_ret;
+	enum iavf_status msg_ret;
 	int ret;
 
 	info.buf_len = IAVF_AQ_BUF_SZ;
@@ -201,7 +196,7 @@ iavf_handle_virtchnl_msg(struct rte_eth_dev *dev)
 		 */
 		msg_opc = (enum virtchnl_ops)rte_le_to_cpu_32(
 						  info.desc.cookie_high);
-		msg_ret = (enum iavf_status_code)rte_le_to_cpu_32(
+		msg_ret = (enum iavf_status)rte_le_to_cpu_32(
 						  info.desc.cookie_low);
 		switch (aq_opc) {
 		case iavf_aqc_opc_send_msg_to_vf:
@@ -210,12 +205,9 @@ iavf_handle_virtchnl_msg(struct rte_eth_dev *dev)
 							info.msg_len);
 			} else {
 				/* read message and it's expected one */
-				if (msg_opc == vf->pend_cmd) {
-					vf->cmd_retval = msg_ret;
-					/* prevent compiler reordering */
-					rte_compiler_barrier();
-					_clear_cmd(vf);
-				} else
+				if (msg_opc == vf->pend_cmd)
+					_notify_cmd(vf, msg_ret);
+				else
 					PMD_DRV_LOG(ERR, "command mismatch,"
 						    "expect %u, get %u",
 						    vf->pend_cmd, msg_opc);
@@ -363,7 +355,7 @@ iavf_get_vf_resource(struct iavf_adapter *adapter)
 	rte_memcpy(vf->vf_res, args.out_buffer,
 		   RTE_MIN(args.out_size, len));
 	/* parse  VF config message back from PF*/
-	iavf_parse_hw_config(hw, vf->vf_res);
+	iavf_vf_parse_hw_config(hw, vf->vf_res);
 	for (i = 0; i < vf->vf_res->num_vsis; i++) {
 		if (vf->vf_res->vsi_res[i].vsi_type == VIRTCHNL_VSI_SRIOV)
 			vf->vsi_res = &vf->vf_res->vsi_res[i];

@@ -78,6 +78,7 @@
 #endif
 
 #define EXTMEM_HEAP_NAME "extmem"
+#define EXTBUF_ZONE_SIZE RTE_PGSIZE_2M
 
 uint16_t verbose_level = 0; /**< Silent by default. */
 int testpmd_logtype; /**< Log type for testpmd logs */
@@ -502,6 +503,9 @@ static int all_ports_started(void);
 struct gso_status gso_ports[RTE_MAX_ETHPORTS];
 uint16_t gso_max_segment_size = RTE_ETHER_MAX_LEN - RTE_ETHER_CRC_LEN;
 
+/* Holds the registered mbuf dynamic flags names. */
+char dynf_names[64][RTE_MBUF_DYN_NAMESIZE];
+
 /*
  * Helper function to check if socket is already discovered.
  * If yes, return positive value. If not, return zero.
@@ -865,6 +869,66 @@ dma_map_cb(struct rte_mempool *mp __rte_unused, void *opaque __rte_unused,
 	}
 }
 
+static unsigned int
+setup_extbuf(uint32_t nb_mbufs, uint16_t mbuf_sz, unsigned int socket_id,
+	    char *pool_name, struct rte_pktmbuf_extmem **ext_mem)
+{
+	struct rte_pktmbuf_extmem *xmem;
+	unsigned int ext_num, zone_num, elt_num;
+	uint16_t elt_size;
+
+	elt_size = RTE_ALIGN_CEIL(mbuf_sz, RTE_CACHE_LINE_SIZE);
+	elt_num = EXTBUF_ZONE_SIZE / elt_size;
+	zone_num = (nb_mbufs + elt_num - 1) / elt_num;
+
+	xmem = malloc(sizeof(struct rte_pktmbuf_extmem) * zone_num);
+	if (xmem == NULL) {
+		TESTPMD_LOG(ERR, "Cannot allocate memory for "
+				 "external buffer descriptors\n");
+		*ext_mem = NULL;
+		return 0;
+	}
+	for (ext_num = 0; ext_num < zone_num; ext_num++) {
+		struct rte_pktmbuf_extmem *xseg = xmem + ext_num;
+		const struct rte_memzone *mz;
+		char mz_name[RTE_MEMZONE_NAMESIZE];
+		int ret;
+
+		ret = snprintf(mz_name, sizeof(mz_name),
+			RTE_MEMPOOL_MZ_FORMAT "_xb_%u", pool_name, ext_num);
+		if (ret < 0 || ret >= (int)sizeof(mz_name)) {
+			errno = ENAMETOOLONG;
+			ext_num = 0;
+			break;
+		}
+		mz = rte_memzone_reserve_aligned(mz_name, EXTBUF_ZONE_SIZE,
+						 socket_id,
+						 RTE_MEMZONE_IOVA_CONTIG |
+						 RTE_MEMZONE_1GB |
+						 RTE_MEMZONE_SIZE_HINT_ONLY,
+						 EXTBUF_ZONE_SIZE);
+		if (mz == NULL) {
+			/*
+			 * The caller exits on external buffer creation
+			 * error, so there is no need to free memzones.
+			 */
+			errno = ENOMEM;
+			ext_num = 0;
+			break;
+		}
+		xseg->buf_ptr = mz->addr;
+		xseg->buf_iova = mz->iova;
+		xseg->buf_len = EXTBUF_ZONE_SIZE;
+		xseg->elt_size = elt_size;
+	}
+	if (ext_num == 0 && xmem != NULL) {
+		free(xmem);
+		xmem = NULL;
+	}
+	*ext_mem = xmem;
+	return ext_num;
+}
+
 /*
  * Configuration initialisation done once at init time.
  */
@@ -931,6 +995,26 @@ mbuf_pool_create(uint16_t mbuf_seg_size, unsigned nb_mbuf,
 			rte_mp = rte_pktmbuf_pool_create(pool_name, nb_mbuf,
 					mb_mempool_cache, 0, mbuf_seg_size,
 					heap_socket);
+			break;
+		}
+	case MP_ALLOC_XBUF:
+		{
+			struct rte_pktmbuf_extmem *ext_mem;
+			unsigned int ext_num;
+
+			ext_num = setup_extbuf(nb_mbuf,	mbuf_seg_size,
+					       socket_id, pool_name, &ext_mem);
+			if (ext_num == 0)
+				rte_exit(EXIT_FAILURE,
+					 "Can't create pinned data buffers\n");
+
+			TESTPMD_LOG(INFO, "preferred mempool ops selected: %s\n",
+					rte_mbuf_best_mempool_ops());
+			rte_mp = rte_pktmbuf_pool_create_extbuf
+					(pool_name, nb_mbuf, mb_mempool_cache,
+					 0, mbuf_seg_size, socket_id,
+					 ext_mem, ext_num);
+			free(ext_mem);
 			break;
 		}
 	default:
@@ -2549,32 +2633,17 @@ setup_attached_port(portid_t pi)
 	printf("Done\n");
 }
 
-void
-detach_port_device(portid_t port_id)
+static void
+detach_device(struct rte_device *dev)
 {
-	struct rte_device *dev;
 	portid_t sibling;
 
-	printf("Removing a device...\n");
-
-	if (port_id_is_invalid(port_id, ENABLED_WARN))
-		return;
-
-	dev = rte_eth_devices[port_id].device;
 	if (dev == NULL) {
 		printf("Device already removed\n");
 		return;
 	}
 
-	if (ports[port_id].port_status != RTE_PORT_CLOSED) {
-		if (ports[port_id].port_status != RTE_PORT_STOPPED) {
-			printf("Port not stopped\n");
-			return;
-		}
-		printf("Port was not closed\n");
-		if (ports[port_id].flow_list)
-			port_flow_flush(port_id);
-	}
+	printf("Removing a device...\n");
 
 	if (rte_dev_remove(dev) < 0) {
 		TESTPMD_LOG(ERR, "Failed to detach device %s\n", dev->name);
@@ -2592,14 +2661,33 @@ detach_port_device(portid_t port_id)
 
 	remove_invalid_ports();
 
-	printf("Device of port %u is detached\n", port_id);
+	printf("Device is detached\n");
 	printf("Now total ports is %d\n", nb_ports);
 	printf("Done\n");
 	return;
 }
 
 void
-detach_device(char *identifier)
+detach_port_device(portid_t port_id)
+{
+	if (port_id_is_invalid(port_id, ENABLED_WARN))
+		return;
+
+	if (ports[port_id].port_status != RTE_PORT_CLOSED) {
+		if (ports[port_id].port_status != RTE_PORT_STOPPED) {
+			printf("Port not stopped\n");
+			return;
+		}
+		printf("Port was not closed\n");
+		if (ports[port_id].flow_list)
+			port_flow_flush(port_id);
+	}
+
+	detach_device(rte_eth_devices[port_id].device);
+}
+
+void
+detach_devargs(char *identifier)
 {
 	struct rte_dev_iterator iterator;
 	struct rte_devargs da;
@@ -2712,8 +2800,6 @@ struct pmd_test_command {
 	cmd_func_t cmd_func;
 };
 
-#define PMD_TEST_CMD_NB (sizeof(pmd_test_menu) / sizeof(pmd_test_menu[0]))
-
 /* Check the link status of all ports in up to 9s, and print them finally */
 static void
 check_all_ports_link_status(uint32_t port_mask)
@@ -2790,6 +2876,7 @@ rmv_port_callback(void *arg)
 	int need_to_start = 0;
 	int org_no_link_check = no_link_check;
 	portid_t port_id = (intptr_t)arg;
+	struct rte_device *dev;
 
 	RTE_ETH_VALID_PORTID_OR_RET(port_id);
 
@@ -2800,8 +2887,12 @@ rmv_port_callback(void *arg)
 	no_link_check = 1;
 	stop_port(port_id);
 	no_link_check = org_no_link_check;
+
+	/* Save rte_device pointer before closing ethdev port */
+	dev = rte_eth_devices[port_id].device;
 	close_port(port_id);
-	detach_port_device(port_id);
+	detach_device(dev); /* might be already removed or have more ports */
+
 	if (need_to_start)
 		start_packet_forwarding(0);
 }
@@ -3570,5 +3661,10 @@ main(int argc, char** argv)
 			return 1;
 	}
 
-	return 0;
+	ret = rte_eal_cleanup();
+	if (ret != 0)
+		rte_exit(EXIT_FAILURE,
+			 "EAL cleanup failed: %s\n", strerror(-ret));
+
+	return EXIT_SUCCESS;
 }

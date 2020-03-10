@@ -31,16 +31,21 @@
 #include <rte_bus_pci.h>
 #include <rte_malloc.h>
 
+#include <mlx5_glue.h>
+#include <mlx5_prm.h>
+#include <mlx5_common.h>
+
+#include "mlx5_defs.h"
 #include "mlx5_utils.h"
 #include "mlx5.h"
 #include "mlx5_mr.h"
 #include "mlx5_autoconf.h"
-#include "mlx5_defs.h"
-#include "mlx5_prm.h"
-#include "mlx5_glue.h"
 
 /* Support tunnel matching. */
-#define MLX5_FLOW_TUNNEL 9
+#define MLX5_FLOW_TUNNEL 10
+
+/* Mbuf dynamic flag offset for inline. */
+extern uint64_t rte_net_mlx5_dynf_inline_mask;
 
 struct mlx5_rxq_stats {
 #ifdef MLX5_PMD_SOFT_COUNTERS
@@ -144,7 +149,7 @@ struct mlx5_rxq_data {
 	struct mlx5_mprq_buf *mprq_repl; /* Stashed mbuf for replenish. */
 	uint16_t idx; /* Queue index. */
 	struct mlx5_rxq_stats stats;
-	uint64_t mbuf_initializer; /* Default rearm_data for vectorized Rx. */
+	rte_xmm_t mbuf_initializer; /* Default rearm/flags for vectorized Rx. */
 	struct rte_mbuf fake_mbuf; /* elts padding for vectorized Rx. */
 	void *cq_uar; /* CQ user access region. */
 	uint32_t cqn; /* CQ number. */
@@ -273,9 +278,7 @@ struct mlx5_txq_data {
 	uint16_t wqe_thres; /* WQE threshold to request completion in CQ. */
 	/* WQ related fields. */
 	uint16_t cq_ci; /* Consumer index for completion queue. */
-#ifndef NDEBUG
-	uint16_t cq_pi; /* Counter of issued CQE "always" requests. */
-#endif
+	uint16_t cq_pi; /* Production index for completion queue. */
 	uint16_t cqe_s; /* Number of CQ elements. */
 	uint16_t cqe_m; /* Mask for CQ indices. */
 	/* CQ related fields. */
@@ -297,6 +300,11 @@ struct mlx5_txq_data {
 	struct mlx5_mr_ctrl mr_ctrl; /* MR control descriptor. */
 	struct mlx5_wqe *wqes; /* Work queue. */
 	struct mlx5_wqe *wqes_end; /* Work queue array limit. */
+#ifdef RTE_LIBRTE_MLX5_DEBUG
+	uint32_t *fcqs; /* Free completion queue (debug extended). */
+#else
+	uint16_t *fcqs; /* Free completion queue. */
+#endif
 	volatile struct mlx5_cqe *cqes; /* Completion queue. */
 	volatile uint32_t *qp_db; /* Work queue doorbell. */
 	volatile uint32_t *cq_db; /* Completion queue doorbell. */
@@ -440,6 +448,7 @@ int mlx5_txq_release(struct rte_eth_dev *dev, uint16_t idx);
 int mlx5_txq_releasable(struct rte_eth_dev *dev, uint16_t idx);
 int mlx5_txq_verify(struct rte_eth_dev *dev);
 void txq_alloc_elts(struct mlx5_txq_ctrl *txq_ctrl);
+void txq_free_elts(struct mlx5_txq_ctrl *txq_ctrl);
 uint64_t mlx5_get_tx_port_offloads(struct rte_eth_dev *dev);
 
 /* mlx5_rxtx.c */
@@ -451,9 +460,6 @@ extern uint8_t mlx5_swp_types_table[];
 void mlx5_set_ptype_table(void);
 void mlx5_set_cksum_table(void);
 void mlx5_set_swp_types_table(void);
-__rte_noinline int mlx5_tx_error_cqe_handle
-				(struct mlx5_txq_data *restrict txq,
-				 volatile struct mlx5_err_cqe *err_cqe);
 uint16_t mlx5_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n);
 void mlx5_rxq_initialize(struct mlx5_rxq_data *rxq);
 __rte_noinline int mlx5_rx_err_handle(struct mlx5_rxq_data *rxq, uint8_t vec);
@@ -472,6 +478,14 @@ void mlx5_dump_debug_information(const char *path, const char *title,
 				 const void *buf, unsigned int len);
 int mlx5_queue_state_modify_primary(struct rte_eth_dev *dev,
 			const struct mlx5_mp_arg_queue_state_modify *sm);
+void mlx5_rxq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
+		       struct rte_eth_rxq_info *qinfo);
+void mlx5_txq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
+		       struct rte_eth_txq_info *qinfo);
+int mlx5_rx_burst_mode_get(struct rte_eth_dev *dev, uint16_t rx_queue_id,
+			   struct rte_eth_burst_mode *mode);
+int mlx5_tx_burst_mode_get(struct rte_eth_dev *dev, uint16_t tx_queue_id,
+			   struct rte_eth_burst_mode *mode);
 
 /* Vectorized version of mlx5_rxtx.c */
 int mlx5_rxq_check_vec_support(struct mlx5_rxq_data *rxq_data);
@@ -546,44 +560,6 @@ __mlx5_uar_write64(uint64_t val, void *addr, rte_spinlock_t *lock)
 		__mlx5_uar_write64_relaxed(val, dst, lock)
 #define mlx5_uar_write64(val, dst, lock) __mlx5_uar_write64(val, dst, lock)
 #endif
-
-/* CQE status. */
-enum mlx5_cqe_status {
-	MLX5_CQE_STATUS_SW_OWN = -1,
-	MLX5_CQE_STATUS_HW_OWN = -2,
-	MLX5_CQE_STATUS_ERR = -3,
-};
-
-/**
- * Check whether CQE is valid.
- *
- * @param cqe
- *   Pointer to CQE.
- * @param cqes_n
- *   Size of completion queue.
- * @param ci
- *   Consumer index.
- *
- * @return
- *   The CQE status.
- */
-static __rte_always_inline enum mlx5_cqe_status
-check_cqe(volatile struct mlx5_cqe *cqe, const uint16_t cqes_n,
-	  const uint16_t ci)
-{
-	const uint16_t idx = ci & cqes_n;
-	const uint8_t op_own = cqe->op_own;
-	const uint8_t op_owner = MLX5_CQE_OWNER(op_own);
-	const uint8_t op_code = MLX5_CQE_OPCODE(op_own);
-
-	if (unlikely((op_owner != (!!(idx))) || (op_code == MLX5_CQE_INVALID)))
-		return MLX5_CQE_STATUS_HW_OWN;
-	rte_cio_rmb();
-	if (unlikely(op_code == MLX5_CQE_RESP_ERR ||
-		     op_code == MLX5_CQE_REQ_ERR))
-		return MLX5_CQE_STATUS_ERR;
-	return MLX5_CQE_STATUS_SW_OWN;
-}
 
 /**
  * Get Memory Pool (MP) from mbuf. If mbuf is indirect, the pool from which the

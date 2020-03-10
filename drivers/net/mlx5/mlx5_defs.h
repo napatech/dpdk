@@ -14,14 +14,6 @@
 /* Reported driver name. */
 #define MLX5_DRIVER_NAME "net_mlx5"
 
-/* Maximum number of simultaneous unicast MAC addresses. */
-#define MLX5_MAX_UC_MAC_ADDRESSES 128
-/* Maximum number of simultaneous Multicast MAC addresses. */
-#define MLX5_MAX_MC_MAC_ADDRESSES 128
-/* Maximum number of simultaneous MAC addresses. */
-#define MLX5_MAX_MAC_ADDRESSES \
-	(MLX5_MAX_UC_MAC_ADDRESSES + MLX5_MAX_MC_MAC_ADDRESSES)
-
 /* Maximum number of simultaneous VLAN filters. */
 #define MLX5_MAX_VLAN_IDS 128
 
@@ -104,8 +96,13 @@
 /* Number of packets vectorized Rx can simultaneously process in a loop. */
 #define MLX5_VPMD_DESCS_PER_LOOP      4
 
+/* Mask of RSS on source only or destination only. */
+#define MLX5_RSS_SRC_DST_ONLY (ETH_RSS_L3_SRC_ONLY | ETH_RSS_L3_DST_ONLY | \
+			       ETH_RSS_L4_SRC_ONLY | ETH_RSS_L4_DST_ONLY)
+
 /* Supported RSS */
-#define MLX5_RSS_HF_MASK (~(ETH_RSS_IP | ETH_RSS_UDP | ETH_RSS_TCP))
+#define MLX5_RSS_HF_MASK (~(ETH_RSS_IP | ETH_RSS_UDP | ETH_RSS_TCP | \
+			    MLX5_RSS_SRC_DST_ONLY))
 
 /* Timeout in seconds to get a valid link status. */
 #define MLX5_LINK_STATUS_TIMEOUT 10
@@ -175,6 +172,10 @@
 #define MLX5_FLOW_MREG_HTABLE_SZ 4096
 #define MLX5_FLOW_MREG_HNAME "MARK_COPY_TABLE"
 #define MLX5_DEFAULT_COPY_ID UINT32_MAX
+
+/* Hairpin TX/RX queue configuration parameters. */
+#define MLX5_HAIRPIN_QUEUE_STRIDE 6
+#define MLX5_HAIRPIN_JUMBO_LOG_SIZE (15 + 2)
 
 /* Definition of static_assert found in /usr/include/assert.h */
 #ifndef HAVE_STATIC_ASSERT

@@ -27,7 +27,6 @@ l2fwd_event_device_setup_internal_port(struct l2fwd_resources *rsrc)
 		.nb_event_port_enqueue_depth = 128
 	};
 	struct rte_event_dev_info dev_info;
-	uint8_t disable_implicit_release;
 	const uint8_t event_d_id = 0; /* Always use first event device only */
 	uint32_t event_queue_cfg = 0;
 	uint16_t ethdev_count = 0;
@@ -44,10 +43,9 @@ l2fwd_event_device_setup_internal_port(struct l2fwd_resources *rsrc)
 	/* Event device configurtion */
 	rte_event_dev_info_get(event_d_id, &dev_info);
 
-	disable_implicit_release = !!(dev_info.event_dev_cap &
-				    RTE_EVENT_DEV_CAP_IMPLICIT_RELEASE_DISABLE);
-	evt_rsrc->disable_implicit_release =
-						disable_implicit_release;
+	/* Enable implicit release */
+	if (dev_info.event_dev_cap & RTE_EVENT_DEV_CAP_IMPLICIT_RELEASE_DISABLE)
+		evt_rsrc->disable_implicit_release = 0;
 
 	if (dev_info.event_dev_cap & RTE_EVENT_DEV_CAP_QUEUE_ALL_TYPES)
 		event_queue_cfg |= RTE_EVENT_QUEUE_CFG_ALL_TYPES;
@@ -73,7 +71,8 @@ l2fwd_event_device_setup_internal_port(struct l2fwd_resources *rsrc)
 		event_d_conf.nb_event_port_enqueue_depth =
 				dev_info.max_event_port_enqueue_depth;
 
-	num_workers = rte_lcore_count();
+	/* Ignore Master core. */
+	num_workers = rte_lcore_count() - 1;
 	if (dev_info.max_event_ports < num_workers)
 		num_workers = dev_info.max_event_ports;
 
@@ -110,7 +109,10 @@ l2fwd_event_port_setup_internal_port(struct l2fwd_resources *rsrc)
 	if (!evt_rsrc->evp.event_p_id)
 		rte_panic("Failed to allocate memory for Event Ports\n");
 
-	rte_event_port_default_conf_get(event_d_id, 0, &def_p_conf);
+	ret = rte_event_port_default_conf_get(event_d_id, 0, &def_p_conf);
+	if (ret < 0)
+		rte_panic("Error to get default configuration of event port\n");
+
 	if (def_p_conf.new_event_threshold < event_p_conf.new_event_threshold)
 		event_p_conf.new_event_threshold =
 						def_p_conf.new_event_threshold;
@@ -162,7 +164,10 @@ l2fwd_event_queue_setup_internal_port(struct l2fwd_resources *rsrc,
 	uint8_t event_q_id = 0;
 	int32_t ret;
 
-	rte_event_queue_default_conf_get(event_d_id, event_q_id, &def_q_conf);
+	ret = rte_event_queue_default_conf_get(event_d_id, event_q_id,
+					       &def_q_conf);
+	if (ret < 0)
+		rte_panic("Error to get default config of event queue\n");
 
 	if (def_q_conf.nb_atomic_flows < event_q_conf.nb_atomic_flows)
 		event_q_conf.nb_atomic_flows = def_q_conf.nb_atomic_flows;

@@ -446,6 +446,7 @@ static const struct eth_dev_ops igbvf_eth_dev_ops = {
 	.tx_descriptor_status = eth_igb_tx_descriptor_status,
 	.tx_queue_setup       = eth_igb_tx_queue_setup,
 	.tx_queue_release     = eth_igb_tx_queue_release,
+	.tx_done_cleanup      = eth_igb_tx_done_cleanup,
 	.set_mc_addr_list     = eth_igb_set_mc_addr_list,
 	.rxq_info_get         = igb_rxq_info_get,
 	.txq_info_get         = igb_txq_info_get,
@@ -2914,7 +2915,7 @@ eth_igb_interrupt_action(struct rte_eth_dev *dev,
 				     dev->data->port_id);
 		}
 
-		PMD_INIT_LOG(DEBUG, "PCI Address: %04d:%02d:%02d:%d",
+		PMD_INIT_LOG(DEBUG, "PCI Address: " PCI_PRI_FMT,
 			     pci_dev->addr.domain,
 			     pci_dev->addr.bus,
 			     pci_dev->addr.devid,

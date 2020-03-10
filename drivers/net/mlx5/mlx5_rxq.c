@@ -4,7 +4,6 @@
  */
 
 #include <stddef.h>
-#include <assert.h>
 #include <errno.h>
 #include <string.h>
 #include <stdint.h>
@@ -30,12 +29,16 @@
 #include <rte_debug.h>
 #include <rte_io.h>
 
+#include <mlx5_glue.h>
+#include <mlx5_devx_cmds.h>
+
+#include "mlx5_defs.h"
 #include "mlx5.h"
 #include "mlx5_rxtx.h"
 #include "mlx5_utils.h"
 #include "mlx5_autoconf.h"
-#include "mlx5_defs.h"
-#include "mlx5_glue.h"
+#include "mlx5_flow.h"
+
 
 /* Default RSS hash key also used for ConnectX-3. */
 uint8_t rss_hash_default_key[] = {
@@ -123,7 +126,7 @@ mlx5_mprq_enabled(struct rte_eth_dev *dev)
 			++n;
 	}
 	/* Multi-Packet RQ can't be partially configured. */
-	assert(n == 0 || n == n_ibv);
+	MLX5_ASSERT(n == 0 || n == n_ibv);
 	return n == n_ibv;
 }
 
@@ -206,11 +209,11 @@ rxq_alloc_elts_sprq(struct mlx5_rxq_ctrl *rxq_ctrl)
 			goto error;
 		}
 		/* Headroom is reserved by rte_pktmbuf_alloc(). */
-		assert(DATA_OFF(buf) == RTE_PKTMBUF_HEADROOM);
+		MLX5_ASSERT(DATA_OFF(buf) == RTE_PKTMBUF_HEADROOM);
 		/* Buffer is supposed to be empty. */
-		assert(rte_pktmbuf_data_len(buf) == 0);
-		assert(rte_pktmbuf_pkt_len(buf) == 0);
-		assert(!buf->next);
+		MLX5_ASSERT(rte_pktmbuf_data_len(buf) == 0);
+		MLX5_ASSERT(rte_pktmbuf_pkt_len(buf) == 0);
+		MLX5_ASSERT(!buf->next);
 		/* Only the first segment keeps headroom. */
 		if (i % sges_n)
 			SET_DATA_OFF(buf, 0);
@@ -224,6 +227,9 @@ rxq_alloc_elts_sprq(struct mlx5_rxq_ctrl *rxq_ctrl)
 	if (mlx5_rxq_check_vec_support(&rxq_ctrl->rxq) > 0) {
 		struct mlx5_rxq_data *rxq = &rxq_ctrl->rxq;
 		struct rte_mbuf *mbuf_init = &rxq->fake_mbuf;
+		struct rte_pktmbuf_pool_private *priv =
+			(struct rte_pktmbuf_pool_private *)
+				rte_mempool_get_priv(rxq_ctrl->rxq.mp);
 		int j;
 
 		/* Initialize default rearm_data for vPMD. */
@@ -231,13 +237,15 @@ rxq_alloc_elts_sprq(struct mlx5_rxq_ctrl *rxq_ctrl)
 		rte_mbuf_refcnt_set(mbuf_init, 1);
 		mbuf_init->nb_segs = 1;
 		mbuf_init->port = rxq->port_id;
+		if (priv->flags & RTE_PKTMBUF_POOL_F_PINNED_EXT_BUF)
+			mbuf_init->ol_flags = EXT_ATTACHED_MBUF;
 		/*
 		 * prevent compiler reordering:
 		 * rearm_data covers previous fields.
 		 */
 		rte_compiler_barrier();
 		rxq->mbuf_initializer =
-			*(uint64_t *)&mbuf_init->rearm_data;
+			*(rte_xmm_t *)&mbuf_init->rearm_data;
 		/* Padding with a fake mbuf for vectorized Rx. */
 		for (j = 0; j < MLX5_VPMD_DESCS_PER_LOOP; ++j)
 			(*rxq->elts)[elts_n + j] = &rxq->fake_mbuf;
@@ -294,7 +302,7 @@ rxq_free_elts_mprq(struct mlx5_rxq_ctrl *rxq_ctrl)
 		rxq->port_id, rxq->idx);
 	if (rxq->mprq_bufs == NULL)
 		return;
-	assert(mlx5_rxq_check_vec_support(rxq) < 0);
+	MLX5_ASSERT(mlx5_rxq_check_vec_support(rxq) < 0);
 	for (i = 0; (i != (1u << rxq->elts_n)); ++i) {
 		if ((*rxq->mprq_bufs)[i] != NULL)
 			mlx5_mprq_buf_free((*rxq->mprq_bufs)[i]);
@@ -651,7 +659,7 @@ rxq_obj_hairpin_release(struct mlx5_rxq_obj *rxq_obj)
 {
 	struct mlx5_devx_modify_rq_attr rq_attr = { 0 };
 
-	assert(rxq_obj);
+	MLX5_ASSERT(rxq_obj);
 	rq_attr.state = MLX5_RQC_STATE_RST;
 	rq_attr.rq_state = MLX5_RQC_STATE_RDY;
 	mlx5_devx_cmd_modify_rq(rxq_obj->rq, &rq_attr);
@@ -670,26 +678,26 @@ rxq_obj_hairpin_release(struct mlx5_rxq_obj *rxq_obj)
 static int
 mlx5_rxq_obj_release(struct mlx5_rxq_obj *rxq_obj)
 {
-	assert(rxq_obj);
+	MLX5_ASSERT(rxq_obj);
 	if (rte_atomic32_dec_and_test(&rxq_obj->refcnt)) {
 		switch (rxq_obj->type) {
 		case MLX5_RXQ_OBJ_TYPE_IBV:
-			assert(rxq_obj->wq);
-			assert(rxq_obj->cq);
+			MLX5_ASSERT(rxq_obj->wq);
+			MLX5_ASSERT(rxq_obj->cq);
 			rxq_free_elts(rxq_obj->rxq_ctrl);
 			claim_zero(mlx5_glue->destroy_wq(rxq_obj->wq));
 			claim_zero(mlx5_glue->destroy_cq(rxq_obj->cq));
 			break;
 		case MLX5_RXQ_OBJ_TYPE_DEVX_RQ:
-			assert(rxq_obj->cq);
-			assert(rxq_obj->rq);
+			MLX5_ASSERT(rxq_obj->cq);
+			MLX5_ASSERT(rxq_obj->rq);
 			rxq_free_elts(rxq_obj->rxq_ctrl);
 			claim_zero(mlx5_devx_cmd_destroy(rxq_obj->rq));
 			rxq_release_rq_resources(rxq_obj->rxq_ctrl);
 			claim_zero(mlx5_glue->destroy_cq(rxq_obj->cq));
 			break;
 		case MLX5_RXQ_OBJ_TYPE_DEVX_HAIRPIN:
-			assert(rxq_obj->rq);
+			MLX5_ASSERT(rxq_obj->rq);
 			rxq_obj_hairpin_release(rxq_obj);
 			break;
 		}
@@ -1260,9 +1268,10 @@ mlx5_rxq_obj_hairpin_new(struct rte_eth_dev *dev, uint16_t idx)
 	struct mlx5_devx_create_rq_attr attr = { 0 };
 	struct mlx5_rxq_obj *tmpl = NULL;
 	int ret = 0;
+	uint32_t max_wq_data;
 
-	assert(rxq_data);
-	assert(!rxq_ctrl->obj);
+	MLX5_ASSERT(rxq_data);
+	MLX5_ASSERT(!rxq_ctrl->obj);
 	tmpl = rte_calloc_socket(__func__, 1, sizeof(*tmpl), 0,
 				 rxq_ctrl->socket);
 	if (!tmpl) {
@@ -1275,11 +1284,15 @@ mlx5_rxq_obj_hairpin_new(struct rte_eth_dev *dev, uint16_t idx)
 	tmpl->type = MLX5_RXQ_OBJ_TYPE_DEVX_HAIRPIN;
 	tmpl->rxq_ctrl = rxq_ctrl;
 	attr.hairpin = 1;
-	/* Workaround for hairpin startup */
-	attr.wq_attr.log_hairpin_num_packets = log2above(32);
-	/* Workaround for packets larger than 1KB */
+	max_wq_data = priv->config.hca_attr.log_max_hairpin_wq_data_sz;
+	/* Jumbo frames > 9KB should be supported, and more packets. */
 	attr.wq_attr.log_hairpin_data_sz =
-			priv->config.hca_attr.log_max_hairpin_wq_data_sz;
+			(max_wq_data < MLX5_HAIRPIN_JUMBO_LOG_SIZE) ?
+			max_wq_data : MLX5_HAIRPIN_JUMBO_LOG_SIZE;
+	/* Set the packets number to the maximum value for performance. */
+	attr.wq_attr.log_hairpin_num_packets =
+			attr.wq_attr.log_hairpin_data_sz -
+			MLX5_HAIRPIN_QUEUE_STRIDE;
 	tmpl->rq = mlx5_devx_cmd_create_rq(priv->sh->ctx, &attr,
 					   rxq_ctrl->socket);
 	if (!tmpl->rq) {
@@ -1333,8 +1346,8 @@ mlx5_rxq_obj_new(struct rte_eth_dev *dev, uint16_t idx,
 	int ret = 0;
 	struct mlx5dv_obj obj;
 
-	assert(rxq_data);
-	assert(!rxq_ctrl->obj);
+	MLX5_ASSERT(rxq_data);
+	MLX5_ASSERT(!rxq_ctrl->obj);
 	if (type == MLX5_RXQ_OBJ_TYPE_DEVX_HAIRPIN)
 		return mlx5_rxq_obj_hairpin_new(dev, idx);
 	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_RX_QUEUE;
@@ -1628,7 +1641,7 @@ mlx5_mprq_alloc_mp(struct rte_eth_dev *dev)
 		if (strd_sz_n < rxq->strd_sz_n)
 			strd_sz_n = rxq->strd_sz_n;
 	}
-	assert(strd_num_n && strd_sz_n);
+	MLX5_ASSERT(strd_num_n && strd_sz_n);
 	buf_len = (1 << strd_num_n) * (1 << strd_sz_n);
 	obj_size = sizeof(struct mlx5_mprq_buf) + buf_len + (1 << strd_num_n) *
 		sizeof(struct rte_mbuf_ext_shared_info) + RTE_PKTMBUF_HEADROOM;
@@ -1717,11 +1730,14 @@ exit:
  *
  * @param dev
  *   Pointer to Ethernet device.
+ * @param idx
+ *   RX queue index.
  * @param max_lro_size
  *   The maximum size for LRO packet.
  */
 static void
-mlx5_max_lro_msg_size_adjust(struct rte_eth_dev *dev, uint32_t max_lro_size)
+mlx5_max_lro_msg_size_adjust(struct rte_eth_dev *dev, uint16_t idx,
+			     uint32_t max_lro_size)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 
@@ -1730,13 +1746,17 @@ mlx5_max_lro_msg_size_adjust(struct rte_eth_dev *dev, uint32_t max_lro_size)
 	    MLX5_MAX_TCP_HDR_OFFSET)
 		max_lro_size -= MLX5_MAX_TCP_HDR_OFFSET;
 	max_lro_size = RTE_MIN(max_lro_size, MLX5_MAX_LRO_SIZE);
-	assert(max_lro_size >= 256u);
-	max_lro_size /= 256u;
+	MLX5_ASSERT(max_lro_size >= MLX5_LRO_SEG_CHUNK_SIZE);
+	max_lro_size /= MLX5_LRO_SEG_CHUNK_SIZE;
 	if (priv->max_lro_msg_size)
 		priv->max_lro_msg_size =
 			RTE_MIN((uint32_t)priv->max_lro_msg_size, max_lro_size);
 	else
 		priv->max_lro_msg_size = max_lro_size;
+	DRV_LOG(DEBUG,
+		"port %u Rx Queue %u max LRO message size adjusted to %u bytes",
+		dev->data->port_id, idx,
+		priv->max_lro_msg_size * MLX5_LRO_SEG_CHUNK_SIZE);
 }
 
 /**
@@ -1909,7 +1929,7 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		rte_errno = EINVAL;
 		goto error;
 	}
-	mlx5_max_lro_msg_size_adjust(dev, max_lro_size);
+	mlx5_max_lro_msg_size_adjust(dev, idx, max_lro_size);
 	/* Toggle RX checksum offload if hardware supports it. */
 	tmpl->rxq.csum = !!(offloads & DEV_RX_OFFLOAD_CHECKSUM);
 	tmpl->rxq.hw_timestamp = !!(offloads & DEV_RX_OFFLOAD_TIMESTAMP);
@@ -2059,7 +2079,7 @@ mlx5_rxq_release(struct rte_eth_dev *dev, uint16_t idx)
 	if (!(*priv->rxqs)[idx])
 		return 0;
 	rxq_ctrl = container_of((*priv->rxqs)[idx], struct mlx5_rxq_ctrl, rxq);
-	assert(rxq_ctrl->priv);
+	MLX5_ASSERT(rxq_ctrl->priv);
 	if (rxq_ctrl->obj && !mlx5_rxq_obj_release(rxq_ctrl->obj))
 		rxq_ctrl->obj = NULL;
 	if (rte_atomic32_dec_and_test(&rxq_ctrl->refcnt)) {
@@ -2465,8 +2485,36 @@ mlx5_hrxq_new(struct rte_eth_dev *dev,
 		memset(&tir_attr, 0, sizeof(tir_attr));
 		tir_attr.disp_type = MLX5_TIRC_DISP_TYPE_INDIRECT;
 		tir_attr.rx_hash_fn = MLX5_RX_HASH_FN_TOEPLITZ;
-		memcpy(&tir_attr.rx_hash_field_selector_outer, &hash_fields,
-		       sizeof(uint64_t));
+		tir_attr.tunneled_offload_en = !!tunnel;
+		/* If needed, translate hash_fields bitmap to PRM format. */
+		if (hash_fields) {
+#ifdef HAVE_IBV_DEVICE_TUNNEL_SUPPORT
+			struct mlx5_rx_hash_field_select *rx_hash_field_select =
+					hash_fields & IBV_RX_HASH_INNER ?
+					&tir_attr.rx_hash_field_selector_inner :
+					&tir_attr.rx_hash_field_selector_outer;
+#else
+			struct mlx5_rx_hash_field_select *rx_hash_field_select =
+					&tir_attr.rx_hash_field_selector_outer;
+#endif
+
+			/* 1 bit: 0: IPv4, 1: IPv6. */
+			rx_hash_field_select->l3_prot_type =
+				!!(hash_fields & MLX5_IPV6_IBV_RX_HASH);
+			/* 1 bit: 0: TCP, 1: UDP. */
+			rx_hash_field_select->l4_prot_type =
+				!!(hash_fields & MLX5_UDP_IBV_RX_HASH);
+			/* Bitmask which sets which fields to use in RX Hash. */
+			rx_hash_field_select->selected_fields =
+			((!!(hash_fields & MLX5_L3_SRC_IBV_RX_HASH)) <<
+			 MLX5_RX_HASH_FIELD_SELECT_SELECTED_FIELDS_SRC_IP) |
+			(!!(hash_fields & MLX5_L3_DST_IBV_RX_HASH)) <<
+			 MLX5_RX_HASH_FIELD_SELECT_SELECTED_FIELDS_DST_IP |
+			(!!(hash_fields & MLX5_L4_SRC_IBV_RX_HASH)) <<
+			 MLX5_RX_HASH_FIELD_SELECT_SELECTED_FIELDS_L4_SPORT |
+			(!!(hash_fields & MLX5_L4_DST_IBV_RX_HASH)) <<
+			 MLX5_RX_HASH_FIELD_SELECT_SELECTED_FIELDS_L4_DPORT;
+		}
 		if (rxq_ctrl->obj->type == MLX5_RXQ_OBJ_TYPE_DEVX_HAIRPIN)
 			tir_attr.transport_domain = priv->sh->td->id;
 		else

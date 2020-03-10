@@ -2,12 +2,14 @@
     Copyright 2015 6WIND S.A.
     Copyright 2015 Mellanox Technologies, Ltd
 
+.. include:: <isonum.txt>
+
 MLX5 poll mode driver
 =====================
 
 The MLX5 poll mode driver library (**librte_pmd_mlx5**) provides support
 for **Mellanox ConnectX-4**, **Mellanox ConnectX-4 Lx** , **Mellanox
-ConnectX-5**, **Mellanox ConnectX-6**, **Mellanox ConnectX-6DX** and
+ConnectX-5**, **Mellanox ConnectX-6**, **Mellanox ConnectX-6 Dx** and
 **Mellanox BlueField** families of 10/25/40/50/100/200 Gb/s adapters
 as well as their virtual functions (VF) in SR-IOV context.
 
@@ -64,6 +66,8 @@ Features
 - Multiple TX and RX queues.
 - Support for scattered TX and RX frames.
 - IPv4, IPv6, TCPv4, TCPv6, UDPv4 and UDPv6 RSS on any number of queues.
+- RSS using different combinations of fields: L3 only, L4 only or both,
+  and source only, destination only or both.
 - Several RSS hash keys, one for each flow type.
 - Default RSS operation with no hash key specification.
 - Configurable RETA table.
@@ -87,12 +91,13 @@ Features
 - RX interrupts.
 - Statistics query including Basic, Extended and per queue.
 - Rx HW timestamp.
-- Tunnel types: VXLAN, L3 VXLAN, VXLAN-GPE, GRE, MPLSoGRE, MPLSoUDP, IP-in-IP, Geneve.
+- Tunnel types: VXLAN, L3 VXLAN, VXLAN-GPE, GRE, MPLSoGRE, MPLSoUDP, IP-in-IP, Geneve, GTP.
 - Tunnel HW offloads: packet type, inner/outer RSS, IP and UDP checksum verification.
 - NIC HW offloads: encapsulation (vxlan, gre, mplsoudp, mplsogre), NAT, routing, TTL
   increment/decrement, count, drop, mark. For details please see :ref:`mlx5_offloads_support`.
 - Flow insertion rate of more then million flows per second, when using Direct Rules.
 - Support for multiple rte_flow groups.
+- Per packet no-inline hint flag to disable packet data copying into Tx descriptors.
 - Hardware LRO.
 
 Limitations
@@ -107,20 +112,17 @@ Limitations
     process. If the external memory is registered by primary process but has
     different virtual address in secondary process, unexpected error may happen.
 
-- Flow pattern without any specific vlan will match for vlan packets as well:
+- When using Verbs flow engine (``dv_flow_en`` = 0), flow pattern without any
+  specific VLAN will match for VLAN packets as well:
 
   When VLAN spec is not specified in the pattern, the matching rule will be created with VLAN as a wild card.
   Meaning, the flow rule::
 
         flow create 0 ingress pattern eth / vlan vid is 3 / ipv4 / end ...
 
-  Will only match vlan packets with vid=3. and the flow rules::
+  Will only match vlan packets with vid=3. and the flow rule::
 
         flow create 0 ingress pattern eth / ipv4 / end ...
-
-  Or::
-
-        flow create 0 ingress pattern eth / vlan / ipv4 / end ...
 
   Will match any ipv4 packet (VLAN included).
 
@@ -157,6 +159,14 @@ Limitations
 - VF: flow rules created on VF devices can only match traffic targeted at the
   configured MAC addresses (see ``rte_eth_dev_mac_addr_add()``).
 
+- Match on GTP tunnel header item supports the following fields only:
+
+     - msg_type
+     - teid
+
+- No Tx metadata go to the E-Switch steering domain for the Flow group 0.
+  The flows within group 0 and set metadata action are rejected by hardware.
+
 .. note::
 
    MAC addresses not already present in the bridge table of the associated
@@ -180,6 +190,33 @@ Limitations
   To receive IPv6 Multicast messages on VM, explicitly set the relevant
   MAC address using rte_eth_dev_mac_addr_add() API.
 
+- To support a mixed traffic pattern (some buffers from local host memory, some
+  buffers from other devices) with high bandwidth, a mbuf flag is used.
+
+  An application hints the PMD whether or not it should try to inline the
+  given mbuf data buffer. PMD should do the best effort to act upon this request.
+
+  The hint flag ``RTE_PMD_MLX5_FINE_GRANULARITY_INLINE`` is dynamic,
+  registered by application with rte_mbuf_dynflag_register(). This flag is
+  purely driver-specific and declared in PMD specific header ``rte_pmd_mlx5.h``,
+  which is intended to be used by the application.
+
+  To query the supported specific flags in runtime,
+  the function ``rte_pmd_mlx5_get_dyn_flag_names`` returns the array of
+  currently (over present hardware and configuration) supported specific flags.
+  The "not inline hint" feature operating flow is the following one:
+
+    - application starts
+    - probe the devices, ports are created
+    - query the port capabilities
+    - if port supporting the feature is found
+    - register dynamic flag ``RTE_PMD_MLX5_FINE_GRANULARITY_INLINE``
+    - application starts the ports
+    - on ``dev_start()`` PMD checks whether the feature flag is registered and
+      enables the feature support in datapath
+    - application might set the registered flag bit in ``ol_flags`` field
+      of mbuf being sent and PMD will handle ones appropriately.
+
 - The amount of descriptors in Tx queue may be limited by data inline settings.
   Inline data require the more descriptor building blocks and overall block
   amount may exceed the hardware supported limits. The application should
@@ -196,6 +233,16 @@ Limitations
 
   - can be applied to VF ports only.
   - must specify PF port action (packet redirection from VF to PF).
+
+- Raw encapsulation:
+
+  - The input buffer, used as outer header, is not validated.
+
+- Raw decapsulation:
+
+  - The decapsulation is always done up to the outermost tunnel detected by the HW.
+  - The input buffer, providing the removal size, is not validated.
+  - The buffer size must match the length of the headers to be removed.
 
 - ICMP/ICMP6 code/type matching, IP-in-IP and MPLS flow matching are all
   mutually exclusive features which cannot be supported together
@@ -270,6 +317,10 @@ These options can be modified in the ``.config`` file.
    64. Default armv8a configuration of make build and meson build set it to 128
    then brings performance degradation.
 
+This option is available in meson:
+
+- ``ibverbs_link`` can be ``static``, ``shared``, or ``dlopen``.
+
 Environment variables
 ~~~~~~~~~~~~~~~~~~~~~
 
@@ -315,9 +366,9 @@ Run-time configuration
 
   Supported on:
 
-  - x86_64 with ConnectX-4, ConnectX-4 LX, ConnectX-5, ConnectX-6, ConnectX-6 DX
+  - x86_64 with ConnectX-4, ConnectX-4 Lx, ConnectX-5, ConnectX-6, ConnectX-6 Dx
     and BlueField.
-  - POWER9 and ARMv8 with ConnectX-4 LX, ConnectX-5, ConnectX-6, ConnectX-6 DX
+  - POWER9 and ARMv8 with ConnectX-4 Lx, ConnectX-5, ConnectX-6, ConnectX-6 Dx
     and BlueField.
 
 - ``rxq_cqe_pad_en`` parameter [int]
@@ -348,9 +399,9 @@ Run-time configuration
 
   Supported on:
 
-  - x86_64 with ConnectX-4, ConnectX-4 LX, ConnectX-5, ConnectX-6, ConnectX-6 DX
+  - x86_64 with ConnectX-4, ConnectX-4 Lx, ConnectX-5, ConnectX-6, ConnectX-6 Dx
     and BlueField.
-  - POWER8 and ARMv8 with ConnectX-4 LX, ConnectX-5, ConnectX-6, ConnectX-6 DX
+  - POWER8 and ARMv8 with ConnectX-4 Lx, ConnectX-5, ConnectX-6, ConnectX-6 Dx
     and BlueField.
 
 - ``mprq_en`` parameter [int]
@@ -453,14 +504,14 @@ Run-time configuration
   If ``txq_inline_min`` key is not present, the value may be queried by the
   driver from the NIC via DevX if this feature is available. If there is no DevX
   enabled/supported the value 18 (supposing L2 header including VLAN) is set
-  for ConnectX-4 and ConnectX-4LX, and 0 is set by default for ConnectX-5
+  for ConnectX-4 and ConnectX-4 Lx, and 0 is set by default for ConnectX-5
   and newer NICs. If packet is shorter the ``txq_inline_min`` value, the entire
   packet is inlined.
 
   For ConnectX-4 NIC, driver does not allow specifying value below 18
   (minimal L2 header, including VLAN), error will be raised.
 
-  For ConnectX-4LX NIC, it is allowed to specify values below 18, but
+  For ConnectX-4 Lx NIC, it is allowed to specify values below 18, but
   it is not recommended and may prevent NIC from sending packets over
   some configurations.
 
@@ -543,7 +594,7 @@ Run-time configuration
 - ``txq_mpw_en`` parameter [int]
 
   A nonzero value enables Enhanced Multi-Packet Write (eMPW) for ConnectX-5,
-  ConnectX-6, ConnectX-6 DX and BlueField. eMPW allows the TX burst function to pack
+  ConnectX-6, ConnectX-6 Dx and BlueField. eMPW allows the TX burst function to pack
   up multiple packets in a single descriptor session in order to save PCI bandwidth
   and improve performance at the cost of a slightly higher CPU usage. When
   ``txq_inline_mpw`` is set along with ``txq_mpw_en``, TX burst function copies
@@ -559,16 +610,17 @@ Run-time configuration
   The rdma core library can map doorbell register in two ways, depending on the
   environment variable "MLX5_SHUT_UP_BF":
 
-  - As regular cached memory, if the variable is either missing or set to zero.
+  - As regular cached memory (usually with write combining attribute), if the
+    variable is either missing or set to zero.
   - As non-cached memory, if the variable is present and set to not "0" value.
 
   The type of mapping may slightly affect the Tx performance, the optimal choice
   is strongly relied on the host architecture and should be deduced practically.
 
   If ``tx_db_nc`` is set to zero, the doorbell is forced to be mapped to regular
-  memory, the PMD will perform the extra write memory barrier after writing to
-  doorbell, it might increase the needed CPU clocks per packet to send, but
-  latency might be improved.
+  memory (with write combining), the PMD will perform the extra write memory barrier
+  after writing to doorbell, it might increase the needed CPU clocks per packet
+  to send, but latency might be improved.
 
   If ``tx_db_nc`` is set to one, the doorbell is forced to be mapped to non
   cached memory, the PMD will not perform the extra write memory barrier
@@ -589,7 +641,7 @@ Run-time configuration
 
 - ``tx_vec_en`` parameter [int]
 
-  A nonzero value enables Tx vector on ConnectX-5, ConnectX-6, ConnectX-6 DX
+  A nonzero value enables Tx vector on ConnectX-5, ConnectX-6, ConnectX-6 Dx
   and BlueField NICs if the number of global Tx queues on the port is less than
   ``txqs_max_vec``. The parameter is deprecated and ignored.
 
@@ -786,6 +838,10 @@ Below are some firmware configurations listed.
 
    FLEX_PARSER_PROFILE_ENABLE=0
 
+- enable GTP flow matching::
+
+   FLEX_PARSER_PROFILE_ENABLE=3
+
 Prerequisites
 -------------
 
@@ -886,7 +942,7 @@ Mellanox OFED/EN
   - ConnectX-5: **16.21.1000** and above.
   - ConnectX-5 Ex: **16.21.1000** and above.
   - ConnectX-6: **20.99.5374** and above.
-  - ConnectX-6 DX: **22.27.0090** and above.
+  - ConnectX-6 Dx: **22.27.0090** and above.
   - BlueField: **18.25.1010** and above.
 
 While these libraries and kernel modules are available on OpenFabrics
@@ -911,28 +967,43 @@ required from that distribution.
 Supported NICs
 --------------
 
-* Mellanox(R) ConnectX(R)-4 10G MCX4111A-XCAT (1x10G)
-* Mellanox(R) ConnectX(R)-4 10G MCX4121A-XCAT (2x10G)
-* Mellanox(R) ConnectX(R)-4 25G MCX4111A-ACAT (1x25G)
-* Mellanox(R) ConnectX(R)-4 25G MCX4121A-ACAT (2x25G)
-* Mellanox(R) ConnectX(R)-4 40G MCX4131A-BCAT (1x40G)
-* Mellanox(R) ConnectX(R)-4 40G MCX413A-BCAT (1x40G)
-* Mellanox(R) ConnectX(R)-4 40G MCX415A-BCAT (1x40G)
-* Mellanox(R) ConnectX(R)-4 50G MCX4131A-GCAT (1x50G)
-* Mellanox(R) ConnectX(R)-4 50G MCX413A-GCAT (1x50G)
-* Mellanox(R) ConnectX(R)-4 50G MCX414A-BCAT (2x50G)
-* Mellanox(R) ConnectX(R)-4 50G MCX415A-GCAT (2x50G)
-* Mellanox(R) ConnectX(R)-4 50G MCX416A-BCAT (2x50G)
-* Mellanox(R) ConnectX(R)-4 50G MCX416A-GCAT (2x50G)
-* Mellanox(R) ConnectX(R)-4 50G MCX415A-CCAT (1x100G)
-* Mellanox(R) ConnectX(R)-4 100G MCX416A-CCAT (2x100G)
-* Mellanox(R) ConnectX(R)-4 Lx 10G MCX4121A-XCAT (2x10G)
-* Mellanox(R) ConnectX(R)-4 Lx 25G MCX4121A-ACAT (2x25G)
-* Mellanox(R) ConnectX(R)-5 100G MCX556A-ECAT (2x100G)
-* Mellanox(R) ConnectX(R)-5 Ex EN 100G MCX516A-CDAT (2x100G)
-* Mellanox(R) ConnectX(R)-6 200G MCX654106A-HCAT (4x200G)
-* Mellanox(R) ConnectX(R)-6DX EN 100G MCX623106AN-CDAT (2*100g)
-* Mellanox(R) ConnectX(R)-6DX EN 200G MCX623105AN-VDAT (1*200g)
+The following Mellanox device families are supported by the same mlx5 driver:
+
+  - ConnectX-4
+  - ConnectX-4 Lx
+  - ConnectX-5
+  - ConnectX-5 Ex
+  - ConnectX-6
+  - ConnectX-6 Dx
+  - BlueField
+
+Below are detailed device names:
+
+* Mellanox\ |reg| ConnectX\ |reg|-4 10G MCX4111A-XCAT (1x10G)
+* Mellanox\ |reg| ConnectX\ |reg|-4 10G MCX412A-XCAT (2x10G)
+* Mellanox\ |reg| ConnectX\ |reg|-4 25G MCX4111A-ACAT (1x25G)
+* Mellanox\ |reg| ConnectX\ |reg|-4 25G MCX412A-ACAT (2x25G)
+* Mellanox\ |reg| ConnectX\ |reg|-4 40G MCX413A-BCAT (1x40G)
+* Mellanox\ |reg| ConnectX\ |reg|-4 40G MCX4131A-BCAT (1x40G)
+* Mellanox\ |reg| ConnectX\ |reg|-4 40G MCX415A-BCAT (1x40G)
+* Mellanox\ |reg| ConnectX\ |reg|-4 50G MCX413A-GCAT (1x50G)
+* Mellanox\ |reg| ConnectX\ |reg|-4 50G MCX4131A-GCAT (1x50G)
+* Mellanox\ |reg| ConnectX\ |reg|-4 50G MCX414A-BCAT (2x50G)
+* Mellanox\ |reg| ConnectX\ |reg|-4 50G MCX415A-GCAT (1x50G)
+* Mellanox\ |reg| ConnectX\ |reg|-4 50G MCX416A-BCAT (2x50G)
+* Mellanox\ |reg| ConnectX\ |reg|-4 50G MCX416A-GCAT (2x50G)
+* Mellanox\ |reg| ConnectX\ |reg|-4 50G MCX415A-CCAT (1x100G)
+* Mellanox\ |reg| ConnectX\ |reg|-4 100G MCX416A-CCAT (2x100G)
+* Mellanox\ |reg| ConnectX\ |reg|-4 Lx 10G MCX4111A-XCAT (1x10G)
+* Mellanox\ |reg| ConnectX\ |reg|-4 Lx 10G MCX4121A-XCAT (2x10G)
+* Mellanox\ |reg| ConnectX\ |reg|-4 Lx 25G MCX4111A-ACAT (1x25G)
+* Mellanox\ |reg| ConnectX\ |reg|-4 Lx 25G MCX4121A-ACAT (2x25G)
+* Mellanox\ |reg| ConnectX\ |reg|-4 Lx 40G MCX4131A-BCAT (1x40G)
+* Mellanox\ |reg| ConnectX\ |reg|-5 100G MCX556A-ECAT (2x100G)
+* Mellanox\ |reg| ConnectX\ |reg|-5 Ex EN 100G MCX516A-CDAT (2x100G)
+* Mellanox\ |reg| ConnectX\ |reg|-6 200G MCX654106A-HCAT (2x200G)
+* Mellanox\ |reg| ConnectX\ |reg|-6 Dx EN 100G MCX623106AN-CDAT (2x100G)
+* Mellanox\ |reg| ConnectX\ |reg|-6 Dx EN 200G MCX623105AN-VDAT (1x200G)
 
 Quick Start Guide on OFED/EN
 ----------------------------
@@ -1153,10 +1224,11 @@ Supported hardware offloads
    | | set_ttl /           | |               | |               |
    | | set_mac_src /       | |               | |               |
    | | set_mac_dst)        | |               | |               |
-   | |                     | |               | |               |
-   | | (of_set_vlan_vid)   | | DPDK 19.11    | | DPDK 19.11    |
-   |                       | | OFED 4.7-1    | | OFED 4.7-1    |
-   |                       | | ConnectX-5    | | ConnectX-5    |
+   +-----------------------+-----------------+-----------------+
+   | | Header rewrite      | | DPDK 20.02    | | DPDK 20.02    |
+   | | (set_dscp)          | | OFED 5.0      | | OFED 5.0      |
+   | |                     | | rdma-core 24  | | rdma-core 24  |
+   | |                     | | ConnectX-5    | | ConnectX-5    |
    +-----------------------+-----------------+-----------------+
    | Jump                  | | DPDK 19.05    | | DPDK 19.02    |
    |                       | | OFED 4.7-1    | | OFED 4.7-1    |
@@ -1176,8 +1248,8 @@ Supported hardware offloads
    | | VLAN                | | DPDK 19.11    | | DPDK 19.11    |
    | | (of_pop_vlan /      | | OFED 4.7-1    | | OFED 4.7-1    |
    | | of_push_vlan /      | | ConnectX-5    | | ConnectX-5    |
-   | | of_set_vlan_pcp /   |                 |                 |
-   | | of_set_vlan_vid)    |                 |                 |
+   | | of_set_vlan_pcp /   | |               | |               |
+   | | of_set_vlan_vid)    | |               | |               |
    +-----------------------+-----------------+-----------------+
    | Hairpin               | |               | | DPDK 19.11    |
    |                       | |     N/A       | | OFED 4.7-3    |
@@ -1314,3 +1386,31 @@ ConnectX-4/ConnectX-5/ConnectX-6/BlueField devices managed by librte_pmd_mlx5.
       Port 3 Link Up - speed 10000 Mbps - full-duplex
       Done
       testpmd>
+
+How to dump flows
+-----------------
+
+This section demonstrates how to dump flows. Currently, it's possible to dump
+all flows with assistance of external tools.
+
+#. 2 ways to get flow raw file:
+
+   - Using testpmd CLI:
+
+   .. code-block:: console
+
+       testpmd> flow dump <port> <output_file>
+
+   - call rte_flow_dev_dump api:
+
+   .. code-block:: console
+
+       rte_flow_dev_dump(port, file, NULL);
+
+#. Dump human-readable flows from raw file:
+
+   Get flow parsing tool from: https://github.com/Mellanox/mlx_steering_dump
+
+   .. code-block:: console
+
+       mlx_steering_dump.py -f <output_file>

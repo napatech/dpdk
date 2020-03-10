@@ -33,3 +33,20 @@ DPDK_20.0 {
 
 	local: *;
 };
+
+DPDK_20.0.1 {
+	global:
+
+	otx2_eth_dev_is_sec_capable;
+	otx2_sec_idev_cfg_init;
+	otx2_sec_idev_tx_cpt_qp_add;
+	otx2_sec_idev_tx_cpt_qp_remove;
+	otx2_sec_idev_tx_cpt_qp_get;
+	otx2_sec_idev_tx_cpt_qp_put;
+} DPDK_20.0;
+
+EXPERIMENTAL {
+	global:
+
+	otx2_logtype_ep;
+};

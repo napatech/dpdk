@@ -6,7 +6,6 @@
 #include <rte_bus_pci.h>
 #include <rte_bus_vdev.h>
 #include <rte_common.h>
-#include <rte_config.h>
 #include <rte_cryptodev.h>
 #include <rte_cryptodev_pmd.h>
 #include <rte_pci.h>
@@ -291,6 +290,9 @@ static struct rte_pci_id ccp_pci_id[] = {
 	},
 	{
 		RTE_PCI_DEVICE(0x1022, 0x1468), /* AMD CCP-5b */
+	},
+	{
+		RTE_PCI_DEVICE(0x1022, 0x15df), /* AMD CCP RV */
 	},
 	{.device_id = 0},
 };

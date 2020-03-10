@@ -6,7 +6,11 @@
 #define _IAVF_ETHDEV_H_
 
 #include <rte_kvargs.h>
-#include "base/iavf_type.h"
+#include <iavf_prototype.h>
+#include <iavf_adminq_cmd.h>
+#include <iavf_type.h>
+
+#include "iavf_log.h"
 
 #define IAVF_AQ_LEN               32
 #define IAVF_AQ_BUF_SZ            4096
@@ -127,6 +131,7 @@ struct iavf_adapter {
 	/* For vector PMD */
 	bool rx_vec_allowed;
 	bool tx_vec_allowed;
+	bool stopped;
 };
 
 /* IAVF_DEV_PRIVATE_TO */
@@ -172,6 +177,17 @@ struct iavf_cmd_info {
 	uint8_t *out_buffer;    /* buffer for response */
 	uint32_t out_size;      /* buffer size for response */
 };
+
+/* notify current command done. Only call in case execute
+ * _atomic_set_cmd successfully.
+ */
+static inline void
+_notify_cmd(struct iavf_info *vf, uint32_t msg_ret)
+{
+	vf->cmd_retval = msg_ret;
+	rte_wmb();
+	vf->pend_cmd = VIRTCHNL_OP_UNKNOWN;
+}
 
 /* clear current command. Only call in case execute
  * _atomic_set_cmd successfully.

@@ -544,6 +544,7 @@ ixgbe_set_vf_lpe(struct rte_eth_dev *dev, __rte_unused uint32_t vf, uint32_t *ms
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint32_t new_mtu = msgbuf[1];
 	uint32_t max_frs;
+	uint32_t hlreg0;
 	int max_frame = new_mtu + RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN;
 
 	/* X540 and X550 support jumbo frames in IOV mode */
@@ -560,6 +561,18 @@ ixgbe_set_vf_lpe(struct rte_eth_dev *dev, __rte_unused uint32_t vf, uint32_t *ms
 	max_frs = (IXGBE_READ_REG(hw, IXGBE_MAXFRS) &
 		   IXGBE_MHADD_MFS_MASK) >> IXGBE_MHADD_MFS_SHIFT;
 	if (max_frs < new_mtu) {
+		hlreg0 = IXGBE_READ_REG(hw, IXGBE_HLREG0);
+		if (new_mtu > RTE_ETHER_MAX_LEN) {
+			dev->data->dev_conf.rxmode.offloads |=
+				DEV_RX_OFFLOAD_JUMBO_FRAME;
+			hlreg0 |= IXGBE_HLREG0_JUMBOEN;
+		} else {
+			dev->data->dev_conf.rxmode.offloads &=
+				~DEV_RX_OFFLOAD_JUMBO_FRAME;
+			hlreg0 &= ~IXGBE_HLREG0_JUMBOEN;
+		}
+		IXGBE_WRITE_REG(hw, IXGBE_HLREG0, hlreg0);
+
 		max_frs = new_mtu << IXGBE_MHADD_MFS_SHIFT;
 		IXGBE_WRITE_REG(hw, IXGBE_MAXFRS, max_frs);
 	}
@@ -749,6 +762,34 @@ out:
 }
 
 static int
+ixgbe_set_vf_macvlan_msg(struct rte_eth_dev *dev, uint32_t vf, uint32_t *msgbuf)
+{
+	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct ixgbe_vf_info *vf_info =
+		*(IXGBE_DEV_PRIVATE_TO_P_VFDATA(dev->data->dev_private));
+	uint8_t *new_mac = (uint8_t *)(&msgbuf[1]);
+	int index = (msgbuf[0] & IXGBE_VT_MSGINFO_MASK) >>
+		    IXGBE_VT_MSGINFO_SHIFT;
+
+	if (index) {
+		if (!rte_is_valid_assigned_ether_addr(
+			(struct rte_ether_addr *)new_mac)) {
+			PMD_DRV_LOG(ERR, "set invalid mac vf:%d\n", vf);
+			return -1;
+		}
+
+		vf_info[vf].mac_count++;
+
+		hw->mac.ops.set_rar(hw, vf_info[vf].mac_count,
+				new_mac, vf, IXGBE_RAH_AV);
+	} else {
+		hw->mac.ops.clear_rar(hw, vf_info[vf].mac_count);
+		vf_info[vf].mac_count = 0;
+	}
+	return 0;
+}
+
+static int
 ixgbe_rcv_msg_from_vf(struct rte_eth_dev *dev, uint16_t vf)
 {
 	uint16_t mbx_size = IXGBE_VFMAILBOX_SIZE;
@@ -834,6 +875,10 @@ ixgbe_rcv_msg_from_vf(struct rte_eth_dev *dev, uint16_t vf)
 	case IXGBE_VF_UPDATE_XCAST_MODE:
 		if (retval == RTE_PMD_IXGBE_MB_EVENT_PROCEED)
 			retval = ixgbe_set_vf_mc_promisc(dev, vf, msgbuf);
+		break;
+	case IXGBE_VF_SET_MACVLAN:
+		if (retval == RTE_PMD_IXGBE_MB_EVENT_PROCEED)
+			retval = ixgbe_set_vf_macvlan_msg(dev, vf, msgbuf);
 		break;
 	default:
 		PMD_DRV_LOG(DEBUG, "Unhandled Msg %8.8x", (unsigned)msgbuf[0]);

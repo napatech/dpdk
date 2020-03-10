@@ -6,7 +6,6 @@
 #ifndef RTE_PMD_MLX5_RXTX_VEC_NEON_H_
 #define RTE_PMD_MLX5_RXTX_VEC_NEON_H_
 
-#include <assert.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
@@ -16,13 +15,14 @@
 #include <rte_mempool.h>
 #include <rte_prefetch.h>
 
+#include <mlx5_prm.h>
+
+#include "mlx5_defs.h"
 #include "mlx5.h"
 #include "mlx5_utils.h"
 #include "mlx5_rxtx.h"
 #include "mlx5_rxtx_vec.h"
 #include "mlx5_autoconf.h"
-#include "mlx5_defs.h"
-#include "mlx5_prm.h"
 
 #pragma GCC diagnostic ignored "-Wcast-qual"
 
@@ -264,8 +264,8 @@ rxq_cq_to_ptype_oflags_v(struct mlx5_rxq_data *rxq,
 	const uint32x4_t cv_mask =
 		vdupq_n_u32(PKT_RX_IP_CKSUM_GOOD | PKT_RX_L4_CKSUM_GOOD |
 			    PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED);
-	const uint64x1_t mbuf_init = vld1_u64(&rxq->mbuf_initializer);
-	const uint64x1_t r32_mask = vcreate_u64(0xffffffff);
+	const uint64x2_t mbuf_init = vld1q_u64
+				((const uint64_t *)&rxq->mbuf_initializer);
 	uint64x2_t rearm0, rearm1, rearm2, rearm3;
 	uint8_t pt_idx0, pt_idx1, pt_idx2, pt_idx3;
 
@@ -326,18 +326,19 @@ rxq_cq_to_ptype_oflags_v(struct mlx5_rxq_data *rxq,
 	/* Merge to ol_flags. */
 	ol_flags = vorrq_u32(ol_flags, cv_flags);
 	/* Merge mbuf_init and ol_flags, and store. */
-	rearm0 = vcombine_u64(mbuf_init,
-			      vshr_n_u64(vget_high_u64(vreinterpretq_u64_u32(
-						       ol_flags)), 32));
-	rearm1 = vcombine_u64(mbuf_init,
-			      vand_u64(vget_high_u64(vreinterpretq_u64_u32(
-						     ol_flags)), r32_mask));
-	rearm2 = vcombine_u64(mbuf_init,
-			      vshr_n_u64(vget_low_u64(vreinterpretq_u64_u32(
-						      ol_flags)), 32));
-	rearm3 = vcombine_u64(mbuf_init,
-			      vand_u64(vget_low_u64(vreinterpretq_u64_u32(
-						    ol_flags)), r32_mask));
+	rearm0 = vreinterpretq_u64_u32(vsetq_lane_u32
+					(vgetq_lane_u32(ol_flags, 3),
+					 vreinterpretq_u32_u64(mbuf_init), 2));
+	rearm1 = vreinterpretq_u64_u32(vsetq_lane_u32
+					(vgetq_lane_u32(ol_flags, 2),
+					 vreinterpretq_u32_u64(mbuf_init), 2));
+	rearm2 = vreinterpretq_u64_u32(vsetq_lane_u32
+					(vgetq_lane_u32(ol_flags, 1),
+					 vreinterpretq_u32_u64(mbuf_init), 2));
+	rearm3 = vreinterpretq_u64_u32(vsetq_lane_u32
+					(vgetq_lane_u32(ol_flags, 0),
+					 vreinterpretq_u32_u64(mbuf_init), 2));
+
 	vst1q_u64((void *)&pkts[0]->rearm_data, rearm0);
 	vst1q_u64((void *)&pkts[1]->rearm_data, rearm1);
 	vst1q_u64((void *)&pkts[2]->rearm_data, rearm2);
@@ -438,8 +439,8 @@ rxq_burst_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts, uint16_t pkts_n,
 	};
 	const uint32x4_t flow_mark_adj = { 0, 0, 0, rxq->mark * (-1) };
 
-	assert(rxq->sges_n == 0);
-	assert(rxq->cqe_n == rxq->elts_n);
+	MLX5_ASSERT(rxq->sges_n == 0);
+	MLX5_ASSERT(rxq->cqe_n == rxq->elts_n);
 	cq = &(*rxq->cqes)[cq_idx];
 	rte_prefetch_non_temporal(cq);
 	rte_prefetch_non_temporal(cq + 1);
@@ -468,7 +469,7 @@ rxq_burst_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts, uint16_t pkts_n,
 	if (!pkts_n)
 		return rcvd_pkt;
 	/* At this point, there shouldn't be any remained packets. */
-	assert(rxq->decompressed == 0);
+	MLX5_ASSERT(rxq->decompressed == 0);
 	/*
 	 * Note that vectors have reverse order - {v3, v2, v1, v0}, because
 	 * there's no instruction to count trailing zeros. __builtin_clzl() is
@@ -726,7 +727,7 @@ rxq_burst_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts, uint16_t pkts_n,
 	if (unlikely(!nocmp_n && comp_idx == MLX5_VPMD_DESCS_PER_LOOP))
 		return rcvd_pkt;
 	/* Update the consumer indexes for non-compressed CQEs. */
-	assert(nocmp_n <= pkts_n);
+	MLX5_ASSERT(nocmp_n <= pkts_n);
 	rxq->cq_ci += nocmp_n;
 	rxq->rq_pi += nocmp_n;
 	rcvd_pkt += nocmp_n;
@@ -736,7 +737,7 @@ rxq_burst_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts, uint16_t pkts_n,
 #endif
 	/* Decompress the last CQE if compressed. */
 	if (comp_idx < MLX5_VPMD_DESCS_PER_LOOP && comp_idx == n) {
-		assert(comp_idx == (nocmp_n % MLX5_VPMD_DESCS_PER_LOOP));
+		MLX5_ASSERT(comp_idx == (nocmp_n % MLX5_VPMD_DESCS_PER_LOOP));
 		rxq->decompressed = rxq_cq_decompress_v(rxq, &cq[nocmp_n],
 							&elts[nocmp_n]);
 		/* Return more packets if needed. */

@@ -6,6 +6,7 @@
 
 #include <rte_cryptodev_pmd.h>
 #include <rte_errno.h>
+#include <rte_ethdev.h>
 
 #include "otx2_cryptodev.h"
 #include "otx2_cryptodev_capabilities.h"
@@ -13,6 +14,7 @@
 #include "otx2_cryptodev_mbox.h"
 #include "otx2_cryptodev_ops.h"
 #include "otx2_mbox.h"
+#include "otx2_sec_idev.h"
 
 #include "cpt_hw_types.h"
 #include "cpt_pmd_logs.h"
@@ -21,6 +23,8 @@
 #include "cpt_ucode_asym.h"
 
 #define METABUF_POOL_CACHE_SIZE	512
+
+static uint64_t otx2_fpm_iova[CPT_EC_ID_PMAX];
 
 /* Forward declarations */
 
@@ -125,6 +129,34 @@ otx2_cpt_metabuf_mempool_destroy(struct otx2_cpt_qp *qp)
 	meta_info->sg_mlen = 0;
 }
 
+static int
+otx2_cpt_qp_inline_cfg(const struct rte_cryptodev *dev, struct otx2_cpt_qp *qp)
+{
+	static rte_atomic16_t port_offset = RTE_ATOMIC16_INIT(-1);
+	uint16_t port_id, nb_ethport = rte_eth_dev_count_avail();
+	int i, ret;
+
+	for (i = 0; i < nb_ethport; i++) {
+		port_id = rte_atomic16_add_return(&port_offset, 1) % nb_ethport;
+		if (otx2_eth_dev_is_sec_capable(&rte_eth_devices[port_id]))
+			break;
+	}
+
+	if (i >= nb_ethport)
+		return 0;
+
+	ret = otx2_cpt_qp_ethdev_bind(dev, qp, port_id);
+	if (ret)
+		return ret;
+
+	/* Publish inline Tx QP to eth dev security */
+	ret = otx2_sec_idev_tx_cpt_qp_add(port_id, qp);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
 static struct otx2_cpt_qp *
 otx2_cpt_qp_create(const struct rte_cryptodev *dev, uint16_t qp_id,
 		   uint8_t group)
@@ -216,7 +248,19 @@ otx2_cpt_qp_create(const struct rte_cryptodev *dev, uint16_t qp_id,
 
 	qp->lf_nq_reg = qp->base + OTX2_CPT_LF_NQ(0);
 
+	ret = otx2_sec_idev_tx_cpt_qp_remove(qp);
+	if (ret && (ret != -ENOENT)) {
+		CPT_LOG_ERR("Could not delete inline configuration");
+		goto mempool_destroy;
+	}
+
 	otx2_cpt_iq_disable(qp);
+
+	ret = otx2_cpt_qp_inline_cfg(dev, qp);
+	if (ret) {
+		CPT_LOG_ERR("Could not configure queue for inline IPsec");
+		goto mempool_destroy;
+	}
 
 	ret = otx2_cpt_iq_enable(dev, qp, group, OTX2_CPT_QUEUE_HI_PRIO,
 				 size_div40);
@@ -242,6 +286,12 @@ otx2_cpt_qp_destroy(const struct rte_cryptodev *dev, struct otx2_cpt_qp *qp)
 	const struct rte_memzone *lf_mem;
 	char name[RTE_MEMZONE_NAMESIZE];
 	int ret;
+
+	ret = otx2_sec_idev_tx_cpt_qp_remove(qp);
+	if (ret && (ret != -ENOENT)) {
+		CPT_LOG_ERR("Could not delete inline configuration");
+		return ret;
+	}
 
 	otx2_cpt_iq_disable(qp);
 
@@ -437,6 +487,17 @@ otx2_cpt_enqueue_asym(struct otx2_cpt_qp *qp,
 		break;
 	case RTE_CRYPTO_ASYM_XFORM_RSA:
 		ret = cpt_enqueue_rsa_op(op, &params, sess);
+		if (unlikely(ret))
+			goto req_fail;
+		break;
+	case RTE_CRYPTO_ASYM_XFORM_ECDSA:
+		ret = cpt_enqueue_ecdsa_op(op, &params, sess, otx2_fpm_iova);
+		if (unlikely(ret))
+			goto req_fail;
+		break;
+	case RTE_CRYPTO_ASYM_XFORM_ECPM:
+		ret = cpt_ecpm_prep(&asym_op->ecpm, &params,
+				    sess->ec_ctx.curveid);
 		if (unlikely(ret))
 			goto req_fail;
 		break;
@@ -641,6 +702,36 @@ otx2_cpt_asym_rsa_op(struct rte_crypto_op *cop, struct cpt_request_info *req,
 	}
 }
 
+static __rte_always_inline void
+otx2_cpt_asym_dequeue_ecdsa_op(struct rte_crypto_ecdsa_op_param *ecdsa,
+			       struct cpt_request_info *req,
+			       struct cpt_asym_ec_ctx *ec)
+{
+	int prime_len = ec_grp[ec->curveid].prime.length;
+
+	if (ecdsa->op_type == RTE_CRYPTO_ASYM_OP_VERIFY)
+		return;
+
+	/* Separate out sign r and s components */
+	memcpy(ecdsa->r.data, req->rptr, prime_len);
+	memcpy(ecdsa->s.data, req->rptr + ROUNDUP8(prime_len), prime_len);
+	ecdsa->r.length = prime_len;
+	ecdsa->s.length = prime_len;
+}
+
+static __rte_always_inline void
+otx2_cpt_asym_dequeue_ecpm_op(struct rte_crypto_ecpm_op_param *ecpm,
+			     struct cpt_request_info *req,
+			     struct cpt_asym_ec_ctx *ec)
+{
+	int prime_len = ec_grp[ec->curveid].prime.length;
+
+	memcpy(ecpm->r.x.data, req->rptr, prime_len);
+	memcpy(ecpm->r.y.data, req->rptr + ROUNDUP8(prime_len), prime_len);
+	ecpm->r.x.length = prime_len;
+	ecpm->r.y.length = prime_len;
+}
+
 static void
 otx2_cpt_asym_post_process(struct rte_crypto_op *cop,
 			   struct cpt_request_info *req)
@@ -659,6 +750,12 @@ otx2_cpt_asym_post_process(struct rte_crypto_op *cop,
 		op->modex.result.length = sess->mod_ctx.modulus.length;
 		memcpy(op->modex.result.data, req->rptr,
 		       op->modex.result.length);
+		break;
+	case RTE_CRYPTO_ASYM_XFORM_ECDSA:
+		otx2_cpt_asym_dequeue_ecdsa_op(&op->ecdsa, req, &sess->ec_ctx);
+		break;
+	case RTE_CRYPTO_ASYM_XFORM_ECPM:
+		otx2_cpt_asym_dequeue_ecpm_op(&op->ecpm, req, &sess->ec_ctx);
 		break;
 	default:
 		CPT_LOG_DP_DEBUG("Invalid crypto xform type");
@@ -824,6 +921,13 @@ otx2_cpt_dev_config(struct rte_cryptodev *dev,
 
 	dev->feature_flags &= ~conf->ff_disable;
 
+	if (dev->feature_flags & RTE_CRYPTODEV_FF_ASYMMETRIC_CRYPTO) {
+		/* Initialize shared FPM table */
+		ret = cpt_fpm_init(otx2_fpm_iova);
+		if (ret)
+			return ret;
+	}
+
 	/* Unregister error interrupts */
 	if (vf->err_intr_registered)
 		otx2_cpt_err_intr_unregister(dev);
@@ -857,12 +961,20 @@ otx2_cpt_dev_config(struct rte_cryptodev *dev,
 		goto queues_detach;
 	}
 
+	ret = otx2_cpt_inline_init(dev);
+	if (ret) {
+		CPT_LOG_ERR("Could not enable inline IPsec");
+		goto intr_unregister;
+	}
+
 	dev->enqueue_burst = otx2_cpt_enqueue_burst;
 	dev->dequeue_burst = otx2_cpt_dequeue_burst;
 
 	rte_mb();
 	return 0;
 
+intr_unregister:
+	otx2_cpt_err_intr_unregister(dev);
 queues_detach:
 	otx2_cpt_queues_detach(dev);
 	return ret;
@@ -881,9 +993,10 @@ otx2_cpt_dev_start(struct rte_cryptodev *dev)
 static void
 otx2_cpt_dev_stop(struct rte_cryptodev *dev)
 {
-	RTE_SET_USED(dev);
-
 	CPT_PMD_INIT_FUNC_TRACE();
+
+	if (dev->feature_flags & RTE_CRYPTODEV_FF_ASYMMETRIC_CRYPTO)
+		cpt_fpm_clear();
 }
 
 static int

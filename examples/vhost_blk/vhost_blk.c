@@ -856,6 +856,7 @@ new_device(int vid)
 				ctrlr->bdev->vid, i,
 				&blk_vq->last_avail_idx,
 				&blk_vq->last_used_idx);
+			assert(ret == 0);
 
 			blk_vq->avail_wrap_counter = blk_vq->last_avail_idx &
 				(1 << 15);
@@ -993,11 +994,7 @@ vhost_blk_ctrlr_construct(const char *ctrlr_name)
 	}
 	snprintf(dev_pathname, sizeof(dev_pathname), "%s/%s", path, ctrlr_name);
 
-	if (access(dev_pathname, F_OK) != -1) {
-		if (unlink(dev_pathname) != 0)
-			rte_exit(EXIT_FAILURE, "Cannot remove %s.\n",
-				 dev_pathname);
-	}
+	unlink(dev_pathname);
 
 	if (rte_vhost_driver_register(dev_pathname, 0) != 0) {
 		fprintf(stderr, "socket %s already exists\n", dev_pathname);
@@ -1040,8 +1037,7 @@ signal_handler(__rte_unused int signum)
 {
 	struct vhost_blk_ctrlr *ctrlr;
 
-	if (access(dev_pathname, F_OK) == 0)
-		unlink(dev_pathname);
+	unlink(dev_pathname);
 
 	if (g_should_stop != -1) {
 		g_should_stop = 1;

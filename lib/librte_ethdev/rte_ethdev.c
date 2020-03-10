@@ -86,7 +86,7 @@ static const struct rte_eth_xstats_name_off rte_stats_strings[] = {
 		rx_nombuf)},
 };
 
-#define RTE_NB_STATS (sizeof(rte_stats_strings) / sizeof(rte_stats_strings[0]))
+#define RTE_NB_STATS RTE_DIM(rte_stats_strings)
 
 static const struct rte_eth_xstats_name_off rte_rxq_stats_strings[] = {
 	{"packets", offsetof(struct rte_eth_stats, q_ipackets)},
@@ -94,15 +94,13 @@ static const struct rte_eth_xstats_name_off rte_rxq_stats_strings[] = {
 	{"errors", offsetof(struct rte_eth_stats, q_errors)},
 };
 
-#define RTE_NB_RXQ_STATS (sizeof(rte_rxq_stats_strings) /	\
-		sizeof(rte_rxq_stats_strings[0]))
+#define RTE_NB_RXQ_STATS RTE_DIM(rte_rxq_stats_strings)
 
 static const struct rte_eth_xstats_name_off rte_txq_stats_strings[] = {
 	{"packets", offsetof(struct rte_eth_stats, q_opackets)},
 	{"bytes", offsetof(struct rte_eth_stats, q_obytes)},
 };
-#define RTE_NB_TXQ_STATS (sizeof(rte_txq_stats_strings) /	\
-		sizeof(rte_txq_stats_strings[0]))
+#define RTE_NB_TXQ_STATS RTE_DIM(rte_txq_stats_strings)
 
 #define RTE_RX_OFFLOAD_BIT2STR(_name)	\
 	{ DEV_RX_OFFLOAD_##_name, #_name }
@@ -2968,6 +2966,7 @@ rte_eth_dev_info_get(uint16_t port_id, struct rte_eth_dev_info *dev_info)
 	 * return status and does not know if get is successful or not.
 	 */
 	memset(dev_info, 0, sizeof(struct rte_eth_dev_info));
+	dev_info->switch_info.domain_id = RTE_ETH_DEV_SWITCH_DOMAIN_ID_INVALID;
 
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
@@ -3253,53 +3252,53 @@ rte_eth_dev_set_vlan_offload(uint16_t port_id, int offload_mask)
 	int mask = 0;
 	int cur, org = 0;
 	uint64_t orig_offloads;
-	uint64_t *dev_offloads;
+	uint64_t dev_offloads;
 
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
 	/* save original values in case of failure */
 	orig_offloads = dev->data->dev_conf.rxmode.offloads;
-	dev_offloads = &dev->data->dev_conf.rxmode.offloads;
+	dev_offloads = orig_offloads;
 
 	/*check which option changed by application*/
 	cur = !!(offload_mask & ETH_VLAN_STRIP_OFFLOAD);
-	org = !!(*dev_offloads & DEV_RX_OFFLOAD_VLAN_STRIP);
+	org = !!(dev_offloads & DEV_RX_OFFLOAD_VLAN_STRIP);
 	if (cur != org) {
 		if (cur)
-			*dev_offloads |= DEV_RX_OFFLOAD_VLAN_STRIP;
+			dev_offloads |= DEV_RX_OFFLOAD_VLAN_STRIP;
 		else
-			*dev_offloads &= ~DEV_RX_OFFLOAD_VLAN_STRIP;
+			dev_offloads &= ~DEV_RX_OFFLOAD_VLAN_STRIP;
 		mask |= ETH_VLAN_STRIP_MASK;
 	}
 
 	cur = !!(offload_mask & ETH_VLAN_FILTER_OFFLOAD);
-	org = !!(*dev_offloads & DEV_RX_OFFLOAD_VLAN_FILTER);
+	org = !!(dev_offloads & DEV_RX_OFFLOAD_VLAN_FILTER);
 	if (cur != org) {
 		if (cur)
-			*dev_offloads |= DEV_RX_OFFLOAD_VLAN_FILTER;
+			dev_offloads |= DEV_RX_OFFLOAD_VLAN_FILTER;
 		else
-			*dev_offloads &= ~DEV_RX_OFFLOAD_VLAN_FILTER;
+			dev_offloads &= ~DEV_RX_OFFLOAD_VLAN_FILTER;
 		mask |= ETH_VLAN_FILTER_MASK;
 	}
 
 	cur = !!(offload_mask & ETH_VLAN_EXTEND_OFFLOAD);
-	org = !!(*dev_offloads & DEV_RX_OFFLOAD_VLAN_EXTEND);
+	org = !!(dev_offloads & DEV_RX_OFFLOAD_VLAN_EXTEND);
 	if (cur != org) {
 		if (cur)
-			*dev_offloads |= DEV_RX_OFFLOAD_VLAN_EXTEND;
+			dev_offloads |= DEV_RX_OFFLOAD_VLAN_EXTEND;
 		else
-			*dev_offloads &= ~DEV_RX_OFFLOAD_VLAN_EXTEND;
+			dev_offloads &= ~DEV_RX_OFFLOAD_VLAN_EXTEND;
 		mask |= ETH_VLAN_EXTEND_MASK;
 	}
 
 	cur = !!(offload_mask & ETH_QINQ_STRIP_OFFLOAD);
-	org = !!(*dev_offloads & DEV_RX_OFFLOAD_QINQ_STRIP);
+	org = !!(dev_offloads & DEV_RX_OFFLOAD_QINQ_STRIP);
 	if (cur != org) {
 		if (cur)
-			*dev_offloads |= DEV_RX_OFFLOAD_QINQ_STRIP;
+			dev_offloads |= DEV_RX_OFFLOAD_QINQ_STRIP;
 		else
-			*dev_offloads &= ~DEV_RX_OFFLOAD_QINQ_STRIP;
+			dev_offloads &= ~DEV_RX_OFFLOAD_QINQ_STRIP;
 		mask |= ETH_QINQ_STRIP_MASK;
 	}
 
@@ -3308,10 +3307,11 @@ rte_eth_dev_set_vlan_offload(uint16_t port_id, int offload_mask)
 		return ret;
 
 	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->vlan_offload_set, -ENOTSUP);
+	dev->data->dev_conf.rxmode.offloads = dev_offloads;
 	ret = (*dev->dev_ops->vlan_offload_set)(dev, mask);
 	if (ret) {
 		/* hit an error restore  original values */
-		*dev_offloads = orig_offloads;
+		dev->data->dev_conf.rxmode.offloads = orig_offloads;
 	}
 
 	return eth_err(port_id, ret);
@@ -4039,7 +4039,7 @@ rte_eth_dev_callback_unregister(uint16_t port_id,
 			next = TAILQ_NEXT(cb, next);
 
 			if (cb->cb_fn != cb_fn || cb->event != event ||
-			    (cb->cb_arg != (void *)-1 && cb->cb_arg != cb_arg))
+			    (cb_arg != (void *)-1 && cb->cb_arg != cb_arg))
 				continue;
 
 			/*
@@ -5064,8 +5064,7 @@ rte_eth_switch_domain_alloc(uint16_t *domain_id)
 
 	*domain_id = RTE_ETH_DEV_SWITCH_DOMAIN_ID_INVALID;
 
-	for (i = RTE_ETH_DEV_SWITCH_DOMAIN_ID_INVALID + 1;
-		i < RTE_MAX_ETHPORTS; i++) {
+	for (i = 0; i < RTE_MAX_ETHPORTS; i++) {
 		if (rte_eth_switch_domains[i].state ==
 			RTE_ETH_SWITCH_DOMAIN_UNUSED) {
 			rte_eth_switch_domains[i].state =

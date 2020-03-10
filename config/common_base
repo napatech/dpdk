@@ -110,6 +110,11 @@ CONFIG_RTE_MAX_VFIO_CONTAINERS=64
 CONFIG_RTE_MALLOC_DEBUG=n
 CONFIG_RTE_EAL_NUMA_AWARE_HUGEPAGES=n
 CONFIG_RTE_USE_LIBBSD=n
+# Use WFE instructions to implement the rte_wait_for_equal_xxx APIs,
+# calling these APIs put the cores in low power state while waiting
+# for the memory address to become equal to the expected value.
+# This is supported only by aarch64.
+CONFIG_RTE_ARM_USE_WFE=n
 
 #
 # Recognize/ignore the AVX/AVX512 CPU flags for performance/power testing.
@@ -288,6 +293,11 @@ CONFIG_RTE_LIBRTE_HINIC_PMD=n
 CONFIG_RTE_LIBRTE_HNS3_PMD=n
 
 #
+# Compile Pensando IONIC PMD driver
+#
+CONFIG_RTE_LIBRTE_IONIC_PMD=y
+
+#
 # Compile burst-oriented IXGBE PMD driver
 #
 CONFIG_RTE_LIBRTE_IXGBE_PMD=y
@@ -295,7 +305,6 @@ CONFIG_RTE_LIBRTE_IXGBE_DEBUG_RX=n
 CONFIG_RTE_LIBRTE_IXGBE_DEBUG_TX=n
 CONFIG_RTE_LIBRTE_IXGBE_DEBUG_TX_FREE=n
 CONFIG_RTE_LIBRTE_IXGBE_PF_DISABLE_STRIP_CRC=n
-CONFIG_RTE_IXGBE_INC_VECTOR=y
 CONFIG_RTE_LIBRTE_IXGBE_BYPASS=n
 
 #
@@ -352,10 +361,15 @@ CONFIG_RTE_LIBRTE_MLX4_DEBUG=n
 
 #
 # Compile burst-oriented Mellanox ConnectX-4, ConnectX-5,
-# ConnectX-6 & Bluefield (MLX5) PMD
+# ConnectX-6 & BlueField (MLX5) PMD
 #
 CONFIG_RTE_LIBRTE_MLX5_PMD=n
 CONFIG_RTE_LIBRTE_MLX5_DEBUG=n
+
+#
+# Compile vdpa-oriented Mellanox ConnectX-6 & BlueField (MLX5) PMD
+#
+CONFIG_RTE_LIBRTE_MLX5_VDPA_PMD=n
 
 # Linking method for mlx4/5 dependency on ibverbs and related libraries
 # Default linking is dynamic by linker.
@@ -803,6 +817,11 @@ CONFIG_RTE_LIBRTE_PMD_IOAT_RAWDEV=y
 # Compile PMD for octeontx2 DMA raw device
 #
 CONFIG_RTE_LIBRTE_PMD_OCTEONTX2_DMA_RAWDEV=y
+
+#
+# Compile PMD for octeontx2 EP raw device
+#
+CONFIG_RTE_LIBRTE_PMD_OCTEONTX2_EP_RAWDEV=y
 
 #
 # Compile PMD for NTB raw device

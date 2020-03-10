@@ -67,12 +67,21 @@ int
 parse_range(const char *token, uint16_t *low, uint16_t *high);
 
 void
+sp4_sort_arr(void);
+
+void
 parse_sp4_tokens(char **tokens, uint32_t n_tokens,
 	struct parse_status *status);
 
 void
+sp6_sort_arr(void);
+
+void
 parse_sp6_tokens(char **tokens, uint32_t n_tokens,
 	struct parse_status *status);
+
+void
+sa_sort_arr(void);
 
 void
 parse_sa_tokens(char **tokens, uint32_t n_tokens,

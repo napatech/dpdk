@@ -10,10 +10,12 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <limits.h>
-#include <assert.h>
 #include <errno.h>
 
+#include <mlx5_common.h>
+
 #include "mlx5_defs.h"
+
 
 /*
  * Compilation workaround for PPC64 when AltiVec is fully enabled, e.g. std=c11.
@@ -25,105 +27,19 @@
 #define bool _Bool
 #endif
 
-/* Bit-field manipulation. */
-#define BITFIELD_DECLARE(bf, type, size) \
-	type bf[(((size_t)(size) / (sizeof(type) * CHAR_BIT)) + \
-		 !!((size_t)(size) % (sizeof(type) * CHAR_BIT)))]
-#define BITFIELD_DEFINE(bf, type, size) \
-	BITFIELD_DECLARE((bf), type, (size)) = { 0 }
-#define BITFIELD_SET(bf, b) \
-	(assert((size_t)(b) < (sizeof(bf) * CHAR_BIT)), \
-	 (void)((bf)[((b) / (sizeof((bf)[0]) * CHAR_BIT))] |= \
-		((size_t)1 << ((b) % (sizeof((bf)[0]) * CHAR_BIT)))))
-#define BITFIELD_RESET(bf, b) \
-	(assert((size_t)(b) < (sizeof(bf) * CHAR_BIT)), \
-	 (void)((bf)[((b) / (sizeof((bf)[0]) * CHAR_BIT))] &= \
-		~((size_t)1 << ((b) % (sizeof((bf)[0]) * CHAR_BIT)))))
-#define BITFIELD_ISSET(bf, b) \
-	(assert((size_t)(b) < (sizeof(bf) * CHAR_BIT)), \
-	 !!(((bf)[((b) / (sizeof((bf)[0]) * CHAR_BIT))] & \
-	     ((size_t)1 << ((b) % (sizeof((bf)[0]) * CHAR_BIT))))))
-
 /* Convert a bit number to the corresponding 64-bit mask */
 #define MLX5_BITSHIFT(v) (UINT64_C(1) << (v))
 
 /* Save and restore errno around argument evaluation. */
 #define ERRNO_SAFE(x) ((errno = (int []){ errno, ((x), 0) }[0]))
 
-/*
- * Helper macros to work around __VA_ARGS__ limitations in a C99 compliant
- * manner.
- */
-#define PMD_DRV_LOG_STRIP(a, b) a
-#define PMD_DRV_LOG_OPAREN (
-#define PMD_DRV_LOG_CPAREN )
-#define PMD_DRV_LOG_COMMA ,
-
-/* Return the file name part of a path. */
-static inline const char *
-pmd_drv_log_basename(const char *s)
-{
-	const char *n = s;
-
-	while (*n)
-		if (*(n++) == '/')
-			s = n;
-	return s;
-}
-
 extern int mlx5_logtype;
-
-#define PMD_DRV_LOG___(level, ...) \
-	rte_log(RTE_LOG_ ## level, \
-		mlx5_logtype, \
-		RTE_FMT(MLX5_DRIVER_NAME ": " \
-			RTE_FMT_HEAD(__VA_ARGS__,), \
-		RTE_FMT_TAIL(__VA_ARGS__,)))
-
-/*
- * When debugging is enabled (NDEBUG not defined), file, line and function
- * information replace the driver name (MLX5_DRIVER_NAME) in log messages.
- */
-#ifndef NDEBUG
-
-#define PMD_DRV_LOG__(level, ...) \
-	PMD_DRV_LOG___(level, "%s:%u: %s(): " __VA_ARGS__)
-#define PMD_DRV_LOG_(level, s, ...) \
-	PMD_DRV_LOG__(level, \
-		s "\n" PMD_DRV_LOG_COMMA \
-		pmd_drv_log_basename(__FILE__) PMD_DRV_LOG_COMMA \
-		__LINE__ PMD_DRV_LOG_COMMA \
-		__func__, \
-		__VA_ARGS__)
-
-#else /* NDEBUG */
-#define PMD_DRV_LOG__(level, ...) \
-	PMD_DRV_LOG___(level, __VA_ARGS__)
-#define PMD_DRV_LOG_(level, s, ...) \
-	PMD_DRV_LOG__(level, s "\n", __VA_ARGS__)
-
-#endif /* NDEBUG */
 
 /* Generic printf()-like logging macro with automatic line feed. */
 #define DRV_LOG(level, ...) \
-	PMD_DRV_LOG_(level, \
+	PMD_DRV_LOG_(level, mlx5_logtype, MLX5_DRIVER_NAME, \
 		__VA_ARGS__ PMD_DRV_LOG_STRIP PMD_DRV_LOG_OPAREN, \
 		PMD_DRV_LOG_CPAREN)
-
-/* claim_zero() does not perform any check when debugging is disabled. */
-#ifndef NDEBUG
-
-#define DEBUG(...) DRV_LOG(DEBUG, __VA_ARGS__)
-#define claim_zero(...) assert((__VA_ARGS__) == 0)
-#define claim_nonzero(...) assert((__VA_ARGS__) != 0)
-
-#else /* NDEBUG */
-
-#define DEBUG(...) (void)0
-#define claim_zero(...) (__VA_ARGS__)
-#define claim_nonzero(...) (__VA_ARGS__)
-
-#endif /* NDEBUG */
 
 #define INFO(...) DRV_LOG(INFO, __VA_ARGS__)
 #define WARN(...) DRV_LOG(WARNING, __VA_ARGS__)
@@ -143,12 +59,6 @@ extern int mlx5_logtype;
 	(((from) >= (to)) ? \
 	 (((val) & (from)) / ((from) / (to))) : \
 	 (((val) & (from)) * ((to) / (from))))
-
-/* Allocate a buffer on the stack and fill it with a printf format string. */
-#define MKSTR(name, ...) \
-	char name[snprintf(NULL, 0, __VA_ARGS__) + 1]; \
-	\
-	snprintf(name, sizeof(name), __VA_ARGS__)
 
 /**
  * Return logarithm of the nearest power of two above input value.

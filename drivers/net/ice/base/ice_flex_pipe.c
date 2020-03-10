@@ -3069,7 +3069,8 @@ ice_free_prof_mask(struct ice_hw *hw, enum ice_block blk, u16 mask_idx)
 	hw->blk[blk].masks.masks[mask_idx].idx = 0;
 
 	/* update mask as unused entry */
-	ice_debug(hw, ICE_DBG_PKG, "Free mask, blk %d, mask %d", blk, mask_idx);
+	ice_debug(hw, ICE_DBG_PKG, "Free mask, blk %d, mask %d\n", blk,
+		  mask_idx);
 	ice_write_prof_mask_reg(hw, blk, mask_idx, 0, 0);
 
 exit_ice_free_prof_mask:
@@ -3618,6 +3619,61 @@ static void ice_init_flow_profs(struct ice_hw *hw, u8 blk_idx)
 }
 
 /**
+ * ice_clear_hw_tbls - clear HW tables and flow profiles
+ * @hw: pointer to the hardware structure
+ */
+void ice_clear_hw_tbls(struct ice_hw *hw)
+{
+	u8 i;
+
+	for (i = 0; i < ICE_BLK_COUNT; i++) {
+		struct ice_prof_redir *prof_redir = &hw->blk[i].prof_redir;
+		struct ice_prof_tcam *prof = &hw->blk[i].prof;
+		struct ice_xlt1 *xlt1 = &hw->blk[i].xlt1;
+		struct ice_xlt2 *xlt2 = &hw->blk[i].xlt2;
+		struct ice_es *es = &hw->blk[i].es;
+
+		if (hw->blk[i].is_list_init) {
+			ice_free_prof_map(hw, i);
+			ice_free_flow_profs(hw, i);
+		}
+
+		ice_free_vsig_tbl(hw, (enum ice_block)i);
+
+		ice_memset(xlt1->ptypes, 0, xlt1->count * sizeof(*xlt1->ptypes),
+			   ICE_NONDMA_MEM);
+		ice_memset(xlt1->ptg_tbl, 0,
+			   ICE_MAX_PTGS * sizeof(*xlt1->ptg_tbl),
+			   ICE_NONDMA_MEM);
+		ice_memset(xlt1->t, 0, xlt1->count * sizeof(*xlt1->t),
+			   ICE_NONDMA_MEM);
+
+		ice_memset(xlt2->vsis, 0, xlt2->count * sizeof(*xlt2->vsis),
+			   ICE_NONDMA_MEM);
+		ice_memset(xlt2->vsig_tbl, 0,
+			   xlt2->count * sizeof(*xlt2->vsig_tbl),
+			   ICE_NONDMA_MEM);
+		ice_memset(xlt2->t, 0, xlt2->count * sizeof(*xlt2->t),
+			   ICE_NONDMA_MEM);
+
+		ice_memset(prof->t, 0, prof->count * sizeof(*prof->t),
+			   ICE_NONDMA_MEM);
+		ice_memset(prof_redir->t, 0,
+			   prof_redir->count * sizeof(*prof_redir->t),
+			   ICE_NONDMA_MEM);
+
+		ice_memset(es->t, 0, es->count * sizeof(*es->t),
+			   ICE_NONDMA_MEM);
+		ice_memset(es->ref_count, 0, es->count * sizeof(*es->ref_count),
+			   ICE_NONDMA_MEM);
+		ice_memset(es->written, 0, es->count * sizeof(*es->written),
+			   ICE_NONDMA_MEM);
+		ice_memset(es->mask_ena, 0, es->count * sizeof(*es->mask_ena),
+			   ICE_NONDMA_MEM);
+	}
+}
+
+/**
  * ice_init_hw_tbls - init hardware table memory
  * @hw: pointer to the hardware structure
  */
@@ -4118,7 +4174,7 @@ ice_upd_prof_hw(struct ice_hw *hw, enum ice_block blk,
 	/* update package */
 	status = ice_update_pkg(hw, ice_pkg_buf(b), 1);
 	if (status == ICE_ERR_AQ_ERROR)
-		ice_debug(hw, ICE_DBG_INIT, "Unable to update HW profile.");
+		ice_debug(hw, ICE_DBG_INIT, "Unable to update HW profile\n");
 
 error_tmp:
 	ice_pkg_buf_free(hw, b);
@@ -5172,7 +5228,7 @@ ice_adj_prof_priorities(struct ice_hw *hw, enum ice_block blk, u16 vsig,
  * @blk: hardware block
  * @vsig: the VSIG to which this profile is to be added
  * @hdl: the profile handle indicating the profile to add
- * @rev: true to reverse the additions to the list
+ * @rev: true to add entries to the end of the list
  * @chg: the change list
  */
 static enum ice_status
@@ -5324,6 +5380,7 @@ err_ice_create_prof_id_vsig:
  * @blk: hardware block
  * @vsi: the initial VSI that will be in VSIG
  * @lst: the list of profile that will be added to the VSIG
+ * @new_vsig: return of new vsig
  * @chg: the change list
  */
 static enum ice_status

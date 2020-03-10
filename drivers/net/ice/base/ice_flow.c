@@ -586,10 +586,6 @@ ice_flow_proc_seg_hdrs(struct ice_flow_prof_params *params)
 			src = (const ice_bitmap_t *)ice_ptypes_gtpc_tid;
 			ice_and_bitmap(params->ptypes, params->ptypes,
 				       src, ICE_FLOW_PTYPE_MAX);
-		} else if (hdrs & ICE_FLOW_SEG_HDR_GTPU) {
-			src = (const ice_bitmap_t *)ice_ptypes_gtpu;
-			ice_and_bitmap(params->ptypes, params->ptypes,
-				       src, ICE_FLOW_PTYPE_MAX);
 		} else if (hdrs & ICE_FLOW_SEG_HDR_GTPU_EH) {
 			src = (const ice_bitmap_t *)ice_ptypes_gtpu;
 			ice_and_bitmap(params->ptypes, params->ptypes,
@@ -598,6 +594,10 @@ ice_flow_proc_seg_hdrs(struct ice_flow_prof_params *params)
 			/* Attributes for GTP packet with Extension Header */
 			params->attr = ice_attr_gtpu_eh;
 			params->attr_cnt = ARRAY_SIZE(ice_attr_gtpu_eh);
+		} else if (hdrs & ICE_FLOW_SEG_HDR_GTPU_IP) {
+			src = (const ice_bitmap_t *)ice_ptypes_gtpu;
+			ice_and_bitmap(params->ptypes, params->ptypes,
+				       src, ICE_FLOW_PTYPE_MAX);
 		}
 	}
 
@@ -868,20 +868,11 @@ ice_flow_xtract_raws(struct ice_hw *hw, struct ice_flow_prof_params *params,
 
 		raw = &params->prof->segs[seg].raws[i];
 
-		/* Only support matching raw fields in the payload */
-		if (raw->off < hdrs_sz)
-			return ICE_ERR_PARAM;
-
-		/* Convert the segment-relative offset into payload-relative
-		 * offset.
-		 */
-		off = raw->off - hdrs_sz;
-
 		/* Storing extraction information */
-		raw->info.xtrct.prot_id = ICE_PROT_PAY;
-		raw->info.xtrct.off = (off / ICE_FLOW_FV_EXTRACT_SZ) *
+		raw->info.xtrct.prot_id = ICE_PROT_MAC_OF_OR_S;
+		raw->info.xtrct.off = (raw->off / ICE_FLOW_FV_EXTRACT_SZ) *
 			ICE_FLOW_FV_EXTRACT_SZ;
-		raw->info.xtrct.disp = (off % ICE_FLOW_FV_EXTRACT_SZ) *
+		raw->info.xtrct.disp = (raw->off % ICE_FLOW_FV_EXTRACT_SZ) *
 			BITS_PER_BYTE;
 		raw->info.xtrct.idx = params->es_cnt;
 
@@ -909,7 +900,7 @@ ice_flow_xtract_raws(struct ice_hw *hw, struct ice_flow_prof_params *params,
 			else
 				idx = params->es_cnt;
 
-			params->es[idx].prot_id = ICE_PROT_PAY;
+			params->es[idx].prot_id = raw->info.xtrct.prot_id;
 			params->es[idx].off = off;
 			params->es_cnt++;
 			off += ICE_FLOW_FV_EXTRACT_SZ;

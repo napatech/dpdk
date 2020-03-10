@@ -224,14 +224,19 @@ hns3_handle_action_queue(struct rte_eth_dev *dev,
 			 struct rte_flow_error *error)
 {
 	struct hns3_adapter *hns = dev->data->dev_private;
-	struct hns3_hw *hw = &hns->hw;
 	const struct rte_flow_action_queue *queue;
+	struct hns3_hw *hw = &hns->hw;
 
 	queue = (const struct rte_flow_action_queue *)action->conf;
-	if (queue->index >= hw->data->nb_rx_queues)
+	if (queue->index >= hw->used_rx_queues) {
+		hns3_err(hw, "queue ID(%d) is greater than number of "
+			  "available queue (%d) in driver.",
+			  queue->index, hw->used_rx_queues);
 		return rte_flow_error_set(error, EINVAL,
 					  RTE_FLOW_ERROR_TYPE_ACTION, action,
 					  "Invalid queue ID in PF");
+	}
+
 	rule->queue_id = queue->index;
 	rule->action = HNS3_FD_ACTION_ACCEPT_PACKET;
 	return 0;
@@ -1882,8 +1887,6 @@ hns3_dev_filter_ctrl(struct rte_eth_dev *dev, enum rte_filter_type filter_type,
 	struct hns3_hw *hw;
 	int ret = 0;
 
-	if (dev == NULL)
-		return -EINVAL;
 	hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	switch (filter_type) {
 	case RTE_ETH_FILTER_GENERIC:

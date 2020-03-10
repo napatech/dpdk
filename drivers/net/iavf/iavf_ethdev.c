@@ -25,11 +25,6 @@
 #include <rte_memzone.h>
 #include <rte_dev.h>
 
-#include "iavf_log.h"
-#include "base/iavf_prototype.h"
-#include "base/iavf_adminq_cmd.h"
-#include "base/iavf_type.h"
-
 #include "iavf.h"
 #include "iavf_rxtx.h"
 
@@ -323,9 +318,10 @@ static int iavf_config_rx_queues_irqs(struct rte_eth_dev *dev,
 		    VIRTCHNL_VF_OFFLOAD_WB_ON_ITR) {
 			/* If WB_ON_ITR supports, enable it */
 			vf->msix_base = IAVF_RX_VEC_START;
-			IAVF_WRITE_REG(hw, IAVFINT_DYN_CTLN1(vf->msix_base - 1),
-				      IAVFINT_DYN_CTLN1_ITR_INDX_MASK |
-				      IAVFINT_DYN_CTLN1_WB_ON_ITR_MASK);
+			IAVF_WRITE_REG(hw,
+				       IAVF_VFINT_DYN_CTLN1(vf->msix_base - 1),
+				       IAVF_VFINT_DYN_CTLN1_ITR_INDX_MASK |
+				       IAVF_VFINT_DYN_CTLN1_WB_ON_ITR_MASK);
 		} else {
 			/* If no WB_ON_ITR offload flags, need to set
 			 * interrupt for descriptor write back.
@@ -335,12 +331,12 @@ static int iavf_config_rx_queues_irqs(struct rte_eth_dev *dev,
 			/* set ITR to max */
 			interval = iavf_calc_itr_interval(
 					IAVF_QUEUE_ITR_INTERVAL_MAX);
-			IAVF_WRITE_REG(hw, IAVFINT_DYN_CTL01,
-				      IAVFINT_DYN_CTL01_INTENA_MASK |
-				      (IAVF_ITR_INDEX_DEFAULT <<
-				       IAVFINT_DYN_CTL01_ITR_INDX_SHIFT) |
-				      (interval <<
-				       IAVFINT_DYN_CTL01_INTERVAL_SHIFT));
+			IAVF_WRITE_REG(hw, IAVF_VFINT_DYN_CTL01,
+				       IAVF_VFINT_DYN_CTL01_INTENA_MASK |
+				       (IAVF_ITR_INDEX_DEFAULT <<
+					IAVF_VFINT_DYN_CTL01_ITR_INDX_SHIFT) |
+				       (interval <<
+					IAVF_VFINT_DYN_CTL01_INTERVAL_SHIFT));
 		}
 		IAVF_WRITE_FLUSH(hw);
 		/* map all queues to the same interrupt */
@@ -420,12 +416,11 @@ iavf_dev_start(struct rte_eth_dev *dev)
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
-	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct rte_intr_handle *intr_handle = dev->intr_handle;
 
 	PMD_INIT_FUNC_TRACE();
 
-	hw->adapter_stopped = 0;
+	adapter->stopped = 0;
 
 	vf->max_pkt_len = dev->data->dev_conf.rxmode.max_rx_pkt_len;
 	vf->num_queue_pairs = RTE_MAX(dev->data->nb_rx_queues,
@@ -459,7 +454,7 @@ iavf_dev_start(struct rte_eth_dev *dev)
 	}
 
 	/* Set all mac addrs */
-	iavf_add_del_all_mac_addr(adapter, TRUE);
+	iavf_add_del_all_mac_addr(adapter, true);
 
 	if (iavf_start_queues(dev) != 0) {
 		PMD_DRV_LOG(ERR, "enable queues failed");
@@ -469,7 +464,7 @@ iavf_dev_start(struct rte_eth_dev *dev)
 	return 0;
 
 err_mac:
-	iavf_add_del_all_mac_addr(adapter, FALSE);
+	iavf_add_del_all_mac_addr(adapter, false);
 err_queue:
 err_rss:
 	return -1;
@@ -480,12 +475,11 @@ iavf_dev_stop(struct rte_eth_dev *dev)
 {
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
-	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct rte_intr_handle *intr_handle = dev->intr_handle;
 
 	PMD_INIT_FUNC_TRACE();
 
-	if (hw->adapter_stopped == 1)
+	if (adapter->stopped == 1)
 		return;
 
 	iavf_stop_queues(dev);
@@ -499,8 +493,8 @@ iavf_dev_stop(struct rte_eth_dev *dev)
 	}
 
 	/* remove all mac addrs */
-	iavf_add_del_all_mac_addr(adapter, FALSE);
-	hw->adapter_stopped = 1;
+	iavf_add_del_all_mac_addr(adapter, false);
+	adapter->stopped = 1;
 }
 
 static int
@@ -654,9 +648,9 @@ iavf_dev_promiscuous_enable(struct rte_eth_dev *dev)
 	if (vf->promisc_unicast_enabled)
 		return 0;
 
-	ret = iavf_config_promisc(adapter, TRUE, vf->promisc_multicast_enabled);
+	ret = iavf_config_promisc(adapter, true, vf->promisc_multicast_enabled);
 	if (!ret)
-		vf->promisc_unicast_enabled = TRUE;
+		vf->promisc_unicast_enabled = true;
 	else
 		ret = -EAGAIN;
 
@@ -674,9 +668,10 @@ iavf_dev_promiscuous_disable(struct rte_eth_dev *dev)
 	if (!vf->promisc_unicast_enabled)
 		return 0;
 
-	ret = iavf_config_promisc(adapter, FALSE, vf->promisc_multicast_enabled);
+	ret = iavf_config_promisc(adapter, false,
+				  vf->promisc_multicast_enabled);
 	if (!ret)
-		vf->promisc_unicast_enabled = FALSE;
+		vf->promisc_unicast_enabled = false;
 	else
 		ret = -EAGAIN;
 
@@ -694,9 +689,9 @@ iavf_dev_allmulticast_enable(struct rte_eth_dev *dev)
 	if (vf->promisc_multicast_enabled)
 		return 0;
 
-	ret = iavf_config_promisc(adapter, vf->promisc_unicast_enabled, TRUE);
+	ret = iavf_config_promisc(adapter, vf->promisc_unicast_enabled, true);
 	if (!ret)
-		vf->promisc_multicast_enabled = TRUE;
+		vf->promisc_multicast_enabled = true;
 	else
 		ret = -EAGAIN;
 
@@ -714,9 +709,9 @@ iavf_dev_allmulticast_disable(struct rte_eth_dev *dev)
 	if (!vf->promisc_multicast_enabled)
 		return 0;
 
-	ret = iavf_config_promisc(adapter, vf->promisc_unicast_enabled, FALSE);
+	ret = iavf_config_promisc(adapter, vf->promisc_unicast_enabled, false);
 	if (!ret)
-		vf->promisc_multicast_enabled = FALSE;
+		vf->promisc_multicast_enabled = false;
 	else
 		ret = -EAGAIN;
 
@@ -738,7 +733,7 @@ iavf_dev_add_mac_addr(struct rte_eth_dev *dev, struct rte_ether_addr *addr,
 		return -EINVAL;
 	}
 
-	err = iavf_add_del_eth_addr(adapter, addr, TRUE);
+	err = iavf_add_del_eth_addr(adapter, addr, true);
 	if (err) {
 		PMD_DRV_LOG(ERR, "fail to add MAC address");
 		return -EIO;
@@ -760,7 +755,7 @@ iavf_dev_del_mac_addr(struct rte_eth_dev *dev, uint32_t index)
 
 	addr = &dev->data->mac_addrs[index];
 
-	err = iavf_add_del_eth_addr(adapter, addr, FALSE);
+	err = iavf_add_del_eth_addr(adapter, addr, false);
 	if (err)
 		PMD_DRV_LOG(ERR, "fail to delete MAC address");
 
@@ -985,7 +980,7 @@ iavf_dev_set_default_mac_addr(struct rte_eth_dev *dev,
 	if (rte_is_valid_assigned_ether_addr(perm_addr))
 		return -EPERM;
 
-	ret = iavf_add_del_eth_addr(adapter, old_addr, FALSE);
+	ret = iavf_add_del_eth_addr(adapter, old_addr, false);
 	if (ret)
 		PMD_DRV_LOG(ERR, "Fail to delete old MAC:"
 			    " %02X:%02X:%02X:%02X:%02X:%02X",
@@ -996,7 +991,7 @@ iavf_dev_set_default_mac_addr(struct rte_eth_dev *dev,
 			    old_addr->addr_bytes[4],
 			    old_addr->addr_bytes[5]);
 
-	ret = iavf_add_del_eth_addr(adapter, mac_addr, TRUE);
+	ret = iavf_add_del_eth_addr(adapter, mac_addr, true);
 	if (ret)
 		PMD_DRV_LOG(ERR, "Fail to add new MAC:"
 			    " %02X:%02X:%02X:%02X:%02X:%02X",
@@ -1068,7 +1063,7 @@ iavf_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	if (ret == 0) {
 		iavf_update_stats(vsi, pstats);
 		stats->ipackets = pstats->rx_unicast + pstats->rx_multicast +
-						pstats->rx_broadcast;
+				pstats->rx_broadcast - pstats->rx_discards;
 		stats->opackets = pstats->tx_broadcast + pstats->tx_multicast +
 						pstats->tx_unicast;
 		stats->imissed = pstats->rx_discards;
@@ -1115,16 +1110,17 @@ iavf_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 	msix_intr = pci_dev->intr_handle.intr_vec[queue_id];
 	if (msix_intr == IAVF_MISC_VEC_ID) {
 		PMD_DRV_LOG(INFO, "MISC is also enabled for control");
-		IAVF_WRITE_REG(hw, IAVFINT_DYN_CTL01,
-			      IAVFINT_DYN_CTL01_INTENA_MASK |
-			      IAVFINT_DYN_CTL01_CLEARPBA_MASK |
-			      IAVFINT_DYN_CTL01_ITR_INDX_MASK);
+		IAVF_WRITE_REG(hw, IAVF_VFINT_DYN_CTL01,
+			       IAVF_VFINT_DYN_CTL01_INTENA_MASK |
+			       IAVF_VFINT_DYN_CTL01_CLEARPBA_MASK |
+			       IAVF_VFINT_DYN_CTL01_ITR_INDX_MASK);
 	} else {
 		IAVF_WRITE_REG(hw,
-			      IAVFINT_DYN_CTLN1(msix_intr - IAVF_RX_VEC_START),
-			      IAVFINT_DYN_CTLN1_INTENA_MASK |
-			      IAVFINT_DYN_CTL01_CLEARPBA_MASK |
-			      IAVFINT_DYN_CTLN1_ITR_INDX_MASK);
+			       IAVF_VFINT_DYN_CTLN1
+				(msix_intr - IAVF_RX_VEC_START),
+			       IAVF_VFINT_DYN_CTLN1_INTENA_MASK |
+			       IAVF_VFINT_DYN_CTL01_CLEARPBA_MASK |
+			       IAVF_VFINT_DYN_CTLN1_ITR_INDX_MASK);
 	}
 
 	IAVF_WRITE_FLUSH(hw);
@@ -1148,7 +1144,7 @@ iavf_dev_rx_queue_intr_disable(struct rte_eth_dev *dev, uint16_t queue_id)
 	}
 
 	IAVF_WRITE_REG(hw,
-		      IAVFINT_DYN_CTLN1(msix_intr - IAVF_RX_VEC_START),
+		      IAVF_VFINT_DYN_CTLN1(msix_intr - IAVF_RX_VEC_START),
 		      0);
 
 	IAVF_WRITE_FLUSH(hw);
@@ -1161,9 +1157,9 @@ iavf_check_vf_reset_done(struct iavf_hw *hw)
 	int i, reset;
 
 	for (i = 0; i < IAVF_RESET_WAIT_CNT; i++) {
-		reset = IAVF_READ_REG(hw, IAVFGEN_RSTAT) &
-			IAVFGEN_RSTAT_VFR_STATE_MASK;
-		reset = reset >> IAVFGEN_RSTAT_VFR_STATE_SHIFT;
+		reset = IAVF_READ_REG(hw, IAVF_VFGEN_RSTAT) &
+			IAVF_VFGEN_RSTAT_VFR_STATE_MASK;
+		reset = reset >> IAVF_VFGEN_RSTAT_VFR_STATE_SHIFT;
 		if (reset == VIRTCHNL_VFR_VFACTIVE ||
 		    reset == VIRTCHNL_VFR_COMPLETED)
 			break;
@@ -1260,10 +1256,13 @@ static inline void
 iavf_enable_irq0(struct iavf_hw *hw)
 {
 	/* Enable admin queue interrupt trigger */
-	IAVF_WRITE_REG(hw, IAVFINT_ICR0_ENA1, IAVFINT_ICR0_ENA1_ADMINQ_MASK);
+	IAVF_WRITE_REG(hw, IAVF_VFINT_ICR0_ENA1,
+		       IAVF_VFINT_ICR0_ENA1_ADMINQ_MASK);
 
-	IAVF_WRITE_REG(hw, IAVFINT_DYN_CTL01, IAVFINT_DYN_CTL01_INTENA_MASK |
-		IAVFINT_DYN_CTL01_CLEARPBA_MASK | IAVFINT_DYN_CTL01_ITR_INDX_MASK);
+	IAVF_WRITE_REG(hw, IAVF_VFINT_DYN_CTL01,
+		       IAVF_VFINT_DYN_CTL01_INTENA_MASK |
+		       IAVF_VFINT_DYN_CTL01_CLEARPBA_MASK |
+		       IAVF_VFINT_DYN_CTL01_ITR_INDX_MASK);
 
 	IAVF_WRITE_FLUSH(hw);
 }
@@ -1272,9 +1271,9 @@ static inline void
 iavf_disable_irq0(struct iavf_hw *hw)
 {
 	/* Disable all interrupt types */
-	IAVF_WRITE_REG(hw, IAVFINT_ICR0_ENA1, 0);
-	IAVF_WRITE_REG(hw, IAVFINT_DYN_CTL01,
-		      IAVFINT_DYN_CTL01_ITR_INDX_MASK);
+	IAVF_WRITE_REG(hw, IAVF_VFINT_ICR0_ENA1, 0);
+	IAVF_WRITE_REG(hw, IAVF_VFINT_DYN_CTL01,
+		       IAVF_VFINT_DYN_CTL01_ITR_INDX_MASK);
 	IAVF_WRITE_FLUSH(hw);
 }
 
@@ -1328,6 +1327,7 @@ iavf_dev_init(struct rte_eth_dev *eth_dev)
 	hw->hw_addr = (void *)pci_dev->mem_resource[0].addr;
 	hw->back = IAVF_DEV_PRIVATE_TO_ADAPTER(eth_dev->data->dev_private);
 	adapter->eth_dev = eth_dev;
+	adapter->stopped = 1;
 
 	if (iavf_init_vf(eth_dev) != 0) {
 		PMD_INIT_LOG(ERR, "Init vf failed");
@@ -1388,7 +1388,6 @@ static int
 iavf_dev_uninit(struct rte_eth_dev *dev)
 {
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
-	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return -EPERM;
@@ -1396,8 +1395,7 @@ iavf_dev_uninit(struct rte_eth_dev *dev)
 	dev->dev_ops = NULL;
 	dev->rx_pkt_burst = NULL;
 	dev->tx_pkt_burst = NULL;
-	if (hw->adapter_stopped == 0)
-		iavf_dev_close(dev);
+	iavf_dev_close(dev);
 
 	rte_free(vf->vf_res);
 	vf->vsi_res = NULL;
@@ -1467,82 +1465,4 @@ RTE_INIT(iavf_init_log)
 	if (iavf_logtype_tx_free >= 0)
 		rte_log_set_level(iavf_logtype_tx_free, RTE_LOG_DEBUG);
 #endif
-}
-
-/* memory func for base code */
-enum iavf_status_code
-iavf_allocate_dma_mem_d(__rte_unused struct iavf_hw *hw,
-		       struct iavf_dma_mem *mem,
-		       u64 size,
-		       u32 alignment)
-{
-	const struct rte_memzone *mz = NULL;
-	char z_name[RTE_MEMZONE_NAMESIZE];
-
-	if (!mem)
-		return IAVF_ERR_PARAM;
-
-	snprintf(z_name, sizeof(z_name), "iavf_dma_%"PRIu64, rte_rand());
-	mz = rte_memzone_reserve_bounded(z_name, size, SOCKET_ID_ANY,
-			RTE_MEMZONE_IOVA_CONTIG, alignment, RTE_PGSIZE_2M);
-	if (!mz)
-		return IAVF_ERR_NO_MEMORY;
-
-	mem->size = size;
-	mem->va = mz->addr;
-	mem->pa = mz->phys_addr;
-	mem->zone = (const void *)mz;
-	PMD_DRV_LOG(DEBUG,
-		    "memzone %s allocated with physical address: %"PRIu64,
-		    mz->name, mem->pa);
-
-	return IAVF_SUCCESS;
-}
-
-enum iavf_status_code
-iavf_free_dma_mem_d(__rte_unused struct iavf_hw *hw,
-		   struct iavf_dma_mem *mem)
-{
-	if (!mem)
-		return IAVF_ERR_PARAM;
-
-	PMD_DRV_LOG(DEBUG,
-		    "memzone %s to be freed with physical address: %"PRIu64,
-		    ((const struct rte_memzone *)mem->zone)->name, mem->pa);
-	rte_memzone_free((const struct rte_memzone *)mem->zone);
-	mem->zone = NULL;
-	mem->va = NULL;
-	mem->pa = (u64)0;
-
-	return IAVF_SUCCESS;
-}
-
-enum iavf_status_code
-iavf_allocate_virt_mem_d(__rte_unused struct iavf_hw *hw,
-			struct iavf_virt_mem *mem,
-			u32 size)
-{
-	if (!mem)
-		return IAVF_ERR_PARAM;
-
-	mem->size = size;
-	mem->va = rte_zmalloc("iavf", size, 0);
-
-	if (mem->va)
-		return IAVF_SUCCESS;
-	else
-		return IAVF_ERR_NO_MEMORY;
-}
-
-enum iavf_status_code
-iavf_free_virt_mem_d(__rte_unused struct iavf_hw *hw,
-		    struct iavf_virt_mem *mem)
-{
-	if (!mem)
-		return IAVF_ERR_PARAM;
-
-	rte_free(mem->va);
-	mem->va = NULL;
-
-	return IAVF_SUCCESS;
 }

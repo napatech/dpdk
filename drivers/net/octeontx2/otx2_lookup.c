@@ -5,6 +5,7 @@
 #include <rte_common.h>
 #include <rte_memzone.h>
 
+#include "otx2_common.h"
 #include "otx2_ethdev.h"
 
 /* NIX_RX_PARSE_S's ERRCODE + ERRLEV (12 bits) */
@@ -12,12 +13,14 @@
 #define ERR_ARRAY_SZ			((BIT(ERRCODE_ERRLEN_WIDTH)) *\
 					sizeof(uint32_t))
 
-#define LOOKUP_ARRAY_SZ			(PTYPE_ARRAY_SZ + ERR_ARRAY_SZ)
+#define SA_TBL_SZ			(RTE_MAX_ETHPORTS * sizeof(uint64_t))
+#define LOOKUP_ARRAY_SZ			(PTYPE_ARRAY_SZ + ERR_ARRAY_SZ +\
+					SA_TBL_SZ)
 
 const uint32_t *
 otx2_nix_supported_ptypes_get(struct rte_eth_dev *eth_dev)
 {
-	struct otx2_eth_dev *dev = otx2_eth_pmd_priv(eth_dev);
+	RTE_SET_USED(eth_dev);
 
 	static const uint32_t ptypes[] = {
 		RTE_PTYPE_L2_ETHER_QINQ, /* LB */
@@ -56,10 +59,7 @@ otx2_nix_supported_ptypes_get(struct rte_eth_dev *eth_dev)
 		RTE_PTYPE_UNKNOWN,
 	};
 
-	if (dev->rx_offload_flags & NIX_RX_OFFLOAD_PTYPE_F)
-		return ptypes;
-	else
-		return NULL;
+	return ptypes;
 }
 
 int
@@ -314,9 +314,13 @@ nix_create_rx_ol_flags_array(void *mem)
 void *
 otx2_nix_fastpath_lookup_mem_get(void)
 {
-	const char name[] = "otx2_nix_fastpath_lookup_mem";
+	const char name[] = OTX2_NIX_FASTPATH_LOOKUP_MEM;
 	const struct rte_memzone *mz;
 	void *mem;
+
+	/* SA_TBL starts after PTYPE_ARRAY & ERR_ARRAY */
+	RTE_BUILD_BUG_ON(OTX2_NIX_SA_TBL_START != (PTYPE_ARRAY_SZ +
+						   ERR_ARRAY_SZ));
 
 	mz = rte_memzone_lookup(name);
 	if (mz != NULL)

@@ -238,8 +238,7 @@ static struct lcore_params lcore_params_array_default[] = {
 };
 
 struct lcore_params *lcore_params = lcore_params_array_default;
-uint16_t nb_lcore_params = sizeof(lcore_params_array_default) /
-				sizeof(lcore_params_array_default[0]);
+uint16_t nb_lcore_params = RTE_DIM(lcore_params_array_default);
 
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
@@ -326,12 +325,6 @@ static lookup_struct_t *ipv6_l3fwd_lookup_struct[NB_SOCKETS];
 
 #define L3FWD_HASH_ENTRIES	1024
 
-#define IPV4_L3FWD_NUM_ROUTES \
-	(sizeof(ipv4_l3fwd_route_array) / sizeof(ipv4_l3fwd_route_array[0]))
-
-#define IPV6_L3FWD_NUM_ROUTES \
-	(sizeof(ipv6_l3fwd_route_array) / sizeof(ipv6_l3fwd_route_array[0]))
-
 static uint16_t ipv4_l3fwd_out_if[L3FWD_HASH_ENTRIES] __rte_cache_aligned;
 static uint16_t ipv6_l3fwd_out_if[L3FWD_HASH_ENTRIES] __rte_cache_aligned;
 #endif
@@ -353,9 +346,6 @@ static struct ipv4_l3fwd_route ipv4_l3fwd_route_array[] = {
 	{RTE_IPV4(7,1,1,0), 24, 6},
 	{RTE_IPV4(8,1,1,0), 24, 7},
 };
-
-#define IPV4_L3FWD_NUM_ROUTES \
-	(sizeof(ipv4_l3fwd_route_array) / sizeof(ipv4_l3fwd_route_array[0]))
 
 #define IPV4_L3FWD_LPM_MAX_RULES     1024
 
@@ -880,9 +870,6 @@ sleep_until_rx_interrupt(int num)
 		port_id = ((uintptr_t)data) >> CHAR_BIT;
 		queue_id = ((uintptr_t)data) &
 			RTE_LEN2MASK(CHAR_BIT, uint8_t);
-		rte_spinlock_lock(&(locks[port_id]));
-		rte_eth_dev_rx_intr_disable(port_id, queue_id);
-		rte_spinlock_unlock(&(locks[port_id]));
 		RTE_LOG(INFO, L3FWD_POWER,
 			"lcore %u is waked up from rx interrupt on"
 			" port %d queue %d\n",
@@ -892,7 +879,7 @@ sleep_until_rx_interrupt(int num)
 	return 0;
 }
 
-static void turn_on_intr(struct lcore_conf *qconf)
+static void turn_on_off_intr(struct lcore_conf *qconf, bool on)
 {
 	int i;
 	struct lcore_rx_queue *rx_queue;
@@ -905,7 +892,10 @@ static void turn_on_intr(struct lcore_conf *qconf)
 		queue_id = rx_queue->queue_id;
 
 		rte_spinlock_lock(&(locks[port_id]));
-		rte_eth_dev_rx_intr_enable(port_id, queue_id);
+		if (on)
+			rte_eth_dev_rx_intr_enable(port_id, queue_id);
+		else
+			rte_eth_dev_rx_intr_disable(port_id, queue_id);
 		rte_spinlock_unlock(&(locks[port_id]));
 	}
 }
@@ -1338,11 +1328,12 @@ start_rx:
 				 */
 				rte_delay_us(lcore_idle_hint);
 			else {
-				/* suspend until rx interrupt trigges */
+				/* suspend until rx interrupt triggers */
 				if (intr_en) {
-					turn_on_intr(qconf);
+					turn_on_off_intr(qconf, 1);
 					sleep_until_rx_interrupt(
 						qconf->n_rx_queue);
+					turn_on_off_intr(qconf, 0);
 					/**
 					 * start receiving packets immediately
 					 */
@@ -1841,7 +1832,7 @@ setup_hash(int socketid)
 
 
 	/* populate the ipv4 hash */
-	for (i = 0; i < IPV4_L3FWD_NUM_ROUTES; i++) {
+	for (i = 0; i < RTE_DIM(ipv4_l3fwd_route_array); i++) {
 		ret = rte_hash_add_key (ipv4_l3fwd_lookup_struct[socketid],
 				(void *) &ipv4_l3fwd_route_array[i].key);
 		if (ret < 0) {
@@ -1854,7 +1845,7 @@ setup_hash(int socketid)
 	}
 
 	/* populate the ipv6 hash */
-	for (i = 0; i < IPV6_L3FWD_NUM_ROUTES; i++) {
+	for (i = 0; i < RTE_DIM(ipv6_l3fwd_route_array); i++) {
 		ret = rte_hash_add_key (ipv6_l3fwd_lookup_struct[socketid],
 				(void *) &ipv6_l3fwd_route_array[i].key);
 		if (ret < 0) {
@@ -1891,7 +1882,7 @@ setup_lpm(int socketid)
 				" on socket %d\n", socketid);
 
 	/* populate the LPM table */
-	for (i = 0; i < IPV4_L3FWD_NUM_ROUTES; i++) {
+	for (i = 0; i < RTE_DIM(ipv4_l3fwd_route_array); i++) {
 		ret = rte_lpm_add(ipv4_l3fwd_lookup_struct[socketid],
 			ipv4_l3fwd_route_array[i].ip,
 			ipv4_l3fwd_route_array[i].depth,

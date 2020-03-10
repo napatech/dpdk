@@ -37,8 +37,6 @@
 
 #define DEFAULT_MAX_CATEGORIES	1
 
-#define IPSEC_SA_MAX_ENTRIES (128) /* must be power of 2, max 2 power 30 */
-#define SPI2IDX(spi) (spi & (IPSEC_SA_MAX_ENTRIES - 1))
 #define INVALID_SPI (0)
 
 #define DISCARD	INVALID_SPI
@@ -53,6 +51,13 @@ struct ipsec_xform;
 struct rte_mbuf;
 
 struct ipsec_sa;
+/*
+ * Keeps number of configured SA's for each address family:
+ */
+struct ipsec_sa_cnt {
+	uint32_t	nb_v4;
+	uint32_t	nb_v6;
+};
 
 typedef int32_t (*ipsec_xform_fn)(struct rte_mbuf *m, struct ipsec_sa *sa,
 		struct rte_crypto_op *cop);
@@ -76,6 +81,7 @@ struct app_sa_prm {
 	uint32_t enable; /* use librte_ipsec API for ipsec pkt processing */
 	uint32_t window_size; /* replay window size */
 	uint32_t enable_esn;  /* enable/disable ESN support */
+	uint32_t cache_sz;	/* per lcore SA cache size */
 	uint64_t flags;       /* rte_ipsec_sa_prm.flags */
 };
 
@@ -352,7 +358,7 @@ sp6_spi_present(uint32_t spi, int inbound, struct ip_addr ip_addr[2],
  * or -ENOENT otherwise.
  */
 int
-sa_spi_present(uint32_t spi, int inbound);
+sa_spi_present(struct sa_ctx *sa_ctx, uint32_t spi, int inbound);
 
 void
 sa_init(struct socket_ctx *ctx, int32_t socket_id);

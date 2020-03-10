@@ -26,22 +26,20 @@ struct bnxt_filter_info *bnxt_alloc_filter(struct bnxt *bp)
 {
 	struct bnxt_filter_info *filter;
 
-	/* Find the 1st unused filter from the free_filter_list pool*/
-	filter = STAILQ_FIRST(&bp->free_filter_list);
+	filter = bnxt_get_unused_filter(bp);
 	if (!filter) {
 		PMD_DRV_LOG(ERR, "No more free filter resources\n");
 		return NULL;
 	}
-	STAILQ_REMOVE_HEAD(&bp->free_filter_list, next);
 
 	filter->mac_index = INVALID_MAC_INDEX;
 	/* Default to L2 MAC Addr filter */
 	filter->flags = HWRM_CFA_L2_FILTER_ALLOC_INPUT_FLAGS_PATH_RX;
 	filter->enables = HWRM_CFA_L2_FILTER_ALLOC_INPUT_ENABLES_L2_ADDR |
 			HWRM_CFA_L2_FILTER_ALLOC_INPUT_ENABLES_L2_ADDR_MASK;
-	memcpy(filter->l2_addr, bp->eth_dev->data->mac_addrs->addr_bytes,
-	       RTE_ETHER_ADDR_LEN);
+	memcpy(filter->l2_addr, bp->mac_addr, RTE_ETHER_ADDR_LEN);
 	memset(filter->l2_addr_mask, 0xff, RTE_ETHER_ADDR_LEN);
+
 	return filter;
 }
 
@@ -192,5 +190,10 @@ struct bnxt_filter_info *bnxt_get_unused_filter(struct bnxt *bp)
 
 void bnxt_free_filter(struct bnxt *bp, struct bnxt_filter_info *filter)
 {
+	memset(filter, 0, sizeof(*filter));
+	filter->mac_index = INVALID_MAC_INDEX;
+	filter->fw_l2_filter_id = UINT64_MAX;
+	filter->fw_ntuple_filter_id = UINT64_MAX;
+	filter->fw_em_filter_id = UINT64_MAX;
 	STAILQ_INSERT_TAIL(&bp->free_filter_list, filter, next);
 }

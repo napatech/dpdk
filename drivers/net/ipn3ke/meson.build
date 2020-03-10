@@ -16,14 +16,15 @@ endif
 if not dep.found()
 	build = false
 	reason = 'missing dependency, "libfdt"'
+	subdir_done()
 endif
 
-if build
-	allow_experimental_apis = true
+allow_experimental_apis = true
 
-	sources += files('ipn3ke_ethdev.c',
-		'ipn3ke_representor.c',
-		'ipn3ke_tm.c',
-		'ipn3ke_flow.c')
-	deps += ['bus_ifpga', 'sched', 'pmd_i40e', 'rawdev', 'rawdev_ifpga']
-endif
+includes += include_directories('../../raw/ifpga')
+
+sources += files('ipn3ke_ethdev.c',
+	'ipn3ke_representor.c',
+	'ipn3ke_tm.c',
+	'ipn3ke_flow.c')
+deps += ['bus_ifpga', 'ethdev', 'sched']

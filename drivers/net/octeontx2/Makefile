@@ -10,7 +10,9 @@ include $(RTE_SDK)/mk/rte.vars.mk
 LIB = librte_pmd_octeontx2.a
 
 CFLAGS += $(WERROR_FLAGS)
+CFLAGS += -I$(RTE_SDK)/drivers/common/cpt
 CFLAGS += -I$(RTE_SDK)/drivers/common/octeontx2
+CFLAGS += -I$(RTE_SDK)/drivers/crypto/octeontx2
 CFLAGS += -I$(RTE_SDK)/drivers/mempool/octeontx2
 CFLAGS += -I$(RTE_SDK)/drivers/net/octeontx2
 CFLAGS += -O3
@@ -50,10 +52,12 @@ SRCS-$(CONFIG_RTE_LIBRTE_OCTEONTX2_PMD) += \
 	otx2_flow_utils.c \
 	otx2_ethdev_irq.c \
 	otx2_ethdev_ops.c \
+	otx2_ethdev_sec.c \
 	otx2_ethdev_debug.c \
 	otx2_ethdev_devargs.c
 
 LDLIBS += -lrte_common_octeontx2 -lrte_mempool_octeontx2 -lrte_eal -lrte_net
 LDLIBS += -lrte_ethdev -lrte_bus_pci -lrte_kvargs -lrte_mbuf  -lrte_mempool -lm
+LDLIBS += -lrte_cryptodev -lrte_eventdev -lrte_security
 
 include $(RTE_SDK)/mk/rte.lib.mk

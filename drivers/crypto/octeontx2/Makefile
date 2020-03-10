@@ -10,8 +10,8 @@ LIB = librte_pmd_octeontx2_crypto.a
 # build flags
 CFLAGS += $(WERROR_FLAGS)
 
-LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
-LDLIBS += -lrte_cryptodev
+LDLIBS += -lrte_eal -lrte_ethdev -lrte_mbuf -lrte_mempool -lrte_ring
+LDLIBS += -lrte_cryptodev -lrte_security
 LDLIBS += -lrte_pci -lrte_bus_pci
 LDLIBS += -lrte_common_cpt -lrte_common_octeontx2
 
@@ -20,7 +20,9 @@ VPATH += $(RTE_SDK)/drivers/crypto/octeontx2
 CFLAGS += -O3
 CFLAGS += -I$(RTE_SDK)/drivers/common/cpt
 CFLAGS += -I$(RTE_SDK)/drivers/common/octeontx2
+CFLAGS += -I$(RTE_SDK)/drivers/crypto/octeontx2
 CFLAGS += -I$(RTE_SDK)/drivers/mempool/octeontx2
+CFLAGS += -I$(RTE_SDK)/drivers/net/octeontx2
 CFLAGS += -DALLOW_EXPERIMENTAL_API
 
 ifneq ($(CONFIG_RTE_ARCH_64),y)

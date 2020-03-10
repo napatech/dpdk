@@ -150,6 +150,8 @@ hns3_send_mbx_msg(struct hns3_hw *hw, uint16_t code, uint16_t subcode,
 {
 	struct hns3_mbx_vf_to_pf_cmd *req;
 	struct hns3_cmd_desc desc;
+	bool is_ring_vector_msg;
+	int offset;
 	int ret;
 
 	req = (struct hns3_mbx_vf_to_pf_cmd *)desc.data;
@@ -164,9 +166,15 @@ hns3_send_mbx_msg(struct hns3_hw *hw, uint16_t code, uint16_t subcode,
 
 	hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_MBX_VF_TO_PF, false);
 	req->msg[0] = code;
-	req->msg[1] = subcode;
-	if (msg_data)
-		memcpy(&req->msg[HNS3_CMD_CODE_OFFSET], msg_data, msg_len);
+	is_ring_vector_msg = (code == HNS3_MBX_MAP_RING_TO_VECTOR) ||
+			     (code == HNS3_MBX_UNMAP_RING_TO_VECTOR) ||
+			     (code == HNS3_MBX_GET_RING_VECTOR_MAP);
+	if (!is_ring_vector_msg)
+		req->msg[1] = subcode;
+	if (msg_data) {
+		offset = is_ring_vector_msg ? 1 : HNS3_CMD_CODE_OFFSET;
+		memcpy(&req->msg[offset], msg_data, msg_len);
+	}
 
 	/* synchronous send */
 	if (need_resp) {
@@ -282,6 +290,40 @@ hns3_update_resp_position(struct hns3_hw *hw, uint32_t resp_msg)
 	resp->tail = tail;
 }
 
+static void
+hns3_link_fail_parse(struct hns3_hw *hw, uint8_t link_fail_code)
+{
+	switch (link_fail_code) {
+	case HNS3_MBX_LF_NORMAL:
+		break;
+	case HNS3_MBX_LF_REF_CLOCK_LOST:
+		hns3_warn(hw, "Reference clock lost!");
+		break;
+	case HNS3_MBX_LF_XSFP_TX_DISABLE:
+		hns3_warn(hw, "SFP tx is disabled!");
+		break;
+	case HNS3_MBX_LF_XSFP_ABSENT:
+		hns3_warn(hw, "SFP is absent!");
+		break;
+	default:
+		hns3_warn(hw, "Unknown fail code:%u!", link_fail_code);
+		break;
+	}
+}
+
+static void
+hns3_handle_link_change_event(struct hns3_hw *hw,
+			      struct hns3_mbx_pf_to_vf_cmd *req)
+{
+#define LINK_STATUS_OFFSET     1
+#define LINK_FAIL_CODE_OFFSET  2
+
+	if (!req->msg[LINK_STATUS_OFFSET])
+		hns3_link_fail_parse(hw, req->msg[LINK_FAIL_CODE_OFFSET]);
+
+	hns3_update_link_status(hw);
+}
+
 void
 hns3_dev_handle_mbx_msg(struct hns3_hw *hw)
 {
@@ -334,6 +376,9 @@ hns3_dev_handle_mbx_msg(struct hns3_hw *hw)
 			hns3_mbx_tail_ptr_move_arq(hw->arq);
 
 			hns3_mbx_handler(hw);
+			break;
+		case HNS3_MBX_PUSH_LINK_STATUS:
+			hns3_handle_link_change_event(hw, req);
 			break;
 		default:
 			hns3_err(hw,

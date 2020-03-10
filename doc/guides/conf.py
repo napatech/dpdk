@@ -237,7 +237,7 @@ def generate_overview_table(output_filename, table_id, section, table_name, titl
                                                                 ini_filename))
                 continue
 
-            if value is not '':
+            if value:
                 # Get the first letter only.
                 ini_data[ini_filename][name] = value[0]
 
@@ -400,6 +400,11 @@ def setup(app):
     generate_overview_table(table_file, 1,
                             'Features',
                             'Features availability in compression drivers',
+                            'Feature')
+    table_file = dirname(__file__) + '/vdpadevs/overview_feature_table.txt'
+    generate_overview_table(table_file, 1,
+                            'Features',
+                            'Features availability in vDPA drivers',
                             'Feature')
 
     if LooseVersion(sphinx_version) < LooseVersion('1.3.1'):

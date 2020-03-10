@@ -268,6 +268,42 @@ qede_interrupt_handler(void *param)
 }
 
 static void
+qede_assign_rxtx_handlers(struct rte_eth_dev *dev)
+{
+	uint64_t tx_offloads = dev->data->dev_conf.txmode.offloads;
+	struct qede_dev *qdev = dev->data->dev_private;
+	struct ecore_dev *edev = &qdev->edev;
+	bool use_tx_offload = false;
+
+	if (ECORE_IS_CMT(edev)) {
+		dev->rx_pkt_burst = qede_recv_pkts_cmt;
+		dev->tx_pkt_burst = qede_xmit_pkts_cmt;
+		return;
+	}
+
+	if (dev->data->lro || dev->data->scattered_rx) {
+		DP_INFO(edev, "Assigning qede_recv_pkts\n");
+		dev->rx_pkt_burst = qede_recv_pkts;
+	} else {
+		DP_INFO(edev, "Assigning qede_recv_pkts_regular\n");
+		dev->rx_pkt_burst = qede_recv_pkts_regular;
+	}
+
+	use_tx_offload = !!(tx_offloads &
+			    (DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM | /* tunnel */
+			     DEV_TX_OFFLOAD_TCP_TSO | /* tso */
+			     DEV_TX_OFFLOAD_VLAN_INSERT)); /* vlan insert */
+
+	if (use_tx_offload) {
+		DP_INFO(edev, "Assigning qede_xmit_pkts\n");
+		dev->tx_pkt_burst = qede_xmit_pkts;
+	} else {
+		DP_INFO(edev, "Assigning qede_xmit_pkts_regular\n");
+		dev->tx_pkt_burst = qede_xmit_pkts_regular;
+	}
+}
+
+static void
 qede_alloc_etherdev(struct qede_dev *qdev, struct qed_dev_eth_info *info)
 {
 	rte_memcpy(&qdev->dev_info, info, sizeof(*info));
@@ -450,7 +486,7 @@ int qede_activate_vport(struct rte_eth_dev *eth_dev, bool flg)
 	params.update_vport_active_tx_flg = 1;
 	params.vport_active_rx_flg = flg;
 	params.vport_active_tx_flg = flg;
-	if (~qdev->enable_tx_switching & flg) {
+	if ((qdev->enable_tx_switching == false) && (flg == true)) {
 		params.update_tx_switching_flg = 1;
 		params.tx_switching_flg = !flg;
 	}
@@ -1082,6 +1118,7 @@ static int qede_dev_start(struct rte_eth_dev *eth_dev)
 	/* Start/resume traffic */
 	qede_fastpath_start(edev);
 
+	qede_assign_rxtx_handlers(eth_dev);
 	DP_INFO(edev, "Device started\n");
 
 	return 0;
@@ -1472,7 +1509,8 @@ static void qede_dev_close(struct rte_eth_dev *eth_dev)
 	if (eth_dev->data->dev_started)
 		qede_dev_stop(eth_dev);
 
-	qede_stop_vport(edev);
+	if (qdev->vport_started)
+		qede_stop_vport(edev);
 	qdev->vport_started = false;
 	qede_fdir_dealloc_resc(eth_dev);
 	qede_dealloc_fp_resc(eth_dev);
@@ -1992,6 +2030,7 @@ qede_dev_supported_ptypes_get(struct rte_eth_dev *eth_dev)
 	};
 
 	if (eth_dev->rx_pkt_burst == qede_recv_pkts ||
+	    eth_dev->rx_pkt_burst == qede_recv_pkts_regular ||
 	    eth_dev->rx_pkt_burst == qede_recv_pkts_cmt)
 		return ptypes;
 
@@ -2287,7 +2326,9 @@ static int qede_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 
 	/* update max frame size */
 	dev->data->dev_conf.rxmode.max_rx_pkt_len = max_rx_pkt_len;
+
 	/* Reassign back */
+	qede_assign_rxtx_handlers(dev);
 	if (ECORE_IS_CMT(edev)) {
 		dev->rx_pkt_burst = qede_recv_pkts_cmt;
 		dev->tx_pkt_burst = qede_xmit_pkts_cmt;
@@ -2495,14 +2536,7 @@ static int qede_common_dev_init(struct rte_eth_dev *eth_dev, bool is_vf)
 	strncpy((char *)params.name, QEDE_PMD_VER_PREFIX,
 		QEDE_PMD_DRV_VER_STR_SIZE);
 
-	if (ECORE_IS_CMT(edev)) {
-		eth_dev->rx_pkt_burst = qede_recv_pkts_cmt;
-		eth_dev->tx_pkt_burst = qede_xmit_pkts_cmt;
-	} else {
-		eth_dev->rx_pkt_burst = qede_recv_pkts;
-		eth_dev->tx_pkt_burst = qede_xmit_pkts;
-	}
-
+	qede_assign_rxtx_handlers(eth_dev);
 	eth_dev->tx_pkt_prepare = qede_xmit_prep_pkts;
 
 	/* For CMT mode device do periodic polling for slowpath events.

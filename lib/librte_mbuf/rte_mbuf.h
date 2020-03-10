@@ -306,6 +306,41 @@ struct rte_pktmbuf_pool_private {
 	uint32_t flags; /**< reserved for future use. */
 };
 
+/**
+ * Return the flags from private data in an mempool structure.
+ *
+ * @param mp
+ *   A pointer to the mempool structure.
+ * @return
+ *   The flags from the private data structure.
+ */
+static inline uint32_t
+rte_pktmbuf_priv_flags(struct rte_mempool *mp)
+{
+	struct rte_pktmbuf_pool_private *mbp_priv;
+
+	mbp_priv = (struct rte_pktmbuf_pool_private *)rte_mempool_get_priv(mp);
+	return mbp_priv->flags;
+}
+
+/**
+ * When set, pktmbuf mempool will hold only mbufs with pinned external
+ * buffer. The external buffer will be attached to the mbuf at the
+ * memory pool creation and will never be detached by the mbuf free calls.
+ * mbuf should not contain any room for data after the mbuf structure.
+ */
+#define RTE_PKTMBUF_POOL_F_PINNED_EXT_BUF (1 << 0)
+
+/**
+ * Returns non zero if given mbuf has a pinned external buffer, or zero
+ * otherwise. The pinned external buffer is allocated at pool creation
+ * time and should not be freed on mbuf freeing.
+ *
+ * External buffer is a user-provided anonymous buffer.
+ */
+#define RTE_MBUF_HAS_PINNED_EXTBUF(mb) \
+	(rte_pktmbuf_priv_flags(mb->pool) & RTE_PKTMBUF_POOL_F_PINNED_EXT_BUF)
+
 #ifdef RTE_LIBRTE_MBUF_DEBUG
 
 /**  check mbuf type in debug mode */
@@ -571,7 +606,8 @@ static inline struct rte_mbuf *rte_mbuf_raw_alloc(struct rte_mempool *mp)
 static __rte_always_inline void
 rte_mbuf_raw_free(struct rte_mbuf *m)
 {
-	RTE_ASSERT(RTE_MBUF_DIRECT(m));
+	RTE_ASSERT(!RTE_MBUF_CLONED(m) &&
+		  (!RTE_MBUF_HAS_EXTBUF(m) || RTE_MBUF_HAS_PINNED_EXTBUF(m)));
 	RTE_ASSERT(rte_mbuf_refcnt_read(m) == 1);
 	RTE_ASSERT(m->next == NULL);
 	RTE_ASSERT(m->nb_segs == 1);
@@ -600,7 +636,6 @@ rte_mbuf_raw_free(struct rte_mbuf *m)
  */
 void rte_pktmbuf_init(struct rte_mempool *mp, void *opaque_arg,
 		      void *m, unsigned i);
-
 
 /**
  * A  packet mbuf pool constructor.
@@ -702,6 +737,63 @@ rte_pktmbuf_pool_create_by_ops(const char *name, unsigned int n,
 	unsigned int cache_size, uint16_t priv_size, uint16_t data_room_size,
 	int socket_id, const char *ops_name);
 
+/** A structure that describes the pinned external buffer segment. */
+struct rte_pktmbuf_extmem {
+	void *buf_ptr;		/**< The virtual address of data buffer. */
+	rte_iova_t buf_iova;	/**< The IO address of the data buffer. */
+	size_t buf_len;		/**< External buffer length in bytes. */
+	uint16_t elt_size;	/**< mbuf element size in bytes. */
+};
+
+/**
+ * Create a mbuf pool with external pinned data buffers.
+ *
+ * This function creates and initializes a packet mbuf pool that contains
+ * only mbufs with external buffer. It is a wrapper to rte_mempool functions.
+ *
+ * @param name
+ *   The name of the mbuf pool.
+ * @param n
+ *   The number of elements in the mbuf pool. The optimum size (in terms
+ *   of memory usage) for a mempool is when n is a power of two minus one:
+ *   n = (2^q - 1).
+ * @param cache_size
+ *   Size of the per-core object cache. See rte_mempool_create() for
+ *   details.
+ * @param priv_size
+ *   Size of application private are between the rte_mbuf structure
+ *   and the data buffer. This value must be aligned to RTE_MBUF_PRIV_ALIGN.
+ * @param data_room_size
+ *   Size of data buffer in each mbuf, including RTE_PKTMBUF_HEADROOM.
+ * @param socket_id
+ *   The socket identifier where the memory should be allocated. The
+ *   value can be *SOCKET_ID_ANY* if there is no NUMA constraint for the
+ *   reserved zone.
+ * @param ext_mem
+ *   Pointer to the array of structures describing the external memory
+ *   for data buffers. It is caller responsibility to register this memory
+ *   with rte_extmem_register() (if needed), map this memory to appropriate
+ *   physical device, etc.
+ * @param ext_num
+ *   Number of elements in the ext_mem array.
+ * @return
+ *   The pointer to the new allocated mempool, on success. NULL on error
+ *   with rte_errno set appropriately. Possible rte_errno values include:
+ *    - E_RTE_NO_CONFIG - function could not get pointer to rte_config structure
+ *    - E_RTE_SECONDARY - function was called from a secondary process instance
+ *    - EINVAL - cache size provided is too large, or priv_size is not aligned.
+ *    - ENOSPC - the maximum number of memzones has already been allocated
+ *    - EEXIST - a memzone with the same name already exists
+ *    - ENOMEM - no appropriate memory area found in which to create memzone
+ */
+__rte_experimental
+struct rte_mempool *
+rte_pktmbuf_pool_create_extbuf(const char *name, unsigned int n,
+	unsigned int cache_size, uint16_t priv_size,
+	uint16_t data_room_size, int socket_id,
+	const struct rte_pktmbuf_extmem *ext_mem,
+	unsigned int ext_num);
+
 /**
  * Get the data room size of mbufs stored in a pktmbuf_pool
  *
@@ -777,7 +869,7 @@ static inline void rte_pktmbuf_reset(struct rte_mbuf *m)
 	m->nb_segs = 1;
 	m->port = MBUF_INVALID_PORT;
 
-	m->ol_flags = 0;
+	m->ol_flags &= EXT_ATTACHED_MBUF;
 	m->packet_type = 0;
 	rte_pktmbuf_reset_headroom(m);
 
@@ -924,9 +1016,13 @@ rte_pktmbuf_ext_shinfo_init_helper(void *buf_addr, uint16_t *buf_len,
  * provided via shinfo. This callback function will be called once all the
  * mbufs are detached from the buffer (refcnt becomes zero).
  *
- * The headroom for the attaching mbuf will be set to zero and this can be
- * properly adjusted after attachment. For example, ``rte_pktmbuf_adj()``
+ * The headroom length of the attaching mbuf will be set to zero and this
+ * can be properly adjusted after attachment. For example, ``rte_pktmbuf_adj()``
  * or ``rte_pktmbuf_reset_headroom()`` might be used.
+ *
+ * Similarly, the packet length is initialized to 0. If the buffer contains
+ * data, the user has to adjust ``data_len`` and the ``pkt_len`` field of
+ * the mbuf accordingly.
  *
  * More mbufs can be attached to the same external buffer by
  * ``rte_pktmbuf_attach()`` once the external buffer has been attached by
@@ -1132,6 +1228,11 @@ __rte_pktmbuf_free_direct(struct rte_mbuf *m)
  *
  * All other fields of the given packet mbuf will be left intact.
  *
+ * If the packet mbuf was allocated from the pool with pinned
+ * external buffers the rte_pktmbuf_detach does nothing with the
+ * mbuf of this kind, because the pinned buffers are not supposed
+ * to be detached.
+ *
  * @param m
  *   The indirect attached packet mbuf.
  */
@@ -1141,11 +1242,26 @@ static inline void rte_pktmbuf_detach(struct rte_mbuf *m)
 	uint32_t mbuf_size, buf_len;
 	uint16_t priv_size;
 
-	if (RTE_MBUF_HAS_EXTBUF(m))
-		__rte_pktmbuf_free_extbuf(m);
-	else
-		__rte_pktmbuf_free_direct(m);
+	if (RTE_MBUF_HAS_EXTBUF(m)) {
+		/*
+		 * The mbuf has the external attached buffer,
+		 * we should check the type of the memory pool where
+		 * the mbuf was allocated from to detect the pinned
+		 * external buffer.
+		 */
+		uint32_t flags = rte_pktmbuf_priv_flags(mp);
 
+		if (flags & RTE_PKTMBUF_POOL_F_PINNED_EXT_BUF) {
+			/*
+			 * The pinned external buffer should not be
+			 * detached from its backing mbuf, just exit.
+			 */
+			return;
+		}
+		__rte_pktmbuf_free_extbuf(m);
+	} else {
+		__rte_pktmbuf_free_direct(m);
+	}
 	priv_size = rte_pktmbuf_priv_size(mp);
 	mbuf_size = (uint32_t)(sizeof(struct rte_mbuf) + priv_size);
 	buf_len = rte_pktmbuf_data_room_size(mp);
@@ -1157,6 +1273,44 @@ static inline void rte_pktmbuf_detach(struct rte_mbuf *m)
 	rte_pktmbuf_reset_headroom(m);
 	m->data_len = 0;
 	m->ol_flags = 0;
+}
+
+/**
+ * @internal Handle the packet mbufs with attached pinned external buffer
+ * on the mbuf freeing:
+ *
+ *  - return zero if reference counter in shinfo is one. It means there is
+ *  no more reference to this pinned buffer and mbuf can be returned to
+ *  the pool
+ *
+ *  - otherwise (if reference counter is not one), decrement reference
+ *  counter and return non-zero value to prevent freeing the backing mbuf.
+ *
+ * Returns non zero if mbuf should not be freed.
+ */
+static inline int __rte_pktmbuf_pinned_extbuf_decref(struct rte_mbuf *m)
+{
+	struct rte_mbuf_ext_shared_info *shinfo;
+
+	/* Clear flags, mbuf is being freed. */
+	m->ol_flags = EXT_ATTACHED_MBUF;
+	shinfo = m->shinfo;
+
+	/* Optimize for performance - do not dec/reinit */
+	if (likely(rte_mbuf_ext_refcnt_read(shinfo) == 1))
+		return 0;
+
+	/*
+	 * Direct usage of add primitive to avoid
+	 * duplication of comparing with one.
+	 */
+	if (likely(rte_atomic16_add_return
+			(&shinfo->refcnt_atomic, -1)))
+		return 1;
+
+	/* Reinitialize counter before mbuf freeing. */
+	rte_mbuf_ext_refcnt_set(shinfo, 1);
+	return 0;
 }
 
 /**
@@ -1180,8 +1334,13 @@ rte_pktmbuf_prefree_seg(struct rte_mbuf *m)
 
 	if (likely(rte_mbuf_refcnt_read(m) == 1)) {
 
-		if (!RTE_MBUF_DIRECT(m))
-			rte_pktmbuf_detach(m);
+		if (!RTE_MBUF_DIRECT(m)) {
+			if (!RTE_MBUF_HAS_EXTBUF(m) ||
+			    !RTE_MBUF_HAS_PINNED_EXTBUF(m))
+				rte_pktmbuf_detach(m);
+			else if (__rte_pktmbuf_pinned_extbuf_decref(m))
+				return NULL;
+		}
 
 		if (m->next != NULL) {
 			m->next = NULL;
@@ -1192,8 +1351,13 @@ rte_pktmbuf_prefree_seg(struct rte_mbuf *m)
 
 	} else if (__rte_mbuf_refcnt_update(m, -1) == 0) {
 
-		if (!RTE_MBUF_DIRECT(m))
-			rte_pktmbuf_detach(m);
+		if (!RTE_MBUF_DIRECT(m)) {
+			if (!RTE_MBUF_HAS_EXTBUF(m) ||
+			    !RTE_MBUF_HAS_PINNED_EXTBUF(m))
+				rte_pktmbuf_detach(m);
+			else if (__rte_pktmbuf_pinned_extbuf_decref(m))
+				return NULL;
+		}
 
 		if (m->next != NULL) {
 			m->next = NULL;
@@ -1535,7 +1699,7 @@ static inline int rte_pktmbuf_trim(struct rte_mbuf *m, uint16_t len)
 static inline int rte_pktmbuf_is_contiguous(const struct rte_mbuf *m)
 {
 	__rte_mbuf_sanity_check(m, 1);
-	return !!(m->nb_segs == 1);
+	return m->nb_segs == 1;
 }
 
 /**

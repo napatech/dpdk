@@ -26,11 +26,12 @@
 #include <rte_malloc.h>
 #include <rte_ip.h>
 
-#include "mlx5.h"
+#include <mlx5_glue.h>
+#include <mlx5_prm.h>
+
 #include "mlx5_defs.h"
+#include "mlx5.h"
 #include "mlx5_flow.h"
-#include "mlx5_glue.h"
-#include "mlx5_prm.h"
 #include "mlx5_rxtx.h"
 
 #define VERBS_SPEC_INNER(item_flags) \
@@ -258,7 +259,7 @@ flow_verbs_spec_add(struct mlx5_flow_verbs *verbs, void *src, unsigned int size)
 
 	if (!verbs)
 		return;
-	assert(verbs->specs);
+	MLX5_ASSERT(verbs->specs);
 	dst = (void *)(verbs->specs + verbs->size);
 	memcpy(dst, src, size);
 	++verbs->attr->num_of_specs;
@@ -1255,6 +1256,18 @@ flow_verbs_validate(struct rte_eth_dev *dev,
 						  "action not supported");
 		}
 	}
+	/*
+	 * Validate the drop action mutual exclusion with other actions.
+	 * Drop action is mutually-exclusive with any other action, except for
+	 * Count action.
+	 */
+	if ((action_flags & MLX5_FLOW_ACTION_DROP) &&
+	    (action_flags & ~(MLX5_FLOW_ACTION_DROP | MLX5_FLOW_ACTION_COUNT)))
+		return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ACTION, NULL,
+					  "Drop action is mutually-exclusive "
+					  "with any other action, except for "
+					  "Count action");
 	if (!(action_flags & MLX5_FLOW_FATE_ACTIONS))
 		return rte_flow_error_set(error, EINVAL,
 					  RTE_FLOW_ERROR_TYPE_ACTION, actions,
@@ -1696,7 +1709,7 @@ flow_verbs_apply(struct rte_eth_dev *dev, struct rte_flow *flow,
 		} else {
 			struct mlx5_hrxq *hrxq;
 
-			assert(flow->rss.queue);
+			MLX5_ASSERT(flow->rss.queue);
 			hrxq = mlx5_hrxq_get(dev, flow->rss.key,
 					     MLX5_RSS_HASH_KEY_LEN,
 					     dev_flow->hash_fields,

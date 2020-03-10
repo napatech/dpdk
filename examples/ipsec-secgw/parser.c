@@ -642,6 +642,10 @@ parse_cfg_file(const char *cfg_filename)
 	cmdline_stdin_exit(cl);
 	fclose(f);
 
+	sa_sort_arr();
+	sp4_sort_arr();
+	sp6_sort_arr();
+
 	return 0;
 
 error_exit:

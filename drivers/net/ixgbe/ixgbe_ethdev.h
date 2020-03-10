@@ -270,6 +270,7 @@ struct ixgbe_vf_info {
 	uint8_t api_version;
 	uint16_t switch_domain_id;
 	uint16_t xcast_mode;
+	uint16_t mac_count;
 };
 
 /*
@@ -510,6 +511,9 @@ struct ixgbe_adapter {
 	 * mailbox status) link status.
 	 */
 	uint8_t pflink_fullchk;
+	uint8_t mac_ctrl_frame_fwd;
+	rte_atomic32_t link_thread_running;
+	pthread_t link_thread_tid;
 };
 
 struct ixgbe_vf_representor {

@@ -13,6 +13,7 @@
 #include "mlx5.h"
 #include "mlx5_rxtx.h"
 #include "mlx5_utils.h"
+#include "rte_pmd_mlx5.h"
 
 /**
  * Stop traffic on Tx queues.
@@ -106,9 +107,12 @@ mlx5_rxq_start(struct rte_eth_dev *dev)
 	unsigned int i;
 	int ret = 0;
 	enum mlx5_rxq_obj_type obj_type = MLX5_RXQ_OBJ_TYPE_IBV;
+	struct mlx5_rxq_data *rxq = NULL;
 
 	for (i = 0; i < priv->rxqs_n; ++i) {
-		if ((*priv->rxqs)[i]->lro) {
+		rxq = (*priv->rxqs)[i];
+
+		if (rxq && rxq->lro) {
 			obj_type =  MLX5_RXQ_OBJ_TYPE_DEVX_RQ;
 			break;
 		}
@@ -267,13 +271,22 @@ mlx5_dev_start(struct rte_eth_dev *dev)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	int ret;
+	int fine_inline;
 
 	DRV_LOG(DEBUG, "port %u starting device", dev->data->port_id);
-	ret = mlx5_dev_configure_rss_reta(dev);
-	if (ret) {
-		DRV_LOG(ERR, "port %u reta config failed: %s",
-			dev->data->port_id, strerror(rte_errno));
-		return -rte_errno;
+	fine_inline = rte_mbuf_dynflag_lookup
+		(RTE_PMD_MLX5_FINE_GRANULARITY_INLINE, NULL);
+	if (fine_inline > 0)
+		rte_net_mlx5_dynf_inline_mask = 1UL << fine_inline;
+	else
+		rte_net_mlx5_dynf_inline_mask = 0;
+	if (dev->data->nb_rx_queues > 0) {
+		ret = mlx5_dev_configure_rss_reta(dev);
+		if (ret) {
+			DRV_LOG(ERR, "port %u reta config failed: %s",
+				dev->data->port_id, strerror(rte_errno));
+			return -rte_errno;
+		}
 	}
 	ret = mlx5_txq_start(dev);
 	if (ret) {
@@ -420,9 +433,14 @@ mlx5_traffic_enable(struct rte_eth_dev *dev)
 		}
 		mlx5_txq_release(dev, i);
 	}
-	if (priv->config.dv_esw_en && !priv->config.vf)
-		if (!mlx5_flow_create_esw_table_zero_flow(dev))
-			goto error;
+	if (priv->config.dv_esw_en && !priv->config.vf) {
+		if (mlx5_flow_create_esw_table_zero_flow(dev))
+			priv->fdb_def_rule = 1;
+		else
+			DRV_LOG(INFO, "port %u FDB default rule cannot be"
+				" configured - only Eswitch group 0 flows are"
+				" supported.", dev->data->port_id);
+	}
 	if (priv->isolated)
 		return 0;
 	if (dev->data->promiscuous) {

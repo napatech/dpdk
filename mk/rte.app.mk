@@ -116,6 +116,7 @@ OCTEONTX2-y := $(CONFIG_RTE_LIBRTE_OCTEONTX2_MEMPOOL)
 OCTEONTX2-y += $(CONFIG_RTE_LIBRTE_PMD_OCTEONTX2_CRYPTO)
 OCTEONTX2-y += $(CONFIG_RTE_LIBRTE_PMD_OCTEONTX2_EVENTDEV)
 OCTEONTX2-y += $(CONFIG_RTE_LIBRTE_PMD_OCTEONTX2_DMA_RAWDEV)
+OCTEONTX2-y += $(CONFIG_RTE_LIBRTE_PMD_OCTEONTX2_EP_RAWDEV)
 OCTEONTX2-y += $(CONFIG_RTE_LIBRTE_OCTEONTX2_PMD)
 ifeq ($(findstring y,$(OCTEONTX2-y)),y)
 _LDLIBS-y += -lrte_common_octeontx2
@@ -183,6 +184,11 @@ _LDLIBS-$(CONFIG_RTE_LIBRTE_HNS3_PMD)       += -lrte_pmd_hns3
 _LDLIBS-$(CONFIG_RTE_LIBRTE_I40E_PMD)       += -lrte_pmd_i40e
 _LDLIBS-$(CONFIG_RTE_LIBRTE_IAVF_PMD)       += -lrte_pmd_iavf
 _LDLIBS-$(CONFIG_RTE_LIBRTE_ICE_PMD)        += -lrte_pmd_ice
+IAVF-y := $(CONFIG_RTE_LIBRTE_IAVF_PMD)
+ifeq ($(findstring y,$(IAVF-y)),y)
+_LDLIBS-y += -lrte_common_iavf
+endif
+_LDLIBS-$(CONFIG_RTE_LIBRTE_IONIC_PMD)      += -lrte_pmd_ionic
 _LDLIBS-$(CONFIG_RTE_LIBRTE_IXGBE_PMD)      += -lrte_pmd_ixgbe
 ifeq ($(CONFIG_RTE_LIBRTE_KNI),y)
 _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_KNI)        += -lrte_pmd_kni
@@ -190,17 +196,21 @@ endif
 _LDLIBS-$(CONFIG_RTE_LIBRTE_LIO_PMD)        += -lrte_pmd_lio
 _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_MEMIF)      += -lrte_pmd_memif
 _LDLIBS-$(CONFIG_RTE_LIBRTE_MLX4_PMD)       += -lrte_pmd_mlx4
+ifeq ($(findstring y,$(CONFIG_RTE_LIBRTE_MLX5_PMD)$(CONFIG_RTE_LIBRTE_MLX5_VDPA_PMD)),y)
+_LDLIBS-y                                   += -lrte_common_mlx5
+endif
 _LDLIBS-$(CONFIG_RTE_LIBRTE_MLX5_PMD)       += -lrte_pmd_mlx5
+_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX5_VDPA_PMD)  += -lrte_pmd_mlx5_vdpa
 ifeq ($(CONFIG_RTE_IBVERBS_LINK_DLOPEN),y)
-_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX4_PMD)       += -ldl
-_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX5_PMD)       += -ldl
+_LDLIBS-y                                   += -ldl
 else ifeq ($(CONFIG_RTE_IBVERBS_LINK_STATIC),y)
 LIBS_IBVERBS_STATIC = $(shell $(RTE_SDK)/buildtools/options-ibverbs-static.sh)
-_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX4_PMD)       += $(LIBS_IBVERBS_STATIC)
-_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX5_PMD)       += $(LIBS_IBVERBS_STATIC)
+_LDLIBS-y                                   += $(LIBS_IBVERBS_STATIC)
 else
+ifeq ($(findstring y,$(CONFIG_RTE_LIBRTE_MLX5_PMD)$(CONFIG_RTE_LIBRTE_MLX5_VDPA_PMD)),y)
+_LDLIBS-y                                   += -libverbs -lmlx5
+endif
 _LDLIBS-$(CONFIG_RTE_LIBRTE_MLX4_PMD)       += -libverbs -lmlx4
-_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX5_PMD)       += -libverbs -lmlx5
 endif
 _LDLIBS-$(CONFIG_RTE_LIBRTE_MVPP2_PMD)      += -lrte_pmd_mvpp2
 _LDLIBS-$(CONFIG_RTE_LIBRTE_MVNETA_PMD)     += -lrte_pmd_mvneta
@@ -269,13 +279,13 @@ _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_QAT_SYM)     += -lrte_pmd_qat -lcrypto
 _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_QAT_ASYM)    += -lrte_pmd_qat -lcrypto
 endif # CONFIG_RTE_LIBRTE_PMD_QAT
 _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_SNOW3G)      += -lrte_pmd_snow3g
-_LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_SNOW3G)      += -L$(LIBSSO_SNOW3G_PATH)/build -lsso_snow3g
+_LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_SNOW3G)      += -lIPSec_MB
 _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_KASUMI)      += -lrte_pmd_kasumi
-_LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_KASUMI)      += -L$(LIBSSO_KASUMI_PATH)/build -lsso_kasumi
+_LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_KASUMI)      += -lIPSec_MB
 _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_ZUC)         += -lrte_pmd_zuc
-_LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_ZUC)         += -L$(LIBSSO_ZUC_PATH)/build -lsso_zuc
+_LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_ZUC)         += -lIPSec_MB
 _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_ARMV8_CRYPTO)    += -lrte_pmd_armv8
-_LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_ARMV8_CRYPTO)    += -L$(ARMV8_CRYPTO_LIB_PATH) -larmv8_crypto
+_LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_ARMV8_CRYPTO)    += -L$(ARMV8_CRYPTO_LIB_PATH) -lAArch64crypto
 _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_MVSAM_CRYPTO) += -L$(LIBMUSDK_PATH)/lib -lrte_pmd_mvsam_crypto -lmusdk
 _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_NITROX)      += -lrte_pmd_nitrox
 _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_OCTEONTX_CRYPTO) += -lrte_pmd_octeontx_crypto
@@ -337,6 +347,7 @@ endif # CONFIG_RTE_LIBRTE_IFPGA_BUS
 _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_IOAT_RAWDEV)   += -lrte_rawdev_ioat
 _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_NTB_RAWDEV) += -lrte_rawdev_ntb
 _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_OCTEONTX2_DMA_RAWDEV) += -lrte_rawdev_octeontx2_dma
+_LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_OCTEONTX2_EP_RAWDEV) += -lrte_rawdev_octeontx2_ep
 endif # CONFIG_RTE_LIBRTE_RAWDEV
 
 endif # !CONFIG_RTE_BUILD_SHARED_LIBS

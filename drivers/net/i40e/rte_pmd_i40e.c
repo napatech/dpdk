@@ -1409,7 +1409,7 @@ rte_pmd_i40e_set_tc_strict_prio(uint16_t port, uint8_t tc_map)
 
 	/* Disable DCBx if it's the first time to set strict priority. */
 	if (!veb->strict_prio_tc) {
-		ret = i40e_aq_stop_lldp(hw, true, NULL);
+		ret = i40e_aq_stop_lldp(hw, true, true, NULL);
 		if (ret)
 			PMD_DRV_LOG(INFO,
 				    "Failed to disable DCBx as it's already"
@@ -1464,7 +1464,7 @@ rte_pmd_i40e_set_tc_strict_prio(uint16_t port, uint8_t tc_map)
 
 	/* Enable DCBx again, if all the TCs' strict priority disabled. */
 	if (!tc_map) {
-		ret = i40e_aq_start_lldp(hw, NULL);
+		ret = i40e_aq_start_lldp(hw, true, NULL);
 		if (ret) {
 			PMD_DRV_LOG(ERR,
 				    "Failed to enable DCBx, err(%d).", ret);
@@ -2172,7 +2172,8 @@ static int check_invalid_pkt_type(uint32_t pkt_type)
 	    tnl != RTE_PTYPE_TUNNEL_GRENAT &&
 	    tnl != RTE_PTYPE_TUNNEL_GTPC &&
 	    tnl != RTE_PTYPE_TUNNEL_GTPU &&
-	    tnl != RTE_PTYPE_TUNNEL_L2TP)
+	    tnl != RTE_PTYPE_TUNNEL_L2TP &&
+	    tnl != RTE_PTYPE_TUNNEL_ESP)
 		return -1;
 
 	if (il2 &&

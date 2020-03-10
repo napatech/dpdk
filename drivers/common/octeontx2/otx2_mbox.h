@@ -73,6 +73,7 @@ struct otx2_mbox {
 	uint16_t tx_size;  /* Size of Tx region */
 	uint16_t ndevs;    /* The number of peers */
 	struct otx2_mbox_dev *dev;
+	uint64_t intr_offset; /* Offset to interrupt register */
 };
 
 /* Header which precedes all mbox messages */
@@ -89,7 +90,7 @@ struct mbox_msghdr {
 #define OTX2_MBOX_RSP_SIG (0xbeef)
 	/* Signature, for validating corrupted msgs */
 	uint16_t __otx2_io sig;
-#define OTX2_MBOX_VERSION (0x0003)
+#define OTX2_MBOX_VERSION (0x0004)
 	/* Version of msg's structure for this ID */
 	uint16_t __otx2_io ver;
 	/* Offset of next msg within mailbox region */
@@ -193,6 +194,8 @@ M(CPT_SET_CRYPTO_GRP,	0xA03, cpt_set_crypto_grp,			\
 			       msg_rsp)					\
 M(CPT_INLINE_IPSEC_CFG, 0xA04, cpt_inline_ipsec_cfg,			\
 			       cpt_inline_ipsec_cfg_msg, msg_rsp)	\
+M(CPT_RX_INLINE_LF_CFG, 0xBFE, cpt_rx_inline_lf_cfg,			\
+			       cpt_rx_inline_lf_cfg_msg, msg_rsp)	\
 /* NPC mbox IDs (range 0x6000 - 0x7FFF) */				\
 M(NPC_MCAM_ALLOC_ENTRY,	0x6000, npc_mcam_alloc_entry,			\
 				npc_mcam_alloc_entry_req,		\
@@ -707,6 +710,8 @@ struct nix_lf_alloc_req {
 	uint16_t __otx2_io sso_func;
 	uint64_t __otx2_io rx_cfg;   /* See NIX_AF_LF(0..127)_RX_CFG */
 	uint64_t __otx2_io way_mask;
+#define NIX_LF_RSS_TAG_LSB_AS_ADDER BIT_ULL(0)
+	uint64_t flags;
 };
 
 struct nix_lf_alloc_rsp {
@@ -918,7 +923,11 @@ struct nix_rss_flowkey_cfg {
 #define FLOW_KEY_TYPE_INNR_UDP      BIT(15)
 #define FLOW_KEY_TYPE_INNR_SCTP     BIT(16)
 #define FLOW_KEY_TYPE_INNR_ETH_DMAC BIT(17)
-	uint8_t	group;       /* RSS context or group */
+#define FLOW_KEY_TYPE_L4_DST BIT(28)
+#define FLOW_KEY_TYPE_L4_SRC BIT(29)
+#define FLOW_KEY_TYPE_L3_DST BIT(30)
+#define FLOW_KEY_TYPE_L3_SRC BIT(31)
+	uint8_t	__otx2_io group;       /* RSS context or group */
 };
 
 struct nix_rss_flowkey_cfg_rsp {
@@ -1200,6 +1209,11 @@ struct cpt_inline_ipsec_cfg_msg {
 	uint8_t __otx2_io dir;
 	uint16_t __otx2_io sso_pf_func; /* Inbound path SSO_PF_FUNC */
 	uint16_t __otx2_io nix_pf_func; /* Outbound path NIX_PF_FUNC */
+};
+
+struct cpt_rx_inline_lf_cfg_msg {
+	struct mbox_msghdr hdr;
+	uint16_t __otx2_io sso_pf_func;
 };
 
 /* NPC mbox message structs */
@@ -1562,8 +1576,8 @@ struct tim_enable_rsp {
 const char *otx2_mbox_id2name(uint16_t id);
 int otx2_mbox_id2size(uint16_t id);
 void otx2_mbox_reset(struct otx2_mbox *mbox, int devid);
-int otx2_mbox_init(struct otx2_mbox *mbox, uintptr_t hwbase,
-		   uintptr_t reg_base, int direction, int ndevs);
+int otx2_mbox_init(struct otx2_mbox *mbox, uintptr_t hwbase, uintptr_t reg_base,
+		   int direction, int ndevsi, uint64_t intr_offset);
 void otx2_mbox_fini(struct otx2_mbox *mbox);
 void otx2_mbox_msg_send(struct otx2_mbox *mbox, int devid);
 int otx2_mbox_wait_for_rsp(struct otx2_mbox *mbox, int devid);

@@ -6,7 +6,6 @@
 #ifndef RTE_PMD_MLX5_RXTX_VEC_ALTIVEC_H_
 #define RTE_PMD_MLX5_RXTX_VEC_ALTIVEC_H_
 
-#include <assert.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
@@ -17,13 +16,14 @@
 #include <rte_mempool.h>
 #include <rte_prefetch.h>
 
+#include <mlx5_prm.h>
+
+#include "mlx5_defs.h"
 #include "mlx5.h"
 #include "mlx5_utils.h"
 #include "mlx5_rxtx.h"
 #include "mlx5_rxtx_vec.h"
 #include "mlx5_autoconf.h"
-#include "mlx5_defs.h"
-#include "mlx5_prm.h"
 
 #ifndef __INTEL_COMPILER
 #pragma GCC diagnostic ignored "-Wcast-qual"
@@ -344,9 +344,8 @@ rxq_cq_to_ptype_oflags_v(struct mlx5_rxq_data *rxq,
 		PKT_RX_IP_CKSUM_GOOD | PKT_RX_L4_CKSUM_GOOD |
 		PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED};
 	const vector unsigned char mbuf_init =
-		(vector unsigned char)(vector unsigned long){
-		*(__attribute__((__aligned__(8))) unsigned long *)
-		&rxq->mbuf_initializer, 0LL};
+		(vector unsigned char)vec_vsx_ld
+			(0, (vector unsigned char *)&rxq->mbuf_initializer);
 	const vector unsigned short rearm_sel_mask =
 		(vector unsigned short){0, 0, 0, 0, 0xffff, 0xffff, 0, 0};
 	vector unsigned char rearm0, rearm1, rearm2, rearm3;
@@ -616,8 +615,8 @@ rxq_burst_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts, uint16_t pkts_n,
 	const vector unsigned short cqe_sel_mask2 =
 		(vector unsigned short){0, 0, 0xffff, 0, 0, 0, 0, 0};
 
-	assert(rxq->sges_n == 0);
-	assert(rxq->cqe_n == rxq->elts_n);
+	MLX5_ASSERT(rxq->sges_n == 0);
+	MLX5_ASSERT(rxq->cqe_n == rxq->elts_n);
 	cq = &(*rxq->cqes)[cq_idx];
 	rte_prefetch0(cq);
 	rte_prefetch0(cq + 1);
@@ -647,7 +646,7 @@ rxq_burst_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts, uint16_t pkts_n,
 	if (!pkts_n)
 		return rcvd_pkt;
 	/* At this point, there shouldn't be any remaining packets. */
-	assert(rxq->decompressed == 0);
+	MLX5_ASSERT(rxq->decompressed == 0);
 
 	/*
 	 * A. load first Qword (8bytes) in one loop.
@@ -1063,7 +1062,7 @@ rxq_burst_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts, uint16_t pkts_n,
 	if (unlikely(!nocmp_n && comp_idx == MLX5_VPMD_DESCS_PER_LOOP))
 		return rcvd_pkt;
 	/* Update the consumer indexes for non-compressed CQEs. */
-	assert(nocmp_n <= pkts_n);
+	MLX5_ASSERT(nocmp_n <= pkts_n);
 	rxq->cq_ci += nocmp_n;
 	rxq->rq_pi += nocmp_n;
 	rcvd_pkt += nocmp_n;
@@ -1073,7 +1072,7 @@ rxq_burst_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts, uint16_t pkts_n,
 #endif
 	/* Decompress the last CQE if compressed. */
 	if (comp_idx < MLX5_VPMD_DESCS_PER_LOOP && comp_idx == n) {
-		assert(comp_idx == (nocmp_n % MLX5_VPMD_DESCS_PER_LOOP));
+		MLX5_ASSERT(comp_idx == (nocmp_n % MLX5_VPMD_DESCS_PER_LOOP));
 		rxq->decompressed =
 			rxq_cq_decompress_v(rxq, &cq[nocmp_n], &elts[nocmp_n]);
 		/* Return more packets if needed. */
