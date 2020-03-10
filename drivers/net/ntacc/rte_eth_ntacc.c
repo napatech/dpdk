@@ -90,33 +90,6 @@ struct supportedDriver_s supportedDriver = {3, 11, 0};
 #define PCI_VENDOR_ID_INTEL          0x8086
 #define PCIE_DEVICE_ID_PF_DSC_1_X    0x09C4
 
-struct supportedAdapters_s supportedAdapters[NB_SUPPORTED_FPGAS] =
-{
-  { 200, 7000, 12, 0, 0 },
-  { 200, 7001, 12, 0, 0 },
-  { 200, 9500, 9, 8, 0 },  
-  { 200, 9501, 9, 8, 0 },
-  { 200, 9502, 9, 8, 0 },
-  { 200, 9503, 9, 8, 0 },
-  { 200, 9505, 9, 8, 0 },
-  { 200, 9512, 9, 8, 0 },
-  { 200, 9515, 9, 8, 0 },
-  { 200, 9516, 9, 8, 0 },
-  { 200, 9517, 9, 8, 0 },
-  { 200, 9519, 10, 7, 0 },
-  { 200, 9521, 18, 00, 0 },
-  { 200, 9522, 20, 00, 0 },
-  { 200, 9523, 10, 7, 0 },
-  { 200, 9526, 18, 00, 0 },
-  { 200, 9528, 18, 00, 0 },
-  { 200, 9531, 20, 00, 0 },
-  { 200, 9532, 27, 00, 0 },
-  { 200, 9533, 22, 00, 0 },
-  { 200, 9534, 21, 28, 0 },
-  { 200, 9535, 21, 28, 0 },
-  { 200, 9537, 22, 00, 0 },
-};
-
 static void *_libnt;
 
 /* NTAPI library functions */
@@ -2706,6 +2679,7 @@ enum property_type_s {
   ZERO_COPY_TX,
   RX_SEGMENT_SIZE,
   TX_SEGMENT_SIZE,
+	NT_4GENERATION,
 };
 
 static int _readProperty(uint8_t adapterNo, enum property_type_s type, int *pValue)
@@ -2740,6 +2714,9 @@ static int _readProperty(uint8_t adapterNo, enum property_type_s type, int *pVal
   case TX_SEGMENT_SIZE:
     snprintf(pInfo->u.property.path, sizeof(pInfo->u.property.path), "ini.Adapter%d.HostBufferSegmentSizeTx", adapterNo);
     break;
+	case NT_4GENERATION:
+		snprintf(pInfo->u.property.path, sizeof(pInfo->u.property.path), "Adapter%d.FpgaGeneration", adapterNo);
+		break;
   default:
     rte_free(pInfo);
     return 0;
@@ -2774,6 +2751,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   uint8_t offset = 0;
   uint8_t localPort = 0;
   struct version_s version;
+	int value;
 
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
@@ -2861,44 +2839,16 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
 #endif
     PMD_NTACC_LOG(INFO, "Port: %u - %s\n", offset + localPort, name);
 
-    // Check if FPGA is supported
-    for (i = 0; i < NB_SUPPORTED_FPGAS; i++) {
-      if (supportedAdapters[i].item == pInfo->u.port_v7.data.adapterInfo.fpgaid.s.item &&
-          supportedAdapters[i].product == pInfo->u.port_v7.data.adapterInfo.fpgaid.s.product) {
-        if (((supportedAdapters[i].ver * 100) + supportedAdapters[i].rev) >
-            ((pInfo->u.port_v7.data.adapterInfo.fpgaid.s.ver * 100) + pInfo->u.port_v7.data.adapterInfo.fpgaid.s.rev)) {
-          PMD_NTACC_LOG(ERR, "ERROR: NT adapter firmware %03d-%04d-%02d-%02d-%02d is not supported. The firmware must be %03d-%04d-%02d-%02d-%02d.\n",
-                  pInfo->u.port_v7.data.adapterInfo.fpgaid.s.item,
-                  pInfo->u.port_v7.data.adapterInfo.fpgaid.s.product,
-                  pInfo->u.port_v7.data.adapterInfo.fpgaid.s.ver,
-                  pInfo->u.port_v7.data.adapterInfo.fpgaid.s.rev,
-                  pInfo->u.port_v7.data.adapterInfo.fpgaid.s.build,
-                  supportedAdapters[i].item,
-                  supportedAdapters[i].product,
-                  supportedAdapters[i].ver,
-                  supportedAdapters[i].rev,
-                  supportedAdapters[i].build);
-          iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
-          goto error;
-        }
-        break;
-      }
-    }
-
-    if (i == NB_SUPPORTED_FPGAS) {
-      // No matching adapter is found
-      PMD_NTACC_LOG(ERR, ">>> ERROR: Not supported NT adapter is found. Following adapters are supported:\n");
-      for (i = 0; i < NB_SUPPORTED_FPGAS; i++) {
-        PMD_NTACC_LOG(ERR, "           %03d-%04d-%02d-%02d-%02d\n",
-                supportedAdapters[i].item,
-                supportedAdapters[i].product,
-                supportedAdapters[i].ver,
-                supportedAdapters[i].rev,
-                supportedAdapters[i].build);
-      }
-      iRet = NT_ERROR_NTPL_FILTER_UNSUPP_FPGA;
-      goto error;
-    }
+		// Check if adapter is supported
+		if ((status = _readProperty(pInfo->u.port_v7.data.adapterNo, NT_4GENERATION, &value)) != 0) {
+			iRet = status;
+			goto error;
+		}
+		if (value != 4) {
+			PMD_NTACC_LOG(ERR, "ERROR: Adapter is not support. It must be a Napatech 4Generation adapterd\n");
+			iRet = NT_ERROR_ADAPTER_NOT_SUPPORTED;
+			goto error;
+		}
 
     /* reserve an ethdev entry */
     eth_dev = rte_eth_dev_allocate(name);
