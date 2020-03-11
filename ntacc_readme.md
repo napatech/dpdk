@@ -44,38 +44,41 @@ The NTACC PMD driver does not need to be bound. This means that the dpdk-devbind
 
 The Napatech driver and SmartNic must be installed and started before the NTACC PMD can be used. See the installation guide in the Napatech driver package for how to install and start the driver.
 
-> Note: The driver and FPGA version must be the supported version or a newer version.
+> Note: The driver must be the supported version or a newer version.
 
-See below for supported drivers and SmartNics:
+
+| Supported driver  |
+|-------------------|
+| 3.11.0 or newer   |
 
 <br>
+All Napatech 4Generation SmartNics are supported. Some SmartNics have limited filter support.
 
-|  Supported SmartNics                        | FPGA                        |  Supported driver  | Filter support |
-|---------------------------------------------------|---------------------------|------|-----|
-|  NT40A01-01-SCC-4×1-E3-FF-ANL               |  200-9500-10-07-00 | 3.11.0 | Full|
-|  NT20E3-2-PTP-ANL                                          |  200-9501-10-07-00 | 3.11.0 | Full|
-|  NT40E3-4-PTP-ANL                                          |  200-9502-10-07-00 | 3.11.0 | Full|
-|  NT80E3-2-PTP-ANL                                          |  200-9503-10-07-00 | 3.11.0 | Full|
-|  NT100E3‐1‐PTP‐ANL                                        |  200-9505-10-08-00 | 3.11.0 | Full|
-|  NT200A01-02-SCC-2×40-E3-FF-ANL           |  200-9512-10-07-00 | 3.11.0| Full|
-|  NT200A01-02-SCC-2×100-E3-FF-ANL        |  200-9515-10-07-00<br>200-9516-10-07-00 | 3.11.0| Full<br>[limited](#LimitedFilter)|
-|  NT80E3-2-PTP-ANL 8x10G                             |  200-9519-10-07-00 | 3.11.0| Full|
-|  NT200A02-01-SCC-2×100-E3-FF-ANL | 200-9521-18-11-00 |3.11.0 | Full|
-| NT200A01‐02‐SCC‐8x10‐E3‐FF‐ANL | 200-9522-20-01-00 | 3.19.0 | Full |
-|  NT200A02-01-SCC-2×100/40-E3-FF-ANL | 200-9526-18-10-00 | 3.11.0| Full|
-| NT200A01‐02‐SCC‐2x25/10/2x40‐E3‐FF‐ANL | 200-9531-20-10-00 | 3.19.0| Full |
-| NT200A02‐01‐SCC‐2x25/10/2x40‐E3‐FF‐ANL | 200-9532-27-02-00| 3.19.0| Full |
-| NT200A02‐01‐SCC‐8x10‐E3‐FF‐ANL | 200-9533-22-05-00 |  3.19.0| Full |
-| NT200A02‐01‐SCC‐8x10‐E3‐FF‐ANL | 200-9534-21-28-00 |  3.19.0| [limited](#LimitedFilter) |
-| NT200A02‐01‐SCC‐2x40‐E3‐FF‐ANL | 200-9535-21-28-00 |  3.19.0| [limited](#LimitedFilter) |
-|  NT40E3-4-PTP-ANL                                          |  200-9537-22-03-00 | 3.19.0 | Full|
-| Intel PAC A10 GX 4x10                                      | 200-7000-12-02-00 | 3.11.0| Full|
-| Intel PAC A10 GX 1x40                                      | 200-7001-12-03-00 | 3.11.0| Full|
+|  Supported SmartNics                        |
+|---------------------------------------------|
+|Intel® Programmable Acceleration Card with Intel® Arria® 10 GX FPGA|
+|NT200A02 SmartNICs (4GA)|
+|NT200A01 SmartNICs (4GA)|
+|NT200C01 SmartNICs (4GA)|
+|NT100E3-1-PTP SmartNICs (4GA)|
+|NT80E3-2-PTP SmartNICs (4GA)|
+|NT80E3-2-PTP-8×10/2×40 SmartNICs (4GA)|
+|NT40A01 SmartNICs (4GA)|
+|NT40E3-4-PTP SmartNICs (4GA)|
+|NT20E3-2-PTP SmartNICs (4GA)|
 
 The complete driver package can be downloaded here:
-[Link™ Capture Software 12.1 Linux](https://supportportal.napatech.com/index.php?/selfhelp/view-article/Link%E2%84%A2-Capture-Software-12.1.2-for-Linux/590)
+[Link™ Capture Software 12.1.5 Linux](https://supportportal.napatech.com/index.php?/selfhelp/view-article/link--capture-software-1215-for-linux/596)
+
 
 #### SmartNic with Limited filter support <a name="LimitedFilter"></a>
+
+| SmartNics | FPGA                        |
+|---------------|---------------------------|
+|NT200A01  | 200-9516-XX-XX-XX |
+|NT200A02  | 200-9534-XX-XX-XX |
+|NT200A02  | 200-9535-XX-XX-XX |
+
 When using a SmartNIC with limited filter support only a limited number of rte_flow filters is supported.
 The rte_flow filters must not contain any spec, mask or last values like below:
 ```
