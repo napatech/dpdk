@@ -239,8 +239,14 @@ eth_af_packet_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	}
 
 	/* kick-off transmits */
-	if (sendto(pkt_q->sockfd, NULL, 0, MSG_DONTWAIT, NULL, 0) == -1) {
-		/* error sending -- no packets transmitted */
+	if (sendto(pkt_q->sockfd, NULL, 0, MSG_DONTWAIT, NULL, 0) == -1 &&
+			errno != ENOBUFS && errno != EAGAIN) {
+		/*
+		 * In case of a ENOBUFS/EAGAIN error all of the enqueued
+		 * packets will be considered successful even though only some
+		 * are sent.
+		 */
+
 		num_tx = 0;
 		num_tx_bytes = 0;
 	}
@@ -433,8 +439,7 @@ eth_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	int ret;
 	int s;
 	unsigned int data_size = internals->req.tp_frame_size -
-				 TPACKET2_HDRLEN -
-				 sizeof(struct sockaddr_ll);
+				 TPACKET2_HDRLEN;
 
 	if (mtu > data_size)
 		return -EINVAL;
@@ -527,8 +532,6 @@ open_packet_iface(const char *key __rte_unused,
 
 	return 0;
 }
-
-static struct rte_vdev_driver pmd_af_packet_drv;
 
 static int
 rte_pmd_init_internals(struct rte_vdev_device *dev,
@@ -973,6 +976,7 @@ rte_pmd_af_packet_remove(struct rte_vdev_device *dev)
 {
 	struct rte_eth_dev *eth_dev = NULL;
 	struct pmd_internals *internals;
+	struct tpacket_req *req;
 	unsigned q;
 
 	PMD_LOG(INFO, "Closing AF_PACKET ethdev on numa socket %u",
@@ -993,7 +997,10 @@ rte_pmd_af_packet_remove(struct rte_vdev_device *dev)
 		return rte_eth_dev_release_port(eth_dev);
 
 	internals = eth_dev->data->dev_private;
+	req = &internals->req;
 	for (q = 0; q < internals->nb_queues; q++) {
+		munmap(internals->rx_queue[q].map,
+			2 * req->tp_block_size * req->tp_block_nr);
 		rte_free(internals->rx_queue[q].rd);
 		rte_free(internals->tx_queue[q].rd);
 	}

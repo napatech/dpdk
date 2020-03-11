@@ -27,7 +27,9 @@
 #include <rte_atomic.h>
 #include <rte_cycles.h>
 #include <rte_ethdev.h>
+#ifdef RTE_LIBRTE_I40E_PMD
 #include <rte_pmd_i40e.h>
+#endif
 
 #include <libvirt/libvirt.h>
 #include "channel_monitor.h"
@@ -158,7 +160,8 @@ parse_json_to_pkt(json_t *element, struct channel_packet *pkt)
 			if (ret)
 				return ret;
 		} else if (!strcmp(key, "name")) {
-			strcpy(pkt->vm_name, json_string_value(value));
+			strlcpy(pkt->vm_name, json_string_value(value),
+					sizeof(pkt->vm_name));
 		} else if (!strcmp(key, "command")) {
 			char command[32];
 			snprintf(command, 32, "%s", json_string_value(value));
@@ -406,8 +409,12 @@ get_pfid(struct policy *pol)
 	for (i = 0; i < pol->pkt.nb_mac_to_monitor; i++) {
 
 		RTE_ETH_FOREACH_DEV(x) {
+#ifdef RTE_LIBRTE_I40E_PMD
 			ret = rte_pmd_i40e_query_vfid_by_mac(x,
 				(struct ether_addr *)&(pol->pkt.vfid[i]));
+#else
+			ret = -ENOTSUP;
+#endif
 			if (ret != -EINVAL) {
 				pol->port[i] = x;
 				break;
@@ -493,15 +500,21 @@ get_pkt_diff(struct policy *pol)
 		vsi_pkt_count_prev_total = 0;
 	double rdtsc_curr, rdtsc_diff, diff;
 	int x;
+#ifdef RTE_LIBRTE_I40E_PMD
 	struct rte_eth_stats vf_stats;
+#endif
 
 	for (x = 0; x < pol->pkt.nb_mac_to_monitor; x++) {
 
+#ifdef RTE_LIBRTE_I40E_PMD
 		/*Read vsi stats*/
 		if (rte_pmd_i40e_get_vf_stats(x, pol->pfid[x], &vf_stats) == 0)
 			vsi_pkt_count = vf_stats.ipackets;
 		else
 			vsi_pkt_count = -1;
+#else
+		vsi_pkt_count = -1;
+#endif
 
 		vsi_pkt_total += vsi_pkt_count;
 
@@ -835,18 +848,13 @@ read_json_packet(struct channel_info *chan_info)
 				indent--;
 			if ((indent > 0) || (idx > 0))
 				idx++;
-			if (indent == 0)
+			if (indent <= 0)
 				json_data[idx] = 0;
 			if (idx >= MAX_JSON_STRING_LEN-1)
 				break;
 		} while (indent > 0);
 
-		if (indent > 0)
-			/*
-			 * We've broken out of the read loop without getting
-			 * a closing brace, so throw away the data
-			 */
-			json_data[idx] = 0;
+		json_data[idx] = '\0';
 
 		if (strlen(json_data) == 0)
 			continue;

@@ -609,6 +609,7 @@ void igb_check_options(struct igb_adapter *adapter)
 				igb_validate_option(&adapter->rss_queues, &opt, adapter);
 				if (adapter->rss_queues)
 					break;
+				/* fallthrough */
 			case 0:
 				adapter->rss_queues = min_t(u32, opt.arg.r.max, num_online_cpus());
 				break;

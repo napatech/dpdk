@@ -76,14 +76,13 @@ core_info_init(void)
 	ci->core_count = get_nprocs_conf();
 	ci->branch_ratio_threshold = BRANCH_RATIO_THRESHOLD;
 	ci->cd = malloc(ci->core_count * sizeof(struct core_details));
+	memset(ci->cd, 0, ci->core_count * sizeof(struct core_details));
 	if (!ci->cd) {
 		RTE_LOG(ERR, POWER_MANAGER, "Failed to allocate memory for core info.");
 		return -1;
 	}
 	for (i = 0; i < ci->core_count; i++) {
 		ci->cd[i].global_enabled_cpus = 1;
-		ci->cd[i].oob_enabled = 0;
-		ci->cd[i].msr_fd = 0;
 	}
 	printf("%d cores in system\n", ci->core_count);
 	return 0;
@@ -157,7 +156,7 @@ power_manager_get_current_frequency(unsigned core_num)
 	rte_spinlock_lock(&global_core_freq_info[core_num].power_sl);
 	index = rte_power_get_freq(core_num);
 	rte_spinlock_unlock(&global_core_freq_info[core_num].power_sl);
-	if (index >= POWER_MGR_MAX_CPUS)
+	if (index >= RTE_MAX_LCORE_FREQS)
 		freq = 0;
 	else
 		freq = global_core_freq_info[core_num].freqs[index];

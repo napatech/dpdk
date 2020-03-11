@@ -315,7 +315,8 @@ cpt_fc_ciph_set_key(void *ctx, cipher_type_t type, uint8_t *key,
 	memcpy(fctx->enc.encr_key, key, key_len);
 
 fc_success:
-	*ctrl_flags = rte_cpu_to_be_64(*ctrl_flags);
+	if (ctrl_flags != NULL)
+		*ctrl_flags = rte_cpu_to_be_64(*ctrl_flags);
 
 success:
 	cpt_ctx->enc_cipher = type;
@@ -549,7 +550,7 @@ cpt_digest_gen_prep(uint32_t flags,
 		/* Minor op is passthrough */
 		opcode.s.minor = 0x03;
 		/* Send out completion code only */
-		vq_cmd_w0.s.param2 = 0x1;
+		vq_cmd_w0.s.param2 = rte_cpu_to_be_16(0x1);
 	}
 
 	vq_cmd_w0.s.opcode = rte_cpu_to_be_16(opcode.flags);

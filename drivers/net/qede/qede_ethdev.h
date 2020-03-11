@@ -66,8 +66,8 @@
 					(edev)->dev_info.num_tc)
 
 #define QEDE_QUEUE_CNT(qdev) ((qdev)->num_queues)
-#define QEDE_RSS_COUNT(qdev) ((qdev)->num_rx_queues)
-#define QEDE_TSS_COUNT(qdev) ((qdev)->num_tx_queues)
+#define QEDE_RSS_COUNT(dev) ((dev)->data->nb_rx_queues)
+#define QEDE_TSS_COUNT(dev) ((dev)->data->nb_tx_queues)
 
 #define QEDE_DUPLEX_FULL	1
 #define QEDE_DUPLEX_HALF	2
@@ -215,7 +215,9 @@ struct qede_dev {
 	struct qed_dev_eth_info dev_info;
 	struct ecore_sb_info *sb_array;
 	struct qede_fastpath *fp_array;
+	struct qede_fastpath_cmt *fp_array_cmt;
 	uint16_t mtu;
+	uint16_t new_mtu;
 	bool enable_tx_switching;
 	bool rss_enable;
 	struct rte_eth_rss_conf rss_conf;

@@ -49,6 +49,13 @@
 
 #define	IGB_FLEX_RAW_NUM	12
 
+struct igb_flow_mem_list igb_flow_list;
+struct igb_ntuple_filter_list igb_filter_ntuple_list;
+struct igb_ethertype_filter_list igb_filter_ethertype_list;
+struct igb_syn_filter_list igb_filter_syn_list;
+struct igb_flex_filter_list igb_filter_flex_list;
+struct igb_rss_filter_list igb_filter_rss_list;
+
 /**
  * Please aware there's an asumption for all the parsers.
  * rte_flow_item is using big endian, rte_flow_attr and
@@ -1374,7 +1381,7 @@ igb_parse_rss_filter(struct rte_eth_dev *dev,
 	index++;
 	NEXT_ITEM_OF_ACTION(act, actions, index);
 	if (act->type != RTE_FLOW_ACTION_TYPE_END) {
-		memset(rss_conf, 0, sizeof(struct rte_eth_rss_conf));
+		memset(rss_conf, 0, sizeof(struct igb_rte_flow_rss_conf));
 		rte_flow_error_set(error, EINVAL,
 			RTE_FLOW_ERROR_TYPE_ACTION,
 			act, "Not supported action.");

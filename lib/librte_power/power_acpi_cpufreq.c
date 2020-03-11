@@ -12,8 +12,9 @@
 #include <signal.h>
 #include <limits.h>
 
-#include <rte_memcpy.h>
 #include <rte_atomic.h>
+#include <rte_memcpy.h>
+#include <rte_memory.h>
 
 #include "power_acpi_cpufreq.h"
 #include "power_common.h"
@@ -28,7 +29,7 @@
 
 #define FOPEN_OR_ERR_RET(f, retval) do { \
 		if ((f) == NULL) { \
-			RTE_LOG(ERR, POWER, "File not openned\n"); \
+			RTE_LOG(ERR, POWER, "File not opened\n"); \
 			return retval; \
 		} \
 } while (0)
@@ -107,7 +108,7 @@ set_freq_internal(struct rte_power_info *pi, uint32_t idx)
 	if (idx == pi->curr_idx)
 		return 0;
 
-	POWER_DEBUG_TRACE("Freqency[%u] %u to be set for lcore %u\n",
+	POWER_DEBUG_TRACE("Frequency[%u] %u to be set for lcore %u\n",
 			idx, pi->freqs[idx], pi->lcore_id);
 	if (fseek(pi->f, 0, SEEK_SET) < 0) {
 		RTE_LOG(ERR, POWER, "Fail to set file position indicator to 0 "
@@ -147,6 +148,8 @@ power_set_governor_userspace(struct rte_power_info *pi)
 
 	s = fgets(buf, sizeof(buf), f);
 	FOPS_OR_NULL_GOTO(s, out);
+	/* Strip off terminating '\n' */
+	strtok(buf, "\n");
 
 	/* Check if current governor is userspace */
 	if (strncmp(buf, POWER_GOVERNOR_USERSPACE,
@@ -502,7 +505,8 @@ power_acpi_cpufreq_freq_up(unsigned int lcore_id)
 	}
 
 	pi = &lcore_power_info[lcore_id];
-	if (pi->curr_idx == 0)
+	if (pi->curr_idx == 0 ||
+	    (pi->curr_idx == 1 && pi->turbo_available && !pi->turbo_enable))
 		return 0;
 
 	/* Frequencies in the array are from high to low. */

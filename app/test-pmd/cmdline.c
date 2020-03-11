@@ -94,14 +94,15 @@ static void cmd_help_brief_parsed(__attribute__((unused)) void *parsed_result,
 		cl,
 		"\n"
 		"Help is available for the following sections:\n\n"
-		"    help control    : Start and stop forwarding.\n"
-		"    help display    : Displaying port, stats and config "
+		"    help control                    : Start and stop forwarding.\n"
+		"    help display                    : Displaying port, stats and config "
 		"information.\n"
-		"    help config     : Configuration information.\n"
-		"    help ports      : Configuring ports.\n"
-		"    help registers  : Reading and setting port registers.\n"
-		"    help filters    : Filters configuration help.\n"
-		"    help all        : All of the above sections.\n\n"
+		"    help config                     : Configuration information.\n"
+		"    help ports                      : Configuring ports.\n"
+		"    help registers                  : Reading and setting port registers.\n"
+		"    help filters                    : Filters configuration help.\n"
+		"    help traffic_management         : Traffic Management commmands.\n"
+		"    help all                        : All of the above sections.\n\n"
 	);
 
 }
@@ -210,21 +211,32 @@ static void cmd_help_long_parsed(void *parsed_result,
 
 			"show port meter stats (port_id) (meter_id) (clear)\n"
 			"    Get meter stats on a port\n\n"
-                        "show port tm cap (port_id)\n"
-                        "       Display the port TM capability.\n\n"
 
-                        "show port tm level cap (port_id) (level_id)\n"
-                        "       Display the port TM hierarchical level capability.\n\n"
+			"show fwd stats all\n"
+			"    Display statistics for all fwd engines.\n\n"
 
-                        "show port tm node cap (port_id) (node_id)\n"
-                        "       Display the port TM node capability.\n\n"
+			"clear fwd stats all\n"
+			"    Clear statistics for all fwd engines.\n\n"
 
-                        "show port tm node type (port_id) (node_id)\n"
-                        "       Display the port TM node type.\n\n"
+			"show port (port_id) rx_offload capabilities\n"
+			"    List all per queue and per port Rx offloading"
+			" capabilities of a port\n\n"
 
-                        "show port tm node stats (port_id) (node_id) (clear)\n"
-                        "       Display the port TM node stats.\n\n"
+			"show port (port_id) rx_offload configuration\n"
+			"    List port level and all queue level"
+			" Rx offloading configuration\n\n"
 
+			"show port (port_id) tx_offload capabilities\n"
+			"    List all per queue and per port"
+			" Tx offloading capabilities of a port\n\n"
+
+			"show port (port_id) tx_offload configuration\n"
+			"    List port level and all queue level"
+			" Tx offloading configuration\n\n"
+
+			"show port (port_id) tx_metadata\n"
+			"    Show Tx metadata value set"
+			" for a specific port\n\n"
 		);
 	}
 
@@ -642,11 +654,6 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"E-tag set filter del e-tag-id (value) port (port_id)\n"
 			"    Delete an E-tag forwarding filter on a port\n\n"
 
-#if defined RTE_LIBRTE_PMD_SOFTNIC && defined RTE_LIBRTE_SCHED
-			"set port tm hierarchy default (port_id)\n"
-			"	Set default traffic Management hierarchy on a port\n\n"
-
-#endif
 			"ddp add (port_id) (profile_path[,backup_profile_path])\n"
 			"    Load a profile package on a port\n\n"
 
@@ -727,62 +734,6 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"show port (port_id) queue-region\n"
 			"    show all queue region related configuration info\n\n"
 
-			"add port tm node shaper profile (port_id) (shaper_profile_id)"
-			" (cmit_tb_rate) (cmit_tb_size) (peak_tb_rate) (peak_tb_size)"
-			" (packet_length_adjust)\n"
-			"	Add port tm node private shaper profile.\n\n"
-
-			"del port tm node shaper profile (port_id) (shaper_profile_id)\n"
-			"	Delete port tm node private shaper profile.\n\n"
-
-			"add port tm node shared shaper (port_id) (shared_shaper_id)"
-			" (shaper_profile_id)\n"
-			"	Add/update port tm node shared shaper.\n\n"
-
-			"del port tm node shared shaper (port_id) (shared_shaper_id)\n"
-			"	Delete port tm node shared shaper.\n\n"
-
-			"set port tm node shaper profile (port_id) (node_id)"
-			" (shaper_profile_id)\n"
-			"	Set port tm node shaper profile.\n\n"
-
-			"add port tm node wred profile (port_id) (wred_profile_id)"
-			" (color_g) (min_th_g) (max_th_g) (maxp_inv_g) (wq_log2_g)"
-			" (color_y) (min_th_y) (max_th_y) (maxp_inv_y) (wq_log2_y)"
-			" (color_r) (min_th_r) (max_th_r) (maxp_inv_r) (wq_log2_r)\n"
-			"	Add port tm node wred profile.\n\n"
-
-			"del port tm node wred profile (port_id) (wred_profile_id)\n"
-			"	Delete port tm node wred profile.\n\n"
-
-			"add port tm nonleaf node (port_id) (node_id) (parent_node_id)"
-			" (priority) (weight) (level_id) (shaper_profile_id)"
-			" (n_sp_priorities) (stats_mask) (n_shared_shapers)"
-			" [(shared_shaper_id_0) (shared_shaper_id_1)...]\n"
-			"	Add port tm nonleaf node.\n\n"
-
-			"add port tm leaf node (port_id) (node_id) (parent_node_id)"
-			" (priority) (weight) (level_id) (shaper_profile_id)"
-			" (cman_mode) (wred_profile_id) (stats_mask) (n_shared_shapers)"
-			" [(shared_shaper_id_0) (shared_shaper_id_1)...]\n"
-			"	Add port tm leaf node.\n\n"
-
-			"del port tm node (port_id) (node_id)\n"
-			"	Delete port tm node.\n\n"
-
-			"set port tm node parent (port_id) (node_id) (parent_node_id)"
-			" (priority) (weight)\n"
-			"	Set port tm node parent.\n\n"
-
-			"suspend port tm node (port_id) (node_id)"
-			"       Suspend tm node.\n\n"
-
-			"resume port tm node (port_id) (node_id)"
-			"       Resume tm node.\n\n"
-
-			"port tm hierarchy commit (port_id) (clean_on_fail)\n"
-			"	Commit tm hierarchy.\n\n"
-
 			"vxlan ip-version (ipv4|ipv6) vni (vni) udp-src"
 			" (udp-src) udp-dst (udp-dst) ip-src (ip-src) ip-dst"
 			" (ip-dst) eth-src (eth-src) eth-dst (eth-dst)\n"
@@ -825,6 +776,9 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"port close (port_id|all)\n"
 			"    Close all ports or port_id.\n\n"
 
+			"port reset (port_id|all)\n"
+			"    Reset all ports or port_id.\n\n"
+
 			"port attach (ident)\n"
 			"    Attach physical or virtual dev by pci address or virtual device name\n\n"
 
@@ -845,11 +799,9 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"port config all max-pkt-len (value)\n"
 			"    Set the max packet length.\n\n"
 
-			"port config all (crc-strip|scatter|rx-cksum|rx-timestamp|hw-vlan|hw-vlan-filter|"
-			"hw-vlan-strip|hw-vlan-extend|drop-en)"
-			" (on|off)\n"
-			"    Set crc-strip/scatter/rx-checksum/hardware-vlan/drop_en"
-			" for ports.\n\n"
+			"port config all drop-en (on|off)\n"
+			"    Enable or disable packet drop on all RX queues of all ports when no "
+			"receive buffers available.\n\n"
 
 			"port config all rss (all|default|ip|tcp|udp|sctp|"
 			"ether|port|vxlan|geneve|nvgre|none|<flowtype_id>)\n"
@@ -918,6 +870,52 @@ static void cmd_help_long_parsed(void *parsed_result,
 
 			"port config (port_id) udp_tunnel_port add|rm vxlan|geneve (udp_port)\n\n"
 			"    Add/remove UDP tunnel port for tunneling offload\n\n"
+
+			"port config <port_id> rx_offload vlan_strip|"
+			"ipv4_cksum|udp_cksum|tcp_cksum|tcp_lro|qinq_strip|"
+			"outer_ipv4_cksum|macsec_strip|header_split|"
+			"vlan_filter|vlan_extend|jumbo_frame|"
+			"scatter|timestamp|security|keep_crc on|off\n"
+			"     Enable or disable a per port Rx offloading"
+			" on all Rx queues of a port\n\n"
+
+			"port (port_id) rxq (queue_id) rx_offload vlan_strip|"
+			"ipv4_cksum|udp_cksum|tcp_cksum|tcp_lro|qinq_strip|"
+			"outer_ipv4_cksum|macsec_strip|header_split|"
+			"vlan_filter|vlan_extend|jumbo_frame|"
+			"scatter|timestamp|security|keep_crc on|off\n"
+			"    Enable or disable a per queue Rx offloading"
+			" only on a specific Rx queue\n\n"
+
+			"port config (port_id) tx_offload vlan_insert|"
+			"ipv4_cksum|udp_cksum|tcp_cksum|sctp_cksum|tcp_tso|"
+			"udp_tso|outer_ipv4_cksum|qinq_insert|vxlan_tnl_tso|"
+			"gre_tnl_tso|ipip_tnl_tso|geneve_tnl_tso|"
+			"macsec_insert|mt_lockfree|multi_segs|mbuf_fast_free|"
+			"security|match_metadata on|off\n"
+			"    Enable or disable a per port Tx offloading"
+			" on all Tx queues of a port\n\n"
+
+			"port (port_id) txq (queue_id) tx_offload vlan_insert|"
+			"ipv4_cksum|udp_cksum|tcp_cksum|sctp_cksum|tcp_tso|"
+			"udp_tso|outer_ipv4_cksum|qinq_insert|vxlan_tnl_tso|"
+			"gre_tnl_tso|ipip_tnl_tso|geneve_tnl_tso|macsec_insert"
+			"|mt_lockfree|multi_segs|mbuf_fast_free|security"
+			" on|off\n"
+			"    Enable or disable a per queue Tx offloading"
+			" only on a specific Tx queue\n\n"
+
+			"bpf-load rx|tx (port) (queue) (J|M|B) (file_name)\n"
+			"    Load an eBPF program as a callback"
+			" for particular RX/TX queue\n\n"
+
+			"bpf-unload rx|tx (port) (queue)\n"
+			"    Unload previously loaded eBPF program"
+			" for particular RX/TX queue\n\n"
+
+			"port config (port_id) tx_metadata (value)\n"
+			"    Set Tx metadata value per port. Testpmd will add this value"
+			" to any Tx packet sent from this port\n\n"
 		);
 	}
 
@@ -1137,6 +1135,107 @@ static void cmd_help_long_parsed(void *parsed_result,
 			" flow rules\n\n"
 		);
 	}
+
+	if (show_all || !strcmp(res->section, "traffic_management")) {
+		cmdline_printf(
+			cl,
+			"\n"
+			"Traffic Management:\n"
+			"--------------\n"
+			"show port tm cap (port_id)\n"
+			"       Display the port TM capability.\n\n"
+
+			"show port tm level cap (port_id) (level_id)\n"
+			"       Display the port TM hierarchical level capability.\n\n"
+
+			"show port tm node cap (port_id) (node_id)\n"
+			"       Display the port TM node capability.\n\n"
+
+			"show port tm node type (port_id) (node_id)\n"
+			"       Display the port TM node type.\n\n"
+
+			"show port tm node stats (port_id) (node_id) (clear)\n"
+			"       Display the port TM node stats.\n\n"
+
+#if defined RTE_LIBRTE_PMD_SOFTNIC && defined RTE_LIBRTE_SCHED
+			"set port tm hierarchy default (port_id)\n"
+			"       Set default traffic Management hierarchy on a port\n\n"
+#endif
+
+			"add port tm node shaper profile (port_id) (shaper_profile_id)"
+			" (cmit_tb_rate) (cmit_tb_size) (peak_tb_rate) (peak_tb_size)"
+			" (packet_length_adjust)\n"
+			"       Add port tm node private shaper profile.\n\n"
+
+			"del port tm node shaper profile (port_id) (shaper_profile_id)\n"
+			"       Delete port tm node private shaper profile.\n\n"
+
+			"add port tm node shared shaper (port_id) (shared_shaper_id)"
+			" (shaper_profile_id)\n"
+			"       Add/update port tm node shared shaper.\n\n"
+
+			"del port tm node shared shaper (port_id) (shared_shaper_id)\n"
+			"       Delete port tm node shared shaper.\n\n"
+
+			"set port tm node shaper profile (port_id) (node_id)"
+			" (shaper_profile_id)\n"
+			"       Set port tm node shaper profile.\n\n"
+
+			"add port tm node wred profile (port_id) (wred_profile_id)"
+			" (color_g) (min_th_g) (max_th_g) (maxp_inv_g) (wq_log2_g)"
+			" (color_y) (min_th_y) (max_th_y) (maxp_inv_y) (wq_log2_y)"
+			" (color_r) (min_th_r) (max_th_r) (maxp_inv_r) (wq_log2_r)\n"
+			"       Add port tm node wred profile.\n\n"
+
+			"del port tm node wred profile (port_id) (wred_profile_id)\n"
+			"       Delete port tm node wred profile.\n\n"
+
+			"add port tm nonleaf node (port_id) (node_id) (parent_node_id)"
+			" (priority) (weight) (level_id) (shaper_profile_id)"
+			" (n_sp_priorities) (stats_mask) (n_shared_shapers)"
+			" [(shared_shaper_id_0) (shared_shaper_id_1)...]\n"
+			"       Add port tm nonleaf node.\n\n"
+
+			"add port tm leaf node (port_id) (node_id) (parent_node_id)"
+			" (priority) (weight) (level_id) (shaper_profile_id)"
+			" (cman_mode) (wred_profile_id) (stats_mask) (n_shared_shapers)"
+			" [(shared_shaper_id_0) (shared_shaper_id_1)...]\n"
+			"       Add port tm leaf node.\n\n"
+
+			"del port tm node (port_id) (node_id)\n"
+			"       Delete port tm node.\n\n"
+
+			"set port tm node parent (port_id) (node_id) (parent_node_id)"
+			" (priority) (weight)\n"
+			"       Set port tm node parent.\n\n"
+
+			"suspend port tm node (port_id) (node_id)"
+			"       Suspend tm node.\n\n"
+
+			"resume port tm node (port_id) (node_id)"
+			"       Resume tm node.\n\n"
+
+			"port tm hierarchy commit (port_id) (clean_on_fail)\n"
+			"       Commit tm hierarchy.\n\n"
+
+			"set port tm mark ip_ecn (port) (green) (yellow)"
+			" (red)\n"
+			"    Enables/Disables the traffic management marking"
+			" for IP ECN (Explicit Congestion Notification)"
+			" packets on a given port\n\n"
+
+			"set port tm mark ip_dscp (port) (green) (yellow)"
+			" (red)\n"
+			"    Enables/Disables the traffic management marking"
+			" on the port for IP dscp packets\n\n"
+
+			"set port tm mark vlan_dei (port) (green) (yellow)"
+			" (red)\n"
+			"    Enables/Disables the traffic management marking"
+			" on the port for VLAN packets with DEI enabled\n\n"
+		);
+	}
+
 }
 
 cmdline_parse_token_string_t cmd_help_long_help =
@@ -1145,12 +1244,13 @@ cmdline_parse_token_string_t cmd_help_long_help =
 cmdline_parse_token_string_t cmd_help_long_section =
 	TOKEN_STRING_INITIALIZER(struct cmd_help_long_result, section,
 			"all#control#display#config#"
-			"ports#registers#filters");
+			"ports#registers#filters#traffic_management");
 
 cmdline_parse_inst_t cmd_help_long = {
 	.f = cmd_help_long_parsed,
 	.data = NULL,
-	.help_str = "help all|control|display|config|ports|register|filters: "
+	.help_str = "help all|control|display|config|ports|register|"
+		"filters|traffic_management: "
 		"Show help",
 	.tokens = {
 		(void *)&cmd_help_long_help,
@@ -1942,107 +2042,24 @@ cmd_config_rx_mode_flag_parsed(void *parsed_result,
 				__attribute__((unused)) void *data)
 {
 	struct cmd_config_rx_mode_flag *res = parsed_result;
-	portid_t pid;
 
 	if (!all_ports_stopped()) {
 		printf("Please stop all ports first\n");
 		return;
 	}
 
-	RTE_ETH_FOREACH_DEV(pid) {
-		struct rte_port *port;
-		uint64_t rx_offloads;
-
-		port = &ports[pid];
-		rx_offloads = port->dev_conf.rxmode.offloads;
-		if (!strcmp(res->name, "crc-strip")) {
-			if (!strcmp(res->value, "on")) {
-				rx_offloads &= ~DEV_RX_OFFLOAD_KEEP_CRC;
-			} else if (!strcmp(res->value, "off")) {
-				rx_offloads |= DEV_RX_OFFLOAD_KEEP_CRC;
-			} else {
-				printf("Unknown parameter\n");
-				return;
-			}
-		} else if (!strcmp(res->name, "scatter")) {
-			if (!strcmp(res->value, "on")) {
-				rx_offloads |= DEV_RX_OFFLOAD_SCATTER;
-			} else if (!strcmp(res->value, "off")) {
-				rx_offloads &= ~DEV_RX_OFFLOAD_SCATTER;
-			} else {
-				printf("Unknown parameter\n");
-				return;
-			}
-		} else if (!strcmp(res->name, "rx-cksum")) {
-			if (!strcmp(res->value, "on"))
-				rx_offloads |= DEV_RX_OFFLOAD_CHECKSUM;
-			else if (!strcmp(res->value, "off"))
-				rx_offloads &= ~DEV_RX_OFFLOAD_CHECKSUM;
-			else {
-				printf("Unknown parameter\n");
-				return;
-			}
-		} else if (!strcmp(res->name, "rx-timestamp")) {
-			if (!strcmp(res->value, "on"))
-				rx_offloads |= DEV_RX_OFFLOAD_TIMESTAMP;
-			else if (!strcmp(res->value, "off"))
-				rx_offloads &= ~DEV_RX_OFFLOAD_TIMESTAMP;
-			else {
-				printf("Unknown parameter\n");
-				return;
-			}
-		} else if (!strcmp(res->name, "hw-vlan")) {
-			if (!strcmp(res->value, "on")) {
-				rx_offloads |= (DEV_RX_OFFLOAD_VLAN_FILTER |
-						DEV_RX_OFFLOAD_VLAN_STRIP);
-			} else if (!strcmp(res->value, "off")) {
-				rx_offloads &= ~(DEV_RX_OFFLOAD_VLAN_FILTER |
-						DEV_RX_OFFLOAD_VLAN_STRIP);
-			} else {
-				printf("Unknown parameter\n");
-				return;
-			}
-		} else if (!strcmp(res->name, "hw-vlan-filter")) {
-			if (!strcmp(res->value, "on"))
-				rx_offloads |= DEV_RX_OFFLOAD_VLAN_FILTER;
-			else if (!strcmp(res->value, "off"))
-				rx_offloads &= ~DEV_RX_OFFLOAD_VLAN_FILTER;
-			else {
-				printf("Unknown parameter\n");
-				return;
-			}
-		} else if (!strcmp(res->name, "hw-vlan-strip")) {
-			if (!strcmp(res->value, "on"))
-				rx_offloads |= DEV_RX_OFFLOAD_VLAN_STRIP;
-			else if (!strcmp(res->value, "off"))
-				rx_offloads &= ~DEV_RX_OFFLOAD_VLAN_STRIP;
-			else {
-				printf("Unknown parameter\n");
-				return;
-			}
-		} else if (!strcmp(res->name, "hw-vlan-extend")) {
-			if (!strcmp(res->value, "on"))
-				rx_offloads |= DEV_RX_OFFLOAD_VLAN_EXTEND;
-			else if (!strcmp(res->value, "off"))
-				rx_offloads &= ~DEV_RX_OFFLOAD_VLAN_EXTEND;
-			else {
-				printf("Unknown parameter\n");
-				return;
-			}
-		} else if (!strcmp(res->name, "drop-en")) {
-			if (!strcmp(res->value, "on"))
-				rx_drop_en = 1;
-			else if (!strcmp(res->value, "off"))
-				rx_drop_en = 0;
-			else {
-				printf("Unknown parameter\n");
-				return;
-			}
-		} else {
+	if (!strcmp(res->name, "drop-en")) {
+		if (!strcmp(res->value, "on"))
+			rx_drop_en = 1;
+		else if (!strcmp(res->value, "off"))
+			rx_drop_en = 0;
+		else {
 			printf("Unknown parameter\n");
 			return;
 		}
-		port->dev_conf.rxmode.offloads = rx_offloads;
+	} else {
+		printf("Unknown parameter\n");
+		return;
 	}
 
 	init_port_config();
@@ -2059,8 +2076,7 @@ cmdline_parse_token_string_t cmd_config_rx_mode_flag_all =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_rx_mode_flag, all, "all");
 cmdline_parse_token_string_t cmd_config_rx_mode_flag_name =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_rx_mode_flag, name,
-					"crc-strip#scatter#rx-cksum#rx-timestamp#hw-vlan#"
-					"hw-vlan-filter#hw-vlan-strip#hw-vlan-extend");
+					"drop-en");
 cmdline_parse_token_string_t cmd_config_rx_mode_flag_value =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_rx_mode_flag, value,
 							"on#off");
@@ -2068,8 +2084,7 @@ cmdline_parse_token_string_t cmd_config_rx_mode_flag_value =
 cmdline_parse_inst_t cmd_config_rx_mode_flag = {
 	.f = cmd_config_rx_mode_flag_parsed,
 	.data = NULL,
-	.help_str = "port config all crc-strip|scatter|rx-cksum|rx-timestamp|hw-vlan|"
-		"hw-vlan-filter|hw-vlan-strip|hw-vlan-extend on|off",
+	.help_str = "port config all drop-en on|off",
 	.tokens = {
 		(void *)&cmd_config_rx_mode_flag_port,
 		(void *)&cmd_config_rx_mode_flag_keyword,
@@ -2261,7 +2276,6 @@ cmd_config_rss_hash_key_parsed(void *parsed_result,
 	uint8_t hash_key_size;
 	uint32_t key_len;
 
-	memset(&dev_info, 0, sizeof(dev_info));
 	rte_eth_dev_info_get(res->port_id, &dev_info);
 	if (dev_info.hash_key_size > 0 &&
 			dev_info.hash_key_size <= sizeof(hash_key))
@@ -2794,7 +2808,6 @@ cmd_set_rss_reta_parsed(void *parsed_result,
 	struct rte_eth_rss_reta_entry64 reta_conf[8];
 	struct cmd_config_rss_reta *res = parsed_result;
 
-	memset(&dev_info, 0, sizeof(dev_info));
 	rte_eth_dev_info_get(res->port_id, &dev_info);
 	if (dev_info.reta_size == 0) {
 		printf("Redirection table size is 0 which is "
@@ -2914,7 +2927,6 @@ cmd_showport_reta_parsed(void *parsed_result,
 	struct rte_eth_dev_info dev_info;
 	uint16_t max_reta_size;
 
-	memset(&dev_info, 0, sizeof(dev_info));
 	rte_eth_dev_info_get(res->port_id, &dev_info);
 	max_reta_size = RTE_MIN(dev_info.reta_size, ETH_RSS_RETA_SIZE_512);
 	if (res->size == 0 || res->size > max_reta_size) {
@@ -4278,6 +4290,17 @@ csum_show(int port_id)
 }
 
 static void
+cmd_config_queue_tx_offloads(struct rte_port *port)
+{
+	int k;
+
+	/* Apply queue tx offloads configuration */
+	for (k = 0; k < port->dev_info.max_rx_queues; k++)
+		port->tx_conf[k].offloads =
+			port->dev_conf.txmode.offloads;
+}
+
+static void
 cmd_csum_parsed(void *parsed_result,
 		       __attribute__((unused)) struct cmdline *cl,
 		       __attribute__((unused)) void *data)
@@ -4361,6 +4384,7 @@ cmd_csum_parsed(void *parsed_result,
 			ports[res->port_id].dev_conf.txmode.offloads &=
 							(~csum_offloads);
 		}
+		cmd_config_queue_tx_offloads(&ports[res->port_id]);
 	}
 	csum_show(res->port_id);
 
@@ -4512,6 +4536,7 @@ cmd_tso_set_parsed(void *parsed_result,
 		printf("TSO segment size for non-tunneled packets is %d\n",
 			ports[res->port_id].tso_segsz);
 	}
+	cmd_config_queue_tx_offloads(&ports[res->port_id]);
 
 	/* display warnings if configuration is not supported by the NIC */
 	rte_eth_dev_info_get(res->port_id, &dev_info);
@@ -4667,6 +4692,7 @@ cmd_tunnel_tso_set_parsed(void *parsed_result,
 				"if outer L3 is IPv4; not necessary for IPv6\n");
 	}
 
+	cmd_config_queue_tx_offloads(&ports[res->port_id]);
 	cmd_reconfig_device_queue(res->port_id, 1, 1);
 }
 
@@ -8271,19 +8297,19 @@ cmd_set_vf_rxmode_parsed(void *parsed_result,
 		       __attribute__((unused)) void *data)
 {
 	int ret = -ENOTSUP;
-	uint16_t rx_mode = 0;
+	uint16_t vf_rxmode = 0;
 	struct cmd_set_vf_rxmode *res = parsed_result;
 
 	int is_on = (strcmp(res->on, "on") == 0) ? 1 : 0;
 	if (!strcmp(res->what,"rxmode")) {
 		if (!strcmp(res->mode, "AUPE"))
-			rx_mode |= ETH_VMDQ_ACCEPT_UNTAG;
+			vf_rxmode |= ETH_VMDQ_ACCEPT_UNTAG;
 		else if (!strcmp(res->mode, "ROPE"))
-			rx_mode |= ETH_VMDQ_ACCEPT_HASH_UC;
+			vf_rxmode |= ETH_VMDQ_ACCEPT_HASH_UC;
 		else if (!strcmp(res->mode, "BAM"))
-			rx_mode |= ETH_VMDQ_ACCEPT_BROADCAST;
+			vf_rxmode |= ETH_VMDQ_ACCEPT_BROADCAST;
 		else if (!strncmp(res->mode, "MPE",3))
-			rx_mode |= ETH_VMDQ_ACCEPT_MULTICAST;
+			vf_rxmode |= ETH_VMDQ_ACCEPT_MULTICAST;
 	}
 
 	RTE_SET_USED(is_on);
@@ -8291,12 +8317,12 @@ cmd_set_vf_rxmode_parsed(void *parsed_result,
 #ifdef RTE_LIBRTE_IXGBE_PMD
 	if (ret == -ENOTSUP)
 		ret = rte_pmd_ixgbe_set_vf_rxmode(res->port_id, res->vf_id,
-						  rx_mode, (uint8_t)is_on);
+						  vf_rxmode, (uint8_t)is_on);
 #endif
 #ifdef RTE_LIBRTE_BNXT_PMD
 	if (ret == -ENOTSUP)
 		ret = rte_pmd_bnxt_set_vf_rxmode(res->port_id, res->vf_id,
-						 rx_mode, (uint8_t)is_on);
+						 vf_rxmode, (uint8_t)is_on);
 #endif
 	if (ret < 0)
 		printf("bad VF receive mode parameter, return code = %d \n",
@@ -10927,7 +10953,6 @@ cmd_flow_director_filter_parsed(void *parsed_result,
 		else if (!strncmp(res->pf_vf, "vf", 2)) {
 			struct rte_eth_dev_info dev_info;
 
-			memset(&dev_info, 0, sizeof(dev_info));
 			rte_eth_dev_info_get(res->port_id, &dev_info);
 			errno = 0;
 			vf_id = strtoul(res->pf_vf + 2, &end, 10);
@@ -12092,7 +12117,7 @@ cmd_set_hash_global_config_parsed(void *parsed_result,
 							res->port_id);
 	else
 		printf("Global hash configurations have been set "
-			"succcessfully by port %d\n", res->port_id);
+			"successfully by port %d\n", res->port_id);
 }
 
 cmdline_parse_token_string_t cmd_set_hash_global_config_all =
@@ -15589,10 +15614,9 @@ static void cmd_set_mplsogre_encap_parsed(void *parsed_result,
 	struct cmd_set_mplsogre_encap_result *res = parsed_result;
 	union {
 		uint32_t mplsogre_label;
-		uint8_t label[3];
+		uint8_t label[4];
 	} id = {
-		.mplsogre_label =
-			rte_cpu_to_be_32(res->label) & RTE_BE32(0x00ffffff),
+		.mplsogre_label = rte_cpu_to_be_32(res->label<<12),
 	};
 
 	if (strcmp(res->mplsogre, "mplsogre_encap") == 0)
@@ -15605,7 +15629,7 @@ static void cmd_set_mplsogre_encap_parsed(void *parsed_result,
 		mplsogre_encap_conf.select_ipv4 = 0;
 	else
 		return;
-	rte_memcpy(mplsogre_encap_conf.label, &id.label[1], 3);
+	rte_memcpy(mplsogre_encap_conf.label, &id.label, 3);
 	if (mplsogre_encap_conf.select_ipv4) {
 		IPV4_ADDR_TO_UINT(res->ip_src, mplsogre_encap_conf.ipv4_src);
 		IPV4_ADDR_TO_UINT(res->ip_dst, mplsogre_encap_conf.ipv4_dst);
@@ -15826,10 +15850,9 @@ static void cmd_set_mplsoudp_encap_parsed(void *parsed_result,
 	struct cmd_set_mplsoudp_encap_result *res = parsed_result;
 	union {
 		uint32_t mplsoudp_label;
-		uint8_t label[3];
+		uint8_t label[4];
 	} id = {
-		.mplsoudp_label =
-			rte_cpu_to_be_32(res->label) & RTE_BE32(0x00ffffff),
+		.mplsoudp_label = rte_cpu_to_be_32(res->label<<12),
 	};
 
 	if (strcmp(res->mplsoudp, "mplsoudp_encap") == 0)
@@ -15842,7 +15865,7 @@ static void cmd_set_mplsoudp_encap_parsed(void *parsed_result,
 		mplsoudp_encap_conf.select_ipv4 = 0;
 	else
 		return;
-	rte_memcpy(mplsoudp_encap_conf.label, &id.label[1], 3);
+	rte_memcpy(mplsoudp_encap_conf.label, &id.label, 3);
 	mplsoudp_encap_conf.udp_src = rte_cpu_to_be_16(res->udp_src);
 	mplsoudp_encap_conf.udp_dst = rte_cpu_to_be_16(res->udp_dst);
 	if (mplsoudp_encap_conf.select_ipv4) {
@@ -17649,7 +17672,7 @@ print_rx_offloads(uint64_t offloads)
 	begin = __builtin_ctzll(offloads);
 	end = sizeof(offloads) * CHAR_BIT - __builtin_clzll(offloads);
 
-	single_offload = 1 << begin;
+	single_offload = 1ULL << begin;
 	for (bit = begin; bit < end; bit++) {
 		if (offloads & single_offload)
 			printf(" %s",
@@ -17807,7 +17830,7 @@ cmdline_parse_token_string_t cmd_config_per_port_rx_offload_result_offload =
 		 offload, "vlan_strip#ipv4_cksum#udp_cksum#tcp_cksum#tcp_lro#"
 			   "qinq_strip#outer_ipv4_cksum#macsec_strip#"
 			   "header_split#vlan_filter#vlan_extend#jumbo_frame#"
-			   "crc_strip#scatter#timestamp#security#keep_crc");
+			   "scatter#timestamp#security#keep_crc");
 cmdline_parse_token_string_t cmd_config_per_port_rx_offload_result_on_off =
 	TOKEN_STRING_INITIALIZER
 		(struct cmd_config_per_port_rx_offload_result,
@@ -17883,7 +17906,7 @@ cmdline_parse_inst_t cmd_config_per_port_rx_offload = {
 	.help_str = "port config <port_id> rx_offload vlan_strip|ipv4_cksum|"
 		    "udp_cksum|tcp_cksum|tcp_lro|qinq_strip|outer_ipv4_cksum|"
 		    "macsec_strip|header_split|vlan_filter|vlan_extend|"
-		    "jumbo_frame|crc_strip|scatter|timestamp|security|keep_crc "
+		    "jumbo_frame|scatter|timestamp|security|keep_crc "
 		    "on|off",
 	.tokens = {
 		(void *)&cmd_config_per_port_rx_offload_result_port,
@@ -17933,7 +17956,7 @@ cmdline_parse_token_string_t cmd_config_per_queue_rx_offload_result_offload =
 		 offload, "vlan_strip#ipv4_cksum#udp_cksum#tcp_cksum#tcp_lro#"
 			   "qinq_strip#outer_ipv4_cksum#macsec_strip#"
 			   "header_split#vlan_filter#vlan_extend#jumbo_frame#"
-			   "crc_strip#scatter#timestamp#security#keep_crc");
+			   "scatter#timestamp#security#keep_crc");
 cmdline_parse_token_string_t cmd_config_per_queue_rx_offload_result_on_off =
 	TOKEN_STRING_INITIALIZER
 		(struct cmd_config_per_queue_rx_offload_result,
@@ -17985,7 +18008,7 @@ cmdline_parse_inst_t cmd_config_per_queue_rx_offload = {
 		    "vlan_strip|ipv4_cksum|"
 		    "udp_cksum|tcp_cksum|tcp_lro|qinq_strip|outer_ipv4_cksum|"
 		    "macsec_strip|header_split|vlan_filter|vlan_extend|"
-		    "jumbo_frame|crc_strip|scatter|timestamp|security|keep_crc "
+		    "jumbo_frame|scatter|timestamp|security|keep_crc "
 		    "on|off",
 	.tokens = {
 		(void *)&cmd_config_per_queue_rx_offload_result_port,
@@ -18043,7 +18066,7 @@ print_tx_offloads(uint64_t offloads)
 	begin = __builtin_ctzll(offloads);
 	end = sizeof(offloads) * CHAR_BIT - __builtin_clzll(offloads);
 
-	single_offload = 1 << begin;
+	single_offload = 1ULL << begin;
 	for (bit = begin; bit < end; bit++) {
 		if (offloads & single_offload)
 			printf(" %s",
@@ -18220,12 +18243,12 @@ search_tx_offload(const char *name)
 	single_offload = 1;
 	for (bit = 0; bit < sizeof(single_offload) * CHAR_BIT; bit++) {
 		single_name = rte_eth_dev_tx_offload_name(single_offload);
+		if (single_name == NULL)
+			break;
 		if (!strcasecmp(single_name, name)) {
 			found = 1;
 			break;
 		} else if (!strcasecmp(single_name, "UNKNOWN"))
-			break;
-		else if (single_name == NULL)
 			break;
 		single_offload <<= 1;
 	}
@@ -18479,7 +18502,7 @@ cmd_show_tx_metadata_parsed(void *parsed_result,
 	}
 	if (!strcmp(res->cmd_keyword, "tx_metadata")) {
 		printf("Port %u tx_metadata: %u\n", res->cmd_pid,
-				ports[res->cmd_pid].tx_metadata);
+			rte_be_to_cpu_32(ports[res->cmd_pid].tx_metadata));
 	}
 }
 

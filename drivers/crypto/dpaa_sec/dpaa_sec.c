@@ -37,6 +37,7 @@
 #include <rte_dpaa_bus.h>
 #include <dpaa_sec.h>
 #include <dpaa_sec_log.h>
+#include <dpaax_iova_table.h>
 
 enum rta_sec_era rta_sec_era;
 
@@ -60,7 +61,7 @@ dpaa_sec_op_ending(struct dpaa_sec_op_ctx *ctx)
 		ctx->op->status = RTE_CRYPTO_OP_STATUS_ERROR;
 	}
 
-	/* report op status to sym->op and then free the ctx memeory  */
+	/* report op status to sym->op and then free the ctx memory  */
 	rte_mempool_put(ctx->ctx_pool, (void *)ctx);
 }
 
@@ -99,8 +100,10 @@ dpaa_mem_vtop(void *vaddr)
 	const struct rte_memseg *ms;
 
 	ms = rte_mem_virt2memseg(vaddr, NULL);
-	if (ms)
+	if (ms) {
+		dpaax_iova_table_update(ms->iova, ms->addr, ms->len);
 		return ms->iova + RTE_PTR_DIFF(vaddr, ms->addr);
+	}
 	return (size_t)NULL;
 }
 
@@ -258,7 +261,8 @@ static inline int is_auth_cipher(dpaa_sec_session *ses)
 {
 	return ((ses->cipher_alg != RTE_CRYPTO_CIPHER_NULL) &&
 		(ses->auth_alg != RTE_CRYPTO_AUTH_NULL) &&
-		(ses->proto_alg != RTE_SECURITY_PROTOCOL_IPSEC));
+		(ses->proto_alg != RTE_SECURITY_PROTOCOL_IPSEC) &&
+		(ses->aead_alg == 0));
 }
 
 static inline int is_proto_ipsec(dpaa_sec_session *ses)
@@ -2166,7 +2170,7 @@ dpaa_sec_security_session_destroy(void *dev __rte_unused,
 
 		rte_free(s->cipher_key.data);
 		rte_free(s->auth_key.data);
-		memset(sess, 0, sizeof(dpaa_sec_session));
+		memset(s, 0, sizeof(dpaa_sec_session));
 		set_sec_session_private_data(sess, NULL);
 		rte_mempool_put(sess_mp, sess_priv);
 	}
@@ -2185,7 +2189,7 @@ dpaa_sec_dev_configure(struct rte_cryptodev *dev,
 	PMD_INIT_FUNC_TRACE();
 
 	internals = dev->data->dev_private;
-	sprintf(str, "ctx_pool_%d", dev->data->dev_id);
+	snprintf(str, sizeof(str), "ctx_pool_%d", dev->data->dev_id);
 	if (!internals->ctx_pool) {
 		internals->ctx_pool = rte_mempool_create((const char *)str,
 							CTX_POOL_NUM_BUFS,
@@ -2391,7 +2395,7 @@ cryptodev_dpaa_sec_probe(struct rte_dpaa_driver *dpaa_drv __rte_unused,
 
 	int retval;
 
-	sprintf(cryptodev_name, "dpaa_sec-%d", dpaa_dev->id.dev_id);
+	snprintf(cryptodev_name, sizeof(cryptodev_name), "%s", dpaa_dev->name);
 
 	cryptodev = rte_cryptodev_pmd_allocate(cryptodev_name, rte_socket_id());
 	if (cryptodev == NULL)

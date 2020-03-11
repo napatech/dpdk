@@ -145,8 +145,8 @@
 					.increment = 0			\
 				},					\
 				.digest_size = {			\
-					.min = 16,			\
-					.max = 16,			\
+					.min = 12,			\
+					.max = 12,			\
 					.increment = 0			\
 				},					\
 				.aad_size = { 0 },			\
@@ -167,7 +167,7 @@
 					.increment = 0			\
 				},					\
 				.digest_size = {			\
-					.min = 12,			\
+					.min = 4,			\
 					.max = 16,			\
 					.increment = 4			\
 				}					\

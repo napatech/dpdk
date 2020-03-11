@@ -219,6 +219,10 @@ nic_xstats_display(portid_t port_id)
 	int cnt_xstats, idx_xstat;
 	struct rte_eth_xstat_name *xstats_names;
 
+	if (port_id_is_invalid(port_id, ENABLED_WARN)) {
+		print_valid_ports();
+		return;
+	}
 	printf("###### NIC extended statistics for port %-2d\n", port_id);
 	if (!rte_eth_dev_is_valid_port(port_id)) {
 		printf("Error: Invalid port number %i\n", port_id);
@@ -274,6 +278,10 @@ nic_xstats_display(portid_t port_id)
 void
 nic_xstats_clear(portid_t port_id)
 {
+	if (port_id_is_invalid(port_id, ENABLED_WARN)) {
+		print_valid_ports();
+		return;
+	}
 	rte_eth_xstats_reset(port_id);
 }
 
@@ -406,7 +414,6 @@ port_infos_display(portid_t port_id)
 	}
 	port = &ports[port_id];
 	rte_eth_link_get_nowait(port_id, &link);
-	memset(&dev_info, 0, sizeof(dev_info));
 	rte_eth_dev_info_get(port_id, &dev_info);
 	printf("\n%s Infos for port %-2d %s\n",
 	       info_border, port_id, info_border);
@@ -510,6 +517,10 @@ port_infos_display(portid_t port_id)
 	printf("Min possible number of TXDs per queue: %hu\n",
 		dev_info.tx_desc_lim.nb_min);
 	printf("TXDs number alignment: %hu\n", dev_info.tx_desc_lim.nb_align);
+	printf("Max segment number per packet: %hu\n",
+		dev_info.tx_desc_lim.nb_seg_max);
+	printf("Max segment number per MTU/TSO: %hu\n",
+		dev_info.tx_desc_lim.nb_mtu_seg_max);
 
 	/* Show switch info only if valid switch domain and port id is set */
 	if (dev_info.switch_info.domain_id !=
@@ -1540,7 +1551,6 @@ ring_rx_descriptor_display(const struct rte_memzone *ring_mz,
 #ifndef RTE_LIBRTE_I40E_16BYTE_RX_DESC
 	struct rte_eth_dev_info dev_info;
 
-	memset(&dev_info, 0, sizeof(dev_info));
 	rte_eth_dev_info_get(port_id, &dev_info);
 	if (strstr(dev_info.driver_name, "i40e") != NULL) {
 		/* 32 bytes RX descriptor, i40e only */
@@ -2955,7 +2965,6 @@ vlan_tpid_set(portid_t port_id, enum rte_vlan_type vlan_type, uint16_t tp_id)
 void
 tx_vlan_set(portid_t port_id, uint16_t vlan_id)
 {
-	int vlan_offload;
 	struct rte_eth_dev_info dev_info;
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN))
@@ -2963,8 +2972,8 @@ tx_vlan_set(portid_t port_id, uint16_t vlan_id)
 	if (vlan_id_is_invalid(vlan_id))
 		return;
 
-	vlan_offload = rte_eth_dev_get_vlan_offload(port_id);
-	if (vlan_offload & ETH_VLAN_EXTEND_OFFLOAD) {
+	if (ports[port_id].dev_conf.txmode.offloads &
+	    DEV_TX_OFFLOAD_QINQ_INSERT) {
 		printf("Error, as QinQ has been enabled.\n");
 		return;
 	}
@@ -2983,7 +2992,6 @@ tx_vlan_set(portid_t port_id, uint16_t vlan_id)
 void
 tx_qinq_set(portid_t port_id, uint16_t vlan_id, uint16_t vlan_id_outer)
 {
-	int vlan_offload;
 	struct rte_eth_dev_info dev_info;
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN))
@@ -2993,11 +3001,6 @@ tx_qinq_set(portid_t port_id, uint16_t vlan_id, uint16_t vlan_id_outer)
 	if (vlan_id_is_invalid(vlan_id_outer))
 		return;
 
-	vlan_offload = rte_eth_dev_get_vlan_offload(port_id);
-	if (!(vlan_offload & ETH_VLAN_EXTEND_OFFLOAD)) {
-		printf("Error, as QinQ hasn't been enabled.\n");
-		return;
-	}
 	rte_eth_dev_info_get(port_id, &dev_info);
 	if ((dev_info.tx_offload_capa & DEV_TX_OFFLOAD_QINQ_INSERT) == 0) {
 		printf("Error: qinq insert not supported by port %d\n",
@@ -3006,7 +3009,8 @@ tx_qinq_set(portid_t port_id, uint16_t vlan_id, uint16_t vlan_id_outer)
 	}
 
 	tx_vlan_reset(port_id);
-	ports[port_id].dev_conf.txmode.offloads |= DEV_TX_OFFLOAD_QINQ_INSERT;
+	ports[port_id].dev_conf.txmode.offloads |= (DEV_TX_OFFLOAD_VLAN_INSERT |
+						    DEV_TX_OFFLOAD_QINQ_INSERT);
 	ports[port_id].tx_vlan_id = vlan_id;
 	ports[port_id].tx_vlan_id_outer = vlan_id_outer;
 }

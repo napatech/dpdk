@@ -112,15 +112,19 @@ ifcvf_vfio_setup(struct ifcvf_internal *internal)
 	struct rte_pci_device *dev = internal->pdev;
 	char devname[RTE_DEV_NAME_MAX_LEN] = {0};
 	int iommu_group_num;
-	int i;
+	int i, ret;
 
 	internal->vfio_dev_fd = -1;
 	internal->vfio_group_fd = -1;
 	internal->vfio_container_fd = -1;
 
 	rte_pci_device_name(&dev->addr, devname, RTE_DEV_NAME_MAX_LEN);
-	rte_vfio_get_group_num(rte_pci_get_sysfs_path(), devname,
+	ret = rte_vfio_get_group_num(rte_pci_get_sysfs_path(), devname,
 			&iommu_group_num);
+	if (ret <= 0) {
+		DRV_LOG(ERR, "%s failed to get IOMMU group", devname);
+		return -1;
+	}
 
 	internal->vfio_container_fd = rte_vfio_container_create();
 	if (internal->vfio_container_fd < 0)
@@ -773,14 +777,14 @@ ifcvf_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	internal->dev_addr.type = PCI_ADDR;
 	list->internal = internal;
 
-	pthread_mutex_lock(&internal_list_lock);
-	TAILQ_INSERT_TAIL(&internal_list, list, next);
-	pthread_mutex_unlock(&internal_list_lock);
-
 	internal->did = rte_vdpa_register_device(&internal->dev_addr,
 				&ifcvf_ops);
 	if (internal->did < 0)
 		goto error;
+
+	pthread_mutex_lock(&internal_list_lock);
+	TAILQ_INSERT_TAIL(&internal_list, list, next);
+	pthread_mutex_unlock(&internal_list_lock);
 
 	rte_atomic32_set(&internal->started, 1);
 	update_datapath(internal);

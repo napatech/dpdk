@@ -304,9 +304,6 @@ _LDLIBS-$(CONFIG_RTE_LIBRTE_EAL)            += -lrt
 ifeq ($(CONFIG_RTE_EXEC_ENV_LINUXAPP)$(CONFIG_RTE_EAL_NUMA_AWARE_HUGEPAGES),yy)
 _LDLIBS-$(CONFIG_RTE_LIBRTE_EAL)            += -lnuma
 endif
-ifeq ($(CONFIG_RTE_EXEC_ENV_LINUXAPP)$(CONFIG_RTE_USE_LIBBSD),yy)
-_LDLIBS-$(CONFIG_RTE_LIBRTE_EAL)            += -lbsd
-endif
 _LDLIBS-$(CONFIG_RTE_LIBRTE_SCHED)          += -lm
 _LDLIBS-$(CONFIG_RTE_LIBRTE_SCHED)          += -lrt
 _LDLIBS-$(CONFIG_RTE_LIBRTE_MEMBER)         += -lm
@@ -336,10 +333,6 @@ filter-libs = \
 		$(call filter-libs,$(call allbutfirst,$(1)))))
 
 LDLIBS := $(call filter-libs,$(LDLIBS))
-
-ifeq ($(RTE_DEVEL_BUILD)$(CONFIG_RTE_BUILD_SHARED_LIB),yy)
-LDFLAGS += -rpath=$(RTE_SDK_BIN)/lib
-endif
 
 MAPFLAGS = -Map=$@.map --cref
 

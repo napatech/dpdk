@@ -23,14 +23,6 @@ SPLIT_STRING,LONG_LINE_STRING,\
 LINE_SPACING,PARENTHESIS_ALIGNMENT,NETWORKING_BLOCK_COMMENT_STYLE,\
 NEW_TYPEDEFS,COMPARISON_TO_NULL"
 
-clean_tmp_files() {
-	if echo $tmpinput | grep -q '^checkpatches\.' ; then
-		rm -f "$tmpinput"
-	fi
-}
-
-trap "clean_tmp_files" INT
-
 print_usage () {
 	cat <<- END_OF_HELP
 	usage: $(basename $0) [-q] [-v] [-nX|patch1 [patch2] ...]]
@@ -44,6 +36,8 @@ print_usage () {
 }
 
 check_forbidden_additions() { # <patch>
+	res=0
+
 	# refrain from new additions of rte_panic() and rte_exit()
 	# multiple folders and expressions are separated by spaces
 	awk -v FOLDERS="lib drivers" \
@@ -51,7 +45,8 @@ check_forbidden_additions() { # <patch>
 		-v RET_ON_FAIL=1 \
 		-v MESSAGE='Using rte_panic/rte_exit' \
 		-f $(dirname $(readlink -e $0))/check-forbidden-tokens.awk \
-		"$1"
+		"$1" || res=1
+
 	# svg figures must be included with wildcard extension
 	# because of png conversion for pdf docs
 	awk -v FOLDERS='doc' \
@@ -59,7 +54,9 @@ check_forbidden_additions() { # <patch>
 		-v RET_ON_FAIL=1 \
 		-v MESSAGE='Using explicit .svg extension instead of .*' \
 		-f $(dirname $(readlink -e $0))/check-forbidden-tokens.awk \
-		"$1"
+		"$1" || res=1
+
+	return $res
 }
 
 number=0
@@ -99,13 +96,16 @@ check () { # <patch> <commit> <title>
 	! $verbose || print_headline "$3"
 	if [ -n "$1" ] ; then
 		tmpinput=$1
-	elif [ -n "$2" ] ; then
-		tmpinput=$(mktemp -t dpdk.checkpatches.XXXXXX)
-		git format-patch --find-renames \
-		--no-stat --stdout -1 $commit > "$tmpinput"
 	else
 		tmpinput=$(mktemp -t dpdk.checkpatches.XXXXXX)
-		cat > "$tmpinput"
+		trap "rm -f '$tmpinput'" INT
+
+		if [ -n "$2" ] ; then
+			git format-patch --find-renames \
+			--no-stat --stdout -1 $commit > "$tmpinput"
+		else
+			cat > "$tmpinput"
+		fi
 	fi
 
 	! $verbose || printf 'Running checkpatch.pl:\n'
@@ -132,7 +132,10 @@ check () { # <patch> <commit> <title>
 		ret=1
 	fi
 
-	clean_tmp_files
+	if [ "$tmpinput" != "$1" ]; then
+		rm -f "$tmpinput"
+		trap - INT
+	fi
 	[ $ret -eq 0 ] && return 0
 
 	status=$(($status + 1))

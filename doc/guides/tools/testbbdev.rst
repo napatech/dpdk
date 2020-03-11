@@ -62,8 +62,7 @@ The following are the command-line options:
 
 ``-e EAL_PARAMS, --eal_params EAL_PARAMS``
  Specifies EAL arguments which are passed to the test app. For more details,
- refer to DPDK documentation at
- http://doc.dpdk.org/guides/linux_gsg/linux_eal_parameters.html.
+ refer to DPDK documentation at :doc:`../linux_gsg/linux_eal_parameters`.
 
 ``-t TIMEOUT, --timeout TIMEOUT``
  Specifies timeout in seconds. If not specified timeout is set to 300 seconds.
@@ -139,7 +138,7 @@ There are 6 main test cases that can be executed using testbbdev tool:
 * Latency measurement [-c latency]
     - Measures the time consumed from the first enqueue until the first
       appearance of a dequeued result
-    - This measurment represents the full latency of a bbdev operation
+    - This measurement represents the full latency of a bbdev operation
       (encode or decode) to execute
 
 * Poll-mode Throughput measurement [-c throughput]
@@ -307,7 +306,7 @@ baseband_null device does not have to be defined explicitly as it is created by 
 
 
 Test Vector files
-=================
+-----------------
 
 Test Vector files contain the data which is used to set turbo decoder/encoder
 parameters and buffers for validation purpose. New test vector files should be
@@ -316,7 +315,7 @@ the syntax of the test vector files is in the following section.
 
 
 Basic principles for test vector files
---------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Line started with ``#`` is treated as a comment and is ignored.
 
 If variable is a chain of values, values should be separated by a comma. If
@@ -351,7 +350,7 @@ documented in *rte_bbdev_op.h*
 
 
 Turbo decoder test vectors template
------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For turbo decoder it has to be always set to ``RTE_BBDEV_OP_TURBO_DEC``
 
@@ -528,7 +527,7 @@ Following statuses can be used:
 
 
 Turbo encoder test vectors template
------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For turbo encoder it has to be always set to ``RTE_BBDEV_OP_TURBO_ENC``
 

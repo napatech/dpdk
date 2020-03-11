@@ -2350,6 +2350,37 @@ i40e_flow_set_fdir_inset(struct i40e_pf *pf,
 	if (num < 0)
 		return -EINVAL;
 
+	if (pf->support_multi_driver) {
+		for (i = 0; i < num; i++)
+			if (i40e_read_rx_ctl(hw,
+					I40E_GLQF_FD_MSK(i, pctype)) !=
+					mask_reg[i]) {
+				PMD_DRV_LOG(ERR, "Input set setting is not"
+						" supported with"
+						" `support-multi-driver`"
+						" enabled!");
+				return -EPERM;
+			}
+		for (i = num; i < I40E_INSET_MASK_NUM_REG; i++)
+			if (i40e_read_rx_ctl(hw,
+					I40E_GLQF_FD_MSK(i, pctype)) != 0) {
+				PMD_DRV_LOG(ERR, "Input set setting is not"
+						" supported with"
+						" `support-multi-driver`"
+						" enabled!");
+				return -EPERM;
+			}
+
+	} else {
+		for (i = 0; i < num; i++)
+			i40e_check_write_reg(hw, I40E_GLQF_FD_MSK(i, pctype),
+				mask_reg[i]);
+		/*clear unused mask registers of the pctype */
+		for (i = num; i < I40E_INSET_MASK_NUM_REG; i++)
+			i40e_check_write_reg(hw,
+					I40E_GLQF_FD_MSK(i, pctype), 0);
+	}
+
 	inset_reg |= i40e_translate_input_set_reg(hw->mac.type, input_set);
 
 	i40e_check_write_reg(hw, I40E_PRTQF_FD_INSET(pctype, 0),
@@ -2358,13 +2389,6 @@ i40e_flow_set_fdir_inset(struct i40e_pf *pf,
 			     (uint32_t)((inset_reg >>
 					 I40E_32_BIT_WIDTH) & UINT32_MAX));
 
-	for (i = 0; i < num; i++)
-		i40e_check_write_reg(hw, I40E_GLQF_FD_MSK(i, pctype),
-				     mask_reg[i]);
-
-	/*clear unused mask registers of the pctype */
-	for (i = num; i < I40E_INSET_MASK_NUM_REG; i++)
-		i40e_check_write_reg(hw, I40E_GLQF_FD_MSK(i, pctype), 0);
 	I40E_WRITE_FLUSH(hw);
 
 	pf->fdir.input_set[pctype] = input_set;
@@ -2443,6 +2467,7 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 	uint64_t input_set = I40E_INSET_NONE;
 	uint16_t frag_off;
 	enum rte_flow_item_type item_type;
+	enum rte_flow_item_type next_type;
 	enum rte_flow_item_type l3 = RTE_FLOW_ITEM_TYPE_END;
 	enum rte_flow_item_type cus_proto = RTE_FLOW_ITEM_TYPE_END;
 	uint32_t i, j;
@@ -2483,6 +2508,16 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 		case RTE_FLOW_ITEM_TYPE_ETH:
 			eth_spec = item->spec;
 			eth_mask = item->mask;
+			next_type = (item + 1)->type;
+
+			if (next_type == RTE_FLOW_ITEM_TYPE_END &&
+						(!eth_spec || !eth_mask)) {
+				rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "NULL eth spec/mask.");
+				return -rte_errno;
+			}
 
 			if (eth_spec && eth_mask) {
 				if (!is_zero_ether_addr(&eth_mask->src) ||
@@ -2495,8 +2530,6 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 				}
 			}
 			if (eth_spec && eth_mask && eth_mask->type) {
-				enum rte_flow_item_type next = (item + 1)->type;
-
 				if (eth_mask->type != RTE_BE16(0xffff)) {
 					rte_flow_error_set(error, EINVAL,
 						      RTE_FLOW_ERROR_TYPE_ITEM,
@@ -2507,7 +2540,7 @@ i40e_flow_parse_fdir_pattern(struct rte_eth_dev *dev,
 
 				ether_type = rte_be_to_cpu_16(eth_spec->type);
 
-				if (next == RTE_FLOW_ITEM_TYPE_VLAN ||
+				if (next_type == RTE_FLOW_ITEM_TYPE_VLAN ||
 				    ether_type == ETHER_TYPE_IPv4 ||
 				    ether_type == ETHER_TYPE_IPv6 ||
 				    ether_type == ETHER_TYPE_ARP ||
@@ -3147,8 +3180,8 @@ i40e_flow_parse_fdir_filter(struct rte_eth_dev *dev,
 
 	cons_filter_type = RTE_ETH_FILTER_FDIR;
 
-	if (dev->data->dev_conf.fdir_conf.mode !=
-	    RTE_FDIR_MODE_PERFECT) {
+	if (dev->data->dev_conf.fdir_conf.mode != RTE_FDIR_MODE_PERFECT ||
+		pf->fdir.fdir_vsi == NULL) {
 		/* Enable fdir when fdir flow is added at first time. */
 		ret = i40e_fdir_setup(pf);
 		if (ret != I40E_SUCCESS) {
@@ -4445,6 +4478,14 @@ i40e_flow_parse_rss_action(struct rte_eth_dev *dev,
 		}
 	}
 
+	if (rss_info->conf.queue_num) {
+		rte_flow_error_set(error, EINVAL,
+				RTE_FLOW_ERROR_TYPE_ACTION,
+				act,
+				"rss only allow one valid rule");
+		return -rte_errno;
+	}
+
 	/* Parse RSS related parameters from configuration */
 	if (rss->func != RTE_ETH_HASH_FUNCTION_DEFAULT)
 		return rte_flow_error_set
@@ -4726,7 +4767,7 @@ i40e_flow_destroy(struct rte_eth_dev *dev,
 		       &((struct i40e_fdir_filter *)flow->rule)->fdir, 0);
 
 		/* If the last flow is destroyed, disable fdir. */
-		if (!ret && !TAILQ_EMPTY(&pf->fdir.fdir_list)) {
+		if (!ret && TAILQ_EMPTY(&pf->fdir.fdir_list)) {
 			i40e_fdir_teardown(pf);
 			dev->data->dev_conf.fdir_conf.mode =
 				   RTE_FDIR_MODE_NONE;

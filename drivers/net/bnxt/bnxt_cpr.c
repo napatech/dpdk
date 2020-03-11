@@ -21,14 +21,12 @@ void bnxt_handle_async_event(struct bnxt *bp,
 				(struct hwrm_async_event_cmpl *)cmp;
 	uint16_t event_id = rte_le_to_cpu_16(async_cmp->event_id);
 
-	/* TODO: HWRM async events are not defined yet */
-	/* Needs to handle: link events, error events, etc. */
 	switch (event_id) {
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_LINK_STATUS_CHANGE:
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_LINK_SPEED_CHANGE:
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_LINK_SPEED_CFG_CHANGE:
 		/* FALLTHROUGH */
-		bnxt_link_update_op(bp->eth_dev, 1);
+		bnxt_link_update_op(bp->eth_dev, 0);
 		break;
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_PF_DRVR_UNLOAD:
 		PMD_DRV_LOG(INFO, "Async event: PF driver unloaded\n");

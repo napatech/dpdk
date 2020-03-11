@@ -8,7 +8,6 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <fcntl.h>
-#include <libgen.h>
 
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
@@ -418,9 +417,9 @@ enic_free_consistent(void *priv,
 	rte_free(mze);
 }
 
-int enic_link_update(struct enic *enic)
+int enic_link_update(struct rte_eth_dev *eth_dev)
 {
-	struct rte_eth_dev *eth_dev = enic->rte_dev;
+	struct enic *enic = pmd_priv(eth_dev);
 	struct rte_eth_link link;
 
 	memset(&link, 0, sizeof(link));
@@ -439,9 +438,11 @@ enic_intr_handler(void *arg)
 
 	vnic_intr_return_all_credits(&enic->intr[ENICPMD_LSC_INTR_OFFSET]);
 
-	enic_link_update(enic);
+	enic_link_update(dev);
 	_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
 	enic_log_q_error(enic);
+	/* Re-enable irq in case of INTx */
+	rte_intr_ack(&enic->pdev->intr_handle);
 }
 
 static int enic_rxq_intr_init(struct enic *enic)
@@ -519,14 +520,14 @@ static void enic_prep_wq_for_simple_tx(struct enic *enic, uint16_t queue_idx)
  * used when that file is not compiled.
  */
 __rte_weak bool
-enic_use_vector_rx_handler(__rte_unused struct enic *enic)
+enic_use_vector_rx_handler(__rte_unused struct rte_eth_dev *eth_dev)
 {
 	return false;
 }
 
-static void pick_rx_handler(struct enic *enic)
+void enic_pick_rx_handler(struct rte_eth_dev *eth_dev)
 {
-	struct rte_eth_dev *eth_dev;
+	struct enic *enic = pmd_priv(eth_dev);
 
 	/*
 	 * Preference order:
@@ -534,8 +535,7 @@ static void pick_rx_handler(struct enic *enic)
 	 * 2. The non-scatter, simplified handler if scatter Rx is not used.
 	 * 3. The default handler as a fallback.
 	 */
-	eth_dev = enic->rte_dev;
-	if (enic_use_vector_rx_handler(enic))
+	if (enic_use_vector_rx_handler(eth_dev))
 		return;
 	if (enic->rq_count > 0 && enic->rq[0].data_queue_enable == 0) {
 		PMD_INIT_LOG(DEBUG, " use the non-scatter Rx handler");
@@ -543,6 +543,20 @@ static void pick_rx_handler(struct enic *enic)
 	} else {
 		PMD_INIT_LOG(DEBUG, " use the normal Rx handler");
 		eth_dev->rx_pkt_burst = &enic_recv_pkts;
+	}
+}
+
+/* Secondary process uses this to set the Tx handler */
+void enic_pick_tx_handler(struct rte_eth_dev *eth_dev)
+{
+	struct enic *enic = pmd_priv(eth_dev);
+
+	if (enic->use_simple_tx_handler) {
+		PMD_INIT_LOG(DEBUG, " use the simple tx handler");
+		eth_dev->tx_pkt_burst = &enic_simple_xmit_pkts;
+	} else {
+		PMD_INIT_LOG(DEBUG, " use the default tx handler");
+		eth_dev->tx_pkt_burst = &enic_xmit_pkts;
 	}
 }
 
@@ -623,12 +637,13 @@ int enic_enable(struct enic *enic)
 		eth_dev->tx_pkt_burst = &enic_simple_xmit_pkts;
 		for (index = 0; index < enic->wq_count; index++)
 			enic_prep_wq_for_simple_tx(enic, index);
+		enic->use_simple_tx_handler = 1;
 	} else {
 		PMD_INIT_LOG(DEBUG, " use the default tx handler");
 		eth_dev->tx_pkt_burst = &enic_xmit_pkts;
 	}
 
-	pick_rx_handler(enic);
+	enic_pick_rx_handler(eth_dev);
 
 	for (index = 0; index < enic->wq_count; index++)
 		enic_start_wq(enic, index);
@@ -718,31 +733,31 @@ void enic_free_rq(void *rxq)
 
 void enic_start_wq(struct enic *enic, uint16_t queue_idx)
 {
-	struct rte_eth_dev *eth_dev = enic->rte_dev;
+	struct rte_eth_dev_data *data = enic->dev_data;
 	vnic_wq_enable(&enic->wq[queue_idx]);
-	eth_dev->data->tx_queue_state[queue_idx] = RTE_ETH_QUEUE_STATE_STARTED;
+	data->tx_queue_state[queue_idx] = RTE_ETH_QUEUE_STATE_STARTED;
 }
 
 int enic_stop_wq(struct enic *enic, uint16_t queue_idx)
 {
-	struct rte_eth_dev *eth_dev = enic->rte_dev;
+	struct rte_eth_dev_data *data = enic->dev_data;
 	int ret;
 
 	ret = vnic_wq_disable(&enic->wq[queue_idx]);
 	if (ret)
 		return ret;
 
-	eth_dev->data->tx_queue_state[queue_idx] = RTE_ETH_QUEUE_STATE_STOPPED;
+	data->tx_queue_state[queue_idx] = RTE_ETH_QUEUE_STATE_STOPPED;
 	return 0;
 }
 
 void enic_start_rq(struct enic *enic, uint16_t queue_idx)
 {
+	struct rte_eth_dev_data *data = enic->dev_data;
 	struct vnic_rq *rq_sop;
 	struct vnic_rq *rq_data;
 	rq_sop = &enic->rq[enic_rte_rq_idx_to_sop_idx(queue_idx)];
 	rq_data = &enic->rq[rq_sop->data_queue_idx];
-	struct rte_eth_dev *eth_dev = enic->rte_dev;
 
 	if (rq_data->in_use) {
 		vnic_rq_enable(rq_data);
@@ -751,13 +766,13 @@ void enic_start_rq(struct enic *enic, uint16_t queue_idx)
 	rte_mb();
 	vnic_rq_enable(rq_sop);
 	enic_initial_post_rx(enic, rq_sop);
-	eth_dev->data->rx_queue_state[queue_idx] = RTE_ETH_QUEUE_STATE_STARTED;
+	data->rx_queue_state[queue_idx] = RTE_ETH_QUEUE_STATE_STARTED;
 }
 
 int enic_stop_rq(struct enic *enic, uint16_t queue_idx)
 {
+	struct rte_eth_dev_data *data = enic->dev_data;
 	int ret1 = 0, ret2 = 0;
-	struct rte_eth_dev *eth_dev = enic->rte_dev;
 	struct vnic_rq *rq_sop;
 	struct vnic_rq *rq_data;
 	rq_sop = &enic->rq[enic_rte_rq_idx_to_sop_idx(queue_idx)];
@@ -773,7 +788,7 @@ int enic_stop_rq(struct enic *enic, uint16_t queue_idx)
 	else if (ret1)
 		return ret1;
 
-	eth_dev->data->rx_queue_state[queue_idx] = RTE_ETH_QUEUE_STATE_STOPPED;
+	data->rx_queue_state[queue_idx] = RTE_ETH_QUEUE_STATE_STOPPED;
 	return 0;
 }
 
@@ -1601,7 +1616,7 @@ int enic_set_mtu(struct enic *enic, uint16_t new_mtu)
 
 	/* put back the real receive function */
 	rte_mb();
-	pick_rx_handler(enic);
+	enic_pick_rx_handler(eth_dev);
 	rte_mb();
 
 	/* restart Rx traffic */
@@ -1681,8 +1696,6 @@ static int enic_dev_init(struct enic *enic)
 	vnic_dev_set_reset_flag(enic->vdev, 0);
 
 	LIST_INIT(&enic->flows);
-	rte_spinlock_init(&enic->flows_lock);
-	enic->max_flow_counter = -1;
 
 	/* set up link status checking */
 	vnic_dev_notify_set(enic->vdev, -1); /* No Intr for notify */
@@ -1716,8 +1729,15 @@ static int enic_dev_init(struct enic *enic)
 			PKT_TX_OUTER_IP_CKSUM |
 			PKT_TX_TUNNEL_MASK;
 		enic->overlay_offload = true;
-		enic->vxlan_port = ENIC_DEFAULT_VXLAN_PORT;
 		dev_info(enic, "Overlay offload is enabled\n");
+	}
+	/*
+	 * Reset the vxlan port if HW vxlan parsing is available. It
+	 * is always enabled regardless of overlay offload
+	 * enable/disable.
+	 */
+	if (enic->vxlan) {
+		enic->vxlan_port = ENIC_DEFAULT_VXLAN_PORT;
 		/*
 		 * Reset the vxlan port to the default, as the NIC firmware
 		 * does not reset it automatically and keeps the old setting.
@@ -1763,20 +1783,14 @@ int enic_probe(struct enic *enic)
 		enic_free_consistent);
 
 	/*
-	 * Allocate the consistent memory for stats and counters upfront so
-	 * both primary and secondary processes can access them.
+	 * Allocate the consistent memory for stats upfront so both primary and
+	 * secondary processes can dump stats.
 	 */
 	err = vnic_dev_alloc_stats_mem(enic->vdev);
 	if (err) {
 		dev_err(enic, "Failed to allocate cmd memory, aborting\n");
 		goto err_out_unregister;
 	}
-	err = vnic_dev_alloc_counter_mem(enic->vdev);
-	if (err) {
-		dev_err(enic, "Failed to allocate counter memory, aborting\n");
-		goto err_out_unregister;
-	}
-
 	/* Issue device open to get device in known state */
 	err = enic_dev_open(enic);
 	if (err) {

@@ -814,7 +814,9 @@ sleep_until_rx_interrupt(int num)
 		port_id = ((uintptr_t)data) >> CHAR_BIT;
 		queue_id = ((uintptr_t)data) &
 			RTE_LEN2MASK(CHAR_BIT, uint8_t);
+		rte_spinlock_lock(&(locks[port_id]));
 		rte_eth_dev_rx_intr_disable(port_id, queue_id);
+		rte_spinlock_unlock(&(locks[port_id]));
 		RTE_LOG(INFO, L3FWD_POWER,
 			"lcore %u is waked up from rx interrupt on"
 			" port %d queue %d\n",
@@ -2118,13 +2120,9 @@ main(int argc, char **argv)
 		/* init RX queues */
 		for(queue = 0; queue < qconf->n_rx_queue; ++queue) {
 			struct rte_eth_rxconf rxq_conf;
-			struct rte_eth_dev *dev;
-			struct rte_eth_conf *conf;
 
 			portid = qconf->rx_queue_list[queue].port_id;
 			queueid = qconf->rx_queue_list[queue].queue_id;
-			dev = &rte_eth_devices[portid];
-			conf = &dev->data->dev_conf;
 
 			if (numa_on)
 				socketid = \
@@ -2137,7 +2135,7 @@ main(int argc, char **argv)
 
 			rte_eth_dev_info_get(portid, &dev_info);
 			rxq_conf = dev_info.default_rxconf;
-			rxq_conf.offloads = conf->rxmode.offloads;
+			rxq_conf.offloads = port_conf.rxmode.offloads;
 			ret = rte_eth_rx_queue_setup(portid, queueid, nb_rxd,
 				socketid, &rxq_conf,
 				pktmbuf_pool[socketid]);

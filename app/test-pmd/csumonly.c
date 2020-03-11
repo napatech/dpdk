@@ -472,6 +472,9 @@ process_outer_cksums(void *outer_l3_hdr, struct testpmd_offload_info *info,
 	if (info->outer_l4_proto != IPPROTO_UDP)
 		return ol_flags;
 
+	if (tso_enabled)
+		ol_flags |= PKT_TX_TCP_SEG;
+
 	/* Skip SW outer UDP checksum generation if HW supports it */
 	if (tx_offloads & DEV_TX_OFFLOAD_OUTER_UDP_CKSUM) {
 		ol_flags |= PKT_TX_OUTER_UDP_CKSUM;
@@ -575,7 +578,7 @@ mbuf_copy_split(const struct rte_mbuf *ms, struct rte_mbuf *md[],
 
 /*
  * Allocate a new mbuf with up to tx_pkt_nb_segs segments.
- * Copy packet contents and offload information into then new segmented mbuf.
+ * Copy packet contents and offload information into the new segmented mbuf.
  */
 static struct rte_mbuf *
 pkt_copy_split(const struct rte_mbuf *pkt)

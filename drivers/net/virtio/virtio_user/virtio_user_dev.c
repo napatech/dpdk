@@ -306,9 +306,9 @@ virtio_user_fill_intr_handle(struct virtio_user_dev *dev)
 
 static void
 virtio_user_mem_event_cb(enum rte_mem_event type __rte_unused,
-						 const void *addr __rte_unused,
-						 size_t len __rte_unused,
-						 void *arg)
+			 const void *addr,
+			 size_t len __rte_unused,
+			 void *arg)
 {
 	struct virtio_user_dev *dev = arg;
 	struct rte_memseg_list *msl;
@@ -412,7 +412,7 @@ virtio_user_dev_setup(struct virtio_user_dev *dev)
 int
 virtio_user_dev_init(struct virtio_user_dev *dev, char *path, int queues,
 		     int cq, int queue_size, const char *mac, char **ifname,
-		     int mrg_rxbuf, int in_order)
+		     int server, int mrg_rxbuf, int in_order)
 {
 	pthread_mutex_init(&dev->mutex, NULL);
 	snprintf(dev->path, PATH_MAX, "%s", path);
@@ -420,6 +420,7 @@ virtio_user_dev_init(struct virtio_user_dev *dev, char *path, int queues,
 	dev->max_queue_pairs = queues;
 	dev->queue_pairs = 1; /* mq disabled by default */
 	dev->queue_size = queue_size;
+	dev->is_server = server;
 	dev->mac_specified = 0;
 	dev->frontend_features = 0;
 	dev->unsupported_features = ~VIRTIO_USER_SUPPORTED_FEATURES;
@@ -599,6 +600,10 @@ virtio_user_handle_ctrl_msg(struct virtio_user_dev *dev, struct vring *vring,
 
 		queues = *(uint16_t *)(uintptr_t)vring->desc[idx_data].addr;
 		status = virtio_user_handle_mq(dev, queues);
+	} else if (hdr->class == VIRTIO_NET_CTRL_RX  ||
+		   hdr->class == VIRTIO_NET_CTRL_MAC ||
+		   hdr->class == VIRTIO_NET_CTRL_VLAN) {
+		status = 0;
 	}
 
 	/* Update status */
@@ -624,7 +629,7 @@ virtio_user_handle_cq(struct virtio_user_dev *dev, uint16_t queue_idx)
 
 		/* Update used ring */
 		uep = &vring->used->ring[avail_idx];
-		uep->id = avail_idx;
+		uep->id = desc_idx;
 		uep->len = n_descs;
 
 		vring->used->idx++;

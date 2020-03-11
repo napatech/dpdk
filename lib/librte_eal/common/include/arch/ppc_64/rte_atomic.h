@@ -63,11 +63,7 @@ extern "C" {
  * Guarantees that the STORE operations generated before the barrier
  * occur before the STORE operations generated after.
  */
-#ifdef RTE_ARCH_64
-#define	rte_wmb() asm volatile("lwsync" : : : "memory")
-#else
 #define	rte_wmb() asm volatile("sync" : : : "memory")
-#endif
 
 /**
  * Read memory barrier.
@@ -75,11 +71,7 @@ extern "C" {
  * Guarantees that the LOAD operations generated before the barrier
  * occur before the LOAD operations generated after.
  */
-#ifdef RTE_ARCH_64
-#define	rte_rmb() asm volatile("lwsync" : : : "memory")
-#else
 #define	rte_rmb() asm volatile("sync" : : : "memory")
-#endif
 
 #define rte_smp_mb() rte_mb()
 
@@ -458,7 +450,7 @@ static inline void rte_atomic64_clear(rte_atomic64_t *v)
 static inline uint64_t
 rte_atomic64_exchange(volatile uint64_t *dst, uint64_t val)
 {
-	return __atomic_exchange_4(dst, val, __ATOMIC_SEQ_CST);
+	return __atomic_exchange_8(dst, val, __ATOMIC_SEQ_CST);
 }
 
 #endif

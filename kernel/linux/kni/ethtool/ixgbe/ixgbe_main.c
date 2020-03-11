@@ -840,6 +840,7 @@ static bool ixgbe_is_sfp(struct ixgbe_hw *hw)
 	case ixgbe_phy_nl:
 		if (hw->mac.type == ixgbe_mac_82598EB)
 			return true;
+		/* fallthrough */
 	default:
 		return false;
 	}
@@ -1418,6 +1419,7 @@ static int ixgbe_sw_init(struct ixgbe_adapter *adapter)
 		break;
 	case ixgbe_mac_X540:
 		adapter->flags2 |= IXGBE_FLAG2_TEMP_SENSOR_CAPABLE;
+		/* fallthrough */
 	case ixgbe_mac_82599EB:
 		adapter->flags |= IXGBE_FLAG_MSI_CAPABLE |
 				  IXGBE_FLAG_MSIX_CAPABLE |
@@ -2033,6 +2035,7 @@ void ixgbe_update_stats(struct ixgbe_adapter *adapter)
 		hwstats->o2bspc += IXGBE_READ_REG(hw, IXGBE_O2BSPC);
 		hwstats->b2ospc += IXGBE_READ_REG(hw, IXGBE_B2OSPC);
 		hwstats->b2ogprc += IXGBE_READ_REG(hw, IXGBE_B2OGPRC);
+		/* fallthrough */
 	case ixgbe_mac_82599EB:
 		for (i = 0; i < 16; i++)
 			adapter->hw_rx_no_dma_resources +=
@@ -2681,6 +2684,7 @@ int ixgbe_kni_probe(struct pci_dev *pdev,
 			/* only support first port */
 			if (hw->bus.func != 0)
 				break;
+			/* fallthrough */
 		case IXGBE_SUBDEV_ID_82599_SFP:
 			adapter->wol = IXGBE_WUFC_MAG;
 			break;

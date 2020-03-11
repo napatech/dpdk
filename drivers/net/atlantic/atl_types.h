@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <netinet/in.h>
+#include <pthread.h>
 
 typedef uint8_t		u8;
 typedef int8_t		s8;
@@ -94,6 +95,8 @@ struct aq_hw_s {
 	struct hw_atl_stats_s last_stats;
 	struct aq_stats_s curr_stats;
 
+	u32 caps_lo;
+
 	u64 speed;
 	unsigned int chip_features;
 	u32 fw_ver_actual;
@@ -101,6 +104,8 @@ struct aq_hw_s {
 	u32 rpc_addr;
 	u32 rpc_tid;
 	struct hw_aq_atl_utils_fw_rpc rpc;
+
+	pthread_mutex_t mbox_mutex;
 };
 
 struct aq_fw_ops {
@@ -133,13 +138,16 @@ struct aq_fw_ops {
 	int (*get_eee_rate)(struct aq_hw_s *self, u32 *rate,
 			u32 *supported_rates);
 
+	int (*get_flow_control)(struct aq_hw_s *self, u32 *fc);
 	int (*set_flow_control)(struct aq_hw_s *self);
 
 	int (*led_control)(struct aq_hw_s *self, u32 mode);
 
-	int (*get_eeprom)(struct aq_hw_s *self, u32 *data, u32 len);
+	int (*get_eeprom)(struct aq_hw_s *self, int dev_addr,
+			u32 *data, u32 len, u32 offset);
 
-	int (*set_eeprom)(struct aq_hw_s *self, u32 *data, u32 len);
+	int (*set_eeprom)(struct aq_hw_s *self, int dev_addr,
+			u32 *data, u32 len, u32 offset);
 };
 
 struct atl_sw_stats {

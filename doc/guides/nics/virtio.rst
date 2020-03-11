@@ -7,7 +7,6 @@ Poll Mode Driver for Emulated Virtio NIC
 Virtio is a para-virtualization framework initiated by IBM, and supported by KVM hypervisor.
 In the Data Plane Development Kit (DPDK),
 we provide a virtio Poll Mode Driver (PMD) as a software solution, comparing to SRIOV hardware solution,
-
 for fast guest VM to guest VM communication and guest VM to host communication.
 
 Vhost is a kernel acceleration module for virtio qemu backend.
@@ -201,7 +200,7 @@ The packet transmission flow is:
 Virtio PMD Rx/Tx Callbacks
 --------------------------
 
-Virtio driver has 4 Rx callbacks and 3 Tx callbacks.
+Virtio driver has 4 Rx callbacks and 2 Tx callbacks.
 
 Rx callbacks:
 
@@ -223,9 +222,6 @@ Tx callbacks:
 #. ``virtio_xmit_pkts``:
    Regular version.
 
-#. ``virtio_xmit_pkts_simple``:
-   Vector version fixes the available ring indexes to optimize performance.
-
 #. ``virtio_xmit_pkts_inorder``:
    In-order version.
 
@@ -239,30 +235,22 @@ By default, the non-vector callbacks are used:
 
 Vector callbacks will be used when:
 
-*   ``txmode.offloads`` is set to ``0x0``, which implies:
-
-    *   Single segment is specified.
-
-    *   No offload support is needed.
-
 *   Mergeable Rx buffers is disabled.
 
 The corresponding callbacks are:
 
 *   For Rx: ``virtio_recv_pkts_vec``.
 
-*   For Tx: ``virtio_xmit_pkts_simple``.
-
 
 Example of using the vector version of the virtio poll mode driver in
 ``testpmd``::
 
-   testpmd -l 0-2 -n 4 -- -i --tx-offloads=0x0 --rxq=1 --txq=1 --nb-cores=1
+   testpmd -l 0-2 -n 4 -- -i --rxq=1 --txq=1 --nb-cores=1
 
 In-order callbacks only work on simulated virtio user vdev.
 
 *   For Rx: If mergeable Rx buffers is enabled and in-order is enabled then
-    ``virtio_xmit_pkts_inorder`` is used.
+    ``virtio_recv_mergeable_pkts_inorder`` is used.
 
 *   For Tx: If in-order is enabled then ``virtio_xmit_pkts_inorder`` is used.
 

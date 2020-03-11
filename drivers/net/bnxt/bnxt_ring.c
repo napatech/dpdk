@@ -163,7 +163,7 @@ int bnxt_alloc_rings(struct bnxt *bp, uint16_t qidx,
 		for (sz = 0; sz < total_alloc_len; sz += getpagesize())
 			rte_mem_lock_page(((char *)mz->addr) + sz);
 		mz_phys_addr = rte_mem_virt2iova(mz->addr);
-		if (mz_phys_addr == 0) {
+		if (mz_phys_addr == RTE_BAD_IOVA) {
 			PMD_DRV_LOG(ERR,
 			"unable to map ring address to physical memory\n");
 			return -ENOMEM;
@@ -344,11 +344,7 @@ int bnxt_alloc_hwrm_rx_ring(struct bnxt *bp, int queue_index)
 	bp->grp_info[queue_index].ag_fw_ring_id = ring->fw_ring_id;
 	B_RX_DB(rxr->ag_doorbell, rxr->ag_prod);
 
-	rxq->rx_buf_use_size = BNXT_MAX_MTU + ETHER_HDR_LEN +
-		ETHER_CRC_LEN + (2 * VLAN_TAG_SIZE);
-
-	if (bp->eth_dev->data->rx_queue_state[queue_index] ==
-	    RTE_ETH_QUEUE_STATE_STARTED) {
+	if (rxq->rx_started) {
 		if (bnxt_init_one_rx_ring(rxq)) {
 			RTE_LOG(ERR, PMD,
 				"bnxt_init_one_rx_ring failed!\n");
@@ -452,8 +448,6 @@ int bnxt_alloc_hwrm_rings(struct bnxt *bp)
 		bp->grp_info[i].ag_fw_ring_id = ring->fw_ring_id;
 		B_RX_DB(rxr->ag_doorbell, rxr->ag_prod);
 
-		rxq->rx_buf_use_size = BNXT_MAX_MTU + ETHER_HDR_LEN +
-					ETHER_CRC_LEN + (2 * VLAN_TAG_SIZE);
 		if (bnxt_init_one_rx_ring(rxq)) {
 			PMD_DRV_LOG(ERR, "bnxt_init_one_rx_ring failed!\n");
 			bnxt_rx_queue_release_op(rxq);
@@ -486,12 +480,12 @@ int bnxt_alloc_hwrm_rings(struct bnxt *bp)
 		/* Tx ring */
 		rc = bnxt_hwrm_ring_alloc(bp, ring,
 					HWRM_RING_ALLOC_INPUT_RING_TYPE_TX,
-					idx, cpr->hw_stats_ctx_id,
+					i, cpr->hw_stats_ctx_id,
 					cp_ring->fw_ring_id);
 		if (rc)
 			goto err_out;
 
-		txr->tx_doorbell = (char *)bp->doorbell_base + idx * 0x80;
+		txr->tx_doorbell = (char *)bp->doorbell_base + i * 0x80;
 		txq->index = idx;
 		bnxt_hwrm_set_ring_coal(bp, &coal, cp_ring->fw_ring_id);
 	}

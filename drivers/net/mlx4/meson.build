@@ -2,6 +2,13 @@
 # Copyright 2018 6WIND S.A.
 # Copyright 2018 Mellanox Technologies, Ltd
 
+if host_machine.system() != 'linux'
+	build = false
+	reason = 'only supported on Linux'
+	subdir_done()
+endif
+build = true
+
 pmd_dlopen = get_option('enable_driver_mlx_glue')
 LIB_GLUE_BASE = 'librte_pmd_mlx4_glue.so'
 LIB_GLUE_VERSION = '18.02.0'
@@ -13,18 +20,17 @@ if pmd_dlopen
 		'-DMLX4_GLUE_VERSION="@0@"'.format(LIB_GLUE_VERSION),
 	]
 endif
+
 libs = [
-	cc.find_library('mnl', required:false),
 	cc.find_library('mlx4', required:false),
 	cc.find_library('ibverbs', required:false),
 ]
-build = true
 foreach lib:libs
 	if not lib.found()
 		build = false
 	endif
 endforeach
-# Compile PMD
+
 if build
 	allow_experimental_apis = true
 	ext_deps += libs
@@ -64,7 +70,7 @@ if build
 	# mlx4_autoconf.h file is still generated.
 	# input array for meson member search:
 	# [ "MACRO to define if found", "header for the search",
-	#   "symbol to search","struct member to search" ]
+	#   "symbol to search", "struct member to search" ]
 	#
 	has_member_args = [
 		[ 'HAVE_IBV_MLX4_WQE_LSO_SEG', 'infiniband/mlx4dv.h',
@@ -72,9 +78,9 @@ if build
 	]
 	config = configuration_data()
 	foreach arg:has_member_args
-		file_prefix = '#include<' + arg[1] + '>'
+		file_prefix = '#include <' + arg[1] + '>'
 		config.set(arg[0], cc.has_member(arg[2], arg[3],
-			prefix : file_prefix))
+			prefix: file_prefix, dependencies: libs))
 	endforeach
 	configure_file(output : 'mlx4_autoconf.h', configuration : config)
 endif

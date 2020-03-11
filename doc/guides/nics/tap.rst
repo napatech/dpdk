@@ -40,7 +40,7 @@ actual MAC address: ``00:64:74:61:70:[00-FF]``.
    --vdev=net_tap0,mac="00:64:74:61:70:11"
 
 The MAC address will have a user value passed as string. The MAC address is in
-format with delimeter ``:``. The string is byte converted to hex and you get
+format with delimiter ``:``. The string is byte converted to hex and you get
 the actual MAC address: ``00:64:74:61:70:11``.
 
 It is possible to specify a remote netdevice to capture packets from by adding
@@ -76,7 +76,7 @@ Please change the IP addresses as you see fit.
 
 If routing is enabled on the host you can also communicate with the DPDK App
 over the internet via a standard socket layer application as long as you
-account for the protocol handing in the application.
+account for the protocol handling in the application.
 
 If you have a Network Stack in your DPDK application or something like it you
 can utilize that stack to handle the network protocols. Plus you would be able
@@ -132,9 +132,9 @@ As rules are translated to TC, it is possible to show them with something like::
 Examples of testpmd flow rules
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Drop packets for destination IP 192.168.0.1::
+Drop packets for destination IP 192.0.2.1::
 
-   testpmd> flow create 0 priority 1 ingress pattern eth / ipv4 dst is 1.1.1.1 \
+   testpmd> flow create 0 priority 1 ingress pattern eth / ipv4 dst is 192.0.2.1 \
             / end actions drop / end
 
 Ensure packets from a given MAC address are received on a queue 2::

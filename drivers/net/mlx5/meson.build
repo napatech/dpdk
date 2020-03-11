@@ -2,6 +2,13 @@
 # Copyright 2018 6WIND S.A.
 # Copyright 2018 Mellanox Technologies, Ltd
 
+if host_machine.system() != 'linux'
+	build = false
+	reason = 'only supported on Linux'
+	subdir_done()
+endif
+build = true
+
 pmd_dlopen = get_option('enable_driver_mlx_glue')
 LIB_GLUE_BASE = 'librte_pmd_mlx5_glue.so'
 LIB_GLUE_VERSION = '18.11.0'
@@ -13,17 +20,18 @@ if pmd_dlopen
 		'-DMLX5_GLUE_VERSION="@0@"'.format(LIB_GLUE_VERSION),
 	]
 endif
+
 libs = [
 	cc.find_library('mnl', required:false),
 	cc.find_library('mlx5', required:false),
 	cc.find_library('ibverbs', required:false),
 ]
-build = true
 foreach lib:libs
 	if not lib.found()
 		build = false
 	endif
 endforeach
+
 if build
 	allow_experimental_apis = true
 	ext_deps += libs
@@ -102,6 +110,8 @@ if build
 		'mlx5dv_create_flow_action_packet_reformat' ],
 		[ 'HAVE_IBV_DEVICE_MPLS_SUPPORT', 'infiniband/verbs.h',
 		'IBV_FLOW_SPEC_MPLS' ],
+		[ 'HAVE_IBV_WQ_FLAGS_PCI_WRITE_END_PADDING', 'infiniband/verbs.h',
+		'IBV_WQ_FLAGS_PCI_WRITE_END_PADDING' ],
 		[ 'HAVE_IBV_WQ_FLAG_RX_END_PADDING', 'infiniband/verbs.h',
 		'IBV_WQ_FLAG_RX_END_PADDING' ],
 		[ 'HAVE_SUPPORTED_40000baseKR4_Full', 'linux/ethtool.h',
@@ -247,12 +257,13 @@ if build
 	]
 	config = configuration_data()
 	foreach arg:has_sym_args
-		config.set(arg[0], cc.has_header_symbol(arg[1], arg[2]))
+		config.set(arg[0], cc.has_header_symbol(arg[1], arg[2],
+			dependencies: libs))
 	endforeach
 	foreach arg:has_member_args
-		file_prefix = '#include<' + arg[1] + '>'
+		file_prefix = '#include <' + arg[1] + '>'
 		config.set(arg[0], cc.has_member(arg[2], arg[3],
-			prefix : file_prefix))
+			prefix : file_prefix, dependencies: libs))
 	endforeach
 	configure_file(output : 'mlx5_autoconf.h', configuration : config)
 endif

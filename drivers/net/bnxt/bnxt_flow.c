@@ -715,7 +715,7 @@ bnxt_validate_and_parse_flow(struct rte_eth_dev *dev,
 {
 	const struct rte_flow_action *act =
 		bnxt_flow_non_void_action(actions);
-	struct bnxt *bp = (struct bnxt *)dev->data->dev_private;
+	struct bnxt *bp = dev->data->dev_private;
 	const struct rte_flow_action_queue *act_q;
 	const struct rte_flow_action_vf *act_vf;
 	struct bnxt_vnic_info *vnic, *vnic0;
@@ -900,7 +900,7 @@ bnxt_flow_validate(struct rte_eth_dev *dev,
 		   const struct rte_flow_action actions[],
 		   struct rte_flow_error *error)
 {
-	struct bnxt *bp = (struct bnxt *)dev->data->dev_private;
+	struct bnxt *bp = dev->data->dev_private;
 	struct bnxt_filter_info *filter;
 	int ret = 0;
 
@@ -968,6 +968,10 @@ bnxt_match_filter(struct bnxt *bp, struct bnxt_filter_info *nf)
 				    sizeof(nf->dst_ipaddr_mask))) {
 				if (mf->dst_id == nf->dst_id)
 					return -EEXIST;
+				/* Clear the new L2 filter that was created
+				 * earlier in bnxt_validate_and_parse_flow.
+				 */
+				bnxt_hwrm_clear_l2_filter(bp, nf);
 				/*
 				 * Same Flow, Different queue
 				 * Clear the old ntuple filter
@@ -998,7 +1002,7 @@ bnxt_flow_create(struct rte_eth_dev *dev,
 		 const struct rte_flow_action actions[],
 		 struct rte_flow_error *error)
 {
-	struct bnxt *bp = (struct bnxt *)dev->data->dev_private;
+	struct bnxt *bp = dev->data->dev_private;
 	struct bnxt_filter_info *filter;
 	struct bnxt_vnic_info *vnic = NULL;
 	bool update_flow = false;
@@ -1070,7 +1074,7 @@ bnxt_flow_create(struct rte_eth_dev *dev,
 			ret = -EXDEV;
 			goto free_flow;
 		}
-		PMD_DRV_LOG(ERR, "Successfully created flow.\n");
+		PMD_DRV_LOG(DEBUG, "Successfully created flow.\n");
 		STAILQ_INSERT_TAIL(&vnic->flow_list, flow, next);
 		return flow;
 	}
@@ -1099,7 +1103,7 @@ bnxt_flow_destroy(struct rte_eth_dev *dev,
 		  struct rte_flow *flow,
 		  struct rte_flow_error *error)
 {
-	struct bnxt *bp = (struct bnxt *)dev->data->dev_private;
+	struct bnxt *bp = dev->data->dev_private;
 	struct bnxt_filter_info *filter = flow->filter;
 	struct bnxt_vnic_info *vnic = flow->vnic;
 	int ret = 0;
@@ -1128,7 +1132,8 @@ bnxt_flow_destroy(struct rte_eth_dev *dev,
 static int
 bnxt_flow_flush(struct rte_eth_dev *dev, struct rte_flow_error *error)
 {
-	struct bnxt *bp = (struct bnxt *)dev->data->dev_private;
+	struct bnxt *bp = dev->data->dev_private;
+	struct bnxt_filter_info *filter = NULL;
 	struct bnxt_vnic_info *vnic;
 	struct rte_flow *flow;
 	unsigned int i;
@@ -1136,13 +1141,19 @@ bnxt_flow_flush(struct rte_eth_dev *dev, struct rte_flow_error *error)
 
 	for (i = 0; i < bp->nr_vnics; i++) {
 		vnic = &bp->vnic_info[i];
-		STAILQ_FOREACH(flow, &vnic->flow_list, next) {
-			struct bnxt_filter_info *filter = flow->filter;
+		if (vnic && vnic->fw_vnic_id == (uint16_t)-1)
+			continue;
+
+		while (!STAILQ_EMPTY(&vnic->flow_list)) {
+			flow = STAILQ_FIRST(&vnic->flow_list);
+			filter = flow->filter;
 
 			if (filter->filter_type == HWRM_CFA_EM_FILTER)
 				ret = bnxt_hwrm_clear_em_filter(bp, filter);
 			if (filter->filter_type == HWRM_CFA_NTUPLE_FILTER)
 				ret = bnxt_hwrm_clear_ntuple_filter(bp, filter);
+
+			ret = bnxt_hwrm_clear_l2_filter(bp, filter);
 
 			if (ret) {
 				rte_flow_error_set
@@ -1154,9 +1165,13 @@ bnxt_flow_flush(struct rte_eth_dev *dev, struct rte_flow_error *error)
 				return -rte_errno;
 			}
 
+			bnxt_free_filter(bp, filter);
+
 			STAILQ_REMOVE(&vnic->flow_list, flow,
 				      rte_flow, next);
+
 			rte_free(flow);
+
 		}
 	}
 

@@ -492,8 +492,6 @@ static const struct eth_dev_ops ops = {
 	.rss_hash_conf_get = eth_rss_hash_conf_get
 };
 
-static struct rte_vdev_driver pmd_null_drv;
-
 static int
 eth_dev_null_create(struct rte_vdev_device *dev,
 		unsigned packet_size,
@@ -623,6 +621,13 @@ rte_pmd_null_probe(struct rte_vdev_device *dev)
 		/* TODO: request info from primary to set up Rx and Tx */
 		eth_dev->dev_ops = &ops;
 		eth_dev->device = &dev->device;
+		if (packet_copy) {
+			eth_dev->rx_pkt_burst = eth_null_copy_rx;
+			eth_dev->tx_pkt_burst = eth_null_copy_tx;
+		} else {
+			eth_dev->rx_pkt_burst = eth_null_rx;
+			eth_dev->tx_pkt_burst = eth_null_tx;
+		}
 		rte_eth_dev_probing_finish(eth_dev);
 		return 0;
 	}

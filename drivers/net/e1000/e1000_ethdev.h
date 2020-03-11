@@ -35,6 +35,9 @@
 #define IGB_MAX_RX_QUEUE_NUM           8
 #define IGB_MAX_RX_QUEUE_NUM_82576     16
 
+#define E1000_I219_MAX_RX_QUEUE_NUM		2
+#define E1000_I219_MAX_TX_QUEUE_NUM		2
+
 #define E1000_SYN_FILTER_ENABLE        0x00000001 /* syn filter enable field */
 #define E1000_SYN_FILTER_QUEUE         0x0000000E /* syn filter queue field */
 #define E1000_SYN_FILTER_QUEUE_SHIFT   1          /* syn filter queue field */
@@ -341,17 +344,17 @@ struct igb_flow_mem {
 };
 
 TAILQ_HEAD(igb_ntuple_filter_list, igb_ntuple_filter_ele);
-struct igb_ntuple_filter_list igb_filter_ntuple_list;
+extern struct igb_ntuple_filter_list igb_filter_ntuple_list;
 TAILQ_HEAD(igb_ethertype_filter_list, igb_ethertype_filter_ele);
-struct igb_ethertype_filter_list igb_filter_ethertype_list;
+extern struct igb_ethertype_filter_list igb_filter_ethertype_list;
 TAILQ_HEAD(igb_syn_filter_list, igb_eth_syn_filter_ele);
-struct igb_syn_filter_list igb_filter_syn_list;
+extern struct igb_syn_filter_list igb_filter_syn_list;
 TAILQ_HEAD(igb_flex_filter_list, igb_flex_filter_ele);
-struct igb_flex_filter_list igb_filter_flex_list;
+extern struct igb_flex_filter_list igb_filter_flex_list;
 TAILQ_HEAD(igb_rss_filter_list, igb_rss_conf_ele);
-struct igb_rss_filter_list igb_filter_rss_list;
+extern struct igb_rss_filter_list igb_filter_rss_list;
 TAILQ_HEAD(igb_flow_mem_list, igb_flow_mem);
-struct igb_flow_mem_list igb_flow_list;
+extern struct igb_flow_mem_list igb_flow_list;
 
 extern const struct rte_flow_ops igb_flow_ops;
 
@@ -515,5 +518,6 @@ int igb_action_rss_same(const struct rte_flow_action_rss *comp,
 int igb_config_rss_filter(struct rte_eth_dev *dev,
 			struct igb_rte_flow_rss_conf *conf,
 			bool add);
+void em_flush_desc_rings(struct rte_eth_dev *dev);
 
 #endif /* _E1000_ETHDEV_H_ */

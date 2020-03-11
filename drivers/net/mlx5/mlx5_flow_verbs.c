@@ -55,7 +55,7 @@ flow_verbs_counter_create(struct rte_eth_dev *dev,
 			  struct mlx5_flow_counter *counter)
 {
 #if defined(HAVE_IBV_DEVICE_COUNTERS_SET_V42)
-	struct priv *priv = dev->data->dev_private;
+	struct mlx5_priv *priv = dev->data->dev_private;
 	struct ibv_counter_set_init_attr init = {
 			 .counter_set_id = counter->id};
 
@@ -66,7 +66,7 @@ flow_verbs_counter_create(struct rte_eth_dev *dev,
 	}
 	return 0;
 #elif defined(HAVE_IBV_DEVICE_COUNTERS_SET_V45)
-	struct priv *priv = dev->data->dev_private;
+	struct mlx5_priv *priv = dev->data->dev_private;
 	struct ibv_counters_init_attr init = {0};
 	struct ibv_counter_attach_attr attach;
 	int ret;
@@ -117,17 +117,17 @@ flow_verbs_counter_create(struct rte_eth_dev *dev,
 static struct mlx5_flow_counter *
 flow_verbs_counter_new(struct rte_eth_dev *dev, uint32_t shared, uint32_t id)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_flow_counter *cnt;
 	int ret;
 
-	LIST_FOREACH(cnt, &priv->flow_counters, next) {
-		if (!cnt->shared || cnt->shared != shared)
-			continue;
-		if (cnt->id != id)
-			continue;
-		cnt->ref_cnt++;
-		return cnt;
+	if (shared) {
+		LIST_FOREACH(cnt, &priv->flow_counters, next) {
+			if (cnt->shared && cnt->id == id) {
+				cnt->ref_cnt++;
+				return cnt;
+			}
+		}
 	}
 	cnt = rte_calloc(__func__, 1, sizeof(*cnt), 0);
 	if (!cnt) {
@@ -1020,6 +1020,7 @@ flow_verbs_validate(struct rte_eth_dev *dev,
 	uint64_t item_flags = 0;
 	uint64_t last_item = 0;
 	uint8_t next_protocol = 0xff;
+	uint16_t ether_type = 0;
 
 	if (items == NULL)
 		return -1;
@@ -1040,6 +1041,17 @@ flow_verbs_validate(struct rte_eth_dev *dev,
 				return ret;
 			last_item = tunnel ? MLX5_FLOW_LAYER_INNER_L2 :
 					     MLX5_FLOW_LAYER_OUTER_L2;
+			if (items->mask != NULL && items->spec != NULL) {
+				ether_type =
+					((const struct rte_flow_item_eth *)
+					 items->spec)->type;
+				ether_type &=
+					((const struct rte_flow_item_eth *)
+					 items->mask)->type;
+				ether_type = rte_be_to_cpu_16(ether_type);
+			} else {
+				ether_type = 0;
+			}
 			break;
 		case RTE_FLOW_ITEM_TYPE_VLAN:
 			ret = mlx5_flow_validate_item_vlan(items, item_flags,
@@ -1050,9 +1062,22 @@ flow_verbs_validate(struct rte_eth_dev *dev,
 					      MLX5_FLOW_LAYER_INNER_VLAN) :
 					     (MLX5_FLOW_LAYER_OUTER_L2 |
 					      MLX5_FLOW_LAYER_OUTER_VLAN);
+			if (items->mask != NULL && items->spec != NULL) {
+				ether_type =
+					((const struct rte_flow_item_vlan *)
+					 items->spec)->inner_type;
+				ether_type &=
+					((const struct rte_flow_item_vlan *)
+					 items->mask)->inner_type;
+				ether_type = rte_be_to_cpu_16(ether_type);
+			} else {
+				ether_type = 0;
+			}
 			break;
 		case RTE_FLOW_ITEM_TYPE_IPV4:
 			ret = mlx5_flow_validate_item_ipv4(items, item_flags,
+							   last_item,
+							   ether_type,
 							   error);
 			if (ret < 0)
 				return ret;
@@ -1074,6 +1099,8 @@ flow_verbs_validate(struct rte_eth_dev *dev,
 			break;
 		case RTE_FLOW_ITEM_TYPE_IPV6:
 			ret = mlx5_flow_validate_item_ipv6(items, item_flags,
+							   last_item,
+							   ether_type,
 							   error);
 			if (ret < 0)
 				return ret;
@@ -1191,7 +1218,7 @@ flow_verbs_validate(struct rte_eth_dev *dev,
 		case RTE_FLOW_ACTION_TYPE_RSS:
 			ret = mlx5_flow_validate_action_rss(actions,
 							    action_flags, dev,
-							    attr,
+							    attr, item_flags,
 							    error);
 			if (ret < 0)
 				return ret;
@@ -1383,7 +1410,7 @@ flow_verbs_prepare(const struct rte_flow_attr *attr __rte_unused,
  *   Pointer to the error structure.
  *
  * @return
- *   0 on success, else a negative errno value otherwise and rte_ernno is set.
+ *   0 on success, else a negative errno value otherwise and rte_errno is set.
  */
 static int
 flow_verbs_translate(struct rte_eth_dev *dev,
@@ -1398,7 +1425,7 @@ flow_verbs_translate(struct rte_eth_dev *dev,
 	uint64_t action_flags = 0;
 	uint64_t priority = attr->priority;
 	uint32_t subpriority = 0;
-	struct priv *priv = dev->data->dev_private;
+	struct mlx5_priv *priv = dev->data->dev_private;
 
 	if (priority == MLX5_FLOW_PRIO_RSVD)
 		priority = priv->config.flow_prio - 1;

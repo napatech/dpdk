@@ -583,7 +583,6 @@ pci_one_device_iommu_support_va(struct rte_pci_device *dev)
 {
 #define VTD_CAP_MGAW_SHIFT	16
 #define VTD_CAP_MGAW_MASK	(0x3fULL << VTD_CAP_MGAW_SHIFT)
-#define X86_VA_WIDTH 47 /* From Documentation/x86/x86_64/mm.txt */
 	struct rte_pci_addr *addr = &dev->addr;
 	char filename[PATH_MAX];
 	FILE *fp;
@@ -593,18 +592,19 @@ pci_one_device_iommu_support_va(struct rte_pci_device *dev)
 		 "%s/" PCI_PRI_FMT "/iommu/intel-iommu/cap",
 		 rte_pci_get_sysfs_path(), addr->domain, addr->bus, addr->devid,
 		 addr->function);
-	if (access(filename, F_OK) == -1) {
-		/* We don't have an Intel IOMMU, assume VA supported*/
-		return true;
-	}
 
-	/* We have an intel IOMMU */
 	fp = fopen(filename, "r");
 	if (fp == NULL) {
-		RTE_LOG(ERR, EAL, "%s(): can't open %s\n", __func__, filename);
+		/* We don't have an Intel IOMMU, assume VA supported */
+		if (errno == ENOENT)
+			return true;
+
+		RTE_LOG(ERR, EAL, "%s(): can't open %s: %s\n",
+			__func__, filename, strerror(errno));
 		return false;
 	}
 
+	/* We have an Intel IOMMU */
 	if (fscanf(fp, "%" PRIx64, &vtd_cap_reg) != 1) {
 		RTE_LOG(ERR, EAL, "%s(): can't read %s\n", __func__, filename);
 		fclose(fp);

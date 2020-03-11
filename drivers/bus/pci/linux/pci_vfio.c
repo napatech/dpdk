@@ -451,7 +451,8 @@ pci_vfio_mmap_bar(int vfio_dev_fd, struct mapped_pci_resource *vfio_res,
 		int bar_index, int additional_flags)
 {
 	struct memreg {
-		unsigned long offset, size;
+		uint64_t offset;
+		size_t   size;
 	} memreg[2] = {};
 	void *bar_addr;
 	struct pci_msix_table *msix_table = &vfio_res->msix_table;
@@ -487,7 +488,8 @@ pci_vfio_mmap_bar(int vfio_dev_fd, struct mapped_pci_resource *vfio_res,
 		RTE_LOG(DEBUG, EAL,
 			"Trying to map BAR%d that contains the MSI-X "
 			"table. Trying offsets: "
-			"0x%04lx:0x%04lx, 0x%04lx:0x%04lx\n", bar_index,
+			"0x%04" PRIx64 ":0x%04zx, 0x%04" PRIx64 ":0x%04zx\n",
+			bar_index,
 			memreg[0].offset, memreg[0].size,
 			memreg[1].offset, memreg[1].size);
 	} else {
@@ -512,8 +514,8 @@ pci_vfio_mmap_bar(int vfio_dev_fd, struct mapped_pci_resource *vfio_res,
 		if (map_addr != MAP_FAILED
 			&& memreg[1].offset && memreg[1].size) {
 			void *second_addr = RTE_PTR_ADD(bar_addr,
-							memreg[1].offset -
-							(uintptr_t)bar->offset);
+						(uintptr_t)(memreg[1].offset -
+						bar->offset));
 			map_addr = pci_map_resource(second_addr,
 							vfio_dev_fd,
 							memreg[1].offset,
@@ -658,7 +660,7 @@ pci_vfio_map_resource_primary(struct rte_pci_device *dev)
 	vfio_res = rte_zmalloc("VFIO_RES", sizeof(*vfio_res), 0);
 	if (vfio_res == NULL) {
 		RTE_LOG(ERR, EAL,
-			"%s(): cannot store uio mmap details\n", __func__);
+			"%s(): cannot store vfio mmap details\n", __func__);
 		goto err_vfio_dev_fd;
 	}
 	memcpy(&vfio_res->pci_addr, &dev->addr, sizeof(vfio_res->pci_addr));
@@ -730,6 +732,9 @@ pci_vfio_map_resource_primary(struct rte_pci_device *dev)
 
 		bar_addr = pci_map_addr;
 		pci_map_addr = RTE_PTR_ADD(bar_addr, (size_t) reg->size);
+
+		pci_map_addr = RTE_PTR_ALIGN(pci_map_addr,
+					sysconf(_SC_PAGE_SIZE));
 
 		maps[i].addr = bar_addr;
 		maps[i].offset = reg->offset;

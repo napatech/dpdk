@@ -26,9 +26,6 @@ int dpaa2_cmdif_logtype;
 /* CMDIF driver name */
 #define DPAA2_CMDIF_PMD_NAME dpaa2_dpci
 
-/* CMDIF driver object */
-static struct rte_vdev_driver dpaa2_cmdif_drv;
-
 /*
  * This API provides the DPCI device ID in 'attr_value'.
  * The device ID shall be passed by GPP to the AIOP using CMDIF commands.
@@ -65,6 +62,7 @@ dpaa2_cmdif_enqueue_bufs(struct rte_rawdev *dev,
 	struct qbman_fd fd;
 	struct qbman_eq_desc eqdesc;
 	struct qbman_swp *swp;
+	uint32_t retry_count = 0;
 	int ret;
 
 	DPAA2_CMDIF_FUNC_TRACE();
@@ -105,11 +103,15 @@ dpaa2_cmdif_enqueue_bufs(struct rte_rawdev *dev,
 		ret = qbman_swp_enqueue_multiple(swp, &eqdesc, &fd, NULL, 1);
 		if (ret < 0 && ret != -EBUSY)
 			DPAA2_CMDIF_ERR("Transmit failure with err: %d\n", ret);
-	} while (ret == -EBUSY);
+		retry_count++;
+	} while ((ret == -EBUSY) && (retry_count < DPAA2_MAX_TX_RETRY_COUNT));
+
+	if (ret < 0)
+		return ret;
 
 	DPAA2_CMDIF_DP_DEBUG("Successfully transmitted a packet\n");
 
-	return 0;
+	return 1;
 }
 
 static int
@@ -274,6 +276,8 @@ dpaa2_cmdif_remove(struct rte_vdev_device *vdev)
 	int ret;
 
 	name = rte_vdev_device_name(vdev);
+	if (name == NULL)
+		return -1;
 
 	DPAA2_CMDIF_INFO("Closing %s on NUMA node %d", name, rte_socket_id());
 

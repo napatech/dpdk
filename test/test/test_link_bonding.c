@@ -201,6 +201,7 @@ configure_ethdev(uint16_t port_id, uint8_t start, uint8_t en_isr)
 }
 
 static int slaves_initialized;
+static int mac_slaves_initialized;
 
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t cvar = PTHREAD_COND_INITIALIZER;
@@ -873,10 +874,11 @@ test_set_explicit_bonded_mac(void)
 static int
 test_set_bonded_port_initialization_mac_assignment(void)
 {
-	int i, slave_count, bonded_port_id;
+	int i, slave_count;
 
 	uint16_t slaves[RTE_MAX_ETHPORTS];
-	int slave_port_ids[BONDED_INIT_MAC_ASSIGNMENT_SLAVE_COUNT];
+	static int bonded_port_id = -1;
+	static int slave_port_ids[BONDED_INIT_MAC_ASSIGNMENT_SLAVE_COUNT];
 
 	struct ether_addr slave_mac_addr, bonded_mac_addr, read_mac_addr;
 
@@ -887,29 +889,36 @@ test_set_bonded_port_initialization_mac_assignment(void)
 	/*
 	 * 1. a - Create / configure  bonded / slave ethdevs
 	 */
-	bonded_port_id = rte_eth_bond_create("net_bonding_mac_ass_test",
-			BONDING_MODE_ACTIVE_BACKUP, rte_socket_id());
-	TEST_ASSERT(bonded_port_id > 0, "failed to create bonded device");
+	if (bonded_port_id == -1) {
+		bonded_port_id = rte_eth_bond_create("net_bonding_mac_ass_test",
+				BONDING_MODE_ACTIVE_BACKUP, rte_socket_id());
+		TEST_ASSERT(bonded_port_id > 0, "failed to create bonded device");
 
-	TEST_ASSERT_SUCCESS(configure_ethdev(bonded_port_id, 0, 0),
-				"Failed to configure bonded ethdev");
+		TEST_ASSERT_SUCCESS(configure_ethdev(bonded_port_id, 0, 0),
+					"Failed to configure bonded ethdev");
+	}
 
-	for (i = 0; i < BONDED_INIT_MAC_ASSIGNMENT_SLAVE_COUNT; i++) {
-		char pmd_name[RTE_ETH_NAME_MAX_LEN];
+	if (!mac_slaves_initialized) {
+		for (i = 0; i < BONDED_INIT_MAC_ASSIGNMENT_SLAVE_COUNT; i++) {
+			char pmd_name[RTE_ETH_NAME_MAX_LEN];
 
-		slave_mac_addr.addr_bytes[ETHER_ADDR_LEN-1] = i + 100;
+			slave_mac_addr.addr_bytes[ETHER_ADDR_LEN-1] = i + 100;
 
-		snprintf(pmd_name, RTE_ETH_NAME_MAX_LEN, "eth_slave_%d", i);
+			snprintf(pmd_name, RTE_ETH_NAME_MAX_LEN,
+				"eth_slave_%d", i);
 
-		slave_port_ids[i] = virtual_ethdev_create(pmd_name,
-				&slave_mac_addr, rte_socket_id(), 1);
+			slave_port_ids[i] = virtual_ethdev_create(pmd_name,
+					&slave_mac_addr, rte_socket_id(), 1);
 
-		TEST_ASSERT(slave_port_ids[i] >= 0,
-				"Failed to create slave ethdev %s", pmd_name);
+			TEST_ASSERT(slave_port_ids[i] >= 0,
+					"Failed to create slave ethdev %s",
+					pmd_name);
 
-		TEST_ASSERT_SUCCESS(configure_ethdev(slave_port_ids[i], 1, 0),
-				"Failed to configure virtual ethdev %s",
-				pmd_name);
+			TEST_ASSERT_SUCCESS(configure_ethdev(slave_port_ids[i], 1, 0),
+					"Failed to configure virtual ethdev %s",
+					pmd_name);
+		}
+		mac_slaves_initialized = 1;
 	}
 
 
@@ -1116,7 +1125,7 @@ test_adding_slave_after_bonded_device_started(void)
 }
 
 #define TEST_STATUS_INTERRUPT_SLAVE_COUNT	4
-#define TEST_LSC_WAIT_TIMEOUT_MS	500
+#define TEST_LSC_WAIT_TIMEOUT_US	500000
 
 int test_lsc_interrupt_count;
 
@@ -1150,6 +1159,11 @@ lsc_timeout(int wait_us)
 	ts.tv_sec = tp.tv_sec;
 	ts.tv_nsec = tp.tv_usec * 1000;
 	ts.tv_nsec += wait_us * 1000;
+	/* Normalize tv_nsec to [0,999999999L] */
+	while (ts.tv_nsec > 1000000000L) {
+		ts.tv_nsec -= 1000000000L;
+		ts.tv_sec += 1;
+	}
 
 	pthread_mutex_lock(&mutex);
 	if (test_lsc_interrupt_count < 1)
@@ -1204,7 +1218,7 @@ test_status_interrupt(void)
 	virtual_ethdev_simulate_link_status_interrupt(
 			test_params->slave_port_ids[3], 0);
 
-	TEST_ASSERT(lsc_timeout(TEST_LSC_WAIT_TIMEOUT_MS) == 0,
+	TEST_ASSERT(lsc_timeout(TEST_LSC_WAIT_TIMEOUT_US) == 0,
 			"timed out waiting for interrupt");
 
 	TEST_ASSERT(test_lsc_interrupt_count > 0,
@@ -1223,7 +1237,7 @@ test_status_interrupt(void)
 	virtual_ethdev_simulate_link_status_interrupt(
 			test_params->slave_port_ids[0], 1);
 
-	TEST_ASSERT(lsc_timeout(TEST_LSC_WAIT_TIMEOUT_MS) == 0,
+	TEST_ASSERT(lsc_timeout(TEST_LSC_WAIT_TIMEOUT_US) == 0,
 			"timed out waiting for interrupt");
 
 	/* test that we have received another lsc interrupt */
@@ -1237,7 +1251,7 @@ test_status_interrupt(void)
 	virtual_ethdev_simulate_link_status_interrupt(
 			test_params->slave_port_ids[0], 1);
 
-	TEST_ASSERT(lsc_timeout(TEST_LSC_WAIT_TIMEOUT_MS) != 0,
+	TEST_ASSERT(lsc_timeout(TEST_LSC_WAIT_TIMEOUT_US) != 0,
 			"received unexpected interrupt");
 
 	TEST_ASSERT_EQUAL(test_lsc_interrupt_count, 0,

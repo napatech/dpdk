@@ -290,7 +290,7 @@ qede_config_arfs_filter(struct rte_eth_dev *eth_dev,
 	/* soft_id could have been used as memzone string, but soft_id is
 	 * not currently used so it has no significance.
 	 */
-	snprintf(mz_name, sizeof(mz_name) - 1, "%lx",
+	snprintf(mz_name, sizeof(mz_name), "%lx",
 		 (unsigned long)rte_get_timer_cycles());
 	mz = rte_memzone_reserve_aligned(mz_name, QEDE_MAX_FDIR_PKT_LEN,
 					 SOCKET_ID_ANY, 0, RTE_CACHE_LINE_SIZE);
@@ -431,7 +431,7 @@ qede_fdir_filter_add(struct rte_eth_dev *eth_dev,
 		return -EINVAL;
 	}
 
-	if (fdir->action.rx_queue >= QEDE_RSS_COUNT(qdev)) {
+	if (fdir->action.rx_queue >= QEDE_RSS_COUNT(eth_dev)) {
 		DP_ERR(edev, "invalid queue number %u\n",
 		       fdir->action.rx_queue);
 		return -EINVAL;
@@ -1343,7 +1343,6 @@ qede_flow_parse_actions(struct rte_eth_dev *dev,
 			struct rte_flow_error *error,
 			struct rte_flow *flow)
 {
-	struct qede_dev *qdev = QEDE_INIT_QDEV(dev);
 	const struct rte_flow_action_queue *queue;
 
 	if (actions == NULL) {
@@ -1358,7 +1357,7 @@ qede_flow_parse_actions(struct rte_eth_dev *dev,
 		case RTE_FLOW_ACTION_TYPE_QUEUE:
 			queue = actions->conf;
 
-			if (queue->index >= QEDE_RSS_COUNT(qdev)) {
+			if (queue->index >= QEDE_RSS_COUNT(dev)) {
 				rte_flow_error_set(error, EINVAL,
 						   RTE_FLOW_ERROR_TYPE_ACTION,
 						   actions,

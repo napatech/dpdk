@@ -37,8 +37,8 @@
 #include <rte_string_fns.h>
 #include <rte_kvargs.h>
 #include <rte_class.h>
+#include <rte_ether.h>
 
-#include "rte_ether.h"
 #include "rte_ethdev.h"
 #include "rte_ethdev_driver.h"
 #include "ethdev_profile.h"
@@ -48,7 +48,6 @@ int rte_eth_dev_logtype;
 
 static const char *MZ_RTE_ETH_DEV_DATA = "rte_eth_dev_data";
 struct rte_eth_dev rte_eth_devices[RTE_MAX_ETHPORTS];
-static uint16_t eth_dev_last_created_port;
 
 /* spinlock for eth device callbacks */
 static rte_spinlock_t rte_eth_dev_cb_lock = RTE_SPINLOCK_INITIALIZER;
@@ -430,8 +429,6 @@ eth_dev_get(uint16_t port_id)
 	struct rte_eth_dev *eth_dev = &rte_eth_devices[port_id];
 
 	eth_dev->data = &rte_eth_dev_shared_data->data[port_id];
-
-	eth_dev_last_created_port = port_id;
 
 	return eth_dev;
 }
@@ -1117,7 +1114,9 @@ rte_eth_dev_configure(uint16_t port_id, uint16_t nb_rx_q, uint16_t nb_tx_q,
 	 * Copy the dev_conf parameter into the dev structure.
 	 * rte_eth_dev_info_get() requires dev_conf, copy it before dev_info get
 	 */
-	memcpy(&dev->data->dev_conf, dev_conf, sizeof(dev->data->dev_conf));
+	if (dev_conf != &dev->data->dev_conf)
+		memcpy(&dev->data->dev_conf, dev_conf,
+		       sizeof(dev->data->dev_conf));
 
 	rte_eth_dev_info_get(port_id, &dev_info);
 
@@ -1594,7 +1593,7 @@ rte_eth_rx_queue_setup(uint16_t port_id, uint16_t rx_queue_id,
 			nb_rx_desc % dev_info.rx_desc_lim.nb_align != 0) {
 
 		RTE_ETHDEV_LOG(ERR,
-			"Invalid value for nb_rx_desc(=%hu), should be: <= %hu, = %hu, and a product of %hu\n",
+			"Invalid value for nb_rx_desc(=%hu), should be: <= %hu, >= %hu, and a product of %hu\n",
 			nb_rx_desc, dev_info.rx_desc_lim.nb_max,
 			dev_info.rx_desc_lim.nb_min,
 			dev_info.rx_desc_lim.nb_align);
@@ -1646,7 +1645,7 @@ rte_eth_rx_queue_setup(uint16_t port_id, uint16_t rx_queue_id,
 	     local_conf.offloads) {
 		RTE_ETHDEV_LOG(ERR,
 			"Ethdev port_id=%d rx_queue_id=%d, new added offloads 0x%"PRIx64" must be "
-			"within pre-queue offload capabilities 0x%"PRIx64" in %s()\n",
+			"within per-queue offload capabilities 0x%"PRIx64" in %s()\n",
 			port_id, rx_queue_id, local_conf.offloads,
 			dev_info.rx_queue_offload_capa,
 			__func__);
@@ -1698,7 +1697,7 @@ rte_eth_tx_queue_setup(uint16_t port_id, uint16_t tx_queue_id,
 	    nb_tx_desc < dev_info.tx_desc_lim.nb_min ||
 	    nb_tx_desc % dev_info.tx_desc_lim.nb_align != 0) {
 		RTE_ETHDEV_LOG(ERR,
-			"Invalid value for nb_tx_desc(=%hu), should be: <= %hu, = %hu, and a product of %hu\n",
+			"Invalid value for nb_tx_desc(=%hu), should be: <= %hu, >= %hu, and a product of %hu\n",
 			nb_tx_desc, dev_info.tx_desc_lim.nb_max,
 			dev_info.tx_desc_lim.nb_min,
 			dev_info.tx_desc_lim.nb_align);
@@ -1750,7 +1749,7 @@ rte_eth_tx_queue_setup(uint16_t port_id, uint16_t tx_queue_id,
 	     local_conf.offloads) {
 		RTE_ETHDEV_LOG(ERR,
 			"Ethdev port_id=%d tx_queue_id=%d, new added offloads 0x%"PRIx64" must be "
-			"within pre-queue offload capabilities 0x%"PRIx64" in %s()\n",
+			"within per-queue offload capabilities 0x%"PRIx64" in %s()\n",
 			port_id, tx_queue_id, local_conf.offloads,
 			dev_info.tx_queue_offload_capa,
 			__func__);
@@ -2520,16 +2519,28 @@ rte_eth_dev_info_get(uint16_t port_id, struct rte_eth_dev_info *dev_info)
 		.nb_align = 1,
 	};
 
+	/*
+	 * Init dev_info before port_id check since caller does not have
+	 * return status and does not know if get is successful or not.
+	 */
+	memset(dev_info, 0, sizeof(struct rte_eth_dev_info));
+
 	RTE_ETH_VALID_PORTID_OR_RET(port_id);
 	dev = &rte_eth_devices[port_id];
 
-	memset(dev_info, 0, sizeof(struct rte_eth_dev_info));
 	dev_info->rx_desc_lim = lim;
 	dev_info->tx_desc_lim = lim;
 	dev_info->device = dev->device;
 
 	RTE_FUNC_PTR_OR_RET(*dev->dev_ops->dev_infos_get);
 	(*dev->dev_ops->dev_infos_get)(dev, dev_info);
+
+	/* Maximum number of queues should be <= RTE_MAX_QUEUES_PER_PORT */
+	dev_info->max_rx_queues = RTE_MIN(dev_info->max_rx_queues,
+			RTE_MAX_QUEUES_PER_PORT);
+	dev_info->max_tx_queues = RTE_MIN(dev_info->max_tx_queues,
+			RTE_MAX_QUEUES_PER_PORT);
+
 	dev_info->driver_name = dev->device->driver->name;
 	dev_info->nb_rx_queues = dev->data->nb_rx_queues;
 	dev_info->nb_tx_queues = dev->data->nb_tx_queues;

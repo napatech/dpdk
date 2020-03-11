@@ -100,7 +100,8 @@ int bnxt_mq_rx_configure(struct bnxt *bp)
 		}
 	}
 	nb_q_per_grp = bp->rx_cp_nr_rings / pools;
-	PMD_DRV_LOG(ERR, "pools = %u nb_q_per_grp = %u\n", pools, nb_q_per_grp);
+	PMD_DRV_LOG(DEBUG, "pools = %u nb_q_per_grp = %u\n",
+		    pools, nb_q_per_grp);
 	start_grp_id = 0;
 	end_grp_id = nb_q_per_grp;
 
@@ -206,39 +207,40 @@ void bnxt_rx_queue_release_mbufs(struct bnxt_rx_queue *rxq)
 	struct bnxt_tpa_info *tpa_info;
 	uint16_t i;
 
+	if (!rxq)
+		return;
+
 	rte_spinlock_lock(&rxq->lock);
 
-	if (rxq) {
-		sw_ring = rxq->rx_ring->rx_buf_ring;
-		if (sw_ring) {
-			for (i = 0;
-			     i < rxq->rx_ring->rx_ring_struct->ring_size; i++) {
-				if (sw_ring[i].mbuf) {
-					rte_pktmbuf_free_seg(sw_ring[i].mbuf);
-					sw_ring[i].mbuf = NULL;
-				}
+	sw_ring = rxq->rx_ring->rx_buf_ring;
+	if (sw_ring) {
+		for (i = 0;
+		     i < rxq->rx_ring->rx_ring_struct->ring_size; i++) {
+			if (sw_ring[i].mbuf) {
+				rte_pktmbuf_free_seg(sw_ring[i].mbuf);
+				sw_ring[i].mbuf = NULL;
 			}
 		}
-		/* Free up mbufs in Agg ring */
-		sw_ring = rxq->rx_ring->ag_buf_ring;
-		if (sw_ring) {
-			for (i = 0;
-			     i < rxq->rx_ring->ag_ring_struct->ring_size; i++) {
-				if (sw_ring[i].mbuf) {
-					rte_pktmbuf_free_seg(sw_ring[i].mbuf);
-					sw_ring[i].mbuf = NULL;
-				}
+	}
+	/* Free up mbufs in Agg ring */
+	sw_ring = rxq->rx_ring->ag_buf_ring;
+	if (sw_ring) {
+		for (i = 0;
+		     i < rxq->rx_ring->ag_ring_struct->ring_size; i++) {
+			if (sw_ring[i].mbuf) {
+				rte_pktmbuf_free_seg(sw_ring[i].mbuf);
+				sw_ring[i].mbuf = NULL;
 			}
 		}
+	}
 
-		/* Free up mbufs in TPA */
-		tpa_info = rxq->rx_ring->tpa_info;
-		if (tpa_info) {
-			for (i = 0; i < BNXT_TPA_MAX; i++) {
-				if (tpa_info[i].mbuf) {
-					rte_pktmbuf_free_seg(tpa_info[i].mbuf);
-					tpa_info[i].mbuf = NULL;
-				}
+	/* Free up mbufs in TPA */
+	tpa_info = rxq->rx_ring->tpa_info;
+	if (tpa_info) {
+		for (i = 0; i < BNXT_TPA_MAX; i++) {
+			if (tpa_info[i].mbuf) {
+				rte_pktmbuf_free_seg(tpa_info[i].mbuf);
+				tpa_info[i].mbuf = NULL;
 			}
 		}
 	}
@@ -287,7 +289,7 @@ int bnxt_rx_queue_setup_op(struct rte_eth_dev *eth_dev,
 			       const struct rte_eth_rxconf *rx_conf,
 			       struct rte_mempool *mp)
 {
-	struct bnxt *bp = (struct bnxt *)eth_dev->data->dev_private;
+	struct bnxt *bp = eth_dev->data->dev_private;
 	uint64_t rx_offloads = eth_dev->data->dev_conf.rxmode.offloads;
 	struct bnxt_rx_queue *rxq;
 	int rc = 0;
@@ -323,13 +325,13 @@ int bnxt_rx_queue_setup_op(struct rte_eth_dev *eth_dev,
 	rxq->nb_rx_desc = nb_desc;
 	rxq->rx_free_thresh = rx_conf->rx_free_thresh;
 
-	PMD_DRV_LOG(DEBUG, "RX Buf size is %d\n", rxq->rx_buf_use_size);
 	PMD_DRV_LOG(DEBUG, "RX Buf MTU %d\n", eth_dev->data->mtu);
 
 	rc = bnxt_init_rx_ring_struct(rxq, socket_id);
 	if (rc)
 		goto out;
 
+	PMD_DRV_LOG(DEBUG, "RX Buf size is %d\n", rxq->rx_buf_size);
 	rxq->queue_id = queue_idx;
 	rxq->port_id = eth_dev->data->port_id;
 	if (rx_offloads & DEV_RX_OFFLOAD_KEEP_CRC)
@@ -349,11 +351,26 @@ int bnxt_rx_queue_setup_op(struct rte_eth_dev *eth_dev,
 	}
 	rte_atomic64_init(&rxq->rx_mbuf_alloc_fail);
 
-	rxq->rx_deferred_start = rx_conf->rx_deferred_start;
-	queue_state = rxq->rx_deferred_start ? RTE_ETH_QUEUE_STATE_STOPPED :
-						RTE_ETH_QUEUE_STATE_STARTED;
+	/* rxq 0 must not be stopped when used as async CPR */
+	if (queue_idx == 0)
+		rxq->rx_deferred_start = false;
+	else
+		rxq->rx_deferred_start = rx_conf->rx_deferred_start;
+
+	if (rxq->rx_deferred_start) {
+		queue_state = RTE_ETH_QUEUE_STATE_STOPPED;
+		rxq->rx_started = false;
+	} else {
+		queue_state = RTE_ETH_QUEUE_STATE_STARTED;
+		rxq->rx_started = true;
+	}
+
 	eth_dev->data->rx_queue_state[queue_idx] = queue_state;
 	rte_spinlock_init(&rxq->lock);
+
+	/* Configure mtu if it is different from what was configured before */
+	if (!queue_idx)
+		bnxt_mtu_set_op(eth_dev, eth_dev->data->mtu);
 out:
 	return rc;
 }
@@ -367,12 +384,11 @@ bnxt_rx_queue_intr_enable_op(struct rte_eth_dev *eth_dev, uint16_t queue_id)
 
 	if (eth_dev->data->rx_queues) {
 		rxq = eth_dev->data->rx_queues[queue_id];
-		if (!rxq) {
-			rc = -EINVAL;
-			return rc;
-		}
+		if (!rxq)
+			return -EINVAL;
+
 		cpr = rxq->cp_ring;
-		B_CP_DB_ARM(cpr);
+		B_CP_DB_REARM(cpr, cpr->cp_raw_cons);
 	}
 	return rc;
 }
@@ -386,10 +402,9 @@ bnxt_rx_queue_intr_disable_op(struct rte_eth_dev *eth_dev, uint16_t queue_id)
 
 	if (eth_dev->data->rx_queues) {
 		rxq = eth_dev->data->rx_queues[queue_id];
-		if (!rxq) {
-			rc = -EINVAL;
-			return rc;
-		}
+		if (!rxq)
+			return -EINVAL;
+
 		cpr = rxq->cp_ring;
 		B_CP_DB_DISARM(cpr);
 	}
@@ -398,7 +413,7 @@ bnxt_rx_queue_intr_disable_op(struct rte_eth_dev *eth_dev, uint16_t queue_id)
 
 int bnxt_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 {
-	struct bnxt *bp = (struct bnxt *)dev->data->dev_private;
+	struct bnxt *bp = dev->data->dev_private;
 	struct rte_eth_conf *dev_conf = &bp->eth_dev->data->dev_conf;
 	struct bnxt_rx_queue *rxq = bp->rx_queues[rx_queue_id];
 	struct bnxt_vnic_info *vnic = NULL;
@@ -409,7 +424,12 @@ int bnxt_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 		return -EINVAL;
 	}
 
+	/* Set the queue state to started here.
+	 * We check the status of the queue while posting buffer.
+	 * If queue is it started, we do not post buffers for Rx.
+	 */
 	dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
+	rxq->rx_started = true;
 
 	bnxt_free_hwrm_rx_ring(bp, rx_queue_id);
 	bnxt_alloc_hwrm_rx_ring(bp, rx_queue_id);
@@ -430,15 +450,18 @@ int bnxt_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 		rc = bnxt_vnic_rss_configure(bp, vnic);
 	}
 
-	if (rc == 0)
-		rxq->rx_deferred_start = false;
+	if (rc != 0) {
+		dev->data->rx_queue_state[rx_queue_id] =
+			RTE_ETH_QUEUE_STATE_STOPPED;
+		rxq->rx_started = false;
+	}
 
 	return rc;
 }
 
 int bnxt_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 {
-	struct bnxt *bp = (struct bnxt *)dev->data->dev_private;
+	struct bnxt *bp = dev->data->dev_private;
 	struct rte_eth_conf *dev_conf = &bp->eth_dev->data->dev_conf;
 	struct bnxt_vnic_info *vnic = NULL;
 	struct bnxt_rx_queue *rxq = NULL;
@@ -458,7 +481,7 @@ int bnxt_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	}
 
 	dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
-	rxq->rx_deferred_start = true;
+	rxq->rx_started = false;
 	PMD_DRV_LOG(DEBUG, "Rx queue stopped\n");
 
 	if (dev_conf->rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG) {

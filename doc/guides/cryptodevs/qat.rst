@@ -7,7 +7,7 @@ Intel(R) QuickAssist (QAT) Crypto Poll Mode Driver
 QAT documentation consists of three parts:
 
 * Details of the symmetric crypto service below.
-* Details of the `compression service <http://doc.dpdk.org/guides/compressdevs/qat_comp.html>`_
+* Details of the :doc:`compression service <../compressdevs/qat_comp>`
   in the compressdev drivers section.
 * Details of building the common QAT infrastructure and the PMDs to support the
   above services. See :ref:`building_qat` below.
@@ -79,9 +79,8 @@ Limitations
 * SNOW 3G (UIA2) and ZUC (EIA3) supported only if hash length and offset fields are byte-multiple.
 * No BSD support as BSD QAT kernel driver not available.
 * ZUC EEA3/EIA3 is not supported by dh895xcc devices
-* Maximum additional authenticated data (AAD) for GCM is 240 bytes long.
+* Maximum additional authenticated data (AAD) for GCM is 240 bytes long and must be passed to the device in a buffer rounded up to the nearest block-size multiple (x16) and padded with zeros.
 * Queue pairs are not thread-safe (that is, within a single queue pair, RX and TX from different lcores is not supported).
-
 
 Extra notes on KASUMI F9
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -124,7 +123,7 @@ Configuring and Building the DPDK QAT PMDs
 
 
 Further information on configuring, building and installing DPDK is described
-`here <http://doc.dpdk.org/guides/linux_gsg/build_dpdk.html>`_.
+:doc:`here <../linux_gsg/build_dpdk>`.
 
 
 Quick instructions for QAT cryptodev PMD are as follows:

@@ -302,12 +302,12 @@ enetc_alloc_txbdr(struct enetc_bdr *txr, uint16_t nb_desc)
 	int size;
 
 	size = nb_desc * sizeof(struct enetc_swbd);
-	txr->q_swbd = rte_malloc(NULL, size, RTE_CACHE_LINE_SIZE);
+	txr->q_swbd = rte_malloc(NULL, size, ENETC_BD_RING_ALIGN);
 	if (txr->q_swbd == NULL)
 		return -ENOMEM;
 
 	size = nb_desc * sizeof(struct enetc_tx_bd);
-	txr->bd_base = rte_malloc(NULL, size, RTE_CACHE_LINE_SIZE);
+	txr->bd_base = rte_malloc(NULL, size, ENETC_BD_RING_ALIGN);
 	if (txr->bd_base == NULL) {
 		rte_free(txr->q_swbd);
 		txr->q_swbd = NULL;
@@ -453,12 +453,12 @@ enetc_alloc_rxbdr(struct enetc_bdr *rxr,
 	int size;
 
 	size = nb_rx_desc * sizeof(struct enetc_swbd);
-	rxr->q_swbd = rte_malloc(NULL, size, RTE_CACHE_LINE_SIZE);
+	rxr->q_swbd = rte_malloc(NULL, size, ENETC_BD_RING_ALIGN);
 	if (rxr->q_swbd == NULL)
 		return -ENOMEM;
 
 	size = nb_rx_desc * sizeof(union enetc_rx_bd);
-	rxr->bd_base = rte_malloc(NULL, size, RTE_CACHE_LINE_SIZE);
+	rxr->bd_base = rte_malloc(NULL, size, ENETC_BD_RING_ALIGN);
 	if (rxr->bd_base == NULL) {
 		rte_free(rxr->q_swbd);
 		rxr->q_swbd = NULL;
@@ -490,15 +490,15 @@ enetc_setup_rxbdr(struct enetc_hw *hw, struct enetc_bdr *rx_ring,
 		       ENETC_RTBLENR_LEN(rx_ring->bd_count));
 
 	rx_ring->mb_pool = mb_pool;
-	/* enable ring */
-	enetc_rxbdr_wr(hw, idx, ENETC_RBMR, ENETC_RBMR_EN);
-	enetc_rxbdr_wr(hw, idx, ENETC_RBPIR, 0);
 	rx_ring->rcir = (void *)((size_t)hw->reg +
 			ENETC_BDR(RX, idx, ENETC_RBCIR));
 	enetc_refill_rx_ring(rx_ring, (enetc_bd_unused(rx_ring)));
 	buf_size = (uint16_t)(rte_pktmbuf_data_room_size(rx_ring->mb_pool) -
 		   RTE_PKTMBUF_HEADROOM);
 	enetc_rxbdr_wr(hw, idx, ENETC_RBBSR, buf_size);
+	/* enable ring */
+	enetc_rxbdr_wr(hw, idx, ENETC_RBMR, ENETC_RBMR_EN);
+	enetc_rxbdr_wr(hw, idx, ENETC_RBPIR, 0);
 }
 
 static int

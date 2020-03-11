@@ -61,17 +61,21 @@ static inline int bnxt_alloc_ag_data(struct bnxt_rx_queue *rxq,
 	struct bnxt_sw_rx_bd *rx_buf = &rxr->ag_buf_ring[prod];
 	struct rte_mbuf *mbuf;
 
+	if (rxbd == NULL) {
+		PMD_DRV_LOG(ERR, "Jumbo Frame. rxbd is NULL\n");
+		return -EINVAL;
+	}
+
+	if (rx_buf == NULL) {
+		PMD_DRV_LOG(ERR, "Jumbo Frame. rx_buf is NULL\n");
+		return -EINVAL;
+	}
+
 	mbuf = __bnxt_alloc_rx_data(rxq->mb_pool);
 	if (!mbuf) {
 		rte_atomic64_inc(&rxq->rx_mbuf_alloc_fail);
 		return -ENOMEM;
 	}
-
-	if (rxbd == NULL)
-		PMD_DRV_LOG(ERR, "Jumbo Frame. rxbd is NULL\n");
-	if (rx_buf == NULL)
-		PMD_DRV_LOG(ERR, "Jumbo Frame. rx_buf is NULL\n");
-
 
 	rx_buf->mbuf = mbuf;
 	mbuf->data_off = RTE_PKTMBUF_HEADROOM;
@@ -154,7 +158,7 @@ static void bnxt_tpa_start(struct bnxt_rx_queue *rxq,
 	if (tpa_start1->flags2 &
 	    rte_cpu_to_le_32(RX_TPA_START_CMPL_FLAGS2_META_FORMAT_VLAN)) {
 		mbuf->vlan_tci = rte_le_to_cpu_32(tpa_start1->metadata);
-		mbuf->ol_flags |= PKT_RX_VLAN;
+		mbuf->ol_flags |= PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED;
 	}
 	if (likely(tpa_start1->flags2 &
 		   rte_cpu_to_le_32(RX_TPA_START_CMPL_FLAGS2_L4_CS_CALC)))
@@ -362,6 +366,7 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 	int rc = 0;
 	uint8_t agg_buf = 0;
 	uint16_t cmp_type;
+	uint32_t flags2_f = 0;
 
 	rxcmp = (struct rx_pkt_cmpl *)
 	    &cpr->cp_desc_ring[cp_cons];
@@ -437,22 +442,50 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 			(RX_PKT_CMPL_METADATA_VID_MASK |
 			RX_PKT_CMPL_METADATA_DE |
 			RX_PKT_CMPL_METADATA_PRI_MASK);
-		mbuf->ol_flags |= PKT_RX_VLAN;
+		mbuf->ol_flags |= PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED;
 	}
 
-	if (likely(RX_CMP_IP_CS_OK(rxcmp1)))
-		mbuf->ol_flags |= PKT_RX_IP_CKSUM_GOOD;
-	else if (likely(RX_CMP_IP_CS_UNKNOWN(rxcmp1)))
-		mbuf->ol_flags |= PKT_RX_IP_CKSUM_UNKNOWN;
-	else
-		mbuf->ol_flags |= PKT_RX_IP_CKSUM_BAD;
+	flags2_f = flags2_0xf(rxcmp1);
+	/* IP Checksum */
+	if (likely(IS_IP_NONTUNNEL_PKT(flags2_f))) {
+		if (unlikely(RX_CMP_IP_CS_ERROR(rxcmp1)))
+			mbuf->ol_flags |= PKT_RX_IP_CKSUM_BAD;
+		else if (unlikely(RX_CMP_IP_CS_UNKNOWN(rxcmp1)))
+			mbuf->ol_flags |= PKT_RX_IP_CKSUM_UNKNOWN;
+		else
+			mbuf->ol_flags |= PKT_RX_IP_CKSUM_GOOD;
+	} else if (IS_IP_TUNNEL_PKT(flags2_f)) {
+		if (unlikely(RX_CMP_IP_OUTER_CS_ERROR(rxcmp1) ||
+			     RX_CMP_IP_CS_ERROR(rxcmp1)))
+			mbuf->ol_flags |= PKT_RX_IP_CKSUM_BAD;
+		else if (unlikely(RX_CMP_IP_CS_UNKNOWN(rxcmp1)))
+			mbuf->ol_flags |= PKT_RX_IP_CKSUM_UNKNOWN;
+		else
+			mbuf->ol_flags |= PKT_RX_IP_CKSUM_GOOD;
+	}
 
-	if (likely(RX_CMP_L4_CS_OK(rxcmp1)))
-		mbuf->ol_flags |= PKT_RX_L4_CKSUM_GOOD;
-	else if (likely(RX_CMP_L4_CS_UNKNOWN(rxcmp1)))
+	/* L4 Checksum */
+	if (likely(IS_L4_NONTUNNEL_PKT(flags2_f))) {
+		if (unlikely(RX_CMP_L4_INNER_CS_ERR2(rxcmp1)))
+			mbuf->ol_flags |= PKT_RX_L4_CKSUM_BAD;
+		else
+			mbuf->ol_flags |= PKT_RX_L4_CKSUM_GOOD;
+	} else if (IS_L4_TUNNEL_PKT(flags2_f)) {
+		if (unlikely(RX_CMP_L4_INNER_CS_ERR2(rxcmp1)))
+			mbuf->ol_flags |= PKT_RX_L4_CKSUM_BAD;
+		else
+			mbuf->ol_flags |= PKT_RX_L4_CKSUM_GOOD;
+		if (unlikely(RX_CMP_L4_OUTER_CS_ERR2(rxcmp1))) {
+			mbuf->ol_flags |= PKT_RX_OUTER_L4_CKSUM_BAD;
+		} else if (unlikely(IS_L4_TUNNEL_PKT_ONLY_INNER_L4_CS
+				    (flags2_f))) {
+			mbuf->ol_flags |= PKT_RX_OUTER_L4_CKSUM_UNKNOWN;
+		} else {
+			mbuf->ol_flags |= PKT_RX_OUTER_L4_CKSUM_GOOD;
+		}
+	} else if (unlikely(RX_CMP_L4_CS_UNKNOWN(rxcmp1))) {
 		mbuf->ol_flags |= PKT_RX_L4_CKSUM_UNKNOWN;
-	else
-		mbuf->ol_flags |= PKT_RX_L4_CKSUM_BAD;
+	}
 
 	mbuf->packet_type = bnxt_parse_pkt_type(rxcmp, rxcmp1);
 
@@ -517,7 +550,7 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	bool evt = false;
 
 	/* If Rx Q was stopped return. RxQ0 cannot be stopped. */
-	if (unlikely(((rxq->rx_deferred_start ||
+	if (unlikely(((!rxq->rx_started ||
 		       !rte_spinlock_trylock(&rxq->lock)) &&
 		      rxq->queue_id)))
 		return 0;
@@ -640,10 +673,7 @@ int bnxt_init_rx_ring_struct(struct bnxt_rx_queue *rxq, unsigned int socket_id)
 	struct bnxt_rx_ring_info *rxr;
 	struct bnxt_ring *ring;
 
-	rxq->rx_buf_use_size = BNXT_MAX_MTU + ETHER_HDR_LEN + ETHER_CRC_LEN +
-			       (2 * VLAN_TAG_SIZE);
-	rxq->rx_buf_size = rxq->rx_buf_use_size + sizeof(struct rte_mbuf);
-
+	rxq->rx_buf_size = BNXT_MAX_PKT_LEN + sizeof(struct rte_mbuf);
 	rxr = rte_zmalloc_socket("bnxt_rx_ring",
 				 sizeof(struct bnxt_rx_ring_info),
 				 RTE_CACHE_LINE_SIZE, socket_id);
@@ -727,8 +757,7 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 	uint16_t size;
 
 	size = rte_pktmbuf_data_room_size(rxq->mb_pool) - RTE_PKTMBUF_HEADROOM;
-	if (rxq->rx_buf_use_size <= size)
-		size = rxq->rx_buf_use_size;
+	size = RTE_MIN(BNXT_MAX_PKT_LEN, size);
 
 	type = RX_PROD_PKT_BD_TYPE_RX_PROD_PKT | RX_PROD_PKT_BD_FLAGS_EOP_PAD;
 

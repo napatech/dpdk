@@ -202,11 +202,19 @@ cperf_mbuf_set(struct rte_mbuf *mbuf,
 {
 	uint32_t segment_sz = options->segment_sz;
 	uint8_t *mbuf_data;
-	uint8_t *test_data =
-			(options->cipher_op == RTE_CRYPTO_CIPHER_OP_ENCRYPT) ?
+	uint8_t *test_data;
+	uint32_t remaining_bytes = options->max_buffer_size;
+
+	if (options->op_type == CPERF_AEAD) {
+		test_data = (options->aead_op == RTE_CRYPTO_AEAD_OP_ENCRYPT) ?
 					test_vector->plaintext.data :
 					test_vector->ciphertext.data;
-	uint32_t remaining_bytes = options->max_buffer_size;
+	} else {
+		test_data =
+			(options->cipher_op == RTE_CRYPTO_CIPHER_OP_ENCRYPT) ?
+				test_vector->plaintext.data :
+				test_vector->ciphertext.data;
+	}
 
 	while (remaining_bytes) {
 		mbuf_data = rte_pktmbuf_mtod(mbuf, uint8_t *);
@@ -232,7 +240,7 @@ cperf_verify_test_runner(void *test_ctx)
 	uint64_t ops_deqd = 0, ops_deqd_total = 0, ops_deqd_failed = 0;
 	uint64_t ops_failed = 0;
 
-	static int only_once;
+	static rte_atomic16_t display_once = RTE_ATOMIC16_INIT(0);
 
 	uint64_t i;
 	uint16_t ops_unused = 0;
@@ -375,12 +383,11 @@ cperf_verify_test_runner(void *test_ctx)
 	}
 
 	if (!ctx->options->csv) {
-		if (!only_once)
+		if (rte_atomic16_test_and_set(&display_once))
 			printf("%12s%12s%12s%12s%12s%12s%12s%12s\n\n",
 				"lcore id", "Buf Size", "Burst size",
 				"Enqueued", "Dequeued", "Failed Enq",
 				"Failed Deq", "Failed Ops");
-		only_once = 1;
 
 		printf("%12u%12u%12u%12"PRIu64"%12"PRIu64"%12"PRIu64
 				"%12"PRIu64"%12"PRIu64"\n",
@@ -393,11 +400,10 @@ cperf_verify_test_runner(void *test_ctx)
 				ops_deqd_failed,
 				ops_failed);
 	} else {
-		if (!only_once)
+		if (rte_atomic16_test_and_set(&display_once))
 			printf("\n# lcore id, Buffer Size(B), "
 				"Burst Size,Enqueued,Dequeued,Failed Enq,"
 				"Failed Deq,Failed Ops\n");
-		only_once = 1;
 
 		printf("%10u;%10u;%u;%"PRIu64";%"PRIu64";%"PRIu64";%"PRIu64";"
 				"%"PRIu64"\n",

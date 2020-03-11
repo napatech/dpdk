@@ -96,7 +96,7 @@ static struct flow_key keys[5] = {
 	}
 };
 /* Array to store the data */
-efd_value_t data[5];
+static efd_value_t data[5];
 
 static inline uint8_t efd_get_all_sockets_bitmask(void)
 {

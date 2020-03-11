@@ -15,9 +15,9 @@ Running Sample Applications
 
 Some sample applications may have their own command-line parameters described in
 their respective guides, however all of them also share the same EAL parameters.
-Please refer to  :doc:`../linux_gsg/linux_eal_parameters` or
-:doc:`../freebsd_gsg/freebsd_eal_parameters` for a list of available EAL
-command-line options.
+Please refer to :doc:`EAL parameters (Linux) <../linux_gsg/linux_eal_parameters>`
+or :doc:`EAL parameters (FreeBSD) <../freebsd_gsg/freebsd_eal_parameters>` for
+a list of available EAL command-line options.
 
 
 The DPDK Sample Applications
@@ -106,7 +106,7 @@ examples are highlighted below.
   (packet arrival) and TX (packet transmission) by adding callbacks to the RX
   and TX packet processing functions.
 
-* :doc:`IPSec Security Gateway<ipsec_secgw>`: The IPSec Security
+* :doc:`IPsec Security Gateway<ipsec_secgw>`: The IPsec Security
   Gateway application is minimal example of something closer to a real world
   example. This is also a good example of an application using the DPDK
   Cryptodev framework.

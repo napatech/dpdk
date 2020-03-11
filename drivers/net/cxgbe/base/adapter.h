@@ -322,6 +322,8 @@ struct adapter {
 	int use_unpacked_mode; /* unpacked rx mode state */
 	rte_spinlock_t win0_lock;
 
+	rte_spinlock_t flow_lock; /* Serialize access for rte_flow ops */
+
 	unsigned int clipt_start; /* CLIP table start */
 	unsigned int clipt_end;   /* CLIP table end */
 	unsigned int l2t_start;   /* Layer 2 table start */
@@ -368,7 +370,7 @@ static inline void t4_os_write_unlock(rte_rwlock_t *lock)
  */
 static inline struct port_info *ethdev2pinfo(const struct rte_eth_dev *dev)
 {
-	return (struct port_info *)dev->data->dev_private;
+	return dev->data->dev_private;
 }
 
 /**

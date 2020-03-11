@@ -235,7 +235,8 @@ dpaa2_dev_rx_parse(struct rte_mbuf *mbuf, void *hw_annot_addr)
 }
 
 static inline struct rte_mbuf *__attribute__((hot))
-eth_sg_fd_to_mbuf(const struct qbman_fd *fd)
+eth_sg_fd_to_mbuf(const struct qbman_fd *fd,
+		  int port_id)
 {
 	struct qbman_sge *sgt, *sge;
 	size_t sg_addr, fd_addr;
@@ -261,6 +262,7 @@ eth_sg_fd_to_mbuf(const struct qbman_fd *fd)
 	first_seg->pkt_len = DPAA2_GET_FD_LEN(fd);
 	first_seg->nb_segs = 1;
 	first_seg->next = NULL;
+	first_seg->port = port_id;
 	if (dpaa2_svr_family == SVR_LX2160A)
 		dpaa2_dev_rx_parse_new(first_seg, fd);
 	else
@@ -294,7 +296,8 @@ eth_sg_fd_to_mbuf(const struct qbman_fd *fd)
 }
 
 static inline struct rte_mbuf *__attribute__((hot))
-eth_fd_to_mbuf(const struct qbman_fd *fd)
+eth_fd_to_mbuf(const struct qbman_fd *fd,
+	       int port_id)
 {
 	struct rte_mbuf *mbuf = DPAA2_INLINE_MBUF_FROM_BUF(
 		DPAA2_IOVA_TO_VADDR(DPAA2_GET_FD_ADDR(fd)),
@@ -308,6 +311,7 @@ eth_fd_to_mbuf(const struct qbman_fd *fd)
 	mbuf->data_off = DPAA2_GET_FD_OFFSET(fd);
 	mbuf->data_len = DPAA2_GET_FD_LEN(fd);
 	mbuf->pkt_len = mbuf->data_len;
+	mbuf->port = port_id;
 	mbuf->next = NULL;
 	rte_mbuf_refcnt_set(mbuf, 1);
 
@@ -352,8 +356,9 @@ eth_mbuf_to_sg_fd(struct rte_mbuf *mbuf,
 	DPAA2_SET_FD_LEN(fd, mbuf->pkt_len);
 	DPAA2_SET_ONLY_FD_BPID(fd, bpid);
 	DPAA2_SET_FD_OFFSET(fd, temp->data_off);
-	DPAA2_SET_FD_ASAL(fd, DPAA2_ASAL_VAL);
 	DPAA2_FD_SET_FORMAT(fd, qbman_fd_sg);
+	DPAA2_RESET_FD_FRC(fd);
+	DPAA2_RESET_FD_CTRL(fd);
 	/*Set Scatter gather table and Scatter gather entries*/
 	sgt = (struct qbman_sge *)(
 			(size_t)DPAA2_IOVA_TO_VADDR(DPAA2_GET_FD_ADDR(fd))
@@ -587,10 +592,9 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		}
 
 		if (unlikely(DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg))
-			bufs[num_rx] = eth_sg_fd_to_mbuf(fd);
+			bufs[num_rx] = eth_sg_fd_to_mbuf(fd, dev->data->port_id);
 		else
-			bufs[num_rx] = eth_fd_to_mbuf(fd);
-		bufs[num_rx]->port = dev->data->port_id;
+			bufs[num_rx] = eth_fd_to_mbuf(fd, dev->data->port_id);
 
 		if (dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_VLAN_STRIP)
 			rte_vlan_strip(bufs[num_rx]);
@@ -630,6 +634,8 @@ dpaa2_dev_process_parallel_event(struct qbman_swp *swp,
 				 struct dpaa2_queue *rxq,
 				 struct rte_event *ev)
 {
+	struct rte_eth_dev *dev = rxq->dev;
+
 	rte_prefetch0((void *)(size_t)(DPAA2_GET_FD_ADDR(fd) +
 		DPAA2_FD_PTA_SIZE + 16));
 
@@ -641,7 +647,7 @@ dpaa2_dev_process_parallel_event(struct qbman_swp *swp,
 	ev->queue_id = rxq->ev.queue_id;
 	ev->priority = rxq->ev.priority;
 
-	ev->mbuf = eth_fd_to_mbuf(fd);
+	ev->mbuf = eth_fd_to_mbuf(fd, dev->data->port_id);
 
 	qbman_swp_dqrr_consume(swp, dq);
 }
@@ -653,6 +659,7 @@ dpaa2_dev_process_atomic_event(struct qbman_swp *swp __attribute__((unused)),
 			       struct dpaa2_queue *rxq,
 			       struct rte_event *ev)
 {
+	struct rte_eth_dev *dev = rxq->dev;
 	uint8_t dqrr_index;
 
 	rte_prefetch0((void *)(size_t)(DPAA2_GET_FD_ADDR(fd) +
@@ -666,7 +673,7 @@ dpaa2_dev_process_atomic_event(struct qbman_swp *swp __attribute__((unused)),
 	ev->queue_id = rxq->ev.queue_id;
 	ev->priority = rxq->ev.priority;
 
-	ev->mbuf = eth_fd_to_mbuf(fd);
+	ev->mbuf = eth_fd_to_mbuf(fd, dev->data->port_id);
 
 	dqrr_index = qbman_get_dqrr_idx(dq);
 	ev->mbuf->seqn = dqrr_index + 1;
@@ -808,15 +815,28 @@ dpaa2_dev_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 			}
 			bufs++;
 		}
+
 		loop = 0;
+		retry_count = 0;
 		while (loop < frames_to_send) {
-			loop += qbman_swp_enqueue_multiple(swp, &eqdesc,
+			ret = qbman_swp_enqueue_multiple(swp, &eqdesc,
 					&fd_arr[loop], &flags[loop],
 					frames_to_send - loop);
+			if (unlikely(ret < 0)) {
+				retry_count++;
+				if (retry_count > DPAA2_MAX_TX_RETRY_COUNT) {
+					num_tx += loop;
+					nb_pkts -= loop;
+					goto send_n_return;
+				}
+			} else {
+				loop += ret;
+				retry_count = 0;
+			}
 		}
 
-		num_tx += frames_to_send;
-		nb_pkts -= frames_to_send;
+		num_tx += loop;
+		nb_pkts -= loop;
 	}
 	dpaa2_q->tx_pkts += num_tx;
 	return num_tx;
@@ -826,13 +846,22 @@ send_n_return:
 	if (loop) {
 		unsigned int i = 0;
 
+		retry_count = 0;
 		while (i < loop) {
-			i += qbman_swp_enqueue_multiple(swp, &eqdesc,
-							&fd_arr[i],
-							&flags[loop],
-							loop - i);
+			ret = qbman_swp_enqueue_multiple(swp, &eqdesc,
+							 &fd_arr[i],
+							 &flags[i],
+							 loop - i);
+			if (unlikely(ret < 0)) {
+				retry_count++;
+				if (retry_count > DPAA2_MAX_TX_RETRY_COUNT)
+					break;
+			} else {
+				i += ret;
+				retry_count = 0;
+			}
 		}
-		num_tx += loop;
+		num_tx += i;
 	}
 skip_tx:
 	dpaa2_q->tx_pkts += num_tx;

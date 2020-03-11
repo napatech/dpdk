@@ -1780,6 +1780,7 @@ static int ixgbe_wol_exclusion(struct ixgbe_adapter *adapter,
 				wol->supported = 0;
 				break;
 			}
+			/* fallthrough */
 		case IXGBE_SUBDEV_ID_82599_SFP:
 			retval = 0;
 			break;

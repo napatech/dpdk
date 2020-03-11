@@ -631,10 +631,10 @@ In the DPDK environment, use the logging interface provided:
 
  /* log in debug level */
  rte_log_set_global_level(RTE_LOG_DEBUG);
- RTE_LOG(DEBUG, my_logtype1, "this is is a debug level message\n");
- RTE_LOG(INFO, my_logtype1, "this is is a info level message\n");
- RTE_LOG(WARNING, my_logtype1, "this is is a warning level message\n");
- RTE_LOG(WARNING, my_logtype2, "this is is a debug level message (not displayed)\n");
+ RTE_LOG(DEBUG, my_logtype1, "this is a debug level message\n");
+ RTE_LOG(INFO, my_logtype1, "this is a info level message\n");
+ RTE_LOG(WARNING, my_logtype1, "this is a warning level message\n");
+ RTE_LOG(WARNING, my_logtype2, "this is a debug level message (not displayed)\n");
 
  /* log in info level */
  rte_log_set_global_level(RTE_LOG_INFO);
@@ -825,10 +825,10 @@ format.
 .. code-block:: python
 
 	sources = files('file1.c', ...)
-	headers = files('file1.c', ...)
+	headers = files('file1.h', ...)
 
 
-The will build based on a number of conventions and assumptions within the DPDK
+This will build based on a number of conventions and assumptions within the DPDK
 itself, for example, that the library name is the same as the directory name in
 which the files are stored.
 

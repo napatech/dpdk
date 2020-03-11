@@ -128,8 +128,9 @@ perf_event_timer_producer(void *arg)
 	fflush(stdout);
 	rte_delay_ms(1000);
 	printf("%s(): lcore %d Average event timer arm latency = %.3f us\n",
-			__func__, rte_lcore_id(), (float)(arm_latency / count) /
-			(rte_get_timer_hz() / 1000000));
+			__func__, rte_lcore_id(),
+			count ? (float)(arm_latency / count) /
+			(rte_get_timer_hz() / 1000000) : 0);
 	return 0;
 }
 
@@ -189,8 +190,9 @@ perf_event_timer_producer_burst(void *arg)
 	fflush(stdout);
 	rte_delay_ms(1000);
 	printf("%s(): lcore %d Average event timer arm latency = %.3f us\n",
-			__func__, rte_lcore_id(), (float)(arm_latency / count) /
-			(rte_get_timer_hz() / 1000000));
+			__func__, rte_lcore_id(),
+			count ? (float)(arm_latency / count) /
+			(rte_get_timer_hz() / 1000000) : 0);
 	return 0;
 }
 
@@ -327,7 +329,8 @@ perf_launch_lcores(struct evt_test *test, struct evt_options *opt,
 		}
 
 		if (new_cycles - dead_lock_cycles > dead_lock_sample &&
-				opt->prod_type == EVT_PROD_TYPE_SYNT) {
+		    (opt->prod_type == EVT_PROD_TYPE_SYNT ||
+		     opt->prod_type == EVT_PROD_TYPE_EVENT_TIMER_ADPTR)) {
 			remaining = t->outstand_pkts - processed_pkts(t);
 			if (dead_lock_remaining == remaining) {
 				rte_event_dev_dump(opt->dev_id, stdout);
@@ -582,7 +585,8 @@ perf_opt_check(struct evt_options *opt, uint64_t nb_queues)
 		return -1;
 	}
 
-	if (opt->prod_type == EVT_PROD_TYPE_SYNT) {
+	if (opt->prod_type == EVT_PROD_TYPE_SYNT ||
+			opt->prod_type == EVT_PROD_TYPE_EVENT_TIMER_ADPTR) {
 		/* Validate producer lcores */
 		if (evt_lcores_has_overlap(opt->plcores,
 					rte_get_master_lcore())) {

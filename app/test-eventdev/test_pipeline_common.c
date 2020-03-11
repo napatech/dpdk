@@ -159,6 +159,7 @@ int
 pipeline_ethdev_setup(struct evt_test *test, struct evt_options *opt)
 {
 	uint16_t i;
+	int ret;
 	uint8_t nb_queues = 1;
 	struct test_pipeline *t = evt_test_priv(test);
 	struct rte_eth_rxconf rx_conf;
@@ -187,7 +188,12 @@ pipeline_ethdev_setup(struct evt_test *test, struct evt_options *opt)
 		struct rte_eth_conf local_port_conf = port_conf;
 		uint32_t caps = 0;
 
-		rte_event_eth_tx_adapter_caps_get(opt->dev_id, i, &caps);
+		ret = rte_event_eth_tx_adapter_caps_get(opt->dev_id, i, &caps);
+		if (ret != 0) {
+			evt_err("failed to get event tx adapter[%d] caps", i);
+			return ret;
+		}
+
 		if (!(caps & RTE_EVENT_ETH_TX_ADAPTER_CAP_INTERNAL_PORT))
 			t->internal_port = 0;
 

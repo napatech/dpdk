@@ -1,5 +1,7 @@
-# SPDK-License-Identifier: BSD-3-Clause
+# SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2018 Intel Corporation
+
+from __future__ import print_function
 
 import socket
 import os
@@ -12,6 +14,11 @@ METRICS_REQ = "{\"action\":0,\"command\":\"ports_all_stat_values\",\"data\":null
 API_REG = "{\"action\":1,\"command\":\"clients\",\"data\":{\"client_path\":\""
 API_UNREG = "{\"action\":2,\"command\":\"clients\",\"data\":{\"client_path\":\""
 DEFAULT_FP = "/var/run/dpdk/default_client"
+
+try:
+    raw_input  # Python 2
+except NameError:
+    raw_input = input  # Python 3
 
 class Socket:
 
@@ -67,11 +74,11 @@ class Client:
     def requestMetrics(self): # Requests metrics for given client
         self.socket.client_fd.send(METRICS_REQ)
         data = self.socket.client_fd.recv(BUFFER_SIZE)
-        print "\nResponse: \n", str(data)
+        print("\nResponse: \n", str(data))
 
     def repeatedlyRequestMetrics(self, sleep_time): # Recursively requests metrics for given client
         print("\nPlease enter the number of times you'd like to continuously request Metrics:")
-        n_requests = int(input("\n:"))
+        n_requests = int(raw_input("\n:"))
         print("\033[F") #Removes the user input from screen, cleans it up
         print("\033[K")
         for i in range(n_requests):
@@ -86,7 +93,7 @@ class Client:
             print("[3] Unregister client")
 
             try:
-                self.choice = int(input("\n:"))
+                self.choice = int(raw_input("\n:"))
                 print("\033[F") #Removes the user input for screen, cleans it up
                 print("\033[K")
                 if self.choice == 1:
@@ -106,10 +113,10 @@ if __name__ == "__main__":
     sleep_time = 1
     file_path = ""
     if (len(sys.argv) == 2):
-	file_path = sys.argv[1]
+        file_path = sys.argv[1]
     else:
         print("Warning - No filepath passed, using default (" + DEFAULT_FP + ").")
-	file_path = DEFAULT_FP
+        file_path = DEFAULT_FP
     client = Client()
     client.getFilepath(file_path)
     client.register()

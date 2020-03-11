@@ -139,8 +139,8 @@ usage(char* progname)
 	printf("  --enable-hw-vlan-extend: enable hardware vlan extend.\n");
 	printf("  --enable-drop-en: enable per queue packet drop.\n");
 	printf("  --disable-rss: disable rss.\n");
-	printf("  --port-topology=N: set port topology (N: paired (default) or "
-	       "chained).\n");
+	printf("  --port-topology=<paired|chained|loop>: set port topology (paired "
+	       "is default).\n");
 	printf("  --forward-mode=N: set forwarding mode (N: %s).\n",
 	       list_pkt_forwarding_modes());
 	printf("  --rss-ip: set RSS functions to IPv4/IPv6 only .\n");
@@ -1245,10 +1245,17 @@ launch_args_parse(int argc, char** argv)
 			break;
 		default:
 			usage(argv[0]);
+			printf("Invalid option: %s\n", argv[optind]);
 			rte_exit(EXIT_FAILURE,
 				 "Command line is incomplete or incorrect\n");
 			break;
 		}
+	}
+
+	if (optind != argc) {
+		usage(argv[0]);
+		printf("Invalid parameter: %s\n", argv[optind]);
+		rte_exit(EXIT_FAILURE, "Command line is incorrect\n");
 	}
 
 	/* Set offload configuration from command line parameters. */

@@ -11,6 +11,7 @@
 #include <rte_mempool.h>
 #include <rte_mbuf.h>
 #include <rte_distributor.h>
+#include <rte_string_fns.h>
 
 #define ITER_POWER 20 /* log 2 of how many iterations we do when timing. */
 #define BURST 32
@@ -69,12 +70,14 @@ handle_work(void *arg)
 		buf[i] = NULL;
 	num = rte_distributor_get_pkt(db, id, buf, buf, num);
 	while (!quit) {
-		worker_stats[id].handled_packets += num;
+		__atomic_fetch_add(&worker_stats[id].handled_packets, num,
+				__ATOMIC_RELAXED);
 		count += num;
 		num = rte_distributor_get_pkt(db, id,
 				buf, buf, num);
 	}
-	worker_stats[id].handled_packets += num;
+	__atomic_fetch_add(&worker_stats[id].handled_packets, num,
+			__ATOMIC_RELAXED);
 	count += num;
 	rte_distributor_return_pkt(db, id, buf, num);
 	return 0;
@@ -373,7 +376,8 @@ handle_work_for_shutdown_test(void *arg)
 				id, buf, buf, num);
 
 		while (!quit) {
-			worker_stats[id].handled_packets++, count++;
+			worker_stats[id].handled_packets += num;
+			count += num;
 			rte_pktmbuf_free(pkt);
 			num = rte_distributor_get_pkt(d, id, buf, buf, num);
 		}
@@ -642,9 +646,11 @@ test_distributor(void)
 
 		worker_params.dist = dist[i];
 		if (i)
-			sprintf(worker_params.name, "burst");
+			strlcpy(worker_params.name, "burst",
+					sizeof(worker_params.name));
 		else
-			sprintf(worker_params.name, "single");
+			strlcpy(worker_params.name, "single",
+					sizeof(worker_params.name));
 
 		rte_eal_mp_remote_launch(handle_work,
 				&worker_params, SKIP_MASTER);

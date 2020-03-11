@@ -26,13 +26,13 @@ struct bnxt_rx_queue {
 	uint16_t		port_id; /* Device port identifier */
 	uint8_t			crc_len; /* 0 if CRC stripped, 4 otherwise */
 	uint8_t			rx_deferred_start; /* not in global dev start */
+	uint8_t			rx_started; /* RX queue is started */
 
 	struct bnxt		*bp;
 	int			index;
 	struct bnxt_vnic_info	*vnic;
 
 	uint32_t			rx_buf_size;
-	uint32_t			rx_buf_use_size;  /* useable size */
 	struct bnxt_rx_ring_info	*rx_ring;
 	struct bnxt_cp_ring_info	*cp_ring;
 	rte_atomic64_t		rx_mbuf_alloc_fail;

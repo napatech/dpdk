@@ -1,7 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- *
- *   Copyright 2017 NXP
- *
+ * Copyright 2017,2019 NXP
  */
 
 #include <assert.h>
@@ -470,8 +468,7 @@ dpaa2_eventdev_queue_def_conf(struct rte_eventdev *dev, uint8_t queue_id,
 	RTE_SET_USED(queue_conf);
 
 	queue_conf->nb_atomic_flows = DPAA2_EVENT_QUEUE_ATOMIC_FLOWS;
-	queue_conf->schedule_type = RTE_SCHED_TYPE_ATOMIC |
-				      RTE_SCHED_TYPE_PARALLEL;
+	queue_conf->schedule_type = RTE_SCHED_TYPE_PARALLEL;
 	queue_conf->priority = RTE_EVENT_DEV_PRIORITY_NORMAL;
 }
 
@@ -640,7 +637,7 @@ dpaa2_eventdev_timeout_ticks(struct rte_eventdev *dev, uint64_t ns,
 	EVENTDEV_INIT_FUNC_TRACE();
 
 	RTE_SET_USED(dev);
-	*timeout_ticks = ns * scale;
+	*timeout_ticks = ns / scale;
 
 	return 0;
 }
