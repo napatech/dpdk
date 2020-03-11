@@ -1049,6 +1049,9 @@ static int eth_link_update(struct rte_eth_dev *dev,
   case NT_LINK_SPEED_10G:
     dev->data->dev_link.link_speed = ETH_SPEED_NUM_10G;
     break;
+	case NT_LINK_SPEED_25G:
+		dev->data->dev_link.link_speed = ETH_SPEED_NUM_25G;
+		break;
   case NT_LINK_SPEED_40G:
     dev->data->dev_link.link_speed = ETH_SPEED_NUM_40G;
     break;
@@ -2176,25 +2179,26 @@ static int eth_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t 
 {
   char buf[51];
   struct pmd_internals *internals = dev->data->dev_private;
+  int length1;
 
-  snprintf(buf, 50, "%d.%d.%d - %03d-%04d-%02d-%02d-%02d", internals->version.major,
-                                                           internals->version.minor,
-                                                           internals->version.patch,
-                                                           internals->fpgaid.s.item,
-                                                           internals->fpgaid.s.product,
-                                                           internals->fpgaid.s.ver,
-                                                           internals->fpgaid.s.rev,
-                                                           internals->fpgaid.s.build);
-  size_t size = strlen(buf);
-  strncpy(fw_version, buf, MIN(size+1, fw_size));
-  if (fw_size > size) {
+  length1 = snprintf(buf, 51, "%d.%d.%d - %03d-%04d-%02d-%02d-%02d", internals->version.major,
+                                                                     internals->version.minor,
+                                                                     internals->version.patch,
+                                                                     internals->fpgaid.s.item,
+                                                                     internals->fpgaid.s.product,
+                                                                     internals->fpgaid.s.ver,
+                                                                     internals->fpgaid.s.rev,
+                                                                     internals->fpgaid.s.build);
+  snprintf(fw_version, fw_size, "%s", buf);
+
+  if ((size_t)length1 < fw_size) {
     // We have space for the version string
     return 0;
   }
   else {
     // We do not have space for the version string
     // return the needed space
-    return size;
+    return length1 + 1;
   }
 }
 
@@ -2488,6 +2492,9 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     case NT_LINK_SPEED_10G:
       pmd_link.link_speed = ETH_SPEED_NUM_10G;
       break;
+		case NT_LINK_SPEED_25G:
+			pmd_link.link_speed = ETH_SPEED_NUM_25G;
+			break;
     case NT_LINK_SPEED_40G:
       pmd_link.link_speed = ETH_SPEED_NUM_40G;
       break;
