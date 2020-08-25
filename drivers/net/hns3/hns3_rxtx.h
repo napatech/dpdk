@@ -11,6 +11,14 @@
 #define	HNS3_ALIGN_RING_DESC	32
 #define HNS3_RING_BASE_ALIGN	128
 
+#define HNS3_512_BD_BUF_SIZE	512
+#define HNS3_1K_BD_BUF_SIZE	1024
+#define HNS3_2K_BD_BUF_SIZE	2048
+#define HNS3_4K_BD_BUF_SIZE	4096
+
+#define HNS3_MIN_BD_BUF_SIZE	HNS3_512_BD_BUF_SIZE
+#define HNS3_MAX_BD_BUF_SIZE	HNS3_4K_BD_BUF_SIZE
+
 #define HNS3_BD_SIZE_512_TYPE			0
 #define HNS3_BD_SIZE_1024_TYPE			1
 #define HNS3_BD_SIZE_2048_TYPE			2
@@ -73,7 +81,7 @@
 #define HNS3_RXD_TSIND_M			(0x7 << HNS3_RXD_TSIND_S)
 #define HNS3_RXD_LKBK_B				15
 #define HNS3_RXD_GRO_SIZE_S			16
-#define HNS3_RXD_GRO_SIZE_M			(0x3ff << HNS3_RXD_GRO_SIZE_S)
+#define HNS3_RXD_GRO_SIZE_M			(0x3fff << HNS3_RXD_GRO_SIZE_S)
 
 #define HNS3_TXD_L3T_S				0
 #define HNS3_TXD_L3T_M				(0x3 << HNS3_TXD_L3T_S)
@@ -242,6 +250,15 @@ struct hns3_rx_queue {
 	uint16_t rx_buf_len;
 	uint16_t rx_free_thresh;
 
+	/*
+	 * port based vlan configuration state.
+	 * value range: HNS3_PORT_BASE_VLAN_DISABLE / HNS3_PORT_BASE_VLAN_ENABLE
+	 */
+	uint16_t pvid_state;
+
+	/* 4 if DEV_RX_OFFLOAD_KEEP_CRC offload set, 0 otherwise */
+	uint8_t crc_len;
+
 	bool rx_deferred_start; /* don't start this queue in dev start */
 	bool configured;        /* indicate if rx queue has been configured */
 
@@ -268,8 +285,62 @@ struct hns3_tx_queue {
 	uint16_t next_to_use;
 	uint16_t tx_bd_ready;
 
+	/*
+	 * port based vlan configuration state.
+	 * value range: HNS3_PORT_BASE_VLAN_DISABLE / HNS3_PORT_BASE_VLAN_ENABLE
+	 */
+	uint16_t pvid_state;
+
 	bool tx_deferred_start; /* don't start this queue in dev start */
 	bool configured;        /* indicate if tx queue has been configured */
+
+	/*
+	 * The following items are used for the abnormal errors statistics in
+	 * the Tx datapath. When upper level application calls the
+	 * rte_eth_tx_burst API function to send multiple packets at a time with
+	 * burst mode based on hns3 network engine, there are some abnormal
+	 * conditions that cause the driver to fail to operate the hardware to
+	 * send packets correctly.
+	 * Note: When using burst mode to call the rte_eth_tx_burst API function
+	 * to send multiple packets at a time. When the first abnormal error is
+	 * detected, add one to the relevant error statistics item, and then
+	 * exit the loop of sending multiple packets of the function. That is to
+	 * say, even if there are multiple packets in which abnormal errors may
+	 * be detected in the burst, the relevant error statistics in the driver
+	 * will only be increased by one.
+	 * The detail description of the Tx abnormal errors statistic items as
+	 * below:
+	 *  - over_length_pkt_cnt
+	 *     Total number of greater than HNS3_MAX_FRAME_LEN the driver
+	 *     supported.
+	 *
+	 * - exceed_limit_bd_pkt_cnt
+	 *     Total number of exceeding the hardware limited bd which process
+	 *     a packet needed bd numbers.
+	 *
+	 * - exceed_limit_bd_reassem_fail
+	 *     Total number of exceeding the hardware limited bd fail which
+	 *     process a packet needed bd numbers and reassemble fail.
+	 *
+	 * - unsupported_tunnel_pkt_cnt
+	 *     Total number of unsupported tunnel packet. The unsupported tunnel
+	 *     type: vxlan_gpe, gtp, ipip and MPLSINUDP, MPLSINUDP is a packet
+	 *     with MPLS-in-UDP RFC 7510 header.
+	 *
+	 * - queue_full_cnt
+	 *     Total count which the available bd numbers in current bd queue is
+	 *     less than the bd numbers with the pkt process needed.
+	 *
+	 * - pkt_padding_fail_cnt
+	 *     Total count which the packet length is less than minimum packet
+	 *     size HNS3_MIN_PKT_SIZE and fail to be appended with 0.
+	 */
+	uint64_t over_length_pkt_cnt;
+	uint64_t exceed_limit_bd_pkt_cnt;
+	uint64_t exceed_limit_bd_reassem_fail;
+	uint64_t unsupported_tunnel_pkt_cnt;
+	uint64_t queue_full_cnt;
+	uint64_t pkt_padding_fail_cnt;
 };
 
 struct hns3_queue_info {
@@ -302,8 +373,10 @@ void hns3_dev_rx_queue_release(void *queue);
 void hns3_dev_tx_queue_release(void *queue);
 void hns3_free_all_queues(struct rte_eth_dev *dev);
 int hns3_reset_all_queues(struct hns3_adapter *hns);
+void hns3_dev_all_rx_queue_intr_enable(struct hns3_hw *hw, bool en);
 int hns3_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id);
 int hns3_dev_rx_queue_intr_disable(struct rte_eth_dev *dev, uint16_t queue_id);
+void hns3_enable_all_queues(struct hns3_hw *hw, bool en);
 int hns3_start_queues(struct hns3_adapter *hns, bool reset_queue);
 int hns3_stop_queues(struct hns3_adapter *hns, bool reset_queue);
 void hns3_dev_release_mbufs(struct hns3_adapter *hns);
@@ -320,8 +393,14 @@ uint16_t hns3_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 			uint16_t nb_pkts);
 const uint32_t *hns3_dev_supported_ptypes_get(struct rte_eth_dev *dev);
 void hns3_set_rxtx_function(struct rte_eth_dev *eth_dev);
-void hns3_tqp_intr_enable(struct hns3_hw *hw, uint16_t tpq_int_num, bool en);
+void hns3_set_queue_intr_gl(struct hns3_hw *hw, uint16_t queue_id,
+			    uint8_t gl_idx, uint16_t gl_value);
+void hns3_set_queue_intr_rl(struct hns3_hw *hw, uint16_t queue_id,
+			    uint16_t rl_value);
 int hns3_set_fake_rx_or_tx_queues(struct rte_eth_dev *dev, uint16_t nb_rx_q,
 				  uint16_t nb_tx_q);
+int hns3_config_gro(struct hns3_hw *hw, bool en);
+int hns3_restore_gro_conf(struct hns3_hw *hw);
+void hns3_update_all_queues_pvid_state(struct hns3_hw *hw);
 
 #endif /* _HNS3_RXTX_H_ */

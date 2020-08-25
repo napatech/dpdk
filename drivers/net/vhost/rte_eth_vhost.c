@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <sys/epoll.h>
 
 #include <rte_mbuf.h>
 #include <rte_ethdev_driver.h>
@@ -18,7 +19,7 @@
 
 #include "rte_eth_vhost.h"
 
-static int vhost_logtype;
+RTE_LOG_REGISTER(vhost_logtype, pmd.net.vhost, NOTICE);
 
 #define VHOST_LOG(level, ...) \
 	rte_log(RTE_LOG_ ## level, vhost_logtype, __VA_ARGS__)
@@ -32,6 +33,8 @@ enum {VIRTIO_RXQ, VIRTIO_TXQ, VIRTIO_QNUM};
 #define ETH_VHOST_IOMMU_SUPPORT		"iommu-support"
 #define ETH_VHOST_POSTCOPY_SUPPORT	"postcopy-support"
 #define ETH_VHOST_VIRTIO_NET_F_HOST_TSO "tso"
+#define ETH_VHOST_LINEAR_BUF  "linear-buffer"
+#define ETH_VHOST_EXT_BUF  "ext-buffer"
 #define VHOST_MAX_PKT_BURST 32
 
 static const char *valid_arguments[] = {
@@ -42,6 +45,8 @@ static const char *valid_arguments[] = {
 	ETH_VHOST_IOMMU_SUPPORT,
 	ETH_VHOST_POSTCOPY_SUPPORT,
 	ETH_VHOST_VIRTIO_NET_F_HOST_TSO,
+	ETH_VHOST_LINEAR_BUF,
+	ETH_VHOST_EXT_BUF,
 	NULL
 };
 
@@ -91,6 +96,8 @@ struct vhost_queue {
 	uint16_t port;
 	uint16_t virtqueue_id;
 	struct vhost_stats stats;
+	int intr_enable;
+	rte_spinlock_t intr_lock;
 };
 
 struct pmd_internal {
@@ -521,16 +528,74 @@ find_internal_resource(char *ifname)
 }
 
 static int
+eth_vhost_update_intr(struct rte_eth_dev *eth_dev, uint16_t rxq_idx)
+{
+	struct rte_intr_handle *handle = eth_dev->intr_handle;
+	struct rte_epoll_event rev;
+	int epfd, ret;
+
+	if (!handle)
+		return 0;
+
+	if (handle->efds[rxq_idx] == handle->elist[rxq_idx].fd)
+		return 0;
+
+	VHOST_LOG(INFO, "kickfd for rxq-%d was changed, updating handler.\n",
+			rxq_idx);
+
+	if (handle->elist[rxq_idx].fd != -1)
+		VHOST_LOG(ERR, "Unexpected previous kickfd value (Got %d, expected -1).\n",
+				handle->elist[rxq_idx].fd);
+
+	/*
+	 * First remove invalid epoll event, and then install
+	 * the new one. May be solved with a proper API in the
+	 * future.
+	 */
+	epfd = handle->elist[rxq_idx].epfd;
+	rev = handle->elist[rxq_idx];
+	ret = rte_epoll_ctl(epfd, EPOLL_CTL_DEL, rev.fd,
+			&handle->elist[rxq_idx]);
+	if (ret) {
+		VHOST_LOG(ERR, "Delete epoll event failed.\n");
+		return ret;
+	}
+
+	rev.fd = handle->efds[rxq_idx];
+	handle->elist[rxq_idx] = rev;
+	ret = rte_epoll_ctl(epfd, EPOLL_CTL_ADD, rev.fd,
+			&handle->elist[rxq_idx]);
+	if (ret) {
+		VHOST_LOG(ERR, "Add epoll event failed.\n");
+		return ret;
+	}
+
+	return 0;
+}
+
+static int
 eth_rxq_intr_enable(struct rte_eth_dev *dev, uint16_t qid)
 {
 	struct rte_vhost_vring vring;
 	struct vhost_queue *vq;
-	int ret = 0;
+	int old_intr_enable, ret = 0;
 
 	vq = dev->data->rx_queues[qid];
 	if (!vq) {
 		VHOST_LOG(ERR, "rxq%d is not setup yet\n", qid);
 		return -1;
+	}
+
+	rte_spinlock_lock(&vq->intr_lock);
+	old_intr_enable = vq->intr_enable;
+	vq->intr_enable = 1;
+	ret = eth_vhost_update_intr(dev, qid);
+	rte_spinlock_unlock(&vq->intr_lock);
+
+	if (ret < 0) {
+		VHOST_LOG(ERR, "Failed to update rxq%d's intr\n", qid);
+		vq->intr_enable = old_intr_enable;
+		return ret;
 	}
 
 	ret = rte_vhost_get_vhost_vring(vq->vid, (qid << 1) + 1, &vring);
@@ -567,6 +632,8 @@ eth_rxq_intr_disable(struct rte_eth_dev *dev, uint16_t qid)
 	rte_vhost_enable_guest_notification(vq->vid, (qid << 1) + 1, 0);
 	rte_wmb();
 
+	vq->intr_enable = 0;
+
 	return 0;
 }
 
@@ -589,7 +656,6 @@ eth_vhost_install_intr(struct rte_eth_dev *dev)
 {
 	struct rte_vhost_vring vring;
 	struct vhost_queue *vq;
-	int count = 0;
 	int nb_rxq = dev->data->nb_rx_queues;
 	int i;
 	int ret;
@@ -619,6 +685,8 @@ eth_vhost_install_intr(struct rte_eth_dev *dev)
 
 	VHOST_LOG(INFO, "Prepare intr vec\n");
 	for (i = 0; i < nb_rxq; i++) {
+		dev->intr_handle->intr_vec[i] = RTE_INTR_VEC_RXTX_OFFSET + i;
+		dev->intr_handle->efds[i] = -1;
 		vq = dev->data->rx_queues[i];
 		if (!vq) {
 			VHOST_LOG(INFO, "rxq-%d not setup yet, skip!\n", i);
@@ -637,14 +705,12 @@ eth_vhost_install_intr(struct rte_eth_dev *dev)
 				"rxq-%d's kickfd is invalid, skip!\n", i);
 			continue;
 		}
-		dev->intr_handle->intr_vec[i] = RTE_INTR_VEC_RXTX_OFFSET + i;
 		dev->intr_handle->efds[i] = vring.kickfd;
-		count++;
 		VHOST_LOG(INFO, "Installed intr vec for rxq-%d\n", i);
 	}
 
-	dev->intr_handle->nb_efd = count;
-	dev->intr_handle->max_intr = count + 1;
+	dev->intr_handle->nb_efd = nb_rxq;
+	dev->intr_handle->max_intr = nb_rxq + 1;
 	dev->intr_handle->type = RTE_INTR_HANDLE_VDEV;
 
 	return 0;
@@ -827,6 +893,47 @@ destroy_device(int vid)
 }
 
 static int
+vring_conf_update(int vid, struct rte_eth_dev *eth_dev, uint16_t vring_id)
+{
+	struct rte_eth_conf *dev_conf = &eth_dev->data->dev_conf;
+	struct pmd_internal *internal = eth_dev->data->dev_private;
+	struct vhost_queue *vq;
+	struct rte_vhost_vring vring;
+	int rx_idx = vring_id % 2 ? (vring_id - 1) >> 1 : -1;
+	int ret = 0;
+
+	/*
+	 * The vring kickfd may be changed after the new device notification.
+	 * Update it when the vring state is updated.
+	 */
+	if (rx_idx >= 0 && rx_idx < eth_dev->data->nb_rx_queues &&
+	    rte_atomic32_read(&internal->dev_attached) &&
+	    rte_atomic32_read(&internal->started) &&
+	    dev_conf->intr_conf.rxq) {
+		ret = rte_vhost_get_vhost_vring(vid, vring_id, &vring);
+		if (ret) {
+			VHOST_LOG(ERR, "Failed to get vring %d information.\n",
+					vring_id);
+			return ret;
+		}
+		eth_dev->intr_handle->efds[rx_idx] = vring.kickfd;
+
+		vq = eth_dev->data->rx_queues[rx_idx];
+		if (!vq) {
+			VHOST_LOG(ERR, "rxq%d is not setup yet\n", rx_idx);
+			return -1;
+		}
+
+		rte_spinlock_lock(&vq->intr_lock);
+		if (vq->intr_enable)
+			ret = eth_vhost_update_intr(eth_dev, rx_idx);
+		rte_spinlock_unlock(&vq->intr_lock);
+	}
+
+	return ret;
+}
+
+static int
 vring_state_changed(int vid, uint16_t vring, int enable)
 {
 	struct rte_vhost_vring_state *state;
@@ -844,6 +951,11 @@ vring_state_changed(int vid, uint16_t vring, int enable)
 	eth_dev = list->eth_dev;
 	/* won't be NULL */
 	state = vring_states[eth_dev->data->port_id];
+
+	if (enable && vring_conf_update(vid, eth_dev, vring))
+		VHOST_LOG(INFO, "Failed to update vring-%d configuration.\n",
+			  (int)vring);
+
 	rte_spinlock_lock(&state->lock);
 	if (state->cur[vring] == enable) {
 		rte_spinlock_unlock(&state->lock);
@@ -1065,16 +1177,14 @@ eth_dev_close(struct rte_eth_dev *dev)
 
 	eth_dev_stop(dev);
 
-	rte_vhost_driver_unregister(internal->iface_name);
-
 	list = find_internal_resource(internal->iface_name);
-	if (!list)
-		return;
-
-	pthread_mutex_lock(&internal_list_lock);
-	TAILQ_REMOVE(&internal_list, list, next);
-	pthread_mutex_unlock(&internal_list_lock);
-	rte_free(list);
+	if (list) {
+		rte_vhost_driver_unregister(internal->iface_name);
+		pthread_mutex_lock(&internal_list_lock);
+		TAILQ_REMOVE(&internal_list, list, next);
+		pthread_mutex_unlock(&internal_list_lock);
+		rte_free(list);
+	}
 
 	if (dev->data->rx_queues)
 		for (i = 0; i < dev->data->nb_rx_queues; i++)
@@ -1111,6 +1221,7 @@ eth_rx_queue_setup(struct rte_eth_dev *dev, uint16_t rx_queue_id,
 
 	vq->mb_pool = mb_pool;
 	vq->virtqueue_id = rx_queue_id * VIRTIO_QNUM + VIRTIO_TXQ;
+	rte_spinlock_init(&vq->intr_lock);
 	dev->data->rx_queues[rx_queue_id] = vq;
 
 	return 0;
@@ -1132,6 +1243,7 @@ eth_tx_queue_setup(struct rte_eth_dev *dev, uint16_t tx_queue_id,
 	}
 
 	vq->virtqueue_id = tx_queue_id * VIRTIO_QNUM + VIRTIO_RXQ;
+	rte_spinlock_init(&vq->intr_lock);
 	dev->data->tx_queues[tx_queue_id] = vq;
 
 	return 0;
@@ -1331,6 +1443,8 @@ eth_dev_vhost_create(struct rte_vdev_device *dev, char *iface_name,
 	internal->disable_flags = disable_flags;
 	data->dev_link = pmd_link;
 	data->dev_flags = RTE_ETH_DEV_INTR_LSC | RTE_ETH_DEV_CLOSE_REMOVE;
+	data->promiscuous = 1;
+	data->all_multicast = 1;
 
 	eth_dev->dev_ops = &ops;
 
@@ -1391,6 +1505,8 @@ rte_pmd_vhost_probe(struct rte_vdev_device *dev)
 	int iommu_support = 0;
 	int postcopy_support = 0;
 	int tso = 0;
+	int linear_buf = 0;
+	int ext_buf = 0;
 	struct rte_eth_dev *eth_dev;
 	const char *name = rte_vdev_device_name(dev);
 
@@ -1488,6 +1604,28 @@ rte_pmd_vhost_probe(struct rte_vdev_device *dev)
 		}
 	}
 
+	if (rte_kvargs_count(kvlist, ETH_VHOST_LINEAR_BUF) == 1) {
+		ret = rte_kvargs_process(kvlist,
+				ETH_VHOST_LINEAR_BUF,
+				&open_int, &linear_buf);
+		if (ret < 0)
+			goto out_free;
+
+		if (linear_buf == 1)
+			flags |= RTE_VHOST_USER_LINEARBUF_SUPPORT;
+	}
+
+	if (rte_kvargs_count(kvlist, ETH_VHOST_EXT_BUF) == 1) {
+		ret = rte_kvargs_process(kvlist,
+				ETH_VHOST_EXT_BUF,
+				&open_int, &ext_buf);
+		if (ret < 0)
+			goto out_free;
+
+		if (ext_buf == 1)
+			flags |= RTE_VHOST_USER_EXTBUF_SUPPORT;
+	}
+
 	if (dev->device.numa_node == SOCKET_ID_ANY)
 		dev->device.numa_node = rte_socket_id();
 
@@ -1539,11 +1677,6 @@ RTE_PMD_REGISTER_PARAM_STRING(net_vhost,
 	"dequeue-zero-copy=<0|1> "
 	"iommu-support=<0|1> "
 	"postcopy-support=<0|1> "
-	"tso=<0|1>");
-
-RTE_INIT(vhost_init_log)
-{
-	vhost_logtype = rte_log_register("pmd.net.vhost");
-	if (vhost_logtype >= 0)
-		rte_log_set_level(vhost_logtype, RTE_LOG_NOTICE);
-}
+	"tso=<0|1> "
+	"linear-buffer=<0|1> "
+	"ext-buffer=<0|1>");

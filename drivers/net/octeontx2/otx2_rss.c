@@ -33,6 +33,29 @@ otx2_nix_rss_tbl_init(struct otx2_eth_dev *dev,
 		req->qidx = (group * rss->rss_size) + idx;
 		req->ctype = NIX_AQ_CTYPE_RSS;
 		req->op = NIX_AQ_INSTOP_INIT;
+
+		if (!dev->lock_rx_ctx)
+			continue;
+
+		req = otx2_mbox_alloc_msg_nix_aq_enq(mbox);
+		if (!req) {
+			/* The shared memory buffer can be full.
+			 * Flush it and retry
+			 */
+			otx2_mbox_msg_send(mbox, 0);
+			rc = otx2_mbox_wait_for_rsp(mbox, 0);
+			if (rc < 0)
+				return rc;
+
+			req = otx2_mbox_alloc_msg_nix_aq_enq(mbox);
+			if (!req)
+				return -ENOMEM;
+		}
+		req->rss.rq = ind_tbl[idx];
+		/* Fill AQ info */
+		req->qidx = (group * rss->rss_size) + idx;
+		req->ctype = NIX_AQ_CTYPE_RSS;
+		req->op = NIX_AQ_INSTOP_LOCK;
 	}
 
 	otx2_mbox_msg_send(mbox, 0);
@@ -210,6 +233,11 @@ otx2_rss_ethdev_to_nix(struct otx2_eth_dev *dev, uint64_t ethdev_rss,
 
 	dev->rss_info.nix_rss = ethdev_rss;
 
+	if (ethdev_rss & ETH_RSS_L2_PAYLOAD &&
+	    dev->npc_flow.switch_header_type == OTX2_PRIV_FLAGS_LEN_90B) {
+		flowkey_cfg |= FLOW_KEY_TYPE_CH_LEN_90B;
+	}
+
 	if (ethdev_rss & ETH_RSS_L3_SRC_ONLY)
 		flowkey_cfg |= FLOW_KEY_TYPE_L3_SRC;
 
@@ -353,7 +381,7 @@ otx2_nix_rss_config(struct rte_eth_dev *eth_dev)
 	int rc;
 
 	/* Skip further configuration if selected mode is not RSS */
-	if (eth_dev->data->dev_conf.rxmode.mq_mode != ETH_MQ_RX_RSS)
+	if (eth_dev->data->dev_conf.rxmode.mq_mode != ETH_MQ_RX_RSS || !qcnt)
 		return 0;
 
 	/* Update default RSS key and cfg */

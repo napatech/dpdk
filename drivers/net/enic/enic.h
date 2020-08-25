@@ -148,6 +148,7 @@ struct enic {
 	uint8_t ig_vlan_rewrite_mode; /* devargs ig-vlan-rewrite */
 	uint16_t vxlan_port;  /* current vxlan port pushed to NIC */
 	int use_simple_tx_handler;
+	int use_noscatter_vec_rx_handler;
 
 	unsigned int flags;
 	unsigned int priv_flags;
@@ -221,25 +222,26 @@ static inline uint32_t enic_mtu_to_max_rx_pktlen(uint32_t mtu)
 /* Get the CQ index from a Start of Packet(SOP) RQ index */
 static inline unsigned int enic_sop_rq_idx_to_cq_idx(unsigned int sop_idx)
 {
-	return sop_idx / 2;
+	return sop_idx;
 }
 
 /* Get the RTE RQ index from a Start of Packet(SOP) RQ index */
 static inline unsigned int enic_sop_rq_idx_to_rte_idx(unsigned int sop_idx)
 {
-	return sop_idx / 2;
+	return sop_idx;
 }
 
 /* Get the Start of Packet(SOP) RQ index from a RTE RQ index */
 static inline unsigned int enic_rte_rq_idx_to_sop_idx(unsigned int rte_idx)
 {
-	return rte_idx * 2;
+	return rte_idx;
 }
 
 /* Get the Data RQ index from a RTE RQ index */
-static inline unsigned int enic_rte_rq_idx_to_data_idx(unsigned int rte_idx)
+static inline unsigned int enic_rte_rq_idx_to_data_idx(unsigned int rte_idx,
+						       struct enic *enic)
 {
-	return rte_idx * 2 + 1;
+	return enic->rq_count + rte_idx;
 }
 
 static inline unsigned int enic_vnic_rq_count(struct enic *enic)
@@ -253,7 +255,7 @@ static inline unsigned int enic_cq_rq(__rte_unused struct enic *enic, unsigned i
 	 * completion queue, so the completion queue number is no
 	 * longer the same as the rq number.
 	 */
-	return rq / 2;
+	return rq;
 }
 
 static inline unsigned int enic_cq_wq(struct enic *enic, unsigned int wq)

@@ -54,8 +54,13 @@ To document a public API, a doxygen-like format must be used: refer to :ref:`dox
 License Header
 ~~~~~~~~~~~~~~
 
-Each file should begin with a special comment containing the appropriate copyright and license for the file.
-Generally this is the BSD License, except for code for Linux Kernel modules.
+Each file must begin with a special comment containing the
+`Software Package Data Exchange (SPDX) License Identfier <https://spdx.org/using-spdx-license-identifier>`_.
+
+Generally this is the BSD License, except for code granted special exceptions.
+The SPDX licences identifier is sufficient, a file should not contain
+an additional text version of the license (boilerplate).
+
 After any copyright header, a blank line should be left before any other contents, e.g. include statements in a C file.
 
 C Preprocessor Directives
@@ -842,12 +847,6 @@ sources
 
 The optional fields are:
 
-allow_experimental_apis
-	**Default Value = false**
-	Used to allow the library to make use of APIs marked as experimental.
-	Set to ``true`` if the C files in the library call any functions
-	marked as experimental in any included header files.
-
 build
 	**Default Value = true**
 	Used to optionally compile a library, based on its dependencies or
@@ -959,9 +958,6 @@ Meson Build File Contents - Drivers
 
 For drivers, the values are largely the same as for libraries. The variables
 supported are:
-
-allow_experimental_apis
-	As above.
 
 build
 	As above.

@@ -289,7 +289,7 @@ hns3_cmd_convert_err_code(uint16_t desc_ret)
 	case HNS3_CMD_INVALID:
 		return -EBADR;
 	default:
-		return -EIO;
+		return -EREMOTEIO;
 	}
 }
 
@@ -349,11 +349,23 @@ static int hns3_cmd_poll_reply(struct hns3_hw *hw)
 
 /*
  * hns3_cmd_send - send command to command queue
- * @hw: pointer to the hw struct
- * @desc: prefilled descriptor for describing the command
- * @num : the number of descriptors to be sent
  *
- * This is the main send command for command queue, it
+ * @param hw
+ *   pointer to the hw struct
+ * @param desc
+ *   prefilled descriptor for describing the command
+ * @param num
+ *   the number of descriptors to be sent
+ * @return
+ *   - -EBUSY if detect device is in resetting
+ *   - -EIO   if detect cmd csq corrupted (due to reset) or
+ *            there is reset pending
+ *   - -ENOMEM/-ETIME/...(Non-Zero) if other error case
+ *   - Zero   if operation completed successfully
+ *
+ * Note -BUSY/-EIO only used in reset case
+ *
+ * Note this is the main send command for command queue, it
  * sends the queue, cleans the queue, etc
  */
 int
@@ -478,6 +490,7 @@ err_crq:
 int
 hns3_cmd_init(struct hns3_hw *hw)
 {
+	uint32_t version;
 	int ret;
 
 	rte_spinlock_lock(&hw->cmq.csq.lock);
@@ -506,18 +519,27 @@ hns3_cmd_init(struct hns3_hw *hw)
 	}
 	rte_atomic16_clear(&hw->reset.disable_cmd);
 
-	ret = hns3_cmd_query_firmware_version(hw, &hw->fw_version);
+	ret = hns3_cmd_query_firmware_version(hw, &version);
 	if (ret) {
 		PMD_INIT_LOG(ERR, "firmware version query failed %d", ret);
 		goto err_cmd_init;
 	}
 
-	PMD_INIT_LOG(INFO, "The firmware version is %08x", hw->fw_version);
+	hw->fw_version = version;
+	PMD_INIT_LOG(INFO, "The firmware version is %lu.%lu.%lu.%lu",
+		     hns3_get_field(version, HNS3_FW_VERSION_BYTE3_M,
+				    HNS3_FW_VERSION_BYTE3_S),
+		     hns3_get_field(version, HNS3_FW_VERSION_BYTE2_M,
+				    HNS3_FW_VERSION_BYTE2_S),
+		     hns3_get_field(version, HNS3_FW_VERSION_BYTE1_M,
+				    HNS3_FW_VERSION_BYTE1_S),
+		     hns3_get_field(version, HNS3_FW_VERSION_BYTE0_M,
+				    HNS3_FW_VERSION_BYTE0_S));
 
 	return 0;
 
 err_cmd_init:
-	hns3_cmd_uninit(hw);
+	rte_atomic16_set(&hw->reset.disable_cmd, 1);
 	return ret;
 }
 

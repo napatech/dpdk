@@ -15,7 +15,7 @@ addons:
     update: true
     packages: &required_packages
       - [libnuma-dev, python3-setuptools, python3-wheel, python3-pip, ninja-build]
-      - [libbsd-dev, libpcap-dev, libibverbs-dev, libcrypto++-dev, libfdt-dev, libjansson4]
+      - [libbsd-dev, libpcap-dev, libibverbs-dev, libcrypto++-dev, libfdt-dev, libjansson-dev]
 
 _aarch64_packages: &aarch64_packages
   - *required_packages
@@ -33,6 +33,10 @@ _doc_packages: &doc_packages
 
 before_install: ./.ci/${TRAVIS_OS_NAME}-setup.sh
 script: ./.ci/${TRAVIS_OS_NAME}-build.sh
+
+env:
+  global:
+    - REF_GIT_TAG=v20.05
 
 jobs:
   include:
@@ -101,6 +105,9 @@ jobs:
   - env: DEF_LIB="static"
     arch: arm64
     compiler: gcc
+  - env: DEF_LIB="shared" RUN_TESTS=1
+    arch: arm64
+    compiler: gcc
   - env: DEF_LIB="shared" BUILD_DOCS=1
     arch: arm64
     compiler: gcc
@@ -121,6 +128,6 @@ jobs:
   - env: DEF_LIB="static"
     arch: arm64
     compiler: clang
-  - env: DEF_LIB="shared"
+  - env: DEF_LIB="shared" RUN_TESTS=1
     arch: arm64
     compiler: clang

@@ -9,7 +9,6 @@ include $(RTE_SDK)/mk/rte.vars.mk
 #
 LIB = librte_bus_fslmc.a
 
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
 
@@ -18,6 +17,7 @@ CFLAGS += -I$(RTE_SDK)/drivers/bus/fslmc/mc
 CFLAGS += -I$(RTE_SDK)/drivers/bus/fslmc/qbman/include
 CFLAGS += -I$(RTE_SDK)/drivers/common/dpaax
 CFLAGS += -I$(RTE_SDK)/lib/librte_eal/common
+LDLIBS += -lpthread
 LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
 LDLIBS += -lrte_ethdev
 LDLIBS += -lrte_common_dpaax

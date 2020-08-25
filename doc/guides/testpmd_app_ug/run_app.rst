@@ -248,6 +248,7 @@ The command line options are:
        ieee1588
        tm
        noisy
+       5tswap
 
 *   ``--rss-ip``
 
@@ -388,12 +389,12 @@ The command line options are:
 
     Set the logical core N to perform bitrate calculation.
 
-*   ``--print-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|dev_probed|dev_released|all>``
+*   ``--print-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|dev_probed|dev_released|flow_aged|all>``
 
     Enable printing the occurrence of the designated event. Using all will
     enable all of them.
 
-*   ``--mask-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|dev_probed|dev_released|all>``
+*   ``--mask-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|dev_probed|dev_released|flow_aged|all>``
 
     Disable printing the occurrence of the designated event. Using all will
     disable all of them.
@@ -481,3 +482,10 @@ The command line options are:
 
     Enable to create mempool which is not IOVA contiguous. Valid only with --mp-alloc=anon.
     The default value is 0.
+
+*   ``--rx-mq-mode``
+
+    Set the hexadecimal bitmask of RX multi queue mode which can be enabled.
+    The default value is 0x7::
+
+       ETH_MQ_RX_RSS_FLAG | ETH_MQ_RX_DCB_FLAG | ETH_MQ_RX_VMDQ_FLAG

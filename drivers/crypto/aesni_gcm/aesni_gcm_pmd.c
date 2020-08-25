@@ -742,7 +742,8 @@ aesni_gcm_create(const char *name,
 			RTE_CRYPTODEV_FF_IN_PLACE_SGL |
 			RTE_CRYPTODEV_FF_OOP_SGL_IN_LB_OUT |
 			RTE_CRYPTODEV_FF_OOP_LB_IN_LB_OUT |
-			RTE_CRYPTODEV_FF_SYM_CPU_CRYPTO;
+			RTE_CRYPTODEV_FF_SYM_CPU_CRYPTO |
+			RTE_CRYPTODEV_FF_SYM_SESSIONLESS;
 
 	/* Check CPU for support for AES instruction set */
 	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AES))
@@ -886,8 +887,4 @@ RTE_PMD_REGISTER_PARAM_STRING(CRYPTODEV_NAME_AESNI_GCM_PMD,
 	"socket_id=<int>");
 RTE_PMD_REGISTER_CRYPTO_DRIVER(aesni_gcm_crypto_drv, aesni_gcm_pmd_drv.driver,
 		cryptodev_driver_id);
-
-RTE_INIT(aesni_gcm_init_log)
-{
-	aesni_gcm_logtype_driver = rte_log_register("pmd.crypto.aesni_gcm");
-}
+RTE_LOG_REGISTER(aesni_gcm_logtype_driver, pmd.crypto.aesni_gcm, NOTICE);

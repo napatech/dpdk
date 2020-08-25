@@ -21,6 +21,7 @@
 #include <inttypes.h>
 #include <pthread.h>
 
+#include <rte_bitops.h>
 #include <rte_byteorder.h>
 #include <rte_memory.h>
 #include <rte_malloc.h>
@@ -288,6 +289,11 @@
 
 #define MAC_RQC2_INC			4
 #define MAC_RQC2_Q_PER_REG		4
+
+#define MAC_MACAHR(i)	(MAC_MACA0HR + ((i) * 8))
+#define MAC_MACALR(i)	(MAC_MACA0LR + ((i) * 8))
+
+#define MAC_HTR(i)	(MAC_HTR0 + ((i) * MAC_HTR_INC))
 
 /* MAC register entry bit positions and sizes */
 #define MAC_HWF0R_ADDMACADRSEL_INDEX	18
@@ -832,6 +838,22 @@
 #define MTL_TC_ETSCR_TSA_WIDTH		2
 #define MTL_TC_QWR_QW_INDEX		0
 #define MTL_TC_QWR_QW_WIDTH		21
+#define MTL_TCPM0R_PSTC0_INDEX		0
+#define MTL_TCPM0R_PSTC0_WIDTH		8
+#define MTL_TCPM0R_PSTC1_INDEX		8
+#define MTL_TCPM0R_PSTC1_WIDTH		8
+#define MTL_TCPM0R_PSTC2_INDEX		16
+#define MTL_TCPM0R_PSTC2_WIDTH		8
+#define MTL_TCPM0R_PSTC3_INDEX		24
+#define MTL_TCPM0R_PSTC3_WIDTH		8
+#define MTL_TCPM1R_PSTC4_INDEX		0
+#define MTL_TCPM1R_PSTC4_WIDTH		8
+#define MTL_TCPM1R_PSTC5_INDEX		8
+#define MTL_TCPM1R_PSTC5_WIDTH		8
+#define MTL_TCPM1R_PSTC6_INDEX		16
+#define MTL_TCPM1R_PSTC6_WIDTH		8
+#define MTL_TCPM1R_PSTC7_INDEX		24
+#define MTL_TCPM1R_PSTC7_WIDTH		8
 
 /* MTL traffic class register value */
 #define MTL_TSA_SP			0x00
@@ -1135,6 +1157,8 @@
 #define RX_NORMAL_DESC3_PL_WIDTH		14
 #define RX_NORMAL_DESC3_RSV_INDEX		26
 #define RX_NORMAL_DESC3_RSV_WIDTH		1
+#define RX_NORMAL_DESC3_LD_INDEX		28
+#define RX_NORMAL_DESC3_LD_WIDTH		1
 
 #define RX_DESC3_L34T_IPV4_TCP			1
 #define RX_DESC3_L34T_IPV4_UDP			2
@@ -1676,34 +1700,6 @@ do {									\
 
 #define time_after_eq(a, b)     ((long)((a) - (b)) >= 0)
 #define time_before_eq(a, b)	time_after_eq(b, a)
-
-/*---bitmap support apis---*/
-static inline int axgbe_test_bit(int nr, volatile unsigned long *addr)
-{
-	int res;
-
-	rte_mb();
-	res = ((*addr) & (1UL << nr)) != 0;
-	rte_mb();
-	return res;
-}
-
-static inline void axgbe_set_bit(unsigned int nr, volatile unsigned long *addr)
-{
-	__sync_fetch_and_or(addr, (1UL << nr));
-}
-
-static inline void axgbe_clear_bit(int nr, volatile unsigned long *addr)
-{
-	__sync_fetch_and_and(addr, ~(1UL << nr));
-}
-
-static inline int axgbe_test_and_clear_bit(int nr, volatile unsigned long *addr)
-{
-	unsigned long mask = (1UL << nr);
-
-	return __sync_fetch_and_and(addr, ~mask) & mask;
-}
 
 static inline unsigned long msecs_to_timer_cycles(unsigned int m)
 {

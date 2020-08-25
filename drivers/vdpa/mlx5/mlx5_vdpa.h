@@ -12,6 +12,7 @@
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 #include <rte_vdpa.h>
+#include <rte_vdpa_dev.h>
 #include <rte_vhost.h>
 #ifdef PEDANTIC
 #pragma GCC diagnostic error "-Wpedantic"
@@ -35,10 +36,14 @@
 #define VIRTIO_F_RING_PACKED 34
 #endif
 
+#define MLX5_VDPA_DEFAULT_TIMER_DELAY_US 100u
+#define MLX5_VDPA_DEFAULT_TIMER_STEP_US 1u
+
 struct mlx5_vdpa_cq {
 	uint16_t log_desc_n;
 	uint32_t cq_ci:24;
 	uint32_t arm_sn:2;
+	uint32_t armed:1;
 	int callfd;
 	rte_spinlock_t sl;
 	struct mlx5_devx_obj *cq;
@@ -69,13 +74,22 @@ struct mlx5_vdpa_query_mr {
 	int is_indirect;
 };
 
+enum {
+	MLX5_VDPA_NOTIFIER_STATE_DISABLED,
+	MLX5_VDPA_NOTIFIER_STATE_ENABLED,
+	MLX5_VDPA_NOTIFIER_STATE_ERR
+};
+
 struct mlx5_vdpa_virtq {
 	SLIST_ENTRY(mlx5_vdpa_virtq) next;
 	uint8_t enable;
 	uint16_t index;
 	uint16_t vq_size;
+	uint8_t notifier_state;
+	bool stopped;
 	struct mlx5_vdpa_priv *priv;
 	struct mlx5_devx_obj *virtq;
+	struct mlx5_devx_obj *counters;
 	struct mlx5_vdpa_event_qp eqp;
 	struct {
 		struct mlx5dv_devx_umem *obj;
@@ -83,6 +97,7 @@ struct mlx5_vdpa_virtq {
 		uint32_t size;
 	} umems[3];
 	struct rte_intr_handle intr_handle;
+	struct mlx5_devx_virtio_q_couners_attr reset;
 };
 
 struct mlx5_vdpa_steer {
@@ -97,13 +112,29 @@ struct mlx5_vdpa_steer {
 	} rss[7];
 };
 
+enum {
+	MLX5_VDPA_EVENT_MODE_DYNAMIC_TIMER,
+	MLX5_VDPA_EVENT_MODE_FIXED_TIMER,
+	MLX5_VDPA_EVENT_MODE_ONLY_INTERRUPT
+};
+
 struct mlx5_vdpa_priv {
 	TAILQ_ENTRY(mlx5_vdpa_priv) next;
 	uint8_t configured;
-	int id; /* vDPA device id. */
+	pthread_mutex_t vq_config_lock;
+	uint64_t last_traffic_tic;
+	pthread_t timer_tid;
+	pthread_mutex_t timer_lock;
+	pthread_cond_t timer_cond;
+	volatile uint8_t timer_on;
+	int event_mode;
+	uint32_t event_us;
+	uint32_t timer_delay_us;
+	uint32_t no_traffic_time_s;
+	struct rte_vdpa_device *vdev; /* vDPA device. */
 	int vid; /* vhost device id. */
 	struct ibv_context *ctx; /* Device context. */
-	struct rte_vdpa_dev_addr dev_addr;
+	struct rte_pci_device *pci_dev;
 	struct mlx5_hca_vdpa_attr caps;
 	uint32_t pdn; /* Protection Domain number. */
 	struct ibv_pd *pd;
@@ -119,12 +150,40 @@ struct mlx5_vdpa_priv {
 	uint16_t nr_virtqs;
 	uint64_t features; /* Negotiated features. */
 	uint16_t log_max_rqt_size;
-	SLIST_HEAD(virtq_list, mlx5_vdpa_virtq) virtq_list;
 	struct mlx5_vdpa_steer steer;
 	struct mlx5dv_var *var;
 	void *virtq_db_addr;
 	SLIST_HEAD(mr_list, mlx5_vdpa_query_mr) mr_list;
+	struct mlx5_vdpa_virtq virtqs[];
 };
+
+enum {
+	MLX5_VDPA_STATS_RECEIVED_DESCRIPTORS,
+	MLX5_VDPA_STATS_COMPLETED_DESCRIPTORS,
+	MLX5_VDPA_STATS_BAD_DESCRIPTOR_ERRORS,
+	MLX5_VDPA_STATS_EXCEED_MAX_CHAIN,
+	MLX5_VDPA_STATS_INVALID_BUFFER,
+	MLX5_VDPA_STATS_COMPLETION_ERRORS,
+	MLX5_VDPA_STATS_MAX
+};
+
+/*
+ * Check whether virtq is for traffic receive.
+ * According to VIRTIO_NET Spec the virtqueues index identity its type by:
+ * 0 receiveq1
+ * 1 transmitq1
+ * ...
+ * 2(N-1) receiveqN
+ * 2(N-1)+1 transmitqN
+ * 2N controlq
+ */
+static inline uint8_t
+is_virtq_recvq(int virtq_index, int nr_vring)
+{
+	if (virtq_index % 2 == 0 && virtq_index != nr_vring - 1)
+		return 1;
+	return 0;
+}
 
 /**
  * Release all the prepared memory regions and all their related resources.
@@ -222,15 +281,17 @@ int mlx5_vdpa_virtqs_prepare(struct mlx5_vdpa_priv *priv);
 /**
  * Enable\Disable virtq..
  *
- * @param[in] virtq
- *   The vdpa driver private virtq structure.
+ * @param[in] priv
+ *   The vdpa driver private structure.
+ * @param[in] index
+ *   The virtq index.
  * @param[in] enable
  *   Set to enable, otherwise disable.
  *
  * @return
  *   0 on success, a negative value otherwise.
  */
-int mlx5_vdpa_virtq_enable(struct mlx5_vdpa_virtq *virtq, int enable);
+int mlx5_vdpa_virtq_enable(struct mlx5_vdpa_priv *priv, int index, int enable);
 
 /**
  * Unset steering and release all its related resources- stop traffic.
@@ -238,7 +299,18 @@ int mlx5_vdpa_virtq_enable(struct mlx5_vdpa_virtq *virtq, int enable);
  * @param[in] priv
  *   The vdpa driver private structure.
  */
-int mlx5_vdpa_steer_unset(struct mlx5_vdpa_priv *priv);
+void mlx5_vdpa_steer_unset(struct mlx5_vdpa_priv *priv);
+
+/**
+ * Update steering according to the received queues status.
+ *
+ * @param[in] priv
+ *   The vdpa driver private structure.
+ *
+ * @return
+ *   0 on success, a negative value otherwise.
+ */
+int mlx5_vdpa_steer_update(struct mlx5_vdpa_priv *priv);
 
 /**
  * Setup steering and all its related resources to enable RSS traffic from the
@@ -307,4 +379,50 @@ int mlx5_vdpa_lm_log(struct mlx5_vdpa_priv *priv);
  */
 int mlx5_vdpa_virtq_modify(struct mlx5_vdpa_virtq *virtq, int state);
 
+/**
+ * Stop virtq before destroying it.
+ *
+ * @param[in] priv
+ *   The vdpa driver private structure.
+ * @param[in] index
+ *   The virtq index.
+ *
+ * @return
+ *   0 on success, a negative value otherwise.
+ */
+int mlx5_vdpa_virtq_stop(struct mlx5_vdpa_priv *priv, int index);
+
+/**
+ * Get virtq statistics.
+ *
+ * @param[in] priv
+ *   The vdpa driver private structure.
+ * @param[in] qid
+ *   The virtq index.
+ * @param stats
+ *   The virtq statistics array to fill.
+ * @param n
+ *   The number of elements in @p stats array.
+ *
+ * @return
+ *   A negative value on error, otherwise the number of entries filled in the
+ *   @p stats array.
+ */
+int
+mlx5_vdpa_virtq_stats_get(struct mlx5_vdpa_priv *priv, int qid,
+			  struct rte_vdpa_stat *stats, unsigned int n);
+
+/**
+ * Reset virtq statistics.
+ *
+ * @param[in] priv
+ *   The vdpa driver private structure.
+ * @param[in] qid
+ *   The virtq index.
+ *
+ * @return
+ *   A negative value on error, otherwise 0.
+ */
+int
+mlx5_vdpa_virtq_stats_reset(struct mlx5_vdpa_priv *priv, int qid);
 #endif /* RTE_PMD_MLX5_VDPA_H_ */

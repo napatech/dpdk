@@ -79,6 +79,7 @@ enum hns3_opcode_type {
 	HNS3_OPC_GBL_RST_STATUS         = 0x0021,
 	HNS3_OPC_QUERY_FUNC_STATUS      = 0x0022,
 	HNS3_OPC_QUERY_PF_RSRC          = 0x0023,
+	HNS3_OPC_QUERY_VF_RSRC          = 0x0024,
 	HNS3_OPC_GET_CFG_PARAM          = 0x0025,
 	HNS3_OPC_PF_RST_DONE            = 0x0026,
 
@@ -206,6 +207,9 @@ enum hns3_opcode_type {
 	HNS3_OPC_FD_AD_OP               = 0x1204,
 	HNS3_OPC_FD_COUNTER_OP          = 0x1205,
 
+	/* Clear hardware state command */
+	HNS3_OPC_CLEAR_HW_STATE         = 0x700A,
+
 	/* SFP command */
 	HNS3_OPC_SFP_GET_SPEED          = 0x7104,
 
@@ -252,6 +256,14 @@ struct hns3_rx_priv_buff_cmd {
 	uint8_t rsv[6];
 };
 
+#define HNS3_FW_VERSION_BYTE3_S		24
+#define HNS3_FW_VERSION_BYTE3_M		GENMASK(31, 24)
+#define HNS3_FW_VERSION_BYTE2_S		16
+#define HNS3_FW_VERSION_BYTE2_M		GENMASK(23, 16)
+#define HNS3_FW_VERSION_BYTE1_S		8
+#define HNS3_FW_VERSION_BYTE1_M		GENMASK(15, 8)
+#define HNS3_FW_VERSION_BYTE0_S		0
+#define HNS3_FW_VERSION_BYTE0_M		GENMASK(7, 0)
 struct hns3_query_version_cmd {
 	uint32_t firmware;
 	uint32_t firmware_rsv[5];
@@ -337,8 +349,9 @@ struct hns3_func_status_cmd {
 	uint8_t rsv[2];
 };
 
-#define HNS3_PF_VEC_NUM_S		0
-#define HNS3_PF_VEC_NUM_M		GENMASK(7, 0)
+#define HNS3_VEC_NUM_S		0
+#define HNS3_VEC_NUM_M		GENMASK(7, 0)
+#define HNS3_MIN_VECTOR_NUM	2 /* one for msi-x, another for IO */
 struct hns3_pf_res_cmd {
 	uint16_t tqp_num;
 	uint16_t buf_size;
@@ -349,6 +362,15 @@ struct hns3_pf_res_cmd {
 	uint16_t tx_buf_size;
 	uint16_t dv_buf_size;
 	uint32_t rsv[2];
+};
+
+struct hns3_vf_res_cmd {
+	uint16_t tqp_num;
+	uint16_t reserved;
+	uint16_t msixcap_localid_ba_nic;
+	uint16_t msixcap_localid_ba_rocee;
+	uint16_t vf_intr_vector_number;
+	uint16_t rsv[7];
 };
 
 #define HNS3_UMV_SPC_ALC_B	0
@@ -600,6 +622,7 @@ struct hns3_config_mac_mode_cmd {
 #define HNS3_CFG_SPEED_40G		3
 #define HNS3_CFG_SPEED_50G		4
 #define HNS3_CFG_SPEED_100G		5
+#define HNS3_CFG_SPEED_200G		8
 
 #define HNS3_CFG_SPEED_S		0
 #define HNS3_CFG_SPEED_M		GENMASK(5, 0)
@@ -677,13 +700,19 @@ struct hns3_tqp_map_cmd {
 	uint8_t rsv[18];
 };
 
-#define HNS3_RING_TYPE_B	0
-#define HNS3_RING_TYPE_TX	0
-#define HNS3_RING_TYPE_RX	1
+enum hns3_ring_type {
+	HNS3_RING_TYPE_TX,
+	HNS3_RING_TYPE_RX
+};
+
+enum hns3_int_gl_idx {
+	HNS3_RING_GL_RX,
+	HNS3_RING_GL_TX,
+	HNS3_RING_GL_IMMEDIATE = 3
+};
+
 #define HNS3_RING_GL_IDX_S	0
 #define HNS3_RING_GL_IDX_M	GENMASK(1, 0)
-#define HNS3_RING_GL_RX		0
-#define HNS3_RING_GL_TX		1
 
 #define HNS3_VECTOR_ELEMENTS_PER_CMD	10
 

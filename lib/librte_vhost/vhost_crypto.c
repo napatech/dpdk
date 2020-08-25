@@ -40,7 +40,8 @@
 		(1 << VIRTIO_RING_F_EVENT_IDX) |			\
 		(1 << VIRTIO_CRYPTO_SERVICE_CIPHER) |			\
 		(1 << VIRTIO_CRYPTO_SERVICE_MAC) |			\
-		(1 << VIRTIO_NET_F_CTRL_VQ))
+		(1 << VIRTIO_NET_F_CTRL_VQ) |				\
+		(1 << VHOST_USER_PROTOCOL_F_CONFIG))
 
 #define IOVA_TO_VVA(t, r, a, l, p)					\
 	((t)(uintptr_t)vhost_iova_to_vva(r->dev, r->vq, a, l, p))
@@ -237,6 +238,11 @@ transform_cipher_param(struct rte_crypto_sym_xform *xform,
 	if (unlikely(ret < 0))
 		return ret;
 
+	if (param->cipher_key_len > VHOST_USER_CRYPTO_MAX_CIPHER_KEY_LENGTH) {
+		VC_LOG_DBG("Invalid cipher key length\n");
+		return -VIRTIO_CRYPTO_BADMSG;
+	}
+
 	xform->type = RTE_CRYPTO_SYM_XFORM_CIPHER;
 	xform->cipher.key.length = param->cipher_key_len;
 	if (xform->cipher.key.length > 0)
@@ -287,6 +293,12 @@ transform_chain_param(struct rte_crypto_sym_xform *xforms,
 			&xform_cipher->cipher.algo);
 	if (unlikely(ret < 0))
 		return ret;
+
+	if (param->cipher_key_len > VHOST_USER_CRYPTO_MAX_CIPHER_KEY_LENGTH) {
+		VC_LOG_DBG("Invalid cipher key length\n");
+		return -VIRTIO_CRYPTO_BADMSG;
+	}
+
 	xform_cipher->type = RTE_CRYPTO_SYM_XFORM_CIPHER;
 	xform_cipher->cipher.key.length = param->cipher_key_len;
 	xform_cipher->cipher.key.data = param->cipher_key_buf;
@@ -301,6 +313,12 @@ transform_chain_param(struct rte_crypto_sym_xform *xforms,
 	ret = auth_algo_transform(param->hash_algo, &xform_auth->auth.algo);
 	if (unlikely(ret < 0))
 		return ret;
+
+	if (param->auth_key_len > VHOST_USER_CRYPTO_MAX_HMAC_KEY_LENGTH) {
+		VC_LOG_DBG("Invalid auth key length\n");
+		return -VIRTIO_CRYPTO_BADMSG;
+	}
+
 	xform_auth->auth.digest_length = param->digest_len;
 	xform_auth->auth.key.length = param->auth_key_len;
 	xform_auth->auth.key.data = param->auth_key_buf;

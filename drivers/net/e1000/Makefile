@@ -10,7 +10,6 @@ LIB = librte_pmd_e1000.a
 
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
 LDLIBS += -lrte_ethdev -lrte_net -lrte_kvargs
 LDLIBS += -lrte_bus_pci
@@ -51,6 +50,7 @@ VPATH += $(SRCDIR)/base
 #
 # all source are stored in SRCS-y
 #
+SRCS-$(CONFIG_RTE_LIBRTE_E1000_PMD) += e1000_base.c
 SRCS-$(CONFIG_RTE_LIBRTE_E1000_PMD) += e1000_80003es2lan.c
 SRCS-$(CONFIG_RTE_LIBRTE_E1000_PMD) += e1000_82540.c
 SRCS-$(CONFIG_RTE_LIBRTE_E1000_PMD) += e1000_82541.c

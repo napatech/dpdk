@@ -52,9 +52,11 @@ iavf_read_msg_from_pf(struct iavf_adapter *adapter, uint16_t buf_len,
 	PMD_DRV_LOG(DEBUG, "AQ from pf carries opcode %u, retval %d",
 		    opcode, vf->cmd_retval);
 
-	if (opcode != vf->pend_cmd)
+	if (opcode != vf->pend_cmd) {
 		PMD_DRV_LOG(WARNING, "command mismatch, expect %u, get %u",
 			    vf->pend_cmd, opcode);
+		return IAVF_ERR_OPCODE_MISMATCH;
+	}
 
 	return IAVF_SUCCESS;
 }
@@ -86,6 +88,7 @@ iavf_execute_vf_cmd(struct iavf_adapter *adapter, struct iavf_cmd_info *args)
 		break;
 	case VIRTCHNL_OP_VERSION:
 	case VIRTCHNL_OP_GET_VF_RESOURCES:
+	case VIRTCHNL_OP_GET_SUPPORTED_RXDIDS:
 		/* for init virtchnl ops, need to poll the response */
 		do {
 			ret = iavf_read_msg_from_pf(adapter, args->out_size,
@@ -127,6 +130,44 @@ iavf_execute_vf_cmd(struct iavf_adapter *adapter, struct iavf_cmd_info *args)
 	return err;
 }
 
+static uint32_t
+iavf_convert_link_speed(enum virtchnl_link_speed virt_link_speed)
+{
+	uint32_t speed;
+
+	switch (virt_link_speed) {
+	case VIRTCHNL_LINK_SPEED_100MB:
+		speed = 100;
+		break;
+	case VIRTCHNL_LINK_SPEED_1GB:
+		speed = 1000;
+		break;
+	case VIRTCHNL_LINK_SPEED_10GB:
+		speed = 10000;
+		break;
+	case VIRTCHNL_LINK_SPEED_40GB:
+		speed = 40000;
+		break;
+	case VIRTCHNL_LINK_SPEED_20GB:
+		speed = 20000;
+		break;
+	case VIRTCHNL_LINK_SPEED_25GB:
+		speed = 25000;
+		break;
+	case VIRTCHNL_LINK_SPEED_2_5GB:
+		speed = 2500;
+		break;
+	case VIRTCHNL_LINK_SPEED_5GB:
+		speed = 5000;
+		break;
+	default:
+		speed = 0;
+		break;
+	}
+
+	return speed;
+}
+
 static void
 iavf_handle_pf_event_msg(struct rte_eth_dev *dev, uint8_t *msg,
 			uint16_t msglen)
@@ -148,7 +189,14 @@ iavf_handle_pf_event_msg(struct rte_eth_dev *dev, uint8_t *msg,
 	case VIRTCHNL_EVENT_LINK_CHANGE:
 		PMD_DRV_LOG(DEBUG, "VIRTCHNL_EVENT_LINK_CHANGE event");
 		vf->link_up = pf_msg->event_data.link_event.link_status;
-		vf->link_speed = pf_msg->event_data.link_event_adv.link_speed;
+		if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_CAP_ADV_LINK_SPEED) {
+			vf->link_speed =
+				pf_msg->event_data.link_event_adv.link_speed;
+		} else {
+			enum virtchnl_link_speed speed;
+			speed = pf_msg->event_data.link_event.link_speed;
+			vf->link_speed = iavf_convert_link_speed(speed);
+		}
 		iavf_dev_link_update(dev, 0);
 		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC,
 					      NULL);
@@ -332,11 +380,10 @@ iavf_get_vf_resource(struct iavf_adapter *adapter)
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	/* TODO: basic offload capabilities, need to
-	 * add advanced/optional offload capabilities
-	 */
-
-	caps = IAVF_BASIC_OFFLOAD_CAPS | VIRTCHNL_VF_CAP_ADV_LINK_SPEED;
+	caps = IAVF_BASIC_OFFLOAD_CAPS | VIRTCHNL_VF_CAP_ADV_LINK_SPEED |
+		VIRTCHNL_VF_OFFLOAD_RX_FLEX_DESC |
+		VIRTCHNL_VF_OFFLOAD_FDIR_PF |
+		VIRTCHNL_VF_OFFLOAD_ADV_RSS_PF;
 
 	args.in_args = (uint8_t *)&caps;
 	args.in_args_size = sizeof(caps);
@@ -369,6 +416,32 @@ iavf_get_vf_resource(struct iavf_adapter *adapter)
 	vf->vsi.vsi_id = vf->vsi_res->vsi_id;
 	vf->vsi.nb_qps = vf->vsi_res->num_queue_pairs;
 	vf->vsi.adapter = adapter;
+
+	return 0;
+}
+
+int
+iavf_get_supported_rxdid(struct iavf_adapter *adapter)
+{
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
+	struct iavf_cmd_info args;
+	int ret;
+
+	args.ops = VIRTCHNL_OP_GET_SUPPORTED_RXDIDS;
+	args.in_args = NULL;
+	args.in_args_size = 0;
+	args.out_buffer = vf->aq_resp;
+	args.out_size = IAVF_AQ_BUF_SZ;
+
+	ret = iavf_execute_vf_cmd(adapter, &args);
+	if (ret) {
+		PMD_DRV_LOG(ERR,
+			    "Failed to execute command of OP_GET_SUPPORTED_RXDIDS");
+		return ret;
+	}
+
+	vf->supported_rxdid =
+		((struct virtchnl_supported_rxdids *)args.out_buffer)->supported_rxdids;
 
 	return 0;
 }
@@ -566,6 +639,31 @@ iavf_configure_queues(struct iavf_adapter *adapter)
 			vc_qp->rxq.dma_ring_addr = rxq[i]->rx_ring_phys_addr;
 			vc_qp->rxq.databuffer_size = rxq[i]->rx_buf_len;
 		}
+
+#ifndef RTE_LIBRTE_IAVF_16BYTE_RX_DESC
+		if (vf->vf_res->vf_cap_flags &
+			VIRTCHNL_VF_OFFLOAD_RX_FLEX_DESC &&
+			vf->supported_rxdid & BIT(IAVF_RXDID_COMMS_OVS_1)) {
+			vc_qp->rxq.rxdid = IAVF_RXDID_COMMS_OVS_1;
+			PMD_DRV_LOG(NOTICE, "request RXDID == %d in "
+					"Queue[%d]", vc_qp->rxq.rxdid, i);
+		} else {
+			vc_qp->rxq.rxdid = IAVF_RXDID_LEGACY_1;
+			PMD_DRV_LOG(NOTICE, "request RXDID == %d in "
+					"Queue[%d]", vc_qp->rxq.rxdid, i);
+		}
+#else
+		if (vf->vf_res->vf_cap_flags &
+			VIRTCHNL_VF_OFFLOAD_RX_FLEX_DESC &&
+			vf->supported_rxdid & BIT(IAVF_RXDID_LEGACY_0)) {
+			vc_qp->rxq.rxdid = IAVF_RXDID_LEGACY_0;
+			PMD_DRV_LOG(NOTICE, "request RXDID == %d in "
+					"Queue[%d]", vc_qp->rxq.rxdid, i);
+		} else {
+			PMD_DRV_LOG(ERR, "RXDID == 0 is not supported");
+			return -1;
+		}
+#endif
 	}
 
 	memset(&args, 0, sizeof(args));
@@ -797,6 +895,183 @@ iavf_add_del_vlan(struct iavf_adapter *adapter, uint16_t vlanid, bool add)
 	if (err)
 		PMD_DRV_LOG(ERR, "fail to execute command %s",
 			    add ? "OP_ADD_VLAN" :  "OP_DEL_VLAN");
+
+	return err;
+}
+
+int
+iavf_fdir_add(struct iavf_adapter *adapter,
+	struct iavf_fdir_conf *filter)
+{
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
+	struct virtchnl_fdir_add *fdir_ret;
+
+	struct iavf_cmd_info args;
+	int err;
+
+	filter->add_fltr.vsi_id = vf->vsi_res->vsi_id;
+	filter->add_fltr.validate_only = 0;
+
+	args.ops = VIRTCHNL_OP_ADD_FDIR_FILTER;
+	args.in_args = (uint8_t *)(&filter->add_fltr);
+	args.in_args_size = sizeof(*(&filter->add_fltr));
+	args.out_buffer = vf->aq_resp;
+	args.out_size = IAVF_AQ_BUF_SZ;
+
+	err = iavf_execute_vf_cmd(adapter, &args);
+	if (err) {
+		PMD_DRV_LOG(ERR, "fail to execute command OP_ADD_FDIR_FILTER");
+		return err;
+	}
+
+	fdir_ret = (struct virtchnl_fdir_add *)args.out_buffer;
+	filter->flow_id = fdir_ret->flow_id;
+
+	if (fdir_ret->status == VIRTCHNL_FDIR_SUCCESS) {
+		PMD_DRV_LOG(INFO,
+			"Succeed in adding rule request by PF");
+	} else if (fdir_ret->status == VIRTCHNL_FDIR_FAILURE_RULE_NORESOURCE) {
+		PMD_DRV_LOG(ERR,
+			"Failed to add rule request due to no hw resource");
+		return -1;
+	} else if (fdir_ret->status == VIRTCHNL_FDIR_FAILURE_RULE_EXIST) {
+		PMD_DRV_LOG(ERR,
+			"Failed to add rule request due to the rule is already existed");
+		return -1;
+	} else if (fdir_ret->status == VIRTCHNL_FDIR_FAILURE_RULE_CONFLICT) {
+		PMD_DRV_LOG(ERR,
+			"Failed to add rule request due to the rule is conflict with existing rule");
+		return -1;
+	} else if (fdir_ret->status == VIRTCHNL_FDIR_FAILURE_RULE_INVALID) {
+		PMD_DRV_LOG(ERR,
+			"Failed to add rule request due to the hw doesn't support");
+		return -1;
+	} else if (fdir_ret->status == VIRTCHNL_FDIR_FAILURE_RULE_TIMEOUT) {
+		PMD_DRV_LOG(ERR,
+			"Failed to add rule request due to time out for programming");
+		return -1;
+	} else {
+		PMD_DRV_LOG(ERR,
+			"Failed to add rule request due to other reasons");
+		return -1;
+	}
+
+	return 0;
+};
+
+int
+iavf_fdir_del(struct iavf_adapter *adapter,
+	struct iavf_fdir_conf *filter)
+{
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
+	struct virtchnl_fdir_del *fdir_ret;
+
+	struct iavf_cmd_info args;
+	int err;
+
+	filter->del_fltr.vsi_id = vf->vsi_res->vsi_id;
+	filter->del_fltr.flow_id = filter->flow_id;
+
+	args.ops = VIRTCHNL_OP_DEL_FDIR_FILTER;
+	args.in_args = (uint8_t *)(&filter->del_fltr);
+	args.in_args_size = sizeof(filter->del_fltr);
+	args.out_buffer = vf->aq_resp;
+	args.out_size = IAVF_AQ_BUF_SZ;
+
+	err = iavf_execute_vf_cmd(adapter, &args);
+	if (err) {
+		PMD_DRV_LOG(ERR, "fail to execute command OP_DEL_FDIR_FILTER");
+		return err;
+	}
+
+	fdir_ret = (struct virtchnl_fdir_del *)args.out_buffer;
+
+	if (fdir_ret->status == VIRTCHNL_FDIR_SUCCESS) {
+		PMD_DRV_LOG(INFO,
+			"Succeed in deleting rule request by PF");
+	} else if (fdir_ret->status == VIRTCHNL_FDIR_FAILURE_RULE_NONEXIST) {
+		PMD_DRV_LOG(ERR,
+			"Failed to delete rule request due to this rule doesn't exist");
+		return -1;
+	} else if (fdir_ret->status == VIRTCHNL_FDIR_FAILURE_RULE_TIMEOUT) {
+		PMD_DRV_LOG(ERR,
+			"Failed to delete rule request due to time out for programming");
+		return -1;
+	} else {
+		PMD_DRV_LOG(ERR,
+			"Failed to delete rule request due to other reasons");
+		return -1;
+	}
+
+	return 0;
+};
+
+int
+iavf_fdir_check(struct iavf_adapter *adapter,
+		struct iavf_fdir_conf *filter)
+{
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
+	struct virtchnl_fdir_add *fdir_ret;
+
+	struct iavf_cmd_info args;
+	int err;
+
+	filter->add_fltr.vsi_id = vf->vsi_res->vsi_id;
+	filter->add_fltr.validate_only = 1;
+
+	args.ops = VIRTCHNL_OP_ADD_FDIR_FILTER;
+	args.in_args = (uint8_t *)(&filter->add_fltr);
+	args.in_args_size = sizeof(*(&filter->add_fltr));
+	args.out_buffer = vf->aq_resp;
+	args.out_size = IAVF_AQ_BUF_SZ;
+
+	err = iavf_execute_vf_cmd(adapter, &args);
+	if (err) {
+		PMD_DRV_LOG(ERR, "fail to check flow direcotor rule");
+		return err;
+	}
+
+	fdir_ret = (struct virtchnl_fdir_add *)args.out_buffer;
+
+	if (fdir_ret->status == VIRTCHNL_FDIR_SUCCESS) {
+		PMD_DRV_LOG(INFO,
+			"Succeed in checking rule request by PF");
+	} else if (fdir_ret->status == VIRTCHNL_FDIR_FAILURE_RULE_INVALID) {
+		PMD_DRV_LOG(ERR,
+			"Failed to check rule request due to parameters validation"
+			" or HW doesn't support");
+		return -1;
+	} else {
+		PMD_DRV_LOG(ERR,
+			"Failed to check rule request due to other reasons");
+		return -1;
+	}
+
+	return 0;
+}
+
+int
+iavf_add_del_rss_cfg(struct iavf_adapter *adapter,
+		     struct virtchnl_rss_cfg *rss_cfg, bool add)
+{
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
+	struct iavf_cmd_info args;
+	int err;
+
+	memset(&args, 0, sizeof(args));
+	args.ops = add ? VIRTCHNL_OP_ADD_RSS_CFG :
+		VIRTCHNL_OP_DEL_RSS_CFG;
+	args.in_args = (u8 *)rss_cfg;
+	args.in_args_size = sizeof(*rss_cfg);
+	args.out_buffer = vf->aq_resp;
+	args.out_size = IAVF_AQ_BUF_SZ;
+
+	err = iavf_execute_vf_cmd(adapter, &args);
+	if (err)
+		PMD_DRV_LOG(ERR,
+			    "Failed to execute command of %s",
+			    add ? "OP_ADD_RSS_CFG" :
+			    "OP_DEL_RSS_INPUT_CFG");
 
 	return err;
 }

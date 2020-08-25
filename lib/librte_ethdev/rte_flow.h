@@ -28,6 +28,7 @@
 #include <rte_byteorder.h>
 #include <rte_esp.h>
 #include <rte_higig.h>
+#include <rte_ecpri.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_dyn.h>
 
@@ -538,6 +539,22 @@ enum rte_flow_item_type {
 	 */
 	RTE_FLOW_ITEM_TYPE_L2TPV3OIP,
 
+	/**
+	 * Matches PFCP Header.
+	 * See struct rte_flow_item_pfcp.
+	 *
+	 */
+	RTE_FLOW_ITEM_TYPE_PFCP,
+
+	/**
+	 * Matches eCPRI Header.
+	 *
+	 * Configure flow for eCPRI over ETH or UDP packets.
+	 *
+	 * See struct rte_flow_item_ecpri.
+	 */
+	RTE_FLOW_ITEM_TYPE_ECPRI,
+
 };
 
 /**
@@ -721,6 +738,12 @@ static const struct rte_flow_item_raw rte_flow_item_raw_mask = {
  * the latter case, @p type refers to that of the outer header, with the
  * inner EtherType/TPID provided by the subsequent pattern item. This is the
  * same order as on the wire.
+ * If the @p type field contains a TPID value, then only tagged packets with the
+ * specified TPID will match the pattern.
+ * Otherwise, only untagged packets will match the pattern.
+ * If the @p ETH item is the only item in the pattern, and the @p type field
+ * is not specified, then both tagged and untagged packets will match the
+ * pattern.
  */
 struct rte_flow_item_eth {
 	struct rte_ether_addr dst; /**< Destination MAC. */
@@ -745,6 +768,8 @@ static const struct rte_flow_item_eth rte_flow_item_eth_mask = {
  * The corresponding standard outer EtherType (TPID) values are
  * RTE_ETHER_TYPE_VLAN or RTE_ETHER_TYPE_QINQ. It can be overridden by
  * the preceding pattern item.
+ * If a @p VLAN item is present in the pattern, then only tagged packets will
+ * match the pattern.
  */
 struct rte_flow_item_vlan {
 	rte_be16_t tci; /**< Tag control information. */
@@ -1580,6 +1605,52 @@ static const struct rte_flow_item_ah rte_flow_item_ah_mask = {
 #endif
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this structure may change without prior notice
+ *
+ * RTE_FLOW_ITEM_TYPE_PFCP
+ *
+ * Match PFCP Header
+ */
+struct rte_flow_item_pfcp {
+	uint8_t s_field;
+	uint8_t msg_type;
+	rte_be16_t msg_len;
+	rte_be64_t seid;
+};
+
+/** Default mask for RTE_FLOW_ITEM_TYPE_PFCP. */
+#ifndef __cplusplus
+static const struct rte_flow_item_pfcp rte_flow_item_pfcp_mask = {
+	.s_field = 0x01,
+	.seid = RTE_BE64(UINT64_C(0xffffffffffffffff)),
+};
+#endif
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this structure may change without prior notice
+ *
+ * RTE_FLOW_ITEM_TYPE_ECPRI
+ *
+ * Match eCPRI Header
+ */
+struct rte_flow_item_ecpri {
+	struct rte_ecpri_combined_msg_hdr hdr;
+};
+
+/** Default mask for RTE_FLOW_ITEM_TYPE_ECPRI. */
+#ifndef __cplusplus
+static const struct rte_flow_item_ecpri rte_flow_item_ecpri_mask = {
+	.hdr = {
+		.common = {
+			.u32 = 0x0,
+		},
+	},
+};
+#endif
+
+/**
  * Matching pattern item definition.
  *
  * A pattern is formed by stacking items starting from the lowest protocol
@@ -2122,6 +2193,16 @@ enum rte_flow_action_type {
 	 * See struct rte_flow_action_set_dscp.
 	 */
 	RTE_FLOW_ACTION_TYPE_SET_IPV6_DSCP,
+
+	/**
+	 * Report as aged flow if timeout passed without any matching on the
+	 * flow.
+	 *
+	 * See struct rte_flow_action_age.
+	 * See function rte_flow_get_aged_flows
+	 * see enum RTE_ETH_EVENT_FLOW_AGED
+	 */
+	RTE_FLOW_ACTION_TYPE_AGE,
 };
 
 /**
@@ -2163,6 +2244,25 @@ struct rte_flow_action_queue {
 	uint16_t index; /**< Queue index to use. */
 };
 
+/**
+ * @warning
+ * @b EXPERIMENTAL: this structure may change without prior notice
+ *
+ * RTE_FLOW_ACTION_TYPE_AGE
+ *
+ * Report flow as aged-out if timeout passed without any matching
+ * on the flow. RTE_ETH_EVENT_FLOW_AGED event is triggered when a
+ * port detects new aged-out flows.
+ *
+ * The flow context and the flow handle will be reported by the
+ * rte_flow_get_aged_flows API.
+ */
+struct rte_flow_action_age {
+	uint32_t timeout:24; /**< Time in seconds. */
+	uint32_t reserved:8; /**< Reserved, must be zero. */
+	void *context;
+		/**< The user flow context, NULL means the rte_flow pointer. */
+};
 
 /**
  * @warning
@@ -2665,7 +2765,7 @@ struct rte_flow_action_set_dscp {
 };
 
 /* Mbuf dynamic field offset for metadata. */
-extern int rte_flow_dynf_metadata_offs;
+extern int32_t rte_flow_dynf_metadata_offs;
 
 /* Mbuf dynamic field flag mask for metadata. */
 extern uint64_t rte_flow_dynf_metadata_mask;
@@ -3294,6 +3394,39 @@ rte_flow_conv(enum rte_flow_conv_op op,
 	      size_t size,
 	      const void *src,
 	      struct rte_flow_error *error);
+
+/**
+ * Get aged-out flows of a given port.
+ *
+ * RTE_ETH_EVENT_FLOW_AGED event will be triggered when at least one new aged
+ * out flow was detected after the last call to rte_flow_get_aged_flows.
+ * This function can be called to get the aged flows usynchronously from the
+ * event callback or synchronously regardless the event.
+ * This is not safe to call rte_flow_get_aged_flows function with other flow
+ * functions from multiple threads simultaneously.
+ *
+ * @param port_id
+ *   Port identifier of Ethernet device.
+ * @param[in, out] contexts
+ *   The address of an array of pointers to the aged-out flows contexts.
+ * @param[in] nb_contexts
+ *   The length of context array pointers.
+ * @param[out] error
+ *   Perform verbose error reporting if not NULL. Initialized in case of
+ *   error only.
+ *
+ * @return
+ *   if nb_contexts is 0, return the amount of all aged contexts.
+ *   if nb_contexts is not 0 , return the amount of aged flows reported
+ *   in the context array, otherwise negative errno value.
+ *
+ * @see rte_flow_action_age
+ * @see RTE_ETH_EVENT_FLOW_AGED
+ */
+__rte_experimental
+int
+rte_flow_get_aged_flows(uint16_t port_id, void **contexts,
+			uint32_t nb_contexts, struct rte_flow_error *error);
 
 #ifdef __cplusplus
 }

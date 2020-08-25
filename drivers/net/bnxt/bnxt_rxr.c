@@ -12,6 +12,7 @@
 #include <rte_memory.h>
 
 #include "bnxt.h"
+#include "bnxt_reps.h"
 #include "bnxt_ring.h"
 #include "bnxt_rxr.h"
 #include "bnxt_rxq.h"
@@ -19,6 +20,9 @@
 #ifdef RTE_LIBRTE_IEEE1588
 #include "bnxt_hwrm.h"
 #endif
+
+#include <bnxt_tf_common.h>
+#include <ulp_mark_mgr.h>
 
 /*
  * RX Ring handling
@@ -399,8 +403,147 @@ bnxt_get_rx_ts_thor(struct bnxt *bp, uint32_t rx_ts_cmpl)
 }
 #endif
 
+static uint32_t
+bnxt_ulp_set_mark_in_mbuf(struct bnxt *bp, struct rx_pkt_cmpl_hi *rxcmp1,
+			  struct rte_mbuf *mbuf, uint32_t *vfr_flag)
+{
+	uint32_t cfa_code;
+	uint32_t meta_fmt;
+	uint32_t meta;
+	bool gfid = false;
+	uint32_t mark_id;
+	uint32_t flags2;
+	uint32_t gfid_support = 0;
+	int rc;
+
+	if (BNXT_GFID_ENABLED(bp))
+		gfid_support = 1;
+
+	cfa_code = rte_le_to_cpu_16(rxcmp1->cfa_code);
+	flags2 = rte_le_to_cpu_32(rxcmp1->flags2);
+	meta = rte_le_to_cpu_32(rxcmp1->metadata);
+
+	/*
+	 * The flags field holds extra bits of info from [6:4]
+	 * which indicate if the flow is in TCAM or EM or EEM
+	 */
+	meta_fmt = (flags2 & BNXT_CFA_META_FMT_MASK) >>
+		BNXT_CFA_META_FMT_SHFT;
+
+	switch (meta_fmt) {
+	case 0:
+		if (gfid_support) {
+			/* Not an LFID or GFID, a flush cmd. */
+			goto skip_mark;
+		} else {
+			/* LFID mode, no vlan scenario */
+			gfid = false;
+		}
+		break;
+	case 4:
+	case 5:
+		/*
+		 * EM/TCAM case
+		 * Assume that EM doesn't support Mark due to GFID
+		 * collisions with EEM.  Simply return without setting the mark
+		 * in the mbuf.
+		 */
+		if (BNXT_CFA_META_EM_TEST(meta)) {
+			/*This is EM hit {EM(1), GFID[27:16], 19'd0 or vtag } */
+			gfid = true;
+			meta >>= BNXT_RX_META_CFA_CODE_SHIFT;
+			cfa_code |= meta << BNXT_CFA_CODE_META_SHIFT;
+		} else {
+			/*
+			 * It is a TCAM entry, so it is an LFID.
+			 * The TCAM IDX and Mode can also be determined
+			 * by decoding the meta_data. We are not
+			 * using these for now.
+			 */
+		}
+		break;
+	case 6:
+	case 7:
+		/* EEM Case, only using gfid in EEM for now. */
+		gfid = true;
+
+		/*
+		 * For EEM flows, The first part of cfa_code is 16 bits.
+		 * The second part is embedded in the
+		 * metadata field from bit 19 onwards. The driver needs to
+		 * ignore the first 19 bits of metadata and use the next 12
+		 * bits as higher 12 bits of cfa_code.
+		 */
+		meta >>= BNXT_RX_META_CFA_CODE_SHIFT;
+		cfa_code |= meta << BNXT_CFA_CODE_META_SHIFT;
+		break;
+	default:
+		/* For other values, the cfa_code is assumed to be an LFID. */
+		break;
+	}
+
+	rc = ulp_mark_db_mark_get(bp->ulp_ctx, gfid,
+				  cfa_code, vfr_flag, &mark_id);
+	if (!rc) {
+		/* VF to VFR Rx path. So, skip mark_id injection in mbuf */
+		if (vfr_flag && *vfr_flag)
+			return mark_id;
+		/* Got the mark, write it to the mbuf and return */
+		mbuf->hash.fdir.hi = mark_id;
+		mbuf->udata64 = (cfa_code & 0xffffffffull) << 32;
+		mbuf->hash.fdir.id = rxcmp1->cfa_code;
+		mbuf->ol_flags |= PKT_RX_FDIR | PKT_RX_FDIR_ID;
+		return mark_id;
+	}
+
+skip_mark:
+	mbuf->hash.fdir.hi = 0;
+	mbuf->hash.fdir.id = 0;
+
+	return 0;
+}
+
+void bnxt_set_mark_in_mbuf(struct bnxt *bp,
+			   struct rx_pkt_cmpl_hi *rxcmp1,
+			   struct rte_mbuf *mbuf)
+{
+	uint32_t cfa_code = 0;
+	uint8_t meta_fmt = 0;
+	uint16_t flags2 = 0;
+	uint32_t meta =  0;
+
+	cfa_code = rte_le_to_cpu_16(rxcmp1->cfa_code);
+	if (!cfa_code)
+		return;
+
+	if (cfa_code && !bp->mark_table[cfa_code].valid)
+		return;
+
+	flags2 = rte_le_to_cpu_16(rxcmp1->flags2);
+	meta = rte_le_to_cpu_32(rxcmp1->metadata);
+	if (meta) {
+		meta >>= BNXT_RX_META_CFA_CODE_SHIFT;
+
+		/* The flags field holds extra bits of info from [6:4]
+		 * which indicate if the flow is in TCAM or EM or EEM
+		 */
+		meta_fmt = (flags2 & BNXT_CFA_META_FMT_MASK) >>
+			   BNXT_CFA_META_FMT_SHFT;
+
+		/* meta_fmt == 4 => 'b100 => 'b10x => EM.
+		 * meta_fmt == 5 => 'b101 => 'b10x => EM + VLAN
+		 * meta_fmt == 6 => 'b110 => 'b11x => EEM
+		 * meta_fmt == 7 => 'b111 => 'b11x => EEM + VLAN.
+		 */
+		meta_fmt >>= BNXT_CFA_META_FMT_EM_EEM_SHFT;
+	}
+
+	mbuf->hash.fdir.hi = bp->mark_table[cfa_code].mark_id;
+	mbuf->ol_flags |= PKT_RX_FDIR | PKT_RX_FDIR_ID;
+}
+
 static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
-			    struct bnxt_rx_queue *rxq, uint32_t *raw_cons)
+		       struct bnxt_rx_queue *rxq, uint32_t *raw_cons)
 {
 	struct bnxt_cp_ring_info *cpr = rxq->cp_ring;
 	struct bnxt_rx_ring_info *rxr = rxq->rx_ring;
@@ -413,8 +556,9 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 	int rc = 0;
 	uint8_t agg_buf = 0;
 	uint16_t cmp_type;
-	uint32_t flags2_f = 0;
+	uint32_t flags2_f = 0, vfr_flag = 0, mark_id = 0;
 	uint16_t flags_type;
+	struct bnxt *bp = rxq->bp;
 
 	rxcmp = (struct rx_pkt_cmpl *)
 	    &cpr->cp_desc_ring[cp_cons];
@@ -490,7 +634,11 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 		mbuf->ol_flags |= PKT_RX_RSS_HASH;
 	}
 
-	bnxt_set_mark_in_mbuf(rxq->bp, rxcmp1, mbuf);
+	if (BNXT_TRUFLOW_EN(bp))
+		mark_id = bnxt_ulp_set_mark_in_mbuf(rxq->bp, rxcmp1, mbuf,
+						    &vfr_flag);
+	else
+		bnxt_set_mark_in_mbuf(rxq->bp, rxcmp1, mbuf);
 
 #ifdef RTE_LIBRTE_IEEE1588
 	if (unlikely((flags_type & RX_PKT_CMPL_FLAGS_MASK) ==
@@ -592,6 +740,20 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 rx:
 	*rx_pkt = mbuf;
 
+	if (BNXT_TRUFLOW_EN(bp) &&
+	    (BNXT_VF_IS_TRUSTED(bp) || BNXT_PF(bp)) &&
+	    vfr_flag) {
+		if (!bnxt_vfr_recv(mark_id, rxq->queue_id, mbuf)) {
+			/* Now return an error so that nb_rx_pkts is not
+			 * incremented.
+			 * This packet was meant to be given to the representor.
+			 * So no need to account the packet and give it to
+			 * parent Rx burst function.
+			 */
+			rc = -ENODEV;
+		}
+	}
+
 next_rx:
 
 	*raw_cons = tmp_raw_cons;
@@ -608,6 +770,7 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	uint32_t raw_cons = cpr->cp_raw_cons;
 	uint32_t cons;
 	int nb_rx_pkts = 0;
+	int nb_rep_rx_pkts = 0;
 	struct rx_pkt_cmpl *rxcmp;
 	uint16_t prod = rxr->rx_prod;
 	uint16_t ag_prod = rxr->ag_prod;
@@ -621,6 +784,24 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	if (unlikely(!rxq->rx_started ||
 		     !rte_spinlock_trylock(&rxq->lock)))
 		return 0;
+
+#if defined(RTE_ARCH_X86) || defined(RTE_ARCH_ARM64)
+	/*
+	 * Replenish buffers if needed when a transition has been made from
+	 * vector- to non-vector- receive processing.
+	 */
+	while (unlikely(rxq->rxrearm_nb)) {
+		if (!bnxt_alloc_rx_data(rxq, rxr, rxq->rxrearm_start)) {
+			rxr->rx_prod = rxq->rxrearm_start;
+			bnxt_db_write(&rxr->rx_db, rxr->rx_prod);
+			rxq->rxrearm_start++;
+			rxq->rxrearm_nb--;
+		} else {
+			/* Retry allocation on next call. */
+			break;
+		}
+	}
+#endif
 
 	/* Handle RX burst request */
 	while (1) {
@@ -641,6 +822,8 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 				nb_rx_pkts++;
 			if (rc == -EBUSY)	/* partial completion */
 				break;
+			if (rc == -ENODEV)	/* completion for representor */
+				nb_rep_rx_pkts++;
 		} else if (!BNXT_NUM_ASYNC_CPR(rxq->bp)) {
 			evt =
 			bnxt_event_hwrm_resp_handler(rxq->bp,
@@ -659,7 +842,7 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	}
 
 	cpr->cp_raw_cons = raw_cons;
-	if (!nb_rx_pkts && !evt) {
+	if (!nb_rx_pkts && !nb_rep_rx_pkts && !evt) {
 		/*
 		 * For PMD, there is no need to keep on pushing to REARM
 		 * the doorbell if there are no new completions
@@ -853,11 +1036,13 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 
 	prod = rxr->rx_prod;
 	for (i = 0; i < ring->ring_size; i++) {
-		if (bnxt_alloc_rx_data(rxq, rxr, prod) != 0) {
-			PMD_DRV_LOG(WARNING,
-				"init'ed rx ring %d with %d/%d mbufs only\n",
-				rxq->queue_id, i, ring->ring_size);
-			break;
+		if (unlikely(!rxr->rx_buf_ring[i].mbuf)) {
+			if (bnxt_alloc_rx_data(rxq, rxr, prod) != 0) {
+				PMD_DRV_LOG(WARNING,
+					    "init'ed rx ring %d with %d/%d mbufs only\n",
+					    rxq->queue_id, i, ring->ring_size);
+				break;
+			}
 		}
 		rxr->rx_prod = prod;
 		prod = RING_NEXT(rxr->rx_ring_struct, prod);
@@ -869,11 +1054,13 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 	prod = rxr->ag_prod;
 
 	for (i = 0; i < ring->ring_size; i++) {
-		if (bnxt_alloc_ag_data(rxq, rxr, prod) != 0) {
-			PMD_DRV_LOG(WARNING,
-			"init'ed AG ring %d with %d/%d mbufs only\n",
-			rxq->queue_id, i, ring->ring_size);
-			break;
+		if (unlikely(!rxr->ag_buf_ring[i].mbuf)) {
+			if (bnxt_alloc_ag_data(rxq, rxr, prod) != 0) {
+				PMD_DRV_LOG(WARNING,
+					    "init'ed AG ring %d with %d/%d mbufs only\n",
+					    rxq->queue_id, i, ring->ring_size);
+				break;
+			}
 		}
 		rxr->ag_prod = prod;
 		prod = RING_NEXT(rxr->ag_ring_struct, prod);
@@ -884,56 +1071,17 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 		unsigned int max_aggs = BNXT_TPA_MAX_AGGS(rxq->bp);
 
 		for (i = 0; i < max_aggs; i++) {
-			rxr->tpa_info[i].mbuf =
-				__bnxt_alloc_rx_data(rxq->mb_pool);
-			if (!rxr->tpa_info[i].mbuf) {
-				rte_atomic64_inc(&rxq->rx_mbuf_alloc_fail);
-				return -ENOMEM;
+			if (unlikely(!rxr->tpa_info[i].mbuf)) {
+				rxr->tpa_info[i].mbuf =
+					__bnxt_alloc_rx_data(rxq->mb_pool);
+				if (!rxr->tpa_info[i].mbuf) {
+					rte_atomic64_inc(&rxq->rx_mbuf_alloc_fail);
+					return -ENOMEM;
+				}
 			}
 		}
 	}
 	PMD_DRV_LOG(DEBUG, "TPA alloc Done!\n");
 
 	return 0;
-}
-
-void bnxt_set_mark_in_mbuf(struct bnxt *bp,
-			   struct rx_pkt_cmpl_hi *rxcmp1,
-			   struct rte_mbuf *mbuf)
-{
-	uint32_t cfa_code = 0;
-	uint8_t meta_fmt =  0;
-	uint16_t flags2 = 0;
-	uint32_t meta =  0;
-
-	cfa_code = rte_le_to_cpu_16(rxcmp1->cfa_code);
-	if (!cfa_code)
-		return;
-
-	if (cfa_code && !bp->mark_table[cfa_code].valid)
-		return;
-
-	flags2 = rte_le_to_cpu_16(rxcmp1->flags2);
-	meta = rte_le_to_cpu_32(rxcmp1->metadata);
-	if (meta) {
-		meta >>= BNXT_RX_META_CFA_CODE_SHIFT;
-
-		/*
-		 * The flags field holds extra bits of info from [6:4]
-		 * which indicate if the flow is in TCAM or EM or EEM
-		 */
-		meta_fmt = (flags2 & BNXT_CFA_META_FMT_MASK) >>
-			   BNXT_CFA_META_FMT_SHFT;
-
-		/*
-		 * meta_fmt == 4 => 'b100 => 'b10x => EM.
-		 * meta_fmt == 5 => 'b101 => 'b10x => EM + VLAN
-		 * meta_fmt == 6 => 'b110 => 'b11x => EEM
-		 * meta_fmt == 7 => 'b111 => 'b11x => EEM + VLAN.
-		 */
-		meta_fmt >>= BNXT_CFA_META_FMT_EM_EEM_SHFT;
-	}
-
-	mbuf->hash.fdir.hi = bp->mark_table[cfa_code].mark_id;
-	mbuf->ol_flags |= PKT_RX_FDIR | PKT_RX_FDIR_ID;
 }

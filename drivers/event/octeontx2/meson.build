@@ -12,17 +12,10 @@ sources = files('otx2_worker.c',
 		'otx2_tim_worker.c'
 		)
 
-allow_experimental_apis = true
-
 extra_flags = []
 # This integrated controller runs only on a arm64 machine, remove 32bit warnings
 if not dpdk_conf.get('RTE_ARCH_64')
 	extra_flags += ['-Wno-int-to-pointer-cast', '-Wno-pointer-to-int-cast']
-endif
-
-# for clang 32-bit compiles we need libatomic for 64-bit atomic ops
-if cc.get_id() == 'clang' and dpdk_conf.get('RTE_ARCH_64') == false
-	ext_deps += cc.find_library('atomic')
 endif
 
 foreach flag: extra_flags

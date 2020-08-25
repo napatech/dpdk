@@ -10,7 +10,6 @@ RTE_SDK_DPAA=$(RTE_SDK)/drivers/net/dpaa
 #
 LIB = librte_pmd_dpaa_event.a
 
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS := -I$(SRCDIR) $(CFLAGS)
 CFLAGS += -O3 $(WERROR_FLAGS)
 CFLAGS += -Wno-pointer-arith
@@ -20,7 +19,7 @@ CFLAGS += -I$(RTE_SDK)/drivers/bus/dpaa
 CFLAGS += -I$(RTE_SDK)/drivers/bus/dpaa/include/
 CFLAGS += -I$(RTE_SDK)/drivers/mempool/dpaa
 CFLAGS += -I$(RTE_SDK)/drivers/common/dpaax
-CFLAGS += -I$(RTE_SDK)/lib/librte_eal/common/include
+CFLAGS += -I$(RTE_SDK)/lib/librte_eal/include
 
 LDLIBS += -lrte_pmd_dpaa_sec
 CFLAGS += -I$(RTE_SDK)/drivers/crypto/dpaa_sec

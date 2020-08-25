@@ -52,6 +52,16 @@
 
 #include "testpmd.h"
 
+#define ETHDEV_FWVERS_LEN 32
+
+#ifdef CLOCK_MONOTONIC_RAW /* Defined in glibc bits/time.h */
+#define CLOCK_TYPE_ID CLOCK_MONOTONIC_RAW
+#else
+#define CLOCK_TYPE_ID CLOCK_MONOTONIC
+#endif
+
+#define NS_PER_SEC 1E9
+
 static char *flowtype_to_str(uint16_t flow_type);
 
 static const struct {
@@ -73,10 +83,17 @@ static const struct {
 };
 
 const struct rss_type_info rss_type_table[] = {
-	{ "all", ETH_RSS_IP | ETH_RSS_TCP |
-			ETH_RSS_UDP | ETH_RSS_SCTP |
-			ETH_RSS_L2_PAYLOAD },
+	{ "all", ETH_RSS_ETH | ETH_RSS_VLAN | ETH_RSS_IP | ETH_RSS_TCP |
+		ETH_RSS_UDP | ETH_RSS_SCTP | ETH_RSS_L2_PAYLOAD |
+		ETH_RSS_L2TPV3 | ETH_RSS_ESP | ETH_RSS_AH | ETH_RSS_PFCP |
+		ETH_RSS_GTPU},
 	{ "none", 0 },
+	{ "eth", ETH_RSS_ETH },
+	{ "l2-src-only", ETH_RSS_L2_SRC_ONLY },
+	{ "l2-dst-only", ETH_RSS_L2_DST_ONLY },
+	{ "vlan", ETH_RSS_VLAN },
+	{ "s-vlan", ETH_RSS_S_VLAN },
+	{ "c-vlan", ETH_RSS_C_VLAN },
 	{ "ipv4", ETH_RSS_IPV4 },
 	{ "ipv4-frag", ETH_RSS_FRAG_IPV4 },
 	{ "ipv4-tcp", ETH_RSS_NONFRAG_IPV4_TCP },
@@ -102,10 +119,22 @@ const struct rss_type_info rss_type_table[] = {
 	{ "tcp", ETH_RSS_TCP },
 	{ "sctp", ETH_RSS_SCTP },
 	{ "tunnel", ETH_RSS_TUNNEL },
+	{ "l3-pre32", RTE_ETH_RSS_L3_PRE32 },
+	{ "l3-pre40", RTE_ETH_RSS_L3_PRE40 },
+	{ "l3-pre48", RTE_ETH_RSS_L3_PRE48 },
+	{ "l3-pre56", RTE_ETH_RSS_L3_PRE56 },
+	{ "l3-pre64", RTE_ETH_RSS_L3_PRE64 },
+	{ "l3-pre96", RTE_ETH_RSS_L3_PRE96 },
 	{ "l3-src-only", ETH_RSS_L3_SRC_ONLY },
 	{ "l3-dst-only", ETH_RSS_L3_DST_ONLY },
 	{ "l4-src-only", ETH_RSS_L4_SRC_ONLY },
 	{ "l4-dst-only", ETH_RSS_L4_DST_ONLY },
+	{ "esp", ETH_RSS_ESP },
+	{ "ah", ETH_RSS_AH },
+	{ "l2tpv3", ETH_RSS_L2TPV3 },
+	{ "pfcp", ETH_RSS_PFCP },
+	{ "pppoe", ETH_RSS_PPPOE },
+	{ "gtpu", ETH_RSS_GTPU },
 	{ NULL, 0 },
 };
 
@@ -124,9 +153,10 @@ nic_stats_display(portid_t port_id)
 	static uint64_t prev_pkts_tx[RTE_MAX_ETHPORTS];
 	static uint64_t prev_bytes_rx[RTE_MAX_ETHPORTS];
 	static uint64_t prev_bytes_tx[RTE_MAX_ETHPORTS];
-	static uint64_t prev_cycles[RTE_MAX_ETHPORTS];
+	static uint64_t prev_ns[RTE_MAX_ETHPORTS];
+	struct timespec cur_time;
 	uint64_t diff_pkts_rx, diff_pkts_tx, diff_bytes_rx, diff_bytes_tx,
-								diff_cycles;
+								diff_ns;
 	uint64_t mpps_rx, mpps_tx, mbps_rx, mbps_tx;
 	struct rte_eth_stats stats;
 	struct rte_port *port = &ports[port_id];
@@ -183,10 +213,17 @@ nic_stats_display(portid_t port_id)
 		}
 	}
 
-	diff_cycles = prev_cycles[port_id];
-	prev_cycles[port_id] = rte_rdtsc();
-	if (diff_cycles > 0)
-		diff_cycles = prev_cycles[port_id] - diff_cycles;
+	diff_ns = 0;
+	if (clock_gettime(CLOCK_TYPE_ID, &cur_time) == 0) {
+		uint64_t ns;
+
+		ns = cur_time.tv_sec * NS_PER_SEC;
+		ns += cur_time.tv_nsec;
+
+		if (prev_ns[port_id] != 0)
+			diff_ns = ns - prev_ns[port_id];
+		prev_ns[port_id] = ns;
+	}
 
 	diff_pkts_rx = (stats.ipackets > prev_pkts_rx[port_id]) ?
 		(stats.ipackets - prev_pkts_rx[port_id]) : 0;
@@ -194,10 +231,10 @@ nic_stats_display(portid_t port_id)
 		(stats.opackets - prev_pkts_tx[port_id]) : 0;
 	prev_pkts_rx[port_id] = stats.ipackets;
 	prev_pkts_tx[port_id] = stats.opackets;
-	mpps_rx = diff_cycles > 0 ?
-		diff_pkts_rx * rte_get_tsc_hz() / diff_cycles : 0;
-	mpps_tx = diff_cycles > 0 ?
-		diff_pkts_tx * rte_get_tsc_hz() / diff_cycles : 0;
+	mpps_rx = diff_ns > 0 ?
+		(double)diff_pkts_rx / diff_ns * NS_PER_SEC : 0;
+	mpps_tx = diff_ns > 0 ?
+		(double)diff_pkts_tx / diff_ns * NS_PER_SEC : 0;
 
 	diff_bytes_rx = (stats.ibytes > prev_bytes_rx[port_id]) ?
 		(stats.ibytes - prev_bytes_rx[port_id]) : 0;
@@ -205,10 +242,10 @@ nic_stats_display(portid_t port_id)
 		(stats.obytes - prev_bytes_tx[port_id]) : 0;
 	prev_bytes_rx[port_id] = stats.ibytes;
 	prev_bytes_tx[port_id] = stats.obytes;
-	mbps_rx = diff_cycles > 0 ?
-		diff_bytes_rx * rte_get_tsc_hz() / diff_cycles : 0;
-	mbps_tx = diff_cycles > 0 ?
-		diff_bytes_tx * rte_get_tsc_hz() / diff_cycles : 0;
+	mbps_rx = diff_ns > 0 ?
+		(double)diff_bytes_rx / diff_ns * NS_PER_SEC : 0;
+	mbps_tx = diff_ns > 0 ?
+		(double)diff_bytes_tx / diff_ns * NS_PER_SEC : 0;
 
 	printf("\n  Throughput (since last show)\n");
 	printf("  Rx-pps: %12"PRIu64"          Rx-bps: %12"PRIu64"\n  Tx-pps: %12"
@@ -222,11 +259,28 @@ nic_stats_display(portid_t port_id)
 void
 nic_stats_clear(portid_t port_id)
 {
+	int ret;
+
 	if (port_id_is_invalid(port_id, ENABLED_WARN)) {
 		print_valid_ports();
 		return;
 	}
-	rte_eth_stats_reset(port_id);
+
+	ret = rte_eth_stats_reset(port_id);
+	if (ret != 0) {
+		printf("%s: Error: failed to reset stats (port %u): %s",
+		       __func__, port_id, strerror(-ret));
+		return;
+	}
+
+	ret = rte_eth_stats_get(port_id, &ports[port_id].stats);
+	if (ret != 0) {
+		if (ret < 0)
+			ret = -ret;
+		printf("%s: Error: failed to get stats (port %u): %s",
+		       __func__, port_id, strerror(ret));
+		return;
+	}
 	printf("\n  NIC statistics for port %d cleared\n", port_id);
 }
 
@@ -302,10 +356,21 @@ nic_xstats_clear(portid_t port_id)
 		print_valid_ports();
 		return;
 	}
+
 	ret = rte_eth_xstats_reset(port_id);
 	if (ret != 0) {
 		printf("%s: Error: failed to reset xstats (port %u): %s",
+		       __func__, port_id, strerror(-ret));
+		return;
+	}
+
+	ret = rte_eth_stats_get(port_id, &ports[port_id].stats);
+	if (ret != 0) {
+		if (ret < 0)
+			ret = -ret;
+		printf("%s: Error: failed to get stats (port %u): %s",
 		       __func__, port_id, strerror(ret));
+		return;
 	}
 }
 
@@ -523,6 +588,7 @@ port_infos_display(portid_t port_id)
 	uint16_t mtu;
 	char name[RTE_ETH_NAME_MAX_LEN];
 	int ret;
+	char fw_version[ETHDEV_FWVERS_LEN];
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN)) {
 		print_valid_ports();
@@ -544,6 +610,13 @@ port_infos_display(portid_t port_id)
 	rte_eth_dev_get_name_by_port(port_id, name);
 	printf("\nDevice name: %s", name);
 	printf("\nDriver name: %s", dev_info.driver_name);
+
+	if (rte_eth_dev_fw_version_get(port_id, fw_version,
+						ETHDEV_FWVERS_LEN) == 0)
+		printf("\nFirmware-version: %s", fw_version);
+	else
+		printf("\nFirmware-version: %s", "not available");
+
 	if (dev_info.device->devargs && dev_info.device->devargs->args)
 		printf("\nDevargs: %s", dev_info.device->devargs->args);
 	printf("\nConnect to socket: %u", port->socket_id);
@@ -979,6 +1052,15 @@ port_offload_cap_display(portid_t port_id)
 			printf("off\n");
 	}
 
+	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_SEND_ON_TIMESTAMP) {
+		printf("Tx scheduling on timestamp:    ");
+		if (ports[port_id].dev_conf.txmode.offloads &
+		    DEV_TX_OFFLOAD_SEND_ON_TIMESTAMP)
+			printf("on\n");
+		else
+			printf("off\n");
+	}
+
 }
 
 int
@@ -1233,8 +1315,9 @@ port_mtu_set(portid_t port_id, uint16_t mtu)
 		return;
 	}
 	diag = rte_eth_dev_set_mtu(port_id, mtu);
-	if (diag == 0 &&
-	    dev_info.rx_offload_capa & DEV_RX_OFFLOAD_JUMBO_FRAME) {
+	if (diag)
+		printf("Set MTU failed. diag=%d\n", diag);
+	else if (dev_info.rx_offload_capa & DEV_RX_OFFLOAD_JUMBO_FRAME) {
 		/*
 		 * Ether overhead in driver is equal to the difference of
 		 * max_rx_pktlen and max_mtu in rte_eth_dev_info when the
@@ -1249,10 +1332,7 @@ port_mtu_set(portid_t port_id, uint16_t mtu)
 		} else
 			rte_port->dev_conf.rxmode.offloads &=
 						~DEV_RX_OFFLOAD_JUMBO_FRAME;
-
-		return;
 	}
-	printf("Set MTU failed. diag=%d\n", diag);
 }
 
 /* Generic flow management functions. */
@@ -1330,6 +1410,57 @@ port_flow_complain(struct rte_flow_error *error)
 	return -err;
 }
 
+static void
+rss_config_display(struct rte_flow_action_rss *rss_conf)
+{
+	uint8_t i;
+
+	if (rss_conf == NULL) {
+		printf("Invalid rule\n");
+		return;
+	}
+
+	printf("RSS:\n"
+	       " queues:");
+	if (rss_conf->queue_num == 0)
+		printf(" none");
+	for (i = 0; i < rss_conf->queue_num; i++)
+		printf(" %d", rss_conf->queue[i]);
+	printf("\n");
+
+	printf(" function: ");
+	switch (rss_conf->func) {
+	case RTE_ETH_HASH_FUNCTION_DEFAULT:
+		printf("default\n");
+		break;
+	case RTE_ETH_HASH_FUNCTION_TOEPLITZ:
+		printf("toeplitz\n");
+		break;
+	case RTE_ETH_HASH_FUNCTION_SIMPLE_XOR:
+		printf("simple_xor\n");
+		break;
+	case RTE_ETH_HASH_FUNCTION_SYMMETRIC_TOEPLITZ:
+		printf("symmetric_toeplitz\n");
+		break;
+	default:
+		printf("Unknown function\n");
+		return;
+	}
+
+	printf(" types:\n");
+	if (rss_conf->types == 0) {
+		printf("  none\n");
+		return;
+	}
+	for (i = 0; rss_type_table[i].str; i++) {
+		if ((rss_conf->types &
+		    rss_type_table[i].rss_type) ==
+		    rss_type_table[i].rss_type &&
+		    rss_type_table[i].rss_type != 0)
+			printf("  %s\n", rss_type_table[i].str);
+	}
+}
+
 /** Validate flow rule. */
 int
 port_flow_validate(portid_t port_id,
@@ -1347,6 +1478,26 @@ port_flow_validate(portid_t port_id,
 	return 0;
 }
 
+/** Update age action context by port_flow pointer. */
+void
+update_age_action_context(const struct rte_flow_action *actions,
+			struct port_flow *pf)
+{
+	struct rte_flow_action_age *age = NULL;
+
+	for (; actions->type != RTE_FLOW_ACTION_TYPE_END; actions++) {
+		switch (actions->type) {
+		case RTE_FLOW_ACTION_TYPE_AGE:
+			age = (struct rte_flow_action_age *)
+				(uintptr_t)actions->conf;
+			age->context = pf;
+			return;
+		default:
+			break;
+		}
+	}
+}
+
 /** Create flow rule. */
 int
 port_flow_create(portid_t port_id,
@@ -1357,28 +1508,27 @@ port_flow_create(portid_t port_id,
 	struct rte_flow *flow;
 	struct rte_port *port;
 	struct port_flow *pf;
-	uint32_t id;
+	uint32_t id = 0;
 	struct rte_flow_error error;
 
-	/* Poisoning to make sure PMDs update it in case of error. */
-	memset(&error, 0x22, sizeof(error));
-	flow = rte_flow_create(port_id, attr, pattern, actions, &error);
-	if (!flow)
-		return port_flow_complain(&error);
 	port = &ports[port_id];
 	if (port->flow_list) {
 		if (port->flow_list->id == UINT32_MAX) {
 			printf("Highest rule ID is already assigned, delete"
 			       " it first");
-			rte_flow_destroy(port_id, flow, NULL);
 			return -ENOMEM;
 		}
 		id = port->flow_list->id + 1;
-	} else
-		id = 0;
+	}
 	pf = port_flow_new(attr, pattern, actions, &error);
-	if (!pf) {
-		rte_flow_destroy(port_id, flow, NULL);
+	if (!pf)
+		return port_flow_complain(&error);
+	update_age_action_context(actions, pf);
+	/* Poisoning to make sure PMDs update it in case of error. */
+	memset(&error, 0x22, sizeof(error));
+	flow = rte_flow_create(port_id, attr, pattern, actions, &error);
+	if (!flow) {
+		free(pf);
 		return port_flow_complain(&error);
 	}
 	pf->next = port->flow_list;
@@ -1497,6 +1647,7 @@ port_flow_query(portid_t port_id, uint32_t rule,
 	const char *name;
 	union {
 		struct rte_flow_query_count count;
+		struct rte_flow_action_rss rss_conf;
 	} query;
 	int ret;
 
@@ -1518,6 +1669,7 @@ port_flow_query(portid_t port_id, uint32_t rule,
 		return port_flow_complain(&error);
 	switch (action->type) {
 	case RTE_FLOW_ACTION_TYPE_COUNT:
+	case RTE_FLOW_ACTION_TYPE_RSS:
 		break;
 	default:
 		printf("Cannot query action type %d (%s)\n",
@@ -1542,12 +1694,82 @@ port_flow_query(portid_t port_id, uint32_t rule,
 		       query.count.hits,
 		       query.count.bytes);
 		break;
+	case RTE_FLOW_ACTION_TYPE_RSS:
+		rss_config_display(&query.rss_conf);
+		break;
 	default:
 		printf("Cannot display result for action type %d (%s)\n",
 		       action->type, name);
 		break;
 	}
 	return 0;
+}
+
+/** List simply and destroy all aged flows. */
+void
+port_flow_aged(portid_t port_id, uint8_t destroy)
+{
+	void **contexts;
+	int nb_context, total = 0, idx;
+	struct rte_flow_error error;
+	struct port_flow *pf;
+
+	if (port_id_is_invalid(port_id, ENABLED_WARN) ||
+	    port_id == (portid_t)RTE_PORT_ALL)
+		return;
+	total = rte_flow_get_aged_flows(port_id, NULL, 0, &error);
+	printf("Port %u total aged flows: %d\n", port_id, total);
+	if (total < 0) {
+		port_flow_complain(&error);
+		return;
+	}
+	if (total == 0)
+		return;
+	contexts = malloc(sizeof(void *) * total);
+	if (contexts == NULL) {
+		printf("Cannot allocate contexts for aged flow\n");
+		return;
+	}
+	printf("ID\tGroup\tPrio\tAttr\n");
+	nb_context = rte_flow_get_aged_flows(port_id, contexts, total, &error);
+	if (nb_context != total) {
+		printf("Port:%d get aged flows count(%d) != total(%d)\n",
+			port_id, nb_context, total);
+		free(contexts);
+		return;
+	}
+	for (idx = 0; idx < nb_context; idx++) {
+		pf = (struct port_flow *)contexts[idx];
+		if (!pf) {
+			printf("Error: get Null context in port %u\n", port_id);
+			continue;
+		}
+		printf("%" PRIu32 "\t%" PRIu32 "\t%" PRIu32 "\t%c%c%c\t\n",
+		       pf->id,
+		       pf->rule.attr->group,
+		       pf->rule.attr->priority,
+		       pf->rule.attr->ingress ? 'i' : '-',
+		       pf->rule.attr->egress ? 'e' : '-',
+		       pf->rule.attr->transfer ? 't' : '-');
+	}
+	if (destroy) {
+		int ret;
+		uint32_t flow_id;
+
+		total = 0;
+		printf("\n");
+		for (idx = 0; idx < nb_context; idx++) {
+			pf = (struct port_flow *)contexts[idx];
+			if (!pf)
+				continue;
+			flow_id = pf->id;
+			ret = port_flow_destroy(port_id, 1, &flow_id);
+			if (!ret)
+				total++;
+		}
+		printf("%d flows be destroyed\n", total);
+	}
+	free(contexts);
 }
 
 /** List flow rules. */
@@ -2353,55 +2575,6 @@ icmp_echo_config_setup(void)
 	}
 }
 
-#if defined RTE_LIBRTE_PMD_SOFTNIC
-static void
-softnic_fwd_config_setup(void)
-{
-	struct rte_port *port;
-	portid_t pid, softnic_portid;
-	queueid_t i;
-	uint8_t softnic_enable = 0;
-
-	RTE_ETH_FOREACH_DEV(pid) {
-			port = &ports[pid];
-			const char *driver = port->dev_info.driver_name;
-
-			if (strcmp(driver, "net_softnic") == 0) {
-				softnic_portid = pid;
-				softnic_enable = 1;
-				break;
-			}
-	}
-
-	if (softnic_enable == 0) {
-		printf("Softnic mode not configured(%s)!\n", __func__);
-		return;
-	}
-
-	cur_fwd_config.nb_fwd_ports = 1;
-	cur_fwd_config.nb_fwd_streams = (streamid_t) nb_rxq;
-
-	/* Re-initialize forwarding streams */
-	init_fwd_streams();
-
-	/*
-	 * In the softnic forwarding test, the number of forwarding cores
-	 * is set to one and remaining are used for softnic packet processing.
-	 */
-	cur_fwd_config.nb_fwd_lcores = 1;
-	setup_fwd_config_of_each_lcore(&cur_fwd_config);
-
-	for (i = 0; i < cur_fwd_config.nb_fwd_streams; i++) {
-		fwd_streams[i]->rx_port   = softnic_portid;
-		fwd_streams[i]->rx_queue  = i;
-		fwd_streams[i]->tx_port   = softnic_portid;
-		fwd_streams[i]->tx_queue  = i;
-		fwd_streams[i]->peer_addr = fwd_streams[i]->tx_port;
-		fwd_streams[i]->retry_enabled = retry_enabled;
-	}
-}
-#endif
-
 void
 fwd_config_setup(void)
 {
@@ -2410,13 +2583,6 @@ fwd_config_setup(void)
 		icmp_echo_config_setup();
 		return;
 	}
-
-#if defined RTE_LIBRTE_PMD_SOFTNIC
-	if (strcmp(cur_fwd_eng->fwd_mode_name, "softnic") == 0) {
-		softnic_fwd_config_setup();
-		return;
-	}
-#endif
 
 	if ((nb_rxq > 1) && (nb_txq > 1)){
 		if (dcb_config)
@@ -2858,6 +3024,58 @@ set_tx_pkt_segments(unsigned *seg_lengths, unsigned nb_segs)
 
 	tx_pkt_length  = tx_pkt_len;
 	tx_pkt_nb_segs = (uint8_t) nb_segs;
+}
+
+void
+show_tx_pkt_times(void)
+{
+	printf("Interburst gap: %u\n", tx_pkt_times_inter);
+	printf("Intraburst gap: %u\n", tx_pkt_times_intra);
+}
+
+void
+set_tx_pkt_times(unsigned int *tx_times)
+{
+	uint16_t port_id;
+	int offload_found = 0;
+	int offset;
+	int flag;
+
+	static const struct rte_mbuf_dynfield desc_offs = {
+		.name = RTE_MBUF_DYNFIELD_TIMESTAMP_NAME,
+		.size = sizeof(uint64_t),
+		.align = __alignof__(uint64_t),
+	};
+	static const struct rte_mbuf_dynflag desc_flag = {
+		.name = RTE_MBUF_DYNFLAG_TX_TIMESTAMP_NAME,
+	};
+
+	RTE_ETH_FOREACH_DEV(port_id) {
+		struct rte_eth_dev_info dev_info = { 0 };
+		int ret;
+
+		ret = rte_eth_dev_info_get(port_id, &dev_info);
+		if (ret == 0 && dev_info.tx_offload_capa &
+				DEV_TX_OFFLOAD_SEND_ON_TIMESTAMP) {
+			offload_found = 1;
+			break;
+		}
+	}
+	if (!offload_found) {
+		printf("No device supporting Tx timestamp scheduling found, "
+		       "dynamic flag and field not registered\n");
+		return;
+	}
+	offset = rte_mbuf_dynfield_register(&desc_offs);
+	if (offset < 0 && rte_errno != EEXIST)
+		printf("Dynamic timestamp field registration error: %d",
+		       rte_errno);
+	flag = rte_mbuf_dynflag_register(&desc_flag);
+	if (flag < 0 && rte_errno != EEXIST)
+		printf("Dynamic timestamp flag registration error: %d",
+		       rte_errno);
+	tx_pkt_times_inter = tx_times[0];
+	tx_pkt_times_intra = tx_times[1];
 }
 
 void
@@ -3595,30 +3813,65 @@ print_fdir_flow_type(uint32_t flow_types_mask)
 	printf("\n");
 }
 
+static int
+get_fdir_info(portid_t port_id, struct rte_eth_fdir_info *fdir_info,
+		    struct rte_eth_fdir_stats *fdir_stat)
+{
+	int ret;
+
+	ret = rte_eth_dev_filter_supported(port_id, RTE_ETH_FILTER_FDIR);
+	if (!ret) {
+		rte_eth_dev_filter_ctrl(port_id, RTE_ETH_FILTER_FDIR,
+			       RTE_ETH_FILTER_INFO, fdir_info);
+		rte_eth_dev_filter_ctrl(port_id, RTE_ETH_FILTER_FDIR,
+			       RTE_ETH_FILTER_STATS, fdir_stat);
+		return 0;
+	}
+
+#ifdef RTE_LIBRTE_I40E_PMD
+	if (ret == -ENOTSUP) {
+		ret = rte_pmd_i40e_get_fdir_info(port_id, fdir_info);
+		if (!ret)
+			ret = rte_pmd_i40e_get_fdir_stats(port_id, fdir_stat);
+	}
+#endif
+#ifdef RTE_LIBRTE_IXGBE_PMD
+	if (ret == -ENOTSUP) {
+		ret = rte_pmd_ixgbe_get_fdir_info(port_id, fdir_info);
+		if (!ret)
+			ret = rte_pmd_ixgbe_get_fdir_stats(port_id, fdir_stat);
+	}
+#endif
+	switch (ret) {
+	case 0:
+		break;
+	case -ENOTSUP:
+		printf("\n FDIR is not supported on port %-2d\n",
+			port_id);
+		break;
+	default:
+		printf("programming error: (%s)\n", strerror(-ret));
+		break;
+	}
+	return ret;
+}
+
 void
 fdir_get_infos(portid_t port_id)
 {
 	struct rte_eth_fdir_stats fdir_stat;
 	struct rte_eth_fdir_info fdir_info;
-	int ret;
 
 	static const char *fdir_stats_border = "########################";
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN))
 		return;
-	ret = rte_eth_dev_filter_supported(port_id, RTE_ETH_FILTER_FDIR);
-	if (ret < 0) {
-		printf("\n FDIR is not supported on port %-2d\n",
-			port_id);
-		return;
-	}
 
 	memset(&fdir_info, 0, sizeof(fdir_info));
-	rte_eth_dev_filter_ctrl(port_id, RTE_ETH_FILTER_FDIR,
-			       RTE_ETH_FILTER_INFO, &fdir_info);
 	memset(&fdir_stat, 0, sizeof(fdir_stat));
-	rte_eth_dev_filter_ctrl(port_id, RTE_ETH_FILTER_FDIR,
-			       RTE_ETH_FILTER_STATS, &fdir_stat);
+	if (get_fdir_info(port_id, &fdir_info, &fdir_stat))
+		return;
+
 	printf("\n  %s FDIR infos for port %-2d     %s\n",
 	       fdir_stats_border, port_id, fdir_stats_border);
 	printf("  MODE: ");

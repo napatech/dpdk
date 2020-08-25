@@ -17,7 +17,7 @@ CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
 LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
 LDLIBS += -lrte_ethdev -lrte_net -lrte_kvargs
-LDLIBS += -lrte_bus_pci
+LDLIBS += -lrte_bus_pci -pthread
 
 EXPORT_MAP := rte_pmd_bnxt_version.map
 
@@ -38,15 +38,26 @@ SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += bnxt_txr.c
 SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += bnxt_vnic.c
 SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += bnxt_irq.c
 SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += bnxt_util.c
+SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += bnxt_reps.c
 SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += rte_pmd_bnxt.c
 ifeq ($(CONFIG_RTE_ARCH_X86), y)
 SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += bnxt_rxtx_vec_sse.c
+endif
+ifeq ($(CONFIG_RTE_ARCH_ARM64), y)
+SRCS-$(CONFIG_RTE_LIBRTE_BNXT_PMD) += bnxt_rxtx_vec_neon.c
+endif
+
+ifeq ($(CONFIG_RTE_LIBRTE_BNXT_PMD), y)
+CFLAGS += -I$(SRCDIR) -I$(SRCDIR)/tf_ulp -I$(SRCDIR)/tf_core -I$(SRCDIR)/hcapi
+include $(SRCDIR)/tf_ulp/Makefile
+include $(SRCDIR)/tf_core/Makefile
+include $(SRCDIR)/hcapi/Makefile
 endif
 
 #
 # Export include files
 #
 SYMLINK-y-include +=
-SYMLINK-$(CONFIG_RTE_LIBRTE_BNXT_PMD)-include := rte_pmd_bnxt.h
+SYMLINK-$(CONFIG_RTE_LIBRTE_BNXT_PMD)-include += rte_pmd_bnxt.h
 
 include $(RTE_SDK)/mk/rte.lib.mk

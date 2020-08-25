@@ -47,6 +47,7 @@ struct pmd_queue {
 
 struct pmd_internals {
 	struct rte_kni *kni;
+	uint16_t port_id;
 	int is_kni_started;
 
 	pthread_t thread;
@@ -67,7 +68,7 @@ static const struct rte_eth_link pmd_link = {
 };
 static int is_kni_initialized;
 
-static int eth_kni_logtype;
+RTE_LOG_REGISTER(eth_kni_logtype, pmd.net.kni, NOTICE);
 
 #define PMD_LOG(level, fmt, args...) \
 	rte_log(RTE_LOG_ ## level, eth_kni_logtype, \
@@ -78,8 +79,11 @@ eth_kni_rx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
 	struct pmd_queue *kni_q = q;
 	struct rte_kni *kni = kni_q->internals->kni;
 	uint16_t nb_pkts;
+	int i;
 
 	nb_pkts = rte_kni_rx_burst(kni, bufs, nb_bufs);
+	for (i = 0; i < nb_pkts; i++)
+		bufs[i]->port = kni_q->internals->port_id;
 
 	kni_q->rx.pkts += nb_pkts;
 
@@ -372,6 +376,7 @@ eth_kni_create(struct rte_vdev_device *vdev,
 		return NULL;
 
 	internals = eth_dev->data->dev_private;
+	internals->port_id = eth_dev->data->port_id;
 	data = eth_dev->data;
 	data->nb_rx_queues = 1;
 	data->nb_tx_queues = 1;
@@ -508,10 +513,3 @@ static struct rte_vdev_driver eth_kni_drv = {
 
 RTE_PMD_REGISTER_VDEV(net_kni, eth_kni_drv);
 RTE_PMD_REGISTER_PARAM_STRING(net_kni, ETH_KNI_NO_REQUEST_THREAD_ARG "=<int>");
-
-RTE_INIT(eth_kni_init_log)
-{
-	eth_kni_logtype = rte_log_register("pmd.net.kni");
-	if (eth_kni_logtype >= 0)
-		rte_log_set_level(eth_kni_logtype, RTE_LOG_NOTICE);
-}

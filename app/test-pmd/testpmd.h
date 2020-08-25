@@ -58,12 +58,6 @@ typedef uint16_t portid_t;
 typedef uint16_t queueid_t;
 typedef uint16_t streamid_t;
 
-#if defined RTE_LIBRTE_PMD_SOFTNIC
-#define SOFTNIC			1
-#else
-#define SOFTNIC			0
-#endif
-
 enum {
 	PORT_TOPOLOGY_PAIRED,
 	PORT_TOPOLOGY_CHAINED,
@@ -154,16 +148,6 @@ struct port_flow {
 	uint8_t data[]; /**< Storage for flow rule description */
 };
 
-#ifdef SOFTNIC
-/**
- * The data structure associate with softnic port
- */
-struct softnic_port {
-	uint32_t default_tm_hierarchy_enable; /**< default tm hierarchy */
-	struct fwd_lcore **fwd_lcore_arg; /**< softnic fwd core parameters */
-};
-#endif
-
 /**
  * The data structure associated with each port.
  */
@@ -196,9 +180,6 @@ struct rte_port {
 	struct port_flow        *flow_list; /**< Associated flows. */
 	const struct rte_eth_rxtx_callback *rx_dump_cb[RTE_MAX_QUEUES_PER_PORT+1];
 	const struct rte_eth_rxtx_callback *tx_dump_cb[RTE_MAX_QUEUES_PER_PORT+1];
-#ifdef SOFTNIC
-	struct softnic_port     softport;  /**< softnic params */
-#endif
 	/**< metadata value to insert in Tx packets. */
 	uint32_t		tx_metadata;
 	const struct rte_eth_rxtx_callback *tx_set_md_cb[RTE_MAX_QUEUES_PER_PORT+1];
@@ -266,9 +247,7 @@ extern struct fwd_engine tx_only_engine;
 extern struct fwd_engine csum_fwd_engine;
 extern struct fwd_engine icmp_echo_engine;
 extern struct fwd_engine noisy_vnf_engine;
-#ifdef SOFTNIC
-extern struct fwd_engine softnic_fwd_engine;
-#endif
+extern struct fwd_engine five_tuple_swap_fwd_engine;
 #ifdef RTE_LIBRTE_IEEE1588
 extern struct fwd_engine ieee1588_fwd_engine;
 #endif
@@ -442,6 +421,8 @@ extern struct rte_fdir_conf fdir_conf;
 extern uint16_t tx_pkt_length; /**< Length of TXONLY packet */
 extern uint16_t tx_pkt_seg_lengths[RTE_MAX_SEGS_PER_PKT]; /**< Seg. lengths */
 extern uint8_t  tx_pkt_nb_segs; /**< Number of segments in TX packets */
+extern uint32_t tx_pkt_times_intra;
+extern uint32_t tx_pkt_times_inter;
 
 enum tx_pkt_split {
 	TX_PKT_SPLIT_OFF,
@@ -602,6 +583,8 @@ struct mplsoudp_decap_conf {
 };
 extern struct mplsoudp_decap_conf mplsoudp_decap_conf;
 
+extern enum rte_eth_rx_mq_mode rx_mq_mode;
+
 static inline unsigned int
 lcore_num(void)
 {
@@ -747,12 +730,15 @@ int port_flow_create(portid_t port_id,
 		     const struct rte_flow_attr *attr,
 		     const struct rte_flow_item *pattern,
 		     const struct rte_flow_action *actions);
+void update_age_action_context(const struct rte_flow_action *actions,
+		     struct port_flow *pf);
 int port_flow_destroy(portid_t port_id, uint32_t n, const uint32_t *rule);
 int port_flow_flush(portid_t port_id);
 int port_flow_dump(portid_t port_id, const char *file_name);
 int port_flow_query(portid_t port_id, uint32_t rule,
 		    const struct rte_flow_action *action);
 void port_flow_list(portid_t port_id, uint32_t n, const uint32_t *group);
+void port_flow_aged(portid_t port_id, uint8_t destroy);
 int port_flow_isolate(portid_t port_id, int set);
 
 void rx_ring_desc_display(portid_t port_id, queueid_t rxq_id, uint16_t rxd_id);
@@ -789,6 +775,8 @@ void set_xstats_hide_zero(uint8_t on_off);
 void set_verbose_level(uint16_t vb_level);
 void set_tx_pkt_segments(unsigned *seg_lengths, unsigned nb_segs);
 void show_tx_pkt_segments(void);
+void set_tx_pkt_times(unsigned int *tx_times);
+void show_tx_pkt_times(void);
 void set_tx_pkt_split(const char *name);
 void set_nb_pkt_per_burst(uint16_t pkt_burst);
 char *list_pkt_forwarding_modes(void);
@@ -878,6 +866,8 @@ queueid_t get_allowed_max_nb_rxq(portid_t *pid);
 int check_nb_rxq(queueid_t rxq);
 queueid_t get_allowed_max_nb_txq(portid_t *pid);
 int check_nb_txq(queueid_t txq);
+int check_nb_rxd(queueid_t rxd);
+int check_nb_txd(queueid_t txd);
 queueid_t get_allowed_max_nb_hairpinq(portid_t *pid);
 int check_nb_hairpinq(queueid_t hairpinq);
 

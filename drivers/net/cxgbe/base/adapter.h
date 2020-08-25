@@ -55,6 +55,12 @@ struct port_info {
 	u8     rss_mode;                /* rss mode */
 	u16    rss_size;                /* size of VI's RSS table slice */
 	u64    rss_hf;			/* RSS Hash Function */
+
+	/* viid fields either returned by fw
+	 * or decoded by parsing viid by driver.
+	 */
+	u8 vin;
+	u8 vivld;
 };
 
 /* Enable or disable autonegotiation.  If this is set to enable,
@@ -303,6 +309,8 @@ struct adapter_devargs {
 	bool keep_ovlan;
 	bool force_link_up;
 	bool tx_mode_latency;
+	u32 filtermode;
+	u32 filtermask;
 };
 
 struct adapter {
@@ -336,6 +344,7 @@ struct adapter {
 	unsigned int l2t_end;     /* Layer 2 table end */
 	struct clip_tbl *clipt;   /* CLIP table */
 	struct l2t_data *l2t;     /* Layer 2 table */
+	struct smt_data *smt;     /* Source mac table */
 	struct mpstcam_table *mpstcam;
 
 	struct tid_info tids;     /* Info used to access TID related tables */

@@ -236,23 +236,12 @@ _ice_rx_queue_release_mbufs(struct ice_rx_queue *rxq)
 			rxq->sw_ring[i].mbuf = NULL;
 		}
 	}
-#ifdef RTE_LIBRTE_ICE_RX_ALLOW_BULK_ALLOC
-		if (rxq->rx_nb_avail == 0)
-			return;
-		for (i = 0; i < rxq->rx_nb_avail; i++) {
-			struct rte_mbuf *mbuf;
+	if (rxq->rx_nb_avail == 0)
+		return;
+	for (i = 0; i < rxq->rx_nb_avail; i++)
+		rte_pktmbuf_free_seg(rxq->rx_stage[rxq->rx_next_avail + i]);
 
-			mbuf = rxq->rx_stage[rxq->rx_next_avail + i];
-			rte_pktmbuf_free_seg(mbuf);
-		}
-		rxq->rx_nb_avail = 0;
-#endif /* RTE_LIBRTE_ICE_RX_ALLOW_BULK_ALLOC */
-}
-
-static void
-ice_rx_queue_release_mbufs(struct ice_rx_queue *rxq)
-{
-	rxq->rx_rel_mbufs(rxq);
+	rxq->rx_nb_avail = 0;
 }
 
 /* turn on or off rx queue
@@ -309,16 +298,10 @@ ice_switch_rx_queue(struct ice_hw *hw, uint16_t q_idx, bool on)
 }
 
 static inline int
-#ifdef RTE_LIBRTE_ICE_RX_ALLOW_BULK_ALLOC
 ice_check_rx_burst_bulk_alloc_preconditions(struct ice_rx_queue *rxq)
-#else
-ice_check_rx_burst_bulk_alloc_preconditions
-	(__rte_unused struct ice_rx_queue *rxq)
-#endif
 {
 	int ret = 0;
 
-#ifdef RTE_LIBRTE_ICE_RX_ALLOW_BULK_ALLOC
 	if (!(rxq->rx_free_thresh >= ICE_RX_MAX_BURST)) {
 		PMD_INIT_LOG(DEBUG, "Rx Burst Bulk Alloc Preconditions: "
 			     "rxq->rx_free_thresh=%d, "
@@ -338,9 +321,6 @@ ice_check_rx_burst_bulk_alloc_preconditions
 			     rxq->nb_rx_desc, rxq->rx_free_thresh);
 		ret = -EINVAL;
 	}
-#else
-	ret = -EINVAL;
-#endif
 
 	return ret;
 }
@@ -357,17 +337,11 @@ ice_reset_rx_queue(struct ice_rx_queue *rxq)
 		return;
 	}
 
-#ifdef RTE_LIBRTE_ICE_RX_ALLOW_BULK_ALLOC
-	if (ice_check_rx_burst_bulk_alloc_preconditions(rxq) == 0)
-		len = (uint16_t)(rxq->nb_rx_desc + ICE_RX_MAX_BURST);
-	else
-#endif /* RTE_LIBRTE_ICE_RX_ALLOW_BULK_ALLOC */
-		len = rxq->nb_rx_desc;
+	len = (uint16_t)(rxq->nb_rx_desc + ICE_RX_MAX_BURST);
 
 	for (i = 0; i < len * sizeof(union ice_rx_flex_desc); i++)
 		((volatile char *)rxq->rx_ring)[i] = 0;
 
-#ifdef RTE_LIBRTE_ICE_RX_ALLOW_BULK_ALLOC
 	memset(&rxq->fake_mbuf, 0x0, sizeof(rxq->fake_mbuf));
 	for (i = 0; i < ICE_RX_MAX_BURST; ++i)
 		rxq->sw_ring[rxq->nb_rx_desc + i].mbuf = &rxq->fake_mbuf;
@@ -375,7 +349,6 @@ ice_reset_rx_queue(struct ice_rx_queue *rxq)
 	rxq->rx_nb_avail = 0;
 	rxq->rx_next_avail = 0;
 	rxq->rx_free_trigger = (uint16_t)(rxq->rx_free_thresh - 1);
-#endif /* RTE_LIBRTE_ICE_RX_ALLOW_BULK_ALLOC */
 
 	rxq->rx_tail = 0;
 	rxq->nb_rx_hold = 0;
@@ -429,7 +402,7 @@ ice_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 		PMD_DRV_LOG(ERR, "Failed to switch RX queue %u on",
 			    rx_queue_id);
 
-		ice_rx_queue_release_mbufs(rxq);
+		rxq->rx_rel_mbufs(rxq);
 		ice_reset_rx_queue(rxq);
 		return -EINVAL;
 	}
@@ -456,7 +429,7 @@ ice_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 				    rx_queue_id);
 			return -EINVAL;
 		}
-		ice_rx_queue_release_mbufs(rxq);
+		rxq->rx_rel_mbufs(rxq);
 		ice_reset_rx_queue(rxq);
 		dev->data->rx_queue_state[rx_queue_id] =
 			RTE_ETH_QUEUE_STATE_STOPPED;
@@ -508,7 +481,7 @@ ice_tx_queue_start(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 	tx_ctx.tso_qnum = txq->reg_idx; /* index for tso state structure */
 	tx_ctx.legacy_int = 1; /* Legacy or Advanced Host Interface */
 
-	ice_set_ctx((uint8_t *)&tx_ctx, txq_elem.txqs[0].txq_ctx,
+	ice_set_ctx(hw, (uint8_t *)&tx_ctx, txq_elem.txqs[0].txq_ctx,
 		    ice_tlan_ctx_info);
 
 	txq->qtx_tail = hw->hw_addr + QTX_COMM_DBELL(txq->reg_idx);
@@ -680,7 +653,7 @@ ice_fdir_tx_queue_start(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 	tx_ctx.tso_qnum = txq->reg_idx; /* index for tso state structure */
 	tx_ctx.legacy_int = 1; /* Legacy or Advanced Host Interface */
 
-	ice_set_ctx((uint8_t *)&tx_ctx, txq_elem.txqs[0].txq_ctx,
+	ice_set_ctx(hw, (uint8_t *)&tx_ctx, txq_elem.txqs[0].txq_ctx,
 		    ice_tlan_ctx_info);
 
 	txq->qtx_tail = hw->hw_addr + QTX_COMM_DBELL(txq->reg_idx);
@@ -718,11 +691,6 @@ _ice_tx_queue_release_mbufs(struct ice_tx_queue *txq)
 			txq->sw_ring[i].mbuf = NULL;
 		}
 	}
-}
-static void
-ice_tx_queue_release_mbufs(struct ice_tx_queue *txq)
-{
-	txq->tx_rel_mbufs(txq);
 }
 
 static void
@@ -799,7 +767,7 @@ ice_tx_queue_stop(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 		return -EINVAL;
 	}
 
-	ice_tx_queue_release_mbufs(txq);
+	txq->tx_rel_mbufs(txq);
 	ice_reset_tx_queue(txq);
 	dev->data->tx_queue_state[tx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
 
@@ -822,7 +790,7 @@ ice_fdir_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 			    rx_queue_id);
 		return -EINVAL;
 	}
-	ice_rx_queue_release_mbufs(rxq);
+	rxq->rx_rel_mbufs(rxq);
 
 	return 0;
 }
@@ -858,7 +826,7 @@ ice_fdir_tx_queue_stop(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 		return -EINVAL;
 	}
 
-	ice_tx_queue_release_mbufs(txq);
+	txq->tx_rel_mbufs(txq);
 
 	return 0;
 }
@@ -926,13 +894,11 @@ ice_rx_queue_setup(struct rte_eth_dev *dev,
 	/* Allocate the maximun number of RX ring hardware descriptor. */
 	len = ICE_MAX_RING_DESC;
 
-#ifdef RTE_LIBRTE_ICE_RX_ALLOW_BULK_ALLOC
 	/**
 	 * Allocating a little more memory because vectorized/bulk_alloc Rx
 	 * functions doesn't check boundaries each time.
 	 */
 	len += ICE_RX_MAX_BURST;
-#endif
 
 	/* Allocate the maximum number of RX ring hardware descriptor. */
 	ring_size = sizeof(union ice_rx_flex_desc) * len;
@@ -952,11 +918,8 @@ ice_rx_queue_setup(struct rte_eth_dev *dev,
 	rxq->rx_ring_dma = rz->iova;
 	rxq->rx_ring = rz->addr;
 
-#ifdef RTE_LIBRTE_ICE_RX_ALLOW_BULK_ALLOC
+	/* always reserve more for bulk alloc */
 	len = (uint16_t)(nb_desc + ICE_RX_MAX_BURST);
-#else
-	len = nb_desc;
-#endif
 
 	/* Allocate the software ring. */
 	rxq->sw_ring = rte_zmalloc_socket(NULL,
@@ -977,17 +940,14 @@ ice_rx_queue_setup(struct rte_eth_dev *dev,
 	use_def_burst_func = ice_check_rx_burst_bulk_alloc_preconditions(rxq);
 
 	if (!use_def_burst_func) {
-#ifdef RTE_LIBRTE_ICE_RX_ALLOW_BULK_ALLOC
 		PMD_INIT_LOG(DEBUG, "Rx Burst Bulk Alloc Preconditions are "
 			     "satisfied. Rx Burst Bulk Alloc function will be "
 			     "used on port=%d, queue=%d.",
 			     rxq->port_id, rxq->queue_id);
-#endif /* RTE_LIBRTE_ICE_RX_ALLOW_BULK_ALLOC */
 	} else {
 		PMD_INIT_LOG(DEBUG, "Rx Burst Bulk Alloc Preconditions are "
-			     "not satisfied, Scattered Rx is requested, "
-			     "or RTE_LIBRTE_ICE_RX_ALLOW_BULK_ALLOC is "
-			     "not enabled on port=%d, queue=%d.",
+			     "not satisfied, Scattered Rx is requested. "
+			     "on port=%d, queue=%d.",
 			     rxq->port_id, rxq->queue_id);
 		ad->rx_bulk_alloc_allowed = false;
 	}
@@ -1005,7 +965,7 @@ ice_rx_queue_release(void *rxq)
 		return;
 	}
 
-	ice_rx_queue_release_mbufs(q);
+	q->rx_rel_mbufs(q);
 	rte_free(q->sw_ring);
 	rte_free(q);
 }
@@ -1201,7 +1161,7 @@ ice_tx_queue_release(void *txq)
 		return;
 	}
 
-	ice_tx_queue_release_mbufs(q);
+	q->tx_rel_mbufs(q);
 	rte_free(q->sw_ring);
 	rte_free(q);
 }
@@ -1399,7 +1359,6 @@ ice_rxd_to_pkt_fields(struct rte_mbuf *mb,
 #endif
 }
 
-#ifdef RTE_LIBRTE_ICE_RX_ALLOW_BULK_ALLOC
 #define ICE_LOOK_AHEAD 8
 #if (ICE_LOOK_AHEAD != 8)
 #error "PMD ICE: ICE_LOOK_AHEAD must be 8\n"
@@ -1620,15 +1579,6 @@ ice_recv_pkts_bulk_alloc(void *rx_queue,
 
 	return nb_rx;
 }
-#else
-static uint16_t
-ice_recv_pkts_bulk_alloc(void __rte_unused *rx_queue,
-			 struct rte_mbuf __rte_unused **rx_pkts,
-			 uint16_t __rte_unused nb_pkts)
-{
-	return 0;
-}
-#endif /* RTE_LIBRTE_ICE_RX_ALLOW_BULK_ALLOC */
 
 static uint16_t
 ice_recv_scattered_pkts(void *rx_queue,
@@ -1872,9 +1822,7 @@ ice_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 		ptypes = ptypes_os;
 
 	if (dev->rx_pkt_burst == ice_recv_pkts ||
-#ifdef RTE_LIBRTE_ICE_RX_ALLOW_BULK_ALLOC
 	    dev->rx_pkt_burst == ice_recv_pkts_bulk_alloc ||
-#endif
 	    dev->rx_pkt_burst == ice_recv_scattered_pkts)
 		return ptypes;
 
@@ -1946,24 +1894,6 @@ ice_tx_descriptor_status(void *tx_queue, uint16_t offset)
 }
 
 void
-ice_clear_queues(struct rte_eth_dev *dev)
-{
-	uint16_t i;
-
-	PMD_INIT_FUNC_TRACE();
-
-	for (i = 0; i < dev->data->nb_tx_queues; i++) {
-		ice_tx_queue_release_mbufs(dev->data->tx_queues[i]);
-		ice_reset_tx_queue(dev->data->tx_queues[i]);
-	}
-
-	for (i = 0; i < dev->data->nb_rx_queues; i++) {
-		ice_rx_queue_release_mbufs(dev->data->rx_queues[i]);
-		ice_reset_rx_queue(dev->data->rx_queues[i]);
-	}
-}
-
-void
 ice_free_queues(struct rte_eth_dev *dev)
 {
 	uint16_t i;
@@ -1975,6 +1905,7 @@ ice_free_queues(struct rte_eth_dev *dev)
 			continue;
 		ice_rx_queue_release(dev->data->rx_queues[i]);
 		dev->data->rx_queues[i] = NULL;
+		rte_eth_dma_zone_free(dev, "rx_ring", i);
 	}
 	dev->data->nb_rx_queues = 0;
 
@@ -1983,6 +1914,7 @@ ice_free_queues(struct rte_eth_dev *dev)
 			continue;
 		ice_tx_queue_release(dev->data->tx_queues[i]);
 		dev->data->tx_queues[i] = NULL;
+		rte_eth_dma_zone_free(dev, "tx_ring", i);
 	}
 	dev->data->nb_tx_queues = 0;
 }
@@ -2477,6 +2409,8 @@ ice_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		tx_pkt = *tx_pkts++;
 
 		td_cmd = 0;
+		td_tag = 0;
+		td_offset = 0;
 		ol_flags = tx_pkt->ol_flags;
 		tx_offload.l2_len = tx_pkt->l2_len;
 		tx_offload.l3_len = tx_pkt->l3_len;
@@ -2535,10 +2469,9 @@ ice_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 						   &cd_tunneling_params);
 
 		/* Enable checksum offloading */
-		if (ol_flags & ICE_TX_CKSUM_OFFLOAD_MASK) {
+		if (ol_flags & ICE_TX_CKSUM_OFFLOAD_MASK)
 			ice_txd_enable_checksum(ol_flags, &td_cmd,
 						&td_offset, tx_offload);
-		}
 
 		if (nb_ctx) {
 			/* Setup TX context descriptor if required */
@@ -2655,7 +2588,7 @@ end_of_tx:
 	return nb_tx;
 }
 
-static inline int __attribute__((always_inline))
+static __rte_always_inline int
 ice_tx_free_bufs(struct ice_tx_queue *txq)
 {
 	struct ice_tx_entry *txep;
@@ -2944,7 +2877,7 @@ ice_xmit_pkts_simple(void *tx_queue,
 	return nb_tx;
 }
 
-void __attribute__((cold))
+void __rte_cold
 ice_set_rx_function(struct rte_eth_dev *dev)
 {
 	PMD_INIT_FUNC_TRACE();
@@ -3054,7 +2987,7 @@ ice_rx_burst_mode_get(struct rte_eth_dev *dev, __rte_unused uint16_t queue_id,
 	return ret;
 }
 
-void __attribute__((cold))
+void __rte_cold
 ice_set_tx_function_flag(struct rte_eth_dev *dev, struct ice_tx_queue *txq)
 {
 	struct ice_adapter *ad =
@@ -3123,7 +3056,7 @@ ice_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 	return i;
 }
 
-void __attribute__((cold))
+void __rte_cold
 ice_set_tx_function(struct rte_eth_dev *dev)
 {
 	struct ice_adapter *ad =
@@ -3752,7 +3685,7 @@ ice_get_default_pkt_type(uint16_t ptype)
 	return type_table[ptype];
 }
 
-void __attribute__((cold))
+void __rte_cold
 ice_set_default_ptype_table(struct rte_eth_dev *dev)
 {
 	struct ice_adapter *ad =

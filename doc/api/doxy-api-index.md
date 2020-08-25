@@ -1,4 +1,4 @@
-API {#index}
+API
 ===
 
 <!--
@@ -20,6 +20,7 @@ The public API headers are grouped by topics:
   [security]           (@ref rte_security.h),
   [compressdev]        (@ref rte_compressdev.h),
   [compress]           (@ref rte_comp.h),
+  [regexdev]           (@ref rte_regexdev.h),
   [eventdev]           (@ref rte_eventdev.h),
   [event_eth_rx_adapter]   (@ref rte_event_eth_rx_adapter.h),
   [event_eth_tx_adapter]   (@ref rte_event_eth_tx_adapter.h),
@@ -107,14 +108,20 @@ The public API headers are grouped by topics:
   [GRO]                (@ref rte_gro.h),
   [GSO]                (@ref rte_gso.h),
   [frag/reass]         (@ref rte_ip_frag.h),
-  [LPM IPv4 route]     (@ref rte_lpm.h),
-  [LPM IPv6 route]     (@ref rte_lpm6.h),
   [VXLAN]              (@ref rte_vxlan.h)
 
 - **QoS**:
   [metering]           (@ref rte_meter.h),
   [scheduler]          (@ref rte_sched.h),
   [RED congestion]     (@ref rte_red.h)
+
+- **routing**:
+  [LPM IPv4 route]     (@ref rte_lpm.h),
+  [LPM IPv6 route]     (@ref rte_lpm6.h),
+  [RIB IPv4]           (@ref rte_rib.h),
+  [RIB IPv6]           (@ref rte_rib6.h),
+  [FIB IPv4]           (@ref rte_fib.h),
+  [FIB IPv6]           (@ref rte_fib6.h)
 
 - **hashes**:
   [hash]               (@ref rte_hash.h),
@@ -159,8 +166,14 @@ The public API headers are grouped by topics:
   * [pipeline]         (@ref rte_pipeline.h)
     [port_in_action]   (@ref rte_port_in_action.h)
     [table_action]     (@ref rte_table_action.h)
+  * [graph]            (@ref rte_graph.h):
+    [graph_worker]     (@ref rte_graph_worker.h)
+  * graph_nodes:
+    [eth_node]         (@ref rte_node_eth_api.h),
+    [ip4_node]         (@ref rte_node_ip4_api.h)
 
 - **basic**:
+  [bitops]             (@ref rte_bitops.h),
   [approx fraction]    (@ref rte_approx.h),
   [random]             (@ref rte_random.h),
   [config file]        (@ref rte_cfgfile.h),
@@ -174,7 +187,9 @@ The public API headers are grouped by topics:
   [hexdump]            (@ref rte_hexdump.h),
   [debug]              (@ref rte_debug.h),
   [log]                (@ref rte_log.h),
-  [errno]              (@ref rte_errno.h)
+  [errno]              (@ref rte_errno.h),
+  [trace]              (@ref rte_trace.h),
+  [trace_point]        (@ref rte_trace_point.h)
 
 - **misc**:
   [EAL config]         (@ref rte_eal.h),

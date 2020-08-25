@@ -18,8 +18,11 @@
 
 #define ICE_FDIR_MAX_QREGION_SIZE	128
 
+#define ICE_FDIR_INSET_ETH (\
+	ICE_INSET_DMAC | ICE_INSET_SMAC | ICE_INSET_ETHERTYPE)
+
 #define ICE_FDIR_INSET_ETH_IPV4 (\
-	ICE_INSET_DMAC | \
+	ICE_FDIR_INSET_ETH | \
 	ICE_INSET_IPV4_SRC | ICE_INSET_IPV4_DST | ICE_INSET_IPV4_TOS | \
 	ICE_INSET_IPV4_TTL | ICE_INSET_IPV4_PROTO)
 
@@ -67,11 +70,18 @@
 	ICE_FDIR_INSET_VXLAN_IPV4 | \
 	ICE_INSET_TUN_SCTP_SRC_PORT | ICE_INSET_TUN_SCTP_DST_PORT)
 
-#define ICE_FDIR_INSET_GTPU (\
+#define ICE_FDIR_INSET_IPV4_GTPU (\
 	ICE_INSET_IPV4_SRC | ICE_INSET_IPV4_DST | ICE_INSET_GTPU_TEID)
 
-#define ICE_FDIR_INSET_GTPU_EH (\
+#define ICE_FDIR_INSET_IPV4_GTPU_EH (\
 	ICE_INSET_IPV4_SRC | ICE_INSET_IPV4_DST | \
+	ICE_INSET_GTPU_TEID | ICE_INSET_GTPU_QFI)
+
+#define ICE_FDIR_INSET_IPV6_GTPU (\
+	ICE_INSET_IPV6_SRC | ICE_INSET_IPV6_DST | ICE_INSET_GTPU_TEID)
+
+#define ICE_FDIR_INSET_IPV6_GTPU_EH (\
+	ICE_INSET_IPV6_SRC | ICE_INSET_IPV6_DST | \
 	ICE_INSET_GTPU_TEID | ICE_INSET_GTPU_QFI)
 
 static struct ice_pattern_match_item ice_fdir_pattern_os[] = {
@@ -102,6 +112,7 @@ static struct ice_pattern_match_item ice_fdir_pattern_os[] = {
 };
 
 static struct ice_pattern_match_item ice_fdir_pattern_comms[] = {
+	{pattern_ethertype,	       ICE_FDIR_INSET_ETH,		     ICE_INSET_NONE},
 	{pattern_eth_ipv4,             ICE_FDIR_INSET_ETH_IPV4,              ICE_INSET_NONE},
 	{pattern_eth_ipv4_udp,         ICE_FDIR_INSET_ETH_IPV4_UDP,          ICE_INSET_NONE},
 	{pattern_eth_ipv4_tcp,         ICE_FDIR_INSET_ETH_IPV4_TCP,          ICE_INSET_NONE},
@@ -126,8 +137,10 @@ static struct ice_pattern_match_item ice_fdir_pattern_comms[] = {
 				       ICE_FDIR_INSET_VXLAN_IPV4_TCP,        ICE_INSET_NONE},
 	{pattern_eth_ipv4_udp_vxlan_eth_ipv4_sctp,
 				       ICE_FDIR_INSET_VXLAN_IPV4_SCTP,       ICE_INSET_NONE},
-	{pattern_eth_ipv4_gtpu,	       ICE_FDIR_INSET_GTPU,                  ICE_INSET_NONE},
-	{pattern_eth_ipv4_gtpu_eh,     ICE_FDIR_INSET_GTPU_EH,               ICE_INSET_NONE},
+	{pattern_eth_ipv4_gtpu,	       ICE_FDIR_INSET_IPV4_GTPU,             ICE_INSET_NONE},
+	{pattern_eth_ipv4_gtpu_eh,     ICE_FDIR_INSET_IPV4_GTPU_EH,          ICE_INSET_NONE},
+	{pattern_eth_ipv6_gtpu,	       ICE_FDIR_INSET_IPV6_GTPU,             ICE_INSET_NONE},
+	{pattern_eth_ipv6_gtpu_eh,     ICE_FDIR_INSET_IPV6_GTPU_EH,          ICE_INSET_NONE},
 };
 
 static struct ice_flow_parser ice_fdir_parser_os;
@@ -584,7 +597,7 @@ ice_fdir_prof_rm(struct ice_pf *pf, enum ice_fltr_ptype ptype, bool is_tunnel)
 						     hw_prof->vsi_h[i]);
 			ice_rem_prof_id_flow(hw, ICE_BLK_FD,
 					     vsi_num, ptype);
-			ice_flow_rem_entry(hw,
+			ice_flow_rem_entry(hw, ICE_BLK_FD,
 					   hw_prof->entry_h[i][is_tunnel]);
 			hw_prof->entry_h[i][is_tunnel] = 0;
 		}
@@ -778,6 +791,21 @@ ice_fdir_cross_prof_conflict(struct ice_pf *pf,
 			(pf, cflct_ptype, is_tunnel))
 			goto err;
 		break;
+	/* IPv6 GTPU */
+	case ICE_FLTR_PTYPE_NONF_IPV6_GTPU_IPV6_OTHER:
+		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV6_GTPU_IPV6_OTHER;
+		if (!ice_fdir_prof_resolve_conflict
+			(pf, cflct_ptype, is_tunnel))
+			goto err;
+		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV6_GTPU_IPV6_OTHER;
+		if (!ice_fdir_prof_resolve_conflict
+			(pf, cflct_ptype, is_tunnel))
+			goto err;
+		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV6_GTPU_IPV6_OTHER;
+		if (!ice_fdir_prof_resolve_conflict
+			(pf, cflct_ptype, is_tunnel))
+			goto err;
+		break;
 	/* IPv6 */
 	case ICE_FLTR_PTYPE_NONF_IPV6_UDP:
 	case ICE_FLTR_PTYPE_NONF_IPV6_TCP:
@@ -876,7 +904,7 @@ ice_fdir_hw_tbl_conf(struct ice_pf *pf, struct ice_vsi *vsi,
 err_add_entry:
 	vsi_num = ice_get_hw_vsi_num(hw, vsi->idx);
 	ice_rem_prof_id_flow(hw, ICE_BLK_FD, vsi_num, prof_id);
-	ice_flow_rem_entry(hw, entry_1);
+	ice_flow_rem_entry(hw, ICE_BLK_FD, entry_1);
 err_add_prof:
 	ice_flow_rem_prof(hw, ICE_BLK_FD, prof_id);
 
@@ -894,6 +922,7 @@ ice_fdir_input_set_parse(uint64_t inset, enum ice_flow_field *field)
 	};
 	static const struct ice_inset_map ice_inset_map[] = {
 		{ICE_INSET_DMAC, ICE_FLOW_FIELD_IDX_ETH_DA},
+		{ICE_INSET_ETHERTYPE, ICE_FLOW_FIELD_IDX_ETH_TYPE},
 		{ICE_INSET_IPV4_SRC, ICE_FLOW_FIELD_IDX_IPV4_SA},
 		{ICE_INSET_IPV4_DST, ICE_FLOW_FIELD_IDX_IPV4_DA},
 		{ICE_INSET_IPV4_TOS, ICE_FLOW_FIELD_IDX_IPV4_DSCP},
@@ -956,33 +985,41 @@ ice_fdir_input_set_conf(struct ice_pf *pf, enum ice_fltr_ptype flow,
 	switch (flow) {
 	case ICE_FLTR_PTYPE_NONF_IPV4_UDP:
 		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_UDP |
-				  ICE_FLOW_SEG_HDR_IPV4);
+				  ICE_FLOW_SEG_HDR_IPV4 |
+				  ICE_FLOW_SEG_HDR_IPV_OTHER);
 		break;
 	case ICE_FLTR_PTYPE_NONF_IPV4_TCP:
 		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_TCP |
-				  ICE_FLOW_SEG_HDR_IPV4);
+				  ICE_FLOW_SEG_HDR_IPV4 |
+				  ICE_FLOW_SEG_HDR_IPV_OTHER);
 		break;
 	case ICE_FLTR_PTYPE_NONF_IPV4_SCTP:
 		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_SCTP |
-				  ICE_FLOW_SEG_HDR_IPV4);
+				  ICE_FLOW_SEG_HDR_IPV4 |
+				  ICE_FLOW_SEG_HDR_IPV_OTHER);
 		break;
 	case ICE_FLTR_PTYPE_NONF_IPV4_OTHER:
-		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_IPV4);
+		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_IPV4 |
+				  ICE_FLOW_SEG_HDR_IPV_OTHER);
 		break;
 	case ICE_FLTR_PTYPE_NONF_IPV6_UDP:
 		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_UDP |
-				  ICE_FLOW_SEG_HDR_IPV6);
+				  ICE_FLOW_SEG_HDR_IPV6 |
+				  ICE_FLOW_SEG_HDR_IPV_OTHER);
 		break;
 	case ICE_FLTR_PTYPE_NONF_IPV6_TCP:
 		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_TCP |
-				  ICE_FLOW_SEG_HDR_IPV6);
+				  ICE_FLOW_SEG_HDR_IPV6 |
+				  ICE_FLOW_SEG_HDR_IPV_OTHER);
 		break;
 	case ICE_FLTR_PTYPE_NONF_IPV6_SCTP:
 		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_SCTP |
-				  ICE_FLOW_SEG_HDR_IPV6);
+				  ICE_FLOW_SEG_HDR_IPV6 |
+				  ICE_FLOW_SEG_HDR_IPV_OTHER);
 		break;
 	case ICE_FLTR_PTYPE_NONF_IPV6_OTHER:
-		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_IPV6);
+		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_IPV6 |
+				  ICE_FLOW_SEG_HDR_IPV_OTHER);
 		break;
 	case ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_UDP:
 	case ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_TCP:
@@ -990,13 +1027,31 @@ ice_fdir_input_set_conf(struct ice_pf *pf, enum ice_fltr_ptype flow,
 	case ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_OTHER:
 		if (ttype == ICE_FDIR_TUNNEL_TYPE_GTPU)
 			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_GTPU_IP |
-					  ICE_FLOW_SEG_HDR_IPV4);
+					  ICE_FLOW_SEG_HDR_IPV4 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
 		else if (ttype == ICE_FDIR_TUNNEL_TYPE_GTPU_EH)
 			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_GTPU_EH |
 					  ICE_FLOW_SEG_HDR_GTPU_IP |
-					  ICE_FLOW_SEG_HDR_IPV4);
+					  ICE_FLOW_SEG_HDR_IPV4 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
 		else
 			PMD_DRV_LOG(ERR, "not supported tunnel type.");
+		break;
+	case ICE_FLTR_PTYPE_NONF_IPV6_GTPU_IPV6_OTHER:
+		if (ttype == ICE_FDIR_TUNNEL_TYPE_GTPU)
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_GTPU_IP |
+					  ICE_FLOW_SEG_HDR_IPV6 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		else if (ttype == ICE_FDIR_TUNNEL_TYPE_GTPU_EH)
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_GTPU_EH |
+					  ICE_FLOW_SEG_HDR_GTPU_IP |
+					  ICE_FLOW_SEG_HDR_IPV6 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		else
+			PMD_DRV_LOG(ERR, "not supported tunnel type.");
+		break;
+	case ICE_FLTR_PTYPE_NON_IP_L2:
+		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_ETH_NON_IP);
 		break;
 	default:
 		PMD_DRV_LOG(ERR, "not supported filter type.");
@@ -1061,6 +1116,9 @@ ice_fdir_init(struct ice_adapter *ad)
 	struct ice_flow_parser *parser;
 	int ret;
 
+	if (ad->hw.dcf_enabled)
+		return 0;
+
 	ret = ice_fdir_setup(pf);
 	if (ret)
 		return ret;
@@ -1080,6 +1138,9 @@ ice_fdir_uninit(struct ice_adapter *ad)
 {
 	struct ice_pf *pf = &ad->pf;
 	struct ice_flow_parser *parser;
+
+	if (ad->hw.dcf_enabled)
+		return;
 
 	if (ad->active_pkg_type == ICE_PKG_TYPE_COMMS)
 		parser = &ice_fdir_parser_comms;
@@ -1114,6 +1175,7 @@ ice_fdir_add_del_filter(struct ice_pf *pf,
 	filter->input.dest_vsi = pf->main_vsi->idx;
 
 	memset(&desc, 0, sizeof(desc));
+	filter->input.comp_report = ICE_FXD_FLTR_QW0_COMP_REPORT_SW;
 	ice_fdir_get_prgm_desc(hw, &filter->input, &desc, add);
 
 	is_tun = ice_fdir_is_tunnel_profile(filter->tunnel_type);
@@ -1533,7 +1595,7 @@ ice_fdir_parse_action(struct ice_adapter *ad,
 		}
 	}
 
-	if (dest_num == 0 || dest_num >= 2) {
+	if (dest_num >= 2) {
 		rte_flow_error_set(error, EINVAL,
 			   RTE_FLOW_ERROR_TYPE_ACTION, actions,
 			   "Unsupported action combination");
@@ -1553,6 +1615,18 @@ ice_fdir_parse_action(struct ice_adapter *ad,
 			   "Too many count actions");
 		return -rte_errno;
 	}
+
+	if (dest_num + mark_num + counter_num == 0) {
+		rte_flow_error_set(error, EINVAL,
+			   RTE_FLOW_ERROR_TYPE_ACTION, actions,
+			   "Empty action");
+		return -rte_errno;
+	}
+
+	/* set default action to PASSTHRU mode, in "mark/count only" case. */
+	if (dest_num == 0)
+		filter->input.dest_ctl =
+			ICE_FLTR_PRGM_DESC_DEST_DIRECT_PKT_OTHER;
 
 	return 0;
 }
@@ -1583,7 +1657,8 @@ ice_fdir_parse_pattern(__rte_unused struct ice_adapter *ad,
 		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
 	};
 	uint32_t vtc_flow_cpu;
-
+	uint16_t ether_type;
+	enum rte_flow_item_type next_type;
 
 	for (item = pattern; item->type != RTE_FLOW_ITEM_TYPE_END; item++) {
 		if (item->last) {
@@ -1599,29 +1674,43 @@ ice_fdir_parse_pattern(__rte_unused struct ice_adapter *ad,
 		case RTE_FLOW_ITEM_TYPE_ETH:
 			eth_spec = item->spec;
 			eth_mask = item->mask;
+			next_type = (item + 1)->type;
 
 			if (eth_spec && eth_mask) {
-				if (!rte_is_zero_ether_addr(&eth_spec->src) ||
-				    !rte_is_zero_ether_addr(&eth_mask->src)) {
-					rte_flow_error_set(error, EINVAL,
-						RTE_FLOW_ERROR_TYPE_ITEM,
-						item,
-						"Src mac not support");
-					return -rte_errno;
+				if (!rte_is_zero_ether_addr(&eth_mask->dst)) {
+					input_set |= ICE_INSET_DMAC;
+					rte_memcpy(&filter->input.ext_data.dst_mac,
+						   &eth_spec->dst,
+						   RTE_ETHER_ADDR_LEN);
 				}
 
-				if (!rte_is_broadcast_ether_addr(&eth_mask->dst)) {
-					rte_flow_error_set(error, EINVAL,
-						RTE_FLOW_ERROR_TYPE_ITEM,
-						item,
-						"Invalid mac addr mask");
-					return -rte_errno;
+				if (!rte_is_zero_ether_addr(&eth_mask->src)) {
+					input_set |= ICE_INSET_SMAC;
+					rte_memcpy(&filter->input.ext_data.src_mac,
+						   &eth_spec->src,
+						   RTE_ETHER_ADDR_LEN);
 				}
 
-				input_set |= ICE_INSET_DMAC;
-				rte_memcpy(&filter->input.ext_data.dst_mac,
-					   &eth_spec->dst,
-					   RTE_ETHER_ADDR_LEN);
+				/* Ignore this field except for ICE_FLTR_PTYPE_NON_IP_L2 */
+				if (eth_mask->type == RTE_BE16(0xffff) &&
+				    next_type == RTE_FLOW_ITEM_TYPE_END) {
+					input_set |= ICE_INSET_ETHERTYPE;
+					ether_type = rte_be_to_cpu_16(eth_spec->type);
+
+					if (ether_type == RTE_ETHER_TYPE_IPV4 ||
+					    ether_type == RTE_ETHER_TYPE_IPV6) {
+						rte_flow_error_set(error, EINVAL,
+								   RTE_FLOW_ERROR_TYPE_ITEM,
+								   item,
+								   "Unsupported ether_type.");
+						return -rte_errno;
+					}
+
+					rte_memcpy(&filter->input.ext_data.ether_type,
+						   &eth_spec->type,
+						   sizeof(eth_spec->type));
+					flow_type = ICE_FLTR_PTYPE_NON_IP_L2;
+				}
 			}
 			break;
 		case RTE_FLOW_ITEM_TYPE_IPV4:
@@ -1658,9 +1747,9 @@ ice_fdir_parse_pattern(__rte_unused struct ice_adapter *ad,
 					input_set |= ICE_INSET_IPV4_PROTO;
 
 				filter->input.ip.v4.dst_ip =
-					ipv4_spec->hdr.src_addr;
-				filter->input.ip.v4.src_ip =
 					ipv4_spec->hdr.dst_addr;
+				filter->input.ip.v4.src_ip =
+					ipv4_spec->hdr.src_addr;
 				filter->input.ip.v4.tos =
 					ipv4_spec->hdr.type_of_service;
 				filter->input.ip.v4.ttl =
@@ -1705,9 +1794,9 @@ ice_fdir_parse_pattern(__rte_unused struct ice_adapter *ad,
 					input_set |= ICE_INSET_IPV6_HOP_LIMIT;
 
 				rte_memcpy(filter->input.ip.v6.dst_ip,
-					   ipv6_spec->hdr.src_addr, 16);
-				rte_memcpy(filter->input.ip.v6.src_ip,
 					   ipv6_spec->hdr.dst_addr, 16);
+				rte_memcpy(filter->input.ip.v6.src_ip,
+					   ipv6_spec->hdr.src_addr, 16);
 
 				vtc_flow_cpu =
 				      rte_be_to_cpu_32(ipv6_spec->hdr.vtc_flow);
@@ -1759,14 +1848,14 @@ ice_fdir_parse_pattern(__rte_unused struct ice_adapter *ad,
 				/* Get filter info */
 				if (l3 == RTE_FLOW_ITEM_TYPE_IPV4) {
 					filter->input.ip.v4.dst_port =
-						tcp_spec->hdr.src_port;
-					filter->input.ip.v4.src_port =
 						tcp_spec->hdr.dst_port;
+					filter->input.ip.v4.src_port =
+						tcp_spec->hdr.src_port;
 				} else if (l3 == RTE_FLOW_ITEM_TYPE_IPV6) {
 					filter->input.ip.v6.dst_port =
-						tcp_spec->hdr.src_port;
-					filter->input.ip.v6.src_port =
 						tcp_spec->hdr.dst_port;
+					filter->input.ip.v6.src_port =
+						tcp_spec->hdr.src_port;
 				}
 			}
 			break;
@@ -1802,14 +1891,14 @@ ice_fdir_parse_pattern(__rte_unused struct ice_adapter *ad,
 				/* Get filter info */
 				if (l3 == RTE_FLOW_ITEM_TYPE_IPV4) {
 					filter->input.ip.v4.dst_port =
-						udp_spec->hdr.src_port;
-					filter->input.ip.v4.src_port =
 						udp_spec->hdr.dst_port;
+					filter->input.ip.v4.src_port =
+						udp_spec->hdr.src_port;
 				} else if (l3 == RTE_FLOW_ITEM_TYPE_IPV6) {
 					filter->input.ip.v6.src_port =
-						udp_spec->hdr.dst_port;
-					filter->input.ip.v6.dst_port =
 						udp_spec->hdr.src_port;
+					filter->input.ip.v6.dst_port =
+						udp_spec->hdr.dst_port;
 				}
 			}
 			break;
@@ -1844,14 +1933,14 @@ ice_fdir_parse_pattern(__rte_unused struct ice_adapter *ad,
 				/* Get filter info */
 				if (l3 == RTE_FLOW_ITEM_TYPE_IPV4) {
 					filter->input.ip.v4.dst_port =
-						sctp_spec->hdr.src_port;
-					filter->input.ip.v4.src_port =
 						sctp_spec->hdr.dst_port;
+					filter->input.ip.v4.src_port =
+						sctp_spec->hdr.src_port;
 				} else if (l3 == RTE_FLOW_ITEM_TYPE_IPV6) {
 					filter->input.ip.v6.dst_port =
-						sctp_spec->hdr.src_port;
-					filter->input.ip.v6.src_port =
 						sctp_spec->hdr.dst_port;
+					filter->input.ip.v6.src_port =
+						sctp_spec->hdr.src_port;
 				}
 			}
 			break;
@@ -1919,8 +2008,12 @@ ice_fdir_parse_pattern(__rte_unused struct ice_adapter *ad,
 	}
 
 	if (tunnel_type == ICE_FDIR_TUNNEL_TYPE_GTPU ||
-	    tunnel_type == ICE_FDIR_TUNNEL_TYPE_GTPU_EH)
-		flow_type = ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_OTHER;
+	    tunnel_type == ICE_FDIR_TUNNEL_TYPE_GTPU_EH) {
+		if (flow_type == ICE_FLTR_PTYPE_NONF_IPV4_UDP)
+			flow_type = ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_OTHER;
+		else
+			flow_type = ICE_FLTR_PTYPE_NONF_IPV6_GTPU_IPV6_OTHER;
+	}
 
 	filter->tunnel_type = tunnel_type;
 	filter->input.flow_type = flow_type;
@@ -1966,7 +2059,8 @@ ice_fdir_parse(struct ice_adapter *ad,
 	if (ret)
 		goto error;
 
-	*meta = filter;
+	if (meta)
+		*meta = filter;
 error:
 	rte_free(item);
 	return ret;

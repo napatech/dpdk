@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2016-2018 Solarflare Communications Inc.
- * All rights reserved.
+ * Copyright(c) 2019-2020 Xilinx, Inc.
+ * Copyright(c) 2016-2019 Solarflare Communications Inc.
  *
  * This software was jointly developed between OKTET Labs (under contract
  * for Solarflare) and Solarflare Communications, Inc.
@@ -242,6 +242,8 @@ struct sfc_adapter {
 	struct sfc_port			port;
 	struct sfc_filter		filter;
 
+	struct sfc_flow_list		flow_list;
+
 	unsigned int			rxq_max;
 	unsigned int			txq_max;
 
@@ -405,6 +407,7 @@ void sfc_port_link_mode_to_info(efx_link_mode_t link_mode,
 int sfc_port_update_mac_stats(struct sfc_adapter *sa);
 int sfc_port_reset_mac_stats(struct sfc_adapter *sa);
 int sfc_set_rx_mode(struct sfc_adapter *sa);
+int sfc_set_rx_mode_unchecked(struct sfc_adapter *sa);
 
 
 #ifdef __cplusplus

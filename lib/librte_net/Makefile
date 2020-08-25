@@ -5,7 +5,6 @@ include $(RTE_SDK)/mk/rte.vars.mk
 
 LIB = librte_net.a
 
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += $(WERROR_FLAGS) -I$(SRCDIR) -O3
 LDLIBS += -lrte_mbuf -lrte_eal -lrte_mempool
 
@@ -21,5 +20,6 @@ SYMLINK-$(CONFIG_RTE_LIBRTE_NET)-include += rte_sctp.h rte_icmp.h rte_arp.h
 SYMLINK-$(CONFIG_RTE_LIBRTE_NET)-include += rte_ether.h rte_gre.h rte_net.h
 SYMLINK-$(CONFIG_RTE_LIBRTE_NET)-include += rte_net_crc.h rte_mpls.h rte_higig.h
 SYMLINK-$(CONFIG_RTE_LIBRTE_NET)-include += rte_gtp.h rte_vxlan.h
+SYMLINK-$(CONFIG_RTE_LIBRTE_NET)-include += rte_ecpri.h
 
 include $(RTE_SDK)/mk/rte.lib.mk

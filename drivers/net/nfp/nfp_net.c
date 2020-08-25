@@ -2353,11 +2353,6 @@ nfp_net_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	new_ctrl = 0;
 
-	if ((mask & ETH_VLAN_FILTER_OFFLOAD) ||
-	    (mask & ETH_VLAN_EXTEND_OFFLOAD))
-		PMD_DRV_LOG(INFO, "No support for ETH_VLAN_FILTER_OFFLOAD or"
-			" ETH_VLAN_EXTEND_OFFLOAD");
-
 	/* Enable vlan strip if it is not configured yet */
 	if ((mask & ETH_VLAN_STRIP_OFFLOAD) &&
 	    !(hw->ctrl & NFP_NET_CFG_CTRL_RXVLAN))
@@ -2625,6 +2620,9 @@ nfp_net_rss_hash_conf_get(struct rte_eth_dev *dev,
 
 	if (cfg_rss_ctrl & NFP_NET_CFG_RSS_IPV6)
 		rss_hf |= ETH_RSS_NONFRAG_IPV4_UDP | ETH_RSS_NONFRAG_IPV6_UDP;
+
+	/* Propagate current RSS hash functions to caller */
+	rss_conf->rss_hf = rss_hf;
 
 	/* Reading the key size */
 	rss_conf->rss_key_len = nn_cfg_readl(hw, NFP_NET_CFG_RSS_KEY_SZ);
@@ -3014,7 +3012,7 @@ nfp_cpp_bridge_serve_write(int sockfd, struct nfp_cpp *cpp)
 	size_t count, curlen, totlen = 0;
 	int err = 0;
 
-	PMD_CPP_LOG(DEBUG, "%s: offset size %lu, count_size: %lu\n", __func__,
+	PMD_CPP_LOG(DEBUG, "%s: offset size %zu, count_size: %zu\n", __func__,
 		sizeof(off_t), sizeof(size_t));
 
 	/* Reading the count param */
@@ -3033,9 +3031,9 @@ nfp_cpp_bridge_serve_write(int sockfd, struct nfp_cpp *cpp)
 	cpp_id = (offset >> 40) << 8;
 	nfp_offset = offset & ((1ull << 40) - 1);
 
-	PMD_CPP_LOG(DEBUG, "%s: count %lu and offset %ld\n", __func__, count,
+	PMD_CPP_LOG(DEBUG, "%s: count %zu and offset %jd\n", __func__, count,
 		offset);
-	PMD_CPP_LOG(DEBUG, "%s: cpp_id %08x and nfp_offset %ld\n", __func__,
+	PMD_CPP_LOG(DEBUG, "%s: cpp_id %08x and nfp_offset %jd\n", __func__,
 		cpp_id, nfp_offset);
 
 	/* Adjust length if not aligned */
@@ -3067,12 +3065,12 @@ nfp_cpp_bridge_serve_write(int sockfd, struct nfp_cpp *cpp)
 			if (len > sizeof(tmpbuf))
 				len = sizeof(tmpbuf);
 
-			PMD_CPP_LOG(DEBUG, "%s: Receive %u of %lu\n", __func__,
+			PMD_CPP_LOG(DEBUG, "%s: Receive %u of %zu\n", __func__,
 					   len, count);
 			err = recv(sockfd, tmpbuf, len, MSG_WAITALL);
 			if (err != (int)len) {
 				RTE_LOG(ERR, PMD,
-					"%s: error when receiving, %d of %lu\n",
+					"%s: error when receiving, %d of %zu\n",
 					__func__, err, count);
 				nfp_cpp_area_release(area);
 				nfp_cpp_area_free(area);
@@ -3116,7 +3114,7 @@ nfp_cpp_bridge_serve_read(int sockfd, struct nfp_cpp *cpp)
 	size_t count, curlen, totlen = 0;
 	int err = 0;
 
-	PMD_CPP_LOG(DEBUG, "%s: offset size %lu, count_size: %lu\n", __func__,
+	PMD_CPP_LOG(DEBUG, "%s: offset size %zu, count_size: %zu\n", __func__,
 		sizeof(off_t), sizeof(size_t));
 
 	/* Reading the count param */
@@ -3135,9 +3133,9 @@ nfp_cpp_bridge_serve_read(int sockfd, struct nfp_cpp *cpp)
 	cpp_id = (offset >> 40) << 8;
 	nfp_offset = offset & ((1ull << 40) - 1);
 
-	PMD_CPP_LOG(DEBUG, "%s: count %lu and offset %ld\n", __func__, count,
+	PMD_CPP_LOG(DEBUG, "%s: count %zu and offset %jd\n", __func__, count,
 			   offset);
-	PMD_CPP_LOG(DEBUG, "%s: cpp_id %08x and nfp_offset %ld\n", __func__,
+	PMD_CPP_LOG(DEBUG, "%s: cpp_id %08x and nfp_offset %jd\n", __func__,
 			   cpp_id, nfp_offset);
 
 	/* Adjust length if not aligned */
@@ -3174,13 +3172,13 @@ nfp_cpp_bridge_serve_read(int sockfd, struct nfp_cpp *cpp)
 				nfp_cpp_area_free(area);
 				return -EIO;
 			}
-			PMD_CPP_LOG(DEBUG, "%s: sending %u of %lu\n", __func__,
+			PMD_CPP_LOG(DEBUG, "%s: sending %u of %zu\n", __func__,
 					   len, count);
 
 			err = send(sockfd, tmpbuf, len, 0);
 			if (err != (int)len) {
 				RTE_LOG(ERR, PMD,
-					"%s: error when sending: %d of %lu\n",
+					"%s: error when sending: %d of %zu\n",
 					__func__, err, count);
 				nfp_cpp_area_release(area);
 				nfp_cpp_area_free(area);
@@ -3451,9 +3449,10 @@ nfp_pf_create_dev(struct rte_pci_device *dev, int port, int ports,
 probe_failed:
 	rte_free(port_name);
 	/* free ports private data if primary process */
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
 		rte_free(eth_dev->data->dev_private);
-
+		eth_dev->data->dev_private = NULL;
+	}
 	rte_eth_dev_release_port(eth_dev);
 
 	return retval;
@@ -3682,9 +3681,6 @@ error:
 	return ret;
 }
 
-int nfp_logtype_init;
-int nfp_logtype_driver;
-
 static const struct rte_pci_id pci_id_nfp_pf_net_map[] = {
 	{
 		RTE_PCI_DEVICE(PCI_VENDOR_ID_NETRONOME,
@@ -3768,16 +3764,8 @@ RTE_PMD_REGISTER_PCI_TABLE(net_nfp_pf, pci_id_nfp_pf_net_map);
 RTE_PMD_REGISTER_PCI_TABLE(net_nfp_vf, pci_id_nfp_vf_net_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_nfp_pf, "* igb_uio | uio_pci_generic | vfio");
 RTE_PMD_REGISTER_KMOD_DEP(net_nfp_vf, "* igb_uio | uio_pci_generic | vfio");
-
-RTE_INIT(nfp_init_log)
-{
-	nfp_logtype_init = rte_log_register("pmd.net.nfp.init");
-	if (nfp_logtype_init >= 0)
-		rte_log_set_level(nfp_logtype_init, RTE_LOG_NOTICE);
-	nfp_logtype_driver = rte_log_register("pmd.net.nfp.driver");
-	if (nfp_logtype_driver >= 0)
-		rte_log_set_level(nfp_logtype_driver, RTE_LOG_NOTICE);
-}
+RTE_LOG_REGISTER(nfp_logtype_init, pmd.net.nfp.init, NOTICE);
+RTE_LOG_REGISTER(nfp_logtype_driver, pmd.net.nfp.driver, NOTICE);
 /*
  * Local variables:
  * c-file-style: "Linux"

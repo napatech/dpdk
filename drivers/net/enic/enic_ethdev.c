@@ -21,8 +21,6 @@
 #include "vnic_enet.h"
 #include "enic.h"
 
-int enic_pmd_logtype;
-
 /*
  * The set of PCI devices this driver supports
  */
@@ -71,12 +69,7 @@ static const struct vic_speed_capa {
 #define ENIC_DEVARG_GENEVE_OPT "geneve-opt"
 #define ENIC_DEVARG_IG_VLAN_REWRITE "ig-vlan-rewrite"
 
-RTE_INIT(enicpmd_init_log)
-{
-	enic_pmd_logtype = rte_log_register("pmd.net.enic");
-	if (enic_pmd_logtype >= 0)
-		rte_log_set_level(enic_pmd_logtype, RTE_LOG_INFO);
-}
+RTE_LOG_REGISTER(enic_pmd_logtype, pmd.net.enic, INFO);
 
 static int
 enicpmd_fdir_ctrl_func(struct rte_eth_dev *eth_dev,
@@ -372,18 +365,6 @@ static int enicpmd_vlan_offload_set(struct rte_eth_dev *eth_dev, int mask)
 			enic->ig_vlan_strip_en = 1;
 		else
 			enic->ig_vlan_strip_en = 0;
-	}
-
-	if ((mask & ETH_VLAN_FILTER_MASK) &&
-	    (offloads & DEV_RX_OFFLOAD_VLAN_FILTER)) {
-		dev_warning(enic,
-			"Configuration of VLAN filter is not supported\n");
-	}
-
-	if ((mask & ETH_VLAN_EXTEND_MASK) &&
-	    (offloads & DEV_RX_OFFLOAD_VLAN_EXTEND)) {
-		dev_warning(enic,
-			"Configuration of extended VLAN is not supported\n");
 	}
 
 	return enic_set_vlan_strip(enic);
@@ -940,7 +921,7 @@ static void enicpmd_dev_rxq_info_get(struct rte_eth_dev *dev,
 
 	ENICPMD_FUNC_TRACE();
 	sop_queue_idx = enic_rte_rq_idx_to_sop_idx(rx_queue_id);
-	data_queue_idx = enic_rte_rq_idx_to_data_idx(rx_queue_id);
+	data_queue_idx = enic_rte_rq_idx_to_data_idx(rx_queue_id, enic);
 	rq_sop = &enic->rq[sop_queue_idx];
 	rq_data = &enic->rq[data_queue_idx]; /* valid if data_queue_enable */
 	qinfo->mp = rq_sop->mp;
@@ -974,6 +955,49 @@ static void enicpmd_dev_txq_info_get(struct rte_eth_dev *dev,
 	memset(&qinfo->conf, 0, sizeof(qinfo->conf));
 	qinfo->conf.offloads = wq->offloads;
 	/* tx_thresh, and all the other fields are not applicable for enic */
+}
+
+static int enicpmd_dev_rx_burst_mode_get(struct rte_eth_dev *dev,
+					 __rte_unused uint16_t queue_id,
+					 struct rte_eth_burst_mode *mode)
+{
+	eth_rx_burst_t pkt_burst = dev->rx_pkt_burst;
+	struct enic *enic = pmd_priv(dev);
+	const char *info_str = NULL;
+	int ret = -EINVAL;
+
+	ENICPMD_FUNC_TRACE();
+	if (enic->use_noscatter_vec_rx_handler)
+		info_str = "Vector AVX2 No Scatter";
+	else if (pkt_burst == enic_noscatter_recv_pkts)
+		info_str = "Scalar No Scatter";
+	else if (pkt_burst == enic_recv_pkts)
+		info_str = "Scalar";
+	if (info_str) {
+		strlcpy(mode->info, info_str, sizeof(mode->info));
+		ret = 0;
+	}
+	return ret;
+}
+
+static int enicpmd_dev_tx_burst_mode_get(struct rte_eth_dev *dev,
+					 __rte_unused uint16_t queue_id,
+					 struct rte_eth_burst_mode *mode)
+{
+	eth_tx_burst_t pkt_burst = dev->tx_pkt_burst;
+	const char *info_str = NULL;
+	int ret = -EINVAL;
+
+	ENICPMD_FUNC_TRACE();
+	if (pkt_burst == enic_simple_xmit_pkts)
+		info_str = "Scalar Simplified";
+	else if (pkt_burst == enic_xmit_pkts)
+		info_str = "Scalar";
+	if (info_str) {
+		strlcpy(mode->info, info_str, sizeof(mode->info));
+		ret = 0;
+	}
+	return ret;
 }
 
 static int enicpmd_dev_rx_queue_intr_enable(struct rte_eth_dev *eth_dev,
@@ -1125,6 +1149,8 @@ static const struct eth_dev_ops enicpmd_eth_dev_ops = {
 	.rx_queue_intr_disable = enicpmd_dev_rx_queue_intr_disable,
 	.rxq_info_get         = enicpmd_dev_rxq_info_get,
 	.txq_info_get         = enicpmd_dev_txq_info_get,
+	.rx_burst_mode_get    = enicpmd_dev_rx_burst_mode_get,
+	.tx_burst_mode_get    = enicpmd_dev_tx_burst_mode_get,
 	.dev_led_on           = NULL,
 	.dev_led_off          = NULL,
 	.flow_ctrl_get        = NULL,

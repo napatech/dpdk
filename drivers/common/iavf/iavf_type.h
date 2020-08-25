@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2019
+ * Copyright(c) 2001-2020 Intel Corporation
  */
 
 #ifndef _IAVF_TYPE_H_
@@ -552,7 +552,8 @@ enum iavf_rx_l2_ptype {
 	IAVF_RX_PTYPE_GRENAT4_MAC_PAY3			= 58,
 	IAVF_RX_PTYPE_GRENAT4_MACVLAN_IPV6_ICMP_PAY4	= 87,
 	IAVF_RX_PTYPE_GRENAT6_MAC_PAY3			= 124,
-	IAVF_RX_PTYPE_GRENAT6_MACVLAN_IPV6_ICMP_PAY4	= 153
+	IAVF_RX_PTYPE_GRENAT6_MACVLAN_IPV6_ICMP_PAY4	= 153,
+	IAVF_RX_PTYPE_PARSER_ABORTED			= 255
 };
 
 struct iavf_rx_ptype_decoded {

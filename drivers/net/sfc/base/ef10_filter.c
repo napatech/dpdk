@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2007-2018 Solarflare Communications Inc.
- * All rights reserved.
+ * Copyright(c) 2019-2020 Xilinx, Inc.
+ * Copyright(c) 2007-2019 Solarflare Communications Inc.
  */
 
 #include "efx.h"
@@ -590,6 +590,231 @@ fail1:
 	return (rc);
 }
 
+enum ef10_filter_add_action_e {
+	/* Insert a new filter */
+	EF10_FILTER_ADD_NEW,
+	/*
+	 * Replace old filter with a new, overriding the old one
+	 * if it has lower priority.
+	 */
+	EF10_FILTER_ADD_REPLACE,
+	/* Store new, lower priority filter as overridden by old filter */
+	EF10_FILTER_ADD_STORE,
+	/* Special case for AUTO filters, remove AUTO_OLD flag */
+	EF10_FILTER_ADD_REFRESH,
+};
+
+static	__checkReturn	efx_rc_t
+ef10_filter_add_lookup_equal_spec(
+	__in		efx_filter_spec_t *spec,
+	__in		efx_filter_spec_t *probe_spec,
+	__in		efx_filter_replacement_policy_t policy,
+	__out		boolean_t *found)
+{
+	efx_rc_t rc;
+
+	/* Refreshing AUTO filter */
+	if (spec->efs_priority == EFX_FILTER_PRI_AUTO &&
+	    probe_spec->efs_priority == EFX_FILTER_PRI_AUTO) {
+		*found = B_TRUE;
+		return (0);
+	}
+
+	/*
+	 * With exclusive filters, higher priority ones
+	 * override lower priority ones, and lower priority
+	 * ones are stored in case the higher priority one
+	 * is removed.
+	 */
+	if (ef10_filter_is_exclusive(spec)) {
+		switch (policy) {
+		case EFX_FILTER_REPLACEMENT_HIGHER_OR_EQUAL_PRIORITY:
+			if (spec->efs_priority == probe_spec->efs_priority) {
+				*found = B_TRUE;
+				break;
+			}
+			/* Fall-through */
+		case EFX_FILTER_REPLACEMENT_HIGHER_PRIORITY:
+			if (spec->efs_priority > probe_spec->efs_priority) {
+				*found = B_TRUE;
+				break;
+			}
+			/* Fall-through */
+		case EFX_FILTER_REPLACEMENT_NEVER:
+			/*
+			 * Lower priority filter needs to be
+			 * stored. It does *not* replace the
+			 * old one. That is why EEXIST is not
+			 * returned in that case.
+			 */
+			if (spec->efs_priority < probe_spec->efs_priority) {
+				*found = B_TRUE;
+				break;
+			} else {
+				rc = EEXIST;
+				goto fail1;
+			}
+		default:
+			EFSYS_ASSERT(0);
+			rc = EEXIST;
+			goto fail2;
+		}
+	} else {
+		*found = B_FALSE;
+	}
+
+	return (0);
+
+fail2:
+	EFSYS_PROBE(fail2);
+
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+
+	return (rc);
+}
+
+
+static			void
+ef10_filter_add_select_action(
+	__in		efx_filter_spec_t *saved_spec,
+	__in		efx_filter_spec_t *spec,
+	__out		enum ef10_filter_add_action_e *action,
+	__out		efx_filter_spec_t **overridden_spec)
+{
+	efx_filter_spec_t *overridden = NULL;
+
+	if (saved_spec == NULL) {
+		*action = EF10_FILTER_ADD_NEW;
+	} else if (ef10_filter_is_exclusive(spec) == B_FALSE) {
+		/*
+		 * Non-exclusive filters are always stored in separate entries
+		 * in the table. The only case involving a saved spec is
+		 * refreshing an AUTO filter.
+		 */
+		EFSYS_ASSERT(saved_spec->efs_overridden_spec == NULL);
+		EFSYS_ASSERT(spec->efs_priority == EFX_FILTER_PRI_AUTO);
+		EFSYS_ASSERT(saved_spec->efs_priority == EFX_FILTER_PRI_AUTO);
+		*action = EF10_FILTER_ADD_REFRESH;
+	} else {
+		/* Exclusive filters stored in the same entry */
+		if (spec->efs_priority > saved_spec->efs_priority) {
+			/*
+			 * Insert a high priority filter over a lower priority
+			 * one. Only two priority levels are implemented, so
+			 * there must not already be an overridden filter.
+			 */
+			EFX_STATIC_ASSERT(EFX_FILTER_NPRI == 2);
+			EFSYS_ASSERT(saved_spec->efs_overridden_spec == NULL);
+			overridden = saved_spec;
+			*action = EF10_FILTER_ADD_REPLACE;
+		} else if (spec->efs_priority == saved_spec->efs_priority) {
+			/* Replace in-place or refresh an existing filter */
+			if (spec->efs_priority == EFX_FILTER_PRI_AUTO)
+				*action = EF10_FILTER_ADD_REFRESH;
+			else
+				*action = EF10_FILTER_ADD_REPLACE;
+		} else {
+			/*
+			 * Insert a lower priority filter, storing it in case
+			 * the higher priority filter is removed.
+			 *
+			 * Currently there are only two priority levels, so this
+			 * must be an AUTO filter.
+			 */
+			EFX_STATIC_ASSERT(EFX_FILTER_NPRI == 2);
+			EFSYS_ASSERT(spec->efs_priority == EFX_FILTER_PRI_AUTO);
+			if (saved_spec->efs_overridden_spec != NULL) {
+				*action = EF10_FILTER_ADD_REFRESH;
+			} else {
+				overridden = spec;
+				*action = EF10_FILTER_ADD_STORE;
+			}
+		}
+	}
+
+	*overridden_spec = overridden;
+}
+
+static	__checkReturn	efx_rc_t
+ef10_filter_add_execute_action(
+	__in		efx_nic_t *enp,
+	__in		efx_filter_spec_t *saved_spec,
+	__in		efx_filter_spec_t *spec,
+	__in		efx_filter_spec_t *overridden_spec,
+	__in		enum ef10_filter_add_action_e action,
+	__in		int ins_index)
+{
+	ef10_filter_table_t *eftp = enp->en_filter.ef_ef10_filter_table;
+	efsys_lock_state_t state;
+	efx_rc_t rc;
+
+	EFSYS_LOCK(enp->en_eslp, state);
+
+	if (action == EF10_FILTER_ADD_REFRESH) {
+		ef10_filter_set_entry_not_auto_old(eftp, ins_index);
+		goto out_unlock;
+	} else if (action == EF10_FILTER_ADD_STORE) {
+		EFSYS_ASSERT(overridden_spec != NULL);
+		saved_spec->efs_overridden_spec = overridden_spec;
+		goto out_unlock;
+	}
+
+	EFSYS_UNLOCK(enp->en_eslp, state);
+
+	switch (action) {
+	case EF10_FILTER_ADD_REPLACE:
+		/*
+		 * On replacing the filter handle may change after a
+		 * successful replace operation.
+		 */
+		rc = efx_mcdi_filter_op_add(enp, spec,
+		    MC_CMD_FILTER_OP_IN_OP_REPLACE,
+		    &eftp->eft_entry[ins_index].efe_handle);
+		break;
+	case EF10_FILTER_ADD_NEW:
+		if (ef10_filter_is_exclusive(spec)) {
+			rc = efx_mcdi_filter_op_add(enp, spec,
+			    MC_CMD_FILTER_OP_IN_OP_INSERT,
+			    &eftp->eft_entry[ins_index].efe_handle);
+		} else {
+			rc = efx_mcdi_filter_op_add(enp, spec,
+			    MC_CMD_FILTER_OP_IN_OP_SUBSCRIBE,
+			    &eftp->eft_entry[ins_index].efe_handle);
+		}
+		break;
+	default:
+		rc = EINVAL;
+		EFSYS_ASSERT(0);
+		break;
+	}
+	if (rc != 0)
+		goto fail1;
+
+	EFSYS_LOCK(enp->en_eslp, state);
+
+	if (action == EF10_FILTER_ADD_REPLACE) {
+		/* Update the fields that may differ */
+		saved_spec->efs_priority = spec->efs_priority;
+		saved_spec->efs_flags = spec->efs_flags;
+		saved_spec->efs_rss_context = spec->efs_rss_context;
+		saved_spec->efs_dmaq_id = spec->efs_dmaq_id;
+
+		if (overridden_spec != NULL)
+			saved_spec->efs_overridden_spec = overridden_spec;
+	}
+
+out_unlock:
+	EFSYS_UNLOCK(enp->en_eslp, state);
+
+	return (0);
+
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+
+	return (rc);
+}
+
 /*
  * An arbitrary search limit for the software hash table. As per the linux net
  * driver.
@@ -600,21 +825,23 @@ static	__checkReturn	efx_rc_t
 ef10_filter_add_internal(
 	__in		efx_nic_t *enp,
 	__inout		efx_filter_spec_t *spec,
-	__in		boolean_t may_replace,
+	__in		efx_filter_replacement_policy_t policy,
 	__out_opt	uint32_t *filter_id)
 {
 	efx_rc_t rc;
 	ef10_filter_table_t *eftp = enp->en_filter.ef_ef10_filter_table;
+	enum ef10_filter_add_action_e action;
+	efx_filter_spec_t *overridden_spec = NULL;
 	efx_filter_spec_t *saved_spec;
 	uint32_t hash;
 	unsigned int depth;
 	int ins_index;
-	boolean_t replacing = B_FALSE;
-	unsigned int i;
 	efsys_lock_state_t state;
 	boolean_t locked = B_FALSE;
 
 	EFSYS_ASSERT(EFX_FAMILY_IS_EF10(enp));
+
+	EFSYS_ASSERT(spec->efs_overridden_spec == NULL);
 
 	hash = ef10_filter_hash(spec);
 
@@ -628,144 +855,135 @@ ef10_filter_add_internal(
 	 * else a free slot to insert at.  If any of them are busy,
 	 * we have to wait and retry.
 	 */
-	for (;;) {
-		ins_index = -1;
-		depth = 1;
-		EFSYS_LOCK(enp->en_eslp, state);
-		locked = B_TRUE;
-
-		for (;;) {
-			i = (hash + depth) & (EFX_EF10_FILTER_TBL_ROWS - 1);
-			saved_spec = ef10_filter_entry_spec(eftp, i);
-
-			if (!saved_spec) {
-				if (ins_index < 0) {
-					ins_index = i;
-				}
-			} else if (ef10_filter_equal(spec, saved_spec)) {
-				if (ef10_filter_entry_is_busy(eftp, i))
-					break;
-				if (saved_spec->efs_priority
-					    == EFX_FILTER_PRI_AUTO) {
-					ins_index = i;
-					goto found;
-				} else if (ef10_filter_is_exclusive(spec)) {
-					if (may_replace) {
-						ins_index = i;
-						goto found;
-					} else {
-						rc = EEXIST;
-						goto fail1;
-					}
-				}
-
-				/* Leave existing */
-			}
-
-			/*
-			 * Once we reach the maximum search depth, use
-			 * the first suitable slot or return EBUSY if
-			 * there was none.
-			 */
-			if (depth == EF10_FILTER_SEARCH_LIMIT) {
-				if (ins_index < 0) {
-					rc = EBUSY;
-					goto fail2;
-				}
-				goto found;
-			}
-			depth++;
-		}
-		EFSYS_UNLOCK(enp->en_eslp, state);
-		locked = B_FALSE;
-	}
-
-found:
-	/*
-	 * Create a software table entry if necessary, and mark it
-	 * busy.  We might yet fail to insert, but any attempt to
-	 * insert a conflicting filter while we're waiting for the
-	 * firmware must find the busy entry.
-	 */
-	saved_spec = ef10_filter_entry_spec(eftp, ins_index);
-	if (saved_spec) {
-		if (saved_spec->efs_priority == EFX_FILTER_PRI_AUTO) {
-			/* This is a filter we are refreshing */
-			ef10_filter_set_entry_not_auto_old(eftp, ins_index);
-			goto out_unlock;
-
-		}
-		replacing = B_TRUE;
-	} else {
-		EFSYS_KMEM_ALLOC(enp->en_esip, sizeof (*spec), saved_spec);
-		if (!saved_spec) {
-			rc = ENOMEM;
-			goto fail3;
-		}
-		*saved_spec = *spec;
-		ef10_filter_set_entry(eftp, ins_index, saved_spec);
-	}
-	ef10_filter_set_entry_busy(eftp, ins_index);
-
-	EFSYS_UNLOCK(enp->en_eslp, state);
-	locked = B_FALSE;
-
-	/*
-	 * On replacing the filter handle may change after after a successful
-	 * replace operation.
-	 */
-	if (replacing) {
-		rc = efx_mcdi_filter_op_add(enp, spec,
-		    MC_CMD_FILTER_OP_IN_OP_REPLACE,
-		    &eftp->eft_entry[ins_index].efe_handle);
-	} else if (ef10_filter_is_exclusive(spec)) {
-		rc = efx_mcdi_filter_op_add(enp, spec,
-		    MC_CMD_FILTER_OP_IN_OP_INSERT,
-		    &eftp->eft_entry[ins_index].efe_handle);
-	} else {
-		rc = efx_mcdi_filter_op_add(enp, spec,
-		    MC_CMD_FILTER_OP_IN_OP_SUBSCRIBE,
-		    &eftp->eft_entry[ins_index].efe_handle);
-	}
-
-	if (rc != 0)
-		goto fail4;
-
+retry:
 	EFSYS_LOCK(enp->en_eslp, state);
 	locked = B_TRUE;
 
-	if (replacing) {
-		/* Update the fields that may differ */
-		saved_spec->efs_priority = spec->efs_priority;
-		saved_spec->efs_flags = spec->efs_flags;
-		saved_spec->efs_rss_context = spec->efs_rss_context;
-		saved_spec->efs_dmaq_id = spec->efs_dmaq_id;
+	ins_index = -1;
+
+	for (depth = 1; depth <= EF10_FILTER_SEARCH_LIMIT; depth++) {
+		unsigned int probe_index;
+		efx_filter_spec_t *probe_spec;
+
+		probe_index = (hash + depth) & (EFX_EF10_FILTER_TBL_ROWS - 1);
+		probe_spec = ef10_filter_entry_spec(eftp, probe_index);
+
+		if (probe_spec == NULL) {
+			if (ins_index < 0)
+				ins_index = probe_index;
+		} else if (ef10_filter_equal(spec, probe_spec)) {
+			boolean_t found;
+
+			if (ef10_filter_entry_is_busy(eftp, probe_index)) {
+				EFSYS_UNLOCK(enp->en_eslp, state);
+				locked = B_FALSE;
+				goto retry;
+			}
+
+			rc = ef10_filter_add_lookup_equal_spec(spec,
+			    probe_spec, policy, &found);
+			if (rc != 0)
+				goto fail1;
+
+			if (found != B_FALSE) {
+				ins_index = probe_index;
+				break;
+			}
+		}
 	}
 
-	ef10_filter_set_entry_not_busy(eftp, ins_index);
+	/*
+	 * Once we reach the maximum search depth, use the first suitable slot
+	 * or return EBUSY if there was none.
+	 */
+	if (ins_index < 0) {
+		rc = EBUSY;
+		goto fail2;
+	}
 
-out_unlock:
+	/*
+	 * Mark software table entry busy. We might yet fail to insert,
+	 * but any attempt to insert a conflicting filter while we're
+	 * waiting for the firmware must find the busy entry.
+	 */
+	ef10_filter_set_entry_busy(eftp, ins_index);
+
+	saved_spec = ef10_filter_entry_spec(eftp, ins_index);
+	ef10_filter_add_select_action(saved_spec, spec, &action,
+	    &overridden_spec);
+
+	/*
+	 * Allocate a new filter if found entry is empty or
+	 * a filter should be overridden.
+	 */
+	if (overridden_spec != NULL || saved_spec == NULL) {
+		efx_filter_spec_t *new_spec;
+
+		EFSYS_UNLOCK(enp->en_eslp, state);
+		locked = B_FALSE;
+
+		EFSYS_KMEM_ALLOC(enp->en_esip, sizeof (*new_spec), new_spec);
+		if (new_spec == NULL) {
+			rc = ENOMEM;
+			overridden_spec = NULL;
+			goto fail3;
+		}
+
+		EFSYS_LOCK(enp->en_eslp, state);
+		locked = B_TRUE;
+
+		if (saved_spec == NULL) {
+			*new_spec = *spec;
+			ef10_filter_set_entry(eftp, ins_index, new_spec);
+		} else {
+			*new_spec = *overridden_spec;
+			overridden_spec = new_spec;
+		}
+	}
 
 	EFSYS_UNLOCK(enp->en_eslp, state);
 	locked = B_FALSE;
 
+	rc = ef10_filter_add_execute_action(enp, saved_spec, spec,
+	    overridden_spec, action, ins_index);
+	if (rc != 0)
+		goto fail4;
+
 	if (filter_id)
 		*filter_id = ins_index;
+
+	EFSYS_LOCK(enp->en_eslp, state);
+	ef10_filter_set_entry_not_busy(eftp, ins_index);
+	EFSYS_UNLOCK(enp->en_eslp, state);
 
 	return (0);
 
 fail4:
 	EFSYS_PROBE(fail4);
 
-	if (!replacing) {
-		EFSYS_KMEM_FREE(enp->en_esip, sizeof (*spec), saved_spec);
-		saved_spec = NULL;
+	EFSYS_ASSERT(locked == B_FALSE);
+	EFSYS_LOCK(enp->en_eslp, state);
+
+	if (action == EF10_FILTER_ADD_NEW) {
+		EFSYS_KMEM_FREE(enp->en_esip, sizeof (*spec),
+		    ef10_filter_entry_spec(eftp, ins_index));
+		ef10_filter_set_entry(eftp, ins_index, NULL);
 	}
-	ef10_filter_set_entry_not_busy(eftp, ins_index);
-	ef10_filter_set_entry(eftp, ins_index, NULL);
+
+	EFSYS_UNLOCK(enp->en_eslp, state);
+
+	if (overridden_spec != NULL)
+		EFSYS_KMEM_FREE(enp->en_esip, sizeof (*spec), overridden_spec);
 
 fail3:
 	EFSYS_PROBE(fail3);
+
+	EFSYS_ASSERT(locked == B_FALSE);
+	EFSYS_LOCK(enp->en_eslp, state);
+
+	ef10_filter_set_entry_not_busy(eftp, ins_index);
+
+	EFSYS_UNLOCK(enp->en_eslp, state);
 
 fail2:
 	EFSYS_PROBE(fail2);
@@ -783,11 +1001,11 @@ fail1:
 ef10_filter_add(
 	__in		efx_nic_t *enp,
 	__inout		efx_filter_spec_t *spec,
-	__in		boolean_t may_replace)
+	__in		enum efx_filter_replacement_policy_e policy)
 {
 	efx_rc_t rc;
 
-	rc = ef10_filter_add_internal(enp, spec, may_replace, NULL);
+	rc = ef10_filter_add_internal(enp, spec, policy, NULL);
 	if (rc != 0)
 		goto fail1;
 
@@ -799,11 +1017,15 @@ fail1:
 	return (rc);
 }
 
-
+/*
+ * Delete a filter by index from the filter table with priority
+ * that is not higher than specified.
+ */
 static	__checkReturn	efx_rc_t
 ef10_filter_delete_internal(
 	__in		efx_nic_t *enp,
-	__in		uint32_t filter_id)
+	__in		uint32_t filter_id,
+	__in		efx_filter_priority_t priority)
 {
 	efx_rc_t rc;
 	ef10_filter_table_t *table = enp->en_filter.ef_ef10_filter_table;
@@ -825,7 +1047,8 @@ ef10_filter_delete_internal(
 		EFSYS_LOCK(enp->en_eslp, state);
 	}
 	if ((spec = ef10_filter_entry_spec(table, filter_idx)) != NULL) {
-		ef10_filter_set_entry_busy(table, filter_idx);
+		if (spec->efs_priority <= priority)
+			ef10_filter_set_entry_busy(table, filter_idx);
 	}
 	EFSYS_UNLOCK(enp->en_eslp, state);
 
@@ -834,31 +1057,53 @@ ef10_filter_delete_internal(
 		goto fail1;
 	}
 
-	/*
-	 * Try to remove the hardware filter. This may fail if the MC has
-	 * rebooted (which frees all hardware filter resources).
-	 */
-	if (ef10_filter_is_exclusive(spec)) {
-		rc = efx_mcdi_filter_op_delete(enp,
-		    MC_CMD_FILTER_OP_IN_OP_REMOVE,
-		    &table->eft_entry[filter_idx].efe_handle);
+	if (spec->efs_priority > priority) {
+		/*
+		 * Applied filter stays, but overridden filter is removed since
+		 * next user request to delete the applied filter should not
+		 * restore outdated filter.
+		 */
+		if (spec->efs_overridden_spec != NULL) {
+			EFSYS_ASSERT(spec->efs_overridden_spec->efs_overridden_spec ==
+			    NULL);
+			EFSYS_KMEM_FREE(enp->en_esip, sizeof (*spec),
+			    spec->efs_overridden_spec);
+			spec->efs_overridden_spec = NULL;
+		}
 	} else {
-		rc = efx_mcdi_filter_op_delete(enp,
-		    MC_CMD_FILTER_OP_IN_OP_UNSUBSCRIBE,
-		    &table->eft_entry[filter_idx].efe_handle);
+		/*
+		 * Try to remove the hardware filter or replace it with the
+		 * saved automatic filter. This may fail if the MC has
+		 * rebooted (which frees all hardware filter resources).
+		 */
+		if (spec->efs_overridden_spec != NULL) {
+			rc = efx_mcdi_filter_op_add(enp,
+			    spec->efs_overridden_spec,
+			    MC_CMD_FILTER_OP_IN_OP_REPLACE,
+			    &table->eft_entry[filter_idx].efe_handle);
+		} else if (ef10_filter_is_exclusive(spec)) {
+			rc = efx_mcdi_filter_op_delete(enp,
+			    MC_CMD_FILTER_OP_IN_OP_REMOVE,
+			    &table->eft_entry[filter_idx].efe_handle);
+		} else {
+			rc = efx_mcdi_filter_op_delete(enp,
+			    MC_CMD_FILTER_OP_IN_OP_UNSUBSCRIBE,
+			    &table->eft_entry[filter_idx].efe_handle);
+		}
+
+		/* Free the software table entry */
+		EFSYS_LOCK(enp->en_eslp, state);
+		ef10_filter_set_entry_not_busy(table, filter_idx);
+		ef10_filter_set_entry(table, filter_idx,
+		    spec->efs_overridden_spec);
+		EFSYS_UNLOCK(enp->en_eslp, state);
+
+		EFSYS_KMEM_FREE(enp->en_esip, sizeof (*spec), spec);
+
+		/* Check result of hardware filter removal */
+		if (rc != 0)
+			goto fail2;
 	}
-
-	/* Free the software table entry */
-	EFSYS_LOCK(enp->en_eslp, state);
-	ef10_filter_set_entry_not_busy(table, filter_idx);
-	ef10_filter_set_entry(table, filter_idx, NULL);
-	EFSYS_UNLOCK(enp->en_eslp, state);
-
-	EFSYS_KMEM_FREE(enp->en_esip, sizeof (*spec), spec);
-
-	/* Check result of hardware filter removal */
-	if (rc != 0)
-		goto fail2;
 
 	return (0);
 
@@ -869,6 +1114,25 @@ fail1:
 	EFSYS_PROBE1(fail1, efx_rc_t, rc);
 
 	return (rc);
+}
+
+static			void
+ef10_filter_delete_auto(
+	__in		efx_nic_t *enp,
+	__in		uint32_t filter_id)
+{
+	ef10_filter_table_t *table = enp->en_filter.ef_ef10_filter_table;
+	uint32_t filter_idx = filter_id % EFX_EF10_FILTER_TBL_ROWS;
+
+	/*
+	 * AUTO_OLD flag is cleared since the auto filter that is to be removed
+	 * may not be the filter at the specified index itself, but the filter
+	 * that is overridden by it.
+	 */
+	ef10_filter_set_entry_not_auto_old(table, filter_idx);
+
+	(void) ef10_filter_delete_internal(enp, filter_idx,
+	    EFX_FILTER_PRI_AUTO);
 }
 
 	__checkReturn	efx_rc_t
@@ -897,7 +1161,8 @@ ef10_filter_delete(
 		i = (hash + depth) & (EFX_EF10_FILTER_TBL_ROWS - 1);
 		saved_spec = ef10_filter_entry_spec(table, i);
 		if (saved_spec && ef10_filter_equal(spec, saved_spec) &&
-		    ef10_filter_same_dest(spec, saved_spec)) {
+		    ef10_filter_same_dest(spec, saved_spec) &&
+		    saved_spec->efs_priority == EFX_FILTER_PRI_MANUAL) {
 			break;
 		}
 		if (depth == EF10_FILTER_SEARCH_LIMIT) {
@@ -910,7 +1175,7 @@ ef10_filter_delete(
 	EFSYS_UNLOCK(enp->en_eslp, state);
 	locked = B_FALSE;
 
-	rc = ef10_filter_delete_internal(enp, i);
+	rc = ef10_filter_delete_internal(enp, i, EFX_FILTER_PRI_MANUAL);
 	if (rc != 0)
 		goto fail2;
 
@@ -1135,7 +1400,7 @@ ef10_filter_insert_unicast(
 	if (rc != 0)
 		goto fail1;
 
-	rc = ef10_filter_add_internal(enp, &spec, B_TRUE,
+	rc = ef10_filter_add_internal(enp, &spec, EFX_FILTER_REPLACEMENT_NEVER,
 	    &eftp->eft_unicst_filter_indexes[eftp->eft_unicst_filter_count]);
 	if (rc != 0)
 		goto fail2;
@@ -1169,7 +1434,7 @@ ef10_filter_insert_all_unicast(
 	rc = efx_filter_spec_set_uc_def(&spec);
 	if (rc != 0)
 		goto fail1;
-	rc = ef10_filter_add_internal(enp, &spec, B_TRUE,
+	rc = ef10_filter_add_internal(enp, &spec, EFX_FILTER_REPLACEMENT_NEVER,
 	    &eftp->eft_unicst_filter_indexes[eftp->eft_unicst_filter_count]);
 	if (rc != 0)
 		goto fail2;
@@ -1239,8 +1504,8 @@ ef10_filter_insert_multicast_list(
 			}
 		}
 
-		rc = ef10_filter_add_internal(enp, &spec, B_TRUE,
-					    &filter_index);
+		rc = ef10_filter_add_internal(enp, &spec,
+		    EFX_FILTER_REPLACEMENT_NEVER, &filter_index);
 
 		if (rc == 0) {
 			eftp->eft_mulcst_filter_indexes[filter_count] =
@@ -1267,8 +1532,8 @@ ef10_filter_insert_multicast_list(
 			goto rollback;
 		}
 
-		rc = ef10_filter_add_internal(enp, &spec, B_TRUE,
-					    &filter_index);
+		rc = ef10_filter_add_internal(enp, &spec,
+		    EFX_FILTER_REPLACEMENT_NEVER, &filter_index);
 
 		if (rc == 0) {
 			eftp->eft_mulcst_filter_indexes[filter_count] =
@@ -1289,7 +1554,7 @@ rollback:
 	/* Remove any filters we have inserted */
 	i = filter_count;
 	while (i--) {
-		(void) ef10_filter_delete_internal(enp,
+		ef10_filter_delete_auto(enp,
 		    eftp->eft_mulcst_filter_indexes[i]);
 	}
 	eftp->eft_mulcst_filter_count = 0;
@@ -1317,7 +1582,7 @@ ef10_filter_insert_all_multicast(
 	if (rc != 0)
 		goto fail1;
 
-	rc = ef10_filter_add_internal(enp, &spec, B_TRUE,
+	rc = ef10_filter_add_internal(enp, &spec, EFX_FILTER_REPLACEMENT_NEVER,
 	    &eftp->eft_mulcst_filter_indexes[0]);
 	if (rc != 0)
 		goto fail2;
@@ -1420,8 +1685,9 @@ ef10_filter_insert_encap_filters(
 		if (rc != 0)
 			goto fail1;
 
-		rc = ef10_filter_add_internal(enp, &spec, B_TRUE,
-			    &table->eft_encap_filter_indexes[
+		rc = ef10_filter_add_internal(enp, &spec,
+		    EFX_FILTER_REPLACEMENT_NEVER,
+		    &table->eft_encap_filter_indexes[
 				    table->eft_encap_filter_count]);
 		if (rc != 0) {
 			if (rc != EACCES)
@@ -1450,7 +1716,7 @@ ef10_filter_remove_old(
 
 	for (i = 0; i < EFX_ARRAY_SIZE(table->eft_entry); i++) {
 		if (ef10_filter_entry_is_auto_old(table, i)) {
-			(void) ef10_filter_delete_internal(enp, i);
+			ef10_filter_delete_auto(enp, i);
 		}
 	}
 }
@@ -1491,6 +1757,196 @@ fail1:
 
 }
 
+static			void
+ef10_filter_remove_all_existing_filters(
+	__in				efx_nic_t *enp)
+{
+	ef10_filter_table_t *table = enp->en_filter.ef_ef10_filter_table;
+	efx_port_t *epp = &(enp->en_port);
+	unsigned int i;
+
+	for (i = 0; i < table->eft_unicst_filter_count; i++) {
+		ef10_filter_delete_auto(enp,
+				table->eft_unicst_filter_indexes[i]);
+	}
+	table->eft_unicst_filter_count = 0;
+
+	for (i = 0; i < table->eft_mulcst_filter_count; i++) {
+		ef10_filter_delete_auto(enp,
+				table->eft_mulcst_filter_indexes[i]);
+	}
+	table->eft_mulcst_filter_count = 0;
+
+	for (i = 0; i < table->eft_encap_filter_count; i++) {
+		ef10_filter_delete_auto(enp,
+				table->eft_encap_filter_indexes[i]);
+	}
+	table->eft_encap_filter_count = 0;
+
+	epp->ep_all_unicst_inserted = B_FALSE;
+	epp->ep_all_mulcst_inserted = B_FALSE;
+}
+
+static			void
+ef10_filter_mark_old_filters(
+	__in				efx_nic_t *enp)
+{
+	ef10_filter_table_t *table = enp->en_filter.ef_ef10_filter_table;
+	unsigned int i;
+
+	for (i = 0; i < table->eft_unicst_filter_count; i++) {
+		ef10_filter_set_entry_auto_old(table,
+					table->eft_unicst_filter_indexes[i]);
+	}
+	for (i = 0; i < table->eft_mulcst_filter_count; i++) {
+		ef10_filter_set_entry_auto_old(table,
+					table->eft_mulcst_filter_indexes[i]);
+	}
+	for (i = 0; i < table->eft_encap_filter_count; i++) {
+		ef10_filter_set_entry_auto_old(table,
+					table->eft_encap_filter_indexes[i]);
+	}
+}
+
+static	__checkReturn	efx_rc_t
+ef10_filter_insert_renew_unicst_filters(
+	__in				efx_nic_t *enp,
+	__in_ecount(6)			uint8_t const *mac_addr,
+	__in				boolean_t all_unicst,
+	__in				efx_filter_flags_t filter_flags,
+	__out				boolean_t *all_unicst_inserted)
+{
+	ef10_filter_table_t *table = enp->en_filter.ef_ef10_filter_table;
+	efx_port_t *epp = &(enp->en_port);
+	efx_rc_t rc;
+
+	/*
+	 * Firmware does not perform chaining on unicast filters. As traffic is
+	 * therefore only delivered to the first matching filter, we should
+	 * always insert the specific filter for our MAC address, to try and
+	 * ensure we get that traffic.
+	 *
+	 * (If the filter for our MAC address has already been inserted by
+	 * another function, we won't receive traffic sent to us, even if we
+	 * insert a unicast mismatch filter. To prevent traffic stealing, this
+	 * therefore relies on the privilege model only allowing functions to
+	 * insert filters for their own MAC address unless explicitly given
+	 * additional privileges by the user. This also means that, even on a
+	 * privileged function, inserting a unicast mismatch filter may not
+	 * catch all traffic in multi PCI function scenarios.)
+	 */
+	table->eft_unicst_filter_count = 0;
+	rc = ef10_filter_insert_unicast(enp, mac_addr, filter_flags);
+	*all_unicst_inserted = B_FALSE;
+	if (all_unicst || (rc != 0)) {
+		efx_rc_t all_unicst_rc;
+
+		all_unicst_rc = ef10_filter_insert_all_unicast(enp,
+						    filter_flags);
+		if (all_unicst_rc == 0) {
+			*all_unicst_inserted = B_TRUE;
+			epp->ep_all_unicst_inserted = B_TRUE;
+		} else if (rc != 0)
+			goto fail1;
+	}
+
+	return (0);
+
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+
+	return (rc);
+}
+
+static	__checkReturn	efx_rc_t
+ef10_filter_insert_renew_mulcst_filters(
+	__in				efx_nic_t *enp,
+	__in				boolean_t mulcst,
+	__in				boolean_t all_mulcst,
+	__in				boolean_t brdcst,
+	__in_ecount(6*count)		uint8_t const *addrs,
+	__in				uint32_t count,
+	__in				efx_filter_flags_t filter_flags,
+	__in				boolean_t all_unicst_inserted,
+	__out				boolean_t *all_mulcst_inserted)
+{
+	ef10_filter_table_t *table = enp->en_filter.ef_ef10_filter_table;
+	efx_nic_cfg_t *encp = &enp->en_nic_cfg;
+	efx_port_t *epp = &(enp->en_port);
+	efx_rc_t rc;
+
+	*all_mulcst_inserted = B_FALSE;
+
+	if (all_mulcst == B_TRUE) {
+		efx_rc_t all_mulcst_rc;
+
+		/*
+		 * Insert the all multicast filter. If that fails, try to insert
+		 * all of our multicast filters (but without rollback on
+		 * failure).
+		 */
+		all_mulcst_rc = ef10_filter_insert_all_multicast(enp,
+							    filter_flags);
+		if (all_mulcst_rc == 0) {
+			epp->ep_all_mulcst_inserted = B_TRUE;
+			*all_mulcst_inserted = B_TRUE;
+		} else {
+			rc = ef10_filter_insert_multicast_list(enp, B_TRUE,
+			    brdcst, addrs, count, filter_flags, B_FALSE);
+			if (rc != 0)
+				goto fail1;
+		}
+	} else {
+		/*
+		 * Insert filters for multicast addresses.
+		 * If any insertion fails, then rollback and try to insert the
+		 * all multicast filter instead.
+		 * If that also fails, try to insert all of the multicast
+		 * filters (but without rollback on failure).
+		 */
+		rc = ef10_filter_insert_multicast_list(enp, mulcst, brdcst,
+			    addrs, count, filter_flags, B_TRUE);
+		if (rc != 0) {
+			if ((table->eft_using_all_mulcst == B_FALSE) &&
+			    (encp->enc_bug26807_workaround == B_TRUE)) {
+				/*
+				 * Multicast filter chaining is on, so remove
+				 * old filters before inserting the multicast
+				 * all filter to avoid duplicate delivery caused
+				 * by packets matching multiple filters.
+				 */
+				ef10_filter_remove_old(enp);
+				if (all_unicst_inserted == B_FALSE)
+					epp->ep_all_unicst_inserted = B_FALSE;
+				if (*all_mulcst_inserted == B_FALSE)
+					epp->ep_all_mulcst_inserted = B_FALSE;
+			}
+
+			rc = ef10_filter_insert_all_multicast(enp,
+							    filter_flags);
+			if (rc == 0) {
+				epp->ep_all_mulcst_inserted = B_TRUE;
+				*all_mulcst_inserted = B_TRUE;
+			} else {
+				rc = ef10_filter_insert_multicast_list(enp,
+				    mulcst, brdcst,
+				    addrs, count, filter_flags, B_FALSE);
+				if (rc != 0)
+					goto fail2;
+			}
+		}
+	}
+
+	return (0);
+
+fail2:
+	EFSYS_PROBE1(fail2, efx_rc_t, rc);
+
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+
+	return (rc);
+}
 
 /*
  * Reconfigure all filters.
@@ -1510,11 +1966,12 @@ ef10_filter_reconfigure(
 	__in				uint32_t count)
 {
 	efx_nic_cfg_t *encp = &enp->en_nic_cfg;
+	efx_port_t *epp = &(enp->en_port);
 	ef10_filter_table_t *table = enp->en_filter.ef_ef10_filter_table;
 	efx_filter_flags_t filter_flags;
 	unsigned int i;
-	efx_rc_t all_unicst_rc = 0;
-	efx_rc_t all_mulcst_rc = 0;
+	boolean_t all_unicst_inserted = B_FALSE;
+	boolean_t all_mulcst_inserted = B_FALSE;
 	efx_rc_t rc;
 
 	if (table->eft_default_rxq == NULL) {
@@ -1524,24 +1981,7 @@ ef10_filter_reconfigure(
 		 * filters must be removed (ignore errors in case the MC
 		 * has rebooted, which removes hardware filters).
 		 */
-		for (i = 0; i < table->eft_unicst_filter_count; i++) {
-			(void) ef10_filter_delete_internal(enp,
-					table->eft_unicst_filter_indexes[i]);
-		}
-		table->eft_unicst_filter_count = 0;
-
-		for (i = 0; i < table->eft_mulcst_filter_count; i++) {
-			(void) ef10_filter_delete_internal(enp,
-					table->eft_mulcst_filter_indexes[i]);
-		}
-		table->eft_mulcst_filter_count = 0;
-
-		for (i = 0; i < table->eft_encap_filter_count; i++) {
-			(void) ef10_filter_delete_internal(enp,
-					table->eft_encap_filter_indexes[i]);
-		}
-		table->eft_encap_filter_count = 0;
-
+		ef10_filter_remove_all_existing_filters(enp);
 		return (0);
 	}
 
@@ -1551,44 +1991,14 @@ ef10_filter_reconfigure(
 		filter_flags = 0;
 
 	/* Mark old filters which may need to be removed */
-	for (i = 0; i < table->eft_unicst_filter_count; i++) {
-		ef10_filter_set_entry_auto_old(table,
-					table->eft_unicst_filter_indexes[i]);
-	}
-	for (i = 0; i < table->eft_mulcst_filter_count; i++) {
-		ef10_filter_set_entry_auto_old(table,
-					table->eft_mulcst_filter_indexes[i]);
-	}
-	for (i = 0; i < table->eft_encap_filter_count; i++) {
-		ef10_filter_set_entry_auto_old(table,
-					table->eft_encap_filter_indexes[i]);
-	}
+	ef10_filter_mark_old_filters(enp);
 
-	/*
-	 * Insert or renew unicast filters.
-	 *
-	 * Firmware does not perform chaining on unicast filters. As traffic is
-	 * therefore only delivered to the first matching filter, we should
-	 * always insert the specific filter for our MAC address, to try and
-	 * ensure we get that traffic.
-	 *
-	 * (If the filter for our MAC address has already been inserted by
-	 * another function, we won't receive traffic sent to us, even if we
-	 * insert a unicast mismatch filter. To prevent traffic stealing, this
-	 * therefore relies on the privilege model only allowing functions to
-	 * insert filters for their own MAC address unless explicitly given
-	 * additional privileges by the user. This also means that, even on a
-	 * priviliged function, inserting a unicast mismatch filter may not
-	 * catch all traffic in multi PCI function scenarios.)
-	 */
-	table->eft_unicst_filter_count = 0;
-	rc = ef10_filter_insert_unicast(enp, mac_addr, filter_flags);
-	if (all_unicst || (rc != 0)) {
-		all_unicst_rc = ef10_filter_insert_all_unicast(enp,
-						    filter_flags);
-		if ((rc != 0) && (all_unicst_rc != 0))
-			goto fail1;
-	}
+	/* Insert or renew unicast filters */
+	rc = ef10_filter_insert_renew_unicst_filters(enp, mac_addr, all_unicst,
+						     filter_flags,
+						     &all_unicst_inserted);
+	if (rc != 0)
+		goto fail1;
 
 	/*
 	 * WORKAROUND_BUG26807 controls firmware support for chained multicast
@@ -1629,56 +2039,20 @@ ef10_filter_reconfigure(
 		 * multicast filters.
 		 */
 		ef10_filter_remove_old(enp);
+		if (all_unicst_inserted == B_FALSE)
+			epp->ep_all_unicst_inserted = B_FALSE;
+
+		epp->ep_all_mulcst_inserted = B_FALSE;
 	}
 
 	/* Insert or renew multicast filters */
-	if (all_mulcst == B_TRUE) {
-		/*
-		 * Insert the all multicast filter. If that fails, try to insert
-		 * all of our multicast filters (but without rollback on
-		 * failure).
-		 */
-		all_mulcst_rc = ef10_filter_insert_all_multicast(enp,
-							    filter_flags);
-		if (all_mulcst_rc != 0) {
-			rc = ef10_filter_insert_multicast_list(enp, B_TRUE,
-			    brdcst, addrs, count, filter_flags, B_FALSE);
-			if (rc != 0)
-				goto fail3;
-		}
-	} else {
-		/*
-		 * Insert filters for multicast addresses.
-		 * If any insertion fails, then rollback and try to insert the
-		 * all multicast filter instead.
-		 * If that also fails, try to insert all of the multicast
-		 * filters (but without rollback on failure).
-		 */
-		rc = ef10_filter_insert_multicast_list(enp, mulcst, brdcst,
-			    addrs, count, filter_flags, B_TRUE);
-		if (rc != 0) {
-			if ((table->eft_using_all_mulcst == B_FALSE) &&
-			    (encp->enc_bug26807_workaround == B_TRUE)) {
-				/*
-				 * Multicast filter chaining is on, so remove
-				 * old filters before inserting the multicast
-				 * all filter to avoid duplicate delivery caused
-				 * by packets matching multiple filters.
-				 */
-				ef10_filter_remove_old(enp);
-			}
-
-			rc = ef10_filter_insert_all_multicast(enp,
-							    filter_flags);
-			if (rc != 0) {
-				rc = ef10_filter_insert_multicast_list(enp,
-				    mulcst, brdcst,
-				    addrs, count, filter_flags, B_FALSE);
-				if (rc != 0)
-					goto fail4;
-			}
-		}
-	}
+	rc = ef10_filter_insert_renew_mulcst_filters(enp, mulcst, all_mulcst,
+						     brdcst, addrs, count,
+						     filter_flags,
+						     all_unicst_inserted,
+						     &all_mulcst_inserted);
+	if (rc != 0)
+		goto fail3;
 
 	if (encp->enc_tunnel_encapsulations_supported != 0) {
 		/* Try to insert filters for encapsulated packets. */
@@ -1689,17 +2063,19 @@ ef10_filter_reconfigure(
 
 	/* Remove old filters which were not renewed */
 	ef10_filter_remove_old(enp);
+	if (all_unicst_inserted == B_FALSE)
+		epp->ep_all_unicst_inserted = B_FALSE;
+	if (all_mulcst_inserted == B_FALSE)
+		epp->ep_all_mulcst_inserted = B_FALSE;
 
 	/* report if any optional flags were rejected */
-	if (((all_unicst != B_FALSE) && (all_unicst_rc != 0)) ||
-	    ((all_mulcst != B_FALSE) && (all_mulcst_rc != 0))) {
+	if (((all_unicst != B_FALSE) && (all_unicst_inserted == B_FALSE)) ||
+	    ((all_mulcst != B_FALSE) && (all_mulcst_inserted == B_FALSE))) {
 		rc = ENOTSUP;
 	}
 
 	return (rc);
 
-fail4:
-	EFSYS_PROBE(fail4);
 fail3:
 	EFSYS_PROBE(fail3);
 fail2:

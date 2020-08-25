@@ -9,7 +9,7 @@ include $(RTE_SDK)/mk/rte.vars.mk
 LIB = librte_pmd_iavf.a
 
 CFLAGS += -I$(RTE_SDK)/drivers/common/iavf
-CFLAGS += -O3 $(WERROR_FLAGS) -Wno-strict-aliasing -DALLOW_EXPERIMENTAL_API
+CFLAGS += -O3 $(WERROR_FLAGS) -Wno-strict-aliasing
 LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
 LDLIBS += -lrte_ethdev -lrte_net -lrte_kvargs -lrte_hash
 LDLIBS += -lrte_bus_pci
@@ -23,6 +23,9 @@ EXPORT_MAP := rte_pmd_iavf_version.map
 SRCS-$(CONFIG_RTE_LIBRTE_IAVF_PMD) += iavf_ethdev.c
 SRCS-$(CONFIG_RTE_LIBRTE_IAVF_PMD) += iavf_vchnl.c
 SRCS-$(CONFIG_RTE_LIBRTE_IAVF_PMD) += iavf_rxtx.c
+SRCS-$(CONFIG_RTE_LIBRTE_IAVF_PMD) += iavf_generic_flow.c
+SRCS-$(CONFIG_RTE_LIBRTE_IAVF_PMD) += iavf_fdir.c
+SRCS-$(CONFIG_RTE_LIBRTE_IAVF_PMD) += iavf_hash.c
 ifeq ($(CONFIG_RTE_ARCH_X86), y)
 SRCS-$(CONFIG_RTE_LIBRTE_IAVF_PMD) += iavf_rxtx_vec_sse.c
 endif

@@ -221,6 +221,13 @@ DPDK_20.0 {
 	local: *;
 };
 
+DPDK_21 {
+	global:
+
+	per_lcore__thread_id;
+
+} DPDK_20.0;
+
 EXPERIMENTAL {
 	global:
 
@@ -303,7 +310,6 @@ EXPERIMENTAL {
 	rte_memseg_get_fd_offset;
 	rte_memseg_get_fd_offset_thread_unsafe;
 	rte_memseg_get_fd_thread_unsafe;
-	rte_option_register;
 
 	# added in 19.02
 	rte_extmem_attach;
@@ -335,4 +341,75 @@ EXPERIMENTAL {
 
 	# added in 20.02
 	rte_thread_is_intr;
+
+	# added in 20.05
+	__rte_eal_trace_alarm_cancel;
+	__rte_eal_trace_alarm_set;
+	__rte_eal_trace_generic_double;
+	__rte_eal_trace_generic_float;
+	__rte_eal_trace_generic_func;
+	__rte_eal_trace_generic_i16;
+	__rte_eal_trace_generic_i32;
+	__rte_eal_trace_generic_i64;
+	__rte_eal_trace_generic_i8;
+	__rte_eal_trace_generic_int;
+	__rte_eal_trace_generic_long;
+	__rte_eal_trace_generic_ptr;
+	__rte_eal_trace_generic_str;
+	__rte_eal_trace_generic_u16;
+	__rte_eal_trace_generic_u32;
+	__rte_eal_trace_generic_u64;
+	__rte_eal_trace_generic_u8;
+	__rte_eal_trace_generic_void;
+	__rte_eal_trace_intr_callback_register;
+	__rte_eal_trace_intr_callback_unregister;
+	__rte_eal_trace_intr_enable;
+	__rte_eal_trace_intr_disable;
+	__rte_eal_trace_mem_free;
+	__rte_eal_trace_mem_malloc;
+	__rte_eal_trace_mem_realloc;
+	__rte_eal_trace_mem_zmalloc;
+	__rte_eal_trace_memzone_free;
+	__rte_eal_trace_memzone_lookup;
+	__rte_eal_trace_memzone_reserve;
+	__rte_eal_trace_thread_lcore_ready;
+	__rte_eal_trace_thread_remote_launch;
+	__rte_trace_mem_per_thread_alloc;
+	__rte_trace_point_emit_field;
+	__rte_trace_point_register;
+	per_lcore_trace_mem;
+	per_lcore_trace_point_sz;
+	rte_log_can_log;
+	rte_thread_getname;
+	rte_trace_dump;
+	rte_trace_is_enabled;
+	rte_trace_metadata_dump;
+	rte_trace_mode_get;
+	rte_trace_mode_set;
+	rte_trace_pattern;
+	rte_trace_point_disable;
+	rte_trace_point_enable;
+	rte_trace_point_is_enabled;
+	rte_trace_point_lookup;
+	rte_trace_regexp;
+	rte_trace_save;
+
+	# added in 20.08
+	rte_eal_vfio_get_vf_token;
+	rte_lcore_callback_register;
+	rte_lcore_callback_unregister;
+	rte_lcore_dump;
+	rte_lcore_iterate;
+	rte_mp_disable;
+	rte_thread_register;
+	rte_thread_unregister;
+};
+
+INTERNAL {
+	global:
+
+	rte_mem_lock;
+	rte_mem_map;
+	rte_mem_page_size;
+	rte_mem_unmap;
 };

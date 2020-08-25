@@ -8,6 +8,8 @@
 #define __BCM_OSAL_H
 
 #include <stdbool.h>
+#include <time.h>
+#include <rte_bitops.h>
 #include <rte_byteorder.h>
 #include <rte_spinlock.h>
 #include <rte_malloc.h>
@@ -18,6 +20,7 @@
 #include <rte_debug.h>
 #include <rte_ether.h>
 #include <rte_io.h>
+#include <rte_version.h>
 
 /* Forward declaration */
 struct ecore_dev;
@@ -308,23 +311,20 @@ typedef struct osal_list_t {
 #define OSAL_BITS_PER_UL_MASK		(OSAL_BITS_PER_UL - 1)
 
 /* Bitops */
-void qede_set_bit(u32, unsigned long *);
 #define OSAL_SET_BIT(bit, bitmap) \
-	qede_set_bit(bit, bitmap)
+	rte_bit_relaxed_set32(bit, bitmap)
 
-void qede_clr_bit(u32, unsigned long *);
 #define OSAL_CLEAR_BIT(bit, bitmap) \
-	qede_clr_bit(bit, bitmap)
+	rte_bit_relaxed_clear32(bit, bitmap)
 
-bool qede_test_bit(u32, unsigned long *);
-#define OSAL_TEST_BIT(bit, bitmap) \
-	qede_test_bit(bit, bitmap)
+#define OSAL_GET_BIT(bit, bitmap) \
+	rte_bit_relaxed_get32(bit, bitmap)
 
 u32 qede_find_first_bit(unsigned long *, u32);
 #define OSAL_FIND_FIRST_BIT(bitmap, length) \
 	qede_find_first_bit(bitmap, length)
 
-u32 qede_find_first_zero_bit(unsigned long *, u32);
+u32 qede_find_first_zero_bit(u32 *bitmap, u32 length);
 #define OSAL_FIND_FIRST_ZERO_BIT(bitmap, length) \
 	qede_find_first_zero_bit(bitmap, length)
 
@@ -371,6 +371,11 @@ void qede_hw_err_notify(struct ecore_hwfn *p_hwfn,
 
 /* TODO: */
 #define OSAL_SCHEDULE_RECOVERY_HANDLER(hwfn) nothing
+
+int qede_save_fw_dump(uint8_t port_id);
+
+#define OSAL_SAVE_FW_DUMP(port_id) qede_save_fw_dump(port_id)
+
 #define OSAL_HW_ERROR_OCCURRED(hwfn, err_type) \
 	qede_hw_err_notify(hwfn, err_type)
 
@@ -426,7 +431,7 @@ u32 qede_osal_log2(u32);
 #define OSAL_PAGE_SIZE 4096
 #define OSAL_CACHE_LINE_SIZE RTE_CACHE_LINE_SIZE
 #define OSAL_IOMEM volatile
-#define OSAL_UNUSED    __attribute__((unused))
+#define OSAL_UNUSED    __rte_unused
 #define OSAL_UNLIKELY(x)  __builtin_expect(!!(x), 0)
 #define OSAL_MIN_T(type, __min1, __min2)	\
 	((type)(__min1) < (type)(__min2) ? (type)(__min1) : (type)(__min2))
@@ -452,8 +457,15 @@ u32 qede_crc32(u32 crc, u8 *ptr, u32 length);
 
 #define OSAL_DIV_S64(a, b)	((a) / (b))
 #define OSAL_LLDP_RX_TLVS(p_hwfn, tlv_buf, tlv_size) nothing
-#define OSAL_GET_EPOCH(p_hwfn)	0
-#define OSAL_DBG_ALLOC_USER_DATA(p_hwfn, user_data_ptr) (0)
+void qed_set_platform_str(struct ecore_hwfn *p_hwfn,
+			  char *buf_str, u32 buf_size);
+#define OSAL_SET_PLATFORM_STR(p_hwfn, buf_str, buf_size) \
+	qed_set_platform_str(p_hwfn, buf_str, buf_size)
+#define OSAL_GET_EPOCH(p_hwfn) ((u32)time(NULL))
+enum dbg_status	qed_dbg_alloc_user_data(struct ecore_hwfn *p_hwfn,
+					void **user_data_ptr);
+#define OSAL_DBG_ALLOC_USER_DATA(p_hwfn, user_data_ptr) \
+	qed_dbg_alloc_user_data(p_hwfn, user_data_ptr)
 #define OSAL_DB_REC_OCCURRED(p_hwfn) nothing
 
 #endif /* __BCM_OSAL_H */

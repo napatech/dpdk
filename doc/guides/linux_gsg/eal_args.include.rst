@@ -132,9 +132,61 @@ Debugging options
 
     Specify log level for a specific component. For example::
 
-        --log-level eal:8
+        --log-level lib.eal:debug
 
     Can be specified multiple times.
+
+*   ``--trace=<regex-match>``
+
+    Enable trace based on regular expression trace name. By default, the trace is
+    disabled. User must specify this option to enable trace.
+    For example:
+
+    Global trace configuration for EAL only::
+
+        --trace=eal
+
+    Global trace configuration for ALL the components::
+
+        --trace=.*
+
+    Can be specified multiple times up to 32 times.
+
+*   ``--trace-dir=<directory path>``
+
+    Specify trace directory for trace output. For example:
+
+    Configuring ``/tmp/`` as a trace output directory::
+
+        --trace-dir=/tmp
+
+    By default, trace output will created at ``home`` directory and parameter
+    must be specified once only.
+
+*   ``--trace-bufsz=<val>``
+
+    Specify maximum size of allocated memory for trace output for each thread.
+    Valid unit can be either ``B`` or ``K`` or ``M`` for ``Bytes``, ``KBytes``
+    and ``MBytes`` respectively. For example:
+
+    Configuring ``2MB`` as a maximum size for trace output file::
+
+        --trace-bufsz=2M
+
+    By default, size of trace output file is ``1MB`` and parameter
+    must be specified once only.
+
+*   ``--trace-mode=<o[verwrite] | d[iscard] >``
+
+    Specify the mode of update of trace output file. Either update on a file
+    can be wrapped or discarded when file size reaches its maximum limit.
+    For example:
+
+    To ``discard`` update on trace output file::
+
+        --trace-mode=d or --trace-mode=discard
+
+    Default mode is ``overwrite`` and parameter must be specified once only.
 
 Other options
 ~~~~~~~~~~~~~
@@ -150,3 +202,11 @@ Other options
 *   ``mbuf-pool-ops-name``:
 
     Pool ops name for mbuf to use.
+
+*    ``--telemetry``:
+
+    Enable telemetry (enabled by default).
+
+*    ``--no-telemetry``:
+
+    Disable telemetry.

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2016-2018 Solarflare Communications Inc.
- * All rights reserved.
+ * Copyright(c) 2019-2020 Xilinx, Inc.
+ * Copyright(c) 2016-2019 Solarflare Communications Inc.
  *
  * This software was jointly developed between OKTET Labs (under contract
  * for Solarflare) and Solarflare Communications, Inc.
@@ -719,7 +719,8 @@ retry:
 		sfc_warn(sa, "promiscuous mode will be disabled");
 
 		port->promisc = B_FALSE;
-		rc = sfc_set_rx_mode(sa);
+		sa->eth_dev->data->promiscuous = 0;
+		rc = sfc_set_rx_mode_unchecked(sa);
 		if (rc != 0)
 			return rc;
 
@@ -732,7 +733,8 @@ retry:
 		sfc_warn(sa, "all-multicast mode will be disabled");
 
 		port->allmulti = B_FALSE;
-		rc = sfc_set_rx_mode(sa);
+		sa->eth_dev->data->all_multicast = 0;
+		rc = sfc_set_rx_mode_unchecked(sa);
 		if (rc != 0)
 			return rc;
 
@@ -820,10 +822,12 @@ sfc_rx_qstart(struct sfc_adapter *sa, unsigned int sw_index)
 	return 0;
 
 fail_mac_filter_default_rxq_set:
+	sfc_rx_qflush(sa, sw_index);
 	sa->priv.dp_rx->qstop(rxq_info->dp, &rxq->evq->read_ptr);
+	rxq_info->state = SFC_RXQ_INITIALIZED;
 
 fail_dp_qstart:
-	sfc_rx_qflush(sa, sw_index);
+	efx_rx_qdestroy(rxq->common);
 
 fail_rx_qcreate:
 fail_bad_contig_block_size:
@@ -1556,10 +1560,6 @@ sfc_rx_check_mode(struct sfc_adapter *sa, struct rte_eth_rxmode *rxmode)
 		sfc_warn(sa, "Rx outer IPv4 checksum offload cannot be disabled - always on");
 		rxmode->offloads |= DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM;
 	}
-
-	if ((offloads_supported & DEV_RX_OFFLOAD_RSS_HASH) &&
-	    (rxmode->mq_mode & ETH_MQ_RX_RSS_FLAG))
-		rxmode->offloads |= DEV_RX_OFFLOAD_RSS_HASH;
 
 	return rc;
 }

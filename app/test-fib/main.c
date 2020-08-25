@@ -2,14 +2,10 @@
  * Copyright(c) 2019 Intel Corporation
  */
 
-#include <rte_string_fns.h>
 #include <getopt.h>
 #include <string.h>
-#include <stdio.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/socket.h>
 
 #include <rte_cycles.h>
 #include <rte_errno.h>
@@ -362,7 +358,7 @@ complete_v6_addr(uint32_t *addr, uint32_t rnd, int n)
 static void
 gen_random_rt_6(struct rt_rule_6 *rt, int nh_sz)
 {
-	uint32_t i, j, k = 0;
+	uint32_t a, i, j, k = 0;
 
 	if (config.nb_routes_per_depth[0] != 0) {
 		memset(rt[k].addr, 0, 16);
@@ -370,7 +366,7 @@ gen_random_rt_6(struct rt_rule_6 *rt, int nh_sz)
 		rt[k++].nh = rte_rand() & get_max_nh(nh_sz);
 	}
 
-	for (int a = 0; a < 4; a++) {
+	for (a = 0; a < 4; a++) {
 		for (i = 1; i <= 32; i++) {
 			uint32_t rnd;
 			double edge = 0;
@@ -444,6 +440,32 @@ gen_rnd_lookup_tbl(int af)
 }
 
 static int
+_inet_net_pton(int af, char *prefix, void *addr)
+{
+	const char *dlm = "/";
+	char *s, *sp;
+	int ret, depth;
+	unsigned int max_depth;
+
+	if ((prefix == NULL) || (addr == NULL))
+		return -EINVAL;
+
+	s = strtok_r(prefix, dlm, &sp);
+	if (s == NULL)
+		return -EINVAL;
+
+	ret = inet_pton(af, s, addr);
+	if (ret != 1)
+		return -errno;
+
+	s = strtok_r(NULL, dlm, &sp);
+	max_depth = (af == AF_INET) ? 32 : 128;
+	GET_CB_FIELD(s, depth, 0, max_depth, 0);
+
+	return depth;
+}
+
+static int
 parse_rt_4(FILE *f)
 {
 	int ret, i, j = 0;
@@ -463,8 +485,7 @@ parse_rt_4(FILE *f)
 			s = NULL;
 		}
 
-		ret = inet_net_pton(AF_INET, in[RT_PREFIX], &rt[j].addr,
-			sizeof(rt[j].addr));
+		ret = _inet_net_pton(AF_INET, in[RT_PREFIX], &rt[j].addr);
 		if (ret == -1)
 			return -errno;
 
@@ -476,30 +497,6 @@ parse_rt_4(FILE *f)
 		j++;
 	}
 	return 0;
-}
-
-static int
-__inet_net_pton6(char *prefix, uint8_t *addr)
-{
-	const char *dlm = "/";
-	char *s, *sp;
-	int ret, depth;
-
-	if ((prefix == NULL) || (addr == NULL))
-		return -EINVAL;
-
-	s = strtok_r(prefix, dlm, &sp);
-	if (s == NULL)
-		return -EINVAL;
-
-	ret = inet_pton(AF_INET6, s, addr);
-	if (ret != 1)
-		return -errno;
-
-	s = strtok_r(NULL, dlm, &sp);
-	GET_CB_FIELD(s, depth, 0, 128, 0);
-
-	return depth;
 }
 
 static int
@@ -522,7 +519,7 @@ parse_rt_6(FILE *f)
 			s = NULL;
 		}
 
-		ret = __inet_net_pton6(in[RT_PREFIX], rt[j].addr);
+		ret = _inet_net_pton(AF_INET6, in[RT_PREFIX], rt[j].addr);
 		if (ret < 0)
 			return ret;
 
@@ -546,6 +543,8 @@ parse_lookup(FILE *f, int af)
 
 	while (fgets(line, sizeof(line), f) != NULL) {
 		s = strtok(line, " \t\n");
+		if (s == NULL)
+			return -EINVAL;
 		ret = inet_pton(af, s, &tbl[i]);
 		if (ret != 1)
 			return -EINVAL;
@@ -790,7 +789,7 @@ dump_rt_4(struct rt_rule_4 *rt)
 	}
 
 	for (i = 0; i < config.nb_routes; i++)
-		fprintf(f, NIPQUAD_FMT"/%d %lu\n", NIPQUAD(rt[i].addr),
+		fprintf(f, NIPQUAD_FMT"/%d %"PRIu64"\n", NIPQUAD(rt[i].addr),
 			rt[i].depth, rt[i].nh);
 
 	fclose(f);
@@ -858,7 +857,8 @@ run_v4(void)
 				return -ret;
 			}
 		}
-		printf("AVG FIB add %lu\n", (rte_rdtsc_precise() - start) / j);
+		printf("AVG FIB add %"PRIu64"\n",
+			(rte_rdtsc_precise() - start) / j);
 		i += j;
 	}
 
@@ -885,7 +885,7 @@ run_v4(void)
 					return -ret;
 				}
 			}
-			printf("AVG LPM add %lu\n",
+			printf("AVG LPM add %"PRIu64"\n",
 				(rte_rdtsc_precise() - start) / j);
 			i += j;
 		}
@@ -939,7 +939,7 @@ run_v4(void)
 		for (j = 0; j < (config.nb_routes - i) / k; j++)
 			rte_fib_delete(fib, rt[i + j].addr, rt[i + j].depth);
 
-		printf("AVG FIB delete %lu\n",
+		printf("AVG FIB delete %"PRIu64"\n",
 			(rte_rdtsc_precise() - start) / j);
 		i += j;
 	}
@@ -951,7 +951,7 @@ run_v4(void)
 				rte_lpm_delete(lpm, rt[i + j].addr,
 					rt[i + j].depth);
 
-			printf("AVG LPM delete %lu\n",
+			printf("AVG LPM delete %"PRIu64"\n",
 				(rte_rdtsc_precise() - start) / j);
 			i += j;
 		}
@@ -973,7 +973,7 @@ dump_rt_6(struct rt_rule_6 *rt)
 	}
 
 	for (i = 0; i < config.nb_routes; i++) {
-		fprintf(f, NIPQUAD6_FMT"/%d %lu\n", NIPQUAD6(rt[i].addr),
+		fprintf(f, NIPQUAD6_FMT"/%d %"PRIu64"\n", NIPQUAD6(rt[i].addr),
 			rt[i].depth, rt[i].nh);
 
 	}
@@ -1036,7 +1036,8 @@ run_v6(void)
 				return -ret;
 			}
 		}
-		printf("AVG FIB add %lu\n", (rte_rdtsc_precise() - start) / j);
+		printf("AVG FIB add %"PRIu64"\n",
+			(rte_rdtsc_precise() - start) / j);
 		i += j;
 	}
 
@@ -1063,7 +1064,7 @@ run_v6(void)
 					return -ret;
 				}
 			}
-			printf("AVG LPM add %lu\n",
+			printf("AVG LPM add %"PRIu64"\n",
 				(rte_rdtsc_precise() - start) / j);
 			i += j;
 		}
@@ -1121,7 +1122,7 @@ run_v6(void)
 		for (j = 0; j < (config.nb_routes - i) / k; j++)
 			rte_fib6_delete(fib, rt[i + j].addr, rt[i + j].depth);
 
-		printf("AVG FIB delete %lu\n",
+		printf("AVG FIB delete %"PRIu64"\n",
 			(rte_rdtsc_precise() - start) / j);
 		i += j;
 	}
@@ -1133,7 +1134,7 @@ run_v6(void)
 				rte_lpm6_delete(lpm, rt[i + j].addr,
 					rt[i + j].depth);
 
-			printf("AVG LPM delete %lu\n",
+			printf("AVG LPM delete %"PRIu64"\n",
 				(rte_rdtsc_precise() - start) / j);
 			i += j;
 		}
@@ -1145,7 +1146,8 @@ int
 main(int argc, char **argv)
 {
 	int ret, af, rt_ent_sz, lookup_ent_sz;
-	FILE	*fr, *fl;
+	FILE *fr = NULL;
+	FILE *fl = NULL;
 	uint8_t depth_lim;
 
 	ret = rte_eal_init(argc, argv);
@@ -1207,7 +1209,7 @@ main(int argc, char **argv)
 		rte_exit(-ENOMEM, "Can not alloc lookup table\n");
 
 	/* Fill routes table */
-	if (config.routes_file == NULL) {
+	if (fr == NULL) {
 		if (distrib_string != NULL)
 			ret = parse_distrib(depth_lim, config.nb_routes);
 		else {
@@ -1243,7 +1245,7 @@ main(int argc, char **argv)
 	}
 
 	/* Fill lookup table with ip's*/
-	if (config.lookup_ips_file == NULL)
+	if (fl == NULL)
 		gen_rnd_lookup_tbl(af);
 	else {
 		ret = parse_lookup(fl, af);

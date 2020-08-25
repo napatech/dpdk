@@ -12,10 +12,9 @@
 #include "mlx5_vdpa_utils.h"
 #include "mlx5_vdpa.h"
 
-int
-mlx5_vdpa_steer_unset(struct mlx5_vdpa_priv *priv)
+static void
+mlx5_vdpa_rss_flows_destroy(struct mlx5_vdpa_priv *priv)
 {
-	int ret __rte_unused;
 	unsigned i;
 
 	for (i = 0; i < RTE_DIM(priv->steer.rss); ++i) {
@@ -40,6 +39,12 @@ mlx5_vdpa_steer_unset(struct mlx5_vdpa_priv *priv)
 			priv->steer.rss[i].matcher = NULL;
 		}
 	}
+}
+
+void
+mlx5_vdpa_steer_unset(struct mlx5_vdpa_priv *priv)
+{
+	mlx5_vdpa_rss_flows_destroy(priv);
 	if (priv->steer.tbl) {
 		claim_zero(mlx5_glue->dr_destroy_flow_tbl(priv->steer.tbl));
 		priv->steer.tbl = NULL;
@@ -52,53 +57,43 @@ mlx5_vdpa_steer_unset(struct mlx5_vdpa_priv *priv)
 		claim_zero(mlx5_devx_cmd_destroy(priv->steer.rqt));
 		priv->steer.rqt = NULL;
 	}
-	return 0;
-}
-
-/*
- * According to VIRTIO_NET Spec the virtqueues index identity its type by:
- * 0 receiveq1
- * 1 transmitq1
- * ...
- * 2(N-1) receiveqN
- * 2(N-1)+1 transmitqN
- * 2N controlq
- */
-static uint8_t
-is_virtq_recvq(int virtq_index, int nr_vring)
-{
-	if (virtq_index % 2 == 0 && virtq_index != nr_vring - 1)
-		return 1;
-	return 0;
 }
 
 #define MLX5_VDPA_DEFAULT_RQT_SIZE 512
+/*
+ * Return the number of queues configured to the table on success, otherwise
+ * -1 on error.
+ */
 static int
 mlx5_vdpa_rqt_prepare(struct mlx5_vdpa_priv *priv)
 {
-	struct mlx5_vdpa_virtq *virtq;
+	int i;
 	uint32_t rqt_n = RTE_MIN(MLX5_VDPA_DEFAULT_RQT_SIZE,
 				 1 << priv->log_max_rqt_size);
 	struct mlx5_devx_rqt_attr *attr = rte_zmalloc(__func__, sizeof(*attr)
 						      + rqt_n *
 						      sizeof(uint32_t), 0);
-	uint32_t i = 0, j;
-	int ret = 0;
+	uint32_t k = 0, j;
+	int ret = 0, num;
 
 	if (!attr) {
 		DRV_LOG(ERR, "Failed to allocate RQT attributes memory.");
 		rte_errno = ENOMEM;
 		return -ENOMEM;
 	}
-	SLIST_FOREACH(virtq, &priv->virtq_list, next) {
-		if (is_virtq_recvq(virtq->index, priv->nr_virtqs) &&
-		    virtq->enable) {
-			attr->rq_list[i] = virtq->virtq->id;
-			i++;
+	for (i = 0; i < priv->nr_virtqs; i++) {
+		if (is_virtq_recvq(i, priv->nr_virtqs) &&
+		    priv->virtqs[i].enable && priv->virtqs[i].virtq) {
+			attr->rq_list[k] = priv->virtqs[i].virtq->id;
+			k++;
 		}
 	}
-	for (j = 0; i != rqt_n; ++i, ++j)
-		attr->rq_list[i] = attr->rq_list[j];
+	if (k == 0)
+		/* No enabled RQ to configure for RSS. */
+		return 0;
+	num = (int)k;
+	for (j = 0; k != rqt_n; ++k, ++j)
+		attr->rq_list[k] = attr->rq_list[j];
 	attr->rq_type = MLX5_INLINE_Q_TYPE_VIRTQ;
 	attr->rqt_max_size = rqt_n;
 	attr->rqt_actual_size = rqt_n;
@@ -114,24 +109,7 @@ mlx5_vdpa_rqt_prepare(struct mlx5_vdpa_priv *priv)
 			DRV_LOG(ERR, "Failed to modify RQT.");
 	}
 	rte_free(attr);
-	return ret;
-}
-
-int
-mlx5_vdpa_virtq_enable(struct mlx5_vdpa_virtq *virtq, int enable)
-{
-	struct mlx5_vdpa_priv *priv = virtq->priv;
-	int ret = 0;
-
-	if (virtq->enable == !!enable)
-		return 0;
-	virtq->enable = !!enable;
-	if (is_virtq_recvq(virtq->index, priv->nr_virtqs)) {
-		ret = mlx5_vdpa_rqt_prepare(priv);
-		if (ret)
-			virtq->enable = !enable;
-	}
-	return ret;
+	return ret ? -1 : num;
 }
 
 static int __rte_unused
@@ -144,10 +122,16 @@ mlx5_vdpa_rss_flows_create(struct mlx5_vdpa_priv *priv)
 		.transport_domain = priv->td->id,
 		.indirect_table = priv->steer.rqt->id,
 		.rx_hash_symmetric = 1,
-		.rx_hash_toeplitz_key = { 0x2cc681d1, 0x5bdbf4f7, 0xfca28319,
-					  0xdb1a3e94, 0x6b9e38d9, 0x2c9c03d1,
-					  0xad9944a7, 0xd9563d59, 0x063c25f3,
-					  0xfc1fdc2a },
+		.rx_hash_toeplitz_key = { 0x2c, 0xc6, 0x81, 0xd1,
+					  0x5b, 0xdb, 0xf4, 0xf7,
+					  0xfc, 0xa2, 0x83, 0x19,
+					  0xdb, 0x1a, 0x3e, 0x94,
+					  0x6b, 0x9e, 0x38, 0xd9,
+					  0x2c, 0x9c, 0x03, 0xd1,
+					  0xad, 0x99, 0x44, 0xa7,
+					  0xd9, 0x56, 0x3d, 0x59,
+					  0x06, 0x3c, 0x25, 0xf3,
+					  0xfc, 0x1f, 0xdc, 0x2a },
 	};
 	struct {
 		size_t size;
@@ -155,10 +139,12 @@ mlx5_vdpa_rss_flows_create(struct mlx5_vdpa_priv *priv)
 		uint32_t buf[MLX5_ST_SZ_DW(fte_match_param)];
 		/**< Matcher value. This value is used as the mask or a key. */
 	} matcher_mask = {
-				.size = sizeof(matcher_mask.buf),
+				.size = sizeof(matcher_mask.buf) -
+					MLX5_ST_SZ_BYTES(fte_match_set_misc4),
 			},
 	  matcher_value = {
-				.size = sizeof(matcher_value.buf),
+				.size = sizeof(matcher_value.buf) -
+					MLX5_ST_SZ_BYTES(fte_match_set_misc4),
 			};
 	struct mlx5dv_flow_matcher_attr dv_attr = {
 		.type = IBV_FLOW_ATTR_NORMAL,
@@ -254,11 +240,32 @@ error:
 }
 
 int
+mlx5_vdpa_steer_update(struct mlx5_vdpa_priv *priv)
+{
+	int ret = mlx5_vdpa_rqt_prepare(priv);
+
+	if (ret == 0) {
+		mlx5_vdpa_rss_flows_destroy(priv);
+		if (priv->steer.rqt) {
+			claim_zero(mlx5_devx_cmd_destroy(priv->steer.rqt));
+			priv->steer.rqt = NULL;
+		}
+	} else if (ret < 0) {
+		return ret;
+	} else if (!priv->steer.rss[0].flow) {
+		ret = mlx5_vdpa_rss_flows_create(priv);
+		if (ret) {
+			DRV_LOG(ERR, "Cannot create RSS flows.");
+			return -1;
+		}
+	}
+	return 0;
+}
+
+int
 mlx5_vdpa_steer_setup(struct mlx5_vdpa_priv *priv)
 {
 #ifdef HAVE_MLX5DV_DR
-	if (mlx5_vdpa_rqt_prepare(priv))
-		return -1;
 	priv->steer.domain = mlx5_glue->dr_create_domain(priv->ctx,
 						  MLX5DV_DR_DOMAIN_TYPE_NIC_RX);
 	if (!priv->steer.domain) {
@@ -270,7 +277,7 @@ mlx5_vdpa_steer_setup(struct mlx5_vdpa_priv *priv)
 		DRV_LOG(ERR, "Failed to create table 0 with Rx domain.");
 		goto error;
 	}
-	if (mlx5_vdpa_rss_flows_create(priv))
+	if (mlx5_vdpa_steer_update(priv))
 		goto error;
 	return 0;
 error:

@@ -87,15 +87,13 @@ static int vmxnet3_dev_info_get(struct rte_eth_dev *dev,
 				struct rte_eth_dev_info *dev_info);
 static const uint32_t *
 vmxnet3_dev_supported_ptypes_get(struct rte_eth_dev *dev);
+static int vmxnet3_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
 static int vmxnet3_dev_vlan_filter_set(struct rte_eth_dev *dev,
 				       uint16_t vid, int on);
 static int vmxnet3_dev_vlan_offload_set(struct rte_eth_dev *dev, int mask);
 static int vmxnet3_mac_addr_set(struct rte_eth_dev *dev,
 				 struct rte_ether_addr *mac_addr);
 static void vmxnet3_interrupt_handler(void *param);
-
-int vmxnet3_logtype_init;
-int vmxnet3_logtype_driver;
 
 /*
  * The set of PCI devices this driver supports
@@ -124,6 +122,7 @@ static const struct eth_dev_ops vmxnet3_eth_dev_ops = {
 	.mac_addr_set         = vmxnet3_mac_addr_set,
 	.dev_infos_get        = vmxnet3_dev_info_get,
 	.dev_supported_ptypes_get = vmxnet3_dev_supported_ptypes_get,
+	.mtu_set              = vmxnet3_dev_mtu_set,
 	.vlan_filter_set      = vmxnet3_dev_vlan_filter_set,
 	.vlan_offload_set     = vmxnet3_dev_vlan_offload_set,
 	.rx_queue_setup       = vmxnet3_dev_rx_queue_setup,
@@ -771,7 +770,8 @@ vmxnet3_dev_start(struct rte_eth_dev *dev)
 		PMD_INIT_LOG(DEBUG, "Failed to setup memory region\n");
 	}
 
-	if (VMXNET3_VERSION_GE_4(hw)) {
+	if (VMXNET3_VERSION_GE_4(hw) &&
+	    dev->data->dev_conf.rxmode.mq_mode == ETH_MQ_RX_RSS) {
 		/* Check for additional RSS  */
 		ret = vmxnet3_v4_rss_configure(dev);
 		if (ret != VMXNET3_SUCCESS) {
@@ -1165,6 +1165,8 @@ vmxnet3_dev_info_get(struct rte_eth_dev *dev,
 	dev_info->max_tx_queues = VMXNET3_MAX_TX_QUEUES;
 	dev_info->min_rx_bufsize = 1518 + RTE_PKTMBUF_HEADROOM;
 	dev_info->max_rx_pktlen = 16384; /* includes CRC, cf MAXFRS register */
+	dev_info->min_mtu = VMXNET3_MIN_MTU;
+	dev_info->max_mtu = VMXNET3_MAX_MTU;
 	dev_info->speed_capa = ETH_LINK_SPEED_10G;
 	dev_info->max_mac_addrs = VMXNET3_MAX_MAC_ADDRS;
 
@@ -1208,6 +1210,18 @@ vmxnet3_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 	if (dev->rx_pkt_burst == vmxnet3_recv_pkts)
 		return ptypes;
 	return NULL;
+}
+
+static int
+vmxnet3_dev_mtu_set(struct rte_eth_dev *dev, __rte_unused uint16_t mtu)
+{
+	if (dev->data->dev_started) {
+		PMD_DRV_LOG(ERR, "Port %d must be stopped to configure MTU",
+			    dev->data->port_id);
+		return -EBUSY;
+	}
+
+	return 0;
 }
 
 static int
@@ -1447,13 +1461,5 @@ vmxnet3_interrupt_handler(void *param)
 RTE_PMD_REGISTER_PCI(net_vmxnet3, rte_vmxnet3_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_vmxnet3, pci_id_vmxnet3_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_vmxnet3, "* igb_uio | uio_pci_generic | vfio-pci");
-
-RTE_INIT(vmxnet3_init_log)
-{
-	vmxnet3_logtype_init = rte_log_register("pmd.net.vmxnet3.init");
-	if (vmxnet3_logtype_init >= 0)
-		rte_log_set_level(vmxnet3_logtype_init, RTE_LOG_NOTICE);
-	vmxnet3_logtype_driver = rte_log_register("pmd.net.vmxnet3.driver");
-	if (vmxnet3_logtype_driver >= 0)
-		rte_log_set_level(vmxnet3_logtype_driver, RTE_LOG_NOTICE);
-}
+RTE_LOG_REGISTER(vmxnet3_logtype_init, pmd.net.vmxnet3.init, NOTICE);
+RTE_LOG_REGISTER(vmxnet3_logtype_driver, pmd.net.vmxnet3.driver, NOTICE);

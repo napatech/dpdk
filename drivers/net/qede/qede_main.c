@@ -5,11 +5,12 @@
  */
 
 #include <limits.h>
-#include <time.h>
 #include <rte_alarm.h>
 #include <rte_string_fns.h>
 
 #include "qede_ethdev.h"
+/* ######### DEBUG ###########*/
+#include "qede_debug.h"
 
 /* Alarm timeout. */
 #define QEDE_ALARM_TIMEOUT_US 100000
@@ -66,7 +67,7 @@ qed_probe(struct ecore_dev *edev, struct rte_pci_device *pci_dev,
 	hw_prepare_params.initiate_pf_flr = true;
 	hw_prepare_params.allow_mdump = false;
 	hw_prepare_params.b_en_pacing = false;
-	hw_prepare_params.epoch = (u32)time(NULL);
+	hw_prepare_params.epoch = OSAL_GET_EPOCH(ECORE_LEADING_HWFN(edev));
 	rc = ecore_hw_prepare(edev, &hw_prepare_params);
 	if (rc) {
 		DP_ERR(edev, "hw prepare failed\n");
@@ -277,9 +278,14 @@ static int qed_slowpath_start(struct ecore_dev *edev,
 	qed_start_iov_task(edev);
 
 #ifdef CONFIG_ECORE_BINARY_FW
-	if (IS_PF(edev))
+	if (IS_PF(edev)) {
 		data = (const uint8_t *)edev->firmware + sizeof(u32);
+
+		/* ############### DEBUG ################## */
+		qed_dbg_pf_init(edev);
+	}
 #endif
+
 
 	/* Start the slowpath */
 	memset(&hw_init_params, 0, sizeof(hw_init_params));
@@ -382,8 +388,8 @@ qed_fill_dev_info(struct ecore_dev *edev, struct qed_dev_info *dev_info)
 
 	if (IS_PF(edev)) {
 		dev_info->b_inter_pf_switch =
-			OSAL_TEST_BIT(ECORE_MF_INTER_PF_SWITCH, &edev->mf_bits);
-		if (!OSAL_TEST_BIT(ECORE_MF_DISABLE_ARFS, &edev->mf_bits))
+			OSAL_GET_BIT(ECORE_MF_INTER_PF_SWITCH, &edev->mf_bits);
+		if (!OSAL_GET_BIT(ECORE_MF_DISABLE_ARFS, &edev->mf_bits))
 			dev_info->b_arfs_capable = true;
 		dev_info->tx_switching = false;
 
@@ -393,6 +399,9 @@ qed_fill_dev_info(struct ecore_dev *edev, struct qed_dev_info *dev_info)
 		if (ptt) {
 			ecore_mcp_get_mfw_ver(ECORE_LEADING_HWFN(edev), ptt,
 					      &dev_info->mfw_rev, NULL);
+
+			ecore_mcp_get_mbi_ver(ECORE_LEADING_HWFN(edev), ptt,
+					      &dev_info->mbi_version);
 
 			ecore_mcp_get_flash_size(ECORE_LEADING_HWFN(edev), ptt,
 						 &dev_info->flash_size);
@@ -777,6 +786,36 @@ const struct qed_common_ops qed_common_ops_pass = {
 	INIT_STRUCT_FIELD(slowpath_stop, &qed_slowpath_stop),
 	INIT_STRUCT_FIELD(remove, &qed_remove),
 	INIT_STRUCT_FIELD(send_drv_state, &qed_send_drv_state),
+	/* ############### DEBUG ####################*/
+
+	INIT_STRUCT_FIELD(dbg_get_debug_engine, &qed_get_debug_engine),
+	INIT_STRUCT_FIELD(dbg_set_debug_engine, &qed_set_debug_engine),
+
+	INIT_STRUCT_FIELD(dbg_protection_override,
+			  &qed_dbg_protection_override),
+	INIT_STRUCT_FIELD(dbg_protection_override_size,
+			  &qed_dbg_protection_override_size),
+
+	INIT_STRUCT_FIELD(dbg_grc, &qed_dbg_grc),
+	INIT_STRUCT_FIELD(dbg_grc_size, &qed_dbg_grc_size),
+
+	INIT_STRUCT_FIELD(dbg_idle_chk, &qed_dbg_idle_chk),
+	INIT_STRUCT_FIELD(dbg_idle_chk_size, &qed_dbg_idle_chk_size),
+
+	INIT_STRUCT_FIELD(dbg_mcp_trace, &qed_dbg_mcp_trace),
+	INIT_STRUCT_FIELD(dbg_mcp_trace_size, &qed_dbg_mcp_trace_size),
+
+	INIT_STRUCT_FIELD(dbg_fw_asserts, &qed_dbg_fw_asserts),
+	INIT_STRUCT_FIELD(dbg_fw_asserts_size, &qed_dbg_fw_asserts_size),
+
+	INIT_STRUCT_FIELD(dbg_ilt, &qed_dbg_ilt),
+	INIT_STRUCT_FIELD(dbg_ilt_size, &qed_dbg_ilt_size),
+
+	INIT_STRUCT_FIELD(dbg_reg_fifo_size, &qed_dbg_reg_fifo_size),
+	INIT_STRUCT_FIELD(dbg_reg_fifo, &qed_dbg_reg_fifo),
+
+	INIT_STRUCT_FIELD(dbg_igu_fifo_size, &qed_dbg_igu_fifo_size),
+	INIT_STRUCT_FIELD(dbg_igu_fifo, &qed_dbg_igu_fifo),
 };
 
 const struct qed_eth_ops qed_eth_ops_pass = {

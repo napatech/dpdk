@@ -49,13 +49,13 @@ _LDLIBS-$(CONFIG_RTE_LIBRTE_FIB)            += -lrte_fib
 _LDLIBS-$(CONFIG_RTE_LIBRTE_RIB)            += -lrte_rib
 _LDLIBS-$(CONFIG_RTE_LIBRTE_LPM)            += -lrte_lpm
 _LDLIBS-$(CONFIG_RTE_LIBRTE_ACL)            += -lrte_acl
-_LDLIBS-$(CONFIG_RTE_LIBRTE_TELEMETRY)      += --no-as-needed
-_LDLIBS-$(CONFIG_RTE_LIBRTE_TELEMETRY)      += --whole-archive
-_LDLIBS-$(CONFIG_RTE_LIBRTE_TELEMETRY)      += -lrte_telemetry -ljansson
-_LDLIBS-$(CONFIG_RTE_LIBRTE_TELEMETRY)      += --no-whole-archive
-_LDLIBS-$(CONFIG_RTE_LIBRTE_TELEMETRY)      += --as-needed
 _LDLIBS-$(CONFIG_RTE_LIBRTE_JOBSTATS)       += -lrte_jobstats
+_LDLIBS-$(CONFIG_RTE_LIBRTE_METRICS)        += --whole-archive
 _LDLIBS-$(CONFIG_RTE_LIBRTE_METRICS)        += -lrte_metrics
+ifeq ($(CONFIG_RTE_LIBRTE_TELEMETRY),y)
+_LDLIBS-$(CONFIG_RTE_LIBRTE_METRICS)        += -ljansson
+endif
+_LDLIBS-$(CONFIG_RTE_LIBRTE_METRICS)        += --no-whole-archive
 _LDLIBS-$(CONFIG_RTE_LIBRTE_BITRATE)        += -lrte_bitratestats
 _LDLIBS-$(CONFIG_RTE_LIBRTE_LATENCY_STATS)  += -lrte_latencystats
 _LDLIBS-$(CONFIG_RTE_LIBRTE_POWER)          += -lrte_power
@@ -77,6 +77,7 @@ _LDLIBS-$(CONFIG_RTE_LIBRTE_HASH)           += -lrte_hash
 _LDLIBS-$(CONFIG_RTE_LIBRTE_MEMBER)         += -lrte_member
 _LDLIBS-$(CONFIG_RTE_LIBRTE_VHOST)          += -lrte_vhost
 _LDLIBS-$(CONFIG_RTE_LIBRTE_KVARGS)         += -lrte_kvargs
+_LDLIBS-y                                   += -lrte_telemetry
 _LDLIBS-$(CONFIG_RTE_LIBRTE_MBUF)           += -lrte_mbuf
 _LDLIBS-$(CONFIG_RTE_LIBRTE_NET)            += -lrte_net
 _LDLIBS-$(CONFIG_RTE_LIBRTE_ETHER)          += -lrte_ethdev
@@ -84,6 +85,7 @@ _LDLIBS-$(CONFIG_RTE_LIBRTE_BBDEV)          += -lrte_bbdev
 _LDLIBS-$(CONFIG_RTE_LIBRTE_CRYPTODEV)      += -lrte_cryptodev
 _LDLIBS-$(CONFIG_RTE_LIBRTE_SECURITY)       += -lrte_security
 _LDLIBS-$(CONFIG_RTE_LIBRTE_COMPRESSDEV)    += -lrte_compressdev
+_LDLIBS-$(CONFIG_RTE_LIBRTE_REGEXDEV)       += -lrte_regexdev
 _LDLIBS-$(CONFIG_RTE_LIBRTE_EVENTDEV)       += -lrte_eventdev
 _LDLIBS-$(CONFIG_RTE_LIBRTE_RAWDEV)         += -lrte_rawdev
 _LDLIBS-$(CONFIG_RTE_LIBRTE_TIMER)          += -lrte_timer
@@ -98,6 +100,8 @@ _LDLIBS-$(CONFIG_RTE_LIBRTE_CMDLINE)        += -lrte_cmdline
 _LDLIBS-$(CONFIG_RTE_LIBRTE_REORDER)        += -lrte_reorder
 _LDLIBS-$(CONFIG_RTE_LIBRTE_SCHED)          += -lrte_sched
 _LDLIBS-$(CONFIG_RTE_LIBRTE_RCU)            += -lrte_rcu
+_LDLIBS-$(CONFIG_RTE_LIBRTE_GRAPH)          += -lrte_graph
+_LDLIBS-$(CONFIG_RTE_LIBRTE_NODE)           += -lrte_node
 
 ifeq ($(CONFIG_RTE_EXEC_ENV_LINUX),y)
 _LDLIBS-$(CONFIG_RTE_LIBRTE_KNI)            += -lrte_kni
@@ -185,9 +189,11 @@ _LDLIBS-$(CONFIG_RTE_LIBRTE_I40E_PMD)       += -lrte_pmd_i40e
 _LDLIBS-$(CONFIG_RTE_LIBRTE_IAVF_PMD)       += -lrte_pmd_iavf
 _LDLIBS-$(CONFIG_RTE_LIBRTE_ICE_PMD)        += -lrte_pmd_ice
 IAVF-y := $(CONFIG_RTE_LIBRTE_IAVF_PMD)
+IAVF-y += $(CONFIG_RTE_LIBRTE_ICE_PMD)
 ifeq ($(findstring y,$(IAVF-y)),y)
 _LDLIBS-y += -lrte_common_iavf
 endif
+_LDLIBS-$(CONFIG_RTE_LIBRTE_IGC_PMD)        += -lrte_pmd_igc
 _LDLIBS-$(CONFIG_RTE_LIBRTE_IONIC_PMD)      += -lrte_pmd_ionic
 _LDLIBS-$(CONFIG_RTE_LIBRTE_IXGBE_PMD)      += -lrte_pmd_ixgbe
 ifeq ($(CONFIG_RTE_LIBRTE_KNI),y)
@@ -196,18 +202,21 @@ endif
 _LDLIBS-$(CONFIG_RTE_LIBRTE_LIO_PMD)        += -lrte_pmd_lio
 _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_MEMIF)      += -lrte_pmd_memif
 _LDLIBS-$(CONFIG_RTE_LIBRTE_MLX4_PMD)       += -lrte_pmd_mlx4
-ifeq ($(findstring y,$(CONFIG_RTE_LIBRTE_MLX5_PMD)$(CONFIG_RTE_LIBRTE_MLX5_VDPA_PMD)),y)
+ifeq ($(findstring y,$(CONFIG_RTE_LIBRTE_MLX5_PMD)$(CONFIG_RTE_LIBRTE_MLX5_VDPA_PMD)$(CONFIG_RTE_LIBRTE_MLX5_REGEX_PMD)),y)
 _LDLIBS-y                                   += -lrte_common_mlx5
 endif
 _LDLIBS-$(CONFIG_RTE_LIBRTE_MLX5_PMD)       += -lrte_pmd_mlx5
 _LDLIBS-$(CONFIG_RTE_LIBRTE_MLX5_VDPA_PMD)  += -lrte_pmd_mlx5_vdpa
+_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX5_REGEX_PMD)  += -lrte_pmd_mlx5_regex
 ifeq ($(CONFIG_RTE_IBVERBS_LINK_DLOPEN),y)
 _LDLIBS-y                                   += -ldl
 else ifeq ($(CONFIG_RTE_IBVERBS_LINK_STATIC),y)
 LIBS_IBVERBS_STATIC = $(shell $(RTE_SDK)/buildtools/options-ibverbs-static.sh)
+_LDLIBS-y                                   += --no-whole-archive
 _LDLIBS-y                                   += $(LIBS_IBVERBS_STATIC)
+_LDLIBS-y                                   += --whole-archive
 else
-ifeq ($(findstring y,$(CONFIG_RTE_LIBRTE_MLX5_PMD)$(CONFIG_RTE_LIBRTE_MLX5_VDPA_PMD)),y)
+ifeq ($(findstring y,$(CONFIG_RTE_LIBRTE_MLX5_PMD)$(CONFIG_RTE_LIBRTE_MLX5_VDPA_PMD)$(CONFIG_RTE_LIBRTE_MLX5_REGEX_PMD)),y)
 _LDLIBS-y                                   += -libverbs -lmlx5
 endif
 _LDLIBS-$(CONFIG_RTE_LIBRTE_MLX4_PMD)       += -libverbs -lmlx4
@@ -247,6 +256,7 @@ _LDLIBS-$(CONFIG_RTE_LIBRTE_NETVSC_PMD)     += -lrte_pmd_netvsc
 ifeq ($(CONFIG_RTE_LIBRTE_BBDEV),y)
 _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_BBDEV_NULL)     += -lrte_pmd_bbdev_null
 _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_BBDEV_FPGA_LTE_FEC) += -lrte_pmd_bbdev_fpga_lte_fec
+_LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_BBDEV_FPGA_5GNR_FEC) += -lrte_pmd_bbdev_fpga_5gnr_fec
 
 # TURBO SOFTWARE PMD is dependent on the FLEXRAN library
 _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_BBDEV_TURBO_SW) += -lrte_pmd_bbdev_turbo_sw

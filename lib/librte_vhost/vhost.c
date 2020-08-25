@@ -27,9 +27,6 @@
 
 struct virtio_net *vhost_devices[MAX_VHOST_DEVICE];
 
-int vhost_config_log_level;
-int vhost_data_log_level;
-
 /* Called with iotlb_lock read-locked */
 uint64_t
 __vhost_iova_to_vva(struct virtio_net *dev, struct vhost_virtqueue *vq,
@@ -332,8 +329,13 @@ free_vq(struct virtio_net *dev, struct vhost_virtqueue *vq)
 {
 	if (vq_is_packed(dev))
 		rte_free(vq->shadow_used_packed);
-	else
+	else {
 		rte_free(vq->shadow_used_split);
+		if (vq->async_pkts_pending)
+			rte_free(vq->async_pkts_pending);
+		if (vq->async_pending_info)
+			rte_free(vq->async_pending_info);
+	}
 	rte_free(vq->batch_copy_elems);
 	rte_mempool_free(vq->iotlb_pool);
 	rte_free(vq);
@@ -532,6 +534,7 @@ init_vring_queue(struct virtio_net *dev, uint32_t vring_idx)
 
 	vq->kickfd = VIRTIO_UNINITIALIZED_EVENTFD;
 	vq->callfd = VIRTIO_UNINITIALIZED_EVENTFD;
+	vq->notif_enable = VIRTIO_UNINITIALIZED_NOTIF;
 
 	vhost_user_iotlb_init(dev, vring_idx);
 	/* Backends are set to -1 indicating an inactive device. */
@@ -633,7 +636,6 @@ vhost_new_device(void)
 	dev->vid = i;
 	dev->flags = VIRTIO_DEV_BUILTIN_VIRTIO_NET;
 	dev->slave_req_fd = -1;
-	dev->vdpa_dev_id = -1;
 	dev->postcopy_ufd = -1;
 	rte_spinlock_init(&dev->slave_req_lock);
 
@@ -644,12 +646,10 @@ void
 vhost_destroy_device_notify(struct virtio_net *dev)
 {
 	struct rte_vdpa_device *vdpa_dev;
-	int did;
 
 	if (dev->flags & VIRTIO_DEV_RUNNING) {
-		did = dev->vdpa_dev_id;
-		vdpa_dev = rte_vdpa_get_device(did);
-		if (vdpa_dev && vdpa_dev->ops->dev_close)
+		vdpa_dev = dev->vdpa_dev;
+		if (vdpa_dev)
 			vdpa_dev->ops->dev_close(dev->vid);
 		dev->flags &= ~VIRTIO_DEV_RUNNING;
 		dev->notify_ops->destroy_device(dev->vid);
@@ -677,17 +677,14 @@ vhost_destroy_device(int vid)
 }
 
 void
-vhost_attach_vdpa_device(int vid, int did)
+vhost_attach_vdpa_device(int vid, struct rte_vdpa_device *vdpa_dev)
 {
 	struct virtio_net *dev = get_device(vid);
 
 	if (dev == NULL)
 		return;
 
-	if (rte_vdpa_get_device(did) == NULL)
-		return;
-
-	dev->vdpa_dev_id = did;
+	dev->vdpa_dev = vdpa_dev;
 }
 
 void
@@ -716,6 +713,7 @@ vhost_enable_dequeue_zero_copy(int vid)
 		return;
 
 	dev->dequeue_zero_copy = 1;
+	VHOST_LOG_CONFIG(INFO, "dequeue zero copy is enabled\n");
 }
 
 void
@@ -1315,6 +1313,23 @@ vhost_enable_notify_packed(struct virtio_net *dev,
 }
 
 int
+vhost_enable_guest_notification(struct virtio_net *dev,
+		struct vhost_virtqueue *vq, int enable)
+{
+	/*
+	 * If the virtqueue is not ready yet, it will be applied
+	 * when it will become ready.
+	 */
+	if (!vq->ready)
+		return 0;
+
+	if (vq_is_packed(dev))
+		return vhost_enable_notify_packed(dev, vq, enable);
+	else
+		return vhost_enable_notify_split(dev, vq, enable);
+}
+
+int
 rte_vhost_enable_guest_notification(int vid, uint16_t queue_id, int enable)
 {
 	struct virtio_net *dev = get_device(vid);
@@ -1328,10 +1343,8 @@ rte_vhost_enable_guest_notification(int vid, uint16_t queue_id, int enable)
 
 	rte_spinlock_lock(&vq->access_lock);
 
-	if (vq_is_packed(dev))
-		ret = vhost_enable_notify_packed(dev, vq, enable);
-	else
-		ret = vhost_enable_notify_split(dev, vq, enable);
+	vq->notif_enable = enable;
+	ret = vhost_enable_guest_notification(dev, vq, enable);
 
 	rte_spinlock_unlock(&vq->access_lock);
 
@@ -1402,14 +1415,15 @@ out:
 	return ret;
 }
 
-int rte_vhost_get_vdpa_device_id(int vid)
+struct rte_vdpa_device *
+rte_vhost_get_vdpa_device(int vid)
 {
 	struct virtio_net *dev = get_device(vid);
 
 	if (dev == NULL)
-		return -1;
+		return NULL;
 
-	return dev->vdpa_dev_id;
+	return dev->vdpa_dev;
 }
 
 int rte_vhost_get_log_base(int vid, uint64_t *log_base,
@@ -1517,13 +1531,124 @@ int rte_vhost_extern_callback_register(int vid,
 	return 0;
 }
 
-RTE_INIT(vhost_log_init)
+int rte_vhost_async_channel_register(int vid, uint16_t queue_id,
+					uint32_t features,
+					struct rte_vhost_async_channel_ops *ops)
 {
-	vhost_config_log_level = rte_log_register("lib.vhost.config");
-	if (vhost_config_log_level >= 0)
-		rte_log_set_level(vhost_config_log_level, RTE_LOG_INFO);
+	struct vhost_virtqueue *vq;
+	struct virtio_net *dev = get_device(vid);
+	struct rte_vhost_async_features f;
 
-	vhost_data_log_level = rte_log_register("lib.vhost.data");
-	if (vhost_data_log_level >= 0)
-		rte_log_set_level(vhost_data_log_level, RTE_LOG_WARNING);
+	if (dev == NULL || ops == NULL)
+		return -1;
+
+	f.intval = features;
+
+	vq = dev->virtqueue[queue_id];
+
+	if (unlikely(vq == NULL || !dev->async_copy))
+		return -1;
+
+	/* packed queue is not supported */
+	if (unlikely(vq_is_packed(dev) || !f.async_inorder)) {
+		VHOST_LOG_CONFIG(ERR,
+			"async copy is not supported on packed queue or non-inorder mode "
+			"(vid %d, qid: %d)\n", vid, queue_id);
+		return -1;
+	}
+
+	if (unlikely(ops->check_completed_copies == NULL ||
+		ops->transfer_data == NULL))
+		return -1;
+
+	rte_spinlock_lock(&vq->access_lock);
+
+	if (unlikely(vq->async_registered)) {
+		VHOST_LOG_CONFIG(ERR,
+			"async register failed: channel already registered "
+			"(vid %d, qid: %d)\n", vid, queue_id);
+		goto reg_out;
+	}
+
+	vq->async_pkts_pending = rte_malloc(NULL,
+			vq->size * sizeof(uintptr_t),
+			RTE_CACHE_LINE_SIZE);
+	vq->async_pending_info = rte_malloc(NULL,
+			vq->size * sizeof(uint64_t),
+			RTE_CACHE_LINE_SIZE);
+	if (!vq->async_pkts_pending || !vq->async_pending_info) {
+		if (vq->async_pkts_pending)
+			rte_free(vq->async_pkts_pending);
+
+		if (vq->async_pending_info)
+			rte_free(vq->async_pending_info);
+
+		VHOST_LOG_CONFIG(ERR,
+				"async register failed: cannot allocate memory for vq data "
+				"(vid %d, qid: %d)\n", vid, queue_id);
+		goto reg_out;
+	}
+
+	vq->async_ops.check_completed_copies = ops->check_completed_copies;
+	vq->async_ops.transfer_data = ops->transfer_data;
+
+	vq->async_inorder = f.async_inorder;
+	vq->async_threshold = f.async_threshold;
+
+	vq->async_registered = true;
+
+reg_out:
+	rte_spinlock_unlock(&vq->access_lock);
+
+	return 0;
 }
+
+int rte_vhost_async_channel_unregister(int vid, uint16_t queue_id)
+{
+	struct vhost_virtqueue *vq;
+	struct virtio_net *dev = get_device(vid);
+	int ret = -1;
+
+	if (dev == NULL)
+		return ret;
+
+	vq = dev->virtqueue[queue_id];
+
+	if (vq == NULL)
+		return ret;
+
+	ret = 0;
+	rte_spinlock_lock(&vq->access_lock);
+
+	if (!vq->async_registered)
+		goto out;
+
+	if (vq->async_pkts_inflight_n) {
+		VHOST_LOG_CONFIG(ERR, "Failed to unregister async channel. "
+			"async inflight packets must be completed before unregistration.\n");
+		ret = -1;
+		goto out;
+	}
+
+	if (vq->async_pkts_pending) {
+		rte_free(vq->async_pkts_pending);
+		vq->async_pkts_pending = NULL;
+	}
+
+	if (vq->async_pending_info) {
+		rte_free(vq->async_pending_info);
+		vq->async_pending_info = NULL;
+	}
+
+	vq->async_ops.transfer_data = NULL;
+	vq->async_ops.check_completed_copies = NULL;
+	vq->async_registered = false;
+
+out:
+	rte_spinlock_unlock(&vq->access_lock);
+
+	return ret;
+}
+
+RTE_LOG_REGISTER(vhost_config_log_level, lib.vhost.config, INFO);
+RTE_LOG_REGISTER(vhost_data_log_level, lib.vhost.data, WARNING);

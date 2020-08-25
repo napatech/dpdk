@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #
-# Copyright (c) 2016-2018 Solarflare Communications Inc.
-# All rights reserved.
+# Copyright(c) 2019-2020 Xilinx, Inc.
+# Copyright(c) 2016-2019 Solarflare Communications Inc.
 #
 # This software was jointly developed between OKTET Labs (under contract
 # for Solarflare) and Solarflare Communications, Inc.
@@ -13,7 +13,6 @@ include $(RTE_SDK)/mk/rte.vars.mk
 #
 LIB = librte_pmd_sfc_efx.a
 
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -I$(SRCDIR)/base/
 CFLAGS += -I$(SRCDIR)
 CFLAGS += -O3

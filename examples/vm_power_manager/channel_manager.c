@@ -4,7 +4,6 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/un.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <inttypes.h>
@@ -34,6 +33,8 @@
 
 
 #define RTE_LOGTYPE_CHANNEL_MANAGER RTE_LOGTYPE_USER1
+
+struct libvirt_vm_info lvm_info[MAX_CLIENTS];
 
 /* Global pointer to libvirt connection */
 static virConnectPtr global_vir_conn_ptr;

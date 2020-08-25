@@ -37,7 +37,6 @@ M: Ajit Khaparde <ajit.khaparde@broadcom.com>
 T: git://dpdk.org/next/dpdk-next-net-brcm
 
 Next-net-intel Tree
-M: Xiaolong Ye <xiaolong.ye@intel.com>
 M: Qi Zhang <qi.z.zhang@intel.com>
 T: git://dpdk.org/next/dpdk-next-net-intel
 
@@ -51,7 +50,7 @@ T: git://dpdk.org/next/dpdk-next-net-mlx
 
 Next-virtio Tree
 M: Maxime Coquelin <maxime.coquelin@redhat.com>
-M: Tiwei Bie <tiwei.bie@intel.com>
+M: Chenbo Xia <chenbo.xia@intel.com>
 T: git://dpdk.org/next/dpdk-next-virtio
 
 Next-crypto Tree
@@ -84,18 +83,16 @@ M: Marko Kovacevic <marko.kovacevic@intel.com>
 F: README
 F: doc/
 
-ABI Policy
-M: Ray Kinsella <mdr@ashroe.eu>
-F: doc/guides/contributing/abi_*.rst
-
 Developers and Maintainers Tools
 M: Thomas Monjalon <thomas@monjalon.net>
 F: MAINTAINERS
+F: devtools/build-dict.sh
 F: devtools/check-dup-includes.sh
 F: devtools/check-maintainers.sh
 F: devtools/check-forbidden-tokens.awk
 F: devtools/check-git-log.sh
 F: devtools/check-includes.sh
+F: devtools/check-spdx-tag.sh
 F: devtools/check-symbol-maps.sh
 F: devtools/checkpatches.sh
 F: devtools/get-maintainer.sh
@@ -127,13 +124,13 @@ F: doc/guides/prog_guide/ext_app_lib_make_help.rst
 Meson build
 M: Bruce Richardson <bruce.richardson@intel.com>
 F: meson.build
-F: lib/librte_eal/freebsd/BSDmakefile.meson
 F: meson_options.txt
 F: config/rte_config.h
+F: buildtools/binutils-avx512-check.sh
 F: buildtools/call-sphinx-build.py
 F: buildtools/gen-pmdinfo-cfile.sh
 F: buildtools/list-dir-globs.py
-F: buildtools/map_to_def.py
+F: buildtools/pkg-config/
 F: buildtools/symlink-drivers-solibs.sh
 
 Public CI
@@ -142,10 +139,12 @@ M: Michael Santana <maicolgabriel@hotmail.com>
 F: .travis.yml
 F: .ci/
 
-ABI versioning
+ABI Policy & Versioning
+M: Ray Kinsella <mdr@ashroe.eu>
 M: Neil Horman <nhorman@tuxdriver.com>
-F: lib/librte_eal/common/include/rte_compat.h
-F: lib/librte_eal/common/include/rte_function_versioning.h
+F: lib/librte_eal/include/rte_compat.h
+F: lib/librte_eal/include/rte_function_versioning.h
+F: doc/guides/contributing/abi_*.rst
 F: doc/guides/rel_notes/deprecation.rst
 F: devtools/check-abi.sh
 F: devtools/check-abi-version.sh
@@ -154,9 +153,10 @@ F: devtools/gen-abi.sh
 F: devtools/libabigail.abignore
 F: devtools/update-abi.sh
 F: devtools/update_version_map_abi.py
-F: devtools/validate-abi.sh
-F: buildtools/check-experimental-syms.sh
+F: buildtools/check-symbols.sh
 F: buildtools/map-list-symbol.sh
+F: drivers/*/*/*.map
+F: lib/*/*.map
 
 Driver information
 M: Neil Horman <nhorman@tuxdriver.com>
@@ -170,9 +170,9 @@ Environment Abstraction Layer
 T: git://dpdk.org/dpdk
 
 EAL API and common code
-F: lib/librte_eal/common/*
-F: lib/librte_eal/common/include/*
-F: lib/librte_eal/common/include/generic/
+F: lib/librte_eal/common/
+F: lib/librte_eal/unix/
+F: lib/librte_eal/include/
 F: lib/librte_eal/rte_eal_version.map
 F: doc/guides/prog_guide/env_abstraction_layer.rst
 F: app/test/test_alarm.c
@@ -185,7 +185,7 @@ F: app/test/test_cycles.c
 F: app/test/test_debug.c
 F: app/test/test_eal*
 F: app/test/test_errno.c
-F: app/test/test_interrupts.c
+F: app/test/test_lcores.c
 F: app/test/test_logs.c
 F: app/test/test_memcpy*
 F: app/test/test_per_lcore.c
@@ -197,17 +197,27 @@ F: app/test/test_string_fns.c
 F: app/test/test_tailq.c
 F: app/test/test_version.c
 
+Trace - EXPERIMENTAL
+M: Jerin Jacob <jerinj@marvell.com>
+M: Sunil Kumar Kori <skori@marvell.com>
+F: lib/librte_eal/include/rte_trace*.h
+F: lib/librte_eal/common/eal_common_trace*.c
+F: lib/librte_eal/common/eal_trace.h
+F: doc/guides/prog_guide/trace_lib.rst
+F: app/test/test_trace*
+
 Memory Allocation
 M: Anatoly Burakov <anatoly.burakov@intel.com>
-F: lib/librte_eal/common/include/rte_fbarray.h
-F: lib/librte_eal/common/include/rte_mem*
-F: lib/librte_eal/common/include/rte_malloc.h
+F: lib/librte_eal/include/rte_fbarray.h
+F: lib/librte_eal/include/rte_mem*
+F: lib/librte_eal/include/rte_malloc.h
 F: lib/librte_eal/common/*malloc*
+F: lib/librte_eal/common/eal_common_dynmem.c
 F: lib/librte_eal/common/eal_common_fbarray.c
 F: lib/librte_eal/common/eal_common_mem*
 F: lib/librte_eal/common/eal_hugepages.h
-F: lib/librte_eal/linux/eal/eal_mem*
-F: lib/librte_eal/freebsd/eal/eal_mem*
+F: lib/librte_eal/linux/eal_mem*
+F: lib/librte_eal/freebsd/eal_mem*
 F: doc/guides/prog_guide/env_abstraction_layer.rst
 F: app/test/test_external_mem.c
 F: app/test/test_func_reentrancy.c
@@ -216,8 +226,13 @@ F: app/test/test_malloc.c
 F: app/test/test_memory.c
 F: app/test/test_memzone.c
 
+Interrupt Subsystem
+M: Harman Kalra <hkalra@marvell.com>
+F: lib/librte_eal/*/*interrupts.*
+F: app/test/test_interrupts.c
+
 Keep alive
-F: lib/librte_eal/common/include/rte_keepalive.h
+F: lib/librte_eal/include/rte_keepalive.h
 F: lib/librte_eal/common/rte_keepalive.c
 F: examples/l2fwd-keepalive/
 F: doc/guides/sample_app_ug/keep_alive.rst
@@ -233,43 +248,47 @@ F: doc/guides/sample_app_ug/multi_process.rst
 
 Service Cores
 M: Harry van Haaren <harry.van.haaren@intel.com>
-F: lib/librte_eal/common/include/rte_service.h
-F: lib/librte_eal/common/include/rte_service_component.h
+F: lib/librte_eal/include/rte_service.h
+F: lib/librte_eal/include/rte_service_component.h
 F: lib/librte_eal/common/rte_service.c
 F: doc/guides/prog_guide/service_cores.rst
 F: app/test/test_service_cores.c
 
+Bitops
+M: Joyce Kong <joyce.kong@arm.com>
+F: lib/librte_eal/include/rte_bitops.h
+F: app/test/test_bitops.c
+
 Bitmap
 M: Cristian Dumitrescu <cristian.dumitrescu@intel.com>
-F: lib/librte_eal/common/include/rte_bitmap.h
+F: lib/librte_eal/include/rte_bitmap.h
 F: app/test/test_bitmap.c
 
 MCSlock - EXPERIMENTAL
 M: Phil Yang <phil.yang@arm.com>
-F: lib/librte_eal/common/include/generic/rte_mcslock.h
+F: lib/librte_eal/include/generic/rte_mcslock.h
 F: app/test/test_mcslock.c
 
 Ticketlock
 M: Joyce Kong <joyce.kong@arm.com>
-F: lib/librte_eal/common/include/generic/rte_ticketlock.h
+F: lib/librte_eal/include/generic/rte_ticketlock.h
 F: app/test/test_ticketlock.c
 
 Pseudo-random Number Generation
 M: Mattias Rönnblom <mattias.ronnblom@ericsson.com>
-F: lib/librte_eal/common/include/rte_random.h
+F: lib/librte_eal/include/rte_random.h
 F: lib/librte_eal/common/rte_random.c
 F: app/test/test_rand_perf.c
 
 ARM v7
 M: Jan Viktorin <viktorin@rehivetech.com>
-M: Gavin Hu <gavin.hu@arm.com>
-F: lib/librte_eal/common/arch/arm/
-F: lib/librte_eal/common/include/arch/arm/
+M: Ruifeng Wang <ruifeng.wang@arm.com>
+F: lib/librte_eal/arm/
 
 ARM v8
 M: Jerin Jacob <jerinj@marvell.com>
-M: Gavin Hu <gavin.hu@arm.com>
-F: lib/librte_eal/common/include/arch/arm/*_64.h
+M: Ruifeng Wang <ruifeng.wang@arm.com>
+F: lib/librte_eal/arm/include/*_64.h
 F: lib/librte_net/net_crc_neon.h
 F: lib/librte_acl/acl_run_neon.*
 F: lib/librte_bpf/bpf_jit_arm64.c
@@ -283,20 +302,17 @@ F: drivers/net/virtio/virtio_rxtx_simple_neon.c
 
 IBM POWER (alpha)
 M: David Christensen <drc@linux.vnet.ibm.com>
-F: lib/librte_eal/common/arch/ppc_64/
-F: lib/librte_eal/common/include/arch/ppc_64/
+F: lib/librte_eal/ppc/
 F: drivers/net/i40e/i40e_rxtx_vec_altivec.c
 F: examples/l3fwd/*altivec.h
 
 Intel x86
 M: Bruce Richardson <bruce.richardson@intel.com>
 M: Konstantin Ananyev <konstantin.ananyev@intel.com>
-F: lib/librte_eal/common/arch/x86/
-F: lib/librte_eal/common/include/arch/x86/
+F: lib/librte_eal/x86/
 
 Linux EAL (with overlaps)
-F: lib/librte_eal/linux/Makefile
-F: lib/librte_eal/linux/eal/
+F: lib/librte_eal/linux/
 F: doc/guides/linux_gsg/
 
 Linux UIO
@@ -306,13 +322,12 @@ F: drivers/bus/pci/linux/*uio*
 
 Linux VFIO
 M: Anatoly Burakov <anatoly.burakov@intel.com>
-F: lib/librte_eal/linux/eal/*vfio*
+F: lib/librte_eal/linux/*vfio*
 F: drivers/bus/pci/linux/*vfio*
 
 FreeBSD EAL (with overlaps)
 M: Bruce Richardson <bruce.richardson@intel.com>
-F: lib/librte_eal/freebsd/Makefile
-F: lib/librte_eal/freebsd/eal/
+F: lib/librte_eal/freebsd/
 F: doc/guides/freebsd_gsg/
 
 FreeBSD contigmem
@@ -324,13 +339,19 @@ M: Bruce Richardson <bruce.richardson@intel.com>
 F: kernel/freebsd/nic_uio/
 
 Windows support
-M: Harini Ramakrishnan <harini.ramakrishnan@microsoft.com>
-M: Omar Cardona <ocardona@microsoft.com>
+M: Dmitry Kozlyuk <dmitry.kozliuk@gmail.com>
+M: Narcisa Ana Maria Vasile <navasile@linux.microsoft.com>
+M: Dmitry Malloy <dmitrym@microsoft.com>
 M: Pallavi Kadam <pallavi.kadam@intel.com>
-M: Ranjit Menon <ranjit.menon@intel.com>
 F: lib/librte_eal/windows/
 F: lib/librte_eal/rte_eal_exports.def
+F: buildtools/map_to_win.py
 F: doc/guides/windows_gsg/
+
+Windows memory allocation
+M: Dmitry Kozlyuk <dmitry.kozliuk@gmail.com>
+F: lib/librte_eal/windows/eal_hugepages.c
+F: lib/librte_eal/windows/eal_mem*
 
 
 Core Libraries
@@ -348,7 +369,8 @@ F: app/test/test_mempool*
 F: app/test/test_func_reentrancy.c
 
 Ring queue
-M: Olivier Matz <olivier.matz@6wind.com>
+M: Honnappa Nagarahalli <honnappa.nagarahalli@arm.com>
+M: Konstantin Ananyev <konstantin.ananyev@intel.com>
 F: lib/librte_ring/
 F: doc/guides/prog_guide/ring_lib.rst
 F: app/test/test_ring*
@@ -419,6 +441,7 @@ M: Declan Doherty <declan.doherty@intel.com>
 T: git://dpdk.org/next/dpdk-next-crypto
 F: lib/librte_security/
 F: doc/guides/prog_guide/rte_security.rst
+F: app/test/test_security.c
 
 Compression API - EXPERIMENTAL
 M: Fiona Trahe <fiona.trahe@intel.com>
@@ -429,6 +452,13 @@ F: drivers/compress/
 F: app/test/test_compressdev*
 F: doc/guides/prog_guide/compressdev.rst
 F: doc/guides/compressdevs/features/default.ini
+
+RegEx API - EXPERIMENTAL
+M: Ori Kam <orika@mellanox.com>
+F: lib/librte_regexdev/
+F: app/test-regex/
+F: doc/guides/prog_guide/regexdev.rst
+F: doc/guides/regexdevs/features/default.ini
 
 Eventdev API
 M: Jerin Jacob <jerinj@marvell.com>
@@ -466,8 +496,8 @@ F: lib/librte_eventdev/*crypto_adapter*
 F: app/test/test_event_crypto_adapter.c
 F: doc/guides/prog_guide/event_crypto_adapter.rst
 
-Raw device API - EXPERIMENTAL
-M: Shreyansh Jain <shreyansh.jain@nxp.com>
+Raw device API
+M: Nipun Gupta <nipun.gupta@nxp.com>
 M: Hemant Agrawal <hemant.agrawal@nxp.com>
 F: lib/librte_rawdev/
 F: drivers/raw/skeleton/
@@ -486,7 +516,6 @@ F: drivers/mempool/bucket/
 Marvell OCTEON TX2
 M: Jerin Jacob <jerinj@marvell.com>
 M: Nithin Dabilpuram <ndabilpuram@marvell.com>
-M: Vamsi Attunuru <vattunuru@marvell.com>
 F: drivers/common/octeontx2/
 F: drivers/mempool/octeontx2/
 F: doc/guides/platform/img/octeontx2_*
@@ -516,6 +545,7 @@ F: drivers/bus/vdev/
 
 VMBUS bus driver
 M: Stephen Hemminger <sthemmin@microsoft.com>
+M: Long Li <longli@microsoft.com>
 F: drivers/bus/vmbus/
 
 
@@ -527,11 +557,11 @@ F: doc/guides/nics/features/default.ini
 
 Link bonding
 M: Chas Williams <chas3@att.com>
+M: Wei Hu (Xavier) <xavier.huwei@huawei.com>
 F: drivers/net/bonding/
 F: doc/guides/prog_guide/link_bonding_poll_mode_drv_lib.rst
 F: app/test/test_link_bonding*
 F: examples/bond/
-F: doc/guides/nics/features/bonding.ini
 
 Linux KNI
 M: Ferruh Yigit <ferruh.yigit@intel.com>
@@ -548,7 +578,7 @@ F: drivers/net/af_packet/
 F: doc/guides/nics/features/afpacket.ini
 
 Linux AF_XDP
-M: Xiaolong Ye <xiaolong.ye@intel.com>
+M: Ciara Loftus <ciara.loftus@intel.com>
 M: Qi Zhang <qi.z.zhang@intel.com>
 F: drivers/net/af_xdp/
 F: doc/guides/nics/af_xdp.rst
@@ -565,7 +595,7 @@ F: doc/guides/nics/ena.rst
 F: doc/guides/nics/features/ena.ini
 
 AMD axgbe
-M: Ravi Kumar <ravi1.kumar@amd.com>
+M: Somalapuram Amaranath <asomalap@amd.com>
 F: drivers/net/axgbe/
 F: doc/guides/nics/axgbe.rst
 F: doc/guides/nics/features/axgbe.ini
@@ -648,7 +678,8 @@ F: doc/guides/nics/hinic.rst
 F: doc/guides/nics/features/hinic.ini
 
 Intel e1000
-M: Wenzhuo Lu <wenzhuo.lu@intel.com>
+M: Wei Zhao <wei.zhao1@intel.com>
+M: Jeff Guo <jia.guo@intel.com>
 T: git://dpdk.org/next/dpdk-next-net-intel
 F: drivers/net/e1000/
 F: doc/guides/nics/e1000em.rst
@@ -657,8 +688,8 @@ F: doc/guides/nics/features/e1000.ini
 F: doc/guides/nics/features/igb*.ini
 
 Intel ixgbe
-M: Wenzhuo Lu <wenzhuo.lu@intel.com>
-M: Konstantin Ananyev <konstantin.ananyev@intel.com>
+M: Wei Zhao <wei.zhao1@intel.com>
+M: Jeff Guo <jia.guo@intel.com>
 T: git://dpdk.org/next/dpdk-next-net-intel
 F: drivers/net/ixgbe/
 F: doc/guides/nics/ixgbe.rst
@@ -667,7 +698,7 @@ F: doc/guides/nics/features/ixgbe*.ini
 
 Intel i40e
 M: Beilei Xing <beilei.xing@intel.com>
-M: Qi Zhang <qi.z.zhang@intel.com>
+M: Jeff Guo <jia.guo@intel.com>
 T: git://dpdk.org/next/dpdk-next-net-intel
 F: drivers/net/i40e/
 F: doc/guides/nics/i40e.rst
@@ -684,7 +715,7 @@ F: doc/guides/nics/features/fm10k*.ini
 
 Intel iavf
 M: Jingjing Wu <jingjing.wu@intel.com>
-M: Wenzhuo Lu <wenzhuo.lu@intel.com>
+M: Beilei Xing <beilei.xing@intel.com>
 T: git://dpdk.org/next/dpdk-next-net-intel
 F: drivers/net/iavf/
 F: drivers/common/iavf/
@@ -692,11 +723,19 @@ F: doc/guides/nics/features/iavf*.ini
 
 Intel ice
 M: Qiming Yang <qiming.yang@intel.com>
-M: Wenzhuo Lu <wenzhuo.lu@intel.com>
+M: Qi Zhang <qi.z.zhang@intel.com>
 T: git://dpdk.org/next/dpdk-next-net-intel
 F: drivers/net/ice/
 F: doc/guides/nics/ice.rst
 F: doc/guides/nics/features/ice.ini
+
+Intel igc
+M: Wei Zhao <wei.zhao1@intel.com>
+M: Jeff Guo <jia.guo@intel.com>
+T: git://dpdk.org/next/dpdk-next-net-intel
+F: drivers/net/igc/
+F: doc/guides/nics/igc.rst
+F: doc/guides/nics/features/igc.ini
 
 Intel ipn3ke
 M: Rosen Xu <rosen.xu@intel.com>
@@ -706,7 +745,6 @@ F: doc/guides/nics/ipn3ke.rst
 F: doc/guides/nics/features/ipn3ke.ini
 
 Marvell mvpp2
-M: Tomasz Duszynski <tdu@semihalf.com>
 M: Liron Himi <lironh@marvell.com>
 T: git://dpdk.org/next/dpdk-next-net-mrvl
 F: drivers/common/mvep/
@@ -760,26 +798,24 @@ Microsoft vdev_netvsc - EXPERIMENTAL
 M: Matan Azrad <matan@mellanox.com>
 F: drivers/net/vdev_netvsc/
 F: doc/guides/nics/vdev_netvsc.rst
-F: doc/guides/nics/features/vdev_netvsc.ini
 
 Microsoft Hyper-V netvsc - EXPERIMENTAL
 M: Stephen Hemminger <sthemmin@microsoft.com>
 M: K. Y. Srinivasan <kys@microsoft.com>
 M: Haiyang Zhang <haiyangz@microsoft.com>
+M: Long Li <longli@microsoft.com>
 F: drivers/net/netvsc/
 F: doc/guides/nics/netvsc.rst
 F: doc/guides/nics/features/netvsc.ini
 
 Netcope szedata2
-M: Jan Remes <remes@netcope.com>
-M: Rastislav Cernay <cernay@netcope.com>
+M: Martin Spinler <spinler@cesnet.cz>
 F: drivers/net/szedata2/
 F: doc/guides/nics/szedata2.rst
 F: doc/guides/nics/features/szedata2.ini
 
 Netcope nfb
-M: Rastislav Cernay <cernay@netcope.com>
-M: Jan Remes <remes@netcope.com>
+M: Martin Spinler <spinler@cesnet.cz>
 F: drivers/net/nfb/
 F: doc/guides/nics/nfb.rst
 F: doc/guides/nics/features/nfb.ini
@@ -856,7 +892,7 @@ F: doc/guides/nics/features/vmxnet3.ini
 
 Vhost-user
 M: Maxime Coquelin <maxime.coquelin@redhat.com>
-M: Tiwei Bie <tiwei.bie@intel.com>
+M: Chenbo Xia <chenbo.xia@intel.com>
 M: Zhihong Wang <zhihong.wang@intel.com>
 T: git://dpdk.org/next/dpdk-next-virtio
 F: lib/librte_vhost/
@@ -871,7 +907,7 @@ F: doc/guides/sample_app_ug/vdpa.rst
 
 Vhost PMD
 M: Maxime Coquelin <maxime.coquelin@redhat.com>
-M: Tiwei Bie <tiwei.bie@intel.com>
+M: Chenbo Xia <chenbo.xia@intel.com>
 M: Zhihong Wang <zhihong.wang@intel.com>
 T: git://dpdk.org/next/dpdk-next-virtio
 F: drivers/net/vhost/
@@ -880,7 +916,7 @@ F: doc/guides/nics/features/vhost.ini
 
 Virtio PMD
 M: Maxime Coquelin <maxime.coquelin@redhat.com>
-M: Tiwei Bie <tiwei.bie@intel.com>
+M: Chenbo Xia <chenbo.xia@intel.com>
 M: Zhihong Wang <zhihong.wang@intel.com>
 T: git://dpdk.org/next/dpdk-next-virtio
 F: drivers/net/virtio/
@@ -910,7 +946,6 @@ KNI PMD
 M: Ferruh Yigit <ferruh.yigit@intel.com>
 F: drivers/net/kni/
 F: doc/guides/nics/kni.rst
-F: doc/guides/nics/features/kni.ini
 
 Ring PMD
 M: Bruce Richardson <bruce.richardson@intel.com>
@@ -918,12 +953,10 @@ F: drivers/net/ring/
 F: doc/guides/nics/pcap_ring.rst
 F: app/test/test_pmd_ring.c
 F: app/test/test_pmd_ring_perf.c
-F: doc/guides/nics/features/ring.ini
 
 Null Networking PMD
 M: Tetsuya Mukawa <mtetsuyah@gmail.com>
 F: drivers/net/null/
-F: doc/guides/nics/features/null.ini
 
 Fail-safe PMD
 M: Gaetan Rivet <grive@u256.net>
@@ -935,7 +968,6 @@ Softnic PMD
 M: Jasvinder Singh <jasvinder.singh@intel.com>
 M: Cristian Dumitrescu <cristian.dumitrescu@intel.com>
 F: drivers/net/softnic/
-F: doc/guides/nics/features/softnic.ini
 F: doc/guides/nics/softnic.rst
 
 Memif PMD
@@ -951,7 +983,7 @@ T: git://dpdk.org/next/dpdk-next-crypto
 F: doc/guides/cryptodevs/features/default.ini
 
 AMD CCP Crypto
-M: Ravi Kumar <ravi1.kumar@amd.com>
+M: Somalapuram Amaranath <asomalap@amd.com>
 F: drivers/crypto/ccp/
 F: doc/guides/cryptodevs/ccp.rst
 F: doc/guides/cryptodevs/features/ccp.ini
@@ -1004,7 +1036,6 @@ F: doc/guides/cryptodevs/kasumi.rst
 F: doc/guides/cryptodevs/features/kasumi.ini
 
 Marvell mvsam
-M: Tomasz Duszynski <tdu@semihalf.com>
 M: Michael Shamis <michaelsh@marvell.com>
 M: Liron Himi <lironh@marvell.com>
 F: drivers/crypto/mvsam/
@@ -1105,6 +1136,16 @@ F: doc/guides/compressdevs/zlib.rst
 F: doc/guides/compressdevs/features/zlib.ini
 
 
+RegEx Drivers
+-------------
+
+Mellanox mlx5
+M: Ori Kam <orika@mellanox.com>
+F: drivers/regex/mlx5/
+F: doc/guides/regexdevs/mlx5.rst
+F: doc/guides/regexdevs/features/mlx5.ini
+
+
 vDPA Drivers
 ------------
 T: git://dpdk.org/next/dpdk-next-virtio
@@ -1203,7 +1244,6 @@ F: doc/guides/rawdevs/dpaa2_cmdif.rst
 
 Marvell OCTEON TX2 DMA
 M: Satha Rao <skoteshwar@marvell.com>
-M: Vamsi Attunuru <vattunuru@marvell.com>
 F: drivers/raw/octeontx2_dma/
 F: doc/guides/rawdevs/octeontx2_dma.rst
 
@@ -1238,6 +1278,7 @@ IP fragmentation & reassembly
 M: Konstantin Ananyev <konstantin.ananyev@intel.com>
 F: lib/librte_ip_frag/
 F: doc/guides/prog_guide/ip_fragment_reassembly_lib.rst
+F: app/test/test_ipfrag.c
 F: examples/ip_fragmentation/
 F: doc/guides/sample_app_ug/ip_frag.rst
 F: examples/ip_reassembly/
@@ -1258,10 +1299,9 @@ M: Konstantin Ananyev <konstantin.ananyev@intel.com>
 T: git://dpdk.org/next/dpdk-next-crypto
 F: lib/librte_ipsec/
 M: Bernard Iremonger <bernard.iremonger@intel.com>
-F: app/test/test_ipsec.c
+F: app/test/test_ipsec*
 F: doc/guides/prog_guide/ipsec_lib.rst
 M: Vladimir Medvedkin <vladimir.medvedkin@intel.com>
-F: app/test/test_ipsec_sad.c
 F: app/test-sad/
 
 Flow Classify - EXPERIMENTAL
@@ -1459,7 +1499,8 @@ F: app/test/test_latencystats.c
 Telemetry - EXPERIMENTAL
 M: Kevin Laatz <kevin.laatz@intel.com>
 F: lib/librte_telemetry/
-F: usertools/dpdk-telemetry-client.py
+F: app/test/test_telemetry*
+F: usertools/dpdk-telemetry*
 F: doc/guides/howto/telemetry.rst
 
 BPF - EXPERIMENTAL
@@ -1468,6 +1509,21 @@ F: lib/librte_bpf/
 F: examples/bpf/
 F: app/test/test_bpf.c
 F: doc/guides/prog_guide/bpf_lib.rst
+
+Graph - EXPERIMENTAL
+M: Jerin Jacob <jerinj@marvell.com>
+M: Kiran Kumar K <kirankumark@marvell.com>
+F: lib/librte_graph/
+F: doc/guides/prog_guide/graph_lib.rst
+F: app/test/test_graph*
+M: Nithin Dabilpuram <ndabilpuram@marvell.com>
+F: examples/l3fwd-graph/
+F: doc/guides/sample_app_ug/l3_forward_graph.rst
+
+Nodes - EXPERIMENTAL
+M: Nithin Dabilpuram <ndabilpuram@marvell.com>
+M: Pavan Nikhilesh <pbhagavatula@marvell.com>
+F: lib/librte_node/
 
 
 Test Applications
@@ -1478,6 +1534,7 @@ F: app/test/Makefile
 F: app/test/autotest*
 F: app/test/commands.c
 F: app/test/get-coremask.sh
+F: app/test/has-hugepage.sh
 F: app/test/packet_burst_generator.c
 F: app/test/packet_burst_generator.h
 F: app/test/process.h
@@ -1496,11 +1553,16 @@ F: app/test/sample_packet_forward.h
 
 Driver testing tool
 M: Wenzhuo Lu <wenzhuo.lu@intel.com>
-M: Jingjing Wu <jingjing.wu@intel.com>
+M: Beilei Xing <beilei.xing@intel.com>
 M: Bernard Iremonger <bernard.iremonger@intel.com>
 T: git://dpdk.org/next/dpdk-next-net
 F: app/test-pmd/
 F: doc/guides/testpmd_app_ug/
+
+Flow performance tool
+M: Wisam Jaddo <wisamm@mellanox.com>
+F: app/test-flow-perf/
+F: doc/guides/tools/flow-perf.rst
 
 Compression performance test application
 T: git://dpdk.org/next/dpdk-next-crypto
@@ -1600,5 +1662,6 @@ M: Xiaoyun Li <xiaoyun.li@intel.com>
 F: examples/tep_termination/
 
 F: examples/vmdq/
+F: doc/guides/sample_app_ug/vmdq_forwarding.rst
 F: examples/vmdq_dcb/
 F: doc/guides/sample_app_ug/vmdq_dcb_forwarding.rst

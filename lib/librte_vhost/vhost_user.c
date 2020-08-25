@@ -87,6 +87,8 @@ static const char *vhost_message_str[VHOST_USER_MAX] = {
 	[VHOST_USER_POSTCOPY_END]  = "VHOST_USER_POSTCOPY_END",
 	[VHOST_USER_GET_INFLIGHT_FD] = "VHOST_USER_GET_INFLIGHT_FD",
 	[VHOST_USER_SET_INFLIGHT_FD] = "VHOST_USER_SET_INFLIGHT_FD",
+	[VHOST_USER_SET_STATUS] = "VHOST_USER_SET_STATUS",
+	[VHOST_USER_GET_STATUS] = "VHOST_USER_GET_STATUS",
 };
 
 static int send_vhost_reply(int sockfd, struct VhostUserMsg *msg);
@@ -191,7 +193,7 @@ vhost_backend_cleanup(struct virtio_net *dev)
 		dev->mem = NULL;
 	}
 
-	free(dev->guest_pages);
+	rte_free(dev->guest_pages);
 	dev->guest_pages = NULL;
 
 	if (dev->log_addr) {
@@ -206,7 +208,7 @@ vhost_backend_cleanup(struct virtio_net *dev)
 			dev->inflight_info->addr = NULL;
 		}
 
-		if (dev->inflight_info->fd > 0) {
+		if (dev->inflight_info->fd >= 0) {
 			close(dev->inflight_info->fd);
 			dev->inflight_info->fd = -1;
 		}
@@ -226,6 +228,25 @@ vhost_backend_cleanup(struct virtio_net *dev)
 	}
 
 	dev->postcopy_listening = 0;
+}
+
+static void
+vhost_user_notify_queue_state(struct virtio_net *dev, uint16_t index,
+			      int enable)
+{
+	struct rte_vdpa_device *vdpa_dev = dev->vdpa_dev;
+	struct vhost_virtqueue *vq = dev->virtqueue[index];
+
+	/* Configure guest notifications on enable */
+	if (enable && vq->notif_enable != VIRTIO_UNINITIALIZED_NOTIF)
+		vhost_enable_guest_notification(dev, vq, vq->notif_enable);
+
+	if (vdpa_dev && vdpa_dev->ops->set_vring_state)
+		vdpa_dev->ops->set_vring_state(dev->vid, index, enable);
+
+	if (dev->notify_ops->vring_state_changed)
+		dev->notify_ops->vring_state_changed(dev->vid,
+				index, enable);
 }
 
 /*
@@ -315,7 +336,6 @@ vhost_user_set_features(struct virtio_net **pdev, struct VhostUserMsg *msg,
 	uint64_t features = msg->payload.u64;
 	uint64_t vhost_features = 0;
 	struct rte_vdpa_device *vdpa_dev;
-	int did = -1;
 
 	if (validate_msg_fds(msg, 0) != 0)
 		return RTE_VHOST_MSG_RESULT_ERR;
@@ -325,6 +345,9 @@ vhost_user_set_features(struct virtio_net **pdev, struct VhostUserMsg *msg,
 		VHOST_LOG_CONFIG(ERR,
 			"(%d) received invalid negotiated features.\n",
 			dev->vid);
+		dev->flags |= VIRTIO_DEV_FEATURES_FAILED;
+		dev->status &= ~VIRTIO_DEVICE_STATUS_FEATURES_OK;
+
 		return RTE_VHOST_MSG_RESULT_ERR;
 	}
 
@@ -384,11 +407,11 @@ vhost_user_set_features(struct virtio_net **pdev, struct VhostUserMsg *msg,
 		}
 	}
 
-	did = dev->vdpa_dev_id;
-	vdpa_dev = rte_vdpa_get_device(did);
-	if (vdpa_dev && vdpa_dev->ops->set_features)
+	vdpa_dev = dev->vdpa_dev;
+	if (vdpa_dev)
 		vdpa_dev->ops->set_features(dev->vid);
 
+	dev->flags &= ~VIRTIO_DEV_FEATURES_FAILED;
 	return RTE_VHOST_MSG_RESULT_OK;
 }
 
@@ -464,12 +487,14 @@ vhost_user_set_vring_num(struct virtio_net **pdev,
 	} else {
 		if (vq->shadow_used_split)
 			rte_free(vq->shadow_used_split);
+
 		vq->shadow_used_split = rte_malloc(NULL,
 				vq->size * sizeof(struct vring_used_elem),
 				RTE_CACHE_LINE_SIZE);
+
 		if (!vq->shadow_used_split) {
 			VHOST_LOG_CONFIG(ERR,
-					"failed to allocate memory for shadow used ring.\n");
+					"failed to allocate memory for vq internal data.\n");
 			return RTE_VHOST_MSG_RESULT_ERR;
 		}
 	}
@@ -903,11 +928,12 @@ add_one_guest_page(struct virtio_net *dev, uint64_t guest_phys_addr,
 	if (dev->nr_guest_pages == dev->max_guest_pages) {
 		dev->max_guest_pages *= 2;
 		old_pages = dev->guest_pages;
-		dev->guest_pages = realloc(dev->guest_pages,
-					dev->max_guest_pages * sizeof(*page));
-		if (!dev->guest_pages) {
+		dev->guest_pages = rte_realloc(dev->guest_pages,
+					dev->max_guest_pages * sizeof(*page),
+					RTE_CACHE_LINE_SIZE);
+		if (dev->guest_pages == NULL) {
 			VHOST_LOG_CONFIG(ERR, "cannot realloc guest_pages\n");
-			free(old_pages);
+			rte_free(old_pages);
 			return -1;
 		}
 	}
@@ -962,6 +988,12 @@ add_guest_pages(struct virtio_net *dev, struct rte_vhost_mem_region *reg,
 		host_user_addr  += size;
 		guest_phys_addr += size;
 		reg_size -= size;
+	}
+
+	/* sort guest page array if over binary search threshold */
+	if (dev->nr_guest_pages >= VHOST_BINARY_SEARCH_THRESH) {
+		qsort((void *)dev->guest_pages, dev->nr_guest_pages,
+			sizeof(struct guest_page), guest_page_addrcmp);
 	}
 
 	return 0;
@@ -1051,6 +1083,13 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 	}
 
 	if (dev->mem) {
+		if (dev->flags & VIRTIO_DEV_VDPA_CONFIGURED) {
+			struct rte_vdpa_device *vdpa_dev = dev->vdpa_dev;
+
+			if (vdpa_dev && vdpa_dev->ops->dev_close)
+				vdpa_dev->ops->dev_close(dev->vid);
+			dev->flags &= ~VIRTIO_DEV_VDPA_CONFIGURED;
+		}
 		free_mem_region(dev);
 		rte_free(dev->mem);
 		dev->mem = NULL;
@@ -1062,10 +1101,12 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 			vhost_user_iotlb_flush_all(dev->virtqueue[i]);
 
 	dev->nr_guest_pages = 0;
-	if (!dev->guest_pages) {
+	if (dev->guest_pages == NULL) {
 		dev->max_guest_pages = 8;
-		dev->guest_pages = malloc(dev->max_guest_pages *
-						sizeof(struct guest_page));
+		dev->guest_pages = rte_zmalloc(NULL,
+					dev->max_guest_pages *
+					sizeof(struct guest_page),
+					RTE_CACHE_LINE_SIZE);
 		if (dev->guest_pages == NULL) {
 			VHOST_LOG_CONFIG(ERR,
 				"(%d) failed to allocate memory "
@@ -1138,7 +1179,8 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 			goto err_mmap;
 		}
 
-		populate = (dev->dequeue_zero_copy) ? MAP_POPULATE : 0;
+		populate = (dev->dequeue_zero_copy || dev->async_copy) ?
+			MAP_POPULATE : 0;
 		mmap_addr = mmap(NULL, mmap_size, PROT_READ | PROT_WRITE,
 				 MAP_SHARED | populate, fd, 0);
 
@@ -1153,7 +1195,7 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 		reg->host_user_addr = (uint64_t)(uintptr_t)mmap_addr +
 				      mmap_offset;
 
-		if (dev->dequeue_zero_copy)
+		if (dev->dequeue_zero_copy || dev->async_copy)
 			if (add_guest_pages(dev, reg, alignment) < 0) {
 				VHOST_LOG_CONFIG(ERR,
 					"adding guest pages to region %u failed.\n",
@@ -1297,8 +1339,11 @@ vq_is_ready(struct virtio_net *dev, struct vhost_virtqueue *vq)
 
 	return rings_ok &&
 	       vq->kickfd != VIRTIO_UNINITIALIZED_EVENTFD &&
-	       vq->callfd != VIRTIO_UNINITIALIZED_EVENTFD;
+	       vq->callfd != VIRTIO_UNINITIALIZED_EVENTFD &&
+	       vq->enabled;
 }
+
+#define VIRTIO_DEV_NUM_VQS_TO_BE_READY 2u
 
 static int
 virtio_is_ready(struct virtio_net *dev)
@@ -1306,18 +1351,29 @@ virtio_is_ready(struct virtio_net *dev)
 	struct vhost_virtqueue *vq;
 	uint32_t i;
 
-	if (dev->nr_vring == 0)
+	if (dev->flags & VIRTIO_DEV_READY)
+		return 1;
+
+	if (dev->nr_vring < VIRTIO_DEV_NUM_VQS_TO_BE_READY)
 		return 0;
 
-	for (i = 0; i < dev->nr_vring; i++) {
+	for (i = 0; i < VIRTIO_DEV_NUM_VQS_TO_BE_READY; i++) {
 		vq = dev->virtqueue[i];
 
 		if (!vq_is_ready(dev, vq))
 			return 0;
 	}
 
-	VHOST_LOG_CONFIG(INFO,
-		"virtio is now ready for processing.\n");
+	/* If supported, ensure the frontend is really done with config */
+	if (dev->protocol_features & (1ULL << VHOST_USER_PROTOCOL_F_STATUS))
+		if (!(dev->status & VIRTIO_DEVICE_STATUS_DRIVER_OK))
+			return 0;
+
+	dev->flags |= VIRTIO_DEV_READY;
+
+	if (!(dev->flags & VIRTIO_DEV_RUNNING))
+		VHOST_LOG_CONFIG(INFO,
+			"virtio is now ready for processing.\n");
 	return 1;
 }
 
@@ -1408,6 +1464,7 @@ vhost_user_get_inflight_fd(struct virtio_net **pdev,
 				"failed to alloc dev inflight area\n");
 			return RTE_VHOST_MSG_RESULT_ERR;
 		}
+		dev->inflight_info->fd = -1;
 	}
 
 	num_queues = msg->payload.inflight.num_queues;
@@ -1432,6 +1489,16 @@ vhost_user_get_inflight_fd(struct virtio_net **pdev,
 		return RTE_VHOST_MSG_RESULT_ERR;
 	}
 	memset(addr, 0, mmap_size);
+
+	if (dev->inflight_info->addr) {
+		munmap(dev->inflight_info->addr, dev->inflight_info->size);
+		dev->inflight_info->addr = NULL;
+	}
+
+	if (dev->inflight_info->fd >= 0) {
+		close(dev->inflight_info->fd);
+		dev->inflight_info->fd = -1;
+	}
 
 	dev->inflight_info->addr = addr;
 	dev->inflight_info->size = msg->payload.inflight.mmap_size = mmap_size;
@@ -1515,10 +1582,13 @@ vhost_user_set_inflight_fd(struct virtio_net **pdev, VhostUserMsg *msg,
 				"failed to alloc dev inflight area\n");
 			return RTE_VHOST_MSG_RESULT_ERR;
 		}
+		dev->inflight_info->fd = -1;
 	}
 
-	if (dev->inflight_info->addr)
+	if (dev->inflight_info->addr) {
 		munmap(dev->inflight_info->addr, dev->inflight_info->size);
+		dev->inflight_info->addr = NULL;
+	}
 
 	addr = mmap(0, mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED,
 		    fd, mmap_offset);
@@ -1527,8 +1597,10 @@ vhost_user_set_inflight_fd(struct virtio_net **pdev, VhostUserMsg *msg,
 		return RTE_VHOST_MSG_RESULT_ERR;
 	}
 
-	if (dev->inflight_info->fd)
+	if (dev->inflight_info->fd >= 0) {
 		close(dev->inflight_info->fd);
+		dev->inflight_info->fd = -1;
+	}
 
 	dev->inflight_info->fd = fd;
 	dev->inflight_info->addr = addr;
@@ -1571,6 +1643,12 @@ vhost_user_set_vring_call(struct virtio_net **pdev, struct VhostUserMsg *msg,
 		"vring call idx:%d file:%d\n", file.index, file.fd);
 
 	vq = dev->virtqueue[file.index];
+
+	if (vq->ready) {
+		vq->ready = 0;
+		vhost_user_notify_queue_state(dev, file.index, 0);
+	}
+
 	if (vq->callfd >= 0)
 		close(vq->callfd);
 
@@ -1829,6 +1907,11 @@ vhost_user_set_vring_kick(struct virtio_net **pdev, struct VhostUserMsg *msg,
 				dev->vid, file.index, 1);
 	}
 
+	if (vq->ready) {
+		vq->ready = 0;
+		vhost_user_notify_queue_state(dev, file.index, 0);
+	}
+
 	if (vq->kickfd >= 0)
 		close(vq->kickfd);
 	vq->kickfd = file.fd;
@@ -1856,6 +1939,7 @@ free_zmbufs(struct vhost_virtqueue *vq)
 	drain_zmbuf_list(vq);
 
 	rte_free(vq->zmbufs);
+	vq->zmbufs = NULL;
 }
 
 /*
@@ -1920,6 +2004,12 @@ vhost_user_get_vring_base(struct virtio_net **pdev,
 	} else {
 		rte_free(vq->shadow_used_split);
 		vq->shadow_used_split = NULL;
+		if (vq->async_pkts_pending)
+			rte_free(vq->async_pkts_pending);
+		if (vq->async_pending_info)
+			rte_free(vq->async_pending_info);
+		vq->async_pkts_pending = NULL;
+		vq->async_pending_info = NULL;
 	}
 
 	rte_free(vq->batch_copy_elems);
@@ -1945,8 +2035,6 @@ vhost_user_set_vring_enable(struct virtio_net **pdev,
 	struct virtio_net *dev = *pdev;
 	int enable = (int)msg->payload.state.num;
 	int index = (int)msg->payload.state.index;
-	struct rte_vdpa_device *vdpa_dev;
-	int did = -1;
 
 	if (validate_msg_fds(msg, 0) != 0)
 		return RTE_VHOST_MSG_RESULT_ERR;
@@ -1955,14 +2043,13 @@ vhost_user_set_vring_enable(struct virtio_net **pdev,
 		"set queue enable: %d to qp idx: %d\n",
 		enable, index);
 
-	did = dev->vdpa_dev_id;
-	vdpa_dev = rte_vdpa_get_device(did);
-	if (vdpa_dev && vdpa_dev->ops->set_vring_state)
-		vdpa_dev->ops->set_vring_state(dev->vid, index, enable);
-
-	if (dev->notify_ops->vring_state_changed)
-		dev->notify_ops->vring_state_changed(dev->vid,
-				index, enable);
+	if (!enable && dev->virtqueue[index]->async_registered) {
+		if (dev->virtqueue[index]->async_pkts_inflight_n) {
+			VHOST_LOG_CONFIG(ERR, "failed to disable vring. "
+			"async inflight packets must be completed first\n");
+			return RTE_VHOST_MSG_RESULT_ERR;
+		}
+	}
 
 	/* On disable, rings have to be stopped being processed. */
 	if (!enable && dev->dequeue_zero_copy)
@@ -1986,15 +2073,6 @@ vhost_user_get_protocol_features(struct virtio_net **pdev,
 
 	rte_vhost_driver_get_features(dev->ifname, &features);
 	rte_vhost_driver_get_protocol_features(dev->ifname, &protocol_features);
-
-	/*
-	 * REPLY_ACK protocol feature is only mandatory for now
-	 * for IOMMU feature. If IOMMU is explicitly disabled by the
-	 * application, disable also REPLY_ACK feature for older buggy
-	 * Qemu versions (from v2.7.0 to v2.9.0).
-	 */
-	if (!(features & (1ULL << VIRTIO_F_IOMMU_PLATFORM)))
-		protocol_features &= ~(1ULL << VHOST_USER_PROTOCOL_F_REPLY_ACK);
 
 	msg->payload.u64 = protocol_features;
 	msg->size = sizeof(msg->payload.u64);
@@ -2059,10 +2137,10 @@ vhost_user_set_log_base(struct virtio_net **pdev, struct VhostUserMsg *msg,
 	size = msg->payload.log.mmap_size;
 	off  = msg->payload.log.mmap_offset;
 
-	/* Don't allow mmap_offset to point outside the mmap region */
-	if (off > size) {
+	/* Check for mmap size and offset overflow. */
+	if (off >= -size) {
 		VHOST_LOG_CONFIG(ERR,
-			"log offset %#"PRIx64" exceeds log size %#"PRIx64"\n",
+			"log offset %#"PRIx64" and log size %#"PRIx64" overflow\n",
 			off, size);
 		return RTE_VHOST_MSG_RESULT_ERR;
 	}
@@ -2131,7 +2209,6 @@ vhost_user_send_rarp(struct virtio_net **pdev, struct VhostUserMsg *msg,
 	struct virtio_net *dev = *pdev;
 	uint8_t *mac = (uint8_t *)&msg->payload.u64;
 	struct rte_vdpa_device *vdpa_dev;
-	int did = -1;
 
 	if (validate_msg_fds(msg, 0) != 0)
 		return RTE_VHOST_MSG_RESULT_ERR;
@@ -2145,13 +2222,11 @@ vhost_user_send_rarp(struct virtio_net **pdev, struct VhostUserMsg *msg,
 	 * Set the flag to inject a RARP broadcast packet at
 	 * rte_vhost_dequeue_burst().
 	 *
-	 * rte_smp_wmb() is for making sure the mac is copied
-	 * before the flag is set.
+	 * __ATOMIC_RELEASE ordering is for making sure the mac is
+	 * copied before the flag is set.
 	 */
-	rte_smp_wmb();
-	rte_atomic16_set(&dev->broadcast_rarp, 1);
-	did = dev->vdpa_dev_id;
-	vdpa_dev = rte_vdpa_get_device(did);
+	__atomic_store_n(&dev->broadcast_rarp, 1, __ATOMIC_RELEASE);
+	vdpa_dev = dev->vdpa_dev;
 	if (vdpa_dev && vdpa_dev->ops->migration_done)
 		vdpa_dev->ops->migration_done(dev->vid);
 
@@ -2411,6 +2486,68 @@ vhost_user_postcopy_end(struct virtio_net **pdev, struct VhostUserMsg *msg,
 	return RTE_VHOST_MSG_RESULT_REPLY;
 }
 
+static int
+vhost_user_get_status(struct virtio_net **pdev, struct VhostUserMsg *msg,
+		      int main_fd __rte_unused)
+{
+	struct virtio_net *dev = *pdev;
+
+	if (validate_msg_fds(msg, 0) != 0)
+		return RTE_VHOST_MSG_RESULT_ERR;
+
+	msg->payload.u64 = dev->status;
+	msg->size = sizeof(msg->payload.u64);
+	msg->fd_num = 0;
+
+	return RTE_VHOST_MSG_RESULT_REPLY;
+}
+
+static int
+vhost_user_set_status(struct virtio_net **pdev, struct VhostUserMsg *msg,
+			int main_fd __rte_unused)
+{
+	struct virtio_net *dev = *pdev;
+
+	if (validate_msg_fds(msg, 0) != 0)
+		return RTE_VHOST_MSG_RESULT_ERR;
+
+	/* As per Virtio specification, the device status is 8bits long */
+	if (msg->payload.u64 > UINT8_MAX) {
+		VHOST_LOG_CONFIG(ERR, "Invalid VHOST_USER_SET_STATUS payload 0x%" PRIx64 "\n",
+				msg->payload.u64);
+		return RTE_VHOST_MSG_RESULT_ERR;
+	}
+
+	dev->status = msg->payload.u64;
+
+	if ((dev->status & VIRTIO_DEVICE_STATUS_FEATURES_OK) &&
+	    (dev->flags & VIRTIO_DEV_FEATURES_FAILED)) {
+		VHOST_LOG_CONFIG(ERR, "FEATURES_OK bit is set but feature negotiation failed\n");
+		/*
+		 * Clear the bit to let the driver know about the feature
+		 * negotiation failure
+		 */
+		dev->status &= ~VIRTIO_DEVICE_STATUS_FEATURES_OK;
+	}
+
+	VHOST_LOG_CONFIG(INFO, "New device status(0x%08x):\n"
+			"\t-ACKNOWLEDGE: %u\n"
+			"\t-DRIVER: %u\n"
+			"\t-FEATURES_OK: %u\n"
+			"\t-DRIVER_OK: %u\n"
+			"\t-DEVICE_NEED_RESET: %u\n"
+			"\t-FAILED: %u\n",
+			dev->status,
+			!!(dev->status & VIRTIO_DEVICE_STATUS_ACK),
+			!!(dev->status & VIRTIO_DEVICE_STATUS_DRIVER),
+			!!(dev->status & VIRTIO_DEVICE_STATUS_FEATURES_OK),
+			!!(dev->status & VIRTIO_DEVICE_STATUS_DRIVER_OK),
+			!!(dev->status & VIRTIO_DEVICE_STATUS_DEV_NEED_RESET),
+			!!(dev->status & VIRTIO_DEVICE_STATUS_FAILED));
+
+	return RTE_VHOST_MSG_RESULT_OK;
+}
+
 typedef int (*vhost_message_handler_t)(struct virtio_net **pdev,
 					struct VhostUserMsg *msg,
 					int main_fd);
@@ -2443,6 +2580,8 @@ static vhost_message_handler_t vhost_message_handlers[VHOST_USER_MAX] = {
 	[VHOST_USER_POSTCOPY_END] = vhost_user_postcopy_end,
 	[VHOST_USER_GET_INFLIGHT_FD] = vhost_user_get_inflight_fd,
 	[VHOST_USER_SET_INFLIGHT_FD] = vhost_user_set_inflight_fd,
+	[VHOST_USER_SET_STATUS] = vhost_user_set_status,
+	[VHOST_USER_GET_STATUS] = vhost_user_get_status,
 };
 
 /* return bytes# of read on success or negative val on failure. */
@@ -2526,7 +2665,7 @@ static int
 vhost_user_check_and_alloc_queue_pair(struct virtio_net *dev,
 			struct VhostUserMsg *msg)
 {
-	uint16_t vring_idx;
+	uint32_t vring_idx;
 
 	switch (msg->request.master) {
 	case VHOST_USER_SET_VRING_KICK:
@@ -2598,11 +2737,11 @@ vhost_user_msg_handler(int vid, int fd)
 	struct virtio_net *dev;
 	struct VhostUserMsg msg;
 	struct rte_vdpa_device *vdpa_dev;
-	int did = -1;
 	int ret;
 	int unlock_required = 0;
 	bool handled;
 	int request;
+	uint32_t i;
 
 	dev = get_device(vid);
 	if (dev == NULL)
@@ -2675,8 +2814,10 @@ vhost_user_msg_handler(int vid, int fd)
 	case VHOST_USER_SEND_RARP:
 	case VHOST_USER_NET_SET_MTU:
 	case VHOST_USER_SET_SLAVE_REQ_FD:
-		vhost_user_lock_all_queue_pairs(dev);
-		unlock_required = 1;
+		if (!(dev->flags & VIRTIO_DEV_VDPA_CONFIGURED)) {
+			vhost_user_lock_all_queue_pairs(dev);
+			unlock_required = 1;
+		}
 		break;
 	default:
 		break;
@@ -2776,30 +2917,44 @@ skip_to_post_handle:
 		return -1;
 	}
 
-	if (!(dev->flags & VIRTIO_DEV_RUNNING) && virtio_is_ready(dev)) {
-		dev->flags |= VIRTIO_DEV_READY;
+	for (i = 0; i < dev->nr_vring; i++) {
+		struct vhost_virtqueue *vq = dev->virtqueue[i];
+		bool cur_ready = vq_is_ready(dev, vq);
 
-		if (!(dev->flags & VIRTIO_DEV_RUNNING)) {
-			if (dev->dequeue_zero_copy) {
-				VHOST_LOG_CONFIG(INFO,
-						"dequeue zero copy is enabled\n");
-			}
-
-			if (dev->notify_ops->new_device(dev->vid) == 0)
-				dev->flags |= VIRTIO_DEV_RUNNING;
+		if (cur_ready != (vq && vq->ready)) {
+			vq->ready = cur_ready;
+			vhost_user_notify_queue_state(dev, i, cur_ready);
 		}
 	}
 
-	did = dev->vdpa_dev_id;
-	vdpa_dev = rte_vdpa_get_device(did);
-	if (vdpa_dev && virtio_is_ready(dev) &&
-			!(dev->flags & VIRTIO_DEV_VDPA_CONFIGURED) &&
-			msg.request.master == VHOST_USER_SET_VRING_CALL) {
-		if (vdpa_dev->ops->dev_conf)
-			vdpa_dev->ops->dev_conf(dev->vid);
-		dev->flags |= VIRTIO_DEV_VDPA_CONFIGURED;
+
+	if (!virtio_is_ready(dev))
+		goto out;
+
+	/*
+	 * Virtio is now ready. If not done already, it is time
+	 * to notify the application it can process the rings and
+	 * configure the vDPA device if present.
+	 */
+
+	if (!(dev->flags & VIRTIO_DEV_RUNNING)) {
+		if (dev->notify_ops->new_device(dev->vid) == 0)
+			dev->flags |= VIRTIO_DEV_RUNNING;
 	}
 
+	vdpa_dev = dev->vdpa_dev;
+	if (!vdpa_dev)
+		goto out;
+
+	if (!(dev->flags & VIRTIO_DEV_VDPA_CONFIGURED)) {
+		if (vdpa_dev->ops->dev_conf(dev->vid))
+			VHOST_LOG_CONFIG(ERR,
+					 "Failed to configure vDPA device\n");
+		else
+			dev->flags |= VIRTIO_DEV_VDPA_CONFIGURED;
+	}
+
+out:
 	return 0;
 }
 
@@ -2812,11 +2967,19 @@ static int process_slave_message_reply(struct virtio_net *dev,
 	if ((msg->flags & VHOST_USER_NEED_REPLY) == 0)
 		return 0;
 
-	if (read_vhost_message(dev->slave_req_fd, &msg_reply) < 0) {
+	ret = read_vhost_message(dev->slave_req_fd, &msg_reply);
+	if (ret <= 0) {
+		if (ret < 0)
+			VHOST_LOG_CONFIG(ERR,
+				"vhost read slave message reply failed\n");
+		else
+			VHOST_LOG_CONFIG(INFO,
+				"vhost peer closed\n");
 		ret = -1;
 		goto out;
 	}
 
+	ret = 0;
 	if (msg_reply.request.slave != msg->request.slave) {
 		VHOST_LOG_CONFIG(ERR,
 			"Received unexpected msg type (%u), expected %u\n",
@@ -2928,21 +3091,21 @@ static int vhost_user_slave_set_vring_host_notifier(struct virtio_net *dev,
 	return process_slave_message_reply(dev, &msg);
 }
 
-int rte_vhost_host_notifier_ctrl(int vid, bool enable)
+int rte_vhost_host_notifier_ctrl(int vid, uint16_t qid, bool enable)
 {
 	struct virtio_net *dev;
 	struct rte_vdpa_device *vdpa_dev;
-	int vfio_device_fd, did, ret = 0;
+	int vfio_device_fd, ret = 0;
 	uint64_t offset, size;
-	unsigned int i;
+	unsigned int i, q_start, q_last;
 
 	dev = get_device(vid);
 	if (!dev)
 		return -ENODEV;
 
-	did = dev->vdpa_dev_id;
-	if (did < 0)
-		return -EINVAL;
+	vdpa_dev = dev->vdpa_dev;
+	if (vdpa_dev == NULL)
+		return -ENODEV;
 
 	if (!(dev->features & (1ULL << VIRTIO_F_VERSION_1)) ||
 	    !(dev->features & (1ULL << VHOST_USER_F_PROTOCOL_FEATURES)) ||
@@ -2954,9 +3117,15 @@ int rte_vhost_host_notifier_ctrl(int vid, bool enable)
 			(1ULL << VHOST_USER_PROTOCOL_F_HOST_NOTIFIER)))
 		return -ENOTSUP;
 
-	vdpa_dev = rte_vdpa_get_device(did);
-	if (!vdpa_dev)
-		return -ENODEV;
+	if (qid == RTE_VHOST_QUEUE_ALL) {
+		q_start = 0;
+		q_last = dev->nr_vring - 1;
+	} else {
+		if (qid >= dev->nr_vring)
+			return -EINVAL;
+		q_start = qid;
+		q_last = qid;
+	}
 
 	RTE_FUNC_PTR_OR_ERR_RET(vdpa_dev->ops->get_vfio_device_fd, -ENOTSUP);
 	RTE_FUNC_PTR_OR_ERR_RET(vdpa_dev->ops->get_notify_area, -ENOTSUP);
@@ -2966,7 +3135,7 @@ int rte_vhost_host_notifier_ctrl(int vid, bool enable)
 		return -ENOTSUP;
 
 	if (enable) {
-		for (i = 0; i < dev->nr_vring; i++) {
+		for (i = q_start; i <= q_last; i++) {
 			if (vdpa_dev->ops->get_notify_area(vid, i, &offset,
 					&size) < 0) {
 				ret = -ENOTSUP;
@@ -2981,7 +3150,7 @@ int rte_vhost_host_notifier_ctrl(int vid, bool enable)
 		}
 	} else {
 disable:
-		for (i = 0; i < dev->nr_vring; i++) {
+		for (i = q_start; i <= q_last; i++) {
 			vhost_user_slave_set_vring_host_notifier(dev, i, -1,
 					0, 0);
 		}

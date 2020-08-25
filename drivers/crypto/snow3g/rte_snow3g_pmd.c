@@ -561,7 +561,10 @@ cryptodev_snow3g_create(const char *name,
 	dev->enqueue_burst = snow3g_pmd_enqueue_burst;
 
 	dev->feature_flags = RTE_CRYPTODEV_FF_SYMMETRIC_CRYPTO |
-			RTE_CRYPTODEV_FF_SYM_OPERATION_CHAINING;
+			RTE_CRYPTODEV_FF_SYM_OPERATION_CHAINING |
+			RTE_CRYPTODEV_FF_NON_BYTE_ALIGNED_DATA |
+			RTE_CRYPTODEV_FF_SYM_SESSIONLESS |
+			RTE_CRYPTODEV_FF_OOP_LB_IN_LB_OUT;
 
 	mgr = alloc_mb_mgr(0);
 	if (mgr == NULL)
@@ -650,8 +653,4 @@ RTE_PMD_REGISTER_PARAM_STRING(CRYPTODEV_NAME_SNOW3G_PMD,
 	"socket_id=<int>");
 RTE_PMD_REGISTER_CRYPTO_DRIVER(snow3g_crypto_drv,
 		cryptodev_snow3g_pmd_drv.driver, cryptodev_driver_id);
-
-RTE_INIT(snow3g_init_log)
-{
-	snow3g_logtype_driver = rte_log_register("pmd.crypto.snow3g");
-}
+RTE_LOG_REGISTER(snow3g_logtype_driver, pmd.crypto.snow3g, INFO);

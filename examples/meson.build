@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2017-2019 Intel Corporation
 
-driver_libs = []
+link_whole_libs = []
 if get_option('default_library') == 'static'
-	driver_libs = dpdk_drivers
+	link_whole_libs = dpdk_static_libraries + dpdk_drivers
 endif
 
 execinfo = cc.find_library('execinfo', required: false)
@@ -23,7 +23,7 @@ all_examples = [
 	'l2fwd', 'l2fwd-cat', 'l2fwd-event',
 	'l2fwd-crypto', 'l2fwd-jobstats',
 	'l2fwd-keepalive', 'l3fwd',
-	'l3fwd-acl', 'l3fwd-power',
+	'l3fwd-acl', 'l3fwd-power', 'l3fwd-graph',
 	'link_status_interrupt',
 	'multi_process/client_server_mp/mp_client',
 	'multi_process/client_server_mp/mp_server',
@@ -99,7 +99,7 @@ foreach example: examples
 		endif
 		executable('dpdk-' + name, sources,
 			include_directories: includes,
-			link_whole: driver_libs,
+			link_whole: link_whole_libs,
 			link_args: dpdk_extra_ldflags,
 			c_args: cflags,
 			dependencies: dep_objs)

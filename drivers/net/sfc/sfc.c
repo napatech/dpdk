@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2016-2018 Solarflare Communications Inc.
- * All rights reserved.
+ * Copyright(c) 2019-2020 Xilinx, Inc.
+ * Copyright(c) 2016-2019 Solarflare Communications Inc.
  *
  * This software was jointly developed between OKTET Labs (under contract
  * for Solarflare) and Solarflare Communications, Inc.
@@ -241,8 +241,8 @@ sfc_estimate_resource_limits(struct sfc_adapter *sa)
 	return 0;
 
 fail_get_vi_pool:
-fail_nic_init:
 	efx_nic_fini(sa->nic);
+fail_nic_init:
 	return rc;
 }
 

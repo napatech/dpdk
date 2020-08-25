@@ -20,6 +20,7 @@ CFLAGS += -O3
 CFLAGS += -std=c11 -Wall -Wextra
 CFLAGS += -g
 CFLAGS += -I$(RTE_SDK)/drivers/common/mlx5
+CFLAGS += -I$(RTE_SDK)/drivers/common/mlx5/linux
 CFLAGS += -I$(RTE_SDK)/drivers/net/mlx5_vdpa
 CFLAGS += -I$(RTE_SDK)/lib/librte_sched
 CFLAGS += -I$(BUILDDIR)/drivers/common/mlx5
@@ -29,14 +30,13 @@ CFLAGS += -D_XOPEN_SOURCE=600
 CFLAGS += $(WERROR_FLAGS)
 CFLAGS += -Wno-strict-prototypes
 LDLIBS += -lrte_common_mlx5
-LDLIBS += -lrte_eal -lrte_vhost -lrte_kvargs -lrte_pci -lrte_bus_pci -lrte_sched
+LDLIBS += -lrte_eal -lrte_vhost -lrte_kvargs -lrte_pci -lrte_sched
+LDLIBS += -pthread
 
 # A few warnings cannot be avoided in external headers.
 CFLAGS += -Wno-error=cast-qual
 
 EXPORT_MAP := rte_pmd_mlx5_vdpa_version.map
-# memseg walk is not part of stable API
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 
 # DEBUG which is usually provided on the command-line may enable
 # CONFIG_RTE_LIBRTE_MLX5_DEBUG.

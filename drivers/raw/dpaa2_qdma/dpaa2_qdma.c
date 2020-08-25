@@ -26,9 +26,6 @@
 
 #define DPAA2_QDMA_NO_PREFETCH "no_prefetch"
 
-/* Dynamic log type identifier */
-int dpaa2_qdma_logtype;
-
 uint32_t dpaa2_coherent_no_alloc_cache;
 uint32_t dpaa2_coherent_alloc_cache;
 
@@ -666,7 +663,9 @@ dpdmai_dev_enqueue_multi(struct dpaa2_dpdmai_dev *dpdmai_dev,
 	if (unlikely(!DPAA2_PER_LCORE_DPIO)) {
 		ret = dpaa2_affine_qbman_swp();
 		if (ret) {
-			DPAA2_QDMA_ERR("Failure in affining portal");
+			DPAA2_QDMA_ERR(
+				"Failed to allocate IO portal, tid: %d\n",
+				rte_gettid());
 			return 0;
 		}
 	}
@@ -788,7 +787,9 @@ dpdmai_dev_dequeue_multijob_prefetch(
 	if (unlikely(!DPAA2_PER_LCORE_DPIO)) {
 		ret = dpaa2_affine_qbman_swp();
 		if (ret) {
-			DPAA2_QDMA_ERR("Failure in affining portal");
+			DPAA2_QDMA_ERR(
+				"Failed to allocate IO portal, tid: %d\n",
+				rte_gettid());
 			return 0;
 		}
 	}
@@ -929,7 +930,9 @@ dpdmai_dev_dequeue_multijob_no_prefetch(
 	if (unlikely(!DPAA2_PER_LCORE_DPIO)) {
 		ret = dpaa2_affine_qbman_swp();
 		if (ret) {
-			DPAA2_QDMA_ERR("Failure in affining portal");
+			DPAA2_QDMA_ERR(
+				"Failed to allocate IO portal, tid: %d\n",
+				rte_gettid());
 			return 0;
 		}
 	}
@@ -1309,7 +1312,7 @@ dpaa2_dpdmai_dev_init(struct rte_rawdev *rawdev, int dpdmai_id)
 
 	/* Open DPDMAI device */
 	dpdmai_dev->dpdmai_id = dpdmai_id;
-	dpdmai_dev->dpdmai.regs = rte_mcp_ptr_list[MC_PORTAL_INDEX];
+	dpdmai_dev->dpdmai.regs = dpaa2_get_mcp_ptr(MC_PORTAL_INDEX);
 	ret = dpdmai_open(&dpdmai_dev->dpdmai, CMD_PRI_LOW,
 			  dpdmai_dev->dpdmai_id, &dpdmai_dev->token);
 	if (ret) {
@@ -1489,10 +1492,4 @@ static struct rte_dpaa2_driver rte_dpaa2_qdma_pmd = {
 RTE_PMD_REGISTER_DPAA2(dpaa2_qdma, rte_dpaa2_qdma_pmd);
 RTE_PMD_REGISTER_PARAM_STRING(dpaa2_qdma,
 	"no_prefetch=<int> ");
-
-RTE_INIT(dpaa2_qdma_init_log)
-{
-	dpaa2_qdma_logtype = rte_log_register("pmd.raw.dpaa2.qdma");
-	if (dpaa2_qdma_logtype >= 0)
-		rte_log_set_level(dpaa2_qdma_logtype, RTE_LOG_INFO);
-}
+RTE_LOG_REGISTER(dpaa2_qdma_logtype, pmd.raw.dpaa2.qdma, INFO);

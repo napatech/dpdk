@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- *   Copyright 2017-2019 NXP
+ *   Copyright 2017-2020 NXP
  *
  */
 #ifndef __RTE_DPAA_BUS_H__
@@ -30,12 +30,13 @@
 #define SVR_LS1046A_FAMILY	0x87070000
 #define SVR_MASK		0xffff0000
 
+/** Device driver supports link state interrupt */
+#define RTE_DPAA_DRV_INTR_LSC  0x0008
+
 #define RTE_DEV_TO_DPAA_CONST(ptr) \
 	container_of(ptr, const struct rte_dpaa_device, device)
 
 extern unsigned int dpaa_svr_family;
-
-extern RTE_DEFINE_PER_LCORE(bool, dpaa_io);
 
 struct rte_dpaa_device;
 struct rte_dpaa_driver;
@@ -43,9 +44,6 @@ struct rte_dpaa_driver;
 /* DPAA Device and Driver lists for DPAA bus */
 TAILQ_HEAD(rte_dpaa_device_list, rte_dpaa_device);
 TAILQ_HEAD(rte_dpaa_driver_list, rte_dpaa_driver);
-
-/* Configuration variables exported from DPAA bus */
-extern struct netcfg_info *dpaa_netcfg;
 
 enum rte_dpaa_type {
 	FSL_DPAA_ETH = 1,
@@ -91,13 +89,40 @@ struct rte_dpaa_driver {
 	enum rte_dpaa_type drv_type;
 	rte_dpaa_probe_t probe;
 	rte_dpaa_remove_t remove;
+	uint32_t drv_flags;                 /**< Flags for controlling device.*/
+};
+
+/* Create storage for dqrr entries per lcore */
+#define DPAA_PORTAL_DEQUEUE_DEPTH	16
+struct dpaa_portal_dqrr {
+	void *mbuf[DPAA_PORTAL_DEQUEUE_DEPTH];
+	uint64_t dqrr_held;
+	uint8_t dqrr_size;
 };
 
 struct dpaa_portal {
 	uint32_t bman_idx; /**< BMAN Portal ID*/
 	uint32_t qman_idx; /**< QMAN Portal ID*/
+	struct dpaa_portal_dqrr dpaa_held_bufs;
+	struct rte_crypto_op **dpaa_sec_ops;
+	int dpaa_sec_op_nb;
 	uint64_t tid;/**< Parent Thread id for this portal */
 };
+
+RTE_DECLARE_PER_LCORE(struct dpaa_portal *, dpaa_io);
+
+#define DPAA_PER_LCORE_PORTAL \
+	RTE_PER_LCORE(dpaa_io)
+#define DPAA_PER_LCORE_DQRR_SIZE \
+	RTE_PER_LCORE(dpaa_io)->dpaa_held_bufs.dqrr_size
+#define DPAA_PER_LCORE_DQRR_HELD \
+	RTE_PER_LCORE(dpaa_io)->dpaa_held_bufs.dqrr_held
+#define DPAA_PER_LCORE_DQRR_MBUF(i) \
+	RTE_PER_LCORE(dpaa_io)->dpaa_held_bufs.mbuf[i]
+#define DPAA_PER_LCORE_RTE_CRYPTO_OP \
+	RTE_PER_LCORE(dpaa_io)->dpaa_sec_ops
+#define DPAA_PER_LCORE_DPAA_SEC_OP_NB \
+	RTE_PER_LCORE(dpaa_io)->dpaa_sec_op_nb
 
 /* Various structures representing contiguous memory maps */
 struct dpaa_memseg {
@@ -158,6 +183,7 @@ rte_dpaa_mem_vtop(void *vaddr)
  *   A pointer to a rte_dpaa_driver structure describing the driver
  *   to be registered.
  */
+__rte_internal
 void rte_dpaa_driver_register(struct rte_dpaa_driver *driver);
 
 /**
@@ -167,6 +193,7 @@ void rte_dpaa_driver_register(struct rte_dpaa_driver *driver);
  *	A pointer to a rte_dpaa_driver structure describing the driver
  *	to be unregistered.
  */
+__rte_internal
 void rte_dpaa_driver_unregister(struct rte_dpaa_driver *driver);
 
 /**
@@ -178,10 +205,13 @@ void rte_dpaa_driver_unregister(struct rte_dpaa_driver *driver);
  * @return
  *	0 in case of success, error otherwise
  */
+__rte_internal
 int rte_dpaa_portal_init(void *arg);
 
+__rte_internal
 int rte_dpaa_portal_fq_init(void *arg, struct qman_fq *fq);
 
+__rte_internal
 int rte_dpaa_portal_fq_close(struct qman_fq *fq);
 
 /**
@@ -198,19 +228,8 @@ RTE_INIT(dpaainitfn_ ##nm) \
 } \
 RTE_PMD_EXPORT_NAME(nm, __COUNTER__)
 
-/* Create storage for dqrr entries per lcore */
-#define DPAA_PORTAL_DEQUEUE_DEPTH	16
-struct dpaa_portal_dqrr {
-	void *mbuf[DPAA_PORTAL_DEQUEUE_DEPTH];
-	uint64_t dqrr_held;
-	uint8_t dqrr_size;
-};
-
-RTE_DECLARE_PER_LCORE(struct dpaa_portal_dqrr, held_bufs);
-
-#define DPAA_PER_LCORE_DQRR_SIZE       RTE_PER_LCORE(held_bufs).dqrr_size
-#define DPAA_PER_LCORE_DQRR_HELD       RTE_PER_LCORE(held_bufs).dqrr_held
-#define DPAA_PER_LCORE_DQRR_MBUF(i)    RTE_PER_LCORE(held_bufs).mbuf[i]
+__rte_internal
+struct fm_eth_port_cfg *dpaa_get_eth_port_cfg(int dev_id);
 
 #ifdef __cplusplus
 }

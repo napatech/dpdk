@@ -2169,7 +2169,6 @@ static int check_invalid_pkt_type(uint32_t pkt_type)
 	    tnl != RTE_PTYPE_TUNNEL_VXLAN &&
 	    tnl != RTE_PTYPE_TUNNEL_NVGRE &&
 	    tnl != RTE_PTYPE_TUNNEL_GENEVE &&
-	    tnl != RTE_PTYPE_TUNNEL_GRENAT &&
 	    tnl != RTE_PTYPE_TUNNEL_GTPC &&
 	    tnl != RTE_PTYPE_TUNNEL_GTPU &&
 	    tnl != RTE_PTYPE_TUNNEL_L2TP &&
@@ -3207,6 +3206,57 @@ rte_pmd_i40e_inset_set(uint16_t port, uint8_t pctype,
 
 	I40E_WRITE_FLUSH(hw);
 	return 0;
+}
+
+int
+rte_pmd_i40e_get_fdir_info(uint16_t port, struct rte_eth_fdir_info *fdir_info)
+{
+	struct rte_eth_dev *dev;
+
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port, -ENODEV);
+
+	dev = &rte_eth_devices[port];
+	if (!is_i40e_supported(dev))
+		return -ENOTSUP;
+
+	i40e_fdir_info_get(dev, fdir_info);
+
+	return 0;
+}
+
+int
+rte_pmd_i40e_get_fdir_stats(uint16_t port, struct rte_eth_fdir_stats *fdir_stat)
+{
+	struct rte_eth_dev *dev;
+
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port, -ENODEV);
+
+	dev = &rte_eth_devices[port];
+	if (!is_i40e_supported(dev))
+		return -ENOTSUP;
+
+	i40e_fdir_stats_get(dev, fdir_stat);
+
+	return 0;
+}
+
+int
+rte_pmd_i40e_set_gre_key_len(uint16_t port, uint8_t len)
+{
+	struct rte_eth_dev *dev;
+	struct i40e_pf *pf;
+	struct i40e_hw *hw;
+
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port, -ENODEV);
+
+	dev = &rte_eth_devices[port];
+	if (!is_i40e_supported(dev))
+		return -ENOTSUP;
+
+	pf = I40E_DEV_PRIVATE_TO_PF(dev->data->dev_private);
+	hw = I40E_PF_TO_HW(pf);
+
+	return i40e_dev_set_gre_key_len(hw, len);
 }
 
 int

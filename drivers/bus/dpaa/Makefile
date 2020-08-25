@@ -9,7 +9,6 @@ RTE_BUS_DPAA=$(RTE_SDK)/drivers/bus/dpaa
 #
 LIB = librte_bus_dpaa.a
 
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS := -I$(SRCDIR) $(CFLAGS)
 CFLAGS += -O3 $(WERROR_FLAGS)
 CFLAGS += -Wno-pointer-arith
@@ -18,7 +17,7 @@ CFLAGS += -I$(RTE_BUS_DPAA)/
 CFLAGS += -I$(RTE_BUS_DPAA)/include
 CFLAGS += -I$(RTE_BUS_DPAA)/base/qbman
 CFLAGS += -I$(RTE_SDK)/drivers/common/dpaax
-CFLAGS += -I$(RTE_SDK)/lib/librte_eal/common/include
+CFLAGS += -I$(RTE_SDK)/lib/librte_eal/include
 
 # versioning export map
 EXPORT_MAP := rte_bus_dpaa_version.map

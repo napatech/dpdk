@@ -8,11 +8,10 @@ include $(RTE_SDK)/mk/rte.vars.mk
 #
 LIB = librte_ethdev.a
 
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
 LDLIBS += -lrte_net -lrte_eal -lrte_mempool -lrte_ring
-LDLIBS += -lrte_mbuf -lrte_kvargs -lrte_meter
+LDLIBS += -lrte_mbuf -lrte_kvargs -lrte_meter -lrte_telemetry
 
 EXPORT_MAP := rte_ethdev_version.map
 
@@ -23,6 +22,7 @@ SRCS-y += rte_flow.c
 SRCS-y += rte_tm.c
 SRCS-y += rte_mtr.c
 SRCS-y += ethdev_profile.c
+SRCS-y += ethdev_trace_points.c
 
 #
 # Export include files
@@ -31,6 +31,8 @@ SYMLINK-y-include += rte_ethdev.h
 SYMLINK-y-include += rte_ethdev_driver.h
 SYMLINK-y-include += rte_ethdev_core.h
 SYMLINK-y-include += rte_ethdev_pci.h
+SYMLINK-y-include += rte_ethdev_trace.h
+SYMLINK-y-include += rte_ethdev_trace_fp.h
 SYMLINK-y-include += rte_ethdev_vdev.h
 SYMLINK-y-include += rte_eth_ctrl.h
 SYMLINK-y-include += rte_dev_info.h

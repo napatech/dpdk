@@ -63,6 +63,12 @@ parallel_test_list = [
         "Report":  None,
     },
     {
+        "Name":    "Lcores autotest",
+        "Command": "lcores_autotest",
+        "Func":    default_autotest,
+        "Report":  None,
+    },
+    {
         "Name":    "Logs autotest",
         "Command": "logs_autotest",
         "Func":    logs_autotest,
@@ -401,6 +407,12 @@ parallel_test_list = [
     {
         "Name":    "Bitmap test",
         "Command": "bitmap_test",
+        "Func":    default_autotest,
+        "Report":  None,
+    },
+    {
+        "Name":    "Bitops test",
+        "Command": "bitops_autotest",
         "Func":    default_autotest,
         "Report":  None,
     },

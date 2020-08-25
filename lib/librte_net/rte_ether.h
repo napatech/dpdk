@@ -59,7 +59,7 @@ extern "C" {
  */
 struct rte_ether_addr {
 	uint8_t addr_bytes[RTE_ETHER_ADDR_LEN]; /**< Addr bytes in tx order */
-} __attribute__((aligned(2)));
+} __rte_aligned(2);
 
 #define RTE_ETHER_LOCAL_ADMIN_ADDR 0x02 /**< Locally assigned Eth. address. */
 #define RTE_ETHER_GROUP_ADDR  0x01 /**< Multicast or broadcast Eth. address. */
@@ -273,7 +273,7 @@ struct rte_ether_hdr {
 	struct rte_ether_addr d_addr; /**< Destination address. */
 	struct rte_ether_addr s_addr; /**< Source address. */
 	uint16_t ether_type;      /**< Frame type. */
-} __attribute__((aligned(2)));
+} __rte_aligned(2);
 
 /**
  * Ethernet VLAN Header.
@@ -283,7 +283,7 @@ struct rte_ether_hdr {
 struct rte_vlan_hdr {
 	uint16_t vlan_tci; /**< Priority (3) + CFI (1) + Identifier Code (12) */
 	uint16_t eth_proto;/**< Ethernet type of encapsulated frame. */
-} __attribute__((__packed__));
+} __rte_packed;
 
 
 
@@ -294,6 +294,9 @@ struct rte_vlan_hdr {
 #define RTE_ETHER_TYPE_RARP 0x8035 /**< Reverse Arp Protocol. */
 #define RTE_ETHER_TYPE_VLAN 0x8100 /**< IEEE 802.1Q VLAN tagging. */
 #define RTE_ETHER_TYPE_QINQ 0x88A8 /**< IEEE 802.1ad QinQ tagging. */
+#define RTE_ETHER_TYPE_QINQ1 0x9100 /**< Deprecated QinQ VLAN. */
+#define RTE_ETHER_TYPE_QINQ2 0x9200 /**< Deprecated QinQ VLAN. */
+#define RTE_ETHER_TYPE_QINQ3 0x9300 /**< Deprecated QinQ VLAN. */
 #define RTE_ETHER_TYPE_PPPOE_DISCOVERY 0x8863 /**< PPPoE Discovery Stage. */
 #define RTE_ETHER_TYPE_PPPOE_SESSION 0x8864 /**< PPPoE Session Stage. */
 #define RTE_ETHER_TYPE_ETAG 0x893F /**< IEEE 802.1BR E-Tag. */
@@ -304,6 +307,7 @@ struct rte_vlan_hdr {
 #define RTE_ETHER_TYPE_LLDP 0x88CC /**< LLDP Protocol. */
 #define RTE_ETHER_TYPE_MPLS 0x8847 /**< MPLS ethertype. */
 #define RTE_ETHER_TYPE_MPLSM 0x8848 /**< MPLS multicast ethertype. */
+#define RTE_ETHER_TYPE_ECPRI 0xAEFE /**< eCPRI ethertype (.1Q supported). */
 
 /**
  * Extract VLAN tag information into mbuf

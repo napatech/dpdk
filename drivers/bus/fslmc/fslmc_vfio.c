@@ -51,6 +51,15 @@ static int fslmc_iommu_type;
 static uint32_t *msi_intr_vaddr;
 void *(*rte_mcp_ptr_list);
 
+void *
+dpaa2_get_mcp_ptr(int portal_idx)
+{
+	if (rte_mcp_ptr_list)
+		return rte_mcp_ptr_list[portal_idx];
+	else
+		return NULL;
+}
+
 static struct rte_dpaa2_object_list dpaa2_obj_list =
 	TAILQ_HEAD_INITIALIZER(dpaa2_obj_list);
 
@@ -730,20 +739,12 @@ fslmc_process_mcp(struct rte_dpaa2_device *dev)
 {
 	int ret;
 	intptr_t v_addr;
-	char *dev_name = NULL;
 	struct fsl_mc_io dpmng  = {0};
 	struct mc_version mc_ver_info = {0};
 
-	rte_mcp_ptr_list = malloc(sizeof(void *) * 1);
+	rte_mcp_ptr_list = malloc(sizeof(void *) * (MC_PORTAL_INDEX + 1));
 	if (!rte_mcp_ptr_list) {
 		DPAA2_BUS_ERR("Unable to allocate MC portal memory");
-		ret = -ENOMEM;
-		goto cleanup;
-	}
-
-	dev_name = strdup(dev->device.name);
-	if (!dev_name) {
-		DPAA2_BUS_ERR("Unable to allocate MC device name memory");
 		ret = -ENOMEM;
 		goto cleanup;
 	}
@@ -762,7 +763,7 @@ fslmc_process_mcp(struct rte_dpaa2_device *dev)
 	 * required.
 	 */
 	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
-		rte_mcp_ptr_list[0] = (void *)v_addr;
+		rte_mcp_ptr_list[MC_PORTAL_INDEX] = (void *)v_addr;
 		return 0;
 	}
 
@@ -782,15 +783,11 @@ fslmc_process_mcp(struct rte_dpaa2_device *dev)
 		ret = -1;
 		goto cleanup;
 	}
-	rte_mcp_ptr_list[0] = (void *)v_addr;
+	rte_mcp_ptr_list[MC_PORTAL_INDEX] = (void *)v_addr;
 
-	free(dev_name);
 	return 0;
 
 cleanup:
-	if (dev_name)
-		free(dev_name);
-
 	if (rte_mcp_ptr_list) {
 		free(rte_mcp_ptr_list);
 		rte_mcp_ptr_list = NULL;

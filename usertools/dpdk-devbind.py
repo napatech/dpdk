@@ -10,6 +10,10 @@ import getopt
 import subprocess
 from os.path import exists, abspath, dirname, basename
 
+if sys.version_info.major < 3:
+    print("WARNING: Python 2 is deprecated for use in DPDK, and will not work in future releases.", file=sys.stderr)
+    print("Please use Python 3 instead", file=sys.stderr)
+
 # The PCI base class for all devices
 network_class = {'Class': '02', 'Vendor': None, 'Device': None,
                     'SVendor': None, 'SDevice': None}
@@ -45,6 +49,8 @@ intel_ioat_bdw = {'Class': '08', 'Vendor': '8086', 'Device': '6f20,6f21,6f22,6f2
               'SVendor': None, 'SDevice': None}
 intel_ioat_skx = {'Class': '08', 'Vendor': '8086', 'Device': '2021',
               'SVendor': None, 'SDevice': None}
+intel_ioat_icx = {'Class': '08', 'Vendor': '8086', 'Device': '0b00',
+              'SVendor': None, 'SDevice': None}
 intel_ntb_skx = {'Class': '06', 'Vendor': '8086', 'Device': '201c',
               'SVendor': None, 'SDevice': None}
 
@@ -54,7 +60,7 @@ crypto_devices = [encryption_class, intel_processor_class]
 eventdev_devices = [cavium_sso, cavium_tim, octeontx2_sso]
 mempool_devices = [cavium_fpa, octeontx2_npa]
 compress_devices = [cavium_zip]
-misc_devices = [intel_ioat_bdw, intel_ioat_skx, intel_ntb_skx, octeontx2_dma]
+misc_devices = [intel_ioat_bdw, intel_ioat_skx, intel_ioat_icx, intel_ntb_skx, octeontx2_dma]
 
 # global dict ethernet devices present. Dictionary indexed by PCI address.
 # Each device within this is itself a dictionary of device properties
@@ -211,7 +217,7 @@ def get_pci_device_details(dev_id, probe_lspci):
         for line in extra_info:
             if len(line) == 0:
                 continue
-            name, value = line.decode().split("\t", 1)
+            name, value = line.decode("utf8").split("\t", 1)
             name = name.strip(":") + "_str"
             device[name] = value
     # check for a unix interface name
@@ -257,7 +263,7 @@ def get_device_details(devices_type):
             # Clear previous device's data
             dev = {}
         else:
-            name, value = dev_line.decode().split("\t", 1)
+            name, value = dev_line.decode("utf8").split("\t", 1)
             value_list = value.rsplit(' ', 1)
             if len(value_list) > 1:
                 # String stored in <name>_str

@@ -137,24 +137,6 @@ struct rte_fslmc_bus {
 				/**< Count of all devices scanned */
 };
 
-#define DPAA2_PORTAL_DEQUEUE_DEPTH	32
-
-/* Create storage for dqrr entries per lcore */
-struct dpaa2_portal_dqrr {
-	struct rte_mbuf *mbuf[DPAA2_PORTAL_DEQUEUE_DEPTH];
-	uint64_t dqrr_held;
-	uint8_t dqrr_size;
-};
-
-RTE_DECLARE_PER_LCORE(struct dpaa2_portal_dqrr, dpaa2_held_bufs);
-
-#define DPAA2_PER_LCORE_DQRR_SIZE \
-	RTE_PER_LCORE(dpaa2_held_bufs).dqrr_size
-#define DPAA2_PER_LCORE_DQRR_HELD \
-	RTE_PER_LCORE(dpaa2_held_bufs).dqrr_held
-#define DPAA2_PER_LCORE_DQRR_MBUF(i) \
-	RTE_PER_LCORE(dpaa2_held_bufs).mbuf[i]
-
 /**
  * Register a DPAA2 driver.
  *
@@ -162,6 +144,7 @@ RTE_DECLARE_PER_LCORE(struct dpaa2_portal_dqrr, dpaa2_held_bufs);
  *   A pointer to a rte_dpaa2_driver structure describing the driver
  *   to be registered.
  */
+__rte_internal
 void rte_fslmc_driver_register(struct rte_dpaa2_driver *driver);
 
 /**
@@ -171,6 +154,7 @@ void rte_fslmc_driver_register(struct rte_dpaa2_driver *driver);
  *   A pointer to a rte_dpaa2_driver structure describing the driver
  *   to be unregistered.
  */
+__rte_internal
 void rte_fslmc_driver_unregister(struct rte_dpaa2_driver *driver);
 
 /** Helper for DPAA2 device registration from driver (eth, crypto) instance */
@@ -189,6 +173,7 @@ RTE_PMD_EXPORT_NAME(nm, __COUNTER__)
  *   A pointer to a rte_dpaa_object structure describing the mc object
  *   to be registered.
  */
+__rte_internal
 void rte_fslmc_object_register(struct rte_dpaa2_object *object);
 
 /**
@@ -200,6 +185,7 @@ void rte_fslmc_object_register(struct rte_dpaa2_object *object);
  *   >=0 for count; 0 indicates either no device of the said type scanned or
  *   invalid device type.
  */
+__rte_internal
 uint32_t rte_fslmc_get_device_count(enum rte_dpaa2_dev_type device_type);
 
 /** Helper for DPAA2 object registration */

@@ -35,13 +35,13 @@ EXPERIMENTAL {
 
 	rte_vdpa_register_device;
 	rte_vdpa_unregister_device;
-	rte_vdpa_find_device_id;
-	rte_vdpa_get_device;
-	rte_vdpa_get_device_num;
+	rte_vdpa_get_stats_names;
+	rte_vdpa_get_stats;
+	rte_vdpa_reset_stats;
 	rte_vhost_driver_attach_vdpa_device;
 	rte_vhost_driver_detach_vdpa_device;
-	rte_vhost_driver_get_vdpa_device_id;
-	rte_vhost_get_vdpa_device_id;
+	rte_vhost_driver_get_vdpa_device;
+	rte_vhost_get_vdpa_device;
 	rte_vhost_driver_get_protocol_features;
 	rte_vhost_driver_get_queue_num;
 	rte_vhost_get_log_base;
@@ -66,4 +66,13 @@ EXPERIMENTAL {
 	rte_vhost_get_vhost_ring_inflight;
 	rte_vhost_get_vring_base_from_inflight;
 	rte_vhost_slave_config_change;
+	rte_vdpa_find_device_by_name;
+	rte_vdpa_get_rte_device;
+	rte_vdpa_get_queue_num;
+	rte_vdpa_get_features;
+	rte_vdpa_get_protocol_features;
+	rte_vhost_async_channel_register;
+	rte_vhost_async_channel_unregister;
+	rte_vhost_submit_enqueue_burst;
+	rte_vhost_poll_enqueue_completed;
 };

@@ -191,8 +191,7 @@ static int recv_vf_mbox_handler(struct hinic_mbox_func_to_func *func_to_func,
 						buf_out, out_size);
 		break;
 	default:
-		PMD_DRV_LOG(ERR, "No handler, mod = %d",
-				recv_mbox->mod);
+		PMD_DRV_LOG(ERR, "No handler, mod: %d", recv_mbox->mod);
 		rc = HINIC_MBOX_VF_CMD_ERROR;
 		break;
 	}
@@ -404,10 +403,8 @@ static int alloc_mbox_wb_status(struct hinic_mbox_func_to_func *func_to_func)
 	struct hinic_hwif *hwif = hwdev->hwif;
 	u32 addr_h, addr_l;
 
-	send_mbox->wb_vaddr = dma_zalloc_coherent(hwdev,
-				  MBOX_WB_STATUS_LEN,
-				  &send_mbox->wb_paddr,
-				  GFP_KERNEL);
+	send_mbox->wb_vaddr = dma_zalloc_coherent(hwdev, MBOX_WB_STATUS_LEN,
+					&send_mbox->wb_paddr, SOCKET_ID_ANY);
 	if (!send_mbox->wb_vaddr) {
 		PMD_DRV_LOG(ERR, "Allocating memory for mailbox wb status failed");
 		return -ENOMEM;
@@ -872,7 +869,7 @@ static int hinic_func_to_func_init(struct hinic_hwdev *hwdev)
 
 	err = alloc_mbox_info(func_to_func->mbox_resp);
 	if (err) {
-		PMD_DRV_LOG(ERR, "Allocating memory for mailbox responsing failed");
+		PMD_DRV_LOG(ERR, "Allocating memory for mailbox responding failed");
 		goto alloc_mbox_for_resp_err;
 	}
 

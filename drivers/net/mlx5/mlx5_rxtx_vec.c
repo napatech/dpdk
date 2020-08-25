@@ -7,21 +7,11 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* Verbs header. */
-/* ISO C doesn't support unnamed structs/unions, disabling -pedantic. */
-#ifdef PEDANTIC
-#pragma GCC diagnostic ignored "-Wpedantic"
-#endif
-#include <infiniband/verbs.h>
-#include <infiniband/mlx5dv.h>
-#ifdef PEDANTIC
-#pragma GCC diagnostic error "-Wpedantic"
-#endif
-
 #include <rte_mbuf.h>
 #include <rte_mempool.h>
 #include <rte_prefetch.h>
 
+#include <mlx5_glue.h>
 #include <mlx5_prm.h>
 
 #include "mlx5_defs.h"
@@ -103,13 +93,20 @@ uint16_t
 mlx5_rx_burst_vec(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
 	struct mlx5_rxq_data *rxq = dpdk_rxq;
-	uint16_t nb_rx;
+	uint16_t nb_rx = 0;
+	uint16_t tn = 0;
 	uint64_t err = 0;
+	bool no_cq = false;
 
-	nb_rx = rxq_burst_v(rxq, pkts, pkts_n, &err);
-	if (unlikely(err | rxq->err_state))
-		nb_rx = rxq_handle_pending_error(rxq, pkts, nb_rx);
-	return nb_rx;
+	do {
+		nb_rx = rxq_burst_v(rxq, pkts + tn, pkts_n - tn, &err, &no_cq);
+		if (unlikely(err | rxq->err_state))
+			nb_rx = rxq_handle_pending_error(rxq, pkts + tn, nb_rx);
+		tn += nb_rx;
+		if (unlikely(no_cq))
+			break;
+	} while (tn != pkts_n);
+	return tn;
 }
 
 /**
@@ -121,7 +118,7 @@ mlx5_rx_burst_vec(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
  * @return
  *   1 if supported, negative errno value if not.
  */
-int __attribute__((cold))
+int __rte_cold
 mlx5_rxq_check_vec_support(struct mlx5_rxq_data *rxq)
 {
 	struct mlx5_rxq_ctrl *ctrl =
@@ -145,11 +142,11 @@ mlx5_rxq_check_vec_support(struct mlx5_rxq_data *rxq)
  * @return
  *   1 if supported, negative errno value if not.
  */
-int __attribute__((cold))
+int __rte_cold
 mlx5_check_vec_rx_support(struct rte_eth_dev *dev)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
-	uint16_t i;
+	uint32_t i;
 
 	if (!priv->config.rx_vec_en)
 		return -ENOTSUP;

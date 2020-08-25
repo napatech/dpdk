@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2019
+ * Copyright(c) 2001-2020 Intel Corporation
  */
 
 #ifndef _ICE_FLEX_TYPE_H_
@@ -25,7 +25,7 @@ struct ice_fv {
 
 /* Package and segment headers and tables */
 struct ice_pkg_hdr {
-	struct ice_pkg_ver format_ver;
+	struct ice_pkg_ver pkg_format_ver;
 	__le32 seg_count;
 	__le32 seg_offset[1];
 };
@@ -35,9 +35,9 @@ struct ice_generic_seg_hdr {
 #define SEGMENT_TYPE_METADATA	0x00000001
 #define SEGMENT_TYPE_ICE	0x00000010
 	__le32 seg_type;
-	struct ice_pkg_ver seg_ver;
+	struct ice_pkg_ver seg_format_ver;
 	__le32 seg_size;
-	char seg_name[ICE_PKG_NAME_SIZE];
+	char seg_id[ICE_PKG_NAME_SIZE];
 };
 
 /* ice specific segment */
@@ -80,7 +80,7 @@ struct ice_buf_table {
 struct ice_global_metadata_seg {
 	struct ice_generic_seg_hdr hdr;
 	struct ice_pkg_ver pkg_ver;
-	__le32 track_id;
+	__le32 rsvd;
 	char pkg_name[ICE_PKG_NAME_SIZE];
 };
 
@@ -531,6 +531,7 @@ struct ice_tunnel_entry {
 	enum ice_tunnel_type type;
 	u16 boost_addr;
 	u16 port;
+	u16 ref;
 	struct ice_boost_tcam_entry *boost_entry;
 	u8 valid;
 	u8 in_use;
@@ -642,8 +643,8 @@ struct ice_xlt1 {
 #define ICE_XLT2_CNT	768
 #define ICE_MAX_VSIGS	768
 
-/* Vsig bit layout:
- * [0:12]: incremental vsig index 1 to ICE_MAX_VSIGS
+/* VSIG bit layout:
+ * [0:12]: incremental VSIG index 1 to ICE_MAX_VSIGS
  * [13:15]: PF number of device
  */
 #define ICE_VSIG_IDX_M	(0x1FFF)
@@ -713,7 +714,7 @@ struct ice_prof_tcam {
 	u16 count;
 	u16 max_prof_id;
 	struct ice_prof_tcam_entry *t;
-	u8 cdid_bits; /* # cdid bits to use in key, 0, 2, 4, or 8 */
+	u8 cdid_bits; /* # CDID bits to use in key, 0, 2, 4, or 8 */
 };
 
 struct ice_prof_redir {

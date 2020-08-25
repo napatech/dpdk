@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2015-2018 Solarflare Communications Inc.
- * All rights reserved.
+ * Copyright(c) 2019-2020 Xilinx, Inc.
+ * Copyright(c) 2015-2019 Solarflare Communications Inc.
  */
 
 #ifndef	_SYS_EF10_IMPL_H
@@ -1079,6 +1079,8 @@ ef10_rx_fini(
 
 #if EFSYS_OPT_FILTER
 
+enum efx_filter_replacement_policy_e;
+
 typedef struct ef10_filter_handle_s {
 	uint32_t	efh_lo;
 	uint32_t	efh_hi;
@@ -1148,7 +1150,7 @@ ef10_filter_restore(
 ef10_filter_add(
 	__in		efx_nic_t *enp,
 	__inout		efx_filter_spec_t *spec,
-	__in		boolean_t may_replace);
+	__in		enum efx_filter_replacement_policy_e policy);
 
 	__checkReturn	efx_rc_t
 ef10_filter_delete(

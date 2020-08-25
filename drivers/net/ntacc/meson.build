@@ -5,10 +5,19 @@ if host_machine.system() != 'linux'
         build = false
 endif
 
-#cflags += '-DUSE_SW_STAT'
-#cflags += '-DDO_NOT_CREATE_DEFAULT_FILTER'
 #cflags += '-DCOPY_OFFSET0=InnerLayer3Header'
-#cflags += '-DUSE_EXTERNAL_BUFFER'
+
+if get_option('ntacc_external_buffers') == true
+  cflags += '-DUSE_EXTERNAL_BUFFER'
+endif
+
+if get_option('ntacc_use_sw_stat') == true
+  cflags += '-DUSE_SW_STAT'
+endif
+
+if get_option('ntacc_no_default_filter') == true
+  cflags += '-DDO_NOT_CREATE_DEFAULT_FILTER'
+endif
 
 sources = files('rte_eth_ntacc.c', 'filter_ntacc.c')
 

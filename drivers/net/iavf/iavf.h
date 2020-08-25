@@ -67,6 +67,9 @@
 #define IAVF_48_BIT_WIDTH (CHAR_BIT * 6)
 #define IAVF_48_BIT_MASK  RTE_LEN2MASK(IAVF_48_BIT_WIDTH, uint64_t)
 
+#define IAVF_RX_DESC_EXT_STATUS_FLEXBH_MASK  0x03
+#define IAVF_RX_DESC_EXT_STATUS_FLEXBH_FD_ID 0x01
+
 struct iavf_adapter;
 struct iavf_rx_queue;
 struct iavf_tx_queue;
@@ -83,6 +86,24 @@ struct iavf_vsi {
 	struct virtchnl_eth_stats eth_stats_offset;
 };
 
+struct rte_flow;
+TAILQ_HEAD(iavf_flow_list, rte_flow);
+
+struct iavf_flow_parser_node;
+TAILQ_HEAD(iavf_parser_list, iavf_flow_parser_node);
+
+struct iavf_fdir_conf {
+	struct virtchnl_fdir_add add_fltr;
+	struct virtchnl_fdir_del del_fltr;
+	uint64_t input_set;
+	uint32_t flow_id;
+	uint32_t mark_flag;
+};
+
+struct iavf_fdir_info {
+	struct iavf_fdir_conf conf;
+};
+
 /* TODO: is that correct to assume the max number to be 16 ?*/
 #define IAVF_MAX_MSIX_VECTORS   16
 
@@ -97,6 +118,7 @@ struct iavf_info {
 	struct virtchnl_version_info virtchnl_version;
 	struct virtchnl_vf_resource *vf_res; /* VF resource */
 	struct virtchnl_vsi_resource *vsi_res; /* LAN VSI */
+	uint64_t supported_rxdid;
 
 	volatile enum virtchnl_ops pend_cmd; /* pending command not finished */
 	uint32_t cmd_retval; /* return value of the cmd response from PF */
@@ -117,9 +139,15 @@ struct iavf_info {
 	uint16_t msix_base; /* msix vector base from */
 	/* queue bitmask for each vector */
 	uint16_t rxq_map[IAVF_MAX_MSIX_VECTORS];
+	struct iavf_flow_list flow_list;
+	rte_spinlock_t flow_ops_lock;
+	struct iavf_parser_list rss_parser_list;
+	struct iavf_parser_list dist_parser_list;
+
+	struct iavf_fdir_info fdir; /* flow director info */
 };
 
-#define IAVF_MAX_PKT_TYPE 256
+#define IAVF_MAX_PKT_TYPE 1024
 
 /* Structure to store private data for each VF instance. */
 struct iavf_adapter {
@@ -131,7 +159,9 @@ struct iavf_adapter {
 	/* For vector PMD */
 	bool rx_vec_allowed;
 	bool tx_vec_allowed;
+	const uint32_t *ptype_tbl;
 	bool stopped;
+	uint16_t fdir_ref_cnt;
 };
 
 /* IAVF_DEV_PRIVATE_TO */
@@ -224,6 +254,7 @@ int iavf_disable_queues(struct iavf_adapter *adapter);
 int iavf_configure_rss_lut(struct iavf_adapter *adapter);
 int iavf_configure_rss_key(struct iavf_adapter *adapter);
 int iavf_configure_queues(struct iavf_adapter *adapter);
+int iavf_get_supported_rxdid(struct iavf_adapter *adapter);
 int iavf_config_irq_map(struct iavf_adapter *adapter);
 void iavf_add_del_all_mac_addr(struct iavf_adapter *adapter, bool add);
 int iavf_dev_link_update(struct rte_eth_dev *dev,
@@ -235,4 +266,10 @@ int iavf_config_promisc(struct iavf_adapter *adapter, bool enable_unicast,
 int iavf_add_del_eth_addr(struct iavf_adapter *adapter,
 			 struct rte_ether_addr *addr, bool add);
 int iavf_add_del_vlan(struct iavf_adapter *adapter, uint16_t vlanid, bool add);
+int iavf_fdir_add(struct iavf_adapter *adapter, struct iavf_fdir_conf *filter);
+int iavf_fdir_del(struct iavf_adapter *adapter, struct iavf_fdir_conf *filter);
+int iavf_fdir_check(struct iavf_adapter *adapter,
+		struct iavf_fdir_conf *filter);
+int iavf_add_del_rss_cfg(struct iavf_adapter *adapter,
+			 struct virtchnl_rss_cfg *rss_cfg, bool add);
 #endif /* _IAVF_ETHDEV_H_ */

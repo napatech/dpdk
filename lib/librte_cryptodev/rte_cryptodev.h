@@ -24,6 +24,8 @@ extern "C" {
 #include <rte_common.h>
 #include <rte_config.h>
 
+#include "rte_cryptodev_trace_fp.h"
+
 extern const char **rte_cyptodev_names;
 
 /* Logging Macros */
@@ -216,6 +218,14 @@ struct rte_cryptodev_asym_capability_idx {
  *   - Return description of the symmetric crypto capability if exist.
  *   - Return NULL if the capability not exist.
  */
+const struct rte_cryptodev_symmetric_capability *
+rte_cryptodev_sym_capability_get_v20(uint8_t dev_id,
+		const struct rte_cryptodev_sym_capability_idx *idx);
+
+const struct rte_cryptodev_symmetric_capability *
+rte_cryptodev_sym_capability_get_v21(uint8_t dev_id,
+		const struct rte_cryptodev_sym_capability_idx *idx);
+
 const struct rte_cryptodev_symmetric_capability *
 rte_cryptodev_sym_capability_get(uint8_t dev_id,
 		const struct rte_cryptodev_sym_capability_idx *idx);
@@ -452,6 +462,10 @@ rte_cryptodev_asym_get_xform_enum(enum rte_crypto_asym_xform_type *xform_enum,
 /**< Support asymmetric session-less operations */
 #define	RTE_CRYPTODEV_FF_SYM_CPU_CRYPTO			(1ULL << 21)
 /**< Support symmetric cpu-crypto processing */
+#define RTE_CRYPTODEV_FF_SYM_SESSIONLESS		(1ULL << 22)
+/**< Support symmetric session-less operations */
+#define RTE_CRYPTODEV_FF_NON_BYTE_ALIGNED_DATA		(1ULL << 23)
+/**< Support operations on data which is not byte aligned */
 
 
 /**
@@ -713,6 +727,23 @@ rte_cryptodev_queue_pair_setup(uint8_t dev_id, uint16_t queue_pair_id,
 		const struct rte_cryptodev_qp_conf *qp_conf, int socket_id);
 
 /**
+ * Get the status of queue pairs setup on a specific crypto device
+ *
+ * @param	dev_id		Crypto device identifier.
+ * @param	queue_pair_id	The index of the queue pairs to set up. The
+ *				value must be in the range [0, nb_queue_pair
+ *				- 1] previously supplied to
+ *				rte_cryptodev_configure().
+ * @return
+ *   - 0: qp was not configured
+ *	 - 1: qp was configured
+ *	 - -EINVAL: device was not configured
+ */
+__rte_experimental
+int
+rte_cryptodev_get_qp_status(uint8_t dev_id, uint16_t queue_pair_id);
+
+/**
  * Get the number of queue pairs on a specific crypto device
  *
  * @param	dev_id		Crypto device identifier.
@@ -758,9 +789,33 @@ rte_cryptodev_stats_reset(uint8_t dev_id);
  * the last valid element has it's op field set to
  * RTE_CRYPTO_OP_TYPE_UNDEFINED.
  */
-extern void
+
+void
 rte_cryptodev_info_get(uint8_t dev_id, struct rte_cryptodev_info *dev_info);
 
+/* An extra element RTE_CRYPTO_AEAD_CHACHA20_POLY1305 is added
+ * to enum rte_crypto_aead_algorithm, also changing the value of
+ *  RTE_CRYPTO_AEAD_LIST_END. To maintain ABI compatibility with applications
+ * which linked against earlier versions, preventing them, for example, from
+ * picking up the new value and using it to index into an array sized too small
+ * for it, it is necessary to have two versions of rte_cryptodev_info_get()
+ * The latest version just returns directly the capabilities retrieved from
+ * the device. The compatible version inspects the capabilities retrieved
+ * from the device, but only returns them directly if the new value
+ * is not included. If the new value is included, it allocates space
+ * for a copy of the device capabilities, trims the new value from this
+ * and returns this copy. It only needs to do this once per device.
+ * For the corner case of a corner case when the alloc may fail,
+ * an empty capability list is returned, as there is no mechanism to return
+ * an error and adding such a mechanism would itself be an ABI breakage.
+ * The compatible version can be removed after the next major ABI release.
+ */
+
+void
+rte_cryptodev_info_get_v20(uint8_t dev_id, struct rte_cryptodev_info *dev_info);
+
+void
+rte_cryptodev_info_get_v21(uint8_t dev_id, struct rte_cryptodev_info *dev_info);
 
 /**
  * Register a callback function for specific device id.
@@ -924,6 +979,7 @@ rte_cryptodev_dequeue_burst(uint8_t dev_id, uint16_t qp_id,
 	nb_ops = (*dev->dequeue_burst)
 			(dev->data->queue_pairs[qp_id], ops, nb_ops);
 
+	rte_cryptodev_trace_dequeue_burst(dev_id, qp_id, (void **)ops, nb_ops);
 	return nb_ops;
 }
 
@@ -964,6 +1020,7 @@ rte_cryptodev_enqueue_burst(uint8_t dev_id, uint16_t qp_id,
 {
 	struct rte_cryptodev *dev = &rte_cryptodevs[dev_id];
 
+	rte_cryptodev_trace_enqueue_burst(dev_id, qp_id, (void **)ops, nb_ops);
 	return (*dev->enqueue_burst)(
 			dev->data->queue_pairs[qp_id], ops, nb_ops);
 }

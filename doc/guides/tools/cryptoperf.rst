@@ -193,6 +193,7 @@ The following are the application command-line options:
            auth-then-cipher
            aead
            pdcp
+           docsis
 
         For GCM/CCM algorithms you should use aead flag.
 
@@ -341,6 +342,14 @@ The following are the application command-line options:
 * ``--pdcp-domain <control/user>``
 
         Set PDCP domain to specify Control/user plane.
+
+* ``--docsis-hdr-sz <n>``
+
+        Set DOCSIS header size(n) in bytes.
+
+* ``--pdcp-ses-hfn-en``
+
+        Enable fixed session based HFN instead of per packet HFN.
 
 Test Vector File
 ~~~~~~~~~~~~~~~~

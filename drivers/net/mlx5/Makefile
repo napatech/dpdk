@@ -11,6 +11,7 @@ LIB = librte_pmd_mlx5.a
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5.c
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_rxq.c
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_txq.c
+SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_txpp.c
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_rxtx.c
 ifneq ($(filter y,$(CONFIG_RTE_ARCH_X86_64) \
 			$(CONFIG_RTE_ARCH_PPC_64) \
@@ -29,16 +30,21 @@ SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_flow.c
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_flow_meter.c
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_flow_dv.c
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_flow_verbs.c
-SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_mp.c
 SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_utils.c
-SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_socket.c
+SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += linux/mlx5_socket.c
+SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += linux/mlx5_os.c
+SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += linux/mlx5_ethdev_os.c
+SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += linux/mlx5_verbs.c
+SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += linux/mlx5_mp_os.c
 
 # Basic CFLAGS.
 CFLAGS += -O3
 CFLAGS += -std=c11 -Wall -Wextra
 CFLAGS += -g
 CFLAGS += -I$(RTE_SDK)/drivers/common/mlx5
+CFLAGS += -I$(RTE_SDK)/drivers/common/mlx5/linux
 CFLAGS += -I$(RTE_SDK)/drivers/net/mlx5
+CFLAGS += -I$(RTE_SDK)/drivers/net/mlx5/linux
 CFLAGS += -I$(BUILDDIR)/drivers/common/mlx5
 CFLAGS += -D_BSD_SOURCE
 CFLAGS += -D_DEFAULT_SOURCE
@@ -49,15 +55,11 @@ LDLIBS += -lrte_common_mlx5
 LDLIBS += -lm
 LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
 LDLIBS += -lrte_ethdev -lrte_net -lrte_kvargs
-LDLIBS += -lrte_bus_pci
 
 # A few warnings cannot be avoided in external headers.
 CFLAGS += -Wno-error=cast-qual
 
 EXPORT_MAP := rte_pmd_mlx5_version.map
-
-# memseg walk is not part of stable API
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 
 # DEBUG which is usually provided on the command-line may enable
 # CONFIG_RTE_LIBRTE_MLX5_DEBUG.

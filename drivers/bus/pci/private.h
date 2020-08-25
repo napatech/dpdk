@@ -18,16 +18,6 @@ struct rte_pci_device;
 extern struct rte_pci_bus rte_pci_bus;
 
 /**
- * Probe the PCI bus
- *
- * @return
- *   - 0 on success.
- *   - !0 on error.
- */
-int
-rte_pci_probe(void);
-
-/**
  * Scan the content of the PCI bus, and the devices in the devices
  * list
  *
@@ -41,6 +31,17 @@ int rte_pci_scan(void);
  */
 void
 pci_name_set(struct rte_pci_device *dev);
+
+/**
+ * Validate whether a device with given PCI address should be ignored or not.
+ *
+ * @param pci_addr
+ *	PCI address of device to be validated
+ * @return
+ *	true: if device is to be ignored,
+ *	false: if device is to be scanned,
+ */
+bool rte_pci_ignore_device(const struct rte_pci_addr *pci_addr);
 
 /**
  * Add a PCI device to the PCI Bus (append to PCI Device list). This function

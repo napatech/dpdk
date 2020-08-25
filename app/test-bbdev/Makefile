@@ -8,7 +8,6 @@ include $(RTE_SDK)/mk/rte.vars.mk
 #
 APP = testbbdev
 
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
 
@@ -23,6 +22,9 @@ SRCS-$(CONFIG_RTE_TEST_BBDEV) += test_bbdev_vector.c
 LDLIBS += -lm
 ifeq ($(CONFIG_RTE_LIBRTE_PMD_BBDEV_FPGA_LTE_FEC),y)
 LDLIBS += -lrte_pmd_bbdev_fpga_lte_fec
+endif
+ifeq ($(CONFIG_RTE_LIBRTE_PMD_BBDEV_FPGA_5GNR_FEC),y)
+LDLIBS += -lrte_pmd_bbdev_fpga_5gnr_fec
 endif
 
 include $(RTE_SDK)/mk/rte.app.mk

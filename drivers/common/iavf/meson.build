@@ -1,7 +1,5 @@
 # SPDX-License-Identifier: BSD-3-Clause
-# Copyright(c) 2019 Intel Corporation
-
-allow_experimental_apis = true
+# Copyright(c) 2019-2020 Intel Corporation
 
 sources = files('iavf_adminq.c', 'iavf_common.c', 'iavf_impl.c')
 

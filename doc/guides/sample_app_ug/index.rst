@@ -29,6 +29,7 @@ Sample Applications User Guides
     l2_forward_event
     l2_forward_cat
     l3_forward
+    l3_forward_graph
     l3_forward_power_man
     l3_forward_access_ctrl
     link_status_intr
@@ -40,6 +41,7 @@ Sample Applications User Guides
     timer
     packet_ordering
     vmdq_dcb_forwarding
+    vmdq_forwarding
     vhost
     vhost_blk
     vhost_crypto

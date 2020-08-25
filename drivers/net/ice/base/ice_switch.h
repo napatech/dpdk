@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2019
+ * Copyright(c) 2001-2020 Intel Corporation
  */
 
 #ifndef _ICE_SWITCH_H_
@@ -14,6 +14,56 @@
 #define ICE_FLTR_RX BIT(0)
 #define ICE_FLTR_TX BIT(1)
 #define ICE_FLTR_TX_RX (ICE_FLTR_RX | ICE_FLTR_TX)
+
+/* Switch Profile IDs for Profile related switch rules */
+#define ICE_PROFID_IPV4_TCP		4
+#define ICE_PROFID_IPV4_UDP		5
+#define ICE_PROFID_IPV6_TCP		7
+#define ICE_PROFID_IPV6_UDP		8
+#define ICE_PROFID_PPPOE_PAY		34
+#define ICE_PROFID_PPPOE_IPV4_TCP	35
+#define ICE_PROFID_PPPOE_IPV4_UDP	36
+#define ICE_PROFID_PPPOE_IPV4_OTHER	37
+#define ICE_PROFID_PPPOE_IPV6_TCP	38
+#define ICE_PROFID_PPPOE_IPV6_UDP	39
+#define ICE_PROFID_PPPOE_IPV6_OTHER	40
+#define ICE_PROFID_IPV4_GTPC_TEID	41
+#define ICE_PROFID_IPV4_GTPU_EH_IPV4_OTHER	47
+#define ICE_PROFID_IPV6_GTPU_IPV6_OTHER	70
+#define ICE_PROFID_IPV4_ESP		71
+#define ICE_PROFID_IPV6_ESP		72
+#define ICE_PROFID_IPV4_AH		73
+#define ICE_PROFID_IPV6_AH		74
+#define ICE_PROFID_IPV4_NAT_T		75
+#define ICE_PROFID_IPV6_NAT_T		76
+#define ICE_PROFID_MAC_IPV4_L2TPV3	77
+#define ICE_PROFID_MAC_IPV6_L2TPV3	78
+#define ICE_PROFID_IPV4_PFCP_NODE	79
+#define ICE_PROFID_IPV4_PFCP_SESSION	80
+#define ICE_PROFID_IPV6_PFCP_NODE	81
+#define ICE_PROFID_IPV6_PFCP_SESSION	82
+
+#define DUMMY_ETH_HDR_LEN		16
+#define ICE_SW_RULE_RX_TX_ETH_HDR_SIZE \
+	(sizeof(struct ice_aqc_sw_rules_elem) - \
+	 FIELD_SIZEOF(struct ice_aqc_sw_rules_elem, pdata) + \
+	 sizeof(struct ice_sw_rule_lkup_rx_tx) + DUMMY_ETH_HDR_LEN - 1)
+#define ICE_SW_RULE_RX_TX_NO_HDR_SIZE \
+	(sizeof(struct ice_aqc_sw_rules_elem) - \
+	 FIELD_SIZEOF(struct ice_aqc_sw_rules_elem, pdata) + \
+	 sizeof(struct ice_sw_rule_lkup_rx_tx) - 1)
+#define ICE_SW_RULE_LG_ACT_SIZE(n) \
+	(sizeof(struct ice_aqc_sw_rules_elem) - \
+	 FIELD_SIZEOF(struct ice_aqc_sw_rules_elem, pdata) + \
+	 sizeof(struct ice_sw_rule_lg_act) - \
+	 FIELD_SIZEOF(struct ice_sw_rule_lg_act, act) + \
+	 ((n) * FIELD_SIZEOF(struct ice_sw_rule_lg_act, act)))
+#define ICE_SW_RULE_VSI_LIST_SIZE(n) \
+	(sizeof(struct ice_aqc_sw_rules_elem) - \
+	 FIELD_SIZEOF(struct ice_aqc_sw_rules_elem, pdata) + \
+	 sizeof(struct ice_sw_rule_vsi_list) - \
+	 FIELD_SIZEOF(struct ice_sw_rule_vsi_list, vsi) + \
+	 ((n) * FIELD_SIZEOF(struct ice_sw_rule_vsi_list, vsi)))
 
 /* Worst case buffer length for ice_aqc_opc_get_res_alloc */
 #define ICE_MAX_RES_TYPES 0x80
@@ -225,8 +275,7 @@ struct ice_sw_recipe {
 	/* Profiles this recipe is associated with */
 	u8 num_profs, *prof_ids;
 
-	/* Possible result indexes are 44, 45, 46 and 47 */
-#define ICE_POSSIBLE_RES_IDX 0x0000F00000000000ULL
+	/* Bit map for possible result indexes */
 	ice_declare_bitmap(res_idxs, ICE_MAX_FV_WORDS);
 
 	/* This allows user to specify the recipe priority.
@@ -449,7 +498,10 @@ ice_init_def_sw_recp(struct ice_hw *hw, struct ice_sw_recipe **recp_list);
 u16 ice_get_hw_vsi_num(struct ice_hw *hw, u16 vsi_handle);
 bool ice_is_vsi_valid(struct ice_hw *hw, u16 vsi_handle);
 
-enum ice_status ice_replay_vsi_all_fltr(struct ice_hw *hw, u16 vsi_handle);
+enum ice_status
+ice_replay_vsi_all_fltr(struct ice_hw *hw, struct ice_port_info *pi,
+			u16 vsi_handle);
+void ice_rm_sw_replay_rule_info(struct ice_hw *hw, struct ice_switch_info *sw);
 void ice_rm_all_sw_replay_rule_info(struct ice_hw *hw);
-
+bool ice_is_prof_rule(enum ice_sw_tunnel_type type);
 #endif /* _ICE_SWITCH_H_ */

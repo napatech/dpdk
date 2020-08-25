@@ -294,6 +294,8 @@ print_stats(char *prgname)
 		printf("\n");
 		print_total_stats(&delta_ts);
 
+		fflush(stdout);
+
 		ts.total_packets_tx += delta_ts.total_packets_tx;
 		ts.total_packets_rx += delta_ts.total_packets_rx;
 		ts.total_packets_dropped += delta_ts.total_packets_dropped;
@@ -582,7 +584,7 @@ ioat_parse_portmask(const char *portmask)
 	/* Parse hexadecimal string */
 	pm = strtoul(portmask, &end, 16);
 	if ((portmask[0] == '\0') || (end == NULL) || (*end != '\0'))
-		return -1;
+		return 0;
 
 	return pm;
 }
@@ -718,7 +720,7 @@ check_link_status(uint32_t port_mask)
 				"Port %d Link Up. Speed %u Mbps - %s\n",
 				portid, link.link_speed,
 				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
-				("full-duplex") : ("half-duplex\n"));
+				("full-duplex") : ("half-duplex"));
 			link_status = 1;
 		} else
 			printf("Port %d Link Down\n", portid);

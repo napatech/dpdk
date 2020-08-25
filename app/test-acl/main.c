@@ -12,7 +12,7 @@
 #include <rte_lcore.h>
 #include <rte_ip.h>
 
-#define	PRINT_USAGE_START	"%s [EAL options]\n"
+#define	PRINT_USAGE_START	"%s [EAL options] --\n"
 
 #define	RTE_LOGTYPE_TESTACL	RTE_LOGTYPE_USER1
 
@@ -858,7 +858,7 @@ search_ip5tuples_once(uint32_t categories, uint32_t step, const char *alg)
 }
 
 static int
-search_ip5tuples(__attribute__((unused)) void *arg)
+search_ip5tuples(__rte_unused void *arg)
 {
 	uint64_t pkt, start, tm;
 	uint32_t i, lcore;

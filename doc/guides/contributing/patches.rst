@@ -28,9 +28,9 @@ The DPDK development process has the following features:
 * All sub-repositories are merged into main repository for ``-rc1`` and ``-rc2`` versions of the release.
 * After the ``-rc2`` release all patches should target the main repository.
 
-The mailing list for DPDK development is `dev@dpdk.org <http://mails.dpdk.org/archives/dev/>`_.
-Contributors will need to `register for the mailing list <http://mails.dpdk.org/listinfo/dev>`_ in order to submit patches.
-It is also worth registering for the DPDK `Patchwork <http://patches.dpdk.org/project/dpdk/list/>`_
+The mailing list for DPDK development is `dev@dpdk.org <https://mails.dpdk.org/archives/dev/>`_.
+Contributors will need to `register for the mailing list <https://mails.dpdk.org/listinfo/dev>`_ in order to submit patches.
+It is also worth registering for the DPDK `Patchwork <https://patches.dpdk.org/project/dpdk/list/>`_
 
 If you are using the GitHub service, you can link your repository to
 the ``travis-ci.org`` build service.  When you push patches to your GitHub
@@ -130,12 +130,12 @@ The source code can be cloned using either of the following:
 main repository::
 
     git clone git://dpdk.org/dpdk
-    git clone http://dpdk.org/git/dpdk
+    git clone https://dpdk.org/git/dpdk
 
-sub-repositories (`list <http://git.dpdk.org/next>`_)::
+sub-repositories (`list <https://git.dpdk.org/next>`_)::
 
     git clone git://dpdk.org/next/dpdk-next-*
-    git clone http://dpdk.org/git/next/dpdk-next-*
+    git clone https://dpdk.org/git/next/dpdk-next-*
 
 Make your Changes
 -----------------
@@ -182,7 +182,7 @@ A good way of thinking about whether a patch should be split is to consider whet
 applied without dependencies as a backport.
 
 It is better to keep the related documentation changes in the same patch
-file as the code, rather than one big documentation patch at then end of a
+file as the code, rather than one big documentation patch at the end of a
 patchset. This makes it easier for future maintenance and development of the
 code.
 
@@ -320,7 +320,7 @@ Patch for Stable Releases
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
 All fix patches to the master branch that are candidates for backporting
-should also be CCed to the `stable@dpdk.org <http://mails.dpdk.org/listinfo/stable>`_
+should also be CCed to the `stable@dpdk.org <https://mails.dpdk.org/listinfo/stable>`_
 mailing list.
 In the commit message body the Cc: stable@dpdk.org should be inserted as follows::
 
@@ -336,6 +336,24 @@ In the commit message body the Cc: stable@dpdk.org should be inserted as follows
 For further information on stable contribution you can go to
 :doc:`Stable Contribution Guide <stable>`.
 
+Patch Dependencies
+~~~~~~~~~~~~~~~~~~
+
+Sometimes a patch or patchset can depend on another one.
+To help the maintainers and automation tasks, please document this dependency in commit log or cover letter
+with the following syntax:
+
+``Depends-on: series-NNNNN ("Title of the series")`` or ``Depends-on: patch-NNNNN ("Title of the patch")``
+
+Where ``NNNNN`` is patchwork ID for patch or series::
+
+     doc: fix some parameter description
+
+     Update the docs, fixing description of some parameter.
+
+     Signed-off-by: Alex Smith <alex.smith@example.com>
+     ---
+     Depends-on: series-10000 ("Title of the series")
 
 Creating Patches
 ----------------
@@ -423,29 +441,22 @@ are loaded from the following files, in order of preference::
    ~/.config/dpdk/devel.config
    /etc/dpdk/devel.config.
 
-Once the environment variable the script can be run as follows::
+Once the environment variable is set, the script can be run as follows::
 
    devtools/checkpatches.sh ~/patch/
 
 The script usage is::
 
-   checkpatches.sh [-h] [-q] [-v] [patch1 [patch2] ...]]"
-
-Where:
-
-* ``-h``: help, usage.
-* ``-q``: quiet. Don't output anything for files without issues.
-* ``-v``: verbose.
-* ``patchX``: path to one or more patches.
+   checkpatches.sh [-h] [-q] [-v] [-nX|-r range|patch1 [patch2] ...]
 
 Then the git logs should be checked using the ``check-git-log.sh`` script.
 
 The script usage is::
 
-   check-git-log.sh [range]
+   check-git-log.sh [-h] [-nX|-r range]
 
-Where the range is a ``git log`` option.
-
+For both of the above scripts, the -n option is used to specify a number of commits from HEAD,
+and the -r option allows the user specify a ``git log`` range.
 
 .. _contrib_check_compilation:
 
@@ -513,6 +524,8 @@ in a single subfolder called "__builds" created in the current directory.
 Setting ``DPDK_BUILD_TEST_DIR`` to an absolute directory path e.g. ``/tmp`` is also supported.
 
 
+.. _integrated_abi_check:
+
 Checking ABI compatibility
 --------------------------
 
@@ -563,7 +576,7 @@ If the patch is in relation to a previous email thread you can add it to the sam
    git send-email --to dev@dpdk.org --in-reply-to <1234-foo@bar.com> 000*.patch
 
 The Message ID can be found in the raw text of emails or at the top of each Patchwork patch,
-`for example <http://patches.dpdk.org/patch/7646/>`_.
+`for example <https://patches.dpdk.org/patch/7646/>`_.
 Shallow threading (``--thread --no-chain-reply-to``) is preferred for a patch series.
 
 Once submitted your patches will appear on the mailing list and in Patchwork.

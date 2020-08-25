@@ -10,13 +10,19 @@ LIB_GLUE_BASE = librte_pmd_mlx5_glue.so
 LIB_GLUE_VERSION = 20.02.0
 
 # Sources.
-ifeq ($(findstring y,$(CONFIG_RTE_LIBRTE_MLX5_PMD)$(CONFIG_RTE_LIBRTE_MLX5_VDPA_PMD)),y)
+ifeq ($(findstring y,$(CONFIG_RTE_LIBRTE_MLX5_PMD)$(CONFIG_RTE_LIBRTE_MLX5_VDPA_PMD)$(CONFIG_RTE_LIBRTE_MLX5_REGEX_PMD)),y)
 ifneq ($(CONFIG_RTE_IBVERBS_LINK_DLOPEN),y)
-SRCS-y += mlx5_glue.c
+SRCS-y += linux/mlx5_glue.c
 endif
 SRCS-y += mlx5_devx_cmds.c
 SRCS-y += mlx5_common.c
-SRCS-y += mlx5_nl.c
+SRCS-y += linux/mlx5_common_os.c
+SRCS-y += linux/mlx5_nl.c
+SRCS-y += linux/mlx5_common_verbs.c
+SRCS-y += mlx5_common_mp.c
+SRCS-y += mlx5_common_mr.c
+SRCS-y += mlx5_malloc.c
+SRCS-y += mlx5_common_pci.c
 ifeq ($(CONFIG_RTE_IBVERBS_LINK_DLOPEN),y)
 INSTALL-y-lib += $(LIB_GLUE)
 endif
@@ -27,6 +33,8 @@ CFLAGS += -O3
 CFLAGS += -std=c11 -Wall -Wextra
 CFLAGS += -g
 CFLAGS += -I.
+CFLAGS += -I$(SRCDIR)
+CFLAGS += -I$(SRCDIR)/linux
 CFLAGS += -D_BSD_SOURCE
 CFLAGS += -D_DEFAULT_SOURCE
 CFLAGS += -D_XOPEN_SOURCE=600
@@ -35,7 +43,7 @@ CFLAGS += -Wno-strict-prototypes
 ifeq ($(CONFIG_RTE_IBVERBS_LINK_DLOPEN),y)
 CFLAGS += -DMLX5_GLUE='"$(LIB_GLUE)"'
 CFLAGS += -DMLX5_GLUE_VERSION='"$(LIB_GLUE_VERSION)"'
-CFLAGS_mlx5_glue.o += -fPIC
+CFLAGS_linux/mlx5_glue.o += -fPIC
 LDLIBS += -ldl
 else ifeq ($(CONFIG_RTE_IBVERBS_LINK_STATIC),y)
 LDLIBS += $(shell $(RTE_SDK)/buildtools/options-ibverbs-static.sh)
@@ -44,6 +52,7 @@ LDLIBS += -libverbs -lmlx5
 endif
 
 LDLIBS += -lrte_eal -lrte_pci -lrte_kvargs -lrte_net
+LDLIBS += -lrte_bus_pci
 
 # A few warnings cannot be avoided in external headers.
 CFLAGS += -Wno-error=cast-qual -UPEDANTIC
@@ -65,6 +74,11 @@ mlx5_autoconf.h.new: FORCE
 
 mlx5_autoconf.h.new: $(RTE_SDK)/buildtools/auto-config-h.sh
 	$Q $(RM) -f -- '$@'
+	$Q sh -- '$<' '$@' \
+		HAVE_IBV_RELAXED_ORDERING \
+		infiniband/verbs.h \
+		enum IBV_ACCESS_RELAXED_ORDERING \
+		$(AUTOCONF_OUTPUT)
 	$Q sh -- '$<' '$@' \
 		HAVE_IBV_DEVICE_STRIDING_RQ_SUPPORT \
 		infiniband/mlx5dv.h \
@@ -146,9 +160,29 @@ mlx5_autoconf.h.new: $(RTE_SDK)/buildtools/auto-config-h.sh
 		enum MLX5DV_FLOW_ACTION_COUNTERS_DEVX \
 		$(AUTOCONF_OUTPUT)
 	$Q sh -- '$<' '$@' \
+		HAVE_MLX5_DR_CREATE_ACTION_DEFAULT_MISS \
+		infiniband/mlx5dv.h \
+		enum MLX5DV_FLOW_ACTION_DEFAULT_MISS \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
 		HAVE_IBV_DEVX_ASYNC \
 		infiniband/mlx5dv.h \
 		func mlx5dv_devx_obj_query_async \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
+		HAVE_IBV_DEVX_QP \
+		infiniband/mlx5dv.h \
+		func mlx5dv_devx_qp_query \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
+		HAVE_MLX5DV_DEVX_UAR_OFFSET \
+		infiniband/mlx5dv.h \
+		field "struct mlx5dv_devx_uar.mmap_off" \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
+		HAVE_MLX5DV_PP_ALLOC \
+		infiniband/mlx5dv.h \
+		func mlx5dv_pp_alloc \
 		$(AUTOCONF_OUTPUT)
 	$Q sh -- '$<' '$@' \
 		HAVE_MLX5DV_DR_ACTION_DEST_DEVX_TIR \
@@ -179,6 +213,26 @@ mlx5_autoconf.h.new: $(RTE_SDK)/buildtools/auto-config-h.sh
 		HAVE_IBV_VAR \
 		infiniband/mlx5dv.h \
 		func mlx5dv_alloc_var \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
+		HAVE_MLX5DV_DR_MEM_RECLAIM \
+		infiniband/mlx5dv.h \
+		func mlx5dv_dr_domain_set_reclaim_device_memory \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
+		HAVE_MLX5_OPCODE_ENHANCED_MPSW \
+		infiniband/mlx5dv.h \
+		enum MLX5_OPCODE_ENHANCED_MPSW \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
+		HAVE_MLX5_OPCODE_SEND_EN \
+		infiniband/mlx5dv.h \
+		enum MLX5_OPCODE_SEND_EN \
+		$(AUTOCONF_OUTPUT)
+	$Q sh -- '$<' '$@' \
+		HAVE_MLX5_OPCODE_WAIT \
+		infiniband/mlx5dv.h \
+		enum MLX5_OPCODE_WAIT \
 		$(AUTOCONF_OUTPUT)
 	$Q sh -- '$<' '$@' \
 		HAVE_ETHTOOL_LINK_MODE_25G \
@@ -318,7 +372,7 @@ mlx5_autoconf.h: mlx5_autoconf.h.new
 		cmp '$<' '$@' $(AUTOCONF_OUTPUT) || \
 		mv '$<' '$@'
 
-ifeq ($(findstring y,$(CONFIG_RTE_LIBRTE_MLX5_PMD)$(CONFIG_RTE_LIBRTE_MLX5_VDPA_PMD)),y)
+ifeq ($(findstring y,$(CONFIG_RTE_LIBRTE_MLX5_PMD)$(CONFIG_RTE_LIBRTE_MLX5_VDPA_PMD)$(CONFIG_RTE_LIBRTE_MLX5_REGEX_PMD)),y)
 $(SRCS-y:.c=.o): mlx5_autoconf.h
 endif
 
@@ -334,17 +388,17 @@ GLUE_LDFLAGS := $(call linkerprefix,$(LDFLAGS))
 else
 GLUE_LDFLAGS := $(LDFLAGS)
 endif
-$(LIB_GLUE): mlx5_glue.o
+$(LIB_GLUE): linux/mlx5_glue.o
 	$Q $(LD) $(GLUE_LDFLAGS) $(EXTRA_LDFLAGS) \
 		-Wl,-h,$(LIB_GLUE) \
 		-shared -o $@ $< -libverbs -lmlx5
 
-mlx5_glue.o: mlx5_autoconf.h
+linux/mlx5_glue.o: mlx5_autoconf.h
 
 endif
 
 clean_mlx5: FORCE
 	$Q rm -f -- mlx5_autoconf.h mlx5_autoconf.h.new
-	$Q rm -f -- mlx5_glue.o $(LIB_GLUE_BASE)*
+	$Q rm -f -- linux/mlx5_glue.o $(LIB_GLUE_BASE)*
 
 clean: clean_mlx5

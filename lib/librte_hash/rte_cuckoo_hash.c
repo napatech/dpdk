@@ -32,6 +32,14 @@
 #include "rte_hash.h"
 #include "rte_cuckoo_hash.h"
 
+/* Mask of all flags supported by this version */
+#define RTE_HASH_EXTRA_FLAGS_MASK (RTE_HASH_EXTRA_FLAGS_TRANS_MEM_SUPPORT | \
+				   RTE_HASH_EXTRA_FLAGS_MULTI_WRITER_ADD | \
+				   RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY | \
+				   RTE_HASH_EXTRA_FLAGS_EXT_TABLE |	\
+				   RTE_HASH_EXTRA_FLAGS_NO_FREE_ON_DEL | \
+				   RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY_LF)
+
 #define FOR_EACH_BUCKET(CURRENT_BKT, START_BUCKET)                            \
 	for (CURRENT_BKT = START_BUCKET;                                      \
 		CURRENT_BKT != NULL;                                          \
@@ -143,6 +151,7 @@ rte_hash_create(const struct rte_hash_parameters *params)
 	unsigned int no_free_on_del = 0;
 	uint32_t *ext_bkt_to_free = NULL;
 	uint32_t *tbl_chng_cnt = NULL;
+	struct lcore_cache *local_free_slots = NULL;
 	unsigned int readwrite_concur_lf_support = 0;
 	uint32_t i;
 
@@ -161,6 +170,12 @@ rte_hash_create(const struct rte_hash_parameters *params)
 			(params->key_len == 0)) {
 		rte_errno = EINVAL;
 		RTE_LOG(ERR, HASH, "rte_hash_create has invalid parameters\n");
+		return NULL;
+	}
+
+	if (params->extra_flag & ~RTE_HASH_EXTRA_FLAGS_MASK) {
+		rte_errno = EINVAL;
+		RTE_LOG(ERR, HASH, "rte_hash_create: unsupported extra flags\n");
 		return NULL;
 	}
 
@@ -369,9 +384,13 @@ rte_hash_create(const struct rte_hash_parameters *params)
 #endif
 
 	if (use_local_cache) {
-		h->local_free_slots = rte_zmalloc_socket(NULL,
+		local_free_slots = rte_zmalloc_socket(NULL,
 				sizeof(struct lcore_cache) * RTE_MAX_LCORE,
 				RTE_CACHE_LINE_SIZE, params->socket_id);
+		if (local_free_slots == NULL) {
+			RTE_LOG(ERR, HASH, "local free slots memory allocation failed\n");
+			goto err_unlock;
+		}
 	}
 
 	/* Default hash function */
@@ -402,6 +421,7 @@ rte_hash_create(const struct rte_hash_parameters *params)
 	*h->tbl_chng_cnt = 0;
 	h->hw_trans_mem_support = hw_trans_mem_support;
 	h->use_local_cache = use_local_cache;
+	h->local_free_slots = local_free_slots;
 	h->readwrite_concur_support = readwrite_concur_support;
 	h->ext_table_support = ext_table_support;
 	h->writer_takes_lock = writer_takes_lock;
@@ -447,6 +467,7 @@ err:
 	rte_ring_free(r);
 	rte_ring_free(r_ext);
 	rte_free(te);
+	rte_free(local_free_slots);
 	rte_free(h);
 	rte_free(buckets);
 	rte_free(buckets_ext);
@@ -939,8 +960,8 @@ __rte_hash_add_key_with_hash(const struct rte_hash *h, const void *key,
 	uint32_t prim_bucket_idx, sec_bucket_idx;
 	struct rte_hash_bucket *prim_bkt, *sec_bkt, *cur_bkt;
 	struct rte_hash_key *new_k, *keys = h->key_store;
+	uint32_t ext_bkt_id = 0;
 	uint32_t slot_id;
-	uint32_t ext_bkt_id;
 	int ret;
 	unsigned n_slots;
 	unsigned lcore_id;
@@ -1095,7 +1116,8 @@ __rte_hash_add_key_with_hash(const struct rte_hash *h, const void *key,
 	 * extendable bucket. We first get a free bucket from ring.
 	 */
 	if (rte_ring_sc_dequeue_elem(h->free_ext_bkts, &ext_bkt_id,
-						sizeof(uint32_t)) != 0) {
+						sizeof(uint32_t)) != 0 ||
+					ext_bkt_id == 0) {
 		ret = -ENOSPC;
 		goto failure;
 	}
@@ -1711,63 +1733,19 @@ compare_signatures(uint32_t *prim_hash_matches, uint32_t *sec_hash_matches,
 	}
 }
 
-#define PREFETCH_OFFSET 4
 static inline void
-__rte_hash_lookup_bulk_l(const struct rte_hash *h, const void **keys,
-			int32_t num_keys, int32_t *positions,
-			uint64_t *hit_mask, void *data[])
+__bulk_lookup_l(const struct rte_hash *h, const void **keys,
+		const struct rte_hash_bucket **primary_bkt,
+		const struct rte_hash_bucket **secondary_bkt,
+		uint16_t *sig, int32_t num_keys, int32_t *positions,
+		uint64_t *hit_mask, void *data[])
 {
 	uint64_t hits = 0;
 	int32_t i;
 	int32_t ret;
-	uint32_t prim_hash[RTE_HASH_LOOKUP_BULK_MAX];
-	uint32_t prim_index[RTE_HASH_LOOKUP_BULK_MAX];
-	uint32_t sec_index[RTE_HASH_LOOKUP_BULK_MAX];
-	uint16_t sig[RTE_HASH_LOOKUP_BULK_MAX];
-	const struct rte_hash_bucket *primary_bkt[RTE_HASH_LOOKUP_BULK_MAX];
-	const struct rte_hash_bucket *secondary_bkt[RTE_HASH_LOOKUP_BULK_MAX];
 	uint32_t prim_hitmask[RTE_HASH_LOOKUP_BULK_MAX] = {0};
 	uint32_t sec_hitmask[RTE_HASH_LOOKUP_BULK_MAX] = {0};
 	struct rte_hash_bucket *cur_bkt, *next_bkt;
-
-	/* Prefetch first keys */
-	for (i = 0; i < PREFETCH_OFFSET && i < num_keys; i++)
-		rte_prefetch0(keys[i]);
-
-	/*
-	 * Prefetch rest of the keys, calculate primary and
-	 * secondary bucket and prefetch them
-	 */
-	for (i = 0; i < (num_keys - PREFETCH_OFFSET); i++) {
-		rte_prefetch0(keys[i + PREFETCH_OFFSET]);
-
-		prim_hash[i] = rte_hash_hash(h, keys[i]);
-
-		sig[i] = get_short_sig(prim_hash[i]);
-		prim_index[i] = get_prim_bucket_index(h, prim_hash[i]);
-		sec_index[i] = get_alt_bucket_index(h, prim_index[i], sig[i]);
-
-		primary_bkt[i] = &h->buckets[prim_index[i]];
-		secondary_bkt[i] = &h->buckets[sec_index[i]];
-
-		rte_prefetch0(primary_bkt[i]);
-		rte_prefetch0(secondary_bkt[i]);
-	}
-
-	/* Calculate and prefetch rest of the buckets */
-	for (; i < num_keys; i++) {
-		prim_hash[i] = rte_hash_hash(h, keys[i]);
-
-		sig[i] = get_short_sig(prim_hash[i]);
-		prim_index[i] = get_prim_bucket_index(h, prim_hash[i]);
-		sec_index[i] = get_alt_bucket_index(h, prim_index[i], sig[i]);
-
-		primary_bkt[i] = &h->buckets[prim_index[i]];
-		secondary_bkt[i] = &h->buckets[sec_index[i]];
-
-		rte_prefetch0(primary_bkt[i]);
-		rte_prefetch0(secondary_bkt[i]);
-	}
 
 	__hash_rw_reader_lock(h);
 
@@ -1903,62 +1881,19 @@ next_key:
 }
 
 static inline void
-__rte_hash_lookup_bulk_lf(const struct rte_hash *h, const void **keys,
-			int32_t num_keys, int32_t *positions,
-			uint64_t *hit_mask, void *data[])
+__bulk_lookup_lf(const struct rte_hash *h, const void **keys,
+		const struct rte_hash_bucket **primary_bkt,
+		const struct rte_hash_bucket **secondary_bkt,
+		uint16_t *sig, int32_t num_keys, int32_t *positions,
+		uint64_t *hit_mask, void *data[])
 {
 	uint64_t hits = 0;
 	int32_t i;
 	int32_t ret;
-	uint32_t prim_hash[RTE_HASH_LOOKUP_BULK_MAX];
-	uint32_t prim_index[RTE_HASH_LOOKUP_BULK_MAX];
-	uint32_t sec_index[RTE_HASH_LOOKUP_BULK_MAX];
-	uint16_t sig[RTE_HASH_LOOKUP_BULK_MAX];
-	const struct rte_hash_bucket *primary_bkt[RTE_HASH_LOOKUP_BULK_MAX];
-	const struct rte_hash_bucket *secondary_bkt[RTE_HASH_LOOKUP_BULK_MAX];
 	uint32_t prim_hitmask[RTE_HASH_LOOKUP_BULK_MAX] = {0};
 	uint32_t sec_hitmask[RTE_HASH_LOOKUP_BULK_MAX] = {0};
 	struct rte_hash_bucket *cur_bkt, *next_bkt;
 	uint32_t cnt_b, cnt_a;
-
-	/* Prefetch first keys */
-	for (i = 0; i < PREFETCH_OFFSET && i < num_keys; i++)
-		rte_prefetch0(keys[i]);
-
-	/*
-	 * Prefetch rest of the keys, calculate primary and
-	 * secondary bucket and prefetch them
-	 */
-	for (i = 0; i < (num_keys - PREFETCH_OFFSET); i++) {
-		rte_prefetch0(keys[i + PREFETCH_OFFSET]);
-
-		prim_hash[i] = rte_hash_hash(h, keys[i]);
-
-		sig[i] = get_short_sig(prim_hash[i]);
-		prim_index[i] = get_prim_bucket_index(h, prim_hash[i]);
-		sec_index[i] = get_alt_bucket_index(h, prim_index[i], sig[i]);
-
-		primary_bkt[i] = &h->buckets[prim_index[i]];
-		secondary_bkt[i] = &h->buckets[sec_index[i]];
-
-		rte_prefetch0(primary_bkt[i]);
-		rte_prefetch0(secondary_bkt[i]);
-	}
-
-	/* Calculate and prefetch rest of the buckets */
-	for (; i < num_keys; i++) {
-		prim_hash[i] = rte_hash_hash(h, keys[i]);
-
-		sig[i] = get_short_sig(prim_hash[i]);
-		prim_index[i] = get_prim_bucket_index(h, prim_hash[i]);
-		sec_index[i] = get_alt_bucket_index(h, prim_index[i], sig[i]);
-
-		primary_bkt[i] = &h->buckets[prim_index[i]];
-		secondary_bkt[i] = &h->buckets[sec_index[i]];
-
-		rte_prefetch0(primary_bkt[i]);
-		rte_prefetch0(secondary_bkt[i]);
-	}
 
 	for (i = 0; i < num_keys; i++)
 		positions[i] = -ENOENT;
@@ -2124,6 +2059,92 @@ next_key:
 		*hit_mask = hits;
 }
 
+#define PREFETCH_OFFSET 4
+static inline void
+__bulk_lookup_prefetching_loop(const struct rte_hash *h,
+	const void **keys, int32_t num_keys,
+	uint16_t *sig,
+	const struct rte_hash_bucket **primary_bkt,
+	const struct rte_hash_bucket **secondary_bkt)
+{
+	int32_t i;
+	uint32_t prim_hash[RTE_HASH_LOOKUP_BULK_MAX];
+	uint32_t prim_index[RTE_HASH_LOOKUP_BULK_MAX];
+	uint32_t sec_index[RTE_HASH_LOOKUP_BULK_MAX];
+
+	/* Prefetch first keys */
+	for (i = 0; i < PREFETCH_OFFSET && i < num_keys; i++)
+		rte_prefetch0(keys[i]);
+
+	/*
+	 * Prefetch rest of the keys, calculate primary and
+	 * secondary bucket and prefetch them
+	 */
+	for (i = 0; i < (num_keys - PREFETCH_OFFSET); i++) {
+		rte_prefetch0(keys[i + PREFETCH_OFFSET]);
+
+		prim_hash[i] = rte_hash_hash(h, keys[i]);
+
+		sig[i] = get_short_sig(prim_hash[i]);
+		prim_index[i] = get_prim_bucket_index(h, prim_hash[i]);
+		sec_index[i] = get_alt_bucket_index(h, prim_index[i], sig[i]);
+
+		primary_bkt[i] = &h->buckets[prim_index[i]];
+		secondary_bkt[i] = &h->buckets[sec_index[i]];
+
+		rte_prefetch0(primary_bkt[i]);
+		rte_prefetch0(secondary_bkt[i]);
+	}
+
+	/* Calculate and prefetch rest of the buckets */
+	for (; i < num_keys; i++) {
+		prim_hash[i] = rte_hash_hash(h, keys[i]);
+
+		sig[i] = get_short_sig(prim_hash[i]);
+		prim_index[i] = get_prim_bucket_index(h, prim_hash[i]);
+		sec_index[i] = get_alt_bucket_index(h, prim_index[i], sig[i]);
+
+		primary_bkt[i] = &h->buckets[prim_index[i]];
+		secondary_bkt[i] = &h->buckets[sec_index[i]];
+
+		rte_prefetch0(primary_bkt[i]);
+		rte_prefetch0(secondary_bkt[i]);
+	}
+}
+
+
+static inline void
+__rte_hash_lookup_bulk_l(const struct rte_hash *h, const void **keys,
+			int32_t num_keys, int32_t *positions,
+			uint64_t *hit_mask, void *data[])
+{
+	uint16_t sig[RTE_HASH_LOOKUP_BULK_MAX];
+	const struct rte_hash_bucket *primary_bkt[RTE_HASH_LOOKUP_BULK_MAX];
+	const struct rte_hash_bucket *secondary_bkt[RTE_HASH_LOOKUP_BULK_MAX];
+
+	__bulk_lookup_prefetching_loop(h, keys, num_keys, sig,
+		primary_bkt, secondary_bkt);
+
+	__bulk_lookup_l(h, keys, primary_bkt, secondary_bkt, sig, num_keys,
+		positions, hit_mask, data);
+}
+
+static inline void
+__rte_hash_lookup_bulk_lf(const struct rte_hash *h, const void **keys,
+			int32_t num_keys, int32_t *positions,
+			uint64_t *hit_mask, void *data[])
+{
+	uint16_t sig[RTE_HASH_LOOKUP_BULK_MAX];
+	const struct rte_hash_bucket *primary_bkt[RTE_HASH_LOOKUP_BULK_MAX];
+	const struct rte_hash_bucket *secondary_bkt[RTE_HASH_LOOKUP_BULK_MAX];
+
+	__bulk_lookup_prefetching_loop(h, keys, num_keys, sig,
+		primary_bkt, secondary_bkt);
+
+	__bulk_lookup_lf(h, keys, primary_bkt, secondary_bkt, sig, num_keys,
+		positions, hit_mask, data);
+}
+
 static inline void
 __rte_hash_lookup_bulk(const struct rte_hash *h, const void **keys,
 			int32_t num_keys, int32_t *positions,
@@ -2160,6 +2181,123 @@ rte_hash_lookup_bulk_data(const struct rte_hash *h, const void **keys,
 	int32_t positions[num_keys];
 
 	__rte_hash_lookup_bulk(h, keys, num_keys, positions, hit_mask, data);
+
+	/* Return number of hits */
+	return __builtin_popcountl(*hit_mask);
+}
+
+
+static inline void
+__rte_hash_lookup_with_hash_bulk_l(const struct rte_hash *h,
+			const void **keys, hash_sig_t *prim_hash,
+			int32_t num_keys, int32_t *positions,
+			uint64_t *hit_mask, void *data[])
+{
+	int32_t i;
+	uint32_t prim_index[RTE_HASH_LOOKUP_BULK_MAX];
+	uint32_t sec_index[RTE_HASH_LOOKUP_BULK_MAX];
+	uint16_t sig[RTE_HASH_LOOKUP_BULK_MAX];
+	const struct rte_hash_bucket *primary_bkt[RTE_HASH_LOOKUP_BULK_MAX];
+	const struct rte_hash_bucket *secondary_bkt[RTE_HASH_LOOKUP_BULK_MAX];
+
+	/*
+	 * Prefetch keys, calculate primary and
+	 * secondary bucket and prefetch them
+	 */
+	for (i = 0; i < num_keys; i++) {
+		rte_prefetch0(keys[i]);
+
+		sig[i] = get_short_sig(prim_hash[i]);
+		prim_index[i] = get_prim_bucket_index(h, prim_hash[i]);
+		sec_index[i] = get_alt_bucket_index(h, prim_index[i], sig[i]);
+
+		primary_bkt[i] = &h->buckets[prim_index[i]];
+		secondary_bkt[i] = &h->buckets[sec_index[i]];
+
+		rte_prefetch0(primary_bkt[i]);
+		rte_prefetch0(secondary_bkt[i]);
+	}
+
+	__bulk_lookup_l(h, keys, primary_bkt, secondary_bkt, sig, num_keys,
+		positions, hit_mask, data);
+}
+
+static inline void
+__rte_hash_lookup_with_hash_bulk_lf(const struct rte_hash *h,
+			const void **keys, hash_sig_t *prim_hash,
+			int32_t num_keys, int32_t *positions,
+			uint64_t *hit_mask, void *data[])
+{
+	int32_t i;
+	uint32_t prim_index[RTE_HASH_LOOKUP_BULK_MAX];
+	uint32_t sec_index[RTE_HASH_LOOKUP_BULK_MAX];
+	uint16_t sig[RTE_HASH_LOOKUP_BULK_MAX];
+	const struct rte_hash_bucket *primary_bkt[RTE_HASH_LOOKUP_BULK_MAX];
+	const struct rte_hash_bucket *secondary_bkt[RTE_HASH_LOOKUP_BULK_MAX];
+
+	/*
+	 * Prefetch keys, calculate primary and
+	 * secondary bucket and prefetch them
+	 */
+	for (i = 0; i < num_keys; i++) {
+		rte_prefetch0(keys[i]);
+
+		sig[i] = get_short_sig(prim_hash[i]);
+		prim_index[i] = get_prim_bucket_index(h, prim_hash[i]);
+		sec_index[i] = get_alt_bucket_index(h, prim_index[i], sig[i]);
+
+		primary_bkt[i] = &h->buckets[prim_index[i]];
+		secondary_bkt[i] = &h->buckets[sec_index[i]];
+
+		rte_prefetch0(primary_bkt[i]);
+		rte_prefetch0(secondary_bkt[i]);
+	}
+
+	__bulk_lookup_lf(h, keys, primary_bkt, secondary_bkt, sig, num_keys,
+		positions, hit_mask, data);
+}
+
+static inline void
+__rte_hash_lookup_with_hash_bulk(const struct rte_hash *h, const void **keys,
+			hash_sig_t *prim_hash, int32_t num_keys,
+			int32_t *positions, uint64_t *hit_mask, void *data[])
+{
+	if (h->readwrite_concur_lf_support)
+		__rte_hash_lookup_with_hash_bulk_lf(h, keys, prim_hash,
+				num_keys, positions, hit_mask, data);
+	else
+		__rte_hash_lookup_with_hash_bulk_l(h, keys, prim_hash,
+				num_keys, positions, hit_mask, data);
+}
+
+int
+rte_hash_lookup_with_hash_bulk(const struct rte_hash *h, const void **keys,
+		hash_sig_t *sig, uint32_t num_keys, int32_t *positions)
+{
+	RETURN_IF_TRUE(((h == NULL) || (keys == NULL) ||
+			(sig == NULL) || (num_keys == 0) ||
+			(num_keys > RTE_HASH_LOOKUP_BULK_MAX) ||
+			(positions == NULL)), -EINVAL);
+
+	__rte_hash_lookup_with_hash_bulk(h, keys, sig, num_keys,
+		positions, NULL, NULL);
+	return 0;
+}
+
+int
+rte_hash_lookup_with_hash_bulk_data(const struct rte_hash *h,
+		const void **keys, hash_sig_t *sig,
+		uint32_t num_keys, uint64_t *hit_mask, void *data[])
+{
+	RETURN_IF_TRUE(((h == NULL) || (keys == NULL) ||
+			(sig == NULL) || (num_keys == 0) ||
+			(num_keys > RTE_HASH_LOOKUP_BULK_MAX) ||
+			(hit_mask == NULL)), -EINVAL);
+
+	int32_t positions[num_keys];
+
+	__rte_hash_lookup_with_hash_bulk(h, keys, sig, num_keys,
+			positions, hit_mask, data);
 
 	/* Return number of hits */
 	return __builtin_popcountl(*hit_mask);

@@ -13,7 +13,6 @@ CFLAGS += $(WERROR_FLAGS)
 CFLAGS += -I$(RTE_SDK)/drivers/common/octeontx2
 CFLAGS += -I$(RTE_SDK)/drivers/mempool/octeontx2
 CFLAGS += -I$(RTE_SDK)/drivers/bus/pci
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 
 ifneq ($(CONFIG_RTE_ARCH_64),y)
 CFLAGS += -Wno-int-to-pointer-cast
@@ -35,6 +34,6 @@ SRCS-y += otx2_common.c
 SRCS-y += otx2_sec_idev.c
 
 LDLIBS += -lrte_eal
-LDLIBS += -lrte_ethdev
+LDLIBS += -lrte_ethdev -lrte_kvargs
 
 include $(RTE_SDK)/mk/rte.lib.mk

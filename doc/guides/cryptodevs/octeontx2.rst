@@ -55,6 +55,7 @@ Hash algorithms:
 AEAD algorithms:
 
 * ``RTE_CRYPTO_AEAD_AES_GCM``
+* ``RTE_CRYPTO_AEAD_CHACHA20_POLY1305``
 
 Asymmetric Crypto Algorithms
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -157,3 +158,24 @@ application:
 
     ./test
     RTE>>cryptodev_octeontx2_asym_autotest
+
+
+Lookaside IPsec Support
+-----------------------
+
+The OCTEON TX2 SoC can accelerate IPsec traffic in lookaside protocol mode,
+with its **cryptographic accelerator (CPT)**. ``OCTEON TX2 crypto PMD`` implements
+this as an ``RTE_SECURITY_ACTION_TYPE_LOOKASIDE_PROTOCOL`` offload.
+
+Refer to :doc:`../prog_guide/rte_security` for more details on protocol offloads.
+
+This feature can be tested with ipsec-secgw sample application.
+
+
+Features supported
+~~~~~~~~~~~~~~~~~~
+
+* IPv4
+* ESP
+* Tunnel mode
+* AES-128/192/256-GCM

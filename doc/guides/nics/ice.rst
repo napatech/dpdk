@@ -12,30 +12,13 @@ the Intel Ethernet Controller E810.
 Prerequisites
 -------------
 
-- Identifying your adapter using `Intel Support
-  <http://www.intel.com/support>`_ and get the latest NVM/FW images.
+- The E810 is currently in sampling state only. To obtain early samples and/or get further information
+  about kernel drivers, firmware and DDP support, please speak to your Intel representative.
 
 - Follow the DPDK :ref:`Getting Started Guide for Linux <linux_gsg>` to setup the basic DPDK environment.
 
 - To get better performance on Intel platforms, please follow the "How to get best performance with NICs on Intel platforms"
   section of the :ref:`Getting Started Guide for Linux <linux_gsg>`.
-
-Recommended Matching List
--------------------------
-
-It is highly recommended to upgrade the ice kernel driver and firmware and
-DDP packages to avoid the compatibility issues with ice PMD. Here is the
-suggested matching list.
-
-   +----------------------+-----------------------+------------------+----------------+-------------------+
-   |     DPDK version     | Kernel driver version | Firmware version | DDP OS Package | DDP COMMS Package |
-   +======================+=======================+==================+================+===================+
-   |        19.11         |        0.12.25        |     1.1.16.39    |      1.3.4     |       1.3.10      |
-   +----------------------+-----------------------+------------------+----------------+-------------------+
-   | 19.08 (experimental) |        0.10.1         |     1.1.12.7     |      1.2.0     |        N/A        |
-   +----------------------+-----------------------+------------------+----------------+-------------------+
-   | 19.05 (experimental) |        0.9.4          |     1.1.10.16    |      1.1.0     |        N/A        |
-   +----------------------+-----------------------+------------------+----------------+-------------------+
 
 Pre-Installation Configuration
 ------------------------------
@@ -53,10 +36,6 @@ Please note that enabling debugging options may affect system performance.
 - ``CONFIG_RTE_LIBRTE_ICE_DEBUG_*`` (default ``n``)
 
   Toggle display of generic debugging messages.
-
-- ``CONFIG_RTE_LIBRTE_ICE_RX_ALLOW_BULK_ALLOC`` (default ``y``)
-
-  Toggle bulk allocation for RX.
 
 - ``CONFIG_RTE_LIBRTE_ICE_16BYTE_RX_DESC`` (default ``n``)
 
@@ -244,6 +223,53 @@ report a MDD event and drop the packets.
 
 The APPs based on DPDK should avoid providing such packets.
 
+Device Config Function (DCF)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This section demonstrates ICE DCF PMD, which shares the core module with ICE
+PMD and iAVF PMD.
+
+A DCF (Device Config Function) PMD bounds to the device's trusted VF with ID 0,
+it can act as a sole controlling entity to exercise advance functionality (such
+as switch, ACL) for the rest VFs.
+
+The DCF PMD needs to advertise and acquire DCF capability which allows DCF to
+send AdminQ commands that it would like to execute over to the PF and receive
+responses for the same from PF.
+
+.. _figure_ice_dcf:
+
+.. figure:: img/ice_dcf.*
+
+   DCF Communication flow.
+
+#. Create the VFs::
+
+      echo 4 > /sys/bus/pci/devices/0000\:18\:00.0/sriov_numvfs
+
+#. Enable the VF0 trust on::
+
+      ip link set dev enp24s0f0 vf 0 trust on
+
+#. Bind the VF0,  and run testpmd with 'cap=dcf' devarg::
+
+      testpmd -l 22-25 -n 4 -w 18:01.0,cap=dcf -- -i
+
+#. Monitor the VF2 interface network traffic::
+
+      tcpdump -e -nn -i enp24s1f2
+
+#. Create one flow to redirect the traffic to VF2 by DCF::
+
+      flow create 0 priority 0 ingress pattern eth / ipv4 src is 192.168.0.2 \
+      dst is 192.168.0.3 / end actions vf id 2 / end
+
+#. Send the packet, and it should be displayed on tcpdump::
+
+      sendp(Ether(src='3c:fd:fe:aa:bb:78', dst='00:00:00:01:02:03')/IP(src=' \
+      192.168.0.2', dst="192.168.0.3")/TCP(flags='S')/Raw(load='XXXXXXXXXX'), \
+      iface="enp24s0f0", count=10)
+
 Sample Application Notes
 ------------------------
 
@@ -285,7 +311,7 @@ is stored in ``ice_adapter->active_pkg_type``.
 A symbolic link to the DDP package file is also ok. The same package
 file is used by both the kernel driver and the DPDK PMD.
 
-19.02 limitation
-~~~~~~~~~~~~~~~~
+limitation
+~~~~~~~~~~
 
-Ice code released in 19.02 is for evaluation only.
+Ice code released is for evaluation only currently.

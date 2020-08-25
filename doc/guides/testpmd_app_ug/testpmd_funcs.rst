@@ -237,7 +237,7 @@ Display the RSS hash functions and RSS hash key of a port::
 clear port
 ~~~~~~~~~~
 
-Clear the port statistics for a given port or for all ports::
+Clear the port statistics and forward engine statistics for a given port or for all ports::
 
    testpmd> clear port (info|stats|xstats|fdir|stat_qmap) (port_id|all)
 
@@ -266,7 +266,7 @@ show config
 Displays the configuration of the application.
 The configuration comes from the command-line, the runtime or the application defaults::
 
-   testpmd> show config (rxtx|cores|fwd|txpkts)
+   testpmd> show config (rxtx|cores|fwd|txpkts|txtimes)
 
 The available information categories are:
 
@@ -277,6 +277,8 @@ The available information categories are:
 * ``fwd``: Packet forwarding configuration.
 
 * ``txpkts``: Packets to TX configuration.
+
+* ``txtimes``: Burst time pattern for Tx only mode.
 
 For example:
 
@@ -298,7 +300,7 @@ set fwd
 Set the packet forwarding mode::
 
    testpmd> set fwd (io|mac|macswap|flowgen| \
-                     rxonly|txonly|csum|icmpecho|noisy) (""|retry)
+                     rxonly|txonly|csum|icmpecho|noisy|5tswap) (""|retry)
 
 ``retry`` can be specified for forwarding engines except ``rx_only``.
 
@@ -329,12 +331,17 @@ The available information categories are:
 
 * ``ieee1588``: Demonstrate L2 IEEE1588 V2 PTP timestamping for RX and TX. Requires ``CONFIG_RTE_LIBRTE_IEEE1588=y``.
 
-* ``softnic``: Demonstrates the softnic forwarding operation. In this mode, packet forwarding is
-  similar to I/O mode except for the fact that packets are loopback to the softnic ports only. Therefore, portmask parameter should be set to softnic port only. The various software based custom NIC pipelines specified through the softnic firmware (DPDK packet framework script) can be tested in this mode. Furthermore, it allows to build 5-level hierarchical QoS scheduler as a default option that can be enabled through CLI once testpmd application is initialised. The user can modify the default scheduler hierarchy or can specify the new QoS Scheduler hierarchy through CLI. Requires ``CONFIG_RTE_LIBRTE_PMD_SOFTNIC=y``.
-
 * ``noisy``: Noisy neighbor simulation.
   Simulate more realistic behavior of a guest machine engaged in receiving
   and sending packets performing Virtual Network Function (VNF).
+
+* ``5tswap``: Swap the source and destination of L2,L3,L4 if they exist.
+
+  L2 swaps the source address and destination address of Ethernet, as same as ``macswap``.
+
+  L3 swaps the source address and destination address of IP (v4 and v6).
+
+  L4 swaps the source port and destination port of transport layer (TCP and UDP).
 
 Example::
 
@@ -371,6 +378,12 @@ Example for the io forwarding engine, with some packet drops on the tx side::
      RX-packets: 548595696      RX-dropped: 0             RX-total: 548595696
      TX-packets: 548595568      TX-dropped: 128           TX-total: 548595696
      ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+.. note::
+
+   Enabling CONFIG_RTE_TEST_PMD_RECORD_CORE_CYCLES appends "CPU cycles/packet" stats, like:
+
+   CPU cycles/packet=xx.dd (total cycles=xxxx / total RX packets=xxxx) at xxx MHz clock
 
 clear fwd
 ~~~~~~~~~
@@ -539,6 +552,12 @@ Dumps the layout of all memory zones::
 
    testpmd> dump_memzone
 
+dump socket memory
+~~~~~~~~~~~~~~~~~~
+
+Dumps the memory usage of all sockets::
+
+   testpmd> dump_socket_mem
 
 dump struct size
 ~~~~~~~~~~~~~~~~
@@ -712,6 +731,40 @@ Set the length of each segment of the TX-ONLY packets or length of packet for FL
    testpmd> set txpkts (x[,y]*)
 
 Where x[,y]* represents a CSV list of values, without white space.
+
+set txtimes
+~~~~~~~~~~~
+
+Configure the timing burst pattern for Tx only mode. This command enables
+the packet send scheduling on dynamic timestamp mbuf field and configures
+timing pattern in Tx only mode. In this mode, if scheduling is enabled
+application provides timestamps in the packets being sent. It is possible
+to configure delay (in unspecified device clock units) between bursts
+and between the packets within the burst::
+
+   testpmd> set txtimes (inter),(intra)
+
+where:
+
+* ``inter``  is the delay between the bursts in the device clock units.
+  If ``intra`` is zero, this is the time between the beginnings of the
+  first packets in the neighbour bursts, if ``intra`` is not zero,
+  ``inter`` specifies the time between the beginning of the first packet
+  of the current burst and the beginning of the last packet of the
+  previous burst. If ``inter`` parameter is zero the send scheduling
+  on timestamps is disabled (default).
+
+* ``intra`` is the delay between the packets within the burst specified
+  in the device clock units. The number of packets in the burst is defined
+  by regular burst setting. If ``intra`` parameter is zero no timestamps
+  provided in the packets excepting the first one in the burst.
+
+As the result the bursts of packet will be transmitted with specific
+delays between the packets within the burst and specific delay between
+the bursts. The rte_eth_read_clock() must be supported by the device(s)
+and is supposed to be engaged to get the current device clock value
+and provide the reference for the timestamps. If there is no supported
+rte_eth_read_clock() there will be no send scheduling provided on the port.
 
 set txsplit
 ~~~~~~~~~~~
@@ -2147,7 +2200,7 @@ port config - speed
 
 Set the speed and duplex mode for all ports or a specific port::
 
-   testpmd> port config (port_id|all) speed (10|100|1000|10000|25000|40000|50000|100000|auto) \
+   testpmd> port config (port_id|all) speed (10|100|1000|10000|25000|40000|50000|100000|200000|auto) \
             duplex (half|full|auto)
 
 port config - queues/descriptors
@@ -2193,12 +2246,14 @@ port config - RSS
 
 Set the RSS (Receive Side Scaling) mode on or off::
 
-   testpmd> port config all rss (all|default|ip|tcp|udp|sctp|ether|port|vxlan|geneve|nvgre|vxlan-gpe|none)
+   testpmd> port config all rss (all|default|eth|vlan|ip|tcp|udp|sctp|ether|port|vxlan|geneve|nvgre|vxlan-gpe|l2tpv3|esp|ah|pfcp|none)
 
 RSS is on by default.
 
-The ``all`` option is equivalent to ip|tcp|udp|sctp|ether.
+The ``all`` option is equivalent to eth|vlan|ip|tcp|udp|sctp|ether|l2tpv3|esp|ah|pfcp.
+
 The ``default`` option enables all supported RSS types reported by device info.
+
 The ``none`` option is equivalent to the ``--disable-rss`` command-line option.
 
 port config - RSS Reta
@@ -3098,13 +3153,6 @@ where:
 * ``red`` enable 1, disable 0 marking IP ecn for yellow marked packets with ecn of 2'b01  or 2'b10
   to ecn of 2'b11 when IP is caring TCP or SCTP
 
-Set port traffic management default hierarchy (softnic forwarding mode)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-set the traffic management default hierarchy on the port::
-
-   testpmd> set port tm hierarchy default (port_id)
-
 Filter Functions
 ----------------
 
@@ -3608,6 +3656,10 @@ following sections.
 
    flow dump {port_id} {output_file}
 
+- List and destroy aged flow rules::
+
+   flow aged {port_id} [destroy]
+
 Validating flow rules
 ~~~~~~~~~~~~~~~~~~~~~
 
@@ -3986,6 +4038,15 @@ This section lists supported pattern items and their attributes, if any.
 - ``l2tpv3oip``: match L2TPv3 over IP header.
 
   - ``session_id {unsigned}``: L2TPv3 over IP session identifier.
+
+- ``ah``: match AH header.
+
+  - ``spi {unsigned}``: security parameters index.
+
+- ``pfcp``: match PFCP header.
+
+  - ``s_field {unsigned}``: S field.
+  - ``seid {unsigned}``: session endpoint identifier.
 
 Actions list
 ^^^^^^^^^^^^
@@ -4486,6 +4547,64 @@ Otherwise, it will complain error occurred::
 
    Caught error type [...] ([...]): [...]
 
+Listing and destroying aged flow rules
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``flow aged`` simply lists aged flow rules be get from api ``rte_flow_get_aged_flows``,
+and ``destroy`` parameter can be used to destroy those flow rules in PMD.
+
+   flow aged {port_id} [destroy]
+
+Listing current aged flow rules::
+
+   testpmd> flow aged 0
+   Port 0 total aged flows: 0
+   testpmd> flow create 0 ingress pattern eth / ipv4 src is 2.2.2.14 / end
+      actions age timeout 5 / queue index 0 /  end
+   Flow rule #0 created
+   testpmd> flow create 0 ingress pattern eth / ipv4 src is 2.2.2.15 / end
+      actions age timeout 4 / queue index 0 /  end
+   Flow rule #1 created
+   testpmd> flow create 0 ingress pattern eth / ipv4 src is 2.2.2.16 / end
+      actions age timeout 2 / queue index 0 /  end
+   Flow rule #2 created
+   testpmd> flow create 0 ingress pattern eth / ipv4 src is 2.2.2.17 / end
+      actions age timeout 3 / queue index 0 /  end
+   Flow rule #3 created
+
+
+Aged Rules are simply list as command ``flow list {port_id}``, but strip the detail rule
+information, all the aged flows are sorted by the longest timeout time. For example, if
+those rules be configured in the same time, ID 2 will be the first aged out rule, the next
+will be ID 3, ID 1, ID 0::
+
+   testpmd> flow aged 0
+   Port 0 total aged flows: 4
+   ID      Group   Prio    Attr
+   2       0       0       i--
+   3       0       0       i--
+   1       0       0       i--
+   0       0       0       i--
+
+If attach ``destroy`` parameter, the command will destroy all the list aged flow rules.
+
+   testpmd> flow aged 0 destroy
+   Port 0 total aged flows: 4
+   ID      Group   Prio    Attr
+   2       0       0       i--
+   3       0       0       i--
+   1       0       0       i--
+   0       0       0       i--
+
+   Flow rule #2 destroyed
+   Flow rule #3 destroyed
+   Flow rule #1 destroyed
+   Flow rule #0 destroyed
+   4 flows be destroyed
+   testpmd> flow aged 0
+   Port 0 total aged flows: 0
+
+
 Sample QinQ flow rules
 ~~~~~~~~~~~~~~~~~~~~~~
 
@@ -4821,6 +4940,35 @@ ESP rules can be created by the following commands::
         queue index 3 / end
  testpmd> flow create 0 ingress pattern eth / ipv6 / udp / esp spi is 1 / end
         actions queue index 3 / end
+
+Sample AH rules
+~~~~~~~~~~~~~~~~
+
+AH rules can be created by the following commands::
+
+ testpmd> flow create 0 ingress pattern eth / ipv4 / ah spi is 1 / end actions
+        queue index 3 / end
+ testpmd> flow create 0 ingress pattern eth / ipv4 / udp / ah spi is 1 / end
+        actions queue index 3 / end
+ testpmd> flow create 0 ingress pattern eth / ipv6 / ah spi is 1 / end actions
+        queue index 3 / end
+ testpmd> flow create 0 ingress pattern eth / ipv6 / udp / ah spi is 1 / end
+        actions queue index 3 / end
+
+Sample PFCP rules
+~~~~~~~~~~~~~~~~~
+
+PFCP rules can be created by the following commands(s_field need to be 1
+if seid is set)::
+
+ testpmd> flow create 0 ingress pattern eth / ipv4 / pfcp s_field is 0 / end
+        actions queue index 3 / end
+ testpmd> flow create 0 ingress pattern eth / ipv4 / pfcp s_field is 1
+        seid is 1 / end actions queue index 3 / end
+ testpmd> flow create 0 ingress pattern eth / ipv6 / pfcp s_field is 0 / end
+        actions queue index 3 / end
+ testpmd> flow create 0 ingress pattern eth / ipv6 / pfcp s_field is 1
+        seid is 1 / end actions queue index 3 / end
 
 BPF Functions
 --------------

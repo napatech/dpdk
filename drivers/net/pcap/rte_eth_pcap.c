@@ -135,7 +135,7 @@ static struct rte_eth_link pmd_link = {
 		.link_autoneg = ETH_LINK_FIXED,
 };
 
-static int eth_pcap_logtype;
+RTE_LOG_REGISTER(eth_pcap_logtype, pmd.net.pcap, NOTICE);
 
 #define PMD_LOG(level, fmt, args...) \
 	rte_log(RTE_LOG_ ## level, eth_pcap_logtype, \
@@ -287,6 +287,8 @@ eth_null_rx(void *queue __rte_unused,
 	return 0;
 }
 
+#define NSEC_PER_SEC	1000000000L
+
 static inline void
 calculate_timestamp(struct timeval *ts) {
 	uint64_t cycles;
@@ -294,8 +296,14 @@ calculate_timestamp(struct timeval *ts) {
 
 	cycles = rte_get_timer_cycles() - start_cycles;
 	cur_time.tv_sec = cycles / hz;
-	cur_time.tv_usec = (cycles % hz) * 1e6 / hz;
-	timeradd(&start_time, &cur_time, ts);
+	cur_time.tv_usec = (cycles % hz) * NSEC_PER_SEC / hz;
+
+	ts->tv_sec = start_time.tv_sec + cur_time.tv_sec;
+	ts->tv_usec = start_time.tv_usec + cur_time.tv_usec;
+	if (ts->tv_usec >= NSEC_PER_SEC) {
+		ts->tv_usec -= NSEC_PER_SEC;
+		ts->tv_sec += 1;
+	}
 }
 
 /*
@@ -475,7 +483,8 @@ open_single_tx_pcap(const char *pcap_filename, pcap_dumper_t **dumper)
 	 * with pcap_dump_open(). We create big enough an Ethernet
 	 * pcap holder.
 	 */
-	tx_pcap = pcap_open_dead(DLT_EN10MB, RTE_ETH_PCAP_SNAPSHOT_LEN);
+	tx_pcap = pcap_open_dead_with_tstamp_precision(DLT_EN10MB,
+			RTE_ETH_PCAP_SNAPSHOT_LEN, PCAP_TSTAMP_PRECISION_NANO);
 	if (tx_pcap == NULL) {
 		PMD_LOG(ERR, "Couldn't create dead pcap");
 		return -1;
@@ -1579,10 +1588,3 @@ RTE_PMD_REGISTER_PARAM_STRING(net_pcap,
 	ETH_PCAP_IFACE_ARG "=<ifc> "
 	ETH_PCAP_PHY_MAC_ARG "=<int>"
 	ETH_PCAP_INFINITE_RX_ARG "=<0|1>");
-
-RTE_INIT(eth_pcap_init_log)
-{
-	eth_pcap_logtype = rte_log_register("pmd.net.pcap");
-	if (eth_pcap_logtype >= 0)
-		rte_log_set_level(eth_pcap_logtype, RTE_LOG_NOTICE);
-}

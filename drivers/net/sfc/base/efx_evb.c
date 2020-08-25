@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2018-2019 Solarflare Communications Inc.
- * All rights reserved.
+ * Copyright(c) 2019-2020 Xilinx, Inc.
+ * Copyright(c) 2018-2019 Solarflare Communications Inc.
  */
 
 #include "efx.h"
@@ -28,7 +28,7 @@ static const efx_evb_ops_t	__efx_evb_dummy_ops = {
 };
 #endif /* EFSYS_OPT_SIENA */
 
-#if EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD || EFSYS_OPT_MEDFORD2
+#if EFX_OPTS_EF10()
 static const efx_evb_ops_t	__efx_evb_ef10_ops = {
 	ef10_evb_init,			/* eeo_init */
 	ef10_evb_fini,			/* eeo_fini */
@@ -44,7 +44,7 @@ static const efx_evb_ops_t	__efx_evb_ef10_ops = {
 	ef10_evb_vport_reconfigure,	/* eeo_vport_reconfigure */
 	ef10_evb_vport_stats,		/* eeo_vport_stats */
 };
-#endif /* EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD || EFSYS_OPT_MEDFORD2 */
+#endif /* EFX_OPTS_EF10() */
 
 	__checkReturn	efx_rc_t
 efx_evb_init(

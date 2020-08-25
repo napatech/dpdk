@@ -44,10 +44,6 @@
 #include "nicvf_svf.h"
 #include "nicvf_logs.h"
 
-int nicvf_logtype_mbox;
-int nicvf_logtype_init;
-int nicvf_logtype_driver;
-
 static void nicvf_dev_stop(struct rte_eth_dev *dev);
 static void nicvf_dev_stop_cleanup(struct rte_eth_dev *dev, bool cleanup);
 static void nicvf_vf_stop(struct rte_eth_dev *dev, struct nicvf *nic,
@@ -55,20 +51,9 @@ static void nicvf_vf_stop(struct rte_eth_dev *dev, struct nicvf *nic,
 static int nicvf_vlan_offload_config(struct rte_eth_dev *dev, int mask);
 static int nicvf_vlan_offload_set(struct rte_eth_dev *dev, int mask);
 
-RTE_INIT(nicvf_init_log)
-{
-	nicvf_logtype_mbox = rte_log_register("pmd.net.thunderx.mbox");
-	if (nicvf_logtype_mbox >= 0)
-		rte_log_set_level(nicvf_logtype_mbox, RTE_LOG_NOTICE);
-
-	nicvf_logtype_init = rte_log_register("pmd.net.thunderx.init");
-	if (nicvf_logtype_init >= 0)
-		rte_log_set_level(nicvf_logtype_init, RTE_LOG_NOTICE);
-
-	nicvf_logtype_driver = rte_log_register("pmd.net.thunderx.driver");
-	if (nicvf_logtype_driver >= 0)
-		rte_log_set_level(nicvf_logtype_driver, RTE_LOG_NOTICE);
-}
+RTE_LOG_REGISTER(nicvf_logtype_mbox, pmd.net.thunderx.mbox, NOTICE);
+RTE_LOG_REGISTER(nicvf_logtype_init, pmd.net.thunderx.init, NOTICE);
+RTE_LOG_REGISTER(nicvf_logtype_driver, pmd.net.thunderx.driver, NOTICE);
 
 static void
 nicvf_link_status_update(struct nicvf *nic,
@@ -496,9 +481,10 @@ nicvf_dev_reta_query(struct rte_eth_dev *dev,
 	int ret, i, j;
 
 	if (reta_size != NIC_MAX_RSS_IDR_TBL_SIZE) {
-		RTE_LOG(ERR, PMD, "The size of hash lookup table configured "
-			"(%d) doesn't match the number hardware can supported "
-			"(%d)", reta_size, NIC_MAX_RSS_IDR_TBL_SIZE);
+		PMD_DRV_LOG(ERR,
+			    "The size of hash lookup table configured "
+			    "(%u) doesn't match the number hardware can supported "
+			    "(%u)", reta_size, NIC_MAX_RSS_IDR_TBL_SIZE);
 		return -EINVAL;
 	}
 
@@ -526,9 +512,9 @@ nicvf_dev_reta_update(struct rte_eth_dev *dev,
 	int ret, i, j;
 
 	if (reta_size != NIC_MAX_RSS_IDR_TBL_SIZE) {
-		RTE_LOG(ERR, PMD, "The size of hash lookup table configured "
-			"(%d) doesn't match the number hardware can supported "
-			"(%d)", reta_size, NIC_MAX_RSS_IDR_TBL_SIZE);
+		PMD_DRV_LOG(ERR, "The size of hash lookup table configured "
+			"(%u) doesn't match the number hardware can supported "
+			"(%u)", reta_size, NIC_MAX_RSS_IDR_TBL_SIZE);
 		return -EINVAL;
 	}
 
@@ -569,8 +555,8 @@ nicvf_dev_rss_hash_update(struct rte_eth_dev *dev,
 
 	if (rss_conf->rss_key &&
 		rss_conf->rss_key_len != RSS_HASH_KEY_BYTE_SIZE) {
-		RTE_LOG(ERR, PMD, "Hash key size mismatch %d",
-				rss_conf->rss_key_len);
+		PMD_DRV_LOG(ERR, "Hash key size mismatch %u",
+			    rss_conf->rss_key_len);
 		return -EINVAL;
 	}
 
@@ -1988,6 +1974,37 @@ nicvf_dev_configure(struct rte_eth_dev *dev)
 	return 0;
 }
 
+static int
+nicvf_dev_set_link_up(struct rte_eth_dev *dev)
+{
+	struct nicvf *nic = nicvf_pmd_priv(dev);
+	int rc, i;
+
+	rc = nicvf_mbox_set_link_up_down(nic, true);
+	if (rc)
+		goto done;
+
+	/* Start tx queues  */
+	for (i = 0; i < dev->data->nb_tx_queues; i++)
+		nicvf_dev_tx_queue_start(dev, i);
+
+done:
+	return rc;
+}
+
+static int
+nicvf_dev_set_link_down(struct rte_eth_dev *dev)
+{
+	struct nicvf *nic = nicvf_pmd_priv(dev);
+	int i;
+
+	/* Stop tx queues  */
+	for (i = 0; i < dev->data->nb_tx_queues; i++)
+		nicvf_dev_tx_queue_stop(dev, i);
+
+	return nicvf_mbox_set_link_up_down(nic, false);
+}
+
 /* Initialize and register driver with DPDK Application */
 static const struct eth_dev_ops nicvf_eth_dev_ops = {
 	.dev_configure            = nicvf_dev_configure,
@@ -2015,6 +2032,8 @@ static const struct eth_dev_ops nicvf_eth_dev_ops = {
 	.rx_queue_count           = nicvf_dev_rx_queue_count,
 	.tx_queue_setup           = nicvf_dev_tx_queue_setup,
 	.tx_queue_release         = nicvf_dev_tx_queue_release,
+	.dev_set_link_up          = nicvf_dev_set_link_up,
+	.dev_set_link_down        = nicvf_dev_set_link_down,
 	.get_reg                  = nicvf_dev_get_regs,
 };
 

@@ -27,8 +27,8 @@ General Guidelines
 #. The removal of symbols is considered an :ref:`ABI breakage <abi_breakages>`,
    once approved these will form part of the next ABI version.
 #. Libraries or APIs marked as :ref:`experimental <experimental_apis>` may
-   change without constraint, as they are not considered part of an ABI version.
-   Experimental libraries have the major ABI version ``0``.
+   be changed or removed without prior notice, as they are not considered part
+   of an ABI version.
 #. Updates to the :ref:`minimum hardware requirements <hw_rqmts>`, which drop
    support for hardware which was previously supported, should be treated as an
    ABI change.
@@ -39,7 +39,10 @@ General Guidelines
    releases, over a number of release cycles. This change begins with
    maintaining ABI stability through one year of DPDK releases starting from
    DPDK 19.11. This policy will be reviewed in 2020, with intention of
-   lengthening the stability period.
+   lengthening the stability period. Additional implementation detail can be
+   found in the :ref:`release notes <20_02_abi_changes>`.
+   Please note that this policy does not currently apply to the
+   :doc:`Windows build <../windows_gsg/intro>`.
 
 What is an ABI?
 ~~~~~~~~~~~~~~~
@@ -159,6 +162,11 @@ The requirements for changing the ABI are:
      ``experimental``, as described in the section on :ref:`Experimental APIs
      and Libraries <experimental_apis>`.
 
+   - In situations in which an ``experimental`` symbol has been stable for some
+     time. When promoting the symbol to become part of the next ABI version, the
+     maintainer may choose to provide an alias to the ``experimental`` tag, so
+     as not to break consuming applications.
+
 #. If a newly proposed API functionally replaces an existing one, when the new
    API becomes non-experimental, then the old one is marked with
    ``__rte_deprecated``.
@@ -220,19 +228,18 @@ Examples of ABI Changes
 The following are examples of allowable ABI changes occurring between
 declarations of major ABI versions.
 
-* DPDK 19.11 release, defines the function ``rte_foo()``, and ``rte_foo()``
-  as part of the major ABI version ``20``.
+* DPDK 19.11 release defines the function ``rte_foo()`` ; ``rte_foo()``
+  is part of the major ABI version ``20``.
 
-* DPDK 20.02 release defines a new function ``rte_foo(uint8_t bar)``, and
-  this is not a problem as long as the symbol ``rte_foo@DPDK20`` is
+* DPDK 20.02 release defines a new function ``rte_foo(uint8_t bar)``.
+  This is not a problem as long as the symbol ``rte_foo@DPDK20`` is
   preserved through :ref:`abi_versioning`.
 
   - The new function may be marked with the ``__rte_experimental`` tag for a
     number of releases, as described in the section :ref:`experimental_apis`.
 
-  - Once ``rte_foo(uint8_t bar)`` becomes non-experimental ``rte_foo()`` is then
-    declared as ``__rte_depreciated``, with an associated deprecation notice
-    provided.
+  - Once ``rte_foo(uint8_t bar)`` becomes non-experimental, ``rte_foo()`` is
+    declared as ``__rte_deprecated`` and an deprecation notice is provided.
 
 * DPDK 19.11 is not re-released to include ``rte_foo(uint8_t bar)``, the new
   version of ``rte_foo`` only exists from DPDK 20.02 onwards as described in the
@@ -242,13 +249,13 @@ declarations of major ABI versions.
   rte_baz()``. This function may or may not exist in the DPDK 20.05 release.
 
 * An application ``dPacket`` wishes to use ``rte_foo(uint8_t bar)``, before the
-  declaration of the DPDK ``21`` major API version. The application can only
+  declaration of the DPDK ``21`` major ABI version. The application can only
   ensure its runtime dependencies are met by specifying ``DPDK (>= 20.2)`` as
-  an explicit package dependency, as the soname only may only indicate the
+  an explicit package dependency, as the soname can only indicate the
   supported major ABI version.
 
 * At the release of DPDK 20.11, the function ``rte_foo(uint8_t bar)`` becomes
-  formally part of then new major ABI version DPDK 21.0 and ``rte_foo()`` may be
+  formally part of then new major ABI version DPDK ``21`` and ``rte_foo()`` may be
   removed.
 
 .. _deprecation_notices:
@@ -290,7 +297,7 @@ APIs
 ~~~~
 
 APIs marked as ``experimental`` are not considered part of an ABI version and
-may change without warning at any time. Since changes to APIs are most likely
+may be changed or removed without prior notice. Since changes to APIs are most likely
 immediately after their introduction, as users begin to take advantage of those
 new APIs and start finding issues with them, new DPDK APIs will be automatically
 marked as ``experimental`` to allow for a period of stabilization before they
@@ -317,11 +324,14 @@ not required. Though, an API should remain in experimental state for at least
 one release. Thereafter, the normal process of posting patch for review to
 mailing list can be followed.
 
+After the experimental tag has been formally removed, a tree/sub-tree maintainer
+may choose to offer an alias to the experimental tag so as not to break
+applications using the symbol. The alias is then dropped at the declaration of
+next major ABI version.
+
 Libraries
 ~~~~~~~~~
 
 Libraries marked as ``experimental`` are entirely not considered part of an ABI
-version, and may change without warning at any time. Experimental libraries
-always have a major version of ``0`` to indicate they exist outside of
-:ref:`abi_versioning` , with the minor version incremented with each ABI change
-to library.
+version.
+All functions in such libraries may be changed or removed without prior notice.

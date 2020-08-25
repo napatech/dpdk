@@ -19,7 +19,7 @@
 #include "rte_flow.h"
 
 /* Mbuf dynamic field name for metadata. */
-int rte_flow_dynf_metadata_offs = -1;
+int32_t rte_flow_dynf_metadata_offs = -1;
 
 /* Mbuf dynamic field flag bit number for metadata. */
 uint64_t rte_flow_dynf_metadata_mask;
@@ -95,6 +95,8 @@ static const struct rte_flow_desc_data rte_flow_desc_item[] = {
 	MK_FLOW_ITEM(AH, sizeof(struct rte_flow_item_ah)),
 	MK_FLOW_ITEM(HIGIG2, sizeof(struct rte_flow_item_higig2_hdr)),
 	MK_FLOW_ITEM(L2TPV3OIP, sizeof(struct rte_flow_item_l2tpv3oip)),
+	MK_FLOW_ITEM(PFCP, sizeof(struct rte_flow_item_pfcp)),
+	MK_FLOW_ITEM(ECPRI, sizeof(struct rte_flow_item_ecpri)),
 };
 
 /** Generate flow_action[] entry. */
@@ -172,6 +174,7 @@ static const struct rte_flow_desc_data rte_flow_desc_action[] = {
 	MK_FLOW_ACTION(SET_META, sizeof(struct rte_flow_action_set_meta)),
 	MK_FLOW_ACTION(SET_IPV4_DSCP, sizeof(struct rte_flow_action_set_dscp)),
 	MK_FLOW_ACTION(SET_IPV6_DSCP, sizeof(struct rte_flow_action_set_dscp)),
+	MK_FLOW_ACTION(AGE, sizeof(struct rte_flow_action_age)),
 };
 
 int
@@ -1231,4 +1234,21 @@ rte_flow_dev_dump(uint16_t port_id, FILE *file, struct rte_flow_error *error)
 	return rte_flow_error_set(error, ENOSYS,
 				  RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
 				  NULL, rte_strerror(ENOSYS));
+}
+
+int
+rte_flow_get_aged_flows(uint16_t port_id, void **contexts,
+		    uint32_t nb_contexts, struct rte_flow_error *error)
+{
+	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
+	const struct rte_flow_ops *ops = rte_flow_ops_get(port_id, error);
+
+	if (unlikely(!ops))
+		return -rte_errno;
+	if (likely(!!ops->get_aged_flows))
+		return flow_err(port_id, ops->get_aged_flows(dev, contexts,
+				nb_contexts, error), error);
+	return rte_flow_error_set(error, ENOTSUP,
+				  RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+				  NULL, rte_strerror(ENOTSUP));
 }

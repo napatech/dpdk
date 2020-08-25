@@ -66,7 +66,7 @@ struct port_stats{
 	unsigned rx;
 	unsigned tx;
 	unsigned drop;
-} __attribute__((aligned(RTE_CACHE_LINE_SIZE / 2)));
+} __rte_aligned(RTE_CACHE_LINE_SIZE / 2);
 
 static int proc_id = -1;
 static unsigned num_procs = 0;
@@ -389,7 +389,7 @@ check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
 					"Port%d Link Up. Speed %u Mbps - %s\n",
 						portid, link.link_speed,
 				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
-					("full-duplex") : ("half-duplex\n"));
+					("full-duplex") : ("half-duplex"));
 				else
 					printf("Port %d Link Down\n", portid);
 				continue;

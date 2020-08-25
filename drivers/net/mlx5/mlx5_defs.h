@@ -143,6 +143,9 @@
 /* Log 2 of the default number of strides per WQE for Multi-Packet RQ. */
 #define MLX5_MPRQ_STRIDE_NUM_N 6U
 
+/* Log 2 of the default size of a stride per WQE for Multi-Packet RQ. */
+#define MLX5_MPRQ_STRIDE_SIZE_N 11U
+
 /* Two-byte shift is disabled for Multi-Packet RQ. */
 #define MLX5_MPRQ_TWO_BYTE_SHIFT 0
 
@@ -168,6 +171,17 @@
 #define MLX5_TXDB_NCACHED 1
 #define MLX5_TXDB_HEURISTIC 2
 
+/* Tx accurate scheduling on timestamps parameters. */
+#define MLX5_TXPP_WAIT_INIT_TS 1000ul /* How long to wait timestamp. */
+#define MLX5_TXPP_CLKQ_SIZE 1
+#define MLX5_TXPP_REARM	((1UL << MLX5_WQ_INDEX_WIDTH) / 4)
+#define MLX5_TXPP_REARM_SQ_SIZE (((1UL << MLX5_CQ_INDEX_WIDTH) / \
+				  MLX5_TXPP_REARM) * 2)
+#define MLX5_TXPP_REARM_CQ_SIZE (MLX5_TXPP_REARM_SQ_SIZE / 2)
+/* The minimal size test packet to put into one WQE, padded by HW. */
+#define MLX5_TXPP_TEST_PKT_SIZE (sizeof(struct rte_ether_hdr) +	\
+				 sizeof(struct rte_ipv4_hdr))
+
 /* Size of the simple hash table for metadata register table. */
 #define MLX5_FLOW_MREG_HTABLE_SZ 4096
 #define MLX5_FLOW_MREG_HNAME "MARK_COPY_TABLE"
@@ -175,11 +189,20 @@
 
 /* Hairpin TX/RX queue configuration parameters. */
 #define MLX5_HAIRPIN_QUEUE_STRIDE 6
-#define MLX5_HAIRPIN_JUMBO_LOG_SIZE (15 + 2)
+#define MLX5_HAIRPIN_JUMBO_LOG_SIZE (14 + 2)
 
 /* Definition of static_assert found in /usr/include/assert.h */
 #ifndef HAVE_STATIC_ASSERT
 #define static_assert _Static_assert
 #endif
+
+/*
+ * Defines the amount of retries to allocate the first UAR in the page.
+ * OFED 5.0.x and Upstream rdma_core before v29 returned the NULL as
+ * UAR base address if UAR was not the first object in the UAR page.
+ * It caused the PMD failure and we should try to get another UAR
+ * till we get the first one with non-NULL base address returned.
+ */
+#define MLX5_ALLOC_UAR_RETRY 32
 
 #endif /* RTE_PMD_MLX5_DEFS_H_ */

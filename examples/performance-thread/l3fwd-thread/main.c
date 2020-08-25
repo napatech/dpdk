@@ -331,7 +331,7 @@ struct ipv4_5tuple {
 	uint16_t port_dst;
 	uint16_t port_src;
 	uint8_t  proto;
-} __attribute__((__packed__));
+} __rte_packed;
 
 union ipv4_5tuple_host {
 	struct {
@@ -354,7 +354,7 @@ struct ipv6_5tuple {
 	uint16_t port_dst;
 	uint16_t port_src;
 	uint8_t  proto;
-} __attribute__((__packed__));
+} __rte_packed;
 
 union ipv6_5tuple_host {
 	struct {
@@ -869,7 +869,7 @@ get_ipv6_dst_port(void *ipv6_hdr,  uint16_t portid,
 #endif
 
 static inline void l3fwd_simple_forward(struct rte_mbuf *m, uint16_t portid)
-		__attribute__((unused));
+		__rte_unused;
 
 #if ((APP_LOOKUP_METHOD == APP_LOOKUP_EXACT_MATCH) && \
 	(ENABLE_MULTI_BUFFER_OPTIMIZE == 1))
@@ -1120,7 +1120,7 @@ simple_ipv6_fwd_8pkts(struct rte_mbuf *m[8], uint16_t portid)
 	struct rte_ether_hdr *eth_hdr[8];
 	union ipv6_5tuple_host key[8];
 
-	__attribute__((unused)) struct rte_ipv6_hdr *ipv6_hdr[8];
+	__rte_unused struct rte_ipv6_hdr *ipv6_hdr[8];
 
 	eth_hdr[0] = rte_pktmbuf_mtod(m[0], struct rte_ether_hdr *);
 	eth_hdr[1] = rte_pktmbuf_mtod(m[1], struct rte_ether_hdr *);
@@ -1877,7 +1877,7 @@ process_burst(struct rte_mbuf *pkts_burst[MAX_PKT_BURST], int nb_rx,
 /*
  * CPU-load stats collector
  */
-static int __attribute__((noreturn))
+static int __rte_noreturn
 cpu_load_collector(__rte_unused void *arg) {
 	unsigned i, j, k;
 	uint64_t hits;
@@ -2299,7 +2299,7 @@ sched_spawner(__rte_unused void *arg) {
 }
 
 /* main processing loop */
-static int __attribute__((noreturn))
+static int __rte_noreturn
 pthread_tx(void *dummy)
 {
 	struct rte_mbuf *pkts_burst[MAX_PKT_BURST];
@@ -2681,10 +2681,7 @@ parse_portmask(const char *portmask)
 	/* parse hexadecimal string */
 	pm = strtoul(portmask, &end, 16);
 	if ((portmask[0] == '\0') || (end == NULL) || (*end != '\0'))
-		return -1;
-
-	if (pm == 0)
-		return -1;
+		return 0;
 
 	return pm;
 }
@@ -3457,7 +3454,7 @@ check_all_ports_link_status(uint32_t port_mask)
 					"Port%d Link Up. Speed %u Mbps - %s\n",
 						portid, link.link_speed,
 				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
-					("full-duplex") : ("half-duplex\n"));
+					("full-duplex") : ("half-duplex"));
 				else
 					printf("Port %d Link Down\n", portid);
 				continue;

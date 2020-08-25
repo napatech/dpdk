@@ -179,9 +179,7 @@ struct fwd_engine * fwd_engines[] = {
 	&csum_fwd_engine,
 	&icmp_echo_engine,
 	&noisy_vnf_engine,
-#if defined RTE_LIBRTE_PMD_SOFTNIC
-	&softnic_fwd_engine,
-#endif
+	&five_tuple_swap_fwd_engine,
 #ifdef RTE_LIBRTE_IEEE1588
 	&ieee1588_fwd_engine,
 #endif
@@ -222,6 +220,12 @@ enum tx_pkt_split tx_pkt_split = TX_PKT_SPLIT_OFF;
 
 uint8_t txonly_multi_flow;
 /**< Whether multiple flows are generated in TXONLY mode. */
+
+uint32_t tx_pkt_times_inter;
+/**< Timings for send scheduling in TXONLY mode, time between bursts. */
+
+uint32_t tx_pkt_times_intra;
+/**< Timings for send scheduling in TXONLY mode, time between packets. */
 
 uint16_t nb_pkt_per_burst = DEF_PKT_BURST; /**< Number of packets per burst. */
 uint16_t mb_mempool_cache = DEF_MBUF_CACHE; /**< Size of mbuf mempool cache. */
@@ -375,6 +379,7 @@ static const char * const eth_event_desc[] = {
 	[RTE_ETH_EVENT_INTR_RMV] = "device removal",
 	[RTE_ETH_EVENT_NEW] = "device probed",
 	[RTE_ETH_EVENT_DESTROY] = "device released",
+	[RTE_ETH_EVENT_FLOW_AGED] = "flow aged",
 	[RTE_ETH_EVENT_MAX] = NULL,
 };
 
@@ -388,7 +393,8 @@ uint32_t event_print_mask = (UINT32_C(1) << RTE_ETH_EVENT_UNKNOWN) |
 			    (UINT32_C(1) << RTE_ETH_EVENT_INTR_RESET) |
 			    (UINT32_C(1) << RTE_ETH_EVENT_IPSEC) |
 			    (UINT32_C(1) << RTE_ETH_EVENT_MACSEC) |
-			    (UINT32_C(1) << RTE_ETH_EVENT_INTR_RMV);
+			    (UINT32_C(1) << RTE_ETH_EVENT_INTR_RMV) |
+			    (UINT32_C(1) << RTE_ETH_EVENT_FLOW_AGED);
 /*
  * Decide if all memory are locked for performance.
  */
@@ -481,6 +487,11 @@ uint8_t bitrate_enabled;
 
 struct gro_status gro_ports[RTE_MAX_ETHPORTS];
 uint8_t gro_flush_cycles = GRO_DEFAULT_FLUSH_CYCLES;
+
+/*
+ * hexadecimal bitmask of RX mq mode can be enabled.
+ */
+enum rte_eth_rx_mq_mode rx_mq_mode = ETH_MQ_RX_VMDQ_DCB_RSS;
 
 /* Forward function declarations */
 static void setup_attached_port(portid_t pi);
@@ -1156,6 +1167,177 @@ check_nb_txq(queueid_t txq)
 }
 
 /*
+ * Get the allowed maximum number of RXDs of every rx queue.
+ * *pid return the port id which has minimal value of
+ * max_rxd in all queues of all ports.
+ */
+static uint16_t
+get_allowed_max_nb_rxd(portid_t *pid)
+{
+	uint16_t allowed_max_rxd = UINT16_MAX;
+	portid_t pi;
+	struct rte_eth_dev_info dev_info;
+
+	RTE_ETH_FOREACH_DEV(pi) {
+		if (eth_dev_info_get_print_err(pi, &dev_info) != 0)
+			continue;
+
+		if (dev_info.rx_desc_lim.nb_max < allowed_max_rxd) {
+			allowed_max_rxd = dev_info.rx_desc_lim.nb_max;
+			*pid = pi;
+		}
+	}
+	return allowed_max_rxd;
+}
+
+/*
+ * Get the allowed minimal number of RXDs of every rx queue.
+ * *pid return the port id which has minimal value of
+ * min_rxd in all queues of all ports.
+ */
+static uint16_t
+get_allowed_min_nb_rxd(portid_t *pid)
+{
+	uint16_t allowed_min_rxd = 0;
+	portid_t pi;
+	struct rte_eth_dev_info dev_info;
+
+	RTE_ETH_FOREACH_DEV(pi) {
+		if (eth_dev_info_get_print_err(pi, &dev_info) != 0)
+			continue;
+
+		if (dev_info.rx_desc_lim.nb_min > allowed_min_rxd) {
+			allowed_min_rxd = dev_info.rx_desc_lim.nb_min;
+			*pid = pi;
+		}
+	}
+
+	return allowed_min_rxd;
+}
+
+/*
+ * Check input rxd is valid or not.
+ * If input rxd is not greater than any of maximum number
+ * of RXDs of every Rx queues and is not less than any of
+ * minimal number of RXDs of every Rx queues, it is valid.
+ * if valid, return 0, else return -1
+ */
+int
+check_nb_rxd(queueid_t rxd)
+{
+	uint16_t allowed_max_rxd;
+	uint16_t allowed_min_rxd;
+	portid_t pid = 0;
+
+	allowed_max_rxd = get_allowed_max_nb_rxd(&pid);
+	if (rxd > allowed_max_rxd) {
+		printf("Fail: input rxd (%u) can't be greater "
+		       "than max_rxds (%u) of port %u\n",
+		       rxd,
+		       allowed_max_rxd,
+		       pid);
+		return -1;
+	}
+
+	allowed_min_rxd = get_allowed_min_nb_rxd(&pid);
+	if (rxd < allowed_min_rxd) {
+		printf("Fail: input rxd (%u) can't be less "
+		       "than min_rxds (%u) of port %u\n",
+		       rxd,
+		       allowed_min_rxd,
+		       pid);
+		return -1;
+	}
+
+	return 0;
+}
+
+/*
+ * Get the allowed maximum number of TXDs of every rx queues.
+ * *pid return the port id which has minimal value of
+ * max_txd in every tx queue.
+ */
+static uint16_t
+get_allowed_max_nb_txd(portid_t *pid)
+{
+	uint16_t allowed_max_txd = UINT16_MAX;
+	portid_t pi;
+	struct rte_eth_dev_info dev_info;
+
+	RTE_ETH_FOREACH_DEV(pi) {
+		if (eth_dev_info_get_print_err(pi, &dev_info) != 0)
+			continue;
+
+		if (dev_info.tx_desc_lim.nb_max < allowed_max_txd) {
+			allowed_max_txd = dev_info.tx_desc_lim.nb_max;
+			*pid = pi;
+		}
+	}
+	return allowed_max_txd;
+}
+
+/*
+ * Get the allowed maximum number of TXDs of every tx queues.
+ * *pid return the port id which has minimal value of
+ * min_txd in every tx queue.
+ */
+static uint16_t
+get_allowed_min_nb_txd(portid_t *pid)
+{
+	uint16_t allowed_min_txd = 0;
+	portid_t pi;
+	struct rte_eth_dev_info dev_info;
+
+	RTE_ETH_FOREACH_DEV(pi) {
+		if (eth_dev_info_get_print_err(pi, &dev_info) != 0)
+			continue;
+
+		if (dev_info.tx_desc_lim.nb_min > allowed_min_txd) {
+			allowed_min_txd = dev_info.tx_desc_lim.nb_min;
+			*pid = pi;
+		}
+	}
+
+	return allowed_min_txd;
+}
+
+/*
+ * Check input txd is valid or not.
+ * If input txd is not greater than any of maximum number
+ * of TXDs of every Rx queues, it is valid.
+ * if valid, return 0, else return -1
+ */
+int
+check_nb_txd(queueid_t txd)
+{
+	uint16_t allowed_max_txd;
+	uint16_t allowed_min_txd;
+	portid_t pid = 0;
+
+	allowed_max_txd = get_allowed_max_nb_txd(&pid);
+	if (txd > allowed_max_txd) {
+		printf("Fail: input txd (%u) can't be greater "
+		       "than max_txds (%u) of port %u\n",
+		       txd,
+		       allowed_max_txd,
+		       pid);
+		return -1;
+	}
+
+	allowed_min_txd = get_allowed_min_nb_txd(&pid);
+	if (txd < allowed_min_txd) {
+		printf("Fail: input txd (%u) can't be less "
+		       "than min_txds (%u) of port %u\n",
+		       txd,
+		       allowed_min_txd,
+		       pid);
+		return -1;
+	}
+	return 0;
+}
+
+
+/*
  * Get the allowed maximum number of hairpin queues.
  * *pid return the port id which has minimal value of
  * max_hairpin_queues in all ports.
@@ -1383,19 +1565,6 @@ init_config(void)
 					"rte_gro_ctx_create() failed\n");
 		}
 	}
-
-#if defined RTE_LIBRTE_PMD_SOFTNIC
-	if (strcmp(cur_fwd_eng->fwd_mode_name, "softnic") == 0) {
-		RTE_ETH_FOREACH_DEV(pid) {
-			port = &ports[pid];
-			const char *driver = port->dev_info.driver_name;
-
-			if (strcmp(driver, "net_softnic") == 0)
-				port->softport.fwd_lcore_arg = fwd_lcores;
-		}
-	}
-#endif
-
 }
 
 
@@ -1514,57 +1683,68 @@ init_fwd_streams(void)
 static void
 pkt_burst_stats_display(const char *rx_tx, struct pkt_burst_stats *pbs)
 {
-	unsigned int total_burst;
-	unsigned int nb_burst;
-	unsigned int burst_stats[3];
-	uint16_t pktnb_stats[3];
+	uint64_t total_burst, sburst;
+	uint64_t nb_burst;
+	uint64_t burst_stats[4];
+	uint16_t pktnb_stats[4];
 	uint16_t nb_pkt;
-	int burst_percent[3];
+	int burst_percent[4], sburstp;
+	int i;
 
 	/*
 	 * First compute the total number of packet bursts and the
 	 * two highest numbers of bursts of the same number of packets.
 	 */
-	total_burst = 0;
-	burst_stats[0] = burst_stats[1] = burst_stats[2] = 0;
-	pktnb_stats[0] = pktnb_stats[1] = pktnb_stats[2] = 0;
-	for (nb_pkt = 0; nb_pkt < MAX_PKT_BURST; nb_pkt++) {
+	memset(&burst_stats, 0x0, sizeof(burst_stats));
+	memset(&pktnb_stats, 0x0, sizeof(pktnb_stats));
+
+	/* Show stats for 0 burst size always */
+	total_burst = pbs->pkt_burst_spread[0];
+	burst_stats[0] = pbs->pkt_burst_spread[0];
+	pktnb_stats[0] = 0;
+
+	/* Find the next 2 burst sizes with highest occurrences. */
+	for (nb_pkt = 1; nb_pkt < MAX_PKT_BURST; nb_pkt++) {
 		nb_burst = pbs->pkt_burst_spread[nb_pkt];
+
 		if (nb_burst == 0)
 			continue;
+
 		total_burst += nb_burst;
-		if (nb_burst > burst_stats[0]) {
-			burst_stats[1] = burst_stats[0];
-			pktnb_stats[1] = pktnb_stats[0];
-			burst_stats[0] = nb_burst;
-			pktnb_stats[0] = nb_pkt;
-		} else if (nb_burst > burst_stats[1]) {
+
+		if (nb_burst > burst_stats[1]) {
+			burst_stats[2] = burst_stats[1];
+			pktnb_stats[2] = pktnb_stats[1];
 			burst_stats[1] = nb_burst;
 			pktnb_stats[1] = nb_pkt;
+		} else if (nb_burst > burst_stats[2]) {
+			burst_stats[2] = nb_burst;
+			pktnb_stats[2] = nb_pkt;
 		}
 	}
 	if (total_burst == 0)
 		return;
-	burst_percent[0] = (burst_stats[0] * 100) / total_burst;
-	printf("  %s-bursts : %u [%d%% of %d pkts", rx_tx, total_burst,
-	       burst_percent[0], (int) pktnb_stats[0]);
-	if (burst_stats[0] == total_burst) {
-		printf("]\n");
-		return;
+
+	printf("  %s-bursts : %"PRIu64" [", rx_tx, total_burst);
+	for (i = 0, sburst = 0, sburstp = 0; i < 4; i++) {
+		if (i == 3) {
+			printf("%d%% of other]\n", 100 - sburstp);
+			return;
+		}
+
+		sburst += burst_stats[i];
+		if (sburst == total_burst) {
+			printf("%d%% of %d pkts]\n",
+				100 - sburstp, (int) pktnb_stats[i]);
+			return;
+		}
+
+		burst_percent[i] =
+			(double)burst_stats[i] / total_burst * 100;
+		printf("%d%% of %d pkts + ",
+			burst_percent[i], (int) pktnb_stats[i]);
+		sburstp += burst_percent[i];
 	}
-	if (burst_stats[0] + burst_stats[1] == total_burst) {
-		printf(" + %d%% of %d pkts]\n",
-		       100 - burst_percent[0], pktnb_stats[1]);
-		return;
-	}
-	burst_percent[1] = (burst_stats[1] * 100) / total_burst;
-	burst_percent[2] = 100 - (burst_percent[0] + burst_percent[1]);
-	if ((burst_percent[1] == 0) || (burst_percent[2] == 0)) {
-		printf(" + %d%% of others]\n", 100 - burst_percent[0]);
-		return;
-	}
-	printf(" + %d%% of %d pkts + %d%% of others]\n",
-	       burst_percent[1], (int) pktnb_stats[1], burst_percent[2]);
 }
 #endif /* RTE_TEST_PMD_RECORD_BURST_STATS */
 
@@ -1782,11 +1962,22 @@ fwd_stats_display(void)
 	       "%s\n",
 	       acc_stats_border, acc_stats_border);
 #ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
-	if (total_recv > 0)
-		printf("\n  CPU cycles/packet=%u (total cycles="
-		       "%"PRIu64" / total RX packets=%"PRIu64")\n",
-		       (unsigned int)(fwd_cycles / total_recv),
-		       fwd_cycles, total_recv);
+#define CYC_PER_MHZ 1E6
+	if (total_recv > 0 || total_xmit > 0) {
+		uint64_t total_pkts = 0;
+		if (strcmp(cur_fwd_eng->fwd_mode_name, "txonly") == 0 ||
+		    strcmp(cur_fwd_eng->fwd_mode_name, "flowgen") == 0)
+			total_pkts = total_xmit;
+		else
+			total_pkts = total_recv;
+
+		printf("\n  CPU cycles/packet=%.2F (total cycles="
+		       "%"PRIu64" / total %s packets=%"PRIu64") at %"PRIu64
+		       " MHz Clock\n",
+		       (double) fwd_cycles / total_pkts,
+		       fwd_cycles, cur_fwd_eng->fwd_mode_name, total_pkts,
+		       (uint64_t)(rte_get_tsc_hz() / CYC_PER_MHZ));
+	}
 #endif
 }
 
@@ -2834,7 +3025,7 @@ check_all_ports_link_status(uint32_t port_mask)
 					"Port%d Link Up. speed %u Mbps- %s\n",
 					portid, link.link_speed,
 				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
-					("full-duplex") : ("half-duplex\n"));
+					("full-duplex") : ("half-duplex"));
 				else
 					printf("Port %d Link Down\n", portid);
 				continue;
@@ -3166,7 +3357,9 @@ init_port_config(void)
 
 		if (port->dcb_flag == 0) {
 			if( port->dev_conf.rx_adv_conf.rss_conf.rss_hf != 0)
-				port->dev_conf.rxmode.mq_mode = ETH_MQ_RX_RSS;
+				port->dev_conf.rxmode.mq_mode =
+					(enum rte_eth_rx_mq_mode)
+						(rx_mq_mode & ETH_MQ_RX_RSS);
 			else
 				port->dev_conf.rxmode.mq_mode = ETH_MQ_RX_NONE;
 		}
@@ -3267,13 +3460,17 @@ get_eth_dcb_conf(portid_t pid, struct rte_eth_conf *eth_conf,
 		}
 
 		/* set DCB mode of RX and TX of multiple queues */
-		eth_conf->rxmode.mq_mode = ETH_MQ_RX_VMDQ_DCB;
+		eth_conf->rxmode.mq_mode =
+				(enum rte_eth_rx_mq_mode)
+					(rx_mq_mode & ETH_MQ_RX_VMDQ_DCB);
 		eth_conf->txmode.mq_mode = ETH_MQ_TX_VMDQ_DCB;
 	} else {
 		struct rte_eth_dcb_rx_conf *rx_conf =
 				&eth_conf->rx_adv_conf.dcb_rx_conf;
 		struct rte_eth_dcb_tx_conf *tx_conf =
 				&eth_conf->tx_adv_conf.dcb_tx_conf;
+
+		memset(&rss_conf, 0, sizeof(struct rte_eth_rss_conf));
 
 		rc = rte_eth_dev_rss_hash_conf_get(pid, &rss_conf);
 		if (rc != 0)
@@ -3287,7 +3484,9 @@ get_eth_dcb_conf(portid_t pid, struct rte_eth_conf *eth_conf,
 			tx_conf->dcb_tc[i] = i % num_tcs;
 		}
 
-		eth_conf->rxmode.mq_mode = ETH_MQ_RX_DCB_RSS;
+		eth_conf->rxmode.mq_mode =
+				(enum rte_eth_rx_mq_mode)
+					(rx_mq_mode & ETH_MQ_RX_DCB_RSS);
 		eth_conf->rx_adv_conf.rss_conf = rss_conf;
 		eth_conf->txmode.mq_mode = ETH_MQ_TX_DCB;
 	}

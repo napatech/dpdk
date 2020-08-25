@@ -314,6 +314,10 @@ get_flexi_cipher_type(enum rte_crypto_cipher_algorithm algo, bool *is_aes)
 		type = CIPHER_AES_CBC;
 		*is_aes = true;
 		break;
+	case RTE_CRYPTO_CIPHER_3DES_CBC:
+		type = CIPHER_3DES_CBC;
+		*is_aes = false;
+		break;
 	default:
 		type = CIPHER_INVALID;
 		NITROX_LOG(ERR, "Algorithm not supported %d\n", algo);
@@ -683,7 +687,8 @@ nitrox_sym_pmd_create(struct nitrox_device *ndev)
 	struct rte_cryptodev *cdev;
 
 	rte_pci_device_name(&ndev->pdev->addr, name, sizeof(name));
-	snprintf(name + strlen(name), RTE_CRYPTODEV_NAME_MAX_LEN, "_n5sym");
+	snprintf(name + strlen(name), RTE_CRYPTODEV_NAME_MAX_LEN - strlen(name),
+		 "_n5sym");
 	ndev->rte_sym_dev.driver = &nitrox_rte_sym_drv;
 	ndev->rte_sym_dev.numa_node = ndev->pdev->device.numa_node;
 	ndev->rte_sym_dev.devargs = NULL;

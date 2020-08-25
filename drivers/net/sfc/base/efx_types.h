@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2007-2018 Solarflare Communications Inc.
- * All rights reserved.
+ * Copyright(c) 2019-2020 Xilinx, Inc.
+ * Copyright(c) 2007-2019 Solarflare Communications Inc.
  *
  * Ackowledgement to Fen Systems Ltd.
  */
@@ -10,6 +10,7 @@
 #define	_SYS_EFX_TYPES_H
 
 #include "efsys.h"
+#include "efx_annote.h"
 
 #ifdef	__cplusplus
 extern "C" {

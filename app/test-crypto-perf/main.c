@@ -39,7 +39,8 @@ const char *cperf_op_type_strs[] = {
 	[CPERF_CIPHER_THEN_AUTH] = "cipher-then-auth",
 	[CPERF_AUTH_THEN_CIPHER] = "auth-then-cipher",
 	[CPERF_AEAD] = "aead",
-	[CPERF_PDCP] = "pdcp"
+	[CPERF_PDCP] = "pdcp",
+	[CPERF_DOCSIS] = "docsis"
 };
 
 const struct cperf_test cperf_testmap[] = {
@@ -202,9 +203,12 @@ cperf_initialize_cryptodev(struct cperf_options *opts, uint8_t *enabled_cdevs)
 		struct rte_cryptodev_config conf = {
 			.nb_queue_pairs = opts->nb_qps,
 			.socket_id = socket_id,
-			.ff_disable = RTE_CRYPTODEV_FF_SECURITY |
-				      RTE_CRYPTODEV_FF_ASYMMETRIC_CRYPTO,
+			.ff_disable = RTE_CRYPTODEV_FF_ASYMMETRIC_CRYPTO,
 		};
+
+		if (opts->op_type != CPERF_PDCP &&
+				opts->op_type != CPERF_DOCSIS)
+			conf.ff_disable |= RTE_CRYPTODEV_FF_SECURITY;
 
 		struct rte_cryptodev_qp_conf qp_conf = {
 			.nb_descriptors = opts->nb_descriptors
@@ -244,7 +248,7 @@ cperf_initialize_cryptodev(struct cperf_options *opts, uint8_t *enabled_cdevs)
 #endif
 		} else
 			sessions_needed = enabled_cdev_count *
-						opts->nb_qps;
+						opts->nb_qps * 2;
 
 		/*
 		 * A single session is required per queue pair
@@ -582,7 +586,8 @@ main(int argc, char **argv)
 		goto err;
 	}
 
-	if (!opts.silent)
+	if (!opts.silent && opts.test != CPERF_TEST_TYPE_THROUGHPUT &&
+			opts.test != CPERF_TEST_TYPE_LATENCY)
 		show_test_vector(t_vec);
 
 	total_nb_qps = nb_cryptodevs * opts.nb_qps;

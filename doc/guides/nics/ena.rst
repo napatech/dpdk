@@ -1,5 +1,5 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
-    Copyright (c) 2015-2019 Amazon.com, Inc. or its affiliates.
+    Copyright (c) 2015-2020 Amazon.com, Inc. or its affiliates.
     All rights reserved.
 
 ENA Poll Mode Driver
@@ -95,6 +95,14 @@ Configuration information
    * **CONFIG_RTE_LIBRTE_ENA_COM_DEBUG** (default n): Enables or disables debug
      logging of low level tx/rx logic in ena_com(base) within the ENA PMD driver.
 
+**Runtime Configuration Parameters**
+
+   * **large_llq_hdr** (default 0)
+
+     Enables or disables usage of large LLQ headers. This option will have
+     effect only if the device also supports large LLQ headers. Otherwise, the
+     default value will be used.
+
 **ENA Configuration Parameters**
 
    * **Number of Queues**
@@ -179,11 +187,55 @@ Prerequisites
 
      echo 1 > /sys/module/vfio/parameters/enable_unsafe_noiommu_mode
 
+   To use ``noiommu`` mode, the ``vfio-pci`` must be built with flag
+   ``CONFIG_VFIO_NOIOMMU``.
+
 #. Bind the intended ENA device to ``vfio-pci`` or ``igb_uio`` module.
 
-
 At this point the system should be ready to run DPDK applications. Once the
-application runs to completion, the ENA can be detached from igb_uio if necessary.
+application runs to completion, the ENA can be detached from attached module if
+necessary.
+
+**Note about usage on \*.metal instances**
+
+On AWS, the metal instances are supporting IOMMU for both arm64 and x86_64
+hosts.
+
+* x86_64 (e.g. c5.metal, i3.metal):
+   IOMMU should be disabled by default. In that situation, the ``igb_uio`` can
+   be used as it is but ``vfio-pci`` should be working in no-IOMMU mode (please
+   see above).
+
+   When IOMMU is enabled, ``igb_uio`` cannot be used as it's not supporting this
+   feature, while ``vfio-pci`` should work without any changes.
+   To enable IOMMU on those hosts, please update ``GRUB_CMDLINE_LINUX`` in file
+   ``/etc/default/grub`` with the below extra boot arguments::
+
+    iommu=1 intel_iommu=on
+
+   Then, make the changes live by executing as a root::
+
+    # grub2-mkconfig > /boot/grub2/grub.cfg
+
+   Finally, reboot should result in IOMMU being enabled.
+
+* arm64 (a1.metal):
+   IOMMU should be enabled by default. Unfortunately, ``vfio-pci`` isn't
+   supporting SMMU, which is implementation of IOMMU for arm64 architecture and
+   ``igb_uio`` isn't supporting IOMMU at all, so to use DPDK with ENA on those
+   hosts, one must disable IOMMU. This can be done by updating
+   ``GRUB_CMDLINE_LINUX`` in file ``/etc/default/grub`` with the extra boot
+   argument::
+
+    iommu.passthrough=1
+
+   Then, make the changes live by executing as a root::
+
+    # grub2-mkconfig > /boot/grub2/grub.cfg
+
+   Finally, reboot should result in IOMMU being disabled.
+   Without IOMMU, ``igb_uio`` can be used as it is but ``vfio-pci`` should be
+   working in no-IOMMU mode (please see above).
 
 Usage example
 -------------

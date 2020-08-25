@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2017 Intel Corporation
 
+from __future__ import print_function
 import sys
 import os
 import argparse
@@ -12,8 +13,12 @@ import shlex
 from threading import Timer
 
 def kill(process):
-    print "ERROR: Test app timed out"
+    print("ERROR: Test app timed out")
     process.kill()
+
+if sys.version_info.major < 3:
+    print("WARNING: Python 2 is deprecated for use in DPDK, and will not work in future releases.", file=sys.stderr)
+    print("Please use Python 3 instead", file=sys.stderr)
 
 if "RTE_SDK" in os.environ:
     dpdk_path = os.environ["RTE_SDK"]
@@ -66,7 +71,7 @@ parser.add_argument("-i", "--init-device",
 args = parser.parse_args()
 
 if not os.path.exists(args.testapp_path):
-    print "No such file: " + args.testapp_path
+    print("No such file: " + args.testapp_path)
     sys.exit(1)
 
 params = [args.testapp_path]

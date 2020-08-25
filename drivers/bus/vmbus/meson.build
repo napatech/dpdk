@@ -1,6 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
-allow_experimental_apis = true
+if is_windows
+	build = false
+	reason = 'not supported on Windows'
+	subdir_done()
+endif
+
 
 install_headers('rte_bus_vmbus.h','rte_vmbus_reg.h')
 

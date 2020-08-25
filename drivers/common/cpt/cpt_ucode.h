@@ -22,38 +22,6 @@ static uint8_t zuc_d[32] = {
 	0x5E, 0x26, 0x3C, 0x4D, 0x78, 0x9A, 0x47, 0xAC
 };
 
-static __rte_always_inline int
-cpt_is_algo_supported(struct rte_crypto_sym_xform *xform)
-{
-	/*
-	 * Microcode only supports the following combination.
-	 * Encryption followed by authentication
-	 * Authentication followed by decryption
-	 */
-	if (xform->next) {
-		if ((xform->type == RTE_CRYPTO_SYM_XFORM_AUTH) &&
-		    (xform->next->type == RTE_CRYPTO_SYM_XFORM_CIPHER) &&
-		    (xform->next->cipher.op == RTE_CRYPTO_CIPHER_OP_ENCRYPT)) {
-			/* Unsupported as of now by microcode */
-			CPT_LOG_DP_ERR("Unsupported combination");
-			return -1;
-		}
-		if ((xform->type == RTE_CRYPTO_SYM_XFORM_CIPHER) &&
-		    (xform->next->type == RTE_CRYPTO_SYM_XFORM_AUTH) &&
-		    (xform->cipher.op == RTE_CRYPTO_CIPHER_OP_DECRYPT)) {
-			/* For GMAC auth there is no cipher operation */
-			if (xform->aead.algo != RTE_CRYPTO_AEAD_AES_GCM ||
-			    xform->next->auth.algo !=
-			    RTE_CRYPTO_AUTH_AES_GMAC) {
-				/* Unsupported as of now by microcode */
-				CPT_LOG_DP_ERR("Unsupported combination");
-				return -1;
-			}
-		}
-	}
-	return 0;
-}
-
 static __rte_always_inline void
 gen_key_snow3g(const uint8_t *ck, uint32_t *keyx)
 {
@@ -107,6 +75,9 @@ cpt_fc_ciph_set_type(cipher_type_t type, struct cpt_ctx *ctx, uint16_t key_len)
 	case AES_GCM:
 		if (unlikely(cpt_fc_ciph_validate_key_aes(key_len) != 0))
 			return -1;
+		fc_type = FC_GEN;
+		break;
+	case CHACHA20:
 		fc_type = FC_GEN;
 		break;
 	case AES_XTS:
@@ -261,6 +232,7 @@ cpt_fc_ciph_set_key(void *ctx, cipher_type_t type, const uint8_t *key,
 	case AES_ECB:
 	case AES_CFB:
 	case AES_CTR:
+	case CHACHA20:
 		cpt_fc_ciph_set_key_set_aes_key_type(fctx, key_len);
 		break;
 	case AES_GCM:
@@ -714,9 +686,6 @@ cpt_enc_hmac_prep(uint32_t flags,
 	m_vaddr = (uint8_t *)m_vaddr + size;
 	m_dma += size;
 
-	if (hash_type == GMAC_TYPE)
-		encr_data_len = 0;
-
 	if (unlikely(!(flags & VALID_IV_BUF))) {
 		iv_len = 0;
 		iv_offset = ENCR_IV_OFFSET(d_offs);
@@ -748,6 +717,11 @@ cpt_enc_hmac_prep(uint32_t flags,
 	opcode.s.major = CPT_MAJOR_OP_FC;
 	opcode.s.minor = 0;
 
+	if (hash_type == GMAC_TYPE) {
+		encr_offset = 0;
+		encr_data_len = 0;
+	}
+
 	auth_dlen = auth_offset + auth_data_len;
 	enc_dlen = encr_data_len + encr_offset;
 	if (unlikely(encr_data_len & 0xf)) {
@@ -756,11 +730,6 @@ cpt_enc_hmac_prep(uint32_t flags,
 		else if (likely((cipher_type == AES_CBC) ||
 				(cipher_type == AES_ECB)))
 			enc_dlen = ROUNDUP16(encr_data_len) + encr_offset;
-	}
-
-	if (unlikely(hash_type == GMAC_TYPE)) {
-		encr_offset = auth_dlen;
-		enc_dlen = 0;
 	}
 
 	if (unlikely(auth_dlen > enc_dlen)) {
@@ -1065,9 +1034,6 @@ cpt_dec_hmac_prep(uint32_t flags,
 	hash_type = cpt_ctx->hash_type;
 	mac_len = cpt_ctx->mac_len;
 
-	if (hash_type == GMAC_TYPE)
-		encr_data_len = 0;
-
 	if (unlikely(!(flags & VALID_IV_BUF))) {
 		iv_len = 0;
 		iv_offset = ENCR_IV_OFFSET(d_offs);
@@ -1124,6 +1090,11 @@ cpt_dec_hmac_prep(uint32_t flags,
 	opcode.s.major = CPT_MAJOR_OP_FC;
 	opcode.s.minor = 1;
 
+	if (hash_type == GMAC_TYPE) {
+		encr_offset = 0;
+		encr_data_len = 0;
+	}
+
 	enc_dlen = encr_offset + encr_data_len;
 	auth_dlen = auth_offset + auth_data_len;
 
@@ -1134,9 +1105,6 @@ cpt_dec_hmac_prep(uint32_t flags,
 		inputlen = enc_dlen + mac_len;
 		outputlen = enc_dlen;
 	}
-
-	if (hash_type == GMAC_TYPE)
-		encr_offset = inputlen;
 
 	vq_cmd_w0.u64 = 0;
 	vq_cmd_w0.s.param1 = encr_data_len;
@@ -2455,7 +2423,7 @@ cpt_fc_dec_hmac_prep(uint32_t flags,
 	return prep_req;
 }
 
-static __rte_always_inline void *__hot
+static __rte_always_inline void *__rte_hot
 cpt_fc_enc_hmac_prep(uint32_t flags, uint64_t d_offs, uint64_t d_lens,
 		     fc_params_t *fc_params, void *op)
 {
@@ -2575,16 +2543,14 @@ fill_sess_aead(struct rte_crypto_sym_xform *xform,
 	aead_form = &xform->aead;
 	void *ctx = SESS_PRIV(sess);
 
-	if (aead_form->op == RTE_CRYPTO_AEAD_OP_ENCRYPT &&
-	   aead_form->algo == RTE_CRYPTO_AEAD_AES_GCM) {
+	if (aead_form->op == RTE_CRYPTO_AEAD_OP_ENCRYPT) {
 		sess->cpt_op |= CPT_OP_CIPHER_ENCRYPT;
 		sess->cpt_op |= CPT_OP_AUTH_GENERATE;
-	} else if (aead_form->op == RTE_CRYPTO_AEAD_OP_DECRYPT &&
-		aead_form->algo == RTE_CRYPTO_AEAD_AES_GCM) {
+	} else if (aead_form->op == RTE_CRYPTO_AEAD_OP_DECRYPT) {
 		sess->cpt_op |= CPT_OP_CIPHER_DECRYPT;
 		sess->cpt_op |= CPT_OP_AUTH_VERIFY;
 	} else {
-		CPT_LOG_DP_ERR("Unknown cipher operation\n");
+		CPT_LOG_DP_ERR("Unknown aead operation\n");
 		return -1;
 	}
 	switch (aead_form->algo) {
@@ -2597,6 +2563,12 @@ fill_sess_aead(struct rte_crypto_sym_xform *xform,
 		CPT_LOG_DP_ERR("Crypto: Unsupported cipher algo %u",
 			       aead_form->algo);
 		return -1;
+	case RTE_CRYPTO_AEAD_CHACHA20_POLY1305:
+		enc_type = CHACHA20;
+		auth_type = POLY1305;
+		cipher_key_len = 32;
+		sess->chacha_poly = 1;
+		break;
 	default:
 		CPT_LOG_DP_ERR("Crypto: Undefined cipher algo %u specified",
 			       aead_form->algo);
@@ -3099,7 +3071,7 @@ fill_fc_params(struct rte_crypto_op *cop,
 	m_src = sym_op->m_src;
 	m_dst = sym_op->m_dst;
 
-	if (sess_misc->aes_gcm) {
+	if (sess_misc->aes_gcm || sess_misc->chacha_poly) {
 		uint8_t *salt;
 		uint8_t *aad_data;
 		uint16_t aad_len;
@@ -3331,49 +3303,6 @@ compl_auth_verify(struct rte_crypto_op *op,
 		op->status = RTE_CRYPTO_OP_STATUS_AUTH_FAILED;
 	else
 		op->status = RTE_CRYPTO_OP_STATUS_SUCCESS;
-}
-
-static __rte_always_inline int
-instance_session_cfg(struct rte_crypto_sym_xform *xform, void *sess)
-{
-	struct rte_crypto_sym_xform *chain;
-
-	CPT_PMD_INIT_FUNC_TRACE();
-
-	if (cpt_is_algo_supported(xform))
-		goto err;
-
-	chain = xform;
-	while (chain) {
-		switch (chain->type) {
-		case RTE_CRYPTO_SYM_XFORM_AEAD:
-			if (fill_sess_aead(chain, sess))
-				goto err;
-			break;
-		case RTE_CRYPTO_SYM_XFORM_CIPHER:
-			if (fill_sess_cipher(chain, sess))
-				goto err;
-			break;
-		case RTE_CRYPTO_SYM_XFORM_AUTH:
-			if (chain->auth.algo == RTE_CRYPTO_AUTH_AES_GMAC) {
-				if (fill_sess_gmac(chain, sess))
-					goto err;
-			} else {
-				if (fill_sess_auth(chain, sess))
-					goto err;
-			}
-			break;
-		default:
-			CPT_LOG_DP_ERR("Invalid crypto xform type");
-			break;
-		}
-		chain = chain->next;
-	}
-
-	return 0;
-
-err:
-	return -1;
 }
 
 static __rte_always_inline void

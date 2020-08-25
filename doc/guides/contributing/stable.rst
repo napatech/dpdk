@@ -51,7 +51,7 @@ agreement and a commitment from a maintainer. The current policy is that each
 year's November (X.11) release will be maintained as an LTS for 2 years.
 
 After the X.11 release, an LTS branch will be created for it at
-http://git.dpdk.org/dpdk-stable where bugfixes will be backported to.
+https://git.dpdk.org/dpdk-stable where bugfixes will be backported to.
 
 A LTS release may align with the declaration of a new major ABI version,
 please read the :doc:`abi_policy` for more information.
@@ -62,7 +62,8 @@ longer depending on the number and criticality of the backported
 fixes. Releases should be coordinated with the validation engineers to ensure
 that a tagged release has been tested.
 
-The current maintained LTS branches are 17.11 and 18.11.
+For a list of the currently maintained stable/LTS branches please see
+the latest `stable roadmap <https://core.dpdk.org/roadmap/#stable>`_.
 
 At the end of the 2 years, a final X.11.N release will be made and at that
 point the LTS branch will no longer be maintained with no further releases.
@@ -107,7 +108,7 @@ The Stable and LTS release are coordinated on the stable@dpdk.org mailing
 list.
 
 All fix patches to the master branch that are candidates for backporting
-should also be CCed to the `stable@dpdk.org <http://mails.dpdk.org/listinfo/stable>`_
+should also be CCed to the `stable@dpdk.org <https://mails.dpdk.org/listinfo/stable>`_
 mailing list.
 
 
@@ -118,7 +119,7 @@ A Stable Release will be released by:
 
 * Tagging the release with YY.MM.n (year, month, number).
 * Uploading a tarball of the release to dpdk.org.
-* Sending an announcement to the `announce@dpdk.org <http://mails.dpdk.org/listinfo/announce>`_
+* Sending an announcement to the `announce@dpdk.org <https://mails.dpdk.org/listinfo/announce>`_
   list.
 
-Stable releases are available on the `dpdk.org download page <http://core.dpdk.org/download/>`_.
+Stable releases are available on the `dpdk.org download page <https://core.dpdk.org/download/>`_.

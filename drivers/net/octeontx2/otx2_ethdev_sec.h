@@ -8,6 +8,7 @@
 #include <rte_ethdev.h>
 
 #include "otx2_ipsec_fp.h"
+#include "otx2_ipsec_po.h"
 
 #define OTX2_CPT_RES_ALIGN		16
 #define OTX2_NIX_SEND_DESC_ALIGN	16
@@ -115,16 +116,6 @@ struct otx2_sec_session_ipsec_ip {
 	/* CPT QP used by SA */
 	struct otx2_cpt_qp *qp;
 };
-
-struct otx2_sec_session_ipsec {
-	struct otx2_sec_session_ipsec_ip ip;
-};
-
-struct otx2_sec_session {
-	struct otx2_sec_session_ipsec ipsec;
-	void *userdata;
-	/**< Userdata registered by the application */
-} __rte_cache_aligned;
 
 int otx2_eth_sec_ctx_create(struct rte_eth_dev *eth_dev);
 

@@ -196,6 +196,7 @@ struct otx2_eth_qconf {
 	void *mempool;
 	uint32_t socket_id;
 	uint16_t nb_desc;
+	uint8_t valid;
 };
 
 struct otx2_fc_info {
@@ -270,8 +271,11 @@ struct otx2_eth_dev {
 	uint8_t mac_addr[RTE_ETHER_ADDR_LEN];
 	uint8_t mkex_pfl_name[MKEX_NAME_LEN];
 	uint8_t max_mac_entries;
+	bool dmac_filter_enable;
 	uint8_t lf_tx_stats;
 	uint8_t lf_rx_stats;
+	uint8_t lock_rx_ctx;
+	uint8_t lock_tx_ctx;
 	uint16_t flags;
 	uint16_t cints;
 	uint16_t qints;
@@ -304,8 +308,10 @@ struct otx2_eth_dev {
 	/* Contiguous queues */
 	uint16_t txschq_contig_list[NIX_TXSCH_LVL_CNT][MAX_TXSCHQ_PER_FUNC];
 	uint16_t otx2_tm_root_lvl;
+	uint16_t link_cfg_lvl;
 	uint16_t tm_flags;
 	uint16_t tm_leaf_cnt;
+	uint64_t tm_rate_min;
 	struct otx2_nix_tm_node_list node_list;
 	struct otx2_nix_tm_shaper_profile_list shaper_profile_list;
 	struct otx2_rss_info rss_info;
@@ -331,6 +337,8 @@ struct otx2_eth_dev {
 	bool sdp_link; /* SDP flag */
 	/* Inline IPsec params */
 	uint16_t ipsec_in_max_spi;
+	uint8_t duplex;
+	uint32_t speed;
 } __rte_cache_aligned;
 
 struct otx2_eth_txq {
@@ -437,6 +445,7 @@ void otx2_eth_dev_link_status_update(struct otx2_dev *dev,
 				     struct cgx_link_user_info *link);
 int otx2_nix_dev_set_link_up(struct rte_eth_dev *eth_dev);
 int otx2_nix_dev_set_link_down(struct rte_eth_dev *eth_dev);
+int otx2_apply_link_speed(struct rte_eth_dev *eth_dev);
 
 /* IRQ */
 int otx2_nix_register_irqs(struct rte_eth_dev *eth_dev);
@@ -445,6 +454,8 @@ int oxt2_nix_register_cq_irqs(struct rte_eth_dev *eth_dev);
 void otx2_nix_unregister_irqs(struct rte_eth_dev *eth_dev);
 void oxt2_nix_unregister_queue_irqs(struct rte_eth_dev *eth_dev);
 void oxt2_nix_unregister_cq_irqs(struct rte_eth_dev *eth_dev);
+void otx2_nix_err_intr_enb_dis(struct rte_eth_dev *eth_dev, bool enb);
+void otx2_nix_ras_intr_enb_dis(struct rte_eth_dev *eth_dev, bool enb);
 
 int otx2_nix_rx_queue_intr_enable(struct rte_eth_dev *eth_dev,
 				  uint16_t rx_queue_id);
@@ -457,6 +468,7 @@ int otx2_nix_dev_get_reg(struct rte_eth_dev *eth_dev,
 			 struct rte_dev_reg_info *regs);
 int otx2_nix_queues_ctx_dump(struct rte_eth_dev *eth_dev);
 void otx2_nix_cqe_dump(const struct nix_cqe_hdr_s *cq);
+void otx2_nix_tm_dump(struct otx2_eth_dev *dev);
 
 /* Stats */
 int otx2_nix_dev_stats_get(struct rte_eth_dev *eth_dev,

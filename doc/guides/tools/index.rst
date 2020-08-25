@@ -12,7 +12,9 @@ DPDK Tools User Guides
     pdump
     pmdinfo
     devbind
+    flow-perf
     testbbdev
     cryptoperf
     comp_perf
     testeventdev
+    testregex

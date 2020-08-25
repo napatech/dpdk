@@ -99,6 +99,7 @@ Features
 - Support for multiple rte_flow groups.
 - Per packet no-inline hint flag to disable packet data copying into Tx descriptors.
 - Hardware LRO.
+- Hairpin.
 
 Limitations
 -----------
@@ -126,6 +127,24 @@ Limitations
 
   Will match any ipv4 packet (VLAN included).
 
+- When using DV flow engine (``dv_flow_en`` = 1), flow pattern without VLAN item
+  will match untagged packets only.
+  The flow rule::
+
+        flow create 0 ingress pattern eth / ipv4 / end ...
+
+  Will match untagged packets only.
+  The flow rule::
+
+        flow create 0 ingress pattern eth / vlan / ipv4 / end ...
+
+  Will match tagged packets only, with any VLAN ID value.
+  The flow rule::
+
+        flow create 0 ingress pattern eth / vlan vid is 3 / ipv4 / end ...
+
+  Will only match tagged packets with VLAN ID 3.
+
 - VLAN pop offload command:
 
   - Flow rules having a VLAN pop offload command as one of their actions and
@@ -144,8 +163,6 @@ Limitations
 - Flows with a VXLAN Network Identifier equal (or ends to be equal)
   to 0 are not supported.
 
-- VXLAN TSO and checksum offloads are not supported on VM.
-
 - L3 VXLAN and VXLAN-GPE tunnels cannot be supported together with MPLSoGRE and MPLSoUDP.
 
 - Match on Geneve header supports the following fields only:
@@ -161,6 +178,7 @@ Limitations
 
 - Match on GTP tunnel header item supports the following fields only:
 
+     - v_pt_rsv_flags: E flag, S flag, PN flag
      - msg_type
      - teid
 
@@ -223,6 +241,32 @@ Limitations
   reduce the requested Tx size or adjust data inline settings with
   ``txq_inline_max`` and ``txq_inline_mpw`` devargs keys.
 
+- To provide the packet send scheduling on mbuf timestamps the ``tx_pp``
+  parameter should be specified, RTE_MBUF_DYNFIELD_TIMESTAMP_NAME and
+  RTE_MBUF_DYNFLAG_TIMESTAMP_NAME should be registered by application.
+  When PMD sees the RTE_MBUF_DYNFLAG_TIMESTAMP_NAME set on the packet
+  being sent it tries to synchronize the time of packet appearing on
+  the wire with the specified packet timestamp. It the specified one
+  is in the past it should be ignored, if one is in the distant future
+  it should be capped with some reasonable value (in range of seconds).
+  These specific cases ("too late" and "distant future") can be optionally
+  reported via device xstats to assist applications to detect the
+  time-related problems.
+
+  The timestamp upper "too-distant-future" limit
+  at the moment of invoking the Tx burst routine
+  can be estimated as ``tx_pp`` option (in nanoseconds) multiplied by 2^23.
+  Please note, for the testpmd txonly mode,
+  the limit is deduced from the expression::
+
+        (n_tx_descriptors / burst_size + 1) * inter_burst_gap
+
+  There is no any packet reordering according timestamps is supposed,
+  neither within packet burst, nor between packets, it is an entirely
+  application responsibility to generate packets and its timestamps
+  in desired order. The timestamps can be put only in the first packet
+  in the burst providing the entire burst scheduling.
+
 - E-Switch decapsulation Flow:
 
   - can be applied to PF port only.
@@ -256,6 +300,16 @@ Limitations
     TCP header (122B).
   - Rx queue with LRO offload enabled, receiving a non-LRO packet, can forward
     it with size limited to max LRO size, not to max RX packet length.
+  - LRO can be used with outer header of TCP packets of the standard format:
+        eth (with or without vlan) / ipv4 or ipv6 / tcp / payload
+
+    Other TCP packets (e.g. with MPLS label) received on Rx queue with LRO enabled, will be received with bad checksum.
+
+- CRC:
+
+  - ``DEV_RX_OFFLOAD_KEEP_CRC`` cannot be supported with decapsulation
+    for some NICs (such as ConnectX-6 Dx and BlueField 2).
+    The capability bit ``scatter_fcs_w_decap_disable`` shows NIC support.
 
 Statistics
 ----------
@@ -359,6 +413,32 @@ Run-time configuration
 
 - **ethtool** operations on related kernel interfaces also affect the PMD.
 
+Run as non-root
+^^^^^^^^^^^^^^^
+
+In order to run as a non-root user,
+some capabilities must be granted to the application::
+
+   setcap cap_sys_admin,cap_net_admin,cap_net_raw,cap_ipc_lock+ep <dpdk-app>
+
+Below are the reasons of the need for each capability:
+
+``cap_sys_admin``
+   When using physical addresses (PA mode), with Linux >= 4.0,
+   for access to ``/proc/self/pagemap``.
+
+``cap_net_admin``
+   For device configuration.
+
+``cap_net_raw``
+   For raw ethernet queue allocation through kernel driver.
+
+``cap_ipc_lock``
+   For DMA memory pinning.
+
+Driver options
+^^^^^^^^^^^^^^
+
 - ``rxq_cqe_comp_en`` parameter [int]
 
   A nonzero value enables the compression of CQE on RX side. This feature
@@ -408,8 +488,7 @@ Run-time configuration
 
   A nonzero value enables configuring Multi-Packet Rx queues. Rx queue is
   configured as Multi-Packet RQ if the total number of Rx queues is
-  ``rxqs_min_mprq`` or more and Rx scatter isn't configured. Disabled by
-  default.
+  ``rxqs_min_mprq`` or more. Disabled by default.
 
   Multi-Packet Rx Queue (MPRQ a.k.a Striding RQ) can further save PCIe bandwidth
   by posting a single large buffer for multiple packets. Instead of posting a
@@ -433,6 +512,20 @@ Run-time configuration
   if ``mprq_en`` is set.
 
   The size of Rx queue should be bigger than the number of strides.
+
+- ``mprq_log_stride_size`` parameter [int]
+
+  Log 2 of the size of a stride for Multi-Packet Rx queue. Configuring a smaller
+  stride size can save some memory and reduce probability of a depletion of all
+  available strides due to unreleased packets by an application. If configured
+  value is not in the range of device capability, the default value will be set
+  with a warning message. The default value is 11 which is 2048 bytes per a
+  stride, valid only if ``mprq_en`` is set. With ``mprq_log_stride_size`` set
+  it is possible for a packet to span across multiple strides. This mode allows
+  support of jumbo frames (9K) with MPRQ. The memcopy of some packets (or part
+  of a packet if Rx scatter is configured) may be required in case there is no
+  space left for a head room at the end of a stride which incurs some
+  performance penalty.
 
 - ``mprq_max_memcpy_len`` parameter [int]
 
@@ -639,6 +732,25 @@ Run-time configuration
   variable "MLX5_SHUT_UP_BF" value is used. If there is no "MLX5_SHUT_UP_BF",
   the default ``tx_db_nc`` value is zero for ARM64 hosts and one for others.
 
+- ``tx_pp`` parameter [int]
+
+  If a nonzero value is specified the driver creates all necessary internal
+  objects to provide accurate packet send scheduling on mbuf timestamps.
+  The positive value specifies the scheduling granularity in nanoseconds,
+  the packet send will be accurate up to specified digits. The allowed range is
+  from 500 to 1 million of nanoseconds. The negative value specifies the module
+  of granularity and engages the special test mode the check the schedule rate.
+  By default (if the ``tx_pp`` is not specified) send scheduling on timestamps
+  feature is disabled.
+
+- ``tx_skew`` parameter [int]
+
+  The parameter adjusts the send packet scheduling on timestamps and represents
+  the average delay between beginning of the transmitting descriptor processing
+  by the hardware and appearance of actual packet data on the wire. The value
+  should be provided in nanoseconds and is valid only if ``tx_pp`` parameter is
+  specified. The default value is zero.
+
 - ``tx_vec_en`` parameter [int]
 
   A nonzero value enables Tx vector on ConnectX-5, ConnectX-6, ConnectX-6 Dx
@@ -735,6 +847,16 @@ Run-time configuration
 
   Enabled by default if supported.
 
+- ``lacp_by_user`` parameter [int]
+
+  A nonzero value enables the control of LACP traffic by the user application.
+  When a bond exists in the driver, by default it should be managed by the
+  kernel and therefore LACP traffic should be steered to the kernel.
+  If this devarg is set to 1 it will allow the user to manage the bond by
+  itself and not steer LACP traffic to the kernel.
+
+  Disabled by default (set to 0).
+
 - ``mr_ext_memseg_en`` parameter [int]
 
   A nonzero value enables extending memseg when registering DMA memory. If
@@ -772,6 +894,57 @@ Run-time configuration
   the input ``lro_timeout_usec`` value.
   If this parameter is not specified, by default PMD will set
   the smallest value supported by HW.
+
+- ``hp_buf_log_sz`` parameter [int]
+
+  The total data buffer size of a hairpin queue (logarithmic form), in bytes.
+  PMD will set the data buffer size to 2 ** ``hp_buf_log_sz``, both for RX & TX.
+  The capacity of the value is specified by the firmware and the initialization
+  will get a failure if it is out of scope.
+  The range of the value is from 11 to 19 right now, and the supported frame
+  size of a single packet for hairpin is from 512B to 128KB. It might change if
+  different firmware release is being used. By using a small value, it could
+  reduce memory consumption but not work with a large frame. If the value is
+  too large, the memory consumption will be high and some potential performance
+  degradation will be introduced.
+  By default, the PMD will set this value to 16, which means that 9KB jumbo
+  frames will be supported.
+
+- ``reclaim_mem_mode`` parameter [int]
+
+  Cache some resources in flow destroy will help flow recreation more efficient.
+  While some systems may require the all the resources can be reclaimed after
+  flow destroyed.
+  The parameter ``reclaim_mem_mode`` provides the option for user to configure
+  if the resource cache is needed or not.
+
+  There are three options to choose:
+
+  - 0. It means the flow resources will be cached as usual. The resources will
+    be cached, helpful with flow insertion rate.
+
+  - 1. It will only enable the DPDK PMD level resources reclaim.
+
+  - 2. Both DPDK PMD level and rdma-core low level will be configured as
+    reclaimed mode.
+
+  By default, the PMD will set this value to 0.
+
+- ``sys_mem_en`` parameter [int]
+
+  A non-zero value enables the PMD memory management allocating memory
+  from system by default, without explicit rte memory flag.
+
+  By default, the PMD will set this value to 0.
+
+- ``decap_en`` parameter [int]
+
+  Some devices do not support FCS (frame checksum) scattering for
+  tunnel-decapsulated packets.
+  If set to 0, this option forces the FCS feature and rejects tunnel
+  decapsulation in the flow engine for such devices.
+
+  By default, the PMD will set this value to 1.
 
 .. _mlx5_firmware_config:
 
@@ -822,6 +995,12 @@ Below are some firmware configurations listed.
     IP_OVER_VXLAN_EN=1
     IP_OVER_VXLAN_PORT=<udp dport>
 
+- enable VXLAN-GPE tunnel flow matching::
+
+    FLEX_PARSER_PROFILE_ENABLE=0
+    or
+    FLEX_PARSER_PROFILE_ENABLE=2
+
 - enable IP-in-IP tunnel flow matching::
 
     FLEX_PARSER_PROFILE_ENABLE=0
@@ -837,10 +1016,17 @@ Below are some firmware configurations listed.
 - enable Geneve flow matching::
 
    FLEX_PARSER_PROFILE_ENABLE=0
+   or
+   FLEX_PARSER_PROFILE_ENABLE=1
 
 - enable GTP flow matching::
 
    FLEX_PARSER_PROFILE_ENABLE=3
+
+- enable eCPRI flow matching::
+
+   FLEX_PARSER_PROFILE_ENABLE=4
+   PROG_PARSE_GRAPH=1
 
 Prerequisites
 -------------
@@ -933,15 +1119,15 @@ thanks to these environment variables:
 Mellanox OFED/EN
 ^^^^^^^^^^^^^^^^
 
-- Mellanox OFED version: ** 4.5, 4.6** /
-  Mellanox EN version: **4.5, 4.6**
+- Mellanox OFED version: **4.5** and above /
+  Mellanox EN version: **4.5** and above
 - firmware version:
 
   - ConnectX-4: **12.21.1000** and above.
   - ConnectX-4 Lx: **14.21.1000** and above.
   - ConnectX-5: **16.21.1000** and above.
   - ConnectX-5 Ex: **16.21.1000** and above.
-  - ConnectX-6: **20.99.5374** and above.
+  - ConnectX-6: **20.27.0090** and above.
   - ConnectX-6 Dx: **22.27.0090** and above.
   - BlueField: **18.25.1010** and above.
 
@@ -1266,6 +1452,32 @@ Supported hardware offloads
    |                       | |  rdma-core 26 | | rdma-core 26  |
    |                       | |  ConnectX-5   | | ConnectX-5    |
    +-----------------------+-----------------+-----------------+
+
+Notes for metadata
+------------------
+
+MARK and META items are interrelated with datapath - they might move from/to
+the applications in mbuf fields. Hence, zero value for these items has the
+special meaning - it means "no metadata are provided", not zero values are
+treated by applications and PMD as valid ones.
+
+Moreover in the flow engine domain the value zero is acceptable to match and
+set, and we should allow to specify zero values as rte_flow parameters for the
+META and MARK items and actions. In the same time zero mask has no meaning and
+should be rejected on validation stage.
+
+Notes for rte_flow
+------------------
+
+Flows are not cached in the driver.
+When stopping a device port, all the flows created on this port from the
+application will be flushed automatically in the background.
+After stopping the device port, all flows on this port become invalid and
+not represented in the system.
+All references to these flows held by the application should be discarded
+directly but neither destroyed nor flushed.
+
+The application should re-create the flows as required after the port restart.
 
 Notes for testpmd
 -----------------

@@ -84,8 +84,6 @@ static struct pp2_bpool *mrvl_port_to_bpool_lookup[RTE_MAX_ETHPORTS];
 static int mrvl_port_bpool_size[PP2_NUM_PKT_PROC][PP2_BPOOL_NUM_POOLS][RTE_MAX_LCORE];
 static uint64_t cookie_addr_high = MRVL_COOKIE_ADDR_INVALID;
 
-int mrvl_logtype;
-
 struct mrvl_ifnames {
 	const char *names[PP2_NUM_ETH_PPIO * PP2_NUM_PKT_PROC];
 	int idx;
@@ -816,7 +814,7 @@ mrvl_flush_bpool(struct rte_eth_dev *dev)
 	unsigned int core_id = rte_lcore_id();
 
 	if (core_id == LCORE_ID_ANY)
-		core_id = 0;
+		core_id = rte_get_master_lcore();
 
 	hif = mrvl_get_hif(priv, core_id);
 
@@ -1620,7 +1618,7 @@ mrvl_fill_bpool(struct mrvl_rxq *rxq, int num)
 
 	core_id = rte_lcore_id();
 	if (core_id == LCORE_ID_ANY)
-		core_id = 0;
+		core_id = rte_get_master_lcore();
 
 	hif = mrvl_get_hif(rxq->priv, core_id);
 	if (!hif)
@@ -1770,7 +1768,7 @@ mrvl_rx_queue_release(void *rxq)
 	unsigned int core_id = rte_lcore_id();
 
 	if (core_id == LCORE_ID_ANY)
-		core_id = 0;
+		core_id = rte_get_master_lcore();
 
 	if (!q)
 		return;
@@ -3040,10 +3038,4 @@ static struct rte_vdev_driver pmd_mrvl_drv = {
 
 RTE_PMD_REGISTER_VDEV(net_mvpp2, pmd_mrvl_drv);
 RTE_PMD_REGISTER_ALIAS(net_mvpp2, eth_mvpp2);
-
-RTE_INIT(mrvl_init_log)
-{
-	mrvl_logtype = rte_log_register("pmd.net.mvpp2");
-	if (mrvl_logtype >= 0)
-		rte_log_set_level(mrvl_logtype, RTE_LOG_NOTICE);
-}
+RTE_LOG_REGISTER(mrvl_logtype, pmd.net.mvpp2, NOTICE);

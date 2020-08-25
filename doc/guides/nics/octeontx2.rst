@@ -39,6 +39,7 @@ Features of the OCTEON TX2 Ethdev PMD are:
 - HW offloaded `ethdev Rx queue` to `eventdev event queue` packet injection
 - Support Rx interrupt
 - Inline IPsec processing support
+- :ref:`Traffic Management API <otx2_tmapi>`
 
 Prerequisites
 -------------
@@ -177,7 +178,7 @@ Runtime Config Options
 
    With the above configuration, higig2 will be enabled on that port and the
    traffic on this port should be higig2 traffic only. Supported switch header
-   types are "higig2" and "dsa".
+   types are "higig2", "dsa" and "chlen90b".
 
 - ``RSS tag as XOR`` (default ``0``)
 
@@ -194,6 +195,7 @@ Runtime Config Options
    Setting this flag to 1 to select the legacy mode.
 
    For example to select the legacy mode(RSS tag adder as XOR)::
+
       -w 0002:02:00.0,tag_as_xor=1
 
 - ``Max SPI for inbound inline IPsec`` (default ``1``)
@@ -202,16 +204,61 @@ Runtime Config Options
    ``ipsec_in_max_spi`` ``devargs`` parameter.
 
    For example::
+
       -w 0002:02:00.0,ipsec_in_max_spi=128
 
    With the above configuration, application can enable inline IPsec processing
    on 128 SAs (SPI 0-127).
+
+- ``Lock Rx contexts in NDC cache``
+
+   Lock Rx contexts in NDC cache by using ``lock_rx_ctx`` parameter.
+
+   For example::
+
+      -w 0002:02:00.0,lock_rx_ctx=1
+
+- ``Lock Tx contexts in NDC cache``
+
+   Lock Tx contexts in NDC cache by using ``lock_tx_ctx`` parameter.
+
+   For example::
+
+      -w 0002:02:00.0,lock_tx_ctx=1
 
 .. note::
 
    Above devarg parameters are configurable per device, user needs to pass the
    parameters to all the PCIe devices if application requires to configure on
    all the ethdev ports.
+
+- ``Lock NPA contexts in NDC``
+
+   Lock NPA aura and pool contexts in NDC cache.
+   The device args take hexadecimal bitmask where each bit represent the
+   corresponding aura/pool id.
+
+   For example::
+
+      -w 0002:02:00.0,npa_lock_mask=0xf
+
+.. _otx2_tmapi:
+
+Traffic Management API
+----------------------
+
+OCTEON TX2 PMD supports generic DPDK Traffic Management API which allows to
+configure the following features:
+
+#. Hierarchical scheduling
+#. Single rate - Two color, Two rate - Three color shaping
+
+Both DWRR and Static Priority(SP) hierarchial scheduling is supported.
+
+Every parent can have atmost 10 SP Children and unlimited DWRR children.
+
+Both PF & VF supports traffic management API with PF supporting 6 levels
+and VF supporting 5 levels of topology.
 
 Limitations
 -----------

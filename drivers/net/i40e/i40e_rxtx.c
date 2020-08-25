@@ -1248,7 +1248,8 @@ end_of_tx:
 		   (unsigned) txq->port_id, (unsigned) txq->queue_id,
 		   (unsigned) tx_id, (unsigned) nb_tx);
 
-	I40E_PCI_REG_WRITE(txq->qtx_tail, tx_id);
+	rte_cio_wmb();
+	I40E_PCI_REG_WRITE_RELAXED(txq->qtx_tail, tx_id);
 	txq->tx_tail = tx_id;
 
 	return nb_tx;
@@ -1570,6 +1571,15 @@ i40e_dev_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	PMD_INIT_FUNC_TRACE();
 
 	rxq = dev->data->rx_queues[rx_queue_id];
+	if (!rxq || !rxq->q_set) {
+		PMD_DRV_LOG(ERR, "RX queue %u not available or setup",
+			    rx_queue_id);
+		return -EINVAL;
+	}
+
+	if (rxq->rx_deferred_start)
+		PMD_DRV_LOG(WARNING, "RX queue %u is deferrd start",
+			    rx_queue_id);
 
 	err = i40e_alloc_rx_queue_mbufs(rxq);
 	if (err) {
@@ -1602,6 +1612,11 @@ i40e_dev_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	struct i40e_hw *hw = I40E_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
 	rxq = dev->data->rx_queues[rx_queue_id];
+	if (!rxq || !rxq->q_set) {
+		PMD_DRV_LOG(ERR, "RX queue %u not available or setup",
+				rx_queue_id);
+		return -EINVAL;
+	}
 
 	/*
 	 * rx_queue_id is queue id application refers to, while
@@ -1630,6 +1645,15 @@ i40e_dev_tx_queue_start(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 	PMD_INIT_FUNC_TRACE();
 
 	txq = dev->data->tx_queues[tx_queue_id];
+	if (!txq || !txq->q_set) {
+		PMD_DRV_LOG(ERR, "TX queue %u is not available or setup",
+			    tx_queue_id);
+		return -EINVAL;
+	}
+
+	if (txq->tx_deferred_start)
+		PMD_DRV_LOG(WARNING, "TX queue %u is deferrd start",
+			    tx_queue_id);
 
 	/*
 	 * tx_queue_id is queue id application refers to, while
@@ -1654,6 +1678,11 @@ i40e_dev_tx_queue_stop(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 	struct i40e_hw *hw = I40E_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
 	txq = dev->data->tx_queues[tx_queue_id];
+	if (!txq || !txq->q_set) {
+		PMD_DRV_LOG(ERR, "TX queue %u is not available or setup",
+			tx_queue_id);
+		return -EINVAL;
+	}
 
 	/*
 	 * tx_queue_id is queue id application refers to, while
@@ -2899,6 +2928,7 @@ i40e_dev_free_queues(struct rte_eth_dev *dev)
 			continue;
 		i40e_dev_rx_queue_release(dev->data->rx_queues[i]);
 		dev->data->rx_queues[i] = NULL;
+		rte_eth_dma_zone_free(dev, "rx_ring", i);
 	}
 
 	for (i = 0; i < dev->data->nb_tx_queues; i++) {
@@ -2906,19 +2936,17 @@ i40e_dev_free_queues(struct rte_eth_dev *dev)
 			continue;
 		i40e_dev_tx_queue_release(dev->data->tx_queues[i]);
 		dev->data->tx_queues[i] = NULL;
+		rte_eth_dma_zone_free(dev, "tx_ring", i);
 	}
 }
-
-#define I40E_FDIR_NUM_TX_DESC  I40E_MIN_RING_DESC
-#define I40E_FDIR_NUM_RX_DESC  I40E_MIN_RING_DESC
 
 enum i40e_status_code
 i40e_fdir_setup_tx_resources(struct i40e_pf *pf)
 {
 	struct i40e_tx_queue *txq;
 	const struct rte_memzone *tz = NULL;
-	uint32_t ring_size;
 	struct rte_eth_dev *dev;
+	uint32_t ring_size;
 
 	if (!pf) {
 		PMD_DRV_LOG(ERR, "PF is not available");
@@ -2958,12 +2986,14 @@ i40e_fdir_setup_tx_resources(struct i40e_pf *pf)
 
 	txq->tx_ring_phys_addr = tz->iova;
 	txq->tx_ring = (struct i40e_tx_desc *)tz->addr;
+
 	/*
 	 * don't need to allocate software ring and reset for the fdir
 	 * program queue just set the queue has been configured.
 	 */
 	txq->q_set = TRUE;
 	pf->fdir.txq = txq;
+	pf->fdir.txq_available_buf_count = I40E_FDIR_PRG_PKT_CNT;
 
 	return I40E_SUCCESS;
 }
@@ -3093,7 +3123,7 @@ i40e_get_recommend_rx_vec(bool scatter)
 			 i40e_recv_pkts_vec;
 }
 
-void __attribute__((cold))
+void __rte_cold
 i40e_set_rx_function(struct rte_eth_dev *dev)
 {
 	struct i40e_adapter *ad =
@@ -3208,7 +3238,7 @@ i40e_rx_burst_mode_get(struct rte_eth_dev *dev, __rte_unused uint16_t queue_id,
 	return ret;
 }
 
-void __attribute__((cold))
+void __rte_cold
 i40e_set_tx_function_flag(struct rte_eth_dev *dev, struct i40e_tx_queue *txq)
 {
 	struct i40e_adapter *ad =
@@ -3259,7 +3289,7 @@ i40e_get_recommend_tx_vec(void)
 	return i40e_xmit_pkts_vec;
 }
 
-void __attribute__((cold))
+void __rte_cold
 i40e_set_tx_function(struct rte_eth_dev *dev)
 {
 	struct i40e_adapter *ad =
@@ -3337,7 +3367,7 @@ i40e_tx_burst_mode_get(struct rte_eth_dev *dev, __rte_unused uint16_t queue_id,
 	return ret;
 }
 
-void __attribute__((cold))
+void __rte_cold
 i40e_set_default_ptype_table(struct rte_eth_dev *dev)
 {
 	struct i40e_adapter *ad =
@@ -3348,7 +3378,7 @@ i40e_set_default_ptype_table(struct rte_eth_dev *dev)
 		ad->ptype_tbl[i] = i40e_get_default_pkt_type(i);
 }
 
-void __attribute__((cold))
+void __rte_cold
 i40e_set_default_pctype_table(struct rte_eth_dev *dev)
 {
 	struct i40e_adapter *ad =

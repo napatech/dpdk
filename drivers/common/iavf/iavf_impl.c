@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2019 Intel Corporation
+ * Copyright(c) 2019-2020 Intel Corporation
  */
 
 #include <stdio.h>
@@ -12,8 +12,6 @@
 
 #include "iavf_type.h"
 #include "iavf_prototype.h"
-
-int iavf_common_logger;
 
 enum iavf_status
 iavf_allocate_dma_mem_d(__rte_unused struct iavf_hw *hw,
@@ -87,9 +85,4 @@ iavf_free_virt_mem_d(__rte_unused struct iavf_hw *hw,
 	return IAVF_SUCCESS;
 }
 
-RTE_INIT(iavf_common_init_log)
-{
-	iavf_common_logger = rte_log_register("pmd.common.iavf");
-	if (iavf_common_logger >= 0)
-		rte_log_set_level(iavf_common_logger, RTE_LOG_NOTICE);
-}
+RTE_LOG_REGISTER(iavf_common_logger, pmd.common.iavf, NOTICE);

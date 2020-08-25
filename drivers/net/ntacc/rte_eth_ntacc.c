@@ -521,7 +521,7 @@ static uint16_t eth_ntacc_rx_mode2(void *queue,
       return 0;
     }
   }
-  
+
   NtDyn3Descr_t *dyn3;
   uint16_t i;
   uint16_t mbuf_len;
@@ -574,7 +574,7 @@ static uint16_t eth_ntacc_rx_mode2(void *queue,
     if (data_len <= mbuf_len) {
       /* Packet will fit in the mbuf, go ahead and copy */
       mbuf->pkt_len = mbuf->data_len = data_len;
-		  rte_memcpy((u_char *)mbuf->buf_addr + mbuf->data_off, (uint8_t *)dyn3 + dyn3->descrLength, mbuf->data_len);
+      rte_memcpy((u_char *)mbuf->buf_addr + mbuf->data_off, (uint8_t *)dyn3 + dyn3->descrLength, mbuf->data_len);
 #ifdef COPY_OFFSET0
       mbuf->data_off += dyn3->offset0;
 #endif
@@ -1051,21 +1051,21 @@ static int eth_dev_configure(struct rte_eth_dev *dev)
     // This must be second time configure is called. Free the queue memory
     rte_free(internals->rxq);
   }
-  
+
   if (internals->txq) {
     // This must be second time configure is called. Free the queue memory
     rte_free(internals->txq);
   }
 
   internals->rxq = (struct ntacc_rx_queue *)rte_zmalloc_socket(internals->name,
-                                                               sizeof(struct ntacc_rx_queue) * dev->data->nb_rx_queues, 
-                                                               RTE_CACHE_LINE_SIZE, 
+                                                               sizeof(struct ntacc_rx_queue) * dev->data->nb_rx_queues,
+                                                               RTE_CACHE_LINE_SIZE,
                                                                dev->device->numa_node);
   if (internals->rxq == NULL) {
     PMD_NTACC_LOG(ERR, "Failed to allocate memory for RX queues");
     return -ENOMEM;
   }
-  
+
   for (i=0; i < dev->data->nb_rx_queues; i++) {
     internals->rxq[i].stream_id = STREAMIDS_PER_PORT * internals->port + i;
     internals->rxq[i].pSeg = NULL;
@@ -1073,8 +1073,8 @@ static int eth_dev_configure(struct rte_eth_dev *dev)
   }
 
   internals->txq = (struct ntacc_tx_queue *)rte_zmalloc_socket(internals->name,
-                                                               sizeof(struct ntacc_tx_queue) * dev->data->nb_tx_queues, 
-                                                               RTE_CACHE_LINE_SIZE, 
+                                                               sizeof(struct ntacc_tx_queue) * dev->data->nb_tx_queues,
+                                                               RTE_CACHE_LINE_SIZE,
                                                                dev->device->numa_node);
   if (internals->txq == NULL) {
     PMD_NTACC_LOG(ERR, "Failed to allocate memory for TX queues");
@@ -1118,7 +1118,7 @@ static int eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_in
   dev_info->tx_desc_lim.nb_align = 32;
 
   dev_info->rx_offload_capa = DEV_RX_OFFLOAD_JUMBO_FRAME |
-                              DEV_RX_OFFLOAD_RSS_HASH    | 
+                              DEV_RX_OFFLOAD_RSS_HASH    |
                               DEV_RX_OFFLOAD_TIMESTAMP   |
                               DEV_RX_OFFLOAD_KEEP_CRC    |
                               DEV_RX_OFFLOAD_SCATTER;
@@ -1957,7 +1957,7 @@ static inline int _handle_items(const struct rte_flow_item items[],
       pColor->colorMask |= RTE_PTYPE_TUNNEL_GTPU;
       break;
 
-    case 	RTE_FLOW_ITEM_TYPE_GTPC:
+    case  RTE_FLOW_ITEM_TYPE_GTPC:
       if (SetGtpFilter(&filter_buf1[strlen(filter_buf1)],
                        pFilterContinue,
                        items,
@@ -2194,7 +2194,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       break;
     }
 
-	  if ((dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_KEEP_CRC) == 0) {
+    if ((dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_KEEP_CRC) == 0) {
       // Remove FCS
       snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ";Slice=EndOfFrame[-4]");
     }
@@ -2463,7 +2463,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
         // Remove FCS
         snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "Slice=EndOfFrame[-4];");
       }
-      
+
       if (internals->rss_hf != 0) {
         struct rte_flow_action_rss rss;
         memset(&rss, 0, sizeof(struct rte_flow_action_rss));
@@ -2516,11 +2516,11 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
   return 0;
 }
 
-static int _dev_flow_validate(struct rte_eth_dev *dev __rte_unused, 
-                         		  const struct rte_flow_attr *attr __rte_unused,
-                        		  const struct rte_flow_item items[] __rte_unused,
-                        		  const struct rte_flow_action actions[] __rte_unused,
-                        		  struct rte_flow_error *error __rte_unused)
+static int _dev_flow_validate(struct rte_eth_dev *dev __rte_unused,
+                              const struct rte_flow_attr *attr __rte_unused,
+                              const struct rte_flow_item items[] __rte_unused,
+                              const struct rte_flow_action actions[] __rte_unused,
+                              struct rte_flow_error *error __rte_unused)
 {
   // As many of the examples uses this function
   // it is added as a dummy function. No validation is done
@@ -2679,7 +2679,7 @@ enum property_type_s {
   ZERO_COPY_TX,
   RX_SEGMENT_SIZE,
   TX_SEGMENT_SIZE,
-	NT_4GENERATION,
+  NT_4GENERATION,
 };
 
 static int _readProperty(uint8_t adapterNo, enum property_type_s type, int *pValue)
@@ -2714,9 +2714,9 @@ static int _readProperty(uint8_t adapterNo, enum property_type_s type, int *pVal
   case TX_SEGMENT_SIZE:
     snprintf(pInfo->u.property.path, sizeof(pInfo->u.property.path), "ini.Adapter%d.HostBufferSegmentSizeTx", adapterNo);
     break;
-	case NT_4GENERATION:
-		snprintf(pInfo->u.property.path, sizeof(pInfo->u.property.path), "Adapter%d.FpgaGeneration", adapterNo);
-		break;
+  case NT_4GENERATION:
+    snprintf(pInfo->u.property.path, sizeof(pInfo->u.property.path), "Adapter%d.FpgaGeneration", adapterNo);
+    break;
   default:
     rte_free(pInfo);
     return 0;
@@ -2751,7 +2751,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
   uint8_t offset = 0;
   uint8_t localPort = 0;
   struct version_s version;
-	int value;
+  int value;
 
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
@@ -2839,16 +2839,16 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
 #endif
     PMD_NTACC_LOG(INFO, "Port: %u - %s\n", offset + localPort, name);
 
-		// Check if adapter is supported
-		if ((status = _readProperty(pInfo->u.port_v7.data.adapterNo, NT_4GENERATION, &value)) != 0) {
-			iRet = status;
-			goto error;
-		}
-		if (value != 4) {
-			PMD_NTACC_LOG(ERR, "ERROR: Adapter is not support. It must be a Napatech 4Generation adapterd\n");
-			iRet = NT_ERROR_ADAPTER_NOT_SUPPORTED;
-			goto error;
-		}
+    // Check if adapter is supported
+    if ((status = _readProperty(pInfo->u.port_v7.data.adapterNo, NT_4GENERATION, &value)) != 0) {
+      iRet = status;
+      goto error;
+    }
+    if (value != 4) {
+      PMD_NTACC_LOG(ERR, "ERROR: Adapter is not support. It must be a Napatech 4Generation adapterd\n");
+      iRet = NT_ERROR_ADAPTER_NOT_SUPPORTED;
+      goto error;
+    }
 
     /* reserve an ethdev entry */
     eth_dev = rte_eth_dev_allocate(name);
@@ -2973,7 +2973,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
       if (value == 0) {
         internals->keyMatcher = 0;
         PMD_NTACC_LOG(INFO, "keyMatcher is not supported\n");
-      } else 
+      } else
         internals->keyMatcher = 1;
 
       // Do we have 4GA zero copy
@@ -3011,20 +3011,20 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     }
 
     // Set rx and tx mode according to the adapter capability
-    if (internals->mode2Rx) 
+    if (internals->mode2Rx)
       eth_dev->rx_pkt_burst = eth_ntacc_rx_mode2;
     else
       eth_dev->rx_pkt_burst = eth_ntacc_rx_mode1;
 
-    if (internals->mode2Tx) 
+    if (internals->mode2Tx)
       eth_dev->tx_pkt_burst = eth_ntacc_tx_mode2;
-    else 
+    else
       eth_dev->tx_pkt_burst = eth_ntacc_tx_mode1;
 
     eth_dev->state = RTE_ETH_DEV_ATTACHED;
 
   #ifndef USE_SW_STAT
-		rte_spinlock_init(&internals->statlock);
+    rte_spinlock_init(&internals->statlock);
   #endif
 
     /* Open the config stream */
@@ -3299,12 +3299,12 @@ static int rte_pmd_ntacc_dev_probe(struct rte_pci_driver *drv __rte_unused, stru
 }
 
 static const struct rte_pci_id ntacc_pci_id_map[] = {
-	{
-		RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT200A01)
-	},
-	{
-		RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT200A02)
-	},
+  {
+    RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT200A01)
+  },
+  {
+    RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT200A02)
+  },
   {
     RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT80E3)
   },
@@ -3323,16 +3323,16 @@ static const struct rte_pci_id ntacc_pci_id_map[] = {
   {
     RTE_PCI_DEVICE(PCI_VENDOR_ID_INTEL,PCIE_DEVICE_ID_PF_DSC_1_X) // Intel AFU adapter
   },
-	{
-		.vendor_id = 0
-	}
+  {
+    .vendor_id = 0
+  }
 };
 
 static struct rte_pci_driver ntacc_driver = {
-	.driver = {
-		.name = "net_ntacc",
-	},
-	.id_table = ntacc_pci_id_map,
+  .driver = {
+    .name = "net_ntacc",
+  },
+  .id_table = ntacc_pci_id_map,
   .probe = rte_pmd_ntacc_dev_probe,
 };
 
@@ -3342,9 +3342,9 @@ static struct rte_pci_driver ntacc_driver = {
 RTE_INIT(rte_ntacc_pmd_init);
 static void rte_ntacc_pmd_init(void)
 {
-	ntacc_logtype = rte_log_register("pmd.net.ntacc");
-	if (ntacc_logtype >= 0)
-		rte_log_set_level(ntacc_logtype, RTE_LOG_NOTICE);
+  ntacc_logtype = rte_log_register("pmd.net.ntacc");
+  if (ntacc_logtype >= 0)
+    rte_log_set_level(ntacc_logtype, RTE_LOG_NOTICE);
 }
 
 RTE_PMD_REGISTER_PCI(net_ntacc, ntacc_driver);

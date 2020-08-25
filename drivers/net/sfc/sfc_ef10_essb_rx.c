@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2017-2018 Solarflare Communications Inc.
- * All rights reserved.
+ * Copyright(c) 2019-2020 Xilinx, Inc.
+ * Copyright(c) 2017-2019 Solarflare Communications Inc.
  *
  * This software was jointly developed between OKTET Labs (under contract
  * for Solarflare) and Solarflare Communications, Inc.
@@ -12,13 +12,10 @@
 #include <stdbool.h>
 
 #include <rte_byteorder.h>
-#include <rte_mbuf_ptype.h>
 #include <rte_mbuf.h>
 #include <rte_io.h>
 
-#include "efx.h"
 #include "efx_types.h"
-#include "efx_regs.h"
 #include "efx_regs_ef10.h"
 
 #include "sfc_tweak.h"

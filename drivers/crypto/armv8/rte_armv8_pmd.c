@@ -630,7 +630,7 @@ process_armv8_chained_op(struct armv8_crypto_qp *qp, struct rte_crypto_op *op,
 	arg.cipher.key = sess->cipher.key.data;
 	/* Acquire combined mode function */
 	crypto_func = sess->crypto_func;
-	ARMV8_CRYPTO_ASSERT(crypto_func != NULL);
+	RTE_VERIFY(crypto_func != NULL);
 	error = crypto_func(csrc, cdst, clen, asrc, adst, alen, &arg);
 	if (error != 0) {
 		op->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
@@ -792,7 +792,8 @@ cryptodev_armv8_crypto_create(const char *name,
 	dev->feature_flags = RTE_CRYPTODEV_FF_SYMMETRIC_CRYPTO |
 			RTE_CRYPTODEV_FF_SYM_OPERATION_CHAINING |
 			RTE_CRYPTODEV_FF_CPU_NEON |
-			RTE_CRYPTODEV_FF_CPU_ARM_CE;
+			RTE_CRYPTODEV_FF_CPU_ARM_CE |
+			RTE_CRYPTODEV_FF_SYM_SESSIONLESS;
 
 	internals = dev->data->dev_private;
 
@@ -859,6 +860,8 @@ static struct rte_vdev_driver armv8_crypto_pmd_drv = {
 };
 
 static struct cryptodev_driver armv8_crypto_drv;
+
+RTE_LOG_REGISTER(crypto_armv8_log_type, pmd.crypto.armv8, ERR);
 
 RTE_PMD_REGISTER_VDEV(CRYPTODEV_NAME_ARMV8_PMD, armv8_crypto_pmd_drv);
 RTE_PMD_REGISTER_ALIAS(CRYPTODEV_NAME_ARMV8_PMD, cryptodev_armv8_pmd);

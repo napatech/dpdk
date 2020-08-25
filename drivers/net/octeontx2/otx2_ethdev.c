@@ -70,7 +70,13 @@ nix_lf_alloc(struct otx2_eth_dev *dev, uint32_t nb_rxq, uint32_t nb_txq)
 		req->rx_cfg |= BIT_ULL(37 /* CSUM_OL4 */);
 		req->rx_cfg |= BIT_ULL(36 /* CSUM_IL4 */);
 	}
-	req->rx_cfg |= BIT_ULL(32 /* DROP_RE */);
+	req->rx_cfg |= (BIT_ULL(32 /* DROP_RE */)             |
+			BIT_ULL(33 /* Outer L2 Length */)     |
+			BIT_ULL(38 /* Inner L4 UDP Length */) |
+			BIT_ULL(39 /* Inner L3 Length */)     |
+			BIT_ULL(40 /* Outer L4 UDP Length */) |
+			BIT_ULL(41 /* Outer L3 Length */));
+
 	if (dev->rss_tag_as_xor == 0)
 		req->flags = NIX_LF_RSS_TAG_LSB_AS_ADDER;
 
@@ -105,6 +111,12 @@ nix_lf_switch_header_type_enable(struct otx2_eth_dev *dev, bool enable)
 
 	if (dev->npc_flow.switch_header_type == 0)
 		return 0;
+
+	if (dev->npc_flow.switch_header_type == OTX2_PRIV_FLAGS_LEN_90B &&
+	    !otx2_dev_is_sdp(dev)) {
+		otx2_err("chlen90b is not supported on non-SDP device");
+		return -EINVAL;
+	}
 
 	/* Notify AF about higig2 config */
 	req = otx2_mbox_alloc_msg_npc_set_pkind(mbox);
@@ -286,8 +298,7 @@ nix_cq_rq_init(struct rte_eth_dev *eth_dev, struct otx2_eth_dev *dev,
 				      NIX_CQ_ALIGN, dev->node);
 	if (rz == NULL) {
 		otx2_err("Failed to allocate mem for cq hw ring");
-		rc = -ENOMEM;
-		goto fail;
+		return -ENOMEM;
 	}
 	memset(rz->addr, 0, rz->len);
 	rxq->desc = (uintptr_t)rz->addr;
@@ -336,7 +347,7 @@ nix_cq_rq_init(struct rte_eth_dev *eth_dev, struct otx2_eth_dev *dev,
 	rc = otx2_mbox_process(mbox);
 	if (rc) {
 		otx2_err("Failed to init cq context");
-		goto fail;
+		return rc;
 	}
 
 	aq = otx2_mbox_alloc_msg_nix_aq_enq(mbox);
@@ -361,10 +372,7 @@ nix_cq_rq_init(struct rte_eth_dev *eth_dev, struct otx2_eth_dev *dev,
 	aq->rq.first_skip = first_skip;
 	aq->rq.later_skip = (sizeof(struct rte_mbuf) / 8);
 	aq->rq.flow_tagw = 32; /* 32-bits */
-	aq->rq.lpb_sizem1 = rte_pktmbuf_data_room_size(mp);
-	aq->rq.lpb_sizem1 += rte_pktmbuf_priv_size(mp);
-	aq->rq.lpb_sizem1 += sizeof(struct rte_mbuf);
-	aq->rq.lpb_sizem1 /= 8;
+	aq->rq.lpb_sizem1 = mp->elt_size / 8;
 	aq->rq.lpb_sizem1 -= 1; /* Expressed in size minus one */
 	aq->rq.ena = 1;
 	aq->rq.pb_caching = 0x2; /* First cache aligned block to LLC */
@@ -378,12 +386,44 @@ nix_cq_rq_init(struct rte_eth_dev *eth_dev, struct otx2_eth_dev *dev,
 	rc = otx2_mbox_process(mbox);
 	if (rc) {
 		otx2_err("Failed to init rq context");
-		goto fail;
+		return rc;
+	}
+
+	if (dev->lock_rx_ctx) {
+		aq = otx2_mbox_alloc_msg_nix_aq_enq(mbox);
+		aq->qidx = qid;
+		aq->ctype = NIX_AQ_CTYPE_CQ;
+		aq->op = NIX_AQ_INSTOP_LOCK;
+
+		aq = otx2_mbox_alloc_msg_nix_aq_enq(mbox);
+		if (!aq) {
+			/* The shared memory buffer can be full.
+			 * Flush it and retry
+			 */
+			otx2_mbox_msg_send(mbox, 0);
+			rc = otx2_mbox_wait_for_rsp(mbox, 0);
+			if (rc < 0) {
+				otx2_err("Failed to LOCK cq context");
+				return rc;
+			}
+
+			aq = otx2_mbox_alloc_msg_nix_aq_enq(mbox);
+			if (!aq) {
+				otx2_err("Failed to LOCK rq context");
+				return -ENOMEM;
+			}
+		}
+		aq->qidx = qid;
+		aq->ctype = NIX_AQ_CTYPE_RQ;
+		aq->op = NIX_AQ_INSTOP_LOCK;
+		rc = otx2_mbox_process(mbox);
+		if (rc < 0) {
+			otx2_err("Failed to LOCK rq context");
+			return rc;
+		}
 	}
 
 	return 0;
-fail:
-	return rc;
 }
 
 static int
@@ -428,6 +468,40 @@ nix_cq_rq_uninit(struct rte_eth_dev *eth_dev, struct otx2_eth_rxq *rxq)
 	if (rc < 0) {
 		otx2_err("Failed to disable cq context");
 		return rc;
+	}
+
+	if (dev->lock_rx_ctx) {
+		aq = otx2_mbox_alloc_msg_nix_aq_enq(mbox);
+		aq->qidx = rxq->rq;
+		aq->ctype = NIX_AQ_CTYPE_CQ;
+		aq->op = NIX_AQ_INSTOP_UNLOCK;
+
+		aq = otx2_mbox_alloc_msg_nix_aq_enq(mbox);
+		if (!aq) {
+			/* The shared memory buffer can be full.
+			 * Flush it and retry
+			 */
+			otx2_mbox_msg_send(mbox, 0);
+			rc = otx2_mbox_wait_for_rsp(mbox, 0);
+			if (rc < 0) {
+				otx2_err("Failed to UNLOCK cq context");
+				return rc;
+			}
+
+			aq = otx2_mbox_alloc_msg_nix_aq_enq(mbox);
+			if (!aq) {
+				otx2_err("Failed to UNLOCK rq context");
+				return -ENOMEM;
+			}
+		}
+		aq->qidx = rxq->rq;
+		aq->ctype = NIX_AQ_CTYPE_RQ;
+		aq->op = NIX_AQ_INSTOP_UNLOCK;
+		rc = otx2_mbox_process(mbox);
+		if (rc < 0) {
+			otx2_err("Failed to UNLOCK rq context");
+			return rc;
+		}
 	}
 
 	return 0;
@@ -519,6 +593,7 @@ otx2_nix_rx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t rq,
 	if (eth_dev->data->rx_queues[rq] != NULL) {
 		otx2_nix_dbg("Freeing memory prior to re-allocation %d", rq);
 		otx2_nix_rx_queue_release(eth_dev->data->rx_queues[rq]);
+		rte_eth_dma_zone_free(eth_dev, "cq", rq);
 		eth_dev->data->rx_queues[rq] = NULL;
 	}
 
@@ -716,6 +791,94 @@ nix_tx_offload_flags(struct rte_eth_dev *eth_dev)
 }
 
 static int
+nix_sqb_lock(struct rte_mempool *mp)
+{
+	struct otx2_npa_lf *npa_lf = otx2_intra_dev_get_cfg()->npa_lf;
+	struct npa_aq_enq_req *req;
+	int rc;
+
+	req = otx2_mbox_alloc_msg_npa_aq_enq(npa_lf->mbox);
+	req->aura_id = npa_lf_aura_handle_to_aura(mp->pool_id);
+	req->ctype = NPA_AQ_CTYPE_AURA;
+	req->op = NPA_AQ_INSTOP_LOCK;
+
+	req = otx2_mbox_alloc_msg_npa_aq_enq(npa_lf->mbox);
+	if (!req) {
+		/* The shared memory buffer can be full.
+		 * Flush it and retry
+		 */
+		otx2_mbox_msg_send(npa_lf->mbox, 0);
+		rc = otx2_mbox_wait_for_rsp(npa_lf->mbox, 0);
+		if (rc < 0) {
+			otx2_err("Failed to LOCK AURA context");
+			return rc;
+		}
+
+		req = otx2_mbox_alloc_msg_npa_aq_enq(npa_lf->mbox);
+		if (!req) {
+			otx2_err("Failed to LOCK POOL context");
+			return -ENOMEM;
+		}
+	}
+
+	req->aura_id = npa_lf_aura_handle_to_aura(mp->pool_id);
+	req->ctype = NPA_AQ_CTYPE_POOL;
+	req->op = NPA_AQ_INSTOP_LOCK;
+
+	rc = otx2_mbox_process(npa_lf->mbox);
+	if (rc < 0) {
+		otx2_err("Unable to lock POOL in NDC");
+		return rc;
+	}
+
+	return 0;
+}
+
+static int
+nix_sqb_unlock(struct rte_mempool *mp)
+{
+	struct otx2_npa_lf *npa_lf = otx2_intra_dev_get_cfg()->npa_lf;
+	struct npa_aq_enq_req *req;
+	int rc;
+
+	req = otx2_mbox_alloc_msg_npa_aq_enq(npa_lf->mbox);
+	req->aura_id = npa_lf_aura_handle_to_aura(mp->pool_id);
+	req->ctype = NPA_AQ_CTYPE_AURA;
+	req->op = NPA_AQ_INSTOP_UNLOCK;
+
+	req = otx2_mbox_alloc_msg_npa_aq_enq(npa_lf->mbox);
+	if (!req) {
+		/* The shared memory buffer can be full.
+		 * Flush it and retry
+		 */
+		otx2_mbox_msg_send(npa_lf->mbox, 0);
+		rc = otx2_mbox_wait_for_rsp(npa_lf->mbox, 0);
+		if (rc < 0) {
+			otx2_err("Failed to UNLOCK AURA context");
+			return rc;
+		}
+
+		req = otx2_mbox_alloc_msg_npa_aq_enq(npa_lf->mbox);
+		if (!req) {
+			otx2_err("Failed to UNLOCK POOL context");
+			return -ENOMEM;
+		}
+	}
+	req = otx2_mbox_alloc_msg_npa_aq_enq(npa_lf->mbox);
+	req->aura_id = npa_lf_aura_handle_to_aura(mp->pool_id);
+	req->ctype = NPA_AQ_CTYPE_POOL;
+	req->op = NPA_AQ_INSTOP_UNLOCK;
+
+	rc = otx2_mbox_process(npa_lf->mbox);
+	if (rc < 0) {
+		otx2_err("Unable to UNLOCK AURA in NDC");
+		return rc;
+	}
+
+	return 0;
+}
+
+static int
 nix_sq_init(struct otx2_eth_txq *txq)
 {
 	struct otx2_eth_dev *dev = txq->dev;
@@ -757,7 +920,20 @@ nix_sq_init(struct otx2_eth_txq *txq)
 	/* Many to one reduction */
 	sq->sq.qint_idx = txq->sq % dev->qints;
 
-	return otx2_mbox_process(mbox);
+	rc = otx2_mbox_process(mbox);
+	if (rc < 0)
+		return rc;
+
+	if (dev->lock_tx_ctx) {
+		sq = otx2_mbox_alloc_msg_nix_aq_enq(mbox);
+		sq->qidx = txq->sq;
+		sq->ctype = NIX_AQ_CTYPE_SQ;
+		sq->op = NIX_AQ_INSTOP_LOCK;
+
+		rc = otx2_mbox_process(mbox);
+	}
+
+	return rc;
 }
 
 static int
@@ -799,6 +975,20 @@ nix_sq_uninit(struct otx2_eth_txq *txq)
 	rc = otx2_mbox_process(mbox);
 	if (rc)
 		return rc;
+
+	if (dev->lock_tx_ctx) {
+		/* Unlock sq */
+		aq = otx2_mbox_alloc_msg_nix_aq_enq(mbox);
+		aq->qidx = txq->sq;
+		aq->ctype = NIX_AQ_CTYPE_SQ;
+		aq->op = NIX_AQ_INSTOP_UNLOCK;
+
+		rc = otx2_mbox_process(mbox);
+		if (rc < 0)
+			return rc;
+
+		nix_sqb_unlock(txq->sqb_pool);
+	}
 
 	/* Read SQ and free sqb's */
 	aq = otx2_mbox_alloc_msg_nix_aq_enq(mbox);
@@ -921,6 +1111,8 @@ nix_alloc_sqb_pool(int port, struct otx2_eth_txq *txq, uint16_t nb_desc)
 	}
 
 	nix_sqb_aura_limit_cfg(txq->sqb_pool, txq->nb_sqb_bufs);
+	if (dev->lock_tx_ctx)
+		nix_sqb_lock(txq->sqb_pool);
 
 	return 0;
 fail:
@@ -992,7 +1184,7 @@ otx2_nix_tx_queue_release(void *_txq)
 	otx2_nix_dbg("Releasing txq %u", txq->sq);
 
 	/* Flush and disable tm */
-	otx2_nix_tm_sw_xoff(txq, eth_dev->data->dev_started);
+	otx2_nix_sq_flush_pre(txq, eth_dev->data->dev_started);
 
 	/* Free sqb's and disable sq */
 	nix_sq_uninit(txq);
@@ -1001,6 +1193,7 @@ otx2_nix_tx_queue_release(void *_txq)
 		rte_mempool_free(txq->sqb_pool);
 		txq->sqb_pool = NULL;
 	}
+	otx2_nix_sq_flush_post(txq);
 	rte_free(txq);
 }
 
@@ -1132,10 +1325,12 @@ nix_store_queue_cfg_and_then_release(struct rte_eth_dev *eth_dev)
 	txq = (struct otx2_eth_txq **)eth_dev->data->tx_queues;
 	for (i = 0; i < nb_txq; i++) {
 		if (txq[i] == NULL) {
-			otx2_err("txq[%d] is already released", i);
-			goto fail;
+			tx_qconf[i].valid = false;
+			otx2_info("txq[%d] is already released", i);
+			continue;
 		}
 		memcpy(&tx_qconf[i], &txq[i]->qconf, sizeof(*tx_qconf));
+		tx_qconf[i].valid = true;
 		otx2_nix_tx_queue_release(txq[i]);
 		eth_dev->data->tx_queues[i] = NULL;
 	}
@@ -1143,10 +1338,12 @@ nix_store_queue_cfg_and_then_release(struct rte_eth_dev *eth_dev)
 	rxq = (struct otx2_eth_rxq **)eth_dev->data->rx_queues;
 	for (i = 0; i < nb_rxq; i++) {
 		if (rxq[i] == NULL) {
-			otx2_err("rxq[%d] is already released", i);
-			goto fail;
+			rx_qconf[i].valid = false;
+			otx2_info("rxq[%d] is already released", i);
+			continue;
 		}
 		memcpy(&rx_qconf[i], &rxq[i]->qconf, sizeof(*rx_qconf));
+		rx_qconf[i].valid = true;
 		otx2_nix_rx_queue_release(rxq[i]);
 		eth_dev->data->rx_queues[i] = NULL;
 	}
@@ -1201,6 +1398,8 @@ nix_restore_queue_cfg(struct rte_eth_dev *eth_dev)
 	 * queues are already setup in port_configure().
 	 */
 	for (i = 0; i < nb_txq; i++) {
+		if (!tx_qconf[i].valid)
+			continue;
 		rc = otx2_nix_tx_queue_setup(eth_dev, i, tx_qconf[i].nb_desc,
 					     tx_qconf[i].socket_id,
 					     &tx_qconf[i].conf.tx);
@@ -1216,6 +1415,8 @@ nix_restore_queue_cfg(struct rte_eth_dev *eth_dev)
 	free(tx_qconf); tx_qconf = NULL;
 
 	for (i = 0; i < nb_rxq; i++) {
+		if (!rx_qconf[i].valid)
+			continue;
 		rc = otx2_nix_rx_queue_setup(eth_dev, i, rx_qconf[i].nb_desc,
 					     rx_qconf[i].socket_id,
 					     &rx_qconf[i].conf.rx,
@@ -1592,11 +1793,6 @@ otx2_nix_configure(struct rte_eth_dev *eth_dev)
 		goto fail_configure;
 	}
 
-	if (conf->link_speeds & ETH_LINK_SPEED_FIXED) {
-		otx2_err("Setting link speed/duplex not supported");
-		goto fail_configure;
-	}
-
 	if (conf->dcb_capability_en == 1) {
 		otx2_err("dcb enable is not supported");
 		goto fail_configure;
@@ -1659,6 +1855,9 @@ otx2_nix_configure(struct rte_eth_dev *eth_dev)
 		otx2_err("Failed to init nix_lf rc=%d", rc);
 		goto fail_offloads;
 	}
+
+	otx2_nix_err_intr_enb_dis(eth_dev, true);
+	otx2_nix_ras_intr_enb_dis(eth_dev, true);
 
 	if (dev->ptp_en &&
 	    dev->npc_flow.switch_header_type == OTX2_PRIV_FLAGS_HIGIG) {
@@ -1773,6 +1972,13 @@ otx2_nix_configure(struct rte_eth_dev *eth_dev)
 		rte_eth_random_addr((uint8_t *)ea);
 
 	rte_ether_format_addr(ea_fmt, RTE_ETHER_ADDR_FMT_SIZE, ea);
+
+	/* Apply new link configurations if changed */
+	rc = otx2_apply_link_speed(eth_dev);
+	if (rc) {
+		otx2_err("Failed to set link configuration");
+		goto uninstall_mc_list;
+	}
 
 	otx2_nix_dbg("Configured port%d mac=%s nb_rxq=%d nb_txq=%d"
 		" rx_offloads=0x%" PRIx64 " tx_offloads=0x%" PRIx64 ""
@@ -2025,6 +2231,7 @@ static const struct eth_dev_ops otx2_eth_dev_ops = {
 	.link_update              = otx2_nix_link_update,
 	.tx_queue_setup           = otx2_nix_tx_queue_setup,
 	.tx_queue_release         = otx2_nix_tx_queue_release,
+	.tm_ops_get               = otx2_nix_tm_ops_get,
 	.rx_queue_setup           = otx2_nix_rx_queue_setup,
 	.rx_queue_release         = otx2_nix_rx_queue_release,
 	.dev_start                = otx2_nix_dev_start,
@@ -2070,6 +2277,7 @@ static const struct eth_dev_ops otx2_eth_dev_ops = {
 	.rx_descriptor_status     = otx2_nix_rx_descriptor_status,
 	.tx_descriptor_status     = otx2_nix_tx_descriptor_status,
 	.tx_done_cleanup          = otx2_nix_tx_done_cleanup,
+	.set_queue_rate_limit     = otx2_nix_tm_set_queue_rate_limit,
 	.pool_ops_supported       = otx2_nix_pool_ops_supported,
 	.filter_ctrl              = otx2_nix_dev_filter_ctrl,
 	.get_module_info          = otx2_nix_get_module_info,
@@ -2152,6 +2360,20 @@ otx2_eth_dev_is_sdp(struct rte_pci_device *pci_dev)
 	return false;
 }
 
+static inline uint64_t
+nix_get_blkaddr(struct otx2_eth_dev *dev)
+{
+	uint64_t reg;
+
+	/* Reading the discovery register to know which NIX is the LF
+	 * attached to.
+	 */
+	reg = otx2_read64(dev->bar2 +
+			  RVU_PF_BLOCK_ADDRX_DISC(RVU_BLOCK_ADDR_NIX0));
+
+	return reg & 0x1FFULL ? RVU_BLOCK_ADDR_NIX0 : RVU_BLOCK_ADDR_NIX1;
+}
+
 static int
 otx2_eth_dev_init(struct rte_eth_dev *eth_dev)
 {
@@ -2211,13 +2433,14 @@ otx2_eth_dev_init(struct rte_eth_dev *eth_dev)
 	dev->configured = 0;
 	dev->drv_inited = true;
 	dev->ptype_disable = 0;
-	dev->base = dev->bar2 + (RVU_BLOCK_ADDR_NIX0 << 20);
 	dev->lmt_addr = dev->bar2 + (RVU_BLOCK_ADDR_LMT << 20);
 
 	/* Attach NIX LF */
 	rc = nix_lf_attach(dev);
 	if (rc)
 		goto otx2_npa_uninit;
+
+	dev->base = dev->bar2 + (nix_get_blkaddr(dev) << 20);
 
 	/* Get NIX MSIX offset */
 	rc = nix_lf_get_msix_offset(dev);

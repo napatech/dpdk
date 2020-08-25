@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2017 Intel Corporation
 
-allow_experimental_apis = true
 headers = files('rte_ip.h',
 	'rte_tcp.h',
 	'rte_udp.h',
@@ -16,7 +15,8 @@ headers = files('rte_ip.h',
 	'rte_net.h',
 	'rte_net_crc.h',
 	'rte_mpls.h',
-	'rte_higig.h')
+	'rte_higig.h',
+	'rte_ecpri.h')
 
 sources = files('rte_arp.c', 'rte_ether.c', 'rte_net.c', 'rte_net_crc.c')
 deps += ['mbuf']

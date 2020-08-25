@@ -47,7 +47,7 @@ release = version
 master_doc = 'index'
 
 # Maximum feature description string length
-feature_str_len = 25
+feature_str_len = 30
 
 # Figures, tables and code-blocks automatically numbered if they have caption
 numfig = True
@@ -314,16 +314,22 @@ def print_table_css(outfile, table_id):
          cursor: default;
          overflow: hidden;
       }
+      table#idx p {
+         margin: 0;
+         line-height: inherit;
+      }
       table#idx th, table#idx td {
          text-align: center;
+         border: solid 1px #ddd;
       }
       table#idx th {
-         font-size: 72%;
+         padding: 0.5em 0;
+      }
+      table#idx th, table#idx th p {
+         font-size: 11px;
          white-space: pre-wrap;
          vertical-align: top;
-         padding: 0.5em 0;
          min-width: 0.9em;
-         width: 2em;
       }
       table#idx col:first-child {
          width: 0;
@@ -332,8 +338,10 @@ def print_table_css(outfile, table_id):
          vertical-align: bottom;
       }
       table#idx td {
-         font-size: 70%;
          padding: 1px;
+      }
+      table#idx td, table#idx td p {
+         font-size: 11px;
       }
       table#idx td:first-child {
          padding-left: 1em;
@@ -401,10 +409,20 @@ def setup(app):
                             'Features',
                             'Features availability in compression drivers',
                             'Feature')
+    table_file = dirname(__file__) + '/regexdevs/overview_feature_table.txt'
+    generate_overview_table(table_file, 1,
+                            'Features',
+                            'Features availability in regex drivers',
+                            'Feature')
     table_file = dirname(__file__) + '/vdpadevs/overview_feature_table.txt'
     generate_overview_table(table_file, 1,
                             'Features',
                             'Features availability in vDPA drivers',
+                            'Feature')
+    table_file = dirname(__file__) + '/bbdevs/overview_feature_table.txt'
+    generate_overview_table(table_file, 1,
+                            'Features',
+                            'Features availability in bbdev drivers',
                             'Feature')
 
     if LooseVersion(sphinx_version) < LooseVersion('1.3.1'):
@@ -415,4 +433,8 @@ def setup(app):
         # Process the numref references once the doctree has been created.
         app.connect('doctree-resolved', process_numref)
 
-    app.add_stylesheet('css/custom.css')
+    try:
+        # New function in sphinx 1.8
+        app.add_css_file('css/custom.css')
+    except:
+        app.add_stylesheet('css/custom.css')

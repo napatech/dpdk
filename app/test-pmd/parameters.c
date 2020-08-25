@@ -49,7 +49,7 @@
 static void
 usage(char* progname)
 {
-	printf("usage: %s "
+	printf("usage: %s [EAL options] -- "
 #ifdef RTE_LIBRTE_CMDLINE
 	       "[--interactive|-i] "
 	       "[--cmdline-file=FILENAME] "
@@ -147,6 +147,8 @@ usage(char* progname)
 	       "is default).\n");
 	printf("  --forward-mode=N: set forwarding mode (N: %s).\n",
 	       list_pkt_forwarding_modes());
+	printf("  --forward-mode=5tswap: set forwarding mode to "
+			"swap L2,L3,L4 for MAC, IPv4/IPv6 and TCP/UDP only.\n");
 	printf("  --rss-ip: set RSS functions to IPv4/IPv6 only .\n");
 	printf("  --rss-udp: set RSS functions to IPv4/IPv6 + UDP.\n");
 	printf("  --rxq=N: set the number of RX queues per port to N.\n");
@@ -187,9 +189,9 @@ usage(char* progname)
 	printf("  --no-rmv-interrupt: disable device removal interrupt.\n");
 	printf("  --bitrate-stats=N: set the logical core N to perform "
 		"bit-rate calculation.\n");
-	printf("  --print-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|all>: "
+	printf("  --print-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|flow_aged|all>: "
 	       "enable print of designated event or all of them.\n");
-	printf("  --mask-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|all>: "
+	printf("  --mask-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|flow_aged|all>: "
 	       "disable print of designated event or all of them.\n");
 	printf("  --flow-isolate-all: "
 	       "requests flow API isolated mode on all ports at initialization time.\n");
@@ -212,6 +214,8 @@ usage(char* progname)
 	printf("  --noisy-lkup-num-writes=N: do N random reads and writes per packet\n");
 	printf("  --no-iova-contig: mempool memory can be IOVA non contiguous. "
 	       "valid only with --mp-alloc=anon\n");
+	printf("  --rx-mq-mode=0xX: hexadecimal bitmask of RX mq mode can be "
+	       "enabled\n");
 }
 
 #ifdef RTE_LIBRTE_CMDLINE
@@ -545,6 +549,8 @@ parse_event_printing_config(const char *optarg, int enable)
 		mask = UINT32_C(1) << RTE_ETH_EVENT_NEW;
 	else if (!strcmp(optarg, "dev_released"))
 		mask = UINT32_C(1) << RTE_ETH_EVENT_DESTROY;
+	else if (!strcmp(optarg, "flow_aged"))
+		mask = UINT32_C(1) << RTE_ETH_EVENT_FLOW_AGED;
 	else if (!strcmp(optarg, "all"))
 		mask = ~UINT32_C(0);
 	else {
@@ -670,6 +676,7 @@ launch_args_parse(int argc, char** argv)
 		{ "noisy-lkup-num-reads",	1, 0, 0 },
 		{ "noisy-lkup-num-reads-writes", 1, 0, 0 },
 		{ "no-iova-contig",             0, 0, 0 },
+		{ "rx-mq-mode",                 1, 0, 0 },
 		{ 0, 0, 0, 0 },
 	};
 
@@ -1363,6 +1370,17 @@ launch_args_parse(int argc, char** argv)
 			}
 			if (!strcmp(lgopts[opt_idx].name, "no-iova-contig"))
 				mempool_flags = MEMPOOL_F_NO_IOVA_CONTIG;
+
+			if (!strcmp(lgopts[opt_idx].name, "rx-mq-mode")) {
+				char *end = NULL;
+				n = strtoul(optarg, &end, 16);
+				if (n >= 0 && n <= ETH_MQ_RX_VMDQ_DCB_RSS)
+					rx_mq_mode = (enum rte_eth_rx_mq_mode)n;
+				else
+					rte_exit(EXIT_FAILURE,
+						 "rx-mq-mode must be >= 0 and <= %d\n",
+						 ETH_MQ_RX_VMDQ_DCB_RSS);
+			}
 			break;
 		case 'h':
 			usage(argv[0]);

@@ -349,6 +349,109 @@ even if only the first term of subtraction has overflowed:
     uint32_t entries = (prod_tail - cons_head);
     uint32_t free_entries = (mask + cons_tail -prod_head);
 
+Producer/consumer synchronization modes
+---------------------------------------
+
+rte_ring supports different synchronization modes for producers and consumers.
+These modes can be specified at ring creation/init time via ``flags``
+parameter.
+That should help users to configure ring in the most suitable way for his
+specific usage scenarios.
+Currently supported modes:
+
+.. _Ring_Library_MPMC_Mode:
+
+MP/MC (default one)
+~~~~~~~~~~~~~~~~~~~
+
+Multi-producer (/multi-consumer) mode. This is a default enqueue (/dequeue)
+mode for the ring. In this mode multiple threads can enqueue (/dequeue)
+objects to (/from) the ring. For 'classic' DPDK deployments (with one thread
+per core) this is usually the most suitable and fastest synchronization mode.
+As a well known limitation - it can perform quite pure on some overcommitted
+scenarios.
+
+.. _Ring_Library_SPSC_Mode:
+
+SP/SC
+~~~~~
+Single-producer (/single-consumer) mode. In this mode only one thread at a time
+is allowed to enqueue (/dequeue) objects to (/from) the ring.
+
+.. _Ring_Library_MT_RTS_Mode:
+
+MP_RTS/MC_RTS
+~~~~~~~~~~~~~
+
+Multi-producer (/multi-consumer) with Relaxed Tail Sync (RTS) mode.
+The main difference from the original MP/MC algorithm is that
+tail value is increased not by every thread that finished enqueue/dequeue,
+but only by the last one.
+That allows threads to avoid spinning on ring tail value,
+leaving actual tail value change to the last thread at a given instance.
+That technique helps to avoid the Lock-Waiter-Preemption (LWP) problem on tail
+update and improves average enqueue/dequeue times on overcommitted systems.
+To achieve that RTS requires 2 64-bit CAS for each enqueue(/dequeue) operation:
+one for head update, second for tail update.
+In comparison the original MP/MC algorithm requires one 32-bit CAS
+for head update and waiting/spinning on tail value.
+
+.. _Ring_Library_MT_HTS_Mode:
+
+MP_HTS/MC_HTS
+~~~~~~~~~~~~~
+
+Multi-producer (/multi-consumer) with Head/Tail Sync (HTS) mode.
+In that mode enqueue/dequeue operation is fully serialized:
+at any given moment only one enqueue/dequeue operation can proceed.
+This is achieved by allowing a thread to proceed with changing ``head.value``
+only when ``head.value == tail.value``.
+Both head and tail values are updated atomically (as one 64-bit value).
+To achieve that 64-bit CAS is used by head update routine.
+That technique also avoids the Lock-Waiter-Preemption (LWP) problem on tail
+update and helps to improve ring enqueue/dequeue behavior in overcommitted
+scenarios. Another advantage of fully serialized producer/consumer -
+it provides the ability to implement MT safe peek API for rte_ring.
+
+Ring Peek API
+-------------
+
+For ring with serialized producer/consumer (HTS sync mode) it is possible
+to split public enqueue/dequeue API into two phases:
+
+*   enqueue/dequeue start
+
+*   enqueue/dequeue finish
+
+That allows user to inspect objects in the ring without removing them
+from it (aka MT safe peek) and reserve space for the objects in the ring
+before actual enqueue.
+Note that this API is available only for two sync modes:
+
+*   Single Producer/Single Consumer (SP/SC)
+
+*   Multi-producer/Multi-consumer with Head/Tail Sync (HTS)
+
+It is a user responsibility to create/init ring with appropriate sync modes
+selected. As an example of usage:
+
+.. code-block:: c
+
+    /* read 1 elem from the ring: */
+    uint32_t n = rte_ring_dequeue_bulk_start(ring, &obj, 1, NULL);
+    if (n != 0) {
+        /* examine object */
+        if (object_examine(obj) == KEEP)
+            /* decided to keep it in the ring. */
+            rte_ring_dequeue_finish(ring, 0);
+        else
+            /* decided to remove it from the ring. */
+            rte_ring_dequeue_finish(ring, n);
+    }
+
+Note that between ``_start_`` and ``_finish_`` none other thread can proceed
+with enqueue(/dequeue) operation till ``_finish_`` completes.
+
 References
 ----------
 

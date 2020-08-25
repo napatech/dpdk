@@ -46,6 +46,15 @@
 	((RVU_PCI_REV_MAJOR(otx2_dev_revid(dev)) == 0x0) &&	\
 	 (RVU_PCI_REV_MIDR_ID(otx2_dev_revid(dev)) == 0x0))
 
+#define otx2_dev_is_96xx_Cx(dev)				\
+	((RVU_PCI_REV_MAJOR(otx2_dev_revid(dev)) == 0x2) &&	\
+	 (RVU_PCI_REV_MIDR_ID(otx2_dev_revid(dev)) == 0x0))
+
+#define otx2_dev_is_96xx_C0(dev)				\
+	((RVU_PCI_REV_MAJOR(otx2_dev_revid(dev)) == 0x2) &&	\
+	 (RVU_PCI_REV_MINOR(otx2_dev_revid(dev)) == 0x0) &&	\
+	 (RVU_PCI_REV_MIDR_ID(otx2_dev_revid(dev)) == 0x0))
+
 struct otx2_dev;
 
 /* Link status callback */
@@ -85,6 +94,7 @@ struct otx2_dev {
 	OTX2_DEV;
 };
 
+__rte_internal
 int otx2_dev_priv_init(struct rte_pci_device *pci_dev, void *otx2_dev);
 
 /* Common dev init and fini routines */
@@ -107,7 +117,9 @@ otx2_dev_init(struct rte_pci_device *pci_dev, void *otx2_dev)
 	return otx2_dev_priv_init(pci_dev, otx2_dev);
 }
 
+__rte_internal
 void otx2_dev_fini(struct rte_pci_device *pci_dev, void *otx2_dev);
+__rte_internal
 int otx2_dev_active_vfs(void *otx2_dev);
 
 #define RVU_PFVF_PF_SHIFT	10

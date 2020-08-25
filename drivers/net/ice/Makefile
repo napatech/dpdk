@@ -10,10 +10,12 @@ LIB = librte_pmd_ice.a
 
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
-CFLAGS += -DALLOW_EXPERIMENTAL_API
+CFLAGS += -I$(RTE_SDK)/drivers/common/iavf
 
 LDLIBS += -lrte_eal -lrte_mbuf -lrte_ethdev -lrte_kvargs
 LDLIBS += -lrte_bus_pci -lrte_mempool -lrte_hash
+LDLIBS += -lrte_net -lrte_common_iavf
+LDLIBS += -lpthread
 
 EXPORT_MAP := rte_pmd_ice_version.map
 
@@ -52,6 +54,8 @@ SRCS-$(CONFIG_RTE_LIBRTE_ICE_PMD) += ice_flex_pipe.c
 SRCS-$(CONFIG_RTE_LIBRTE_ICE_PMD) += ice_flow.c
 SRCS-$(CONFIG_RTE_LIBRTE_ICE_PMD) += ice_dcb.c
 SRCS-$(CONFIG_RTE_LIBRTE_ICE_PMD) += ice_fdir.c
+SRCS-$(CONFIG_RTE_LIBRTE_ICE_PMD) += ice_acl.c
+SRCS-$(CONFIG_RTE_LIBRTE_ICE_PMD) += ice_acl_ctrl.c
 
 SRCS-$(CONFIG_RTE_LIBRTE_ICE_PMD) += ice_ethdev.c
 SRCS-$(CONFIG_RTE_LIBRTE_ICE_PMD) += ice_rxtx.c
@@ -81,6 +85,10 @@ ifeq ($(CC_AVX2_SUPPORT), 1)
 	SRCS-$(CONFIG_RTE_LIBRTE_ICE_PMD) += ice_rxtx_vec_avx2.c
 endif
 SRCS-$(CONFIG_RTE_LIBRTE_ICE_PMD) += ice_generic_flow.c
+
+SRCS-$(CONFIG_RTE_LIBRTE_ICE_PMD) += ice_dcf.c
+SRCS-$(CONFIG_RTE_LIBRTE_ICE_PMD) += ice_dcf_ethdev.c
+SRCS-$(CONFIG_RTE_LIBRTE_ICE_PMD) += ice_dcf_parent.c
 
 # install this header file
 SYMLINK-$(CONFIG_RTE_LIBRTE_ICE_PMD)-include := rte_pmd_ice.h

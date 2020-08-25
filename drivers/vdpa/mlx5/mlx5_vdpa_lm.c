@@ -15,13 +15,17 @@ mlx5_vdpa_logging_enable(struct mlx5_vdpa_priv *priv, int enable)
 		.type = MLX5_VIRTQ_MODIFY_TYPE_DIRTY_BITMAP_DUMP_ENABLE,
 		.dirty_bitmap_dump_enable = enable,
 	};
-	struct mlx5_vdpa_virtq *virtq;
+	int i;
 
-	SLIST_FOREACH(virtq, &priv->virtq_list, next) {
-		attr.queue_index = virtq->index;
-		if (mlx5_devx_cmd_modify_virtq(virtq->virtq, &attr)) {
-			DRV_LOG(ERR, "Failed to modify virtq %d logging.",
-				virtq->index);
+	for (i = 0; i < priv->nr_virtqs; ++i) {
+		attr.queue_index = i;
+		if (!priv->virtqs[i].virtq) {
+			DRV_LOG(DEBUG, "virtq %d is invalid for dirty bitmap "
+				"enabling.", i);
+		} else if (mlx5_devx_cmd_modify_virtq(priv->virtqs[i].virtq,
+			   &attr)) {
+			DRV_LOG(ERR, "Failed to modify virtq %d for dirty "
+				"bitmap enabling.", i);
 			return -1;
 		}
 	}
@@ -39,6 +43,7 @@ mlx5_vdpa_dirty_bitmap_set(struct mlx5_vdpa_priv *priv, uint64_t log_base,
 			.pg_access = 1,
 			.klm_array = NULL,
 			.klm_num = 0,
+			.relaxed_ordering = 0,
 	};
 	struct mlx5_devx_virtq_attr attr = {
 		.type = MLX5_VIRTQ_MODIFY_TYPE_DIRTY_BITMAP_PARAMS,
@@ -46,7 +51,7 @@ mlx5_vdpa_dirty_bitmap_set(struct mlx5_vdpa_priv *priv, uint64_t log_base,
 		.dirty_bitmap_size = log_size,
 	};
 	struct mlx5_vdpa_query_mr *mr = rte_malloc(__func__, sizeof(*mr), 0);
-	struct mlx5_vdpa_virtq *virtq;
+	int i;
 
 	if (!mr) {
 		DRV_LOG(ERR, "Failed to allocate mem for lm mr.");
@@ -66,11 +71,13 @@ mlx5_vdpa_dirty_bitmap_set(struct mlx5_vdpa_priv *priv, uint64_t log_base,
 		goto err;
 	}
 	attr.dirty_bitmap_mkey = mr->mkey->id;
-	SLIST_FOREACH(virtq, &priv->virtq_list, next) {
-		attr.queue_index = virtq->index;
-		if (mlx5_devx_cmd_modify_virtq(virtq->virtq, &attr)) {
-			DRV_LOG(ERR, "Failed to modify virtq %d for lm.",
-				virtq->index);
+	for (i = 0; i < priv->nr_virtqs; ++i) {
+		attr.queue_index = i;
+		if (!priv->virtqs[i].virtq) {
+			DRV_LOG(DEBUG, "virtq %d is invalid for LM.", i);
+		} else if (mlx5_devx_cmd_modify_virtq(priv->virtqs[i].virtq,
+						      &attr)) {
+			DRV_LOG(ERR, "Failed to modify virtq %d for LM.", i);
 			goto err;
 		}
 	}
@@ -92,10 +99,9 @@ err:
 int
 mlx5_vdpa_lm_log(struct mlx5_vdpa_priv *priv)
 {
-	struct mlx5_devx_virtq_attr attr = {0};
-	struct mlx5_vdpa_virtq *virtq;
 	uint64_t features;
 	int ret = rte_vhost_get_negotiated_features(priv->vid, &features);
+	int i;
 
 	if (ret) {
 		DRV_LOG(ERR, "Failed to get negotiated features.");
@@ -103,27 +109,19 @@ mlx5_vdpa_lm_log(struct mlx5_vdpa_priv *priv)
 	}
 	if (!RTE_VHOST_NEED_LOG(features))
 		return 0;
-	SLIST_FOREACH(virtq, &priv->virtq_list, next) {
-		ret = mlx5_vdpa_virtq_modify(virtq, 0);
-		if (ret)
-			return -1;
-		if (mlx5_devx_cmd_query_virtq(virtq->virtq, &attr)) {
-			DRV_LOG(ERR, "Failed to query virtq %d.", virtq->index);
-			return -1;
+	for (i = 0; i < priv->nr_virtqs; ++i) {
+		if (!priv->virtqs[i].virtq) {
+			DRV_LOG(DEBUG, "virtq %d is invalid for LM log.", i);
+		} else {
+			ret = mlx5_vdpa_virtq_stop(priv, i);
+			if (ret) {
+				DRV_LOG(ERR, "Failed to stop virtq %d for LM "
+					"log.", i);
+				return -1;
+			}
 		}
-		DRV_LOG(INFO, "Query vid %d vring %d: hw_available_idx=%d, "
-			"hw_used_index=%d", priv->vid, virtq->index,
-			attr.hw_available_index, attr.hw_used_index);
-		ret = rte_vhost_set_vring_base(priv->vid, virtq->index,
-					       attr.hw_available_index,
-					       attr.hw_used_index);
-		if (ret) {
-			DRV_LOG(ERR, "Failed to set virtq %d base.",
-				virtq->index);
-			return -1;
-		}
-		rte_vhost_log_used_vring(priv->vid, virtq->index, 0,
-				       MLX5_VDPA_USED_RING_LEN(virtq->vq_size));
+		rte_vhost_log_used_vring(priv->vid, i, 0,
+			      MLX5_VDPA_USED_RING_LEN(priv->virtqs[i].vq_size));
 	}
 	return 0;
 }

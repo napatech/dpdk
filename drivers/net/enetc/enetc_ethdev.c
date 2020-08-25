@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2018-2019 NXP
+ * Copyright 2018-2020 NXP
  */
 
 #include <stdbool.h>
@@ -9,8 +9,6 @@
 
 #include "enetc_logs.h"
 #include "enetc.h"
-
-int enetc_logtype_pmd;
 
 static int
 enetc_dev_start(struct rte_eth_dev *dev)
@@ -146,6 +144,15 @@ enetc_hardware_init(struct enetc_eth_hw *hw)
 	/* Calculating and storing the base HW addresses */
 	hw->hw.port = (void *)((size_t)hw->hw.reg + ENETC_PORT_BASE);
 	hw->hw.global = (void *)((size_t)hw->hw.reg + ENETC_GLOBAL_BASE);
+
+	/* WA for Rx lock-up HW erratum */
+	enetc_port_wr(enetc_hw, ENETC_PM0_RX_FIFO, 1);
+
+	/* set ENETC transaction flags to coherent, don't allocate.
+	 * BD writes merge with surrounding cache line data, frame data writes
+	 * overwrite cache line.
+	 */
+	enetc_wr(enetc_hw, ENETC_SICAR0, ENETC_SICAR0_COHERENT);
 
 	/* Enabling Station Interface */
 	enetc_wr(enetc_hw, ENETC_SIMR, ENETC_SIMR_EN);
@@ -942,10 +949,4 @@ static struct rte_pci_driver rte_enetc_pmd = {
 RTE_PMD_REGISTER_PCI(net_enetc, rte_enetc_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_enetc, pci_id_enetc_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_enetc, "* vfio-pci");
-
-RTE_INIT(enetc_pmd_init_log)
-{
-	enetc_logtype_pmd = rte_log_register("pmd.net.enetc");
-	if (enetc_logtype_pmd >= 0)
-		rte_log_set_level(enetc_logtype_pmd, RTE_LOG_NOTICE);
-}
+RTE_LOG_REGISTER(enetc_logtype_pmd, pmd.net.enetc, NOTICE);

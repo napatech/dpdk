@@ -13,7 +13,7 @@
 #include "i40e_rxtx.h"
 #include "i40e_rxtx_vec_common.h"
 
-#include <altivec.h>
+#include <rte_altivec.h>
 
 #pragma GCC diagnostic ignored "-Wcast-qual"
 
@@ -591,25 +591,25 @@ i40e_xmit_fixed_burst_vec(void *tx_queue, struct rte_mbuf **tx_pkts,
 	return nb_pkts;
 }
 
-void __attribute__((cold))
+void __rte_cold
 i40e_rx_queue_release_mbufs_vec(struct i40e_rx_queue *rxq)
 {
 	_i40e_rx_queue_release_mbufs_vec(rxq);
 }
 
-int __attribute__((cold))
+int __rte_cold
 i40e_rxq_vec_setup(struct i40e_rx_queue *rxq)
 {
 	return i40e_rxq_vec_setup_default(rxq);
 }
 
-int __attribute__((cold))
+int __rte_cold
 i40e_txq_vec_setup(struct i40e_tx_queue __rte_unused * txq)
 {
 	return 0;
 }
 
-int __attribute__((cold))
+int __rte_cold
 i40e_rx_vec_dev_conf_condition_check(struct rte_eth_dev *dev)
 {
 	return i40e_rx_vec_dev_conf_condition_check_default(dev);

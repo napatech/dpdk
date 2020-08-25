@@ -1,4 +1,4 @@
-DPDK_20.0 {
+INTERNAL {
 	global:
 
 	otx2_npa_lf_fini;

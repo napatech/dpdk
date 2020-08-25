@@ -7,6 +7,7 @@
 #include "axgbe_ethdev.h"
 #include "axgbe_common.h"
 #include "axgbe_phy.h"
+#include "axgbe_regs.h"
 
 static int eth_axgbe_dev_init(struct rte_eth_dev *eth_dev);
 static int eth_axgbe_dev_uninit(struct rte_eth_dev *eth_dev);
@@ -19,8 +20,25 @@ static int axgbe_dev_promiscuous_enable(struct rte_eth_dev *dev);
 static int axgbe_dev_promiscuous_disable(struct rte_eth_dev *dev);
 static int axgbe_dev_allmulticast_enable(struct rte_eth_dev *dev);
 static int axgbe_dev_allmulticast_disable(struct rte_eth_dev *dev);
+static int axgbe_dev_mac_addr_set(struct rte_eth_dev *dev,
+				  struct rte_ether_addr *mac_addr);
+static int axgbe_dev_mac_addr_add(struct rte_eth_dev *dev,
+				  struct rte_ether_addr *mac_addr,
+				  uint32_t index,
+				  uint32_t vmdq);
+static void axgbe_dev_mac_addr_remove(struct rte_eth_dev *dev, uint32_t index);
+static int axgbe_dev_set_mc_addr_list(struct rte_eth_dev *dev,
+				      struct rte_ether_addr *mc_addr_set,
+				      uint32_t nb_mc_addr);
+static int axgbe_dev_uc_hash_table_set(struct rte_eth_dev *dev,
+				       struct rte_ether_addr *mac_addr,
+				       uint8_t add);
+static int axgbe_dev_uc_all_hash_table_set(struct rte_eth_dev *dev,
+					   uint8_t add);
 static int axgbe_dev_link_update(struct rte_eth_dev *dev,
 				 int wait_to_complete);
+static int axgbe_dev_get_regs(struct rte_eth_dev *dev,
+			      struct rte_dev_reg_info *regs);
 static int axgbe_dev_stats_get(struct rte_eth_dev *dev,
 				struct rte_eth_stats *stats);
 static int axgbe_dev_stats_reset(struct rte_eth_dev *dev);
@@ -42,8 +60,30 @@ axgbe_dev_xstats_get_names_by_id(struct rte_eth_dev *dev,
 				 const uint64_t *ids,
 				 unsigned int size);
 static int axgbe_dev_xstats_reset(struct rte_eth_dev *dev);
+static int axgbe_dev_rss_reta_update(struct rte_eth_dev *dev,
+			  struct rte_eth_rss_reta_entry64 *reta_conf,
+			  uint16_t reta_size);
+static int axgbe_dev_rss_reta_query(struct rte_eth_dev *dev,
+			 struct rte_eth_rss_reta_entry64 *reta_conf,
+			 uint16_t reta_size);
+static int axgbe_dev_rss_hash_update(struct rte_eth_dev *dev,
+				     struct rte_eth_rss_conf *rss_conf);
+static int axgbe_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
+				       struct rte_eth_rss_conf *rss_conf);
 static int  axgbe_dev_info_get(struct rte_eth_dev *dev,
 			       struct rte_eth_dev_info *dev_info);
+static int axgbe_flow_ctrl_get(struct rte_eth_dev *dev,
+				struct rte_eth_fc_conf *fc_conf);
+static int axgbe_flow_ctrl_set(struct rte_eth_dev *dev,
+				struct rte_eth_fc_conf *fc_conf);
+static int axgbe_priority_flow_ctrl_set(struct rte_eth_dev *dev,
+				struct rte_eth_pfc_conf *pfc_conf);
+static void axgbe_rxq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
+	struct rte_eth_rxq_info *qinfo);
+static void axgbe_txq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
+	struct rte_eth_txq_info *qinfo);
+const uint32_t *axgbe_dev_supported_ptypes_get(struct rte_eth_dev *dev);
+static int axgb_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
 
 struct axgbe_xstats {
 	char name[RTE_ETH_XSTATS_NAME_SIZE];
@@ -103,9 +143,6 @@ static const struct axgbe_xstats axgbe_xstats_strings[] = {
 #define AMD_PCI_AXGBE_DEVICE_V2A 0x1458
 #define AMD_PCI_AXGBE_DEVICE_V2B 0x1459
 
-int axgbe_logtype_init;
-int axgbe_logtype_driver;
-
 static const struct rte_pci_id pci_id_axgbe_map[] = {
 	{RTE_PCI_DEVICE(AMD_PCI_VENDOR_ID, AMD_PCI_AXGBE_DEVICE_V2A)},
 	{RTE_PCI_DEVICE(AMD_PCI_VENDOR_ID, AMD_PCI_AXGBE_DEVICE_V2B)},
@@ -157,7 +194,14 @@ static const struct eth_dev_ops axgbe_eth_dev_ops = {
 	.promiscuous_disable  = axgbe_dev_promiscuous_disable,
 	.allmulticast_enable  = axgbe_dev_allmulticast_enable,
 	.allmulticast_disable = axgbe_dev_allmulticast_disable,
+	.mac_addr_set         = axgbe_dev_mac_addr_set,
+	.mac_addr_add         = axgbe_dev_mac_addr_add,
+	.mac_addr_remove      = axgbe_dev_mac_addr_remove,
+	.set_mc_addr_list     = axgbe_dev_set_mc_addr_list,
+	.uc_hash_table_set    = axgbe_dev_uc_hash_table_set,
+	.uc_all_hash_table_set = axgbe_dev_uc_all_hash_table_set,
 	.link_update          = axgbe_dev_link_update,
+	.get_reg	      = axgbe_dev_get_regs,
 	.stats_get            = axgbe_dev_stats_get,
 	.stats_reset          = axgbe_dev_stats_reset,
 	.xstats_get	      = axgbe_dev_xstats_get,
@@ -165,11 +209,24 @@ static const struct eth_dev_ops axgbe_eth_dev_ops = {
 	.xstats_get_names     = axgbe_dev_xstats_get_names,
 	.xstats_get_names_by_id = axgbe_dev_xstats_get_names_by_id,
 	.xstats_get_by_id     = axgbe_dev_xstats_get_by_id,
+	.reta_update          = axgbe_dev_rss_reta_update,
+	.reta_query           = axgbe_dev_rss_reta_query,
+	.rss_hash_update      = axgbe_dev_rss_hash_update,
+	.rss_hash_conf_get    = axgbe_dev_rss_hash_conf_get,
 	.dev_infos_get        = axgbe_dev_info_get,
 	.rx_queue_setup       = axgbe_dev_rx_queue_setup,
 	.rx_queue_release     = axgbe_dev_rx_queue_release,
 	.tx_queue_setup       = axgbe_dev_tx_queue_setup,
 	.tx_queue_release     = axgbe_dev_tx_queue_release,
+	.flow_ctrl_get        = axgbe_flow_ctrl_get,
+	.flow_ctrl_set        = axgbe_flow_ctrl_set,
+	.priority_flow_ctrl_set = axgbe_priority_flow_ctrl_set,
+	.rxq_info_get                 = axgbe_rxq_info_get,
+	.txq_info_get                 = axgbe_txq_info_get,
+	.dev_supported_ptypes_get     = axgbe_dev_supported_ptypes_get,
+	.rx_descriptor_status         = axgbe_dev_rx_descriptor_status,
+	.tx_descriptor_status         = axgbe_dev_tx_descriptor_status,
+	.mtu_set		= axgb_mtu_set,
 };
 
 static int axgbe_phy_reset(struct axgbe_port *pdata)
@@ -201,12 +258,14 @@ axgbe_dev_interrupt_handler(void *param)
 	pdata->phy_if.an_isr(pdata);
 	/*DMA related interrupts*/
 	dma_isr = AXGMAC_IOREAD(pdata, DMA_ISR);
+	PMD_DRV_LOG(DEBUG, "DMA_ISR=%#010x\n", dma_isr);
 	if (dma_isr) {
 		if (dma_isr & 1) {
 			dma_ch_isr =
 				AXGMAC_DMA_IOREAD((struct axgbe_rx_queue *)
 						  pdata->rx_queues[0],
 						  DMA_CH_SR);
+			PMD_DRV_LOG(DEBUG, "DMA_CH0_ISR=%#010x\n", dma_ch_isr);
 			AXGMAC_DMA_IOWRITE((struct axgbe_rx_queue *)
 					   pdata->rx_queues[0],
 					   DMA_CH_SR, dma_ch_isr);
@@ -249,6 +308,10 @@ axgbe_dev_start(struct rte_eth_dev *dev)
 {
 	struct axgbe_port *pdata = dev->data->dev_private;
 	int ret;
+	struct rte_eth_dev_data *dev_data = dev->data;
+	uint16_t max_pkt_len = dev_data->dev_conf.rxmode.max_rx_pkt_len;
+
+	dev->dev_ops = &axgbe_eth_dev_ops;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -277,8 +340,18 @@ axgbe_dev_start(struct rte_eth_dev *dev)
 	axgbe_dev_enable_tx(dev);
 	axgbe_dev_enable_rx(dev);
 
-	axgbe_clear_bit(AXGBE_STOPPED, &pdata->dev_state);
-	axgbe_clear_bit(AXGBE_DOWN, &pdata->dev_state);
+	rte_bit_relaxed_clear32(AXGBE_STOPPED, &pdata->dev_state);
+	rte_bit_relaxed_clear32(AXGBE_DOWN, &pdata->dev_state);
+	if ((dev_data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_SCATTER) ||
+				max_pkt_len > pdata->rx_buf_size)
+		dev_data->scattered_rx = 1;
+
+	/*  Scatter Rx handling */
+	if (dev_data->scattered_rx)
+		dev->rx_pkt_burst = &eth_axgbe_recv_scattered_pkts;
+	else
+		dev->rx_pkt_burst = &axgbe_recv_pkts;
+
 	return 0;
 }
 
@@ -292,17 +365,17 @@ axgbe_dev_stop(struct rte_eth_dev *dev)
 
 	rte_intr_disable(&pdata->pci_dev->intr_handle);
 
-	if (axgbe_test_bit(AXGBE_STOPPED, &pdata->dev_state))
+	if (rte_bit_relaxed_get32(AXGBE_STOPPED, &pdata->dev_state))
 		return;
 
-	axgbe_set_bit(AXGBE_STOPPED, &pdata->dev_state);
+	rte_bit_relaxed_set32(AXGBE_STOPPED, &pdata->dev_state);
 	axgbe_dev_disable_tx(dev);
 	axgbe_dev_disable_rx(dev);
 
 	pdata->phy_if.phy_stop(pdata);
 	pdata->hw_if.exit(pdata);
 	memset(&dev->data->dev_link, 0, sizeof(struct rte_eth_link));
-	axgbe_set_bit(AXGBE_DOWN, &pdata->dev_state);
+	rte_bit_relaxed_set32(AXGBE_DOWN, &pdata->dev_state);
 }
 
 /* Clear all resources like TX/RX queues. */
@@ -364,6 +437,263 @@ axgbe_dev_allmulticast_disable(struct rte_eth_dev *dev)
 	return 0;
 }
 
+static int
+axgbe_dev_mac_addr_set(struct rte_eth_dev *dev, struct rte_ether_addr *mac_addr)
+{
+	struct axgbe_port *pdata = dev->data->dev_private;
+
+	/* Set Default MAC Addr */
+	axgbe_set_mac_addn_addr(pdata, (u8 *)mac_addr, 0);
+
+	return 0;
+}
+
+static int
+axgbe_dev_mac_addr_add(struct rte_eth_dev *dev, struct rte_ether_addr *mac_addr,
+			      uint32_t index, uint32_t pool __rte_unused)
+{
+	struct axgbe_port *pdata = dev->data->dev_private;
+	struct axgbe_hw_features *hw_feat = &pdata->hw_feat;
+
+	if (index > hw_feat->addn_mac) {
+		PMD_DRV_LOG(ERR, "Invalid Index %d\n", index);
+		return -EINVAL;
+	}
+	axgbe_set_mac_addn_addr(pdata, (u8 *)mac_addr, index);
+	return 0;
+}
+
+static int
+axgbe_dev_rss_reta_update(struct rte_eth_dev *dev,
+			  struct rte_eth_rss_reta_entry64 *reta_conf,
+			  uint16_t reta_size)
+{
+	struct axgbe_port *pdata = dev->data->dev_private;
+	unsigned int i, idx, shift;
+	int ret;
+
+	if (!pdata->rss_enable) {
+		PMD_DRV_LOG(ERR, "RSS not enabled\n");
+		return -ENOTSUP;
+	}
+
+	if (reta_size == 0 || reta_size > AXGBE_RSS_MAX_TABLE_SIZE) {
+		PMD_DRV_LOG(ERR, "reta_size %d is not supported\n", reta_size);
+		return -EINVAL;
+	}
+
+	for (i = 0; i < reta_size; i++) {
+		idx = i / RTE_RETA_GROUP_SIZE;
+		shift = i % RTE_RETA_GROUP_SIZE;
+		if ((reta_conf[idx].mask & (1ULL << shift)) == 0)
+			continue;
+		pdata->rss_table[i] = reta_conf[idx].reta[shift];
+	}
+
+	/* Program the lookup table */
+	ret = axgbe_write_rss_lookup_table(pdata);
+	return ret;
+}
+
+static int
+axgbe_dev_rss_reta_query(struct rte_eth_dev *dev,
+			 struct rte_eth_rss_reta_entry64 *reta_conf,
+			 uint16_t reta_size)
+{
+	struct axgbe_port *pdata = dev->data->dev_private;
+	unsigned int i, idx, shift;
+
+	if (!pdata->rss_enable) {
+		PMD_DRV_LOG(ERR, "RSS not enabled\n");
+		return -ENOTSUP;
+	}
+
+	if (reta_size == 0 || reta_size > AXGBE_RSS_MAX_TABLE_SIZE) {
+		PMD_DRV_LOG(ERR, "reta_size %d is not supported\n", reta_size);
+		return -EINVAL;
+	}
+
+	for (i = 0; i < reta_size; i++) {
+		idx = i / RTE_RETA_GROUP_SIZE;
+		shift = i % RTE_RETA_GROUP_SIZE;
+		if ((reta_conf[idx].mask & (1ULL << shift)) == 0)
+			continue;
+		reta_conf[idx].reta[shift] = pdata->rss_table[i];
+	}
+	return 0;
+}
+
+static int
+axgbe_dev_rss_hash_update(struct rte_eth_dev *dev,
+			  struct rte_eth_rss_conf *rss_conf)
+{
+	struct axgbe_port *pdata = dev->data->dev_private;
+	int ret;
+
+	if (!pdata->rss_enable) {
+		PMD_DRV_LOG(ERR, "RSS not enabled\n");
+		return -ENOTSUP;
+	}
+
+	if (rss_conf == NULL) {
+		PMD_DRV_LOG(ERR, "rss_conf value isn't valid\n");
+		return -EINVAL;
+	}
+
+	if (rss_conf->rss_key != NULL &&
+	    rss_conf->rss_key_len == AXGBE_RSS_HASH_KEY_SIZE) {
+		rte_memcpy(pdata->rss_key, rss_conf->rss_key,
+		       AXGBE_RSS_HASH_KEY_SIZE);
+		/* Program the hash key */
+		ret = axgbe_write_rss_hash_key(pdata);
+		if (ret != 0)
+			return ret;
+	}
+
+	pdata->rss_hf = rss_conf->rss_hf & AXGBE_RSS_OFFLOAD;
+
+	if (pdata->rss_hf & (ETH_RSS_IPV4 | ETH_RSS_IPV6))
+		AXGMAC_SET_BITS(pdata->rss_options, MAC_RSSCR, IP2TE, 1);
+	if (pdata->rss_hf &
+	    (ETH_RSS_NONFRAG_IPV4_TCP | ETH_RSS_NONFRAG_IPV6_TCP))
+		AXGMAC_SET_BITS(pdata->rss_options, MAC_RSSCR, TCP4TE, 1);
+	if (pdata->rss_hf &
+	    (ETH_RSS_NONFRAG_IPV4_UDP | ETH_RSS_NONFRAG_IPV6_UDP))
+		AXGMAC_SET_BITS(pdata->rss_options, MAC_RSSCR, UDP4TE, 1);
+
+	/* Set the RSS options */
+	AXGMAC_IOWRITE(pdata, MAC_RSSCR, pdata->rss_options);
+
+	return 0;
+}
+
+static int
+axgbe_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
+			    struct rte_eth_rss_conf *rss_conf)
+{
+	struct axgbe_port *pdata = dev->data->dev_private;
+
+	if (!pdata->rss_enable) {
+		PMD_DRV_LOG(ERR, "RSS not enabled\n");
+		return -ENOTSUP;
+	}
+
+	if (rss_conf == NULL) {
+		PMD_DRV_LOG(ERR, "rss_conf value isn't valid\n");
+		return -EINVAL;
+	}
+
+	if (rss_conf->rss_key != NULL &&
+	    rss_conf->rss_key_len >= AXGBE_RSS_HASH_KEY_SIZE) {
+		rte_memcpy(rss_conf->rss_key, pdata->rss_key,
+		       AXGBE_RSS_HASH_KEY_SIZE);
+	}
+	rss_conf->rss_key_len = AXGBE_RSS_HASH_KEY_SIZE;
+	rss_conf->rss_hf = pdata->rss_hf;
+	return 0;
+}
+
+static void
+axgbe_dev_mac_addr_remove(struct rte_eth_dev *dev, uint32_t index)
+{
+	struct axgbe_port *pdata = dev->data->dev_private;
+	struct axgbe_hw_features *hw_feat = &pdata->hw_feat;
+
+	if (index > hw_feat->addn_mac) {
+		PMD_DRV_LOG(ERR, "Invalid Index %d\n", index);
+		return;
+	}
+	axgbe_set_mac_addn_addr(pdata, NULL, index);
+}
+
+static int
+axgbe_dev_set_mc_addr_list(struct rte_eth_dev *dev,
+				      struct rte_ether_addr *mc_addr_set,
+				      uint32_t nb_mc_addr)
+{
+	struct axgbe_port *pdata = dev->data->dev_private;
+	struct axgbe_hw_features *hw_feat = &pdata->hw_feat;
+	uint32_t index = 1; /* 0 is always default mac */
+	uint32_t i;
+
+	if (nb_mc_addr > hw_feat->addn_mac) {
+		PMD_DRV_LOG(ERR, "Invalid Index %d\n", nb_mc_addr);
+		return -EINVAL;
+	}
+
+	/* clear unicast addresses */
+	for (i = 1; i < hw_feat->addn_mac; i++) {
+		if (rte_is_zero_ether_addr(&dev->data->mac_addrs[i]))
+			continue;
+		memset(&dev->data->mac_addrs[i], 0,
+		       sizeof(struct rte_ether_addr));
+	}
+
+	while (nb_mc_addr--)
+		axgbe_set_mac_addn_addr(pdata, (u8 *)mc_addr_set++, index++);
+
+	return 0;
+}
+
+static int
+axgbe_dev_uc_hash_table_set(struct rte_eth_dev *dev,
+			    struct rte_ether_addr *mac_addr, uint8_t add)
+{
+	struct axgbe_port *pdata = dev->data->dev_private;
+	struct axgbe_hw_features *hw_feat = &pdata->hw_feat;
+
+	if (!hw_feat->hash_table_size) {
+		PMD_DRV_LOG(ERR, "MAC Hash Table not supported\n");
+		return -ENOTSUP;
+	}
+
+	axgbe_set_mac_hash_table(pdata, (u8 *)mac_addr, add);
+
+	if (pdata->uc_hash_mac_addr > 0) {
+		AXGMAC_IOWRITE_BITS(pdata, MAC_PFR, HPF, 1);
+		AXGMAC_IOWRITE_BITS(pdata, MAC_PFR, HUC, 1);
+	} else {
+		AXGMAC_IOWRITE_BITS(pdata, MAC_PFR, HPF, 0);
+		AXGMAC_IOWRITE_BITS(pdata, MAC_PFR, HUC, 0);
+	}
+	return 0;
+}
+
+static int
+axgbe_dev_uc_all_hash_table_set(struct rte_eth_dev *dev, uint8_t add)
+{
+	struct axgbe_port *pdata = dev->data->dev_private;
+	struct axgbe_hw_features *hw_feat = &pdata->hw_feat;
+	uint32_t index;
+
+	if (!hw_feat->hash_table_size) {
+		PMD_DRV_LOG(ERR, "MAC Hash Table not supported\n");
+		return -ENOTSUP;
+	}
+
+	for (index = 0; index < pdata->hash_table_count; index++) {
+		if (add)
+			pdata->uc_hash_table[index] = ~0;
+		else
+			pdata->uc_hash_table[index] = 0;
+
+		PMD_DRV_LOG(DEBUG, "%s MAC hash table at Index %#x\n",
+			    add ? "set" : "clear", index);
+
+		AXGMAC_IOWRITE(pdata, MAC_HTR(index),
+			       pdata->uc_hash_table[index]);
+	}
+
+	if (add) {
+		AXGMAC_IOWRITE_BITS(pdata, MAC_PFR, HPF, 1);
+		AXGMAC_IOWRITE_BITS(pdata, MAC_PFR, HUC, 1);
+	} else {
+		AXGMAC_IOWRITE_BITS(pdata, MAC_PFR, HPF, 0);
+		AXGMAC_IOWRITE_BITS(pdata, MAC_PFR, HUC, 0);
+	}
+	return 0;
+}
+
 /* return 0 means link status changed, -1 means not changed */
 static int
 axgbe_dev_link_update(struct rte_eth_dev *dev,
@@ -391,6 +721,27 @@ axgbe_dev_link_update(struct rte_eth_dev *dev,
 	return ret;
 }
 
+static int
+axgbe_dev_get_regs(struct rte_eth_dev *dev, struct rte_dev_reg_info *regs)
+{
+	struct axgbe_port *pdata = dev->data->dev_private;
+
+	if (regs->data == NULL) {
+		regs->length = axgbe_regs_get_count(pdata);
+		regs->width = sizeof(uint32_t);
+		return 0;
+	}
+
+	/* Only full register dump is supported */
+	if (regs->length &&
+	    regs->length != (uint32_t)axgbe_regs_get_count(pdata))
+		return -ENOTSUP;
+
+	regs->version = pdata->pci_dev->id.vendor_id << 16 |
+			pdata->pci_dev->id.device_id;
+	axgbe_regs_dump(pdata, regs->data);
+	return 0;
+}
 static void axgbe_read_mmc_stats(struct axgbe_port *pdata)
 {
 	struct axgbe_mmc_stats *stats = &pdata->mmc_stats;
@@ -782,13 +1133,16 @@ axgbe_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->max_tx_queues = pdata->tx_ring_count;
 	dev_info->min_rx_bufsize = AXGBE_RX_MIN_BUF_SIZE;
 	dev_info->max_rx_pktlen = AXGBE_RX_MAX_BUF_SIZE;
-	dev_info->max_mac_addrs = AXGBE_MAX_MAC_ADDRS;
+	dev_info->max_mac_addrs = pdata->hw_feat.addn_mac + 1;
+	dev_info->max_hash_mac_addrs = pdata->hw_feat.hash_table_size;
 	dev_info->speed_capa =  ETH_LINK_SPEED_10G;
 
 	dev_info->rx_offload_capa =
 		DEV_RX_OFFLOAD_IPV4_CKSUM |
 		DEV_RX_OFFLOAD_UDP_CKSUM  |
 		DEV_RX_OFFLOAD_TCP_CKSUM  |
+		DEV_RX_OFFLOAD_JUMBO_FRAME	|
+		DEV_RX_OFFLOAD_SCATTER	  |
 		DEV_RX_OFFLOAD_KEEP_CRC;
 
 	dev_info->tx_offload_capa =
@@ -816,6 +1170,262 @@ axgbe_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	return 0;
 }
 
+static int
+axgbe_flow_ctrl_get(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
+{
+	struct axgbe_port *pdata = dev->data->dev_private;
+	struct xgbe_fc_info fc = pdata->fc;
+	unsigned int reg, reg_val = 0;
+
+	reg = MAC_Q0TFCR;
+	reg_val = AXGMAC_IOREAD(pdata, reg);
+	fc.low_water[0] =  AXGMAC_MTL_IOREAD_BITS(pdata, 0, MTL_Q_RQFCR, RFA);
+	fc.high_water[0] =  AXGMAC_MTL_IOREAD_BITS(pdata, 0, MTL_Q_RQFCR, RFD);
+	fc.pause_time[0] = AXGMAC_GET_BITS(reg_val, MAC_Q0TFCR, PT);
+	fc.autoneg = pdata->pause_autoneg;
+
+	if (pdata->rx_pause && pdata->tx_pause)
+		fc.mode = RTE_FC_FULL;
+	else if (pdata->rx_pause)
+		fc.mode = RTE_FC_RX_PAUSE;
+	else if (pdata->tx_pause)
+		fc.mode = RTE_FC_TX_PAUSE;
+	else
+		fc.mode = RTE_FC_NONE;
+
+	fc_conf->high_water =  (1024 + (fc.low_water[0] << 9)) / 1024;
+	fc_conf->low_water =  (1024 + (fc.high_water[0] << 9)) / 1024;
+	fc_conf->pause_time = fc.pause_time[0];
+	fc_conf->send_xon = fc.send_xon;
+	fc_conf->mode = fc.mode;
+
+	return 0;
+}
+
+static int
+axgbe_flow_ctrl_set(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
+{
+	struct axgbe_port *pdata = dev->data->dev_private;
+	struct xgbe_fc_info fc = pdata->fc;
+	unsigned int reg, reg_val = 0;
+	reg = MAC_Q0TFCR;
+
+	pdata->pause_autoneg = fc_conf->autoneg;
+	pdata->phy.pause_autoneg = pdata->pause_autoneg;
+	fc.send_xon = fc_conf->send_xon;
+	AXGMAC_MTL_IOWRITE_BITS(pdata, 0, MTL_Q_RQFCR, RFA,
+			AXGMAC_FLOW_CONTROL_VALUE(1024 * fc_conf->high_water));
+	AXGMAC_MTL_IOWRITE_BITS(pdata, 0, MTL_Q_RQFCR, RFD,
+			AXGMAC_FLOW_CONTROL_VALUE(1024 * fc_conf->low_water));
+	AXGMAC_SET_BITS(reg_val, MAC_Q0TFCR, PT, fc_conf->pause_time);
+	AXGMAC_IOWRITE(pdata, reg, reg_val);
+	fc.mode = fc_conf->mode;
+
+	if (fc.mode == RTE_FC_FULL) {
+		pdata->tx_pause = 1;
+		pdata->rx_pause = 1;
+	} else if (fc.mode == RTE_FC_RX_PAUSE) {
+		pdata->tx_pause = 0;
+		pdata->rx_pause = 1;
+	} else if (fc.mode == RTE_FC_TX_PAUSE) {
+		pdata->tx_pause = 1;
+		pdata->rx_pause = 0;
+	} else {
+		pdata->tx_pause = 0;
+		pdata->rx_pause = 0;
+	}
+
+	if (pdata->tx_pause != (unsigned int)pdata->phy.tx_pause)
+		pdata->hw_if.config_tx_flow_control(pdata);
+
+	if (pdata->rx_pause != (unsigned int)pdata->phy.rx_pause)
+		pdata->hw_if.config_rx_flow_control(pdata);
+
+	pdata->hw_if.config_flow_control(pdata);
+	pdata->phy.tx_pause = pdata->tx_pause;
+	pdata->phy.rx_pause = pdata->rx_pause;
+
+	return 0;
+}
+
+static int
+axgbe_priority_flow_ctrl_set(struct rte_eth_dev *dev,
+		struct rte_eth_pfc_conf *pfc_conf)
+{
+	struct axgbe_port *pdata = dev->data->dev_private;
+	struct xgbe_fc_info fc = pdata->fc;
+	uint8_t tc_num;
+
+	tc_num = pdata->pfc_map[pfc_conf->priority];
+
+	if (pfc_conf->priority >= pdata->hw_feat.tc_cnt) {
+		PMD_INIT_LOG(ERR, "Max supported  traffic class: %d\n",
+				pdata->hw_feat.tc_cnt);
+	return -EINVAL;
+	}
+
+	pdata->pause_autoneg = pfc_conf->fc.autoneg;
+	pdata->phy.pause_autoneg = pdata->pause_autoneg;
+	fc.send_xon = pfc_conf->fc.send_xon;
+	AXGMAC_MTL_IOWRITE_BITS(pdata, tc_num, MTL_Q_RQFCR, RFA,
+		AXGMAC_FLOW_CONTROL_VALUE(1024 * pfc_conf->fc.high_water));
+	AXGMAC_MTL_IOWRITE_BITS(pdata, tc_num, MTL_Q_RQFCR, RFD,
+		AXGMAC_FLOW_CONTROL_VALUE(1024 * pfc_conf->fc.low_water));
+
+	switch (tc_num) {
+	case 0:
+		AXGMAC_IOWRITE_BITS(pdata, MTL_TCPM0R,
+				PSTC0, pfc_conf->fc.pause_time);
+		break;
+	case 1:
+		AXGMAC_IOWRITE_BITS(pdata, MTL_TCPM0R,
+				PSTC1, pfc_conf->fc.pause_time);
+		break;
+	case 2:
+		AXGMAC_IOWRITE_BITS(pdata, MTL_TCPM0R,
+				PSTC2, pfc_conf->fc.pause_time);
+		break;
+	case 3:
+		AXGMAC_IOWRITE_BITS(pdata, MTL_TCPM0R,
+				PSTC3, pfc_conf->fc.pause_time);
+		break;
+	case 4:
+		AXGMAC_IOWRITE_BITS(pdata, MTL_TCPM1R,
+				PSTC4, pfc_conf->fc.pause_time);
+		break;
+	case 5:
+		AXGMAC_IOWRITE_BITS(pdata, MTL_TCPM1R,
+				PSTC5, pfc_conf->fc.pause_time);
+		break;
+	case 7:
+		AXGMAC_IOWRITE_BITS(pdata, MTL_TCPM1R,
+				PSTC6, pfc_conf->fc.pause_time);
+		break;
+	case 6:
+		AXGMAC_IOWRITE_BITS(pdata, MTL_TCPM1R,
+				PSTC7, pfc_conf->fc.pause_time);
+		break;
+	}
+
+	fc.mode = pfc_conf->fc.mode;
+
+	if (fc.mode == RTE_FC_FULL) {
+		pdata->tx_pause = 1;
+		pdata->rx_pause = 1;
+		AXGMAC_IOWRITE_BITS(pdata, MAC_RFCR, PFCE, 1);
+	} else if (fc.mode == RTE_FC_RX_PAUSE) {
+		pdata->tx_pause = 0;
+		pdata->rx_pause = 1;
+		AXGMAC_IOWRITE_BITS(pdata, MAC_RFCR, PFCE, 1);
+	} else if (fc.mode == RTE_FC_TX_PAUSE) {
+		pdata->tx_pause = 1;
+		pdata->rx_pause = 0;
+		AXGMAC_IOWRITE_BITS(pdata, MAC_RFCR, PFCE, 0);
+	} else {
+		pdata->tx_pause = 0;
+		pdata->rx_pause = 0;
+		AXGMAC_IOWRITE_BITS(pdata, MAC_RFCR, PFCE, 0);
+	}
+
+	if (pdata->tx_pause != (unsigned int)pdata->phy.tx_pause)
+		pdata->hw_if.config_tx_flow_control(pdata);
+
+	if (pdata->rx_pause != (unsigned int)pdata->phy.rx_pause)
+		pdata->hw_if.config_rx_flow_control(pdata);
+	pdata->hw_if.config_flow_control(pdata);
+	pdata->phy.tx_pause = pdata->tx_pause;
+	pdata->phy.rx_pause = pdata->rx_pause;
+
+	return 0;
+}
+
+void
+axgbe_rxq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
+	struct rte_eth_rxq_info *qinfo)
+{
+	struct   axgbe_rx_queue *rxq;
+
+	rxq = dev->data->rx_queues[queue_id];
+	qinfo->mp = rxq->mb_pool;
+	qinfo->scattered_rx = dev->data->scattered_rx;
+	qinfo->nb_desc = rxq->nb_desc;
+	qinfo->conf.rx_free_thresh = rxq->free_thresh;
+}
+
+void
+axgbe_txq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
+	struct rte_eth_txq_info *qinfo)
+{
+	struct  axgbe_tx_queue *txq;
+
+	txq = dev->data->tx_queues[queue_id];
+	qinfo->nb_desc = txq->nb_desc;
+	qinfo->conf.tx_free_thresh = txq->free_thresh;
+}
+const uint32_t *
+axgbe_dev_supported_ptypes_get(struct rte_eth_dev *dev)
+{
+	static const uint32_t ptypes[] = {
+		RTE_PTYPE_L2_ETHER,
+		RTE_PTYPE_L2_ETHER_TIMESYNC,
+		RTE_PTYPE_L2_ETHER_LLDP,
+		RTE_PTYPE_L2_ETHER_ARP,
+		RTE_PTYPE_L3_IPV4_EXT_UNKNOWN,
+		RTE_PTYPE_L3_IPV6_EXT_UNKNOWN,
+		RTE_PTYPE_L4_FRAG,
+		RTE_PTYPE_L4_ICMP,
+		RTE_PTYPE_L4_NONFRAG,
+		RTE_PTYPE_L4_SCTP,
+		RTE_PTYPE_L4_TCP,
+		RTE_PTYPE_L4_UDP,
+		RTE_PTYPE_TUNNEL_GRENAT,
+		RTE_PTYPE_TUNNEL_IP,
+		RTE_PTYPE_INNER_L2_ETHER,
+		RTE_PTYPE_INNER_L2_ETHER_VLAN,
+		RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN,
+		RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN,
+		RTE_PTYPE_INNER_L4_FRAG,
+		RTE_PTYPE_INNER_L4_ICMP,
+		RTE_PTYPE_INNER_L4_NONFRAG,
+		RTE_PTYPE_INNER_L4_SCTP,
+		RTE_PTYPE_INNER_L4_TCP,
+		RTE_PTYPE_INNER_L4_UDP,
+		RTE_PTYPE_UNKNOWN
+	};
+
+	if (dev->rx_pkt_burst == axgbe_recv_pkts)
+		return ptypes;
+	return NULL;
+}
+static int axgb_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
+{
+	struct rte_eth_dev_info dev_info;
+	struct axgbe_port *pdata = dev->data->dev_private;
+	uint32_t frame_size = mtu + RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN;
+	unsigned int val = 0;
+	axgbe_dev_info_get(dev, &dev_info);
+	/* check that mtu is within the allowed range */
+	if (mtu < RTE_ETHER_MIN_MTU || frame_size > dev_info.max_rx_pktlen)
+		return -EINVAL;
+	/* mtu setting is forbidden if port is start */
+	if (dev->data->dev_started) {
+		PMD_DRV_LOG(ERR, "port %d must be stopped before configuration",
+				dev->data->port_id);
+		return -EBUSY;
+	}
+	if (frame_size > RTE_ETHER_MAX_LEN) {
+		dev->data->dev_conf.rxmode.offloads |=
+			DEV_RX_OFFLOAD_JUMBO_FRAME;
+		val = 1;
+	} else {
+		dev->data->dev_conf.rxmode.offloads &=
+			~DEV_RX_OFFLOAD_JUMBO_FRAME;
+		val = 0;
+	}
+	AXGMAC_IOWRITE_BITS(pdata, MAC_RCR, JE, val);
+	dev->data->dev_conf.rxmode.max_rx_pkt_len = frame_size;
+	return 0;
+}
 static void axgbe_get_all_hw_features(struct axgbe_port *pdata)
 {
 	unsigned int mac_hfr0, mac_hfr1, mac_hfr2;
@@ -1017,10 +1627,10 @@ eth_axgbe_dev_init(struct rte_eth_dev *eth_dev)
 	struct axgbe_port *pdata;
 	struct rte_pci_device *pci_dev;
 	uint32_t reg, mac_lo, mac_hi;
+	uint32_t len;
 	int ret;
 
 	eth_dev->dev_ops = &axgbe_eth_dev_ops;
-	eth_dev->rx_pkt_burst = &axgbe_recv_pkts;
 
 	/*
 	 * For secondary processes, we don't initialise any further as primary
@@ -1031,8 +1641,8 @@ eth_axgbe_dev_init(struct rte_eth_dev *eth_dev)
 
 	pdata = eth_dev->data->dev_private;
 	/* initial state */
-	axgbe_set_bit(AXGBE_DOWN, &pdata->dev_state);
-	axgbe_set_bit(AXGBE_STOPPED, &pdata->dev_state);
+	rte_bit_relaxed_set32(AXGBE_DOWN, &pdata->dev_state);
+	rte_bit_relaxed_set32(AXGBE_STOPPED, &pdata->dev_state);
 	pdata->eth_dev = eth_dev;
 
 	pci_dev = RTE_DEV_TO_PCI(eth_dev->device);
@@ -1086,12 +1696,25 @@ eth_axgbe_dev_init(struct rte_eth_dev *eth_dev)
 	pdata->mac_addr.addr_bytes[4] = mac_hi & 0xff;
 	pdata->mac_addr.addr_bytes[5] = (mac_hi >> 8)  &  0xff;
 
-	eth_dev->data->mac_addrs = rte_zmalloc("axgbe_mac_addr",
-					       RTE_ETHER_ADDR_LEN, 0);
+	len = RTE_ETHER_ADDR_LEN * AXGBE_MAX_MAC_ADDRS;
+	eth_dev->data->mac_addrs = rte_zmalloc("axgbe_mac_addr", len, 0);
+
 	if (!eth_dev->data->mac_addrs) {
 		PMD_INIT_LOG(ERR,
-			     "Failed to alloc %u bytes needed to store MAC addr tbl",
-			     RTE_ETHER_ADDR_LEN);
+			     "Failed to alloc %u bytes needed to "
+			     "store MAC addresses", len);
+		return -ENOMEM;
+	}
+
+	/* Allocate memory for storing hash filter MAC addresses */
+	len = RTE_ETHER_ADDR_LEN * AXGBE_MAX_HASH_MAC_ADDRS;
+	eth_dev->data->hash_mac_addrs = rte_zmalloc("axgbe_hash_mac_addr",
+						    len, 0);
+
+	if (eth_dev->data->hash_mac_addrs == NULL) {
+		PMD_INIT_LOG(ERR,
+			     "Failed to allocate %d bytes needed to "
+			     "store MAC addresses", len);
 		return -ENOMEM;
 	}
 
@@ -1216,13 +1839,5 @@ static struct rte_pci_driver rte_axgbe_pmd = {
 RTE_PMD_REGISTER_PCI(net_axgbe, rte_axgbe_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_axgbe, pci_id_axgbe_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_axgbe, "* igb_uio | uio_pci_generic | vfio-pci");
-
-RTE_INIT(axgbe_init_log)
-{
-	axgbe_logtype_init = rte_log_register("pmd.net.axgbe.init");
-	if (axgbe_logtype_init >= 0)
-		rte_log_set_level(axgbe_logtype_init, RTE_LOG_NOTICE);
-	axgbe_logtype_driver = rte_log_register("pmd.net.axgbe.driver");
-	if (axgbe_logtype_driver >= 0)
-		rte_log_set_level(axgbe_logtype_driver, RTE_LOG_NOTICE);
-}
+RTE_LOG_REGISTER(axgbe_logtype_init, pmd.net.axgbe.init, NOTICE);
+RTE_LOG_REGISTER(axgbe_logtype_driver, pmd.net.axgbe.driver, NOTICE);

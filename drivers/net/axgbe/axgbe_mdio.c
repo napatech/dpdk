@@ -300,6 +300,8 @@ static void axgbe_an73_restart(struct axgbe_port *pdata)
 {
 	axgbe_an73_enable_interrupts(pdata);
 	axgbe_an73_set(pdata, true, true);
+
+	PMD_DRV_LOG(DEBUG, "CL73 AN enabled/restarted\n");
 }
 
 static void axgbe_an73_disable(struct axgbe_port *pdata)
@@ -307,6 +309,8 @@ static void axgbe_an73_disable(struct axgbe_port *pdata)
 	axgbe_an73_set(pdata, false, false);
 	axgbe_an73_disable_interrupts(pdata);
 	pdata->an_start = 0;
+
+	PMD_DRV_LOG(DEBUG, "CL73 AN disabled\n");
 }
 
 static void axgbe_an_restart(struct axgbe_port *pdata)
@@ -383,6 +387,8 @@ static enum axgbe_an axgbe_an73_tx_training(struct axgbe_port *pdata,
 		reg |= AXGBE_KR_TRAINING_START;
 		XMDIO_WRITE(pdata, MDIO_MMD_PMAPMD, MDIO_PMA_10GBR_PMD_CTRL,
 			    reg);
+
+		PMD_DRV_LOG(DEBUG, "KR training initiated\n");
 
 		if (pdata->phy_if.phy_impl.kr_training_post)
 			pdata->phy_if.phy_impl.kr_training_post(pdata);
@@ -466,6 +472,9 @@ static enum axgbe_an axgbe_an73_page_received(struct axgbe_port *pdata)
 			pdata->kx_state = AXGBE_RX_BPA;
 
 			pdata->an_start = rte_get_timer_cycles();
+
+			PMD_DRV_LOG(NOTICE,
+				    "CL73 AN timed out, resetting state\n");
 		}
 	}
 
@@ -515,6 +524,26 @@ static enum axgbe_an axgbe_an73_incompat_link(struct axgbe_port *pdata)
 	return AXGBE_AN_INCOMPAT_LINK;
 }
 
+static const char *axgbe_state_as_string(enum axgbe_an state)
+{
+	switch (state) {
+	case AXGBE_AN_READY:
+		return "Ready";
+	case AXGBE_AN_PAGE_RECEIVED:
+		return "Page-Received";
+	case AXGBE_AN_INCOMPAT_LINK:
+		return "Incompatible-Link";
+	case AXGBE_AN_COMPLETE:
+		return "Complete";
+	case AXGBE_AN_NO_LINK:
+		return "No-Link";
+	case AXGBE_AN_ERROR:
+		return "Error";
+	default:
+		return "Undefined";
+	}
+}
+
 static void axgbe_an73_state_machine(struct axgbe_port *pdata)
 {
 	enum axgbe_an cur_state = pdata->an_state;
@@ -535,6 +564,9 @@ next_int:
 	} else {
 		pdata->an_state = AXGBE_AN_ERROR;
 	}
+
+	PMD_DRV_LOG(DEBUG, "CL73 AN : %s\n",
+		    axgbe_state_as_string(pdata->an_state));
 
 again:
 	cur_state = pdata->an_state;
@@ -581,6 +613,9 @@ again:
 		pdata->an_start = 0;
 		if (pdata->phy_if.phy_impl.an_post)
 			pdata->phy_if.phy_impl.an_post(pdata);
+
+		PMD_DRV_LOG(DEBUG, "CL73 AN result: %s\n",
+			    axgbe_state_as_string(pdata->an_result));
 	}
 
 	if (cur_state != pdata->an_state)
@@ -685,6 +720,8 @@ static void axgbe_an37_isr(struct axgbe_port *pdata)
 
 static void axgbe_an_isr(struct axgbe_port *pdata)
 {
+	PMD_DRV_LOG(DEBUG, "AN interrupt received\n");
+
 	switch (pdata->an_mode) {
 	case AXGBE_AN_MODE_CL73:
 	case AXGBE_AN_MODE_CL73_REDRV:
@@ -792,6 +829,8 @@ static void axgbe_an73_init(struct axgbe_port *pdata)
 	reg &= ~AXGBE_XNP_NP_EXCHANGE;
 
 	XMDIO_WRITE(pdata, MDIO_MMD_AN, MDIO_AN_ADVERTISE, reg);
+
+	PMD_DRV_LOG(DEBUG, "CL73 AN initialized\n");
 }
 
 static void axgbe_an_init(struct axgbe_port *pdata)
@@ -843,6 +882,8 @@ static int axgbe_phy_config_fixed(struct axgbe_port *pdata)
 {
 	enum axgbe_mode mode;
 
+	PMD_DRV_LOG(DEBUG, "fixed PHY configuration\n");
+
 	/* Disable auto-negotiation */
 	axgbe_an_disable(pdata);
 
@@ -875,7 +916,7 @@ static int __axgbe_phy_config_aneg(struct axgbe_port *pdata)
 {
 	int ret;
 
-	axgbe_set_bit(AXGBE_LINK_INIT, &pdata->dev_state);
+	rte_bit_relaxed_set32(AXGBE_LINK_INIT, &pdata->dev_state);
 	pdata->link_check = rte_get_timer_cycles();
 
 	ret = pdata->phy_if.phy_impl.an_config(pdata);
@@ -886,6 +927,9 @@ static int __axgbe_phy_config_aneg(struct axgbe_port *pdata)
 		ret = axgbe_phy_config_fixed(pdata);
 		if (ret || !pdata->kr_redrv)
 			return ret;
+		PMD_DRV_LOG(DEBUG, "AN redriver support\n");
+	} else {
+		PMD_DRV_LOG(DEBUG, "AN PHY configuration\n");
 	}
 
 	/* Disable auto-negotiation interrupt */
@@ -937,9 +981,9 @@ static int axgbe_phy_config_aneg(struct axgbe_port *pdata)
 
 	ret = __axgbe_phy_config_aneg(pdata);
 	if (ret)
-		axgbe_set_bit(AXGBE_LINK_ERR, &pdata->dev_state);
+		rte_bit_relaxed_set32(AXGBE_LINK_ERR, &pdata->dev_state);
 	else
-		axgbe_clear_bit(AXGBE_LINK_ERR, &pdata->dev_state);
+		rte_bit_relaxed_clear32(AXGBE_LINK_ERR, &pdata->dev_state);
 
 	pthread_mutex_unlock(&pdata->an_mutex);
 
@@ -959,8 +1003,10 @@ static void axgbe_check_link_timeout(struct axgbe_port *pdata)
 	link_timeout = pdata->link_check + (AXGBE_LINK_TIMEOUT *
 					    2 *  rte_get_timer_hz());
 	ticks = rte_get_timer_cycles();
-	if (time_after(ticks, link_timeout))
+	if (time_after(ticks, link_timeout)) {
+		PMD_DRV_LOG(NOTICE, "AN link timeout\n");
 		axgbe_phy_config_aneg(pdata);
+	}
 }
 
 static enum axgbe_mode axgbe_phy_status_aneg(struct axgbe_port *pdata)
@@ -1026,7 +1072,7 @@ static void axgbe_phy_status(struct axgbe_port *pdata)
 	unsigned int reg = 0;
 	unsigned long autoneg_start_time;
 
-	if (axgbe_test_bit(AXGBE_LINK_ERR, &pdata->dev_state)) {
+	if (rte_bit_relaxed_get32(AXGBE_LINK_ERR, &pdata->dev_state)) {
 		pdata->phy.link = 0;
 		goto adjust_link;
 	}
@@ -1070,10 +1116,11 @@ static void axgbe_phy_status(struct axgbe_port *pdata)
 			}
 		}
 		axgbe_phy_status_result(pdata);
-		if (axgbe_test_bit(AXGBE_LINK_INIT, &pdata->dev_state))
-			axgbe_clear_bit(AXGBE_LINK_INIT, &pdata->dev_state);
+		if (rte_bit_relaxed_get32(AXGBE_LINK_INIT, &pdata->dev_state))
+			rte_bit_relaxed_clear32(AXGBE_LINK_INIT,
+						&pdata->dev_state);
 	} else {
-		if (axgbe_test_bit(AXGBE_LINK_INIT, &pdata->dev_state)) {
+		if (rte_bit_relaxed_get32(AXGBE_LINK_INIT, &pdata->dev_state)) {
 			axgbe_check_link_timeout(pdata);
 
 			if (link_aneg)
@@ -1088,6 +1135,7 @@ adjust_link:
 
 static void axgbe_phy_stop(struct axgbe_port *pdata)
 {
+	PMD_DRV_LOG(DEBUG, "stopping PHY\n");
 	if (!pdata->phy_started)
 		return;
 	/* Indicate the PHY is down */
@@ -1102,6 +1150,8 @@ static void axgbe_phy_stop(struct axgbe_port *pdata)
 static int axgbe_phy_start(struct axgbe_port *pdata)
 {
 	int ret;
+
+	PMD_DRV_LOG(DEBUG, "starting PHY\n");
 
 	ret = pdata->phy_if.phy_impl.start(pdata);
 	if (ret)

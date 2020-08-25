@@ -21,8 +21,6 @@
 
 #include <dpaax_iova_table.h>
 
-int dpaa2_logtype_bus;
-
 #define VFIO_IOMMU_GROUP_PATH "/sys/kernel/iommu_groups"
 #define FSLMC_BUS_NAME	fslmc
 
@@ -36,8 +34,6 @@ rte_fslmc_get_device_count(enum rte_dpaa2_dev_type device_type)
 		return 0;
 	return rte_fslmc_bus.device_count[device_type];
 }
-
-RTE_DEFINE_PER_LCORE(struct dpaa2_portal_dqrr, dpaa2_held_bufs);
 
 static void
 cleanup_fslmc_device_list(void)
@@ -115,14 +111,9 @@ static void
 dump_device_list(void)
 {
 	struct rte_dpaa2_device *dev;
-	uint32_t global_log_level;
-	int local_log_level;
 
 	/* Only if the log level has been set to Debugging, print list */
-	global_log_level = rte_log_get_global_level();
-	local_log_level = rte_log_get_level(dpaa2_logtype_bus);
-	if (global_log_level == RTE_LOG_DEBUG ||
-	    local_log_level == RTE_LOG_DEBUG) {
+	if (rte_log_can_log(dpaa2_logtype_bus, RTE_LOG_DEBUG)) {
 		DPAA2_BUS_LOG(DEBUG, "List of devices scanned on bus:");
 		TAILQ_FOREACH(dev, &rte_fslmc_bus.device_list, next) {
 			DPAA2_BUS_LOG(DEBUG, "\t\t%s", dev->device.name);
@@ -608,6 +599,11 @@ fslmc_bus_dev_iterate(const void *start, const char *str,
 	struct rte_dpaa2_device *dev;
 	char *dup, *dev_name = NULL;
 
+	if (str == NULL) {
+		DPAA2_BUS_DEBUG("No device string");
+		return NULL;
+	}
+
 	/* Expectation is that device would be name=device_name */
 	if (strncmp(str, "name=", 5) != 0) {
 		DPAA2_BUS_DEBUG("Invalid device string (%s)\n", str);
@@ -654,11 +650,4 @@ struct rte_fslmc_bus rte_fslmc_bus = {
 };
 
 RTE_REGISTER_BUS(FSLMC_BUS_NAME, rte_fslmc_bus.bus);
-
-RTE_INIT(fslmc_init_log)
-{
-	/* Bus level logs */
-	dpaa2_logtype_bus = rte_log_register("bus.fslmc");
-	if (dpaa2_logtype_bus >= 0)
-		rte_log_set_level(dpaa2_logtype_bus, RTE_LOG_NOTICE);
-}
+RTE_LOG_REGISTER(dpaa2_logtype_bus, bus.fslmc, NOTICE);

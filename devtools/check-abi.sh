@@ -44,21 +44,28 @@ for dump in $(find $refdir -name "*.dump"); do
 		echo "Skipped glue library $name."
 		continue
 	fi
-	# skip experimental libraries, with a sover starting with 0.
-	if grep -qE "\<soname='[^']*\.so\.0\.[^']*'" $dump; then
-		echo "Skipped experimental library $name."
-		continue
-	fi
 	dump2=$(find $newdir -name $name)
 	if [ -z "$dump2" ] || [ ! -e "$dump2" ]; then
 		echo "Error: can't find $name in $newdir"
 		error=1
 		continue
 	fi
-	if ! abidiff $ABIDIFF_OPTIONS $dump $dump2; then
+	abidiff $ABIDIFF_OPTIONS $dump $dump2 || {
+		abiret=$?
 		echo "Error: ABI issue reported for 'abidiff $ABIDIFF_OPTIONS $dump $dump2'"
 		error=1
-	fi
+		echo
+		if [ $(($abiret & 3)) -ne 0 ]; then
+			echo "ABIDIFF_ERROR|ABIDIFF_USAGE_ERROR, this could be a script or environment issue."
+		fi
+		if [ $(($abiret & 4)) -ne 0 ]; then
+			echo "ABIDIFF_ABI_CHANGE, this change requires a review (abidiff flagged this as a potential issue)."
+		fi
+		if [ $(($abiret & 8)) -ne 0 ]; then
+			echo "ABIDIFF_ABI_INCOMPATIBLE_CHANGE, this change breaks the ABI."
+		fi
+		echo
+	}
 done
 
 [ -z "$error" ] || [ -n "$warnonly" ]

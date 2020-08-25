@@ -124,7 +124,6 @@ enum i40e_flxpld_layer_idx {
 #define I40E_FLAG_FDIR                  (1ULL << 6)
 #define I40E_FLAG_VXLAN                 (1ULL << 7)
 #define I40E_FLAG_RSS_AQ_CAPABLE        (1ULL << 8)
-#define I40E_FLAG_VF_MAC_BY_PF          (1ULL << 9)
 #define I40E_FLAG_ALL (I40E_FLAG_RSS | \
 		       I40E_FLAG_DCB | \
 		       I40E_FLAG_VMDQ | \
@@ -133,8 +132,7 @@ enum i40e_flxpld_layer_idx {
 		       I40E_FLAG_HEADER_SPLIT_ENABLED | \
 		       I40E_FLAG_FDIR | \
 		       I40E_FLAG_VXLAN | \
-		       I40E_FLAG_RSS_AQ_CAPABLE | \
-		       I40E_FLAG_VF_MAC_BY_PF)
+		       I40E_FLAG_RSS_AQ_CAPABLE)
 
 #define I40E_RSS_OFFLOAD_ALL ( \
 	ETH_RSS_FRAG_IPV4 | \
@@ -193,6 +191,9 @@ enum i40e_flxpld_layer_idx {
 #define I40E_GL_SWT_L2TAGCTRL_ETHERTYPE_SHIFT 16
 #define I40E_GL_SWT_L2TAGCTRL_ETHERTYPE_MASK  \
 	I40E_MASK(0xFFFF, I40E_GL_SWT_L2TAGCTRL_ETHERTYPE_SHIFT)
+
+#define I40E_RSS_TYPE_NONE           0ULL
+#define I40E_RSS_TYPE_INVALID        1ULL
 
 #define I40E_INSET_NONE            0x00000000000000000ULL
 
@@ -262,6 +263,17 @@ enum i40e_flxpld_layer_idx {
 #define I40E_MAX_PERCENT            100
 #define I40E_DEFAULT_DCB_APP_NUM    1
 #define I40E_DEFAULT_DCB_APP_PRIO   3
+
+#define I40E_FDIR_PRG_PKT_CNT       128
+
+/*
+ * Struct to store flow created.
+ */
+struct rte_flow {
+	TAILQ_ENTRY(rte_flow) node;
+	enum rte_filter_type filter_type;
+	void *rule;
+};
 
 /**
  * The overhead from MTU to max frame size.
@@ -544,12 +556,19 @@ struct i40e_ipv6_l2tpv3oip_flow {
 	uint32_t session_id; /* Session ID in big endian. */
 };
 
+/* A structure used to define the input for l2 dst type flow */
+struct i40e_l2_flow {
+	struct rte_ether_addr dst;
+	struct rte_ether_addr src;
+	uint16_t ether_type;          /**< Ether type in big endian */
+};
+
 /*
  * A union contains the inputs for all types of flow
  * items in flows need to be in big endian
  */
 union i40e_fdir_flow {
-	struct rte_eth_l2_flow          l2_flow;
+	struct i40e_l2_flow             l2_flow;
 	struct rte_eth_udpv4_flow       udp4_flow;
 	struct rte_eth_tcpv4_flow       tcp4_flow;
 	struct rte_eth_sctpv4_flow      sctp4_flow;
@@ -666,6 +685,23 @@ struct i40e_fdir_filter {
 	struct i40e_fdir_filter_conf fdir;
 };
 
+/* fdir memory pool entry */
+struct i40e_fdir_entry {
+	struct rte_flow flow;
+	uint32_t idx;
+};
+
+/* pre-allocated fdir memory pool */
+struct i40e_fdir_flow_pool {
+	/* a bitmap to manage the fdir pool */
+	struct rte_bitmap *bitmap;
+	/* the size the pool is pf->fdir->fdir_space_size */
+	struct i40e_fdir_entry *pool;
+};
+
+#define FLOW_TO_FLOW_BITMAP(f) \
+	container_of((f), struct i40e_fdir_entry, flow)
+
 TAILQ_HEAD(i40e_fdir_filter_list, i40e_fdir_filter);
 /*
  *  A structure used to define fields of a FDIR related info.
@@ -675,8 +711,14 @@ struct i40e_fdir_info {
 	uint16_t match_counter_index;  /* Statistic counter index used for fdir*/
 	struct i40e_tx_queue *txq;
 	struct i40e_rx_queue *rxq;
-	void *prg_pkt;                 /* memory for fdir program packet */
-	uint64_t dma_addr;             /* physic address of packet memory*/
+	void *prg_pkt[I40E_FDIR_PRG_PKT_CNT];     /* memory for fdir program packet */
+	uint64_t dma_addr[I40E_FDIR_PRG_PKT_CNT]; /* physic address of packet memory*/
+	/*
+	 * txq available buffer counter, indicates how many available buffers
+	 * for fdir programming, initialized as I40E_FDIR_PRG_PKT_CNT
+	 */
+	int txq_available_buf_count;
+
 	/* input set bits for each pctype */
 	uint64_t input_set[I40E_FILTER_PCTYPE_MAX];
 	/*
@@ -689,6 +731,34 @@ struct i40e_fdir_info {
 	struct i40e_fdir_filter_list fdir_list;
 	struct i40e_fdir_filter **hash_map;
 	struct rte_hash *hash_table;
+	/* An array to store the inserted rules input */
+	struct i40e_fdir_filter *fdir_filter_array;
+
+	/*
+	 * Priority ordering at filter invalidation(destroying a flow) between
+	 * "best effort" space and "guaranteed" space.
+	 *
+	 * 0 = At filter invalidation, the hardware first tries to increment the
+	 * "best effort" space. The "guaranteed" space is incremented only when
+	 * the global "best effort" space is at it max value or the "best effort"
+	 * space of the PF is at its max value.
+	 * 1 = At filter invalidation, the hardware first tries to increment its
+	 * "guaranteed" space. The "best effort" space is incremented only when
+	 * it is already at its max value.
+	 */
+	uint32_t fdir_invalprio;
+	/* the total size of the fdir, this number is the sum of the guaranteed +
+	 * shared space
+	 */
+	uint32_t fdir_space_size;
+	/* the actual number of the fdir rules in hardware, initialized as 0 */
+	uint32_t fdir_actual_cnt;
+	/* the free guaranteed space of the fdir */
+	uint32_t fdir_guarantee_free_space;
+	/* the fdir total guaranteed space */
+	uint32_t fdir_guarantee_total_space;
+	/* the pre-allocated pool of the rte_flow */
+	struct i40e_fdir_flow_pool fdir_flow_pool;
 
 	/* Mark if flex pit and mask is set */
 	bool flex_pit_flag[I40E_MAX_FLXPLD_LAYER];
@@ -749,16 +819,24 @@ struct i40e_queue_regions {
 	struct i40e_queue_region_info region[I40E_REGION_MAX_INDEX + 1];
 };
 
+struct i40e_rss_pattern_info {
+	uint8_t action_flag;
+	uint64_t types;
+};
+
 /* Tunnel filter number HW supports */
 #define I40E_MAX_TUNNEL_FILTER_NUM 400
 
 #define I40E_AQC_REPLACE_CLOUD_CMD_INPUT_FV_TEID_WORD0 44
 #define I40E_AQC_REPLACE_CLOUD_CMD_INPUT_FV_TEID_WORD1 45
+#define I40E_AQC_REPLACE_CLOUD_CMD_INPUT_FV_SRC_PORT 29
+#define I40E_AQC_REPLACE_CLOUD_CMD_INPUT_FV_DST_PORT 30
 #define I40E_AQC_ADD_CLOUD_TNL_TYPE_MPLSOUDP	8
 #define I40E_AQC_ADD_CLOUD_TNL_TYPE_MPLSOGRE	9
 #define I40E_AQC_ADD_CLOUD_FILTER_0X10		0x10
 #define I40E_AQC_ADD_CLOUD_FILTER_0X11		0x11
 #define I40E_AQC_ADD_CLOUD_FILTER_0X12		0x12
+#define I40E_AQC_ADD_L1_FILTER_0X10		0x10
 #define I40E_AQC_ADD_L1_FILTER_0X11		0x11
 #define I40E_AQC_ADD_L1_FILTER_0X12		0x12
 #define I40E_AQC_ADD_L1_FILTER_0X13		0x13
@@ -815,7 +893,18 @@ enum i40e_tunnel_type {
 	I40E_TUNNEL_TYPE_GTPU,
 	I40E_TUNNEL_TYPE_ESPoUDP,
 	I40E_TUNNEL_TYPE_ESPoIP,
+	I40E_CLOUD_TYPE_UDP,
+	I40E_CLOUD_TYPE_TCP,
+	I40E_CLOUD_TYPE_SCTP,
 	I40E_TUNNEL_TYPE_MAX,
+};
+
+/**
+ * L4 port type.
+ */
+enum i40e_l4_port_type {
+	I40E_L4_PORT_TYPE_SRC = 0,
+	I40E_L4_PORT_TYPE_DST,
 };
 
 /**
@@ -839,6 +928,7 @@ struct i40e_tunnel_filter_conf {
 	/** Flags from ETH_TUNNEL_FILTER_XX - see above. */
 	uint16_t filter_type;
 	enum i40e_tunnel_type tunnel_type; /**< Tunnel Type. */
+	enum i40e_l4_port_type l4_port_type; /**< L4 Port Type. */
 	uint32_t tenant_id;     /**< Tenant ID to match. VNI, GRE key... */
 	uint16_t queue_id;      /**< Queue assigned to if match. */
 	uint8_t is_to_vf;       /**< 0 - to PF, 1 - to VF */
@@ -865,15 +955,6 @@ struct i40e_mirror_rule {
 };
 
 TAILQ_HEAD(i40e_mirror_rule_list, i40e_mirror_rule);
-
-/*
- * Struct to store flow created.
- */
-struct rte_flow {
-	TAILQ_ENTRY(rte_flow) node;
-	enum rte_filter_type filter_type;
-	void *rule;
-};
 
 TAILQ_HEAD(i40e_flow_list, rte_flow);
 
@@ -968,6 +1049,15 @@ struct i40e_rte_flow_rss_conf {
 		     I40E_VFQF_HKEY_MAX_INDEX : I40E_PFQF_HKEY_MAX_INDEX + 1) *
 		    sizeof(uint32_t)]; /* Hash key. */
 	uint16_t queue[I40E_MAX_Q_PER_TC]; /**< Queues indices to use. */
+	bool valid; /* Check if it's valid */
+};
+
+TAILQ_HEAD(i40e_rss_conf_list, i40e_rss_filter);
+
+/* RSS filter list structure */
+struct i40e_rss_filter {
+	TAILQ_ENTRY(i40e_rss_filter) next;
+	struct i40e_rte_flow_rss_conf rss_filter_info;
 };
 
 struct i40e_vf_msg_cfg {
@@ -1038,7 +1128,8 @@ struct i40e_pf {
 	struct i40e_fdir_info fdir; /* flow director info */
 	struct i40e_ethertype_rule ethertype; /* Ethertype filter rule */
 	struct i40e_tunnel_rule tunnel; /* Tunnel filter rule */
-	struct i40e_rte_flow_rss_conf rss_info; /* rss info */
+	struct i40e_rte_flow_rss_conf rss_info; /* RSS info */
+	struct i40e_rss_conf_list rss_config_list; /* RSS rule list */
 	struct i40e_queue_regions queue_region; /* queue region info */
 	struct i40e_fc_conf fc_conf; /* Flow control conf */
 	struct i40e_mirror_rule_list mirror_list;
@@ -1050,6 +1141,9 @@ struct i40e_pf {
 	bool mpls_replace_flag;  /* 1 - MPLS filter replace is done */
 	bool gtp_replace_flag;   /* 1 - GTP-C/U filter replace is done */
 	bool qinq_replace_flag;  /* QINQ filter replace is done */
+	/* l4 port flag */
+	bool sport_replace_flag;   /* Source port replace is done */
+	bool dport_replace_flag;   /* Destination port replace is done */
 	struct i40e_tm_conf tm_conf;
 	bool support_multi_driver; /* 1 - support multiple driver */
 
@@ -1225,8 +1319,9 @@ void i40e_update_vsi_stats(struct i40e_vsi *vsi);
 void i40e_pf_disable_irq0(struct i40e_hw *hw);
 void i40e_pf_enable_irq0(struct i40e_hw *hw);
 int i40e_dev_link_update(struct rte_eth_dev *dev, int wait_to_complete);
-void i40e_vsi_queues_bind_intr(struct i40e_vsi *vsi, uint16_t itr_idx);
+int i40e_vsi_queues_bind_intr(struct i40e_vsi *vsi, uint16_t itr_idx);
 void i40e_vsi_queues_unbind_intr(struct i40e_vsi *vsi);
+void i40e_vsi_disable_queues_intr(struct i40e_vsi *vsi);
 int i40e_vsi_vlan_pvid_set(struct i40e_vsi *vsi,
 			   struct i40e_vsi_vlan_pvid_info *info);
 int i40e_vsi_config_vlan_stripping(struct i40e_vsi *vsi, bool on);
@@ -1236,6 +1331,7 @@ uint64_t i40e_parse_hena(const struct i40e_adapter *adapter, uint64_t flags);
 enum i40e_status_code i40e_fdir_setup_tx_resources(struct i40e_pf *pf);
 enum i40e_status_code i40e_fdir_setup_rx_resources(struct i40e_pf *pf);
 int i40e_fdir_setup(struct i40e_pf *pf);
+void i40e_vsi_enable_queues_intr(struct i40e_vsi *vsi);
 const struct rte_memzone *i40e_memzone_reserve(const char *name,
 					uint32_t len,
 					int socket_id);
@@ -1247,6 +1343,11 @@ enum i40e_filter_pctype
 				uint16_t flow_type);
 uint16_t i40e_pctype_to_flowtype(const struct i40e_adapter *adapter,
 				 enum i40e_filter_pctype pctype);
+int i40e_dev_set_gre_key_len(struct i40e_hw *hw, uint8_t len);
+void i40e_fdir_info_get(struct rte_eth_dev *dev,
+			struct rte_eth_fdir_info *fdir);
+void i40e_fdir_stats_get(struct rte_eth_dev *dev,
+			 struct rte_eth_fdir_stats *stat);
 int i40e_fdir_ctrl_func(struct rte_eth_dev *dev,
 			  enum rte_filter_op filter_op,
 			  void *arg);
@@ -1288,9 +1389,13 @@ int i40e_ethertype_filter_set(struct i40e_pf *pf,
 int i40e_add_del_fdir_filter(struct rte_eth_dev *dev,
 			     const struct rte_eth_fdir_filter *filter,
 			     bool add);
+struct rte_flow *
+i40e_fdir_entry_pool_get(struct i40e_fdir_info *fdir_info);
+void i40e_fdir_entry_pool_put(struct i40e_fdir_info *fdir_info,
+		struct rte_flow *flow);
 int i40e_flow_add_del_fdir_filter(struct rte_eth_dev *dev,
-				  const struct i40e_fdir_filter_conf *filter,
-				  bool add);
+			      const struct i40e_fdir_filter_conf *filter,
+			      bool add);
 int i40e_dev_tunnel_filter_set(struct i40e_pf *pf,
 			       struct rte_eth_tunnel_filter_conf *tunnel_filter,
 			       uint8_t add);
@@ -1338,8 +1443,6 @@ int i40e_set_rss_key(struct i40e_vsi *vsi, uint8_t *key, uint8_t key_len);
 int i40e_set_rss_lut(struct i40e_vsi *vsi, uint8_t *lut, uint16_t lut_size);
 int i40e_rss_conf_init(struct i40e_rte_flow_rss_conf *out,
 		       const struct rte_flow_action_rss *in);
-int i40e_action_rss_same(const struct rte_flow_action_rss *comp,
-			 const struct rte_flow_action_rss *with);
 int i40e_config_rss_filter(struct i40e_pf *pf,
 		struct i40e_rte_flow_rss_conf *conf, bool add);
 int i40e_vf_representor_init(struct rte_eth_dev *ethdev, void *init_params);

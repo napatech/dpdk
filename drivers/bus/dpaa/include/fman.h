@@ -2,6 +2,7 @@
  *
  * Copyright 2010-2012 Freescale Semiconductor, Inc.
  * All rights reserved.
+ * Copyright 2019-2020 NXP
  *
  */
 
@@ -72,6 +73,7 @@ enum fman_mac_type {
 	fman_offline = 0,
 	fman_mac_1g,
 	fman_mac_10g,
+	fman_mac_2_5g,
 };
 
 struct mac_addr {
@@ -360,6 +362,7 @@ struct fman_if_ic_params {
  */
 struct __fman_if {
 	struct fman_if __if;
+	char node_name[IF_NAME_MAX_LEN];
 	char node_path[PATH_MAX];
 	uint64_t regs_size;
 	void *ccsr_map;

@@ -10,7 +10,6 @@ ifeq ($(CONFIG_RTE_TEST_PMD),y)
 #
 APP = testpmd
 
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
 CFLAGS += -Wno-deprecated-declarations
@@ -34,13 +33,10 @@ SRCS-y += txonly.c
 SRCS-y += csumonly.c
 SRCS-y += icmpecho.c
 SRCS-y += noisy_vnf.c
+SRCS-y += 5tswap.c
 SRCS-$(CONFIG_RTE_LIBRTE_IEEE1588) += ieee1588fwd.c
 SRCS-$(CONFIG_RTE_LIBRTE_BPF) += bpf_cmd.c
 SRCS-y += util.c
-
-ifeq ($(CONFIG_RTE_LIBRTE_PMD_SOFTNIC), y)
-SRCS-y += softnicfwd.c
-endif
 
 ifeq ($(CONFIG_RTE_BUILD_SHARED_LIB),y)
 

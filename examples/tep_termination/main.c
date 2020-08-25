@@ -203,10 +203,7 @@ parse_portmask(const char *portmask)
 	/* parse hexadecimal string */
 	pm = strtoul(portmask, &end, 16);
 	if ((portmask[0] == '\0') || (end == NULL) || (*end != '\0'))
-		return -1;
-
-	if (pm == 0)
-		return -1;
+		return 0;
 
 	return pm;
 }
@@ -1110,6 +1107,8 @@ print_stats(__rte_unused void *arg)
 			dev_ll = dev_ll->next;
 		}
 		printf("\n================================================\n");
+
+		fflush(stdout);
 	}
 
 	return NULL;

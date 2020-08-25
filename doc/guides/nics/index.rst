@@ -32,6 +32,7 @@ Network Interface Controller Drivers
     i40e
     ice
     igb
+    igc
     ionic
     ipn3ke
     ixgbe
@@ -46,6 +47,7 @@ Network Interface Controller Drivers
     netvsc
     nfb
     nfp
+    null
     octeontx
     octeontx2
     pfe

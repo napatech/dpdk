@@ -11,7 +11,7 @@ arm_force_default_march = (machine == 'default')
 flags_common_default = [
 	# Accelarate rte_memcpy. Be sure to run unit test (memcpy_perf_autotest)
 	# to determine the best threshold in code. Refer to notes in source file
-	# (lib/librte_eal/common/include/arch/arm/rte_memcpy_64.h) for more info.
+	# (lib/librte_eal/arm/include/rte_memcpy_64.h) for more info.
 	['RTE_ARCH_ARM64_MEMCPY', false],
 	#	['RTE_ARM64_MEMCPY_ALIGNED_THRESHOLD', 2048],
 	#	['RTE_ARM64_MEMCPY_UNALIGNED_THRESHOLD', 512],
@@ -82,7 +82,7 @@ flags_thunderx2_extra = [
 flags_octeontx2_extra = [
 	['RTE_MACHINE', '"octeontx2"'],
 	['RTE_MAX_NUMA_NODES', 1],
-	['RTE_MAX_LCORE', 24],
+	['RTE_MAX_LCORE', 36],
 	['RTE_ARM_FEATURE_ATOMICS', true],
 	['RTE_EAL_IGB_UIO', false],
 	['RTE_USE_C11_MEM_MODEL', true]]

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2017 Intel Corporation
+ * Copyright(c) 2017-2020 Intel Corporation
  */
 
 #ifndef _IAVF_OSDEP_H_
@@ -149,12 +149,12 @@ struct iavf_dma_mem {
 	u64 pa;
 	u32 size;
 	const void *zone;
-} __attribute__((packed));
+} __rte_packed;
 
 struct iavf_virt_mem {
 	void *va;
 	u32 size;
-} __attribute__((packed));
+} __rte_packed;
 
 /* SW spinlock */
 struct iavf_spinlock {

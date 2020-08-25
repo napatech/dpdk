@@ -10,17 +10,6 @@
 #include <fcntl.h>
 #include <sys/queue.h>
 
-/* Verbs header. */
-/* ISO C doesn't support unnamed structs/unions, disabling -pedantic. */
-#ifdef PEDANTIC
-#pragma GCC diagnostic ignored "-Wpedantic"
-#endif
-#include <infiniband/verbs.h>
-#include <infiniband/mlx5dv.h>
-#ifdef PEDANTIC
-#pragma GCC diagnostic error "-Wpedantic"
-#endif
-
 #include <rte_mbuf.h>
 #include <rte_malloc.h>
 #include <rte_ethdev_driver.h>
@@ -28,12 +17,15 @@
 #include <rte_interrupts.h>
 #include <rte_debug.h>
 #include <rte_io.h>
+#include <rte_eal_paging.h>
 
 #include <mlx5_glue.h>
 #include <mlx5_devx_cmds.h>
+#include <mlx5_malloc.h>
 
 #include "mlx5_defs.h"
 #include "mlx5.h"
+#include "mlx5_common_os.h"
 #include "mlx5_rxtx.h"
 #include "mlx5_utils.h"
 #include "mlx5_autoconf.h"
@@ -107,7 +99,7 @@ inline int
 mlx5_mprq_enabled(struct rte_eth_dev *dev)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
-	uint16_t i;
+	uint32_t i;
 	uint16_t n = 0;
 	uint16_t n_ibv = 0;
 
@@ -439,6 +431,244 @@ mlx5_rxq_releasable(struct rte_eth_dev *dev, uint16_t idx)
 	return (rte_atomic32_read(&rxq_ctrl->refcnt) == 1);
 }
 
+/* Fetches and drops all SW-owned and error CQEs to synchronize CQ. */
+static void
+rxq_sync_cq(struct mlx5_rxq_data *rxq)
+{
+	const uint16_t cqe_n = 1 << rxq->cqe_n;
+	const uint16_t cqe_mask = cqe_n - 1;
+	volatile struct mlx5_cqe *cqe;
+	int ret, i;
+
+	i = cqe_n;
+	do {
+		cqe = &(*rxq->cqes)[rxq->cq_ci & cqe_mask];
+		ret = check_cqe(cqe, cqe_n, rxq->cq_ci);
+		if (ret == MLX5_CQE_STATUS_HW_OWN)
+			break;
+		if (ret == MLX5_CQE_STATUS_ERR) {
+			rxq->cq_ci++;
+			continue;
+		}
+		MLX5_ASSERT(ret == MLX5_CQE_STATUS_SW_OWN);
+		if (MLX5_CQE_FORMAT(cqe->op_own) != MLX5_COMPRESSED) {
+			rxq->cq_ci++;
+			continue;
+		}
+		/* Compute the next non compressed CQE. */
+		rxq->cq_ci += rte_be_to_cpu_32(cqe->byte_cnt);
+
+	} while (--i);
+	/* Move all CQEs to HW ownership, including possible MiniCQEs. */
+	for (i = 0; i < cqe_n; i++) {
+		cqe = &(*rxq->cqes)[i];
+		cqe->op_own = MLX5_CQE_INVALIDATE;
+	}
+	/* Resync CQE and WQE (WQ in RESET state). */
+	rte_cio_wmb();
+	*rxq->cq_db = rte_cpu_to_be_32(rxq->cq_ci);
+	rte_cio_wmb();
+	*rxq->rq_db = rte_cpu_to_be_32(0);
+	rte_cio_wmb();
+}
+
+/**
+ * Rx queue stop. Device queue goes to the RESET state,
+ * all involved mbufs are freed from WQ.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param idx
+ *   RX queue index.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+int
+mlx5_rx_queue_stop_primary(struct rte_eth_dev *dev, uint16_t idx)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_rxq_data *rxq = (*priv->rxqs)[idx];
+	struct mlx5_rxq_ctrl *rxq_ctrl =
+			container_of(rxq, struct mlx5_rxq_ctrl, rxq);
+	int ret;
+
+	MLX5_ASSERT(rte_eal_process_type() == RTE_PROC_PRIMARY);
+	if (rxq_ctrl->obj->type == MLX5_RXQ_OBJ_TYPE_IBV) {
+		struct ibv_wq_attr mod = {
+			.attr_mask = IBV_WQ_ATTR_STATE,
+			.wq_state = IBV_WQS_RESET,
+		};
+
+		ret = mlx5_glue->modify_wq(rxq_ctrl->obj->wq, &mod);
+	} else { /* rxq_ctrl->obj->type == MLX5_RXQ_OBJ_TYPE_DEVX_RQ. */
+		struct mlx5_devx_modify_rq_attr rq_attr;
+
+		memset(&rq_attr, 0, sizeof(rq_attr));
+		rq_attr.rq_state = MLX5_RQC_STATE_RST;
+		rq_attr.state = MLX5_RQC_STATE_RDY;
+		ret = mlx5_devx_cmd_modify_rq(rxq_ctrl->obj->rq, &rq_attr);
+	}
+	if (ret) {
+		DRV_LOG(ERR, "Cannot change Rx WQ state to RESET:  %s",
+			strerror(errno));
+		rte_errno = errno;
+		return ret;
+	}
+	/* Remove all processes CQEs. */
+	rxq_sync_cq(rxq);
+	/* Free all involved mbufs. */
+	rxq_free_elts(rxq_ctrl);
+	/* Set the actual queue state. */
+	dev->data->rx_queue_state[idx] = RTE_ETH_QUEUE_STATE_STOPPED;
+	return 0;
+}
+
+/**
+ * Rx queue stop. Device queue goes to the RESET state,
+ * all involved mbufs are freed from WQ.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param idx
+ *   RX queue index.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+int
+mlx5_rx_queue_stop(struct rte_eth_dev *dev, uint16_t idx)
+{
+	eth_rx_burst_t pkt_burst = dev->rx_pkt_burst;
+	int ret;
+
+	if (dev->data->rx_queue_state[idx] == RTE_ETH_QUEUE_STATE_HAIRPIN) {
+		DRV_LOG(ERR, "Hairpin queue can't be stopped");
+		rte_errno = EINVAL;
+		return -EINVAL;
+	}
+	if (dev->data->rx_queue_state[idx] == RTE_ETH_QUEUE_STATE_STOPPED)
+		return 0;
+	/*
+	 * Vectorized Rx burst requires the CQ and RQ indices
+	 * synchronized, that might be broken on RQ restart
+	 * and cause Rx malfunction, so queue stopping is
+	 * not supported if vectorized Rx burst is engaged.
+	 * The routine pointer depends on the process
+	 * type, should perform check there.
+	 */
+	if (pkt_burst == mlx5_rx_burst) {
+		DRV_LOG(ERR, "Rx queue stop is not supported "
+			"for vectorized Rx");
+		rte_errno = EINVAL;
+		return -EINVAL;
+	}
+	if (rte_eal_process_type() ==  RTE_PROC_SECONDARY) {
+		ret = mlx5_mp_os_req_queue_control(dev, idx,
+						   MLX5_MP_REQ_QUEUE_RX_STOP);
+	} else {
+		ret = mlx5_rx_queue_stop_primary(dev, idx);
+	}
+	return ret;
+}
+
+/**
+ * Rx queue start. Device queue goes to the ready state,
+ * all required mbufs are allocated and WQ is replenished.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param idx
+ *   RX queue index.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+int
+mlx5_rx_queue_start_primary(struct rte_eth_dev *dev, uint16_t idx)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_rxq_data *rxq = (*priv->rxqs)[idx];
+	struct mlx5_rxq_ctrl *rxq_ctrl =
+			container_of(rxq, struct mlx5_rxq_ctrl, rxq);
+	int ret;
+
+	MLX5_ASSERT(rte_eal_process_type() ==  RTE_PROC_PRIMARY);
+	/* Allocate needed buffers. */
+	ret = rxq_alloc_elts(rxq_ctrl);
+	if (ret) {
+		DRV_LOG(ERR, "Cannot reallocate buffers for Rx WQ");
+		rte_errno = errno;
+		return ret;
+	}
+	rte_cio_wmb();
+	*rxq->cq_db = rte_cpu_to_be_32(rxq->cq_ci);
+	rte_cio_wmb();
+	/* Reset RQ consumer before moving queue ro READY state. */
+	*rxq->rq_db = rte_cpu_to_be_32(0);
+	rte_cio_wmb();
+	if (rxq_ctrl->obj->type == MLX5_RXQ_OBJ_TYPE_IBV) {
+		struct ibv_wq_attr mod = {
+			.attr_mask = IBV_WQ_ATTR_STATE,
+			.wq_state = IBV_WQS_RDY,
+		};
+
+		ret = mlx5_glue->modify_wq(rxq_ctrl->obj->wq, &mod);
+	} else { /* rxq_ctrl->obj->type == MLX5_RXQ_OBJ_TYPE_DEVX_RQ. */
+		struct mlx5_devx_modify_rq_attr rq_attr;
+
+		memset(&rq_attr, 0, sizeof(rq_attr));
+		rq_attr.rq_state = MLX5_RQC_STATE_RDY;
+		rq_attr.state = MLX5_RQC_STATE_RST;
+		ret = mlx5_devx_cmd_modify_rq(rxq_ctrl->obj->rq, &rq_attr);
+	}
+	if (ret) {
+		DRV_LOG(ERR, "Cannot change Rx WQ state to READY:  %s",
+			strerror(errno));
+		rte_errno = errno;
+		return ret;
+	}
+	/* Reinitialize RQ - set WQEs. */
+	mlx5_rxq_initialize(rxq);
+	rxq->err_state = MLX5_RXQ_ERR_STATE_NO_ERROR;
+	/* Set actual queue state. */
+	dev->data->rx_queue_state[idx] = RTE_ETH_QUEUE_STATE_STARTED;
+	return 0;
+}
+
+/**
+ * Rx queue start. Device queue goes to the ready state,
+ * all required mbufs are allocated and WQ is replenished.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param idx
+ *   RX queue index.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+int
+mlx5_rx_queue_start(struct rte_eth_dev *dev, uint16_t idx)
+{
+	int ret;
+
+	if (dev->data->rx_queue_state[idx] == RTE_ETH_QUEUE_STATE_HAIRPIN) {
+		DRV_LOG(ERR, "Hairpin queue can't be started");
+		rte_errno = EINVAL;
+		return -EINVAL;
+	}
+	if (dev->data->rx_queue_state[idx] == RTE_ETH_QUEUE_STATE_STARTED)
+		return 0;
+	if (rte_eal_process_type() ==  RTE_PROC_SECONDARY) {
+		ret = mlx5_mp_os_req_queue_control(dev, idx,
+						   MLX5_MP_REQ_QUEUE_RX_START);
+	} else {
+		ret = mlx5_rx_queue_start_primary(dev, idx);
+	}
+	return ret;
+}
+
 /**
  * Rx queue presetup checks.
  *
@@ -453,19 +683,19 @@ mlx5_rxq_releasable(struct rte_eth_dev *dev, uint16_t idx)
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
-mlx5_rx_queue_pre_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc)
+mlx5_rx_queue_pre_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t *desc)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 
-	if (!rte_is_power_of_2(desc)) {
-		desc = 1 << log2above(desc);
+	if (!rte_is_power_of_2(*desc)) {
+		*desc = 1 << log2above(*desc);
 		DRV_LOG(WARNING,
 			"port %u increased number of descriptors in Rx queue %u"
 			" to the next power of two (%d)",
-			dev->data->port_id, idx, desc);
+			dev->data->port_id, idx, *desc);
 	}
 	DRV_LOG(DEBUG, "port %u configuring Rx queue %u for %u descriptors",
-		dev->data->port_id, idx, desc);
+		dev->data->port_id, idx, *desc);
 	if (idx >= priv->rxqs_n) {
 		DRV_LOG(ERR, "port %u Rx queue index out of range (%u >= %u)",
 			dev->data->port_id, idx, priv->rxqs_n);
@@ -511,7 +741,7 @@ mlx5_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		container_of(rxq, struct mlx5_rxq_ctrl, rxq);
 	int res;
 
-	res = mlx5_rx_queue_pre_setup(dev, idx, desc);
+	res = mlx5_rx_queue_pre_setup(dev, idx, &desc);
 	if (res)
 		return res;
 	rxq_ctrl = mlx5_rxq_new(dev, idx, desc, socket, conf, mp);
@@ -552,7 +782,7 @@ mlx5_rx_hairpin_queue_setup(struct rte_eth_dev *dev, uint16_t idx,
 		container_of(rxq, struct mlx5_rxq_ctrl, rxq);
 	int res;
 
-	res = mlx5_rx_queue_pre_setup(dev, idx, desc);
+	res = mlx5_rx_queue_pre_setup(dev, idx, &desc);
 	if (res)
 		return res;
 	if (hairpin_conf->peer_count != 1 ||
@@ -636,15 +866,34 @@ mlx5_rxq_obj_get(struct rte_eth_dev *dev, uint16_t idx)
  *   DevX Rx queue object.
  */
 static void
-rxq_release_rq_resources(struct mlx5_rxq_ctrl *rxq_ctrl)
+rxq_release_devx_rq_resources(struct mlx5_rxq_ctrl *rxq_ctrl)
 {
 	if (rxq_ctrl->rxq.wqes) {
-		rte_free((void *)(uintptr_t)rxq_ctrl->rxq.wqes);
+		mlx5_free((void *)(uintptr_t)rxq_ctrl->rxq.wqes);
 		rxq_ctrl->rxq.wqes = NULL;
 	}
 	if (rxq_ctrl->wq_umem) {
 		mlx5_glue->devx_umem_dereg(rxq_ctrl->wq_umem);
 		rxq_ctrl->wq_umem = NULL;
+	}
+}
+
+/**
+ * Release the resources allocated for the Rx CQ DevX object.
+ *
+ * @param rxq_ctrl
+ *   DevX Rx queue object.
+ */
+static void
+rxq_release_devx_cq_resources(struct mlx5_rxq_ctrl *rxq_ctrl)
+{
+	if (rxq_ctrl->rxq.cqes) {
+		rte_free((void *)(uintptr_t)rxq_ctrl->rxq.cqes);
+		rxq_ctrl->rxq.cqes = NULL;
+	}
+	if (rxq_ctrl->cq_umem) {
+		mlx5_glue->devx_umem_dereg(rxq_ctrl->cq_umem);
+		rxq_ctrl->cq_umem = NULL;
 	}
 }
 
@@ -683,29 +932,33 @@ mlx5_rxq_obj_release(struct mlx5_rxq_obj *rxq_obj)
 		switch (rxq_obj->type) {
 		case MLX5_RXQ_OBJ_TYPE_IBV:
 			MLX5_ASSERT(rxq_obj->wq);
-			MLX5_ASSERT(rxq_obj->cq);
+			MLX5_ASSERT(rxq_obj->ibv_cq);
 			rxq_free_elts(rxq_obj->rxq_ctrl);
 			claim_zero(mlx5_glue->destroy_wq(rxq_obj->wq));
-			claim_zero(mlx5_glue->destroy_cq(rxq_obj->cq));
+			claim_zero(mlx5_glue->destroy_cq(rxq_obj->ibv_cq));
+			if (rxq_obj->ibv_channel)
+				claim_zero(mlx5_glue->destroy_comp_channel
+					   (rxq_obj->ibv_channel));
 			break;
 		case MLX5_RXQ_OBJ_TYPE_DEVX_RQ:
-			MLX5_ASSERT(rxq_obj->cq);
 			MLX5_ASSERT(rxq_obj->rq);
+			MLX5_ASSERT(rxq_obj->devx_cq);
 			rxq_free_elts(rxq_obj->rxq_ctrl);
 			claim_zero(mlx5_devx_cmd_destroy(rxq_obj->rq));
-			rxq_release_rq_resources(rxq_obj->rxq_ctrl);
-			claim_zero(mlx5_glue->destroy_cq(rxq_obj->cq));
+			claim_zero(mlx5_devx_cmd_destroy(rxq_obj->devx_cq));
+			if (rxq_obj->devx_channel)
+				mlx5_glue->devx_destroy_event_channel
+							(rxq_obj->devx_channel);
+			rxq_release_devx_rq_resources(rxq_obj->rxq_ctrl);
+			rxq_release_devx_cq_resources(rxq_obj->rxq_ctrl);
 			break;
 		case MLX5_RXQ_OBJ_TYPE_DEVX_HAIRPIN:
 			MLX5_ASSERT(rxq_obj->rq);
 			rxq_obj_hairpin_release(rxq_obj);
 			break;
 		}
-		if (rxq_obj->channel)
-			claim_zero(mlx5_glue->destroy_comp_channel
-				   (rxq_obj->channel));
 		LIST_REMOVE(rxq_obj, next);
-		rte_free(rxq_obj);
+		mlx5_free(rxq_obj);
 		return 0;
 	}
 	return 1;
@@ -733,7 +986,9 @@ mlx5_rx_intr_vec_enable(struct rte_eth_dev *dev)
 	if (!dev->data->dev_conf.intr_conf.rxq)
 		return 0;
 	mlx5_rx_intr_vec_disable(dev);
-	intr_handle->intr_vec = malloc(n * sizeof(intr_handle->intr_vec[0]));
+	intr_handle->intr_vec = mlx5_malloc(0,
+				n * sizeof(intr_handle->intr_vec[0]),
+				0, SOCKET_ID_ANY);
 	if (intr_handle->intr_vec == NULL) {
 		DRV_LOG(ERR,
 			"port %u failed to allocate memory for interrupt"
@@ -746,12 +1001,11 @@ mlx5_rx_intr_vec_enable(struct rte_eth_dev *dev)
 	for (i = 0; i != n; ++i) {
 		/* This rxq obj must not be released in this function. */
 		struct mlx5_rxq_obj *rxq_obj = mlx5_rxq_obj_get(dev, i);
-		int fd;
-		int flags;
 		int rc;
 
 		/* Skip queues that cannot request interrupts. */
-		if (!rxq_obj || !rxq_obj->channel) {
+		if (!rxq_obj || (!rxq_obj->ibv_channel &&
+				 !rxq_obj->devx_channel)) {
 			/* Use invalid intr_vec[] index to disable entry. */
 			intr_handle->intr_vec[i] =
 				RTE_INTR_VEC_RXTX_OFFSET +
@@ -768,21 +1022,19 @@ mlx5_rx_intr_vec_enable(struct rte_eth_dev *dev)
 			rte_errno = ENOMEM;
 			return -rte_errno;
 		}
-		fd = rxq_obj->channel->fd;
-		flags = fcntl(fd, F_GETFL);
-		rc = fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+		rc = mlx5_os_set_nonblock_channel_fd(rxq_obj->fd);
 		if (rc < 0) {
 			rte_errno = errno;
 			DRV_LOG(ERR,
 				"port %u failed to make Rx interrupt file"
 				" descriptor %d non-blocking for queue index"
 				" %d",
-				dev->data->port_id, fd, i);
+				dev->data->port_id, rxq_obj->fd, i);
 			mlx5_rx_intr_vec_disable(dev);
 			return -rte_errno;
 		}
 		intr_handle->intr_vec[i] = RTE_INTR_VEC_RXTX_OFFSET + count;
-		intr_handle->efds[count] = fd;
+		intr_handle->efds[count] = rxq_obj->fd;
 		count++;
 	}
 	if (!count)
@@ -830,7 +1082,7 @@ mlx5_rx_intr_vec_disable(struct rte_eth_dev *dev)
 free:
 	rte_intr_free_epoll_fd(intr_handle);
 	if (intr_handle->intr_vec)
-		free(intr_handle->intr_vec);
+		mlx5_free(intr_handle->intr_vec);
 	intr_handle->nb_efd = 0;
 	intr_handle->intr_vec = NULL;
 }
@@ -854,7 +1106,7 @@ mlx5_arm_cq(struct mlx5_rxq_data *rxq, int sq_n_rxq)
 	sq_n = sq_n_rxq & MLX5_CQ_SQN_MASK;
 	doorbell_hi = sq_n << MLX5_CQ_SQN_OFFSET | (rxq->cq_ci & MLX5_CI_MASK);
 	doorbell = (uint64_t)doorbell_hi << 32;
-	doorbell |=  rxq->cqn;
+	doorbell |= rxq->cqn;
 	rxq->cq_db[MLX5_CQ_ARM_DB] = rte_cpu_to_be_32(doorbell_hi);
 	mlx5_uar_write64(rte_cpu_to_be_64(doorbell),
 			 cq_db_reg, rxq->uar_lock_cq);
@@ -933,21 +1185,46 @@ mlx5_rx_intr_disable(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 		rte_errno = EINVAL;
 		return -rte_errno;
 	}
-	ret = mlx5_glue->get_cq_event(rxq_obj->channel, &ev_cq, &ev_ctx);
-	if (ret || ev_cq != rxq_obj->cq) {
-		rte_errno = EINVAL;
-		goto exit;
+	if (rxq_obj->type == MLX5_RXQ_OBJ_TYPE_IBV) {
+		ret = mlx5_glue->get_cq_event(rxq_obj->ibv_channel, &ev_cq,
+					      &ev_ctx);
+		if (ret < 0 || ev_cq != rxq_obj->ibv_cq)
+			goto exit;
+		mlx5_glue->ack_cq_events(rxq_obj->ibv_cq, 1);
+	} else if (rxq_obj->type == MLX5_RXQ_OBJ_TYPE_DEVX_RQ) {
+#ifdef HAVE_IBV_DEVX_EVENT
+		union {
+			struct mlx5dv_devx_async_event_hdr event_resp;
+			uint8_t buf[sizeof(struct mlx5dv_devx_async_event_hdr)
+				    + 128];
+		} out;
+
+		ret = mlx5_glue->devx_get_event
+				(rxq_obj->devx_channel, &out.event_resp,
+				 sizeof(out.buf));
+		if (ret < 0 || out.event_resp.cookie !=
+				(uint64_t)(uintptr_t)rxq_obj->devx_cq)
+			goto exit;
+#endif /* HAVE_IBV_DEVX_EVENT */
 	}
 	rxq_data->cq_arm_sn++;
-	mlx5_glue->ack_cq_events(rxq_obj->cq, 1);
 	mlx5_rxq_obj_release(rxq_obj);
 	return 0;
 exit:
+	/**
+	 * For ret < 0 save the errno (may be EAGAIN which means the get_event
+	 * function was called before receiving one).
+	 */
+	if (ret < 0)
+		rte_errno = errno;
+	else
+		rte_errno = EINVAL;
 	ret = rte_errno; /* Save rte_errno before cleanup. */
 	if (rxq_obj)
 		mlx5_rxq_obj_release(rxq_obj);
-	DRV_LOG(WARNING, "port %u unable to disable interrupt on Rx queue %d",
-		dev->data->port_id, rx_queue_id);
+	if (ret != EAGAIN)
+		DRV_LOG(WARNING, "port %u unable to disable interrupt on Rx queue %d",
+			dev->data->port_id, rx_queue_id);
 	rte_errno = ret; /* Restore rte_errno. */
 	return -rte_errno;
 }
@@ -981,7 +1258,7 @@ mlx5_ibv_cq_new(struct rte_eth_dev *dev, struct mlx5_priv *priv,
 
 	cq_attr.ibv = (struct ibv_cq_init_attr_ex){
 		.cqe = cqe_n,
-		.channel = rxq_obj->channel,
+		.channel = rxq_obj->ibv_channel,
 		.comp_mask = 0,
 	};
 	cq_attr.mlx5 = (struct mlx5dv_cq_init_attr){
@@ -1065,7 +1342,7 @@ mlx5_ibv_wq_new(struct rte_eth_dev *dev, struct mlx5_priv *priv,
 		/* Max number of scatter/gather elements in a WR. */
 		.max_sge = 1 << rxq_data->sges_n,
 		.pd = priv->sh->pd,
-		.cq = rxq_obj->cq,
+		.cq = rxq_obj->ibv_cq,
 		.comp_mask = IBV_WQ_FLAGS_CVLAN_STRIPPING | 0,
 		.create_flags = (rxq_data->vlan_strip ?
 				 IBV_WQ_FLAGS_CVLAN_STRIPPING : 0),
@@ -1164,8 +1441,8 @@ mlx5_devx_wq_attr_fill(struct mlx5_priv *priv, struct mlx5_rxq_ctrl *rxq_ctrl,
 					MLX5_WQ_END_PAD_MODE_ALIGN :
 					MLX5_WQ_END_PAD_MODE_NONE;
 	wq_attr->pd = priv->sh->pdn;
-	wq_attr->dbr_addr = rxq_ctrl->dbr_offset;
-	wq_attr->dbr_umem_id = rxq_ctrl->dbr_umem_id;
+	wq_attr->dbr_addr = rxq_ctrl->rq_dbr_offset;
+	wq_attr->dbr_umem_id = rxq_ctrl->rq_dbr_umem_id;
 	wq_attr->dbr_umem_valid = 1;
 	wq_attr->wq_umem_id = rxq_ctrl->wq_umem->umem_id;
 	wq_attr->wq_umem_valid = 1;
@@ -1191,7 +1468,7 @@ mlx5_devx_rq_new(struct rte_eth_dev *dev, uint16_t idx, uint32_t cqn)
 	struct mlx5_rxq_data *rxq_data = (*priv->rxqs)[idx];
 	struct mlx5_rxq_ctrl *rxq_ctrl =
 		container_of(rxq_data, struct mlx5_rxq_ctrl, rxq);
-	struct mlx5_devx_create_rq_attr rq_attr;
+	struct mlx5_devx_create_rq_attr rq_attr = { 0 };
 	uint32_t wqe_n = 1 << (rxq_data->elts_n - rxq_data->sges_n);
 	uint32_t wq_size = 0;
 	uint32_t wqe_size = 0;
@@ -1199,7 +1476,6 @@ mlx5_devx_rq_new(struct rte_eth_dev *dev, uint16_t idx, uint32_t cqn)
 	void *buf = NULL;
 	struct mlx5_devx_obj *rq;
 
-	memset(&rq_attr, 0, sizeof(rq_attr));
 	/* Fill RQ attributes. */
 	rq_attr.mem_rq_type = MLX5_RQC_MEM_RQ_TYPE_MEMORY_RQ_INLINE;
 	rq_attr.flush_in_error_en = 1;
@@ -1229,22 +1505,155 @@ mlx5_devx_rq_new(struct rte_eth_dev *dev, uint16_t idx, uint32_t cqn)
 	/* Calculate and allocate WQ memory space. */
 	wqe_size = 1 << log_wqe_size; /* round up power of two.*/
 	wq_size = wqe_n * wqe_size;
-	buf = rte_calloc_socket(__func__, 1, wq_size, MLX5_WQE_BUF_ALIGNMENT,
-				rxq_ctrl->socket);
+	size_t alignment = MLX5_WQE_BUF_ALIGNMENT;
+	if (alignment == (size_t)-1) {
+		DRV_LOG(ERR, "Failed to get mem page size");
+		rte_errno = ENOMEM;
+		return NULL;
+	}
+	buf = mlx5_malloc(MLX5_MEM_RTE | MLX5_MEM_ZERO, wq_size,
+			  alignment, rxq_ctrl->socket);
 	if (!buf)
 		return NULL;
 	rxq_data->wqes = buf;
 	rxq_ctrl->wq_umem = mlx5_glue->devx_umem_reg(priv->sh->ctx,
 						     buf, wq_size, 0);
 	if (!rxq_ctrl->wq_umem) {
-		rte_free(buf);
+		mlx5_free(buf);
 		return NULL;
 	}
 	mlx5_devx_wq_attr_fill(priv, rxq_ctrl, &rq_attr.wq_attr);
 	rq = mlx5_devx_cmd_create_rq(priv->sh->ctx, &rq_attr, rxq_ctrl->socket);
 	if (!rq)
-		rxq_release_rq_resources(rxq_ctrl);
+		rxq_release_devx_rq_resources(rxq_ctrl);
 	return rq;
+}
+
+/**
+ * Create a DevX CQ object for an Rx queue.
+ *
+ * @param dev
+ *   Pointer to Ethernet device.
+ * @param cqe_n
+ *   Number of CQEs in CQ.
+ * @param idx
+ *   Queue index in DPDK Rx queue array
+ * @param rxq_obj
+ *   Pointer to Rx queue object data.
+ *
+ * @return
+ *   The DevX object initialised, NULL otherwise and rte_errno is set.
+ */
+static struct mlx5_devx_obj *
+mlx5_devx_cq_new(struct rte_eth_dev *dev, unsigned int cqe_n, uint16_t idx,
+		 struct mlx5_rxq_obj *rxq_obj)
+{
+	struct mlx5_devx_obj *cq_obj = 0;
+	struct mlx5_devx_cq_attr cq_attr = { 0 };
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_rxq_data *rxq_data = (*priv->rxqs)[idx];
+	struct mlx5_rxq_ctrl *rxq_ctrl =
+		container_of(rxq_data, struct mlx5_rxq_ctrl, rxq);
+	size_t page_size = rte_mem_page_size();
+	uint32_t lcore = (uint32_t)rte_lcore_to_cpu_id(-1);
+	uint32_t eqn = 0;
+	void *buf = NULL;
+	uint16_t event_nums[1] = {0};
+	uint32_t log_cqe_n;
+	uint32_t cq_size;
+	int ret = 0;
+
+	if (page_size == (size_t)-1) {
+		DRV_LOG(ERR, "Failed to get page_size.");
+		goto error;
+	}
+	if (priv->config.cqe_comp && !rxq_data->hw_timestamp &&
+	    !rxq_data->lro) {
+		cq_attr.cqe_comp_en = MLX5DV_CQ_INIT_ATTR_MASK_COMPRESSED_CQE;
+#ifdef HAVE_IBV_DEVICE_STRIDING_RQ_SUPPORT
+		cq_attr.mini_cqe_res_format =
+				mlx5_rxq_mprq_enabled(rxq_data) ?
+				MLX5DV_CQE_RES_FORMAT_CSUM_STRIDX :
+				MLX5DV_CQE_RES_FORMAT_HASH;
+#else
+		cq_attr.mini_cqe_res_format = MLX5DV_CQE_RES_FORMAT_HASH;
+#endif
+		/*
+		 * For vectorized Rx, it must not be doubled in order to
+		 * make cq_ci and rq_ci aligned.
+		 */
+		if (mlx5_rxq_check_vec_support(rxq_data) < 0)
+			cqe_n *= 2;
+	} else if (priv->config.cqe_comp && rxq_data->hw_timestamp) {
+		DRV_LOG(DEBUG,
+			"port %u Rx CQE compression is disabled for HW"
+			" timestamp",
+			dev->data->port_id);
+	} else if (priv->config.cqe_comp && rxq_data->lro) {
+		DRV_LOG(DEBUG,
+			"port %u Rx CQE compression is disabled for LRO",
+			dev->data->port_id);
+	}
+#ifdef HAVE_IBV_MLX5_MOD_CQE_128B_PAD
+	if (priv->config.cqe_pad)
+		cq_attr.cqe_size = MLX5DV_CQ_INIT_ATTR_FLAGS_CQE_PAD;
+#endif
+	log_cqe_n = log2above(cqe_n);
+	cq_size = sizeof(struct mlx5_cqe) * (1 << log_cqe_n);
+	/* Query the EQN for this core. */
+	if (mlx5_glue->devx_query_eqn(priv->sh->ctx, lcore, &eqn)) {
+		DRV_LOG(ERR, "Failed to query EQN for CQ.");
+		goto error;
+	}
+	cq_attr.eqn = eqn;
+	buf = rte_calloc_socket(__func__, 1, cq_size, page_size,
+				rxq_ctrl->socket);
+	if (!buf) {
+		DRV_LOG(ERR, "Failed to allocate memory for CQ.");
+		goto error;
+	}
+	rxq_data->cqes = (volatile struct mlx5_cqe (*)[])(uintptr_t)buf;
+	rxq_ctrl->cq_umem = mlx5_glue->devx_umem_reg(priv->sh->ctx, buf,
+						     cq_size,
+						     IBV_ACCESS_LOCAL_WRITE);
+	if (!rxq_ctrl->cq_umem) {
+		DRV_LOG(ERR, "Failed to register umem for CQ.");
+		goto error;
+	}
+	cq_attr.uar_page_id = priv->sh->devx_rx_uar->page_id;
+	cq_attr.q_umem_id = rxq_ctrl->cq_umem->umem_id;
+	cq_attr.q_umem_valid = 1;
+	cq_attr.log_cq_size = log_cqe_n;
+	cq_attr.log_page_size = rte_log2_u32(page_size);
+	cq_attr.db_umem_offset = rxq_ctrl->cq_dbr_offset;
+	cq_attr.db_umem_id = rxq_ctrl->cq_dbr_umem_id;
+	cq_attr.db_umem_valid = rxq_ctrl->cq_dbr_umem_id_valid;
+	cq_obj = mlx5_devx_cmd_create_cq(priv->sh->ctx, &cq_attr);
+	if (!cq_obj)
+		goto error;
+	rxq_data->cqe_n = log_cqe_n;
+	rxq_data->cqn = cq_obj->id;
+	if (rxq_obj->devx_channel) {
+		ret = mlx5_glue->devx_subscribe_devx_event
+						(rxq_obj->devx_channel,
+						 cq_obj->obj,
+						 sizeof(event_nums),
+						 event_nums,
+						 (uint64_t)(uintptr_t)cq_obj);
+		if (ret) {
+			DRV_LOG(ERR, "Fail to subscribe CQ to event channel.");
+			rte_errno = errno;
+			goto error;
+		}
+	}
+	/* Initialise CQ to 1's to mark HW ownership for all CQEs. */
+	memset((void *)(uintptr_t)rxq_data->cqes, 0xFF, cq_size);
+	return cq_obj;
+error:
+	if (cq_obj)
+		mlx5_devx_cmd_destroy(cq_obj);
+	rxq_release_devx_cq_resources(rxq_ctrl);
+	return NULL;
 }
 
 /**
@@ -1267,28 +1676,39 @@ mlx5_rxq_obj_hairpin_new(struct rte_eth_dev *dev, uint16_t idx)
 		container_of(rxq_data, struct mlx5_rxq_ctrl, rxq);
 	struct mlx5_devx_create_rq_attr attr = { 0 };
 	struct mlx5_rxq_obj *tmpl = NULL;
-	int ret = 0;
 	uint32_t max_wq_data;
 
 	MLX5_ASSERT(rxq_data);
 	MLX5_ASSERT(!rxq_ctrl->obj);
-	tmpl = rte_calloc_socket(__func__, 1, sizeof(*tmpl), 0,
-				 rxq_ctrl->socket);
+	tmpl = mlx5_malloc(MLX5_MEM_RTE | MLX5_MEM_ZERO, sizeof(*tmpl), 0,
+			   rxq_ctrl->socket);
 	if (!tmpl) {
 		DRV_LOG(ERR,
 			"port %u Rx queue %u cannot allocate verbs resources",
 			dev->data->port_id, rxq_data->idx);
 		rte_errno = ENOMEM;
-		goto error;
+		return NULL;
 	}
 	tmpl->type = MLX5_RXQ_OBJ_TYPE_DEVX_HAIRPIN;
 	tmpl->rxq_ctrl = rxq_ctrl;
 	attr.hairpin = 1;
 	max_wq_data = priv->config.hca_attr.log_max_hairpin_wq_data_sz;
 	/* Jumbo frames > 9KB should be supported, and more packets. */
-	attr.wq_attr.log_hairpin_data_sz =
-			(max_wq_data < MLX5_HAIRPIN_JUMBO_LOG_SIZE) ?
-			max_wq_data : MLX5_HAIRPIN_JUMBO_LOG_SIZE;
+	if (priv->config.log_hp_size != (uint32_t)MLX5_ARG_UNSET) {
+		if (priv->config.log_hp_size > max_wq_data) {
+			DRV_LOG(ERR, "total data size %u power of 2 is "
+				"too large for hairpin",
+				priv->config.log_hp_size);
+			mlx5_free(tmpl);
+			rte_errno = ERANGE;
+			return NULL;
+		}
+		attr.wq_attr.log_hairpin_data_sz = priv->config.log_hp_size;
+	} else {
+		attr.wq_attr.log_hairpin_data_sz =
+				(max_wq_data < MLX5_HAIRPIN_JUMBO_LOG_SIZE) ?
+				 max_wq_data : MLX5_HAIRPIN_JUMBO_LOG_SIZE;
+	}
 	/* Set the packets number to the maximum value for performance. */
 	attr.wq_attr.log_hairpin_num_packets =
 			attr.wq_attr.log_hairpin_data_sz -
@@ -1299,21 +1719,17 @@ mlx5_rxq_obj_hairpin_new(struct rte_eth_dev *dev, uint16_t idx)
 		DRV_LOG(ERR,
 			"port %u Rx hairpin queue %u can't create rq object",
 			dev->data->port_id, idx);
+		mlx5_free(tmpl);
 		rte_errno = errno;
-		goto error;
+		return NULL;
 	}
 	DRV_LOG(DEBUG, "port %u rxq %u updated with %p", dev->data->port_id,
 		idx, (void *)&tmpl);
 	rte_atomic32_inc(&tmpl->refcnt);
 	LIST_INSERT_HEAD(&priv->rxqsobj, tmpl, next);
 	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_NONE;
+	dev->data->rx_queue_state[idx] = RTE_ETH_QUEUE_STATE_HAIRPIN;
 	return tmpl;
-error:
-	ret = rte_errno; /* Save rte_errno before cleanup. */
-	if (tmpl->rq)
-		mlx5_devx_cmd_destroy(tmpl->rq);
-	rte_errno = ret; /* Restore rte_errno. */
-	return NULL;
 }
 
 /**
@@ -1352,11 +1768,11 @@ mlx5_rxq_obj_new(struct rte_eth_dev *dev, uint16_t idx,
 		return mlx5_rxq_obj_hairpin_new(dev, idx);
 	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_RX_QUEUE;
 	priv->verbs_alloc_ctx.obj = rxq_ctrl;
-	tmpl = rte_calloc_socket(__func__, 1, sizeof(*tmpl), 0,
-				 rxq_ctrl->socket);
+	tmpl = mlx5_malloc(MLX5_MEM_RTE | MLX5_MEM_ZERO, sizeof(*tmpl), 0,
+			   rxq_ctrl->socket);
 	if (!tmpl) {
 		DRV_LOG(ERR,
-			"port %u Rx queue %u cannot allocate verbs resources",
+			"port %u Rx queue %u cannot allocate resources",
 			dev->data->port_id, rxq_data->idx);
 		rte_errno = ENOMEM;
 		goto error;
@@ -1364,59 +1780,75 @@ mlx5_rxq_obj_new(struct rte_eth_dev *dev, uint16_t idx,
 	tmpl->type = type;
 	tmpl->rxq_ctrl = rxq_ctrl;
 	if (rxq_ctrl->irq) {
-		tmpl->channel = mlx5_glue->create_comp_channel(priv->sh->ctx);
-		if (!tmpl->channel) {
-			DRV_LOG(ERR, "port %u: comp channel creation failure",
-				dev->data->port_id);
-			rte_errno = ENOMEM;
-			goto error;
+		if (tmpl->type == MLX5_RXQ_OBJ_TYPE_IBV) {
+			tmpl->ibv_channel =
+				mlx5_glue->create_comp_channel(priv->sh->ctx);
+			if (!tmpl->ibv_channel) {
+				DRV_LOG(ERR, "port %u: comp channel creation "
+					"failure", dev->data->port_id);
+				rte_errno = ENOMEM;
+				goto error;
+			}
+			tmpl->fd = tmpl->ibv_channel->fd;
+		} else if (tmpl->type == MLX5_RXQ_OBJ_TYPE_DEVX_RQ) {
+			int devx_ev_flag =
+			  MLX5DV_DEVX_CREATE_EVENT_CHANNEL_FLAGS_OMIT_EV_DATA;
+
+			tmpl->devx_channel =
+				mlx5_glue->devx_create_event_channel
+								(priv->sh->ctx,
+								 devx_ev_flag);
+			if (!tmpl->devx_channel) {
+				rte_errno = errno;
+				DRV_LOG(ERR,
+					"Failed to create event channel %d.",
+					rte_errno);
+				goto error;
+			}
+			tmpl->fd = tmpl->devx_channel->fd;
 		}
 	}
 	if (mlx5_rxq_mprq_enabled(rxq_data))
 		cqe_n = wqe_n * (1 << rxq_data->strd_num_n) - 1;
 	else
-		cqe_n = wqe_n  - 1;
-	tmpl->cq = mlx5_ibv_cq_new(dev, priv, rxq_data, cqe_n, tmpl);
-	if (!tmpl->cq) {
-		DRV_LOG(ERR, "port %u Rx queue %u CQ creation failure",
-			dev->data->port_id, idx);
-		rte_errno = ENOMEM;
-		goto error;
-	}
-	obj.cq.in = tmpl->cq;
-	obj.cq.out = &cq_info;
-	ret = mlx5_glue->dv_init_obj(&obj, MLX5DV_OBJ_CQ);
-	if (ret) {
-		rte_errno = ret;
-		goto error;
-	}
-	if (cq_info.cqe_size != RTE_CACHE_LINE_SIZE) {
-		DRV_LOG(ERR,
-			"port %u wrong MLX5_CQE_SIZE environment variable"
-			" value: it should be set to %u",
-			dev->data->port_id, RTE_CACHE_LINE_SIZE);
-		rte_errno = EINVAL;
-		goto error;
-	}
+		cqe_n = wqe_n - 1;
 	DRV_LOG(DEBUG, "port %u device_attr.max_qp_wr is %d",
-		dev->data->port_id, priv->sh->device_attr.orig_attr.max_qp_wr);
+		dev->data->port_id, priv->sh->device_attr.max_qp_wr);
 	DRV_LOG(DEBUG, "port %u device_attr.max_sge is %d",
-		dev->data->port_id, priv->sh->device_attr.orig_attr.max_sge);
-	/* Allocate door-bell for types created with DevX. */
-	if (tmpl->type != MLX5_RXQ_OBJ_TYPE_IBV) {
-		struct mlx5_devx_dbr_page *dbr_page;
-		int64_t dbr_offset;
-
-		dbr_offset = mlx5_get_dbr(dev, &dbr_page);
-		if (dbr_offset < 0)
-			goto error;
-		rxq_ctrl->dbr_offset = dbr_offset;
-		rxq_ctrl->dbr_umem_id = dbr_page->umem->umem_id;
-		rxq_ctrl->dbr_umem_id_valid = 1;
-		rxq_data->rq_db = (uint32_t *)((uintptr_t)dbr_page->dbrs +
-					       (uintptr_t)rxq_ctrl->dbr_offset);
-	}
+		dev->data->port_id, priv->sh->device_attr.max_sge);
 	if (tmpl->type == MLX5_RXQ_OBJ_TYPE_IBV) {
+		/* Create CQ using Verbs API. */
+		tmpl->ibv_cq = mlx5_ibv_cq_new(dev, priv, rxq_data, cqe_n,
+					       tmpl);
+		if (!tmpl->ibv_cq) {
+			DRV_LOG(ERR, "port %u Rx queue %u CQ creation failure",
+				dev->data->port_id, idx);
+			rte_errno = ENOMEM;
+			goto error;
+		}
+		obj.cq.in = tmpl->ibv_cq;
+		obj.cq.out = &cq_info;
+		ret = mlx5_glue->dv_init_obj(&obj, MLX5DV_OBJ_CQ);
+		if (ret) {
+			rte_errno = ret;
+			goto error;
+		}
+		if (cq_info.cqe_size != RTE_CACHE_LINE_SIZE) {
+			DRV_LOG(ERR,
+				"port %u wrong MLX5_CQE_SIZE environment "
+				"variable value: it should be set to %u",
+				dev->data->port_id, RTE_CACHE_LINE_SIZE);
+			rte_errno = EINVAL;
+			goto error;
+		}
+		/* Fill the rings. */
+		rxq_data->cqe_n = log2above(cq_info.cqe_cnt);
+		rxq_data->cq_db = cq_info.dbrec;
+		rxq_data->cqes =
+			(volatile struct mlx5_cqe (*)[])(uintptr_t)cq_info.buf;
+		rxq_data->cq_uar = cq_info.cq_uar;
+		rxq_data->cqn = cq_info.cqn;
+		/* Create WQ (RQ) using Verbs API. */
 		tmpl->wq = mlx5_ibv_wq_new(dev, priv, rxq_data, idx, wqe_n,
 					   tmpl);
 		if (!tmpl->wq) {
@@ -1448,10 +1880,45 @@ mlx5_rxq_obj_new(struct rte_eth_dev *dev, uint16_t idx,
 		rxq_data->wqes = rwq.buf;
 		rxq_data->rq_db = rwq.dbrec;
 	} else if (tmpl->type == MLX5_RXQ_OBJ_TYPE_DEVX_RQ) {
-		struct mlx5_devx_modify_rq_attr rq_attr;
+		struct mlx5_devx_modify_rq_attr rq_attr = { 0 };
+		struct mlx5_devx_dbr_page *dbr_page;
+		int64_t dbr_offset;
 
-		memset(&rq_attr, 0, sizeof(rq_attr));
-		tmpl->rq = mlx5_devx_rq_new(dev, idx, cq_info.cqn);
+		/* Allocate CQ door-bell. */
+		dbr_offset = mlx5_get_dbr(priv->sh->ctx, &priv->dbrpgs,
+					  &dbr_page);
+		if (dbr_offset < 0) {
+			DRV_LOG(ERR, "Failed to allocate CQ door-bell.");
+			goto error;
+		}
+		rxq_ctrl->cq_dbr_offset = dbr_offset;
+		rxq_ctrl->cq_dbr_umem_id = mlx5_os_get_umem_id(dbr_page->umem);
+		rxq_ctrl->cq_dbr_umem_id_valid = 1;
+		rxq_data->cq_db =
+			(uint32_t *)((uintptr_t)dbr_page->dbrs +
+				     (uintptr_t)rxq_ctrl->cq_dbr_offset);
+		rxq_data->cq_uar = priv->sh->devx_rx_uar->base_addr;
+		/* Create CQ using DevX API. */
+		tmpl->devx_cq = mlx5_devx_cq_new(dev, cqe_n, idx, tmpl);
+		if (!tmpl->devx_cq) {
+			DRV_LOG(ERR, "Failed to create CQ.");
+			goto error;
+		}
+		/* Allocate RQ door-bell. */
+		dbr_offset = mlx5_get_dbr(priv->sh->ctx, &priv->dbrpgs,
+					  &dbr_page);
+		if (dbr_offset < 0) {
+			DRV_LOG(ERR, "Failed to allocate RQ door-bell.");
+			goto error;
+		}
+		rxq_ctrl->rq_dbr_offset = dbr_offset;
+		rxq_ctrl->rq_dbr_umem_id = mlx5_os_get_umem_id(dbr_page->umem);
+		rxq_ctrl->rq_dbr_umem_id_valid = 1;
+		rxq_data->rq_db =
+			(uint32_t *)((uintptr_t)dbr_page->dbrs +
+				     (uintptr_t)rxq_ctrl->rq_dbr_offset);
+		/* Create RQ using DevX API. */
+		tmpl->rq = mlx5_devx_rq_new(dev, idx, tmpl->devx_cq->id);
 		if (!tmpl->rq) {
 			DRV_LOG(ERR, "port %u Rx queue %u RQ creation failure",
 				dev->data->port_id, idx);
@@ -1465,12 +1932,6 @@ mlx5_rxq_obj_new(struct rte_eth_dev *dev, uint16_t idx,
 		if (ret)
 			goto error;
 	}
-	/* Fill the rings. */
-	rxq_data->cqe_n = log2above(cq_info.cqe_cnt);
-	rxq_data->cq_db = cq_info.dbrec;
-	rxq_data->cqes = (volatile struct mlx5_cqe (*)[])(uintptr_t)cq_info.buf;
-	rxq_data->cq_uar = cq_info.cq_uar;
-	rxq_data->cqn = cq_info.cqn;
 	rxq_data->cq_arm_sn = 0;
 	mlx5_rxq_initialize(rxq_data);
 	rxq_data->cq_ci = 0;
@@ -1479,24 +1940,36 @@ mlx5_rxq_obj_new(struct rte_eth_dev *dev, uint16_t idx,
 	rte_atomic32_inc(&tmpl->refcnt);
 	LIST_INSERT_HEAD(&priv->rxqsobj, tmpl, next);
 	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_NONE;
+	dev->data->rx_queue_state[idx] = RTE_ETH_QUEUE_STATE_STARTED;
 	return tmpl;
 error:
 	if (tmpl) {
 		ret = rte_errno; /* Save rte_errno before cleanup. */
-		if (tmpl->type == MLX5_RXQ_OBJ_TYPE_IBV && tmpl->wq)
-			claim_zero(mlx5_glue->destroy_wq(tmpl->wq));
-		else if (tmpl->type == MLX5_RXQ_OBJ_TYPE_DEVX_RQ && tmpl->rq)
-			claim_zero(mlx5_devx_cmd_destroy(tmpl->rq));
-		if (tmpl->cq)
-			claim_zero(mlx5_glue->destroy_cq(tmpl->cq));
-		if (tmpl->channel)
-			claim_zero(mlx5_glue->destroy_comp_channel
-							(tmpl->channel));
-		rte_free(tmpl);
+		if (tmpl->type == MLX5_RXQ_OBJ_TYPE_IBV) {
+			if (tmpl->wq)
+				claim_zero(mlx5_glue->destroy_wq(tmpl->wq));
+			if (tmpl->ibv_cq)
+				claim_zero(mlx5_glue->destroy_cq(tmpl->ibv_cq));
+			if (tmpl->ibv_channel)
+				claim_zero(mlx5_glue->destroy_comp_channel
+							(tmpl->ibv_channel));
+		} else if (tmpl->type == MLX5_RXQ_OBJ_TYPE_DEVX_RQ) {
+			if (tmpl->rq)
+				claim_zero(mlx5_devx_cmd_destroy(tmpl->rq));
+			if (tmpl->devx_cq)
+				claim_zero(mlx5_devx_cmd_destroy
+							(tmpl->devx_cq));
+			if (tmpl->devx_channel)
+				mlx5_glue->devx_destroy_event_channel
+							(tmpl->devx_channel);
+		}
+		mlx5_free(tmpl);
 		rte_errno = ret; /* Restore rte_errno. */
 	}
-	if (type == MLX5_RXQ_OBJ_TYPE_DEVX_RQ)
-		rxq_release_rq_resources(rxq_ctrl);
+	if (type == MLX5_RXQ_OBJ_TYPE_DEVX_RQ) {
+		rxq_release_devx_rq_resources(rxq_ctrl);
+		rxq_release_devx_cq_resources(rxq_ctrl);
+	}
 	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_NONE;
 	return NULL;
 }
@@ -1782,9 +2255,10 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_rxq_ctrl *tmpl;
 	unsigned int mb_len = rte_pktmbuf_data_room_size(mp);
+	unsigned int mprq_stride_nums;
 	unsigned int mprq_stride_size;
+	unsigned int mprq_stride_cap;
 	struct mlx5_dev_config *config = &priv->config;
-	unsigned int strd_headroom_en;
 	/*
 	 * Always allocate extra slots, even if eventually
 	 * the vector Rx will not be used.
@@ -1813,10 +2287,8 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		rte_errno = ENOSPC;
 		return NULL;
 	}
-	tmpl = rte_calloc_socket("RXQ", 1,
-				 sizeof(*tmpl) +
-				 desc_n * sizeof(struct rte_mbuf *),
-				 0, socket);
+	tmpl = mlx5_malloc(MLX5_MEM_RTE | MLX5_MEM_ZERO, sizeof(*tmpl) +
+			   desc_n * sizeof(struct rte_mbuf *), 0, socket);
 	if (!tmpl) {
 		rte_errno = ENOMEM;
 		return NULL;
@@ -1830,42 +2302,42 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	tmpl->socket = socket;
 	if (dev->data->dev_conf.intr_conf.rxq)
 		tmpl->irq = 1;
-	/*
-	 * LRO packet may consume all the stride memory, hence we cannot
-	 * guaranty head-room near the packet memory in the stride.
-	 * In this case scatter is, for sure, enabled and an empty mbuf may be
-	 * added in the start for the head-room.
-	 */
-	if (lro_on_queue && RTE_PKTMBUF_HEADROOM > 0 &&
-	    non_scatter_min_mbuf_size > mb_len) {
-		strd_headroom_en = 0;
-		mprq_stride_size = RTE_MIN(max_rx_pkt_len,
-					1u << config->mprq.max_stride_size_n);
-	} else {
-		strd_headroom_en = 1;
-		mprq_stride_size = non_scatter_min_mbuf_size;
-	}
+	mprq_stride_nums = config->mprq.stride_num_n ?
+		config->mprq.stride_num_n : MLX5_MPRQ_STRIDE_NUM_N;
+	mprq_stride_size = non_scatter_min_mbuf_size <=
+		(1U << config->mprq.max_stride_size_n) ?
+		log2above(non_scatter_min_mbuf_size) : MLX5_MPRQ_STRIDE_SIZE_N;
+	mprq_stride_cap = (config->mprq.stride_num_n ?
+		(1U << config->mprq.stride_num_n) : (1U << mprq_stride_nums)) *
+			(config->mprq.stride_size_n ?
+		(1U << config->mprq.stride_size_n) : (1U << mprq_stride_size));
 	/*
 	 * This Rx queue can be configured as a Multi-Packet RQ if all of the
 	 * following conditions are met:
 	 *  - MPRQ is enabled.
 	 *  - The number of descs is more than the number of strides.
-	 *  - max_rx_pkt_len plus overhead is less than the max size of a
-	 *    stride.
+	 *  - max_rx_pkt_len plus overhead is less than the max size
+	 *    of a stride or mprq_stride_size is specified by a user.
+	 *    Need to nake sure that there are enough stides to encap
+	 *    the maximum packet size in case mprq_stride_size is set.
 	 *  Otherwise, enable Rx scatter if necessary.
 	 */
-	if (mprq_en &&
-	    desc > (1U << config->mprq.stride_num_n) &&
-	    mprq_stride_size <= (1U << config->mprq.max_stride_size_n)) {
+	if (mprq_en && desc > (1U << mprq_stride_nums) &&
+	    (non_scatter_min_mbuf_size <=
+	     (1U << config->mprq.max_stride_size_n) ||
+	     (config->mprq.stride_size_n &&
+	      non_scatter_min_mbuf_size <= mprq_stride_cap))) {
 		/* TODO: Rx scatter isn't supported yet. */
 		tmpl->rxq.sges_n = 0;
 		/* Trim the number of descs needed. */
-		desc >>= config->mprq.stride_num_n;
-		tmpl->rxq.strd_num_n = config->mprq.stride_num_n;
-		tmpl->rxq.strd_sz_n = RTE_MAX(log2above(mprq_stride_size),
-					      config->mprq.min_stride_size_n);
+		desc >>= mprq_stride_nums;
+		tmpl->rxq.strd_num_n = config->mprq.stride_num_n ?
+			config->mprq.stride_num_n : mprq_stride_nums;
+		tmpl->rxq.strd_sz_n = config->mprq.stride_size_n ?
+			config->mprq.stride_size_n : mprq_stride_size;
 		tmpl->rxq.strd_shift_en = MLX5_MPRQ_TWO_BYTE_SHIFT;
-		tmpl->rxq.strd_headroom_en = strd_headroom_en;
+		tmpl->rxq.strd_scatter_en =
+				!!(offloads & DEV_RX_OFFLOAD_SCATTER);
 		tmpl->rxq.mprq_max_memcpy_len = RTE_MIN(first_mb_free_size,
 				config->mprq.max_memcpy_len);
 		max_lro_size = RTE_MIN(max_rx_pkt_len,
@@ -1909,14 +2381,24 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		tmpl->rxq.sges_n = sges_n;
 		max_lro_size = max_rx_pkt_len;
 	}
-	if (mprq_en && !mlx5_rxq_mprq_enabled(&tmpl->rxq))
+	if (config->mprq.enabled && !mlx5_rxq_mprq_enabled(&tmpl->rxq))
 		DRV_LOG(WARNING,
-			"port %u MPRQ is requested but cannot be enabled"
-			" (requested: desc = %u, stride_sz = %u,"
-			" supported: min_stride_num = %u, max_stride_sz = %u).",
-			dev->data->port_id, desc, mprq_stride_size,
-			(1 << config->mprq.stride_num_n),
-			(1 << config->mprq.max_stride_size_n));
+			"port %u MPRQ is requested but cannot be enabled\n"
+			" (requested: pkt_sz = %u, desc_num = %u,"
+			" rxq_num = %u, stride_sz = %u, stride_num = %u\n"
+			"  supported: min_rxqs_num = %u,"
+			" min_stride_sz = %u, max_stride_sz = %u).",
+			dev->data->port_id, non_scatter_min_mbuf_size,
+			desc, priv->rxqs_n,
+			config->mprq.stride_size_n ?
+				(1U << config->mprq.stride_size_n) :
+				(1U << mprq_stride_size),
+			config->mprq.stride_num_n ?
+				(1U << config->mprq.stride_num_n) :
+				(1U << mprq_stride_nums),
+			config->mprq.min_rxqs_num,
+			(1U << config->mprq.min_stride_size_n),
+			(1U << config->mprq.max_stride_size_n));
 	DRV_LOG(DEBUG, "port %u maximum number of segments per packet: %u",
 		dev->data->port_id, 1 << tmpl->rxq.sges_n);
 	if (desc % (1 << tmpl->rxq.sges_n)) {
@@ -1978,14 +2460,14 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	tmpl->rxq.elts =
 		(struct rte_mbuf *(*)[1 << tmpl->rxq.elts_n])(tmpl + 1);
 #ifndef RTE_ARCH_64
-	tmpl->rxq.uar_lock_cq = &priv->uar_lock_cq;
+	tmpl->rxq.uar_lock_cq = &priv->sh->uar_lock_cq;
 #endif
 	tmpl->rxq.idx = idx;
 	rte_atomic32_inc(&tmpl->refcnt);
 	LIST_INSERT_HEAD(&priv->rxqsctrl, tmpl, next);
 	return tmpl;
 error:
-	rte_free(tmpl);
+	mlx5_free(tmpl);
 	return NULL;
 }
 
@@ -2011,7 +2493,8 @@ mlx5_rxq_hairpin_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_rxq_ctrl *tmpl;
 
-	tmpl = rte_calloc_socket("RXQ", 1, sizeof(*tmpl), 0, SOCKET_ID_ANY);
+	tmpl = mlx5_malloc(MLX5_MEM_RTE | MLX5_MEM_ZERO, sizeof(*tmpl), 0,
+			   SOCKET_ID_ANY);
 	if (!tmpl) {
 		rte_errno = ENOMEM;
 		return NULL;
@@ -2083,13 +2566,18 @@ mlx5_rxq_release(struct rte_eth_dev *dev, uint16_t idx)
 	if (rxq_ctrl->obj && !mlx5_rxq_obj_release(rxq_ctrl->obj))
 		rxq_ctrl->obj = NULL;
 	if (rte_atomic32_dec_and_test(&rxq_ctrl->refcnt)) {
-		if (rxq_ctrl->dbr_umem_id_valid)
-			claim_zero(mlx5_release_dbr(dev, rxq_ctrl->dbr_umem_id,
-						    rxq_ctrl->dbr_offset));
+		if (rxq_ctrl->rq_dbr_umem_id_valid)
+			claim_zero(mlx5_release_dbr(&priv->dbrpgs,
+						    rxq_ctrl->rq_dbr_umem_id,
+						    rxq_ctrl->rq_dbr_offset));
+		if (rxq_ctrl->cq_dbr_umem_id_valid)
+			claim_zero(mlx5_release_dbr(&priv->dbrpgs,
+						    rxq_ctrl->cq_dbr_umem_id,
+						    rxq_ctrl->cq_dbr_offset));
 		if (rxq_ctrl->type == MLX5_RXQ_TYPE_STANDARD)
 			mlx5_mr_btree_free(&rxq_ctrl->rxq.mr_ctrl.cache_bh);
 		LIST_REMOVE(rxq_ctrl, next);
-		rte_free(rxq_ctrl);
+		mlx5_free(rxq_ctrl);
 		(*priv->rxqs)[idx] = NULL;
 		return 0;
 	}
@@ -2167,8 +2655,8 @@ mlx5_ind_table_obj_new(struct rte_eth_dev *dev, const uint16_t *queues,
 	struct mlx5_ind_table_obj *ind_tbl;
 	unsigned int i = 0, j = 0, k = 0;
 
-	ind_tbl = rte_calloc(__func__, 1, sizeof(*ind_tbl) +
-			     queues_n * sizeof(uint16_t), 0);
+	ind_tbl = mlx5_malloc(MLX5_MEM_ZERO, sizeof(*ind_tbl) +
+			      queues_n * sizeof(uint16_t), 0, SOCKET_ID_ANY);
 	if (!ind_tbl) {
 		rte_errno = ENOMEM;
 		return NULL;
@@ -2211,8 +2699,9 @@ mlx5_ind_table_obj_new(struct rte_eth_dev *dev, const uint16_t *queues,
 			      log2above(queues_n) :
 			      log2above(priv->config.ind_table_max_size));
 
-		rqt_attr = rte_calloc(__func__, 1, sizeof(*rqt_attr) +
-				      rqt_n * sizeof(uint32_t), 0);
+		rqt_attr = mlx5_malloc(MLX5_MEM_ZERO, sizeof(*rqt_attr) +
+				      rqt_n * sizeof(uint32_t), 0,
+				      SOCKET_ID_ANY);
 		if (!rqt_attr) {
 			DRV_LOG(ERR, "port %u cannot allocate RQT resources",
 				dev->data->port_id);
@@ -2234,7 +2723,7 @@ mlx5_ind_table_obj_new(struct rte_eth_dev *dev, const uint16_t *queues,
 			rqt_attr->rq_list[k] = rqt_attr->rq_list[j];
 		ind_tbl->rqt = mlx5_devx_cmd_create_rqt(priv->sh->ctx,
 							rqt_attr);
-		rte_free(rqt_attr);
+		mlx5_free(rqt_attr);
 		if (!ind_tbl->rqt) {
 			DRV_LOG(ERR, "port %u cannot create DevX RQT",
 				dev->data->port_id);
@@ -2249,7 +2738,7 @@ mlx5_ind_table_obj_new(struct rte_eth_dev *dev, const uint16_t *queues,
 error:
 	for (j = 0; j < i; j++)
 		mlx5_rxq_release(dev, ind_tbl->queues[j]);
-	rte_free(ind_tbl);
+	mlx5_free(ind_tbl);
 	DEBUG("port %u cannot create indirection table", dev->data->port_id);
 	return NULL;
 }
@@ -2319,7 +2808,7 @@ mlx5_ind_table_obj_release(struct rte_eth_dev *dev,
 		claim_nonzero(mlx5_rxq_release(dev, ind_tbl->queues[i]));
 	if (!rte_atomic32_read(&ind_tbl->refcnt)) {
 		LIST_REMOVE(ind_tbl, next);
-		rte_free(ind_tbl);
+		mlx5_free(ind_tbl);
 		return 0;
 	}
 	return 1;
@@ -2370,9 +2859,9 @@ mlx5_ind_table_obj_verify(struct rte_eth_dev *dev)
  *   Tunnel type.
  *
  * @return
- *   The Verbs/DevX object initialised, NULL otherwise and rte_errno is set.
+ *   The Verbs/DevX object initialised index, 0 otherwise and rte_errno is set.
  */
-struct mlx5_hrxq *
+uint32_t
 mlx5_hrxq_new(struct rte_eth_dev *dev,
 	      const uint8_t *rss_key, uint32_t rss_key_len,
 	      uint64_t hash_fields,
@@ -2381,6 +2870,7 @@ mlx5_hrxq_new(struct rte_eth_dev *dev,
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_hrxq *hrxq;
+	uint32_t hrxq_idx = 0;
 	struct ibv_qp *qp = NULL;
 	struct mlx5_ind_table_obj *ind_tbl;
 	int err;
@@ -2400,7 +2890,7 @@ mlx5_hrxq_new(struct rte_eth_dev *dev,
 	}
 	if (!ind_tbl) {
 		rte_errno = ENOMEM;
-		return NULL;
+		return 0;
 	}
 	if (ind_tbl->type == MLX5_IND_TBL_TYPE_IBV) {
 #ifdef HAVE_IBV_DEVICE_TUNNEL_SUPPORT
@@ -2519,7 +3009,8 @@ mlx5_hrxq_new(struct rte_eth_dev *dev,
 			tir_attr.transport_domain = priv->sh->td->id;
 		else
 			tir_attr.transport_domain = priv->sh->tdn;
-		memcpy(tir_attr.rx_hash_toeplitz_key, rss_key, rss_key_len);
+		memcpy(tir_attr.rx_hash_toeplitz_key, rss_key,
+		       MLX5_RSS_HASH_KEY_LEN);
 		tir_attr.indirect_table = ind_tbl->rqt->id;
 		if (dev->data->dev_conf.lpbk_mode)
 			tir_attr.self_lb_block =
@@ -2540,7 +3031,7 @@ mlx5_hrxq_new(struct rte_eth_dev *dev,
 			goto error;
 		}
 	}
-	hrxq = rte_calloc(__func__, 1, sizeof(*hrxq) + rss_key_len, 0);
+	hrxq = mlx5_ipool_zmalloc(priv->sh->ipool[MLX5_IPOOL_HRXQ], &hrxq_idx);
 	if (!hrxq)
 		goto error;
 	hrxq->ind_table = ind_tbl;
@@ -2569,8 +3060,9 @@ mlx5_hrxq_new(struct rte_eth_dev *dev,
 	hrxq->hash_fields = hash_fields;
 	memcpy(hrxq->rss_key, rss_key, rss_key_len);
 	rte_atomic32_inc(&hrxq->refcnt);
-	LIST_INSERT_HEAD(&priv->hrxqs, hrxq, next);
-	return hrxq;
+	ILIST_INSERT(priv->sh->ipool[MLX5_IPOOL_HRXQ], &priv->hrxqs, hrxq_idx,
+		     hrxq, next);
+	return hrxq_idx;
 error:
 	err = rte_errno; /* Save rte_errno before cleanup. */
 	mlx5_ind_table_obj_release(dev, ind_tbl);
@@ -2579,7 +3071,7 @@ error:
 	else if (tir)
 		claim_zero(mlx5_devx_cmd_destroy(tir));
 	rte_errno = err; /* Restore rte_errno. */
-	return NULL;
+	return 0;
 }
 
 /**
@@ -2596,9 +3088,9 @@ error:
  *   Number of queues.
  *
  * @return
- *   An hash Rx queue on success.
+ *   An hash Rx queue index on success.
  */
-struct mlx5_hrxq *
+uint32_t
 mlx5_hrxq_get(struct rte_eth_dev *dev,
 	      const uint8_t *rss_key, uint32_t rss_key_len,
 	      uint64_t hash_fields,
@@ -2606,9 +3098,11 @@ mlx5_hrxq_get(struct rte_eth_dev *dev,
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_hrxq *hrxq;
+	uint32_t idx;
 
 	queues_n = hash_fields ? queues_n : 1;
-	LIST_FOREACH(hrxq, &priv->hrxqs, next) {
+	ILIST_FOREACH(priv->sh->ipool[MLX5_IPOOL_HRXQ], priv->hrxqs, idx,
+		      hrxq, next) {
 		struct mlx5_ind_table_obj *ind_tbl;
 
 		if (hrxq->rss_key_len != rss_key_len)
@@ -2625,9 +3119,9 @@ mlx5_hrxq_get(struct rte_eth_dev *dev,
 			continue;
 		}
 		rte_atomic32_inc(&hrxq->refcnt);
-		return hrxq;
+		return idx;
 	}
-	return NULL;
+	return 0;
 }
 
 /**
@@ -2636,14 +3130,20 @@ mlx5_hrxq_get(struct rte_eth_dev *dev,
  * @param dev
  *   Pointer to Ethernet device.
  * @param hrxq
- *   Pointer to Hash Rx queue to release.
+ *   Index to Hash Rx queue to release.
  *
  * @return
  *   1 while a reference on it exists, 0 when freed.
  */
 int
-mlx5_hrxq_release(struct rte_eth_dev *dev, struct mlx5_hrxq *hrxq)
+mlx5_hrxq_release(struct rte_eth_dev *dev, uint32_t hrxq_idx)
 {
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_hrxq *hrxq;
+
+	hrxq = mlx5_ipool_get(priv->sh->ipool[MLX5_IPOOL_HRXQ], hrxq_idx);
+	if (!hrxq)
+		return 0;
 	if (rte_atomic32_dec_and_test(&hrxq->refcnt)) {
 #ifdef HAVE_IBV_FLOW_DV_SUPPORT
 		mlx5_glue->destroy_flow_action(hrxq->action);
@@ -2653,8 +3153,9 @@ mlx5_hrxq_release(struct rte_eth_dev *dev, struct mlx5_hrxq *hrxq)
 		else /* hrxq->ind_table->type == MLX5_IND_TBL_TYPE_DEVX */
 			claim_zero(mlx5_devx_cmd_destroy(hrxq->tir));
 		mlx5_ind_table_obj_release(dev, hrxq->ind_table);
-		LIST_REMOVE(hrxq, next);
-		rte_free(hrxq);
+		ILIST_REMOVE(priv->sh->ipool[MLX5_IPOOL_HRXQ], &priv->hrxqs,
+			     hrxq_idx, hrxq, next);
+		mlx5_ipool_free(priv->sh->ipool[MLX5_IPOOL_HRXQ], hrxq_idx);
 		return 0;
 	}
 	claim_nonzero(mlx5_ind_table_obj_release(dev, hrxq->ind_table));
@@ -2675,9 +3176,11 @@ mlx5_hrxq_verify(struct rte_eth_dev *dev)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_hrxq *hrxq;
+	uint32_t idx;
 	int ret = 0;
 
-	LIST_FOREACH(hrxq, &priv->hrxqs, next) {
+	ILIST_FOREACH(priv->sh->ipool[MLX5_IPOOL_HRXQ], priv->hrxqs, idx,
+		      hrxq, next) {
 		DRV_LOG(DEBUG,
 			"port %u hash Rx queue %p still referenced",
 			dev->data->port_id, (void *)hrxq);
@@ -2727,14 +3230,14 @@ mlx5_rxq_obj_drop_new(struct rte_eth_dev *dev)
 		rte_errno = errno;
 		goto error;
 	}
-	rxq = rte_calloc(__func__, 1, sizeof(*rxq), 0);
+	rxq = mlx5_malloc(MLX5_MEM_ZERO, sizeof(*rxq), 0, SOCKET_ID_ANY);
 	if (!rxq) {
 		DEBUG("port %u cannot allocate drop Rx queue memory",
 		      dev->data->port_id);
 		rte_errno = ENOMEM;
 		goto error;
 	}
-	rxq->cq = cq;
+	rxq->ibv_cq = cq;
 	rxq->wq = wq;
 	priv->drop_queue.rxq = rxq;
 	return rxq;
@@ -2763,9 +3266,9 @@ mlx5_rxq_obj_drop_release(struct rte_eth_dev *dev)
 
 	if (rxq->wq)
 		claim_zero(mlx5_glue->destroy_wq(rxq->wq));
-	if (rxq->cq)
-		claim_zero(mlx5_glue->destroy_cq(rxq->cq));
-	rte_free(rxq);
+	if (rxq->ibv_cq)
+		claim_zero(mlx5_glue->destroy_cq(rxq->ibv_cq));
+	mlx5_free(rxq);
 	priv->drop_queue.rxq = NULL;
 }
 
@@ -2803,7 +3306,8 @@ mlx5_ind_table_obj_drop_new(struct rte_eth_dev *dev)
 		rte_errno = errno;
 		goto error;
 	}
-	ind_tbl = rte_calloc(__func__, 1, sizeof(*ind_tbl), 0);
+	ind_tbl = mlx5_malloc(MLX5_MEM_ZERO, sizeof(*ind_tbl), 0,
+			      SOCKET_ID_ANY);
 	if (!ind_tbl) {
 		rte_errno = ENOMEM;
 		goto error;
@@ -2829,7 +3333,7 @@ mlx5_ind_table_obj_drop_release(struct rte_eth_dev *dev)
 
 	claim_zero(mlx5_glue->destroy_rwq_ind_table(ind_tbl->ind_table));
 	mlx5_rxq_obj_drop_release(dev);
-	rte_free(ind_tbl);
+	mlx5_free(ind_tbl);
 	priv->drop_queue.hrxq->ind_table = NULL;
 }
 
@@ -2854,7 +3358,7 @@ mlx5_hrxq_drop_new(struct rte_eth_dev *dev)
 		rte_atomic32_inc(&priv->drop_queue.hrxq->refcnt);
 		return priv->drop_queue.hrxq;
 	}
-	hrxq = rte_calloc(__func__, 1, sizeof(*hrxq), 0);
+	hrxq = mlx5_malloc(MLX5_MEM_ZERO, sizeof(*hrxq), 0, SOCKET_ID_ANY);
 	if (!hrxq) {
 		DRV_LOG(WARNING,
 			"port %u cannot allocate memory for drop queue",
@@ -2911,7 +3415,7 @@ error:
 		mlx5_ind_table_obj_drop_release(dev);
 	if (hrxq) {
 		priv->drop_queue.hrxq = NULL;
-		rte_free(hrxq);
+		mlx5_free(hrxq);
 	}
 	return NULL;
 }
@@ -2934,7 +3438,31 @@ mlx5_hrxq_drop_release(struct rte_eth_dev *dev)
 #endif
 		claim_zero(mlx5_glue->destroy_qp(hrxq->qp));
 		mlx5_ind_table_obj_drop_release(dev);
-		rte_free(hrxq);
+		mlx5_free(hrxq);
 		priv->drop_queue.hrxq = NULL;
+	}
+}
+
+
+/**
+ * Set the Rx queue timestamp conversion parameters
+ *
+ * @param[in] dev
+ *   Pointer to the Ethernet device structure.
+ */
+void
+mlx5_rxq_timestamp_set(struct rte_eth_dev *dev)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_dev_ctx_shared *sh = priv->sh;
+	struct mlx5_rxq_data *data;
+	unsigned int i;
+
+	for (i = 0; i != priv->rxqs_n; ++i) {
+		if (!(*priv->rxqs)[i])
+			continue;
+		data = (*priv->rxqs)[i];
+		data->sh = sh;
+		data->rt_timestamp = priv->config.rt_timestamp;
 	}
 }

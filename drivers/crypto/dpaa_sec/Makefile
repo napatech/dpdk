@@ -10,7 +10,6 @@ include $(RTE_SDK)/mk/rte.vars.mk
 LIB = librte_pmd_dpaa_sec.a
 
 # build flags
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
 
@@ -20,7 +19,7 @@ CFLAGS += -I$(RTE_SDK)/drivers/bus/dpaa/base/qbman
 CFLAGS += -I$(RTE_SDK)/drivers/common/dpaax
 CFLAGS += -I$(RTE_SDK)/drivers/crypto/dpaa_sec/
 CFLAGS += -I$(RTE_SDK)/drivers/common/dpaax/caamflib/
-CFLAGS += -I$(RTE_SDK)/lib/librte_eal/common/include
+CFLAGS += -I$(RTE_SDK)/lib/librte_eal/include
 LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
 LDLIBS += -lrte_cryptodev
 

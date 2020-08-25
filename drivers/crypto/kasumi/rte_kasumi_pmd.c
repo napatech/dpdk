@@ -549,7 +549,10 @@ cryptodev_kasumi_create(const char *name,
 	dev->enqueue_burst = kasumi_pmd_enqueue_burst;
 
 	dev->feature_flags = RTE_CRYPTODEV_FF_SYMMETRIC_CRYPTO |
-			RTE_CRYPTODEV_FF_SYM_OPERATION_CHAINING;
+			RTE_CRYPTODEV_FF_SYM_OPERATION_CHAINING |
+			RTE_CRYPTODEV_FF_NON_BYTE_ALIGNED_DATA |
+			RTE_CRYPTODEV_FF_SYM_SESSIONLESS |
+			RTE_CRYPTODEV_FF_OOP_LB_IN_LB_OUT;
 
 	mgr = alloc_mb_mgr(0);
 	if (mgr == NULL)
@@ -636,7 +639,4 @@ RTE_PMD_REGISTER_PARAM_STRING(CRYPTODEV_NAME_KASUMI_PMD,
 RTE_PMD_REGISTER_CRYPTO_DRIVER(kasumi_crypto_drv,
 		cryptodev_kasumi_pmd_drv.driver, cryptodev_driver_id);
 
-RTE_INIT(kasumi_init_log)
-{
-	kasumi_logtype_driver = rte_log_register("pmd.crypto.kasumi");
-}
+RTE_LOG_REGISTER(kasumi_logtype_driver, pmd.crypto.kasumi, NOTICE);

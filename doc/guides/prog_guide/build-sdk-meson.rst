@@ -87,6 +87,9 @@ Project-specific options are passed used -Doption=value::
 	meson -Ddisable_drivers=event/*,net/tap  # disable tap driver and all
 					# eventdev PMDs for a smaller build
 
+	meson -Denable_trace_fp=true tracebuild # build with fast path traces
+					# enabled
+
 Examples of setting some of the same options using meson configure::
 
 	meson configure -Dwerror=true
@@ -96,6 +99,8 @@ Examples of setting some of the same options using meson configure::
 	meson configure -Dexamples=l3fwd,l2fwd
 
 	meson configure -Dmax_lcores=8
+
+	meson configure -Denable_trace_fp=true
 
 NOTE: once meson has been run to configure a build in a directory, it
 cannot be run again on the same directory. Instead ``meson configure``
@@ -186,7 +191,7 @@ From examples/helloworld/Makefile::
 	PC_FILE := $(shell pkg-config --path libdpdk)
 	CFLAGS += -O3 $(shell pkg-config --cflags libdpdk)
 	LDFLAGS_SHARED = $(shell pkg-config --libs libdpdk)
-	LDFLAGS_STATIC = -Wl,-Bstatic $(shell pkg-config --static --libs libdpdk)
+	LDFLAGS_STATIC = $(shell pkg-config --static --libs libdpdk)
 
 	build/$(APP)-shared: $(SRCS-y) Makefile $(PC_FILE) | build
 		$(CC) $(CFLAGS) $(SRCS-y) -o $@ $(LDFLAGS) $(LDFLAGS_SHARED)

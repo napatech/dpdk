@@ -1030,7 +1030,7 @@ qede_set_ucast_tunn_cmn_param(struct ecore_filter_ucast *ucast,
 static int
 _qede_tunn_filter_config(struct rte_eth_dev *eth_dev,
 			 const struct rte_eth_tunnel_filter_conf *conf,
-			 __attribute__((unused)) enum rte_filter_op filter_op,
+			 __rte_unused enum rte_filter_op filter_op,
 			 enum ecore_tunn_clss *clss,
 			 bool add)
 {
@@ -1168,7 +1168,7 @@ qede_tunn_filter_config(struct rte_eth_dev *eth_dev,
 }
 
 static int
-qede_flow_validate_attr(__attribute__((unused))struct rte_eth_dev *dev,
+qede_flow_validate_attr(__rte_unused struct rte_eth_dev *dev,
 			const struct rte_flow_attr *attr,
 			struct rte_flow_error *error)
 {
@@ -1218,7 +1218,7 @@ qede_flow_validate_attr(__attribute__((unused))struct rte_eth_dev *dev,
 }
 
 static int
-qede_flow_parse_pattern(__attribute__((unused))struct rte_eth_dev *dev,
+qede_flow_parse_pattern(__rte_unused struct rte_eth_dev *dev,
 			const struct rte_flow_item pattern[],
 			struct rte_flow_error *error,
 			struct rte_flow *flow)
@@ -1486,10 +1486,32 @@ qede_flow_destroy(struct rte_eth_dev *eth_dev,
 	return rc;
 }
 
+static int
+qede_flow_flush(struct rte_eth_dev *eth_dev,
+		struct rte_flow_error *error)
+{
+	struct qede_dev *qdev = QEDE_INIT_QDEV(eth_dev);
+	struct qede_arfs_entry *tmp = NULL;
+	int rc = 0;
+
+	while (!SLIST_EMPTY(&qdev->arfs_info.arfs_list_head)) {
+		tmp = SLIST_FIRST(&qdev->arfs_info.arfs_list_head);
+
+		rc = qede_config_arfs_filter(eth_dev, tmp, false);
+		if (rc < 0)
+			rte_flow_error_set(error, rc,
+					   RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
+					   "Failed to flush flow filter");
+	}
+
+	return rc;
+}
+
 const struct rte_flow_ops qede_flow_ops = {
 	.validate = qede_flow_validate,
 	.create = qede_flow_create,
 	.destroy = qede_flow_destroy,
+	.flush = qede_flow_flush,
 };
 
 int qede_dev_filter_ctrl(struct rte_eth_dev *eth_dev,

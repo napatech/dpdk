@@ -23,7 +23,6 @@ CFLAGS += -I$(RTE_SDK)/drivers/common/octeontx2
 CFLAGS += -I$(RTE_SDK)/drivers/crypto/octeontx2
 CFLAGS += -I$(RTE_SDK)/drivers/mempool/octeontx2
 CFLAGS += -I$(RTE_SDK)/drivers/net/octeontx2
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 
 ifneq ($(CONFIG_RTE_ARCH_64),y)
 CFLAGS += -Wno-int-to-pointer-cast
@@ -39,6 +38,7 @@ SRCS-$(CONFIG_RTE_LIBRTE_PMD_OCTEONTX2_CRYPTO) += otx2_cryptodev_capabilities.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_OCTEONTX2_CRYPTO) += otx2_cryptodev_hw_access.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_OCTEONTX2_CRYPTO) += otx2_cryptodev_mbox.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_OCTEONTX2_CRYPTO) += otx2_cryptodev_ops.c
+SRCS-$(CONFIG_RTE_LIBRTE_PMD_OCTEONTX2_CRYPTO) += otx2_cryptodev_sec.c
 
 # export include files
 SYMLINK-y-include +=

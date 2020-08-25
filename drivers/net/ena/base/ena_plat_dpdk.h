@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright (c) 2015-2019 Amazon.com, Inc. or its affiliates.
+ * Copyright (c) 2015-2020 Amazon.com, Inc. or its affiliates.
  * All rights reserved.
  */
 
@@ -180,18 +180,22 @@ do {                                                                   \
  * Each rte_memzone should have unique name.
  * To satisfy it, count number of allocations and add it to name.
  */
-extern uint32_t ena_alloc_cnt;
+extern rte_atomic32_t ena_alloc_cnt;
 
 #define ENA_MEM_ALLOC_COHERENT(dmadev, size, virt, phys, handle)	\
 	do {								\
-		const struct rte_memzone *mz;				\
-		char z_name[RTE_MEMZONE_NAMESIZE];			\
+		const struct rte_memzone *mz = NULL;			\
 		ENA_TOUCH(dmadev); ENA_TOUCH(handle);			\
-		snprintf(z_name, sizeof(z_name),			\
-				"ena_alloc_%d", ena_alloc_cnt++);	\
-		mz = rte_memzone_reserve(z_name, size, SOCKET_ID_ANY,	\
-				RTE_MEMZONE_IOVA_CONTIG);		\
-		handle = mz;						\
+		if (size > 0) {						\
+			char z_name[RTE_MEMZONE_NAMESIZE];		\
+			snprintf(z_name, sizeof(z_name),		\
+			 "ena_alloc_%d",				\
+			 rte_atomic32_add_return(&ena_alloc_cnt, 1));	\
+			mz = rte_memzone_reserve(z_name, size,		\
+					SOCKET_ID_ANY,			\
+					RTE_MEMZONE_IOVA_CONTIG);	\
+			handle = mz;					\
+		}							\
 		if (mz == NULL) {					\
 			virt = NULL;					\
 			phys = 0;					\
@@ -209,14 +213,17 @@ extern uint32_t ena_alloc_cnt;
 #define ENA_MEM_ALLOC_COHERENT_NODE(					\
 	dmadev, size, virt, phys, mem_handle, node, dev_node)		\
 	do {								\
-		const struct rte_memzone *mz;				\
-		char z_name[RTE_MEMZONE_NAMESIZE];			\
+		const struct rte_memzone *mz = NULL;			\
 		ENA_TOUCH(dmadev); ENA_TOUCH(dev_node);			\
-		snprintf(z_name, sizeof(z_name),			\
-				"ena_alloc_%d", ena_alloc_cnt++);	\
-		mz = rte_memzone_reserve(z_name, size, node,		\
+		if (size > 0) {						\
+			char z_name[RTE_MEMZONE_NAMESIZE];		\
+			snprintf(z_name, sizeof(z_name),		\
+			 "ena_alloc_%d",				\
+			 rte_atomic32_add_return(&ena_alloc_cnt, 1));   \
+			mz = rte_memzone_reserve(z_name, size, node,	\
 				RTE_MEMZONE_IOVA_CONTIG);		\
-		mem_handle = mz;					\
+			mem_handle = mz;				\
+		}							\
 		if (mz == NULL) {					\
 			virt = NULL;					\
 			phys = 0;					\
@@ -294,6 +301,15 @@ extern uint32_t ena_alloc_cnt;
 
 #define DIV_ROUND_UP(n, d) (((n) + (d) - 1) / (d))
 
-#include "ena_includes.h"
+#define ENA_FFS(x) ffs(x)
 
+void ena_rss_key_fill(void *key, size_t size);
+
+#define ENA_RSS_FILL_KEY(key, size) ena_rss_key_fill(key, size)
+
+#define ENA_INTR_INITIAL_TX_INTERVAL_USECS_PLAT 0
+
+#define ENA_PRIu64 PRIu64
+
+#include "ena_includes.h"
 #endif /* DPDK_ENA_COM_ENA_PLAT_DPDK_H_ */

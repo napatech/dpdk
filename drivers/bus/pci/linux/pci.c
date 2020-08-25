@@ -330,9 +330,10 @@ pci_scan_one(const char *dirname, const struct rte_pci_addr *addr)
 			dev->kdrv = RTE_KDRV_UIO_GENERIC;
 		else
 			dev->kdrv = RTE_KDRV_UNKNOWN;
-	} else
+	} else {
 		dev->kdrv = RTE_KDRV_NONE;
-
+		return 0;
+	}
 	/* device is valid, add in list (sorted) */
 	if (TAILQ_EMPTY(&rte_pci_bus.device_list)) {
 		rte_pci_add_device(dev);
@@ -377,6 +378,11 @@ pci_scan_one(const char *dirname, const struct rte_pci_addr *addr)
 						 */
 						RTE_LOG(ERR, EAL, "Unexpected device scan at %s!\n",
 							filename);
+					else if (dev2->device.devargs !=
+						 dev->device.devargs) {
+						rte_devargs_remove(dev2->device.devargs);
+						pci_name_set(dev2);
+					}
 				}
 				free(dev);
 			}
@@ -482,6 +488,9 @@ rte_pci_scan(void)
 		if (parse_pci_addr_format(e->d_name, sizeof(e->d_name), &addr) != 0)
 			continue;
 
+		if (rte_pci_ignore_device(&addr))
+			continue;
+
 		snprintf(dirname, sizeof(dirname), "%s/%s",
 				rte_pci_get_sysfs_path(), e->d_name);
 
@@ -549,7 +558,40 @@ pci_device_iommu_support_va(const struct rte_pci_device *dev)
 bool
 pci_device_iommu_support_va(__rte_unused const struct rte_pci_device *dev)
 {
-	return false;
+	/*
+	 * IOMMU is always present on a PowerNV host (IOMMUv2).
+	 * IOMMU is also present in a KVM/QEMU VM (IOMMUv1) but is not
+	 * currently supported by DPDK. Test for our current environment
+	 * and report VA support as appropriate.
+	 */
+
+	char *line = NULL;
+	size_t len = 0;
+	char filename[PATH_MAX] = "/proc/cpuinfo";
+	FILE *fp = fopen(filename, "r");
+	bool ret = false;
+
+	if (fp == NULL) {
+		RTE_LOG(ERR, EAL, "%s(): can't open %s: %s\n",
+			__func__, filename, strerror(errno));
+		return ret;
+	}
+
+	/* Check for a PowerNV platform */
+	while (getline(&line, &len, fp) != -1) {
+		if (strstr(line, "platform") != NULL)
+			continue;
+
+		if (strstr(line, "PowerNV") != NULL) {
+			RTE_LOG(DEBUG, EAL, "Running on a PowerNV system\n");
+			ret = true;
+			break;
+		}
+	}
+
+	free(line);
+	fclose(fp);
+	return ret;
 }
 #else
 bool
@@ -733,11 +775,6 @@ rte_pci_ioport_map(struct rte_pci_device *dev, int bar,
 		ret = pci_uio_ioport_map(dev, bar, p);
 #endif
 		break;
-	case RTE_KDRV_NONE:
-#if defined(RTE_ARCH_X86)
-		ret = pci_ioport_map(dev, bar, p);
-#endif
-		break;
 	default:
 		break;
 	}
@@ -764,11 +801,6 @@ rte_pci_ioport_read(struct rte_pci_ioport *p,
 	case RTE_KDRV_UIO_GENERIC:
 		pci_uio_ioport_read(p, data, len, offset);
 		break;
-	case RTE_KDRV_NONE:
-#if defined(RTE_ARCH_X86)
-		pci_uio_ioport_read(p, data, len, offset);
-#endif
-		break;
 	default:
 		break;
 	}
@@ -789,11 +821,6 @@ rte_pci_ioport_write(struct rte_pci_ioport *p,
 		break;
 	case RTE_KDRV_UIO_GENERIC:
 		pci_uio_ioport_write(p, data, len, offset);
-		break;
-	case RTE_KDRV_NONE:
-#if defined(RTE_ARCH_X86)
-		pci_uio_ioport_write(p, data, len, offset);
-#endif
 		break;
 	default:
 		break;
@@ -820,11 +847,6 @@ rte_pci_ioport_unmap(struct rte_pci_ioport *p)
 		ret = 0;
 #else
 		ret = pci_uio_ioport_unmap(p);
-#endif
-		break;
-	case RTE_KDRV_NONE:
-#if defined(RTE_ARCH_X86)
-		ret = 0;
 #endif
 		break;
 	default:
