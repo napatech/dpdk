@@ -9,7 +9,8 @@ The NTACC PMD driver does not need to be bound. This means that the dpdk-devbind
 	1. [SmartNic with Limited filter support](#LimitedFilter)
 2. [Compiling the Napatech NTACC PMD driver](#compiling)
 	1. [Environment variable](#Environment)
-	2. [Configuration setting](#configuration)
+	2. [Configuration setting using old makefile](#configuration)
+	3. [Configuration setting using meson/ninja](#configurationmeson)
 3. [Napatech Driver Configuration](#driverconfig)
 	1. [Statistics update interval](#statinterval)
 4. [Number of RX queues and TX queues available](#queues)
@@ -105,7 +106,9 @@ In order to compile the NTACC PMD, the NAPATECH3_PATH environment variable must 
 
 /opt/napatech3 is the default path for installing the Napatech driver. If the driver is installed elsewhere, that path must be used.
 
-##### Configuration setting  <a name="configuration"></a>
+> Note: When using the old makefile the parameter MAKE_PAUSE=n must be added to the commandline.
+
+##### Configuration setting using old makefile <a name="configuration"></a>
 To enable DPDK to compile NTACC PMD, a configuration setting must be set in the file common_base.
 
 `CONFIG_RTE_LIBRTE_PMD_NTACC=y`
@@ -123,6 +126,17 @@ This setting is used to disable generation of a default catch all filter. See [D
 - Copy offset:
 This setting is used to copy offset to different packets layers into the mbuf. See [Copy packet offset to mbuf](#copyoffset) for further information.
 <br>`CONFIG_RTE_LIBRTE_PMD_NTACC_COPY_OFFSET=y`
+
+##### Configuration setting using meson/ninja <a name="configurationmeson"></a>
+The NTACC PMD automatically compiled.
+
+- Hardware-based or software-based statistic:
+This setting is used to select between software-based and hardware-based statistics. To enable the setting run:
+<br>`meson setup --reconfigure -Dntacc_use_sw_stat=true`
+
+- Disable default filter:
+This setting is used to disable generation of a default catch all filter. See [Default filter](#default-filter) for further information. To enable the setting run:
+<br>`meson setup --reconfigure -Dntacc_no_default_filter=true`
 
 ## Napatech Driver Configuration <a name="driverconfig"></a>
 The Napatech driver is configured using an ini-file – `ntservice.ini`. By default, the ini-file is located in `/opt/napatech3/config`. The following changes must be made to the default ini-file.
@@ -1289,9 +1303,13 @@ There are some limitations when using external buffers.
    Headroom is located in the mbuf buffer and as this buffer is replaced by a pointer to the Napatech internal buffer, threre is no free space for headroom.
 
 #### Enable external buffers<a name="enableexternalbuffer"></a>
-To enable *Using external buffers*, set following in common_base:
+To enable *Using external buffers*, set following in common_base when using the old makefile:
 
 `CONFIG_RTE_LIBRTE_PMD_NTACC_USE_EXTERNAL_BUFFER=y` 
+
+To enable *Using external buffers*, run following command when using meson:
+
+`meson setup --reconfigure -Dntacc_external_buffers=true`
 
 #### Using/detecting external buffers<a name="detectexternalbuffer"></a>
 When receiving a mbuf it is possible to detect whether or not it contains an external buffer. 
