@@ -276,7 +276,7 @@ static int hn_nvs_send_rndis_ctrl(struct vmbus_channel *chan,
 	sg.len  = reqlen;
 
 	if (sg.ofs + reqlen >  PAGE_SIZE) {
-		PMD_DRV_LOG(ERR, "RNDIS request crosses page bounary");
+		PMD_DRV_LOG(ERR, "RNDIS request crosses page boundary");
 		return -EINVAL;
 	}
 
@@ -292,7 +292,7 @@ static int hn_nvs_send_rndis_ctrl(struct vmbus_channel *chan,
  */
 static void hn_rndis_link_alarm(void *arg)
 {
-	_rte_eth_dev_callback_process(arg, RTE_ETH_EVENT_INTR_LSC, NULL);
+	rte_eth_dev_callback_process(arg, RTE_ETH_EVENT_INTR_LSC, NULL);
 }
 
 void hn_rndis_link_status(struct rte_eth_dev *dev, const void *msg)

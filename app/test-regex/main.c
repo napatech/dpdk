@@ -35,6 +35,10 @@ enum app_args {
 	ARG_NUM_OF_ITERATIONS,
 };
 
+struct job_ctx {
+	struct rte_mbuf *mbuf;
+};
+
 static void
 usage(const char *prog_name)
 {
@@ -66,7 +70,9 @@ args_parse(int argc, char **argv, char *rules_file, char *data_file,
 		/* Perf test only */
 		{ "perf", 0, 0, ARG_PERF_MODE},
 		/* Number of iterations to run with perf test */
-		{ "nb_iter", 1, 0, ARG_NUM_OF_ITERATIONS}
+		{ "nb_iter", 1, 0, ARG_NUM_OF_ITERATIONS},
+		/* End of options */
+		{ 0, 0, 0, 0 }
 	};
 
 	argvopt = argv;
@@ -171,7 +177,7 @@ init_port(struct rte_mempool **mbuf_mp, uint32_t nb_jobs,
 	};
 	struct rte_regexdev_qp_conf qp_conf = {
 		.nb_desc = 1024,
-		.qp_conf_flags = RTE_REGEX_QUEUE_PAIR_CFG_OOS_F,
+		.qp_conf_flags = 0,
 	};
 	int res = 0;
 
@@ -216,6 +222,8 @@ init_port(struct rte_mempool **mbuf_mp, uint32_t nb_jobs,
 			printf("Error, can't configure device %d.\n", id);
 			goto error;
 		}
+		if (info.regexdev_capa & RTE_REGEXDEV_CAPA_QUEUE_PAIR_OOS_F)
+			qp_conf.qp_conf_flags |= RTE_REGEX_QUEUE_PAIR_CFG_OOS_F;
 		res = rte_regexdev_queue_pair_setup(id, 0, &qp_conf);
 		if (res < 0) {
 			printf("Error, can't setup queue pair for device %d.\n",
@@ -264,12 +272,19 @@ run_regex(struct rte_mempool *mbuf_mp, uint32_t nb_jobs,
 	time_t start;
 	time_t end;
 	double time;
+	struct job_ctx *jobs_ctx;
 
 	shinfo.free_cb = extbuf_free_cb;
 
 	ops = rte_malloc(NULL, sizeof(*ops) * nb_jobs, 0);
 	if (!ops) {
 		printf("Error, can't allocate memory for ops.\n");
+		return -ENOMEM;
+	}
+
+	jobs_ctx = rte_malloc(NULL, sizeof(struct job_ctx)*nb_jobs, 0);
+	if (!jobs_ctx) {
+		printf("Error, can't allocate memory for jobs_ctx.\n");
 		return -ENOMEM;
 	}
 
@@ -315,6 +330,7 @@ run_regex(struct rte_mempool *mbuf_mp, uint32_t nb_jobs,
 		long act_job_len = RTE_MIN(job_len, buf_len - pos);
 		rte_pktmbuf_attach_extbuf(ops[i]->mbuf, &buf[pos], 0,
 					  act_job_len, &shinfo);
+		jobs_ctx[i].mbuf = ops[i]->mbuf;
 		ops[i]->mbuf->data_len = job_len;
 		ops[i]->mbuf->pkt_len = act_job_len;
 		ops[i]->user_id = i;
@@ -384,13 +400,13 @@ run_regex(struct rte_mempool *mbuf_mp, uint32_t nb_jobs,
 	}
 end:
 	for (i = 0; i < actual_jobs; i++) {
-		if (ops[i]) {
-			if (ops[i]->mbuf)
-				rte_pktmbuf_free(ops[i]->mbuf);
+		if (ops[i])
 			rte_free(ops[i]);
-		}
+		if (jobs_ctx[i].mbuf)
+			rte_pktmbuf_free(jobs_ctx[i].mbuf);
 	}
 	rte_free(ops);
+	rte_free(jobs_ctx);
 	if (buf)
 		rte_free(buf);
 	return res;

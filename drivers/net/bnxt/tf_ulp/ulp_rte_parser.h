@@ -11,13 +11,18 @@
 #include <rte_flow_driver.h>
 #include "ulp_template_db_enum.h"
 #include "ulp_template_struct.h"
+#include "ulp_mapper.h"
+#include "bnxt_tf_common.h"
 
 /* defines to be used in the tunnel header parsing */
 #define BNXT_ULP_ENCAP_IPV4_VER_HLEN_TOS	2
 #define BNXT_ULP_ENCAP_IPV4_ID_PROTO		6
 #define BNXT_ULP_ENCAP_IPV4_DEST_IP		4
 #define BNXT_ULP_ENCAP_IPV4_SIZE		12
-#define BNXT_ULP_ENCAP_IPV6_SIZE		8
+#define BNXT_ULP_ENCAP_IPV6_VTC_FLOW		4
+#define BNXT_ULP_ENCAP_IPV6_PROTO_TTL		2
+#define BNXT_ULP_ENCAP_IPV6_DO			2
+#define BNXT_ULP_ENCAP_IPV6_SIZE		24
 #define BNXT_ULP_ENCAP_UDP_SIZE			4
 #define BNXT_ULP_INVALID_SVIF_VAL		-1U
 
@@ -30,6 +35,11 @@
 #define	BNXT_ULP_PARSER_IPV6_VER_MASK		0xf0000000
 #define	BNXT_ULP_PARSER_IPV6_TC			0x0ff00000
 #define	BNXT_ULP_PARSER_IPV6_FLOW_LABEL		0x000fffff
+
+void
+bnxt_ulp_init_mapper_params(struct bnxt_ulp_mapper_create_parms *mapper_cparms,
+			    struct ulp_rte_parser_params *params,
+			    enum bnxt_ulp_fdb_type flow_type);
 
 /* Function to handle the parsing of the RTE port id. */
 int32_t
@@ -220,5 +230,10 @@ ulp_rte_set_tp_dst_act_handler(const struct rte_flow_action *action_item,
 int32_t
 ulp_rte_dec_ttl_act_handler(const struct rte_flow_action *action_item,
 			    struct ulp_rte_parser_params *params);
+
+/* Function to handle the parsing of RTE Flow action JUMP .*/
+int32_t
+ulp_rte_jump_act_handler(const struct rte_flow_action *action_item,
+			 struct ulp_rte_parser_params *params);
 
 #endif /* _ULP_RTE_PARSER_H_ */

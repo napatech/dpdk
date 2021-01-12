@@ -226,6 +226,8 @@ struct memac_regs {
 	uint32_t thm;			/**< 0x37C tx messages counter */
 };
 
+#define BMI_PORT_CFG_FDOVR 0x02000000
+
 struct rx_bmi_regs {
 	uint32_t fmbm_rcfg;		/**< Rx Configuration */
 	uint32_t fmbm_rst;		/**< Rx Status */
@@ -320,6 +322,11 @@ struct fman_if {
 	struct rte_ether_addr mac_addr;
 	/* The Qman channel to schedule Tx FQs to */
 	u16 tx_channel_id;
+
+	uint8_t base_profile_id;
+	uint8_t num_profiles;
+
+	uint8_t is_shared_mac;
 	/* The hard-coded FQIDs for this interface. Note: this doesn't cover
 	 * the PCD nor the "Rx default" FQIDs, which are configured via FMC
 	 * and its XML-based configuration.

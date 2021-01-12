@@ -4,7 +4,7 @@
 Fail-safe poll mode driver library
 ==================================
 
-The Fail-safe poll mode driver library (**librte_pmd_failsafe**) implements a
+The Fail-safe poll mode driver library (**librte_net_failsafe**) implements a
 virtual device that allows using device supporting hotplug, without modifying
 other components relying on such device (application, other PMDs).
 In this context, hotplug support is meant as plugging or removing a device
@@ -14,10 +14,6 @@ Additionally to the Seamless Hotplug feature, the Fail-safe PMD offers the
 ability to redirect operations to a secondary device when the primary has been
 removed from the system.
 
-.. note::
-
-   The library is enabled by default. You can enable it or disable it manually
-   by setting the ``CONFIG_RTE_LIBRTE_PMD_FAILSAFE`` configuration option.
 
 Features
 --------
@@ -33,14 +29,6 @@ automatically by detecting capable devices and registering the relevant handler.
 
 Check the feature matrix for the complete set of supported features.
 
-Compilation option
-------------------
-
-Available options within the ``$RTE_TARGET/build/.config`` file:
-
-- ``CONFIG_RTE_LIBRTE_PMD_FAILSAFE`` (default **y**)
-
-  This option enables or disables compiling librte_pmd_failsafe.
 
 Using the Fail-safe PMD from the EAL command line
 -------------------------------------------------
@@ -60,7 +48,7 @@ Fail-safe command line parameters
 
   This parameter allows the user to define a sub-device. The ``<iface>`` part of
   this parameter must be a valid device definition. It follows the same format
-  provided to any ``-w`` or ``--vdev`` options.
+  provided to any ``-a`` or ``--vdev`` options.
 
   Enclosing the device definition within parentheses here allows using
   additional sub-device parameters if need be. They will be passed on to the
@@ -68,11 +56,11 @@ Fail-safe command line parameters
 
 .. note::
 
-   In case where the sub-device is also used as a whitelist device, using ``-w``
+   In case where the sub-device is also used as an allowed device, using ``-a``
    on the EAL command line, the fail-safe PMD will use the device with the
    options provided to the EAL instead of its own parameters.
 
-   When trying to use a PCI device automatically probed by the blacklist mode,
+   When trying to use a PCI device automatically probed by the command line,
    the name for the fail-safe sub-device must be the full PCI id:
    Domain:Bus:Device.Function, *i.e.* ``00:00:00.0`` instead of ``00:00.0``,
    as the second form is historically accepted by the DPDK.
@@ -123,42 +111,42 @@ This section shows some example of using **testpmd** with a fail-safe PMD.
 #. To build a PMD and configure DPDK, refer to the document
    :ref:`compiling and testing a PMD for a NIC <pmd_build_and_test>`.
 
-#. Start testpmd. The sub-device ``84:00.0`` should be blacklisted from normal EAL
-   operations to avoid probing it twice, as the PCI bus is in blacklist mode.
+#. Start testpmd. The sub-device ``84:00.0`` should be blocked from normal EAL
+   operations to avoid probing it twice, as the PCI bus is in blocklist mode.
 
    .. code-block:: console
 
-      $RTE_TARGET/build/app/testpmd -c 0xff -n 4 \
+      ./<build_dir>/app/dpdk-testpmd -c 0xff -n 4 \
          --vdev 'net_failsafe0,mac=de:ad:be:ef:01:02,dev(84:00.0),dev(net_ring0)' \
          -b 84:00.0 -b 00:04.0 -- -i
 
-   If the sub-device ``84:00.0`` is not blacklisted, it will be probed by the
+   If the sub-device ``84:00.0`` is not blocked, it will be probed by the
    EAL first. When the fail-safe then tries to initialize it the probe operation
    fails.
 
-   Note that PCI blacklist mode is the default PCI operating mode.
+   Note that PCI blocklist mode is the default PCI operating mode.
 
-#. Alternatively, it can be used alongside any other device in whitelist mode.
+#. Alternatively, it can be used alongside any other device in allow mode.
 
    .. code-block:: console
 
-      $RTE_TARGET/build/app/testpmd -c 0xff -n 4 \
+      ./<build_dir>/app/dpdk-testpmd -c 0xff -n 4 \
          --vdev 'net_failsafe0,mac=de:ad:be:ef:01:02,dev(84:00.0),dev(net_ring0)' \
-         -w 81:00.0 -- -i
+         -a 81:00.0 -- -i
 
 #. Start testpmd using a flexible device definition
 
    .. code-block:: console
 
-      $RTE_TARGET/build/app/testpmd -c 0xff -n 4 -w ff:ff.f \
+      ./<build_dir>/app/dpdk-testpmd -c 0xff -n 4 -a ff:ff.f \
          --vdev='net_failsafe0,exec(echo 84:00.0)' -- -i
 
 #. Start testpmd, automatically probing the device 84:00.0 and using it with
    the fail-safe.
- 
+
    .. code-block:: console
- 
-      $RTE_TARGET/build/app/testpmd -c 0xff -n 4 \
+
+      ./<build_dir>/app/dpdk-testpmd -c 0xff -n 4 \
          --vdev 'net_failsafe0,dev(0000:84:00.0),dev(net_ring0)' -- -i
 
 

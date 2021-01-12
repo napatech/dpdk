@@ -23,6 +23,11 @@
 /* Host monitor interval */
 #define HN_CHAN_LATENCY_NS	50000
 
+#define HN_TXCOPY_THRESHOLD	512
+#define HN_RXCOPY_THRESHOLD	256
+
+#define HN_RX_EXTMBUF_ENABLE	0
+
 /* Buffers need to be aligned */
 #ifndef PAGE_SIZE
 #define PAGE_SIZE 4096
@@ -54,7 +59,9 @@ struct hn_tx_queue {
 	uint16_t	queue_id;
 	uint32_t	free_thresh;
 	struct rte_mempool *txdesc_pool;
+	const struct rte_memzone *tx_rndis_mz;
 	void		*tx_rndis;
+	rte_iova_t	tx_rndis_iova;
 
 	/* Applied packet transmission aggregation limits. */
 	uint32_t	agg_szmax;
@@ -83,13 +90,15 @@ struct hn_rx_queue {
 	struct hn_stats stats;
 
 	void *event_buf;
+	struct hn_rx_bufinfo *rxbuf_info;
+	rte_atomic32_t  rxbuf_outstanding;
 };
 
 
 /* multi-packet data from host */
 struct hn_rx_bufinfo {
 	struct vmbus_channel *chan;
-	struct hn_data *hv;
+	struct hn_rx_queue *rxq;
 	uint64_t	xactid;
 	struct rte_mbuf_ext_shared_info shinfo;
 } __rte_cache_aligned;
@@ -111,9 +120,9 @@ struct hn_data {
 	uint32_t	link_speed;
 
 	struct rte_mem_resource *rxbuf_res;	/* UIO resource for Rx */
-	struct hn_rx_bufinfo *rxbuf_info;
 	uint32_t	rxbuf_section_cnt;	/* # of Rx sections */
-	rte_atomic32_t	rxbuf_outstanding;
+	uint32_t	rx_copybreak;
+	uint32_t	rx_extmbuf_enable;
 	uint16_t	max_queues;		/* Max available queues */
 	uint16_t	num_queues;
 	uint64_t	rss_offloads;
@@ -122,6 +131,7 @@ struct hn_data {
 	struct rte_mem_resource *chim_res;	/* UIO resource for Tx */
 	struct rte_bitmap *chim_bmap;		/* Send buffer map */
 	void		*chim_bmem;
+	uint32_t	tx_copybreak;
 	uint32_t	chim_szmax;		/* Max size per buffer */
 	uint32_t	chim_cnt;		/* Max packets per buffer */
 
@@ -216,8 +226,8 @@ int	hn_vf_configure(struct rte_eth_dev *dev,
 const uint32_t *hn_vf_supported_ptypes(struct rte_eth_dev *dev);
 int	hn_vf_start(struct rte_eth_dev *dev);
 void	hn_vf_reset(struct rte_eth_dev *dev);
-void	hn_vf_stop(struct rte_eth_dev *dev);
-void	hn_vf_close(struct rte_eth_dev *dev);
+int	hn_vf_close(struct rte_eth_dev *dev);
+int	hn_vf_stop(struct rte_eth_dev *dev);
 
 int	hn_vf_allmulticast_enable(struct rte_eth_dev *dev);
 int	hn_vf_allmulticast_disable(struct rte_eth_dev *dev);

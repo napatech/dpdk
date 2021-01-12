@@ -26,6 +26,10 @@ extern "C" {
  */
 #define SF_FLOW_SPEC_NB_FILTERS_MAX 8
 
+/* Used to guard action masks */
+#define SFC_BUILD_SET_OVERFLOW(_action, _set) \
+	RTE_BUILD_BUG_ON((_action) >= sizeof(_set) * CHAR_BIT)
+
 /* RSS configuration storage */
 struct sfc_flow_rss {
 	unsigned int	rxq_hw_index_min;
@@ -38,6 +42,7 @@ struct sfc_flow_rss {
 /* Flow engines supported by the implementation */
 enum sfc_flow_spec_type {
 	SFC_FLOW_SPEC_FILTER = 0,
+	SFC_FLOW_SPEC_MAE,
 
 	SFC_FLOW_SPEC_NTYPES
 };
@@ -52,8 +57,24 @@ struct sfc_flow_spec_filter {
 	unsigned int count;
 	/* RSS toggle */
 	boolean_t rss;
+	/* RSS hash toggle */
+	boolean_t rss_hash_required;
 	/* RSS configuration */
 	struct sfc_flow_rss rss_conf;
+};
+
+/* MAE-specific flow specification */
+struct sfc_flow_spec_mae {
+	/* Desired priority level */
+	unsigned int			priority;
+	/* Outer rule registry entry */
+	struct sfc_mae_outer_rule	*outer_rule;
+	/* EFX match specification */
+	efx_mae_match_spec_t		*match_spec;
+	/* Action set registry entry */
+	struct sfc_mae_action_set	*action_set;
+	/* Firmware-allocated rule ID */
+	efx_mae_rule_id_t		rule_id;
 };
 
 /* Flow specification */
@@ -65,6 +86,8 @@ struct sfc_flow_spec {
 	union {
 		/* Filter-based (VNIC level flows) specification */
 		struct sfc_flow_spec_filter filter;
+		/* MAE-based (lower-level HW switch flows) specification */
+		struct sfc_flow_spec_mae mae;
 	};
 };
 
@@ -89,6 +112,7 @@ enum sfc_flow_item_layers {
 /* Flow parse context types */
 enum sfc_flow_parse_ctx_type {
 	SFC_FLOW_PARSE_CTX_FILTER = 0,
+	SFC_FLOW_PARSE_CTX_MAE,
 
 	SFC_FLOW_PARSE_CTX_NTYPES
 };
@@ -101,6 +125,8 @@ struct sfc_flow_parse_ctx {
 	union {
 		/* Context pointer valid for filter-based (VNIC) flows */
 		efx_filter_spec_t *filter;
+		/* Context pointer valid for MAE-based flows */
+		struct sfc_mae_parse_ctx *mae;
 	};
 };
 
@@ -142,6 +168,12 @@ typedef int (sfc_flow_parse_cb_t)(struct rte_eth_dev *dev,
 				  const struct rte_flow_action actions[],
 				  struct rte_flow *flow,
 				  struct rte_flow_error *error);
+
+typedef int (sfc_flow_verify_cb_t)(struct sfc_adapter *sa,
+				   struct rte_flow *flow);
+
+typedef void (sfc_flow_cleanup_cb_t)(struct sfc_adapter *sa,
+				     struct rte_flow *flow);
 
 typedef int (sfc_flow_insert_cb_t)(struct sfc_adapter *sa,
 				   struct rte_flow *flow);

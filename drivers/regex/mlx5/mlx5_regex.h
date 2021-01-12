@@ -11,6 +11,7 @@
 #include <infiniband/mlx5dv.h>
 
 #include <mlx5_common.h>
+#include <mlx5_common_mr.h>
 
 #include "mlx5_rxp.h"
 
@@ -47,9 +48,9 @@ struct mlx5_regex_qp {
 	uint32_t free_sqs;
 	struct mlx5_regex_job *jobs;
 	struct ibv_mr *metadata;
-	struct ibv_mr *inputs;
 	struct ibv_mr *outputs;
 	size_t ci, pi;
+	struct mlx5_mr_ctrl mr_ctrl;
 };
 
 struct mlx5_regex_db {
@@ -78,6 +79,7 @@ struct mlx5_regex_priv {
 	struct mlx5dv_devx_uar *uar; /* UAR object. */
 	struct ibv_pd *pd;
 	struct mlx5_dbr_page_list dbrpgs; /* Door-bell pages. */
+	struct mlx5_mr_share_cache mr_scache; /* Global shared MR cache. */
 };
 
 /* mlx5_regex.c */
@@ -109,6 +111,8 @@ int mlx5_regex_qp_setup(struct rte_regexdev *dev, uint16_t qp_ind,
 
 /* mlx5_regex_fastpath.c */
 int mlx5_regexdev_setup_fastpath(struct mlx5_regex_priv *priv, uint32_t qp_id);
+void mlx5_regexdev_teardown_fastpath(struct mlx5_regex_priv *priv,
+				     uint32_t qp_id);
 uint16_t mlx5_regexdev_enqueue(struct rte_regexdev *dev, uint16_t qp_id,
 		       struct rte_regex_ops **ops, uint16_t nb_ops);
 uint16_t mlx5_regexdev_dequeue(struct rte_regexdev *dev, uint16_t qp_id,

@@ -23,6 +23,7 @@
 #include <rte_udp.h>
 #include <rte_ip.h>
 #include <rte_net.h>
+#include <rte_vect.h>
 
 #include "i40e_logs.h"
 #include "base/i40e_prototype.h"
@@ -760,7 +761,7 @@ i40e_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 	if (nb_hold > rxq->rx_free_thresh) {
 		rx_id = (uint16_t) ((rx_id == 0) ?
 			(rxq->nb_rx_desc - 1) : (rx_id - 1));
-		I40E_PCI_REG_WRITE(rxq->qrx_tail, rx_id);
+		I40E_PCI_REG_WC_WRITE(rxq->qrx_tail, rx_id);
 		nb_hold = 0;
 	}
 	rxq->nb_rx_hold = nb_hold;
@@ -938,7 +939,7 @@ i40e_recv_scattered_pkts(void *rx_queue,
 	if (nb_hold > rxq->rx_free_thresh) {
 		rx_id = (uint16_t)(rx_id == 0 ?
 			(rxq->nb_rx_desc - 1) : (rx_id - 1));
-		I40E_PCI_REG_WRITE(rxq->qrx_tail, rx_id);
+		I40E_PCI_REG_WC_WRITE(rxq->qrx_tail, rx_id);
 		nb_hold = 0;
 	}
 	rxq->nb_rx_hold = nb_hold;
@@ -1248,8 +1249,8 @@ end_of_tx:
 		   (unsigned) txq->port_id, (unsigned) txq->queue_id,
 		   (unsigned) tx_id, (unsigned) nb_tx);
 
-	rte_cio_wmb();
-	I40E_PCI_REG_WRITE_RELAXED(txq->qtx_tail, tx_id);
+	rte_io_wmb();
+	I40E_PCI_REG_WC_WRITE_RELAXED(txq->qtx_tail, tx_id);
 	txq->tx_tail = tx_id;
 
 	return nb_tx;
@@ -1400,7 +1401,7 @@ tx_xmit_pkts(struct i40e_tx_queue *txq,
 		txq->tx_tail = 0;
 
 	/* Update the tx tail register */
-	I40E_PCI_REG_WRITE(txq->qtx_tail, txq->tx_tail);
+	I40E_PCI_REG_WC_WRITE(txq->qtx_tail, txq->tx_tail);
 
 	return nb_pkts;
 }
@@ -3098,7 +3099,8 @@ static eth_rx_burst_t
 i40e_get_latest_rx_vec(bool scatter)
 {
 #if defined(RTE_ARCH_X86) && defined(CC_AVX2_SUPPORT)
-	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2))
+	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) &&
+			rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256)
 		return scatter ? i40e_recv_scattered_pkts_vec_avx2 :
 				 i40e_recv_pkts_vec_avx2;
 #endif
@@ -3115,7 +3117,8 @@ i40e_get_recommend_rx_vec(bool scatter)
 	 * use of AVX2 version to later plaforms, not all those that could
 	 * theoretically run it.
 	 */
-	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F))
+	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) &&
+			rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256)
 		return scatter ? i40e_recv_scattered_pkts_vec_avx2 :
 				 i40e_recv_pkts_vec_avx2;
 #endif
@@ -3154,7 +3157,8 @@ i40e_set_rx_function(struct rte_eth_dev *dev)
 		}
 	}
 
-	if (ad->rx_vec_allowed) {
+	if (ad->rx_vec_allowed  &&
+			rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
 		/* Vec Rx path */
 		PMD_INIT_LOG(DEBUG, "Vector Rx path will be used on port=%d.",
 				dev->data->port_id);
@@ -3268,7 +3272,8 @@ static eth_tx_burst_t
 i40e_get_latest_tx_vec(void)
 {
 #if defined(RTE_ARCH_X86) && defined(CC_AVX2_SUPPORT)
-	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2))
+	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) &&
+			rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256)
 		return i40e_xmit_pkts_vec_avx2;
 #endif
 	return i40e_xmit_pkts_vec;
@@ -3283,7 +3288,8 @@ i40e_get_recommend_tx_vec(void)
 	 * use of AVX2 version to later plaforms, not all those that could
 	 * theoretically run it.
 	 */
-	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F))
+	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) &&
+			rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256)
 		return i40e_xmit_pkts_vec_avx2;
 #endif
 	return i40e_xmit_pkts_vec;
@@ -3311,7 +3317,8 @@ i40e_set_tx_function(struct rte_eth_dev *dev)
 	}
 
 	if (ad->tx_simple_allowed) {
-		if (ad->tx_vec_allowed) {
+		if (ad->tx_vec_allowed &&
+				rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
 			PMD_INIT_LOG(DEBUG, "Vector tx finally be used.");
 			if (ad->use_latest_vec)
 				dev->tx_pkt_burst =
@@ -3438,7 +3445,6 @@ i40e_set_default_pctype_table(struct rte_eth_dev *dev)
 }
 
 #ifndef RTE_LIBRTE_I40E_INC_VECTOR
-/* Stubs needed for linkage when CONFIG_RTE_LIBRTE_I40E_INC_VECTOR is set to 'n' */
 int
 i40e_rx_vec_dev_conf_condition_check(struct rte_eth_dev __rte_unused *dev)
 {

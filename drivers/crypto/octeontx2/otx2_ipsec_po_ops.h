@@ -25,7 +25,8 @@ otx2_ipsec_po_out_rlen_get(struct otx2_sec_session_ipsec_lp *sess,
 }
 
 static __rte_always_inline struct cpt_request_info *
-alloc_request_struct(char *maddr, void *cop, int mdata_len)
+alloc_request_struct(char *maddr, void *cop, int mdata_len,
+		     enum rte_security_ipsec_tunnel_type tunnel_type)
 {
 	struct cpt_request_info *req;
 	struct cpt_meta_info *meta;
@@ -47,6 +48,7 @@ alloc_request_struct(char *maddr, void *cop, int mdata_len)
 	op[1] = (uintptr_t)cop;
 	op[2] = (uintptr_t)req;
 	op[3] = mdata_len;
+	op[4] = tunnel_type;
 
 	return req;
 }
@@ -86,7 +88,8 @@ process_outb_sa(struct rte_crypto_op *cop,
 	}
 
 	mdata += extend_tail; /* mdata follows encrypted data */
-	req = alloc_request_struct(mdata, (void *)cop, mdata_len);
+	req = alloc_request_struct(mdata, (void *)cop, mdata_len,
+		sess->tunnel_type);
 
 	data = rte_pktmbuf_prepend(m_src, extend_head);
 	if (unlikely(data == NULL)) {
@@ -120,7 +123,6 @@ process_outb_sa(struct rte_crypto_op *cop,
 	req->ist.ei0 = word0.u64;
 	req->ist.ei1 = rte_pktmbuf_iova(m_src);
 	req->ist.ei2 = req->ist.ei1;
-	req->ist.ei3 = sess->ucmd_w3;
 
 	hdr->seq = rte_cpu_to_be_32(sess->seq_lo);
 	hdr->ip_id = rte_cpu_to_be_32(sess->ip_id);
@@ -157,7 +159,8 @@ process_inb_sa(struct rte_crypto_op *cop,
 		goto exit;
 	}
 
-	req = alloc_request_struct(mdata, (void *)cop, mdata_len);
+	req = alloc_request_struct(mdata, (void *)cop, mdata_len,
+		sess->tunnel_type);
 
 	/* Prepare CPT instruction */
 	word0.u64 = sess->ucmd_w0;
@@ -166,7 +169,6 @@ process_inb_sa(struct rte_crypto_op *cop,
 	req->ist.ei0 = word0.u64;
 	req->ist.ei1 = rte_pktmbuf_iova(m_src);
 	req->ist.ei2 = req->ist.ei1;
-	req->ist.ei3 = sess->ucmd_w3;
 
 exit:
 	*prep_req = req;

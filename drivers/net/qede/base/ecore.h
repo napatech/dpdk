@@ -714,6 +714,10 @@ struct ecore_hwfn {
 
 	/* @DPDK */
 	struct ecore_ptt		*p_arfs_ptt;
+
+	/* DPDK specific, not the part of vanilla ecore */
+	osal_spinlock_t spq_lock;
+	u32 iov_task_flags;
 };
 
 enum ecore_mf_mode {
@@ -937,6 +941,9 @@ struct ecore_dev {
 	struct ecore_dbg_feature	dbg_features[DBG_FEATURE_NUM];
 	struct ecore_dbg_params		dbg_params;
 	osal_mutex_t			dbg_lock;
+
+	/* DPDK specific ecore field */
+	struct rte_pci_device		*pci_dev;
 };
 
 enum ecore_hsi_def_type {

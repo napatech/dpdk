@@ -65,6 +65,7 @@ struct core_state {
 	/* map of services IDs are run on this core */
 	uint64_t service_mask;
 	uint8_t runstate; /* running or stopped */
+	uint8_t thread_active; /* indicates when thread is in service_run() */
 	uint8_t is_service_core; /* set if core is currently a service core */
 	uint8_t service_active_on_lcore[RTE_SERVICE_NUM_MAX];
 	uint64_t loops;
@@ -106,7 +107,7 @@ rte_service_init(void)
 	struct rte_config *cfg = rte_eal_get_configuration();
 	for (i = 0; i < RTE_MAX_LCORE; i++) {
 		if (lcore_config[i].core_role == ROLE_SERVICE) {
-			if ((unsigned int)i == cfg->master_lcore)
+			if ((unsigned int)i == cfg->main_lcore)
 				continue;
 			rte_service_lcore_add(i);
 			count++;
@@ -457,6 +458,8 @@ service_runner_func(void *arg)
 	const int lcore = rte_lcore_id();
 	struct core_state *cs = &lcore_states[lcore];
 
+	__atomic_store_n(&cs->thread_active, 1, __ATOMIC_SEQ_CST);
+
 	/* runstate act as the guard variable. Use load-acquire
 	 * memory order here to synchronize with store-release
 	 * in runstate update functions.
@@ -475,7 +478,25 @@ service_runner_func(void *arg)
 		cs->loops++;
 	}
 
+	/* Use SEQ CST memory ordering to avoid any re-ordering around
+	 * this store, ensuring that once this store is visible, the service
+	 * lcore thread really is done in service cores code.
+	 */
+	__atomic_store_n(&cs->thread_active, 0, __ATOMIC_SEQ_CST);
 	return 0;
+}
+
+int32_t
+rte_service_lcore_may_be_active(uint32_t lcore)
+{
+	if (lcore >= RTE_MAX_LCORE || !lcore_states[lcore].is_service_core)
+		return -EINVAL;
+
+	/* Load thread_active using ACQUIRE to avoid instructions dependent on
+	 * the result being re-ordered before this load completes.
+	 */
+	return __atomic_load_n(&lcore_states[lcore].thread_active,
+			       __ATOMIC_ACQUIRE);
 }
 
 int32_t
@@ -811,37 +832,14 @@ rte_service_lcore_attr_get(uint32_t lcore, uint32_t attr_id,
 	}
 }
 
-static void
-service_dump_one(FILE *f, struct rte_service_spec_impl *s, uint32_t reset)
-{
-	/* avoid divide by zero */
-	int calls = 1;
-	if (s->calls != 0)
-		calls = s->calls;
-
-	if (reset) {
-		s->cycles_spent = 0;
-		s->calls = 0;
-		return;
-	}
-
-	if (f == NULL)
-		return;
-
-	fprintf(f, "  %s: stats %d\tcalls %"PRIu64"\tcycles %"
-			PRIu64"\tavg: %"PRIu64"\n",
-			s->spec.name, service_stats_enabled(s), s->calls,
-			s->cycles_spent, s->cycles_spent / calls);
-}
-
 int32_t
 rte_service_attr_reset_all(uint32_t id)
 {
 	struct rte_service_spec_impl *s;
 	SERVICE_VALID_GET_OR_ERR_RET(id, s, -EINVAL);
 
-	int reset = 1;
-	service_dump_one(NULL, s, reset);
+	s->cycles_spent = 0;
+	s->calls = 0;
 	return 0;
 }
 
@@ -863,7 +861,21 @@ rte_service_lcore_attr_reset_all(uint32_t lcore)
 }
 
 static void
-service_dump_calls_per_lcore(FILE *f, uint32_t lcore, uint32_t reset)
+service_dump_one(FILE *f, struct rte_service_spec_impl *s)
+{
+	/* avoid divide by zero */
+	int calls = 1;
+
+	if (s->calls != 0)
+		calls = s->calls;
+	fprintf(f, "  %s: stats %d\tcalls %"PRIu64"\tcycles %"
+			PRIu64"\tavg: %"PRIu64"\n",
+			s->spec.name, service_stats_enabled(s), s->calls,
+			s->cycles_spent, s->cycles_spent / calls);
+}
+
+static void
+service_dump_calls_per_lcore(FILE *f, uint32_t lcore)
 {
 	uint32_t i;
 	struct core_state *cs = &lcore_states[lcore];
@@ -873,8 +885,6 @@ service_dump_calls_per_lcore(FILE *f, uint32_t lcore, uint32_t reset)
 		if (!service_valid(i))
 			continue;
 		fprintf(f, "%"PRIu64"\t", cs->calls_per_service[i]);
-		if (reset)
-			cs->calls_per_service[i] = 0;
 	}
 	fprintf(f, "\n");
 }
@@ -890,8 +900,7 @@ rte_service_dump(FILE *f, uint32_t id)
 		struct rte_service_spec_impl *s;
 		SERVICE_VALID_GET_OR_ERR_RET(id, s, -EINVAL);
 		fprintf(f, "Service %s Summary\n", s->spec.name);
-		uint32_t reset = 0;
-		service_dump_one(f, s, reset);
+		service_dump_one(f, s);
 		return 0;
 	}
 
@@ -900,8 +909,7 @@ rte_service_dump(FILE *f, uint32_t id)
 	for (i = 0; i < RTE_SERVICE_NUM_MAX; i++) {
 		if (!service_valid(i))
 			continue;
-		uint32_t reset = 0;
-		service_dump_one(f, &rte_services[i], reset);
+		service_dump_one(f, &rte_services[i]);
 	}
 
 	fprintf(f, "Service Cores Summary\n");
@@ -909,8 +917,7 @@ rte_service_dump(FILE *f, uint32_t id)
 		if (lcore_config[i].core_role != ROLE_SERVICE)
 			continue;
 
-		uint32_t reset = 0;
-		service_dump_calls_per_lcore(f, i, reset);
+		service_dump_calls_per_lcore(f, i);
 	}
 
 	return 0;

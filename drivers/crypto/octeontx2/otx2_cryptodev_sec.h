@@ -18,7 +18,7 @@ struct otx2_sec_session_ipsec_lp {
 		struct otx2_ipsec_po_out_sa out_sa;
 	};
 
-	uint64_t ucmd_w3;
+	uint64_t cpt_inst_w7;
 	union {
 		uint64_t ucmd_w0;
 		struct {
@@ -55,6 +55,8 @@ struct otx2_sec_session_ipsec_lp {
 	uint8_t iv_length;
 	/** Auth IV length in bytes */
 	uint8_t auth_iv_length;
+	/** IPsec tunnel type */
+	enum rte_security_ipsec_tunnel_type tunnel_type;
 };
 
 int otx2_crypto_sec_ctx_create(struct rte_cryptodev *crypto_dev);

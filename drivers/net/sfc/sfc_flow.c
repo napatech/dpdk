@@ -18,6 +18,7 @@
 #include "efx.h"
 
 #include "sfc.h"
+#include "sfc_debug.h"
 #include "sfc_rx.h"
 #include "sfc_filter.h"
 #include "sfc_flow.h"
@@ -26,18 +27,31 @@
 
 struct sfc_flow_ops_by_spec {
 	sfc_flow_parse_cb_t	*parse;
+	sfc_flow_verify_cb_t	*verify;
+	sfc_flow_cleanup_cb_t	*cleanup;
 	sfc_flow_insert_cb_t	*insert;
 	sfc_flow_remove_cb_t	*remove;
 };
 
 static sfc_flow_parse_cb_t sfc_flow_parse_rte_to_filter;
+static sfc_flow_parse_cb_t sfc_flow_parse_rte_to_mae;
 static sfc_flow_insert_cb_t sfc_flow_filter_insert;
 static sfc_flow_remove_cb_t sfc_flow_filter_remove;
 
 static const struct sfc_flow_ops_by_spec sfc_flow_ops_filter = {
 	.parse = sfc_flow_parse_rte_to_filter,
+	.verify = NULL,
+	.cleanup = NULL,
 	.insert = sfc_flow_filter_insert,
 	.remove = sfc_flow_filter_remove,
+};
+
+static const struct sfc_flow_ops_by_spec sfc_flow_ops_mae = {
+	.parse = sfc_flow_parse_rte_to_mae,
+	.verify = sfc_mae_flow_verify,
+	.cleanup = sfc_mae_flow_cleanup,
+	.insert = sfc_mae_flow_insert,
+	.remove = sfc_mae_flow_remove,
 };
 
 static const struct sfc_flow_ops_by_spec *
@@ -49,6 +63,9 @@ sfc_flow_get_ops_by_spec(struct rte_flow *flow)
 	switch (spec->type) {
 	case SFC_FLOW_SPEC_FILTER:
 		ops = &sfc_flow_ops_filter;
+		break;
+	case SFC_FLOW_SPEC_MAE:
+		ops = &sfc_flow_ops_mae;
 		break;
 	default:
 		SFC_ASSERT(false);
@@ -1123,12 +1140,15 @@ static const struct sfc_flow_item sfc_flow_items[] = {
  * Protocol-independent flow API support
  */
 static int
-sfc_flow_parse_attr(const struct rte_flow_attr *attr,
+sfc_flow_parse_attr(struct sfc_adapter *sa,
+		    const struct rte_flow_attr *attr,
 		    struct rte_flow *flow,
 		    struct rte_flow_error *error)
 {
 	struct sfc_flow_spec *spec = &flow->spec;
 	struct sfc_flow_spec_filter *spec_filter = &spec->filter;
+	struct sfc_flow_spec_mae *spec_mae = &spec->mae;
+	struct sfc_mae *mae = &sa->mae;
 
 	if (attr == NULL) {
 		rte_flow_error_set(error, EINVAL,
@@ -1166,10 +1186,23 @@ sfc_flow_parse_attr(const struct rte_flow_attr *attr,
 		spec_filter->template.efs_rss_context = EFX_RSS_CONTEXT_DEFAULT;
 		spec_filter->template.efs_priority = EFX_FILTER_PRI_MANUAL;
 	} else {
-		rte_flow_error_set(error, ENOTSUP,
-				   RTE_FLOW_ERROR_TYPE_ATTR_TRANSFER, attr,
-				   "Transfer is not supported");
-		return -rte_errno;
+		if (mae->status != SFC_MAE_STATUS_SUPPORTED) {
+			rte_flow_error_set(error, ENOTSUP,
+					   RTE_FLOW_ERROR_TYPE_ATTR_TRANSFER,
+					   attr, "Transfer is not supported");
+			return -rte_errno;
+		}
+		if (attr->priority > mae->nb_action_rule_prios_max) {
+			rte_flow_error_set(error, ENOTSUP,
+					   RTE_FLOW_ERROR_TYPE_ATTR_PRIORITY,
+					   attr, "Unsupported priority level");
+			return -rte_errno;
+		}
+		spec->type = SFC_FLOW_SPEC_MAE;
+		spec_mae->priority = attr->priority;
+		spec_mae->match_spec = NULL;
+		spec_mae->action_set = NULL;
+		spec_mae->rule_id.id = EFX_MAE_RSRC_ID_INVALID;
 	}
 
 	return 0;
@@ -1255,7 +1288,8 @@ sfc_flow_parse_pattern(const struct sfc_flow_item *flow_items,
 			break;
 
 		default:
-			if (is_ifrm) {
+			if (parse_ctx->type == SFC_FLOW_PARSE_CTX_FILTER &&
+			    is_ifrm) {
 				rte_flow_error_set(error, EINVAL,
 					RTE_FLOW_ERROR_TYPE_ITEM,
 					pattern,
@@ -1292,12 +1326,17 @@ sfc_flow_parse_queue(struct sfc_adapter *sa,
 	struct sfc_flow_spec *spec = &flow->spec;
 	struct sfc_flow_spec_filter *spec_filter = &spec->filter;
 	struct sfc_rxq *rxq;
+	struct sfc_rxq_info *rxq_info;
 
 	if (queue->index >= sfc_sa2shared(sa)->rxq_count)
 		return -EINVAL;
 
 	rxq = &sa->rxq_ctrl[queue->index];
 	spec_filter->template.efs_dmaq_id = (uint16_t)rxq->hw_index;
+
+	rxq_info = &sfc_sa2shared(sa)->rxq_info[queue->index];
+	spec_filter->rss_hash_required = !!(rxq_info->rxq_flags &
+					    SFC_RXQ_FLAG_RSS_HASH);
 
 	return 0;
 }
@@ -1464,13 +1503,34 @@ sfc_flow_filter_insert(struct sfc_adapter *sa,
 	struct sfc_flow_spec_filter *spec_filter = &flow->spec.filter;
 	struct sfc_flow_rss *flow_rss = &spec_filter->rss_conf;
 	uint32_t efs_rss_context = EFX_RSS_CONTEXT_DEFAULT;
+	boolean_t create_context;
 	unsigned int i;
 	int rc = 0;
 
-	if (spec_filter->rss) {
-		unsigned int rss_spread = MIN(flow_rss->rxq_hw_index_max -
-					      flow_rss->rxq_hw_index_min + 1,
-					      EFX_MAXRSS);
+	create_context = spec_filter->rss || (spec_filter->rss_hash_required &&
+			rss->dummy_rss_context == EFX_RSS_CONTEXT_DEFAULT);
+
+	if (create_context) {
+		unsigned int rss_spread;
+		unsigned int rss_hash_types;
+		uint8_t *rss_key;
+
+		if (spec_filter->rss) {
+			rss_spread = MIN(flow_rss->rxq_hw_index_max -
+					flow_rss->rxq_hw_index_min + 1,
+					EFX_MAXRSS);
+			rss_hash_types = flow_rss->rss_hash_types;
+			rss_key = flow_rss->rss_key;
+		} else {
+			/*
+			 * Initialize dummy RSS context parameters to have
+			 * valid RSS hash. Use default RSS hash function and
+			 * key.
+			 */
+			rss_spread = 1;
+			rss_hash_types = rss->hash_types;
+			rss_key = rss->key;
+		}
 
 		rc = efx_rx_scale_context_alloc(sa->nic,
 						EFX_RX_SCALE_EXCLUSIVE,
@@ -1481,16 +1541,19 @@ sfc_flow_filter_insert(struct sfc_adapter *sa,
 
 		rc = efx_rx_scale_mode_set(sa->nic, efs_rss_context,
 					   rss->hash_alg,
-					   flow_rss->rss_hash_types, B_TRUE);
+					   rss_hash_types, B_TRUE);
 		if (rc != 0)
 			goto fail_scale_mode_set;
 
 		rc = efx_rx_scale_key_set(sa->nic, efs_rss_context,
-					  flow_rss->rss_key,
-					  sizeof(rss->key));
+					  rss_key, sizeof(rss->key));
 		if (rc != 0)
 			goto fail_scale_key_set;
+	} else {
+		efs_rss_context = rss->dummy_rss_context;
+	}
 
+	if (spec_filter->rss || spec_filter->rss_hash_required) {
 		/*
 		 * At this point, fully elaborated filter specifications
 		 * have been produced from the template. To make sure that
@@ -1501,8 +1564,9 @@ sfc_flow_filter_insert(struct sfc_adapter *sa,
 			efx_filter_spec_t *spec = &spec_filter->filters[i];
 
 			spec->efs_rss_context = efs_rss_context;
-			spec->efs_dmaq_id = flow_rss->rxq_hw_index_min;
 			spec->efs_flags |= EFX_FILTER_FLAG_RX_RSS;
+			if (spec_filter->rss)
+				spec->efs_dmaq_id = flow_rss->rxq_hw_index_min;
 		}
 	}
 
@@ -1510,7 +1574,12 @@ sfc_flow_filter_insert(struct sfc_adapter *sa,
 	if (rc != 0)
 		goto fail_filter_insert;
 
-	if (spec_filter->rss) {
+	if (create_context) {
+		unsigned int dummy_tbl[RTE_DIM(flow_rss->rss_tbl)] = {0};
+		unsigned int *tbl;
+
+		tbl = spec_filter->rss ? flow_rss->rss_tbl : dummy_tbl;
+
 		/*
 		 * Scale table is set after filter insertion because
 		 * the table entries are relative to the base RxQ ID
@@ -1520,10 +1589,13 @@ sfc_flow_filter_insert(struct sfc_adapter *sa,
 		 * the table entries, and the operation will succeed
 		 */
 		rc = efx_rx_scale_tbl_set(sa->nic, efs_rss_context,
-					  flow_rss->rss_tbl,
-					  RTE_DIM(flow_rss->rss_tbl));
+					  tbl, RTE_DIM(flow_rss->rss_tbl));
 		if (rc != 0)
 			goto fail_scale_tbl_set;
+
+		/* Remember created dummy RSS context */
+		if (!spec_filter->rss)
+			rss->dummy_rss_context = efs_rss_context;
 	}
 
 	return 0;
@@ -1534,7 +1606,7 @@ fail_scale_tbl_set:
 fail_filter_insert:
 fail_scale_key_set:
 fail_scale_mode_set:
-	if (efs_rss_context != EFX_RSS_CONTEXT_DEFAULT)
+	if (create_context)
 		efx_rx_scale_context_free(sa->nic, efs_rss_context);
 
 fail_scale_context_alloc:
@@ -1607,9 +1679,6 @@ sfc_flow_parse_actions(struct sfc_adapter *sa,
 				   "NULL actions");
 		return -rte_errno;
 	}
-
-#define SFC_BUILD_SET_OVERFLOW(_action, _set) \
-	RTE_BUILD_BUG_ON(_action >= sizeof(_set) * CHAR_BIT)
 
 	for (; actions->type != RTE_FLOW_ACTION_TYPE_END; actions++) {
 		switch (actions->type) {
@@ -1706,7 +1775,6 @@ sfc_flow_parse_actions(struct sfc_adapter *sa,
 
 		actions_set |= (1UL << actions->type);
 	}
-#undef SFC_BUILD_SET_OVERFLOW
 
 	/* When fate is unknown, drop traffic. */
 	if ((actions_set & fate_actions_mask) == 0) {
@@ -2357,6 +2425,30 @@ fail_bad_value:
 }
 
 static int
+sfc_flow_parse_rte_to_mae(struct rte_eth_dev *dev,
+			  const struct rte_flow_item pattern[],
+			  const struct rte_flow_action actions[],
+			  struct rte_flow *flow,
+			  struct rte_flow_error *error)
+{
+	struct sfc_adapter *sa = sfc_adapter_by_eth_dev(dev);
+	struct sfc_flow_spec *spec = &flow->spec;
+	struct sfc_flow_spec_mae *spec_mae = &spec->mae;
+	int rc;
+
+	rc = sfc_mae_rule_parse_pattern(sa, pattern, spec_mae, error);
+	if (rc != 0)
+		return rc;
+
+	rc = sfc_mae_rule_parse_actions(sa, actions, &spec_mae->action_set,
+					error);
+	if (rc != 0)
+		return rc;
+
+	return 0;
+}
+
+static int
 sfc_flow_parse(struct rte_eth_dev *dev,
 	       const struct rte_flow_attr *attr,
 	       const struct rte_flow_item pattern[],
@@ -2364,10 +2456,11 @@ sfc_flow_parse(struct rte_eth_dev *dev,
 	       struct rte_flow *flow,
 	       struct rte_flow_error *error)
 {
+	struct sfc_adapter *sa = sfc_adapter_by_eth_dev(dev);
 	const struct sfc_flow_ops_by_spec *ops;
 	int rc;
 
-	rc = sfc_flow_parse_attr(attr, flow, error);
+	rc = sfc_flow_parse_attr(sa, attr, flow, error);
 	if (rc != 0)
 		return rc;
 
@@ -2398,8 +2491,14 @@ sfc_flow_zmalloc(struct rte_flow_error *error)
 }
 
 static void
-sfc_flow_free(__rte_unused struct sfc_adapter *sa, struct rte_flow *flow)
+sfc_flow_free(struct sfc_adapter *sa, struct rte_flow *flow)
 {
+	const struct sfc_flow_ops_by_spec *ops;
+
+	ops = sfc_flow_get_ops_by_spec(flow);
+	if (ops != NULL && ops->cleanup != NULL)
+		ops->cleanup(sa, flow);
+
 	rte_free(flow);
 }
 
@@ -2452,6 +2551,36 @@ sfc_flow_remove(struct sfc_adapter *sa, struct rte_flow *flow,
 }
 
 static int
+sfc_flow_verify(struct sfc_adapter *sa, struct rte_flow *flow,
+		struct rte_flow_error *error)
+{
+	const struct sfc_flow_ops_by_spec *ops;
+	int rc = 0;
+
+	ops = sfc_flow_get_ops_by_spec(flow);
+	if (ops == NULL) {
+		rte_flow_error_set(error, ENOTSUP,
+				   RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
+				   "No backend to handle this flow");
+		return -rte_errno;
+	}
+
+	if (ops->verify != NULL) {
+		SFC_ASSERT(sfc_adapter_is_locked(sa));
+		rc = ops->verify(sa, flow);
+	}
+
+	if (rc != 0) {
+		rte_flow_error_set(error, rc,
+			RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
+			"Failed to verify flow validity with FW");
+		return -rte_errno;
+	}
+
+	return 0;
+}
+
+static int
 sfc_flow_validate(struct rte_eth_dev *dev,
 		  const struct rte_flow_attr *attr,
 		  const struct rte_flow_item pattern[],
@@ -2466,9 +2595,15 @@ sfc_flow_validate(struct rte_eth_dev *dev,
 	if (flow == NULL)
 		return -rte_errno;
 
+	sfc_adapter_lock(sa);
+
 	rc = sfc_flow_parse(dev, attr, pattern, actions, flow, error);
+	if (rc == 0)
+		rc = sfc_flow_verify(sa, flow, error);
 
 	sfc_flow_free(sa, flow);
+
+	sfc_adapter_unlock(sa);
 
 	return rc;
 }
@@ -2488,11 +2623,11 @@ sfc_flow_create(struct rte_eth_dev *dev,
 	if (flow == NULL)
 		goto fail_no_mem;
 
+	sfc_adapter_lock(sa);
+
 	rc = sfc_flow_parse(dev, attr, pattern, actions, flow, error);
 	if (rc != 0)
 		goto fail_bad_value;
-
-	sfc_adapter_lock(sa);
 
 	TAILQ_INSERT_TAIL(&sa->flow_list, flow, entries);
 
@@ -2633,12 +2768,19 @@ sfc_flow_fini(struct sfc_adapter *sa)
 void
 sfc_flow_stop(struct sfc_adapter *sa)
 {
+	struct sfc_adapter_shared * const sas = sfc_sa2shared(sa);
+	struct sfc_rss *rss = &sas->rss;
 	struct rte_flow *flow;
 
 	SFC_ASSERT(sfc_adapter_is_locked(sa));
 
 	TAILQ_FOREACH(flow, &sa->flow_list, entries)
 		sfc_flow_remove(sa, flow, NULL);
+
+	if (rss->dummy_rss_context != EFX_RSS_CONTEXT_DEFAULT) {
+		efx_rx_scale_context_free(sa->nic, rss->dummy_rss_context);
+		rss->dummy_rss_context = EFX_RSS_CONTEXT_DEFAULT;
+	}
 }
 
 int

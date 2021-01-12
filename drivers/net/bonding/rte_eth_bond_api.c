@@ -129,12 +129,6 @@ deactivate_slave(struct rte_eth_dev *eth_dev, uint16_t port_id)
 	RTE_ASSERT(active_count < RTE_DIM(internals->active_slaves));
 	internals->active_slave_count = active_count;
 
-	/* Resetting active_slave when reaches to max
-	 * no of slaves in active list
-	 */
-	if (internals->active_slave >= active_count)
-		internals->active_slave = 0;
-
 	if (eth_dev->data->dev_started) {
 		if (internals->mode == BONDING_MODE_8023AD) {
 			bond_mode_8023ad_start(eth_dev);
@@ -243,7 +237,12 @@ slave_rte_flow_prepare(uint16_t slave_id, struct bond_dev_private *internals)
 	uint16_t slave_port_id = internals->slaves[slave_id].port_id;
 
 	if (internals->flow_isolated_valid != 0) {
-		rte_eth_dev_stop(slave_port_id);
+		if (rte_eth_dev_stop(slave_port_id) != 0) {
+			RTE_BOND_LOG(ERR, "Failed to stop device on port %u",
+				     slave_port_id);
+			return -1;
+		}
+
 		if (rte_flow_isolate(slave_port_id, internals->flow_isolated,
 		    &ferror)) {
 			RTE_BOND_LOG(ERR, "rte_flow_isolate failed for slave"

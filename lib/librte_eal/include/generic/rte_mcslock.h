@@ -32,9 +32,6 @@ typedef struct rte_mcslock {
 } rte_mcslock_t;
 
 /**
- * @warning
- * @b EXPERIMENTAL: This API may change without prior notice
- *
  * Take the MCS lock.
  *
  * @param msl
@@ -45,7 +42,6 @@ typedef struct rte_mcslock {
  *   A pointer to a new node of MCS lock. Each CPU/thread acquiring the
  *   lock should use its 'own node'.
  */
-__rte_experimental
 static inline void
 rte_mcslock_lock(rte_mcslock_t **msl, rte_mcslock_t *me)
 {
@@ -68,7 +64,14 @@ rte_mcslock_lock(rte_mcslock_t **msl, rte_mcslock_t *me)
 		 */
 		return;
 	}
-	__atomic_store_n(&prev->next, me, __ATOMIC_RELAXED);
+	/* The store to me->next above should also complete before the node is
+	 * visible to predecessor thread releasing the lock. Hence, the store
+	 * prev->next also requires release semantics. Note that, for example,
+	 * on ARM, the release semantics in the exchange operation is not
+	 * strong as a release fence and is not sufficient to enforce the
+	 * desired order here.
+	 */
+	__atomic_store_n(&prev->next, me, __ATOMIC_RELEASE);
 
 	/* The while-load of me->locked should not move above the previous
 	 * store to prev->next. Otherwise it will cause a deadlock. Need a
@@ -85,9 +88,6 @@ rte_mcslock_lock(rte_mcslock_t **msl, rte_mcslock_t *me)
 }
 
 /**
- * @warning
- * @b EXPERIMENTAL: This API may change without prior notice
- *
  * Release the MCS lock.
  *
  * @param msl
@@ -95,7 +95,6 @@ rte_mcslock_lock(rte_mcslock_t **msl, rte_mcslock_t *me)
  * @param me
  *   A pointer to the node of MCS lock passed in rte_mcslock_lock.
  */
-__rte_experimental
 static inline void
 rte_mcslock_unlock(rte_mcslock_t **msl, rte_mcslock_t *me)
 {
@@ -126,9 +125,6 @@ rte_mcslock_unlock(rte_mcslock_t **msl, rte_mcslock_t *me)
 }
 
 /**
- * @warning
- * @b EXPERIMENTAL: This API may change without prior notice
- *
  * Try to take the lock.
  *
  * @param msl
@@ -138,7 +134,6 @@ rte_mcslock_unlock(rte_mcslock_t **msl, rte_mcslock_t *me)
  * @return
  *   1 if the lock is successfully taken; 0 otherwise.
  */
-__rte_experimental
 static inline int
 rte_mcslock_trylock(rte_mcslock_t **msl, rte_mcslock_t *me)
 {
@@ -159,9 +154,6 @@ rte_mcslock_trylock(rte_mcslock_t **msl, rte_mcslock_t *me)
 }
 
 /**
- * @warning
- * @b EXPERIMENTAL: This API may change without prior notice
- *
  * Test if the lock is taken.
  *
  * @param msl
@@ -169,7 +161,6 @@ rte_mcslock_trylock(rte_mcslock_t **msl, rte_mcslock_t *me)
  * @return
  *   1 if the lock is currently taken; 0 otherwise.
  */
-__rte_experimental
 static inline int
 rte_mcslock_is_locked(rte_mcslock_t *msl)
 {

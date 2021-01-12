@@ -167,8 +167,8 @@ check_lcore_params(void)
 			return -1;
 		}
 
-		if (lcore == rte_get_master_lcore()) {
-			printf("Error: lcore %u is master lcore\n", lcore);
+		if (lcore == rte_get_main_lcore()) {
+			printf("Error: lcore %u is main lcore\n", lcore);
 			return -1;
 		}
 		socketid = rte_lcore_to_socket_id(lcore);
@@ -596,6 +596,7 @@ check_all_ports_link_status(uint32_t port_mask)
 	struct rte_eth_link link;
 	uint16_t portid;
 	int ret;
+	char link_status_text[RTE_ETH_LINK_MAX_STR_LEN];
 
 	printf("\nChecking link status");
 	fflush(stdout);
@@ -620,16 +621,10 @@ check_all_ports_link_status(uint32_t port_mask)
 			}
 			/* Print link status if flag set */
 			if (print_flag == 1) {
-				if (link.link_status)
-					printf("Port%d Link Up. Speed %u Mbps "
-					       "-%s\n",
-					       portid, link.link_speed,
-					       (link.link_duplex ==
-						ETH_LINK_FULL_DUPLEX)
-						       ? ("full-duplex")
-						       : ("half-duplex\n"));
-				else
-					printf("Port %d Link Down\n", portid);
+				rte_eth_link_to_str(link_status_text,
+					sizeof(link_status_text), &link);
+				printf("Port %d %s\n", portid,
+				       link_status_text);
 				continue;
 			}
 			/* Clear all_ports_up flag if any link down */
@@ -1096,16 +1091,16 @@ main(int argc, char **argv)
 			route_str, i);
 	}
 
-	/* Launch per-lcore init on every slave lcore */
-	rte_eal_mp_remote_launch(graph_main_loop, NULL, SKIP_MASTER);
+	/* Launch per-lcore init on every worker lcore */
+	rte_eal_mp_remote_launch(graph_main_loop, NULL, SKIP_MAIN);
 
-	/* Accumulate and print stats on master until exit */
+	/* Accumulate and print stats on main until exit */
 	if (rte_graph_has_stats_feature())
 		print_stats();
 
-	/* Wait for slave cores to exit */
+	/* Wait for worker cores to exit */
 	ret = 0;
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		ret = rte_eal_wait_lcore(lcore_id);
 		/* Destroy graph */
 		if (ret < 0 || rte_graph_destroy(
@@ -1121,7 +1116,10 @@ main(int argc, char **argv)
 		if ((enabled_port_mask & (1 << portid)) == 0)
 			continue;
 		printf("Closing port %d...", portid);
-		rte_eth_dev_stop(portid);
+		ret = rte_eth_dev_stop(portid);
+		if (ret != 0)
+			printf("Failed to stop port %u: %s\n",
+			       portid, rte_strerror(-ret));
 		rte_eth_dev_close(portid);
 		printf(" Done\n");
 	}

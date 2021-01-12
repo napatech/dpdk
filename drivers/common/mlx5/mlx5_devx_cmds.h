@@ -8,6 +8,14 @@
 #include "mlx5_glue.h"
 #include "mlx5_prm.h"
 
+/*
+ * Defines the amount of retries to allocate the first UAR in the page.
+ * OFED 5.0.x and Upstream rdma_core before v29 returned the NULL as
+ * UAR base address if UAR was not the first object in the UAR page.
+ * It caused the PMD failure and we should try to get another UAR
+ * till we get the first one with non-NULL base address returned.
+ */
+#define MLX5_ALLOC_UAR_RETRY 32
 
 /* This is limitation of libibverbs: in length variable type is u16. */
 #define MLX5_DEVX_MAX_KLM_ENTRIES ((UINT16_MAX - \
@@ -20,7 +28,8 @@ struct mlx5_devx_mkey_attr {
 	uint32_t pd;
 	uint32_t log_entity_size;
 	uint32_t pg_access:1;
-	uint32_t relaxed_ordering:1;
+	uint32_t relaxed_ordering_write:1;
+	uint32_t relaxed_ordering_read:1;
 	struct mlx5_klm *klm_array;
 	int klm_num;
 };
@@ -85,6 +94,7 @@ struct mlx5_hca_attr {
 	uint32_t tunnel_lro_vxlan:1;
 	uint32_t lro_max_msg_sz_mode:2;
 	uint32_t lro_timer_supported_periods[MLX5_LRO_NUM_SUPP_PERIODS];
+	uint16_t lro_min_mss_size;
 	uint32_t flex_parser_protocols;
 	uint32_t hairpin:1;
 	uint32_t log_max_hairpin_queues:5;
@@ -98,10 +108,13 @@ struct mlx5_hca_attr {
 	uint32_t cross_channel:1;
 	uint32_t non_wire_sq:1; /* SQ with non-wire ops is supported. */
 	uint32_t log_max_static_sq_wq:5; /* Static WQE size SQ. */
+	uint32_t num_lag_ports:4; /* Number of ports can be bonded. */
 	uint32_t dev_freq_khz; /* Timestamp counter frequency, kHz. */
 	uint32_t scatter_fcs_w_decap_disable:1;
+	uint32_t flow_hit_aso:1; /* General obj type FLOW_HIT_ASO supported. */
 	uint32_t regex:1;
 	uint32_t regexp_num_of_engines;
+	uint32_t log_max_ft_sampler_num:8;
 	struct mlx5_hca_qos_attr qos;
 	struct mlx5_hca_vdpa_attr vdpa;
 };
@@ -190,6 +203,13 @@ struct mlx5_devx_tir_attr {
 	struct mlx5_rx_hash_field_select rx_hash_field_selector_inner;
 };
 
+/* TIR attributes structure, used by TIR modify. */
+struct mlx5_devx_modify_tir_attr {
+	uint32_t tirn:24;
+	uint64_t modify_bitmask;
+	struct mlx5_devx_tir_attr tir;
+};
+
 /* RQT attributes structure, used by RQT operations. */
 struct mlx5_devx_rqt_attr {
 	uint8_t rq_type;
@@ -246,6 +266,7 @@ struct mlx5_devx_cq_attr {
 	uint32_t overrun_ignore:1;
 	uint32_t cqe_comp_en:1;
 	uint32_t mini_cqe_res_format:2;
+	uint32_t mini_cqe_res_format_ext:2;
 	uint32_t cqe_size:3;
 	uint32_t log_cq_size:5;
 	uint32_t log_page_size:5;
@@ -289,6 +310,7 @@ struct mlx5_devx_virtq_attr {
 		uint32_t size;
 		uint64_t offset;
 	} umems[3];
+	uint8_t error_type;
 };
 
 
@@ -434,6 +456,9 @@ __rte_internal
 int mlx5_devx_cmd_modify_rqt(struct mlx5_devx_obj *rqt,
 			     struct mlx5_devx_rqt_attr *rqt_attr);
 __rte_internal
+int mlx5_devx_cmd_modify_tir(struct mlx5_devx_obj *tir,
+			     struct mlx5_devx_modify_tir_attr *tir_attr);
+__rte_internal
 int mlx5_devx_cmd_query_parse_samples(struct mlx5_devx_obj *flex_obj,
 				      uint32_t ids[], uint32_t num);
 
@@ -470,5 +495,9 @@ struct mlx5_devx_obj *mlx5_devx_cmd_create_virtio_q_counters(void *ctx);
 __rte_internal
 int mlx5_devx_cmd_query_virtio_q_counters(struct mlx5_devx_obj *couners_obj,
 				  struct mlx5_devx_virtio_q_couners_attr *attr);
+
+__rte_internal
+struct mlx5_devx_obj *mlx5_devx_cmd_create_flow_hit_aso_obj(void *ctx,
+							    uint32_t pd);
 
 #endif /* RTE_PMD_MLX5_DEVX_CMDS_H_ */

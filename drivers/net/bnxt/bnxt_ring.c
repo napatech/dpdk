@@ -251,7 +251,7 @@ int bnxt_alloc_rings(struct bnxt *bp, uint16_t qidx,
 			rx_ring->vmem =
 			    (void **)((char *)mz->addr + rx_vmem_start);
 			rx_ring_info->rx_buf_ring =
-			    (struct bnxt_sw_rx_bd *)rx_ring->vmem;
+			    (struct rte_mbuf **)rx_ring->vmem;
 		}
 
 		rx_ring = rx_ring_info->ag_ring_struct;
@@ -269,7 +269,7 @@ int bnxt_alloc_rings(struct bnxt *bp, uint16_t qidx,
 			rx_ring->vmem =
 			    (void **)((char *)mz->addr + ag_vmem_start);
 			rx_ring_info->ag_buf_ring =
-			    (struct bnxt_sw_rx_bd *)rx_ring->vmem;
+			    (struct rte_mbuf **)rx_ring->vmem;
 		}
 
 		rx_ring_info->ag_bitmap =
@@ -429,7 +429,7 @@ int bnxt_alloc_rxtx_nq_ring(struct bnxt *bp)
 	if (!BNXT_HAS_NQ(bp) || bp->rxtx_nq_ring)
 		return 0;
 
-	socket_id = rte_lcore_to_socket_id(rte_get_master_lcore());
+	socket_id = rte_lcore_to_socket_id(rte_get_main_lcore());
 
 	nqr = rte_zmalloc_socket("nqr",
 				 sizeof(struct bnxt_cp_ring_info),
@@ -451,6 +451,7 @@ int bnxt_alloc_rxtx_nq_ring(struct bnxt *bp)
 	ring->ring_mask = ring->ring_size - 1;
 	ring->vmem_size = 0;
 	ring->vmem = NULL;
+	ring->fw_ring_id = INVALID_HW_RING_ID;
 
 	nqr->cp_ring_struct = ring;
 	rc = bnxt_alloc_rings(bp, 0, NULL, NULL, nqr, NULL, "l2_nqr");
@@ -819,7 +820,7 @@ int bnxt_alloc_async_ring_struct(struct bnxt *bp)
 	if (BNXT_NUM_ASYNC_CPR(bp) == 0)
 		return 0;
 
-	socket_id = rte_lcore_to_socket_id(rte_get_master_lcore());
+	socket_id = rte_lcore_to_socket_id(rte_get_main_lcore());
 
 	cpr = rte_zmalloc_socket("cpr",
 				 sizeof(struct bnxt_cp_ring_info),

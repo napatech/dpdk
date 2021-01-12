@@ -22,7 +22,7 @@ Run-time path is main thing that differs from L3 forwarding sample application.
 Difference is that forwarding logic starting from Rx, followed by LPM lookup,
 TTL update and finally Tx is implemented inside graph nodes. These nodes are
 interconnected in graph framework. Application main loop needs to walk over
-graph using ``rte_graph_walk()`` with graph objects created one per slave lcore.
+graph using ``rte_graph_walk()`` with graph objects created one per worker lcore.
 
 The lookup method is as per implementation of ``ip4_lookup`` graph node.
 The ID of the output interface for the input packet is the next hop returned by
@@ -44,7 +44,7 @@ Running the Application
 
 The application has a number of command line options similar to l3fwd::
 
-    ./l3fwd-graph [EAL options] -- -p PORTMASK
+    ./dpdk-l3fwd-graph [EAL options] -- -p PORTMASK
                                    [-P]
                                    --config(port,queue,lcore)[,(port,queue,lcore)]
                                    [--eth-dest=X,MM:MM:MM:MM:MM:MM]
@@ -79,7 +79,7 @@ To enable L3 forwarding between two ports, assuming that both ports are in the s
 
 .. code-block:: console
 
-    ./build/l3fwd-graph -l 1,2 -n 4 -- -p 0x3 --config="(0,0,1),(1,0,2)"
+    ./<build_dir>/examples/dpdk-l3fwd-graph -l 1,2 -n 4 -- -p 0x3 --config="(0,0,1),(1,0,2)"
 
 In this command:
 
@@ -265,7 +265,7 @@ headers will be provided run-time using ``rte_node_ip4_route_add()`` and
     Since currently ``ip4_lookup`` and ``ip4_rewrite`` nodes don't support
     lock-less mechanisms(RCU, etc) to add run-time forwarding data like route and
     rewrite data, forwarding data is added before packet processing loop is
-    launched on slave lcore.
+    launched on worker lcore.
 
 .. code-block:: c
 
@@ -297,7 +297,7 @@ Packet Forwarding using Graph Walk
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Now that all the device configurations are done, graph creations are done and
-forwarding data is updated with nodes, slave lcores will be launched with graph
+forwarding data is updated with nodes, worker lcores will be launched with graph
 main loop. Graph main loop is very simple in the sense that it needs to
 continuously call a non-blocking API ``rte_graph_walk()`` with it's lcore
 specific graph object that was already created.

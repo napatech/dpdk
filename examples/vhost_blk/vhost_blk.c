@@ -2,6 +2,12 @@
  * Copyright(c) 2010-2019 Intel Corporation
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include <pthread.h>
+#include <sched.h>
+
 #include <stdint.h>
 #include <unistd.h>
 #include <stdbool.h>
@@ -877,7 +883,11 @@ int main(int argc, char *argv[])
 
 	signal(SIGINT, signal_handler);
 
-	rte_vhost_driver_start(dev_pathname);
+	ret = rte_vhost_driver_start(dev_pathname);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to start vhost driver.\n");
+		return -1;
+	}
 
 	/* loop for exit the application */
 	while (1)

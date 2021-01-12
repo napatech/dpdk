@@ -346,6 +346,11 @@ static inline u16 ice_find_first_bit(const ice_bitmap_t *bitmap, u16 size)
 	return ice_find_next_bit(bitmap, size, 0);
 }
 
+#define ice_for_each_set_bit(_bitpos, _addr, _maxlen)	\
+	for ((_bitpos) = ice_find_first_bit((_addr), (_maxlen)); \
+	     (_bitpos) < (_maxlen); \
+	     (_bitpos) = ice_find_next_bit((_addr), (_maxlen), (_bitpos) + 1))
+
 /**
  * ice_is_any_bit_set - Return true of any bit in the bitmap is set
  * @bitmap: the bitmap to check
@@ -373,6 +378,48 @@ static inline void ice_cp_bitmap(ice_bitmap_t *dst, ice_bitmap_t *src, u16 size)
 {
 	ice_memcpy(dst, src, BITS_TO_CHUNKS(size) * sizeof(ice_bitmap_t),
 		   ICE_NONDMA_TO_NONDMA);
+}
+
+/**
+ * ice_bitmap_set - set a number of bits in bitmap from a starting position
+ * @dst: bitmap destination
+ * @pos: first bit position to set
+ * @num_bits: number of bits to set
+ *
+ * This function sets bits in a bitmap from pos to (pos + num_bits) - 1.
+ * Note that this function assumes it is operating on a bitmap declared using
+ * ice_declare_bitmap.
+ */
+static inline void
+ice_bitmap_set(ice_bitmap_t *dst, u16 pos, u16 num_bits)
+{
+	u16 i;
+
+	for (i = pos; i < pos + num_bits; i++)
+		ice_set_bit(i, dst);
+}
+
+/**
+ * ice_bitmap_hweight - hamming weight of bitmap
+ * @bm: bitmap pointer
+ * @size: size of bitmap (in bits)
+ *
+ * This function determines the number of set bits in a bitmap.
+ * Note that this function assumes it is operating on a bitmap declared using
+ * ice_declare_bitmap.
+ */
+static inline int
+ice_bitmap_hweight(ice_bitmap_t *bm, u16 size)
+{
+	int count = 0;
+	u16 bit = 0;
+
+	while (size > (bit = ice_find_next_bit(bm, size, bit))) {
+		count++;
+		bit++;
+	}
+
+	return count;
 }
 
 /**

@@ -283,6 +283,7 @@ mlx5_vdpa_dev_close(int vid)
 	}
 	if (priv->configured)
 		ret |= mlx5_vdpa_lm_log(priv);
+	mlx5_vdpa_err_event_unset(priv);
 	mlx5_vdpa_cqe_event_unset(priv);
 	mlx5_vdpa_steer_unset(priv);
 	mlx5_vdpa_virtqs_release(priv);
@@ -318,6 +319,7 @@ mlx5_vdpa_dev_config(int vid)
 		DRV_LOG(WARNING, "MTU cannot be set on device %s.",
 				vdev->device->name);
 	if (mlx5_vdpa_pd_create(priv) || mlx5_vdpa_mem_register(priv) ||
+	    mlx5_vdpa_err_event_setup(priv) ||
 	    mlx5_vdpa_virtqs_prepare(priv) || mlx5_vdpa_steer_setup(priv) ||
 	    mlx5_vdpa_cqe_event_setup(priv)) {
 		mlx5_vdpa_dev_close(vid);
@@ -730,6 +732,9 @@ mlx5_vdpa_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	}
 	priv->caps = attr.vdpa;
 	priv->log_max_rqt_size = attr.log_max_rqt_size;
+	priv->num_lag_ports = attr.num_lag_ports;
+	if (attr.num_lag_ports == 0)
+		priv->num_lag_ports = 1;
 	priv->ctx = ctx;
 	priv->pci_dev = pci_dev;
 	priv->var = mlx5_glue->dv_alloc_var(ctx, 0);
@@ -819,11 +824,19 @@ static const struct rte_pci_id mlx5_vdpa_pci_id_map[] = {
 	},
 	{
 		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
-				PCI_DEVICE_ID_MELLANOX_CONNECTX6DXVF)
+				PCI_DEVICE_ID_MELLANOX_CONNECTXVF)
 	},
 	{
 		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
 				PCI_DEVICE_ID_MELLANOX_CONNECTX6DXBF)
+	},
+	{
+		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
+				PCI_DEVICE_ID_MELLANOX_CONNECTX7)
+	},
+	{
+		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
+				PCI_DEVICE_ID_MELLANOX_CONNECTX7BF)
 	},
 	{
 		.vendor_id = 0

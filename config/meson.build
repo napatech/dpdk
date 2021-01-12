@@ -29,10 +29,7 @@ abi_version = run_command(find_program('cat', 'more'),
 # and have the soname be all but the final part of the abi_version.
 # e.g. v20.1 => librte_foo.so.20.1
 #    sonames => librte_foo.so.20
-# e.g. v20.0.1 => librte_foo.so.20.0.1
-#      sonames => librte_foo.so.20.0
-abi_va = abi_version.split('.')
-so_version = abi_va.length() == 2 ? abi_va[0] : abi_va[0] + '.' + abi_va[1]
+so_version = abi_version.split('.')[0]
 
 # extract all version information into the build configuration
 dpdk_conf.set('RTE_VER_YEAR', pver.get(0).to_int())
@@ -60,9 +57,11 @@ eal_pmd_path = join_paths(get_option('prefix'), driver_install_path)
 # driver .so files often depend upon the bus drivers for their connect bus,
 # e.g. ixgbe depends on librte_bus_pci. This means that the bus drivers need
 # to be in the library path, so symlink the drivers from the main lib directory.
-meson.add_install_script('../buildtools/symlink-drivers-solibs.sh',
-		get_option('libdir'),
-		pmd_subdir_opt)
+if not is_windows
+	meson.add_install_script('../buildtools/symlink-drivers-solibs.sh',
+			get_option('libdir'),
+			pmd_subdir_opt)
+endif
 
 # set the machine type and cflags for it
 if meson.is_cross_build()
@@ -107,6 +106,7 @@ dpdk_conf.set_quoted('RTE_TOOLCHAIN', toolchain)
 dpdk_conf.set('RTE_TOOLCHAIN_' + toolchain.to_upper(), 1)
 
 dpdk_conf.set('RTE_ARCH_64', cc.sizeof('void *') == 8)
+dpdk_conf.set('RTE_ARCH_32', cc.sizeof('void *') == 4)
 
 if not is_windows
 	add_project_link_arguments('-Wl,--no-as-needed', language: 'c')
@@ -150,6 +150,15 @@ if numa_dep.found() and cc.has_header('numaif.h')
 	dpdk_extra_ldflags += '-lnuma'
 endif
 
+has_libfdt = 0
+fdt_dep = cc.find_library('libfdt', required: false)
+if fdt_dep.found() and cc.has_header('fdt.h')
+	dpdk_conf.set10('RTE_HAS_LIBFDT', true)
+	has_libfdt = 1
+	add_project_link_arguments('-lfdt', language: 'c')
+	dpdk_extra_ldflags += '-lfdt'
+endif
+
 # check for libbsd
 libbsd = dependency('libbsd', required: false)
 if libbsd.found()
@@ -157,11 +166,9 @@ if libbsd.found()
 endif
 
 # check for pcap
-pcap_dep = dependency('pcap', required: false)
-if pcap_dep.found()
-	# pcap got a pkg-config file only in 1.9.0 and before that meson uses
-	# an internal pcap-config finder, which is not compatible with
-	# cross-compilation, so try to fallback to find_library
+pcap_dep = dependency('libpcap', required: false, method: 'pkg-config')
+if not pcap_dep.found()
+	# pcap got a pkg-config file only in 1.9.0
 	pcap_dep = cc.find_library('pcap', required: false)
 endif
 if pcap_dep.found() and cc.has_header('pcap.h', dependencies: pcap_dep)
@@ -187,6 +194,7 @@ warning_flags = [
 	# additional warnings in alphabetical order
 	'-Wcast-qual',
 	'-Wdeprecated',
+	'-Wformat',
 	'-Wformat-nonliteral',
 	'-Wformat-security',
 	'-Wmissing-declarations',
@@ -213,7 +221,7 @@ if not dpdk_conf.get('RTE_ARCH_64')
 	warning_flags += '-Wno-pointer-to-int-cast'
 endif
 if cc.get_id() == 'intel'
-	warning_ids = [188, 2203, 2279, 2557, 3179, 3656]
+	warning_ids = [181, 188, 2203, 2279, 2557, 3179, 3656]
 	foreach i:warning_ids
 		warning_flags += '-diag-disable=@0@'.format(i)
 	endforeach
@@ -248,7 +256,8 @@ dpdk_conf.set('RTE_COMPILE_TIME_CPUFLAGS', ','.join(compile_time_cpuflags))
 # set the install path for the drivers
 dpdk_conf.set_quoted('RTE_EAL_PMD_PATH', eal_pmd_path)
 
-install_headers('rte_config.h', subdir: get_option('include_subdir_arch'))
+install_headers(['rte_config.h', 'rte_compatibility_defines.h'],
+		subdir: get_option('include_subdir_arch'))
 
 # enable VFIO only if it is linux OS
 dpdk_conf.set('RTE_EAL_VFIO', is_linux)
@@ -269,6 +278,8 @@ if is_windows
 	if cc.get_id() == 'gcc'
 		add_project_arguments('-D__USE_MINGW_ANSI_STDIO', language: 'c')
 	endif
+
+	add_project_link_arguments('-lws2_32', language: 'c')
 
 	# Contrary to docs, VirtualAlloc2() is exported by mincore.lib
 	# in Windows SDK, while MinGW exports it by advapi32.a.

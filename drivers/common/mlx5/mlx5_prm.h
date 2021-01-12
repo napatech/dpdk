@@ -120,7 +120,7 @@
 				  MLX5_WQE_DSEG_SIZE + \
 				  MLX5_ESEG_MIN_INLINE_SIZE)
 
-/* Missed in mlv5dv.h, should define here. */
+/* Missed in mlx5dv.h, should define here. */
 #ifndef HAVE_MLX5_OPCODE_ENHANCED_MPSW
 #define MLX5_OPCODE_ENHANCED_MPSW 0x29u
 #endif
@@ -131,6 +131,10 @@
 
 #ifndef HAVE_MLX5_OPCODE_WAIT
 #define MLX5_OPCODE_WAIT 0x0fu
+#endif
+
+#ifndef HAVE_MLX5_OPCODE_ACCESS_ASO
+#define MLX5_OPCODE_ACCESS_ASO 0x2du
 #endif
 
 /* CQE value to inform that VLAN is stripped. */
@@ -239,6 +243,9 @@
 /* Default mark mask for metadata legacy mode. */
 #define MLX5_FLOW_MARK_MASK 0xffffff
 
+/* Byte length mask when mark is enable in miniCQE */
+#define MLX5_LEN_WITH_MARK_MASK 0xffffff00
+
 /* Maximum number of DS in WQE. Limited by 6-bit field. */
 #define MLX5_DSEG_MAX 63
 
@@ -285,6 +292,15 @@ struct mlx5_wqe_cseg {
 	uint32_t flags;
 	uint32_t misc;
 } __rte_packed __rte_aligned(MLX5_WSEG_SIZE);
+
+/*
+ * WQE CSEG opcode field size is 32 bits, divided:
+ * Bits 31:24 OPC_MOD
+ * Bits 23:8 wqe_index
+ * Bits 7:0 OPCODE
+ */
+#define WQE_CSEG_OPC_MOD_OFFSET		24
+#define WQE_CSEG_WQE_INDEX_OFFSET	 8
 
 /* Header of data segment. Minimal size Data Segment */
 struct mlx5_wqe_dseg {
@@ -539,7 +555,7 @@ enum mlx5_modification_field {
 #define MLX5_MREG_C_NUM (MLX5_MODI_META_REG_C_7 - MLX5_MODI_META_REG_C_0 + 1)
 
 enum modify_reg {
-	REG_NONE = 0,
+	REG_NON = 0,
 	REG_A,
 	REG_B,
 	REG_C_0,
@@ -608,7 +624,7 @@ typedef uint8_t u8;
 #define MLX5_SET(typ, p, fld, v) \
 	do { \
 		u32 _v = v; \
-		*((__be32 *)(p) + __mlx5_dw_off(typ, fld)) = \
+		*((rte_be32_t *)(p) + __mlx5_dw_off(typ, fld)) = \
 		rte_cpu_to_be_32((rte_be_to_cpu_32(*((u32 *)(p) + \
 				  __mlx5_dw_off(typ, fld))) & \
 				  (~__mlx5_dw_mask(typ, fld))) | \
@@ -619,15 +635,15 @@ typedef uint8_t u8;
 #define MLX5_SET64(typ, p, fld, v) \
 	do { \
 		MLX5_ASSERT(__mlx5_bit_sz(typ, fld) == 64); \
-		*((__be64 *)(p) + __mlx5_64_off(typ, fld)) = \
+		*((rte_be64_t *)(p) + __mlx5_64_off(typ, fld)) = \
 			rte_cpu_to_be_64(v); \
 	} while (0)
 
 #define MLX5_SET16(typ, p, fld, v) \
 	do { \
 		u16 _v = v; \
-		*((__be16 *)(p) + __mlx5_16_off(typ, fld)) = \
-		rte_cpu_to_be_16((rte_be_to_cpu_16(*((__be16 *)(p) + \
+		*((rte_be16_t *)(p) + __mlx5_16_off(typ, fld)) = \
+		rte_cpu_to_be_16((rte_be_to_cpu_16(*((rte_be16_t *)(p) + \
 				  __mlx5_16_off(typ, fld))) & \
 				  (~__mlx5_16_mask(typ, fld))) | \
 				 (((_v) & __mlx5_mask16(typ, fld)) << \
@@ -639,14 +655,14 @@ typedef uint8_t u8;
 	__mlx5_dw_off(typ, fld))) >> __mlx5_dw_bit_off(typ, fld)) & \
 	__mlx5_mask(typ, fld))
 #define MLX5_GET(typ, p, fld) \
-	((rte_be_to_cpu_32(*((__be32 *)(p) +\
+	((rte_be_to_cpu_32(*((rte_be32_t *)(p) +\
 	__mlx5_dw_off(typ, fld))) >> __mlx5_dw_bit_off(typ, fld)) & \
 	__mlx5_mask(typ, fld))
 #define MLX5_GET16(typ, p, fld) \
-	((rte_be_to_cpu_16(*((__be16 *)(p) + \
+	((rte_be_to_cpu_16(*((rte_be16_t *)(p) + \
 	  __mlx5_16_off(typ, fld))) >> __mlx5_16_bit_off(typ, fld)) & \
 	 __mlx5_mask16(typ, fld))
-#define MLX5_GET64(typ, p, fld) rte_be_to_cpu_64(*((__be64 *)(p) + \
+#define MLX5_GET64(typ, p, fld) rte_be_to_cpu_64(*((rte_be64_t *)(p) + \
 						   __mlx5_64_off(typ, fld)))
 #define MLX5_FLD_SZ_BYTES(typ, fld) (__mlx5_bit_sz(typ, fld) / 8)
 
@@ -830,6 +846,7 @@ enum {
 	MLX5_CMD_OP_ACCESS_REGISTER = 0x805,
 	MLX5_CMD_OP_ALLOC_TRANSPORT_DOMAIN = 0x816,
 	MLX5_CMD_OP_CREATE_TIR = 0x900,
+	MLX5_CMD_OP_MODIFY_TIR = 0x901,
 	MLX5_CMD_OP_CREATE_SQ = 0X904,
 	MLX5_CMD_OP_MODIFY_SQ = 0X905,
 	MLX5_CMD_OP_CREATE_RQ = 0x908,
@@ -1036,12 +1053,18 @@ enum {
 	MLX5_GET_HCA_CAP_OP_MOD_GENERAL_DEVICE = 0x0 << 1,
 	MLX5_GET_HCA_CAP_OP_MOD_ETHERNET_OFFLOAD_CAPS = 0x1 << 1,
 	MLX5_GET_HCA_CAP_OP_MOD_QOS_CAP = 0xc << 1,
+	MLX5_GET_HCA_CAP_OP_MOD_NIC_FLOW_TABLE = 0x7 << 1,
 	MLX5_GET_HCA_CAP_OP_MOD_VDPA_EMULATION = 0x13 << 1,
 };
 
-#define MLX5_GENERAL_OBJ_TYPES_CAP_VIRTQ_NET_Q			(1ULL << 0xd)
-#define MLX5_GENERAL_OBJ_TYPES_CAP_VIRTIO_Q_COUNTERS		(1ULL << 0x1c)
-#define MLX5_GENERAL_OBJ_TYPES_CAP_PARSE_GRAPH_FLEX_NODE	(1ULL << 0x22)
+#define MLX5_GENERAL_OBJ_TYPES_CAP_VIRTQ_NET_Q \
+			(1ULL << MLX5_GENERAL_OBJ_TYPE_VIRTQ)
+#define MLX5_GENERAL_OBJ_TYPES_CAP_VIRTIO_Q_COUNTERS \
+			(1ULL << MLX5_GENERAL_OBJ_TYPE_VIRTIO_Q_COUNTERS)
+#define MLX5_GENERAL_OBJ_TYPES_CAP_PARSE_GRAPH_FLEX_NODE \
+			(1ULL << MLX5_GENERAL_OBJ_TYPE_FLEX_PARSE_GRAPH)
+#define MLX5_GENERAL_OBJ_TYPES_CAP_FLOW_HIT_ASO \
+			(1ULL << MLX5_GENERAL_OBJ_TYPE_FLOW_HIT_ASO)
 
 enum {
 	MLX5_HCA_CAP_OPMOD_GET_MAX   = 0,
@@ -1470,13 +1493,73 @@ struct mlx5_ifc_virtio_emulation_cap_bits {
 	u8 reserved_at_1c0[0x620];
 };
 
+struct mlx5_ifc_flow_table_prop_layout_bits {
+	u8 ft_support[0x1];
+	u8 flow_tag[0x1];
+	u8 flow_counter[0x1];
+	u8 flow_modify_en[0x1];
+	u8 modify_root[0x1];
+	u8 identified_miss_table[0x1];
+	u8 flow_table_modify[0x1];
+	u8 reformat[0x1];
+	u8 decap[0x1];
+	u8 reset_root_to_default[0x1];
+	u8 pop_vlan[0x1];
+	u8 push_vlan[0x1];
+	u8 fpga_vendor_acceleration[0x1];
+	u8 pop_vlan_2[0x1];
+	u8 push_vlan_2[0x1];
+	u8 reformat_and_vlan_action[0x1];
+	u8 modify_and_vlan_action[0x1];
+	u8 sw_owner[0x1];
+	u8 reformat_l3_tunnel_to_l2[0x1];
+	u8 reformat_l2_to_l3_tunnel[0x1];
+	u8 reformat_and_modify_action[0x1];
+	u8 reserved_at_15[0x9];
+	u8 sw_owner_v2[0x1];
+	u8 reserved_at_1f[0x1];
+	u8 reserved_at_20[0x2];
+	u8 log_max_ft_size[0x6];
+	u8 log_max_modify_header_context[0x8];
+	u8 max_modify_header_actions[0x8];
+	u8 max_ft_level[0x8];
+	u8 reserved_at_40[0x8];
+	u8 log_max_ft_sampler_num[8];
+	u8 metadata_reg_b_width[0x8];
+	u8 metadata_reg_a_width[0x8];
+	u8 reserved_at_60[0x18];
+	u8 log_max_ft_num[0x8];
+	u8 reserved_at_80[0x10];
+	u8 log_max_flow_counter[0x8];
+	u8 log_max_destination[0x8];
+	u8 reserved_at_a0[0x18];
+	u8 log_max_flow[0x8];
+	u8 reserved_at_c0[0x140];
+};
+
+struct mlx5_ifc_flow_table_nic_cap_bits {
+	u8	   reserved_at_0[0x200];
+	struct mlx5_ifc_flow_table_prop_layout_bits flow_table_properties;
+};
+
 union mlx5_ifc_hca_cap_union_bits {
 	struct mlx5_ifc_cmd_hca_cap_bits cmd_hca_cap;
 	struct mlx5_ifc_per_protocol_networking_offload_caps_bits
 	       per_protocol_networking_offload_caps;
 	struct mlx5_ifc_qos_cap_bits qos_cap;
 	struct mlx5_ifc_virtio_emulation_cap_bits vdpa_caps;
+	struct mlx5_ifc_flow_table_nic_cap_bits flow_table_nic_cap;
 	u8 reserved_at_0[0x8000];
+};
+
+struct mlx5_ifc_set_action_in_bits {
+	u8 action_type[0x4];
+	u8 field[0xc];
+	u8 reserved_at_10[0x3];
+	u8 offset[0x5];
+	u8 reserved_at_18[0x3];
+	u8 length[0x5];
+	u8 data[0x20];
 };
 
 struct mlx5_ifc_query_hca_cap_out_bits {
@@ -1859,6 +1942,34 @@ struct mlx5_ifc_create_tir_in_bits {
 };
 
 enum {
+	MLX5_MODIFY_TIR_IN_MODIFY_BITMASK_LRO = 1ULL << 0,
+	MLX5_MODIFY_TIR_IN_MODIFY_BITMASK_INDIRECT_TABLE = 1ULL << 1,
+	MLX5_MODIFY_TIR_IN_MODIFY_BITMASK_HASH = 1ULL << 2,
+	/* bit 3 - tunneled_offload_en modify not supported. */
+	MLX5_MODIFY_TIR_IN_MODIFY_BITMASK_SELF_LB_EN = 1ULL << 4,
+};
+
+struct mlx5_ifc_modify_tir_out_bits {
+	u8 status[0x8];
+	u8 reserved_at_8[0x18];
+	u8 syndrome[0x20];
+	u8 reserved_at_40[0x40];
+};
+
+struct mlx5_ifc_modify_tir_in_bits {
+	u8 opcode[0x10];
+	u8 uid[0x10];
+	u8 reserved_at_20[0x10];
+	u8 op_mod[0x10];
+	u8 reserved_at_40[0x8];
+	u8 tirn[0x18];
+	u8 reserved_at_60[0x20];
+	u8 modify_bitmask[0x40];
+	u8 reserved_at_c0[0x40];
+	struct mlx5_ifc_tirc_bits ctx;
+};
+
+enum {
 	MLX5_INLINE_Q_TYPE_RQ = 0x0,
 	MLX5_INLINE_Q_TYPE_VIRTQ = 0x1,
 };
@@ -2062,11 +2173,14 @@ struct mlx5_ifc_cqc_bits {
 	u8 cqe_comp_en[0x1];
 	u8 mini_cqe_res_format[0x2];
 	u8 st[0x4];
-	u8 reserved_at_18[0x8];
+	u8 reserved_at_18[0x1];
+	u8 cqe_comp_layout[0x7];
 	u8 dbr_umem_id[0x20];
 	u8 reserved_at_40[0x14];
 	u8 page_offset[0x6];
-	u8 reserved_at_5a[0x6];
+	u8 reserved_at_5a[0x2];
+	u8 mini_cqe_res_format_ext[0x2];
+	u8 cq_timestamp_format[0x2];
 	u8 reserved_at_60[0x3];
 	u8 log_cq_size[0x5];
 	u8 uar_page[0x18];
@@ -2121,6 +2235,7 @@ enum {
 	MLX5_GENERAL_OBJ_TYPE_VIRTQ = 0x000d,
 	MLX5_GENERAL_OBJ_TYPE_VIRTIO_Q_COUNTERS = 0x001c,
 	MLX5_GENERAL_OBJ_TYPE_FLEX_PARSE_GRAPH = 0x0022,
+	MLX5_GENERAL_OBJ_TYPE_FLOW_HIT_ASO = 0x0025,
 };
 
 struct mlx5_ifc_general_obj_in_cmd_hdr_bits {
@@ -2190,7 +2305,8 @@ struct mlx5_ifc_virtio_q_bits {
 	u8 used_addr[0x40];
 	u8 available_addr[0x40];
 	u8 virtio_q_mkey[0x20];
-	u8 reserved_at_160[0x20];
+	u8 reserved_at_160[0x18];
+	u8 error_type[0x8];
 	u8 umem_1_id[0x20];
 	u8 umem_1_size[0x20];
 	u8 umem_1_offset[0x40];
@@ -2218,7 +2334,7 @@ struct mlx5_ifc_virtio_net_q_bits {
 	u8 vhost_log_page[0x5];
 	u8 reserved_at_90[0xc];
 	u8 state[0x4];
-	u8 error_type[0x8];
+	u8 reserved_at_a0[0x8];
 	u8 tisn_or_qpn[0x18];
 	u8 dirty_bitmap_mkey[0x20];
 	u8 dirty_bitmap_size[0x20];
@@ -2237,6 +2353,90 @@ struct mlx5_ifc_create_virtq_in_bits {
 struct mlx5_ifc_query_virtq_out_bits {
 	struct mlx5_ifc_general_obj_in_cmd_hdr_bits hdr;
 	struct mlx5_ifc_virtio_net_q_bits virtq;
+};
+
+struct mlx5_ifc_flow_hit_aso_bits {
+	u8 modify_field_select[0x40];
+	u8 reserved_at_40[0x48];
+	u8 access_pd[0x18];
+	u8 reserved_at_a0[0x160];
+	u8 flag[0x200];
+};
+
+struct mlx5_ifc_create_flow_hit_aso_in_bits {
+	struct mlx5_ifc_general_obj_in_cmd_hdr_bits hdr;
+	struct mlx5_ifc_flow_hit_aso_bits flow_hit_aso;
+};
+
+enum mlx5_access_aso_opc_mod {
+	ASO_OPC_MOD_IPSEC = 0x0,
+	ASO_OPC_MOD_CONNECTION_TRACKING = 0x1,
+	ASO_OPC_MOD_POLICER = 0x2,
+	ASO_OPC_MOD_RACE_AVOIDANCE = 0x3,
+	ASO_OPC_MOD_FLOW_HIT = 0x4,
+};
+
+#define ASO_CSEG_DATA_MASK_MODE_OFFSET	30
+
+enum mlx5_aso_data_mask_mode {
+	BITWISE_64BIT = 0x0,
+	BYTEWISE_64BYTE = 0x1,
+	CALCULATED_64BYTE = 0x2,
+};
+
+#define ASO_CSEG_COND_0_OPER_OFFSET	20
+#define ASO_CSEG_COND_1_OPER_OFFSET	16
+
+enum mlx5_aso_pre_cond_op {
+	ASO_OP_ALWAYS_FALSE = 0x0,
+	ASO_OP_ALWAYS_TRUE = 0x1,
+	ASO_OP_EQUAL = 0x2,
+	ASO_OP_NOT_EQUAL = 0x3,
+	ASO_OP_GREATER_OR_EQUAL = 0x4,
+	ASO_OP_LESSER_OR_EQUAL = 0x5,
+	ASO_OP_LESSER = 0x6,
+	ASO_OP_GREATER = 0x7,
+	ASO_OP_CYCLIC_GREATER = 0x8,
+	ASO_OP_CYCLIC_LESSER = 0x9,
+};
+
+#define ASO_CSEG_COND_OPER_OFFSET	6
+
+enum mlx5_aso_op {
+	ASO_OPER_LOGICAL_AND = 0x0,
+	ASO_OPER_LOGICAL_OR = 0x1,
+};
+
+/* ASO WQE CTRL segment. */
+struct mlx5_aso_cseg {
+	uint32_t va_h;
+	uint32_t va_l_r;
+	uint32_t lkey;
+	uint32_t operand_masks;
+	uint32_t condition_0_data;
+	uint32_t condition_0_mask;
+	uint32_t condition_1_data;
+	uint32_t condition_1_mask;
+	uint64_t bitwise_data;
+	uint64_t data_mask;
+} __rte_packed;
+
+#define MLX5_ASO_WQE_DSEG_SIZE	0x40
+
+/* ASO WQE Data segment. */
+struct mlx5_aso_dseg {
+	uint8_t data[MLX5_ASO_WQE_DSEG_SIZE];
+} __rte_packed;
+
+/* ASO WQE. */
+struct mlx5_aso_wqe {
+	struct mlx5_wqe_cseg general_cseg;
+	struct mlx5_aso_cseg aso_cseg;
+	struct mlx5_aso_dseg aso_dseg;
+} __rte_packed;
+
+enum {
+	MLX5_EVENT_TYPE_OBJECT_CHANGE = 0x27,
 };
 
 enum {
@@ -2823,7 +3023,14 @@ struct mlx5_mini_cqe8 {
 	union {
 		uint32_t rx_hash_result;
 		struct {
-			uint16_t checksum;
+			union {
+				uint16_t checksum;
+				uint16_t flow_tag_high;
+				struct {
+					uint8_t reserved;
+					uint8_t hdr_type;
+				};
+			};
 			uint16_t stride_idx;
 		};
 		struct {
@@ -2832,7 +3039,19 @@ struct mlx5_mini_cqe8 {
 			uint8_t  reserved;
 		} s_wqe_info;
 	};
-	uint32_t byte_cnt;
+	union {
+		uint32_t byte_cnt_flow;
+		uint32_t byte_cnt;
+	};
+};
+
+/* Mini CQE responder format. */
+enum {
+	MLX5_CQE_RESP_FORMAT_HASH = 0x0,
+	MLX5_CQE_RESP_FORMAT_CSUM = 0x1,
+	MLX5_CQE_RESP_FORMAT_FTAG_STRIDX = 0x2,
+	MLX5_CQE_RESP_FORMAT_CSUM_STRIDX = 0x3,
+	MLX5_CQE_RESP_FORMAT_L34H_STRIDX = 0x4,
 };
 
 /* srTCM PRM flow meter parameters. */

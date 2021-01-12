@@ -77,6 +77,7 @@ struct mlx5dv_devx_async_cmd_hdr;
 #ifndef HAVE_MLX5DV_DR
 enum  mlx5dv_dr_domain_type { unused, };
 struct mlx5dv_dr_domain;
+struct mlx5dv_dr_action;
 #endif
 
 #ifndef HAVE_MLX5DV_DR_DEVX_PORT
@@ -85,6 +86,34 @@ struct mlx5dv_devx_port;
 
 #ifndef HAVE_MLX5_DR_CREATE_ACTION_FLOW_METER
 struct mlx5dv_dr_flow_meter_attr;
+#endif
+
+#ifndef HAVE_MLX5_DR_CREATE_ACTION_FLOW_SAMPLE
+struct mlx5dv_dr_flow_sampler_attr {
+	uint32_t sample_ratio;
+	void *default_next_table;
+	size_t num_sample_actions;
+	struct mlx5dv_dr_action **sample_actions;
+	uint64_t action;
+};
+#endif
+
+#ifndef HAVE_MLX5_DR_CREATE_ACTION_DEST_ARRAY
+enum mlx5dv_dr_action_dest_type {
+	MLX5DV_DR_ACTION_DEST,
+	MLX5DV_DR_ACTION_DEST_REFORMAT,
+};
+struct mlx5dv_dr_action_dest_reformat {
+	struct mlx5dv_dr_action *reformat;
+	struct mlx5dv_dr_action *dest;
+};
+struct mlx5dv_dr_action_dest_attr {
+	enum mlx5dv_dr_action_dest_type type;
+	union {
+		struct mlx5dv_dr_action *dest;
+		struct mlx5dv_dr_action_dest_reformat *dest_reformat;
+	};
+};
 #endif
 
 #ifndef HAVE_IBV_DEVX_EVENT
@@ -102,7 +131,6 @@ struct mlx5dv_var { uint32_t page_id; uint32_t length; off_t mmap_off;
 #define IBV_ACCESS_RELAXED_ORDERING 0
 #endif
 
-/* LIB_GLUE_VERSION must be updated every time this structure is modified. */
 struct mlx5_glue {
 	const char *version;
 	int (*fork_init)(void);
@@ -195,6 +223,7 @@ struct mlx5_glue {
 	void *(*dr_create_domain)(struct ibv_context *ctx,
 				  enum mlx5dv_dr_domain_type domain);
 	int (*dr_destroy_domain)(void *domain);
+	int (*dr_sync_domain)(void *domain, uint32_t flags);
 	struct ibv_cq_ex *(*dv_create_cq)
 		(struct ibv_context *context,
 		 struct ibv_cq_init_attr_ex *cq_attr,
@@ -309,6 +338,15 @@ struct mlx5_glue {
 					 const void *pp_context,
 					 uint32_t flags);
 	void (*dv_free_pp)(struct mlx5dv_pp *pp);
+	void *(*dr_create_flow_action_sampler)
+			(struct mlx5dv_dr_flow_sampler_attr *attr);
+	void *(*dr_create_flow_action_dest_array)
+			(void *domain,
+			 size_t num_dest,
+			 struct mlx5dv_dr_action_dest_attr *dests[]);
+	void *(*dv_create_flow_action_aso)
+			(struct mlx5dv_dr_domain *domain, void *aso_obj,
+			 uint32_t offset, uint32_t flags, uint8_t return_reg_c);
 };
 
 extern const struct mlx5_glue *mlx5_glue;

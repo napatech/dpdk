@@ -151,13 +151,6 @@ rte_mbuf_data_iova(const struct rte_mbuf *mb)
 	return mb->buf_iova + mb->data_off;
 }
 
-__rte_deprecated
-static inline phys_addr_t
-rte_mbuf_data_dma_addr(const struct rte_mbuf *mb)
-{
-	return rte_mbuf_data_iova(mb);
-}
-
 /**
  * Return the default IO address of the beginning of the mbuf data
  *
@@ -174,13 +167,6 @@ static inline rte_iova_t
 rte_mbuf_data_iova_default(const struct rte_mbuf *mb)
 {
 	return mb->buf_iova + RTE_PKTMBUF_HEADROOM;
-}
-
-__rte_deprecated
-static inline phys_addr_t
-rte_mbuf_data_dma_addr_default(const struct rte_mbuf *mb)
-{
-	return rte_mbuf_data_iova_default(mb);
 }
 
 /**
@@ -554,12 +540,29 @@ __rte_experimental
 int rte_mbuf_check(const struct rte_mbuf *m, int is_header,
 		   const char **reason);
 
-#define MBUF_RAW_ALLOC_CHECK(m) do {				\
-	RTE_ASSERT(rte_mbuf_refcnt_read(m) == 1);		\
-	RTE_ASSERT((m)->next == NULL);				\
-	RTE_ASSERT((m)->nb_segs == 1);				\
-	__rte_mbuf_sanity_check(m, 0);				\
-} while (0)
+/**
+ * Sanity checks on a reinitialized mbuf in debug mode.
+ *
+ * Check the consistency of the given reinitialized mbuf.
+ * The function will cause a panic if corruption is detected.
+ *
+ * Check that the mbuf is properly reinitialized (refcnt=1, next=NULL,
+ * nb_segs=1), as done by rte_pktmbuf_prefree_seg().
+ *
+ * @param m
+ *   The mbuf to be checked.
+ */
+static __rte_always_inline void
+__rte_mbuf_raw_sanity_check(__rte_unused const struct rte_mbuf *m)
+{
+	RTE_ASSERT(rte_mbuf_refcnt_read(m) == 1);
+	RTE_ASSERT(m->next == NULL);
+	RTE_ASSERT(m->nb_segs == 1);
+	__rte_mbuf_sanity_check(m, 0);
+}
+
+/** For backwards compatibility. */
+#define MBUF_RAW_ALLOC_CHECK(m) __rte_mbuf_raw_sanity_check(m)
 
 /**
  * Allocate an uninitialized mbuf from mempool *mp*.
@@ -586,7 +589,7 @@ static inline struct rte_mbuf *rte_mbuf_raw_alloc(struct rte_mempool *mp)
 
 	if (rte_mempool_get(mp, (void **)&m) < 0)
 		return NULL;
-	MBUF_RAW_ALLOC_CHECK(m);
+	__rte_mbuf_raw_sanity_check(m);
 	return m;
 }
 
@@ -609,10 +612,7 @@ rte_mbuf_raw_free(struct rte_mbuf *m)
 {
 	RTE_ASSERT(!RTE_MBUF_CLONED(m) &&
 		  (!RTE_MBUF_HAS_EXTBUF(m) || RTE_MBUF_HAS_PINNED_EXTBUF(m)));
-	RTE_ASSERT(rte_mbuf_refcnt_read(m) == 1);
-	RTE_ASSERT(m->next == NULL);
-	RTE_ASSERT(m->nb_segs == 1);
-	__rte_mbuf_sanity_check(m, 0);
+	__rte_mbuf_raw_sanity_check(m);
 	rte_mempool_put(m->pool, m);
 }
 
@@ -858,8 +858,6 @@ static inline void rte_pktmbuf_reset_headroom(struct rte_mbuf *m)
  * @param m
  *   The packet mbuf to be reset.
  */
-#define MBUF_INVALID_PORT UINT16_MAX
-
 static inline void rte_pktmbuf_reset(struct rte_mbuf *m)
 {
 	m->next = NULL;
@@ -868,7 +866,7 @@ static inline void rte_pktmbuf_reset(struct rte_mbuf *m)
 	m->vlan_tci = 0;
 	m->vlan_tci_outer = 0;
 	m->nb_segs = 1;
-	m->port = MBUF_INVALID_PORT;
+	m->port = RTE_MBUF_PORT_INVALID;
 
 	m->ol_flags &= EXT_ATTACHED_MBUF;
 	m->packet_type = 0;
@@ -931,22 +929,22 @@ static inline int rte_pktmbuf_alloc_bulk(struct rte_mempool *pool,
 	switch (count % 4) {
 	case 0:
 		while (idx != count) {
-			MBUF_RAW_ALLOC_CHECK(mbufs[idx]);
+			__rte_mbuf_raw_sanity_check(mbufs[idx]);
 			rte_pktmbuf_reset(mbufs[idx]);
 			idx++;
 			/* fall-through */
 	case 3:
-			MBUF_RAW_ALLOC_CHECK(mbufs[idx]);
+			__rte_mbuf_raw_sanity_check(mbufs[idx]);
 			rte_pktmbuf_reset(mbufs[idx]);
 			idx++;
 			/* fall-through */
 	case 2:
-			MBUF_RAW_ALLOC_CHECK(mbufs[idx]);
+			__rte_mbuf_raw_sanity_check(mbufs[idx]);
 			rte_pktmbuf_reset(mbufs[idx]);
 			idx++;
 			/* fall-through */
 	case 1:
-			MBUF_RAW_ALLOC_CHECK(mbufs[idx]);
+			__rte_mbuf_raw_sanity_check(mbufs[idx]);
 			rte_pktmbuf_reset(mbufs[idx]);
 			idx++;
 			/* fall-through */
@@ -1122,7 +1120,6 @@ __rte_pktmbuf_copy_hdr(struct rte_mbuf *mdst, const struct rte_mbuf *msrc)
 	mdst->tx_offload = msrc->tx_offload;
 	mdst->hash = msrc->hash;
 	mdst->packet_type = msrc->packet_type;
-	mdst->timestamp = msrc->timestamp;
 	rte_mbuf_dynfield_copy(mdst, msrc);
 }
 
@@ -1536,13 +1533,6 @@ static inline struct rte_mbuf *rte_pktmbuf_lastseg(struct rte_mbuf *m)
 		m = m->next;
 	return m;
 }
-
-/* deprecated */
-#define rte_pktmbuf_mtophys_offset(m, o) \
-	rte_pktmbuf_iova_offset(m, o)
-
-/* deprecated */
-#define rte_pktmbuf_mtophys(m) rte_pktmbuf_iova(m)
 
 /**
  * A macro that returns the length of the packet.

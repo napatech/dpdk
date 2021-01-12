@@ -1,5 +1,5 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
-    Copyright 2017 NXP
+    Copyright 2017,2020 NXP
 
 
 
@@ -125,8 +125,9 @@ ESP/AH headers will be removed from the packet and the received packet
 will contains the decrypted packet only. The driver Rx path checks the
 descriptors and based on the crypto status sets additional flags in
 ``rte_mbuf.ol_flags`` field. The driver would also set device-specific
-metadata in ``rte_mbuf.udata64`` field. This will allow the application
-to identify the security processing done on the packet.
+metadata in ``RTE_SECURITY_DYNFIELD_NAME`` field.
+This will allow the application to identify the security processing
+done on the packet.
 
 .. note::
 
@@ -533,8 +534,12 @@ and this allows further acceleration of the offload of Crypto workloads.
 
 The Security framework provides APIs to create and free sessions for crypto/ethernet
 devices, where sessions are mempool objects. It is the application's responsibility
-to create and manage the session mempools. The mempool object size should be able to
-accommodate the driver's private data of security session.
+to create and manage two session mempools - one for session and other for session
+private data. The private session data mempool object size should be able to
+accommodate the driver's private data of security session. The application can get
+the size of session private data using API ``rte_security_session_get_size``.
+And the session mempool object size should be enough to accommodate
+``rte_security_session``.
 
 Once the session mempools have been created, ``rte_security_session_create()``
 is used to allocate and initialize a session for the required crypto/ethernet device.
@@ -564,8 +569,8 @@ security session which processed the packet.
 
 .. note::
 
-    In case of inline processed packets, ``rte_mbuf.udata64`` field would be
-    used by the driver to relay information on the security processing
+    In case of inline processed packets, ``RTE_SECURITY_DYNFIELD_NAME`` field
+    would be used by the driver to relay information on the security processing
     associated with the packet. In ingress, the driver would set this in Rx
     path while in egress, ``rte_security_set_pkt_metadata()`` would perform a
     similar operation. The application is expected not to modify the field
@@ -647,62 +652,9 @@ which will be updated in the future.
 
 IPsec related configuration parameters are defined in ``rte_security_ipsec_xform``
 
-.. code-block:: c
-
-    struct rte_security_ipsec_xform {
-        uint32_t spi;
-        /**< SA security parameter index */
-        uint32_t salt;
-        /**< SA salt */
-        struct rte_security_ipsec_sa_options options;
-        /**< various SA options */
-        enum rte_security_ipsec_sa_direction direction;
-        /**< IPsec SA Direction - Egress/Ingress */
-        enum rte_security_ipsec_sa_protocol proto;
-        /**< IPsec SA Protocol - AH/ESP */
-        enum rte_security_ipsec_sa_mode mode;
-        /**< IPsec SA Mode - transport/tunnel */
-        struct rte_security_ipsec_tunnel_param tunnel;
-        /**< Tunnel parameters, NULL for transport mode */
-    };
-
 PDCP related configuration parameters are defined in ``rte_security_pdcp_xform``
 
-.. code-block:: c
-
-    struct rte_security_pdcp_xform {
-        int8_t bearer;	/**< PDCP bearer ID */
-        /** Enable in order delivery, this field shall be set only if
-         * driver/HW is capable. See RTE_SECURITY_PDCP_ORDERING_CAP.
-         */
-        uint8_t en_ordering;
-        /** Notify driver/HW to detect and remove duplicate packets.
-         * This field should be set only when driver/hw is capable.
-         * See RTE_SECURITY_PDCP_DUP_DETECT_CAP.
-         */
-        uint8_t remove_duplicates;
-        /** PDCP mode of operation: Control or data */
-        enum rte_security_pdcp_domain domain;
-        /** PDCP Frame Direction 0:UL 1:DL */
-        enum rte_security_pdcp_direction pkt_dir;
-        /** Sequence number size, 5/7/12/15/18 */
-        enum rte_security_pdcp_sn_size sn_size;
-        /** Starting Hyper Frame Number to be used together with the SN
-         * from the PDCP frames
-         */
-        uint32_t hfn;
-        /** HFN Threshold for key renegotiation */
-        uint32_t hfn_threshold;
-    };
-
 DOCSIS related configuration parameters are defined in ``rte_security_docsis_xform``
-
-.. code-block:: c
-
-    struct rte_security_docsis_xform {
-        enum rte_security_docsis_direction direction;
-        /**< DOCSIS direction */
-    };
 
 
 Security API

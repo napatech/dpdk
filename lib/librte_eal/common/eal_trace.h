@@ -24,7 +24,6 @@
 
 #define TRACE_PREFIX_LEN 12
 #define TRACE_DIR_STR_LEN (sizeof("YYYY-mm-dd-AM-HH-MM-SS") + TRACE_PREFIX_LEN)
-#define TRACE_CTF_FIELD_SIZE 384
 #define TRACE_POINT_NAME_SIZE 64
 #define TRACE_CTF_MAGIC 0xC1FC1FC1
 #define TRACE_MAX_ARGS	32
@@ -33,7 +32,7 @@ struct trace_point {
 	STAILQ_ENTRY(trace_point) next;
 	rte_trace_point_t *handle;
 	char name[TRACE_POINT_NAME_SIZE];
-	char ctf_field[TRACE_CTF_FIELD_SIZE];
+	char *ctf_field;
 };
 
 enum trace_area_e {
@@ -104,6 +103,7 @@ bool trace_has_duplicate_entry(void);
 void trace_uuid_generate(void);
 int trace_metadata_create(void);
 void trace_metadata_destroy(void);
+char *trace_metadata_fixup_field(const char *field);
 int trace_mkdir(void);
 int trace_epoch_time_save(void);
 void trace_mem_free(void);

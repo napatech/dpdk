@@ -60,12 +60,6 @@ fs_sub_device_alloc(struct rte_eth_dev *dev,
 	return 0;
 }
 
-static void
-fs_sub_device_free(struct rte_eth_dev *dev)
-{
-	rte_free(PRIV(dev)->subs);
-}
-
 static void fs_hotplug_alarm(void *arg);
 
 int
@@ -235,7 +229,7 @@ fs_eth_dev_create(struct rte_vdev_device *vdev)
 	if (failsafe_mac_from_arg) {
 		/*
 		 * If MAC address was provided as a parameter,
-		 * apply to all probed slaves.
+		 * apply to all probed subdevices.
 		 */
 		FOREACH_SUBDEV_STATE(sdev, i, dev, DEV_PROBED) {
 			ret = rte_eth_dev_default_mac_addr_set(PORT_ID(sdev),
@@ -260,8 +254,8 @@ fs_eth_dev_create(struct rte_vdev_device *vdev)
 		 * If no device has been probed and no ether_addr
 		 * has been provided on the command line, use a random
 		 * valid one.
-		 * It will be applied during future slave state syncs to
-		 * probed slaves.
+		 * It will be applied during future state syncs to
+		 * probed subdevices.
 		 */
 		if (i == priv->subs_tail)
 			rte_eth_random_addr(&mac->addr_bytes[0]);
@@ -270,7 +264,8 @@ fs_eth_dev_create(struct rte_vdev_device *vdev)
 		mac->addr_bytes[0], mac->addr_bytes[1],
 		mac->addr_bytes[2], mac->addr_bytes[3],
 		mac->addr_bytes[4], mac->addr_bytes[5]);
-	dev->data->dev_flags |= RTE_ETH_DEV_INTR_LSC;
+	dev->data->dev_flags |= RTE_ETH_DEV_INTR_LSC |
+				RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 	PRIV(dev)->intr_handle = (struct rte_intr_handle){
 		.fd = -1,
 		.type = RTE_INTR_HANDLE_EXT,
@@ -285,7 +280,7 @@ unregister_new_callback:
 free_args:
 	failsafe_args_free(dev);
 free_subs:
-	fs_sub_device_free(dev);
+	rte_free(PRIV(dev)->subs);
 free_dev:
 	/* mac_addrs must not be freed alone because part of dev_private */
 	dev->data->mac_addrs = NULL;
@@ -301,20 +296,8 @@ fs_rte_eth_free(const char *name)
 
 	dev = rte_eth_dev_allocated(name);
 	if (dev == NULL)
-		return -ENODEV;
-	rte_eth_dev_callback_unregister(RTE_ETH_ALL, RTE_ETH_EVENT_NEW,
-					failsafe_eth_new_event_callback, dev);
-	ret = failsafe_eal_uninit(dev);
-	if (ret)
-		ERROR("Error while uninitializing sub-EAL");
-	failsafe_args_free(dev);
-	fs_sub_device_free(dev);
-	ret = pthread_mutex_destroy(&PRIV(dev)->hotplug_mutex);
-	if (ret)
-		ERROR("Error while destroying hotplug mutex");
-	rte_free(PRIV(dev)->mcast_addrs);
-	/* mac_addrs must not be freed alone because part of dev_private */
-	dev->data->mac_addrs = NULL;
+		return 0; /* port already released */
+	ret = failsafe_eth_dev_close(dev);
 	rte_eth_dev_release_port(dev);
 	return ret;
 }

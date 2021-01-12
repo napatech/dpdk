@@ -239,7 +239,9 @@ sym_session_configure(int driver_id, struct rte_crypto_sym_xform *xform,
 		      struct rte_cryptodev_sym_session *sess,
 		      struct rte_mempool *pool)
 {
+	struct rte_crypto_sym_xform *temp_xform = xform;
 	struct cpt_sess_misc *misc;
+	vq_cmd_word3_t vq_cmd_w3;
 	void *priv;
 	int ret;
 
@@ -253,7 +255,7 @@ sym_session_configure(int driver_id, struct rte_crypto_sym_xform *xform,
 	}
 
 	memset(priv, 0, sizeof(struct cpt_sess_misc) +
-			offsetof(struct cpt_ctx, fctx));
+			offsetof(struct cpt_ctx, mc_ctx));
 
 	misc = priv;
 
@@ -279,10 +281,24 @@ sym_session_configure(int driver_id, struct rte_crypto_sym_xform *xform,
 			goto priv_put;
 	}
 
+	if ((GET_SESS_FC_TYPE(misc) == HASH_HMAC) &&
+			cpt_mac_len_verify(&temp_xform->auth)) {
+		CPT_LOG_ERR("MAC length is not supported");
+		ret = -ENOTSUP;
+		goto priv_put;
+	}
+
 	set_sym_session_private_data(sess, driver_id, priv);
 
 	misc->ctx_dma_addr = rte_mempool_virt2iova(misc) +
 			     sizeof(struct cpt_sess_misc);
+
+	vq_cmd_w3.u64 = 0;
+	vq_cmd_w3.s.grp = 0;
+	vq_cmd_w3.s.cptr = misc->ctx_dma_addr + offsetof(struct cpt_ctx,
+							 mc_ctx);
+
+	misc->cpt_inst_w7 = vq_cmd_w3.u64;
 
 	return 0;
 
@@ -364,6 +380,8 @@ otx_cpt_asym_session_cfg(struct rte_cryptodev *dev,
 		return ret;
 	}
 
+	priv->cpt_inst_w7 = 0;
+
 	set_asym_session_private_data(sess, dev->driver_id, priv);
 	return 0;
 }
@@ -393,14 +411,14 @@ otx_cpt_asym_session_clear(struct rte_cryptodev *dev,
 static __rte_always_inline int32_t __rte_hot
 otx_cpt_request_enqueue(struct cpt_instance *instance,
 			struct pending_queue *pqueue,
-			void *req)
+			void *req, uint64_t cpt_inst_w7)
 {
 	struct cpt_request_info *user_req = (struct cpt_request_info *)req;
 
 	if (unlikely(pqueue->pending_count >= DEFAULT_CMD_QLEN))
 		return -EAGAIN;
 
-	fill_cpt_inst(instance, req);
+	fill_cpt_inst(instance, req, cpt_inst_w7);
 
 	CPT_LOG_DP_DEBUG("req: %p op: %p ", req, user_req->op);
 
@@ -412,7 +430,7 @@ otx_cpt_request_enqueue(struct cpt_instance *instance,
 	/* Default mode of software queue */
 	mark_cpt_inst(instance);
 
-	pqueue->rid_queue[pqueue->enq_tail].rid = (uintptr_t)user_req;
+	pqueue->req_queue[pqueue->enq_tail] = (uintptr_t)user_req;
 
 	/* We will use soft queue length here to limit requests */
 	MOD_INC(pqueue->enq_tail, DEFAULT_CMD_QLEN);
@@ -488,7 +506,8 @@ otx_cpt_enq_single_asym(struct cpt_instance *instance,
 		goto req_fail;
 	}
 
-	ret = otx_cpt_request_enqueue(instance, pqueue, params.req);
+	ret = otx_cpt_request_enqueue(instance, pqueue, params.req,
+				      sess->cpt_inst_w7);
 
 	if (unlikely(ret)) {
 		CPT_LOG_DP_ERR("Could not enqueue crypto req");
@@ -510,7 +529,8 @@ otx_cpt_enq_single_sym(struct cpt_instance *instance,
 {
 	struct cpt_sess_misc *sess;
 	struct rte_crypto_sym_op *sym_op = op->sym;
-	void *prep_req, *mdata = NULL;
+	struct cpt_request_info *prep_req;
+	void *mdata = NULL;
 	int ret = 0;
 	uint64_t cpt_op;
 
@@ -522,10 +542,10 @@ otx_cpt_enq_single_sym(struct cpt_instance *instance,
 
 	if (likely(cpt_op & CPT_OP_CIPHER_MASK))
 		ret = fill_fc_params(op, sess, &instance->meta_info, &mdata,
-				     &prep_req);
+				     (void **)&prep_req);
 	else
 		ret = fill_digest_params(op, sess, &instance->meta_info,
-					 &mdata, &prep_req);
+					 &mdata, (void **)&prep_req);
 
 	if (unlikely(ret)) {
 		CPT_LOG_DP_ERR("prep cryto req : op %p, cpt_op 0x%x "
@@ -534,7 +554,8 @@ otx_cpt_enq_single_sym(struct cpt_instance *instance,
 	}
 
 	/* Enqueue prepared instruction to h/w */
-	ret = otx_cpt_request_enqueue(instance, pqueue, prep_req);
+	ret = otx_cpt_request_enqueue(instance, pqueue, prep_req,
+				      sess->cpt_inst_w7);
 
 	if (unlikely(ret)) {
 		/* Buffer allocated for request preparation need to be freed */
@@ -717,7 +738,8 @@ otx_cpt_asym_dequeue_ecdsa_op(struct rte_crypto_ecdsa_op_param *ecdsa,
 
 	/* Separate out sign r and s components */
 	memcpy(ecdsa->r.data, req->rptr, prime_len);
-	memcpy(ecdsa->s.data, req->rptr + ROUNDUP8(prime_len), prime_len);
+	memcpy(ecdsa->s.data, req->rptr + RTE_ALIGN_CEIL(prime_len, 8),
+	       prime_len);
 	ecdsa->r.length = prime_len;
 	ecdsa->s.length = prime_len;
 }
@@ -730,7 +752,8 @@ otx_cpt_asym_dequeue_ecpm_op(struct rte_crypto_ecpm_op_param *ecpm,
 	int prime_len = ec_grp[ec->curveid].prime.length;
 
 	memcpy(ecpm->r.x.data, req->rptr, prime_len);
-	memcpy(ecpm->r.y.data, req->rptr + ROUNDUP8(prime_len), prime_len);
+	memcpy(ecpm->r.y.data, req->rptr + RTE_ALIGN_CEIL(prime_len, 8),
+	       prime_len);
 	ecpm->r.x.length = prime_len;
 	ecpm->r.y.length = prime_len;
 }
@@ -800,7 +823,6 @@ otx_cpt_pkt_dequeue(void *qptr, struct rte_crypto_op **ops, uint16_t nb_ops,
 	struct cpt_instance *instance = (struct cpt_instance *)qptr;
 	struct cpt_request_info *user_req;
 	struct cpt_vf *cptvf = (struct cpt_vf *)instance;
-	struct rid *rid_e;
 	uint8_t cc[nb_ops];
 	int i, count, pcount;
 	uint8_t ret;
@@ -814,11 +836,13 @@ otx_cpt_pkt_dequeue(void *qptr, struct rte_crypto_op **ops, uint16_t nb_ops,
 	count = (nb_ops > pcount) ? pcount : nb_ops;
 
 	for (i = 0; i < count; i++) {
-		rid_e = &pqueue->rid_queue[pqueue->deq_head];
-		user_req = (struct cpt_request_info *)(rid_e->rid);
+		user_req = (struct cpt_request_info *)
+				pqueue->req_queue[pqueue->deq_head];
 
-		if (likely((i+1) < count))
-			rte_prefetch_non_temporal((void *)rid_e[1].rid);
+		if (likely((i+1) < count)) {
+			rte_prefetch_non_temporal(
+				(void *)pqueue->req_queue[i+1]);
+		}
 
 		ret = check_nb_command_id(user_req, instance);
 
@@ -977,6 +1001,7 @@ otx_cpt_dev_create(struct rte_cryptodev *c_dev)
 				RTE_CRYPTODEV_FF_HW_ACCELERATED |
 				RTE_CRYPTODEV_FF_SYM_OPERATION_CHAINING |
 				RTE_CRYPTODEV_FF_IN_PLACE_SGL |
+				RTE_CRYPTODEV_FF_OOP_LB_IN_LB_OUT |
 				RTE_CRYPTODEV_FF_OOP_SGL_IN_LB_OUT |
 				RTE_CRYPTODEV_FF_OOP_SGL_IN_SGL_OUT |
 				RTE_CRYPTODEV_FF_SYM_SESSIONLESS;

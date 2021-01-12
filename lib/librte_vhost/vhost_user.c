@@ -99,8 +99,15 @@ close_msg_fds(struct VhostUserMsg *msg)
 {
 	int i;
 
-	for (i = 0; i < msg->fd_num; i++)
-		close(msg->fds[i]);
+	for (i = 0; i < msg->fd_num; i++) {
+		int fd = msg->fds[i];
+
+		if (fd == -1)
+			continue;
+
+		msg->fds[i] = -1;
+		close(fd);
+	}
 }
 
 /*
@@ -134,46 +141,14 @@ get_blk_size(int fd)
 	return ret == -1 ? (uint64_t)-1 : (uint64_t)stat.st_blksize;
 }
 
-/*
- * Reclaim all the outstanding zmbufs for a virtqueue.
- */
-static void
-drain_zmbuf_list(struct vhost_virtqueue *vq)
-{
-	struct zcopy_mbuf *zmbuf, *next;
-
-	for (zmbuf = TAILQ_FIRST(&vq->zmbuf_list);
-	     zmbuf != NULL; zmbuf = next) {
-		next = TAILQ_NEXT(zmbuf, next);
-
-		while (!mbuf_is_consumed(zmbuf->mbuf))
-			usleep(1000);
-
-		TAILQ_REMOVE(&vq->zmbuf_list, zmbuf, next);
-		restore_mbuf(zmbuf->mbuf);
-		rte_pktmbuf_free(zmbuf->mbuf);
-		put_zmbuf(zmbuf);
-		vq->nr_zmbuf -= 1;
-	}
-}
-
 static void
 free_mem_region(struct virtio_net *dev)
 {
 	uint32_t i;
 	struct rte_vhost_mem_region *reg;
-	struct vhost_virtqueue *vq;
 
 	if (!dev || !dev->mem)
 		return;
-
-	if (dev->dequeue_zero_copy) {
-		for (i = 0; i < dev->nr_vring; i++) {
-			vq = dev->virtqueue[i];
-			if (vq)
-				drain_zmbuf_list(vq);
-		}
-	}
 
 	for (i = 0; i < dev->mem->nregions; i++) {
 		reg = &dev->mem->regions[i];
@@ -373,7 +348,9 @@ vhost_user_set_features(struct virtio_net **pdev, struct VhostUserMsg *msg,
 
 	dev->features = features;
 	if (dev->features &
-		((1 << VIRTIO_NET_F_MRG_RXBUF) | (1ULL << VIRTIO_F_VERSION_1))) {
+		((1ULL << VIRTIO_NET_F_MRG_RXBUF) |
+		 (1ULL << VIRTIO_F_VERSION_1) |
+		 (1ULL << VIRTIO_F_RING_PACKED))) {
 		dev->vhost_hlen = sizeof(struct virtio_net_hdr_mrg_rxbuf);
 	} else {
 		dev->vhost_hlen = sizeof(struct virtio_net_hdr);
@@ -454,23 +431,6 @@ vhost_user_set_vring_num(struct virtio_net **pdev,
 		return RTE_VHOST_MSG_RESULT_ERR;
 	}
 
-	if (dev->dequeue_zero_copy) {
-		vq->nr_zmbuf = 0;
-		vq->last_zmbuf_idx = 0;
-		vq->zmbuf_size = vq->size;
-		if (vq->zmbufs)
-			rte_free(vq->zmbufs);
-		vq->zmbufs = rte_zmalloc(NULL, vq->zmbuf_size *
-					 sizeof(struct zcopy_mbuf), 0);
-		if (vq->zmbufs == NULL) {
-			VHOST_LOG_CONFIG(WARNING,
-				"failed to allocate mem for zero copy; "
-				"zero copy is force disabled\n");
-			dev->dequeue_zero_copy = 0;
-		}
-		TAILQ_INIT(&vq->zmbuf_list);
-	}
-
 	if (vq_is_packed(dev)) {
 		if (vq->shadow_used_packed)
 			rte_free(vq->shadow_used_packed);
@@ -524,7 +484,6 @@ numa_realloc(struct virtio_net *dev, int index)
 	int oldnode, newnode;
 	struct virtio_net *old_dev;
 	struct vhost_virtqueue *old_vq, *vq;
-	struct zcopy_mbuf *new_zmbuf;
 	struct vring_used_elem *new_shadow_used_split;
 	struct vring_used_elem_packed *new_shadow_used_packed;
 	struct batch_copy_elem *new_batch_copy_elems;
@@ -555,16 +514,6 @@ numa_realloc(struct virtio_net *dev, int index)
 			return dev;
 
 		memcpy(vq, old_vq, sizeof(*vq));
-		TAILQ_INIT(&vq->zmbuf_list);
-
-		if (dev->dequeue_zero_copy) {
-			new_zmbuf = rte_malloc_socket(NULL, vq->zmbuf_size *
-					sizeof(struct zcopy_mbuf), 0, newnode);
-			if (new_zmbuf) {
-				rte_free(vq->zmbufs);
-				vq->zmbufs = new_zmbuf;
-			}
-		}
 
 		if (vq_is_packed(dev)) {
 			new_shadow_used_packed = rte_malloc_socket(NULL,
@@ -1062,7 +1011,6 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 	uint64_t alignment;
 	uint32_t i;
 	int populate;
-	int fd;
 
 	if (validate_msg_fds(msg, memory->nregions) != 0)
 		return RTE_VHOST_MSG_RESULT_ERR;
@@ -1070,7 +1018,7 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 	if (memory->nregions > VHOST_MEMORY_MAX_NREGIONS) {
 		VHOST_LOG_CONFIG(ERR,
 			"too many memory regions (%u)\n", memory->nregions);
-		return RTE_VHOST_MSG_RESULT_ERR;
+		goto close_msg_fds;
 	}
 
 	if (dev->mem && !vhost_memory_changed(memory, dev->mem)) {
@@ -1112,7 +1060,7 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 				"(%d) failed to allocate memory "
 				"for dev->guest_pages\n",
 				dev->vid);
-			return RTE_VHOST_MSG_RESULT_ERR;
+			goto close_msg_fds;
 		}
 	}
 
@@ -1122,18 +1070,23 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 		VHOST_LOG_CONFIG(ERR,
 			"(%d) failed to allocate memory for dev->mem\n",
 			dev->vid);
-		return RTE_VHOST_MSG_RESULT_ERR;
+		goto free_guest_pages;
 	}
 	dev->mem->nregions = memory->nregions;
 
 	for (i = 0; i < memory->nregions; i++) {
-		fd  = msg->fds[i];
 		reg = &dev->mem->regions[i];
 
 		reg->guest_phys_addr = memory->regions[i].guest_phys_addr;
 		reg->guest_user_addr = memory->regions[i].userspace_addr;
 		reg->size            = memory->regions[i].memory_size;
-		reg->fd              = fd;
+		reg->fd              = msg->fds[i];
+
+		/*
+		 * Assign invalid file descriptor value to avoid double
+		 * closing on error path.
+		 */
+		msg->fds[i] = -1;
 
 		mmap_offset = memory->regions[i].mmap_offset;
 
@@ -1143,7 +1096,7 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 				"mmap_offset (%#"PRIx64") and memory_size "
 				"(%#"PRIx64") overflow\n",
 				mmap_offset, reg->size);
-			goto err_mmap;
+			goto free_mem_table;
 		}
 
 		mmap_size = reg->size + mmap_offset;
@@ -1156,11 +1109,11 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 		 * to avoid failure, make sure in caller to keep length
 		 * aligned.
 		 */
-		alignment = get_blk_size(fd);
+		alignment = get_blk_size(reg->fd);
 		if (alignment == (uint64_t)-1) {
 			VHOST_LOG_CONFIG(ERR,
 				"couldn't get hugepage size through fstat\n");
-			goto err_mmap;
+			goto free_mem_table;
 		}
 		mmap_size = RTE_ALIGN_CEIL(mmap_size, alignment);
 		if (mmap_size == 0) {
@@ -1176,18 +1129,17 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 			VHOST_LOG_CONFIG(ERR, "mmap size (0x%" PRIx64 ") "
 					"or alignment (0x%" PRIx64 ") is invalid\n",
 					reg->size + mmap_offset, alignment);
-			goto err_mmap;
+			goto free_mem_table;
 		}
 
-		populate = (dev->dequeue_zero_copy || dev->async_copy) ?
-			MAP_POPULATE : 0;
+		populate = dev->async_copy ? MAP_POPULATE : 0;
 		mmap_addr = mmap(NULL, mmap_size, PROT_READ | PROT_WRITE,
-				 MAP_SHARED | populate, fd, 0);
+				 MAP_SHARED | populate, reg->fd, 0);
 
 		if (mmap_addr == MAP_FAILED) {
 			VHOST_LOG_CONFIG(ERR,
 				"mmap region %u failed.\n", i);
-			goto err_mmap;
+			goto free_mem_table;
 		}
 
 		reg->mmap_addr = mmap_addr;
@@ -1195,12 +1147,12 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 		reg->host_user_addr = (uint64_t)(uintptr_t)mmap_addr +
 				      mmap_offset;
 
-		if (dev->dequeue_zero_copy || dev->async_copy)
+		if (dev->async_copy)
 			if (add_guest_pages(dev, reg, alignment) < 0) {
 				VHOST_LOG_CONFIG(ERR,
 					"adding guest pages to region %u failed.\n",
 					i);
-				goto err_mmap;
+				goto free_mem_table;
 			}
 
 		VHOST_LOG_CONFIG(INFO,
@@ -1243,17 +1195,17 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 		if (read_vhost_message(main_fd, &ack_msg) <= 0) {
 			VHOST_LOG_CONFIG(ERR,
 				"Failed to read qemu ack on postcopy set-mem-table\n");
-			goto err_mmap;
+			goto free_mem_table;
 		}
 
 		if (validate_msg_fds(&ack_msg, 0) != 0)
-			goto err_mmap;
+			goto free_mem_table;
 
 		if (ack_msg.request.master != VHOST_USER_SET_MEM_TABLE) {
 			VHOST_LOG_CONFIG(ERR,
 				"Bad qemu ack on postcopy set-mem-table (%d)\n",
 				ack_msg.request.master);
-			goto err_mmap;
+			goto free_mem_table;
 		}
 
 		/* Now userfault register and we can use the memory */
@@ -1277,7 +1229,7 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 					"Failed to register ufd for region %d: (ufd = %d) %s\n",
 					i, dev->postcopy_ufd,
 					strerror(errno));
-				goto err_mmap;
+				goto free_mem_table;
 			}
 			VHOST_LOG_CONFIG(INFO,
 				"\t userfaultfd registered for range : "
@@ -1286,13 +1238,16 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 				(uint64_t)reg_struct.range.start +
 				(uint64_t)reg_struct.range.len - 1);
 #else
-			goto err_mmap;
+			goto free_mem_table;
 #endif
 		}
 	}
 
 	for (i = 0; i < dev->nr_vring; i++) {
 		struct vhost_virtqueue *vq = dev->virtqueue[i];
+
+		if (!vq)
+			continue;
 
 		if (vq->desc || vq->avail || vq->used) {
 			/*
@@ -1305,7 +1260,7 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 			dev = translate_ring_addresses(dev, i);
 			if (!dev) {
 				dev = *pdev;
-				goto err_mmap;
+				goto free_mem_table;
 			}
 
 			*pdev = dev;
@@ -1316,10 +1271,15 @@ vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *msg,
 
 	return RTE_VHOST_MSG_RESULT_OK;
 
-err_mmap:
+free_mem_table:
 	free_mem_region(dev);
 	rte_free(dev->mem);
 	dev->mem = NULL;
+free_guest_pages:
+	rte_free(dev->guest_pages);
+	dev->guest_pages = NULL;
+close_msg_fds:
+	close_msg_fds(msg);
 	return RTE_VHOST_MSG_RESULT_ERR;
 }
 
@@ -1343,21 +1303,28 @@ vq_is_ready(struct virtio_net *dev, struct vhost_virtqueue *vq)
 	       vq->enabled;
 }
 
-#define VIRTIO_DEV_NUM_VQS_TO_BE_READY 2u
+#define VIRTIO_BUILTIN_NUM_VQS_TO_BE_READY 2u
 
 static int
 virtio_is_ready(struct virtio_net *dev)
 {
 	struct vhost_virtqueue *vq;
-	uint32_t i;
+	uint32_t i, nr_vring = dev->nr_vring;
 
 	if (dev->flags & VIRTIO_DEV_READY)
 		return 1;
 
-	if (dev->nr_vring < VIRTIO_DEV_NUM_VQS_TO_BE_READY)
+	if (!dev->nr_vring)
 		return 0;
 
-	for (i = 0; i < VIRTIO_DEV_NUM_VQS_TO_BE_READY; i++) {
+	if (dev->flags & VIRTIO_DEV_BUILTIN_VIRTIO_NET) {
+		nr_vring = VIRTIO_BUILTIN_NUM_VQS_TO_BE_READY;
+
+		if (dev->nr_vring < nr_vring)
+			return 0;
+	}
+
+	for (i = 0; i < nr_vring; i++) {
 		vq = dev->virtqueue[i];
 
 		if (!vq_is_ready(dev, vq))
@@ -1608,6 +1575,9 @@ vhost_user_set_inflight_fd(struct virtio_net **pdev, VhostUserMsg *msg,
 
 	for (i = 0; i < num_queues; i++) {
 		vq = dev->virtqueue[i];
+		if (!vq)
+			continue;
+
 		if (vq_is_packed(dev)) {
 			vq->inflight_packed = addr;
 			vq->inflight_packed->desc_num = queue_size;
@@ -1888,8 +1858,12 @@ vhost_user_set_vring_kick(struct virtio_net **pdev, struct VhostUserMsg *msg,
 
 	/* Interpret ring addresses only when ring is started. */
 	dev = translate_ring_addresses(dev, file.index);
-	if (!dev)
+	if (!dev) {
+		if (file.fd != VIRTIO_INVALID_EVENTFD)
+			close(file.fd);
+
 		return RTE_VHOST_MSG_RESULT_ERR;
+	}
 
 	*pdev = dev;
 
@@ -1931,15 +1905,6 @@ vhost_user_set_vring_kick(struct virtio_net **pdev, struct VhostUserMsg *msg,
 	}
 
 	return RTE_VHOST_MSG_RESULT_OK;
-}
-
-static void
-free_zmbufs(struct vhost_virtqueue *vq)
-{
-	drain_zmbuf_list(vq);
-
-	rte_free(vq->zmbufs);
-	vq->zmbufs = NULL;
 }
 
 /*
@@ -1996,8 +1961,6 @@ vhost_user_get_vring_base(struct virtio_net **pdev,
 
 	vq->signalled_used_valid = false;
 
-	if (dev->dequeue_zero_copy)
-		free_zmbufs(vq);
 	if (vq_is_packed(dev)) {
 		rte_free(vq->shadow_used_packed);
 		vq->shadow_used_packed = NULL;
@@ -2006,10 +1969,10 @@ vhost_user_get_vring_base(struct virtio_net **pdev,
 		vq->shadow_used_split = NULL;
 		if (vq->async_pkts_pending)
 			rte_free(vq->async_pkts_pending);
-		if (vq->async_pending_info)
-			rte_free(vq->async_pending_info);
+		if (vq->async_pkts_info)
+			rte_free(vq->async_pkts_info);
 		vq->async_pkts_pending = NULL;
-		vq->async_pending_info = NULL;
+		vq->async_pkts_info = NULL;
 	}
 
 	rte_free(vq->batch_copy_elems);
@@ -2043,17 +2006,13 @@ vhost_user_set_vring_enable(struct virtio_net **pdev,
 		"set queue enable: %d to qp idx: %d\n",
 		enable, index);
 
-	if (!enable && dev->virtqueue[index]->async_registered) {
+	if (enable && dev->virtqueue[index]->async_registered) {
 		if (dev->virtqueue[index]->async_pkts_inflight_n) {
-			VHOST_LOG_CONFIG(ERR, "failed to disable vring. "
+			VHOST_LOG_CONFIG(ERR, "failed to enable vring. "
 			"async inflight packets must be completed first\n");
 			return RTE_VHOST_MSG_RESULT_ERR;
 		}
 	}
-
-	/* On disable, rings have to be stopped being processed. */
-	if (!enable && dev->dequeue_zero_copy)
-		drain_zmbuf_list(dev->virtqueue[index]);
 
 	dev->virtqueue[index]->enabled = enable;
 
@@ -2131,7 +2090,7 @@ vhost_user_set_log_base(struct virtio_net **pdev, struct VhostUserMsg *msg,
 		VHOST_LOG_CONFIG(ERR,
 			"invalid log base msg size: %"PRId32" != %d\n",
 			msg->size, (int)sizeof(VhostUserLog));
-		return RTE_VHOST_MSG_RESULT_ERR;
+		goto close_msg_fds;
 	}
 
 	size = msg->payload.log.mmap_size;
@@ -2142,7 +2101,7 @@ vhost_user_set_log_base(struct virtio_net **pdev, struct VhostUserMsg *msg,
 		VHOST_LOG_CONFIG(ERR,
 			"log offset %#"PRIx64" and log size %#"PRIx64" overflow\n",
 			off, size);
-		return RTE_VHOST_MSG_RESULT_ERR;
+		goto close_msg_fds;
 	}
 
 	VHOST_LOG_CONFIG(INFO,
@@ -2179,6 +2138,10 @@ vhost_user_set_log_base(struct virtio_net **pdev, struct VhostUserMsg *msg,
 	msg->fd_num = 0;
 
 	return RTE_VHOST_MSG_RESULT_REPLY;
+
+close_msg_fds:
+	close_msg_fds(msg);
+	return RTE_VHOST_MSG_RESULT_ERR;
 }
 
 static int vhost_user_set_log_fd(struct virtio_net **pdev __rte_unused,
@@ -2377,6 +2340,9 @@ vhost_user_iotlb_msg(struct virtio_net **pdev, struct VhostUserMsg *msg,
 		for (i = 0; i < dev->nr_vring; i++) {
 			struct vhost_virtqueue *vq = dev->virtqueue[i];
 
+			if (!vq)
+				continue;
+
 			vhost_user_iotlb_cache_insert(vq, imsg->iova, vva,
 					len, imsg->perm);
 
@@ -2387,6 +2353,9 @@ vhost_user_iotlb_msg(struct virtio_net **pdev, struct VhostUserMsg *msg,
 	case VHOST_IOTLB_INVALIDATE:
 		for (i = 0; i < dev->nr_vring; i++) {
 			struct vhost_virtqueue *vq = dev->virtqueue[i];
+
+			if (!vq)
+				continue;
 
 			vhost_user_iotlb_cache_remove(vq, imsg->iova,
 					imsg->size);
@@ -2531,6 +2500,7 @@ vhost_user_set_status(struct virtio_net **pdev, struct VhostUserMsg *msg,
 	}
 
 	VHOST_LOG_CONFIG(INFO, "New device status(0x%08x):\n"
+			"\t-RESET: %u\n"
 			"\t-ACKNOWLEDGE: %u\n"
 			"\t-DRIVER: %u\n"
 			"\t-FEATURES_OK: %u\n"
@@ -2538,6 +2508,7 @@ vhost_user_set_status(struct virtio_net **pdev, struct VhostUserMsg *msg,
 			"\t-DEVICE_NEED_RESET: %u\n"
 			"\t-FAILED: %u\n",
 			dev->status,
+			(dev->status == VIRTIO_DEVICE_STATUS_RESET),
 			!!(dev->status & VIRTIO_DEVICE_STATUS_ACK),
 			!!(dev->status & VIRTIO_DEVICE_STATUS_DRIVER),
 			!!(dev->status & VIRTIO_DEVICE_STATUS_FEATURES_OK),

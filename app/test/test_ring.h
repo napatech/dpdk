@@ -35,11 +35,66 @@ test_ring_create(const char *name, int esize, unsigned int count,
 		int socket_id, unsigned int flags)
 {
 	/* Legacy queue APIs? */
-	if ((esize) == -1)
-		return rte_ring_create((name), (count), (socket_id), (flags));
+	if (esize == -1)
+		return rte_ring_create(name, count, socket_id, flags);
 	else
-		return rte_ring_create_elem((name), (esize), (count),
-						(socket_id), (flags));
+		return rte_ring_create_elem(name, esize, count,
+						socket_id, flags);
+}
+
+static inline void*
+test_ring_inc_ptr(void *obj, int esize, unsigned int n)
+{
+	size_t sz;
+
+	sz = sizeof(void *);
+	/* Legacy queue APIs? */
+	if (esize != -1)
+		sz = esize;
+
+	return (void *)((uint32_t *)obj + (n * sz / sizeof(uint32_t)));
+}
+
+static inline void
+test_ring_mem_copy(void *dst, void * const *src, int esize, unsigned int num)
+{
+	size_t sz;
+
+	sz = num * sizeof(void *);
+	if (esize != -1)
+		sz = esize * num;
+
+	memcpy(dst, src, sz);
+}
+
+/* Copy to the ring memory */
+static inline void
+test_ring_copy_to(struct rte_ring_zc_data *zcd, void * const *src, int esize,
+	unsigned int num)
+{
+	test_ring_mem_copy(zcd->ptr1, src, esize, zcd->n1);
+	if (zcd->n1 != num) {
+		if (esize == -1)
+			src = src + zcd->n1;
+		else
+			src = (void * const *)((const uint32_t *)src +
+					(zcd->n1 * esize / sizeof(uint32_t)));
+		test_ring_mem_copy(zcd->ptr2, src,
+					esize, num - zcd->n1);
+	}
+}
+
+/* Copy from the ring memory */
+static inline void
+test_ring_copy_from(struct rte_ring_zc_data *zcd, void *dst, int esize,
+	unsigned int num)
+{
+	test_ring_mem_copy(dst, zcd->ptr1, esize, zcd->n1);
+
+	if (zcd->n1 != num) {
+		dst = test_ring_inc_ptr(dst, esize, zcd->n1);
+		test_ring_mem_copy(dst, zcd->ptr2, esize, num - zcd->n1);
+	}
 }
 
 static __rte_always_inline unsigned int
@@ -47,14 +102,14 @@ test_ring_enqueue(struct rte_ring *r, void **obj, int esize, unsigned int n,
 			unsigned int api_type)
 {
 	/* Legacy queue APIs? */
-	if ((esize) == -1)
+	if (esize == -1)
 		switch (api_type) {
 		case (TEST_RING_THREAD_DEF | TEST_RING_ELEM_SINGLE):
-			return rte_ring_enqueue(r, obj);
+			return rte_ring_enqueue(r, *obj);
 		case (TEST_RING_THREAD_SPSC | TEST_RING_ELEM_SINGLE):
-			return rte_ring_sp_enqueue(r, obj);
+			return rte_ring_sp_enqueue(r, *obj);
 		case (TEST_RING_THREAD_MPMC | TEST_RING_ELEM_SINGLE):
-			return rte_ring_mp_enqueue(r, obj);
+			return rte_ring_mp_enqueue(r, *obj);
 		case (TEST_RING_THREAD_DEF | TEST_RING_ELEM_BULK):
 			return rte_ring_enqueue_bulk(r, obj, n, NULL);
 		case (TEST_RING_THREAD_SPSC | TEST_RING_ELEM_BULK):
@@ -108,7 +163,7 @@ test_ring_dequeue(struct rte_ring *r, void **obj, int esize, unsigned int n,
 			unsigned int api_type)
 {
 	/* Legacy queue APIs? */
-	if ((esize) == -1)
+	if (esize == -1)
 		switch (api_type) {
 		case (TEST_RING_THREAD_DEF | TEST_RING_ELEM_SINGLE):
 			return rte_ring_dequeue(r, obj);

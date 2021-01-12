@@ -12,6 +12,10 @@
 #include "tf_tcam.h"
 #include "tf_em.h"
 #include "tf_if_tbl.h"
+#include "tfp.h"
+
+#define TF_DEV_P4_PARIF_MAX 16
+#define TF_DEV_P4_PF_MASK 0xfUL
 
 /**
  * Device specific function that retrieves the MAX number of HCAPI
@@ -28,13 +32,32 @@
  *   - (-EINVAL) on failure.
  */
 static int
-tf_dev_p4_get_max_types(struct tf *tfp __rte_unused,
+tf_dev_p4_get_max_types(struct tf *tfp,
 			uint16_t *max_types)
 {
-	if (max_types == NULL)
+	struct tf_session *tfs;
+	struct tf_dev_info *dev;
+	int rc;
+
+	if (max_types == NULL || tfp == NULL)
 		return -EINVAL;
 
-	*max_types = CFA_RESOURCE_TYPE_P4_LAST + 1;
+	/* Retrieve the session information */
+	rc = tf_session_get_session(tfp, &tfs);
+	if (rc)
+		return rc;
+
+	/* Retrieve the device information */
+	rc = tf_session_get_device(tfs, &dev);
+	if (rc)
+		return rc;
+
+	if (dev->type == TF_DEVICE_TYPE_WH)
+		*max_types = CFA_RESOURCE_TYPE_P4_LAST + 1;
+	else if (dev->type == TF_DEVICE_TYPE_SR)
+		*max_types = CFA_RESOURCE_TYPE_P45_LAST + 1;
+	else
+		return -ENODEV;
 
 	return 0;
 }
@@ -78,6 +101,42 @@ tf_dev_p4_get_tcam_slice_info(struct tf *tfp __rte_unused,
 	return 0;
 }
 
+static int
+tf_dev_p4_map_parif(struct tf *tfp __rte_unused,
+		    uint16_t parif_bitmask,
+		    uint16_t pf,
+		    uint8_t *data,
+		    uint8_t *mask,
+		    uint16_t sz_in_bytes)
+{
+	uint32_t parif_pf[2] = { 0 };
+	uint32_t parif_pf_mask[2] = { 0 };
+	uint32_t parif;
+	uint32_t shift;
+
+	if (sz_in_bytes != sizeof(uint64_t))
+		return -ENOTSUP;
+
+	for (parif = 0; parif < TF_DEV_P4_PARIF_MAX; parif++) {
+		if (parif_bitmask & (1UL << parif)) {
+			if (parif < 8) {
+				shift = 4 * parif;
+				parif_pf_mask[0] |= TF_DEV_P4_PF_MASK << shift;
+				parif_pf[0] |= pf << shift;
+			} else {
+				shift = 4 * (parif - 8);
+				parif_pf_mask[1] |= TF_DEV_P4_PF_MASK << shift;
+				parif_pf[1] |= pf << shift;
+			}
+		}
+	}
+	tfp_memcpy(data, parif_pf, sz_in_bytes);
+	tfp_memcpy(mask, parif_pf_mask, sz_in_bytes);
+
+	return 0;
+}
+
+
 /**
  * Truflow P4 device specific functions
  */
@@ -106,6 +165,8 @@ const struct tf_dev_ops tf_dev_ops_p4_init = {
 	.tf_dev_insert_ext_em_entry = NULL,
 	.tf_dev_delete_ext_em_entry = NULL,
 	.tf_dev_alloc_tbl_scope = NULL,
+	.tf_dev_map_tbl_scope = NULL,
+	.tf_dev_map_parif = NULL,
 	.tf_dev_free_tbl_scope = NULL,
 	.tf_dev_set_if_tbl = NULL,
 	.tf_dev_get_if_tbl = NULL,
@@ -141,6 +202,8 @@ const struct tf_dev_ops tf_dev_ops_p4 = {
 	.tf_dev_insert_ext_em_entry = tf_em_insert_ext_entry,
 	.tf_dev_delete_ext_em_entry = tf_em_delete_ext_entry,
 	.tf_dev_alloc_tbl_scope = tf_em_ext_common_alloc,
+	.tf_dev_map_tbl_scope = tf_em_ext_map_tbl_scope,
+	.tf_dev_map_parif = tf_dev_p4_map_parif,
 	.tf_dev_free_tbl_scope = tf_em_ext_common_free,
 	.tf_dev_set_if_tbl = tf_if_tbl_set,
 	.tf_dev_get_if_tbl = tf_if_tbl_get,

@@ -34,6 +34,8 @@ struct hwrm_func_qstats_output;
 	(1 << (HWRM_ASYNC_EVENT_CMPL_EVENT_ID_VF_CFG_CHANGE - 32))
 #define ASYNC_CMPL_EVENT_ID_DBG_NOTIFICATION	\
 	(1 << (HWRM_ASYNC_EVENT_CMPL_EVENT_ID_DEBUG_NOTIFICATION - 32))
+#define	ASYNC_CMPL_EVENT_ID_DEFAULT_VNIC_CHANGE	\
+	(1 << (HWRM_ASYNC_EVENT_CMPL_EVENT_ID_DEFAULT_VNIC_CHANGE - 32))
 
 #define HWRM_QUEUE_SERVICE_PROFILE_LOSSY \
 	HWRM_QUEUE_QPORTCFG_OUTPUT_QUEUE_ID0_SERVICE_PROFILE_LOSSY
@@ -45,6 +47,13 @@ struct hwrm_func_qstats_output;
 	HWRM_FUNC_RESOURCE_QCAPS_OUTPUT_VF_RESERVATION_STRATEGY_MINIMAL_STATIC
 #define HWRM_FUNC_RESOURCE_QCAPS_OUTPUT_VF_RESV_STRATEGY_MAXIMAL \
 	HWRM_FUNC_RESOURCE_QCAPS_OUTPUT_VF_RESERVATION_STRATEGY_MAXIMAL
+
+#define HWRM_PORT_PHY_CFG_IN_EN_FORCE_PAM4_LINK_SPEED \
+	HWRM_PORT_PHY_CFG_INPUT_ENABLES_FORCE_PAM4_LINK_SPEED
+#define HWRM_PORT_PHY_CFG_IN_EN_AUTO_PAM4_LINK_SPD_MASK \
+	HWRM_PORT_PHY_CFG_INPUT_ENABLES_AUTO_PAM4_LINK_SPEED_MASK
+#define HWRM_PORT_PHY_CFG_IN_EN_AUTO_LINK_SPEED_MASK \
+	HWRM_PORT_PHY_CFG_INPUT_ENABLES_AUTO_LINK_SPEED_MASK
 
 #define HWRM_CFA_ADV_FLOW_MGNT_QCAPS_L2_HDR_SRC_FILTER_EN \
 HWRM_CFA_ADV_FLOW_MGNT_QCAPS_OUTPUT_FLAGS_L2_HEADER_SOURCE_FIELDS_SUPPORTED
@@ -98,6 +107,16 @@ enum bnxt_flow_dir {
 	BNXT_DIR_MAX
 };
 
+struct bnxt_pf_resource_info {
+	uint16_t num_rsscos_ctxs;
+	uint16_t num_stat_ctxs;
+	uint16_t num_tx_rings;
+	uint16_t num_rx_rings;
+	uint16_t num_cp_rings;
+	uint16_t num_l2_ctxs;
+	uint32_t num_hw_ring_grps;
+};
+
 #define BNXT_CTX_VAL_INVAL	0xFFFF
 
 int bnxt_hwrm_cfa_l2_clear_rx_mask(struct bnxt *bp,
@@ -118,7 +137,7 @@ int bnxt_hwrm_exec_fwd_resp(struct bnxt *bp, uint16_t target_id,
 int bnxt_hwrm_reject_fwd_resp(struct bnxt *bp, uint16_t target_id,
 			      void *encaped, size_t ec_size);
 
-int bnxt_hwrm_func_buf_rgtr(struct bnxt *bp);
+int bnxt_hwrm_func_buf_rgtr(struct bnxt *bp, int num_vfs);
 int bnxt_hwrm_func_buf_unrgtr(struct bnxt *bp);
 int bnxt_hwrm_func_driver_register(struct bnxt *bp);
 int bnxt_hwrm_func_qcaps(struct bnxt *bp);
@@ -278,6 +297,9 @@ int bnxt_hwrm_port_phy_qcaps(struct bnxt *bp);
 int bnxt_hwrm_oem_cmd(struct bnxt *bp, uint32_t entry_num);
 int bnxt_clear_one_vnic_filter(struct bnxt *bp,
 			       struct bnxt_filter_info *filter);
-int bnxt_hwrm_cfa_vfr_alloc(struct bnxt *bp, uint16_t vf_idx);
-int bnxt_hwrm_cfa_vfr_free(struct bnxt *bp, uint16_t vf_idx);
+void bnxt_hwrm_free_vf_info(struct bnxt *bp);
+int bnxt_hwrm_first_vf_id_query(struct bnxt *bp, uint16_t fid,
+				uint16_t *first_vf_id);
+int bnxt_hwrm_cfa_pair_alloc(struct bnxt *bp, struct bnxt_representor *rep);
+int bnxt_hwrm_cfa_pair_free(struct bnxt *bp, struct bnxt_representor *rep);
 #endif

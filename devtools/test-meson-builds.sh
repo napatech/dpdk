@@ -38,25 +38,54 @@ else
 fi
 
 default_path=$PATH
-default_pkgpath=$PKG_CONFIG_PATH
 default_cppflags=$CPPFLAGS
 default_cflags=$CFLAGS
 default_ldflags=$LDFLAGS
+default_meson_options=$DPDK_MESON_OPTIONS
+
+opt_verbose=
+opt_vverbose=
+if [ "$1" = "-v" ] ; then
+	opt_verbose=y
+elif [ "$1" = "-vv" ] ; then
+	opt_verbose=y
+	opt_vverbose=y
+fi
+# we can't use plain verbose when we don't have pipefail option so up-level
+if [ -z "$PIPEFAIL" -a -n "$opt_verbose" ] ; then
+	echo "# Missing pipefail shell option, changing VERBOSE to VERY_VERBOSE"
+	opt_vverbose=y
+fi
+[ -n "$opt_verbose" ] && exec 8>&1 || exec 8>/dev/null
+verbose=8
+[ -n "$opt_vverbose" ] && exec 9>&1 || exec 9>/dev/null
+veryverbose=9
+
+check_cc_flags () # <flag to check> <flag2> ...
+{
+	echo 'int main(void) { return 0; }' |
+		cc $@ -x c - -o /dev/null 2> /dev/null
+}
 
 load_env () # <target compiler>
 {
 	targetcc=$1
+	# reset variables before target-specific config
 	export PATH=$default_path
-	export PKG_CONFIG_PATH=$default_pkgpath
+	unset PKG_CONFIG_PATH # global default makes no sense
 	export CPPFLAGS=$default_cppflags
 	export CFLAGS=$default_cflags
 	export LDFLAGS=$default_ldflags
-	unset DPDK_MESON_OPTIONS
-	if command -v $targetcc >/dev/null 2>&1 ; then
+	export DPDK_MESON_OPTIONS=$default_meson_options
+	# set target hint for use in the loaded config file
+	if [ -n "$target_override" ] ; then
+		DPDK_TARGET=$target_override
+	elif command -v $targetcc >/dev/null 2>&1 ; then
 		DPDK_TARGET=$($targetcc -v 2>&1 | sed -n 's,^Target: ,,p')
 	else # toolchain not yet in PATH: its name should be enough
 		DPDK_TARGET=$targetcc
 	fi
+	echo "Using DPDK_TARGET $DPDK_TARGET" >&$verbose
 	# config input: $DPDK_TARGET
 	. $srcdir/devtools/load-devel-config
 	# config output: $DPDK_MESON_OPTIONS, $PATH, $PKG_CONFIG_PATH, etc
@@ -90,23 +119,22 @@ config () # <dir> <builddir> <meson options>
 		options="$options -D$option"
 	done
 	options="$options $*"
-	echo "$MESON $options $dir $builddir"
+	echo "$MESON $options $dir $builddir" >&$verbose
 	$MESON $options $dir $builddir
 }
 
 compile () # <builddir>
 {
 	builddir=$1
-	if [ -n "$TEST_MESON_BUILD_VERY_VERBOSE" ] ; then
+	if [ -n "$opt_vverbose" ] ; then
 		# for full output from ninja use "-v"
 		echo "$ninja_cmd -v -C $builddir"
 		$ninja_cmd -v -C $builddir
-	elif [ -n "$TEST_MESON_BUILD_VERBOSE" ] ; then
+	elif [ -n "$opt_verbose" ] ; then
 		# for keeping the history of short cmds, pipe through cat
 		echo "$ninja_cmd -C $builddir | cat"
 		$ninja_cmd -C $builddir | cat
 	else
-		echo "$ninja_cmd -C $builddir"
 		$ninja_cmd -C $builddir
 	fi
 }
@@ -114,13 +142,8 @@ compile () # <builddir>
 install_target () # <builddir> <installdir>
 {
 	rm -rf $2
-	if [ -n "$TEST_MESON_BUILD_VERY_VERBOSE$TEST_MESON_BUILD_VERBOSE" ]; then
-		echo "DESTDIR=$2 $ninja_cmd -C $1 install"
-		DESTDIR=$2 $ninja_cmd -C $1 install
-	else
-		echo "DESTDIR=$2 $ninja_cmd -C $1 install >/dev/null"
-		DESTDIR=$2 $ninja_cmd -C $1 install >/dev/null
-	fi
+	echo "DESTDIR=$2 $ninja_cmd -C $1 install" >&$verbose
+	DESTDIR=$2 $ninja_cmd -C $1 install >&$veryverbose
 }
 
 build () # <directory> <target compiler | cross file> <meson options>
@@ -175,17 +198,6 @@ build () # <directory> <target compiler | cross file> <meson options>
 	fi
 }
 
-if [ "$1" = "-vv" ] ; then
-	TEST_MESON_BUILD_VERY_VERBOSE=1
-elif [ "$1" = "-v" ] ; then
-	TEST_MESON_BUILD_VERBOSE=1
-fi
-# we can't use plain verbose when we don't have pipefail option so up-level
-if [ -z "$PIPEFAIL" -a -n "$TEST_MESON_BUILD_VERBOSE" ] ; then
-	echo "# Missing pipefail shell option, changing VERBOSE to VERY_VERBOSE"
-	TEST_MESON_BUILD_VERY_VERBOSE=1
-fi
-
 # shared and static linked builds with gcc and clang
 for c in gcc clang ; do
 	command -v $c >/dev/null 2>&1 || continue
@@ -200,11 +212,28 @@ done
 # Set the install path for libraries to "lib" explicitly to prevent problems
 # with pkg-config prefixes if installed in "lib/x86_64-linux-gnu" later.
 default_machine='nehalem'
-ok=$(cc -march=$default_machine -E - < /dev/null > /dev/null 2>&1 || echo false)
-if [ "$ok" = "false" ] ; then
+if ! check_cc_flags "-march=$default_machine" ; then
 	default_machine='corei7'
 fi
 build build-x86-default cc -Dlibdir=lib -Dmachine=$default_machine $use_shared
+
+# 32-bit with default compiler
+if check_cc_flags '-m32' ; then
+	if [ -d '/usr/lib/i386-linux-gnu' ] ; then
+		# 32-bit pkgconfig on Debian/Ubuntu
+		export PKG_CONFIG_LIBDIR='/usr/lib/i386-linux-gnu/pkgconfig'
+	elif [ -d '/usr/lib32' ] ; then
+		# 32-bit pkgconfig on Arch
+		export PKG_CONFIG_LIBDIR='/usr/lib32/pkgconfig'
+	else
+		# 32-bit pkgconfig on RHEL/Fedora (lib vs lib64)
+		export PKG_CONFIG_LIBDIR='/usr/lib/pkgconfig'
+	fi
+	target_override='i386-pc-linux-gnu'
+	build build-32b cc -Dc_args='-m32' -Dc_link_args='-m32'
+	target_override=
+	unset PKG_CONFIG_LIBDIR
+fi
 
 # x86 MinGW
 build build-x86-mingw $srcdir/config/x86/cross-mingw -Dexamples=helloworld
@@ -228,22 +257,24 @@ done
 
 # Test installation of the x86-default target, to be used for checking
 # the sample apps build using the pkg-config file for cflags and libs
+load_env cc
 build_path=$(readlink -f $builds_dir/build-x86-default)
 export DESTDIR=$build_path/install
 # No need to reinstall if ABI checks are enabled
 if [ -z "$DPDK_ABI_REF_VERSION" ]; then
 	install_target $build_path $DESTDIR
 fi
-
-load_env cc
 pc_file=$(find $DESTDIR -name libdpdk.pc)
 export PKG_CONFIG_PATH=$(dirname $pc_file):$PKG_CONFIG_PATH
-
+libdir=$(dirname $(find $DESTDIR -name librte_eal.so))
+export LD_LIBRARY_PATH=$libdir:$LD_LIBRARY_PATH
+examples=${DPDK_BUILD_TEST_EXAMPLES:-"cmdline helloworld l2fwd l3fwd skeleton timer"}
 # if pkg-config defines the necessary flags, test building some examples
 if pkg-config --define-prefix libdpdk >/dev/null 2>&1; then
 	export PKGCONF="pkg-config --define-prefix"
-	for example in cmdline helloworld l2fwd l3fwd skeleton timer; do
+	for example in $examples; do
 		echo "## Building $example"
-		$MAKE -C $DESTDIR/usr/local/share/dpdk/examples/$example clean shared static
+		$MAKE -C $DESTDIR/usr/local/share/dpdk/examples/$example \
+			clean shared static >&$veryverbose
 	done
 fi

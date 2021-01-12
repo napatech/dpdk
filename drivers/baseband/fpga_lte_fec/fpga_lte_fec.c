@@ -1251,14 +1251,14 @@ fpga_dma_desc_te_fill(struct rte_bbdev_enc_op *op,
 	desc->offset = desc_offset;
 	/* Set inbound data buffer address */
 	desc->in_addr_hi = (uint32_t)(
-			rte_pktmbuf_mtophys_offset(input, in_offset) >> 32);
+			rte_pktmbuf_iova_offset(input, in_offset) >> 32);
 	desc->in_addr_lw = (uint32_t)(
-			rte_pktmbuf_mtophys_offset(input, in_offset));
+			rte_pktmbuf_iova_offset(input, in_offset));
 
 	desc->out_addr_hi = (uint32_t)(
-			rte_pktmbuf_mtophys_offset(output, out_offset) >> 32);
+			rte_pktmbuf_iova_offset(output, out_offset) >> 32);
 	desc->out_addr_lw = (uint32_t)(
-			rte_pktmbuf_mtophys_offset(output, out_offset));
+			rte_pktmbuf_iova_offset(output, out_offset));
 
 	/* Save software context needed for dequeue */
 	desc->op_addr = op;
@@ -1302,9 +1302,9 @@ fpga_dma_desc_td_fill(struct rte_bbdev_dec_op *op,
 	desc->done = 0;
 	/* Set inbound data buffer address */
 	desc->in_addr_hi = (uint32_t)(
-			rte_pktmbuf_mtophys_offset(input, in_offset) >> 32);
+			rte_pktmbuf_iova_offset(input, in_offset) >> 32);
 	desc->in_addr_lw = (uint32_t)(
-			rte_pktmbuf_mtophys_offset(input, in_offset));
+			rte_pktmbuf_iova_offset(input, in_offset));
 	desc->in_len = in_length;
 	desc->k = k;
 	desc->crc_type = !check_bit(op->turbo_dec.op_flags,
@@ -1316,9 +1316,9 @@ fpga_dma_desc_td_fill(struct rte_bbdev_dec_op *op,
 	desc->max_iter = op->turbo_dec.iter_max * 2;
 	desc->offset = desc_offset;
 	desc->out_addr_hi = (uint32_t)(
-			rte_pktmbuf_mtophys_offset(output, out_offset) >> 32);
+			rte_pktmbuf_iova_offset(output, out_offset) >> 32);
 	desc->out_addr_lw = (uint32_t)(
-			rte_pktmbuf_mtophys_offset(output, out_offset));
+			rte_pktmbuf_iova_offset(output, out_offset));
 
 	/* Save software context needed for dequeue */
 	desc->op_addr = op;
@@ -2328,7 +2328,7 @@ fpga_lte_fec_init(struct rte_bbdev *dev, struct rte_pci_driver *drv)
 
 	rte_bbdev_log_debug(
 			"Init device %s [%s] @ virtaddr %p phyaddr %#"PRIx64,
-			dev->device->driver->name, dev->data->name,
+			drv->driver.name, dev->data->name,
 			(void *)pci_dev->mem_resource[0].addr,
 			pci_dev->mem_resource[0].phys_addr);
 }
@@ -2383,7 +2383,7 @@ fpga_lte_fec_probe(struct rte_pci_driver *pci_drv,
 		((uint16_t)(version_id >> 16)), ((uint16_t)version_id));
 
 #ifdef RTE_LIBRTE_BBDEV_DEBUG
-	if (!strcmp(bbdev->device->driver->name,
+	if (!strcmp(pci_drv->driver.name,
 			RTE_STR(FPGA_LTE_FEC_PF_DRIVER_NAME)))
 		print_static_reg_debug_info(d->mmio_base);
 #endif
@@ -2432,10 +2432,10 @@ fpga_lte_fec_remove(struct rte_pci_device *pci_dev)
 }
 
 static inline void
-set_default_fpga_conf(struct fpga_lte_fec_conf *def_conf)
+set_default_fpga_conf(struct rte_fpga_lte_fec_conf *def_conf)
 {
 	/* clear default configuration before initialization */
-	memset(def_conf, 0, sizeof(struct fpga_lte_fec_conf));
+	memset(def_conf, 0, sizeof(struct rte_fpga_lte_fec_conf));
 	/* Set pf mode to true */
 	def_conf->pf_mode_en = true;
 
@@ -2450,15 +2450,15 @@ set_default_fpga_conf(struct fpga_lte_fec_conf *def_conf)
 
 /* Initial configuration of FPGA LTE FEC device */
 int
-fpga_lte_fec_configure(const char *dev_name,
-		const struct fpga_lte_fec_conf *conf)
+rte_fpga_lte_fec_configure(const char *dev_name,
+		const struct rte_fpga_lte_fec_conf *conf)
 {
 	uint32_t payload_32, address;
 	uint16_t payload_16;
 	uint8_t payload_8;
 	uint16_t q_id, vf_id, total_q_id, total_ul_q_id, total_dl_q_id;
 	struct rte_bbdev *bbdev = rte_bbdev_get_named_dev(dev_name);
-	struct fpga_lte_fec_conf def_conf;
+	struct rte_fpga_lte_fec_conf def_conf;
 
 	if (bbdev == NULL) {
 		rte_bbdev_log(ERR,

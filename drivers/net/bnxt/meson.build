@@ -2,7 +2,7 @@
 # Copyright(c) 2018 Intel Corporation
 # Copyright(c) 2020 Broadcom
 
-install_headers('rte_pmd_bnxt.h')
+headers = files('rte_pmd_bnxt.h')
 
 includes += include_directories('tf_ulp')
 includes += include_directories('tf_core')
@@ -64,6 +64,11 @@ sources = files('bnxt_cpr.c',
 	'tf_ulp/ulp_port_db.c',
 	'tf_ulp/ulp_def_rules.c',
 	'tf_ulp/ulp_fc_mgr.c',
+	'tf_ulp/ulp_tun.c',
+	'tf_ulp/ulp_template_db_wh_plus_act.c',
+	'tf_ulp/ulp_template_db_wh_plus_class.c',
+	'tf_ulp/ulp_template_db_stingray_act.c',
+	'tf_ulp/ulp_template_db_stingray_class.c',
 
 	'rte_pmd_bnxt.c')
 

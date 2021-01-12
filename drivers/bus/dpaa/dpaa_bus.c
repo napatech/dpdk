@@ -32,6 +32,7 @@
 #include <rte_ring.h>
 #include <rte_bus.h>
 #include <rte_mbuf_pool_ops.h>
+#include <rte_mbuf_dyn.h>
 
 #include <dpaa_of.h>
 #include <rte_dpaa_bus.h>
@@ -54,6 +55,9 @@ unsigned int dpaa_svr_family;
 #define FSL_DPAA_BUS_NAME	dpaa_bus
 
 RTE_DEFINE_PER_LCORE(struct dpaa_portal *, dpaa_io);
+
+#define DPAA_SEQN_DYNFIELD_NAME "dpaa_seqn_dynfield"
+int dpaa_seqn_dynfield_offset = -1;
 
 struct fm_eth_port_cfg *
 dpaa_get_eth_port_cfg(int dev_id)
@@ -251,18 +255,30 @@ dpaa_clean_device_list(void)
 
 int rte_dpaa_portal_init(void *arg)
 {
+	static const struct rte_mbuf_dynfield dpaa_seqn_dynfield_desc = {
+		.name = DPAA_SEQN_DYNFIELD_NAME,
+		.size = sizeof(dpaa_seqn_t),
+		.align = __alignof__(dpaa_seqn_t),
+	};
 	unsigned int cpu, lcore = rte_lcore_id();
 	int ret;
 
 	BUS_INIT_FUNC_TRACE();
 
 	if ((size_t)arg == 1 || lcore == LCORE_ID_ANY)
-		lcore = rte_get_master_lcore();
+		lcore = rte_get_main_lcore();
 	else
 		if (lcore >= RTE_MAX_LCORE)
 			return -1;
 
 	cpu = rte_lcore_to_cpu_id(lcore);
+
+	dpaa_seqn_dynfield_offset =
+		rte_mbuf_dynfield_register(&dpaa_seqn_dynfield_desc);
+	if (dpaa_seqn_dynfield_offset < 0) {
+		DPAA_BUS_LOG(ERR, "Failed to register mbuf field for dpaa sequence number\n");
+		return -rte_errno;
+	}
 
 	/* Initialise bman thread portals */
 	ret = bman_thread_init();
@@ -568,7 +584,7 @@ rte_dpaa_bus_probe(void)
 	struct rte_dpaa_driver *drv;
 	FILE *svr_file = NULL;
 	unsigned int svr_ver;
-	int probe_all = rte_dpaa_bus.bus.conf.scan_mode != RTE_BUS_SCAN_WHITELIST;
+	int probe_all = rte_dpaa_bus.bus.conf.scan_mode != RTE_BUS_SCAN_ALLOWLIST;
 	static int process_once;
 
 	/* If DPAA bus is not present nothing needs to be done */
@@ -630,13 +646,12 @@ rte_dpaa_bus_probe(void)
 
 			if (!drv->probe ||
 			    (dev->device.devargs &&
-			    dev->device.devargs->policy == RTE_DEV_BLACKLISTED))
+			     dev->device.devargs->policy == RTE_DEV_BLOCKED))
 				continue;
 
 			if (probe_all ||
 			    (dev->device.devargs &&
-			    dev->device.devargs->policy ==
-			    RTE_DEV_WHITELISTED)) {
+			     dev->device.devargs->policy == RTE_DEV_ALLOWED)) {
 				ret = drv->probe(drv, dev);
 				if (ret) {
 					DPAA_BUS_ERR("unable to probe:%s",

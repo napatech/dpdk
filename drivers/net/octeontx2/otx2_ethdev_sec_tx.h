@@ -55,7 +55,7 @@ otx2_sec_event_tx(struct otx2_ssogws *ws, struct rte_event *ev,
 		struct nix_iova_s nix_iova;
 	} *sd;
 
-	priv = get_sec_session_private_data((void *)(m->udata64));
+	priv = get_sec_session_private_data((void *)(*rte_security_dynfield(m)));
 	sess = &priv->ipsec.ip;
 	sa = &sess->out_sa;
 
@@ -87,7 +87,7 @@ otx2_sec_event_tx(struct otx2_ssogws *ws, struct rte_event *ev,
 	 */
 	rte_pktmbuf_append(m, extend_tail);
 	data = rte_pktmbuf_prepend(m, extend_head);
-	data_addr = rte_pktmbuf_mtophys(m);
+	data_addr = rte_pktmbuf_iova(m);
 
 	/*
 	 * Move the Ethernet header, to insert otx2_ipsec_fp_out_hdr prior
@@ -160,7 +160,7 @@ otx2_sec_event_tx(struct otx2_ssogws *ws, struct rte_event *ev,
 	sess->ip_id++;
 	sess->esn++;
 
-	rte_cio_wmb();
+	rte_io_wmb();
 
 	do {
 		otx2_lmt_mov(sess->cpt_lmtline, &inst, 2);

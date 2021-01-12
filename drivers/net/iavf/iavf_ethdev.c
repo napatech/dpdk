@@ -28,11 +28,54 @@
 #include "iavf.h"
 #include "iavf_rxtx.h"
 #include "iavf_generic_flow.h"
+#include "rte_pmd_iavf.h"
+
+/* devargs */
+#define IAVF_PROTO_XTR_ARG         "proto_xtr"
+
+static const char * const iavf_valid_args[] = {
+	IAVF_PROTO_XTR_ARG,
+	NULL
+};
+
+static const struct rte_mbuf_dynfield iavf_proto_xtr_metadata_param = {
+	.name = "intel_pmd_dynfield_proto_xtr_metadata",
+	.size = sizeof(uint32_t),
+	.align = __alignof__(uint32_t),
+	.flags = 0,
+};
+
+struct iavf_proto_xtr_ol {
+	const struct rte_mbuf_dynflag param;
+	uint64_t *ol_flag;
+	bool required;
+};
+
+static struct iavf_proto_xtr_ol iavf_proto_xtr_params[] = {
+	[IAVF_PROTO_XTR_VLAN] = {
+		.param = { .name = "intel_pmd_dynflag_proto_xtr_vlan" },
+		.ol_flag = &rte_pmd_ifd_dynflag_proto_xtr_vlan_mask },
+	[IAVF_PROTO_XTR_IPV4] = {
+		.param = { .name = "intel_pmd_dynflag_proto_xtr_ipv4" },
+		.ol_flag = &rte_pmd_ifd_dynflag_proto_xtr_ipv4_mask },
+	[IAVF_PROTO_XTR_IPV6] = {
+		.param = { .name = "intel_pmd_dynflag_proto_xtr_ipv6" },
+		.ol_flag = &rte_pmd_ifd_dynflag_proto_xtr_ipv6_mask },
+	[IAVF_PROTO_XTR_IPV6_FLOW] = {
+		.param = { .name = "intel_pmd_dynflag_proto_xtr_ipv6_flow" },
+		.ol_flag = &rte_pmd_ifd_dynflag_proto_xtr_ipv6_flow_mask },
+	[IAVF_PROTO_XTR_TCP] = {
+		.param = { .name = "intel_pmd_dynflag_proto_xtr_tcp" },
+		.ol_flag = &rte_pmd_ifd_dynflag_proto_xtr_tcp_mask },
+	[IAVF_PROTO_XTR_IP_OFFSET] = {
+		.param = { .name = "intel_pmd_dynflag_proto_xtr_ip_offset" },
+		.ol_flag = &rte_pmd_ifd_dynflag_proto_xtr_ip_offset_mask },
+};
 
 static int iavf_dev_configure(struct rte_eth_dev *dev);
 static int iavf_dev_start(struct rte_eth_dev *dev);
-static void iavf_dev_stop(struct rte_eth_dev *dev);
-static void iavf_dev_close(struct rte_eth_dev *dev);
+static int iavf_dev_stop(struct rte_eth_dev *dev);
+static int iavf_dev_close(struct rte_eth_dev *dev);
 static int iavf_dev_reset(struct rte_eth_dev *dev);
 static int iavf_dev_info_get(struct rte_eth_dev *dev,
 			     struct rte_eth_dev_info *dev_info);
@@ -40,6 +83,11 @@ static const uint32_t *iavf_dev_supported_ptypes_get(struct rte_eth_dev *dev);
 static int iavf_dev_stats_get(struct rte_eth_dev *dev,
 			     struct rte_eth_stats *stats);
 static int iavf_dev_stats_reset(struct rte_eth_dev *dev);
+static int iavf_dev_xstats_get(struct rte_eth_dev *dev,
+				 struct rte_eth_xstat *xstats, unsigned int n);
+static int iavf_dev_xstats_get_names(struct rte_eth_dev *dev,
+				       struct rte_eth_xstat_name *xstats_names,
+				       unsigned int limit);
 static int iavf_dev_promiscuous_enable(struct rte_eth_dev *dev);
 static int iavf_dev_promiscuous_disable(struct rte_eth_dev *dev);
 static int iavf_dev_allmulticast_enable(struct rte_eth_dev *dev);
@@ -73,11 +121,38 @@ static int iavf_dev_filter_ctrl(struct rte_eth_dev *dev,
 		     enum rte_filter_type filter_type,
 		     enum rte_filter_op filter_op,
 		     void *arg);
+static int iavf_set_mc_addr_list(struct rte_eth_dev *dev,
+			struct rte_ether_addr *mc_addrs,
+			uint32_t mc_addrs_num);
 
 static const struct rte_pci_id pci_id_iavf_map[] = {
 	{ RTE_PCI_DEVICE(IAVF_INTEL_VENDOR_ID, IAVF_DEV_ID_ADAPTIVE_VF) },
 	{ .vendor_id = 0, /* sentinel */ },
 };
+
+struct rte_iavf_xstats_name_off {
+	char name[RTE_ETH_XSTATS_NAME_SIZE];
+	unsigned int offset;
+};
+
+static const struct rte_iavf_xstats_name_off rte_iavf_stats_strings[] = {
+	{"rx_bytes", offsetof(struct iavf_eth_stats, rx_bytes)},
+	{"rx_unicast_packets", offsetof(struct iavf_eth_stats, rx_unicast)},
+	{"rx_multicast_packets", offsetof(struct iavf_eth_stats, rx_multicast)},
+	{"rx_broadcast_packets", offsetof(struct iavf_eth_stats, rx_broadcast)},
+	{"rx_dropped_packets", offsetof(struct iavf_eth_stats, rx_discards)},
+	{"rx_unknown_protocol_packets", offsetof(struct iavf_eth_stats,
+		rx_unknown_protocol)},
+	{"tx_bytes", offsetof(struct iavf_eth_stats, tx_bytes)},
+	{"tx_unicast_packets", offsetof(struct iavf_eth_stats, tx_unicast)},
+	{"tx_multicast_packets", offsetof(struct iavf_eth_stats, tx_multicast)},
+	{"tx_broadcast_packets", offsetof(struct iavf_eth_stats, tx_broadcast)},
+	{"tx_dropped_packets", offsetof(struct iavf_eth_stats, tx_discards)},
+	{"tx_error_packets", offsetof(struct iavf_eth_stats, tx_errors)},
+};
+
+#define IAVF_NB_XSTATS (sizeof(rte_iavf_stats_strings) / \
+		sizeof(rte_iavf_stats_strings[0]))
 
 static const struct eth_dev_ops iavf_eth_dev_ops = {
 	.dev_configure              = iavf_dev_configure,
@@ -90,12 +165,16 @@ static const struct eth_dev_ops iavf_eth_dev_ops = {
 	.link_update                = iavf_dev_link_update,
 	.stats_get                  = iavf_dev_stats_get,
 	.stats_reset                = iavf_dev_stats_reset,
+	.xstats_get                 = iavf_dev_xstats_get,
+	.xstats_get_names           = iavf_dev_xstats_get_names,
+	.xstats_reset               = iavf_dev_stats_reset,
 	.promiscuous_enable         = iavf_dev_promiscuous_enable,
 	.promiscuous_disable        = iavf_dev_promiscuous_disable,
 	.allmulticast_enable        = iavf_dev_allmulticast_enable,
 	.allmulticast_disable       = iavf_dev_allmulticast_disable,
 	.mac_addr_add               = iavf_dev_add_mac_addr,
 	.mac_addr_remove            = iavf_dev_del_mac_addr,
+	.set_mc_addr_list			= iavf_set_mc_addr_list,
 	.vlan_filter_set            = iavf_dev_vlan_filter_set,
 	.vlan_offload_set           = iavf_dev_vlan_offload_set,
 	.rx_queue_start             = iavf_dev_rx_queue_start,
@@ -113,26 +192,67 @@ static const struct eth_dev_ops iavf_eth_dev_ops = {
 	.rss_hash_conf_get          = iavf_dev_rss_hash_conf_get,
 	.rxq_info_get               = iavf_dev_rxq_info_get,
 	.txq_info_get               = iavf_dev_txq_info_get,
-	.rx_queue_count             = iavf_dev_rxq_count,
-	.rx_descriptor_status       = iavf_dev_rx_desc_status,
-	.tx_descriptor_status       = iavf_dev_tx_desc_status,
 	.mtu_set                    = iavf_dev_mtu_set,
 	.rx_queue_intr_enable       = iavf_dev_rx_queue_intr_enable,
 	.rx_queue_intr_disable      = iavf_dev_rx_queue_intr_disable,
 	.filter_ctrl                = iavf_dev_filter_ctrl,
+	.tx_done_cleanup	    = iavf_dev_tx_done_cleanup,
 };
+
+static int
+iavf_set_mc_addr_list(struct rte_eth_dev *dev,
+			struct rte_ether_addr *mc_addrs,
+			uint32_t mc_addrs_num)
+{
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
+	struct iavf_adapter *adapter =
+		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+	int err, ret;
+
+	if (mc_addrs_num > IAVF_NUM_MACADDR_MAX) {
+		PMD_DRV_LOG(ERR,
+			    "can't add more than a limited number (%u) of addresses.",
+			    (uint32_t)IAVF_NUM_MACADDR_MAX);
+		return -EINVAL;
+	}
+
+	/* flush previous addresses */
+	err = iavf_add_del_mc_addr_list(adapter, vf->mc_addrs, vf->mc_addrs_num,
+					false);
+	if (err)
+		return err;
+
+	/* add new ones */
+	err = iavf_add_del_mc_addr_list(adapter, mc_addrs, mc_addrs_num, true);
+
+	if (err) {
+		/* if adding mac address list fails, should add the previous
+		 * addresses back.
+		 */
+		ret = iavf_add_del_mc_addr_list(adapter, vf->mc_addrs,
+						vf->mc_addrs_num, true);
+		if (ret)
+			return ret;
+	} else {
+		vf->mc_addrs_num = mc_addrs_num;
+		memcpy(vf->mc_addrs,
+		       mc_addrs, mc_addrs_num * sizeof(*mc_addrs));
+	}
+
+	return err;
+}
 
 static int
 iavf_init_rss(struct iavf_adapter *adapter)
 {
 	struct iavf_info *vf =  IAVF_DEV_PRIVATE_TO_VF(adapter);
 	struct rte_eth_rss_conf *rss_conf;
-	uint8_t i, j, nb_q;
+	uint16_t i, j, nb_q;
 	int ret;
 
 	rss_conf = &adapter->eth_dev->data->dev_conf.rx_adv_conf.rss_conf;
 	nb_q = RTE_MIN(adapter->eth_dev->data->nb_rx_queues,
-		       IAVF_MAX_NUM_QUEUES);
+		       vf->max_rss_qregion);
 
 	if (!(vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_RSS_PF)) {
 		PMD_DRV_LOG(DEBUG, "RSS is not supported");
@@ -179,12 +299,40 @@ iavf_init_rss(struct iavf_adapter *adapter)
 }
 
 static int
+iavf_queues_req_reset(struct rte_eth_dev *dev, uint16_t num)
+{
+	struct iavf_adapter *ad =
+		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+	struct iavf_info *vf =  IAVF_DEV_PRIVATE_TO_VF(ad);
+	int ret;
+
+	ret = iavf_request_queues(ad, num);
+	if (ret) {
+		PMD_DRV_LOG(ERR, "request queues from PF failed");
+		return ret;
+	}
+	PMD_DRV_LOG(INFO, "change queue pairs from %u to %u",
+			vf->vsi_res->num_queue_pairs, num);
+
+	ret = iavf_dev_reset(dev);
+	if (ret) {
+		PMD_DRV_LOG(ERR, "vf reset failed");
+		return ret;
+	}
+
+	return 0;
+}
+
+static int
 iavf_dev_configure(struct rte_eth_dev *dev)
 {
 	struct iavf_adapter *ad =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf =  IAVF_DEV_PRIVATE_TO_VF(ad);
 	struct rte_eth_conf *dev_conf = &dev->data->dev_conf;
+	uint16_t num_queue_pairs = RTE_MAX(dev->data->nb_rx_queues,
+		dev->data->nb_tx_queues);
+	int ret;
 
 	ad->rx_bulk_alloc_allowed = true;
 	/* Initialize to TRUE. If any of Rx queues doesn't meet the
@@ -195,6 +343,46 @@ iavf_dev_configure(struct rte_eth_dev *dev)
 
 	if (dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG)
 		dev->data->dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_RSS_HASH;
+
+	/* Large VF setting */
+	if (num_queue_pairs > IAVF_MAX_NUM_QUEUES_DFLT) {
+		if (!(vf->vf_res->vf_cap_flags &
+				VIRTCHNL_VF_LARGE_NUM_QPAIRS)) {
+			PMD_DRV_LOG(ERR, "large VF is not supported");
+			return -1;
+		}
+
+		if (num_queue_pairs > IAVF_MAX_NUM_QUEUES_LV) {
+			PMD_DRV_LOG(ERR, "queue pairs number cannot be larger than %u",
+				IAVF_MAX_NUM_QUEUES_LV);
+			return -1;
+		}
+
+		ret = iavf_queues_req_reset(dev, num_queue_pairs);
+		if (ret)
+			return ret;
+
+		ret = iavf_get_max_rss_queue_region(ad);
+		if (ret) {
+			PMD_INIT_LOG(ERR, "get max rss queue region failed");
+			return ret;
+		}
+
+		vf->lv_enabled = true;
+	} else {
+		/* Check if large VF is already enabled. If so, disable and
+		 * release redundant queue resource.
+		 */
+		if (vf->lv_enabled) {
+			ret = iavf_queues_req_reset(dev, num_queue_pairs);
+			if (ret)
+				return ret;
+
+			vf->lv_enabled = false;
+		}
+		/* if large VF is not required, use default rss queue region */
+		vf->max_rss_qregion = IAVF_MAX_NUM_QUEUES_DFLT;
+	}
 
 	/* Vlan stripping setting */
 	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_VLAN) {
@@ -253,7 +441,7 @@ iavf_init_rxq(struct rte_eth_dev *dev, struct iavf_rx_queue *rxq)
 
 	rxq->max_pkt_len = max_pkt_len;
 	if ((dev_data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_SCATTER) ||
-	    (rxq->max_pkt_len + 2 * IAVF_VLAN_TAG_SIZE) > buf_size) {
+	    rxq->max_pkt_len > buf_size) {
 		dev_data->scattered_rx = 1;
 	}
 	IAVF_PCI_REG_WRITE(rxq->qrx_tail, rxq->nb_rx_desc - 1);
@@ -292,6 +480,7 @@ static int iavf_config_rx_queues_irqs(struct rte_eth_dev *dev,
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
 	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(adapter);
+	struct iavf_qv_map *qv_map;
 	uint16_t interval, i;
 	int vec;
 
@@ -312,6 +501,14 @@ static int iavf_config_rx_queues_irqs(struct rte_eth_dev *dev,
 		}
 	}
 
+	qv_map = rte_zmalloc("qv_map",
+		dev->data->nb_rx_queues * sizeof(struct iavf_qv_map), 0);
+	if (!qv_map) {
+		PMD_DRV_LOG(ERR, "Failed to allocate %d queue-vector map",
+				dev->data->nb_rx_queues);
+		return -1;
+	}
+
 	if (!dev->data->dev_conf.intr_conf.rxq ||
 	    !rte_intr_dp_is_en(intr_handle)) {
 		/* Rx interrupt disabled, Map interrupt only for writeback */
@@ -320,10 +517,19 @@ static int iavf_config_rx_queues_irqs(struct rte_eth_dev *dev,
 		    VIRTCHNL_VF_OFFLOAD_WB_ON_ITR) {
 			/* If WB_ON_ITR supports, enable it */
 			vf->msix_base = IAVF_RX_VEC_START;
+			/* Set the ITR for index zero, to 2us to make sure that
+			 * we leave time for aggregation to occur, but don't
+			 * increase latency dramatically.
+			 */
 			IAVF_WRITE_REG(hw,
 				       IAVF_VFINT_DYN_CTLN1(vf->msix_base - 1),
-				       IAVF_VFINT_DYN_CTLN1_ITR_INDX_MASK |
-				       IAVF_VFINT_DYN_CTLN1_WB_ON_ITR_MASK);
+				       (0 << IAVF_VFINT_DYN_CTLN1_ITR_INDX_SHIFT) |
+				       IAVF_VFINT_DYN_CTLN1_WB_ON_ITR_MASK |
+				       (2UL << IAVF_VFINT_DYN_CTLN1_INTERVAL_SHIFT));
+			/* debug - check for success! the return value
+			 * should be 2, offset is 0x2800
+			 */
+			/* IAVF_READ_REG(hw, IAVF_VFINT_ITRN1(0, 0)); */
 		} else {
 			/* If no WB_ON_ITR offload flags, need to set
 			 * interrupt for descriptor write back.
@@ -342,16 +548,21 @@ static int iavf_config_rx_queues_irqs(struct rte_eth_dev *dev,
 		}
 		IAVF_WRITE_FLUSH(hw);
 		/* map all queues to the same interrupt */
-		for (i = 0; i < dev->data->nb_rx_queues; i++)
-			vf->rxq_map[vf->msix_base] |= 1 << i;
+		for (i = 0; i < dev->data->nb_rx_queues; i++) {
+			qv_map[i].queue_id = i;
+			qv_map[i].vector_id = vf->msix_base;
+		}
+		vf->qv_map = qv_map;
 	} else {
 		if (!rte_intr_allow_others(intr_handle)) {
 			vf->nb_msix = 1;
 			vf->msix_base = IAVF_MISC_VEC_ID;
 			for (i = 0; i < dev->data->nb_rx_queues; i++) {
-				vf->rxq_map[vf->msix_base] |= 1 << i;
+				qv_map[i].queue_id = i;
+				qv_map[i].vector_id = vf->msix_base;
 				intr_handle->intr_vec[i] = IAVF_MISC_VEC_ID;
 			}
+			vf->qv_map = qv_map;
 			PMD_DRV_LOG(DEBUG,
 				    "vector %u are mapping to all Rx queues",
 				    vf->msix_base);
@@ -364,20 +575,42 @@ static int iavf_config_rx_queues_irqs(struct rte_eth_dev *dev,
 			vf->msix_base = IAVF_RX_VEC_START;
 			vec = IAVF_RX_VEC_START;
 			for (i = 0; i < dev->data->nb_rx_queues; i++) {
-				vf->rxq_map[vec] |= 1 << i;
+				qv_map[i].queue_id = i;
+				qv_map[i].vector_id = vec;
 				intr_handle->intr_vec[i] = vec++;
 				if (vec >= vf->nb_msix)
 					vec = IAVF_RX_VEC_START;
 			}
+			vf->qv_map = qv_map;
 			PMD_DRV_LOG(DEBUG,
 				    "%u vectors are mapping to %u Rx queues",
 				    vf->nb_msix, dev->data->nb_rx_queues);
 		}
 	}
 
-	if (iavf_config_irq_map(adapter)) {
-		PMD_DRV_LOG(ERR, "config interrupt mapping failed");
-		return -1;
+	if (!vf->lv_enabled) {
+		if (iavf_config_irq_map(adapter)) {
+			PMD_DRV_LOG(ERR, "config interrupt mapping failed");
+			return -1;
+		}
+	} else {
+		uint16_t num_qv_maps = dev->data->nb_rx_queues;
+		uint16_t index = 0;
+
+		while (num_qv_maps > IAVF_IRQ_MAP_NUM_PER_BUF) {
+			if (iavf_config_irq_map_lv(adapter,
+					IAVF_IRQ_MAP_NUM_PER_BUF, index)) {
+				PMD_DRV_LOG(ERR, "config interrupt mapping for large VF failed");
+				return -1;
+			}
+			num_qv_maps -= IAVF_IRQ_MAP_NUM_PER_BUF;
+			index += IAVF_IRQ_MAP_NUM_PER_BUF;
+		}
+
+		if (iavf_config_irq_map_lv(adapter, num_qv_maps, index)) {
+			PMD_DRV_LOG(ERR, "config interrupt mapping for large VF failed");
+			return -1;
+		}
 	}
 	return 0;
 }
@@ -419,6 +652,8 @@ iavf_dev_start(struct rte_eth_dev *dev)
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
 	struct rte_intr_handle *intr_handle = dev->intr_handle;
+	uint16_t num_queue_pairs;
+	uint16_t index = 0;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -427,13 +662,27 @@ iavf_dev_start(struct rte_eth_dev *dev)
 	vf->max_pkt_len = dev->data->dev_conf.rxmode.max_rx_pkt_len;
 	vf->num_queue_pairs = RTE_MAX(dev->data->nb_rx_queues,
 				      dev->data->nb_tx_queues);
+	num_queue_pairs = vf->num_queue_pairs;
 
 	if (iavf_init_queues(dev) != 0) {
 		PMD_DRV_LOG(ERR, "failed to do Queue init");
 		return -1;
 	}
 
-	if (iavf_configure_queues(adapter) != 0) {
+	/* If needed, send configure queues msg multiple times to make the
+	 * adminq buffer length smaller than the 4K limitation.
+	 */
+	while (num_queue_pairs > IAVF_CFG_Q_NUM_PER_BUF) {
+		if (iavf_configure_queues(adapter,
+				IAVF_CFG_Q_NUM_PER_BUF, index) != 0) {
+			PMD_DRV_LOG(ERR, "configure queues failed");
+			goto err_queue;
+		}
+		num_queue_pairs -= IAVF_CFG_Q_NUM_PER_BUF;
+		index += IAVF_CFG_Q_NUM_PER_BUF;
+	}
+
+	if (iavf_configure_queues(adapter, num_queue_pairs, index) != 0) {
 		PMD_DRV_LOG(ERR, "configure queues failed");
 		goto err_queue;
 	}
@@ -451,6 +700,10 @@ iavf_dev_start(struct rte_eth_dev *dev)
 	/* Set all mac addrs */
 	iavf_add_del_all_mac_addr(adapter, true);
 
+	/* Set all multicast addresses */
+	iavf_add_del_mc_addr_list(adapter, vf->mc_addrs, vf->mc_addrs_num,
+				  true);
+
 	if (iavf_start_queues(dev) != 0) {
 		PMD_DRV_LOG(ERR, "enable queues failed");
 		goto err_mac;
@@ -464,9 +717,10 @@ err_queue:
 	return -1;
 }
 
-static void
+static int
 iavf_dev_stop(struct rte_eth_dev *dev)
 {
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct rte_intr_handle *intr_handle = dev->intr_handle;
@@ -474,7 +728,7 @@ iavf_dev_stop(struct rte_eth_dev *dev)
 	PMD_INIT_FUNC_TRACE();
 
 	if (adapter->stopped == 1)
-		return;
+		return 0;
 
 	iavf_stop_queues(dev);
 
@@ -488,7 +742,15 @@ iavf_dev_stop(struct rte_eth_dev *dev)
 
 	/* remove all mac addrs */
 	iavf_add_del_all_mac_addr(adapter, false);
+
+	/* remove all multicast addresses */
+	iavf_add_del_mc_addr_list(adapter, vf->mc_addrs, vf->mc_addrs_num,
+				  false);
+
 	adapter->stopped = 1;
+	dev->data->dev_started = 0;
+
+	return 0;
 }
 
 static int
@@ -496,10 +758,12 @@ iavf_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 {
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
 
-	dev_info->max_rx_queues = vf->vsi_res->num_queue_pairs;
-	dev_info->max_tx_queues = vf->vsi_res->num_queue_pairs;
+	dev_info->max_rx_queues = IAVF_MAX_NUM_QUEUES_LV;
+	dev_info->max_tx_queues = IAVF_MAX_NUM_QUEUES_LV;
 	dev_info->min_rx_bufsize = IAVF_BUF_SIZE_MIN;
 	dev_info->max_rx_pktlen = IAVF_FRAME_SIZE_MAX;
+	dev_info->max_mtu = dev_info->max_rx_pktlen - IAVF_ETH_OVERHEAD;
+	dev_info->min_mtu = RTE_ETHER_MIN_MTU;
 	dev_info->hash_key_size = vf->vf_res->rss_key_size;
 	dev_info->reta_size = vf->vf_res->rss_lut_size;
 	dev_info->flow_type_rss_offloads = IAVF_RSS_OFFLOAD_ALL;
@@ -528,7 +792,8 @@ iavf_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		DEV_TX_OFFLOAD_GRE_TNL_TSO |
 		DEV_TX_OFFLOAD_IPIP_TNL_TSO |
 		DEV_TX_OFFLOAD_GENEVE_TNL_TSO |
-		DEV_TX_OFFLOAD_MULTI_SEGS;
+		DEV_TX_OFFLOAD_MULTI_SEGS |
+		DEV_TX_OFFLOAD_MBUF_FAST_FREE;
 
 	dev_info->default_rxconf = (struct rte_eth_rxconf) {
 		.rx_free_thresh = IAVF_DEFAULT_RX_FREE_THRESH,
@@ -625,12 +890,7 @@ iavf_dev_link_update(struct rte_eth_dev *dev,
 	new_link.link_autoneg = !(dev->data->dev_conf.link_speeds &
 				ETH_LINK_SPEED_FIXED);
 
-	if (rte_atomic64_cmpset((uint64_t *)&dev->data->dev_link,
-				*(uint64_t *)&dev->data->dev_link,
-				*(uint64_t *)&new_link) == 0)
-		return -1;
-
-	return 0;
+	return rte_eth_linkstatus_set(dev, &new_link);
 }
 
 static int
@@ -639,18 +899,9 @@ iavf_dev_promiscuous_enable(struct rte_eth_dev *dev)
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
-	int ret;
 
-	if (vf->promisc_unicast_enabled)
-		return 0;
-
-	ret = iavf_config_promisc(adapter, true, vf->promisc_multicast_enabled);
-	if (!ret)
-		vf->promisc_unicast_enabled = true;
-	else
-		ret = -EAGAIN;
-
-	return ret;
+	return iavf_config_promisc(adapter,
+				  true, vf->promisc_multicast_enabled);
 }
 
 static int
@@ -659,19 +910,9 @@ iavf_dev_promiscuous_disable(struct rte_eth_dev *dev)
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
-	int ret;
 
-	if (!vf->promisc_unicast_enabled)
-		return 0;
-
-	ret = iavf_config_promisc(adapter, false,
-				  vf->promisc_multicast_enabled);
-	if (!ret)
-		vf->promisc_unicast_enabled = false;
-	else
-		ret = -EAGAIN;
-
-	return ret;
+	return iavf_config_promisc(adapter,
+				  false, vf->promisc_multicast_enabled);
 }
 
 static int
@@ -680,18 +921,9 @@ iavf_dev_allmulticast_enable(struct rte_eth_dev *dev)
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
-	int ret;
 
-	if (vf->promisc_multicast_enabled)
-		return 0;
-
-	ret = iavf_config_promisc(adapter, vf->promisc_unicast_enabled, true);
-	if (!ret)
-		vf->promisc_multicast_enabled = true;
-	else
-		ret = -EAGAIN;
-
-	return ret;
+	return iavf_config_promisc(adapter,
+				  vf->promisc_unicast_enabled, true);
 }
 
 static int
@@ -700,18 +932,9 @@ iavf_dev_allmulticast_disable(struct rte_eth_dev *dev)
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
-	int ret;
 
-	if (!vf->promisc_multicast_enabled)
-		return 0;
-
-	ret = iavf_config_promisc(adapter, vf->promisc_unicast_enabled, false);
-	if (!ret)
-		vf->promisc_multicast_enabled = false;
-	else
-		ret = -EAGAIN;
-
-	return ret;
+	return iavf_config_promisc(adapter,
+				  vf->promisc_unicast_enabled, false);
 }
 
 static int
@@ -969,9 +1192,6 @@ iavf_dev_set_default_mac_addr(struct rte_eth_dev *dev,
 	old_addr = (struct rte_ether_addr *)hw->mac.addr;
 	perm_addr = (struct rte_ether_addr *)hw->mac.perm_addr;
 
-	if (rte_is_same_ether_addr(mac_addr, old_addr))
-		return 0;
-
 	/* If the MAC address is configured by host, skip the setting */
 	if (rte_is_valid_assigned_ether_addr(perm_addr))
 		return -EPERM;
@@ -1094,6 +1314,55 @@ iavf_dev_stats_reset(struct rte_eth_dev *dev)
 	return 0;
 }
 
+static int iavf_dev_xstats_get_names(__rte_unused struct rte_eth_dev *dev,
+				      struct rte_eth_xstat_name *xstats_names,
+				      __rte_unused unsigned int limit)
+{
+	unsigned int i;
+
+	if (xstats_names != NULL)
+		for (i = 0; i < IAVF_NB_XSTATS; i++) {
+			snprintf(xstats_names[i].name,
+				sizeof(xstats_names[i].name),
+				"%s", rte_iavf_stats_strings[i].name);
+		}
+	return IAVF_NB_XSTATS;
+}
+
+static int iavf_dev_xstats_get(struct rte_eth_dev *dev,
+				 struct rte_eth_xstat *xstats, unsigned int n)
+{
+	int ret;
+	unsigned int i;
+	struct iavf_adapter *adapter =
+		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
+	struct iavf_vsi *vsi = &vf->vsi;
+	struct virtchnl_eth_stats *pstats = NULL;
+
+	if (n < IAVF_NB_XSTATS)
+		return IAVF_NB_XSTATS;
+
+	ret = iavf_query_stats(adapter, &pstats);
+	if (ret != 0)
+		return 0;
+
+	if (!xstats)
+		return 0;
+
+	iavf_update_stats(vsi, pstats);
+
+	/* loop over xstats array and values from pstats */
+	for (i = 0; i < IAVF_NB_XSTATS; i++) {
+		xstats[i].id = i;
+		xstats[i].value = *(uint64_t *)(((char *)pstats) +
+			rte_iavf_stats_strings[i].offset);
+	}
+
+	return IAVF_NB_XSTATS;
+}
+
+
 static int
 iavf_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
@@ -1169,6 +1438,349 @@ iavf_check_vf_reset_done(struct iavf_hw *hw)
 }
 
 static int
+iavf_lookup_proto_xtr_type(const char *flex_name)
+{
+	static struct {
+		const char *name;
+		enum iavf_proto_xtr_type type;
+	} xtr_type_map[] = {
+		{ "vlan",      IAVF_PROTO_XTR_VLAN      },
+		{ "ipv4",      IAVF_PROTO_XTR_IPV4      },
+		{ "ipv6",      IAVF_PROTO_XTR_IPV6      },
+		{ "ipv6_flow", IAVF_PROTO_XTR_IPV6_FLOW },
+		{ "tcp",       IAVF_PROTO_XTR_TCP       },
+		{ "ip_offset", IAVF_PROTO_XTR_IP_OFFSET },
+	};
+	uint32_t i;
+
+	for (i = 0; i < RTE_DIM(xtr_type_map); i++) {
+		if (strcmp(flex_name, xtr_type_map[i].name) == 0)
+			return xtr_type_map[i].type;
+	}
+
+	PMD_DRV_LOG(ERR, "wrong proto_xtr type, "
+		    "it should be: vlan|ipv4|ipv6|ipv6_flow|tcp|ip_offset");
+
+	return -1;
+}
+
+/**
+ * Parse elem, the elem could be single number/range or '(' ')' group
+ * 1) A single number elem, it's just a simple digit. e.g. 9
+ * 2) A single range elem, two digits with a '-' between. e.g. 2-6
+ * 3) A group elem, combines multiple 1) or 2) with '( )'. e.g (0,2-4,6)
+ *    Within group elem, '-' used for a range separator;
+ *                       ',' used for a single number.
+ */
+static int
+iavf_parse_queue_set(const char *input, int xtr_type,
+		     struct iavf_devargs *devargs)
+{
+	const char *str = input;
+	char *end = NULL;
+	uint32_t min, max;
+	uint32_t idx;
+
+	while (isblank(*str))
+		str++;
+
+	if (!isdigit(*str) && *str != '(')
+		return -1;
+
+	/* process single number or single range of number */
+	if (*str != '(') {
+		errno = 0;
+		idx = strtoul(str, &end, 10);
+		if (errno || !end || idx >= IAVF_MAX_QUEUE_NUM)
+			return -1;
+
+		while (isblank(*end))
+			end++;
+
+		min = idx;
+		max = idx;
+
+		/* process single <number>-<number> */
+		if (*end == '-') {
+			end++;
+			while (isblank(*end))
+				end++;
+			if (!isdigit(*end))
+				return -1;
+
+			errno = 0;
+			idx = strtoul(end, &end, 10);
+			if (errno || !end || idx >= IAVF_MAX_QUEUE_NUM)
+				return -1;
+
+			max = idx;
+			while (isblank(*end))
+				end++;
+		}
+
+		if (*end != ':')
+			return -1;
+
+		for (idx = RTE_MIN(min, max);
+		     idx <= RTE_MAX(min, max); idx++)
+			devargs->proto_xtr[idx] = xtr_type;
+
+		return 0;
+	}
+
+	/* process set within bracket */
+	str++;
+	while (isblank(*str))
+		str++;
+	if (*str == '\0')
+		return -1;
+
+	min = IAVF_MAX_QUEUE_NUM;
+	do {
+		/* go ahead to the first digit */
+		while (isblank(*str))
+			str++;
+		if (!isdigit(*str))
+			return -1;
+
+		/* get the digit value */
+		errno = 0;
+		idx = strtoul(str, &end, 10);
+		if (errno || !end || idx >= IAVF_MAX_QUEUE_NUM)
+			return -1;
+
+		/* go ahead to separator '-',',' and ')' */
+		while (isblank(*end))
+			end++;
+		if (*end == '-') {
+			if (min == IAVF_MAX_QUEUE_NUM)
+				min = idx;
+			else /* avoid continuous '-' */
+				return -1;
+		} else if (*end == ',' || *end == ')') {
+			max = idx;
+			if (min == IAVF_MAX_QUEUE_NUM)
+				min = idx;
+
+			for (idx = RTE_MIN(min, max);
+			     idx <= RTE_MAX(min, max); idx++)
+				devargs->proto_xtr[idx] = xtr_type;
+
+			min = IAVF_MAX_QUEUE_NUM;
+		} else {
+			return -1;
+		}
+
+		str = end + 1;
+	} while (*end != ')' && *end != '\0');
+
+	return 0;
+}
+
+static int
+iavf_parse_queue_proto_xtr(const char *queues, struct iavf_devargs *devargs)
+{
+	const char *queue_start;
+	uint32_t idx;
+	int xtr_type;
+	char flex_name[32];
+
+	while (isblank(*queues))
+		queues++;
+
+	if (*queues != '[') {
+		xtr_type = iavf_lookup_proto_xtr_type(queues);
+		if (xtr_type < 0)
+			return -1;
+
+		devargs->proto_xtr_dflt = xtr_type;
+
+		return 0;
+	}
+
+	queues++;
+	do {
+		while (isblank(*queues))
+			queues++;
+		if (*queues == '\0')
+			return -1;
+
+		queue_start = queues;
+
+		/* go across a complete bracket */
+		if (*queue_start == '(') {
+			queues += strcspn(queues, ")");
+			if (*queues != ')')
+				return -1;
+		}
+
+		/* scan the separator ':' */
+		queues += strcspn(queues, ":");
+		if (*queues++ != ':')
+			return -1;
+		while (isblank(*queues))
+			queues++;
+
+		for (idx = 0; ; idx++) {
+			if (isblank(queues[idx]) ||
+			    queues[idx] == ',' ||
+			    queues[idx] == ']' ||
+			    queues[idx] == '\0')
+				break;
+
+			if (idx > sizeof(flex_name) - 2)
+				return -1;
+
+			flex_name[idx] = queues[idx];
+		}
+		flex_name[idx] = '\0';
+		xtr_type = iavf_lookup_proto_xtr_type(flex_name);
+		if (xtr_type < 0)
+			return -1;
+
+		queues += idx;
+
+		while (isblank(*queues) || *queues == ',' || *queues == ']')
+			queues++;
+
+		if (iavf_parse_queue_set(queue_start, xtr_type, devargs) < 0)
+			return -1;
+	} while (*queues != '\0');
+
+	return 0;
+}
+
+static int
+iavf_handle_proto_xtr_arg(__rte_unused const char *key, const char *value,
+			  void *extra_args)
+{
+	struct iavf_devargs *devargs = extra_args;
+
+	if (!value || !extra_args)
+		return -EINVAL;
+
+	if (iavf_parse_queue_proto_xtr(value, devargs) < 0) {
+		PMD_DRV_LOG(ERR, "the proto_xtr's parameter is wrong : '%s'",
+			    value);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int iavf_parse_devargs(struct rte_eth_dev *dev)
+{
+	struct iavf_adapter *ad =
+		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+	struct rte_devargs *devargs = dev->device->devargs;
+	struct rte_kvargs *kvlist;
+	int ret;
+
+	if (!devargs)
+		return 0;
+
+	kvlist = rte_kvargs_parse(devargs->args, iavf_valid_args);
+	if (!kvlist) {
+		PMD_INIT_LOG(ERR, "invalid kvargs key\n");
+		return -EINVAL;
+	}
+
+	ad->devargs.proto_xtr_dflt = IAVF_PROTO_XTR_NONE;
+	memset(ad->devargs.proto_xtr, IAVF_PROTO_XTR_NONE,
+	       sizeof(ad->devargs.proto_xtr));
+
+	ret = rte_kvargs_process(kvlist, IAVF_PROTO_XTR_ARG,
+				 &iavf_handle_proto_xtr_arg, &ad->devargs);
+	if (ret)
+		goto bail;
+
+bail:
+	rte_kvargs_free(kvlist);
+	return ret;
+}
+
+static void
+iavf_init_proto_xtr(struct rte_eth_dev *dev)
+{
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
+	struct iavf_adapter *ad =
+			IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+	const struct iavf_proto_xtr_ol *xtr_ol;
+	bool proto_xtr_enable = false;
+	int offset;
+	uint16_t i;
+
+	vf->proto_xtr = rte_zmalloc("vf proto xtr",
+				    vf->vsi_res->num_queue_pairs, 0);
+	if (unlikely(!(vf->proto_xtr))) {
+		PMD_DRV_LOG(ERR, "no memory for setting up proto_xtr's table");
+		return;
+	}
+
+	for (i = 0; i < vf->vsi_res->num_queue_pairs; i++) {
+		vf->proto_xtr[i] = ad->devargs.proto_xtr[i] !=
+					IAVF_PROTO_XTR_NONE ?
+					ad->devargs.proto_xtr[i] :
+					ad->devargs.proto_xtr_dflt;
+
+		if (vf->proto_xtr[i] != IAVF_PROTO_XTR_NONE) {
+			uint8_t type = vf->proto_xtr[i];
+
+			iavf_proto_xtr_params[type].required = true;
+			proto_xtr_enable = true;
+		}
+	}
+
+	if (likely(!proto_xtr_enable))
+		return;
+
+	offset = rte_mbuf_dynfield_register(&iavf_proto_xtr_metadata_param);
+	if (unlikely(offset == -1)) {
+		PMD_DRV_LOG(ERR,
+			    "failed to extract protocol metadata, error %d",
+			    -rte_errno);
+		return;
+	}
+
+	PMD_DRV_LOG(DEBUG,
+		    "proto_xtr metadata offset in mbuf is : %d",
+		    offset);
+	rte_pmd_ifd_dynfield_proto_xtr_metadata_offs = offset;
+
+	for (i = 0; i < RTE_DIM(iavf_proto_xtr_params); i++) {
+		xtr_ol = &iavf_proto_xtr_params[i];
+
+		uint8_t rxdid = iavf_proto_xtr_type_to_rxdid((uint8_t)i);
+
+		if (!xtr_ol->required)
+			continue;
+
+		if (!(vf->supported_rxdid & BIT(rxdid))) {
+			PMD_DRV_LOG(ERR,
+				    "rxdid[%u] is not supported in hardware",
+				    rxdid);
+			rte_pmd_ifd_dynfield_proto_xtr_metadata_offs = -1;
+			break;
+		}
+
+		offset = rte_mbuf_dynflag_register(&xtr_ol->param);
+		if (unlikely(offset == -1)) {
+			PMD_DRV_LOG(ERR,
+				    "failed to register proto_xtr offload '%s', error %d",
+				    xtr_ol->param.name, -rte_errno);
+
+			rte_pmd_ifd_dynfield_proto_xtr_metadata_offs = -1;
+			break;
+		}
+
+		PMD_DRV_LOG(DEBUG,
+			    "proto_xtr offload '%s' offset in mbuf is : %d",
+			    xtr_ol->param.name, offset);
+		*xtr_ol->ol_flag = 1ULL << offset;
+	}
+}
+
+static int
 iavf_init_vf(struct rte_eth_dev *dev)
 {
 	int err, bufsz;
@@ -1176,6 +1788,12 @@ iavf_init_vf(struct rte_eth_dev *dev)
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
+
+	err = iavf_parse_devargs(dev);
+	if (err) {
+		PMD_INIT_LOG(ERR, "Failed to parse devargs");
+		goto err;
+	}
 
 	err = iavf_set_mac_type(hw);
 	if (err) {
@@ -1239,6 +1857,8 @@ iavf_init_vf(struct rte_eth_dev *dev)
 			goto err_rss;
 		}
 	}
+
+	iavf_init_proto_xtr(dev);
 
 	return 0;
 err_rss:
@@ -1335,6 +1955,9 @@ iavf_dev_init(struct rte_eth_dev *eth_dev)
 
 	/* assign ops func pointer */
 	eth_dev->dev_ops = &iavf_eth_dev_ops;
+	eth_dev->rx_queue_count = iavf_dev_rxq_count;
+	eth_dev->rx_descriptor_status = iavf_dev_rx_desc_status;
+	eth_dev->tx_descriptor_status = iavf_dev_tx_desc_status;
 	eth_dev->rx_pkt_burst = &iavf_recv_pkts;
 	eth_dev->tx_pkt_burst = &iavf_xmit_pkts;
 	eth_dev->tx_pkt_prepare = &iavf_prep_pkts;
@@ -1349,6 +1972,7 @@ iavf_dev_init(struct rte_eth_dev *eth_dev)
 		return 0;
 	}
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	hw->vendor_id = pci_dev->id.vendor_id;
 	hw->device_id = pci_dev->id.device_id;
@@ -1408,7 +2032,7 @@ iavf_dev_init(struct rte_eth_dev *eth_dev)
 	return 0;
 }
 
-static void
+static int
 iavf_dev_close(struct rte_eth_dev *dev)
 {
 	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -1416,10 +2040,25 @@ iavf_dev_close(struct rte_eth_dev *dev)
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
+	int ret;
 
-	iavf_dev_stop(dev);
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
+
+	ret = iavf_dev_stop(dev);
+
 	iavf_flow_flush(dev, NULL);
 	iavf_flow_uninit(adapter);
+
+	/*
+	 * disable promiscuous mode before reset vf
+	 * it is a workaround solution when work with kernel driver
+	 * and it is not the normal way
+	 */
+	if (vf->promisc_unicast_enabled || vf->promisc_multicast_enabled)
+		iavf_config_promisc(adapter, false, false);
+
 	iavf_shutdown_adminq(hw);
 	/* disable uio intr before callback unregister */
 	rte_intr_disable(intr_handle);
@@ -1428,20 +2067,17 @@ iavf_dev_close(struct rte_eth_dev *dev)
 	rte_intr_callback_unregister(intr_handle,
 				     iavf_dev_interrupt_handler, dev);
 	iavf_disable_irq0(hw);
-}
 
-static int
-iavf_dev_uninit(struct rte_eth_dev *dev)
-{
-	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
-
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return -EPERM;
-
-	dev->dev_ops = NULL;
-	dev->rx_pkt_burst = NULL;
-	dev->tx_pkt_burst = NULL;
-	iavf_dev_close(dev);
+	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_RSS_PF) {
+		if (vf->rss_lut) {
+			rte_free(vf->rss_lut);
+			vf->rss_lut = NULL;
+		}
+		if (vf->rss_key) {
+			rte_free(vf->rss_key);
+			vf->rss_key = NULL;
+		}
+	}
 
 	rte_free(vf->vf_res);
 	vf->vsi_res = NULL;
@@ -1450,14 +2086,18 @@ iavf_dev_uninit(struct rte_eth_dev *dev)
 	rte_free(vf->aq_resp);
 	vf->aq_resp = NULL;
 
-	if (vf->rss_lut) {
-		rte_free(vf->rss_lut);
-		vf->rss_lut = NULL;
-	}
-	if (vf->rss_key) {
-		rte_free(vf->rss_key);
-		vf->rss_key = NULL;
-	}
+	vf->vf_reset = false;
+
+	return ret;
+}
+
+static int
+iavf_dev_uninit(struct rte_eth_dev *dev)
+{
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return -EPERM;
+
+	iavf_dev_close(dev);
 
 	return 0;
 }

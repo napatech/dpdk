@@ -131,8 +131,9 @@ skip_linking:
 			qbman_eq_desc_set_response(&eqdesc[loop], 0, 0);
 
 			if (event->sched_type == RTE_SCHED_TYPE_ATOMIC
-				&& event->mbuf->seqn) {
-				uint8_t dqrr_index = event->mbuf->seqn - 1;
+				&& *dpaa2_seqn(event->mbuf)) {
+				uint8_t dqrr_index =
+					*dpaa2_seqn(event->mbuf) - 1;
 
 				qbman_eq_desc_set_dca(&eqdesc[loop], 1,
 						      dqrr_index, 0);
@@ -249,7 +250,7 @@ static void dpaa2_eventdev_process_atomic(struct qbman_swp *swp,
 
 	rte_memcpy(ev, ev_temp, sizeof(struct rte_event));
 	rte_free(ev_temp);
-	ev->mbuf->seqn = dqrr_index + 1;
+	*dpaa2_seqn(ev->mbuf) = dqrr_index + 1;
 	DPAA2_PER_LCORE_DQRR_SIZE++;
 	DPAA2_PER_LCORE_DQRR_HELD |= 1 << dqrr_index;
 	DPAA2_PER_LCORE_DQRR_MBUF(dqrr_index) = ev->mbuf;
@@ -314,7 +315,7 @@ skip_linking:
 		if (DPAA2_PER_LCORE_DQRR_HELD & (1 << i)) {
 			qbman_swp_dqrr_idx_consume(swp, i);
 			DPAA2_PER_LCORE_DQRR_SIZE--;
-			DPAA2_PER_LCORE_DQRR_MBUF(i)->seqn =
+			*dpaa2_seqn(DPAA2_PER_LCORE_DQRR_MBUF(i)) =
 				DPAA2_INVALID_MBUF_SEQN;
 		}
 		i++;
@@ -406,7 +407,8 @@ dpaa2_eventdev_info_get(struct rte_eventdev *dev,
 		RTE_EVENT_DEV_CAP_RUNTIME_PORT_LINK |
 		RTE_EVENT_DEV_CAP_MULTIPLE_QUEUE_PORT |
 		RTE_EVENT_DEV_CAP_NONSEQ_MODE |
-		RTE_EVENT_DEV_CAP_QUEUE_ALL_TYPES;
+		RTE_EVENT_DEV_CAP_QUEUE_ALL_TYPES |
+		RTE_EVENT_DEV_CAP_CARRY_FLOW_ID;
 
 }
 
@@ -536,7 +538,7 @@ dpaa2_eventdev_port_def_conf(struct rte_eventdev *dev, uint8_t port_id,
 		DPAA2_EVENT_MAX_PORT_DEQUEUE_DEPTH;
 	port_conf->enqueue_depth =
 		DPAA2_EVENT_MAX_PORT_ENQUEUE_DEPTH;
-	port_conf->disable_implicit_release = 0;
+	port_conf->event_port_cfg = 0;
 }
 
 static int
@@ -569,14 +571,14 @@ dpaa2_eventdev_port_release(void *port)
 
 	EVENTDEV_INIT_FUNC_TRACE();
 
+	if (portal == NULL)
+		return;
+
 	/* TODO: Cleanup is required when ports are in linked state. */
 	if (portal->is_port_linked)
 		DPAA2_EVENTDEV_WARN("Event port must be unlinked before release");
 
-	if (portal)
-		rte_free(portal);
-
-	portal = NULL;
+	rte_free(portal);
 }
 
 static int

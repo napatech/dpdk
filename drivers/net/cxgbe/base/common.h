@@ -187,6 +187,7 @@ struct devlog_params {
 
 struct arch_specific_params {
 	u8 nchan;
+	u8 cng_ch_bits_log;             /* congestion channel map bits width */
 	u16 mps_rplc_size;
 	u16 vfcount;
 	u32 sge_fl_db;
@@ -218,6 +219,7 @@ struct rss_params {
  */
 struct pf_resources {
 	unsigned int neq;      /* N egress Qs */
+	unsigned int nethctrl; /* N egress ETH or CTRL Qs */
 	unsigned int niqflint; /* N ingress Qs/w free list(s) & intr */
 };
 

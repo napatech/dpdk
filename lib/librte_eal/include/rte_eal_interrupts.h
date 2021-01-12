@@ -69,10 +69,18 @@ struct rte_epoll_event {
 struct rte_intr_handle {
 	RTE_STD_C11
 	union {
-		int vfio_dev_fd;  /**< VFIO device file descriptor */
-		int uio_cfg_fd;  /**< UIO cfg file desc for uio_pci_generic */
+		struct {
+			RTE_STD_C11
+			union {
+				/** VFIO device file descriptor */
+				int vfio_dev_fd;
+				/** UIO cfg file desc for uio_pci_generic */
+				int uio_cfg_fd;
+			};
+			int fd;	/**< interrupt event file descriptor */
+		};
+		void *handle; /**< device driver handle (Windows) */
 	};
-	int fd;	 /**< interrupt event file descriptor */
 	enum rte_intr_handle_type type;  /**< handle type */
 	uint32_t max_intr;             /**< max interrupt requested */
 	uint32_t nb_efd;               /**< number of available efd(event fd) */
@@ -87,6 +95,7 @@ struct rte_intr_handle {
 
 /**
  * It waits for events on the epoll instance.
+ * Retries if signal received.
  *
  * @param epfd
  *   Epoll instance fd on which the caller wait for events.
@@ -103,6 +112,28 @@ struct rte_intr_handle {
  */
 int
 rte_epoll_wait(int epfd, struct rte_epoll_event *events,
+	       int maxevents, int timeout);
+
+/**
+ * It waits for events on the epoll instance.
+ * Does not retry if signal received.
+ *
+ * @param epfd
+ *   Epoll instance fd on which the caller wait for events.
+ * @param events
+ *   Memory area contains the events that will be available for the caller.
+ * @param maxevents
+ *   Up to maxevents are returned, must greater than zero.
+ * @param timeout
+ *   Specifying a timeout of -1 causes a block indefinitely.
+ *   Specifying a timeout equal to zero cause to return immediately.
+ * @return
+ *   - On success, returns the number of available event.
+ *   - On failure, a negative value.
+ */
+__rte_experimental
+int
+rte_epoll_wait_interruptible(int epfd, struct rte_epoll_event *events,
 	       int maxevents, int timeout);
 
 /**

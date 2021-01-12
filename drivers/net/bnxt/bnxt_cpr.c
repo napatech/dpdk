@@ -46,6 +46,51 @@ void bnxt_wait_for_device_shutdown(struct bnxt *bp)
 	} while (timeout);
 }
 
+static void
+bnxt_process_default_vnic_change(struct bnxt *bp,
+				 struct hwrm_async_event_cmpl *async_cmp)
+{
+	uint16_t vnic_state, vf_fid, vf_id;
+	struct bnxt_representor *vf_rep_bp;
+	struct rte_eth_dev *eth_dev;
+	bool vfr_found = false;
+	uint32_t event_data;
+
+	if (!BNXT_TRUFLOW_EN(bp))
+		return;
+
+	PMD_DRV_LOG(INFO, "Default vnic change async event received\n");
+	event_data = rte_le_to_cpu_32(async_cmp->event_data1);
+
+	vnic_state = (event_data & BNXT_DEFAULT_VNIC_STATE_MASK) >>
+			BNXT_DEFAULT_VNIC_STATE_SFT;
+	if (vnic_state != BNXT_DEFAULT_VNIC_ALLOC)
+		return;
+
+	if (!bp->rep_info)
+		return;
+
+	vf_fid = (event_data & BNXT_DEFAULT_VNIC_CHANGE_VF_ID_MASK) >>
+			BNXT_DEFAULT_VNIC_CHANGE_VF_ID_SFT;
+	PMD_DRV_LOG(INFO, "async event received vf_id 0x%x\n", vf_fid);
+
+	for (vf_id = 0; vf_id < BNXT_MAX_VF_REPS; vf_id++) {
+		eth_dev = bp->rep_info[vf_id].vfr_eth_dev;
+		if (!eth_dev)
+			continue;
+		vf_rep_bp = eth_dev->data->dev_private;
+		if (vf_rep_bp &&
+		    vf_rep_bp->fw_fid == vf_fid) {
+			vfr_found = true;
+			break;
+		}
+	}
+	if (!vfr_found)
+		return;
+
+	bnxt_rep_dev_start_op(eth_dev);
+}
+
 /*
  * Async event handling
  */
@@ -63,7 +108,7 @@ void bnxt_handle_async_event(struct bnxt *bp,
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_LINK_SPEED_CHANGE:
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_LINK_SPEED_CFG_CHANGE:
 		/* FALLTHROUGH */
-		bnxt_link_update(bp->eth_dev, 0, ETH_LINK_UP);
+		bnxt_link_update_op(bp->eth_dev, 0);
 		break;
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_PF_DRVR_UNLOAD:
 		PMD_DRV_LOG(INFO, "Async event: PF driver unloaded\n");
@@ -76,6 +121,12 @@ void bnxt_handle_async_event(struct bnxt *bp,
 		PMD_DRV_LOG(INFO, "Port conn async event\n");
 		break;
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_RESET_NOTIFY:
+		/*
+		 * Avoid any rx/tx packet processing during firmware reset
+		 * operation.
+		 */
+		bnxt_stop_rxtx(bp);
+
 		/* Ignore reset notify async events when stopping the port */
 		if (!bp->eth_dev->data->dev_started) {
 			bp->flags |= BNXT_FLAG_FATAL_ERROR;
@@ -144,6 +195,9 @@ void bnxt_handle_async_event(struct bnxt *bp,
 			    rte_le_to_cpu_32(async_cmp->event_data1),
 			    rte_le_to_cpu_32(async_cmp->event_data2));
 		break;
+	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_DEFAULT_VNIC_CHANGE:
+		bnxt_process_default_vnic_change(bp, async_cmp);
+		break;
 	default:
 		PMD_DRV_LOG(DEBUG, "handle_async_event id = 0x%x\n", event_id);
 		break;
@@ -188,7 +242,7 @@ void bnxt_handle_fwd_req(struct bnxt *bp, struct cmpl_base *cmpl)
 		goto reject;
 	}
 
-	if (bnxt_rcv_msg_from_vf(bp, vf_id, fwd_cmd) == true) {
+	if (bnxt_rcv_msg_from_vf(bp, vf_id, fwd_cmd)) {
 		/*
 		 * In older firmware versions, the MAC had to be all zeros for
 		 * the VF to set it's MAC via hwrm_func_vf_cfg. Set to all
@@ -203,6 +257,7 @@ void bnxt_handle_fwd_req(struct bnxt *bp, struct cmpl_base *cmpl)
 				(const uint8_t *)"\x00\x00\x00\x00\x00");
 			}
 		}
+
 		if (fwd_cmd->req_type == HWRM_CFA_L2_SET_RX_MASK) {
 			struct hwrm_cfa_l2_set_rx_mask_input *srm =
 							(void *)fwd_cmd;
@@ -214,6 +269,7 @@ void bnxt_handle_fwd_req(struct bnxt *bp, struct cmpl_base *cmpl)
 			    HWRM_CFA_L2_SET_RX_MASK_INPUT_MASK_VLAN_NONVLAN |
 			    HWRM_CFA_L2_SET_RX_MASK_INPUT_MASK_ANYVLAN_NONVLAN);
 		}
+
 		/* Forward */
 		rc = bnxt_hwrm_exec_fwd_resp(bp, fw_vf_id, fwd_cmd, req_len);
 		if (rc) {
@@ -255,7 +311,7 @@ int bnxt_event_hwrm_resp_handler(struct bnxt *bp, struct cmpl_base *cmp)
 		bnxt_handle_async_event(bp, cmp);
 		evt = 1;
 		break;
-	case CMPL_BASE_TYPE_HWRM_FWD_RESP:
+	case CMPL_BASE_TYPE_HWRM_FWD_REQ:
 		/* Handle HWRM forwarded responses */
 		bnxt_handle_fwd_req(bp, cmp);
 		evt = 1;
@@ -286,4 +342,10 @@ bool bnxt_is_recovery_enabled(struct bnxt *bp)
 		return true;
 
 	return false;
+}
+
+void bnxt_stop_rxtx(struct bnxt *bp)
+{
+	bp->eth_dev->rx_pkt_burst = &bnxt_dummy_recv_pkts;
+	bp->eth_dev->tx_pkt_burst = &bnxt_dummy_xmit_pkts;
 }

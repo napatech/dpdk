@@ -37,8 +37,8 @@ static int avp_dev_create(struct rte_pci_device *pci_dev,
 
 static int avp_dev_configure(struct rte_eth_dev *dev);
 static int avp_dev_start(struct rte_eth_dev *dev);
-static void avp_dev_stop(struct rte_eth_dev *dev);
-static void avp_dev_close(struct rte_eth_dev *dev);
+static int avp_dev_stop(struct rte_eth_dev *dev);
+static int avp_dev_close(struct rte_eth_dev *dev);
 static int avp_dev_info_get(struct rte_eth_dev *dev,
 			    struct rte_eth_dev_info *dev_info);
 static int avp_vlan_offload_set(struct rte_eth_dev *dev, int mask);
@@ -957,8 +957,6 @@ eth_avp_dev_init(struct rte_eth_dev *eth_dev)
 	eth_dev->dev_ops = &avp_eth_dev_ops;
 	eth_dev->rx_pkt_burst = &avp_recv_pkts;
 	eth_dev->tx_pkt_burst = &avp_xmit_pkts;
-	/* Let rte_eth_dev_close() release the port resources */
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_CLOSE_REMOVE;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
 		/*
@@ -976,6 +974,7 @@ eth_avp_dev_init(struct rte_eth_dev *eth_dev)
 	}
 
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	/* Check current migration status */
 	if (avp_dev_migration_pending(eth_dev)) {
@@ -2077,7 +2076,7 @@ unlock:
 	return ret;
 }
 
-static void
+static int
 avp_dev_stop(struct rte_eth_dev *eth_dev)
 {
 	struct avp_dev *avp = AVP_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
@@ -2086,6 +2085,7 @@ avp_dev_stop(struct rte_eth_dev *eth_dev)
 	rte_spinlock_lock(&avp->lock);
 	if (avp->flags & AVP_F_DETACHED) {
 		PMD_DRV_LOG(ERR, "Operation not supported during VM live migration\n");
+		ret = -ENOTSUP;
 		goto unlock;
 	}
 
@@ -2101,13 +2101,17 @@ avp_dev_stop(struct rte_eth_dev *eth_dev)
 
 unlock:
 	rte_spinlock_unlock(&avp->lock);
+	return ret;
 }
 
-static void
+static int
 avp_dev_close(struct rte_eth_dev *eth_dev)
 {
 	struct avp_dev *avp = AVP_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
 	int ret;
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	rte_spinlock_lock(&avp->lock);
 	if (avp->flags & AVP_F_DETACHED) {
@@ -2139,6 +2143,7 @@ avp_dev_close(struct rte_eth_dev *eth_dev)
 
 unlock:
 	rte_spinlock_unlock(&avp->lock);
+	return 0;
 }
 
 static int

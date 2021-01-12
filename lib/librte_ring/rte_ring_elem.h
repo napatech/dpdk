@@ -373,8 +373,7 @@ __rte_ring_dequeue_elems(struct rte_ring *r, uint32_t cons_head,
  * (powerpc/arm).
  * There are 2 choices for the users
  * 1.use rmb() memory barrier
- * 2.use one-direction load_acquire/store_release barrier,defined by
- * CONFIG_RTE_USE_C11_MEM_MODEL=y
+ * 2.use one-direction load_acquire/store_release barrier
  * It depends on performance test results.
  * By default, move common functions to rte_ring_generic.h
  */
@@ -1080,6 +1079,7 @@ rte_ring_dequeue_burst_elem(struct rte_ring *r, void *obj_table,
 
 #ifdef ALLOW_EXPERIMENTAL_API
 #include <rte_ring_peek.h>
+#include <rte_ring_peek_zc.h>
 #endif
 
 #include <rte_ring.h>

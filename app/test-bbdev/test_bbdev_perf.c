@@ -24,9 +24,10 @@
 #define GET_SOCKET(socket_id) (((socket_id) == SOCKET_ID_ANY) ? 0 : (socket_id))
 
 #define MAX_QUEUES RTE_MAX_LCORE
-#define TEST_REPETITIONS 1000
+#define TEST_REPETITIONS 100
+#define WAIT_OFFLOAD_US 1000
 
-#ifdef RTE_LIBRTE_PMD_BBDEV_FPGA_LTE_FEC
+#ifdef RTE_BASEBAND_FPGA_LTE_FEC
 #include <fpga_lte_fec.h>
 #define FPGA_LTE_PF_DRIVER_NAME ("intel_fpga_lte_fec_pf")
 #define FPGA_LTE_VF_DRIVER_NAME ("intel_fpga_lte_fec_vf")
@@ -39,7 +40,7 @@
 #define FLR_4G_TIMEOUT 610
 #endif
 
-#ifdef RTE_LIBRTE_PMD_BBDEV_FPGA_5GNR_FEC
+#ifdef RTE_BASEBAND_FPGA_5GNR_FEC
 #include <rte_pmd_fpga_5gnr_fec.h>
 #define FPGA_5GNR_PF_DRIVER_NAME ("intel_fpga_5gnr_fec_pf")
 #define FPGA_5GNR_VF_DRIVER_NAME ("intel_fpga_5gnr_fec_vf")
@@ -50,6 +51,18 @@
 #define UL_5G_LOAD_BALANCE 128
 #define DL_5G_LOAD_BALANCE 128
 #define FLR_5G_TIMEOUT 610
+#endif
+
+#ifdef RTE_BASEBAND_ACC100
+#include <rte_acc100_cfg.h>
+#define ACC100PF_DRIVER_NAME   ("intel_acc100_pf")
+#define ACC100VF_DRIVER_NAME   ("intel_acc100_vf")
+#define ACC100_QMGR_NUM_AQS 16
+#define ACC100_QMGR_NUM_QGS 2
+#define ACC100_QMGR_AQ_DEPTH 5
+#define ACC100_QMGR_INVALID_IDX -1
+#define ACC100_QMGR_RR 1
+#define ACC100_QOS_GBR 0
 #endif
 
 #define OPS_CACHE_SIZE 256U
@@ -565,17 +578,17 @@ add_bbdev_dev(uint8_t dev_id, struct rte_bbdev_info *info,
 /* Configure fpga lte fec with PF & VF values
  * if '-i' flag is set and using fpga device
  */
-#ifdef RTE_LIBRTE_PMD_BBDEV_FPGA_LTE_FEC
+#ifdef RTE_BASEBAND_FPGA_LTE_FEC
 	if ((get_init_device() == true) &&
 		(!strcmp(info->drv.driver_name, FPGA_LTE_PF_DRIVER_NAME))) {
-		struct fpga_lte_fec_conf conf;
+		struct rte_fpga_lte_fec_conf conf;
 		unsigned int i;
 
 		printf("Configure FPGA LTE FEC Driver %s with default values\n",
 				info->drv.driver_name);
 
 		/* clear default configuration before initialization */
-		memset(&conf, 0, sizeof(struct fpga_lte_fec_conf));
+		memset(&conf, 0, sizeof(struct rte_fpga_lte_fec_conf));
 
 		/* Set PF mode :
 		 * true if PF is used for data plane
@@ -603,23 +616,23 @@ add_bbdev_dev(uint8_t dev_id, struct rte_bbdev_info *info,
 		conf.flr_time_out = FLR_4G_TIMEOUT;
 
 		/* setup FPGA PF with configuration information */
-		ret = fpga_lte_fec_configure(info->dev_name, &conf);
+		ret = rte_fpga_lte_fec_configure(info->dev_name, &conf);
 		TEST_ASSERT_SUCCESS(ret,
 				"Failed to configure 4G FPGA PF for bbdev %s",
 				info->dev_name);
 	}
 #endif
-#ifdef RTE_LIBRTE_PMD_BBDEV_FPGA_5GNR_FEC
+#ifdef RTE_BASEBAND_FPGA_5GNR_FEC
 	if ((get_init_device() == true) &&
 		(!strcmp(info->drv.driver_name, FPGA_5GNR_PF_DRIVER_NAME))) {
-		struct fpga_5gnr_fec_conf conf;
+		struct rte_fpga_5gnr_fec_conf conf;
 		unsigned int i;
 
 		printf("Configure FPGA 5GNR FEC Driver %s with default values\n",
 				info->drv.driver_name);
 
 		/* clear default configuration before initialization */
-		memset(&conf, 0, sizeof(struct fpga_5gnr_fec_conf));
+		memset(&conf, 0, sizeof(struct rte_fpga_5gnr_fec_conf));
 
 		/* Set PF mode :
 		 * true if PF is used for data plane
@@ -647,12 +660,71 @@ add_bbdev_dev(uint8_t dev_id, struct rte_bbdev_info *info,
 		conf.flr_time_out = FLR_5G_TIMEOUT;
 
 		/* setup FPGA PF with configuration information */
-		ret = fpga_5gnr_fec_configure(info->dev_name, &conf);
+		ret = rte_fpga_5gnr_fec_configure(info->dev_name, &conf);
 		TEST_ASSERT_SUCCESS(ret,
 				"Failed to configure 5G FPGA PF for bbdev %s",
 				info->dev_name);
 	}
 #endif
+#ifdef RTE_BASEBAND_ACC100
+	if ((get_init_device() == true) &&
+		(!strcmp(info->drv.driver_name, ACC100PF_DRIVER_NAME))) {
+		struct rte_acc100_conf conf;
+		unsigned int i;
+
+		printf("Configure ACC100 FEC Driver %s with default values\n",
+				info->drv.driver_name);
+
+		/* clear default configuration before initialization */
+		memset(&conf, 0, sizeof(struct rte_acc100_conf));
+
+		/* Always set in PF mode for built-in configuration */
+		conf.pf_mode_en = true;
+		for (i = 0; i < RTE_ACC100_NUM_VFS; ++i) {
+			conf.arb_dl_4g[i].gbr_threshold1 = ACC100_QOS_GBR;
+			conf.arb_dl_4g[i].gbr_threshold1 = ACC100_QOS_GBR;
+			conf.arb_dl_4g[i].round_robin_weight = ACC100_QMGR_RR;
+			conf.arb_ul_4g[i].gbr_threshold1 = ACC100_QOS_GBR;
+			conf.arb_ul_4g[i].gbr_threshold1 = ACC100_QOS_GBR;
+			conf.arb_ul_4g[i].round_robin_weight = ACC100_QMGR_RR;
+			conf.arb_dl_5g[i].gbr_threshold1 = ACC100_QOS_GBR;
+			conf.arb_dl_5g[i].gbr_threshold1 = ACC100_QOS_GBR;
+			conf.arb_dl_5g[i].round_robin_weight = ACC100_QMGR_RR;
+			conf.arb_ul_5g[i].gbr_threshold1 = ACC100_QOS_GBR;
+			conf.arb_ul_5g[i].gbr_threshold1 = ACC100_QOS_GBR;
+			conf.arb_ul_5g[i].round_robin_weight = ACC100_QMGR_RR;
+		}
+
+		conf.input_pos_llr_1_bit = true;
+		conf.output_pos_llr_1_bit = true;
+		conf.num_vf_bundles = 1; /**< Number of VF bundles to setup */
+
+		conf.q_ul_4g.num_qgroups = ACC100_QMGR_NUM_QGS;
+		conf.q_ul_4g.first_qgroup_index = ACC100_QMGR_INVALID_IDX;
+		conf.q_ul_4g.num_aqs_per_groups = ACC100_QMGR_NUM_AQS;
+		conf.q_ul_4g.aq_depth_log2 = ACC100_QMGR_AQ_DEPTH;
+		conf.q_dl_4g.num_qgroups = ACC100_QMGR_NUM_QGS;
+		conf.q_dl_4g.first_qgroup_index = ACC100_QMGR_INVALID_IDX;
+		conf.q_dl_4g.num_aqs_per_groups = ACC100_QMGR_NUM_AQS;
+		conf.q_dl_4g.aq_depth_log2 = ACC100_QMGR_AQ_DEPTH;
+		conf.q_ul_5g.num_qgroups = ACC100_QMGR_NUM_QGS;
+		conf.q_ul_5g.first_qgroup_index = ACC100_QMGR_INVALID_IDX;
+		conf.q_ul_5g.num_aqs_per_groups = ACC100_QMGR_NUM_AQS;
+		conf.q_ul_5g.aq_depth_log2 = ACC100_QMGR_AQ_DEPTH;
+		conf.q_dl_5g.num_qgroups = ACC100_QMGR_NUM_QGS;
+		conf.q_dl_5g.first_qgroup_index = ACC100_QMGR_INVALID_IDX;
+		conf.q_dl_5g.num_aqs_per_groups = ACC100_QMGR_NUM_AQS;
+		conf.q_dl_5g.aq_depth_log2 = ACC100_QMGR_AQ_DEPTH;
+
+		/* setup PF with configuration information */
+		ret = rte_acc100_configure(info->dev_name, &conf);
+		TEST_ASSERT_SUCCESS(ret,
+				"Failed to configure ACC100 PF for bbdev %s",
+				info->dev_name);
+	}
+#endif
+	/* Let's refresh this now this is configured */
+	rte_bbdev_info_get(dev_id, info);
 	nb_queues = RTE_MIN(rte_lcore_count(), info->drv.max_num_queues);
 	nb_queues = RTE_MIN(nb_queues, (unsigned int) MAX_QUEUES);
 
@@ -2396,7 +2468,7 @@ retrieve_harq_ddr(uint16_t dev_id, uint16_t queue_id,
 {
 	uint16_t j;
 	int save_status, ret;
-	uint32_t harq_offset = (uint32_t) queue_id * HARQ_INCR * 1024;
+	uint32_t harq_offset = (uint32_t) queue_id * HARQ_INCR * MAX_OPS;
 	struct rte_bbdev_dec_op *ops_deq[MAX_BURST];
 	uint32_t flags = ops[0]->ldpc_dec.op_flags;
 	bool loopback = flags & RTE_BBDEV_LDPC_INTERNAL_HARQ_MEMORY_LOOPBACK;
@@ -2442,20 +2514,20 @@ preload_harq_ddr(uint16_t dev_id, uint16_t queue_id,
 		bool preload)
 {
 	uint16_t j;
-	int ret;
-	uint32_t harq_offset = (uint32_t) queue_id * HARQ_INCR * 1024;
-	struct rte_bbdev_op_data save_hc_in, save_hc_out;
-	struct rte_bbdev_dec_op *ops_deq[MAX_BURST];
+	int deq;
+	uint32_t harq_offset = (uint32_t) queue_id * HARQ_INCR * MAX_OPS;
+	struct rte_bbdev_op_data save_hc_in[MAX_OPS], save_hc_out[MAX_OPS];
+	struct rte_bbdev_dec_op *ops_deq[MAX_OPS];
 	uint32_t flags = ops[0]->ldpc_dec.op_flags;
 	bool mem_in = flags & RTE_BBDEV_LDPC_INTERNAL_HARQ_MEMORY_IN_ENABLE;
 	bool hc_in = flags & RTE_BBDEV_LDPC_HQ_COMBINE_IN_ENABLE;
 	bool mem_out = flags & RTE_BBDEV_LDPC_INTERNAL_HARQ_MEMORY_OUT_ENABLE;
 	bool hc_out = flags & RTE_BBDEV_LDPC_HQ_COMBINE_OUT_ENABLE;
 	bool h_comp = flags & RTE_BBDEV_LDPC_HARQ_6BIT_COMPRESSION;
-	for (j = 0; j < n; ++j) {
-		if ((mem_in || hc_in) && preload) {
-			save_hc_in = ops[j]->ldpc_dec.harq_combined_input;
-			save_hc_out = ops[j]->ldpc_dec.harq_combined_output;
+	if ((mem_in || hc_in) && preload) {
+		for (j = 0; j < n; ++j) {
+			save_hc_in[j] = ops[j]->ldpc_dec.harq_combined_input;
+			save_hc_out[j] = ops[j]->ldpc_dec.harq_combined_output;
 			ops[j]->ldpc_dec.op_flags =
 				RTE_BBDEV_LDPC_INTERNAL_HARQ_MEMORY_LOOPBACK +
 				RTE_BBDEV_LDPC_INTERNAL_HARQ_MEMORY_OUT_ENABLE;
@@ -2465,16 +2537,23 @@ preload_harq_ddr(uint16_t dev_id, uint16_t queue_id,
 			ops[j]->ldpc_dec.harq_combined_output.offset =
 					harq_offset;
 			ops[j]->ldpc_dec.harq_combined_input.offset = 0;
-			rte_bbdev_enqueue_ldpc_dec_ops(dev_id, queue_id,
-					&ops[j], 1);
-			ret = 0;
-			while (ret == 0)
-				ret = rte_bbdev_dequeue_ldpc_dec_ops(
-					dev_id, queue_id, &ops_deq[j], 1);
-			ops[j]->ldpc_dec.op_flags = flags;
-			ops[j]->ldpc_dec.harq_combined_input = save_hc_in;
-			ops[j]->ldpc_dec.harq_combined_output = save_hc_out;
+			harq_offset += HARQ_INCR;
 		}
+		rte_bbdev_enqueue_ldpc_dec_ops(dev_id, queue_id, &ops[0], n);
+		deq = 0;
+		while (deq != n)
+			deq += rte_bbdev_dequeue_ldpc_dec_ops(
+					dev_id, queue_id, &ops_deq[deq],
+					n - deq);
+		/* Restore the operations */
+		for (j = 0; j < n; ++j) {
+			ops[j]->ldpc_dec.op_flags = flags;
+			ops[j]->ldpc_dec.harq_combined_input = save_hc_in[j];
+			ops[j]->ldpc_dec.harq_combined_output = save_hc_out[j];
+		}
+	}
+	harq_offset = (uint32_t) queue_id * HARQ_INCR * MAX_OPS;
+	for (j = 0; j < n; ++j) {
 		/* Adjust HARQ offset when we reach external DDR */
 		if (mem_in || hc_in)
 			ops[j]->ldpc_dec.harq_combined_input.offset
@@ -3160,11 +3239,9 @@ bler_pmd_lcore_ldpc_dec(void *arg)
 				mbuf_reset(
 				ops_enq[j]->ldpc_dec.harq_combined_output.data);
 		}
-		if (extDdr) {
-			bool preload = i == (TEST_REPETITIONS - 1);
+		if (extDdr)
 			preload_harq_ddr(tp->dev_id, queue_id, ops_enq,
-					num_ops, preload);
-		}
+					num_ops, true);
 		start_time = rte_rdtsc_precise();
 
 		for (enq = 0, deq = 0; enq < num_ops;) {
@@ -3291,11 +3368,9 @@ throughput_pmd_lcore_ldpc_dec(void *arg)
 				mbuf_reset(
 				ops_enq[j]->ldpc_dec.harq_combined_output.data);
 		}
-		if (extDdr) {
-			bool preload = i == (TEST_REPETITIONS - 1);
+		if (extDdr)
 			preload_harq_ddr(tp->dev_id, queue_id, ops_enq,
-					num_ops, preload);
-		}
+					num_ops, true);
 		start_time = rte_rdtsc_precise();
 
 		for (enq = 0, deq = 0; enq < num_ops;) {
@@ -3644,21 +3719,25 @@ bler_test(struct active_device *ad,
 			RTE_ALIGN(sizeof(struct thread_params) * num_lcores,
 				RTE_CACHE_LINE_SIZE));
 
-	if (test_vector.op_type == RTE_BBDEV_OP_LDPC_DEC)
+	if ((test_vector.op_type == RTE_BBDEV_OP_LDPC_DEC) &&
+			!check_bit(test_vector.ldpc_dec.op_flags,
+			RTE_BBDEV_LDPC_INTERNAL_HARQ_MEMORY_LOOPBACK)
+			&& !check_bit(test_vector.ldpc_dec.op_flags,
+			RTE_BBDEV_LDPC_LLR_COMPRESSION))
 		bler_function = bler_pmd_lcore_ldpc_dec;
 	else
 		return TEST_SKIPPED;
 
 	rte_atomic16_set(&op_params->sync, SYNC_WAIT);
 
-	/* Master core is set at first entry */
+	/* Main core is set at first entry */
 	t_params[0].dev_id = ad->dev_id;
 	t_params[0].lcore_id = rte_lcore_id();
 	t_params[0].op_params = op_params;
 	t_params[0].queue_id = ad->queue_ids[used_cores++];
 	t_params[0].iter_count = 0;
 
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		if (used_cores >= num_lcores)
 			break;
 
@@ -3675,7 +3754,7 @@ bler_test(struct active_device *ad,
 	rte_atomic16_set(&op_params->sync, SYNC_START);
 	ret = bler_function(&t_params[0]);
 
-	/* Master core is always used */
+	/* Main core is always used */
 	for (used_cores = 1; used_cores < num_lcores; used_cores++)
 		ret |= rte_eal_wait_lcore(t_params[used_cores].lcore_id);
 
@@ -3769,14 +3848,14 @@ throughput_test(struct active_device *ad,
 
 	rte_atomic16_set(&op_params->sync, SYNC_WAIT);
 
-	/* Master core is set at first entry */
+	/* Main core is set at first entry */
 	t_params[0].dev_id = ad->dev_id;
 	t_params[0].lcore_id = rte_lcore_id();
 	t_params[0].op_params = op_params;
 	t_params[0].queue_id = ad->queue_ids[used_cores++];
 	t_params[0].iter_count = 0;
 
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		if (used_cores >= num_lcores)
 			break;
 
@@ -3793,7 +3872,7 @@ throughput_test(struct active_device *ad,
 	rte_atomic16_set(&op_params->sync, SYNC_START);
 	ret = throughput_function(&t_params[0]);
 
-	/* Master core is always used */
+	/* Main core is always used */
 	for (used_cores = 1; used_cores < num_lcores; used_cores++)
 		ret |= rte_eal_wait_lcore(t_params[used_cores].lcore_id);
 
@@ -3817,7 +3896,7 @@ throughput_test(struct active_device *ad,
 	/* In interrupt TC we need to wait for the interrupt callback to deqeue
 	 * all pending operations. Skip waiting for queues which reported an
 	 * error using processing_status variable.
-	 * Wait for master lcore operations.
+	 * Wait for main lcore operations.
 	 */
 	tp = &t_params[0];
 	while ((rte_atomic16_read(&tp->nb_dequeued) <
@@ -3830,7 +3909,7 @@ throughput_test(struct active_device *ad,
 	tp->mbps /= TEST_REPETITIONS;
 	ret |= (int)rte_atomic16_read(&tp->processing_status);
 
-	/* Wait for slave lcores operations */
+	/* Wait for worker lcores operations */
 	for (used_cores = 1; used_cores < num_lcores; used_cores++) {
 		tp = &t_params[used_cores];
 
@@ -3928,12 +4007,14 @@ latency_test_dec(struct rte_mempool *mempool,
 	return i;
 }
 
+/* Test case for latency/validation for LDPC Decoder */
 static int
 latency_test_ldpc_dec(struct rte_mempool *mempool,
 		struct test_buffers *bufs, struct rte_bbdev_dec_op *ref_op,
 		int vector_mask, uint16_t dev_id, uint16_t queue_id,
 		const uint16_t num_to_process, uint16_t burst_sz,
-		uint64_t *total_time, uint64_t *min_time, uint64_t *max_time)
+		uint64_t *total_time, uint64_t *min_time, uint64_t *max_time,
+		bool disable_et)
 {
 	int ret = TEST_SUCCESS;
 	uint16_t i, j, dequeued;
@@ -3955,7 +4036,7 @@ latency_test_ldpc_dec(struct rte_mempool *mempool,
 				"rte_bbdev_dec_op_alloc_bulk() failed");
 
 		/* For latency tests we need to disable early termination */
-		if (check_bit(ref_op->ldpc_dec.op_flags,
+		if (disable_et && check_bit(ref_op->ldpc_dec.op_flags,
 				RTE_BBDEV_LDPC_ITERATION_STOP_ENABLE))
 			ref_op->ldpc_dec.op_flags -=
 					RTE_BBDEV_LDPC_ITERATION_STOP_ENABLE;
@@ -4150,9 +4231,10 @@ latency_test_ldpc_enc(struct rte_mempool *mempool,
 	return i;
 }
 
+/* Common function for running validation and latency test cases */
 static int
-latency_test(struct active_device *ad,
-		struct test_op_params *op_params)
+validation_latency_test(struct active_device *ad,
+		struct test_op_params *op_params, bool latency_flag)
 {
 	int iter;
 	uint16_t burst_sz = op_params->burst_sz;
@@ -4177,7 +4259,11 @@ latency_test(struct active_device *ad,
 	TEST_ASSERT_NOT_NULL(op_type_str, "Invalid op type: %u", op_type);
 
 	printf("+ ------------------------------------------------------- +\n");
-	printf("== test: validation/latency\ndev: %s, burst size: %u, num ops: %u, op type: %s\n",
+	if (latency_flag)
+		printf("== test: latency\ndev:");
+	else
+		printf("== test: validation\ndev:");
+	printf("%s, burst size: %u, num ops: %u, op type: %s\n",
 			info.dev_name, burst_sz, num_to_process, op_type_str);
 
 	if (op_type == RTE_BBDEV_OP_TURBO_DEC)
@@ -4185,11 +4271,6 @@ latency_test(struct active_device *ad,
 				op_params->ref_dec_op, op_params->vector_mask,
 				ad->dev_id, queue_id, num_to_process,
 				burst_sz, &total_time, &min_time, &max_time);
-	else if (op_type == RTE_BBDEV_OP_TURBO_ENC)
-		iter = latency_test_enc(op_params->mp, bufs,
-				op_params->ref_enc_op, ad->dev_id, queue_id,
-				num_to_process, burst_sz, &total_time,
-				&min_time, &max_time);
 	else if (op_type == RTE_BBDEV_OP_LDPC_ENC)
 		iter = latency_test_ldpc_enc(op_params->mp, bufs,
 				op_params->ref_enc_op, ad->dev_id, queue_id,
@@ -4199,13 +4280,14 @@ latency_test(struct active_device *ad,
 		iter = latency_test_ldpc_dec(op_params->mp, bufs,
 				op_params->ref_dec_op, op_params->vector_mask,
 				ad->dev_id, queue_id, num_to_process,
-				burst_sz, &total_time, &min_time, &max_time);
-	else
+				burst_sz, &total_time, &min_time, &max_time,
+				latency_flag);
+	else /* RTE_BBDEV_OP_TURBO_ENC */
 		iter = latency_test_enc(op_params->mp, bufs,
-					op_params->ref_enc_op,
-					ad->dev_id, queue_id,
-					num_to_process, burst_sz, &total_time,
-					&min_time, &max_time);
+				op_params->ref_enc_op,
+				ad->dev_id, queue_id,
+				num_to_process, burst_sz, &total_time,
+				&min_time, &max_time);
 
 	if (iter <= 0)
 		return TEST_FAILED;
@@ -4222,6 +4304,18 @@ latency_test(struct active_device *ad,
 			(double)rte_get_tsc_hz());
 
 	return TEST_SUCCESS;
+}
+
+static int
+latency_test(struct active_device *ad, struct test_op_params *op_params)
+{
+	return validation_latency_test(ad, op_params, true);
+}
+
+static int
+validation_test(struct active_device *ad, struct test_op_params *op_params)
+{
+	return validation_latency_test(ad, op_params, false);
 }
 
 #ifdef RTE_BBDEV_OFFLOAD_COST
@@ -4299,15 +4393,15 @@ offload_latency_test_dec(struct rte_mempool *mempool, struct test_buffers *bufs,
 		time_st->enq_acc_total_time += stats.acc_offload_cycles;
 
 		/* give time for device to process ops */
-		rte_delay_us(200);
+		rte_delay_us(WAIT_OFFLOAD_US);
 
 		/* Start time meas for dequeue function offload latency */
 		deq_start_time = rte_rdtsc_precise();
 		/* Dequeue one operation */
 		do {
 			deq += rte_bbdev_dequeue_dec_ops(dev_id, queue_id,
-					&ops_deq[deq], 1);
-		} while (unlikely(deq != 1));
+					&ops_deq[deq], enq);
+		} while (unlikely(deq == 0));
 
 		deq_last_time = rte_rdtsc_precise() - deq_start_time;
 		time_st->deq_max_time = RTE_MAX(time_st->deq_max_time,
@@ -4390,15 +4484,15 @@ offload_latency_test_ldpc_dec(struct rte_mempool *mempool,
 		time_st->enq_acc_total_time += stats.acc_offload_cycles;
 
 		/* give time for device to process ops */
-		rte_delay_us(200);
+		rte_delay_us(WAIT_OFFLOAD_US);
 
 		/* Start time meas for dequeue function offload latency */
 		deq_start_time = rte_rdtsc_precise();
 		/* Dequeue one operation */
 		do {
 			deq += rte_bbdev_dequeue_ldpc_dec_ops(dev_id, queue_id,
-					&ops_deq[deq], 1);
-		} while (unlikely(deq != 1));
+					&ops_deq[deq], enq);
+		} while (unlikely(deq == 0));
 
 		deq_last_time = rte_rdtsc_precise() - deq_start_time;
 		time_st->deq_max_time = RTE_MAX(time_st->deq_max_time,
@@ -4478,15 +4572,15 @@ offload_latency_test_enc(struct rte_mempool *mempool, struct test_buffers *bufs,
 		time_st->enq_acc_total_time += stats.acc_offload_cycles;
 
 		/* give time for device to process ops */
-		rte_delay_us(200);
+		rte_delay_us(WAIT_OFFLOAD_US);
 
 		/* Start time meas for dequeue function offload latency */
 		deq_start_time = rte_rdtsc_precise();
 		/* Dequeue one operation */
 		do {
 			deq += rte_bbdev_dequeue_enc_ops(dev_id, queue_id,
-					&ops_deq[deq], 1);
-		} while (unlikely(deq != 1));
+					&ops_deq[deq], enq);
+		} while (unlikely(deq == 0));
 
 		deq_last_time = rte_rdtsc_precise() - deq_start_time;
 		time_st->deq_max_time = RTE_MAX(time_st->deq_max_time,
@@ -4561,15 +4655,15 @@ offload_latency_test_ldpc_enc(struct rte_mempool *mempool,
 		time_st->enq_acc_total_time += stats.acc_offload_cycles;
 
 		/* give time for device to process ops */
-		rte_delay_us(200);
+		rte_delay_us(WAIT_OFFLOAD_US);
 
 		/* Start time meas for dequeue function offload latency */
 		deq_start_time = rte_rdtsc_precise();
 		/* Dequeue one operation */
 		do {
 			deq += rte_bbdev_dequeue_ldpc_enc_ops(dev_id, queue_id,
-					&ops_deq[deq], 1);
-		} while (unlikely(deq != 1));
+					&ops_deq[deq], enq);
+		} while (unlikely(deq == 0));
 
 		deq_last_time = rte_rdtsc_precise() - deq_start_time;
 		time_st->deq_max_time = RTE_MAX(time_st->deq_max_time,
@@ -4690,6 +4784,23 @@ offload_cost_test(struct active_device *ad,
 			rte_get_tsc_hz(), (double)time_st.deq_max_time,
 			(double)(time_st.deq_max_time * 1000000) /
 			rte_get_tsc_hz());
+
+	struct rte_bbdev_stats stats = {0};
+	get_bbdev_queue_stats(ad->dev_id, queue_id, &stats);
+	if (op_type != RTE_BBDEV_OP_LDPC_DEC) {
+		TEST_ASSERT_SUCCESS(stats.enqueued_count != num_to_process,
+				"Mismatch in enqueue count %10"PRIu64" %d",
+				stats.enqueued_count, num_to_process);
+		TEST_ASSERT_SUCCESS(stats.dequeued_count != num_to_process,
+				"Mismatch in dequeue count %10"PRIu64" %d",
+				stats.dequeued_count, num_to_process);
+	}
+	TEST_ASSERT_SUCCESS(stats.enqueue_err_count != 0,
+			"Enqueue count Error %10"PRIu64"",
+			stats.enqueue_err_count);
+	TEST_ASSERT_SUCCESS(stats.dequeue_err_count != 0,
+			"Dequeue count Error (%10"PRIu64"",
+			stats.dequeue_err_count);
 
 	return TEST_SUCCESS;
 #endif
@@ -4859,6 +4970,12 @@ latency_tc(void)
 }
 
 static int
+validation_tc(void)
+{
+	return run_test_case(validation_test);
+}
+
+static int
 interrupt_tc(void)
 {
 	return run_test_case(throughput_test);
@@ -4889,7 +5006,7 @@ static struct unit_test_suite bbdev_validation_testsuite = {
 	.setup = testsuite_setup,
 	.teardown = testsuite_teardown,
 	.unit_test_cases = {
-		TEST_CASE_ST(ut_setup, ut_teardown, latency_tc),
+		TEST_CASE_ST(ut_setup, ut_teardown, validation_tc),
 		TEST_CASES_END() /**< NULL terminate unit test array */
 	}
 };

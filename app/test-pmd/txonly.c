@@ -156,6 +156,34 @@ setup_pkt_udp_ip_headers(struct rte_ipv4_hdr *ip_hdr,
 	ip_hdr->hdr_checksum = (uint16_t) ip_cksum;
 }
 
+static inline void
+update_pkt_header(struct rte_mbuf *pkt, uint32_t total_pkt_len)
+{
+	struct rte_ipv4_hdr *ip_hdr;
+	struct rte_udp_hdr *udp_hdr;
+	uint16_t pkt_data_len;
+	uint16_t pkt_len;
+
+	pkt_data_len = (uint16_t) (total_pkt_len - (
+					sizeof(struct rte_ether_hdr) +
+					sizeof(struct rte_ipv4_hdr) +
+					sizeof(struct rte_udp_hdr)));
+	/* updata udp pkt length */
+	udp_hdr = rte_pktmbuf_mtod_offset(pkt, struct rte_udp_hdr *,
+				sizeof(struct rte_ether_hdr) +
+				sizeof(struct rte_ipv4_hdr));
+	pkt_len = (uint16_t) (pkt_data_len + sizeof(struct rte_udp_hdr));
+	udp_hdr->dgram_len = RTE_CPU_TO_BE_16(pkt_len);
+
+	/* updata ip pkt length and csum */
+	ip_hdr = rte_pktmbuf_mtod_offset(pkt, struct rte_ipv4_hdr *,
+				sizeof(struct rte_ether_hdr));
+	ip_hdr->hdr_checksum = 0;
+	pkt_len = (uint16_t) (pkt_len + sizeof(struct rte_ipv4_hdr));
+	ip_hdr->total_length = RTE_CPU_TO_BE_16(pkt_len);
+	ip_hdr->hdr_checksum = rte_ipv4_cksum(ip_hdr);
+}
+
 static inline bool
 pkt_burst_prepare(struct rte_mbuf *pkt, struct rte_mempool *mbp,
 		struct rte_ether_hdr *eth_hdr, const uint16_t vlan_tci,
@@ -223,6 +251,10 @@ pkt_burst_prepare(struct rte_mbuf *pkt, struct rte_mempool *mbp,
 	copy_buf_to_pkt(&pkt_udp_hdr, sizeof(pkt_udp_hdr), pkt,
 			sizeof(struct rte_ether_hdr) +
 			sizeof(struct rte_ipv4_hdr));
+
+	if (unlikely(tx_pkt_split == TX_PKT_SPLIT_RND) || txonly_multi_flow)
+		update_pkt_header(pkt, pkt_len);
+
 	if (unlikely(timestamp_enable)) {
 		uint64_t skew = RTE_PER_LCORE(timestamp_qskew);
 		struct {
@@ -299,15 +331,9 @@ pkt_burst_transmit(struct fwd_stream *fs)
 	uint32_t retry;
 	uint64_t ol_flags = 0;
 	uint64_t tx_offloads;
-#ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
-	uint64_t start_tsc;
-	uint64_t end_tsc;
-	uint64_t core_cycles;
-#endif
+	uint64_t start_tsc = 0;
 
-#ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
-	start_tsc = rte_rdtsc();
-#endif
+	get_start_cycles(&start_tsc);
 
 	mbp = current_fwd_lcore()->mbp;
 	txp = &ports[fs->tx_port];
@@ -380,9 +406,7 @@ pkt_burst_transmit(struct fwd_stream *fs)
 	if (txonly_multi_flow)
 		RTE_PER_LCORE(_ip_var) -= nb_pkt - nb_tx;
 
-#ifdef RTE_TEST_PMD_RECORD_BURST_STATS
-	fs->tx_burst_stats.pkt_burst_spread[nb_tx]++;
-#endif
+	inc_tx_burst_stats(fs, nb_tx);
 	if (unlikely(nb_tx < nb_pkt)) {
 		if (verbose_level > 0 && fs->fwd_dropped == 0)
 			printf("port %d tx_queue %d - drop "
@@ -396,11 +420,7 @@ pkt_burst_transmit(struct fwd_stream *fs)
 		} while (++nb_tx < nb_pkt);
 	}
 
-#ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
-	end_tsc = rte_rdtsc();
-	core_cycles = (end_tsc - start_tsc);
-	fs->core_cycles = (uint64_t) (fs->core_cycles + core_cycles);
-#endif
+	get_end_cycles(fs, start_tsc);
 }
 
 static void

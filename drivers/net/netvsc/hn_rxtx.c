@@ -40,9 +40,6 @@
 	(sizeof(struct vmbus_chanpkt_hdr) + sizeof(struct hn_nvs_rndis))
 
 #define HN_TXD_CACHE_SIZE	32 /* per cpu tx_descriptor pool cache */
-#define HN_TXCOPY_THRESHOLD	512
-
-#define HN_RXCOPY_THRESHOLD	256
 #define HN_RXQ_EVENT_DEFAULT	2048
 
 struct hn_rxinfo {
@@ -160,8 +157,8 @@ static void hn_txd_init(struct rte_mempool *mp __rte_unused,
 
 	txd->queue_id = txq->queue_id;
 	txd->chim_index = NVS_CHIM_IDX_INVALID;
-	txd->rndis_pkt = (struct rndis_packet_msg *)(char *)txq->tx_rndis
-		+ idx * HN_RNDIS_PKT_ALIGNED;
+	txd->rndis_pkt = (struct rndis_packet_msg *)((char *)txq->tx_rndis
+		+ idx * HN_RNDIS_PKT_ALIGNED);
 }
 
 int
@@ -252,16 +249,6 @@ hn_dev_tx_queue_setup(struct rte_eth_dev *dev,
 
 	PMD_INIT_FUNC_TRACE();
 
-	txq = rte_zmalloc_socket("HN_TXQ", sizeof(*txq), RTE_CACHE_LINE_SIZE,
-				 socket_id);
-	if (!txq)
-		return -ENOMEM;
-
-	txq->hv = hv;
-	txq->chan = hv->channels[queue_idx];
-	txq->port_id = dev->data->port_id;
-	txq->queue_id = queue_idx;
-
 	tx_free_thresh = tx_conf->tx_free_thresh;
 	if (tx_free_thresh == 0)
 		tx_free_thresh = RTE_MIN(nb_desc / 4,
@@ -276,6 +263,15 @@ hn_dev_tx_queue_setup(struct rte_eth_dev *dev,
 		return -EINVAL;
 	}
 
+	txq = rte_zmalloc_socket("HN_TXQ", sizeof(*txq), RTE_CACHE_LINE_SIZE,
+				 socket_id);
+	if (!txq)
+		return -ENOMEM;
+
+	txq->hv = hv;
+	txq->chan = hv->channels[queue_idx];
+	txq->port_id = dev->data->port_id;
+	txq->queue_id = queue_idx;
 	txq->free_thresh = tx_free_thresh;
 
 	snprintf(name, sizeof(name),
@@ -284,10 +280,15 @@ hn_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	PMD_INIT_LOG(DEBUG, "TX descriptor pool %s n=%u size=%zu",
 		     name, nb_desc, sizeof(struct hn_txdesc));
 
-	txq->tx_rndis = rte_calloc("hn_txq_rndis", nb_desc,
-				   HN_RNDIS_PKT_ALIGNED, RTE_CACHE_LINE_SIZE);
-	if (txq->tx_rndis == NULL)
+	txq->tx_rndis_mz = rte_memzone_reserve_aligned(name,
+			nb_desc * HN_RNDIS_PKT_ALIGNED, rte_socket_id(),
+			RTE_MEMZONE_IOVA_CONTIG, HN_RNDIS_PKT_ALIGNED);
+	if (!txq->tx_rndis_mz) {
+		err = -rte_errno;
 		goto error;
+	}
+	txq->tx_rndis = txq->tx_rndis_mz->addr;
+	txq->tx_rndis_iova = txq->tx_rndis_mz->iova;
 
 	txq->txdesc_pool = rte_mempool_create(name, nb_desc,
 					      sizeof(struct hn_txdesc),
@@ -316,7 +317,7 @@ hn_dev_tx_queue_setup(struct rte_eth_dev *dev,
 error:
 	if (txq->txdesc_pool)
 		rte_mempool_free(txq->txdesc_pool);
-	rte_free(txq->tx_rndis);
+	rte_memzone_free(txq->tx_rndis_mz);
 	rte_free(txq);
 	return err;
 }
@@ -367,7 +368,7 @@ hn_dev_tx_queue_release(void *arg)
 	if (txq->txdesc_pool)
 		rte_mempool_free(txq->txdesc_pool);
 
-	rte_free(txq->tx_rndis);
+	rte_memzone_free(txq->tx_rndis_mz);
 	rte_free(txq);
 }
 
@@ -419,8 +420,10 @@ hn_nvs_send_completed(struct rte_eth_dev *dev, uint16_t queue_id,
 		++txq->stats.errors;
 	}
 
-	if (txd->chim_index != NVS_CHIM_IDX_INVALID)
+	if (txd->chim_index != NVS_CHIM_IDX_INVALID) {
 		hn_chim_free(hv, txd->chim_index);
+		txd->chim_index = NVS_CHIM_IDX_INVALID;
+	}
 
 	rte_pktmbuf_free(txd->m);
 	hn_txd_put(txq, txd);
@@ -524,21 +527,21 @@ next:
 static void hn_rx_buf_free_cb(void *buf __rte_unused, void *opaque)
 {
 	struct hn_rx_bufinfo *rxb = opaque;
-	struct hn_data *hv = rxb->hv;
+	struct hn_rx_queue *rxq = rxb->rxq;
 
-	rte_atomic32_dec(&hv->rxbuf_outstanding);
+	rte_atomic32_dec(&rxq->rxbuf_outstanding);
 	hn_nvs_ack_rxbuf(rxb->chan, rxb->xactid);
 }
 
-static struct hn_rx_bufinfo *hn_rx_buf_init(const struct hn_rx_queue *rxq,
+static struct hn_rx_bufinfo *hn_rx_buf_init(struct hn_rx_queue *rxq,
 					    const struct vmbus_chanpkt_rxbuf *pkt)
 {
 	struct hn_rx_bufinfo *rxb;
 
-	rxb = rxq->hv->rxbuf_info + pkt->hdr.xactid;
+	rxb = rxq->rxbuf_info + pkt->hdr.xactid;
 	rxb->chan = rxq->chan;
 	rxb->xactid = pkt->hdr.xactid;
-	rxb->hv = rxq->hv;
+	rxb->rxq = rxq;
 
 	rxb->shinfo.free_cb = hn_rx_buf_free_cb;
 	rxb->shinfo.fcb_opaque = rxb;
@@ -567,8 +570,8 @@ static void hn_rxpkt(struct hn_rx_queue *rxq, struct hn_rx_bufinfo *rxb,
 	 * For large packets, avoid copy if possible but need to keep
 	 * some space available in receive area for later packets.
 	 */
-	if (dlen >= HN_RXCOPY_THRESHOLD &&
-	    (uint32_t)rte_atomic32_read(&hv->rxbuf_outstanding) <
+	if (hv->rx_extmbuf_enable && dlen > hv->rx_copybreak &&
+	    (uint32_t)rte_atomic32_read(&rxq->rxbuf_outstanding) <
 			hv->rxbuf_section_cnt / 2) {
 		struct rte_mbuf_ext_shared_info *shinfo;
 		const void *rxbuf;
@@ -585,7 +588,7 @@ static void hn_rxpkt(struct hn_rx_queue *rxq, struct hn_rx_bufinfo *rxb,
 
 		/* shinfo is already set to 1 by the caller */
 		if (rte_mbuf_ext_refcnt_update(shinfo, 1) == 2)
-			rte_atomic32_inc(&hv->rxbuf_outstanding);
+			rte_atomic32_inc(&rxq->rxbuf_outstanding);
 
 		rte_pktmbuf_attach_extbuf(m, data, iova,
 					  dlen + headroom, shinfo);
@@ -664,7 +667,8 @@ static void hn_rndis_rx_data(struct hn_rx_queue *rxq,
 			     struct hn_rx_bufinfo *rxb,
 			     void *data, uint32_t dlen)
 {
-	unsigned int data_off, data_len, pktinfo_off, pktinfo_len;
+	unsigned int data_off, data_len;
+	unsigned int pktinfo_off, pktinfo_len;
 	const struct rndis_packet_msg *pkt = data;
 	struct hn_rxinfo info = {
 		.vlan_info = HN_NDIS_VLAN_INFO_INVALID,
@@ -709,7 +713,8 @@ static void hn_rndis_rx_data(struct hn_rx_queue *rxq,
 			goto error;
 	}
 
-	if (unlikely(data_off + data_len > pkt->len))
+	/* overflow check */
+	if (data_len > data_len + data_off || data_len + data_off > pkt->len)
 		goto error;
 
 	if (unlikely(data_len < RTE_ETHER_HDR_LEN))
@@ -888,6 +893,23 @@ struct hn_rx_queue *hn_rx_queue_alloc(struct hn_data *hv,
 		return NULL;
 	}
 
+	/* setup rxbuf_info for non-primary queue */
+	if (queue_id) {
+		rxq->rxbuf_info = rte_calloc("HN_RXBUF_INFO",
+					hv->rxbuf_section_cnt,
+					sizeof(*rxq->rxbuf_info),
+					RTE_CACHE_LINE_SIZE);
+
+		if (!rxq->rxbuf_info) {
+			PMD_DRV_LOG(ERR,
+				"Could not allocate rxbuf info for queue %d\n",
+				queue_id);
+			rte_free(rxq->event_buf);
+			rte_free(rxq);
+			return NULL;
+		}
+	}
+
 	return rxq;
 }
 
@@ -953,6 +975,7 @@ hn_dev_rx_queue_setup(struct rte_eth_dev *dev,
 
 fail:
 	rte_ring_free(rxq->rx_ring);
+	rte_free(rxq->rxbuf_info);
 	rte_free(rxq->event_buf);
 	rte_free(rxq);
 	return error;
@@ -975,6 +998,7 @@ hn_rx_queue_free(struct hn_rx_queue *rxq, bool keep_primary)
 	if (keep_primary && rxq == rxq->hv->primary)
 		return;
 
+	rte_free(rxq->rxbuf_info);
 	rte_free(rxq->event_buf);
 	rte_free(rxq);
 }
@@ -1423,12 +1447,8 @@ static int hn_xmit_sg(struct hn_tx_queue *txq,
 	hn_rndis_dump(txd->rndis_pkt);
 
 	/* pass IOVA of rndis header in first segment */
-	addr = rte_malloc_virt2iova(txq->tx_rndis);
-	if (unlikely(addr == RTE_BAD_IOVA)) {
-		PMD_DRV_LOG(ERR, "RNDIS transmit can not get iova");
-		return -EINVAL;
-	}
-	addr = addr + ((char *)txd->rndis_pkt - (char *)txq->tx_rndis);
+	addr = txq->tx_rndis_iova +
+		((char *)txd->rndis_pkt - (char *)txq->tx_rndis);
 
 	sg[0].page = addr / PAGE_SIZE;
 	sg[0].ofs = addr & PAGE_MASK;
@@ -1494,7 +1514,8 @@ hn_xmit_pkts(void *ptxq, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 			break;
 
 		/* For small packets aggregate them in chimney buffer */
-		if (m->pkt_len < HN_TXCOPY_THRESHOLD && pkt_size <= txq->agg_szmax) {
+		if (m->pkt_len <= hv->tx_copybreak &&
+		    pkt_size <= txq->agg_szmax) {
 			/* If this packet will not fit, then flush  */
 			if (txq->agg_pktleft == 0 ||
 			    RTE_ALIGN(pkt_size, txq->agg_align) > txq->agg_szleft) {

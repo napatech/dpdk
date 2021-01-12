@@ -3,6 +3,8 @@
 
 includes += include_directories('.')
 
+cflags += [ '-DABI_VERSION="@0@"'.format(abi_version) ]
+
 if is_windows
 	sources += files(
 		'eal_common_bus.c',
@@ -31,6 +33,7 @@ if is_windows
 		'malloc_heap.c',
 		'rte_malloc.c',
 		'eal_common_timer.c',
+		'rte_service.c',
 	)
 	subdir_done()
 endif

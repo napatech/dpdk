@@ -30,9 +30,7 @@
 #include <rte_string_fns.h>
 #include <rte_spinlock.h>
 #include <rte_tailq.h>
-#include <rte_function_versioning.h>
 #include <rte_eal_paging.h>
-
 
 #include "rte_mempool.h"
 #include "rte_mempool_trace.h"
@@ -305,17 +303,12 @@ mempool_ops_alloc_once(struct rte_mempool *mp)
 	return 0;
 }
 
-__vsym int
-rte_mempool_populate_iova_v21(struct rte_mempool *mp, char *vaddr,
-	rte_iova_t iova, size_t len, rte_mempool_memchunk_free_cb_t *free_cb,
-	void *opaque);
-
 /* Add objects in the pool, using a physically contiguous memory
  * zone. Return the number of objects added, or a negative value
  * on error.
  */
-__vsym int
-rte_mempool_populate_iova_v21(struct rte_mempool *mp, char *vaddr,
+int
+rte_mempool_populate_iova(struct rte_mempool *mp, char *vaddr,
 	rte_iova_t iova, size_t len, rte_mempool_memchunk_free_cb_t *free_cb,
 	void *opaque)
 {
@@ -375,35 +368,6 @@ fail:
 	return ret;
 }
 
-BIND_DEFAULT_SYMBOL(rte_mempool_populate_iova, _v21, 21);
-MAP_STATIC_SYMBOL(
-	int rte_mempool_populate_iova(struct rte_mempool *mp, char *vaddr,
-				rte_iova_t iova, size_t len,
-				rte_mempool_memchunk_free_cb_t *free_cb,
-				void *opaque),
-	rte_mempool_populate_iova_v21);
-
-__vsym int
-rte_mempool_populate_iova_v20(struct rte_mempool *mp, char *vaddr,
-	rte_iova_t iova, size_t len, rte_mempool_memchunk_free_cb_t *free_cb,
-	void *opaque);
-
-__vsym int
-rte_mempool_populate_iova_v20(struct rte_mempool *mp, char *vaddr,
-	rte_iova_t iova, size_t len, rte_mempool_memchunk_free_cb_t *free_cb,
-	void *opaque)
-{
-	int ret;
-
-	ret = rte_mempool_populate_iova_v21(mp, vaddr, iova, len, free_cb,
-					opaque);
-	if (ret == 0)
-		ret = -EINVAL;
-
-	return ret;
-}
-VERSION_SYMBOL(rte_mempool_populate_iova, _v20, 20.0);
-
 static rte_iova_t
 get_iova(void *addr)
 {
@@ -417,16 +381,11 @@ get_iova(void *addr)
 	return ms->iova + RTE_PTR_DIFF(addr, ms->addr);
 }
 
-__vsym int
-rte_mempool_populate_virt_v21(struct rte_mempool *mp, char *addr,
-	size_t len, size_t pg_sz, rte_mempool_memchunk_free_cb_t *free_cb,
-	void *opaque);
-
 /* Populate the mempool with a virtual area. Return the number of
  * objects added, or a negative value on error.
  */
-__vsym int
-rte_mempool_populate_virt_v21(struct rte_mempool *mp, char *addr,
+int
+rte_mempool_populate_virt(struct rte_mempool *mp, char *addr,
 	size_t len, size_t pg_sz, rte_mempool_memchunk_free_cb_t *free_cb,
 	void *opaque)
 {
@@ -459,7 +418,7 @@ rte_mempool_populate_virt_v21(struct rte_mempool *mp, char *addr,
 				break;
 		}
 
-		ret = rte_mempool_populate_iova_v21(mp, addr + off, iova,
+		ret = rte_mempool_populate_iova(mp, addr + off, iova,
 			phys_len, free_cb, opaque);
 		if (ret == 0)
 			continue;
@@ -477,35 +436,6 @@ rte_mempool_populate_virt_v21(struct rte_mempool *mp, char *addr,
 	rte_mempool_free_memchunks(mp);
 	return ret;
 }
-BIND_DEFAULT_SYMBOL(rte_mempool_populate_virt, _v21, 21);
-MAP_STATIC_SYMBOL(
-	int rte_mempool_populate_virt(struct rte_mempool *mp,
-				char *addr, size_t len, size_t pg_sz,
-				rte_mempool_memchunk_free_cb_t *free_cb,
-				void *opaque),
-	rte_mempool_populate_virt_v21);
-
-__vsym int
-rte_mempool_populate_virt_v20(struct rte_mempool *mp, char *addr,
-	size_t len, size_t pg_sz, rte_mempool_memchunk_free_cb_t *free_cb,
-	void *opaque);
-
-__vsym int
-rte_mempool_populate_virt_v20(struct rte_mempool *mp, char *addr,
-	size_t len, size_t pg_sz, rte_mempool_memchunk_free_cb_t *free_cb,
-	void *opaque)
-{
-	int ret;
-
-	ret = rte_mempool_populate_virt_v21(mp, addr, len, pg_sz,
-						free_cb, opaque);
-
-	if (ret == 0)
-		ret = -EINVAL;
-
-	return ret;
-}
-VERSION_SYMBOL(rte_mempool_populate_virt, _v20, 20.0);
 
 /* Get the minimal page size used in a mempool before populating it. */
 int
@@ -1266,6 +1196,7 @@ rte_mempool_dump(FILE *f, struct rte_mempool *mp)
 	unsigned lcore_id;
 #endif
 	struct rte_mempool_memhdr *memhdr;
+	struct rte_mempool_ops *ops;
 	unsigned common_count;
 	unsigned cache_count;
 	size_t mem_len = 0;
@@ -1275,6 +1206,7 @@ rte_mempool_dump(FILE *f, struct rte_mempool *mp)
 
 	fprintf(f, "mempool <%s>@%p\n", mp->name, mp);
 	fprintf(f, "  flags=%x\n", mp->flags);
+	fprintf(f, "  socket_id=%d\n", mp->socket_id);
 	fprintf(f, "  pool=%p\n", mp->pool_data);
 	fprintf(f, "  iova=0x%" PRIx64 "\n", mp->mz->iova);
 	fprintf(f, "  nb_mem_chunks=%u\n", mp->nb_mem_chunks);
@@ -1287,6 +1219,10 @@ rte_mempool_dump(FILE *f, struct rte_mempool *mp)
 	       mp->header_size + mp->elt_size + mp->trailer_size);
 
 	fprintf(f, "  private_data_size=%"PRIu32"\n", mp->private_data_size);
+
+	fprintf(f, "  ops_index=%d\n", mp->ops_index);
+	ops = rte_mempool_get_ops(mp->ops_index);
+	fprintf(f, "  ops_name: <%s>\n", (ops != NULL) ? ops->name : "NA");
 
 	STAILQ_FOREACH(memhdr, &mp->mem_list, next)
 		mem_len += memhdr->len;

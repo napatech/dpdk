@@ -84,7 +84,7 @@ struct rte_rcu_qsbr_cnt {
 	 *   changes to various APIs.
 	 */
 	uint32_t lock_cnt;
-	/**< Lock counter. Used when CONFIG_RTE_LIBRTE_RCU_DEBUG is enabled */
+	/**< Lock counter. Used when RTE_LIBRTE_RCU_DEBUG is enabled */
 } __rte_cache_aligned;
 
 #define __RTE_QSBR_CNT_THR_OFFLINE 0
@@ -202,9 +202,6 @@ struct rte_rcu_qsbr_dq_parameters {
 struct rte_rcu_qsbr_dq;
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Return the size of the memory occupied by a Quiescent State variable.
  *
  * @param max_threads
@@ -215,14 +212,10 @@ struct rte_rcu_qsbr_dq;
  *   Possible rte_errno codes are:
  *   - EINVAL - max_threads is 0
  */
-__rte_experimental
 size_t
 rte_rcu_qsbr_get_memsize(uint32_t max_threads);
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Initialize a Quiescent State (QS) variable.
  *
  * @param v
@@ -237,14 +230,10 @@ rte_rcu_qsbr_get_memsize(uint32_t max_threads);
  *   - EINVAL - max_threads is 0 or 'v' is NULL.
  *
  */
-__rte_experimental
 int
 rte_rcu_qsbr_init(struct rte_rcu_qsbr *v, uint32_t max_threads);
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Register a reader thread to report its quiescent state
  * on a QS variable.
  *
@@ -264,14 +253,10 @@ rte_rcu_qsbr_init(struct rte_rcu_qsbr *v, uint32_t max_threads);
  *   the QS variable. thread_id is a value between 0 and (max_threads - 1).
  *   'max_threads' is the parameter passed in 'rte_rcu_qsbr_init' API.
  */
-__rte_experimental
 int
 rte_rcu_qsbr_thread_register(struct rte_rcu_qsbr *v, unsigned int thread_id);
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Remove a reader thread, from the list of threads reporting their
  * quiescent state on a QS variable.
  *
@@ -286,14 +271,10 @@ rte_rcu_qsbr_thread_register(struct rte_rcu_qsbr *v, unsigned int thread_id);
  *   Reader thread with this thread ID will stop reporting its quiescent
  *   state on the QS variable.
  */
-__rte_experimental
 int
 rte_rcu_qsbr_thread_unregister(struct rte_rcu_qsbr *v, unsigned int thread_id);
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Add a registered reader thread, to the list of threads reporting their
  * quiescent state on a QS variable.
  *
@@ -318,7 +299,6 @@ rte_rcu_qsbr_thread_unregister(struct rte_rcu_qsbr *v, unsigned int thread_id);
  *   Reader thread with this thread ID will report its quiescent state on
  *   the QS variable.
  */
-__rte_experimental
 static __rte_always_inline void
 rte_rcu_qsbr_thread_online(struct rte_rcu_qsbr *v, unsigned int thread_id)
 {
@@ -358,9 +338,6 @@ rte_rcu_qsbr_thread_online(struct rte_rcu_qsbr *v, unsigned int thread_id)
 }
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Remove a registered reader thread from the list of threads reporting their
  * quiescent state on a QS variable.
  *
@@ -380,7 +357,6 @@ rte_rcu_qsbr_thread_online(struct rte_rcu_qsbr *v, unsigned int thread_id)
  *   rte_rcu_qsbr_check API will not wait for the reader thread with
  *   this thread ID to report its quiescent state on the QS variable.
  */
-__rte_experimental
 static __rte_always_inline void
 rte_rcu_qsbr_thread_offline(struct rte_rcu_qsbr *v, unsigned int thread_id)
 {
@@ -399,9 +375,6 @@ rte_rcu_qsbr_thread_offline(struct rte_rcu_qsbr *v, unsigned int thread_id)
 }
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Acquire a lock for accessing a shared data structure.
  *
  * This is implemented as a lock-free function. It is multi-thread
@@ -410,18 +383,17 @@ rte_rcu_qsbr_thread_offline(struct rte_rcu_qsbr *v, unsigned int thread_id)
  * This API is provided to aid debugging. This should be called before
  * accessing a shared data structure.
  *
- * When CONFIG_RTE_LIBRTE_RCU_DEBUG is enabled a lock counter is incremented.
+ * When RTE_LIBRTE_RCU_DEBUG is enabled a lock counter is incremented.
  * Similarly rte_rcu_qsbr_unlock will decrement the counter. When the
  * rte_rcu_qsbr_check API will verify that this counter is 0.
  *
- * When CONFIG_RTE_LIBRTE_RCU_DEBUG is disabled, this API will do nothing.
+ * When RTE_LIBRTE_RCU_DEBUG is disabled, this API will do nothing.
  *
  * @param v
  *   QS variable
  * @param thread_id
  *   Reader thread id
  */
-__rte_experimental
 static __rte_always_inline void
 rte_rcu_qsbr_lock(__rte_unused struct rte_rcu_qsbr *v,
 			__rte_unused unsigned int thread_id)
@@ -436,9 +408,6 @@ rte_rcu_qsbr_lock(__rte_unused struct rte_rcu_qsbr *v,
 }
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Release a lock after accessing a shared data structure.
  *
  * This is implemented as a lock-free function. It is multi-thread
@@ -447,18 +416,17 @@ rte_rcu_qsbr_lock(__rte_unused struct rte_rcu_qsbr *v,
  * This API is provided to aid debugging. This should be called after
  * accessing a shared data structure.
  *
- * When CONFIG_RTE_LIBRTE_RCU_DEBUG is enabled, rte_rcu_qsbr_unlock will
+ * When RTE_LIBRTE_RCU_DEBUG is enabled, rte_rcu_qsbr_unlock will
  * decrement a lock counter. rte_rcu_qsbr_check API will verify that this
  * counter is 0.
  *
- * When CONFIG_RTE_LIBRTE_RCU_DEBUG is disabled, this API will do nothing.
+ * When RTE_LIBRTE_RCU_DEBUG is disabled, this API will do nothing.
  *
  * @param v
  *   QS variable
  * @param thread_id
  *   Reader thread id
  */
-__rte_experimental
 static __rte_always_inline void
 rte_rcu_qsbr_unlock(__rte_unused struct rte_rcu_qsbr *v,
 			__rte_unused unsigned int thread_id)
@@ -477,9 +445,6 @@ rte_rcu_qsbr_unlock(__rte_unused struct rte_rcu_qsbr *v,
 }
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Ask the reader threads to report the quiescent state
  * status.
  *
@@ -492,7 +457,6 @@ rte_rcu_qsbr_unlock(__rte_unused struct rte_rcu_qsbr *v,
  *   - This is the token for this call of the API. This should be
  *     passed to rte_rcu_qsbr_check API.
  */
-__rte_experimental
 static __rte_always_inline uint64_t
 rte_rcu_qsbr_start(struct rte_rcu_qsbr *v)
 {
@@ -511,9 +475,6 @@ rte_rcu_qsbr_start(struct rte_rcu_qsbr *v)
 }
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Update quiescent state for a reader thread.
  *
  * This is implemented as a lock-free function. It is multi-thread safe.
@@ -525,7 +486,6 @@ rte_rcu_qsbr_start(struct rte_rcu_qsbr *v)
  * @param thread_id
  *   Update the quiescent state for the reader with this thread ID.
  */
-__rte_experimental
 static __rte_always_inline void
 rte_rcu_qsbr_quiescent(struct rte_rcu_qsbr *v, unsigned int thread_id)
 {
@@ -552,7 +512,7 @@ rte_rcu_qsbr_quiescent(struct rte_rcu_qsbr *v, unsigned int thread_id)
 		__atomic_store_n(&v->qsbr_cnt[thread_id].cnt,
 					 t, __ATOMIC_RELEASE);
 
-	__RTE_RCU_DP_LOG(DEBUG, "%s: update: token = %"PRIu64", Thread ID = %d",
+	__RTE_RCU_DP_LOG(DEBUG, "%s: update: token = %" PRIu64 ", Thread ID = %d",
 		__func__, t, thread_id);
 }
 
@@ -580,13 +540,13 @@ __rte_rcu_qsbr_check_selective(struct rte_rcu_qsbr *v, uint64_t t, bool wait)
 		while (bmap) {
 			j = __builtin_ctzl(bmap);
 			__RTE_RCU_DP_LOG(DEBUG,
-				"%s: check: token = %"PRIu64", wait = %d, Bit Map = 0x%"PRIx64", Thread ID = %d",
+				"%s: check: token = %" PRIu64 ", wait = %d, Bit Map = 0x%" PRIx64 ", Thread ID = %d",
 				__func__, t, wait, bmap, id + j);
 			c = __atomic_load_n(
 					&v->qsbr_cnt[id + j].cnt,
 					__ATOMIC_ACQUIRE);
 			__RTE_RCU_DP_LOG(DEBUG,
-				"%s: status: token = %"PRIu64", wait = %d, Thread QS cnt = %"PRIu64", Thread ID = %d",
+				"%s: status: token = %" PRIu64 ", wait = %d, Thread QS cnt = %" PRIu64 ", Thread ID = %d",
 				__func__, t, wait, c, id+j);
 
 			/* Counter is not checked for wrap-around condition
@@ -643,12 +603,12 @@ __rte_rcu_qsbr_check_all(struct rte_rcu_qsbr *v, uint64_t t, bool wait)
 
 	for (i = 0, cnt = v->qsbr_cnt; i < v->max_threads; i++, cnt++) {
 		__RTE_RCU_DP_LOG(DEBUG,
-			"%s: check: token = %"PRIu64", wait = %d, Thread ID = %d",
+			"%s: check: token = %" PRIu64 ", wait = %d, Thread ID = %d",
 			__func__, t, wait, i);
 		while (1) {
 			c = __atomic_load_n(&cnt->cnt, __ATOMIC_ACQUIRE);
 			__RTE_RCU_DP_LOG(DEBUG,
-				"%s: status: token = %"PRIu64", wait = %d, Thread QS cnt = %"PRIu64", Thread ID = %d",
+				"%s: status: token = %" PRIu64 ", wait = %d, Thread QS cnt = %" PRIu64 ", Thread ID = %d",
 				__func__, t, wait, c, i);
 
 			/* Counter is not checked for wrap-around condition
@@ -683,9 +643,6 @@ __rte_rcu_qsbr_check_all(struct rte_rcu_qsbr *v, uint64_t t, bool wait)
 }
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Checks if all the reader threads have entered the quiescent state
  * referenced by token.
  *
@@ -716,7 +673,6 @@ __rte_rcu_qsbr_check_all(struct rte_rcu_qsbr *v, uint64_t t, bool wait)
  *   - 1 if all reader threads have passed through specified number
  *     of quiescent states.
  */
-__rte_experimental
 static __rte_always_inline int
 rte_rcu_qsbr_check(struct rte_rcu_qsbr *v, uint64_t t, bool wait)
 {
@@ -725,10 +681,10 @@ rte_rcu_qsbr_check(struct rte_rcu_qsbr *v, uint64_t t, bool wait)
 	/* Check if all the readers have already acknowledged this token */
 	if (likely(t <= v->acked_token)) {
 		__RTE_RCU_DP_LOG(DEBUG,
-			"%s: check: token = %"PRIu64", wait = %d",
+			"%s: check: token = %" PRIu64 ", wait = %d",
 			__func__, t, wait);
 		__RTE_RCU_DP_LOG(DEBUG,
-			"%s: status: least acked token = %"PRIu64"",
+			"%s: status: least acked token = %" PRIu64,
 			__func__, v->acked_token);
 		return 1;
 	}
@@ -740,9 +696,6 @@ rte_rcu_qsbr_check(struct rte_rcu_qsbr *v, uint64_t t, bool wait)
 }
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Wait till the reader threads have entered quiescent state.
  *
  * This is implemented as a lock-free function. It is multi-thread safe.
@@ -760,14 +713,10 @@ rte_rcu_qsbr_check(struct rte_rcu_qsbr *v, uint64_t t, bool wait)
  *   on this QS variable (i.e. the calling thread is also part of the
  *   readside critical section). If not, pass RTE_QSBR_THRID_INVALID.
  */
-__rte_experimental
 void
 rte_rcu_qsbr_synchronize(struct rte_rcu_qsbr *v, unsigned int thread_id);
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Dump the details of a single QS variables to a file.
  *
  * It is NOT multi-thread safe.
@@ -782,7 +731,6 @@ rte_rcu_qsbr_synchronize(struct rte_rcu_qsbr *v, unsigned int thread_id);
  *   Possible rte_errno codes are:
  *   - EINVAL - NULL parameters are passed
  */
-__rte_experimental
 int
 rte_rcu_qsbr_dump(FILE *f, struct rte_rcu_qsbr *v);
 

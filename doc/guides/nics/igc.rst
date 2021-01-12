@@ -4,26 +4,11 @@
 IGC Poll Mode Driver
 ======================
 
-The IGC PMD (librte_pmd_igc) provides poll mode driver support for Foxville
+The IGC PMD (**librte_net_igc**) provides poll mode driver support for Foxville
 I225 Series Network Adapters.
 
-- For information about I225, please refer to:
-  `https://ark.intel.com/content/www/us/en/ark/products/series/184686/
-  intel-ethernet-controller-i225-series.html`
-
-Config File Options
-~~~~~~~~~~~~~~~~~~~
-
-The following options can be modified in the ``config`` file.
-Please note that enabling debugging options may affect system performance.
-
-- ``CONFIG_RTE_LIBRTE_IGC_PMD`` (default ``y``)
-
-  Toggle compilation of the ``librte_pmd_igc`` driver.
-
-- ``CONFIG_RTE_LIBRTE_IGC_DEBUG_*`` (default ``n``)
-
-  Toggle display of generic debugging messages.
+- For information about I225, please refer to: `Intel® Ethernet Controller I225 Series
+  <https://ark.intel.com/content/www/us/en/ark/products/series/184686/intel-ethernet-controller-i225-series.html>`_.
 
 
 Driver compilation and testing
@@ -67,7 +52,7 @@ outer VLAN to 0x9100:
 
 .. code-block:: console
 
-   ./app/testpmd -l 4-8 -- -i
+   ./app/dpdk-testpmd -l 4-8 -- -i
    ...
 
    testpmd> vlan set filter on 0
@@ -94,7 +79,7 @@ Start ``testpmd``:
 
 .. code-block:: console
 
-   ./testpmd -l 4-8 -- i --rxq=4 --txq=4 --pkt-filter-mode=perfect --disable-rss
+   ./dpdk-testpmd -l 4-8 -- i --rxq=4 --txq=4 --pkt-filter-mode=perfect --disable-rss
 
 Add a rule to direct packet whose ``ether-type=0x801`` to queue 1:
 

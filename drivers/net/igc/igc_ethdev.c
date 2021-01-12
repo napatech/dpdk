@@ -179,11 +179,11 @@ static const struct rte_igc_xstats_name_off rte_igc_stats_strings[] = {
 
 static int eth_igc_configure(struct rte_eth_dev *dev);
 static int eth_igc_link_update(struct rte_eth_dev *dev, int wait_to_complete);
-static void eth_igc_stop(struct rte_eth_dev *dev);
+static int eth_igc_stop(struct rte_eth_dev *dev);
 static int eth_igc_start(struct rte_eth_dev *dev);
 static int eth_igc_set_link_up(struct rte_eth_dev *dev);
 static int eth_igc_set_link_down(struct rte_eth_dev *dev);
-static void eth_igc_close(struct rte_eth_dev *dev);
+static int eth_igc_close(struct rte_eth_dev *dev);
 static int eth_igc_reset(struct rte_eth_dev *dev);
 static int eth_igc_promiscuous_enable(struct rte_eth_dev *dev);
 static int eth_igc_promiscuous_disable(struct rte_eth_dev *dev);
@@ -272,10 +272,6 @@ static const struct eth_dev_ops eth_igc_ops = {
 
 	.rx_queue_setup		= eth_igc_rx_queue_setup,
 	.rx_queue_release	= eth_igc_rx_queue_release,
-	.rx_queue_count		= eth_igc_rx_queue_count,
-	.rx_descriptor_done	= eth_igc_rx_descriptor_done,
-	.rx_descriptor_status	= eth_igc_rx_descriptor_status,
-	.tx_descriptor_status	= eth_igc_tx_descriptor_status,
 	.tx_queue_setup		= eth_igc_tx_queue_setup,
 	.tx_queue_release	= eth_igc_tx_queue_release,
 	.tx_done_cleanup	= eth_igc_tx_done_cleanup,
@@ -544,8 +540,7 @@ eth_igc_interrupt_action(struct rte_eth_dev *dev)
 				pci_dev->addr.bus,
 				pci_dev->addr.devid,
 				pci_dev->addr.function);
-		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC,
-				NULL);
+		rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
 	}
 }
 
@@ -612,7 +607,7 @@ eth_igc_rxtx_control(struct rte_eth_dev *dev, bool enable)
  *  This routine disables all traffic on the adapter by issuing a
  *  global reset on the MAC.
  */
-static void
+static int
 eth_igc_stop(struct rte_eth_dev *dev)
 {
 	struct igc_adapter *adapter = IGC_DEV_PRIVATE(dev);
@@ -621,6 +616,7 @@ eth_igc_stop(struct rte_eth_dev *dev)
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	struct rte_eth_link link;
 
+	dev->data->dev_started = 0;
 	adapter->stopped = 1;
 
 	/* disable receive and transmit */
@@ -673,6 +669,8 @@ eth_igc_stop(struct rte_eth_dev *dev)
 		rte_free(intr_handle->intr_vec);
 		intr_handle->intr_vec = NULL;
 	}
+
+	return 0;
 }
 
 /*
@@ -1170,7 +1168,7 @@ igc_dev_free_queues(struct rte_eth_dev *dev)
 	dev->data->nb_tx_queues = 0;
 }
 
-static void
+static int
 eth_igc_close(struct rte_eth_dev *dev)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
@@ -1178,11 +1176,14 @@ eth_igc_close(struct rte_eth_dev *dev)
 	struct igc_hw *hw = IGC_DEV_PRIVATE_HW(dev);
 	struct igc_adapter *adapter = IGC_DEV_PRIVATE(dev);
 	int retry = 0;
+	int ret = 0;
 
 	PMD_INIT_FUNC_TRACE();
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	if (!adapter->stopped)
-		eth_igc_stop(dev);
+		ret = eth_igc_stop(dev);
 
 	igc_flow_flush(dev, NULL);
 	igc_clear_all_filter(dev);
@@ -1204,6 +1205,8 @@ eth_igc_close(struct rte_eth_dev *dev)
 
 	/* Reset any pending lock */
 	igc_reset_swfw_lock(hw);
+
+	return ret;
 }
 
 static void
@@ -1227,6 +1230,10 @@ eth_igc_dev_init(struct rte_eth_dev *dev)
 
 	PMD_INIT_FUNC_TRACE();
 	dev->dev_ops = &eth_igc_ops;
+	dev->rx_descriptor_done	= eth_igc_rx_descriptor_done;
+	dev->rx_queue_count = eth_igc_rx_queue_count;
+	dev->rx_descriptor_status = eth_igc_rx_descriptor_status;
+	dev->tx_descriptor_status = eth_igc_tx_descriptor_status;
 
 	/*
 	 * for secondary processes, we don't initialize any further as primary
@@ -1237,6 +1244,7 @@ eth_igc_dev_init(struct rte_eth_dev *dev)
 		return 0;
 
 	rte_eth_copy_pci_info(dev, pci_dev);
+	dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	hw->back = pci_dev;
 	hw->hw_addr = (void *)pci_dev->mem_resource[0].addr;
@@ -1322,11 +1330,6 @@ eth_igc_dev_init(struct rte_eth_dev *dev)
 		goto err_late;
 	}
 
-	/* Pass the information to the rte_eth_dev_close() that it should also
-	 * release the private port resources.
-	 */
-	dev->data->dev_flags |= RTE_ETH_DEV_CLOSE_REMOVE;
-
 	hw->mac.get_link_status = 1;
 	igc->stopped = 0;
 
@@ -1367,10 +1370,6 @@ static int
 eth_igc_dev_uninit(__rte_unused struct rte_eth_dev *eth_dev)
 {
 	PMD_INIT_FUNC_TRACE();
-
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return 0;
-
 	eth_igc_close(eth_dev);
 	return 0;
 }

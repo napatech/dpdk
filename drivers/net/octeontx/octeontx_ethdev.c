@@ -227,9 +227,9 @@ octeontx_link_status_poll(void *arg)
 			octeontx_link_status_update(nic, &link);
 			octeontx_link_status_print(dev, &link);
 			rte_eth_linkstatus_set(dev, &link);
-			_rte_eth_dev_callback_process(dev,
-						      RTE_ETH_EVENT_INTR_LSC,
-						      NULL);
+			rte_eth_dev_callback_process(dev,
+						     RTE_ETH_EVENT_INTR_LSC,
+						     NULL);
 		}
 	}
 
@@ -478,7 +478,7 @@ octeontx_dev_configure(struct rte_eth_dev *dev)
 	return 0;
 }
 
-static void
+static int
 octeontx_dev_close(struct rte_eth_dev *dev)
 {
 	struct octeontx_txq *txq = NULL;
@@ -487,6 +487,8 @@ octeontx_dev_close(struct rte_eth_dev *dev)
 	int ret;
 
 	PMD_INIT_FUNC_TRACE();
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	rte_event_dev_close(nic->evdev);
 
@@ -509,14 +511,9 @@ octeontx_dev_close(struct rte_eth_dev *dev)
 		rte_free(txq);
 	}
 
-	/* Free MAC address table */
-	rte_free(dev->data->mac_addrs);
-	dev->data->mac_addrs = NULL;
-
 	octeontx_port_close(nic);
 
-	dev->tx_pkt_burst = NULL;
-	dev->rx_pkt_burst = NULL;
+	return 0;
 }
 
 static int
@@ -676,7 +673,7 @@ error:
 	return ret;
 }
 
-static void
+static int
 octeontx_dev_stop(struct rte_eth_dev *dev)
 {
 	struct octeontx_nic *nic = octeontx_pmd_priv(dev);
@@ -690,14 +687,14 @@ octeontx_dev_stop(struct rte_eth_dev *dev)
 	if (ret < 0) {
 		octeontx_log_err("failed to req stop port %d res=%d",
 					nic->port_id, ret);
-		return;
+		return ret;
 	}
 
 	ret = octeontx_pki_port_stop(nic->port_id);
 	if (ret < 0) {
 		octeontx_log_err("failed to stop pki port %d res=%d",
 					nic->port_id, ret);
-		return;
+		return ret;
 	}
 
 	ret = octeontx_pko_channel_stop(nic->base_ochan);
@@ -705,8 +702,10 @@ octeontx_dev_stop(struct rte_eth_dev *dev)
 		octeontx_log_err("failed to stop channel %d VF%d %d %d",
 			     nic->base_ochan, nic->port_id, nic->num_tx_queues,
 			     ret);
-		return;
+		return ret;
 	}
+
+	return 0;
 }
 
 static int
@@ -1363,7 +1362,6 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 
 	eth_dev->device = &dev->device;
 	eth_dev->intr_handle = NULL;
-	eth_dev->data->kdrv = RTE_KDRV_NONE;
 	eth_dev->data->numa_node = dev->device.numa_node;
 
 	data->port_id = eth_dev->data->port_id;
@@ -1377,6 +1375,7 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 	data->promiscuous = 0;
 	data->all_multicast = 0;
 	data->scattered_rx = 0;
+	data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	/* Get maximum number of supported MAC entries */
 	max_entries = octeontx_bgx_port_mac_entries_get(nic->port_id);
@@ -1464,10 +1463,9 @@ octeontx_remove(struct rte_vdev_device *dev)
 	for (i = 0; i < OCTEONTX_VDEV_DEFAULT_MAX_NR_PORT; i++) {
 		sprintf(octtx_name, "eth_octeontx_%d", i);
 
-		/* reserve an ethdev entry */
 		eth_dev = rte_eth_dev_allocated(octtx_name);
 		if (eth_dev == NULL)
-			return -ENODEV;
+			continue; /* port already released */
 
 		if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
 			rte_eth_dev_release_port(eth_dev);
@@ -1477,9 +1475,8 @@ octeontx_remove(struct rte_vdev_device *dev)
 		nic = octeontx_pmd_priv(eth_dev);
 		rte_event_dev_stop(nic->evdev);
 		PMD_INIT_LOG(INFO, "Closing octeontx device %s", octtx_name);
-
+		octeontx_dev_close(eth_dev);
 		rte_eth_dev_release_port(eth_dev);
-		rte_event_dev_close(nic->evdev);
 	}
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)

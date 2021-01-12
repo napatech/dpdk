@@ -23,6 +23,10 @@ extern "C" {
 #include <rte_mbuf.h>
 #include <rte_byteorder.h>
 
+#ifdef RTE_EXEC_ENV_WINDOWS /* Workaround conflict with rte_ether_hdr. */
+#undef s_addr /* Defined in winsock2.h included in windows.h. */
+#endif
+
 #define RTE_ETHER_ADDR_LEN  6 /**< Length of Ethernet address. */
 #define RTE_ETHER_TYPE_LEN  2 /**< Length of Ethernet type field. */
 #define RTE_ETHER_CRC_LEN   4 /**< Length of Ethernet CRC. */
@@ -146,10 +150,9 @@ static inline int rte_is_multicast_ether_addr(const struct rte_ether_addr *ea)
  */
 static inline int rte_is_broadcast_ether_addr(const struct rte_ether_addr *ea)
 {
-	const uint16_t *ea_words = (const uint16_t *)ea;
+	const uint16_t *w = (const uint16_t *)ea;
 
-	return (ea_words[0] == 0xFFFF && ea_words[1] == 0xFFFF &&
-		ea_words[2] == 0xFFFF);
+	return (w[0] & w[1] & w[2]) == 0xFFFF;
 }
 
 /**
@@ -208,29 +211,18 @@ void
 rte_eth_random_addr(uint8_t *addr);
 
 /**
- * Fast copy an Ethernet address.
+ * Copy an Ethernet address.
  *
  * @param ea_from
  *   A pointer to a ether_addr structure holding the Ethernet address to copy.
  * @param ea_to
  *   A pointer to a ether_addr structure where to copy the Ethernet address.
  */
-static inline void rte_ether_addr_copy(const struct rte_ether_addr *ea_from,
-				   struct rte_ether_addr *ea_to)
+static inline void
+rte_ether_addr_copy(const struct rte_ether_addr *__restrict ea_from,
+		    struct rte_ether_addr *__restrict ea_to)
 {
-#ifdef __INTEL_COMPILER
-	uint16_t *from_words = (uint16_t *)(ea_from->addr_bytes);
-	uint16_t *to_words   = (uint16_t *)(ea_to->addr_bytes);
-
-	to_words[0] = from_words[0];
-	to_words[1] = from_words[1];
-	to_words[2] = from_words[2];
-#else
-	/*
-	 * Use the common way, because of a strange gcc warning.
-	 */
 	*ea_to = *ea_from;
-#endif
 }
 
 #define RTE_ETHER_ADDR_FMT_SIZE         18
@@ -359,6 +351,10 @@ static inline int rte_vlan_insert(struct rte_mbuf **m)
 
 	/* Can't insert header if mbuf is shared */
 	if (!RTE_MBUF_DIRECT(*m) || rte_mbuf_refcnt_read(*m) > 1)
+		return -EINVAL;
+
+	/* Can't insert header if the first segment is too short */
+	if (rte_pktmbuf_data_len(*m) < 2 * RTE_ETHER_ADDR_LEN)
 		return -EINVAL;
 
 	oh = rte_pktmbuf_mtod(*m, struct rte_ether_hdr *);

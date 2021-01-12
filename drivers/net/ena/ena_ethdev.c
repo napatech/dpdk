@@ -27,7 +27,7 @@
 #include <ena_eth_io_defs.h>
 
 #define DRV_MODULE_VER_MAJOR	2
-#define DRV_MODULE_VER_MINOR	1
+#define DRV_MODULE_VER_MINOR	2
 #define DRV_MODULE_VER_SUBMINOR	0
 
 #define ENA_IO_TXQ_IDX(q)	(2 * (q))
@@ -72,6 +72,9 @@ struct ena_stats {
 #define ENA_STAT_TX_ENTRY(stat) \
 	ENA_STAT_ENTRY(stat, tx)
 
+#define ENA_STAT_ENI_ENTRY(stat) \
+	ENA_STAT_ENTRY(stat, eni)
+
 #define ENA_STAT_GLOBAL_ENTRY(stat) \
 	ENA_STAT_ENTRY(stat, dev)
 
@@ -89,6 +92,14 @@ static const struct ena_stats ena_stats_global_strings[] = {
 	ENA_STAT_GLOBAL_ENTRY(dev_start),
 	ENA_STAT_GLOBAL_ENTRY(dev_stop),
 	ENA_STAT_GLOBAL_ENTRY(tx_drops),
+};
+
+static const struct ena_stats ena_stats_eni_strings[] = {
+	ENA_STAT_ENI_ENTRY(bw_in_allowance_exceeded),
+	ENA_STAT_ENI_ENTRY(bw_out_allowance_exceeded),
+	ENA_STAT_ENI_ENTRY(pps_allowance_exceeded),
+	ENA_STAT_ENI_ENTRY(conntrack_allowance_exceeded),
+	ENA_STAT_ENI_ENTRY(linklocal_allowance_exceeded),
 };
 
 static const struct ena_stats ena_stats_tx_strings[] = {
@@ -114,6 +125,7 @@ static const struct ena_stats ena_stats_rx_strings[] = {
 };
 
 #define ENA_STATS_ARRAY_GLOBAL	ARRAY_SIZE(ena_stats_global_strings)
+#define ENA_STATS_ARRAY_ENI	ARRAY_SIZE(ena_stats_eni_strings)
 #define ENA_STATS_ARRAY_TX	ARRAY_SIZE(ena_stats_tx_strings)
 #define ENA_STATS_ARRAY_RX	ARRAY_SIZE(ena_stats_rx_strings)
 
@@ -128,8 +140,8 @@ static const struct ena_stats ena_stats_rx_strings[] = {
 /** Vendor ID used by Amazon devices */
 #define PCI_VENDOR_ID_AMAZON 0x1D0F
 /** Amazon devices */
-#define PCI_DEVICE_ID_ENA_VF	0xEC20
-#define PCI_DEVICE_ID_ENA_LLQ_VF	0xEC21
+#define PCI_DEVICE_ID_ENA_VF		0xEC20
+#define PCI_DEVICE_ID_ENA_VF_RSERV0	0xEC21
 
 #define	ENA_TX_OFFLOAD_MASK	(\
 	PKT_TX_L4_MASK |         \
@@ -143,7 +155,7 @@ static const struct ena_stats ena_stats_rx_strings[] = {
 
 static const struct rte_pci_id pci_id_ena_map[] = {
 	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_AMAZON, PCI_DEVICE_ID_ENA_VF) },
-	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_AMAZON, PCI_DEVICE_ID_ENA_LLQ_VF) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_AMAZON, PCI_DEVICE_ID_ENA_VF_RSERV0) },
 	{ .device_id = 0 },
 };
 
@@ -186,8 +198,8 @@ static void ena_init_rings(struct ena_adapter *adapter,
 			   bool disable_meta_caching);
 static int ena_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
 static int ena_start(struct rte_eth_dev *dev);
-static void ena_stop(struct rte_eth_dev *dev);
-static void ena_close(struct rte_eth_dev *dev);
+static int ena_stop(struct rte_eth_dev *dev);
+static int ena_close(struct rte_eth_dev *dev);
 static int ena_dev_reset(struct rte_eth_dev *dev);
 static int ena_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats);
 static void ena_rx_queue_release_all(struct rte_eth_dev *dev);
@@ -233,6 +245,7 @@ static int ena_process_bool_devarg(const char *key,
 				   void *opaque);
 static int ena_parse_devargs(struct ena_adapter *adapter,
 			     struct rte_devargs *devargs);
+static int ena_copy_eni_stats(struct ena_adapter *adapter);
 
 static const struct eth_dev_ops ena_dev_ops = {
 	.dev_configure        = ena_dev_configure,
@@ -283,21 +296,23 @@ static inline void ena_rx_mbuf_prepare(struct rte_mbuf *mbuf,
 	else if (ena_rx_ctx->l4_proto == ENA_ETH_IO_L4_PROTO_UDP)
 		packet_type |= RTE_PTYPE_L4_UDP;
 
-	if (ena_rx_ctx->l3_proto == ENA_ETH_IO_L3_PROTO_IPV4)
+	if (ena_rx_ctx->l3_proto == ENA_ETH_IO_L3_PROTO_IPV4) {
 		packet_type |= RTE_PTYPE_L3_IPV4;
-	else if (ena_rx_ctx->l3_proto == ENA_ETH_IO_L3_PROTO_IPV6)
+		if (unlikely(ena_rx_ctx->l3_csum_err))
+			ol_flags |= PKT_RX_IP_CKSUM_BAD;
+		else
+			ol_flags |= PKT_RX_IP_CKSUM_GOOD;
+	} else if (ena_rx_ctx->l3_proto == ENA_ETH_IO_L3_PROTO_IPV6) {
 		packet_type |= RTE_PTYPE_L3_IPV6;
+	}
 
-	if (!ena_rx_ctx->l4_csum_checked)
+	if (!ena_rx_ctx->l4_csum_checked || ena_rx_ctx->frag)
 		ol_flags |= PKT_RX_L4_CKSUM_UNKNOWN;
 	else
-		if (unlikely(ena_rx_ctx->l4_csum_err) && !ena_rx_ctx->frag)
+		if (unlikely(ena_rx_ctx->l4_csum_err))
 			ol_flags |= PKT_RX_L4_CKSUM_BAD;
 		else
-			ol_flags |= PKT_RX_L4_CKSUM_UNKNOWN;
-
-	if (unlikely(ena_rx_ctx->l3_csum_err))
-		ol_flags |= PKT_RX_IP_CKSUM_BAD;
+			ol_flags |= PKT_RX_L4_CKSUM_GOOD;
 
 	mbuf->ol_flags = ol_flags;
 	mbuf->packet_type = packet_type;
@@ -451,7 +466,7 @@ err:
 /* This function calculates the number of xstats based on the current config */
 static unsigned int ena_xstats_calc_num(struct rte_eth_dev *dev)
 {
-	return ENA_STATS_ARRAY_GLOBAL +
+	return ENA_STATS_ARRAY_GLOBAL + ENA_STATS_ARRAY_ENI +
 		(dev->data->nb_tx_queues * ENA_STATS_ARRAY_TX) +
 		(dev->data->nb_rx_queues * ENA_STATS_ARRAY_RX);
 }
@@ -487,14 +502,18 @@ err:
 	ena_com_delete_debug_area(&adapter->ena_dev);
 }
 
-static void ena_close(struct rte_eth_dev *dev)
+static int ena_close(struct rte_eth_dev *dev)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	struct ena_adapter *adapter = dev->data->dev_private;
+	int ret = 0;
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	if (adapter->state == ENA_ADAPTER_STATE_RUNNING)
-		ena_stop(dev);
+		ret = ena_stop(dev);
 	adapter->state = ENA_ADAPTER_STATE_CLOSED;
 
 	ena_rx_queue_release_all(dev);
@@ -513,6 +532,8 @@ static void ena_close(struct rte_eth_dev *dev)
 	 * release of the resource in the rte_eth_dev_release_port().
 	 */
 	dev->data->mac_addrs = NULL;
+
+	return ret;
 }
 
 static int
@@ -570,7 +591,9 @@ static int ena_rss_reta_update(struct rte_eth_dev *dev,
 		}
 	}
 
+	rte_spinlock_lock(&adapter->admin_lock);
 	rc = ena_com_indirect_table_set(ena_dev);
+	rte_spinlock_unlock(&adapter->admin_lock);
 	if (unlikely(rc && rc != ENA_COM_UNSUPPORTED)) {
 		PMD_DRV_LOG(ERR, "Cannot flush the indirect table\n");
 		return rc;
@@ -599,7 +622,9 @@ static int ena_rss_reta_query(struct rte_eth_dev *dev,
 	    (reta_size > RTE_RETA_GROUP_SIZE && ((reta_conf + 1) == NULL)))
 		return -EINVAL;
 
+	rte_spinlock_lock(&adapter->admin_lock);
 	rc = ena_com_indirect_table_get(ena_dev, indirect_table);
+	rte_spinlock_unlock(&adapter->admin_lock);
 	if (unlikely(rc && rc != ENA_COM_UNSUPPORTED)) {
 		PMD_DRV_LOG(ERR, "cannot get indirect table\n");
 		return -ENOTSUP;
@@ -954,7 +979,10 @@ static int ena_stats_get(struct rte_eth_dev *dev,
 		return -ENOTSUP;
 
 	memset(&ena_stats, 0, sizeof(ena_stats));
+
+	rte_spinlock_lock(&adapter->admin_lock);
 	rc = ena_com_get_dev_basic_stats(ena_dev, &ena_stats);
+	rte_spinlock_unlock(&adapter->admin_lock);
 	if (unlikely(rc)) {
 		PMD_DRV_LOG(ERR, "Could not retrieve statistics from ENA\n");
 		return rc;
@@ -1075,7 +1103,7 @@ err_start_tx:
 	return rc;
 }
 
-static void ena_stop(struct rte_eth_dev *dev)
+static int ena_stop(struct rte_eth_dev *dev)
 {
 	struct ena_adapter *adapter = dev->data->dev_private;
 	struct ena_com_dev *ena_dev = &adapter->ena_dev;
@@ -1093,6 +1121,9 @@ static void ena_stop(struct rte_eth_dev *dev)
 
 	++adapter->dev_stats.dev_stop;
 	adapter->state = ENA_ADAPTER_STATE_STOPPED;
+	dev->data->dev_started = 0;
+
+	return 0;
 }
 
 static int ena_create_io_queue(struct ena_ring *ring)
@@ -1621,7 +1652,7 @@ static void ena_timer_wd_callback(__rte_unused struct rte_timer *timer,
 
 	if (unlikely(adapter->trigger_reset)) {
 		PMD_DRV_LOG(ERR, "Trigger reset is on\n");
-		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_RESET,
+		rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_RESET,
 			NULL);
 	}
 }
@@ -1750,6 +1781,8 @@ static int eth_ena_dev_init(struct rte_eth_dev *eth_dev)
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
 
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
+
 	memset(adapter, 0, sizeof(struct ena_adapter));
 	ena_dev = &adapter->ena_dev;
 
@@ -1861,12 +1894,6 @@ static int eth_ena_dev_init(struct rte_eth_dev *eth_dev)
 			get_feat_ctx.dev_attr.mac_addr,
 			(struct rte_ether_addr *)adapter->mac_addr);
 
-	/*
-	 * Pass the information to the rte_eth_dev_close() that it should also
-	 * release the private port resources.
-	 */
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_CLOSE_REMOVE;
-
 	adapter->drv_stats = rte_zmalloc("adapter stats",
 					 sizeof(*adapter->drv_stats),
 					 RTE_CACHE_LINE_SIZE);
@@ -1875,6 +1902,8 @@ static int eth_ena_dev_init(struct rte_eth_dev *eth_dev)
 		rc = -ENOMEM;
 		goto err_delete_debug_area;
 	}
+
+	rte_spinlock_init(&adapter->admin_lock);
 
 	rte_intr_callback_register(intr_handle,
 				   ena_interrupt_handler_rte,
@@ -1933,11 +1962,6 @@ static int eth_ena_dev_uninit(struct rte_eth_dev *eth_dev)
 		return 0;
 
 	ena_destroy_device(eth_dev);
-
-	eth_dev->dev_ops = NULL;
-	eth_dev->rx_pkt_burst = NULL;
-	eth_dev->tx_pkt_burst = NULL;
-	eth_dev->tx_pkt_prepare = NULL;
 
 	return 0;
 }
@@ -2599,6 +2623,31 @@ static uint16_t eth_ena_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 	return sent_idx;
 }
 
+int ena_copy_eni_stats(struct ena_adapter *adapter)
+{
+	struct ena_admin_eni_stats admin_eni_stats;
+	int rc;
+
+	rte_spinlock_lock(&adapter->admin_lock);
+	rc = ena_com_get_eni_stats(&adapter->ena_dev, &admin_eni_stats);
+	rte_spinlock_unlock(&adapter->admin_lock);
+	if (rc != 0) {
+		if (rc == ENA_COM_UNSUPPORTED) {
+			PMD_DRV_LOG(DEBUG,
+				"Retrieving ENI metrics is not supported.\n");
+		} else {
+			PMD_DRV_LOG(WARNING,
+				"Failed to get ENI metrics: %d\n", rc);
+		}
+		return rc;
+	}
+
+	rte_memcpy(&adapter->eni_stats, &admin_eni_stats,
+		sizeof(struct ena_stats_eni));
+
+	return 0;
+}
+
 /**
  * DPDK callback to retrieve names of extended device statistics
  *
@@ -2625,6 +2674,10 @@ static int ena_xstats_get_names(struct rte_eth_dev *dev,
 	for (stat = 0; stat < ENA_STATS_ARRAY_GLOBAL; stat++, count++)
 		strcpy(xstats_names[count].name,
 			ena_stats_global_strings[stat].name);
+
+	for (stat = 0; stat < ENA_STATS_ARRAY_ENI; stat++, count++)
+		strcpy(xstats_names[count].name,
+			ena_stats_eni_strings[stat].name);
 
 	for (stat = 0; stat < ENA_STATS_ARRAY_RX; stat++)
 		for (i = 0; i < dev->data->nb_rx_queues; i++, count++)
@@ -2673,12 +2726,25 @@ static int ena_xstats_get(struct rte_eth_dev *dev,
 		return 0;
 
 	for (stat = 0; stat < ENA_STATS_ARRAY_GLOBAL; stat++, count++) {
-		stat_offset = ena_stats_rx_strings[stat].stat_offset;
+		stat_offset = ena_stats_global_strings[stat].stat_offset;
 		stats_begin = &adapter->dev_stats;
 
 		xstats[count].id = count;
 		xstats[count].value = *((uint64_t *)
 			((char *)stats_begin + stat_offset));
+	}
+
+	/* Even if the function below fails, we should copy previous (or initial
+	 * values) to keep structure of rte_eth_xstat consistent.
+	 */
+	ena_copy_eni_stats(adapter);
+	for (stat = 0; stat < ENA_STATS_ARRAY_ENI; stat++, count++) {
+		stat_offset = ena_stats_eni_strings[stat].stat_offset;
+		stats_begin = &adapter->eni_stats;
+
+		xstats[count].id = count;
+		xstats[count].value = *((uint64_t *)
+		    ((char *)stats_begin + stat_offset));
 	}
 
 	for (stat = 0; stat < ENA_STATS_ARRAY_RX; stat++) {
@@ -2717,6 +2783,8 @@ static int ena_xstats_get_by_id(struct rte_eth_dev *dev,
 	unsigned int i;
 	int qid;
 	int valid = 0;
+	bool was_eni_copied = false;
+
 	for (i = 0; i < n; ++i) {
 		id = ids[i];
 		/* Check if id belongs to global statistics */
@@ -2726,8 +2794,24 @@ static int ena_xstats_get_by_id(struct rte_eth_dev *dev,
 			continue;
 		}
 
-		/* Check if id belongs to rx queue statistics */
+		/* Check if id belongs to ENI statistics */
 		id -= ENA_STATS_ARRAY_GLOBAL;
+		if (id < ENA_STATS_ARRAY_ENI) {
+			/* Avoid reading ENI stats multiple times in a single
+			 * function call, as it requires communication with the
+			 * admin queue.
+			 */
+			if (!was_eni_copied) {
+				was_eni_copied = true;
+				ena_copy_eni_stats(adapter);
+			}
+			values[i] = *((uint64_t *)&adapter->eni_stats + id);
+			++valid;
+			continue;
+		}
+
+		/* Check if id belongs to rx queue statistics */
+		id -= ENA_STATS_ARRAY_ENI;
 		rx_entries = ENA_STATS_ARRAY_RX * dev->data->nb_rx_queues;
 		if (id < rx_entries) {
 			qid = id % dev->data->nb_rx_queues;
@@ -2867,7 +2951,7 @@ static void ena_update_on_link_change(void *adapter_data,
 	adapter->link_status = status;
 
 	ena_link_update(eth_dev, 0);
-	_rte_eth_dev_callback_process(eth_dev, RTE_ETH_EVENT_INTR_LSC, NULL);
+	rte_eth_dev_callback_process(eth_dev, RTE_ETH_EVENT_INTR_LSC, NULL);
 }
 
 static void ena_notification(void *data,

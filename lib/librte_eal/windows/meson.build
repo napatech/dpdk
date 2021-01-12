@@ -5,9 +5,11 @@ subdir('include')
 
 sources += files(
 	'eal.c',
+	'eal_alarm.c',
 	'eal_debug.c',
 	'eal_file.c',
 	'eal_hugepages.c',
+	'eal_interrupts.c',
 	'eal_lcore.c',
 	'eal_log.c',
 	'eal_memalloc.c',

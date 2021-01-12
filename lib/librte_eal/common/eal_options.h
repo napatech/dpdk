@@ -13,8 +13,12 @@ enum {
 	/* long options mapped to a short option */
 #define OPT_HELP              "help"
 	OPT_HELP_NUM            = 'h',
-#define OPT_PCI_BLACKLIST     "pci-blacklist"
-	OPT_PCI_BLACKLIST_NUM   = 'b',
+#define OPT_DEV_ALLOW	      "allow"
+	OPT_DEV_ALLOW_NUM       = 'a',
+#define OPT_DEV_BLOCK         "block"
+	OPT_DEV_BLOCK_NUM      = 'b',
+
+	/* legacy option that will be removed in future */
 #define OPT_PCI_WHITELIST     "pci-whitelist"
 	OPT_PCI_WHITELIST_NUM   = 'w',
 
@@ -43,6 +47,8 @@ enum {
 	OPT_TRACE_BUF_SIZE_NUM,
 #define OPT_TRACE_MODE        "trace-mode"
 	OPT_TRACE_MODE_NUM,
+#define OPT_MAIN_LCORE        "main-lcore"
+	OPT_MAIN_LCORE_NUM,
 #define OPT_MASTER_LCORE      "master-lcore"
 	OPT_MASTER_LCORE_NUM,
 #define OPT_MBUF_POOL_OPS_NAME "mbuf-pool-ops-name"
@@ -85,6 +91,13 @@ enum {
 	OPT_TELEMETRY_NUM,
 #define OPT_NO_TELEMETRY      "no-telemetry"
 	OPT_NO_TELEMETRY_NUM,
+#define OPT_FORCE_MAX_SIMD_BITWIDTH  "force-max-simd-bitwidth"
+	OPT_FORCE_MAX_SIMD_BITWIDTH_NUM,
+
+	/* legacy option that will be removed in future */
+#define OPT_PCI_BLACKLIST     "pci-blacklist"
+	OPT_PCI_BLACKLIST_NUM,
+
 	OPT_LONG_MAX_NUM
 };
 

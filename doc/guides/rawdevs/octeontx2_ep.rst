@@ -18,14 +18,6 @@ This OCTEON TX2 End Point mode PMD supports
 
 #. Packet Output - OCTEON TX2 to Host with info pointer mode.
 
-Config File Options
-~~~~~~~~~~~~~~~~~~~
-
-The following options can be modified in the ``config`` file.
-
-- ``CONFIG_RTE_LIBRTE_PMD_OCTEONTX2_EP_RAWDEV`` (default ``y``)
-
-  Toggle compilation of the ``lrte_pmd_octeontx2_ep`` driver.
 
 Initialization
 --------------
@@ -66,7 +58,8 @@ The following code shows how the device is configured
    struct rte_rawdev_info rdev_info = {.dev_private = &config};
    config.enqdeq_mpool = (void *)rte_mempool_create(...);
 
-   rte_rawdev_configure(dev_id, (rte_rawdev_obj_t)&rdev_info);
+   rte_rawdev_configure(dev_id, (rte_rawdev_obj_t)&rdev_info,
+                        sizeof(config));
 
 Performing Data Transfer
 ------------------------

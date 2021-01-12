@@ -404,7 +404,7 @@ mlx5_dma_unmap(struct rte_pci_device *pdev, void *addr,
 		return -1;
 	}
 	LIST_REMOVE(mr, mr);
-	LIST_INSERT_HEAD(&sh->share_cache.mr_free_list, mr, mr);
+	mlx5_mr_free(mr, sh->share_cache.dereg_mr_cb);
 	DEBUG("port %u remove MR(%p) from list", dev->data->port_id,
 	      (void *)mr);
 	mlx5_mr_rebuild_cache(&sh->share_cache);
@@ -536,6 +536,9 @@ mlx5_mr_update_mp(struct rte_eth_dev *dev, struct mlx5_mr_ctrl *mr_ctrl,
 		.ret = 0,
 	};
 
+	DRV_LOG(DEBUG, "Port %u Rx queue registering mp %s "
+		       "having %u chunks.", dev->data->port_id,
+		       mp->name, mp->nb_mem_chunks);
 	rte_mempool_mem_iter(mp, mlx5_mr_update_mp_cb, &data);
 	if (data.ret < 0 && rte_errno == ENXIO) {
 		/* Mempool may have externally allocated memory. */

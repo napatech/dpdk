@@ -821,20 +821,23 @@ power_freq_scaleup_heuristic(unsigned lcore_id,
  *  0 on success
  */
 static int
-sleep_until_rx_interrupt(int num)
+sleep_until_rx_interrupt(int num, int lcore)
 {
 	/*
 	 * we want to track when we are woken up by traffic so that we can go
-	 * back to sleep again without log spamming.
+	 * back to sleep again without log spamming. Avoid cache line sharing
+	 * to prevent threads stepping on each others' toes.
 	 */
-	static bool timeout;
+	static struct {
+		bool wakeup;
+	} __rte_cache_aligned status[RTE_MAX_LCORE];
 	struct rte_epoll_event event[num];
 	int n, i;
 	uint16_t port_id;
 	uint8_t queue_id;
 	void *data;
 
-	if (!timeout) {
+	if (status[lcore].wakeup) {
 		RTE_LOG(INFO, L3FWD_POWER,
 				"lcore %u sleeps until interrupt triggers\n",
 				rte_lcore_id());
@@ -851,7 +854,7 @@ sleep_until_rx_interrupt(int num)
 			" port %d queue %d\n",
 			rte_lcore_id(), port_id, queue_id);
 	}
-	timeout = n == 0;
+	status[lcore].wakeup = n != 0;
 
 	return 0;
 }
@@ -1050,7 +1053,8 @@ start_rx:
 				if (intr_en) {
 					turn_on_off_intr(qconf, 1);
 					sleep_until_rx_interrupt(
-							qconf->n_rx_queue);
+							qconf->n_rx_queue,
+							lcore_id);
 					turn_on_off_intr(qconf, 0);
 					/**
 					 * start receiving packets immediately
@@ -1473,7 +1477,8 @@ start_rx:
 				if (intr_en) {
 					turn_on_off_intr(qconf, 1);
 					sleep_until_rx_interrupt(
-						qconf->n_rx_queue);
+							qconf->n_rx_queue,
+							lcore_id);
 					turn_on_off_intr(qconf, 0);
 					/**
 					 * start receiving packets immediately
@@ -1514,7 +1519,7 @@ check_lcore_params(void)
 						"off\n", lcore, socketid);
 		}
 		if (app_mode == APP_MODE_TELEMETRY && lcore == rte_lcore_id()) {
-			printf("cannot enable master core %d in config for telemetry mode\n",
+			printf("cannot enable main core %d in config for telemetry mode\n",
 				rte_lcore_id());
 			return -1;
 		}
@@ -2134,6 +2139,7 @@ check_all_ports_link_status(uint32_t port_mask)
 	uint16_t portid;
 	struct rte_eth_link link;
 	int ret;
+	char link_status_text[RTE_ETH_LINK_MAX_STR_LEN];
 
 	printf("\nChecking link status");
 	fflush(stdout);
@@ -2153,15 +2159,10 @@ check_all_ports_link_status(uint32_t port_mask)
 			}
 			/* print link status if flag set */
 			if (print_flag == 1) {
-				if (link.link_status)
-					printf("Port %d Link Up - speed %u "
-						"Mbps - %s\n", (uint8_t)portid,
-						(unsigned)link.link_speed,
-				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
-					("full-duplex") : ("half-duplex"));
-				else
-					printf("Port %d Link Down\n",
-						(uint8_t)portid);
+				rte_eth_link_to_str(link_status_text,
+					sizeof(link_status_text), &link);
+				printf("Port %d %s\n", portid,
+				       link_status_text);
 				continue;
 			}
 			/* clear all_ports_up flag if any link down */
@@ -2287,7 +2288,7 @@ get_current_stat_values(uint64_t *values)
 	uint64_t app_eps = 0, app_fps = 0, app_br = 0;
 	uint64_t count = 0;
 
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		qconf = &lcore_conf[lcore_id];
 		if (qconf->n_rx_queue == 0)
 			continue;
@@ -2379,10 +2380,10 @@ launch_timer(unsigned int lcore_id)
 	RTE_SET_USED(lcore_id);
 
 
-	if (rte_get_master_lcore() != lcore_id) {
-		rte_panic("timer on lcore:%d which is not master core:%d\n",
+	if (rte_get_main_lcore() != lcore_id) {
+		rte_panic("timer on lcore:%d which is not main core:%d\n",
 				lcore_id,
-				rte_get_master_lcore());
+				rte_get_main_lcore());
 	}
 
 	RTE_LOG(INFO, POWER, "Bring up the Timer\n");
@@ -2706,9 +2707,7 @@ main(int argc, char **argv)
 				if (add_cb_parse_ptype(portid, queueid) < 0)
 					rte_exit(EXIT_FAILURE,
 						 "Fail to add ptype cb\n");
-			} else if (!check_ptype(portid))
-				rte_exit(EXIT_FAILURE,
-					 "PMD can not provide needed ptypes\n");
+			}
 		}
 	}
 
@@ -2739,6 +2738,11 @@ main(int argc, char **argv)
 		}
 		/* initialize spinlock for each port */
 		rte_spinlock_init(&(locks[portid]));
+
+		if (!parse_ptype)
+			if (!check_ptype(portid))
+				rte_exit(EXIT_FAILURE,
+					"PMD can not provide needed ptypes\n");
 	}
 
 	check_all_ports_link_status(enabled_port_mask);
@@ -2763,11 +2767,11 @@ main(int argc, char **argv)
 
 	/* launch per-lcore init on every lcore */
 	if (app_mode == APP_MODE_LEGACY) {
-		rte_eal_mp_remote_launch(main_legacy_loop, NULL, CALL_MASTER);
+		rte_eal_mp_remote_launch(main_legacy_loop, NULL, CALL_MAIN);
 	} else if (app_mode == APP_MODE_EMPTY_POLL) {
 		empty_poll_stop = false;
 		rte_eal_mp_remote_launch(main_empty_poll_loop, NULL,
-				SKIP_MASTER);
+				SKIP_MAIN);
 	} else if (app_mode == APP_MODE_TELEMETRY) {
 		unsigned int i;
 
@@ -2783,7 +2787,7 @@ main(int argc, char **argv)
 		else
 			rte_exit(EXIT_FAILURE, "failed to register metrics names");
 
-		RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+		RTE_LCORE_FOREACH_WORKER(lcore_id) {
 			rte_spinlock_init(&stats[lcore_id].telemetry_lock);
 		}
 		rte_timer_init(&telemetry_timer);
@@ -2791,15 +2795,15 @@ main(int argc, char **argv)
 				handle_app_stats,
 				"Returns global power stats. Parameters: None");
 		rte_eal_mp_remote_launch(main_telemetry_loop, NULL,
-						SKIP_MASTER);
+						SKIP_MAIN);
 	} else if (app_mode == APP_MODE_INTERRUPT) {
-		rte_eal_mp_remote_launch(main_intr_loop, NULL, CALL_MASTER);
+		rte_eal_mp_remote_launch(main_intr_loop, NULL, CALL_MAIN);
 	}
 
 	if (app_mode == APP_MODE_EMPTY_POLL || app_mode == APP_MODE_TELEMETRY)
 		launch_timer(rte_lcore_id());
 
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		if (rte_eal_wait_lcore(lcore_id) < 0)
 			return -1;
 	}
@@ -2809,7 +2813,11 @@ main(int argc, char **argv)
 		if ((enabled_port_mask & (1 << portid)) == 0)
 			continue;
 
-		rte_eth_dev_stop(portid);
+		ret = rte_eth_dev_stop(portid);
+		if (ret != 0)
+			RTE_LOG(ERR, L3FWD_POWER, "rte_eth_dev_stop: err=%d, port=%u\n",
+				ret, portid);
+
 		rte_eth_dev_close(portid);
 	}
 

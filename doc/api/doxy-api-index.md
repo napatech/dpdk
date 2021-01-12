@@ -41,16 +41,22 @@ The public API headers are grouped by topics:
   [vhost]              (@ref rte_vhost.h),
   [vdpa]               (@ref rte_vdpa.h),
   [KNI]                (@ref rte_kni.h),
+  [ark]                (@ref rte_pmd_ark.h),
   [ixgbe]              (@ref rte_pmd_ixgbe.h),
   [i40e]               (@ref rte_pmd_i40e.h),
   [ice]                (@ref rte_pmd_ice.h),
+  [iavf]               (@ref rte_pmd_iavf.h),
+  [ioat]               (@ref rte_ioat_rawdev.h),
   [bnxt]               (@ref rte_pmd_bnxt.h),
   [dpaa]               (@ref rte_pmd_dpaa.h),
   [dpaa2]              (@ref rte_pmd_dpaa2.h),
+  [mlx5]               (@ref rte_pmd_mlx5.h),
   [dpaa2_mempool]      (@ref rte_dpaa2_mempool.h),
   [dpaa2_cmdif]        (@ref rte_pmd_dpaa2_cmdif.h),
   [dpaa2_qdma]         (@ref rte_pmd_dpaa2_qdma.h),
-  [crypto_scheduler]   (@ref rte_cryptodev_scheduler.h)
+  [crypto_scheduler]   (@ref rte_cryptodev_scheduler.h),
+  [dlb]                (@ref rte_pmd_dlb.h),
+  [dlb2]               (@ref rte_pmd_dlb2.h)
 
 - **memory**:
   [memseg]             (@ref rte_memory.h),
@@ -101,14 +107,18 @@ The public API headers are grouped by topics:
   [IPsec SA]           (@ref rte_ipsec_sa.h),
   [IPsec SAD]          (@ref rte_ipsec_sad.h),
   [IP]                 (@ref rte_ip.h),
+  [frag/reass]         (@ref rte_ip_frag.h),
   [SCTP]               (@ref rte_sctp.h),
   [TCP]                (@ref rte_tcp.h),
   [UDP]                (@ref rte_udp.h),
   [GTP]                (@ref rte_gtp.h),
   [GRO]                (@ref rte_gro.h),
   [GSO]                (@ref rte_gso.h),
-  [frag/reass]         (@ref rte_ip_frag.h),
-  [VXLAN]              (@ref rte_vxlan.h)
+  [GRE]                (@ref rte_gre.h),
+  [MPLS]               (@ref rte_mpls.h),
+  [VXLAN]              (@ref rte_vxlan.h),
+  [Geneve]             (@ref rte_geneve.h),
+  [eCPRI]              (@ref rte_ecpri.h)
 
 - **QoS**:
   [metering]           (@ref rte_meter.h),
@@ -166,6 +176,17 @@ The public API headers are grouped by topics:
   * [pipeline]         (@ref rte_pipeline.h)
     [port_in_action]   (@ref rte_port_in_action.h)
     [table_action]     (@ref rte_table_action.h)
+  * SWX pipeline:
+    [control]          (@ref rte_swx_ctl.h),
+    [extern]           (@ref rte_swx_extern.h),
+    [pipeline]         (@ref rte_swx_pipeline.h)
+  * SWX port:
+    [port]             (@ref rte_swx_port.h),
+    [ethdev]           (@ref rte_swx_port_ethdev.h),
+    [src/sink]         (@ref rte_swx_port_source_sink.h)
+  * SWX table:
+    [table]            (@ref rte_swx_table.h),
+    [table_em]         (@ref rte_swx_table_em.h)
   * [graph]            (@ref rte_graph.h):
     [graph_worker]     (@ref rte_graph_worker.h)
   * graph_nodes:

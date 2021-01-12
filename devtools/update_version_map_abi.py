@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2019 Intel Corporation
 
@@ -9,7 +9,6 @@ ABI version is supplied via command-line parameter. This script is to be called
 from the devtools/update-abi.sh utility.
 """
 
-from __future__ import print_function
 import argparse
 import sys
 import re
@@ -105,9 +104,9 @@ def __parse_map_file(f_in):
     return has_stable, stable_lines, experimental_lines, internal_lines
 
 
-def __generate_stable_abi(f_out, abi_version, lines):
+def __generate_stable_abi(f_out, abi_major, lines):
     # print ABI version header
-    print("DPDK_{} {{".format(abi_version), file=f_out)
+    print("DPDK_{} {{".format(abi_major), file=f_out)
 
     # print global section if it exists
     if lines:
@@ -160,16 +159,12 @@ def __generate_internal_abi(f_out, lines):
     print("};", file=f_out)
 
 def __main():
-    if sys.version_info.major < 3:
-        print("WARNING: Python 2 is deprecated for use in DPDK, and will not work in future releases.", file=sys.stderr)
-        print("Please use Python 3 instead", file=sys.stderr)
-
     arg_parser = argparse.ArgumentParser(
         description='Merge versions in linker version script.')
 
     arg_parser.add_argument("map_file", type=str,
                             help='path to linker version script file '
-                                 '(pattern: *version.map)')
+                                 '(pattern: version.map)')
     arg_parser.add_argument("abi_version", type=str,
                             help='target ABI version (pattern: MAJOR.MINOR)')
 
@@ -186,6 +181,7 @@ def __main():
               file=sys.stderr)
         arg_parser.print_help()
         sys.exit(1)
+    abi_major = parsed.abi_version.split('.')[0]
 
     with open(parsed.map_file) as f_in:
         has_stable, stable_lines, experimental_lines, internal_lines = __parse_map_file(f_in)
@@ -193,7 +189,7 @@ def __main():
     with open(parsed.map_file, 'w') as f_out:
         need_newline = has_stable and experimental_lines
         if has_stable:
-            __generate_stable_abi(f_out, parsed.abi_version, stable_lines)
+            __generate_stable_abi(f_out, abi_major, stable_lines)
         if need_newline:
             # separate sections with a newline
             print(file=f_out)

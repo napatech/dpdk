@@ -8,7 +8,7 @@
 #include <rte_malloc.h>
 #include <rte_pci.h>
 #include <rte_cryptodev_pmd.h>
-#ifdef RTE_LIBRTE_SECURITY
+#ifdef RTE_LIB_SECURITY
 #include <rte_security_driver.h>
 #endif
 
@@ -39,7 +39,7 @@ static const struct rte_cryptodev_capabilities qat_gen3_sym_capabilities[] = {
 	RTE_CRYPTODEV_END_OF_CAPABILITIES_LIST()
 };
 
-#ifdef RTE_LIBRTE_SECURITY
+#ifdef RTE_LIB_SECURITY
 static const struct rte_cryptodev_capabilities
 					qat_security_sym_capabilities[] = {
 	QAT_SECURITY_SYM_CAPABILITIES,
@@ -258,10 +258,14 @@ static struct rte_cryptodev_ops crypto_qat_ops = {
 		/* Crypto related operations */
 		.sym_session_get_size	= qat_sym_session_get_private_size,
 		.sym_session_configure	= qat_sym_session_configure,
-		.sym_session_clear	= qat_sym_session_clear
+		.sym_session_clear	= qat_sym_session_clear,
+
+		/* Raw data-path API related operations */
+		.sym_get_raw_dp_ctx_size = qat_sym_get_dp_ctx_size,
+		.sym_configure_raw_dp_ctx = qat_sym_configure_dp_ctx,
 };
 
-#ifdef RTE_LIBRTE_SECURITY
+#ifdef RTE_LIB_SECURITY
 static const struct rte_security_capability *
 qat_security_cap_get(void *device __rte_unused)
 {
@@ -376,7 +380,8 @@ qat_sym_dev_create(struct qat_pci_device *qat_pci_dev,
 			RTE_CRYPTODEV_FF_OOP_SGL_IN_LB_OUT |
 			RTE_CRYPTODEV_FF_OOP_LB_IN_SGL_OUT |
 			RTE_CRYPTODEV_FF_OOP_LB_IN_LB_OUT |
-			RTE_CRYPTODEV_FF_DIGEST_ENCRYPTED;
+			RTE_CRYPTODEV_FF_DIGEST_ENCRYPTED |
+			RTE_CRYPTODEV_FF_SYM_RAW_DP;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
@@ -385,7 +390,7 @@ qat_sym_dev_create(struct qat_pci_device *qat_pci_dev,
 			"QAT_SYM_CAPA_GEN_%d",
 			qat_pci_dev->qat_dev_gen);
 
-#ifdef RTE_LIBRTE_SECURITY
+#ifdef RTE_LIB_SECURITY
 	struct rte_security_ctx *security_instance;
 	security_instance = rte_malloc("qat_sec",
 				sizeof(struct rte_security_ctx),
@@ -462,7 +467,7 @@ qat_sym_dev_create(struct qat_pci_device *qat_pci_dev,
 	return 0;
 
 error:
-#ifdef RTE_LIBRTE_SECURITY
+#ifdef RTE_LIB_SECURITY
 	rte_free(cryptodev->security_ctx);
 	cryptodev->security_ctx = NULL;
 #endif
@@ -487,7 +492,7 @@ qat_sym_dev_destroy(struct qat_pci_device *qat_pci_dev)
 
 	/* free crypto device */
 	cryptodev = rte_cryptodev_pmd_get_dev(qat_pci_dev->sym_dev->sym_dev_id);
-#ifdef RTE_LIBRTE_SECURITY
+#ifdef RTE_LIB_SECURITY
 	rte_free(cryptodev->security_ctx);
 	cryptodev->security_ctx = NULL;
 #endif

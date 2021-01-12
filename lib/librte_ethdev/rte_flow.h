@@ -555,6 +555,12 @@ enum rte_flow_item_type {
 	 */
 	RTE_FLOW_ITEM_TYPE_ECPRI,
 
+	/**
+	 * Matches the presence of IPv6 fragment extension header.
+	 *
+	 * See struct rte_flow_item_ipv6_frag_ext.
+	 */
+	RTE_FLOW_ITEM_TYPE_IPV6_FRAG_EXT,
 };
 
 /**
@@ -740,15 +746,17 @@ static const struct rte_flow_item_raw rte_flow_item_raw_mask = {
  * same order as on the wire.
  * If the @p type field contains a TPID value, then only tagged packets with the
  * specified TPID will match the pattern.
- * Otherwise, only untagged packets will match the pattern.
- * If the @p ETH item is the only item in the pattern, and the @p type field
- * is not specified, then both tagged and untagged packets will match the
- * pattern.
+ * The field @p has_vlan can be used to match any type of tagged packets,
+ * instead of using the @p type field.
+ * If the @p type and @p has_vlan fields are not specified, then both tagged
+ * and untagged packets will match the pattern.
  */
 struct rte_flow_item_eth {
 	struct rte_ether_addr dst; /**< Destination MAC. */
 	struct rte_ether_addr src; /**< Source MAC. */
 	rte_be16_t type; /**< EtherType or TPID. */
+	uint32_t has_vlan:1; /**< Packet header contains at least one VLAN. */
+	uint32_t reserved:31; /**< Reserved, must be zero. */
 };
 
 /** Default mask for RTE_FLOW_ITEM_TYPE_ETH. */
@@ -770,10 +778,17 @@ static const struct rte_flow_item_eth rte_flow_item_eth_mask = {
  * the preceding pattern item.
  * If a @p VLAN item is present in the pattern, then only tagged packets will
  * match the pattern.
+ * The field @p has_more_vlan can be used to match any type of tagged packets,
+ * instead of using the @p inner_type field.
+ * If the @p inner_type and @p has_more_vlan fields are not specified,
+ * then any tagged packets will match the pattern.
  */
 struct rte_flow_item_vlan {
 	rte_be16_t tci; /**< Tag control information. */
 	rte_be16_t inner_type; /**< Inner EtherType or TPID. */
+	uint32_t has_more_vlan:1;
+	/**< Packet header contains at least one more VLAN, after this VLAN. */
+	uint32_t reserved:31; /**< Reserved, must be zero. */
 };
 
 /** Default mask for RTE_FLOW_ITEM_TYPE_VLAN. */
@@ -810,11 +825,30 @@ static const struct rte_flow_item_ipv4 rte_flow_item_ipv4_mask = {
  *
  * Matches an IPv6 header.
  *
- * Note: IPv6 options are handled by dedicated pattern items, see
- * RTE_FLOW_ITEM_TYPE_IPV6_EXT.
+ * Dedicated flags indicate if header contains specific extension headers.
  */
 struct rte_flow_item_ipv6 {
 	struct rte_ipv6_hdr hdr; /**< IPv6 header definition. */
+	uint32_t has_hop_ext:1;
+	/**< Header contains Hop-by-Hop Options extension header. */
+	uint32_t has_route_ext:1;
+	/**< Header contains Routing extension header. */
+	uint32_t has_frag_ext:1;
+	/**< Header contains Fragment extension header. */
+	uint32_t has_auth_ext:1;
+	/**< Header contains Authentication extension header. */
+	uint32_t has_esp_ext:1;
+	/**< Header contains Encapsulation Security Payload extension header. */
+	uint32_t has_dest_ext:1;
+	/**< Header contains Destination Options extension header. */
+	uint32_t has_mobil_ext:1;
+	/**< Header contains Mobility extension header. */
+	uint32_t has_hip_ext:1;
+	/**< Header contains Host Identity Protocol extension header. */
+	uint32_t has_shim6_ext:1;
+	/**< Header contains Shim6 Protocol extension header. */
+	uint32_t reserved:23;
+	/**< Reserved for future extension headers, must be zero. */
 };
 
 /** Default mask for RTE_FLOW_ITEM_TYPE_IPV6. */
@@ -1236,6 +1270,20 @@ struct rte_flow_item_ipv6_ext rte_flow_item_ipv6_ext_mask = {
 	.next_hdr = 0xff,
 };
 #endif
+
+/**
+ * RTE_FLOW_ITEM_TYPE_IPV6_FRAG_EXT
+ *
+ * Matches the presence of IPv6 fragment extension header.
+ *
+ * Preceded by any of:
+ *
+ * - RTE_FLOW_ITEM_TYPE_IPV6
+ * - RTE_FLOW_ITEM_TYPE_IPV6_EXT
+ */
+struct rte_flow_item_ipv6_frag_ext {
+	struct rte_ipv6_fragment_ext hdr;
+};
 
 /**
  * RTE_FLOW_ITEM_TYPE_ICMP6
@@ -1785,7 +1833,8 @@ enum rte_flow_action_type {
 	/**
 	 * Enables counters for this flow rule.
 	 *
-	 * These counters can be retrieved and reset through rte_flow_query(),
+	 * These counters can be retrieved and reset through rte_flow_query() or
+	 * rte_flow_shared_action_query() if the action provided via handle,
 	 * see struct rte_flow_query_count.
 	 *
 	 * See struct rte_flow_action_count.
@@ -2201,8 +2250,25 @@ enum rte_flow_action_type {
 	 * See struct rte_flow_action_age.
 	 * See function rte_flow_get_aged_flows
 	 * see enum RTE_ETH_EVENT_FLOW_AGED
+	 * See struct rte_flow_query_age
 	 */
 	RTE_FLOW_ACTION_TYPE_AGE,
+
+	/**
+	 * The matching packets will be duplicated with specified ratio and
+	 * applied with own set of actions with a fate action.
+	 *
+	 * See struct rte_flow_action_sample.
+	 */
+	RTE_FLOW_ACTION_TYPE_SAMPLE,
+
+	/**
+	 * Describe action shared across multiple flow rules.
+	 *
+	 * Allow multiple rules reference the same action by handle (see
+	 * struct rte_flow_shared_action).
+	 */
+	RTE_FLOW_ACTION_TYPE_SHARED,
 };
 
 /**
@@ -2265,6 +2331,20 @@ struct rte_flow_action_age {
 };
 
 /**
+ * RTE_FLOW_ACTION_TYPE_AGE (query)
+ *
+ * Query structure to retrieve the aging status information of a
+ * shared AGE action, or a flow rule using the AGE action.
+ */
+struct rte_flow_query_age {
+	uint32_t reserved:6; /**< Reserved, must be zero. */
+	uint32_t aged:1; /**< 1 if aging timeout expired, 0 otherwise. */
+	uint32_t sec_since_last_hit_valid:1;
+	/**< sec_since_last_hit value is valid. */
+	uint32_t sec_since_last_hit:24; /**< Seconds since last traffic hit. */
+};
+
+/**
  * @warning
  * @b EXPERIMENTAL: this structure may change without prior notice
  *
@@ -2278,6 +2358,9 @@ struct rte_flow_action_age {
  * Counters can be retrieved and reset through ``rte_flow_query()``, see
  * ``struct rte_flow_query_count``.
  *
+ * @deprecated Shared attribute is deprecated, use generic
+ * RTE_FLOW_ACTION_TYPE_SHARED action.
+ *
  * The shared flag indicates whether the counter is unique to the flow rule the
  * action is specified with, or whether it is a shared counter.
  *
@@ -2290,7 +2373,8 @@ struct rte_flow_action_age {
  * to all ports within that switch domain.
  */
 struct rte_flow_action_count {
-	uint32_t shared:1; /**< Share counter ID with other flow rules. */
+	/** @deprecated Share counter ID with other flow rules. */
+	uint32_t shared:1;
 	uint32_t reserved:31; /**< Reserved, must be zero. */
 	uint32_t id; /**< Counter ID. */
 };
@@ -2764,6 +2848,20 @@ struct rte_flow_action_set_dscp {
 	uint8_t dscp;
 };
 
+
+/**
+ * RTE_FLOW_ACTION_TYPE_SHARED
+ *
+ * Opaque type returned after successfully creating a shared action.
+ *
+ * This handle can be used to manage and query the related action:
+ * - share it across multiple flow rules
+ * - update action configuration
+ * - query action data
+ * - destroy action
+ */
+struct rte_flow_shared_action;
+
 /* Mbuf dynamic field offset for metadata. */
 extern int32_t rte_flow_dynf_metadata_offs;
 
@@ -2811,6 +2909,28 @@ struct rte_flow_action {
  * destroy it or retrieve counters).
  */
 struct rte_flow;
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this structure may change without prior notice
+ *
+ * RTE_FLOW_ACTION_TYPE_SAMPLE
+ *
+ * Adds a sample action to a matched flow.
+ *
+ * The matching packets will be duplicated with specified ratio and applied
+ * with own set of actions with a fate action, the sampled packet could be
+ * redirected to queue or port. All the packets continue processing on the
+ * default flow path.
+ *
+ * When the sample ratio is set to 1 then the packets will be 100% mirrored.
+ * Additional action list be supported to add for sampled or mirrored packets.
+ */
+struct rte_flow_action_sample {
+	uint32_t ratio; /**< packets sampled equals to '1/ratio'. */
+	const struct rte_flow_action *actions;
+		/**< sub-action list specific for the sampling hit cases. */
+};
 
 /**
  * Verbose error types.
@@ -3428,6 +3548,355 @@ int
 rte_flow_get_aged_flows(uint16_t port_id, void **contexts,
 			uint32_t nb_contexts, struct rte_flow_error *error);
 
+/**
+ * Specify shared action configuration
+ */
+struct rte_flow_shared_action_conf {
+	/**
+	 * Flow direction for shared action configuration.
+	 *
+	 * Shared action should be valid at least for one flow direction,
+	 * otherwise it is invalid for both ingress and egress rules.
+	 */
+	uint32_t ingress:1;
+	/**< Action valid for rules applied to ingress traffic. */
+	uint32_t egress:1;
+	/**< Action valid for rules applied to egress traffic. */
+
+	/**
+	 * When set to 1, indicates that the action is valid for
+	 * transfer traffic; otherwise, for non-transfer traffic.
+	 *
+	 * See struct rte_flow_attr.
+	 */
+	uint32_t transfer:1;
+};
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Create shared action for reuse in multiple flow rules.
+ * The created shared action has single state and configuration
+ * across all flow rules using it.
+ *
+ * @param[in] port_id
+ *    The port identifier of the Ethernet device.
+ * @param[in] conf
+ *   Shared action configuration.
+ * @param[in] action
+ *   Action configuration for shared action creation.
+ * @param[out] error
+ *   Perform verbose error reporting if not NULL. PMDs initialize this
+ *   structure in case of error only.
+ * @return
+ *   A valid handle in case of success, NULL otherwise and rte_errno is set
+ *   to one of the error codes defined:
+ *   - (ENODEV) if *port_id* invalid.
+ *   - (ENOSYS) if underlying device does not support this functionality.
+ *   - (EIO) if underlying device is removed.
+ *   - (EINVAL) if *action* invalid.
+ *   - (ENOTSUP) if *action* valid but unsupported.
+ */
+__rte_experimental
+struct rte_flow_shared_action *
+rte_flow_shared_action_create(uint16_t port_id,
+			      const struct rte_flow_shared_action_conf *conf,
+			      const struct rte_flow_action *action,
+			      struct rte_flow_error *error);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Destroy the shared action by handle.
+ *
+ * @param[in] port_id
+ *    The port identifier of the Ethernet device.
+ * @param[in] action
+ *   Handle for the shared action to be destroyed.
+ * @param[out] error
+ *   Perform verbose error reporting if not NULL. PMDs initialize this
+ *   structure in case of error only.
+ * @return
+ *   - (0) if success.
+ *   - (-ENODEV) if *port_id* invalid.
+ *   - (-ENOSYS) if underlying device does not support this functionality.
+ *   - (-EIO) if underlying device is removed.
+ *   - (-ENOENT) if action pointed by *action* handle was not found.
+ *   - (-EBUSY) if action pointed by *action* handle still used by some rules
+ *   rte_errno is also set.
+ */
+__rte_experimental
+int
+rte_flow_shared_action_destroy(uint16_t port_id,
+			       struct rte_flow_shared_action *action,
+			       struct rte_flow_error *error);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Update in-place the shared action configuration pointed by *action* handle
+ * with the configuration provided as *update* argument.
+ * The update of the shared action configuration effects all flow rules reusing
+ * the action via handle.
+ *
+ * @param[in] port_id
+ *    The port identifier of the Ethernet device.
+ * @param[in] action
+ *   Handle for the shared action to be updated.
+ * @param[in] update
+ *   Action specification used to modify the action pointed by handle.
+ *   *update* should be of same type with the action pointed by the *action*
+ *   handle argument, otherwise considered as invalid.
+ * @param[out] error
+ *   Perform verbose error reporting if not NULL. PMDs initialize this
+ *   structure in case of error only.
+ * @return
+ *   - (0) if success.
+ *   - (-ENODEV) if *port_id* invalid.
+ *   - (-ENOSYS) if underlying device does not support this functionality.
+ *   - (-EIO) if underlying device is removed.
+ *   - (-EINVAL) if *update* invalid.
+ *   - (-ENOTSUP) if *update* valid but unsupported.
+ *   - (-ENOENT) if action pointed by *ctx* was not found.
+ *   rte_errno is also set.
+ */
+__rte_experimental
+int
+rte_flow_shared_action_update(uint16_t port_id,
+			      struct rte_flow_shared_action *action,
+			      const struct rte_flow_action *update,
+			      struct rte_flow_error *error);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Query the shared action by handle.
+ *
+ * Retrieve action-specific data such as counters.
+ * Data is gathered by special action which may be present/referenced in
+ * more than one flow rule definition.
+ *
+ * \see RTE_FLOW_ACTION_TYPE_COUNT
+ *
+ * @param port_id
+ *   Port identifier of Ethernet device.
+ * @param[in] action
+ *   Handle for the shared action to query.
+ * @param[in, out] data
+ *   Pointer to storage for the associated query data type.
+ * @param[out] error
+ *   Perform verbose error reporting if not NULL. PMDs initialize this
+ *   structure in case of error only.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+__rte_experimental
+int
+rte_flow_shared_action_query(uint16_t port_id,
+			     const struct rte_flow_shared_action *action,
+			     void *data,
+			     struct rte_flow_error *error);
+
+/* Tunnel has a type and the key information. */
+struct rte_flow_tunnel {
+	/**
+	 * Tunnel type, for example RTE_FLOW_ITEM_TYPE_VXLAN,
+	 * RTE_FLOW_ITEM_TYPE_NVGRE etc.
+	 */
+	enum rte_flow_item_type	type;
+	uint64_t tun_id; /**< Tunnel identification. */
+
+	RTE_STD_C11
+	union {
+		struct {
+			rte_be32_t src_addr; /**< IPv4 source address. */
+			rte_be32_t dst_addr; /**< IPv4 destination address. */
+		} ipv4;
+		struct {
+			uint8_t src_addr[16]; /**< IPv6 source address. */
+			uint8_t dst_addr[16]; /**< IPv6 destination address. */
+		} ipv6;
+	};
+	rte_be16_t tp_src; /**< Tunnel port source. */
+	rte_be16_t tp_dst; /**< Tunnel port destination. */
+	uint16_t   tun_flags; /**< Tunnel flags. */
+
+	bool       is_ipv6; /**< True for valid IPv6 fields. Otherwise IPv4. */
+
+	/**
+	 * the following members are required to restore packet
+	 * after miss
+	 */
+	uint8_t    tos; /**< TOS for IPv4, TC for IPv6. */
+	uint8_t    ttl; /**< TTL for IPv4, HL for IPv6. */
+	uint32_t label; /**< Flow Label for IPv6. */
+};
+
+/**
+ * Indicate that the packet has a tunnel.
+ */
+#define RTE_FLOW_RESTORE_INFO_TUNNEL  (1ULL << 0)
+
+/**
+ * Indicate that the packet has a non decapsulated tunnel header.
+ */
+#define RTE_FLOW_RESTORE_INFO_ENCAPSULATED  (1ULL << 1)
+
+/**
+ * Indicate that the packet has a group_id.
+ */
+#define RTE_FLOW_RESTORE_INFO_GROUP_ID  (1ULL << 2)
+
+/**
+ * Restore information structure to communicate the current packet processing
+ * state when some of the processing pipeline is done in hardware and should
+ * continue in software.
+ */
+struct rte_flow_restore_info {
+	/**
+	 * Bitwise flags (RTE_FLOW_RESTORE_INFO_*) to indicate validation of
+	 * other fields in struct rte_flow_restore_info.
+	 */
+	uint64_t flags;
+	uint32_t group_id; /**< Group ID where packed missed */
+	struct rte_flow_tunnel tunnel; /**< Tunnel information. */
+};
+
+/**
+ * Allocate an array of actions to be used in rte_flow_create, to implement
+ * tunnel-decap-set for the given tunnel.
+ * Sample usage:
+ *   actions vxlan_decap / tunnel-decap-set(tunnel properties) /
+ *            jump group 0 / end
+ *
+ * @param port_id
+ *   Port identifier of Ethernet device.
+ * @param[in] tunnel
+ *   Tunnel properties.
+ * @param[out] actions
+ *   Array of actions to be allocated by the PMD. This array should be
+ *   concatenated with the actions array provided to rte_flow_create.
+ * @param[out] num_of_actions
+ *   Number of actions allocated.
+ * @param[out] error
+ *   Perform verbose error reporting if not NULL. PMDs initialize this
+ *   structure in case of error only.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+__rte_experimental
+int
+rte_flow_tunnel_decap_set(uint16_t port_id,
+			  struct rte_flow_tunnel *tunnel,
+			  struct rte_flow_action **actions,
+			  uint32_t *num_of_actions,
+			  struct rte_flow_error *error);
+
+/**
+ * Allocate an array of items to be used in rte_flow_create, to implement
+ * tunnel-match for the given tunnel.
+ * Sample usage:
+ *   pattern tunnel-match(tunnel properties) / outer-header-matches /
+ *           inner-header-matches / end
+ *
+ * @param port_id
+ *   Port identifier of Ethernet device.
+ * @param[in] tunnel
+ *   Tunnel properties.
+ * @param[out] items
+ *   Array of items to be allocated by the PMD. This array should be
+ *   concatenated with the items array provided to rte_flow_create.
+ * @param[out] num_of_items
+ *   Number of items allocated.
+ * @param[out] error
+ *   Perform verbose error reporting if not NULL. PMDs initialize this
+ *   structure in case of error only.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+__rte_experimental
+int
+rte_flow_tunnel_match(uint16_t port_id,
+		      struct rte_flow_tunnel *tunnel,
+		      struct rte_flow_item **items,
+		      uint32_t *num_of_items,
+		      struct rte_flow_error *error);
+
+/**
+ * Populate the current packet processing state, if exists, for the given mbuf.
+ *
+ * @param port_id
+ *   Port identifier of Ethernet device.
+ * @param[in] m
+ *   Mbuf struct.
+ * @param[out] info
+ *   Restore information. Upon success contains the HW state.
+ * @param[out] error
+ *   Perform verbose error reporting if not NULL. PMDs initialize this
+ *   structure in case of error only.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+__rte_experimental
+int
+rte_flow_get_restore_info(uint16_t port_id,
+			  struct rte_mbuf *m,
+			  struct rte_flow_restore_info *info,
+			  struct rte_flow_error *error);
+
+/**
+ * Release the action array as allocated by rte_flow_tunnel_decap_set.
+ *
+ * @param port_id
+ *   Port identifier of Ethernet device.
+ * @param[in] actions
+ *   Array of actions to be released.
+ * @param[in] num_of_actions
+ *   Number of elements in actions array.
+ * @param[out] error
+ *   Perform verbose error reporting if not NULL. PMDs initialize this
+ *   structure in case of error only.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+__rte_experimental
+int
+rte_flow_tunnel_action_decap_release(uint16_t port_id,
+				     struct rte_flow_action *actions,
+				     uint32_t num_of_actions,
+				     struct rte_flow_error *error);
+
+/**
+ * Release the item array as allocated by rte_flow_tunnel_match.
+ *
+ * @param port_id
+ *   Port identifier of Ethernet device.
+ * @param[in] items
+ *   Array of items to be released.
+ * @param[in] num_of_items
+ *   Number of elements in item array.
+ * @param[out] error
+ *   Perform verbose error reporting if not NULL. PMDs initialize this
+ *   structure in case of error only.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+__rte_experimental
+int
+rte_flow_tunnel_item_release(uint16_t port_id,
+			     struct rte_flow_item *items,
+			     uint32_t num_of_items,
+			     struct rte_flow_error *error);
 #ifdef __cplusplus
 }
 #endif

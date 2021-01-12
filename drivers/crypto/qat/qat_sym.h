@@ -6,7 +6,7 @@
 #define _QAT_SYM_H_
 
 #include <rte_cryptodev_pmd.h>
-#ifdef RTE_LIBRTE_SECURITY
+#ifdef RTE_LIB_SECURITY
 #include <rte_net_crc.h>
 #endif
 
@@ -135,7 +135,7 @@ qat_bpicipher_postprocess(struct qat_sym_session *ctx,
 	return sym_op->cipher.data.length - last_block_len;
 }
 
-#ifdef RTE_LIBRTE_SECURITY
+#ifdef RTE_LIB_SECURITY
 static inline void
 qat_crc_verify(struct qat_sym_session *ctx, struct rte_crypto_op *op)
 {
@@ -231,7 +231,7 @@ qat_sym_process_response(void **op, uint8_t *resp)
 
 		rx_op->status = RTE_CRYPTO_OP_STATUS_AUTH_FAILED;
 	} else {
-#ifdef RTE_LIBRTE_SECURITY
+#ifdef RTE_LIB_SECURITY
 		uint8_t is_docsis_sec = 0;
 
 		if (rx_op->sess_type == RTE_CRYPTO_OP_SECURITY_SESSION) {
@@ -256,7 +256,7 @@ qat_sym_process_response(void **op, uint8_t *resp)
 
 		if (sess->bpi_ctx) {
 			qat_bpicipher_postprocess(sess, rx_op);
-#ifdef RTE_LIBRTE_SECURITY
+#ifdef RTE_LIB_SECURITY
 			if (is_docsis_sec)
 				qat_crc_verify(sess, rx_op);
 #endif
@@ -264,6 +264,16 @@ qat_sym_process_response(void **op, uint8_t *resp)
 	}
 	*op = (void *)rx_op;
 }
+
+int
+qat_sym_configure_dp_ctx(struct rte_cryptodev *dev, uint16_t qp_id,
+	struct rte_crypto_raw_dp_ctx *raw_dp_ctx,
+	enum rte_crypto_op_sess_type sess_type,
+	union rte_cryptodev_session_ctx session_ctx, uint8_t is_update);
+
+int
+qat_sym_get_dp_ctx_size(struct rte_cryptodev *dev);
+
 #else
 
 static inline void
@@ -276,5 +286,6 @@ static inline void
 qat_sym_process_response(void **op __rte_unused, uint8_t *resp __rte_unused)
 {
 }
+
 #endif
 #endif /* _QAT_SYM_H_ */

@@ -4,7 +4,7 @@
 BNXT Poll Mode Driver
 =====================
 
-The Broadcom BNXT PMD (**librte_pmd_bnxt**) implements support for adapters
+The Broadcom BNXT PMD (**librte_net_bnxt**) implements support for adapters
 based on Ethernet controllers and SoCs belonging to the Broadcom
 BCM574XX/BCM575XX NetXtreme-E® Family of Ethernet Network Controllers,
 the Broadcom BCM588XX Stingray Family of Smart NIC Adapters, and the Broadcom
@@ -24,30 +24,6 @@ BNXT PMD requires a kernel module (VFIO or UIO) for setting up a device, mapping
 device memory to userspace, registering interrupts, etc.
 VFIO is more secure than UIO, relying on IOMMU protection.
 UIO requires the IOMMU disabled or configured to pass-through mode.
-
-Operating Systems supported:
-
-* Red Hat Enterprise Linux release 8.1 (Ootpa)
-* Red Hat Enterprise Linux release 8.0 (Ootpa)
-* Red Hat Enterprise Linux Server release 7.7 (Maipo)
-* Red Hat Enterprise Linux Server release 7.6 (Maipo)
-* Red Hat Enterprise Linux Server release 7.5 (Maipo)
-* Red Hat Enterprise Linux Server release 7.4 (Maipo)
-* Red Hat Enterprise Linux Server release 7.3 (Maipo)
-* Red Hat Enterprise Linux Server release 7.2 (Maipo)
-* CentOS Linux release 8.0
-* CentOS Linux release 7.7
-* CentOS Linux release 7.6.1810
-* CentOS Linux release 7.5.1804
-* CentOS Linux release 7.4.1708
-* Fedora 31
-* FreeBSD 12.1
-* Suse 15SP1
-* Ubuntu 19.04
-* Ubuntu 18.04
-* Ubuntu 16.10
-* Ubuntu 16.04
-* Ubuntu 14.04
 
 The BNXT PMD supports operating with:
 
@@ -258,8 +234,8 @@ The BNXT PMD supports hardware-based packet filtering:
 Unicast MAC Filter
 ^^^^^^^^^^^^^^^^^^
 
-The application adds (or removes) MAC addresses to enable (or disable)
-whitelist filtering to accept packets.
+The application can add (or remove) MAC addresses to enable (or disable)
+filtering on MAC address used to accept packets.
 
 .. code-block:: console
 
@@ -269,8 +245,8 @@ whitelist filtering to accept packets.
 Multicast MAC Filter
 ^^^^^^^^^^^^^^^^^^^^
 
-Application adds (or removes) Multicast addresses to enable (or disable)
-whitelist filtering to accept packets.
+The application can add (or remove) Multicast addresses that enable (or disable)
+filtering on multicast MAC address used to accept packets.
 
 .. code-block:: console
 
@@ -278,7 +254,7 @@ whitelist filtering to accept packets.
     testpmd> mcast_addr (add|remove) (port_id) (XX:XX:XX:XX:XX:XX)
 
 Application adds (or removes) Multicast addresses to enable (or disable)
-whitelist filtering to accept packets.
+allowlist filtering to accept packets.
 
 Note that the BNXT PMD supports up to 16 MC MAC filters. if the user adds more
 than 16 MC MACs, the BNXT PMD puts the port into the Allmulticast mode.
@@ -385,7 +361,7 @@ The application enables multiple TX and RX queues when it is started.
 
 .. code-block:: console
 
-    testpmd -l 1,3,5 --master-lcore 1 --txq=2 –rxq=2 --nb-cores=2
+    testpmd -l 1,3,5 --main-lcore 1 --txq=2 –rxq=2 --nb-cores=2
 
 **TSS**
 
@@ -565,9 +541,6 @@ The BNXT PMD supports a PTP client application to communicate with a PTP master
 clock using DPDK IEEE1588 APIs. Note that the PTP client application needs to
 run on PF and vector mode needs to be disabled.
 
-For the PTP time synchronization support, the BNXT PMD must be compiled with
-``CONFIG_RTE_LIBRTE_IEEE1588=y`` (this compilation flag is currently pending).
-
 .. code-block:: console
 
     testpmd> set fwd ieee1588 // enable IEEE 1588 mode
@@ -612,7 +585,7 @@ Basic stats include:
 * oerrors
 
 By default, per-queue stats for 16 queues are supported. For more than 16
-queues, BNXT PMD should be compiled with ``CONFIG_RTE_ETHDEV_QUEUE_STAT_CNTRS``
+queues, BNXT PMD should be compiled with ``RTE_ETHDEV_QUEUE_STAT_CNTRS``
 set to the desired number of queues.
 
 Extended Stats
@@ -686,7 +659,9 @@ The feature uses a newly implemented control-plane firmware interface which
 optimizes flow insertions and deletions.
 
 This is a tech preview feature, and is disabled by default. It can be enabled
-using bnxt devargs. For ex: "-w 0000:0d:00.0,host-based-truflow=1”.
+using bnxt devargs. For ex: "-a 0000:0d:00.0,host-based-truflow=1”.
+
+This feature is currently supported on Whitney+ and Stingray devices.
 
 Notes
 -----
@@ -705,6 +680,26 @@ Notes
   on the same source or destination MAC address. This allows packets of such
   flows to be directed to one or more queues associated with the VNIC id.
   This implementation is supported only when TRUFLOW functionality is disabled.
+
+- An application can issue a VXLAN decap offload request using rte_flow API
+  either as a single rte_flow request or a combination of two stages.
+  The PMD currently supports the two stage offload design.
+  In this approach the offload request may come as two flow offload requests
+  Flow1 & Flow2.  The match criteria for Flow1 is O_DMAC, O_SMAC, O_DST_IP,
+  O_UDP_DPORT and actions are COUNT, MARK, JUMP. The match criteria for Flow2
+  is O_SRC_IP, O_DST_IP, VNI and inner header fields.
+  Flow1 and Flow2 flow offload requests can come in any order. If Flow2 flow
+  offload request comes first then Flow2 can’t be offloaded as there is
+  no O_DMAC information in Flow2. In this case, Flow2 will be deferred until
+  Flow1 flow offload request arrives. When Flow1 flow offload request is
+  received it will have O_DMAC information. Using Flow1’s O_DMAC, driver
+  creates an L2 context entry in the hardware as part of offloading Flow1.
+  Flow2 will now use Flow1’s O_DMAC to get the L2 context id associated with
+  this O_DMAC and other flow fields that are cached already at the time
+  of deferring Flow2 for offloading. Flow2 that arrive after Flow1 is offloaded
+  will be directly programmed and not cached.
+
+- PMD supports thread-safe rte_flow operations.
 
 Note: A VNIC represents a virtual interface in the hardware. It is a resource
 in the RX path of the chip and is used to setup various target actions such as
@@ -728,11 +723,53 @@ when the PMD is initialized on a PF or trusted-VF. The user can specify the list
 of VF IDs of the VFs for which the representors are needed by using the
 ``devargs`` option ``representor``.::
 
-  -w DBDF,representor=[0,1,4]
+  -a DBDF,representor=[0,1,4]
 
 Note that currently hot-plugging of representor ports is not supported so all
 the required representors must be specified on the creation of the PF or the
 trusted VF.
+
+Representors on Stingray SoC
+----------------------------
+A representor created on X86 host typically represents a VF running in the same
+X86 domain. But in case of the SoC, the application can run on the CPU complex
+inside the SoC. The representor can be created on the SoC to represent a PF or a
+VF running in the x86 domain. Since the representator creation requires passing
+the bus:device.function of the PCI device endpoint which is not necessarily in the
+same host domain, additional dev args have been added to the PMD.
+
+* rep_is_vf - false to indicate VF representor
+* rep_is_pf - true to indicate PF representor
+* rep_based_pf - Physical index of the PF
+* rep_q_r2f - Logical COS Queue index for the rep to endpoint direction
+* rep_q_f2r - Logical COS Queue index for the endpoint to rep direction
+* rep_fc_r2f - Flow control for the representor to endpoint direction
+* rep_fc_f2r - Flow control for the endpoint to representor direction
+
+The sample command line with the new ``devargs`` looks like this::
+
+  -a 0000:06:02.0,host-based-truflow=1,representor=[1],rep-based-pf=8,\
+	rep-is-pf=1,rep-q-r2f=1,rep-fc-r2f=0,rep-q-f2r=1,rep-fc-f2r=1
+
+.. code-block:: console
+
+	testpmd -l1-4 -n2 -a 0008:01:00.0,host-based-truflow=1,\
+	representor=[0], rep-based-pf=8,rep-is-pf=0,rep-q-r2f=1,rep-fc-r2f=1,\
+	rep-q-f2r=0,rep-fc-f2r=1 --log-level="pmd.*",8 -- -i --rxq=3 --txq=3
+
+Number of flows supported
+-------------------------
+The number of flows that can be support can be changed using the devargs
+parameter ``max_num_kflows``. The default number of flows supported is 16K each
+in ingress and egress path.
+
+Selecting EM vs EEM
+-------------------
+Broadcom devices can support filter creation in the onchip memory or the
+external memory. This is referred to as EM or EEM mode respectively.
+The decision for internal/external EM support is based on the ``devargs``
+parameter ``max_num_kflows``.  If this is set by the user, external EM is used.
+Otherwise EM support is enabled with flows created in internal memory.
 
 Application Support
 -------------------
@@ -854,6 +891,9 @@ is stopped.
 
 Note that TX (or RX) vector mode can be enabled independently from RX (or TX)
 vector mode.
+
+Also vector mode is allowed when jumbo is enabled
+as long as the MTU setting does not require scattered Rx.
 
 Appendix
 --------

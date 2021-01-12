@@ -33,26 +33,20 @@ all_examples = [
 	'ntb', 'packet_ordering',
 	'performance-thread/l3fwd-thread',
 	'performance-thread/pthread_shim',
+	'pipeline',
 	'ptpclient',
 	'qos_meter', 'qos_sched',
 	'rxtx_callbacks',
 	'server_node_efd/node',
 	'server_node_efd/server',
 	'service_cores',
-	'skeleton', 'tep_termination',
+	'skeleton',
 	'timer', 'vdpa',
 	'vhost', 'vhost_crypto',
 	'vhost_blk', 'vm_power_manager',
 	'vm_power_manager/guest_cli',
 	'vmdq', 'vmdq_dcb',
 ]
-# install all example code on install - irrespective of whether the example in
-# question is to be built as part of this build or not.
-foreach ex:all_examples
-	install_subdir(ex,
-			install_dir: get_option('datadir') + '/dpdk/examples',
-			exclude_files: 'meson.build')
-endforeach
 
 if get_option('examples') == ''
 	subdir_done()
@@ -80,9 +74,6 @@ foreach example: examples
 	ext_deps = [execinfo]
 	includes = [include_directories(example)]
 	deps = ['eal', 'mempool', 'net', 'mbuf', 'ethdev', 'cmdline']
-	if is_windows
-		deps = ['eal'] # only supported lib on Windows currently
-	endif
 	subdir(example)
 
 	if build

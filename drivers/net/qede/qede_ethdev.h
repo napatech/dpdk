@@ -34,6 +34,7 @@
 #include "base/ecore_l2.h"
 #include "base/ecore_vf.h"
 
+#include "qede_sriov.h"
 #include "qede_logs.h"
 #include "qede_if.h"
 #include "qede_rxtx.h"
@@ -291,11 +292,6 @@ int qede_ntuple_filter_conf(struct rte_eth_dev *eth_dev,
 			    enum rte_filter_op filter_op, void *arg);
 
 int qede_check_fdir_support(struct rte_eth_dev *eth_dev);
-
-uint16_t qede_fdir_construct_pkt(struct rte_eth_dev *eth_dev,
-				 struct rte_eth_fdir_filter *fdir,
-				 void *buff,
-				 struct ecore_arfs_config_params *params);
 
 void qede_fdir_dealloc_resc(struct rte_eth_dev *eth_dev);
 

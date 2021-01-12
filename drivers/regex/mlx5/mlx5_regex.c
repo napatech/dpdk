@@ -157,7 +157,7 @@ mlx5_regex_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	if (!priv) {
 		DRV_LOG(ERR, "Failed to allocate private memory.");
 		rte_errno = ENOMEM;
-		goto error;
+		goto dev_error;
 	}
 	priv->ctx = ctx;
 	priv->nb_engines = 2; /* attr.regexp_num_of_engines */
@@ -176,7 +176,12 @@ mlx5_regex_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		rte_errno = ENOMEM;
 		goto error;
 	}
-	priv->uar = mlx5_glue->devx_alloc_uar(ctx, 0);
+	/*
+	 * This PMD always claims the write memory barrier on UAR
+	 * registers writings, it is safe to allocate UAR with any
+	 * memory mapping type.
+	 */
+	priv->uar = mlx5_devx_alloc_uar(ctx, -1);
 	if (!priv->uar) {
 		DRV_LOG(ERR, "can't allocate uar.");
 		rte_errno = ENOMEM;
@@ -194,6 +199,16 @@ mlx5_regex_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	priv->regexdev->device = (struct rte_device *)pci_dev;
 	priv->regexdev->data->dev_private = priv;
 	priv->regexdev->state = RTE_REGEXDEV_READY;
+	priv->mr_scache.reg_mr_cb = mlx5_common_verbs_reg_mr;
+	priv->mr_scache.dereg_mr_cb = mlx5_common_verbs_dereg_mr;
+	ret = mlx5_mr_btree_init(&priv->mr_scache.cache,
+				 MLX5_MR_BTREE_CACHE_N * 2,
+				 rte_socket_id());
+	if (ret) {
+		DRV_LOG(ERR, "MR init tree failed.");
+	    rte_errno = ENOMEM;
+		goto error;
+	}
 	return 0;
 
 error:
@@ -243,6 +258,10 @@ static const struct rte_pci_id mlx5_regex_pci_id_map[] = {
 	{
 		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
 				PCI_DEVICE_ID_MELLANOX_CONNECTX6DXBF)
+	},
+	{
+		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
+				PCI_DEVICE_ID_MELLANOX_CONNECTX7BF)
 	},
 	{
 		.vendor_id = 0

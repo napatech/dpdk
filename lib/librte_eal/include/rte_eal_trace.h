@@ -130,6 +130,12 @@ RTE_TRACE_POINT(
 )
 
 RTE_TRACE_POINT(
+	rte_eal_trace_generic_size_t,
+	RTE_TRACE_POINT_ARGS(size_t sz),
+	rte_trace_point_emit_size_t(sz);
+)
+
+RTE_TRACE_POINT(
 	rte_eal_trace_generic_func,
 	RTE_TRACE_POINT_ARGS(const char *func),
 	rte_trace_point_emit_string(func);
@@ -258,10 +264,10 @@ RTE_TRACE_POINT(
 RTE_TRACE_POINT(
 	rte_eal_trace_thread_remote_launch,
 	RTE_TRACE_POINT_ARGS(int (*f)(void *), void *arg,
-		unsigned int slave_id, int rc),
+		unsigned int worker_id, int rc),
 	rte_trace_point_emit_ptr(f);
 	rte_trace_point_emit_ptr(arg);
-	rte_trace_point_emit_u32(slave_id);
+	rte_trace_point_emit_u32(worker_id);
 	rte_trace_point_emit_int(rc);
 )
 RTE_TRACE_POINT(

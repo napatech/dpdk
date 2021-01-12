@@ -118,7 +118,8 @@ The proposer should justify the need for a new sub-tree and should have demonstr
 The maintainer should be confirmed by an ``ack`` from an existing tree maintainer.
 Disagreements on trees or maintainers can be brought to the Technical Board.
 
-The backup maintainer for the master tree should be selected from the existing sub-tree maintainers from the project.
+The backup maintainer for the main tree should be selected
+from the existing sub-tree maintainers of the project.
 The backup maintainer for a sub-tree should be selected from among the component maintainers within that sub-tree.
 
 
@@ -319,7 +320,7 @@ For example::
 Patch for Stable Releases
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-All fix patches to the master branch that are candidates for backporting
+All fix patches to the main branch that are candidates for backporting
 should also be CCed to the `stable@dpdk.org <https://mails.dpdk.org/listinfo/stable>`_
 mailing list.
 In the commit message body the Cc: stable@dpdk.org should be inserted as follows::
@@ -463,55 +464,6 @@ and the -r option allows the user specify a ``git log`` range.
 Checking Compilation
 --------------------
 
-Makefile System
-~~~~~~~~~~~~~~~
-
-Compilation of patches and changes should be tested using the ``test-build.sh`` script in the ``devtools``
-directory of the DPDK repo::
-
-  devtools/test-build.sh x86_64-native-linux-gcc+next+shared
-
-The script usage is::
-
-   test-build.sh [-h] [-jX] [-s] [config1 [config2] ...]]
-
-Where:
-
-* ``-h``: help, usage.
-* ``-jX``: use X parallel jobs in "make".
-* ``-s``: short test with only first config and without examples/doc.
-* ``config``: default config name plus config switches delimited with a ``+`` sign.
-
-Examples of configs are::
-
-   x86_64-native-linux-gcc
-   x86_64-native-linux-gcc+next+shared
-   x86_64-native-linux-clang+shared
-
-The builds can be modified via the following environmental variables:
-
-* ``DPDK_BUILD_TEST_CONFIGS`` (target1+option1+option2 target2)
-* ``DPDK_BUILD_TEST_DIR``
-* ``DPDK_DEP_CFLAGS``
-* ``DPDK_DEP_LDFLAGS``
-* ``DPDK_DEP_PCAP`` (y/[n])
-* ``DPDK_NOTIFY`` (notify-send)
-
-These can be set from the command line or in the config files shown above in the :ref:`contrib_checkpatch`.
-
-The recommended configurations and options to test compilation prior to submitting patches are::
-
-   x86_64-native-linux-gcc+shared+next
-   x86_64-native-linux-clang+shared
-   i686-native-linux-gcc
-
-   export DPDK_DEP_ZLIB=y
-   export DPDK_DEP_PCAP=y
-   export DPDK_DEP_SSL=y
-
-Meson System
-~~~~~~~~~~~~
-
 Compilation of patches is to be tested with ``devtools/test-meson-builds.sh`` script.
 
 The script internally checks for dependencies, then builds for several
@@ -532,13 +484,18 @@ Checking ABI compatibility
 By default, ABI compatibility checks are disabled.
 
 To enable them, a reference version must be selected via the environment
-variable ``DPDK_ABI_REF_VERSION``.
+variable ``DPDK_ABI_REF_VERSION``. Contributors should ordinarily reference the
+git tag of the most recent release of DPDK in ``DPDK_ABI_REF_VERSION``.
 
-The ``devtools/test-build.sh`` and ``devtools/test-meson-builds.sh`` scripts
-then build this reference version in a temporary directory and store the
-results in a subfolder of the current working directory.
+The ``devtools/test-meson-builds.sh`` script then build this reference version
+in a temporary directory and store the results in a subfolder of the current
+working directory.
 The environment variable ``DPDK_ABI_REF_DIR`` can be set so that the results go
 to a different location.
+
+Sample::
+
+   DPDK_ABI_REF_VERSION=v19.11 DPDK_ABI_REF_DIR=/tmp ./devtools/test-meson-builds.sh
 
 
 Sending Patches

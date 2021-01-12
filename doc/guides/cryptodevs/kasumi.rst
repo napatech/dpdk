@@ -4,7 +4,7 @@
 KASUMI Crypto Poll Mode Driver
 ===============================
 
-The KASUMI PMD (**librte_pmd_kasumi**) provides poll mode crypto driver support for
+The KASUMI PMD (**librte_crypto_kasumi**) provides poll mode crypto driver support for
 utilizing `Intel IPSec Multi-buffer library <https://github.com/01org/intel-ipsec-mb>`_
 which implements F8 and F9 functions for KASUMI UEA1 cipher and UIA1 hash algorithms.
 
@@ -89,15 +89,6 @@ In order to enable this virtual crypto PMD, user must:
 
 * Build the multi buffer library (explained in Installation section).
 
-* Build DPDK as follows:
-
-.. code-block:: console
-
-	make config T=x86_64-native-linux-gcc
-	sed -i 's,\(CONFIG_RTE_LIBRTE_PMD_KASUMI\)=n,\1=y,' build/.config
-	make
-
-
 To use the PMD in an application, user must:
 
 * Call rte_vdev_init("crypto_kasumi") within the application.
@@ -117,7 +108,7 @@ Example:
 
 .. code-block:: console
 
-    ./l2fwd-crypto -l 1 -n 4 --vdev="crypto_kasumi,socket_id=0,max_nb_sessions=128" \
+    ./dpdk-l2fwd-crypto -l 1 -n 4 --vdev="crypto_kasumi,socket_id=0,max_nb_sessions=128" \
     -- -p 1 --cdev SW --chain CIPHER_ONLY --cipher_algo "kasumi-f8"
 
 Extra notes on KASUMI F9

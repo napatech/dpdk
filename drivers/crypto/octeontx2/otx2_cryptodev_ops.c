@@ -13,6 +13,7 @@
 #include "otx2_cryptodev_hw_access.h"
 #include "otx2_cryptodev_mbox.h"
 #include "otx2_cryptodev_ops.h"
+#include "otx2_cryptodev_ops_helper.h"
 #include "otx2_ipsec_po_ops.h"
 #include "otx2_mbox.h"
 #include "otx2_sec_idev.h"
@@ -191,7 +192,7 @@ otx2_cpt_qp_create(const struct rte_cryptodev *dev, uint16_t qp_id,
 	size_div40 = (iq_len + 40 - 1) / 40 + 1;
 
 	/* For pending queue */
-	len = iq_len * RTE_ALIGN(sizeof(struct rid), 8);
+	len = iq_len * sizeof(uintptr_t);
 
 	/* Space for instruction group memory */
 	len += size_div40 * 16;
@@ -228,12 +229,12 @@ otx2_cpt_qp_create(const struct rte_cryptodev *dev, uint16_t qp_id,
 	}
 
 	/* Initialize pending queue */
-	qp->pend_q.rid_queue = (struct rid *)va;
+	qp->pend_q.req_queue = (uintptr_t *)va;
 	qp->pend_q.enq_tail = 0;
 	qp->pend_q.deq_head = 0;
 	qp->pend_q.pending_count = 0;
 
-	used_len = iq_len * RTE_ALIGN(sizeof(struct rid), 8);
+	used_len = iq_len * sizeof(uintptr_t);
 	used_len += size_div40 * 16;
 	used_len = RTE_ALIGN(used_len, pg_sz);
 	iova += used_len;
@@ -353,7 +354,9 @@ sym_session_configure(int driver_id, struct rte_crypto_sym_xform *xform,
 		      struct rte_cryptodev_sym_session *sess,
 		      struct rte_mempool *pool)
 {
+	struct rte_crypto_sym_xform *temp_xform = xform;
 	struct cpt_sess_misc *misc;
+	vq_cmd_word3_t vq_cmd_w3;
 	void *priv;
 	int ret;
 
@@ -367,7 +370,7 @@ sym_session_configure(int driver_id, struct rte_crypto_sym_xform *xform,
 	}
 
 	memset(priv, 0, sizeof(struct cpt_sess_misc) +
-			offsetof(struct cpt_ctx, fctx));
+			offsetof(struct cpt_ctx, mc_ctx));
 
 	misc = priv;
 
@@ -393,10 +396,21 @@ sym_session_configure(int driver_id, struct rte_crypto_sym_xform *xform,
 			goto priv_put;
 	}
 
+	if ((GET_SESS_FC_TYPE(misc) == HASH_HMAC) &&
+			cpt_mac_len_verify(&temp_xform->auth)) {
+		CPT_LOG_ERR("MAC length is not supported");
+		ret = -ENOTSUP;
+		goto priv_put;
+	}
+
 	set_sym_session_private_data(sess, driver_id, misc);
 
 	misc->ctx_dma_addr = rte_mempool_virt2iova(misc) +
 			     sizeof(struct cpt_sess_misc);
+
+	vq_cmd_w3.u64 = 0;
+	vq_cmd_w3.s.cptr = misc->ctx_dma_addr + offsetof(struct cpt_ctx,
+							 mc_ctx);
 
 	/*
 	 * IE engines support IPsec operations
@@ -404,9 +418,11 @@ sym_session_configure(int driver_id, struct rte_crypto_sym_xform *xform,
 	 * Air-Crypto operations
 	 */
 	if (misc->zsk_flag || misc->chacha_poly)
-		misc->egrp = OTX2_CPT_EGRP_SE;
+		vq_cmd_w3.s.grp = OTX2_CPT_EGRP_SE;
 	else
-		misc->egrp = OTX2_CPT_EGRP_SE_IE;
+		vq_cmd_w3.s.grp = OTX2_CPT_EGRP_SE_IE;
+
+	misc->cpt_inst_w7 = vq_cmd_w3.u64;
 
 	return 0;
 
@@ -416,32 +432,63 @@ priv_put:
 	return -ENOTSUP;
 }
 
-static void
-sym_session_clear(int driver_id, struct rte_cryptodev_sym_session *sess)
+static __rte_always_inline void __rte_hot
+otx2_ca_enqueue_req(const struct otx2_cpt_qp *qp,
+		    struct cpt_request_info *req,
+		    void *lmtline,
+		    uint64_t cpt_inst_w7)
 {
-	void *priv = get_sym_session_private_data(sess, driver_id);
-	struct rte_mempool *pool;
+	union cpt_inst_s inst;
+	uint64_t lmt_status;
 
-	if (priv == NULL)
-		return;
+	inst.u[0] = 0;
+	inst.s9x.res_addr = req->comp_baddr;
+	inst.u[2] = 0;
+	inst.u[3] = 0;
 
-	memset(priv, 0, cpt_get_session_size());
+	inst.s9x.ei0 = req->ist.ei0;
+	inst.s9x.ei1 = req->ist.ei1;
+	inst.s9x.ei2 = req->ist.ei2;
+	inst.s9x.ei3 = cpt_inst_w7;
 
-	pool = rte_mempool_from_obj(priv);
+	inst.s9x.qord = 1;
+	inst.s9x.grp = qp->ev.queue_id;
+	inst.s9x.tt = qp->ev.sched_type;
+	inst.s9x.tag = (RTE_EVENT_TYPE_CRYPTODEV << 28) |
+			qp->ev.flow_id;
+	inst.s9x.wq_ptr = (uint64_t)req >> 3;
+	req->qp = qp;
 
-	set_sym_session_private_data(sess, driver_id, NULL);
+	do {
+		/* Copy CPT command to LMTLINE */
+		memcpy(lmtline, &inst, sizeof(inst));
 
-	rte_mempool_put(pool, priv);
+		/*
+		 * Make sure compiler does not reorder memcpy and ldeor.
+		 * LMTST transactions are always flushed from the write
+		 * buffer immediately, a DMB is not required to push out
+		 * LMTSTs.
+		 */
+		rte_io_wmb();
+		lmt_status = otx2_lmt_submit(qp->lf_nq_reg);
+	} while (lmt_status == 0);
+
 }
 
 static __rte_always_inline int32_t __rte_hot
 otx2_cpt_enqueue_req(const struct otx2_cpt_qp *qp,
 		     struct pending_queue *pend_q,
-		     struct cpt_request_info *req)
+		     struct cpt_request_info *req,
+		     uint64_t cpt_inst_w7)
 {
 	void *lmtline = qp->lmtline;
 	union cpt_inst_s inst;
 	uint64_t lmt_status;
+
+	if (qp->ca_enable) {
+		otx2_ca_enqueue_req(qp, req, lmtline, cpt_inst_w7);
+		return 0;
+	}
 
 	if (unlikely(pend_q->pending_count >= OTX2_CPT_DEFAULT_CMD_QLEN))
 		return -EAGAIN;
@@ -454,7 +501,7 @@ otx2_cpt_enqueue_req(const struct otx2_cpt_qp *qp,
 	inst.s9x.ei0 = req->ist.ei0;
 	inst.s9x.ei1 = req->ist.ei1;
 	inst.s9x.ei2 = req->ist.ei2;
-	inst.s9x.ei3 = req->ist.ei3;
+	inst.s9x.ei3 = cpt_inst_w7;
 
 	req->time_out = rte_get_timer_cycles() +
 			DEFAULT_COMMAND_TIMEOUT * rte_get_timer_hz();
@@ -469,11 +516,11 @@ otx2_cpt_enqueue_req(const struct otx2_cpt_qp *qp,
 		 * buffer immediately, a DMB is not required to push out
 		 * LMTSTs.
 		 */
-		rte_cio_wmb();
+		rte_io_wmb();
 		lmt_status = otx2_lmt_submit(qp->lf_nq_reg);
 	} while (lmt_status == 0);
 
-	pend_q->rid_queue[pend_q->enq_tail].rid = (uintptr_t)req;
+	pend_q->req_queue[pend_q->enq_tail] = (uintptr_t)req;
 
 	/* We will use soft queue length here to limit requests */
 	MOD_INC(pend_q->enq_tail, OTX2_CPT_DEFAULT_CMD_QLEN);
@@ -491,7 +538,6 @@ otx2_cpt_enqueue_asym(struct otx2_cpt_qp *qp,
 	struct rte_crypto_asym_op *asym_op = op->asym;
 	struct asym_op_params params = {0};
 	struct cpt_asym_sess_misc *sess;
-	vq_cmd_word3_t *w3;
 	uintptr_t *cop;
 	void *mdata;
 	int ret;
@@ -546,11 +592,7 @@ otx2_cpt_enqueue_asym(struct otx2_cpt_qp *qp,
 		goto req_fail;
 	}
 
-	/* Set engine group of AE */
-	w3 = (vq_cmd_word3_t *)&params.req->ist.ei3;
-	w3->s.grp = OTX2_CPT_EGRP_AE;
-
-	ret = otx2_cpt_enqueue_req(qp, pend_q, params.req);
+	ret = otx2_cpt_enqueue_req(qp, pend_q, params.req, sess->cpt_inst_w7);
 
 	if (unlikely(ret)) {
 		CPT_LOG_DP_ERR("Could not enqueue crypto req");
@@ -572,7 +614,6 @@ otx2_cpt_enqueue_sym(struct otx2_cpt_qp *qp, struct rte_crypto_op *op,
 	struct rte_crypto_sym_op *sym_op = op->sym;
 	struct cpt_request_info *req;
 	struct cpt_sess_misc *sess;
-	vq_cmd_word3_t *w3;
 	uint64_t cpt_op;
 	void *mdata;
 	int ret;
@@ -595,10 +636,7 @@ otx2_cpt_enqueue_sym(struct otx2_cpt_qp *qp, struct rte_crypto_op *op,
 		return ret;
 	}
 
-	w3 = ((vq_cmd_word3_t *)(&req->ist.ei3));
-	w3->s.grp = sess->egrp;
-
-	ret = otx2_cpt_enqueue_req(qp, pend_q, req);
+	ret = otx2_cpt_enqueue_req(qp, pend_q, req, sess->cpt_inst_w7);
 
 	if (unlikely(ret)) {
 		/* Free buffer allocated by fill params routines */
@@ -633,7 +671,7 @@ otx2_cpt_enqueue_sec(struct otx2_cpt_qp *qp, struct rte_crypto_op *op,
 		return ret;
 	}
 
-	ret = otx2_cpt_enqueue_req(qp, pend_q, req);
+	ret = otx2_cpt_enqueue_req(qp, pend_q, req, sess->cpt_inst_w7);
 
 	return ret;
 }
@@ -648,8 +686,8 @@ otx2_cpt_enqueue_sym_sessless(struct otx2_cpt_qp *qp, struct rte_crypto_op *op,
 	int ret;
 
 	/* Create temporary session */
-
-	if (rte_mempool_get(qp->sess_mp, (void **)&sess))
+	sess = rte_cryptodev_sym_session_create(qp->sess_mp);
+	if (sess == NULL)
 		return -ENOMEM;
 
 	ret = sym_session_configure(driver_id, sym_op->xform, sess,
@@ -785,7 +823,8 @@ otx2_cpt_asym_dequeue_ecdsa_op(struct rte_crypto_ecdsa_op_param *ecdsa,
 
 	/* Separate out sign r and s components */
 	memcpy(ecdsa->r.data, req->rptr, prime_len);
-	memcpy(ecdsa->s.data, req->rptr + ROUNDUP8(prime_len), prime_len);
+	memcpy(ecdsa->s.data, req->rptr + RTE_ALIGN_CEIL(prime_len, 8),
+	       prime_len);
 	ecdsa->r.length = prime_len;
 	ecdsa->s.length = prime_len;
 }
@@ -798,7 +837,8 @@ otx2_cpt_asym_dequeue_ecpm_op(struct rte_crypto_ecpm_op_param *ecpm,
 	int prime_len = ec_grp[ec->curveid].prime.length;
 
 	memcpy(ecpm->r.x.data, req->rptr, prime_len);
-	memcpy(ecpm->r.y.data, req->rptr + ROUNDUP8(prime_len), prime_len);
+	memcpy(ecpm->r.y.data, req->rptr + RTE_ALIGN_CEIL(prime_len, 8),
+	       prime_len);
 	ecpm->r.x.length = prime_len;
 	ecpm->r.y.length = prime_len;
 }
@@ -842,6 +882,7 @@ otx2_cpt_sec_post_process(struct rte_crypto_op *cop, uintptr_t *rsp)
 	vq_cmd_word0_t *word0 = (vq_cmd_word0_t *)&req->ist.ei0;
 	struct rte_crypto_sym_op *sym_op = cop->sym;
 	struct rte_mbuf *m = sym_op->m_src;
+	struct rte_ipv6_hdr *ip6;
 	struct rte_ipv4_hdr *ip;
 	uint16_t m_len;
 	int mdata_len;
@@ -850,11 +891,19 @@ otx2_cpt_sec_post_process(struct rte_crypto_op *cop, uintptr_t *rsp)
 	mdata_len = (int)rsp[3];
 	rte_pktmbuf_trim(m, mdata_len);
 
-	if ((word0->s.opcode & 0xff) == OTX2_IPSEC_PO_PROCESS_IPSEC_INB) {
+	if (word0->s.opcode.major == OTX2_IPSEC_PO_PROCESS_IPSEC_INB) {
 		data = rte_pktmbuf_mtod(m, char *);
-		ip = (struct rte_ipv4_hdr *)(data + OTX2_IPSEC_PO_INB_RPTR_HDR);
 
-		m_len = rte_be_to_cpu_16(ip->total_length);
+		if (rsp[4] == RTE_SECURITY_IPSEC_TUNNEL_IPV4) {
+			ip = (struct rte_ipv4_hdr *)(data +
+				OTX2_IPSEC_PO_INB_RPTR_HDR);
+			m_len = rte_be_to_cpu_16(ip->total_length);
+		} else {
+			ip6 = (struct rte_ipv6_hdr *)(data +
+				OTX2_IPSEC_PO_INB_RPTR_HDR);
+			m_len = rte_be_to_cpu_16(ip6->payload_len) +
+				sizeof(struct rte_ipv6_hdr);
+		}
 
 		m->data_len = m_len;
 		m->pkt_len = m_len;
@@ -866,6 +915,8 @@ static inline void
 otx2_cpt_dequeue_post_process(struct otx2_cpt_qp *qp, struct rte_crypto_op *cop,
 			      uintptr_t *rsp, uint8_t cc)
 {
+	unsigned int sz;
+
 	if (cop->type == RTE_CRYPTO_OP_TYPE_SYMMETRIC) {
 		if (cop->sess_type == RTE_CRYPTO_OP_SECURITY_SESSION) {
 			if (likely(cc == OTX2_IPSEC_PO_CC_SUCCESS)) {
@@ -894,6 +945,9 @@ otx2_cpt_dequeue_post_process(struct otx2_cpt_qp *qp, struct rte_crypto_op *cop,
 		if (unlikely(cop->sess_type == RTE_CRYPTO_OP_SESSIONLESS)) {
 			sym_session_clear(otx2_cryptodev_driver_id,
 					  cop->sym->session);
+			sz = rte_cryptodev_sym_get_existing_header_session_size(
+					cop->sym->session);
+			memset(cop->sym->session, 0, sz);
 			rte_mempool_put(qp->sess_mp, cop->sym->session);
 			cop->sym->session = NULL;
 		}
@@ -914,52 +968,6 @@ otx2_cpt_dequeue_post_process(struct otx2_cpt_qp *qp, struct rte_crypto_op *cop,
 	}
 }
 
-static __rte_always_inline uint8_t
-otx2_cpt_compcode_get(struct cpt_request_info *req)
-{
-	volatile struct cpt_res_s_9s *res;
-	uint8_t ret;
-
-	res = (volatile struct cpt_res_s_9s *)req->completion_addr;
-
-	if (unlikely(res->compcode == CPT_9X_COMP_E_NOTDONE)) {
-		if (rte_get_timer_cycles() < req->time_out)
-			return ERR_REQ_PENDING;
-
-		CPT_LOG_DP_ERR("Request timed out");
-		return ERR_REQ_TIMEOUT;
-	}
-
-	if (likely(res->compcode == CPT_9X_COMP_E_GOOD)) {
-		ret = NO_ERR;
-		if (unlikely(res->uc_compcode)) {
-			ret = res->uc_compcode;
-			CPT_LOG_DP_DEBUG("Request failed with microcode error");
-			CPT_LOG_DP_DEBUG("MC completion code 0x%x",
-					 res->uc_compcode);
-		}
-	} else {
-		CPT_LOG_DP_DEBUG("HW completion code 0x%x", res->compcode);
-
-		ret = res->compcode;
-		switch (res->compcode) {
-		case CPT_9X_COMP_E_INSTERR:
-			CPT_LOG_DP_ERR("Request failed with instruction error");
-			break;
-		case CPT_9X_COMP_E_FAULT:
-			CPT_LOG_DP_ERR("Request failed with DMA fault");
-			break;
-		case CPT_9X_COMP_E_HWERR:
-			CPT_LOG_DP_ERR("Request failed with hardware error");
-			break;
-		default:
-			CPT_LOG_DP_ERR("Request failed with unknown completion code");
-		}
-	}
-
-	return ret;
-}
-
 static uint16_t
 otx2_cpt_dequeue_burst(void *qptr, struct rte_crypto_op **ops, uint16_t nb_ops)
 {
@@ -969,7 +977,6 @@ otx2_cpt_dequeue_burst(void *qptr, struct rte_crypto_op **ops, uint16_t nb_ops)
 	struct cpt_request_info *req;
 	struct rte_crypto_op *cop;
 	uint8_t cc[nb_ops];
-	struct rid *rid;
 	uintptr_t *rsp;
 	void *metabuf;
 
@@ -981,8 +988,8 @@ otx2_cpt_dequeue_burst(void *qptr, struct rte_crypto_op **ops, uint16_t nb_ops)
 		nb_ops = nb_pending;
 
 	for (i = 0; i < nb_ops; i++) {
-		rid = &pend_q->rid_queue[pend_q->deq_head];
-		req = (struct cpt_request_info *)(rid->rid);
+		req = (struct cpt_request_info *)
+				pend_q->req_queue[pend_q->deq_head];
 
 		cc[i] = otx2_cpt_compcode_get(req);
 
@@ -1011,6 +1018,15 @@ otx2_cpt_dequeue_burst(void *qptr, struct rte_crypto_op **ops, uint16_t nb_ops)
 	}
 
 	return nb_completed;
+}
+
+void
+otx2_cpt_set_enqdeq_fns(struct rte_cryptodev *dev)
+{
+	dev->enqueue_burst = otx2_cpt_enqueue_burst;
+	dev->dequeue_burst = otx2_cpt_dequeue_burst;
+
+	rte_mb();
 }
 
 /* PMD ops */
@@ -1075,10 +1091,8 @@ otx2_cpt_dev_config(struct rte_cryptodev *dev,
 		goto intr_unregister;
 	}
 
-	dev->enqueue_burst = otx2_cpt_enqueue_burst;
-	dev->dequeue_burst = otx2_cpt_dequeue_burst;
+	otx2_cpt_set_enqdeq_fns(dev);
 
-	rte_mb();
 	return 0;
 
 intr_unregister:
@@ -1253,6 +1267,7 @@ otx2_cpt_asym_session_cfg(struct rte_cryptodev *dev,
 			  struct rte_mempool *pool)
 {
 	struct cpt_asym_sess_misc *priv;
+	vq_cmd_word3_t vq_cmd_w3;
 	int ret;
 
 	CPT_PMD_INIT_FUNC_TRACE();
@@ -1273,7 +1288,12 @@ otx2_cpt_asym_session_cfg(struct rte_cryptodev *dev,
 		return ret;
 	}
 
+	vq_cmd_w3.u64 = 0;
+	vq_cmd_w3.s.grp = OTX2_CPT_EGRP_AE;
+	priv->cpt_inst_w7 = vq_cmd_w3.u64;
+
 	set_asym_session_private_data(sess, dev->driver_id, priv);
+
 	return 0;
 }
 

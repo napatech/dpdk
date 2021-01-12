@@ -66,7 +66,7 @@ ixgbe_mb_intr_setup(struct rte_eth_dev *dev)
 	return 0;
 }
 
-void ixgbe_pf_host_init(struct rte_eth_dev *eth_dev)
+int ixgbe_pf_host_init(struct rte_eth_dev *eth_dev)
 {
 	struct ixgbe_vf_info **vfinfo =
 		IXGBE_DEV_PRIVATE_TO_P_VFDATA(eth_dev->data->dev_private);
@@ -78,19 +78,30 @@ void ixgbe_pf_host_init(struct rte_eth_dev *eth_dev)
 		IXGBE_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
 	uint16_t vf_num;
 	uint8_t nb_queue;
+	int ret = 0;
 
 	PMD_INIT_FUNC_TRACE();
 
 	RTE_ETH_DEV_SRIOV(eth_dev).active = 0;
 	vf_num = dev_num_vf(eth_dev);
 	if (vf_num == 0)
-		return;
+		return ret;
 
 	*vfinfo = rte_zmalloc("vf_info", sizeof(struct ixgbe_vf_info) * vf_num, 0);
-	if (*vfinfo == NULL)
-		rte_panic("Cannot allocate memory for private VF data\n");
+	if (*vfinfo == NULL) {
+		PMD_INIT_LOG(ERR,
+			"Cannot allocate memory for private VF data");
+		return -ENOMEM;
+	}
 
-	rte_eth_switch_domain_alloc(&(*vfinfo)->switch_domain_id);
+	ret = rte_eth_switch_domain_alloc(&(*vfinfo)->switch_domain_id);
+	if (ret) {
+		PMD_INIT_LOG(ERR,
+			"failed to allocate switch domain for device %d", ret);
+		rte_free(*vfinfo);
+		*vfinfo = NULL;
+		return ret;
+	}
 
 	memset(mirror_info, 0, sizeof(struct ixgbe_mirror_info));
 	memset(uta_info, 0, sizeof(struct ixgbe_uta_info));
@@ -118,6 +129,8 @@ void ixgbe_pf_host_init(struct rte_eth_dev *eth_dev)
 
 	/* set mb interrupt mask */
 	ixgbe_mb_intr_setup(eth_dev);
+
+	return ret;
 }
 
 void ixgbe_pf_host_uninit(struct rte_eth_dev *eth_dev)
@@ -832,7 +845,7 @@ ixgbe_rcv_msg_from_vf(struct rte_eth_dev *dev, uint16_t vf)
 		vfinfo[vf].clear_to_send = true;
 
 		/* notify application about VF reset */
-		_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_VF_MBOX,
+		rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_VF_MBOX,
 					      &ret_param);
 		return ret;
 	}
@@ -844,8 +857,7 @@ ixgbe_rcv_msg_from_vf(struct rte_eth_dev *dev, uint16_t vf)
 	 * if 0, do nothing and send ACK to VF
 	 * if ret_param.retval > 1, do nothing and send NAK to VF
 	 */
-	_rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_VF_MBOX,
-				      &ret_param);
+	rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_VF_MBOX, &ret_param);
 
 	retval = ret_param.retval;
 

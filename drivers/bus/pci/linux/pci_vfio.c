@@ -34,7 +34,6 @@
  * This code tries to determine if the PCI device is bound to VFIO driver,
  * and initialize it (map BARs, set up interrupts) if that's the case.
  *
- * This file is only compiled if CONFIG_RTE_EAL_VFIO is set to "y".
  */
 
 #ifdef VFIO_PRESENT
@@ -565,8 +564,20 @@ pci_vfio_mmap_bar(int vfio_dev_fd, struct mapped_pci_resource *vfio_res,
 							RTE_MAP_FORCE_ADDRESS);
 		}
 
+		/*
+		 * Regarding "memreg[0].size == 0":
+		 * If this BAR has MSI-X table, memreg[0].size (the
+		 * first part or the part before the table) can
+		 * legitimately be 0 for hardware using vector table
+		 * offset 0 (i.e. first part does not exist).
+		 *
+		 * When memreg[0].size is 0, "mapping the first part"
+		 * never happens, and map_addr is NULL at this
+		 * point. So check that mapping has been actually
+		 * attempted.
+		 */
 		/* if there's a second part, try to map it */
-		if (map_addr != MAP_FAILED
+		if ((map_addr != NULL || memreg[0].size == 0)
 			&& memreg[1].offset && memreg[1].size) {
 			void *second_addr = RTE_PTR_ADD(bar_addr,
 						(uintptr_t)(memreg[1].offset -
@@ -578,7 +589,7 @@ pci_vfio_mmap_bar(int vfio_dev_fd, struct mapped_pci_resource *vfio_res,
 							RTE_MAP_FORCE_ADDRESS);
 		}
 
-		if (map_addr == NULL || map_addr == MAP_FAILED) {
+		if (map_addr == NULL) {
 			munmap(bar_addr, bar->size);
 			bar_addr = MAP_FAILED;
 			RTE_LOG(ERR, EAL, "Failed to map pci BAR%d\n",
@@ -751,7 +762,7 @@ pci_vfio_map_resource_primary(struct rte_pci_device *dev)
 		}
 	}
 
-	for (i = 0; i < (int) vfio_res->nb_maps; i++) {
+	for (i = 0; i < vfio_res->nb_maps; i++) {
 		struct vfio_region_info *reg = NULL;
 		void *bar_addr;
 
@@ -827,7 +838,8 @@ pci_vfio_map_resource_primary(struct rte_pci_device *dev)
 err_vfio_res:
 	rte_free(vfio_res);
 err_vfio_dev_fd:
-	close(vfio_dev_fd);
+	rte_vfio_release_device(rte_pci_get_sysfs_path(),
+			pci_addr, vfio_dev_fd);
 	return -1;
 }
 
@@ -876,7 +888,7 @@ pci_vfio_map_resource_secondary(struct rte_pci_device *dev)
 	/* map BARs */
 	maps = vfio_res->maps;
 
-	for (i = 0; i < (int) vfio_res->nb_maps; i++) {
+	for (i = 0; i < vfio_res->nb_maps; i++) {
 		ret = pci_vfio_mmap_bar(vfio_dev_fd, vfio_res, i, MAP_FIXED);
 		if (ret < 0) {
 			RTE_LOG(ERR, EAL, "  %s mapping BAR%i failed: %s\n",
@@ -895,7 +907,8 @@ pci_vfio_map_resource_secondary(struct rte_pci_device *dev)
 
 	return 0;
 err_vfio_dev_fd:
-	close(vfio_dev_fd);
+	rte_vfio_release_device(rte_pci_get_sysfs_path(),
+			pci_addr, vfio_dev_fd);
 	return -1;
 }
 
@@ -935,7 +948,7 @@ find_and_unmap_vfio_resource(struct mapped_pci_res_list *vfio_res_list,
 		pci_addr);
 
 	maps = vfio_res->maps;
-	for (i = 0; i < (int) vfio_res->nb_maps; i++) {
+	for (i = 0; i < vfio_res->nb_maps; i++) {
 
 		/*
 		 * We do not need to be aware of MSI-X table BAR mappings as
@@ -1004,7 +1017,7 @@ pci_vfio_unmap_resource_primary(struct rte_pci_device *dev)
 	}
 
 	TAILQ_REMOVE(vfio_res_list, vfio_res, next);
-
+	rte_free(vfio_res);
 	return 0;
 }
 

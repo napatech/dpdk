@@ -85,6 +85,18 @@ typedef uint16_t unaligned_uint16_t;
 
 /******* Macro to mark functions and fields scheduled for removal *****/
 #define __rte_deprecated	__attribute__((__deprecated__))
+#define __rte_deprecated_msg(msg)	__attribute__((__deprecated__(msg)))
+
+/**
+ *  Macro to mark macros and defines scheduled for removal
+ */
+#if defined(RTE_CC_GCC) || defined(RTE_CC_CLANG)
+#define RTE_PRAGMA(x)  _Pragma(#x)
+#define RTE_PRAGMA_WARNING(w) RTE_PRAGMA(GCC warning #w)
+#define RTE_DEPRECATED(x)  RTE_PRAGMA_WARNING(#x is deprecated)
+#else
+#define RTE_DEPRECATED(x)
+#endif
 
 /**
  * Mark a function or variable to a weak reference.
@@ -131,6 +143,18 @@ typedef uint16_t unaligned_uint16_t;
 #else
 #define __rte_format_printf(format_index, first_arg) \
 	__attribute__((format(printf, format_index, first_arg)))
+#endif
+
+/**
+ * Tells compiler that the function returns a value that points to
+ * memory, where the size is given by the one or two arguments.
+ * Used by compiler to validate object size.
+ */
+#if defined(RTE_CC_GCC) || defined(RTE_CC_CLANG)
+#define __rte_alloc_size(...) \
+	__attribute__((alloc_size(__VA_ARGS__)))
+#else
+#define __rte_alloc_size(...)
 #endif
 
 #define RTE_PRIORITY_LOG 101

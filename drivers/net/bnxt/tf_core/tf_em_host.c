@@ -374,8 +374,14 @@ tf_em_ext_alloc(struct tf *tfp, struct tf_alloc_tbl_scope_parms *parms)
 	struct tf_tbl_scope_cb *tbl_scope_cb;
 	struct hcapi_cfa_em_table *em_tables;
 	struct tf_free_tbl_scope_parms free_parms;
+	struct tf_rm_allocate_parms aparms = { 0 };
+	struct tf_rm_free_parms fparms = { 0 };
 
-	rc = tf_tbl_scope_alloc(&parms->tbl_scope_id);
+	/* Get Table Scope control block from the session pool */
+	aparms.rm_db = eem_db[TF_DIR_RX];
+	aparms.db_index = TF_EM_TBL_TYPE_TBL_SCOPE;
+	aparms.index = (uint32_t *)&parms->tbl_scope_id;
+	rc = tf_rm_allocate(&aparms);
 	if (rc) {
 		TFP_DRV_LOG(ERR,
 			    "Failed to allocate table scope\n");
@@ -385,6 +391,14 @@ tf_em_ext_alloc(struct tf *tfp, struct tf_alloc_tbl_scope_parms *parms)
 	tbl_scope_cb = &tbl_scopes[parms->tbl_scope_id];
 	tbl_scope_cb->index = parms->tbl_scope_id;
 	tbl_scope_cb->tbl_scope_id = parms->tbl_scope_id;
+
+	rc = tfp_get_pf(tfp, &tbl_scope_cb->pf);
+	if (rc) {
+		TFP_DRV_LOG(ERR,
+			    "EEM: PF query error rc:%s\n",
+			    strerror(-rc));
+		goto cleanup;
+	}
 
 	for (dir = 0; dir < TF_DIR_MAX; dir++) {
 		rc = tf_msg_em_qcaps(tfp,
@@ -472,7 +486,11 @@ cleanup_full:
 	return -EINVAL;
 
 cleanup:
-	tf_tbl_scope_free(parms->tbl_scope_id);
+	/* Free Table control block */
+	fparms.rm_db = eem_db[TF_DIR_RX];
+	fparms.db_index = TF_EM_TBL_TYPE_TBL_SCOPE;
+	fparms.index = parms->tbl_scope_id;
+	tf_rm_free(&fparms);
 	return -EINVAL;
 }
 
@@ -483,6 +501,7 @@ tf_em_ext_free(struct tf *tfp,
 	int rc = 0;
 	enum tf_dir  dir;
 	struct tf_tbl_scope_cb *tbl_scope_cb;
+	struct tf_rm_free_parms aparms = { 0 };
 
 	tbl_scope_cb = tbl_scope_cb_find(parms->tbl_scope_id);
 
@@ -491,7 +510,11 @@ tf_em_ext_free(struct tf *tfp,
 		return -EINVAL;
 	}
 
-	rc = tf_tbl_scope_free(parms->tbl_scope_id);
+	/* Free Table control block */
+	aparms.rm_db = eem_db[TF_DIR_RX];
+	aparms.db_index = TF_EM_TBL_TYPE_TBL_SCOPE;
+	aparms.index = parms->tbl_scope_id;
+	rc = tf_rm_free(&aparms);
 	if (rc) {
 		TFP_DRV_LOG(ERR,
 			    "Failed to free table scope\n");

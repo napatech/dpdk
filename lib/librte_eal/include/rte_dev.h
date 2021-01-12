@@ -33,12 +33,6 @@ enum rte_dev_event_type {
 	RTE_DEV_EVENT_MAX	/**< max value of this enum */
 };
 
-struct rte_dev_event {
-	enum rte_dev_event_type type;	/**< device event type */
-	int subsystem;			/**< subsystem id */
-	char *devname;			/**< device name */
-};
-
 typedef void (*rte_dev_event_cb_fn)(const char *device_name,
 					enum rte_dev_event_type event,
 					void *cb_arg);
@@ -55,24 +49,18 @@ typedef void (*rte_dev_event_cb_fn)(const char *device_name,
 } while (0)
 
 /**
- * Device driver.
- */
-enum rte_kernel_driver {
-	RTE_KDRV_UNKNOWN = 0,
-	RTE_KDRV_IGB_UIO,
-	RTE_KDRV_VFIO,
-	RTE_KDRV_UIO_GENERIC,
-	RTE_KDRV_NIC_UIO,
-	RTE_KDRV_NONE,
-};
-
-/**
  * Device policies.
  */
 enum rte_dev_policy {
-	RTE_DEV_WHITELISTED,
-	RTE_DEV_BLACKLISTED,
+	RTE_DEV_ALLOWED,
+	RTE_DEV_BLOCKED,
 };
+
+/* Backwards compatibility will be removed */
+#define RTE_DEV_WHITELISTED \
+	RTE_DEPRECATED(RTE_DEV_WHITELISTED) RTE_DEV_ALLOWED
+#define RTE_DEV_BLACKLISTED \
+	RTE_DEPRECATED(RTE_DEV_BLACKLISTED) RTE_DEV_BLOCKED
 
 /**
  * A generic memory resource representation.

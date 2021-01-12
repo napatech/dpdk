@@ -15,6 +15,7 @@
 
 #define OTX2_CPT_MAX_LFS		64
 #define OTX2_CPT_MAX_QUEUES_PER_VF	64
+#define OTX2_CPT_PMD_VERSION		3
 
 /**
  * Device private data
@@ -35,7 +36,7 @@ struct otx2_cpt_vf {
 };
 
 struct cpt_meta_info {
-	uint64_t deq_op_info[4];
+	uint64_t deq_op_info[5];
 	uint64_t comp_code_sz;
 	union cpt_res_s cpt_res __rte_aligned(16);
 	struct cpt_request_info cpt_req;
@@ -49,5 +50,7 @@ extern int otx2_cpt_logtype;
  * Crypto device driver ID
  */
 extern uint8_t otx2_cryptodev_driver_id;
+
+void otx2_cpt_set_enqdeq_fns(struct rte_cryptodev *dev);
 
 #endif /* _OTX2_CRYPTODEV_H_ */

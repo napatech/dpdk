@@ -25,7 +25,12 @@ ipsec_lp_len_precalc(struct rte_security_ipsec_xform *ipsec,
 {
 	struct rte_crypto_sym_xform *cipher_xform, *auth_xform;
 
-	lp->partial_len = sizeof(struct rte_ipv4_hdr);
+	if (ipsec->tunnel.type == RTE_SECURITY_IPSEC_TUNNEL_IPV4)
+		lp->partial_len = sizeof(struct rte_ipv4_hdr);
+	else if (ipsec->tunnel.type == RTE_SECURITY_IPSEC_TUNNEL_IPV6)
+		lp->partial_len = sizeof(struct rte_ipv6_hdr);
+	else
+		return -EINVAL;
 
 	if (ipsec->proto == RTE_SECURITY_IPSEC_SA_PROTO_ESP) {
 		lp->partial_len += sizeof(struct rte_esp_hdr);
@@ -107,7 +112,7 @@ otx2_cpt_enq_sa_write(struct otx2_sec_session_ipsec_lp *lp,
 	inst.u64[3] = 0;
 	inst.res_addr = rte_mempool_virt2iova(res);
 
-	rte_cio_wmb();
+	rte_io_wmb();
 
 	do {
 		/* Copy CPT command to LMTLINE */
@@ -124,7 +129,7 @@ otx2_cpt_enq_sa_write(struct otx2_sec_session_ipsec_lp *lp,
 			otx2_err("Request timed out");
 			return -ETIMEDOUT;
 		}
-	    rte_cio_rmb();
+	    rte_io_rmb();
 	}
 
 	if (unlikely(res->compcode != CPT_9X_COMP_E_GOOD)) {
@@ -203,6 +208,7 @@ crypto_sec_ipsec_outb_session_create(struct rte_cryptodev *crypto_dev,
 	struct otx2_ipsec_po_out_sa *sa;
 	struct otx2_sec_session *sess;
 	struct otx2_cpt_inst_s inst;
+	struct rte_ipv6_hdr *ip6;
 	struct rte_ipv4_hdr *ip;
 	int ret;
 
@@ -222,6 +228,7 @@ crypto_sec_ipsec_outb_session_create(struct rte_cryptodev *crypto_dev,
 	lp->ip_id = 0;
 	lp->seq_lo = 1;
 	lp->seq_hi = 0;
+	lp->tunnel_type = ipsec->tunnel.type;
 
 	ret = ipsec_po_sa_ctl_set(ipsec, crypto_xform, ctl);
 	if (ret)
@@ -254,6 +261,24 @@ crypto_sec_ipsec_outb_session_create(struct rte_cryptodev *crypto_dev,
 				sizeof(struct in_addr));
 			memcpy(&ip->dst_addr, &ipsec->tunnel.ipv4.dst_ip,
 				sizeof(struct in_addr));
+		} else if (ipsec->tunnel.type ==
+				RTE_SECURITY_IPSEC_TUNNEL_IPV6) {
+			ip6 = &sa->template.ipv6_hdr;
+			ip6->vtc_flow = rte_cpu_to_be_32(0x60000000 |
+				((ipsec->tunnel.ipv6.dscp <<
+					RTE_IPV6_HDR_TC_SHIFT) &
+					RTE_IPV6_HDR_TC_MASK) |
+				((ipsec->tunnel.ipv6.flabel <<
+					RTE_IPV6_HDR_FL_SHIFT) &
+					RTE_IPV6_HDR_FL_MASK));
+			ip6->hop_limits = ipsec->tunnel.ipv6.hlimit;
+			ip6->proto = (ipsec->proto ==
+					RTE_SECURITY_IPSEC_SA_PROTO_ESP) ?
+					IPPROTO_ESP : IPPROTO_AH;
+			memcpy(&ip6->src_addr, &ipsec->tunnel.ipv6.src_addr,
+				sizeof(struct in6_addr));
+			memcpy(&ip6->dst_addr, &ipsec->tunnel.ipv6.dst_addr,
+				sizeof(struct in6_addr));
 		} else {
 			return -EINVAL;
 		}
@@ -298,7 +323,7 @@ crypto_sec_ipsec_outb_session_create(struct rte_cryptodev *crypto_dev,
 	inst.egrp = OTX2_CPT_EGRP_SE;
 	inst.cptr = rte_mempool_virt2iova(sa);
 
-	lp->ucmd_w3 = inst.u64[7];
+	lp->cpt_inst_w7 = inst.u64[7];
 	lp->ucmd_opcode = (lp->ctx_len << 8) |
 				(OTX2_IPSEC_PO_PROCESS_IPSEC_OUTB);
 
@@ -342,6 +367,7 @@ crypto_sec_ipsec_inb_session_create(struct rte_cryptodev *crypto_dev,
 	if (ret)
 		return ret;
 
+	lp->tunnel_type = ipsec->tunnel.type;
 	auth_xform = crypto_xform;
 	cipher_xform = crypto_xform->next;
 
@@ -381,7 +407,7 @@ crypto_sec_ipsec_inb_session_create(struct rte_cryptodev *crypto_dev,
 	inst.egrp = OTX2_CPT_EGRP_SE;
 	inst.cptr = rte_mempool_virt2iova(sa);
 
-	lp->ucmd_w3 = inst.u64[7];
+	lp->cpt_inst_w7 = inst.u64[7];
 	lp->ucmd_opcode = (lp->ctx_len << 8) |
 				(OTX2_IPSEC_PO_PROCESS_IPSEC_INB);
 
@@ -428,6 +454,9 @@ otx2_crypto_sec_session_create(void *device,
 
 	if (conf->action_type != RTE_SECURITY_ACTION_TYPE_LOOKASIDE_PROTOCOL)
 		return -ENOTSUP;
+
+	if (rte_security_dynfield_register() < 0)
+		return -rte_errno;
 
 	if (rte_mempool_get(mempool, (void **)&priv)) {
 		otx2_err("Could not allocate security session private data");
@@ -488,7 +517,7 @@ otx2_crypto_sec_set_pkt_mdata(void *device __rte_unused,
 			      struct rte_mbuf *m, void *params __rte_unused)
 {
 	/* Set security session as the pkt metadata */
-	m->udata64 = (uint64_t)session;
+	*rte_security_dynfield(m) = (rte_security_dynfield_t)session;
 
 	return 0;
 }

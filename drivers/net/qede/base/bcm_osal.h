@@ -21,6 +21,7 @@
 #include <rte_ether.h>
 #include <rte_io.h>
 #include <rte_version.h>
+#include <rte_bus_pci.h>
 
 /* Forward declaration */
 struct ecore_dev;
@@ -81,9 +82,8 @@ typedef intptr_t osal_int_ptr_t;
 
 #define DELAY(x) rte_delay_us(x)
 #define usec_delay(x) DELAY(x)
-#define msec_delay(x) DELAY(1000 * (x))
 #define OSAL_UDELAY(time) usec_delay(time)
-#define OSAL_MSLEEP(time) msec_delay(time)
+#define OSAL_MSLEEP(time) rte_delay_us_sleep(1000 * (time))
 
 /* Memory allocations and deallocations */
 
@@ -177,9 +177,12 @@ typedef pthread_mutex_t osal_mutex_t;
 
 /* DPC */
 
+void osal_poll_mode_dpc(osal_int_ptr_t hwfn_cookie);
 #define OSAL_DPC_ALLOC(hwfn) OSAL_ALLOC(hwfn, GFP, sizeof(osal_dpc_t))
-#define OSAL_DPC_INIT(dpc, hwfn) nothing
-#define OSAL_POLL_MODE_DPC(hwfn) nothing
+#define OSAL_DPC_INIT(dpc, hwfn) \
+	OSAL_SPIN_LOCK_INIT(&(hwfn)->spq_lock)
+#define OSAL_POLL_MODE_DPC(hwfn) \
+	osal_poll_mode_dpc((osal_int_ptr_t)(p_hwfn))
 #define OSAL_DPC_SYNC(hwfn) nothing
 
 /* Lists */
@@ -286,11 +289,14 @@ typedef struct osal_list_t {
 	OSAL_LIST_PUSH_HEAD(new_entry, list)
 
 /* PCI config space */
-
-#define OSAL_PCI_READ_CONFIG_BYTE(dev, address, dst) nothing
-#define OSAL_PCI_READ_CONFIG_WORD(dev, address, dst) nothing
-#define OSAL_PCI_READ_CONFIG_DWORD(dev, address, dst) nothing
-#define OSAL_PCI_FIND_EXT_CAPABILITY(dev, pcie_id) 0
+#define OSAL_PCI_READ_CONFIG_BYTE(dev, address, dst) \
+	rte_pci_read_config((dev)->pci_dev, dst, 1, address)
+#define OSAL_PCI_READ_CONFIG_WORD(dev, address, dst) \
+	rte_pci_read_config((dev)->pci_dev, dst, 2, address)
+#define OSAL_PCI_READ_CONFIG_DWORD(dev, address, dst) \
+	rte_pci_read_config((dev)->pci_dev, dst, 4, address)
+#define OSAL_PCI_FIND_EXT_CAPABILITY(dev, cap) \
+	rte_pci_find_ext_capability((dev)->pci_dev, cap)
 #define OSAL_PCI_FIND_CAPABILITY(dev, pcie_id) 0
 #define OSAL_PCI_WRITE_CONFIG_WORD(dev, address, val) nothing
 #define OSAL_BAR_SIZE(dev, bar_id) 0
@@ -341,10 +347,14 @@ u32 qede_find_first_zero_bit(u32 *bitmap, u32 length);
 
 /* SR-IOV channel */
 
-#define OSAL_VF_FLR_UPDATE(hwfn) nothing
+int osal_pf_vf_msg(struct ecore_hwfn *p_hwfn);
+void osal_vf_flr_update(struct ecore_hwfn *p_hwfn);
+#define OSAL_VF_FLR_UPDATE(hwfn) \
+	osal_vf_flr_update(hwfn)
 #define OSAL_VF_SEND_MSG2PF(dev, done, msg, reply_addr, msg_size, reply_size) 0
 #define OSAL_VF_CQE_COMPLETION(_dev_p, _cqe, _protocol)	(0)
-#define OSAL_PF_VF_MSG(hwfn, vfid) 0
+#define OSAL_PF_VF_MSG(hwfn, vfid) \
+	osal_pf_vf_msg(hwfn)
 #define OSAL_PF_VF_MALICIOUS(hwfn, vfid) nothing
 #define OSAL_IOV_CHK_UCAST(hwfn, vfid, params) 0
 #define OSAL_IOV_POST_START_VPORT(hwfn, vf, vport_id, opaque_fid) nothing
@@ -372,7 +382,7 @@ void qede_hw_err_notify(struct ecore_hwfn *p_hwfn,
 /* TODO: */
 #define OSAL_SCHEDULE_RECOVERY_HANDLER(hwfn) nothing
 
-int qede_save_fw_dump(uint8_t port_id);
+int qede_save_fw_dump(uint16_t port_id);
 
 #define OSAL_SAVE_FW_DUMP(port_id) qede_save_fw_dump(port_id)
 

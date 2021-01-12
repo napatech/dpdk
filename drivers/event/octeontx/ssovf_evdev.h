@@ -86,8 +86,6 @@
 #define SSO_GRP_GET_PRIORITY              0x7
 #define SSO_GRP_SET_PRIORITY              0x8
 
-#define SSOVF_SELFTEST_ARG               ("selftest")
-
 /*
  * In Cavium OCTEON TX SoC, all accesses to the device registers are
  * implictly strongly ordered. So, The relaxed version of IO operation is
@@ -146,6 +144,12 @@ struct ssovf_evdev {
 	uint32_t min_deq_timeout_ns;
 	uint32_t max_deq_timeout_ns;
 	int32_t max_num_events;
+	uint32_t available_events;
+	uint16_t rxq_pools;
+	uint64_t *rxq_pool_array;
+	uint8_t *rxq_pool_rcnt;
+	uint16_t tim_ring_cnt;
+	uint16_t *tim_ring_ids;
 } __rte_cache_aligned;
 
 /* Event port aka HWS */

@@ -283,6 +283,29 @@ Thus, the previous example would be better written:
 DPDK also provides an optimized way to store elements in lockless rings.
 This should be used in all data-path code, when there are several consumer and/or producers to avoid locking for concurrent access.
 
+Naming
+------
+
+For symbol names and documentation, new usage of
+'master / slave' (or 'slave' independent of 'master') and 'blacklist /
+whitelist' is not allowed.
+
+Recommended replacements for 'master / slave' are:
+    '{primary,main} / {secondary,replica,subordinate}'
+    '{initiator,requester} / {target,responder}'
+    '{controller,host} / {device,worker,proxy}'
+    'leader / follower'
+    'director / performer'
+
+Recommended replacements for 'blacklist/whitelist' are:
+    'denylist / allowlist'
+    'blocklist / passlist'
+
+Exceptions for introducing new usage is to maintain compatibility
+with an existing (as of 2020) hardware or protocol
+specification that mandates those terms.
+
+
 Typedefs
 ~~~~~~~~
 
@@ -339,7 +362,7 @@ For example:
 	typedef int (lcore_function_t)(void *);
 
 	/* launch a function of lcore_function_t type */
-	int rte_eal_remote_launch(lcore_function_t *f, void *arg, unsigned slave_id);
+	int rte_eal_remote_launch(lcore_function_t *f, void *arg, unsigned worker_id);
 
 
 C Indentation
@@ -765,7 +788,7 @@ specializations, run the ``app/test`` binary, and use the ``dump_log_types``
 Python Code
 -----------
 
-All Python code should work with Python 2.7+ and 3.2+ and be compliant with
+All Python code should be compliant with
 `PEP8 (Style Guide for Python Code) <https://www.python.org/dev/peps/pep-0008/>`_.
 
 The ``pep8`` tool can be used for testing compliance with the guidelines.
@@ -773,52 +796,12 @@ The ``pep8`` tool can be used for testing compliance with the guidelines.
 Integrating with the Build System
 ---------------------------------
 
-DPDK supports being built in two different ways:
+DPDK is built using the tools ``meson`` and ``ninja``.
 
-* using ``make`` - or more specifically "GNU make", i.e. ``gmake`` on FreeBSD
-* using the tools ``meson`` and ``ninja``
-
-Any new library or driver to be integrated into DPDK should support being
-built with both systems. While building using ``make`` is a legacy approach, and
-most build-system enhancements are being done using ``meson`` and ``ninja``
-there are no plans at this time to deprecate the legacy ``make`` build system.
-
-Therefore all new component additions should include both a ``Makefile`` and a
-``meson.build`` file, and should be added to the component lists in both the
-``Makefile`` and ``meson.build`` files in the relevant top-level directory:
+Therefore all new component additions should include a ``meson.build`` file,
+and should be added to the component lists in the ``meson.build`` files in the
+relevant top-level directory:
 either ``lib`` directory or a ``driver`` subdirectory.
-
-Makefile Contents
-~~~~~~~~~~~~~~~~~
-
-The ``Makefile`` for the component should be of the following format, where
-``<name>`` corresponds to the name of the library in question, e.g. hash,
-lpm, etc. For drivers, the same format of Makefile is used.
-
-.. code-block:: none
-
-	# pull in basic DPDK definitions, including whether library is to be
-	# built or not
-	include $(RTE_SDK)/mk/rte.vars.mk
-
-	# library name
-	LIB = librte_<name>.a
-
-	# any library cflags needed. Generally add "-O3 $(WERROR_FLAGS)"
-	CFLAGS += -O3
-	CFLAGS += $(WERROR_FLAGS)
-
-	# the symbol version information for the library
-	EXPORT_MAP := rte_<name>_version.map
-
-	# all source filenames are stored in SRCS-y
-	SRCS-$(CONFIG_RTE_LIBRTE_<NAME>) += rte_<name>.c
-
-	# install includes
-	SYMLINK-$(CONFIG_RTE_LIBRTE_<NAME>)-include += rte_<name>.h
-
-	# pull in rules to build the library
-	include $(RTE_SDK)/mk/rte.lib.mk
 
 Meson Build File Contents - Libraries
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1002,6 +985,9 @@ reason
 	As above.
 
 sources [mandatory]
+	As above
+
+headers
 	As above
 
 version

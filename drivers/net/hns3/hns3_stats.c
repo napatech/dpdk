@@ -2,13 +2,9 @@
  * Copyright(c) 2018-2019 Hisilicon Limited.
  */
 
-#include <stdbool.h>
-#include <stdint.h>
-#include <rte_common.h>
 #include <rte_ethdev.h>
 #include <rte_io.h>
 #include <rte_malloc.h>
-#include <rte_spinlock.h>
 
 #include "hns3_ethdev.h"
 #include "hns3_rxtx.h"
@@ -189,15 +185,61 @@ static const struct hns3_xstats_name_offset hns3_mac_strings[] = {
 
 static const struct hns3_xstats_name_offset hns3_error_int_stats_strings[] = {
 	{"MAC_AFIFO_TNL_INT_R",
-		HNS3_ERR_INT_STATS_FIELD_OFFSET(mac_afifo_tnl_intr_cnt)},
-	{"PPU_MPF_ABNORMAL_INT_ST2",
-		HNS3_ERR_INT_STATS_FIELD_OFFSET(ppu_mpf_abnormal_intr_st2_cnt)},
-	{"SSU_PORT_BASED_ERR_INT",
-		HNS3_ERR_INT_STATS_FIELD_OFFSET(ssu_port_based_pf_intr_cnt)},
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(mac_afifo_tnl_int_cnt)},
+	{"PPU_MPF_ABNORMAL_INT_ST2_MSIX",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(ppu_mpf_abn_int_st2_msix_cnt)},
+	{"SSU_PORT_BASED_ERR_INT_MSIX",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(ssu_port_based_pf_int_cnt)},
 	{"PPP_PF_ABNORMAL_INT_ST0",
-		HNS3_ERR_INT_STATS_FIELD_OFFSET(ppp_pf_abnormal_intr_cnt)},
-	{"PPU_PF_ABNORMAL_INT_ST",
-		HNS3_ERR_INT_STATS_FIELD_OFFSET(ppu_pf_abnormal_intr_cnt)}
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(ppp_pf_abnormal_int_cnt)},
+	{"PPU_PF_ABNORMAL_INT_ST_MSIX",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(ppu_pf_abnormal_int_msix_cnt)},
+	{"IMP_TCM_ECC_INT_STS",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(imp_tcm_ecc_int_cnt)},
+	{"CMDQ_MEM_ECC_INT_STS",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(cmdq_mem_ecc_int_cnt)},
+	{"IMP_RD_POISON_INT_STS",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(imp_rd_poison_int_cnt)},
+	{"TQP_INT_ECC_INT_STS",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(tqp_int_ecc_int_cnt)},
+	{"MSIX_ECC_INT_STS",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(msix_ecc_int_cnt)},
+	{"SSU_ECC_MULTI_BIT_INT_0",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(ssu_ecc_multi_bit_int_0_cnt)},
+	{"SSU_ECC_MULTI_BIT_INT_1",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(ssu_ecc_multi_bit_int_1_cnt)},
+	{"SSU_COMMON_ERR_INT",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(ssu_common_ecc_int_cnt)},
+	{"IGU_INT_STS",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(igu_int_cnt)},
+	{"PPP_MPF_ABNORMAL_INT_ST1",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(ppp_mpf_abnormal_int_st1_cnt)},
+	{"PPP_MPF_ABNORMAL_INT_ST3",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(ppp_mpf_abnormal_int_st3_cnt)},
+	{"PPU_MPF_ABNORMAL_INT_ST1",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(ppu_mpf_abnormal_int_st1_cnt)},
+	{"PPU_MPF_ABNORMAL_INT_ST2_RAS",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(ppu_mpf_abn_int_st2_ras_cnt)},
+	{"PPU_MPF_ABNORMAL_INT_ST3",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(ppu_mpf_abnormal_int_st3_cnt)},
+	{"TM_SCH_RINT",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(tm_sch_int_cnt)},
+	{"QCN_FIFO_RINT",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(qcn_fifo_int_cnt)},
+	{"QCN_ECC_RINT",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(qcn_ecc_int_cnt)},
+	{"NCSI_ECC_INT_RPT",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(ncsi_ecc_int_cnt)},
+	{"SSU_PORT_BASED_ERR_INT_RAS",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(ssu_port_based_err_int_cnt)},
+	{"SSU_FIFO_OVERFLOW_INT",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(ssu_fifo_overflow_int_cnt)},
+	{"SSU_ETS_TCG_INT",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(ssu_ets_tcg_int_cnt)},
+	{"IGU_EGU_TNL_INT_STS",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(igu_egu_tnl_int_cnt)},
+	{"PPU_PF_ABNORMAL_INT_ST_RAS",
+		HNS3_ERR_INT_STATS_FIELD_OFFSET(ppu_pf_abnormal_int_ras_cnt)},
 };
 
 /* The statistic of reset */
@@ -225,13 +267,13 @@ static const struct hns3_xstats_name_offset hns3_rx_bd_error_strings[] = {
 	{"L2_RX_ERRORS",
 		HNS3_RX_BD_ERROR_STATS_FIELD_OFFSET(l2_errors)},
 	{"RX_L3_CHECKSUM_ERRORS",
-		HNS3_RX_BD_ERROR_STATS_FIELD_OFFSET(l3_csum_erros)},
+		HNS3_RX_BD_ERROR_STATS_FIELD_OFFSET(l3_csum_errors)},
 	{"RX_L4_CHECKSUM_ERRORS",
-		HNS3_RX_BD_ERROR_STATS_FIELD_OFFSET(l4_csum_erros)},
+		HNS3_RX_BD_ERROR_STATS_FIELD_OFFSET(l4_csum_errors)},
 	{"RX_OL3_CHECKSUM_ERRORS",
-		HNS3_RX_BD_ERROR_STATS_FIELD_OFFSET(ol3_csum_erros)},
+		HNS3_RX_BD_ERROR_STATS_FIELD_OFFSET(ol3_csum_errors)},
 	{"RX_OL4_CHECKSUM_ERRORS",
-		HNS3_RX_BD_ERROR_STATS_FIELD_OFFSET(ol4_csum_erros)}
+		HNS3_RX_BD_ERROR_STATS_FIELD_OFFSET(ol4_csum_errors)}
 };
 
 /* The statistic of the Tx errors */
@@ -283,6 +325,8 @@ static const struct hns3_xstats_name_offset hns3_tx_queue_strings[] = {
 
 #define HNS3_FIX_NUM_STATS (HNS3_NUM_MAC_STATS + HNS3_NUM_ERROR_INT_XSTATS + \
 			    HNS3_NUM_RESET_XSTATS)
+
+static void hns3_tqp_stats_clear(struct hns3_hw *hw);
 
 /*
  * Query all the MAC statistics data of Network ICL command ,opcode id: 0x0034.
@@ -410,11 +454,10 @@ hns3_update_tqp_stats(struct hns3_hw *hw)
 		hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_QUERY_RX_STATUS,
 					  true);
 
-		desc.data[0] = rte_cpu_to_le_32((uint32_t)i &
-						HNS3_QUEUE_ID_MASK);
+		desc.data[0] = rte_cpu_to_le_32((uint32_t)i);
 		ret = hns3_cmd_send(hw, &desc, 1);
 		if (ret) {
-			hns3_err(hw, "Failed to query RX No.%d queue stat: %d",
+			hns3_err(hw, "Failed to query RX No.%u queue stat: %d",
 				 i, ret);
 			return ret;
 		}
@@ -425,11 +468,10 @@ hns3_update_tqp_stats(struct hns3_hw *hw)
 		hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_QUERY_TX_STATUS,
 					  true);
 
-		desc.data[0] = rte_cpu_to_le_32((uint32_t)i &
-						HNS3_QUEUE_ID_MASK);
+		desc.data[0] = rte_cpu_to_le_32((uint32_t)i);
 		ret = hns3_cmd_send(hw, &desc, 1);
 		if (ret) {
-			hns3_err(hw, "Failed to query TX No.%d queue stat: %d",
+			hns3_err(hw, "Failed to query TX No.%u queue stat: %d",
 				 i, ret);
 			return ret;
 		}
@@ -507,7 +549,6 @@ hns3_stats_reset(struct rte_eth_dev *eth_dev)
 {
 	struct hns3_adapter *hns = eth_dev->data->dev_private;
 	struct hns3_hw *hw = &hns->hw;
-	struct hns3_tqp_stats *stats = &hw->tqp_stats;
 	struct hns3_cmd_desc desc_reset;
 	struct hns3_rx_queue *rxq;
 	struct hns3_tx_queue *txq;
@@ -515,28 +556,26 @@ hns3_stats_reset(struct rte_eth_dev *eth_dev)
 	int ret;
 
 	/*
-	 * If this is a reset xstats is NULL, and we have cleared the
-	 * registers by reading them.
+	 * Note: Reading hardware statistics of rx/tx queue packet number
+	 * will clear them.
 	 */
 	for (i = 0; i < hw->tqps_num; i++) {
 		hns3_cmd_setup_basic_desc(&desc_reset, HNS3_OPC_QUERY_RX_STATUS,
 					  true);
-		desc_reset.data[0] = rte_cpu_to_le_32((uint32_t)i &
-						      HNS3_QUEUE_ID_MASK);
+		desc_reset.data[0] = rte_cpu_to_le_32((uint32_t)i);
 		ret = hns3_cmd_send(hw, &desc_reset, 1);
 		if (ret) {
-			hns3_err(hw, "Failed to reset RX No.%d queue stat: %d",
+			hns3_err(hw, "Failed to reset RX No.%u queue stat: %d",
 				 i, ret);
 			return ret;
 		}
 
 		hns3_cmd_setup_basic_desc(&desc_reset, HNS3_OPC_QUERY_TX_STATUS,
 					  true);
-		desc_reset.data[0] = rte_cpu_to_le_32((uint32_t)i &
-						      HNS3_QUEUE_ID_MASK);
+		desc_reset.data[0] = rte_cpu_to_le_32((uint32_t)i);
 		ret = hns3_cmd_send(hw, &desc_reset, 1);
 		if (ret) {
-			hns3_err(hw, "Failed to reset TX No.%d queue stat: %d",
+			hns3_err(hw, "Failed to reset TX No.%u queue stat: %d",
 				 i, ret);
 			return ret;
 		}
@@ -548,10 +587,10 @@ hns3_stats_reset(struct rte_eth_dev *eth_dev)
 		if (rxq) {
 			rxq->pkt_len_errors = 0;
 			rxq->l2_errors = 0;
-			rxq->l3_csum_erros = 0;
-			rxq->l4_csum_erros = 0;
-			rxq->ol3_csum_erros = 0;
-			rxq->ol4_csum_erros = 0;
+			rxq->l3_csum_errors = 0;
+			rxq->l4_csum_errors = 0;
+			rxq->ol3_csum_errors = 0;
+			rxq->ol4_csum_errors = 0;
 		}
 	}
 
@@ -568,7 +607,7 @@ hns3_stats_reset(struct rte_eth_dev *eth_dev)
 		}
 	}
 
-	memset(stats, 0, sizeof(struct hns3_tqp_stats));
+	hns3_tqp_stats_clear(hw);
 
 	return 0;
 }
@@ -622,8 +661,7 @@ hns3_get_queue_stats(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats,
 	/* Get rx queue stats */
 	for (j = 0; j < dev->data->nb_rx_queues; j++) {
 		for (i = 0; i < HNS3_NUM_RX_QUEUE_STATS; i++) {
-			reg_offset = HNS3_TQP_REG_OFFSET +
-					HNS3_TQP_REG_SIZE * j;
+			reg_offset = hns3_get_tqp_reg_offset(j);
 			xstats[*count].value = hns3_read_dev(hw,
 				reg_offset + hns3_rx_queue_strings[i].offset);
 			xstats[*count].id = *count;
@@ -634,15 +672,30 @@ hns3_get_queue_stats(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats,
 	/* Get tx queue stats */
 	for (j = 0; j < dev->data->nb_tx_queues; j++) {
 		for (i = 0; i < HNS3_NUM_TX_QUEUE_STATS; i++) {
-			reg_offset = HNS3_TQP_REG_OFFSET +
-					HNS3_TQP_REG_SIZE * j;
+			reg_offset = hns3_get_tqp_reg_offset(j);
 			xstats[*count].value = hns3_read_dev(hw,
 				reg_offset + hns3_tx_queue_strings[i].offset);
 			xstats[*count].id = *count;
 			(*count)++;
 		}
 	}
+}
 
+void
+hns3_error_int_stats_add(struct hns3_adapter *hns, const char *err)
+{
+	struct hns3_pf *pf = &hns->pf;
+	uint16_t i;
+	char *addr;
+
+	for (i = 0; i < HNS3_NUM_ERROR_INT_XSTATS; i++) {
+		if (strcmp(hns3_error_int_stats_strings[i].name, err) == 0) {
+			addr = (char *)&pf->abn_int_stats +
+				hns3_error_int_stats_strings[i].offset;
+			*(uint64_t *)addr += 1;
+			break;
+		}
+	}
 }
 
 /*
@@ -906,7 +959,7 @@ hns3_dev_xstats_get_by_id(struct rte_eth_dev *dev, const uint64_t *ids,
 
 	for (i = 0; i < size; i++) {
 		if (ids[i] >= cnt_stats) {
-			hns3_err(hw, "ids[%d] (%" PRIx64 ") is invalid, "
+			hns3_err(hw, "ids[%u] (%" PRIx64 ") is invalid, "
 				     "should < %u", i, ids[i], cnt_stats);
 			rte_free(values_copy);
 			return -EINVAL;
@@ -967,7 +1020,7 @@ hns3_dev_xstats_get_names_by_id(struct rte_eth_dev *dev,
 
 	for (i = 0; i < size; i++) {
 		if (ids[i] >= cnt_stats) {
-			hns3_err(hw, "ids[%d] (%" PRIx64 ") is invalid, "
+			hns3_err(hw, "ids[%u] (%" PRIx64 ") is invalid, "
 				     "should < %u", i, ids[i], cnt_stats);
 			rte_free(names_copy);
 			return -EINVAL;
@@ -1007,4 +1060,50 @@ hns3_dev_xstats_reset(struct rte_eth_dev *dev)
 	memset(&pf->abn_int_stats, 0, sizeof(struct hns3_err_msix_intr_stats));
 
 	return 0;
+}
+
+int
+hns3_tqp_stats_init(struct hns3_hw *hw)
+{
+	struct hns3_tqp_stats *tqp_stats = &hw->tqp_stats;
+
+	tqp_stats->rcb_rx_ring_pktnum = rte_zmalloc("hns3_rx_ring_pkt_num",
+					 sizeof(uint64_t) * hw->tqps_num, 0);
+	if (tqp_stats->rcb_rx_ring_pktnum == NULL) {
+		hns3_err(hw, "failed to allocate rx_ring pkt_num.");
+		return -ENOMEM;
+	}
+
+	tqp_stats->rcb_tx_ring_pktnum = rte_zmalloc("hns3_tx_ring_pkt_num",
+					 sizeof(uint64_t) * hw->tqps_num, 0);
+	if (tqp_stats->rcb_tx_ring_pktnum == NULL) {
+		hns3_err(hw, "failed to allocate tx_ring pkt_num.");
+		rte_free(tqp_stats->rcb_rx_ring_pktnum);
+		tqp_stats->rcb_rx_ring_pktnum = NULL;
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+
+void
+hns3_tqp_stats_uninit(struct hns3_hw *hw)
+{
+	struct hns3_tqp_stats *tqp_stats = &hw->tqp_stats;
+
+	rte_free(tqp_stats->rcb_rx_ring_pktnum);
+	tqp_stats->rcb_rx_ring_pktnum = NULL;
+	rte_free(tqp_stats->rcb_tx_ring_pktnum);
+	tqp_stats->rcb_tx_ring_pktnum = NULL;
+}
+
+static void
+hns3_tqp_stats_clear(struct hns3_hw *hw)
+{
+	struct hns3_tqp_stats *stats = &hw->tqp_stats;
+
+	stats->rcb_rx_ring_pktnum_rcd = 0;
+	stats->rcb_tx_ring_pktnum_rcd = 0;
+	memset(stats->rcb_rx_ring_pktnum, 0, sizeof(uint64_t) * hw->tqps_num);
+	memset(stats->rcb_tx_ring_pktnum, 0, sizeof(uint64_t) * hw->tqps_num);
 }

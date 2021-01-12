@@ -23,7 +23,6 @@
 /* packet header and tx offload info */
 #define ETHER_LEN_NO_VLAN		14
 #define ETHER_LEN_WITH_VLAN		18
-#define HEADER_LEN_OFFSET		2
 #define VXLANLEN			8
 #define MAX_PLD_OFFSET			221
 #define MAX_SINGLE_SGE_SIZE		65536
@@ -714,7 +713,6 @@ hinic_ipv4_phdr_cksum(const struct rte_ipv4_hdr *ipv4_hdr, uint64_t ol_flags)
 		uint8_t  proto;    /* L4 protocol type. */
 		uint16_t len;      /* L4 length. */
 	} psd_hdr;
-	uint8_t ihl;
 
 	psd_hdr.src_addr = ipv4_hdr->src_addr;
 	psd_hdr.dst_addr = ipv4_hdr->dst_addr;
@@ -723,13 +721,9 @@ hinic_ipv4_phdr_cksum(const struct rte_ipv4_hdr *ipv4_hdr, uint64_t ol_flags)
 	if (ol_flags & PKT_TX_TCP_SEG) {
 		psd_hdr.len = 0;
 	} else {
-		/* ipv4_hdr->version_ihl is uint8_t big endian, ihl locates
-		 * lower 4 bits and unit is 4 bytes
-		 */
-		ihl = (ipv4_hdr->version_ihl & 0xF) << 2;
 		psd_hdr.len =
 		rte_cpu_to_be_16(rte_be_to_cpu_16(ipv4_hdr->total_length) -
-				 ihl);
+				 rte_ipv4_hdr_len(ipv4_hdr));
 	}
 	return rte_raw_cksum(&psd_hdr, sizeof(psd_hdr));
 }
@@ -773,7 +767,8 @@ static inline void hinic_get_pld_offset(struct rte_mbuf *m,
 {
 	uint64_t ol_flags = m->ol_flags;
 
-	if ((ol_flags & PKT_TX_L4_MASK) == PKT_TX_UDP_CKSUM)
+	if (((ol_flags & PKT_TX_L4_MASK) == PKT_TX_UDP_CKSUM) ||
+	    ((ol_flags & PKT_TX_L4_MASK) == PKT_TX_SCTP_CKSUM))
 		off_info->payload_offset = m->l2_len + m->l3_len;
 	else if ((ol_flags & PKT_TX_TCP_CKSUM) || (ol_flags & PKT_TX_TCP_SEG))
 		off_info->payload_offset = m->l2_len + m->l3_len +
@@ -785,27 +780,25 @@ static inline void hinic_analyze_tx_info(struct rte_mbuf *mbuf,
 {
 	struct rte_ether_hdr *eth_hdr;
 	struct rte_vlan_hdr *vlan_hdr;
-	struct rte_ipv4_hdr *ip4h;
-	u16 pkt_type;
-	u8 *hdr;
+	struct rte_ipv4_hdr *ipv4_hdr;
+	u16 eth_type;
 
-	hdr = (u8 *)rte_pktmbuf_mtod(mbuf, u8*);
-	eth_hdr = (struct rte_ether_hdr *)hdr;
-	pkt_type = rte_be_to_cpu_16(eth_hdr->ether_type);
+	eth_hdr = rte_pktmbuf_mtod(mbuf, struct rte_ether_hdr *);
+	eth_type = rte_be_to_cpu_16(eth_hdr->ether_type);
 
-	if (pkt_type == RTE_ETHER_TYPE_VLAN) {
+	if (eth_type == RTE_ETHER_TYPE_VLAN) {
 		off_info->outer_l2_len = ETHER_LEN_WITH_VLAN;
-		vlan_hdr = (struct rte_vlan_hdr *)(hdr + 1);
-		pkt_type = rte_be_to_cpu_16(vlan_hdr->eth_proto);
+		vlan_hdr = (struct rte_vlan_hdr *)(eth_hdr + 1);
+		eth_type = rte_be_to_cpu_16(vlan_hdr->eth_proto);
 	} else {
 		off_info->outer_l2_len = ETHER_LEN_NO_VLAN;
 	}
 
-	if (pkt_type == RTE_ETHER_TYPE_IPV4) {
-		ip4h = (struct rte_ipv4_hdr *)(hdr + off_info->outer_l2_len);
-		off_info->outer_l3_len = (ip4h->version_ihl & 0xf) <<
-					HEADER_LEN_OFFSET;
-	} else if (pkt_type == RTE_ETHER_TYPE_IPV6) {
+	if (eth_type == RTE_ETHER_TYPE_IPV4) {
+		ipv4_hdr = rte_pktmbuf_mtod_offset(mbuf, struct rte_ipv4_hdr *,
+						   off_info->outer_l2_len);
+		off_info->outer_l3_len = rte_ipv4_hdr_len(ipv4_hdr);
+	} else if (eth_type == RTE_ETHER_TYPE_IPV6) {
 		/* not support ipv6 extension header */
 		off_info->outer_l3_len = sizeof(struct rte_ipv6_hdr);
 	}

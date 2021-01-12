@@ -20,13 +20,13 @@ if [ ! -f "$testpmd" ] ; then
 fi
 
 if ldd $testpmd | grep -q librte_ ; then
-	export LD_LIBRARY_PATH=$build/drivers:$build/lib:$LD_LIBRARY_PATH
-	libs='-d librte_mempool_ring.so -d librte_pmd_null.so'
+	export LD_LIBRARY_PATH=$build/lib:$LD_LIBRARY_PATH
+	libs="-d $build/drivers"
 else
 	libs=
 fi
 
 (sleep 1 && echo stop) |
 $testpmd -c $coremask --no-huge -m 20 \
-	$libs -w 0:0.0 --vdev net_null1 --vdev net_null2 $eal_options -- \
+	$libs -a 0:0.0 --vdev net_null1 --vdev net_null2 $eal_options -- \
 	--no-mlockall --total-num-mbufs=2048 $testpmd_options -ia

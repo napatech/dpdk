@@ -193,7 +193,7 @@ cmd_num_parsed(void *parsed_result,
 }
 
 cmdline_parse_token_num_t cmd_num_tok =
-	TOKEN_NUM_INITIALIZER(struct cmd_num_result, num, UINT32);
+	TOKEN_NUM_INITIALIZER(struct cmd_num_result, num, RTE_UINT32);
 
 cmdline_parse_inst_t cmd_num = {
 	.f = cmd_num_parsed,  /* function to call */
@@ -294,8 +294,10 @@ cmd_get_history_bufsize_parsed(__rte_unused void *parsed_result,
 		struct cmdline *cl,
 		__rte_unused void *data)
 {
+	struct rdline *rdl = cmdline_get_rdline(cl);
+
 	cmdline_printf(cl, "History buffer size: %zu\n",
-			sizeof(cl->rdl.history_buf));
+			sizeof(rdl->history_buf));
 }
 
 cmdline_parse_token_string_t cmd_get_history_bufsize_tok =
@@ -326,7 +328,9 @@ cmd_clear_history_parsed(__rte_unused void *parsed_result,
 		struct cmdline *cl,
 		__rte_unused void *data)
 {
-	rdline_clear_history(&cl->rdl);
+	struct rdline *rdl = cmdline_get_rdline(cl);
+
+	rdline_clear_history(rdl);
 }
 
 cmdline_parse_token_string_t cmd_clear_history_tok =

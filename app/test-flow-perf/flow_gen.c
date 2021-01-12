@@ -18,26 +18,33 @@
 
 static void
 fill_attributes(struct rte_flow_attr *attr,
-	uint64_t flow_attrs, uint16_t group)
+	uint64_t *flow_attrs, uint16_t group)
 {
-	if (flow_attrs & INGRESS)
-		attr->ingress = 1;
-	if (flow_attrs & EGRESS)
-		attr->egress = 1;
-	if (flow_attrs & TRANSFER)
-		attr->transfer = 1;
+	uint8_t i;
+	for (i = 0; i < MAX_ATTRS_NUM; i++) {
+		if (flow_attrs[i] == 0)
+			break;
+		if (flow_attrs[i] & INGRESS)
+			attr->ingress = 1;
+		else if (flow_attrs[i] & EGRESS)
+			attr->egress = 1;
+		else if (flow_attrs[i] & TRANSFER)
+			attr->transfer = 1;
+	}
 	attr->group = group;
 }
 
 struct rte_flow *
 generate_flow(uint16_t port_id,
 	uint16_t group,
-	uint64_t flow_attrs,
-	uint64_t flow_items,
-	uint64_t flow_actions,
+	uint64_t *flow_attrs,
+	uint64_t *flow_items,
+	uint64_t *flow_actions,
 	uint16_t next_table,
 	uint32_t outer_ip_src,
 	uint16_t hairpinq,
+	uint64_t encap_data,
+	uint64_t decap_data,
 	struct rte_flow_error *error)
 {
 	struct rte_flow_attr attr;
@@ -52,7 +59,8 @@ generate_flow(uint16_t port_id,
 	fill_attributes(&attr, flow_attrs, group);
 
 	fill_actions(actions, flow_actions,
-		outer_ip_src, next_table, hairpinq);
+		outer_ip_src, next_table, hairpinq,
+		encap_data, decap_data);
 
 	fill_items(items, flow_items, outer_ip_src);
 

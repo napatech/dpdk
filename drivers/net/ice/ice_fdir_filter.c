@@ -778,30 +778,15 @@ ice_fdir_cross_prof_conflict(struct ice_pf *pf,
 			goto err;
 		break;
 	case ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_OTHER:
-		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_OTHER;
+		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_UDP;
 		if (!ice_fdir_prof_resolve_conflict
 			(pf, cflct_ptype, is_tunnel))
 			goto err;
-		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_OTHER;
+		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_TCP;
 		if (!ice_fdir_prof_resolve_conflict
 			(pf, cflct_ptype, is_tunnel))
 			goto err;
-		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_OTHER;
-		if (!ice_fdir_prof_resolve_conflict
-			(pf, cflct_ptype, is_tunnel))
-			goto err;
-		break;
-	/* IPv6 GTPU */
-	case ICE_FLTR_PTYPE_NONF_IPV6_GTPU_IPV6_OTHER:
-		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV6_GTPU_IPV6_OTHER;
-		if (!ice_fdir_prof_resolve_conflict
-			(pf, cflct_ptype, is_tunnel))
-			goto err;
-		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV6_GTPU_IPV6_OTHER;
-		if (!ice_fdir_prof_resolve_conflict
-			(pf, cflct_ptype, is_tunnel))
-			goto err;
-		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV6_GTPU_IPV6_OTHER;
+		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_ICMP;
 		if (!ice_fdir_prof_resolve_conflict
 			(pf, cflct_ptype, is_tunnel))
 			goto err;
@@ -958,30 +943,9 @@ ice_fdir_input_set_parse(uint64_t inset, enum ice_flow_field *field)
 	}
 }
 
-static int
-ice_fdir_input_set_conf(struct ice_pf *pf, enum ice_fltr_ptype flow,
-			uint64_t input_set, enum ice_fdir_tunnel_type ttype)
+static void
+ice_fdir_input_set_hdrs(enum ice_fltr_ptype flow, struct ice_flow_seg_info *seg)
 {
-	struct ice_flow_seg_info *seg;
-	struct ice_flow_seg_info *seg_tun = NULL;
-	enum ice_flow_field field[ICE_FLOW_FIELD_IDX_MAX];
-	bool is_tunnel;
-	int i, ret;
-
-	if (!input_set)
-		return -EINVAL;
-
-	seg = (struct ice_flow_seg_info *)
-		ice_malloc(hw, sizeof(*seg));
-	if (!seg) {
-		PMD_DRV_LOG(ERR, "No memory can be allocated");
-		return -ENOMEM;
-	}
-
-	for (i = 0; i < ICE_FLOW_FIELD_IDX_MAX; i++)
-		field[i] = ICE_FLOW_FIELD_IDX_MAX;
-	ice_fdir_input_set_parse(input_set, field);
-
 	switch (flow) {
 	case ICE_FLTR_PTYPE_NONF_IPV4_UDP:
 		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_UDP |
@@ -1025,30 +989,26 @@ ice_fdir_input_set_conf(struct ice_pf *pf, enum ice_fltr_ptype flow,
 	case ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_TCP:
 	case ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_ICMP:
 	case ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_OTHER:
-		if (ttype == ICE_FDIR_TUNNEL_TYPE_GTPU)
-			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_GTPU_IP |
-					  ICE_FLOW_SEG_HDR_IPV4 |
-					  ICE_FLOW_SEG_HDR_IPV_OTHER);
-		else if (ttype == ICE_FDIR_TUNNEL_TYPE_GTPU_EH)
-			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_GTPU_EH |
-					  ICE_FLOW_SEG_HDR_GTPU_IP |
-					  ICE_FLOW_SEG_HDR_IPV4 |
-					  ICE_FLOW_SEG_HDR_IPV_OTHER);
-		else
-			PMD_DRV_LOG(ERR, "not supported tunnel type.");
+		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_GTPU_IP |
+				  ICE_FLOW_SEG_HDR_IPV4 |
+				  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		break;
+	case ICE_FLTR_PTYPE_NONF_IPV4_GTPU_EH_IPV4_OTHER:
+		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_GTPU_EH |
+				  ICE_FLOW_SEG_HDR_GTPU_IP |
+				  ICE_FLOW_SEG_HDR_IPV4 |
+				  ICE_FLOW_SEG_HDR_IPV_OTHER);
 		break;
 	case ICE_FLTR_PTYPE_NONF_IPV6_GTPU_IPV6_OTHER:
-		if (ttype == ICE_FDIR_TUNNEL_TYPE_GTPU)
-			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_GTPU_IP |
-					  ICE_FLOW_SEG_HDR_IPV6 |
-					  ICE_FLOW_SEG_HDR_IPV_OTHER);
-		else if (ttype == ICE_FDIR_TUNNEL_TYPE_GTPU_EH)
-			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_GTPU_EH |
-					  ICE_FLOW_SEG_HDR_GTPU_IP |
-					  ICE_FLOW_SEG_HDR_IPV6 |
-					  ICE_FLOW_SEG_HDR_IPV_OTHER);
-		else
-			PMD_DRV_LOG(ERR, "not supported tunnel type.");
+		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_GTPU_IP |
+				  ICE_FLOW_SEG_HDR_IPV6 |
+				  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		break;
+	case ICE_FLTR_PTYPE_NONF_IPV6_GTPU_EH_IPV6_OTHER:
+		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_GTPU_EH |
+				  ICE_FLOW_SEG_HDR_GTPU_IP |
+				  ICE_FLOW_SEG_HDR_IPV6 |
+				  ICE_FLOW_SEG_HDR_IPV_OTHER);
 		break;
 	case ICE_FLTR_PTYPE_NON_IP_L2:
 		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_ETH_NON_IP);
@@ -1057,27 +1017,57 @@ ice_fdir_input_set_conf(struct ice_pf *pf, enum ice_fltr_ptype flow,
 		PMD_DRV_LOG(ERR, "not supported filter type.");
 		break;
 	}
+}
 
-	for (i = 0; field[i] != ICE_FLOW_FIELD_IDX_MAX; i++) {
-		ice_flow_set_fld(seg, field[i],
-				 ICE_FLOW_FLD_OFF_INVAL,
-				 ICE_FLOW_FLD_OFF_INVAL,
-				 ICE_FLOW_FLD_OFF_INVAL, false);
+static int
+ice_fdir_input_set_conf(struct ice_pf *pf, enum ice_fltr_ptype flow,
+			uint64_t inner_input_set, uint64_t outer_input_set,
+			enum ice_fdir_tunnel_type ttype)
+{
+	struct ice_flow_seg_info *seg;
+	struct ice_flow_seg_info *seg_tun = NULL;
+	enum ice_flow_field field[ICE_FLOW_FIELD_IDX_MAX];
+	uint64_t input_set;
+	bool is_tunnel;
+	int k, i, ret = 0;
+
+	if (!(inner_input_set | outer_input_set))
+		return -EINVAL;
+
+	seg_tun = (struct ice_flow_seg_info *)
+		ice_malloc(hw, sizeof(*seg_tun) * ICE_FD_HW_SEG_MAX);
+	if (!seg_tun) {
+		PMD_DRV_LOG(ERR, "No memory can be allocated");
+		return -ENOMEM;
+	}
+
+	/* use seg_tun[1] to record tunnel inner part or non-tunnel */
+	for (k = 0; k <= ICE_FD_HW_SEG_TUN; k++) {
+		seg = &seg_tun[k];
+		input_set = (k == ICE_FD_HW_SEG_TUN) ? inner_input_set : outer_input_set;
+		if (input_set == 0)
+			continue;
+
+		for (i = 0; i < ICE_FLOW_FIELD_IDX_MAX; i++)
+			field[i] = ICE_FLOW_FIELD_IDX_MAX;
+
+		ice_fdir_input_set_parse(input_set, field);
+
+		ice_fdir_input_set_hdrs(flow, seg);
+
+		for (i = 0; field[i] != ICE_FLOW_FIELD_IDX_MAX; i++) {
+			ice_flow_set_fld(seg, field[i],
+					 ICE_FLOW_FLD_OFF_INVAL,
+					 ICE_FLOW_FLD_OFF_INVAL,
+					 ICE_FLOW_FLD_OFF_INVAL, false);
+		}
 	}
 
 	is_tunnel = ice_fdir_is_tunnel_profile(ttype);
 	if (!is_tunnel) {
 		ret = ice_fdir_hw_tbl_conf(pf, pf->main_vsi, pf->fdir.fdir_vsi,
-					   seg, flow, false);
+					   seg_tun + 1, flow, false);
 	} else {
-		seg_tun = (struct ice_flow_seg_info *)
-			ice_malloc(hw, sizeof(*seg) * ICE_FD_HW_SEG_MAX);
-		if (!seg_tun) {
-			PMD_DRV_LOG(ERR, "No memory can be allocated");
-			rte_free(seg);
-			return -ENOMEM;
-		}
-		rte_memcpy(&seg_tun[1], seg, sizeof(*seg));
 		ret = ice_fdir_hw_tbl_conf(pf, pf->main_vsi, pf->fdir.fdir_vsi,
 					   seg_tun, flow, true);
 	}
@@ -1085,9 +1075,7 @@ ice_fdir_input_set_conf(struct ice_pf *pf, enum ice_fltr_ptype flow,
 	if (!ret) {
 		return ret;
 	} else if (ret < 0) {
-		rte_free(seg);
-		if (is_tunnel)
-			rte_free(seg_tun);
+		rte_free(seg_tun);
 		return (ret == -EEXIST) ? 0 : ret;
 	} else {
 		return ret;
@@ -1297,7 +1285,8 @@ ice_fdir_create_filter(struct ice_adapter *ad,
 	is_tun = ice_fdir_is_tunnel_profile(filter->tunnel_type);
 
 	ret = ice_fdir_input_set_conf(pf, filter->input.flow_type,
-			filter->input_set, filter->tunnel_type);
+				      filter->input_set, filter->outer_input_set,
+				      filter->tunnel_type);
 	if (ret) {
 		rte_flow_error_set(error, -ret,
 				   RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
@@ -1328,6 +1317,9 @@ ice_fdir_create_filter(struct ice_adapter *ad,
 				   "Add filter rule failed.");
 		goto free_counter;
 	}
+
+	if (filter->mark_flag == 1)
+		ice_fdir_rx_parsing_enable(ad, 1);
 
 	rte_memcpy(entry, filter, sizeof(*entry));
 	ret = ice_fdir_entry_insert(pf, entry, &key);
@@ -1401,6 +1393,10 @@ ice_fdir_destroy_filter(struct ice_adapter *ad,
 	}
 
 	ice_fdir_cnt_update(pf, filter->input.flow_type, is_tun, false);
+
+	if (filter->mark_flag == 1)
+		ice_fdir_rx_parsing_enable(ad, 0);
+
 	flow->rule = NULL;
 
 	rte_free(filter);
@@ -1573,7 +1569,7 @@ ice_fdir_parse_action(struct ice_adapter *ad,
 			break;
 		case RTE_FLOW_ACTION_TYPE_MARK:
 			mark_num++;
-
+			filter->mark_flag = 1;
 			mark_spec = actions->conf;
 			filter->input.fltr_id = mark_spec->id;
 			filter->input.fdid_prio = ICE_FXD_FLTR_QW1_FDID_PRI_ONE;
@@ -2007,13 +2003,18 @@ ice_fdir_parse_pattern(__rte_unused struct ice_adapter *ad,
 		}
 	}
 
-	if (tunnel_type == ICE_FDIR_TUNNEL_TYPE_GTPU ||
-	    tunnel_type == ICE_FDIR_TUNNEL_TYPE_GTPU_EH) {
-		if (flow_type == ICE_FLTR_PTYPE_NONF_IPV4_UDP)
-			flow_type = ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_OTHER;
-		else
-			flow_type = ICE_FLTR_PTYPE_NONF_IPV6_GTPU_IPV6_OTHER;
-	}
+	if (tunnel_type == ICE_FDIR_TUNNEL_TYPE_GTPU &&
+		flow_type == ICE_FLTR_PTYPE_NONF_IPV4_UDP)
+		flow_type = ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_OTHER;
+	else if (tunnel_type == ICE_FDIR_TUNNEL_TYPE_GTPU_EH &&
+		flow_type == ICE_FLTR_PTYPE_NONF_IPV4_UDP)
+		flow_type = ICE_FLTR_PTYPE_NONF_IPV4_GTPU_EH_IPV4_OTHER;
+	else if (tunnel_type == ICE_FDIR_TUNNEL_TYPE_GTPU &&
+		flow_type == ICE_FLTR_PTYPE_NONF_IPV6_UDP)
+		flow_type = ICE_FLTR_PTYPE_NONF_IPV6_GTPU_IPV6_OTHER;
+	else if (tunnel_type == ICE_FDIR_TUNNEL_TYPE_GTPU_EH &&
+		flow_type == ICE_FLTR_PTYPE_NONF_IPV6_UDP)
+		flow_type = ICE_FLTR_PTYPE_NONF_IPV6_GTPU_EH_IPV6_OTHER;
 
 	filter->tunnel_type = tunnel_type;
 	filter->input.flow_type = flow_type;
@@ -2045,7 +2046,7 @@ ice_fdir_parse(struct ice_adapter *ad,
 	ret = ice_fdir_parse_pattern(ad, pattern, error, filter);
 	if (ret)
 		goto error;
-	input_set = filter->input_set;
+	input_set = filter->input_set | filter->outer_input_set;
 	if (!input_set || input_set & ~item->input_set_mask) {
 		rte_flow_error_set(error, EINVAL,
 				   RTE_FLOW_ERROR_TYPE_ITEM_SPEC,

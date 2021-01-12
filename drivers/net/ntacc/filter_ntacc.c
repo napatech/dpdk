@@ -404,12 +404,11 @@ void CreateHash(char *ntpl_buf, const struct rte_flow_action_rss *rss, struct pm
   switch (rss->func)
   {
   case RTE_ETH_HASH_FUNCTION_DEFAULT:
-    if (internals->symHashMode == SYM_HASH_ENA_PER_PORT)
-      func = RTE_ETH_HASH_FUNCTION_SIMPLE_XOR;
-    else
-      func = RTE_ETH_HASH_FUNCTION_DEFAULT;
+    internals->symHashMode = SYM_HASH_DIS_PER_PORT;
+    func = RTE_ETH_HASH_FUNCTION_DEFAULT;
     break;
   case RTE_ETH_HASH_FUNCTION_SIMPLE_XOR:
+		internals->symHashMode = SYM_HASH_ENA_PER_PORT;
     func = RTE_ETH_HASH_FUNCTION_SIMPLE_XOR;
     break;
   default:

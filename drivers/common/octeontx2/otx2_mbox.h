@@ -90,7 +90,7 @@ struct mbox_msghdr {
 #define OTX2_MBOX_RSP_SIG (0xbeef)
 	/* Signature, for validating corrupted msgs */
 	uint16_t __otx2_io sig;
-#define OTX2_MBOX_VERSION (0x0007)
+#define OTX2_MBOX_VERSION (0x000a)
 	/* Version of msg's structure for this ID */
 	uint16_t __otx2_io ver;
 	/* Offset of next msg within mailbox region */
@@ -199,6 +199,19 @@ M(CPT_INLINE_IPSEC_CFG, 0xA04, cpt_inline_ipsec_cfg,			\
 M(CPT_RX_INLINE_LF_CFG, 0xBFE, cpt_rx_inline_lf_cfg,			\
 			       cpt_rx_inline_lf_cfg_msg, msg_rsp)	\
 M(CPT_GET_CAPS,		0xBFD, cpt_caps_get, msg_req, cpt_caps_rsp_msg)	\
+/* REE mbox IDs (range 0xE00 - 0xFFF) */				\
+M(REE_CONFIG_LF,	0xE01, ree_config_lf, ree_lf_req_msg,		\
+				msg_rsp)				\
+M(REE_RD_WR_REGISTER,	0xE02, ree_rd_wr_register, ree_rd_wr_reg_msg,	\
+				ree_rd_wr_reg_msg)			\
+M(REE_RULE_DB_PROG,	0xE03, ree_rule_db_prog,			\
+				ree_rule_db_prog_req_msg,		\
+				msg_rsp)				\
+M(REE_RULE_DB_LEN_GET,	0xE04, ree_rule_db_len_get, ree_req_msg,	\
+				ree_rule_db_len_rsp_msg)		\
+M(REE_RULE_DB_GET,	0xE05, ree_rule_db_get,				\
+				ree_rule_db_get_req_msg,		\
+				ree_rule_db_get_rsp_msg)		\
 /* NPC mbox IDs (range 0x6000 - 0x7FFF) */				\
 M(NPC_MCAM_ALLOC_ENTRY,	0x6000, npc_mcam_alloc_entry,			\
 				npc_mcam_alloc_entry_req,		\
@@ -245,6 +258,8 @@ M(NPC_MCAM_READ_ENTRY,	  0x600f, npc_mcam_read_entry,			\
 M(NPC_SET_PKIND,          0x6010, npc_set_pkind,                        \
 				  npc_set_pkind,                        \
 				  msg_rsp)                              \
+M(NPC_MCAM_READ_BASE_RULE, 0x6011, npc_read_base_steer_rule, msg_req,   \
+				   npc_mcam_read_base_rule_rsp)         \
 /* NIX mbox IDs (range 0x8000 - 0xFFFF) */				\
 M(NIX_LF_ALLOC,		0x8000, nix_lf_alloc, nix_lf_alloc_req,		\
 				nix_lf_alloc_rsp)			\
@@ -439,17 +454,17 @@ struct msix_offset_rsp {
 	struct mbox_msghdr hdr;
 	uint16_t __otx2_io npa_msixoff;
 	uint16_t __otx2_io nix_msixoff;
-	uint8_t __otx2_io sso;
-	uint8_t __otx2_io ssow;
-	uint8_t __otx2_io timlfs;
-	uint8_t __otx2_io cptlfs;
+	uint16_t __otx2_io sso;
+	uint16_t __otx2_io ssow;
+	uint16_t __otx2_io timlfs;
+	uint16_t __otx2_io cptlfs;
 	uint16_t __otx2_io sso_msixoff[MAX_RVU_BLKLF_CNT];
 	uint16_t __otx2_io ssow_msixoff[MAX_RVU_BLKLF_CNT];
 	uint16_t __otx2_io timlf_msixoff[MAX_RVU_BLKLF_CNT];
 	uint16_t __otx2_io cptlf_msixoff[MAX_RVU_BLKLF_CNT];
-	uint8_t __otx2_io cpt1_lfs;
-	uint8_t __otx2_io ree0_lfs;
-	uint8_t __otx2_io ree1_lfs;
+	uint16_t __otx2_io cpt1_lfs;
+	uint16_t __otx2_io ree0_lfs;
+	uint16_t __otx2_io ree1_lfs;
 	uint16_t __otx2_io cpt1_lf_msixoff[MAX_RVU_BLKLF_CNT];
 	uint16_t __otx2_io ree0_lf_msixoff[MAX_RVU_BLKLF_CNT];
 	uint16_t __otx2_io ree1_lf_msixoff[MAX_RVU_BLKLF_CNT];
@@ -767,6 +782,7 @@ struct nix_lf_alloc_rsp {
 	uint8_t __otx2_io cgx_links;  /* No. of CGX links present in HW */
 	uint8_t __otx2_io lbk_links;  /* No. of LBK links present in HW */
 	uint8_t __otx2_io sdp_links;  /* No. of SDP links present in HW */
+	uint8_t __otx2_io tx_link;    /* Transmit channel link number */
 };
 
 struct nix_lf_free_req {
@@ -966,6 +982,8 @@ struct nix_rss_flowkey_cfg {
 #define FLOW_KEY_TYPE_INNR_SCTP     BIT(16)
 #define FLOW_KEY_TYPE_INNR_ETH_DMAC BIT(17)
 #define FLOW_KEY_TYPE_CH_LEN_90B	BIT(18)
+#define FLOW_KEY_TYPE_CUSTOM0		BIT(19)
+#define FLOW_KEY_TYPE_VLAN		BIT(20)
 #define FLOW_KEY_TYPE_L4_DST BIT(28)
 #define FLOW_KEY_TYPE_L4_SRC BIT(29)
 #define FLOW_KEY_TYPE_L3_DST BIT(30)
@@ -1224,6 +1242,8 @@ struct cpt_rd_wr_reg_msg {
 	uint64_t __otx2_io *ret_val;
 	uint64_t __otx2_io val;
 	uint8_t __otx2_io is_write;
+	/* BLKADDR_CPT0/BLKADDR_CPT1 or 0 for BLKADDR_CPT0 */
+	uint8_t __otx2_io blkaddr;
 };
 
 struct cpt_set_crypto_grp_req_msg {
@@ -1235,11 +1255,14 @@ struct cpt_lf_alloc_req_msg {
 	struct mbox_msghdr hdr;
 	uint16_t __otx2_io nix_pf_func;
 	uint16_t __otx2_io sso_pf_func;
+	uint16_t __otx2_io eng_grpmask;
+	/* BLKADDR_CPT0/BLKADDR_CPT1 or 0 for BLKADDR_CPT0 */
+	uint8_t __otx2_io blkaddr;
 };
 
 struct cpt_lf_alloc_rsp_msg {
 	struct mbox_msghdr hdr;
-	uint8_t __otx2_io crypto_eng_grp;
+	uint16_t __otx2_io eng_grpmsk;
 };
 
 #define CPT_INLINE_INBOUND	0
@@ -1544,6 +1567,11 @@ struct npc_mcam_read_entry_rsp {
 	uint8_t __otx2_io enable;
 };
 
+struct npc_mcam_read_base_rule_rsp {
+	struct mbox_msghdr hdr;
+	struct mcam_entry entry_data;
+};
+
 /* TIM mailbox error codes
  * Range 801 - 900.
  */
@@ -1648,6 +1676,96 @@ struct tim_enable_rsp {
 	struct mbox_msghdr hdr;
 	uint64_t __otx2_io timestarted;
 	uint32_t __otx2_io currentbucket;
+};
+
+/* REE mailbox error codes
+ * Range 1001 - 1100.
+ */
+enum ree_af_status {
+	REE_AF_ERR_RULE_UNKNOWN_VALUE		= -1001,
+	REE_AF_ERR_LF_NO_MORE_RESOURCES		= -1002,
+	REE_AF_ERR_LF_INVALID			= -1003,
+	REE_AF_ERR_ACCESS_DENIED		= -1004,
+	REE_AF_ERR_RULE_DB_PARTIAL		= -1005,
+	REE_AF_ERR_RULE_DB_EQ_BAD_VALUE		= -1006,
+	REE_AF_ERR_RULE_DB_BLOCK_ALLOC_FAILED	= -1007,
+	REE_AF_ERR_BLOCK_NOT_IMPLEMENTED	= -1008,
+	REE_AF_ERR_RULE_DB_INC_OFFSET_TOO_BIG	= -1009,
+	REE_AF_ERR_RULE_DB_OFFSET_TOO_BIG	= -1010,
+	REE_AF_ERR_Q_IS_GRACEFUL_DIS		= -1011,
+	REE_AF_ERR_Q_NOT_GRACEFUL_DIS		= -1012,
+	REE_AF_ERR_RULE_DB_ALLOC_FAILED		= -1013,
+	REE_AF_ERR_RULE_DB_TOO_BIG		= -1014,
+	REE_AF_ERR_RULE_DB_GEQ_BAD_VALUE	= -1015,
+	REE_AF_ERR_RULE_DB_LEQ_BAD_VALUE	= -1016,
+	REE_AF_ERR_RULE_DB_WRONG_LENGTH		= -1017,
+	REE_AF_ERR_RULE_DB_WRONG_OFFSET		= -1018,
+	REE_AF_ERR_RULE_DB_BLOCK_TOO_BIG	= -1019,
+	REE_AF_ERR_RULE_DB_SHOULD_FILL_REQUEST	= -1020,
+	REE_AF_ERR_RULE_DBI_ALLOC_FAILED	= -1021,
+	REE_AF_ERR_LF_WRONG_PRIORITY		= -1022,
+	REE_AF_ERR_LF_SIZE_TOO_BIG		= -1023,
+};
+
+/* REE mbox message formats */
+
+struct ree_req_msg {
+	struct mbox_msghdr hdr;
+	uint32_t __otx2_io blkaddr;
+};
+
+struct ree_lf_req_msg {
+	struct mbox_msghdr hdr;
+	uint32_t __otx2_io blkaddr;
+	uint32_t __otx2_io size;
+	uint8_t __otx2_io lf;
+	uint8_t __otx2_io pri;
+};
+
+struct ree_rule_db_prog_req_msg {
+	struct mbox_msghdr hdr;
+#define REE_RULE_DB_REQ_BLOCK_SIZE (MBOX_SIZE >> 1)
+	uint8_t __otx2_io rule_db[REE_RULE_DB_REQ_BLOCK_SIZE];
+	uint32_t __otx2_io blkaddr; /* REE0 or REE1 */
+	uint32_t __otx2_io total_len; /* total len of rule db */
+	uint32_t __otx2_io offset; /* offset of current rule db block */
+	uint16_t __otx2_io len; /* length of rule db block */
+	uint8_t __otx2_io is_last; /* is this the last block */
+	uint8_t __otx2_io is_incremental; /* is incremental flow */
+	uint8_t __otx2_io is_dbi; /* is rule db incremental */
+};
+
+struct ree_rule_db_get_req_msg {
+	struct mbox_msghdr hdr;
+	uint32_t __otx2_io blkaddr;
+	uint32_t __otx2_io offset; /* retrieve db from this offset */
+	uint8_t __otx2_io is_dbi; /* is request for rule db incremental */
+};
+
+struct ree_rd_wr_reg_msg {
+	struct mbox_msghdr hdr;
+	uint64_t __otx2_io reg_offset;
+	uint64_t __otx2_io *ret_val;
+	uint64_t __otx2_io val;
+	uint32_t __otx2_io blkaddr;
+	uint8_t __otx2_io is_write;
+};
+
+struct ree_rule_db_len_rsp_msg {
+	struct mbox_msghdr hdr;
+	uint32_t __otx2_io blkaddr;
+	uint32_t __otx2_io len;
+	uint32_t __otx2_io inc_len;
+};
+
+struct ree_rule_db_get_rsp_msg {
+	struct mbox_msghdr hdr;
+#define REE_RULE_DB_RSP_BLOCK_SIZE (MBOX_DOWN_TX_SIZE - SZ_1K)
+	uint8_t __otx2_io rule_db[REE_RULE_DB_RSP_BLOCK_SIZE];
+	uint32_t __otx2_io total_len; /* total len of rule db */
+	uint32_t __otx2_io offset; /* offset of current rule db block */
+	uint16_t __otx2_io len; /* length of rule db block */
+	uint8_t __otx2_io is_last; /* is this the last block */
 };
 
 __rte_internal

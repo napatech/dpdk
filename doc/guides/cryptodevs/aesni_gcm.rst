@@ -5,7 +5,7 @@ AES-NI GCM Crypto Poll Mode Driver
 ==================================
 
 
-The AES-NI GCM PMD (**librte_pmd_aesni_gcm**) provides poll mode crypto driver
+The AES-NI GCM PMD (**librte_crypto_aesni_gcm**) provides poll mode crypto driver
 support for utilizing Intel multi buffer library (see AES-NI Multi-buffer PMD documentation
 to learn more about it, including installation).
 
@@ -31,8 +31,6 @@ Limitations
 -----------
 
 * In out-of-place operations, chained destination mbufs are not supported.
-* Chained mbufs are only supported by RTE_CRYPTO_AEAD_AES_GCM algorithm,
-  not RTE_CRYPTO_AUTH_AES_GMAC.
 * Cipher only is not supported.
 
 
@@ -42,8 +40,8 @@ Installation
 To build DPDK with the AESNI_GCM_PMD the user is required to download the multi-buffer
 library from `here <https://github.com/01org/intel-ipsec-mb>`_
 and compile it on their user system before building DPDK.
-The latest version of the library supported by this PMD is v0.54, which
-can be downloaded in `<https://github.com/01org/intel-ipsec-mb/archive/v0.54.zip>`_.
+The latest version of the library supported by this PMD is v0.55, which
+can be downloaded in `<https://github.com/01org/intel-ipsec-mb/archive/v0.55.zip>`_.
 
 .. code-block:: console
 
@@ -85,7 +83,7 @@ and the external crypto libraries supported by them:
    17.02 - 17.05  ISA-L Crypto v2.18
    17.08 - 18.02  Multi-buffer library 0.46 - 0.48
    18.05 - 19.02  Multi-buffer library 0.49 - 0.52
-   19.05+         Multi-buffer library 0.52 - 0.54
+   19.05+         Multi-buffer library 0.52 - 0.55
    =============  ================================
 
 
@@ -95,8 +93,6 @@ Initialization
 In order to enable this virtual crypto PMD, user must:
 
 * Build the multi buffer library (explained in Installation section).
-
-* Set CONFIG_RTE_LIBRTE_PMD_AESNI_GCM=y in config/common_base.
 
 To use the PMD in an application, user must:
 
@@ -117,5 +113,5 @@ Example:
 
 .. code-block:: console
 
-    ./l2fwd-crypto -l 1 -n 4 --vdev="crypto_aesni_gcm,socket_id=0,max_nb_sessions=128" \
+    ./dpdk-l2fwd-crypto -l 1 -n 4 --vdev="crypto_aesni_gcm,socket_id=0,max_nb_sessions=128" \
     -- -p 1 --cdev SW --chain AEAD --aead_algo "aes-gcm"

@@ -162,7 +162,7 @@ cmd_quit_parsed(__rte_unused void *parsed_result,
 	uint32_t lcore_id;
 
 	/* Stop transmission first. */
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		conf = &fwd_lcore_conf[lcore_id];
 
 		if (!conf->nb_stream)
@@ -668,7 +668,7 @@ assign_stream_to_lcores(void)
 	uint8_t lcore_num, nb_extra;
 
 	lcore_num = rte_lcore_count();
-	/* Exclude master core */
+	/* Exclude main core */
 	lcore_num--;
 
 	nb_streams = (fwd_mode == IOFWD) ? num_queues * 2 : num_queues;
@@ -678,7 +678,7 @@ assign_stream_to_lcores(void)
 	sm_id = 0;
 	i = 0;
 
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		conf = &fwd_lcore_conf[lcore_id];
 
 		if (i < nb_extra) {
@@ -697,7 +697,7 @@ assign_stream_to_lcores(void)
 	}
 
 	/* Print packet forwading config. */
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		conf = &fwd_lcore_conf[lcore_id];
 
 		if (!conf->nb_stream)
@@ -729,6 +729,7 @@ start_pkt_fwd(void)
 	struct rte_eth_link eth_link;
 	uint32_t lcore_id;
 	int ret, i;
+	char link_status_text[RTE_ETH_LINK_MAX_STR_LEN];
 
 	ret = ntb_fwd_config_setup();
 	if (ret < 0) {
@@ -747,11 +748,11 @@ start_pkt_fwd(void)
 				return;
 			}
 			if (eth_link.link_status) {
-				printf("Eth%u Link Up. Speed %u Mbps - %s\n",
-					eth_port_id, eth_link.link_speed,
-					(eth_link.link_duplex ==
-					 ETH_LINK_FULL_DUPLEX) ?
-					("full-duplex") : ("half-duplex"));
+				rte_eth_link_to_str(link_status_text,
+					sizeof(link_status_text),
+					&eth_link);
+				printf("Eth%u %s\n", eth_port_id,
+				       link_status_text);
 				break;
 			}
 		}
@@ -765,7 +766,7 @@ start_pkt_fwd(void)
 	assign_stream_to_lcores();
 	in_test = 1;
 
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		conf = &fwd_lcore_conf[lcore_id];
 
 		if (!conf->nb_stream)
@@ -826,7 +827,7 @@ cmd_stop_parsed(__rte_unused void *parsed_result,
 	struct ntb_fwd_lcore_conf *conf;
 	uint32_t lcore_id;
 
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		conf = &fwd_lcore_conf[lcore_id];
 
 		if (!conf->nb_stream)
@@ -1074,7 +1075,7 @@ cmdline_parse_ctx_t main_ctx[] = {
 	NULL,
 };
 
-/* prompt function, called from main on MASTER lcore */
+/* prompt function, called from main on MAIN lcore */
 static void
 prompt(void)
 {
@@ -1389,7 +1390,7 @@ main(int argc, char **argv)
 	rte_rawdev_set_attr(dev_id, NTB_QUEUE_NUM_NAME, num_queues);
 	printf("Set queue number as %u.\n", num_queues);
 	ntb_rawdev_info.dev_private = (rte_rawdev_obj_t)(&ntb_info);
-	rte_rawdev_info_get(dev_id, &ntb_rawdev_info);
+	rte_rawdev_info_get(dev_id, &ntb_rawdev_info, sizeof(ntb_info));
 
 	nb_mbuf = nb_desc * num_queues * 2 * 2 + rte_lcore_count() *
 		  MEMPOOL_CACHE_SIZE;
@@ -1401,7 +1402,7 @@ main(int argc, char **argv)
 	ntb_conf.num_queues = num_queues;
 	ntb_conf.queue_size = nb_desc;
 	ntb_rawdev_conf.dev_private = (rte_rawdev_obj_t)(&ntb_conf);
-	ret = rte_rawdev_configure(dev_id, &ntb_rawdev_conf);
+	ret = rte_rawdev_configure(dev_id, &ntb_rawdev_conf, sizeof(ntb_conf));
 	if (ret)
 		rte_exit(EXIT_FAILURE, "Can't config ntb dev: err=%d, "
 			"port=%u\n", ret, dev_id);
@@ -1411,7 +1412,8 @@ main(int argc, char **argv)
 	ntb_q_conf.rx_mp = mbuf_pool;
 	for (i = 0; i < num_queues; i++) {
 		/* Setup rawdev queue */
-		ret = rte_rawdev_queue_setup(dev_id, i, &ntb_q_conf);
+		ret = rte_rawdev_queue_setup(dev_id, i, &ntb_q_conf,
+				sizeof(ntb_q_conf));
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE,
 				"Failed to setup ntb queue %u.\n", i);

@@ -1,5 +1,5 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
-    Copyright(c) 2019 Intel Corporation.
+    Copyright(c) 2019-2020 Intel Corporation.
 
 AF_XDP Poll Mode Driver
 ==========================
@@ -32,6 +32,9 @@ The following options can be provided to set up an af_xdp port in DPDK.
 *   ``iface`` - name of the Kernel interface to attach to (required);
 *   ``start_queue`` - starting netdev queue id (optional, default 0);
 *   ``queue_count`` - total netdev queue number (optional, default 1);
+*   ``shared_umem`` - PMD will attempt to share UMEM with others (optional,
+    default 0);
+*   ``xdp_prog`` - path to custom xdp program (optional, default none);
 
 Prerequisites
 -------------
@@ -45,6 +48,9 @@ This is a Linux-specific PMD, thus the following prerequisites apply:
 *  A Kernel bound interface to attach to;
 *  For need_wakeup feature, it requires kernel version later than v5.3-rc1;
 *  For PMD zero copy, it requires kernel version later than v5.4-rc1;
+*  For shared_umem, it requires kernel version v5.10 or later and libbpf version
+   v0.2.0 or later.
+*  For 32-bit OS, a kernel with version 5.4 or later is required.
 
 Set up an af_xdp interface
 -----------------------------
@@ -77,3 +83,28 @@ Limitations
 
   Note: The AF_XDP PMD will fail to initialise if an MTU which violates the driver's
   conditions as above is set prior to launching the application.
+
+- **Shared UMEM**
+
+  The sharing of UMEM is only supported for AF_XDP sockets with unique contexts.
+  The context refers to the netdev,qid tuple.
+
+  The following combination will fail:
+
+  .. code-block:: console
+
+    --vdev net_af_xdp0,iface=ens786f1,shared_umem=1 \
+    --vdev net_af_xdp1,iface=ens786f1,shared_umem=1 \
+
+  Either of the following however is permitted since either the netdev or qid differs
+  between the two vdevs:
+
+  .. code-block:: console
+
+    --vdev net_af_xdp0,iface=ens786f1,shared_umem=1 \
+    --vdev net_af_xdp1,iface=ens786f1,start_queue=1,shared_umem=1 \
+
+  .. code-block:: console
+
+    --vdev net_af_xdp0,iface=ens786f1,shared_umem=1 \
+    --vdev net_af_xdp1,iface=ens786f2,shared_umem=1 \

@@ -99,7 +99,7 @@ dpaa_event_enqueue_burst(void *port, const struct rte_event ev[],
 		case RTE_EVENT_OP_RELEASE:
 			qman_dca_index(ev[i].impl_opaque, 0);
 			mbuf = DPAA_PER_LCORE_DQRR_MBUF(i);
-			mbuf->seqn = DPAA_INVALID_MBUF_SEQN;
+			*dpaa_seqn(mbuf) = DPAA_INVALID_MBUF_SEQN;
 			DPAA_PER_LCORE_DQRR_HELD &= ~(1 << i);
 			DPAA_PER_LCORE_DQRR_SIZE--;
 			break;
@@ -206,7 +206,7 @@ dpaa_event_dequeue_burst(void *port, struct rte_event ev[],
 		if (DPAA_PER_LCORE_DQRR_HELD & (1 << i)) {
 			qman_dca_index(i, 0);
 			mbuf = DPAA_PER_LCORE_DQRR_MBUF(i);
-			mbuf->seqn = DPAA_INVALID_MBUF_SEQN;
+			*dpaa_seqn(mbuf) = DPAA_INVALID_MBUF_SEQN;
 			DPAA_PER_LCORE_DQRR_HELD &= ~(1 << i);
 			DPAA_PER_LCORE_DQRR_SIZE--;
 		}
@@ -276,7 +276,7 @@ dpaa_event_dequeue_burst_intr(void *port, struct rte_event ev[],
 		if (DPAA_PER_LCORE_DQRR_HELD & (1 << i)) {
 			qman_dca_index(i, 0);
 			mbuf = DPAA_PER_LCORE_DQRR_MBUF(i);
-			mbuf->seqn = DPAA_INVALID_MBUF_SEQN;
+			*dpaa_seqn(mbuf) = DPAA_INVALID_MBUF_SEQN;
 			DPAA_PER_LCORE_DQRR_HELD &= ~(1 << i);
 			DPAA_PER_LCORE_DQRR_SIZE--;
 		}
@@ -355,7 +355,8 @@ dpaa_event_dev_info_get(struct rte_eventdev *dev,
 		RTE_EVENT_DEV_CAP_DISTRIBUTED_SCHED |
 		RTE_EVENT_DEV_CAP_BURST_MODE |
 		RTE_EVENT_DEV_CAP_MULTIPLE_QUEUE_PORT |
-		RTE_EVENT_DEV_CAP_NONSEQ_MODE;
+		RTE_EVENT_DEV_CAP_NONSEQ_MODE |
+		RTE_EVENT_DEV_CAP_CARRY_FLOW_ID;
 }
 
 static int

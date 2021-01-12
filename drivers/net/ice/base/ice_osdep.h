@@ -165,6 +165,7 @@ do {									\
 #endif
 
 #define ICE_PCI_REG_WRITE(reg, value) writel(value, reg)
+#define ICE_PCI_REG_WC_WRITE(reg, value) rte_write32_wc(value, reg)
 
 #define ICE_READ_REG(hw, reg)         rd32(hw, reg)
 #define ICE_WRITE_REG(hw, reg, value) wr32(hw, reg, value)
@@ -258,7 +259,7 @@ ice_alloc_dma_mem(__rte_unused struct ice_hw *hw,
 
 	mem->size = size;
 	mem->va = mz->addr;
-	mem->pa = mz->phys_addr;
+	mem->pa = mz->iova;
 	mem->zone = (const void *)mz;
 	PMD_DRV_LOG(DEBUG, "memzone %s allocated with physical address: "
 		    "%"PRIu64, mz->name, mem->pa);

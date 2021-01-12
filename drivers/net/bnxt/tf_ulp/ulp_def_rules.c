@@ -304,8 +304,8 @@ ulp_default_flow_create(struct rte_eth_dev *eth_dev,
 	struct ulp_rte_act_prop		act_prop;
 	struct ulp_rte_act_bitmap	act = { 0 };
 	struct bnxt_ulp_context		*ulp_ctx;
-	uint32_t type, ulp_flags = 0;
-	int rc;
+	uint32_t type, ulp_flags = 0, fid;
+	int rc = 0;
 
 	memset(&mapper_params, 0, sizeof(mapper_params));
 	memset(hdr_field, 0, sizeof(hdr_field));
@@ -316,6 +316,8 @@ ulp_default_flow_create(struct rte_eth_dev *eth_dev,
 	mapper_params.act = &act;
 	mapper_params.act_prop = &act_prop;
 	mapper_params.comp_fld = comp_fld;
+	mapper_params.class_tid = ulp_class_tid;
+	mapper_params.flow_type = BNXT_ULP_FDB_TYPE_DEFAULT;
 
 	ulp_ctx = bnxt_ulp_eth_dev_ptr2_cntxt_get(eth_dev);
 	if (!ulp_ctx) {
@@ -350,15 +352,43 @@ ulp_default_flow_create(struct rte_eth_dev *eth_dev,
 		type = param_list->type;
 	}
 
-	mapper_params.class_tid = ulp_class_tid;
-
-	rc = ulp_mapper_flow_create(ulp_ctx, &mapper_params, flow_id);
-	if (rc) {
-		BNXT_TF_DBG(ERR, "Failed to create default flow.\n");
-		return rc;
+	/* Get the function id */
+	if (ulp_port_db_port_func_id_get(ulp_ctx,
+					 eth_dev->data->port_id,
+					 &mapper_params.func_id)) {
+		BNXT_TF_DBG(ERR, "conversion of port to func id failed\n");
+		goto err1;
 	}
 
+	/* Protect flow creation */
+	if (bnxt_ulp_cntxt_acquire_fdb_lock(ulp_ctx)) {
+		BNXT_TF_DBG(ERR, "Flow db lock acquire failed\n");
+		goto err1;
+	}
+
+	rc = ulp_flow_db_fid_alloc(ulp_ctx, BNXT_ULP_FDB_TYPE_DEFAULT,
+				   mapper_params.func_id, &fid);
+	if (rc) {
+		BNXT_TF_DBG(ERR, "Unable to allocate flow table entry\n");
+		goto err2;
+	}
+
+	mapper_params.flow_id = fid;
+	rc = ulp_mapper_flow_create(ulp_ctx, &mapper_params);
+	if (rc)
+		goto err3;
+
+	bnxt_ulp_cntxt_release_fdb_lock(ulp_ctx);
+	*flow_id = fid;
 	return 0;
+
+err3:
+	ulp_flow_db_fid_free(ulp_ctx, BNXT_ULP_FDB_TYPE_DEFAULT, fid);
+err2:
+	bnxt_ulp_cntxt_release_fdb_lock(ulp_ctx);
+err1:
+	BNXT_TF_DBG(ERR, "Failed to create default flow.\n");
+	return rc;
 }
 
 /*
@@ -377,7 +407,7 @@ int32_t
 ulp_default_flow_destroy(struct rte_eth_dev *eth_dev, uint32_t flow_id)
 {
 	struct bnxt_ulp_context *ulp_ctx;
-	int rc;
+	int rc = 0;
 
 	ulp_ctx = bnxt_ulp_eth_dev_ptr2_cntxt_get(eth_dev);
 	if (!ulp_ctx) {
@@ -385,10 +415,20 @@ ulp_default_flow_destroy(struct rte_eth_dev *eth_dev, uint32_t flow_id)
 		return -EINVAL;
 	}
 
-	rc = ulp_mapper_flow_destroy(ulp_ctx, flow_id,
-				     BNXT_ULP_DEFAULT_FLOW_TABLE);
+	if (!flow_id) {
+		BNXT_TF_DBG(DEBUG, "invalid flow id zero\n");
+		return rc;
+	}
+
+	if (bnxt_ulp_cntxt_acquire_fdb_lock(ulp_ctx)) {
+		BNXT_TF_DBG(ERR, "Flow db lock acquire failed\n");
+		return -EINVAL;
+	}
+	rc = ulp_mapper_flow_destroy(ulp_ctx, BNXT_ULP_FDB_TYPE_DEFAULT,
+				     flow_id);
 	if (rc)
 		BNXT_TF_DBG(ERR, "Failed to destroy flow.\n");
+	bnxt_ulp_cntxt_release_fdb_lock(ulp_ctx);
 
 	return rc;
 }
@@ -397,7 +437,7 @@ void
 bnxt_ulp_destroy_df_rules(struct bnxt *bp, bool global)
 {
 	struct bnxt_ulp_df_rule_info *info;
-	uint8_t port_id;
+	uint16_t port_id;
 
 	if (!BNXT_TRUFLOW_EN(bp) ||
 	    BNXT_ETH_DEV_IS_REPRESENTOR(bp->eth_dev))
@@ -417,7 +457,7 @@ bnxt_ulp_destroy_df_rules(struct bnxt *bp, bool global)
 					 info->port_to_app_flow_id);
 		ulp_default_flow_destroy(bp->eth_dev,
 					 info->app_to_port_flow_id);
-		info->valid = false;
+		memset(info, 0, sizeof(struct bnxt_ulp_df_rule_info));
 		return;
 	}
 
@@ -431,7 +471,7 @@ bnxt_ulp_destroy_df_rules(struct bnxt *bp, bool global)
 					 info->port_to_app_flow_id);
 		ulp_default_flow_destroy(bp->eth_dev,
 					 info->app_to_port_flow_id);
-		info->valid = false;
+		memset(info, 0, sizeof(struct bnxt_ulp_df_rule_info));
 	}
 }
 
@@ -461,31 +501,28 @@ int32_t
 bnxt_ulp_create_df_rules(struct bnxt *bp)
 {
 	struct bnxt_ulp_df_rule_info *info;
-	uint8_t port_id;
+	uint16_t port_id;
 	int rc;
 
 	if (!BNXT_TRUFLOW_EN(bp) ||
-	    BNXT_ETH_DEV_IS_REPRESENTOR(bp->eth_dev))
+	    BNXT_ETH_DEV_IS_REPRESENTOR(bp->eth_dev) || !bp->ulp_ctx)
 		return 0;
 
 	port_id = bp->eth_dev->data->port_id;
 	info = &bp->ulp_ctx->cfg_data->df_rule_info[port_id];
-	BNXT_TF_DBG(INFO, "*** creating port to app default rule ***\n");
 	rc = bnxt_create_port_app_df_rule(bp, BNXT_ULP_DF_TPL_PORT_TO_VS,
 					  &info->port_to_app_flow_id);
 	if (rc) {
-		PMD_DRV_LOG(ERR,
+		BNXT_TF_DBG(ERR,
 			    "Failed to create port to app default rule\n");
 		return rc;
 	}
-	BNXT_TF_DBG(INFO, "*** created port to app default rule ***\n");
 
 	bp->tx_cfa_action = 0;
-	BNXT_TF_DBG(INFO, "*** creating app to port default rule ***\n");
 	rc = bnxt_create_port_app_df_rule(bp, BNXT_ULP_DF_TPL_VS_TO_PORT,
 					  &info->app_to_port_flow_id);
 	if (rc) {
-		PMD_DRV_LOG(ERR,
+		BNXT_TF_DBG(ERR,
 			    "Failed to create app to port default rule\n");
 		goto port_to_app_free;
 	}
@@ -497,7 +534,6 @@ bnxt_ulp_create_df_rules(struct bnxt *bp)
 		goto app_to_port_free;
 
 	info->valid = true;
-	BNXT_TF_DBG(INFO, "*** created app to port default rule ***\n");
 	return 0;
 
 app_to_port_free:
@@ -507,4 +543,116 @@ port_to_app_free:
 	info->valid = false;
 
 	return rc;
+}
+
+static int32_t
+bnxt_create_port_vfr_default_rule(struct bnxt *bp,
+				  uint8_t flow_type,
+				  uint16_t vfr_port_id,
+				  uint32_t *flow_id)
+{
+	struct ulp_tlv_param param_list[] = {
+		{
+			.type = BNXT_ULP_DF_PARAM_TYPE_DEV_PORT_ID,
+			.length = 2,
+			.value = {(vfr_port_id >> 8) & 0xff, vfr_port_id & 0xff}
+		},
+		{
+			.type = BNXT_ULP_DF_PARAM_TYPE_LAST,
+			.length = 0,
+			.value = {0}
+		}
+	};
+	return ulp_default_flow_create(bp->eth_dev, param_list, flow_type,
+				       flow_id);
+}
+
+int32_t
+bnxt_ulp_create_vfr_default_rules(struct rte_eth_dev *vfr_ethdev)
+{
+	struct bnxt_ulp_vfr_rule_info *info;
+	struct bnxt_representor *vfr = vfr_ethdev->data->dev_private;
+	struct rte_eth_dev *parent_dev = vfr->parent_dev;
+	struct bnxt *bp = parent_dev->data->dev_private;
+	uint16_t vfr_port_id = vfr_ethdev->data->port_id;
+	uint16_t port_id;
+	int rc;
+
+	if (!bp || !BNXT_TRUFLOW_EN(bp))
+		return 0;
+
+	port_id = vfr_ethdev->data->port_id;
+	info = bnxt_ulp_cntxt_ptr2_ulp_vfr_info_get(bp->ulp_ctx, port_id);
+
+	if (!info) {
+		BNXT_TF_DBG(ERR, "Failed to get vfr ulp context\n");
+		return -EINVAL;
+	}
+
+	if (info->valid) {
+		BNXT_TF_DBG(ERR, "VFR already allocated\n");
+		return -EINVAL;
+	}
+
+	memset(info, 0, sizeof(struct bnxt_ulp_vfr_rule_info));
+	rc = bnxt_create_port_vfr_default_rule(bp, BNXT_ULP_DF_TPL_VFREP_TO_VF,
+					       vfr_port_id,
+					       &info->rep2vf_flow_id);
+	if (rc) {
+		BNXT_TF_DBG(ERR, "Failed to create VFREP to VF default rule\n");
+		goto error;
+	}
+	rc = bnxt_create_port_vfr_default_rule(bp, BNXT_ULP_DF_TPL_VF_TO_VFREP,
+					       vfr_port_id,
+					       &info->vf2rep_flow_id);
+	if (rc) {
+		BNXT_TF_DBG(ERR, "Failed to create VF to VFREP default rule\n");
+		goto error;
+	}
+	rc = ulp_default_flow_db_cfa_action_get(bp->ulp_ctx,
+						info->rep2vf_flow_id,
+						&vfr->vfr_tx_cfa_action);
+	if (rc) {
+		BNXT_TF_DBG(ERR, "Failed to get the tx cfa action\n");
+		goto error;
+	}
+
+	/* Update the other details */
+	info->valid = true;
+	info->parent_port_id =  bp->eth_dev->data->port_id;
+	return 0;
+
+error:
+	if (info->rep2vf_flow_id)
+		ulp_default_flow_destroy(bp->eth_dev, info->rep2vf_flow_id);
+	if (info->vf2rep_flow_id)
+		ulp_default_flow_destroy(bp->eth_dev, info->vf2rep_flow_id);
+	return rc;
+}
+
+int32_t
+bnxt_ulp_delete_vfr_default_rules(struct bnxt_representor *vfr)
+{
+	struct bnxt_ulp_vfr_rule_info *info;
+	struct rte_eth_dev *parent_dev = vfr->parent_dev;
+	struct bnxt *bp = parent_dev->data->dev_private;
+
+	if (!bp || !BNXT_TRUFLOW_EN(bp))
+		return 0;
+	info = bnxt_ulp_cntxt_ptr2_ulp_vfr_info_get(bp->ulp_ctx,
+						    vfr->dpdk_port_id);
+	if (!info) {
+		BNXT_TF_DBG(ERR, "Failed to get vfr ulp context\n");
+		return -EINVAL;
+	}
+
+	if (!info->valid) {
+		BNXT_TF_DBG(ERR, "VFR already freed\n");
+		return -EINVAL;
+	}
+	ulp_default_flow_destroy(bp->eth_dev, info->rep2vf_flow_id);
+	ulp_default_flow_destroy(bp->eth_dev, info->vf2rep_flow_id);
+	vfr->vfr_tx_cfa_action = 0;
+	memset(info, 0, sizeof(struct bnxt_ulp_vfr_rule_info));
+	return 0;
 }

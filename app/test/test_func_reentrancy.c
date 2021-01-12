@@ -27,15 +27,15 @@
 #include <rte_spinlock.h>
 #include <rte_malloc.h>
 
-#ifdef RTE_LIBRTE_HASH
+#ifdef RTE_LIB_HASH
 #include <rte_hash.h>
 #include <rte_fbk_hash.h>
 #include <rte_jhash.h>
-#endif /* RTE_LIBRTE_HASH */
+#endif /* RTE_LIB_HASH */
 
-#ifdef RTE_LIBRTE_LPM
+#ifdef RTE_LIB_LPM
 #include <rte_lpm.h>
-#endif /* RTE_LIBRTE_LPM */
+#endif /* RTE_LIB_LPM */
 
 #include <rte_string_fns.h>
 
@@ -57,8 +57,8 @@ typedef void (*case_clean_t)(unsigned lcore_id);
 static rte_atomic32_t obj_count = RTE_ATOMIC32_INIT(0);
 static rte_atomic32_t synchro = RTE_ATOMIC32_INIT(0);
 
-#define WAIT_SYNCHRO_FOR_SLAVES()   do{ \
-	if (lcore_self != rte_get_master_lcore())                  \
+#define WAIT_SYNCHRO_FOR_WORKERS()   do { \
+	if (lcore_self != rte_get_main_lcore())                  \
 		while (rte_atomic32_read(&synchro) == 0);        \
 } while(0)
 
@@ -70,7 +70,7 @@ test_eal_init_once(__rte_unused void *arg)
 {
 	unsigned lcore_self =  rte_lcore_id();
 
-	WAIT_SYNCHRO_FOR_SLAVES();
+	WAIT_SYNCHRO_FOR_WORKERS();
 
 	rte_atomic32_set(&obj_count, 1); /* silent the check in the caller */
 	if (rte_eal_init(0, NULL) != -1)
@@ -106,7 +106,7 @@ ring_create_lookup(__rte_unused void *arg)
 	char ring_name[MAX_STRING_SIZE];
 	int i;
 
-	WAIT_SYNCHRO_FOR_SLAVES();
+	WAIT_SYNCHRO_FOR_WORKERS();
 
 	/* create the same ring simultaneously on all threads */
 	for (i = 0; i < MAX_ITER_ONCE; i++) {
@@ -166,7 +166,7 @@ mempool_create_lookup(__rte_unused void *arg)
 	char mempool_name[MAX_STRING_SIZE];
 	int i;
 
-	WAIT_SYNCHRO_FOR_SLAVES();
+	WAIT_SYNCHRO_FOR_WORKERS();
 
 	/* create the same mempool simultaneously on all threads */
 	for (i = 0; i < MAX_ITER_ONCE; i++) {
@@ -200,7 +200,7 @@ mempool_create_lookup(__rte_unused void *arg)
 	return 0;
 }
 
-#ifdef RTE_LIBRTE_HASH
+#ifdef RTE_LIB_HASH
 static void
 hash_clean(unsigned lcore_id)
 {
@@ -232,7 +232,7 @@ hash_create_free(__rte_unused void *arg)
 		.socket_id = 0,
 	};
 
-	WAIT_SYNCHRO_FOR_SLAVES();
+	WAIT_SYNCHRO_FOR_WORKERS();
 
 	/* create the same hash simultaneously on all threads */
 	hash_params.name = "fr_test_once";
@@ -296,7 +296,7 @@ fbk_create_free(__rte_unused void *arg)
 		.init_val = RTE_FBK_HASH_INIT_VAL_DEFAULT,
 	};
 
-	WAIT_SYNCHRO_FOR_SLAVES();
+	WAIT_SYNCHRO_FOR_WORKERS();
 
 	/* create the same fbk hash table simultaneously on all threads */
 	fbk_params.name = "fr_test_once";
@@ -328,9 +328,9 @@ fbk_create_free(__rte_unused void *arg)
 
 	return 0;
 }
-#endif /* RTE_LIBRTE_HASH */
+#endif /* RTE_LIB_HASH */
 
-#ifdef RTE_LIBRTE_LPM
+#ifdef RTE_LIB_LPM
 static void
 lpm_clean(unsigned int lcore_id)
 {
@@ -359,7 +359,7 @@ lpm_create_free(__rte_unused void *arg)
 	char lpm_name[MAX_STRING_SIZE];
 	int i;
 
-	WAIT_SYNCHRO_FOR_SLAVES();
+	WAIT_SYNCHRO_FOR_WORKERS();
 
 	/* create the same lpm simultaneously on all threads */
 	for (i = 0; i < MAX_ITER_ONCE; i++) {
@@ -388,7 +388,7 @@ lpm_create_free(__rte_unused void *arg)
 
 	return 0;
 }
-#endif /* RTE_LIBRTE_LPM */
+#endif /* RTE_LIB_LPM */
 
 struct test_case{
 	case_func_t    func;
@@ -403,13 +403,13 @@ struct test_case test_cases[] = {
 	{ ring_create_lookup,     NULL,  ring_clean,   "ring create/lookup" },
 	{ mempool_create_lookup,  NULL,  mempool_clean,
 			"mempool create/lookup" },
-#ifdef RTE_LIBRTE_HASH
+#ifdef RTE_LIB_HASH
 	{ hash_create_free,       NULL,  hash_clean,   "hash create/free" },
 	{ fbk_create_free,        NULL,  fbk_clean,    "fbk create/free" },
-#endif /* RTE_LIBRTE_HASH */
-#ifdef RTE_LIBRTE_LPM
+#endif /* RTE_LIB_HASH */
+#ifdef RTE_LIB_LPM
 	{ lpm_create_free,        NULL,  lpm_clean,    "lpm create/free" },
-#endif /* RTE_LIBRTE_LPM */
+#endif /* RTE_LIB_LPM */
 };
 
 /**
@@ -430,7 +430,7 @@ launch_test(struct test_case *pt_case)
 	rte_atomic32_set(&obj_count, 0);
 	rte_atomic32_set(&synchro, 0);
 
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		if (cores == 1)
 			break;
 		cores--;
@@ -443,7 +443,7 @@ launch_test(struct test_case *pt_case)
 		ret = -1;
 
 	cores = cores_save;
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+	RTE_LCORE_FOREACH_WORKER(lcore_id) {
 		if (cores == 1)
 			break;
 		cores--;

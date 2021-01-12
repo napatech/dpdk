@@ -22,13 +22,6 @@
 #define DPAA_MBUF_HW_ANNOTATION		64
 #define DPAA_FD_PTA_SIZE		64
 
-/* mbuf->seqn will be used to store event entry index for
- * driver specific usage. For parallel mode queues, invalid
- * index will be set and for atomic mode queues, valid value
- * ranging from 1 to 16.
- */
-#define DPAA_INVALID_MBUF_SEQN  0
-
 /* we will re-use the HEADROOM for annotation in RX */
 #define DPAA_HW_BUF_RESERVE	0
 #define DPAA_PACKET_LAYOUT_ALIGN	64
@@ -59,10 +52,10 @@
 #endif
 
 /* PCD frame queues */
-#define DPAA_PCD_FQID_START		0x400
-#define DPAA_PCD_FQID_MULTIPLIER	0x100
 #define DPAA_DEFAULT_NUM_PCD_QUEUES	1
-#define DPAA_MAX_NUM_PCD_QUEUES		4
+#define DPAA_VSP_PROFILE_MAX_NUM	8
+#define DPAA_MAX_NUM_PCD_QUEUES	DPAA_VSP_PROFILE_MAX_NUM
+/*Same as VSP profile number*/
 
 #define DPAA_IF_TX_PRIORITY		3
 #define DPAA_IF_RX_PRIORITY		0
@@ -103,6 +96,10 @@
 #define DPAA_FD_CMD_CFQ			0x00ffffff
 /**< Confirmation Frame Queue */
 
+#define DPAA_DEFAULT_RXQ_VSP_ID		1
+
+#define FMC_FILE "/tmp/fmc.bin"
+
 /* Each network interface is represented by one of these */
 struct dpaa_if {
 	int valid;
@@ -118,6 +115,13 @@ struct dpaa_if {
 	uint32_t ifid;
 	struct dpaa_bp_info *bp_info;
 	struct rte_eth_fc_conf *fc_conf;
+	void *port_handle;
+	void *netenv_handle;
+	void *scheme_handle[2];
+	uint32_t scheme_count;
+
+	void *vsp_handle[DPAA_VSP_PROFILE_MAX_NUM];
+	uint32_t vsp_bpid[DPAA_VSP_PROFILE_MAX_NUM];
 };
 
 struct dpaa_if_stats {

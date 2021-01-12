@@ -105,27 +105,18 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 		uint8_t *byte;
 	} h;
 
-#ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
-	uint64_t start_tsc;
-	uint64_t end_tsc;
-	uint64_t core_cycles;
-#endif
+	uint64_t start_tsc = 0;
 
-#ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
-	start_tsc = rte_rdtsc();
-#endif
+	get_start_cycles(&start_tsc);
 
 	/*
 	 * Receive a burst of packets and forward them.
 	 */
 	nb_rx = rte_eth_rx_burst(fs->rx_port, fs->rx_queue, pkts_burst,
 				 nb_pkt_per_burst);
+	inc_rx_burst_stats(fs, nb_rx);
 	if (unlikely(nb_rx == 0))
 		return;
-
-#ifdef RTE_TEST_PMD_RECORD_BURST_STATS
-	fs->rx_burst_stats.pkt_burst_spread[nb_rx]++;
-#endif
 
 	fs->rx_packets += nb_rx;
 	txp = &ports[fs->tx_port];
@@ -151,7 +142,7 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 		if (proto == RTE_BE16(RTE_ETHER_TYPE_IPV4)) {
 			swap_ipv4(h.ipv4);
 			next_proto = h.ipv4->next_proto_id;
-			mb->l3_len = (h.ipv4->version_ihl & 0x0f) * 4;
+			mb->l3_len = rte_ipv4_hdr_len(h.ipv4);
 			h.byte += mb->l3_len;
 		} else if (proto == RTE_BE16(RTE_ETHER_TYPE_IPV6)) {
 			swap_ipv6(h.ipv6);
@@ -184,20 +175,14 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 		}
 	}
 	fs->tx_packets += nb_tx;
-#ifdef RTE_TEST_PMD_RECORD_BURST_STATS
-	fs->tx_burst_stats.pkt_burst_spread[nb_tx]++;
-#endif
+	inc_tx_burst_stats(fs, nb_tx);
 	if (unlikely(nb_tx < nb_rx)) {
 		fs->fwd_dropped += (nb_rx - nb_tx);
 		do {
 			rte_pktmbuf_free(pkts_burst[nb_tx]);
 		} while (++nb_tx < nb_rx);
 	}
-#ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
-	end_tsc = rte_rdtsc();
-	core_cycles = (end_tsc - start_tsc);
-	fs->core_cycles = (uint64_t) (fs->core_cycles + core_cycles);
-#endif
+	get_end_cycles(fs, start_tsc);
 }
 
 struct fwd_engine five_tuple_swap_fwd_engine = {

@@ -38,8 +38,11 @@ nix_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 			otx2_nix_xmit_prepare_tso(tx_pkts[i], flags);
 	}
 
-	/* Lets commit any changes in the packet */
-	rte_cio_wmb();
+	/* Lets commit any changes in the packet here as no further changes
+	 * to the packet will be done unless no fast free is enabled.
+	 */
+	if (!(flags & NIX_TX_OFFLOAD_MBUF_NOFF_F))
+		rte_io_wmb();
 
 	for (i = 0; i < pkts; i++) {
 		otx2_nix_xmit_prepare(tx_pkts[i], cmd, flags);
@@ -74,8 +77,11 @@ nix_xmit_pkts_mseg(void *tx_queue, struct rte_mbuf **tx_pkts,
 			otx2_nix_xmit_prepare_tso(tx_pkts[i], flags);
 	}
 
-	/* Lets commit any changes in the packet */
-	rte_cio_wmb();
+	/* Lets commit any changes in the packet here as no further changes
+	 * to the packet will be done unless no fast free is enabled.
+	 */
+	if (!(flags & NIX_TX_OFFLOAD_MBUF_NOFF_F))
+		rte_io_wmb();
 
 	for (i = 0; i < pkts; i++) {
 		otx2_nix_xmit_prepare(tx_pkts[i], cmd, flags);
@@ -127,8 +133,11 @@ nix_xmit_pkts_vector(void *tx_queue, struct rte_mbuf **tx_pkts,
 	/* Reduce the cached count */
 	txq->fc_cache_pkts -= pkts;
 
-	/* Lets commit any changes in the packet */
-	rte_cio_wmb();
+	/* Lets commit any changes in the packet here as no further changes
+	 * to the packet will be done unless no fast free is enabled.
+	 */
+	if (!(flags & NIX_TX_OFFLOAD_MBUF_NOFF_F))
+		rte_io_wmb();
 
 	senddesc01_w0 = vld1q_dup_u64(&txq->cmd[0]);
 	senddesc23_w0 = senddesc01_w0;
@@ -221,6 +230,10 @@ nix_xmit_pkts_vector(void *tx_queue, struct rte_mbuf **tx_pkts,
 							1, 0);
 			senddesc01_w0 = vorrq_u64(senddesc01_w0, xmask01);
 			senddesc23_w0 = vorrq_u64(senddesc23_w0, xmask23);
+			/* Ensuring mbuf fields which got updated in
+			 * otx2_nix_prefree_seg are written before LMTST.
+			 */
+			rte_io_wmb();
 		} else {
 			struct rte_mbuf *mbuf;
 			/* Mark mempool object as "put" since

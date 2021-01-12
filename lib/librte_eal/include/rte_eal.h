@@ -65,17 +65,9 @@ int rte_eal_iopl_init(void);
 /**
  * Initialize the Environment Abstraction Layer (EAL).
  *
- * This function is to be executed on the MASTER lcore only, as soon
+ * This function is to be executed on the MAIN lcore only, as soon
  * as possible in the application's main() function.
- *
- * The function finishes the initialization process before main() is called.
- * It puts the SLAVE lcores in the WAIT state.
- *
- * When the multi-partition feature is supported, depending on the
- * configuration (if CONFIG_RTE_EAL_MAIN_PARTITION is disabled), this
- * function waits to ensure that the magic number is set before
- * returning. See also the rte_eal_get_configuration() function. Note:
- * This behavior may change in the future.
+ * It puts the WORKER lcores in the WAIT state.
  *
  * @param argc
  *   A non-negative value.  If it is greater than 0, the array members
@@ -130,8 +122,9 @@ int rte_eal_init(int argc, char **argv);
  * be made. It is expected that common usage of this function is to call it
  * just before terminating the process.
  *
- * @return 0 Successfully released all internal EAL resources
- * @return -EFAULT There was an error in releasing all resources.
+ * @return
+ *  - 0 Successfully released all internal EAL resources.
+ *  - -EFAULT There was an error in releasing all resources.
  */
 int rte_eal_cleanup(void);
 

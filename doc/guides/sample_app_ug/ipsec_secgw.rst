@@ -116,12 +116,6 @@ To compile the sample application see :doc:`compiling`.
 
 The application is located in the ``ipsec-secgw`` sub-directory.
 
-#. [Optional] Build the application for debugging:
-   This option adds some extra flags, disables compiler optimizations and
-   is verbose::
-
-       make DEBUG=1
-
 
 Running the Application
 -----------------------
@@ -129,9 +123,9 @@ Running the Application
 The application has a number of command line options::
 
 
-   ./build/ipsec-secgw [EAL options] --
+   ./<build_dir>/examples/dpdk-ipsec-secgw [EAL options] --
                         -p PORTMASK -P -u PORTMASK -j FRAMESIZE
-                        -l -w REPLAY_WINOW_SIZE -e -a
+                        -l -w REPLAY_WINDOW_SIZE -e -a
                         -c SAD_CACHE_SIZE
                         -s NUMBER_OF_MBUFS_IN_PACKET_POOL
                         -f CONFIG_FILE_PATH
@@ -167,7 +161,7 @@ Where:
 
 *   ``-l``: enables code-path that uses librte_ipsec.
 
-*   ``-w REPLAY_WINOW_SIZE``: specifies the IPsec sequence number replay window
+*   ``-w REPLAY_WINDOW_SIZE``: specifies the IPsec sequence number replay window
     size for each Security Association (available only with librte_ipsec
     code path).
 
@@ -245,7 +239,7 @@ The mapping of lcores to port/queues is similar to other l3fwd applications.
 
 For example, given the following command line to run application in poll mode::
 
-    ./build/ipsec-secgw -l 20,21 -n 4 --socket-mem 0,2048       \
+    ./<build_dir>/examples/dpdk-ipsec-secgw -l 20,21 -n 4 --socket-mem 0,2048       \
            --vdev "crypto_null" -- -p 0xf -P -u 0x3             \
            --config="(0,0,20),(1,0,20),(2,0,21),(3,0,21)"       \
            -f /path/to/config_file --transfer-mode poll         \
@@ -297,7 +291,7 @@ where each option means:
 Similarly for example, given the following command line to run application in
 event app mode::
 
-    ./build/ipsec-secgw -c 0x3 -- -P -p 0x3 -u 0x1       \
+    ./<build_dir>/examples/dpdk-ipsec-secgw -c 0x3 -- -P -p 0x3 -u 0x1       \
            -f /path/to/config_file --transfer-mode event \
            --event-schedule-type parallel                \
 
@@ -329,15 +323,15 @@ This means that if the application is using a single core and both hardware
 and software crypto devices are detected, hardware devices will be used.
 
 A way to achieve the case where you want to force the use of virtual crypto
-devices is to whitelist the Ethernet devices needed and therefore implicitly
-blacklisting all hardware crypto devices.
+devices is to only use the Ethernet devices needed (via the allow flag)
+and therefore implicitly blocking all hardware crypto devices.
 
 For example, something like the following command line:
 
 .. code-block:: console
 
-    ./build/ipsec-secgw -l 20,21 -n 4 --socket-mem 0,2048 \
-            -w 81:00.0 -w 81:00.1 -w 81:00.2 -w 81:00.3 \
+    ./<build_dir>/examples/dpdk-ipsec-secgw -l 20,21 -n 4 --socket-mem 0,2048 \
+            -a 81:00.0 -a 81:00.1 -a 81:00.2 -a 81:00.3 \
             --vdev "crypto_aesni_mb" --vdev "crypto_null" \
 	    -- \
             -p 0xf -P -u 0x3 --config="(0,0,20),(1,0,20),(2,0,21),(3,0,21)" \
@@ -935,13 +929,13 @@ The user must setup the following environment variables:
 
 *   ``REMOTE_IFACE``: interface name for the test-port on the DUT.
 
-*   ``ETH_DEV``: ethernet device to be used on the SUT by DPDK ('-w <pci-id>')
+*   ``ETH_DEV``: ethernet device to be used on the SUT by DPDK ('-a <pci-id>')
 
 Also the user can optionally setup:
 
 *   ``SGW_LCORE``: lcore to run ipsec-secgw on (default value is 0)
 
-*   ``CRYPTO_DEV``: crypto device to be used ('-w <pci-id>'). If none specified
+*   ``CRYPTO_DEV``: crypto device to be used ('-a <pci-id>'). If none specified
     appropriate vdevs will be created by the script
 
 Scripts can be used for multiple test scenarios. To check all available

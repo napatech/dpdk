@@ -51,26 +51,44 @@ struct rte_crypto_sgl {
 };
 
 /**
- * Synchronous operation descriptor.
- * Supposed to be used with CPU crypto API call.
+ * Crypto virtual and IOVA address descriptor, used to describe cryptographic
+ * data buffer without the length information. The length information is
+ * normally predefined during session creation.
+ */
+struct rte_crypto_va_iova_ptr {
+	void *va;
+	rte_iova_t iova;
+};
+
+/**
+ * Raw data operation descriptor.
+ * Supposed to be used with synchronous CPU crypto API call or asynchronous
+ * RAW data path API call.
  */
 struct rte_crypto_sym_vec {
-	/** array of SGL vectors */
-	struct rte_crypto_sgl *sgl;
-	/** array of pointers to IV */
-	void **iv;
-	/** array of pointers to AAD */
-	void **aad;
-	/** array of pointers to digest */
-	void **digest;
-	/**
-	 * array of statuses for each operation:
-	 *  - 0 on success
-	 *  - errno on error
-	 */
-	int32_t *status;
 	/** number of operations to perform */
 	uint32_t num;
+	/** array of SGL vectors */
+	struct rte_crypto_sgl *sgl;
+	/** array of pointers to cipher IV */
+	struct rte_crypto_va_iova_ptr *iv;
+	/** array of pointers to digest */
+	struct rte_crypto_va_iova_ptr *digest;
+
+	__extension__
+	union {
+		/** array of pointers to auth IV, used for chain operation */
+		struct rte_crypto_va_iova_ptr *auth_iv;
+		/** array of pointers to AAD, used for AEAD operation */
+		struct rte_crypto_va_iova_ptr *aad;
+	};
+
+	/**
+	 * array of statuses for each operation:
+	 * - 0 on success
+	 * - errno on error
+	 */
+	int32_t *status;
 };
 
 /**
@@ -87,7 +105,13 @@ union rte_crypto_sym_ofs {
 	} ofs;
 };
 
-/** Symmetric Cipher Algorithms */
+/** Symmetric Cipher Algorithms
+ *
+ * Note, to avoid ABI breakage across releases
+ * - LIST_END should not be added to this enum
+ * - the order of enums should not be changed
+ * - new algorithms should only be added to the end
+ */
 enum rte_crypto_cipher_algorithm {
 	RTE_CRYPTO_CIPHER_NULL = 1,
 	/**< NULL cipher algorithm. No mode applies to the NULL algorithm. */
@@ -132,15 +156,12 @@ enum rte_crypto_cipher_algorithm {
 	 * for m_src and m_dst in the rte_crypto_sym_op must be NULL.
 	 */
 
-	RTE_CRYPTO_CIPHER_DES_DOCSISBPI,
+	RTE_CRYPTO_CIPHER_DES_DOCSISBPI
 	/**< DES algorithm using modes required by
 	 * DOCSIS Baseline Privacy Plus Spec.
 	 * Chained mbufs are not supported in this mode, i.e. rte_mbuf.next
 	 * for m_src and m_dst in the rte_crypto_sym_op must be NULL.
 	 */
-
-	RTE_CRYPTO_CIPHER_LIST_END
-
 };
 
 /** Cipher algorithm name strings */
@@ -246,7 +267,13 @@ struct rte_crypto_cipher_xform {
 	} iv;	/**< Initialisation vector parameters */
 };
 
-/** Symmetric Authentication / Hash Algorithms */
+/** Symmetric Authentication / Hash Algorithms
+ *
+ * Note, to avoid ABI breakage across releases
+ * - LIST_END should not be added to this enum
+ * - the order of enums should not be changed
+ * - new algorithms should only be added to the end
+ */
 enum rte_crypto_auth_algorithm {
 	RTE_CRYPTO_AUTH_NULL = 1,
 	/**< NULL hash algorithm. */
@@ -312,10 +339,8 @@ enum rte_crypto_auth_algorithm {
 	/**< HMAC using 384 bit SHA3 algorithm. */
 	RTE_CRYPTO_AUTH_SHA3_512,
 	/**< 512 bit SHA3 algorithm. */
-	RTE_CRYPTO_AUTH_SHA3_512_HMAC,
+	RTE_CRYPTO_AUTH_SHA3_512_HMAC
 	/**< HMAC using 512 bit SHA3 algorithm. */
-
-	RTE_CRYPTO_AUTH_LIST_END
 };
 
 /** Authentication algorithm name strings */
@@ -406,15 +431,20 @@ struct rte_crypto_auth_xform {
 };
 
 
-/** Symmetric AEAD Algorithms */
+/** Symmetric AEAD Algorithms
+ *
+ * Note, to avoid ABI breakage across releases
+ * - LIST_END should not be added to this enum
+ * - the order of enums should not be changed
+ * - new algorithms should only be added to the end
+ */
 enum rte_crypto_aead_algorithm {
 	RTE_CRYPTO_AEAD_AES_CCM = 1,
 	/**< AES algorithm in CCM mode. */
 	RTE_CRYPTO_AEAD_AES_GCM,
 	/**< AES algorithm in GCM mode. */
-	RTE_CRYPTO_AEAD_CHACHA20_POLY1305,
+	RTE_CRYPTO_AEAD_CHACHA20_POLY1305
 	/**< Chacha20 cipher with poly1305 authenticator */
-	RTE_CRYPTO_AEAD_LIST_END
 };
 
 /** AEAD algorithm name strings */

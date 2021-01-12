@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "rte_cpuid.h"
 
@@ -110,6 +111,8 @@ const struct feature_entry rte_cpu_feature_table[] = {
 	FEAT_DEF(AVX512F, 0x00000007, 0, RTE_REG_EBX, 16)
 	FEAT_DEF(RDSEED, 0x00000007, 0, RTE_REG_EBX, 18)
 
+	FEAT_DEF(WAITPKG, 0x00000007, 0, RTE_REG_ECX, 5)
+
 	FEAT_DEF(LAHF_SAHF, 0x80000001, 0, RTE_REG_ECX,  0)
 	FEAT_DEF(LZCNT, 0x80000001, 0, RTE_REG_ECX,  4)
 
@@ -176,4 +179,15 @@ rte_cpu_get_flag_name(enum rte_cpu_flag_t feature)
 	if (feature >= RTE_CPUFLAG_NUMFLAGS)
 		return NULL;
 	return rte_cpu_feature_table[feature].name;
+}
+
+void
+rte_cpu_get_intrinsics_support(struct rte_cpu_intrinsics *intrinsics)
+{
+	memset(intrinsics, 0, sizeof(*intrinsics));
+
+	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_WAITPKG)) {
+		intrinsics->power_monitor = 1;
+		intrinsics->power_pause = 1;
+	}
 }

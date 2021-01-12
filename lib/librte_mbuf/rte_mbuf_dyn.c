@@ -13,6 +13,7 @@
 #include <rte_errno.h>
 #include <rte_malloc.h>
 #include <rte_string_fns.h>
+#include <rte_bitops.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_dyn.h>
 
@@ -172,7 +173,7 @@ __mbuf_dynfield_lookup(const char *name)
 			break;
 	}
 
-	if (te == NULL) {
+	if (te == NULL || mbuf_dynfield == NULL) {
 		rte_errno = ENOENT;
 		return NULL;
 	}
@@ -185,19 +186,15 @@ rte_mbuf_dynfield_lookup(const char *name, struct rte_mbuf_dynfield *params)
 {
 	struct mbuf_dynfield_elt *mbuf_dynfield;
 
-	if (shm == NULL) {
-		rte_errno = ENOENT;
-		return -1;
-	}
-
 	rte_mcfg_tailq_read_lock();
-	mbuf_dynfield = __mbuf_dynfield_lookup(name);
+	if (shm == NULL && init_shared_mem() < 0)
+		mbuf_dynfield = NULL;
+	else
+		mbuf_dynfield = __mbuf_dynfield_lookup(name);
 	rte_mcfg_tailq_read_unlock();
 
-	if (mbuf_dynfield == NULL) {
-		rte_errno = ENOENT;
+	if (mbuf_dynfield == NULL)
 		return -1;
-	}
 
 	if (params != NULL)
 		memcpy(params, &mbuf_dynfield->params, sizeof(*params));
@@ -384,19 +381,15 @@ rte_mbuf_dynflag_lookup(const char *name,
 {
 	struct mbuf_dynflag_elt *mbuf_dynflag;
 
-	if (shm == NULL) {
-		rte_errno = ENOENT;
-		return -1;
-	}
-
 	rte_mcfg_tailq_read_lock();
-	mbuf_dynflag = __mbuf_dynflag_lookup(name);
+	if (shm == NULL && init_shared_mem() < 0)
+		mbuf_dynflag = NULL;
+	else
+		mbuf_dynflag = __mbuf_dynflag_lookup(name);
 	rte_mcfg_tailq_read_unlock();
 
-	if (mbuf_dynflag == NULL) {
-		rte_errno = ENOENT;
+	if (mbuf_dynflag == NULL)
 		return -1;
-	}
 
 	if (params != NULL)
 		memcpy(params, &mbuf_dynflag->params, sizeof(*params));
@@ -568,4 +561,53 @@ void rte_mbuf_dyn_dump(FILE *out)
 	}
 
 	rte_mcfg_tailq_write_unlock();
+}
+
+static int
+rte_mbuf_dyn_timestamp_register(int *field_offset, uint64_t *flag,
+		const char *direction, const char *flag_name)
+{
+	static const struct rte_mbuf_dynfield field_desc = {
+		.name = RTE_MBUF_DYNFIELD_TIMESTAMP_NAME,
+		.size = sizeof(rte_mbuf_timestamp_t),
+		.align = __alignof__(rte_mbuf_timestamp_t),
+	};
+	struct rte_mbuf_dynflag flag_desc = {};
+	int offset;
+
+	offset = rte_mbuf_dynfield_register(&field_desc);
+	if (offset < 0) {
+		RTE_LOG(ERR, MBUF,
+			"Failed to register mbuf field for timestamp\n");
+		return -1;
+	}
+	if (field_offset != NULL)
+		*field_offset = offset;
+
+	strlcpy(flag_desc.name, flag_name, sizeof(flag_desc.name));
+	offset = rte_mbuf_dynflag_register(&flag_desc);
+	if (offset < 0) {
+		RTE_LOG(ERR, MBUF,
+			"Failed to register mbuf flag for %s timestamp\n",
+			direction);
+		return -1;
+	}
+	if (flag != NULL)
+		*flag = RTE_BIT64(offset);
+
+	return 0;
+}
+
+int
+rte_mbuf_dyn_rx_timestamp_register(int *field_offset, uint64_t *rx_flag)
+{
+	return rte_mbuf_dyn_timestamp_register(field_offset, rx_flag,
+			"Rx", RTE_MBUF_DYNFLAG_RX_TIMESTAMP_NAME);
+}
+
+int
+rte_mbuf_dyn_tx_timestamp_register(int *field_offset, uint64_t *tx_flag)
+{
+	return rte_mbuf_dyn_timestamp_register(field_offset, tx_flag,
+			"Tx", RTE_MBUF_DYNFLAG_TX_TIMESTAMP_NAME);
 }

@@ -10,6 +10,7 @@
 #include <rte_time.h>
 #include <rte_mempool.h>
 #include <rte_mbuf.h>
+#include <rte_vect.h>
 
 static void
 axgbe_rx_queue_release(struct axgbe_rx_queue *rx_queue)
@@ -95,7 +96,7 @@ int axgbe_dev_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 		axgbe_rx_queue_release(rxq);
 		return -ENOMEM;
 	}
-	rxq->ring_phys_addr = (uint64_t)dma->phys_addr;
+	rxq->ring_phys_addr = (uint64_t)dma->iova;
 	rxq->desc = (volatile union axgbe_rx_desc *)dma->addr;
 	memset((void *)rxq->desc, 0, size);
 	/* Allocate software ring */
@@ -275,6 +276,10 @@ axgbe_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		/* Get the RSS hash */
 		if (AXGMAC_GET_BITS_LE(desc->write.desc3, RX_NORMAL_DESC3, RSV))
 			mbuf->hash.rss = rte_le_to_cpu_32(desc->write.desc1);
+		/* Indicate if a Context Descriptor is next */
+		if (AXGMAC_GET_BITS_LE(desc->write.desc3, RX_NORMAL_DESC3, CDA))
+			mbuf->ol_flags |= PKT_RX_IEEE1588_PTP
+					| PKT_RX_IEEE1588_TMST;
 		pkt_len = AXGMAC_GET_BITS_LE(desc->write.desc3, RX_NORMAL_DESC3,
 					     PL) - rxq->crc_len;
 		/* Mbuf populate */
@@ -530,7 +535,7 @@ int axgbe_dev_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 		return -ENOMEM;
 	}
 	memset(tz->addr, 0, tsize);
-	txq->ring_phys_addr = (uint64_t)tz->phys_addr;
+	txq->ring_phys_addr = (uint64_t)tz->iova;
 	txq->desc = tz->addr;
 	txq->queue_id = queue_idx;
 	txq->port_id = dev->data->port_id;
@@ -553,7 +558,8 @@ int axgbe_dev_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	if (!pdata->tx_queues)
 		pdata->tx_queues = dev->data->tx_queues;
 
-	if (txq->vector_disable)
+	if (txq->vector_disable ||
+			rte_vect_get_max_simd_bitwidth() < RTE_VECT_SIMD_128)
 		dev->tx_pkt_burst = &axgbe_xmit_pkts;
 	else
 #ifdef RTE_ARCH_X86
@@ -722,6 +728,10 @@ static int axgbe_xmit_hw(struct axgbe_tx_queue *txq,
 	/* Total msg length to transmit */
 	AXGMAC_SET_BITS_LE(desc->desc3, TX_NORMAL_DESC3, FL,
 			   mbuf->pkt_len);
+	/* Timestamp enablement check */
+	if (mbuf->ol_flags & PKT_TX_IEEE1588_TMST)
+		AXGMAC_SET_BITS_LE(desc->desc2, TX_NORMAL_DESC2, TTSE, 1);
+	rte_wmb();
 	/* Mark it as First and Last Descriptor */
 	AXGMAC_SET_BITS_LE(desc->desc3, TX_NORMAL_DESC3, FD, 1);
 	AXGMAC_SET_BITS_LE(desc->desc3, TX_NORMAL_DESC3, LD, 1);

@@ -39,6 +39,7 @@ test_sources = files('commands.c',
 	'test_efd.c',
 	'test_efd_perf.c',
 	'test_errno.c',
+	'test_ethdev_link.c',
 	'test_event_crypto_adapter.c',
 	'test_event_eth_rx_adapter.c',
 	'test_event_ring.c',
@@ -107,9 +108,11 @@ test_sources = files('commands.c',
 	'test_ring_mpmc_stress.c',
 	'test_ring_hts_stress.c',
 	'test_ring_mt_peek_stress.c',
+	'test_ring_mt_peek_stress_zc.c',
 	'test_ring_perf.c',
 	'test_ring_rts_stress.c',
 	'test_ring_st_peek_stress.c',
+	'test_ring_st_peek_stress_zc.c',
 	'test_ring_stress.c',
 	'test_rwlock.c',
 	'test_sched.c',
@@ -170,6 +173,7 @@ test_deps = ['acl',
 	'ring',
 	'security',
 	'stack',
+	'telemetry',
 	'timer'
 ]
 
@@ -187,11 +191,11 @@ fast_tests = [
         ['cycles_autotest', true],
         ['debug_autotest', true],
         ['eal_flags_c_opt_autotest', false],
-        ['eal_flags_master_opt_autotest', false],
+        ['eal_flags_main_opt_autotest', false],
         ['eal_flags_n_opt_autotest', false],
         ['eal_flags_hpet_autotest', false],
         ['eal_flags_no_huge_autotest', false],
-        ['eal_flags_w_opt_autotest', false],
+        ['eal_flags_a_opt_autotest', false],
         ['eal_flags_b_opt_autotest', false],
         ['eal_flags_vdev_opt_autotest', false],
         ['eal_flags_r_opt_autotest', false],
@@ -200,6 +204,7 @@ fast_tests = [
         ['eal_flags_misc_autotest', false],
         ['eal_fs_autotest', true],
         ['errno_autotest', true],
+        ['ethdev_link_status', true],
         ['event_ring_autotest', true],
         ['fib_autotest', true],
         ['fib6_autotest', true],
@@ -335,33 +340,33 @@ dump_test_names = [
 # unit tests without requiring that the developer install the
 # DPDK libraries.  Explicit linkage of drivers (plugin libraries)
 # in applications should not be used.
-if dpdk_conf.has('RTE_LIBRTE_RING_MEMPOOL')
+if dpdk_conf.has('RTE_MEMPOOL_RING')
 	test_deps += 'mempool_ring'
 endif
-if dpdk_conf.has('RTE_LIBRTE_STACK_MEMPOOL')
+if dpdk_conf.has('RTE_MEMPOOL_STACK')
 	test_deps += 'mempool_stack'
 endif
-if dpdk_conf.has('RTE_LIBRTE_SKELETON_EVENTDEV_PMD')
-	test_deps += 'pmd_skeleton_event'
+if dpdk_conf.has('RTE_EVENT_SKELETON')
+	test_deps += 'event_skeleton'
 endif
-if dpdk_conf.has('RTE_LIBRTE_TELEMETRY')
-	test_sources += 'test_telemetry_json.c'
-	fast_tests += [['telemetry_json_autotest', true]]
+if dpdk_conf.has('RTE_LIB_TELEMETRY')
+	test_sources += ['test_telemetry_json.c', 'test_telemetry_data.c']
+	fast_tests += [['telemetry_json_autotest', true], ['telemetry_data_autotest', true]]
 endif
 
 # The following linkages of drivers are required because
 # they are used via a driver-specific API.
-if dpdk_conf.has('RTE_LIBRTE_BOND_PMD')
-	test_deps += 'pmd_bond'
+if dpdk_conf.has('RTE_NET_BOND')
+	test_deps += 'net_bond'
 	test_sources += ['test_link_bonding.c', 'test_link_bonding_rssconf.c']
 	driver_test_names += ['link_bonding_autotest', 'link_bonding_rssconf_autotest']
-	if dpdk_conf.has('RTE_LIBRTE_RING_PMD')
+	if dpdk_conf.has('RTE_NET_RING')
 		test_sources += 'test_link_bonding_mode4.c'
 		driver_test_names += 'link_bonding_mode4_autotest'
 	endif
 endif
-if dpdk_conf.has('RTE_LIBRTE_RING_PMD')
-	test_deps += 'pmd_ring'
+if dpdk_conf.has('RTE_NET_RING')
+	test_deps += 'net_ring'
 	test_sources += 'test_pmd_ring_perf.c'
 	test_sources += 'test_pmd_ring.c'
 	test_sources += 'test_event_eth_tx_adapter.c'
@@ -377,13 +382,13 @@ if dpdk_conf.has('RTE_LIBRTE_RING_PMD')
 	fast_tests += [['pdump_autotest', true]]
 endif
 
-if dpdk_conf.has('RTE_LIBRTE_POWER')
+if dpdk_conf.has('RTE_LIB_POWER')
 	test_deps += 'power'
 endif
-if dpdk_conf.has('RTE_LIBRTE_KNI')
+if dpdk_conf.has('RTE_LIB_KNI')
 	test_deps += 'kni'
 endif
-if dpdk_conf.has('RTE_LIBRTE_PDUMP')
+if dpdk_conf.has('RTE_LIB_PDUMP')
 	test_deps += 'pdump'
 endif
 
@@ -400,7 +405,7 @@ cflags += '-fno-strict-aliasing'
 cflags += ['-DALLOW_INTERNAL_API']
 
 test_dep_objs = []
-if dpdk_conf.has('RTE_LIBRTE_COMPRESSDEV')
+if dpdk_conf.has('RTE_LIB_COMPRESSDEV')
 	compress_test_dep = dependency('zlib', required: false)
 	if compress_test_dep.found()
 		test_dep_objs += compress_test_dep
@@ -410,8 +415,9 @@ if dpdk_conf.has('RTE_LIBRTE_COMPRESSDEV')
 	endif
 endif
 
-if dpdk_conf.has('RTE_LIBRTE_PMD_CRYPTO_SCHEDULER')
+if dpdk_conf.has('RTE_CRYPTO_SCHEDULER')
 	driver_test_names += 'cryptodev_scheduler_autotest'
+	test_deps += 'crypto_scheduler'
 endif
 
 foreach d:test_deps

@@ -8,6 +8,7 @@ endif
 drivers = ['aesni_gcm',
 	   'aesni_mb',
 	   'armv8',
+	   'bcmfs',
 	   'caam_jr',
 	   'ccp',
 	   'dpaa_sec',
@@ -19,12 +20,10 @@ drivers = ['aesni_gcm',
 	   'octeontx',
 	   'octeontx2',
 	   'openssl',
-	   'qat',
 	   'scheduler',
 	   'snow3g',
 	   'virtio',
 	   'zuc']
 
 std_deps = ['cryptodev'] # cryptodev pulls in all other needed deps
-config_flag_fmt = 'RTE_LIBRTE_@0@_PMD'
-driver_name_fmt = 'rte_pmd_@0@'
+config_flag_fmt = 'RTE_LIBRTE_PMD_@0@'

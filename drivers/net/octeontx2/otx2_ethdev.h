@@ -13,6 +13,7 @@
 #include <rte_kvargs.h>
 #include <rte_mbuf.h>
 #include <rte_mempool.h>
+#include <rte_security_driver.h>
 #include <rte_string_fns.h>
 #include <rte_time.h>
 
@@ -119,7 +120,8 @@
 #define NIX_RSS_OFFLOAD		(ETH_RSS_PORT | ETH_RSS_IP | ETH_RSS_UDP |\
 				 ETH_RSS_TCP | ETH_RSS_SCTP | \
 				 ETH_RSS_TUNNEL | ETH_RSS_L2_PAYLOAD | \
-				 NIX_RSS_L3_L4_SRC_DST)
+				 NIX_RSS_L3_L4_SRC_DST | ETH_RSS_LEVEL_MASK | \
+				 ETH_RSS_C_VLAN)
 
 #define NIX_TX_OFFLOAD_CAPA ( \
 	DEV_TX_OFFLOAD_MBUF_FAST_FREE	| \
@@ -437,6 +439,8 @@ int otx2_nix_set_mc_addr_list(struct rte_eth_dev *eth_dev,
 /* MTU */
 int otx2_nix_mtu_set(struct rte_eth_dev *eth_dev, uint16_t mtu);
 int otx2_nix_recalc_mtu(struct rte_eth_dev *eth_dev);
+void otx2_nix_enable_mseg_on_jumbo(struct otx2_eth_rxq *rxq);
+
 
 /* Link */
 void otx2_nix_toggle_flag_link_cfg(struct otx2_eth_dev *dev, bool set);

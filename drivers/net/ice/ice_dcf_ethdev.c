@@ -589,7 +589,7 @@ ice_dcf_stop_queues(struct rte_eth_dev *dev)
 	}
 }
 
-static void
+static int
 ice_dcf_dev_stop(struct rte_eth_dev *dev)
 {
 	struct ice_dcf_adapter *dcf_ad = dev->data->dev_private;
@@ -598,7 +598,7 @@ ice_dcf_dev_stop(struct rte_eth_dev *dev)
 
 	if (ad->pf.adapter_stopped == 1) {
 		PMD_DRV_LOG(DEBUG, "Port is already stopped");
-		return;
+		return 0;
 	}
 
 	ice_dcf_stop_queues(dev);
@@ -612,6 +612,8 @@ ice_dcf_dev_stop(struct rte_eth_dev *dev)
 	ice_dcf_add_del_all_mac_addr(&dcf_ad->real_hw, false);
 	dev->data->dev_link.link_status = ETH_LINK_DOWN;
 	ad->pf.adapter_stopped = 1;
+
+	return 0;
 }
 
 static int
@@ -847,20 +849,18 @@ ice_dcf_stats_reset(struct rte_eth_dev *dev)
 	return 0;
 }
 
-static void
+static int
 ice_dcf_dev_close(struct rte_eth_dev *dev)
 {
 	struct ice_dcf_adapter *adapter = dev->data->dev_private;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return;
-
-	dev->dev_ops = NULL;
-	dev->rx_pkt_burst = NULL;
-	dev->tx_pkt_burst = NULL;
+		return 0;
 
 	ice_dcf_uninit_parent_adapter(dev);
 	ice_dcf_uninit_hw(dev, &adapter->real_hw);
+
+	return 0;
 }
 
 static int
@@ -906,7 +906,7 @@ ice_dcf_dev_init(struct rte_eth_dev *eth_dev)
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
 
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_CLOSE_REMOVE;
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	adapter->real_hw.vc_event_msg_cb = ice_dcf_handle_pf_event_msg;
 	if (ice_dcf_init_hw(eth_dev, &adapter->real_hw) != 0) {

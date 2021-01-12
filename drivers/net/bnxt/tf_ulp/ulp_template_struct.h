@@ -72,6 +72,14 @@ struct ulp_rte_parser_params {
 	struct ulp_rte_act_bitmap	act_bitmap;
 	struct ulp_rte_act_prop		act_prop;
 	uint32_t			dir_attr;
+	uint32_t			priority;
+	uint32_t			fid;
+	uint32_t			parent_flow;
+	uint32_t			parent_fid;
+	uint16_t			func_id;
+	uint16_t			port_id;
+	uint32_t			class_id;
+	uint32_t			act_tmpl;
 	struct bnxt_ulp_context		*ulp_ctx;
 };
 
@@ -140,23 +148,34 @@ struct bnxt_ulp_act_match_info {
 extern	uint16_t ulp_act_sig_tbl[];
 extern struct bnxt_ulp_act_match_info ulp_act_match_list[];
 
+/* Device Specific Tables for mapper */
+struct ulp_template_device_tbls {
+	struct bnxt_ulp_mapper_tbl_list_info *tmpl_list;
+	struct bnxt_ulp_mapper_tbl_info *tbl_list;
+	struct bnxt_ulp_mapper_key_field_info *key_field_list;
+	struct bnxt_ulp_mapper_result_field_info *result_field_list;
+	struct bnxt_ulp_mapper_ident_info *ident_list;
+};
+
 /* Device specific parameters */
 struct bnxt_ulp_device_params {
 	uint8_t				description[16];
-	enum bnxt_ulp_flow_mem_type	flow_mem_type;
 	enum bnxt_ulp_byte_order	byte_order;
 	uint8_t				encap_byte_swap;
 	uint8_t				num_phy_ports;
 	uint32_t			mark_db_lfid_entries;
 	uint64_t			mark_db_gfid_entries;
-	uint64_t			flow_db_num_entries;
+	uint64_t			int_flow_db_num_entries;
+	uint64_t			ext_flow_db_num_entries;
 	uint32_t			flow_count_db_entries;
+	uint32_t			fdb_parent_flow_entries;
 	uint32_t			num_resources_per_flow;
 	uint32_t			ext_cntr_table_type;
 	uint64_t			byte_count_mask;
 	uint64_t			packet_count_mask;
 	uint32_t			byte_count_shift;
 	uint32_t			packet_count_shift;
+	const struct ulp_template_device_tbls *dev_tbls;
 };
 
 /* Flow Mapper */
@@ -164,7 +183,6 @@ struct bnxt_ulp_mapper_tbl_list_info {
 	uint32_t		device_name;
 	uint32_t		start_tbl_idx;
 	uint32_t		num_tbls;
-	enum bnxt_ulp_fdb_type	flow_db_table_type;
 };
 
 struct bnxt_ulp_mapper_tbl_info {
@@ -173,6 +191,7 @@ struct bnxt_ulp_mapper_tbl_info {
 	enum bnxt_ulp_resource_sub_type	resource_sub_type;
 	enum bnxt_ulp_cond_opcode	cond_opcode;
 	uint32_t			cond_operand;
+	enum bnxt_ulp_mem_type_opcode	mem_type_opcode;
 	uint8_t				direction;
 	uint32_t			priority;
 	enum bnxt_ulp_search_before_alloc	srch_b4_alloc;
@@ -200,7 +219,7 @@ struct bnxt_ulp_mapper_tbl_info {
 	uint32_t			index_operand;
 };
 
-struct bnxt_ulp_mapper_class_key_field_info {
+struct bnxt_ulp_mapper_key_field_info {
 	uint8_t				description[64];
 	enum bnxt_ulp_mapper_opc	mask_opcode;
 	enum bnxt_ulp_mapper_opc	spec_opcode;
@@ -250,51 +269,6 @@ struct bnxt_ulp_cache_tbl_params {
  * This table maintains the device specific parameters.
  */
 extern struct bnxt_ulp_device_params ulp_device_params[];
-
-/*
- * The ulp_class_tmpl_list and ulp_act_tmpl_list are indexed by the dev_id
- * and template id (either class or action) returned by the matcher.
- * The result provides the start index and number of entries in the connected
- * ulp_class_tbl_list/ulp_act_tbl_list.
- */
-extern struct bnxt_ulp_mapper_tbl_list_info	ulp_class_tmpl_list[];
-extern struct bnxt_ulp_mapper_tbl_list_info	ulp_act_tmpl_list[];
-
-/*
- * The ulp_class_tbl_list and ulp_act_tbl_list are indexed based on the results
- * of the template lists.  Each entry describes the high level details of the
- * table entry to include the start index and number of instructions in the
- * field lists.
- */
-extern struct bnxt_ulp_mapper_tbl_info	ulp_class_tbl_list[];
-extern struct bnxt_ulp_mapper_tbl_info	ulp_act_tbl_list[];
-
-/*
- * The ulp_class_result_field_list provides the instructions for creating result
- * records such as tcam/em results.
- */
-extern struct bnxt_ulp_mapper_result_field_info	ulp_class_result_field_list[];
-
-/*
- * The ulp_data_field_list provides the instructions for creating an action
- * record.  It uses the same structure as the result list, but is only used for
- * actions.
- */
-extern
-struct bnxt_ulp_mapper_result_field_info ulp_act_result_field_list[];
-
-/*
- * The ulp_act_prop_map_table provides the mapping to index and size of action
- * tcam and em tables.
- */
-extern
-struct bnxt_ulp_mapper_class_key_field_info	ulp_class_key_field_list[];
-
-/*
- * The ulp_ident_list provides the instructions for creating identifiers such
- * as profile ids.
- */
-extern struct bnxt_ulp_mapper_ident_info	ulp_ident_list[];
 
 /*
  * The ulp_act_prop_map_table provides the mapping to index and size of action

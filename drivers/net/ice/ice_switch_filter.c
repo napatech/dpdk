@@ -139,7 +139,42 @@ struct sw_meta {
 
 static struct ice_flow_parser ice_switch_dist_parser_os;
 static struct ice_flow_parser ice_switch_dist_parser_comms;
-static struct ice_flow_parser ice_switch_perm_parser;
+static struct ice_flow_parser ice_switch_perm_parser_os;
+static struct ice_flow_parser ice_switch_perm_parser_comms;
+
+static struct
+ice_pattern_match_item ice_switch_pattern_dist_os[] = {
+	{pattern_ethertype,
+			ICE_SW_INSET_ETHER, ICE_INSET_NONE},
+	{pattern_ethertype_vlan,
+			ICE_SW_INSET_MAC_VLAN, ICE_INSET_NONE},
+	{pattern_eth_arp,
+			ICE_INSET_NONE, ICE_INSET_NONE},
+	{pattern_eth_ipv4,
+			ICE_SW_INSET_MAC_IPV4, ICE_INSET_NONE},
+	{pattern_eth_ipv4_udp,
+			ICE_SW_INSET_MAC_IPV4_UDP, ICE_INSET_NONE},
+	{pattern_eth_ipv4_tcp,
+			ICE_SW_INSET_MAC_IPV4_TCP, ICE_INSET_NONE},
+	{pattern_eth_ipv6,
+			ICE_SW_INSET_MAC_IPV6, ICE_INSET_NONE},
+	{pattern_eth_ipv6_udp,
+			ICE_SW_INSET_MAC_IPV6_UDP, ICE_INSET_NONE},
+	{pattern_eth_ipv6_tcp,
+			ICE_SW_INSET_MAC_IPV6_TCP, ICE_INSET_NONE},
+	{pattern_eth_ipv4_udp_vxlan_eth_ipv4,
+			ICE_SW_INSET_DIST_VXLAN_IPV4, ICE_INSET_NONE},
+	{pattern_eth_ipv4_udp_vxlan_eth_ipv4_udp,
+			ICE_SW_INSET_DIST_VXLAN_IPV4_UDP, ICE_INSET_NONE},
+	{pattern_eth_ipv4_udp_vxlan_eth_ipv4_tcp,
+			ICE_SW_INSET_DIST_VXLAN_IPV4_TCP, ICE_INSET_NONE},
+	{pattern_eth_ipv4_nvgre_eth_ipv4,
+			ICE_SW_INSET_DIST_NVGRE_IPV4, ICE_INSET_NONE},
+	{pattern_eth_ipv4_nvgre_eth_ipv4_udp,
+			ICE_SW_INSET_DIST_NVGRE_IPV4_UDP, ICE_INSET_NONE},
+	{pattern_eth_ipv4_nvgre_eth_ipv4_tcp,
+			ICE_SW_INSET_DIST_NVGRE_IPV4_TCP, ICE_INSET_NONE},
+};
 
 static struct
 ice_pattern_match_item ice_switch_pattern_dist_comms[] = {
@@ -147,6 +182,8 @@ ice_pattern_match_item ice_switch_pattern_dist_comms[] = {
 			ICE_SW_INSET_ETHER, ICE_INSET_NONE},
 	{pattern_ethertype_vlan,
 			ICE_SW_INSET_MAC_VLAN, ICE_INSET_NONE},
+	{pattern_eth_arp,
+			ICE_INSET_NONE, ICE_INSET_NONE},
 	{pattern_eth_ipv4,
 			ICE_SW_INSET_MAC_IPV4, ICE_INSET_NONE},
 	{pattern_eth_ipv4_udp,
@@ -228,7 +265,7 @@ ice_pattern_match_item ice_switch_pattern_dist_comms[] = {
 };
 
 static struct
-ice_pattern_match_item ice_switch_pattern_dist_os[] = {
+ice_pattern_match_item ice_switch_pattern_perm_os[] = {
 	{pattern_ethertype,
 			ICE_SW_INSET_ETHER, ICE_INSET_NONE},
 	{pattern_ethertype_vlan,
@@ -248,25 +285,27 @@ ice_pattern_match_item ice_switch_pattern_dist_os[] = {
 	{pattern_eth_ipv6_tcp,
 			ICE_SW_INSET_MAC_IPV6_TCP, ICE_INSET_NONE},
 	{pattern_eth_ipv4_udp_vxlan_eth_ipv4,
-			ICE_SW_INSET_DIST_VXLAN_IPV4, ICE_INSET_NONE},
+			ICE_SW_INSET_PERM_TUNNEL_IPV4, ICE_INSET_NONE},
 	{pattern_eth_ipv4_udp_vxlan_eth_ipv4_udp,
-			ICE_SW_INSET_DIST_VXLAN_IPV4_UDP, ICE_INSET_NONE},
+			ICE_SW_INSET_PERM_TUNNEL_IPV4_UDP, ICE_INSET_NONE},
 	{pattern_eth_ipv4_udp_vxlan_eth_ipv4_tcp,
-			ICE_SW_INSET_DIST_VXLAN_IPV4_TCP, ICE_INSET_NONE},
+			ICE_SW_INSET_PERM_TUNNEL_IPV4_TCP, ICE_INSET_NONE},
 	{pattern_eth_ipv4_nvgre_eth_ipv4,
-			ICE_SW_INSET_DIST_NVGRE_IPV4, ICE_INSET_NONE},
+			ICE_SW_INSET_PERM_TUNNEL_IPV4, ICE_INSET_NONE},
 	{pattern_eth_ipv4_nvgre_eth_ipv4_udp,
-			ICE_SW_INSET_DIST_NVGRE_IPV4_UDP, ICE_INSET_NONE},
+			ICE_SW_INSET_PERM_TUNNEL_IPV4_UDP, ICE_INSET_NONE},
 	{pattern_eth_ipv4_nvgre_eth_ipv4_tcp,
-			ICE_SW_INSET_DIST_NVGRE_IPV4_TCP, ICE_INSET_NONE},
+			ICE_SW_INSET_PERM_TUNNEL_IPV4_TCP, ICE_INSET_NONE},
 };
 
 static struct
-ice_pattern_match_item ice_switch_pattern_perm[] = {
+ice_pattern_match_item ice_switch_pattern_perm_comms[] = {
 	{pattern_ethertype,
 			ICE_SW_INSET_ETHER, ICE_INSET_NONE},
 	{pattern_ethertype_vlan,
 			ICE_SW_INSET_MAC_VLAN, ICE_INSET_NONE},
+	{pattern_eth_arp,
+		ICE_INSET_NONE, ICE_INSET_NONE},
 	{pattern_eth_ipv4,
 			ICE_SW_INSET_MAC_IPV4, ICE_INSET_NONE},
 	{pattern_eth_ipv4_udp,
@@ -1405,17 +1444,32 @@ ice_switch_parse_dcf_action(struct ice_dcf_adapter *ad,
 		case RTE_FLOW_ACTION_TYPE_VF:
 			rule_info->sw_act.fltr_act = ICE_FWD_TO_VSI;
 			act_vf = action->conf;
+
+			if (act_vf->id >= ad->real_hw.num_vfs &&
+				!act_vf->original) {
+				rte_flow_error_set(error,
+					EINVAL, RTE_FLOW_ERROR_TYPE_ACTION,
+					actions,
+					"Invalid vf id");
+				return -rte_errno;
+			}
+
 			if (act_vf->original)
 				rule_info->sw_act.vsi_handle =
 					ad->real_hw.avf.bus.func;
 			else
 				rule_info->sw_act.vsi_handle = act_vf->id;
 			break;
+
+		case RTE_FLOW_ACTION_TYPE_DROP:
+			rule_info->sw_act.fltr_act = ICE_DROP_PACKET;
+			break;
+
 		default:
 			rte_flow_error_set(error,
 					   EINVAL, RTE_FLOW_ERROR_TYPE_ACTION,
 					   actions,
-					   "Invalid action type or queue number");
+					   "Invalid action type");
 			return -rte_errno;
 		}
 	}
@@ -1467,11 +1521,11 @@ ice_switch_parse_action(struct ice_pf *pf,
 			if ((act_qgrop->queue[0] +
 				act_qgrop->queue_num) >
 				dev->data->nb_rx_queues)
-				goto error;
+				goto error1;
 			for (i = 0; i < act_qgrop->queue_num - 1; i++)
 				if (act_qgrop->queue[i + 1] !=
 					act_qgrop->queue[i] + 1)
-					goto error;
+					goto error2;
 			rule_info->sw_act.qgrp_size =
 				act_qgrop->queue_num;
 			break;
@@ -1510,6 +1564,20 @@ error:
 		EINVAL, RTE_FLOW_ERROR_TYPE_ACTION,
 		actions,
 		"Invalid action type or queue number");
+	return -rte_errno;
+
+error1:
+	rte_flow_error_set(error,
+		EINVAL, RTE_FLOW_ERROR_TYPE_ACTION,
+		actions,
+		"Invalid queue region indexes");
+	return -rte_errno;
+
+error2:
+	rte_flow_error_set(error,
+		EINVAL, RTE_FLOW_ERROR_TYPE_ACTION,
+		actions,
+		"Discontinuous queue region");
 	return -rte_errno;
 }
 
@@ -1654,12 +1722,8 @@ ice_switch_parse_pattern_action(struct ice_adapter *ad,
 	rule_info.tun_type = tun_type;
 
 	ret = ice_switch_check_action(actions, error);
-	if (ret) {
-		rte_flow_error_set(error, EINVAL,
-				   RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
-				   "Invalid input action number");
+	if (ret)
 		goto error;
-	}
 
 	if (ad->hw.dcf_enabled)
 		ret = ice_switch_parse_dcf_action((void *)ad, actions, error,
@@ -1667,12 +1731,8 @@ ice_switch_parse_pattern_action(struct ice_adapter *ad,
 	else
 		ret = ice_switch_parse_action(pf, actions, error, &rule_info);
 
-	if (ret) {
-		rte_flow_error_set(error, EINVAL,
-				   RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
-				   "Invalid input action");
+	if (ret)
 		goto error;
-	}
 
 	if (meta) {
 		*meta = sw_meta_ptr;
@@ -1797,7 +1857,7 @@ ice_switch_init(struct ice_adapter *ad)
 {
 	int ret = 0;
 	struct ice_flow_parser *dist_parser;
-	struct ice_flow_parser *perm_parser = &ice_switch_perm_parser;
+	struct ice_flow_parser *perm_parser;
 
 	if (ad->active_pkg_type == ICE_PKG_TYPE_COMMS)
 		dist_parser = &ice_switch_dist_parser_comms;
@@ -1806,10 +1866,16 @@ ice_switch_init(struct ice_adapter *ad)
 	else
 		return -EINVAL;
 
-	if (ad->devargs.pipe_mode_support)
+	if (ad->devargs.pipe_mode_support) {
+		if (ad->active_pkg_type == ICE_PKG_TYPE_COMMS)
+			perm_parser = &ice_switch_perm_parser_comms;
+		else
+			perm_parser = &ice_switch_perm_parser_os;
+
 		ret = ice_register_parser(perm_parser, ad);
-	else
+	} else {
 		ret = ice_register_parser(dist_parser, ad);
+	}
 	return ret;
 }
 
@@ -1817,17 +1883,25 @@ static void
 ice_switch_uninit(struct ice_adapter *ad)
 {
 	struct ice_flow_parser *dist_parser;
-	struct ice_flow_parser *perm_parser = &ice_switch_perm_parser;
+	struct ice_flow_parser *perm_parser;
 
 	if (ad->active_pkg_type == ICE_PKG_TYPE_COMMS)
 		dist_parser = &ice_switch_dist_parser_comms;
-	else
+	else if (ad->active_pkg_type == ICE_PKG_TYPE_OS_DEFAULT)
 		dist_parser = &ice_switch_dist_parser_os;
-
-	if (ad->devargs.pipe_mode_support)
-		ice_unregister_parser(perm_parser, ad);
 	else
+		return;
+
+	if (ad->devargs.pipe_mode_support) {
+		if (ad->active_pkg_type == ICE_PKG_TYPE_COMMS)
+			perm_parser = &ice_switch_perm_parser_comms;
+		else
+			perm_parser = &ice_switch_perm_parser_os;
+
+		ice_unregister_parser(perm_parser, ad);
+	} else {
 		ice_unregister_parser(dist_parser, ad);
+	}
 }
 
 static struct
@@ -1861,10 +1935,19 @@ ice_flow_parser ice_switch_dist_parser_comms = {
 };
 
 static struct
-ice_flow_parser ice_switch_perm_parser = {
+ice_flow_parser ice_switch_perm_parser_os = {
 	.engine = &ice_switch_engine,
-	.array = ice_switch_pattern_perm,
-	.array_len = RTE_DIM(ice_switch_pattern_perm),
+	.array = ice_switch_pattern_perm_os,
+	.array_len = RTE_DIM(ice_switch_pattern_perm_os),
+	.parse_pattern_action = ice_switch_parse_pattern_action,
+	.stage = ICE_FLOW_STAGE_PERMISSION,
+};
+
+static struct
+ice_flow_parser ice_switch_perm_parser_comms = {
+	.engine = &ice_switch_engine,
+	.array = ice_switch_pattern_perm_comms,
+	.array_len = RTE_DIM(ice_switch_pattern_perm_comms),
 	.parse_pattern_action = ice_switch_parse_pattern_action,
 	.stage = ICE_FLOW_STAGE_PERMISSION,
 };

@@ -142,6 +142,10 @@ static struct {
   struct pmd_internals *pInternals;
 } _PmdInternals[RTE_MAX_ETHPORTS];
 
+/* enable timestamp in mbuf */
+bool enable_ts[RTE_MAX_ETHPORTS];
+uint64_t timestamp_rx_dynflag;
+int timestamp_dynfield_offset = -1;
 
 /**
  * Log nt errors (Napatech adapter errors)
@@ -357,10 +361,11 @@ static __rte_always_inline uint16_t eth_ntacc_convert_pkt_to_mbuf(NtDyn3Descr_t 
       break;
   }
 
-  if (rx_q->tsMultiplier) {
-    mbuf->timestamp = dyn3->timestamp * rx_q->tsMultiplier;
-    mbuf->ol_flags |= PKT_RX_TIMESTAMP;
-  }
+	if (enable_ts[rx_q->in_port]) {
+		*RTE_MBUF_DYNFIELD(mbuf, timestamp_dynfield_offset, rte_mbuf_timestamp_t *) = 
+			dyn3->timestamp * rx_q->tsMultiplier;
+		mbuf->ol_flags |= timestamp_rx_dynflag;
+	}
   mbuf->port = rx_q->in_port + (dyn3->rxPort - rx_q->local_port);
   const uint16_t data_len = (uint16_t)(dyn3->capLength - dyn3->descrLength);
 
@@ -560,10 +565,11 @@ static uint16_t eth_ntacc_rx_mode2(void *queue,
       break;
     }
 
-    if (rx_q->tsMultiplier) {
-      mbuf->timestamp = dyn3->timestamp * rx_q->tsMultiplier;
-      mbuf->ol_flags |= PKT_RX_TIMESTAMP;
-    }
+		if (enable_ts[rx_q->in_port]) {
+			*RTE_MBUF_DYNFIELD(mbuf, timestamp_dynfield_offset, rte_mbuf_timestamp_t *) = 
+				dyn3->timestamp * rx_q->tsMultiplier;
+			mbuf->ol_flags |= timestamp_rx_dynflag;
+		}
     mbuf->port = rx_q->in_port + (dyn3->rxPort - rx_q->local_port);
 
     data_len = (uint16_t)(dyn3->capLength - dyn3->descrLength);
@@ -973,7 +979,8 @@ StartError:
  * Is the only place for us to close all the tx streams dumpers.
  * If not called the dumpers will be flushed within each tx burst.
  */
-static void eth_dev_stop(struct rte_eth_dev *dev)
+
+static int eth_dev_stop(struct rte_eth_dev *dev)
 {
   struct pmd_internals *internals = dev->data->dev_private;
   struct ntacc_rx_queue *rx_q = internals->rxq;
@@ -1028,11 +1035,15 @@ static void eth_dev_stop(struct rte_eth_dev *dev)
   // Detach shared memory
   shmdt(internals->shm);
   shmctl(internals->shmid, IPC_RMID, NULL);
+	return 0;
 }
 
 static int eth_dev_configure(struct rte_eth_dev *dev)
 {
   struct pmd_internals *internals = dev->data->dev_private;
+	struct rte_eth_conf *eth_conf = &dev->data->dev_conf;
+	uint64_t rx_offloads = eth_conf->rxmode.offloads;
+
   uint i;
 
   if (dev->data->dev_conf.rxmode.mq_mode == ETH_MQ_RX_RSS) {
@@ -1089,6 +1100,21 @@ static int eth_dev_configure(struct rte_eth_dev *dev)
     internals->txq[i].maxTxPktSize = internals->maxTxPktSize;
   }
 
+	if (rx_offloads & DEV_RX_OFFLOAD_TIMESTAMP)
+	{
+		if (internals->tsMultiplier == 0) {
+			enable_ts[dev->data->port_id] = false;
+			PMD_NTACC_LOG(ERR, "Adapter timpestamp format is not supported");
+			return -EPERM;
+		}
+		else {
+			if (rte_mbuf_dyn_rx_timestamp_register(&timestamp_dynfield_offset, &timestamp_rx_dynflag) != 0) {
+				PMD_NTACC_LOG(ERR, "Error to register timestamp field/flag");
+				return -rte_errno;
+			}
+			enable_ts[dev->data->port_id] = true;
+		}
+	}
   return 0;
 }
 
@@ -1334,7 +1360,7 @@ static int eth_stats_reset(struct rte_eth_dev *dev)
 }
 #endif
 
-static void eth_dev_close(struct rte_eth_dev *dev)
+static int eth_dev_close(struct rte_eth_dev *dev)
 {
   struct pmd_internals *internals = dev->data->dev_private;
   PMD_NTACC_LOG(DEBUG, "Closing port %u (%u) on adapter %u\n", internals->port, deviceCount, internals->adapterNo);
@@ -1367,6 +1393,7 @@ static void eth_dev_close(struct rte_eth_dev *dev)
     PMD_NTACC_LOG(DEBUG, "Closing dyn lib\n");
     dlclose(_libnt);
   }
+	return 0;
 }
 
 static void eth_queue_release(void *q __rte_unused)
@@ -2301,43 +2328,6 @@ static int _dev_flow_flush(struct rte_eth_dev *dev,
   return 0;
 }
 
-static int _hash_filter_ctrl(struct rte_eth_dev *dev,
-                             enum rte_filter_op filter_op,
-                             void *arg)
-{
-  struct pmd_internals *internals = dev->data->dev_private;
-  struct rte_eth_hash_filter_info *info = (struct rte_eth_hash_filter_info *)arg;
-  int ret = 0;
-
-  switch (filter_op) {
-  case RTE_ETH_FILTER_NOP:
-    break;
-  case RTE_ETH_FILTER_SET:
-    if (info->info_type == RTE_ETH_HASH_FILTER_SYM_HASH_ENA_PER_PORT) {
-      if (info->info.enable) {
-        if (internals->symHashMode != SYM_HASH_ENA_PER_PORT) {
-          internals->symHashMode = SYM_HASH_ENA_PER_PORT;
-        }
-      }
-      else {
-        if (internals->symHashMode != SYM_HASH_DIS_PER_PORT) {
-          internals->symHashMode = SYM_HASH_DIS_PER_PORT;
-        }
-      }
-    }
-    else {
-      PMD_NTACC_LOG(WARNING, ">>> Warning: Filter Hash - info_type (%d) not supported", info->info_type);
-      ret = -ENOTSUP;
-    }
-    break;
-  default:
-    PMD_NTACC_LOG(WARNING, ">>> Warning:  Filter Hash - Filter operation (%d) not supported", filter_op);
-    ret = -ENOTSUP;
-    break;
-  }
-  return ret;
-}
-
 static unsigned int _checkHostbuffers(struct rte_eth_dev *dev, uint8_t queue)
 {
   int status;
@@ -2541,26 +2531,18 @@ static int _dev_filter_ctrl(struct rte_eth_dev *dev __rte_unused,
                             enum rte_filter_op filter_op,
                             void *arg)
 {
-  int ret = EINVAL;
-
-  switch (filter_type) {
-  case RTE_ETH_FILTER_HASH:
-    ret = _hash_filter_ctrl(dev, filter_op, arg);
-    return ret;
-  case RTE_ETH_FILTER_GENERIC:
-    switch (filter_op) {
-    case RTE_ETH_FILTER_NOP:
-      return 0;
-    default:
-      *(const void **)arg = &_dev_flow_ops;
-      return 0;
-    }
-  default:
-    PMD_NTACC_LOG(ERR, "NTACC: %s: filter type (%d) not supported\n", __func__, filter_type);
-    break;
-  }
-
-  return -ret;
+  if (filter_type == RTE_ETH_FILTER_GENERIC) {
+		if (filter_op == RTE_ETH_FILTER_GET) {
+			*(const void **)arg = &_dev_flow_ops;
+			return 0;
+		}
+		else {
+			PMD_NTACC_LOG(ERR, "NTACC: %s: filter operation (%d) not supported\n", __func__, filter_op);
+			return -EINVAL;
+		}
+	}
+  PMD_NTACC_LOG(ERR, "NTACC: %s: filter type (%d) not supported\n", __func__, filter_type);
+  return -EINVAL;
 }
 
 static int eth_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)

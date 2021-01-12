@@ -147,7 +147,7 @@ virtqueue_dequeue_burst_rx_packed(struct virtqueue *vq,
 
 	for (i = 0; i < num; i++) {
 		used_idx = vq->vq_used_cons_idx;
-		/* desc_is_used has a load-acquire or rte_cio_rmb inside
+		/* desc_is_used has a load-acquire or rte_io_rmb inside
 		 * and wait for used desc in virtqueue.
 		 */
 		if (!desc_is_used(&desc[used_idx], vq))
@@ -910,9 +910,10 @@ virtio_rx_offload(struct rte_mbuf *m, struct virtio_net_hdr *hdr)
 			 */
 			uint16_t csum = 0, off;
 
-			rte_raw_cksum_mbuf(m, hdr->csum_start,
+			if (rte_raw_cksum_mbuf(m, hdr->csum_start,
 				rte_pktmbuf_pkt_len(m) - hdr->csum_start,
-				&csum);
+				&csum) < 0)
+				return -EINVAL;
 			if (likely(csum != 0xffff))
 				csum = ~csum;
 			off = hdr->csum_offset + hdr->csum_start;
@@ -1756,7 +1757,7 @@ virtio_xmit_pkts_packed(void *tx_queue, struct rte_mbuf **tx_pkts,
 
 	for (nb_tx = 0; nb_tx < nb_pkts; nb_tx++) {
 		struct rte_mbuf *txm = tx_pkts[nb_tx];
-		int can_push = 0, slots, need;
+		int can_push = 0, use_indirect = 0, slots, need;
 
 		/* optimize ring usage */
 		if ((vtpci_with_feature(hw, VIRTIO_F_ANY_LAYOUT) ||
@@ -1768,12 +1769,15 @@ virtio_xmit_pkts_packed(void *tx_queue, struct rte_mbuf **tx_pkts,
 		    rte_is_aligned(rte_pktmbuf_mtod(txm, char *),
 			   __alignof__(struct virtio_net_hdr_mrg_rxbuf)))
 			can_push = 1;
-
+		else if (vtpci_with_feature(hw, VIRTIO_RING_F_INDIRECT_DESC) &&
+			 txm->nb_segs < VIRTIO_MAX_TX_INDIRECT)
+			use_indirect = 1;
 		/* How many main ring entries are needed to this Tx?
+		 * indirect   => 1
 		 * any_layout => number of segments
 		 * default    => number of segments + 1
 		 */
-		slots = txm->nb_segs + !can_push;
+		slots = use_indirect ? 1 : (txm->nb_segs + !can_push);
 		need = slots - vq->vq_free_cnt;
 
 		/* Positive value indicates it need free vring descriptors */
@@ -1791,7 +1795,8 @@ virtio_xmit_pkts_packed(void *tx_queue, struct rte_mbuf **tx_pkts,
 		if (can_push)
 			virtqueue_enqueue_xmit_packed_fast(txvq, txm, in_order);
 		else
-			virtqueue_enqueue_xmit_packed(txvq, txm, slots, 0,
+			virtqueue_enqueue_xmit_packed(txvq, txm, slots,
+						      use_indirect, 0,
 						      in_order);
 
 		virtio_update_packet_stats(&txvq->stats, txm);

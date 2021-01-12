@@ -2,12 +2,12 @@
 # Copyright(c) 2018 Cavium, Inc
 if not is_linux
 	build = false
-	reason = 'only supported on linux'
+	reason = 'only supported on Linux'
 endif
 
 deps += ['bus_pci']
 deps += ['common_cpt']
-name = 'octeontx_crypto'
+fmt_name = 'octeontx_crypto'
 
 sources = files('otx_cryptodev.c',
 		'otx_cryptodev_capabilities.c',

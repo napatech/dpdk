@@ -4,7 +4,7 @@
 HNS3 Poll Mode Driver
 ===============================
 
-The hns3 PMD (librte_pmd_hns3) provides poll mode driver support
+The hns3 PMD (**librte_net_hns3**) provides poll mode driver support
 for the inbuilt Hisilicon Network Subsystem(HNS) network engine
 found in the Hisilicon Kunpeng 920 SoC.
 
@@ -29,13 +29,14 @@ Features of the HNS3 PMD are:
 - QinQ inserting
 - DCB
 - Scattered and gather for TX and RX
-- Flow director
+- Vector Poll mode driver
 - Dump register
 - SR-IOV VF
 - Multi-process
 - MAC/VLAN filter
 - MTU update
 - NUMA support
+- Generic flow API
 
 Prerequisites
 -------------
@@ -44,16 +45,6 @@ Prerequisites
 
 - Follow the DPDK :ref:`Getting Started Guide for Linux <linux_gsg>` to setup the basic DPDK environment.
 
-Pre-Installation Configuration
-------------------------------
-
-Config File Options
-~~~~~~~~~~~~~~~~~~~
-
-The following options can be modified in the ``config`` file.
-Please note that enabling debugging options may affect system performance.
-
-- ``CONFIG_RTE_LIBRTE_HNS3_PMD`` (default ``y``)
 
 Driver compilation and testing
 ------------------------------

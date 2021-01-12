@@ -104,6 +104,21 @@ struct rte_ipv4_hdr {
 #define RTE_IPV4_VHL_DEF    ((IPVERSION << 4) | RTE_IPV4_MIN_IHL)
 
 /**
+ * Get the length of an IPv4 header.
+ *
+ * @param ipv4_hdr
+ *   Pointer to the IPv4 header.
+ * @return
+ *   The length of the IPv4 header (with options if present) in bytes.
+ */
+static inline uint8_t
+rte_ipv4_hdr_len(const struct rte_ipv4_hdr *ipv4_hdr)
+{
+	return (uint8_t)((ipv4_hdr->version_ihl & RTE_IPV4_HDR_IHL_MASK) *
+		RTE_IPV4_IHL_MULTIPLIER);
+}
+
+/**
  * @internal Calculate a sum of all words in the buffer.
  * Helper routine for the rte_raw_cksum().
  *
@@ -225,6 +240,9 @@ rte_raw_cksum_mbuf(const struct rte_mbuf *m, uint32_t off, uint32_t len,
 			break;
 		off -= seglen;
 	}
+	RTE_ASSERT(seg != NULL);
+	if (seg == NULL)
+		return -1;
 	seglen -= off;
 	buf = rte_pktmbuf_mtod_offset(seg, const char *, off);
 	if (seglen >= len) {
@@ -269,7 +287,7 @@ static inline uint16_t
 rte_ipv4_cksum(const struct rte_ipv4_hdr *ipv4_hdr)
 {
 	uint16_t cksum;
-	cksum = rte_raw_cksum(ipv4_hdr, sizeof(struct rte_ipv4_hdr));
+	cksum = rte_raw_cksum(ipv4_hdr, rte_ipv4_hdr_len(ipv4_hdr));
 	return (uint16_t)~cksum;
 }
 
@@ -302,6 +320,8 @@ rte_ipv4_phdr_cksum(const struct rte_ipv4_hdr *ipv4_hdr, uint64_t ol_flags)
 		uint16_t len;      /* L4 length. */
 	} psd_hdr;
 
+	uint32_t l3_len;
+
 	psd_hdr.src_addr = ipv4_hdr->src_addr;
 	psd_hdr.dst_addr = ipv4_hdr->dst_addr;
 	psd_hdr.zero = 0;
@@ -309,9 +329,9 @@ rte_ipv4_phdr_cksum(const struct rte_ipv4_hdr *ipv4_hdr, uint64_t ol_flags)
 	if (ol_flags & PKT_TX_TCP_SEG) {
 		psd_hdr.len = 0;
 	} else {
-		psd_hdr.len = rte_cpu_to_be_16(
-			(uint16_t)(rte_be_to_cpu_16(ipv4_hdr->total_length)
-				- sizeof(struct rte_ipv4_hdr)));
+		l3_len = rte_be_to_cpu_16(ipv4_hdr->total_length);
+		psd_hdr.len = rte_cpu_to_be_16((uint16_t)(l3_len -
+			rte_ipv4_hdr_len(ipv4_hdr)));
 	}
 	return rte_raw_cksum(&psd_hdr, sizeof(psd_hdr));
 }
@@ -319,8 +339,8 @@ rte_ipv4_phdr_cksum(const struct rte_ipv4_hdr *ipv4_hdr, uint64_t ol_flags)
 /**
  * Process the IPv4 UDP or TCP checksum.
  *
- * The IPv4 header should not contains options. The IP and layer 4
- * checksum must be set to 0 in the packet by the caller.
+ * The IP and layer 4 checksum must be set to 0 in the packet by
+ * the caller.
  *
  * @param ipv4_hdr
  *   The pointer to the contiguous IPv4 header.
@@ -334,12 +354,14 @@ rte_ipv4_udptcp_cksum(const struct rte_ipv4_hdr *ipv4_hdr, const void *l4_hdr)
 {
 	uint32_t cksum;
 	uint32_t l3_len, l4_len;
+	uint8_t ip_hdr_len;
 
+	ip_hdr_len = rte_ipv4_hdr_len(ipv4_hdr);
 	l3_len = rte_be_to_cpu_16(ipv4_hdr->total_length);
-	if (l3_len < sizeof(struct rte_ipv4_hdr))
+	if (l3_len < ip_hdr_len)
 		return 0;
 
-	l4_len = l3_len - sizeof(struct rte_ipv4_hdr);
+	l4_len = l3_len - ip_hdr_len;
 
 	cksum = rte_raw_cksum(l4_hdr, l4_len);
 	cksum += rte_ipv4_phdr_cksum(ipv4_hdr, 0);
@@ -456,8 +478,30 @@ rte_ipv6_udptcp_cksum(const struct rte_ipv6_hdr *ipv6_hdr, const void *l4_hdr)
 	return (uint16_t)cksum;
 }
 
-/* IPv6 fragmentation header size */
-#define RTE_IPV6_FRAG_HDR_SIZE 8
+/** IPv6 fragment extension header. */
+#define	RTE_IPV6_EHDR_MF_SHIFT	0
+#define	RTE_IPV6_EHDR_MF_MASK	1
+#define	RTE_IPV6_EHDR_FO_SHIFT	3
+#define	RTE_IPV6_EHDR_FO_MASK	(~((1 << RTE_IPV6_EHDR_FO_SHIFT) - 1))
+#define	RTE_IPV6_EHDR_FO_ALIGN	(1 << RTE_IPV6_EHDR_FO_SHIFT)
+
+#define RTE_IPV6_FRAG_USED_MASK	(RTE_IPV6_EHDR_MF_MASK | RTE_IPV6_EHDR_FO_MASK)
+
+#define RTE_IPV6_GET_MF(x)	((x) & RTE_IPV6_EHDR_MF_MASK)
+#define RTE_IPV6_GET_FO(x)	((x) >> RTE_IPV6_EHDR_FO_SHIFT)
+
+#define RTE_IPV6_SET_FRAG_DATA(fo, mf)	\
+	(((fo) & RTE_IPV6_EHDR_FO_MASK) | ((mf) & RTE_IPV6_EHDR_MF_MASK))
+
+struct rte_ipv6_fragment_ext {
+	uint8_t next_header;	/**< Next header type */
+	uint8_t reserved;	/**< Reserved */
+	rte_be16_t frag_data;	/**< All fragmentation data */
+	rte_be32_t id;		/**< Packet ID */
+} __rte_packed;
+
+/* IPv6 fragment extension header size */
+#define RTE_IPV6_FRAG_HDR_SIZE	sizeof(struct rte_ipv6_fragment_ext)
 
 /**
  * Parse next IPv6 header extension

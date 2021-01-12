@@ -554,7 +554,7 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 			}
 
 			/* Check if VNI is masked. */
-			if (vxlan_spec && vxlan_mask) {
+			if (vxlan_mask != NULL) {
 				vni_masked =
 					!!memcmp(vxlan_mask->vni, vni_mask,
 						 RTE_DIM(vni_mask));
@@ -1365,6 +1365,8 @@ use_vnic:
 		if (vnic->rx_queue_cnt > 1) {
 			vnic->hash_type =
 				bnxt_rte_to_hwrm_hash_types(rss->types);
+			vnic->hash_mode =
+			bnxt_rte_to_hwrm_hash_level(bp, rss->types, rss->level);
 
 			if (!rss->key_len) {
 				/* If hash key has not been specified,

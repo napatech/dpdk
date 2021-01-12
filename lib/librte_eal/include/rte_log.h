@@ -27,20 +27,6 @@ extern "C" {
 #include <rte_config.h>
 #include <rte_compat.h>
 
-struct rte_log_dynamic_type;
-
-/** The rte_log structure. */
-struct rte_logs {
-	uint32_t type;  /**< Bitfield with enabled logs. */
-	uint32_t level; /**< Log level. */
-	FILE *file;     /**< Output file set by rte_openlog_stream, or NULL. */
-	size_t dynamic_types_len;
-	struct rte_log_dynamic_type *dynamic_types;
-};
-
-/** Global log information */
-extern struct rte_logs rte_logs;
-
 /* SDK log type */
 #define RTE_LOGTYPE_EAL        0 /**< Log related to eal. */
 #define RTE_LOGTYPE_MALLOC     1 /**< Log related to malloc. */
@@ -103,16 +89,12 @@ extern struct rte_logs rte_logs;
 int rte_openlog_stream(FILE *f);
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Retrieve the stream used by the logging system (see rte_openlog_stream()
  * to change it).
  *
  * @return
  *   Pointer to the stream.
  */
-__rte_experimental
 FILE *rte_log_get_stream(void);
 
 /**
@@ -274,7 +256,7 @@ void rte_log_dump(FILE *f);
  * to rte_openlog_stream().
  *
  * The level argument determines if the log should be displayed or
- * not, depending on the global rte_logs variable.
+ * not, depending on the loglevel settings.
  *
  * The preferred alternative is the RTE_LOG() because it adds the
  * level and type in the logged string.
@@ -305,7 +287,7 @@ int rte_log(uint32_t level, uint32_t logtype, const char *format, ...)
  * to rte_openlog_stream().
  *
  * The level argument determines if the log should be displayed or
- * not, depending on the global rte_logs variable. A trailing
+ * not, depending on the loglevel settings. A trailing
  * newline may be added if needed.
  *
  * The preferred alternative is the RTE_LOG() because it adds the

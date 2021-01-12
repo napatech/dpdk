@@ -282,14 +282,28 @@ struct rte_flow {
 #define I40E_ETH_OVERHEAD \
 	(RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN + I40E_VLAN_TAG_SIZE * 2)
 
+#define I40E_RXTX_BYTES_H_16_BIT(bytes) ((bytes) & ~I40E_48_BIT_MASK)
+#define I40E_RXTX_BYTES_L_48_BIT(bytes) ((bytes) & I40E_48_BIT_MASK)
+
 struct i40e_adapter;
 struct rte_pci_driver;
+
+/**
+ * MAC filter type
+ */
+enum i40e_mac_filter_type {
+	I40E_MAC_PERFECT_MATCH = 1, /**< exact match of MAC addr. */
+	I40E_MACVLAN_PERFECT_MATCH, /**< exact match of MAC addr and VLAN ID. */
+	I40E_MAC_HASH_MATCH, /**< hash match of MAC addr. */
+	/** hash match of MAC addr and exact match of VLAN ID. */
+	I40E_MACVLAN_HASH_MATCH,
+};
 
 /**
  * MAC filter structure
  */
 struct i40e_mac_filter_info {
-	enum rte_mac_filter_type filter_type;
+	enum i40e_mac_filter_type filter_type;
 	struct rte_ether_addr mac_addr;
 };
 
@@ -344,7 +358,7 @@ struct i40e_veb {
 /* i40e MACVLAN filter structure */
 struct i40e_macvlan_filter {
 	struct rte_ether_addr macaddr;
-	enum rte_mac_filter_type filter_type;
+	enum i40e_mac_filter_type filter_type;
 	uint16_t vlan_id;
 };
 
@@ -399,6 +413,8 @@ struct i40e_vsi {
 	uint8_t vlan_anti_spoof_on; /* The VLAN anti-spoofing enabled */
 	uint8_t vlan_filter_on; /* The VLAN filter enabled */
 	struct i40e_bw_info bw_info; /* VSI bandwidth information */
+	uint64_t prev_rx_bytes;
+	uint64_t prev_tx_bytes;
 };
 
 struct pool_entry {
@@ -594,11 +610,22 @@ enum i40e_fdir_ip_type {
 	I40E_FDIR_IPTYPE_IPV6,
 };
 
+/**
+ * Structure to store flex pit for flow diretor.
+ */
+struct i40e_fdir_flex_pit {
+	uint8_t src_offset; /* offset in words from the beginning of payload */
+	uint8_t size;       /* size in words */
+	uint8_t dst_offset; /* offset in words of flexible payload */
+};
+
 /* A structure used to contain extend input of flow */
 struct i40e_fdir_flow_ext {
 	uint16_t vlan_tci;
 	uint8_t flexbytes[RTE_ETH_FDIR_MAX_FLEXLEN];
 	/* It is filled by the flexible payload to match. */
+	uint8_t flex_mask[I40E_FDIR_MAX_FLEX_LEN];
+	uint8_t raw_id;
 	uint8_t is_vf;   /* 1 for VF, 0 for port dev */
 	uint16_t dst_id; /* VF ID, available when is_vf is 1*/
 	bool inner_ip;   /* If there is inner ip */
@@ -607,6 +634,8 @@ struct i40e_fdir_flow_ext {
 	bool customized_pctype; /* If customized pctype is used */
 	bool pkt_template; /* If raw packet template is used */
 	bool is_udp; /* ipv4|ipv6 udp flow */
+	enum i40e_flxpld_layer_idx layer_idx;
+	struct i40e_fdir_flex_pit flex_pit[I40E_MAX_FLXPLD_LAYER * I40E_MAX_FLXPLD_FIED];
 };
 
 /* A structure used to define the input for a flow director filter entry */
@@ -648,23 +677,13 @@ struct i40e_fdir_action {
 };
 
 /* A structure used to define the flow director filter entry by filter_ctrl API
- * It supports RTE_ETH_FILTER_FDIR with RTE_ETH_FILTER_ADD and
- * RTE_ETH_FILTER_DELETE operations.
+ * It supports RTE_ETH_FILTER_FDIR data representation.
  */
 struct i40e_fdir_filter_conf {
 	uint32_t soft_id;
 	/* ID, an unique value is required when deal with FDIR entry */
 	struct i40e_fdir_input input;    /* Input set */
 	struct i40e_fdir_action action;  /* Action taken when match */
-};
-
-/*
- * Structure to store flex pit for flow diretor.
- */
-struct i40e_fdir_flex_pit {
-	uint8_t src_offset;    /* offset in words from the beginning of payload */
-	uint8_t size;          /* size in words */
-	uint8_t dst_offset;    /* offset in words of flexible payload */
 };
 
 struct i40e_fdir_flex_mask {
@@ -1156,6 +1175,10 @@ struct i40e_pf {
 	uint16_t switch_domain_id;
 
 	struct i40e_vf_msg_cfg vf_msg_cfg;
+	uint64_t prev_rx_bytes;
+	uint64_t prev_tx_bytes;
+	uint64_t internal_prev_rx_bytes;
+	uint64_t internal_prev_tx_bytes;
 };
 
 enum pending_msg {
@@ -1200,6 +1223,7 @@ struct i40e_vf {
 	bool promisc_unicast_enabled;
 	bool promisc_multicast_enabled;
 
+	rte_spinlock_t cmd_send_lock;
 	uint32_t version_major; /* Major version number */
 	uint32_t version_minor; /* Minor version number */
 	uint16_t promisc_flags; /* Promiscuous setting */
@@ -1348,16 +1372,11 @@ void i40e_fdir_info_get(struct rte_eth_dev *dev,
 			struct rte_eth_fdir_info *fdir);
 void i40e_fdir_stats_get(struct rte_eth_dev *dev,
 			 struct rte_eth_fdir_stats *stat);
-int i40e_fdir_ctrl_func(struct rte_eth_dev *dev,
-			  enum rte_filter_op filter_op,
-			  void *arg);
 int i40e_select_filter_input_set(struct i40e_hw *hw,
 				 struct rte_eth_input_set_conf *conf,
 				 enum rte_filter_type filter);
 void i40e_fdir_filter_restore(struct i40e_pf *pf);
 int i40e_hash_filter_inset_select(struct i40e_hw *hw,
-			     struct rte_eth_input_set_conf *conf);
-int i40e_fdir_filter_inset_select(struct i40e_pf *pf,
 			     struct rte_eth_input_set_conf *conf);
 int i40e_pf_host_send_msg_to_vf(struct i40e_pf_vf *vf, uint32_t opcode,
 				uint32_t retval, uint8_t *msg,
@@ -1386,9 +1405,6 @@ uint64_t i40e_get_default_input_set(uint16_t pctype);
 int i40e_ethertype_filter_set(struct i40e_pf *pf,
 			      struct rte_eth_ethertype_filter *filter,
 			      bool add);
-int i40e_add_del_fdir_filter(struct rte_eth_dev *dev,
-			     const struct rte_eth_fdir_filter *filter,
-			     bool add);
 struct rte_flow *
 i40e_fdir_entry_pool_get(struct i40e_fdir_info *fdir_info);
 void i40e_fdir_entry_pool_put(struct i40e_fdir_info *fdir_info,

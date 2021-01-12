@@ -45,7 +45,7 @@ enetc_dev_start(struct rte_eth_dev *dev)
 	return 0;
 }
 
-static void
+static int
 enetc_dev_stop(struct rte_eth_dev *dev)
 {
 	struct enetc_eth_hw *hw =
@@ -54,6 +54,7 @@ enetc_dev_stop(struct rte_eth_dev *dev)
 	uint32_t val;
 
 	PMD_INIT_FUNC_TRACE();
+	dev->data->dev_started = 0;
 	/* Disable port */
 	val = enetc_port_rd(enetc_hw, ENETC_PMR);
 	enetc_port_wr(enetc_hw, ENETC_PMR, val & (~ENETC_PMR_EN));
@@ -61,6 +62,8 @@ enetc_dev_stop(struct rte_eth_dev *dev)
 	val = enetc_port_rd(enetc_hw, ENETC_PM0_CMD_CFG);
 	enetc_port_wr(enetc_hw, ENETC_PM0_CMD_CFG,
 		      val & (~(ENETC_PM0_TX_EN | ENETC_PM0_RX_EN)));
+
+	return 0;
 }
 
 static const uint32_t *
@@ -545,13 +548,17 @@ enetc_stats_reset(struct rte_eth_dev *dev)
 	return 0;
 }
 
-static void
+static int
 enetc_dev_close(struct rte_eth_dev *dev)
 {
 	uint16_t i;
+	int ret;
 
 	PMD_INIT_FUNC_TRACE();
-	enetc_dev_stop(dev);
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
+
+	ret = enetc_dev_stop(dev);
 
 	for (i = 0; i < dev->data->nb_rx_queues; i++) {
 		enetc_rx_queue_release(dev->data->rx_queues[i]);
@@ -564,6 +571,11 @@ enetc_dev_close(struct rte_eth_dev *dev)
 		dev->data->tx_queues[i] = NULL;
 	}
 	dev->data->nb_tx_queues = 0;
+
+	if (rte_eal_iova_mode() == RTE_IOVA_PA)
+		dpaax_iova_table_depopulate();
+
+	return ret;
 }
 
 static int
@@ -873,6 +885,8 @@ enetc_dev_init(struct rte_eth_dev *eth_dev)
 	eth_dev->rx_pkt_burst = &enetc_recv_pkts;
 	eth_dev->tx_pkt_burst = &enetc_xmit_pkts;
 
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
+
 	/* Retrieving and storing the HW base address of device */
 	hw->hw.reg = (void *)pci_dev->mem_resource[0].addr;
 	hw->device_id = pci_dev->id.device_id;
@@ -914,14 +928,11 @@ enetc_dev_init(struct rte_eth_dev *eth_dev)
 }
 
 static int
-enetc_dev_uninit(struct rte_eth_dev *eth_dev __rte_unused)
+enetc_dev_uninit(struct rte_eth_dev *eth_dev)
 {
 	PMD_INIT_FUNC_TRACE();
 
-	if (rte_eal_iova_mode() == RTE_IOVA_PA)
-		dpaax_iova_table_depopulate();
-
-	return 0;
+	return enetc_dev_close(eth_dev);
 }
 
 static int

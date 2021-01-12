@@ -281,7 +281,9 @@ out:
 
 static void qede_interrupt_action(struct ecore_hwfn *p_hwfn)
 {
+	OSAL_SPIN_LOCK(&p_hwfn->spq_lock);
 	ecore_int_sp_dpc((osal_int_ptr_t)(p_hwfn));
+	OSAL_SPIN_UNLOCK(&p_hwfn->spq_lock);
 }
 
 static void
@@ -1161,12 +1163,13 @@ err:
 	return -1; /* common error code is < 0 */
 }
 
-static void qede_dev_stop(struct rte_eth_dev *eth_dev)
+static int qede_dev_stop(struct rte_eth_dev *eth_dev)
 {
 	struct qede_dev *qdev = QEDE_INIT_QDEV(eth_dev);
 	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
 
 	PMD_INIT_FUNC_TRACE(edev);
+	eth_dev->data->dev_started = 0;
 
 	/* Bring the link down */
 	qede_dev_set_link_state(eth_dev, false);
@@ -1181,7 +1184,7 @@ static void qede_dev_stop(struct rte_eth_dev *eth_dev)
 
 	/* Disable vport */
 	if (qede_activate_vport(eth_dev, false))
-		return;
+		return 0;
 
 	if (qdev->enable_lro)
 		qede_enable_tpa(eth_dev, false);
@@ -1193,6 +1196,8 @@ static void qede_dev_stop(struct rte_eth_dev *eth_dev)
 	ecore_hw_stop_fastpath(edev); /* TBD - loop */
 
 	DP_INFO(edev, "Device is stopped\n");
+
+	return 0;
 }
 
 static const char * const valid_args[] = {
@@ -1542,13 +1547,18 @@ static void qede_poll_sp_sb_cb(void *param)
 	}
 }
 
-static void qede_dev_close(struct rte_eth_dev *eth_dev)
+static int qede_dev_close(struct rte_eth_dev *eth_dev)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	struct qede_dev *qdev = QEDE_INIT_QDEV(eth_dev);
 	struct ecore_dev *edev = QEDE_INIT_EDEV(qdev);
+	int ret = 0;
 
 	PMD_INIT_FUNC_TRACE(edev);
+
+	/* only close in case of the primary process */
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	/* dev_stop() shall cleanup fp resources in hw but without releasing
 	 * dma memories and sw structures so that dev_start() can be called
@@ -1556,7 +1566,7 @@ static void qede_dev_close(struct rte_eth_dev *eth_dev)
 	 * can release all the resources and device can be brought up newly
 	 */
 	if (eth_dev->data->dev_started)
-		qede_dev_stop(eth_dev);
+		ret = qede_dev_stop(eth_dev);
 
 	if (qdev->vport_started)
 		qede_stop_vport(edev);
@@ -1586,6 +1596,8 @@ static void qede_dev_close(struct rte_eth_dev *eth_dev)
 
 	if (ECORE_IS_CMT(edev))
 		rte_eal_alarm_cancel(qede_poll_sp_sb_cb, (void *)eth_dev);
+
+	return ret;
 }
 
 static int
@@ -2330,7 +2342,9 @@ static int qede_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 	}
 	if (dev->data->dev_started) {
 		dev->data->dev_started = 0;
-		qede_dev_stop(dev);
+		rc = qede_dev_stop(dev);
+		if (rc != 0)
+			return rc;
 		restart = true;
 	}
 	rte_delay_ms(1000);
@@ -2386,7 +2400,6 @@ static const struct eth_dev_ops qede_eth_dev_ops = {
 	.dev_infos_get = qede_dev_info_get,
 	.rx_queue_setup = qede_rx_queue_setup,
 	.rx_queue_release = qede_rx_queue_release,
-	.rx_descriptor_status = qede_rx_descriptor_status,
 	.tx_queue_setup = qede_tx_queue_setup,
 	.tx_queue_release = qede_tx_queue_release,
 	.dev_start = qede_dev_start,
@@ -2431,7 +2444,6 @@ static const struct eth_dev_ops qede_eth_vf_dev_ops = {
 	.dev_infos_get = qede_dev_info_get,
 	.rx_queue_setup = qede_rx_queue_setup,
 	.rx_queue_release = qede_rx_queue_release,
-	.rx_descriptor_status = qede_rx_descriptor_status,
 	.tx_queue_setup = qede_tx_queue_setup,
 	.tx_queue_release = qede_tx_queue_release,
 	.dev_start = qede_dev_start,
@@ -2477,6 +2489,24 @@ static void qede_update_pf_params(struct ecore_dev *edev)
 	qed_ops->common->update_pf_params(edev, &pf_params);
 }
 
+static void qede_generate_random_mac_addr(struct rte_ether_addr *mac_addr)
+{
+	uint64_t random;
+
+	/* Set Organizationally Unique Identifier (OUI) prefix. */
+	mac_addr->addr_bytes[0] = 0x00;
+	mac_addr->addr_bytes[1] = 0x09;
+	mac_addr->addr_bytes[2] = 0xC0;
+
+	/* Force indication of locally assigned MAC address. */
+	mac_addr->addr_bytes[0] |= RTE_ETHER_LOCAL_ADMIN_ADDR;
+
+	/* Generate the last 3 bytes of the MAC address with a random number. */
+	random = rte_rand();
+
+	memcpy(&mac_addr->addr_bytes[3], &random, 3);
+}
+
 static int qede_common_dev_init(struct rte_eth_dev *eth_dev, bool is_vf)
 {
 	struct rte_pci_device *pci_dev;
@@ -2489,7 +2519,7 @@ static int qede_common_dev_init(struct rte_eth_dev *eth_dev, bool is_vf)
 	uint8_t bulletin_change;
 	uint8_t vf_mac[RTE_ETHER_ADDR_LEN];
 	uint8_t is_mac_forced;
-	bool is_mac_exist;
+	bool is_mac_exist = false;
 	/* Fix up ecore debug level */
 	uint32_t dp_module = ~0 & ~ECORE_MSG_HW;
 	uint8_t dp_level = ECORE_LEVEL_VERBOSE;
@@ -2515,6 +2545,7 @@ static int qede_common_dev_init(struct rte_eth_dev *eth_dev, bool is_vf)
 	}
 
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	/* @DPDK */
 	edev->vendor_id = pci_dev->id.vendor_id;
@@ -2667,9 +2698,24 @@ static int qede_common_dev_init(struct rte_eth_dev *eth_dev, bool is_vf)
 				DP_ERR(edev, "No VF macaddr assigned\n");
 			}
 		}
+
+		/* If MAC doesn't exist from PF, generate random one */
+		if (!is_mac_exist) {
+			struct rte_ether_addr *mac_addr;
+
+			mac_addr = (struct rte_ether_addr *)&vf_mac;
+			qede_generate_random_mac_addr(mac_addr);
+
+			rte_ether_addr_copy(mac_addr,
+					    &eth_dev->data->mac_addrs[0]);
+
+			rte_ether_addr_copy(&eth_dev->data->mac_addrs[0],
+					    &adapter->primary_mac);
+		}
 	}
 
 	eth_dev->dev_ops = (is_vf) ? &qede_eth_vf_dev_ops : &qede_eth_dev_ops;
+	eth_dev->rx_descriptor_status = qede_rx_descriptor_status;
 
 	adapter->num_tx_queues = 0;
 	adapter->num_rx_queues = 0;
@@ -2700,6 +2746,7 @@ static int qede_common_dev_init(struct rte_eth_dev *eth_dev, bool is_vf)
 		adapter->vxlan.enable = false;
 		adapter->geneve.enable = false;
 		adapter->ipgre.enable = false;
+		qed_ops->sriov_configure(edev, pci_dev->max_vfs);
 	}
 
 	DP_INFO(edev, "MAC address : %02x:%02x:%02x:%02x:%02x:%02x\n",
@@ -2736,20 +2783,8 @@ static int qede_dev_common_uninit(struct rte_eth_dev *eth_dev)
 {
 	struct qede_dev *qdev = eth_dev->data->dev_private;
 	struct ecore_dev *edev = &qdev->edev;
-
 	PMD_INIT_FUNC_TRACE(edev);
-
-	/* only uninitialize in the primary process */
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return 0;
-
-	/* safe to close dev here */
 	qede_dev_close(eth_dev);
-
-	eth_dev->dev_ops = NULL;
-	eth_dev->rx_pkt_burst = NULL;
-	eth_dev->tx_pkt_burst = NULL;
-
 	return 0;
 }
 

@@ -807,6 +807,7 @@ check_all_ports_link_status(uint32_t port_mask)
 	uint8_t count, all_ports_up, print_flag = 0;
 	struct rte_eth_link link;
 	int ret;
+	char link_status_text[RTE_ETH_LINK_MAX_STR_LEN];
 
 	printf("\nChecking link status");
 	fflush(stdout);
@@ -830,14 +831,10 @@ check_all_ports_link_status(uint32_t port_mask)
 			}
 			/* print link status if flag set */
 			if (print_flag == 1) {
-				if (link.link_status)
-					printf(
-					"Port%d Link Up. Speed %u Mbps -%s\n",
-						portid, link.link_speed,
-				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
-					("full-duplex") : ("half-duplex"));
-				else
-					printf("Port %d Link Down\n", portid);
+				rte_eth_link_to_str(link_status_text,
+					sizeof(link_status_text), &link);
+				printf("Port %d %s\n", portid,
+				       link_status_text);
 				continue;
 			}
 			/* clear all_ports_up flag if any link down */
@@ -1275,7 +1272,7 @@ main(int argc, char **argv)
 
 	ret = 0;
 	/* launch per-lcore init on every lcore */
-	rte_eal_mp_remote_launch(l3fwd_lkp.main_loop, NULL, CALL_MASTER);
+	rte_eal_mp_remote_launch(l3fwd_lkp.main_loop, NULL, CALL_MAIN);
 	if (evt_rsrc->enabled) {
 		for (i = 0; i < evt_rsrc->rx_adptr.nb_rx_adptr; i++)
 			rte_event_eth_rx_adapter_stop(
@@ -1287,7 +1284,10 @@ main(int argc, char **argv)
 		RTE_ETH_FOREACH_DEV(portid) {
 			if ((enabled_port_mask & (1 << portid)) == 0)
 				continue;
-			rte_eth_dev_stop(portid);
+			ret = rte_eth_dev_stop(portid);
+			if (ret != 0)
+				printf("rte_eth_dev_stop: err=%d, port=%u\n",
+				       ret, portid);
 		}
 
 		rte_eal_mp_wait_lcore();
@@ -1307,7 +1307,10 @@ main(int argc, char **argv)
 			if ((enabled_port_mask & (1 << portid)) == 0)
 				continue;
 			printf("Closing port %d...", portid);
-			rte_eth_dev_stop(portid);
+			ret = rte_eth_dev_stop(portid);
+			if (ret != 0)
+				printf("rte_eth_dev_stop: err=%d, port=%u\n",
+				       ret, portid);
 			rte_eth_dev_close(portid);
 			printf(" Done\n");
 		}
