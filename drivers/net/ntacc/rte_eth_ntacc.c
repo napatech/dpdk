@@ -1108,9 +1108,11 @@ static int eth_dev_configure(struct rte_eth_dev *dev)
 			return -EPERM;
 		}
 		else {
-			if (rte_mbuf_dyn_rx_timestamp_register(&timestamp_dynfield_offset, &timestamp_rx_dynflag) != 0) {
-				PMD_NTACC_LOG(ERR, "Error to register timestamp field/flag");
-				return -rte_errno;
+			if (timestamp_dynfield_offset == -1) {
+				if (rte_mbuf_dyn_rx_timestamp_register(&timestamp_dynfield_offset, &timestamp_rx_dynflag) != 0) {
+					PMD_NTACC_LOG(ERR, "Error to register timestamp field/flag");
+					return -rte_errno;
+				}
 			}
 			enable_ts[dev->data->port_id] = true;
 		}
