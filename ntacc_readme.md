@@ -9,8 +9,7 @@ The NTACC PMD driver does not need to be bound. This means that the dpdk-devbind
 	1. [SmartNic with Limited filter support](#LimitedFilter)
 2. [Compiling the Napatech NTACC PMD driver](#compiling)
 	1. [Environment variable](#Environment)
-	2. [Configuration setting using old makefile](#configuration)
-	3. [Configuration setting using meson/ninja](#configurationmeson)
+	2. [Configuration setting using meson/ninja](#configurationmeson)
 3. [Napatech Driver Configuration](#driverconfig)
 	1. [Statistics update interval](#statinterval)
 4. [Number of RX queues and TX queues available](#queues)
@@ -24,8 +23,8 @@ The NTACC PMD driver does not need to be bound. This means that the dpdk-devbind
 12. [Generic rte_flow RSS/Hash functions](#hash)
 	1. [Symmetric/Unsymmetric hash](#Symmetric)
 	2. [Default RSS/HASH function](#DefaultRSS)
-13. [Default filter](#DefaultFilter)
-	1. [Disabling default filter](#DisablingDefaultFilter)
+13. [Catch All Filter - promiscuous mode](#DefaultFilter)
+	1. [Disabling catch all filter](#DisablingDefaultFilter)
 14. [Examples of generic rte_flow filters](#examples1)
 15. [Limited filter resources](#resources)
 16. [Filter creation example -  5tuple filter](#Filtercreationexample)
@@ -61,6 +60,8 @@ All Napatech 4Generation SmartNics are supported. Some SmartNics have limited fi
 |NT200A02 SmartNICs (4GA)|
 |NT200A01 SmartNICs (4GA)|
 |NT200C01 SmartNICs (4GA)|
+|NT100A01 SmartNICs (4GA)|
+|NT50B01 SmartNICs (4GA)|
 |NT100E3-1-PTP SmartNICs (4GA)|
 |NT80E3-2-PTP SmartNICs (4GA)|
 |NT80E3-2-PTP-8×10/2×40 SmartNICs (4GA)|
@@ -69,7 +70,7 @@ All Napatech 4Generation SmartNics are supported. Some SmartNics have limited fi
 |NT20E3-2-PTP SmartNICs (4GA)|
 
 The complete driver package can be downloaded here:
-[Link™ Capture Software 12.1.5 Linux](https://supportportal.napatech.com/index.php?/selfhelp/view-article/link--capture-software-1215-for-linux/596)
+[Link™ Capture Software 12.5.2 Linux](https://supportportal.napatech.com/index.php?/selfhelp/view-article/link--capture-software-1252-for-linux/634)
 
 
 #### SmartNic with Limited filter support <a name="LimitedFilter"></a>
@@ -106,37 +107,12 @@ In order to compile the NTACC PMD, the NAPATECH3_PATH environment variable must 
 
 /opt/napatech3 is the default path for installing the Napatech driver. If the driver is installed elsewhere, that path must be used.
 
-> Note: When using the old makefile the parameter MAKE_PAUSE=n must be added to the commandline.
-
-##### Configuration setting using old makefile <a name="configuration"></a>
-To enable DPDK to compile NTACC PMD, a configuration setting must be set in the file common_base.
-
-`CONFIG_RTE_LIBRTE_PMD_NTACC=y`
-
-Three other configuration settings can be used to change the behaviour of the NTACC PMD:
-
-- Hardware-based or software-based statistic:
-This setting is used to select between software-based and hardware-based statistics.
-<br>`CONFIG_RTE_LIBRTE_PMD_NTACC_USE_SW_STAT=n`
-
-- Disable default filter:
-This setting is used to disable generation of a default catch all filter. See [Default filter](#default-filter) for further information.
-<br>`CONFIG_RTE_LIBRTE_PMD_NTACC_DISABLE_DEFAULT_FILTER=n`
-
-- Copy offset:
-This setting is used to copy offset to different packets layers into the mbuf. See [Copy packet offset to mbuf](#copyoffset) for further information.
-<br>`CONFIG_RTE_LIBRTE_PMD_NTACC_COPY_OFFSET=y`
-
 ##### Configuration setting using meson/ninja <a name="configurationmeson"></a>
-The NTACC PMD automatically compiled.
+The NTACC PMD is automatically compiled.
 
 - Hardware-based or software-based statistic:
 This setting is used to select between software-based and hardware-based statistics. To enable the setting run:
 <br>`meson setup --reconfigure -Dntacc_use_sw_stat=true`
-
-- Disable default filter:
-This setting is used to disable generation of a default catch all filter. See [Default filter](#default-filter) for further information. To enable the setting run:
-<br>`meson setup --reconfigure -Dntacc_no_default_filter=true`
 
 ## Napatech Driver Configuration <a name="driverconfig"></a>
 The Napatech driver is configured using an ini-file – `ntservice.ini`. By default, the ini-file is located in `/opt/napatech3/config`. The following changes must be made to the default ini-file.
@@ -169,7 +145,7 @@ HostBuffersTx = [4, 16, -1]
 This means that it will be possible to create 4 RX queues and 4 TX queues.
 
 #### Statistics update interval  <a name="statinterval"></a>
-When using hardware-based statistics `CONFIG_RTE_LIBRTE_PMD_NTACC_USE_SW_STAT=n`, the default update interval is 500 ms, i.e. the time between each time the statistics are updated by the SmartNic. In some cases, the update interval is too large. The update interval can be changed by changing the `StatInterval` option in the system section in the ini-file.
+When using hardware-based statistics `ntacc_use_sw_stat=true`, the default update interval is 500 ms, i.e. the time between each time the statistics are updated by the SmartNic. In some cases, the update interval is too large. The update interval can be changed by changing the `StatInterval` option in the system section in the ini-file.
 ```
 [System]
 StatInterval=1
@@ -190,8 +166,6 @@ The maximum number of RX queues per port is the smallest number of either:
 
 - (256 / number of ports)
 - `RTE_ETHDEV_QUEUE_STAT_CNTRS`
-
-`RTE_ETHDEV_QUEUE_STAT_CNTRS` is defined in `common_base`
 
 ## Starting NTACC PMD <a name="starting"></a>
 
@@ -384,26 +358,7 @@ The key generation can either be symmetric (sorted) or unsymmetric (unsorted). T
 | `RTE_ETH_HASH_FUNCTION_SIMPLE_XOR` | Symmetric (sorted) |
 | `RTE_ETH_HASH_FUNCTION_TOEPLITZ` | Not supported |
 
-The default key generation is set to Unsymmetric. It can be changed by the function:
-
-```
-int rte_eth_dev_filter_ctrl(uint8_t port_id, enum rte_filter_type filter_type, enum rte_filter_op filter_op, void *arg);
-```
-
-in the following way:
-
-```C++
-struct rte_eth_hash_filter_info info;
-memset(&info, 0, sizeof(info));
-info.info_type = RTE_ETH_HASH_FILTER_SYM_HASH_ENA_PER_PORT;
-info.info.enable = 0;
-if (rte_eth_dev_filter_ctrl(0, RTE_ETH_FILTER_HASH, RTE_ETH_FILTER_SET, &info) < 0) {
-  printf("Cannot set symmetric hash enable per port on port %u\n", 0);
-  return NULL;
-}
-```
-
-Setting `info.info.enable = 0` sets the default to unsymmetric hash and setting `info.info.enable = 1` sets the default to symmetric hash.
+The default key generation is set to Unsymmetric. 
 
 > `sorted` and `unsorted` is Napatech terms for symmetric and unsymmetric.
 
@@ -442,20 +397,18 @@ if (retval != 0)
 See below for information about the consequences of setting a default RSS/HASH function.
 
 
-## Default Filter <a name="DefaultFilter"></a>
-When starting the NTACC PMD driver, a default catch all filter with priority 62 (lowest priority) is created for each DPDK port. The filter will send all incoming packets to queue 0 for each DPDK port. If rte_flow filters are created with higher priority, then all packets matching these filters will be sent to the queues defined by the filters. All packets not matching the filter will be sent to queue 0.
+## Catch All Filter - promiscuous mode<a name="DefaultFilter"></a>
+When starting the NTACC PMD driver, no filter is created and therefor no data is received. In order to start receiving data the adapter must either be put in promiscuous mode or an rte_flow filter must be created.
+
+When putting the adapter in promiscuous mode a catch all filter with priority 62 (lowest priority) is created for the DPDK port. The filter will send all incoming packets to queue 0. If rte_flow filters are created with higher priority, then all packets matching these filters will be sent to the queues defined by the filters. All packets not matching the filter will be sent to queue 0.
 
 If a default RSS (hash) mode is defined using the rte_eth_dev_configure command (mq_mode = ETH_MQ_RX_RSS), a default catch all filter is created, that will send incoming packet to all defined queues using the defined RSS/HASH function.
 
 > With a default RSS/HASH function, the default filter will collide with any rte_flow filters created, as all non-matched packets will be distributed to all defined queues using the default RSS/HASH function. It is recommended not to define a default RSS/HASH function if any rte_flow filters are going to be used.
 
 
-#### Disabling Default Filter <a name="DisablingDefaultFilter"></a>
-The default filter can be disabled either at compile time by setting:
-
-`CONFIG_RTE_LIBRTE_PMD_NTACC_DISABLE_DEFAULT_FILTER=y`
-
-or at runtime by using the rte_flow_isolate command:
+#### Disabling catch all filter<a name="DisablingDefaultFilter"></a>
+The catch all filter can be disabled either by disabling promiscuous mode or by using the rte_flow_isolate command:
 
 | Action                       | Command                                      |
 |---------------------------|---------------------------------------------|
@@ -1303,10 +1256,6 @@ There are some limitations when using external buffers.
    Headroom is located in the mbuf buffer and as this buffer is replaced by a pointer to the Napatech internal buffer, threre is no free space for headroom.
 
 #### Enable external buffers<a name="enableexternalbuffer"></a>
-To enable *Using external buffers*, set following in common_base when using the old makefile:
-
-`CONFIG_RTE_LIBRTE_PMD_NTACC_USE_EXTERNAL_BUFFER=y` 
-
 To enable *Using external buffers*, run following command when using meson:
 
 `meson setup --reconfigure -Dntacc_external_buffers=true`
