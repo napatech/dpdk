@@ -291,11 +291,12 @@ static void eth_ntacc_rx_ext_buffer_release(void *addr __rte_unused, void *opaqu
 }
 #else
 static int eth_ntacc_rx_jumbo(struct rte_mempool *mb_pool,
-                            struct rte_mbuf *mbuf,
-                            const u_char *data,
-                            uint16_t data_len)
+                              struct rte_mbuf *mbuf,
+                              const u_char *data,
+                              uint16_t data_len)
 {
   struct rte_mbuf *m = mbuf;
+  uint16_t filled_so_far;
 
   /* Copy the first segment. */
   uint16_t len = RTE_MIN(rte_pktmbuf_tailroom(mbuf), data_len);
@@ -306,14 +307,20 @@ static int eth_ntacc_rx_jumbo(struct rte_mempool *mb_pool,
   data += len;
   mbuf->pkt_len = total_len;
   mbuf->data_len = len;
+  filled_so_far = len;
 
   while (data_len > 0) {
     /* Allocate next mbuf and point to that. */
     m->next = rte_pktmbuf_alloc(mb_pool);
-
-    if (unlikely(!m->next))
-      return -1;
-
+    if (unlikely(!m->next)) {
+      struct rte_mbuf *b = mbuf;
+      while (b != NULL) {
+        b->pkt_len = filled_so_far;
+        b = b->next;
+      }
+      m->data_len = len;
+      return filled_so_far;
+    }
     m = m->next;
 
     /* Copy next segment. */
@@ -322,12 +329,13 @@ static int eth_ntacc_rx_jumbo(struct rte_mempool *mb_pool,
 
     m->pkt_len = total_len;
     m->data_len = len;
+    filled_so_far += len;
 
     mbuf->nb_segs++;
     data_len -= len;
     data += len;
   }
-  return mbuf->nb_segs;
+  return total_len;
 }
 #endif
 
@@ -361,11 +369,11 @@ static __rte_always_inline uint16_t eth_ntacc_convert_pkt_to_mbuf(NtDyn3Descr_t 
       break;
   }
 
-	if (enable_ts[rx_q->in_port]) {
-		*RTE_MBUF_DYNFIELD(mbuf, timestamp_dynfield_offset, rte_mbuf_timestamp_t *) = 
-			dyn3->timestamp * rx_q->tsMultiplier;
-		mbuf->ol_flags |= timestamp_rx_dynflag;
-	}
+  if (enable_ts[rx_q->in_port]) {
+    *RTE_MBUF_DYNFIELD(mbuf, timestamp_dynfield_offset, rte_mbuf_timestamp_t *) =
+      dyn3->timestamp * rx_q->tsMultiplier;
+    mbuf->ol_flags |= timestamp_rx_dynflag;
+  }
   mbuf->port = rx_q->in_port + (dyn3->rxPort - rx_q->local_port);
   const uint16_t data_len = (uint16_t)(dyn3->capLength - dyn3->descrLength);
 
@@ -394,8 +402,7 @@ static __rte_always_inline uint16_t eth_ntacc_convert_pkt_to_mbuf(NtDyn3Descr_t 
 #endif
   } else {
     /* Try read jumbo frame into multi mbufs. */
-    if (unlikely(eth_ntacc_rx_jumbo(rx_q->mb_pool, mbuf, (uint8_t*)dyn3 + dyn3->descrLength, data_len) == -1))
-      return 0;
+    return eth_ntacc_rx_jumbo(rx_q->mb_pool, mbuf, (uint8_t*)dyn3 + dyn3->descrLength, data_len);
   }
 #endif
   return data_len;
@@ -565,11 +572,11 @@ static uint16_t eth_ntacc_rx_mode2(void *queue,
       break;
     }
 
-		if (enable_ts[rx_q->in_port]) {
-			*RTE_MBUF_DYNFIELD(mbuf, timestamp_dynfield_offset, rte_mbuf_timestamp_t *) = 
-				dyn3->timestamp * rx_q->tsMultiplier;
-			mbuf->ol_flags |= timestamp_rx_dynflag;
-		}
+    if (enable_ts[rx_q->in_port]) {
+      *RTE_MBUF_DYNFIELD(mbuf, timestamp_dynfield_offset, rte_mbuf_timestamp_t *) =
+        dyn3->timestamp * rx_q->tsMultiplier;
+      mbuf->ol_flags |= timestamp_rx_dynflag;
+    }
     mbuf->port = rx_q->in_port + (dyn3->rxPort - rx_q->local_port);
 
     data_len = (uint16_t)(dyn3->capLength - dyn3->descrLength);
@@ -589,9 +596,11 @@ static uint16_t eth_ntacc_rx_mode2(void *queue,
       struct rte_mbuf *m;
       const u_char *data;
       uint16_t total_len = data_len;
+      uint16_t filled_so_far;
 
       mbuf->pkt_len = total_len;
       mbuf->data_len = mbuf_len;
+      filled_so_far = mbuf_len;
 
       data = (u_char *)dyn3 + dyn3->descrLength;
       rte_memcpy((u_char *)mbuf->buf_addr + mbuf->data_off, data, mbuf_len);
@@ -602,8 +611,16 @@ static uint16_t eth_ntacc_rx_mode2(void *queue,
       while (data_len > 0) {
         /* Allocate next mbuf and point to that. */
         m->next = rte_pktmbuf_alloc(rx_q->mb_pool);
-        if (unlikely(!m->next))
-          return 0;
+        if (unlikely(!m->next)) {
+          struct rte_mbuf *b = mbuf;
+          while (b != NULL) {
+            b->pkt_len = filled_so_far;
+            b = b->next;
+          }
+          m->data_len = mbuf_len;
+          num_rx++;
+          goto OutOfMbufs;
+        }
 
         m = m->next;
         /* Copy next segment. */
@@ -612,6 +629,7 @@ static uint16_t eth_ntacc_rx_mode2(void *queue,
 
         m->pkt_len = total_len;
         m->data_len = mbuf_len;
+        filled_so_far += mbuf_len;
 
         mbuf->nb_segs++;
         data_len -= mbuf_len;
@@ -627,6 +645,7 @@ static uint16_t eth_ntacc_rx_mode2(void *queue,
       break;
     }
   }
+OutOfMbufs:
 #ifdef USE_SW_STAT
   rx_q->rx_pkts+=num_rx;
   rx_q->rx_bytes+=bytes;
@@ -832,9 +851,6 @@ static int _destroy_drop_errored_packets_filter(struct pmd_internals *internals)
 static int eth_dev_start(struct rte_eth_dev *dev)
 {
   struct pmd_internals *internals = dev->data->dev_private;
-#ifndef DO_NOT_CREATE_DEFAULT_FILTER
-  struct rte_flow_error error;
-#endif
   struct ntacc_rx_queue *rx_q = internals->rxq;
   struct ntacc_tx_queue *tx_q = internals->txq;
   uint queue;
@@ -914,10 +930,6 @@ static int eth_dev_start(struct rte_eth_dev *dev)
       break;
     }
   }
-
-#ifndef DO_NOT_CREATE_DEFAULT_FILTER
-  _dev_flow_isolate(dev, 0, &error);
-#endif
 
   _create_drop_errored_packets_filter(internals);
 
@@ -1035,14 +1047,14 @@ static int eth_dev_stop(struct rte_eth_dev *dev)
   // Detach shared memory
   shmdt(internals->shm);
   shmctl(internals->shmid, IPC_RMID, NULL);
-	return 0;
+  return 0;
 }
 
 static int eth_dev_configure(struct rte_eth_dev *dev)
 {
   struct pmd_internals *internals = dev->data->dev_private;
-	struct rte_eth_conf *eth_conf = &dev->data->dev_conf;
-	uint64_t rx_offloads = eth_conf->rxmode.offloads;
+  struct rte_eth_conf *eth_conf = &dev->data->dev_conf;
+  uint64_t rx_offloads = eth_conf->rxmode.offloads;
 
   uint i;
 
@@ -1100,23 +1112,23 @@ static int eth_dev_configure(struct rte_eth_dev *dev)
     internals->txq[i].maxTxPktSize = internals->maxTxPktSize;
   }
 
-	if (rx_offloads & DEV_RX_OFFLOAD_TIMESTAMP)
-	{
-		if (internals->tsMultiplier == 0) {
-			enable_ts[dev->data->port_id] = false;
-			PMD_NTACC_LOG(ERR, "Adapter timpestamp format is not supported");
-			return -EPERM;
-		}
-		else {
-			if (timestamp_dynfield_offset == -1) {
-				if (rte_mbuf_dyn_rx_timestamp_register(&timestamp_dynfield_offset, &timestamp_rx_dynflag) != 0) {
-					PMD_NTACC_LOG(ERR, "Error to register timestamp field/flag");
-					return -rte_errno;
-				}
-			}
-			enable_ts[dev->data->port_id] = true;
-		}
-	}
+  if (rx_offloads & DEV_RX_OFFLOAD_TIMESTAMP)
+  {
+    if (internals->tsMultiplier == 0) {
+      enable_ts[dev->data->port_id] = false;
+      PMD_NTACC_LOG(ERR, "Adapter timpestamp format is not supported");
+      return -EPERM;
+    }
+    else {
+      if (timestamp_dynfield_offset == -1) {
+        if (rte_mbuf_dyn_rx_timestamp_register(&timestamp_dynfield_offset, &timestamp_rx_dynflag) != 0) {
+          PMD_NTACC_LOG(ERR, "Error to register timestamp field/flag");
+          return -rte_errno;
+        }
+      }
+      enable_ts[dev->data->port_id] = true;
+    }
+  }
   return 0;
 }
 
@@ -1395,7 +1407,7 @@ static int eth_dev_close(struct rte_eth_dev *dev)
     PMD_NTACC_LOG(DEBUG, "Closing dyn lib\n");
     dlclose(_libnt);
   }
-	return 0;
+  return 0;
 }
 
 static void eth_queue_release(void *q __rte_unused)
@@ -2534,15 +2546,15 @@ static int _dev_filter_ctrl(struct rte_eth_dev *dev __rte_unused,
                             void *arg)
 {
   if (filter_type == RTE_ETH_FILTER_GENERIC) {
-		if (filter_op == RTE_ETH_FILTER_GET) {
-			*(const void **)arg = &_dev_flow_ops;
-			return 0;
-		}
-		else {
-			PMD_NTACC_LOG(ERR, "NTACC: %s: filter operation (%d) not supported\n", __func__, filter_op);
-			return -EINVAL;
-		}
-	}
+    if (filter_op == RTE_ETH_FILTER_GET) {
+      *(const void **)arg = &_dev_flow_ops;
+      return 0;
+    }
+    else {
+      PMD_NTACC_LOG(ERR, "NTACC: %s: filter operation (%d) not supported\n", __func__, filter_op);
+      return -EINVAL;
+    }
+  }
   PMD_NTACC_LOG(ERR, "NTACC: %s: filter type (%d) not supported\n", __func__, filter_type);
   return -EINVAL;
 }
@@ -2604,6 +2616,19 @@ UpdateError:
   return ret;
 }
 
+static int eth_promiscuous_enable(struct rte_eth_dev *dev)
+{
+  struct rte_flow_error error;
+  return _dev_flow_isolate(dev, 0, &error);
+}
+
+static int eth_promiscuous_disable(struct rte_eth_dev *dev)
+{
+  struct rte_flow_error error;
+  return _dev_flow_isolate(dev, 1, &error);
+}
+
+
 static const uint32_t *_dev_supported_ptypes_get(struct rte_eth_dev *dev __rte_unused)
 {
   static const uint32_t ptypes[] = {
@@ -2655,7 +2680,9 @@ static struct eth_dev_ops ops = {
     .filter_ctrl = _dev_filter_ctrl,
     .fw_version_get = eth_fw_version_get,
     .rss_hash_update = eth_rss_hash_update,
-    .dev_supported_ptypes_get = _dev_supported_ptypes_get
+    .dev_supported_ptypes_get = _dev_supported_ptypes_get,
+    .promiscuous_enable = eth_promiscuous_enable,
+    .promiscuous_disable = eth_promiscuous_disable
 };
 
 enum property_type_s {

@@ -37,8 +37,6 @@ option('use_hpet', type: 'boolean', value: false,
 
 option('ntacc_external_buffers', type: 'boolean', value: false,
   description: 'Napatech driver: Use external buffers')
-option('ntacc_no_default_filter', type: 'boolean', value: false,
-  description: 'Napatech driver: Do not create a default catch all filter')
 option('ntacc_use_sw_stat', type: 'boolean', value: false,
   description: 'Napatech driver: Use software statistics')
 

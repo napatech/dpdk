@@ -15,10 +15,6 @@ if get_option('ntacc_use_sw_stat') == true
   cflags += '-DUSE_SW_STAT'
 endif
 
-if get_option('ntacc_no_default_filter') == true
-  cflags += '-DDO_NOT_CREATE_DEFAULT_FILTER'
-endif
-
 sources = files('rte_eth_ntacc.c', 'filter_ntacc.c')
 
 cmd = run_command('sh', '-c', 'echo $NAPATECH3_PATH')
