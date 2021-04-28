@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright(c) 2019-2020 Xilinx, Inc.
+ * Copyright(c) 2019-2021 Xilinx, Inc.
  * Copyright(c) 2006-2019 Solarflare Communications Inc.
  */
 
@@ -4070,6 +4070,7 @@ typedef struct efx_mae_limits_s {
 	uint32_t			eml_max_n_action_prios;
 	uint32_t			eml_max_n_outer_prios;
 	uint32_t			eml_encap_types_supported;
+	uint32_t			eml_encap_header_size_limit;
 } efx_mae_limits_t;
 
 LIBEFX_API
@@ -4241,6 +4242,11 @@ efx_mae_action_set_spec_fini(
 
 LIBEFX_API
 extern	__checkReturn			efx_rc_t
+efx_mae_action_set_populate_decap(
+	__in				efx_mae_actions_t *spec);
+
+LIBEFX_API
+extern	__checkReturn			efx_rc_t
 efx_mae_action_set_populate_vlan_pop(
 	__in				efx_mae_actions_t *spec);
 
@@ -4250,6 +4256,15 @@ efx_mae_action_set_populate_vlan_push(
 	__in				efx_mae_actions_t *spec,
 	__in				uint16_t tpid_be,
 	__in				uint16_t tci_be);
+
+/*
+ * Use efx_mae_action_set_fill_in_eh_id() to set ID of the allocated
+ * encap. header in the specification prior to action set allocation.
+ */
+LIBEFX_API
+extern	__checkReturn			efx_rc_t
+efx_mae_action_set_populate_encap(
+	__in				efx_mae_actions_t *spec);
 
 LIBEFX_API
 extern	__checkReturn			efx_rc_t
@@ -4283,6 +4298,11 @@ efx_mae_action_set_specs_equal(
  * Conduct a comparison to check whether two match specifications
  * of equal rule type (action / outer) and priority would map to
  * the very same rule class from the firmware's standpoint.
+ *
+ * For match specification fields that are not supported by firmware,
+ * the rule class only matches if the mask/value pairs for that field
+ * are equal. Clients should use efx_mae_match_spec_is_valid() before
+ * calling this API to detect usage of unsupported fields.
  */
 LIBEFX_API
 extern	__checkReturn			efx_rc_t
@@ -4318,6 +4338,33 @@ extern	__checkReturn			efx_rc_t
 efx_mae_match_spec_outer_rule_id_set(
 	__in				efx_mae_match_spec_t *spec,
 	__in				const efx_mae_rule_id_t *or_idp);
+
+/* Encap. header ID */
+typedef struct efx_mae_eh_id_s {
+	uint32_t id;
+} efx_mae_eh_id_t;
+
+LIBEFX_API
+extern	__checkReturn			efx_rc_t
+efx_mae_encap_header_alloc(
+	__in				efx_nic_t *enp,
+	__in				efx_tunnel_protocol_t encap_type,
+	__in_bcount(header_size)	uint8_t *header_data,
+	__in				size_t header_size,
+	__out				efx_mae_eh_id_t *eh_idp);
+
+LIBEFX_API
+extern	__checkReturn			efx_rc_t
+efx_mae_encap_header_free(
+	__in				efx_nic_t *enp,
+	__in				const efx_mae_eh_id_t *eh_idp);
+
+/* See description before efx_mae_action_set_populate_encap(). */
+LIBEFX_API
+extern	__checkReturn			efx_rc_t
+efx_mae_action_set_fill_in_eh_id(
+	__in				efx_mae_actions_t *spec,
+	__in				const efx_mae_eh_id_t *eh_idp);
 
 /* Action set ID */
 typedef struct efx_mae_aset_id_s {
@@ -4362,6 +4409,148 @@ efx_mae_action_rule_remove(
 	__in				const efx_mae_rule_id_t *ar_idp);
 
 #endif /* EFSYS_OPT_MAE */
+
+#if EFSYS_OPT_VIRTIO
+
+/* A Virtio net device can have one or more pairs of Rx/Tx virtqueues
+ * while virtio block device has a single virtqueue,
+ * for further details refer section of 4.2.3 of SF-120734
+ */
+typedef enum efx_virtio_vq_type_e {
+	EFX_VIRTIO_VQ_TYPE_NET_RXQ,
+	EFX_VIRTIO_VQ_TYPE_NET_TXQ,
+	EFX_VIRTIO_VQ_TYPE_BLOCK,
+	EFX_VIRTIO_VQ_NTYPES
+} efx_virtio_vq_type_t;
+
+typedef struct efx_virtio_vq_dyncfg_s {
+	/*
+	 * If queue is being created to be migrated then this
+	 * should be the FINAL_PIDX value returned by MC_CMD_VIRTIO_FINI_QUEUE
+	 * of the queue being migrated from. Otherwise, it should be zero.
+	 */
+	uint32_t		evvd_vq_pidx;
+	/*
+	 * If this queue is being created to be migrated then this
+	 * should be the FINAL_CIDX value returned by MC_CMD_VIRTIO_FINI_QUEUE
+	 * of the queue being migrated from. Otherwise, it should be zero.
+	 */
+	uint32_t		evvd_vq_cidx;
+} efx_virtio_vq_dyncfg_t;
+
+/*
+ * Virtqueue size must be a power of 2, maximum size is 32768
+ * (see VIRTIO v1.1 section 2.6)
+ */
+#define EFX_VIRTIO_MAX_VQ_SIZE	0x8000
+
+typedef struct efx_virtio_vq_cfg_s {
+	unsigned int		evvc_vq_num;
+	efx_virtio_vq_type_t	evvc_type;
+	/*
+	 * vDPA as VF : It is target VF number if queue is being created on VF.
+	 * vDPA as PF : If queue to be created on PF then it should be
+	 * EFX_PCI_VF_INVALID.
+	 */
+	uint16_t		evvc_target_vf;
+	/*
+	 * Maximum virtqueue size is EFX_VIRTIO_MAX_VQ_SIZE and
+	 * virtqueue size 0 means the queue is unavailable.
+	 */
+	uint32_t		evvc_vq_size;
+	efsys_dma_addr_t        evvc_desc_tbl_addr;
+	efsys_dma_addr_t	evvc_avail_ring_addr;
+	efsys_dma_addr_t	evvc_used_ring_addr;
+	/* MSIX vector number for the virtqueue or 0xFFFF if MSIX is not used */
+	uint16_t                evvc_msix_vector;
+	/*
+	 * evvc_pas_id contains a PCIe address space identifier if the queue
+	 * uses PASID.
+	 */
+	boolean_t               evvc_use_pasid;
+	uint32_t		evvc_pas_id;
+	/* Negotiated virtio features to be applied to this virtqueue */
+	uint64_t		evcc_features;
+} efx_virtio_vq_cfg_t;
+
+typedef struct efx_virtio_vq_s	efx_virtio_vq_t;
+
+typedef enum efx_virtio_device_type_e {
+	EFX_VIRTIO_DEVICE_TYPE_RESERVED,
+	EFX_VIRTIO_DEVICE_TYPE_NET,
+	EFX_VIRTIO_DEVICE_TYPE_BLOCK,
+	EFX_VIRTIO_DEVICE_NTYPES
+} efx_virtio_device_type_t;
+
+LIBEFX_API
+extern	__checkReturn	efx_rc_t
+efx_virtio_init(
+	__in		efx_nic_t *enp);
+
+LIBEFX_API
+extern			void
+efx_virtio_fini(
+	__in		efx_nic_t *enp);
+
+/*
+ * When virtio net driver in the guest sets VIRTIO_CONFIG_STATUS_DRIVER_OK bit,
+ * hypervisor starts configuring all the virtqueues in the device. When the
+ * vhost_user has received VHOST_USER_SET_VRING_ENABLE for all the virtqueues,
+ * then it invokes VDPA driver callback dev_conf. APIs qstart and qcreate would
+ * be invoked from dev_conf callback to create the virtqueues, For further
+ * details refer SF-122427.
+ */
+LIBEFX_API
+extern	__checkReturn	efx_rc_t
+efx_virtio_qcreate(
+	__in		efx_nic_t *enp,
+	__deref_out	efx_virtio_vq_t **evvpp);
+
+LIBEFX_API
+extern	__checkReturn	efx_rc_t
+efx_virtio_qstart(
+	__in		efx_virtio_vq_t *evvp,
+	__in		efx_virtio_vq_cfg_t *evvcp,
+	__in_opt	efx_virtio_vq_dyncfg_t *evvdp);
+
+LIBEFX_API
+extern	__checkReturn	efx_rc_t
+efx_virtio_qstop(
+	__in		efx_virtio_vq_t *evvp,
+	__out_opt	efx_virtio_vq_dyncfg_t *evvdp);
+
+LIBEFX_API
+extern			void
+efx_virtio_qdestroy(
+	__in		efx_virtio_vq_t *evvp);
+
+/*
+ * Get the offset in the BAR of the doorbells for a VI.
+ * net device : doorbell offset of RX & TX queues
+ * block device : request doorbell offset in the BAR.
+ * For further details refer section of 4 of SF-119689
+ */
+LIBEFX_API
+extern	__checkReturn	efx_rc_t
+efx_virtio_get_doorbell_offset(
+	__in		efx_virtio_vq_t *evvp,
+	__out		uint32_t *offsetp);
+
+LIBEFX_API
+extern	__checkReturn	efx_rc_t
+efx_virtio_get_features(
+	__in		efx_nic_t *enp,
+	__in		efx_virtio_device_type_t type,
+	__out		uint64_t *featuresp);
+
+LIBEFX_API
+extern	__checkReturn	efx_rc_t
+efx_virtio_verify_features(
+	__in		efx_nic_t *enp,
+	__in		efx_virtio_device_type_t type,
+	__in		uint64_t features);
+
+#endif /* EFSYS_OPT_VIRTIO */
 
 #ifdef	__cplusplus
 }

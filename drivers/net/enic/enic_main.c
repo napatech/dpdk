@@ -15,7 +15,7 @@
 #include <rte_malloc.h>
 #include <rte_mbuf.h>
 #include <rte_string_fns.h>
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 
 #include "enic_compat.h"
 #include "enic.h"
@@ -534,6 +534,11 @@ void enic_pick_rx_handler(struct rte_eth_dev *eth_dev)
 {
 	struct enic *enic = pmd_priv(eth_dev);
 
+	if (enic->cq64) {
+		ENICPMD_LOG(DEBUG, " use the normal Rx handler for 64B CQ entry");
+		eth_dev->rx_pkt_burst = &enic_recv_pkts_64;
+		return;
+	}
 	/*
 	 * Preference order:
 	 * 1. The vectorized handler if possible and requested.
@@ -603,9 +608,6 @@ int enic_enable(struct enic *enic)
 	err = enic_rxq_intr_init(enic);
 	if (err)
 		return err;
-	if (enic_clsf_init(enic))
-		dev_warning(enic, "Init of hash table for clsf failed."\
-			"Flow director feature will not work\n");
 
 	/* Initialize flowman if not already initialized during probe */
 	if (enic->fm == NULL && enic_fm_init(enic))
@@ -954,8 +956,22 @@ int enic_alloc_rq(struct enic *enic, uint16_t queue_idx,
 		}
 		nb_data_desc = rq_data->ring.desc_count;
 	}
+	/* Enable 64B CQ entry if requested */
+	if (enic->cq64 && vnic_dev_set_cq_entry_size(enic->vdev,
+				sop_queue_idx, VNIC_RQ_CQ_ENTRY_SIZE_64)) {
+		dev_err(enic, "failed to enable 64B CQ entry on sop rq\n");
+		goto err_free_rq_data;
+	}
+	if (rq_data->in_use && enic->cq64 &&
+	    vnic_dev_set_cq_entry_size(enic->vdev, data_queue_idx,
+		VNIC_RQ_CQ_ENTRY_SIZE_64)) {
+		dev_err(enic, "failed to enable 64B CQ entry on data rq\n");
+		goto err_free_rq_data;
+	}
+
 	rc = vnic_cq_alloc(enic->vdev, &enic->cq[cq_idx], cq_idx,
 			   socket_id, nb_sop_desc + nb_data_desc,
+			   enic->cq64 ?	sizeof(struct cq_enet_rq_desc_64) :
 			   sizeof(struct cq_enet_rq_desc));
 	if (rc) {
 		dev_err(enic, "error in allocation of cq for rq\n");
@@ -1102,7 +1118,6 @@ int enic_disable(struct enic *enic)
 
 	vnic_dev_disable(enic->vdev);
 
-	enic_clsf_destroy(enic);
 	enic_fm_destroy(enic);
 
 	if (!enic_is_sriov_vf(enic))
@@ -1752,9 +1767,6 @@ static int enic_dev_init(struct enic *enic)
 		dev_err(enic, "failed to allocate vnic_wq, aborting.\n");
 		return -1;
 	}
-
-	/* Get the supported filters */
-	enic_fdir_info(enic);
 
 	eth_dev->data->mac_addrs = rte_zmalloc("enic_mac_addr",
 					sizeof(struct rte_ether_addr) *

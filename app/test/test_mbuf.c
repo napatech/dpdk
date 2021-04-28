@@ -1174,6 +1174,8 @@ err:
 }
 
 #include <unistd.h>
+#include <sys/resource.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 
 /* use fork() to test mbuf errors panic */
@@ -1186,9 +1188,14 @@ verify_mbuf_check_panics(struct rte_mbuf *buf)
 	pid = fork();
 
 	if (pid == 0) {
+		struct rlimit rl;
+
+		/* No need to generate a coredump when panicking. */
+		rl.rlim_cur = rl.rlim_max = 0;
+		setrlimit(RLIMIT_CORE, &rl);
 		rte_mbuf_sanity_check(buf, 1); /* should panic */
 		exit(0);  /* return normally if it doesn't panic */
-	} else if (pid < 0){
+	} else if (pid < 0) {
 		printf("Fork Failed\n");
 		return -1;
 	}
@@ -1613,7 +1620,7 @@ test_get_rx_ol_flag_name(void)
 		VAL_NAME(PKT_RX_IP_CKSUM_BAD),
 		VAL_NAME(PKT_RX_IP_CKSUM_GOOD),
 		VAL_NAME(PKT_RX_IP_CKSUM_NONE),
-		VAL_NAME(PKT_RX_EIP_CKSUM_BAD),
+		VAL_NAME(PKT_RX_OUTER_IP_CKSUM_BAD),
 		VAL_NAME(PKT_RX_VLAN_STRIPPED),
 		VAL_NAME(PKT_RX_IEEE1588_PTP),
 		VAL_NAME(PKT_RX_IEEE1588_TMST),

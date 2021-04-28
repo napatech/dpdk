@@ -31,7 +31,7 @@
 
 #define ICE_VPMD_RX_BURST           32
 #define ICE_VPMD_TX_BURST           32
-#define ICE_RXQ_REARM_THRESH        32
+#define ICE_RXQ_REARM_THRESH        64
 #define ICE_MAX_RX_BURST            ICE_RXQ_REARM_THRESH
 #define ICE_TX_MAX_FREE_BUF_SZ      64
 #define ICE_DESCS_PER_LOOP          4
@@ -88,6 +88,7 @@ struct ice_rx_queue {
 	uint64_t xtr_ol_flag; /* Protocol extraction offload flag */
 	ice_rxd_to_pkt_fields_t rxd_to_pkt_fields; /* handle FlexiMD by RXDID */
 	ice_rx_release_mbufs_t rx_rel_mbufs;
+	uint64_t offloads;
 };
 
 struct ice_tx_entry {
@@ -256,13 +257,23 @@ uint16_t ice_xmit_pkts_vec_avx2(void *tx_queue, struct rte_mbuf **tx_pkts,
 				uint16_t nb_pkts);
 uint16_t ice_recv_pkts_vec_avx512(void *rx_queue, struct rte_mbuf **rx_pkts,
 				  uint16_t nb_pkts);
+uint16_t ice_recv_pkts_vec_avx512_offload(void *rx_queue,
+					  struct rte_mbuf **rx_pkts,
+					  uint16_t nb_pkts);
 uint16_t ice_recv_scattered_pkts_vec_avx512(void *rx_queue,
 					    struct rte_mbuf **rx_pkts,
 					    uint16_t nb_pkts);
+uint16_t ice_recv_scattered_pkts_vec_avx512_offload(void *rx_queue,
+						    struct rte_mbuf **rx_pkts,
+						    uint16_t nb_pkts);
 uint16_t ice_xmit_pkts_vec_avx512(void *tx_queue, struct rte_mbuf **tx_pkts,
 				  uint16_t nb_pkts);
+uint16_t ice_xmit_pkts_vec_avx512_offload(void *tx_queue,
+					  struct rte_mbuf **tx_pkts,
+					  uint16_t nb_pkts);
 int ice_fdir_programming(struct ice_pf *pf, struct ice_fltr_desc *fdir_desc);
 int ice_tx_done_cleanup(void *txq, uint32_t free_cnt);
+int ice_get_monitor_addr(void *rx_queue, struct rte_power_monitor_cond *pmc);
 
 #define FDIR_PARSING_ENABLE_PER_QUEUE(ad, on) do { \
 	int i; \

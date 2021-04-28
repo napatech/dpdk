@@ -245,11 +245,6 @@ ch_rte_parsetype_vlan(const void *dmask, const struct rte_flow_item *item,
 	/* If user has not given any mask, then use chelsio supported mask. */
 	mask = umask ? umask : (const struct rte_flow_item_vlan *)dmask;
 
-	if (!fs->mask.ethtype)
-		return rte_flow_error_set(e, EINVAL, RTE_FLOW_ERROR_TYPE_ITEM,
-					  item,
-					  "Can't parse VLAN item without knowing ethertype");
-
 	/* If ethertype is already set and is not VLAN (0x8100) or
 	 * QINQ(0x88A8), then don't proceed further. Otherwise,
 	 * reset the outer ethertype, so that it can be replaced by
@@ -275,7 +270,7 @@ ch_rte_parsetype_vlan(const void *dmask, const struct rte_flow_item *item,
 			fs->mask.ethtype = 0;
 			fs->val.ethtype = 0;
 		}
-	} else if (fs->val.ethtype == RTE_ETHER_TYPE_VLAN) {
+	} else {
 		CXGBE_FILL_FS(1, 1, ivlan_vld);
 		if (spec) {
 			if (spec->tci || (umask && umask->tci))
@@ -1453,23 +1448,9 @@ static const struct rte_flow_ops cxgbe_flow_ops = {
 };
 
 int
-cxgbe_dev_filter_ctrl(struct rte_eth_dev *dev,
-		      enum rte_filter_type filter_type,
-		      enum rte_filter_op filter_op,
-		      void *arg)
+cxgbe_dev_flow_ops_get(struct rte_eth_dev *dev __rte_unused,
+		       const struct rte_flow_ops **ops)
 {
-	int ret = 0;
-
-	RTE_SET_USED(dev);
-	switch (filter_type) {
-	case RTE_ETH_FILTER_GENERIC:
-		if (filter_op != RTE_ETH_FILTER_GET)
-			return -EINVAL;
-		*(const void **)arg = &cxgbe_flow_ops;
-		break;
-	default:
-		ret = -ENOTSUP;
-		break;
-	}
-	return ret;
+	*ops = &cxgbe_flow_ops;
+	return 0;
 }

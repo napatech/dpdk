@@ -22,11 +22,6 @@ defined in ``rte_flow.h``.
   queues, to virtual/physical device functions or ports, performing tunnel
   offloads, adding marks and so on.
 
-It is slightly higher-level than the legacy filtering framework which it
-encompasses and supersedes (including all functions and filter types) in
-order to expose a single interface with an unambiguous behavior that is
-common to all poll-mode drivers (PMDs).
-
 Flow rule
 ---------
 
@@ -1403,6 +1398,36 @@ Matches a eCPRI header.
 - ``hdr``: eCPRI header definition (``rte_ecpri.h``).
 - Default ``mask`` matches nothing, for all eCPRI messages.
 
+Item: ``PACKET_INTEGRITY_CHECKS``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Matches packet integrity.
+For some devices application needs to enable integration checks in HW
+before using this item.
+
+- ``level``: the encapsulation level that should be checked:
+   - ``level == 0`` means the default PMD mode (can be inner most / outermost).
+   - ``level == 1`` means outermost header.
+   - ``level > 1``  means inner header. See also RSS level.
+- ``packet_ok``: All HW packet integrity checks have passed based on the
+  topmost network layer. For example, for ICMP packet the topmost network
+  layer is L3 and for TCP or UDP packet the topmost network layer is L4.
+- ``l2_ok``: all layer 2 HW integrity checks passed.
+- ``l3_ok``: all layer 3 HW integrity checks passed.
+- ``l4_ok``: all layer 4 HW integrity checks passed.
+- ``l2_crc_ok``: layer 2 CRC check passed.
+- ``ipv4_csum_ok``: IPv4 checksum check passed.
+- ``l4_csum_ok``: layer 4 checksum check passed.
+- ``l3_len_ok``: the layer 3 length is smaller than the frame length.
+
+Item: ``CONNTRACK``
+^^^^^^^^^^^^^^^^^^^
+
+Matches a conntrack state after conntrack action.
+
+- ``flags``: conntrack packet state flags.
+- Default ``mask`` matches all state bits.
+
 Actions
 ~~~~~~~
 
@@ -1724,7 +1749,7 @@ that counter.
 For ports within the same switch domain then the counter id namespace extends
 to all ports within that switch domain.
 
-The shared flag is DEPRECATED and ``SHARED`` ``COUNT`` action should be used
+The shared flag is DEPRECATED and ``INDIRECT`` ``COUNT`` action should be used
 to make shared counters.
 
 .. _table_rte_flow_action_count:
@@ -2747,24 +2772,236 @@ packets, and must have a fate action.
    | ``actions``  | sub-action list for sampling    |
    +--------------+---------------------------------+
 
-Action: ``SHARED``
-^^^^^^^^^^^^^^^^^^
+Action: ``INDIRECT``
+^^^^^^^^^^^^^^^^^^^^
 
-Flow utilize shared action by handle as returned from
-``rte_flow_shared_action_create()``.
+Flow utilize indirect action by handle as returned from
+``rte_flow_action_handle_create()``.
 
-The behaviour of the shared action defined by ``action`` argument of type
-``struct rte_flow_action`` passed to ``rte_flow_shared_action_create()``.
+The behaviour of the indirect action defined by ``action`` argument of type
+``struct rte_flow_action`` passed to ``rte_flow_action_handle_create()``.
 
-.. _table_rte_flow_shared_action:
+The indirect action can be used by a single flow or shared among multiple flows.
+The indirect action can be in-place updated by ``rte_flow_action_handle_update()``
+without destroying flow and creating flow again. The fields that could be
+updated depend on the type of the ``action`` and different for every type.
 
-.. table:: SHARED
+The indirect action specified data (e.g. counter) can be queried by
+``rte_flow_action_handle_query()``.
+
+.. _table_rte_flow_action_handle:
+
+.. table:: INDIRECT
 
    +---------------+
    | Field         |
    +===============+
    | no properties |
    +---------------+
+
+Action: ``MODIFY_FIELD``
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Modify ``dst`` field according to ``op`` selected (set, addition,
+subtraction) with ``width`` bits of data from ``src`` field.
+
+Any arbitrary header field (as well as mark, metadata or tag values)
+can be used as both source and destination fields as set by ``field``.
+The immediate value ``RTE_FLOW_FIELD_VALUE`` (or a pointer to it
+``RTE_FLOW_FIELD_POINTER``) is allowed as a source only.
+``RTE_FLOW_FIELD_START`` is used to point to the beginning of a packet.
+See ``enum rte_flow_field_id`` for the list of supported fields.
+
+``op`` selects the operation to perform on a destination field.
+- ``set`` copies the data from ``src`` field to ``dst`` field.
+- ``add`` adds together ``dst`` and ``src`` and stores the result into ``dst``.
+- ``sub`` subtracts ``src`` from ``dst`` and stores the result into ``dst``
+
+``width`` defines a number of bits to use from ``src`` field.
+
+``level`` is used to access any packet field on any encapsulation level
+as well as any tag element in the tag array.
+- ``0`` means the default behaviour. Depending on the packet type, it can
+mean outermost, innermost or anything in between.
+- ``1`` requests access to the outermost packet encapsulation level.
+- ``2`` and subsequent values requests access to the specified packet
+encapsulation level, from outermost to innermost (lower to higher values).
+For the tag array (in case of multiple tags are supported and present)
+``level`` translates directly into the array index.
+
+``offset`` specifies the number of bits to skip from a field's start.
+That allows performing a partial copy of the needed part or to divide a big
+packet field into multiple smaller fields. Alternatively, ``offset`` allows
+going past the specified packet field boundary to copy a field to an
+arbitrary place in a packet, essentially providing a way to copy any part of
+a packet to any other part of it.
+
+``value`` sets an immediate value to be used as a source or points to a
+location of the value in memory. It is used instead of ``level`` and ``offset``
+for ``RTE_FLOW_FIELD_VALUE`` and ``RTE_FLOW_FIELD_POINTER`` respectively.
+
+.. _table_rte_flow_action_modify_field:
+
+.. table:: MODIFY_FIELD
+
+   +---------------+-------------------------+
+   | Field         | Value                   |
+   +===============+=========================+
+   | ``op``        | operation to perform    |
+   +---------------+-------------------------+
+   | ``dst``       | destination field       |
+   +---------------+-------------------------+
+   | ``src``       | source field            |
+   +---------------+-------------------------+
+   | ``width``     | number of bits to use   |
+   +---------------+-------------------------+
+
+.. _table_rte_flow_action_modify_data:
+
+.. table:: destination/source field definition
+
+   +---------------+----------------------------------------------------------+
+   | Field         | Value                                                    |
+   +===============+==========================================================+
+   | ``field``     | ID: packet field, mark, meta, tag, immediate, pointer    |
+   +---------------+----------------------------------------------------------+
+   | ``level``     | encapsulation level of a packet field or tag array index |
+   +---------------+----------------------------------------------------------+
+   | ``offset``    | number of bits to skip at the beginning                  |
+   +---------------+----------------------------------------------------------+
+   | ``value``     | immediate value or a pointer to this value               |
+   +---------------+----------------------------------------------------------+
+
+Action: ``CONNTRACK``
+^^^^^^^^^^^^^^^^^^^^^
+
+Create a conntrack (connection tracking) context with the provided information.
+
+In stateful session like TCP, the conntrack action provides the ability to
+examine every packet of this connection and associate the state to every
+packet. It will help to realize the stateful offload of connections with little
+software participation. For example, the packets with invalid state may be
+handled by the software. The control packets could be handled in the hardware.
+The software just need to query the state of a connection when needed, and then
+decide how to handle the flow rules and conntrack context.
+
+A conntrack context should be created via ``rte_flow_action_handle_create()``
+before using. Then the handle with ``INDIRECT`` type is used for a flow rule
+creation. If a flow rule with an opposite direction needs to be created, the
+``rte_flow_action_handle_update()`` should be used to modify the direction.
+
+Not all the fields of the ``struct rte_flow_action_conntrack`` will be used
+for a conntrack context creating, depending on the HW, and they should be
+in host byte order. PMD should convert them into network byte order when
+needed by the HW.
+
+The ``struct rte_flow_modify_conntrack`` should be used for an updating.
+
+The current conntrack context information could be queried via the
+``rte_flow_action_handle_query()`` interface.
+
+.. _table_rte_flow_action_conntrack:
+
+.. table:: CONNTRACK
+
+   +--------------------------+-------------------------------------------------------------+
+   | Field                    | Value                                                       |
+   +==========================+=============================================================+
+   | ``peer_port``            | peer port number                                            |
+   +--------------------------+-------------------------------------------------------------+
+   | ``is_original_dir``      | direction of this connection for creating flow rule         |
+   +--------------------------+-------------------------------------------------------------+
+   | ``enable``               | enable the conntrack context                                |
+   +--------------------------+-------------------------------------------------------------+
+   | ``live_connection``      | one ack was seen for this connection                        |
+   +--------------------------+-------------------------------------------------------------+
+   | ``selective_ack``        | SACK enabled                                                |
+   +--------------------------+-------------------------------------------------------------+
+   | ``challenge_ack_passed`` | a challenge ack has passed                                  |
+   +--------------------------+-------------------------------------------------------------+
+   | ``last_direction``       | direction of the last passed packet                         |
+   +--------------------------+-------------------------------------------------------------+
+   | ``liberal_mode``         | only report state change                                    |
+   +--------------------------+-------------------------------------------------------------+
+   | ``state``                | current state                                               |
+   +--------------------------+-------------------------------------------------------------+
+   | ``max_ack_window``       | maximal window scaling factor                               |
+   +--------------------------+-------------------------------------------------------------+
+   | ``retransmission_limit`` | maximal retransmission times                                |
+   +--------------------------+-------------------------------------------------------------+
+   | ``original_dir``         | TCP parameters of the original direction                    |
+   +--------------------------+-------------------------------------------------------------+
+   | ``reply_dir``            | TCP parameters of the reply direction                       |
+   +--------------------------+-------------------------------------------------------------+
+   | ``last_window``          | window size of the last passed packet                       |
+   +--------------------------+-------------------------------------------------------------+
+   | ``last_seq``             | sequence number of the last passed packet                   |
+   +--------------------------+-------------------------------------------------------------+
+   | ``last_ack``             | acknowledgment number the last passed packet                |
+   +--------------------------+-------------------------------------------------------------+
+   | ``last_end``             | sum of ack number and length of the last passed packet      |
+   +--------------------------+-------------------------------------------------------------+
+
+.. _table_rte_flow_tcp_dir_param:
+
+.. table:: configuration parameters for each direction
+
+   +---------------------+---------------------------------------------------------+
+   | Field               | Value                                                   |
+   +=====================+=========================================================+
+   | ``scale``           | TCP window scaling factor                               |
+   +---------------------+---------------------------------------------------------+
+   | ``close_initiated`` | FIN sent from this direction                            |
+   +---------------------+---------------------------------------------------------+
+   | ``last_ack_seen``   | an ACK packet received                                  |
+   +---------------------+---------------------------------------------------------+
+   | ``data_unacked``    | unacknowledged data for packets from this direction     |
+   +---------------------+---------------------------------------------------------+
+   | ``sent_end``        | max{seq + len} seen in sent packets                     |
+   +---------------------+---------------------------------------------------------+
+   | ``reply_end``       | max{sack + max{win, 1}} seen in reply packets           |
+   +---------------------+---------------------------------------------------------+
+   | ``max_win``         | max{max{win, 1}} + {sack - ack} seen in sent packets    |
+   +---------------------+---------------------------------------------------------+
+   | ``max_ack``         | max{ack} + seen in sent packets                         |
+   +---------------------+---------------------------------------------------------+
+
+.. _table_rte_flow_modify_conntrack:
+
+.. table:: update a conntrack context
+
+   +----------------+-------------------------------------------------+
+   | Field          | Value                                           |
+   +================+=================================================+
+   | ``new_ct``     | new conntrack information                       |
+   +----------------+-------------------------------------------------+
+   | ``direction``  | direction will be updated                       |
+   +----------------+-------------------------------------------------+
+   | ``state``      | other fields except direction will be updated   |
+   +----------------+-------------------------------------------------+
+   | ``reserved``   | reserved bits                                   |
+   +----------------+-------------------------------------------------+
+
+Action: ``METER_COLOR``
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Color the packet to reflect the meter color result.
+
+The meter action must be configured before meter color action.
+Meter color action is set to a color to reflect the meter color result.
+Set the meter color in the mbuf to the selected color.
+The meter color action output color is the output color of the packet,
+which is set in the packet meta-data (i.e. struct ``rte_mbuf::sched::color``)
+
+.. _table_rte_flow_action_meter_color:
+
+.. table:: METER_COLOR
+
+   +-----------------+--------------+
+   | Field           | Value        |
+   +=================+==============+
+   | ``meter_color`` | Packet color |
+   +-----------------+--------------+
 
 Negative types
 ~~~~~~~~~~~~~~
@@ -3031,7 +3268,6 @@ port and may return errors such as ``ENOTSUP`` ("not supported"):
 - Configuring MAC addresses.
 - Configuring multicast addresses.
 - Configuring VLAN filters.
-- Configuring Rx filters through the legacy API (e.g. FDIR).
 - Configuring global RSS settings.
 
 .. code-block:: c
@@ -3258,13 +3494,7 @@ The PMD interface is defined in ``rte_flow_driver.h``. It is not subject to
 API/ABI versioning constraints as it is not exposed to applications and may
 evolve independently.
 
-It is currently implemented on top of the legacy filtering framework through
-filter type *RTE_ETH_FILTER_GENERIC* that accepts the single operation
-*RTE_ETH_FILTER_GET* to return PMD-specific *rte_flow* callbacks wrapped
-inside ``struct rte_flow_ops``.
-
-This overhead is temporarily necessary in order to keep compatibility with
-the legacy filtering framework, which should eventually disappear.
+The PMD interface is based on callbacks pointed by the ``struct rte_flow_ops``.
 
 - PMD callbacks implement exactly the interface described in `Rules
   management`_, except for the port ID argument which has already been

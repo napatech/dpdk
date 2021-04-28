@@ -1,0 +1,130 @@
+name: build
+
+on:
+  push:
+  schedule:
+    - cron: '0 0 * * 1'
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -exo pipefail {0}
+
+jobs:
+  build:
+    name: ${{ join(matrix.config.*, '-') }}
+    runs-on: ${{ matrix.config.os }}
+    env:
+      AARCH64: ${{ matrix.config.cross == 'aarch64' }}
+      ABI_CHECKS: ${{ contains(matrix.config.checks, 'abi') }}
+      BUILD_32BIT: ${{ matrix.config.cross == 'i386' }}
+      BUILD_DOCS: ${{ contains(matrix.config.checks, 'doc') }}
+      CC: ccache ${{ matrix.config.compiler }}
+      DEF_LIB: ${{ matrix.config.library }}
+      LIBABIGAIL_VERSION: libabigail-1.8
+      REF_GIT_TAG: v21.02
+      RUN_TESTS: ${{ contains(matrix.config.checks, 'tests') }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - os: ubuntu-18.04
+            compiler: gcc
+            library: static
+          - os: ubuntu-18.04
+            compiler: gcc
+            library: shared
+            checks: abi+doc+tests
+          - os: ubuntu-18.04
+            compiler: clang
+            library: static
+          - os: ubuntu-18.04
+            compiler: clang
+            library: shared
+            checks: doc+tests
+          - os: ubuntu-18.04
+            compiler: gcc
+            library: static
+            cross: i386
+          - os: ubuntu-18.04
+            compiler: gcc
+            library: static
+            cross: aarch64
+          - os: ubuntu-18.04
+            compiler: gcc
+            library: shared
+            cross: aarch64
+
+    steps:
+    - name: Checkout sources
+      uses: actions/checkout@v2
+    - name: Generate cache keys
+      id: get_ref_keys
+      run: |
+        echo -n '::set-output name=ccache::'
+        echo 'ccache-${{ matrix.config.os }}-${{ matrix.config.compiler }}-${{ matrix.config.cross }}-'$(date -u +%Y-w%W)
+        echo -n '::set-output name=libabigail::'
+        echo 'libabigail-${{ matrix.config.os }}'
+        echo -n '::set-output name=abi::'
+        echo 'abi-${{ matrix.config.os }}-${{ matrix.config.compiler }}-${{ matrix.config.cross }}-${{ env.LIBABIGAIL_VERSION }}-${{ env.REF_GIT_TAG }}'
+    - name: Retrieve ccache cache
+      uses: actions/cache@v2
+      with:
+        path: ~/.ccache
+        key: ${{ steps.get_ref_keys.outputs.ccache }}-${{ github.ref }}
+        restore-keys: |
+          ${{ steps.get_ref_keys.outputs.ccache }}-refs/heads/main
+    - name: Retrieve libabigail cache
+      id: libabigail-cache
+      uses: actions/cache@v2
+      if: env.ABI_CHECKS == 'true'
+      with:
+        path: libabigail
+        key: ${{ steps.get_ref_keys.outputs.libabigail }}
+    - name: Retrieve ABI reference cache
+      uses: actions/cache@v2
+      if: env.ABI_CHECKS == 'true'
+      with:
+        path: reference
+        key: ${{ steps.get_ref_keys.outputs.abi }}
+    - name: Update APT cache
+      run: sudo apt update || true
+    - name: Install packages
+      run: sudo apt install -y ccache libnuma-dev python3-setuptools
+        python3-wheel python3-pip python3-pyelftools ninja-build libbsd-dev
+        libpcap-dev libibverbs-dev libcrypto++-dev libfdt-dev libjansson-dev
+    - name: Install libabigail build dependencies if no cache is available
+      if: env.ABI_CHECKS == 'true' && steps.libabigail-cache.outputs.cache-hit != 'true'
+      run: sudo apt install -y autoconf automake libtool pkg-config libxml2-dev
+          libdw-dev
+    - name: Install i386 cross compiling packages
+      if: env.BUILD_32BIT == 'true'
+      run: sudo apt install -y gcc-multilib
+    - name: Install aarch64 cross compiling packages
+      if: env.AARCH64 == 'true'
+      run: sudo apt install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+        pkg-config-aarch64-linux-gnu
+    - name: Install test tools packages
+      if: env.AARCH64 != 'true' || env.RUN_TESTS == 'true'
+      run: sudo apt install -y gdb
+    - name: Install doc generation packages
+      if: env.BUILD_DOCS == 'true'
+      run: sudo apt install -y doxygen graphviz python3-sphinx
+        python3-sphinx-rtd-theme
+    - name: Run setup
+      run: |
+        .ci/linux-setup.sh
+        # Workaround on $HOME permissions as EAL checks them for plugin loading
+        chmod o-w $HOME
+    - name: Build and test
+      run: .ci/linux-build.sh
+    - name: Upload logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v2
+      with:
+        name: meson-logs-${{ join(matrix.config.*, '-') }}
+        path: |
+          build/meson-logs/testlog.txt
+          build/.ninja_log
+          build/meson-logs/meson-log.txt
+          build/gdb.log

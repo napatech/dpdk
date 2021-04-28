@@ -746,6 +746,7 @@ mlx5_nl_mac_addr_sync(int nlsk_fd, unsigned int iface_idx,
 	int i;
 	int ret;
 
+	memset(macs, 0, n * sizeof(macs[0]));
 	ret = mlx5_nl_mac_addr_list(nlsk_fd, iface_idx, &macs, &macs_n);
 	if (ret)
 		return;
@@ -758,11 +759,21 @@ mlx5_nl_mac_addr_sync(int nlsk_fd, unsigned int iface_idx,
 				break;
 		if (j != n)
 			continue;
-		/* Find the first entry available. */
-		for (j = 0; j != n; ++j) {
-			if (rte_is_zero_ether_addr(&mac_addrs[j])) {
-				mac_addrs[j] = macs[i];
-				break;
+		if (rte_is_multicast_ether_addr(&macs[i])) {
+			/* Find the first entry available. */
+			for (j = MLX5_MAX_UC_MAC_ADDRESSES; j != n; ++j) {
+				if (rte_is_zero_ether_addr(&mac_addrs[j])) {
+					mac_addrs[j] = macs[i];
+					break;
+				}
+			}
+		} else {
+			/* Find the first entry available. */
+			for (j = 0; j != MLX5_MAX_UC_MAC_ADDRESSES; ++j) {
+				if (rte_is_zero_ether_addr(&mac_addrs[j])) {
+					mac_addrs[j] = macs[i];
+					break;
+				}
 			}
 		}
 	}
@@ -1148,6 +1159,8 @@ mlx5_nl_check_switch_info(bool num_vf_set,
 	case MLX5_PHYS_PORT_NAME_TYPE_PFHPF:
 		/* Fallthrough */
 	case MLX5_PHYS_PORT_NAME_TYPE_PFVF:
+		/* Fallthrough */
+	case MLX5_PHYS_PORT_NAME_TYPE_PFSF:
 		/* New representors naming schema. */
 		switch_info->representor = 1;
 		break;

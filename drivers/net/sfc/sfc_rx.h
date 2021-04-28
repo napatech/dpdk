@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright(c) 2019-2020 Xilinx, Inc.
+ * Copyright(c) 2019-2021 Xilinx, Inc.
  * Copyright(c) 2016-2019 Solarflare Communications Inc.
  *
  * This software was jointly developed between OKTET Labs (under contract
@@ -12,7 +12,7 @@
 
 #include <rte_mbuf.h>
 #include <rte_mempool.h>
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 
 #include "efx.h"
 

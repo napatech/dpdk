@@ -616,11 +616,25 @@ l2fwd_simple_forward(struct rte_mbuf *m, uint16_t portid,
 		struct l2fwd_crypto_options *options)
 {
 	uint16_t dst_port;
+	uint32_t pad_len;
+	struct rte_ipv4_hdr *ip_hdr;
+	uint32_t ipdata_offset = sizeof(struct rte_ether_hdr);
 
+	ip_hdr = (struct rte_ipv4_hdr *)(rte_pktmbuf_mtod(m, char *) +
+					 ipdata_offset);
 	dst_port = l2fwd_dst_ports[portid];
 
 	if (options->mac_updating)
 		l2fwd_mac_updating(m, dst_port);
+
+	if (options->auth_xform.auth.op == RTE_CRYPTO_AUTH_OP_VERIFY)
+		rte_pktmbuf_trim(m, options->auth_xform.auth.digest_length);
+
+	if (options->cipher_xform.cipher.op == RTE_CRYPTO_CIPHER_OP_DECRYPT) {
+		pad_len = m->pkt_len - rte_be_to_cpu_16(ip_hdr->total_length) -
+			  ipdata_offset;
+		rte_pktmbuf_trim(m, pad_len);
+	}
 
 	l2fwd_send_packet(m, dst_port);
 }
@@ -2112,12 +2126,21 @@ check_capabilities(struct l2fwd_crypto_options *options, uint8_t cdev_id)
 					cap->sym.cipher.key_size.max,
 					cap->sym.cipher.key_size.increment)
 						!= 0) {
-				RTE_LOG(DEBUG, USER1,
-					"Device %u does not support cipher "
-					"key length\n",
+				if (dev_info.feature_flags &
+				    RTE_CRYPTODEV_FF_CIPHER_WRAPPED_KEY) {
+					RTE_LOG(DEBUG, USER1,
+					"Key length does not match the device "
+					"%u capability. Key may be wrapped\n",
 					cdev_id);
-				return -1;
+				} else {
+					RTE_LOG(DEBUG, USER1,
+					"Key length does not match the device "
+					"%u capability\n",
+					cdev_id);
+					return -1;
+				}
 			}
+
 		/*
 		 * Check if length of the cipher key to be randomly generated
 		 * is supported by the algorithm chosen.
@@ -2249,6 +2272,12 @@ initialize_cryptodevs(struct l2fwd_crypto_options *options, unsigned nb_ports,
 		struct rte_cryptodev_info dev_info;
 
 		if (enabled_cdevs[cdev_id] == 0)
+			continue;
+
+		if (check_cryptodev_mask(options, cdev_id) < 0)
+			continue;
+
+		if (check_capabilities(options, cdev_id) < 0)
 			continue;
 
 		retval = rte_cryptodev_socket_id(cdev_id);
@@ -2691,7 +2720,8 @@ main(int argc, char **argv)
 
 	/* create the mbuf pool */
 	l2fwd_pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", NB_MBUF, 512,
-			sizeof(struct rte_crypto_op),
+			RTE_ALIGN(sizeof(struct rte_crypto_op),
+				RTE_CACHE_LINE_SIZE),
 			RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
 	if (l2fwd_pktmbuf_pool == NULL)
 		rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
@@ -2804,6 +2834,9 @@ main(int argc, char **argv)
 		if (rte_eal_wait_lcore(lcore_id) < 0)
 			return -1;
 	}
+
+	/* clean up the EAL */
+	rte_eal_cleanup();
 
 	return 0;
 }

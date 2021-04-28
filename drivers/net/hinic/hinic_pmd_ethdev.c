@@ -4,7 +4,7 @@
 
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
-#include <rte_ethdev_pci.h>
+#include <ethdev_pci.h>
 #include <rte_mbuf.h>
 #include <rte_malloc.h>
 #include <rte_memcpy.h>
@@ -74,6 +74,9 @@
 
 #define HINIC_PKTLEN_TO_MTU(pktlen)	\
 	((pktlen) - (ETH_HLEN + ETH_CRC_LEN))
+
+/* The max frame size with default MTU */
+#define HINIC_ETH_MAX_LEN (RTE_ETHER_MTU + ETH_HLEN + ETH_CRC_LEN)
 
 /* lro numer limit for one packet */
 #define HINIC_LRO_WQE_NUM_DEFAULT	8
@@ -1556,7 +1559,7 @@ static int hinic_dev_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 
 	/* update max frame size */
 	frame_size = HINIC_MTU_TO_PKTLEN(mtu);
-	if (frame_size > RTE_ETHER_MAX_LEN)
+	if (frame_size > HINIC_ETH_MAX_LEN)
 		dev->data->dev_conf.rxmode.offloads |=
 			DEV_RX_OFFLOAD_JUMBO_FRAME;
 	else
@@ -2501,42 +2504,20 @@ allmulti:
 }
 
 /**
- * DPDK callback to manage filter control operations
+ * DPDK callback to get flow operations
  *
  * @param dev
  *   Pointer to Ethernet device structure.
- * @param filter_type
- *   Filter type, which just supports generic type.
- * @param filter_op
- *   Filter operation to perform.
- * @param arg
+ * @param ops
  *   Pointer to operation-specific structure.
  *
  * @return
  *   0 on success, negative error value otherwise.
  */
-static int hinic_dev_filter_ctrl(struct rte_eth_dev *dev,
-		     enum rte_filter_type filter_type,
-		     enum rte_filter_op filter_op,
-		     void *arg)
+static int hinic_dev_flow_ops_get(struct rte_eth_dev *dev __rte_unused,
+				  const struct rte_flow_ops **ops)
 {
-	struct hinic_nic_dev *nic_dev = HINIC_ETH_DEV_TO_PRIVATE_NIC_DEV(dev);
-	int func_id = hinic_global_func_id(nic_dev->hwdev);
-
-	switch (filter_type) {
-	case RTE_ETH_FILTER_GENERIC:
-		if (filter_op != RTE_ETH_FILTER_GET)
-			return -EINVAL;
-		*(const void **)arg = &hinic_flow_ops;
-		break;
-	default:
-		PMD_DRV_LOG(INFO, "Filter type (%d) not supported",
-			filter_type);
-		return -EINVAL;
-	}
-
-	PMD_DRV_LOG(INFO, "Set filter_ctrl succeed, func_id: 0x%x, filter_type: 0x%x,"
-			"filter_op: 0x%x.", func_id, filter_type, filter_op);
+	*ops = &hinic_flow_ops;
 	return 0;
 }
 
@@ -3044,7 +3025,7 @@ static const struct eth_dev_ops hinic_pmd_ops = {
 	.mac_addr_remove               = hinic_mac_addr_remove,
 	.mac_addr_add                  = hinic_mac_addr_add,
 	.set_mc_addr_list              = hinic_set_mc_addr_list,
-	.filter_ctrl                   = hinic_dev_filter_ctrl,
+	.flow_ops_get                  = hinic_dev_flow_ops_get,
 };
 
 static const struct eth_dev_ops hinic_pmd_vf_ops = {
@@ -3079,7 +3060,11 @@ static const struct eth_dev_ops hinic_pmd_vf_ops = {
 	.mac_addr_remove               = hinic_mac_addr_remove,
 	.mac_addr_add                  = hinic_mac_addr_add,
 	.set_mc_addr_list              = hinic_set_mc_addr_list,
-	.filter_ctrl                   = hinic_dev_filter_ctrl,
+	.flow_ops_get                  = hinic_dev_flow_ops_get,
+};
+
+static const struct eth_dev_ops hinic_dev_sec_ops = {
+	.dev_infos_get                 = hinic_dev_infos_get,
 };
 
 static int hinic_func_init(struct rte_eth_dev *eth_dev)
@@ -3096,6 +3081,7 @@ static int hinic_func_init(struct rte_eth_dev *eth_dev)
 
 	/* EAL is SECONDARY and eth_dev is already created */
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+		eth_dev->dev_ops = &hinic_dev_sec_ops;
 		PMD_DRV_LOG(INFO, "Initialize %s in secondary process",
 			    eth_dev->data->name);
 

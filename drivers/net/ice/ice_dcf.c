@@ -17,8 +17,8 @@
 #include <rte_atomic.h>
 #include <rte_eal.h>
 #include <rte_ether.h>
-#include <rte_ethdev_driver.h>
-#include <rte_ethdev_pci.h>
+#include <ethdev_driver.h>
+#include <ethdev_pci.h>
 #include <rte_malloc.h>
 #include <rte_memzone.h>
 #include <rte_dev.h>
@@ -234,6 +234,7 @@ ice_dcf_get_vf_resource(struct ice_dcf_hw *hw)
 
 	caps = VIRTCHNL_VF_OFFLOAD_WB_ON_ITR | VIRTCHNL_VF_OFFLOAD_RX_POLLING |
 	       VIRTCHNL_VF_CAP_ADV_LINK_SPEED | VIRTCHNL_VF_CAP_DCF |
+	       VIRTCHNL_VF_OFFLOAD_VLAN_V2 |
 	       VF_BASE_MODE_OFFLOADS | VIRTCHNL_VF_OFFLOAD_RX_FLEX_DESC;
 
 	err = ice_dcf_send_cmd_req_no_irq(hw, VIRTCHNL_OP_GET_VF_RESOURCES,
@@ -504,9 +505,7 @@ ice_dcf_send_aq_cmd(void *dcf_hw, struct ice_aq_desc *desc,
 	}
 
 	do {
-		if ((!desc_cmd.pending && !buff_cmd.pending) ||
-		    (!desc_cmd.pending && desc_cmd.v_ret != IAVF_SUCCESS) ||
-		    (!buff_cmd.pending && buff_cmd.v_ret != IAVF_SUCCESS))
+		if (!desc_cmd.pending && !buff_cmd.pending)
 			break;
 
 		rte_delay_ms(ICE_DCF_ARQ_CHECK_TIME);

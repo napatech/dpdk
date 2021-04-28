@@ -209,16 +209,19 @@ main(int argc, char **argv)
 		apply_profile(i);
 		printf("\n==> Profile: %s\n\n", profiles[i].name);
 
-		sleep(1);
+		rte_delay_us_sleep(1 * US_PER_S);
 		rte_service_dump(stdout, UINT32_MAX);
 
-		sleep(5);
+		rte_delay_us_sleep(5 * US_PER_S);
 		rte_service_dump(stdout, UINT32_MAX);
 
 		i++;
 		if (i >= NUM_PROFILES)
 			i = 0;
 	}
+
+	/* clean up the EAL */
+	rte_eal_cleanup();
 
 	return 0;
 }

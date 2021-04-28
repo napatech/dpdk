@@ -9,8 +9,8 @@
 #include <rte_dev.h>
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
-#include <rte_ethdev_driver.h>
-#include <rte_ethdev_pci.h>
+#include <ethdev_driver.h>
+#include <ethdev_pci.h>
 #include <rte_kvargs.h>
 #include <rte_string_fns.h>
 
@@ -64,6 +64,7 @@ static const struct vic_speed_capa {
 	{ 0, 0 }, /* End marker */
 };
 
+#define ENIC_DEVARG_CQ64 "cq64"
 #define ENIC_DEVARG_DISABLE_OVERLAY "disable-overlay"
 #define ENIC_DEVARG_ENABLE_AVX2_RX "enable-avx2-rx"
 #define ENIC_DEVARG_GENEVE_OPT "geneve-opt"
@@ -73,13 +74,10 @@ static const struct vic_speed_capa {
 RTE_LOG_REGISTER(enic_pmd_logtype, pmd.net.enic, INFO);
 
 static int
-enicpmd_dev_filter_ctrl(struct rte_eth_dev *dev,
-		     enum rte_filter_type filter_type,
-		     enum rte_filter_op filter_op,
-		     void *arg)
+enicpmd_dev_flow_ops_get(struct rte_eth_dev *dev,
+			 const struct rte_flow_ops **ops)
 {
 	struct enic *enic = pmd_priv(dev);
-	int ret = 0;
 
 	ENICPMD_FUNC_TRACE();
 
@@ -89,23 +87,12 @@ enicpmd_dev_filter_ctrl(struct rte_eth_dev *dev,
 	 */
 	if (enic->geneve_opt_enabled)
 		return -ENOTSUP;
-	switch (filter_type) {
-	case RTE_ETH_FILTER_GENERIC:
-		if (filter_op != RTE_ETH_FILTER_GET)
-			return -EINVAL;
-		if (enic->flow_filter_mode == FILTER_FLOWMAN)
-			*(const void **)arg = &enic_fm_flow_ops;
-		else
-			*(const void **)arg = &enic_flow_ops;
-		break;
-	default:
-		dev_warning(enic, "Filter type (%d) not supported",
-			filter_type);
-		ret = -EINVAL;
-		break;
-	}
 
-	return ret;
+	if (enic->flow_filter_mode == FILTER_FLOWMAN)
+		*ops = &enic_fm_flow_ops;
+	else
+		*ops = &enic_flow_ops;
+	return 0;
 }
 
 static void enicpmd_dev_tx_queue_release(void *txq)
@@ -933,6 +920,8 @@ static int enicpmd_dev_rx_burst_mode_get(struct rte_eth_dev *dev,
 		info_str = "Scalar No Scatter";
 	else if (pkt_burst == enic_recv_pkts)
 		info_str = "Scalar";
+	else if (pkt_burst == enic_recv_pkts_64)
+		info_str = "Scalar 64B Completion";
 	if (info_str) {
 		strlcpy(mode->info, info_str, sizeof(mode->info));
 		ret = 0;
@@ -1118,7 +1107,7 @@ static const struct eth_dev_ops enicpmd_eth_dev_ops = {
 	.mac_addr_remove      = enicpmd_remove_mac_addr,
 	.mac_addr_set         = enicpmd_set_mac_addr,
 	.set_mc_addr_list     = enicpmd_set_mc_addr_list,
-	.filter_ctrl          = enicpmd_dev_filter_ctrl,
+	.flow_ops_get         = enicpmd_dev_flow_ops_get,
 	.reta_query           = enicpmd_dev_rss_reta_query,
 	.reta_update          = enicpmd_dev_rss_reta_update,
 	.rss_hash_conf_get    = enicpmd_dev_rss_hash_conf_get,
@@ -1145,6 +1134,8 @@ static int enic_parse_zero_one(const char *key,
 			": expected=0|1 given=%s\n", key, value);
 		return -EINVAL;
 	}
+	if (strcmp(key, ENIC_DEVARG_CQ64) == 0)
+		enic->cq64_request = b;
 	if (strcmp(key, ENIC_DEVARG_DISABLE_OVERLAY) == 0)
 		enic->disable_overlay = b;
 	if (strcmp(key, ENIC_DEVARG_ENABLE_AVX2_RX) == 0)
@@ -1190,6 +1181,7 @@ static int enic_parse_ig_vlan_rewrite(__rte_unused const char *key,
 static int enic_check_devargs(struct rte_eth_dev *dev)
 {
 	static const char *const valid_keys[] = {
+		ENIC_DEVARG_CQ64,
 		ENIC_DEVARG_DISABLE_OVERLAY,
 		ENIC_DEVARG_ENABLE_AVX2_RX,
 		ENIC_DEVARG_GENEVE_OPT,
@@ -1201,6 +1193,7 @@ static int enic_check_devargs(struct rte_eth_dev *dev)
 
 	ENICPMD_FUNC_TRACE();
 
+	enic->cq64_request = true; /* Use 64B entry if available */
 	enic->disable_overlay = false;
 	enic->enable_avx2_rx = false;
 	enic->geneve_opt_request = false;
@@ -1210,7 +1203,9 @@ static int enic_check_devargs(struct rte_eth_dev *dev)
 	kvlist = rte_kvargs_parse(dev->device->devargs->args, valid_keys);
 	if (!kvlist)
 		return -EINVAL;
-	if (rte_kvargs_process(kvlist, ENIC_DEVARG_DISABLE_OVERLAY,
+	if (rte_kvargs_process(kvlist, ENIC_DEVARG_CQ64,
+			       enic_parse_zero_one, enic) < 0 ||
+	    rte_kvargs_process(kvlist, ENIC_DEVARG_DISABLE_OVERLAY,
 			       enic_parse_zero_one, enic) < 0 ||
 	    rte_kvargs_process(kvlist, ENIC_DEVARG_ENABLE_AVX2_RX,
 			       enic_parse_zero_one, enic) < 0 ||
@@ -1303,6 +1298,12 @@ static int eth_enic_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		if (retval)
 			return retval;
 	}
+	if (eth_da.nb_representor_ports > 0 &&
+	    eth_da.type != RTE_ETH_REPRESENTOR_VF) {
+		ENICPMD_LOG(ERR, "unsupported representor type: %s\n",
+			    pci_dev->device.devargs->args);
+		return -ENOTSUP;
+	}
 	retval = rte_eth_dev_create(&pci_dev->device, pci_dev->device.name,
 		sizeof(struct enic),
 		eth_dev_pci_specific_init, pci_dev,
@@ -1382,6 +1383,7 @@ RTE_PMD_REGISTER_PCI(net_enic, rte_enic_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_enic, pci_id_enic_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_enic, "* igb_uio | uio_pci_generic | vfio-pci");
 RTE_PMD_REGISTER_PARAM_STRING(net_enic,
+	ENIC_DEVARG_CQ64 "=0|1"
 	ENIC_DEVARG_DISABLE_OVERLAY "=0|1 "
 	ENIC_DEVARG_ENABLE_AVX2_RX "=0|1 "
 	ENIC_DEVARG_GENEVE_OPT "=0|1 "

@@ -15,8 +15,8 @@
 
 #include <rte_mbuf.h>
 #include <rte_flow_driver.h>
-#include <rte_ethdev_driver.h>
-#include <rte_ethdev_vdev.h>
+#include <ethdev_driver.h>
+#include <ethdev_vdev.h>
 #include <rte_malloc.h>
 #include <rte_memcpy.h>
 #include <rte_bus_vdev.h>
@@ -640,6 +640,7 @@ ipn3ke_tm_ops_get(struct rte_eth_dev *ethdev,
  */
 #define IPN3KE_ETH_OVERHEAD \
 	(RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN + IPN3KE_VLAN_TAG_SIZE * 2)
+#define IPN3KE_ETH_MAX_LEN (RTE_ETHER_MTU + IPN3KE_ETH_OVERHEAD)
 
 #define IPN3KE_MAC_FRAME_SIZE_MAX    9728
 #define IPN3KE_MAC_RX_FRAME_MAXLENGTH    0x00AE

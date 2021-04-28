@@ -552,7 +552,7 @@ octeontx_dev_mtu_set(struct rte_eth_dev *eth_dev, uint16_t mtu)
 	if (rc)
 		return rc;
 
-	if (frame_size > RTE_ETHER_MAX_LEN)
+	if (frame_size > OCCTX_L2_MAX_LEN)
 		nic->rx_offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
 	else
 		nic->rx_offloads &= ~DEV_RX_OFFLOAD_JUMBO_FRAME;
@@ -867,7 +867,6 @@ octeontx_dev_info(struct rte_eth_dev *dev,
 
 	dev_info->max_mac_addrs =
 				octeontx_bgx_port_mac_entries_get(nic->port_id);
-	dev_info->max_rx_pktlen = PKI_MAX_PKTLEN;
 	dev_info->max_rx_queues = 1;
 	dev_info->max_tx_queues = PKO_MAX_NUM_DQ;
 	dev_info->min_rx_bufsize = 0;

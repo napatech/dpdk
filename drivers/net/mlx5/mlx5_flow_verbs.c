@@ -10,7 +10,7 @@
 
 #include <rte_common.h>
 #include <rte_ether.h>
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_flow.h>
 #include <rte_flow_driver.h>
 #include <rte_malloc.h>
@@ -23,7 +23,7 @@
 #include "mlx5_defs.h"
 #include "mlx5.h"
 #include "mlx5_flow.h"
-#include "mlx5_rxtx.h"
+#include "mlx5_rx.h"
 
 #define VERBS_SPEC_INNER(item_flags) \
 	(!!((item_flags) & MLX5_FLOW_LAYER_TUNNEL) ? IBV_FLOW_SPEC_INNER : 0)
@@ -37,6 +37,12 @@ static const uint32_t priority_map_3[][MLX5_PRIORITY_MAP_MAX] = {
 static const uint32_t priority_map_5[][MLX5_PRIORITY_MAP_MAX] = {
 	{ 0, 1, 2 }, { 3, 4, 5 }, { 6, 7, 8 },
 	{ 9, 10, 11 }, { 12, 13, 14 },
+};
+
+/* Verbs specification header. */
+struct ibv_spec_header {
+	enum ibv_flow_spec_type type;
+	uint16_t size;
 };
 
 /**
@@ -103,8 +109,11 @@ mlx5_flow_discover_priorities(struct rte_eth_dev *dev)
 			dev->data->port_id, priority);
 		return -rte_errno;
 	}
-	DRV_LOG(INFO, "port %u flow maximum priority: %d",
-		dev->data->port_id, priority);
+	DRV_LOG(INFO, "port %u supported flow priorities:"
+		" 0-%d for ingress or egress root table,"
+		" 0-%d for non-root table or transfer root table.",
+		dev->data->port_id, priority - 2,
+		MLX5_NON_ROOT_FLOW_MAX_PRIO - 1);
 	return priority;
 }
 
@@ -1247,6 +1256,7 @@ flow_verbs_validate(struct rte_eth_dev *dev,
 	uint64_t last_item = 0;
 	uint8_t next_protocol = 0xff;
 	uint16_t ether_type = 0;
+	bool is_empty_vlan = false;
 
 	if (items == NULL)
 		return -1;
@@ -1274,6 +1284,8 @@ flow_verbs_validate(struct rte_eth_dev *dev,
 				ether_type &=
 					((const struct rte_flow_item_eth *)
 					 items->mask)->type;
+				if (ether_type == RTE_BE16(RTE_ETHER_TYPE_VLAN))
+					is_empty_vlan = true;
 				ether_type = rte_be_to_cpu_16(ether_type);
 			} else {
 				ether_type = 0;
@@ -1299,6 +1311,7 @@ flow_verbs_validate(struct rte_eth_dev *dev,
 			} else {
 				ether_type = 0;
 			}
+			is_empty_vlan = false;
 			break;
 		case RTE_FLOW_ITEM_TYPE_IPV4:
 			ret = mlx5_flow_validate_item_ipv4
@@ -1410,6 +1423,10 @@ flow_verbs_validate(struct rte_eth_dev *dev,
 		}
 		item_flags |= last_item;
 	}
+	if (is_empty_vlan)
+		return rte_flow_error_set(error, ENOTSUP,
+						 RTE_FLOW_ERROR_TYPE_ITEM, NULL,
+		    "VLAN matching without vid specification is not supported");
 	for (; actions->type != RTE_FLOW_ACTION_TYPE_END; actions++) {
 		switch (actions->type) {
 		case RTE_FLOW_ACTION_TYPE_VOID:
@@ -1704,7 +1721,7 @@ flow_verbs_translate(struct rte_eth_dev *dev,
 
 	MLX5_ASSERT(wks);
 	rss_desc = &wks->rss_desc;
-	if (priority == MLX5_FLOW_PRIO_RSVD)
+	if (priority == MLX5_FLOW_LOWEST_PRIO_INDICATOR)
 		priority = priv->config.flow_prio - 1;
 	for (; actions->type != RTE_FLOW_ACTION_TYPE_END; actions++) {
 		int ret;

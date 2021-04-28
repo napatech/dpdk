@@ -558,61 +558,60 @@ enqueue_one_chain_job(struct qat_sym_session *ctx,
 	case ICP_QAT_HW_AUTH_ALGO_KASUMI_F9:
 	case ICP_QAT_HW_AUTH_ALGO_ZUC_3G_128_EIA3:
 		auth_param->u1.aad_adr = auth_iv->iova;
-
-		if (unlikely(n_data_vecs > 1)) {
-			int auth_end_get = 0, i = n_data_vecs - 1;
-			struct rte_crypto_vec *cvec = &data[0];
-			uint32_t len;
-
-			len = data_len - ofs.ofs.auth.tail;
-
-			while (i >= 0 && len > 0) {
-				if (cvec->len >= len) {
-					auth_iova_end = cvec->iova +
-						(cvec->len - len);
-					len = 0;
-					auth_end_get = 1;
-					break;
-				}
-				len -= cvec->len;
-				i--;
-				cvec++;
-			}
-
-			if (unlikely(auth_end_get == 0))
-				return -1;
-		} else
-			auth_iova_end = data[0].iova + auth_param->auth_off +
-				auth_param->auth_len;
-
-		/* Then check if digest-encrypted conditions are met */
-		if ((auth_param->auth_off + auth_param->auth_len <
-			cipher_param->cipher_offset +
-			cipher_param->cipher_length) &&
-			(digest->iova == auth_iova_end)) {
-			/* Handle partial digest encryption */
-			if (cipher_param->cipher_offset +
-					cipher_param->cipher_length <
-					auth_param->auth_off +
-					auth_param->auth_len +
-					ctx->digest_length)
-				req->comn_mid.dst_length =
-					req->comn_mid.src_length =
-					auth_param->auth_off +
-					auth_param->auth_len +
-					ctx->digest_length;
-			struct icp_qat_fw_comn_req_hdr *header =
-				&req->comn_hdr;
-			ICP_QAT_FW_LA_DIGEST_IN_BUFFER_SET(
-				header->serv_specif_flags,
-				ICP_QAT_FW_LA_DIGEST_IN_BUFFER);
-		}
 		break;
 	case ICP_QAT_HW_AUTH_ALGO_GALOIS_128:
 	case ICP_QAT_HW_AUTH_ALGO_GALOIS_64:
 		break;
 	default:
 		break;
+	}
+
+	if (unlikely(n_data_vecs > 1)) {
+		int auth_end_get = 0, i = n_data_vecs - 1;
+		struct rte_crypto_vec *cvec = &data[0];
+		uint32_t len;
+
+		len = data_len - ofs.ofs.auth.tail;
+
+		while (i >= 0 && len > 0) {
+			if (cvec->len >= len) {
+				auth_iova_end = cvec->iova + len;
+				len = 0;
+				auth_end_get = 1;
+				break;
+			}
+			len -= cvec->len;
+			i--;
+			cvec++;
+		}
+
+		if (unlikely(auth_end_get == 0))
+			return -1;
+	} else
+		auth_iova_end = data[0].iova + auth_param->auth_off +
+			auth_param->auth_len;
+
+	/* Then check if digest-encrypted conditions are met */
+	if ((auth_param->auth_off + auth_param->auth_len <
+		cipher_param->cipher_offset +
+		cipher_param->cipher_length) &&
+		(digest->iova == auth_iova_end)) {
+		/* Handle partial digest encryption */
+		if (cipher_param->cipher_offset +
+				cipher_param->cipher_length <
+				auth_param->auth_off +
+				auth_param->auth_len +
+				ctx->digest_length)
+			req->comn_mid.dst_length =
+				req->comn_mid.src_length =
+				auth_param->auth_off +
+				auth_param->auth_len +
+				ctx->digest_length;
+		struct icp_qat_fw_comn_req_hdr *header =
+			&req->comn_hdr;
+		ICP_QAT_FW_LA_DIGEST_IN_BUFFER_SET(
+			header->serv_specif_flags,
+			ICP_QAT_FW_LA_DIGEST_IN_BUFFER);
 	}
 
 	return 0;
@@ -708,6 +707,7 @@ qat_sym_dp_enqueue_chain_jobs(void *qp_data, uint8_t *drv_ctx,
 static __rte_always_inline uint32_t
 qat_sym_dp_dequeue_burst(void *qp_data, uint8_t *drv_ctx,
 	rte_cryptodev_raw_get_dequeue_count_t get_dequeue_count,
+	uint32_t max_nb_to_dequeue,
 	rte_cryptodev_raw_post_dequeue_t post_dequeue,
 	void **out_user_data, uint8_t is_user_data_array,
 	uint32_t *n_success_jobs, int *return_status)
@@ -737,9 +737,23 @@ qat_sym_dp_dequeue_burst(void *qp_data, uint8_t *drv_ctx,
 
 	resp_opaque = (void *)(uintptr_t)resp->opaque_data;
 	/* get the dequeue count */
-	n = get_dequeue_count(resp_opaque);
-	if (unlikely(n == 0))
-		return 0;
+	if (get_dequeue_count) {
+		n = get_dequeue_count(resp_opaque);
+		if (unlikely(n == 0))
+			return 0;
+		else if (n > 1) {
+			head = (head + rx_queue->msg_size * (n - 1)) &
+				rx_queue->modulo_mask;
+			resp = (struct icp_qat_fw_comn_resp *)(
+				(uint8_t *)rx_queue->base_addr + head);
+			if (*(uint32_t *)resp == ADF_RING_EMPTY_SIG)
+				return 0;
+		}
+	} else {
+		if (unlikely(max_nb_to_dequeue == 0))
+			return 0;
+		n = max_nb_to_dequeue;
+	}
 
 	out_user_data[0] = resp_opaque;
 	status = QAT_SYM_DP_IS_RESP_SUCCESS(resp);

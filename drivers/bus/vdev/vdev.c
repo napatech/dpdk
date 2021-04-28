@@ -189,6 +189,7 @@ vdev_probe_all_drivers(struct rte_vdev_device *dev)
 {
 	const char *name;
 	struct rte_vdev_driver *driver;
+	enum rte_iova_mode iova_mode;
 	int ret;
 
 	if (rte_dev_is_probed(&dev->device))
@@ -199,6 +200,14 @@ vdev_probe_all_drivers(struct rte_vdev_device *dev)
 
 	if (vdev_parse(name, &driver))
 		return -1;
+
+	iova_mode = rte_eal_iova_mode();
+	if ((driver->drv_flags & RTE_VDEV_DRV_NEED_IOVA_AS_VA) && (iova_mode == RTE_IOVA_PA)) {
+		VDEV_LOG(ERR, "%s requires VA IOVA mode but current mode is PA, not initializing",
+				name);
+		return -1;
+	}
+
 	ret = driver->probe(dev);
 	if (ret == 0)
 		dev->device.driver = &driver->driver;
@@ -236,13 +245,14 @@ alloc_devargs(const char *name, const char *args)
 
 	devargs->bus = &rte_vdev_bus;
 	if (args)
-		devargs->args = strdup(args);
+		devargs->data = strdup(args);
 	else
-		devargs->args = strdup("");
+		devargs->data = strdup("");
+	devargs->args = devargs->data;
 
 	ret = strlcpy(devargs->name, name, sizeof(devargs->name));
 	if (ret < 0 || ret >= (int)sizeof(devargs->name)) {
-		free(devargs->args);
+		rte_devargs_reset(devargs);
 		free(devargs);
 		return NULL;
 	}
@@ -296,7 +306,7 @@ insert_vdev(const char *name, const char *args,
 
 	return 0;
 fail:
-	free(devargs->args);
+	rte_devargs_reset(devargs);
 	free(devargs);
 	free(dev);
 	return ret;
@@ -594,6 +604,25 @@ vdev_unplug(struct rte_device *dev)
 	return rte_vdev_uninit(dev->name);
 }
 
+static enum rte_iova_mode
+vdev_get_iommu_class(void)
+{
+	const char *name;
+	struct rte_vdev_device *dev;
+	struct rte_vdev_driver *driver;
+
+	TAILQ_FOREACH(dev, &vdev_device_list, next) {
+		name = rte_vdev_device_name(dev);
+		if (vdev_parse(name, &driver))
+			continue;
+
+		if (driver->drv_flags & RTE_VDEV_DRV_NEED_IOVA_AS_VA)
+			return RTE_IOVA_VA;
+	}
+
+	return RTE_IOVA_DC;
+}
+
 static struct rte_bus rte_vdev_bus = {
 	.scan = vdev_scan,
 	.probe = vdev_probe,
@@ -603,6 +632,7 @@ static struct rte_bus rte_vdev_bus = {
 	.parse = vdev_parse,
 	.dma_map = vdev_dma_map,
 	.dma_unmap = vdev_dma_unmap,
+	.get_iommu_class = vdev_get_iommu_class,
 	.dev_iterate = rte_vdev_dev_iterate,
 };
 

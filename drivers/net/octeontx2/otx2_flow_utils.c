@@ -271,6 +271,7 @@ otx2_flow_update_parse_state(struct otx2_parse_state *pst,
 			     uint8_t flags)
 {
 	struct npc_lid_lt_xtract_info *xinfo;
+	struct otx2_flow_dump_data *dump;
 	struct npc_xtract_info *lfinfo;
 	int intf, lf_cfg;
 	int i, j, rc = 0;
@@ -320,6 +321,9 @@ otx2_flow_update_parse_state(struct otx2_parse_state *pst,
 	}
 
 done:
+	dump = &pst->flow->dump_data[pst->flow->num_patterns++];
+	dump->lid = lid;
+	dump->ltype = lt;
 	/* Next pattern to parse by subsequent layers */
 	pst->pattern++;
 	return 0;
@@ -386,7 +390,8 @@ otx2_flow_parse_item_basic(const struct rte_flow_item *item,
 	}
 
 	/* We have valid spec */
-	info->spec = item->spec;
+	if (item->type != RTE_FLOW_ITEM_TYPE_RAW)
+		info->spec = item->spec;
 
 	/* If mask is not set, use default mask, err if default mask is
 	 * also NULL.
@@ -401,7 +406,8 @@ otx2_flow_parse_item_basic(const struct rte_flow_item *item,
 		}
 		info->mask = info->def_mask;
 	} else {
-		info->mask = item->mask;
+		if (item->type != RTE_FLOW_ITEM_TYPE_RAW)
+			info->mask = item->mask;
 	}
 
 	/* mask specified must be subset of hw supported mask
@@ -944,7 +950,7 @@ otx2_flow_mcam_alloc_and_write(struct rte_flow *flow, struct otx2_mbox *mbox,
 		req->entry_data.kw[0] |= flow_info->channel;
 		req->entry_data.kw_mask[0] |=  (BIT_ULL(12) - 1);
 	} else {
-		uint16_t pf_func = (flow->npc_action >> 4) & 0xffff;
+		uint16_t pf_func = (flow->npc_action >> 48) & 0xffff;
 
 		pf_func = htons(pf_func);
 		req->entry_data.kw[0] |= ((uint64_t)pf_func << 32);

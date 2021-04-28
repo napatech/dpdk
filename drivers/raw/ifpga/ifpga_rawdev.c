@@ -526,10 +526,10 @@ ifpga_monitor_start_func(void)
 	int ret;
 
 	if (ifpga_monitor_start == 0) {
-		ret = pthread_create(&ifpga_monitor_start_thread,
-			NULL,
-			ifpga_rawdev_gsd_handle, NULL);
-		if (ret) {
+		ret = rte_ctrl_thread_create(&ifpga_monitor_start_thread,
+					     "ifpga-monitor", NULL,
+					     ifpga_rawdev_gsd_handle, NULL);
+		if (ret != 0) {
 			IFPGA_RAWDEV_PMD_ERR(
 				"Fail to create ifpga nonitor thread");
 			return -1;
@@ -1611,7 +1611,7 @@ static struct rte_pci_driver rte_ifpga_rawdev_pmd = {
 RTE_PMD_REGISTER_PCI(ifpga_rawdev_pci_driver, rte_ifpga_rawdev_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(ifpga_rawdev_pci_driver, rte_ifpga_rawdev_pmd);
 RTE_PMD_REGISTER_KMOD_DEP(ifpga_rawdev_pci_driver, "* igb_uio | uio_pci_generic | vfio-pci");
-RTE_LOG_REGISTER(ifpga_rawdev_logtype, driver.raw.init, NOTICE);
+RTE_LOG_REGISTER(ifpga_rawdev_logtype, pmd.raw.ifpga, NOTICE);
 
 static const char * const valid_args[] = {
 #define IFPGA_ARG_NAME         "ifpga"
@@ -1737,3 +1737,33 @@ RTE_PMD_REGISTER_PARAM_STRING(ifpga_rawdev_cfg,
 	"ifpga=<string> "
 	"port=<int> "
 	"afu_bts=<path>");
+
+struct rte_pci_bus *ifpga_get_pci_bus(void)
+{
+	return rte_ifpga_rawdev_pmd.bus;
+}
+
+int ifpga_rawdev_partial_reconfigure(struct rte_rawdev *dev, int port,
+	const char *file)
+{
+	if (!dev) {
+		IFPGA_RAWDEV_PMD_ERR("Input parameter is invalid");
+		return -EINVAL;
+	}
+
+	return rte_fpga_do_pr(dev, port, file);
+}
+
+void ifpga_rawdev_cleanup(void)
+{
+	struct ifpga_rawdev *dev;
+	unsigned int i;
+
+	for (i = 0; i < IFPGA_RAWDEV_NUM; i++) {
+		dev = &ifpga_rawdevices[i];
+		if (dev->rawdev) {
+			rte_rawdev_pmd_release(dev->rawdev);
+			dev->rawdev = NULL;
+		}
+	}
+}

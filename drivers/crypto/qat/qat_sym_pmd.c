@@ -211,6 +211,12 @@ static int qat_sym_qp_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 				rte_mempool_virt2iova(cookie) +
 				offsetof(struct qat_sym_op_cookie,
 				qat_sgl_dst);
+
+		cookie->opt.spc_gmac.cd_phys_addr =
+				rte_mempool_virt2iova(cookie) +
+				offsetof(struct qat_sym_op_cookie,
+				opt.spc_gmac.cd_cipher);
+
 	}
 
 	/* Get fw version from QAT (GEN2), skip if we've got it already */
@@ -330,6 +336,10 @@ qat_sym_dev_create(struct qat_pci_device *qat_pci_dev,
 	const struct rte_cryptodev_capabilities *capabilities;
 	uint64_t capa_size;
 
+	snprintf(name, RTE_CRYPTODEV_NAME_MAX_LEN, "%s_%s",
+			qat_pci_dev->name, "sym");
+	QAT_LOG(DEBUG, "Creating QAT SYM device %s", name);
+
 	/*
 	 * All processes must use same driver id so they can share sessions.
 	 * Store driver_id so we can validate that all processes have the same
@@ -348,10 +358,6 @@ qat_sym_dev_create(struct qat_pci_device *qat_pci_dev,
 			return -(EFAULT);
 		}
 	}
-
-	snprintf(name, RTE_CRYPTODEV_NAME_MAX_LEN, "%s_%s",
-			qat_pci_dev->name, "sym");
-	QAT_LOG(DEBUG, "Creating QAT SYM device %s", name);
 
 	/* Populate subset device to use in cryptodev device creation */
 	qat_dev_instance->sym_rte_dev.driver = &cryptodev_qat_sym_driver;

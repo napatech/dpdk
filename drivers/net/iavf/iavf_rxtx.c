@@ -17,7 +17,7 @@
 #include <rte_mbuf.h>
 #include <rte_malloc.h>
 #include <rte_ether.h>
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_tcp.h>
 #include <rte_sctp.h>
 #include <rte_udp.h>
@@ -55,6 +55,31 @@ iavf_proto_xtr_type_to_rxdid(uint8_t flex_type)
 
 	return flex_type < RTE_DIM(rxdid_map) ?
 				rxdid_map[flex_type] : IAVF_RXDID_COMMS_OVS_1;
+}
+
+int
+iavf_get_monitor_addr(void *rx_queue, struct rte_power_monitor_cond *pmc)
+{
+	struct iavf_rx_queue *rxq = rx_queue;
+	volatile union iavf_rx_desc *rxdp;
+	uint16_t desc;
+
+	desc = rxq->rx_tail;
+	rxdp = &rxq->rx_ring[desc];
+	/* watch for changes in status bit */
+	pmc->addr = &rxdp->wb.qword1.status_error_len;
+
+	/*
+	 * we expect the DD bit to be set to 1 if this descriptor was already
+	 * written to.
+	 */
+	pmc->val = rte_cpu_to_le_64(1 << IAVF_RX_DESC_STATUS_DD_SHIFT);
+	pmc->mask = rte_cpu_to_le_64(1 << IAVF_RX_DESC_STATUS_DD_SHIFT);
+
+	/* registers are 64-bit */
+	pmc->size = sizeof(uint64_t);
+
+	return 0;
 }
 
 static inline int
@@ -135,7 +160,7 @@ check_rx_vec_allow(struct iavf_rx_queue *rxq)
 static inline bool
 check_tx_vec_allow(struct iavf_tx_queue *txq)
 {
-	if (!(txq->offloads & IAVF_NO_VECTOR_FLAGS) &&
+	if (!(txq->offloads & IAVF_TX_NO_VECTOR_FLAGS) &&
 	    txq->rs_thresh >= IAVF_VPMD_TX_MAX_BURST &&
 	    txq->rs_thresh <= IAVF_VPMD_TX_MAX_FREE_BUF) {
 		PMD_INIT_LOG(DEBUG, "Vector tx can be enabled on this txq.");
@@ -498,8 +523,11 @@ iavf_dev_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	uint8_t proto_xtr;
 	uint16_t len;
 	uint16_t rx_free_thresh;
+	uint64_t offloads;
 
 	PMD_INIT_FUNC_TRACE();
+
+	offloads = rx_conf->offloads | dev->data->dev_conf.rxmode.offloads;
 
 	if (nb_desc % IAVF_ALIGN_RING_DESC != 0 ||
 	    nb_desc > IAVF_MAX_RING_DESC ||
@@ -543,6 +571,24 @@ iavf_dev_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 		rxq->proto_xtr = IAVF_PROTO_XTR_NONE;
 	}
 
+	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_VLAN_V2) {
+		struct virtchnl_vlan_supported_caps *stripping_support =
+				&vf->vlan_v2_caps.offloads.stripping_support;
+		uint32_t stripping_cap;
+
+		if (stripping_support->outer)
+			stripping_cap = stripping_support->outer;
+		else
+			stripping_cap = stripping_support->inner;
+
+		if (stripping_cap & VIRTCHNL_VLAN_TAG_LOCATION_L2TAG1)
+			rxq->rx_flags = IAVF_RX_FLAGS_VLAN_TAG_LOC_L2TAG1;
+		else if (stripping_cap & VIRTCHNL_VLAN_TAG_LOCATION_L2TAG2_2)
+			rxq->rx_flags = IAVF_RX_FLAGS_VLAN_TAG_LOC_L2TAG2_2;
+	} else {
+		rxq->rx_flags = IAVF_RX_FLAGS_VLAN_TAG_LOC_L2TAG1;
+	}
+
 	iavf_select_rxd_to_pkt_fields_handler(rxq, rxq->rxdid);
 
 	rxq->mp = mp;
@@ -550,10 +596,15 @@ iavf_dev_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	rxq->rx_free_thresh = rx_free_thresh;
 	rxq->queue_id = queue_idx;
 	rxq->port_id = dev->data->port_id;
-	rxq->crc_len = 0; /* crc stripping by default */
 	rxq->rx_deferred_start = rx_conf->rx_deferred_start;
 	rxq->rx_hdr_len = 0;
 	rxq->vsi = vsi;
+	rxq->offloads = offloads;
+
+	if (dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_KEEP_CRC)
+		rxq->crc_len = RTE_ETHER_CRC_LEN;
+	else
+		rxq->crc_len = 0;
 
 	len = rte_pktmbuf_data_room_size(rxq->mp) - RTE_PKTMBUF_HEADROOM;
 	rxq->rx_buf_len = RTE_ALIGN(len, (1 << IAVF_RXQ_CTX_DBUFF_SHIFT));
@@ -625,6 +676,8 @@ iavf_dev_tx_queue_setup(struct rte_eth_dev *dev,
 		       const struct rte_eth_txconf *tx_conf)
 {
 	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct iavf_info *vf =
+		IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
 	struct iavf_tx_queue *txq;
 	const struct rte_memzone *mz;
 	uint32_t ring_size;
@@ -664,6 +717,24 @@ iavf_dev_tx_queue_setup(struct rte_eth_dev *dev,
 		PMD_INIT_LOG(ERR, "Failed to allocate memory for "
 			     "tx queue structure");
 		return -ENOMEM;
+	}
+
+	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_VLAN_V2) {
+		struct virtchnl_vlan_supported_caps *insertion_support =
+			&vf->vlan_v2_caps.offloads.insertion_support;
+		uint32_t insertion_cap;
+
+		if (insertion_support->outer)
+			insertion_cap = insertion_support->outer;
+		else
+			insertion_cap = insertion_support->inner;
+
+		if (insertion_cap & VIRTCHNL_VLAN_TAG_LOCATION_L2TAG1)
+			txq->vlan_flag = IAVF_TX_FLAGS_VLAN_TAG_LOC_L2TAG1;
+		else if (insertion_cap & VIRTCHNL_VLAN_TAG_LOCATION_L2TAG2)
+			txq->vlan_flag = IAVF_TX_FLAGS_VLAN_TAG_LOC_L2TAG2;
+	} else {
+		txq->vlan_flag = IAVF_TX_FLAGS_VLAN_TAG_LOC_L2TAG1;
 	}
 
 	txq->nb_tx_desc = nb_desc;
@@ -948,31 +1019,27 @@ iavf_rxd_to_vlan_tci(struct rte_mbuf *mb, volatile union iavf_rx_desc *rxdp)
 
 static inline void
 iavf_flex_rxd_to_vlan_tci(struct rte_mbuf *mb,
-			  volatile union iavf_rx_flex_desc *rxdp)
+			  volatile union iavf_rx_flex_desc *rxdp,
+			  uint8_t rx_flags)
 {
-	if (rte_le_to_cpu_64(rxdp->wb.status_error0) &
-		(1 << IAVF_RX_FLEX_DESC_STATUS0_L2TAG1P_S)) {
-		mb->ol_flags |= PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED;
-		mb->vlan_tci =
-			rte_le_to_cpu_16(rxdp->wb.l2tag1);
-	} else {
-		mb->vlan_tci = 0;
-	}
+	uint16_t vlan_tci = 0;
+
+	if (rx_flags & IAVF_RX_FLAGS_VLAN_TAG_LOC_L2TAG1 &&
+	    rte_le_to_cpu_64(rxdp->wb.status_error0) &
+	    (1 << IAVF_RX_FLEX_DESC_STATUS0_L2TAG1P_S))
+		vlan_tci = rte_le_to_cpu_16(rxdp->wb.l2tag1);
 
 #ifndef RTE_LIBRTE_IAVF_16BYTE_RX_DESC
-	if (rte_le_to_cpu_16(rxdp->wb.status_error1) &
-	    (1 << IAVF_RX_FLEX_DESC_STATUS1_L2TAG2P_S)) {
-		mb->ol_flags |= PKT_RX_QINQ_STRIPPED | PKT_RX_QINQ |
-				PKT_RX_VLAN_STRIPPED | PKT_RX_VLAN;
-		mb->vlan_tci_outer = mb->vlan_tci;
-		mb->vlan_tci = rte_le_to_cpu_16(rxdp->wb.l2tag2_2nd);
-		PMD_RX_LOG(DEBUG, "Descriptor l2tag2_1: %u, l2tag2_2: %u",
-			   rte_le_to_cpu_16(rxdp->wb.l2tag2_1st),
-			   rte_le_to_cpu_16(rxdp->wb.l2tag2_2nd));
-	} else {
-		mb->vlan_tci_outer = 0;
-	}
+	if (rx_flags & IAVF_RX_FLAGS_VLAN_TAG_LOC_L2TAG2_2 &&
+	    rte_le_to_cpu_16(rxdp->wb.status_error1) &
+	    (1 << IAVF_RX_FLEX_DESC_STATUS1_L2TAG2P_S))
+		vlan_tci = rte_le_to_cpu_16(rxdp->wb.l2tag2_2nd);
 #endif
+
+	if (vlan_tci) {
+		mb->ol_flags |= PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED;
+		mb->vlan_tci = vlan_tci;
+	}
 }
 
 /* Translate the rx descriptor status and error fields to pkt flags */
@@ -1071,7 +1138,7 @@ iavf_flex_rxd_error_to_pkt_flags(uint16_t stat_err0)
 		flags |= PKT_RX_L4_CKSUM_GOOD;
 
 	if (unlikely(stat_err0 & (1 << IAVF_RX_FLEX_DESC_STATUS0_XSUM_EIPE_S)))
-		flags |= PKT_RX_EIP_CKSUM_BAD;
+		flags |= PKT_RX_OUTER_IP_CKSUM_BAD;
 
 	return flags;
 }
@@ -1290,7 +1357,7 @@ iavf_recv_pkts_flex_rxd(void *rx_queue,
 		rxm->ol_flags = 0;
 		rxm->packet_type = ptype_tbl[IAVF_RX_FLEX_DESC_PTYPE_M &
 			rte_le_to_cpu_16(rxd.wb.ptype_flex_flags0)];
-		iavf_flex_rxd_to_vlan_tci(rxm, &rxd);
+		iavf_flex_rxd_to_vlan_tci(rxm, &rxd, rxq->rx_flags);
 		rxq->rxd_to_pkt_fields(rxq, rxm, &rxd);
 		pkt_flags = iavf_flex_rxd_error_to_pkt_flags(rx_stat_err0);
 		rxm->ol_flags |= pkt_flags;
@@ -1431,7 +1498,7 @@ iavf_recv_scattered_pkts_flex_rxd(void *rx_queue, struct rte_mbuf **rx_pkts,
 		first_seg->ol_flags = 0;
 		first_seg->packet_type = ptype_tbl[IAVF_RX_FLEX_DESC_PTYPE_M &
 			rte_le_to_cpu_16(rxd.wb.ptype_flex_flags0)];
-		iavf_flex_rxd_to_vlan_tci(first_seg, &rxd);
+		iavf_flex_rxd_to_vlan_tci(first_seg, &rxd, rxq->rx_flags);
 		rxq->rxd_to_pkt_fields(rxq, first_seg, &rxd);
 		pkt_flags = iavf_flex_rxd_error_to_pkt_flags(rx_stat_err0);
 
@@ -1668,7 +1735,7 @@ iavf_rx_scan_hw_ring_flex_rxd(struct iavf_rx_queue *rxq)
 
 			mb->packet_type = ptype_tbl[IAVF_RX_FLEX_DESC_PTYPE_M &
 				rte_le_to_cpu_16(rxdp[j].wb.ptype_flex_flags0)];
-			iavf_flex_rxd_to_vlan_tci(mb, &rxdp[j]);
+			iavf_flex_rxd_to_vlan_tci(mb, &rxdp[j], rxq->rx_flags);
 			rxq->rxd_to_pkt_fields(rxq, mb, &rxdp[j]);
 			stat_err0 = rte_le_to_cpu_16(rxdp[j].wb.status_error0);
 			pkt_flags = iavf_flex_rxd_error_to_pkt_flags(stat_err0);
@@ -1941,9 +2008,9 @@ iavf_xmit_cleanup(struct iavf_tx_queue *txq)
 	if ((txd[desc_to_clean_to].cmd_type_offset_bsz &
 			rte_cpu_to_le_64(IAVF_TXD_QW1_DTYPE_MASK)) !=
 			rte_cpu_to_le_64(IAVF_TX_DESC_DTYPE_DESC_DONE)) {
-		PMD_TX_FREE_LOG(DEBUG, "TX descriptor %4u is not done "
-				"(port=%d queue=%d)", desc_to_clean_to,
-				txq->port_id, txq->queue_id);
+		PMD_TX_LOG(DEBUG, "TX descriptor %4u is not done "
+			   "(port=%d queue=%d)", desc_to_clean_to,
+			   txq->port_id, txq->queue_id);
 		return -1;
 	}
 
@@ -1964,11 +2031,14 @@ iavf_xmit_cleanup(struct iavf_tx_queue *txq)
 
 /* Check if the context descriptor is needed for TX offloading */
 static inline uint16_t
-iavf_calc_context_desc(uint64_t flags)
+iavf_calc_context_desc(uint64_t flags, uint8_t vlan_flag)
 {
-	static uint64_t mask = PKT_TX_TCP_SEG;
-
-	return (flags & mask) ? 1 : 0;
+	if (flags & PKT_TX_TCP_SEG)
+		return 1;
+	if (flags & PKT_TX_VLAN_PKT &&
+	    vlan_flag & IAVF_TX_FLAGS_VLAN_TAG_LOC_L2TAG2)
+		return 1;
+	return 0;
 }
 
 static inline void
@@ -2089,6 +2159,7 @@ iavf_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 	uint16_t tx_last;
 	uint16_t slen;
 	uint64_t buf_dma_addr;
+	uint16_t cd_l2tag2 = 0;
 	union iavf_tx_offload tx_offload = {0};
 
 	txq = tx_queue;
@@ -2115,7 +2186,7 @@ iavf_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		tx_offload.l4_len = tx_pkt->l4_len;
 		tx_offload.tso_segsz = tx_pkt->tso_segsz;
 		/* Calculate the number of context descriptors needed. */
-		nb_ctx = iavf_calc_context_desc(ol_flags);
+		nb_ctx = iavf_calc_context_desc(ol_flags, txq->vlan_flag);
 
 		/* The number of descriptors that must be allocated for
 		 * a packet equals to the number of the segments of that
@@ -2150,7 +2221,8 @@ iavf_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		}
 
 		/* Descriptor based VLAN insertion */
-		if (ol_flags & PKT_TX_VLAN_PKT) {
+		if (ol_flags & PKT_TX_VLAN_PKT &&
+		    txq->vlan_flag & IAVF_TX_FLAGS_VLAN_TAG_LOC_L2TAG1) {
 			td_cmd |= IAVF_TX_DESC_CMD_IL2TAG1;
 			td_tag = tx_pkt->vlan_tci;
 		}
@@ -2185,8 +2257,16 @@ iavf_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 				cd_type_cmd_tso_mss |=
 					iavf_set_tso_ctx(tx_pkt, tx_offload);
 
+			if (ol_flags & PKT_TX_VLAN_PKT &&
+			   txq->vlan_flag & IAVF_TX_FLAGS_VLAN_TAG_LOC_L2TAG2) {
+				cd_type_cmd_tso_mss |= IAVF_TX_CTX_DESC_IL2TAG2
+					<< IAVF_TXD_CTX_QW1_CMD_SHIFT;
+				cd_l2tag2 = tx_pkt->vlan_tci;
+			}
+
 			ctx_txd->type_cmd_tso_mss =
 				rte_cpu_to_le_64(cd_type_cmd_tso_mss);
+			ctx_txd->l2tag2 = rte_cpu_to_le_16(cd_l2tag2);
 
 			IAVF_DUMP_TX_DESC(txq, &txr[tx_id], tx_id);
 			txe->last_id = tx_last;
@@ -2284,7 +2364,7 @@ iavf_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 			return i;
 		}
 
-#ifdef RTE_LIBRTE_ETHDEV_DEBUG
+#ifdef RTE_ETHDEV_DEBUG_TX
 		ret = rte_validate_tx_offload(m);
 		if (ret != 0) {
 			rte_errno = -ret;
@@ -2312,22 +2392,23 @@ iavf_set_rx_function(struct rte_eth_dev *dev)
 #ifdef RTE_ARCH_X86
 	struct iavf_rx_queue *rxq;
 	int i;
+	int check_ret;
+	bool use_sse = false;
 	bool use_avx2 = false;
-#ifdef CC_AVX512_SUPPORT
 	bool use_avx512 = false;
-#endif
+	bool use_flex = false;
 
-	if (!iavf_rx_vec_dev_check(dev) &&
-			rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
-		for (i = 0; i < dev->data->nb_rx_queues; i++) {
-			rxq = dev->data->rx_queues[i];
-			(void)iavf_rxq_vec_setup(rxq);
+	check_ret = iavf_rx_vec_dev_check(dev);
+	if (check_ret >= 0 &&
+	    rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
+		if (check_ret == IAVF_VECTOR_PATH) {
+			use_sse = true;
+			if ((rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) == 1 ||
+			     rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) == 1) &&
+			    rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256)
+				use_avx2 = true;
 		}
 
-		if ((rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) == 1 ||
-		     rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) == 1) &&
-				rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256)
-			use_avx2 = true;
 #ifdef CC_AVX512_SUPPORT
 		if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) == 1 &&
 		    rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512BW) == 1 &&
@@ -2335,61 +2416,114 @@ iavf_set_rx_function(struct rte_eth_dev *dev)
 			use_avx512 = true;
 #endif
 
+		if (!use_sse && !use_avx2 && !use_avx512)
+			goto normal;
+
+		if (vf->vf_res->vf_cap_flags &
+			VIRTCHNL_VF_OFFLOAD_RX_FLEX_DESC)
+			use_flex = true;
+
+		for (i = 0; i < dev->data->nb_rx_queues; i++) {
+			rxq = dev->data->rx_queues[i];
+			(void)iavf_rxq_vec_setup(rxq);
+		}
+
 		if (dev->data->scattered_rx) {
-			PMD_DRV_LOG(DEBUG,
-				    "Using %sVector Scattered Rx (port %d).",
-				    use_avx2 ? "avx2 " : "",
-				    dev->data->port_id);
-			if (vf->vf_res->vf_cap_flags &
-				VIRTCHNL_VF_OFFLOAD_RX_FLEX_DESC) {
+			if (!use_avx512) {
+				PMD_DRV_LOG(DEBUG,
+					    "Using %sVector Scattered Rx (port %d).",
+					    use_avx2 ? "avx2 " : "",
+					    dev->data->port_id);
+			} else {
+				if (check_ret == IAVF_VECTOR_PATH)
+					PMD_DRV_LOG(DEBUG,
+						    "Using AVX512 Vector Scattered Rx (port %d).",
+						    dev->data->port_id);
+				else
+					PMD_DRV_LOG(DEBUG,
+						    "Using AVX512 OFFLOAD Vector Scattered Rx (port %d).",
+						    dev->data->port_id);
+			}
+			if (use_flex) {
 				dev->rx_pkt_burst = use_avx2 ?
 					iavf_recv_scattered_pkts_vec_avx2_flex_rxd :
 					iavf_recv_scattered_pkts_vec_flex_rxd;
 #ifdef CC_AVX512_SUPPORT
-				if (use_avx512)
-					dev->rx_pkt_burst =
-						iavf_recv_scattered_pkts_vec_avx512_flex_rxd;
+				if (use_avx512) {
+					if (check_ret == IAVF_VECTOR_PATH)
+						dev->rx_pkt_burst =
+							iavf_recv_scattered_pkts_vec_avx512_flex_rxd;
+					else
+						dev->rx_pkt_burst =
+							iavf_recv_scattered_pkts_vec_avx512_flex_rxd_offload;
+				}
 #endif
 			} else {
 				dev->rx_pkt_burst = use_avx2 ?
 					iavf_recv_scattered_pkts_vec_avx2 :
 					iavf_recv_scattered_pkts_vec;
 #ifdef CC_AVX512_SUPPORT
-				if (use_avx512)
-					dev->rx_pkt_burst =
-						iavf_recv_scattered_pkts_vec_avx512;
+				if (use_avx512) {
+					if (check_ret == IAVF_VECTOR_PATH)
+						dev->rx_pkt_burst =
+							iavf_recv_scattered_pkts_vec_avx512;
+					else
+						dev->rx_pkt_burst =
+							iavf_recv_scattered_pkts_vec_avx512_offload;
+				}
 #endif
 			}
 		} else {
-			PMD_DRV_LOG(DEBUG, "Using %sVector Rx (port %d).",
-				    use_avx2 ? "avx2 " : "",
-				    dev->data->port_id);
-			if (vf->vf_res->vf_cap_flags &
-				VIRTCHNL_VF_OFFLOAD_RX_FLEX_DESC) {
+			if (!use_avx512) {
+				PMD_DRV_LOG(DEBUG, "Using %sVector Rx (port %d).",
+					    use_avx2 ? "avx2 " : "",
+					    dev->data->port_id);
+			} else {
+				if (check_ret == IAVF_VECTOR_PATH)
+					PMD_DRV_LOG(DEBUG,
+						    "Using AVX512 Vector Rx (port %d).",
+						    dev->data->port_id);
+				else
+					PMD_DRV_LOG(DEBUG,
+						    "Using AVX512 OFFLOAD Vector Rx (port %d).",
+						    dev->data->port_id);
+			}
+			if (use_flex) {
 				dev->rx_pkt_burst = use_avx2 ?
 					iavf_recv_pkts_vec_avx2_flex_rxd :
 					iavf_recv_pkts_vec_flex_rxd;
 #ifdef CC_AVX512_SUPPORT
-				if (use_avx512)
-					dev->rx_pkt_burst =
-						iavf_recv_pkts_vec_avx512_flex_rxd;
+				if (use_avx512) {
+					if (check_ret == IAVF_VECTOR_PATH)
+						dev->rx_pkt_burst =
+							iavf_recv_pkts_vec_avx512_flex_rxd;
+					else
+						dev->rx_pkt_burst =
+							iavf_recv_pkts_vec_avx512_flex_rxd_offload;
+				}
 #endif
 			} else {
 				dev->rx_pkt_burst = use_avx2 ?
 					iavf_recv_pkts_vec_avx2 :
 					iavf_recv_pkts_vec;
 #ifdef CC_AVX512_SUPPORT
-				if (use_avx512)
-					dev->rx_pkt_burst =
-						iavf_recv_pkts_vec_avx512;
+				if (use_avx512) {
+					if (check_ret == IAVF_VECTOR_PATH)
+						dev->rx_pkt_burst =
+							iavf_recv_pkts_vec_avx512;
+					else
+						dev->rx_pkt_burst =
+							iavf_recv_pkts_vec_avx512_offload;
+				}
 #endif
 			}
 		}
 
 		return;
 	}
-#endif
 
+normal:
+#endif
 	if (dev->data->scattered_rx) {
 		PMD_DRV_LOG(DEBUG, "Using a Scattered Rx callback (port=%d).",
 			    dev->data->port_id);
@@ -2418,17 +2552,23 @@ iavf_set_tx_function(struct rte_eth_dev *dev)
 #ifdef RTE_ARCH_X86
 	struct iavf_tx_queue *txq;
 	int i;
+	int check_ret;
+	bool use_sse = false;
 	bool use_avx2 = false;
-#ifdef CC_AVX512_SUPPORT
 	bool use_avx512 = false;
-#endif
 
-	if (!iavf_tx_vec_dev_check(dev) &&
-			rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
-		if ((rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) == 1 ||
-		     rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) == 1) &&
-				rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256)
-			use_avx2 = true;
+	check_ret = iavf_tx_vec_dev_check(dev);
+
+	if (check_ret >= 0 &&
+	    rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
+		/* SSE and AVX2 not support offload path yet. */
+		if (check_ret == IAVF_VECTOR_PATH) {
+			use_sse = true;
+			if ((rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) == 1 ||
+			     rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) == 1) &&
+			    rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256)
+				use_avx2 = true;
+		}
 #ifdef CC_AVX512_SUPPORT
 		if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) == 1 &&
 		    rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512BW) == 1 &&
@@ -2436,15 +2576,29 @@ iavf_set_tx_function(struct rte_eth_dev *dev)
 			use_avx512 = true;
 #endif
 
-		PMD_DRV_LOG(DEBUG, "Using %sVector Tx (port %d).",
-			    use_avx2 ? "avx2 " : "",
-			    dev->data->port_id);
-		dev->tx_pkt_burst = use_avx2 ?
-				    iavf_xmit_pkts_vec_avx2 :
-				    iavf_xmit_pkts_vec;
+		if (!use_sse && !use_avx2 && !use_avx512)
+			goto normal;
+
+		if (!use_avx512) {
+			PMD_DRV_LOG(DEBUG, "Using %sVector Tx (port %d).",
+				    use_avx2 ? "avx2 " : "",
+				    dev->data->port_id);
+			dev->tx_pkt_burst = use_avx2 ?
+					    iavf_xmit_pkts_vec_avx2 :
+					    iavf_xmit_pkts_vec;
+		}
 #ifdef CC_AVX512_SUPPORT
-		if (use_avx512)
-			dev->tx_pkt_burst = iavf_xmit_pkts_vec_avx512;
+		if (use_avx512) {
+			if (check_ret == IAVF_VECTOR_PATH) {
+				dev->tx_pkt_burst = iavf_xmit_pkts_vec_avx512;
+				PMD_DRV_LOG(DEBUG, "Using AVX512 Vector Tx (port %d).",
+					    dev->data->port_id);
+			} else {
+				dev->tx_pkt_burst = iavf_xmit_pkts_vec_avx512_offload;
+				PMD_DRV_LOG(DEBUG, "Using AVX512 OFFLOAD Vector Tx (port %d).",
+					    dev->data->port_id);
+			}
+		}
 #endif
 		dev->tx_pkt_prepare = NULL;
 
@@ -2464,8 +2618,9 @@ iavf_set_tx_function(struct rte_eth_dev *dev)
 
 		return;
 	}
-#endif
 
+normal:
+#endif
 	PMD_DRV_LOG(DEBUG, "Using Basic Tx callback (port=%d).",
 		    dev->data->port_id);
 	dev->tx_pkt_burst = iavf_xmit_pkts;
@@ -3193,6 +3348,50 @@ iavf_get_default_ptype_table(void)
 			RTE_PTYPE_TUNNEL_GTPU |
 			RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
 			RTE_PTYPE_INNER_L4_ICMP,
+
+		/* IPv4 --> UDP ECPRI */
+		[372] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[373] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[374] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[375] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[376] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[377] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[378] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[379] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[380] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[381] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+
+		/* IPV6 --> UDP ECPRI */
+		[382] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[383] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[384] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[385] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[386] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[387] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[388] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[389] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[390] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[391] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
 		/* All others reserved */
 	};
 

@@ -7,7 +7,7 @@
 
 #include <rte_kvargs.h>
 
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 
 #include "base/ice_common.h"
 #include "base/ice_adminq_cmd.h"
@@ -135,6 +135,7 @@
  */
 #define ICE_ETH_OVERHEAD \
 	(RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN + ICE_VLAN_TAG_SIZE * 2)
+#define ICE_ETH_MAX_LEN (RTE_ETHER_MTU + ICE_ETH_OVERHEAD)
 
 #define ICE_RXTX_BYTES_HIGH(bytes) ((bytes) & ~ICE_40_BIT_MASK)
 #define ICE_RXTX_BYTES_LOW(bytes) ((bytes) & ICE_40_BIT_MASK)
@@ -166,11 +167,19 @@ struct ice_mac_filter {
 	struct ice_mac_filter_info mac_info;
 };
 
+struct ice_vlan {
+	uint16_t tpid;
+	uint16_t vid;
+};
+
+#define ICE_VLAN(tpid, vid) \
+	((struct ice_vlan){ tpid, vid })
+
 /**
  * VLAN filter structure
  */
 struct ice_vlan_filter_info {
-	uint16_t vlan_id;
+	struct ice_vlan vlan;
 };
 
 TAILQ_HEAD(ice_vlan_filter_list, ice_vlan_filter);
@@ -292,8 +301,8 @@ struct ice_fdir_filter_conf {
 	struct ice_fdir_counter *counter; /* flow specific counter context */
 	struct rte_flow_action_count act_count;
 
-	uint64_t input_set;
-	uint64_t outer_input_set; /* only for tunnel packets outer fields */
+	uint64_t input_set_o; /* used for non-tunnel or tunnel outer fields */
+	uint64_t input_set_i; /* only for tunnel inner fields */
 	uint32_t mark_flag;
 };
 

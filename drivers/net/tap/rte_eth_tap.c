@@ -7,8 +7,8 @@
 #include <rte_byteorder.h>
 #include <rte_common.h>
 #include <rte_mbuf.h>
-#include <rte_ethdev_driver.h>
-#include <rte_ethdev_vdev.h>
+#include <ethdev_driver.h>
+#include <ethdev_vdev.h>
 #include <rte_malloc.h>
 #include <rte_bus_vdev.h>
 #include <rte_kvargs.h>
@@ -1890,7 +1890,7 @@ static const struct eth_dev_ops ops = {
 	.stats_reset            = tap_stats_reset,
 	.dev_supported_ptypes_get = tap_dev_supported_ptypes_get,
 	.rss_hash_update        = tap_rss_hash_update,
-	.filter_ctrl            = tap_dev_filter_ctrl,
+	.flow_ops_get           = tap_dev_flow_ops_get,
 };
 
 static int

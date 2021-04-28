@@ -5,13 +5,9 @@
 #ifndef _RTE_ETH_MEMIF_H_
 #define _RTE_ETH_MEMIF_H_
 
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif				/* GNU_SOURCE */
-
 #include <sys/queue.h>
 
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_ether.h>
 #include <rte_interrupts.h>
 

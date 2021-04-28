@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2020 Intel Corporation
+ * Copyright(c) 2001-2021 Intel Corporation
  */
 
 #ifndef _ICE_FLOW_H_
@@ -71,6 +71,9 @@
 	(ICE_FLOW_HASH_IPV6_PRE64 | ICE_FLOW_HASH_UDP_PORT)
 #define ICE_HASH_SCTP_IPV6_PRE64 \
 	(ICE_FLOW_HASH_IPV6_PRE64 | ICE_FLOW_HASH_SCTP_PORT)
+
+#define ICE_FLOW_HASH_VXLAN_VNI \
+	(BIT_ULL(ICE_FLOW_FIELD_IDX_VXLAN_VNI))
 
 #define ICE_FLOW_HASH_GTP_TEID \
 	(BIT_ULL(ICE_FLOW_FIELD_IDX_GTPC_TEID))
@@ -179,6 +182,11 @@ enum ice_flow_seg_hdr {
 	ICE_FLOW_SEG_HDR_NAT_T_ESP	= 0x00400000,
 	ICE_FLOW_SEG_HDR_ETH_NON_IP	= 0x00800000,
 	ICE_FLOW_SEG_HDR_GTPU_NON_IP	= 0x01000000,
+	ICE_FLOW_SEG_HDR_VXLAN		= 0x02000000,
+	ICE_FLOW_SEG_HDR_ECPRI_TP0	= 0x04000000,
+	ICE_FLOW_SEG_HDR_UDP_ECPRI_TP0	= 0x08000000,
+	ICE_FLOW_SEG_HDR_L2TPV2		= 0x10000000,
+	ICE_FLOW_SEG_HDR_PPP		= 0x40000000,
 	/* The following is an additive bit for ICE_FLOW_SEG_HDR_IPV4 and
 	 * ICE_FLOW_SEG_HDR_IPV6 which include the IPV4 other PTYPEs
 	 */
@@ -267,6 +275,12 @@ enum ice_flow_field {
 	ICE_FLOW_FIELD_IDX_AH_SPI,
 	/* NAT_T ESP */
 	ICE_FLOW_FIELD_IDX_NAT_T_ESP_SPI,
+	/* VXLAN VNI */
+	ICE_FLOW_FIELD_IDX_VXLAN_VNI,
+	/* ECPRI_TP0 */
+	ICE_FLOW_FIELD_IDX_ECPRI_TP0_PC_ID,
+	/* UDP_ECPRI_TP0 */
+	ICE_FLOW_FIELD_IDX_UDP_ECPRI_TP0_PC_ID,
 	 /* The total number of enums must not exceed 64 */
 	ICE_FLOW_FIELD_IDX_MAX
 };
@@ -434,7 +448,7 @@ struct ice_flow_entry {
 	u8 acts_cnt;
 };
 
-#define ICE_FLOW_ENTRY_HNDL(e)	((unsigned long)e)
+#define ICE_FLOW_ENTRY_HNDL(e)	((intptr_t)e)
 #define ICE_FLOW_ENTRY_PTR(h)	((struct ice_flow_entry *)(h))
 
 struct ice_flow_prof {
@@ -541,6 +555,8 @@ ice_flow_set_fld_prefix(struct ice_flow_seg_info *seg, enum ice_flow_field fld,
 void
 ice_flow_add_fld_raw(struct ice_flow_seg_info *seg, u16 off, u8 len,
 		     u16 val_loc, u16 mask_loc);
+enum ice_status ice_flow_rem_vsi_prof(struct ice_hw *hw, enum ice_block blk,
+				      u16 vsi_handle, u64 prof_id);
 void ice_rem_vsi_rss_list(struct ice_hw *hw, u16 vsi_handle);
 enum ice_status ice_replay_rss_cfg(struct ice_hw *hw, u16 vsi_handle);
 enum ice_status

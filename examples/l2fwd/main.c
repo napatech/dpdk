@@ -9,7 +9,6 @@
 #include <inttypes.h>
 #include <sys/types.h>
 #include <sys/queue.h>
-#include <netinet/in.h>
 #include <setjmp.h>
 #include <stdarg.h>
 #include <ctype.h>
@@ -903,6 +902,9 @@ main(int argc, char **argv)
 		rte_eth_dev_close(portid);
 		printf(" Done\n");
 	}
+
+	/* clean up the EAL */
+	rte_eal_cleanup();
 	printf("Bye...\n");
 
 	return ret;

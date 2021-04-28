@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright(c) 2019-2020 Xilinx, Inc.
+ * Copyright(c) 2019-2021 Xilinx, Inc.
  * Copyright(c) 2016-2019 Solarflare Communications Inc.
  *
  * This software was jointly developed between OKTET Labs (under contract
@@ -480,6 +480,25 @@ sfc_ef10_xmit_tso_pkt(struct sfc_ef10_txq * const txq, struct rte_mbuf *m_seg,
 		if (in_off == 0)
 			needed_desc--;
 	}
+
+	/*
+	 * 8000-series EF10 hardware requires that innermost IP length
+	 * be greater than or equal to the value which each segment is
+	 * supposed to have; otherwise, TCP checksum will be incorrect.
+	 *
+	 * The same concern applies to outer UDP datagram length field.
+	 */
+	switch (m_seg->ol_flags & PKT_TX_TUNNEL_MASK) {
+	case PKT_TX_TUNNEL_VXLAN:
+		/* FALLTHROUGH */
+	case PKT_TX_TUNNEL_GENEVE:
+		sfc_tso_outer_udp_fix_len(first_m_seg, hdr_addr);
+		break;
+	default:
+		break;
+	}
+
+	sfc_tso_innermost_ip_fix_len(first_m_seg, hdr_addr, iph_off);
 
 	/*
 	 * Tx prepare has debug-only checks that offload flags are correctly

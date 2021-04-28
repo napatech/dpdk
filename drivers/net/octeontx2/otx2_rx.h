@@ -215,6 +215,7 @@ nix_cqe_xtract_mseg(const struct nix_rx_parse_s *rx,
 			iova_list = (const rte_iova_t *)(iova_list + 1);
 		}
 	}
+	mbuf->next = NULL;
 }
 
 static __rte_always_inline uint16_t
@@ -259,7 +260,7 @@ nix_rx_sec_mbuf_update(const struct nix_cqe_hdr_s *cq, struct rte_mbuf *m,
 	data = rte_pktmbuf_mtod(m, char *);
 
 	if (sa->replay_win_sz) {
-		if (cpt_ipsec_antireplay_check(sa, data) < 0)
+		if (cpt_ipsec_ip_antireplay_check(sa, data) < 0)
 			return PKT_RX_SEC_OFFLOAD | PKT_RX_SEC_OFFLOAD_FAILED;
 	}
 
@@ -330,10 +331,12 @@ otx2_nix_cqe_to_mbuf(const struct nix_cqe_hdr_s *cq, const uint32_t tag,
 	*(uint64_t *)(&mbuf->rearm_data) = val;
 	mbuf->pkt_len = len;
 
-	if (flag & NIX_RX_MULTI_SEG_F)
+	if (flag & NIX_RX_MULTI_SEG_F) {
 		nix_cqe_xtract_mseg(rx, mbuf, val);
-	else
+	} else {
 		mbuf->data_len = len;
+		mbuf->next = NULL;
+	}
 }
 
 #define CKSUM_F NIX_RX_OFFLOAD_CHECKSUM_F

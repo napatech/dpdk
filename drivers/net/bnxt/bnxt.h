@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2014-2018 Broadcom
+ * Copyright(c) 2014-2021 Broadcom
  * All rights reserved.
  */
 
@@ -12,7 +12,7 @@
 
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_memory.h>
 #include <rte_lcore.h>
 #include <rte_spinlock.h>
@@ -33,35 +33,21 @@
 #define BROADCOM_DEV_ID_STRATUS_NIC_VF2 0x1609
 #define BROADCOM_DEV_ID_STRATUS_NIC	0x1614
 #define BROADCOM_DEV_ID_57414_VF	0x16c1
-#define BROADCOM_DEV_ID_57301		0x16c8
-#define BROADCOM_DEV_ID_57302		0x16c9
-#define BROADCOM_DEV_ID_57304_PF	0x16ca
 #define BROADCOM_DEV_ID_57304_VF	0x16cb
 #define BROADCOM_DEV_ID_57417_MF	0x16cc
 #define BROADCOM_DEV_ID_NS2		0x16cd
-#define BROADCOM_DEV_ID_57311		0x16ce
-#define BROADCOM_DEV_ID_57312		0x16cf
-#define BROADCOM_DEV_ID_57402		0x16d0
-#define BROADCOM_DEV_ID_57404		0x16d1
-#define BROADCOM_DEV_ID_57406_PF	0x16d2
 #define BROADCOM_DEV_ID_57406_VF	0x16d3
-#define BROADCOM_DEV_ID_57402_MF	0x16d4
-#define BROADCOM_DEV_ID_57407_RJ45	0x16d5
 #define BROADCOM_DEV_ID_57412		0x16d6
 #define BROADCOM_DEV_ID_57414		0x16d7
 #define BROADCOM_DEV_ID_57416_RJ45	0x16d8
 #define BROADCOM_DEV_ID_57417_RJ45	0x16d9
 #define BROADCOM_DEV_ID_5741X_VF	0x16dc
 #define BROADCOM_DEV_ID_57412_MF	0x16de
-#define BROADCOM_DEV_ID_57314		0x16df
 #define BROADCOM_DEV_ID_57317_RJ45	0x16e0
 #define BROADCOM_DEV_ID_5731X_VF	0x16e1
 #define BROADCOM_DEV_ID_57417_SFP	0x16e2
 #define BROADCOM_DEV_ID_57416_SFP	0x16e3
 #define BROADCOM_DEV_ID_57317_SFP	0x16e4
-#define BROADCOM_DEV_ID_57404_MF	0x16e7
-#define BROADCOM_DEV_ID_57406_MF	0x16e8
-#define BROADCOM_DEV_ID_57407_SFP	0x16e9
 #define BROADCOM_DEV_ID_57407_MF	0x16ea
 #define BROADCOM_DEV_ID_57414_MF	0x16ec
 #define BROADCOM_DEV_ID_57416_MF	0x16ee
@@ -80,6 +66,10 @@
 #define BROADCOM_DEV_ID_58804		0xd804
 #define BROADCOM_DEV_ID_58808		0x16f0
 #define BROADCOM_DEV_ID_58802_VF	0xd800
+#define BROADCOM_DEV_ID_58812		0xd812
+#define BROADCOM_DEV_ID_58814		0xd814
+#define BROADCOM_DEV_ID_58818		0xd818
+#define BROADCOM_DEV_ID_58818_VF	0xd82e
 
 #define BROADCOM_DEV_957508_N2100	0x5208
 #define IS_BNXT_DEV_957508_N2100(bp)	\
@@ -112,11 +102,11 @@
 #define TPA_MAX_SEGS		5 /* 32 segments in log2 units */
 
 #define BNXT_TPA_MAX_AGGS(bp) \
-	(BNXT_CHIP_THOR(bp) ? TPA_MAX_AGGS_TH : \
+	(BNXT_CHIP_P5(bp) ? TPA_MAX_AGGS_TH : \
 			     TPA_MAX_AGGS)
 
 #define BNXT_TPA_MAX_SEGS(bp) \
-	(BNXT_CHIP_THOR(bp) ? TPA_MAX_SEGS_TH : \
+	(BNXT_CHIP_P5(bp) ? TPA_MAX_SEGS_TH : \
 			      TPA_MAX_SEGS)
 
 /*
@@ -127,9 +117,9 @@
  */
 #ifdef RTE_EXEC_ENV_FREEBSD
 /* In FreeBSD OS, nic_uio driver does not support interrupts */
-#define BNXT_NUM_ASYNC_CPR(bp) 0
+#define BNXT_NUM_ASYNC_CPR(bp) 0U
 #else
-#define BNXT_NUM_ASYNC_CPR(bp) 1
+#define BNXT_NUM_ASYNC_CPR(bp) 1U
 #endif
 
 #define BNXT_MISC_VEC_ID               RTE_INTR_VEC_ZERO_OFFSET
@@ -319,6 +309,7 @@ struct rte_flow {
 #define BNXT_PTP_FLAGS_PATH_TX		0x0
 #define BNXT_PTP_FLAGS_PATH_RX		0x1
 #define BNXT_PTP_FLAGS_CURRENT_TIME	0x2
+#define BNXT_PTP_CURRENT_TIME_MASK	0xFFFF00000000ULL
 
 struct bnxt_ptp_cfg {
 #define BNXT_GRCPF_REG_WINDOW_BASE_OUT  0x400
@@ -368,6 +359,7 @@ struct bnxt_ptp_cfg {
 
 	/* On Thor, the Rx timestamp is present in the Rx completion record */
 	uint64_t			rx_timestamp;
+	uint64_t			current_time;
 };
 
 struct bnxt_coal {
@@ -381,22 +373,36 @@ struct bnxt_coal {
 };
 
 /* 64-bit doorbell */
+#define DBR_EPOCH_MASK				0x01000000UL
+#define DBR_EPOCH_SFT				24
 #define DBR_XID_SFT				32
 #define DBR_PATH_L2				(0x1ULL << 56)
+#define DBR_VALID				(0x1ULL << 58)
 #define DBR_TYPE_SQ				(0x0ULL << 60)
 #define DBR_TYPE_SRQ				(0x2ULL << 60)
 #define DBR_TYPE_CQ				(0x4ULL << 60)
 #define DBR_TYPE_NQ				(0xaULL << 60)
 #define DBR_TYPE_NQ_ARM				(0xbULL << 60)
 
-#define BNXT_RSS_TBL_SIZE_THOR		512
-#define BNXT_RSS_ENTRIES_PER_CTX_THOR	64
-#define BNXT_MAX_RSS_CTXTS_THOR \
-	(BNXT_RSS_TBL_SIZE_THOR / BNXT_RSS_ENTRIES_PER_CTX_THOR)
+#define DB_PF_OFFSET			0x10000
+#define DB_VF_OFFSET			0x4000
 
-#define BNXT_MAX_TC    8
-#define BNXT_MAX_QUEUE 8
-#define BNXT_MAX_TC_Q  (BNXT_MAX_TC + 1)
+#define BNXT_RSS_TBL_SIZE_P5		512U
+#define BNXT_RSS_ENTRIES_PER_CTX_P5	64
+#define BNXT_MAX_RSS_CTXTS_P5 \
+	(BNXT_RSS_TBL_SIZE_P5 / BNXT_RSS_ENTRIES_PER_CTX_P5)
+
+#define BNXT_MAX_QUEUE			8
+#define BNXT_MAX_TQM_SP_RINGS		1
+#define BNXT_MAX_TQM_FP_LEGACY_RINGS	8
+#define BNXT_MAX_TQM_FP_RINGS		9
+#define BNXT_MAX_TQM_LEGACY_RINGS	\
+	(BNXT_MAX_TQM_SP_RINGS + BNXT_MAX_TQM_FP_LEGACY_RINGS)
+#define BNXT_MAX_TQM_RINGS		\
+	(BNXT_MAX_TQM_SP_RINGS + BNXT_MAX_TQM_FP_RINGS)
+#define BNXT_BACKING_STORE_CFG_LEGACY_LEN	256
+#define BNXT_BACKING_STORE_CFG_LEN	\
+	sizeof(struct hwrm_func_backing_store_cfg_input)
 #define BNXT_PAGE_SHFT 12
 #define BNXT_PAGE_SIZE (1 << BNXT_PAGE_SHFT)
 #define MAX_CTX_PAGES  (BNXT_PAGE_SIZE / 8)
@@ -465,7 +471,7 @@ struct bnxt_ctx_mem_info {
 	struct bnxt_ctx_pg_info cq_mem;
 	struct bnxt_ctx_pg_info vnic_mem;
 	struct bnxt_ctx_pg_info stat_mem;
-	struct bnxt_ctx_pg_info *tqm_mem[BNXT_MAX_TC_Q];
+	struct bnxt_ctx_pg_info *tqm_mem[BNXT_MAX_TQM_RINGS];
 };
 
 struct bnxt_ctx_mem_buf_info {
@@ -583,6 +589,7 @@ struct bnxt_rep_info {
 				     DEV_RX_OFFLOAD_UDP_CKSUM | \
 				     DEV_RX_OFFLOAD_TCP_CKSUM | \
 				     DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM | \
+				     DEV_RX_OFFLOAD_OUTER_UDP_CKSUM | \
 				     DEV_RX_OFFLOAD_JUMBO_FRAME | \
 				     DEV_RX_OFFLOAD_KEEP_CRC | \
 				     DEV_RX_OFFLOAD_VLAN_EXTEND | \
@@ -614,6 +621,7 @@ struct bnxt {
 	struct rte_eth_dev		*eth_dev;
 	struct rte_pci_device		*pdev;
 	void				*doorbell_base;
+	int				legacy_db_size;
 
 	uint32_t		flags;
 #define BNXT_FLAG_REGISTERED		BIT(0)
@@ -629,7 +637,7 @@ struct bnxt {
 #define BNXT_FLAG_KONG_MB_EN		BIT(10)
 #define BNXT_FLAG_TRUSTED_VF_EN		BIT(11)
 #define BNXT_FLAG_DFLT_VNIC_SET		BIT(12)
-#define BNXT_FLAG_THOR_CHIP		BIT(13)
+#define BNXT_FLAG_CHIP_P5		BIT(13)
 #define BNXT_FLAG_STINGRAY		BIT(14)
 #define BNXT_FLAG_FW_RESET		BIT(15)
 #define BNXT_FLAG_FATAL_ERROR		BIT(16)
@@ -645,6 +653,9 @@ struct bnxt {
 #define BNXT_FLAG_DFLT_MAC_SET			BIT(26)
 #define BNXT_FLAG_TRUFLOW_EN			BIT(27)
 #define BNXT_FLAG_GFID_ENABLE			BIT(28)
+#define BNXT_FLAG_RFS_NEEDS_VNIC		BIT(29)
+#define BNXT_FLAG_FLOW_CFA_RFS_RING_TBL_IDX_V2	BIT(30)
+#define BNXT_RFS_NEEDS_VNIC(bp)	((bp)->flags & BNXT_FLAG_RFS_NEEDS_VNIC)
 #define BNXT_PF(bp)		(!((bp)->flags & BNXT_FLAG_VF))
 #define BNXT_VF(bp)		((bp)->flags & BNXT_FLAG_VF)
 #define BNXT_NPAR(bp)		((bp)->flags & BNXT_FLAG_NPAR_PF)
@@ -653,14 +664,24 @@ struct bnxt {
 #define BNXT_USE_CHIMP_MB	0 //For non-CFA commands, everything uses Chimp.
 #define BNXT_USE_KONG(bp)	((bp)->flags & BNXT_FLAG_KONG_MB_EN)
 #define BNXT_VF_IS_TRUSTED(bp)	((bp)->flags & BNXT_FLAG_TRUSTED_VF_EN)
-#define BNXT_CHIP_THOR(bp)	((bp)->flags & BNXT_FLAG_THOR_CHIP)
+#define BNXT_CHIP_P5(bp)	((bp)->flags & BNXT_FLAG_CHIP_P5)
 #define BNXT_STINGRAY(bp)	((bp)->flags & BNXT_FLAG_STINGRAY)
-#define BNXT_HAS_NQ(bp)		BNXT_CHIP_THOR(bp)
-#define BNXT_HAS_RING_GRPS(bp)	(!BNXT_CHIP_THOR(bp))
+#define BNXT_HAS_NQ(bp)		BNXT_CHIP_P5(bp)
+#define BNXT_HAS_RING_GRPS(bp)	(!BNXT_CHIP_P5(bp))
 #define BNXT_FLOW_XSTATS_EN(bp)	((bp)->flags & BNXT_FLAG_FLOW_XSTATS_EN)
 #define BNXT_HAS_DFLT_MAC_SET(bp)      ((bp)->flags & BNXT_FLAG_DFLT_MAC_SET)
 #define BNXT_TRUFLOW_EN(bp)	((bp)->flags & BNXT_FLAG_TRUFLOW_EN)
 #define BNXT_GFID_ENABLED(bp)	((bp)->flags & BNXT_FLAG_GFID_ENABLE)
+
+	uint32_t			flags2;
+#define BNXT_FLAGS2_PTP_TIMESYNC_ENABLED	BIT(0)
+#define BNXT_FLAGS2_PTP_ALARM_SCHEDULED		BIT(1)
+#define BNXT_P5_PTP_TIMESYNC_ENABLED(bp)	\
+	((bp)->flags2 & BNXT_FLAGS2_PTP_TIMESYNC_ENABLED)
+
+	uint16_t		chip_num;
+#define CHIP_NUM_58818		0xd818
+#define BNXT_CHIP_SR2(bp)	((bp)->chip_num == CHIP_NUM_58818)
 
 	uint32_t		fw_cap;
 #define BNXT_FW_CAP_HOT_RESET		BIT(0)
@@ -677,6 +698,7 @@ struct bnxt {
 	uint32_t		vnic_cap_flags;
 #define BNXT_VNIC_CAP_COS_CLASSIFY	BIT(0)
 #define BNXT_VNIC_CAP_OUTER_RSS		BIT(1)
+#define BNXT_VNIC_CAP_RX_CMPL_V2	BIT(2)
 	unsigned int		rx_nr_rings;
 	unsigned int		rx_cp_nr_rings;
 	unsigned int		rx_num_qs_per_vnic;
@@ -724,8 +746,19 @@ struct bnxt {
 	void				*hwrm_short_cmd_req_addr;
 	rte_iova_t			hwrm_short_cmd_req_dma_addr;
 	rte_spinlock_t			hwrm_lock;
+	/* synchronize between dev_configure_op and int handler */
 	pthread_mutex_t			def_cp_lock;
+	/* synchronize between dev_start_op and async evt handler
+	 * Locking sequence in async evt handler will be
+	 * def_cp_lock
+	 * health_check_lock
+	 */
 	pthread_mutex_t			health_check_lock;
+	/* synchronize between dev_stop/dev_close_op and
+	 * error recovery thread triggered as part of
+	 * HWRM_ASYNC_EVENT_CMPL_EVENT_ID_RESET_NOTIFY
+	 */
+	pthread_mutex_t			err_recovery_lock;
 	uint16_t			max_req_len;
 	uint16_t			max_resp_len;
 	uint16_t                        hwrm_max_ext_req_len;
@@ -751,21 +784,7 @@ struct bnxt {
 	uint16_t		max_cp_rings;
 	uint16_t		max_tx_rings;
 	uint16_t		max_rx_rings;
-#define MAX_STINGRAY_RINGS		128U
-/* For sake of symmetry, max Tx rings == max Rx rings, one stat ctx for each */
-#define BNXT_MAX_RX_RINGS(bp) \
-	(BNXT_STINGRAY(bp) ? RTE_MIN(RTE_MIN(bp->max_rx_rings / 2U, \
-					     MAX_STINGRAY_RINGS), \
-				     bp->max_stat_ctx / 2U) : \
-				RTE_MIN(bp->max_rx_rings / 2U, \
-					bp->max_stat_ctx / 2U))
-#define BNXT_MAX_TX_RINGS(bp) \
-	(RTE_MIN((bp)->max_tx_rings, BNXT_MAX_RX_RINGS(bp)))
-
-#define BNXT_MAX_RINGS(bp) \
-	(RTE_MIN((((bp)->max_cp_rings - BNXT_NUM_ASYNC_CPR(bp)) / 2U), \
-		 BNXT_MAX_TX_RINGS(bp)))
-
+#define MAX_STINGRAY_RINGS		236U
 #define BNXT_MAX_VF_REP_RINGS	8
 
 	uint16_t		max_nq_rings;
@@ -818,10 +837,50 @@ struct bnxt {
 	struct bnxt_dmabuf_info dmabuf;
 	struct bnxt_ulp_context	*ulp_ctx;
 	struct bnxt_flow_stat_info *flow_stat;
-	uint8_t			flow_xstat;
 	uint16_t		max_num_kflows;
 	uint16_t		tx_cfa_action;
 };
+
+static
+inline uint16_t bnxt_max_rings(struct bnxt *bp)
+{
+	struct rte_eth_conf *dev_conf = &bp->eth_dev->data->dev_conf;
+	uint16_t max_tx_rings = bp->max_tx_rings;
+	uint16_t max_rx_rings = bp->max_rx_rings;
+	uint16_t max_cp_rings = bp->max_cp_rings;
+	uint16_t max_rings;
+
+	/* For the sake of symmetry:
+	 * max Tx rings == max Rx rings, one stat ctx for each.
+	 */
+	if (BNXT_STINGRAY(bp)) {
+		max_rx_rings = RTE_MIN(RTE_MIN(max_rx_rings / 2U,
+					       MAX_STINGRAY_RINGS),
+				       bp->max_stat_ctx / 2U);
+	} else {
+		max_rx_rings = RTE_MIN(max_rx_rings / 2U,
+				       bp->max_stat_ctx / 2U);
+	}
+
+	if (BNXT_CHIP_P5(bp)) {
+		/* RSS table size in Thor is 512.
+		 * Cap max Rx rings to the same value for RSS.
+		 * For non-RSS case cap it to the max VNIC count.
+		 */
+		if (dev_conf->rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG)
+			max_rx_rings = RTE_MIN(max_rx_rings,
+					       BNXT_RSS_TBL_SIZE_P5);
+		else
+			max_rx_rings = RTE_MIN(max_rx_rings, bp->max_vnics);
+	}
+
+	max_tx_rings = RTE_MIN(max_tx_rings, max_rx_rings);
+	if (max_cp_rings > BNXT_NUM_ASYNC_CPR(bp))
+		max_cp_rings -= BNXT_NUM_ASYNC_CPR(bp);
+	max_rings = RTE_MIN(max_cp_rings / 2U, max_tx_rings);
+
+	return max_rings;
+}
 
 #define BNXT_FC_TIMER	1 /* Timer freq in Sec Flow Counters */
 
@@ -951,9 +1010,7 @@ void bnxt_flow_cnt_alarm_cb(void *arg);
 int bnxt_flow_stats_req(struct bnxt *bp);
 int bnxt_flow_stats_cnt(struct bnxt *bp);
 uint32_t bnxt_get_speed_capabilities(struct bnxt *bp);
+int bnxt_flow_ops_get_op(struct rte_eth_dev *dev,
+			 const struct rte_flow_ops **ops);
 
-int
-bnxt_filter_ctrl_op(struct rte_eth_dev *dev,
-		    enum rte_filter_type filter_type,
-		    enum rte_filter_op filter_op, void *arg);
 #endif

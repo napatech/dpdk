@@ -2,6 +2,9 @@
 language: c
 cache:
   ccache: true
+  directories:
+    - libabigail
+    - reference
 
 dist: bionic
 
@@ -11,12 +14,19 @@ addons:
   apt:
     update: true
     packages: &required_packages
-      - [libnuma-dev, python3-setuptools, python3-wheel, python3-pip, ninja-build]
+      - [libnuma-dev, python3-setuptools, python3-wheel, python3-pip, python3-pyelftools, ninja-build]
       - [libbsd-dev, libpcap-dev, libibverbs-dev, libcrypto++-dev, libfdt-dev, libjansson-dev]
 
 _aarch64_packages: &aarch64_packages
   - *required_packages
   - [gcc-aarch64-linux-gnu, libc6-dev-arm64-cross, pkg-config-aarch64-linux-gnu]
+
+_aarch64_clang_packages: &aarch64_clang_packages
+  - *required_packages
+  - [libgcc-7-dev-arm64-cross, libatomic1-arm64-cross, libc6-dev-arm64-cross, pkg-config-aarch64-linux-gnu]
+
+_libabigail_build_packages: &libabigail_build_packages
+  - [autoconf, automake, libtool, pkg-config, libxml2-dev, libdw-dev]
 
 _build_32b_packages: &build_32b_packages
   - *required_packages
@@ -28,16 +38,21 @@ _doc_packages: &doc_packages
 before_install: ./.ci/${TRAVIS_OS_NAME}-setup.sh
 script: ./.ci/${TRAVIS_OS_NAME}-build.sh
 
+env:
+  global:
+    - LIBABIGAIL_VERSION=libabigail-1.8
+    - REF_GIT_TAG=v21.02
+
 jobs:
   include:
   # x86_64 gcc jobs
   - env: DEF_LIB="static"
     arch: amd64
     compiler: gcc
-  - env: DEF_LIB="shared" RUN_TESTS=1
+  - env: DEF_LIB="shared" RUN_TESTS=true
     arch: amd64
     compiler: gcc
-  - env: DEF_LIB="shared" BUILD_DOCS=1
+  - env: DEF_LIB="shared" BUILD_DOCS=true
     arch: amd64
     compiler: gcc
     addons:
@@ -45,14 +60,22 @@ jobs:
         packages:
           - *required_packages
           - *doc_packages
+  - env: DEF_LIB="shared" ABI_CHECKS=true
+    arch: amd64
+    compiler: gcc
+    addons:
+      apt:
+        packages:
+          - *required_packages
+          - *libabigail_build_packages
   # x86_64 clang jobs
   - env: DEF_LIB="static"
     arch: amd64
     compiler: clang
-  - env: DEF_LIB="shared" RUN_TESTS=1
+  - env: DEF_LIB="shared" RUN_TESTS=true
     arch: amd64
     compiler: clang
-  - env: DEF_LIB="shared" BUILD_DOCS=1
+  - env: DEF_LIB="shared" BUILD_DOCS=true
     arch: amd64
     compiler: clang
     addons:
@@ -61,7 +84,7 @@ jobs:
           - *required_packages
           - *doc_packages
   # x86_64 cross-compiling 32-bits jobs
-  - env: DEF_LIB="static" BUILD_32BIT=1
+  - env: DEF_LIB="static" BUILD_32BIT=true
     arch: amd64
     compiler: gcc
     addons:
@@ -69,49 +92,77 @@ jobs:
         packages:
           - *build_32b_packages
   # x86_64 cross-compiling aarch64 jobs
-  - env: DEF_LIB="static" AARCH64=1
+  - env: DEF_LIB="static" AARCH64=true
     arch: amd64
     compiler: gcc
     addons:
       apt:
         packages:
           - *aarch64_packages
-  - env: DEF_LIB="shared" AARCH64=1
+  - env: DEF_LIB="shared" AARCH64=true
     arch: amd64
     compiler: gcc
     addons:
       apt:
         packages:
           - *aarch64_packages
+  - env: DEF_LIB="static" AARCH64=true
+    arch: amd64
+    compiler: clang
+    addons:
+      apt:
+        packages:
+          - *aarch64_clang_packages
+  - env: DEF_LIB="shared" AARCH64=true
+    arch: amd64
+    compiler: clang
+    addons:
+      apt:
+        packages:
+          - *aarch64_clang_packages
   # aarch64 gcc jobs
   - env: DEF_LIB="static"
-    arch: arm64
-    compiler: gcc
-  - env: DEF_LIB="shared" RUN_TESTS=1
-    arch: arm64
-    compiler: gcc
-  - env: DEF_LIB="shared" RUN_TESTS=1
     dist: focal
     arch: arm64-graviton2
     virt: vm
     group: edge
     compiler: gcc
-  - env: DEF_LIB="shared" BUILD_DOCS=1
-    arch: arm64
+  - env: DEF_LIB="shared" RUN_TESTS=true
+    dist: focal
+    arch: arm64-graviton2
+    virt: vm
+    group: edge
+    compiler: gcc
+  - env: DEF_LIB="shared" BUILD_DOCS=true
+    dist: focal
+    arch: arm64-graviton2
+    virt: vm
+    group: edge
     compiler: gcc
     addons:
       apt:
         packages:
           - *required_packages
           - *doc_packages
+  - env: DEF_LIB="shared" ABI_CHECKS=true
+    dist: focal
+    arch: arm64-graviton2
+    virt: vm
+    group: edge
+    compiler: gcc
+    addons:
+      apt:
+        packages:
+          - *required_packages
+          - *libabigail_build_packages
   # aarch64 clang jobs
   - env: DEF_LIB="static"
-    arch: arm64
+    dist: focal
+    arch: arm64-graviton2
+    virt: vm
+    group: edge
     compiler: clang
-  - env: DEF_LIB="shared" RUN_TESTS=1
-    arch: arm64
-    compiler: clang
-  - env: DEF_LIB="shared" RUN_TESTS=1
+  - env: DEF_LIB="shared" RUN_TESTS=true
     dist: focal
     arch: arm64-graviton2
     virt: vm

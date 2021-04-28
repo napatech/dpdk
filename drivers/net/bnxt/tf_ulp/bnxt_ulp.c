@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2019-2020 Broadcom
+ * Copyright(c) 2019-2021 Broadcom
  * All rights reserved.
  */
 
@@ -52,7 +52,7 @@ static int32_t
 bnxt_ulp_devid_get(struct bnxt *bp,
 		   enum bnxt_ulp_device_id  *ulp_dev_id)
 {
-	if (BNXT_CHIP_THOR(bp))
+	if (BNXT_CHIP_P5(bp))
 		return -EINVAL;
 	/* Assuming Whitney */
 	*ulp_dev_id = BNXT_ULP_DEVICE_ID_WH_PLUS;

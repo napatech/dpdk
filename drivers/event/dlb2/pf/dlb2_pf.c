@@ -6,12 +6,13 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <sys/mman.h>
-#include <sys/fcntl.h>
+#include <fcntl.h>
 #include <sys/time.h>
 #include <errno.h>
 #include <assert.h>
 #include <unistd.h>
 #include <string.h>
+
 #include <rte_debug.h>
 #include <rte_log.h>
 #include <rte_dev.h>
@@ -26,8 +27,8 @@
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
 #include <rte_eventdev.h>
-#include <rte_eventdev_pmd.h>
-#include <rte_eventdev_pmd_pci.h>
+#include <eventdev_pmd.h>
+#include <eventdev_pmd_pci.h>
 #include <rte_memory.h>
 #include <rte_string_fns.h>
 
@@ -284,7 +285,7 @@ dlb2_pf_ldb_port_create(struct dlb2_hw_dev *handle,
 	alloc_sz = RTE_CACHE_LINE_ROUNDUP(alloc_sz);
 
 	port_base = dlb2_alloc_coherent_aligned(&mz, &cq_base, alloc_sz,
-						PAGE_SIZE);
+						rte_mem_page_size());
 	if (port_base == NULL)
 		return -ENOMEM;
 
@@ -307,7 +308,7 @@ dlb2_pf_ldb_port_create(struct dlb2_hw_dev *handle,
 
 	pp_base = (uintptr_t)dlb2_dev->hw.func_kva + PP_BASE(is_dir);
 	dlb2_port[response.id][DLB2_LDB_PORT].pp_addr =
-		(void *)(pp_base + (PAGE_SIZE * response.id));
+		(void *)(pp_base + (rte_mem_page_size() * response.id));
 
 	dlb2_port[response.id][DLB2_LDB_PORT].cq_base = (void *)(port_base);
 	memset(&port_memory, 0, sizeof(port_memory));
@@ -359,7 +360,7 @@ dlb2_pf_dir_port_create(struct dlb2_hw_dev *handle,
 	alloc_sz = RTE_CACHE_LINE_ROUNDUP(alloc_sz);
 
 	port_base = dlb2_alloc_coherent_aligned(&mz, &cq_base, alloc_sz,
-						PAGE_SIZE);
+						rte_mem_page_size());
 	if (port_base == NULL)
 		return -ENOMEM;
 
@@ -382,7 +383,7 @@ dlb2_pf_dir_port_create(struct dlb2_hw_dev *handle,
 
 	pp_base = (uintptr_t)dlb2_dev->hw.func_kva + PP_BASE(is_dir);
 	dlb2_port[response.id][DLB2_DIR_PORT].pp_addr =
-		(void *)(pp_base + (PAGE_SIZE * response.id));
+		(void *)(pp_base + (rte_mem_page_size() * response.id));
 
 	dlb2_port[response.id][DLB2_DIR_PORT].cq_base =
 		(void *)(port_base);

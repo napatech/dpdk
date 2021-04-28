@@ -103,13 +103,8 @@ mlx5_vdpa_virtqs_release(struct mlx5_vdpa_priv *priv)
 	for (i = 0; i < priv->nr_virtqs; i++) {
 		virtq = &priv->virtqs[i];
 		mlx5_vdpa_virtq_unset(virtq);
-		if (virtq->counters) {
+		if (virtq->counters)
 			claim_zero(mlx5_devx_cmd_destroy(virtq->counters));
-			virtq->counters = NULL;
-			memset(&virtq->reset, 0, sizeof(virtq->reset));
-		}
-		memset(virtq->err_time, 0, sizeof(virtq->err_time));
-		virtq->n_retry = 0;
 	}
 	for (i = 0; i < priv->num_lag_ports; i++) {
 		if (priv->tiss[i]) {
@@ -126,6 +121,7 @@ mlx5_vdpa_virtqs_release(struct mlx5_vdpa_priv *priv)
 		priv->virtq_db_addr = NULL;
 	}
 	priv->features = 0;
+	memset(priv->virtqs, 0, sizeof(*virtq) * priv->nr_virtqs);
 	priv->nr_virtqs = 0;
 }
 
@@ -327,6 +323,9 @@ mlx5_vdpa_virtq_setup(struct mlx5_vdpa_priv *priv, int index)
 	attr.tis_id = priv->tiss[(index / 2) % priv->num_lag_ports]->id;
 	attr.queue_index = index;
 	attr.pd = priv->pdn;
+	attr.hw_latency_mode = priv->hw_latency_mode;
+	attr.hw_max_latency_us = priv->hw_max_latency_us;
+	attr.hw_max_pending_comp = priv->hw_max_pending_comp;
 	virtq->virtq = mlx5_devx_cmd_create_virtq(priv->ctx, &attr);
 	virtq->priv = priv;
 	if (!virtq->virtq)
@@ -497,7 +496,7 @@ mlx5_vdpa_virtq_is_modified(struct mlx5_vdpa_priv *priv,
 		return -1;
 	if (vq.size != virtq->vq_size || vq.kickfd != virtq->intr_handle.fd)
 		return 1;
-	if (virtq->eqp.cq.cq) {
+	if (virtq->eqp.cq.cq_obj.cq) {
 		if (vq.callfd != virtq->eqp.cq.callfd)
 			return 1;
 	} else if (vq.callfd != -1) {

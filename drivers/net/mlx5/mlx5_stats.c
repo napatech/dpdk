@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_common.h>
 #include <rte_malloc.h>
 
@@ -16,7 +16,8 @@
 
 #include "mlx5_defs.h"
 #include "mlx5.h"
-#include "mlx5_rxtx.h"
+#include "mlx5_rx.h"
+#include "mlx5_tx.h"
 #include "mlx5_malloc.h"
 
 /**

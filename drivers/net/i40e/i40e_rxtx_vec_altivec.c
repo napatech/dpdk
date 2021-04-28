@@ -4,7 +4,7 @@
  */
 
 #include <stdint.h>
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_malloc.h>
 
 #include "base/i40e_prototype.h"
@@ -132,10 +132,10 @@ desc_to_olflags_v(vector unsigned long descs[4], struct rte_mbuf **rx_pkts)
 			PKT_RX_IP_CKSUM_BAD,
 			PKT_RX_L4_CKSUM_BAD,
 			PKT_RX_L4_CKSUM_BAD | PKT_RX_IP_CKSUM_BAD,
-			PKT_RX_EIP_CKSUM_BAD,
-			PKT_RX_EIP_CKSUM_BAD | PKT_RX_IP_CKSUM_BAD,
-			PKT_RX_EIP_CKSUM_BAD | PKT_RX_L4_CKSUM_BAD,
-			PKT_RX_EIP_CKSUM_BAD | PKT_RX_L4_CKSUM_BAD
+			PKT_RX_OUTER_IP_CKSUM_BAD,
+			PKT_RX_OUTER_IP_CKSUM_BAD | PKT_RX_IP_CKSUM_BAD,
+			PKT_RX_OUTER_IP_CKSUM_BAD | PKT_RX_L4_CKSUM_BAD,
+			PKT_RX_OUTER_IP_CKSUM_BAD | PKT_RX_L4_CKSUM_BAD
 					     | PKT_RX_IP_CKSUM_BAD,
 			0, 0, 0, 0, 0, 0, 0, 0};
 

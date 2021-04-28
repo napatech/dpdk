@@ -23,18 +23,31 @@
 #define IAVF_VPMD_DESCS_PER_LOOP  4
 #define IAVF_VPMD_TX_MAX_FREE_BUF 64
 
-#define IAVF_NO_VECTOR_FLAGS (				 \
+#define IAVF_TX_NO_VECTOR_FLAGS (				 \
 		DEV_TX_OFFLOAD_MULTI_SEGS |		 \
+		DEV_TX_OFFLOAD_TCP_TSO)
+
+#define IAVF_TX_VECTOR_OFFLOAD (				 \
 		DEV_TX_OFFLOAD_VLAN_INSERT |		 \
+		DEV_TX_OFFLOAD_QINQ_INSERT |		 \
+		DEV_TX_OFFLOAD_IPV4_CKSUM |		 \
 		DEV_TX_OFFLOAD_SCTP_CKSUM |		 \
 		DEV_TX_OFFLOAD_UDP_CKSUM |		 \
-		DEV_TX_OFFLOAD_TCP_TSO |		 \
 		DEV_TX_OFFLOAD_TCP_CKSUM)
+
+#define IAVF_RX_VECTOR_OFFLOAD (				 \
+		DEV_RX_OFFLOAD_CHECKSUM |		 \
+		DEV_RX_OFFLOAD_SCTP_CKSUM |		 \
+		DEV_RX_OFFLOAD_VLAN |		 \
+		DEV_RX_OFFLOAD_RSS_HASH)
+
+#define IAVF_VECTOR_PATH 0
+#define IAVF_VECTOR_OFFLOAD_PATH 1
 
 #define DEFAULT_TX_RS_THRESH     32
 #define DEFAULT_TX_FREE_THRESH   32
 
-#define IAVF_MIN_TSO_MSS          256
+#define IAVF_MIN_TSO_MSS          88
 #define IAVF_MAX_TSO_MSS          9668
 #define IAVF_TSO_MAX_SEG          UINT8_MAX
 #define IAVF_TX_MAX_MTU_SEG       8
@@ -190,11 +203,15 @@ struct iavf_rx_queue {
 	bool q_set;             /* if rx queue has been configured */
 	bool rx_deferred_start; /* don't start this queue in dev start */
 	const struct iavf_rxq_ops *ops;
+	uint8_t rx_flags;
+#define IAVF_RX_FLAGS_VLAN_TAG_LOC_L2TAG1     BIT(0)
+#define IAVF_RX_FLAGS_VLAN_TAG_LOC_L2TAG2_2   BIT(1)
 	uint8_t proto_xtr; /* protocol extraction type */
 	uint64_t xtr_ol_flag;
 		/* flexible descriptor metadata extraction offload flag */
 	iavf_rxd_to_pkt_fields_t rxd_to_pkt_fields;
 				/* handle flexible descriptor by RXDID */
+	uint64_t offloads;
 };
 
 struct iavf_tx_entry {
@@ -232,6 +249,9 @@ struct iavf_tx_queue {
 	bool q_set;                    /* if rx queue has been configured */
 	bool tx_deferred_start;        /* don't start this queue in dev start */
 	const struct iavf_txq_ops *ops;
+#define IAVF_TX_FLAGS_VLAN_TAG_LOC_L2TAG1	BIT(0)
+#define IAVF_TX_FLAGS_VLAN_TAG_LOC_L2TAG2	BIT(1)
+	uint8_t vlan_flag;
 };
 
 /* Offload features */
@@ -463,23 +483,39 @@ uint16_t iavf_xmit_pkts_vec(void *tx_queue, struct rte_mbuf **tx_pkts,
 			    uint16_t nb_pkts);
 uint16_t iavf_xmit_pkts_vec_avx2(void *tx_queue, struct rte_mbuf **tx_pkts,
 				 uint16_t nb_pkts);
+int iavf_get_monitor_addr(void *rx_queue, struct rte_power_monitor_cond *pmc);
 int iavf_rx_vec_dev_check(struct rte_eth_dev *dev);
 int iavf_tx_vec_dev_check(struct rte_eth_dev *dev);
 int iavf_rxq_vec_setup(struct iavf_rx_queue *rxq);
 int iavf_txq_vec_setup(struct iavf_tx_queue *txq);
 uint16_t iavf_recv_pkts_vec_avx512(void *rx_queue, struct rte_mbuf **rx_pkts,
 				   uint16_t nb_pkts);
+uint16_t iavf_recv_pkts_vec_avx512_offload(void *rx_queue,
+					   struct rte_mbuf **rx_pkts,
+					   uint16_t nb_pkts);
 uint16_t iavf_recv_pkts_vec_avx512_flex_rxd(void *rx_queue,
 					    struct rte_mbuf **rx_pkts,
 					    uint16_t nb_pkts);
+uint16_t iavf_recv_pkts_vec_avx512_flex_rxd_offload(void *rx_queue,
+						    struct rte_mbuf **rx_pkts,
+						    uint16_t nb_pkts);
 uint16_t iavf_recv_scattered_pkts_vec_avx512(void *rx_queue,
 					     struct rte_mbuf **rx_pkts,
 					     uint16_t nb_pkts);
+uint16_t iavf_recv_scattered_pkts_vec_avx512_offload(void *rx_queue,
+						     struct rte_mbuf **rx_pkts,
+						     uint16_t nb_pkts);
 uint16_t iavf_recv_scattered_pkts_vec_avx512_flex_rxd(void *rx_queue,
 						      struct rte_mbuf **rx_pkts,
 						      uint16_t nb_pkts);
+uint16_t iavf_recv_scattered_pkts_vec_avx512_flex_rxd_offload(void *rx_queue,
+							      struct rte_mbuf **rx_pkts,
+							      uint16_t nb_pkts);
 uint16_t iavf_xmit_pkts_vec_avx512(void *tx_queue, struct rte_mbuf **tx_pkts,
 				   uint16_t nb_pkts);
+uint16_t iavf_xmit_pkts_vec_avx512_offload(void *tx_queue,
+					   struct rte_mbuf **tx_pkts,
+					   uint16_t nb_pkts);
 int iavf_txq_vec_setup_avx512(struct iavf_tx_queue *txq);
 
 uint8_t iavf_proto_xtr_type_to_rxdid(uint8_t xtr_type);

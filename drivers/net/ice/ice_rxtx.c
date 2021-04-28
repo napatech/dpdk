@@ -2,12 +2,13 @@
  * Copyright(c) 2018 Intel Corporation
  */
 
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_net.h>
 #include <rte_vect.h>
 
 #include "rte_pmd_ice.h"
 #include "ice_rxtx.h"
+#include "ice_rxtx_vec_common.h"
 
 #define ICE_TX_CKSUM_OFFLOAD_MASK (		 \
 		PKT_TX_IP_CKSUM |		 \
@@ -25,6 +26,32 @@ uint64_t rte_net_ice_dynflag_proto_xtr_ipv6_mask;
 uint64_t rte_net_ice_dynflag_proto_xtr_ipv6_flow_mask;
 uint64_t rte_net_ice_dynflag_proto_xtr_tcp_mask;
 uint64_t rte_net_ice_dynflag_proto_xtr_ip_offset_mask;
+
+int
+ice_get_monitor_addr(void *rx_queue, struct rte_power_monitor_cond *pmc)
+{
+	volatile union ice_rx_flex_desc *rxdp;
+	struct ice_rx_queue *rxq = rx_queue;
+	uint16_t desc;
+
+	desc = rxq->rx_tail;
+	rxdp = &rxq->rx_ring[desc];
+	/* watch for changes in status bit */
+	pmc->addr = &rxdp->wb.status_error0;
+
+	/*
+	 * we expect the DD bit to be set to 1 if this descriptor was already
+	 * written to.
+	 */
+	pmc->val = rte_cpu_to_le_16(1 << ICE_RX_FLEX_DESC_STATUS0_DD_S);
+	pmc->mask = rte_cpu_to_le_16(1 << ICE_RX_FLEX_DESC_STATUS0_DD_S);
+
+	/* register is 16-bit */
+	pmc->size = sizeof(uint16_t);
+
+	return 0;
+}
+
 
 static inline uint8_t
 ice_proto_xtr_type_to_rxdid(uint8_t xtr_type)
@@ -246,23 +273,23 @@ ice_program_hw_rx_queue(struct ice_rx_queue *rxq)
 				   dev->data->dev_conf.rxmode.max_rx_pkt_len);
 
 	if (rxmode->offloads & DEV_RX_OFFLOAD_JUMBO_FRAME) {
-		if (rxq->max_pkt_len <= RTE_ETHER_MAX_LEN ||
+		if (rxq->max_pkt_len <= ICE_ETH_MAX_LEN ||
 		    rxq->max_pkt_len > ICE_FRAME_SIZE_MAX) {
 			PMD_DRV_LOG(ERR, "maximum packet length must "
 				    "be larger than %u and smaller than %u,"
 				    "as jumbo frame is enabled",
-				    (uint32_t)RTE_ETHER_MAX_LEN,
+				    (uint32_t)ICE_ETH_MAX_LEN,
 				    (uint32_t)ICE_FRAME_SIZE_MAX);
 			return -EINVAL;
 		}
 	} else {
 		if (rxq->max_pkt_len < RTE_ETHER_MIN_LEN ||
-		    rxq->max_pkt_len > RTE_ETHER_MAX_LEN) {
+		    rxq->max_pkt_len > ICE_ETH_MAX_LEN) {
 			PMD_DRV_LOG(ERR, "maximum packet length must be "
 				    "larger than %u and smaller than %u, "
 				    "as jumbo frame is disabled",
 				    (uint32_t)RTE_ETHER_MIN_LEN,
-				    (uint32_t)RTE_ETHER_MAX_LEN);
+				    (uint32_t)ICE_ETH_MAX_LEN);
 			return -EINVAL;
 		}
 	}
@@ -701,7 +728,7 @@ ice_fdir_program_hw_rx_queue(struct ice_rx_queue *rxq)
 	rx_ctx.hbuf = rxq->rx_hdr_len >> ICE_RLAN_CTX_HBUF_S;
 	rx_ctx.dtype = 0; /* No Header Split mode */
 	rx_ctx.dsize = 1; /* 32B descriptors */
-	rx_ctx.rxmax = RTE_ETHER_MAX_LEN;
+	rx_ctx.rxmax = ICE_ETH_MAX_LEN;
 	/* TPH: Transaction Layer Packet (TLP) processing hints */
 	rx_ctx.tphrdesc_ena = 1;
 	rx_ctx.tphwdesc_ena = 1;
@@ -1032,6 +1059,7 @@ ice_rx_queue_setup(struct rte_eth_dev *dev,
 	uint32_t ring_size;
 	uint16_t len;
 	int use_def_burst_func = 1;
+	uint64_t offloads;
 
 	if (nb_desc % ICE_ALIGN_RING_DESC != 0 ||
 	    nb_desc > ICE_MAX_RING_DESC ||
@@ -1040,6 +1068,8 @@ ice_rx_queue_setup(struct rte_eth_dev *dev,
 			     "invalid", nb_desc);
 		return -EINVAL;
 	}
+
+	offloads = rx_conf->offloads | dev->data->dev_conf.rxmode.offloads;
 
 	/* Free memory if needed */
 	if (dev->data->rx_queues[queue_idx]) {
@@ -1061,6 +1091,7 @@ ice_rx_queue_setup(struct rte_eth_dev *dev,
 	rxq->nb_rx_desc = nb_desc;
 	rxq->rx_free_thresh = rx_conf->rx_free_thresh;
 	rxq->queue_id = queue_idx;
+	rxq->offloads = offloads;
 
 	rxq->reg_idx = vsi->base_queue + queue_idx;
 	rxq->port_id = dev->data->port_id;
@@ -1449,7 +1480,12 @@ ice_rxd_error_to_pkt_flags(uint16_t stat_err0)
 		flags |= PKT_RX_L4_CKSUM_GOOD;
 
 	if (unlikely(stat_err0 & (1 << ICE_RX_FLEX_DESC_STATUS0_XSUM_EIPE_S)))
-		flags |= PKT_RX_EIP_CKSUM_BAD;
+		flags |= PKT_RX_OUTER_IP_CKSUM_BAD;
+
+	if (unlikely(stat_err0 & (1 << ICE_RX_FLEX_DESC_STATUS0_XSUM_EUDPE_S)))
+		flags |= PKT_RX_OUTER_L4_CKSUM_BAD;
+	else
+		flags |= PKT_RX_OUTER_L4_CKSUM_GOOD;
 
 	return flags;
 }
@@ -1958,7 +1994,9 @@ ice_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 	    dev->rx_pkt_burst == ice_recv_scattered_pkts_vec ||
 #ifdef CC_AVX512_SUPPORT
 	    dev->rx_pkt_burst == ice_recv_pkts_vec_avx512 ||
+	    dev->rx_pkt_burst == ice_recv_pkts_vec_avx512_offload ||
 	    dev->rx_pkt_burst == ice_recv_scattered_pkts_vec_avx512 ||
+	    dev->rx_pkt_burst == ice_recv_scattered_pkts_vec_avx512_offload ||
 #endif
 	    dev->rx_pkt_burst == ice_recv_pkts_vec_avx2 ||
 	    dev->rx_pkt_burst == ice_recv_scattered_pkts_vec_avx2)
@@ -2319,8 +2357,11 @@ ice_parse_tunneling_params(uint64_t ol_flags,
 	*cd_tunneling |= (tx_offload.l2_len >> 1) <<
 		ICE_TXD_CTX_QW0_NATLEN_S;
 
-	if ((ol_flags & PKT_TX_OUTER_UDP_CKSUM) &&
-	    (ol_flags & PKT_TX_OUTER_IP_CKSUM) &&
+	/**
+	 * Calculate the tunneling UDP checksum.
+	 * Shall be set only if L4TUNT = 01b and EIPT is not zero
+	 */
+	if (!(*cd_tunneling & ICE_TX_CTX_EIPT_NONE) &&
 	    (*cd_tunneling & ICE_TXD_CTX_UDP_TUNNELING))
 		*cd_tunneling |= ICE_TXD_CTX_QW0_L4T_CS_M;
 }
@@ -2402,11 +2443,11 @@ ice_xmit_cleanup(struct ice_tx_queue *txq)
 	desc_to_clean_to = sw_ring[desc_to_clean_to].last_id;
 	if (!(txd[desc_to_clean_to].cmd_type_offset_bsz &
 	    rte_cpu_to_le_64(ICE_TX_DESC_DTYPE_DESC_DONE))) {
-		PMD_TX_FREE_LOG(DEBUG, "TX descriptor %4u is not done "
-				"(port=%d queue=%d) value=0x%"PRIx64"\n",
-				desc_to_clean_to,
-				txq->port_id, txq->queue_id,
-				txd[desc_to_clean_to].cmd_type_offset_bsz);
+		PMD_TX_LOG(DEBUG, "TX descriptor %4u is not done "
+			   "(port=%d queue=%d) value=0x%"PRIx64"\n",
+			   desc_to_clean_to,
+			   txq->port_id, txq->queue_id,
+			   txd[desc_to_clean_to].cmd_type_offset_bsz);
 		/* Failed to clean any descriptors */
 		return -1;
 	}
@@ -2697,10 +2738,10 @@ ice_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
 		/* set RS bit on the last descriptor of one packet */
 		if (txq->nb_tx_used >= txq->tx_rs_thresh) {
-			PMD_TX_FREE_LOG(DEBUG,
-					"Setting RS bit on TXD id="
-					"%4u (port=%d queue=%d)",
-					tx_last, txq->port_id, txq->queue_id);
+			PMD_TX_LOG(DEBUG,
+				   "Setting RS bit on TXD id="
+				   "%4u (port=%d queue=%d)",
+				   tx_last, txq->port_id, txq->queue_id);
 
 			td_cmd |= ICE_TX_DESC_CMD_RS;
 
@@ -3017,12 +3058,14 @@ ice_set_rx_function(struct rte_eth_dev *dev)
 #ifdef RTE_ARCH_X86
 	struct ice_rx_queue *rxq;
 	int i;
+	int rx_check_ret;
 	bool use_avx512 = false;
 	bool use_avx2 = false;
 
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-		if (!ice_rx_vec_dev_check(dev) && ad->rx_bulk_alloc_allowed &&
-				rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
+		rx_check_ret = ice_rx_vec_dev_check(dev);
+		if (rx_check_ret >= 0 && ad->rx_bulk_alloc_allowed &&
+		    rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
 			ad->rx_vec_allowed = true;
 			for (i = 0; i < dev->data->nb_rx_queues; i++) {
 				rxq = dev->data->rx_queues[i];
@@ -3056,11 +3099,19 @@ ice_set_rx_function(struct rte_eth_dev *dev)
 		if (dev->data->scattered_rx) {
 			if (use_avx512) {
 #ifdef CC_AVX512_SUPPORT
-				PMD_DRV_LOG(NOTICE,
-					"Using AVX512 Vector Scattered Rx (port %d).",
-					dev->data->port_id);
-				dev->rx_pkt_burst =
-					ice_recv_scattered_pkts_vec_avx512;
+				if (rx_check_ret == ICE_VECTOR_OFFLOAD_PATH) {
+					PMD_DRV_LOG(NOTICE,
+						"Using AVX512 OFFLOAD Vector Scattered Rx (port %d).",
+						dev->data->port_id);
+					dev->rx_pkt_burst =
+						ice_recv_scattered_pkts_vec_avx512_offload;
+				} else {
+					PMD_DRV_LOG(NOTICE,
+						"Using AVX512 Vector Scattered Rx (port %d).",
+						dev->data->port_id);
+					dev->rx_pkt_burst =
+						ice_recv_scattered_pkts_vec_avx512;
+				}
 #endif
 			} else {
 				PMD_DRV_LOG(DEBUG,
@@ -3074,11 +3125,19 @@ ice_set_rx_function(struct rte_eth_dev *dev)
 		} else {
 			if (use_avx512) {
 #ifdef CC_AVX512_SUPPORT
-				PMD_DRV_LOG(NOTICE,
-					"Using AVX512 Vector Rx (port %d).",
-					dev->data->port_id);
-				dev->rx_pkt_burst =
-					ice_recv_pkts_vec_avx512;
+				if (rx_check_ret == ICE_VECTOR_OFFLOAD_PATH) {
+					PMD_DRV_LOG(NOTICE,
+						"Using AVX512 OFFLOAD Vector Rx (port %d).",
+						dev->data->port_id);
+					dev->rx_pkt_burst =
+						ice_recv_pkts_vec_avx512_offload;
+				} else {
+					PMD_DRV_LOG(NOTICE,
+						"Using AVX512 Vector Rx (port %d).",
+						dev->data->port_id);
+					dev->rx_pkt_burst =
+						ice_recv_pkts_vec_avx512;
+				}
 #endif
 			} else {
 				PMD_DRV_LOG(DEBUG,
@@ -3127,7 +3186,9 @@ static const struct {
 #ifdef RTE_ARCH_X86
 #ifdef CC_AVX512_SUPPORT
 	{ ice_recv_scattered_pkts_vec_avx512, "Vector AVX512 Scattered" },
+	{ ice_recv_scattered_pkts_vec_avx512_offload, "Offload Vector AVX512 Scattered" },
 	{ ice_recv_pkts_vec_avx512,           "Vector AVX512" },
+	{ ice_recv_pkts_vec_avx512_offload,   "Offload Vector AVX512" },
 #endif
 	{ ice_recv_scattered_pkts_vec_avx2, "Vector AVX2 Scattered" },
 	{ ice_recv_pkts_vec_avx2,           "Vector AVX2" },
@@ -3209,7 +3270,7 @@ ice_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 			return i;
 		}
 
-#ifdef RTE_LIBRTE_ETHDEV_DEBUG
+#ifdef RTE_ETHDEV_DEBUG_TX
 		ret = rte_validate_tx_offload(m);
 		if (ret != 0) {
 			rte_errno = -ret;
@@ -3233,12 +3294,14 @@ ice_set_tx_function(struct rte_eth_dev *dev)
 #ifdef RTE_ARCH_X86
 	struct ice_tx_queue *txq;
 	int i;
+	int tx_check_ret;
 	bool use_avx512 = false;
 	bool use_avx2 = false;
 
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-		if (!ice_tx_vec_dev_check(dev) &&
-				rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
+		tx_check_ret = ice_tx_vec_dev_check(dev);
+		if (tx_check_ret >= 0 &&
+		    rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
 			ad->tx_vec_allowed = true;
 			for (i = 0; i < dev->data->nb_tx_queues; i++) {
 				txq = dev->data->tx_queues[i];
@@ -3257,11 +3320,14 @@ ice_set_tx_function(struct rte_eth_dev *dev)
 			PMD_DRV_LOG(NOTICE,
 				"AVX512 is not supported in build env");
 #endif
-			if (!use_avx512 &&
+			if (!use_avx512 && tx_check_ret == ICE_VECTOR_PATH &&
 			(rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) == 1 ||
 			rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) == 1) &&
 			rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256)
 				use_avx2 = true;
+
+			if (!use_avx512 && tx_check_ret == ICE_VECTOR_OFFLOAD_PATH)
+				ad->tx_vec_allowed = false;
 
 		} else {
 			ad->tx_vec_allowed = false;
@@ -3271,9 +3337,18 @@ ice_set_tx_function(struct rte_eth_dev *dev)
 	if (ad->tx_vec_allowed) {
 		if (use_avx512) {
 #ifdef CC_AVX512_SUPPORT
-			PMD_DRV_LOG(NOTICE, "Using AVX512 Vector Tx (port %d).",
-				    dev->data->port_id);
-			dev->tx_pkt_burst = ice_xmit_pkts_vec_avx512;
+			if (tx_check_ret == ICE_VECTOR_OFFLOAD_PATH) {
+				PMD_DRV_LOG(NOTICE,
+					    "Using AVX512 OFFLOAD Vector Tx (port %d).",
+					    dev->data->port_id);
+				dev->tx_pkt_burst =
+					ice_xmit_pkts_vec_avx512_offload;
+			} else {
+				PMD_DRV_LOG(NOTICE,
+					    "Using AVX512 Vector Tx (port %d).",
+					    dev->data->port_id);
+				dev->tx_pkt_burst = ice_xmit_pkts_vec_avx512;
+			}
 #endif
 		} else {
 			PMD_DRV_LOG(DEBUG, "Using %sVector Tx (port %d).",
@@ -3309,6 +3384,7 @@ static const struct {
 #ifdef RTE_ARCH_X86
 #ifdef CC_AVX512_SUPPORT
 	{ ice_xmit_pkts_vec_avx512, "Vector AVX512" },
+	{ ice_xmit_pkts_vec_avx512_offload, "Offload Vector AVX512" },
 #endif
 	{ ice_xmit_pkts_vec_avx2, "Vector AVX2" },
 	{ ice_xmit_pkts_vec,      "Vector SSE" },
@@ -3872,6 +3948,50 @@ ice_get_default_pkt_type(uint16_t ptype)
 			RTE_PTYPE_TUNNEL_GTPU |
 			RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
 			RTE_PTYPE_INNER_L4_ICMP,
+
+		/* IPv4 --> UDP ECPRI */
+		[372] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[373] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[374] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[375] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[376] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[377] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[378] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[379] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[380] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[381] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+
+		/* IPV6 --> UDP ECPRI */
+		[382] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[383] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[384] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[385] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[386] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[387] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[388] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[389] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[390] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
+		[391] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+			RTE_PTYPE_L4_UDP,
 		/* All others reserved */
 	};
 

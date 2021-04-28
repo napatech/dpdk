@@ -51,6 +51,8 @@
 /* ETH_HLEN+ETH_FCS+2*VLAN_HLEN */
 #define NIX_L2_OVERHEAD \
 	(RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN + 8)
+#define NIX_L2_MAX_LEN \
+	(RTE_ETHER_MTU + NIX_L2_OVERHEAD)
 
 /* HW config of frame size doesn't include FCS */
 #define NIX_MAX_HW_FRS			9212
@@ -161,6 +163,11 @@
 #define NIX_TIMESYNC_TX_CMD_LEN		8
 /* Additional timesync values. */
 #define OTX2_CYCLECOUNTER_MASK   0xffffffffffffffffULL
+
+#define OCTEONTX2_PMD			net_octeontx2
+
+#define otx2_ethdev_is_same_driver(dev) \
+	(strcmp((dev)->device->driver->name, RTE_STR(OCTEONTX2_PMD)) == 0)
 
 enum nix_q_size_e {
 	nix_q_size_16,	/* 16 entries */
@@ -394,9 +401,8 @@ otx2_eth_pmd_priv(struct rte_eth_dev *eth_dev)
 /* Ops */
 int otx2_nix_info_get(struct rte_eth_dev *eth_dev,
 		      struct rte_eth_dev_info *dev_info);
-int otx2_nix_dev_filter_ctrl(struct rte_eth_dev *eth_dev,
-			     enum rte_filter_type filter_type,
-			     enum rte_filter_op filter_op, void *arg);
+int otx2_nix_dev_flow_ops_get(struct rte_eth_dev *eth_dev,
+			      const struct rte_flow_ops **ops);
 int otx2_nix_fw_version_get(struct rte_eth_dev *eth_dev, char *fw_version,
 			    size_t fw_size);
 int otx2_nix_get_module_info(struct rte_eth_dev *eth_dev,

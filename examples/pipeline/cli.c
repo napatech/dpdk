@@ -10,7 +10,9 @@
 #include <rte_common.h>
 #include <rte_ethdev.h>
 #include <rte_swx_port_ethdev.h>
+#include <rte_swx_port_ring.h>
 #include <rte_swx_port_source_sink.h>
+#include <rte_swx_port_fd.h>
 #include <rte_swx_pipeline.h>
 #include <rte_swx_ctl.h>
 
@@ -53,7 +55,7 @@ parser_read_uint64(uint64_t *value, const char *p)
 	if (!isdigit(*p))
 		return -EINVAL;
 
-	val = strtoul(p, &next, 10);
+	val = strtoul(p, &next, 0);
 	if (p == next)
 		return -EINVAL;
 
@@ -444,6 +446,80 @@ cmd_link_show(char **tokens,
 	}
 }
 
+static const char cmd_ring_help[] =
+"ring <ring_name> size <size> numa <numa_node>\n";
+
+static void
+cmd_ring(char **tokens,
+	uint32_t n_tokens,
+	char *out,
+	size_t out_size,
+	void *obj)
+{
+	struct ring_params p;
+	char *name;
+	struct ring *ring;
+
+	if (n_tokens != 6) {
+		snprintf(out, out_size, MSG_ARG_MISMATCH, tokens[0]);
+		return;
+	}
+
+	name = tokens[1];
+
+	if (strcmp(tokens[2], "size") != 0) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "size");
+		return;
+	}
+
+	if (parser_read_uint32(&p.size, tokens[3]) != 0) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "size");
+		return;
+	}
+
+	if (strcmp(tokens[4], "numa") != 0) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "numa");
+		return;
+	}
+
+	if (parser_read_uint32(&p.numa_node, tokens[5]) != 0) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "numa_node");
+		return;
+	}
+
+	ring = ring_create(obj, name, &p);
+	if (!ring) {
+		snprintf(out, out_size, MSG_CMD_FAIL, tokens[0]);
+		return;
+	}
+}
+
+static const char cmd_tap_help[] =
+"tap <tap_name>\n";
+
+static void
+cmd_tap(char **tokens,
+	uint32_t n_tokens,
+	char *out,
+	size_t out_size,
+	void *obj)
+{
+	struct tap *tap;
+	char *name;
+
+	if (n_tokens < 2) {
+		snprintf(out, out_size, MSG_ARG_MISMATCH, tokens[0]);
+		return;
+	}
+	name = tokens[1];
+
+	tap = tap_create(obj, name);
+	if (tap == NULL) {
+		snprintf(out, out_size, MSG_CMD_FAIL, tokens[0]);
+		return;
+	}
+}
+
 static const char cmd_pipeline_create_help[] =
 "pipeline <pipeline_name> create <numa_node>\n";
 
@@ -480,7 +556,9 @@ cmd_pipeline_create(char **tokens,
 static const char cmd_pipeline_port_in_help[] =
 "pipeline <pipeline_name> port in <port_id>\n"
 "   link <link_name> rxq <queue_id> bsz <burst_size>\n"
-"   | source <mempool_name> <file_name>\n";
+"   ring <ring_name> bsz <burst_size>\n"
+"   | source <mempool_name> <file_name>\n"
+"   | tap <tap_name> mempool <mempool_name> mtu <mtu> bsz <burst_size>\n";
 
 static void
 cmd_pipeline_port_in(char **tokens,
@@ -567,6 +645,41 @@ cmd_pipeline_port_in(char **tokens,
 			port_id,
 			"ethdev",
 			&params);
+	} else if (strcmp(tokens[t0], "ring") == 0) {
+		struct rte_swx_port_ring_reader_params params;
+		struct ring *ring;
+
+		if (n_tokens < t0 + 4) {
+			snprintf(out, out_size, MSG_ARG_MISMATCH,
+				"pipeline port in ring");
+			return;
+		}
+
+		ring = ring_find(obj, tokens[t0 + 1]);
+		if (!ring) {
+			snprintf(out, out_size, MSG_ARG_INVALID,
+				"ring_name");
+			return;
+		}
+		params.name = ring->name;
+
+		if (strcmp(tokens[t0 + 2], "bsz") != 0) {
+			snprintf(out, out_size, MSG_ARG_NOT_FOUND, "bsz");
+			return;
+		}
+
+		if (parser_read_uint32(&params.burst_size, tokens[t0 + 3])) {
+			snprintf(out, out_size, MSG_ARG_INVALID,
+				"burst_size");
+			return;
+		}
+
+		t0 += 4;
+
+		status = rte_swx_pipeline_port_in_config(p->p,
+			port_id,
+			"ring",
+			&params);
 	} else if (strcmp(tokens[t0], "source") == 0) {
 		struct rte_swx_port_source_params params;
 		struct mempool *mp;
@@ -593,6 +706,68 @@ cmd_pipeline_port_in(char **tokens,
 			port_id,
 			"source",
 			&params);
+	} else if (strcmp(tokens[t0], "tap") == 0) {
+		struct rte_swx_port_fd_reader_params params;
+		struct tap *tap;
+		struct mempool *mp;
+
+		if (n_tokens < t0 + 8) {
+			snprintf(out, out_size, MSG_ARG_MISMATCH,
+				"pipeline port in tap");
+			return;
+		}
+
+		tap = tap_find(obj, tokens[t0 + 1]);
+		if (!tap) {
+			snprintf(out, out_size, MSG_ARG_INVALID,
+				"tap_name");
+			return;
+		}
+		params.fd = tap->fd;
+
+		if (strcmp(tokens[t0 + 2], "mempool") != 0) {
+			snprintf(out, out_size, MSG_ARG_NOT_FOUND,
+				"mempool");
+			return;
+		}
+
+		mp = mempool_find(obj, tokens[t0 + 3]);
+		if (!mp) {
+			snprintf(out, out_size, MSG_ARG_INVALID,
+				"mempool_name");
+			return;
+		}
+		params.mempool = mp->m;
+
+		if (strcmp(tokens[t0 + 4], "mtu") != 0) {
+			snprintf(out, out_size, MSG_ARG_NOT_FOUND,
+				"mtu");
+			return;
+		}
+
+		if (parser_read_uint32(&params.mtu, tokens[t0 + 5]) != 0) {
+			snprintf(out, out_size, MSG_ARG_INVALID, "mtu");
+			return;
+		}
+
+		if (strcmp(tokens[t0 + 6], "bsz") != 0) {
+			snprintf(out, out_size, MSG_ARG_NOT_FOUND, "bsz");
+			return;
+		}
+
+		if (parser_read_uint32(&params.burst_size, tokens[t0 + 7])) {
+			snprintf(out, out_size, MSG_ARG_INVALID,
+				"burst_size");
+			return;
+		}
+
+		t0 += 8;
+
+		status = rte_swx_pipeline_port_in_config(p->p,
+			port_id,
+			"fd",
+			&params);
+
 	} else {
 		snprintf(out, out_size, MSG_ARG_INVALID, tokens[0]);
 		return;
@@ -612,7 +787,9 @@ cmd_pipeline_port_in(char **tokens,
 static const char cmd_pipeline_port_out_help[] =
 "pipeline <pipeline_name> port out <port_id>\n"
 "   link <link_name> txq <txq_id> bsz <burst_size>\n"
-"   | sink <file_name> | none\n";
+"   ring <ring_name> bsz <burst_size>\n"
+"   | sink <file_name> | none\n"
+"   | tap <tap_name> bsz <burst_size>\n";
 
 static void
 cmd_pipeline_port_out(char **tokens,
@@ -699,6 +876,41 @@ cmd_pipeline_port_out(char **tokens,
 			port_id,
 			"ethdev",
 			&params);
+	} else if (strcmp(tokens[t0], "ring") == 0) {
+		struct rte_swx_port_ring_writer_params params;
+		struct ring *ring;
+
+		if (n_tokens < t0 + 4) {
+			snprintf(out, out_size, MSG_ARG_MISMATCH,
+				"pipeline port out link");
+			return;
+		}
+
+		ring = ring_find(obj, tokens[t0 + 1]);
+		if (!ring) {
+			snprintf(out, out_size, MSG_ARG_INVALID,
+				"ring_name");
+			return;
+		}
+		params.name = ring->name;
+
+		if (strcmp(tokens[t0 + 2], "bsz") != 0) {
+			snprintf(out, out_size, MSG_ARG_NOT_FOUND, "bsz");
+			return;
+		}
+
+		if (parser_read_uint32(&params.burst_size, tokens[t0 + 3])) {
+			snprintf(out, out_size, MSG_ARG_INVALID,
+				"burst_size");
+			return;
+		}
+
+		t0 += 4;
+
+		status = rte_swx_pipeline_port_out_config(p->p,
+			port_id,
+			"ring",
+			&params);
 	} else if (strcmp(tokens[t0], "sink") == 0) {
 		struct rte_swx_port_sink_params params;
 
@@ -710,6 +922,41 @@ cmd_pipeline_port_out(char **tokens,
 		status = rte_swx_pipeline_port_out_config(p->p,
 			port_id,
 			"sink",
+			&params);
+	} else if (strcmp(tokens[t0], "tap") == 0) {
+		struct rte_swx_port_fd_writer_params params;
+		struct tap *tap;
+
+		if (n_tokens < t0 + 4) {
+			snprintf(out, out_size, MSG_ARG_MISMATCH,
+				"pipeline port out tap");
+			return;
+		}
+
+		tap = tap_find(obj, tokens[t0 + 1]);
+		if (!tap) {
+			snprintf(out, out_size, MSG_ARG_INVALID,
+				"tap_name");
+			return;
+		}
+		params.fd = tap->fd;
+
+		if (strcmp(tokens[t0 + 2], "bsz") != 0) {
+			snprintf(out, out_size, MSG_ARG_NOT_FOUND, "bsz");
+			return;
+		}
+
+		if (parser_read_uint32(&params.burst_size, tokens[t0 + 3])) {
+			snprintf(out, out_size, MSG_ARG_INVALID,
+				"burst_size");
+			return;
+		}
+
+		t0 += 4;
+
+		status = rte_swx_pipeline_port_out_config(p->p,
+			port_id,
+			"fd",
 			&params);
 	} else {
 		snprintf(out, out_size, MSG_ARG_INVALID, tokens[0]);
@@ -841,7 +1088,7 @@ cmd_pipeline_table_update(char **tokens,
 	if (strcmp(file_name_add, "none")) {
 		file_add = fopen(file_name_add, "r");
 		if (!file_add) {
-			snprintf(out, out_size, "Cannot open file %s",
+			snprintf(out, out_size, "Cannot open file %s.\n",
 				file_name_add);
 			goto error;
 		}
@@ -850,7 +1097,7 @@ cmd_pipeline_table_update(char **tokens,
 	if (strcmp(file_name_delete, "none")) {
 		file_delete = fopen(file_name_delete, "r");
 		if (!file_delete) {
-			snprintf(out, out_size, "Cannot open file %s",
+			snprintf(out, out_size, "Cannot open file %s.\n",
 				file_name_delete);
 			goto error;
 		}
@@ -859,7 +1106,7 @@ cmd_pipeline_table_update(char **tokens,
 	if (strcmp(file_name_default, "none")) {
 		file_default = fopen(file_name_default, "r");
 		if (!file_default) {
-			snprintf(out, out_size, "Cannot open file %s",
+			snprintf(out, out_size, "Cannot open file %s.\n",
 				file_name_default);
 			goto error;
 		}
@@ -881,14 +1128,19 @@ cmd_pipeline_table_update(char **tokens,
 	if (file_add)
 		for (line_id = 1; ; line_id++) {
 			struct rte_swx_table_entry *entry;
+			int is_blank_or_comment;
 
 			if (fgets(line, 2048, file_add) == NULL)
 				break;
 
 			entry = rte_swx_ctl_pipeline_table_entry_read(p->ctl,
 				table_name,
-				line);
+				line,
+				&is_blank_or_comment);
 			if (!entry) {
+				if (is_blank_or_comment)
+					continue;
+
 				snprintf(out, out_size, MSG_FILE_ERR,
 					file_name_add, line_id);
 				goto error;
@@ -911,14 +1163,19 @@ cmd_pipeline_table_update(char **tokens,
 	if (file_delete)
 		for (line_id = 1; ; line_id++) {
 			struct rte_swx_table_entry *entry;
+			int is_blank_or_comment;
 
 			if (fgets(line, 2048, file_delete) == NULL)
 				break;
 
 			entry = rte_swx_ctl_pipeline_table_entry_read(p->ctl,
 				table_name,
-				line);
+				line,
+				&is_blank_or_comment);
 			if (!entry) {
+				if (is_blank_or_comment)
+					continue;
+
 				snprintf(out, out_size, MSG_FILE_ERR,
 					file_name_delete, line_id);
 				goto error;
@@ -940,14 +1197,19 @@ cmd_pipeline_table_update(char **tokens,
 	if (file_default)
 		for (line_id = 1; ; line_id++) {
 			struct rte_swx_table_entry *entry;
+			int is_blank_or_comment;
 
 			if (fgets(line, 2048, file_default) == NULL)
 				break;
 
 			entry = rte_swx_ctl_pipeline_table_entry_read(p->ctl,
 				table_name,
-				line);
+				line,
+				&is_blank_or_comment);
 			if (!entry) {
+				if (is_blank_or_comment)
+					continue;
+
 				snprintf(out, out_size, MSG_FILE_ERR,
 					file_name_default, line_id);
 				goto error;
@@ -992,6 +1254,497 @@ error:
 		fclose(file_delete);
 	if (file_default)
 		fclose(file_default);
+}
+
+static const char cmd_pipeline_regrd_help[] =
+"pipeline <pipeline_name> regrd <register_array_name> <index>\n";
+
+static void
+cmd_pipeline_regrd(char **tokens,
+	uint32_t n_tokens,
+	char *out,
+	size_t out_size,
+	void *obj)
+{
+	struct pipeline *p;
+	const char *name;
+	uint64_t value;
+	uint32_t idx;
+	int status;
+
+	if (n_tokens != 5) {
+		snprintf(out, out_size, MSG_ARG_MISMATCH, tokens[0]);
+		return;
+	}
+
+	p = pipeline_find(obj, tokens[1]);
+	if (!p || !p->ctl) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "pipeline_name");
+		return;
+	}
+
+	if (strcmp(tokens[2], "regrd")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "regrd");
+		return;
+	}
+
+	name = tokens[3];
+
+	if (parser_read_uint32(&idx, tokens[4])) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "index");
+		return;
+	}
+
+	status = rte_swx_ctl_pipeline_regarray_read(p->p, name, idx, &value);
+	if (status) {
+		snprintf(out, out_size, "Command failed.\n");
+		return;
+	}
+
+	snprintf(out, out_size, "0x%" PRIx64 "\n", value);
+}
+
+static const char cmd_pipeline_regwr_help[] =
+"pipeline <pipeline_name> regwr <register_array_name> <index> <value>\n";
+
+static void
+cmd_pipeline_regwr(char **tokens,
+	uint32_t n_tokens,
+	char *out,
+	size_t out_size,
+	void *obj)
+{
+	struct pipeline *p;
+	const char *name;
+	uint64_t value;
+	uint32_t idx;
+	int status;
+
+	if (n_tokens != 6) {
+		snprintf(out, out_size, MSG_ARG_MISMATCH, tokens[0]);
+		return;
+	}
+
+	p = pipeline_find(obj, tokens[1]);
+	if (!p || !p->ctl) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "pipeline_name");
+		return;
+	}
+
+	if (strcmp(tokens[2], "regwr")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "regwr");
+		return;
+	}
+
+	name = tokens[3];
+
+	if (parser_read_uint32(&idx, tokens[4])) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "index");
+		return;
+	}
+
+	if (parser_read_uint64(&value, tokens[5])) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "value");
+		return;
+	}
+
+	status = rte_swx_ctl_pipeline_regarray_write(p->p, name, idx, value);
+	if (status) {
+		snprintf(out, out_size, "Command failed.\n");
+		return;
+	}
+}
+
+static const char cmd_pipeline_meter_profile_add_help[] =
+"pipeline <pipeline_name> meter profile <profile_name> add "
+	"cir <cir> pir <pir> cbs <cbs> pbs <pbs>\n";
+
+static void
+cmd_pipeline_meter_profile_add(char **tokens,
+	uint32_t n_tokens,
+	char *out,
+	size_t out_size,
+	void *obj)
+{
+	struct rte_meter_trtcm_params params;
+	struct pipeline *p;
+	const char *profile_name;
+	int status;
+
+	if (n_tokens != 14) {
+		snprintf(out, out_size, MSG_ARG_MISMATCH, tokens[0]);
+		return;
+	}
+
+	p = pipeline_find(obj, tokens[1]);
+	if (!p || !p->ctl) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "pipeline_name");
+		return;
+	}
+
+	if (strcmp(tokens[2], "meter")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "meter");
+		return;
+	}
+
+	if (strcmp(tokens[3], "profile")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "profile");
+		return;
+	}
+
+	profile_name = tokens[4];
+
+	if (strcmp(tokens[5], "add")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "add");
+		return;
+	}
+
+	if (strcmp(tokens[6], "cir")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "cir");
+		return;
+	}
+
+	if (parser_read_uint64(&params.cir, tokens[7])) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "cir");
+		return;
+	}
+
+	if (strcmp(tokens[8], "pir")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "pir");
+		return;
+	}
+
+	if (parser_read_uint64(&params.pir, tokens[9])) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "pir");
+		return;
+	}
+
+	if (strcmp(tokens[10], "cbs")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "cbs");
+		return;
+	}
+
+	if (parser_read_uint64(&params.cbs, tokens[11])) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "cbs");
+		return;
+	}
+
+	if (strcmp(tokens[12], "pbs")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "pbs");
+		return;
+	}
+
+	if (parser_read_uint64(&params.pbs, tokens[13])) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "pbs");
+		return;
+	}
+
+	status = rte_swx_ctl_meter_profile_add(p->p, profile_name, &params);
+	if (status) {
+		snprintf(out, out_size, "Command failed.\n");
+		return;
+	}
+}
+
+static const char cmd_pipeline_meter_profile_delete_help[] =
+"pipeline <pipeline_name> meter profile <profile_name> delete\n";
+
+static void
+cmd_pipeline_meter_profile_delete(char **tokens,
+	uint32_t n_tokens,
+	char *out,
+	size_t out_size,
+	void *obj)
+{
+	struct pipeline *p;
+	const char *profile_name;
+	int status;
+
+	if (n_tokens != 6) {
+		snprintf(out, out_size, MSG_ARG_MISMATCH, tokens[0]);
+		return;
+	}
+
+	p = pipeline_find(obj, tokens[1]);
+	if (!p || !p->ctl) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "pipeline_name");
+		return;
+	}
+
+	if (strcmp(tokens[2], "meter")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "meter");
+		return;
+	}
+
+	if (strcmp(tokens[3], "profile")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "profile");
+		return;
+	}
+
+	profile_name = tokens[4];
+
+	if (strcmp(tokens[5], "delete")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "delete");
+		return;
+	}
+
+	status = rte_swx_ctl_meter_profile_delete(p->p, profile_name);
+	if (status) {
+		snprintf(out, out_size, "Command failed.\n");
+		return;
+	}
+}
+
+static const char cmd_pipeline_meter_reset_help[] =
+"pipeline <pipeline_name> meter <meter_array_name> from <index0> to <index1> "
+	"reset\n";
+
+static void
+cmd_pipeline_meter_reset(char **tokens,
+	uint32_t n_tokens,
+	char *out,
+	size_t out_size,
+	void *obj)
+{
+	struct pipeline *p;
+	const char *name;
+	uint32_t idx0, idx1;
+
+	if (n_tokens != 9) {
+		snprintf(out, out_size, MSG_ARG_MISMATCH, tokens[0]);
+		return;
+	}
+
+	p = pipeline_find(obj, tokens[1]);
+	if (!p || !p->ctl) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "pipeline_name");
+		return;
+	}
+
+	if (strcmp(tokens[2], "meter")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "meter");
+		return;
+	}
+
+	name = tokens[3];
+
+	if (strcmp(tokens[4], "from")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "from");
+		return;
+	}
+
+	if (parser_read_uint32(&idx0, tokens[5])) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "index0");
+		return;
+	}
+
+	if (strcmp(tokens[6], "to")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "to");
+		return;
+	}
+
+	if (parser_read_uint32(&idx1, tokens[7]) || (idx1 < idx0)) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "index1");
+		return;
+	}
+
+	if (strcmp(tokens[8], "reset")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "reset");
+		return;
+	}
+
+	for ( ; idx0 <= idx1; idx0++) {
+		int status;
+
+		status = rte_swx_ctl_meter_reset(p->p, name, idx0);
+		if (status) {
+			snprintf(out, out_size, "Command failed for index %u.\n", idx0);
+			return;
+		}
+	}
+}
+
+static const char cmd_pipeline_meter_set_help[] =
+"pipeline <pipeline_name> meter <meter_array_name> from <index0> to <index1> "
+	"set profile <profile_name>\n";
+
+static void
+cmd_pipeline_meter_set(char **tokens,
+	uint32_t n_tokens,
+	char *out,
+	size_t out_size,
+	void *obj)
+{
+	struct pipeline *p;
+	const char *name, *profile_name;
+	uint32_t idx0, idx1;
+
+	if (n_tokens != 11) {
+		snprintf(out, out_size, MSG_ARG_MISMATCH, tokens[0]);
+		return;
+	}
+
+	p = pipeline_find(obj, tokens[1]);
+	if (!p || !p->ctl) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "pipeline_name");
+		return;
+	}
+
+	if (strcmp(tokens[2], "meter")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "meter");
+		return;
+	}
+
+	name = tokens[3];
+
+	if (strcmp(tokens[4], "from")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "from");
+		return;
+	}
+
+	if (parser_read_uint32(&idx0, tokens[5])) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "index0");
+		return;
+	}
+
+	if (strcmp(tokens[6], "to")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "to");
+		return;
+	}
+
+	if (parser_read_uint32(&idx1, tokens[7]) || (idx1 < idx0)) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "index1");
+		return;
+	}
+
+	if (strcmp(tokens[8], "set")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "set");
+		return;
+	}
+
+	if (strcmp(tokens[9], "profile")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "profile");
+		return;
+	}
+
+	profile_name = tokens[10];
+
+	for ( ; idx0 <= idx1; idx0++) {
+		int status;
+
+		status = rte_swx_ctl_meter_set(p->p, name, idx0, profile_name);
+		if (status) {
+			snprintf(out, out_size, "Command failed for index %u.\n", idx0);
+			return;
+		}
+	}
+}
+
+static const char cmd_pipeline_meter_stats_help[] =
+"pipeline <pipeline_name> meter <meter_array_name> from <index0> to <index1> "
+	"stats\n";
+
+static void
+cmd_pipeline_meter_stats(char **tokens,
+	uint32_t n_tokens,
+	char *out,
+	size_t out_size,
+	void *obj)
+{
+	struct rte_swx_ctl_meter_stats stats;
+	struct pipeline *p;
+	const char *name;
+	uint32_t idx0, idx1;
+
+	if (n_tokens != 9) {
+		snprintf(out, out_size, MSG_ARG_MISMATCH, tokens[0]);
+		return;
+	}
+
+	p = pipeline_find(obj, tokens[1]);
+	if (!p || !p->ctl) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "pipeline_name");
+		return;
+	}
+
+	if (strcmp(tokens[2], "meter")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "meter");
+		return;
+	}
+
+	name = tokens[3];
+
+	if (strcmp(tokens[4], "from")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "from");
+		return;
+	}
+
+	if (parser_read_uint32(&idx0, tokens[5])) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "index0");
+		return;
+	}
+
+	if (strcmp(tokens[6], "to")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "to");
+		return;
+	}
+
+	if (parser_read_uint32(&idx1, tokens[7]) || (idx1 < idx0)) {
+		snprintf(out, out_size, MSG_ARG_INVALID, "index1");
+		return;
+	}
+
+	if (strcmp(tokens[8], "stats")) {
+		snprintf(out, out_size, MSG_ARG_NOT_FOUND, "stats");
+		return;
+	}
+
+	/* Table header. */
+	snprintf(out, out_size, "+-%7s-+-%16s-+-%16s-+-%16s-+-%16s-+-%16s-+-%16s-+\n",
+		 "-------",
+		 "----------------", "----------------", "----------------",
+		 "----------------", "----------------", "----------------");
+	out_size -= strlen(out);
+	out += strlen(out);
+
+	snprintf(out, out_size, "| %4s | %16s | %16s | %16s | %16s | %16s | %16s |\n",
+		 "METER #",
+		 "GREEN (packets)", "YELLOW (packets)", "RED (packets)",
+		 "GREEN (bytes)", "YELLOW (bytes)", "RED (bytes)");
+	out_size -= strlen(out);
+	out += strlen(out);
+
+	snprintf(out, out_size, "+-%7s-+-%16s-+-%16s-+-%16s-+-%16s-+-%16s-+-%16s-+\n",
+		 "-------",
+		 "----------------", "----------------", "----------------",
+		 "----------------", "----------------", "----------------");
+	out_size -= strlen(out);
+	out += strlen(out);
+
+	/* Table rows. */
+	for ( ; idx0 <= idx1; idx0++) {
+		int status;
+
+		status = rte_swx_ctl_meter_stats_read(p->p, name, idx0, &stats);
+		if (status) {
+			snprintf(out, out_size, "Pipeline meter stats error at index %u.\n", idx0);
+			out_size -= strlen(out);
+			out += strlen(out);
+			return;
+		}
+
+		snprintf(out, out_size, "| %7d | %16" PRIx64 " | %16" PRIx64 " | %16" PRIx64
+			 " | %16" PRIx64 " | %16" PRIx64 " | %16" PRIx64 " |\n",
+			 idx0,
+			 stats.n_pkts[RTE_COLOR_GREEN],
+			 stats.n_pkts[RTE_COLOR_YELLOW],
+			 stats.n_pkts[RTE_COLOR_RED],
+			 stats.n_bytes[RTE_COLOR_GREEN],
+			 stats.n_bytes[RTE_COLOR_YELLOW],
+			 stats.n_bytes[RTE_COLOR_RED]);
+		out_size -= strlen(out);
+		out += strlen(out);
+	}
 }
 
 static const char cmd_pipeline_stats_help[] =
@@ -1049,7 +1802,7 @@ cmd_pipeline_stats(char **tokens,
 		out += strlen(out);
 	}
 
-	snprintf(out, out_size, "Output ports:\n");
+	snprintf(out, out_size, "\nOutput ports:\n");
 	out_size -= strlen(out);
 	out += strlen(out);
 
@@ -1064,6 +1817,58 @@ cmd_pipeline_stats(char **tokens,
 			i, stats.n_pkts, stats.n_bytes);
 		out_size -= strlen(out);
 		out += strlen(out);
+	}
+
+	snprintf(out, out_size, "\nTables:\n");
+	out_size -= strlen(out);
+	out += strlen(out);
+
+	for (i = 0; i < info.n_tables; i++) {
+		struct rte_swx_ctl_table_info table_info;
+		uint64_t n_pkts_action[info.n_actions];
+		struct rte_swx_table_stats stats = {
+			.n_pkts_hit = 0,
+			.n_pkts_miss = 0,
+			.n_pkts_action = n_pkts_action,
+		};
+		uint32_t j;
+
+		status = rte_swx_ctl_table_info_get(p->p, i, &table_info);
+		if (status) {
+			snprintf(out, out_size, "Table info get error.");
+			return;
+		}
+
+		status = rte_swx_ctl_pipeline_table_stats_read(p->p, table_info.name, &stats);
+		if (status) {
+			snprintf(out, out_size, "Table stats read error.");
+			return;
+		}
+
+		snprintf(out, out_size, "\tTable %s:\n"
+			"\t\tHit (packets): %" PRIu64 "\n"
+			"\t\tMiss (packets): %" PRIu64 "\n",
+			table_info.name,
+			stats.n_pkts_hit,
+			stats.n_pkts_miss);
+		out_size -= strlen(out);
+		out += strlen(out);
+
+		for (j = 0; j < info.n_actions; j++) {
+			struct rte_swx_ctl_action_info action_info;
+
+			status = rte_swx_ctl_action_info_get(p->p, j, &action_info);
+			if (status) {
+				snprintf(out, out_size, "Action info get error.");
+				return;
+			}
+
+			snprintf(out, out_size, "\t\tAction %s (packets): %" PRIu64 "\n",
+				action_info.name,
+				stats.n_pkts_action[j]);
+			out_size -= strlen(out);
+			out += strlen(out);
+		}
 	}
 }
 
@@ -1182,11 +1987,19 @@ cmd_help(char **tokens,
 			"List of commands:\n"
 			"\tmempool\n"
 			"\tlink\n"
+			"\ttap\n"
 			"\tpipeline create\n"
 			"\tpipeline port in\n"
 			"\tpipeline port out\n"
 			"\tpipeline build\n"
 			"\tpipeline table update\n"
+			"\tpipeline regrd\n"
+			"\tpipeline regwr\n"
+			"\tpipeline meter profile add\n"
+			"\tpipeline meter profile delete\n"
+			"\tpipeline meter reset\n"
+			"\tpipeline meter set\n"
+			"\tpipeline meter stats\n"
 			"\tpipeline stats\n"
 			"\tthread pipeline enable\n"
 			"\tthread pipeline disable\n\n");
@@ -1200,6 +2013,16 @@ cmd_help(char **tokens,
 
 	if (strcmp(tokens[0], "link") == 0) {
 		snprintf(out, out_size, "\n%s\n", cmd_link_help);
+		return;
+	}
+
+	if (strcmp(tokens[0], "ring") == 0) {
+		snprintf(out, out_size, "\n%s\n", cmd_ring_help);
+		return;
+	}
+
+	if (strcmp(tokens[0], "tap") == 0) {
+		snprintf(out, out_size, "\n%s\n", cmd_tap_help);
 		return;
 	}
 
@@ -1236,6 +2059,55 @@ cmd_help(char **tokens,
 		(strcmp(tokens[2], "update") == 0)) {
 		snprintf(out, out_size, "\n%s\n",
 			cmd_pipeline_table_update_help);
+		return;
+	}
+
+	if ((strcmp(tokens[0], "pipeline") == 0) &&
+		(n_tokens == 2) && (strcmp(tokens[1], "regrd") == 0)) {
+		snprintf(out, out_size, "\n%s\n", cmd_pipeline_regrd_help);
+		return;
+	}
+
+	if ((strcmp(tokens[0], "pipeline") == 0) &&
+		(n_tokens == 2) && (strcmp(tokens[1], "regwr") == 0)) {
+		snprintf(out, out_size, "\n%s\n", cmd_pipeline_regwr_help);
+		return;
+	}
+
+	if (!strcmp(tokens[0], "pipeline") &&
+		(n_tokens == 4) && !strcmp(tokens[1], "meter")
+		&& !strcmp(tokens[2], "profile")
+		&& !strcmp(tokens[3], "add")) {
+		snprintf(out, out_size, "\n%s\n", cmd_pipeline_meter_profile_add_help);
+		return;
+	}
+
+	if (!strcmp(tokens[0], "pipeline") &&
+		(n_tokens == 4) && !strcmp(tokens[1], "meter")
+		&& !strcmp(tokens[2], "profile")
+		&& !strcmp(tokens[3], "delete")) {
+		snprintf(out, out_size, "\n%s\n", cmd_pipeline_meter_profile_delete_help);
+		return;
+	}
+
+	if (!strcmp(tokens[0], "pipeline") &&
+		(n_tokens == 3) && !strcmp(tokens[1], "meter")
+		&& !strcmp(tokens[2], "reset")) {
+		snprintf(out, out_size, "\n%s\n", cmd_pipeline_meter_reset_help);
+		return;
+	}
+
+	if (!strcmp(tokens[0], "pipeline") &&
+		(n_tokens == 3) && !strcmp(tokens[1], "meter")
+		&& !strcmp(tokens[2], "set")) {
+		snprintf(out, out_size, "\n%s\n", cmd_pipeline_meter_set_help);
+		return;
+	}
+
+	if (!strcmp(tokens[0], "pipeline") &&
+		(n_tokens == 3) && !strcmp(tokens[1], "meter")
+		&& !strcmp(tokens[2], "stats")) {
+		snprintf(out, out_size, "\n%s\n", cmd_pipeline_meter_stats_help);
 		return;
 	}
 
@@ -1294,12 +2166,22 @@ cli_process(char *in, char *out, size_t out_size, void *obj)
 	}
 
 	if (strcmp(tokens[0], "link") == 0) {
-		if (strcmp(tokens[1], "show") == 0) {
+		if ((n_tokens >= 2) && (strcmp(tokens[1], "show") == 0)) {
 			cmd_link_show(tokens, n_tokens, out, out_size, obj);
 			return;
 		}
 
 		cmd_link(tokens, n_tokens, out, out_size, obj);
+		return;
+	}
+
+	if (strcmp(tokens[0], "ring") == 0) {
+		cmd_ring(tokens, n_tokens, out, out_size, obj);
+		return;
+	}
+
+	if (strcmp(tokens[0], "tap") == 0) {
+		cmd_tap(tokens, n_tokens, out, out_size, obj);
 		return;
 	}
 
@@ -1338,6 +2220,55 @@ cli_process(char *in, char *out, size_t out_size, void *obj)
 			(strcmp(tokens[2], "table") == 0)) {
 			cmd_pipeline_table_update(tokens, n_tokens, out,
 				out_size, obj);
+			return;
+		}
+
+		if ((n_tokens >= 3) &&
+			(strcmp(tokens[2], "regrd") == 0)) {
+			cmd_pipeline_regrd(tokens, n_tokens, out, out_size, obj);
+			return;
+		}
+
+		if ((n_tokens >= 3) &&
+			(strcmp(tokens[2], "regwr") == 0)) {
+			cmd_pipeline_regwr(tokens, n_tokens, out, out_size, obj);
+			return;
+		}
+
+		if ((n_tokens >= 6) &&
+			(strcmp(tokens[2], "meter") == 0) &&
+			(strcmp(tokens[3], "profile") == 0) &&
+			(strcmp(tokens[5], "add") == 0)) {
+			cmd_pipeline_meter_profile_add(tokens, n_tokens, out, out_size, obj);
+			return;
+		}
+
+		if ((n_tokens >= 6) &&
+			(strcmp(tokens[2], "meter") == 0) &&
+			(strcmp(tokens[3], "profile") == 0) &&
+			(strcmp(tokens[5], "delete") == 0)) {
+			cmd_pipeline_meter_profile_delete(tokens, n_tokens, out, out_size, obj);
+			return;
+		}
+
+		if ((n_tokens >= 9) &&
+			(strcmp(tokens[2], "meter") == 0) &&
+			(strcmp(tokens[8], "reset") == 0)) {
+			cmd_pipeline_meter_reset(tokens, n_tokens, out, out_size, obj);
+			return;
+		}
+
+		if ((n_tokens >= 9) &&
+			(strcmp(tokens[2], "meter") == 0) &&
+			(strcmp(tokens[8], "set") == 0)) {
+			cmd_pipeline_meter_set(tokens, n_tokens, out, out_size, obj);
+			return;
+		}
+
+		if ((n_tokens >= 9) &&
+			(strcmp(tokens[2], "meter") == 0) &&
+			(strcmp(tokens[8], "stats") == 0)) {
+			cmd_pipeline_meter_stats(tokens, n_tokens, out, out_size, obj);
 			return;
 		}
 

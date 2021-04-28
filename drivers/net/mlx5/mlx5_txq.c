@@ -12,7 +12,8 @@
 
 #include <rte_mbuf.h>
 #include <rte_malloc.h>
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
+#include <rte_bus_pci.h>
 #include <rte_common.h>
 #include <rte_eal_paging.h>
 
@@ -23,6 +24,7 @@
 #include "mlx5_defs.h"
 #include "mlx5_utils.h"
 #include "mlx5.h"
+#include "mlx5_tx.h"
 #include "mlx5_rxtx.h"
 #include "mlx5_autoconf.h"
 
@@ -123,6 +125,8 @@ mlx5_get_tx_port_offloads(struct rte_eth_dev *dev)
 				     DEV_TX_OFFLOAD_GRE_TNL_TSO |
 				     DEV_TX_OFFLOAD_GENEVE_TNL_TSO);
 	}
+	if (!config->mprq.enabled)
+		offloads |= DEV_TX_OFFLOAD_MBUF_FAST_FREE;
 	return offloads;
 }
 
@@ -634,18 +638,23 @@ txq_uar_uninit_secondary(struct mlx5_txq_ctrl *txq_ctrl)
 void
 mlx5_tx_uar_uninit_secondary(struct rte_eth_dev *dev)
 {
-	struct mlx5_priv *priv = dev->data->dev_private;
-	struct mlx5_txq_data *txq;
-	struct mlx5_txq_ctrl *txq_ctrl;
+	struct mlx5_proc_priv *ppriv = (struct mlx5_proc_priv *)
+					dev->process_private;
+	const size_t page_size = rte_mem_page_size();
+	void *addr;
 	unsigned int i;
 
+	if (page_size == (size_t)-1) {
+		DRV_LOG(ERR, "Failed to get mem page size");
+		return;
+	}
 	MLX5_ASSERT(rte_eal_process_type() == RTE_PROC_SECONDARY);
-	for (i = 0; i != priv->txqs_n; ++i) {
-		if (!(*priv->txqs)[i])
+	for (i = 0; i != ppriv->uar_table_sz; ++i) {
+		if (!ppriv->uar_table[i])
 			continue;
-		txq = (*priv->txqs)[i];
-		txq_ctrl = container_of(txq, struct mlx5_txq_ctrl, txq);
-		txq_uar_uninit_secondary(txq_ctrl);
+		addr = ppriv->uar_table[i];
+		rte_mem_unmap(RTE_PTR_ALIGN_FLOOR(addr, page_size), page_size);
+
 	}
 }
 
@@ -800,6 +809,10 @@ txq_set_params(struct mlx5_txq_ctrl *txq_ctrl)
 	bool vlan_inline;
 	unsigned int temp;
 
+	txq_ctrl->txq.fast_free =
+		!!((txq_ctrl->txq.offloads & DEV_TX_OFFLOAD_MBUF_FAST_FREE) &&
+		   !(txq_ctrl->txq.offloads & DEV_TX_OFFLOAD_MULTI_SEGS) &&
+		   !config->mprq.enabled);
 	if (config->txqs_inline == MLX5_ARG_UNSET)
 		txqs_inline =
 #if defined(RTE_ARCH_ARM64)
@@ -1146,6 +1159,7 @@ mlx5_txq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	LIST_INSERT_HEAD(&priv->txqsctrl, tmpl, next);
 	return tmpl;
 error:
+	mlx5_mr_btree_free(&tmpl->txq.mr_ctrl.cache_bh);
 	mlx5_free(tmpl);
 	return NULL;
 }

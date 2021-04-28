@@ -28,7 +28,7 @@ static struct rte_pci_driver ioat_pmd_drv;
 #define IOAT_DEVICE_ID_BDXF	0x6f2F
 #define IOAT_DEVICE_ID_ICX	0x0b00
 
-RTE_LOG_REGISTER(ioat_pmd_logtype, rawdev.ioat, INFO);
+RTE_LOG_REGISTER(ioat_pmd_logtype, pmd.raw.ioat, INFO);
 
 #define DESC_SZ sizeof(struct rte_ioat_generic_hw_desc)
 #define COMPLETION_SZ sizeof(__m128i)
@@ -165,7 +165,23 @@ ioat_rawdev_create(const char *name, struct rte_pci_device *dev)
 		goto cleanup;
 	}
 
+	/* Allocate memory for the primary process or else return the memory
+	 * of primary memzone for the secondary process.
+	 */
 	snprintf(mz_name, sizeof(mz_name), "rawdev%u_private", rawdev->dev_id);
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
+		mz = rte_memzone_lookup(mz_name);
+		if (mz == NULL) {
+			IOAT_PMD_ERR("Unable lookup memzone for private data\n");
+			ret = -ENOMEM;
+			goto cleanup;
+		}
+		rawdev->dev_private = mz->addr;
+		rawdev->dev_ops = &ioat_rawdev_ops;
+		rawdev->device = &dev->device;
+		rawdev->driver_name = dev->device.driver->name;
+		return 0;
+	}
 	mz = rte_memzone_reserve(mz_name, sizeof(struct rte_ioat_rawdev),
 			dev->device.numa_node, RTE_MEMZONE_IOVA_CONTIG);
 	if (mz == NULL) {

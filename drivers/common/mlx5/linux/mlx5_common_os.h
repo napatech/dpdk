@@ -6,6 +6,7 @@
 #define RTE_PMD_MLX5_COMMON_OS_H_
 
 #include <stdio.h>
+#include <malloc.h>
 
 #include <rte_pci.h>
 #include <rte_debug.h>
@@ -16,6 +17,7 @@
 
 #include "mlx5_autoconf.h"
 #include "mlx5_glue.h"
+#include "mlx5_malloc.h"
 
 /**
  * Get device name. Given an ibv_device pointer - return a
@@ -201,4 +203,89 @@ mlx5_os_get_devx_uar_page_id(void *uar)
 #endif
 }
 
+__rte_internal
+static inline void *
+mlx5_os_alloc_pd(void *ctx)
+{
+	return mlx5_glue->alloc_pd(ctx);
+}
+
+__rte_internal
+static inline int
+mlx5_os_dealloc_pd(void *pd)
+{
+	return mlx5_glue->dealloc_pd(pd);
+}
+
+__rte_internal
+static inline void *
+mlx5_os_umem_reg(void *ctx, void *addr, size_t size, uint32_t access)
+{
+	return mlx5_glue->devx_umem_reg(ctx, addr, size, access);
+}
+
+__rte_internal
+static inline int
+mlx5_os_umem_dereg(void *pumem)
+{
+	return mlx5_glue->devx_umem_dereg(pumem);
+}
+
+static inline void *
+mlx5_os_devx_create_event_channel(void *ctx, int flags)
+{
+	return mlx5_glue->devx_create_event_channel(ctx, flags);
+}
+
+static inline void
+mlx5_os_devx_destroy_event_channel(void *eventc)
+{
+	mlx5_glue->devx_destroy_event_channel(eventc);
+}
+
+static inline int
+mlx5_os_devx_subscribe_devx_event(void *eventc,
+				  void *obj,
+				  uint16_t events_sz, uint16_t events_num[],
+				  uint64_t cookie)
+{
+	return mlx5_glue->devx_subscribe_devx_event(eventc, obj, events_sz,
+						    events_num, cookie);
+}
+
+/**
+ * Memory allocation optionally with alignment.
+ *
+ * @param[in] align
+ *    Alignment size (may be zero)
+ * @param[in] size
+ *    Size in bytes to allocate
+ *
+ * @return
+ *    Valid pointer to allocated memory, NULL in case of failure
+ */
+static inline void *
+mlx5_os_malloc(size_t align, size_t size)
+{
+	void *buf;
+
+	if (posix_memalign(&buf, align, size))
+		return NULL;
+	return buf;
+}
+
+/**
+ * This API de-allocates a memory that originally could have been
+ * allocated aligned or non-aligned. In Linux it is a wrapper
+ * around free().
+ *
+ * @param[in] addr
+ *    Pointer to address to free
+ *
+ */
+static inline void
+mlx5_os_free(void *addr)
+{
+	free(addr);
+}
 #endif /* RTE_PMD_MLX5_COMMON_OS_H_ */

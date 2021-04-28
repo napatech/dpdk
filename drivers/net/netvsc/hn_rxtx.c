@@ -1387,7 +1387,8 @@ static unsigned int hn_get_slots(const struct rte_mbuf *m)
 		unsigned int size = rte_pktmbuf_data_len(m);
 		unsigned int offs = rte_mbuf_data_iova(m) & PAGE_MASK;
 
-		slots += (offs + size + PAGE_SIZE - 1) / PAGE_SIZE;
+		slots += (offs + size + rte_mem_page_size() - 1) /
+				rte_mem_page_size();
 		m = m->next;
 	}
 
@@ -1402,12 +1403,13 @@ static unsigned int hn_fill_sg(struct vmbus_gpa *sg,
 
 	while (m) {
 		rte_iova_t addr = rte_mbuf_data_iova(m);
-		unsigned int page = addr / PAGE_SIZE;
+		unsigned int page = addr / rte_mem_page_size();
 		unsigned int offset = addr & PAGE_MASK;
 		unsigned int len = rte_pktmbuf_data_len(m);
 
 		while (len > 0) {
-			unsigned int bytes = RTE_MIN(len, PAGE_SIZE - offset);
+			unsigned int bytes = RTE_MIN(len,
+					rte_mem_page_size() - offset);
 
 			sg[segs].page = page;
 			sg[segs].ofs = offset;
@@ -1450,7 +1452,7 @@ static int hn_xmit_sg(struct hn_tx_queue *txq,
 	addr = txq->tx_rndis_iova +
 		((char *)txd->rndis_pkt - (char *)txq->tx_rndis);
 
-	sg[0].page = addr / PAGE_SIZE;
+	sg[0].page = addr / rte_mem_page_size();
 	sg[0].ofs = addr & PAGE_MASK;
 	sg[0].len = RNDIS_PACKET_MSG_OFFSET_ABS(hn_rndis_pktlen(txd->rndis_pkt));
 	segs = 1;
@@ -1492,16 +1494,20 @@ hn_xmit_pkts(void *ptxq, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		hn_process_events(hv, txq->queue_id, 0);
 
 	/* Transmit over VF if present and up */
-	rte_rwlock_read_lock(&hv->vf_lock);
-	vf_dev = hn_get_vf_dev(hv);
-	if (vf_dev && vf_dev->data->dev_started) {
-		void *sub_q = vf_dev->data->tx_queues[queue_id];
+	if (hv->vf_ctx.vf_vsc_switched) {
+		rte_rwlock_read_lock(&hv->vf_lock);
+		vf_dev = hn_get_vf_dev(hv);
+		if (hv->vf_ctx.vf_vsc_switched && vf_dev &&
+		    vf_dev->data->dev_started) {
+			void *sub_q = vf_dev->data->tx_queues[queue_id];
 
-		nb_tx = (*vf_dev->tx_pkt_burst)(sub_q, tx_pkts, nb_pkts);
+			nb_tx = (*vf_dev->tx_pkt_burst)
+					(sub_q, tx_pkts, nb_pkts);
+			rte_rwlock_read_unlock(&hv->vf_lock);
+			return nb_tx;
+		}
 		rte_rwlock_read_unlock(&hv->vf_lock);
-		return nb_tx;
 	}
-	rte_rwlock_read_unlock(&hv->vf_lock);
 
 	for (nb_tx = 0; nb_tx < nb_pkts; nb_tx++) {
 		struct rte_mbuf *m = tx_pkts[nb_tx];
@@ -1614,13 +1620,17 @@ hn_recv_pkts(void *prxq, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 					   (void **)rx_pkts, nb_pkts, NULL);
 
 	/* If VF is available, check that as well */
-	rte_rwlock_read_lock(&hv->vf_lock);
-	vf_dev = hn_get_vf_dev(hv);
-	if (vf_dev && vf_dev->data->dev_started)
-		nb_rcv += hn_recv_vf(vf_dev->data->port_id, rxq,
-				     rx_pkts + nb_rcv, nb_pkts - nb_rcv);
+	if (hv->vf_ctx.vf_vsc_switched) {
+		rte_rwlock_read_lock(&hv->vf_lock);
+		vf_dev = hn_get_vf_dev(hv);
+		if (hv->vf_ctx.vf_vsc_switched && vf_dev &&
+		    vf_dev->data->dev_started)
+			nb_rcv += hn_recv_vf(vf_dev->data->port_id, rxq,
+					     rx_pkts + nb_rcv,
+					     nb_pkts - nb_rcv);
 
-	rte_rwlock_read_unlock(&hv->vf_lock);
+		rte_rwlock_read_unlock(&hv->vf_lock);
+	}
 	return nb_rcv;
 }
 

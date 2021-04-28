@@ -72,7 +72,7 @@ Run testpmd inside guest
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
 Make sure you have DPDK built inside the guest. Also make sure the
-corresponding virtio-net PCI device is bond to a uio driver, which
+corresponding virtio-net PCI device is bond to a UIO driver, which
 could be done by:
 
 .. code-block:: console
@@ -188,7 +188,7 @@ Common Issues
 
   .. code-block:: console
 
-      cat /sys/kernel/mm/hugepages/hugepages-<pagesize>/nr_hugepages
+     dpdk-hugepages.py --show
 
   The command above indicates how many hugepages are free to support QEMU's
   allocation request.

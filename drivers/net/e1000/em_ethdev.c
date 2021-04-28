@@ -15,8 +15,8 @@
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
 #include <rte_ether.h>
-#include <rte_ethdev_driver.h>
-#include <rte_ethdev_pci.h>
+#include <ethdev_driver.h>
+#include <ethdev_pci.h>
 #include <rte_memory.h>
 #include <rte_eal.h>
 #include <rte_malloc.h>
@@ -975,8 +975,7 @@ eth_em_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats)
 
 	/* Rx Errors */
 	rte_stats->imissed = stats->mpc;
-	rte_stats->ierrors = stats->crcerrs +
-	                     stats->rlec + stats->ruc + stats->roc +
+	rte_stats->ierrors = stats->crcerrs + stats->rlec +
 	                     stats->rxerrc + stats->algnerrc + stats->cexterr;
 
 	/* Tx Errors */
@@ -1799,24 +1798,27 @@ eth_em_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	if (ret != 0)
 		return ret;
 
-	frame_size = mtu + RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN +
-		VLAN_TAG_SIZE;
+	frame_size = mtu + E1000_ETH_OVERHEAD;
 
 	/* check that mtu is within the allowed range */
 	if (mtu < RTE_ETHER_MIN_MTU || frame_size > dev_info.max_rx_pktlen)
 		return -EINVAL;
 
-	/* refuse mtu that requires the support of scattered packets when this
-	 * feature has not been enabled before. */
-	if (!dev->data->scattered_rx &&
-	    frame_size > dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM)
+	/*
+	 * If device is started, refuse mtu that requires the support of
+	 * scattered packets when this feature has not been enabled before.
+	 */
+	if (dev->data->dev_started && !dev->data->scattered_rx &&
+	    frame_size > dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM) {
+		PMD_INIT_LOG(ERR, "Stop port first.");
 		return -EINVAL;
+	}
 
 	hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	rctl = E1000_READ_REG(hw, E1000_RCTL);
 
 	/* switch to jumbo mode if needed */
-	if (frame_size > RTE_ETHER_MAX_LEN) {
+	if (frame_size > E1000_ETH_MAX_LEN) {
 		dev->data->dev_conf.rxmode.offloads |=
 			DEV_RX_OFFLOAD_JUMBO_FRAME;
 		rctl |= E1000_RCTL_LPE;
@@ -1847,9 +1849,3 @@ eth_em_set_mc_addr_list(struct rte_eth_dev *dev,
 RTE_PMD_REGISTER_PCI(net_e1000_em, rte_em_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_e1000_em, pci_id_em_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_e1000_em, "* igb_uio | uio_pci_generic | vfio-pci");
-
-/* see e1000_logs.c */
-RTE_INIT(igb_init_log)
-{
-	e1000_igb_init_log();
-}

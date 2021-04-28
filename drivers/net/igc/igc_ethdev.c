@@ -8,8 +8,8 @@
 #include <rte_string_fns.h>
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
-#include <rte_ethdev_driver.h>
-#include <rte_ethdev_pci.h>
+#include <ethdev_driver.h>
+#include <ethdev_pci.h>
 #include <rte_malloc.h>
 #include <rte_alarm.h>
 
@@ -297,7 +297,7 @@ static const struct eth_dev_ops eth_igc_ops = {
 	.vlan_offload_set	= eth_igc_vlan_offload_set,
 	.vlan_tpid_set		= eth_igc_vlan_tpid_set,
 	.vlan_strip_queue_set	= eth_igc_vlan_strip_queue_set,
-	.filter_ctrl		= eth_igc_filter_ctrl,
+	.flow_ops_get		= eth_igc_flow_ops_get,
 };
 
 /*
@@ -340,6 +340,9 @@ eth_igc_configure(struct rte_eth_dev *dev)
 	int ret;
 
 	PMD_INIT_FUNC_TRACE();
+
+	if (dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG)
+		dev->data->dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_RSS_HASH;
 
 	ret  = igc_check_mq_mode(dev);
 	if (ret != 0)
@@ -1590,12 +1593,14 @@ eth_igc_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 		return -EINVAL;
 
 	/*
-	 * refuse mtu that requires the support of scattered packets when
-	 * this feature has not been enabled before.
+	 * If device is started, refuse mtu that requires the support of
+	 * scattered packets when this feature has not been enabled before.
 	 */
-	if (!dev->data->scattered_rx &&
-	    frame_size > dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM)
+	if (dev->data->dev_started && !dev->data->scattered_rx &&
+	    frame_size > dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM) {
+		PMD_INIT_LOG(ERR, "Stop port first.");
 		return -EINVAL;
+	}
 
 	rctl = IGC_READ_REG(hw, IGC_RCTL);
 
@@ -1899,8 +1904,7 @@ eth_igc_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats)
 
 	/* Rx Errors */
 	rte_stats->imissed = stats->mpc;
-	rte_stats->ierrors = stats->crcerrs +
-			stats->rlec + stats->ruc + stats->roc +
+	rte_stats->ierrors = stats->crcerrs + stats->rlec +
 			stats->rxerrc + stats->algnerrc;
 
 	/* Tx Errors */

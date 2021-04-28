@@ -5,7 +5,7 @@
 #include <errno.h>
 #include <stdint.h>
 #include <rte_log.h>
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_flow_driver.h>
 #include <rte_ether.h>
 #include <rte_hash.h>
@@ -1314,6 +1314,8 @@ enic_fm_copy_action(struct enic_flowman *fm,
 			const struct rte_flow_action_mark *mark =
 				actions->conf;
 
+			if (enic->use_noscatter_vec_rx_handler)
+				goto unsupported;
 			if (mark->id >= ENIC_MAGIC_FILTER_ID - 1)
 				return rte_flow_error_set(error, EINVAL,
 					RTE_FLOW_ERROR_TYPE_ACTION,
@@ -1327,6 +1329,8 @@ enic_fm_copy_action(struct enic_flowman *fm,
 			break;
 		}
 		case RTE_FLOW_ACTION_TYPE_FLAG: {
+			if (enic->use_noscatter_vec_rx_handler)
+				goto unsupported;
 			/* ENIC_MAGIC_FILTER_ID is reserved for flagging */
 			memset(&fm_op, 0, sizeof(fm_op));
 			fm_op.fa_op = FMOP_MARK;
@@ -2886,7 +2890,7 @@ enic_fm_init(struct enic *enic)
 	rc = enic_fm_init_actions(fm);
 	if (rc) {
 		ENICPMD_LOG(ERR, "cannot create action hash, error:%d", rc);
-		goto error_tables;
+		goto error_counters;
 	}
 	/*
 	 * One default exact match table for each direction. We hold onto
@@ -2895,7 +2899,7 @@ enic_fm_init(struct enic *enic)
 	rc = enic_fet_alloc(fm, 1, NULL, 128, &fm->default_ig_fet);
 	if (rc) {
 		ENICPMD_LOG(ERR, "cannot alloc default IG exact match table");
-		goto error_counters;
+		goto error_actions;
 	}
 	fm->default_ig_fet->ref = 1;
 	rc = enic_fet_alloc(fm, 0, NULL, 128, &fm->default_eg_fet);
@@ -2910,6 +2914,8 @@ enic_fm_init(struct enic *enic)
 
 error_ig_fet:
 	enic_fet_free(fm, fm->default_ig_fet);
+error_actions:
+	rte_hash_free(fm->action_hash);
 error_counters:
 	enic_fm_free_all_counters(fm);
 error_tables:

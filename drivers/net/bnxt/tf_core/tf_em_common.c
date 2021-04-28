@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2019-2020 Broadcom
+ * Copyright(c) 2019-2021 Broadcom
  * All rights reserved.
  */
 
@@ -307,7 +307,6 @@ tf_em_page_tbl_pgcnt(uint32_t num_pages,
 {
 	return roundup(num_pages, MAX_PAGE_PTRS(page_size)) /
 		       MAX_PAGE_PTRS(page_size);
-	return 0;
 }
 
 /**

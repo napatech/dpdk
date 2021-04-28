@@ -7,8 +7,8 @@
 
 #include <rte_mbuf.h>
 #include <rte_malloc.h>
-#include <rte_ethdev_driver.h>
-#include <rte_ethdev_vdev.h>
+#include <ethdev_driver.h>
+#include <ethdev_vdev.h>
 #include <rte_tcp.h>
 #include <rte_udp.h>
 #include <rte_ip.h>
@@ -1728,6 +1728,17 @@ slave_configure(struct rte_eth_dev *bonded_eth_dev,
 		slave_eth_dev->data->dev_conf.rxmode.offloads &=
 				~DEV_RX_OFFLOAD_VLAN_FILTER;
 
+	slave_eth_dev->data->dev_conf.rxmode.max_rx_pkt_len =
+			bonded_eth_dev->data->dev_conf.rxmode.max_rx_pkt_len;
+
+	if (bonded_eth_dev->data->dev_conf.rxmode.offloads &
+			DEV_RX_OFFLOAD_JUMBO_FRAME)
+		slave_eth_dev->data->dev_conf.rxmode.offloads |=
+				DEV_RX_OFFLOAD_JUMBO_FRAME;
+	else
+		slave_eth_dev->data->dev_conf.rxmode.offloads &=
+				~DEV_RX_OFFLOAD_JUMBO_FRAME;
+
 	nb_rx_queues = bonded_eth_dev->data->nb_rx_queues;
 	nb_tx_queues = bonded_eth_dev->data->nb_tx_queues;
 
@@ -3097,14 +3108,11 @@ bond_ethdev_mac_address_set(struct rte_eth_dev *dev,
 }
 
 static int
-bond_filter_ctrl(struct rte_eth_dev *dev __rte_unused,
-		 enum rte_filter_type type, enum rte_filter_op op, void *arg)
+bond_flow_ops_get(struct rte_eth_dev *dev __rte_unused,
+		  const struct rte_flow_ops **ops)
 {
-	if (type == RTE_ETH_FILTER_GENERIC && op == RTE_ETH_FILTER_GET) {
-		*(const void **)arg = &bond_flow_ops;
-		return 0;
-	}
-	return -ENOTSUP;
+	*ops = &bond_flow_ops;
+	return 0;
 }
 
 static int
@@ -3196,7 +3204,7 @@ const struct eth_dev_ops default_dev_ops = {
 	.mac_addr_set         = bond_ethdev_mac_address_set,
 	.mac_addr_add         = bond_ethdev_mac_addr_add,
 	.mac_addr_remove      = bond_ethdev_mac_addr_remove,
-	.filter_ctrl          = bond_filter_ctrl
+	.flow_ops_get         = bond_flow_ops_get
 };
 
 static int
@@ -3767,4 +3775,4 @@ RTE_PMD_REGISTER_PARAM_STRING(net_bonding,
 	"up_delay=<int> "
 	"down_delay=<int>");
 
-RTE_LOG_REGISTER(bond_logtype, pmd.net.bond, NOTICE);
+RTE_LOG_REGISTER(bond_logtype, pmd.net.bonding, NOTICE);

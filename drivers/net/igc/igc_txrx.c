@@ -3,8 +3,9 @@
  */
 
 #include <rte_config.h>
+#include <rte_flow.h>
 #include <rte_malloc.h>
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_net.h>
 
 #include "igc_logs.h"
@@ -1290,20 +1291,24 @@ igc_rx_init(struct rte_eth_dev *dev)
 	 * This needs to be done after enable.
 	 */
 	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		uint32_t dvmolr;
+
 		rxq = dev->data->rx_queues[i];
 		IGC_WRITE_REG(hw, IGC_RDH(rxq->reg_idx), 0);
-		IGC_WRITE_REG(hw, IGC_RDT(rxq->reg_idx),
-				rxq->nb_rx_desc - 1);
+		IGC_WRITE_REG(hw, IGC_RDT(rxq->reg_idx), rxq->nb_rx_desc - 1);
 
-		/* strip queue vlan offload */
-		if (rxq->offloads & DEV_RX_OFFLOAD_VLAN_STRIP) {
-			uint32_t dvmolr;
-			dvmolr = IGC_READ_REG(hw, IGC_DVMOLR(rxq->queue_id));
+		dvmolr = IGC_READ_REG(hw, IGC_DVMOLR(rxq->reg_idx));
+		if (rxq->offloads & DEV_RX_OFFLOAD_VLAN_STRIP)
+			dvmolr |= IGC_DVMOLR_STRVLAN;
+		else
+			dvmolr &= ~IGC_DVMOLR_STRVLAN;
 
-			/* If vlan been stripped off, the CRC is meaningless. */
-			dvmolr |= IGC_DVMOLR_STRVLAN | IGC_DVMOLR_STRCRC;
-			IGC_WRITE_REG(hw, IGC_DVMOLR(rxq->reg_idx), dvmolr);
-		}
+		if (offloads & DEV_RX_OFFLOAD_KEEP_CRC)
+			dvmolr &= ~IGC_DVMOLR_STRCRC;
+		else
+			dvmolr |= IGC_DVMOLR_STRCRC;
+
+		IGC_WRITE_REG(hw, IGC_DVMOLR(rxq->reg_idx), dvmolr);
 	}
 
 	return 0;
@@ -1434,7 +1439,7 @@ eth_igc_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 			return i;
 		}
 
-#ifdef RTE_LIBRTE_ETHDEV_DEBUG
+#ifdef RTE_ETHDEV_DEBUG_TX
 		ret = rte_validate_tx_offload(m);
 		if (ret != 0) {
 			rte_errno = -ret;
@@ -2266,12 +2271,10 @@ eth_igc_vlan_strip_queue_set(struct rte_eth_dev *dev,
 
 	reg_val = IGC_READ_REG(hw, IGC_DVMOLR(rx_queue_id));
 	if (on) {
-		/* If vlan been stripped off, the CRC is meaningless. */
-		reg_val |= IGC_DVMOLR_STRVLAN | IGC_DVMOLR_STRCRC;
+		reg_val |= IGC_DVMOLR_STRVLAN;
 		rxq->offloads |= DEV_RX_OFFLOAD_VLAN_STRIP;
 	} else {
-		reg_val &= ~(IGC_DVMOLR_STRVLAN | IGC_DVMOLR_HIDVLAN |
-				IGC_DVMOLR_STRCRC);
+		reg_val &= ~(IGC_DVMOLR_STRVLAN | IGC_DVMOLR_HIDVLAN);
 		rxq->offloads &= ~DEV_RX_OFFLOAD_VLAN_STRIP;
 	}
 

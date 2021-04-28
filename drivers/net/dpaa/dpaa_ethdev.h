@@ -9,7 +9,7 @@
 
 /* System headers */
 #include <stdbool.h>
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_event_eth_rx_adapter.h>
 
 #include <fsl_usd.h>
@@ -50,6 +50,10 @@
 #ifndef VLAN_TAG_SIZE
 #define VLAN_TAG_SIZE   4 /** < Vlan Header Length */
 #endif
+
+#define DPAA_ETH_MAX_LEN (RTE_ETHER_MTU + \
+			  RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN + \
+			  VLAN_TAG_SIZE)
 
 /* PCD frame queues */
 #define DPAA_DEFAULT_NUM_PCD_QUEUES	1

@@ -46,11 +46,18 @@
 	VIRTCHNL_VF_OFFLOAD_RX_POLLING)
 
 #define IAVF_RSS_OFFLOAD_ALL ( \
+	ETH_RSS_IPV4 | \
 	ETH_RSS_FRAG_IPV4 |         \
 	ETH_RSS_NONFRAG_IPV4_TCP |  \
 	ETH_RSS_NONFRAG_IPV4_UDP |  \
 	ETH_RSS_NONFRAG_IPV4_SCTP | \
-	ETH_RSS_NONFRAG_IPV4_OTHER)
+	ETH_RSS_NONFRAG_IPV4_OTHER | \
+	ETH_RSS_IPV6 | \
+	ETH_RSS_FRAG_IPV6 | \
+	ETH_RSS_NONFRAG_IPV6_TCP | \
+	ETH_RSS_NONFRAG_IPV6_UDP | \
+	ETH_RSS_NONFRAG_IPV6_SCTP | \
+	ETH_RSS_NONFRAG_IPV6_OTHER)
 
 #define IAVF_MISC_VEC_ID                RTE_INTR_VEC_ZERO_OFFSET
 #define IAVF_RX_VEC_START               RTE_INTR_VEC_RXTX_OFFSET
@@ -66,6 +73,7 @@
 #define IAVF_VLAN_TAG_SIZE               4
 #define IAVF_ETH_OVERHEAD \
 	(RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN + IAVF_VLAN_TAG_SIZE * 2)
+#define IAVF_ETH_MAX_LEN (RTE_ETHER_MTU + IAVF_ETH_OVERHEAD)
 
 #define IAVF_32_BIT_WIDTH (CHAR_BIT * 4)
 #define IAVF_48_BIT_WIDTH (CHAR_BIT * 6)
@@ -132,6 +140,7 @@ struct iavf_info {
 	struct virtchnl_version_info virtchnl_version;
 	struct virtchnl_vf_resource *vf_res; /* VF resource */
 	struct virtchnl_vsi_resource *vsi_res; /* LAN VSI */
+	struct virtchnl_vlan_caps vlan_v2_caps;
 	uint64_t supported_rxdid;
 	uint8_t *proto_xtr; /* proto xtr type for all queues */
 	volatile enum virtchnl_ops pend_cmd; /* pending command not finished */
@@ -153,6 +162,7 @@ struct iavf_info {
 
 	uint8_t *rss_lut;
 	uint8_t *rss_key;
+	uint64_t rss_hf;
 	uint16_t nb_msix;   /* number of MSI-X interrupts on Rx */
 	uint16_t msix_base; /* msix vector base from */
 	uint16_t max_rss_qregion; /* max RSS queue region supported by PF */
@@ -302,6 +312,11 @@ int iavf_configure_rss_key(struct iavf_adapter *adapter);
 int iavf_configure_queues(struct iavf_adapter *adapter,
 			uint16_t num_queue_pairs, uint16_t index);
 int iavf_get_supported_rxdid(struct iavf_adapter *adapter);
+int iavf_config_vlan_strip_v2(struct iavf_adapter *adapter, bool enable);
+int iavf_config_vlan_insert_v2(struct iavf_adapter *adapter, bool enable);
+int iavf_add_del_vlan_v2(struct iavf_adapter *adapter, uint16_t vlanid,
+			 bool add);
+int iavf_get_vlan_offload_caps_v2(struct iavf_adapter *adapter);
 int iavf_config_irq_map(struct iavf_adapter *adapter);
 int iavf_config_irq_map_lv(struct iavf_adapter *adapter, uint16_t num,
 			uint16_t index);
@@ -313,7 +328,7 @@ int iavf_query_stats(struct iavf_adapter *adapter,
 int iavf_config_promisc(struct iavf_adapter *adapter, bool enable_unicast,
 		       bool enable_multicast);
 int iavf_add_del_eth_addr(struct iavf_adapter *adapter,
-			 struct rte_ether_addr *addr, bool add);
+			 struct rte_ether_addr *addr, bool add, uint8_t type);
 int iavf_add_del_vlan(struct iavf_adapter *adapter, uint16_t vlanid, bool add);
 int iavf_fdir_add(struct iavf_adapter *adapter, struct iavf_fdir_conf *filter);
 int iavf_fdir_del(struct iavf_adapter *adapter, struct iavf_fdir_conf *filter);
@@ -321,6 +336,8 @@ int iavf_fdir_check(struct iavf_adapter *adapter,
 		struct iavf_fdir_conf *filter);
 int iavf_add_del_rss_cfg(struct iavf_adapter *adapter,
 			 struct virtchnl_rss_cfg *rss_cfg, bool add);
+int iavf_set_hena(struct iavf_adapter *adapter, uint64_t hena);
+int iavf_rss_hash_set(struct iavf_adapter *ad, uint64_t rss_hf, bool add);
 int iavf_add_del_mc_addr_list(struct iavf_adapter *adapter,
 			struct rte_ether_addr *mc_addrs,
 			uint32_t mc_addrs_num, bool add);

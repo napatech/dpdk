@@ -9,7 +9,7 @@
 
 #include <rte_debug.h>
 #include <rte_atomic.h>
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_malloc.h>
 #include <rte_flow.h>
 #include <rte_cycles.h>
@@ -1095,6 +1095,8 @@ static void
 fs_dev_merge_info(struct rte_eth_dev_info *info,
 		  const struct rte_eth_dev_info *sinfo)
 {
+	info->min_mtu = RTE_MAX(info->min_mtu, sinfo->min_mtu);
+	info->max_mtu = RTE_MIN(info->max_mtu, sinfo->max_mtu);
 	info->max_rx_pktlen = RTE_MIN(info->max_rx_pktlen, sinfo->max_rx_pktlen);
 	info->max_rx_queues = RTE_MIN(info->max_rx_queues, sinfo->max_rx_queues);
 	info->max_tx_queues = RTE_MIN(info->max_tx_queues, sinfo->max_tx_queues);
@@ -1163,6 +1165,8 @@ fs_dev_infos_get(struct rte_eth_dev *dev,
 	int ret;
 
 	/* Use maximum upper bounds by default */
+	infos->min_mtu = RTE_ETHER_MIN_MTU;
+	infos->max_mtu = UINT16_MAX;
 	infos->max_rx_pktlen = UINT32_MAX;
 	infos->max_rx_queues = RTE_MAX_QUEUES_PER_PORT;
 	infos->max_tx_queues = RTE_MAX_QUEUES_PER_PORT;
@@ -1192,7 +1196,8 @@ fs_dev_infos_get(struct rte_eth_dev *dev,
 		DEV_RX_OFFLOAD_JUMBO_FRAME |
 		DEV_RX_OFFLOAD_SCATTER |
 		DEV_RX_OFFLOAD_TIMESTAMP |
-		DEV_RX_OFFLOAD_SECURITY;
+		DEV_RX_OFFLOAD_SECURITY |
+		DEV_RX_OFFLOAD_RSS_HASH;
 
 	infos->rx_queue_offload_capa =
 		DEV_RX_OFFLOAD_VLAN_STRIP |
@@ -1209,7 +1214,8 @@ fs_dev_infos_get(struct rte_eth_dev *dev,
 		DEV_RX_OFFLOAD_JUMBO_FRAME |
 		DEV_RX_OFFLOAD_SCATTER |
 		DEV_RX_OFFLOAD_TIMESTAMP |
-		DEV_RX_OFFLOAD_SECURITY;
+		DEV_RX_OFFLOAD_SECURITY |
+		DEV_RX_OFFLOAD_RSS_HASH;
 
 	infos->tx_offload_capa =
 		DEV_TX_OFFLOAD_MULTI_SEGS |
@@ -1508,17 +1514,11 @@ fs_rss_hash_update(struct rte_eth_dev *dev,
 }
 
 static int
-fs_filter_ctrl(struct rte_eth_dev *dev __rte_unused,
-		enum rte_filter_type type,
-		enum rte_filter_op op,
-		void *arg)
+fs_flow_ops_get(struct rte_eth_dev *dev __rte_unused,
+		const struct rte_flow_ops **ops)
 {
-	if (type == RTE_ETH_FILTER_GENERIC &&
-	    op == RTE_ETH_FILTER_GET) {
-		*(const void **)arg = &fs_flow_ops;
-		return 0;
-	}
-	return -ENOTSUP;
+	*ops = &fs_flow_ops;
+	return 0;
 }
 
 const struct eth_dev_ops failsafe_ops = {
@@ -1559,5 +1559,5 @@ const struct eth_dev_ops failsafe_ops = {
 	.mac_addr_set = fs_mac_addr_set,
 	.set_mc_addr_list = fs_set_mc_addr_list,
 	.rss_hash_update = fs_rss_hash_update,
-	.filter_ctrl = fs_filter_ctrl,
+	.flow_ops_get = fs_flow_ops_get,
 };

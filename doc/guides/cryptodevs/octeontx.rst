@@ -107,9 +107,7 @@ applications.
 
 .. code-block:: console
 
-        echo 8 > /sys/kernel/mm/hugepages/hugepages-524288kB/nr_hugepages
-        mkdir /mnt/huge
-        mount -t hugetlbfs nodev /mnt/huge
+   dpdk-hugepages.py --setup 4G --pagesize 512M
 
 Example applications can now be executed with crypto operations offloaded to
 OCTEON TX crypto PMD.
@@ -137,3 +135,9 @@ application:
 
         ./dpdk-test
         RTE>>cryptodev_octeontx_asym_autotest
+
+Limitations
+-----------
+
+Multiple lcores may not operate on the same crypto queue pair. The lcore that
+enqueues to a queue pair is the one that must dequeue from it.

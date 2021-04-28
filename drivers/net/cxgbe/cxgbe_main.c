@@ -27,8 +27,8 @@
 #include <rte_eal.h>
 #include <rte_alarm.h>
 #include <rte_ether.h>
-#include <rte_ethdev_driver.h>
-#include <rte_ethdev_pci.h>
+#include <ethdev_driver.h>
+#include <ethdev_pci.h>
 #include <rte_random.h>
 #include <rte_dev.h>
 #include <rte_kvargs.h>
@@ -732,7 +732,7 @@ void cxgbe_print_port_info(struct adapter *adap)
 			--bufp;
 		sprintf(bufp, "BASE-%s",
 			t4_get_port_type_description(
-					(enum fw_port_type)pi->port_type));
+				(enum fw_port_type)pi->link_cfg.port_type));
 
 		dev_info(adap,
 			 " " PCI_PRI_FMT " Chelsio rev %d %s %s\n",
@@ -1496,6 +1496,10 @@ static int adap_init0(struct adapter *adap)
 	else
 		adap->params.max_tx_coalesce_num = ETH_COALESCE_PKT_NUM;
 
+	params[0] = CXGBE_FW_PARAM_DEV(VI_ENABLE_INGRESS_AFTER_LINKUP);
+	ret = t4_query_params(adap, adap->mbox, adap->pf, 0, 1, params, val);
+	adap->params.vi_enable_rx = (ret == 0 && val[0] != 0);
+
 	/*
 	 * The MTU/MSS Table is initialized by now, so load their values.  If
 	 * we're initializing the adapter, then we'll make any modifications
@@ -1575,23 +1579,50 @@ void t4_os_portmod_changed(const struct adapter *adap, int port_id)
 
 	const struct port_info *pi = adap2pinfo(adap, port_id);
 
-	if (pi->mod_type == FW_PORT_MOD_TYPE_NONE)
+	if (pi->link_cfg.mod_type == FW_PORT_MOD_TYPE_NONE)
 		dev_info(adap, "Port%d: port module unplugged\n", pi->port_id);
-	else if (pi->mod_type < ARRAY_SIZE(mod_str))
+	else if (pi->link_cfg.mod_type < ARRAY_SIZE(mod_str))
 		dev_info(adap, "Port%d: %s port module inserted\n", pi->port_id,
-			 mod_str[pi->mod_type]);
-	else if (pi->mod_type == FW_PORT_MOD_TYPE_NOTSUPPORTED)
+			 mod_str[pi->link_cfg.mod_type]);
+	else if (pi->link_cfg.mod_type == FW_PORT_MOD_TYPE_NOTSUPPORTED)
 		dev_info(adap, "Port%d: unsupported port module inserted\n",
 			 pi->port_id);
-	else if (pi->mod_type == FW_PORT_MOD_TYPE_UNKNOWN)
+	else if (pi->link_cfg.mod_type == FW_PORT_MOD_TYPE_UNKNOWN)
 		dev_info(adap, "Port%d: unknown port module inserted\n",
 			 pi->port_id);
-	else if (pi->mod_type == FW_PORT_MOD_TYPE_ERROR)
+	else if (pi->link_cfg.mod_type == FW_PORT_MOD_TYPE_ERROR)
 		dev_info(adap, "Port%d: transceiver module error\n",
 			 pi->port_id);
 	else
 		dev_info(adap, "Port%d: unknown module type %d inserted\n",
-			 pi->port_id, pi->mod_type);
+			 pi->port_id, pi->link_cfg.mod_type);
+}
+
+void t4_os_link_changed(struct adapter *adap, int port_id)
+{
+	struct port_info *pi = adap2pinfo(adap, port_id);
+
+	/* If link status has not changed or if firmware doesn't
+	 * support enabling/disabling VI's Rx path during runtime,
+	 * then return.
+	 */
+	if (adap->params.vi_enable_rx == 0 ||
+	    pi->vi_en_rx == pi->link_cfg.link_ok)
+		return;
+
+	/* Don't enable VI Rx path, if link has been administratively
+	 * turned off.
+	 */
+	if (pi->vi_en_tx == 0 && pi->vi_en_rx == 0)
+		return;
+
+	/* When link goes down, disable the port's Rx path to drop
+	 * Rx traffic closer to the wire, instead of processing it
+	 * further in the Rx pipeline. The Rx path will be re-enabled
+	 * once the link up message comes in firmware event queue.
+	 */
+	pi->vi_en_rx = pi->link_cfg.link_ok;
+	t4_enable_vi(adap, adap->mbox, pi->viid, pi->vi_en_rx, pi->vi_en_tx);
 }
 
 bool cxgbe_force_linkup(struct adapter *adap)
@@ -1636,18 +1667,16 @@ int cxgbe_link_start(struct port_info *pi)
 		}
 	}
 	if (ret == 0 && is_pf4(adapter))
-		ret = t4_link_l1cfg(adapter, adapter->mbox, pi->tx_chan,
-				    &pi->link_cfg);
+		ret = t4_link_l1cfg(pi, pi->link_cfg.admin_caps);
 	if (ret == 0) {
-		/*
-		 * Enabling a Virtual Interface can result in an interrupt
-		 * during the processing of the VI Enable command and, in some
-		 * paths, result in an attempt to issue another command in the
-		 * interrupt context.  Thus, we disable interrupts during the
-		 * course of the VI Enable command ...
+		/* Disable VI Rx until link up message is received in
+		 * firmware event queue, if firmware supports enabling/
+		 * disabling VI Rx at runtime.
 		 */
+		pi->vi_en_rx = adapter->params.vi_enable_rx ? 0 : 1;
+		pi->vi_en_tx = 1;
 		ret = t4_enable_vi_params(adapter, adapter->mbox, pi->viid,
-					  true, true, false);
+					  pi->vi_en_rx, pi->vi_en_tx, false);
 	}
 
 	if (ret == 0 && cxgbe_force_linkup(adapter))
@@ -1905,7 +1934,7 @@ void cxgbe_get_speed_caps(struct port_info *pi, u32 *speed_caps)
 {
 	*speed_caps = 0;
 
-	fw_caps_to_speed_caps(pi->port_type, pi->link_cfg.pcaps,
+	fw_caps_to_speed_caps(pi->link_cfg.port_type, pi->link_cfg.pcaps,
 			      speed_caps);
 
 	if (!(pi->link_cfg.pcaps & FW_PORT_CAP32_ANEG))
@@ -1924,7 +1953,13 @@ int cxgbe_set_link_status(struct port_info *pi, bool status)
 	struct adapter *adapter = pi->adapter;
 	int err = 0;
 
-	err = t4_enable_vi(adapter, adapter->mbox, pi->viid, status, status);
+	/* Wait for link up message from firmware to enable Rx path,
+	 * if firmware supports enabling/disabling VI Rx at runtime.
+	 */
+	pi->vi_en_rx = adapter->params.vi_enable_rx ? 0 : status;
+	pi->vi_en_tx = status;
+	err = t4_enable_vi(adapter, adapter->mbox, pi->viid, pi->vi_en_rx,
+			   pi->vi_en_tx);
 	if (err) {
 		dev_err(adapter, "%s: disable_vi failed: %d\n", __func__, err);
 		return err;

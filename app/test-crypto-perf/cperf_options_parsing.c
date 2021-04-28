@@ -24,7 +24,7 @@ usage(char *progname)
 {
 	printf("%s [EAL options] --\n"
 		" --silent: disable options dump\n"
-		" --ptest throughput / latency / verify / pmd-cycleount :"
+		" --ptest throughput / latency / verify / pmd-cyclecount :"
 		" set test type\n"
 		" --pool_sz N: set the number of crypto ops/mbufs allocated\n"
 		" --total-ops N: set the number of total operations performed\n"
@@ -983,7 +983,7 @@ cperf_options_parse(struct cperf_options *options, int argc, char **argv)
 		switch (opt) {
 		case 'h':
 			usage(argv[0]);
-			rte_exit(EXIT_SUCCESS, "Displayed help\n");
+			exit(EXIT_SUCCESS);
 			break;
 		/* long options */
 		case 0:

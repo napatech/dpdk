@@ -14,6 +14,13 @@
 #define ICE_DCF_VSI_UPDATE_SERVICE_INTERVAL	100000 /* us */
 static rte_spinlock_t vsi_update_lock = RTE_SPINLOCK_INITIALIZER;
 
+struct ice_dcf_reset_event_param {
+	struct ice_dcf_hw *dcf_hw;
+
+	bool vfr; /* VF reset event */
+	uint16_t vf_id; /* The reset VF ID */
+};
+
 static __rte_always_inline void
 ice_dcf_update_vsi_ctx(struct ice_hw *hw, uint16_t vsi_handle,
 		       uint16_t vsi_map)
@@ -110,23 +117,63 @@ ice_dcf_update_pf_vsi_map(struct ice_hw *hw, uint16_t pf_vsi_idx,
 static void*
 ice_dcf_vsi_update_service_handler(void *param)
 {
-	struct ice_dcf_hw *hw = param;
+	struct ice_dcf_reset_event_param *reset_param = param;
+	struct ice_dcf_hw *hw = reset_param->dcf_hw;
+	struct ice_dcf_adapter *adapter;
 
-	usleep(ICE_DCF_VSI_UPDATE_SERVICE_INTERVAL);
+	rte_delay_us(ICE_DCF_VSI_UPDATE_SERVICE_INTERVAL);
 
 	rte_spinlock_lock(&vsi_update_lock);
 
-	if (!ice_dcf_handle_vsi_update_event(hw)) {
-		struct ice_dcf_adapter *dcf_ad =
-			container_of(hw, struct ice_dcf_adapter, real_hw);
+	adapter = container_of(hw, struct ice_dcf_adapter, real_hw);
 
-		ice_dcf_update_vf_vsi_map(&dcf_ad->parent.hw,
+	if (!ice_dcf_handle_vsi_update_event(hw))
+		ice_dcf_update_vf_vsi_map(&adapter->parent.hw,
 					  hw->num_vfs, hw->vf_vsi_map);
+
+	if (reset_param->vfr && adapter->repr_infos) {
+		struct rte_eth_dev *vf_rep_eth_dev =
+			adapter->repr_infos[reset_param->vf_id].vf_rep_eth_dev;
+		if (vf_rep_eth_dev && vf_rep_eth_dev->data->dev_started) {
+			PMD_DRV_LOG(DEBUG, "VF%u representor is resetting",
+				    reset_param->vf_id);
+			ice_dcf_vf_repr_init_vlan(vf_rep_eth_dev);
+		}
 	}
 
 	rte_spinlock_unlock(&vsi_update_lock);
 
+	free(param);
+
 	return NULL;
+}
+
+static void
+start_vsi_reset_thread(struct ice_dcf_hw *dcf_hw, bool vfr, uint16_t vf_id)
+{
+#define THREAD_NAME_LEN	16
+	struct ice_dcf_reset_event_param *param;
+	char name[THREAD_NAME_LEN];
+	pthread_t thread;
+	int ret;
+
+	param = malloc(sizeof(*param));
+	if (!param) {
+		PMD_DRV_LOG(ERR, "Failed to allocate the memory for reset handling");
+		return;
+	}
+
+	param->dcf_hw = dcf_hw;
+	param->vfr = vfr;
+	param->vf_id = vf_id;
+
+	snprintf(name, sizeof(name), "ice-reset-%u", vf_id);
+	ret = rte_ctrl_thread_create(&thread, name, NULL,
+				     ice_dcf_vsi_update_service_handler, param);
+	if (ret != 0) {
+		PMD_DRV_LOG(ERR, "Failed to start the thread for reset handling");
+		free(param);
+	}
 }
 
 void
@@ -134,7 +181,6 @@ ice_dcf_handle_pf_event_msg(struct ice_dcf_hw *dcf_hw,
 			    uint8_t *msg, uint16_t msglen)
 {
 	struct virtchnl_pf_event *pf_msg = (struct virtchnl_pf_event *)msg;
-	pthread_t thread;
 
 	if (msglen < sizeof(struct virtchnl_pf_event)) {
 		PMD_DRV_LOG(DEBUG, "Invalid event message length : %u", msglen);
@@ -144,8 +190,7 @@ ice_dcf_handle_pf_event_msg(struct ice_dcf_hw *dcf_hw,
 	switch (pf_msg->event) {
 	case VIRTCHNL_EVENT_RESET_IMPENDING:
 		PMD_DRV_LOG(DEBUG, "VIRTCHNL_EVENT_RESET_IMPENDING event");
-		pthread_create(&thread, NULL,
-			       ice_dcf_vsi_update_service_handler, dcf_hw);
+		start_vsi_reset_thread(dcf_hw, false, 0);
 		break;
 	case VIRTCHNL_EVENT_LINK_CHANGE:
 		PMD_DRV_LOG(DEBUG, "VIRTCHNL_EVENT_LINK_CHANGE event");
@@ -157,8 +202,8 @@ ice_dcf_handle_pf_event_msg(struct ice_dcf_hw *dcf_hw,
 		PMD_DRV_LOG(DEBUG, "VIRTCHNL_EVENT_DCF_VSI_MAP_UPDATE event : VF%u with VSI num %u",
 			    pf_msg->event_data.vf_vsi_map.vf_id,
 			    pf_msg->event_data.vf_vsi_map.vsi_id);
-		pthread_create(&thread, NULL,
-			       ice_dcf_vsi_update_service_handler, dcf_hw);
+		start_vsi_reset_thread(dcf_hw, true,
+				       pf_msg->event_data.vf_vsi_map.vf_id);
 		break;
 	default:
 		PMD_DRV_LOG(ERR, "Unknown event received %u", pf_msg->event);
@@ -202,7 +247,7 @@ ice_dcf_init_parent_hw(struct ice_hw *hw)
 
 	/* Initialize port_info struct with PHY capabilities */
 	status = ice_aq_get_phy_caps(hw->port_info, false,
-				     ICE_AQC_REPORT_TOPO_CAP, pcaps, NULL);
+				     ICE_AQC_REPORT_TOPO_CAP_MEDIA, pcaps, NULL);
 	ice_free(hw, pcaps);
 	if (status)
 		goto err_unroll_alloc;
@@ -273,24 +318,24 @@ ice_dcf_request_pkg_name(struct ice_hw *hw, char *pkg_name)
 	snprintf(pkg_name, ICE_MAX_PKG_FILENAME_SIZE,
 		 ICE_PKG_FILE_SEARCH_PATH_UPDATES "ice-%016llx.pkg",
 		 (unsigned long long)dsn);
-	if (!access(pkg_name, 0))
+	if (!ice_access(pkg_name, 0))
 		return 0;
 
 	snprintf(pkg_name, ICE_MAX_PKG_FILENAME_SIZE,
 		 ICE_PKG_FILE_SEARCH_PATH_DEFAULT "ice-%016llx.pkg",
 		 (unsigned long long)dsn);
-	if (!access(pkg_name, 0))
+	if (!ice_access(pkg_name, 0))
 		return 0;
 
 pkg_file_direct:
 	snprintf(pkg_name,
 		 ICE_MAX_PKG_FILENAME_SIZE, "%s", ICE_PKG_FILE_UPDATES);
-	if (!access(pkg_name, 0))
+	if (!ice_access(pkg_name, 0))
 		return 0;
 
 	snprintf(pkg_name,
 		 ICE_MAX_PKG_FILENAME_SIZE, "%s", ICE_PKG_FILE_DEFAULT);
-	if (!access(pkg_name, 0))
+	if (!ice_access(pkg_name, 0))
 		return 0;
 
 	return -1;

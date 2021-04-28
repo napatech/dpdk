@@ -6,6 +6,7 @@
 #define _IGC_ETHDEV_H_
 
 #include <rte_ethdev.h>
+#include <rte_flow.h>
 
 #include "base/igc_osdep.h"
 #include "base/igc_hw.h"
@@ -67,7 +68,8 @@ extern "C" {
 	DEV_RX_OFFLOAD_SCTP_CKSUM  | \
 	DEV_RX_OFFLOAD_JUMBO_FRAME | \
 	DEV_RX_OFFLOAD_KEEP_CRC    | \
-	DEV_RX_OFFLOAD_SCATTER)
+	DEV_RX_OFFLOAD_SCATTER     | \
+	DEV_RX_OFFLOAD_RSS_HASH)
 
 #define IGC_TX_OFFLOAD_ALL	(    \
 	DEV_TX_OFFLOAD_VLAN_INSERT | \

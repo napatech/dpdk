@@ -41,7 +41,6 @@ The public API headers are grouped by topics:
   [vhost]              (@ref rte_vhost.h),
   [vdpa]               (@ref rte_vdpa.h),
   [KNI]                (@ref rte_kni.h),
-  [ark]                (@ref rte_pmd_ark.h),
   [ixgbe]              (@ref rte_pmd_ixgbe.h),
   [i40e]               (@ref rte_pmd_i40e.h),
   [ice]                (@ref rte_pmd_ice.h),
@@ -55,8 +54,8 @@ The public API headers are grouped by topics:
   [dpaa2_cmdif]        (@ref rte_pmd_dpaa2_cmdif.h),
   [dpaa2_qdma]         (@ref rte_pmd_dpaa2_qdma.h),
   [crypto_scheduler]   (@ref rte_cryptodev_scheduler.h),
-  [dlb]                (@ref rte_pmd_dlb.h),
-  [dlb2]               (@ref rte_pmd_dlb2.h)
+  [dlb2]               (@ref rte_pmd_dlb2.h),
+  [ifpga]              (@ref rte_pmd_ifpga.h)
 
 - **memory**:
   [memseg]             (@ref rte_memory.h),
@@ -73,6 +72,7 @@ The public API headers are grouped by topics:
 - **locks**:
   [atomic]             (@ref rte_atomic.h),
   [mcslock]            (@ref rte_mcslock.h),
+  [pflock]             (@ref rte_pflock.h),
   [rwlock]             (@ref rte_rwlock.h),
   [spinlock]           (@ref rte_spinlock.h),
   [ticketlock]         (@ref rte_ticketlock.h),
@@ -85,7 +85,8 @@ The public API headers are grouped by topics:
   [byte order]         (@ref rte_byteorder.h),
   [CPU flags]          (@ref rte_cpuflags.h),
   [CPU pause]          (@ref rte_pause.h),
-  [I/O access]         (@ref rte_io.h)
+  [I/O access]         (@ref rte_io.h),
+  [power management]   (@ref rte_power_intrinsics.h)
 
 - **CPU multicore**:
   [interrupts]         (@ref rte_interrupts.h),
@@ -94,7 +95,8 @@ The public API headers are grouped by topics:
   [per-lcore]          (@ref rte_per_lcore.h),
   [service cores]      (@ref rte_service.h),
   [keepalive]          (@ref rte_keepalive.h),
-  [power/freq]         (@ref rte_power.h)
+  [power/freq]         (@ref rte_power.h),
+  [PMD power]          (@ref rte_power_pmd_mgmt.h)
 
 - **layers**:
   [ethernet]           (@ref rte_ether.h),
@@ -183,10 +185,13 @@ The public API headers are grouped by topics:
   * SWX port:
     [port]             (@ref rte_swx_port.h),
     [ethdev]           (@ref rte_swx_port_ethdev.h),
+    [fd]               (@ref rte_swx_port_fd.h),
+    [ring]             (@ref rte_swx_port_ring.h),
     [src/sink]         (@ref rte_swx_port_source_sink.h)
   * SWX table:
     [table]            (@ref rte_swx_table.h),
     [table_em]         (@ref rte_swx_table_em.h)
+    [table_wm]         (@ref rte_swx_table_wm.h)
   * [graph]            (@ref rte_graph.h):
     [graph_worker]     (@ref rte_graph_worker.h)
   * graph_nodes:

@@ -22,6 +22,7 @@
 
 #include <mlx5_glue.h>
 #include <mlx5_devx_cmds.h>
+#include <mlx5_common_devx.h>
 #include <mlx5_prm.h>
 
 
@@ -36,7 +37,7 @@
 #define VIRTIO_F_RING_PACKED 34
 #endif
 
-#define MLX5_VDPA_DEFAULT_TIMER_DELAY_US 100u
+#define MLX5_VDPA_DEFAULT_TIMER_DELAY_US 0u
 #define MLX5_VDPA_DEFAULT_TIMER_STEP_US 1u
 
 struct mlx5_vdpa_cq {
@@ -46,13 +47,7 @@ struct mlx5_vdpa_cq {
 	uint32_t armed:1;
 	int callfd;
 	rte_spinlock_t sl;
-	struct mlx5_devx_obj *cq;
-	struct mlx5dv_devx_umem *umem_obj;
-	union {
-		volatile void *umem_buf;
-		volatile struct mlx5_cqe *cqes;
-	};
-	volatile uint32_t *db_rec;
+	struct mlx5_devx_cq cq_obj;
 	uint64_t errors;
 };
 
@@ -131,9 +126,13 @@ struct mlx5_vdpa_priv {
 	pthread_cond_t timer_cond;
 	volatile uint8_t timer_on;
 	int event_mode;
+	int event_core; /* Event thread cpu affinity core. */
 	uint32_t event_us;
 	uint32_t timer_delay_us;
 	uint32_t no_traffic_time_s;
+	uint8_t hw_latency_mode; /* Hardware CQ moderation mode. */
+	uint16_t hw_max_latency_us; /* Hardware CQ moderation period in usec. */
+	uint16_t hw_max_pending_comp; /* Hardware CQ moderation counter. */
 	struct rte_vdpa_device *vdev; /* vDPA device. */
 	int vid; /* vhost device id. */
 	struct ibv_context *ctx; /* Device context. */
@@ -144,7 +143,6 @@ struct mlx5_vdpa_priv {
 	uint32_t gpa_mkey_index;
 	struct ibv_mr *null_mr;
 	struct rte_vhost_memory *vmem;
-	uint32_t eqn;
 	struct mlx5dv_devx_event_channel *eventc;
 	struct mlx5dv_devx_event_channel *err_chnl;
 	struct mlx5dv_devx_uar *uar;
@@ -154,6 +152,7 @@ struct mlx5_vdpa_priv {
 	struct mlx5_devx_obj *tiss[16]; /* TIS list for each LAG port. */
 	uint16_t nr_virtqs;
 	uint8_t num_lag_ports;
+	uint8_t qp_ts_format;
 	uint64_t features; /* Negotiated features. */
 	uint16_t log_max_rqt_size;
 	struct mlx5_vdpa_steer steer;

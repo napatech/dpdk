@@ -11,6 +11,7 @@
 #include <linux/virtio_net.h>
 #include <stdbool.h>
 
+#include <rte_eal_paging.h>
 #include <rte_malloc.h>
 #include <rte_memory.h>
 #include <rte_bus_pci.h>
@@ -25,20 +26,18 @@
 
 #include "base/ifcvf.h"
 
-RTE_LOG_REGISTER(ifcvf_vdpa_logtype, pmd.net.ifcvf_vdpa, NOTICE);
+RTE_LOG_REGISTER(ifcvf_vdpa_logtype, pmd.vdpa.ifcvf, NOTICE);
 #define DRV_LOG(level, fmt, args...) \
 	rte_log(RTE_LOG_ ## level, ifcvf_vdpa_logtype, \
 		"IFCVF %s(): " fmt "\n", __func__, ##args)
-
-#ifndef PAGE_SIZE
-#define PAGE_SIZE 4096
-#endif
 
 #define IFCVF_USED_RING_LEN(size) \
 	((size) * sizeof(struct vring_used_elem) + sizeof(uint16_t) * 3)
 
 #define IFCVF_VDPA_MODE		"vdpa"
 #define IFCVF_SW_FALLBACK_LM	"sw-live-migration"
+
+#define THREAD_NAME_LEN	16
 
 static const char * const ifcvf_valid_arguments[] = {
 	IFCVF_VDPA_MODE,
@@ -497,14 +496,17 @@ notify_relay(void *arg)
 static int
 setup_notify_relay(struct ifcvf_internal *internal)
 {
+	char name[THREAD_NAME_LEN];
 	int ret;
 
-	ret = pthread_create(&internal->tid, NULL, notify_relay,
-			(void *)internal);
-	if (ret) {
+	snprintf(name, sizeof(name), "ifc-notify-%d", internal->vid);
+	ret = rte_ctrl_thread_create(&internal->tid, name, NULL, notify_relay,
+				     (void *)internal);
+	if (ret != 0) {
 		DRV_LOG(ERR, "failed to create notify relay pthread.");
 		return -1;
 	}
+
 	return 0;
 }
 
@@ -600,11 +602,11 @@ m_ifcvf_start(struct ifcvf_internal *internal)
 	for (i = 0; i < nr_vring; i++) {
 		rte_vhost_get_vhost_vring(vid, i, &vq);
 
-		size = RTE_ALIGN_CEIL(vring_size(vq.size, PAGE_SIZE),
-				PAGE_SIZE);
-		vring_buf = rte_zmalloc("ifcvf", size, PAGE_SIZE);
+		size = RTE_ALIGN_CEIL(vring_size(vq.size, rte_mem_page_size()),
+				rte_mem_page_size());
+		vring_buf = rte_zmalloc("ifcvf", size, rte_mem_page_size());
 		vring_init(&internal->m_vring[i], vq.size, vring_buf,
-				PAGE_SIZE);
+				rte_mem_page_size());
 
 		ret = rte_vfio_container_dma_map(internal->vfio_container_fd,
 			(uint64_t)(uintptr_t)vring_buf, m_vring_iova, size);
@@ -686,8 +688,8 @@ m_ifcvf_stop(struct ifcvf_internal *internal)
 		len = IFCVF_USED_RING_LEN(vq.size);
 		rte_vhost_log_used_vring(vid, i, 0, len);
 
-		size = RTE_ALIGN_CEIL(vring_size(vq.size, PAGE_SIZE),
-				PAGE_SIZE);
+		size = RTE_ALIGN_CEIL(vring_size(vq.size, rte_mem_page_size()),
+				rte_mem_page_size());
 		rte_vfio_container_dma_unmap(internal->vfio_container_fd,
 			(uint64_t)(uintptr_t)internal->m_vring[i].desc,
 			m_vring_iova, size);
@@ -800,14 +802,17 @@ vring_relay(void *arg)
 static int
 setup_vring_relay(struct ifcvf_internal *internal)
 {
+	char name[THREAD_NAME_LEN];
 	int ret;
 
-	ret = pthread_create(&internal->tid, NULL, vring_relay,
-			(void *)internal);
-	if (ret) {
+	snprintf(name, sizeof(name), "ifc-vring-%d", internal->vid);
+	ret = rte_ctrl_thread_create(&internal->tid, name, NULL, vring_relay,
+				     (void *)internal);
+	if (ret != 0) {
 		DRV_LOG(ERR, "failed to create ring relay pthread.");
 		return -1;
 	}
+
 	return 0;
 }
 

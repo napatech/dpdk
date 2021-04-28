@@ -9,7 +9,6 @@
 #include <inttypes.h>
 #include <sys/types.h>
 #include <sys/queue.h>
-#include <netinet/in.h>
 #include <setjmp.h>
 #include <stdarg.h>
 #include <ctype.h>
@@ -730,6 +729,9 @@ main(int argc, char **argv)
 		if (rte_eal_wait_lcore(lcore_id) < 0)
 			return -1;
 	}
+
+	/* clean up the EAL */
+	rte_eal_cleanup();
 
 	return 0;
 }

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2014-2018 Broadcom
+ * Copyright(c) 2014-2021 Broadcom
  * All rights reserved.
  */
 
@@ -24,7 +24,7 @@ void bnxt_free_txq_stats(struct bnxt_tx_queue *txq)
 
 static void bnxt_tx_queue_release_mbufs(struct bnxt_tx_queue *txq)
 {
-	struct bnxt_sw_tx_bd *sw_ring;
+	struct rte_mbuf **sw_ring;
 	uint16_t i;
 
 	if (!txq || !txq->tx_ring)
@@ -33,9 +33,9 @@ static void bnxt_tx_queue_release_mbufs(struct bnxt_tx_queue *txq)
 	sw_ring = txq->tx_ring->tx_buf_ring;
 	if (sw_ring) {
 		for (i = 0; i < txq->tx_ring->tx_ring_struct->ring_size; i++) {
-			if (sw_ring[i].mbuf) {
-				rte_pktmbuf_free_seg(sw_ring[i].mbuf);
-				sw_ring[i].mbuf = NULL;
+			if (sw_ring[i]) {
+				rte_pktmbuf_free_seg(sw_ring[i]);
+				sw_ring[i] = NULL;
 			}
 		}
 	}
@@ -98,7 +98,7 @@ int bnxt_tx_queue_setup_op(struct rte_eth_dev *eth_dev,
 	if (rc)
 		return rc;
 
-	if (queue_idx >= BNXT_MAX_RINGS(bp)) {
+	if (queue_idx >= bnxt_max_rings(bp)) {
 		PMD_DRV_LOG(ERR,
 			"Cannot create Tx ring %d. Only %d rings available\n",
 			queue_idx, bp->max_tx_rings);

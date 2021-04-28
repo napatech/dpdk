@@ -137,6 +137,8 @@ struct fwd_stream {
 	uint64_t rx_bad_l4_csum ; /**< received packets has bad l4 checksum */
 	uint64_t rx_bad_outer_l4_csum;
 	/**< received packets has bad outer l4 checksum */
+	uint64_t rx_bad_outer_ip_csum;
+	/**< received packets having bad outer ip checksum */
 	unsigned int gro_times;	/**< GRO operation times */
 	uint64_t     core_cycles; /**< used for RX and TX processing */
 	struct pkt_burst_stats rx_burst_stats;
@@ -149,7 +151,7 @@ struct fwd_stream {
  */
 enum age_action_context_type {
 	ACTION_AGE_CONTEXT_TYPE_FLOW,
-	ACTION_AGE_CONTEXT_TYPE_SHARED_ACTION,
+	ACTION_AGE_CONTEXT_TYPE_INDIRECT_ACTION,
 };
 
 /** Descriptor for a single flow. */
@@ -163,12 +165,12 @@ struct port_flow {
 	uint8_t data[]; /**< Storage for flow rule description */
 };
 
-/* Descriptor for shared action */
-struct port_shared_action {
-	struct port_shared_action *next; /**< Next flow in list. */
-	uint32_t id; /**< Shared action ID. */
+/* Descriptor for indirect action */
+struct port_indirect_action {
+	struct port_indirect_action *next; /**< Next flow in list. */
+	uint32_t id; /**< Indirect action ID. */
 	enum rte_flow_action_type type; /**< Action type. */
-	struct rte_flow_shared_action *action;	/**< Shared action handle. */
+	struct rte_flow_action_handle *handle;	/**< Indirect action handle. */
 	enum age_action_context_type age_type; /**< Age action context type. */
 };
 
@@ -206,8 +208,6 @@ struct rte_port {
 	uint16_t                tunnel_tso_segsz; /**< Segmentation offload MSS for tunneled pkts. */
 	uint16_t                tx_vlan_id;/**< The tag ID */
 	uint16_t                tx_vlan_id_outer;/**< The outer tag ID */
-	uint8_t                 tx_queue_stats_mapping_enabled;
-	uint8_t                 rx_queue_stats_mapping_enabled;
 	volatile uint16_t        port_status;    /**< port started or not */
 	uint8_t                 need_setup;     /**< port just attached */
 	uint8_t                 need_reconfig;  /**< need reconfiguring port or not */
@@ -222,8 +222,8 @@ struct rte_port {
 	uint32_t                mc_addr_nb; /**< nb. of addr. in mc_addr_pool */
 	uint8_t                 slave_flag; /**< bonding slave port */
 	struct port_flow        *flow_list; /**< Associated flows. */
-	struct port_shared_action *actions_list;
-	/**< Associated shared actions. */
+	struct port_indirect_action *actions_list;
+	/**< Associated indirect actions. */
 	LIST_HEAD(, port_flow_tunnel) flow_tunnel_list;
 	const struct rte_eth_rxtx_callback *rx_dump_cb[RTE_MAX_QUEUES_PER_PORT+1];
 	const struct rte_eth_rxtx_callback *tx_dump_cb[RTE_MAX_QUEUES_PER_PORT+1];
@@ -249,7 +249,6 @@ struct fwd_lcore {
 	streamid_t stream_idx;   /**< index of 1st stream in "fwd_streams" */
 	streamid_t stream_nb;    /**< number of streams in "fwd_streams" */
 	lcoreid_t  cpuid_idx;    /**< index of logical core in CPU id table */
-	queueid_t  tx_queue;     /**< TX queue to send forwarded packets */
 	volatile char stopped;   /**< stop forwarding when set */
 };
 
@@ -326,25 +325,6 @@ enum dcb_mode_enable
 	DCB_ENABLED
 };
 
-#define MAX_TX_QUEUE_STATS_MAPPINGS 1024 /* MAX_PORT of 32 @ 32 tx_queues/port */
-#define MAX_RX_QUEUE_STATS_MAPPINGS 4096 /* MAX_PORT of 32 @ 128 rx_queues/port */
-
-struct queue_stats_mappings {
-	portid_t port_id;
-	uint16_t queue_id;
-	uint8_t stats_counter_id;
-} __rte_cache_aligned;
-
-extern struct queue_stats_mappings tx_queue_stats_mappings_array[];
-extern struct queue_stats_mappings rx_queue_stats_mappings_array[];
-
-/* Assign both tx and rx queue stats mappings to the same default values */
-extern struct queue_stats_mappings *tx_queue_stats_mappings;
-extern struct queue_stats_mappings *rx_queue_stats_mappings;
-
-extern uint16_t nb_tx_queue_stats_mappings;
-extern uint16_t nb_rx_queue_stats_mappings;
-
 extern uint8_t xstats_hide_zero; /**< Hide zero values for xstats display */
 
 /* globals used for configuration */
@@ -362,6 +342,7 @@ extern uint8_t no_flush_rx; /**<set by "--no-flush-rx" parameter */
 extern uint8_t flow_isolate_all; /**< set by "--flow-isolate-all */
 extern uint8_t  mp_alloc_type;
 /**< set by "--mp-anon" or "--mp-alloc" parameter */
+extern uint32_t eth_link_speed;
 extern uint8_t no_link_check; /**<set by "--disable-link-check" parameter */
 extern uint8_t no_device_start; /**<set by "--disable-device-start" parameter */
 extern volatile int test_done; /* stop packet forwarding when set to 1. */
@@ -497,6 +478,7 @@ extern enum tx_pkt_split tx_pkt_split;
 extern uint8_t txonly_multi_flow;
 
 extern uint16_t nb_pkt_per_burst;
+extern uint16_t nb_pkt_flowgen_clones;
 extern uint16_t mb_mempool_cache;
 extern int8_t rx_pthresh;
 extern int8_t rx_hthresh;
@@ -648,6 +630,8 @@ extern struct mplsoudp_decap_conf mplsoudp_decap_conf;
 
 extern enum rte_eth_rx_mq_mode rx_mq_mode;
 
+extern struct rte_flow_action_conntrack conntrack_context;
+
 static inline unsigned int
 lcore_num(void)
 {
@@ -790,14 +774,12 @@ void nic_stats_display(portid_t port_id);
 void nic_stats_clear(portid_t port_id);
 void nic_xstats_display(portid_t port_id);
 void nic_xstats_clear(portid_t port_id);
-void nic_stats_mapping_display(portid_t port_id);
 void device_infos_display(const char *identifier);
 void port_infos_display(portid_t port_id);
 void port_summary_display(portid_t port_id);
 void port_eeprom_display(portid_t port_id);
 void port_module_eeprom_display(portid_t port_id);
 void port_summary_header_display(void);
-void port_offload_cap_display(portid_t port_id);
 void rx_queue_infos_display(portid_t port_idi, uint16_t queue_id);
 void tx_queue_infos_display(portid_t port_idi, uint16_t queue_id);
 void fwd_lcores_config_display(void);
@@ -821,14 +803,14 @@ void port_reg_bit_field_set(portid_t port_id, uint32_t reg_off,
 			    uint8_t bit1_pos, uint8_t bit2_pos, uint32_t value);
 void port_reg_display(portid_t port_id, uint32_t reg_off);
 void port_reg_set(portid_t port_id, uint32_t reg_off, uint32_t value);
-int port_shared_action_create(portid_t port_id, uint32_t id,
-			      const struct rte_flow_shared_action_conf *conf,
+int port_action_handle_create(portid_t port_id, uint32_t id,
+			      const struct rte_flow_indir_action_conf *conf,
 			      const struct rte_flow_action *action);
-int port_shared_action_destroy(portid_t port_id,
+int port_action_handle_destroy(portid_t port_id,
 			       uint32_t n, const uint32_t *action);
-struct rte_flow_shared_action *port_shared_action_get_by_id(portid_t port_id,
+struct rte_flow_action_handle *port_action_handle_get_by_id(portid_t port_id,
 							    uint32_t id);
-int port_shared_action_update(portid_t port_id, uint32_t id,
+int port_action_handle_update(portid_t port_id, uint32_t id,
 			      const struct rte_flow_action *action);
 int port_flow_validate(portid_t port_id,
 		       const struct rte_flow_attr *attr,
@@ -840,12 +822,13 @@ int port_flow_create(portid_t port_id,
 		     const struct rte_flow_item *pattern,
 		     const struct rte_flow_action *actions,
 		     const struct tunnel_ops *tunnel_ops);
-int port_shared_action_query(portid_t port_id, uint32_t id);
+int port_action_handle_query(portid_t port_id, uint32_t id);
 void update_age_action_context(const struct rte_flow_action *actions,
 		     struct port_flow *pf);
 int port_flow_destroy(portid_t port_id, uint32_t n, const uint32_t *rule);
 int port_flow_flush(portid_t port_id);
-int port_flow_dump(portid_t port_id, const char *file_name);
+int port_flow_dump(portid_t port_id, bool dump_all,
+			uint32_t rule, const char *file_name);
 int port_flow_query(portid_t port_id, uint32_t rule,
 		    const struct rte_flow_action *action);
 void port_flow_list(portid_t port_id, uint32_t n, const uint32_t *group);
@@ -857,6 +840,8 @@ void port_flow_tunnel_list(portid_t port_id);
 void port_flow_tunnel_destroy(portid_t port_id, uint32_t tunnel_id);
 void port_flow_tunnel_create(portid_t port_id, const struct tunnel_ops *ops);
 int port_flow_isolate(portid_t port_id, int set);
+int port_meter_policy_add(portid_t port_id, uint32_t policy_id,
+		const struct rte_flow_action *actions);
 
 void rx_ring_desc_display(portid_t port_id, queueid_t rxq_id, uint16_t rxd_id);
 void tx_ring_desc_display(portid_t port_id, queueid_t txq_id, uint16_t txd_id);
@@ -956,7 +941,7 @@ int set_vf_rate_limit(portid_t port_id, uint16_t vf, uint16_t rate,
 
 void port_rss_hash_conf_show(portid_t port_id, int show_rss_key);
 void port_rss_hash_key_update(portid_t port_id, char rss_type[],
-			      uint8_t *hash_key, uint hash_key_len);
+			      uint8_t *hash_key, uint8_t hash_key_len);
 int rx_queue_id_is_invalid(queueid_t rxq_id);
 int tx_queue_id_is_invalid(queueid_t txq_id);
 void setup_gro(const char *onoff, portid_t port_id);
@@ -1027,6 +1012,7 @@ uint16_t tx_pkt_set_dynf(uint16_t port_id, __rte_unused uint16_t queue,
 			 __rte_unused void *user_param);
 void add_tx_dynf_callback(portid_t portid);
 void remove_tx_dynf_callback(portid_t portid);
+int update_jumbo_frame_offload(portid_t portid);
 
 /*
  * Work-around of a compilation error with ICC on invocations of the

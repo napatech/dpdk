@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2014-2018 Broadcom
+ * Copyright(c) 2014-2021 Broadcom
  * All rights reserved.
  */
 
@@ -26,6 +26,10 @@ struct bnxt_db_info;
 #define CMP_TYPE(cmp)						\
 	(((struct cmpl_base *)cmp)->type & CMPL_BASE_TYPE_MASK)
 
+/* Get completion length from completion type, in 16-byte units. */
+#define CMP_LEN(cmp_type) (((cmp_type) & 1) + 1)
+
+
 #define ADV_RAW_CMP(idx, n)	((idx) + (n))
 #define NEXT_RAW_CMP(idx)	ADV_RAW_CMP(idx, 1)
 #define RING_CMP(ring, idx)	((idx) & (ring)->ring_mask)
@@ -45,7 +49,7 @@ struct bnxt_db_info;
 } while (0)
 #define B_CP_DB_REARM(cpr, raw_cons)					\
 	rte_write32((DB_CP_REARM_FLAGS |				\
-		    RING_CMP(((cpr)->cp_ring_struct), raw_cons)),	\
+		    DB_RING_IDX(&((cpr)->cp_db), raw_cons)),		\
 		    ((cpr)->cp_db.doorbell))
 
 #define B_CP_DB_ARM(cpr)	rte_write32((DB_KEY_CP),		\
@@ -65,8 +69,8 @@ struct bnxt_db_info;
 } while (0)
 #define B_CP_DIS_DB(cpr, raw_cons)					\
 	rte_write32_relaxed((DB_CP_FLAGS |				\
-			    RING_CMP(((cpr)->cp_ring_struct), raw_cons)), \
-			    ((cpr)->cp_db.doorbell))
+		    DB_RING_IDX(&((cpr)->cp_db), raw_cons)),		\
+		    ((cpr)->cp_db.doorbell))
 
 #define B_CP_DB(cpr, raw_cons, ring_mask)				\
 	rte_write32((DB_CP_FLAGS |					\
@@ -80,7 +84,15 @@ struct bnxt_db_info {
 		uint32_t        db_key32;
 	};
 	bool                    db_64;
+	uint32_t		db_ring_mask;
+	uint32_t		db_epoch_mask;
+	uint32_t		db_epoch_shift;
 };
+
+#define DB_EPOCH(db, idx)	(((idx) & (db)->db_epoch_mask) <<	\
+				 ((db)->db_epoch_shift))
+#define DB_RING_IDX(db, idx)	(((idx) & (db)->db_ring_mask) |		\
+				 DB_EPOCH(db, idx))
 
 struct bnxt_ring;
 struct bnxt_cp_ring_info {
@@ -95,7 +107,6 @@ struct bnxt_cp_ring_info {
 	uint32_t		hw_stats_ctx_id;
 
 	struct bnxt_ring	*cp_ring_struct;
-	uint16_t		cp_cons;
 	bool			valid;
 };
 

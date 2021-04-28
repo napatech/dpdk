@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
 *
- * Copyright(c) 2019-2020 Xilinx, Inc.
+ * Copyright(c) 2019-2021 Xilinx, Inc.
  * Copyright(c) 2016-2019 Solarflare Communications Inc.
  *
  * This software was jointly developed between OKTET Labs (under contract
@@ -14,7 +14,7 @@
 
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_kvargs.h>
 #include <rte_spinlock.h>
 #include <rte_atomic.h>
@@ -22,6 +22,7 @@
 #include "efx.h"
 
 #include "sfc_efx_mcdi.h"
+#include "sfc_efx.h"
 
 #include "sfc_debug.h"
 #include "sfc_log.h"

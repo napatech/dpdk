@@ -11,7 +11,7 @@
 #include <stdarg.h>
 
 #include <rte_ether.h>
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_log.h>
 #include <rte_memzone.h>
 #include <rte_malloc.h>
@@ -22,6 +22,7 @@
 #include <rte_sctp.h>
 #include <rte_hash_crc.h>
 #include <rte_bitmap.h>
+#include <rte_os_shim.h>
 
 #include "i40e_logs.h"
 #include "base/i40e_type.h"
@@ -116,7 +117,7 @@ i40e_fdir_rx_queue_init(struct i40e_rx_queue *rxq)
 #endif
 	rx_ctx.dtype = i40e_header_split_none;
 	rx_ctx.hsplit_0 = I40E_HEADER_SPLIT_NONE;
-	rx_ctx.rxmax = RTE_ETHER_MAX_LEN;
+	rx_ctx.rxmax = I40E_ETH_MAX_LEN;
 	rx_ctx.tphrdesc_ena = 1;
 	rx_ctx.tphwdesc_ena = 1;
 	rx_ctx.tphdata_ena = 1;
@@ -355,6 +356,7 @@ i40e_init_flx_pld(struct i40e_pf *pf)
 			I40E_PRTQF_FLX_PIT(index + 1), 0x0000FC29);/*non-used*/
 		I40E_WRITE_REG(hw,
 			I40E_PRTQF_FLX_PIT(index + 2), 0x0000FC2A);/*non-used*/
+		pf->fdir.flex_pit_flag[i] = 0;
 	}
 
 	/* initialize the masks */
@@ -1513,8 +1515,6 @@ i40e_flow_set_fdir_flex_pit(struct i40e_pf *pf,
 		I40E_WRITE_REG(hw, I40E_PRTQF_FLX_PIT(field_idx), flx_pit);
 		min_next_off++;
 	}
-
-	pf->fdir.flex_pit_flag[layer_idx] = 1;
 }
 
 static int
@@ -1587,6 +1587,87 @@ i40e_flow_set_fdir_flex_msk(struct i40e_pf *pf,
 	}
 
 	pf->fdir.flex_mask_flag[pctype] = 1;
+}
+
+static int
+i40e_flow_set_fdir_inset(struct i40e_pf *pf,
+			 enum i40e_filter_pctype pctype,
+			 uint64_t input_set)
+{
+	uint32_t mask_reg[I40E_INSET_MASK_NUM_REG] = {0};
+	struct i40e_hw *hw = I40E_PF_TO_HW(pf);
+	uint64_t inset_reg = 0;
+	int i, num;
+
+	/* Check if the input set is valid */
+	if (i40e_validate_input_set(pctype, RTE_ETH_FILTER_FDIR,
+				    input_set) != 0) {
+		PMD_DRV_LOG(ERR, "Invalid input set");
+		return -EINVAL;
+	}
+
+	/* Check if the configuration is conflicted */
+	if (pf->fdir.inset_flag[pctype] &&
+	    memcmp(&pf->fdir.input_set[pctype], &input_set, sizeof(uint64_t))) {
+		PMD_DRV_LOG(ERR, "Conflict with the first rule's input set.");
+		return -EINVAL;
+	}
+
+	if (pf->fdir.inset_flag[pctype] &&
+	    !memcmp(&pf->fdir.input_set[pctype], &input_set, sizeof(uint64_t)))
+		return 0;
+
+	num = i40e_generate_inset_mask_reg(hw, input_set, mask_reg,
+						 I40E_INSET_MASK_NUM_REG);
+	if (num < 0) {
+		PMD_DRV_LOG(ERR, "Invalid pattern mask.");
+		return -EINVAL;
+	}
+
+	if (pf->support_multi_driver) {
+		for (i = 0; i < num; i++)
+			if (i40e_read_rx_ctl(hw,
+					I40E_GLQF_FD_MSK(i, pctype)) !=
+					mask_reg[i]) {
+				PMD_DRV_LOG(ERR, "Input set setting is not"
+						" supported with"
+						" `support-multi-driver`"
+						" enabled!");
+				return -EPERM;
+			}
+		for (i = num; i < I40E_INSET_MASK_NUM_REG; i++)
+			if (i40e_read_rx_ctl(hw,
+					I40E_GLQF_FD_MSK(i, pctype)) != 0) {
+				PMD_DRV_LOG(ERR, "Input set setting is not"
+						" supported with"
+						" `support-multi-driver`"
+						" enabled!");
+				return -EPERM;
+			}
+
+	} else {
+		for (i = 0; i < num; i++)
+			i40e_check_write_reg(hw, I40E_GLQF_FD_MSK(i, pctype),
+				mask_reg[i]);
+		/*clear unused mask registers of the pctype */
+		for (i = num; i < I40E_INSET_MASK_NUM_REG; i++)
+			i40e_check_write_reg(hw,
+					I40E_GLQF_FD_MSK(i, pctype), 0);
+	}
+
+	inset_reg |= i40e_translate_input_set_reg(hw->mac.type, input_set);
+
+	i40e_check_write_reg(hw, I40E_PRTQF_FD_INSET(pctype, 0),
+			     (uint32_t)(inset_reg & UINT32_MAX));
+	i40e_check_write_reg(hw, I40E_PRTQF_FD_INSET(pctype, 1),
+			     (uint32_t)((inset_reg >>
+					 I40E_32_BIT_WIDTH) & UINT32_MAX));
+
+	I40E_WRITE_FLUSH(hw);
+
+	pf->fdir.input_set[pctype] = input_set;
+	pf->fdir.inset_flag[pctype] = 1;
+	return 0;
 }
 
 static inline unsigned char *
@@ -1686,7 +1767,15 @@ i40e_flow_add_del_fdir_filter(struct rte_eth_dev *dev,
 	i40e_fdir_filter_convert(filter, &check_filter);
 
 	if (add) {
+		/* configure the input set for common PCTYPEs*/
 		if (!filter->input.flow_ext.customized_pctype) {
+			ret = i40e_flow_set_fdir_inset(pf, pctype,
+					filter->input.flow_ext.input_set);
+			if (ret < 0)
+				return ret;
+		}
+
+		if (filter->input.flow_ext.is_flex_flow) {
 			for (i = 0; i < filter->input.flow_ext.raw_id; i++) {
 				layer_idx = filter->input.flow_ext.layer_idx;
 				field_idx = layer_idx * I40E_MAX_FLXPLD_FIED + i;
@@ -1738,6 +1827,9 @@ i40e_flow_add_del_fdir_filter(struct rte_eth_dev *dev,
 				fdir_info->fdir_guarantee_free_space > 0)
 			wait_status = false;
 	} else {
+		if (filter->input.flow_ext.is_flex_flow)
+			layer_idx = filter->input.flow_ext.layer_idx;
+
 		node = i40e_sw_fdir_filter_lookup(fdir_info,
 				&check_filter.fdir.input);
 		if (!node) {
@@ -1783,6 +1875,17 @@ i40e_flow_add_del_fdir_filter(struct rte_eth_dev *dev,
 		PMD_DRV_LOG(ERR, "fdir programming fails for PCTYPE(%u).",
 			    pctype);
 		goto error_op;
+	}
+
+	if (filter->input.flow_ext.is_flex_flow) {
+		if (add) {
+			fdir_info->flex_flow_count[layer_idx]++;
+			pf->fdir.flex_pit_flag[layer_idx] = 1;
+		} else {
+			fdir_info->flex_flow_count[layer_idx]--;
+			if (!fdir_info->flex_flow_count[layer_idx])
+				pf->fdir.flex_pit_flag[layer_idx] = 0;
+		}
 	}
 
 	if (add) {

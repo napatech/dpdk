@@ -29,7 +29,7 @@
 #include <rte_eal.h>
 #include <rte_alarm.h>
 #include <rte_ether.h>
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_malloc.h>
 #include <rte_ring.h>
 
@@ -48,6 +48,9 @@
 #include <fsl_fman.h>
 #include <process.h>
 #include <fmlib/fm_ext.h>
+
+#define CHECK_INTERVAL         100  /* 100ms */
+#define MAX_REPEAT_TIME        90   /* 9s (90 * 100ms) in total */
 
 /* Supported Rx offloads */
 static uint64_t dev_rx_offloads_sup =
@@ -184,7 +187,7 @@ dpaa_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 		return -EINVAL;
 	}
 
-	if (frame_size > RTE_ETHER_MAX_LEN)
+	if (frame_size > DPAA_ETH_MAX_LEN)
 		dev->data->dev_conf.rxmode.offloads |=
 						DEV_RX_OFFLOAD_JUMBO_FRAME;
 	else
@@ -483,9 +486,6 @@ static int dpaa_eth_dev_close(struct rte_eth_dev *dev)
 	if (dpaa_intf->cgr_rx) {
 		for (loop = 0; loop < dpaa_intf->nb_rx_queues; loop++)
 			qman_delete_cgr(&dpaa_intf->cgr_rx[loop]);
-
-		qman_release_cgrid_range(dpaa_intf->cgr_rx[loop].cgrid,
-					 dpaa_intf->nb_rx_queues);
 	}
 
 	rte_free(dpaa_intf->cgr_rx);
@@ -494,9 +494,6 @@ static int dpaa_eth_dev_close(struct rte_eth_dev *dev)
 	if (dpaa_intf->cgr_tx) {
 		for (loop = 0; loop < MAX_DPAA_CORES; loop++)
 			qman_delete_cgr(&dpaa_intf->cgr_tx[loop]);
-
-		qman_release_cgrid_range(dpaa_intf->cgr_tx[loop].cgrid,
-					 MAX_DPAA_CORES);
 		rte_free(dpaa_intf->cgr_tx);
 		dpaa_intf->cgr_tx = NULL;
 	}
@@ -669,23 +666,30 @@ dpaa_dev_tx_burst_mode_get(struct rte_eth_dev *dev,
 }
 
 static int dpaa_eth_link_update(struct rte_eth_dev *dev,
-				int wait_to_complete __rte_unused)
+				int wait_to_complete)
 {
 	struct dpaa_if *dpaa_intf = dev->data->dev_private;
 	struct rte_eth_link *link = &dev->data->dev_link;
 	struct fman_if *fif = dev->process_private;
 	struct __fman_if *__fif = container_of(fif, struct __fman_if, __if);
 	int ret, ioctl_version;
+	uint8_t count;
 
 	PMD_INIT_FUNC_TRACE();
 
 	ioctl_version = dpaa_get_ioctl_version_number();
 
-
 	if (dev->data->dev_flags & RTE_ETH_DEV_INTR_LSC) {
-		ret = dpaa_get_link_status(__fif->node_name, link);
-		if (ret)
-			return ret;
+		for (count = 0; count <= MAX_REPEAT_TIME; count++) {
+			ret = dpaa_get_link_status(__fif->node_name, link);
+			if (ret)
+				return ret;
+			if (link->link_status == ETH_LINK_DOWN &&
+			    wait_to_complete)
+				rte_delay_ms(CHECK_INTERVAL);
+			else
+				break;
+		}
 	} else {
 		link->link_status = dpaa_intf->valid;
 	}
@@ -963,6 +967,12 @@ int dpaa_eth_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 			DPAA_MEMPOOL_TO_POOL_INFO(mp)->bpid)) {
 			return -EINVAL;
 		}
+	}
+
+	if (dpaa_intf->bp_info && dpaa_intf->bp_info->bp &&
+	    dpaa_intf->bp_info->mp != mp) {
+		DPAA_PMD_WARN("Multiple pools on same interface not supported");
+		return -EINVAL;
 	}
 
 	/* Max packet can fit in single buffer */
@@ -1511,12 +1521,19 @@ dpaa_rxq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 {
 	struct dpaa_if *dpaa_intf = dev->data->dev_private;
 	struct qman_fq *rxq;
+	int ret;
 
 	rxq = dev->data->rx_queues[queue_id];
 
 	qinfo->mp = dpaa_intf->bp_info->mp;
 	qinfo->scattered_rx = dev->data->scattered_rx;
 	qinfo->nb_desc = rxq->nb_desc;
+
+	/* Report the HW Rx buffer length to user */
+	ret = fman_if_get_maxfrm(dev->process_private);
+	if (ret > 0)
+		qinfo->rx_buf_size = ret;
+
 	qinfo->conf.rx_free_thresh = 1;
 	qinfo->conf.rx_drop_en = 1;
 	qinfo->conf.rx_deferred_start = 0;

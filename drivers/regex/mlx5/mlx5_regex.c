@@ -119,6 +119,7 @@ mlx5_regex_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	struct mlx5_hca_attr attr;
 	char name[RTE_REGEXDEV_NAME_MAX_LEN];
 	int ret;
+	uint32_t val;
 
 	ibv = mlx5_regex_get_ib_device_match(&pci_dev->addr);
 	if (!ibv) {
@@ -159,8 +160,17 @@ mlx5_regex_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		rte_errno = ENOMEM;
 		goto dev_error;
 	}
+	priv->sq_ts_format = attr.sq_ts_format;
 	priv->ctx = ctx;
 	priv->nb_engines = 2; /* attr.regexp_num_of_engines */
+	ret = mlx5_devx_regex_register_read(priv->ctx, 0,
+					    MLX5_RXP_CSR_IDENTIFIER, &val);
+	if (ret) {
+		DRV_LOG(ERR, "CSR read failed!");
+		return -1;
+	}
+	if (val == MLX5_RXP_BF2_IDENTIFIER)
+		priv->is_bf2 = 1;
 	/* Default RXP programming mode to Shared. */
 	priv->prog_mode = MLX5_RXP_SHARED_PROG_MODE;
 	mlx5_regex_get_name(name, pci_dev);
@@ -168,12 +178,6 @@ mlx5_regex_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	if (priv->regexdev == NULL) {
 		DRV_LOG(ERR, "Failed to register RegEx device.");
 		rte_errno = rte_errno ? rte_errno : EINVAL;
-		goto error;
-	}
-	ret = mlx5_glue->devx_query_eqn(ctx, 0, &priv->eqn);
-	if (ret) {
-		DRV_LOG(ERR, "can't query event queue number.");
-		rte_errno = ENOMEM;
 		goto error;
 	}
 	/*
@@ -195,6 +199,13 @@ mlx5_regex_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	}
 	priv->regexdev->dev_ops = &mlx5_regexdev_ops;
 	priv->regexdev->enqueue = mlx5_regexdev_enqueue;
+#ifdef HAVE_MLX5_UMR_IMKEY
+	if (!attr.umr_indirect_mkey_disabled &&
+	    !attr.umr_modify_entity_size_disabled)
+		priv->has_umr = 1;
+	if (priv->has_umr)
+		priv->regexdev->enqueue = mlx5_regexdev_enqueue_gga;
+#endif
 	priv->regexdev->dequeue = mlx5_regexdev_dequeue;
 	priv->regexdev->device = (struct rte_device *)pci_dev;
 	priv->regexdev->data->dev_private = priv;
@@ -209,6 +220,8 @@ mlx5_regex_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	    rte_errno = ENOMEM;
 		goto error;
 	}
+	DRV_LOG(INFO, "RegEx GGA is %s.",
+		priv->has_umr ? "supported" : "unsupported");
 	return 0;
 
 error:

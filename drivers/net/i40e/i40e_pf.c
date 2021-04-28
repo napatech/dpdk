@@ -14,7 +14,7 @@
 #include <rte_string_fns.h>
 #include <rte_pci.h>
 #include <rte_ether.h>
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_malloc.h>
 #include <rte_memcpy.h>
 
@@ -333,6 +333,10 @@ i40e_pf_host_process_cmd_get_vf_resource(struct i40e_pf_vf *vf, uint8_t *msg,
 
 	vf_res->vf_cap_flags = vf->request_caps &
 				   I40E_VIRTCHNL_OFFLOAD_CAPS;
+
+	if (vf->request_caps & VIRTCHNL_VF_OFFLOAD_REQ_QUEUES)
+		vf_res->vf_cap_flags |= VIRTCHNL_VF_OFFLOAD_REQ_QUEUES;
+
 	/* For X722, it supports write back on ITR
 	 * without binding queue to interrupt vector.
 	 */

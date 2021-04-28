@@ -24,8 +24,7 @@ static inline int qede_alloc_rx_buffer(struct qede_rx_queue *rxq)
 			   rte_mempool_in_use_count(rxq->mb_pool));
 		return -ENOMEM;
 	}
-	rxq->sw_rx_ring[idx].mbuf = new_mb;
-	rxq->sw_rx_ring[idx].page_offset = 0;
+	rxq->sw_rx_ring[idx] = new_mb;
 	mapping = rte_mbuf_data_iova_default(new_mb);
 	/* Advance PROD and get BD pointer */
 	rx_bd = (struct eth_rx_bd *)ecore_chain_produce(&rxq->rx_bd_ring);
@@ -39,17 +38,24 @@ static inline int qede_alloc_rx_buffer(struct qede_rx_queue *rxq)
 
 static inline int qede_alloc_rx_bulk_mbufs(struct qede_rx_queue *rxq, int count)
 {
-	void *obj_p[QEDE_MAX_BULK_ALLOC_COUNT] __rte_cache_aligned;
 	struct rte_mbuf *mbuf = NULL;
 	struct eth_rx_bd *rx_bd;
 	dma_addr_t mapping;
 	int i, ret = 0;
 	uint16_t idx;
+	uint16_t mask = NUM_RX_BDS(rxq);
 
 	if (count > QEDE_MAX_BULK_ALLOC_COUNT)
 		count = QEDE_MAX_BULK_ALLOC_COUNT;
 
-	ret = rte_mempool_get_bulk(rxq->mb_pool, obj_p, count);
+	idx = rxq->sw_rx_prod & NUM_RX_BDS(rxq);
+
+	if (count > mask - idx + 1)
+		count = mask - idx + 1;
+
+	ret = rte_mempool_get_bulk(rxq->mb_pool, (void **)&rxq->sw_rx_ring[idx],
+				   count);
+
 	if (unlikely(ret)) {
 		PMD_RX_LOG(ERR, rxq,
 			   "Failed to allocate %d rx buffers "
@@ -63,20 +69,17 @@ static inline int qede_alloc_rx_bulk_mbufs(struct qede_rx_queue *rxq, int count)
 	}
 
 	for (i = 0; i < count; i++) {
-		mbuf = obj_p[i];
-		if (likely(i < count - 1))
-			rte_prefetch0(obj_p[i + 1]);
+		rte_prefetch0(rxq->sw_rx_ring[(idx + 1) & NUM_RX_BDS(rxq)]);
+		mbuf = rxq->sw_rx_ring[idx & NUM_RX_BDS(rxq)];
 
-		idx = rxq->sw_rx_prod & NUM_RX_BDS(rxq);
-		rxq->sw_rx_ring[idx].mbuf = mbuf;
-		rxq->sw_rx_ring[idx].page_offset = 0;
 		mapping = rte_mbuf_data_iova_default(mbuf);
 		rx_bd = (struct eth_rx_bd *)
 			ecore_chain_produce(&rxq->rx_bd_ring);
 		rx_bd->addr.hi = rte_cpu_to_le_32(U64_HI(mapping));
 		rx_bd->addr.lo = rte_cpu_to_le_32(U64_LO(mapping));
-		rxq->sw_rx_prod++;
+		idx++;
 	}
+	rxq->sw_rx_prod = idx;
 
 	return 0;
 }
@@ -309,9 +312,9 @@ static void qede_rx_queue_release_mbufs(struct qede_rx_queue *rxq)
 
 	if (rxq->sw_rx_ring) {
 		for (i = 0; i < rxq->nb_rx_desc; i++) {
-			if (rxq->sw_rx_ring[i].mbuf) {
-				rte_pktmbuf_free(rxq->sw_rx_ring[i].mbuf);
-				rxq->sw_rx_ring[i].mbuf = NULL;
+			if (rxq->sw_rx_ring[i]) {
+				rte_pktmbuf_free(rxq->sw_rx_ring[i]);
+				rxq->sw_rx_ring[i] = NULL;
 			}
 		}
 	}
@@ -393,6 +396,7 @@ qede_alloc_tx_queue_mem(struct rte_eth_dev *dev,
 	struct ecore_dev *edev = &qdev->edev;
 	struct qede_tx_queue *txq;
 	int rc;
+	size_t sw_tx_ring_size;
 
 	txq = rte_zmalloc_socket("qede_tx_queue", sizeof(struct qede_tx_queue),
 				 RTE_CACHE_LINE_SIZE, socket_id);
@@ -425,9 +429,9 @@ qede_alloc_tx_queue_mem(struct rte_eth_dev *dev,
 	}
 
 	/* Allocate software ring */
+	sw_tx_ring_size = sizeof(txq->sw_tx_ring) * txq->nb_tx_desc;
 	txq->sw_tx_ring = rte_zmalloc_socket("txq->sw_tx_ring",
-					     (sizeof(struct qede_tx_entry) *
-					      txq->nb_tx_desc),
+					     sw_tx_ring_size,
 					     RTE_CACHE_LINE_SIZE, socket_id);
 
 	if (!txq->sw_tx_ring) {
@@ -523,9 +527,9 @@ static void qede_tx_queue_release_mbufs(struct qede_tx_queue *txq)
 
 	if (txq->sw_tx_ring) {
 		for (i = 0; i < txq->nb_tx_desc; i++) {
-			if (txq->sw_tx_ring[i].mbuf) {
-				rte_pktmbuf_free(txq->sw_tx_ring[i].mbuf);
-				txq->sw_tx_ring[i].mbuf = NULL;
+			if (txq->sw_tx_ring[i]) {
+				rte_pktmbuf_free(txq->sw_tx_ring[i]);
+				txq->sw_tx_ring[i] = NULL;
 			}
 		}
 	}
@@ -882,51 +886,66 @@ qede_tx_queue_start(struct rte_eth_dev *eth_dev, uint16_t tx_queue_id)
 }
 
 static inline void
-qede_free_tx_pkt(struct qede_tx_queue *txq)
-{
-	struct rte_mbuf *mbuf;
-	uint16_t nb_segs;
-	uint16_t idx;
-
-	idx = TX_CONS(txq);
-	mbuf = txq->sw_tx_ring[idx].mbuf;
-	if (mbuf) {
-		nb_segs = mbuf->nb_segs;
-		PMD_TX_LOG(DEBUG, txq, "nb_segs to free %u\n", nb_segs);
-		while (nb_segs) {
-			/* It's like consuming rxbuf in recv() */
-			ecore_chain_consume(&txq->tx_pbl);
-			txq->nb_tx_avail++;
-			nb_segs--;
-		}
-		rte_pktmbuf_free(mbuf);
-		txq->sw_tx_ring[idx].mbuf = NULL;
-		txq->sw_tx_cons++;
-		PMD_TX_LOG(DEBUG, txq, "Freed tx packet\n");
-	} else {
-		ecore_chain_consume(&txq->tx_pbl);
-		txq->nb_tx_avail++;
-	}
-}
-
-static inline void
 qede_process_tx_compl(__rte_unused struct ecore_dev *edev,
 		      struct qede_tx_queue *txq)
 {
 	uint16_t hw_bd_cons;
-#ifdef RTE_LIBRTE_QEDE_DEBUG_TX
 	uint16_t sw_tx_cons;
-#endif
+	uint16_t remaining;
+	uint16_t mask;
+	struct rte_mbuf *mbuf;
+	uint16_t nb_segs;
+	uint16_t idx;
+	uint16_t first_idx;
 
 	rte_compiler_barrier();
+	rte_prefetch0(txq->hw_cons_ptr);
+	sw_tx_cons = ecore_chain_get_cons_idx(&txq->tx_pbl);
 	hw_bd_cons = rte_le_to_cpu_16(*txq->hw_cons_ptr);
 #ifdef RTE_LIBRTE_QEDE_DEBUG_TX
-	sw_tx_cons = ecore_chain_get_cons_idx(&txq->tx_pbl);
 	PMD_TX_LOG(DEBUG, txq, "Tx Completions = %u\n",
 		   abs(hw_bd_cons - sw_tx_cons));
 #endif
-	while (hw_bd_cons !=  ecore_chain_get_cons_idx(&txq->tx_pbl))
-		qede_free_tx_pkt(txq);
+
+	mask = NUM_TX_BDS(txq);
+	idx = txq->sw_tx_cons & mask;
+
+	remaining = hw_bd_cons - sw_tx_cons;
+	txq->nb_tx_avail += remaining;
+	first_idx = idx;
+
+	while (remaining) {
+		mbuf = txq->sw_tx_ring[idx];
+		RTE_ASSERT(mbuf);
+		nb_segs = mbuf->nb_segs;
+		remaining -= nb_segs;
+
+		/* Prefetch the next mbuf. Note that at least the last 4 mbufs
+		 * that are prefetched will not be used in the current call.
+		 */
+		rte_mbuf_prefetch_part1(txq->sw_tx_ring[(idx + 4) & mask]);
+		rte_mbuf_prefetch_part2(txq->sw_tx_ring[(idx + 4) & mask]);
+
+		PMD_TX_LOG(DEBUG, txq, "nb_segs to free %u\n", nb_segs);
+
+		while (nb_segs) {
+			ecore_chain_consume(&txq->tx_pbl);
+			nb_segs--;
+		}
+
+		idx = (idx + 1) & mask;
+		PMD_TX_LOG(DEBUG, txq, "Freed tx packet\n");
+	}
+	txq->sw_tx_cons = idx;
+
+	if (first_idx > idx) {
+		rte_pktmbuf_free_bulk(&txq->sw_tx_ring[first_idx],
+							  mask - first_idx + 1);
+		rte_pktmbuf_free_bulk(&txq->sw_tx_ring[0], idx);
+	} else {
+		rte_pktmbuf_free_bulk(&txq->sw_tx_ring[first_idx],
+							  idx - first_idx);
+	}
 }
 
 static int qede_drain_txq(struct qede_dev *qdev,
@@ -1302,18 +1321,15 @@ static inline void qede_rx_bd_ring_consume(struct qede_rx_queue *rxq)
 
 static inline void
 qede_reuse_page(__rte_unused struct qede_dev *qdev,
-		struct qede_rx_queue *rxq, struct qede_rx_entry *curr_cons)
+		struct qede_rx_queue *rxq, struct rte_mbuf *curr_cons)
 {
 	struct eth_rx_bd *rx_bd_prod = ecore_chain_produce(&rxq->rx_bd_ring);
 	uint16_t idx = rxq->sw_rx_prod & NUM_RX_BDS(rxq);
-	struct qede_rx_entry *curr_prod;
 	dma_addr_t new_mapping;
 
-	curr_prod = &rxq->sw_rx_ring[idx];
-	*curr_prod = *curr_cons;
+	rxq->sw_rx_ring[idx] = curr_cons;
 
-	new_mapping = rte_mbuf_data_iova_default(curr_prod->mbuf) +
-		      curr_prod->page_offset;
+	new_mapping = rte_mbuf_data_iova_default(curr_cons);
 
 	rx_bd_prod->addr.hi = rte_cpu_to_le_32(U64_HI(new_mapping));
 	rx_bd_prod->addr.lo = rte_cpu_to_le_32(U64_LO(new_mapping));
@@ -1325,10 +1341,10 @@ static inline void
 qede_recycle_rx_bd_ring(struct qede_rx_queue *rxq,
 			struct qede_dev *qdev, uint8_t count)
 {
-	struct qede_rx_entry *curr_cons;
+	struct rte_mbuf *curr_cons;
 
 	for (; count > 0; count--) {
-		curr_cons = &rxq->sw_rx_ring[rxq->sw_rx_cons & NUM_RX_BDS(rxq)];
+		curr_cons = rxq->sw_rx_ring[rxq->sw_rx_cons & NUM_RX_BDS(rxq)];
 		qede_reuse_page(qdev, rxq, curr_cons);
 		qede_rx_bd_ring_consume(rxq);
 	}
@@ -1350,7 +1366,7 @@ qede_rx_process_tpa_cmn_cont_end_cqe(__rte_unused struct qede_dev *qdev,
 	if (rte_le_to_cpu_16(len)) {
 		tpa_info = &rxq->tpa_info[agg_index];
 		cons_idx = rxq->sw_rx_cons & NUM_RX_BDS(rxq);
-		curr_frag = rxq->sw_rx_ring[cons_idx].mbuf;
+		curr_frag = rxq->sw_rx_ring[cons_idx];
 		assert(curr_frag);
 		curr_frag->nb_segs = 1;
 		curr_frag->pkt_len = rte_le_to_cpu_16(len);
@@ -1482,7 +1498,7 @@ qede_process_sg_pkts(void *p_rxq,  struct rte_mbuf *rx_mb,
 			return -EINVAL;
 		}
 		sw_rx_index = rxq->sw_rx_cons & NUM_RX_BDS(rxq);
-		seg2 = rxq->sw_rx_ring[sw_rx_index].mbuf;
+		seg2 = rxq->sw_rx_ring[sw_rx_index];
 		qede_rx_bd_ring_consume(rxq);
 		pkt_len -= cur_size;
 		seg2->data_len = cur_size;
@@ -1601,7 +1617,7 @@ qede_recv_pkts_regular(void *p_rxq, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 
 		/* Get the data from the SW ring */
 		sw_rx_index = rxq->sw_rx_cons & num_rx_bds;
-		rx_mb = rxq->sw_rx_ring[sw_rx_index].mbuf;
+		rx_mb = rxq->sw_rx_ring[sw_rx_index];
 		assert(rx_mb != NULL);
 
 		parse_flag = rte_le_to_cpu_16(fp_cqe->pars_flags.flags);
@@ -1632,7 +1648,7 @@ qede_recv_pkts_regular(void *p_rxq, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 					"Outer L3 csum failed, flags = 0x%x\n",
 					parse_flag);
 				rxq->rx_hw_errors++;
-				ol_flags |= PKT_RX_EIP_CKSUM_BAD;
+				ol_flags |= PKT_RX_OUTER_IP_CKSUM_BAD;
 			} else {
 				ol_flags |= PKT_RX_IP_CKSUM_GOOD;
 			}
@@ -1700,7 +1716,7 @@ qede_recv_pkts_regular(void *p_rxq, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 
 		/* Prefetch next mbuf while processing current one. */
 		preload_idx = rxq->sw_rx_cons & num_rx_bds;
-		rte_prefetch0(rxq->sw_rx_ring[preload_idx].mbuf);
+		rte_prefetch0(rxq->sw_rx_ring[preload_idx]);
 
 		/* Update rest of the MBUF fields */
 		rx_mb->data_off = offset + RTE_PKTMBUF_HEADROOM;
@@ -1858,7 +1874,7 @@ qede_recv_pkts(void *p_rxq, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 
 		/* Get the data from the SW ring */
 		sw_rx_index = rxq->sw_rx_cons & NUM_RX_BDS(rxq);
-		rx_mb = rxq->sw_rx_ring[sw_rx_index].mbuf;
+		rx_mb = rxq->sw_rx_ring[sw_rx_index];
 		assert(rx_mb != NULL);
 
 		/* Handle regular CQE or TPA start CQE */
@@ -1901,7 +1917,7 @@ qede_recv_pkts(void *p_rxq, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 					"Outer L3 csum failed, flags = 0x%x\n",
 					parse_flag);
 				  rxq->rx_hw_errors++;
-				  ol_flags |= PKT_RX_EIP_CKSUM_BAD;
+				  ol_flags |= PKT_RX_OUTER_IP_CKSUM_BAD;
 			} else {
 				  ol_flags |= PKT_RX_IP_CKSUM_GOOD;
 			}
@@ -1989,7 +2005,7 @@ qede_recv_pkts(void *p_rxq, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 
 		/* Prefetch next mbuf while processing current one. */
 		preload_idx = rxq->sw_rx_cons & NUM_RX_BDS(rxq);
-		rte_prefetch0(rxq->sw_rx_ring[preload_idx].mbuf);
+		rte_prefetch0(rxq->sw_rx_ring[preload_idx]);
 
 		/* Update rest of the MBUF fields */
 		rx_mb->data_off = offset + RTE_PKTMBUF_HEADROOM;
@@ -2243,7 +2259,7 @@ qede_xmit_pkts_regular(void *p_txq, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 	struct eth_tx_3rd_bd *bd3;
 	struct rte_mbuf *m_seg = NULL;
 	struct rte_mbuf *mbuf;
-	struct qede_tx_entry *sw_tx_ring;
+	struct rte_mbuf **sw_tx_ring;
 	uint16_t nb_tx_pkts;
 	uint16_t bd_prod;
 	uint16_t idx;
@@ -2306,7 +2322,7 @@ qede_xmit_pkts_regular(void *p_txq, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
 		/* Fill the entry in the SW ring and the BDs in the FW ring */
 		idx = TX_PROD(txq);
-		sw_tx_ring[idx].mbuf = mbuf;
+		sw_tx_ring[idx] = mbuf;
 
 		/* BD1 */
 		bd1 = (struct eth_tx_1st_bd *)ecore_chain_produce(&txq->tx_pbl);
@@ -2612,7 +2628,7 @@ qede_xmit_pkts(void *p_txq, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
 		/* Fill the entry in the SW ring and the BDs in the FW ring */
 		idx = TX_PROD(txq);
-		txq->sw_tx_ring[idx].mbuf = mbuf;
+		txq->sw_tx_ring[idx] = mbuf;
 
 		/* BD1 */
 		bd1 = (struct eth_tx_1st_bd *)ecore_chain_produce(&txq->tx_pbl);

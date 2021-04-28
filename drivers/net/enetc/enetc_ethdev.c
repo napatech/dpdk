@@ -3,7 +3,7 @@
  */
 
 #include <stdbool.h>
-#include <rte_ethdev_pci.h>
+#include <ethdev_pci.h>
 #include <rte_random.h>
 #include <dpaax_iova_table.h>
 
@@ -677,7 +677,7 @@ enetc_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 		return -EINVAL;
 	}
 
-	if (frame_size > RTE_ETHER_MAX_LEN)
+	if (frame_size > ENETC_ETH_MAX_LEN)
 		dev->data->dev_conf.rxmode.offloads &=
 						DEV_RX_OFFLOAD_JUMBO_FRAME;
 	else

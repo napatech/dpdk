@@ -17,10 +17,10 @@ struct packet_tracker {
 	unsigned short next_read;
 	unsigned short next_write;
 	unsigned short last_remain;
+	unsigned short ioat_space;
 };
 
 struct packet_tracker cb_tracker[MAX_VHOST_DEVICE];
-
 
 int
 open_ioat(const char *value)
@@ -113,7 +113,7 @@ open_ioat(const char *value)
 			goto out;
 		}
 		rte_rawdev_start(dev_id);
-
+		cb_tracker[dev_id].ioat_space = IOAT_RING_SIZE;
 		dma_info->nr++;
 		i++;
 	}
@@ -128,7 +128,7 @@ ioat_transfer_data_cb(int vid, uint16_t queue_id,
 		struct rte_vhost_async_status *opaque_data, uint16_t count)
 {
 	uint32_t i_desc;
-	int dev_id = dma_bind[vid].dmas[queue_id * 2 + VIRTIO_RXQ].dev_id;
+	uint16_t dev_id = dma_bind[vid].dmas[queue_id * 2 + VIRTIO_RXQ].dev_id;
 	struct rte_vhost_iov_iter *src = NULL;
 	struct rte_vhost_iov_iter *dst = NULL;
 	unsigned long i_seg;
@@ -140,13 +140,9 @@ ioat_transfer_data_cb(int vid, uint16_t queue_id,
 			src = descs[i_desc].src;
 			dst = descs[i_desc].dst;
 			i_seg = 0;
+			if (cb_tracker[dev_id].ioat_space < src->nr_segs)
+				break;
 			while (i_seg < src->nr_segs) {
-				/*
-				 * TODO: Assuming that the ring space of the
-				 * IOAT device is large enough, so there is no
-				 * error here, and the actual error handling
-				 * will be added later.
-				 */
 				rte_ioat_enqueue_copy(dev_id,
 					(uintptr_t)(src->iov[i_seg].iov_base)
 						+ src->offset,
@@ -158,7 +154,8 @@ ioat_transfer_data_cb(int vid, uint16_t queue_id,
 				i_seg++;
 			}
 			write &= mask;
-			cb_tracker[dev_id].size_track[write] = i_seg;
+			cb_tracker[dev_id].size_track[write] = src->nr_segs;
+			cb_tracker[dev_id].ioat_space -= src->nr_segs;
 			write++;
 		}
 	} else {
@@ -178,17 +175,28 @@ ioat_check_completed_copies_cb(int vid, uint16_t queue_id,
 {
 	if (!opaque_data) {
 		uintptr_t dump[255];
-		unsigned short n_seg;
+		int n_seg;
 		unsigned short read, write;
 		unsigned short nb_packet = 0;
 		unsigned short mask = MAX_ENQUEUED_SIZE - 1;
 		unsigned short i;
-		int dev_id = dma_bind[vid].dmas[queue_id * 2
+
+		uint16_t dev_id = dma_bind[vid].dmas[queue_id * 2
 				+ VIRTIO_RXQ].dev_id;
 		n_seg = rte_ioat_completed_ops(dev_id, 255, dump, dump);
-		n_seg += cb_tracker[dev_id].last_remain;
-		if (!n_seg)
+		if (n_seg < 0) {
+			RTE_LOG(ERR,
+				VHOST_DATA,
+				"fail to poll completed buf on IOAT device %u",
+				dev_id);
 			return 0;
+		}
+		if (n_seg == 0)
+			return 0;
+
+		cb_tracker[dev_id].ioat_space += n_seg;
+		n_seg += cb_tracker[dev_id].last_remain;
+
 		read = cb_tracker[dev_id].next_read;
 		write = cb_tracker[dev_id].next_write;
 		for (i = 0; i < max_packets; i++) {

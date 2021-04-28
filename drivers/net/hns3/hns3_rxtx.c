@@ -1,17 +1,19 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2018-2019 Hisilicon Limited.
+ * Copyright(c) 2018-2021 HiSilicon Limited.
  */
 
 #include <rte_bus_pci.h>
 #include <rte_common.h>
 #include <rte_cycles.h>
+#include <rte_geneve.h>
 #include <rte_vxlan.h>
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_io.h>
 #include <rte_net.h>
 #include <rte_malloc.h>
-#if defined(RTE_ARCH_ARM64) && defined(CC_SVE_SUPPORT)
+#if defined(RTE_ARCH_ARM64)
 #include <rte_cpuflags.h>
+#include <rte_vect.h>
 #endif
 
 #include "hns3_ethdev.h"
@@ -624,13 +626,9 @@ static int
 hns3pf_reset_tqp(struct hns3_hw *hw, uint16_t queue_id)
 {
 #define HNS3_TQP_RESET_TRY_MS	200
+	uint16_t wait_time = 0;
 	uint8_t reset_status;
-	uint64_t end;
 	int ret;
-
-	ret = hns3_tqp_enable(hw, queue_id, false);
-	if (ret)
-		return ret;
 
 	/*
 	 * In current version VF is not supported when PF is driven by DPDK
@@ -642,17 +640,18 @@ hns3pf_reset_tqp(struct hns3_hw *hw, uint16_t queue_id)
 		hns3_err(hw, "Send reset tqp cmd fail, ret = %d", ret);
 		return ret;
 	}
-	end = get_timeofday_ms() + HNS3_TQP_RESET_TRY_MS;
+
 	do {
 		/* Wait for tqp hw reset */
 		rte_delay_ms(HNS3_POLL_RESPONE_MS);
+		wait_time += HNS3_POLL_RESPONE_MS;
 		ret = hns3_get_tqp_reset_status(hw, queue_id, &reset_status);
 		if (ret)
 			goto tqp_reset_fail;
 
 		if (reset_status)
 			break;
-	} while (get_timeofday_ms() < end);
+	} while (wait_time < HNS3_TQP_RESET_TRY_MS);
 
 	if (!reset_status) {
 		ret = -ETIMEDOUT;
@@ -678,11 +677,6 @@ hns3vf_reset_tqp(struct hns3_hw *hw, uint16_t queue_id)
 	uint8_t msg_data[2];
 	int ret;
 
-	/* Disable VF's queue before send queue reset msg to PF */
-	ret = hns3_tqp_enable(hw, queue_id, false);
-	if (ret)
-		return ret;
-
 	memcpy(msg_data, &queue_id, sizeof(uint16_t));
 
 	ret = hns3_send_mbx_msg(hw, HNS3_MBX_QUEUE_RESET, 0, msg_data,
@@ -694,14 +688,105 @@ hns3vf_reset_tqp(struct hns3_hw *hw, uint16_t queue_id)
 }
 
 static int
-hns3_reset_tqp(struct hns3_adapter *hns, uint16_t queue_id)
+hns3_reset_rcb_cmd(struct hns3_hw *hw, uint8_t *reset_status)
 {
-	struct hns3_hw *hw = &hns->hw;
+	struct hns3_reset_cmd *req;
+	struct hns3_cmd_desc desc;
+	int ret;
 
-	if (hns->is_vf)
-		return hns3vf_reset_tqp(hw, queue_id);
-	else
-		return hns3pf_reset_tqp(hw, queue_id);
+	hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_CFG_RST_TRIGGER, false);
+	req = (struct hns3_reset_cmd *)desc.data;
+	hns3_set_bit(req->mac_func_reset, HNS3_CFG_RESET_RCB_B, 1);
+
+	/*
+	 * The start qid should be the global qid of the first tqp of the
+	 * function which should be reset in this port. Since our PF not
+	 * support take over of VFs, so we only need to reset function 0,
+	 * and its start qid is always 0.
+	 */
+	req->fun_reset_rcb_vqid_start = rte_cpu_to_le_16(0);
+	req->fun_reset_rcb_vqid_num = rte_cpu_to_le_16(hw->cfg_max_queues);
+
+	ret = hns3_cmd_send(hw, &desc, 1);
+	if (ret) {
+		hns3_err(hw, "fail to send rcb reset cmd, ret = %d.", ret);
+		return ret;
+	}
+
+	*reset_status = req->fun_reset_rcb_return_status;
+	return 0;
+}
+
+static int
+hns3pf_reset_all_tqps(struct hns3_hw *hw)
+{
+#define HNS3_RESET_RCB_NOT_SUPPORT	0U
+#define HNS3_RESET_ALL_TQP_SUCCESS	1U
+	uint8_t reset_status;
+	int ret;
+	int i;
+
+	ret = hns3_reset_rcb_cmd(hw, &reset_status);
+	if (ret)
+		return ret;
+
+	/*
+	 * If the firmware version is low, it may not support the rcb reset
+	 * which means reset all the tqps at a time. In this case, we should
+	 * reset tqps one by one.
+	 */
+	if (reset_status == HNS3_RESET_RCB_NOT_SUPPORT) {
+		for (i = 0; i < hw->cfg_max_queues; i++) {
+			ret = hns3pf_reset_tqp(hw, i);
+			if (ret) {
+				hns3_err(hw,
+				  "fail to reset tqp, queue_id = %d, ret = %d.",
+				  i, ret);
+				return ret;
+			}
+		}
+	} else if (reset_status != HNS3_RESET_ALL_TQP_SUCCESS) {
+		hns3_err(hw, "fail to reset all tqps, reset_status = %u.",
+				reset_status);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+static int
+hns3vf_reset_all_tqps(struct hns3_hw *hw)
+{
+#define HNS3VF_RESET_ALL_TQP_DONE	1U
+	uint8_t reset_status;
+	uint8_t msg_data[2];
+	int ret;
+	int i;
+
+	memset(msg_data, 0, sizeof(uint16_t));
+	ret = hns3_send_mbx_msg(hw, HNS3_MBX_QUEUE_RESET, 0, msg_data,
+				sizeof(msg_data), true, &reset_status,
+				sizeof(reset_status));
+	if (ret) {
+		hns3_err(hw, "fail to send rcb reset mbx, ret = %d.", ret);
+		return ret;
+	}
+
+	if (reset_status == HNS3VF_RESET_ALL_TQP_DONE)
+		return 0;
+
+	/*
+	 * If the firmware version or kernel PF version is low, it may not
+	 * support the rcb reset which means reset all the tqps at a time.
+	 * In this case, we should reset tqps one by one.
+	 */
+	for (i = 1; i < hw->cfg_max_queues; i++) {
+		ret = hns3vf_reset_tqp(hw, i);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
 }
 
 int
@@ -710,14 +795,21 @@ hns3_reset_all_tqps(struct hns3_adapter *hns)
 	struct hns3_hw *hw = &hns->hw;
 	int ret, i;
 
+	/* Disable all queues before reset all queues */
 	for (i = 0; i < hw->cfg_max_queues; i++) {
-		ret = hns3_reset_tqp(hns, i);
+		ret = hns3_tqp_enable(hw, i, false);
 		if (ret) {
-			hns3_err(hw, "Failed to reset No.%d queue: %d", i, ret);
+			hns3_err(hw,
+			    "fail to disable tqps before tqps reset, ret = %d.",
+			    ret);
 			return ret;
 		}
 	}
-	return 0;
+
+	if (hns->is_vf)
+		return hns3vf_reset_all_tqps(hw);
+	else
+		return hns3pf_reset_all_tqps(hw);
 }
 
 static int
@@ -834,6 +926,24 @@ queue_reset_fail:
 	return ret;
 }
 
+uint32_t
+hns3_get_tqp_intr_reg_offset(uint16_t tqp_intr_id)
+{
+	uint32_t reg_offset;
+
+	/* Need an extend offset to config queues > 64 */
+	if (tqp_intr_id < HNS3_MIN_EXT_TQP_INTR_ID)
+		reg_offset = HNS3_TQP_INTR_REG_BASE +
+			     tqp_intr_id * HNS3_TQP_INTR_LOW_ORDER_OFFSET;
+	else
+		reg_offset = HNS3_TQP_INTR_EXT_REG_BASE +
+			     tqp_intr_id / HNS3_MIN_EXT_TQP_INTR_ID *
+			     HNS3_TQP_INTR_HIGH_ORDER_OFFSET +
+			     tqp_intr_id % HNS3_MIN_EXT_TQP_INTR_ID *
+			     HNS3_TQP_INTR_LOW_ORDER_OFFSET;
+
+	return reg_offset;
+}
 
 void
 hns3_set_queue_intr_gl(struct hns3_hw *hw, uint16_t queue_id,
@@ -847,7 +957,7 @@ hns3_set_queue_intr_gl(struct hns3_hw *hw, uint16_t queue_id,
 	if (gl_idx >= RTE_DIM(offset) || gl_value > HNS3_TQP_INTR_GL_MAX)
 		return;
 
-	addr = offset[gl_idx] + queue_id * HNS3_TQP_INTR_REG_SIZE;
+	addr = offset[gl_idx] + hns3_get_tqp_intr_reg_offset(queue_id);
 	if (hw->intr.gl_unit == HNS3_INTR_COALESCE_GL_UINT_1US)
 		value = gl_value | HNS3_TQP_INTR_GL_UNIT_1US;
 	else
@@ -864,7 +974,7 @@ hns3_set_queue_intr_rl(struct hns3_hw *hw, uint16_t queue_id, uint16_t rl_value)
 	if (rl_value > HNS3_TQP_INTR_RL_MAX)
 		return;
 
-	addr = HNS3_TQP_INTR_RL_REG + queue_id * HNS3_TQP_INTR_REG_SIZE;
+	addr = HNS3_TQP_INTR_RL_REG + hns3_get_tqp_intr_reg_offset(queue_id);
 	value = HNS3_RL_USEC_TO_REG(rl_value);
 	if (value > 0)
 		value |= HNS3_TQP_INTR_RL_ENABLE_MASK;
@@ -885,10 +995,10 @@ hns3_set_queue_intr_ql(struct hns3_hw *hw, uint16_t queue_id, uint16_t ql_value)
 	if (hw->intr.int_ql_max == HNS3_INTR_QL_NONE)
 		return;
 
-	addr = HNS3_TQP_INTR_TX_QL_REG + queue_id * HNS3_TQP_INTR_REG_SIZE;
+	addr = HNS3_TQP_INTR_TX_QL_REG + hns3_get_tqp_intr_reg_offset(queue_id);
 	hns3_write_dev(hw, addr, ql_value);
 
-	addr = HNS3_TQP_INTR_RX_QL_REG + queue_id * HNS3_TQP_INTR_REG_SIZE;
+	addr = HNS3_TQP_INTR_RX_QL_REG + hns3_get_tqp_intr_reg_offset(queue_id);
 	hns3_write_dev(hw, addr, ql_value);
 }
 
@@ -897,7 +1007,7 @@ hns3_queue_intr_enable(struct hns3_hw *hw, uint16_t queue_id, bool en)
 {
 	uint32_t addr, value;
 
-	addr = HNS3_TQP_INTR_CTRL_REG + queue_id * HNS3_TQP_INTR_REG_SIZE;
+	addr = HNS3_TQP_INTR_CTRL_REG + hns3_get_tqp_intr_reg_offset(queue_id);
 	value = en ? 1 : 0;
 
 	hns3_write_dev(hw, addr, value);
@@ -1784,6 +1894,7 @@ hns3_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t nb_desc,
 				       HNS3_PORT_BASE_VLAN_ENABLE;
 	else
 		rxq->pvid_sw_discard_en = false;
+	rxq->ptype_en = hns3_dev_rxd_adv_layout_supported(hw) ? true : false;
 	rxq->configured = true;
 	rxq->io_base = (void *)((char *)hw->io_base + HNS3_TQP_REG_OFFSET +
 				idx * HNS3_TQP_REG_SIZE);
@@ -1792,12 +1903,9 @@ hns3_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t nb_desc,
 	rxq->io_head_reg = (volatile void *)((char *)rxq->io_base +
 			   HNS3_RING_RX_HEAD_REG);
 	rxq->rx_buf_len = rx_buf_size;
-	rxq->l2_errors = 0;
-	rxq->pkt_len_errors = 0;
-	rxq->l3_csum_errors = 0;
-	rxq->l4_csum_errors = 0;
-	rxq->ol3_csum_errors = 0;
-	rxq->ol4_csum_errors = 0;
+	memset(&rxq->basic_stats, 0, sizeof(struct hns3_rx_basic_stats));
+	memset(&rxq->err_stats, 0, sizeof(struct hns3_rx_bd_errors_stats));
+	memset(&rxq->dfx_stats, 0, sizeof(struct hns3_rx_dfx_stats));
 
 	/* CRC len set here is used for amending packet length */
 	if (dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_KEEP_CRC)
@@ -1855,8 +1963,6 @@ hns3_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 {
 	static const uint32_t ptypes[] = {
 		RTE_PTYPE_L2_ETHER,
-		RTE_PTYPE_L2_ETHER_VLAN,
-		RTE_PTYPE_L2_ETHER_QINQ,
 		RTE_PTYPE_L2_ETHER_LLDP,
 		RTE_PTYPE_L2_ETHER_ARP,
 		RTE_PTYPE_L3_IPV4,
@@ -1870,8 +1976,6 @@ hns3_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 		RTE_PTYPE_L4_UDP,
 		RTE_PTYPE_TUNNEL_GRE,
 		RTE_PTYPE_INNER_L2_ETHER,
-		RTE_PTYPE_INNER_L2_ETHER_VLAN,
-		RTE_PTYPE_INNER_L2_ETHER_QINQ,
 		RTE_PTYPE_INNER_L3_IPV4,
 		RTE_PTYPE_INNER_L3_IPV6,
 		RTE_PTYPE_INNER_L3_IPV4_EXT,
@@ -1884,12 +1988,45 @@ hns3_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 		RTE_PTYPE_TUNNEL_NVGRE,
 		RTE_PTYPE_UNKNOWN
 	};
+	static const uint32_t adv_layout_ptypes[] = {
+		RTE_PTYPE_L2_ETHER,
+		RTE_PTYPE_L2_ETHER_TIMESYNC,
+		RTE_PTYPE_L2_ETHER_LLDP,
+		RTE_PTYPE_L2_ETHER_ARP,
+		RTE_PTYPE_L3_IPV4_EXT_UNKNOWN,
+		RTE_PTYPE_L3_IPV6_EXT_UNKNOWN,
+		RTE_PTYPE_L4_FRAG,
+		RTE_PTYPE_L4_NONFRAG,
+		RTE_PTYPE_L4_UDP,
+		RTE_PTYPE_L4_TCP,
+		RTE_PTYPE_L4_SCTP,
+		RTE_PTYPE_L4_IGMP,
+		RTE_PTYPE_L4_ICMP,
+		RTE_PTYPE_TUNNEL_GRE,
+		RTE_PTYPE_TUNNEL_GRENAT,
+		RTE_PTYPE_INNER_L2_ETHER,
+		RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN,
+		RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN,
+		RTE_PTYPE_INNER_L4_FRAG,
+		RTE_PTYPE_INNER_L4_ICMP,
+		RTE_PTYPE_INNER_L4_NONFRAG,
+		RTE_PTYPE_INNER_L4_UDP,
+		RTE_PTYPE_INNER_L4_TCP,
+		RTE_PTYPE_INNER_L4_SCTP,
+		RTE_PTYPE_INNER_L4_ICMP,
+		RTE_PTYPE_UNKNOWN
+	};
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
-	if (dev->rx_pkt_burst == hns3_recv_pkts ||
+	if (dev->rx_pkt_burst == hns3_recv_pkts_simple ||
 	    dev->rx_pkt_burst == hns3_recv_scattered_pkts ||
 	    dev->rx_pkt_burst == hns3_recv_pkts_vec ||
-	    dev->rx_pkt_burst == hns3_recv_pkts_vec_sve)
-		return ptypes;
+	    dev->rx_pkt_burst == hns3_recv_pkts_vec_sve) {
+		if (hns3_dev_rxd_adv_layout_supported(hw))
+			return adv_layout_ptypes;
+		else
+			return ptypes;
+	}
 
 	return NULL;
 }
@@ -1897,32 +2034,12 @@ hns3_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 static void
 hns3_init_non_tunnel_ptype_tbl(struct hns3_ptype_table *tbl)
 {
-	tbl->l2l3table[0][0] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4;
-	tbl->l2l3table[0][1] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6;
-	tbl->l2l3table[0][2] = RTE_PTYPE_L2_ETHER_ARP;
-	tbl->l2l3table[0][3] = RTE_PTYPE_L2_ETHER;
-	tbl->l2l3table[0][4] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT;
-	tbl->l2l3table[0][5] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT;
-	tbl->l2l3table[0][6] = RTE_PTYPE_L2_ETHER_LLDP;
-	tbl->l2l3table[0][15] = RTE_PTYPE_L2_ETHER;
-
-	tbl->l2l3table[1][0] = RTE_PTYPE_L2_ETHER_VLAN | RTE_PTYPE_L3_IPV4;
-	tbl->l2l3table[1][1] = RTE_PTYPE_L2_ETHER_VLAN | RTE_PTYPE_L3_IPV6;
-	tbl->l2l3table[1][2] = RTE_PTYPE_L2_ETHER_ARP;
-	tbl->l2l3table[1][3] = RTE_PTYPE_L2_ETHER_VLAN;
-	tbl->l2l3table[1][4] = RTE_PTYPE_L2_ETHER_VLAN | RTE_PTYPE_L3_IPV4_EXT;
-	tbl->l2l3table[1][5] = RTE_PTYPE_L2_ETHER_VLAN | RTE_PTYPE_L3_IPV6_EXT;
-	tbl->l2l3table[1][6] = RTE_PTYPE_L2_ETHER_LLDP;
-	tbl->l2l3table[1][15] = RTE_PTYPE_L2_ETHER_VLAN;
-
-	tbl->l2l3table[2][0] = RTE_PTYPE_L2_ETHER_QINQ | RTE_PTYPE_L3_IPV4;
-	tbl->l2l3table[2][1] = RTE_PTYPE_L2_ETHER_QINQ | RTE_PTYPE_L3_IPV6;
-	tbl->l2l3table[2][2] = RTE_PTYPE_L2_ETHER_ARP;
-	tbl->l2l3table[2][3] = RTE_PTYPE_L2_ETHER_QINQ;
-	tbl->l2l3table[2][4] = RTE_PTYPE_L2_ETHER_QINQ | RTE_PTYPE_L3_IPV4_EXT;
-	tbl->l2l3table[2][5] = RTE_PTYPE_L2_ETHER_QINQ | RTE_PTYPE_L3_IPV6_EXT;
-	tbl->l2l3table[2][6] = RTE_PTYPE_L2_ETHER_LLDP;
-	tbl->l2l3table[2][15] = RTE_PTYPE_L2_ETHER_QINQ;
+	tbl->l3table[0] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4;
+	tbl->l3table[1] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6;
+	tbl->l3table[2] = RTE_PTYPE_L2_ETHER_ARP;
+	tbl->l3table[4] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT;
+	tbl->l3table[5] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT;
+	tbl->l3table[6] = RTE_PTYPE_L2_ETHER_LLDP;
 
 	tbl->l4table[0] = RTE_PTYPE_L4_UDP;
 	tbl->l4table[1] = RTE_PTYPE_L4_TCP;
@@ -1935,17 +2052,17 @@ hns3_init_non_tunnel_ptype_tbl(struct hns3_ptype_table *tbl)
 static void
 hns3_init_tunnel_ptype_tbl(struct hns3_ptype_table *tbl)
 {
-	tbl->inner_l2table[0] = RTE_PTYPE_INNER_L2_ETHER;
-	tbl->inner_l2table[1] = RTE_PTYPE_INNER_L2_ETHER_VLAN;
-	tbl->inner_l2table[2] = RTE_PTYPE_INNER_L2_ETHER_QINQ;
-
-	tbl->inner_l3table[0] = RTE_PTYPE_INNER_L3_IPV4;
-	tbl->inner_l3table[1] = RTE_PTYPE_INNER_L3_IPV6;
+	tbl->inner_l3table[0] = RTE_PTYPE_INNER_L2_ETHER |
+				RTE_PTYPE_INNER_L3_IPV4;
+	tbl->inner_l3table[1] = RTE_PTYPE_INNER_L2_ETHER |
+				RTE_PTYPE_INNER_L3_IPV6;
 	/* There is not a ptype for inner ARP/RARP */
 	tbl->inner_l3table[2] = RTE_PTYPE_UNKNOWN;
 	tbl->inner_l3table[3] = RTE_PTYPE_UNKNOWN;
-	tbl->inner_l3table[4] = RTE_PTYPE_INNER_L3_IPV4_EXT;
-	tbl->inner_l3table[5] = RTE_PTYPE_INNER_L3_IPV6_EXT;
+	tbl->inner_l3table[4] = RTE_PTYPE_INNER_L2_ETHER |
+				RTE_PTYPE_INNER_L3_IPV4_EXT;
+	tbl->inner_l3table[5] = RTE_PTYPE_INNER_L2_ETHER |
+				RTE_PTYPE_INNER_L3_IPV6_EXT;
 
 	tbl->inner_l4table[0] = RTE_PTYPE_INNER_L4_UDP;
 	tbl->inner_l4table[1] = RTE_PTYPE_INNER_L4_TCP;
@@ -1956,20 +2073,203 @@ hns3_init_tunnel_ptype_tbl(struct hns3_ptype_table *tbl)
 	tbl->inner_l4table[4] = RTE_PTYPE_UNKNOWN;
 	tbl->inner_l4table[5] = RTE_PTYPE_INNER_L4_ICMP;
 
-	tbl->ol2table[0] = RTE_PTYPE_L2_ETHER;
-	tbl->ol2table[1] = RTE_PTYPE_L2_ETHER_VLAN;
-	tbl->ol2table[2] = RTE_PTYPE_L2_ETHER_QINQ;
-
-	tbl->ol3table[0] = RTE_PTYPE_L3_IPV4;
-	tbl->ol3table[1] = RTE_PTYPE_L3_IPV6;
+	tbl->ol3table[0] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4;
+	tbl->ol3table[1] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6;
 	tbl->ol3table[2] = RTE_PTYPE_UNKNOWN;
 	tbl->ol3table[3] = RTE_PTYPE_UNKNOWN;
-	tbl->ol3table[4] = RTE_PTYPE_L3_IPV4_EXT;
-	tbl->ol3table[5] = RTE_PTYPE_L3_IPV6_EXT;
+	tbl->ol3table[4] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT;
+	tbl->ol3table[5] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT;
 
 	tbl->ol4table[0] = RTE_PTYPE_UNKNOWN;
-	tbl->ol4table[1] = RTE_PTYPE_TUNNEL_VXLAN;
+	tbl->ol4table[1] = RTE_PTYPE_L4_UDP | RTE_PTYPE_TUNNEL_VXLAN;
 	tbl->ol4table[2] = RTE_PTYPE_TUNNEL_NVGRE;
+}
+
+static void
+hns3_init_adv_layout_ptype(struct hns3_ptype_table *tbl)
+{
+	uint32_t *ptype = tbl->ptype;
+
+	/* Non-tunnel L2 */
+	ptype[1] = RTE_PTYPE_L2_ETHER_ARP;
+	ptype[3] = RTE_PTYPE_L2_ETHER_LLDP;
+	ptype[8] = RTE_PTYPE_L2_ETHER_TIMESYNC;
+
+	/* Non-tunnel IPv4 */
+	ptype[17] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_L4_FRAG;
+	ptype[18] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_L4_NONFRAG;
+	ptype[19] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_L4_UDP;
+	ptype[20] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_L4_TCP;
+	ptype[21] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRE;
+	ptype[22] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_L4_SCTP;
+	ptype[23] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_L4_IGMP;
+	ptype[24] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_L4_ICMP;
+	/* The next ptype is PTP over IPv4 + UDP */
+	ptype[25] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_L4_UDP;
+
+	/* IPv4 --> GRE/Teredo/VXLAN */
+	ptype[29] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT;
+	/* IPv4 --> GRE/Teredo/VXLAN --> MAC */
+	ptype[30] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER;
+
+	/* IPv4 --> GRE/Teredo/VXLAN --> MAC --> IPv4 */
+	ptype[31] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_FRAG;
+	ptype[32] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_NONFRAG;
+	ptype[33] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_UDP;
+	ptype[34] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_TCP;
+	ptype[35] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_SCTP;
+	/* The next ptype's inner L4 is IGMP */
+	ptype[36] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN;
+	ptype[37] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_ICMP;
+
+	/* IPv4 --> GRE/Teredo/VXLAN --> MAC --> IPv6 */
+	ptype[39] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_FRAG;
+	ptype[40] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_NONFRAG;
+	ptype[41] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_UDP;
+	ptype[42] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_TCP;
+	ptype[43] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_SCTP;
+	/* The next ptype's inner L4 is IGMP */
+	ptype[44] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN;
+	ptype[45] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN |
+		    RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		    RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		    RTE_PTYPE_INNER_L4_ICMP;
+
+	/* Non-tunnel IPv6 */
+	ptype[111] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_L4_FRAG;
+	ptype[112] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_L4_NONFRAG;
+	ptype[113] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_L4_UDP;
+	ptype[114] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_L4_TCP;
+	ptype[115] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRE;
+	ptype[116] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_L4_SCTP;
+	ptype[117] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_L4_IGMP;
+	ptype[118] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_L4_ICMP;
+	/* Special for PTP over IPv6 + UDP */
+	ptype[119] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_L4_UDP;
+
+	/* IPv6 --> GRE/Teredo/VXLAN */
+	ptype[123] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT;
+	/* IPv6 --> GRE/Teredo/VXLAN --> MAC */
+	ptype[124] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER;
+
+	/* IPv6 --> GRE/Teredo/VXLAN --> MAC --> IPv4 */
+	ptype[125] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_FRAG;
+	ptype[126] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_NONFRAG;
+	ptype[127] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_UDP;
+	ptype[128] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_TCP;
+	ptype[129] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_SCTP;
+	/* The next ptype's inner L4 is IGMP */
+	ptype[130] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN;
+	ptype[131] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_ICMP;
+
+	/* IPv6 --> GRE/Teredo/VXLAN --> MAC --> IPv6 */
+	ptype[133] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_FRAG;
+	ptype[134] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_NONFRAG;
+	ptype[135] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_UDP;
+	ptype[136] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_TCP;
+	ptype[137] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_SCTP;
+	/* The next ptype's inner L4 is IGMP */
+	ptype[138] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN;
+	ptype[139] = RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+		     RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN |
+		     RTE_PTYPE_INNER_L4_ICMP;
 }
 
 void
@@ -1982,6 +2282,7 @@ hns3_init_rx_ptype_tble(struct rte_eth_dev *dev)
 
 	hns3_init_non_tunnel_ptype_tbl(tbl);
 	hns3_init_tunnel_ptype_tbl(tbl);
+	hns3_init_adv_layout_ptype(tbl);
 }
 
 static inline void
@@ -2071,8 +2372,27 @@ hns3_rx_alloc_buffer(struct hns3_rx_queue *rxq)
 		return rte_mbuf_raw_alloc(rxq->mb_pool);
 }
 
+static inline void
+hns3_rx_ptp_timestamp_handle(struct hns3_rx_queue *rxq, struct rte_mbuf *mbuf,
+		  volatile struct hns3_desc *rxd)
+{
+	struct hns3_pf *pf = HNS3_DEV_PRIVATE_TO_PF(rxq->hns);
+	uint64_t timestamp = rte_le_to_cpu_64(rxd->timestamp);
+
+	mbuf->ol_flags |= PKT_RX_IEEE1588_PTP | PKT_RX_IEEE1588_TMST;
+	if (hns3_timestamp_rx_dynflag > 0) {
+		*RTE_MBUF_DYNFIELD(mbuf, hns3_timestamp_dynfield_offset,
+			rte_mbuf_timestamp_t *) = timestamp;
+		mbuf->ol_flags |= hns3_timestamp_rx_dynflag;
+	}
+
+	pf->rx_timestamp = timestamp;
+}
+
 uint16_t
-hns3_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
+hns3_recv_pkts_simple(void *rx_queue,
+		      struct rte_mbuf **rx_pkts,
+		      uint16_t nb_pkts)
 {
 	volatile struct hns3_desc *rx_ring;  /* RX ring (desc) */
 	volatile struct hns3_desc *rxdp;     /* pointer of the current desc */
@@ -2083,7 +2403,6 @@ hns3_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 	struct rte_mbuf *nmb;           /* pointer of the new mbuf */
 	struct rte_mbuf *rxm;
 	uint32_t bd_base_info;
-	uint32_t cksum_err;
 	uint32_t l234_info;
 	uint32_t ol_info;
 	uint64_t dma_addr;
@@ -2130,7 +2449,11 @@ hns3_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		}
 
 		rxm = rxe->mbuf;
+		rxm->ol_flags = 0;
 		rxe->mbuf = nmb;
+
+		if (unlikely(bd_base_info & BIT(HNS3_RXD_TS_VLD_B)))
+			hns3_rx_ptp_timestamp_handle(rxq, rxm, rxdp);
 
 		dma_addr = rte_mbuf_data_iova_default(nmb);
 		rxdp->addr = rte_cpu_to_le_64(dma_addr);
@@ -2142,7 +2465,7 @@ hns3_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		rxm->data_len = rxm->pkt_len;
 		rxm->port = rxq->port_id;
 		rxm->hash.rss = rte_le_to_cpu_32(rxd.rx.rss_hash);
-		rxm->ol_flags = PKT_RX_RSS_HASH;
+		rxm->ol_flags |= PKT_RX_RSS_HASH;
 		if (unlikely(bd_base_info & BIT(HNS3_RXD_LUM_B))) {
 			rxm->hash.fdir.hi =
 				rte_le_to_cpu_16(rxd.rx.fd_id);
@@ -2154,17 +2477,19 @@ hns3_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		/* Load remained descriptor data and extract necessary fields */
 		l234_info = rte_le_to_cpu_32(rxd.rx.l234_info);
 		ol_info = rte_le_to_cpu_32(rxd.rx.ol_info);
-		ret = hns3_handle_bdinfo(rxq, rxm, bd_base_info,
-					 l234_info, &cksum_err);
+		ret = hns3_handle_bdinfo(rxq, rxm, bd_base_info, l234_info);
 		if (unlikely(ret))
 			goto pkt_err;
 
 		rxm->packet_type = hns3_rx_calc_ptype(rxq, l234_info, ol_info);
 
-		if (likely(bd_base_info & BIT(HNS3_RXD_L3L4P_B)))
-			hns3_rx_set_cksum_flag(rxm, rxm->packet_type,
-					       cksum_err);
+		if (rxm->packet_type == RTE_PTYPE_L2_ETHER_TIMESYNC)
+			rxm->ol_flags |= PKT_RX_IEEE1588_PTP;
+
 		hns3_rxd_to_vlan_tci(rxq, rxm, l234_info, &rxd);
+
+		/* Increment bytes counter  */
+		rxq->basic_stats.bytes += rxm->pkt_len;
 
 		rx_pkts[nb_rx++] = rxm;
 		continue;
@@ -2199,7 +2524,6 @@ hns3_recv_scattered_pkts(void *rx_queue,
 	struct rte_mbuf *rxm;
 	struct rte_eth_dev *dev;
 	uint32_t bd_base_info;
-	uint32_t cksum_err;
 	uint32_t l234_info;
 	uint32_t gro_size;
 	uint32_t ol_info;
@@ -2373,18 +2697,17 @@ hns3_recv_scattered_pkts(void *rx_queue,
 		l234_info = rte_le_to_cpu_32(rxd.rx.l234_info);
 		ol_info = rte_le_to_cpu_32(rxd.rx.ol_info);
 		ret = hns3_handle_bdinfo(rxq, first_seg, bd_base_info,
-					 l234_info, &cksum_err);
+					 l234_info);
 		if (unlikely(ret))
 			goto pkt_err;
 
 		first_seg->packet_type = hns3_rx_calc_ptype(rxq,
 						l234_info, ol_info);
 
-		if (bd_base_info & BIT(HNS3_RXD_L3L4P_B))
-			hns3_rx_set_cksum_flag(first_seg,
-					       first_seg->packet_type,
-					       cksum_err);
 		hns3_rxd_to_vlan_tci(rxq, first_seg, l234_info, &rxd);
+
+		/* Increment bytes counter */
+		rxq->basic_stats.bytes += first_seg->pkt_len;
 
 		rx_pkts[nb_rx++] = first_seg;
 		first_seg = NULL;
@@ -2442,10 +2765,10 @@ hns3_rx_burst_mode_get(struct rte_eth_dev *dev, __rte_unused uint16_t queue_id,
 		eth_rx_burst_t pkt_burst;
 		const char *info;
 	} burst_infos[] = {
-		{ hns3_recv_pkts,		"Scalar" },
+		{ hns3_recv_pkts_simple,	"Scalar Simple" },
 		{ hns3_recv_scattered_pkts,	"Scalar Scattered" },
-		{ hns3_recv_pkts_vec,		"Vector Neon" },
-		{ hns3_recv_pkts_vec_sve,	"Vector Sve" },
+		{ hns3_recv_pkts_vec,		"Vector Neon"   },
+		{ hns3_recv_pkts_vec_sve,	"Vector Sve"    },
 	};
 
 	eth_rx_burst_t pkt_burst = dev->rx_pkt_burst;
@@ -2465,9 +2788,23 @@ hns3_rx_burst_mode_get(struct rte_eth_dev *dev, __rte_unused uint16_t queue_id,
 }
 
 static bool
-hns3_check_sve_support(void)
+hns3_get_default_vec_support(void)
 {
-#if defined(RTE_ARCH_ARM64) && defined(CC_SVE_SUPPORT)
+#if defined(RTE_ARCH_ARM64)
+	if (rte_vect_get_max_simd_bitwidth() < RTE_VECT_SIMD_128)
+		return false;
+	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_NEON))
+		return true;
+#endif
+	return false;
+}
+
+static bool
+hns3_get_sve_support(void)
+{
+#if defined(RTE_ARCH_ARM64) && defined(__ARM_FEATURE_SVE)
+	if (rte_vect_get_max_simd_bitwidth() < RTE_VECT_SIMD_256)
+		return false;
 	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_SVE))
 		return true;
 #endif
@@ -2479,14 +2816,28 @@ hns3_get_rx_function(struct rte_eth_dev *dev)
 {
 	struct hns3_adapter *hns = dev->data->dev_private;
 	uint64_t offloads = dev->data->dev_conf.rxmode.offloads;
+	bool vec_allowed, sve_allowed, simple_allowed;
+	bool vec_support;
 
-	if (hns->rx_vec_allowed && hns3_rx_check_vec_support(dev) == 0)
-		return hns3_check_sve_support() ? hns3_recv_pkts_vec_sve :
-		       hns3_recv_pkts_vec;
+	vec_support = hns3_rx_check_vec_support(dev) == 0;
+	vec_allowed = vec_support && hns3_get_default_vec_support();
+	sve_allowed = vec_support && hns3_get_sve_support();
+	simple_allowed = !dev->data->scattered_rx &&
+			 (offloads & DEV_RX_OFFLOAD_TCP_LRO) == 0;
 
-	if (hns->rx_simple_allowed && !dev->data->scattered_rx &&
-	    (offloads & DEV_RX_OFFLOAD_TCP_LRO) == 0)
-		return hns3_recv_pkts;
+	if (hns->rx_func_hint == HNS3_IO_FUNC_HINT_VEC && vec_allowed)
+		return hns3_recv_pkts_vec;
+	if (hns->rx_func_hint == HNS3_IO_FUNC_HINT_SVE && sve_allowed)
+		return hns3_recv_pkts_vec_sve;
+	if (hns->rx_func_hint == HNS3_IO_FUNC_HINT_SIMPLE && simple_allowed)
+		return hns3_recv_pkts_simple;
+	if (hns->rx_func_hint == HNS3_IO_FUNC_HINT_COMMON)
+		return hns3_recv_scattered_pkts;
+
+	if (vec_allowed)
+		return hns3_recv_pkts_vec;
+	if (simple_allowed)
+		return hns3_recv_pkts_simple;
 
 	return hns3_recv_scattered_pkts;
 }
@@ -2622,12 +2973,10 @@ hns3_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t nb_desc,
 					     HNS3_RING_TX_TAIL_REG);
 	txq->min_tx_pkt_len = hw->min_tx_pkt_len;
 	txq->tso_mode = hw->tso_mode;
-	txq->over_length_pkt_cnt = 0;
-	txq->exceed_limit_bd_pkt_cnt = 0;
-	txq->exceed_limit_bd_reassem_fail = 0;
-	txq->unsupported_tunnel_pkt_cnt = 0;
-	txq->queue_full_cnt = 0;
-	txq->pkt_padding_fail_cnt = 0;
+	txq->udp_cksum_mode = hw->udp_cksum_mode;
+	memset(&txq->basic_stats, 0, sizeof(struct hns3_tx_basic_stats));
+	memset(&txq->dfx_stats, 0, sizeof(struct hns3_tx_dfx_stats));
+
 	rte_spinlock_lock(&hw->lock);
 	dev->data->tx_queues[idx] = txq;
 	rte_spinlock_unlock(&hw->lock);
@@ -2732,7 +3081,7 @@ hns3_fill_per_desc(struct hns3_desc *desc, struct rte_mbuf *rxm)
 {
 	desc->addr = rte_mbuf_data_iova(rxm);
 	desc->tx.send_size = rte_cpu_to_le_16(rte_pktmbuf_data_len(rxm));
-	desc->tx.tp_fe_sc_vld_ra_ri = rte_cpu_to_le_16(BIT(HNS3_TXD_VLD_B));
+	desc->tx.tp_fe_sc_vld_ra_ri |= rte_cpu_to_le_16(BIT(HNS3_TXD_VLD_B));
 }
 
 static void
@@ -2747,7 +3096,7 @@ hns3_fill_first_desc(struct hns3_tx_queue *txq, struct hns3_desc *desc,
 	hdr_len += (ol_flags & PKT_TX_TUNNEL_MASK) ?
 			   rxm->outer_l2_len + rxm->outer_l3_len : 0;
 	paylen = rxm->pkt_len - hdr_len;
-	desc->tx.paylen = rte_cpu_to_le_32(paylen);
+	desc->tx.paylen_fd_dop_ol4cs |= rte_cpu_to_le_32(paylen);
 	hns3_set_tso(desc, paylen, rxm);
 
 	/*
@@ -2780,6 +3129,10 @@ hns3_fill_first_desc(struct hns3_tx_queue *txq, struct hns3_desc *desc,
 					rte_cpu_to_le_32(BIT(HNS3_TXD_VLAN_B));
 		desc->tx.vlan_tag = rte_cpu_to_le_16(rxm->vlan_tci);
 	}
+
+	if (ol_flags & PKT_TX_IEEE1588_TMST)
+		desc->tx.tp_fe_sc_vld_ra_ri |=
+				rte_cpu_to_le_16(BIT(HNS3_TXD_TSYN_B));
 }
 
 static inline int
@@ -2984,8 +3337,10 @@ hns3_parse_tunneling_params(struct hns3_tx_queue *txq, struct rte_mbuf *m,
 {
 	struct hns3_desc *tx_ring = txq->tx_ring;
 	struct hns3_desc *desc = &tx_ring[tx_desc_id];
+	uint64_t ol_flags = m->ol_flags;
 	uint32_t tmp_outer = 0;
 	uint32_t tmp_inner = 0;
+	uint32_t tmp_ol4cs;
 	int ret;
 
 	/*
@@ -2995,7 +3350,7 @@ hns3_parse_tunneling_params(struct hns3_tx_queue *txq, struct rte_mbuf *m,
 	 * calculations, the length of the L2 header include the outer and
 	 * inner, will be filled during the parsing of tunnel packects.
 	 */
-	if (!(m->ol_flags & PKT_TX_TUNNEL_MASK)) {
+	if (!(ol_flags & PKT_TX_TUNNEL_MASK)) {
 		/*
 		 * For non tunnel type the tunnel type id is 0, so no need to
 		 * assign a value to it. Only the inner(normal) L2 header length
@@ -3010,7 +3365,8 @@ hns3_parse_tunneling_params(struct hns3_tx_queue *txq, struct rte_mbuf *m,
 		 * inner l2_len. It would lead a cksum error. So driver has to
 		 * calculate the header length.
 		 */
-		if (unlikely(!(m->ol_flags & PKT_TX_OUTER_IP_CKSUM) &&
+		if (unlikely(!(ol_flags &
+			(PKT_TX_OUTER_IP_CKSUM | PKT_TX_OUTER_UDP_CKSUM)) &&
 					m->outer_l2_len == 0)) {
 			struct rte_net_hdr_lens hdr_len;
 			(void)rte_net_get_ptype(m, &hdr_len,
@@ -3027,6 +3383,9 @@ hns3_parse_tunneling_params(struct hns3_tx_queue *txq, struct rte_mbuf *m,
 
 	desc->tx.ol_type_vlan_len_msec = rte_cpu_to_le_32(tmp_outer);
 	desc->tx.type_cs_vlan_tso_len = rte_cpu_to_le_32(tmp_inner);
+	tmp_ol4cs = ol_flags & PKT_TX_OUTER_UDP_CKSUM ?
+			BIT(HNS3_TXD_OL4CS_B) : 0;
+	desc->tx.paylen_fd_dop_ol4cs = rte_cpu_to_le_32(tmp_ol4cs);
 
 	return 0;
 }
@@ -3065,6 +3424,7 @@ hns3_parse_l4_cksum_params(struct rte_mbuf *m, uint32_t *type_cs_vlan_tso_len)
 	uint32_t tmp;
 	/* Enable L4 checksum offloads */
 	switch (ol_flags & (PKT_TX_L4_MASK | PKT_TX_TCP_SEG)) {
+	case PKT_TX_TCP_CKSUM | PKT_TX_TCP_SEG:
 	case PKT_TX_TCP_CKSUM:
 	case PKT_TX_TCP_SEG:
 		tmp = *type_cs_vlan_tso_len;
@@ -3156,31 +3516,78 @@ hns3_pkt_need_linearized(struct rte_mbuf *tx_pkts, uint32_t bd_num,
 	return false;
 }
 
+static bool
+hns3_outer_ipv4_cksum_prepared(struct rte_mbuf *m, uint64_t ol_flags,
+				uint32_t *l4_proto)
+{
+	struct rte_ipv4_hdr *ipv4_hdr;
+	ipv4_hdr = rte_pktmbuf_mtod_offset(m, struct rte_ipv4_hdr *,
+					   m->outer_l2_len);
+	if (ol_flags & PKT_TX_OUTER_IP_CKSUM)
+		ipv4_hdr->hdr_checksum = 0;
+	if (ol_flags & PKT_TX_OUTER_UDP_CKSUM) {
+		struct rte_udp_hdr *udp_hdr;
+		/*
+		 * If OUTER_UDP_CKSUM is support, HW can caclulate the pseudo
+		 * header for TSO packets
+		 */
+		if (ol_flags & PKT_TX_TCP_SEG)
+			return true;
+		udp_hdr = rte_pktmbuf_mtod_offset(m, struct rte_udp_hdr *,
+				m->outer_l2_len + m->outer_l3_len);
+		udp_hdr->dgram_cksum = rte_ipv4_phdr_cksum(ipv4_hdr, ol_flags);
+
+		return true;
+	}
+	*l4_proto = ipv4_hdr->next_proto_id;
+	return false;
+}
+
+static bool
+hns3_outer_ipv6_cksum_prepared(struct rte_mbuf *m, uint64_t ol_flags,
+				uint32_t *l4_proto)
+{
+	struct rte_ipv6_hdr *ipv6_hdr;
+	ipv6_hdr = rte_pktmbuf_mtod_offset(m, struct rte_ipv6_hdr *,
+					   m->outer_l2_len);
+	if (ol_flags & PKT_TX_OUTER_UDP_CKSUM) {
+		struct rte_udp_hdr *udp_hdr;
+		/*
+		 * If OUTER_UDP_CKSUM is support, HW can caclulate the pseudo
+		 * header for TSO packets
+		 */
+		if (ol_flags & PKT_TX_TCP_SEG)
+			return true;
+		udp_hdr = rte_pktmbuf_mtod_offset(m, struct rte_udp_hdr *,
+				m->outer_l2_len + m->outer_l3_len);
+		udp_hdr->dgram_cksum = rte_ipv6_phdr_cksum(ipv6_hdr, ol_flags);
+
+		return true;
+	}
+	*l4_proto = ipv6_hdr->proto;
+	return false;
+}
+
 static void
 hns3_outer_header_cksum_prepare(struct rte_mbuf *m)
 {
 	uint64_t ol_flags = m->ol_flags;
 	uint32_t paylen, hdr_len, l4_proto;
+	struct rte_udp_hdr *udp_hdr;
 
 	if (!(ol_flags & (PKT_TX_OUTER_IPV4 | PKT_TX_OUTER_IPV6)))
 		return;
 
 	if (ol_flags & PKT_TX_OUTER_IPV4) {
-		struct rte_ipv4_hdr *ipv4_hdr;
-		ipv4_hdr = rte_pktmbuf_mtod_offset(m, struct rte_ipv4_hdr *,
-						   m->outer_l2_len);
-		l4_proto = ipv4_hdr->next_proto_id;
-		if (ol_flags & PKT_TX_OUTER_IP_CKSUM)
-			ipv4_hdr->hdr_checksum = 0;
+		if (hns3_outer_ipv4_cksum_prepared(m, ol_flags, &l4_proto))
+			return;
 	} else {
-		struct rte_ipv6_hdr *ipv6_hdr;
-		ipv6_hdr = rte_pktmbuf_mtod_offset(m, struct rte_ipv6_hdr *,
-						   m->outer_l2_len);
-		l4_proto = ipv6_hdr->proto;
+		if (hns3_outer_ipv6_cksum_prepared(m, ol_flags, &l4_proto))
+			return;
 	}
+
 	/* driver should ensure the outer udp cksum is 0 for TUNNEL TSO */
 	if (l4_proto == IPPROTO_UDP && (ol_flags & PKT_TX_TCP_SEG)) {
-		struct rte_udp_hdr *udp_hdr;
 		hdr_len = m->l2_len + m->l3_len + m->l4_len;
 		hdr_len += m->outer_l2_len + m->outer_l3_len;
 		paylen = m->pkt_len - hdr_len;
@@ -3274,6 +3681,69 @@ hns3_vld_vlan_chk(struct hns3_tx_queue *txq, struct rte_mbuf *m)
 }
 #endif
 
+static uint16_t
+hns3_udp_cksum_help(struct rte_mbuf *m)
+{
+	uint64_t ol_flags = m->ol_flags;
+	uint16_t cksum = 0;
+	uint32_t l4_len;
+
+	if (ol_flags & PKT_TX_IPV4) {
+		struct rte_ipv4_hdr *ipv4_hdr = rte_pktmbuf_mtod_offset(m,
+				struct rte_ipv4_hdr *, m->l2_len);
+		l4_len = rte_be_to_cpu_16(ipv4_hdr->total_length) - m->l3_len;
+	} else {
+		struct rte_ipv6_hdr *ipv6_hdr = rte_pktmbuf_mtod_offset(m,
+				struct rte_ipv6_hdr *, m->l2_len);
+		l4_len = rte_be_to_cpu_16(ipv6_hdr->payload_len);
+	}
+
+	rte_raw_cksum_mbuf(m, m->l2_len + m->l3_len, l4_len, &cksum);
+
+	cksum = ~cksum;
+	/*
+	 * RFC 768:If the computed checksum is zero for UDP, it is transmitted
+	 * as all ones
+	 */
+	if (cksum == 0)
+		cksum = 0xffff;
+
+	return (uint16_t)cksum;
+}
+
+static bool
+hns3_validate_tunnel_cksum(struct hns3_tx_queue *tx_queue, struct rte_mbuf *m)
+{
+	uint64_t ol_flags = m->ol_flags;
+	struct rte_udp_hdr *udp_hdr;
+	uint16_t dst_port;
+
+	if (tx_queue->udp_cksum_mode == HNS3_SPECIAL_PORT_HW_CKSUM_MODE ||
+	    ol_flags & PKT_TX_TUNNEL_MASK ||
+	    (ol_flags & PKT_TX_L4_MASK) != PKT_TX_UDP_CKSUM)
+		return true;
+	/*
+	 * A UDP packet with the same dst_port as VXLAN\VXLAN_GPE\GENEVE will
+	 * be recognized as a tunnel packet in HW. In this case, if UDP CKSUM
+	 * offload is set and the tunnel mask has not been set, the CKSUM will
+	 * be wrong since the header length is wrong and driver should complete
+	 * the CKSUM to avoid CKSUM error.
+	 */
+	udp_hdr = rte_pktmbuf_mtod_offset(m, struct rte_udp_hdr *,
+						m->l2_len + m->l3_len);
+	dst_port = rte_be_to_cpu_16(udp_hdr->dst_port);
+	switch (dst_port) {
+	case RTE_VXLAN_DEFAULT_PORT:
+	case RTE_VXLAN_GPE_DEFAULT_PORT:
+	case RTE_GENEVE_DEFAULT_PORT:
+		udp_hdr->dgram_cksum = hns3_udp_cksum_help(m);
+		m->ol_flags = ol_flags & ~PKT_TX_L4_MASK;
+		return false;
+	default:
+		return true;
+	}
+}
+
 static int
 hns3_prep_pkt_proc(struct hns3_tx_queue *tx_queue, struct rte_mbuf *m)
 {
@@ -3318,6 +3788,9 @@ hns3_prep_pkt_proc(struct hns3_tx_queue *tx_queue, struct rte_mbuf *m)
 		return ret;
 	}
 
+	if (!hns3_validate_tunnel_cksum(tx_queue, m))
+		return 0;
+
 	hns3_outer_header_cksum_prepare(m);
 
 	return 0;
@@ -3350,7 +3823,7 @@ hns3_parse_cksum(struct hns3_tx_queue *txq, uint16_t tx_desc_id,
 	if (m->ol_flags & HNS3_TX_CKSUM_OFFLOAD_MASK) {
 		/* Fill in tunneling parameters if necessary */
 		if (hns3_parse_tunneling_params(txq, m, tx_desc_id)) {
-			txq->unsupported_tunnel_pkt_cnt++;
+			txq->dfx_stats.unsupported_tunnel_pkt_cnt++;
 				return -EINVAL;
 		}
 
@@ -3380,17 +3853,17 @@ hns3_check_non_tso_pkt(uint16_t nb_buf, struct rte_mbuf **m_seg,
 	 * driver support, the packet will be ignored.
 	 */
 	if (unlikely(rte_pktmbuf_pkt_len(tx_pkt) > HNS3_MAX_FRAME_LEN)) {
-		txq->over_length_pkt_cnt++;
+		txq->dfx_stats.over_length_pkt_cnt++;
 		return -EINVAL;
 	}
 
 	max_non_tso_bd_num = txq->max_non_tso_bd_num;
 	if (unlikely(nb_buf > max_non_tso_bd_num)) {
-		txq->exceed_limit_bd_pkt_cnt++;
+		txq->dfx_stats.exceed_limit_bd_pkt_cnt++;
 		ret = hns3_reassemble_tx_pkts(tx_pkt, &new_pkt,
 					      max_non_tso_bd_num);
 		if (ret) {
-			txq->exceed_limit_bd_reassem_fail++;
+			txq->dfx_stats.exceed_limit_bd_reassem_fail++;
 			return ret;
 		}
 		*m_seg = new_pkt;
@@ -3466,7 +3939,7 @@ hns3_tx_setup_4bd(struct hns3_desc *txdp, struct rte_mbuf **pkts)
 		dma_addr = rte_mbuf_data_iova(*pkts);
 		txdp->addr = rte_cpu_to_le_64(dma_addr);
 		txdp->tx.send_size = rte_cpu_to_le_16((*pkts)->data_len);
-		txdp->tx.paylen = 0;
+		txdp->tx.paylen_fd_dop_ol4cs = 0;
 		txdp->tx.type_cs_vlan_tso_len = 0;
 		txdp->tx.ol_type_vlan_len_msec = 0;
 		txdp->tx.tp_fe_sc_vld_ra_ri = rte_cpu_to_le_16(bd_flag);
@@ -3482,7 +3955,7 @@ hns3_tx_setup_1bd(struct hns3_desc *txdp, struct rte_mbuf **pkts)
 	dma_addr = rte_mbuf_data_iova(*pkts);
 	txdp->addr = rte_cpu_to_le_64(dma_addr);
 	txdp->tx.send_size = rte_cpu_to_le_16((*pkts)->data_len);
-	txdp->tx.paylen = 0;
+	txdp->tx.paylen_fd_dop_ol4cs = 0;
 	txdp->tx.type_cs_vlan_tso_len = 0;
 	txdp->tx.ol_type_vlan_len_msec = 0;
 	txdp->tx.tp_fe_sc_vld_ra_ri = rte_cpu_to_le_16(bd_flag);
@@ -3504,6 +3977,11 @@ hns3_tx_fill_hw_ring(struct hns3_tx_queue *txq,
 	for (i = 0; i < mainpart; i += PER_LOOP_NUM) {
 		hns3_tx_backup_4mbuf(tx_entry + i, pkts + i);
 		hns3_tx_setup_4bd(txdp + i, pkts + i);
+
+		/* Increment bytes counter */
+		uint32_t j;
+		for (j = 0; j < PER_LOOP_NUM; j++)
+			txq->basic_stats.bytes += pkts[i + j]->pkt_len;
 	}
 	if (unlikely(leftover > 0)) {
 		for (i = 0; i < leftover; i++) {
@@ -3511,6 +3989,9 @@ hns3_tx_fill_hw_ring(struct hns3_tx_queue *txq,
 					     pkts + mainpart + i);
 			hns3_tx_setup_1bd(txdp + mainpart + i,
 					  pkts + mainpart + i);
+
+			/* Increment bytes counter */
+			txq->basic_stats.bytes += pkts[mainpart + i]->pkt_len;
 		}
 	}
 }
@@ -3528,7 +4009,7 @@ hns3_xmit_pkts_simple(void *tx_queue,
 	nb_pkts = RTE_MIN(txq->tx_bd_ready, nb_pkts);
 	if (unlikely(nb_pkts == 0)) {
 		if (txq->tx_bd_ready == 0)
-			txq->queue_full_cnt++;
+			txq->dfx_stats.queue_full_cnt++;
 		return 0;
 	}
 
@@ -3580,7 +4061,7 @@ hns3_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		nb_buf = tx_pkt->nb_segs;
 
 		if (nb_buf > txq->tx_bd_ready) {
-			txq->queue_full_cnt++;
+			txq->dfx_stats.queue_full_cnt++;
 			if (nb_tx == 0)
 				return 0;
 
@@ -3601,7 +4082,7 @@ hns3_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 					 rte_pktmbuf_pkt_len(tx_pkt);
 			appended = rte_pktmbuf_append(tx_pkt, add_len);
 			if (appended == NULL) {
-				txq->pkt_padding_fail_cnt++;
+				txq->dfx_stats.pkt_padding_fail_cnt++;
 				break;
 			}
 
@@ -3649,6 +4130,8 @@ hns3_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		desc->tx.tp_fe_sc_vld_ra_ri |=
 				 rte_cpu_to_le_16(BIT(HNS3_TXD_FE_B));
 
+		/* Increment bytes counter */
+		txq->basic_stats.bytes += tx_pkt->pkt_len;
 		nb_hold += i;
 		txq->next_to_use = tx_next_use;
 		txq->tx_bd_ready -= i;
@@ -3708,23 +4191,47 @@ hns3_tx_burst_mode_get(struct rte_eth_dev *dev, __rte_unused uint16_t queue_id,
 	return 0;
 }
 
+static bool
+hns3_tx_check_simple_support(struct rte_eth_dev *dev)
+{
+	uint64_t offloads = dev->data->dev_conf.txmode.offloads;
+
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	if (hns3_dev_ptp_supported(hw))
+		return false;
+
+	return (offloads == (offloads & DEV_TX_OFFLOAD_MBUF_FAST_FREE));
+}
+
 static eth_tx_burst_t
 hns3_get_tx_function(struct rte_eth_dev *dev, eth_tx_prep_t *prep)
 {
-	uint64_t offloads = dev->data->dev_conf.txmode.offloads;
 	struct hns3_adapter *hns = dev->data->dev_private;
+	bool vec_allowed, sve_allowed, simple_allowed;
+	bool vec_support;
 
-	if (hns->tx_vec_allowed && hns3_tx_check_vec_support(dev) == 0) {
-		*prep = NULL;
-		return hns3_check_sve_support() ? hns3_xmit_pkts_vec_sve :
-			hns3_xmit_pkts_vec;
-	}
+	vec_support = hns3_tx_check_vec_support(dev) == 0;
+	vec_allowed = vec_support && hns3_get_default_vec_support();
+	sve_allowed = vec_support && hns3_get_sve_support();
+	simple_allowed = hns3_tx_check_simple_support(dev);
 
-	if (hns->tx_simple_allowed &&
-	    offloads == (offloads & DEV_TX_OFFLOAD_MBUF_FAST_FREE)) {
-		*prep = NULL;
+	*prep = NULL;
+
+	if (hns->tx_func_hint == HNS3_IO_FUNC_HINT_VEC && vec_allowed)
+		return hns3_xmit_pkts_vec;
+	if (hns->tx_func_hint == HNS3_IO_FUNC_HINT_SVE && sve_allowed)
+		return hns3_xmit_pkts_vec_sve;
+	if (hns->tx_func_hint == HNS3_IO_FUNC_HINT_SIMPLE && simple_allowed)
 		return hns3_xmit_pkts_simple;
+	if (hns->tx_func_hint == HNS3_IO_FUNC_HINT_COMMON) {
+		*prep = hns3_prep_pkts;
+		return hns3_xmit_pkts;
 	}
+
+	if (vec_allowed)
+		return hns3_xmit_pkts_vec;
+	if (simple_allowed)
+		return hns3_xmit_pkts_simple;
 
 	*prep = hns3_prep_pkts;
 	return hns3_xmit_pkts;
@@ -3738,16 +4245,35 @@ hns3_dummy_rxtx_burst(void *dpdk_txq __rte_unused,
 	return 0;
 }
 
+static void
+hns3_trace_rxtx_function(struct rte_eth_dev *dev)
+{
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct rte_eth_burst_mode rx_mode;
+	struct rte_eth_burst_mode tx_mode;
+
+	memset(&rx_mode, 0, sizeof(rx_mode));
+	memset(&tx_mode, 0, sizeof(tx_mode));
+	(void)hns3_rx_burst_mode_get(dev, 0, &rx_mode);
+	(void)hns3_tx_burst_mode_get(dev, 0, &tx_mode);
+
+	hns3_dbg(hw, "using rx_pkt_burst: %s, tx_pkt_burst: %s.",
+		 rx_mode.info, tx_mode.info);
+}
+
 void hns3_set_rxtx_function(struct rte_eth_dev *eth_dev)
 {
 	struct hns3_adapter *hns = eth_dev->data->dev_private;
 	eth_tx_prep_t prep = NULL;
 
 	if (hns->hw.adapter_state == HNS3_NIC_STARTED &&
-	    rte_atomic16_read(&hns->hw.reset.resetting) == 0) {
+	    __atomic_load_n(&hns->hw.reset.resetting, __ATOMIC_RELAXED) == 0) {
 		eth_dev->rx_pkt_burst = hns3_get_rx_function(eth_dev);
+		eth_dev->rx_descriptor_status = hns3_dev_rx_descriptor_status;
 		eth_dev->tx_pkt_burst = hns3_get_tx_function(eth_dev, &prep);
 		eth_dev->tx_pkt_prepare = prep;
+		eth_dev->tx_descriptor_status = hns3_dev_tx_descriptor_status;
+		hns3_trace_rxtx_function(eth_dev);
 	} else {
 		eth_dev->rx_pkt_burst = hns3_dummy_rxtx_burst;
 		eth_dev->tx_pkt_burst = hns3_dummy_rxtx_burst;
@@ -3801,10 +4327,12 @@ hns3_dev_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	if (!hns3_dev_indep_txrx_supported(hw))
 		return -ENOTSUP;
 
+	rte_spinlock_lock(&hw->lock);
 	ret = hns3_reset_queue(hw, rx_queue_id, HNS3_RING_TYPE_RX);
 	if (ret) {
 		hns3_err(hw, "fail to reset Rx queue %u, ret = %d.",
 			 rx_queue_id, ret);
+		rte_spinlock_unlock(&hw->lock);
 		return ret;
 	}
 
@@ -3812,11 +4340,13 @@ hns3_dev_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	if (ret) {
 		hns3_err(hw, "fail to init Rx queue %u, ret = %d.",
 			 rx_queue_id, ret);
+		rte_spinlock_unlock(&hw->lock);
 		return ret;
 	}
 
 	hns3_enable_rxq(rxq, true);
 	dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
+	rte_spinlock_unlock(&hw->lock);
 
 	return ret;
 }
@@ -3843,12 +4373,14 @@ hns3_dev_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	if (!hns3_dev_indep_txrx_supported(hw))
 		return -ENOTSUP;
 
+	rte_spinlock_lock(&hw->lock);
 	hns3_enable_rxq(rxq, false);
 
 	hns3_rx_queue_release_mbufs(rxq);
 
 	hns3_reset_sw_rxq(rxq);
 	dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
+	rte_spinlock_unlock(&hw->lock);
 
 	return 0;
 }
@@ -3863,16 +4395,19 @@ hns3_dev_tx_queue_start(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 	if (!hns3_dev_indep_txrx_supported(hw))
 		return -ENOTSUP;
 
+	rte_spinlock_lock(&hw->lock);
 	ret = hns3_reset_queue(hw, tx_queue_id, HNS3_RING_TYPE_TX);
 	if (ret) {
 		hns3_err(hw, "fail to reset Tx queue %u, ret = %d.",
 			 tx_queue_id, ret);
+		rte_spinlock_unlock(&hw->lock);
 		return ret;
 	}
 
 	hns3_init_txq(txq);
 	hns3_enable_txq(txq, true);
 	dev->data->tx_queue_state[tx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
+	rte_spinlock_unlock(&hw->lock);
 
 	return ret;
 }
@@ -3886,6 +4421,7 @@ hns3_dev_tx_queue_stop(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 	if (!hns3_dev_indep_txrx_supported(hw))
 		return -ENOTSUP;
 
+	rte_spinlock_lock(&hw->lock);
 	hns3_enable_txq(txq, false);
 	hns3_tx_queue_release_mbufs(txq);
 	/*
@@ -3897,8 +4433,130 @@ hns3_dev_tx_queue_stop(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 	 */
 	hns3_init_txq(txq);
 	dev->data->tx_queue_state[tx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
+	rte_spinlock_unlock(&hw->lock);
 
 	return 0;
+}
+
+static int
+hns3_tx_done_cleanup_full(struct hns3_tx_queue *txq, uint32_t free_cnt)
+{
+	uint16_t next_to_clean = txq->next_to_clean;
+	uint16_t next_to_use   = txq->next_to_use;
+	uint16_t tx_bd_ready   = txq->tx_bd_ready;
+	struct hns3_entry *tx_pkt = &txq->sw_ring[next_to_clean];
+	struct hns3_desc *desc = &txq->tx_ring[next_to_clean];
+	uint32_t idx;
+
+	if (free_cnt == 0 || free_cnt > txq->nb_tx_desc)
+		free_cnt = txq->nb_tx_desc;
+
+	for (idx = 0; idx < free_cnt; idx++) {
+		if (next_to_clean == next_to_use)
+			break;
+
+		if (desc->tx.tp_fe_sc_vld_ra_ri &
+		    rte_cpu_to_le_16(BIT(HNS3_TXD_VLD_B)))
+			break;
+
+		if (tx_pkt->mbuf != NULL) {
+			rte_pktmbuf_free_seg(tx_pkt->mbuf);
+			tx_pkt->mbuf = NULL;
+		}
+
+		next_to_clean++;
+		tx_bd_ready++;
+		tx_pkt++;
+		desc++;
+		if (next_to_clean == txq->nb_tx_desc) {
+			tx_pkt = txq->sw_ring;
+			desc = txq->tx_ring;
+			next_to_clean = 0;
+		}
+	}
+
+	if (idx > 0) {
+		txq->next_to_clean = next_to_clean;
+		txq->tx_bd_ready = tx_bd_ready;
+	}
+
+	return (int)idx;
+}
+
+int
+hns3_tx_done_cleanup(void *txq, uint32_t free_cnt)
+{
+	struct hns3_tx_queue *q = (struct hns3_tx_queue *)txq;
+	struct rte_eth_dev *dev = &rte_eth_devices[q->port_id];
+
+	if (dev->tx_pkt_burst == hns3_xmit_pkts)
+		return hns3_tx_done_cleanup_full(q, free_cnt);
+	else if (dev->tx_pkt_burst == hns3_dummy_rxtx_burst)
+		return 0;
+	else
+		return -ENOTSUP;
+}
+
+int
+hns3_dev_rx_descriptor_status(void *rx_queue, uint16_t offset)
+{
+	volatile struct hns3_desc *rxdp;
+	struct hns3_rx_queue *rxq;
+	struct rte_eth_dev *dev;
+	uint32_t bd_base_info;
+	uint16_t desc_id;
+
+	rxq = (struct hns3_rx_queue *)rx_queue;
+	if (offset >= rxq->nb_rx_desc)
+		return -EINVAL;
+
+	desc_id = (rxq->next_to_use + offset) % rxq->nb_rx_desc;
+	rxdp = &rxq->rx_ring[desc_id];
+	bd_base_info = rte_le_to_cpu_32(rxdp->rx.bd_base_info);
+	dev = &rte_eth_devices[rxq->port_id];
+	if (dev->rx_pkt_burst == hns3_recv_pkts_simple ||
+	    dev->rx_pkt_burst == hns3_recv_scattered_pkts) {
+		if (offset >= rxq->nb_rx_desc - rxq->rx_free_hold)
+			return RTE_ETH_RX_DESC_UNAVAIL;
+	} else if (dev->rx_pkt_burst == hns3_recv_pkts_vec ||
+		   dev->rx_pkt_burst == hns3_recv_pkts_vec_sve) {
+		if (offset >= rxq->nb_rx_desc - rxq->rx_rearm_nb)
+			return RTE_ETH_RX_DESC_UNAVAIL;
+	} else {
+		return RTE_ETH_RX_DESC_UNAVAIL;
+	}
+
+	if (!(bd_base_info & BIT(HNS3_RXD_VLD_B)))
+		return RTE_ETH_RX_DESC_AVAIL;
+	else
+		return RTE_ETH_RX_DESC_DONE;
+}
+
+int
+hns3_dev_tx_descriptor_status(void *tx_queue, uint16_t offset)
+{
+	volatile struct hns3_desc *txdp;
+	struct hns3_tx_queue *txq;
+	struct rte_eth_dev *dev;
+	uint16_t desc_id;
+
+	txq = (struct hns3_tx_queue *)tx_queue;
+	if (offset >= txq->nb_tx_desc)
+		return -EINVAL;
+
+	dev = &rte_eth_devices[txq->port_id];
+	if (dev->tx_pkt_burst != hns3_xmit_pkts_simple &&
+	    dev->tx_pkt_burst != hns3_xmit_pkts &&
+	    dev->tx_pkt_burst != hns3_xmit_pkts_vec_sve &&
+	    dev->tx_pkt_burst != hns3_xmit_pkts_vec)
+		return RTE_ETH_TX_DESC_UNAVAIL;
+
+	desc_id = (txq->next_to_use + offset) % txq->nb_tx_desc;
+	txdp = &txq->tx_ring[desc_id];
+	if (txdp->tx.tp_fe_sc_vld_ra_ri & rte_cpu_to_le_16(BIT(HNS3_TXD_VLD_B)))
+		return RTE_ETH_TX_DESC_FULL;
+	else
+		return RTE_ETH_TX_DESC_DONE;
 }
 
 uint32_t
@@ -3924,4 +4582,15 @@ hns3_rx_queue_count(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 		return 0;
 	else
 		return fbd_num - driver_hold_bd_num;
+}
+
+void
+hns3_enable_rxd_adv_layout(struct hns3_hw *hw)
+{
+	/*
+	 * If the hardware support rxd advanced layout, then driver enable it
+	 * default.
+	 */
+	if (hns3_dev_rxd_adv_layout_supported(hw))
+		hns3_write_dev(hw, HNS3_RXD_ADV_LAYOUT_EN_REG, 1);
 }

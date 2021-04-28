@@ -9,7 +9,6 @@
 #include <inttypes.h>
 #include <sys/types.h>
 #include <sys/queue.h>
-#include <netinet/in.h>
 #include <setjmp.h>
 #include <stdarg.h>
 #include <ctype.h>
@@ -259,5 +258,10 @@ main(int argc, char **argv)
 		rte_exit(EXIT_FAILURE, "error in creating flow");
 	}
 
-	return main_loop();
+	ret = main_loop();
+
+	/* clean up the EAL */
+	rte_eal_cleanup();
+
+	return ret;
 }

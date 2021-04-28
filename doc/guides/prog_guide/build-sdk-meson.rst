@@ -35,7 +35,7 @@ The ``meson`` tool is used to configure a DPDK build. On most Linux
 distributions this can be got using the local package management system,
 e.g. ``dnf install meson`` or ``apt-get install meson``. If meson is not
 available as a suitable package, it can also be installed using the Python
-3 ``pip`` tool, e.g. ``pip3 install meson``. Version 0.47.1 of meson is
+3 ``pip`` tool, e.g. ``pip3 install meson``. Version 0.49.2 of meson is
 required - if the version packaged is too old, the latest version is
 generally available from "pip".
 
@@ -45,6 +45,12 @@ Installing meson will, in many cases, also install ninja, but, if not
 already installed, it too is generally packaged by most Linux distributions.
 If not available as a package, it can be downloaded as source or binary from
 https://ninja-build.org/
+
+It is best advised to go over the following links for the complete dependencies:
+
+* :doc:`Linux <../linux_gsg/sys_reqs>`
+* :doc:`FreeBSD <../freebsd_gsg/build_dpdk>`
+* :doc:`Windows <../windows_gsg/build_dpdk>`
 
 
 Configuring the Build
@@ -85,7 +91,7 @@ Project-specific options are passed used -Doption=value::
 
 	meson -Denable_docs=true fullbuild  # build and install docs
 
-	meson -Dmachine=default  # use builder-independent baseline -march
+	meson -Dmachine=generic  # use builder-independent baseline -march
 
 	meson -Ddisable_drivers=event/*,net/tap  # disable tap driver and all
 					# eventdev PMDs for a smaller build
@@ -114,7 +120,7 @@ Examples of setting some of the same options using meson configure::
         re-scan from meson.
 
 .. note::
-        machine=default uses a config that works on all supported architectures
+        machine=generic uses a config that works on all supported architectures
         regardless of the capabilities of the machine where the build is happening.
 
 As well as those settings taken from ``meson configure``, other options

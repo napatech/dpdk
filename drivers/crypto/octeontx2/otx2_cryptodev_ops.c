@@ -7,6 +7,7 @@
 #include <rte_cryptodev_pmd.h>
 #include <rte_errno.h>
 #include <rte_ethdev.h>
+#include <rte_event_crypto_adapter.h>
 
 #include "otx2_cryptodev.h"
 #include "otx2_cryptodev_capabilities.h"
@@ -14,6 +15,7 @@
 #include "otx2_cryptodev_mbox.h"
 #include "otx2_cryptodev_ops.h"
 #include "otx2_cryptodev_ops_helper.h"
+#include "otx2_ipsec_anti_replay.h"
 #include "otx2_ipsec_po_ops.h"
 #include "otx2_mbox.h"
 #include "otx2_sec_idev.h"
@@ -241,7 +243,8 @@ otx2_cpt_qp_create(const struct rte_cryptodev *dev, uint16_t qp_id,
 
 	qp->iq_dma_addr = iova;
 	qp->id = qp_id;
-	qp->base = OTX2_CPT_LF_BAR2(vf, qp_id);
+	qp->blkaddr = vf->lf_blkaddr[qp_id];
+	qp->base = OTX2_CPT_LF_BAR2(vf, qp->blkaddr, qp_id);
 
 	lmtline = vf->otx2_dev.bar2 +
 		  (RVU_BLOCK_ADDR_LMT << 20 | qp_id << 12) +
@@ -320,12 +323,16 @@ sym_xform_verify(struct rte_crypto_sym_xform *xform)
 	if (xform->next) {
 		if (xform->type == RTE_CRYPTO_SYM_XFORM_AUTH &&
 		    xform->next->type == RTE_CRYPTO_SYM_XFORM_CIPHER &&
-		    xform->next->cipher.op == RTE_CRYPTO_CIPHER_OP_ENCRYPT)
+		    xform->next->cipher.op == RTE_CRYPTO_CIPHER_OP_ENCRYPT &&
+		    (xform->auth.algo != RTE_CRYPTO_AUTH_SHA1_HMAC ||
+		     xform->next->cipher.algo != RTE_CRYPTO_CIPHER_AES_CBC))
 			return -ENOTSUP;
 
 		if (xform->type == RTE_CRYPTO_SYM_XFORM_CIPHER &&
 		    xform->cipher.op == RTE_CRYPTO_CIPHER_OP_DECRYPT &&
-		    xform->next->type == RTE_CRYPTO_SYM_XFORM_AUTH)
+		    xform->next->type == RTE_CRYPTO_SYM_XFORM_AUTH &&
+		    (xform->cipher.algo != RTE_CRYPTO_CIPHER_AES_CBC ||
+		     xform->next->auth.algo != RTE_CRYPTO_AUTH_SHA1_HMAC))
 			return -ENOTSUP;
 
 		if (xform->type == RTE_CRYPTO_SYM_XFORM_CIPHER &&
@@ -432,14 +439,34 @@ priv_put:
 	return -ENOTSUP;
 }
 
-static __rte_always_inline void __rte_hot
+static __rte_always_inline int32_t __rte_hot
 otx2_ca_enqueue_req(const struct otx2_cpt_qp *qp,
 		    struct cpt_request_info *req,
 		    void *lmtline,
+		    struct rte_crypto_op *op,
 		    uint64_t cpt_inst_w7)
 {
+	union rte_event_crypto_metadata *m_data;
 	union cpt_inst_s inst;
 	uint64_t lmt_status;
+
+	if (op->sess_type == RTE_CRYPTO_OP_WITH_SESSION) {
+		m_data = rte_cryptodev_sym_session_get_user_data(
+						op->sym->session);
+		if (m_data == NULL) {
+			rte_pktmbuf_free(op->sym->m_src);
+			rte_crypto_op_free(op);
+			rte_errno = EINVAL;
+			return -EINVAL;
+		}
+	} else if (op->sess_type == RTE_CRYPTO_OP_SESSIONLESS &&
+		   op->private_data_offset) {
+		m_data = (union rte_event_crypto_metadata *)
+			 ((uint8_t *)op +
+			  op->private_data_offset);
+	} else {
+		return -EINVAL;
+	}
 
 	inst.u[0] = 0;
 	inst.s9x.res_addr = req->comp_baddr;
@@ -451,12 +478,11 @@ otx2_ca_enqueue_req(const struct otx2_cpt_qp *qp,
 	inst.s9x.ei2 = req->ist.ei2;
 	inst.s9x.ei3 = cpt_inst_w7;
 
-	inst.s9x.qord = 1;
-	inst.s9x.grp = qp->ev.queue_id;
-	inst.s9x.tt = qp->ev.sched_type;
-	inst.s9x.tag = (RTE_EVENT_TYPE_CRYPTODEV << 28) |
-			qp->ev.flow_id;
-	inst.s9x.wq_ptr = (uint64_t)req >> 3;
+	inst.u[2] = (((RTE_EVENT_TYPE_CRYPTODEV << 28) |
+		      m_data->response_info.flow_id) |
+		     ((uint64_t)m_data->response_info.sched_type << 32) |
+		     ((uint64_t)m_data->response_info.queue_id << 34));
+	inst.u[3] = 1 | (((uint64_t)req >> 3) << 3);
 	req->qp = qp;
 
 	do {
@@ -473,22 +499,22 @@ otx2_ca_enqueue_req(const struct otx2_cpt_qp *qp,
 		lmt_status = otx2_lmt_submit(qp->lf_nq_reg);
 	} while (lmt_status == 0);
 
+	return 0;
 }
 
 static __rte_always_inline int32_t __rte_hot
 otx2_cpt_enqueue_req(const struct otx2_cpt_qp *qp,
 		     struct pending_queue *pend_q,
 		     struct cpt_request_info *req,
+		     struct rte_crypto_op *op,
 		     uint64_t cpt_inst_w7)
 {
 	void *lmtline = qp->lmtline;
 	union cpt_inst_s inst;
 	uint64_t lmt_status;
 
-	if (qp->ca_enable) {
-		otx2_ca_enqueue_req(qp, req, lmtline, cpt_inst_w7);
-		return 0;
-	}
+	if (qp->ca_enable)
+		return otx2_ca_enqueue_req(qp, req, lmtline, op, cpt_inst_w7);
 
 	if (unlikely(pend_q->pending_count >= OTX2_CPT_DEFAULT_CMD_QLEN))
 		return -EAGAIN;
@@ -592,7 +618,8 @@ otx2_cpt_enqueue_asym(struct otx2_cpt_qp *qp,
 		goto req_fail;
 	}
 
-	ret = otx2_cpt_enqueue_req(qp, pend_q, params.req, sess->cpt_inst_w7);
+	ret = otx2_cpt_enqueue_req(qp, pend_q, params.req, op,
+				   sess->cpt_inst_w7);
 
 	if (unlikely(ret)) {
 		CPT_LOG_DP_ERR("Could not enqueue crypto req");
@@ -636,7 +663,7 @@ otx2_cpt_enqueue_sym(struct otx2_cpt_qp *qp, struct rte_crypto_op *op,
 		return ret;
 	}
 
-	ret = otx2_cpt_enqueue_req(qp, pend_q, req, sess->cpt_inst_w7);
+	ret = otx2_cpt_enqueue_req(qp, pend_q, req, op, sess->cpt_inst_w7);
 
 	if (unlikely(ret)) {
 		/* Free buffer allocated by fill params routines */
@@ -650,28 +677,70 @@ static __rte_always_inline int __rte_hot
 otx2_cpt_enqueue_sec(struct otx2_cpt_qp *qp, struct rte_crypto_op *op,
 		     struct pending_queue *pend_q)
 {
+	uint32_t winsz, esn_low = 0, esn_hi = 0, seql = 0, seqh = 0;
+	struct rte_mbuf *m_src = op->sym->m_src;
 	struct otx2_sec_session_ipsec_lp *sess;
 	struct otx2_ipsec_po_sa_ctl *ctl_wrd;
+	struct otx2_ipsec_po_in_sa *sa;
 	struct otx2_sec_session *priv;
 	struct cpt_request_info *req;
+	uint64_t seq_in_sa, seq = 0;
+	uint8_t esn;
 	int ret;
 
 	priv = get_sec_session_private_data(op->sym->sec_session);
 	sess = &priv->ipsec.lp;
+	sa = &sess->in_sa;
 
-	ctl_wrd = &sess->in_sa.ctl;
+	ctl_wrd = &sa->ctl;
+	esn = ctl_wrd->esn_en;
+	winsz = sa->replay_win_sz;
 
 	if (ctl_wrd->direction == OTX2_IPSEC_PO_SA_DIRECTION_OUTBOUND)
 		ret = process_outb_sa(op, sess, &qp->meta_info, (void **)&req);
-	else
+	else {
+		if (winsz) {
+			esn_low = rte_be_to_cpu_32(sa->esn_low);
+			esn_hi = rte_be_to_cpu_32(sa->esn_hi);
+			seql = *rte_pktmbuf_mtod_offset(m_src, uint32_t *,
+				sizeof(struct rte_ipv4_hdr) + 4);
+			seql = rte_be_to_cpu_32(seql);
+
+			if (!esn)
+				seq = (uint64_t)seql;
+			else {
+				seqh = anti_replay_get_seqh(winsz, seql, esn_hi,
+						esn_low);
+				seq = ((uint64_t)seqh << 32) | seql;
+			}
+
+			if (unlikely(seq == 0))
+				return IPSEC_ANTI_REPLAY_FAILED;
+
+			ret = anti_replay_check(sa->replay, seq, winsz);
+			if (unlikely(ret)) {
+				otx2_err("Anti replay check failed");
+				return IPSEC_ANTI_REPLAY_FAILED;
+			}
+		}
+
 		ret = process_inb_sa(op, sess, &qp->meta_info, (void **)&req);
+	}
 
 	if (unlikely(ret)) {
 		otx2_err("Crypto req : op %p, ret 0x%x", op, ret);
 		return ret;
 	}
 
-	ret = otx2_cpt_enqueue_req(qp, pend_q, req, sess->cpt_inst_w7);
+	ret = otx2_cpt_enqueue_req(qp, pend_q, req, op, sess->cpt_inst_w7);
+
+	if (winsz && esn) {
+		seq_in_sa = ((uint64_t)esn_hi << 32) | esn_low;
+		if (seq > seq_in_sa) {
+			sa->esn_low = rte_cpu_to_be_32(seql);
+			sa->esn_hi = rte_cpu_to_be_32(seqh);
+		}
+	}
 
 	return ret;
 }
@@ -884,7 +953,7 @@ otx2_cpt_sec_post_process(struct rte_crypto_op *cop, uintptr_t *rsp)
 	struct rte_mbuf *m = sym_op->m_src;
 	struct rte_ipv6_hdr *ip6;
 	struct rte_ipv4_hdr *ip;
-	uint16_t m_len;
+	uint16_t m_len = 0;
 	int mdata_len;
 	char *data;
 
@@ -894,11 +963,12 @@ otx2_cpt_sec_post_process(struct rte_crypto_op *cop, uintptr_t *rsp)
 	if (word0->s.opcode.major == OTX2_IPSEC_PO_PROCESS_IPSEC_INB) {
 		data = rte_pktmbuf_mtod(m, char *);
 
-		if (rsp[4] == RTE_SECURITY_IPSEC_TUNNEL_IPV4) {
+		if (rsp[4] == OTX2_IPSEC_PO_TRANSPORT ||
+		    rsp[4] == OTX2_IPSEC_PO_TUNNEL_IPV4) {
 			ip = (struct rte_ipv4_hdr *)(data +
 				OTX2_IPSEC_PO_INB_RPTR_HDR);
 			m_len = rte_be_to_cpu_16(ip->total_length);
-		} else {
+		} else if (rsp[4] == OTX2_IPSEC_PO_TUNNEL_IPV6) {
 			ip6 = (struct rte_ipv6_hdr *)(data +
 				OTX2_IPSEC_PO_INB_RPTR_HDR);
 			m_len = rte_be_to_cpu_16(ip6->payload_len) +

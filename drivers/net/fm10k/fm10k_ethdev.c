@@ -2,8 +2,8 @@
  * Copyright(c) 2013-2016 Intel Corporation
  */
 
-#include <rte_ethdev_driver.h>
-#include <rte_ethdev_pci.h>
+#include <ethdev_driver.h>
+#include <ethdev_pci.h>
 #include <rte_malloc.h>
 #include <rte_memzone.h>
 #include <rte_string_fns.h>
@@ -3287,12 +3287,9 @@ RTE_PMD_REGISTER_PCI_TABLE(net_fm10k, pci_id_fm10k_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_fm10k, "* igb_uio | uio_pci_generic | vfio-pci");
 RTE_LOG_REGISTER(fm10k_logtype_init, pmd.net.fm10k.init, NOTICE);
 RTE_LOG_REGISTER(fm10k_logtype_driver, pmd.net.fm10k.driver, NOTICE);
-#ifdef RTE_LIBRTE_FM10K_DEBUG_RX
+#ifdef RTE_ETHDEV_DEBUG_RX
 RTE_LOG_REGISTER(fm10k_logtype_rx, pmd.net.fm10k.rx, DEBUG);
 #endif
-#ifdef RTE_LIBRTE_FM10K_DEBUG_TX
+#ifdef RTE_ETHDEV_DEBUG_TX
 RTE_LOG_REGISTER(fm10k_logtype_tx, pmd.net.fm10k.tx, DEBUG);
-#endif
-#ifdef RTE_LIBRTE_FM10K_DEBUG_TX_FREE
-RTE_LOG_REGISTER(fm10k_logtype_tx_free, pmd.net.fm10k.tx_free, DEBUG);
 #endif

@@ -11,7 +11,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
-#include <sys/fcntl.h>
+#include <fcntl.h>
 
 #include <rte_common.h>
 #include <rte_config.h>
@@ -20,7 +20,7 @@
 #include <rte_dev.h>
 #include <rte_errno.h>
 #include <rte_eventdev.h>
-#include <rte_eventdev_pmd.h>
+#include <eventdev_pmd.h>
 #include <rte_io.h>
 #include <rte_kvargs.h>
 #include <rte_log.h>
@@ -2870,6 +2870,7 @@ dlb2_dequeue_wait(struct dlb2_eventdev *dlb2,
 	if (elapsed_ticks >= timeout) {
 		return 1;
 	} else if (dlb2->umwait_allowed) {
+		struct rte_power_monitor_cond pmc;
 		volatile struct dlb2_dequeue_qe *cq_base;
 		union {
 			uint64_t raw_qe[2];
@@ -2890,9 +2891,12 @@ dlb2_dequeue_wait(struct dlb2_eventdev *dlb2,
 		else
 			expected_value = 0;
 
-		rte_power_monitor(monitor_addr, expected_value,
-				  qe_mask.raw_qe[1], timeout + start_ticks,
-				  sizeof(uint64_t));
+		pmc.addr = monitor_addr;
+		pmc.val = expected_value;
+		pmc.mask = qe_mask.raw_qe[1];
+		pmc.size = sizeof(uint64_t);
+
+		rte_power_monitor(&pmc, timeout + start_ticks);
 
 		DLB2_INC_STAT(ev_port->stats.traffic.rx_umonitor_umwait, 1);
 	} else {

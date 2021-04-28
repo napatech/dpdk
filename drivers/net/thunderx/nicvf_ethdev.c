@@ -23,8 +23,8 @@
 #include <rte_dev.h>
 #include <rte_eal.h>
 #include <rte_ether.h>
-#include <rte_ethdev_driver.h>
-#include <rte_ethdev_pci.h>
+#include <ethdev_driver.h>
+#include <ethdev_pci.h>
 #include <rte_interrupts.h>
 #include <rte_log.h>
 #include <rte_memory.h>
@@ -176,7 +176,7 @@ nicvf_dev_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 		(frame_size + 2 * VLAN_TAG_SIZE > buffsz * NIC_HW_MAX_SEGS))
 		return -EINVAL;
 
-	if (frame_size > RTE_ETHER_MAX_LEN)
+	if (frame_size > NIC_HW_L2_MAX_LEN)
 		rxmode->offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
 	else
 		rxmode->offloads &= ~DEV_RX_OFFLOAD_JUMBO_FRAME;

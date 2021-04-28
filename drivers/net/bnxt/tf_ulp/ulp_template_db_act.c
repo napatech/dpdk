@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2014-2020 Broadcom
+ * Copyright(c) 2014-2021 Broadcom
  * All rights reserved.
  */
 
@@ -8,6 +8,10 @@
 #include "ulp_template_struct.h"
 #include "ulp_rte_parser.h"
 
+/*
+ * Action signature table:
+ * maps hash id to ulp_act_match_list[] index
+ */
 uint16_t ulp_act_sig_tbl[BNXT_ULP_ACT_SIG_TBL_MAX_SZ] = {
 	[BNXT_ULP_ACT_HID_015a] = 1,
 	[BNXT_ULP_ACT_HID_00eb] = 2,
@@ -93,6 +97,7 @@ uint16_t ulp_act_sig_tbl[BNXT_ULP_ACT_SIG_TBL_MAX_SZ] = {
 	[BNXT_ULP_ACT_HID_0b4e] = 82
 };
 
+/* Array for the act matcher list */
 struct bnxt_ulp_act_match_info ulp_act_match_list[] = {
 	[1] = {
 	.act_hid = BNXT_ULP_ACT_HID_015a,

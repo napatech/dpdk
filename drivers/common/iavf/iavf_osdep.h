@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2017-2020 Intel Corporation
+ * Copyright(c) 2017-2021 Intel Corporation
  */
 
 #ifndef _IAVF_OSDEP_H_
@@ -55,6 +55,15 @@ typedef uint64_t        s64;
 #define __be64          uint64_t
 #endif
 
+/* Avoid macro redefinition warning on Windows */
+#ifdef RTE_EXEC_ENV_WINDOWS
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+#endif
 #define min(a, b) RTE_MIN(a, b)
 #define max(a, b) RTE_MAX(a, b)
 

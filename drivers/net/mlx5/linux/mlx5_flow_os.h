@@ -351,6 +351,95 @@ mlx5_flow_os_create_flow_action_drop(void **action)
 }
 
 /**
+ * Create flow action: default miss.
+ *
+ * @param[out] action
+ *   Pointer to a valid action on success, NULL otherwise.
+ *
+ * @return
+ *   0 on success, or -1 on failure and errno is set.
+ */
+static inline int
+mlx5_flow_os_create_flow_action_default_miss(void **action)
+{
+	*action = mlx5_glue->dr_create_flow_action_default_miss();
+	return (*action) ? 0 : -1;
+}
+
+/**
+ * Create flow action: dest_devx_tir
+ *
+ * @param[in] tir
+ *   Pointer to DevX tir object
+ * @param[out] action
+ *   Pointer to a valid action on success, NULL otherwise.
+ *
+ * @return
+ *   0 on success, or -1 on failure and errno is set.
+ */
+static inline int
+mlx5_flow_os_create_flow_action_dest_devx_tir(struct mlx5_devx_obj *tir,
+					      void **action)
+{
+#ifdef HAVE_IBV_FLOW_DV_SUPPORT
+	*action = mlx5_glue->dv_create_flow_action_dest_devx_tir(tir->obj);
+	return (*action) ? 0 : -1;
+#else
+	/* If no DV support - skip the operation and return success */
+	RTE_SET_USED(tir);
+	*action = 0;
+	return 0;
+#endif
+}
+
+/**
+ * Create flow action: sampler
+ *
+ * @param[in] attr
+ *   Pointer to sampler attribute
+ * @param[out] action
+ *   Pointer to a valid action on success, NULL otherwise.
+ *
+ * @return
+ *   0 on success, or -1 on failure and errno is set.
+ */
+static inline int
+mlx5_os_flow_dr_create_flow_action_sampler
+			(struct mlx5dv_dr_flow_sampler_attr *attr,
+			void **action)
+{
+	*action = mlx5_glue->dr_create_flow_action_sampler(attr);
+	return (*action) ? 0 : -1;
+}
+
+/**
+ * Create flow action: dest_array
+ *
+ * @param[in] domain
+ *   Pointer to relevant domain.
+ * @param[in] num_dest
+ *   Number of destinations array.
+ * @param[in] dests
+ *   Array of destination attributes.
+ * @param[out] action
+ *   Pointer to a valid action on success, NULL otherwise.
+ *
+ * @return
+ *   0 on success, or -1 on failure and errno is set.
+ */
+static inline int
+mlx5_os_flow_dr_create_flow_action_dest_array
+			(void *domain,
+			 size_t num_dest,
+			 struct mlx5dv_dr_action_dest_attr *dests[],
+			 void **action)
+{
+	*action = mlx5_glue->dr_create_flow_action_dest_array(
+						domain, num_dest, dests);
+	return (*action) ? 0 : -1;
+}
+
+/**
  * Destroy flow action.
  *
  * @param[in] action
@@ -365,4 +454,30 @@ mlx5_flow_os_destroy_flow_action(void *action)
 	return mlx5_glue->destroy_flow_action(action);
 }
 
+/**
+ * OS wrapper over Verbs API.
+ * Adjust flow priority based on the highest layer and the request priority.
+ *
+ * @param[in] dev
+ *    Pointer to the Ethernet device structure.
+ * @param[in] priority
+ *    The rule base priority.
+ * @param[in] subpriority
+ *    The priority based on the items.
+ *
+ * @return
+ *    The new priority.
+ */
+static inline uint32_t
+mlx5_os_flow_adjust_priority(struct rte_eth_dev *dev, int32_t priority,
+			  uint32_t subpriority)
+{
+	return mlx5_flow_adjust_priority(dev, priority, subpriority);
+}
+
+static inline int
+mlx5_os_flow_dr_sync_domain(void *domain, uint32_t flags)
+{
+	return mlx5_glue->dr_sync_domain(domain, flags);
+}
 #endif /* RTE_PMD_MLX5_FLOW_OS_H_ */

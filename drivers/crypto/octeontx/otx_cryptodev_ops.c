@@ -205,12 +205,16 @@ sym_xform_verify(struct rte_crypto_sym_xform *xform)
 	if (xform->next) {
 		if (xform->type == RTE_CRYPTO_SYM_XFORM_AUTH &&
 		    xform->next->type == RTE_CRYPTO_SYM_XFORM_CIPHER &&
-		    xform->next->cipher.op == RTE_CRYPTO_CIPHER_OP_ENCRYPT)
+		    xform->next->cipher.op == RTE_CRYPTO_CIPHER_OP_ENCRYPT &&
+		    (xform->auth.algo != RTE_CRYPTO_AUTH_SHA1_HMAC ||
+		     xform->next->cipher.algo != RTE_CRYPTO_CIPHER_AES_CBC))
 			return -ENOTSUP;
 
 		if (xform->type == RTE_CRYPTO_SYM_XFORM_CIPHER &&
 		    xform->cipher.op == RTE_CRYPTO_CIPHER_OP_DECRYPT &&
-		    xform->next->type == RTE_CRYPTO_SYM_XFORM_AUTH)
+		    xform->next->type == RTE_CRYPTO_SYM_XFORM_AUTH &&
+		    (xform->cipher.algo != RTE_CRYPTO_CIPHER_AES_CBC ||
+		     xform->next->auth.algo != RTE_CRYPTO_AUTH_SHA1_HMAC))
 			return -ENOTSUP;
 
 		if (xform->type == RTE_CRYPTO_SYM_XFORM_CIPHER &&
@@ -577,8 +581,8 @@ otx_cpt_enq_single_sym_sessless(struct cpt_instance *instance,
 	int ret;
 
 	/* Create temporary session */
-
-	if (rte_mempool_get(instance->sess_mp, (void **)&sess))
+	sess = rte_cryptodev_sym_session_create(instance->sess_mp);
+	if (sess == NULL)
 		return -ENOMEM;
 
 	ret = sym_session_configure(driver_id, sym_op->xform, sess,
@@ -1004,7 +1008,8 @@ otx_cpt_dev_create(struct rte_cryptodev *c_dev)
 				RTE_CRYPTODEV_FF_OOP_LB_IN_LB_OUT |
 				RTE_CRYPTODEV_FF_OOP_SGL_IN_LB_OUT |
 				RTE_CRYPTODEV_FF_OOP_SGL_IN_SGL_OUT |
-				RTE_CRYPTODEV_FF_SYM_SESSIONLESS;
+				RTE_CRYPTODEV_FF_SYM_SESSIONLESS |
+				RTE_CRYPTODEV_FF_DIGEST_ENCRYPTED;
 		break;
 	default:
 		/* Feature not supported. Abort */

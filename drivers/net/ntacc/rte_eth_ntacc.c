@@ -60,6 +60,11 @@
 #include "rte_eth_ntacc.h"
 #include "filter_ntacc.h"
 
+/**
+* Napatech version
+*/
+#define NT_VER "2.8"
+
 int ntacc_logtype;
 
 #define STRINGIZE(x) #x
@@ -2542,39 +2547,28 @@ static const struct rte_flow_ops _dev_flow_ops = {
   .isolate = _dev_flow_isolate,
 };
 
-static int _dev_filter_ctrl(struct rte_eth_dev *dev __rte_unused,
-                            enum rte_filter_type filter_type,
-                            enum rte_filter_op filter_op,
-                            void *arg)
+static int _dev_flow_ops_get(struct rte_eth_dev *dev __rte_unused,
+														 const struct rte_flow_ops **ops)
 {
-  if (filter_type == RTE_ETH_FILTER_GENERIC) {
-    if (filter_op == RTE_ETH_FILTER_GET) {
-      *(const void **)arg = &_dev_flow_ops;
-      return 0;
-    }
-    else {
-      PMD_NTACC_LOG(ERR, "NTACC: %s: filter operation (%d) not supported\n", __func__, filter_op);
-      return -EINVAL;
-    }
-  }
-  PMD_NTACC_LOG(ERR, "NTACC: %s: filter type (%d) not supported\n", __func__, filter_type);
-  return -EINVAL;
+	*ops = &_dev_flow_ops;
+	return 0;
 }
 
 static int eth_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
 {
-  char buf[51];
+  char buf[71];
   struct pmd_internals *internals = dev->data->dev_private;
   int length1;
 
-  length1 = snprintf(buf, 51, "%d.%d.%d - %03d-%04d-%02d-%02d-%02d", internals->version.major,
-                                                                     internals->version.minor,
-                                                                     internals->version.patch,
-                                                                     internals->fpgaid.s.item,
-                                                                     internals->fpgaid.s.product,
-                                                                     internals->fpgaid.s.ver,
-                                                                     internals->fpgaid.s.rev,
-                                                                     internals->fpgaid.s.build);
+  length1 = snprintf(buf, 71, "PMD %s - %d.%d.%d - %03d-%04d-%02d-%02d-%02d", NT_VER,
+																																							internals->version.major,
+																																					    internals->version.minor,
+																																					    internals->version.patch,
+																																					    internals->fpgaid.s.item,
+																																					    internals->fpgaid.s.product,
+																																					    internals->fpgaid.s.ver,
+																																					    internals->fpgaid.s.rev,
+																																					    internals->fpgaid.s.build);
   snprintf(fw_version, fw_size, "%s", buf);
 
   if ((size_t)length1 < fw_size) {
@@ -2679,12 +2673,12 @@ static struct eth_dev_ops ops = {
     .stats_reset = eth_stats_reset,
     .flow_ctrl_get = _dev_get_flow_ctrl,
     .flow_ctrl_set = _dev_set_flow_ctrl,
-    .filter_ctrl = _dev_filter_ctrl,
     .fw_version_get = eth_fw_version_get,
     .rss_hash_update = eth_rss_hash_update,
     .dev_supported_ptypes_get = _dev_supported_ptypes_get,
     .promiscuous_enable = eth_promiscuous_enable,
-    .promiscuous_disable = eth_promiscuous_disable
+    .promiscuous_disable = eth_promiscuous_disable,
+		.flow_ops_get = _dev_flow_ops_get,
 };
 
 enum property_type_s {
@@ -3252,7 +3246,7 @@ static int rte_pmd_ntacc_dev_probe(struct rte_pci_driver *drv __rte_unused, stru
     break;
   }
 
-  PMD_NTACC_LOG(DEBUG, "Initializing net_ntacc %s for %s on numa %d\n", rte_version(),
+  PMD_NTACC_LOG(DEBUG, "Initializing net_ntacc_%s %s for %s on numa %d\n", NT_VER, rte_version(),
                                                                        dev->device.name,
                                                                        dev->device.numa_node);
 

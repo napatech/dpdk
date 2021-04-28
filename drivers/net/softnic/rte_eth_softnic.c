@@ -6,8 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <rte_ethdev_driver.h>
-#include <rte_ethdev_vdev.h>
+#include <ethdev_driver.h>
+#include <ethdev_vdev.h>
 #include <rte_malloc.h>
 #include <rte_bus_vdev.h>
 #include <rte_kvargs.h>
@@ -248,18 +248,11 @@ pmd_link_update(struct rte_eth_dev *dev __rte_unused,
 }
 
 static int
-pmd_filter_ctrl(struct rte_eth_dev *dev __rte_unused,
-		enum rte_filter_type filter_type,
-		enum rte_filter_op filter_op,
-		void *arg)
+pmd_flow_ops_get(struct rte_eth_dev *dev __rte_unused,
+		 const struct rte_flow_ops **ops)
 {
-	if (filter_type == RTE_ETH_FILTER_GENERIC &&
-			filter_op == RTE_ETH_FILTER_GET) {
-		*(const void **)arg = &pmd_flow_ops;
-		return 0;
-	}
-
-	return -ENOTSUP;
+	*ops = &pmd_flow_ops;
+	return 0;
 }
 
 static int
@@ -287,7 +280,7 @@ static const struct eth_dev_ops pmd_ops = {
 	.dev_infos_get = pmd_dev_infos_get,
 	.rx_queue_setup = pmd_rx_queue_setup,
 	.tx_queue_setup = pmd_tx_queue_setup,
-	.filter_ctrl = pmd_filter_ctrl,
+	.flow_ops_get = pmd_flow_ops_get,
 	.tm_ops_get = pmd_tm_ops_get,
 	.mtr_ops_get = pmd_mtr_ops_get,
 };

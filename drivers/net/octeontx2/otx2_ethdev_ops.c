@@ -58,7 +58,7 @@ otx2_nix_mtu_set(struct rte_eth_dev *eth_dev, uint16_t mtu)
 	if (rc)
 		return rc;
 
-	if (frame_size > RTE_ETHER_MAX_LEN)
+	if (frame_size > NIX_L2_MAX_LEN)
 		dev->rx_offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
 	else
 		dev->rx_offloads &= ~DEV_RX_OFFLOAD_JUMBO_FRAME;
@@ -471,24 +471,11 @@ otx2_nix_pool_ops_supported(struct rte_eth_dev *eth_dev, const char *pool)
 }
 
 int
-otx2_nix_dev_filter_ctrl(struct rte_eth_dev *eth_dev,
-			 enum rte_filter_type filter_type,
-			 enum rte_filter_op filter_op, void *arg)
+otx2_nix_dev_flow_ops_get(struct rte_eth_dev *eth_dev __rte_unused,
+			  const struct rte_flow_ops **ops)
 {
-	RTE_SET_USED(eth_dev);
-
-	if (filter_type != RTE_ETH_FILTER_GENERIC) {
-		otx2_err("Unsupported filter type %d", filter_type);
-		return -ENOTSUP;
-	}
-
-	if (filter_op == RTE_ETH_FILTER_GET) {
-		*(const void **)arg = &otx2_flow_ops;
-		return 0;
-	}
-
-	otx2_err("Invalid filter_op %d", filter_op);
-	return -EINVAL;
+	*ops = &otx2_flow_ops;
+	return 0;
 }
 
 static struct cgx_fw_data *
@@ -533,8 +520,7 @@ otx2_nix_get_module_eeprom(struct rte_eth_dev *eth_dev,
 	struct otx2_eth_dev *dev = otx2_eth_pmd_priv(eth_dev);
 	struct cgx_fw_data *rsp;
 
-	if (!info->data || !info->length ||
-	    (info->offset + info->length > SFP_EEPROM_SIZE))
+	if (info->offset + info->length > SFP_EEPROM_SIZE)
 		return -EINVAL;
 
 	rsp = nix_get_fwdata(dev);

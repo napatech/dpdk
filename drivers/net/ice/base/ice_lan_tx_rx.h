@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2020 Intel Corporation
+ * Copyright(c) 2001-2021 Intel Corporation
  */
 
 #ifndef _ICE_LAN_TX_RX_H_
@@ -296,7 +296,6 @@ enum ice_rx_l2_ptype {
 };
 
 struct ice_rx_ptype_decoded {
-	u32 ptype:10;
 	u32 known:1;
 	u32 outer_ip:1;
 	u32 outer_ip_ver:2;
@@ -1217,8 +1216,7 @@ struct ice_tx_drbell_q_ctx {
 
 /* macro to make the table lines short */
 #define ICE_PTT(PTYPE, OUTER_IP, OUTER_IP_VER, OUTER_FRAG, T, TE, TEF, I, PL)\
-	{	PTYPE, \
-		1, \
+	{	1, \
 		ICE_RX_PTYPE_OUTER_##OUTER_IP, \
 		ICE_RX_PTYPE_OUTER_##OUTER_IP_VER, \
 		ICE_RX_PTYPE_##OUTER_FRAG, \
@@ -1228,18 +1226,18 @@ struct ice_tx_drbell_q_ctx {
 		ICE_RX_PTYPE_INNER_PROT_##I, \
 		ICE_RX_PTYPE_PAYLOAD_LAYER_##PL }
 
-#define ICE_PTT_UNUSED_ENTRY(PTYPE) { PTYPE, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
+#define ICE_PTT_UNUSED_ENTRY(PTYPE) { 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 
 /* shorter macros makes the table fit but are terse */
 #define ICE_RX_PTYPE_NOF		ICE_RX_PTYPE_NOT_FRAG
 #define ICE_RX_PTYPE_FRG		ICE_RX_PTYPE_FRAG
 
-/* Lookup table mapping the HW PTYPE to the bit field for decoding */
-static const struct ice_rx_ptype_decoded ice_ptype_lkup[] = {
+/* Lookup table mapping the 10-bit HW PTYPE to the bit field for decoding */
+static const struct ice_rx_ptype_decoded ice_ptype_lkup[1024] = {
 	/* L2 Packet types */
 	ICE_PTT_UNUSED_ENTRY(0),
 	ICE_PTT(1, L2, NONE, NOF, NONE, NONE, NOF, NONE, PAY2),
-	ICE_PTT(2, L2, NONE, NOF, NONE, NONE, NOF, NONE, NONE),
+	ICE_PTT_UNUSED_ENTRY(2),
 	ICE_PTT_UNUSED_ENTRY(3),
 	ICE_PTT_UNUSED_ENTRY(4),
 	ICE_PTT_UNUSED_ENTRY(5),
@@ -1353,7 +1351,7 @@ static const struct ice_rx_ptype_decoded ice_ptype_lkup[] = {
 	/* Non Tunneled IPv6 */
 	ICE_PTT(88, IP, IPV6, FRG, NONE, NONE, NOF, NONE, PAY3),
 	ICE_PTT(89, IP, IPV6, NOF, NONE, NONE, NOF, NONE, PAY3),
-	ICE_PTT(90, IP, IPV6, NOF, NONE, NONE, NOF, UDP,  PAY3),
+	ICE_PTT(90, IP, IPV6, NOF, NONE, NONE, NOF, UDP,  PAY4),
 	ICE_PTT_UNUSED_ENTRY(91),
 	ICE_PTT(92, IP, IPV6, NOF, NONE, NONE, NOF, TCP,  PAY4),
 	ICE_PTT(93, IP, IPV6, NOF, NONE, NONE, NOF, SCTP, PAY4),

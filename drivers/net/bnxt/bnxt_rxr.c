@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2014-2018 Broadcom
+ * Copyright(c) 2014-2021 Broadcom
  * All rights reserved.
  */
 
@@ -39,12 +39,15 @@ static inline struct rte_mbuf *__bnxt_alloc_rx_data(struct rte_mempool *mb)
 
 static inline int bnxt_alloc_rx_data(struct bnxt_rx_queue *rxq,
 				     struct bnxt_rx_ring_info *rxr,
-				     uint16_t prod)
+				     uint16_t raw_prod)
 {
-	struct rx_prod_pkt_bd *rxbd = &rxr->rx_desc_ring[prod];
-	struct rte_mbuf **rx_buf = &rxr->rx_buf_ring[prod];
+	uint16_t prod = RING_IDX(rxr->rx_ring_struct, raw_prod);
+	struct rx_prod_pkt_bd *rxbd;
+	struct rte_mbuf **rx_buf;
 	struct rte_mbuf *mbuf;
 
+	rxbd = &rxr->rx_desc_ring[prod];
+	rx_buf = &rxr->rx_buf_ring[prod];
 	mbuf = __bnxt_alloc_rx_data(rxq->mb_pool);
 	if (!mbuf) {
 		rte_atomic64_inc(&rxq->rx_mbuf_alloc_fail);
@@ -61,12 +64,15 @@ static inline int bnxt_alloc_rx_data(struct bnxt_rx_queue *rxq,
 
 static inline int bnxt_alloc_ag_data(struct bnxt_rx_queue *rxq,
 				     struct bnxt_rx_ring_info *rxr,
-				     uint16_t prod)
+				     uint16_t raw_prod)
 {
-	struct rx_prod_pkt_bd *rxbd = &rxr->ag_desc_ring[prod];
-	struct rte_mbuf **rx_buf = &rxr->ag_buf_ring[prod];
+	uint16_t prod = RING_IDX(rxr->ag_ring_struct, raw_prod);
+	struct rx_prod_pkt_bd *rxbd;
+	struct rte_mbuf **rx_buf;
 	struct rte_mbuf *mbuf;
 
+	rxbd = &rxr->ag_desc_ring[prod];
+	rx_buf = &rxr->ag_buf_ring[prod];
 	if (rxbd == NULL) {
 		PMD_DRV_LOG(ERR, "Jumbo Frame. rxbd is NULL\n");
 		return -EINVAL;
@@ -94,10 +100,11 @@ static inline int bnxt_alloc_ag_data(struct bnxt_rx_queue *rxq,
 static inline void bnxt_reuse_rx_mbuf(struct bnxt_rx_ring_info *rxr,
 			       struct rte_mbuf *mbuf)
 {
-	uint16_t prod = RING_NEXT(rxr->rx_ring_struct, rxr->rx_prod);
+	uint16_t prod, raw_prod = RING_NEXT(rxr->rx_raw_prod);
 	struct rte_mbuf **prod_rx_buf;
 	struct rx_prod_pkt_bd *prod_bd;
 
+	prod = RING_IDX(rxr->rx_ring_struct, raw_prod);
 	prod_rx_buf = &rxr->rx_buf_ring[prod];
 
 	RTE_ASSERT(*prod_rx_buf == NULL);
@@ -109,7 +116,7 @@ static inline void bnxt_reuse_rx_mbuf(struct bnxt_rx_ring_info *rxr,
 
 	prod_bd->address = rte_cpu_to_le_64(rte_mbuf_data_iova_default(mbuf));
 
-	rxr->rx_prod = prod;
+	rxr->rx_raw_prod = raw_prod;
 }
 
 static inline
@@ -119,12 +126,59 @@ struct rte_mbuf *bnxt_consume_rx_buf(struct bnxt_rx_ring_info *rxr,
 	struct rte_mbuf **cons_rx_buf;
 	struct rte_mbuf *mbuf;
 
-	cons_rx_buf = &rxr->rx_buf_ring[cons];
+	cons_rx_buf = &rxr->rx_buf_ring[RING_IDX(rxr->rx_ring_struct, cons)];
 	RTE_ASSERT(*cons_rx_buf != NULL);
 	mbuf = *cons_rx_buf;
 	*cons_rx_buf = NULL;
 
 	return mbuf;
+}
+
+static void bnxt_tpa_get_metadata(struct bnxt *bp,
+				  struct bnxt_tpa_info *tpa_info,
+				  struct rx_tpa_start_cmpl *tpa_start,
+				  struct rx_tpa_start_cmpl_hi *tpa_start1)
+{
+	tpa_info->cfa_code_valid = 0;
+	tpa_info->vlan_valid = 0;
+	tpa_info->hash_valid = 0;
+	tpa_info->l4_csum_valid = 0;
+
+	if (likely(tpa_start->flags_type &
+		   rte_cpu_to_le_32(RX_TPA_START_CMPL_FLAGS_RSS_VALID))) {
+		tpa_info->hash_valid = 1;
+		tpa_info->rss_hash = rte_le_to_cpu_32(tpa_start->rss_hash);
+	}
+
+	if (bp->vnic_cap_flags & BNXT_VNIC_CAP_RX_CMPL_V2) {
+		struct rx_tpa_start_v2_cmpl *v2_tpa_start = (void *)tpa_start;
+		struct rx_tpa_start_v2_cmpl_hi *v2_tpa_start1 =
+			(void *)tpa_start1;
+
+		if (v2_tpa_start->agg_id &
+		    RX_TPA_START_V2_CMPL_METADATA1_VALID) {
+			tpa_info->vlan_valid = 1;
+			tpa_info->vlan =
+				rte_le_to_cpu_16(v2_tpa_start1->metadata0);
+		}
+
+		if (v2_tpa_start1->flags2 & RX_CMP_FLAGS2_L4_CSUM_ALL_OK_MASK)
+			tpa_info->l4_csum_valid = 1;
+
+		return;
+	}
+
+	tpa_info->cfa_code_valid = 1;
+	tpa_info->cfa_code = rte_le_to_cpu_16(tpa_start1->cfa_code);
+	if (tpa_start1->flags2 &
+	    rte_cpu_to_le_32(RX_TPA_START_CMPL_FLAGS2_META_FORMAT_VLAN)) {
+		tpa_info->vlan_valid = 1;
+		tpa_info->vlan = rte_le_to_cpu_32(tpa_start1->metadata);
+	}
+
+	if (likely(tpa_start1->flags2 &
+		   rte_cpu_to_le_32(RX_TPA_START_CMPL_FLAGS2_L4_CS_CALC)))
+		tpa_info->l4_csum_valid = 1;
 }
 
 static void bnxt_tpa_start(struct bnxt_rx_queue *rxq,
@@ -157,25 +211,27 @@ static void bnxt_tpa_start(struct bnxt_rx_queue *rxq,
 	mbuf->data_len = mbuf->pkt_len;
 	mbuf->port = rxq->port_id;
 	mbuf->ol_flags = PKT_RX_LRO;
-	if (likely(tpa_start->flags_type &
-		   rte_cpu_to_le_32(RX_TPA_START_CMPL_FLAGS_RSS_VALID))) {
-		mbuf->hash.rss = rte_le_to_cpu_32(tpa_start->rss_hash);
+
+	bnxt_tpa_get_metadata(rxq->bp, tpa_info, tpa_start, tpa_start1);
+
+	if (likely(tpa_info->hash_valid)) {
+		mbuf->hash.rss = tpa_info->rss_hash;
 		mbuf->ol_flags |= PKT_RX_RSS_HASH;
-	} else {
-		mbuf->hash.fdir.id = rte_le_to_cpu_16(tpa_start1->cfa_code);
+	} else if (tpa_info->cfa_code_valid) {
+		mbuf->hash.fdir.id = tpa_info->cfa_code;
 		mbuf->ol_flags |= PKT_RX_FDIR | PKT_RX_FDIR_ID;
 	}
-	if (tpa_start1->flags2 &
-	    rte_cpu_to_le_32(RX_TPA_START_CMPL_FLAGS2_META_FORMAT_VLAN)) {
-		mbuf->vlan_tci = rte_le_to_cpu_32(tpa_start1->metadata);
+
+	if (tpa_info->vlan_valid) {
+		mbuf->vlan_tci = tpa_info->vlan;
 		mbuf->ol_flags |= PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED;
 	}
-	if (likely(tpa_start1->flags2 &
-		   rte_cpu_to_le_32(RX_TPA_START_CMPL_FLAGS2_L4_CS_CALC)))
+
+	if (likely(tpa_info->l4_csum_valid))
 		mbuf->ol_flags |= PKT_RX_L4_CKSUM_GOOD;
 
 	/* recycle next mbuf */
-	data_cons = RING_NEXT(rxr->rx_ring_struct, data_cons);
+	data_cons = RING_NEXT(data_cons);
 	bnxt_reuse_rx_mbuf(rxr, bnxt_consume_rx_buf(rxr, data_cons));
 }
 
@@ -198,18 +254,20 @@ static int bnxt_agg_bufs_valid(struct bnxt_cp_ring_info *cpr,
 static int bnxt_prod_ag_mbuf(struct bnxt_rx_queue *rxq)
 {
 	struct bnxt_rx_ring_info *rxr = rxq->rx_ring;
-	uint16_t next = RING_NEXT(rxr->ag_ring_struct, rxr->ag_prod);
+	uint16_t raw_next = RING_NEXT(rxr->ag_raw_prod);
+	uint16_t bmap_next = RING_IDX(rxr->ag_ring_struct, raw_next);
 
 	/* TODO batch allocation for better performance */
-	while (rte_bitmap_get(rxr->ag_bitmap, next)) {
-		if (unlikely(bnxt_alloc_ag_data(rxq, rxr, next))) {
-			PMD_DRV_LOG(ERR,
-				"agg mbuf alloc failed: prod=0x%x\n", next);
+	while (rte_bitmap_get(rxr->ag_bitmap, bmap_next)) {
+		if (unlikely(bnxt_alloc_ag_data(rxq, rxr, raw_next))) {
+			PMD_DRV_LOG(ERR, "agg mbuf alloc failed: prod=0x%x\n",
+				    raw_next);
 			break;
 		}
-		rte_bitmap_clear(rxr->ag_bitmap, next);
-		rxr->ag_prod = next;
-		next = RING_NEXT(rxr->ag_ring_struct, next);
+		rte_bitmap_clear(rxr->ag_bitmap, bmap_next);
+		rxr->ag_raw_prod = raw_next;
+		raw_next = RING_NEXT(raw_next);
+		bmap_next = RING_IDX(rxr->ag_ring_struct, raw_next);
 	}
 
 	return 0;
@@ -225,13 +283,13 @@ static int bnxt_rx_pages(struct bnxt_rx_queue *rxq,
 	uint16_t cp_cons, ag_cons;
 	struct rx_pkt_cmpl *rxcmp;
 	struct rte_mbuf *last = mbuf;
-	bool is_thor_tpa = tpa_info && BNXT_CHIP_THOR(rxq->bp);
+	bool is_p5_tpa = tpa_info && BNXT_CHIP_P5(rxq->bp);
 
 	for (i = 0; i < agg_buf; i++) {
 		struct rte_mbuf **ag_buf;
 		struct rte_mbuf *ag_mbuf;
 
-		if (is_thor_tpa) {
+		if (is_p5_tpa) {
 			rxcmp = (void *)&tpa_info->agg_arr[i];
 		} else {
 			*tmp_raw_cons = NEXT_RAW_CMP(*tmp_raw_cons);
@@ -267,6 +325,7 @@ static int bnxt_rx_pages(struct bnxt_rx_queue *rxq,
 		 */
 		rte_bitmap_set(rxr->ag_bitmap, ag_cons);
 	}
+	last->next = NULL;
 	bnxt_prod_ag_mbuf(rxq);
 	return 0;
 }
@@ -285,7 +344,7 @@ static inline struct rte_mbuf *bnxt_tpa_end(
 	uint8_t payload_offset;
 	struct bnxt_tpa_info *tpa_info;
 
-	if (BNXT_CHIP_THOR(rxq->bp)) {
+	if (BNXT_CHIP_P5(rxq->bp)) {
 		struct rx_tpa_v2_end_cmpl *th_tpa_end;
 		struct rx_tpa_v2_end_cmpl_hi *th_tpa_end1;
 
@@ -344,7 +403,7 @@ bnxt_init_ptype_table(void)
 
 		ip6 = i & (RX_PKT_CMPL_FLAGS2_IP_TYPE >> 7);
 		tun = i & (RX_PKT_CMPL_FLAGS2_T_IP_CS_CALC >> 2);
-		type = (i & 0x38) << 9;
+		type = (i & 0x78) << 9;
 
 		if (!tun && !ip6)
 			l3 = RTE_PTYPE_L3_IPV4_EXT_UNKNOWN;
@@ -406,62 +465,98 @@ bnxt_parse_pkt_type(struct rx_pkt_cmpl *rxcmp, struct rx_pkt_cmpl_hi *rxcmp1)
 	return bnxt_ptype_table[index];
 }
 
-uint32_t
-bnxt_ol_flags_table[BNXT_OL_FLAGS_TBL_DIM] __rte_cache_aligned;
-
-uint32_t
-bnxt_ol_flags_err_table[BNXT_OL_FLAGS_ERR_TBL_DIM] __rte_cache_aligned;
-
 static void __rte_cold
-bnxt_init_ol_flags_tables(void)
+bnxt_init_ol_flags_tables(struct bnxt_rx_queue *rxq)
 {
-	static bool initialized;
+	struct bnxt_rx_ring_info *rxr = rxq->rx_ring;
+	struct rte_eth_conf *dev_conf;
+	bool outer_cksum_enabled;
+	uint64_t offloads;
 	uint32_t *pt;
 	int i;
 
-	if (initialized)
-		return;
+	dev_conf = &rxq->bp->eth_dev->data->dev_conf;
+	offloads = dev_conf->rxmode.offloads;
+
+	outer_cksum_enabled = !!(offloads & (DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM |
+					     DEV_RX_OFFLOAD_OUTER_UDP_CKSUM));
 
 	/* Initialize ol_flags table. */
-	pt = bnxt_ol_flags_table;
+	pt = rxr->ol_flags_table;
 	for (i = 0; i < BNXT_OL_FLAGS_TBL_DIM; i++) {
 		pt[i] = 0;
+
 		if (i & RX_PKT_CMPL_FLAGS2_META_FORMAT_VLAN)
 			pt[i] |= PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED;
 
-		if (i & RX_PKT_CMPL_FLAGS2_IP_CS_CALC)
-			pt[i] |= PKT_RX_IP_CKSUM_GOOD;
+		if (i & (RX_PKT_CMPL_FLAGS2_T_IP_CS_CALC << 3)) {
+			/* Tunnel case. */
+			if (outer_cksum_enabled) {
+				if (i & RX_PKT_CMPL_FLAGS2_IP_CS_CALC)
+					pt[i] |= PKT_RX_IP_CKSUM_GOOD;
 
-		if (i & RX_PKT_CMPL_FLAGS2_L4_CS_CALC)
-			pt[i] |= PKT_RX_L4_CKSUM_GOOD;
+				if (i & RX_PKT_CMPL_FLAGS2_L4_CS_CALC)
+					pt[i] |= PKT_RX_L4_CKSUM_GOOD;
 
-		if (i & RX_PKT_CMPL_FLAGS2_T_L4_CS_CALC)
-			pt[i] |= PKT_RX_OUTER_L4_CKSUM_GOOD;
+				if (i & RX_PKT_CMPL_FLAGS2_T_L4_CS_CALC)
+					pt[i] |= PKT_RX_OUTER_L4_CKSUM_GOOD;
+			} else {
+				if (i & RX_PKT_CMPL_FLAGS2_T_IP_CS_CALC)
+					pt[i] |= PKT_RX_IP_CKSUM_GOOD;
+
+				if (i & RX_PKT_CMPL_FLAGS2_T_L4_CS_CALC)
+					pt[i] |= PKT_RX_L4_CKSUM_GOOD;
+			}
+		} else {
+			/* Non-tunnel case. */
+			if (i & RX_PKT_CMPL_FLAGS2_IP_CS_CALC)
+				pt[i] |= PKT_RX_IP_CKSUM_GOOD;
+
+			if (i & RX_PKT_CMPL_FLAGS2_L4_CS_CALC)
+				pt[i] |= PKT_RX_L4_CKSUM_GOOD;
+		}
 	}
 
 	/* Initialize checksum error table. */
-	pt = bnxt_ol_flags_err_table;
+	pt = rxr->ol_flags_err_table;
 	for (i = 0; i < BNXT_OL_FLAGS_ERR_TBL_DIM; i++) {
 		pt[i] = 0;
-		if (i & (RX_PKT_CMPL_ERRORS_IP_CS_ERROR >> 4))
-			pt[i] |= PKT_RX_IP_CKSUM_BAD;
 
-		if (i & (RX_PKT_CMPL_ERRORS_L4_CS_ERROR >> 4))
-			pt[i] |= PKT_RX_L4_CKSUM_BAD;
+		if (i & (RX_PKT_CMPL_FLAGS2_T_IP_CS_CALC << 2)) {
+			/* Tunnel case. */
+			if (outer_cksum_enabled) {
+				if (i & (RX_PKT_CMPL_ERRORS_IP_CS_ERROR >> 4))
+					pt[i] |= PKT_RX_IP_CKSUM_BAD;
 
-		if (i & (RX_PKT_CMPL_ERRORS_T_IP_CS_ERROR >> 4))
-			pt[i] |= PKT_RX_EIP_CKSUM_BAD;
+				if (i & (RX_PKT_CMPL_ERRORS_T_IP_CS_ERROR >> 4))
+					pt[i] |= PKT_RX_OUTER_IP_CKSUM_BAD;
 
-		if (i & (RX_PKT_CMPL_ERRORS_T_L4_CS_ERROR >> 4))
-			pt[i] |= PKT_RX_OUTER_L4_CKSUM_BAD;
+				if (i & (RX_PKT_CMPL_ERRORS_L4_CS_ERROR >> 4))
+					pt[i] |= PKT_RX_L4_CKSUM_BAD;
+
+				if (i & (RX_PKT_CMPL_ERRORS_T_L4_CS_ERROR >> 4))
+					pt[i] |= PKT_RX_OUTER_L4_CKSUM_BAD;
+			} else {
+				if (i & (RX_PKT_CMPL_ERRORS_T_IP_CS_ERROR >> 4))
+					pt[i] |= PKT_RX_IP_CKSUM_BAD;
+
+				if (i & (RX_PKT_CMPL_ERRORS_T_L4_CS_ERROR >> 4))
+					pt[i] |= PKT_RX_L4_CKSUM_BAD;
+			}
+		} else {
+			/* Non-tunnel case. */
+			if (i & (RX_PKT_CMPL_ERRORS_IP_CS_ERROR >> 4))
+				pt[i] |= PKT_RX_IP_CKSUM_BAD;
+
+			if (i & (RX_PKT_CMPL_ERRORS_L4_CS_ERROR >> 4))
+				pt[i] |= PKT_RX_L4_CKSUM_BAD;
+		}
 	}
-
-	initialized = true;
 }
 
 static void
-bnxt_set_ol_flags(struct rx_pkt_cmpl *rxcmp, struct rx_pkt_cmpl_hi *rxcmp1,
-		  struct rte_mbuf *mbuf)
+bnxt_set_ol_flags(struct bnxt_rx_ring_info *rxr, struct rx_pkt_cmpl *rxcmp,
+		  struct rx_pkt_cmpl_hi *rxcmp1, struct rte_mbuf *mbuf)
 {
 	uint16_t flags_type, errors, flags;
 	uint64_t ol_flags;
@@ -475,6 +570,7 @@ bnxt_set_ol_flags(struct rx_pkt_cmpl *rxcmp, struct rx_pkt_cmpl_hi *rxcmp1,
 				 RX_PKT_CMPL_FLAGS2_T_L4_CS_CALC |
 				 RX_PKT_CMPL_FLAGS2_META_FORMAT_VLAN);
 
+	flags |= (flags & RX_PKT_CMPL_FLAGS2_T_IP_CS_CALC) << 3;
 	errors = rte_le_to_cpu_16(rxcmp1->errors_v2) &
 				(RX_PKT_CMPL_ERRORS_IP_CS_ERROR |
 				 RX_PKT_CMPL_ERRORS_L4_CS_ERROR |
@@ -482,26 +578,36 @@ bnxt_set_ol_flags(struct rx_pkt_cmpl *rxcmp, struct rx_pkt_cmpl_hi *rxcmp1,
 				 RX_PKT_CMPL_ERRORS_T_L4_CS_ERROR);
 	errors = (errors >> 4) & flags;
 
-	ol_flags = bnxt_ol_flags_table[flags & ~errors];
+	ol_flags = rxr->ol_flags_table[flags & ~errors];
 
-	if (errors)
-		ol_flags |= bnxt_ol_flags_err_table[errors];
+	if (unlikely(errors)) {
+		errors |= (flags & RX_PKT_CMPL_FLAGS2_T_IP_CS_CALC) << 2;
+		ol_flags |= rxr->ol_flags_err_table[errors];
+	}
 
 	if (flags_type & RX_PKT_CMPL_FLAGS_RSS_VALID) {
 		mbuf->hash.rss = rte_le_to_cpu_32(rxcmp->rss_hash);
 		ol_flags |= PKT_RX_RSS_HASH;
 	}
 
+#ifdef RTE_LIBRTE_IEEE1588
+	if (unlikely((flags_type & RX_PKT_CMPL_FLAGS_MASK) ==
+		     RX_PKT_CMPL_FLAGS_ITYPE_PTP_W_TIMESTAMP))
+		ol_flags |= PKT_RX_IEEE1588_PTP | PKT_RX_IEEE1588_TMST;
+#endif
+
 	mbuf->ol_flags = ol_flags;
 }
 
 #ifdef RTE_LIBRTE_IEEE1588
 static void
-bnxt_get_rx_ts_thor(struct bnxt *bp, uint32_t rx_ts_cmpl)
+bnxt_get_rx_ts_p5(struct bnxt *bp, uint32_t rx_ts_cmpl)
 {
-	uint64_t systime_cycles = 0;
+	struct bnxt_ptp_cfg *ptp = bp->ptp_cfg;
+	uint64_t last_hwrm_time;
+	uint64_t pkt_time = 0;
 
-	if (!BNXT_CHIP_THOR(bp))
+	if (!BNXT_CHIP_P5(bp) || !ptp)
 		return;
 
 	/* On Thor, Rx timestamps are provided directly in the
@@ -512,10 +618,13 @@ bnxt_get_rx_ts_thor(struct bnxt *bp, uint32_t rx_ts_cmpl)
 	 * from the HWRM response with the lower 32 bits in the
 	 * Rx completion to produce the 48 bit timestamp for the Rx packet
 	 */
-	bnxt_hwrm_port_ts_query(bp, BNXT_PTP_FLAGS_CURRENT_TIME,
-				&systime_cycles);
-	bp->ptp_cfg->rx_timestamp = (systime_cycles & 0xFFFF00000000);
-	bp->ptp_cfg->rx_timestamp |= rx_ts_cmpl;
+	last_hwrm_time = ptp->current_time;
+	pkt_time = (last_hwrm_time & BNXT_PTP_CURRENT_TIME_MASK) | rx_ts_cmpl;
+	if (rx_ts_cmpl < (uint32_t)last_hwrm_time) {
+		/* timer has rolled over */
+		pkt_time += (1ULL << 32);
+	}
+	ptp->rx_timestamp = pkt_time;
 }
 #endif
 
@@ -666,7 +775,7 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 	struct rx_pkt_cmpl *rxcmp;
 	struct rx_pkt_cmpl_hi *rxcmp1;
 	uint32_t tmp_raw_cons = *raw_cons;
-	uint16_t cons, prod, cp_cons =
+	uint16_t cons, raw_prod, cp_cons =
 	    RING_CMP(cpr->cp_ring_struct, tmp_raw_cons);
 	struct rte_mbuf *mbuf;
 	int rc = 0;
@@ -703,7 +812,8 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 				cpr->cp_ring_struct->ring_mask,
 				cpr->valid);
 
-	if (cmp_type == RX_TPA_START_CMPL_TYPE_RX_TPA_START) {
+	if (cmp_type == RX_TPA_START_CMPL_TYPE_RX_TPA_START ||
+	    cmp_type == RX_TPA_START_V2_CMPL_TYPE_RX_TPA_START_V2) {
 		bnxt_tpa_start(rxq, (struct rx_tpa_start_cmpl *)rxcmp,
 			       (struct rx_tpa_start_cmpl_hi *)rxcmp1);
 		rc = -EINVAL; /* Continue w/o new mbuf */
@@ -716,17 +826,17 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 			return -EBUSY;
 		*rx_pkt = mbuf;
 		goto next_rx;
-	} else if (cmp_type != 0x11) {
+	} else if ((cmp_type != CMPL_BASE_TYPE_RX_L2) &&
+		   (cmp_type != CMPL_BASE_TYPE_RX_L2_V2)) {
 		rc = -EINVAL;
 		goto next_rx;
 	}
 
-	agg_buf = (rxcmp->agg_bufs_v1 & RX_PKT_CMPL_AGG_BUFS_MASK)
-			>> RX_PKT_CMPL_AGG_BUFS_SFT;
+	agg_buf = BNXT_RX_L2_AGG_BUFS(rxcmp);
 	if (agg_buf && !bnxt_agg_bufs_valid(cpr, agg_buf, tmp_raw_cons))
 		return -EBUSY;
 
-	prod = rxr->rx_prod;
+	raw_prod = rxr->rx_raw_prod;
 
 	cons = rxcmp->opaque;
 	mbuf = bnxt_consume_rx_buf(rxr, cons);
@@ -740,16 +850,24 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 	mbuf->data_len = mbuf->pkt_len;
 	mbuf->port = rxq->port_id;
 
-	bnxt_set_ol_flags(rxcmp, rxcmp1, mbuf);
-
 #ifdef RTE_LIBRTE_IEEE1588
 	if (unlikely((rte_le_to_cpu_16(rxcmp->flags_type) &
 		      RX_PKT_CMPL_FLAGS_MASK) ==
-		      RX_PKT_CMPL_FLAGS_ITYPE_PTP_W_TIMESTAMP)) {
-		mbuf->ol_flags |= PKT_RX_IEEE1588_PTP | PKT_RX_IEEE1588_TMST;
-		bnxt_get_rx_ts_thor(rxq->bp, rxcmp1->reorder);
-	}
+		     RX_PKT_CMPL_FLAGS_ITYPE_PTP_W_TIMESTAMP))
+		bnxt_get_rx_ts_p5(rxq->bp, rxcmp1->reorder);
 #endif
+
+	if (cmp_type == CMPL_BASE_TYPE_RX_L2_V2) {
+		bnxt_parse_csum_v2(mbuf, rxcmp1);
+		bnxt_parse_pkt_type_v2(mbuf, rxcmp, rxcmp1);
+		bnxt_rx_vlan_v2(mbuf, rxcmp, rxcmp1);
+		/* TODO Add support for cfa_code parsing */
+		goto reuse_rx_mbuf;
+	}
+
+	bnxt_set_ol_flags(rxr, rxcmp, rxcmp1, mbuf);
+
+	mbuf->packet_type = bnxt_parse_pkt_type(rxcmp, rxcmp1);
 
 	if (BNXT_TRUFLOW_EN(bp))
 		mark_id = bnxt_ulp_set_mark_in_mbuf(rxq->bp, rxcmp1, mbuf,
@@ -757,10 +875,9 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 	else
 		bnxt_set_mark_in_mbuf(rxq->bp, rxcmp1, mbuf);
 
+reuse_rx_mbuf:
 	if (agg_buf)
 		bnxt_rx_pages(rxq, mbuf, &tmp_raw_cons, agg_buf, NULL);
-
-	mbuf->packet_type = bnxt_parse_pkt_type(rxcmp, rxcmp1);
 
 #ifdef BNXT_DEBUG
 	if (rxcmp1->errors_v2 & RX_CMP_L2_ERRORS) {
@@ -786,13 +903,14 @@ static int bnxt_rx_pkt(struct rte_mbuf **rx_pkt,
 	 * calls in favour of a tight loop with the same function being called
 	 * in it.
 	 */
-	prod = RING_NEXT(rxr->rx_ring_struct, prod);
-	if (bnxt_alloc_rx_data(rxq, rxr, prod)) {
-		PMD_DRV_LOG(ERR, "mbuf alloc failed with prod=0x%x\n", prod);
+	raw_prod = RING_NEXT(raw_prod);
+	if (bnxt_alloc_rx_data(rxq, rxr, raw_prod)) {
+		PMD_DRV_LOG(ERR, "mbuf alloc failed with prod=0x%x\n",
+			    raw_prod);
 		rc = -ENOMEM;
 		goto rx;
 	}
-	rxr->rx_prod = prod;
+	rxr->rx_raw_prod = raw_prod;
 
 	if (BNXT_TRUFLOW_EN(bp) && (BNXT_VF_IS_TRUSTED(bp) || BNXT_PF(bp)) &&
 	    vfr_flag) {
@@ -826,13 +944,14 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	struct bnxt_rx_queue *rxq = rx_queue;
 	struct bnxt_cp_ring_info *cpr = rxq->cp_ring;
 	struct bnxt_rx_ring_info *rxr = rxq->rx_ring;
+	uint16_t rx_raw_prod = rxr->rx_raw_prod;
+	uint16_t ag_raw_prod = rxr->ag_raw_prod;
 	uint32_t raw_cons = cpr->cp_raw_cons;
+	bool alloc_failed = false;
 	uint32_t cons;
 	int nb_rx_pkts = 0;
 	int nb_rep_rx_pkts = 0;
 	struct rx_pkt_cmpl *rxcmp;
-	uint16_t prod = rxr->rx_prod;
-	uint16_t ag_prod = rxr->ag_prod;
 	int rc = 0;
 	bool evt = false;
 
@@ -850,8 +969,8 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	 */
 	while (unlikely(rxq->rxrearm_nb)) {
 		if (!bnxt_alloc_rx_data(rxq, rxr, rxq->rxrearm_start)) {
-			rxr->rx_prod = rxq->rxrearm_start;
-			bnxt_db_write(&rxr->rx_db, rxr->rx_prod);
+			rxr->rx_raw_prod = rxq->rxrearm_start;
+			bnxt_db_write(&rxr->rx_db, rxr->rx_raw_prod);
 			rxq->rxrearm_start++;
 			rxq->rxrearm_nb--;
 		} else {
@@ -872,15 +991,21 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 					cpr->cp_ring_struct->ring_mask,
 					cpr->valid);
 
-		/* TODO: Avoid magic numbers... */
-		if ((CMP_TYPE(rxcmp) & 0x30) == 0x10) {
+		if (CMP_TYPE(rxcmp) == CMPL_BASE_TYPE_HWRM_DONE) {
+			PMD_DRV_LOG(ERR, "Rx flush done\n");
+		} else if ((CMP_TYPE(rxcmp) >= CMPL_BASE_TYPE_RX_TPA_START_V2) &&
+		     (CMP_TYPE(rxcmp) <= RX_TPA_V2_ABUF_CMPL_TYPE_RX_TPA_AGG)) {
 			rc = bnxt_rx_pkt(&rx_pkts[nb_rx_pkts], rxq, &raw_cons);
-			if (likely(!rc) || rc == -ENOMEM)
+			if (!rc)
 				nb_rx_pkts++;
-			if (rc == -EBUSY)	/* partial completion */
+			else if (rc == -EBUSY)	/* partial completion */
 				break;
-			if (rc == -ENODEV)	/* completion for representor */
+			else if (rc == -ENODEV)	/* completion for representor */
 				nb_rep_rx_pkts++;
+			else if (rc == -ENOMEM) {
+				nb_rx_pkts++;
+				alloc_failed = true;
+			}
 		} else if (!BNXT_NUM_ASYNC_CPR(rxq->bp)) {
 			evt =
 			bnxt_event_hwrm_resp_handler(rxq->bp,
@@ -891,11 +1016,8 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		}
 
 		raw_cons = NEXT_RAW_CMP(raw_cons);
-		if (nb_rx_pkts == nb_pkts || evt)
+		if (nb_rx_pkts == nb_pkts || nb_rep_rx_pkts == nb_pkts || evt)
 			break;
-		/* Post some Rx buf early in case of larger burst processing */
-		if (nb_rx_pkts == BNXT_RX_POST_THRESH)
-			bnxt_db_write(&rxr->rx_db, rxr->rx_prod);
 	}
 
 	cpr->cp_raw_cons = raw_cons;
@@ -907,32 +1029,37 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		goto done;
 	}
 
-	if (prod != rxr->rx_prod)
-		bnxt_db_write(&rxr->rx_db, rxr->rx_prod);
-
-	/* Ring the AGG ring DB */
-	if (ag_prod != rxr->ag_prod)
-		bnxt_db_write(&rxr->ag_db, rxr->ag_prod);
-
+	/* Ring the completion queue doorbell. */
 	bnxt_db_cq(cpr);
 
-	/* Attempt to alloc Rx buf in case of a previous allocation failure. */
-	if (rc == -ENOMEM) {
-		int i = RING_NEXT(rxr->rx_ring_struct, prod);
-		int cnt = nb_rx_pkts;
+	/* Ring the receive descriptor doorbell. */
+	if (rx_raw_prod != rxr->rx_raw_prod)
+		bnxt_db_write(&rxr->rx_db, rxr->rx_raw_prod);
 
-		for (; cnt;
-			i = RING_NEXT(rxr->rx_ring_struct, i), cnt--) {
-			struct rte_mbuf **rx_buf = &rxr->rx_buf_ring[i];
+	/* Ring the AGG ring DB */
+	if (ag_raw_prod != rxr->ag_raw_prod)
+		bnxt_db_write(&rxr->ag_db, rxr->ag_raw_prod);
+
+	/* Attempt to alloc Rx buf in case of a previous allocation failure. */
+	if (alloc_failed) {
+		uint16_t cnt;
+
+		rx_raw_prod = RING_NEXT(rx_raw_prod);
+		for (cnt = 0; cnt < nb_rx_pkts + nb_rep_rx_pkts; cnt++) {
+			struct rte_mbuf **rx_buf;
+			uint16_t ndx;
+
+			ndx = RING_IDX(rxr->rx_ring_struct, rx_raw_prod + cnt);
+			rx_buf = &rxr->rx_buf_ring[ndx];
 
 			/* Buffer already allocated for this index. */
 			if (*rx_buf != NULL && *rx_buf != &rxq->fake_mbuf)
 				continue;
 
 			/* This slot is empty. Alloc buffer for Rx */
-			if (!bnxt_alloc_rx_data(rxq, rxr, i)) {
-				rxr->rx_prod = i;
-				bnxt_db_write(&rxr->rx_db, rxr->rx_prod);
+			if (!bnxt_alloc_rx_data(rxq, rxr, rx_raw_prod + cnt)) {
+				rxr->rx_raw_prod = rx_raw_prod + cnt;
+				bnxt_db_write(&rxr->rx_db, rxr->rx_raw_prod);
 			} else {
 				PMD_DRV_LOG(ERR, "Alloc  mbuf failed\n");
 				break;
@@ -992,12 +1119,9 @@ void bnxt_free_rx_rings(struct bnxt *bp)
 
 int bnxt_init_rx_ring_struct(struct bnxt_rx_queue *rxq, unsigned int socket_id)
 {
-	struct rte_eth_dev *eth_dev = rxq->bp->eth_dev;
-	struct rte_eth_rxmode *rxmode;
 	struct bnxt_cp_ring_info *cpr;
 	struct bnxt_rx_ring_info *rxr;
 	struct bnxt_ring *ring;
-	bool use_agg_ring;
 
 	rxq->rx_buf_size = BNXT_MAX_PKT_LEN + sizeof(struct rte_mbuf);
 
@@ -1040,19 +1164,9 @@ int bnxt_init_rx_ring_struct(struct bnxt_rx_queue *rxq, unsigned int socket_id)
 		return -ENOMEM;
 	cpr->cp_ring_struct = ring;
 
-	rxmode = &eth_dev->data->dev_conf.rxmode;
-	use_agg_ring = (rxmode->offloads & DEV_RX_OFFLOAD_SCATTER) ||
-		       (rxmode->offloads & DEV_RX_OFFLOAD_TCP_LRO) ||
-		       (rxmode->max_rx_pkt_len >
-			 (uint32_t)(rte_pktmbuf_data_room_size(rxq->mb_pool) -
-				    RTE_PKTMBUF_HEADROOM));
-
 	/* Allocate two completion slots per entry in desc ring. */
 	ring->ring_size = rxr->rx_ring_struct->ring_size * 2;
-
-	/* Allocate additional slots if aggregation ring is in use. */
-	if (use_agg_ring)
-		ring->ring_size *= AGG_RING_SIZE_FACTOR;
+	ring->ring_size *= AGG_RING_SIZE_FACTOR;
 
 	ring->ring_size = rte_align32pow2(ring->ring_size);
 	ring->ring_mask = ring->ring_size - 1;
@@ -1100,37 +1214,37 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 {
 	struct bnxt_rx_ring_info *rxr;
 	struct bnxt_ring *ring;
-	uint32_t prod, type;
+	uint32_t raw_prod, type;
 	unsigned int i;
 	uint16_t size;
 
 	/* Initialize packet type table. */
 	bnxt_init_ptype_table();
 
-	/* Initialize offload flags parsing table. */
-	bnxt_init_ol_flags_tables();
-
 	size = rte_pktmbuf_data_room_size(rxq->mb_pool) - RTE_PKTMBUF_HEADROOM;
 	size = RTE_MIN(BNXT_MAX_PKT_LEN, size);
 
-	type = RX_PROD_PKT_BD_TYPE_RX_PROD_PKT | RX_PROD_PKT_BD_FLAGS_EOP_PAD;
+	type = RX_PROD_PKT_BD_TYPE_RX_PROD_PKT;
 
 	rxr = rxq->rx_ring;
 	ring = rxr->rx_ring_struct;
 	bnxt_init_rxbds(ring, type, size);
 
-	prod = rxr->rx_prod;
+	/* Initialize offload flags parsing table. */
+	bnxt_init_ol_flags_tables(rxq);
+
+	raw_prod = rxr->rx_raw_prod;
 	for (i = 0; i < ring->ring_size; i++) {
 		if (unlikely(!rxr->rx_buf_ring[i])) {
-			if (bnxt_alloc_rx_data(rxq, rxr, prod) != 0) {
+			if (bnxt_alloc_rx_data(rxq, rxr, raw_prod) != 0) {
 				PMD_DRV_LOG(WARNING,
 					    "init'ed rx ring %d with %d/%d mbufs only\n",
 					    rxq->queue_id, i, ring->ring_size);
 				break;
 			}
 		}
-		rxr->rx_prod = prod;
-		prod = RING_NEXT(rxr->rx_ring_struct, prod);
+		rxr->rx_raw_prod = raw_prod;
+		raw_prod = RING_NEXT(raw_prod);
 	}
 
 	/* Initialize dummy mbuf pointers for vector mode rx. */
@@ -1142,19 +1256,19 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 	ring = rxr->ag_ring_struct;
 	type = RX_PROD_AGG_BD_TYPE_RX_PROD_AGG;
 	bnxt_init_rxbds(ring, type, size);
-	prod = rxr->ag_prod;
+	raw_prod = rxr->ag_raw_prod;
 
 	for (i = 0; i < ring->ring_size; i++) {
 		if (unlikely(!rxr->ag_buf_ring[i])) {
-			if (bnxt_alloc_ag_data(rxq, rxr, prod) != 0) {
+			if (bnxt_alloc_ag_data(rxq, rxr, raw_prod) != 0) {
 				PMD_DRV_LOG(WARNING,
 					    "init'ed AG ring %d with %d/%d mbufs only\n",
 					    rxq->queue_id, i, ring->ring_size);
 				break;
 			}
 		}
-		rxr->ag_prod = prod;
-		prod = RING_NEXT(rxr->ag_ring_struct, prod);
+		rxr->ag_raw_prod = raw_prod;
+		raw_prod = RING_NEXT(raw_prod);
 	}
 	PMD_DRV_LOG(DEBUG, "AGG Done!\n");
 
@@ -1173,6 +1287,38 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 		}
 	}
 	PMD_DRV_LOG(DEBUG, "TPA alloc Done!\n");
+
+	return 0;
+}
+
+/* Sweep the Rx completion queue till HWRM_DONE for ring flush is received.
+ * The mbufs will not be freed in this call.
+ * They will be freed during ring free as a part of mem cleanup.
+ */
+int bnxt_flush_rx_cmp(struct bnxt_cp_ring_info *cpr)
+{
+	struct bnxt_ring *cp_ring_struct = cpr->cp_ring_struct;
+	uint32_t ring_mask = cp_ring_struct->ring_mask;
+	uint32_t raw_cons = cpr->cp_raw_cons;
+	struct rx_pkt_cmpl *rxcmp;
+	uint32_t nb_rx = 0;
+	uint32_t cons;
+
+	do {
+		cons = RING_CMP(cpr->cp_ring_struct, raw_cons);
+		rxcmp = (struct rx_pkt_cmpl *)&cpr->cp_desc_ring[cons];
+
+		if (CMP_TYPE(rxcmp) == CMPL_BASE_TYPE_HWRM_DONE)
+			return 1;
+
+		raw_cons = NEXT_RAW_CMP(raw_cons);
+		nb_rx++;
+	} while (nb_rx < ring_mask);
+
+	cpr->cp_raw_cons = raw_cons;
+
+	/* Ring the completion queue doorbell. */
+	bnxt_db_cq(cpr);
 
 	return 0;
 }

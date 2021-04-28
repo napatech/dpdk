@@ -89,7 +89,7 @@ be passed as part of EAL arguments. For example,
 
 .. code-block:: console
 
-   testpmd -a af:10.0,pflink_fullchk=1 -- -i
+   dpdk-testpmd -a af:10.0,pflink_fullchk=1 -- -i
 
 - ``pflink_fullchk`` (default **0**)
 
@@ -251,6 +251,21 @@ Do not bind ``igb_uio`` with legacy mode in X550 NICs.
 Before binding ``vfio`` with legacy mode in X550 NICs, use ``modprobe vfio ``
 ``nointxmask=1`` to load ``vfio`` module if the intx is not shared with other
 devices.
+
+RSS isn't supported when QinQ is enabled
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Due to FW limitation, IXGBE doesn't support RSS when QinQ is enabled currently.
+
+UDP with zero checksum is reported as error
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Intel 82599 10 Gigabit Ethernet Controller Specification Update (Revision 2.87)
+Errata: 44 Integrity Error Reported for IPv4/UDP Packets With Zero Checksum
+
+To support UDP zero checksum, the zero and bad UDP checksum packet is marked as
+PKT_RX_L4_CKSUM_UNKNOWN, so the application needs to recompute the checksum to
+validate it.
 
 Inline crypto processing support
 --------------------------------

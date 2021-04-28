@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright(c) 2019-2020 Xilinx, Inc.
+ * Copyright(c) 2019-2021 Xilinx, Inc.
  * Copyright(c) 2016-2019 Solarflare Communications Inc.
  *
  * This software was jointly developed between OKTET Labs (under contract
@@ -8,8 +8,8 @@
  */
 
 #include <rte_dev.h>
-#include <rte_ethdev_driver.h>
-#include <rte_ethdev_pci.h>
+#include <ethdev_driver.h>
+#include <ethdev_pci.h>
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
 #include <rte_errno.h>
@@ -640,10 +640,19 @@ sfc_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 			mac_stats[EFX_MAC_VADAPTER_TX_BROADCAST_BYTES];
 		stats->imissed = mac_stats[EFX_MAC_VADAPTER_RX_BAD_PACKETS];
 		stats->oerrors = mac_stats[EFX_MAC_VADAPTER_TX_BAD_PACKETS];
+
+		/* CRC is included in these stats, but shouldn't be */
+		stats->ibytes -= stats->ipackets * RTE_ETHER_CRC_LEN;
+		stats->obytes -= stats->opackets * RTE_ETHER_CRC_LEN;
 	} else {
 		stats->opackets = mac_stats[EFX_MAC_TX_PKTS];
 		stats->ibytes = mac_stats[EFX_MAC_RX_OCTETS];
 		stats->obytes = mac_stats[EFX_MAC_TX_OCTETS];
+
+		/* CRC is included in these stats, but shouldn't be */
+		stats->ibytes -= mac_stats[EFX_MAC_RX_PKTS] * RTE_ETHER_CRC_LEN;
+		stats->obytes -= mac_stats[EFX_MAC_TX_PKTS] * RTE_ETHER_CRC_LEN;
+
 		/*
 		 * Take into account stats which are whenever supported
 		 * on EF10. If some stat is not supported by current
@@ -1017,7 +1026,7 @@ sfc_dev_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 	 * The driver does not use it, but other PMDs update jumbo frame
 	 * flag and max_rx_pkt_len when MTU is set.
 	 */
-	if (mtu > RTE_ETHER_MAX_LEN) {
+	if (mtu > RTE_ETHER_MTU) {
 		struct rte_eth_rxmode *rxmode = &dev->data->dev_conf.rxmode;
 		rxmode->offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
 	}
@@ -1742,32 +1751,11 @@ bad_reta_entry:
 }
 
 static int
-sfc_dev_filter_ctrl(struct rte_eth_dev *dev, enum rte_filter_type filter_type,
-		    enum rte_filter_op filter_op,
-		    void *arg)
+sfc_dev_flow_ops_get(struct rte_eth_dev *dev __rte_unused,
+		     const struct rte_flow_ops **ops)
 {
-	struct sfc_adapter *sa = sfc_adapter_by_eth_dev(dev);
-	int rc = ENOTSUP;
-
-	sfc_log_init(sa, "entry");
-
-	switch (filter_type) {
-	case RTE_ETH_FILTER_GENERIC:
-		if (filter_op != RTE_ETH_FILTER_GET) {
-			rc = EINVAL;
-		} else {
-			*(const void **)arg = &sfc_flow_ops;
-			rc = 0;
-		}
-		break;
-	default:
-		sfc_err(sa, "Unknown filter type %u", filter_type);
-		break;
-	}
-
-	sfc_log_init(sa, "exit: %d", -rc);
-	SFC_ASSERT(rc >= 0);
-	return -rc;
+	*ops = &sfc_flow_ops;
+	return 0;
 }
 
 static int
@@ -1850,7 +1838,7 @@ static const struct eth_dev_ops sfc_eth_dev_ops = {
 	.reta_query			= sfc_dev_rss_reta_query,
 	.rss_hash_update		= sfc_dev_rss_hash_update,
 	.rss_hash_conf_get		= sfc_dev_rss_hash_conf_get,
-	.filter_ctrl			= sfc_dev_filter_ctrl,
+	.flow_ops_get			= sfc_dev_flow_ops_get,
 	.set_mc_addr_list		= sfc_set_mc_addr_list,
 	.rxq_info_get			= sfc_rx_queue_info_get,
 	.txq_info_get			= sfc_tx_queue_info_get,
@@ -2151,6 +2139,13 @@ sfc_eth_dev_init(struct rte_eth_dev *dev)
 	const efx_nic_cfg_t *encp;
 	const struct rte_ether_addr *from;
 	int ret;
+
+	if (sfc_efx_dev_class_get(pci_dev->device.devargs) !=
+			SFC_EFX_DEV_CLASS_NET) {
+		SFC_GENERIC_LOG(DEBUG,
+			"Incompatible device class: skip probing, should be probed by other sfc driver.");
+		return 1;
+	}
 
 	sfc_register_dp();
 

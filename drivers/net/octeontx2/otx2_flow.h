@@ -30,6 +30,7 @@ enum {
 #define NPC_IH_LENGTH			8
 #define NPC_TPID_LENGTH			2
 #define NPC_HIGIG2_LENGTH		16
+#define NPC_MAX_RAW_ITEM_LEN		16
 #define NPC_COUNTER_NONE		(-1)
 /* 32 bytes from LDATA_CFG & 32 bytes from FLAGS_CFG */
 #define NPC_MAX_EXTRACT_DATA_LEN	(64)
@@ -149,6 +150,11 @@ struct otx2_mcam_ents_info {
 	uint32_t live_ent;
 };
 
+struct otx2_flow_dump_data {
+	uint8_t lid;
+	uint16_t ltype;
+};
+
 struct rte_flow {
 	uint8_t  nix_intf;
 	uint32_t  mcam_id;
@@ -159,6 +165,8 @@ struct rte_flow {
 	uint64_t mcam_mask[OTX2_MAX_MCAM_WIDTH_DWORDS];
 	uint64_t npc_action;
 	uint64_t vtag_action;
+	struct otx2_flow_dump_data dump_data[32];
+	uint16_t num_patterns;
 	TAILQ_ENTRY(rte_flow) next;
 };
 
@@ -401,4 +409,7 @@ int otx2_flow_parse_actions(struct rte_eth_dev *dev,
 int otx2_flow_free_all_resources(struct otx2_eth_dev *hw);
 
 int otx2_flow_parse_mpls(struct otx2_parse_state *pst, int lid);
+
+void otx2_flow_dump(FILE *file, struct otx2_eth_dev *hw,
+		    struct rte_flow *flow);
 #endif /* __OTX2_FLOW_H__ */

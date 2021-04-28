@@ -6,15 +6,17 @@
 #include <unistd.h>
 
 #include <rte_ether.h>
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_interrupts.h>
 #include <rte_alarm.h>
+#include <rte_cycles.h>
 
 #include <mlx5_malloc.h>
 
 #include "mlx5.h"
 #include "mlx5_mr.h"
-#include "mlx5_rxtx.h"
+#include "mlx5_rx.h"
+#include "mlx5_tx.h"
 #include "mlx5_utils.h"
 #include "rte_pmd_mlx5.h"
 
@@ -1171,7 +1173,7 @@ mlx5_dev_stop(struct rte_eth_dev *dev)
 	rte_wmb();
 	/* Disable datapath on secondary process. */
 	mlx5_mp_os_req_stop_rxtx(dev);
-	usleep(1000 * priv->rxqs_n);
+	rte_delay_us_sleep(1000 * priv->rxqs_n);
 	DRV_LOG(DEBUG, "port %u stopping device", dev->data->port_id);
 	mlx5_flow_stop_default(dev);
 	/* Control flows for default traffic can be removed firstly. */
@@ -1315,8 +1317,12 @@ mlx5_traffic_enable(struct rte_eth_dev *dev)
 				goto error;
 			ret = mlx5_ctrl_flow(dev, &ipv6_multi_spec,
 					     &ipv6_multi_mask);
-			if (ret)
-				goto error;
+			if (ret) {
+				/* Do not fail on IPv6 broadcast creation failure. */
+				DRV_LOG(WARNING,
+					"IPv6 broadcast is not supported");
+				ret = 0;
+			}
 		}
 	}
 	/* Add MAC address flows. */

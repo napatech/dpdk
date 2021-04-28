@@ -6,7 +6,7 @@
 #ifndef RTE_PMD_MLX5_DEFS_H_
 #define RTE_PMD_MLX5_DEFS_H_
 
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_vxlan.h>
 
 #include "mlx5_autoconf.h"
@@ -47,10 +47,6 @@
 #ifndef MLX5_PMD_SOFT_COUNTERS
 #define MLX5_PMD_SOFT_COUNTERS 1
 #endif
-
-/* Switch port ID parameters for bonding configurations. */
-#define MLX5_PORT_ID_BONDING_PF_MASK 0xf
-#define MLX5_PORT_ID_BONDING_PF_SHIFT 12
 
 /* Alarm timeout. */
 #define MLX5_ALARM_TIMEOUT_US 100000
@@ -196,11 +192,14 @@
 #define MLX5_HAIRPIN_QUEUE_STRIDE 6
 #define MLX5_HAIRPIN_JUMBO_LOG_SIZE (14 + 2)
 
-/* Maximum number of shared actions supported by rte_flow */
-#define MLX5_MAX_SHARED_ACTIONS 2
+/* Maximum number of indirect actions supported by rte_flow */
+#define MLX5_MAX_INDIRECT_ACTIONS 2
 
-/* Definition of static_assert found in /usr/include/assert.h */
-#ifndef HAVE_STATIC_ASSERT
+/*
+ * Linux definition of static_assert is found in /usr/include/assert.h.
+ * Windows does not require a redefinition.
+ */
+#if !defined(HAVE_STATIC_ASSERT) && !defined(RTE_EXEC_ENV_WINDOWS)
 #define static_assert _Static_assert
 #endif
 

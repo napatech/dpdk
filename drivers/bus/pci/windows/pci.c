@@ -10,8 +10,9 @@
 #include "pci_netuio.h"
 
 #include <devpkey.h>
+#include <regstr.h>
 
-#ifdef RTE_TOOLCHAIN_GCC
+#if defined RTE_TOOLCHAIN_GCC && (__MINGW64_VERSION_MAJOR < 8)
 #include <devpropdef.h>
 DEFINE_DEVPROPKEY(DEVPKEY_Device_Numa_Node, 0x540b947e, 0x8b40, 0x45bc,
 	0xa8, 0xa2, 0x6a, 0x0b, 0x89, 0x4c, 0xbd, 0xa2, 3);
@@ -22,20 +23,25 @@ DEFINE_DEVPROPKEY(DEVPKEY_Device_Numa_Node, 0x540b947e, 0x8b40, 0x45bc,
  * the registry hive for PCI devices.
  */
 
-/* The functions below are not implemented on Windows,
+/* Class ID consists of hexadecimal digits */
+#define RTE_PCI_DRV_CLASSID_DIGIT "0123456789abcdefABCDEF"
+
+/* Some of the functions below are not implemented on Windows,
  * but need to be defined for compilation purposes
  */
 
 /* Map pci device */
 int
-rte_pci_map_device(struct rte_pci_device *dev __rte_unused)
+rte_pci_map_device(struct rte_pci_device *dev)
 {
-	/* This function is not implemented on Windows.
-	 * We really should short-circuit the call to these functions by
-	 * clearing the RTE_PCI_DRV_NEED_MAPPING flag
-	 * in the rte_pci_driver flags.
+	/* Only return success for devices bound to netuio.
+	 * Devices that are bound to netuio are mapped at
+	 * the bus probing stage.
 	 */
-	return 0;
+	if (dev->kdrv == RTE_PCI_KDRV_NET_UIO)
+		return 0;
+	else
+		return -1;
 }
 
 /* Unmap pci device */
@@ -201,14 +207,14 @@ get_device_resource_info(HDEVINFO dev_info,
 	int ret;
 
 	switch (dev->kdrv) {
-	case RTE_PCI_KDRV_NONE:
-		/* mem_resource - Unneeded for RTE_PCI_KDRV_NONE */
+	case RTE_PCI_KDRV_UNKNOWN:
+		/* bifurcated driver case - mem_resource is unneeded */
 		dev->mem_resource[0].phys_addr = 0;
 		dev->mem_resource[0].len = 0;
 		dev->mem_resource[0].addr = NULL;
 		break;
-	case RTE_PCI_KDRV_NIC_UIO:
-		/* get device info from netuio kernel driver */
+	case RTE_PCI_KDRV_NET_UIO:
+		/* get device info from NetUIO kernel driver */
 		ret = get_netuio_device_info(dev_info, dev_info_data, dev);
 		if (ret != 0) {
 			RTE_LOG(DEBUG, EAL,
@@ -234,6 +240,12 @@ get_device_resource_info(HDEVINFO dev_info,
 		&DEVPKEY_Device_Numa_Node, &property_type,
 		(BYTE *)&numa_node, sizeof(numa_node), NULL, 0);
 	if (!res) {
+		DWORD error = GetLastError();
+		if (error == ERROR_NOT_FOUND) {
+			/* On older CPUs, NUMA is not bound to PCIe locality. */
+			dev->device.numa_node = 0;
+			return ERROR_SUCCESS;
+		}
 		RTE_LOG_WIN32_ERR("SetupDiGetDevicePropertyW"
 			"(DEVPKEY_Device_Numa_Node)");
 		return -1;
@@ -267,23 +279,41 @@ get_pci_hardware_id(HDEVINFO dev_info, PSP_DEVINFO_DATA device_info_data,
 
 /*
  * parse the SPDRP_HARDWAREID output and assign to rte_pci_id
+ *
+ * A list of the device identification string formats can be found at:
+ * https://docs.microsoft.com/en-us/windows-hardware/drivers/install/identifiers-for-pci-devices
  */
 static int
 parse_pci_hardware_id(const char *buf, struct rte_pci_id *pci_id)
 {
 	int ids = 0;
 	uint16_t vendor_id, device_id;
-	uint32_t subvendor_id = 0;
+	uint32_t subvendor_id = 0, class_id = 0;
+	const char *cp;
 
 	ids = sscanf_s(buf, "PCI\\VEN_%" PRIx16 "&DEV_%" PRIx16 "&SUBSYS_%"
 		PRIx32, &vendor_id, &device_id, &subvendor_id);
 	if (ids != 3)
 		return -1;
 
+	/* Try and find PCI class ID */
+	for (cp = buf; !(cp[0] == 0 && cp[1] == 0); cp++)
+		if (*cp == '&' && sscanf_s(cp,
+				"&CC_%" PRIx32, &class_id) == 1) {
+			/*
+			 * If the Programming Interface code is not specified,
+			 * assume that it is zero.
+			 */
+			if (strspn(cp + 4, RTE_PCI_DRV_CLASSID_DIGIT) == 4)
+				class_id <<= 8;
+			break;
+		}
+
 	pci_id->vendor_id = vendor_id;
 	pci_id->device_id = device_id;
 	pci_id->subsystem_device_id = subvendor_id >> 16;
 	pci_id->subsystem_vendor_id = subvendor_id & 0xffff;
+	pci_id->class_id = class_id;
 	return 0;
 }
 
@@ -293,28 +323,35 @@ set_kernel_driver_type(PSP_DEVINFO_DATA device_info_data,
 {
 	/* set kernel driver type based on device class */
 	if (IsEqualGUID(&(device_info_data->ClassGuid), &GUID_DEVCLASS_NETUIO))
-		dev->kdrv = RTE_PCI_KDRV_NIC_UIO;
+		dev->kdrv = RTE_PCI_KDRV_NET_UIO;
 	else
-		dev->kdrv = RTE_PCI_KDRV_NONE;
+		dev->kdrv = RTE_PCI_KDRV_UNKNOWN;
 }
 
 static int
 pci_scan_one(HDEVINFO dev_info, PSP_DEVINFO_DATA device_info_data)
 {
-	struct rte_pci_device *dev;
+	struct rte_pci_device *dev = NULL;
 	int ret = -1;
-	char  pci_device_info[PATH_MAX];
+	char  pci_device_info[REGSTR_VAL_MAX_HCID_LEN];
 	struct rte_pci_addr addr;
 	struct rte_pci_id pci_id;
 
-	dev = malloc(sizeof(*dev));
-	if (dev == NULL)
+	ret = get_device_pci_address(dev_info, device_info_data, &addr);
+	if (ret != 0)
 		goto end;
 
-	memset(dev, 0, sizeof(*dev));
+	if (rte_pci_ignore_device(&addr)) {
+		/*
+		 * We won't add this device, but we want to continue
+		 * looking for supported devices
+		 */
+		ret = ERROR_CONTINUE;
+		goto end;
+	}
 
 	ret = get_pci_hardware_id(dev_info, device_info_data,
-		pci_device_info, PATH_MAX);
+		pci_device_info, sizeof(pci_device_info));
 	if (ret != 0)
 		goto end;
 
@@ -328,10 +365,13 @@ pci_scan_one(HDEVINFO dev_info, PSP_DEVINFO_DATA device_info_data)
 		goto end;
 	}
 
-	ret = get_device_pci_address(dev_info, device_info_data, &addr);
-	if (ret != 0)
+	dev = malloc(sizeof(*dev));
+	if (dev == NULL)
 		goto end;
 
+	memset(dev, 0, sizeof(*dev));
+
+	dev->device.bus = &rte_pci_bus.bus;
 	dev->addr = addr;
 	dev->id = pci_id;
 	dev->max_vfs = 0; /* TODO: get max_vfs */
@@ -410,7 +450,7 @@ rte_pci_scan(void)
 		device_index++;
 		/* we only want to enumerate net & netuio class devices */
 		if (IsEqualGUID(&(device_info_data.ClassGuid),
-		    &GUID_DEVCLASS_NET) ||
+			    &GUID_DEVCLASS_NET) ||
 			IsEqualGUID(&(device_info_data.ClassGuid),
 			    &GUID_DEVCLASS_NETUIO)) {
 			ret = pci_scan_one(dev_info, &device_info_data);

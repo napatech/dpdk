@@ -5,8 +5,8 @@
 #include <stdbool.h>
 
 #include <rte_cycles.h>
-#include <rte_eventdev_pmd.h>
-#include <rte_eventdev_pmd_vdev.h>
+#include <eventdev_pmd.h>
+#include <eventdev_pmd_vdev.h>
 #include <rte_random.h>
 #include <rte_ring_elem.h>
 
@@ -60,9 +60,6 @@ dsw_port_setup(struct rte_eventdev *dev, uint8_t port_id,
 
 	port->in_ring = in_ring;
 	port->ctl_in_ring = ctl_in_ring;
-
-	rte_atomic16_init(&port->load);
-	rte_atomic32_init(&port->immigration_load);
 
 	port->load_update_interval =
 		(DSW_LOAD_UPDATE_INTERVAL * rte_get_timer_hz()) / US_PER_S;
@@ -275,7 +272,7 @@ dsw_start(struct rte_eventdev *dev)
 	uint16_t i;
 	uint64_t now;
 
-	rte_atomic32_init(&dsw->credits_on_loan);
+	dsw->credits_on_loan = 0;
 
 	initial_flow_to_port_assignment(dsw);
 

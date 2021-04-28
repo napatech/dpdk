@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2014-2018 Broadcom
+ * Copyright(c) 2014-2021 Broadcom
  * All rights reserved.
  */
 
@@ -106,7 +106,6 @@ int bnxt_mq_rx_configure(struct bnxt *bp)
 
 	pools = RTE_MIN(pools, bp->rx_cp_nr_rings);
 	nb_q_per_grp = bp->rx_cp_nr_rings / pools;
-	bp->rx_num_qs_per_vnic = nb_q_per_grp;
 	PMD_DRV_LOG(DEBUG, "pools = %u nb_q_per_grp = %u\n",
 		    pools, nb_q_per_grp);
 	start_grp_id = 0;
@@ -165,6 +164,8 @@ skip_filter_allocation:
 	}
 
 out:
+	bp->rx_num_qs_per_vnic = nb_q_per_grp;
+
 	if (dev_conf->rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG) {
 		struct rte_eth_rss_conf *rss = &dev_conf->rx_adv_conf.rss_conf;
 
@@ -212,6 +213,16 @@ void bnxt_rx_queue_release_mbufs(struct bnxt_rx_queue *rxq)
 
 	sw_ring = rxq->rx_ring->rx_buf_ring;
 	if (sw_ring) {
+#if defined(RTE_ARCH_X86) || defined(RTE_ARCH_ARM64)
+		/*
+		 * The vector receive burst function does not set used
+		 * mbuf pointers to NULL, do that here to simplify
+		 * cleanup logic.
+		 */
+		for (i = 0; i < rxq->rxrearm_nb; i++)
+			sw_ring[rxq->rxrearm_start + i] = NULL;
+		rxq->rxrearm_nb = 0;
+#endif
 		for (i = 0;
 		     i < rxq->rx_ring->rx_ring_struct->ring_size; i++) {
 			if (sw_ring[i]) {
@@ -311,7 +322,7 @@ int bnxt_rx_queue_setup_op(struct rte_eth_dev *eth_dev,
 	if (rc)
 		return rc;
 
-	if (queue_idx >= BNXT_MAX_RINGS(bp)) {
+	if (queue_idx >= bnxt_max_rings(bp)) {
 		PMD_DRV_LOG(ERR,
 			"Cannot create Rx ring %d. Only %d rings available\n",
 			queue_idx, bp->max_rx_rings);
@@ -364,8 +375,9 @@ int bnxt_rx_queue_setup_op(struct rte_eth_dev *eth_dev,
 
 	eth_dev->data->rx_queues[queue_idx] = rxq;
 	/* Allocate RX ring hardware descriptors */
-	if (bnxt_alloc_rings(bp, queue_idx, NULL, rxq, rxq->cp_ring, NULL,
-			     "rxr")) {
+	rc = bnxt_alloc_rings(bp, queue_idx, NULL, rxq, rxq->cp_ring, NULL,
+			     "rxr");
+	if (rc) {
 		PMD_DRV_LOG(ERR,
 			    "ring_dma_zone_reserve for rx_ring failed!\n");
 		goto err;
@@ -472,7 +484,7 @@ int bnxt_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	if (rc)
 		return rc;
 
-	if (BNXT_CHIP_THOR(bp)) {
+	if (BNXT_CHIP_P5(bp)) {
 		/* Reconfigure default receive ring and MRU. */
 		bnxt_hwrm_vnic_cfg(bp, rxq->vnic);
 	}
@@ -557,12 +569,12 @@ int bnxt_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 		rc = bnxt_vnic_rss_configure(bp, vnic);
 	}
 
-	if (BNXT_CHIP_THOR(bp)) {
-		/* Compute current number of active receive queues. */
-		for (i = vnic->start_grp_id; i < vnic->end_grp_id; i++)
-			if (bp->rx_queues[i]->rx_started)
-				active_queue_cnt++;
+	/* Compute current number of active receive queues. */
+	for (i = vnic->start_grp_id; i < vnic->end_grp_id; i++)
+		if (bp->rx_queues[i]->rx_started)
+			active_queue_cnt++;
 
+	if (BNXT_CHIP_P5(bp)) {
 		/*
 		 * For Thor, we need to ensure that the VNIC default receive
 		 * ring corresponds to an active receive queue. When no queue
@@ -581,6 +593,22 @@ int bnxt_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 		} else {
 			/* Reconfigure default receive ring. */
 			bnxt_hwrm_vnic_cfg(bp, vnic);
+		}
+	} else if (active_queue_cnt) {
+		/*
+		 * If the queue being stopped is the current default queue and
+		 * there are other active queues, pick one of them as the
+		 * default and reconfigure the vnic.
+		 */
+		if (vnic->dflt_ring_grp == bp->grp_info[rx_queue_id].fw_grp_id) {
+			for (i = vnic->start_grp_id; i < vnic->end_grp_id; i++) {
+				if (bp->rx_queues[i]->rx_started) {
+					vnic->dflt_ring_grp =
+						bp->grp_info[i].fw_grp_id;
+					bnxt_hwrm_vnic_cfg(bp, vnic);
+					break;
+				}
+			}
 		}
 	}
 

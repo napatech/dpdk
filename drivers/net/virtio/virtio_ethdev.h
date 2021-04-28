@@ -7,11 +7,9 @@
 
 #include <stdint.h>
 
-#include "virtio_pci.h"
+#include <ethdev_driver.h>
 
-#ifndef PAGE_SIZE
-#define PAGE_SIZE 4096
-#endif
+#include "virtio.h"
 
 #define VIRTIO_MAX_RX_QUEUES 128U
 #define VIRTIO_MAX_TX_QUEUES 128U
@@ -117,6 +115,8 @@ void virtio_interrupt_handler(void *param);
 
 int virtio_dev_pause(struct rte_eth_dev *dev);
 void virtio_dev_resume(struct rte_eth_dev *dev);
+int virtio_dev_stop(struct rte_eth_dev *dev);
+int virtio_dev_close(struct rte_eth_dev *dev);
 int virtio_inject_pkts(struct rte_eth_dev *dev, struct rte_mbuf **tx_pkts,
 		int nb_pkts);
 

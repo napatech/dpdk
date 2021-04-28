@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright(c) 2019-2020 Xilinx, Inc.
+ * Copyright(c) 2019-2021 Xilinx, Inc.
  * Copyright(c) 2016-2019 Solarflare Communications Inc.
  *
  * This software was jointly developed between OKTET Labs (under contract
@@ -28,6 +28,7 @@ sfc_kvargs_parse(struct sfc_adapter *sa)
 		SFC_KVARG_TX_DATAPATH,
 		SFC_KVARG_FW_VARIANT,
 		SFC_KVARG_RXD_WAIT_TIMEOUT_NS,
+		SFC_EFX_KVARG_DEV_CLASS,
 		NULL,
 	};
 

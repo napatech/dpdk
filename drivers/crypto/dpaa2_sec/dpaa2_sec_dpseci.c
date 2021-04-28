@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
  *   Copyright (c) 2016 Freescale Semiconductor, Inc. All rights reserved.
- *   Copyright 2016-2020 NXP
+ *   Copyright 2016-2021 NXP
  *
  */
 
@@ -1842,7 +1842,7 @@ dpaa2_sec_cipher_init(struct rte_cryptodev *dev,
 	session->ctxt_type = DPAA2_SEC_CIPHER;
 	session->cipher_key.data = rte_zmalloc(NULL, xform->cipher.key.length,
 			RTE_CACHE_LINE_SIZE);
-	if (session->cipher_key.data == NULL) {
+	if (session->cipher_key.data == NULL && xform->cipher.key.length > 0) {
 		DPAA2_SEC_ERR("No Memory for cipher key");
 		rte_free(priv);
 		return -ENOMEM;
@@ -2134,10 +2134,28 @@ dpaa2_sec_auth_init(struct rte_cryptodev *dev,
 					   !session->dir,
 					   session->digest_length);
 		break;
-	case RTE_CRYPTO_AUTH_AES_GMAC:
 	case RTE_CRYPTO_AUTH_AES_XCBC_MAC:
+		authdata.algtype = OP_ALG_ALGSEL_AES;
+		authdata.algmode = OP_ALG_AAI_XCBC_MAC;
+		session->auth_alg = RTE_CRYPTO_AUTH_AES_XCBC_MAC;
+		bufsize = cnstr_shdsc_aes_mac(
+					priv->flc_desc[DESC_INITFINAL].desc,
+					1, 0, SHR_NEVER, &authdata,
+					!session->dir,
+					session->digest_length);
+		break;
 	case RTE_CRYPTO_AUTH_AES_CMAC:
+		authdata.algtype = OP_ALG_ALGSEL_AES;
+		authdata.algmode = OP_ALG_AAI_CMAC;
+		session->auth_alg = RTE_CRYPTO_AUTH_AES_CMAC;
+		bufsize = cnstr_shdsc_aes_mac(
+					   priv->flc_desc[DESC_INITFINAL].desc,
+					   1, 0, SHR_NEVER, &authdata,
+					   !session->dir,
+					   session->digest_length);
+		break;
 	case RTE_CRYPTO_AUTH_AES_CBC_MAC:
+	case RTE_CRYPTO_AUTH_AES_GMAC:
 	case RTE_CRYPTO_AUTH_KASUMI_F9:
 	case RTE_CRYPTO_AUTH_NULL:
 		DPAA2_SEC_ERR("Crypto: Unsupported auth alg %un",
@@ -2406,6 +2424,17 @@ dpaa2_sec_aead_chain_init(struct rte_cryptodev *dev,
 		session->auth_alg = RTE_CRYPTO_AUTH_SHA512_HMAC;
 		break;
 	case RTE_CRYPTO_AUTH_AES_XCBC_MAC:
+		authdata.algtype = OP_ALG_ALGSEL_AES;
+		authdata.algmode = OP_ALG_AAI_XCBC_MAC;
+		session->auth_alg = RTE_CRYPTO_AUTH_AES_XCBC_MAC;
+		break;
+	case RTE_CRYPTO_AUTH_AES_CMAC:
+		authdata.algtype = OP_ALG_ALGSEL_AES;
+		authdata.algmode = OP_ALG_AAI_CMAC;
+		session->auth_alg = RTE_CRYPTO_AUTH_AES_CMAC;
+		break;
+	case RTE_CRYPTO_AUTH_AES_CBC_MAC:
+	case RTE_CRYPTO_AUTH_AES_GMAC:
 	case RTE_CRYPTO_AUTH_SNOW3G_UIA2:
 	case RTE_CRYPTO_AUTH_NULL:
 	case RTE_CRYPTO_AUTH_SHA1:
@@ -2414,10 +2443,7 @@ dpaa2_sec_aead_chain_init(struct rte_cryptodev *dev,
 	case RTE_CRYPTO_AUTH_SHA224:
 	case RTE_CRYPTO_AUTH_SHA384:
 	case RTE_CRYPTO_AUTH_MD5:
-	case RTE_CRYPTO_AUTH_AES_GMAC:
 	case RTE_CRYPTO_AUTH_KASUMI_F9:
-	case RTE_CRYPTO_AUTH_AES_CMAC:
-	case RTE_CRYPTO_AUTH_AES_CBC_MAC:
 	case RTE_CRYPTO_AUTH_ZUC_EIA3:
 		DPAA2_SEC_ERR("Crypto: Unsupported auth alg %u",
 			      auth_xform->algo);
@@ -2750,14 +2776,18 @@ dpaa2_sec_ipsec_proto_init(struct rte_crypto_cipher_xform *cipher_xform,
 		authdata->algtype = OP_PCL_IPSEC_HMAC_SHA2_512_256;
 		authdata->algmode = OP_ALG_AAI_HMAC;
 		break;
+	case RTE_CRYPTO_AUTH_AES_XCBC_MAC:
+		authdata->algtype = OP_PCL_IPSEC_AES_XCBC_MAC_96;
+		authdata->algmode = OP_ALG_AAI_XCBC_MAC;
+		break;
 	case RTE_CRYPTO_AUTH_AES_CMAC:
 		authdata->algtype = OP_PCL_IPSEC_AES_CMAC_96;
+		authdata->algmode = OP_ALG_AAI_CMAC;
 		break;
 	case RTE_CRYPTO_AUTH_NULL:
 		authdata->algtype = OP_PCL_IPSEC_HMAC_NULL;
 		break;
 	case RTE_CRYPTO_AUTH_SHA224_HMAC:
-	case RTE_CRYPTO_AUTH_AES_XCBC_MAC:
 	case RTE_CRYPTO_AUTH_SNOW3G_UIA2:
 	case RTE_CRYPTO_AUTH_SHA1:
 	case RTE_CRYPTO_AUTH_SHA256:

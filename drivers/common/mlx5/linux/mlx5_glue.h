@@ -307,10 +307,13 @@ struct mlx5_glue {
 	int (*devx_qp_query)(struct ibv_qp *qp,
 			     const void *in, size_t inlen,
 			     void *out, size_t outlen);
+	int (*devx_wq_query)(struct ibv_wq *wq, const void *in, size_t inlen,
+			     void *out, size_t outlen);
 	int (*devx_port_query)(struct ibv_context *ctx,
 			       uint32_t port_num,
 			       struct mlx5dv_devx_port *mlx5_devx_port);
 	int (*dr_dump_domain)(FILE *file, void *domain);
+	int (*dr_dump_rule)(FILE *file, void *rule);
 	int (*devx_query_eqn)(struct ibv_context *context, uint32_t cpus,
 			      uint32_t *eqn);
 	struct mlx5dv_devx_event_channel *(*devx_create_event_channel)

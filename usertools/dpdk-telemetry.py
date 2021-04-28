@@ -11,7 +11,9 @@ import socket
 import os
 import glob
 import json
+import errno
 import readline
+import argparse
 
 # global vars
 TELEMETRY_VERSION = "v2"
@@ -32,6 +34,20 @@ def read_socket(sock, buf_len, echo=True):
     return ret
 
 
+def get_app_name(pid):
+    """ return the app name for a given PID, for printing """
+    proc_cmdline = os.path.join('/proc', str(pid), 'cmdline')
+    try:
+        with open(proc_cmdline) as f:
+            argv0 = f.read(1024).split('\0')[0]
+            return os.path.basename(argv0)
+    except IOError as e:
+        # ignore file not found errors
+        if e.errno != errno.ENOENT:
+            raise
+    return None
+
+
 def handle_socket(path):
     """ Connect to socket and handle user input """
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
@@ -45,6 +61,9 @@ def handle_socket(path):
         return
     json_reply = read_socket(sock, 1024)
     output_buf_len = json_reply["max_output_len"]
+    app_name = get_app_name(json_reply["pid"])
+    if app_name:
+        print('Connected to application: "%s"' % app_name)
 
     # get list of commands for readline completion
     sock.send("/".encode())
@@ -70,14 +89,21 @@ def readline_complete(text, state):
     return matches[state]
 
 
+def get_dpdk_runtime_dir(fp):
+    """ Using the same logic as in DPDK's EAL, get the DPDK runtime directory
+    based on the file-prefix and user """
+    if (os.getuid() == 0):
+        return os.path.join('/var/run/dpdk', fp)
+    return os.path.join(os.environ.get('XDG_RUNTIME_DIR', '/tmp'), 'dpdk', fp)
+
+
 readline.parse_and_bind('tab: complete')
 readline.set_completer(readline_complete)
 readline.set_completer_delims(readline.get_completer_delims().replace('/', ''))
 
-# Path to sockets for processes run as a root user
-for f in glob.glob('/var/run/dpdk/*/dpdk_telemetry.%s' % TELEMETRY_VERSION):
-    handle_socket(f)
-# Path to sockets for processes run as a regular user
-for f in glob.glob('%s/dpdk/*/dpdk_telemetry.%s' %
-                   (os.environ.get('XDG_RUNTIME_DIR', '/tmp'), TELEMETRY_VERSION)):
-    handle_socket(f)
+parser = argparse.ArgumentParser()
+parser.add_argument('-f', '--file-prefix', \
+        help='Provide file-prefix for DPDK runtime directory', default='rte')
+args = parser.parse_args()
+rdir = get_dpdk_runtime_dir(args.file_prefix)
+handle_socket(os.path.join(rdir, 'dpdk_telemetry.{}'.format(TELEMETRY_VERSION)))

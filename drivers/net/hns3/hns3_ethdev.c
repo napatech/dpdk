@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2018-2019 Hisilicon Limited.
+ * Copyright(c) 2018-2021 HiSilicon Limited.
  */
 
 #include <rte_alarm.h>
 #include <rte_bus_pci.h>
-#include <rte_ethdev_pci.h>
-#include <rte_io.h>
+#include <ethdev_pci.h>
 #include <rte_pci.h>
+#include <rte_kvargs.h>
 
 #include "hns3_ethdev.h"
 #include "hns3_logs.h"
@@ -20,6 +20,7 @@
 #define HNS3_DEFAULT_PORT_CONF_QUEUES_NUM	1
 
 #define HNS3_SERVICE_INTERVAL		1000000 /* us */
+#define HNS3_SERVICE_QUICK_INTERVAL	10
 #define HNS3_INVALID_PVID		0xFFFF
 
 #define HNS3_FILTER_TYPE_VF		0
@@ -57,6 +58,7 @@ enum hns3_evt_cause {
 	HNS3_VECTOR0_EVENT_RST,
 	HNS3_VECTOR0_EVENT_MBX,
 	HNS3_VECTOR0_EVENT_ERR,
+	HNS3_VECTOR0_EVENT_PTP,
 	HNS3_VECTOR0_EVENT_OTHER,
 };
 
@@ -93,14 +95,26 @@ static enum hns3_reset_level hns3_get_reset_level(struct hns3_adapter *hns,
 static int hns3_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
 static int hns3_vlan_pvid_configure(struct hns3_adapter *hns, uint16_t pvid,
 				    int on);
-static int hns3_update_speed_duplex(struct rte_eth_dev *eth_dev);
+static int hns3_update_link_info(struct rte_eth_dev *eth_dev);
+static bool hns3_update_link_status(struct hns3_hw *hw);
 
 static int hns3_add_mc_addr(struct hns3_hw *hw,
 			    struct rte_ether_addr *mac_addr);
 static int hns3_remove_mc_addr(struct hns3_hw *hw,
 			    struct rte_ether_addr *mac_addr);
 static int hns3_restore_fec(struct hns3_hw *hw);
-static int hns3_query_dev_fec_info(struct rte_eth_dev *dev);
+static int hns3_query_dev_fec_info(struct hns3_hw *hw);
+static int hns3_do_stop(struct hns3_adapter *hns);
+static int hns3_check_port_speed(struct hns3_hw *hw, uint32_t link_speeds);
+
+void hns3_ether_format_addr(char *buf, uint16_t size,
+			    const struct rte_ether_addr *ether_addr)
+{
+	snprintf(buf, size, "%02X:**:**:**:%02X:%02X",
+		ether_addr->addr_bytes[0],
+		ether_addr->addr_bytes[4],
+		ether_addr->addr_bytes[5]);
+}
 
 static void
 hns3_pf_disable_irq0(struct hns3_hw *hw)
@@ -115,6 +129,47 @@ hns3_pf_enable_irq0(struct hns3_hw *hw)
 }
 
 static enum hns3_evt_cause
+hns3_proc_imp_reset_event(struct hns3_adapter *hns, bool is_delay,
+			  uint32_t *vec_val)
+{
+	struct hns3_hw *hw = &hns->hw;
+
+	__atomic_store_n(&hw->reset.disable_cmd, 1, __ATOMIC_RELAXED);
+	hns3_atomic_set_bit(HNS3_IMP_RESET, &hw->reset.pending);
+	*vec_val = BIT(HNS3_VECTOR0_IMPRESET_INT_B);
+	if (!is_delay) {
+		hw->reset.stats.imp_cnt++;
+		hns3_warn(hw, "IMP reset detected, clear reset status");
+	} else {
+		hns3_schedule_delayed_reset(hns);
+		hns3_warn(hw, "IMP reset detected, don't clear reset status");
+	}
+
+	return HNS3_VECTOR0_EVENT_RST;
+}
+
+static enum hns3_evt_cause
+hns3_proc_global_reset_event(struct hns3_adapter *hns, bool is_delay,
+			     uint32_t *vec_val)
+{
+	struct hns3_hw *hw = &hns->hw;
+
+	__atomic_store_n(&hw->reset.disable_cmd, 1, __ATOMIC_RELAXED);
+	hns3_atomic_set_bit(HNS3_GLOBAL_RESET, &hw->reset.pending);
+	*vec_val = BIT(HNS3_VECTOR0_GLOBALRESET_INT_B);
+	if (!is_delay) {
+		hw->reset.stats.global_cnt++;
+		hns3_warn(hw, "Global reset detected, clear reset status");
+	} else {
+		hns3_schedule_delayed_reset(hns);
+		hns3_warn(hw,
+			  "Global reset detected, don't clear reset status");
+	}
+
+	return HNS3_VECTOR0_EVENT_RST;
+}
+
+static enum hns3_evt_cause
 hns3_check_event_cause(struct hns3_adapter *hns, uint32_t *clearval)
 {
 	struct hns3_hw *hw = &hns->hw;
@@ -123,12 +178,14 @@ hns3_check_event_cause(struct hns3_adapter *hns, uint32_t *clearval)
 	uint32_t hw_err_src_reg;
 	uint32_t val;
 	enum hns3_evt_cause ret;
+	bool is_delay;
 
 	/* fetch the events from their corresponding regs */
 	vector0_int_stats = hns3_read_dev(hw, HNS3_VECTOR0_OTHER_INT_STS_REG);
 	cmdq_src_val = hns3_read_dev(hw, HNS3_VECTOR0_CMDQ_SRC_REG);
 	hw_err_src_reg = hns3_read_dev(hw, HNS3_RAS_PF_OTHER_INT_STS_REG);
 
+	is_delay = clearval == NULL ? true : false;
 	/*
 	 * Assumption: If by any chance reset and mailbox events are reported
 	 * together then we will only process reset event and defer the
@@ -137,35 +194,20 @@ hns3_check_event_cause(struct hns3_adapter *hns, uint32_t *clearval)
 	 * from H/W just for the mailbox.
 	 */
 	if (BIT(HNS3_VECTOR0_IMPRESET_INT_B) & vector0_int_stats) { /* IMP */
-		rte_atomic16_set(&hw->reset.disable_cmd, 1);
-		hns3_atomic_set_bit(HNS3_IMP_RESET, &hw->reset.pending);
-		val = BIT(HNS3_VECTOR0_IMPRESET_INT_B);
-		if (clearval) {
-			hw->reset.stats.imp_cnt++;
-			hns3_warn(hw, "IMP reset detected, clear reset status");
-		} else {
-			hns3_schedule_delayed_reset(hns);
-			hns3_warn(hw, "IMP reset detected, don't clear reset status");
-		}
-
-		ret = HNS3_VECTOR0_EVENT_RST;
+		ret = hns3_proc_imp_reset_event(hns, is_delay, &val);
 		goto out;
 	}
 
 	/* Global reset */
 	if (BIT(HNS3_VECTOR0_GLOBALRESET_INT_B) & vector0_int_stats) {
-		rte_atomic16_set(&hw->reset.disable_cmd, 1);
-		hns3_atomic_set_bit(HNS3_GLOBAL_RESET, &hw->reset.pending);
-		val = BIT(HNS3_VECTOR0_GLOBALRESET_INT_B);
-		if (clearval) {
-			hw->reset.stats.global_cnt++;
-			hns3_warn(hw, "Global reset detected, clear reset status");
-		} else {
-			hns3_schedule_delayed_reset(hns);
-			hns3_warn(hw, "Global reset detected, don't clear reset status");
-		}
+		ret = hns3_proc_global_reset_event(hns, is_delay, &val);
+		goto out;
+	}
 
-		ret = HNS3_VECTOR0_EVENT_RST;
+	/* Check for vector0 1588 event source */
+	if (BIT(HNS3_VECTOR0_1588_INT_B) & vector0_int_stats) {
+		val = BIT(HNS3_VECTOR0_1588_INT_B);
+		ret = HNS3_VECTOR0_EVENT_PTP;
 		goto out;
 	}
 
@@ -185,9 +227,6 @@ hns3_check_event_cause(struct hns3_adapter *hns, uint32_t *clearval)
 		goto out;
 	}
 
-	if (clearval && (vector0_int_stats || cmdq_src_val || hw_err_src_reg))
-		hns3_warn(hw, "vector0_int_stats:0x%x cmdq_src_val:0x%x hw_err_src_reg:0x%x",
-			  vector0_int_stats, cmdq_src_val, hw_err_src_reg);
 	val = vector0_int_stats;
 	ret = HNS3_VECTOR0_EVENT_OTHER;
 out:
@@ -197,10 +236,17 @@ out:
 	return ret;
 }
 
+static bool
+hns3_is_1588_event_type(uint32_t event_type)
+{
+	return (event_type == HNS3_VECTOR0_EVENT_PTP);
+}
+
 static void
 hns3_clear_event_cause(struct hns3_hw *hw, uint32_t event_type, uint32_t regclr)
 {
-	if (event_type == HNS3_VECTOR0_EVENT_RST)
+	if (event_type == HNS3_VECTOR0_EVENT_RST ||
+	    hns3_is_1588_event_type(event_type))
 		hns3_write_dev(hw, HNS3_MISC_RESET_STS_REG, regclr);
 	else if (event_type == HNS3_VECTOR0_EVENT_MBX)
 		hns3_write_dev(hw, HNS3_VECTOR0_CMDQ_SRC_REG, regclr);
@@ -223,6 +269,36 @@ hns3_clear_all_event_cause(struct hns3_hw *hw)
 			       BIT(HNS3_VECTOR0_GLOBALRESET_INT_B) |
 			       BIT(HNS3_VECTOR0_CORERESET_INT_B));
 	hns3_clear_event_cause(hw, HNS3_VECTOR0_EVENT_MBX, 0);
+	hns3_clear_event_cause(hw, HNS3_VECTOR0_EVENT_PTP,
+				BIT(HNS3_VECTOR0_1588_INT_B));
+}
+
+static void
+hns3_handle_mac_tnl(struct hns3_hw *hw)
+{
+	struct hns3_cmd_desc desc;
+	uint32_t status;
+	int ret;
+
+	/* query and clear mac tnl interruptions */
+	hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_QUERY_MAC_TNL_INT, true);
+	ret = hns3_cmd_send(hw, &desc, 1);
+	if (ret) {
+		hns3_err(hw, "failed to query mac tnl int, ret = %d.", ret);
+		return;
+	}
+
+	status = rte_le_to_cpu_32(desc.data[0]);
+	if (status) {
+		hns3_warn(hw, "mac tnl int occurs, status = 0x%x.", status);
+		hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_CLEAR_MAC_TNL_INT,
+					  false);
+		desc.data[0] = rte_cpu_to_le_32(HNS3_MAC_TNL_INT_CLR);
+		ret = hns3_cmd_send(hw, &desc, 1);
+		if (ret)
+			hns3_err(hw, "failed to clear mac tnl int, ret = %d.",
+				 ret);
+	}
 }
 
 static void
@@ -233,24 +309,34 @@ hns3_interrupt_handler(void *param)
 	struct hns3_hw *hw = &hns->hw;
 	enum hns3_evt_cause event_cause;
 	uint32_t clearval = 0;
+	uint32_t vector0_int;
+	uint32_t ras_int;
+	uint32_t cmdq_int;
 
 	/* Disable interrupt */
 	hns3_pf_disable_irq0(hw);
 
 	event_cause = hns3_check_event_cause(hns, &clearval);
+	vector0_int = hns3_read_dev(hw, HNS3_VECTOR0_OTHER_INT_STS_REG);
+	ras_int = hns3_read_dev(hw, HNS3_RAS_PF_OTHER_INT_STS_REG);
+	cmdq_int = hns3_read_dev(hw, HNS3_VECTOR0_CMDQ_SRC_REG);
 	/* vector 0 interrupt is shared with reset and mailbox source events. */
 	if (event_cause == HNS3_VECTOR0_EVENT_ERR) {
-		hns3_warn(hw, "Received err interrupt");
-		hns3_handle_msix_error(hns, &hw->reset.request);
-		hns3_handle_ras_error(hns, &hw->reset.request);
-		hns3_schedule_reset(hns);
+		hns3_warn(hw, "received interrupt: vector0_int_stat:0x%x "
+			  "ras_int_stat:0x%x cmdq_int_stat:0x%x",
+			  vector0_int, ras_int, cmdq_int);
+		hns3_handle_mac_tnl(hw);
+		hns3_handle_error(hns);
 	} else if (event_cause == HNS3_VECTOR0_EVENT_RST) {
-		hns3_warn(hw, "Received reset interrupt");
+		hns3_warn(hw, "received reset interrupt");
 		hns3_schedule_reset(hns);
-	} else if (event_cause == HNS3_VECTOR0_EVENT_MBX)
+	} else if (event_cause == HNS3_VECTOR0_EVENT_MBX) {
 		hns3_dev_handle_mbx_msg(hw);
-	else
-		hns3_err(hw, "Received unknown event");
+	} else {
+		hns3_warn(hw, "received unknown event: vector0_int_stat:0x%x "
+			  "ras_int_stat:0x%x cmdq_int_stat:0x%x",
+			  vector0_int, ras_int, cmdq_int);
+	}
 
 	hns3_clear_event_cause(hw, event_cause, clearval);
 	/* Enable interrupt if it is not cause by reset */
@@ -894,7 +980,7 @@ hns3_vlan_pvid_configure(struct hns3_adapter *hns, uint16_t pvid, int on)
 {
 	struct hns3_hw *hw = &hns->hw;
 	uint16_t port_base_vlan_state;
-	int ret;
+	int ret, err;
 
 	if (on == 0 && pvid != hw->port_base_vlan_cfg.pvid) {
 		if (hw->port_base_vlan_cfg.pvid != HNS3_INVALID_PVID)
@@ -917,7 +1003,7 @@ hns3_vlan_pvid_configure(struct hns3_adapter *hns, uint16_t pvid, int on)
 	if (ret) {
 		hns3_err(hw, "failed to config rx vlan strip for pvid, "
 			 "ret = %d", ret);
-		return ret;
+		goto pvid_vlan_strip_fail;
 	}
 
 	if (pvid == HNS3_INVALID_PVID)
@@ -926,12 +1012,26 @@ hns3_vlan_pvid_configure(struct hns3_adapter *hns, uint16_t pvid, int on)
 	if (ret) {
 		hns3_err(hw, "failed to update vlan filter entries, ret = %d",
 			 ret);
-		return ret;
+		goto vlan_filter_set_fail;
 	}
 
 out:
 	hw->port_base_vlan_cfg.state = port_base_vlan_state;
 	hw->port_base_vlan_cfg.pvid = on ? pvid : HNS3_INVALID_PVID;
+	return ret;
+
+vlan_filter_set_fail:
+	err = hns3_en_pvid_strip(hns, hw->port_base_vlan_cfg.state ==
+					HNS3_PORT_BASE_VLAN_ENABLE);
+	if (err)
+		hns3_err(hw, "fail to rollback pvid strip, ret = %d", err);
+
+pvid_vlan_strip_fail:
+	err = hns3_vlan_txvlan_cfg(hns, hw->port_base_vlan_cfg.state,
+					hw->port_base_vlan_cfg.pvid);
+	if (err)
+		hns3_err(hw, "fail to rollback txvlan status, ret = %d", err);
+
 	return ret;
 }
 
@@ -1008,7 +1108,7 @@ hns3_init_vlan_config(struct hns3_adapter *hns)
 	 * ensure that the hardware configuration remains unchanged before and
 	 * after reset.
 	 */
-	if (rte_atomic16_read(&hw->reset.resetting) == 0) {
+	if (__atomic_load_n(&hw->reset.resetting, __ATOMIC_RELAXED) == 0) {
 		hw->port_base_vlan_cfg.state = HNS3_PORT_BASE_VLAN_DISABLE;
 		hw->port_base_vlan_cfg.pvid = HNS3_INVALID_PVID;
 	}
@@ -1032,7 +1132,7 @@ hns3_init_vlan_config(struct hns3_adapter *hns)
 	 * we will restore configurations to hardware in hns3_restore_vlan_table
 	 * and hns3_restore_vlan_conf later.
 	 */
-	if (rte_atomic16_read(&hw->reset.resetting) == 0) {
+	if (__atomic_load_n(&hw->reset.resetting, __ATOMIC_RELAXED) == 0) {
 		ret = hns3_vlan_pvid_configure(hns, HNS3_INVALID_PVID, 0);
 		if (ret) {
 			hns3_err(hw, "pvid set fail in pf, ret =%d", ret);
@@ -1449,7 +1549,7 @@ hns3_add_uc_addr_common(struct hns3_hw *hw, struct rte_ether_addr *mac_addr)
 
 	/* check if mac addr is valid */
 	if (!rte_is_valid_assigned_ether_addr(mac_addr)) {
-		rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
+		hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 				      mac_addr);
 		hns3_err(hw, "Add unicast mac addr err! addr(%s) invalid",
 			 mac_str);
@@ -1489,7 +1589,7 @@ hns3_add_uc_addr_common(struct hns3_hw *hw, struct rte_ether_addr *mac_addr)
 		return -ENOSPC;
 	}
 
-	rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE, mac_addr);
+	hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE, mac_addr);
 
 	/* check if we just hit the duplicate */
 	if (ret == 0) {
@@ -1515,7 +1615,7 @@ hns3_add_mc_addr_common(struct hns3_hw *hw, struct rte_ether_addr *mac_addr)
 		addr = &hw->mc_addrs[i];
 		/* Check if there are duplicate addresses */
 		if (rte_is_same_ether_addr(addr, mac_addr)) {
-			rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
+			hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 					      addr);
 			hns3_err(hw, "failed to add mc mac addr, same addrs"
 				 "(%s) is added by the set_mc_mac_addr_list "
@@ -1526,7 +1626,7 @@ hns3_add_mc_addr_common(struct hns3_hw *hw, struct rte_ether_addr *mac_addr)
 
 	ret = hns3_add_mc_addr(hw, mac_addr);
 	if (ret) {
-		rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
+		hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 				      mac_addr);
 		hns3_err(hw, "failed to add mc mac addr(%s), ret = %d",
 			 mac_str, ret);
@@ -1542,7 +1642,7 @@ hns3_remove_mc_addr_common(struct hns3_hw *hw, struct rte_ether_addr *mac_addr)
 
 	ret = hns3_remove_mc_addr(hw, mac_addr);
 	if (ret) {
-		rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
+		hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 				      mac_addr);
 		hns3_err(hw, "failed to remove mc mac addr(%s), ret = %d",
 			 mac_str, ret);
@@ -1576,7 +1676,7 @@ hns3_add_mac_addr(struct rte_eth_dev *dev, struct rte_ether_addr *mac_addr,
 
 	if (ret) {
 		rte_spinlock_unlock(&hw->lock);
-		rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
+		hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 				      mac_addr);
 		hns3_err(hw, "failed to add mac addr(%s), ret = %d", mac_str,
 			 ret);
@@ -1599,7 +1699,7 @@ hns3_remove_uc_addr_common(struct hns3_hw *hw, struct rte_ether_addr *mac_addr)
 
 	/* check if mac addr is valid */
 	if (!rte_is_valid_assigned_ether_addr(mac_addr)) {
-		rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
+		hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 				      mac_addr);
 		hns3_err(hw, "remove unicast mac addr err! addr(%s) invalid",
 			 mac_str);
@@ -1635,7 +1735,7 @@ hns3_remove_mac_addr(struct rte_eth_dev *dev, uint32_t idx)
 		ret = hns3_remove_uc_addr_common(hw, mac_addr);
 	rte_spinlock_unlock(&hw->lock);
 	if (ret) {
-		rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
+		hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 				      mac_addr);
 		hns3_err(hw, "failed to remove mac addr(%s), ret = %d", mac_str,
 			 ret);
@@ -1666,7 +1766,7 @@ hns3_set_default_mac_addr(struct rte_eth_dev *dev,
 	if (default_addr_setted) {
 		ret = hns3_remove_uc_addr_common(hw, oaddr);
 		if (ret) {
-			rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
+			hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 					      oaddr);
 			hns3_warn(hw, "Remove old uc mac address(%s) fail: %d",
 				  mac_str, ret);
@@ -1677,7 +1777,7 @@ hns3_set_default_mac_addr(struct rte_eth_dev *dev,
 
 	ret = hns3_add_uc_addr_common(hw, mac_addr);
 	if (ret) {
-		rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
+		hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 				      mac_addr);
 		hns3_err(hw, "Failed to set mac addr(%s): %d", mac_str, ret);
 		goto err_add_uc_addr;
@@ -1699,7 +1799,7 @@ hns3_set_default_mac_addr(struct rte_eth_dev *dev,
 err_pause_addr_cfg:
 	ret_val = hns3_remove_uc_addr_common(hw, mac_addr);
 	if (ret_val) {
-		rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
+		hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 				      mac_addr);
 		hns3_warn(hw,
 			  "Failed to roll back to del setted mac addr(%s): %d",
@@ -1710,7 +1810,7 @@ err_add_uc_addr:
 	if (rm_succes) {
 		ret_val = hns3_add_uc_addr_common(hw, oaddr);
 		if (ret_val) {
-			rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
+			hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 					      oaddr);
 			hns3_warn(hw,
 				  "Failed to restore old uc mac addr(%s): %d",
@@ -1746,7 +1846,7 @@ hns3_configure_all_mac_addr(struct hns3_adapter *hns, bool del)
 
 		if (ret) {
 			err = ret;
-			rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
+			hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 					      addr);
 			hns3_err(hw, "failed to %s mac addr(%s) index:%d "
 				 "ret = %d.", del ? "remove" : "restore",
@@ -1795,7 +1895,7 @@ hns3_add_mc_addr(struct hns3_hw *hw, struct rte_ether_addr *mac_addr)
 
 	/* Check if mac addr is valid */
 	if (!rte_is_multicast_ether_addr(mac_addr)) {
-		rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
+		hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 				      mac_addr);
 		hns3_err(hw, "failed to add mc mac addr, addr(%s) invalid",
 			 mac_str);
@@ -1823,7 +1923,7 @@ hns3_add_mc_addr(struct hns3_hw *hw, struct rte_ether_addr *mac_addr)
 	if (ret) {
 		if (ret == -ENOSPC)
 			hns3_err(hw, "mc mac vlan table is full");
-		rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
+		hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 				      mac_addr);
 		hns3_err(hw, "failed to add mc mac addr(%s): %d", mac_str, ret);
 	}
@@ -1842,7 +1942,7 @@ hns3_remove_mc_addr(struct hns3_hw *hw, struct rte_ether_addr *mac_addr)
 
 	/* Check if mac addr is valid */
 	if (!rte_is_multicast_ether_addr(mac_addr)) {
-		rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
+		hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 				      mac_addr);
 		hns3_err(hw, "Failed to rm mc mac addr, addr(%s) invalid",
 			 mac_str);
@@ -1870,7 +1970,7 @@ hns3_remove_mc_addr(struct hns3_hw *hw, struct rte_ether_addr *mac_addr)
 	}
 
 	if (ret) {
-		rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
+		hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 				      mac_addr);
 		hns3_err(hw, "Failed to rm mc mac addr(%s): %d", mac_str, ret);
 	}
@@ -1899,7 +1999,7 @@ hns3_set_mc_addr_chk_param(struct hns3_hw *hw,
 	for (i = 0; i < nb_mc_addr; i++) {
 		addr = &mc_addr_set[i];
 		if (!rte_is_multicast_ether_addr(addr)) {
-			rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
+			hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 					      addr);
 			hns3_err(hw,
 				 "failed to set mc mac addr, addr(%s) invalid.",
@@ -1910,7 +2010,7 @@ hns3_set_mc_addr_chk_param(struct hns3_hw *hw,
 		/* Check if there are duplicate addresses */
 		for (j = i + 1; j < nb_mc_addr; j++) {
 			if (rte_is_same_ether_addr(addr, &mc_addr_set[j])) {
-				rte_ether_format_addr(mac_str,
+				hns3_ether_format_addr(mac_str,
 						      RTE_ETHER_ADDR_FMT_SIZE,
 						      addr);
 				hns3_err(hw, "failed to set mc mac addr, "
@@ -1927,7 +2027,7 @@ hns3_set_mc_addr_chk_param(struct hns3_hw *hw,
 		for (j = 0; j < HNS3_UC_MACADDR_NUM; j++) {
 			if (rte_is_same_ether_addr(addr,
 						   &hw->data->mac_addrs[j])) {
-				rte_ether_format_addr(mac_str,
+				hns3_ether_format_addr(mac_str,
 						      RTE_ETHER_ADDR_FMT_SIZE,
 						      addr);
 				hns3_err(hw, "failed to set mc mac addr, "
@@ -2101,7 +2201,7 @@ hns3_configure_all_mc_mac_addr(struct hns3_adapter *hns, bool del)
 			ret = hns3_add_mc_addr(hw, addr);
 		if (ret) {
 			err = ret;
-			rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
+			hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 					      addr);
 			hns3_dbg(hw, "%s mc mac addr: %s failed for pf: ret = %d",
 				 del ? "Remove" : "Restore", mac_str, ret);
@@ -2123,24 +2223,17 @@ hns3_check_mq_mode(struct rte_eth_dev *dev)
 	int max_tc = 0;
 	int i;
 
+	if ((rx_mq_mode & ETH_MQ_RX_VMDQ_FLAG) ||
+	    (tx_mq_mode == ETH_MQ_TX_VMDQ_DCB ||
+	     tx_mq_mode == ETH_MQ_TX_VMDQ_ONLY)) {
+		hns3_err(hw, "VMDQ is not supported, rx_mq_mode = %d, tx_mq_mode = %d.",
+			 rx_mq_mode, tx_mq_mode);
+		return -EOPNOTSUPP;
+	}
+
 	dcb_rx_conf = &dev->data->dev_conf.rx_adv_conf.dcb_rx_conf;
 	dcb_tx_conf = &dev->data->dev_conf.tx_adv_conf.dcb_tx_conf;
-
-	if (rx_mq_mode == ETH_MQ_RX_VMDQ_DCB_RSS) {
-		hns3_err(hw, "ETH_MQ_RX_VMDQ_DCB_RSS is not supported. "
-			 "rx_mq_mode = %d", rx_mq_mode);
-		return -EINVAL;
-	}
-
-	if (rx_mq_mode == ETH_MQ_RX_VMDQ_DCB ||
-	    tx_mq_mode == ETH_MQ_TX_VMDQ_DCB) {
-		hns3_err(hw, "ETH_MQ_RX_VMDQ_DCB and ETH_MQ_TX_VMDQ_DCB "
-			 "is not supported. rx_mq_mode = %d, tx_mq_mode = %d",
-			 rx_mq_mode, tx_mq_mode);
-		return -EINVAL;
-	}
-
-	if (rx_mq_mode == ETH_MQ_RX_DCB_RSS) {
+	if (rx_mq_mode & ETH_MQ_RX_DCB_FLAG) {
 		if (dcb_rx_conf->nb_tcs > pf->tc_max) {
 			hns3_err(hw, "nb_tcs(%u) > max_tc(%u) driver supported.",
 				 dcb_rx_conf->nb_tcs, pf->tc_max);
@@ -2198,27 +2291,28 @@ hns3_check_dcb_cfg(struct rte_eth_dev *dev)
 		return -EOPNOTSUPP;
 	}
 
-	/* Check multiple queue mode */
-	return hns3_check_mq_mode(dev);
+	return 0;
 }
 
 static int
-hns3_bind_ring_with_vector(struct hns3_hw *hw, uint8_t vector_id, bool mmap,
+hns3_bind_ring_with_vector(struct hns3_hw *hw, uint16_t vector_id, bool en,
 			   enum hns3_ring_type queue_type, uint16_t queue_id)
 {
 	struct hns3_cmd_desc desc;
 	struct hns3_ctrl_vector_chain_cmd *req =
 		(struct hns3_ctrl_vector_chain_cmd *)desc.data;
-	enum hns3_cmd_status status;
 	enum hns3_opcode_type op;
 	uint16_t tqp_type_and_id = 0;
-	const char *op_str;
 	uint16_t type;
 	uint16_t gl;
+	int ret;
 
-	op = mmap ? HNS3_OPC_ADD_RING_TO_VECTOR : HNS3_OPC_DEL_RING_TO_VECTOR;
+	op = en ? HNS3_OPC_ADD_RING_TO_VECTOR : HNS3_OPC_DEL_RING_TO_VECTOR;
 	hns3_cmd_setup_basic_desc(&desc, op, false);
-	req->int_vector_id = vector_id;
+	req->int_vector_id = hns3_get_field(vector_id, HNS3_TQP_INT_ID_L_M,
+					      HNS3_TQP_INT_ID_L_S);
+	req->int_vector_id_h = hns3_get_field(vector_id, HNS3_TQP_INT_ID_H_M,
+					      HNS3_TQP_INT_ID_H_S);
 
 	if (queue_type == HNS3_RING_TYPE_RX)
 		gl = HNS3_RING_GL_RX;
@@ -2234,12 +2328,11 @@ hns3_bind_ring_with_vector(struct hns3_hw *hw, uint8_t vector_id, bool mmap,
 		       gl);
 	req->tqp_type_and_id[0] = rte_cpu_to_le_16(tqp_type_and_id);
 	req->int_cause_num = 1;
-	op_str = mmap ? "Map" : "Unmap";
-	status = hns3_cmd_send(hw, &desc, 1);
-	if (status) {
-		hns3_err(hw, "%s TQP %u fail, vector_id is %u, status is %d.",
-			 op_str, queue_id, req->int_vector_id, status);
-		return status;
+	ret = hns3_cmd_send(hw, &desc, 1);
+	if (ret) {
+		hns3_err(hw, "%s TQP %u fail, vector_id = %u, ret = %d.",
+			 en ? "Map" : "Unmap", queue_id, vector_id, ret);
+		return ret;
 	}
 
 	return 0;
@@ -2302,17 +2395,90 @@ hns3_init_ring_with_vector(struct hns3_hw *hw)
 }
 
 static int
+hns3_refresh_mtu(struct rte_eth_dev *dev, struct rte_eth_conf *conf)
+{
+	struct hns3_adapter *hns = dev->data->dev_private;
+	struct hns3_hw *hw = &hns->hw;
+	uint32_t max_rx_pkt_len;
+	uint16_t mtu;
+	int ret;
+
+	if (!(conf->rxmode.offloads & DEV_RX_OFFLOAD_JUMBO_FRAME))
+		return 0;
+
+	/*
+	 * If jumbo frames are enabled, MTU needs to be refreshed
+	 * according to the maximum RX packet length.
+	 */
+	max_rx_pkt_len = conf->rxmode.max_rx_pkt_len;
+	if (max_rx_pkt_len > HNS3_MAX_FRAME_LEN ||
+	    max_rx_pkt_len <= HNS3_DEFAULT_FRAME_LEN) {
+		hns3_err(hw, "maximum Rx packet length must be greater than %u "
+			 "and no more than %u when jumbo frame enabled.",
+			 (uint16_t)HNS3_DEFAULT_FRAME_LEN,
+			 (uint16_t)HNS3_MAX_FRAME_LEN);
+		return -EINVAL;
+	}
+
+	mtu = (uint16_t)HNS3_PKTLEN_TO_MTU(max_rx_pkt_len);
+	ret = hns3_dev_mtu_set(dev, mtu);
+	if (ret)
+		return ret;
+	dev->data->mtu = mtu;
+
+	return 0;
+}
+
+static int
+hns3_check_link_speed(struct hns3_hw *hw, uint32_t link_speeds)
+{
+	int ret;
+
+	/*
+	 * Some hardware doesn't support auto-negotiation, but users may not
+	 * configure link_speeds (default 0), which means auto-negotiation.
+	 * In this case, a warning message need to be printed, instead of
+	 * an error.
+	 */
+	if (link_speeds == ETH_LINK_SPEED_AUTONEG &&
+	    hw->mac.support_autoneg == 0) {
+		hns3_warn(hw, "auto-negotiation is not supported, use default fixed speed!");
+		return 0;
+	}
+
+	if (link_speeds != ETH_LINK_SPEED_AUTONEG) {
+		ret = hns3_check_port_speed(hw, link_speeds);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+static int
+hns3_check_dev_conf(struct rte_eth_dev *dev)
+{
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct rte_eth_conf *conf = &dev->data->dev_conf;
+	int ret;
+
+	ret = hns3_check_mq_mode(dev);
+	if (ret)
+		return ret;
+
+	return hns3_check_link_speed(hw, conf->link_speeds);
+}
+
+static int
 hns3_dev_configure(struct rte_eth_dev *dev)
 {
 	struct hns3_adapter *hns = dev->data->dev_private;
 	struct rte_eth_conf *conf = &dev->data->dev_conf;
 	enum rte_eth_rx_mq_mode mq_mode = conf->rxmode.mq_mode;
 	struct hns3_hw *hw = &hns->hw;
-	struct hns3_rss_conf *rss_cfg = &hw->rss_info;
 	uint16_t nb_rx_q = dev->data->nb_rx_queues;
 	uint16_t nb_tx_q = dev->data->nb_tx_queues;
 	struct rte_eth_rss_conf rss_conf;
-	uint16_t mtu;
 	bool gro_en;
 	int ret;
 
@@ -2338,11 +2504,9 @@ hns3_dev_configure(struct rte_eth_dev *dev)
 	}
 
 	hw->adapter_state = HNS3_NIC_CONFIGURING;
-	if (conf->link_speeds & ETH_LINK_SPEED_FIXED) {
-		hns3_err(hw, "setting link speed/duplex not supported");
-		ret = -EINVAL;
+	ret = hns3_check_dev_conf(dev);
+	if (ret)
 		goto cfg_err;
-	}
 
 	if ((uint32_t)mq_mode & ETH_MQ_RX_DCB_FLAG) {
 		ret = hns3_check_dcb_cfg(dev);
@@ -2355,32 +2519,18 @@ hns3_dev_configure(struct rte_eth_dev *dev)
 		conf->rxmode.offloads |= DEV_RX_OFFLOAD_RSS_HASH;
 		rss_conf = conf->rx_adv_conf.rss_conf;
 		hw->rss_dis_flag = false;
-		if (rss_conf.rss_key == NULL) {
-			rss_conf.rss_key = rss_cfg->key;
-			rss_conf.rss_key_len = HNS3_RSS_KEY_SIZE;
-		}
-
 		ret = hns3_dev_rss_hash_update(dev, &rss_conf);
 		if (ret)
 			goto cfg_err;
 	}
 
-	/*
-	 * If jumbo frames are enabled, MTU needs to be refreshed
-	 * according to the maximum RX packet length.
-	 */
-	if (conf->rxmode.offloads & DEV_RX_OFFLOAD_JUMBO_FRAME) {
-		/*
-		 * Security of max_rx_pkt_len is guaranteed in dpdk frame.
-		 * Maximum value of max_rx_pkt_len is HNS3_MAX_FRAME_LEN, so it
-		 * can safely assign to "uint16_t" type variable.
-		 */
-		mtu = (uint16_t)HNS3_PKTLEN_TO_MTU(conf->rxmode.max_rx_pkt_len);
-		ret = hns3_dev_mtu_set(dev, mtu);
-		if (ret)
-			goto cfg_err;
-		dev->data->mtu = mtu;
-	}
+	ret = hns3_refresh_mtu(dev, conf);
+	if (ret)
+		goto cfg_err;
+
+	ret = hns3_mbuf_dyn_rx_timestamp_register(dev, conf);
+	if (ret)
+		goto cfg_err;
 
 	ret = hns3_dev_configure_vlan(dev);
 	if (ret)
@@ -2391,11 +2541,6 @@ hns3_dev_configure(struct rte_eth_dev *dev)
 	ret = hns3_config_gro(hw, gro_en);
 	if (ret)
 		goto cfg_err;
-
-	hns->rx_simple_allowed = true;
-	hns->rx_vec_allowed = true;
-	hns->tx_simple_allowed = true;
-	hns->tx_vec_allowed = true;
 
 	hns3_init_rx_ptype_tble(dev);
 	hw->adapter_state = HNS3_NIC_CONFIGURED;
@@ -2427,17 +2572,33 @@ hns3_set_mac_mtu(struct hns3_hw *hw, uint16_t new_mps)
 static int
 hns3_config_mtu(struct hns3_hw *hw, uint16_t mps)
 {
+	struct hns3_adapter *hns = HNS3_DEV_HW_TO_ADAPTER(hw);
+	uint16_t original_mps = hns->pf.mps;
+	int err;
 	int ret;
 
 	ret = hns3_set_mac_mtu(hw, mps);
 	if (ret) {
-		hns3_err(hw, "Failed to set mtu, ret = %d", ret);
+		hns3_err(hw, "failed to set mtu, ret = %d", ret);
 		return ret;
 	}
 
+	hns->pf.mps = mps;
 	ret = hns3_buffer_alloc(hw);
-	if (ret)
-		hns3_err(hw, "Failed to allocate buffer, ret = %d", ret);
+	if (ret) {
+		hns3_err(hw, "failed to allocate buffer, ret = %d", ret);
+		goto rollback;
+	}
+
+	return 0;
+
+rollback:
+	err = hns3_set_mac_mtu(hw, original_mps);
+	if (err) {
+		hns3_err(hw, "fail to rollback MTU, err = %d", err);
+		return ret;
+	}
+	hns->pf.mps = original_mps;
 
 	return ret;
 }
@@ -2458,7 +2619,7 @@ hns3_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	}
 
 	rte_spinlock_lock(&hw->lock);
-	is_jumbo_frame = frame_size > RTE_ETHER_MAX_LEN ? true : false;
+	is_jumbo_frame = frame_size > HNS3_DEFAULT_FRAME_LEN ? true : false;
 	frame_size = RTE_MAX(frame_size, HNS3_DEFAULT_FRAME_LEN);
 
 	/*
@@ -2472,7 +2633,7 @@ hns3_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 			 dev->data->port_id, mtu, ret);
 		return ret;
 	}
-	hns->pf.mps = (uint16_t)frame_size;
+
 	if (is_jumbo_frame)
 		dev->data->dev_conf.rxmode.offloads |=
 						DEV_RX_OFFLOAD_JUMBO_FRAME;
@@ -2485,7 +2646,68 @@ hns3_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	return 0;
 }
 
-static int
+static uint32_t
+hns3_get_copper_port_speed_capa(uint32_t supported_speed)
+{
+	uint32_t speed_capa = 0;
+
+	if (supported_speed & HNS3_PHY_LINK_SPEED_10M_HD_BIT)
+		speed_capa |= ETH_LINK_SPEED_10M_HD;
+	if (supported_speed & HNS3_PHY_LINK_SPEED_10M_BIT)
+		speed_capa |= ETH_LINK_SPEED_10M;
+	if (supported_speed & HNS3_PHY_LINK_SPEED_100M_HD_BIT)
+		speed_capa |= ETH_LINK_SPEED_100M_HD;
+	if (supported_speed & HNS3_PHY_LINK_SPEED_100M_BIT)
+		speed_capa |= ETH_LINK_SPEED_100M;
+	if (supported_speed & HNS3_PHY_LINK_SPEED_1000M_BIT)
+		speed_capa |= ETH_LINK_SPEED_1G;
+
+	return speed_capa;
+}
+
+static uint32_t
+hns3_get_firber_port_speed_capa(uint32_t supported_speed)
+{
+	uint32_t speed_capa = 0;
+
+	if (supported_speed & HNS3_FIBER_LINK_SPEED_1G_BIT)
+		speed_capa |= ETH_LINK_SPEED_1G;
+	if (supported_speed & HNS3_FIBER_LINK_SPEED_10G_BIT)
+		speed_capa |= ETH_LINK_SPEED_10G;
+	if (supported_speed & HNS3_FIBER_LINK_SPEED_25G_BIT)
+		speed_capa |= ETH_LINK_SPEED_25G;
+	if (supported_speed & HNS3_FIBER_LINK_SPEED_40G_BIT)
+		speed_capa |= ETH_LINK_SPEED_40G;
+	if (supported_speed & HNS3_FIBER_LINK_SPEED_50G_BIT)
+		speed_capa |= ETH_LINK_SPEED_50G;
+	if (supported_speed & HNS3_FIBER_LINK_SPEED_100G_BIT)
+		speed_capa |= ETH_LINK_SPEED_100G;
+	if (supported_speed & HNS3_FIBER_LINK_SPEED_200G_BIT)
+		speed_capa |= ETH_LINK_SPEED_200G;
+
+	return speed_capa;
+}
+
+static uint32_t
+hns3_get_speed_capa(struct hns3_hw *hw)
+{
+	struct hns3_mac *mac = &hw->mac;
+	uint32_t speed_capa;
+
+	if (mac->media_type == HNS3_MEDIA_TYPE_COPPER)
+		speed_capa =
+			hns3_get_copper_port_speed_capa(mac->supported_speed);
+	else
+		speed_capa =
+			hns3_get_firber_port_speed_capa(mac->supported_speed);
+
+	if (mac->support_autoneg == 0)
+		speed_capa |= ETH_LINK_SPEED_FIXED;
+
+	return speed_capa;
+}
+
+int
 hns3_dev_infos_get(struct rte_eth_dev *eth_dev, struct rte_eth_dev_info *info)
 {
 	struct hns3_adapter *hns = eth_dev->data->dev_private;
@@ -2532,9 +2754,15 @@ hns3_dev_infos_get(struct rte_eth_dev *eth_dev, struct rte_eth_dev_info *info)
 				 DEV_TX_OFFLOAD_MBUF_FAST_FREE |
 				 hns3_txvlan_cap_get(hw));
 
+	if (hns3_dev_outer_udp_cksum_supported(hw))
+		info->tx_offload_capa |= DEV_TX_OFFLOAD_OUTER_UDP_CKSUM;
+
 	if (hns3_dev_indep_txrx_supported(hw))
 		info->dev_capa = RTE_ETH_DEV_CAPA_RUNTIME_RX_QUEUE_SETUP |
 				 RTE_ETH_DEV_CAPA_RUNTIME_TX_QUEUE_SETUP;
+
+	if (hns3_dev_ptp_supported(hw))
+		info->rx_offload_capa |= DEV_RX_OFFLOAD_TIMESTAMP;
 
 	info->rx_desc_lim = (struct rte_eth_desc_lim) {
 		.nb_max = HNS3_MAX_RING_DESC,
@@ -2550,6 +2778,7 @@ hns3_dev_infos_get(struct rte_eth_dev *eth_dev, struct rte_eth_dev_info *info)
 		.nb_mtu_seg_max = hw->max_non_tso_bd_num,
 	};
 
+	info->speed_capa = hns3_get_speed_capa(hw);
 	info->default_rxconf = (struct rte_eth_rxconf) {
 		.rx_free_thresh = HNS3_DEFAULT_RX_FREE_THRESH,
 		/*
@@ -2567,7 +2796,7 @@ hns3_dev_infos_get(struct rte_eth_dev *eth_dev, struct rte_eth_dev_info *info)
 
 	info->vmdq_queue_num = 0;
 
-	info->reta_size = HNS3_RSS_IND_TBL_SIZE;
+	info->reta_size = hw->rss_ind_tbl_size;
 	info->hash_key_size = HNS3_RSS_KEY_SIZE;
 	info->flow_type_rss_offloads = HNS3_ETH_RSS_SUPPORT;
 
@@ -2607,20 +2836,27 @@ hns3_fw_version_get(struct rte_eth_dev *eth_dev, char *fw_version,
 }
 
 static int
-hns3_dev_link_update(struct rte_eth_dev *eth_dev,
-		     __rte_unused int wait_to_complete)
+hns3_update_port_link_info(struct rte_eth_dev *eth_dev)
 {
-	struct hns3_adapter *hns = eth_dev->data->dev_private;
-	struct hns3_hw *hw = &hns->hw;
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
+	int ret;
+
+	(void)hns3_update_link_status(hw);
+
+	ret = hns3_update_link_info(eth_dev);
+	if (ret)
+		hw->mac.link_status = ETH_LINK_DOWN;
+
+	return ret;
+}
+
+static void
+hns3_setup_linkstatus(struct rte_eth_dev *eth_dev,
+		      struct rte_eth_link *new_link)
+{
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
 	struct hns3_mac *mac = &hw->mac;
-	struct rte_eth_link new_link;
 
-	if (!hns3_is_reset_pending(hns)) {
-		hns3_update_speed_duplex(eth_dev);
-		hns3_update_link_status(hw);
-	}
-
-	memset(&new_link, 0, sizeof(new_link));
 	switch (mac->link_speed) {
 	case ETH_SPEED_NUM_10M:
 	case ETH_SPEED_NUM_100M:
@@ -2631,17 +2867,49 @@ hns3_dev_link_update(struct rte_eth_dev *eth_dev,
 	case ETH_SPEED_NUM_50G:
 	case ETH_SPEED_NUM_100G:
 	case ETH_SPEED_NUM_200G:
-		new_link.link_speed = mac->link_speed;
+		new_link->link_speed = mac->link_speed;
 		break;
 	default:
-		new_link.link_speed = ETH_SPEED_NUM_100M;
+		if (mac->link_status)
+			new_link->link_speed = ETH_SPEED_NUM_UNKNOWN;
+		else
+			new_link->link_speed = ETH_SPEED_NUM_NONE;
 		break;
 	}
 
-	new_link.link_duplex = mac->link_duplex;
-	new_link.link_status = mac->link_status ? ETH_LINK_UP : ETH_LINK_DOWN;
-	new_link.link_autoneg =
-	    !(eth_dev->data->dev_conf.link_speeds & ETH_LINK_SPEED_FIXED);
+	new_link->link_duplex = mac->link_duplex;
+	new_link->link_status = mac->link_status ? ETH_LINK_UP : ETH_LINK_DOWN;
+	new_link->link_autoneg = mac->link_autoneg;
+}
+
+static int
+hns3_dev_link_update(struct rte_eth_dev *eth_dev, int wait_to_complete)
+{
+#define HNS3_LINK_CHECK_INTERVAL 100  /* 100ms */
+#define HNS3_MAX_LINK_CHECK_TIMES 20  /* 2s (100 * 20ms) in total */
+
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
+	uint32_t retry_cnt = HNS3_MAX_LINK_CHECK_TIMES;
+	struct hns3_mac *mac = &hw->mac;
+	struct rte_eth_link new_link;
+	int ret;
+
+	do {
+		ret = hns3_update_port_link_info(eth_dev);
+		if (ret) {
+			hns3_err(hw, "failed to get port link info, ret = %d.",
+				 ret);
+			break;
+		}
+
+		if (!wait_to_complete || mac->link_status == ETH_LINK_UP)
+			break;
+
+		rte_delay_ms(HNS3_LINK_CHECK_INTERVAL);
+	} while (retry_cnt--);
+
+	memset(&new_link, 0, sizeof(new_link));
+	hns3_setup_linkstatus(eth_dev, &new_link);
 
 	return rte_eth_linkstatus_set(eth_dev, &new_link);
 }
@@ -2958,6 +3226,20 @@ hns3_parse_dev_specifications(struct hns3_hw *hw, struct hns3_cmd_desc *desc)
 }
 
 static int
+hns3_check_dev_specifications(struct hns3_hw *hw)
+{
+	if (hw->rss_ind_tbl_size == 0 ||
+	    hw->rss_ind_tbl_size > HNS3_RSS_IND_TBL_SIZE_MAX) {
+		hns3_err(hw, "the size of hash lookup table configured (%u)"
+			      " exceeds the maximum(%u)", hw->rss_ind_tbl_size,
+			      HNS3_RSS_IND_TBL_SIZE_MAX);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int
 hns3_query_dev_specifications(struct hns3_hw *hw)
 {
 	struct hns3_cmd_desc desc[HNS3_QUERY_DEV_SPECS_BD_NUM];
@@ -2977,7 +3259,7 @@ hns3_query_dev_specifications(struct hns3_hw *hw)
 
 	hns3_parse_dev_specifications(hw, desc);
 
-	return 0;
+	return hns3_check_dev_specifications(hw);
 }
 
 static int
@@ -3001,13 +3283,6 @@ hns3_get_capability(struct hns3_hw *hw)
 	    device_id == HNS3_DEV_ID_200G_RDMA)
 		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_DCB_B, 1);
 
-	ret = hns3_query_dev_fec_info(eth_dev);
-	if (ret) {
-		PMD_INIT_LOG(ERR,
-			     "failed to query FEC information, ret = %d", ret);
-		return ret;
-	}
-
 	/* Get PCI revision id */
 	ret = rte_pci_read_config(pci_dev, &revision, HNS3_PCI_REVISION_ID_LEN,
 				  HNS3_PCI_REVISION_ID);
@@ -3024,9 +3299,11 @@ hns3_get_capability(struct hns3_hw *hw)
 		hw->intr.gl_unit = HNS3_INTR_COALESCE_GL_UINT_2US;
 		hw->tso_mode = HNS3_TSO_SW_CAL_PSEUDO_H_CSUM;
 		hw->vlan_mode = HNS3_SW_SHIFT_AND_DISCARD_MODE;
+		hw->drop_stats_mode = HNS3_PKTS_DROP_STATS_MODE1;
 		hw->min_tx_pkt_len = HNS3_HIP08_MIN_TX_PKT_LEN;
 		pf->tqp_config_mode = HNS3_FIXED_MAX_TQP_NUM_MODE;
 		hw->rss_info.ipv6_sctp_offload_supported = false;
+		hw->udp_cksum_mode = HNS3_SPECIAL_PORT_SW_CKSUM_MODE;
 		return 0;
 	}
 
@@ -3042,11 +3319,44 @@ hns3_get_capability(struct hns3_hw *hw)
 	hw->intr.gl_unit = HNS3_INTR_COALESCE_GL_UINT_1US;
 	hw->tso_mode = HNS3_TSO_HW_CAL_PSEUDO_H_CSUM;
 	hw->vlan_mode = HNS3_HW_SHIFT_AND_DISCARD_MODE;
+	hw->drop_stats_mode = HNS3_PKTS_DROP_STATS_MODE2;
 	hw->min_tx_pkt_len = HNS3_HIP09_MIN_TX_PKT_LEN;
 	pf->tqp_config_mode = HNS3_FLEX_MAX_TQP_NUM_MODE;
 	hw->rss_info.ipv6_sctp_offload_supported = true;
+	hw->udp_cksum_mode = HNS3_SPECIAL_PORT_HW_CKSUM_MODE;
 
 	return 0;
+}
+
+static int
+hns3_check_media_type(struct hns3_hw *hw, uint8_t media_type)
+{
+	int ret;
+
+	switch (media_type) {
+	case HNS3_MEDIA_TYPE_COPPER:
+		if (!hns3_dev_copper_supported(hw)) {
+			PMD_INIT_LOG(ERR,
+				     "Media type is copper, not supported.");
+			ret = -EOPNOTSUPP;
+		} else {
+			ret = 0;
+		}
+		break;
+	case HNS3_MEDIA_TYPE_FIBER:
+		ret = 0;
+		break;
+	case HNS3_MEDIA_TYPE_BACKPLANE:
+		PMD_INIT_LOG(ERR, "Media type is Backplane, not supported.");
+		ret = -EOPNOTSUPP;
+		break;
+	default:
+		PMD_INIT_LOG(ERR, "Unknown media type = %u!", media_type);
+		ret = -EINVAL;
+		break;
+	}
+
+	return ret;
 }
 
 static int
@@ -3063,11 +3373,9 @@ hns3_get_board_configuration(struct hns3_hw *hw)
 		return ret;
 	}
 
-	if (cfg.media_type == HNS3_MEDIA_TYPE_COPPER &&
-	    !hns3_dev_copper_supported(hw)) {
-		PMD_INIT_LOG(ERR, "media type is copper, not supported.");
-		return -EOPNOTSUPP;
-	}
+	ret = hns3_check_media_type(hw, cfg.media_type);
+	if (ret)
+		return ret;
 
 	hw->mac.media_type = cfg.media_type;
 	hw->rss_size_max = cfg.rss_size_max;
@@ -3139,8 +3447,15 @@ hns3_get_configuration(struct hns3_hw *hw)
 	}
 
 	ret = hns3_get_board_configuration(hw);
-	if (ret)
+	if (ret) {
 		PMD_INIT_LOG(ERR, "failed to get board configuration: %d", ret);
+		return ret;
+	}
+
+	ret = hns3_query_dev_fec_info(hw);
+	if (ret)
+		PMD_INIT_LOG(ERR,
+			     "failed to query FEC information, ret = %d", ret);
 
 	return ret;
 }
@@ -4282,24 +4597,48 @@ hns3_dev_promisc_restore(struct hns3_adapter *hns)
 }
 
 static int
-hns3_get_sfp_speed(struct hns3_hw *hw, uint32_t *speed)
+hns3_get_sfp_info(struct hns3_hw *hw, struct hns3_mac *mac_info)
 {
-	struct hns3_sfp_speed_cmd *resp;
+	struct hns3_sfp_info_cmd *resp;
 	struct hns3_cmd_desc desc;
 	int ret;
 
-	hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_SFP_GET_SPEED, true);
-	resp = (struct hns3_sfp_speed_cmd *)desc.data;
+	hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_GET_SFP_INFO, true);
+	resp = (struct hns3_sfp_info_cmd *)desc.data;
+	resp->query_type = HNS3_ACTIVE_QUERY;
+
 	ret = hns3_cmd_send(hw, &desc, 1);
 	if (ret == -EOPNOTSUPP) {
-		hns3_err(hw, "IMP do not support get SFP speed %d", ret);
+		hns3_warn(hw, "firmware does not support get SFP info,"
+			  " ret = %d.", ret);
 		return ret;
 	} else if (ret) {
-		hns3_err(hw, "get sfp speed failed %d", ret);
+		hns3_err(hw, "get sfp info failed, ret = %d.", ret);
 		return ret;
 	}
 
-	*speed = resp->sfp_speed;
+	/*
+	 * In some case, the speed of MAC obtained from firmware may be 0, it
+	 * shouldn't be set to mac->speed.
+	 */
+	if (!rte_le_to_cpu_32(resp->sfp_speed))
+		return 0;
+
+	mac_info->link_speed = rte_le_to_cpu_32(resp->sfp_speed);
+	/*
+	 * if resp->supported_speed is 0, it means it's an old version
+	 * firmware, do not update these params.
+	 */
+	if (resp->supported_speed) {
+		mac_info->query_type = HNS3_ACTIVE_QUERY;
+		mac_info->supported_speed =
+					rte_le_to_cpu_32(resp->supported_speed);
+		mac_info->support_autoneg = resp->autoneg_ability;
+		mac_info->link_autoneg = (resp->autoneg == 0) ? ETH_LINK_FIXED
+					: ETH_LINK_AUTONEG;
+	} else {
+		mac_info->query_type = HNS3_DEFAULT_QUERY;
+	}
 
 	return 0;
 }
@@ -4317,7 +4656,6 @@ static int
 hns3_cfg_mac_speed_dup(struct hns3_hw *hw, uint32_t speed, uint8_t duplex)
 {
 	struct hns3_mac *mac = &hw->mac;
-	uint32_t cur_speed = mac->link_speed;
 	int ret;
 
 	duplex = hns3_check_speed_dup(duplex, speed);
@@ -4328,44 +4666,155 @@ hns3_cfg_mac_speed_dup(struct hns3_hw *hw, uint32_t speed, uint8_t duplex)
 	if (ret)
 		return ret;
 
-	mac->link_speed = speed;
-	ret = hns3_dcb_port_shaper_cfg(hw);
-	if (ret) {
-		hns3_err(hw, "failed to configure port shaper, ret = %d.", ret);
-		mac->link_speed = cur_speed;
+	ret = hns3_port_shaper_update(hw, speed);
+	if (ret)
 		return ret;
-	}
 
+	mac->link_speed = speed;
 	mac->link_duplex = duplex;
 
 	return 0;
 }
 
 static int
-hns3_update_speed_duplex(struct rte_eth_dev *eth_dev)
+hns3_update_fiber_link_info(struct hns3_hw *hw)
 {
-	struct hns3_adapter *hns = eth_dev->data->dev_private;
-	struct hns3_hw *hw = &hns->hw;
-	struct hns3_pf *pf = &hns->pf;
-	uint32_t speed;
+	struct hns3_pf *pf = HNS3_DEV_HW_TO_PF(hw);
+	struct hns3_mac *mac = &hw->mac;
+	struct hns3_mac mac_info;
 	int ret;
 
-	/* If IMP do not support get SFP/qSFP speed, return directly */
+	/* If firmware do not support get SFP/qSFP speed, return directly */
 	if (!pf->support_sfp_query)
 		return 0;
 
-	ret = hns3_get_sfp_speed(hw, &speed);
+	memset(&mac_info, 0, sizeof(struct hns3_mac));
+	ret = hns3_get_sfp_info(hw, &mac_info);
 	if (ret == -EOPNOTSUPP) {
 		pf->support_sfp_query = false;
 		return ret;
 	} else if (ret)
 		return ret;
 
-	if (speed == ETH_SPEED_NUM_NONE)
-		return 0; /* do nothing if no SFP */
+	/* Do nothing if no SFP */
+	if (mac_info.link_speed == ETH_SPEED_NUM_NONE)
+		return 0;
+
+	/*
+	 * If query_type is HNS3_ACTIVE_QUERY, it is no need
+	 * to reconfigure the speed of MAC. Otherwise, it indicates
+	 * that the current firmware only supports to obtain the
+	 * speed of the SFP, and the speed of MAC needs to reconfigure.
+	 */
+	mac->query_type = mac_info.query_type;
+	if (mac->query_type == HNS3_ACTIVE_QUERY) {
+		if (mac_info.link_speed != mac->link_speed) {
+			ret = hns3_port_shaper_update(hw, mac_info.link_speed);
+			if (ret)
+				return ret;
+		}
+
+		mac->link_speed = mac_info.link_speed;
+		mac->supported_speed = mac_info.supported_speed;
+		mac->support_autoneg = mac_info.support_autoneg;
+		mac->link_autoneg = mac_info.link_autoneg;
+
+		return 0;
+	}
 
 	/* Config full duplex for SFP */
-	return hns3_cfg_mac_speed_dup(hw, speed, ETH_LINK_FULL_DUPLEX);
+	return hns3_cfg_mac_speed_dup(hw, mac_info.link_speed,
+				      ETH_LINK_FULL_DUPLEX);
+}
+
+static void
+hns3_parse_copper_phy_params(struct hns3_cmd_desc *desc, struct hns3_mac *mac)
+{
+#define HNS3_PHY_SUPPORTED_SPEED_MASK   0x2f
+
+	struct hns3_phy_params_bd0_cmd *req;
+	uint32_t supported;
+
+	req = (struct hns3_phy_params_bd0_cmd *)desc[0].data;
+	mac->link_speed = rte_le_to_cpu_32(req->speed);
+	mac->link_duplex = hns3_get_bit(req->duplex,
+					   HNS3_PHY_DUPLEX_CFG_B);
+	mac->link_autoneg = hns3_get_bit(req->autoneg,
+					   HNS3_PHY_AUTONEG_CFG_B);
+	mac->advertising = rte_le_to_cpu_32(req->advertising);
+	mac->lp_advertising = rte_le_to_cpu_32(req->lp_advertising);
+	supported = rte_le_to_cpu_32(req->supported);
+	mac->supported_speed = supported & HNS3_PHY_SUPPORTED_SPEED_MASK;
+	mac->support_autoneg = !!(supported & HNS3_PHY_LINK_MODE_AUTONEG_BIT);
+}
+
+static int
+hns3_get_copper_phy_params(struct hns3_hw *hw, struct hns3_mac *mac)
+{
+	struct hns3_cmd_desc desc[HNS3_PHY_PARAM_CFG_BD_NUM];
+	uint16_t i;
+	int ret;
+
+	for (i = 0; i < HNS3_PHY_PARAM_CFG_BD_NUM - 1; i++) {
+		hns3_cmd_setup_basic_desc(&desc[i], HNS3_OPC_PHY_PARAM_CFG,
+					  true);
+		desc[i].flag |= rte_cpu_to_le_16(HNS3_CMD_FLAG_NEXT);
+	}
+	hns3_cmd_setup_basic_desc(&desc[i], HNS3_OPC_PHY_PARAM_CFG, true);
+
+	ret = hns3_cmd_send(hw, desc, HNS3_PHY_PARAM_CFG_BD_NUM);
+	if (ret) {
+		hns3_err(hw, "get phy parameters failed, ret = %d.", ret);
+		return ret;
+	}
+
+	hns3_parse_copper_phy_params(desc, mac);
+
+	return 0;
+}
+
+static int
+hns3_update_copper_link_info(struct hns3_hw *hw)
+{
+	struct hns3_mac *mac = &hw->mac;
+	struct hns3_mac mac_info;
+	int ret;
+
+	memset(&mac_info, 0, sizeof(struct hns3_mac));
+	ret = hns3_get_copper_phy_params(hw, &mac_info);
+	if (ret)
+		return ret;
+
+	if (mac_info.link_speed != mac->link_speed) {
+		ret = hns3_port_shaper_update(hw, mac_info.link_speed);
+		if (ret)
+			return ret;
+	}
+
+	mac->link_speed = mac_info.link_speed;
+	mac->link_duplex = mac_info.link_duplex;
+	mac->link_autoneg = mac_info.link_autoneg;
+	mac->supported_speed = mac_info.supported_speed;
+	mac->advertising = mac_info.advertising;
+	mac->lp_advertising = mac_info.lp_advertising;
+	mac->support_autoneg = mac_info.support_autoneg;
+
+	return 0;
+}
+
+static int
+hns3_update_link_info(struct rte_eth_dev *eth_dev)
+{
+	struct hns3_adapter *hns = eth_dev->data->dev_private;
+	struct hns3_hw *hw = &hns->hw;
+	int ret = 0;
+
+	if (hw->mac.media_type == HNS3_MEDIA_TYPE_COPPER)
+		ret = hns3_update_copper_link_info(hw);
+	else if (hw->mac.media_type == HNS3_MEDIA_TYPE_FIBER)
+		ret = hns3_update_fiber_link_info(hw);
+
+	return ret;
 }
 
 static int
@@ -4434,7 +4883,7 @@ hns3_get_mac_link_status(struct hns3_hw *hw)
 	return !!link_status;
 }
 
-void
+static bool
 hns3_update_link_status(struct hns3_hw *hw)
 {
 	int state;
@@ -4443,7 +4892,30 @@ hns3_update_link_status(struct hns3_hw *hw)
 	if (state != hw->mac.link_status) {
 		hw->mac.link_status = state;
 		hns3_warn(hw, "Link status change to %s!", state ? "up" : "down");
+		hns3_config_mac_tnl_int(hw,
+					state == ETH_LINK_UP ? true : false);
+		return true;
 	}
+
+	return false;
+}
+
+void
+hns3_update_linkstatus_and_event(struct hns3_hw *hw, bool query)
+{
+	struct rte_eth_dev *dev = &rte_eth_devices[hw->data->port_id];
+	struct rte_eth_link new_link;
+	int ret;
+
+	if (query)
+		hns3_update_port_link_info(dev);
+
+	memset(&new_link, 0, sizeof(new_link));
+	hns3_setup_linkstatus(dev, &new_link);
+
+	ret = rte_eth_linkstatus_set(dev, &new_link);
+	if (ret == 0 && dev->data->dev_conf.intr_conf.lsc != 0)
+		hns3_start_report_lse(dev);
 }
 
 static void
@@ -4453,10 +4925,9 @@ hns3_service_handler(void *param)
 	struct hns3_adapter *hns = eth_dev->data->dev_private;
 	struct hns3_hw *hw = &hns->hw;
 
-	if (!hns3_is_reset_pending(hns)) {
-		hns3_update_speed_duplex(eth_dev);
-		hns3_update_link_status(hw);
-	} else
+	if (!hns3_is_reset_pending(hns))
+		hns3_update_linkstatus_and_event(hw, true);
+	else
 		hns3_warn(hw, "Cancel the query when reset is pending");
 
 	rte_eal_alarm_set(HNS3_SERVICE_INTERVAL, hns3_service_handler, eth_dev);
@@ -4581,6 +5052,89 @@ hns3_config_all_msix_error(struct hns3_hw *hw, bool enable)
 	hns3_write_dev(hw, HNS3_VECTOR0_OTER_EN_REG, val);
 }
 
+static uint32_t
+hns3_set_firber_default_support_speed(struct hns3_hw *hw)
+{
+	struct hns3_mac *mac = &hw->mac;
+
+	switch (mac->link_speed) {
+	case ETH_SPEED_NUM_1G:
+		return HNS3_FIBER_LINK_SPEED_1G_BIT;
+	case ETH_SPEED_NUM_10G:
+		return HNS3_FIBER_LINK_SPEED_10G_BIT;
+	case ETH_SPEED_NUM_25G:
+		return HNS3_FIBER_LINK_SPEED_25G_BIT;
+	case ETH_SPEED_NUM_40G:
+		return HNS3_FIBER_LINK_SPEED_40G_BIT;
+	case ETH_SPEED_NUM_50G:
+		return HNS3_FIBER_LINK_SPEED_50G_BIT;
+	case ETH_SPEED_NUM_100G:
+		return HNS3_FIBER_LINK_SPEED_100G_BIT;
+	case ETH_SPEED_NUM_200G:
+		return HNS3_FIBER_LINK_SPEED_200G_BIT;
+	default:
+		hns3_warn(hw, "invalid speed %u Mbps.", mac->link_speed);
+		return 0;
+	}
+}
+
+/*
+ * Validity of supported_speed for firber and copper media type can be
+ * guaranteed by the following policy:
+ * Copper:
+ *       Although the initialization of the phy in the firmware may not be
+ *       completed, the firmware can guarantees that the supported_speed is
+ *       an valid value.
+ * Firber:
+ *       If the version of firmware supports the acitive query way of the
+ *       HNS3_OPC_GET_SFP_INFO opcode, the supported_speed can be obtained
+ *       through it. If unsupported, use the SFP's speed as the value of the
+ *       supported_speed.
+ */
+static int
+hns3_get_port_supported_speed(struct rte_eth_dev *eth_dev)
+{
+	struct hns3_adapter *hns = eth_dev->data->dev_private;
+	struct hns3_hw *hw = &hns->hw;
+	struct hns3_mac *mac = &hw->mac;
+	int ret;
+
+	ret = hns3_update_link_info(eth_dev);
+	if (ret)
+		return ret;
+
+	if (mac->media_type == HNS3_MEDIA_TYPE_FIBER) {
+		/*
+		 * Some firmware does not support the report of supported_speed,
+		 * and only report the effective speed of SFP. In this case, it
+		 * is necessary to use the SFP's speed as the supported_speed.
+		 */
+		if (mac->supported_speed == 0)
+			mac->supported_speed =
+				hns3_set_firber_default_support_speed(hw);
+	}
+
+	return 0;
+}
+
+static void
+hns3_get_fc_autoneg_capability(struct hns3_adapter *hns)
+{
+	struct hns3_mac *mac = &hns->hw.mac;
+
+	if (mac->media_type == HNS3_MEDIA_TYPE_COPPER) {
+		hns->pf.support_fc_autoneg = true;
+		return;
+	}
+
+	/*
+	 * Flow control auto-negotiation requires the cooperation of the driver
+	 * and firmware. Currently, the optical port does not support flow
+	 * control auto-negotiation.
+	 */
+	hns->pf.support_fc_autoneg = false;
+}
+
 static int
 hns3_init_pf(struct rte_eth_dev *eth_dev)
 {
@@ -4623,6 +5177,13 @@ hns3_init_pf(struct rte_eth_dev *eth_dev)
 		goto err_cmd_init;
 	}
 
+	/* Hardware statistics of imissed registers cleared. */
+	ret = hns3_update_imissed_stats(hw, true);
+	if (ret) {
+		hns3_err(hw, "clear imissed stats failed, ret = %d", ret);
+		goto err_cmd_init;
+	}
+
 	hns3_config_all_msix_error(hw, true);
 
 	ret = rte_intr_callback_register(&pci_dev->intr_handle,
@@ -4632,6 +5193,10 @@ hns3_init_pf(struct rte_eth_dev *eth_dev)
 		PMD_INIT_LOG(ERR, "Failed to register intr: %d", ret);
 		goto err_intr_callback_register;
 	}
+
+	ret = hns3_ptp_init(hw);
+	if (ret)
+		goto err_get_config;
 
 	/* Enable interrupt */
 	rte_intr_enable(&pci_dev->intr_handle);
@@ -4661,7 +5226,7 @@ hns3_init_pf(struct rte_eth_dev *eth_dev)
 		goto err_fdir;
 	}
 
-	hns3_set_default_rss_args(hw);
+	hns3_rss_set_default_args(hw);
 
 	ret = hns3_enable_hw_error_intr(hns, true);
 	if (ret) {
@@ -4670,8 +5235,21 @@ hns3_init_pf(struct rte_eth_dev *eth_dev)
 		goto err_enable_intr;
 	}
 
+	ret = hns3_get_port_supported_speed(eth_dev);
+	if (ret) {
+		PMD_INIT_LOG(ERR, "failed to get speed capabilities supported "
+			     "by device, ret = %d.", ret);
+		goto err_supported_speed;
+	}
+
+	hns3_get_fc_autoneg_capability(hns);
+
+	hns3_tm_conf_init(eth_dev);
+
 	return 0;
 
+err_supported_speed:
+	(void)hns3_enable_hw_error_intr(hns, false);
 err_enable_intr:
 	hns3_fdir_filter_uninit(hns);
 err_fdir:
@@ -4703,6 +5281,7 @@ hns3_uninit_pf(struct rte_eth_dev *eth_dev)
 
 	PMD_INIT_FUNC_TRACE();
 
+	hns3_tm_conf_uninit(eth_dev);
 	hns3_enable_hw_error_intr(hns, false);
 	hns3_rss_uninit(hns);
 	(void)hns3_config_gro(hw, false);
@@ -4710,6 +5289,7 @@ hns3_uninit_pf(struct rte_eth_dev *eth_dev)
 	hns3_fdir_filter_uninit(hns);
 	hns3_uninit_umv_space(hw);
 	hns3_tqp_stats_uninit(hw);
+	hns3_config_mac_tnl_int(hw, false);
 	hns3_pf_disable_irq0(hw);
 	rte_intr_disable(&pci_dev->intr_handle);
 	hns3_intr_unregister(&pci_dev->intr_handle, hns3_interrupt_handler,
@@ -4718,6 +5298,268 @@ hns3_uninit_pf(struct rte_eth_dev *eth_dev)
 	hns3_cmd_uninit(hw);
 	hns3_cmd_destroy_queue(hw);
 	hw->io_base = NULL;
+}
+
+static uint32_t
+hns3_convert_link_speeds2bitmap_copper(uint32_t link_speeds)
+{
+	uint32_t speed_bit;
+
+	switch (link_speeds & ~ETH_LINK_SPEED_FIXED) {
+	case ETH_LINK_SPEED_10M:
+		speed_bit = HNS3_PHY_LINK_SPEED_10M_BIT;
+		break;
+	case ETH_LINK_SPEED_10M_HD:
+		speed_bit = HNS3_PHY_LINK_SPEED_10M_HD_BIT;
+		break;
+	case ETH_LINK_SPEED_100M:
+		speed_bit = HNS3_PHY_LINK_SPEED_100M_BIT;
+		break;
+	case ETH_LINK_SPEED_100M_HD:
+		speed_bit = HNS3_PHY_LINK_SPEED_100M_HD_BIT;
+		break;
+	case ETH_LINK_SPEED_1G:
+		speed_bit = HNS3_PHY_LINK_SPEED_1000M_BIT;
+		break;
+	default:
+		speed_bit = 0;
+		break;
+	}
+
+	return speed_bit;
+}
+
+static uint32_t
+hns3_convert_link_speeds2bitmap_fiber(uint32_t link_speeds)
+{
+	uint32_t speed_bit;
+
+	switch (link_speeds & ~ETH_LINK_SPEED_FIXED) {
+	case ETH_LINK_SPEED_1G:
+		speed_bit = HNS3_FIBER_LINK_SPEED_1G_BIT;
+		break;
+	case ETH_LINK_SPEED_10G:
+		speed_bit = HNS3_FIBER_LINK_SPEED_10G_BIT;
+		break;
+	case ETH_LINK_SPEED_25G:
+		speed_bit = HNS3_FIBER_LINK_SPEED_25G_BIT;
+		break;
+	case ETH_LINK_SPEED_40G:
+		speed_bit = HNS3_FIBER_LINK_SPEED_40G_BIT;
+		break;
+	case ETH_LINK_SPEED_50G:
+		speed_bit = HNS3_FIBER_LINK_SPEED_50G_BIT;
+		break;
+	case ETH_LINK_SPEED_100G:
+		speed_bit = HNS3_FIBER_LINK_SPEED_100G_BIT;
+		break;
+	case ETH_LINK_SPEED_200G:
+		speed_bit = HNS3_FIBER_LINK_SPEED_200G_BIT;
+		break;
+	default:
+		speed_bit = 0;
+		break;
+	}
+
+	return speed_bit;
+}
+
+static int
+hns3_check_port_speed(struct hns3_hw *hw, uint32_t link_speeds)
+{
+	struct hns3_mac *mac = &hw->mac;
+	uint32_t supported_speed = mac->supported_speed;
+	uint32_t speed_bit = 0;
+
+	if (mac->media_type == HNS3_MEDIA_TYPE_COPPER)
+		speed_bit = hns3_convert_link_speeds2bitmap_copper(link_speeds);
+	else if (mac->media_type == HNS3_MEDIA_TYPE_FIBER)
+		speed_bit = hns3_convert_link_speeds2bitmap_fiber(link_speeds);
+
+	if (!(speed_bit & supported_speed)) {
+		hns3_err(hw, "link_speeds(0x%x) exceeds the supported speed capability or is incorrect.",
+			 link_speeds);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static inline uint32_t
+hns3_get_link_speed(uint32_t link_speeds)
+{
+	uint32_t speed = ETH_SPEED_NUM_NONE;
+
+	if (link_speeds & ETH_LINK_SPEED_10M ||
+	    link_speeds & ETH_LINK_SPEED_10M_HD)
+		speed = ETH_SPEED_NUM_10M;
+	if (link_speeds & ETH_LINK_SPEED_100M ||
+	    link_speeds & ETH_LINK_SPEED_100M_HD)
+		speed = ETH_SPEED_NUM_100M;
+	if (link_speeds & ETH_LINK_SPEED_1G)
+		speed = ETH_SPEED_NUM_1G;
+	if (link_speeds & ETH_LINK_SPEED_10G)
+		speed = ETH_SPEED_NUM_10G;
+	if (link_speeds & ETH_LINK_SPEED_25G)
+		speed = ETH_SPEED_NUM_25G;
+	if (link_speeds & ETH_LINK_SPEED_40G)
+		speed = ETH_SPEED_NUM_40G;
+	if (link_speeds & ETH_LINK_SPEED_50G)
+		speed = ETH_SPEED_NUM_50G;
+	if (link_speeds & ETH_LINK_SPEED_100G)
+		speed = ETH_SPEED_NUM_100G;
+	if (link_speeds & ETH_LINK_SPEED_200G)
+		speed = ETH_SPEED_NUM_200G;
+
+	return speed;
+}
+
+static uint8_t
+hns3_get_link_duplex(uint32_t link_speeds)
+{
+	if ((link_speeds & ETH_LINK_SPEED_10M_HD) ||
+	    (link_speeds & ETH_LINK_SPEED_100M_HD))
+		return ETH_LINK_HALF_DUPLEX;
+	else
+		return ETH_LINK_FULL_DUPLEX;
+}
+
+static int
+hns3_set_copper_port_link_speed(struct hns3_hw *hw,
+				struct hns3_set_link_speed_cfg *cfg)
+{
+	struct hns3_cmd_desc desc[HNS3_PHY_PARAM_CFG_BD_NUM];
+	struct hns3_phy_params_bd0_cmd *req;
+	uint16_t i;
+
+	for (i = 0; i < HNS3_PHY_PARAM_CFG_BD_NUM - 1; i++) {
+		hns3_cmd_setup_basic_desc(&desc[i], HNS3_OPC_PHY_PARAM_CFG,
+					  false);
+		desc[i].flag |= rte_cpu_to_le_16(HNS3_CMD_FLAG_NEXT);
+	}
+	hns3_cmd_setup_basic_desc(&desc[i], HNS3_OPC_PHY_PARAM_CFG, false);
+	req = (struct hns3_phy_params_bd0_cmd *)desc[0].data;
+	req->autoneg = cfg->autoneg;
+
+	/*
+	 * The full speed capability is used to negotiate when
+	 * auto-negotiation is enabled.
+	 */
+	if (cfg->autoneg) {
+		req->advertising = HNS3_PHY_LINK_SPEED_10M_BIT |
+				    HNS3_PHY_LINK_SPEED_10M_HD_BIT |
+				    HNS3_PHY_LINK_SPEED_100M_BIT |
+				    HNS3_PHY_LINK_SPEED_100M_HD_BIT |
+				    HNS3_PHY_LINK_SPEED_1000M_BIT;
+	} else {
+		req->speed = cfg->speed;
+		req->duplex = cfg->duplex;
+	}
+
+	return hns3_cmd_send(hw, desc, HNS3_PHY_PARAM_CFG_BD_NUM);
+}
+
+static int
+hns3_set_autoneg(struct hns3_hw *hw, bool enable)
+{
+	struct hns3_config_auto_neg_cmd *req;
+	struct hns3_cmd_desc desc;
+	uint32_t flag = 0;
+	int ret;
+
+	hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_CONFIG_AN_MODE, false);
+
+	req = (struct hns3_config_auto_neg_cmd *)desc.data;
+	if (enable)
+		hns3_set_bit(flag, HNS3_MAC_CFG_AN_EN_B, 1);
+	req->cfg_an_cmd_flag = rte_cpu_to_le_32(flag);
+
+	ret = hns3_cmd_send(hw, &desc, 1);
+	if (ret)
+		hns3_err(hw, "autoneg set cmd failed, ret = %d.", ret);
+
+	return ret;
+}
+
+static int
+hns3_set_fiber_port_link_speed(struct hns3_hw *hw,
+			       struct hns3_set_link_speed_cfg *cfg)
+{
+	int ret;
+
+	if (hw->mac.support_autoneg) {
+		ret = hns3_set_autoneg(hw, cfg->autoneg);
+		if (ret) {
+			hns3_err(hw, "failed to configure auto-negotiation.");
+			return ret;
+		}
+
+		/*
+		 * To enable auto-negotiation, we only need to open the switch
+		 * of auto-negotiation, then firmware sets all speed
+		 * capabilities.
+		 */
+		if (cfg->autoneg)
+			return 0;
+	}
+
+	/*
+	 * Some hardware doesn't support auto-negotiation, but users may not
+	 * configure link_speeds (default 0), which means auto-negotiation.
+	 * In this case, it should return success.
+	 */
+	if (cfg->autoneg)
+		return 0;
+
+	return hns3_cfg_mac_speed_dup(hw, cfg->speed, cfg->duplex);
+}
+
+static int
+hns3_set_port_link_speed(struct hns3_hw *hw,
+			 struct hns3_set_link_speed_cfg *cfg)
+{
+	int ret;
+
+	if (hw->mac.media_type == HNS3_MEDIA_TYPE_COPPER) {
+#if defined(RTE_HNS3_ONLY_1630_FPGA)
+		struct hns3_pf *pf = HNS3_DEV_HW_TO_PF(hw);
+		if (pf->is_tmp_phy)
+			return 0;
+#endif
+
+		ret = hns3_set_copper_port_link_speed(hw, cfg);
+		if (ret) {
+			hns3_err(hw, "failed to set copper port link speed,"
+				 "ret = %d.", ret);
+			return ret;
+		}
+	} else if (hw->mac.media_type == HNS3_MEDIA_TYPE_FIBER) {
+		ret = hns3_set_fiber_port_link_speed(hw, cfg);
+		if (ret) {
+			hns3_err(hw, "failed to set fiber port link speed,"
+				 "ret = %d.", ret);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
+static int
+hns3_apply_link_speed(struct hns3_hw *hw)
+{
+	struct rte_eth_conf *conf = &hw->data->dev_conf;
+	struct hns3_set_link_speed_cfg cfg;
+
+	memset(&cfg, 0, sizeof(struct hns3_set_link_speed_cfg));
+	cfg.autoneg = (conf->link_speeds == ETH_LINK_SPEED_AUTONEG) ?
+			ETH_LINK_AUTONEG : ETH_LINK_FIXED;
+	if (cfg.autoneg != ETH_LINK_AUTONEG) {
+		cfg.speed = hns3_get_link_speed(conf->link_speeds);
+		cfg.duplex = hns3_get_link_duplex(conf->link_speeds);
+	}
+
+	return hns3_set_port_link_speed(hw, &cfg);
 }
 
 static int
@@ -4730,6 +5572,18 @@ hns3_do_start(struct hns3_adapter *hns, bool reset_queue)
 	if (ret)
 		return ret;
 
+	/*
+	 * The hns3_dcb_cfg_update may configure TM module, so
+	 * hns3_tm_conf_update must called later.
+	 */
+	ret = hns3_tm_conf_update(hw);
+	if (ret) {
+		PMD_INIT_LOG(ERR, "failed to update tm conf, ret = %d.", ret);
+		return ret;
+	}
+
+	hns3_enable_rxd_adv_layout(hw);
+
 	ret = hns3_init_queues(hns, reset_queue);
 	if (ret) {
 		PMD_INIT_LOG(ERR, "failed to init queues, ret = %d.", ret);
@@ -4741,9 +5595,15 @@ hns3_do_start(struct hns3_adapter *hns, bool reset_queue)
 		PMD_INIT_LOG(ERR, "failed to enable MAC, ret = %d", ret);
 		goto err_config_mac_mode;
 	}
+
+	ret = hns3_apply_link_speed(hw);
+	if (ret)
+		goto err_config_mac_mode;
+
 	return 0;
 
 err_config_mac_mode:
+	(void)hns3_cfg_mac_mode(hw, false);
 	hns3_dev_release_mbufs(hns);
 	/*
 	 * Here is exception handling, hns3_reset_all_tqps will have the
@@ -4761,33 +5621,34 @@ hns3_map_rx_interrupt(struct rte_eth_dev *dev)
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
 	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	uint8_t base = RTE_INTR_VEC_ZERO_OFFSET;
-	uint8_t vec = RTE_INTR_VEC_ZERO_OFFSET;
+	uint16_t base = RTE_INTR_VEC_ZERO_OFFSET;
+	uint16_t vec = RTE_INTR_VEC_ZERO_OFFSET;
 	uint32_t intr_vector;
 	uint16_t q_id;
 	int ret;
 
-	if (dev->data->dev_conf.intr_conf.rxq == 0)
+	/*
+	 * hns3 needs a separate interrupt to be used as event interrupt which
+	 * could not be shared with task queue pair, so KERNEL drivers need
+	 * support multiple interrupt vectors.
+	 */
+	if (dev->data->dev_conf.intr_conf.rxq == 0 ||
+	    !rte_intr_cap_multiple(intr_handle))
 		return 0;
 
-	/* disable uio/vfio intr/eventfd mapping */
 	rte_intr_disable(intr_handle);
+	intr_vector = hw->used_rx_queues;
+	/* creates event fd for each intr vector when MSIX is used */
+	if (rte_intr_efd_enable(intr_handle, intr_vector))
+		return -EINVAL;
 
-	/* check and configure queue intr-vector mapping */
-	if (rte_intr_cap_multiple(intr_handle) ||
-	    !RTE_ETH_DEV_SRIOV(dev).active) {
-		intr_vector = hw->used_rx_queues;
-		/* creates event fd for each intr vector when MSIX is used */
-		if (rte_intr_efd_enable(intr_handle, intr_vector))
-			return -EINVAL;
-	}
-	if (rte_intr_dp_is_en(intr_handle) && !intr_handle->intr_vec) {
+	if (intr_handle->intr_vec == NULL) {
 		intr_handle->intr_vec =
 			rte_zmalloc("intr_vec",
 				    hw->used_rx_queues * sizeof(int), 0);
 		if (intr_handle->intr_vec == NULL) {
-			hns3_err(hw, "Failed to allocate %u rx_queues"
-				     " intr_vec", hw->used_rx_queues);
+			hns3_err(hw, "failed to allocate %u rx_queues intr_vec",
+					hw->used_rx_queues);
 			ret = -ENOMEM;
 			goto alloc_intr_vec_error;
 		}
@@ -4797,28 +5658,26 @@ hns3_map_rx_interrupt(struct rte_eth_dev *dev)
 		vec = RTE_INTR_VEC_RXTX_OFFSET;
 		base = RTE_INTR_VEC_RXTX_OFFSET;
 	}
-	if (rte_intr_dp_is_en(intr_handle)) {
-		for (q_id = 0; q_id < hw->used_rx_queues; q_id++) {
-			ret = hns3_bind_ring_with_vector(hw, vec, true,
-							 HNS3_RING_TYPE_RX,
-							 q_id);
-			if (ret)
-				goto bind_vector_error;
-			intr_handle->intr_vec[q_id] = vec;
-			if (vec < base + intr_handle->nb_efd - 1)
-				vec++;
-		}
+
+	for (q_id = 0; q_id < hw->used_rx_queues; q_id++) {
+		ret = hns3_bind_ring_with_vector(hw, vec, true,
+						 HNS3_RING_TYPE_RX, q_id);
+		if (ret)
+			goto bind_vector_error;
+		intr_handle->intr_vec[q_id] = vec;
+		/*
+		 * If there are not enough efds (e.g. not enough interrupt),
+		 * remaining queues will be bond to the last interrupt.
+		 */
+		if (vec < base + intr_handle->nb_efd - 1)
+			vec++;
 	}
 	rte_intr_enable(intr_handle);
 	return 0;
 
 bind_vector_error:
-	rte_intr_efd_disable(intr_handle);
-	if (intr_handle->intr_vec) {
-		free(intr_handle->intr_vec);
-		intr_handle->intr_vec = NULL;
-	}
-	return ret;
+	rte_free(intr_handle->intr_vec);
+	intr_handle->intr_vec = NULL;
 alloc_intr_vec_error:
 	rte_intr_efd_disable(intr_handle);
 	return ret;
@@ -4863,7 +5722,7 @@ hns3_dev_start(struct rte_eth_dev *dev)
 	int ret;
 
 	PMD_INIT_FUNC_TRACE();
-	if (rte_atomic16_read(&hw->reset.resetting))
+	if (__atomic_load_n(&hw->reset.resetting, __ATOMIC_RELAXED))
 		return -EBUSY;
 
 	rte_spinlock_lock(&hw->lock);
@@ -4876,11 +5735,8 @@ hns3_dev_start(struct rte_eth_dev *dev)
 		return ret;
 	}
 	ret = hns3_map_rx_interrupt(dev);
-	if (ret) {
-		hw->adapter_state = HNS3_NIC_CONFIGURED;
-		rte_spinlock_unlock(&hw->lock);
-		return ret;
-	}
+	if (ret)
+		goto map_rx_inter_err;
 
 	/*
 	 * There are three register used to control the status of a TQP
@@ -4894,19 +5750,12 @@ hns3_dev_start(struct rte_eth_dev *dev)
 	 * status of queue in the dpdk framework.
 	 */
 	ret = hns3_start_all_txqs(dev);
-	if (ret) {
-		hw->adapter_state = HNS3_NIC_CONFIGURED;
-		rte_spinlock_unlock(&hw->lock);
-		return ret;
-	}
+	if (ret)
+		goto map_rx_inter_err;
 
 	ret = hns3_start_all_rxqs(dev);
-	if (ret) {
-		hns3_stop_all_txqs(dev);
-		hw->adapter_state = HNS3_NIC_CONFIGURED;
-		rte_spinlock_unlock(&hw->lock);
-		return ret;
-	}
+	if (ret)
+		goto start_all_rxqs_fail;
 
 	hw->adapter_state = HNS3_NIC_STARTED;
 	rte_spinlock_unlock(&hw->lock);
@@ -4914,7 +5763,6 @@ hns3_dev_start(struct rte_eth_dev *dev)
 	hns3_rx_scattered_calc(dev);
 	hns3_set_rxtx_function(dev);
 	hns3_mp_req_start_rxtx(dev);
-	rte_eal_alarm_set(HNS3_SERVICE_INTERVAL, hns3_service_handler, dev);
 
 	hns3_restore_filter(dev);
 
@@ -4927,8 +5775,24 @@ hns3_dev_start(struct rte_eth_dev *dev)
 	 */
 	hns3_start_tqps(hw);
 
+	hns3_tm_dev_start_proc(hw);
+
+	if (dev->data->dev_conf.intr_conf.lsc != 0)
+		hns3_dev_link_update(dev, 0);
+	rte_eal_alarm_set(HNS3_SERVICE_INTERVAL, hns3_service_handler, dev);
+
 	hns3_info(hw, "hns3 dev start successful!");
+
 	return 0;
+
+start_all_rxqs_fail:
+	hns3_stop_all_txqs(dev);
+map_rx_inter_err:
+	(void)hns3_do_stop(hns);
+	hw->adapter_state = HNS3_NIC_CONFIGURED;
+	rte_spinlock_unlock(&hw->lock);
+
+	return ret;
 }
 
 static int
@@ -4937,12 +5801,23 @@ hns3_do_stop(struct hns3_adapter *hns)
 	struct hns3_hw *hw = &hns->hw;
 	int ret;
 
+	/*
+	 * The "hns3_do_stop" function will also be called by .stop_service to
+	 * prepare reset. At the time of global or IMP reset, the command cannot
+	 * be sent to stop the tx/rx queues. The mbuf in Tx/Rx queues may be
+	 * accessed during the reset process. So the mbuf can not be released
+	 * during reset and is required to be released after the reset is
+	 * completed.
+	 */
+	if (__atomic_load_n(&hw->reset.resetting,  __ATOMIC_RELAXED) == 0)
+		hns3_dev_release_mbufs(hns);
+
 	ret = hns3_cfg_mac_mode(hw, false);
 	if (ret)
 		return ret;
 	hw->mac.link_status = ETH_LINK_DOWN;
 
-	if (rte_atomic16_read(&hw->reset.disable_cmd) == 0) {
+	if (__atomic_load_n(&hw->reset.disable_cmd, __ATOMIC_RELAXED) == 0) {
 		hns3_configure_all_mac_addr(hns, true);
 		ret = hns3_reset_all_tqps(hns);
 		if (ret) {
@@ -5009,15 +5884,17 @@ hns3_dev_stop(struct rte_eth_dev *dev)
 	rte_delay_ms(hw->tqps_num);
 
 	rte_spinlock_lock(&hw->lock);
-	if (rte_atomic16_read(&hw->reset.resetting) == 0) {
+	if (__atomic_load_n(&hw->reset.resetting, __ATOMIC_RELAXED) == 0) {
+		hns3_tm_dev_stop_proc(hw);
+		hns3_config_mac_tnl_int(hw, false);
 		hns3_stop_tqps(hw);
 		hns3_do_stop(hns);
 		hns3_unmap_rx_interrupt(dev);
-		hns3_dev_release_mbufs(hns);
 		hw->adapter_state = HNS3_NIC_CONFIGURED;
 	}
 	hns3_rx_scattered_reset(dev);
 	rte_eal_alarm_cancel(hns3_service_handler, dev);
+	hns3_stop_report_lse(dev);
 	rte_spinlock_unlock(&hw->lock);
 
 	return 0;
@@ -5057,16 +5934,102 @@ hns3_dev_close(struct rte_eth_dev *eth_dev)
 	return ret;
 }
 
+static void
+hns3_get_autoneg_rxtx_pause_copper(struct hns3_hw *hw, bool *rx_pause,
+				   bool *tx_pause)
+{
+	struct hns3_mac *mac = &hw->mac;
+	uint32_t advertising = mac->advertising;
+	uint32_t lp_advertising = mac->lp_advertising;
+	*rx_pause = false;
+	*tx_pause = false;
+
+	if (advertising & lp_advertising & HNS3_PHY_LINK_MODE_PAUSE_BIT) {
+		*rx_pause = true;
+		*tx_pause = true;
+	} else if (advertising & lp_advertising &
+		   HNS3_PHY_LINK_MODE_ASYM_PAUSE_BIT) {
+		if (advertising & HNS3_PHY_LINK_MODE_PAUSE_BIT)
+			*rx_pause = true;
+		else if (lp_advertising & HNS3_PHY_LINK_MODE_PAUSE_BIT)
+			*tx_pause = true;
+	}
+}
+
+static enum hns3_fc_mode
+hns3_get_autoneg_fc_mode(struct hns3_hw *hw)
+{
+	enum hns3_fc_mode current_mode;
+	bool rx_pause = false;
+	bool tx_pause = false;
+
+	switch (hw->mac.media_type) {
+	case HNS3_MEDIA_TYPE_COPPER:
+		hns3_get_autoneg_rxtx_pause_copper(hw, &rx_pause, &tx_pause);
+		break;
+
+	/*
+	 * Flow control auto-negotiation is not supported for fiber and
+	 * backpalne media type.
+	 */
+	case HNS3_MEDIA_TYPE_FIBER:
+	case HNS3_MEDIA_TYPE_BACKPLANE:
+		hns3_err(hw, "autoneg FC mode can't be obtained, but flow control auto-negotiation is enabled.");
+		current_mode = hw->requested_fc_mode;
+		goto out;
+	default:
+		hns3_err(hw, "autoneg FC mode can't be obtained for unknown media type(%u).",
+			 hw->mac.media_type);
+		current_mode = HNS3_FC_NONE;
+		goto out;
+	}
+
+	if (rx_pause && tx_pause)
+		current_mode = HNS3_FC_FULL;
+	else if (rx_pause)
+		current_mode = HNS3_FC_RX_PAUSE;
+	else if (tx_pause)
+		current_mode = HNS3_FC_TX_PAUSE;
+	else
+		current_mode = HNS3_FC_NONE;
+
+out:
+	return current_mode;
+}
+
+static enum hns3_fc_mode
+hns3_get_current_fc_mode(struct rte_eth_dev *dev)
+{
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct hns3_pf *pf = HNS3_DEV_PRIVATE_TO_PF(dev->data->dev_private);
+	struct hns3_mac *mac = &hw->mac;
+
+	/*
+	 * When the flow control mode is obtained, the device may not complete
+	 * auto-negotiation. It is necessary to wait for link establishment.
+	 */
+	(void)hns3_dev_link_update(dev, 1);
+
+	/*
+	 * If the link auto-negotiation of the nic is disabled, or the flow
+	 * control auto-negotiation is not supported, the forced flow control
+	 * mode is used.
+	 */
+	if (mac->link_autoneg == 0 || !pf->support_fc_autoneg)
+		return hw->requested_fc_mode;
+
+	return hns3_get_autoneg_fc_mode(hw);
+}
+
 static int
 hns3_flow_ctrl_get(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 {
 	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct hns3_pf *pf = HNS3_DEV_PRIVATE_TO_PF(dev->data->dev_private);
+	enum hns3_fc_mode current_mode;
 
-	fc_conf->pause_time = pf->pause_time;
-
-	/* return fc current mode */
-	switch (hw->current_mode) {
+	current_mode = hns3_get_current_fc_mode(dev);
+	switch (current_mode) {
 	case HNS3_FC_FULL:
 		fc_conf->mode = RTE_FC_FULL;
 		break;
@@ -5082,6 +6045,9 @@ hns3_flow_ctrl_get(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 		break;
 	}
 
+	fc_conf->pause_time = pf->pause_time;
+	fc_conf->autoneg = pf->support_fc_autoneg ? hw->mac.link_autoneg : 0;
+
 	return 0;
 }
 
@@ -5090,19 +6056,19 @@ hns3_get_fc_mode(struct hns3_hw *hw, enum rte_eth_fc_mode mode)
 {
 	switch (mode) {
 	case RTE_FC_NONE:
-		hw->requested_mode = HNS3_FC_NONE;
+		hw->requested_fc_mode = HNS3_FC_NONE;
 		break;
 	case RTE_FC_RX_PAUSE:
-		hw->requested_mode = HNS3_FC_RX_PAUSE;
+		hw->requested_fc_mode = HNS3_FC_RX_PAUSE;
 		break;
 	case RTE_FC_TX_PAUSE:
-		hw->requested_mode = HNS3_FC_TX_PAUSE;
+		hw->requested_fc_mode = HNS3_FC_TX_PAUSE;
 		break;
 	case RTE_FC_FULL:
-		hw->requested_mode = HNS3_FC_FULL;
+		hw->requested_fc_mode = HNS3_FC_FULL;
 		break;
 	default:
-		hw->requested_mode = HNS3_FC_NONE;
+		hw->requested_fc_mode = HNS3_FC_NONE;
 		hns3_warn(hw, "fc_mode(%u) exceeds member scope and is "
 			  "configured to RTE_FC_NONE", mode);
 		break;
@@ -5110,10 +6076,44 @@ hns3_get_fc_mode(struct hns3_hw *hw, enum rte_eth_fc_mode mode)
 }
 
 static int
+hns3_check_fc_autoneg_valid(struct hns3_hw *hw, uint8_t autoneg)
+{
+	struct hns3_pf *pf = HNS3_DEV_HW_TO_PF(hw);
+
+	if (!pf->support_fc_autoneg) {
+		if (autoneg != 0) {
+			hns3_err(hw, "unsupported fc auto-negotiation setting.");
+			return -EOPNOTSUPP;
+		}
+
+		/*
+		 * Flow control auto-negotiation of the NIC is not supported,
+		 * but other auto-negotiation features may be supported.
+		 */
+		if (autoneg != hw->mac.link_autoneg) {
+			hns3_err(hw, "please use 'link_speeds' in struct rte_eth_conf to disable autoneg!");
+			return -EOPNOTSUPP;
+		}
+
+		return 0;
+	}
+
+	/*
+	 * If flow control auto-negotiation of the NIC is supported, all
+	 * auto-negotiation features are supported.
+	 */
+	if (autoneg != hw->mac.link_autoneg) {
+		hns3_err(hw, "please use 'link_speeds' in struct rte_eth_conf to change autoneg!");
+		return -EOPNOTSUPP;
+	}
+
+	return 0;
+}
+
+static int
 hns3_flow_ctrl_set(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 {
 	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct hns3_pf *pf = HNS3_DEV_PRIVATE_TO_PF(dev->data->dev_private);
 	int ret;
 
 	if (fc_conf->high_water || fc_conf->low_water ||
@@ -5125,10 +6125,11 @@ hns3_flow_ctrl_set(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 			 fc_conf->send_xon, fc_conf->mac_ctrl_frame_fwd);
 		return -EINVAL;
 	}
-	if (fc_conf->autoneg) {
-		hns3_err(hw, "Unsupported fc auto-negotiation setting.");
-		return -EINVAL;
-	}
+
+	ret = hns3_check_fc_autoneg_valid(hw, fc_conf->autoneg);
+	if (ret)
+		return ret;
+
 	if (!fc_conf->pause_time) {
 		hns3_err(hw, "Invalid pause time %u setting.",
 			 fc_conf->pause_time);
@@ -5142,10 +6143,12 @@ hns3_flow_ctrl_set(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 		return -EOPNOTSUPP;
 	}
 
+	if (hw->num_tc > 1) {
+		hns3_err(hw, "in multi-TC scenarios, MAC pause is not supported.");
+		return -EOPNOTSUPP;
+	}
+
 	hns3_get_fc_mode(hw, fc_conf->mode);
-	if (hw->requested_mode == hw->current_mode &&
-	    pf->pause_time == fc_conf->pause_time)
-		return 0;
 
 	rte_spinlock_lock(&hw->lock);
 	ret = hns3_fc_enable(dev, fc_conf);
@@ -5159,8 +6162,6 @@ hns3_priority_flow_ctrl_set(struct rte_eth_dev *dev,
 			    struct rte_eth_pfc_conf *pfc_conf)
 {
 	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct hns3_pf *pf = HNS3_DEV_PRIVATE_TO_PF(dev->data->dev_private);
-	uint8_t priority;
 	int ret;
 
 	if (!hns3_dev_dcb_supported(hw)) {
@@ -5195,12 +6196,7 @@ hns3_priority_flow_ctrl_set(struct rte_eth_dev *dev,
 		return -EOPNOTSUPP;
 	}
 
-	priority = pfc_conf->priority;
 	hns3_get_fc_mode(hw, pfc_conf->fc.mode);
-	if (hw->dcb_info.pfc_en & BIT(priority) &&
-	    hw->requested_mode == hw->current_mode &&
-	    pfc_conf->fc.pause_time == pf->pause_time)
-		return 0;
 
 	rte_spinlock_lock(&hw->lock);
 	ret = hns3_dcb_pfc_enable(dev, pfc_conf);
@@ -5315,12 +6311,15 @@ hns3_is_reset_pending(struct hns3_adapter *hns)
 
 	hns3_check_event_cause(hns, NULL);
 	reset = hns3_get_reset_level(hns, &hw->reset.pending);
-	if (hw->reset.level != HNS3_NONE_RESET && hw->reset.level < reset) {
+
+	if (reset != HNS3_NONE_RESET && hw->reset.level != HNS3_NONE_RESET &&
+	    hw->reset.level < reset) {
 		hns3_warn(hw, "High level reset %d is pending", reset);
 		return true;
 	}
 	reset = hns3_get_reset_level(hns, &hw->reset.request);
-	if (hw->reset.level != HNS3_NONE_RESET && hw->reset.level < reset) {
+	if (reset != HNS3_NONE_RESET && hw->reset.level != HNS3_NONE_RESET &&
+	    hw->reset.level < reset) {
 		hns3_warn(hw, "High level reset %d is request", reset);
 		return true;
 	}
@@ -5452,14 +6451,12 @@ hns3_record_imp_error(struct hns3_adapter *hns)
 	reg_val = hns3_read_dev(hw, HNS3_VECTOR0_OTER_EN_REG);
 	if (hns3_get_bit(reg_val, HNS3_VECTOR0_IMP_RD_POISON_B)) {
 		hns3_warn(hw, "Detected IMP RD poison!");
-		hns3_error_int_stats_add(hns, "IMP_RD_POISON_INT_STS");
 		hns3_set_bit(reg_val, HNS3_VECTOR0_IMP_RD_POISON_B, 0);
 		hns3_write_dev(hw, HNS3_VECTOR0_OTER_EN_REG, reg_val);
 	}
 
 	if (hns3_get_bit(reg_val, HNS3_VECTOR0_IMP_CMDQ_ERR_B)) {
 		hns3_warn(hw, "Detected IMP CMDQ error!");
-		hns3_error_int_stats_add(hns, "CMDQ_MEM_ECC_INT_STS");
 		hns3_set_bit(reg_val, HNS3_VECTOR0_IMP_CMDQ_ERR_B, 0);
 		hns3_write_dev(hw, HNS3_VECTOR0_OTER_EN_REG, reg_val);
 	}
@@ -5484,7 +6481,7 @@ hns3_prepare_reset(struct hns3_adapter *hns)
 		 * any mailbox handling or command to firmware is only valid
 		 * after hns3_cmd_init is called.
 		 */
-		rte_atomic16_set(&hw->reset.disable_cmd, 1);
+		__atomic_store_n(&hw->reset.disable_cmd, 1, __ATOMIC_RELAXED);
 		hw->reset.stats.request_cnt++;
 		break;
 	case HNS3_IMP_RESET:
@@ -5518,9 +6515,11 @@ hns3_stop_service(struct hns3_adapter *hns)
 	struct rte_eth_dev *eth_dev;
 
 	eth_dev = &rte_eth_devices[hw->data->port_id];
-	if (hw->adapter_state == HNS3_NIC_STARTED)
-		rte_eal_alarm_cancel(hns3_service_handler, eth_dev);
 	hw->mac.link_status = ETH_LINK_DOWN;
+	if (hw->adapter_state == HNS3_NIC_STARTED) {
+		rte_eal_alarm_cancel(hns3_service_handler, eth_dev);
+		hns3_update_linkstatus_and_event(hw, false);
+	}
 
 	hns3_set_rxtx_function(eth_dev);
 	rte_wmb();
@@ -5542,7 +6541,7 @@ hns3_stop_service(struct hns3_adapter *hns)
 	 * from table space. Hence, for function reset software intervention is
 	 * required to delete the entries
 	 */
-	if (rte_atomic16_read(&hw->reset.disable_cmd) == 0)
+	if (__atomic_load_n(&hw->reset.disable_cmd, __ATOMIC_RELAXED) == 0)
 		hns3_configure_all_mc_mac_addr(hns, true);
 	rte_spinlock_unlock(&hw->lock);
 
@@ -5562,7 +6561,15 @@ hns3_start_service(struct hns3_adapter *hns)
 	hns3_set_rxtx_function(eth_dev);
 	hns3_mp_req_start_rxtx(eth_dev);
 	if (hw->adapter_state == HNS3_NIC_STARTED) {
-		hns3_service_handler(eth_dev);
+		/*
+		 * This API parent function already hold the hns3_hw.lock, the
+		 * hns3_service_handler may report lse, in bonding application
+		 * it will call driver's ops which may acquire the hns3_hw.lock
+		 * again, thus lead to deadlock.
+		 * We defer calls hns3_service_handler to avoid the deadlock.
+		 */
+		rte_eal_alarm_set(HNS3_SERVICE_QUICK_INTERVAL,
+				  hns3_service_handler, eth_dev);
 
 		/* Enable interrupt of all rx queues before enabling queues */
 		hns3_dev_all_rx_queue_intr_enable(hw, true);
@@ -5611,6 +6618,10 @@ hns3_restore_conf(struct hns3_adapter *hns)
 	if (ret)
 		goto err_promisc;
 
+	ret = hns3_restore_ptp(hns);
+	if (ret)
+		goto err_promisc;
+
 	ret = hns3_restore_rx_interrupt(hw);
 	if (ret)
 		goto err_promisc;
@@ -5656,8 +6667,10 @@ hns3_reset_service(void *param)
 	 * The interrupt may have been lost. It is necessary to handle
 	 * the interrupt to recover from the error.
 	 */
-	if (rte_atomic16_read(&hns->hw.reset.schedule) == SCHEDULE_DEFERRED) {
-		rte_atomic16_set(&hns->hw.reset.schedule, SCHEDULE_REQUESTED);
+	if (__atomic_load_n(&hw->reset.schedule, __ATOMIC_RELAXED) ==
+			    SCHEDULE_DEFERRED) {
+		__atomic_store_n(&hw->reset.schedule, SCHEDULE_REQUESTED,
+				  __ATOMIC_RELAXED);
 		hns3_err(hw, "Handling interrupts in delayed tasks");
 		hns3_interrupt_handler(&rte_eth_devices[hw->data->port_id]);
 		reset_level = hns3_get_reset_level(hns, &hw->reset.pending);
@@ -5666,7 +6679,7 @@ hns3_reset_service(void *param)
 			hns3_atomic_set_bit(HNS3_IMP_RESET, &hw->reset.pending);
 		}
 	}
-	rte_atomic16_set(&hns->hw.reset.schedule, SCHEDULE_NONE);
+	__atomic_store_n(&hw->reset.schedule, SCHEDULE_NONE, __ATOMIC_RELAXED);
 
 	/*
 	 * Check if there is any ongoing reset in the hardware. This status can
@@ -5788,6 +6801,16 @@ get_current_fec_auto_state(struct hns3_hw *hw, uint8_t *state)
 	struct hns3_cmd_desc desc;
 	int ret;
 
+	/*
+	 * CMD(HNS3_OPC_CONFIG_FEC_MODE) read is not supported
+	 * in device of link speed
+	 * below 10 Gbps.
+	 */
+	if (hw->mac.link_speed < ETH_SPEED_NUM_10G) {
+		*state = 0;
+		return 0;
+	}
+
 	hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_CONFIG_FEC_MODE, true);
 	req = (struct hns3_config_fec_cmd *)desc.data;
 	ret = hns3_cmd_send(hw, &desc, 1);
@@ -5802,11 +6825,9 @@ get_current_fec_auto_state(struct hns3_hw *hw, uint8_t *state)
 }
 
 static int
-hns3_fec_get(struct rte_eth_dev *dev, uint32_t *fec_capa)
+hns3_fec_get_internal(struct hns3_hw *hw, uint32_t *fec_capa)
 {
-#define QUERY_ACTIVE_SPEED	1
-	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct hns3_sfp_speed_cmd *resp;
+	struct hns3_sfp_info_cmd *resp;
 	uint32_t tmp_fec_capa;
 	uint8_t auto_state;
 	struct hns3_cmd_desc desc;
@@ -5828,9 +6849,9 @@ hns3_fec_get(struct rte_eth_dev *dev, uint32_t *fec_capa)
 		}
 	}
 
-	hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_SFP_GET_SPEED, true);
-	resp = (struct hns3_sfp_speed_cmd *)desc.data;
-	resp->query_type = QUERY_ACTIVE_SPEED;
+	hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_GET_SFP_INFO, true);
+	resp = (struct hns3_sfp_info_cmd *)desc.data;
+	resp->query_type = HNS3_ACTIVE_QUERY;
 
 	ret = hns3_cmd_send(hw, &desc, 1);
 	if (ret == -EOPNOTSUPP) {
@@ -5863,6 +6884,14 @@ hns3_fec_get(struct rte_eth_dev *dev, uint32_t *fec_capa)
 
 	*fec_capa = tmp_fec_capa;
 	return 0;
+}
+
+static int
+hns3_fec_get(struct rte_eth_dev *dev, uint32_t *fec_capa)
+{
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+
+	return hns3_fec_get_internal(hw, fec_capa);
 }
 
 static int
@@ -5969,11 +6998,16 @@ hns3_fec_set(struct rte_eth_dev *dev, uint32_t mode)
 		return -EINVAL;
 	}
 
+	rte_spinlock_lock(&hw->lock);
 	ret = hns3_set_fec_hw(hw, mode);
-	if (ret)
+	if (ret) {
+		rte_spinlock_unlock(&hw->lock);
 		return ret;
+	}
 
 	pf->fec_mode = mode;
+	rte_spinlock_unlock(&hw->lock);
+
 	return 0;
 }
 
@@ -5994,18 +7028,267 @@ hns3_restore_fec(struct hns3_hw *hw)
 }
 
 static int
-hns3_query_dev_fec_info(struct rte_eth_dev *dev)
+hns3_query_dev_fec_info(struct hns3_hw *hw)
 {
-	struct hns3_adapter *hns = dev->data->dev_private;
-	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(hns);
-	struct hns3_pf *pf = &hns->pf;
+	struct hns3_adapter *hns = HNS3_DEV_HW_TO_ADAPTER(hw);
+	struct hns3_pf *pf = HNS3_DEV_PRIVATE_TO_PF(hns);
 	int ret;
 
-	ret = hns3_fec_get(dev, &pf->fec_mode);
+	ret = hns3_fec_get_internal(hw, &pf->fec_mode);
 	if (ret)
 		hns3_err(hw, "query device FEC info failed, ret = %d", ret);
 
 	return ret;
+}
+
+static bool
+hns3_optical_module_existed(struct hns3_hw *hw)
+{
+	struct hns3_cmd_desc desc;
+	bool existed;
+	int ret;
+
+	hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_GET_SFP_EXIST, true);
+	ret = hns3_cmd_send(hw, &desc, 1);
+	if (ret) {
+		hns3_err(hw,
+			 "fail to get optical module exist state, ret = %d.\n",
+			 ret);
+		return false;
+	}
+	existed = !!desc.data[0];
+
+	return existed;
+}
+
+static int
+hns3_get_module_eeprom_data(struct hns3_hw *hw, uint32_t offset,
+				uint32_t len, uint8_t *data)
+{
+#define HNS3_SFP_INFO_CMD_NUM 6
+#define HNS3_SFP_INFO_MAX_LEN \
+	(HNS3_SFP_INFO_BD0_LEN + \
+	(HNS3_SFP_INFO_CMD_NUM - 1) * HNS3_SFP_INFO_BDX_LEN)
+	struct hns3_cmd_desc desc[HNS3_SFP_INFO_CMD_NUM];
+	struct hns3_sfp_info_bd0_cmd *sfp_info_bd0;
+	uint16_t read_len;
+	uint16_t copy_len;
+	int ret;
+	int i;
+
+	for (i = 0; i < HNS3_SFP_INFO_CMD_NUM; i++) {
+		hns3_cmd_setup_basic_desc(&desc[i], HNS3_OPC_GET_SFP_EEPROM,
+					  true);
+		if (i < HNS3_SFP_INFO_CMD_NUM - 1)
+			desc[i].flag |= rte_cpu_to_le_16(HNS3_CMD_FLAG_NEXT);
+	}
+
+	sfp_info_bd0 = (struct hns3_sfp_info_bd0_cmd *)desc[0].data;
+	sfp_info_bd0->offset = rte_cpu_to_le_16((uint16_t)offset);
+	read_len = RTE_MIN(len, HNS3_SFP_INFO_MAX_LEN);
+	sfp_info_bd0->read_len = rte_cpu_to_le_16((uint16_t)read_len);
+
+	ret = hns3_cmd_send(hw, desc, HNS3_SFP_INFO_CMD_NUM);
+	if (ret) {
+		hns3_err(hw, "fail to get module EEPROM info, ret = %d.\n",
+				ret);
+		return ret;
+	}
+
+	/* The data format in BD0 is different with the others. */
+	copy_len = RTE_MIN(len, HNS3_SFP_INFO_BD0_LEN);
+	memcpy(data, sfp_info_bd0->data, copy_len);
+	read_len = copy_len;
+
+	for (i = 1; i < HNS3_SFP_INFO_CMD_NUM; i++) {
+		if (read_len >= len)
+			break;
+
+		copy_len = RTE_MIN(len - read_len, HNS3_SFP_INFO_BDX_LEN);
+		memcpy(data + read_len, desc[i].data, copy_len);
+		read_len += copy_len;
+	}
+
+	return (int)read_len;
+}
+
+static int
+hns3_get_module_eeprom(struct rte_eth_dev *dev,
+		       struct rte_dev_eeprom_info *info)
+{
+	struct hns3_adapter *hns = dev->data->dev_private;
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(hns);
+	uint32_t offset = info->offset;
+	uint32_t len = info->length;
+	uint8_t *data = info->data;
+	uint32_t read_len = 0;
+
+	if (hw->mac.media_type != HNS3_MEDIA_TYPE_FIBER)
+		return -ENOTSUP;
+
+	if (!hns3_optical_module_existed(hw)) {
+		hns3_err(hw, "fail to read module EEPROM: no module is connected.\n");
+		return -EIO;
+	}
+
+	while (read_len < len) {
+		int ret;
+		ret = hns3_get_module_eeprom_data(hw, offset + read_len,
+						  len - read_len,
+						  data + read_len);
+		if (ret < 0)
+			return -EIO;
+		read_len += ret;
+	}
+
+	return 0;
+}
+
+static int
+hns3_get_module_info(struct rte_eth_dev *dev,
+		     struct rte_eth_dev_module_info *modinfo)
+{
+#define HNS3_SFF8024_ID_SFP		0x03
+#define HNS3_SFF8024_ID_QSFP_8438	0x0c
+#define HNS3_SFF8024_ID_QSFP_8436_8636	0x0d
+#define HNS3_SFF8024_ID_QSFP28_8636	0x11
+#define HNS3_SFF_8636_V1_3		0x03
+	struct hns3_adapter *hns = dev->data->dev_private;
+	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(hns);
+	struct rte_dev_eeprom_info info;
+	struct hns3_sfp_type sfp_type;
+	int ret;
+
+	memset(&sfp_type, 0, sizeof(sfp_type));
+	memset(&info, 0, sizeof(info));
+	info.data = (uint8_t *)&sfp_type;
+	info.length = sizeof(sfp_type);
+	ret = hns3_get_module_eeprom(dev, &info);
+	if (ret)
+		return ret;
+
+	switch (sfp_type.type) {
+	case HNS3_SFF8024_ID_SFP:
+		modinfo->type = RTE_ETH_MODULE_SFF_8472;
+		modinfo->eeprom_len = RTE_ETH_MODULE_SFF_8472_LEN;
+		break;
+	case HNS3_SFF8024_ID_QSFP_8438:
+		modinfo->type = RTE_ETH_MODULE_SFF_8436;
+		modinfo->eeprom_len = RTE_ETH_MODULE_SFF_8436_MAX_LEN;
+		break;
+	case HNS3_SFF8024_ID_QSFP_8436_8636:
+		if (sfp_type.ext_type < HNS3_SFF_8636_V1_3) {
+			modinfo->type = RTE_ETH_MODULE_SFF_8436;
+			modinfo->eeprom_len = RTE_ETH_MODULE_SFF_8436_MAX_LEN;
+		} else {
+			modinfo->type = RTE_ETH_MODULE_SFF_8636;
+			modinfo->eeprom_len = RTE_ETH_MODULE_SFF_8636_MAX_LEN;
+		}
+		break;
+	case HNS3_SFF8024_ID_QSFP28_8636:
+		modinfo->type = RTE_ETH_MODULE_SFF_8636;
+		modinfo->eeprom_len = RTE_ETH_MODULE_SFF_8636_MAX_LEN;
+		break;
+	default:
+		hns3_err(hw, "unknown module, type = %u, extra_type = %u.\n",
+			 sfp_type.type, sfp_type.ext_type);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int
+hns3_parse_io_hint_func(const char *key, const char *value, void *extra_args)
+{
+	uint32_t hint = HNS3_IO_FUNC_HINT_NONE;
+
+	RTE_SET_USED(key);
+
+	if (strcmp(value, "vec") == 0)
+		hint = HNS3_IO_FUNC_HINT_VEC;
+	else if (strcmp(value, "sve") == 0)
+		hint = HNS3_IO_FUNC_HINT_SVE;
+	else if (strcmp(value, "simple") == 0)
+		hint = HNS3_IO_FUNC_HINT_SIMPLE;
+	else if (strcmp(value, "common") == 0)
+		hint = HNS3_IO_FUNC_HINT_COMMON;
+
+	/* If the hint is valid then update output parameters */
+	if (hint != HNS3_IO_FUNC_HINT_NONE)
+		*(uint32_t *)extra_args = hint;
+
+	return 0;
+}
+
+static const char *
+hns3_get_io_hint_func_name(uint32_t hint)
+{
+	switch (hint) {
+	case HNS3_IO_FUNC_HINT_VEC:
+		return "vec";
+	case HNS3_IO_FUNC_HINT_SVE:
+		return "sve";
+	case HNS3_IO_FUNC_HINT_SIMPLE:
+		return "simple";
+	case HNS3_IO_FUNC_HINT_COMMON:
+		return "common";
+	default:
+		return "none";
+	}
+}
+
+static int
+hns3_parse_dev_caps_mask(const char *key, const char *value, void *extra_args)
+{
+	uint64_t val;
+
+	RTE_SET_USED(key);
+
+	val = strtoull(value, NULL, 16);
+	*(uint64_t *)extra_args = val;
+
+	return 0;
+}
+
+void
+hns3_parse_devargs(struct rte_eth_dev *dev)
+{
+	struct hns3_adapter *hns = dev->data->dev_private;
+	uint32_t rx_func_hint = HNS3_IO_FUNC_HINT_NONE;
+	uint32_t tx_func_hint = HNS3_IO_FUNC_HINT_NONE;
+	struct hns3_hw *hw = &hns->hw;
+	uint64_t dev_caps_mask = 0;
+	struct rte_kvargs *kvlist;
+
+	if (dev->device->devargs == NULL)
+		return;
+
+	kvlist = rte_kvargs_parse(dev->device->devargs->args, NULL);
+	if (!kvlist)
+		return;
+
+	(void)rte_kvargs_process(kvlist, HNS3_DEVARG_RX_FUNC_HINT,
+			   &hns3_parse_io_hint_func, &rx_func_hint);
+	(void)rte_kvargs_process(kvlist, HNS3_DEVARG_TX_FUNC_HINT,
+			   &hns3_parse_io_hint_func, &tx_func_hint);
+	(void)rte_kvargs_process(kvlist, HNS3_DEVARG_DEV_CAPS_MASK,
+			   &hns3_parse_dev_caps_mask, &dev_caps_mask);
+	rte_kvargs_free(kvlist);
+
+	if (rx_func_hint != HNS3_IO_FUNC_HINT_NONE)
+		hns3_warn(hw, "parsed %s = %s.", HNS3_DEVARG_RX_FUNC_HINT,
+			  hns3_get_io_hint_func_name(rx_func_hint));
+	hns->rx_func_hint = rx_func_hint;
+	if (tx_func_hint != HNS3_IO_FUNC_HINT_NONE)
+		hns3_warn(hw, "parsed %s = %s.", HNS3_DEVARG_TX_FUNC_HINT,
+			  hns3_get_io_hint_func_name(tx_func_hint));
+	hns->tx_func_hint = tx_func_hint;
+
+	if (dev_caps_mask != 0)
+		hns3_warn(hw, "parsed %s = 0x%" PRIx64 ".",
+			  HNS3_DEVARG_DEV_CAPS_MASK, dev_caps_mask);
+	hns->dev_caps_mask = dev_caps_mask;
 }
 
 static const struct eth_dev_ops hns3_eth_dev_ops = {
@@ -6053,17 +7336,28 @@ static const struct eth_dev_ops hns3_eth_dev_ops = {
 	.rss_hash_conf_get      = hns3_dev_rss_hash_conf_get,
 	.reta_update            = hns3_dev_rss_reta_update,
 	.reta_query             = hns3_dev_rss_reta_query,
-	.filter_ctrl            = hns3_dev_filter_ctrl,
+	.flow_ops_get           = hns3_dev_flow_ops_get,
 	.vlan_filter_set        = hns3_vlan_filter_set,
 	.vlan_tpid_set          = hns3_vlan_tpid_set,
 	.vlan_offload_set       = hns3_vlan_offload_set,
 	.vlan_pvid_set          = hns3_vlan_pvid_set,
 	.get_reg                = hns3_get_regs,
+	.get_module_info        = hns3_get_module_info,
+	.get_module_eeprom      = hns3_get_module_eeprom,
 	.get_dcb_info           = hns3_get_dcb_info,
 	.dev_supported_ptypes_get = hns3_dev_supported_ptypes_get,
 	.fec_get_capability     = hns3_fec_get_capability,
 	.fec_get                = hns3_fec_get,
 	.fec_set                = hns3_fec_set,
+	.tm_ops_get             = hns3_tm_ops_get,
+	.tx_done_cleanup        = hns3_tx_done_cleanup,
+	.timesync_enable            = hns3_timesync_enable,
+	.timesync_disable           = hns3_timesync_disable,
+	.timesync_read_rx_timestamp = hns3_timesync_read_rx_timestamp,
+	.timesync_read_tx_timestamp = hns3_timesync_read_tx_timestamp,
+	.timesync_adjust_time       = hns3_timesync_adjust_time,
+	.timesync_read_time         = hns3_timesync_read_time,
+	.timesync_write_time        = hns3_timesync_write_time,
 };
 
 static const struct hns3_reset_ops hns3_reset_ops = {
@@ -6095,8 +7389,8 @@ hns3_dev_init(struct rte_eth_dev *eth_dev)
 		PMD_INIT_LOG(ERR, "Failed to alloc memory for process private");
 		return -ENOMEM;
 	}
-	/* initialize flow filter lists */
-	hns3_filterlist_init(eth_dev);
+
+	hns3_flow_init(eth_dev);
 
 	hns3_set_rxtx_function(eth_dev);
 	eth_dev->dev_ops = &hns3_eth_dev_ops;
@@ -6113,8 +7407,6 @@ hns3_dev_init(struct rte_eth_dev *eth_dev)
 		return 0;
 	}
 
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
-
 	ret = hns3_mp_init_primary();
 	if (ret) {
 		PMD_INIT_LOG(ERR,
@@ -6126,6 +7418,7 @@ hns3_dev_init(struct rte_eth_dev *eth_dev)
 	hw->adapter_state = HNS3_NIC_UNINITIALIZED;
 	hns->is_vf = false;
 	hw->data = eth_dev->data;
+	hns3_parse_devargs(eth_dev);
 
 	/*
 	 * Set default max packet size according to the mtu
@@ -6160,7 +7453,7 @@ hns3_dev_init(struct rte_eth_dev *eth_dev)
 	eth_addr = (struct rte_ether_addr *)hw->mac.mac_addr;
 	if (!rte_is_valid_assigned_ether_addr(eth_addr)) {
 		rte_eth_random_addr(hw->mac.mac_addr);
-		rte_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
+		hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 				(struct rte_ether_addr *)hw->mac.mac_addr);
 		hns3_warn(hw, "default mac_addr from firmware is an invalid "
 			  "unicast address, using random MAC address %s",
@@ -6171,7 +7464,8 @@ hns3_dev_init(struct rte_eth_dev *eth_dev)
 
 	hw->adapter_state = HNS3_NIC_INITIALIZED;
 
-	if (rte_atomic16_read(&hns->hw.reset.schedule) == SCHEDULE_PENDING) {
+	if (__atomic_load_n(&hw->reset.schedule, __ATOMIC_RELAXED) ==
+			    SCHEDULE_PENDING) {
 		hns3_err(hw, "Reschedule reset service after dev_init");
 		hns3_schedule_reset(hns);
 	} else {
@@ -6195,8 +7489,10 @@ err_mp_init_primary:
 err_mp_init_secondary:
 	eth_dev->dev_ops = NULL;
 	eth_dev->rx_pkt_burst = NULL;
+	eth_dev->rx_descriptor_status = NULL;
 	eth_dev->tx_pkt_burst = NULL;
 	eth_dev->tx_pkt_prepare = NULL;
+	eth_dev->tx_descriptor_status = NULL;
 	rte_free(eth_dev->process_private);
 	eth_dev->process_private = NULL;
 	return ret;
@@ -6210,8 +7506,11 @@ hns3_dev_uninit(struct rte_eth_dev *eth_dev)
 
 	PMD_INIT_FUNC_TRACE();
 
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return -EPERM;
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+		rte_free(eth_dev->process_private);
+		eth_dev->process_private = NULL;
+		return 0;
+	}
 
 	if (hw->adapter_state < HNS3_NIC_CLOSING)
 		hns3_dev_close(eth_dev);
@@ -6247,7 +7546,7 @@ static const struct rte_pci_id pci_id_hns3_map[] = {
 
 static struct rte_pci_driver rte_hns3_pmd = {
 	.id_table = pci_id_hns3_map,
-	.drv_flags = RTE_PCI_DRV_NEED_MAPPING,
+	.drv_flags = RTE_PCI_DRV_NEED_MAPPING | RTE_PCI_DRV_INTR_LSC,
 	.probe = eth_hns3_pci_probe,
 	.remove = eth_hns3_pci_remove,
 };
@@ -6255,5 +7554,9 @@ static struct rte_pci_driver rte_hns3_pmd = {
 RTE_PMD_REGISTER_PCI(net_hns3, rte_hns3_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_hns3, pci_id_hns3_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_hns3, "* igb_uio | vfio-pci");
+RTE_PMD_REGISTER_PARAM_STRING(net_hns3,
+		HNS3_DEVARG_RX_FUNC_HINT "=vec|sve|simple|common "
+		HNS3_DEVARG_TX_FUNC_HINT "=vec|sve|simple|common "
+		HNS3_DEVARG_DEV_CAPS_MASK "=<1-65535> ");
 RTE_LOG_REGISTER(hns3_logtype_init, pmd.net.hns3.init, NOTICE);
 RTE_LOG_REGISTER(hns3_logtype_driver, pmd.net.hns3.driver, NOTICE);

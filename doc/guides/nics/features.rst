@@ -402,9 +402,9 @@ Supports configuring link flow control.
 Flow API
 --------
 
-Supports the DPDK Flow API for generic filtering.
+Supports flow API family.
 
-* **[implements] eth_dev_ops**: ``filter_ctrl:RTE_ETH_FILTER_GENERIC``.
+* **[implements] eth_dev_ops**: ``flow_ops_get``.
 * **[implements] rte_flow_ops**: ``All``.
 
 
@@ -518,6 +518,21 @@ Supports QinQ (queue in queue) offload.
   ``tx_offload_capa,tx_queue_offload_capa:DEV_TX_OFFLOAD_QINQ_INSERT``.
 
 
+.. _nic_features_fec:
+
+FEC
+---
+
+Supports Forward error correction. Forward error correction (FEC) is a bit error correction mode.
+It adds error correction information to data packets at the transmit end, and uses the error correction
+information to correct the bit errors generated during data packet transmission at the receive end. This
+improves signal quality but also brings a delay to signals. This function can be enabled or disabled as required.
+
+* **[implements] eth_dev_ops**: ``fec_get_capability``, ``fec_get``, ``fec_set``.
+* **[provides]   rte_eth_fec_capa**: ``speed:ETH_SPEED_NUM_*``, ``capa:RTE_ETH_FEC_MODE_TO_CAPA()``.
+* **[related]    API**: ``rte_eth_fec_get_capability()``, ``rte_eth_fec_get()``, ``rte_eth_fec_set()``.
+
+
 .. _nic_features_l3_checksum_offload:
 
 L3 checksum offload
@@ -597,7 +612,7 @@ Supports inner packet L3 checksum.
   ``mbuf.ol_flags:PKT_TX_OUTER_IP_CKSUM``,
   ``mbuf.ol_flags:PKT_TX_OUTER_IPV4`` | ``PKT_TX_OUTER_IPV6``.
 * **[uses]     mbuf**: ``mbuf.outer_l2_len``, ``mbuf.outer_l3_len``.
-* **[provides] mbuf**: ``mbuf.ol_flags:PKT_RX_EIP_CKSUM_BAD``.
+* **[provides] mbuf**: ``mbuf.ol_flags:PKT_RX_OUTER_IP_CKSUM_BAD``.
 * **[provides] rte_eth_dev_info**: ``rx_offload_capa,rx_queue_offload_capa:DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM``,
   ``tx_offload_capa,tx_queue_offload_capa:DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM``.
 
@@ -785,38 +800,28 @@ Multiprocess aware
 Driver can be used for primary-secondary process model.
 
 
-.. _nic_features_bsd_nic_uio:
+.. _nic_features_freebsd:
 
-BSD nic_uio
------------
+FreeBSD
+-------
 
-BSD ``nic_uio`` module supported.
+Supports running on FreeBSD.
 
 
-.. _nic_features_linux_uio:
+.. _nic_features_linux:
 
-Linux UIO
----------
+Linux
+-----
 
-Works with ``igb_uio`` kernel module.
+Supports running on Linux.
 
-* **[provides] RTE_PMD_REGISTER_KMOD_DEP**: ``igb_uio``.
 
-.. _nic_features_linux_vfio:
+.. _nic_features_windows:
 
-Linux VFIO
-----------
+Windows
+-------
 
-Works with ``vfio-pci`` kernel module.
-
-* **[provides] RTE_PMD_REGISTER_KMOD_DEP**: ``vfio-pci``.
-
-.. _nic_features_other_kdrv:
-
-Other kdrv
-----------
-
-Kernel module other than above ones supported.
+Supports running on Windows.
 
 
 .. _nic_features_armv7:

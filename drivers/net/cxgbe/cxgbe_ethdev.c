@@ -28,8 +28,8 @@
 #include <rte_eal.h>
 #include <rte_alarm.h>
 #include <rte_ether.h>
-#include <rte_ethdev_driver.h>
-#include <rte_ethdev_pci.h>
+#include <ethdev_driver.h>
+#include <ethdev_pci.h>
 #include <rte_malloc.h>
 #include <rte_random.h>
 #include <rte_dev.h>
@@ -193,11 +193,12 @@ int cxgbe_dev_link_update(struct rte_eth_dev *eth_dev,
 			  int wait_to_complete)
 {
 	struct port_info *pi = eth_dev->data->dev_private;
-	struct adapter *adapter = pi->adapter;
-	struct sge *s = &adapter->sge;
-	struct rte_eth_link new_link = { 0 };
 	unsigned int i, work_done, budget = 32;
+	struct link_config *lc = &pi->link_cfg;
+	struct adapter *adapter = pi->adapter;
+	struct rte_eth_link new_link = { 0 };
 	u8 old_link = pi->link_cfg.link_ok;
+	struct sge *s = &adapter->sge;
 
 	for (i = 0; i < CXGBE_LINK_STATUS_POLL_CNT; i++) {
 		if (!s->fw_evtq.desc)
@@ -218,9 +219,9 @@ int cxgbe_dev_link_update(struct rte_eth_dev *eth_dev,
 
 	new_link.link_status = cxgbe_force_linkup(adapter) ?
 			       ETH_LINK_UP : pi->link_cfg.link_ok;
-	new_link.link_autoneg = pi->link_cfg.autoneg;
+	new_link.link_autoneg = (lc->link_caps & FW_PORT_CAP32_ANEG) ? 1 : 0;
 	new_link.link_duplex = ETH_LINK_FULL_DUPLEX;
-	new_link.link_speed = pi->link_cfg.speed;
+	new_link.link_speed = t4_fwcap_to_speed(lc->link_caps);
 
 	return rte_eth_linkstatus_set(eth_dev, &new_link);
 }
@@ -300,7 +301,7 @@ int cxgbe_dev_mtu_set(struct rte_eth_dev *eth_dev, uint16_t mtu)
 		return -EINVAL;
 
 	/* set to jumbo mode if needed */
-	if (new_mtu > RTE_ETHER_MAX_LEN)
+	if (new_mtu > CXGBE_ETH_MAX_LEN)
 		eth_dev->data->dev_conf.rxmode.offloads |=
 			DEV_RX_OFFLOAD_JUMBO_FRAME;
 	else
@@ -669,7 +670,7 @@ int cxgbe_dev_rx_queue_setup(struct rte_eth_dev *eth_dev,
 		rxq->fl.size = temp_nb_desc;
 
 	/* Set to jumbo mode if necessary */
-	if (pkt_len > RTE_ETHER_MAX_LEN)
+	if (pkt_len > CXGBE_ETH_MAX_LEN)
 		eth_dev->data->dev_conf.rxmode.offloads |=
 			DEV_RX_OFFLOAD_JUMBO_FRAME;
 	else
@@ -787,11 +788,17 @@ static int cxgbe_flow_ctrl_get(struct rte_eth_dev *eth_dev,
 {
 	struct port_info *pi = eth_dev->data->dev_private;
 	struct link_config *lc = &pi->link_cfg;
-	int rx_pause, tx_pause;
+	u8 rx_pause = 0, tx_pause = 0;
+	u32 caps = lc->link_caps;
 
-	fc_conf->autoneg = lc->fc & PAUSE_AUTONEG;
-	rx_pause = lc->fc & PAUSE_RX;
-	tx_pause = lc->fc & PAUSE_TX;
+	if (caps & FW_PORT_CAP32_ANEG)
+		fc_conf->autoneg = 1;
+
+	if (caps & FW_PORT_CAP32_FC_TX)
+		tx_pause = 1;
+
+	if (caps & FW_PORT_CAP32_FC_RX)
+		rx_pause = 1;
 
 	if (rx_pause && tx_pause)
 		fc_conf->mode = RTE_FC_FULL;
@@ -808,30 +815,39 @@ static int cxgbe_flow_ctrl_set(struct rte_eth_dev *eth_dev,
 			       struct rte_eth_fc_conf *fc_conf)
 {
 	struct port_info *pi = eth_dev->data->dev_private;
-	struct adapter *adapter = pi->adapter;
 	struct link_config *lc = &pi->link_cfg;
+	u32 new_caps = lc->admin_caps;
+	u8 tx_pause = 0, rx_pause = 0;
+	int ret;
 
-	if (lc->pcaps & FW_PORT_CAP32_ANEG) {
-		if (fc_conf->autoneg)
-			lc->requested_fc |= PAUSE_AUTONEG;
-		else
-			lc->requested_fc &= ~PAUSE_AUTONEG;
+	if (fc_conf->mode == RTE_FC_FULL) {
+		tx_pause = 1;
+		rx_pause = 1;
+	} else if (fc_conf->mode == RTE_FC_TX_PAUSE) {
+		tx_pause = 1;
+	} else if (fc_conf->mode == RTE_FC_RX_PAUSE) {
+		rx_pause = 1;
 	}
 
-	if (((fc_conf->mode & RTE_FC_FULL) == RTE_FC_FULL) ||
-	    (fc_conf->mode & RTE_FC_RX_PAUSE))
-		lc->requested_fc |= PAUSE_RX;
-	else
-		lc->requested_fc &= ~PAUSE_RX;
+	ret = t4_set_link_pause(pi, fc_conf->autoneg, tx_pause,
+				rx_pause, &new_caps);
+	if (ret != 0)
+		return ret;
 
-	if (((fc_conf->mode & RTE_FC_FULL) == RTE_FC_FULL) ||
-	    (fc_conf->mode & RTE_FC_TX_PAUSE))
-		lc->requested_fc |= PAUSE_TX;
-	else
-		lc->requested_fc &= ~PAUSE_TX;
+	if (!fc_conf->autoneg) {
+		if (lc->pcaps & FW_PORT_CAP32_FORCE_PAUSE)
+			new_caps |= FW_PORT_CAP32_FORCE_PAUSE;
+	} else {
+		new_caps &= ~FW_PORT_CAP32_FORCE_PAUSE;
+	}
 
-	return t4_link_l1cfg(adapter, adapter->mbox, pi->tx_chan,
-			     &pi->link_cfg);
+	if (new_caps != lc->admin_caps) {
+		ret = t4_link_l1cfg(pi, new_caps);
+		if (ret == 0)
+			lc->admin_caps = new_caps;
+	}
+
+	return ret;
 }
 
 const uint32_t *
@@ -1177,6 +1193,125 @@ int cxgbe_mac_addr_set(struct rte_eth_dev *dev, struct rte_ether_addr *addr)
 	return 0;
 }
 
+static int cxgbe_fec_get_capa_speed_to_fec(struct link_config *lc,
+					   struct rte_eth_fec_capa *capa_arr)
+{
+	int num = 0;
+
+	if (lc->pcaps & FW_PORT_CAP32_SPEED_100G) {
+		if (capa_arr) {
+			capa_arr[num].speed = ETH_SPEED_NUM_100G;
+			capa_arr[num].capa = RTE_ETH_FEC_MODE_CAPA_MASK(NOFEC) |
+					     RTE_ETH_FEC_MODE_CAPA_MASK(RS);
+		}
+		num++;
+	}
+
+	if (lc->pcaps & FW_PORT_CAP32_SPEED_50G) {
+		if (capa_arr) {
+			capa_arr[num].speed = ETH_SPEED_NUM_50G;
+			capa_arr[num].capa = RTE_ETH_FEC_MODE_CAPA_MASK(NOFEC) |
+					     RTE_ETH_FEC_MODE_CAPA_MASK(BASER);
+		}
+		num++;
+	}
+
+	if (lc->pcaps & FW_PORT_CAP32_SPEED_25G) {
+		if (capa_arr) {
+			capa_arr[num].speed = ETH_SPEED_NUM_25G;
+			capa_arr[num].capa = RTE_ETH_FEC_MODE_CAPA_MASK(NOFEC) |
+					     RTE_ETH_FEC_MODE_CAPA_MASK(BASER) |
+					     RTE_ETH_FEC_MODE_CAPA_MASK(RS);
+		}
+		num++;
+	}
+
+	return num;
+}
+
+static int cxgbe_fec_get_capability(struct rte_eth_dev *dev,
+				    struct rte_eth_fec_capa *speed_fec_capa,
+				    unsigned int num)
+{
+	struct port_info *pi = dev->data->dev_private;
+	struct link_config *lc = &pi->link_cfg;
+	u8 num_entries;
+
+	if (!(lc->pcaps & V_FW_PORT_CAP32_FEC(M_FW_PORT_CAP32_FEC)))
+		return -EOPNOTSUPP;
+
+	num_entries = cxgbe_fec_get_capa_speed_to_fec(lc, NULL);
+	if (!speed_fec_capa || num < num_entries)
+		return num_entries;
+
+	return cxgbe_fec_get_capa_speed_to_fec(lc, speed_fec_capa);
+}
+
+static int cxgbe_fec_get(struct rte_eth_dev *dev, uint32_t *fec_capa)
+{
+	struct port_info *pi = dev->data->dev_private;
+	struct link_config *lc = &pi->link_cfg;
+	u32 fec_caps = 0, caps = lc->link_caps;
+
+	if (!(lc->pcaps & V_FW_PORT_CAP32_FEC(M_FW_PORT_CAP32_FEC)))
+		return -EOPNOTSUPP;
+
+	if (caps & FW_PORT_CAP32_FEC_RS)
+		fec_caps = RTE_ETH_FEC_MODE_CAPA_MASK(RS);
+	else if (caps & FW_PORT_CAP32_FEC_BASER_RS)
+		fec_caps = RTE_ETH_FEC_MODE_CAPA_MASK(BASER);
+	else
+		fec_caps = RTE_ETH_FEC_MODE_CAPA_MASK(NOFEC);
+
+	*fec_capa = fec_caps;
+	return 0;
+}
+
+static int cxgbe_fec_set(struct rte_eth_dev *dev, uint32_t fec_capa)
+{
+	struct port_info *pi = dev->data->dev_private;
+	u8 fec_rs = 0, fec_baser = 0, fec_none = 0;
+	struct link_config *lc = &pi->link_cfg;
+	u32 new_caps = lc->admin_caps;
+	int ret;
+
+	if (!(lc->pcaps & V_FW_PORT_CAP32_FEC(M_FW_PORT_CAP32_FEC)))
+		return -EOPNOTSUPP;
+
+	if (!fec_capa)
+		return -EINVAL;
+
+	if (fec_capa & RTE_ETH_FEC_MODE_CAPA_MASK(AUTO))
+		goto set_fec;
+
+	if (fec_capa & RTE_ETH_FEC_MODE_CAPA_MASK(NOFEC))
+		fec_none = 1;
+
+	if (fec_capa & RTE_ETH_FEC_MODE_CAPA_MASK(BASER))
+		fec_baser = 1;
+
+	if (fec_capa & RTE_ETH_FEC_MODE_CAPA_MASK(RS))
+		fec_rs = 1;
+
+set_fec:
+	ret = t4_set_link_fec(pi, fec_rs, fec_baser, fec_none, &new_caps);
+	if (ret != 0)
+		return ret;
+
+	if (lc->pcaps & FW_PORT_CAP32_FORCE_FEC)
+		new_caps |= FW_PORT_CAP32_FORCE_FEC;
+	else
+		new_caps &= ~FW_PORT_CAP32_FORCE_FEC;
+
+	if (new_caps != lc->admin_caps) {
+		ret = t4_link_l1cfg(pi, new_caps);
+		if (ret == 0)
+			lc->admin_caps = new_caps;
+	}
+
+	return ret;
+}
+
 static const struct eth_dev_ops cxgbe_eth_dev_ops = {
 	.dev_start		= cxgbe_dev_start,
 	.dev_stop		= cxgbe_dev_stop,
@@ -1200,7 +1335,7 @@ static const struct eth_dev_ops cxgbe_eth_dev_ops = {
 	.rx_queue_start		= cxgbe_dev_rx_queue_start,
 	.rx_queue_stop		= cxgbe_dev_rx_queue_stop,
 	.rx_queue_release	= cxgbe_dev_rx_queue_release,
-	.filter_ctrl            = cxgbe_dev_filter_ctrl,
+	.flow_ops_get           = cxgbe_dev_flow_ops_get,
 	.stats_get		= cxgbe_dev_stats_get,
 	.stats_reset		= cxgbe_dev_stats_reset,
 	.flow_ctrl_get		= cxgbe_flow_ctrl_get,
@@ -1214,6 +1349,9 @@ static const struct eth_dev_ops cxgbe_eth_dev_ops = {
 	.mac_addr_set		= cxgbe_mac_addr_set,
 	.reta_update            = cxgbe_dev_rss_reta_update,
 	.reta_query             = cxgbe_dev_rss_reta_query,
+	.fec_get_capability     = cxgbe_fec_get_capability,
+	.fec_get                = cxgbe_fec_get,
+	.fec_set                = cxgbe_fec_set,
 };
 
 /*

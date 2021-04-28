@@ -13,7 +13,6 @@
 #define _RTE_CONFIG_H_
 
 #include <rte_build_config.h>
-#include "rte_compatibility_defines.h"
 
 /* legacy defines */
 #ifdef RTE_EXEC_ENV_LINUX
@@ -58,10 +57,12 @@
 #define RTE_MAX_QUEUES_PER_PORT 1024
 #define RTE_ETHDEV_QUEUE_STAT_CNTRS 16 /* max 256 */
 #define RTE_ETHDEV_RXTX_CALLBACKS 1
+#define RTE_MAX_MULTI_HOST_CTRLS 4
 
 /* cryptodev defines */
 #define RTE_CRYPTO_MAX_DEVS 64
 #define RTE_CRYPTODEV_NAME_LEN 64
+#define RTE_CRYPTO_CALLBACKS 1
 
 /* compressdev defines */
 #define RTE_COMPRESS_MAX_DEVS 64
@@ -137,12 +138,6 @@
 
 /* QEDE PMD defines */
 #define RTE_LIBRTE_QEDE_FW ""
-
-/* DLB PMD defines */
-#define RTE_LIBRTE_PMD_DLB_POLL_INTERVAL 1000
-#define RTE_LIBRTE_PMD_DLB_UMWAIT_CTL_STATE  0
-#undef RTE_LIBRTE_PMD_DLB_QUELL_STATS
-#define RTE_LIBRTE_PMD_DLB_SW_CREDIT_QUANTA 32
 
 /* DLB2 defines */
 #define RTE_LIBRTE_PMD_DLB2_POLL_INTERVAL 1000

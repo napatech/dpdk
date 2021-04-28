@@ -25,15 +25,8 @@ computes an average time across all windows.
 The application also provides the ability to measure rte flow deletion rate,
 in addition to memory consumption before and after the flow rules' creation.
 
-The app supports single and multi core performance measurements.
-
-
-Known Limitations
------------------
-
-The current version has limitations which can be removed in future:
-
-* Single core insertion only.
+The app supports single and multiple core performance measurements, and
+support multiple cores insertion/deletion as well.
 
 
 Compiling the Application
@@ -103,6 +96,14 @@ The command line options are:
 *	``--portmask=N``
 	hexadecimal bitmask of ports to be used.
 
+*	``--cores=N``
+	Set the number of needed cores to insert/delete rte_flow rules.
+	Default cores count is 1.
+
+*       ``--unique-data``
+        Flag to set using unique data for all actions that support data,
+        Such as header modify and encap actions. Default is using fixed
+        data for any action that support data for all flows.
 
 Attributes:
 
@@ -349,3 +350,7 @@ Actions:
 
 *	``--vxlan-decap``
 	Add vxlan decap action to all flows actions.
+
+*       ``--meter``
+        Add meter action to all flows actions.
+        Currently, 1 meter profile -> N meter rules -> N rte flows.

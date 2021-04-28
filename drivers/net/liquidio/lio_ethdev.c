@@ -3,8 +3,8 @@
  */
 
 #include <rte_string_fns.h>
-#include <rte_ethdev_driver.h>
-#include <rte_ethdev_pci.h>
+#include <ethdev_driver.h>
+#include <ethdev_pci.h>
 #include <rte_cycles.h>
 #include <rte_malloc.h>
 #include <rte_alarm.h>
@@ -481,7 +481,7 @@ lio_dev_mtu_set(struct rte_eth_dev *eth_dev, uint16_t mtu)
 		return -1;
 	}
 
-	if (frame_len > RTE_ETHER_MAX_LEN)
+	if (frame_len > LIO_ETH_MAX_LEN)
 		eth_dev->data->dev_conf.rxmode.offloads |=
 			DEV_RX_OFFLOAD_JUMBO_FRAME;
 	else

@@ -74,6 +74,7 @@ Features
 - RX VLAN stripping.
 - TX VLAN insertion.
 - RX CRC stripping configuration.
+- TX mbuf fast free offload.
 - Promiscuous mode on PF and VF.
 - Multicast promiscuous mode on PF and VF.
 - Hardware checksum offloads.
@@ -98,9 +99,26 @@ Features
 - Hardware LRO.
 - Hairpin.
 - Multiple-thread flow insertion.
+- Matching on GTP extension header with raw encap/decap action.
+- Matching on Geneve TLV option header with raw encap/decap action.
+- RSS support in sample action.
+- E-Switch mirroring and jump.
+- E-Switch mirroring and modify.
+- 21844 flow priorities for ingress or egress flow groups greater than 0 and for any transfer
+  flow group.
 
 Limitations
 -----------
+
+- Windows support:
+
+  On Windows, the features are limited:
+
+  - Promiscuous mode is not supported
+  - The following rules are supported:
+
+    - IPv4/UDP with CVLAN filtering
+    - Unicast MAC filtering
 
 - For secondary process:
 
@@ -153,9 +171,9 @@ Limitations
 
   - Flow rules having a VLAN pop offload command as one of their actions and
     are lacking a match on VLAN as one of their items are not supported.
-  - The command is not supported on egress traffic.
+  - The command is not supported on egress traffic in NIC mode.
 
-- VLAN push offload is not supported on ingress traffic.
+- VLAN push offload is not supported on ingress traffic in NIC mode.
 
 - VLAN set PCP offload is not supported on existing headers.
 
@@ -175,7 +193,19 @@ Limitations
      - OAM
      - protocol type
      - options length
-       Currently, the only supported options length value is 0.
+
+- Match on Geneve TLV option is supported on the following fields:
+
+     - Class
+     - Type
+     - Length
+     - Data
+
+  Only one Class/Type/Length Geneve TLV option is supported per shared device.
+  Class/Type/Length fields must be specified as well as masks.
+  Class/Type/Length specified masks must be full.
+  Matching Geneve TLV option without specifying data is not supported.
+  Matching Geneve TLV option with ``data & mask == 0`` is not supported.
 
 - VF: flow rules created on VF devices can only match traffic targeted at the
   configured MAC addresses (see ``rte_eth_dev_mac_addr_add()``).
@@ -185,6 +215,10 @@ Limitations
      - v_pt_rsv_flags: E flag, S flag, PN flag
      - msg_type
      - teid
+
+- Match on GTP extension header only for GTP PDU session container (next
+  extension header type = 0x85).
+- Match on GTP extension header is not supported in group 0.
 
 - No Tx metadata go to the E-Switch steering domain for the Flow group 0.
   The flows within group 0 and set metadata action are rejected by hardware.
@@ -320,11 +354,38 @@ Limitations
     for some NICs (such as ConnectX-6 Dx, ConnectX-6 Lx, and BlueField-2).
     The capability bit ``scatter_fcs_w_decap_disable`` shows NIC support.
 
+- TX mbuf fast free:
+
+  - fast free offload assumes the all mbufs being sent are originated from the
+    same memory pool and there is no any extra references to the mbufs (the
+    reference counter for each mbuf is equal 1 on tx_burst call). The latter
+    means there should be no any externally attached buffers in mbufs. It is
+    an application responsibility to provide the correct mbufs if the fast
+    free offload is engaged. The mlx5 PMD implicitly produces the mbufs with
+    externally attached buffers if MPRQ option is enabled, hence, the fast
+    free offload is neither supported nor advertised if there is MPRQ enabled.
+
 - Sample flow:
 
-  - Supports ``RTE_FLOW_ACTION_TYPE_SAMPLE`` action only within NIC Rx and E-Switch steering domain.
-  - The E-Switch Sample flow must have the eswitch_manager VPORT destination (PF or ECPF) and no additional actions.
-  - For ConnectX-5, the ``RTE_FLOW_ACTION_TYPE_SAMPLE`` is typically used as first action in the E-Switch egress flow if with header modify or encapsulation actions.
+  - Supports ``RTE_FLOW_ACTION_TYPE_SAMPLE`` action only within NIC Rx and
+    E-Switch steering domain.
+  - For E-Switch Sampling flow with sample ratio > 1, additional actions are not
+    supported in the sample actions list.
+  - For ConnectX-5, the ``RTE_FLOW_ACTION_TYPE_SAMPLE`` is typically used as
+    first action in the E-Switch egress flow if with header modify or
+    encapsulation actions.
+  - For NIC Rx flow, supports ``MARK``, ``COUNT``, ``QUEUE``, ``RSS`` in the
+    sample actions list.
+  - For E-Switch mirroring flow, supports ``RAW ENCAP``, ``Port ID``,
+    ``VXLAN ENCAP``, ``NVGRE ENCAP`` in the sample actions list.
+
+- Modify Field flow:
+
+  - Supports the 'set' operation only for ``RTE_FLOW_ACTION_TYPE_MODIFY_FIELD`` action.
+  - Modification of an arbitrary place in a packet via the special ``RTE_FLOW_FIELD_START`` Field ID is not supported.
+  - Modification of the 802.1Q Tag, VXLAN Network or GENEVE Network ID's is not supported.
+  - Encapsulation levels are not supported, can modify outermost header fields only.
+  - Offsets must be 32-bits aligned, cannot skip past the boundary of a field.
 
 - IPv6 header item 'proto' field, indicating the next header protocol, should
   not be set as extension header.
@@ -337,6 +398,12 @@ Limitations
 
   - Hairpin between two ports could only manual binding and explicit Tx flow mode. For single port hairpin, all the combinations of auto/manual binding and explicit/implicit Tx flow mode could be supported.
   - Hairpin in switchdev SR-IOV mode is not supported till now.
+
+- Meter:
+  - All the meter colors with drop action will be counted only by the global drop statistics.
+  - Green color is not supported with drop action.
+  - Yellow detection is not supported.
+  - Red color must be with drop action.
 
 Statistics
 ----------
@@ -433,13 +500,17 @@ Driver options
   A nonzero value enables the compression of CQE on RX side. This feature
   allows to save PCI bandwidth and improve performance. Enabled by default.
   Different compression formats are supported in order to achieve the best
-  performance for different traffic patterns. Hash RSS format is the default.
+  performance for different traffic patterns. Default format depends on
+  Multi-Packet Rx queue configuration: Hash RSS format is used in case
+  MPRQ is disabled, Checksum format is used in case MPRQ is enabled.
 
   Specifying 2 as a ``rxq_cqe_comp_en`` value selects Flow Tag format for
   better compression rate in case of RTE Flow Mark traffic.
   Specifying 3 as a ``rxq_cqe_comp_en`` value selects Checksum format.
   Specifying 4 as a ``rxq_cqe_comp_en`` value selects L3/L4 Header format for
   better compression rate in case of mixed TCP/UDP and IPv4/IPv6 traffic.
+  CQE compression format selection requires DevX to be enabled. If there is
+  no DevX enabled/supported the value is reset to 1 by default.
 
   Supported on:
 
@@ -447,24 +518,6 @@ Driver options
     ConnectX-6 Lx, BlueField and BlueField-2.
   - POWER9 and ARMv8 with ConnectX-4 Lx, ConnectX-5, ConnectX-6, ConnectX-6 Dx,
     ConnectX-6 Lx, BlueField and BlueField-2.
-
-- ``rxq_cqe_pad_en`` parameter [int]
-
-  A nonzero value enables 128B padding of CQE on RX side. The size of CQE
-  is aligned with the size of a cacheline of the core. If cacheline size is
-  128B, the CQE size is configured to be 128B even though the device writes
-  only 64B data on the cacheline. This is to avoid unnecessary cache
-  invalidation by device's two consecutive writes on to one cacheline.
-  However in some architecture, it is more beneficial to update entire
-  cacheline with padding the rest 64B rather than striding because
-  read-modify-write could drop performance a lot. On the other hand,
-  writing extra data will consume more PCIe bandwidth and could also drop
-  the maximum throughput. It is recommended to empirically set this
-  parameter. Disabled by default.
-
-  Supported on:
-
-  - CPU having 128B cacheline with ConnectX-5 and BlueField.
 
 - ``rxq_pkt_pad_en`` parameter [int]
 
@@ -825,7 +878,7 @@ Driver options
   +------+-----------+-----------+-------------+-------------+
   | 1    | 24 bits   | vary 0-32 | 32 bits     | yes         |
   +------+-----------+-----------+-------------+-------------+
-  | 2    | vary 0-32 | 32 bits   | 32 bits     | yes         |
+  | 2    | vary 0-24 | 32 bits   | 32 bits     | yes         |
   +------+-----------+-----------+-------------+-------------+
 
   If there is no E-Switch configuration the ``dv_xmeta_en`` parameter is
@@ -836,6 +889,17 @@ Driver options
   The Direct Verbs/Rules (engaged with ``dv_flow_en`` = 1) supports all
   of the extensive metadata features. The legacy Verbs supports FLAG and
   MARK metadata actions over NIC Rx steering domain only.
+
+  Setting META value to zero in flow action means there is no item provided
+  and receiving datapath will not report in mbufs the metadata are present.
+  Setting MARK value to zero in flow action means the zero FDIR ID value
+  will be reported on packet receiving.
+
+  For the MARK action the last 16 values in the full range are reserved for
+  internal PMD purposes (to emulate FLAG action). The valid range for the
+  MARK action values is 0-0xFFEF for the 16-bit mode and 0-xFFFFEF
+  for the 24-bit mode, the flows with the MARK action value outside
+  the specified range will be rejected.
 
 - ``dv_flow_en`` parameter [int]
 
@@ -874,14 +938,22 @@ Driver options
 - ``representor`` parameter [list]
 
   This parameter can be used to instantiate DPDK Ethernet devices from
-  existing port (or VF) representors configured on the device.
+  existing port (PF, VF or SF) representors configured on the device.
 
   It is a standard parameter whose format is described in
   :ref:`ethernet_device_standard_device_arguments`.
 
-  For instance, to probe port representors 0 through 2::
+  For instance, to probe VF port representors 0 through 2::
 
-    representor=[0-2]
+    <PCI_BDF>,representor=vf[0-2]
+
+  To probe SF port representors 0 through 2::
+
+    <PCI_BDF>,representor=sf[0-2]
+
+  To probe VF port representors 0 through 2 on both PFs of bonding device::
+
+    <Primary_PCI_BDF>,representor=pf[0,1]vf[0-2]
 
 - ``max_dump_files_num`` parameter [int]
 
@@ -1022,6 +1094,10 @@ Below are some firmware configurations listed.
    or
    FLEX_PARSER_PROFILE_ENABLE=1
 
+- enable Geneve TLV option flow matching::
+
+   FLEX_PARSER_PROFILE_ENABLE=0
+
 - enable GTP flow matching::
 
    FLEX_PARSER_PROFILE_ENABLE=3
@@ -1031,8 +1107,8 @@ Below are some firmware configurations listed.
    FLEX_PARSER_PROFILE_ENABLE=4
    PROG_PARSE_GRAPH=1
 
-Prerequisites
--------------
+Linux Prerequisites
+-------------------
 
 This driver relies on external libraries and kernel drivers for resources
 allocations and initialization. The following dependencies are not part of
@@ -1145,7 +1221,44 @@ required from that distribution.
 
    Several versions of Mellanox OFED/EN are available. Installing the version
    this DPDK release was developed and tested against is strongly
-   recommended. Please check the `prerequisites`_.
+   recommended. Please check the `linux prerequisites`_.
+
+Windows Prerequisites
+---------------------
+
+This driver relies on external libraries and kernel drivers for resources
+allocations and initialization. The dependencies in the following sub-sections
+are not part of DPDK, and must be installed separately.
+
+Compilation Prerequisites
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+DevX SDK installation
+^^^^^^^^^^^^^^^^^^^^^
+
+The DevX SDK must be installed on the machine building the Windows PMD.
+Additional information can be found at
+`How to Integrate Windows DevX in Your Development Environment
+<https://docs.mellanox.com/display/winof2v250/RShim+Drivers+and+Usage#RShimDriversandUsage-DevXInterface>`__.
+
+Runtime Prerequisites
+~~~~~~~~~~~~~~~~~~~~~
+
+WinOF2 version 2.60 or higher must be installed on the machine.
+
+WinOF2 installation
+^^^^^^^^^^^^^^^^^^^
+
+The driver can be downloaded from the following site:
+`WINOF2
+<https://www.mellanox.com/products/adapter-software/ethernet/windows/winof-2>`__
+
+DevX Enablement
+^^^^^^^^^^^^^^^
+
+DevX for Windows must be enabled in the Windows registry.
+The keys ``DevxEnabled`` and ``DevxFsRules`` must be set.
+Additional information can be found in the WinOF2 user manual.
 
 Supported NICs
 --------------
@@ -1194,7 +1307,7 @@ Below are detailed device names:
 Quick Start Guide on OFED/EN
 ----------------------------
 
-1. Download latest Mellanox OFED/EN. For more info check the  `prerequisites`_.
+1. Download latest Mellanox OFED/EN. For more info check the `linux prerequisites`_.
 
 
 2. Install the required libraries and kernel modules either by installing
@@ -1253,15 +1366,15 @@ Quick Start Guide on OFED/EN
 Enable switchdev mode
 ---------------------
 
-Switchdev mode is a mode in E-Switch, that binds between representor and VF.
-Representor is a port in DPDK that is connected to a VF in such a way
-that assuming there are no offload flows, each packet that is sent from the VF
-will be received by the corresponding representor. While each packet that is
-sent to a representor will be received by the VF.
+Switchdev mode is a mode in E-Switch, that binds between representor and VF or SF.
+Representor is a port in DPDK that is connected to a VF or SF in such a way
+that assuming there are no offload flows, each packet that is sent from the VF or SF
+will be received by the corresponding representor. While each packet that is or SF
+sent to a representor will be received by the VF or SF.
 This is very useful in case of SRIOV mode, where the first packet that is sent
-by the VF will be received by the DPDK application which will decide if this
+by the VF or SF will be received by the DPDK application which will decide if this
 flow should be offloaded to the E-Switch. After offloading the flow packet
-that the VF that are matching the flow will not be received any more by
+that the VF or SF that are matching the flow will not be received any more by
 the DPDK application.
 
 1. Enable SRIOV mode::
@@ -1287,6 +1400,40 @@ the DPDK application.
 5. Enbale switchdev mode::
 
         echo switchdev > /sys/class/net/<net device>/compat/devlink/mode
+
+SubFunction representor support
+-------------------------------
+SubFunction is a portion of the PCI device, a SF netdev has its own
+dedicated queues(txq, rxq). A SF netdev supports E-Switch representation
+offload similar to existing PF and VF representors. A SF shares PCI
+level resources with other SFs and/or with its parent PCI function.
+
+1. Configure SF feature::
+
+        mlxconfig -d <mst device> set PF_BAR2_SIZE=<0/1/2/3> PF_BAR2_ENABLE=1
+
+        Value of PF_BAR2_SIZE:
+
+            0: 8 SFs
+            1: 16 SFs
+            2: 32 SFs
+            3: 64 SFs
+
+2. Reset the FW::
+
+        mlxfwreset -d <mst device> reset
+
+3. Enable switchdev mode::
+
+        echo switchdev > /sys/class/net/<net device>/compat/devlink/mode
+
+4. Create SF::
+
+        mlnx-sf -d <PCI_BDF> -a create
+
+5. Probe SF representor::
+
+        testpmd> port attach <PCI_BDF>,representor=sf0,dv_flow_en=1
 
 Performance tuning
 ------------------
@@ -1390,7 +1537,8 @@ Supported hardware offloads
    Rx timestamp   17.11  4.14    16     4.2-1 12.21.1000 ConnectX-4
    TSO            17.11  4.14    16     4.2-1 12.21.1000 ConnectX-4
    LRO            19.08  N/A     N/A    4.6-4 16.25.6406 ConnectX-5
-   Buffer Split   20.11  N/A     N/A    5.1-2 22.28.2006 ConnectX-6 Dx
+   Tx scheduling  20.08  N/A     N/A    5.1-2 22.28.2006 ConnectX-6 Dx
+   Buffer Split   20.11  N/A     N/A    5.1-2 16.28.2006 ConnectX-5
    ============== ===== ===== ========= ===== ========== =============
 
 .. table:: Minimal SW/HW versions for rte_flow offloads
@@ -1413,16 +1561,24 @@ Supported hardware offloads
    |                       | |               | | rdma-core 23  |
    |                       | |               | | ConnectX-4    |
    +-----------------------+-----------------+-----------------+
-   | RSS shared action     | |               | | DPDK 20.11    |
-   |                       | |     N/A       | | OFED 5.2      |
-   |                       | |               | | rdma-core 33  |
-   |                       | |               | | ConnectX-5    |
+   | Shared action         | |               | |               |
+   |                       | | :numref:`sact`| | :numref:`sact`|
+   |                       | |               | |               |
+   |                       | |               | |               |
    +-----------------------+-----------------+-----------------+
    | | VLAN                | | DPDK 19.11    | | DPDK 19.11    |
    | | (of_pop_vlan /      | | OFED 4.7-1    | | OFED 4.7-1    |
    | | of_push_vlan /      | | ConnectX-5    | | ConnectX-5    |
    | | of_set_vlan_pcp /   | |               | |               |
    | | of_set_vlan_vid)    | |               | |               |
+   +-----------------------+-----------------+-----------------+
+   | | VLAN                | | DPDK 21.05    | |               |
+   | | ingress and /       | | OFED 5.3      | |    N/A        |
+   | | of_push_vlan /      | | ConnectX-6 Dx | |               |
+   +-----------------------+-----------------+-----------------+
+   | | VLAN                | | DPDK 21.05    | |               |
+   | | egress and /        | | OFED 5.3      | |    N/A        |
+   | | of_pop_vlan /       | | ConnectX-6 Dx | |               |
    +-----------------------+-----------------+-----------------+
    | Encapsulation         | | DPDK 19.05    | | DPDK 19.02    |
    | (VXLAN / NVGRE / RAW) | | OFED 4.7-1    | | OFED 4.6      |
@@ -1496,7 +1652,34 @@ Supported hardware offloads
    |                       | |  rdma-core 32 | | N/A           |
    |                       | |  ConnectX-5   | | ConnectX-5    |
    +-----------------------+-----------------+-----------------+
-   | Age shared action     | |  DPDK 20.11   | | DPDK 20.11    |
+   | Encapsulation         | |  DPDK 21.02   | | DPDK 21.02    |
+   | GTP PSC               | |  OFED 5.2     | | OFED 5.2      |
+   |                       | |  rdma-core 35 | | rdma-core 35  |
+   |                       | |  ConnectX-6 Dx| | ConnectX-6 Dx |
+   +-----------------------+-----------------+-----------------+
+   | Encapsulation         | | DPDK 21.02    | | DPDK 21.02    |
+   | GENEVE TLV option     | | OFED 5.2      | | OFED 5.2      |
+   |                       | | rdma-core 34  | | rdma-core 34  |
+   |                       | | ConnectX-6 Dx | | ConnectX-6 Dx |
+   +-----------------------+-----------------+-----------------+
+   | Modify Field          | | DPDK 21.02    | | DPDK 21.02    |
+   |                       | | OFED 5.2      | | OFED 5.2      |
+   |                       | | rdma-core 35  | | rdma-core 35  |
+   |                       | | ConnectX-5    | | ConnectX-5    |
+   +-----------------------+-----------------+-----------------+
+
+.. table:: Minimal SW/HW versions for shared action offload
+   :name: sact
+
+   +-----------------------+-----------------+-----------------+
+   | Shared Action         | with E-Switch   | with NIC        |
+   +=======================+=================+=================+
+   | RSS                   | |               | | DPDK 20.11    |
+   |                       | |     N/A       | | OFED 5.2      |
+   |                       | |               | | rdma-core 33  |
+   |                       | |               | | ConnectX-5    |
+   +-----------------------+-----------------+-----------------+
+   | Age                   | |  DPDK 20.11   | | DPDK 20.11    |
    |                       | |  OFED 5.2     | | OFED 5.2      |
    |                       | |  rdma-core 32 | | rdma-core 32  |
    |                       | |  ConnectX-6 Dx| | ConnectX-6 Dx |
@@ -1594,11 +1777,11 @@ ConnectX-4/ConnectX-5/ConnectX-6/BlueField devices managed by librte_net_mlx5.
 
 #. Request huge pages::
 
-      echo 1024 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages/nr_hugepages
+      dpdk-hugepages.py --setup 2G
 
 #. Start testpmd with basic parameters::
 
-      testpmd -l 8-15 -n 4 -a 05:00.0 -a 05:00.1 -a 06:00.0 -a 06:00.1 -- --rxq=2 --txq=2 -i
+      dpdk-testpmd -l 8-15 -n 4 -a 05:00.0 -a 05:00.1 -a 06:00.0 -a 06:00.1 -- --rxq=2 --txq=2 -i
 
    Example output::
 
@@ -1660,13 +1843,16 @@ all flows with assistance of external tools.
 
    .. code-block:: console
 
-       testpmd> flow dump <port> <output_file>
+       To dump all flows:
+       testpmd> flow dump <port> all <output_file>
+       and dump one flow:
+       testpmd> flow dump <port> rule <rule_id> <output_file>
 
    - call rte_flow_dev_dump api:
 
    .. code-block:: console
 
-       rte_flow_dev_dump(port, file, NULL);
+       rte_flow_dev_dump(port, flow, file, NULL);
 
 #. Dump human-readable flows from raw file:
 
@@ -1674,4 +1860,4 @@ all flows with assistance of external tools.
 
    .. code-block:: console
 
-       mlx_steering_dump.py -f <output_file>
+       mlx_steering_dump.py -f <output_file> -flowptr <flow_ptr>

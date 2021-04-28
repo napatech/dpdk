@@ -93,6 +93,9 @@ main(int argc, char **argv)
 {
 #ifdef RTE_LIB_CMDLINE
 	struct cmdline *cl;
+	char *tests[argc]; /* store an array of tests to run */
+	int test_count = 0;
+	int i;
 #endif
 	char *extra_args;
 	int ret;
@@ -134,8 +137,14 @@ main(int argc, char **argv)
 		goto out;
 	}
 
+	argv += ret;
+	argc -= ret;
+
+	prgname = argv[0];
+
 #ifdef RTE_LIB_TIMER
-	if (rte_timer_subsystem_init() < 0) {
+	ret = rte_timer_subsystem_init();
+	if (ret < 0 && ret != -EALREADY) {
 		ret = -1;
 		goto out;
 	}
@@ -145,10 +154,6 @@ main(int argc, char **argv)
 		ret = -1;
 		goto out;
 	}
-
-	argv += ret;
-
-	prgname = argv[0];
 
 	recursive_call = getenv(RECURSIVE_ENV_VAR);
 	if (recursive_call != NULL) {
@@ -164,29 +169,60 @@ main(int argc, char **argv)
 
 
 #ifdef RTE_LIB_CMDLINE
-	cl = cmdline_stdin_new(main_ctx, "RTE>>");
-	if (cl == NULL) {
-		ret = -1;
-		goto out;
+	char *dpdk_test = getenv("DPDK_TEST");
+
+	if (dpdk_test && strlen(dpdk_test) == 0)
+		dpdk_test = NULL;
+
+	if (dpdk_test && !command_valid(dpdk_test)) {
+		RTE_LOG(WARNING, APP, "Invalid DPDK_TEST value '%s'\n", dpdk_test);
+		dpdk_test = NULL;
 	}
 
-	char *dpdk_test = getenv("DPDK_TEST");
-	if (dpdk_test && strlen(dpdk_test)) {
+	if (dpdk_test)
+		tests[test_count++] = dpdk_test;
+	for (i = 1; i < argc; i++) {
+		if (!command_valid(argv[i]))
+			RTE_LOG(WARNING, APP, "Invalid test requested: '%s'\n", argv[i]);
+		else
+			tests[test_count++] = argv[i];
+	}
+
+	if (test_count > 0) {
 		char buf[1024];
-		snprintf(buf, sizeof(buf), "%s\n", dpdk_test);
-		if (cmdline_in(cl, buf, strlen(buf)) < 0) {
-			printf("error on cmdline input\n");
+
+		cl = cmdline_new(main_ctx, "RTE>>", 0, 1);
+		if (cl == NULL) {
 			ret = -1;
 			goto out;
 		}
 
-		cmdline_stdin_exit(cl);
-		ret = last_test_result;
+		for (i = 0; i < test_count; i++) {
+			snprintf(buf, sizeof(buf), "%s\n", tests[i]);
+			if (cmdline_in(cl, buf, strlen(buf)) < 0) {
+				printf("error on cmdline input\n");
+
+				ret = -1;
+			} else
+				ret = last_test_result;
+
+			if (ret != 0)
+				break;
+		}
+		cmdline_free(cl);
 		goto out;
+	} else {
+		/* if no DPDK_TEST env variable, go interactive */
+		cl = cmdline_stdin_new(main_ctx, "RTE>>");
+		if (cl == NULL) {
+			ret = -1;
+			goto out;
+		}
+
+		cmdline_interact(cl);
+		cmdline_stdin_exit(cl);
+		cmdline_free(cl);
 	}
-	/* if no DPDK_TEST env variable, go interactive */
-	cmdline_interact(cl);
-	cmdline_stdin_exit(cl);
 #endif
 	ret = 0;
 

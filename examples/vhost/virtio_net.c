@@ -23,6 +23,7 @@ vs_vhost_net_setup(struct vhost_dev *dev)
 	uint16_t i;
 	int vid = dev->vid;
 	struct vhost_queue *queue;
+	int ret;
 
 	RTE_LOG(INFO, VHOST_CONFIG,
 		"setting builtin vhost-user net driver\n");
@@ -33,7 +34,12 @@ vs_vhost_net_setup(struct vhost_dev *dev)
 	else
 		dev->hdr_len = sizeof(struct virtio_net_hdr);
 
-	rte_vhost_get_mem_table(vid, &dev->mem);
+	ret = rte_vhost_get_mem_table(vid, &dev->mem);
+	if (ret < 0) {
+		RTE_LOG(ERR, VHOST_CONFIG, "Failed to get "
+			"VM memory layout for device(%d)\n", vid);
+		return;
+	}
 
 	dev->nr_vrings = rte_vhost_get_vring_num(vid);
 	for (i = 0; i < dev->nr_vrings; i++) {
@@ -191,7 +197,7 @@ vs_enqueue_pkts(struct vhost_dev *dev, uint16_t queue_id,
 	queue = &dev->queues[queue_id];
 	vr    = &queue->vr;
 
-	avail_idx = *((volatile uint16_t *)&vr->avail->idx);
+	avail_idx = __atomic_load_n(&vr->avail->idx, __ATOMIC_ACQUIRE);
 	start_idx = queue->last_used_idx;
 	free_entries = avail_idx - start_idx;
 	count = RTE_MIN(count, free_entries);
@@ -224,9 +230,7 @@ vs_enqueue_pkts(struct vhost_dev *dev, uint16_t queue_id,
 			rte_prefetch0(&vr->desc[desc_indexes[i+1]]);
 	}
 
-	rte_smp_wmb();
-
-	*(volatile uint16_t *)&vr->used->idx += count;
+	__atomic_add_fetch(&vr->used->idx, count, __ATOMIC_RELEASE);
 	queue->last_used_idx += count;
 
 	rte_vhost_vring_call(dev->vid, queue_id);
@@ -374,7 +378,7 @@ vs_dequeue_pkts(struct vhost_dev *dev, uint16_t queue_id,
 	queue = &dev->queues[queue_id];
 	vr    = &queue->vr;
 
-	free_entries = *((volatile uint16_t *)&vr->avail->idx) -
+	free_entries = __atomic_load_n(&vr->avail->idx, __ATOMIC_ACQUIRE) -
 			queue->last_avail_idx;
 	if (free_entries == 0)
 		return 0;
@@ -429,10 +433,8 @@ vs_dequeue_pkts(struct vhost_dev *dev, uint16_t queue_id,
 
 	queue->last_avail_idx += i;
 	queue->last_used_idx += i;
-	rte_smp_wmb();
-	rte_smp_rmb();
 
-	vr->used->idx += i;
+	__atomic_add_fetch(&vr->used->idx, i, __ATOMIC_ACQ_REL);
 
 	rte_vhost_vring_call(dev->vid, queue_id);
 

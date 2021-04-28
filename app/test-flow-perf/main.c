@@ -34,11 +34,12 @@
 #include <rte_mbuf.h>
 #include <rte_ethdev.h>
 #include <rte_flow.h>
+#include <rte_mtr.h>
 
 #include "config.h"
 #include "flow_gen.h"
 
-#define MAX_ITERATIONS             100
+#define MAX_BATCHES_COUNT          100
 #define DEFAULT_RULES_COUNT    4000000
 #define DEFAULT_RULES_BATCH     100000
 #define DEFAULT_GROUP                0
@@ -60,6 +61,7 @@ static bool dump_iterations;
 static bool delete_flag;
 static bool dump_socket_mem_flag;
 static bool enable_fwd;
+static bool unique_data;
 
 static struct rte_mempool *mbuf_mp;
 static uint32_t nb_lcores;
@@ -72,7 +74,8 @@ static uint32_t nb_lcores;
 #define LCORE_MODE_PKT    1
 #define LCORE_MODE_STATS  2
 #define MAX_STREAMS      64
-#define MAX_LCORES       64
+#define METER_CREATE	  1
+#define METER_DELETE	  2
 
 struct stream {
 	int tx_port;
@@ -92,7 +95,25 @@ struct lcore_info {
 	struct rte_mbuf *pkts[MAX_PKT_BURST];
 } __rte_cache_aligned;
 
-static struct lcore_info lcore_infos[MAX_LCORES];
+static struct lcore_info lcore_infos[RTE_MAX_LCORE];
+
+struct used_cpu_time {
+	double insertion[MAX_PORTS][RTE_MAX_LCORE];
+	double deletion[MAX_PORTS][RTE_MAX_LCORE];
+};
+
+struct multi_cores_pool {
+	uint32_t cores_count;
+	uint32_t rules_count;
+	struct used_cpu_time meters_record;
+	struct used_cpu_time flows_record;
+	int64_t last_alloc[RTE_MAX_LCORE];
+	int64_t current_alloc[RTE_MAX_LCORE];
+} __rte_cache_aligned;
+
+static struct multi_cores_pool mc_pool = {
+	.cores_count = 1,
+};
 
 static void
 usage(char *progname)
@@ -111,6 +132,8 @@ usage(char *progname)
 	printf("  --enable-fwd: To enable packets forwarding"
 		" after insertion\n");
 	printf("  --portmask=N: hexadecimal bitmask of ports used\n");
+	printf("  --unique-data: flag to set using unique data for all"
+		" actions that support data, such as header modify and encap actions\n");
 
 	printf("To set flow attributes:\n");
 	printf("  --ingress: set ingress attribute in flows\n");
@@ -118,6 +141,8 @@ usage(char *progname)
 	printf("  --transfer: set transfer attribute in flows\n");
 	printf("  --group=N: set group for all flows,"
 		" default is %d\n", DEFAULT_GROUP);
+	printf("  --cores=N: to set the number of needed "
+		"cores to insert rte_flow rules, default is 1\n");
 
 	printf("To set flow items:\n");
 	printf("  --ether: add ether layer in flow items\n");
@@ -181,6 +206,7 @@ usage(char *progname)
 	printf("  --set-ipv6-dscp: add set ipv6 dscp action to flow actions\n"
 		"ipv6 dscp value to be set is random each flow\n");
 	printf("  --flag: add flag action to flow actions\n");
+	printf("  --meter: add meter action to flow actions\n");
 	printf("  --raw-encap=<data>: add raw encap action to flow actions\n"
 		"Data is the data needed to be encaped\n"
 		"Example: raw-encap=ether,ipv4,udp,vxlan\n");
@@ -510,6 +536,14 @@ args_parse(int argc, char **argv)
 			.map_idx = &actions_idx
 		},
 		{
+			.str = "meter",
+			.mask = FLOW_ACTION_MASK(
+				RTE_FLOW_ACTION_TYPE_METER
+			),
+			.map = &flow_actions[0],
+			.map_idx = &actions_idx
+		},
+		{
 			.str = "vxlan-encap",
 			.mask = FLOW_ACTION_MASK(
 				RTE_FLOW_ACTION_TYPE_VXLAN_ENCAP
@@ -536,7 +570,9 @@ args_parse(int argc, char **argv)
 		{ "deletion-rate",              0, 0, 0 },
 		{ "dump-socket-mem",            0, 0, 0 },
 		{ "enable-fwd",                 0, 0, 0 },
+		{ "unique-data",                0, 0, 0 },
 		{ "portmask",                   1, 0, 0 },
+		{ "cores",                      1, 0, 0 },
 		/* Attributes */
 		{ "ingress",                    0, 0, 0 },
 		{ "egress",                     0, 0, 0 },
@@ -587,6 +623,7 @@ args_parse(int argc, char **argv)
 		{ "set-ipv4-dscp",              0, 0, 0 },
 		{ "set-ipv6-dscp",              0, 0, 0 },
 		{ "flag",                       0, 0, 0 },
+		{ "meter",		        0, 0, 0 },
 		{ "raw-encap",                  1, 0, 0 },
 		{ "raw-decap",                  1, 0, 0 },
 		{ "vxlan-encap",                0, 0, 0 },
@@ -606,7 +643,7 @@ args_parse(int argc, char **argv)
 		case 0:
 			if (strcmp(lgopts[opt_idx].name, "help") == 0) {
 				usage(argv[0]);
-				rte_exit(EXIT_SUCCESS, "Displayed help\n");
+				exit(EXIT_SUCCESS);
 			}
 
 			if (strcmp(lgopts[opt_idx].name, "group") == 0) {
@@ -614,7 +651,7 @@ args_parse(int argc, char **argv)
 				if (n >= 0)
 					flow_group = n;
 				else
-					rte_exit(EXIT_SUCCESS,
+					rte_exit(EXIT_FAILURE,
 						"flow group should be >= 0\n");
 				printf("group %d / ", flow_group);
 			}
@@ -634,7 +671,7 @@ args_parse(int argc, char **argv)
 				if (n > 0)
 					hairpin_queues_num = n;
 				else
-					rte_exit(EXIT_SUCCESS,
+					rte_exit(EXIT_FAILURE,
 						"Hairpin queues should be > 0\n");
 
 				flow_actions[actions_idx++] =
@@ -647,7 +684,7 @@ args_parse(int argc, char **argv)
 				if (n > 0)
 					hairpin_queues_num = n;
 				else
-					rte_exit(EXIT_SUCCESS,
+					rte_exit(EXIT_FAILURE,
 						"Hairpin queues should be > 0\n");
 
 				flow_actions[actions_idx++] =
@@ -671,11 +708,9 @@ args_parse(int argc, char **argv)
 							break;
 						}
 						/* Reached last item with no match */
-						if (i == (RTE_DIM(flow_options) - 1)) {
-							fprintf(stderr, "Invalid encap item: %s\n", token);
-							usage(argv[0]);
-							rte_exit(EXIT_SUCCESS, "Invalid encap item\n");
-						}
+						if (i == (RTE_DIM(flow_options) - 1))
+							rte_exit(EXIT_FAILURE,
+								"Invalid encap item: %s\n", token);
 					}
 					token = strtok(NULL, ",");
 				}
@@ -693,15 +728,13 @@ args_parse(int argc, char **argv)
 					for (i = 0; i < RTE_DIM(flow_options); i++) {
 						if (strcmp(flow_options[i].str, token) == 0) {
 							printf("%s,", token);
-							encap_data |= flow_options[i].mask;
+							decap_data |= flow_options[i].mask;
 							break;
 						}
 						/* Reached last item with no match */
-						if (i == (RTE_DIM(flow_options) - 1)) {
-							fprintf(stderr, "Invalid decap item: %s\n", token);
-							usage(argv[0]);
-							rte_exit(EXIT_SUCCESS, "Invalid decap item\n");
-						}
+						if (i == (RTE_DIM(flow_options) - 1))
+							rte_exit(EXIT_FAILURE,
+								"Invalid decap item %s\n", token);
 					}
 					token = strtok(NULL, ",");
 				}
@@ -714,9 +747,9 @@ args_parse(int argc, char **argv)
 				if (n >= DEFAULT_RULES_BATCH)
 					rules_batch = n;
 				else {
-					printf("\n\nrules_batch should be >= %d\n",
+					rte_exit(EXIT_FAILURE,
+						"rules_batch should be >= %d\n",
 						DEFAULT_RULES_BATCH);
-					rte_exit(EXIT_SUCCESS, " ");
 				}
 			}
 			if (strcmp(lgopts[opt_idx].name,
@@ -725,13 +758,17 @@ args_parse(int argc, char **argv)
 				if (n >= (int) rules_batch)
 					rules_count = n;
 				else {
-					printf("\n\nrules_count should be >= %d\n",
+					rte_exit(EXIT_FAILURE,
+						"rules_count should be >= %d\n",
 						rules_batch);
 				}
 			}
 			if (strcmp(lgopts[opt_idx].name,
 					"dump-iterations") == 0)
 				dump_iterations = true;
+			if (strcmp(lgopts[opt_idx].name,
+					"unique-data") == 0)
+				unique_data = true;
 			if (strcmp(lgopts[opt_idx].name,
 					"deletion-rate") == 0)
 				delete_flag = true;
@@ -750,11 +787,26 @@ args_parse(int argc, char **argv)
 					rte_exit(EXIT_FAILURE, "Invalid fwd port mask\n");
 				ports_mask = pm;
 			}
+			if (strcmp(lgopts[opt_idx].name, "cores") == 0) {
+				n = atoi(optarg);
+				if ((int) rte_lcore_count() <= n) {
+					rte_exit(EXIT_FAILURE,
+						"Error: you need %d cores to run on multi-cores\n"
+						"Existing cores are: %d\n", n, rte_lcore_count());
+				}
+				if (n <= RTE_MAX_LCORE && n > 0)
+					mc_pool.cores_count = n;
+				else {
+					rte_exit(EXIT_FAILURE,
+						"Error: cores count must be > 0 and < %d\n",
+						RTE_MAX_LCORE);
+				}
+			}
 			break;
 		default:
-			fprintf(stderr, "Invalid option: %s\n", argv[optind]);
 			usage(argv[0]);
-			rte_exit(EXIT_SUCCESS, "Invalid option\n");
+			rte_exit(EXIT_FAILURE, "Invalid option: %s\n",
+					argv[optind]);
 			break;
 		}
 	}
@@ -826,189 +878,578 @@ print_flow_error(struct rte_flow_error error)
 }
 
 static inline void
-destroy_flows(int port_id, struct rte_flow **flow_list)
+print_rules_batches(double *cpu_time_per_batch)
 {
-	struct rte_flow_error error;
-	clock_t start_iter, end_iter;
-	double cpu_time_used = 0;
-	double flows_rate;
-	double cpu_time_per_iter[MAX_ITERATIONS];
+	uint8_t idx;
 	double delta;
-	uint32_t i;
-	int iter_id;
+	double rate;
 
-	for (i = 0; i < MAX_ITERATIONS; i++)
-		cpu_time_per_iter[i] = -1;
-
-	if (rules_batch > rules_count)
-		rules_batch = rules_count;
-
-	/* Deletion Rate */
-	printf("Flows Deletion on port = %d\n", port_id);
-	start_iter = clock();
-	for (i = 0; i < rules_count; i++) {
-		if (flow_list[i] == 0)
+	for (idx = 0; idx < MAX_BATCHES_COUNT; idx++) {
+		if (!cpu_time_per_batch[idx])
 			break;
+		delta = (double)(rules_batch / cpu_time_per_batch[idx]);
+		rate = delta / 1000; /* Save rate in K unit. */
+		printf(":: Rules batch #%d: %d rules "
+			"in %f sec[ Rate = %f K Rule/Sec ]\n",
+			idx, rules_batch,
+			cpu_time_per_batch[idx], rate);
+	}
+}
 
-		memset(&error, 0x33, sizeof(error));
-		if (rte_flow_destroy(port_id, flow_list[i], &error)) {
-			print_flow_error(error);
-			rte_exit(EXIT_FAILURE, "Error in deleting flow");
-		}
 
-		if (i && !((i + 1) % rules_batch)) {
-			/* Save the deletion rate of each iter */
-			end_iter = clock();
-			delta = (double) (end_iter - start_iter);
-			iter_id = ((i + 1) / rules_batch) - 1;
-			cpu_time_per_iter[iter_id] =
-				delta / CLOCKS_PER_SEC;
-			cpu_time_used += cpu_time_per_iter[iter_id];
-			start_iter = clock();
+static inline int
+has_meter(void)
+{
+	int i;
+
+	for (i = 0; i < MAX_ACTIONS_NUM; i++) {
+		if (flow_actions[i] == 0)
+			break;
+		if (flow_actions[i]
+				& FLOW_ACTION_MASK(RTE_FLOW_ACTION_TYPE_METER))
+			return 1;
+	}
+	return 0;
+}
+
+static void
+create_meter_rule(int port_id, uint32_t counter)
+{
+	int ret;
+	struct rte_mtr_params params;
+	uint32_t default_prof_id = 100;
+	struct rte_mtr_error error;
+
+	memset(&params, 0, sizeof(struct rte_mtr_params));
+	params.meter_enable = 1;
+	params.stats_mask = 0xffff;
+	params.use_prev_mtr_color = 0;
+	params.dscp_table = NULL;
+
+	/*create meter*/
+	params.meter_profile_id = default_prof_id;
+	ret = rte_mtr_create(port_id, counter, &params, 1, &error);
+	if (ret != 0) {
+		printf("Port %u create meter idx(%d) error(%d) message: %s\n",
+			port_id, counter, error.type,
+			error.message ? error.message : "(no stated reason)");
+		rte_exit(EXIT_FAILURE, "Error in creating meter\n");
+	}
+}
+
+static void
+destroy_meter_rule(int port_id, uint32_t counter)
+{
+	struct rte_mtr_error error;
+
+	if (rte_mtr_destroy(port_id, counter, &error)) {
+		printf("Port %u destroy meter(%d) error(%d) message: %s\n",
+			port_id, counter, error.type,
+			error.message ? error.message : "(no stated reason)");
+		rte_exit(EXIT_FAILURE, "Error in deleting meter rule\n");
+	}
+}
+
+static void
+meters_handler(int port_id, uint8_t core_id, uint8_t ops)
+{
+	uint64_t start_batch;
+	double cpu_time_used, insertion_rate;
+	int rules_count_per_core, rules_batch_idx;
+	uint32_t counter, start_counter = 0, end_counter;
+	double cpu_time_per_batch[MAX_BATCHES_COUNT] = { 0 };
+
+	rules_count_per_core = rules_count / mc_pool.cores_count;
+
+	if (core_id)
+		start_counter = core_id * rules_count_per_core;
+	end_counter = (core_id + 1) * rules_count_per_core;
+
+	cpu_time_used = 0;
+	start_batch = rte_get_timer_cycles();
+	for (counter = start_counter; counter < end_counter; counter++) {
+		if (ops == METER_CREATE)
+			create_meter_rule(port_id, counter);
+		else
+			destroy_meter_rule(port_id, counter);
+		/*
+		 * Save the insertion rate for rules batch.
+		 * Check if the insertion reached the rules
+		 * patch counter, then save the insertion rate
+		 * for this batch.
+		 */
+		if (!((counter + 1) % rules_batch)) {
+			rules_batch_idx = ((counter + 1) / rules_batch) - 1;
+			cpu_time_per_batch[rules_batch_idx] =
+				((double)(rte_get_timer_cycles() - start_batch))
+				/ rte_get_timer_hz();
+			cpu_time_used += cpu_time_per_batch[rules_batch_idx];
+			start_batch = rte_get_timer_cycles();
 		}
 	}
 
-	/* Deletion rate per iteration */
+	/* Print insertion rates for all batches */
 	if (dump_iterations)
-		for (i = 0; i < MAX_ITERATIONS; i++) {
-			if (cpu_time_per_iter[i] == -1)
-				continue;
-			delta = (double)(rules_batch /
-				cpu_time_per_iter[i]);
-			flows_rate = delta / 1000;
-			printf(":: Iteration #%d: %d flows "
-				"in %f sec[ Rate = %f K/Sec ]\n",
-				i, rules_batch,
-				cpu_time_per_iter[i], flows_rate);
-		}
+		print_rules_batches(cpu_time_per_batch);
 
-	/* Deletion rate for all flows */
-	flows_rate = ((double) (rules_count / cpu_time_used) / 1000);
-	printf("\n:: Total flow deletion rate -> %f K/Sec\n",
-		flows_rate);
-	printf(":: The time for deleting %d in flows %f seconds\n",
-		rules_count, cpu_time_used);
+	insertion_rate =
+		((double) (rules_count_per_core / cpu_time_used) / 1000);
+
+	/* Insertion rate for all rules in one core */
+	printf(":: Port %d :: Core %d Meter %s :: start @[%d] - end @[%d],"
+		" use:%.02fs, rate:%.02fk Rule/Sec\n",
+		port_id, core_id, ops == METER_CREATE ? "create" : "delete",
+		start_counter, end_counter - 1,
+		cpu_time_used, insertion_rate);
+
+	if (ops == METER_CREATE)
+		mc_pool.meters_record.insertion[port_id][core_id]
+			= cpu_time_used;
+	else
+		mc_pool.meters_record.deletion[port_id][core_id]
+			= cpu_time_used;
+}
+
+static void
+destroy_meter_profile(void)
+{
+	struct rte_mtr_error error;
+	uint16_t nr_ports;
+	int port_id;
+
+	nr_ports = rte_eth_dev_count_avail();
+	for (port_id = 0; port_id < nr_ports; port_id++) {
+		/* If port outside portmask */
+		if (!((ports_mask >> port_id) & 0x1))
+			continue;
+
+		if (rte_mtr_meter_profile_delete
+			(port_id, DEFAULT_METER_PROF_ID, &error)) {
+			printf("Port %u del profile error(%d) message: %s\n",
+				port_id, error.type,
+				error.message ? error.message : "(no stated reason)");
+			rte_exit(EXIT_FAILURE, "Error: Destroy meter profile Failed!\n");
+		}
+	}
+}
+
+static void
+create_meter_profile(void)
+{
+	uint16_t nr_ports;
+	int ret, port_id;
+	struct rte_mtr_meter_profile mp;
+	struct rte_mtr_error error;
+
+	/*
+	 *currently , only create one meter file for one port
+	 *1 meter profile -> N meter rules -> N rte flows
+	 */
+	memset(&mp, 0, sizeof(struct rte_mtr_meter_profile));
+	nr_ports = rte_eth_dev_count_avail();
+	for (port_id = 0; port_id < nr_ports; port_id++) {
+		/* If port outside portmask */
+		if (!((ports_mask >> port_id) & 0x1))
+			continue;
+
+		mp.alg = RTE_MTR_SRTCM_RFC2697;
+		mp.srtcm_rfc2697.cir = METER_CIR;
+		mp.srtcm_rfc2697.cbs = METER_CIR / 8;
+		mp.srtcm_rfc2697.ebs = 0;
+
+		ret = rte_mtr_meter_profile_add
+			(port_id, DEFAULT_METER_PROF_ID, &mp, &error);
+		if (ret != 0) {
+			printf("Port %u create Profile error(%d) message: %s\n",
+				port_id, error.type,
+				error.message ? error.message : "(no stated reason)");
+			rte_exit(EXIT_FAILURE, "Error: Creation meter profile Failed!\n");
+		}
+	}
 }
 
 static inline void
-flows_handler(void)
+destroy_flows(int port_id, uint8_t core_id, struct rte_flow **flows_list)
 {
-	struct rte_flow **flow_list;
 	struct rte_flow_error error;
-	clock_t start_iter, end_iter;
-	double cpu_time_used;
-	double flows_rate;
-	double cpu_time_per_iter[MAX_ITERATIONS];
+	clock_t start_batch, end_batch;
+	double cpu_time_used = 0;
+	double deletion_rate;
+	double cpu_time_per_batch[MAX_BATCHES_COUNT] = { 0 };
 	double delta;
-	uint16_t nr_ports;
 	uint32_t i;
-	int port_id;
-	int iter_id;
+	int rules_batch_idx;
+	int rules_count_per_core;
+
+	rules_count_per_core = rules_count / mc_pool.cores_count;
+	/* If group > 0 , should add 1 flow which created in group 0 */
+	if (flow_group > 0 && core_id == 0)
+		rules_count_per_core++;
+
+	start_batch = rte_get_timer_cycles();
+	for (i = 0; i < (uint32_t) rules_count_per_core; i++) {
+		if (flows_list[i] == 0)
+			break;
+
+		memset(&error, 0x33, sizeof(error));
+		if (rte_flow_destroy(port_id, flows_list[i], &error)) {
+			print_flow_error(error);
+			rte_exit(EXIT_FAILURE, "Error in deleting flow\n");
+		}
+
+		/*
+		 * Save the deletion rate for rules batch.
+		 * Check if the deletion reached the rules
+		 * patch counter, then save the deletion rate
+		 * for this batch.
+		 */
+		if (!((i + 1) % rules_batch)) {
+			end_batch = rte_get_timer_cycles();
+			delta = (double) (end_batch - start_batch);
+			rules_batch_idx = ((i + 1) / rules_batch) - 1;
+			cpu_time_per_batch[rules_batch_idx] = delta / rte_get_timer_hz();
+			cpu_time_used += cpu_time_per_batch[rules_batch_idx];
+			start_batch = rte_get_timer_cycles();
+		}
+	}
+
+	/* Print deletion rates for all batches */
+	if (dump_iterations)
+		print_rules_batches(cpu_time_per_batch);
+
+	/* Deletion rate for all rules */
+	deletion_rate = ((double) (rules_count_per_core / cpu_time_used) / 1000);
+	printf(":: Port %d :: Core %d :: Rules deletion rate -> %f K Rule/Sec\n",
+		port_id, core_id, deletion_rate);
+	printf(":: Port %d :: Core %d :: The time for deleting %d rules is %f seconds\n",
+		port_id, core_id, rules_count_per_core, cpu_time_used);
+
+	mc_pool.flows_record.deletion[port_id][core_id] = cpu_time_used;
+}
+
+static struct rte_flow **
+insert_flows(int port_id, uint8_t core_id)
+{
+	struct rte_flow **flows_list;
+	struct rte_flow_error error;
+	clock_t start_batch, end_batch;
+	double first_flow_latency;
+	double cpu_time_used;
+	double insertion_rate;
+	double cpu_time_per_batch[MAX_BATCHES_COUNT] = { 0 };
+	double delta;
 	uint32_t flow_index;
+	uint32_t counter, start_counter = 0, end_counter;
 	uint64_t global_items[MAX_ITEMS_NUM] = { 0 };
 	uint64_t global_actions[MAX_ACTIONS_NUM] = { 0 };
+	int rules_batch_idx;
+	int rules_count_per_core;
+
+	rules_count_per_core = rules_count / mc_pool.cores_count;
+
+	/* Set boundaries of rules for each core. */
+	if (core_id)
+		start_counter = core_id * rules_count_per_core;
+	end_counter = (core_id + 1) * rules_count_per_core;
 
 	global_items[0] = FLOW_ITEM_MASK(RTE_FLOW_ITEM_TYPE_ETH);
 	global_actions[0] = FLOW_ITEM_MASK(RTE_FLOW_ACTION_TYPE_JUMP);
 
-	nr_ports = rte_eth_dev_count_avail();
+	flows_list = rte_zmalloc("flows_list",
+		(sizeof(struct rte_flow *) * rules_count_per_core) + 1, 0);
+	if (flows_list == NULL)
+		rte_exit(EXIT_FAILURE, "No Memory available!\n");
 
-	for (i = 0; i < MAX_ITERATIONS; i++)
-		cpu_time_per_iter[i] = -1;
+	cpu_time_used = 0;
+	flow_index = 0;
+	if (flow_group > 0 && core_id == 0) {
+		/*
+		 * Create global rule to jump into flow_group,
+		 * this way the app will avoid the default rules.
+		 *
+		 * This rule will be created only once.
+		 *
+		 * Global rule:
+		 * group 0 eth / end actions jump group <flow_group>
+		 */
+		flow = generate_flow(port_id, 0, flow_attrs,
+			global_items, global_actions,
+			flow_group, 0, 0, 0, 0, core_id, unique_data, &error);
+
+		if (flow == NULL) {
+			print_flow_error(error);
+			rte_exit(EXIT_FAILURE, "Error in creating flow\n");
+		}
+		flows_list[flow_index++] = flow;
+	}
+
+	start_batch = rte_get_timer_cycles();
+	for (counter = start_counter; counter < end_counter; counter++) {
+		flow = generate_flow(port_id, flow_group,
+			flow_attrs, flow_items, flow_actions,
+			JUMP_ACTION_TABLE, counter,
+			hairpin_queues_num,
+			encap_data, decap_data,
+			core_id, unique_data, &error);
+
+		if (!counter) {
+			first_flow_latency = (double) (rte_get_timer_cycles() - start_batch);
+			first_flow_latency /= rte_get_timer_hz();
+			/* In millisecond */
+			first_flow_latency *= 1000;
+			printf(":: First Flow Latency :: Port %d :: First flow "
+				"installed in %f milliseconds\n",
+				port_id, first_flow_latency);
+		}
+
+		if (force_quit)
+			counter = end_counter;
+
+		if (!flow) {
+			print_flow_error(error);
+			rte_exit(EXIT_FAILURE, "Error in creating flow\n");
+		}
+
+		flows_list[flow_index++] = flow;
+
+		/*
+		 * Save the insertion rate for rules batch.
+		 * Check if the insertion reached the rules
+		 * patch counter, then save the insertion rate
+		 * for this batch.
+		 */
+		if (!((counter + 1) % rules_batch)) {
+			end_batch = rte_get_timer_cycles();
+			delta = (double) (end_batch - start_batch);
+			rules_batch_idx = ((counter + 1) / rules_batch) - 1;
+			cpu_time_per_batch[rules_batch_idx] = delta / rte_get_timer_hz();
+			cpu_time_used += cpu_time_per_batch[rules_batch_idx];
+			start_batch = rte_get_timer_cycles();
+		}
+	}
+
+	/* Print insertion rates for all batches */
+	if (dump_iterations)
+		print_rules_batches(cpu_time_per_batch);
+
+	printf(":: Port %d :: Core %d boundaries :: start @[%d] - end @[%d]\n",
+		port_id, core_id, start_counter, end_counter - 1);
+
+	/* Insertion rate for all rules in one core */
+	insertion_rate = ((double) (rules_count_per_core / cpu_time_used) / 1000);
+	printf(":: Port %d :: Core %d :: Rules insertion rate -> %f K Rule/Sec\n",
+		port_id, core_id, insertion_rate);
+	printf(":: Port %d :: Core %d :: The time for creating %d in rules %f seconds\n",
+		port_id, core_id, rules_count_per_core, cpu_time_used);
+
+	mc_pool.flows_record.insertion[port_id][core_id] = cpu_time_used;
+	return flows_list;
+}
+
+static void
+flows_handler(uint8_t core_id)
+{
+	struct rte_flow **flows_list;
+	uint16_t nr_ports;
+	int port_id;
+
+	nr_ports = rte_eth_dev_count_avail();
 
 	if (rules_batch > rules_count)
 		rules_batch = rules_count;
 
-	printf(":: Flows Count per port: %d\n", rules_count);
-
-	flow_list = rte_zmalloc("flow_list",
-		(sizeof(struct rte_flow *) * rules_count) + 1, 0);
-	if (flow_list == NULL)
-		rte_exit(EXIT_FAILURE, "No Memory available!");
+	printf(":: Rules Count per port: %d\n\n", rules_count);
 
 	for (port_id = 0; port_id < nr_ports; port_id++) {
 		/* If port outside portmask */
 		if (!((ports_mask >> port_id) & 0x1))
 			continue;
-		cpu_time_used = 0;
-		flow_index = 0;
-		if (flow_group > 0) {
-			/*
-			 * Create global rule to jump into flow_group,
-			 * this way the app will avoid the default rules.
-			 *
-			 * Global rule:
-			 * group 0 eth / end actions jump group <flow_group>
-			 *
-			 */
-			flow = generate_flow(port_id, 0, flow_attrs,
-				global_items, global_actions,
-				flow_group, 0, 0, 0, 0, &error);
 
-			if (flow == NULL) {
-				print_flow_error(error);
-				rte_exit(EXIT_FAILURE, "error in creating flow");
-			}
-			flow_list[flow_index++] = flow;
+		/* Insertion part. */
+		mc_pool.last_alloc[core_id] = (int64_t)dump_socket_mem(stdout);
+		if (has_meter())
+			meters_handler(port_id, core_id, METER_CREATE);
+		flows_list = insert_flows(port_id, core_id);
+		if (flows_list == NULL)
+			rte_exit(EXIT_FAILURE, "Error: Insertion Failed!\n");
+		mc_pool.current_alloc[core_id] = (int64_t)dump_socket_mem(stdout);
+
+		/* Deletion part. */
+		if (delete_flag) {
+			destroy_flows(port_id, core_id, flows_list);
+			if (has_meter())
+				meters_handler(port_id, core_id, METER_DELETE);
 		}
-
-		/* Insertion Rate */
-		printf("Flows insertion on port = %d\n", port_id);
-		start_iter = clock();
-		for (i = 0; i < rules_count; i++) {
-			flow = generate_flow(port_id, flow_group,
-				flow_attrs, flow_items, flow_actions,
-				JUMP_ACTION_TABLE, i,
-				hairpin_queues_num,
-				encap_data, decap_data,
-				&error);
-
-			if (force_quit)
-				i = rules_count;
-
-			if (!flow) {
-				print_flow_error(error);
-				rte_exit(EXIT_FAILURE, "error in creating flow");
-			}
-
-			flow_list[flow_index++] = flow;
-
-			if (i && !((i + 1) % rules_batch)) {
-				/* Save the insertion rate of each iter */
-				end_iter = clock();
-				delta = (double) (end_iter - start_iter);
-				iter_id = ((i + 1) / rules_batch) - 1;
-				cpu_time_per_iter[iter_id] =
-					delta / CLOCKS_PER_SEC;
-				cpu_time_used += cpu_time_per_iter[iter_id];
-				start_iter = clock();
-			}
-		}
-
-		/* Iteration rate per iteration */
-		if (dump_iterations)
-			for (i = 0; i < MAX_ITERATIONS; i++) {
-				if (cpu_time_per_iter[i] == -1)
-					continue;
-				delta = (double)(rules_batch /
-					cpu_time_per_iter[i]);
-				flows_rate = delta / 1000;
-				printf(":: Iteration #%d: %d flows "
-					"in %f sec[ Rate = %f K/Sec ]\n",
-					i, rules_batch,
-					cpu_time_per_iter[i], flows_rate);
-			}
-
-		/* Insertion rate for all flows */
-		flows_rate = ((double) (rules_count / cpu_time_used) / 1000);
-		printf("\n:: Total flow insertion rate -> %f K/Sec\n",
-						flows_rate);
-		printf(":: The time for creating %d in flows %f seconds\n",
-						rules_count, cpu_time_used);
-
-		if (delete_flag)
-			destroy_flows(port_id, flow_list);
 	}
+}
+
+static void
+dump_used_cpu_time(const char *item,
+		uint16_t port, struct used_cpu_time *used_time)
+{
+	uint32_t i;
+	/* Latency: total count of rte rules divided
+	 * over max time used by thread between all
+	 * threads time.
+	 *
+	 * Throughput: total count of rte rules divided
+	 * over the average of the time cosumed by all
+	 * threads time.
+	 */
+	double insertion_latency_time;
+	double insertion_throughput_time;
+	double deletion_latency_time;
+	double deletion_throughput_time;
+	double insertion_latency, insertion_throughput;
+	double deletion_latency, deletion_throughput;
+
+	/* Save first insertion/deletion rates from first thread.
+	 * Start comparing with all threads, if any thread used
+	 * time more than current saved, replace it.
+	 *
+	 * Thus in the end we will have the max time used for
+	 * insertion/deletion by one thread.
+	 *
+	 * As for memory consumption, save the min of all threads
+	 * of last alloc, and save the max for all threads for
+	 * current alloc.
+	 */
+
+	insertion_latency_time = used_time->insertion[port][0];
+	deletion_latency_time = used_time->deletion[port][0];
+	insertion_throughput_time = used_time->insertion[port][0];
+	deletion_throughput_time = used_time->deletion[port][0];
+
+	i = mc_pool.cores_count;
+	while (i-- > 1) {
+		insertion_throughput_time += used_time->insertion[port][i];
+		deletion_throughput_time += used_time->deletion[port][i];
+		if (insertion_latency_time < used_time->insertion[port][i])
+			insertion_latency_time = used_time->insertion[port][i];
+		if (deletion_latency_time < used_time->deletion[port][i])
+			deletion_latency_time = used_time->deletion[port][i];
+	}
+
+	insertion_latency = ((double) (mc_pool.rules_count
+				/ insertion_latency_time) / 1000);
+	deletion_latency = ((double) (mc_pool.rules_count
+				/ deletion_latency_time) / 1000);
+
+	insertion_throughput_time /= mc_pool.cores_count;
+	deletion_throughput_time /= mc_pool.cores_count;
+	insertion_throughput = ((double) (mc_pool.rules_count
+				/ insertion_throughput_time) / 1000);
+	deletion_throughput = ((double) (mc_pool.rules_count
+				/ deletion_throughput_time) / 1000);
+
+	/* Latency stats */
+	printf("\n%s\n:: [Latency | Insertion] All Cores :: Port %d :: ",
+		item, port);
+	printf("Total flows insertion rate -> %f K Rules/Sec\n",
+		insertion_latency);
+	printf(":: [Latency | Insertion] All Cores :: Port %d :: ", port);
+	printf("The time for creating %d rules is %f seconds\n",
+		mc_pool.rules_count, insertion_latency_time);
+
+	/* Throughput stats */
+	printf(":: [Throughput | Insertion] All Cores :: Port %d :: ", port);
+	printf("Total flows insertion rate -> %f K Rules/Sec\n",
+		insertion_throughput);
+	printf(":: [Throughput | Insertion] All Cores :: Port %d :: ", port);
+	printf("The average time for creating %d rules is %f seconds\n",
+		mc_pool.rules_count, insertion_throughput_time);
+
+	if (delete_flag) {
+	/* Latency stats */
+		printf(":: [Latency | Deletion] All Cores :: Port %d :: Total "
+			"deletion rate -> %f K Rules/Sec\n",
+			port, deletion_latency);
+		printf(":: [Latency | Deletion] All Cores :: Port %d :: ",
+			port);
+		printf("The time for deleting %d rules is %f seconds\n",
+			mc_pool.rules_count, deletion_latency_time);
+
+		/* Throughput stats */
+		printf(":: [Throughput | Deletion] All Cores :: Port %d :: Total "
+			"deletion rate -> %f K Rules/Sec\n",
+			port, deletion_throughput);
+		printf(":: [Throughput | Deletion] All Cores :: Port %d :: ",
+			port);
+		printf("The average time for deleting %d rules is %f seconds\n",
+			mc_pool.rules_count, deletion_throughput_time);
+	}
+}
+
+static void
+dump_used_mem(uint16_t port)
+{
+	uint32_t i;
+	int64_t last_alloc, current_alloc;
+	int flow_size_in_bytes;
+
+	last_alloc = mc_pool.last_alloc[0];
+	current_alloc = mc_pool.current_alloc[0];
+
+	i = mc_pool.cores_count;
+	while (i-- > 1) {
+		if (last_alloc > mc_pool.last_alloc[i])
+			last_alloc = mc_pool.last_alloc[i];
+		if (current_alloc < mc_pool.current_alloc[i])
+			current_alloc = mc_pool.current_alloc[i];
+	}
+
+	flow_size_in_bytes = (current_alloc - last_alloc) / mc_pool.rules_count;
+	printf("\n:: Port %d :: rte_flow size in DPDK layer: %d Bytes\n",
+		port, flow_size_in_bytes);
+}
+
+static int
+run_rte_flow_handler_cores(void *data __rte_unused)
+{
+	uint16_t port;
+	int lcore_counter = 0;
+	int lcore_id = rte_lcore_id();
+	int i;
+
+	RTE_LCORE_FOREACH(i) {
+		/*  If core not needed return. */
+		if (lcore_id == i) {
+			printf(":: lcore %d mapped with index %d\n", lcore_id, lcore_counter);
+			if (lcore_counter >= (int) mc_pool.cores_count)
+				return 0;
+			break;
+		}
+		lcore_counter++;
+	}
+	lcore_id = lcore_counter;
+
+	if (lcore_id >= (int) mc_pool.cores_count)
+		return 0;
+
+	mc_pool.rules_count = rules_count;
+
+	flows_handler(lcore_id);
+
+	/* Only main core to print total results. */
+	if (lcore_id != 0)
+		return 0;
+
+	/* Make sure all cores finished insertion/deletion process. */
+	rte_eal_mp_wait_lcore();
+
+	RTE_ETH_FOREACH_DEV(port) {
+		/* If port outside portmask */
+		if (!((ports_mask >> port) & 0x1))
+			continue;
+		if (has_meter())
+			dump_used_cpu_time("Meters:",
+				port, &mc_pool.meters_record);
+		dump_used_cpu_time("Flows:",
+			port, &mc_pool.flows_record);
+		dump_used_mem(port);
+	}
+
+	return 0;
 }
 
 static void
@@ -1085,12 +1526,12 @@ packet_per_second_stats(void)
 	int i;
 
 	old = rte_zmalloc("old",
-		sizeof(struct lcore_info) * MAX_LCORES, 0);
+		sizeof(struct lcore_info) * RTE_MAX_LCORE, 0);
 	if (old == NULL)
-		rte_exit(EXIT_FAILURE, "No Memory available!");
+		rte_exit(EXIT_FAILURE, "No Memory available!\n");
 
 	memcpy(old, lcore_infos,
-		sizeof(struct lcore_info) * MAX_LCORES);
+		sizeof(struct lcore_info) * RTE_MAX_LCORE);
 
 	while (!force_quit) {
 		uint64_t total_tx_pkts = 0;
@@ -1113,7 +1554,7 @@ packet_per_second_stats(void)
 		printf("%6s %16s %16s %16s\n", "------", "----------------",
 			"----------------", "----------------");
 		nr_lines = 3;
-		for (i = 0; i < MAX_LCORES; i++) {
+		for (i = 0; i < RTE_MAX_LCORE; i++) {
 			li  = &lcore_infos[i];
 			oli = &old[i];
 			if (li->mode != LCORE_MODE_PKT)
@@ -1144,7 +1585,7 @@ packet_per_second_stats(void)
 		}
 
 		memcpy(old, lcore_infos,
-			sizeof(struct lcore_info) * MAX_LCORES);
+			sizeof(struct lcore_info) * RTE_MAX_LCORE);
 	}
 }
 
@@ -1205,7 +1646,7 @@ init_lcore_info(void)
 	 * This means that this stream is not used, or not set
 	 * yet.
 	 */
-	for (i = 0; i < MAX_LCORES; i++)
+	for (i = 0; i < RTE_MAX_LCORE; i++)
 		for (j = 0; j < MAX_STREAMS; j++) {
 			lcore_infos[i].streams[j].tx_port = -1;
 			lcore_infos[i].streams[j].rx_port = -1;
@@ -1267,7 +1708,7 @@ init_lcore_info(void)
 
 	/* Print all streams */
 	printf(":: Stream -> core id[N]: (rx_port, rx_queue)->(tx_port, tx_queue)\n");
-	for (i = 0; i < MAX_LCORES; i++)
+	for (i = 0; i < RTE_MAX_LCORE; i++)
 		for (j = 0; j < MAX_STREAMS; j++) {
 			/* No streams for this core */
 			if (lcore_infos[i].streams[j].tx_port == -1)
@@ -1421,7 +1862,6 @@ main(int argc, char **argv)
 	int ret;
 	uint16_t port;
 	struct rte_flow_error error;
-	int64_t alloc, last_alloc;
 
 	ret = rte_eal_init(argc, argv);
 	if (ret < 0)
@@ -1434,6 +1874,7 @@ main(int argc, char **argv)
 	delete_flag = false;
 	dump_socket_mem_flag = false;
 	flow_group = DEFAULT_GROUP;
+	unique_data = false;
 
 	signal(SIGINT, signal_handler);
 	signal(SIGTERM, signal_handler);
@@ -1449,18 +1890,18 @@ main(int argc, char **argv)
 	if (nb_lcores <= 1)
 		rte_exit(EXIT_FAILURE, "This app needs at least two cores\n");
 
-	last_alloc = (int64_t)dump_socket_mem(stdout);
-	flows_handler();
-	alloc = (int64_t)dump_socket_mem(stdout);
+	printf(":: Flows Count per port: %d\n\n", rules_count);
 
-	if (last_alloc)
-		fprintf(stdout, ":: Memory allocation change(M): %.6lf\n",
-		(alloc - last_alloc) / 1.0e6);
+	if (has_meter())
+		create_meter_profile();
+	rte_eal_mp_remote_launch(run_rte_flow_handler_cores, NULL, CALL_MAIN);
 
 	if (enable_fwd) {
 		init_lcore_info();
 		rte_eal_mp_remote_launch(start_forwarding, NULL, CALL_MAIN);
 	}
+	if (has_meter() && delete_flag)
+		destroy_meter_profile();
 
 	RTE_ETH_FOREACH_DEV(port) {
 		rte_flow_flush(port, &error);
@@ -1468,5 +1909,6 @@ main(int argc, char **argv)
 			printf("Failed to stop device on port %u\n", port);
 		rte_eth_dev_close(port);
 	}
+	printf("\nBye ...\n");
 	return 0;
 }

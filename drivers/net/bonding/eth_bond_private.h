@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <sys/queue.h>
 
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_flow.h>
 #include <rte_spinlock.h>
 #include <rte_bitmap.h>
@@ -212,7 +212,7 @@ int
 valid_bonded_port_id(uint16_t port_id);
 
 int
-valid_slave_port_id(uint16_t port_id, uint8_t mode);
+valid_slave_port_id(struct bond_dev_private *internals, uint16_t port_id);
 
 void
 deactivate_slave(struct rte_eth_dev *eth_dev, uint16_t port_id);

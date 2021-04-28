@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2019-2020 Broadcom
+ * Copyright(c) 2019-2021 Broadcom
  * All rights reserved.
  */
 
@@ -82,7 +82,7 @@ tf_open_session(struct tf *tfp,
 		return rc;
 
 	TFP_DRV_LOG(INFO,
-		    "domain:%d, bus:%d, device:%d\n",
+		    "domain:%d, bus:%d, device:%u\n",
 		    parms->session_id.internal.domain,
 		    parms->session_id.internal.bus,
 		    parms->session_id.internal.device);

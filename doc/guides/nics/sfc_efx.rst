@@ -1,5 +1,5 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
-    Copyright(c) 2019-2020 Xilinx, Inc.
+    Copyright(c) 2019-2021 Xilinx, Inc.
     Copyright(c) 2016-2019 Solarflare Communications Inc.
 
     This software was jointly developed between OKTET Labs (under contract
@@ -356,6 +356,14 @@ allow option like "-a 02:00.0,arg1=value1,...".
 
 Case-insensitive 1/y/yes/on or 0/n/no/off may be used to specify
 boolean parameters value.
+
+- ``class`` [net|vdpa] (default **net**)
+
+  Choose the mode of operation of ef100 device.
+  **net** device will work as network device and will be probed by net/sfc driver.
+  **vdpa** device will work as vdpa device and will be probed by vdpa/sfc driver.
+  If this parameter is not specified then ef100 device will operate as
+  network device.
 
 - ``rx_datapath`` [auto|efx|ef10|ef10_essb] (default **auto**)
 

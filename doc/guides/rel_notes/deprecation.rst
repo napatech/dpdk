@@ -11,14 +11,6 @@ here.
 Deprecation Notices
 -------------------
 
-* build: The macros defined to indicate which DPDK libraries and drivers
-  are included in the meson build are changing to a standardized format of
-  ``RTE_LIB_<NAME>`` and ``RTE_<CLASS>_<NAME>``, where ``NAME`` is the
-  upper-case component name, e.g. EAL, ETHDEV, IXGBE, and ``CLASS`` is the
-  upper-case name of the device class to which a driver belongs e.g.
-  ``NET``, ``CRYPTO``, ``VDPA``. The old macros are deprecated and will be
-  removed in a future release.
-
 * kvargs: The function ``rte_kvargs_process`` will get a new parameter
   for returning key match count. It will ease handling of no-match case.
 
@@ -121,11 +113,27 @@ Deprecation Notices
   will be limited to maximum 256 queues.
   Also compile time flag ``RTE_ETHDEV_QUEUE_STAT_CNTRS`` will be removed.
 
-* Broadcom bnxt PMD: NetXtreme devices belonging to the ``BCM573xx and
-  BCM5740x`` families will no longer be supported as of DPDK 21.02.
-  Specifically the support for the following Broadcom PCI IDs will be removed
-  from the release: ``0x16c8, 0x16c9, 0x16ca, 0x16ce, 0x16cf, 0x16df,``
-  ``0x16d0, 0x16d1, 0x16d2, 0x16d4, 0x16d5, 0x16e7, 0x16e8, 0x16e9``.
+* ethdev: The offload flag ``PKT_RX_EIP_CKSUM_BAD`` will be removed and
+  replaced by the new flag ``PKT_RX_OUTER_IP_CKSUM_BAD``. The new name is more
+  consistent with existing outer header checksum status flag naming, which
+  should help in reducing confusion about its usage.
+
+* i40e: As there are both i40evf and iavf pmd, the functions of them are
+  duplicated. And now more and more advanced features are developed on iavf.
+  To keep consistent with kernel driver's name
+  (https://patchwork.ozlabs.org/patch/970154/), i40evf is no need to maintain.
+  Starting from 21.05, the default VF driver of i40e will be iavf, but i40evf
+  can still be used if users specify the devarg "driver=i40evf". I40evf will
+  be deleted in DPDK 21.11.
+
+* eventdev: The structure ``rte_event_eth_rx_adapter_queue_conf`` will be
+  extended to include ``rte_event_eth_rx_adapter_event_vector_config`` elements
+  and the function ``rte_event_eth_rx_adapter_queue_event_vector_config`` will
+  be removed in DPDK 21.11.
+
+  An application can enable event vectorization by passing the desired vector
+  values to the function ``rte_event_eth_rx_adapter_queue_add`` using
+  the structure ``rte_event_eth_rx_adapter_queue_add``.
 
 * sched: To allow more traffic classes, flexible mapping of pipe queues to
   traffic classes, and subport level configuration of pipes and queues

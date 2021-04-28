@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* Copyright(c) 2019-2020 Broadcom All rights reserved. */
+/* Copyright(c) 2019-2021 Broadcom All rights reserved. */
 
 #include <inttypes.h>
 #include <stdbool.h>
@@ -27,11 +27,11 @@
 	uint32_t tmp, of;						       \
 									       \
 	of = _mm_extract_epi32((rss_flags), (pi)) |			       \
-		bnxt_ol_flags_table[_mm_extract_epi32((ol_index), (pi))];      \
+		rxr->ol_flags_table[_mm_extract_epi32((ol_index), (pi))];      \
 									       \
 	tmp = _mm_extract_epi32((errors), (pi));			       \
 	if (tmp)							       \
-		of |= bnxt_ol_flags_err_table[tmp];			       \
+		of |= rxr->ol_flags_err_table[tmp];			       \
 	(ol_flags) = of;						       \
 }
 
@@ -54,7 +54,8 @@
 
 static inline void
 descs_to_mbufs(__m128i mm_rxcmp[4], __m128i mm_rxcmp1[4],
-	       __m128i mbuf_init, struct rte_mbuf **mbuf)
+	       __m128i mbuf_init, struct rte_mbuf **mbuf,
+	       struct bnxt_rx_ring_info *rxr)
 {
 	const __m128i shuf_msk =
 		_mm_set_epi8(15, 14, 13, 12,          /* rss */
@@ -72,7 +73,7 @@ descs_to_mbufs(__m128i mm_rxcmp[4], __m128i mm_rxcmp1[4],
 	const __m128i rss_mask =
 		_mm_set1_epi32(RX_PKT_CMPL_FLAGS_RSS_VALID);
 	__m128i t0, t1, flags_type, flags2, index, errors, rss_flags;
-	__m128i ptype_idx;
+	__m128i ptype_idx, is_tunnel;
 	uint32_t ol_flags;
 
 	/* Compute packet type table indexes for four packets */
@@ -99,6 +100,8 @@ descs_to_mbufs(__m128i mm_rxcmp[4], __m128i mm_rxcmp1[4],
 	t1 = _mm_unpackhi_epi32(mm_rxcmp1[2], mm_rxcmp1[3]);
 
 	/* Compute ol_flags and checksum error indexes for four packets. */
+	is_tunnel = _mm_and_si128(flags2, _mm_set1_epi32(4));
+	is_tunnel = _mm_slli_epi32(is_tunnel, 3);
 	flags2 = _mm_and_si128(flags2, _mm_set1_epi32(0x1F));
 
 	errors = _mm_srli_epi32(_mm_unpacklo_epi64(t0, t1), 4);
@@ -106,6 +109,8 @@ descs_to_mbufs(__m128i mm_rxcmp[4], __m128i mm_rxcmp1[4],
 	errors = _mm_and_si128(errors, flags2);
 
 	index = _mm_andnot_si128(errors, flags2);
+	errors = _mm_or_si128(errors, _mm_srli_epi32(is_tunnel, 1));
+	index = _mm_or_si128(index, is_tunnel);
 
 	/* Update mbuf rearm_data for four packets. */
 	GET_OL_FLAGS(rss_flags, index, errors, 0, ol_flags);
@@ -251,34 +256,19 @@ bnxt_recv_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
 		valid = _mm_cvtsi128_si64(_mm_packs_epi32(info3_v, info3_v));
 		num_valid = __builtin_popcountll(valid & desc_valid_mask);
 
-		switch (num_valid) {
-		case 4:
-			rxr->rx_buf_ring[mbcons + 3] = NULL;
-			/* FALLTHROUGH */
-		case 3:
-			rxr->rx_buf_ring[mbcons + 2] = NULL;
-			/* FALLTHROUGH */
-		case 2:
-			rxr->rx_buf_ring[mbcons + 1] = NULL;
-			/* FALLTHROUGH */
-		case 1:
-			rxr->rx_buf_ring[mbcons + 0] = NULL;
+		if (num_valid == 0)
 			break;
-		case 0:
-			goto out;
-		}
 
-		descs_to_mbufs(rxcmp, rxcmp1, mbuf_init, &rx_pkts[nb_rx_pkts]);
+		descs_to_mbufs(rxcmp, rxcmp1, mbuf_init, &rx_pkts[nb_rx_pkts],
+			       rxr);
 		nb_rx_pkts += num_valid;
 
 		if (num_valid < RTE_BNXT_DESCS_PER_LOOP)
 			break;
 	}
 
-out:
 	if (nb_rx_pkts) {
-		rxr->rx_prod =
-			RING_ADV(rxr->rx_ring_struct, rxr->rx_prod, nb_rx_pkts);
+		rxr->rx_raw_prod = RING_ADV(rxr->rx_raw_prod, nb_rx_pkts);
 
 		rxq->rxrearm_nb += nb_rx_pkts;
 		cpr->cp_raw_cons += 2 * nb_rx_pkts;
@@ -331,12 +321,11 @@ bnxt_handle_tx_cp_vec(struct bnxt_tx_queue *txq)
 
 static inline void
 bnxt_xmit_one(struct rte_mbuf *mbuf, struct tx_bd_long *txbd,
-	      struct bnxt_sw_tx_bd *tx_buf)
+	      struct rte_mbuf **tx_buf)
 {
 	__m128i desc;
 
-	tx_buf->mbuf = mbuf;
-	tx_buf->nr_bds = 1;
+	*tx_buf = mbuf;
 
 	desc = _mm_set_epi64x(mbuf->buf_iova + mbuf->data_off,
 			      bnxt_xmit_flags_len(mbuf->data_len,
@@ -351,11 +340,12 @@ bnxt_xmit_fixed_burst_vec(struct bnxt_tx_queue *txq, struct rte_mbuf **tx_pkts,
 			  uint16_t nb_pkts)
 {
 	struct bnxt_tx_ring_info *txr = txq->tx_ring;
-	uint16_t tx_prod = txr->tx_prod;
+	uint16_t tx_prod, tx_raw_prod = txr->tx_raw_prod;
 	struct tx_bd_long *txbd;
-	struct bnxt_sw_tx_bd *tx_buf;
+	struct rte_mbuf **tx_buf;
 	uint16_t to_send;
 
+	tx_prod = RING_IDX(txr->tx_ring_struct, tx_raw_prod);
 	txbd = &txr->tx_desc_ring[tx_prod];
 	tx_buf = &txr->tx_buf_ring[tx_prod];
 
@@ -395,10 +385,10 @@ bnxt_xmit_fixed_burst_vec(struct bnxt_tx_queue *txq, struct rte_mbuf **tx_pkts,
 	txbd[-1].opaque = nb_pkts;
 	txbd[-1].flags_type &= ~TX_BD_LONG_FLAGS_NO_CMPL;
 
-	tx_prod = RING_ADV(txr->tx_ring_struct, tx_prod, nb_pkts);
-	bnxt_db_write(&txr->tx_db, tx_prod);
+	tx_raw_prod += nb_pkts;
+	bnxt_db_write(&txr->tx_db, tx_raw_prod);
 
-	txr->tx_prod = tx_prod;
+	txr->tx_raw_prod = tx_raw_prod;
 
 	return nb_pkts;
 }
@@ -435,8 +425,8 @@ bnxt_xmit_pkts_vec(void *tx_queue, struct rte_mbuf **tx_pkts,
 		 * Ensure that a ring wrap does not occur within a call to
 		 * bnxt_xmit_fixed_burst_vec().
 		 */
-		num = RTE_MIN(num,
-			      ring_size - (txr->tx_prod & (ring_size - 1)));
+		num = RTE_MIN(num, ring_size -
+				   (txr->tx_raw_prod & (ring_size - 1)));
 		ret = bnxt_xmit_fixed_burst_vec(txq, &tx_pkts[nb_sent], num);
 		nb_sent += ret;
 		nb_pkts -= ret;

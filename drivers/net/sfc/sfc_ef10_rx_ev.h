@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright(c) 2019-2020 Xilinx, Inc.
+ * Copyright(c) 2019-2021 Xilinx, Inc.
  * Copyright(c) 2018-2019 Solarflare Communications Inc.
  *
  * This software was jointly developed between OKTET Labs (under contract
@@ -76,7 +76,7 @@ sfc_ef10_rx_ev_to_offloads(const efx_qword_t rx_ev, struct rte_mbuf *m,
 		l4_csum_err_bit = ESF_EZ_RX_TCP_UDP_INNER_CHKSUM_ERR_LBN;
 		if (unlikely(EFX_TEST_QWORD_BIT(rx_ev,
 						ESF_DZ_RX_IPCKSUM_ERR_LBN)))
-			ol_flags |= PKT_RX_EIP_CKSUM_BAD;
+			ol_flags |= PKT_RX_OUTER_IP_CKSUM_BAD;
 	}
 
 	switch (EFX_QWORD_FIELD(rx_ev, ESF_DZ_RX_ETH_TAG_CLASS)) {

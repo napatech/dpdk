@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2020 Intel Corporation
+ * Copyright(c) 2001-2021 Intel Corporation
  */
 
 #ifndef _ICE_TYPE_H_
@@ -44,9 +44,7 @@
 #define ice_struct_size(ptr, field, num) \
 	(sizeof(*(ptr)) + sizeof(*(ptr)->field) * (num))
 
-#ifndef FLEX_ARRAY_SIZE
 #define FLEX_ARRAY_SIZE(_ptr, _mem, cnt) ((cnt) * sizeof(_ptr->_mem[0]))
-#endif /* FLEX_ARRAY_SIZE */
 
 #include "ice_status.h"
 #include "ice_hw_autogen.h"
@@ -57,6 +55,7 @@
 #include "ice_lan_tx_rx.h"
 #include "ice_flex_type.h"
 #include "ice_protocol_type.h"
+#include "ice_vlan_mode.h"
 
 /**
  * ice_is_pow2 - check if integer value is a power of 2
@@ -247,6 +246,7 @@ struct ice_link_status {
 	u16 max_frame_size;
 	u16 link_speed;
 	u16 req_speeds;
+	u8 link_cfg_err;
 	u8 lse_ena;	/* Link Status Event notification */
 	u8 link_info;
 	u8 an_info;
@@ -303,8 +303,29 @@ enum ice_fltr_ptype {
 	ICE_FLTR_PTYPE_NONF_IPV4_TCP,
 	ICE_FLTR_PTYPE_NONF_IPV4_SCTP,
 	ICE_FLTR_PTYPE_NONF_IPV4_OTHER,
+	ICE_FLTR_PTYPE_NONF_IPV4_GTPU,
+	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_EH,
+	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_EH_DW,
+	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_EH_UP,
+	ICE_FLTR_PTYPE_NONF_IPV6_GTPU,
+	ICE_FLTR_PTYPE_NONF_IPV6_GTPU_EH,
+	ICE_FLTR_PTYPE_NONF_IPV6_GTPU_EH_DW,
+	ICE_FLTR_PTYPE_NONF_IPV6_GTPU_EH_UP,
+	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4,
 	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_UDP,
 	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_TCP,
+	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV6,
+	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV6_UDP,
+	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV6_TCP,
+	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_EH_IPV4,
+	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_EH_IPV4_UDP,
+	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_EH_IPV4_TCP,
+	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_EH_DW_IPV4,
+	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_EH_DW_IPV4_UDP,
+	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_EH_DW_IPV4_TCP,
+	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_EH_UP_IPV4,
+	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_EH_UP_IPV4_UDP,
+	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_EH_UP_IPV4_TCP,
 	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_ICMP,
 	ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_OTHER,
 	ICE_FLTR_PTYPE_NONF_IPV6_GTPU_IPV6_OTHER,
@@ -323,11 +344,14 @@ enum ice_fltr_ptype {
 	ICE_FLTR_PTYPE_NONF_IPV6_PFCP_NODE,
 	ICE_FLTR_PTYPE_NONF_IPV6_PFCP_SESSION,
 	ICE_FLTR_PTYPE_NON_IP_L2,
+	ICE_FLTR_PTYPE_NONF_ECPRI_TP0,
+	ICE_FLTR_PTYPE_NONF_IPV4_UDP_ECPRI_TP0,
 	ICE_FLTR_PTYPE_FRAG_IPV4,
 	ICE_FLTR_PTYPE_NONF_IPV6_UDP,
 	ICE_FLTR_PTYPE_NONF_IPV6_TCP,
 	ICE_FLTR_PTYPE_NONF_IPV6_SCTP,
 	ICE_FLTR_PTYPE_NONF_IPV6_OTHER,
+	ICE_FLTR_PTYPE_NONF_IPV4_UDP_VXLAN,
 	ICE_FLTR_PTYPE_MAX,
 };
 
@@ -419,7 +443,11 @@ struct ice_hw_common_caps {
 	u8 apm_wol_support;
 	u8 acpi_prog_mthd;
 	u8 proxy_support;
+	bool sec_rev_disabled;
+	bool update_disabled;
 	bool nvm_unified_update;
+#define ICE_NVM_MGMT_SEC_REV_DISABLED		BIT(0)
+#define ICE_NVM_MGMT_UPDATE_DISABLED		BIT(1)
 #define ICE_NVM_MGMT_UNIFIED_UPD_SUPPORT	BIT(3)
 };
 
@@ -531,6 +559,15 @@ enum ice_flash_bank {
 	ICE_INVALID_FLASH_BANK,
 	ICE_1ST_FLASH_BANK,
 	ICE_2ND_FLASH_BANK,
+};
+
+/* Enumeration of which flash bank is desired to read from, either the active
+ * bank or the inactive bank. Used to abstract 1st and 2nd bank notion from
+ * code which just wants to read the active or inactive flash bank.
+ */
+enum ice_bank_select {
+	ICE_ACTIVE_FLASH_BANK,
+	ICE_INACTIVE_FLASH_BANK,
 };
 
 /* information for accessing NVM, OROM, and Netlist flash banks */
@@ -765,18 +802,10 @@ struct ice_dcb_app_priority_table {
 #define ICE_TLV_STATUS_OPER		0x1
 #define ICE_TLV_STATUS_SYNC		0x2
 #define ICE_TLV_STATUS_ERR		0x4
-#ifndef ICE_APP_PROT_ID_FCOE
 #define ICE_APP_PROT_ID_FCOE		0x8906
-#endif /* ICE_APP_PROT_ID_FCOE */
-#ifndef ICE_APP_PROT_ID_ISCSI
 #define ICE_APP_PROT_ID_ISCSI		0x0cbc
-#endif /* ICE_APP_PROT_ID_ISCSI */
-#ifndef ICE_APP_PROT_ID_ISCSI_860
 #define ICE_APP_PROT_ID_ISCSI_860	0x035c
-#endif /* ICE_APP_PROT_ID_ISCSI_860 */
-#ifndef ICE_APP_PROT_ID_FIP
 #define ICE_APP_PROT_ID_FIP		0x8914
-#endif /* ICE_APP_PROT_ID_FIP */
 #define ICE_APP_SEL_ETHTYPE		0x1
 #define ICE_APP_SEL_TCPIP		0x2
 #define ICE_CEE_APP_SEL_ETHTYPE		0x0
@@ -961,6 +990,8 @@ struct ice_hw {
 	/* tunneling info */
 	struct ice_lock tnl_lock;
 	struct ice_tunnel_table tnl;
+	/* dvm boost update information */
+	struct ice_dvm_table dvm_upd;
 
 	struct ice_acl_tbl *acl_tbl;
 	struct ice_fd_hw_prof **acl_prof;
@@ -985,6 +1016,8 @@ struct ice_hw {
 	ice_declare_bitmap(fdir_perfect_fltr, ICE_FLTR_PTYPE_MAX);
 	struct ice_lock rss_locks;	/* protect RSS configuration */
 	struct LIST_HEAD_TYPE rss_list_head;
+	ice_declare_bitmap(hw_ptype, ICE_FLOW_PTYPE_MAX);
+	u8 dvm_ena;
 };
 
 /* Statistics collected by each port, VSI, VEB, and S-channel */
@@ -1144,8 +1177,49 @@ struct ice_aq_get_set_rss_lut_params {
 #define ICE_NVM_CSS_SREV_L			0x14
 #define ICE_NVM_CSS_SREV_H			0x15
 
+/* Length of CSS header section in words */
+#define ICE_CSS_HEADER_LENGTH			330
+
+/* Offset of Shadow RAM copy in the NVM bank area. */
+#define ICE_NVM_SR_COPY_WORD_OFFSET		ROUND_UP(ICE_CSS_HEADER_LENGTH, 32)
+
 /* Size in bytes of Option ROM trailer */
-#define ICE_NVM_OROM_TRAILER_LENGTH		660
+#define ICE_NVM_OROM_TRAILER_LENGTH		(2 * ICE_CSS_HEADER_LENGTH)
+
+/* The Link Topology Netlist section is stored as a series of words. It is
+ * stored in the NVM as a TLV, with the first two words containing the type
+ * and length.
+ */
+#define ICE_NETLIST_LINK_TOPO_MOD_ID		0x011B
+#define ICE_NETLIST_TYPE_OFFSET			0x0000
+#define ICE_NETLIST_LEN_OFFSET			0x0001
+
+/* The Link Topology section follows the TLV header. When reading the netlist
+ * using ice_read_netlist_module, we need to account for the 2-word TLV
+ * header.
+ */
+#define ICE_NETLIST_LINK_TOPO_OFFSET(n)		((n) + 2)
+
+#define ICE_LINK_TOPO_MODULE_LEN		ICE_NETLIST_LINK_TOPO_OFFSET(0x0000)
+#define ICE_LINK_TOPO_NODE_COUNT		ICE_NETLIST_LINK_TOPO_OFFSET(0x0001)
+
+#define ICE_LINK_TOPO_NODE_COUNT_M		MAKEMASK(0x3FF, 0)
+
+/* The Netlist ID Block is located after all of the Link Topology nodes. */
+#define ICE_NETLIST_ID_BLK_SIZE			0x30
+#define ICE_NETLIST_ID_BLK_OFFSET(n)		ICE_NETLIST_LINK_TOPO_OFFSET(0x0004 + 2 * (n))
+
+/* netlist ID block field offsets (word offsets) */
+#define ICE_NETLIST_ID_BLK_MAJOR_VER_LOW	0x02
+#define ICE_NETLIST_ID_BLK_MAJOR_VER_HIGH	0x03
+#define ICE_NETLIST_ID_BLK_MINOR_VER_LOW	0x04
+#define ICE_NETLIST_ID_BLK_MINOR_VER_HIGH	0x05
+#define ICE_NETLIST_ID_BLK_TYPE_LOW		0x06
+#define ICE_NETLIST_ID_BLK_TYPE_HIGH		0x07
+#define ICE_NETLIST_ID_BLK_REV_LOW		0x08
+#define ICE_NETLIST_ID_BLK_REV_HIGH		0x09
+#define ICE_NETLIST_ID_BLK_SHA_HASH_WORD(n)	(0x0A + (n))
+#define ICE_NETLIST_ID_BLK_CUST_VER		0x2F
 
 /* Auxiliary field, mask and shift definition for Shadow RAM and NVM Flash */
 #define ICE_SR_VPD_SIZE_WORDS		512
@@ -1194,4 +1268,9 @@ struct ice_aq_get_set_rss_lut_params {
 #define ICE_FW_API_LLDP_FLTR_MAJ	1
 #define ICE_FW_API_LLDP_FLTR_MIN	7
 #define ICE_FW_API_LLDP_FLTR_PATCH	1
+
+/* AQ API version for report default configuration */
+#define ICE_FW_API_REPORT_DFLT_CFG_MAJ		1
+#define ICE_FW_API_REPORT_DFLT_CFG_MIN		7
+#define ICE_FW_API_REPORT_DFLT_CFG_PATCH	3
 #endif /* _ICE_TYPE_H_ */

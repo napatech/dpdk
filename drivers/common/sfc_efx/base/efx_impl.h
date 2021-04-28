@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright(c) 2019-2020 Xilinx, Inc.
+ * Copyright(c) 2019-2021 Xilinx, Inc.
  * Copyright(c) 2007-2019 Solarflare Communications Inc.
  */
 
@@ -65,6 +65,7 @@ extern "C" {
 #define	EFX_MOD_TUNNEL		0x00004000
 #define	EFX_MOD_EVB		0x00008000
 #define	EFX_MOD_PROXY		0x00010000
+#define	EFX_MOD_VIRTIO		0x00020000
 
 #define	EFX_RESET_PHY		0x00000001
 #define	EFX_RESET_RXQ_ERR	0x00000002
@@ -307,6 +308,22 @@ typedef struct efx_tunnel_ops_s {
 	void		(*eto_fini)(efx_nic_t *);
 } efx_tunnel_ops_t;
 #endif /* EFSYS_OPT_TUNNEL */
+
+#if EFSYS_OPT_VIRTIO
+typedef struct efx_virtio_ops_s {
+	efx_rc_t	(*evo_virtio_qstart)(efx_virtio_vq_t *,
+				efx_virtio_vq_cfg_t *,
+				efx_virtio_vq_dyncfg_t *);
+	efx_rc_t	(*evo_virtio_qstop)(efx_virtio_vq_t *,
+				efx_virtio_vq_dyncfg_t *);
+	efx_rc_t	(*evo_get_doorbell_offset)(efx_virtio_vq_t *,
+				uint32_t *);
+	efx_rc_t	(*evo_get_features)(efx_nic_t *,
+				efx_virtio_device_type_t, uint64_t *);
+	efx_rc_t	(*evo_verify_features)(efx_nic_t *,
+				efx_virtio_device_type_t, uint64_t);
+} efx_virtio_ops_t;
+#endif /* EFSYS_OPT_VIRTIO */
 
 typedef struct efx_port_s {
 	efx_mac_type_t		ep_mac_type;
@@ -857,6 +874,9 @@ struct efx_nic_s {
 #endif	/* EFSYS_OPT_NVRAM */
 #if EFSYS_OPT_VPD
 	const efx_vpd_ops_t	*en_evpdop;
+#endif	/* EFSYS_OPT_VPD */
+#if EFSYS_OPT_VIRTIO
+	const efx_virtio_ops_t	*en_evop;
 #endif	/* EFSYS_OPT_VPD */
 #if EFSYS_OPT_RX_SCALE
 	efx_rx_hash_support_t		en_hash_support;
@@ -1707,8 +1727,10 @@ struct efx_mae_match_spec_s {
 
 typedef enum efx_mae_action_e {
 	/* These actions are strictly ordered. */
+	EFX_MAE_ACTION_DECAP,
 	EFX_MAE_ACTION_VLAN_POP,
 	EFX_MAE_ACTION_VLAN_PUSH,
+	EFX_MAE_ACTION_ENCAP,
 
 	/*
 	 * These actions are not strictly ordered and can
@@ -1736,6 +1758,10 @@ typedef struct efx_mae_action_vlan_push_s {
 	uint16_t			emavp_tci_be;
 } efx_mae_action_vlan_push_t;
 
+typedef struct efx_mae_actions_rsrc_s {
+	efx_mae_eh_id_t			emar_eh_id;
+} efx_mae_actions_rsrc_t;
+
 struct efx_mae_actions_s {
 	/* Bitmap of actions in spec, indexed by action type */
 	uint32_t			ema_actions;
@@ -1746,9 +1772,38 @@ struct efx_mae_actions_s {
 	    EFX_MAE_VLAN_PUSH_MAX_NTAGS];
 	uint32_t			ema_mark_value;
 	efx_mport_sel_t			ema_deliver_mport;
+
+	/*
+	 * Always keep this at the end of the struct since
+	 * efx_mae_action_set_specs_equal() relies on that
+	 * to make sure that resource IDs are not compared.
+	 */
+	efx_mae_actions_rsrc_t		ema_rsrc;
 };
 
 #endif /* EFSYS_OPT_MAE */
+
+#if EFSYS_OPT_VIRTIO
+
+#define	EFX_VQ_MAGIC	0x026011950
+
+typedef enum efx_virtio_vq_state_e {
+	EFX_VIRTIO_VQ_STATE_UNKNOWN = 0,
+	EFX_VIRTIO_VQ_STATE_INITIALIZED,
+	EFX_VIRTIO_VQ_STATE_STARTED,
+	EFX_VIRTIO_VQ_NSTATES
+} efx_virtio_vq_state_t;
+
+struct efx_virtio_vq_s {
+	uint32_t		evv_magic;
+	efx_nic_t		*evv_enp;
+	efx_virtio_vq_state_t	evv_state;
+	uint32_t		evv_vi_index;
+	efx_virtio_vq_type_t	evv_type;
+	uint16_t		evv_target_vf;
+};
+
+#endif /* EFSYS_OPT_VIRTIO */
 
 #ifdef	__cplusplus
 }

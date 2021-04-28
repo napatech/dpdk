@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2018-2019 Hisilicon Limited.
+ * Copyright(c) 2018-2021 HiSilicon Limited.
  */
 
 #ifndef _HNS3_MBX_H_
@@ -83,12 +83,26 @@ enum hns3_mbx_link_fail_subcode {
 #define HNS3_MBX_RING_MAP_BASIC_MSG_NUM	3
 #define HNS3_MBX_RING_NODE_VARIABLE_NUM	3
 
+enum {
+	HNS3_MBX_RESP_MATCHING_SCHEME_OF_ORIGINAL = 0,
+	HNS3_MBX_RESP_MATCHING_SCHEME_OF_MATCH_ID
+};
+
 struct hns3_mbx_resp_status {
 	rte_spinlock_t lock; /* protects against contending sync cmd resp */
+
+	uint8_t matching_scheme;
+
+	/* The following fields used in the matching scheme for original */
 	uint32_t req_msg_data;
 	uint32_t head;
 	uint32_t tail;
 	uint32_t lost;
+
+	/* The following fields used in the matching scheme for match_id */
+	uint16_t match_id;
+	bool received_match_resp;
+
 	int resp_status;
 	uint8_t additional_info[HNS3_MBX_MAX_RESP_DATA_SIZE];
 };
@@ -106,7 +120,8 @@ struct hns3_mbx_vf_to_pf_cmd {
 	uint8_t mbx_need_resp;
 	uint8_t rsv1;
 	uint8_t msg_len;
-	uint8_t rsv2[3];
+	uint8_t rsv2;
+	uint16_t match_id;
 	uint8_t msg[HNS3_MBX_MAX_MSG_SIZE];
 };
 
@@ -114,7 +129,8 @@ struct hns3_mbx_pf_to_vf_cmd {
 	uint8_t dest_vfid;
 	uint8_t rsv[3];
 	uint8_t msg_len;
-	uint8_t rsv1[3];
+	uint8_t rsv1;
+	uint16_t match_id;
 	uint16_t msg[8];
 };
 
@@ -144,22 +160,8 @@ struct hns3_pf_rst_done_cmd {
 
 #define HNS3_PF_RESET_DONE_BIT		BIT(0)
 
-/* used by VF to store the received Async responses from PF */
-struct hns3_mbx_arq_ring {
-#define HNS3_MBX_MAX_ARQ_MSG_SIZE	8
-#define HNS3_MBX_MAX_ARQ_MSG_NUM	1024
-	uint32_t head;
-	uint32_t tail;
-	uint32_t count;
-	uint16_t msg_q[HNS3_MBX_MAX_ARQ_MSG_NUM][HNS3_MBX_MAX_ARQ_MSG_SIZE];
-};
-
 #define hns3_mbx_ring_ptr_move_crq(crq) \
 	((crq)->next_to_use = ((crq)->next_to_use + 1) % (crq)->desc_num)
-#define hns3_mbx_tail_ptr_move_arq(arq) \
-	((arq).tail = ((arq).tail + 1) % HNS3_MBX_MAX_ARQ_MSG_SIZE)
-#define hns3_mbx_head_ptr_move_arq(arq) \
-		((arq).head = ((arq).head + 1) % HNS3_MBX_MAX_ARQ_MSG_SIZE)
 
 struct hns3_hw;
 void hns3_dev_handle_mbx_msg(struct hns3_hw *hw);

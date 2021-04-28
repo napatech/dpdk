@@ -25,8 +25,8 @@
 #include <rte_eal.h>
 #include <rte_alarm.h>
 #include <rte_ether.h>
-#include <rte_ethdev_driver.h>
-#include <rte_ethdev_pci.h>
+#include <ethdev_driver.h>
+#include <ethdev_pci.h>
 #include <rte_malloc.h>
 #include <rte_dev.h>
 
@@ -106,6 +106,9 @@ static int i40evf_dev_tx_queue_start(struct rte_eth_dev *dev,
 				     uint16_t tx_queue_id);
 static int i40evf_dev_tx_queue_stop(struct rte_eth_dev *dev,
 				    uint16_t tx_queue_id);
+static int i40evf_add_del_eth_addr(struct rte_eth_dev *dev,
+				   struct rte_ether_addr *addr,
+				   bool add, uint8_t type);
 static int i40evf_add_mac_addr(struct rte_eth_dev *dev,
 			       struct rte_ether_addr *addr,
 			       uint32_t index,
@@ -823,10 +826,9 @@ i40evf_stop_queues(struct rte_eth_dev *dev)
 }
 
 static int
-i40evf_add_mac_addr(struct rte_eth_dev *dev,
-		    struct rte_ether_addr *addr,
-		    __rte_unused uint32_t index,
-		    __rte_unused uint32_t pool)
+i40evf_add_del_eth_addr(struct rte_eth_dev *dev,
+			struct rte_ether_addr *addr,
+			bool add, uint8_t type)
 {
 	struct virtchnl_ether_addr_list *list;
 	struct i40e_vf *vf = I40EVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
@@ -834,6 +836,34 @@ i40evf_add_mac_addr(struct rte_eth_dev *dev,
 			sizeof(struct virtchnl_ether_addr)];
 	int err;
 	struct vf_cmd_info args;
+
+	list = (struct virtchnl_ether_addr_list *)cmd_buffer;
+	list->vsi_id = vf->vsi_res->vsi_id;
+	list->num_elements = 1;
+	list->list[0].type = type;
+	rte_memcpy(list->list[0].addr, addr->addr_bytes,
+					sizeof(addr->addr_bytes));
+
+	args.ops = add ? VIRTCHNL_OP_ADD_ETH_ADDR : VIRTCHNL_OP_DEL_ETH_ADDR;
+	args.in_args = cmd_buffer;
+	args.in_args_size = sizeof(cmd_buffer);
+	args.out_buffer = vf->aq_resp;
+	args.out_size = I40E_AQ_BUF_SZ;
+	err = i40evf_execute_vf_cmd(dev, &args);
+	if (err)
+		PMD_DRV_LOG(ERR, "fail to execute command %s",
+			    add ? "OP_ADD_ETH_ADDR" :  "OP_DEL_ETH_ADDR");
+	return err;
+}
+
+static int
+i40evf_add_mac_addr(struct rte_eth_dev *dev,
+		    struct rte_ether_addr *addr,
+		    __rte_unused uint32_t index,
+		    __rte_unused uint32_t pool)
+{
+	struct i40e_vf *vf = I40EVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
+	int err;
 
 	if (rte_is_zero_ether_addr(addr)) {
 		PMD_DRV_LOG(ERR, "Invalid mac:%x:%x:%x:%x:%x:%x",
@@ -843,21 +873,10 @@ i40evf_add_mac_addr(struct rte_eth_dev *dev,
 		return I40E_ERR_INVALID_MAC_ADDR;
 	}
 
-	list = (struct virtchnl_ether_addr_list *)cmd_buffer;
-	list->vsi_id = vf->vsi_res->vsi_id;
-	list->num_elements = 1;
-	rte_memcpy(list->list[0].addr, addr->addr_bytes,
-					sizeof(addr->addr_bytes));
+	err = i40evf_add_del_eth_addr(dev, addr, TRUE, VIRTCHNL_ETHER_ADDR_EXTRA);
 
-	args.ops = VIRTCHNL_OP_ADD_ETH_ADDR;
-	args.in_args = cmd_buffer;
-	args.in_args_size = sizeof(cmd_buffer);
-	args.out_buffer = vf->aq_resp;
-	args.out_size = I40E_AQ_BUF_SZ;
-	err = i40evf_execute_vf_cmd(dev, &args);
 	if (err)
-		PMD_DRV_LOG(ERR, "fail to execute command "
-			    "OP_ADD_ETHER_ADDRESS");
+		PMD_DRV_LOG(ERR, "fail to add MAC address");
 	else
 		vf->vsi.mac_num++;
 
@@ -865,53 +884,23 @@ i40evf_add_mac_addr(struct rte_eth_dev *dev,
 }
 
 static void
-i40evf_del_mac_addr_by_addr(struct rte_eth_dev *dev,
-			    struct rte_ether_addr *addr)
-{
-	struct virtchnl_ether_addr_list *list;
-	struct i40e_vf *vf = I40EVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
-	uint8_t cmd_buffer[sizeof(struct virtchnl_ether_addr_list) + \
-			sizeof(struct virtchnl_ether_addr)];
-	int err;
-	struct vf_cmd_info args;
-
-	if (i40e_validate_mac_addr(addr->addr_bytes) != I40E_SUCCESS) {
-		PMD_DRV_LOG(ERR, "Invalid mac:%x-%x-%x-%x-%x-%x",
-			    addr->addr_bytes[0], addr->addr_bytes[1],
-			    addr->addr_bytes[2], addr->addr_bytes[3],
-			    addr->addr_bytes[4], addr->addr_bytes[5]);
-		return;
-	}
-
-	list = (struct virtchnl_ether_addr_list *)cmd_buffer;
-	list->vsi_id = vf->vsi_res->vsi_id;
-	list->num_elements = 1;
-	rte_memcpy(list->list[0].addr, addr->addr_bytes,
-			sizeof(addr->addr_bytes));
-
-	args.ops = VIRTCHNL_OP_DEL_ETH_ADDR;
-	args.in_args = cmd_buffer;
-	args.in_args_size = sizeof(cmd_buffer);
-	args.out_buffer = vf->aq_resp;
-	args.out_size = I40E_AQ_BUF_SZ;
-	err = i40evf_execute_vf_cmd(dev, &args);
-	if (err)
-		PMD_DRV_LOG(ERR, "fail to execute command "
-			    "OP_DEL_ETHER_ADDRESS");
-	else
-		vf->vsi.mac_num--;
-	return;
-}
-
-static void
 i40evf_del_mac_addr(struct rte_eth_dev *dev, uint32_t index)
 {
+	struct i40e_vf *vf = I40EVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
 	struct rte_eth_dev_data *data = dev->data;
 	struct rte_ether_addr *addr;
+	int err;
 
 	addr = &data->mac_addrs[index];
 
-	i40evf_del_mac_addr_by_addr(dev, addr);
+	err = i40evf_add_del_eth_addr(dev, addr, FALSE, VIRTCHNL_ETHER_ADDR_EXTRA);
+
+	if (err)
+		PMD_DRV_LOG(ERR, "fail to delete MAC address");
+	else
+		vf->vsi.mac_num--;
+
+	return;
 }
 
 static int
@@ -1078,8 +1067,18 @@ i40evf_add_vlan(struct rte_eth_dev *dev, uint16_t vlanid)
 	args.out_buffer = vf->aq_resp;
 	args.out_size = I40E_AQ_BUF_SZ;
 	err = i40evf_execute_vf_cmd(dev, &args);
-	if (err)
+	if (err) {
 		PMD_DRV_LOG(ERR, "fail to execute command OP_ADD_VLAN");
+		return err;
+	}
+	/**
+	 * In linux kernel driver on receiving ADD_VLAN it enables
+	 * VLAN_STRIP by default. So reconfigure the vlan_offload
+	 * as it was done by the app earlier.
+	 */
+	err = i40evf_vlan_offload_set(dev, ETH_VLAN_STRIP_MASK);
+	if (err)
+		PMD_DRV_LOG(ERR, "fail to set vlan_strip");
 
 	return err;
 }
@@ -1495,7 +1494,8 @@ i40evf_handle_aq_msg(struct rte_eth_dev *dev)
 						       info.msg_len);
 			else {
 				/* read message and it's expected one */
-				if (msg_opc == vf->pend_cmd) {
+				if ((volatile uint32_t)msg_opc ==
+				    vf->pend_cmd) {
 					vf->cmd_retval = msg_ret;
 					/* prevent compiler reordering */
 					rte_compiler_barrier();
@@ -1645,9 +1645,53 @@ i40evf_dev_uninit(struct rte_eth_dev *eth_dev)
 	return 0;
 }
 
+static int
+i40evf_check_driver_handler(__rte_unused const char *key,
+			    const char *value, __rte_unused void *opaque)
+{
+	if (strcmp(value, "i40evf"))
+		return -1;
+
+	return 0;
+}
+
+static int
+i40evf_driver_selected(struct rte_devargs *devargs)
+{
+	struct rte_kvargs *kvlist;
+	const char *key = "driver";
+	int ret = 0;
+
+	if (devargs == NULL)
+		return 0;
+
+	kvlist = rte_kvargs_parse(devargs->args, NULL);
+	if (kvlist == NULL)
+		return 0;
+
+	if (!rte_kvargs_count(kvlist, key))
+		goto exit;
+
+	/* i40evf driver selected when there's a key-value pair:
+	 * driver=i40evf
+	 */
+	if (rte_kvargs_process(kvlist, key,
+			       i40evf_check_driver_handler, NULL) < 0)
+		goto exit;
+
+	ret = 1;
+
+exit:
+	rte_kvargs_free(kvlist);
+	return ret;
+}
+
 static int eth_i40evf_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	struct rte_pci_device *pci_dev)
 {
+	if (!i40evf_driver_selected(pci_dev->device.devargs))
+		return 1;
+
 	return rte_eth_dev_pci_generic_probe(pci_dev,
 		sizeof(struct i40e_adapter), i40evf_dev_init);
 }
@@ -1670,6 +1714,7 @@ static struct rte_pci_driver rte_i40evf_pmd = {
 RTE_PMD_REGISTER_PCI(net_i40e_vf, rte_i40evf_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_i40e_vf, pci_id_i40evf_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_i40e_vf, "* igb_uio | vfio-pci");
+RTE_PMD_REGISTER_PARAM_STRING(net_i40e_vf, "driver=i40evf");
 
 static int
 i40evf_dev_configure(struct rte_eth_dev *dev)
@@ -1889,22 +1934,22 @@ i40evf_rxq_init(struct rte_eth_dev *dev, struct i40e_rx_queue *rxq)
 	 * Check if the jumbo frame and maximum packet length are set correctly
 	 */
 	if (dev_data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_JUMBO_FRAME) {
-		if (rxq->max_pkt_len <= RTE_ETHER_MAX_LEN ||
+		if (rxq->max_pkt_len <= I40E_ETH_MAX_LEN ||
 		    rxq->max_pkt_len > I40E_FRAME_SIZE_MAX) {
 			PMD_DRV_LOG(ERR, "maximum packet length must be "
 				"larger than %u and smaller than %u, as jumbo "
-				"frame is enabled", (uint32_t)RTE_ETHER_MAX_LEN,
+				"frame is enabled", (uint32_t)I40E_ETH_MAX_LEN,
 					(uint32_t)I40E_FRAME_SIZE_MAX);
 			return I40E_ERR_CONFIG;
 		}
 	} else {
 		if (rxq->max_pkt_len < RTE_ETHER_MIN_LEN ||
-		    rxq->max_pkt_len > RTE_ETHER_MAX_LEN) {
+		    rxq->max_pkt_len > I40E_ETH_MAX_LEN) {
 			PMD_DRV_LOG(ERR, "maximum packet length must be "
 				"larger than %u and smaller than %u, as jumbo "
 				"frame is disabled",
 				(uint32_t)RTE_ETHER_MIN_LEN,
-				(uint32_t)RTE_ETHER_MAX_LEN);
+				(uint32_t)I40E_ETH_MAX_LEN);
 			return I40E_ERR_CONFIG;
 		}
 	}
@@ -2082,6 +2127,7 @@ i40evf_add_del_all_mac_addr(struct rte_eth_dev *dev, bool add)
 				continue;
 			rte_memcpy(list->list[j].addr, addr->addr_bytes,
 					 sizeof(addr->addr_bytes));
+			list->list[j].type = VIRTCHNL_ETHER_ADDR_EXTRA;
 			PMD_DRV_LOG(DEBUG, "add/rm mac:%x:%x:%x:%x:%x:%x",
 				    addr->addr_bytes[0], addr->addr_bytes[1],
 				    addr->addr_bytes[2], addr->addr_bytes[3],
@@ -2406,6 +2452,7 @@ i40evf_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 		stats->imissed = pstats->rx_discards;
 		stats->oerrors = pstats->tx_errors + pstats->tx_discards;
 		stats->ibytes = pstats->rx_bytes;
+		stats->ibytes -= stats->ipackets * RTE_ETHER_CRC_LEN;
 		stats->obytes = pstats->tx_bytes;
 	} else {
 		PMD_DRV_LOG(ERR, "Get statistics failed");
@@ -2734,7 +2781,7 @@ i40evf_config_rss(struct i40e_vf *vf)
 		}
 
 		for (i = 0; i < rss_lut_size; i++)
-			lut_info[i] = i % vf->num_queue_pairs;
+			lut_info[i] = i % num;
 
 		ret = i40evf_set_rss_lut(&vf->vsi, lut_info,
 					 rss_lut_size);
@@ -2825,7 +2872,7 @@ i40evf_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 		return -EBUSY;
 	}
 
-	if (frame_size > RTE_ETHER_MAX_LEN)
+	if (frame_size > I40E_ETH_MAX_LEN)
 		dev_data->dev_conf.rxmode.offloads |=
 			DEV_RX_OFFLOAD_JUMBO_FRAME;
 	else
@@ -2841,15 +2888,23 @@ i40evf_set_default_mac_addr(struct rte_eth_dev *dev,
 			    struct rte_ether_addr *mac_addr)
 {
 	struct i40e_hw *hw = I40E_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct rte_ether_addr *old_addr;
+	int ret;
+
+	old_addr = (struct rte_ether_addr *)hw->mac.addr;
 
 	if (!rte_is_valid_assigned_ether_addr(mac_addr)) {
 		PMD_DRV_LOG(ERR, "Tried to set invalid MAC address.");
 		return -EINVAL;
 	}
 
-	i40evf_del_mac_addr_by_addr(dev, (struct rte_ether_addr *)hw->mac.addr);
+	if (rte_is_same_ether_addr(old_addr, mac_addr))
+		return 0;
 
-	if (i40evf_add_mac_addr(dev, mac_addr, 0, 0) != 0)
+	i40evf_add_del_eth_addr(dev, old_addr, FALSE, VIRTCHNL_ETHER_ADDR_PRIMARY);
+
+	ret = i40evf_add_del_eth_addr(dev, mac_addr, TRUE, VIRTCHNL_ETHER_ADDR_PRIMARY);
+	if (ret)
 		return -EIO;
 
 	rte_ether_addr_copy(mac_addr, (struct rte_ether_addr *)hw->mac.addr);
@@ -2893,6 +2948,7 @@ i40evf_add_del_mc_addr_list(struct rte_eth_dev *dev,
 
 		memcpy(list->list[i].addr, mc_addrs[i].addr_bytes,
 			sizeof(list->list[i].addr));
+		list->list[i].type = VIRTCHNL_ETHER_ADDR_EXTRA;
 	}
 
 	args.ops = add ? VIRTCHNL_OP_ADD_ETH_ADDR : VIRTCHNL_OP_DEL_ETH_ADDR;

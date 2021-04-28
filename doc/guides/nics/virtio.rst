@@ -71,7 +71,7 @@ In this release, the virtio PMD driver provides the basic functionality of packe
 
 *   Virtio supports software vlan stripping and inserting.
 
-*   Virtio supports using port IO to get PCI resource when uio/igb_uio module is not available.
+*   Virtio supports using port IO to get PCI resource when UIO module is not available.
 
 Prerequisites
 -------------
@@ -103,7 +103,8 @@ Host2VM communication example
 
         insmod rte_kni.ko
 
-    Other basic DPDK preparations like hugepage enabling, uio port binding are not listed here.
+    Other basic DPDK preparations like hugepage enabling,
+    UIO port binding are not listed here.
     Please refer to the *DPDK Getting Started Guide* for detailed instructions.
 
 #.  Launch the kni user application:
@@ -152,7 +153,7 @@ Host2VM communication example
     .. code-block:: console
 
         modprobe uio
-        echo 512 > /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages
+        dpdk-hugepages.py --setup 1G
         modprobe uio_pci_generic
         ./usertools/dpdk-devbind.py -b uio_pci_generic 00:03.0
 
@@ -266,7 +267,7 @@ There is no vector callbacks for packed virtqueue for now.
 Example of using the vector version of the virtio poll mode driver in
 ``testpmd``::
 
-   testpmd -l 0-2 -n 4 -- -i --rxq=1 --txq=1 --nb-cores=1
+   dpdk-testpmd -l 0-2 -n 4 -- -i --rxq=1 --txq=1 --nb-cores=1
 
 In-order callbacks only work on simulated virtio user vdev.
 
@@ -483,11 +484,11 @@ according to below configuration:
 #. Packed virtqueue in-order non-mergeable path: If in-order feature is negotiated and
    Rx mergeable is not negotiated, this path will be selected.
 #. Packed virtqueue vectorized Rx path: If building and running environment support
-   AVX512 && in-order feature is negotiated && Rx mergeable is not negotiated &&
-   TCP_LRO Rx offloading is disabled && vectorized option enabled,
+   (AVX512 || NEON) && in-order feature is negotiated && Rx mergeable
+   is not negotiated && TCP_LRO Rx offloading is disabled && vectorized option enabled,
    this path will be selected.
 #. Packed virtqueue vectorized Tx path: If building and running environment support
-   AVX512 && in-order feature is negotiated && vectorized option enabled,
+   (AVX512 || NEON)  && in-order feature is negotiated && vectorized option enabled,
    this path will be selected.
 
 Rx/Tx callbacks of each Virtio path

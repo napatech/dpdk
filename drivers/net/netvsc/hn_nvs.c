@@ -97,8 +97,13 @@ __hn_nvs_execute(struct hn_data *hv,
 	hdr = (struct hn_nvs_hdr *)buffer;
 
 	/* Silently drop received packets while waiting for response */
-	if (hdr->type == NVS_TYPE_RNDIS) {
+	switch (hdr->type) {
+	case NVS_TYPE_RNDIS:
 		hn_nvs_ack_rxbuf(chan, xactid);
+		/* fallthrough */
+
+	case NVS_TYPE_TXTBL_NOTE:
+		PMD_DRV_LOG(DEBUG, "discard packet type 0x%x", hdr->type);
 		goto retry;
 	}
 
@@ -569,7 +574,7 @@ hn_nvs_alloc_subchans(struct hn_data *hv, uint32_t *nsubch)
 	return 0;
 }
 
-void
+int
 hn_nvs_set_datapath(struct hn_data *hv, uint32_t path)
 {
 	struct hn_nvs_datapath dp;
@@ -588,4 +593,6 @@ hn_nvs_set_datapath(struct hn_data *hv, uint32_t path)
 			    "send set datapath failed: %d",
 			    error);
 	}
+
+	return error;
 }

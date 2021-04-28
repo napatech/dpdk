@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright(c) 2019-2020 Xilinx, Inc.
+ * Copyright(c) 2019-2021 Xilinx, Inc.
  * Copyright(c) 2017-2019 Solarflare Communications Inc.
  *
  * This software was jointly developed between OKTET Labs (under contract
@@ -10,7 +10,7 @@
 #include <rte_byteorder.h>
 #include <rte_tailq.h>
 #include <rte_common.h>
-#include <rte_ethdev_driver.h>
+#include <ethdev_driver.h>
 #include <rte_ether.h>
 #include <rte_flow.h>
 #include <rte_flow_driver.h>
@@ -96,6 +96,7 @@ static sfc_flow_item_parse sfc_flow_parse_udp;
 static sfc_flow_item_parse sfc_flow_parse_vxlan;
 static sfc_flow_item_parse sfc_flow_parse_geneve;
 static sfc_flow_item_parse sfc_flow_parse_nvgre;
+static sfc_flow_item_parse sfc_flow_parse_pppoex;
 
 typedef int (sfc_flow_spec_set_vals)(struct sfc_flow_spec *spec,
 				     unsigned int filters_count_for_one_val,
@@ -1063,6 +1064,63 @@ sfc_flow_parse_nvgre(const struct rte_flow_item *item,
 	return rc;
 }
 
+/**
+ * Convert PPPoEx item to EFX filter specification.
+ *
+ * @param item[in]
+ *   Item specification.
+ *   Matching on PPPoEx fields is not supported.
+ *   This item can only be used to set or validate the EtherType filter.
+ *   Only zero masks are allowed.
+ *   Ranging is not supported.
+ * @param efx_spec[in, out]
+ *   EFX filter specification to update.
+ * @param[out] error
+ *   Perform verbose error reporting if not NULL.
+ */
+static int
+sfc_flow_parse_pppoex(const struct rte_flow_item *item,
+		      struct sfc_flow_parse_ctx *parse_ctx,
+		      struct rte_flow_error *error)
+{
+	efx_filter_spec_t *efx_spec = parse_ctx->filter;
+	const struct rte_flow_item_pppoe *spec = NULL;
+	const struct rte_flow_item_pppoe *mask = NULL;
+	const struct rte_flow_item_pppoe supp_mask = {};
+	const struct rte_flow_item_pppoe def_mask = {};
+	uint16_t ether_type;
+	int rc;
+
+	rc = sfc_flow_parse_init(item,
+				 (const void **)&spec,
+				 (const void **)&mask,
+				 &supp_mask,
+				 &def_mask,
+				 sizeof(struct rte_flow_item_pppoe),
+				 error);
+	if (rc != 0)
+		return rc;
+
+	if (item->type == RTE_FLOW_ITEM_TYPE_PPPOED)
+		ether_type = RTE_ETHER_TYPE_PPPOE_DISCOVERY;
+	else
+		ether_type = RTE_ETHER_TYPE_PPPOE_SESSION;
+
+	if ((efx_spec->efs_match_flags & EFX_FILTER_MATCH_ETHER_TYPE) != 0) {
+		if (efx_spec->efs_ether_type != ether_type) {
+			rte_flow_error_set(error, EINVAL,
+					   RTE_FLOW_ERROR_TYPE_ITEM, item,
+					   "Invalid EtherType for a PPPoE flow item");
+			return -rte_errno;
+		}
+	} else {
+		efx_spec->efs_match_flags |= EFX_FILTER_MATCH_ETHER_TYPE;
+		efx_spec->efs_ether_type = ether_type;
+	}
+
+	return 0;
+}
+
 static const struct sfc_flow_item sfc_flow_items[] = {
 	{
 		.type = RTE_FLOW_ITEM_TYPE_VOID,
@@ -1084,6 +1142,20 @@ static const struct sfc_flow_item sfc_flow_items[] = {
 		.layer = SFC_FLOW_ITEM_L2,
 		.ctx_type = SFC_FLOW_PARSE_CTX_FILTER,
 		.parse = sfc_flow_parse_vlan,
+	},
+	{
+		.type = RTE_FLOW_ITEM_TYPE_PPPOED,
+		.prev_layer = SFC_FLOW_ITEM_L2,
+		.layer = SFC_FLOW_ITEM_L2,
+		.ctx_type = SFC_FLOW_PARSE_CTX_FILTER,
+		.parse = sfc_flow_parse_pppoex,
+	},
+	{
+		.type = RTE_FLOW_ITEM_TYPE_PPPOES,
+		.prev_layer = SFC_FLOW_ITEM_L2,
+		.layer = SFC_FLOW_ITEM_L2,
+		.ctx_type = SFC_FLOW_PARSE_CTX_FILTER,
+		.parse = sfc_flow_parse_pppoex,
 	},
 	{
 		.type = RTE_FLOW_ITEM_TYPE_IPV4,
@@ -2440,8 +2512,7 @@ sfc_flow_parse_rte_to_mae(struct rte_eth_dev *dev,
 	if (rc != 0)
 		return rc;
 
-	rc = sfc_mae_rule_parse_actions(sa, actions, &spec_mae->action_set,
-					error);
+	rc = sfc_mae_rule_parse_actions(sa, actions, spec_mae, error);
 	if (rc != 0)
 		return rc;
 

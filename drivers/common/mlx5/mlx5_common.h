@@ -14,12 +14,13 @@
 #include <rte_kvargs.h>
 #include <rte_devargs.h>
 #include <rte_bitops.h>
+#include <rte_os_shim.h>
 
 #include "mlx5_prm.h"
 #include "mlx5_devx_cmds.h"
 
 /* Reported driver name. */
-#define MLX5_DRIVER_NAME "mlx5_pci"
+#define MLX5_PCI_DRIVER_NAME "mlx5_pci"
 
 /* Bit-field manipulation. */
 #define BITFIELD_DECLARE(bf, type, size) \
@@ -65,10 +66,6 @@ pmd_drv_log_basename(const char *s)
 			RTE_FMT_HEAD(__VA_ARGS__,), \
 		RTE_FMT_TAIL(__VA_ARGS__,)))
 
-/*
- * When debugging is enabled (MLX5_DEBUG not defined), file, line and function
- * information replace the driver name (MLX5_DRIVER_NAME) in log messages.
- */
 #ifdef RTE_LIBRTE_MLX5_DEBUG
 
 #define PMD_DRV_LOG__(level, type, name, ...) \
@@ -92,14 +89,12 @@ pmd_drv_log_basename(const char *s)
 /* claim_zero() does not perform any check when debugging is disabled. */
 #ifdef RTE_LIBRTE_MLX5_DEBUG
 
-#define DEBUG(...) DRV_LOG(DEBUG, __VA_ARGS__)
 #define MLX5_ASSERT(exp) RTE_VERIFY(exp)
 #define claim_zero(...) MLX5_ASSERT((__VA_ARGS__) == 0)
 #define claim_nonzero(...) MLX5_ASSERT((__VA_ARGS__) != 0)
 
 #else /* RTE_LIBRTE_MLX5_DEBUG */
 
-#define DEBUG(...) (void)0
 #define MLX5_ASSERT(exp) RTE_ASSERT(exp)
 #define claim_zero(...) (__VA_ARGS__)
 #define claim_nonzero(...) (__VA_ARGS__)
@@ -153,6 +148,7 @@ enum mlx5_nl_phys_port_name_type {
 	MLX5_PHYS_PORT_NAME_TYPE_UPLINK, /* p0, kernel ver >= 5.0 */
 	MLX5_PHYS_PORT_NAME_TYPE_PFVF, /* pf0vf0, kernel ver >= 5.0 */
 	MLX5_PHYS_PORT_NAME_TYPE_PFHPF, /* pf0, kernel ver >= 5.7, HPF rep */
+	MLX5_PHYS_PORT_NAME_TYPE_PFSF, /* pf0sf0, kernel ver >= 5.0 */
 	MLX5_PHYS_PORT_NAME_TYPE_UNKNOWN, /* Unrecognized. */
 };
 
@@ -161,6 +157,7 @@ struct mlx5_switch_info {
 	uint32_t master:1; /**< Master device. */
 	uint32_t representor:1; /**< Representor device. */
 	enum mlx5_nl_phys_port_name_type name_type; /** < Port name type. */
+	int32_t ctrl_num; /**< Controller number (valid for c#pf#vf# format). */
 	int32_t pf_num; /**< PF number (valid for pfxvfx format only). */
 	int32_t port_name; /**< Representor port name. */
 	uint64_t switch_id; /**< Switch identifier. */
@@ -217,24 +214,10 @@ enum mlx5_class {
 	MLX5_CLASS_NET = RTE_BIT64(0),
 	MLX5_CLASS_VDPA = RTE_BIT64(1),
 	MLX5_CLASS_REGEX = RTE_BIT64(2),
+	MLX5_CLASS_COMPRESS = RTE_BIT64(3),
 };
 
 #define MLX5_DBR_SIZE RTE_CACHE_LINE_SIZE
-#define MLX5_DBR_PER_PAGE 64
-/* Must be >= CHAR_BIT * sizeof(uint64_t) */
-#define MLX5_DBR_PAGE_SIZE (MLX5_DBR_PER_PAGE * MLX5_DBR_SIZE)
-/* Page size must be >= 512. */
-#define MLX5_DBR_BITMAP_SIZE (MLX5_DBR_PER_PAGE / (CHAR_BIT * sizeof(uint64_t)))
-
-struct mlx5_devx_dbr_page {
-	/* Door-bell records, must be first member in structure. */
-	uint8_t dbrs[MLX5_DBR_PAGE_SIZE];
-	LIST_ENTRY(mlx5_devx_dbr_page) next; /* Pointer to the next element. */
-	void *umem;
-	uint32_t dbr_count; /* Number of door-bell records in use. */
-	/* 1 bit marks matching door-bell is in use. */
-	uint64_t dbr_bitmap[MLX5_DBR_BITMAP_SIZE];
-};
 
 /* devX creation object */
 struct mlx5_devx_obj {
@@ -249,18 +232,10 @@ struct mlx5_klm {
 	uint64_t address;
 };
 
-LIST_HEAD(mlx5_dbr_page_list, mlx5_devx_dbr_page);
-
 __rte_internal
 void mlx5_translate_port_name(const char *port_name_in,
 			      struct mlx5_switch_info *port_info_out);
 void mlx5_glue_constructor(void);
-__rte_internal
-int64_t mlx5_get_dbr(void *ctx,  struct mlx5_dbr_page_list *head,
-		     struct mlx5_devx_dbr_page **dbr_page);
-__rte_internal
-int32_t mlx5_release_dbr(struct mlx5_dbr_page_list *head, uint32_t umem_id,
-			 uint64_t offset);
 __rte_internal
 void *mlx5_devx_alloc_uar(void *ctx, int mapping);
 extern uint8_t haswell_broadwell_cpu;
