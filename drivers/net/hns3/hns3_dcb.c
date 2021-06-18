@@ -727,6 +727,18 @@ hns3_queue_to_tc_mapping(struct hns3_hw *hw, uint16_t nb_rx_q, uint16_t nb_tx_q)
 {
 	int ret;
 
+	if (nb_rx_q < hw->num_tc) {
+		hns3_err(hw, "number of Rx queues(%u) is less than number of TC(%u).",
+			 nb_rx_q, hw->num_tc);
+		return -EINVAL;
+	}
+
+	if (nb_tx_q < hw->num_tc) {
+		hns3_err(hw, "number of Tx queues(%u) is less than number of TC(%u).",
+			 nb_tx_q, hw->num_tc);
+		return -EINVAL;
+	}
+
 	ret = hns3_set_rss_size(hw, nb_rx_q);
 	if (ret)
 		return ret;
@@ -1531,7 +1543,8 @@ hns3_dcb_hw_configure(struct hns3_adapter *hns)
 	enum hns3_fc_status fc_status = hw->current_fc_status;
 	enum hns3_fc_mode requested_fc_mode = hw->requested_fc_mode;
 	uint8_t hw_pfc_map = hw->dcb_info.hw_pfc_map;
-	int ret, status;
+	uint8_t pfc_en = hw->dcb_info.pfc_en;
+	int ret;
 
 	if (pf->tx_sch_mode != HNS3_FLAG_TC_BASE_SCH_MODE &&
 	    pf->tx_sch_mode != HNS3_FLAG_VNET_BASE_SCH_MODE)
@@ -1556,7 +1569,7 @@ hns3_dcb_hw_configure(struct hns3_adapter *hns)
 
 		ret = hns3_buffer_alloc(hw);
 		if (ret)
-			return ret;
+			goto buffer_alloc_fail;
 
 		hw->current_fc_status = HNS3_FC_STATUS_PFC;
 		hw->requested_fc_mode = HNS3_FC_FULL;
@@ -1582,10 +1595,10 @@ hns3_dcb_hw_configure(struct hns3_adapter *hns)
 pfc_setup_fail:
 	hw->requested_fc_mode = requested_fc_mode;
 	hw->current_fc_status = fc_status;
+
+buffer_alloc_fail:
+	hw->dcb_info.pfc_en = pfc_en;
 	hw->dcb_info.hw_pfc_map = hw_pfc_map;
-	status = hns3_buffer_alloc(hw);
-	if (status)
-		hns3_err(hw, "recover packet buffer fail! status = %d", status);
 
 	return ret;
 }
@@ -1604,8 +1617,7 @@ hns3_dcb_configure(struct hns3_adapter *hns)
 	int ret;
 
 	hns3_dcb_cfg_validate(hns, &num_tc, &map_changed);
-	if (map_changed ||
-	    __atomic_load_n(&hw->reset.resetting,  __ATOMIC_RELAXED)) {
+	if (map_changed) {
 		ret = hns3_dcb_info_update(hns, num_tc);
 		if (ret) {
 			hns3_err(hw, "dcb info update failed: %d", ret);
@@ -1701,13 +1713,17 @@ hns3_dcb_init(struct hns3_hw *hw)
 	return 0;
 }
 
-static int
+int
 hns3_update_queue_map_configure(struct hns3_adapter *hns)
 {
 	struct hns3_hw *hw = &hns->hw;
+	enum rte_eth_rx_mq_mode mq_mode = hw->data->dev_conf.rxmode.mq_mode;
 	uint16_t nb_rx_q = hw->data->nb_rx_queues;
 	uint16_t nb_tx_q = hw->data->nb_tx_queues;
 	int ret;
+
+	if ((uint32_t)mq_mode & ETH_MQ_RX_DCB_FLAG)
+		return 0;
 
 	ret = hns3_dcb_update_tc_queue_mapping(hw, nb_rx_q, nb_tx_q);
 	if (ret) {
@@ -1722,30 +1738,28 @@ hns3_update_queue_map_configure(struct hns3_adapter *hns)
 	return ret;
 }
 
-int
-hns3_dcb_cfg_update(struct hns3_adapter *hns)
+static void
+hns3_get_fc_mode(struct hns3_hw *hw, enum rte_eth_fc_mode mode)
 {
-	struct hns3_hw *hw = &hns->hw;
-	enum rte_eth_rx_mq_mode mq_mode = hw->data->dev_conf.rxmode.mq_mode;
-	int ret;
-
-	if ((uint32_t)mq_mode & ETH_MQ_RX_DCB_FLAG) {
-		ret = hns3_dcb_configure(hns);
-		if (ret)
-			hns3_err(hw, "Failed to config dcb: %d", ret);
-	} else {
-		/*
-		 * Update queue map without PFC configuration,
-		 * due to queues reconfigured by user.
-		 */
-		ret = hns3_update_queue_map_configure(hns);
-		if (ret)
-			hns3_err(hw,
-				 "Failed to update queue mapping configure: %d",
-				 ret);
+	switch (mode) {
+	case RTE_FC_NONE:
+		hw->requested_fc_mode = HNS3_FC_NONE;
+		break;
+	case RTE_FC_RX_PAUSE:
+		hw->requested_fc_mode = HNS3_FC_RX_PAUSE;
+		break;
+	case RTE_FC_TX_PAUSE:
+		hw->requested_fc_mode = HNS3_FC_TX_PAUSE;
+		break;
+	case RTE_FC_FULL:
+		hw->requested_fc_mode = HNS3_FC_FULL;
+		break;
+	default:
+		hw->requested_fc_mode = HNS3_FC_NONE;
+		hns3_warn(hw, "fc_mode(%u) exceeds member scope and is "
+			  "configured to RTE_FC_NONE", mode);
+		break;
 	}
-
-	return ret;
 }
 
 /*
@@ -1760,13 +1774,15 @@ hns3_dcb_pfc_enable(struct rte_eth_dev *dev, struct rte_eth_pfc_conf *pfc_conf)
 	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct hns3_pf *pf = HNS3_DEV_PRIVATE_TO_PF(dev->data->dev_private);
 	enum hns3_fc_status fc_status = hw->current_fc_status;
+	enum hns3_fc_mode old_fc_mode = hw->requested_fc_mode;
 	uint8_t hw_pfc_map = hw->dcb_info.hw_pfc_map;
 	uint8_t pfc_en = hw->dcb_info.pfc_en;
 	uint8_t priority = pfc_conf->priority;
 	uint16_t pause_time = pf->pause_time;
-	int ret, status;
+	int ret;
 
 	pf->pause_time = pfc_conf->fc.pause_time;
+	hns3_get_fc_mode(hw, pfc_conf->fc.mode);
 	hw->current_fc_status = HNS3_FC_STATUS_PFC;
 	hw->dcb_info.pfc_en |= BIT(priority);
 	hw->dcb_info.hw_pfc_map =
@@ -1788,13 +1804,11 @@ hns3_dcb_pfc_enable(struct rte_eth_dev *dev, struct rte_eth_pfc_conf *pfc_conf)
 	return 0;
 
 pfc_setup_fail:
+	hw->requested_fc_mode = old_fc_mode;
 	hw->current_fc_status = fc_status;
 	pf->pause_time = pause_time;
 	hw->dcb_info.pfc_en = pfc_en;
 	hw->dcb_info.hw_pfc_map = hw_pfc_map;
-	status = hns3_buffer_alloc(hw);
-	if (status)
-		hns3_err(hw, "recover packet buffer fail: %d", status);
 
 	return ret;
 }
@@ -1810,11 +1824,13 @@ hns3_fc_enable(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 {
 	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct hns3_pf *pf = HNS3_DEV_PRIVATE_TO_PF(dev->data->dev_private);
+	enum hns3_fc_mode old_fc_mode = hw->requested_fc_mode;
 	enum hns3_fc_status fc_status = hw->current_fc_status;
 	uint16_t pause_time = pf->pause_time;
 	int ret;
 
 	pf->pause_time = fc_conf->pause_time;
+	hns3_get_fc_mode(hw, fc_conf->mode);
 
 	/*
 	 * In fact, current_fc_status is HNS3_FC_STATUS_NONE when mode
@@ -1834,6 +1850,7 @@ hns3_fc_enable(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 	return 0;
 
 setup_fc_fail:
+	hw->requested_fc_mode = old_fc_mode;
 	hw->current_fc_status = fc_status;
 	pf->pause_time = pause_time;
 

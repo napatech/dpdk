@@ -201,6 +201,7 @@ mlx4_proc_priv_init(struct rte_eth_dev *dev)
 	struct mlx4_proc_priv *ppriv;
 	size_t ppriv_size;
 
+	mlx4_proc_priv_uninit(dev);
 	/*
 	 * UAR register table follows the process private structure. BlueFlame
 	 * registers for Tx queues are stored in the table.
@@ -1319,7 +1320,7 @@ glue_error:
 #endif
 
 /* Initialize driver log type. */
-RTE_LOG_REGISTER(mlx4_logtype, pmd.net.mlx4, NOTICE)
+RTE_LOG_REGISTER_DEFAULT(mlx4_logtype, NOTICE)
 
 /**
  * Driver initialization routine.

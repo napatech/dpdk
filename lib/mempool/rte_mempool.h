@@ -64,18 +64,23 @@ extern "C" {
 #ifdef RTE_LIBRTE_MEMPOOL_DEBUG
 /**
  * A structure that stores the mempool statistics (per-lcore).
+ * Note: Cache stats (put_cache_bulk/objs, get_cache_bulk/objs) are not
+ * captured since they can be calculated from other stats.
+ * For example: put_cache_objs = put_objs - put_common_pool_objs.
  */
 struct rte_mempool_debug_stats {
-	uint64_t put_bulk;         /**< Number of puts. */
-	uint64_t put_objs;         /**< Number of objects successfully put. */
-	uint64_t get_success_bulk; /**< Successful allocation number. */
-	uint64_t get_success_objs; /**< Objects successfully allocated. */
-	uint64_t get_fail_bulk;    /**< Failed allocation number. */
-	uint64_t get_fail_objs;    /**< Objects that failed to be allocated. */
-	/** Successful allocation number of contiguous blocks. */
-	uint64_t get_success_blks;
-	/** Failed allocation number of contiguous blocks. */
-	uint64_t get_fail_blks;
+	uint64_t put_bulk;             /**< Number of puts. */
+	uint64_t put_objs;             /**< Number of objects successfully put. */
+	uint64_t put_common_pool_bulk; /**< Number of bulks enqueued in common pool. */
+	uint64_t put_common_pool_objs; /**< Number of objects enqueued in common pool. */
+	uint64_t get_common_pool_bulk; /**< Number of bulks dequeued from common pool. */
+	uint64_t get_common_pool_objs; /**< Number of objects dequeued from common pool. */
+	uint64_t get_success_bulk;     /**< Successful allocation number. */
+	uint64_t get_success_objs;     /**< Objects successfully allocated. */
+	uint64_t get_fail_bulk;        /**< Failed allocation number. */
+	uint64_t get_fail_objs;        /**< Objects that failed to be allocated. */
+	uint64_t get_success_blks;     /**< Successful allocation number of contiguous blocks. */
+	uint64_t get_fail_blks;        /**< Failed allocation number of contiguous blocks. */
 } __rte_cache_aligned;
 #endif
 
@@ -273,20 +278,11 @@ struct rte_mempool {
 #define __MEMPOOL_STAT_ADD(mp, name, n) do {                    \
 		unsigned __lcore_id = rte_lcore_id();           \
 		if (__lcore_id < RTE_MAX_LCORE) {               \
-			mp->stats[__lcore_id].name##_objs += n;	\
-			mp->stats[__lcore_id].name##_bulk += 1;	\
+			mp->stats[__lcore_id].name += n;        \
 		}                                               \
 	} while(0)
-#define __MEMPOOL_CONTIG_BLOCKS_STAT_ADD(mp, name, n) do {                    \
-		unsigned int __lcore_id = rte_lcore_id();       \
-		if (__lcore_id < RTE_MAX_LCORE) {               \
-			mp->stats[__lcore_id].name##_blks += n;	\
-			mp->stats[__lcore_id].name##_bulk += 1;	\
-		}                                               \
-	} while (0)
 #else
 #define __MEMPOOL_STAT_ADD(mp, name, n) do {} while(0)
-#define __MEMPOOL_CONTIG_BLOCKS_STAT_ADD(mp, name, n) do {} while (0)
 #endif
 
 /**
@@ -708,10 +704,16 @@ rte_mempool_ops_dequeue_bulk(struct rte_mempool *mp,
 		void **obj_table, unsigned n)
 {
 	struct rte_mempool_ops *ops;
+	int ret;
 
 	rte_mempool_trace_ops_dequeue_bulk(mp, obj_table, n);
 	ops = rte_mempool_get_ops(mp->ops_index);
-	return ops->dequeue(mp, obj_table, n);
+	ret = ops->dequeue(mp, obj_table, n);
+	if (ret == 0) {
+		__MEMPOOL_STAT_ADD(mp, get_common_pool_bulk, 1);
+		__MEMPOOL_STAT_ADD(mp, get_common_pool_objs, n);
+	}
+	return ret;
 }
 
 /**
@@ -758,6 +760,8 @@ rte_mempool_ops_enqueue_bulk(struct rte_mempool *mp, void * const *obj_table,
 {
 	struct rte_mempool_ops *ops;
 
+	__MEMPOOL_STAT_ADD(mp, put_common_pool_bulk, 1);
+	__MEMPOOL_STAT_ADD(mp, put_common_pool_objs, n);
 	rte_mempool_trace_ops_enqueue_bulk(mp, obj_table, n);
 	ops = rte_mempool_get_ops(mp->ops_index);
 	return ops->enqueue(mp, obj_table, n);
@@ -1288,7 +1292,8 @@ __mempool_generic_put(struct rte_mempool *mp, void * const *obj_table,
 	void **cache_objs;
 
 	/* increment stat now, adding in mempool always success */
-	__MEMPOOL_STAT_ADD(mp, put, n);
+	__MEMPOOL_STAT_ADD(mp, put_bulk, 1);
+	__MEMPOOL_STAT_ADD(mp, put_objs, n);
 
 	/* No cache provided or if put would overflow mem allocated for cache */
 	if (unlikely(cache == NULL || n > RTE_MEMPOOL_CACHE_MAX_SIZE))
@@ -1446,7 +1451,8 @@ __mempool_generic_get(struct rte_mempool *mp, void **obj_table,
 
 	cache->len -= n;
 
-	__MEMPOOL_STAT_ADD(mp, get_success, n);
+	__MEMPOOL_STAT_ADD(mp, get_success_bulk, 1);
+	__MEMPOOL_STAT_ADD(mp, get_success_objs, n);
 
 	return 0;
 
@@ -1455,10 +1461,13 @@ ring_dequeue:
 	/* get remaining objects from ring */
 	ret = rte_mempool_ops_dequeue_bulk(mp, obj_table, n);
 
-	if (ret < 0)
-		__MEMPOOL_STAT_ADD(mp, get_fail, n);
-	else
-		__MEMPOOL_STAT_ADD(mp, get_success, n);
+	if (ret < 0) {
+		__MEMPOOL_STAT_ADD(mp, get_fail_bulk, 1);
+		__MEMPOOL_STAT_ADD(mp, get_fail_objs, n);
+	} else {
+		__MEMPOOL_STAT_ADD(mp, get_success_bulk, 1);
+		__MEMPOOL_STAT_ADD(mp, get_success_objs, n);
+	}
 
 	return ret;
 }
@@ -1581,11 +1590,13 @@ rte_mempool_get_contig_blocks(struct rte_mempool *mp,
 
 	ret = rte_mempool_ops_dequeue_contig_blocks(mp, first_obj_table, n);
 	if (ret == 0) {
-		__MEMPOOL_CONTIG_BLOCKS_STAT_ADD(mp, get_success, n);
+		__MEMPOOL_STAT_ADD(mp, get_success_bulk, 1);
+		__MEMPOOL_STAT_ADD(mp, get_success_blks, n);
 		__mempool_contig_blocks_check_cookies(mp, first_obj_table, n,
 						      1);
 	} else {
-		__MEMPOOL_CONTIG_BLOCKS_STAT_ADD(mp, get_fail, n);
+		__MEMPOOL_STAT_ADD(mp, get_fail_bulk, 1);
+		__MEMPOOL_STAT_ADD(mp, get_fail_blks, n);
 	}
 
 	rte_mempool_trace_get_contig_blocks(mp, first_obj_table, n);

@@ -216,6 +216,7 @@ static const struct eth_dev_ops i40evf_eth_dev_ops = {
 	.mtu_set              = i40evf_dev_mtu_set,
 	.mac_addr_set         = i40evf_set_default_mac_addr,
 	.tx_done_cleanup      = i40e_tx_done_cleanup,
+	.get_monitor_addr     = i40e_get_monitor_addr
 };
 
 /*
@@ -1236,7 +1237,7 @@ i40evf_reset_vf(struct rte_eth_dev *dev)
 	  * it to ACTIVE. In this duration, vf may not catch the moment that
 	  * COMPLETE is set. So, for vf, we'll try to wait a long time.
 	  */
-	rte_delay_ms(200);
+	rte_delay_ms(500);
 
 	ret = i40evf_check_vf_reset_done(dev);
 	if (ret) {
@@ -2127,7 +2128,9 @@ i40evf_add_del_all_mac_addr(struct rte_eth_dev *dev, bool add)
 				continue;
 			rte_memcpy(list->list[j].addr, addr->addr_bytes,
 					 sizeof(addr->addr_bytes));
-			list->list[j].type = VIRTCHNL_ETHER_ADDR_EXTRA;
+			list->list[j].type = (j == 0 ?
+					      VIRTCHNL_ETHER_ADDR_PRIMARY :
+					      VIRTCHNL_ETHER_ADDR_EXTRA);
 			PMD_DRV_LOG(DEBUG, "add/rm mac:%x:%x:%x:%x:%x:%x",
 				    addr->addr_bytes[0], addr->addr_bytes[1],
 				    addr->addr_bytes[2], addr->addr_bytes[3],

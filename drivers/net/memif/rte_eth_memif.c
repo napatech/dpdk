@@ -706,6 +706,7 @@ next_in_chain:
 	/* populate descriptor */
 	d0 = &ring->desc[slot & mask];
 	d0->length = rte_pktmbuf_data_len(mbuf);
+	mq->n_bytes += rte_pktmbuf_data_len(mbuf);
 	/* FIXME: get region index */
 	d0->region = 1;
 	d0->offset = rte_pktmbuf_mtod(mbuf, uint8_t *) -
@@ -1878,4 +1879,4 @@ RTE_PMD_REGISTER_PARAM_STRING(net_memif,
 			      ETH_MEMIF_ZC_ARG "=yes|no"
 			      ETH_MEMIF_SECRET_ARG "=<string>");
 
-RTE_LOG_REGISTER(memif_logtype, pmd.net.memif, NOTICE);
+RTE_LOG_REGISTER_DEFAULT(memif_logtype, NOTICE);

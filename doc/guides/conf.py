@@ -5,8 +5,6 @@
 from docutils import nodes
 from distutils.version import LooseVersion
 from sphinx import __version__ as sphinx_version
-from sphinx.highlighting import PygmentsBridge
-from pygments.formatters.latex import LatexFormatter
 from os import listdir
 from os import environ
 from os.path import basename
@@ -30,8 +28,10 @@ stop_on_error = ('-W' in argv)
 
 project = 'Data Plane Development Kit'
 html_logo = '../logo/DPDK_logo_vertical_rev_small.png'
-latex_logo = '../logo/DPDK_logo_horizontal_tag.png'
-html_add_permalinks = ""
+if LooseVersion(sphinx_version) >= LooseVersion('3.5'):
+    html_permalinks = False
+else:
+    html_add_permalinks = ""
 html_show_copyright = False
 highlight_language = 'none'
 
@@ -45,46 +45,6 @@ feature_str_len = 30
 
 # Figures, tables and code-blocks automatically numbered if they have caption
 numfig = True
-
-latex_documents = [
-    ('index',
-     'doc.tex',
-     '',
-     '',
-     'manual')
-]
-
-# Latex directives to be included directly in the latex/pdf docs.
-custom_latex_preamble = r"""
-\usepackage{textalpha}
-\RecustomVerbatimEnvironment{Verbatim}{Verbatim}{xleftmargin=5mm}
-\usepackage{etoolbox}
-\robustify\(
-\robustify\)
-"""
-
-# Configuration for the latex/pdf docs.
-latex_elements = {
-    'papersize': 'a4paper',
-    'pointsize': '11pt',
-    # remove blank pages
-    'classoptions': ',openany,oneside',
-    'babel': '\\usepackage[english]{babel}',
-    # customize Latex formatting
-    'preamble': custom_latex_preamble
-}
-
-
-# Override the default Latex formatter in order to modify the
-# code/verbatim blocks.
-class CustomLatexFormatter(LatexFormatter):
-    def __init__(self, **options):
-        super(CustomLatexFormatter, self).__init__(**options)
-        # Use the second smallest font size for code/verbatim blocks.
-        self.verboptions = r'formatcom=\footnotesize'
-
-# Replace the default latex formatter.
-PygmentsBridge.latex_formatter = CustomLatexFormatter
 
 # Configuration for man pages
 man_pages = [("testpmd_app_ug/run_app", "testpmd",
@@ -216,14 +176,8 @@ def generate_overview_table(output_filename, table_id, section, table_name, titl
         # Initialize the dict with the default.ini value.
         ini_data[ini_filename] = valid_features.copy()
 
-        # Check for a valid ini section.
+        # Check for a section.
         if not config.has_section(section):
-            print("{}: File '{}' has no [{}] secton".format(warning,
-                                                            ini_filename,
-                                                            section),
-                                                            file=stderr)
-            if stop_on_error:
-                raise Exception('Warning is treated as a failure')
             continue
 
         # Check for valid features names.
@@ -379,6 +333,16 @@ def setup(app):
                             'Features',
                             'Features availability in networking drivers',
                             'Feature')
+    table_file = dirname(__file__) + '/nics/rte_flow_items_table.txt'
+    generate_overview_table(table_file, 2,
+                            'rte_flow items',
+                            'rte_flow items availability in networking drivers',
+                            'Item')
+    table_file = dirname(__file__) + '/nics/rte_flow_actions_table.txt'
+    generate_overview_table(table_file, 3,
+                            'rte_flow actions',
+                            'rte_flow actions availability in networking drivers',
+                            'Action')
     table_file = dirname(__file__) + '/cryptodevs/overview_feature_table.txt'
     generate_overview_table(table_file, 1,
                             'Features',

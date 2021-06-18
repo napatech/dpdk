@@ -2910,6 +2910,10 @@ cmd_setup_rxtx_queue_parsed(
 		if (!numa_support || socket_id == NUMA_NO_CONFIG)
 			socket_id = port->socket_id;
 
+		if (port->nb_tx_desc[res->qid] < tx_pkt_nb_segs) {
+			printf("Failed to setup TX queue: not enough descriptors\n");
+			return;
+		}
 		ret = rte_eth_tx_queue_setup(res->portid,
 					     res->qid,
 					     port->nb_tx_desc[res->qid],
@@ -3266,6 +3270,7 @@ cmd_config_dcb_parsed(void *parsed_result,
                         __rte_unused void *data)
 {
 	struct cmd_config_dcb *res = parsed_result;
+	struct rte_eth_dcb_info dcb_info;
 	portid_t port_id = res->port_id;
 	struct rte_port *port;
 	uint8_t pfc_en;
@@ -3288,6 +3293,14 @@ cmd_config_dcb_parsed(void *parsed_result,
 		printf("nb_cores shouldn't be less than number of TCs.\n");
 		return;
 	}
+
+	/* Check whether the port supports the report of DCB info. */
+	ret = rte_eth_dev_get_dcb_info(port_id, &dcb_info);
+	if (ret == -ENOTSUP) {
+		printf("rte_eth_dev_get_dcb_info not supported.\n");
+		return;
+	}
+
 	if (!strncmp(res->pfc_en, "on", 2))
 		pfc_en = 1;
 	else
@@ -3302,12 +3315,12 @@ cmd_config_dcb_parsed(void *parsed_result,
 		ret = init_port_dcb_config(port_id, DCB_ENABLED,
 				(enum rte_eth_nb_tcs)res->num_tcs,
 				pfc_en);
-
-
 	if (ret != 0) {
 		printf("Cannot initialize network ports.\n");
 		return;
 	}
+
+	fwd_config_setup();
 
 	cmd_reconfig_device_queue(port_id, 1, 1);
 }
@@ -4666,7 +4679,7 @@ cmd_config_queue_tx_offloads(struct rte_port *port)
 	int k;
 
 	/* Apply queue tx offloads configuration */
-	for (k = 0; k < port->dev_info.max_rx_queues; k++)
+	for (k = 0; k < port->dev_info.max_tx_queues; k++)
 		port->tx_conf[k].offloads =
 			port->dev_conf.txmode.offloads;
 }
@@ -9727,7 +9740,7 @@ dump_socket_mem(FILE *f)
 	fprintf(f,
 		"Total   : size(M) total: %.6lf alloc: %.6lf(%.3lf%%) free: %.6lf \tcount alloc: %-4u free: %u\n",
 		(double)total / (1024 * 1024), (double)alloc / (1024 * 1024),
-		(double)alloc * 100 / (double)total,
+		total ? ((double)alloc * 100 / (double)total) : 0,
 		(double)free / (1024 * 1024),
 		n_alloc, n_free);
 	if (last_allocs)

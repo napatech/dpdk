@@ -32,6 +32,8 @@ struct mlx5_devx_mkey_attr {
 	uint32_t relaxed_ordering_write:1;
 	uint32_t relaxed_ordering_read:1;
 	uint32_t umr_en:1;
+	uint32_t crypto_en:2;
+	uint32_t set_remote_rw:1;
 	struct mlx5_klm *klm_array;
 	int klm_num;
 };
@@ -100,6 +102,7 @@ struct mlx5_hca_attr {
 	uint32_t eth_net_offloads:1;
 	uint32_t eth_virt:1;
 	uint32_t wqe_vlan_insert:1;
+	uint32_t csum_cap:1;
 	uint32_t wqe_inline_mode:2;
 	uint32_t vport_inline_mode:3;
 	uint32_t tunnel_stateless_geneve_rx:1;
@@ -136,12 +139,20 @@ struct mlx5_hca_attr {
 	uint32_t qp_ts_format:2;
 	uint32_t regex:1;
 	uint32_t reg_c_preserve:1;
+	uint32_t ct_offload:1; /* General obj type ASO CT offload supported. */
+	uint32_t crypto:1; /* Crypto engine is supported. */
+	uint32_t aes_xts:1; /* AES-XTS crypto is supported. */
+	uint32_t dek:1; /* General obj type DEK is supported. */
+	uint32_t import_kek:1; /* General obj type IMPORT_KEK supported. */
+	uint32_t credential:1; /* General obj type CREDENTIAL supported. */
+	uint32_t crypto_login:1; /* General obj type CRYPTO_LOGIN supported. */
 	uint32_t regexp_num_of_engines;
 	uint32_t log_max_ft_sampler_num:8;
 	uint32_t geneve_tlv_opt;
 	uint32_t cqe_compression:1;
 	uint32_t mini_cqe_resp_flow_tag:1;
 	uint32_t mini_cqe_resp_l3_l4_tag:1;
+	uint32_t pkt_integrity_match:1; /* 1 if HW supports integrity item */
 	struct mlx5_hca_qos_attr qos;
 	struct mlx5_hca_vdpa_attr vdpa;
 	int log_max_qp_sz;
@@ -432,6 +443,41 @@ struct mlx5_devx_graph_node_attr {
 	struct mlx5_devx_graph_arc_attr out[MLX5_GRAPH_NODE_ARC_NUM];
 };
 
+/* Encryption key size is up to 1024 bit, 128 bytes. */
+#define MLX5_CRYPTO_KEY_MAX_SIZE	128
+
+struct mlx5_devx_dek_attr {
+	uint32_t key_size:4;
+	uint32_t has_keytag:1;
+	uint32_t key_purpose:4;
+	uint32_t pd:24;
+	uint64_t opaque;
+	uint8_t key[MLX5_CRYPTO_KEY_MAX_SIZE];
+};
+
+struct mlx5_devx_import_kek_attr {
+	uint64_t modify_field_select;
+	uint32_t state:8;
+	uint32_t key_size:4;
+	uint8_t key[MLX5_CRYPTO_KEY_MAX_SIZE];
+};
+
+#define MLX5_CRYPTO_CREDENTIAL_SIZE	48
+
+struct mlx5_devx_credential_attr {
+	uint64_t modify_field_select;
+	uint32_t state:8;
+	uint32_t credential_role:8;
+	uint8_t credential[MLX5_CRYPTO_CREDENTIAL_SIZE];
+};
+
+struct mlx5_devx_crypto_login_attr {
+	uint64_t modify_field_select;
+	uint32_t credential_pointer:24;
+	uint32_t session_import_kek_ptr:24;
+	uint8_t credential[MLX5_CRYPTO_CREDENTIAL_SIZE];
+};
+
 /* mlx5_devx_cmds.c */
 
 __rte_internal
@@ -523,6 +569,10 @@ int mlx5_devx_cmd_register_read(void *ctx, uint16_t reg_id,
 				uint32_t arg, uint32_t *data, uint32_t dw_cnt);
 
 __rte_internal
+int mlx5_devx_cmd_register_write(void *ctx, uint16_t reg_id,
+				 uint32_t arg, uint32_t *data, uint32_t dw_cnt);
+
+__rte_internal
 struct mlx5_devx_obj *
 mlx5_devx_cmd_create_geneve_tlv_option(void *ctx,
 		uint16_t class, uint8_t type, uint8_t len);
@@ -567,6 +617,10 @@ struct mlx5_devx_obj *mlx5_devx_cmd_queue_counter_alloc(void *ctx);
 __rte_internal
 int mlx5_devx_cmd_queue_counter_query(struct mlx5_devx_obj *dcs, int clear,
 				      uint32_t *out_of_buffers);
+__rte_internal
+struct mlx5_devx_obj *mlx5_devx_cmd_create_conn_track_offload_obj(void *ctx,
+					uint32_t pd, uint32_t log_obj_size);
+
 /**
  * Create general object of type FLOW_METER_ASO using DevX API..
  *
@@ -584,4 +638,23 @@ int mlx5_devx_cmd_queue_counter_query(struct mlx5_devx_obj *dcs, int clear,
 __rte_internal
 struct mlx5_devx_obj *mlx5_devx_cmd_create_flow_meter_aso_obj(void *ctx,
 					uint32_t pd, uint32_t log_obj_size);
+__rte_internal
+struct mlx5_devx_obj *
+mlx5_devx_cmd_create_dek_obj(void *ctx, struct mlx5_devx_dek_attr *attr);
+
+__rte_internal
+struct mlx5_devx_obj *
+mlx5_devx_cmd_create_import_kek_obj(void *ctx,
+				    struct mlx5_devx_import_kek_attr *attr);
+
+__rte_internal
+struct mlx5_devx_obj *
+mlx5_devx_cmd_create_credential_obj(void *ctx,
+				    struct mlx5_devx_credential_attr *attr);
+
+__rte_internal
+struct mlx5_devx_obj *
+mlx5_devx_cmd_create_crypto_login_obj(void *ctx,
+				      struct mlx5_devx_crypto_login_attr *attr);
+
 #endif /* RTE_PMD_MLX5_DEVX_CMDS_H_ */

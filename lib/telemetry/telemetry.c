@@ -27,6 +27,9 @@
 #define MAX_OUTPUT_LEN (1024 * 16)
 #define MAX_CONNECTIONS 10
 
+/** Maximum number of telemetry callbacks. */
+#define TELEMETRY_MAX_CALLBACKS 64
+
 #ifndef RTE_EXEC_ENV_WINDOWS
 static void *
 client_handler(void *socket);
@@ -104,8 +107,10 @@ list_commands(const char *cmd __rte_unused, const char *params __rte_unused,
 	int i;
 
 	rte_tel_data_start_array(d, RTE_TEL_STRING_VAL);
+	rte_spinlock_lock(&callback_sl);
 	for (i = 0; i < num_callbacks; i++)
 		rte_tel_data_add_array_string(d, callbacks[i].cmd);
+	rte_spinlock_unlock(&callback_sl);
 	return 0;
 }
 

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2015-2020
+ * Copyright(c) 2015-2020 Beijing WangXun Technology Co., Ltd.
+ * Copyright(c) 2010-2017 Intel Corporation
  */
 
 #include <stdio.h>
@@ -930,34 +931,10 @@ static int
 eth_txgbe_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		struct rte_pci_device *pci_dev)
 {
-	struct rte_eth_dev *pf_ethdev;
-	struct rte_eth_devargs eth_da;
-	int retval;
-
-	if (pci_dev->device.devargs) {
-		retval = rte_eth_devargs_parse(pci_dev->device.devargs->args,
-				&eth_da);
-		if (retval)
-			return retval;
-	} else {
-		memset(&eth_da, 0, sizeof(eth_da));
-	}
-
-	retval = rte_eth_dev_create(&pci_dev->device, pci_dev->device.name,
+	return rte_eth_dev_create(&pci_dev->device, pci_dev->device.name,
 			sizeof(struct txgbe_adapter),
 			eth_dev_pci_specific_init, pci_dev,
 			eth_txgbe_dev_init, NULL);
-
-	if (retval || eth_da.nb_representor_ports < 1)
-		return retval;
-	if (eth_da.type != RTE_ETH_REPRESENTOR_VF)
-		return -ENOTSUP;
-
-	pf_ethdev = rte_eth_dev_allocated(pci_dev->device.name);
-	if (pf_ethdev == NULL)
-		return -ENODEV;
-
-	return 0;
 }
 
 static int eth_txgbe_pci_remove(struct rte_pci_device *pci_dev)
@@ -966,7 +943,7 @@ static int eth_txgbe_pci_remove(struct rte_pci_device *pci_dev)
 
 	ethdev = rte_eth_dev_allocated(pci_dev->device.name);
 	if (!ethdev)
-		return -ENODEV;
+		return 0;
 
 	return rte_eth_dev_destroy(ethdev, eth_txgbe_dev_uninit);
 }
@@ -1209,7 +1186,6 @@ txgbe_vlan_hw_extend_disable(struct rte_eth_dev *dev)
 
 	ctrl = rd32(hw, TXGBE_PORTCTL);
 	ctrl &= ~TXGBE_PORTCTL_VLANEXT;
-	ctrl &= ~TXGBE_PORTCTL_QINQ;
 	wr32(hw, TXGBE_PORTCTL, ctrl);
 }
 
@@ -1217,17 +1193,38 @@ static void
 txgbe_vlan_hw_extend_enable(struct rte_eth_dev *dev)
 {
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
-	struct rte_eth_rxmode *rxmode = &dev->data->dev_conf.rxmode;
-	struct rte_eth_txmode *txmode = &dev->data->dev_conf.txmode;
 	uint32_t ctrl;
 
 	PMD_INIT_FUNC_TRACE();
 
 	ctrl  = rd32(hw, TXGBE_PORTCTL);
 	ctrl |= TXGBE_PORTCTL_VLANEXT;
-	if (rxmode->offloads & DEV_RX_OFFLOAD_QINQ_STRIP ||
-	    txmode->offloads & DEV_TX_OFFLOAD_QINQ_INSERT)
-		ctrl |= TXGBE_PORTCTL_QINQ;
+	wr32(hw, TXGBE_PORTCTL, ctrl);
+}
+
+static void
+txgbe_qinq_hw_strip_disable(struct rte_eth_dev *dev)
+{
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+	uint32_t ctrl;
+
+	PMD_INIT_FUNC_TRACE();
+
+	ctrl = rd32(hw, TXGBE_PORTCTL);
+	ctrl &= ~TXGBE_PORTCTL_QINQ;
+	wr32(hw, TXGBE_PORTCTL, ctrl);
+}
+
+static void
+txgbe_qinq_hw_strip_enable(struct rte_eth_dev *dev)
+{
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+	uint32_t ctrl;
+
+	PMD_INIT_FUNC_TRACE();
+
+	ctrl  = rd32(hw, TXGBE_PORTCTL);
+	ctrl |= TXGBE_PORTCTL_QINQ | TXGBE_PORTCTL_VLANEXT;
 	wr32(hw, TXGBE_PORTCTL, ctrl);
 }
 
@@ -1292,6 +1289,13 @@ txgbe_vlan_offload_config(struct rte_eth_dev *dev, int mask)
 			txgbe_vlan_hw_extend_enable(dev);
 		else
 			txgbe_vlan_hw_extend_disable(dev);
+	}
+
+	if (mask & ETH_QINQ_STRIP_MASK) {
+		if (rxmode->offloads & DEV_RX_OFFLOAD_QINQ_STRIP)
+			txgbe_qinq_hw_strip_enable(dev);
+		else
+			txgbe_qinq_hw_strip_disable(dev);
 	}
 
 	return 0;
@@ -2582,9 +2586,11 @@ txgbe_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
 	hw->phy.get_fw_version(hw, &etrack_id);
 
 	ret = snprintf(fw_version, fw_size, "0x%08x", etrack_id);
+	if (ret < 0)
+		return -EINVAL;
 
 	ret += 1; /* add the size of '\0' */
-	if (fw_size < (u32)ret)
+	if (fw_size < (size_t)ret)
 		return ret;
 	else
 		return 0;
@@ -4993,7 +4999,6 @@ txgbe_dev_udp_tunnel_port_add(struct rte_eth_dev *dev,
 			break;
 		}
 		wr32(hw, TXGBE_VXLANPORT, udp_tunnel->udp_port);
-		wr32(hw, TXGBE_VXLANPORTGPE, udp_tunnel->udp_port);
 		break;
 	case RTE_TUNNEL_TYPE_GENEVE:
 		if (udp_tunnel->udp_port == 0) {
@@ -5010,6 +5015,14 @@ txgbe_dev_udp_tunnel_port_add(struct rte_eth_dev *dev,
 			break;
 		}
 		wr32(hw, TXGBE_TEREDOPORT, udp_tunnel->udp_port);
+		break;
+	case RTE_TUNNEL_TYPE_VXLAN_GPE:
+		if (udp_tunnel->udp_port == 0) {
+			PMD_DRV_LOG(ERR, "Add VxLAN port 0 is not allowed.");
+			ret = -EINVAL;
+			break;
+		}
+		wr32(hw, TXGBE_VXLANPORTGPE, udp_tunnel->udp_port);
 		break;
 	default:
 		PMD_DRV_LOG(ERR, "Invalid tunnel type");
@@ -5044,7 +5057,6 @@ txgbe_dev_udp_tunnel_port_del(struct rte_eth_dev *dev,
 			break;
 		}
 		wr32(hw, TXGBE_VXLANPORT, 0);
-		wr32(hw, TXGBE_VXLANPORTGPE, 0);
 		break;
 	case RTE_TUNNEL_TYPE_GENEVE:
 		cur_port = (uint16_t)rd32(hw, TXGBE_GENEVEPORT);
@@ -5065,6 +5077,16 @@ txgbe_dev_udp_tunnel_port_del(struct rte_eth_dev *dev,
 			break;
 		}
 		wr32(hw, TXGBE_TEREDOPORT, 0);
+		break;
+	case RTE_TUNNEL_TYPE_VXLAN_GPE:
+		cur_port = (uint16_t)rd32(hw, TXGBE_VXLANPORTGPE);
+		if (cur_port != udp_tunnel->udp_port) {
+			PMD_DRV_LOG(ERR, "Port %u does not exist.",
+					udp_tunnel->udp_port);
+			ret = -EINVAL;
+			break;
+		}
+		wr32(hw, TXGBE_VXLANPORTGPE, 0);
 		break;
 	default:
 		PMD_DRV_LOG(ERR, "Invalid tunnel type");
@@ -5337,17 +5359,17 @@ RTE_PMD_REGISTER_PARAM_STRING(net_txgbe,
 			      TXGBE_DEVARG_FFE_PRE "=<uint16>"
 			      TXGBE_DEVARG_FFE_POST "=<uint16>");
 
-RTE_LOG_REGISTER(txgbe_logtype_init, pmd.net.txgbe.init, NOTICE);
-RTE_LOG_REGISTER(txgbe_logtype_driver, pmd.net.txgbe.driver, NOTICE);
-RTE_LOG_REGISTER(txgbe_logtype_bp, pmd.net.txgbe.bp, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(txgbe_logtype_init, init, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(txgbe_logtype_driver, driver, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(txgbe_logtype_bp, bp, NOTICE);
 
 #ifdef RTE_LIBRTE_TXGBE_DEBUG_RX
-	RTE_LOG_REGISTER(txgbe_logtype_rx, pmd.net.txgbe.rx, DEBUG);
+	RTE_LOG_REGISTER_SUFFIX(txgbe_logtype_rx, rx, DEBUG);
 #endif
 #ifdef RTE_LIBRTE_TXGBE_DEBUG_TX
-	RTE_LOG_REGISTER(txgbe_logtype_tx, pmd.net.txgbe.tx, DEBUG);
+	RTE_LOG_REGISTER_SUFFIX(txgbe_logtype_tx, tx, DEBUG);
 #endif
 
 #ifdef RTE_LIBRTE_TXGBE_DEBUG_TX_FREE
-	RTE_LOG_REGISTER(txgbe_logtype_tx_free, pmd.net.txgbe.tx_free, DEBUG);
+	RTE_LOG_REGISTER_SUFFIX(txgbe_logtype_tx_free, tx_free, DEBUG);
 #endif

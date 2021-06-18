@@ -1073,7 +1073,7 @@ atl_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
 {
 	struct aq_hw_s *hw = ATL_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint32_t fw_ver = 0;
-	unsigned int ret = 0;
+	int ret = 0;
 
 	ret = hw_atl_utils_get_fw_version(hw, &fw_ver);
 	if (ret)
@@ -1081,10 +1081,11 @@ atl_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
 
 	ret = snprintf(fw_version, fw_size, "%u.%u.%u", fw_ver >> 24,
 		       (fw_ver >> 16) & 0xFFU, fw_ver & 0xFFFFU);
+	if (ret < 0)
+		return -EINVAL;
 
 	ret += 1; /* add string null-terminator */
-
-	if (fw_size < ret)
+	if (fw_size < (size_t)ret)
 		return ret;
 
 	return 0;
@@ -1914,5 +1915,5 @@ is_atlantic_supported(struct rte_eth_dev *dev)
 RTE_PMD_REGISTER_PCI(net_atlantic, rte_atl_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_atlantic, pci_id_atl_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_atlantic, "* igb_uio | uio_pci_generic");
-RTE_LOG_REGISTER(atl_logtype_init, pmd.net.atlantic.init, NOTICE);
-RTE_LOG_REGISTER(atl_logtype_driver, pmd.net.atlantic.driver, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(atl_logtype_init, init, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(atl_logtype_driver, driver, NOTICE);

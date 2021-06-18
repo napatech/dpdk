@@ -306,6 +306,7 @@ struct rte_flow {
 	struct bnxt_vnic_info	*vnic;
 };
 
+#define BNXT_PTP_RX_PND_CNT		10
 #define BNXT_PTP_FLAGS_PATH_TX		0x0
 #define BNXT_PTP_FLAGS_PATH_RX		0x1
 #define BNXT_PTP_FLAGS_CURRENT_TIME	0x2
@@ -597,13 +598,6 @@ struct bnxt_rep_info {
 				     DEV_RX_OFFLOAD_SCATTER | \
 				     DEV_RX_OFFLOAD_RSS_HASH)
 
-#define  MAX_TABLE_SUPPORT 4
-#define  MAX_DIR_SUPPORT   2
-struct bnxt_dmabuf_info {
-	uint32_t entry_num;
-	int      fd[MAX_DIR_SUPPORT][MAX_TABLE_SUPPORT];
-};
-
 #define BNXT_HWRM_SHORT_REQ_LEN		sizeof(struct hwrm_short_input)
 
 struct bnxt_flow_stat_info {
@@ -726,7 +720,7 @@ struct bnxt {
 	uint32_t		max_ring_grps;
 	struct bnxt_ring_grp_info	*grp_info;
 
-	unsigned int		nr_vnics;
+	uint16_t			nr_vnics;
 
 #define BNXT_GET_DEFAULT_VNIC(bp)	(&(bp)->vnic_info[0])
 	struct bnxt_vnic_info	*vnic_info;
@@ -834,7 +828,6 @@ struct bnxt {
 	uint16_t		port_svif;
 
 	struct tf		tfp;
-	struct bnxt_dmabuf_info dmabuf;
 	struct bnxt_ulp_context	*ulp_ctx;
 	struct bnxt_flow_stat_info *flow_stat;
 	uint16_t		max_num_kflows;
@@ -844,7 +837,6 @@ struct bnxt {
 static
 inline uint16_t bnxt_max_rings(struct bnxt *bp)
 {
-	struct rte_eth_conf *dev_conf = &bp->eth_dev->data->dev_conf;
 	uint16_t max_tx_rings = bp->max_tx_rings;
 	uint16_t max_rx_rings = bp->max_rx_rings;
 	uint16_t max_cp_rings = bp->max_cp_rings;
@@ -862,17 +854,12 @@ inline uint16_t bnxt_max_rings(struct bnxt *bp)
 				       bp->max_stat_ctx / 2U);
 	}
 
-	if (BNXT_CHIP_P5(bp)) {
-		/* RSS table size in Thor is 512.
-		 * Cap max Rx rings to the same value for RSS.
-		 * For non-RSS case cap it to the max VNIC count.
-		 */
-		if (dev_conf->rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG)
-			max_rx_rings = RTE_MIN(max_rx_rings,
-					       BNXT_RSS_TBL_SIZE_P5);
-		else
-			max_rx_rings = RTE_MIN(max_rx_rings, bp->max_vnics);
-	}
+	/*
+	 * RSS table size in Thor is 512.
+	 * Cap max Rx rings to the same value for RSS.
+	 */
+	if (BNXT_CHIP_P5(bp))
+		max_rx_rings = RTE_MIN(max_rx_rings, BNXT_RSS_TBL_SIZE_P5);
 
 	max_tx_rings = RTE_MIN(max_tx_rings, max_rx_rings);
 	if (max_cp_rings > BNXT_NUM_ASYNC_CPR(bp))

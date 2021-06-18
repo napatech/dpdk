@@ -238,11 +238,11 @@ process_zuc_hash_op(struct zuc_qp *qp, struct rte_crypto_op **ops,
 {
 	unsigned int i;
 	uint8_t processed_ops = 0;
-	uint8_t *src[ZUC_MAX_BURST];
+	uint8_t *src[ZUC_MAX_BURST] = { 0 };
 	uint32_t *dst[ZUC_MAX_BURST];
-	uint32_t length_in_bits[ZUC_MAX_BURST];
-	uint8_t *iv[ZUC_MAX_BURST];
-	const void *hash_keys[ZUC_MAX_BURST];
+	uint32_t length_in_bits[ZUC_MAX_BURST] = { 0 };
+	uint8_t *iv[ZUC_MAX_BURST] = { 0 };
+	const void *hash_keys[ZUC_MAX_BURST] = { 0 };
 	struct zuc_session *sess;
 
 	for (i = 0; i < num_ops; i++) {
@@ -580,4 +580,4 @@ RTE_PMD_REGISTER_PARAM_STRING(CRYPTODEV_NAME_ZUC_PMD,
 	"socket_id=<int>");
 RTE_PMD_REGISTER_CRYPTO_DRIVER(zuc_crypto_drv, cryptodev_zuc_pmd_drv.driver,
 		cryptodev_driver_id);
-RTE_LOG_REGISTER(zuc_logtype_driver, pmd.crypto.zuc, INFO);
+RTE_LOG_REGISTER_DEFAULT(zuc_logtype_driver, INFO);

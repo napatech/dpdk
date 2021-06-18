@@ -1618,97 +1618,99 @@ port_action_handle_query(portid_t port_id, uint32_t id)
 {
 	struct rte_flow_error error;
 	struct port_indirect_action *pia;
-	uint64_t default_data;
-	void *data = NULL;
-	int ret = 0;
+	union {
+		struct rte_flow_query_count count;
+		struct rte_flow_query_age age;
+		struct rte_flow_action_conntrack ct;
+	} query;
 
 	pia = action_get_by_id(port_id, id);
 	if (!pia)
 		return -EINVAL;
 	switch (pia->type) {
-	case RTE_FLOW_ACTION_TYPE_RSS:
 	case RTE_FLOW_ACTION_TYPE_AGE:
-		data = &default_data;
+	case RTE_FLOW_ACTION_TYPE_COUNT:
 		break;
 	default:
-		printf("Indirect action %u (type: %d) on port %u doesn't"
-		       " support query\n", id, pia->type, port_id);
-		return -1;
+		printf("Indirect action %u (type: %d) on port %u doesn't support query\n",
+		       id, pia->type, port_id);
+		return -ENOTSUP;
 	}
-	if (rte_flow_action_handle_query(port_id, pia->handle, data, &error))
-		ret = port_flow_complain(&error);
+	/* Poisoning to make sure PMDs update it in case of error. */
+	memset(&error, 0x55, sizeof(error));
+	memset(&query, 0, sizeof(query));
+	if (rte_flow_action_handle_query(port_id, pia->handle, &query, &error))
+		return port_flow_complain(&error);
 	switch (pia->type) {
-	case RTE_FLOW_ACTION_TYPE_RSS:
-		if (!ret)
-			printf("Shared RSS action:\n\trefs:%u\n",
-			       *((uint32_t *)data));
-		data = NULL;
-		break;
 	case RTE_FLOW_ACTION_TYPE_AGE:
-		if (!ret) {
-			struct rte_flow_query_age *resp = data;
-
-			printf("AGE:\n"
-			       " aged: %u\n"
-			       " sec_since_last_hit_valid: %u\n"
-			       " sec_since_last_hit: %" PRIu32 "\n",
-			       resp->aged,
-			       resp->sec_since_last_hit_valid,
-			       resp->sec_since_last_hit);
-		}
-		data = NULL;
+		printf("Indirect AGE action:\n"
+		       " aged: %u\n"
+		       " sec_since_last_hit_valid: %u\n"
+		       " sec_since_last_hit: %" PRIu32 "\n",
+		       query.age.aged,
+		       query.age.sec_since_last_hit_valid,
+		       query.age.sec_since_last_hit);
+		break;
+	case RTE_FLOW_ACTION_TYPE_COUNT:
+		printf("Indirect COUNT action:\n"
+		       " hits_set: %u\n"
+		       " bytes_set: %u\n"
+		       " hits: %" PRIu64 "\n"
+		       " bytes: %" PRIu64 "\n",
+		       query.count.hits_set,
+		       query.count.bytes_set,
+		       query.count.hits,
+		       query.count.bytes);
 		break;
 	case RTE_FLOW_ACTION_TYPE_CONNTRACK:
-		if (!ret) {
-			struct rte_flow_action_conntrack *ct = data;
-
-			printf("Conntrack Context:\n"
-			       "  Peer: %u, Flow dir: %s, Enable: %u\n"
-			       "  Live: %u, SACK: %u, CACK: %u\n"
-			       "  Packet dir: %s, Liberal: %u, State: %u\n"
-			       "  Factor: %u, Retrans: %u, TCP flags: %u\n"
-			       "  Last Seq: %u, Last ACK: %u\n"
-			       "  Last Win: %u, Last End: %u\n",
-			       ct->peer_port,
-			       ct->is_original_dir ? "Original" : "Reply",
-			       ct->enable, ct->live_connection,
-			       ct->selective_ack, ct->challenge_ack_passed,
-			       ct->last_direction ? "Original" : "Reply",
-			       ct->liberal_mode, ct->state,
-			       ct->max_ack_window, ct->retransmission_limit,
-			       ct->last_index, ct->last_seq, ct->last_ack,
-			       ct->last_window, ct->last_end);
-			printf("  Original Dir:\n"
-			       "    scale: %u, fin: %u, ack seen: %u\n"
-			       " unacked data: %u\n    Sent end: %u,"
-			       "    Reply end: %u, Max win: %u, Max ACK: %u\n",
-			       ct->original_dir.scale,
-			       ct->original_dir.close_initiated,
-			       ct->original_dir.last_ack_seen,
-			       ct->original_dir.data_unacked,
-			       ct->original_dir.sent_end,
-			       ct->original_dir.reply_end,
-			       ct->original_dir.max_win,
-			       ct->original_dir.max_ack);
-			printf("  Reply Dir:\n"
-			       "    scale: %u, fin: %u, ack seen: %u\n"
-			       " unacked data: %u\n    Sent end: %u,"
-			       "    Reply end: %u, Max win: %u, Max ACK: %u\n",
-			       ct->reply_dir.scale,
-			       ct->reply_dir.close_initiated,
-			       ct->reply_dir.last_ack_seen,
-			       ct->reply_dir.data_unacked,
-			       ct->reply_dir.sent_end, ct->reply_dir.reply_end,
-			       ct->reply_dir.max_win, ct->reply_dir.max_ack);
-		}
-		data = NULL;
+		printf("Conntrack Context:\n"
+		       "  Peer: %u, Flow dir: %s, Enable: %u\n"
+		       "  Live: %u, SACK: %u, CACK: %u\n"
+		       "  Packet dir: %s, Liberal: %u, State: %u\n"
+		       "  Factor: %u, Retrans: %u, TCP flags: %u\n"
+		       "  Last Seq: %u, Last ACK: %u\n"
+		       "  Last Win: %u, Last End: %u\n",
+		       query.ct.peer_port,
+		       query.ct.is_original_dir ? "Original" : "Reply",
+		       query.ct.enable, query.ct.live_connection,
+		       query.ct.selective_ack, query.ct.challenge_ack_passed,
+		       query.ct.last_direction ? "Original" : "Reply",
+		       query.ct.liberal_mode, query.ct.state,
+		       query.ct.max_ack_window, query.ct.retransmission_limit,
+		       query.ct.last_index, query.ct.last_seq,
+		       query.ct.last_ack, query.ct.last_window,
+		       query.ct.last_end);
+		printf("  Original Dir:\n"
+		       "    scale: %u, fin: %u, ack seen: %u\n"
+		       " unacked data: %u\n    Sent end: %u,"
+		       "    Reply end: %u, Max win: %u, Max ACK: %u\n",
+		       query.ct.original_dir.scale,
+		       query.ct.original_dir.close_initiated,
+		       query.ct.original_dir.last_ack_seen,
+		       query.ct.original_dir.data_unacked,
+		       query.ct.original_dir.sent_end,
+		       query.ct.original_dir.reply_end,
+		       query.ct.original_dir.max_win,
+		       query.ct.original_dir.max_ack);
+		printf("  Reply Dir:\n"
+		       "    scale: %u, fin: %u, ack seen: %u\n"
+		       " unacked data: %u\n    Sent end: %u,"
+		       "    Reply end: %u, Max win: %u, Max ACK: %u\n",
+		       query.ct.reply_dir.scale,
+		       query.ct.reply_dir.close_initiated,
+		       query.ct.reply_dir.last_ack_seen,
+		       query.ct.reply_dir.data_unacked,
+		       query.ct.reply_dir.sent_end,
+		       query.ct.reply_dir.reply_end,
+		       query.ct.reply_dir.max_win,
+		       query.ct.reply_dir.max_ack);
 		break;
 	default:
-		printf("Indirect action %u (type: %d) on port %u doesn't"
-		       " support query\n", id, pia->type, port_id);
-		ret = -1;
+		printf("Indirect action %u (type: %d) on port %u doesn't support query\n",
+		       id, pia->type, port_id);
+		break;
 	}
-	return ret;
+	return 0;
 }
 
 static struct port_flow_tunnel *
@@ -1938,6 +1940,9 @@ port_flow_create(portid_t port_id,
 	memset(&error, 0x22, sizeof(error));
 	flow = rte_flow_create(port_id, attr, pattern, actions, &error);
 	if (!flow) {
+		if (tunnel_ops->enabled)
+			port_flow_tunnel_offload_cmd_release(port_id,
+							     tunnel_ops, pft);
 		free(pf);
 		return port_flow_complain(&error);
 	}
@@ -3008,6 +3013,21 @@ rss_fwd_config_setup(void)
 	}
 }
 
+static uint16_t
+get_fwd_port_total_tc_num(void)
+{
+	struct rte_eth_dcb_info dcb_info;
+	uint16_t total_tc_num = 0;
+	unsigned int i;
+
+	for (i = 0; i < nb_fwd_ports; i++) {
+		(void)rte_eth_dev_get_dcb_info(fwd_ports_ids[i], &dcb_info);
+		total_tc_num += dcb_info.nb_tcs;
+	}
+
+	return total_tc_num;
+}
+
 /**
  * For the DCB forwarding test, each core is assigned on each traffic class.
  *
@@ -3027,12 +3047,42 @@ dcb_fwd_config_setup(void)
 	lcoreid_t  lc_id;
 	uint16_t nb_rx_queue, nb_tx_queue;
 	uint16_t i, j, k, sm_id = 0;
+	uint16_t total_tc_num;
+	struct rte_port *port;
 	uint8_t tc = 0;
+	portid_t pid;
+	int ret;
+
+	/*
+	 * The fwd_config_setup() is called when the port is RTE_PORT_STARTED
+	 * or RTE_PORT_STOPPED.
+	 *
+	 * Re-configure ports to get updated mapping between tc and queue in
+	 * case the queue number of the port is changed. Skip for started ports
+	 * since modifying queue number and calling dev_configure need to stop
+	 * ports first.
+	 */
+	for (pid = 0; pid < nb_fwd_ports; pid++) {
+		if (port_is_started(pid) == 1)
+			continue;
+
+		port = &ports[pid];
+		ret = rte_eth_dev_configure(pid, nb_rxq, nb_txq,
+					    &port->dev_conf);
+		if (ret < 0) {
+			printf("Failed to re-configure port %d, ret = %d.\n",
+				pid, ret);
+			return;
+		}
+	}
 
 	cur_fwd_config.nb_fwd_lcores = (lcoreid_t) nb_fwd_lcores;
 	cur_fwd_config.nb_fwd_ports = nb_fwd_ports;
 	cur_fwd_config.nb_fwd_streams =
 		(streamid_t) (nb_rxq * cur_fwd_config.nb_fwd_ports);
+	total_tc_num = get_fwd_port_total_tc_num();
+	if (cur_fwd_config.nb_fwd_lcores > total_tc_num)
+		cur_fwd_config.nb_fwd_lcores = total_tc_num;
 
 	/* reinitialize forwarding streams */
 	init_fwd_streams();
@@ -3154,6 +3204,10 @@ icmp_echo_config_setup(void)
 void
 fwd_config_setup(void)
 {
+	struct rte_port *port;
+	portid_t pt_id;
+	unsigned int i;
+
 	cur_fwd_config.fwd_eng = cur_fwd_eng;
 	if (strcmp(cur_fwd_eng->fwd_mode_name, "icmpecho") == 0) {
 		icmp_echo_config_setup();
@@ -3161,9 +3215,24 @@ fwd_config_setup(void)
 	}
 
 	if ((nb_rxq > 1) && (nb_txq > 1)){
-		if (dcb_config)
+		if (dcb_config) {
+			for (i = 0; i < nb_fwd_ports; i++) {
+				pt_id = fwd_ports_ids[i];
+				port = &ports[pt_id];
+				if (!port->dcb_flag) {
+					printf("In DCB mode, all forwarding ports must "
+						"be configured in this mode.\n");
+					return;
+				}
+			}
+			if (nb_fwd_lcores == 1) {
+				printf("In DCB mode,the nb forwarding cores "
+					"should be larger than 1.\n");
+				return;
+			}
+
 			dcb_fwd_config_setup();
-		else
+		} else
 			rss_fwd_config_setup();
 	}
 	else
@@ -3697,13 +3766,15 @@ nb_segs_is_invalid(unsigned int nb_segs)
 	RTE_ETH_FOREACH_DEV(port_id) {
 		for (queue_id = 0; queue_id < nb_txq; queue_id++) {
 			ret = get_tx_ring_size(port_id, queue_id, &ring_size);
-
-			if (ret)
-				return true;
-
+			if (ret) {
+				/* Port may not be initialized yet, can't say
+				 * the port is invalid in this stage.
+				 */
+				continue;
+			}
 			if (ring_size < nb_segs) {
-				printf("nb segments per TX packets=%u >= "
-				       "TX queue(%u) ring_size=%u - ignored\n",
+				printf("nb segments per TX packets=%u >= TX "
+				       "queue(%u) ring_size=%u - txpkts ignored\n",
 				       nb_segs, queue_id, ring_size);
 				return true;
 			}
@@ -3719,12 +3790,26 @@ set_tx_pkt_segments(unsigned int *seg_lengths, unsigned int nb_segs)
 	uint16_t tx_pkt_len;
 	unsigned int i;
 
-	if (nb_segs_is_invalid(nb_segs))
+	/*
+	 * For single segment settings failed check is ignored.
+	 * It is a very basic capability to send the single segment
+	 * packets, suppose it is always supported.
+	 */
+	if (nb_segs > 1 && nb_segs_is_invalid(nb_segs)) {
+		printf("Tx segment size(%u) is not supported - txpkts ignored\n",
+			nb_segs);
 		return;
+	}
+
+	if (nb_segs > RTE_MAX_SEGS_PER_PKT) {
+		printf("Tx segment size(%u) is bigger than max number of segment(%u)\n",
+			nb_segs, RTE_MAX_SEGS_PER_PKT);
+		return;
+	}
 
 	/*
 	 * Check that each segment length is greater or equal than
-	 * the mbuf data sise.
+	 * the mbuf data size.
 	 * Check also that the total packet length is greater or equal than the
 	 * size of an empty UDP/IP packet (sizeof(struct rte_ether_hdr) +
 	 * 20 + 8).

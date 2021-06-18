@@ -212,6 +212,27 @@ enum rte_flow_item_type pattern_eth_qinq_ipv6[] = {
 	RTE_FLOW_ITEM_TYPE_IPV6,
 	RTE_FLOW_ITEM_TYPE_END,
 };
+enum rte_flow_item_type pattern_eth_ipv6_frag_ext[] = {
+	RTE_FLOW_ITEM_TYPE_ETH,
+	RTE_FLOW_ITEM_TYPE_IPV6,
+	RTE_FLOW_ITEM_TYPE_IPV6_FRAG_EXT,
+	RTE_FLOW_ITEM_TYPE_END,
+};
+enum rte_flow_item_type pattern_eth_vlan_ipv6_frag_ext[] = {
+	RTE_FLOW_ITEM_TYPE_ETH,
+	RTE_FLOW_ITEM_TYPE_VLAN,
+	RTE_FLOW_ITEM_TYPE_IPV6,
+	RTE_FLOW_ITEM_TYPE_IPV6_FRAG_EXT,
+	RTE_FLOW_ITEM_TYPE_END,
+};
+enum rte_flow_item_type pattern_eth_qinq_ipv6_frag_ext[] = {
+	RTE_FLOW_ITEM_TYPE_ETH,
+	RTE_FLOW_ITEM_TYPE_VLAN,
+	RTE_FLOW_ITEM_TYPE_VLAN,
+	RTE_FLOW_ITEM_TYPE_IPV6,
+	RTE_FLOW_ITEM_TYPE_IPV6_FRAG_EXT,
+	RTE_FLOW_ITEM_TYPE_END,
+};
 enum rte_flow_item_type pattern_eth_ipv6_udp[] = {
 	RTE_FLOW_ITEM_TYPE_ETH,
 	RTE_FLOW_ITEM_TYPE_IPV6,
@@ -2087,6 +2108,7 @@ static struct ice_ptype_match ice_ptype_map[] = {
 	{pattern_eth_ipv6_udp,				ICE_PTYPE_IPV6_UDP_PAY},
 	{pattern_eth_ipv6_tcp,				ICE_PTYPE_IPV6_TCP_PAY},
 	{pattern_eth_ipv6_sctp,				ICE_PTYPE_IPV6_SCTP_PAY},
+	{pattern_eth_ipv6_frag_ext,			ICE_PTYPE_IPV6FRAG_PAY},
 	{pattern_eth_ipv6_gtpu,				ICE_MAC_IPV6_GTPU},
 	{pattern_eth_ipv6_gtpu_eh,			ICE_MAC_IPV6_GTPU},
 	{pattern_eth_ipv6_gtpu_ipv4,			ICE_MAC_IPV6_GTPU_IPV4_PAY},

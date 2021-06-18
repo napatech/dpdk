@@ -156,9 +156,12 @@ hns3vf_enable_msix(const struct rte_pci_device *device, bool op)
 		if (ret < 0) {
 			PMD_INIT_LOG(ERR, "failed to write PCI offset 0x%x",
 				    (pos + PCI_MSIX_FLAGS));
+			return -ENXIO;
 		}
+
 		return 0;
 	}
+
 	return -ENXIO;
 }
 
@@ -1022,11 +1025,14 @@ hns3vf_dev_infos_get(struct rte_eth_dev *eth_dev, struct rte_eth_dev_info *info)
 		.offloads = 0,
 	};
 
-	info->vmdq_queue_num = 0;
-
 	info->reta_size = hw->rss_ind_tbl_size;
 	info->hash_key_size = HNS3_RSS_KEY_SIZE;
 	info->flow_type_rss_offloads = HNS3_ETH_RSS_SUPPORT;
+
+	info->default_rxportconf.burst_size = HNS3_DEFAULT_PORT_CONF_BURST_SIZE;
+	info->default_txportconf.burst_size = HNS3_DEFAULT_PORT_CONF_BURST_SIZE;
+	info->default_rxportconf.nb_queues = HNS3_DEFAULT_PORT_CONF_QUEUES_NUM;
+	info->default_txportconf.nb_queues = HNS3_DEFAULT_PORT_CONF_QUEUES_NUM;
 	info->default_rxportconf.ring_size = HNS3_DEFAULT_RING_DESC;
 	info->default_txportconf.ring_size = HNS3_DEFAULT_RING_DESC;
 
@@ -1492,18 +1498,6 @@ hns3vf_set_tc_queue_mapping(struct hns3_adapter *hns, uint16_t nb_rx_q,
 {
 	struct hns3_hw *hw = &hns->hw;
 
-	if (nb_rx_q < hw->num_tc) {
-		hns3_err(hw, "number of Rx queues(%u) is less than tcs(%u).",
-			 nb_rx_q, hw->num_tc);
-		return -EINVAL;
-	}
-
-	if (nb_tx_q < hw->num_tc) {
-		hns3_err(hw, "number of Tx queues(%u) is less than tcs(%u).",
-			 nb_tx_q, hw->num_tc);
-		return -EINVAL;
-	}
-
 	return hns3_queue_to_tc_mapping(hw, nb_rx_q, nb_tx_q);
 }
 
@@ -1885,12 +1879,6 @@ hns3vf_init_hardware(struct hns3_adapter *hns)
 		goto err_init_hardware;
 	}
 
-	ret = hns3vf_set_alive(hw, true);
-	if (ret) {
-		PMD_INIT_LOG(ERR, "Failed to VF send alive to PF: %d", ret);
-		goto err_init_hardware;
-	}
-
 	return 0;
 
 err_init_hardware:
@@ -1988,6 +1976,12 @@ hns3vf_init_vf(struct rte_eth_dev *eth_dev)
 		goto err_set_tc_queue;
 
 	hns3_rss_set_default_args(hw);
+
+	ret = hns3vf_set_alive(hw, true);
+	if (ret) {
+		PMD_INIT_LOG(ERR, "Failed to VF send alive to PF: %d", ret);
+		goto err_set_tc_queue;
+	}
 
 	return 0;
 
@@ -2181,8 +2175,11 @@ hns3vf_fw_version_get(struct rte_eth_dev *eth_dev, char *fw_version,
 				      HNS3_FW_VERSION_BYTE1_S),
 		       hns3_get_field(version, HNS3_FW_VERSION_BYTE0_M,
 				      HNS3_FW_VERSION_BYTE0_S));
+	if (ret < 0)
+		return -EINVAL;
+
 	ret += 1; /* add the size of '\0' */
-	if (fw_size < (uint32_t)ret)
+	if (fw_size < (size_t)ret)
 		return ret;
 	else
 		return 0;
@@ -2208,15 +2205,17 @@ hns3vf_dev_link_update(struct rte_eth_dev *eth_dev,
 	case ETH_SPEED_NUM_50G:
 	case ETH_SPEED_NUM_100G:
 	case ETH_SPEED_NUM_200G:
-		new_link.link_speed = mac->link_speed;
+		if (mac->link_status)
+			new_link.link_speed = mac->link_speed;
 		break;
 	default:
 		if (mac->link_status)
 			new_link.link_speed = ETH_SPEED_NUM_UNKNOWN;
-		else
-			new_link.link_speed = ETH_SPEED_NUM_NONE;
 		break;
 	}
+
+	if (!mac->link_status)
+		new_link.link_speed = ETH_SPEED_NUM_NONE;
 
 	new_link.link_duplex = mac->link_duplex;
 	new_link.link_status = mac->link_status ? ETH_LINK_UP : ETH_LINK_DOWN;
@@ -2502,7 +2501,7 @@ hns3vf_wait_hardware_ready(struct hns3_adapter *hns)
 		hns3_warn(hw, "hardware is ready, delay 1 sec for PF reset complete");
 		return -EAGAIN;
 	} else if (wait_data->result == HNS3_WAIT_TIMEOUT) {
-		gettimeofday(&tv, NULL);
+		hns3_clock_gettime(&tv);
 		hns3_warn(hw, "Reset step4 hardware not ready after reset time=%ld.%.6ld",
 			  tv.tv_sec, tv.tv_usec);
 		return -ETIME;
@@ -2512,7 +2511,7 @@ hns3vf_wait_hardware_ready(struct hns3_adapter *hns)
 	wait_data->hns = hns;
 	wait_data->check_completion = is_vf_reset_done;
 	wait_data->end_ms = (uint64_t)HNS3VF_RESET_WAIT_CNT *
-				      HNS3VF_RESET_WAIT_MS + get_timeofday_ms();
+				HNS3VF_RESET_WAIT_MS + hns3_clock_gettime_ms();
 	wait_data->interval = HNS3VF_RESET_WAIT_MS * USEC_PER_MSEC;
 	wait_data->count = HNS3VF_RESET_WAIT_CNT;
 	wait_data->result = HNS3_WAIT_REQUEST;
@@ -2697,6 +2696,13 @@ hns3vf_restore_conf(struct hns3_adapter *hns)
 		hns3_info(hw, "hns3vf dev restart successful!");
 	} else if (hw->adapter_state == HNS3_NIC_STOPPING)
 		hw->adapter_state = HNS3_NIC_CONFIGURED;
+
+	ret = hns3vf_set_alive(hw, true);
+	if (ret) {
+		hns3_err(hw, "failed to VF send alive to PF: %d", ret);
+		goto err_vlan_table;
+	}
+
 	return 0;
 
 err_vlan_table:
@@ -2767,14 +2773,13 @@ hns3vf_reset_service(void *param)
 	 */
 	reset_level = hns3vf_get_reset_level(hw, &hw->reset.pending);
 	if (reset_level != HNS3_NONE_RESET) {
-		gettimeofday(&tv_start, NULL);
+		hns3_clock_gettime(&tv_start);
 		hns3_reset_process(hns, reset_level);
-		gettimeofday(&tv, NULL);
+		hns3_clock_gettime(&tv);
 		timersub(&tv, &tv_start, &tv_delta);
-		msec = tv_delta.tv_sec * MSEC_PER_SEC +
-		       tv_delta.tv_usec / USEC_PER_MSEC;
+		msec = hns3_clock_calctime_ms(&tv_delta);
 		if (msec > HNS3_RESET_PROCESS_MS)
-			hns3_err(hw, "%d handle long time delta %" PRIx64
+			hns3_err(hw, "%d handle long time delta %" PRIu64
 				 " ms time=%ld.%.6ld",
 				 hw->reset.level, msec, tv.tv_sec, tv.tv_usec);
 	}

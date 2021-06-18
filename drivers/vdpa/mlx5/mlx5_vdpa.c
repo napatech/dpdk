@@ -44,7 +44,7 @@
 
 #define MLX5_VDPA_MAX_RETRIES 20
 #define MLX5_VDPA_USEC 1000
-#define MLX5_VDPA_DEFAULT_NO_TRAFFIC_TIME_S 2LLU
+#define MLX5_VDPA_DEFAULT_NO_TRAFFIC_MAX 16LLU
 
 TAILQ_HEAD(mlx5_vdpa_privs, mlx5_vdpa_priv) priv_list =
 					      TAILQ_HEAD_INITIALIZER(priv_list);
@@ -472,34 +472,6 @@ static struct rte_vdpa_dev_ops mlx5_vdpa_ops = {
 	.reset_stats = mlx5_vdpa_reset_stats,
 };
 
-static struct ibv_device *
-mlx5_vdpa_get_ib_device_match(struct rte_pci_addr *addr)
-{
-	int n;
-	struct ibv_device **ibv_list = mlx5_glue->get_device_list(&n);
-	struct ibv_device *ibv_match = NULL;
-
-	if (!ibv_list) {
-		rte_errno = ENOSYS;
-		return NULL;
-	}
-	while (n-- > 0) {
-		struct rte_pci_addr pci_addr;
-
-		DRV_LOG(DEBUG, "Checking device \"%s\"..", ibv_list[n]->name);
-		if (mlx5_dev_to_pci_addr(ibv_list[n]->ibdev_path, &pci_addr))
-			continue;
-		if (rte_pci_addr_cmp(addr, &pci_addr))
-			continue;
-		ibv_match = ibv_list[n];
-		break;
-	}
-	if (!ibv_match)
-		rte_errno = ENOENT;
-	mlx5_glue->free_device_list(ibv_list);
-	return ibv_match;
-}
-
 /* Try to disable ROCE by Netlink\Devlink. */
 static int
 mlx5_vdpa_nl_roce_disable(const char *addr)
@@ -595,7 +567,7 @@ mlx5_vdpa_roce_disable(struct rte_pci_addr *addr, struct ibv_device **ibv)
 		struct ibv_device *ibv_new;
 
 		for (r = MLX5_VDPA_MAX_RETRIES; r; r--) {
-			ibv_new = mlx5_vdpa_get_ib_device_match(addr);
+			ibv_new = mlx5_os_get_ibv_device(addr);
 			if (ibv_new) {
 				*ibv = ibv_new;
 				return 0;
@@ -632,7 +604,7 @@ mlx5_vdpa_args_check_handler(const char *key, const char *val, void *opaque)
 	} else if (strcmp(key, "event_us") == 0) {
 		priv->event_us = (uint32_t)tmp;
 	} else if (strcmp(key, "no_traffic_time") == 0) {
-		priv->no_traffic_time_s = (uint32_t)tmp;
+		priv->no_traffic_max = (uint32_t)tmp;
 	} else if (strcmp(key, "event_core") == 0) {
 		if (tmp >= (unsigned long)n_cores)
 			DRV_LOG(WARNING, "Invalid event_core %s.", val);
@@ -658,7 +630,7 @@ mlx5_vdpa_config_get(struct rte_devargs *devargs, struct mlx5_vdpa_priv *priv)
 	priv->event_mode = MLX5_VDPA_EVENT_MODE_FIXED_TIMER;
 	priv->event_us = 0;
 	priv->event_core = -1;
-	priv->no_traffic_time_s = MLX5_VDPA_DEFAULT_NO_TRAFFIC_TIME_S;
+	priv->no_traffic_max = MLX5_VDPA_DEFAULT_NO_TRAFFIC_MAX;
 	if (devargs == NULL)
 		return;
 	kvlist = rte_kvargs_parse(devargs->args, NULL);
@@ -671,7 +643,7 @@ mlx5_vdpa_config_get(struct rte_devargs *devargs, struct mlx5_vdpa_priv *priv)
 		priv->event_us = MLX5_VDPA_DEFAULT_TIMER_STEP_US;
 	DRV_LOG(DEBUG, "event mode is %d.", priv->event_mode);
 	DRV_LOG(DEBUG, "event_us is %u us.", priv->event_us);
-	DRV_LOG(DEBUG, "no traffic time is %u s.", priv->no_traffic_time_s);
+	DRV_LOG(DEBUG, "no traffic max is %u.", priv->no_traffic_max);
 }
 
 /**
@@ -698,7 +670,7 @@ mlx5_vdpa_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	struct mlx5_hca_attr attr;
 	int ret;
 
-	ibv = mlx5_vdpa_get_ib_device_match(&pci_dev->addr);
+	ibv = mlx5_os_get_ibv_device(&pci_dev->addr);
 	if (!ibv) {
 		DRV_LOG(ERR, "No matching IB device for PCI slot "
 			PCI_PRI_FMT ".", pci_dev->addr.domain,
@@ -815,6 +787,8 @@ mlx5_vdpa_pci_remove(struct rte_pci_device *pci_dev)
 			mlx5_glue->dv_free_var(priv->var);
 			priv->var = NULL;
 		}
+		if (priv->vdev)
+			rte_vdpa_unregister_device(priv->vdev);
 		mlx5_glue->close_device(priv->ctx);
 		pthread_mutex_destroy(&priv->vq_config_lock);
 		rte_free(priv);
@@ -869,7 +843,7 @@ static struct mlx5_pci_driver mlx5_vdpa_driver = {
 	},
 };
 
-RTE_LOG_REGISTER(mlx5_vdpa_logtype, pmd.vdpa.mlx5, NOTICE)
+RTE_LOG_REGISTER_DEFAULT(mlx5_vdpa_logtype, NOTICE)
 
 /**
  * Driver initialization routine.

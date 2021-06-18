@@ -228,13 +228,19 @@ iavf_execute_vf_cmd(struct iavf_adapter *adapter, struct iavf_cmd_info *args)
 			rte_delay_ms(ASQ_DELAY_MS);
 			/* If don't read msg or read sys event, continue */
 		} while (i++ < MAX_TRY_TIMES);
-		/* If there's no response is received, clear command */
-		if (i >= MAX_TRY_TIMES  ||
-		    vf->cmd_retval != VIRTCHNL_STATUS_SUCCESS) {
-			err = -1;
-			PMD_DRV_LOG(ERR, "No response or return failure (%d)"
-				    " for cmd %d", vf->cmd_retval, args->ops);
+
+		if (i >= MAX_TRY_TIMES) {
+			PMD_DRV_LOG(ERR, "No response for cmd %d", args->ops);
 			_clear_cmd(vf);
+			err = -EIO;
+		} else if (vf->cmd_retval ==
+			   VIRTCHNL_STATUS_ERR_NOT_SUPPORTED) {
+			PMD_DRV_LOG(ERR, "Cmd %d not supported", args->ops);
+			err = -ENOTSUP;
+		} else if (vf->cmd_retval != VIRTCHNL_STATUS_SUCCESS) {
+			PMD_DRV_LOG(ERR, "Return failure %d for cmd %d",
+				    vf->cmd_retval, args->ops);
+			err = -EINVAL;
 		}
 		break;
 	}
@@ -1166,7 +1172,9 @@ iavf_add_del_all_mac_addr(struct iavf_adapter *adapter, bool add)
 				continue;
 			rte_memcpy(list->list[j].addr, addr->addr_bytes,
 				   sizeof(addr->addr_bytes));
-			list->list[j].type = VIRTCHNL_ETHER_ADDR_EXTRA;
+			list->list[j].type = (j == 0 ?
+					      VIRTCHNL_ETHER_ADDR_PRIMARY :
+					      VIRTCHNL_ETHER_ADDR_EXTRA);
 			PMD_DRV_LOG(DEBUG, "add/rm mac:%x:%x:%x:%x:%x:%x",
 				    addr->addr_bytes[0], addr->addr_bytes[1],
 				    addr->addr_bytes[2], addr->addr_bytes[3],
@@ -1493,6 +1501,30 @@ iavf_add_del_rss_cfg(struct iavf_adapter *adapter,
 			    "OP_DEL_RSS_INPUT_CFG");
 
 	return err;
+}
+
+int
+iavf_get_hena_caps(struct iavf_adapter *adapter, uint64_t *caps)
+{
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
+	struct iavf_cmd_info args;
+	int err;
+
+	args.ops = VIRTCHNL_OP_GET_RSS_HENA_CAPS;
+	args.in_args = NULL;
+	args.in_args_size = 0;
+	args.out_buffer = vf->aq_resp;
+	args.out_size = IAVF_AQ_BUF_SZ;
+
+	err = iavf_execute_vf_cmd(adapter, &args);
+	if (err) {
+		PMD_DRV_LOG(ERR,
+			    "Failed to execute command of OP_GET_RSS_HENA_CAPS");
+		return err;
+	}
+
+	*caps = ((struct virtchnl_rss_hena *)args.out_buffer)->hena;
+	return 0;
 }
 
 int

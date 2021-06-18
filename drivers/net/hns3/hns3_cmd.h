@@ -306,22 +306,19 @@ struct hns3_rx_priv_buff_cmd {
 #define HNS3_FW_VERSION_BYTE0_M		GENMASK(7, 0)
 
 enum HNS3_CAPS_BITS {
-	HNS3_CAPS_UDP_GSO_B,
-	HNS3_CAPS_ATR_B,
-	HNS3_CAPS_FD_QUEUE_REGION_B,
+	/*
+	 * The following capability index definitions must be the same as those
+	 * of the firmware.
+	 */
+	HNS3_CAPS_FD_QUEUE_REGION_B = 2,
 	HNS3_CAPS_PTP_B,
-	HNS3_CAPS_INT_QL_B,
-	HNS3_CAPS_SIMPLE_BD_B,
-	HNS3_CAPS_TX_PUSH_B,
-	HNS3_CAPS_PHY_IMP_B,
+	HNS3_CAPS_PHY_IMP_B = 7,
 	HNS3_CAPS_TQP_TXRX_INDEP_B,
 	HNS3_CAPS_HW_PAD_B,
 	HNS3_CAPS_STASH_B,
 	HNS3_CAPS_UDP_TUNNEL_CSUM_B,
 	HNS3_CAPS_RAS_IMP_B,
-	HNS3_CAPS_FEC_B,
-	HNS3_CAPS_PAUSE_B,
-	HNS3_CAPS_RXD_ADV_LAYOUT_B,
+	HNS3_CAPS_RXD_ADV_LAYOUT_B = 15,
 };
 
 enum HNS3_API_CAP_BITS {
@@ -460,8 +457,6 @@ struct hns3_umv_spc_alc_cmd {
 #define HNS3_CFG_RD_LEN_BYTES		16
 #define HNS3_CFG_RD_LEN_UNIT		4
 
-#define HNS3_CFG_VMDQ_S			0
-#define HNS3_CFG_VMDQ_M			GENMASK(7, 0)
 #define HNS3_CFG_TC_NUM_S		8
 #define HNS3_CFG_TC_NUM_M		GENMASK(15, 8)
 #define HNS3_CFG_TQP_DESC_N_S		16

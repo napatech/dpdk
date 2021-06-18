@@ -2197,8 +2197,9 @@ static int bnxt_flow_ctrl_set_op(struct rte_eth_dev *dev,
 	if (rc)
 		return rc;
 
-	if (!BNXT_SINGLE_PF(bp) || BNXT_VF(bp)) {
-		PMD_DRV_LOG(ERR, "Flow Control Settings cannot be modified\n");
+	if (!BNXT_SINGLE_PF(bp)) {
+		PMD_DRV_LOG(ERR,
+			    "Flow Control Settings cannot be modified on VF or on shared PF\n");
 		return -ENOTSUP;
 	}
 
@@ -2794,9 +2795,11 @@ bnxt_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
 
 	ret = snprintf(fw_version, fw_size, "%d.%d.%d.%d",
 			fw_major, fw_minor, fw_updt, fw_rsvd);
+	if (ret < 0)
+		return -EINVAL;
 
 	ret += 1; /* add the size of '\0' */
-	if (fw_size < (uint32_t)ret)
+	if (fw_size < (size_t)ret)
 		return ret;
 	else
 		return 0;
@@ -2992,9 +2995,8 @@ bnxt_vlan_pvid_set_op(struct rte_eth_dev *dev, uint16_t pvid, int on)
 	if (rc)
 		return rc;
 
-	if (!BNXT_SINGLE_PF(bp) || BNXT_VF(bp)) {
-		PMD_DRV_LOG(ERR,
-			"PVID cannot be modified for this function\n");
+	if (!BNXT_SINGLE_PF(bp)) {
+		PMD_DRV_LOG(ERR, "PVID cannot be modified on VF or on shared PF\n");
 		return -ENOTSUP;
 	}
 	bp->vlan = on ? pvid : 0;
@@ -3388,6 +3390,38 @@ static int bnxt_get_tx_ts(struct bnxt *bp, uint64_t *ts)
 	return 0;
 }
 
+static int bnxt_clr_rx_ts(struct bnxt *bp, uint64_t *last_ts)
+{
+	struct bnxt_ptp_cfg *ptp = bp->ptp_cfg;
+	struct bnxt_pf_info *pf = bp->pf;
+	uint16_t port_id;
+	int i = 0;
+	uint32_t fifo;
+
+	if (!ptp || (bp->flags & BNXT_FLAG_CHIP_P5))
+		return -EINVAL;
+
+	port_id = pf->port_id;
+	fifo = rte_le_to_cpu_32(rte_read32((uint8_t *)bp->bar0 +
+				ptp->rx_mapped_regs[BNXT_PTP_RX_FIFO]));
+	while ((fifo & BNXT_PTP_RX_FIFO_PENDING) && (i < BNXT_PTP_RX_PND_CNT)) {
+		rte_write32(1 << port_id, (uint8_t *)bp->bar0 +
+			    ptp->rx_mapped_regs[BNXT_PTP_RX_FIFO_ADV]);
+		fifo = rte_le_to_cpu_32(rte_read32((uint8_t *)bp->bar0 +
+					ptp->rx_mapped_regs[BNXT_PTP_RX_FIFO]));
+		*last_ts = rte_le_to_cpu_32(rte_read32((uint8_t *)bp->bar0 +
+					ptp->rx_mapped_regs[BNXT_PTP_RX_TS_L]));
+		*last_ts |= (uint64_t)rte_le_to_cpu_32(rte_read32((uint8_t *)bp->bar0 +
+					ptp->rx_mapped_regs[BNXT_PTP_RX_TS_H])) << 32;
+		i++;
+	}
+
+	if (i >= BNXT_PTP_RX_PND_CNT)
+		return -EBUSY;
+
+	return 0;
+}
+
 static int bnxt_get_rx_ts(struct bnxt *bp, uint64_t *ts)
 {
 	struct bnxt_ptp_cfg *ptp = bp->ptp_cfg;
@@ -3406,10 +3440,8 @@ static int bnxt_get_rx_ts(struct bnxt *bp, uint64_t *ts)
 
 	fifo = rte_le_to_cpu_32(rte_read32((uint8_t *)bp->bar0 +
 				   ptp->rx_mapped_regs[BNXT_PTP_RX_FIFO]));
-	if (fifo & BNXT_PTP_RX_FIFO_PENDING) {
-/*		bnxt_clr_rx_ts(bp);	  TBD  */
-		return -EBUSY;
-	}
+	if (fifo & BNXT_PTP_RX_FIFO_PENDING)
+		return bnxt_clr_rx_ts(bp, ts);
 
 	*ts = rte_le_to_cpu_32(rte_read32((uint8_t *)bp->bar0 +
 				ptp->rx_mapped_regs[BNXT_PTP_RX_TS_L]));
@@ -3957,7 +3989,7 @@ static int bnxt_restore_mac_filters(struct bnxt *bp)
 	struct rte_ether_addr *addr;
 	uint64_t pool_mask;
 	uint32_t pool = 0;
-	uint16_t i;
+	uint32_t i;
 	int rc;
 
 	if (BNXT_VF(bp) && !BNXT_VF_IS_TRUSTED(bp))
@@ -4127,13 +4159,17 @@ uint32_t bnxt_read_fw_status_reg(struct bnxt *bp, uint32_t index)
 	struct bnxt_error_recovery_info *info = bp->recovery_info;
 	uint32_t reg = info->status_regs[index];
 	uint32_t type, offset, val = 0;
+	int ret = 0;
 
 	type = BNXT_FW_STATUS_REG_TYPE(reg);
 	offset = BNXT_FW_STATUS_REG_OFF(reg);
 
 	switch (type) {
 	case BNXT_FW_STATUS_REG_TYPE_CFG:
-		rte_pci_read_config(bp->pdev, &val, sizeof(val), offset);
+		ret = rte_pci_read_config(bp->pdev, &val, sizeof(val), offset);
+		if (ret < 0)
+			PMD_DRV_LOG(ERR, "Failed to read PCI offset %#x",
+				    offset);
 		break;
 	case BNXT_FW_STATUS_REG_TYPE_GRC:
 		offset = info->mapped_status_regs[index];
@@ -4238,6 +4274,8 @@ reset:
 	/* Stop DMA to/from device */
 	bp->flags |= BNXT_FLAG_FATAL_ERROR;
 	bp->flags |= BNXT_FLAG_FW_RESET;
+
+	bnxt_stop_rxtx(bp);
 
 	PMD_DRV_LOG(ERR, "Detected FW dead condition\n");
 
@@ -6153,7 +6191,7 @@ bool is_bnxt_supported(struct rte_eth_dev *dev)
 	return is_device_supported(dev, &bnxt_rte_pmd);
 }
 
-RTE_LOG_REGISTER(bnxt_logtype_driver, pmd.net.bnxt.driver, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(bnxt_logtype_driver, driver, NOTICE);
 RTE_PMD_REGISTER_PCI(net_bnxt, bnxt_rte_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_bnxt, bnxt_pci_id_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_bnxt, "* igb_uio | uio_pci_generic | vfio-pci");

@@ -215,15 +215,18 @@ ionic_dev_fw_version_get(struct rte_eth_dev *eth_dev,
 {
 	struct ionic_lif *lif = IONIC_ETH_DEV_TO_LIF(eth_dev);
 	struct ionic_adapter *adapter = lif->adapter;
+	int ret;
 
-	if (fw_version == NULL || fw_size <= 0)
+	ret = snprintf(fw_version, fw_size, "%s",
+		 adapter->fw_version);
+	if (ret < 0)
 		return -EINVAL;
 
-	snprintf(fw_version, fw_size, "%s",
-		 adapter->fw_version);
-	fw_version[fw_size - 1] = '\0';
-
-	return 0;
+	ret += 1; /* add the size of '\0' */
+	if (fw_size < (size_t)ret)
+		return ret;
+	else
+		return 0;
 }
 
 /*
@@ -1293,4 +1296,4 @@ static struct rte_pci_driver rte_ionic_pmd = {
 RTE_PMD_REGISTER_PCI(net_ionic, rte_ionic_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_ionic, pci_id_ionic_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_ionic, "* igb_uio | uio_pci_generic | vfio-pci");
-RTE_LOG_REGISTER(ionic_logtype, pmd.net.ionic, NOTICE);
+RTE_LOG_REGISTER_DEFAULT(ionic_logtype, NOTICE);

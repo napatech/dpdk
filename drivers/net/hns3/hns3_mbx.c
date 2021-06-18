@@ -347,7 +347,7 @@ hns3_link_fail_parse(struct hns3_hw *hw, uint8_t link_fail_code)
 
 static void
 hns3pf_handle_link_change_event(struct hns3_hw *hw,
-			      struct hns3_mbx_pf_to_vf_cmd *req)
+				struct hns3_mbx_vf_to_pf_cmd *req)
 {
 #define LINK_STATUS_OFFSET     1
 #define LINK_FAIL_CODE_OFFSET  2
@@ -438,16 +438,19 @@ scan_next:
 void
 hns3_dev_handle_mbx_msg(struct hns3_hw *hw)
 {
+	struct hns3_adapter *hns = HNS3_DEV_HW_TO_ADAPTER(hw);
 	struct hns3_cmq_ring *crq = &hw->cmq.crq;
 	struct hns3_mbx_pf_to_vf_cmd *req;
 	struct hns3_cmd_desc *desc;
+	bool handle_out;
 	uint8_t opcode;
 	uint16_t flag;
 
 	rte_spinlock_lock(&hw->cmq.crq.lock);
 
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY ||
-	    !rte_thread_is_intr()) {
+	handle_out = (rte_eal_process_type() != RTE_PROC_PRIMARY ||
+		      !rte_thread_is_intr()) && hns->is_vf;
+	if (handle_out) {
 		/*
 		 * Currently, any threads in the primary and secondary processes
 		 * could send mailbox sync request, so it will need to process
@@ -491,7 +494,8 @@ hns3_dev_handle_mbx_msg(struct hns3_hw *hw)
 			continue;
 		}
 
-		if (desc->opcode == 0) {
+		handle_out = hns->is_vf && desc->opcode == 0;
+		if (handle_out) {
 			/* Message already processed by other thread */
 			crq->desc[crq->next_to_use].flag = 0;
 			hns3_mbx_ring_ptr_move_crq(crq);
@@ -509,7 +513,14 @@ hns3_dev_handle_mbx_msg(struct hns3_hw *hw)
 			hns3_handle_asserting_reset(hw, req);
 			break;
 		case HNS3_MBX_PUSH_LINK_STATUS:
-			hns3pf_handle_link_change_event(hw, req);
+			/*
+			 * This message is reported by the firmware and is
+			 * reported in 'struct hns3_mbx_vf_to_pf_cmd' format.
+			 * Therefore, we should cast the req variable to
+			 * 'struct hns3_mbx_vf_to_pf_cmd' and then process it.
+			 */
+			hns3pf_handle_link_change_event(hw,
+				(struct hns3_mbx_vf_to_pf_cmd *)req);
 			break;
 		case HNS3_MBX_PUSH_VLAN_INFO:
 			/*
@@ -528,9 +539,8 @@ hns3_dev_handle_mbx_msg(struct hns3_hw *hw)
 			hns3_handle_promisc_info(hw, req->msg[1]);
 			break;
 		default:
-			hns3_err(hw,
-				 "VF received unsupported(%u) mbx msg from PF",
-				 req->msg[0]);
+			hns3_err(hw, "received unsupported(%u) mbx msg",
+				 opcode);
 			break;
 		}
 

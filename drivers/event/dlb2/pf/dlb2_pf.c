@@ -47,7 +47,7 @@ dlb2_pf_low_level_io_init(void)
 {
 	int i;
 	/* Addresses will be initialized at port create */
-	for (i = 0; i < DLB2_MAX_NUM_PORTS; i++) {
+	for (i = 0; i < DLB2_MAX_NUM_PORTS(DLB2_HW_V2_5); i++) {
 		/* First directed ports */
 		dlb2_port[i][DLB2_DIR_PORT].pp_addr = NULL;
 		dlb2_port[i][DLB2_DIR_PORT].cq_base = NULL;
@@ -615,7 +615,10 @@ dlb2_eventdev_pci_init(struct rte_eventdev *eventdev)
 		.max_num_events = DLB2_MAX_NUM_LDB_CREDITS,
 		.num_dir_credits_override = -1,
 		.qid_depth_thresholds = { {0} },
-		.cos_id = DLB2_COS_DEFAULT
+		.cos_id = DLB2_COS_DEFAULT,
+		.poll_interval = DLB2_POLL_INTERVAL_DEFAULT,
+		.sw_credit_quanta = DLB2_SW_CREDIT_QUANTA_DEFAULT,
+		.default_depth_thresh = DLB2_DEPTH_THRESH_DEFAULT
 	};
 	struct dlb2_eventdev *dlb2;
 
@@ -628,6 +631,7 @@ dlb2_eventdev_pci_init(struct rte_eventdev *eventdev)
 
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
 		dlb2 = dlb2_pmd_priv(eventdev); /* rte_zmalloc_socket mem */
+		dlb2->version = DLB2_HW_DEVICE_FROM_PCI_ID(pci_dev);
 
 		/* Probe the DLB2 PF layer */
 		dlb2->qm_instance.pf_dev = dlb2_probe(pci_dev);
@@ -643,7 +647,8 @@ dlb2_eventdev_pci_init(struct rte_eventdev *eventdev)
 		if (pci_dev->device.devargs) {
 			ret = dlb2_parse_params(pci_dev->device.devargs->args,
 						pci_dev->device.devargs->name,
-						&dlb2_args);
+						&dlb2_args,
+						dlb2->version);
 			if (ret) {
 				DLB2_LOG_ERR("PFPMD failed to parse args ret=%d, errno=%d\n",
 					     ret, rte_errno);
@@ -655,6 +660,8 @@ dlb2_eventdev_pci_init(struct rte_eventdev *eventdev)
 						  event_dlb2_pf_name,
 						  &dlb2_args);
 	} else {
+		dlb2 = dlb2_pmd_priv(eventdev);
+		dlb2->version = DLB2_HW_DEVICE_FROM_PCI_ID(pci_dev);
 		ret = dlb2_secondary_eventdev_probe(eventdev,
 						    event_dlb2_pf_name);
 	}
@@ -678,6 +685,16 @@ static const struct rte_pci_id pci_id_dlb2_map[] = {
 	{
 		RTE_PCI_DEVICE(EVENTDEV_INTEL_VENDOR_ID,
 			       PCI_DEVICE_ID_INTEL_DLB2_PF)
+	},
+	{
+		.vendor_id = 0,
+	},
+};
+
+static const struct rte_pci_id pci_id_dlb2_5_map[] = {
+	{
+		RTE_PCI_DEVICE(EVENTDEV_INTEL_VENDOR_ID,
+			       PCI_DEVICE_ID_INTEL_DLB2_5_PF)
 	},
 	{
 		.vendor_id = 0,
@@ -718,6 +735,40 @@ event_dlb2_pci_remove(struct rte_pci_device *pci_dev)
 
 }
 
+static int
+event_dlb2_5_pci_probe(struct rte_pci_driver *pci_drv,
+		       struct rte_pci_device *pci_dev)
+{
+	int ret;
+
+	ret = rte_event_pmd_pci_probe_named(pci_drv, pci_dev,
+					    sizeof(struct dlb2_eventdev),
+					    dlb2_eventdev_pci_init,
+					    event_dlb2_pf_name);
+	if (ret) {
+		DLB2_LOG_INFO("rte_event_pmd_pci_probe_named() failed, "
+				"ret=%d\n", ret);
+	}
+
+	return ret;
+}
+
+static int
+event_dlb2_5_pci_remove(struct rte_pci_device *pci_dev)
+{
+	int ret;
+
+	ret = rte_event_pmd_pci_remove(pci_dev, NULL);
+
+	if (ret) {
+		DLB2_LOG_INFO("rte_event_pmd_pci_remove() failed, "
+				"ret=%d\n", ret);
+	}
+
+	return ret;
+
+}
+
 static struct rte_pci_driver pci_eventdev_dlb2_pmd = {
 	.id_table = pci_id_dlb2_map,
 	.drv_flags = RTE_PCI_DRV_NEED_MAPPING,
@@ -725,5 +776,15 @@ static struct rte_pci_driver pci_eventdev_dlb2_pmd = {
 	.remove = event_dlb2_pci_remove,
 };
 
+static struct rte_pci_driver pci_eventdev_dlb2_5_pmd = {
+	.id_table = pci_id_dlb2_5_map,
+	.drv_flags = RTE_PCI_DRV_NEED_MAPPING,
+	.probe = event_dlb2_5_pci_probe,
+	.remove = event_dlb2_5_pci_remove,
+};
+
 RTE_PMD_REGISTER_PCI(event_dlb2_pf, pci_eventdev_dlb2_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(event_dlb2_pf, pci_id_dlb2_map);
+
+RTE_PMD_REGISTER_PCI(event_dlb2_5_pf, pci_eventdev_dlb2_5_pmd);
+RTE_PMD_REGISTER_PCI_TABLE(event_dlb2_5_pf, pci_id_dlb2_5_map);

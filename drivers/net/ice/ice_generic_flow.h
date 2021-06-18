@@ -52,6 +52,7 @@
 #define ICE_L2TPV3OIP_SESSION_ID	BIT_ULL(43)
 #define ICE_PFCP_SEID			BIT_ULL(42)
 #define ICE_PFCP_S_FIELD		BIT_ULL(41)
+#define ICE_IP_PK_ID		    BIT_ULL(40)
 
 /* input set */
 
@@ -69,11 +70,13 @@
 #define ICE_INSET_IPV4_TOS		(ICE_PROT_IPV4 | ICE_IP_TOS)
 #define ICE_INSET_IPV4_PROTO		(ICE_PROT_IPV4 | ICE_IP_PROTO)
 #define ICE_INSET_IPV4_TTL		(ICE_PROT_IPV4 | ICE_IP_TTL)
+#define ICE_INSET_IPV4_PKID		(ICE_PROT_IPV4 | ICE_IP_PK_ID)
 #define ICE_INSET_IPV6_SRC		(ICE_PROT_IPV6 | ICE_IP_SRC)
 #define ICE_INSET_IPV6_DST		(ICE_PROT_IPV6 | ICE_IP_DST)
 #define ICE_INSET_IPV6_NEXT_HDR		(ICE_PROT_IPV6 | ICE_IP_PROTO)
 #define ICE_INSET_IPV6_HOP_LIMIT	(ICE_PROT_IPV6 | ICE_IP_TTL)
 #define ICE_INSET_IPV6_TC		(ICE_PROT_IPV6 | ICE_IP_TOS)
+#define ICE_INSET_IPV6_PKID		(ICE_PROT_IPV6 | ICE_IP_PK_ID)
 
 #define ICE_INSET_TCP_SRC_PORT		(ICE_PROT_TCP | ICE_SPORT)
 #define ICE_INSET_TCP_DST_PORT		(ICE_PROT_TCP | ICE_DPORT)
@@ -92,64 +95,9 @@
 
 /* tunnel */
 
-#define ICE_INSET_TUN_SMAC \
-	(ICE_PROT_MAC | ICE_SMAC)
-#define ICE_INSET_TUN_DMAC \
-	(ICE_PROT_MAC | ICE_DMAC)
-
-#define ICE_INSET_TUN_IPV4_SRC \
-	(ICE_PROT_IPV4 | ICE_IP_SRC)
-#define ICE_INSET_TUN_IPV4_DST \
-	(ICE_PROT_IPV4 | ICE_IP_DST)
-#define ICE_INSET_TUN_IPV4_TTL \
-	(ICE_PROT_IPV4 | ICE_IP_TTL)
-#define ICE_INSET_TUN_IPV4_PROTO \
-	(ICE_PROT_IPV4 | ICE_IP_PROTO)
-#define ICE_INSET_TUN_IPV4_TOS \
-	(ICE_PROT_IPV4 | ICE_IP_TOS)
-#define ICE_INSET_TUN_IPV6_SRC \
-	(ICE_PROT_IPV6 | ICE_IP_SRC)
-#define ICE_INSET_TUN_IPV6_DST \
-	(ICE_PROT_IPV6 | ICE_IP_DST)
-#define ICE_INSET_TUN_IPV6_HOP_LIMIT \
-	(ICE_PROT_IPV6 | ICE_IP_TTL)
-#define ICE_INSET_TUN_IPV6_NEXT_HDR \
-	(ICE_PROT_IPV6 | ICE_IP_PROTO)
-#define ICE_INSET_TUN_IPV6_TC \
-	(ICE_PROT_IPV6 | ICE_IP_TOS)
-
-#define ICE_INSET_TUN_TCP_SRC_PORT \
-	(ICE_PROT_TCP | ICE_SPORT)
-#define ICE_INSET_TUN_TCP_DST_PORT \
-	(ICE_PROT_TCP | ICE_DPORT)
-#define ICE_INSET_TUN_UDP_SRC_PORT \
-	(ICE_PROT_UDP | ICE_SPORT)
-#define ICE_INSET_TUN_UDP_DST_PORT \
-	(ICE_PROT_UDP | ICE_DPORT)
-#define ICE_INSET_TUN_SCTP_SRC_PORT \
-	(ICE_PROT_SCTP | ICE_SPORT)
-#define ICE_INSET_TUN_SCTP_DST_PORT \
-	(ICE_PROT_SCTP | ICE_DPORT)
-#define ICE_INSET_TUN_ICMP4_SRC_PORT \
-	(ICE_PROT_ICMP4 | ICE_SPORT)
-#define ICE_INSET_TUN_ICMP4_DST_PORT \
-	(ICE_PROT_ICMP4 | ICE_DPORT)
-#define ICE_INSET_TUN_ICMP6_SRC_PORT \
-	(ICE_PROT_ICMP6 | ICE_SPORT)
-#define ICE_INSET_TUN_ICMP6_DST_PORT \
-	(ICE_PROT_ICMP6 | ICE_DPORT)
-#define ICE_INSET_TUN_ICMP4_TYPE \
-	(ICE_PROT_ICMP4 | ICE_ICMP_TYPE)
-#define ICE_INSET_TUN_ICMP4_CODE \
-	(ICE_PROT_ICMP4 | ICE_ICMP_CODE)
-#define ICE_INSET_TUN_ICMP6_TYPE \
-	(ICE_PROT_ICMP6 | ICE_ICMP_TYPE)
-#define ICE_INSET_TUN_ICMP6_CODE \
-	(ICE_PROT_ICMP6 | ICE_ICMP_CODE)
-
-#define ICE_INSET_TUN_VXLAN_VNI \
+#define ICE_INSET_VXLAN_VNI \
 	(ICE_PROT_VXLAN | ICE_VXLAN_VNI)
-#define ICE_INSET_TUN_NVGRE_TNI \
+#define ICE_INSET_NVGRE_TNI \
 	(ICE_PROT_NVGRE | ICE_NVGRE_TNI)
 #define ICE_INSET_GTPU_TEID \
 	(ICE_PROT_GTPU | ICE_GTPU_TEID)
@@ -202,6 +150,9 @@ extern enum rte_flow_item_type pattern_eth_qinq_ipv4_icmp[];
 extern enum rte_flow_item_type pattern_eth_ipv6[];
 extern enum rte_flow_item_type pattern_eth_vlan_ipv6[];
 extern enum rte_flow_item_type pattern_eth_qinq_ipv6[];
+extern enum rte_flow_item_type pattern_eth_ipv6_frag_ext[];
+extern enum rte_flow_item_type pattern_eth_vlan_ipv6_frag_ext[];
+extern enum rte_flow_item_type pattern_eth_qinq_ipv6_frag_ext[];
 extern enum rte_flow_item_type pattern_eth_ipv6_udp[];
 extern enum rte_flow_item_type pattern_eth_vlan_ipv6_udp[];
 extern enum rte_flow_item_type pattern_eth_qinq_ipv6_udp[];
@@ -473,8 +424,8 @@ enum ice_flow_classification_stage {
 /* pattern structure */
 struct ice_pattern_match_item {
 	enum rte_flow_item_type *pattern_list;
-	uint64_t input_set_mask_o; /* used for tunnel outer or non tunnel fields */
 	/* pattern_list must end with RTE_FLOW_ITEM_TYPE_END */
+	uint64_t input_set_mask_o; /* used for tunnel outer or non tunnel fields */
 	uint64_t input_set_mask_i; /* only used for tunnel inner fields */
 	void *meta;
 };

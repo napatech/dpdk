@@ -10,10 +10,6 @@
 #include "hns3_intr.h"
 #include "hns3_logs.h"
 
-#define hns3_is_csq(ring) ((ring)->flag & HNS3_TYPE_CSQ)
-
-#define cmq_ring_to_dev(ring)   (&(ring)->dev->pdev->dev)
-
 static int
 hns3_ring_space(struct hns3_cmq_ring *ring)
 {
@@ -245,7 +241,7 @@ hns3_is_special_opcode(uint16_t opcode)
 				  HNS3_OPC_QUERY_ALL_ERR_INFO,};
 	uint32_t i;
 
-	for (i = 0; i < ARRAY_SIZE(spec_opcode); i++)
+	for (i = 0; i < RTE_DIM(spec_opcode); i++)
 		if (spec_opcode[i] == opcode)
 			return true;
 
@@ -276,7 +272,7 @@ hns3_cmd_convert_err_code(uint16_t desc_ret)
 
 	uint32_t i;
 
-	for (i = 0; i < ARRAY_SIZE(hns3_cmdq_status); i++)
+	for (i = 0; i < RTE_DIM(hns3_cmdq_status); i++)
 		if (hns3_cmdq_status[i].imp_errcode == desc_ret)
 			return hns3_cmdq_status[i].linux_errcode;
 
@@ -423,21 +419,14 @@ hns3_get_caps_name(uint32_t caps_id)
 		enum HNS3_CAPS_BITS caps;
 		const char *name;
 	} dev_caps[] = {
-		{ HNS3_CAPS_UDP_GSO_B,         "udp_gso"         },
-		{ HNS3_CAPS_ATR_B,             "atr"             },
 		{ HNS3_CAPS_FD_QUEUE_REGION_B, "fd_queue_region" },
 		{ HNS3_CAPS_PTP_B,             "ptp"             },
-		{ HNS3_CAPS_INT_QL_B,          "int_ql"          },
-		{ HNS3_CAPS_SIMPLE_BD_B,       "simple_bd"       },
-		{ HNS3_CAPS_TX_PUSH_B,         "tx_push"         },
 		{ HNS3_CAPS_PHY_IMP_B,         "phy_imp"         },
 		{ HNS3_CAPS_TQP_TXRX_INDEP_B,  "tqp_txrx_indep"  },
 		{ HNS3_CAPS_HW_PAD_B,          "hw_pad"          },
 		{ HNS3_CAPS_STASH_B,           "stash"           },
 		{ HNS3_CAPS_UDP_TUNNEL_CSUM_B, "udp_tunnel_csum" },
 		{ HNS3_CAPS_RAS_IMP_B,         "ras_imp"         },
-		{ HNS3_CAPS_FEC_B,             "fec"             },
-		{ HNS3_CAPS_PAUSE_B,           "pause"           },
 		{ HNS3_CAPS_RXD_ADV_LAYOUT_B,  "rxd_adv_layout"  }
 	};
 	uint32_t i;
@@ -484,8 +473,6 @@ hns3_parse_capability(struct hns3_hw *hw,
 {
 	uint32_t caps = rte_le_to_cpu_32(cmd->caps[0]);
 
-	if (hns3_get_bit(caps, HNS3_CAPS_UDP_GSO_B))
-		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_UDP_GSO_B, 1);
 	if (hns3_get_bit(caps, HNS3_CAPS_FD_QUEUE_REGION_B))
 		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_FD_QUEUE_REGION_B,
 			     1);
@@ -502,8 +489,6 @@ hns3_parse_capability(struct hns3_hw *hw,
 			hns3_warn(hw, "ignore PTP capability due to lack of "
 				  "rxd advanced layout capability.");
 	}
-	if (hns3_get_bit(caps, HNS3_CAPS_TX_PUSH_B))
-		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_TX_PUSH_B, 1);
 	if (hns3_get_bit(caps, HNS3_CAPS_PHY_IMP_B))
 		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_COPPER_B, 1);
 	if (hns3_get_bit(caps, HNS3_CAPS_TQP_TXRX_INDEP_B))

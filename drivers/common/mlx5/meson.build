@@ -16,6 +16,7 @@ sources += files(
         'mlx5_malloc.c',
         'mlx5_common_pci.c',
         'mlx5_common_devx.c',
+        'mlx5_common_utils.c',
 )
 
 cflags_options = [
@@ -23,7 +24,7 @@ cflags_options = [
         '-Wno-strict-prototypes',
         '-D_BSD_SOURCE',
         '-D_DEFAULT_SOURCE',
-        '-D_XOPEN_SOURCE=600'
+        '-D_XOPEN_SOURCE=600',
 ]
 foreach option:cflags_options
     if cc.has_argument(option)

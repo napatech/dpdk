@@ -60,76 +60,56 @@ mlx5_aso_cq_create(void *ctx, struct mlx5_aso_cq *cq, uint16_t log_desc_n,
 /**
  * Free MR resources.
  *
+ * @param[in] sh
+ *   Pointer to shared device context.
  * @param[in] mr
  *   MR to free.
  */
 static void
-mlx5_aso_devx_dereg_mr(struct mlx5_aso_devx_mr *mr)
+mlx5_aso_dereg_mr(struct mlx5_dev_ctx_shared *sh, struct mlx5_pmd_mr *mr)
 {
-	claim_zero(mlx5_devx_cmd_destroy(mr->mkey));
-	if (!mr->is_indirect && mr->umem)
-		claim_zero(mlx5_glue->devx_umem_dereg(mr->umem));
-	mlx5_free(mr->buf);
+	void *addr = mr->addr;
+
+	sh->share_cache.dereg_mr_cb(mr);
+	mlx5_free(addr);
 	memset(mr, 0, sizeof(*mr));
 }
 
 /**
  * Register Memory Region.
  *
- * @param[in] ctx
- *   Context returned from mlx5 open_device() glue function.
+ * @param[in] sh
+ *   Pointer to shared device context.
  * @param[in] length
  *   Size of MR buffer.
  * @param[in/out] mr
  *   Pointer to MR to create.
  * @param[in] socket
  *   Socket to use for allocation.
- * @param[in] pdn
- *   Protection Domain number to use.
  *
  * @return
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
-mlx5_aso_devx_reg_mr(void *ctx, size_t length, struct mlx5_aso_devx_mr *mr,
-		     int socket, int pdn)
+mlx5_aso_reg_mr(struct mlx5_dev_ctx_shared *sh, size_t length,
+		struct mlx5_pmd_mr *mr, int socket)
 {
-	struct mlx5_devx_mkey_attr mkey_attr;
 
-	mr->buf = mlx5_malloc(MLX5_MEM_RTE | MLX5_MEM_ZERO, length, 4096,
-			      socket);
-	if (!mr->buf) {
-		DRV_LOG(ERR, "Failed to create ASO bits mem for MR by Devx.");
+	int ret;
+
+	mr->addr = mlx5_malloc(MLX5_MEM_RTE | MLX5_MEM_ZERO, length, 4096,
+			       socket);
+	if (!mr->addr) {
+		DRV_LOG(ERR, "Failed to create ASO bits mem for MR.");
 		return -1;
 	}
-	mr->umem = mlx5_os_umem_reg(ctx, mr->buf, length,
-						 IBV_ACCESS_LOCAL_WRITE);
-	if (!mr->umem) {
-		DRV_LOG(ERR, "Failed to register Umem for MR by Devx.");
-		goto error;
-	}
-	mkey_attr.addr = (uintptr_t)mr->buf;
-	mkey_attr.size = length;
-	mkey_attr.umem_id = mlx5_os_get_umem_id(mr->umem);
-	mkey_attr.pd = pdn;
-	mkey_attr.pg_access = 1;
-	mkey_attr.klm_array = NULL;
-	mkey_attr.klm_num = 0;
-	mkey_attr.relaxed_ordering_read = 0;
-	mkey_attr.relaxed_ordering_write = 0;
-	mr->mkey = mlx5_devx_cmd_mkey_create(ctx, &mkey_attr);
-	if (!mr->mkey) {
+	ret = sh->share_cache.reg_mr_cb(sh->pd, mr->addr, length, mr);
+	if (ret) {
 		DRV_LOG(ERR, "Failed to create direct Mkey.");
-		goto error;
+		mlx5_free(mr->addr);
+		return -1;
 	}
-	mr->length = length;
-	mr->is_indirect = false;
 	return 0;
-error:
-	if (mr->umem)
-		claim_zero(mlx5_glue->devx_umem_dereg(mr->umem));
-	mlx5_free(mr->buf);
-	return -1;
 }
 
 /**
@@ -164,8 +144,8 @@ mlx5_aso_age_init_sq(struct mlx5_aso_sq *sq)
 	for (i = 0, wqe = &sq->sq_obj.aso_wqes[0]; i < size; ++i, ++wqe) {
 		wqe->general_cseg.sq_ds = rte_cpu_to_be_32((sq->sqn << 8) |
 							  (sizeof(*wqe) >> 4));
-		wqe->aso_cseg.lkey = rte_cpu_to_be_32(sq->mr.mkey->id);
-		addr = (uint64_t)((uint64_t *)sq->mr.buf + i *
+		wqe->aso_cseg.lkey = rte_cpu_to_be_32(sq->mr.lkey);
+		addr = (uint64_t)((uint64_t *)sq->mr.addr + i *
 					    MLX5_ASO_AGE_ACTIONS_PER_POOL / 64);
 		wqe->aso_cseg.va_h = rte_cpu_to_be_32((uint32_t)(addr >> 32));
 		wqe->aso_cseg.va_l_r = rte_cpu_to_be_32((uint32_t)addr | 1u);
@@ -191,7 +171,6 @@ mlx5_aso_mtr_init_sq(struct mlx5_aso_sq *sq)
 	volatile struct mlx5_aso_wqe *restrict wqe;
 	int i;
 	int size = 1 << sq->log_desc_n;
-	uint32_t idx;
 
 	/* All the next fields state should stay constant. */
 	for (i = 0, wqe = &sq->sq_obj.aso_wqes[0]; i < size; ++i, ++wqe) {
@@ -204,11 +183,43 @@ mlx5_aso_mtr_init_sq(struct mlx5_aso_sq *sq)
 			 (BYTEWISE_64BYTE << ASO_CSEG_DATA_MASK_MODE_OFFSET));
 		wqe->general_cseg.flags = RTE_BE32(MLX5_COMP_ALWAYS <<
 							 MLX5_COMP_MODE_OFFSET);
-		for (idx = 0; idx < MLX5_ASO_METERS_PER_WQE;
-			idx++)
-			wqe->aso_dseg.mtrs[idx].v_bo_sc_bbog_mm =
-				RTE_BE32((1 << ASO_DSEG_VALID_OFFSET) |
-				(MLX5_FLOW_COLOR_GREEN << ASO_DSEG_SC_OFFSET));
+	}
+}
+
+/*
+ * Initialize Send Queue used for ASO connection tracking.
+ *
+ * @param[in] sq
+ *   ASO SQ to initialize.
+ */
+static void
+mlx5_aso_ct_init_sq(struct mlx5_aso_sq *sq)
+{
+	volatile struct mlx5_aso_wqe *restrict wqe;
+	int i;
+	int size = 1 << sq->log_desc_n;
+	uint64_t addr;
+
+	/* All the next fields state should stay constant. */
+	for (i = 0, wqe = &sq->sq_obj.aso_wqes[0]; i < size; ++i, ++wqe) {
+		wqe->general_cseg.sq_ds = rte_cpu_to_be_32((sq->sqn << 8) |
+							  (sizeof(*wqe) >> 4));
+		/* One unique MR for the query data. */
+		wqe->aso_cseg.lkey = rte_cpu_to_be_32(sq->mr.lkey);
+		/* Magic number 64 represents the length of a ASO CT obj. */
+		addr = (uint64_t)((uintptr_t)sq->mr.addr + i * 64);
+		wqe->aso_cseg.va_h = rte_cpu_to_be_32((uint32_t)(addr >> 32));
+		wqe->aso_cseg.va_l_r = rte_cpu_to_be_32((uint32_t)addr | 1u);
+		/*
+		 * The values of operand_masks are different for modify
+		 * and query.
+		 * And data_mask may be different for each modification. In
+		 * query, it could be zero and ignored.
+		 * CQE generation is always needed, in order to decide when
+		 * it is available to create the flow or read the data.
+		 */
+		wqe->general_cseg.flags = RTE_BE32(MLX5_COMP_ALWAYS <<
+						   MLX5_COMP_MODE_OFFSET);
 	}
 }
 
@@ -227,14 +238,15 @@ mlx5_aso_mtr_init_sq(struct mlx5_aso_sq *sq)
  *   Protection Domain number to use.
  * @param[in] log_desc_n
  *   Log of number of descriptors in queue.
+ * @param[in] ts_format
+ *   timestamp format supported by the queue.
  *
  * @return
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
-mlx5_aso_sq_create(void *ctx, struct mlx5_aso_sq *sq, int socket,
-		   void *uar, uint32_t pdn,  uint16_t log_desc_n,
-		   uint32_t ts_format)
+mlx5_aso_sq_create(void *ctx, struct mlx5_aso_sq *sq, int socket, void *uar,
+		   uint32_t pdn, uint16_t log_desc_n, uint32_t ts_format)
 {
 	struct mlx5_devx_create_sq_attr attr = {
 		.user_index = 0xFFFF,
@@ -286,36 +298,50 @@ error:
  *
  * @param[in] sh
  *   Pointer to shared device context.
+ * @param[in] aso_opc_mod
+ *   Mode of ASO feature.
  *
  * @return
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
 mlx5_aso_queue_init(struct mlx5_dev_ctx_shared *sh,
-			enum mlx5_access_aso_opc_mod aso_opc_mod)
+		    enum mlx5_access_aso_opc_mod aso_opc_mod)
 {
 	uint32_t sq_desc_n = 1 << MLX5_ASO_QUEUE_LOG_DESC;
 
 	switch (aso_opc_mod) {
 	case ASO_OPC_MOD_FLOW_HIT:
-		if (mlx5_aso_devx_reg_mr(sh->ctx,
-			(MLX5_ASO_AGE_ACTIONS_PER_POOL / 8) *
-			sq_desc_n, &sh->aso_age_mng->aso_sq.mr, 0, sh->pdn))
+		if (mlx5_aso_reg_mr(sh, (MLX5_ASO_AGE_ACTIONS_PER_POOL / 8) *
+				    sq_desc_n, &sh->aso_age_mng->aso_sq.mr, 0))
 			return -1;
 		if (mlx5_aso_sq_create(sh->ctx, &sh->aso_age_mng->aso_sq, 0,
 				  sh->tx_uar, sh->pdn, MLX5_ASO_QUEUE_LOG_DESC,
 				  sh->sq_ts_format)) {
-			mlx5_aso_devx_dereg_mr(&sh->aso_age_mng->aso_sq.mr);
+			mlx5_aso_dereg_mr(sh, &sh->aso_age_mng->aso_sq.mr);
 			return -1;
 		}
 		mlx5_aso_age_init_sq(&sh->aso_age_mng->aso_sq);
 		break;
 	case ASO_OPC_MOD_POLICER:
-		if (mlx5_aso_sq_create(sh->ctx, &sh->mtrmng->sq, 0,
+		if (mlx5_aso_sq_create(sh->ctx, &sh->mtrmng->pools_mng.sq, 0,
 				  sh->tx_uar, sh->pdn, MLX5_ASO_QUEUE_LOG_DESC,
 				  sh->sq_ts_format))
 			return -1;
-		mlx5_aso_mtr_init_sq(&sh->mtrmng->sq);
+		mlx5_aso_mtr_init_sq(&sh->mtrmng->pools_mng.sq);
+		break;
+	case ASO_OPC_MOD_CONNECTION_TRACKING:
+		/* 64B per object for query. */
+		if (mlx5_aso_reg_mr(sh, 64 * sq_desc_n,
+				    &sh->ct_mng->aso_sq.mr, 0))
+			return -1;
+		if (mlx5_aso_sq_create(sh->ctx, &sh->ct_mng->aso_sq, 0,
+				sh->tx_uar, sh->pdn, MLX5_ASO_QUEUE_LOG_DESC,
+				sh->sq_ts_format)) {
+			mlx5_aso_dereg_mr(sh, &sh->ct_mng->aso_sq.mr);
+			return -1;
+		}
+		mlx5_aso_ct_init_sq(&sh->ct_mng->aso_sq);
 		break;
 	default:
 		DRV_LOG(ERR, "Unknown ASO operation mode");
@@ -329,20 +355,26 @@ mlx5_aso_queue_init(struct mlx5_dev_ctx_shared *sh,
  *
  * @param[in] sh
  *   Pointer to shared device context.
+ * @param[in] aso_opc_mod
+ *   Mode of ASO feature.
  */
 void
 mlx5_aso_queue_uninit(struct mlx5_dev_ctx_shared *sh,
-				enum mlx5_access_aso_opc_mod aso_opc_mod)
+		      enum mlx5_access_aso_opc_mod aso_opc_mod)
 {
 	struct mlx5_aso_sq *sq;
 
 	switch (aso_opc_mod) {
 	case ASO_OPC_MOD_FLOW_HIT:
-		mlx5_aso_devx_dereg_mr(&sh->aso_age_mng->aso_sq.mr);
+		mlx5_aso_dereg_mr(sh, &sh->aso_age_mng->aso_sq.mr);
 		sq = &sh->aso_age_mng->aso_sq;
 		break;
 	case ASO_OPC_MOD_POLICER:
-		sq = &sh->mtrmng->sq;
+		sq = &sh->mtrmng->pools_mng.sq;
+		break;
+	case ASO_OPC_MOD_CONNECTION_TRACKING:
+		mlx5_aso_dereg_mr(sh, &sh->ct_mng->aso_sq.mr);
+		sq = &sh->ct_mng->aso_sq;
 		break;
 	default:
 		DRV_LOG(ERR, "Unknown ASO operation mode");
@@ -478,7 +510,7 @@ mlx5_aso_age_action_update(struct mlx5_dev_ctx_shared *sh, uint16_t n)
 		uint16_t idx = (sq->tail + i) & mask;
 		struct mlx5_aso_age_pool *pool = sq->elts[idx].pool;
 		uint64_t diff = curr - pool->time_of_last_age_check;
-		uint64_t *addr = sq->mr.buf;
+		uint64_t *addr = sq->mr.addr;
 		int j;
 
 		addr += idx * MLX5_ASO_AGE_ACTIONS_PER_POOL / 64;
@@ -664,6 +696,7 @@ mlx5_aso_mtr_sq_enqueue_single(struct mlx5_aso_sq *sq,
 {
 	volatile struct mlx5_aso_wqe *wqe = NULL;
 	struct mlx5_flow_meter_info *fm = NULL;
+	struct mlx5_flow_meter_profile *fmp;
 	uint16_t size = 1 << sq->log_desc_n;
 	uint16_t mask = size - 1;
 	uint16_t res;
@@ -704,6 +737,16 @@ mlx5_aso_mtr_sq_enqueue_single(struct mlx5_aso_sq *sq,
 			RTE_BE32(MLX5_IFC_FLOW_METER_DISABLE_CBS_CIR_VAL);
 		wqe->aso_dseg.mtrs[dseg_idx].ebs_eir = 0;
 	}
+	fmp = fm->profile;
+	if (fmp->profile.packet_mode)
+		wqe->aso_dseg.mtrs[dseg_idx].v_bo_sc_bbog_mm =
+				RTE_BE32((1 << ASO_DSEG_VALID_OFFSET) |
+				(MLX5_FLOW_COLOR_GREEN << ASO_DSEG_SC_OFFSET) |
+				(MLX5_METER_MODE_PKT << ASO_DSEG_MTR_MODE));
+	else
+		wqe->aso_dseg.mtrs[dseg_idx].v_bo_sc_bbog_mm =
+				RTE_BE32((1 << ASO_DSEG_VALID_OFFSET) |
+				(MLX5_FLOW_COLOR_GREEN << ASO_DSEG_SC_OFFSET));
 	sq->head++;
 	sq->pi += 2;/* Each WQE contains 2 WQEBB's. */
 	rte_io_wmb();
@@ -798,7 +841,7 @@ int
 mlx5_aso_meter_update_by_wqe(struct mlx5_dev_ctx_shared *sh,
 			struct mlx5_aso_mtr *mtr)
 {
-	struct mlx5_aso_sq *sq = &sh->mtrmng->sq;
+	struct mlx5_aso_sq *sq = &sh->mtrmng->pools_mng.sq;
 	uint32_t poll_wqe_times = MLX5_MTR_POLL_WQE_CQE_TIMES;
 
 	do {
@@ -830,7 +873,7 @@ int
 mlx5_aso_mtr_wait(struct mlx5_dev_ctx_shared *sh,
 			struct mlx5_aso_mtr *mtr)
 {
-	struct mlx5_aso_sq *sq = &sh->mtrmng->sq;
+	struct mlx5_aso_sq *sq = &sh->mtrmng->pools_mng.sq;
 	uint32_t poll_cqe_times = MLX5_MTR_POLL_WQE_CQE_TIMES;
 
 	if (__atomic_load_n(&mtr->state, __ATOMIC_RELAXED) ==
@@ -847,4 +890,542 @@ mlx5_aso_mtr_wait(struct mlx5_dev_ctx_shared *sh,
 	DRV_LOG(ERR, "Fail to poll CQE ready for ASO meter offset %d",
 			mtr->offset);
 	return -1;
+}
+
+/*
+ * Post a WQE to the ASO CT SQ to modify the context.
+ *
+ * @param[in] mng
+ *   Pointer to the CT pools management structure.
+ * @param[in] ct
+ *   Pointer to the generic CT structure related to the context.
+ * @param[in] profile
+ *   Pointer to configuration profile.
+ *
+ * @return
+ *   1 on success (WQE number), 0 on failure.
+ */
+static uint16_t
+mlx5_aso_ct_sq_enqueue_single(struct mlx5_aso_ct_pools_mng *mng,
+			      struct mlx5_aso_ct_action *ct,
+			      const struct rte_flow_action_conntrack *profile)
+{
+	volatile struct mlx5_aso_wqe *wqe = NULL;
+	struct mlx5_aso_sq *sq = &mng->aso_sq;
+	uint16_t size = 1 << sq->log_desc_n;
+	uint16_t mask = size - 1;
+	uint16_t res;
+	struct mlx5_aso_ct_pool *pool;
+	void *desg;
+	void *orig_dir;
+	void *reply_dir;
+
+	rte_spinlock_lock(&sq->sqsl);
+	/* Prevent other threads to update the index. */
+	res = size - (uint16_t)(sq->head - sq->tail);
+	if (unlikely(!res)) {
+		rte_spinlock_unlock(&sq->sqsl);
+		DRV_LOG(ERR, "Fail: SQ is full and no free WQE to send");
+		return 0;
+	}
+	wqe = &sq->sq_obj.aso_wqes[sq->head & mask];
+	rte_prefetch0(&sq->sq_obj.aso_wqes[(sq->head + 1) & mask]);
+	/* Fill next WQE. */
+	MLX5_ASO_CT_UPDATE_STATE(ct, ASO_CONNTRACK_WAIT);
+	sq->elts[sq->head & mask].ct = ct;
+	sq->elts[sq->head & mask].query_data = NULL;
+	pool = container_of(ct, struct mlx5_aso_ct_pool, actions[ct->offset]);
+	/* Each WQE will have a single CT object. */
+	wqe->general_cseg.misc = rte_cpu_to_be_32(pool->devx_obj->id +
+						  ct->offset);
+	wqe->general_cseg.opcode = rte_cpu_to_be_32(MLX5_OPCODE_ACCESS_ASO |
+			(ASO_OPC_MOD_CONNECTION_TRACKING <<
+			 WQE_CSEG_OPC_MOD_OFFSET) |
+			sq->pi << WQE_CSEG_WQE_INDEX_OFFSET);
+	wqe->aso_cseg.operand_masks = rte_cpu_to_be_32
+			(0u |
+			 (ASO_OPER_LOGICAL_OR << ASO_CSEG_COND_OPER_OFFSET) |
+			 (ASO_OP_ALWAYS_TRUE << ASO_CSEG_COND_1_OPER_OFFSET) |
+			 (ASO_OP_ALWAYS_TRUE << ASO_CSEG_COND_0_OPER_OFFSET) |
+			 (BYTEWISE_64BYTE << ASO_CSEG_DATA_MASK_MODE_OFFSET));
+	wqe->aso_cseg.data_mask = UINT64_MAX;
+	/* To make compiler happy. */
+	desg = (void *)(uintptr_t)wqe->aso_dseg.data;
+	MLX5_SET(conn_track_aso, desg, valid, 1);
+	MLX5_SET(conn_track_aso, desg, state, profile->state);
+	MLX5_SET(conn_track_aso, desg, freeze_track, !profile->enable);
+	MLX5_SET(conn_track_aso, desg, connection_assured,
+		 profile->live_connection);
+	MLX5_SET(conn_track_aso, desg, sack_permitted, profile->selective_ack);
+	MLX5_SET(conn_track_aso, desg, challenged_acked,
+		 profile->challenge_ack_passed);
+	/* Heartbeat, retransmission_counter, retranmission_limit_exceeded: 0 */
+	MLX5_SET(conn_track_aso, desg, heartbeat, 0);
+	MLX5_SET(conn_track_aso, desg, max_ack_window,
+		 profile->max_ack_window);
+	MLX5_SET(conn_track_aso, desg, retransmission_counter, 0);
+	MLX5_SET(conn_track_aso, desg, retranmission_limit_exceeded, 0);
+	MLX5_SET(conn_track_aso, desg, retranmission_limit,
+		 profile->retransmission_limit);
+	MLX5_SET(conn_track_aso, desg, reply_direction_tcp_scale,
+		 profile->reply_dir.scale);
+	MLX5_SET(conn_track_aso, desg, reply_direction_tcp_close_initiated,
+		 profile->reply_dir.close_initiated);
+	/* Both directions will use the same liberal mode. */
+	MLX5_SET(conn_track_aso, desg, reply_direction_tcp_liberal_enabled,
+		 profile->liberal_mode);
+	MLX5_SET(conn_track_aso, desg, reply_direction_tcp_data_unacked,
+		 profile->reply_dir.data_unacked);
+	MLX5_SET(conn_track_aso, desg, reply_direction_tcp_max_ack,
+		 profile->reply_dir.last_ack_seen);
+	MLX5_SET(conn_track_aso, desg, original_direction_tcp_scale,
+		 profile->original_dir.scale);
+	MLX5_SET(conn_track_aso, desg, original_direction_tcp_close_initiated,
+		 profile->original_dir.close_initiated);
+	MLX5_SET(conn_track_aso, desg, original_direction_tcp_liberal_enabled,
+		 profile->liberal_mode);
+	MLX5_SET(conn_track_aso, desg, original_direction_tcp_data_unacked,
+		 profile->original_dir.data_unacked);
+	MLX5_SET(conn_track_aso, desg, original_direction_tcp_max_ack,
+		 profile->original_dir.last_ack_seen);
+	MLX5_SET(conn_track_aso, desg, last_win, profile->last_window);
+	MLX5_SET(conn_track_aso, desg, last_dir, profile->last_direction);
+	MLX5_SET(conn_track_aso, desg, last_index, profile->last_index);
+	MLX5_SET(conn_track_aso, desg, last_seq, profile->last_seq);
+	MLX5_SET(conn_track_aso, desg, last_ack, profile->last_ack);
+	MLX5_SET(conn_track_aso, desg, last_end, profile->last_end);
+	orig_dir = MLX5_ADDR_OF(conn_track_aso, desg, original_dir);
+	MLX5_SET(tcp_window_params, orig_dir, sent_end,
+		 profile->original_dir.sent_end);
+	MLX5_SET(tcp_window_params, orig_dir, reply_end,
+		 profile->original_dir.reply_end);
+	MLX5_SET(tcp_window_params, orig_dir, max_win,
+		 profile->original_dir.max_win);
+	MLX5_SET(tcp_window_params, orig_dir, max_ack,
+		 profile->original_dir.max_ack);
+	reply_dir = MLX5_ADDR_OF(conn_track_aso, desg, reply_dir);
+	MLX5_SET(tcp_window_params, reply_dir, sent_end,
+		 profile->reply_dir.sent_end);
+	MLX5_SET(tcp_window_params, reply_dir, reply_end,
+		 profile->reply_dir.reply_end);
+	MLX5_SET(tcp_window_params, reply_dir, max_win,
+		 profile->reply_dir.max_win);
+	MLX5_SET(tcp_window_params, reply_dir, max_ack,
+		 profile->reply_dir.max_ack);
+	sq->head++;
+	sq->pi += 2; /* Each WQE contains 2 WQEBB's. */
+	rte_io_wmb();
+	sq->sq_obj.db_rec[MLX5_SND_DBR] = rte_cpu_to_be_32(sq->pi);
+	rte_wmb();
+	*sq->uar_addr = *(volatile uint64_t *)wqe; /* Assume 64 bit ARCH. */
+	rte_wmb();
+	rte_spinlock_unlock(&sq->sqsl);
+	return 1;
+}
+
+/*
+ * Update the status field of CTs to indicate ready to be used by flows.
+ * A continuous number of CTs since last update.
+ *
+ * @param[in] sq
+ *   Pointer to ASO CT SQ.
+ * @param[in] num
+ *   Number of CT structures to be updated.
+ *
+ * @return
+ *   0 on success, a negative value.
+ */
+static void
+mlx5_aso_ct_status_update(struct mlx5_aso_sq *sq, uint16_t num)
+{
+	uint16_t size = 1 << sq->log_desc_n;
+	uint16_t mask = size - 1;
+	uint16_t i;
+	struct mlx5_aso_ct_action *ct = NULL;
+	uint16_t idx;
+
+	for (i = 0; i < num; i++) {
+		idx = (uint16_t)((sq->tail + i) & mask);
+		ct = sq->elts[idx].ct;
+		MLX5_ASSERT(ct);
+		MLX5_ASO_CT_UPDATE_STATE(ct, ASO_CONNTRACK_READY);
+		if (sq->elts[idx].query_data)
+			rte_memcpy(sq->elts[idx].query_data,
+				   (char *)((uintptr_t)sq->mr.addr + idx * 64),
+				   64);
+	}
+}
+
+/*
+ * Post a WQE to the ASO CT SQ to query the current context.
+ *
+ * @param[in] mng
+ *   Pointer to the CT pools management structure.
+ * @param[in] ct
+ *   Pointer to the generic CT structure related to the context.
+ * @param[in] data
+ *   Pointer to data area to be filled.
+ *
+ * @return
+ *   1 on success (WQE number), 0 on failure.
+ */
+static int
+mlx5_aso_ct_sq_query_single(struct mlx5_aso_ct_pools_mng *mng,
+			    struct mlx5_aso_ct_action *ct, char *data)
+{
+	volatile struct mlx5_aso_wqe *wqe = NULL;
+	struct mlx5_aso_sq *sq = &mng->aso_sq;
+	uint16_t size = 1 << sq->log_desc_n;
+	uint16_t mask = size - 1;
+	uint16_t res;
+	uint16_t wqe_idx;
+	struct mlx5_aso_ct_pool *pool;
+	enum mlx5_aso_ct_state state =
+				__atomic_load_n(&ct->state, __ATOMIC_RELAXED);
+
+	if (state == ASO_CONNTRACK_FREE) {
+		DRV_LOG(ERR, "Fail: No context to query");
+		return -1;
+	} else if (state == ASO_CONNTRACK_WAIT) {
+		return 0;
+	}
+	rte_spinlock_lock(&sq->sqsl);
+	res = size - (uint16_t)(sq->head - sq->tail);
+	if (unlikely(!res)) {
+		rte_spinlock_unlock(&sq->sqsl);
+		DRV_LOG(ERR, "Fail: SQ is full and no free WQE to send");
+		return 0;
+	}
+	MLX5_ASO_CT_UPDATE_STATE(ct, ASO_CONNTRACK_QUERY);
+	wqe = &sq->sq_obj.aso_wqes[sq->head & mask];
+	/* Confirm the location and address of the prefetch instruction. */
+	rte_prefetch0(&sq->sq_obj.aso_wqes[(sq->head + 1) & mask]);
+	/* Fill next WQE. */
+	wqe_idx = sq->head & mask;
+	sq->elts[wqe_idx].ct = ct;
+	sq->elts[wqe_idx].query_data = data;
+	pool = container_of(ct, struct mlx5_aso_ct_pool, actions[ct->offset]);
+	/* Each WQE will have a single CT object. */
+	wqe->general_cseg.misc = rte_cpu_to_be_32(pool->devx_obj->id +
+						  ct->offset);
+	wqe->general_cseg.opcode = rte_cpu_to_be_32(MLX5_OPCODE_ACCESS_ASO |
+			(ASO_OPC_MOD_CONNECTION_TRACKING <<
+			 WQE_CSEG_OPC_MOD_OFFSET) |
+			sq->pi << WQE_CSEG_WQE_INDEX_OFFSET);
+	/*
+	 * There is no write request is required.
+	 * ASO_OPER_LOGICAL_AND and ASO_OP_ALWAYS_FALSE are both 0.
+	 * "BYTEWISE_64BYTE" is needed for a whole context.
+	 * Set to 0 directly to reduce an endian swap. (Modify should rewrite.)
+	 * "data_mask" is ignored.
+	 * Buffer address was already filled during initialization.
+	 */
+	wqe->aso_cseg.operand_masks = rte_cpu_to_be_32(BYTEWISE_64BYTE <<
+					ASO_CSEG_DATA_MASK_MODE_OFFSET);
+	wqe->aso_cseg.data_mask = 0;
+	sq->head++;
+	/*
+	 * Each WQE contains 2 WQEBB's, even though
+	 * data segment is not used in this case.
+	 */
+	sq->pi += 2;
+	rte_io_wmb();
+	sq->sq_obj.db_rec[MLX5_SND_DBR] = rte_cpu_to_be_32(sq->pi);
+	rte_wmb();
+	*sq->uar_addr = *(volatile uint64_t *)wqe; /* Assume 64 bit ARCH. */
+	rte_wmb();
+	rte_spinlock_unlock(&sq->sqsl);
+	return 1;
+}
+
+/*
+ * Handle completions from WQEs sent to ASO CT.
+ *
+ * @param[in] mng
+ *   Pointer to the CT pools management structure.
+ */
+static void
+mlx5_aso_ct_completion_handle(struct mlx5_aso_ct_pools_mng *mng)
+{
+	struct mlx5_aso_sq *sq = &mng->aso_sq;
+	struct mlx5_aso_cq *cq = &sq->cq;
+	volatile struct mlx5_cqe *restrict cqe;
+	const uint32_t cq_size = 1 << cq->log_desc_n;
+	const uint32_t mask = cq_size - 1;
+	uint32_t idx;
+	uint32_t next_idx;
+	uint16_t max;
+	uint16_t n = 0;
+	int ret;
+
+	rte_spinlock_lock(&sq->sqsl);
+	max = (uint16_t)(sq->head - sq->tail);
+	if (unlikely(!max)) {
+		rte_spinlock_unlock(&sq->sqsl);
+		return;
+	}
+	next_idx = cq->cq_ci & mask;
+	do {
+		idx = next_idx;
+		next_idx = (cq->cq_ci + 1) & mask;
+		/* Need to confirm the position of the prefetch. */
+		rte_prefetch0(&cq->cq_obj.cqes[next_idx]);
+		cqe = &cq->cq_obj.cqes[idx];
+		ret = check_cqe(cqe, cq_size, cq->cq_ci);
+		/*
+		 * Be sure owner read is done before any other cookie field or
+		 * opaque field.
+		 */
+		rte_io_rmb();
+		if (unlikely(ret != MLX5_CQE_STATUS_SW_OWN)) {
+			if (likely(ret == MLX5_CQE_STATUS_HW_OWN))
+				break;
+			mlx5_aso_cqe_err_handle(sq);
+		} else {
+			n++;
+		}
+		cq->cq_ci++;
+	} while (1);
+	if (likely(n)) {
+		mlx5_aso_ct_status_update(sq, n);
+		sq->tail += n;
+		rte_io_wmb();
+		cq->cq_obj.db_rec[0] = rte_cpu_to_be_32(cq->cq_ci);
+	}
+	rte_spinlock_unlock(&sq->sqsl);
+}
+
+/*
+ * Update connection tracking ASO context by sending WQE.
+ *
+ * @param[in] sh
+ *   Pointer to mlx5_dev_ctx_shared object.
+ * @param[in] ct
+ *   Pointer to connection tracking offload object.
+ * @param[in] profile
+ *   Pointer to connection tracking TCP parameter.
+ *
+ * @return
+ *   0 on success, -1 on failure.
+ */
+int
+mlx5_aso_ct_update_by_wqe(struct mlx5_dev_ctx_shared *sh,
+			  struct mlx5_aso_ct_action *ct,
+			  const struct rte_flow_action_conntrack *profile)
+{
+	struct mlx5_aso_ct_pools_mng *mng = sh->ct_mng;
+	uint32_t poll_wqe_times = MLX5_CT_POLL_WQE_CQE_TIMES;
+	struct mlx5_aso_ct_pool *pool;
+
+	MLX5_ASSERT(ct);
+	do {
+		mlx5_aso_ct_completion_handle(mng);
+		if (mlx5_aso_ct_sq_enqueue_single(mng, ct, profile))
+			return 0;
+		/* Waiting for wqe resource. */
+		rte_delay_us_sleep(10u);
+	} while (--poll_wqe_times);
+	pool = container_of(ct, struct mlx5_aso_ct_pool, actions[ct->offset]);
+	DRV_LOG(ERR, "Fail to send WQE for ASO CT %d in pool %d",
+		ct->offset, pool->index);
+	return -1;
+}
+
+/*
+ * The routine is used to wait for WQE completion to continue with queried data.
+ *
+ * @param[in] sh
+ *   Pointer to mlx5_dev_ctx_shared object.
+ * @param[in] ct
+ *   Pointer to connection tracking offload object.
+ *
+ * @return
+ *   0 on success, -1 on failure.
+ */
+int
+mlx5_aso_ct_wait_ready(struct mlx5_dev_ctx_shared *sh,
+		       struct mlx5_aso_ct_action *ct)
+{
+	struct mlx5_aso_ct_pools_mng *mng = sh->ct_mng;
+	uint32_t poll_cqe_times = MLX5_CT_POLL_WQE_CQE_TIMES;
+	struct mlx5_aso_ct_pool *pool;
+
+	if (__atomic_load_n(&ct->state, __ATOMIC_RELAXED) ==
+	    ASO_CONNTRACK_READY)
+		return 0;
+	do {
+		mlx5_aso_ct_completion_handle(mng);
+		if (__atomic_load_n(&ct->state, __ATOMIC_RELAXED) ==
+		    ASO_CONNTRACK_READY)
+			return 0;
+		/* Waiting for CQE ready, consider should block or sleep. */
+		rte_delay_us_sleep(MLX5_ASO_WQE_CQE_RESPONSE_DELAY);
+	} while (--poll_cqe_times);
+	pool = container_of(ct, struct mlx5_aso_ct_pool, actions[ct->offset]);
+	DRV_LOG(ERR, "Fail to poll CQE for ASO CT %d in pool %d",
+		ct->offset, pool->index);
+	return -1;
+}
+
+/*
+ * Convert the hardware conntrack data format into the profile.
+ *
+ * @param[in] profile
+ *   Pointer to conntrack profile to be filled after query.
+ * @param[in] wdata
+ *   Pointer to data fetched from hardware.
+ */
+static inline void
+mlx5_aso_ct_obj_analyze(struct rte_flow_action_conntrack *profile,
+			char *wdata)
+{
+	void *o_dir = MLX5_ADDR_OF(conn_track_aso, wdata, original_dir);
+	void *r_dir = MLX5_ADDR_OF(conn_track_aso, wdata, reply_dir);
+
+	/* MLX5_GET16 should be taken into consideration. */
+	profile->state = (enum rte_flow_conntrack_state)
+			 MLX5_GET(conn_track_aso, wdata, state);
+	profile->enable = !MLX5_GET(conn_track_aso, wdata, freeze_track);
+	profile->selective_ack = MLX5_GET(conn_track_aso, wdata,
+					  sack_permitted);
+	profile->live_connection = MLX5_GET(conn_track_aso, wdata,
+					    connection_assured);
+	profile->challenge_ack_passed = MLX5_GET(conn_track_aso, wdata,
+						 challenged_acked);
+	profile->max_ack_window = MLX5_GET(conn_track_aso, wdata,
+					   max_ack_window);
+	profile->retransmission_limit = MLX5_GET(conn_track_aso, wdata,
+						 retranmission_limit);
+	profile->last_window = MLX5_GET(conn_track_aso, wdata, last_win);
+	profile->last_direction = MLX5_GET(conn_track_aso, wdata, last_dir);
+	profile->last_index = (enum rte_flow_conntrack_tcp_last_index)
+			      MLX5_GET(conn_track_aso, wdata, last_index);
+	profile->last_seq = MLX5_GET(conn_track_aso, wdata, last_seq);
+	profile->last_ack = MLX5_GET(conn_track_aso, wdata, last_ack);
+	profile->last_end = MLX5_GET(conn_track_aso, wdata, last_end);
+	profile->liberal_mode = MLX5_GET(conn_track_aso, wdata,
+				reply_direction_tcp_liberal_enabled) |
+				MLX5_GET(conn_track_aso, wdata,
+				original_direction_tcp_liberal_enabled);
+	/* No liberal in the RTE structure profile. */
+	profile->reply_dir.scale = MLX5_GET(conn_track_aso, wdata,
+					    reply_direction_tcp_scale);
+	profile->reply_dir.close_initiated = MLX5_GET(conn_track_aso, wdata,
+					reply_direction_tcp_close_initiated);
+	profile->reply_dir.data_unacked = MLX5_GET(conn_track_aso, wdata,
+					reply_direction_tcp_data_unacked);
+	profile->reply_dir.last_ack_seen = MLX5_GET(conn_track_aso, wdata,
+					reply_direction_tcp_max_ack);
+	profile->reply_dir.sent_end = MLX5_GET(tcp_window_params,
+					       r_dir, sent_end);
+	profile->reply_dir.reply_end = MLX5_GET(tcp_window_params,
+						r_dir, reply_end);
+	profile->reply_dir.max_win = MLX5_GET(tcp_window_params,
+					      r_dir, max_win);
+	profile->reply_dir.max_ack = MLX5_GET(tcp_window_params,
+					      r_dir, max_ack);
+	profile->original_dir.scale = MLX5_GET(conn_track_aso, wdata,
+					       original_direction_tcp_scale);
+	profile->original_dir.close_initiated = MLX5_GET(conn_track_aso, wdata,
+					original_direction_tcp_close_initiated);
+	profile->original_dir.data_unacked = MLX5_GET(conn_track_aso, wdata,
+					original_direction_tcp_data_unacked);
+	profile->original_dir.last_ack_seen = MLX5_GET(conn_track_aso, wdata,
+					original_direction_tcp_max_ack);
+	profile->original_dir.sent_end = MLX5_GET(tcp_window_params,
+						  o_dir, sent_end);
+	profile->original_dir.reply_end = MLX5_GET(tcp_window_params,
+						   o_dir, reply_end);
+	profile->original_dir.max_win = MLX5_GET(tcp_window_params,
+						 o_dir, max_win);
+	profile->original_dir.max_ack = MLX5_GET(tcp_window_params,
+						 o_dir, max_ack);
+}
+
+/*
+ * Query connection tracking information parameter by send WQE.
+ *
+ * @param[in] dev
+ *   Pointer to Ethernet device.
+ * @param[in] ct
+ *   Pointer to connection tracking offload object.
+ * @param[out] profile
+ *   Pointer to connection tracking TCP information.
+ *
+ * @return
+ *   0 on success, -1 on failure.
+ */
+int
+mlx5_aso_ct_query_by_wqe(struct mlx5_dev_ctx_shared *sh,
+			 struct mlx5_aso_ct_action *ct,
+			 struct rte_flow_action_conntrack *profile)
+{
+	struct mlx5_aso_ct_pools_mng *mng = sh->ct_mng;
+	uint32_t poll_wqe_times = MLX5_CT_POLL_WQE_CQE_TIMES;
+	struct mlx5_aso_ct_pool *pool;
+	char out_data[64 * 2];
+	int ret;
+
+	MLX5_ASSERT(ct);
+	do {
+		mlx5_aso_ct_completion_handle(mng);
+		ret = mlx5_aso_ct_sq_query_single(mng, ct, out_data);
+		if (ret < 0)
+			return ret;
+		else if (ret > 0)
+			goto data_handle;
+		/* Waiting for wqe resource or state. */
+		else
+			rte_delay_us_sleep(10u);
+	} while (--poll_wqe_times);
+	pool = container_of(ct, struct mlx5_aso_ct_pool, actions[ct->offset]);
+	DRV_LOG(ERR, "Fail to send WQE for ASO CT %d in pool %d",
+		ct->offset, pool->index);
+	return -1;
+data_handle:
+	ret = mlx5_aso_ct_wait_ready(sh, ct);
+	if (!ret)
+		mlx5_aso_ct_obj_analyze(profile, out_data);
+	return ret;
+}
+
+/*
+ * Make sure the conntrack context is synchronized with hardware before
+ * creating a flow rule that uses it.
+ *
+ * @param[in] sh
+ *   Pointer to shared device context.
+ * @param[in] ct
+ *   Pointer to connection tracking offload object.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+int
+mlx5_aso_ct_available(struct mlx5_dev_ctx_shared *sh,
+		      struct mlx5_aso_ct_action *ct)
+{
+	struct mlx5_aso_ct_pools_mng *mng = sh->ct_mng;
+	uint32_t poll_cqe_times = MLX5_CT_POLL_WQE_CQE_TIMES;
+	enum mlx5_aso_ct_state state =
+				__atomic_load_n(&ct->state, __ATOMIC_RELAXED);
+
+	if (state == ASO_CONNTRACK_FREE) {
+		rte_errno = ENXIO;
+		return -rte_errno;
+	} else if (state == ASO_CONNTRACK_READY ||
+		   state == ASO_CONNTRACK_QUERY) {
+		return 0;
+	}
+	do {
+		mlx5_aso_ct_completion_handle(mng);
+		state = __atomic_load_n(&ct->state, __ATOMIC_RELAXED);
+		if (state == ASO_CONNTRACK_READY ||
+		    state == ASO_CONNTRACK_QUERY)
+			return 0;
+		/* Waiting for CQE ready, consider should block or sleep. */
+		rte_delay_us_sleep(MLX5_ASO_WQE_CQE_RESPONSE_DELAY);
+	} while (--poll_cqe_times);
+	rte_errno = EBUSY;
+	return -rte_errno;
 }

@@ -86,8 +86,8 @@ mp_secondary_handle(const struct rte_mp_msg *mp_msg, const void *peer)
 	case HNS3_MP_REQ_START_RXTX:
 		PMD_INIT_LOG(INFO, "port %u starting datapath",
 			     dev->data->port_id);
-		rte_mb();
 		hns3_set_rxtx_function(dev);
+		rte_mb();
 		mp_init_msg(dev, &mp_res, param->type);
 		res->result = 0;
 		ret = rte_mp_reply(&mp_res, peer);
@@ -130,7 +130,7 @@ mp_req_on_rxtx(struct rte_eth_dev *dev, enum hns3_mp_req_type type)
 	int ret;
 	int i;
 
-	if (!hw->secondary_cnt)
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY || !hw->secondary_cnt)
 		return;
 	if (type != HNS3_MP_REQ_START_RXTX && type != HNS3_MP_REQ_STOP_RXTX) {
 		hns3_err(hw, "port %u unknown request (req_type %d)",

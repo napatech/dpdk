@@ -27,8 +27,8 @@
 #include <ena_eth_io_defs.h>
 
 #define DRV_MODULE_VER_MAJOR	2
-#define DRV_MODULE_VER_MINOR	2
-#define DRV_MODULE_VER_SUBMINOR	1
+#define DRV_MODULE_VER_MINOR	3
+#define DRV_MODULE_VER_SUBMINOR	0
 
 #define ENA_IO_TXQ_IDX(q)	(2 * (q))
 #define ENA_IO_RXQ_IDX(q)	(2 * (q) + 1)
@@ -50,6 +50,8 @@
 #define ARRAY_SIZE(x) RTE_DIM(x)
 
 #define ENA_MIN_RING_DESC	128
+
+#define ENA_PTYPE_HAS_HASH	(RTE_PTYPE_L4_TCP | RTE_PTYPE_L4_UDP)
 
 enum ethtool_stringset {
 	ETH_SS_TEST             = 0,
@@ -85,7 +87,7 @@ struct ena_stats {
  * Each rte_memzone should have unique name.
  * To satisfy it, count number of allocation and add it to name.
  */
-rte_atomic32_t ena_alloc_cnt;
+rte_atomic64_t ena_alloc_cnt;
 
 static const struct ena_stats ena_stats_global_strings[] = {
 	ENA_STAT_GLOBAL_ENTRY(wd_expired),
@@ -162,6 +164,7 @@ static const struct rte_pci_id pci_id_ena_map[] = {
 static struct ena_aenq_handlers aenq_handlers;
 
 static int ena_device_init(struct ena_com_dev *ena_dev,
+			   struct rte_pci_device *pdev,
 			   struct ena_com_dev_get_features_ctx *get_feat_ctx,
 			   bool *wd_state);
 static int ena_dev_configure(struct rte_eth_dev *dev);
@@ -314,6 +317,11 @@ static inline void ena_rx_mbuf_prepare(struct rte_mbuf *mbuf,
 		else
 			ol_flags |= PKT_RX_L4_CKSUM_GOOD;
 
+	if (likely((packet_type & ENA_PTYPE_HAS_HASH) && !ena_rx_ctx->frag)) {
+		ol_flags |= PKT_RX_RSS_HASH;
+		mbuf->hash.rss = ena_rx_ctx->hash;
+	}
+
 	mbuf->ol_flags = ol_flags;
 	mbuf->packet_type = packet_type;
 }
@@ -450,11 +458,11 @@ err:
 }
 
 /* This function calculates the number of xstats based on the current config */
-static unsigned int ena_xstats_calc_num(struct rte_eth_dev *dev)
+static unsigned int ena_xstats_calc_num(struct rte_eth_dev_data *data)
 {
 	return ENA_STATS_ARRAY_GLOBAL + ENA_STATS_ARRAY_ENI +
-		(dev->data->nb_tx_queues * ENA_STATS_ARRAY_TX) +
-		(dev->data->nb_rx_queues * ENA_STATS_ARRAY_RX);
+		(data->nb_tx_queues * ENA_STATS_ARRAY_TX) +
+		(data->nb_rx_queues * ENA_STATS_ARRAY_RX);
 }
 
 static void ena_config_debug_area(struct ena_adapter *adapter)
@@ -462,7 +470,7 @@ static void ena_config_debug_area(struct ena_adapter *adapter)
 	u32 debug_area_size;
 	int rc, ss_count;
 
-	ss_count = ena_xstats_calc_num(adapter->rte_dev);
+	ss_count = ena_xstats_calc_num(adapter->edev_data);
 
 	/* allocate 32 bytes for each string and 64bit for the value */
 	debug_area_size = ss_count * ETH_GSTRING_LEN + sizeof(u64) * ss_count;
@@ -511,7 +519,7 @@ static int ena_close(struct rte_eth_dev *dev)
 	rte_intr_disable(intr_handle);
 	rte_intr_callback_unregister(intr_handle,
 				     ena_interrupt_handler_rte,
-				     adapter);
+				     dev);
 
 	/*
 	 * MAC is not allocated dynamically. Setting NULL should prevent from
@@ -526,6 +534,12 @@ static int
 ena_dev_reset(struct rte_eth_dev *dev)
 {
 	int rc = 0;
+
+	/* Cannot release memory in secondary process */
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+		PMD_DRV_LOG(WARNING, "dev_reset not supported in secondary.\n");
+		return -EPERM;
+	}
 
 	ena_destroy_device(dev);
 	rc = eth_ena_dev_init(dev);
@@ -586,7 +600,7 @@ static int ena_rss_reta_update(struct rte_eth_dev *dev,
 	}
 
 	PMD_DRV_LOG(DEBUG, "%s(): RSS configured %d entries  for port %d\n",
-		__func__, reta_size, adapter->rte_dev->data->port_id);
+		__func__, reta_size, dev->data->port_id);
 
 	return 0;
 }
@@ -630,7 +644,7 @@ static int ena_rss_reta_query(struct rte_eth_dev *dev,
 static int ena_rss_init_default(struct ena_adapter *adapter)
 {
 	struct ena_com_dev *ena_dev = &adapter->ena_dev;
-	uint16_t nb_rx_queues = adapter->rte_dev->data->nb_rx_queues;
+	uint16_t nb_rx_queues = adapter->edev_data->nb_rx_queues;
 	int rc, i;
 	u32 val;
 
@@ -669,7 +683,7 @@ static int ena_rss_init_default(struct ena_adapter *adapter)
 		goto err_fill_indir;
 	}
 	PMD_DRV_LOG(DEBUG, "RSS configured for port %d\n",
-		adapter->rte_dev->data->port_id);
+		adapter->edev_data->port_id);
 
 	return 0;
 
@@ -840,10 +854,10 @@ static uint32_t ena_get_mtu_conf(struct ena_adapter *adapter)
 {
 	uint32_t max_frame_len = adapter->max_mtu;
 
-	if (adapter->rte_eth_dev_data->dev_conf.rxmode.offloads &
+	if (adapter->edev_data->dev_conf.rxmode.offloads &
 	    DEV_RX_OFFLOAD_JUMBO_FRAME)
 		max_frame_len =
-			adapter->rte_eth_dev_data->dev_conf.rxmode.max_rx_pkt_len;
+			adapter->edev_data->dev_conf.rxmode.max_rx_pkt_len;
 
 	return max_frame_len;
 }
@@ -1051,6 +1065,12 @@ static int ena_start(struct rte_eth_dev *dev)
 	uint64_t ticks;
 	int rc = 0;
 
+	/* Cannot allocate memory in secondary process */
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+		PMD_DRV_LOG(WARNING, "dev_start not supported in secondary.\n");
+		return -EPERM;
+	}
+
 	rc = ena_check_valid_conf(adapter);
 	if (rc)
 		return rc;
@@ -1063,8 +1083,8 @@ static int ena_start(struct rte_eth_dev *dev)
 	if (rc)
 		goto err_start_tx;
 
-	if (adapter->rte_dev->data->dev_conf.rxmode.mq_mode &
-	    ETH_MQ_RX_RSS_FLAG && adapter->rte_dev->data->nb_rx_queues > 0) {
+	if (adapter->edev_data->dev_conf.rxmode.mq_mode &
+	    ETH_MQ_RX_RSS_FLAG && adapter->edev_data->nb_rx_queues > 0) {
 		rc = ena_rss_init_default(adapter);
 		if (rc)
 			goto err_rss_init;
@@ -1077,7 +1097,7 @@ static int ena_start(struct rte_eth_dev *dev)
 
 	ticks = rte_get_timer_hz();
 	rte_timer_reset(&adapter->timer_wd, ticks, PERIODICAL, rte_lcore_id(),
-			ena_timer_wd_callback, adapter);
+			ena_timer_wd_callback, dev);
 
 	++adapter->dev_stats.dev_start;
 	adapter->state = ENA_ADAPTER_STATE_RUNNING;
@@ -1096,6 +1116,12 @@ static int ena_stop(struct rte_eth_dev *dev)
 	struct ena_adapter *adapter = dev->data->dev_private;
 	struct ena_com_dev *ena_dev = &adapter->ena_dev;
 	int rc;
+
+	/* Cannot free memory in secondary process */
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+		PMD_DRV_LOG(WARNING, "dev_stop not supported in secondary.\n");
+		return -EPERM;
+	}
 
 	rte_timer_stop_sync(&adapter->timer_wd);
 	ena_queue_stop_all(dev, ENA_RING_TYPE_TX);
@@ -1275,9 +1301,6 @@ static int ena_tx_queue_setup(struct rte_eth_dev *dev,
 		return -EINVAL;
 	}
 
-	if (nb_desc == RTE_ETH_DEV_FALLBACK_TX_RINGSIZE)
-		nb_desc = adapter->max_tx_ring_size;
-
 	txq->port_id = dev->data->port_id;
 	txq->next_to_clean = 0;
 	txq->next_to_use = 0;
@@ -1348,9 +1371,6 @@ static int ena_rx_queue_setup(struct rte_eth_dev *dev,
 			queue_idx);
 		return ENA_COM_FAULT;
 	}
-
-	if (nb_desc == RTE_ETH_DEV_FALLBACK_RX_RINGSIZE)
-		nb_desc = adapter->max_rx_ring_size;
 
 	if (!rte_is_power_of_2(nb_desc)) {
 		PMD_DRV_LOG(ERR,
@@ -1504,6 +1524,7 @@ static int ena_populate_rx_queue(struct ena_ring *rxq, unsigned int count)
 }
 
 static int ena_device_init(struct ena_com_dev *ena_dev,
+			   struct rte_pci_device *pdev,
 			   struct ena_com_dev_get_features_ctx *get_feat_ctx,
 			   bool *wd_state)
 {
@@ -1521,9 +1542,7 @@ static int ena_device_init(struct ena_com_dev *ena_dev,
 	/* The PCIe configuration space revision id indicate if mmio reg
 	 * read is disabled.
 	 */
-	readless_supported =
-		!(((struct rte_pci_device *)ena_dev->dmadev)->id.class_id
-			       & ENA_MMIO_DISABLE_REG_READ);
+	readless_supported = !(pdev->id.class_id & ENA_MMIO_DISABLE_REG_READ);
 	ena_com_set_mmio_read_mode(ena_dev, readless_supported);
 
 	/* reset device */
@@ -1594,12 +1613,13 @@ err_mmio_read_less:
 
 static void ena_interrupt_handler_rte(void *cb_arg)
 {
-	struct ena_adapter *adapter = cb_arg;
+	struct rte_eth_dev *dev = cb_arg;
+	struct ena_adapter *adapter = dev->data->dev_private;
 	struct ena_com_dev *ena_dev = &adapter->ena_dev;
 
 	ena_com_admin_q_comp_intr_handler(ena_dev);
 	if (likely(adapter->state != ENA_ADAPTER_STATE_CLOSED))
-		ena_com_aenq_intr_handler(ena_dev, adapter);
+		ena_com_aenq_intr_handler(ena_dev, dev);
 }
 
 static void check_for_missing_keep_alive(struct ena_adapter *adapter)
@@ -1632,8 +1652,8 @@ static void check_for_admin_com_state(struct ena_adapter *adapter)
 static void ena_timer_wd_callback(__rte_unused struct rte_timer *timer,
 				  void *arg)
 {
-	struct ena_adapter *adapter = arg;
-	struct rte_eth_dev *dev = adapter->rte_dev;
+	struct rte_eth_dev *dev = arg;
+	struct ena_adapter *adapter = dev->data->dev_private;
 
 	check_for_missing_keep_alive(adapter);
 	check_for_admin_com_state(adapter);
@@ -1774,11 +1794,9 @@ static int eth_ena_dev_init(struct rte_eth_dev *eth_dev)
 	memset(adapter, 0, sizeof(struct ena_adapter));
 	ena_dev = &adapter->ena_dev;
 
-	adapter->rte_eth_dev_data = eth_dev->data;
-	adapter->rte_dev = eth_dev;
+	adapter->edev_data = eth_dev->data;
 
 	pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
-	adapter->pdev = pci_dev;
 
 	PMD_INIT_LOG(INFO, "Initializing %x:%x:%x.%d",
 		     pci_dev->addr.domain,
@@ -1798,7 +1816,8 @@ static int eth_ena_dev_init(struct rte_eth_dev *eth_dev)
 	}
 
 	ena_dev->reg_bar = adapter->regs;
-	ena_dev->dmadev = adapter->pdev;
+	/* This is a dummy pointer for ena_com functions. */
+	ena_dev->dmadev = adapter;
 
 	adapter->id_number = adapters_found;
 
@@ -1812,7 +1831,7 @@ static int eth_ena_dev_init(struct rte_eth_dev *eth_dev)
 	}
 
 	/* device specific initialization routine */
-	rc = ena_device_init(ena_dev, &get_feat_ctx, &wd_state);
+	rc = ena_device_init(ena_dev, pci_dev, &get_feat_ctx, &wd_state);
 	if (rc) {
 		PMD_INIT_LOG(CRIT, "Failed to init ENA device");
 		goto err;
@@ -1895,7 +1914,7 @@ static int eth_ena_dev_init(struct rte_eth_dev *eth_dev)
 
 	rte_intr_callback_register(intr_handle,
 				   ena_interrupt_handler_rte,
-				   adapter);
+				   eth_dev);
 	rte_intr_enable(intr_handle);
 	ena_com_set_admin_polling_mode(ena_dev, false);
 	ena_com_admin_aenq_enable(ena_dev);
@@ -1959,6 +1978,9 @@ static int ena_dev_configure(struct rte_eth_dev *dev)
 	struct ena_adapter *adapter = dev->data->dev_private;
 
 	adapter->state = ENA_ADAPTER_STATE_CONFIG;
+
+	if (dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG)
+		dev->data->dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_RSS_HASH;
 
 	adapter->tx_selected_offloads = dev->data->dev_conf.txmode.offloads;
 	adapter->rx_selected_offloads = dev->data->dev_conf.rxmode.offloads;
@@ -2036,6 +2058,7 @@ static int ena_infos_get(struct rte_eth_dev *dev,
 
 	/* Inform framework about available features */
 	dev_info->rx_offload_capa = rx_feat;
+	dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_RSS_HASH;
 	dev_info->rx_queue_offload_capa = rx_feat;
 	dev_info->tx_offload_capa = tx_feat;
 	dev_info->tx_queue_offload_capa = tx_feat;
@@ -2067,6 +2090,9 @@ static int ena_infos_get(struct rte_eth_dev *dev,
 					adapter->max_tx_sgl_size);
 	dev_info->tx_desc_lim.nb_mtu_seg_max = RTE_MIN(ENA_PKT_MAX_BUFS,
 					adapter->max_tx_sgl_size);
+
+	dev_info->default_rxportconf.ring_size = ENA_DEFAULT_RING_SIZE;
+	dev_info->default_txportconf.ring_size = ENA_DEFAULT_RING_SIZE;
 
 	return 0;
 }
@@ -2244,8 +2270,6 @@ static uint16_t eth_ena_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 			rte_atomic64_inc(&rx_ring->adapter->drv_stats->ierrors);
 			++rx_ring->rx_stats.bad_csum;
 		}
-
-		mbuf->hash.rss = ena_rx_ctx.hash;
 
 		rx_pkts[completed] = mbuf;
 		rx_ring->rx_stats.bytes += mbuf->pkt_len;
@@ -2673,7 +2697,7 @@ static int ena_xstats_get_names(struct rte_eth_dev *dev,
 				struct rte_eth_xstat_name *xstats_names,
 				unsigned int n)
 {
-	unsigned int xstats_count = ena_xstats_calc_num(dev);
+	unsigned int xstats_count = ena_xstats_calc_num(dev->data);
 	unsigned int stat, i, count = 0;
 
 	if (n < xstats_count || !xstats_names)
@@ -2722,7 +2746,7 @@ static int ena_xstats_get(struct rte_eth_dev *dev,
 			  unsigned int n)
 {
 	struct ena_adapter *adapter = dev->data->dev_private;
-	unsigned int xstats_count = ena_xstats_calc_num(dev);
+	unsigned int xstats_count = ena_xstats_calc_num(dev->data);
 	unsigned int stat, i, count = 0;
 	int stat_offset;
 	void *stats_begin;
@@ -2865,7 +2889,7 @@ static int ena_process_bool_devarg(const char *key,
 	}
 
 	/* Now, assign it to the proper adapter field. */
-	if (strcmp(key, ENA_DEVARG_LARGE_LLQ_HDR))
+	if (strcmp(key, ENA_DEVARG_LARGE_LLQ_HDR) == 0)
 		adapter->use_large_llq_hdr = bool_value;
 
 	return 0;
@@ -2876,6 +2900,7 @@ static int ena_parse_devargs(struct ena_adapter *adapter,
 {
 	static const char * const allowed_args[] = {
 		ENA_DEVARG_LARGE_LLQ_HDR,
+		NULL,
 	};
 	struct rte_kvargs *kvlist;
 	int rc;
@@ -2925,19 +2950,19 @@ RTE_PMD_REGISTER_PCI(net_ena, rte_ena_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_ena, pci_id_ena_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_ena, "* igb_uio | uio_pci_generic | vfio-pci");
 RTE_PMD_REGISTER_PARAM_STRING(net_ena, ENA_DEVARG_LARGE_LLQ_HDR "=<0|1>");
-RTE_LOG_REGISTER(ena_logtype_init, pmd.net.ena.init, NOTICE);
-RTE_LOG_REGISTER(ena_logtype_driver, pmd.net.ena.driver, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(ena_logtype_init, init, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(ena_logtype_driver, driver, NOTICE);
 #ifdef RTE_LIBRTE_ENA_DEBUG_RX
-RTE_LOG_REGISTER(ena_logtype_rx, pmd.net.ena.rx, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(ena_logtype_rx, rx, NOTICE);
 #endif
 #ifdef RTE_LIBRTE_ENA_DEBUG_TX
-RTE_LOG_REGISTER(ena_logtype_tx, pmd.net.ena.tx, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(ena_logtype_tx, tx, NOTICE);
 #endif
 #ifdef RTE_LIBRTE_ENA_DEBUG_TX_FREE
-RTE_LOG_REGISTER(ena_logtype_tx_free, pmd.net.ena.tx_free, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(ena_logtype_tx_free, tx_free, NOTICE);
 #endif
 #ifdef RTE_LIBRTE_ENA_COM_DEBUG
-RTE_LOG_REGISTER(ena_logtype_com, pmd.net.ena.com, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(ena_logtype_com, com, NOTICE);
 #endif
 
 /******************************************************************************
@@ -2946,14 +2971,12 @@ RTE_LOG_REGISTER(ena_logtype_com, pmd.net.ena.com, NOTICE);
 static void ena_update_on_link_change(void *adapter_data,
 				      struct ena_admin_aenq_entry *aenq_e)
 {
-	struct rte_eth_dev *eth_dev;
-	struct ena_adapter *adapter;
+	struct rte_eth_dev *eth_dev = adapter_data;
+	struct ena_adapter *adapter = eth_dev->data->dev_private;
 	struct ena_admin_aenq_link_change_desc *aenq_link_desc;
 	uint32_t status;
 
-	adapter = adapter_data;
 	aenq_link_desc = (struct ena_admin_aenq_link_change_desc *)aenq_e;
-	eth_dev = adapter->rte_dev;
 
 	status = get_ena_admin_aenq_link_change_desc_link_status(aenq_link_desc);
 	adapter->link_status = status;
@@ -2962,10 +2985,11 @@ static void ena_update_on_link_change(void *adapter_data,
 	rte_eth_dev_callback_process(eth_dev, RTE_ETH_EVENT_INTR_LSC, NULL);
 }
 
-static void ena_notification(void *data,
+static void ena_notification(void *adapter_data,
 			     struct ena_admin_aenq_entry *aenq_e)
 {
-	struct ena_adapter *adapter = data;
+	struct rte_eth_dev *eth_dev = adapter_data;
+	struct ena_adapter *adapter = eth_dev->data->dev_private;
 	struct ena_admin_ena_hw_hints *hints;
 
 	if (aenq_e->aenq_common_desc.group != ENA_ADMIN_NOTIFICATION)
@@ -2973,7 +2997,7 @@ static void ena_notification(void *data,
 			aenq_e->aenq_common_desc.group,
 			ENA_ADMIN_NOTIFICATION);
 
-	switch (aenq_e->aenq_common_desc.syndrom) {
+	switch (aenq_e->aenq_common_desc.syndrome) {
 	case ENA_ADMIN_UPDATE_HINTS:
 		hints = (struct ena_admin_ena_hw_hints *)
 			(&aenq_e->inline_data_w4);
@@ -2981,14 +3005,15 @@ static void ena_notification(void *data,
 		break;
 	default:
 		PMD_DRV_LOG(ERR, "Invalid aenq notification link state %d\n",
-			aenq_e->aenq_common_desc.syndrom);
+			aenq_e->aenq_common_desc.syndrome);
 	}
 }
 
 static void ena_keep_alive(void *adapter_data,
 			   __rte_unused struct ena_admin_aenq_entry *aenq_e)
 {
-	struct ena_adapter *adapter = adapter_data;
+	struct rte_eth_dev *eth_dev = adapter_data;
+	struct ena_adapter *adapter = eth_dev->data->dev_private;
 	struct ena_admin_aenq_keep_alive_desc *desc;
 	uint64_t rx_drops;
 	uint64_t tx_drops;

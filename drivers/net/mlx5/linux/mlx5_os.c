@@ -154,6 +154,8 @@ mlx5_os_get_dev_attr(void *ctx, struct mlx5_dev_attr *device_attr)
 #ifdef HAVE_IBV_DEVICE_TUNNEL_SUPPORT
 	device_attr->tunnel_offloads_caps = dv_attr.tunnel_offloads_caps;
 #endif
+	strlcpy(device_attr->fw_ver, attr_ex.orig_attr.fw_ver,
+		sizeof(device_attr->fw_ver));
 
 	return err;
 }
@@ -1097,7 +1099,8 @@ err_secondary:
 	}
 	if (devx_port.comp_mask & MLX5DV_DEVX_PORT_VPORT) {
 		priv->vport_id = devx_port.vport_num;
-	} else if (spawn->pf_bond >= 0) {
+	} else if (spawn->pf_bond >= 0 &&
+		   (switch_info->representor || switch_info->master)) {
 		DRV_LOG(ERR, "can't deduce vport index for port %d"
 			     " on bonding device %s",
 			     spawn->phys_port,
@@ -1299,13 +1302,14 @@ err_secondary:
 			if (log_obj_size >=
 			config->hca_attr.qos.log_meter_aso_granularity &&
 			log_obj_size <=
-			config->hca_attr.qos.log_meter_aso_max_alloc) {
+			config->hca_attr.qos.log_meter_aso_max_alloc)
 				sh->meter_aso_en = 1;
-				err = mlx5_aso_flow_mtrs_mng_init(priv);
-				if (err) {
-					err = -err;
-					goto error;
-				}
+		}
+		if (priv->mtr_en) {
+			err = mlx5_aso_flow_mtrs_mng_init(priv->sh);
+			if (err) {
+				err = -err;
+				goto error;
 			}
 		}
 #endif
@@ -1321,6 +1325,19 @@ err_secondary:
 			DRV_LOG(DEBUG, "Flow Hit ASO is supported.");
 		}
 #endif /* HAVE_MLX5_DR_CREATE_ACTION_ASO */
+#if defined(HAVE_MLX5_DR_CREATE_ACTION_ASO) && \
+	defined(HAVE_MLX5_DR_ACTION_ASO_CT)
+		if (config->hca_attr.ct_offload &&
+		    priv->mtr_color_reg == REG_C_3) {
+			err = mlx5_flow_aso_ct_mng_init(sh);
+			if (err) {
+				err = -err;
+				goto error;
+			}
+			DRV_LOG(DEBUG, "CT ASO is supported.");
+			sh->ct_aso_en = 1;
+		}
+#endif /* HAVE_MLX5_DR_CREATE_ACTION_ASO && HAVE_MLX5_DR_ACTION_ASO_CT */
 #if defined(HAVE_MLX5DV_DR) && defined(HAVE_MLX5_DR_CREATE_ACTION_FLOW_SAMPLE)
 		if (config->hca_attr.log_max_ft_sampler_num > 0  &&
 		    config->dv_flow_en) {
@@ -1615,7 +1632,10 @@ err_secondary:
 		priv->obj_ops.txq_obj_new = mlx5_os_txq_obj_new;
 		priv->obj_ops.txq_obj_release = mlx5_os_txq_obj_release;
 		mlx5_queue_counter_id_prepare(eth_dev);
-
+		priv->obj_ops.lb_dummy_queue_create =
+					mlx5_rxq_ibv_obj_dummy_lb_create;
+		priv->obj_ops.lb_dummy_queue_release =
+					mlx5_rxq_ibv_obj_dummy_lb_release;
 	} else {
 		priv->obj_ops = ibv_obj_ops;
 	}
@@ -1862,11 +1882,14 @@ mlx5_device_bond_pci_match(const struct ibv_device *ibv_dev,
 				tmp_str);
 			break;
 		}
-		/* Match PCI address. */
+		/* Match PCI address, allows BDF0+pfx or BDFx+pfx. */
 		if (pci_dev->domain == pci_addr.domain &&
 		    pci_dev->bus == pci_addr.bus &&
 		    pci_dev->devid == pci_addr.devid &&
-		    pci_dev->function + owner == pci_addr.function)
+		    ((pci_dev->function == 0 &&
+		      pci_dev->function + owner == pci_addr.function) ||
+		     (pci_dev->function == owner &&
+		      pci_addr.function == owner)))
 			pf = info.port_name;
 		/* Get ifindex. */
 		snprintf(tmp_str, sizeof(tmp_str),
@@ -2682,8 +2705,8 @@ mlx5_os_read_dev_stat(struct mlx5_priv *priv, const char *ctr_name,
 	if (priv->sh) {
 		if (priv->q_counters != NULL &&
 		    strcmp(ctr_name, "out_of_buffer") == 0)
-			return mlx5_devx_cmd_queue_counter_query(priv->sh->ctx,
-							   0, (uint32_t *)stat);
+			return mlx5_devx_cmd_queue_counter_query
+					(priv->q_counters, 0, (uint32_t *)stat);
 		MKSTR(path, "%s/ports/%d/hw_counters/%s",
 		      priv->sh->ibdev_path,
 		      priv->dev_port,

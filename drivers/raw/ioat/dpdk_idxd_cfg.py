@@ -29,7 +29,7 @@ class SysfsDir:
                 f.write(str(contents))
 
 
-def configure_dsa(dsa_id, queues):
+def configure_dsa(dsa_id, queues, prefix):
     "Configure the DSA instance with appropriate number of queues"
     dsa_dir = SysfsDir(f"/sys/bus/dsa/devices/dsa{dsa_id}")
     drv_dir = SysfsDir("/sys/bus/dsa/drivers/dsa")
@@ -39,14 +39,14 @@ def configure_dsa(dsa_id, queues):
     max_queues = dsa_dir.read_int("max_work_queues")
     max_tokens = dsa_dir.read_int("max_tokens")
 
-    # we want one engine per group
-    nb_groups = min(max_engines, max_groups)
-    for grp in range(nb_groups):
-        dsa_dir.write_values({f"engine{dsa_id}.{grp}/group_id": grp})
-
     nb_queues = min(queues, max_queues)
     if queues > nb_queues:
         print(f"Setting number of queues to max supported value: {max_queues}")
+
+    # we want one engine per group, and no more engines than queues
+    nb_groups = min(max_engines, max_groups, nb_queues)
+    for grp in range(nb_groups):
+        dsa_dir.write_values({f"engine{dsa_id}.{grp}/group_id": grp})
 
     # configure each queue
     for q in range(nb_queues):
@@ -54,7 +54,7 @@ def configure_dsa(dsa_id, queues):
         wq_dir.write_values({"group_id": q % nb_groups,
                              "type": "user",
                              "mode": "dedicated",
-                             "name": f"dpdk_wq{dsa_id}.{q}",
+                             "name": f"{prefix}_wq{dsa_id}.{q}",
                              "priority": 1,
                              "size": int(max_tokens / nb_queues)})
 
@@ -71,8 +71,11 @@ def main(args):
     arg_p.add_argument('dsa_id', type=int, help="DSA instance number")
     arg_p.add_argument('-q', metavar='queues', type=int, default=255,
                        help="Number of queues to set up")
+    arg_p.add_argument('--name-prefix', metavar='prefix', dest='prefix',
+                       default="dpdk",
+                       help="Prefix for workqueue name to mark for DPDK use [default: 'dpdk']")
     parsed_args = arg_p.parse_args(args[1:])
-    configure_dsa(parsed_args.dsa_id, parsed_args.q)
+    configure_dsa(parsed_args.dsa_id, parsed_args.q, parsed_args.prefix)
 
 
 if __name__ == "__main__":

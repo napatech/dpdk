@@ -23,7 +23,6 @@
 #include "mlx5_compress_utils.h"
 
 #define MLX5_COMPRESS_DRIVER_NAME mlx5_compress
-#define MLX5_COMPRESS_LOG_NAME    pmd.compress.mlx5
 #define MLX5_COMPRESS_MAX_QPS 1024
 #define MLX5_COMP_MAX_WIN_SIZE_CONF 6u
 
@@ -647,34 +646,6 @@ mlx5_compress_dequeue_burst(void *queue_pair, struct rte_comp_op **ops,
 	return i;
 }
 
-static struct ibv_device *
-mlx5_compress_get_ib_device_match(struct rte_pci_addr *addr)
-{
-	int n;
-	struct ibv_device **ibv_list = mlx5_glue->get_device_list(&n);
-	struct ibv_device *ibv_match = NULL;
-
-	if (ibv_list == NULL) {
-		rte_errno = ENOSYS;
-		return NULL;
-	}
-	while (n-- > 0) {
-		struct rte_pci_addr paddr;
-
-		DRV_LOG(DEBUG, "Checking device \"%s\"..", ibv_list[n]->name);
-		if (mlx5_dev_to_pci_addr(ibv_list[n]->ibdev_path, &paddr) != 0)
-			continue;
-		if (rte_pci_addr_cmp(addr, &paddr) != 0)
-			continue;
-		ibv_match = ibv_list[n];
-		break;
-	}
-	if (ibv_match == NULL)
-		rte_errno = ENOENT;
-	mlx5_glue->free_device_list(ibv_list);
-	return ibv_match;
-}
-
 static void
 mlx5_compress_hw_global_release(struct mlx5_compress_priv *priv)
 {
@@ -774,7 +745,7 @@ mlx5_compress_pci_probe(struct rte_pci_driver *pci_drv,
 		rte_errno = ENOTSUP;
 		return -rte_errno;
 	}
-	ibv = mlx5_compress_get_ib_device_match(&pci_dev->addr);
+	ibv = mlx5_os_get_ibv_device(&pci_dev->addr);
 	if (ibv == NULL) {
 		DRV_LOG(ERR, "No matching IB device for PCI slot "
 			PCI_PRI_FMT ".", pci_dev->addr.domain,
@@ -901,7 +872,7 @@ RTE_INIT(rte_mlx5_compress_init)
 		mlx5_pci_driver_register(&mlx5_compress_driver);
 }
 
-RTE_LOG_REGISTER(mlx5_compress_logtype, MLX5_COMPRESS_LOG_NAME, NOTICE)
+RTE_LOG_REGISTER_DEFAULT(mlx5_compress_logtype, NOTICE)
 RTE_PMD_EXPORT_NAME(MLX5_COMPRESS_DRIVER_NAME, __COUNTER__);
 RTE_PMD_REGISTER_PCI_TABLE(MLX5_COMPRESS_DRIVER_NAME, mlx5_compress_pci_id_map);
 RTE_PMD_REGISTER_KMOD_DEP(MLX5_COMPRESS_DRIVER_NAME, "* ib_uverbs & mlx5_core & mlx5_ib");

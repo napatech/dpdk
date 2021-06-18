@@ -532,9 +532,11 @@ dpaa_fw_version_get(struct rte_eth_dev *dev __rte_unused,
 
 	ret = snprintf(fw_version, fw_size, "SVR:%x-fman-v%x",
 		       svr_ver, fman_ip_rev);
-	ret += 1; /* add the size of '\0' */
+	if (ret < 0)
+		return -EINVAL;
 
-	if (fw_size < (uint32_t)ret)
+	ret += 1; /* add the size of '\0' */
+	if (fw_size < (size_t)ret)
 		return ret;
 	else
 		return 0;
@@ -2309,4 +2311,4 @@ static struct rte_dpaa_driver rte_dpaa_pmd = {
 };
 
 RTE_PMD_REGISTER_DPAA(net_dpaa, rte_dpaa_pmd);
-RTE_LOG_REGISTER(dpaa_logtype_pmd, pmd.net.dpaa, NOTICE);
+RTE_LOG_REGISTER_DEFAULT(dpaa_logtype_pmd, NOTICE);

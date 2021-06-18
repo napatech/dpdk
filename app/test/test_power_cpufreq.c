@@ -39,14 +39,16 @@ test_power_caps(void)
 #define TEST_FREQ_ROUNDING_DELTA 50000
 #define TEST_ROUND_FREQ_TO_N_100000 100000
 
-#define TEST_POWER_SYSFILE_CUR_FREQ \
+#define TEST_POWER_SYSFILE_CPUINFO_FREQ \
 	"/sys/devices/system/cpu/cpu%u/cpufreq/cpuinfo_cur_freq"
+#define TEST_POWER_SYSFILE_SCALING_FREQ \
+	"/sys/devices/system/cpu/cpu%u/cpufreq/scaling_cur_freq"
 
 static uint32_t total_freq_num;
 static uint32_t freqs[TEST_POWER_FREQS_NUM_MAX];
 
 static int
-check_cur_freq(unsigned lcore_id, uint32_t idx)
+check_cur_freq(unsigned int lcore_id, uint32_t idx, bool turbo)
 {
 #define TEST_POWER_CONVERT_TO_DECIMAL 10
 #define MAX_LOOP 100
@@ -58,12 +60,19 @@ check_cur_freq(unsigned lcore_id, uint32_t idx)
 	int i;
 
 	if (snprintf(fullpath, sizeof(fullpath),
-		TEST_POWER_SYSFILE_CUR_FREQ, lcore_id) < 0) {
+		TEST_POWER_SYSFILE_SCALING_FREQ, lcore_id) < 0) {
 		return 0;
 	}
 	f = fopen(fullpath, "r");
 	if (f == NULL) {
-		return 0;
+		if (snprintf(fullpath, sizeof(fullpath),
+			TEST_POWER_SYSFILE_CPUINFO_FREQ, lcore_id) < 0) {
+			return 0;
+		}
+		f = fopen(fullpath, "r");
+		if (f == NULL) {
+			return 0;
+		}
 	}
 	for (i = 0; i < MAX_LOOP; i++) {
 		fflush(f);
@@ -81,7 +90,10 @@ check_cur_freq(unsigned lcore_id, uint32_t idx)
 					/ TEST_ROUND_FREQ_TO_N_100000;
 		freq_conv = freq_conv * TEST_ROUND_FREQ_TO_N_100000;
 
-		ret = (freqs[idx] == freq_conv ? 0 : -1);
+		if (turbo)
+			ret = (freqs[idx] <= freq_conv ? 0 : -1);
+		else
+			ret = (freqs[idx] == freq_conv ? 0 : -1);
 
 		if (ret == 0)
 			break;
@@ -174,7 +186,7 @@ check_power_get_freq(void)
 	}
 
 	/* Check the current frequency */
-	ret = check_cur_freq(TEST_POWER_LCORE_ID, count);
+	ret = check_cur_freq(TEST_POWER_LCORE_ID, count, false);
 	if (ret < 0)
 		return -1;
 
@@ -224,7 +236,7 @@ check_power_set_freq(void)
 	}
 
 	/* Check the current frequency */
-	ret = check_cur_freq(TEST_POWER_LCORE_ID, total_freq_num - 1);
+	ret = check_cur_freq(TEST_POWER_LCORE_ID, total_freq_num - 1, false);
 	if (ret < 0)
 		return -1;
 
@@ -236,6 +248,8 @@ static int
 check_power_freq_down(void)
 {
 	int ret;
+
+	rte_power_freq_enable_turbo(TEST_POWER_LCORE_ID);
 
 	/* test with an invalid lcore id */
 	ret = rte_power_freq_down(TEST_POWER_LCORE_INVALID);
@@ -260,7 +274,7 @@ check_power_freq_down(void)
 	}
 
 	/* Check the current frequency */
-	ret = check_cur_freq(TEST_POWER_LCORE_ID, total_freq_num - 1);
+	ret = check_cur_freq(TEST_POWER_LCORE_ID, total_freq_num - 1, false);
 	if (ret < 0)
 		return -1;
 
@@ -279,7 +293,7 @@ check_power_freq_down(void)
 	}
 
 	/* Check the current frequency */
-	ret = check_cur_freq(TEST_POWER_LCORE_ID, 1);
+	ret = check_cur_freq(TEST_POWER_LCORE_ID, 1, false);
 	if (ret < 0)
 		return -1;
 
@@ -315,7 +329,7 @@ check_power_freq_up(void)
 	}
 
 	/* Check the current frequency */
-	ret = check_cur_freq(TEST_POWER_LCORE_ID, total_freq_num - 2);
+	ret = check_cur_freq(TEST_POWER_LCORE_ID, total_freq_num - 2, false);
 	if (ret < 0)
 		return -1;
 
@@ -334,7 +348,7 @@ check_power_freq_up(void)
 	}
 
 	/* Check the current frequency */
-	ret = check_cur_freq(TEST_POWER_LCORE_ID, 0);
+	ret = check_cur_freq(TEST_POWER_LCORE_ID, 0, true);
 	if (ret < 0)
 		return -1;
 
@@ -362,7 +376,7 @@ check_power_freq_max(void)
 	}
 
 	/* Check the current frequency */
-	ret = check_cur_freq(TEST_POWER_LCORE_ID, 0);
+	ret = check_cur_freq(TEST_POWER_LCORE_ID, 0, true);
 	if (ret < 0)
 		return -1;
 
@@ -390,7 +404,7 @@ check_power_freq_min(void)
 	}
 
 	/* Check the current frequency */
-	ret = check_cur_freq(TEST_POWER_LCORE_ID, total_freq_num - 1);
+	ret = check_cur_freq(TEST_POWER_LCORE_ID, total_freq_num - 1, false);
 	if (ret < 0)
 		return -1;
 
@@ -422,9 +436,15 @@ check_power_turbo(void)
 				TEST_POWER_LCORE_ID);
 		return -1;
 	}
+	ret = rte_power_freq_max(TEST_POWER_LCORE_ID);
+	if (ret < 0) {
+		printf("Fail to scale up the freq to max on lcore %u\n",
+						TEST_POWER_LCORE_ID);
+		return -1;
+	}
 
 	/* Check the current frequency */
-	ret = check_cur_freq(TEST_POWER_LCORE_ID, 0);
+	ret = check_cur_freq(TEST_POWER_LCORE_ID, 0, true);
 	if (ret < 0)
 		return -1;
 
@@ -441,9 +461,15 @@ check_power_turbo(void)
 				TEST_POWER_LCORE_ID);
 		return -1;
 	}
+	ret = rte_power_freq_max(TEST_POWER_LCORE_ID);
+	if (ret < 0) {
+		printf("Fail to scale up the freq to max on lcore %u\n",
+						TEST_POWER_LCORE_ID);
+		return -1;
+	}
 
 	/* Check the current frequency */
-	ret = check_cur_freq(TEST_POWER_LCORE_ID, 1);
+	ret = check_cur_freq(TEST_POWER_LCORE_ID, 1, false);
 	if (ret < 0)
 		return -1;
 

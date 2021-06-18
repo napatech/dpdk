@@ -352,6 +352,20 @@ static const struct mlx5_indexed_pool_config mlx5_ipool_cfg[] = {
 		.free = mlx5_free,
 		.type = "mlx5_shared_action_rss",
 	},
+	[MLX5_IPOOL_MTR_POLICY] = {
+		/**
+		 * The ipool index should grow continually from small to big,
+		 * for policy idx, so not set grow_trunk to avoid policy index
+		 * not jump continually.
+		 */
+		.size = sizeof(struct mlx5_flow_meter_sub_policy),
+		.trunk_size = 64,
+		.need_lock = 1,
+		.release_mem_en = 1,
+		.malloc = mlx5_malloc,
+		.free = mlx5_free,
+		.type = "mlx5_meter_policy_ipool",
+	},
 };
 
 
@@ -571,27 +585,25 @@ mlx5_flow_counters_mng_close(struct mlx5_dev_ctx_shared *sh)
  *   Pointer to mlx5_dev_ctx_shared object to free
  */
 int
-mlx5_aso_flow_mtrs_mng_init(struct mlx5_priv *priv)
+mlx5_aso_flow_mtrs_mng_init(struct mlx5_dev_ctx_shared *sh)
 {
-	if (!priv->mtr_idx_tbl) {
-		priv->mtr_idx_tbl = mlx5_l3t_create(MLX5_L3T_TYPE_DWORD);
-		if (!priv->mtr_idx_tbl) {
-			DRV_LOG(ERR, "fail to create meter lookup table.");
-			rte_errno = ENOMEM;
-			return -ENOMEM;
-		}
-	}
-	if (!priv->sh->mtrmng) {
-		priv->sh->mtrmng = mlx5_malloc(MLX5_MEM_ZERO,
-			sizeof(*priv->sh->mtrmng),
+	if (!sh->mtrmng) {
+		sh->mtrmng = mlx5_malloc(MLX5_MEM_ZERO,
+			sizeof(*sh->mtrmng),
 			RTE_CACHE_LINE_SIZE, SOCKET_ID_ANY);
-		if (!priv->sh->mtrmng) {
-			DRV_LOG(ERR, "mlx5_aso_mtr_pools_mng allocation was failed.");
+		if (!sh->mtrmng) {
+			DRV_LOG(ERR,
+			"meter management allocation was failed.");
 			rte_errno = ENOMEM;
 			return -ENOMEM;
 		}
-		rte_spinlock_init(&priv->sh->mtrmng->mtrsl);
-		LIST_INIT(&priv->sh->mtrmng->meters);
+		if (sh->meter_aso_en) {
+			rte_spinlock_init(&sh->mtrmng->pools_mng.mtrsl);
+			LIST_INIT(&sh->mtrmng->pools_mng.meters);
+			sh->mtrmng->policy_idx_tbl =
+				mlx5_l3t_create(MLX5_L3T_TYPE_DWORD);
+		}
+		sh->mtrmng->def_policy_id = MLX5_INVALID_POLICY_ID;
 	}
 	return 0;
 }
@@ -607,31 +619,34 @@ static void
 mlx5_aso_flow_mtrs_mng_close(struct mlx5_dev_ctx_shared *sh)
 {
 	struct mlx5_aso_mtr_pool *mtr_pool;
-	struct mlx5_aso_mtr_pools_mng *mtrmng = sh->mtrmng;
+	struct mlx5_flow_mtr_mng *mtrmng = sh->mtrmng;
 	uint32_t idx;
 #ifdef HAVE_MLX5_DR_CREATE_ACTION_ASO
 	struct mlx5_aso_mtr *aso_mtr;
 	int i;
 #endif /* HAVE_MLX5_DR_CREATE_ACTION_ASO */
 
-	mlx5_aso_queue_uninit(sh, ASO_OPC_MOD_POLICER);
-	idx = mtrmng->n_valid;
-	while (idx--) {
-		mtr_pool = mtrmng->pools[idx];
+	if (sh->meter_aso_en) {
+		mlx5_aso_queue_uninit(sh, ASO_OPC_MOD_POLICER);
+		idx = mtrmng->pools_mng.n_valid;
+		while (idx--) {
+			mtr_pool = mtrmng->pools_mng.pools[idx];
 #ifdef HAVE_MLX5_DR_CREATE_ACTION_ASO
-		for (i = 0; i < MLX5_ASO_MTRS_PER_POOL; i++) {
-			aso_mtr = &mtr_pool->mtrs[i];
-			if (aso_mtr->fm.meter_action)
-				claim_zero(mlx5_glue->destroy_flow_action
-						(aso_mtr->fm.meter_action));
-		}
+			for (i = 0; i < MLX5_ASO_MTRS_PER_POOL; i++) {
+				aso_mtr = &mtr_pool->mtrs[i];
+				if (aso_mtr->fm.meter_action)
+					claim_zero
+					(mlx5_glue->destroy_flow_action
+					(aso_mtr->fm.meter_action));
+			}
 #endif /* HAVE_MLX5_DR_CREATE_ACTION_ASO */
-		claim_zero(mlx5_devx_cmd_destroy
+			claim_zero(mlx5_devx_cmd_destroy
 						(mtr_pool->devx_obj));
-		mtrmng->n_valid--;
-		mlx5_free(mtr_pool);
+			mtrmng->pools_mng.n_valid--;
+			mlx5_free(mtr_pool);
+		}
+		mlx5_free(sh->mtrmng->pools_mng.pools);
 	}
-	mlx5_free(sh->mtrmng->pools);
 	mlx5_free(sh->mtrmng);
 	sh->mtrmng = NULL;
 }
@@ -647,12 +662,104 @@ mlx5_age_event_prepare(struct mlx5_dev_ctx_shared *sh)
 		age_info = &sh->port[i].age_info;
 		if (!MLX5_AGE_GET(age_info, MLX5_AGE_EVENT_NEW))
 			continue;
-		if (MLX5_AGE_GET(age_info, MLX5_AGE_TRIGGER))
+		MLX5_AGE_UNSET(age_info, MLX5_AGE_EVENT_NEW);
+		if (MLX5_AGE_GET(age_info, MLX5_AGE_TRIGGER)) {
+			MLX5_AGE_UNSET(age_info, MLX5_AGE_TRIGGER);
 			rte_eth_dev_callback_process
 				(&rte_eth_devices[sh->port[i].devx_ih_port_id],
 				RTE_ETH_EVENT_FLOW_AGED, NULL);
-		age_info->flags = 0;
+		}
 	}
+}
+
+/*
+ * Initialize the ASO connection tracking structure.
+ *
+ * @param[in] sh
+ *   Pointer to mlx5_dev_ctx_shared object.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+int
+mlx5_flow_aso_ct_mng_init(struct mlx5_dev_ctx_shared *sh)
+{
+	int err;
+
+	if (sh->ct_mng)
+		return 0;
+	sh->ct_mng = mlx5_malloc(MLX5_MEM_ZERO, sizeof(*sh->ct_mng),
+				 RTE_CACHE_LINE_SIZE, SOCKET_ID_ANY);
+	if (!sh->ct_mng) {
+		DRV_LOG(ERR, "ASO CT management allocation failed.");
+		rte_errno = ENOMEM;
+		return -rte_errno;
+	}
+	err = mlx5_aso_queue_init(sh, ASO_OPC_MOD_CONNECTION_TRACKING);
+	if (err) {
+		mlx5_free(sh->ct_mng);
+		/* rte_errno should be extracted from the failure. */
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
+	rte_spinlock_init(&sh->ct_mng->ct_sl);
+	rte_rwlock_init(&sh->ct_mng->resize_rwl);
+	LIST_INIT(&sh->ct_mng->free_cts);
+	return 0;
+}
+
+/*
+ * Close and release all the resources of the
+ * ASO connection tracking management structure.
+ *
+ * @param[in] sh
+ *   Pointer to mlx5_dev_ctx_shared object to free.
+ */
+static void
+mlx5_flow_aso_ct_mng_close(struct mlx5_dev_ctx_shared *sh)
+{
+	struct mlx5_aso_ct_pools_mng *mng = sh->ct_mng;
+	struct mlx5_aso_ct_pool *ct_pool;
+	struct mlx5_aso_ct_action *ct;
+	uint32_t idx;
+	uint32_t val;
+	uint32_t cnt;
+	int i;
+
+	mlx5_aso_queue_uninit(sh, ASO_OPC_MOD_CONNECTION_TRACKING);
+	idx = mng->next;
+	while (idx--) {
+		cnt = 0;
+		ct_pool = mng->pools[idx];
+		for (i = 0; i < MLX5_ASO_CT_ACTIONS_PER_POOL; i++) {
+			ct = &ct_pool->actions[i];
+			val = __atomic_fetch_sub(&ct->refcnt, 1,
+						 __ATOMIC_RELAXED);
+			MLX5_ASSERT(val == 1);
+			if (val > 1)
+				cnt++;
+#ifdef HAVE_MLX5_DR_ACTION_ASO_CT
+			if (ct->dr_action_orig)
+				claim_zero(mlx5_glue->destroy_flow_action
+							(ct->dr_action_orig));
+			if (ct->dr_action_rply)
+				claim_zero(mlx5_glue->destroy_flow_action
+							(ct->dr_action_rply));
+#endif
+		}
+		claim_zero(mlx5_devx_cmd_destroy(ct_pool->devx_obj));
+		if (cnt) {
+			DRV_LOG(DEBUG, "%u ASO CT objects are being used in the pool %u",
+				cnt, i);
+		}
+		mlx5_free(ct_pool);
+		/* in case of failure. */
+		mng->next--;
+	}
+	mlx5_free(mng->pools);
+	mlx5_free(mng);
+	/* Management structure must be cleared to 0s during allocation. */
+	sh->ct_mng = NULL;
 }
 
 /**
@@ -660,7 +767,7 @@ mlx5_age_event_prepare(struct mlx5_dev_ctx_shared *sh)
  *
  * @param[in] sh
  *   Pointer to mlx5_dev_ctx_shared object.
- * @param[in] sh
+ * @param[in] config
  *   Pointer to user dev config.
  */
 static void
@@ -1348,6 +1455,7 @@ mlx5_proc_priv_init(struct rte_eth_dev *dev)
 	struct mlx5_proc_priv *ppriv;
 	size_t ppriv_size;
 
+	mlx5_proc_priv_uninit(dev);
 	/*
 	 * UAR register table follows the process private structure. BlueFlame
 	 * registers for Tx queues are stored in the table.
@@ -1457,6 +1565,8 @@ mlx5_dev_close(struct rte_eth_dev *dev)
 	if (priv->mreg_cp_tbl)
 		mlx5_hlist_destroy(priv->mreg_cp_tbl);
 	mlx5_mprq_free_mp(dev);
+	if (priv->sh->ct_mng)
+		mlx5_flow_aso_ct_mng_close(priv->sh);
 	mlx5_os_free_shared_dr(priv);
 	if (priv->rss_conf.rss_key != NULL)
 		mlx5_free(priv->rss_conf.rss_key);
@@ -1600,6 +1710,7 @@ const struct eth_dev_ops mlx5_dev_ops = {
 	.hairpin_queue_peer_update = mlx5_hairpin_queue_peer_update,
 	.hairpin_queue_peer_bind = mlx5_hairpin_queue_peer_bind,
 	.hairpin_queue_peer_unbind = mlx5_hairpin_queue_peer_unbind,
+	.get_monitor_addr = mlx5_get_monitor_addr,
 };
 
 /* Available operations from secondary process. */
@@ -1684,6 +1795,7 @@ const struct eth_dev_ops mlx5_dev_ops_isolate = {
 	.hairpin_queue_peer_update = mlx5_hairpin_queue_peer_update,
 	.hairpin_queue_peer_bind = mlx5_hairpin_queue_peer_bind,
 	.hairpin_queue_peer_unbind = mlx5_hairpin_queue_peer_unbind,
+	.get_monitor_addr = mlx5_get_monitor_addr,
 };
 
 /**
@@ -2331,7 +2443,7 @@ static struct mlx5_pci_driver mlx5_driver = {
 };
 
 /* Initialize driver log type. */
-RTE_LOG_REGISTER(mlx5_logtype, pmd.net.mlx5, NOTICE)
+RTE_LOG_REGISTER_DEFAULT(mlx5_logtype, NOTICE)
 
 /**
  * Driver initialization routine.

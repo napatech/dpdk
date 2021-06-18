@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2015-2020
+ * Copyright(c) 2015-2020 Beijing WangXun Technology Co., Ltd.
+ * Copyright(c) 2010-2017 Intel Corporation
  */
 
 #include <sys/queue.h>
@@ -240,11 +241,10 @@ cons_parse_ntuple_filter(const struct rte_flow_attr *attr,
 			return -rte_errno;
 		}
 		/* if the first item is MAC, the content should be NULL */
-		if ((item->spec || item->mask) &&
-			(memcmp(eth_spec, &eth_null,
-				sizeof(struct rte_flow_item_eth)) ||
-			 memcmp(eth_mask, &eth_null,
-				sizeof(struct rte_flow_item_eth)))) {
+		if ((item->spec && memcmp(eth_spec, &eth_null,
+					  sizeof(struct rte_flow_item_eth))) ||
+		    (item->mask && memcmp(eth_mask, &eth_null,
+					  sizeof(struct rte_flow_item_eth)))) {
 			rte_flow_error_set(error, EINVAL,
 				RTE_FLOW_ERROR_TYPE_ITEM,
 				item, "Not supported by ntuple filter");
@@ -272,11 +272,10 @@ cons_parse_ntuple_filter(const struct rte_flow_attr *attr,
 			return -rte_errno;
 		}
 		/* the content should be NULL */
-		if ((item->spec || item->mask) &&
-			(memcmp(vlan_spec, &vlan_null,
-				sizeof(struct rte_flow_item_vlan)) ||
-			 memcmp(vlan_mask, &vlan_null,
-				sizeof(struct rte_flow_item_vlan)))) {
+		if ((item->spec && memcmp(vlan_spec, &vlan_null,
+					  sizeof(struct rte_flow_item_vlan))) ||
+		    (item->mask && memcmp(vlan_mask, &vlan_null,
+					  sizeof(struct rte_flow_item_vlan)))) {
 			rte_flow_error_set(error, EINVAL,
 				RTE_FLOW_ERROR_TYPE_ITEM,
 				item, "Not supported by ntuple filter");
@@ -512,7 +511,7 @@ action:
 		memset(filter, 0, sizeof(struct rte_eth_ntuple_filter));
 		rte_flow_error_set(error, EINVAL,
 			RTE_FLOW_ERROR_TYPE_ACTION,
-			item, "Not supported action.");
+			act, "Not supported action.");
 		return -rte_errno;
 	}
 	filter->queue =
@@ -2537,7 +2536,7 @@ txgbe_parse_rss_filter(struct rte_eth_dev *dev,
 	/* check if the next not void item is END */
 	act = next_no_void_action(actions, act);
 	if (act->type != RTE_FLOW_ACTION_TYPE_END) {
-		memset(rss_conf, 0, sizeof(struct rte_eth_rss_conf));
+		memset(rss_conf, 0, sizeof(struct txgbe_rte_flow_rss_conf));
 		rte_flow_error_set(error, EINVAL,
 			RTE_FLOW_ERROR_TYPE_ACTION,
 			act, "Not supported action.");

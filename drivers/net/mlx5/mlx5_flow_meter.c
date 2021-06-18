@@ -38,6 +38,12 @@ mlx5_flow_meter_action_create(struct mlx5_priv *priv,
 	uint32_t cbs_cir = rte_be_to_cpu_32(srtcm->cbs_cir);
 	uint32_t ebs_eir = rte_be_to_cpu_32(srtcm->ebs_eir);
 	uint32_t val;
+	enum mlx5_meter_domain domain =
+		fm->transfer ? MLX5_MTR_DOMAIN_TRANSFER :
+			fm->egress ? MLX5_MTR_DOMAIN_EGRESS :
+				MLX5_MTR_DOMAIN_INGRESS;
+	struct mlx5_flow_meter_def_policy *def_policy =
+		priv->sh->mtrmng->def_policy[domain];
 
 	memset(fmp, 0, MLX5_ST_SZ_BYTES(flow_meter_parameters));
 	MLX5_SET(flow_meter_parameters, fmp, valid, 1);
@@ -57,10 +63,7 @@ mlx5_flow_meter_action_create(struct mlx5_priv *priv,
 	MLX5_SET(flow_meter_parameters, fmp, ebs_exponent, val);
 	val = (ebs_eir >> ASO_DSEG_EBS_MAN_OFFSET) & ASO_DSEG_MAN_MASK;
 	MLX5_SET(flow_meter_parameters, fmp, ebs_mantissa, val);
-	mtr_init.next_table =
-		fm->transfer ? fm->mfts->transfer.tbl->obj :
-			fm->egress ? fm->mfts->egress.tbl->obj :
-				fm->mfts->ingress.tbl->obj;
+	mtr_init.next_table = def_policy->sub_policy.tbl_rsc->obj;
 	mtr_init.reg_c_index = priv->mtr_color_reg - REG_C_0;
 	mtr_init.flow_meter_parameter = fmp;
 	mtr_init.flow_meter_parameter_sz =
@@ -141,13 +144,19 @@ mlx5_flow_meter_profile_validate(struct rte_eth_dev *dev,
 	if (profile->alg == RTE_MTR_SRTCM_RFC2697) {
 		if (priv->config.hca_attr.qos.flow_meter_old) {
 			/* Verify support for flow meter parameters. */
-			if (profile->srtcm_rfc2697.cir > 0 &&
-			    profile->srtcm_rfc2697.cir <= MLX5_SRTCM_CIR_MAX &&
-			    profile->srtcm_rfc2697.cbs > 0 &&
-			    profile->srtcm_rfc2697.cbs <= MLX5_SRTCM_CBS_MAX &&
-			    profile->srtcm_rfc2697.ebs <= MLX5_SRTCM_EBS_MAX)
-				return 0;
-			else
+			if (priv->sh->meter_aso_en && profile->packet_mode) {
+				if (profile->srtcm_rfc2697.cir > 0 &&
+					(profile->srtcm_rfc2697.cir <<
+					MLX5_MTRS_PPS_MAP_BPS_SHIFT)
+					<= MLX5_SRTCM_CIR_MAX &&
+					profile->srtcm_rfc2697.cbs > 0 &&
+					(profile->srtcm_rfc2697.cbs <<
+					MLX5_MTRS_PPS_MAP_BPS_SHIFT)
+					<= MLX5_SRTCM_CBS_MAX &&
+					(profile->srtcm_rfc2697.ebs <<
+					MLX5_MTRS_PPS_MAP_BPS_SHIFT)
+					<= MLX5_SRTCM_EBS_MAX)
+					return 0;
 				return -rte_mtr_error_set
 					     (error, ENOTSUP,
 					      RTE_MTR_ERROR_TYPE_MTR_PARAMS,
@@ -155,6 +164,22 @@ mlx5_flow_meter_profile_validate(struct rte_eth_dev *dev,
 					      profile->srtcm_rfc2697.ebs ?
 					      "Metering value ebs must be 0." :
 					      "Invalid metering parameters.");
+			}
+			if (profile->srtcm_rfc2697.cir > 0 &&
+				profile->srtcm_rfc2697.cir <=
+						MLX5_SRTCM_CIR_MAX &&
+				profile->srtcm_rfc2697.cbs > 0 &&
+				profile->srtcm_rfc2697.cbs <=
+						MLX5_SRTCM_CBS_MAX &&
+				profile->srtcm_rfc2697.ebs <=
+						MLX5_SRTCM_EBS_MAX)
+				return 0;
+			return -rte_mtr_error_set(error, ENOTSUP,
+					RTE_MTR_ERROR_TYPE_MTR_PARAMS,
+					NULL,
+					profile->srtcm_rfc2697.ebs ?
+					"Metering value ebs must be 0." :
+					"Invalid metering parameters.");
 		}
 	}
 	return -rte_mtr_error_set(error, ENOTSUP,
@@ -238,20 +263,36 @@ mlx5_flow_meter_xbs_man_exp_calc(uint64_t xbs, uint8_t *man, uint8_t *exp)
  */
 static int
 mlx5_flow_meter_param_fill(struct mlx5_flow_meter_profile *fmp,
-			  struct rte_mtr_error *error)
+			struct mlx5_priv *priv, struct rte_mtr_error *error)
 {
 	struct mlx5_flow_meter_srtcm_rfc2697_prm *srtcm = &fmp->srtcm_prm;
 	uint8_t man, exp;
 	uint32_t cbs_exp, cbs_man, cir_exp, cir_man;
 	uint32_t ebs_exp, ebs_man;
+	uint64_t cir, cbs, ebs;
 
 	if (fmp->profile.alg != RTE_MTR_SRTCM_RFC2697)
 		return -rte_mtr_error_set(error, ENOTSUP,
 				RTE_MTR_ERROR_TYPE_METER_PROFILE,
 				NULL, "Metering algorithm not supported.");
+	if (!priv->sh->meter_aso_en && fmp->profile.packet_mode)
+		return -rte_mtr_error_set(error, ENOTSUP,
+			RTE_MTR_ERROR_TYPE_METER_PROFILE,
+			NULL, "Metering algorithm packet mode not supported.");
+	if (priv->sh->meter_aso_en && fmp->profile.packet_mode) {
+		cir = fmp->profile.srtcm_rfc2697.cir <<
+				MLX5_MTRS_PPS_MAP_BPS_SHIFT;
+		cbs = fmp->profile.srtcm_rfc2697.cbs <<
+				MLX5_MTRS_PPS_MAP_BPS_SHIFT;
+		ebs = fmp->profile.srtcm_rfc2697.ebs <<
+				MLX5_MTRS_PPS_MAP_BPS_SHIFT;
+	} else {
+		cir = fmp->profile.srtcm_rfc2697.cir;
+		cbs = fmp->profile.srtcm_rfc2697.cbs;
+		ebs = fmp->profile.srtcm_rfc2697.ebs;
+	}
 	/* cir = 8G * cir_mantissa * 1/(2^cir_exponent)) Bytes/Sec */
-	mlx5_flow_meter_cir_man_exp_calc(fmp->profile.srtcm_rfc2697.cir,
-				    &man, &exp);
+	mlx5_flow_meter_cir_man_exp_calc(cir, &man, &exp);
 	/* Check if cir mantissa is too large. */
 	if (exp > ASO_DSEG_CIR_EXP_MASK)
 		return -rte_mtr_error_set(error, ENOTSUP,
@@ -261,8 +302,7 @@ mlx5_flow_meter_param_fill(struct mlx5_flow_meter_profile *fmp,
 	cir_man = man;
 	cir_exp = exp;
 	 /* cbs = cbs_mantissa * 2^cbs_exponent */
-	mlx5_flow_meter_xbs_man_exp_calc(fmp->profile.srtcm_rfc2697.cbs,
-				    &man, &exp);
+	mlx5_flow_meter_xbs_man_exp_calc(cbs, &man, &exp);
 	/* Check if cbs mantissa is too large. */
 	if (exp > ASO_DSEG_EXP_MASK)
 		return -rte_mtr_error_set(error, ENOTSUP,
@@ -275,8 +315,7 @@ mlx5_flow_meter_param_fill(struct mlx5_flow_meter_profile *fmp,
 				cbs_man << ASO_DSEG_CBS_MAN_OFFSET |
 				cir_exp << ASO_DSEG_CIR_EXP_OFFSET |
 				cir_man);
-	mlx5_flow_meter_xbs_man_exp_calc(fmp->profile.srtcm_rfc2697.ebs,
-				    &man, &exp);
+	mlx5_flow_meter_xbs_man_exp_calc(ebs, &man, &exp);
 	/* Check if ebs mantissa is too large. */
 	if (exp > ASO_DSEG_EXP_MASK)
 		return -rte_mtr_error_set(error, ENOTSUP,
@@ -316,11 +355,15 @@ mlx5_flow_mtr_cap_get(struct rte_eth_dev *dev,
 					  RTE_MTR_ERROR_TYPE_UNSPECIFIED, NULL,
 					  "Meter is not supported");
 	memset(cap, 0, sizeof(*cap));
-	if (priv->sh->meter_aso_en)
-	    /* 2 meters per one ASO cache line. */
+	if (priv->sh->meter_aso_en) {
+		/* 2 meters per one ASO cache line. */
 		cap->n_max = 1 << (qattr->log_max_num_meter_aso + 1);
-	else
+		cap->srtcm_rfc2697_packet_mode_supported = 1;
+	} else {
 		cap->n_max = 1 << qattr->log_max_flow_meter;
+		cap->srtcm_rfc2697_packet_mode_supported = 0;
+	}
+	cap->srtcm_rfc2697_byte_mode_supported = 1;
 	cap->n_shared_max = cap->n_max;
 	cap->identical = 1;
 	cap->shared_identical = 1;
@@ -381,7 +424,7 @@ mlx5_flow_meter_profile_add(struct rte_eth_dev *dev,
 	fmp->id = meter_profile_id;
 	fmp->profile = *profile;
 	/* Fill the flow meter parameters for the PRM. */
-	ret = mlx5_flow_meter_param_fill(fmp, error);
+	ret = mlx5_flow_meter_param_fill(fmp, priv, error);
 	if (ret)
 		goto error;
 	/* Add to list. */
@@ -432,6 +475,400 @@ mlx5_flow_meter_profile_delete(struct rte_eth_dev *dev,
 	/* Remove from list. */
 	TAILQ_REMOVE(&priv->flow_meter_profiles, fmp, next);
 	mlx5_free(fmp);
+	return 0;
+}
+
+/**
+ * Find policy by id.
+ *
+ * @param[in] dev
+ *   Pointer to Ethernet device.
+ * @param policy_id
+ *   Policy id.
+ *
+ * @return
+ *   Pointer to the policy found on success, NULL otherwise.
+ */
+struct mlx5_flow_meter_policy *
+mlx5_flow_meter_policy_find(struct rte_eth_dev *dev,
+			    uint32_t policy_id,
+			    uint32_t *policy_idx)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_flow_meter_sub_policy *sub_policy = NULL;
+	union mlx5_l3t_data data;
+
+	if (policy_id > MLX5_MAX_SUB_POLICY_TBL_NUM ||
+		!priv->sh->mtrmng->policy_idx_tbl)
+		return NULL;
+	if (mlx5_l3t_get_entry(priv->sh->mtrmng->policy_idx_tbl,
+				policy_id, &data) ||
+				!data.dword)
+		return NULL;
+	if (policy_idx)
+		*policy_idx = data.dword;
+	sub_policy = mlx5_ipool_get(priv->sh->ipool[MLX5_IPOOL_MTR_POLICY],
+					data.dword);
+	/* Remove reference taken by the mlx5_l3t_get_entry. */
+	mlx5_l3t_clear_entry(priv->sh->mtrmng->policy_idx_tbl,
+				policy_id);
+	if (sub_policy)
+		if (sub_policy->main_policy_id)
+			return sub_policy->main_policy;
+	return NULL;
+}
+
+/**
+ * Callback to check MTR policy action validate
+ *
+ * @param[in] dev
+ *   Pointer to Ethernet device.
+ * @param[in] actions
+ *   Pointer to meter policy action detail.
+ * @param[out] error
+ *   Pointer to the error structure.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+static int
+mlx5_flow_meter_policy_validate(struct rte_eth_dev *dev,
+	struct rte_mtr_meter_policy_params *policy,
+	struct rte_mtr_error *error)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct rte_flow_attr attr = { .transfer =
+			priv->config.dv_esw_en ? 1 : 0};
+	bool is_rss = false;
+	bool is_def_policy = false;
+	uint8_t domain_bitmap;
+	int ret;
+
+	if (!priv->mtr_en || !priv->sh->meter_aso_en)
+		return -rte_mtr_error_set(error, ENOTSUP,
+				RTE_MTR_ERROR_TYPE_METER_POLICY,
+				NULL, "meter policy unsupported.");
+	ret = mlx5_flow_validate_mtr_acts(dev, policy->actions, &attr,
+			&is_rss, &domain_bitmap, &is_def_policy, error);
+	if (ret)
+		return ret;
+	return 0;
+}
+
+static int
+__mlx5_flow_meter_policy_delete(struct rte_eth_dev *dev,
+			uint32_t policy_id,
+			struct mlx5_flow_meter_policy *mtr_policy,
+			struct rte_mtr_error *error)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_flow_meter_sub_policy *sub_policy;
+	uint32_t i, j;
+	uint16_t sub_policy_num;
+
+	rte_spinlock_lock(&mtr_policy->sl);
+	if (mtr_policy->ref_cnt) {
+		rte_spinlock_unlock(&mtr_policy->sl);
+		return -rte_mtr_error_set(error, EBUSY,
+				RTE_MTR_ERROR_TYPE_METER_POLICY_ID,
+				 NULL,
+				"Meter policy object is being used.");
+	}
+	mlx5_flow_destroy_policy_rules(dev, mtr_policy);
+	mlx5_flow_destroy_mtr_acts(dev, mtr_policy);
+	for (i = 0; i < MLX5_MTR_DOMAIN_MAX; i++) {
+		sub_policy_num = (mtr_policy->sub_policy_num >>
+			(MLX5_MTR_SUB_POLICY_NUM_SHIFT * i)) &
+			MLX5_MTR_SUB_POLICY_NUM_MASK;
+		if (sub_policy_num) {
+			for (j = 0; j < sub_policy_num; j++) {
+				sub_policy = mtr_policy->sub_policys[i][j];
+				if (sub_policy)
+					mlx5_ipool_free
+					(priv->sh->ipool[MLX5_IPOOL_MTR_POLICY],
+					sub_policy->idx);
+			}
+		}
+	}
+	if (priv->sh->mtrmng->policy_idx_tbl) {
+		if (mlx5_l3t_clear_entry(priv->sh->mtrmng->policy_idx_tbl,
+					policy_id)) {
+			rte_spinlock_unlock(&mtr_policy->sl);
+			return -rte_mtr_error_set(error, ENOTSUP,
+				RTE_MTR_ERROR_TYPE_METER_POLICY_ID, NULL,
+				"Fail to delete policy in index table.");
+		}
+	}
+	rte_spinlock_unlock(&mtr_policy->sl);
+	return 0;
+}
+
+/**
+ * Callback to add MTR policy.
+ *
+ * @param[in] dev
+ *   Pointer to Ethernet device.
+ * @param[out] policy_id
+ *   Pointer to policy id
+ * @param[in] actions
+ *   Pointer to meter policy action detail.
+ * @param[out] error
+ *   Pointer to the error structure.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+static int
+mlx5_flow_meter_policy_add(struct rte_eth_dev *dev,
+			uint32_t policy_id,
+			struct rte_mtr_meter_policy_params *policy,
+			struct rte_mtr_error *error)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct rte_flow_attr attr = { .transfer =
+			priv->config.dv_esw_en ? 1 : 0};
+	uint32_t sub_policy_idx = 0;
+	uint32_t policy_idx = 0;
+	struct mlx5_flow_meter_policy *mtr_policy = NULL;
+	struct mlx5_flow_meter_sub_policy *sub_policy;
+	bool is_rss = false;
+	bool is_def_policy = false;
+	uint32_t i;
+	int ret;
+	uint32_t policy_size = sizeof(struct mlx5_flow_meter_policy);
+	uint16_t sub_policy_num;
+	uint8_t domain_bitmap = 0;
+	union mlx5_l3t_data data;
+
+	if (!priv->mtr_en)
+		return -rte_mtr_error_set(error, ENOTSUP,
+					  RTE_MTR_ERROR_TYPE_METER_POLICY,
+					  NULL, "meter policy unsupported.");
+	if (policy_id == MLX5_INVALID_POLICY_ID)
+		return -rte_mtr_error_set(error, ENOTSUP,
+			RTE_MTR_ERROR_TYPE_METER_POLICY_ID, NULL,
+			"policy ID is invalid. ");
+	if (policy_id == priv->sh->mtrmng->def_policy_id)
+		return -rte_mtr_error_set(error, EEXIST,
+			RTE_MTR_ERROR_TYPE_METER_POLICY_ID, NULL,
+			"policy ID exists. ");
+	mtr_policy = mlx5_flow_meter_policy_find(dev, policy_id,
+				&policy_idx);
+	if (mtr_policy)
+		return -rte_mtr_error_set(error, EEXIST,
+			RTE_MTR_ERROR_TYPE_METER_POLICY_ID, NULL,
+			"policy ID exists. ");
+	ret = mlx5_flow_validate_mtr_acts(dev, policy->actions, &attr,
+			&is_rss, &domain_bitmap, &is_def_policy, error);
+	if (ret)
+		return ret;
+	if (!domain_bitmap)
+		return -rte_mtr_error_set(error, ENOTSUP,
+				RTE_MTR_ERROR_TYPE_METER_POLICY,
+				NULL, "fail to find policy domain.");
+	if (is_def_policy) {
+		if (priv->sh->mtrmng->def_policy_id != MLX5_INVALID_POLICY_ID)
+			return -rte_mtr_error_set(error, EEXIST,
+				RTE_MTR_ERROR_TYPE_METER_POLICY_ID,
+				NULL, "a policy with similar actions "
+				"is already configured");
+		if (mlx5_flow_create_def_policy(dev))
+			return -rte_mtr_error_set(error, ENOTSUP,
+				RTE_MTR_ERROR_TYPE_METER_POLICY,
+				NULL,
+				"fail to create non-terminated policy.");
+		priv->sh->mtrmng->def_policy_id = policy_id;
+		return 0;
+	}
+	if (!priv->sh->meter_aso_en)
+		return -rte_mtr_error_set(error, ENOTSUP,
+			RTE_MTR_ERROR_TYPE_METER_POLICY, NULL,
+			"no ASO capability to support the policy ");
+	for (i = 0; i < MLX5_MTR_DOMAIN_MAX; i++) {
+		if (!(domain_bitmap & (1 << i)))
+			continue;
+		if (is_rss) {
+			policy_size +=
+			sizeof(struct mlx5_flow_meter_sub_policy *) *
+			MLX5_MTR_RSS_MAX_SUB_POLICY;
+			break;
+		}
+		policy_size += sizeof(struct mlx5_flow_meter_sub_policy *);
+	}
+	mtr_policy = mlx5_malloc(MLX5_MEM_ZERO, policy_size,
+			 RTE_CACHE_LINE_SIZE, SOCKET_ID_ANY);
+	if (!mtr_policy)
+		return -rte_mtr_error_set(error, ENOMEM,
+				RTE_MTR_ERROR_TYPE_METER_POLICY, NULL,
+				"Memory alloc failed for meter policy.");
+	policy_size = sizeof(struct mlx5_flow_meter_policy);
+	for (i = 0; i < MLX5_MTR_DOMAIN_MAX; i++) {
+		if (!(domain_bitmap & (1 << i)))
+			continue;
+		if (i == MLX5_MTR_DOMAIN_INGRESS)
+			mtr_policy->ingress = 1;
+		if (i == MLX5_MTR_DOMAIN_EGRESS)
+			mtr_policy->egress = 1;
+		if (i == MLX5_MTR_DOMAIN_TRANSFER)
+			mtr_policy->transfer = 1;
+		sub_policy = mlx5_ipool_zmalloc
+				(priv->sh->ipool[MLX5_IPOOL_MTR_POLICY],
+				&sub_policy_idx);
+		if (!sub_policy)
+			goto policy_add_err;
+		if (sub_policy_idx > MLX5_MAX_SUB_POLICY_TBL_NUM)
+			goto policy_add_err;
+		sub_policy->idx = sub_policy_idx;
+		sub_policy->main_policy = mtr_policy;
+		if (!policy_idx) {
+			policy_idx = sub_policy_idx;
+			sub_policy->main_policy_id = 1;
+		}
+		mtr_policy->sub_policys[i] =
+		(struct mlx5_flow_meter_sub_policy **)
+			((uint8_t *)mtr_policy + policy_size);
+		mtr_policy->sub_policys[i][0] = sub_policy;
+		sub_policy_num = (mtr_policy->sub_policy_num >>
+			(MLX5_MTR_SUB_POLICY_NUM_SHIFT * i)) &
+			MLX5_MTR_SUB_POLICY_NUM_MASK;
+		sub_policy_num++;
+		mtr_policy->sub_policy_num &= ~(MLX5_MTR_SUB_POLICY_NUM_MASK <<
+			(MLX5_MTR_SUB_POLICY_NUM_SHIFT * i));
+		mtr_policy->sub_policy_num |=
+			(sub_policy_num & MLX5_MTR_SUB_POLICY_NUM_MASK) <<
+			(MLX5_MTR_SUB_POLICY_NUM_SHIFT * i);
+		if (is_rss) {
+			mtr_policy->is_rss = 1;
+			break;
+		}
+		policy_size += sizeof(struct mlx5_flow_meter_sub_policy  *);
+	}
+	rte_spinlock_init(&mtr_policy->sl);
+	ret = mlx5_flow_create_mtr_acts(dev, mtr_policy,
+					policy->actions, error);
+	if (ret)
+		goto policy_add_err;
+	if (!is_rss && !mtr_policy->is_queue) {
+		/* Create policy rules in HW. */
+		ret = mlx5_flow_create_policy_rules(dev, mtr_policy);
+		if (ret)
+			goto policy_add_err;
+	}
+	data.dword = policy_idx;
+	if (!priv->sh->mtrmng->policy_idx_tbl) {
+		priv->sh->mtrmng->policy_idx_tbl =
+				mlx5_l3t_create(MLX5_L3T_TYPE_DWORD);
+		if (!priv->sh->mtrmng->policy_idx_tbl)
+			goto policy_add_err;
+	}
+	if (mlx5_l3t_set_entry(priv->sh->mtrmng->policy_idx_tbl,
+				policy_id, &data))
+		goto policy_add_err;
+	return 0;
+policy_add_err:
+	if (mtr_policy) {
+		ret = __mlx5_flow_meter_policy_delete(dev, policy_id,
+			mtr_policy, error);
+		mlx5_free(mtr_policy);
+		if (ret)
+			return ret;
+	}
+	return -rte_mtr_error_set(error, ENOTSUP,
+				  RTE_MTR_ERROR_TYPE_UNSPECIFIED,
+				  NULL, "Failed to create devx policy.");
+}
+
+/**
+ * Callback to delete MTR policy.
+ *
+ * @param[in] dev
+ *   Pointer to Ethernet device.
+ * @param[in] policy_id
+ *   Meter policy id.
+ * @param[out] error
+ *   Pointer to the error structure.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+static int
+mlx5_flow_meter_policy_delete(struct rte_eth_dev *dev,
+			  uint32_t policy_id,
+			  struct rte_mtr_error *error)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_flow_meter_policy *mtr_policy;
+	uint32_t policy_idx;
+	int ret;
+
+	if (policy_id == priv->sh->mtrmng->def_policy_id) {
+		if (priv->sh->mtrmng->def_policy_ref_cnt > 0)
+			return -rte_mtr_error_set(error, ENOTSUP,
+				RTE_MTR_ERROR_TYPE_METER_POLICY_ID, NULL,
+				"Meter policy object is being used.");
+		priv->sh->mtrmng->def_policy_id = MLX5_INVALID_POLICY_ID;
+		return 0;
+	}
+	mtr_policy = mlx5_flow_meter_policy_find(dev, policy_id, &policy_idx);
+	if (!mtr_policy)
+		return -rte_mtr_error_set(error, ENOTSUP,
+			RTE_MTR_ERROR_TYPE_METER_POLICY_ID, NULL,
+			"Meter policy id is invalid. ");
+	ret = __mlx5_flow_meter_policy_delete(dev, policy_id, mtr_policy,
+						error);
+	if (ret)
+		return ret;
+	mlx5_free(mtr_policy);
+	return 0;
+}
+
+/**
+ * Check meter validation.
+ *
+ * @param[in] priv
+ *   Pointer to mlx5 private data structure.
+ * @param[in] meter_id
+ *   Meter id.
+ * @param[in] params
+ *   Pointer to rte meter parameters.
+ * @param[out] error
+ *   Pointer to rte meter error structure.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+static int
+mlx5_flow_meter_validate(struct mlx5_priv *priv, uint32_t meter_id,
+			 struct rte_mtr_params *params,
+			 struct rte_mtr_error *error)
+{
+	/* Meter must use global drop action. */
+	if (!priv->sh->dr_drop_action)
+		return -rte_mtr_error_set(error, ENOTSUP,
+					  RTE_MTR_ERROR_TYPE_MTR_PARAMS,
+					  NULL,
+					  "No drop action ready for meter.");
+	/* Meter params must not be NULL. */
+	if (params == NULL)
+		return -rte_mtr_error_set(error, EINVAL,
+					  RTE_MTR_ERROR_TYPE_MTR_PARAMS,
+					  NULL, "Meter object params null.");
+	/* Previous meter color is not supported. */
+	if (params->use_prev_mtr_color)
+		return -rte_mtr_error_set(error, ENOTSUP,
+					  RTE_MTR_ERROR_TYPE_MTR_PARAMS,
+					  NULL,
+					  "Previous meter color "
+					  "not supported.");
+	if (params->meter_policy_id == MLX5_INVALID_POLICY_ID)
+		return -rte_mtr_error_set(error, ENOENT,
+				RTE_MTR_ERROR_TYPE_METER_POLICY_ID,
+				NULL, "Meter policy id not valid.");
+	/* Validate meter id. */
+	if (mlx5_flow_meter_find(priv, meter_id, NULL))
+		return -rte_mtr_error_set(error, EEXIST,
+			RTE_MTR_ERROR_TYPE_MTR_ID, NULL,
+			"Meter object already exists.");
 	return 0;
 }
 
@@ -540,13 +977,195 @@ mlx5_flow_meter_action_modify(struct mlx5_priv *priv,
 #endif
 }
 
-static void
-mlx5_flow_meter_stats_enable_update(struct mlx5_flow_meter_info *fm,
+static int
+mlx5_flow_meter_stats_enable_update(struct rte_eth_dev *dev,
+				struct mlx5_flow_meter_info *fm,
 				uint64_t stats_mask)
 {
 	fm->bytes_dropped =
 		(stats_mask & RTE_MTR_STATS_N_BYTES_DROPPED) ? 1 : 0;
 	fm->pkts_dropped = (stats_mask & RTE_MTR_STATS_N_PKTS_DROPPED) ? 1 : 0;
+	if (fm->bytes_dropped || fm->pkts_dropped) {
+		if (!fm->drop_cnt) {
+			/* Alloc policer counters. */
+			fm->drop_cnt = mlx5_counter_alloc(dev);
+			if (!fm->drop_cnt)
+				return -1;
+		}
+	} else {
+		if (fm->drop_cnt) {
+			mlx5_counter_free(dev, fm->drop_cnt);
+			fm->drop_cnt = 0;
+		}
+	}
+	return 0;
+}
+
+/**
+ * Create meter rules.
+ *
+ * @param[in] dev
+ *   Pointer to Ethernet device.
+ * @param[in] meter_id
+ *   Meter id.
+ * @param[in] params
+ *   Pointer to rte meter parameters.
+ * @param[in] shared
+ *   Meter shared with other flow or not.
+ * @param[out] error
+ *   Pointer to rte meter error structure.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+static int
+mlx5_flow_meter_create(struct rte_eth_dev *dev, uint32_t meter_id,
+		       struct rte_mtr_params *params, int shared,
+		       struct rte_mtr_error *error)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_legacy_flow_meters *fms = &priv->flow_meters;
+	struct mlx5_flow_meter_profile *fmp;
+	struct mlx5_flow_meter_info *fm;
+	struct mlx5_legacy_flow_meter *legacy_fm;
+	struct mlx5_flow_meter_policy *mtr_policy = NULL;
+	struct mlx5_indexed_pool_config flow_ipool_cfg = {
+		.size = 0,
+		.trunk_size = 64,
+		.need_lock = 1,
+		.type = "mlx5_flow_mtr_flow_id_pool",
+	};
+	struct mlx5_aso_mtr *aso_mtr;
+	uint32_t mtr_idx, policy_idx;
+	union mlx5_l3t_data data;
+	int ret;
+	uint8_t domain_bitmap;
+	uint8_t mtr_id_bits;
+	uint8_t mtr_reg_bits = priv->mtr_reg_share ?
+				MLX5_MTR_IDLE_BITS_IN_COLOR_REG : MLX5_REG_BITS;
+
+	if (!priv->mtr_en)
+		return -rte_mtr_error_set(error, ENOTSUP,
+					RTE_MTR_ERROR_TYPE_UNSPECIFIED, NULL,
+					"Meter is not supported");
+	/* Validate the parameters. */
+	ret = mlx5_flow_meter_validate(priv, meter_id, params, error);
+	if (ret)
+		return ret;
+	/* Meter profile must exist. */
+	fmp = mlx5_flow_meter_profile_find(priv, params->meter_profile_id);
+	if (fmp == NULL)
+		return -rte_mtr_error_set(error, ENOENT,
+			RTE_MTR_ERROR_TYPE_METER_PROFILE_ID,
+			NULL, "Meter profile id not valid.");
+	/* Meter policy must exist. */
+	if (params->meter_policy_id == priv->sh->mtrmng->def_policy_id) {
+		__atomic_add_fetch
+			(&priv->sh->mtrmng->def_policy_ref_cnt,
+			1, __ATOMIC_RELAXED);
+		domain_bitmap = MLX5_MTR_ALL_DOMAIN_BIT;
+		if (!priv->config.dv_esw_en)
+			domain_bitmap &= ~MLX5_MTR_DOMAIN_TRANSFER_BIT;
+	} else {
+		mtr_policy = mlx5_flow_meter_policy_find(dev,
+				params->meter_policy_id, &policy_idx);
+		if (!priv->sh->meter_aso_en)
+			return -rte_mtr_error_set(error, ENOTSUP,
+				RTE_MTR_ERROR_TYPE_UNSPECIFIED, NULL,
+				"Part of the policies cannot be "
+				"supported without ASO ");
+		if (!mtr_policy)
+			return -rte_mtr_error_set(error, ENOENT,
+				RTE_MTR_ERROR_TYPE_METER_POLICY_ID,
+				NULL, "Meter policy id not valid.");
+		domain_bitmap = (mtr_policy->ingress ?
+					MLX5_MTR_DOMAIN_INGRESS_BIT : 0) |
+				(mtr_policy->egress ?
+					MLX5_MTR_DOMAIN_EGRESS_BIT : 0) |
+				(mtr_policy->transfer ?
+					MLX5_MTR_DOMAIN_TRANSFER_BIT : 0);
+	}
+	/* Allocate the flow meter memory. */
+	if (priv->sh->meter_aso_en) {
+		mtr_idx = mlx5_flow_mtr_alloc(dev);
+		if (!mtr_idx)
+			return -rte_mtr_error_set(error, ENOMEM,
+				RTE_MTR_ERROR_TYPE_UNSPECIFIED, NULL,
+				"Memory alloc failed for meter.");
+		aso_mtr = mlx5_aso_meter_by_idx(priv, mtr_idx);
+		fm = &aso_mtr->fm;
+	} else {
+		legacy_fm = mlx5_ipool_zmalloc
+				(priv->sh->ipool[MLX5_IPOOL_MTR], &mtr_idx);
+		if (legacy_fm == NULL)
+			return -rte_mtr_error_set(error, ENOMEM,
+				RTE_MTR_ERROR_TYPE_UNSPECIFIED, NULL,
+				"Memory alloc failed for meter.");
+		legacy_fm->idx = mtr_idx;
+		fm = &legacy_fm->fm;
+	}
+	mtr_id_bits = MLX5_REG_BITS - __builtin_clz(mtr_idx);
+	if ((mtr_id_bits + priv->sh->mtrmng->max_mtr_flow_bits) >
+	    mtr_reg_bits) {
+		DRV_LOG(ERR, "Meter number exceeds max limit.");
+		goto error;
+	}
+	if (mtr_id_bits > priv->sh->mtrmng->max_mtr_bits)
+		priv->sh->mtrmng->max_mtr_bits = mtr_id_bits;
+	/* Fill the flow meter parameters. */
+	fm->meter_id = meter_id;
+	fm->policy_id = params->meter_policy_id;
+	fm->profile = fmp;
+	if (mlx5_flow_meter_stats_enable_update(dev, fm, params->stats_mask))
+		goto error;
+	if (mlx5_flow_create_mtr_tbls(dev, fm, mtr_idx, domain_bitmap))
+		goto error;
+	/* Add to the flow meter list. */
+	if (!priv->sh->meter_aso_en)
+		TAILQ_INSERT_TAIL(fms, legacy_fm, next);
+	/* Add to the flow meter list. */
+	fm->active_state = 1; /* Config meter starts as active. */
+	fm->is_enable = 1;
+	fm->shared = !!shared;
+	__atomic_add_fetch(&fm->profile->ref_cnt, 1, __ATOMIC_RELAXED);
+	if (params->meter_policy_id == priv->sh->mtrmng->def_policy_id) {
+		fm->def_policy = 1;
+		fm->flow_ipool = mlx5_ipool_create(&flow_ipool_cfg);
+		if (!fm->flow_ipool)
+			goto error;
+	}
+	rte_spinlock_init(&fm->sl);
+	/* If ASO meter supported, update ASO flow meter by wqe. */
+	if (priv->sh->meter_aso_en) {
+		aso_mtr = container_of(fm, struct mlx5_aso_mtr, fm);
+		ret = mlx5_aso_meter_update_by_wqe(priv->sh, aso_mtr);
+		if (ret)
+			goto error;
+		if (!priv->mtr_idx_tbl) {
+			priv->mtr_idx_tbl =
+				mlx5_l3t_create(MLX5_L3T_TYPE_DWORD);
+			if (!priv->mtr_idx_tbl)
+				goto error;
+		}
+		data.dword = mtr_idx;
+		if (mlx5_l3t_set_entry(priv->mtr_idx_tbl, meter_id, &data))
+			goto error;
+	}
+	if (mtr_policy)
+		__atomic_add_fetch(&mtr_policy->ref_cnt, 1, __ATOMIC_RELAXED);
+	return 0;
+error:
+	mlx5_flow_destroy_mtr_tbls(dev, fm);
+	/* Free policer counters. */
+	if (fm->drop_cnt)
+		mlx5_counter_free(dev, fm->drop_cnt);
+	if (priv->sh->meter_aso_en)
+		mlx5_flow_mtr_free(dev, mtr_idx);
+	else
+		mlx5_ipool_free(priv->sh->ipool[MLX5_IPOOL_MTR], mtr_idx);
+	return -rte_mtr_error_set(error, ENOTSUP,
+		RTE_MTR_ERROR_TYPE_UNSPECIFIED,
+		NULL, "Failed to create devx meter.");
 }
 
 static int
@@ -558,6 +1177,7 @@ mlx5_flow_meter_params_flush(struct rte_eth_dev *dev,
 	struct mlx5_legacy_flow_meters *fms = &priv->flow_meters;
 	struct mlx5_flow_meter_profile *fmp;
 	struct mlx5_legacy_flow_meter *legacy_fm = NULL;
+	struct mlx5_flow_meter_policy *mtr_policy;
 
 	/* Meter object must not have any owner. */
 	MLX5_ASSERT(!fm->ref_cnt);
@@ -567,23 +1187,42 @@ mlx5_flow_meter_params_flush(struct rte_eth_dev *dev,
 		return -1;
 	/* Update dependencies. */
 	__atomic_sub_fetch(&fmp->ref_cnt, 1, __ATOMIC_RELAXED);
+	fm->profile = NULL;
 	/* Remove from list. */
 	if (!priv->sh->meter_aso_en) {
-		legacy_fm = container_of(fm, struct mlx5_legacy_flow_meter, fm);
+		legacy_fm = container_of(fm,
+			struct mlx5_legacy_flow_meter, fm);
 		TAILQ_REMOVE(fms, legacy_fm, next);
 	}
 	/* Free drop counters. */
 	if (fm->drop_cnt)
 		mlx5_counter_free(dev, fm->drop_cnt);
 	/* Free meter flow table. */
-	if (fm->flow_ipool)
+	if (fm->flow_ipool) {
 		mlx5_ipool_destroy(fm->flow_ipool);
-	mlx5_flow_destroy_mtr_tbls(dev, fm->mfts);
-	if (priv->sh->meter_aso_en)
+		fm->flow_ipool = 0;
+	}
+	mlx5_flow_destroy_mtr_tbls(dev, fm);
+	if (fm->def_policy)
+		__atomic_sub_fetch(&priv->sh->mtrmng->def_policy_ref_cnt,
+				1, __ATOMIC_RELAXED);
+	if (priv->sh->meter_aso_en) {
+		if (!fm->def_policy) {
+			mtr_policy = mlx5_flow_meter_policy_find(dev,
+						fm->policy_id, NULL);
+			if (mtr_policy)
+				__atomic_sub_fetch(&mtr_policy->ref_cnt,
+						1, __ATOMIC_RELAXED);
+			fm->policy_id = 0;
+		}
+		fm->def_policy = 0;
+		if (mlx5_l3t_clear_entry(priv->mtr_idx_tbl, fm->meter_id))
+			return -1;
 		mlx5_flow_mtr_free(dev, mtr_idx);
-	else
+	} else {
 		mlx5_ipool_free(priv->sh->ipool[MLX5_IPOOL_MTR],
 					legacy_fm->idx);
+	}
 	return 0;
 }
 
@@ -610,30 +1249,28 @@ mlx5_flow_meter_destroy(struct rte_eth_dev *dev, uint32_t meter_id,
 
 	if (!priv->mtr_en)
 		return -rte_mtr_error_set(error, ENOTSUP,
-					  RTE_MTR_ERROR_TYPE_UNSPECIFIED, NULL,
+					  RTE_MTR_ERROR_TYPE_UNSPECIFIED,
+					  NULL,
 					  "Meter is not supported");
 	/* Meter object must exist. */
 	fm = mlx5_flow_meter_find(priv, meter_id, &mtr_idx);
 	if (fm == NULL)
 		return -rte_mtr_error_set(error, ENOENT,
 					  RTE_MTR_ERROR_TYPE_MTR_ID,
-					  NULL, "Meter object id not valid.");
+					  NULL,
+					  "Meter object id not valid.");
 	/* Meter object must not have any owner. */
 	if (fm->ref_cnt > 0)
 		return -rte_mtr_error_set(error, EBUSY,
 					  RTE_MTR_ERROR_TYPE_UNSPECIFIED,
-					  NULL, "Meter object is being used.");
-	if (priv->sh->meter_aso_en) {
-		if (mlx5_l3t_clear_entry(priv->mtr_idx_tbl, meter_id))
-			return -rte_mtr_error_set(error, EBUSY,
-				RTE_MTR_ERROR_TYPE_UNSPECIFIED, NULL,
-				"Fail to delete ASO Meter in index table.");
-	}
+					  NULL,
+					  "Meter object is being used.");
 	/* Destroy the meter profile. */
 	if (mlx5_flow_meter_params_flush(dev, fm, mtr_idx))
 		return -rte_mtr_error_set(error, EINVAL,
 					RTE_MTR_ERROR_TYPE_METER_PROFILE_ID,
-					NULL, "MTR object meter profile invalid.");
+					NULL,
+					"MTR object meter profile invalid.");
 	return 0;
 }
 
@@ -867,7 +1504,11 @@ mlx5_flow_meter_stats_update(struct rte_eth_dev *dev,
 		return -rte_mtr_error_set(error, ENOENT,
 					  RTE_MTR_ERROR_TYPE_MTR_ID,
 					  NULL, "Meter object id not valid.");
-	mlx5_flow_meter_stats_enable_update(fm, stats_mask);
+	if (mlx5_flow_meter_stats_enable_update(dev, fm, stats_mask))
+		return -rte_mtr_error_set(error, ENOENT,
+					  RTE_MTR_ERROR_TYPE_MTR_ID,
+					  NULL, "Fail to allocate "
+					  "counter for meter.");
 	return 0;
 }
 
@@ -942,6 +1583,10 @@ static const struct rte_mtr_ops mlx5_flow_mtr_ops = {
 	.capabilities_get = mlx5_flow_mtr_cap_get,
 	.meter_profile_add = mlx5_flow_meter_profile_add,
 	.meter_profile_delete = mlx5_flow_meter_profile_delete,
+	.meter_policy_validate = mlx5_flow_meter_policy_validate,
+	.meter_policy_add = mlx5_flow_meter_policy_add,
+	.meter_policy_delete = mlx5_flow_meter_policy_delete,
+	.create = mlx5_flow_meter_create,
 	.destroy = mlx5_flow_meter_destroy,
 	.meter_enable = mlx5_flow_meter_enable,
 	.meter_disable = mlx5_flow_meter_disable,
@@ -980,7 +1625,7 @@ mlx5_flow_meter_ops_get(struct rte_eth_dev *dev __rte_unused, void *arg)
  *   Pointer to Meter index.
  *
  * @return
- *   Pointer to the profile found on success, NULL otherwise.
+ *   Pointer to the meter info found on success, NULL otherwise.
  */
 struct mlx5_flow_meter_info *
 mlx5_flow_meter_find(struct mlx5_priv *priv, uint32_t meter_id,
@@ -989,14 +1634,19 @@ mlx5_flow_meter_find(struct mlx5_priv *priv, uint32_t meter_id,
 	struct mlx5_legacy_flow_meter *legacy_fm;
 	struct mlx5_legacy_flow_meters *fms = &priv->flow_meters;
 	struct mlx5_aso_mtr *aso_mtr;
-	struct mlx5_aso_mtr_pools_mng *mtrmng = priv->sh->mtrmng;
+	struct mlx5_aso_mtr_pools_mng *pools_mng =
+				&priv->sh->mtrmng->pools_mng;
 	union mlx5_l3t_data data;
 
 	if (priv->sh->meter_aso_en) {
-		rte_spinlock_lock(&mtrmng->mtrsl);
+		rte_spinlock_lock(&pools_mng->mtrsl);
+		if (!pools_mng->n_valid || !priv->mtr_idx_tbl) {
+			rte_spinlock_unlock(&pools_mng->mtrsl);
+			return NULL;
+		}
 		if (mlx5_l3t_get_entry(priv->mtr_idx_tbl, meter_id, &data) ||
 			!data.dword) {
-			rte_spinlock_unlock(&mtrmng->mtrsl);
+			rte_spinlock_unlock(&pools_mng->mtrsl);
 			return NULL;
 		}
 		if (mtr_idx)
@@ -1004,11 +1654,13 @@ mlx5_flow_meter_find(struct mlx5_priv *priv, uint32_t meter_id,
 		aso_mtr = mlx5_aso_meter_by_idx(priv, data.dword);
 		/* Remove reference taken by the mlx5_l3t_get_entry. */
 		mlx5_l3t_clear_entry(priv->mtr_idx_tbl, meter_id);
-		rte_spinlock_unlock(&mtrmng->mtrsl);
+		rte_spinlock_unlock(&pools_mng->mtrsl);
+		if (!aso_mtr || aso_mtr->state == ASO_METER_FREE)
+			return NULL;
 		return &aso_mtr->fm;
 	}
 	TAILQ_FOREACH(legacy_fm, fms, next)
-		if (meter_id == legacy_fm->meter_id) {
+		if (meter_id == legacy_fm->fm.meter_id) {
 			if (mtr_idx)
 				*mtr_idx = legacy_fm->idx;
 			return &legacy_fm->fm;
@@ -1025,7 +1677,7 @@ mlx5_flow_meter_find(struct mlx5_priv *priv, uint32_t meter_id,
  *   Meter index.
  *
  * @return
- *   Pointer to the profile found on success, NULL otherwise.
+ *   Pointer to the meter info found on success, NULL otherwise.
  */
 struct mlx5_flow_meter_info *
 flow_dv_meter_find_by_idx(struct mlx5_priv *priv, uint32_t idx)
@@ -1034,6 +1686,8 @@ flow_dv_meter_find_by_idx(struct mlx5_priv *priv, uint32_t idx)
 
 	if (priv->sh->meter_aso_en) {
 		aso_mtr = mlx5_aso_meter_by_idx(priv, idx);
+		if (!aso_mtr)
+			return NULL;
 		return &aso_mtr->fm;
 	} else {
 		return mlx5_ipool_get(priv->sh->ipool[MLX5_IPOOL_MTR], idx);
@@ -1155,6 +1809,40 @@ mlx5_flow_meter_detach(struct mlx5_priv *priv,
 }
 
 /**
+ * Flush meter with Rx queue configuration.
+ *
+ * @param[in] dev
+ *   Pointer to Ethernet device.
+ */
+void
+mlx5_flow_meter_rxq_flush(struct rte_eth_dev *dev)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_flow_meter_sub_policy *sub_policy;
+	struct mlx5_flow_meter_policy *mtr_policy;
+	void *entry;
+	uint32_t i, policy_idx;
+
+	if (!priv->mtr_en)
+		return;
+	if (priv->sh->mtrmng->policy_idx_tbl && priv->sh->refcnt == 1) {
+		MLX5_L3T_FOREACH(priv->sh->mtrmng->policy_idx_tbl,
+					i, entry) {
+			policy_idx = *(uint32_t *)entry;
+			sub_policy = mlx5_ipool_get
+				(priv->sh->ipool[MLX5_IPOOL_MTR_POLICY],
+				policy_idx);
+			if (!sub_policy || !sub_policy->main_policy)
+				continue;
+			mtr_policy = sub_policy->main_policy;
+			if (mtr_policy->is_queue || mtr_policy->is_rss)
+				mlx5_flow_destroy_sub_policy_with_rxq(dev,
+					mtr_policy);
+		}
+	}
+}
+
+/**
  * Flush meter configuration.
  *
  * @param[in] dev
@@ -1169,40 +1857,68 @@ int
 mlx5_flow_meter_flush(struct rte_eth_dev *dev, struct rte_mtr_error *error)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
-	struct mlx5_aso_mtr_pools_mng *mtrmng = priv->sh->mtrmng;
 	struct mlx5_legacy_flow_meters *fms = &priv->flow_meters;
 	struct mlx5_mtr_profiles *fmps = &priv->flow_meter_profiles;
 	struct mlx5_flow_meter_profile *fmp;
 	struct mlx5_legacy_flow_meter *legacy_fm;
 	struct mlx5_flow_meter_info *fm;
-	struct mlx5_aso_mtr_pool *mtr_pool;
+	struct mlx5_flow_meter_sub_policy *sub_policy;
 	void *tmp;
-	uint32_t i, offset, mtr_idx;
+	uint32_t i, mtr_idx, policy_idx;
+	void *entry;
+	struct mlx5_aso_mtr *aso_mtr;
 
+	if (!priv->mtr_en)
+		return 0;
 	if (priv->sh->meter_aso_en) {
-		i = mtrmng->n_valid;
-		while (i--) {
-			mtr_pool = mtrmng->pools[i];
-			for (offset = 0; offset < MLX5_ASO_MTRS_PER_POOL;
-				offset++) {
-				fm = &mtr_pool->mtrs[offset].fm;
-				mtr_idx = MLX5_MAKE_MTR_IDX(i, offset);
-				if (mlx5_flow_meter_params_flush(dev,
-						fm, mtr_idx))
-					return -rte_mtr_error_set
-					(error, EINVAL,
-					RTE_MTR_ERROR_TYPE_METER_PROFILE_ID,
-					NULL, "MTR object meter profile invalid.");
+		if (priv->mtr_idx_tbl) {
+			MLX5_L3T_FOREACH(priv->mtr_idx_tbl, i, entry) {
+				mtr_idx = *(uint32_t *)entry;
+				if (mtr_idx) {
+					aso_mtr =
+					mlx5_aso_meter_by_idx(priv, mtr_idx);
+					fm = &aso_mtr->fm;
+					(void)mlx5_flow_meter_params_flush(dev,
+						fm, mtr_idx);
+				}
 			}
+			mlx5_l3t_destroy(priv->mtr_idx_tbl);
+			priv->mtr_idx_tbl = NULL;
 		}
 	} else {
 		TAILQ_FOREACH_SAFE(legacy_fm, fms, next, tmp) {
 			fm = &legacy_fm->fm;
 			if (mlx5_flow_meter_params_flush(dev, fm, 0))
 				return -rte_mtr_error_set(error, EINVAL,
-					RTE_MTR_ERROR_TYPE_METER_PROFILE_ID,
-					NULL, "MTR object meter profile invalid.");
+				RTE_MTR_ERROR_TYPE_METER_PROFILE_ID,
+				NULL, "MTR object meter profile invalid.");
 		}
+	}
+	if (priv->sh->mtrmng->policy_idx_tbl && priv->sh->refcnt == 1) {
+		MLX5_L3T_FOREACH(priv->sh->mtrmng->policy_idx_tbl,
+					i, entry) {
+			policy_idx = *(uint32_t *)entry;
+			sub_policy = mlx5_ipool_get
+				(priv->sh->ipool[MLX5_IPOOL_MTR_POLICY],
+				policy_idx);
+			if (!sub_policy)
+				return -rte_mtr_error_set(error,
+						EINVAL,
+					RTE_MTR_ERROR_TYPE_METER_POLICY_ID,
+						NULL, "MTR object "
+						"meter policy invalid.");
+			if (__mlx5_flow_meter_policy_delete(dev, i,
+						sub_policy->main_policy,
+						error))
+				return -rte_mtr_error_set(error,
+						EINVAL,
+					RTE_MTR_ERROR_TYPE_METER_POLICY_ID,
+						NULL, "MTR object "
+						"meter policy invalid.");
+			mlx5_free(sub_policy->main_policy);
+		}
+		mlx5_l3t_destroy(priv->sh->mtrmng->policy_idx_tbl);
+		priv->sh->mtrmng->policy_idx_tbl = NULL;
 	}
 	TAILQ_FOREACH_SAFE(fmp, fmps, next, tmp) {
 		/* Check unused. */
@@ -1211,5 +1927,9 @@ mlx5_flow_meter_flush(struct rte_eth_dev *dev, struct rte_mtr_error *error)
 		TAILQ_REMOVE(&priv->flow_meter_profiles, fmp, next);
 		mlx5_free(fmp);
 	}
+	/* Delete default policy table. */
+	mlx5_flow_destroy_def_policy(dev);
+	if (priv->sh->refcnt == 1)
+		mlx5_flow_destroy_mtr_drop_tbls(dev);
 	return 0;
 }

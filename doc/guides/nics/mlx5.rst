@@ -106,6 +106,10 @@ Features
 - E-Switch mirroring and modify.
 - 21844 flow priorities for ingress or egress flow groups greater than 0 and for any transfer
   flow group.
+- Flow metering, including meter policy API.
+- Flow integrity offload API.
+- Connection tracking.
+- Sub-Function representors.
 
 Limitations
 -----------
@@ -400,10 +404,43 @@ Limitations
   - Hairpin in switchdev SR-IOV mode is not supported till now.
 
 - Meter:
+
   - All the meter colors with drop action will be counted only by the global drop statistics.
   - Green color is not supported with drop action.
   - Yellow detection is not supported.
   - Red color must be with drop action.
+  - Meter statistics are supported only for drop case.
+  - Meter yellow color detection is not supported.
+  - A meter action created with pre-defined policy must be the last action in the flow except single case where the policy actions are:
+     - green: NULL or END.
+     - yellow: NULL or END.
+     - RED: DROP / END.
+  - The only supported meter policy actions:
+     - green: QUEUE, RSS, PORT_ID, JUMP, MARK and SET_TAG.
+     - yellow: must be empty.
+     - RED: must be DROP.
+  - meter profile packet mode is supported.
+
+- Integrity:
+
+  - Integrity offload is enabled for **ConnectX-6** family.
+  - Verification bits provided by the hardware are ``l3_ok``, ``ipv4_csum_ok``, ``l4_ok``, ``l4_csum_ok``.
+  - ``level`` value 0 references outer headers.
+  - Multiple integrity items not supported in a single flow rule.
+  - Flow rule items supplied by application must explicitly specify network headers referred by integrity item.
+    For example, if integrity item mask sets ``l4_ok`` or ``l4_csum_ok`` bits, reference to L4 network header,
+    TCP or UDP, must be in the rule pattern as well::
+
+      flow create 0 ingress pattern integrity level is 0 value mask l3_ok value spec l3_ok / eth / ipv6 / end …
+      or
+      flow create 0 ingress pattern integrity level is 0 value mask l4_ok value spec 0 / eth / ipv4 proto is udp / end …
+
+- Connection tracking:
+
+  - Cannot co-exist with ASO meter, ASO age action in a single flow rule.
+  - Flow rules insertion rate and memory consumption need more optimization.
+  - 256 ports maximum.
+  - 4M connections maximum.
 
 Statistics
 ----------
@@ -1401,9 +1438,10 @@ the DPDK application.
 
         echo switchdev > /sys/class/net/<net device>/compat/devlink/mode
 
-SubFunction representor support
--------------------------------
-SubFunction is a portion of the PCI device, a SF netdev has its own
+Sub-Function representor
+------------------------
+
+Sub-Function is a portion of the PCI device, a SF netdev has its own
 dedicated queues(txq, rxq). A SF netdev supports E-Switch representation
 offload similar to existing PF and VF representors. A SF shares PCI
 level resources with other SFs and/or with its parent PCI function.
@@ -1458,7 +1496,7 @@ Performance tuning
    for better performance. For VMs, verify that the right CPU
    and NUMA node are pinned according to the above. Run::
 
-        lstopo-no-graphics
+        lstopo-no-graphics --merge
 
    to identify the NUMA node to which the PCIe adapter is connected.
 
@@ -1667,6 +1705,11 @@ Supported hardware offloads
    |                       | | rdma-core 35  | | rdma-core 35  |
    |                       | | ConnectX-5    | | ConnectX-5    |
    +-----------------------+-----------------+-----------------+
+   | Connection tracking   | |               | | DPDK 21.05    |
+   |                       | |     N/A       | | OFED 5.3      |
+   |                       | |               | | rdma-core 35  |
+   |                       | |               | | ConnectX-6 Dx |
+   +-----------------------+-----------------+-----------------+
 
 .. table:: Minimal SW/HW versions for shared action offload
    :name: sact
@@ -1679,10 +1722,15 @@ Supported hardware offloads
    |                       | |               | | rdma-core 33  |
    |                       | |               | | ConnectX-5    |
    +-----------------------+-----------------+-----------------+
-   | Age                   | |  DPDK 20.11   | | DPDK 20.11    |
-   |                       | |  OFED 5.2     | | OFED 5.2      |
-   |                       | |  rdma-core 32 | | rdma-core 32  |
-   |                       | |  ConnectX-6 Dx| | ConnectX-6 Dx |
+   | Age                   | | DPDK 20.11    | | DPDK 20.11    |
+   |                       | | OFED 5.2      | | OFED 5.2      |
+   |                       | | rdma-core 32  | | rdma-core 32  |
+   |                       | | ConnectX-6 Dx | | ConnectX-6 Dx |
+   +-----------------------+-----------------+-----------------+
+   | Count                 | | DPDK 21.05    | | DPDK 21.05    |
+   |                       | | OFED 4.6      | | OFED 4.6      |
+   |                       | | rdma-core 24  | | rdma-core 23  |
+   |                       | | ConnectX-5    | | ConnectX-5    |
    +-----------------------+-----------------+-----------------+
 
 Notes for metadata

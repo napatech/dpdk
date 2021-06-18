@@ -237,9 +237,6 @@ qede_fw_version_get(struct rte_eth_dev *dev, char *fw_ver, size_t fw_size)
 	static char ver_str[QEDE_PMD_DRV_VER_STR_SIZE];
 	size_t size;
 
-	if (fw_ver == NULL)
-		return 0;
-
 	if (IS_PF(edev))
 		snprintf(ver_str, QEDE_PMD_DRV_VER_STR_SIZE, "%s",
 			 QEDE_PMD_FW_VERSION);
@@ -2895,5 +2892,5 @@ RTE_PMD_REGISTER_KMOD_DEP(net_qede, "* igb_uio | uio_pci_generic | vfio-pci");
 RTE_PMD_REGISTER_PCI(net_qede_vf, rte_qedevf_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_qede_vf, pci_id_qedevf_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_qede_vf, "* igb_uio | vfio-pci");
-RTE_LOG_REGISTER(qede_logtype_init, pmd.net.qede.init, NOTICE);
-RTE_LOG_REGISTER(qede_logtype_driver, pmd.net.qede.driver, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(qede_logtype_init, init, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(qede_logtype_driver, driver, NOTICE);

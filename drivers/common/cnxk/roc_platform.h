@@ -23,9 +23,14 @@
 #include "roc_bits.h"
 
 #if defined(__ARM_FEATURE_SVE)
-#define PLT_CPU_FEATURE_PREAMBLE ".cpu generic+crc+lse+sve\n"
+#define PLT_CPU_FEATURE_PREAMBLE                                               \
+	".arch_extension crc\n"                                                \
+	".arch_extension lse\n"                                                \
+	".arch_extension sve\n"
 #else
-#define PLT_CPU_FEATURE_PREAMBLE ".cpu generic+crc+lse\n"
+#define PLT_CPU_FEATURE_PREAMBLE                                               \
+	".arch_extension crc\n"                                                \
+	".arch_extension lse\n"
 #endif
 
 #define PLT_ASSERT		 RTE_ASSERT
@@ -165,22 +170,18 @@ extern int cnxk_logtype_tm;
 #define plt_tm_dbg(fmt, ...)	plt_dbg(tm, fmt, ##__VA_ARGS__)
 
 #ifdef __cplusplus
-#define CNXK_PCI_ID(subsystem_dev, dev)				\
-	{							\
-		RTE_CLASS_ANY_ID,				\
-		PCI_VENDOR_ID_CAVIUM,				\
-		(dev),						\
-		PCI_ANY_ID,					\
-		(subsystem_dev),				\
+#define CNXK_PCI_ID(subsystem_dev, dev)                                        \
+	{                                                                      \
+		RTE_CLASS_ANY_ID, PCI_VENDOR_ID_CAVIUM, (dev), RTE_PCI_ANY_ID, \
+			(subsystem_dev),                                       \
 	}
 #else
-#define CNXK_PCI_ID(subsystem_dev, dev)				\
-	{							\
-		.class_id = RTE_CLASS_ANY_ID,			\
-		.vendor_id = PCI_VENDOR_ID_CAVIUM,		\
-		.device_id = (dev),				\
-		.subsystem_vendor_id = PCI_ANY_ID,		\
-		.subsystem_device_id = (subsystem_dev),		\
+#define CNXK_PCI_ID(subsystem_dev, dev)                                        \
+	{                                                                      \
+		.class_id = RTE_CLASS_ANY_ID,                                  \
+		.vendor_id = PCI_VENDOR_ID_CAVIUM, .device_id = (dev),         \
+		.subsystem_vendor_id = RTE_PCI_ANY_ID,                         \
+		.subsystem_device_id = (subsystem_dev),                        \
 	}
 #endif
 

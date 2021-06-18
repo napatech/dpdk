@@ -1133,8 +1133,11 @@ tap_dev_close(struct rte_eth_dev *dev)
 
 	if (internals->remote_if_index) {
 		/* Restore initial remote state */
-		ioctl(internals->ioctl_sock, SIOCSIFFLAGS,
+		int ret = ioctl(internals->ioctl_sock, SIOCSIFFLAGS,
 				&internals->remote_initial_flags);
+		if (ret)
+			TAP_LOG(ERR, "restore remote state failed: %d", ret);
+
 	}
 
 	rte_mempool_free(internals->gso_ctx_mp);
@@ -2568,4 +2571,4 @@ RTE_PMD_REGISTER_PARAM_STRING(net_tap,
 			      ETH_TAP_IFACE_ARG "=<string> "
 			      ETH_TAP_MAC_ARG "=" ETH_TAP_MAC_ARG_FMT " "
 			      ETH_TAP_REMOTE_ARG "=<string>");
-RTE_LOG_REGISTER(tap_logtype, pmd.net.tap, NOTICE);
+RTE_LOG_REGISTER_DEFAULT(tap_logtype, NOTICE);

@@ -69,6 +69,14 @@ check_forbidden_additions() { # <patch>
 		-f $(dirname $(readlink -f $0))/check-forbidden-tokens.awk \
 		"$1" || res=1
 
+	# check %l or %ll format specifier
+	awk -v FOLDERS='lib drivers app examples' \
+		-v EXPRESSIONS='%ll*[xud]' \
+		-v RET_ON_FAIL=1 \
+		-v MESSAGE='Using %l format, prefer %PRI*64 if type is [u]int64_t' \
+		-f $(dirname $(readlink -f $0))/check-forbidden-tokens.awk \
+		"$1" || res=1
+
 	# forbid variable declaration inside "for" loop
 	awk -v FOLDERS='.' \
 		-v EXPRESSIONS='for[[:space:]]*\\((char|u?int|unsigned|s?size_t)' \
@@ -118,8 +126,7 @@ check_forbidden_additions() { # <patch>
 		-f $(dirname $(readlink -f $0))/check-forbidden-tokens.awk \
 		"$1" || res=1
 
-	# svg figures must be included with wildcard extension
-	# because of png conversion for pdf docs
+	# SVG must be included with wildcard extension to allow conversion
 	awk -v FOLDERS='doc' \
 		-v EXPRESSIONS='::[[:space:]]*[^[:space:]]*\\.svg' \
 		-v RET_ON_FAIL=1 \
@@ -197,6 +204,15 @@ check_internal_tags() { # <patch>
 	}' || res=1
 
 	return $res
+}
+
+check_release_notes() { # <patch>
+	rel_notes_prefix=doc/guides/rel_notes/release_
+	IFS=. read year month release < VERSION
+	current_rel_notes=${rel_notes_prefix}${year}_${month}.rst
+
+	! grep -e '^--- a/'$rel_notes_prefix -e '^+++ b/'$rel_notes_prefix "$1" |
+		grep -v $current_rel_notes
 }
 
 number=0
@@ -284,6 +300,14 @@ check () { # <patch> <commit> <title>
 
 	! $verbose || printf '\nChecking __rte_internal tags:\n'
 	report=$(check_internal_tags "$tmpinput")
+	if [ $? -ne 0 ] ; then
+		$headline_printed || print_headline "$3"
+		printf '%s\n' "$report"
+		ret=1
+	fi
+
+	! $verbose || printf '\nChecking release notes updates:\n'
+	report=$(check_release_notes "$tmpinput")
 	if [ $? -ne 0 ] ; then
 		$headline_printed || print_headline "$3"
 		printf '%s\n' "$report"

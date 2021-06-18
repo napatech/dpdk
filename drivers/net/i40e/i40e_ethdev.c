@@ -854,6 +854,8 @@ floating_veb_list_handler(__rte_unused const char *key,
 		idx = strtoul(floating_veb_value, &end, 10);
 		if (errno || end == NULL)
 			return -1;
+		if (idx < 0)
+			return -1;
 		while (isblank(*end))
 			end++;
 		if (*end == '-') {
@@ -3687,9 +3689,11 @@ i40e_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
 		 ((hw->nvm.version >> 4) & 0xff),
 		 (hw->nvm.version & 0xf), hw->nvm.eetrack,
 		 ver, build, patch);
+	if (ret < 0)
+		return -EINVAL;
 
 	ret += 1; /* add the size of '\0' */
-	if (fw_size < (u32)ret)
+	if (fw_size < (size_t)ret)
 		return ret;
 	else
 		return 0;
@@ -12445,13 +12449,13 @@ i40e_cloud_filter_qinq_create(struct i40e_pf *pf)
 	return ret;
 }
 
-RTE_LOG_REGISTER(i40e_logtype_init, pmd.net.i40e.init, NOTICE);
-RTE_LOG_REGISTER(i40e_logtype_driver, pmd.net.i40e.driver, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(i40e_logtype_init, init, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(i40e_logtype_driver, driver, NOTICE);
 #ifdef RTE_ETHDEV_DEBUG_RX
-RTE_LOG_REGISTER(i40e_logtype_rx, pmd.net.i40e.rx, DEBUG);
+RTE_LOG_REGISTER_SUFFIX(i40e_logtype_rx, rx, DEBUG);
 #endif
 #ifdef RTE_ETHDEV_DEBUG_TX
-RTE_LOG_REGISTER(i40e_logtype_tx, pmd.net.i40e.tx, DEBUG);
+RTE_LOG_REGISTER_SUFFIX(i40e_logtype_tx, tx, DEBUG);
 #endif
 
 RTE_PMD_REGISTER_PARAM_STRING(net_i40e,

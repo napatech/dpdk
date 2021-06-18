@@ -347,6 +347,7 @@ enum ice_fltr_ptype {
 	ICE_FLTR_PTYPE_NONF_ECPRI_TP0,
 	ICE_FLTR_PTYPE_NONF_IPV4_UDP_ECPRI_TP0,
 	ICE_FLTR_PTYPE_FRAG_IPV4,
+	ICE_FLTR_PTYPE_FRAG_IPV6,
 	ICE_FLTR_PTYPE_NONF_IPV6_UDP,
 	ICE_FLTR_PTYPE_NONF_IPV6_TCP,
 	ICE_FLTR_PTYPE_NONF_IPV6_SCTP,
@@ -449,6 +450,19 @@ struct ice_hw_common_caps {
 #define ICE_NVM_MGMT_SEC_REV_DISABLED		BIT(0)
 #define ICE_NVM_MGMT_UPDATE_DISABLED		BIT(1)
 #define ICE_NVM_MGMT_UNIFIED_UPD_SUPPORT	BIT(3)
+
+	/* External topology device images within the NVM */
+#define ICE_EXT_TOPO_DEV_IMG_COUNT	4
+	u32 ext_topo_dev_img_ver_high[ICE_EXT_TOPO_DEV_IMG_COUNT];
+	u32 ext_topo_dev_img_ver_low[ICE_EXT_TOPO_DEV_IMG_COUNT];
+	u8 ext_topo_dev_img_part_num[ICE_EXT_TOPO_DEV_IMG_COUNT];
+#define ICE_EXT_TOPO_DEV_IMG_PART_NUM_S	8
+#define ICE_EXT_TOPO_DEV_IMG_PART_NUM_M	\
+		MAKEMASK(0xFF, ICE_EXT_TOPO_DEV_IMG_PART_NUM_S)
+	bool ext_topo_dev_img_load_en[ICE_EXT_TOPO_DEV_IMG_COUNT];
+#define ICE_EXT_TOPO_DEV_IMG_LOAD_EN	BIT(0)
+	bool ext_topo_dev_img_prog_en[ICE_EXT_TOPO_DEV_IMG_COUNT];
+#define ICE_EXT_TOPO_DEV_IMG_PROG_EN	BIT(1)
 };
 
 /* Function specific capabilities */
@@ -797,7 +811,8 @@ struct ice_dcb_app_priority_table {
 };
 
 #define ICE_MAX_USER_PRIORITY		8
-#define ICE_DCBX_MAX_APPS		32
+#define ICE_DCBX_MAX_APPS		64
+#define ICE_DSCP_NUM_VAL		64
 #define ICE_LLDPDU_SIZE			1500
 #define ICE_TLV_STATUS_OPER		0x1
 #define ICE_TLV_STATUS_SYNC		0x2
@@ -817,7 +832,14 @@ struct ice_dcbx_cfg {
 	struct ice_dcb_ets_cfg etscfg;
 	struct ice_dcb_ets_cfg etsrec;
 	struct ice_dcb_pfc_cfg pfc;
+#define ICE_QOS_MODE_VLAN	0x0
+#define ICE_QOS_MODE_DSCP	0x1
+	u8 pfc_mode;
 	struct ice_dcb_app_priority_table app[ICE_DCBX_MAX_APPS];
+	/* when DSCP mapping defined by user set its bit to 1 */
+	ice_declare_bitmap(dscp_mapped, ICE_DSCP_NUM_VAL);
+	/* array holding DSCP -> UP/TC values for DSCP L3 QoS mode */
+	u8 dscp_map[ICE_DSCP_NUM_VAL];
 	u8 dcbx_mode;
 #define ICE_DCBX_MODE_CEE	0x1
 #define ICE_DCBX_MODE_IEEE	0x2

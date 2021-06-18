@@ -42,6 +42,9 @@
 #define HNS3_PF_FUNC_ID			0
 #define HNS3_1ST_VF_FUNC_ID		1
 
+#define HNS3_DEFAULT_PORT_CONF_BURST_SIZE	32
+#define HNS3_DEFAULT_PORT_CONF_QUEUES_NUM	1
+
 #define HNS3_SW_SHIFT_AND_DISCARD_MODE		0
 #define HNS3_HW_SHIFT_AND_DISCARD_MODE		1
 
@@ -152,7 +155,6 @@ struct hns3_tc_queue_info {
 };
 
 struct hns3_cfg {
-	uint8_t vmdq_vport_num;
 	uint8_t tc_num;
 	uint16_t tqp_desc_num;
 	uint16_t rx_buf_len;
@@ -735,7 +737,7 @@ struct hns3_ptype_table {
 	 * descriptor, it functions only when firmware report the capability of
 	 * HNS3_CAPS_RXD_ADV_LAYOUT_B and driver enabled it.
 	 */
-	uint32_t ptype[HNS3_PTYPE_NUM] __rte_cache_min_aligned;
+	uint32_t ptype[HNS3_PTYPE_NUM] __rte_cache_aligned;
 };
 
 #define HNS3_FIXED_MAX_TQP_NUM_MODE		0
@@ -839,7 +841,7 @@ struct hns3_adapter {
 
 	uint64_t dev_caps_mask;
 
-	struct hns3_ptype_table ptype_tbl __rte_cache_min_aligned;
+	struct hns3_ptype_table ptype_tbl __rte_cache_aligned;
 };
 
 enum {
@@ -855,17 +857,17 @@ enum {
 
 #define HNS3_DEVARG_DEV_CAPS_MASK	"dev_caps_mask"
 
-#define HNS3_DEV_SUPPORT_DCB_B			0x0
-#define HNS3_DEV_SUPPORT_COPPER_B		0x1
-#define HNS3_DEV_SUPPORT_UDP_GSO_B		0x2
-#define HNS3_DEV_SUPPORT_FD_QUEUE_REGION_B	0x3
-#define HNS3_DEV_SUPPORT_PTP_B			0x4
-#define HNS3_DEV_SUPPORT_TX_PUSH_B		0x5
-#define HNS3_DEV_SUPPORT_INDEP_TXRX_B		0x6
-#define HNS3_DEV_SUPPORT_STASH_B		0x7
-#define HNS3_DEV_SUPPORT_RXD_ADV_LAYOUT_B	0x9
-#define HNS3_DEV_SUPPORT_OUTER_UDP_CKSUM_B	0xA
-#define HNS3_DEV_SUPPORT_RAS_IMP_B		0xB
+enum {
+	HNS3_DEV_SUPPORT_DCB_B,
+	HNS3_DEV_SUPPORT_COPPER_B,
+	HNS3_DEV_SUPPORT_FD_QUEUE_REGION_B,
+	HNS3_DEV_SUPPORT_PTP_B,
+	HNS3_DEV_SUPPORT_INDEP_TXRX_B,
+	HNS3_DEV_SUPPORT_STASH_B,
+	HNS3_DEV_SUPPORT_RXD_ADV_LAYOUT_B,
+	HNS3_DEV_SUPPORT_OUTER_UDP_CKSUM_B,
+	HNS3_DEV_SUPPORT_RAS_IMP_B,
+};
 
 #define hns3_dev_dcb_supported(hw) \
 	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_DCB_B)
@@ -874,10 +876,6 @@ enum {
 #define hns3_dev_copper_supported(hw) \
 	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_COPPER_B)
 
-/* Support UDP GSO offload */
-#define hns3_dev_udp_gso_supported(hw) \
-	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_UDP_GSO_B)
-
 /* Support the queue region action rule of flow directory */
 #define hns3_dev_fd_queue_region_supported(hw) \
 	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_FD_QUEUE_REGION_B)
@@ -885,9 +883,6 @@ enum {
 /* Support PTP timestamp offload */
 #define hns3_dev_ptp_supported(hw) \
 	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_PTP_B)
-
-#define hns3_dev_tx_push_supported(hw) \
-	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_TX_PUSH_B)
 
 /* Support to Independently enable/disable/reset Tx or Rx queues */
 #define hns3_dev_indep_txrx_supported(hw) \
@@ -984,13 +979,13 @@ static inline void hns3_write_reg(void *base, uint32_t reg, uint32_t value)
 }
 
 /*
- * The optimized function for writing registers used in the '.rx_pkt_burst' and
- * '.tx_pkt_burst' ops implementation function.
+ * The optimized function for writing registers reduces one address addition
+ * calculation, it was used in the '.rx_pkt_burst' and '.tx_pkt_burst' ops
+ * implementation function.
  */
 static inline void hns3_write_reg_opt(volatile void *addr, uint32_t value)
 {
-	rte_io_wmb();
-	rte_write32_relaxed(rte_cpu_to_le_32(value), addr);
+	rte_write32(rte_cpu_to_le_32(value), addr);
 }
 
 static inline uint32_t hns3_read_reg(void *base, uint32_t reg)
@@ -1005,8 +1000,6 @@ static inline uint32_t hns3_read_reg(void *base, uint32_t reg)
 #define hns3_read_dev(a, reg) \
 	hns3_read_reg((a)->io_base, (reg))
 
-#define ARRAY_SIZE(x) RTE_DIM(x)
-
 #define NEXT_ITEM_OF_ACTION(act, actions, index)                        \
 	do {								\
 		act = (actions) + (index);				\
@@ -1019,15 +1012,9 @@ static inline uint32_t hns3_read_reg(void *base, uint32_t reg)
 #define MSEC_PER_SEC              1000L
 #define USEC_PER_MSEC             1000L
 
-static inline uint64_t
-get_timeofday_ms(void)
-{
-	struct timeval tv;
-
-	(void)gettimeofday(&tv, NULL);
-
-	return (uint64_t)tv.tv_sec * MSEC_PER_SEC + tv.tv_usec / USEC_PER_MSEC;
-}
+void hns3_clock_gettime(struct timeval *tv);
+uint64_t hns3_clock_calctime_ms(struct timeval *tv);
+uint64_t hns3_clock_gettime_ms(void);
 
 static inline uint64_t
 hns3_atomic_test_bit(unsigned int nr, volatile uint64_t *addr)

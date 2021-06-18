@@ -77,6 +77,7 @@ Developers and Maintainers Tools
 M: Thomas Monjalon <thomas@monjalon.net>
 F: MAINTAINERS
 F: devtools/build-dict.sh
+F: devtools/check-doc-vs-code.sh
 F: devtools/check-dup-includes.sh
 F: devtools/check-maintainers.sh
 F: devtools/check-forbidden-tokens.awk
@@ -87,6 +88,7 @@ F: devtools/checkpatches.sh
 F: devtools/get-maintainer.sh
 F: devtools/git-log-fixes.sh
 F: devtools/load-devel-config
+F: devtools/parse-flow-support.sh
 F: devtools/update-patches.py
 F: devtools/words-case.txt
 F: license/
@@ -104,6 +106,7 @@ F: buildtools/list-dir-globs.py
 F: buildtools/pkg-config/
 F: buildtools/symlink-drivers-solibs.sh
 F: devtools/test-meson-builds.sh
+F: devtools/check-meson.py
 
 Public CI
 M: Aaron Conole <aconole@redhat.com>
@@ -674,7 +677,6 @@ F: doc/guides/nics/hinic.rst
 F: doc/guides/nics/features/hinic.ini
 
 Intel e1000
-M: Jeff Guo <jia.guo@intel.com>
 M: Haiyue Wang <haiyue.wang@intel.com>
 T: git://dpdk.org/next/dpdk-next-net-intel
 F: drivers/net/e1000/
@@ -684,7 +686,6 @@ F: doc/guides/nics/features/e1000.ini
 F: doc/guides/nics/features/igb*.ini
 
 Intel ixgbe
-M: Jeff Guo <jia.guo@intel.com>
 M: Haiyue Wang <haiyue.wang@intel.com>
 T: git://dpdk.org/next/dpdk-next-net-intel
 F: drivers/net/ixgbe/
@@ -694,7 +695,6 @@ F: doc/guides/nics/features/ixgbe*.ini
 
 Intel i40e
 M: Beilei Xing <beilei.xing@intel.com>
-M: Jeff Guo <jia.guo@intel.com>
 T: git://dpdk.org/next/dpdk-next-net-intel
 F: drivers/net/i40e/
 F: doc/guides/nics/i40e.rst
@@ -726,7 +726,6 @@ F: doc/guides/nics/ice.rst
 F: doc/guides/nics/features/ice.ini
 
 Intel igc
-M: Jeff Guo <jia.guo@intel.com>
 M: Haiyue Wang <haiyue.wang@intel.com>
 T: git://dpdk.org/next/dpdk-next-net-intel
 F: drivers/net/igc/
@@ -895,7 +894,7 @@ M: Andrew Rybchenko <andrew.rybchenko@oktetlabs.ru>
 F: drivers/common/sfc_efx/
 F: drivers/net/sfc/
 F: doc/guides/nics/sfc_efx.rst
-F: doc/guides/nics/features/sfc_efx.ini
+F: doc/guides/nics/features/sfc.ini
 
 Wangxun txgbe
 M: Jiawen Wu <jiawenwu@trustnetic.com>
@@ -1217,6 +1216,12 @@ Intel DLB2
 M: Timothy McDaniel <timothy.mcdaniel@intel.com>
 F: drivers/event/dlb2/
 F: doc/guides/eventdevs/dlb2.rst
+
+Marvell cnxk
+M: Pavan Nikhilesh <pbhagavatula@marvell.com>
+M: Shijith Thotton <sthotton@marvell.com>
+F: drivers/event/cnxk/
+F: doc/guides/eventdevs/cnxk.rst
 
 Marvell OCTEON TX2
 M: Pavan Nikhilesh <pbhagavatula@marvell.com>

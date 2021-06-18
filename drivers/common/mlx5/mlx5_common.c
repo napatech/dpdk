@@ -11,7 +11,7 @@
 
 #include "mlx5_common.h"
 #include "mlx5_common_os.h"
-#include "mlx5_common_utils.h"
+#include "mlx5_common_log.h"
 #include "mlx5_common_pci.h"
 
 uint8_t haswell_broadwell_cpu;
@@ -39,7 +39,7 @@ static inline void mlx5_cpu_id(unsigned int level,
 }
 #endif
 
-RTE_LOG_REGISTER(mlx5_common_logtype, pmd.common.mlx5, NOTICE)
+RTE_LOG_REGISTER_DEFAULT(mlx5_common_logtype, NOTICE)
 
 static bool mlx5_common_initialized;
 

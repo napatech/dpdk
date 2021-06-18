@@ -569,7 +569,7 @@ eth_ark_dev_start(struct rte_eth_dev *dev)
 		 * This is only used for sanity checking with internal generator
 		 */
 		if (rte_ctrl_thread_create(&thread, "ark-delay-pg", NULL,
-					   ark_pktgen_delay_start, ark) != 0) {
+					   ark_pktgen_delay_start, ark->pg)) {
 			ARK_PMD_LOG(ERR, "Could not create pktgen "
 				    "starter thread\n");
 			return -1;
@@ -1015,4 +1015,4 @@ RTE_PMD_REGISTER_PARAM_STRING(net_ark,
 			      ARK_PKTGEN_ARG "=<filename> "
 			      ARK_PKTCHKR_ARG "=<filename> "
 			      ARK_PKTDIR_ARG "=<bitmap>");
-RTE_LOG_REGISTER(ark_logtype, pmd.net.ark, NOTICE);
+RTE_LOG_REGISTER_DEFAULT(ark_logtype, NOTICE);

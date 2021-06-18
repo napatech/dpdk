@@ -469,10 +469,6 @@ vhost_user_set_vring_num(struct virtio_net **pdev,
 		return RTE_VHOST_MSG_RESULT_ERR;
 	}
 
-	if (dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM)) {
-		if (vhost_user_iotlb_init(dev, msg->payload.state.index))
-			return RTE_VHOST_MSG_RESULT_ERR;
-	}
 	return RTE_VHOST_MSG_RESULT_OK;
 }
 
@@ -578,7 +574,7 @@ out:
 	dev->virtqueue[index] = vq;
 	vhost_devices[dev->vid] = dev;
 
-	if (old_vq != vq && (dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM)))
+	if (old_vq != vq)
 		vhost_user_iotlb_init(dev, index);
 
 	return dev;
@@ -1922,9 +1918,6 @@ vhost_user_set_vring_kick(struct virtio_net **pdev, struct VhostUserMsg *msg,
 	 */
 	if (!(dev->features & (1ULL << VHOST_USER_F_PROTOCOL_FEATURES))) {
 		vq->enabled = true;
-		if (dev->notify_ops->vring_state_changed)
-			dev->notify_ops->vring_state_changed(
-				dev->vid, file.index, 1);
 	}
 
 	if (vq->ready) {
@@ -2013,13 +2006,6 @@ vhost_user_get_vring_base(struct virtio_net **pdev,
 	} else {
 		rte_free(vq->shadow_used_split);
 		vq->shadow_used_split = NULL;
-
-		if (vq->async_pkts_info)
-			rte_free(vq->async_pkts_info);
-		if (vq->async_descs_split)
-			rte_free(vq->async_descs_split);
-		vq->async_pkts_info = NULL;
-		vq->async_descs_split = NULL;
 	}
 
 	rte_free(vq->batch_copy_elems);

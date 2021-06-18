@@ -168,10 +168,6 @@ int bnxt_hwrm_ring_grp_alloc(struct bnxt *bp, unsigned int idx);
 int bnxt_hwrm_ring_grp_free(struct bnxt *bp, unsigned int idx);
 
 int bnxt_hwrm_stat_clear(struct bnxt *bp, struct bnxt_cp_ring_info *cpr);
-int bnxt_hwrm_stat_ctx_alloc(struct bnxt *bp,
-			     struct bnxt_cp_ring_info *cpr, unsigned int idx);
-int bnxt_hwrm_stat_ctx_free(struct bnxt *bp,
-			    struct bnxt_cp_ring_info *cpr, unsigned int idx);
 int bnxt_hwrm_ctx_qstats(struct bnxt *bp, uint32_t cid, int idx,
 			 struct rte_eth_stats *stats, uint8_t rx);
 
@@ -294,7 +290,6 @@ int bnxt_hwrm_get_dflt_vnic_svif(struct bnxt *bp, uint16_t fid,
 				 uint16_t *vnic_id, uint16_t *svif);
 int bnxt_hwrm_parent_pf_qcfg(struct bnxt *bp);
 int bnxt_hwrm_port_phy_qcaps(struct bnxt *bp);
-int bnxt_hwrm_oem_cmd(struct bnxt *bp, uint32_t entry_num);
 int bnxt_clear_one_vnic_filter(struct bnxt *bp,
 			       struct bnxt_filter_info *filter);
 void bnxt_free_vf_info(struct bnxt *bp);

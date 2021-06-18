@@ -226,9 +226,11 @@ dpaa2_fw_version_get(struct rte_eth_dev *dev,
 		       mc_ver_info.major,
 		       mc_ver_info.minor,
 		       mc_ver_info.revision);
+	if (ret < 0)
+		return -EINVAL;
 
 	ret += 1; /* add the size of '\0' */
-	if (fw_size < (uint32_t)ret)
+	if (fw_size < (size_t)ret)
 		return ret;
 	else
 		return 0;
@@ -2893,4 +2895,4 @@ RTE_PMD_REGISTER_PARAM_STRING(net_dpaa2,
 		DRIVER_NO_PREFETCH_MODE "=<int>"
 		DRIVER_TX_CONF "=<int>"
 		DRIVER_ERROR_QUEUE "=<int>");
-RTE_LOG_REGISTER(dpaa2_logtype_pmd, pmd.net.dpaa2, NOTICE);
+RTE_LOG_REGISTER_DEFAULT(dpaa2_logtype_pmd, NOTICE);

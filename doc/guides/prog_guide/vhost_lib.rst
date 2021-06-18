@@ -118,6 +118,18 @@ The following is an overview of some key Vhost API functions:
 
     It is disabled by default.
 
+  - ``RTE_VHOST_USER_NET_COMPLIANT_OL_FLAGS``
+
+    Since v16.04, the vhost library forwards checksum and gso requests for
+    packets received from a virtio driver by filling Tx offload metadata in
+    the mbuf. This behavior is inconsistent with other drivers but it is left
+    untouched for existing applications that might rely on it.
+
+    This flag disables the legacy behavior and instead ask vhost to simply
+    populate Rx offload metadata in the mbuf.
+
+    It is disabled by default.
+
 * ``rte_vhost_driver_set_features(path, features)``
 
   This function sets the feature bits the vhost-user driver supports. The
@@ -208,9 +220,9 @@ The following is an overview of some key Vhost API functions:
 
 * ``rte_vhost_async_channel_register(vid, queue_id, features, ops)``
 
-  Register a vhost queue with async copy device channel.
-  Following device ``features`` must be specified together with the
-  registration:
+  Register a vhost queue with async copy device channel after vring
+  is enabled. Following device ``features`` must be specified together
+  with the registration:
 
   * ``async_inorder``
 
@@ -244,6 +256,14 @@ The following is an overview of some key Vhost API functions:
 * ``rte_vhost_async_channel_unregister(vid, queue_id)``
 
   Unregister the async copy device channel from a vhost queue.
+  Unregistration will fail, if the vhost queue has in-flight
+  packets that are not completed.
+
+  Unregister async copy devices in vring_state_changed() may
+  fail, as this API tries to acquire the spinlock of vhost
+  queue. The recommended way is to unregister async copy
+  devices for all vhost queues in destroy_device(), when a
+  virtio device is paused or shut down.
 
 * ``rte_vhost_submit_enqueue_burst(vid, queue_id, pkts, count, comp_pkts, comp_count)``
 

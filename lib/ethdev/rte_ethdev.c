@@ -260,7 +260,9 @@ rte_eth_iterator_init(struct rte_dev_iterator *iter, const char *devargs_str)
 	}
 
 	/* Convert bus args to new syntax for use with new API dev_iterate. */
-	if (strcmp(iter->bus->name, "vdev") == 0) {
+	if ((strcmp(iter->bus->name, "vdev") == 0) ||
+		(strcmp(iter->bus->name, "fslmc") == 0) ||
+		(strcmp(iter->bus->name, "dpaa_bus") == 0)) {
 		bus_param_key = "name";
 	} else if (strcmp(iter->bus->name, "pci") == 0) {
 		bus_param_key = "addr";
@@ -6292,7 +6294,7 @@ rte_eth_representor_info_get(uint16_t port_id,
 	return eth_err(port_id, (*dev->dev_ops->representor_info_get)(dev, info));
 }
 
-RTE_LOG_REGISTER(rte_eth_dev_logtype, lib.ethdev, INFO);
+RTE_LOG_REGISTER_DEFAULT(rte_eth_dev_logtype, INFO);
 
 RTE_INIT(ethdev_init_telemetry)
 {

@@ -2928,23 +2928,9 @@ ice_rss_hash_set(struct ice_pf *pf, uint64_t rss_hf)
 	}
 
 	if (rss_hf & ETH_RSS_IPV4) {
-		cfg.addl_hdrs = ICE_FLOW_SEG_HDR_GTPU_IP | ICE_FLOW_SEG_HDR_IPV4 |
-				ICE_FLOW_SEG_HDR_IPV_OTHER;
-		cfg.hash_flds = ICE_FLOW_HASH_IPV4;
-		ret = ice_add_rss_cfg_wrap(pf, vsi->idx, &cfg);
-		if (ret)
-			PMD_DRV_LOG(ERR, "%s GTPU_IPV4 rss flow fail %d",
-				    __func__, ret);
-
-		cfg.addl_hdrs = ICE_FLOW_SEG_HDR_GTPU_EH | ICE_FLOW_SEG_HDR_IPV4 |
-				ICE_FLOW_SEG_HDR_IPV_OTHER;
-		ret = ice_add_rss_cfg_wrap(pf, vsi->idx, &cfg);
-		if (ret)
-			PMD_DRV_LOG(ERR, "%s GTPU_EH_IPV4 rss flow fail %d",
-				    __func__, ret);
-
 		cfg.addl_hdrs = ICE_FLOW_SEG_HDR_PPPOE | ICE_FLOW_SEG_HDR_IPV4 |
 				ICE_FLOW_SEG_HDR_IPV_OTHER;
+		cfg.hash_flds = ICE_FLOW_HASH_IPV4;
 		ret = ice_add_rss_cfg_wrap(pf, vsi->idx, &cfg);
 		if (ret)
 			PMD_DRV_LOG(ERR, "%s PPPoE_IPV4 rss flow fail %d",
@@ -2952,23 +2938,9 @@ ice_rss_hash_set(struct ice_pf *pf, uint64_t rss_hf)
 	}
 
 	if (rss_hf & ETH_RSS_IPV6) {
-		cfg.addl_hdrs = ICE_FLOW_SEG_HDR_GTPU_IP | ICE_FLOW_SEG_HDR_IPV6 |
-				ICE_FLOW_SEG_HDR_IPV_OTHER;
-		cfg.hash_flds = ICE_FLOW_HASH_IPV6;
-		ret = ice_add_rss_cfg_wrap(pf, vsi->idx, &cfg);
-		if (ret)
-			PMD_DRV_LOG(ERR, "%s GTPU_IPV6 rss flow fail %d",
-				    __func__, ret);
-
-		cfg.addl_hdrs = ICE_FLOW_SEG_HDR_GTPU_EH | ICE_FLOW_SEG_HDR_IPV6 |
-				ICE_FLOW_SEG_HDR_IPV_OTHER;
-		ret = ice_add_rss_cfg_wrap(pf, vsi->idx, &cfg);
-		if (ret)
-			PMD_DRV_LOG(ERR, "%s GTPU_EH_IPV6 rss flow fail %d",
-				    __func__, ret);
-
 		cfg.addl_hdrs = ICE_FLOW_SEG_HDR_PPPOE | ICE_FLOW_SEG_HDR_IPV6 |
 				ICE_FLOW_SEG_HDR_IPV_OTHER;
+		cfg.hash_flds = ICE_FLOW_HASH_IPV6;
 		ret = ice_add_rss_cfg_wrap(pf, vsi->idx, &cfg);
 		if (ret)
 			PMD_DRV_LOG(ERR, "%s PPPoE_IPV6 rss flow fail %d",
@@ -2976,23 +2948,9 @@ ice_rss_hash_set(struct ice_pf *pf, uint64_t rss_hf)
 	}
 
 	if (rss_hf & ETH_RSS_NONFRAG_IPV4_UDP) {
-		cfg.addl_hdrs = ICE_FLOW_SEG_HDR_GTPU_IP | ICE_FLOW_SEG_HDR_UDP |
-				ICE_FLOW_SEG_HDR_IPV4 | ICE_FLOW_SEG_HDR_IPV_OTHER;
-		cfg.hash_flds = ICE_HASH_UDP_IPV4;
-		ret = ice_add_rss_cfg_wrap(pf, vsi->idx, &cfg);
-		if (ret)
-			PMD_DRV_LOG(ERR, "%s GTPU_IPV4_UDP rss flow fail %d",
-				    __func__, ret);
-
-		cfg.addl_hdrs = ICE_FLOW_SEG_HDR_GTPU_EH | ICE_FLOW_SEG_HDR_UDP |
-				ICE_FLOW_SEG_HDR_IPV4 | ICE_FLOW_SEG_HDR_IPV_OTHER;
-		ret = ice_add_rss_cfg_wrap(pf, vsi->idx, &cfg);
-		if (ret)
-			PMD_DRV_LOG(ERR, "%s GTPU_EH_IPV4_UDP rss flow fail %d",
-				    __func__, ret);
-
 		cfg.addl_hdrs = ICE_FLOW_SEG_HDR_PPPOE | ICE_FLOW_SEG_HDR_UDP |
 				ICE_FLOW_SEG_HDR_IPV4 | ICE_FLOW_SEG_HDR_IPV_OTHER;
+		cfg.hash_flds = ICE_HASH_UDP_IPV4;
 		ret = ice_add_rss_cfg_wrap(pf, vsi->idx, &cfg);
 		if (ret)
 			PMD_DRV_LOG(ERR, "%s PPPoE_IPV4_UDP rss flow fail %d",
@@ -3000,23 +2958,9 @@ ice_rss_hash_set(struct ice_pf *pf, uint64_t rss_hf)
 	}
 
 	if (rss_hf & ETH_RSS_NONFRAG_IPV6_UDP) {
-		cfg.addl_hdrs = ICE_FLOW_SEG_HDR_GTPU_IP | ICE_FLOW_SEG_HDR_UDP |
-				ICE_FLOW_SEG_HDR_IPV6 | ICE_FLOW_SEG_HDR_IPV_OTHER;
-		cfg.hash_flds = ICE_HASH_UDP_IPV6;
-		ret = ice_add_rss_cfg_wrap(pf, vsi->idx, &cfg);
-		if (ret)
-			PMD_DRV_LOG(ERR, "%s GTPU_IPV6_UDP rss flow fail %d",
-				    __func__, ret);
-
-		cfg.addl_hdrs = ICE_FLOW_SEG_HDR_GTPU_EH | ICE_FLOW_SEG_HDR_UDP |
-				ICE_FLOW_SEG_HDR_IPV6 | ICE_FLOW_SEG_HDR_IPV_OTHER;
-		ret = ice_add_rss_cfg_wrap(pf, vsi->idx, &cfg);
-		if (ret)
-			PMD_DRV_LOG(ERR, "%s GTPU_EH_IPV6_UDP rss flow fail %d",
-				    __func__, ret);
-
 		cfg.addl_hdrs = ICE_FLOW_SEG_HDR_PPPOE | ICE_FLOW_SEG_HDR_UDP |
 				ICE_FLOW_SEG_HDR_IPV6 | ICE_FLOW_SEG_HDR_IPV_OTHER;
+		cfg.hash_flds = ICE_HASH_UDP_IPV6;
 		ret = ice_add_rss_cfg_wrap(pf, vsi->idx, &cfg);
 		if (ret)
 			PMD_DRV_LOG(ERR, "%s PPPoE_IPV6_UDP rss flow fail %d",
@@ -3024,23 +2968,9 @@ ice_rss_hash_set(struct ice_pf *pf, uint64_t rss_hf)
 	}
 
 	if (rss_hf & ETH_RSS_NONFRAG_IPV4_TCP) {
-		cfg.addl_hdrs = ICE_FLOW_SEG_HDR_GTPU_IP | ICE_FLOW_SEG_HDR_TCP |
-				ICE_FLOW_SEG_HDR_IPV4 | ICE_FLOW_SEG_HDR_IPV_OTHER;
-		cfg.hash_flds = ICE_HASH_TCP_IPV4;
-		ret = ice_add_rss_cfg_wrap(pf, vsi->idx, &cfg);
-		if (ret)
-			PMD_DRV_LOG(ERR, "%s GTPU_IPV4_TCP rss flow fail %d",
-				    __func__, ret);
-
-		cfg.addl_hdrs = ICE_FLOW_SEG_HDR_GTPU_EH | ICE_FLOW_SEG_HDR_TCP |
-				ICE_FLOW_SEG_HDR_IPV4 | ICE_FLOW_SEG_HDR_IPV_OTHER;
-		ret = ice_add_rss_cfg_wrap(pf, vsi->idx, &cfg);
-		if (ret)
-			PMD_DRV_LOG(ERR, "%s GTPU_EH_IPV4_TCP rss flow fail %d",
-				    __func__, ret);
-
 		cfg.addl_hdrs = ICE_FLOW_SEG_HDR_PPPOE | ICE_FLOW_SEG_HDR_TCP |
 				ICE_FLOW_SEG_HDR_IPV4 | ICE_FLOW_SEG_HDR_IPV_OTHER;
+		cfg.hash_flds = ICE_HASH_TCP_IPV4;
 		ret = ice_add_rss_cfg_wrap(pf, vsi->idx, &cfg);
 		if (ret)
 			PMD_DRV_LOG(ERR, "%s PPPoE_IPV4_TCP rss flow fail %d",
@@ -3048,23 +2978,9 @@ ice_rss_hash_set(struct ice_pf *pf, uint64_t rss_hf)
 	}
 
 	if (rss_hf & ETH_RSS_NONFRAG_IPV6_TCP) {
-		cfg.addl_hdrs = ICE_FLOW_SEG_HDR_GTPU_IP | ICE_FLOW_SEG_HDR_TCP |
-				ICE_FLOW_SEG_HDR_IPV6 | ICE_FLOW_SEG_HDR_IPV_OTHER;
-		cfg.hash_flds = ICE_HASH_TCP_IPV6;
-		ret = ice_add_rss_cfg_wrap(pf, vsi->idx, &cfg);
-		if (ret)
-			PMD_DRV_LOG(ERR, "%s GTPU_IPV6_TCP rss flow fail %d",
-				    __func__, ret);
-
-		cfg.addl_hdrs = ICE_FLOW_SEG_HDR_GTPU_EH | ICE_FLOW_SEG_HDR_TCP |
-				ICE_FLOW_SEG_HDR_IPV6 | ICE_FLOW_SEG_HDR_IPV_OTHER;
-		ret = ice_add_rss_cfg_wrap(pf, vsi->idx, &cfg);
-		if (ret)
-			PMD_DRV_LOG(ERR, "%s GTPU_EH_IPV6_TCP rss flow fail %d",
-				    __func__, ret);
-
 		cfg.addl_hdrs = ICE_FLOW_SEG_HDR_PPPOE | ICE_FLOW_SEG_HDR_TCP |
 				ICE_FLOW_SEG_HDR_IPV6 | ICE_FLOW_SEG_HDR_IPV_OTHER;
+		cfg.hash_flds = ICE_HASH_TCP_IPV6;
 		ret = ice_add_rss_cfg_wrap(pf, vsi->idx, &cfg);
 		if (ret)
 			PMD_DRV_LOG(ERR, "%s PPPoE_IPV6_TCP rss flow fail %d",
@@ -3124,7 +3040,7 @@ static int ice_init_rss(struct ice_pf *pf)
 	/* configure RSS key */
 	if (!rss_conf->rss_key) {
 		/* Calculate the default hash key */
-		for (i = 0; i <= vsi->rss_key_size; i++)
+		for (i = 0; i < vsi->rss_key_size; i++)
 			vsi->rss_key[i] = (uint8_t)rte_rand();
 	} else {
 		rte_memcpy(vsi->rss_key, rss_conf->rss_key,
@@ -3539,7 +3455,7 @@ ice_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	}
 
 	dev_info->rx_queue_offload_capa = 0;
-	dev_info->tx_queue_offload_capa = 0;
+	dev_info->tx_queue_offload_capa = DEV_TX_OFFLOAD_MBUF_FAST_FREE;
 
 	dev_info->reta_size = pf->hash_lut_size;
 	dev_info->hash_key_size = (VSIQF_HKEY_MAX_INDEX + 1) * sizeof(uint32_t);
@@ -4646,10 +4562,12 @@ ice_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
 			hw->flash.nvm.minor,
 			hw->flash.nvm.eetrack,
 			ver, build, patch);
+	if (ret < 0)
+		return -EINVAL;
 
 	/* add the size of '\0' */
 	ret += 1;
-	if (fw_size < (u32)ret)
+	if (fw_size < (size_t)ret)
 		return ret;
 	else
 		return 0;
@@ -5370,11 +5288,11 @@ RTE_PMD_REGISTER_PARAM_STRING(net_ice,
 			      ICE_SAFE_MODE_SUPPORT_ARG "=<0|1>"
 			      ICE_PIPELINE_MODE_SUPPORT_ARG "=<0|1>");
 
-RTE_LOG_REGISTER(ice_logtype_init, pmd.net.ice.init, NOTICE);
-RTE_LOG_REGISTER(ice_logtype_driver, pmd.net.ice.driver, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(ice_logtype_init, init, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(ice_logtype_driver, driver, NOTICE);
 #ifdef RTE_ETHDEV_DEBUG_RX
-RTE_LOG_REGISTER(ice_logtype_rx, pmd.net.ice.rx, DEBUG);
+RTE_LOG_REGISTER_SUFFIX(ice_logtype_rx, rx, DEBUG);
 #endif
 #ifdef RTE_ETHDEV_DEBUG_TX
-RTE_LOG_REGISTER(ice_logtype_tx, pmd.net.ice.tx, DEBUG);
+RTE_LOG_REGISTER_SUFFIX(ice_logtype_tx, tx, DEBUG);
 #endif
