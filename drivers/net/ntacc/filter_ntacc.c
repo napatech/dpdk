@@ -532,13 +532,14 @@ void CreateStreamid(char *ntpl_buf, struct pmd_internals *internals, uint32_t nb
   if (nb_queues > 1) {
     // We need to check whether we can set it up as a range or list
     for (i = 0; i < nb_queues - 1; i++) {
+			internals->rxq[list_queues[i]].stream_assigned = 1;
       if (list_queues[i] != (list_queues[i + 1] - 1)) {
         // The queues are not contigous, so we need to use a list
         range = false;
         break;
       }
     }
-  }
+	}
   else {
     range = false;
   }
@@ -550,6 +551,7 @@ void CreateStreamid(char *ntpl_buf, struct pmd_internals *internals, uint32_t nb
   }
   else {
     for (i = 0; i < nb_queues; i++) {
+			internals->rxq[list_queues[i]].stream_assigned = 1;
       snprintf(buf, 20, "%u", internals->rxq[list_queues[i]].stream_id);
       strcat(ntpl_buf, buf);
       if (i < nb_queues - 1) {

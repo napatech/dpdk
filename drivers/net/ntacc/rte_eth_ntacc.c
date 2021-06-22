@@ -1012,20 +1012,47 @@ static int eth_dev_stop(struct rte_eth_dev *dev)
   _dev_flow_flush(dev, &error);
   _destroy_drop_errored_packets_filter(internals);
 
+	for (queue = 0; queue < dev->data->nb_rx_queues; queue++) {
+		if (rx_q[queue].enabled) {
+			eth_rx_queue_stop(dev, queue);
+		}
+	}
   for (queue = 0; queue < dev->data->nb_rx_queues; queue++) {
     if (rx_q[queue].enabled) {
       if (rx_q[queue].pSeg) {
         (*_NT_NetRxRelease)(rx_q[queue].pNetRx, rx_q[queue].pSeg);
         rx_q[queue].pSeg = NULL;
       }
-      if (rx_q[queue].pNetRx) {
-          (void)(*_NT_NetRxClose)(rx_q[queue].pNetRx);
-          rx_q[queue].pNetRx = NULL;
-      }
-      memset(&rx_q[queue].ringControl, 0, sizeof(rx_q[queue].ringControl));
-      eth_rx_queue_stop(dev, queue);
-    }
+		}
   }
+	for (queue = 0; queue < dev->data->nb_rx_queues; queue++) {
+		if (rx_q[queue].enabled) {
+			if (rx_q[queue].pNetRx) {
+				if (!rx_q[queue].stream_assigned) {
+					 char ntpl_buf[50];
+					 uint32_t ntplID;
+					 snprintf(ntpl_buf, 50, "assign[streamid=%u]=all", rx_q[queue].stream_id);
+					 NTACC_LOCK(&internals->configlock);
+					 DoNtpl(ntpl_buf, &ntplID, internals, NULL);
+					 NTACC_UNLOCK(&internals->configlock);
+					 snprintf(ntpl_buf, 50, "delete=%u", ntplID);
+					 NTACC_LOCK(&internals->configlock);
+					 DoNtpl(ntpl_buf, &ntplID, internals, NULL);
+					 NTACC_UNLOCK(&internals->configlock);
+					 rx_q[queue].stream_assigned = 0;
+				 }
+				 (void)(*_NT_NetRxClose)(rx_q[queue].pNetRx);
+				 rx_q[queue].pNetRx = NULL;
+			}
+		}
+	}
+	for (queue = 0; queue < dev->data->nb_rx_queues; queue++) {
+		if (rx_q[queue].enabled) {
+			memset(&rx_q[queue].ringControl, 0, sizeof(rx_q[queue].ringControl));
+			rx_q[queue].enabled = false;
+		}
+	}
+
   for (queue = 0; queue < dev->data->nb_tx_queues; queue++) {
     if (tx_q[queue].enabled) {
       if (tx_q[queue].pNetTx) {
@@ -1450,7 +1477,8 @@ static int eth_link_update(struct rte_eth_dev *dev,
 
   dev->data->dev_link.link_status = pInfo->u.port_v8.data.state == NT_LINK_STATE_UP ? 1 : 0;
   switch (pInfo->u.port_v8.data.speed) {
-  case NT_LINK_SPEED_UNKNOWN:
+	case NT_LINK_SPEED_UNKNOWN:
+	case NT_LINK_SPEED_END:
     dev->data->dev_link.link_speed = ETH_SPEED_NUM_1G;
     break;
   case NT_LINK_SPEED_10M:
@@ -2418,7 +2446,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
     }
     NTACC_UNLOCK(&internals->lock);
 
-    // Check that the hostbuffers are deleted/changed
+		// Check that the hostbuffers are deleted/changed
     counter = 0;
     found = false;
     while (counter < 10 && found == false) {
@@ -2430,7 +2458,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       }
     }
 
-    NTACC_LOCK(&internals->lock);
+		NTACC_LOCK(&internals->lock);
     rte_free(internals->defaultFlow);
     internals->defaultFlow = NULL;
     NTACC_UNLOCK(&internals->lock);
@@ -2491,7 +2519,6 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
         CreateStreamid(&ntpl_buf[strlen(ntpl_buf)], internals, 1, list_queues);
         nb_queues = 1;
       }
-
       // Set the port number
       snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1,
                ";tag=%s]=port==%u", internals->tagName, internals->port);
@@ -2914,6 +2941,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
 
     switch (pInfo->u.port_v7.data.speed) {
     case NT_LINK_SPEED_UNKNOWN:
+		case NT_LINK_SPEED_END:
       pmd_link.link_speed = ETH_SPEED_NUM_1G;
       break;
     case NT_LINK_SPEED_10M:

@@ -102,7 +102,8 @@ struct ntacc_rx_queue {
   volatile uint64_t      err_pkts;
 #endif
 
-  uint32_t                stream_id;
+  uint32_t               stream_id;
+	int                    stream_assigned;
   uint16_t               buf_size;
   int                     enabled;
   uint8_t                local_port;
