@@ -63,7 +63,7 @@
 /**
 * Napatech version
 */
-#define NT_VER "2.8"
+#define NT_VER "2.9"
 
 int ntacc_logtype;
 
@@ -2318,6 +2318,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
 
   if (!reuse) {
     if (DoNtpl(ntpl_buf, &ntplID, internals, NULL) != 0) {
+			NTACC_UNLOCK(&internals->configlock);
       goto FlowError;
     }
     NTACC_LOCK(&internals->lock);
