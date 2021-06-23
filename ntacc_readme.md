@@ -70,8 +70,7 @@ All Napatech 4Generation SmartNics are supported. Some SmartNics have limited fi
 |NT20E3-2-PTP SmartNICs (4GA)|
 
 The complete driver package can be downloaded here:
-[Link™ Capture Software 12.5.2 Linux](https://supportportal.napatech.com/index.php?/selfhelp/view-article/link--capture-software-1252-for-linux/634)
-
+[Link™ Capture Software 12.6.4 for Linux](https://supportportal.napatech.com/index.php?/selfhelp/view-article/link--capture-software-1264-for-linux/646)
 
 #### SmartNic with Limited filter support <a name="LimitedFilter"></a>
 
