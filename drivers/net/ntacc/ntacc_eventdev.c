@@ -123,7 +123,7 @@ static uint16_t
 ntacc_eventdev_dequeue_burst(void *port, struct rte_event ev[],
                              uint16_t nb_events, uint64_t timeout_ticks)
 {
-	struct ntacc_port *sp = port;
+  struct ntacc_port *sp = port;
   uint16_t got_nb_events = 0;
   unsigned i;
 
@@ -132,6 +132,7 @@ ntacc_eventdev_dequeue_burst(void *port, struct rte_event ev[],
   ct_assert(sizeof(ev[0].u64) == sizeof(NtFlowStatus_t));
   
   if (sp->rxq->hFlowStream == NULL || nb_events == 0) {
+    printf("The flow stream has been closed\n");
     return 0;
   }
   
@@ -642,7 +643,6 @@ static int _nt_lib_open(void)
     fprintf(stderr, "Failed to find \"NT_FlowStatusRead\" in %s\n", path);
     return -1;
   }
-
   return 0;
 }
 

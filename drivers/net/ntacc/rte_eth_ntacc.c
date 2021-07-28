@@ -85,6 +85,7 @@ struct supportedDriver_s supportedDriver = {3, 7, 2};
 #define PCI_DEVICE_ID_NT40E3   0x0145
 #define PCI_DEVICE_ID_NT40A01  0x0185
 #define PCI_DEVICE_ID_NT100E3  0x0155
+#define PCI_DEVICE_ID_NT100A01 0x01E5
 
 #define PCI_VENDOR_ID_INTEL          0x8086
 #define PCIE_DEVICE_ID_PF_DSC_1_X    0x09C4
@@ -105,6 +106,7 @@ struct supportedAdapters_s supportedAdapters[NB_SUPPORTED_FPGAS] =
   { 200, 7001, 12, 0, 0 },
   { 200, 9523, 14, 0, 0 },
   { 200, 9524, 14, 0, 0 },
+  { 200, 9559, 14, 0, 0 },
 };
 
 static void *_libnt;
@@ -825,13 +827,8 @@ static int eth_dev_start(struct rte_eth_dev *dev)
     for (queue = 0; queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
       if (rx_q[queue].enabled) {
         NtFlowAttr_t attr;
-        uint32_t flags = NT_FLOW_STREAM_WR;
-        if (internals->flowMatcher > 1) {
-          flags |= NT_FLOW_STREAM_RD;
-        }
         (*_NT_FlowOpenAttrInit)(&attr);
         (*_NT_FlowOpenAttrSetAdapterNo)(&attr, internals->adapterNo);
-        (*_NT_FlowOpenAttrSetFlags)(&attr, flags);
         if ((status = (*_NT_FlowOpen_Attr)(&rx_q[queue].hFlowStream, "DPDK", &attr)) != NT_SUCCESS) {
           _log_nt_errors(status, "NT_NetRxOpen() failed", __func__);
           goto StartError;
@@ -1029,6 +1026,9 @@ static void eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_i
   }
   if (pInfo->u.port_v7.data.capabilities.speed & NT_LINK_SPEED_10G) {
     dev_info->speed_capa |= ETH_LINK_SPEED_10G;
+  }
+  if (pInfo->u.port_v7.data.capabilities.speed & NT_LINK_SPEED_25G) {
+	dev_info->speed_capa |= ETH_LINK_SPEED_25G;
   }
   if (pInfo->u.port_v7.data.capabilities.speed & NT_LINK_SPEED_40G) {
     dev_info->speed_capa |= ETH_LINK_SPEED_40G;
@@ -1232,6 +1232,7 @@ static int eth_link_update(struct rte_eth_dev *dev,
   dev->data->dev_link.link_status = pInfo->u.port_v8.data.state == NT_LINK_STATE_UP ? 1 : 0;
   switch (pInfo->u.port_v8.data.speed) {
   case NT_LINK_SPEED_UNKNOWN:
+  case NT_LINK_SPEED_END:
     dev->data->dev_link.link_speed = ETH_SPEED_NUM_1G;
     break;
   case NT_LINK_SPEED_10M:
@@ -1249,6 +1250,9 @@ static int eth_link_update(struct rte_eth_dev *dev,
   case NT_LINK_SPEED_40G:
     dev->data->dev_link.link_speed = ETH_SPEED_NUM_40G;
     break;
+  case NT_LINK_SPEED_25G:
+	dev->data->dev_link.link_speed = ETH_SPEED_NUM_25G;
+	break;
   case NT_LINK_SPEED_50G:
     dev->data->dev_link.link_speed = ETH_SPEED_NUM_50G;
     break;
@@ -2064,7 +2068,7 @@ FlowError:
 
 static inline int _programFlowNtpl(struct pmd_internals *internals, struct rte_flow_5tuple *tuple, struct rte_flow_error *error)
 {
-  char ntpl_buf[156];
+  char ntpl_buf[200];
   uint8_t port;
 
   uint32_t idv4 = internals->flow.up.ipv4key_id;
@@ -2079,106 +2083,101 @@ static inline int _programFlowNtpl(struct pmd_internals *internals, struct rte_f
 
   if (tuple->flag & RTE_FLOW_PROGRAM_SINGLE_DIR) {
     // IPv4
-    snprintf(ntpl_buf, 156, "KeyType[name=KT%u;Access=partial;Bank=0;tag=port%u]={32,32,16,16}", idv4, internals->port);
+    snprintf(ntpl_buf, 200, "keytype[name=Flowtesttype%u;tag=port%u] = {sw_32_32, sw_16_16}", idv4, internals->port);
     if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[3], internals, error) != 0) {
       return 1;
     }
-    snprintf(ntpl_buf, 156, "KeyDef[name=KDEF%u;KeyType=KT%u;prot=OUTER;tag=port%u]=(Layer3Header[12]/32,Layer3Header[16]/32,Layer4Header[0]/16,Layer4Header[2]/16)", idv4, idv4, internals->port);
+    snprintf(ntpl_buf, 200, "keydef[name=Flowtestdef%u;keytype=Flowtesttype%u;ipprotocolfield=Outer;tag=port%u]=(layer3header[12]/32/32,layer4header[0]/16/16)", idv4, idv4, internals->port);
     if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[2], internals, error) != 0) {
       return 1;
     }
-    // IPv4 Drop
-    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;tag=port%u]=(Layer3Protocol==IPV4)and(port==%u)and(Key(KDEF%u,KeyID=%u,Counterset=CSA)==%u)", internals->port, internals->port, idv4, idv4, internals->flow.up.key[DROP]);
-    if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[1], internals, error) != 0) {
-      return 1;
-    }
+//		// IPv4 Drop
+//		snprintf(ntpl_buf, 200, "assign[StreamId=drop;priority=1;tag=port%u]=layer3protocol==ipv4 and key(Flowtestdef%u,KeyID=1,CounterSet=CSB)==4 and Port==%u", internals->port, idv4, internals->port);
+//		if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[0], internals, error) != 0) {
+//			return 1;
+//		}
     // IPv4 Forward
-    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;DestinationPort=%u;tag=port%u]=(Layer3Protocol==IPV4)and(port==%u)and(Key(KDEF%u,KeyID=%u,Counterset=CSB)==%u)", port, internals->port, internals->port, idv4, idv4, internals->flow.up.key[FORWARD]);
+		snprintf(ntpl_buf, 200, "assign[StreamId=drop;priority=1;DestinationPort=%u;tag=port%u]=layer3protocol==ipv4 and key(Flowtestdef%u,KeyID=1,CounterSet=CSB)==4 and Port==%u", port, internals->port, idv4, internals->port);
     if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[0], internals, error) != 0) {
       return 1;
     }
 
     // IPv6
-    snprintf(ntpl_buf, 156, "KeyType[name=KT%u;Access=partial;Bank=0;tag=port%u]={128,128,16,16}", idv6, internals->port);
+    snprintf(ntpl_buf, 200, "keytype[name=Flowtesttype%u;tag=port%u] = {sw_128_128, sw_16_16}", idv6, internals->port);
     if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[3], internals, error) != 0) {
       return 1;
     }
-    snprintf(ntpl_buf, 156, "KeyDef[name=KDEF%u;KeyType=KT%u;prot=OUTER;tag=port%u]=(Layer3Header[8]/128,Layer3Header[24]/128,Layer4Header[0]/16,Layer4Header[2]/16)", idv6, idv6, internals->port);
+    snprintf(ntpl_buf, 200, "KeyDef[name=Flowtestdef%u;KeyType=Flowtesttype%u;ipprotocolfield=OUTER;tag=port%u]=(layer3header[8]/128/128, layer4header[0]/16/16)", idv6, idv6, internals->port);
     if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[2], internals, error) != 0) {
       return 1;
     }
-    // IPv6 Drop
-    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;tag=port%u]=(Layer3Protocol==IPV6)and(port==%u)and(Key(KDEF%u,KeyID=%u,Counterset=CSA)==%u)", internals->port, internals->port, idv6, idv6, internals->flow.up.key[DROP]);
-    if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[1], internals, error) != 0) {
-      return 1;
-    }
+//    // IPv6 Drop
+//    snprintf(ntpl_buf, 200, "assign[streamid=drop;priority=1;tag=port%u]=layer3protocol==ipv6 and key(Flowtestdef%u,KeyID=2,CounterSet=CSA)==4 and Port==%u", internals->port, idv6, internals->port);
+//    if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[1], internals, error) != 0) {
+//      return 1;
+//    }
     // IPv6 Forward
-    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;DestinationPort=%u;tag=port%u]=(Layer3Protocol==IPV6)and(port==%u)and(Key(KDEF%u,KeyID=%u,Counterset=CSB)==%u)", port, internals->port, internals->port, idv6, idv6, internals->flow.up.key[FORWARD]);
+    snprintf(ntpl_buf, 200, "assign[streamid=drop;priority=1;DestinationPort=%u;tag=port%u]=layer3protocol==ipv6 and key(Flowtestdef%u,KeyID=2,CounterSet=CSA)==4 and Port==%u", port, internals->port, idv6, internals->port);
     if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[0], internals, error) != 0) {
       return 1;
     }
   }
   else {
     // IPv4
-    snprintf(ntpl_buf, 156, "KeyType[name=KT%u;Access=partial;Bank=0;tag=port%u]={32,32,16,16}", idv4, internals->port);
+    snprintf(ntpl_buf, 200, "keytype[name=Flowtesttype%u;tag=port%u] = {sw_32_32, sw_16_16}", idv4, internals->port);
     if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[6], internals, error) != 0) {
       return 1;
     }
-    snprintf(ntpl_buf, 156, "KeyDef[name=UP%u;KeyType=KT%u;prot=OUTER;tag=port%u]=(Layer3Header[12]/32,Layer3Header[16]/32,Layer4Header[0]/16,Layer4Header[2]/16)", idv4, idv4, internals->port);
-    if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[5], internals, error) != 0) {
-      return 1;
-    }
-    snprintf(ntpl_buf, 156, "KeyDef[name=DOWN%u;KeyType=KT%u;prot=OUTER;tag=port%u]=(Layer3Header[16]/32,Layer3Header[12]/32,Layer4Header[2]/16,Layer4Header[0]/16)", idv4, idv4, internals->port);
+
+    snprintf(ntpl_buf, 200, "KeyDef[name=Flowtestdef%u;KeyType=Flowtesttype%u;ipprotocolfield=OUTER;tag=port%u]=(layer3header[12]/32/32,layer4header[0]/16/16)", idv4, idv4, port);
     if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[4], internals, error) != 0) {
       return 1;
     }
-    // IPv4 Drop
-    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;tag=port%u]=(Layer3Protocol==IPV4)and(port==%u)and(Key(UP%u,KeyID=%u,Counterset=CSA)==%u)", internals->port, internals->port, idv4, idv4, internals->flow.up.key[DROP]);
-    if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[3], internals, error) != 0) {
-      return 1;
-    }
-    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;tag=port%u]=(Layer3Protocol==IPV4)and(port==%u)and(Key(DOWN%u,KeyID=%u,Counterset=CSB)==%u)", internals->port, port, idv4, idv4, internals->flow.up.key[DROP]);
-    if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[2], internals, error) != 0) {
-      return 1;
-    }
-    // IPv4 Forward
-    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;DestinationPort=%u;tag=port%u]=(Layer3Protocol==IPV4)and(port==%u)and(Key(UP%u,KeyID=%u,Counterset=CSA)==%u)", port, internals->port, internals->port, idv4, idv4, internals->flow.up.key[FORWARD]);
-    if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[1], internals, error) != 0) {
-      return 1;
-    }
-    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;DestinationPort=%u;tag=port%u]=(Layer3Protocol==IPV4)and(port==%u)and(Key(DOWN%u,KeyID=%u,Counterset=CSB)==%u)", internals->port, internals->port, port, idv4, idv4, internals->flow.up.key[FORWARD]);
-    if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[0], internals, error) != 0) {
-      return 1;
-    }
+
+//    // IPv4 drop
+//    snprintf(ntpl_buf, 200, "assign[streamid=drop;priority=1;tag=port%u]=(Layer3Protocol==IPV4)and(port==%u)and(Key(Flowtestdef%u,KeyID=1,Counterset=CSA)==4)", port, internals->port, idv4);
+//    if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[1], internals, error) != 0) {
+//      return 1;
+//    }
+//    snprintf(ntpl_buf, 200, "assign[streamid=drop;priority=1;tag=port%u]=(Layer3Protocol==IPV4)and(port==%u)and(Key(Flowtestdef%u,KeyID=1,Counterset=CSB,fieldaction=swap)==4)", internals->port, port, idv4);
+//    if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[0], internals, error) != 0) {
+//      return 1;
+//    }
+
+		// IPv4 Forward
+		snprintf(ntpl_buf, 200, "assign[streamid=drop;priority=1;DestinationPort=%u;tag=port%u]=(Layer3Protocol==IPV4)and(port==%u)and(Key(Flowtestdef%u,KeyID=1,Counterset=CSA)==4)", port, internals->port, internals->port, idv4);
+		if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[1], internals, error) != 0) {
+			return 1;
+		}
+		snprintf(ntpl_buf, 200, "assign[streamid=drop;priority=1;DestinationPort=%u;tag=port%u]=(Layer3Protocol==IPV4)and(port==%u)and(Key(Flowtestdef%u,KeyID=1,Counterset=CSB,fieldaction=swap)==4)", internals->port, port, port, idv4);
+		if (DoNtpl(ntpl_buf, &internals->flow.ipv4ntplid[0], internals, error) != 0) {
+			return 1;
+		}
 
     // IPv6
-    snprintf(ntpl_buf, 156, "KeyType[name=KT%u;Access=partial;Bank=0;tag=port%u]={128,128,16,16}", idv6, internals->port);
+    snprintf(ntpl_buf, 200, "KeyType[name=Flowtesttype%u;tag=port%u]={sw_128_128, sw_16_16}", idv6, internals->port);
     if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[6], internals, error) != 0) {
       return 1;
     }
-    snprintf(ntpl_buf, 156, "KeyDef[name=UP%u;KeyType=KT%u;prot=OUTER;tag=port%u]=(Layer3Header[8]/128,Layer3Header[24]/128,Layer4Header[0]/16,Layer4Header[2]/16)", idv6, idv6, internals->port);
+    snprintf(ntpl_buf, 200, "KeyDef[name=Flowtestdef%u;KeyType=Flowtesttype%u;ipprotocolfield=OUTER;tag=port%u]=(layer3header[8]/128/128, layer4header[0]/16/16)", idv6, idv6, internals->port);
     if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[5], internals, error) != 0) {
       return 1;
     }
-    snprintf(ntpl_buf, 156, "KeyDef[name=DOWN%u;KeyType=KT%u;prot=OUTER;tag=port%u]=(Layer3Header[24]/128,Layer3Header[8]/128,Layer4Header[2]/16,Layer4Header[0]/16)", idv6, idv6, internals->port);
-    if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[4], internals, error) != 0) {
-      return 1;
-    }
-    // IPv6 Drop
-    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;tag=port%u]=(Layer3Protocol==IPV6)and(port==%u)and(Key(UP%u,KeyID=%u,Counterset=CSA)==%u)", internals->port, internals->port, idv6, idv6, internals->flow.up.key[DROP]);
-    if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[3], internals, error) != 0) {
-      return 1;
-    }
-    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;tag=port%u]=(Layer3Protocol==IPV6)and(port==%u)and(Key(DOWN%u,KeyID=%u,Counterset=CSB)==%u)", internals->port, port, idv6, idv6, internals->flow.up.key[DROP]);
-    if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[2], internals, error) != 0) {
-      return 1;
-    }
+//    // IPv6 Drop
+//    snprintf(ntpl_buf, 200, "assign[streamid=drop;priority=1;tag=port%u]=layer3protocol==ipv6 and key(Flowtestdef%u,KeyID=2,CounterSet=CSA)==4 and Port==%u", internals->port, idv6, internals->port);
+//    if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[3], internals, error) != 0) {
+//      return 1;
+//    }
+//		snprintf(ntpl_buf, 200, "assign[streamid=drop;priority=1;tag=port%u]=layer3protocol==ipv6 and key(Flowtestdef%u,KeyID=2,CounterSet=CSA)==4 and Port==%u", port, idv6, port);
+//    if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[2], internals, error) != 0) {
+//      return 1;
+//    }
     // IPv6 Forward
-    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;DestinationPort=%u;tag=port%u]=(Layer3Protocol==IPV6)and(port==%u)and(Key(UP%u,KeyID=%u,Counterset=CSB)==%u)", port, internals->port, internals->port, idv6, idv6, internals->flow.up.key[FORWARD]);
+    snprintf(ntpl_buf, 200, "assign[streamid=drop;priority=1;DestinationPort=%u;tag=port%u]=layer3protocol==ipv6 and key(Flowtestdef%u,KeyID=2,CounterSet=CSA)==4 and Port==%u", port, internals->port, idv6, internals->port);
     if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[1], internals, error) != 0) {
       return 1;
     }
-    snprintf(ntpl_buf, 156, "assign[streamid=drop;priority=1;DestinationPort=%u;tag=port%u]=(Layer3Protocol==IPV6)and(port==%u)and(Key(DOWN%u,KeyID=%u,Counterset=CSB)==%u)", internals->port, internals->port, port, idv6, idv6, internals->flow.up.key[FORWARD]);
+    snprintf(ntpl_buf, 200, "assign[streamid=drop;priority=1;DestinationPort=%u;tag=port%u]=layer3protocol==ipv6 and key(Flowtestdef%u,KeyID=2,CounterSet=CSB,fieldaction=swap)==4 and Port==%u", internals->port, port, idv6, port);
     if (DoNtpl(ntpl_buf, &internals->flow.ipv6ntplid[0], internals, error) != 0) {
       return 1;
     }
@@ -2245,64 +2244,66 @@ static int _dev_flow_match_program(struct rte_eth_dev *dev,
   flowMatch.color = 0;
   flowMatch.op = tuple->flag & RTE_FLOW_PROGRAM_DELETE ? 0 : 1;
   flowMatch.gfi = 1;
-  flowMatch.prot = tuple->proto;
+  flowMatch.ipProtocolField = tuple->proto;
   flowMatch.id = tuple->flowID;
 
   if (tuple->flag & RTE_FLOW_PROGRAM_IPV4) {
-    flowMatch.u.ip4tuple4.sa = tuple->u.IPv4.src_addr;
-    flowMatch.u.ip4tuple4.da = tuple->u.IPv4.dst_addr;
-    flowMatch.u.ip4tuple4.sp = tuple->src_port;
-    flowMatch.u.ip4tuple4.dp = tuple->dst_port;
+	struct IPv4Tuple_s *pIPv4_flow = (struct IPv4Tuple_s *)flowMatch.keyData;
+    pIPv4_flow->da = tuple->u.IPv4.dst_addr;
+    pIPv4_flow->sa = tuple->u.IPv4.src_addr;
+    pIPv4_flow->dp = tuple->dst_port;
+    pIPv4_flow->sp = tuple->src_port;
     if (tuple->flag & RTE_FLOW_PROGRAM_DROP_ACTION) {
       if (internals->flow.downStream) {
-        flowMatch.ft = internals->flow.down.key[DROP];
-        flowMatch.kid = internals->flow.down.ipv4key_id;
+        flowMatch.keySetId = 4;
+        flowMatch.keyId = 1;
       }
       else {
-        flowMatch.ft = internals->flow.up.key[DROP];
-        flowMatch.kid = internals->flow.up.ipv4key_id;
+        flowMatch.keySetId = 4;
+        flowMatch.keyId = 1;
       }
     }
     else {
       if (internals->flow.downStream) {
-        flowMatch.ft = internals->flow.down.key[FORWARD];
-        flowMatch.kid = internals->flow.down.ipv4key_id;
+        flowMatch.keySetId = 4;
+        flowMatch.keyId = 1;
       }
       else {
-        flowMatch.ft = internals->flow.up.key[FORWARD];
-        flowMatch.kid = internals->flow.up.ipv4key_id;
+        flowMatch.keySetId = 4;
+        flowMatch.keyId = 1;
       }
     }
   }
   else {
-    memcpy(&flowMatch.u.ip6tuple4.sa, &tuple->u.IPv6.src_addr, 16);
-    memcpy(&flowMatch.u.ip6tuple4.da, &tuple->u.IPv6.dst_addr, 16);
-    flowMatch.u.ip6tuple4.sp = tuple->src_port;
-    flowMatch.u.ip6tuple4.dp = tuple->dst_port;
+	struct IPv6Tuple_s *pIPv6_flow = (struct IPv6Tuple_s *)flowMatch.keyData;
+    memcpy(pIPv6_flow->da, &tuple->u.IPv6.dst_addr, 16);
+    memcpy(pIPv6_flow->sa, &tuple->u.IPv6.src_addr, 16);
+    pIPv6_flow->dp = tuple->dst_port;
+    pIPv6_flow->sp = tuple->src_port;
     if (tuple->flag & RTE_FLOW_PROGRAM_DROP_ACTION) {
       if (internals->flow.downStream) {
-        flowMatch.ft = internals->flow.down.key[DROP];
-        flowMatch.kid = internals->flow.down.ipv6key_id;
+        flowMatch.keySetId = 4;
+        flowMatch.keyId = 2;
       }
       else {
-        flowMatch.ft = internals->flow.up.key[DROP];
-        flowMatch.kid = internals->flow.up.ipv6key_id;
+        flowMatch.keySetId = 4;
+        flowMatch.keyId = 2;
       }
     }
     else {
       if (internals->flow.downStream) {
-        flowMatch.ft = internals->flow.down.key[FORWARD];
-        flowMatch.kid = internals->flow.down.ipv6key_id;
+        flowMatch.keySetId = 4;
+        flowMatch.keyId = 2;
       }
       else {
-        flowMatch.ft = internals->flow.up.key[FORWARD];
-        flowMatch.kid = internals->flow.up.ipv6key_id;
+        flowMatch.keySetId = 4;
+        flowMatch.keyId = 2;
       }
     }
   }
 
 #if 0
-  PMD_NTACC_LOG(DEBUG, "Flow : Color: %u, op %u, FT %u, KID %u, Prot %u\n", flow->color, flow->op, flow->ft, flow->kid, flow->prot);
+  PMD_NTACC_LOG(DEBUG, "Flow : Color: %u, op %u, keySetId %u, keyId %u, Prot %u\n", flow->color, flow->op, flow->keySetId, flow->keyId, flow->prot);
   {
     char buffer[41*2];
     buffer[0] = 0;
@@ -2317,7 +2318,7 @@ static int _dev_flow_match_program(struct rte_eth_dev *dev,
     // Get the status code as text
     (*_NT_ExplainError)(status, errorBuffer, sizeof(errorBuffer) - 1);
     rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL, "Failed writing flow");
-    PMD_NTACC_LOG(ERR, "NT_FlowWrite() failed: %s - %u - %u\n", errorBuffer, rte_lcore_id(), flowMatch.kid);
+    PMD_NTACC_LOG(ERR, "NT_FlowWrite() failed: %s - %u - %u\n", errorBuffer, rte_lcore_id(), flowMatch.keyId);
     return 1;
   }
   return 0;
@@ -3030,7 +3031,8 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     }
 
     switch (pInfo->u.port_v7.data.speed) {
-    case NT_LINK_SPEED_UNKNOWN:
+	case NT_LINK_SPEED_UNKNOWN:
+	case NT_LINK_SPEED_END:
       pmd_link.link_speed = ETH_SPEED_NUM_1G;
       break;
     case NT_LINK_SPEED_10M:
@@ -3045,6 +3047,9 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     case NT_LINK_SPEED_10G:
       pmd_link.link_speed = ETH_SPEED_NUM_10G;
       break;
+	case NT_LINK_SPEED_25G:
+	  pmd_link.link_speed = ETH_SPEED_NUM_25G;
+	  break;
     case NT_LINK_SPEED_40G:
       pmd_link.link_speed = ETH_SPEED_NUM_40G;
       break;
@@ -3388,11 +3393,14 @@ static int rte_pmd_ntacc_dev_probe(struct rte_pci_driver *drv __rte_unused, stru
 
 static const struct rte_pci_id ntacc_pci_id_map[] = {
   {
-		RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT200A02)
-	},
-	{
-		RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT200A01)
-	},
+	 RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT100A01)
+  },
+  {
+	 RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT200A02)
+  },
+  {
+	 RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT200A01)
+  },
   {
     RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT80E3)
   },

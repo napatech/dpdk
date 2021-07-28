@@ -265,7 +265,22 @@ struct supportedAdapters_s {
   uint32_t build:10;
 };
 
-#define NB_SUPPORTED_FPGAS 14
+struct IPv4Tuple_s {
+  uint32_t sa; /*!< Source address */
+  uint32_t da; /*!< Destination address */
+  uint16_t sp; /*!< Source port */
+  uint16_t dp; /*!< Destination port */
+} __attribute__((__packed__));
+
+struct IPv6Tuple_s {
+  uint8_t sa[16]; /*!< Source address */
+  uint8_t da[16]; /*!< Destination address */
+  uint16_t sp;    /*!< Source port */
+  uint16_t dp;    /*!< Destination port */
+} __attribute__((__packed__));
+
+
+#define NB_SUPPORTED_FPGAS 16
 
 int DoNtpl(const char *ntplStr, uint32_t *pNtplID, struct pmd_internals *internals, struct rte_flow_error *error);
 
