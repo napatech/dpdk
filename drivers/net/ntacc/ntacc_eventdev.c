@@ -70,9 +70,10 @@ int (*_NT_FlowClose)(NtFlowStream_t);
 int (*_NT_FlowWrite)(NtFlowStream_t, NtFlow_t *, uint32_t);
 int (*_NT_FlowRead)(NtFlowStream_t, NtFlowInfo_t*, uint32_t);
 int (*_NT_FlowStatusRead)(NtFlowStream_t, NtFlowStatus_t*);
-#define ASSERT_CONCAT_(a, b) a##b
-#define ASSERT_CONCAT(a, b) ASSERT_CONCAT_(a, b)
-#define ct_assert(e) enum { ASSERT_CONCAT(assert_line_, __LINE__) = 1/(!!(e)) }
+//#define ASSERT_CONCAT_(a, b) a##b
+//#define ASSERT_CONCAT(a, b) ASSERT_CONCAT_(a, b)
+//#define ct_assert(e) enum { ASSERT_CONCAT(assert_line_, __LINE__) = 1/(!!(e)) }
+#define ct_assert(e) 
 
 static uint16_t
 ntacc_eventdev_dequeue(void *port, struct rte_event *ev,
@@ -138,30 +139,29 @@ ntacc_eventdev_dequeue_burst(void *port, struct rte_event ev[],
   
   RTE_SET_USED(timeout_ticks);
 
-    switch (ev[0].event) {
-    case GET_FLOW_DATA:
-      for (i = 0; i < nb_events; i++) {
-        ev[i].event_ptr = (void *)rte_malloc("event_ntacc", sizeof(NtFlowInfo_t), 0);
-        if (ev[i].event_ptr) {
-          if ((*_NT_FlowRead)(sp->rxq->hFlowStream, ev[i].event_ptr, 0) != NT_SUCCESS) {
-            rte_free(ev[i].event_ptr);
-            ev[i].event_ptr = NULL;
-            return got_nb_events;
-          }
-          got_nb_events++;
-        }
-      }
-      break;
-    case GET_FLOW_STATUS:
-      for (i = 0; i < nb_events; i++) {
-        ev[i].event_ptr = NULL;
-        if ((*_NT_FlowStatusRead)(sp->rxq->hFlowStream, (NtFlowStatus_t*)&ev[i].u64) != NT_SUCCESS) {
+  switch (ev[0].event) {
+  case GET_FLOW_DATA:
+    for (i = 0; i < nb_events; i++) {
+      ev[i].event_ptr = (void *)rte_malloc("event_ntacc", sizeof(NtFlowInfo_t), 0);
+      if (ev[i].event_ptr) {
+        if ((*_NT_FlowRead)(sp->rxq->hFlowStream, ev[i].event_ptr, 0) != NT_SUCCESS) {
+          rte_free(ev[i].event_ptr);
+          ev[i].event_ptr = NULL;
           return got_nb_events;
         }
         got_nb_events++;
       }
-      break;
     }
+    break;
+  case GET_FLOW_STATUS:
+    for (i = 0; i < nb_events; i++) {
+      ev[i].event_ptr = NULL;
+      if ((*_NT_FlowStatusRead)(sp->rxq->hFlowStream, (NtFlowStatus_t*)&ev[i].u64) != NT_SUCCESS) {
+        return got_nb_events;
+      }
+      got_nb_events++;
+    }
+    break;
   }
 	return got_nb_events;
 }
