@@ -34,7 +34,7 @@
 #ifndef __RTE_ETH_NTACC_H__
 #define __RTE_ETH_NTACC_H__
 
-#include <rte_ethdev_pci.h>
+#include <ethdev_pci.h>
 
 #define SEGMENT_LENGTH  (1024*1024)
 

@@ -63,7 +63,7 @@
 /**
 * Napatech version
 */
-#define NT_VER "2.9"
+#define NT_VER "2.10"
 
 int ntacc_logtype;
 
