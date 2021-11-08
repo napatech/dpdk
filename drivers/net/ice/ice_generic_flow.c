@@ -1820,7 +1820,7 @@ ice_flow_init(struct ice_adapter *ad)
 	TAILQ_INIT(&pf->dist_parser_list);
 	rte_spinlock_init(&pf->flow_ops_lock);
 
-	TAILQ_FOREACH_SAFE(engine, &engine_list, node, temp) {
+	RTE_TAILQ_FOREACH_SAFE(engine, &engine_list, node, temp) {
 		if (engine->init == NULL) {
 			PMD_INIT_LOG(ERR, "Invalid engine type (%d)",
 					engine->type);
@@ -1846,7 +1846,7 @@ ice_flow_uninit(struct ice_adapter *ad)
 	struct ice_flow_parser_node *p_parser;
 	void *temp;
 
-	TAILQ_FOREACH_SAFE(engine, &engine_list, node, temp) {
+	RTE_TAILQ_FOREACH_SAFE(engine, &engine_list, node, temp) {
 		if (engine->uninit)
 			engine->uninit(ad);
 	}
@@ -1923,9 +1923,9 @@ ice_register_parser(struct ice_flow_parser *parser,
 	} else {
 		if (parser->engine->type == ICE_FLOW_ENGINE_SWITCH ||
 				parser->engine->type == ICE_FLOW_ENGINE_HASH)
-			TAILQ_INSERT_TAIL(list, parser_node, node);
-		else if (parser->engine->type == ICE_FLOW_ENGINE_FDIR)
 			TAILQ_INSERT_HEAD(list, parser_node, node);
+		else if (parser->engine->type == ICE_FLOW_ENGINE_FDIR)
+			TAILQ_INSERT_TAIL(list, parser_node, node);
 		else if (parser->engine->type == ICE_FLOW_ENGINE_ACL)
 			TAILQ_INSERT_HEAD(list, parser_node, node);
 		else
@@ -1946,7 +1946,7 @@ ice_unregister_parser(struct ice_flow_parser *parser,
 	if (list == NULL)
 		return;
 
-	TAILQ_FOREACH_SAFE(p_parser, list, node, temp) {
+	RTE_TAILQ_FOREACH_SAFE(p_parser, list, node, temp) {
 		if (p_parser->parser->engine->type == parser->engine->type) {
 			TAILQ_REMOVE(list, p_parser, node);
 			rte_free(p_parser);
@@ -2134,11 +2134,15 @@ static struct ice_ptype_match ice_ptype_map[] = {
 	{pattern_eth_arp,				ICE_PTYPE_MAC_PAY},
 	{pattern_eth_vlan_ipv4,				ICE_PTYPE_IPV4_PAY},
 	{pattern_eth_qinq_ipv4,				ICE_PTYPE_IPV4_PAY},
+	{pattern_eth_qinq_ipv4_udp,			ICE_PTYPE_IPV4_UDP_PAY},
+	{pattern_eth_qinq_ipv4_tcp,			ICE_PTYPE_IPV4_TCP_PAY},
 	{pattern_eth_vlan_ipv4_udp,			ICE_PTYPE_IPV4_UDP_PAY},
 	{pattern_eth_vlan_ipv4_tcp,			ICE_PTYPE_IPV4_TCP_PAY},
 	{pattern_eth_vlan_ipv4_sctp,			ICE_PTYPE_IPV4_SCTP_PAY},
 	{pattern_eth_vlan_ipv6,				ICE_PTYPE_IPV6_PAY},
 	{pattern_eth_qinq_ipv6,				ICE_PTYPE_IPV6_PAY},
+	{pattern_eth_qinq_ipv6_udp,			ICE_PTYPE_IPV6_UDP_PAY},
+	{pattern_eth_qinq_ipv6_tcp,			ICE_PTYPE_IPV6_TCP_PAY},
 	{pattern_eth_vlan_ipv6_udp,			ICE_PTYPE_IPV6_UDP_PAY},
 	{pattern_eth_vlan_ipv6_tcp,			ICE_PTYPE_IPV6_TCP_PAY},
 	{pattern_eth_vlan_ipv6_sctp,			ICE_PTYPE_IPV6_SCTP_PAY},
@@ -2272,7 +2276,7 @@ ice_parse_engine_create(struct ice_adapter *ad,
 	void *meta = NULL;
 	void *temp;
 
-	TAILQ_FOREACH_SAFE(parser_node, parser_list, node, temp) {
+	RTE_TAILQ_FOREACH_SAFE(parser_node, parser_list, node, temp) {
 		int ret;
 
 		if (parser_node->parser->parse_pattern_action(ad,
@@ -2305,7 +2309,7 @@ ice_parse_engine_validate(struct ice_adapter *ad,
 	struct ice_flow_parser_node *parser_node;
 	void *temp;
 
-	TAILQ_FOREACH_SAFE(parser_node, parser_list, node, temp) {
+	RTE_TAILQ_FOREACH_SAFE(parser_node, parser_list, node, temp) {
 		if (parser_node->parser->parse_pattern_action(ad,
 				parser_node->parser->array,
 				parser_node->parser->array_len,
@@ -2477,7 +2481,7 @@ ice_flow_flush(struct rte_eth_dev *dev,
 	void *temp;
 	int ret = 0;
 
-	TAILQ_FOREACH_SAFE(p_flow, &pf->flow_list, node, temp) {
+	RTE_TAILQ_FOREACH_SAFE(p_flow, &pf->flow_list, node, temp) {
 		ret = ice_flow_destroy(dev, p_flow, error);
 		if (ret) {
 			PMD_DRV_LOG(ERR, "Failed to flush flows");
@@ -2518,15 +2522,16 @@ ice_flow_query(struct rte_eth_dev *dev,
 			ret = flow->engine->query_count(ad, flow, count, error);
 			break;
 		default:
-			return rte_flow_error_set(error, ENOTSUP,
+			ret = rte_flow_error_set(error, ENOTSUP,
 					RTE_FLOW_ERROR_TYPE_ACTION,
 					actions,
 					"action not supported");
+			goto out;
 		}
 	}
 
+out:
 	rte_spinlock_unlock(&pf->flow_ops_lock);
-
 	return ret;
 }
 
@@ -2537,21 +2542,21 @@ ice_flow_redirect(struct ice_adapter *ad,
 	struct ice_pf *pf = &ad->pf;
 	struct rte_flow *p_flow;
 	void *temp;
-	int ret;
+	int ret = 0;
 
 	rte_spinlock_lock(&pf->flow_ops_lock);
 
-	TAILQ_FOREACH_SAFE(p_flow, &pf->flow_list, node, temp) {
+	RTE_TAILQ_FOREACH_SAFE(p_flow, &pf->flow_list, node, temp) {
 		if (!p_flow->engine->redirect)
 			continue;
 		ret = p_flow->engine->redirect(ad, p_flow, rd);
 		if (ret) {
 			PMD_DRV_LOG(ERR, "Failed to redirect flows");
-			return ret;
+			break;
 		}
 	}
 
 	rte_spinlock_unlock(&pf->flow_ops_lock);
 
-	return 0;
+	return ret;
 }

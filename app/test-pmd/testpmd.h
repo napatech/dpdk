@@ -11,8 +11,12 @@
 #include <rte_bus_pci.h>
 #include <rte_gro.h>
 #include <rte_gso.h>
+#include <rte_os_shim.h>
 #include <cmdline.h>
 #include <sys/queue.h>
+#ifdef RTE_HAS_JANSSON
+#include <jansson.h>
+#endif
 
 #define RTE_PORT_ALL            (~(portid_t)0x0)
 
@@ -92,7 +96,7 @@ enum {
  * that are recorded for each forwarding stream.
  */
 struct pkt_burst_stats {
-	unsigned int pkt_burst_spread[MAX_PKT_BURST];
+	unsigned int pkt_burst_spread[MAX_PKT_BURST + 1];
 };
 
 /** Information for a given RSS type. */
@@ -143,6 +147,7 @@ struct fwd_stream {
 	uint64_t     core_cycles; /**< used for RX and TX processing */
 	struct pkt_burst_stats rx_burst_stats;
 	struct pkt_burst_stats tx_burst_stats;
+	struct fwd_lcore *lcore; /**< Lcore being scheduled. */
 };
 
 /**
@@ -172,6 +177,8 @@ struct port_indirect_action {
 	enum rte_flow_action_type type; /**< Action type. */
 	struct rte_flow_action_handle *handle;	/**< Indirect action handle. */
 	enum age_action_context_type age_type; /**< Age action context type. */
+	/** If true, the action applies to "transfer" flows, and vice versa */
+	bool transfer;
 };
 
 struct port_flow_tunnel {
@@ -192,6 +199,17 @@ struct tunnel_ops {
 	uint32_t enabled:1;
 	uint32_t actions:1;
 	uint32_t items:1;
+};
+
+/** Information for an extended statistics to show. */
+struct xstat_display_info {
+	/** Supported xstats IDs in the order of xstats_display */
+	uint64_t *ids_supp;
+	size_t   ids_supp_sz;
+	uint64_t *prev_values;
+	uint64_t *curr_values;
+	uint64_t prev_ns;
+	bool	 allocated;
 };
 
 /**
@@ -233,6 +251,9 @@ struct rte_port {
 	/**< dynamic flags. */
 	uint64_t		mbuf_dynf;
 	const struct rte_eth_rxtx_callback *tx_set_dynf_cb[RTE_MAX_QUEUES_PER_PORT+1];
+	/** Associated port which is supposed to handle "transfer" flows */
+	portid_t		flow_transfer_proxy;
+	struct xstat_display_info xstats_info;
 };
 
 /**
@@ -267,7 +288,7 @@ struct fwd_lcore {
  *     Forwards packets unchanged on the same port.
  *     Check that sent IEEE1588 PTP packets are timestamped by the hardware.
  */
-typedef void (*port_fwd_begin_t)(portid_t pi);
+typedef int (*port_fwd_begin_t)(portid_t pi);
 typedef void (*port_fwd_end_t)(portid_t pi);
 typedef void (*packet_fwd_t)(struct fwd_stream *fs);
 
@@ -277,6 +298,27 @@ struct fwd_engine {
 	port_fwd_end_t   port_fwd_end;   /**< NULL if nothing special to do. */
 	packet_fwd_t     packet_fwd;     /**< Mandatory. */
 };
+
+#define FLEX_ITEM_MAX_SAMPLES_NUM 16
+#define FLEX_ITEM_MAX_LINKS_NUM 16
+#define FLEX_MAX_FLOW_PATTERN_LENGTH 64
+#define FLEX_MAX_PARSERS_NUM 8
+#define FLEX_MAX_PATTERNS_NUM 64
+#define FLEX_PARSER_ERR ((struct flex_item *)-1)
+
+struct flex_item {
+	struct rte_flow_item_flex_conf flex_conf;
+	struct rte_flow_item_flex_handle *flex_handle;
+	uint32_t flex_id;
+};
+
+struct flex_pattern {
+	struct rte_flow_item_flex spec, mask;
+	uint8_t spec_pattern[FLEX_MAX_FLOW_PATTERN_LENGTH];
+	uint8_t mask_pattern[FLEX_MAX_FLOW_PATTERN_LENGTH];
+};
+extern struct flex_item *flex_items[RTE_MAX_ETHPORTS][FLEX_MAX_PARSERS_NUM];
+extern struct flex_pattern flex_patterns[FLEX_MAX_PATTERNS_NUM];
 
 #define BURST_TX_WAIT_US 1
 #define BURST_TX_RETRIES 64
@@ -297,11 +339,14 @@ extern struct fwd_engine five_tuple_swap_fwd_engine;
 #ifdef RTE_LIBRTE_IEEE1588
 extern struct fwd_engine ieee1588_fwd_engine;
 #endif
+extern struct fwd_engine shared_rxq_engine;
 
 extern struct fwd_engine * fwd_engines[]; /**< NULL terminated array. */
 extern cmdline_parse_inst_t cmd_set_raw;
 extern cmdline_parse_inst_t cmd_show_set_raw;
 extern cmdline_parse_inst_t cmd_show_set_raw_all;
+extern cmdline_parse_inst_t cmd_set_flex_is_pattern;
+extern cmdline_parse_inst_t cmd_set_flex_spec_pattern;
 
 extern uint16_t mempool_flags;
 
@@ -433,6 +478,9 @@ extern uint32_t param_total_num_mbufs;
 
 extern uint16_t stats_period;
 
+extern struct rte_eth_xstat_name *xstats_display;
+extern unsigned int xstats_display_num;
+
 extern uint16_t hairpin_mode;
 
 #ifdef RTE_LIB_LATENCYSTATS
@@ -445,7 +493,9 @@ extern lcoreid_t bitrate_lcore_id;
 extern uint8_t bitrate_enabled;
 #endif
 
-extern struct rte_fdir_conf fdir_conf;
+extern struct rte_eth_fdir_conf fdir_conf;
+
+extern uint32_t max_rx_pkt_len;
 
 /*
  * Configuration of packet segments used to scatter received packets
@@ -476,8 +526,11 @@ extern enum tx_pkt_split tx_pkt_split;
 
 extern uint8_t txonly_multi_flow;
 
+extern uint32_t rxq_share;
+
 extern uint16_t nb_pkt_per_burst;
 extern uint16_t nb_pkt_flowgen_clones;
+extern int nb_flows_flowgen;
 extern uint16_t mb_mempool_cache;
 extern int8_t rx_pthresh;
 extern int8_t rx_hthresh;
@@ -631,6 +684,15 @@ extern enum rte_eth_rx_mq_mode rx_mq_mode;
 
 extern struct rte_flow_action_conntrack conntrack_context;
 
+extern int proc_id;
+extern unsigned int num_procs;
+
+static inline bool
+is_proc_primary(void)
+{
+	return rte_eal_process_type() == RTE_PROC_PRIMARY;
+}
+
 static inline unsigned int
 lcore_num(void)
 {
@@ -686,7 +748,7 @@ port_pci_reg_read(struct rte_port *port, uint32_t reg_off)
 	uint32_t reg_v;
 
 	if (!port->dev_info.device) {
-		printf("Invalid device\n");
+		fprintf(stderr, "Invalid device\n");
 		return 0;
 	}
 
@@ -694,7 +756,7 @@ port_pci_reg_read(struct rte_port *port, uint32_t reg_off)
 	if (bus && !strcmp(bus->name, "pci")) {
 		pci_dev = RTE_DEV_TO_PCI(port->dev_info.device);
 	} else {
-		printf("Not a PCI device\n");
+		fprintf(stderr, "Not a PCI device\n");
 		return 0;
 	}
 
@@ -714,7 +776,7 @@ port_pci_reg_write(struct rte_port *port, uint32_t reg_off, uint32_t reg_v)
 	void *reg_addr;
 
 	if (!port->dev_info.device) {
-		printf("Invalid device\n");
+		fprintf(stderr, "Invalid device\n");
 		return;
 	}
 
@@ -722,7 +784,7 @@ port_pci_reg_write(struct rte_port *port, uint32_t reg_off, uint32_t reg_v)
 	if (bus && !strcmp(bus->name, "pci")) {
 		pci_dev = RTE_DEV_TO_PCI(port->dev_info.device);
 	} else {
-		printf("Not a PCI device\n");
+		fprintf(stderr, "Not a PCI device\n");
 		return;
 	}
 
@@ -762,7 +824,7 @@ inc_tx_burst_stats(struct fwd_stream *fs, uint16_t nb_tx)
 }
 
 /* Prototypes */
-unsigned int parse_item_list(char* str, const char* item_name,
+unsigned int parse_item_list(const char *str, const char *item_name,
 			unsigned int max_items,
 			unsigned int *parsed_items, int check_unique_values);
 void launch_args_parse(int argc, char** argv);
@@ -782,6 +844,7 @@ void port_summary_header_display(void);
 void rx_queue_infos_display(portid_t port_idi, uint16_t queue_id);
 void tx_queue_infos_display(portid_t port_idi, uint16_t queue_id);
 void fwd_lcores_config_display(void);
+bool pkt_fwd_shared_rxq_check(void);
 void pkt_fwd_config_display(struct fwd_config *cfg);
 void rxtx_config_display(void);
 void fwd_config_setup(void);
@@ -885,7 +948,7 @@ void show_tx_pkt_segments(void);
 void set_tx_pkt_times(unsigned int *tx_times);
 void show_tx_pkt_times(void);
 void set_tx_pkt_split(const char *name);
-int parse_fec_mode(const char *name, enum rte_eth_fec_mode *mode);
+int parse_fec_mode(const char *name, uint32_t *fec_capa);
 void show_fec_capability(uint32_t num, struct rte_eth_fec_capa *speed_fec_capa);
 void set_nb_pkt_per_burst(uint16_t pkt_burst);
 char *list_pkt_forwarding_modes(void);
@@ -949,6 +1012,8 @@ void show_gro(portid_t port_id);
 void setup_gso(const char *mode, portid_t port_id);
 int eth_dev_info_get_print_err(uint16_t port_id,
 			struct rte_eth_dev_info *dev_info);
+int eth_dev_conf_get_print_err(uint16_t port_id,
+			struct rte_eth_conf *dev_conf);
 void eth_set_promisc_mode(uint16_t port_id, int enable);
 void eth_set_allmulticast_mode(uint16_t port, int enable);
 int eth_link_get_nowait_print_err(uint16_t port_id, struct rte_eth_link *link);
@@ -1011,7 +1076,16 @@ uint16_t tx_pkt_set_dynf(uint16_t port_id, __rte_unused uint16_t queue,
 			 __rte_unused void *user_param);
 void add_tx_dynf_callback(portid_t portid);
 void remove_tx_dynf_callback(portid_t portid);
+int update_mtu_from_frame_size(portid_t portid, uint32_t max_rx_pktlen);
 int update_jumbo_frame_offload(portid_t portid);
+void flex_item_create(portid_t port_id, uint16_t flex_id, const char *filename);
+void flex_item_destroy(portid_t port_id, uint16_t flex_id);
+void port_flex_item_flush(portid_t port_id);
+
+extern int flow_parse(const char *src, void *result, unsigned int size,
+		      struct rte_flow_attr **attr,
+		      struct rte_flow_item **pattern,
+		      struct rte_flow_action **actions);
 
 /*
  * Work-around of a compilation error with ICC on invocations of the

@@ -59,7 +59,7 @@ The application has a number of command line options::
         -p PORTMASK [-P]
         --rx(port,queue,lcore,thread)[,(port,queue,lcore,thread)]
         --tx(lcore,thread)[,(lcore,thread)]
-        [--enable-jumbo] [--max-pkt-len PKTLEN]]  [--no-numa]
+        [--max-pkt-len PKTLEN]  [--no-numa]
         [--hash-entry-num] [--ipv6] [--no-lthreads] [--stat-lcore lcore]
         [--parse-ptype]
 
@@ -79,8 +79,6 @@ Where:
 * ``--tx (lcore,thread)[,(lcore,thread)]``: the list of TX threads identifying
   the lcore the thread runs on, and the id of RX thread with which it is
   associated. The parameters are explained below.
-
-* ``--enable-jumbo``: optional, enables jumbo frames.
 
 * ``--max-pkt-len``: optional, maximum packet length in decimal (64-9600).
 
@@ -1176,7 +1174,7 @@ Tracing of events can be individually masked, and the mask may be programmed
 at run time. An unmasked event results in a callback that provides information
 about the event. The default callback simply prints trace information. The
 default mask is 0 (all events off) the mask can be modified by calling the
-function ``lthread_diagniostic_set_mask()``.
+function ``lthread_diagnostic_set_mask()``.
 
 It is possible register a user callback function to implement more
 sophisticated diagnostic functions.

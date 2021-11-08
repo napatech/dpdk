@@ -157,6 +157,11 @@
 #define	BNXT_DEFAULT_VNIC_CHANGE_VF_ID_SFT		\
 	HWRM_ASYNC_EVENT_CMPL_DEFAULT_VNIC_CHANGE_EVENT_DATA1_VF_ID_SFT
 
+#define BNXT_EVENT_ERROR_REPORT_TYPE(data1)				\
+	(((data1) &							\
+	  HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_EVENT_DATA1_ERROR_TYPE_MASK)  >>\
+	 HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_EVENT_DATA1_ERROR_TYPE_SFT)
+
 #define BNXT_HWRM_CMD_TO_FORWARD(cmd)	\
 		(bp->pf->vf_req_fwd[(cmd) / 32] |= (1 << ((cmd) % 32)))
 
@@ -292,6 +297,7 @@ struct bnxt_link_info {
 	uint16_t		auto_pam4_link_speeds;
 	uint16_t		support_pam4_auto_speeds;
 	uint8_t			req_signal_mode;
+	uint8_t			module_status;
 };
 
 #define BNXT_COS_QUEUE_COUNT	8
@@ -495,9 +501,9 @@ struct bnxt_ctx_mem_buf_info {
 struct bnxt_error_recovery_info {
 	/* All units in milliseconds */
 	uint32_t	driver_polling_freq;
-	uint32_t	master_func_wait_period;
+	uint32_t	primary_func_wait_period;
 	uint32_t	normal_func_wait_period;
-	uint32_t	master_func_wait_period_after_reset;
+	uint32_t	primary_func_wait_period_after_reset;
 	uint32_t	max_bailout_time_after_reset;
 #define BNXT_FW_STATUS_REG		0
 #define BNXT_FW_HEARTBEAT_CNT_REG	1
@@ -514,7 +520,7 @@ struct bnxt_error_recovery_info {
 	uint8_t		delay_after_reset[BNXT_NUM_RESET_REG];
 #define BNXT_FLAG_ERROR_RECOVERY_HOST	BIT(0)
 #define BNXT_FLAG_ERROR_RECOVERY_CO_CPU	BIT(1)
-#define BNXT_FLAG_MASTER_FUNC		BIT(2)
+#define BNXT_FLAG_PRIMARY_FUNC		BIT(2)
 #define BNXT_FLAG_RECOVERY_ENABLED	BIT(3)
 	uint32_t	flags;
 
@@ -563,40 +569,37 @@ struct bnxt_rep_info {
 #define BNXT_FW_STATUS_SHUTDOWN		0x100000
 
 #define BNXT_ETH_RSS_SUPPORT (	\
-	ETH_RSS_IPV4 |		\
-	ETH_RSS_NONFRAG_IPV4_TCP |	\
-	ETH_RSS_NONFRAG_IPV4_UDP |	\
-	ETH_RSS_IPV6 |		\
-	ETH_RSS_NONFRAG_IPV6_TCP |	\
-	ETH_RSS_NONFRAG_IPV6_UDP |	\
-	ETH_RSS_LEVEL_MASK)
+	RTE_ETH_RSS_IPV4 |		\
+	RTE_ETH_RSS_NONFRAG_IPV4_TCP |	\
+	RTE_ETH_RSS_NONFRAG_IPV4_UDP |	\
+	RTE_ETH_RSS_IPV6 |		\
+	RTE_ETH_RSS_NONFRAG_IPV6_TCP |	\
+	RTE_ETH_RSS_NONFRAG_IPV6_UDP |	\
+	RTE_ETH_RSS_LEVEL_MASK)
 
-#define BNXT_DEV_TX_OFFLOAD_SUPPORT (DEV_TX_OFFLOAD_VLAN_INSERT | \
-				     DEV_TX_OFFLOAD_IPV4_CKSUM | \
-				     DEV_TX_OFFLOAD_TCP_CKSUM | \
-				     DEV_TX_OFFLOAD_UDP_CKSUM | \
-				     DEV_TX_OFFLOAD_TCP_TSO | \
-				     DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM | \
-				     DEV_TX_OFFLOAD_VXLAN_TNL_TSO | \
-				     DEV_TX_OFFLOAD_GRE_TNL_TSO | \
-				     DEV_TX_OFFLOAD_IPIP_TNL_TSO | \
-				     DEV_TX_OFFLOAD_GENEVE_TNL_TSO | \
-				     DEV_TX_OFFLOAD_QINQ_INSERT | \
-				     DEV_TX_OFFLOAD_MULTI_SEGS)
+#define BNXT_DEV_TX_OFFLOAD_SUPPORT (RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | \
+				     RTE_ETH_TX_OFFLOAD_TCP_CKSUM | \
+				     RTE_ETH_TX_OFFLOAD_UDP_CKSUM | \
+				     RTE_ETH_TX_OFFLOAD_TCP_TSO | \
+				     RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM | \
+				     RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO | \
+				     RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO | \
+				     RTE_ETH_TX_OFFLOAD_IPIP_TNL_TSO | \
+				     RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO | \
+				     RTE_ETH_TX_OFFLOAD_QINQ_INSERT | \
+				     RTE_ETH_TX_OFFLOAD_MULTI_SEGS)
 
-#define BNXT_DEV_RX_OFFLOAD_SUPPORT (DEV_RX_OFFLOAD_VLAN_FILTER | \
-				     DEV_RX_OFFLOAD_VLAN_STRIP | \
-				     DEV_RX_OFFLOAD_IPV4_CKSUM | \
-				     DEV_RX_OFFLOAD_UDP_CKSUM | \
-				     DEV_RX_OFFLOAD_TCP_CKSUM | \
-				     DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM | \
-				     DEV_RX_OFFLOAD_OUTER_UDP_CKSUM | \
-				     DEV_RX_OFFLOAD_JUMBO_FRAME | \
-				     DEV_RX_OFFLOAD_KEEP_CRC | \
-				     DEV_RX_OFFLOAD_VLAN_EXTEND | \
-				     DEV_RX_OFFLOAD_TCP_LRO | \
-				     DEV_RX_OFFLOAD_SCATTER | \
-				     DEV_RX_OFFLOAD_RSS_HASH)
+#define BNXT_DEV_RX_OFFLOAD_SUPPORT (RTE_ETH_RX_OFFLOAD_VLAN_FILTER | \
+				     RTE_ETH_RX_OFFLOAD_IPV4_CKSUM | \
+				     RTE_ETH_RX_OFFLOAD_UDP_CKSUM | \
+				     RTE_ETH_RX_OFFLOAD_TCP_CKSUM | \
+				     RTE_ETH_RX_OFFLOAD_OUTER_IPV4_CKSUM | \
+				     RTE_ETH_RX_OFFLOAD_OUTER_UDP_CKSUM | \
+				     RTE_ETH_RX_OFFLOAD_KEEP_CRC | \
+				     RTE_ETH_RX_OFFLOAD_VLAN_EXTEND | \
+				     RTE_ETH_RX_OFFLOAD_TCP_LRO | \
+				     RTE_ETH_RX_OFFLOAD_SCATTER | \
+				     RTE_ETH_RX_OFFLOAD_RSS_HASH)
 
 #define BNXT_HWRM_SHORT_REQ_LEN		sizeof(struct hwrm_short_input)
 
@@ -607,6 +610,49 @@ struct bnxt_flow_stat_info {
 	struct bnxt_ctx_mem_buf_info rx_fc_out_tbl;
 	struct bnxt_ctx_mem_buf_info tx_fc_in_tbl;
 	struct bnxt_ctx_mem_buf_info tx_fc_out_tbl;
+};
+
+struct bnxt_ring_stats {
+	/* Number of transmitted unicast packets */
+	uint64_t	tx_ucast_pkts;
+	/* Number of transmitted multicast packets */
+	uint64_t	tx_mcast_pkts;
+	/* Number of transmitted broadcast packets */
+	uint64_t	tx_bcast_pkts;
+	/* Number of packets discarded in transmit path */
+	uint64_t	tx_discard_pkts;
+	/* Number of packets in transmit path with error */
+	uint64_t	tx_error_pkts;
+	/* Number of transmitted bytes for unicast traffic */
+	uint64_t	tx_ucast_bytes;
+	/* Number of transmitted bytes for multicast traffic */
+	uint64_t	tx_mcast_bytes;
+	/* Number of transmitted bytes for broadcast traffic */
+	uint64_t	tx_bcast_bytes;
+	/* Number of received unicast packets */
+	uint64_t	rx_ucast_pkts;
+	/* Number of received multicast packets */
+	uint64_t	rx_mcast_pkts;
+	/* Number of received broadcast packets */
+	uint64_t	rx_bcast_pkts;
+	/* Number of packets discarded in receive path */
+	uint64_t	rx_discard_pkts;
+	/* Number of packets in receive path with errors */
+	uint64_t	rx_error_pkts;
+	/* Number of received bytes for unicast traffic */
+	uint64_t	rx_ucast_bytes;
+	/* Number of received bytes for multicast traffic */
+	uint64_t	rx_mcast_bytes;
+	/* Number of received bytes for broadcast traffic */
+	uint64_t	rx_bcast_bytes;
+	/* Number of aggregated unicast packets */
+	uint64_t	rx_agg_pkts;
+	/* Number of aggregated unicast bytes */
+	uint64_t	rx_agg_bytes;
+	/* Number of aggregation events */
+	uint64_t	rx_agg_events;
+	/* Number of aborted aggregations */
+	uint64_t	rx_agg_aborts;
 };
 
 struct bnxt {
@@ -645,10 +691,9 @@ struct bnxt {
 #define BNXT_FLAG_RX_VECTOR_PKT_MODE		BIT(24)
 #define BNXT_FLAG_FLOW_XSTATS_EN		BIT(25)
 #define BNXT_FLAG_DFLT_MAC_SET			BIT(26)
-#define BNXT_FLAG_TRUFLOW_EN			BIT(27)
-#define BNXT_FLAG_GFID_ENABLE			BIT(28)
-#define BNXT_FLAG_RFS_NEEDS_VNIC		BIT(29)
-#define BNXT_FLAG_FLOW_CFA_RFS_RING_TBL_IDX_V2	BIT(30)
+#define BNXT_FLAG_GFID_ENABLE			BIT(27)
+#define BNXT_FLAG_RFS_NEEDS_VNIC		BIT(28)
+#define BNXT_FLAG_FLOW_CFA_RFS_RING_TBL_IDX_V2	BIT(29)
 #define BNXT_RFS_NEEDS_VNIC(bp)	((bp)->flags & BNXT_FLAG_RFS_NEEDS_VNIC)
 #define BNXT_PF(bp)		(!((bp)->flags & BNXT_FLAG_VF))
 #define BNXT_VF(bp)		((bp)->flags & BNXT_FLAG_VF)
@@ -664,14 +709,16 @@ struct bnxt {
 #define BNXT_HAS_RING_GRPS(bp)	(!BNXT_CHIP_P5(bp))
 #define BNXT_FLOW_XSTATS_EN(bp)	((bp)->flags & BNXT_FLAG_FLOW_XSTATS_EN)
 #define BNXT_HAS_DFLT_MAC_SET(bp)      ((bp)->flags & BNXT_FLAG_DFLT_MAC_SET)
-#define BNXT_TRUFLOW_EN(bp)	((bp)->flags & BNXT_FLAG_TRUFLOW_EN)
 #define BNXT_GFID_ENABLED(bp)	((bp)->flags & BNXT_FLAG_GFID_ENABLE)
 
 	uint32_t			flags2;
 #define BNXT_FLAGS2_PTP_TIMESYNC_ENABLED	BIT(0)
 #define BNXT_FLAGS2_PTP_ALARM_SCHEDULED		BIT(1)
+#define	BNXT_FLAGS2_ACCUM_STATS_EN		BIT(2)
 #define BNXT_P5_PTP_TIMESYNC_ENABLED(bp)	\
 	((bp)->flags2 & BNXT_FLAGS2_PTP_TIMESYNC_ENABLED)
+#define	BNXT_ACCUM_STATS_EN(bp)			\
+	((bp)->flags2 & BNXT_FLAGS2_ACCUM_STATS_EN)
 
 	uint16_t		chip_num;
 #define CHIP_NUM_58818		0xd818
@@ -686,6 +733,9 @@ struct bnxt {
 #define BNXT_FW_CAP_ADV_FLOW_MGMT	BIT(5)
 #define BNXT_FW_CAP_ADV_FLOW_COUNTERS	BIT(6)
 #define BNXT_FW_CAP_LINK_ADMIN		BIT(7)
+#define BNXT_FW_CAP_TRUFLOW_EN		BIT(8)
+#define BNXT_FW_CAP_VLAN_TX_INSERT	BIT(9)
+#define BNXT_TRUFLOW_EN(bp)	((bp)->fw_cap & BNXT_FW_CAP_TRUFLOW_EN)
 
 	pthread_mutex_t         flow_lock;
 
@@ -693,6 +743,8 @@ struct bnxt {
 #define BNXT_VNIC_CAP_COS_CLASSIFY	BIT(0)
 #define BNXT_VNIC_CAP_OUTER_RSS		BIT(1)
 #define BNXT_VNIC_CAP_RX_CMPL_V2	BIT(2)
+#define BNXT_VNIC_CAP_VLAN_RX_STRIP	BIT(3)
+#define BNXT_RX_VLAN_STRIP_EN(bp)	((bp)->vnic_cap_flags & BNXT_VNIC_CAP_VLAN_RX_STRIP)
 	unsigned int		rx_nr_rings;
 	unsigned int		rx_cp_nr_rings;
 	unsigned int		rx_num_qs_per_vnic;
@@ -828,10 +880,14 @@ struct bnxt {
 	uint16_t		port_svif;
 
 	struct tf		tfp;
+	struct tf		tfp_shared;
 	struct bnxt_ulp_context	*ulp_ctx;
 	struct bnxt_flow_stat_info *flow_stat;
 	uint16_t		max_num_kflows;
+	uint8_t			app_id;
 	uint16_t		tx_cfa_action;
+	struct bnxt_ring_stats	*prev_rx_ring_stats;
+	struct bnxt_ring_stats	*prev_tx_ring_stats;
 };
 
 static
@@ -920,6 +976,20 @@ struct bnxt_vf_rep_tx_queue {
 	struct bnxt_representor *bp;
 };
 
+#define I2C_DEV_ADDR_A0			0xa0
+#define I2C_DEV_ADDR_A2			0xa2
+#define SFF_DIAG_SUPPORT_OFFSET		0x5c
+#define SFF_MODULE_ID_SFP		0x3
+#define SFF_MODULE_ID_QSFP		0xc
+#define SFF_MODULE_ID_QSFP_PLUS		0xd
+#define SFF_MODULE_ID_QSFP28		0x11
+#define SFF8636_FLATMEM_OFFSET		0x2
+#define SFF8636_FLATMEM_MASK		0x4
+#define SFF8636_OPT_PAGES_OFFSET	0xc3
+#define SFF8636_PAGE1_MASK		0x40
+#define SFF8636_PAGE2_MASK		0x80
+#define BNXT_MAX_PHY_I2C_RESP_SIZE	64
+
 int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu);
 int bnxt_link_update(struct rte_eth_dev *eth_dev, int wait_to_complete,
 		     bool exp_link_status);
@@ -981,7 +1051,11 @@ int32_t
 bnxt_ulp_create_vfr_default_rules(struct rte_eth_dev *vfr_ethdev);
 int32_t
 bnxt_ulp_delete_vfr_default_rules(struct bnxt_representor *vfr);
+void bnxt_get_iface_mac(uint16_t port, enum bnxt_ulp_intf_type type,
+			uint8_t *mac, uint8_t *parent_mac);
 uint16_t bnxt_get_vnic_id(uint16_t port, enum bnxt_ulp_intf_type type);
+uint16_t bnxt_get_parent_vnic_id(uint16_t port, enum bnxt_ulp_intf_type type);
+struct bnxt *bnxt_get_bp(uint16_t port);
 uint16_t bnxt_get_svif(uint16_t port_id, bool func_svif,
 		       enum bnxt_ulp_intf_type type);
 uint16_t bnxt_get_fw_func_id(uint16_t port, enum bnxt_ulp_intf_type type);

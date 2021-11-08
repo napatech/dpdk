@@ -19,7 +19,7 @@
 #define DEFAULT_NUM_XFORMS              (2)
 #define NUM_MBUFS                       (8191)
 #define MBUF_CACHE_SIZE                 (256)
-#define MBUF_DATAPAYLOAD_SIZE		(2048 + DIGEST_BYTE_LENGTH_SHA512)
+#define MBUF_DATAPAYLOAD_SIZE		(4096 + DIGEST_BYTE_LENGTH_SHA512)
 #define MBUF_SIZE			(sizeof(struct rte_mbuf) + \
 		RTE_PKTMBUF_HEADROOM + MBUF_DATAPAYLOAD_SIZE)
 
@@ -59,6 +59,7 @@
 #define CRYPTODEV_NAME_SNOW3G_PMD	crypto_snow3g
 #define CRYPTODEV_NAME_KASUMI_PMD	crypto_kasumi
 #define CRYPTODEV_NAME_ZUC_PMD		crypto_zuc
+#define CRYPTODEV_NAME_CHACHA20_POLY1305_PMD	crypto_chacha20_poly1305
 #define CRYPTODEV_NAME_ARMV8_PMD	crypto_armv8
 #define CRYPTODEV_NAME_DPAA_SEC_PMD	crypto_dpaa_sec
 #define CRYPTODEV_NAME_DPAA2_SEC_PMD	crypto_dpaa2_sec
@@ -71,6 +72,10 @@
 #define CRYPTODEV_NAME_CAAM_JR_PMD	crypto_caam_jr
 #define CRYPTODEV_NAME_NITROX_PMD	crypto_nitrox_sym
 #define CRYPTODEV_NAME_BCMFS_PMD	crypto_bcmfs
+#define CRYPTODEV_NAME_CN9K_PMD		crypto_cn9k
+#define CRYPTODEV_NAME_CN10K_PMD	crypto_cn10k
+#define CRYPTODEV_NAME_MLX5_PMD		crypto_mlx5
+
 
 enum cryptodev_api_test_type {
 	CRYPTODEV_API_TEST = 0,

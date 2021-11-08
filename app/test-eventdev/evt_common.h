@@ -55,6 +55,7 @@ struct evt_options {
 	uint8_t timdev_cnt;
 	uint8_t nb_timer_adptrs;
 	uint8_t timdev_use_burst;
+	uint8_t per_port_pool;
 	uint8_t sched_type_list[EVT_MAX_STAGES];
 	uint16_t mbuf_sz;
 	uint16_t wkr_deq_dep;
@@ -63,6 +64,7 @@ struct evt_options {
 	uint32_t nb_flows;
 	uint32_t tx_first;
 	uint32_t max_pkt_sz;
+	uint32_t prod_enq_burst_sz;
 	uint32_t deq_tmo_nsec;
 	uint32_t q_priority:1;
 	uint32_t fwd_latency:1;

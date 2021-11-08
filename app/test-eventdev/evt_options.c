@@ -26,6 +26,7 @@ evt_options_default(struct evt_options *opt)
 	opt->nb_flows = 1024;
 	opt->socket_id = SOCKET_ID_ANY;
 	opt->pool_sz = 16 * 1024;
+	opt->prod_enq_burst_sz = 1;
 	opt->wkr_deq_dep = 16;
 	opt->nb_pkts = (1ULL << 26); /* do ~64M packets */
 	opt->nb_timers = 1E8;
@@ -297,6 +298,23 @@ evt_parse_eth_queues(struct evt_options *opt, const char *arg)
 	return ret;
 }
 
+static int
+evt_parse_per_port_pool(struct evt_options *opt, const char *arg __rte_unused)
+{
+	opt->per_port_pool = 1;
+	return 0;
+}
+
+static int
+evt_parse_prod_enq_burst_sz(struct evt_options *opt, const char *arg)
+{
+	int ret;
+
+	ret = parser_read_uint32(&(opt->prod_enq_burst_sz), arg);
+
+	return ret;
+}
+
 static void
 usage(char *program)
 {
@@ -329,10 +347,12 @@ usage(char *program)
 		"\t--expiry_nsec      : event timer expiry ns.\n"
 		"\t--mbuf_sz          : packet mbuf size.\n"
 		"\t--max_pkt_sz       : max packet size.\n"
+		"\t--prod_enq_burst_sz : producer enqueue burst size.\n"
 		"\t--nb_eth_queues    : number of ethernet Rx queues.\n"
 		"\t--enable_vector    : enable event vectorization.\n"
 		"\t--vector_size      : Max vector size.\n"
 		"\t--vector_tmo_ns    : Max vector timeout in nanoseconds\n"
+		"\t--per_port_pool    : Configure unique pool per ethdev port\n"
 		);
 	printf("available tests:\n");
 	evt_test_dump_names();
@@ -404,10 +424,12 @@ static struct option lgopts[] = {
 	{ EVT_EXPIRY_NSEC,         1, 0, 0 },
 	{ EVT_MBUF_SZ,             1, 0, 0 },
 	{ EVT_MAX_PKT_SZ,          1, 0, 0 },
+	{ EVT_PROD_ENQ_BURST_SZ,   1, 0, 0 },
 	{ EVT_NB_ETH_QUEUES,       1, 0, 0 },
 	{ EVT_ENA_VECTOR,          0, 0, 0 },
 	{ EVT_VECTOR_SZ,           1, 0, 0 },
 	{ EVT_VECTOR_TMO,          1, 0, 0 },
+	{ EVT_PER_PORT_POOL,       0, 0, 0 },
 	{ EVT_HELP,                0, 0, 0 },
 	{ NULL,                    0, 0, 0 }
 };
@@ -442,10 +464,12 @@ evt_opts_parse_long(int opt_idx, struct evt_options *opt)
 		{ EVT_EXPIRY_NSEC, evt_parse_expiry_nsec},
 		{ EVT_MBUF_SZ, evt_parse_mbuf_sz},
 		{ EVT_MAX_PKT_SZ, evt_parse_max_pkt_sz},
+		{ EVT_PROD_ENQ_BURST_SZ, evt_parse_prod_enq_burst_sz},
 		{ EVT_NB_ETH_QUEUES, evt_parse_eth_queues},
 		{ EVT_ENA_VECTOR, evt_parse_ena_vector},
 		{ EVT_VECTOR_SZ, evt_parse_vector_size},
 		{ EVT_VECTOR_TMO, evt_parse_vector_tmo_ns},
+		{ EVT_PER_PORT_POOL, evt_parse_per_port_pool},
 	};
 
 	for (i = 0; i < RTE_DIM(parsermap); i++) {

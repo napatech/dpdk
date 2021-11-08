@@ -48,7 +48,7 @@ mlx5_vdpa_event_qp_global_prepare(struct mlx5_vdpa_priv *priv)
 {
 	if (priv->eventc)
 		return 0;
-	priv->eventc = mlx5_os_devx_create_event_channel(priv->ctx,
+	priv->eventc = mlx5_os_devx_create_event_channel(priv->cdev->ctx,
 			   MLX5DV_DEVX_CREATE_EVENT_CHANNEL_FLAGS_OMIT_EV_DATA);
 	if (!priv->eventc) {
 		rte_errno = errno;
@@ -61,7 +61,7 @@ mlx5_vdpa_event_qp_global_prepare(struct mlx5_vdpa_priv *priv)
 	 * registers writings, it is safe to allocate UAR with any
 	 * memory mapping type.
 	 */
-	priv->uar = mlx5_devx_alloc_uar(priv->ctx, -1);
+	priv->uar = mlx5_devx_alloc_uar(priv->cdev->ctx, -1);
 	if (!priv->uar) {
 		rte_errno = errno;
 		DRV_LOG(ERR, "Failed to allocate UAR.");
@@ -115,8 +115,8 @@ mlx5_vdpa_cq_create(struct mlx5_vdpa_priv *priv, uint16_t log_desc_n,
 	uint16_t event_nums[1] = {0};
 	int ret;
 
-	ret = mlx5_devx_cq_create(priv->ctx, &cq->cq_obj, log_desc_n, &attr,
-				  SOCKET_ID_ANY);
+	ret = mlx5_devx_cq_create(priv->cdev->ctx, &cq->cq_obj, log_desc_n,
+				  &attr, SOCKET_ID_ANY);
 	if (ret)
 		goto error;
 	cq->cq_ci = 0;
@@ -179,7 +179,7 @@ mlx5_vdpa_cq_poll(struct mlx5_vdpa_cq *cq)
 		cq->cq_obj.db_rec[0] = rte_cpu_to_be_32(cq->cq_ci);
 		rte_io_wmb();
 		/* Ring SW QP doorbell record. */
-		eqp->db_rec[0] = rte_cpu_to_be_32(cq->cq_ci + cq_size);
+		eqp->sw_qp.db_rec[0] = rte_cpu_to_be_32(cq->cq_ci + cq_size);
 	}
 	return comp;
 }
@@ -397,7 +397,8 @@ mlx5_vdpa_err_event_setup(struct mlx5_vdpa_priv *priv)
 	int flags;
 
 	/* Setup device event channel. */
-	priv->err_chnl = mlx5_glue->devx_create_event_channel(priv->ctx, 0);
+	priv->err_chnl = mlx5_glue->devx_create_event_channel(priv->cdev->ctx,
+							      0);
 	if (!priv->err_chnl) {
 		rte_errno = errno;
 		DRV_LOG(ERR, "Failed to create device event channel %d.",
@@ -410,12 +411,17 @@ mlx5_vdpa_err_event_setup(struct mlx5_vdpa_priv *priv)
 		DRV_LOG(ERR, "Failed to change device event channel FD.");
 		goto error;
 	}
-	priv->err_intr_handle.fd = priv->err_chnl->fd;
-	priv->err_intr_handle.type = RTE_INTR_HANDLE_EXT;
-	if (rte_intr_callback_register(&priv->err_intr_handle,
+
+	if (rte_intr_fd_set(priv->err_intr_handle, priv->err_chnl->fd))
+		goto error;
+
+	if (rte_intr_type_set(priv->err_intr_handle, RTE_INTR_HANDLE_EXT))
+		goto error;
+
+	if (rte_intr_callback_register(priv->err_intr_handle,
 				       mlx5_vdpa_err_interrupt_handler,
 				       priv)) {
-		priv->err_intr_handle.fd = 0;
+		rte_intr_fd_set(priv->err_intr_handle, 0);
 		DRV_LOG(ERR, "Failed to register error interrupt for device %d.",
 			priv->vid);
 		goto error;
@@ -435,20 +441,20 @@ mlx5_vdpa_err_event_unset(struct mlx5_vdpa_priv *priv)
 	int retries = MLX5_VDPA_INTR_RETRIES;
 	int ret = -EAGAIN;
 
-	if (!priv->err_intr_handle.fd)
+	if (!rte_intr_fd_get(priv->err_intr_handle))
 		return;
 	while (retries-- && ret == -EAGAIN) {
-		ret = rte_intr_callback_unregister(&priv->err_intr_handle,
+		ret = rte_intr_callback_unregister(priv->err_intr_handle,
 					    mlx5_vdpa_err_interrupt_handler,
 					    priv);
 		if (ret == -EAGAIN) {
 			DRV_LOG(DEBUG, "Try again to unregister fd %d "
 				"of error interrupt, retries = %d.",
-				priv->err_intr_handle.fd, retries);
+				rte_intr_fd_get(priv->err_intr_handle),
+				retries);
 			rte_pause();
 		}
 	}
-	memset(&priv->err_intr_handle, 0, sizeof(priv->err_intr_handle));
 	if (priv->err_chnl) {
 #ifdef HAVE_IBV_DEVX_EVENT
 		union {
@@ -531,12 +537,7 @@ mlx5_vdpa_cqe_event_unset(struct mlx5_vdpa_priv *priv)
 void
 mlx5_vdpa_event_qp_destroy(struct mlx5_vdpa_event_qp *eqp)
 {
-	if (eqp->sw_qp)
-		claim_zero(mlx5_devx_cmd_destroy(eqp->sw_qp));
-	if (eqp->umem_obj)
-		claim_zero(mlx5_glue->devx_umem_dereg(eqp->umem_obj));
-	if (eqp->umem_buf)
-		rte_free(eqp->umem_buf);
+	mlx5_devx_qp_destroy(&eqp->sw_qp);
 	if (eqp->fw_qp)
 		claim_zero(mlx5_devx_cmd_destroy(eqp->fw_qp));
 	mlx5_vdpa_cq_destroy(&eqp->cq);
@@ -547,36 +548,36 @@ static int
 mlx5_vdpa_qps2rts(struct mlx5_vdpa_event_qp *eqp)
 {
 	if (mlx5_devx_cmd_modify_qp_state(eqp->fw_qp, MLX5_CMD_OP_RST2INIT_QP,
-					  eqp->sw_qp->id)) {
+					  eqp->sw_qp.qp->id)) {
 		DRV_LOG(ERR, "Failed to modify FW QP to INIT state(%u).",
 			rte_errno);
 		return -1;
 	}
-	if (mlx5_devx_cmd_modify_qp_state(eqp->sw_qp, MLX5_CMD_OP_RST2INIT_QP,
-					  eqp->fw_qp->id)) {
+	if (mlx5_devx_cmd_modify_qp_state(eqp->sw_qp.qp,
+			MLX5_CMD_OP_RST2INIT_QP, eqp->fw_qp->id)) {
 		DRV_LOG(ERR, "Failed to modify SW QP to INIT state(%u).",
 			rte_errno);
 		return -1;
 	}
 	if (mlx5_devx_cmd_modify_qp_state(eqp->fw_qp, MLX5_CMD_OP_INIT2RTR_QP,
-					  eqp->sw_qp->id)) {
+					  eqp->sw_qp.qp->id)) {
 		DRV_LOG(ERR, "Failed to modify FW QP to RTR state(%u).",
 			rte_errno);
 		return -1;
 	}
-	if (mlx5_devx_cmd_modify_qp_state(eqp->sw_qp, MLX5_CMD_OP_INIT2RTR_QP,
-					  eqp->fw_qp->id)) {
+	if (mlx5_devx_cmd_modify_qp_state(eqp->sw_qp.qp,
+			MLX5_CMD_OP_INIT2RTR_QP, eqp->fw_qp->id)) {
 		DRV_LOG(ERR, "Failed to modify SW QP to RTR state(%u).",
 			rte_errno);
 		return -1;
 	}
 	if (mlx5_devx_cmd_modify_qp_state(eqp->fw_qp, MLX5_CMD_OP_RTR2RTS_QP,
-					  eqp->sw_qp->id)) {
+					  eqp->sw_qp.qp->id)) {
 		DRV_LOG(ERR, "Failed to modify FW QP to RTS state(%u).",
 			rte_errno);
 		return -1;
 	}
-	if (mlx5_devx_cmd_modify_qp_state(eqp->sw_qp, MLX5_CMD_OP_RTR2RTS_QP,
+	if (mlx5_devx_cmd_modify_qp_state(eqp->sw_qp.qp, MLX5_CMD_OP_RTR2RTS_QP,
 					  eqp->fw_qp->id)) {
 		DRV_LOG(ERR, "Failed to modify SW QP to RTS state(%u).",
 			rte_errno);
@@ -591,56 +592,38 @@ mlx5_vdpa_event_qp_create(struct mlx5_vdpa_priv *priv, uint16_t desc_n,
 {
 	struct mlx5_devx_qp_attr attr = {0};
 	uint16_t log_desc_n = rte_log2_u32(desc_n);
-	uint32_t umem_size = (1 << log_desc_n) * MLX5_WSEG_SIZE +
-						       sizeof(*eqp->db_rec) * 2;
+	uint32_t ret;
 
 	if (mlx5_vdpa_event_qp_global_prepare(priv))
 		return -1;
 	if (mlx5_vdpa_cq_create(priv, log_desc_n, callfd, &eqp->cq))
 		return -1;
-	attr.pd = priv->pdn;
-	attr.ts_format = mlx5_ts_format_conv(priv->qp_ts_format);
-	eqp->fw_qp = mlx5_devx_cmd_create_qp(priv->ctx, &attr);
+	attr.pd = priv->cdev->pdn;
+	attr.ts_format =
+		mlx5_ts_format_conv(priv->cdev->config.hca_attr.qp_ts_format);
+	eqp->fw_qp = mlx5_devx_cmd_create_qp(priv->cdev->ctx, &attr);
 	if (!eqp->fw_qp) {
 		DRV_LOG(ERR, "Failed to create FW QP(%u).", rte_errno);
 		goto error;
 	}
-	eqp->umem_buf = rte_zmalloc(__func__, umem_size, 4096);
-	if (!eqp->umem_buf) {
-		DRV_LOG(ERR, "Failed to allocate memory for SW QP.");
-		rte_errno = ENOMEM;
-		goto error;
-	}
-	eqp->umem_obj = mlx5_glue->devx_umem_reg(priv->ctx,
-					       (void *)(uintptr_t)eqp->umem_buf,
-					       umem_size,
-					       IBV_ACCESS_LOCAL_WRITE);
-	if (!eqp->umem_obj) {
-		DRV_LOG(ERR, "Failed to register umem for SW QP.");
-		goto error;
-	}
 	attr.uar_index = priv->uar->page_id;
 	attr.cqn = eqp->cq.cq_obj.cq->id;
-	attr.log_page_size = rte_log2_u32(sysconf(_SC_PAGESIZE));
-	attr.rq_size = 1 << log_desc_n;
+	attr.rq_size = RTE_BIT32(log_desc_n);
 	attr.log_rq_stride = rte_log2_u32(MLX5_WSEG_SIZE);
 	attr.sq_size = 0; /* No need SQ. */
-	attr.dbr_umem_valid = 1;
-	attr.wq_umem_id = eqp->umem_obj->umem_id;
-	attr.wq_umem_offset = 0;
-	attr.dbr_umem_id = eqp->umem_obj->umem_id;
-	attr.dbr_address = (1 << log_desc_n) * MLX5_WSEG_SIZE;
-	attr.ts_format = mlx5_ts_format_conv(priv->qp_ts_format);
-	eqp->sw_qp = mlx5_devx_cmd_create_qp(priv->ctx, &attr);
-	if (!eqp->sw_qp) {
+	attr.ts_format =
+		mlx5_ts_format_conv(priv->cdev->config.hca_attr.qp_ts_format);
+	ret = mlx5_devx_qp_create(priv->cdev->ctx, &(eqp->sw_qp), log_desc_n,
+				  &attr, SOCKET_ID_ANY);
+	if (ret) {
 		DRV_LOG(ERR, "Failed to create SW QP(%u).", rte_errno);
 		goto error;
 	}
-	eqp->db_rec = RTE_PTR_ADD(eqp->umem_buf, (uintptr_t)attr.dbr_address);
 	if (mlx5_vdpa_qps2rts(eqp))
 		goto error;
 	/* First ringing. */
-	rte_write32(rte_cpu_to_be_32(1 << log_desc_n), &eqp->db_rec[0]);
+	rte_write32(rte_cpu_to_be_32(RTE_BIT32(log_desc_n)),
+			&eqp->sw_qp.db_rec[0]);
 	return 0;
 error:
 	mlx5_vdpa_event_qp_destroy(eqp);

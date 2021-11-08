@@ -495,7 +495,7 @@ efd_search_hash(struct rte_efd_table * const table,
 
 struct rte_efd_table *
 rte_efd_create(const char *name, uint32_t max_num_rules, uint32_t key_len,
-		uint8_t online_cpu_socket_bitmask, uint8_t offline_cpu_socket)
+		uint64_t online_cpu_socket_bitmask, uint8_t offline_cpu_socket)
 {
 	struct rte_efd_table *table = NULL;
 	uint8_t *key_array = NULL;
@@ -759,7 +759,7 @@ rte_efd_free(struct rte_efd_table *table)
 	efd_list = RTE_TAILQ_CAST(rte_efd_tailq.head, rte_efd_list);
 	rte_mcfg_tailq_write_lock();
 
-	TAILQ_FOREACH_SAFE(te, efd_list, next, temp) {
+	RTE_TAILQ_FOREACH_SAFE(te, efd_list, next, temp) {
 		if (te->data == (void *) table) {
 			TAILQ_REMOVE(efd_list, te, next);
 			rte_free(te);

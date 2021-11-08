@@ -819,6 +819,8 @@ mlx5_devx_cmd_query_hca_attr(void *ctx,
 	attr->roce = MLX5_GET(cmd_hca_cap, hcattr, roce);
 	attr->rq_ts_format = MLX5_GET(cmd_hca_cap, hcattr, rq_ts_format);
 	attr->sq_ts_format = MLX5_GET(cmd_hca_cap, hcattr, sq_ts_format);
+	attr->steering_format_version =
+		MLX5_GET(cmd_hca_cap, hcattr, steering_format_version);
 	attr->regex = MLX5_GET(cmd_hca_cap, hcattr, regexp);
 	attr->regexp_num_of_engines = MLX5_GET(cmd_hca_cap, hcattr,
 					       regexp_num_of_engines);
@@ -856,9 +858,18 @@ mlx5_devx_cmd_query_hca_attr(void *ctx,
 	attr->log_max_srq_sz = MLX5_GET(cmd_hca_cap, hcattr, log_max_srq_sz);
 	attr->reg_c_preserve =
 		MLX5_GET(cmd_hca_cap, hcattr, reg_c_preserve);
-	attr->mmo_dma_en = MLX5_GET(cmd_hca_cap, hcattr, dma_mmo);
-	attr->mmo_compress_en = MLX5_GET(cmd_hca_cap, hcattr, compress);
-	attr->mmo_decompress_en = MLX5_GET(cmd_hca_cap, hcattr, decompress);
+	attr->mmo_regex_qp_en = MLX5_GET(cmd_hca_cap, hcattr, regexp_mmo_qp);
+	attr->mmo_regex_sq_en = MLX5_GET(cmd_hca_cap, hcattr, regexp_mmo_sq);
+	attr->mmo_dma_sq_en = MLX5_GET(cmd_hca_cap, hcattr, dma_mmo_sq);
+	attr->mmo_compress_sq_en = MLX5_GET(cmd_hca_cap, hcattr,
+			compress_mmo_sq);
+	attr->mmo_decompress_sq_en = MLX5_GET(cmd_hca_cap, hcattr,
+			decompress_mmo_sq);
+	attr->mmo_dma_qp_en = MLX5_GET(cmd_hca_cap, hcattr, dma_mmo_qp);
+	attr->mmo_compress_qp_en = MLX5_GET(cmd_hca_cap, hcattr,
+			compress_mmo_qp);
+	attr->mmo_decompress_qp_en = MLX5_GET(cmd_hca_cap, hcattr,
+			decompress_mmo_qp);
 	attr->compress_min_block_size = MLX5_GET(cmd_hca_cap, hcattr,
 						 compress_min_block_size);
 	attr->log_max_mmo_dma = MLX5_GET(cmd_hca_cap, hcattr, log_dma_mmo_size);
@@ -947,7 +958,16 @@ mlx5_devx_cmd_query_hca_attr(void *ctx,
 	attr->log_max_ft_sampler_num = MLX5_GET
 		(flow_table_nic_cap, hcattr,
 		 flow_table_properties_nic_receive.log_max_ft_sampler_num);
+	attr->flow.tunnel_header_0_1 = MLX5_GET
+		(flow_table_nic_cap, hcattr,
+		 ft_field_support_2_nic_receive.tunnel_header_0_1);
 	attr->pkt_integrity_match = mlx5_devx_query_pkt_integrity_match(hcattr);
+	attr->inner_ipv4_ihl = MLX5_GET
+		(flow_table_nic_cap, hcattr,
+		 ft_field_support_2_nic_receive.inner_ipv4_ihl);
+	attr->outer_ipv4_ihl = MLX5_GET
+		(flow_table_nic_cap, hcattr,
+		 ft_field_support_2_nic_receive.outer_ipv4_ihl);
 	/* Query HCA offloads for Ethernet protocol. */
 	memset(in, 0, sizeof(in));
 	memset(out, 0, sizeof(out));
@@ -974,12 +994,30 @@ mlx5_devx_cmd_query_hca_attr(void *ctx,
 					 hcattr, wqe_vlan_insert);
 	attr->csum_cap = MLX5_GET(per_protocol_networking_offload_caps,
 					 hcattr, csum_cap);
+	attr->vlan_cap = MLX5_GET(per_protocol_networking_offload_caps,
+					 hcattr, vlan_cap);
 	attr->lro_cap = MLX5_GET(per_protocol_networking_offload_caps, hcattr,
 				 lro_cap);
+	attr->max_lso_cap = MLX5_GET(per_protocol_networking_offload_caps,
+				 hcattr, max_lso_cap);
+	attr->scatter_fcs = MLX5_GET(per_protocol_networking_offload_caps,
+				 hcattr, scatter_fcs);
 	attr->tunnel_lro_gre = MLX5_GET(per_protocol_networking_offload_caps,
 					hcattr, tunnel_lro_gre);
 	attr->tunnel_lro_vxlan = MLX5_GET(per_protocol_networking_offload_caps,
 					  hcattr, tunnel_lro_vxlan);
+	attr->swp = MLX5_GET(per_protocol_networking_offload_caps,
+					  hcattr, swp);
+	attr->tunnel_stateless_gre =
+				MLX5_GET(per_protocol_networking_offload_caps,
+					  hcattr, tunnel_stateless_gre);
+	attr->tunnel_stateless_vxlan =
+				MLX5_GET(per_protocol_networking_offload_caps,
+					  hcattr, tunnel_stateless_vxlan);
+	attr->swp_csum = MLX5_GET(per_protocol_networking_offload_caps,
+					  hcattr, swp_csum);
+	attr->swp_lso = MLX5_GET(per_protocol_networking_offload_caps,
+					  hcattr, swp_lso);
 	attr->lro_max_msg_sz_mode = MLX5_GET
 					(per_protocol_networking_offload_caps,
 					 hcattr, lro_max_msg_sz_mode);
@@ -2010,7 +2048,15 @@ mlx5_devx_cmd_create_qp(void *ctx,
 	MLX5_SET(qpc, qpc, st, MLX5_QP_ST_RC);
 	MLX5_SET(qpc, qpc, pd, attr->pd);
 	MLX5_SET(qpc, qpc, ts_format, attr->ts_format);
+	MLX5_SET(qpc, qpc, user_index, attr->user_index);
 	if (attr->uar_index) {
+		if (attr->mmo) {
+			void *qpc_ext_and_pas_list = MLX5_ADDR_OF(create_qp_in,
+				in, qpc_extension_and_pas_list);
+			void *qpc_ext = MLX5_ADDR_OF(qpc_extension_and_pas_list,
+				qpc_ext_and_pas_list, qpc_data_extension);
+			MLX5_SET(qpc_extension, qpc_ext, mmo, 1);
+		}
 		MLX5_SET(qpc, qpc, pm_state, MLX5_QP_PM_MIGRATED);
 		MLX5_SET(qpc, qpc, uar_page, attr->uar_index);
 		if (attr->log_page_size > MLX5_ADAPTER_PAGE_SHIFT)
@@ -2753,4 +2799,44 @@ mlx5_devx_cmd_create_crypto_login_obj(void *ctx,
 	}
 	crypto_login_obj->id = MLX5_GET(general_obj_out_cmd_hdr, out, obj_id);
 	return crypto_login_obj;
+}
+
+/**
+ * Query LAG context.
+ *
+ * @param[in] ctx
+ *   Pointer to ibv_context, returned from mlx5dv_open_device.
+ * @param[out] lag_ctx
+ *   Pointer to struct mlx5_devx_lag_context, to be set by the routine.
+ *
+ * @return
+ *   0 on success, a negative value otherwise.
+ */
+int
+mlx5_devx_cmd_query_lag(void *ctx,
+			struct mlx5_devx_lag_context *lag_ctx)
+{
+	uint32_t in[MLX5_ST_SZ_DW(query_lag_in)] = {0};
+	uint32_t out[MLX5_ST_SZ_DW(query_lag_out)] = {0};
+	void *lctx;
+	int rc;
+
+	MLX5_SET(query_lag_in, in, opcode, MLX5_CMD_OP_QUERY_LAG);
+	rc = mlx5_glue->devx_general_cmd(ctx, in, sizeof(in), out, sizeof(out));
+	if (rc)
+		goto error;
+	lctx = MLX5_ADDR_OF(query_lag_out, out, context);
+	lag_ctx->fdb_selection_mode = MLX5_GET(lag_context, lctx,
+					       fdb_selection_mode);
+	lag_ctx->port_select_mode = MLX5_GET(lag_context, lctx,
+					       port_select_mode);
+	lag_ctx->lag_state = MLX5_GET(lag_context, lctx, lag_state);
+	lag_ctx->tx_remap_affinity_2 = MLX5_GET(lag_context, lctx,
+						tx_remap_affinity_2);
+	lag_ctx->tx_remap_affinity_1 = MLX5_GET(lag_context, lctx,
+						tx_remap_affinity_1);
+	return 0;
+error:
+	rc = (rc > 0) ? -rc : rc;
+	return rc;
 }

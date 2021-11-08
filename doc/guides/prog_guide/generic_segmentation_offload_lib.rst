@@ -194,11 +194,11 @@ To segment an outgoing packet, an application must:
 
    - the bit mask of required GSO types. The GSO library uses the same macros as
      those that describe a physical device's TX offloading capabilities (i.e.
-     ``DEV_TX_OFFLOAD_*_TSO``) for gso_types. For example, if an application
+     ``RTE_ETH_TX_OFFLOAD_*_TSO``) for gso_types. For example, if an application
      wants to segment TCP/IPv4 packets, it should set gso_types to
-     ``DEV_TX_OFFLOAD_TCP_TSO``. The only other supported values currently
-     supported for gso_types are ``DEV_TX_OFFLOAD_VXLAN_TNL_TSO``, and
-     ``DEV_TX_OFFLOAD_GRE_TNL_TSO``; a combination of these macros is also
+     ``RTE_ETH_TX_OFFLOAD_TCP_TSO``. The only other supported values currently
+     supported for gso_types are ``RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO``, and
+     ``RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO``; a combination of these macros is also
      allowed.
 
    - a flag, that indicates whether the IPv4 headers of output segments should
@@ -211,11 +211,11 @@ To segment an outgoing packet, an application must:
      responsibility to ensure that these flags are set.
 
    - For example, in order to segment TCP/IPv4 packets, the application should
-     add the ``PKT_TX_IPV4`` and ``PKT_TX_TCP_SEG`` flags to the mbuf's
+     add the ``RTE_MBUF_F_TX_IPV4`` and ``RTE_MBUF_F_TX_TCP_SEG`` flags to the mbuf's
      ol_flags.
 
    - If checksum calculation in hardware is required, the application should
-     also add the ``PKT_TX_TCP_CKSUM`` and ``PKT_TX_IP_CKSUM`` flags.
+     also add the ``RTE_MBUF_F_TX_TCP_CKSUM`` and ``RTE_MBUF_F_TX_IP_CKSUM`` flags.
 
 #. Check if the packet should be processed. Packets with one of the
    following properties are not processed and are returned immediately:

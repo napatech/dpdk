@@ -1,9 +1,11 @@
-DPDK_21 {
+DPDK_22 {
 	global:
 
 	rte_kvargs_count;
 	rte_kvargs_free;
+	rte_kvargs_get;
 	rte_kvargs_parse;
+	rte_kvargs_parse_delim;
 	rte_kvargs_process;
 
 	local: *;
@@ -12,9 +14,6 @@ DPDK_21 {
 EXPERIMENTAL {
 	global:
 
-	rte_kvargs_parse_delim;
-	rte_kvargs_strcmp;
-
-	# added in 21.05
-	rte_kvargs_get;
+	# added in 21.11
+	rte_kvargs_get_with_value;
 };

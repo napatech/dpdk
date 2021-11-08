@@ -16,6 +16,7 @@
 #include <rte_bus.h>
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
+#include <rte_lcore.h>
 #include <rte_per_lcore.h>
 #include <rte_memory.h>
 #include <rte_eal.h>
@@ -190,7 +191,9 @@ rte_pci_probe_one_driver(struct rte_pci_driver *dr,
 	}
 
 	if (dev->device.numa_node < 0) {
-		RTE_LOG(WARNING, EAL, "  Invalid NUMA socket, default to 0\n");
+		if (rte_socket_count() > 1)
+			RTE_LOG(INFO, EAL, "Device %s is not NUMA-aware, defaulting socket to 0\n",
+					dev->name);
 		dev->device.numa_node = 0;
 	}
 
@@ -223,16 +226,39 @@ rte_pci_probe_one_driver(struct rte_pci_driver *dr,
 			return -EINVAL;
 		}
 
-		dev->driver = dr;
-	}
-
-	if (!already_probed && (dr->drv_flags & RTE_PCI_DRV_NEED_MAPPING)) {
-		/* map resources for devices that use igb_uio */
-		ret = rte_pci_map_device(dev);
-		if (ret != 0) {
-			dev->driver = NULL;
-			return ret;
+		/* Allocate interrupt instance for pci device */
+		dev->intr_handle =
+			rte_intr_instance_alloc(RTE_INTR_INSTANCE_F_PRIVATE);
+		if (dev->intr_handle == NULL) {
+			RTE_LOG(ERR, EAL,
+				"Failed to create interrupt instance for %s\n",
+				dev->device.name);
+			return -ENOMEM;
 		}
+
+		dev->vfio_req_intr_handle =
+			rte_intr_instance_alloc(RTE_INTR_INSTANCE_F_PRIVATE);
+		if (dev->vfio_req_intr_handle == NULL) {
+			rte_intr_instance_free(dev->intr_handle);
+			dev->intr_handle = NULL;
+			RTE_LOG(ERR, EAL,
+				"Failed to create vfio req interrupt instance for %s\n",
+				dev->device.name);
+			return -ENOMEM;
+		}
+
+		if (dr->drv_flags & RTE_PCI_DRV_NEED_MAPPING) {
+			ret = rte_pci_map_device(dev);
+			if (ret != 0) {
+				rte_intr_instance_free(dev->vfio_req_intr_handle);
+				dev->vfio_req_intr_handle = NULL;
+				rte_intr_instance_free(dev->intr_handle);
+				dev->intr_handle = NULL;
+				return ret;
+			}
+		}
+
+		dev->driver = dr;
 	}
 
 	RTE_LOG(INFO, EAL, "Probe PCI driver: %s (%x:%x) device: "PCI_PRI_FMT" (socket %i)\n",
@@ -245,6 +271,10 @@ rte_pci_probe_one_driver(struct rte_pci_driver *dr,
 		return ret; /* no rollback if already succeeded earlier */
 	if (ret) {
 		dev->driver = NULL;
+		rte_intr_instance_free(dev->vfio_req_intr_handle);
+		dev->vfio_req_intr_handle = NULL;
+		rte_intr_instance_free(dev->intr_handle);
+		dev->intr_handle = NULL;
 		if ((dr->drv_flags & RTE_PCI_DRV_NEED_MAPPING) &&
 			/* Don't unmap if device is unsupported and
 			 * driver needs mapped resources.
@@ -292,6 +322,10 @@ rte_pci_detach_dev(struct rte_pci_device *dev)
 	/* clear driver structure */
 	dev->driver = NULL;
 	dev->device.driver = NULL;
+	rte_intr_instance_free(dev->intr_handle);
+	dev->intr_handle = NULL;
+	rte_intr_instance_free(dev->vfio_req_intr_handle);
+	dev->vfio_req_intr_handle = NULL;
 
 	if (dr->drv_flags & RTE_PCI_DRV_NEED_MAPPING)
 		/* unmap resources for devices that use igb_uio */
@@ -746,6 +780,34 @@ rte_pci_find_ext_capability(struct rte_pci_device *dev, uint32_t cap)
 	return 0;
 }
 
+int
+rte_pci_set_bus_master(struct rte_pci_device *dev, bool enable)
+{
+	uint16_t old_cmd, cmd;
+
+	if (rte_pci_read_config(dev, &old_cmd, sizeof(old_cmd),
+				RTE_PCI_COMMAND) < 0) {
+		RTE_LOG(ERR, EAL, "error in reading PCI command register\n");
+		return -1;
+	}
+
+	if (enable)
+		cmd = old_cmd | RTE_PCI_COMMAND_MASTER;
+	else
+		cmd = old_cmd & ~RTE_PCI_COMMAND_MASTER;
+
+	if (cmd == old_cmd)
+		return 0;
+
+	if (rte_pci_write_config(dev, &cmd, sizeof(cmd),
+				 RTE_PCI_COMMAND) < 0) {
+		RTE_LOG(ERR, EAL, "error in writing PCI command register\n");
+		return -1;
+	}
+
+	return 0;
+}
+
 struct rte_pci_bus rte_pci_bus = {
 	.bus = {
 		.scan = rte_pci_scan,
@@ -754,6 +816,7 @@ struct rte_pci_bus rte_pci_bus = {
 		.plug = pci_plug,
 		.unplug = pci_unplug,
 		.parse = pci_parse,
+		.devargs_parse = rte_pci_devargs_parse,
 		.dma_map = pci_dma_map,
 		.dma_unmap = pci_dma_unmap,
 		.get_iommu_class = rte_pci_get_iommu_class,

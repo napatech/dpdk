@@ -370,7 +370,35 @@ dsw_close(struct rte_eventdev *dev)
 	return 0;
 }
 
-static struct rte_eventdev_ops dsw_evdev_ops = {
+static int
+dsw_eth_rx_adapter_caps_get(const struct rte_eventdev *dev __rte_unused,
+			    const struct rte_eth_dev *eth_dev __rte_unused,
+			    uint32_t *caps)
+{
+	*caps = RTE_EVENT_ETH_RX_ADAPTER_SW_CAP;
+	return 0;
+}
+
+static int
+dsw_timer_adapter_caps_get(const struct rte_eventdev *dev __rte_unused,
+			   uint64_t flags __rte_unused, uint32_t *caps,
+			   const struct event_timer_adapter_ops **ops)
+{
+	*caps = 0;
+	*ops = NULL;
+	return 0;
+}
+
+static int
+dsw_crypto_adapter_caps_get(const struct rte_eventdev *dev  __rte_unused,
+			    const struct rte_cryptodev *cdev  __rte_unused,
+			    uint32_t *caps)
+{
+	*caps = RTE_EVENT_CRYPTO_ADAPTER_SW_CAP;
+	return 0;
+}
+
+static struct eventdev_ops dsw_evdev_ops = {
 	.port_setup = dsw_port_setup,
 	.port_def_conf = dsw_port_def_conf,
 	.port_release = dsw_port_release,
@@ -384,6 +412,9 @@ static struct rte_eventdev_ops dsw_evdev_ops = {
 	.dev_start = dsw_start,
 	.dev_stop = dsw_stop,
 	.dev_close = dsw_close,
+	.eth_rx_adapter_caps_get = dsw_eth_rx_adapter_caps_get,
+	.timer_adapter_caps_get = dsw_timer_adapter_caps_get,
+	.crypto_adapter_caps_get = dsw_crypto_adapter_caps_get,
 	.xstats_get = dsw_xstats_get,
 	.xstats_get_names = dsw_xstats_get_names,
 	.xstats_get_by_name = dsw_xstats_get_by_name
@@ -417,6 +448,7 @@ dsw_probe(struct rte_vdev_device *vdev)
 	dsw = dev->data->dev_private;
 	dsw->data = dev->data;
 
+	event_dev_probing_finish(dev);
 	return 0;
 }
 

@@ -27,6 +27,7 @@ libraries = [
         'acl',
         'bbdev',
         'bitratestats',
+        'bpf',
         'cfgfile',
         'compressdev',
         'cryptodev',
@@ -41,10 +42,11 @@ libraries = [
         'latencystats',
         'lpm',
         'member',
+        'pcapng',
         'power',
-        'pdump',
         'rawdev',
         'regexdev',
+        'dmadev',
         'rib',
         'reorder',
         'sched',
@@ -54,32 +56,13 @@ libraries = [
         'ipsec', # ipsec lib depends on net, crypto and security
         'fib', #fib lib depends on rib
         'port', # pkt framework libs which use other libs from above
+        'pdump', # pdump lib depends on bpf
         'table',
         'pipeline',
         'flow_classify', # flow_classify lib depends on pkt framework table lib
-        'bpf',
         'graph',
         'node',
 ]
-
-if is_windows
-    libraries = [
-            'kvargs',
-            'telemetry',
-            'eal',
-            'ring',
-            'rcu',
-            'mempool',
-            'mbuf',
-            'net',
-            'meter',
-            'ethdev',
-            'pci',
-            'cmdline',
-            'hash',
-            'cfgfile',
-    ] # only supported libraries for windows
-endif
 
 optional_libs = [
         'kni',

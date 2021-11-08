@@ -457,6 +457,14 @@ parse_op_type(struct cperf_options *opts, const char *arg)
 		{
 			cperf_op_type_strs[CPERF_DOCSIS],
 			CPERF_DOCSIS
+		},
+		{
+			cperf_op_type_strs[CPERF_IPSEC],
+			CPERF_IPSEC
+		},
+		{
+			cperf_op_type_strs[CPERF_ASYM_MODEX],
+			CPERF_ASYM_MODEX
 		}
 	};
 
@@ -662,7 +670,8 @@ parse_pdcp_sn_sz(struct cperf_options *opts, const char *arg)
 
 const char *cperf_pdcp_domain_strs[] = {
 	[RTE_SECURITY_PDCP_MODE_CONTROL] = "control",
-	[RTE_SECURITY_PDCP_MODE_DATA] = "data"
+	[RTE_SECURITY_PDCP_MODE_DATA] = "data",
+	[RTE_SECURITY_PDCP_MODE_SHORT_MAC] = "short_mac"
 };
 
 static int
@@ -677,6 +686,11 @@ parse_pdcp_domain(struct cperf_options *opts, const char *arg)
 			cperf_pdcp_domain_strs
 			[RTE_SECURITY_PDCP_MODE_DATA],
 			RTE_SECURITY_PDCP_MODE_DATA
+		},
+		{
+			cperf_pdcp_domain_strs
+			[RTE_SECURITY_PDCP_MODE_SHORT_MAC],
+			RTE_SECURITY_PDCP_MODE_SHORT_MAC
 		}
 	};
 

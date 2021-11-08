@@ -5,7 +5,7 @@
 #include "cnxk_eventdev.h"
 #include "cnxk_tim_evdev.h"
 
-static struct rte_event_timer_adapter_ops cnxk_tim_ops;
+static struct event_timer_adapter_ops cnxk_tim_ops;
 
 static int
 cnxk_tim_chnk_pool_create(struct cnxk_tim_ring *tim_ring,
@@ -19,7 +19,7 @@ cnxk_tim_chnk_pool_create(struct cnxk_tim_ring *tim_ring,
 	cache_sz /= rte_lcore_count();
 	/* Create chunk pool. */
 	if (rcfg->flags & RTE_EVENT_TIMER_ADAPTER_F_SP_PUT) {
-		mp_flags = MEMPOOL_F_SP_PUT | MEMPOOL_F_SC_GET;
+		mp_flags = RTE_MEMPOOL_F_SP_PUT | RTE_MEMPOOL_F_SC_GET;
 		plt_tim_dbg("Using single producer mode");
 		tim_ring->prod_type_sp = true;
 	}
@@ -27,8 +27,8 @@ cnxk_tim_chnk_pool_create(struct cnxk_tim_ring *tim_ring,
 	snprintf(pool_name, sizeof(pool_name), "cnxk_tim_chunk_pool%d",
 		 tim_ring->ring_id);
 
-	if (cache_sz > RTE_MEMPOOL_CACHE_MAX_SIZE)
-		cache_sz = RTE_MEMPOOL_CACHE_MAX_SIZE;
+	if (cache_sz > CNXK_TIM_MAX_POOL_CACHE_SZ)
+		cache_sz = CNXK_TIM_MAX_POOL_CACHE_SZ;
 	cache_sz = cache_sz != 0 ? cache_sz : 2;
 	tim_ring->nb_chunks += (cache_sz * rte_lcore_count());
 	if (!tim_ring->disable_npa) {
@@ -353,8 +353,7 @@ cnxk_tim_stats_reset(const struct rte_event_timer_adapter *adapter)
 
 int
 cnxk_tim_caps_get(const struct rte_eventdev *evdev, uint64_t flags,
-		  uint32_t *caps,
-		  const struct rte_event_timer_adapter_ops **ops)
+		  uint32_t *caps, const struct event_timer_adapter_ops **ops)
 {
 	struct cnxk_tim_evdev *dev = cnxk_tim_priv_get();
 

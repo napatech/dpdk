@@ -21,11 +21,7 @@
 
 /**
  * @file
- * PCI probing under linux
- *
- * This code is used to simulate a PCI probe by parsing information in sysfs.
- * When a registered device matches a driver, it is then initialized with
- * IGB_UIO driver (or doesn't initialize, if the device wasn't bound to it).
+ * PCI probing using Linux sysfs.
  */
 
 extern struct rte_pci_bus rte_pci_bus;
@@ -331,7 +327,7 @@ pci_scan_one(const char *dirname, const struct rte_pci_addr *addr)
 		else
 			dev->kdrv = RTE_PCI_KDRV_UNKNOWN;
 	} else {
-		dev->kdrv = RTE_PCI_KDRV_NONE;
+		free(dev);
 		return 0;
 	}
 	/* device is valid, add in list (sorted) */
@@ -549,16 +545,22 @@ bool
 pci_device_iommu_support_va(__rte_unused const struct rte_pci_device *dev)
 {
 	/*
-	 * IOMMU is always present on a PowerNV host (IOMMUv2).
-	 * IOMMU is also present in a KVM/QEMU VM (IOMMUv1) but is not
-	 * currently supported by DPDK. Test for our current environment
-	 * and report VA support as appropriate.
+	 * All POWER systems support an IOMMU, but only IOMMUv2 supports
+	 * IOVA = VA in DPDK. Check contents of /proc/cpuinfo to find the
+	 * system.
+	 *
+	 * Platform | Model |  IOMMU  | VA? |             Comment
+	 * ---------+-------+---------+-----+---------------------------------
+	 *  PowerNV |  N/A  | IOMMUv2 | Yes | OpenPOWER (Bare Metal)
+	 *  pSeries | ~qemu | IOMMUv2 | Yes | PowerVM Logical Partition (LPAR)
+	 *  pSeries |  qemu | IOMMUv1 |  No | QEMU Virtual Machine
 	 */
 
 	char *line = NULL;
 	size_t len = 0;
 	char filename[PATH_MAX] = "/proc/cpuinfo";
 	FILE *fp = fopen(filename, "r");
+	bool pseries = false, powernv = false, qemu = false;
 	bool ret = false;
 
 	if (fp == NULL) {
@@ -567,20 +569,29 @@ pci_device_iommu_support_va(__rte_unused const struct rte_pci_device *dev)
 		return ret;
 	}
 
-	/* Check for a PowerNV platform */
+	/* Check the "platform" and "model" fields */
 	while (getline(&line, &len, fp) != -1) {
-		if (strstr(line, "platform") != NULL)
-			continue;
-
-		if (strstr(line, "PowerNV") != NULL) {
-			RTE_LOG(DEBUG, EAL, "Running on a PowerNV system\n");
-			ret = true;
-			break;
+		if (strstr(line, "platform") != NULL) {
+			if (strstr(line, "PowerNV") != NULL) {
+				RTE_LOG(DEBUG, EAL, "Running on a PowerNV platform\n");
+				powernv = true;
+			} else if (strstr(line, "pSeries") != NULL) {
+				RTE_LOG(DEBUG, EAL, "Running on a pSeries platform\n");
+				pseries = true;
+			}
+		} else if (strstr(line, "model") != NULL) {
+			if (strstr(line, "qemu") != NULL) {
+				RTE_LOG(DEBUG, EAL, "Found qemu emulation\n");
+				qemu = true;
+			}
 		}
 	}
 
 	free(line);
 	fclose(fp);
+
+	if (powernv || (pseries && !qemu))
+		ret = true;
 	return ret;
 }
 #else
@@ -634,7 +645,7 @@ int rte_pci_read_config(const struct rte_pci_device *device,
 		void *buf, size_t len, off_t offset)
 {
 	char devname[RTE_DEV_NAME_MAX_LEN] = "";
-	const struct rte_intr_handle *intr_handle = &device->intr_handle;
+	const struct rte_intr_handle *intr_handle = device->intr_handle;
 
 	switch (device->kdrv) {
 	case RTE_PCI_KDRV_IGB_UIO:
@@ -658,7 +669,7 @@ int rte_pci_write_config(const struct rte_pci_device *device,
 		const void *buf, size_t len, off_t offset)
 {
 	char devname[RTE_DEV_NAME_MAX_LEN] = "";
-	const struct rte_intr_handle *intr_handle = &device->intr_handle;
+	const struct rte_intr_handle *intr_handle = device->intr_handle;
 
 	switch (device->kdrv) {
 	case RTE_PCI_KDRV_IGB_UIO:

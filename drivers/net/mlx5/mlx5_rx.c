@@ -18,11 +18,11 @@
 
 #include <mlx5_prm.h>
 #include <mlx5_common.h>
+#include <mlx5_common_mr.h>
 
 #include "mlx5_autoconf.h"
 #include "mlx5_defs.h"
 #include "mlx5.h"
-#include "mlx5_mr.h"
 #include "mlx5_utils.h"
 #include "mlx5_rxtx.h"
 #include "mlx5_rx.h"
@@ -240,33 +240,45 @@ mlx5_rx_burst_mode_get(struct rte_eth_dev *dev,
 /**
  * DPDK callback to get the number of used descriptors in a RX queue.
  *
- * @param dev
- *   Pointer to the device structure.
- *
- * @param rx_queue_id
- *   The Rx queue.
+ * @param rx_queue
+ *   The Rx queue pointer.
  *
  * @return
  *   The number of used rx descriptor.
  *   -EINVAL if the queue is invalid
  */
 uint32_t
-mlx5_rx_queue_count(struct rte_eth_dev *dev, uint16_t rx_queue_id)
+mlx5_rx_queue_count(void *rx_queue)
 {
-	struct mlx5_priv *priv = dev->data->dev_private;
-	struct mlx5_rxq_data *rxq;
+	struct mlx5_rxq_data *rxq = rx_queue;
+	struct rte_eth_dev *dev;
+
+	if (!rxq) {
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
+
+	dev = &rte_eth_devices[rxq->port_id];
 
 	if (dev->rx_pkt_burst == NULL ||
 	    dev->rx_pkt_burst == removed_rx_burst) {
 		rte_errno = ENOTSUP;
 		return -rte_errno;
 	}
-	rxq = (*priv->rxqs)[rx_queue_id];
-	if (!rxq) {
-		rte_errno = EINVAL;
-		return -rte_errno;
-	}
+
 	return rx_queue_count(rxq);
+}
+
+#define CLB_VAL_IDX 0
+#define CLB_MSK_IDX 1
+static int
+mlx5_monitor_callback(const uint64_t value,
+		const uint64_t opaque[RTE_POWER_MONITOR_OPAQUE_SZ])
+{
+	const uint64_t m = opaque[CLB_MSK_IDX];
+	const uint64_t v = opaque[CLB_VAL_IDX];
+
+	return (value & m) == v ? -1 : 0;
 }
 
 int mlx5_get_monitor_addr(void *rx_queue, struct rte_power_monitor_cond *pmc)
@@ -282,8 +294,9 @@ int mlx5_get_monitor_addr(void *rx_queue, struct rte_power_monitor_cond *pmc)
 		return -rte_errno;
 	}
 	pmc->addr = &cqe->op_own;
-	pmc->val =  !!idx;
-	pmc->mask = MLX5_CQE_OWNER_MASK;
+	pmc->opaque[CLB_VAL_IDX] = !!idx;
+	pmc->opaque[CLB_MSK_IDX] = MLX5_CQE_OWNER_MASK;
+	pmc->fn = mlx5_monitor_callback;
 	pmc->size = sizeof(uint8_t);
 	return 0;
 }
@@ -679,10 +692,10 @@ rxq_cq_to_ol_flags(volatile struct mlx5_cqe *cqe)
 	ol_flags =
 		TRANSPOSE(flags,
 			  MLX5_CQE_RX_L3_HDR_VALID,
-			  PKT_RX_IP_CKSUM_GOOD) |
+			  RTE_MBUF_F_RX_IP_CKSUM_GOOD) |
 		TRANSPOSE(flags,
 			  MLX5_CQE_RX_L4_HDR_VALID,
-			  PKT_RX_L4_CKSUM_GOOD);
+			  RTE_MBUF_F_RX_L4_CKSUM_GOOD);
 	return ol_flags;
 }
 
@@ -718,7 +731,7 @@ rxq_cq_to_mbuf(struct mlx5_rxq_data *rxq, struct rte_mbuf *pkt,
 			rss_hash_res = rte_be_to_cpu_32(mcqe->rx_hash_result);
 		if (rss_hash_res) {
 			pkt->hash.rss = rss_hash_res;
-			pkt->ol_flags |= PKT_RX_RSS_HASH;
+			pkt->ol_flags |= RTE_MBUF_F_RX_RSS_HASH;
 		}
 	}
 	if (rxq->mark) {
@@ -732,16 +745,16 @@ rxq_cq_to_mbuf(struct mlx5_rxq_data *rxq, struct rte_mbuf *pkt,
 			mark = ((mcqe->byte_cnt_flow & 0xff) << 8) |
 				(mcqe->flow_tag_high << 16);
 		if (MLX5_FLOW_MARK_IS_VALID(mark)) {
-			pkt->ol_flags |= PKT_RX_FDIR;
+			pkt->ol_flags |= RTE_MBUF_F_RX_FDIR;
 			if (mark != RTE_BE32(MLX5_FLOW_MARK_DEFAULT)) {
-				pkt->ol_flags |= PKT_RX_FDIR_ID;
+				pkt->ol_flags |= RTE_MBUF_F_RX_FDIR_ID;
 				pkt->hash.fdir.hi = mlx5_flow_mark_get(mark);
 			}
 		}
 	}
 	if (rxq->dynf_meta) {
-		uint32_t meta = cqe->flow_table_metadata &
-				rxq->flow_meta_port_mask;
+		uint32_t meta = rte_be_to_cpu_32(cqe->flow_table_metadata) &
+			rxq->flow_meta_port_mask;
 
 		if (meta) {
 			pkt->ol_flags |= rxq->flow_meta_mask;
@@ -762,7 +775,7 @@ rxq_cq_to_mbuf(struct mlx5_rxq_data *rxq, struct rte_mbuf *pkt,
 			vlan_strip = mcqe->hdr_type &
 				     RTE_BE16(MLX5_CQE_VLAN_STRIPPED);
 		if (vlan_strip) {
-			pkt->ol_flags |= PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED;
+			pkt->ol_flags |= RTE_MBUF_F_RX_VLAN | RTE_MBUF_F_RX_VLAN_STRIPPED;
 			pkt->vlan_tci = rte_be_to_cpu_16(cqe->vlan_info);
 		}
 	}
@@ -850,7 +863,7 @@ mlx5_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			}
 			pkt = seg;
 			MLX5_ASSERT(len >= (rxq->crc_present << 2));
-			pkt->ol_flags &= EXT_ATTACHED_MBUF;
+			pkt->ol_flags &= RTE_MBUF_F_EXTERNAL;
 			rxq_cq_to_mbuf(rxq, pkt, cqe, mcqe);
 			if (rxq->crc_present)
 				len -= RTE_ETHER_CRC_LEN;
@@ -859,7 +872,7 @@ mlx5_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 				mlx5_lro_update_hdr
 					(rte_pktmbuf_mtod(pkt, uint8_t *), cqe,
 					 mcqe, rxq, len);
-				pkt->ol_flags |= PKT_RX_LRO;
+				pkt->ol_flags |= RTE_MBUF_F_RX_LRO;
 				pkt->tso_segsz = len / cqe->lro_num_seg;
 			}
 		}
@@ -1016,20 +1029,6 @@ mlx5_lro_update_hdr(uint8_t *__rte_restrict padd,
 }
 
 void
-mlx5_mprq_buf_free_cb(void *addr __rte_unused, void *opaque)
-{
-	struct mlx5_mprq_buf *buf = opaque;
-
-	if (__atomic_load_n(&buf->refcnt, __ATOMIC_RELAXED) == 1) {
-		rte_mempool_put(buf->mp, buf);
-	} else if (unlikely(__atomic_sub_fetch(&buf->refcnt, 1,
-					       __ATOMIC_RELAXED) == 0)) {
-		__atomic_store_n(&buf->refcnt, 1, __ATOMIC_RELAXED);
-		rte_mempool_put(buf->mp, buf);
-	}
-}
-
-void
 mlx5_mprq_buf_free(struct mlx5_mprq_buf *buf)
 {
 	mlx5_mprq_buf_free_cb(NULL, buf);
@@ -1131,7 +1130,7 @@ mlx5_rx_burst_mprq(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		if (cqe->lro_num_seg > 1) {
 			mlx5_lro_update_hdr(rte_pktmbuf_mtod(pkt, uint8_t *),
 					    cqe, mcqe, rxq, len);
-			pkt->ol_flags |= PKT_RX_LRO;
+			pkt->ol_flags |= RTE_MBUF_F_RX_LRO;
 			pkt->tso_segsz = len / cqe->lro_num_seg;
 		}
 		PKT_LEN(pkt) = len;

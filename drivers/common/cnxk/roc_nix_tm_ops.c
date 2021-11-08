@@ -38,6 +38,13 @@ roc_nix_tm_sq_aura_fc(struct roc_nix_sq *sq, bool enable)
 
 	req->aura.fc_ena = enable;
 	req->aura_mask.fc_ena = 1;
+	if (roc_model_is_cn9k() || roc_model_is_cn10ka_a0()) {
+		req->aura.fc_stype = 0x0;      /* STF */
+		req->aura_mask.fc_stype = 0x0; /* STF */
+	} else {
+		req->aura.fc_stype = 0x3;      /* STSTP */
+		req->aura_mask.fc_stype = 0x3; /* STSTP */
+	}
 
 	rc = mbox_process(mbox);
 	if (rc)
@@ -78,19 +85,73 @@ roc_nix_tm_free_resources(struct roc_nix *roc_nix, bool hw_only)
 }
 
 static int
+nix_tm_adjust_shaper_pps_rate(struct nix_tm_shaper_profile *profile)
+{
+	uint64_t min_rate = profile->commit.rate;
+
+	if (!profile->pkt_mode)
+		return 0;
+
+	profile->pkt_mode_adj = 1;
+
+	if (profile->commit.rate &&
+	    (profile->commit.rate < NIX_TM_MIN_SHAPER_PPS_RATE ||
+	     profile->commit.rate > NIX_TM_MAX_SHAPER_PPS_RATE))
+		return NIX_ERR_TM_INVALID_COMMIT_RATE;
+
+	if (profile->peak.rate &&
+	    (profile->peak.rate < NIX_TM_MIN_SHAPER_PPS_RATE ||
+	     profile->peak.rate > NIX_TM_MAX_SHAPER_PPS_RATE))
+		return NIX_ERR_TM_INVALID_PEAK_RATE;
+
+	if (profile->peak.rate && min_rate > profile->peak.rate)
+		min_rate = profile->peak.rate;
+
+	/* Each packet accomulate single count, whereas HW
+	 * considers each unit as Byte, so we need convert
+	 * user pps to bps
+	 */
+	profile->commit.rate = profile->commit.rate * 8;
+	profile->peak.rate = profile->peak.rate * 8;
+	min_rate = min_rate * 8;
+
+	if (min_rate && (min_rate < NIX_TM_MIN_SHAPER_RATE)) {
+		int adjust = NIX_TM_MIN_SHAPER_RATE / min_rate;
+
+		if (adjust > NIX_TM_LENGTH_ADJUST_MAX)
+			return NIX_ERR_TM_SHAPER_PKT_LEN_ADJUST;
+
+		profile->pkt_mode_adj += adjust;
+		profile->commit.rate += (adjust * profile->commit.rate);
+		profile->peak.rate += (adjust * profile->peak.rate);
+	}
+
+	return 0;
+}
+
+static int
 nix_tm_shaper_profile_add(struct roc_nix *roc_nix,
 			  struct nix_tm_shaper_profile *profile, int skip_ins)
 {
 	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
 	uint64_t commit_rate, commit_sz;
+	uint64_t min_burst, max_burst;
 	uint64_t peak_rate, peak_sz;
 	uint32_t id;
+	int rc;
 
 	id = profile->id;
+	rc = nix_tm_adjust_shaper_pps_rate(profile);
+	if (rc)
+		return rc;
+
 	commit_rate = profile->commit.rate;
 	commit_sz = profile->commit.size;
 	peak_rate = profile->peak.rate;
 	peak_sz = profile->peak.size;
+
+	min_burst = NIX_TM_MIN_SHAPER_BURST;
+	max_burst = roc_nix_tm_max_shaper_burst_get();
 
 	if (nix_tm_shaper_profile_search(nix, id) && !skip_ins)
 		return NIX_ERR_TM_SHAPER_PROFILE_EXISTS;
@@ -105,8 +166,7 @@ nix_tm_shaper_profile_add(struct roc_nix *roc_nix,
 
 	/* commit rate and burst size can be enabled/disabled */
 	if (commit_rate || commit_sz) {
-		if (commit_sz < NIX_TM_MIN_SHAPER_BURST ||
-		    commit_sz > NIX_TM_MAX_SHAPER_BURST)
+		if (commit_sz < min_burst || commit_sz > max_burst)
 			return NIX_ERR_TM_INVALID_COMMIT_SZ;
 		else if (!nix_tm_shaper_rate_conv(commit_rate, NULL, NULL,
 						  NULL))
@@ -115,8 +175,7 @@ nix_tm_shaper_profile_add(struct roc_nix *roc_nix,
 
 	/* Peak rate and burst size can be enabled/disabled */
 	if (peak_sz || peak_rate) {
-		if (peak_sz < NIX_TM_MIN_SHAPER_BURST ||
-		    peak_sz > NIX_TM_MAX_SHAPER_BURST)
+		if (peak_sz < min_burst || peak_sz > max_burst)
 			return NIX_ERR_TM_INVALID_PEAK_SZ;
 		else if (!nix_tm_shaper_rate_conv(peak_rate, NULL, NULL, NULL))
 			return NIX_ERR_TM_INVALID_PEAK_RATE;
@@ -155,17 +214,8 @@ roc_nix_tm_shaper_profile_add(struct roc_nix *roc_nix,
 
 	profile->ref_cnt = 0;
 	profile->id = roc_profile->id;
-	if (roc_profile->pkt_mode) {
-		/* Each packet accomulate single count, whereas HW
-		 * considers each unit as Byte, so we need convert
-		 * user pps to bps
-		 */
-		profile->commit.rate = roc_profile->commit_rate * 8;
-		profile->peak.rate = roc_profile->peak_rate * 8;
-	} else {
-		profile->commit.rate = roc_profile->commit_rate;
-		profile->peak.rate = roc_profile->peak_rate;
-	}
+	profile->commit.rate = roc_profile->commit_rate;
+	profile->peak.rate = roc_profile->peak_rate;
 	profile->commit.size = roc_profile->commit_sz;
 	profile->peak.size = roc_profile->peak_sz;
 	profile->pkt_len_adj = roc_profile->pkt_len_adj;
@@ -183,17 +233,8 @@ roc_nix_tm_shaper_profile_update(struct roc_nix *roc_nix,
 
 	profile = (struct nix_tm_shaper_profile *)roc_profile->reserved;
 
-	if (roc_profile->pkt_mode) {
-		/* Each packet accomulate single count, whereas HW
-		 * considers each unit as Byte, so we need convert
-		 * user pps to bps
-		 */
-		profile->commit.rate = roc_profile->commit_rate * 8;
-		profile->peak.rate = roc_profile->peak_rate * 8;
-	} else {
-		profile->commit.rate = roc_profile->commit_rate;
-		profile->peak.rate = roc_profile->peak_rate;
-	}
+	profile->commit.rate = roc_profile->commit_rate;
+	profile->peak.rate = roc_profile->peak_rate;
 	profile->commit.size = roc_profile->commit_sz;
 	profile->peak.size = roc_profile->peak_sz;
 
@@ -308,6 +349,56 @@ int
 roc_nix_tm_node_delete(struct roc_nix *roc_nix, uint32_t node_id, bool free)
 {
 	return nix_tm_node_delete(roc_nix, node_id, ROC_NIX_TM_USER, free);
+}
+
+int
+roc_nix_smq_flush(struct roc_nix *roc_nix)
+{
+	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
+	struct nix_tm_node_list *list;
+	enum roc_nix_tm_tree tree;
+	struct nix_tm_node *node;
+	int rc = 0;
+
+	if (!(nix->tm_flags & NIX_TM_HIERARCHY_ENA))
+		return 0;
+
+	tree = nix->tm_tree;
+	list = nix_tm_node_list(nix, tree);
+
+	/* XOFF & Flush all SMQ's. HRM mandates
+	 * all SQ's empty before SMQ flush is issued.
+	 */
+	TAILQ_FOREACH(node, list, node) {
+		if (node->hw_lvl != NIX_TXSCH_LVL_SMQ)
+			continue;
+		if (!(node->flags & NIX_TM_NODE_HWRES))
+			continue;
+
+		rc = nix_tm_smq_xoff(nix, node, true);
+		if (rc) {
+			plt_err("Failed to enable smq %u, rc=%d", node->hw_id,
+				rc);
+			goto exit;
+		}
+	}
+
+	/* XON all SMQ's */
+	TAILQ_FOREACH(node, list, node) {
+		if (node->hw_lvl != NIX_TXSCH_LVL_SMQ)
+			continue;
+		if (!(node->flags & NIX_TM_NODE_HWRES))
+			continue;
+
+		rc = nix_tm_smq_xoff(nix, node, false);
+		if (rc) {
+			plt_err("Failed to enable smq %u, rc=%d", node->hw_id,
+				rc);
+			goto exit;
+		}
+	}
+exit:
+	return rc;
 }
 
 int
@@ -843,13 +934,6 @@ roc_nix_tm_init(struct roc_nix *roc_nix)
 		return rc;
 	}
 
-	/* Prepare rlimit tree */
-	rc = nix_tm_prepare_rate_limited_tree(roc_nix);
-	if (rc) {
-		plt_err("failed to prepare rlimit tm tree, rc=%d", rc);
-		return rc;
-	}
-
 	return rc;
 }
 
@@ -867,11 +951,11 @@ roc_nix_tm_rlimit_sq(struct roc_nix *roc_nix, uint16_t qid, uint64_t rate)
 	uint8_t k = 0;
 	int rc;
 
-	if (nix->tm_tree != ROC_NIX_TM_RLIMIT ||
+	if ((nix->tm_tree == ROC_NIX_TM_USER) ||
 	    !(nix->tm_flags & NIX_TM_HIERARCHY_ENA))
 		return NIX_ERR_TM_INVALID_TREE;
 
-	node = nix_tm_node_search(nix, qid, ROC_NIX_TM_RLIMIT);
+	node = nix_tm_node_search(nix, qid, nix->tm_tree);
 
 	/* check if we found a valid leaf node */
 	if (!node || !nix_tm_is_leaf(nix, node->lvl) || !node->parent ||

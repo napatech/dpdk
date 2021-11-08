@@ -5,7 +5,7 @@
 #include <rte_common.h>
 #include <rte_hexdump.h>
 #include <rte_cryptodev.h>
-#include <rte_cryptodev_pmd.h>
+#include <cryptodev_pmd.h>
 #include <rte_bus_vdev.h>
 #include <rte_malloc.h>
 #include <rte_cpuflags.h>
@@ -1114,7 +1114,7 @@ process_openssl_auth_encryption_ccm(struct rte_mbuf *mbuf_src, int offset,
 		if (EVP_EncryptUpdate(ctx, NULL, &len, aad + 18, aadlen) <= 0)
 			goto process_auth_encryption_ccm_err;
 
-	if (srclen > 0)
+	if (srclen >= 0)
 		if (process_openssl_encryption_update(mbuf_src, offset, &dst,
 				srclen, ctx, 0))
 			goto process_auth_encryption_ccm_err;
@@ -1197,7 +1197,7 @@ process_openssl_auth_decryption_ccm(struct rte_mbuf *mbuf_src, int offset,
 		if (EVP_DecryptUpdate(ctx, NULL, &len, aad + 18, aadlen) <= 0)
 			goto process_auth_decryption_ccm_err;
 
-	if (srclen > 0)
+	if (srclen >= 0)
 		if (process_openssl_decryption_update(mbuf_src, offset, &dst,
 				srclen, ctx, 0))
 			return -EFAULT;
@@ -2212,6 +2212,8 @@ cryptodev_openssl_create(const char *name,
 	internals = dev->data->dev_private;
 
 	internals->max_nb_qpairs = init_params->max_nb_queue_pairs;
+
+	rte_cryptodev_pmd_probing_finish(dev);
 
 	return 0;
 

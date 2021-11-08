@@ -27,7 +27,7 @@ otx_ep_dmazone_free(const struct rte_memzone *mz)
 	int ret = 0;
 
 	if (mz == NULL) {
-		otx_ep_err("Memzone %s : NULL\n", mz->name);
+		otx_ep_err("Memzone: NULL\n");
 		return;
 	}
 
@@ -563,7 +563,7 @@ otx_ep_xmit_pkts(void *tx_queue, struct rte_mbuf **pkts, uint16_t nb_pkts)
 			struct otx_ep_buf_free_info *finfo;
 			int j, frags, num_sg;
 
-			if (!(otx_ep->tx_offloads & DEV_TX_OFFLOAD_MULTI_SEGS))
+			if (!(otx_ep->tx_offloads & RTE_ETH_TX_OFFLOAD_MULTI_SEGS))
 				goto xmit_fail;
 
 			finfo = (struct otx_ep_buf_free_info *)rte_malloc(NULL,
@@ -697,7 +697,7 @@ otx2_ep_xmit_pkts(void *tx_queue, struct rte_mbuf **pkts, uint16_t nb_pkts)
 			struct otx_ep_buf_free_info *finfo;
 			int j, frags, num_sg;
 
-			if (!(otx_ep->tx_offloads & DEV_TX_OFFLOAD_MULTI_SEGS))
+			if (!(otx_ep->tx_offloads & RTE_ETH_TX_OFFLOAD_MULTI_SEGS))
 				goto xmit_fail;
 
 			finfo = (struct otx_ep_buf_free_info *)
@@ -953,14 +953,8 @@ otx_ep_droq_read_packet(struct otx_ep_device *otx_ep,
 	droq_pkt->l3_len = hdr_lens.l3_len;
 	droq_pkt->l4_len = hdr_lens.l4_len;
 
-	if ((droq_pkt->pkt_len > (RTE_ETHER_MAX_LEN + OTX_CUST_DATA_LEN)) &&
-	    !(otx_ep->rx_offloads & DEV_RX_OFFLOAD_JUMBO_FRAME)) {
-		rte_pktmbuf_free(droq_pkt);
-		goto oq_read_fail;
-	}
-
 	if (droq_pkt->nb_segs > 1 &&
-	    !(otx_ep->rx_offloads & DEV_RX_OFFLOAD_SCATTER)) {
+	    !(otx_ep->rx_offloads & RTE_ETH_RX_OFFLOAD_SCATTER)) {
 		rte_pktmbuf_free(droq_pkt);
 		goto oq_read_fail;
 	}

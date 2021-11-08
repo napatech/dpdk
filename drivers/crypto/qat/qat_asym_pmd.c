@@ -2,7 +2,7 @@
  * Copyright(c) 2019 Intel Corporation
  */
 
-#include <rte_cryptodev_pmd.h>
+#include <cryptodev_pmd.h>
 
 #include "qat_logs.h"
 
@@ -54,12 +54,10 @@ static void qat_asym_dev_info_get(struct rte_cryptodev *dev,
 				  struct rte_cryptodev_info *info)
 {
 	struct qat_asym_dev_private *internals = dev->data->dev_private;
-	const struct qat_qp_hw_data *asym_hw_qps =
-		qat_gen_config[internals->qat_dev->qat_dev_gen]
-			      .qp_hw_data[QAT_SERVICE_ASYMMETRIC];
+	struct qat_pci_device *qat_dev = internals->qat_dev;
 
 	if (info != NULL) {
-		info->max_nb_queue_pairs = qat_qps_per_service(asym_hw_qps,
+		info->max_nb_queue_pairs = qat_qps_per_service(qat_dev,
 							QAT_SERVICE_ASYMMETRIC);
 		info->feature_flags = dev->feature_flags;
 		info->capabilities = internals->qat_dev_capabilities;
@@ -105,6 +103,7 @@ static int qat_asym_qp_release(struct rte_cryptodev *dev,
 			       uint16_t queue_pair_id)
 {
 	struct qat_asym_dev_private *qat_private = dev->data->dev_private;
+	enum qat_device_gen qat_dev_gen = qat_private->qat_dev->qat_dev_gen;
 
 	QAT_LOG(DEBUG, "Release asym qp %u on device %d",
 				queue_pair_id, dev->data->dev_id);
@@ -112,7 +111,7 @@ static int qat_asym_qp_release(struct rte_cryptodev *dev,
 	qat_private->qat_dev->qps_in_use[QAT_SERVICE_ASYMMETRIC][queue_pair_id]
 						= NULL;
 
-	return qat_qp_release((struct qat_qp **)
+	return qat_qp_release(qat_dev_gen, (struct qat_qp **)
 			&(dev->data->queue_pairs[queue_pair_id]));
 }
 
@@ -128,6 +127,7 @@ static int qat_asym_qp_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 	struct qat_qp **qp_addr =
 			(struct qat_qp **)&(dev->data->queue_pairs[qp_id]);
 	struct qat_asym_dev_private *qat_private = dev->data->dev_private;
+	struct qat_pci_device *qat_dev = qat_private->qat_dev;
 	const struct qat_qp_hw_data *asym_hw_qps =
 			qat_gen_config[qat_private->qat_dev->qat_dev_gen]
 				      .qp_hw_data[QAT_SERVICE_ASYMMETRIC];
@@ -139,7 +139,7 @@ static int qat_asym_qp_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 		if (ret < 0)
 			return ret;
 	}
-	if (qp_id >= qat_qps_per_service(asym_hw_qps, QAT_SERVICE_ASYMMETRIC)) {
+	if (qp_id >= qat_qps_per_service(qat_dev, QAT_SERVICE_ASYMMETRIC)) {
 		QAT_LOG(ERR, "qp_id %u invalid for this device", qp_id);
 		return -EINVAL;
 	}
@@ -251,6 +251,14 @@ qat_asym_dev_create(struct qat_pci_device *qat_pci_dev,
 	struct rte_cryptodev *cryptodev;
 	struct qat_asym_dev_private *internals;
 
+	if (qat_pci_dev->qat_dev_gen == QAT_GEN4) {
+		QAT_LOG(ERR, "Asymmetric crypto PMD not supported on QAT 4xxx");
+		return -EFAULT;
+	}
+	if (qat_pci_dev->qat_dev_gen == QAT_GEN3) {
+		QAT_LOG(ERR, "Asymmetric crypto PMD not supported on QAT c4xxx");
+		return -EFAULT;
+	}
 	snprintf(name, RTE_CRYPTODEV_NAME_MAX_LEN, "%s_%s",
 			qat_pci_dev->name, "asym");
 	QAT_LOG(DEBUG, "Creating QAT ASYM device %s\n", name);
@@ -335,6 +343,9 @@ qat_asym_dev_create(struct qat_pci_device *qat_pci_dev,
 	}
 
 	qat_pci_dev->asym_dev = internals;
+
+	rte_cryptodev_pmd_probing_finish(cryptodev);
+
 	QAT_LOG(DEBUG, "Created QAT ASYM device %s as cryptodev instance %d",
 			cryptodev->data->name, internals->asym_dev_id);
 	return 0;

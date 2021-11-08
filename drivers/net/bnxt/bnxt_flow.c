@@ -738,6 +738,10 @@ bnxt_validate_and_parse_flow_type(struct bnxt *bp,
 	filter->enables = en;
 	filter->valid_flags = valid_flags;
 
+	/* Items parsed but no filter to create in HW. */
+	if (filter->enables == 0 && filter->valid_flags == 0)
+		filter->filter_type = HWRM_CFA_CONFIG;
+
 	return 0;
 }
 
@@ -919,50 +923,90 @@ bnxt_get_l2_filter(struct bnxt *bp, struct bnxt_filter_info *nf,
 	return l2_filter;
 }
 
-static int bnxt_vnic_prep(struct bnxt *bp, struct bnxt_vnic_info *vnic)
+static void bnxt_vnic_cleanup(struct bnxt *bp, struct bnxt_vnic_info *vnic)
+{
+	if (vnic->rx_queue_cnt > 1)
+		bnxt_hwrm_vnic_ctx_free(bp, vnic);
+
+	bnxt_hwrm_vnic_free(bp, vnic);
+
+	rte_free(vnic->fw_grp_ids);
+	vnic->fw_grp_ids = NULL;
+
+	vnic->rx_queue_cnt = 0;
+}
+
+static int bnxt_vnic_prep(struct bnxt *bp, struct bnxt_vnic_info *vnic,
+			  const struct rte_flow_action *act,
+			  struct rte_flow_error *error)
 {
 	struct rte_eth_conf *dev_conf = &bp->eth_dev->data->dev_conf;
 	uint64_t rx_offloads = dev_conf->rxmode.offloads;
 	int rc;
 
 	if (bp->nr_vnics > bp->max_vnics - 1)
-		return -ENOMEM;
+		return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ATTR_GROUP,
+					  NULL,
+					  "Group id is invalid");
 
 	rc = bnxt_vnic_grp_alloc(bp, vnic);
 	if (rc)
-		goto ret;
+		return rte_flow_error_set(error, -rc,
+					  RTE_FLOW_ERROR_TYPE_ACTION,
+					  act,
+					  "Failed to alloc VNIC group");
 
 	rc = bnxt_hwrm_vnic_alloc(bp, vnic);
 	if (rc) {
-		PMD_DRV_LOG(ERR, "HWRM vnic alloc failure rc: %x\n", rc);
+		rte_flow_error_set(error, -rc,
+				   RTE_FLOW_ERROR_TYPE_ACTION,
+				   act,
+				   "Failed to alloc VNIC");
 		goto ret;
 	}
-	bp->nr_vnics++;
 
 	/* RSS context is required only when there is more than one RSS ring */
 	if (vnic->rx_queue_cnt > 1) {
-		rc = bnxt_hwrm_vnic_ctx_alloc(bp, vnic, 0 /* ctx_idx 0 */);
+		rc = bnxt_hwrm_vnic_ctx_alloc(bp, vnic, 0);
 		if (rc) {
-			PMD_DRV_LOG(ERR,
-				    "HWRM vnic ctx alloc failure: %x\n", rc);
+			rte_flow_error_set(error, -rc,
+					   RTE_FLOW_ERROR_TYPE_ACTION,
+					   act,
+					   "Failed to alloc VNIC context");
 			goto ret;
 		}
-	} else {
-		PMD_DRV_LOG(DEBUG, "No RSS context required\n");
 	}
 
-	if (rx_offloads & DEV_RX_OFFLOAD_VLAN_STRIP)
+	if (rx_offloads & RTE_ETH_RX_OFFLOAD_VLAN_STRIP)
 		vnic->vlan_strip = true;
 	else
 		vnic->vlan_strip = false;
 
 	rc = bnxt_hwrm_vnic_cfg(bp, vnic);
-	if (rc)
+	if (rc) {
+		rte_flow_error_set(error, -rc,
+				   RTE_FLOW_ERROR_TYPE_ACTION,
+				   act,
+				   "Failed to configure VNIC");
 		goto ret;
+	}
 
-	bnxt_hwrm_vnic_plcmode_cfg(bp, vnic);
+	rc = bnxt_hwrm_vnic_plcmode_cfg(bp, vnic);
+	if (rc) {
+		rte_flow_error_set(error, -rc,
+				   RTE_FLOW_ERROR_TYPE_ACTION,
+				   act,
+				   "Failed to configure VNIC plcmode");
+		goto ret;
+	}
+
+	bp->nr_vnics++;
+
+	return 0;
 
 ret:
+	bnxt_vnic_cleanup(bp, vnic);
 	return rc;
 }
 
@@ -1028,6 +1072,167 @@ bnxt_update_filter_flags_en(struct bnxt_filter_info *filter,
 	PMD_DRV_LOG(DEBUG,
 		"l2_filter: %p fw_l2_filter_id %" PRIx64 " l2_ref_cnt %u\n",
 		filter1, filter->fw_l2_filter_id, filter->l2_ref_cnt);
+}
+
+/* Valid actions supported along with RSS are count and mark. */
+static int
+bnxt_validate_rss_action(const struct rte_flow_action actions[])
+{
+	for (; actions->type != RTE_FLOW_ACTION_TYPE_END; actions++) {
+		switch (actions->type) {
+		case RTE_FLOW_ACTION_TYPE_VOID:
+			break;
+		case RTE_FLOW_ACTION_TYPE_RSS:
+			break;
+		case RTE_FLOW_ACTION_TYPE_MARK:
+			break;
+		case RTE_FLOW_ACTION_TYPE_COUNT:
+			break;
+		default:
+			return -ENOTSUP;
+		}
+	}
+
+	return 0;
+}
+
+static int
+bnxt_get_vnic(struct bnxt *bp, uint32_t group)
+{
+	int vnic_id = 0;
+
+	/* For legacy NS3 based implementations,
+	 * group_id will be mapped to a VNIC ID.
+	 */
+	if (BNXT_STINGRAY(bp))
+		vnic_id = group;
+
+	/* Non NS3 cases, group_id will be ignored.
+	 * Setting will be configured on default VNIC.
+	 */
+	return vnic_id;
+}
+
+static int
+bnxt_vnic_rss_cfg_update(struct bnxt *bp,
+			 struct bnxt_vnic_info *vnic,
+			 const struct rte_flow_action *act,
+			 struct rte_flow_error *error)
+{
+	const struct rte_flow_action_rss *rss;
+	unsigned int rss_idx, i;
+	uint16_t hash_type;
+	uint64_t types;
+	int rc;
+
+	rss = (const struct rte_flow_action_rss *)act->conf;
+
+	/* Currently only Toeplitz hash is supported. */
+	if (rss->func != RTE_ETH_HASH_FUNCTION_DEFAULT &&
+	    rss->func != RTE_ETH_HASH_FUNCTION_TOEPLITZ) {
+		rte_flow_error_set(error,
+				   ENOTSUP,
+				   RTE_FLOW_ERROR_TYPE_ACTION,
+				   act,
+				   "Unsupported RSS hash function");
+		rc = -rte_errno;
+		goto ret;
+	}
+
+	/* key_len should match the hash key supported by hardware */
+	if (rss->key_len != 0 && rss->key_len != HW_HASH_KEY_SIZE) {
+		rte_flow_error_set(error,
+				   EINVAL,
+				   RTE_FLOW_ERROR_TYPE_ACTION,
+				   act,
+				   "Incorrect hash key parameters");
+		rc = -rte_errno;
+		goto ret;
+	}
+
+	/* Currently RSS hash on inner and outer headers are supported.
+	 * 0 => Default setting
+	 * 1 => Inner
+	 * 2 => Outer
+	 */
+	if (rss->level > 2) {
+		rte_flow_error_set(error,
+				   ENOTSUP,
+				   RTE_FLOW_ERROR_TYPE_ACTION,
+				   act,
+				   "Unsupported hash level");
+		rc = -rte_errno;
+		goto ret;
+	}
+
+	if ((rss->queue_num == 0 && rss->queue != NULL) ||
+	    (rss->queue_num != 0 && rss->queue == NULL)) {
+		rte_flow_error_set(error,
+				   EINVAL,
+				   RTE_FLOW_ERROR_TYPE_ACTION,
+				   act,
+				   "Invalid queue config specified");
+		rc = -rte_errno;
+		goto ret;
+	}
+
+	/* If RSS types is 0, use a best effort configuration */
+	types = rss->types ? rss->types : RTE_ETH_RSS_IPV4;
+
+	hash_type = bnxt_rte_to_hwrm_hash_types(types);
+
+	/* If requested types can't be supported, leave existing settings */
+	if (hash_type)
+		vnic->hash_type = hash_type;
+
+	vnic->hash_mode =
+		bnxt_rte_to_hwrm_hash_level(bp, rss->types, rss->level);
+
+	/* Update RSS key only if key_len != 0 */
+	if (rss->key_len != 0)
+		memcpy(vnic->rss_hash_key, rss->key, rss->key_len);
+
+	if (rss->queue_num == 0)
+		goto skip_rss_table;
+
+	/* Validate Rx queues */
+	for (i = 0; i < rss->queue_num; i++) {
+		PMD_DRV_LOG(DEBUG, "RSS action Queue %d\n", rss->queue[i]);
+
+		if (rss->queue[i] >= bp->rx_nr_rings ||
+		    !bp->rx_queues[rss->queue[i]]) {
+			rte_flow_error_set(error,
+					   EINVAL,
+					   RTE_FLOW_ERROR_TYPE_ACTION,
+					   act,
+					   "Invalid queue ID for RSS");
+			rc = -rte_errno;
+			goto ret;
+		}
+	}
+
+	/* Prepare the indirection table */
+	for (rss_idx = 0; rss_idx < HW_HASH_INDEX_SIZE; rss_idx++) {
+		struct bnxt_rx_queue *rxq;
+		uint32_t idx;
+
+		idx = rss->queue[rss_idx % rss->queue_num];
+
+		if (BNXT_CHIP_P5(bp)) {
+			rxq = bp->rx_queues[idx];
+			vnic->rss_table[rss_idx * 2] =
+				rxq->rx_ring->rx_ring_struct->fw_ring_id;
+			vnic->rss_table[rss_idx * 2 + 1] =
+				rxq->cp_ring->cp_ring_struct->fw_ring_id;
+		} else {
+			vnic->rss_table[rss_idx] = vnic->fw_grp_ids[idx];
+		}
+	}
+
+skip_rss_table:
+	rc = bnxt_hwrm_vnic_rss_cfg(bp, vnic);
+ret:
+	return rc;
 }
 
 static int
@@ -1117,7 +1322,7 @@ start:
 
 		rxq = bp->rx_queues[act_q->index];
 
-		if (!(dev_conf->rxmode.mq_mode & ETH_MQ_RX_RSS) && rxq &&
+		if (!(dev_conf->rxmode.mq_mode & RTE_ETH_MQ_RX_RSS) && rxq &&
 		    vnic->fw_vnic_id != INVALID_HW_RING_ID)
 			goto use_vnic;
 
@@ -1142,16 +1347,9 @@ start:
 
 		PMD_DRV_LOG(DEBUG, "VNIC found\n");
 
-		rc = bnxt_vnic_prep(bp, vnic);
-		if (rc)  {
-			rte_flow_error_set(error,
-					   EINVAL,
-					   RTE_FLOW_ERROR_TYPE_ACTION,
-					   act,
-					   "VNIC prep fail");
-			rc = -rte_errno;
+		rc = bnxt_vnic_prep(bp, vnic, act, error);
+		if (rc)
 			goto ret;
-		}
 
 		PMD_DRV_LOG(DEBUG,
 			    "vnic[%d] = %p vnic->fw_grp_ids = %p\n",
@@ -1296,12 +1494,37 @@ skip_vnic_alloc:
 		filter->flow_id = filter1->flow_id;
 		break;
 	case RTE_FLOW_ACTION_TYPE_RSS:
+		rc = bnxt_validate_rss_action(actions);
+		if (rc != 0) {
+			rte_flow_error_set(error,
+					   EINVAL,
+					   RTE_FLOW_ERROR_TYPE_ACTION,
+					   act,
+					   "Invalid actions specified with RSS");
+			rc = -rte_errno;
+			goto ret;
+		}
+
 		rss = (const struct rte_flow_action_rss *)act->conf;
 
-		vnic_id = attr->group;
+		vnic_id = bnxt_get_vnic(bp, attr->group);
 
 		BNXT_VALID_VNIC_OR_RET(bp, vnic_id);
 		vnic = &bp->vnic_info[vnic_id];
+
+		/*
+		 * For non NS3 cases, rte_flow_items will not be considered
+		 * for RSS updates.
+		 */
+		if (filter->filter_type == HWRM_CFA_CONFIG) {
+			/* RSS config update requested */
+			rc = bnxt_vnic_rss_cfg_update(bp, vnic, act, error);
+			if (rc != 0)
+				return -rte_errno;
+
+			filter->dst_id = vnic->fw_vnic_id;
+			break;
+		}
 
 		/* Check if requested RSS config matches RSS config of VNIC
 		 * only if it is not a fresh VNIC configuration.
@@ -1362,16 +1585,9 @@ skip_vnic_alloc:
 		vnic->end_grp_id = rss->queue[rss->queue_num - 1];
 		vnic->func_default = 0;	//This is not a default VNIC.
 
-		rc = bnxt_vnic_prep(bp, vnic);
-		if (rc) {
-			rte_flow_error_set(error,
-					   EINVAL,
-					   RTE_FLOW_ERROR_TYPE_ACTION,
-					   act,
-					   "VNIC prep fail");
-			rc = -rte_errno;
+		rc = bnxt_vnic_prep(bp, vnic, act, error);
+		if (rc)
 			goto ret;
-		}
 
 		PMD_DRV_LOG(DEBUG,
 			    "vnic[%d] = %p vnic->fw_grp_ids = %p\n",
@@ -1536,9 +1752,11 @@ bnxt_flow_validate(struct rte_eth_dev *dev,
 
 	filter = bnxt_get_unused_filter(bp);
 	if (filter == NULL) {
-		PMD_DRV_LOG(ERR, "Not enough resources for a new flow.\n");
+		rte_flow_error_set(error, ENOSPC,
+				   RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
+				   "Not enough resources for a new flow");
 		bnxt_release_flow_lock(bp);
-		return -ENOMEM;
+		return -ENOSPC;
 	}
 
 	ret = bnxt_validate_and_parse_flow(dev, pattern, actions, attr,
@@ -1549,10 +1767,7 @@ bnxt_flow_validate(struct rte_eth_dev *dev,
 	vnic = find_matching_vnic(bp, filter);
 	if (vnic) {
 		if (STAILQ_EMPTY(&vnic->filter)) {
-			rte_free(vnic->fw_grp_ids);
-			bnxt_hwrm_vnic_ctx_free(bp, vnic);
-			bnxt_hwrm_vnic_free(bp, vnic);
-			vnic->rx_queue_cnt = 0;
+			bnxt_vnic_cleanup(bp, vnic);
 			bp->nr_vnics--;
 			PMD_DRV_LOG(DEBUG, "Free VNIC\n");
 		}
@@ -1941,12 +2156,20 @@ static int bnxt_handle_tunnel_redirect_destroy(struct bnxt *bp,
 		/* Tunnel doesn't belong to this VF, so don't send HWRM
 		 * cmd, just delete the flow from driver
 		 */
-		if (bp->fw_fid != (tun_dst_fid + bp->first_vf_id))
+		if (bp->fw_fid != (tun_dst_fid + bp->first_vf_id)) {
 			PMD_DRV_LOG(ERR,
 				    "Tunnel does not belong to this VF, skip hwrm_tunnel_redirect_free\n");
-		else
+		} else {
 			ret = bnxt_hwrm_tunnel_redirect_free(bp,
 							filter->tunnel_type);
+			if (ret) {
+				rte_flow_error_set(error, -ret,
+						   RTE_FLOW_ERROR_TYPE_HANDLE,
+						   NULL,
+						   "Unable to free tunnel redirection");
+				return ret;
+			}
+		}
 	}
 	return ret;
 }
@@ -1972,6 +2195,10 @@ _bnxt_flow_destroy(struct bnxt *bp,
 		else
 			return ret;
 	}
+
+	/* For config type, there is no filter in HW. Finish cleanup here */
+	if (filter->filter_type == HWRM_CFA_CONFIG)
+		goto done;
 
 	ret = bnxt_match_filter(bp, filter);
 	if (ret == 0)
@@ -2009,12 +2236,7 @@ done:
 		 */
 		if (vnic && !vnic->func_default &&
 		    STAILQ_EMPTY(&vnic->flow_list)) {
-			rte_free(vnic->fw_grp_ids);
-			if (vnic->rx_queue_cnt > 1)
-				bnxt_hwrm_vnic_ctx_free(bp, vnic);
-
-			bnxt_hwrm_vnic_free(bp, vnic);
-			vnic->rx_queue_cnt = 0;
+			bnxt_vnic_cleanup(bp, vnic);
 			bp->nr_vnics--;
 		}
 	} else {

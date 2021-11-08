@@ -31,6 +31,7 @@
 #define CNXK_TIM_NB_CHUNK_SLOTS(sz) (((sz) / CNXK_TIM_CHUNK_ALIGNMENT) - 1)
 #define CNXK_TIM_MIN_CHUNK_SLOTS    (0x1)
 #define CNXK_TIM_MAX_CHUNK_SLOTS    (0x1FFE)
+#define CNXK_TIM_MAX_POOL_CACHE_SZ  (128)
 
 #define CN9K_TIM_MIN_TMO_TKS (256)
 
@@ -90,8 +91,8 @@ struct cnxk_tim_evdev {
 	uint32_t chunk_sz;
 	/* Dev args */
 	uint8_t disable_npa;
-	uint16_t chunk_slots;
-	uint16_t min_ring_cnt;
+	uint32_t chunk_slots;
+	uint32_t min_ring_cnt;
 	uint8_t enable_stats;
 	uint16_t ring_ctl_cnt;
 	struct cnxk_tim_ctl *ring_ctl_data;
@@ -267,7 +268,7 @@ cnxk_tim_timer_cancel_burst(const struct rte_event_timer_adapter *adptr,
 
 int cnxk_tim_caps_get(const struct rte_eventdev *dev, uint64_t flags,
 		      uint32_t *caps,
-		      const struct rte_event_timer_adapter_ops **ops);
+		      const struct event_timer_adapter_ops **ops);
 
 void cnxk_tim_init(struct roc_sso *sso);
 void cnxk_tim_fini(void);

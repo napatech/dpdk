@@ -307,7 +307,7 @@ struct hns3_rx_queue {
 	uint16_t rx_rearm_start; /* index of BD that driver re-arming from */
 	uint16_t rx_rearm_nb;    /* number of remaining BDs to be re-armed */
 
-	/* 4 if DEV_RX_OFFLOAD_KEEP_CRC offload set, 0 otherwise */
+	/* 4 if RTE_ETH_RX_OFFLOAD_KEEP_CRC offload set, 0 otherwise */
 	uint8_t crc_len;
 
 	/*
@@ -419,6 +419,7 @@ struct hns3_tx_dfx_stats {
 };
 
 struct hns3_tx_queue {
+	/* The io_tail_reg is write-only if working in tx push mode */
 	volatile void *io_tail_reg;
 	struct hns3_desc *tx_ring;
 	struct hns3_entry *sw_ring;
@@ -470,7 +471,7 @@ struct hns3_tx_queue {
 	 *  - HNS3_SPECIAL_PORT_SW_CKSUM_MODE
 	 *     In this mode, HW can not do checksum for special UDP port like
 	 *     4789, 4790, 6081 for non-tunnel UDP packets and UDP tunnel
-	 *     packets without the PKT_TX_TUNEL_MASK in the mbuf. So, PMD need
+	 *     packets without the RTE_MBUF_F_TX_TUNEL_MASK in the mbuf. So, PMD need
 	 *     do the checksum for these packets to avoid a checksum error.
 	 *
 	 *  - HNS3_SPECIAL_PORT_HW_CKSUM_MODE
@@ -544,12 +545,11 @@ struct hns3_queue_info {
 	unsigned int socket_id;
 };
 
-#define HNS3_TX_CKSUM_OFFLOAD_MASK ( \
-	PKT_TX_OUTER_UDP_CKSUM | \
-	PKT_TX_OUTER_IP_CKSUM | \
-	PKT_TX_IP_CKSUM | \
-	PKT_TX_TCP_SEG | \
-	PKT_TX_L4_MASK)
+#define HNS3_TX_CKSUM_OFFLOAD_MASK (RTE_MBUF_F_TX_OUTER_UDP_CKSUM | \
+	RTE_MBUF_F_TX_OUTER_IP_CKSUM | \
+	RTE_MBUF_F_TX_IP_CKSUM | \
+	RTE_MBUF_F_TX_TCP_SEG | \
+	RTE_MBUF_F_TX_L4_MASK)
 
 enum hns3_cksum_status {
 	HNS3_CKSUM_NONE = 0,
@@ -573,29 +573,29 @@ hns3_rx_set_cksum_flag(struct hns3_rx_queue *rxq,
 				 BIT(HNS3_RXD_OL4E_B))
 
 	if (likely((l234_info & HNS3_RXD_CKSUM_ERR_MASK) == 0)) {
-		rxm->ol_flags |= (PKT_RX_IP_CKSUM_GOOD | PKT_RX_L4_CKSUM_GOOD);
+		rxm->ol_flags |= (RTE_MBUF_F_RX_IP_CKSUM_GOOD | RTE_MBUF_F_RX_L4_CKSUM_GOOD);
 		return;
 	}
 
 	if (unlikely(l234_info & BIT(HNS3_RXD_L3E_B))) {
-		rxm->ol_flags |= PKT_RX_IP_CKSUM_BAD;
+		rxm->ol_flags |= RTE_MBUF_F_RX_IP_CKSUM_BAD;
 		rxq->dfx_stats.l3_csum_errors++;
 	} else {
-		rxm->ol_flags |= PKT_RX_IP_CKSUM_GOOD;
+		rxm->ol_flags |= RTE_MBUF_F_RX_IP_CKSUM_GOOD;
 	}
 
 	if (unlikely(l234_info & BIT(HNS3_RXD_L4E_B))) {
-		rxm->ol_flags |= PKT_RX_L4_CKSUM_BAD;
+		rxm->ol_flags |= RTE_MBUF_F_RX_L4_CKSUM_BAD;
 		rxq->dfx_stats.l4_csum_errors++;
 	} else {
-		rxm->ol_flags |= PKT_RX_L4_CKSUM_GOOD;
+		rxm->ol_flags |= RTE_MBUF_F_RX_L4_CKSUM_GOOD;
 	}
 
 	if (unlikely(l234_info & BIT(HNS3_RXD_OL3E_B)))
 		rxq->dfx_stats.ol3_csum_errors++;
 
 	if (unlikely(l234_info & BIT(HNS3_RXD_OL4E_B))) {
-		rxm->ol_flags |= PKT_RX_OUTER_L4_CKSUM_BAD;
+		rxm->ol_flags |= RTE_MBUF_F_RX_OUTER_L4_CKSUM_BAD;
 		rxq->dfx_stats.ol4_csum_errors++;
 	}
 }
@@ -659,8 +659,25 @@ hns3_rx_calc_ptype(struct hns3_rx_queue *rxq, const uint32_t l234_info,
 		return ptype_tbl->l3table[l3id] | ptype_tbl->l4table[l4id];
 }
 
-void hns3_dev_rx_queue_release(void *queue);
-void hns3_dev_tx_queue_release(void *queue);
+/*
+ * If enable using Tx push feature and also device support it, then use quick
+ * doorbell (bar45) to inform the hardware.
+ *
+ * The other cases (such as: device don't support or user don't enable using)
+ * then use normal doorbell (bar23) to inform the hardware.
+ */
+static inline void
+hns3_write_txq_tail_reg(struct hns3_tx_queue *txq, uint32_t value)
+{
+	rte_io_wmb();
+	if (txq->tx_push_enable)
+		rte_write64_relaxed(rte_cpu_to_le_32(value), txq->io_tail_reg);
+	else
+		rte_write32_relaxed(rte_cpu_to_le_32(value), txq->io_tail_reg);
+}
+
+void hns3_dev_rx_queue_release(struct rte_eth_dev *dev, uint16_t queue_id);
+void hns3_dev_tx_queue_release(struct rte_eth_dev *dev, uint16_t queue_id);
 void hns3_free_all_queues(struct rte_eth_dev *dev);
 int hns3_reset_all_tqps(struct hns3_adapter *hns);
 void hns3_dev_all_rx_queue_intr_enable(struct hns3_hw *hw, bool en);
@@ -678,7 +695,7 @@ int hns3_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t nb_desc,
 			struct rte_mempool *mp);
 int hns3_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t nb_desc,
 			unsigned int socket, const struct rte_eth_txconf *conf);
-uint32_t hns3_rx_queue_count(struct rte_eth_dev *dev, uint16_t rx_queue_id);
+uint32_t hns3_rx_queue_count(void *rx_queue);
 int hns3_dev_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id);
 int hns3_dev_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id);
 int hns3_dev_tx_queue_start(struct rte_eth_dev *dev, uint16_t tx_queue_id);
@@ -711,6 +728,12 @@ int hns3_tx_burst_mode_get(struct rte_eth_dev *dev,
 const uint32_t *hns3_dev_supported_ptypes_get(struct rte_eth_dev *dev);
 void hns3_init_rx_ptype_tble(struct rte_eth_dev *dev);
 void hns3_set_rxtx_function(struct rte_eth_dev *eth_dev);
+eth_tx_burst_t hns3_get_tx_function(struct rte_eth_dev *dev,
+				    eth_tx_prep_t *prep);
+uint16_t hns3_dummy_rxtx_burst(void *dpdk_txq __rte_unused,
+			       struct rte_mbuf **pkts __rte_unused,
+			       uint16_t pkts_n __rte_unused);
+
 uint32_t hns3_get_tqp_intr_reg_offset(uint16_t tqp_intr_id);
 void hns3_set_queue_intr_gl(struct hns3_hw *hw, uint16_t queue_id,
 			    uint8_t gl_idx, uint16_t gl_value);
@@ -741,5 +764,8 @@ int hns3_tx_done_cleanup(void *txq, uint32_t free_cnt);
 void hns3_enable_rxd_adv_layout(struct hns3_hw *hw);
 int hns3_dev_rx_descriptor_status(void *rx_queue, uint16_t offset);
 int hns3_dev_tx_descriptor_status(void *tx_queue, uint16_t offset);
+void hns3_tx_push_init(struct rte_eth_dev *dev);
+void hns3_stop_tx_datapath(struct rte_eth_dev *dev);
+void hns3_start_tx_datapath(struct rte_eth_dev *dev);
 
 #endif /* _HNS3_RXTX_H_ */

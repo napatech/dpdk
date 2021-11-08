@@ -27,48 +27,6 @@
 #include <mlx5_malloc.h>
 
 /**
- * Register mr. Given protection domain pointer, pointer to addr and length
- * register the memory region.
- *
- * @param[in] pd
- *   Pointer to protection domain context.
- * @param[in] addr
- *   Pointer to memory start address.
- * @param[in] length
- *   Length of the memory to register.
- * @param[out] pmd_mr
- *   pmd_mr struct set with lkey, address, length and pointer to mr object
- *
- * @return
- *   0 on successful registration, -1 otherwise
- */
-static int
-mlx5_reg_mr(void *pd, void *addr, size_t length,
-		 struct mlx5_pmd_mr *pmd_mr)
-{
-	return mlx5_common_verbs_reg_mr(pd, addr, length, pmd_mr);
-}
-
-/**
- * Deregister mr. Given the mlx5 pmd MR - deregister the MR
- *
- * @param[in] pmd_mr
- *   pmd_mr struct set with lkey, address, length and pointer to mr object
- *
- */
-static void
-mlx5_dereg_mr(struct mlx5_pmd_mr *pmd_mr)
-{
-	mlx5_common_verbs_dereg_mr(pmd_mr);
-}
-
-/* verbs operations. */
-const struct mlx5_mr_ops mlx5_mr_verbs_ops = {
-	.reg_mr = mlx5_reg_mr,
-	.dereg_mr = mlx5_dereg_mr,
-};
-
-/**
  * Modify Rx WQ vlan stripping offload
  *
  * @param rxq_obj
@@ -249,9 +207,10 @@ mlx5_rxq_ibv_cq_create(struct rte_eth_dev *dev, uint16_t idx)
 		cq_attr.mlx5.flags |= MLX5DV_CQ_INIT_ATTR_FLAGS_CQE_PAD;
 	}
 #endif
-	return mlx5_glue->cq_ex_to_cq(mlx5_glue->dv_create_cq(priv->sh->ctx,
-							      &cq_attr.ibv,
-							      &cq_attr.mlx5));
+	return mlx5_glue->cq_ex_to_cq(mlx5_glue->dv_create_cq
+							   (priv->sh->cdev->ctx,
+							    &cq_attr.ibv,
+							    &cq_attr.mlx5));
 }
 
 /**
@@ -288,7 +247,7 @@ mlx5_rxq_ibv_wq_create(struct rte_eth_dev *dev, uint16_t idx)
 		.max_wr = wqe_n >> rxq_data->sges_n,
 		/* Max number of scatter/gather elements in a WR. */
 		.max_sge = 1 << rxq_data->sges_n,
-		.pd = priv->sh->pd,
+		.pd = priv->sh->cdev->pd,
 		.cq = rxq_obj->ibv_cq,
 		.comp_mask = IBV_WQ_FLAGS_CVLAN_STRIPPING | 0,
 		.create_flags = (rxq_data->vlan_strip ?
@@ -323,10 +282,10 @@ mlx5_rxq_ibv_wq_create(struct rte_eth_dev *dev, uint16_t idx)
 			.two_byte_shift_en = MLX5_MPRQ_TWO_BYTE_SHIFT,
 		};
 	}
-	rxq_obj->wq = mlx5_glue->dv_create_wq(priv->sh->ctx, &wq_attr.ibv,
+	rxq_obj->wq = mlx5_glue->dv_create_wq(priv->sh->cdev->ctx, &wq_attr.ibv,
 					      &wq_attr.mlx5);
 #else
-	rxq_obj->wq = mlx5_glue->create_wq(priv->sh->ctx, &wq_attr.ibv);
+	rxq_obj->wq = mlx5_glue->create_wq(priv->sh->cdev->ctx, &wq_attr.ibv);
 #endif
 	if (rxq_obj->wq) {
 		/*
@@ -379,7 +338,7 @@ mlx5_rxq_ibv_obj_new(struct rte_eth_dev *dev, uint16_t idx)
 	tmpl->rxq_ctrl = rxq_ctrl;
 	if (rxq_ctrl->irq) {
 		tmpl->ibv_channel =
-				mlx5_glue->create_comp_channel(priv->sh->ctx);
+			mlx5_glue->create_comp_channel(priv->sh->cdev->ctx);
 		if (!tmpl->ibv_channel) {
 			DRV_LOG(ERR, "Port %u: comp channel creation failure.",
 				dev->data->port_id);
@@ -542,12 +501,13 @@ mlx5_ibv_ind_table_new(struct rte_eth_dev *dev, const unsigned int log_n,
 	/* Finalise indirection table. */
 	for (j = 0; i != (unsigned int)(1 << log_n); ++j, ++i)
 		wq[i] = wq[j];
-	ind_tbl->ind_table = mlx5_glue->create_rwq_ind_table(priv->sh->ctx,
-					&(struct ibv_rwq_ind_table_init_attr){
-						.log_ind_tbl_size = log_n,
-						.ind_tbl = wq,
-						.comp_mask = 0,
-					});
+	ind_tbl->ind_table = mlx5_glue->create_rwq_ind_table
+					(priv->sh->cdev->ctx,
+					 &(struct ibv_rwq_ind_table_init_attr){
+						 .log_ind_tbl_size = log_n,
+						 .ind_tbl = wq,
+						 .comp_mask = 0,
+					 });
 	if (!ind_tbl->ind_table) {
 		rte_errno = errno;
 		return -rte_errno;
@@ -609,7 +569,7 @@ mlx5_ibv_hrxq_new(struct rte_eth_dev *dev, struct mlx5_hrxq *hrxq,
 	}
 #endif
 	qp = mlx5_glue->dv_create_qp
-			(priv->sh->ctx,
+			(priv->sh->cdev->ctx,
 			 &(struct ibv_qp_init_attr_ex){
 				.qp_type = IBV_QPT_RAW_PACKET,
 				.comp_mask =
@@ -625,12 +585,12 @@ mlx5_ibv_hrxq_new(struct rte_eth_dev *dev, struct mlx5_hrxq *hrxq,
 					.rx_hash_fields_mask = hash_fields,
 				},
 				.rwq_ind_tbl = ind_tbl->ind_table,
-				.pd = priv->sh->pd,
+				.pd = priv->sh->cdev->pd,
 			  },
 			  &qp_init_attr);
 #else
 	qp = mlx5_glue->create_qp_ex
-			(priv->sh->ctx,
+			(priv->sh->cdev->ctx,
 			 &(struct ibv_qp_init_attr_ex){
 				.qp_type = IBV_QPT_RAW_PACKET,
 				.comp_mask =
@@ -646,7 +606,7 @@ mlx5_ibv_hrxq_new(struct rte_eth_dev *dev, struct mlx5_hrxq *hrxq,
 					.rx_hash_fields_mask = hash_fields,
 				},
 				.rwq_ind_tbl = ind_tbl->ind_table,
-				.pd = priv->sh->pd,
+				.pd = priv->sh->cdev->pd,
 			 });
 #endif
 	if (!qp) {
@@ -715,7 +675,7 @@ static int
 mlx5_rxq_ibv_obj_drop_create(struct rte_eth_dev *dev)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
-	struct ibv_context *ctx = priv->sh->ctx;
+	struct ibv_context *ctx = priv->sh->cdev->ctx;
 	struct mlx5_rxq_obj *rxq = priv->drop_queue.rxq;
 
 	if (rxq)
@@ -739,7 +699,7 @@ mlx5_rxq_ibv_obj_drop_create(struct rte_eth_dev *dev)
 						    .wq_type = IBV_WQT_RQ,
 						    .max_wr = 1,
 						    .max_sge = 1,
-						    .pd = priv->sh->pd,
+						    .pd = priv->sh->cdev->pd,
 						    .cq = rxq->ibv_cq,
 					      });
 	if (!rxq->wq) {
@@ -779,7 +739,7 @@ mlx5_ibv_drop_action_create(struct rte_eth_dev *dev)
 		goto error;
 	rxq = priv->drop_queue.rxq;
 	ind_tbl = mlx5_glue->create_rwq_ind_table
-				(priv->sh->ctx,
+				(priv->sh->cdev->ctx,
 				 &(struct ibv_rwq_ind_table_init_attr){
 					.log_ind_tbl_size = 0,
 					.ind_tbl = (struct ibv_wq **)&rxq->wq,
@@ -792,7 +752,7 @@ mlx5_ibv_drop_action_create(struct rte_eth_dev *dev)
 		rte_errno = errno;
 		goto error;
 	}
-	hrxq->qp = mlx5_glue->create_qp_ex(priv->sh->ctx,
+	hrxq->qp = mlx5_glue->create_qp_ex(priv->sh->cdev->ctx,
 		 &(struct ibv_qp_init_attr_ex){
 			.qp_type = IBV_QPT_RAW_PACKET,
 			.comp_mask = IBV_QP_INIT_ATTR_PD |
@@ -805,7 +765,7 @@ mlx5_ibv_drop_action_create(struct rte_eth_dev *dev)
 				.rx_hash_fields_mask = 0,
 				},
 			.rwq_ind_tbl = ind_tbl,
-			.pd = priv->sh->pd
+			.pd = priv->sh->cdev->pd
 		 });
 	if (!hrxq->qp) {
 		DRV_LOG(DEBUG, "Port %u cannot allocate QP for drop queue.",
@@ -893,7 +853,7 @@ mlx5_txq_ibv_qp_create(struct rte_eth_dev *dev, uint16_t idx)
 	qp_attr.qp_type = IBV_QPT_RAW_PACKET,
 	/* Do *NOT* enable this, completions events are managed per Tx burst. */
 	qp_attr.sq_sig_all = 0;
-	qp_attr.pd = priv->sh->pd;
+	qp_attr.pd = priv->sh->cdev->pd;
 	qp_attr.comp_mask = IBV_QP_INIT_ATTR_PD;
 	if (txq_data->inlen_send)
 		qp_attr.cap.max_inline_data = txq_ctrl->max_inline_data;
@@ -901,7 +861,7 @@ mlx5_txq_ibv_qp_create(struct rte_eth_dev *dev, uint16_t idx)
 		qp_attr.max_tso_header = txq_ctrl->max_tso_header;
 		qp_attr.comp_mask |= IBV_QP_INIT_ATTR_MAX_TSO_HEADER;
 	}
-	qp_obj = mlx5_glue->create_qp_ex(priv->sh->ctx, &qp_attr);
+	qp_obj = mlx5_glue->create_qp_ex(priv->sh->cdev->ctx, &qp_attr);
 	if (qp_obj == NULL) {
 		DRV_LOG(ERR, "Port %u Tx queue %u QP creation failure.",
 			dev->data->port_id, idx);
@@ -947,7 +907,8 @@ mlx5_txq_ibv_obj_new(struct rte_eth_dev *dev, uint16_t idx)
 	}
 	cqe_n = desc / MLX5_TX_COMP_THRESH +
 		1 + MLX5_TX_COMP_THRESH_INLINE_DIV;
-	txq_obj->cq = mlx5_glue->create_cq(priv->sh->ctx, cqe_n, NULL, NULL, 0);
+	txq_obj->cq = mlx5_glue->create_cq(priv->sh->cdev->ctx, cqe_n,
+					   NULL, NULL, 0);
 	if (txq_obj->cq == NULL) {
 		DRV_LOG(ERR, "Port %u Tx queue %u CQ creation failure.",
 			dev->data->port_id, idx);
@@ -1070,7 +1031,7 @@ mlx5_rxq_ibv_obj_dummy_lb_create(struct rte_eth_dev *dev)
 #if defined(HAVE_IBV_DEVICE_TUNNEL_SUPPORT) && defined(HAVE_IBV_FLOW_DV_SUPPORT)
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_dev_ctx_shared *sh = priv->sh;
-	struct ibv_context *ctx = sh->ctx;
+	struct ibv_context *ctx = sh->cdev->ctx;
 	struct mlx5dv_qp_init_attr qp_init_attr = {0};
 	struct {
 		struct ibv_cq_init_attr_ex ibv;
@@ -1114,7 +1075,7 @@ mlx5_rxq_ibv_obj_dummy_lb_create(struct rte_eth_dev *dev)
 				&(struct ibv_qp_init_attr_ex){
 					.qp_type = IBV_QPT_RAW_PACKET,
 					.comp_mask = IBV_QP_INIT_ATTR_PD,
-					.pd = sh->pd,
+					.pd = sh->cdev->pd,
 					.send_cq = sh->self_lb.ibv_cq,
 					.recv_cq = sh->self_lb.ibv_cq,
 					.cap.max_recv_wr = 1,

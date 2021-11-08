@@ -162,7 +162,7 @@ ifcvf_vfio_setup(struct ifcvf_internal *internal)
 	if (rte_pci_map_device(dev))
 		goto err;
 
-	internal->vfio_dev_fd = dev->intr_handle.vfio_dev_fd;
+	internal->vfio_dev_fd = rte_intr_dev_fd_get(dev->intr_handle);
 
 	for (i = 0; i < RTE_MIN(PCI_MAX_RESOURCE, IFCVF_PCI_MAX_RESOURCE);
 			i++) {
@@ -182,7 +182,7 @@ err:
 }
 
 static int
-ifcvf_dma_map(struct ifcvf_internal *internal, int do_map)
+ifcvf_dma_map(struct ifcvf_internal *internal, bool do_map)
 {
 	uint32_t i;
 	int ret;
@@ -365,7 +365,8 @@ vdpa_enable_vfio_intr(struct ifcvf_internal *internal, bool m_rx)
 	irq_set->index = VFIO_PCI_MSIX_IRQ_INDEX;
 	irq_set->start = 0;
 	fd_ptr = (int *)&irq_set->data;
-	fd_ptr[RTE_INTR_VEC_ZERO_OFFSET] = internal->pdev->intr_handle.fd;
+	fd_ptr[RTE_INTR_VEC_ZERO_OFFSET] =
+		rte_intr_fd_get(internal->pdev->intr_handle);
 
 	for (i = 0; i < nr_vring; i++)
 		internal->intr_fd[i] = -1;
@@ -538,11 +539,11 @@ update_datapath(struct ifcvf_internal *internal)
 	if (!rte_atomic32_read(&internal->running) &&
 	    (rte_atomic32_read(&internal->started) &&
 	     rte_atomic32_read(&internal->dev_attached))) {
-		ret = ifcvf_dma_map(internal, 1);
+		ret = ifcvf_dma_map(internal, true);
 		if (ret)
 			goto err;
 
-		ret = vdpa_enable_vfio_intr(internal, 0);
+		ret = vdpa_enable_vfio_intr(internal, false);
 		if (ret)
 			goto err;
 
@@ -568,7 +569,7 @@ update_datapath(struct ifcvf_internal *internal)
 		if (ret)
 			goto err;
 
-		ret = ifcvf_dma_map(internal, 0);
+		ret = ifcvf_dma_map(internal, false);
 		if (ret)
 			goto err;
 
@@ -850,7 +851,7 @@ ifcvf_sw_fallback_switchover(struct ifcvf_internal *internal)
 		goto error;
 
 	/* set up interrupt for interrupt relay */
-	ret = vdpa_enable_vfio_intr(internal, 1);
+	ret = vdpa_enable_vfio_intr(internal, true);
 	if (ret)
 		goto unmap;
 
@@ -875,7 +876,7 @@ stop_vf:
 unset_intr:
 	vdpa_disable_vfio_intr(internal);
 unmap:
-	ifcvf_dma_map(internal, 0);
+	ifcvf_dma_map(internal, false);
 error:
 	return -1;
 }
@@ -934,7 +935,7 @@ ifcvf_dev_close(int vid)
 		vdpa_disable_vfio_intr(internal);
 
 		/* unset DMA map for guest memory */
-		ifcvf_dma_map(internal, 0);
+		ifcvf_dma_map(internal, false);
 
 		internal->sw_fallback_running = false;
 	} else {
@@ -1130,7 +1131,7 @@ ifcvf_set_vring_state(int vid, int vring, int state)
 	}
 
 	if (state && !hw->vring[vring].enable) {
-		ret = vdpa_enable_vfio_intr(internal, 0);
+		ret = vdpa_enable_vfio_intr(internal, false);
 		if (ret)
 			return ret;
 	}

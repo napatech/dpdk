@@ -20,10 +20,37 @@
 #include "sfc_log.h"
 #include "sfc_ev.h"
 #include "sfc_rx.h"
+#include "sfc_mae_counter.h"
 #include "sfc_tx.h"
 #include "sfc_kvargs.h"
 #include "sfc_tweak.h"
+#include "sfc_sw_stats.h"
+#include "sfc_switch.h"
 
+bool
+sfc_repr_supported(const struct sfc_adapter *sa)
+{
+	if (!sa->switchdev)
+		return false;
+
+	/*
+	 * Representor proxy should use service lcore on PF's socket
+	 * (sa->socket_id) to be efficient. But the proxy will fall back
+	 * to any socket if it is not possible to get the service core
+	 * on the same socket. Check that at least service core on any
+	 * socket is available.
+	 */
+	if (sfc_get_service_lcore(SOCKET_ID_ANY) == RTE_MAX_LCORE)
+		return false;
+
+	return true;
+}
+
+bool
+sfc_repr_available(const struct sfc_adapter_shared *sas)
+{
+	return sas->nb_repr_rxq > 0 && sas->nb_repr_txq > 0;
+}
 
 int
 sfc_dma_alloc(const struct sfc_adapter *sa, const char *name, uint16_t id,
@@ -79,13 +106,13 @@ sfc_phy_cap_from_link_speeds(uint32_t speeds)
 {
 	uint32_t phy_caps = 0;
 
-	if (~speeds & ETH_LINK_SPEED_FIXED) {
+	if (~speeds & RTE_ETH_LINK_SPEED_FIXED) {
 		phy_caps |= (1 << EFX_PHY_CAP_AN);
 		/*
 		 * If no speeds are specified in the mask, any supported
 		 * may be negotiated
 		 */
-		if (speeds == ETH_LINK_SPEED_AUTONEG)
+		if (speeds == RTE_ETH_LINK_SPEED_AUTONEG)
 			phy_caps |=
 				(1 << EFX_PHY_CAP_1000FDX) |
 				(1 << EFX_PHY_CAP_10000FDX) |
@@ -94,17 +121,17 @@ sfc_phy_cap_from_link_speeds(uint32_t speeds)
 				(1 << EFX_PHY_CAP_50000FDX) |
 				(1 << EFX_PHY_CAP_100000FDX);
 	}
-	if (speeds & ETH_LINK_SPEED_1G)
+	if (speeds & RTE_ETH_LINK_SPEED_1G)
 		phy_caps |= (1 << EFX_PHY_CAP_1000FDX);
-	if (speeds & ETH_LINK_SPEED_10G)
+	if (speeds & RTE_ETH_LINK_SPEED_10G)
 		phy_caps |= (1 << EFX_PHY_CAP_10000FDX);
-	if (speeds & ETH_LINK_SPEED_25G)
+	if (speeds & RTE_ETH_LINK_SPEED_25G)
 		phy_caps |= (1 << EFX_PHY_CAP_25000FDX);
-	if (speeds & ETH_LINK_SPEED_40G)
+	if (speeds & RTE_ETH_LINK_SPEED_40G)
 		phy_caps |= (1 << EFX_PHY_CAP_40000FDX);
-	if (speeds & ETH_LINK_SPEED_50G)
+	if (speeds & RTE_ETH_LINK_SPEED_50G)
 		phy_caps |= (1 << EFX_PHY_CAP_50000FDX);
-	if (speeds & ETH_LINK_SPEED_100G)
+	if (speeds & RTE_ETH_LINK_SPEED_100G)
 		phy_caps |= (1 << EFX_PHY_CAP_100000FDX);
 
 	return phy_caps;
@@ -174,6 +201,7 @@ static int
 sfc_estimate_resource_limits(struct sfc_adapter *sa)
 {
 	const efx_nic_cfg_t *encp = efx_nic_cfg_get(sa->nic);
+	struct sfc_adapter_shared *sas = sfc_sa2shared(sa);
 	efx_drv_limits_t limits;
 	int rc;
 	uint32_t evq_allocated;
@@ -235,17 +263,88 @@ sfc_estimate_resource_limits(struct sfc_adapter *sa)
 	rxq_allocated = MIN(rxq_allocated, limits.edl_max_rxq_count);
 	txq_allocated = MIN(txq_allocated, limits.edl_max_txq_count);
 
-	/* Subtract management EVQ not used for traffic */
-	SFC_ASSERT(evq_allocated > 0);
+	/*
+	 * Subtract management EVQ not used for traffic
+	 * The resource allocation strategy is as follows:
+	 * - one EVQ for management
+	 * - one EVQ for each ethdev RXQ
+	 * - one EVQ for each ethdev TXQ
+	 * - one EVQ and one RXQ for optional MAE counters.
+	 */
+	if (evq_allocated == 0) {
+		sfc_err(sa, "count of allocated EvQ is 0");
+		rc = ENOMEM;
+		goto fail_allocate_evq;
+	}
 	evq_allocated--;
 
-	/* Right now we use separate EVQ for Rx and Tx */
-	sa->rxq_max = MIN(rxq_allocated, evq_allocated / 2);
-	sa->txq_max = MIN(txq_allocated, evq_allocated - sa->rxq_max);
+	/*
+	 * Reserve absolutely required minimum.
+	 * Right now we use separate EVQ for Rx and Tx.
+	 */
+	if (rxq_allocated > 0 && evq_allocated > 0) {
+		sa->rxq_max = 1;
+		rxq_allocated--;
+		evq_allocated--;
+	}
+	if (txq_allocated > 0 && evq_allocated > 0) {
+		sa->txq_max = 1;
+		txq_allocated--;
+		evq_allocated--;
+	}
+
+	if (sfc_mae_counter_rxq_required(sa) &&
+	    rxq_allocated > 0 && evq_allocated > 0) {
+		rxq_allocated--;
+		evq_allocated--;
+		sas->counters_rxq_allocated = true;
+	} else {
+		sas->counters_rxq_allocated = false;
+	}
+
+	if (sfc_repr_supported(sa) &&
+	    evq_allocated >= SFC_REPR_PROXY_NB_RXQ_MIN +
+	    SFC_REPR_PROXY_NB_TXQ_MIN &&
+	    rxq_allocated >= SFC_REPR_PROXY_NB_RXQ_MIN &&
+	    txq_allocated >= SFC_REPR_PROXY_NB_TXQ_MIN) {
+		unsigned int extra;
+
+		txq_allocated -= SFC_REPR_PROXY_NB_TXQ_MIN;
+		rxq_allocated -= SFC_REPR_PROXY_NB_RXQ_MIN;
+		evq_allocated -= SFC_REPR_PROXY_NB_RXQ_MIN +
+			SFC_REPR_PROXY_NB_TXQ_MIN;
+
+		sas->nb_repr_rxq = SFC_REPR_PROXY_NB_RXQ_MIN;
+		sas->nb_repr_txq = SFC_REPR_PROXY_NB_TXQ_MIN;
+
+		/* Allocate extra representor RxQs up to the maximum */
+		extra = MIN(evq_allocated, rxq_allocated);
+		extra = MIN(extra,
+			    SFC_REPR_PROXY_NB_RXQ_MAX - sas->nb_repr_rxq);
+		evq_allocated -= extra;
+		rxq_allocated -= extra;
+		sas->nb_repr_rxq += extra;
+
+		/* Allocate extra representor TxQs up to the maximum */
+		extra = MIN(evq_allocated, txq_allocated);
+		extra = MIN(extra,
+			    SFC_REPR_PROXY_NB_TXQ_MAX - sas->nb_repr_txq);
+		evq_allocated -= extra;
+		txq_allocated -= extra;
+		sas->nb_repr_txq += extra;
+	} else {
+		sas->nb_repr_rxq = 0;
+		sas->nb_repr_txq = 0;
+	}
+
+	/* Add remaining allocated queues */
+	sa->rxq_max += MIN(rxq_allocated, evq_allocated / 2);
+	sa->txq_max += MIN(txq_allocated, evq_allocated - sa->rxq_max);
 
 	/* Keep NIC initialized */
 	return 0;
 
+fail_allocate_evq:
 fail_get_vi_pool:
 	efx_nic_fini(sa->nic);
 fail_nic_init:
@@ -255,16 +354,26 @@ fail_nic_init:
 static int
 sfc_set_drv_limits(struct sfc_adapter *sa)
 {
+	struct sfc_adapter_shared *sas = sfc_sa2shared(sa);
 	const struct rte_eth_dev_data *data = sa->eth_dev->data;
+	uint32_t rxq_reserved = sfc_nb_reserved_rxq(sas);
+	uint32_t txq_reserved = sfc_nb_txq_reserved(sas);
 	efx_drv_limits_t lim;
 
 	memset(&lim, 0, sizeof(lim));
 
-	/* Limits are strict since take into account initial estimation */
+	/*
+	 * Limits are strict since take into account initial estimation.
+	 * Resource allocation stategy is described in
+	 * sfc_estimate_resource_limits().
+	 */
 	lim.edl_min_evq_count = lim.edl_max_evq_count =
-		1 + data->nb_rx_queues + data->nb_tx_queues;
-	lim.edl_min_rxq_count = lim.edl_max_rxq_count = data->nb_rx_queues;
-	lim.edl_min_txq_count = lim.edl_max_txq_count = data->nb_tx_queues;
+		1 + data->nb_rx_queues + data->nb_tx_queues +
+		rxq_reserved + txq_reserved;
+	lim.edl_min_rxq_count = lim.edl_max_rxq_count =
+		data->nb_rx_queues + rxq_reserved;
+	lim.edl_min_txq_count = lim.edl_max_txq_count =
+		data->nb_tx_queues + txq_reserved;
 
 	return efx_nic_set_drv_limits(sa->nic, &lim);
 }
@@ -292,10 +401,10 @@ sfc_set_fw_subvariant(struct sfc_adapter *sa)
 			tx_offloads |= txq_info->offloads;
 	}
 
-	if (tx_offloads & (DEV_TX_OFFLOAD_IPV4_CKSUM |
-			   DEV_TX_OFFLOAD_TCP_CKSUM |
-			   DEV_TX_OFFLOAD_UDP_CKSUM |
-			   DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM))
+	if (tx_offloads & (RTE_ETH_TX_OFFLOAD_IPV4_CKSUM |
+			   RTE_ETH_TX_OFFLOAD_TCP_CKSUM |
+			   RTE_ETH_TX_OFFLOAD_UDP_CKSUM |
+			   RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM))
 		req_fw_subvariant = EFX_NIC_FW_SUBVARIANT_DEFAULT;
 	else
 		req_fw_subvariant = EFX_NIC_FW_SUBVARIANT_NO_TX_CSUM;
@@ -331,7 +440,7 @@ sfc_try_start(struct sfc_adapter *sa)
 	sfc_log_init(sa, "entry");
 
 	SFC_ASSERT(sfc_adapter_is_locked(sa));
-	SFC_ASSERT(sa->state == SFC_ADAPTER_STARTING);
+	SFC_ASSERT(sa->state == SFC_ETHDEV_STARTING);
 
 	sfc_log_init(sa, "set FW subvariant");
 	rc = sfc_set_fw_subvariant(sa);
@@ -389,8 +498,15 @@ sfc_try_start(struct sfc_adapter *sa)
 	if (rc != 0)
 		goto fail_flows_insert;
 
+	rc = sfc_repr_proxy_start(sa);
+	if (rc != 0)
+		goto fail_repr_proxy_start;
+
 	sfc_log_init(sa, "done");
 	return 0;
+
+fail_repr_proxy_start:
+	sfc_flow_stop(sa);
 
 fail_flows_insert:
 	sfc_tx_stop(sa);
@@ -429,9 +545,9 @@ sfc_start(struct sfc_adapter *sa)
 	SFC_ASSERT(sfc_adapter_is_locked(sa));
 
 	switch (sa->state) {
-	case SFC_ADAPTER_CONFIGURED:
+	case SFC_ETHDEV_CONFIGURED:
 		break;
-	case SFC_ADAPTER_STARTED:
+	case SFC_ETHDEV_STARTED:
 		sfc_notice(sa, "already started");
 		return 0;
 	default:
@@ -439,7 +555,7 @@ sfc_start(struct sfc_adapter *sa)
 		goto fail_bad_state;
 	}
 
-	sa->state = SFC_ADAPTER_STARTING;
+	sa->state = SFC_ETHDEV_STARTING;
 
 	rc = 0;
 	do {
@@ -462,13 +578,13 @@ sfc_start(struct sfc_adapter *sa)
 	if (rc != 0)
 		goto fail_try_start;
 
-	sa->state = SFC_ADAPTER_STARTED;
+	sa->state = SFC_ETHDEV_STARTED;
 	sfc_log_init(sa, "done");
 	return 0;
 
 fail_try_start:
 fail_sriov_vswitch_create:
-	sa->state = SFC_ADAPTER_CONFIGURED;
+	sa->state = SFC_ETHDEV_CONFIGURED;
 fail_bad_state:
 	sfc_log_init(sa, "failed %d", rc);
 	return rc;
@@ -482,9 +598,9 @@ sfc_stop(struct sfc_adapter *sa)
 	SFC_ASSERT(sfc_adapter_is_locked(sa));
 
 	switch (sa->state) {
-	case SFC_ADAPTER_STARTED:
+	case SFC_ETHDEV_STARTED:
 		break;
-	case SFC_ADAPTER_CONFIGURED:
+	case SFC_ETHDEV_CONFIGURED:
 		sfc_notice(sa, "already stopped");
 		return;
 	default:
@@ -493,8 +609,9 @@ sfc_stop(struct sfc_adapter *sa)
 		return;
 	}
 
-	sa->state = SFC_ADAPTER_STOPPING;
+	sa->state = SFC_ETHDEV_STOPPING;
 
+	sfc_repr_proxy_stop(sa);
 	sfc_flow_stop(sa);
 	sfc_tx_stop(sa);
 	sfc_rx_stop(sa);
@@ -503,7 +620,7 @@ sfc_stop(struct sfc_adapter *sa)
 	sfc_intr_stop(sa);
 	efx_nic_fini(sa->nic);
 
-	sa->state = SFC_ADAPTER_CONFIGURED;
+	sa->state = SFC_ETHDEV_CONFIGURED;
 	sfc_log_init(sa, "done");
 }
 
@@ -514,7 +631,7 @@ sfc_restart(struct sfc_adapter *sa)
 
 	SFC_ASSERT(sfc_adapter_is_locked(sa));
 
-	if (sa->state != SFC_ADAPTER_STARTED)
+	if (sa->state != SFC_ETHDEV_STARTED)
 		return EINVAL;
 
 	sfc_stop(sa);
@@ -535,7 +652,7 @@ sfc_restart_if_required(void *arg)
 	if (rte_atomic32_cmpset((volatile uint32_t *)&sa->restart_required,
 				1, 0)) {
 		sfc_adapter_lock(sa);
-		if (sa->state == SFC_ADAPTER_STARTED)
+		if (sa->state == SFC_ETHDEV_STARTED)
 			(void)sfc_restart(sa);
 		sfc_adapter_unlock(sa);
 	}
@@ -568,9 +685,9 @@ sfc_configure(struct sfc_adapter *sa)
 
 	SFC_ASSERT(sfc_adapter_is_locked(sa));
 
-	SFC_ASSERT(sa->state == SFC_ADAPTER_INITIALIZED ||
-		   sa->state == SFC_ADAPTER_CONFIGURED);
-	sa->state = SFC_ADAPTER_CONFIGURING;
+	SFC_ASSERT(sa->state == SFC_ETHDEV_INITIALIZED ||
+		   sa->state == SFC_ETHDEV_CONFIGURED);
+	sa->state = SFC_ETHDEV_CONFIGURING;
 
 	rc = sfc_check_conf(sa);
 	if (rc != 0)
@@ -592,9 +709,16 @@ sfc_configure(struct sfc_adapter *sa)
 	if (rc != 0)
 		goto fail_tx_configure;
 
-	sa->state = SFC_ADAPTER_CONFIGURED;
+	rc = sfc_sw_xstats_configure(sa);
+	if (rc != 0)
+		goto fail_sw_xstats_configure;
+
+	sa->state = SFC_ETHDEV_CONFIGURED;
 	sfc_log_init(sa, "done");
 	return 0;
+
+fail_sw_xstats_configure:
+	sfc_tx_close(sa);
 
 fail_tx_configure:
 	sfc_rx_close(sa);
@@ -607,7 +731,7 @@ fail_port_configure:
 
 fail_intr_configure:
 fail_check_conf:
-	sa->state = SFC_ADAPTER_INITIALIZED;
+	sa->state = SFC_ETHDEV_INITIALIZED;
 	sfc_log_init(sa, "failed %d", rc);
 	return rc;
 }
@@ -619,15 +743,16 @@ sfc_close(struct sfc_adapter *sa)
 
 	SFC_ASSERT(sfc_adapter_is_locked(sa));
 
-	SFC_ASSERT(sa->state == SFC_ADAPTER_CONFIGURED);
-	sa->state = SFC_ADAPTER_CLOSING;
+	SFC_ASSERT(sa->state == SFC_ETHDEV_CONFIGURED);
+	sa->state = SFC_ETHDEV_CLOSING;
 
+	sfc_sw_xstats_close(sa);
 	sfc_tx_close(sa);
 	sfc_rx_close(sa);
 	sfc_port_close(sa);
 	sfc_intr_close(sa);
 
-	sa->state = SFC_ADAPTER_INITIALIZED;
+	sa->state = SFC_ETHDEV_INITIALIZED;
 	sfc_log_init(sa, "done");
 }
 
@@ -774,7 +899,7 @@ sfc_attach(struct sfc_adapter *sa)
 	sa->priv.shared->tunnel_encaps =
 		encp->enc_tunnel_encapsulations_supported;
 
-	if (sfc_dp_tx_offload_capa(sa->priv.dp_tx) & DEV_TX_OFFLOAD_TCP_TSO) {
+	if (sfc_dp_tx_offload_capa(sa->priv.dp_tx) & RTE_ETH_TX_OFFLOAD_TCP_TSO) {
 		sa->tso = encp->enc_fw_assisted_tso_v2_enabled ||
 			  encp->enc_tso_v3_enabled;
 		if (!sa->tso)
@@ -783,8 +908,8 @@ sfc_attach(struct sfc_adapter *sa)
 
 	if (sa->tso &&
 	    (sfc_dp_tx_offload_capa(sa->priv.dp_tx) &
-	     (DEV_TX_OFFLOAD_VXLAN_TNL_TSO |
-	      DEV_TX_OFFLOAD_GENEVE_TNL_TSO)) != 0) {
+	     (RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO |
+	      RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO)) != 0) {
 		sa->tso_encap = encp->enc_fw_assisted_tso_v2_encap_enabled ||
 				encp->enc_tso_v3_enabled;
 		if (!sa->tso_encap)
@@ -834,14 +959,30 @@ sfc_attach(struct sfc_adapter *sa)
 	if (rc != 0)
 		goto fail_filter_attach;
 
+	rc = sfc_mae_counter_rxq_attach(sa);
+	if (rc != 0)
+		goto fail_mae_counter_rxq_attach;
+
 	rc = sfc_mae_attach(sa);
 	if (rc != 0)
 		goto fail_mae_attach;
+
+	rc = sfc_mae_switchdev_init(sa);
+	if (rc != 0)
+		goto fail_mae_switchdev_init;
+
+	rc = sfc_repr_proxy_attach(sa);
+	if (rc != 0)
+		goto fail_repr_proxy_attach;
 
 	sfc_log_init(sa, "fini nic");
 	efx_nic_fini(enp);
 
 	sfc_flow_init(sa);
+
+	rc = sfc_sw_xstats_init(sa);
+	if (rc != 0)
+		goto fail_sw_xstats_init;
 
 	/*
 	 * Create vSwitch to be able to use VFs when PF is not started yet
@@ -852,16 +993,28 @@ sfc_attach(struct sfc_adapter *sa)
 	if (rc != 0)
 		goto fail_sriov_vswitch_create;
 
-	sa->state = SFC_ADAPTER_INITIALIZED;
+	sa->state = SFC_ETHDEV_INITIALIZED;
 
 	sfc_log_init(sa, "done");
 	return 0;
 
 fail_sriov_vswitch_create:
+	sfc_sw_xstats_close(sa);
+
+fail_sw_xstats_init:
 	sfc_flow_fini(sa);
+	sfc_repr_proxy_detach(sa);
+
+fail_repr_proxy_attach:
+	sfc_mae_switchdev_fini(sa);
+
+fail_mae_switchdev_init:
 	sfc_mae_detach(sa);
 
 fail_mae_attach:
+	sfc_mae_counter_rxq_detach(sa);
+
+fail_mae_counter_rxq_attach:
 	sfc_filter_detach(sa);
 
 fail_filter_attach:
@@ -892,6 +1045,18 @@ fail_nic_reset:
 }
 
 void
+sfc_pre_detach(struct sfc_adapter *sa)
+{
+	sfc_log_init(sa, "entry");
+
+	SFC_ASSERT(!sfc_adapter_is_locked(sa));
+
+	sfc_repr_proxy_pre_detach(sa);
+
+	sfc_log_init(sa, "done");
+}
+
+void
 sfc_detach(struct sfc_adapter *sa)
 {
 	sfc_log_init(sa, "entry");
@@ -902,7 +1067,10 @@ sfc_detach(struct sfc_adapter *sa)
 
 	sfc_flow_fini(sa);
 
+	sfc_repr_proxy_detach(sa);
+	sfc_mae_switchdev_fini(sa);
 	sfc_mae_detach(sa);
+	sfc_mae_counter_rxq_detach(sa);
 	sfc_filter_detach(sa);
 	sfc_rss_detach(sa);
 	sfc_port_detach(sa);
@@ -911,7 +1079,7 @@ sfc_detach(struct sfc_adapter *sa)
 	efx_tunnel_fini(sa->nic);
 	sfc_sriov_detach(sa);
 
-	sa->state = SFC_ADAPTER_UNINITIALIZED;
+	sa->state = SFC_ETHDEV_UNINITIALIZED;
 }
 
 static int
@@ -1162,6 +1330,9 @@ sfc_unprobe(struct sfc_adapter *sa)
 	 */
 	rte_eal_alarm_cancel(sfc_restart_if_required, sa);
 
+	sfc_mae_clear_switch_port(sa->mae.switch_domain_id,
+				  sa->mae.switch_port_id);
+
 	sfc_log_init(sa, "destroy nic");
 	sa->nic = NULL;
 	efx_nic_destroy(enp);
@@ -1169,7 +1340,7 @@ sfc_unprobe(struct sfc_adapter *sa)
 	sfc_mem_bar_fini(sa);
 
 	sfc_flow_fini(sa);
-	sa->state = SFC_ADAPTER_UNINITIALIZED;
+	sa->state = SFC_ETHDEV_UNINITIALIZED;
 }
 
 uint32_t

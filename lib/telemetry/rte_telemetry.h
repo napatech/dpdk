@@ -3,7 +3,6 @@
  */
 
 #include <stdint.h>
-#include <sched.h>
 
 #include <rte_compat.h>
 
@@ -11,7 +10,7 @@
 #define _RTE_TELEMETRY_H_
 
 /** Maximum length for string used in object. */
-#define RTE_TEL_MAX_STRING_LEN 64
+#define RTE_TEL_MAX_STRING_LEN 128
 /** Maximum length of string. */
 #define RTE_TEL_MAX_SINGLE_STRING_LEN 8192
 /** Maximum number of dictionary entries. */
@@ -23,10 +22,6 @@
  * @file
  *
  * RTE Telemetry.
- *
- * @warning
- * @b EXPERIMENTAL:
- * All functions in this file may be changed or removed without prior notice.
  *
  * The telemetry library provides a method to retrieve statistics from
  * DPDK by sending a request message over a socket. DPDK will send
@@ -59,7 +54,6 @@ enum rte_tel_value_type {
  * @return
  *   0 on success, negative errno on error
  */
-__rte_experimental
 int
 rte_tel_data_start_array(struct rte_tel_data *d, enum rte_tel_value_type type);
 
@@ -71,7 +65,6 @@ rte_tel_data_start_array(struct rte_tel_data *d, enum rte_tel_value_type type);
  * @return
  *   0 on success, negative errno on error
  */
-__rte_experimental
 int
 rte_tel_data_start_dict(struct rte_tel_data *d);
 
@@ -85,7 +78,6 @@ rte_tel_data_start_dict(struct rte_tel_data *d);
  * @return
  *   0 on success, negative errno on error, E2BIG on string truncation
  */
-__rte_experimental
 int
 rte_tel_data_string(struct rte_tel_data *d, const char *str);
 
@@ -101,7 +93,6 @@ rte_tel_data_string(struct rte_tel_data *d, const char *str);
  * @return
  *   0 on success, negative errno on error, E2BIG on string truncation
  */
-__rte_experimental
 int
 rte_tel_data_add_array_string(struct rte_tel_data *d, const char *str);
 
@@ -117,7 +108,6 @@ rte_tel_data_add_array_string(struct rte_tel_data *d, const char *str);
  * @return
  *   0 on success, negative errno on error
  */
-__rte_experimental
 int
 rte_tel_data_add_array_int(struct rte_tel_data *d, int x);
 
@@ -133,7 +123,6 @@ rte_tel_data_add_array_int(struct rte_tel_data *d, int x);
  * @return
  *   0 on success, negative errno on error
  */
-__rte_experimental
 int
 rte_tel_data_add_array_u64(struct rte_tel_data *d, uint64_t x);
 
@@ -154,7 +143,6 @@ rte_tel_data_add_array_u64(struct rte_tel_data *d, uint64_t x);
  * @return
  *   0 on success, negative errno on error
  */
-__rte_experimental
 int
 rte_tel_data_add_array_container(struct rte_tel_data *d,
 		struct rte_tel_data *val, int keep);
@@ -173,7 +161,6 @@ rte_tel_data_add_array_container(struct rte_tel_data *d,
  *   0 on success, negative errno on error, E2BIG on string truncation of
  *   either name or value.
  */
-__rte_experimental
 int
 rte_tel_data_add_dict_string(struct rte_tel_data *d, const char *name,
 		const char *val);
@@ -191,7 +178,6 @@ rte_tel_data_add_dict_string(struct rte_tel_data *d, const char *name,
  * @return
  *   0 on success, negative errno on error, E2BIG on string truncation of name.
  */
-__rte_experimental
 int
 rte_tel_data_add_dict_int(struct rte_tel_data *d, const char *name, int val);
 
@@ -208,7 +194,6 @@ rte_tel_data_add_dict_int(struct rte_tel_data *d, const char *name, int val);
  * @return
  *   0 on success, negative errno on error, E2BIG on string truncation of name.
  */
-__rte_experimental
 int
 rte_tel_data_add_dict_u64(struct rte_tel_data *d,
 		const char *name, uint64_t val);
@@ -232,7 +217,6 @@ rte_tel_data_add_dict_u64(struct rte_tel_data *d,
  * @return
  *   0 on success, negative errno on error
  */
-__rte_experimental
 int
 rte_tel_data_add_dict_container(struct rte_tel_data *d, const char *name,
 		struct rte_tel_data *val, int keep);
@@ -283,9 +267,8 @@ typedef void * (*handler)(void *sock_id);
  * @return
  *  -EINVAL for invalid parameters failure.
  *  @return
- *  -ENOENT if max callbacks limit has been reached.
+ *  -ENOMEM for mem allocation failure.
  */
-__rte_experimental
 int
 rte_telemetry_register_cmd(const char *cmd, telemetry_cb fn, const char *help);
 
@@ -297,7 +280,6 @@ rte_telemetry_register_cmd(const char *cmd, telemetry_cb fn, const char *help);
  * @return
  *  Pointer to a container.
  */
-__rte_experimental
 struct rte_tel_data *
 rte_tel_data_alloc(void);
 
@@ -309,7 +291,6 @@ rte_tel_data_alloc(void);
  *  Pointer to container.
  *.
  */
-__rte_experimental
 void
 rte_tel_data_free(struct rte_tel_data *data);
 

@@ -8,8 +8,14 @@
 #define ROC_AURA_ID_MASK       (BIT_ULL(16) - 1)
 #define ROC_AURA_OP_LIMIT_MASK (BIT_ULL(36) - 1)
 
+#define ROC_NPA_MAX_BLOCK_SZ		   (128 * 1024)
 #define ROC_CN10K_NPA_BATCH_ALLOC_MAX_PTRS 512
 #define ROC_CN10K_NPA_BATCH_FREE_MAX_PTRS  15
+
+/* This value controls how much of the present average resource level is used to
+ * calculate the new resource level.
+ */
+#define ROC_NPA_AVG_CONT 0xE0
 
 /* 16 CASP instructions can be outstanding in CN9k, but we use only 15
  * outstanding CASPs as we run out of registers.
@@ -208,7 +214,7 @@ roc_npa_aura_batch_alloc_issue(uint64_t aura_handle, uint64_t *buf,
 	cmp.u = 0;
 	cmp.compare_s.aura = roc_npa_aura_handle_to_aura(aura_handle);
 	cmp.compare_s.drop = drop;
-	cmp.compare_s.stype = ALLOC_STYPE_STSTP;
+	cmp.compare_s.stype = ALLOC_STYPE_STF;
 	cmp.compare_s.dis_wait = dis_wait;
 	cmp.compare_s.count = num;
 
@@ -217,6 +223,17 @@ roc_npa_aura_batch_alloc_issue(uint64_t aura_handle, uint64_t *buf,
 		return -1;
 
 	return 0;
+}
+
+static inline void
+roc_npa_batch_alloc_wait(uint64_t *cache_line)
+{
+	/* Batch alloc status code is updated in bits [5:6] of the first word
+	 * of the 128 byte cache line.
+	 */
+	while (((__atomic_load_n(cache_line, __ATOMIC_RELAXED) >> 5) & 0x3) ==
+	       ALLOC_CCODE_INVAL)
+		;
 }
 
 static inline unsigned int
@@ -231,17 +248,10 @@ roc_npa_aura_batch_alloc_count(uint64_t *aligned_buf, unsigned int num)
 	/* Check each ROC cache line one by one */
 	for (i = 0; i < num; i += (ROC_ALIGN >> 3)) {
 		struct npa_batch_alloc_status_s *status;
-		int ccode;
 
 		status = (struct npa_batch_alloc_status_s *)&aligned_buf[i];
 
-		/* Status is updated in first 7 bits of each 128 byte cache
-		 * line. Wait until the status gets updated.
-		 */
-		do {
-			ccode = (volatile int)status->ccode;
-		} while (ccode == ALLOC_CCODE_INVAL);
-
+		roc_npa_batch_alloc_wait(&aligned_buf[i]);
 		count += status->count;
 	}
 
@@ -261,16 +271,11 @@ roc_npa_aura_batch_alloc_extract(uint64_t *buf, uint64_t *aligned_buf,
 	/* Check each ROC cache line one by one */
 	for (i = 0; i < num; i += (ROC_ALIGN >> 3)) {
 		struct npa_batch_alloc_status_s *status;
-		int line_count, ccode;
+		int line_count;
 
 		status = (struct npa_batch_alloc_status_s *)&aligned_buf[i];
 
-		/* Status is updated in first 7 bits of each 128 byte cache
-		 * line. Wait until the status gets updated.
-		 */
-		do {
-			ccode = (volatile int)status->ccode;
-		} while (ccode == ALLOC_CCODE_INVAL);
+		roc_npa_batch_alloc_wait(&aligned_buf[i]);
 
 		line_count = status->count;
 

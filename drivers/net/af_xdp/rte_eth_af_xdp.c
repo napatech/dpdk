@@ -37,6 +37,7 @@
 #include <rte_malloc.h>
 #include <rte_ring.h>
 #include <rte_spinlock.h>
+#include <rte_power_intrinsics.h>
 
 #include "compat.h"
 
@@ -77,6 +78,7 @@ RTE_LOG_REGISTER_DEFAULT(af_xdp_logtype, NOTICE);
 #define ETH_AF_XDP_RX_BATCH_SIZE	XSK_RING_CONS__DEFAULT_NUM_DESCS
 #define ETH_AF_XDP_TX_BATCH_SIZE	XSK_RING_CONS__DEFAULT_NUM_DESCS
 
+#define ETH_AF_XDP_ETH_OVERHEAD		(RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN)
 
 struct xsk_umem_info {
 	struct xsk_umem *umem;
@@ -162,10 +164,10 @@ static const char * const valid_arguments[] = {
 };
 
 static const struct rte_eth_link pmd_link = {
-	.link_speed = ETH_SPEED_NUM_10G,
-	.link_duplex = ETH_LINK_FULL_DUPLEX,
-	.link_status = ETH_LINK_DOWN,
-	.link_autoneg = ETH_LINK_AUTONEG
+	.link_speed = RTE_ETH_SPEED_NUM_10G,
+	.link_duplex = RTE_ETH_LINK_FULL_DUPLEX,
+	.link_status = RTE_ETH_LINK_DOWN,
+	.link_autoneg = RTE_ETH_LINK_AUTONEG
 };
 
 /* List which tracks PMDs to facilitate sharing UMEMs across them. */
@@ -526,7 +528,6 @@ af_xdp_tx_zc(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 
 			if (!xsk_ring_prod__reserve(&txq->tx, 1, &idx_tx)) {
 				rte_pktmbuf_free(local_mbuf);
-				kick_tx(txq, cq);
 				goto out;
 			}
 
@@ -550,10 +551,9 @@ af_xdp_tx_zc(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		tx_bytes += mbuf->pkt_len;
 	}
 
-	kick_tx(txq, cq);
-
 out:
 	xsk_ring_prod__submit(&txq->tx, count);
+	kick_tx(txq, cq);
 
 	txq->stats.tx_pkts += count;
 	txq->stats.tx_bytes += tx_bytes;
@@ -653,7 +653,7 @@ eth_af_xdp_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 static int
 eth_dev_start(struct rte_eth_dev *dev)
 {
-	dev->data->dev_link.link_status = ETH_LINK_UP;
+	dev->data->dev_link.link_status = RTE_ETH_LINK_UP;
 
 	return 0;
 }
@@ -662,7 +662,7 @@ eth_dev_start(struct rte_eth_dev *dev)
 static int
 eth_dev_stop(struct rte_eth_dev *dev)
 {
-	dev->data->dev_link.link_status = ETH_LINK_DOWN;
+	dev->data->dev_link.link_status = RTE_ETH_LINK_DOWN;
 	return 0;
 }
 
@@ -788,6 +788,38 @@ eth_dev_configure(struct rte_eth_dev *dev)
 	return 0;
 }
 
+#define CLB_VAL_IDX 0
+static int
+eth_monitor_callback(const uint64_t value,
+		const uint64_t opaque[RTE_POWER_MONITOR_OPAQUE_SZ])
+{
+	const uint64_t v = opaque[CLB_VAL_IDX];
+	const uint64_t m = (uint32_t)~0;
+
+	/* if the value has changed, abort entering power optimized state */
+	return (value & m) == v ? 0 : -1;
+}
+
+static int
+eth_get_monitor_addr(void *rx_queue, struct rte_power_monitor_cond *pmc)
+{
+	struct pkt_rx_queue *rxq = rx_queue;
+	unsigned int *prod = rxq->rx.producer;
+	const uint32_t cur_val = rxq->rx.cached_prod; /* use cached value */
+
+	/* watch for changes in producer ring */
+	pmc->addr = (void *)prod;
+
+	/* store current value */
+	pmc->opaque[CLB_VAL_IDX] = cur_val;
+	pmc->fn = eth_monitor_callback;
+
+	/* AF_XDP producer ring index is 32-bit */
+	pmc->size = sizeof(uint32_t);
+
+	return 0;
+}
+
 static int
 eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 {
@@ -795,19 +827,19 @@ eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 
 	dev_info->if_index = internals->if_index;
 	dev_info->max_mac_addrs = 1;
-	dev_info->max_rx_pktlen = ETH_FRAME_LEN;
 	dev_info->max_rx_queues = internals->queue_cnt;
 	dev_info->max_tx_queues = internals->queue_cnt;
 
 	dev_info->min_mtu = RTE_ETHER_MIN_MTU;
 #if defined(XDP_UMEM_UNALIGNED_CHUNK_FLAG)
-	dev_info->max_mtu = getpagesize() -
-				sizeof(struct rte_mempool_objhdr) -
-				sizeof(struct rte_mbuf) -
-				RTE_PKTMBUF_HEADROOM - XDP_PACKET_HEADROOM;
+	dev_info->max_rx_pktlen = getpagesize() -
+				  sizeof(struct rte_mempool_objhdr) -
+				  sizeof(struct rte_mbuf) -
+				  RTE_PKTMBUF_HEADROOM - XDP_PACKET_HEADROOM;
 #else
-	dev_info->max_mtu = ETH_AF_XDP_FRAME_SIZE - XDP_PACKET_HEADROOM;
+	dev_info->max_rx_pktlen = ETH_AF_XDP_FRAME_SIZE - XDP_PACKET_HEADROOM;
 #endif
+	dev_info->max_mtu = dev_info->max_rx_pktlen - ETH_AF_XDP_ETH_OVERHEAD;
 
 	dev_info->default_rxportconf.burst_size = ETH_AF_XDP_DFLT_BUSY_BUDGET;
 	dev_info->default_txportconf.burst_size = ETH_AF_XDP_DFLT_BUSY_BUDGET;
@@ -956,11 +988,6 @@ eth_dev_close(struct rte_eth_dev *dev)
 	}
 
 	return 0;
-}
-
-static void
-eth_queue_release(void *q __rte_unused)
-{
 }
 
 static int
@@ -1443,11 +1470,10 @@ static const struct eth_dev_ops ops = {
 	.promiscuous_disable = eth_dev_promiscuous_disable,
 	.rx_queue_setup = eth_rx_queue_setup,
 	.tx_queue_setup = eth_tx_queue_setup,
-	.rx_queue_release = eth_queue_release,
-	.tx_queue_release = eth_queue_release,
 	.link_update = eth_link_update,
 	.stats_get = eth_stats_get,
 	.stats_reset = eth_stats_reset,
+	.get_monitor_addr = eth_get_monitor_addr,
 };
 
 /** parse busy_budget argument */
@@ -1758,16 +1784,11 @@ rte_pmd_af_xdp_probe(struct rte_vdev_device *dev)
 		rte_vdev_device_name(dev));
 
 	name = rte_vdev_device_name(dev);
-	if (rte_eal_process_type() == RTE_PROC_SECONDARY &&
-		strlen(rte_vdev_device_args(dev)) == 0) {
-		eth_dev = rte_eth_dev_attach_secondary(name);
-		if (eth_dev == NULL) {
-			AF_XDP_LOG(ERR, "Failed to probe %s\n", name);
-			return -EINVAL;
-		}
-		eth_dev->dev_ops = &ops;
-		rte_eth_dev_probing_finish(eth_dev);
-		return 0;
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
+		AF_XDP_LOG(ERR, "Failed to probe %s. "
+				"AF_XDP PMD does not support secondary processes.\n",
+				name);
+		return -ENOTSUP;
 	}
 
 	kvlist = rte_kvargs_parse(rte_vdev_device_args(dev), valid_arguments);

@@ -234,7 +234,11 @@ struct mbox_msghdr {
 	  nix_inline_ipsec_lf_cfg, msg_rsp)                                    \
 	M(NIX_CN10K_AQ_ENQ, 0x801b, nix_cn10k_aq_enq, nix_cn10k_aq_enq_req,    \
 	  nix_cn10k_aq_enq_rsp)                                                \
-	M(NIX_GET_HW_INFO, 0x801c, nix_get_hw_info, msg_req, nix_hw_info)
+	M(NIX_GET_HW_INFO, 0x801c, nix_get_hw_info, msg_req, nix_hw_info)      \
+	M(NIX_BANDPROF_ALLOC, 0x801d, nix_bandprof_alloc,                      \
+	  nix_bandprof_alloc_req, nix_bandprof_alloc_rsp)                      \
+	M(NIX_BANDPROF_FREE, 0x801e, nix_bandprof_free, nix_bandprof_free_req, \
+	  msg_rsp)
 
 /* Messages initiated by AF (range 0xC00 - 0xDFF) */
 #define MBOX_UP_CGX_MESSAGES                                                   \
@@ -278,14 +282,28 @@ struct ready_msg_rsp {
 	uint16_t __io rclk_freq; /* RCLK frequency */
 };
 
+enum npc_pkind_type {
+	NPC_RX_VLAN_EXDSA_PKIND = 56ULL,
+	NPC_RX_CHLEN24B_PKIND,
+	NPC_RX_CPT_HDR_PKIND,
+	NPC_RX_CHLEN90B_PKIND,
+	NPC_TX_HIGIG_PKIND,
+	NPC_RX_HIGIG_PKIND,
+	NPC_RX_EXDSA_PKIND,
+	NPC_RX_EDSA_PKIND,
+	NPC_TX_DEF_PKIND,
+};
+
 /* Struct to set pkind */
 struct npc_set_pkind {
 	struct mbox_msghdr hdr;
-#define ROC_PRIV_FLAGS_DEFAULT BIT_ULL(0)
-#define ROC_PRIV_FLAGS_EDSA    BIT_ULL(1)
-#define ROC_PRIV_FLAGS_HIGIG   BIT_ULL(2)
-#define ROC_PRIV_FLAGS_LEN_90B BIT_ULL(3)
-#define ROC_PRIV_FLAGS_CUSTOM  BIT_ULL(63)
+#define ROC_PRIV_FLAGS_DEFAULT	  BIT_ULL(0)
+#define ROC_PRIV_FLAGS_EDSA	  BIT_ULL(1)
+#define ROC_PRIV_FLAGS_HIGIG	  BIT_ULL(2)
+#define ROC_PRIV_FLAGS_LEN_90B	  BIT_ULL(3)
+#define ROC_PRIV_FLAGS_EXDSA	  BIT_ULL(4)
+#define ROC_PRIV_FLAGS_VLAN_EXDSA BIT_ULL(5)
+#define ROC_PRIV_FLAGS_CUSTOM	  BIT_ULL(63)
 	uint64_t __io mode;
 #define PKIND_TX BIT_ULL(0)
 #define PKIND_RX BIT_ULL(1)
@@ -403,6 +421,9 @@ struct lmtst_tbl_setup_req {
 	uint64_t __io dis_line_pref : 1;
 	uint64_t __io ssow_pf_func : 13;
 	uint16_t __io pcifunc;
+	uint8_t __io use_local_lmt_region;
+	uint64_t __io lmt_iova;
+	uint64_t __io rsvd[2]; /* Future use */
 };
 
 /* CGX mbox message formats */
@@ -706,6 +727,7 @@ struct nix_lf_alloc_req {
 	uint64_t __io rx_cfg; /* See NIX_AF_LF(0..127)_RX_CFG */
 	uint64_t __io way_mask;
 #define NIX_LF_RSS_TAG_LSB_AS_ADDER BIT_ULL(0)
+#define NIX_LF_LBK_BLK_SEL	    BIT_ULL(1)
 	uint64_t flags;
 };
 
@@ -754,6 +776,10 @@ struct nix_cn10k_aq_enq_req {
 		__io struct nix_rsse_s rss;
 		/* Valid when op == WRITE/INIT and ctype == NIX_AQ_CTYPE_MCE */
 		__io struct nix_rx_mce_s mce;
+		/* Valid when op == WRITE/INIT and
+		 * ctype == NIX_AQ_CTYPE_BAND_PROF
+		 */
+		__io struct nix_band_prof_s prof;
 	};
 	/* Mask data when op == WRITE (1=write, 0=don't write) */
 	union {
@@ -767,6 +793,8 @@ struct nix_cn10k_aq_enq_req {
 		__io struct nix_rsse_s rss_mask;
 		/* Valid when op == WRITE and ctype == NIX_AQ_CTYPE_MCE */
 		__io struct nix_rx_mce_s mce_mask;
+		/* Valid when op == WRITE and ctype == NIX_AQ_CTYPE_BAND_PROF */
+		__io struct nix_band_prof_s prof_mask;
 	};
 };
 
@@ -778,6 +806,7 @@ struct nix_cn10k_aq_enq_rsp {
 		struct nix_cq_ctx_s cq;
 		struct nix_rsse_s rss;
 		struct nix_rx_mce_s mce;
+		struct nix_band_prof_s prof;
 	};
 };
 
@@ -1112,6 +1141,27 @@ struct nix_hw_info {
 	uint16_t __io rsvd[15];
 };
 
+struct nix_bandprof_alloc_req {
+	struct mbox_msghdr hdr;
+	/* Count of profiles needed per layer */
+	uint16_t __io prof_count[NIX_RX_BAND_PROF_LAYER_MAX];
+};
+
+struct nix_bandprof_alloc_rsp {
+	struct mbox_msghdr hdr;
+	uint16_t __io prof_count[NIX_RX_BAND_PROF_LAYER_MAX];
+
+#define BANDPROF_PER_PFFUNC 64
+	uint16_t __io prof_idx[NIX_RX_BAND_PROF_LAYER_MAX][BANDPROF_PER_PFFUNC];
+};
+
+struct nix_bandprof_free_req {
+	struct mbox_msghdr hdr;
+	uint8_t __io free_all;
+	uint16_t __io prof_count[NIX_RX_BAND_PROF_LAYER_MAX];
+	uint16_t __io prof_idx[NIX_RX_BAND_PROF_LAYER_MAX][BANDPROF_PER_PFFUNC];
+};
+
 /* SSO mailbox error codes
  * Range 501 - 600.
  */
@@ -1328,6 +1378,9 @@ struct cpt_rxc_time_cfg_req {
 struct cpt_rx_inline_lf_cfg_msg {
 	struct mbox_msghdr hdr;
 	uint16_t __io sso_pf_func;
+	uint16_t __io param1;
+	uint16_t __io param2;
+	uint16_t __io reserved;
 };
 
 enum cpt_eng_type {

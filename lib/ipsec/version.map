@@ -1,4 +1,4 @@
-DPDK_21 {
+DPDK_22 {
 	global:
 
 	rte_ipsec_pkt_crypto_group;
@@ -18,4 +18,13 @@ DPDK_21 {
 	rte_ipsec_session_prepare;
 
 	local: *;
+};
+
+EXPERIMENTAL {
+	global:
+
+	# added in 21.11
+	rte_ipsec_telemetry_sa_add;
+	rte_ipsec_telemetry_sa_del;
+
 };

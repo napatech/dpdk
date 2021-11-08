@@ -203,14 +203,6 @@ mlx5_os_get_devx_uar_page_id(void *uar)
 #endif
 }
 
-__rte_internal
-static inline void *
-mlx5_os_alloc_pd(void *ctx)
-{
-	return mlx5_glue->alloc_pd(ctx);
-}
-
-__rte_internal
 static inline int
 mlx5_os_dealloc_pd(void *pd)
 {
@@ -289,8 +281,7 @@ mlx5_os_free(void *addr)
 	free(addr);
 }
 
-__rte_internal
-struct ibv_device *
-mlx5_os_get_ibv_device(struct rte_pci_addr *addr);
+void
+mlx5_set_context_attr(struct rte_device *dev, struct ibv_context *ctx);
 
 #endif /* RTE_PMD_MLX5_COMMON_OS_H_ */

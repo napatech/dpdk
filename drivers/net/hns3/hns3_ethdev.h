@@ -188,13 +188,12 @@ enum hns3_media_type {
 
 struct hns3_mac {
 	uint8_t mac_addr[RTE_ETHER_ADDR_LEN];
-	bool default_addr_setted; /* whether default addr(mac_addr) is set */
 	uint8_t media_type;
 	uint8_t phy_addr;
-	uint8_t link_duplex  : 1; /* ETH_LINK_[HALF/FULL]_DUPLEX */
-	uint8_t link_autoneg : 1; /* ETH_LINK_[AUTONEG/FIXED] */
-	uint8_t link_status  : 1; /* ETH_LINK_[DOWN/UP] */
-	uint32_t link_speed;      /* ETH_SPEED_NUM_ */
+	uint8_t link_duplex  : 1; /* RTE_ETH_LINK_[HALF/FULL]_DUPLEX */
+	uint8_t link_autoneg : 1; /* RTE_ETH_LINK_[AUTONEG/FIXED] */
+	uint8_t link_status  : 1; /* RTE_ETH_LINK_[DOWN/UP] */
+	uint32_t link_speed;      /* RTE_ETH_SPEED_NUM_ */
 	/*
 	 * Some firmware versions support only the SFP speed query. In addition
 	 * to the SFP speed query, some firmware supports the query of the speed
@@ -481,6 +480,11 @@ struct hns3_hw {
 	struct hns3_cmq cmq;
 	struct hns3_mbx_resp_status mbx_resp; /* mailbox response */
 	struct hns3_mac mac;
+	/*
+	 * This flag indicates dev_set_link_down() API is called, and is cleared
+	 * by dev_set_link_up() or dev_start().
+	 */
+	bool set_link_down;
 	unsigned int secondary_cnt; /* Number of secondary processes init'd. */
 	struct hns3_tqp_stats tqp_stats;
 	/* Include Mac stats | Rx stats | Tx stats */
@@ -488,6 +492,7 @@ struct hns3_hw {
 	struct hns3_rx_missed_stats imissed_stats;
 	uint64_t oerror_stats;
 	uint32_t fw_version;
+	uint16_t pf_vf_if_version;  /* version of communication interface */
 
 	uint16_t num_msi;
 	uint16_t total_tqps_num;    /* total task queue pairs of this PF */
@@ -617,7 +622,7 @@ struct hns3_hw {
 	 *  - HNS3_SPECIAL_PORT_SW_CKSUM_MODE
 	 *     In this mode, HW can not do checksum for special UDP port like
 	 *     4789, 4790, 6081 for non-tunnel UDP packets and UDP tunnel
-	 *     packets without the PKT_TX_TUNEL_MASK in the mbuf. So, PMD need
+	 *     packets without the RTE_MBUF_F_TX_TUNEL_MASK in the mbuf. So, PMD need
 	 *     do the checksum for these packets to avoid a checksum error.
 	 *
 	 *  - HNS3_SPECIAL_PORT_HW_CKSUM_MODE
@@ -629,6 +634,9 @@ struct hns3_hw {
 	struct hns3_port_base_vlan_config port_base_vlan_cfg;
 
 	pthread_mutex_t flows_lock; /* rte_flow ops lock */
+	struct hns3_fdir_rule_list flow_fdir_list; /* flow fdir rule list */
+	struct hns3_rss_filter_list flow_rss_list; /* flow RSS rule list */
+	struct hns3_flow_mem_list flow_list;
 
 	/*
 	 * PMD setup and configuration is not thread safe. Since it is not
@@ -696,6 +704,8 @@ struct hns3_vtag_cfg {
 enum hns3_mp_req_type {
 	HNS3_MP_REQ_START_RXTX = 1,
 	HNS3_MP_REQ_STOP_RXTX,
+	HNS3_MP_REQ_START_TX,
+	HNS3_MP_REQ_STOP_TX,
 	HNS3_MP_REQ_MAX
 };
 
@@ -782,6 +792,7 @@ struct hns3_pf {
 	uint8_t prio_tc[HNS3_MAX_USER_PRIO]; /* TC indexed by prio */
 	uint16_t pause_time;
 	bool support_fc_autoneg;       /* support FC autonegotiate */
+	bool support_multi_tc_pause;
 
 	uint16_t wanted_umv_size;
 	uint16_t max_umv_size;
@@ -840,6 +851,7 @@ struct hns3_adapter {
 	uint32_t tx_func_hint;
 
 	uint64_t dev_caps_mask;
+	uint16_t mbx_time_limit_ms; /* wait time for mbx message */
 
 	struct hns3_ptype_table ptype_tbl __rte_cache_aligned;
 };
@@ -857,48 +869,25 @@ enum {
 
 #define HNS3_DEVARG_DEV_CAPS_MASK	"dev_caps_mask"
 
+#define HNS3_DEVARG_MBX_TIME_LIMIT_MS	"mbx_time_limit_ms"
+
 enum {
 	HNS3_DEV_SUPPORT_DCB_B,
 	HNS3_DEV_SUPPORT_COPPER_B,
 	HNS3_DEV_SUPPORT_FD_QUEUE_REGION_B,
 	HNS3_DEV_SUPPORT_PTP_B,
+	HNS3_DEV_SUPPORT_TX_PUSH_B,
 	HNS3_DEV_SUPPORT_INDEP_TXRX_B,
 	HNS3_DEV_SUPPORT_STASH_B,
 	HNS3_DEV_SUPPORT_RXD_ADV_LAYOUT_B,
 	HNS3_DEV_SUPPORT_OUTER_UDP_CKSUM_B,
 	HNS3_DEV_SUPPORT_RAS_IMP_B,
+	HNS3_DEV_SUPPORT_TM_B,
+	HNS3_DEV_SUPPORT_VF_VLAN_FLT_MOD_B,
 };
 
-#define hns3_dev_dcb_supported(hw) \
-	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_DCB_B)
-
-/* Support copper media type */
-#define hns3_dev_copper_supported(hw) \
-	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_COPPER_B)
-
-/* Support the queue region action rule of flow directory */
-#define hns3_dev_fd_queue_region_supported(hw) \
-	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_FD_QUEUE_REGION_B)
-
-/* Support PTP timestamp offload */
-#define hns3_dev_ptp_supported(hw) \
-	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_PTP_B)
-
-/* Support to Independently enable/disable/reset Tx or Rx queues */
-#define hns3_dev_indep_txrx_supported(hw) \
-	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_INDEP_TXRX_B)
-
-#define hns3_dev_stash_supported(hw) \
-	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_STASH_B)
-
-#define hns3_dev_rxd_adv_layout_supported(hw) \
-	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_RXD_ADV_LAYOUT_B)
-
-#define hns3_dev_outer_udp_cksum_supported(hw) \
-	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_OUTER_UDP_CKSUM_B)
-
-#define hns3_dev_ras_imp_supported(hw) \
-	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_RAS_IMP_B)
+#define hns3_dev_get_support(hw, _name) \
+	hns3_get_bit((hw)->capability, HNS3_DEV_SUPPORT_##_name##_B)
 
 #define HNS3_DEV_PRIVATE_TO_HW(adapter) \
 	(&((struct hns3_adapter *)adapter)->hw)
@@ -1090,9 +1079,9 @@ static inline uint64_t
 hns3_txvlan_cap_get(struct hns3_hw *hw)
 {
 	if (hw->port_base_vlan_cfg.state)
-		return DEV_TX_OFFLOAD_VLAN_INSERT;
+		return RTE_ETH_TX_OFFLOAD_VLAN_INSERT;
 	else
-		return DEV_TX_OFFLOAD_VLAN_INSERT | DEV_TX_OFFLOAD_QINQ_INSERT;
+		return RTE_ETH_TX_OFFLOAD_VLAN_INSERT | RTE_ETH_TX_OFFLOAD_QINQ_INSERT;
 }
 
 #endif /* _HNS3_ETHDEV_H_ */

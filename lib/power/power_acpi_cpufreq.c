@@ -19,41 +19,10 @@
 #include "power_acpi_cpufreq.h"
 #include "power_common.h"
 
-#ifdef RTE_LIBRTE_POWER_DEBUG
-#define POWER_DEBUG_TRACE(fmt, args...) do { \
-		RTE_LOG(ERR, POWER, "%s: " fmt, __func__, ## args); \
-} while (0)
-#else
-#define POWER_DEBUG_TRACE(fmt, args...)
-#endif
-
-#define FOPEN_OR_ERR_RET(f, retval) do { \
-		if ((f) == NULL) { \
-			RTE_LOG(ERR, POWER, "File not opened\n"); \
-			return retval; \
-		} \
-} while (0)
-
-#define FOPS_OR_NULL_GOTO(ret, label) do { \
-		if ((ret) == NULL) { \
-			RTE_LOG(ERR, POWER, "fgets returns nothing\n"); \
-			goto label; \
-		} \
-} while (0)
-
-#define FOPS_OR_ERR_GOTO(ret, label) do { \
-		if ((ret) < 0) { \
-			RTE_LOG(ERR, POWER, "File operations failed\n"); \
-			goto label; \
-		} \
-} while (0)
-
 #define STR_SIZE     1024
 #define POWER_CONVERT_TO_DECIMAL 10
 
 #define POWER_GOVERNOR_USERSPACE "userspace"
-#define POWER_SYSFILE_GOVERNOR   \
-		"/sys/devices/system/cpu/cpu%u/cpufreq/scaling_governor"
 #define POWER_SYSFILE_AVAIL_FREQ \
 		"/sys/devices/system/cpu/cpu%u/cpufreq/scaling_available_frequencies"
 #define POWER_SYSFILE_SETSPEED   \
@@ -78,7 +47,7 @@ enum power_state {
 /**
  * Power info per lcore.
  */
-struct rte_power_info {
+struct acpi_power_info {
 	unsigned int lcore_id;                   /**< Logical core id */
 	uint32_t freqs[RTE_MAX_LCORE_FREQS]; /**< Frequency array */
 	uint32_t nb_freqs;                   /**< number of available freqs */
@@ -90,14 +59,14 @@ struct rte_power_info {
 	uint16_t turbo_enable;               /**< Turbo Boost enable/disable */
 } __rte_cache_aligned;
 
-static struct rte_power_info lcore_power_info[RTE_MAX_LCORE];
+static struct acpi_power_info lcore_power_info[RTE_MAX_LCORE];
 
 /**
  * It is to set specific freq for specific logical core, according to the index
  * of supported frequencies.
  */
 static int
-set_freq_internal(struct rte_power_info *pi, uint32_t idx)
+set_freq_internal(struct acpi_power_info *pi, uint32_t idx)
 {
 	if (idx >= RTE_MAX_LCORE_FREQS || idx >= pi->nb_freqs) {
 		RTE_LOG(ERR, POWER, "Invalid frequency index %u, which "
@@ -133,55 +102,20 @@ set_freq_internal(struct rte_power_info *pi, uint32_t idx)
  * governor will be saved for rolling back.
  */
 static int
-power_set_governor_userspace(struct rte_power_info *pi)
+power_set_governor_userspace(struct acpi_power_info *pi)
 {
-	FILE *f;
-	int ret = -1;
-	char buf[BUFSIZ];
-	char fullpath[PATH_MAX];
-	char *s;
-	int val;
+	return power_set_governor(pi->lcore_id, POWER_GOVERNOR_USERSPACE,
+			pi->governor_ori, sizeof(pi->governor_ori));
+}
 
-	snprintf(fullpath, sizeof(fullpath), POWER_SYSFILE_GOVERNOR,
-			pi->lcore_id);
-	f = fopen(fullpath, "rw+");
-	FOPEN_OR_ERR_RET(f, ret);
-
-	s = fgets(buf, sizeof(buf), f);
-	FOPS_OR_NULL_GOTO(s, out);
-	/* Strip off terminating '\n' */
-	strtok(buf, "\n");
-
-	/* Save the original governor */
-	rte_strscpy(pi->governor_ori, buf, sizeof(pi->governor_ori));
-
-	/* Check if current governor is userspace */
-	if (strncmp(buf, POWER_GOVERNOR_USERSPACE,
-			sizeof(POWER_GOVERNOR_USERSPACE)) == 0) {
-		ret = 0;
-		POWER_DEBUG_TRACE("Power management governor of lcore %u is "
-				"already userspace\n", pi->lcore_id);
-		goto out;
-	}
-
-	/* Write 'userspace' to the governor */
-	val = fseek(f, 0, SEEK_SET);
-	FOPS_OR_ERR_GOTO(val, out);
-
-	val = fputs(POWER_GOVERNOR_USERSPACE, f);
-	FOPS_OR_ERR_GOTO(val, out);
-
-	/* We need to flush to see if the fputs succeeds */
-	val = fflush(f);
-	FOPS_OR_ERR_GOTO(val, out);
-
-	ret = 0;
-	RTE_LOG(INFO, POWER, "Power management governor of lcore %u has been "
-			"set to user space successfully\n", pi->lcore_id);
-out:
-	fclose(f);
-
-	return ret;
+/**
+ * It is to check the governor and then set the original governor back if
+ * needed by writing the sys file.
+ */
+static int
+power_set_governor_original(struct acpi_power_info *pi)
+{
+	return power_set_governor(pi->lcore_id, pi->governor_ori, NULL, 0);
 }
 
 /**
@@ -189,28 +123,27 @@ out:
  * sys file.
  */
 static int
-power_get_available_freqs(struct rte_power_info *pi)
+power_get_available_freqs(struct acpi_power_info *pi)
 {
 	FILE *f;
 	int ret = -1, i, count;
 	char *p;
 	char buf[BUFSIZ];
-	char fullpath[PATH_MAX];
 	char *freqs[RTE_MAX_LCORE_FREQS];
-	char *s;
 
-	snprintf(fullpath, sizeof(fullpath), POWER_SYSFILE_AVAIL_FREQ,
-			pi->lcore_id);
-	f = fopen(fullpath, "r");
-	FOPEN_OR_ERR_RET(f, ret);
+	open_core_sysfs_file(&f, "r", POWER_SYSFILE_AVAIL_FREQ, pi->lcore_id);
+	if (f == NULL) {
+		RTE_LOG(ERR, POWER, "failed to open %s\n",
+				POWER_SYSFILE_AVAIL_FREQ);
+		goto out;
+	}
 
-	s = fgets(buf, sizeof(buf), f);
-	FOPS_OR_NULL_GOTO(s, out);
-
-	/* Strip the line break if there is */
-	p = strchr(buf, '\n');
-	if (p != NULL)
-		*p = 0;
+	ret = read_core_sysfs_s(f, buf, sizeof(buf));
+	if ((ret) < 0) {
+		RTE_LOG(ERR, POWER, "Failed to read %s\n",
+				POWER_SYSFILE_AVAIL_FREQ);
+		goto out;
+	}
 
 	/* Split string into at most RTE_MAX_LCORE_FREQS frequencies */
 	count = rte_strsplit(buf, sizeof(buf), freqs,
@@ -250,7 +183,8 @@ power_get_available_freqs(struct rte_power_info *pi)
 	POWER_DEBUG_TRACE("%d frequency(s) of lcore %u are available\n",
 			count, pi->lcore_id);
 out:
-	fclose(f);
+	if (f != NULL)
+		fclose(f);
 
 	return ret;
 }
@@ -259,21 +193,26 @@ out:
  * It is to fopen the sys file for the future setting the lcore frequency.
  */
 static int
-power_init_for_setting_freq(struct rte_power_info *pi)
+power_init_for_setting_freq(struct acpi_power_info *pi)
 {
 	FILE *f;
-	char fullpath[PATH_MAX];
 	char buf[BUFSIZ];
 	uint32_t i, freq;
-	char *s;
+	int ret;
 
-	snprintf(fullpath, sizeof(fullpath), POWER_SYSFILE_SETSPEED,
-			pi->lcore_id);
-	f = fopen(fullpath, "rw+");
-	FOPEN_OR_ERR_RET(f, -1);
+	open_core_sysfs_file(&f, "rw+", POWER_SYSFILE_SETSPEED, pi->lcore_id);
+	if (f == NULL) {
+		RTE_LOG(ERR, POWER, "Failed to open %s\n",
+				POWER_SYSFILE_SETSPEED);
+		goto err;
+	}
 
-	s = fgets(buf, sizeof(buf), f);
-	FOPS_OR_NULL_GOTO(s, out);
+	ret = read_core_sysfs_s(f, buf, sizeof(buf));
+	if ((ret) < 0) {
+		RTE_LOG(ERR, POWER, "Failed to read %s\n",
+				POWER_SYSFILE_SETSPEED);
+		goto err;
+	}
 
 	freq = strtoul(buf, NULL, POWER_CONVERT_TO_DECIMAL);
 	for (i = 0; i < pi->nb_freqs; i++) {
@@ -284,8 +223,9 @@ power_init_for_setting_freq(struct rte_power_info *pi)
 		}
 	}
 
-out:
-	fclose(f);
+err:
+	if (f != NULL)
+		fclose(f);
 
 	return -1;
 }
@@ -299,7 +239,7 @@ power_acpi_cpufreq_check_supported(void)
 int
 power_acpi_cpufreq_init(unsigned int lcore_id)
 {
-	struct rte_power_info *pi;
+	struct acpi_power_info *pi;
 	uint32_t exp_state;
 
 	if (lcore_id >= RTE_MAX_LCORE) {
@@ -369,58 +309,10 @@ fail:
 	return -1;
 }
 
-/**
- * It is to check the governor and then set the original governor back if
- * needed by writing the sys file.
- */
-static int
-power_set_governor_original(struct rte_power_info *pi)
-{
-	FILE *f;
-	int ret = -1;
-	char buf[BUFSIZ];
-	char fullpath[PATH_MAX];
-	char *s;
-	int val;
-
-	snprintf(fullpath, sizeof(fullpath), POWER_SYSFILE_GOVERNOR,
-			pi->lcore_id);
-	f = fopen(fullpath, "rw+");
-	FOPEN_OR_ERR_RET(f, ret);
-
-	s = fgets(buf, sizeof(buf), f);
-	FOPS_OR_NULL_GOTO(s, out);
-
-	/* Check if the governor to be set is the same as current */
-	if (strncmp(buf, pi->governor_ori, sizeof(pi->governor_ori)) == 0) {
-		ret = 0;
-		POWER_DEBUG_TRACE("Power management governor of lcore %u "
-				"has already been set to %s\n",
-				pi->lcore_id, pi->governor_ori);
-		goto out;
-	}
-
-	/* Write back the original governor */
-	val = fseek(f, 0, SEEK_SET);
-	FOPS_OR_ERR_GOTO(val, out);
-
-	val = fputs(pi->governor_ori, f);
-	FOPS_OR_ERR_GOTO(val, out);
-
-	ret = 0;
-	RTE_LOG(INFO, POWER, "Power management governor of lcore %u "
-			"has been set back to %s successfully\n",
-			pi->lcore_id, pi->governor_ori);
-out:
-	fclose(f);
-
-	return ret;
-}
-
 int
 power_acpi_cpufreq_exit(unsigned int lcore_id)
 {
-	struct rte_power_info *pi;
+	struct acpi_power_info *pi;
 	uint32_t exp_state;
 
 	if (lcore_id >= RTE_MAX_LCORE) {
@@ -475,7 +367,7 @@ fail:
 uint32_t
 power_acpi_cpufreq_freqs(unsigned int lcore_id, uint32_t *freqs, uint32_t num)
 {
-	struct rte_power_info *pi;
+	struct acpi_power_info *pi;
 
 	if (lcore_id >= RTE_MAX_LCORE) {
 		RTE_LOG(ERR, POWER, "Invalid lcore ID\n");
@@ -522,7 +414,7 @@ power_acpi_cpufreq_set_freq(unsigned int lcore_id, uint32_t index)
 int
 power_acpi_cpufreq_freq_down(unsigned int lcore_id)
 {
-	struct rte_power_info *pi;
+	struct acpi_power_info *pi;
 
 	if (lcore_id >= RTE_MAX_LCORE) {
 		RTE_LOG(ERR, POWER, "Invalid lcore ID\n");
@@ -540,7 +432,7 @@ power_acpi_cpufreq_freq_down(unsigned int lcore_id)
 int
 power_acpi_cpufreq_freq_up(unsigned int lcore_id)
 {
-	struct rte_power_info *pi;
+	struct acpi_power_info *pi;
 
 	if (lcore_id >= RTE_MAX_LCORE) {
 		RTE_LOG(ERR, POWER, "Invalid lcore ID\n");
@@ -581,7 +473,7 @@ power_acpi_cpufreq_freq_max(unsigned int lcore_id)
 int
 power_acpi_cpufreq_freq_min(unsigned int lcore_id)
 {
-	struct rte_power_info *pi;
+	struct acpi_power_info *pi;
 
 	if (lcore_id >= RTE_MAX_LCORE) {
 		RTE_LOG(ERR, POWER, "Invalid lcore ID\n");
@@ -598,7 +490,7 @@ power_acpi_cpufreq_freq_min(unsigned int lcore_id)
 int
 power_acpi_turbo_status(unsigned int lcore_id)
 {
-	struct rte_power_info *pi;
+	struct acpi_power_info *pi;
 
 	if (lcore_id >= RTE_MAX_LCORE) {
 		RTE_LOG(ERR, POWER, "Invalid lcore ID\n");
@@ -614,7 +506,7 @@ power_acpi_turbo_status(unsigned int lcore_id)
 int
 power_acpi_enable_turbo(unsigned int lcore_id)
 {
-	struct rte_power_info *pi;
+	struct acpi_power_info *pi;
 
 	if (lcore_id >= RTE_MAX_LCORE) {
 		RTE_LOG(ERR, POWER, "Invalid lcore ID\n");
@@ -647,7 +539,7 @@ power_acpi_enable_turbo(unsigned int lcore_id)
 int
 power_acpi_disable_turbo(unsigned int lcore_id)
 {
-	struct rte_power_info *pi;
+	struct acpi_power_info *pi;
 
 	if (lcore_id >= RTE_MAX_LCORE) {
 		RTE_LOG(ERR, POWER, "Invalid lcore ID\n");
@@ -674,7 +566,7 @@ power_acpi_disable_turbo(unsigned int lcore_id)
 int power_acpi_get_capabilities(unsigned int lcore_id,
 		struct rte_power_core_capabilities *caps)
 {
-	struct rte_power_info *pi;
+	struct acpi_power_info *pi;
 
 	if (lcore_id >= RTE_MAX_LCORE) {
 		RTE_LOG(ERR, POWER, "Invalid lcore ID\n");

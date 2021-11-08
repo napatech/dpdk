@@ -22,10 +22,11 @@ exclude() # <pattern>
 	case $(basename $dir) in
 		bnxt)
 			filter=$(sed -n "/$1/{N;/TYPE_NOT_SUPPORTED/P;}" \
-				$dir/tf_ulp/ulp_template_db{,_tbl}.c |
+				$dir/tf_ulp/ulp_rte_handler_tbl.c |
 				grep -wo "$1[[:alnum:]_]*" | sort -u |
 				tr '\n' '|' | sed 's,.$,\n,')
-			grep -vE "$filter";;
+			exceptions='RTE_FLOW_ACTION_TYPE_SHARED'
+			grep -vE "$filter" | grep -vE $exceptions;;
 		*) cat
 	esac
 }

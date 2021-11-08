@@ -24,22 +24,22 @@
 #define IAVF_VPMD_TX_MAX_FREE_BUF 64
 
 #define IAVF_TX_NO_VECTOR_FLAGS (				 \
-		DEV_TX_OFFLOAD_MULTI_SEGS |		 \
-		DEV_TX_OFFLOAD_TCP_TSO)
+		RTE_ETH_TX_OFFLOAD_MULTI_SEGS |		 \
+		RTE_ETH_TX_OFFLOAD_TCP_TSO)
 
 #define IAVF_TX_VECTOR_OFFLOAD (				 \
-		DEV_TX_OFFLOAD_VLAN_INSERT |		 \
-		DEV_TX_OFFLOAD_QINQ_INSERT |		 \
-		DEV_TX_OFFLOAD_IPV4_CKSUM |		 \
-		DEV_TX_OFFLOAD_SCTP_CKSUM |		 \
-		DEV_TX_OFFLOAD_UDP_CKSUM |		 \
-		DEV_TX_OFFLOAD_TCP_CKSUM)
+		RTE_ETH_TX_OFFLOAD_VLAN_INSERT |		 \
+		RTE_ETH_TX_OFFLOAD_QINQ_INSERT |		 \
+		RTE_ETH_TX_OFFLOAD_IPV4_CKSUM |		 \
+		RTE_ETH_TX_OFFLOAD_SCTP_CKSUM |		 \
+		RTE_ETH_TX_OFFLOAD_UDP_CKSUM |		 \
+		RTE_ETH_TX_OFFLOAD_TCP_CKSUM)
 
 #define IAVF_RX_VECTOR_OFFLOAD (				 \
-		DEV_RX_OFFLOAD_CHECKSUM |		 \
-		DEV_RX_OFFLOAD_SCTP_CKSUM |		 \
-		DEV_RX_OFFLOAD_VLAN |		 \
-		DEV_RX_OFFLOAD_RSS_HASH)
+		RTE_ETH_RX_OFFLOAD_CHECKSUM |		 \
+		RTE_ETH_RX_OFFLOAD_SCTP_CKSUM |		 \
+		RTE_ETH_RX_OFFLOAD_VLAN |		 \
+		RTE_ETH_RX_OFFLOAD_RSS_HASH)
 
 #define IAVF_VECTOR_PATH 0
 #define IAVF_VECTOR_OFFLOAD_PATH 1
@@ -52,23 +52,21 @@
 #define IAVF_TSO_MAX_SEG          UINT8_MAX
 #define IAVF_TX_MAX_MTU_SEG       8
 
-#define IAVF_TX_CKSUM_OFFLOAD_MASK (		 \
-		PKT_TX_IP_CKSUM |		 \
-		PKT_TX_L4_MASK |		 \
-		PKT_TX_TCP_SEG)
+#define IAVF_TX_CKSUM_OFFLOAD_MASK (RTE_MBUF_F_TX_IP_CKSUM |		 \
+		RTE_MBUF_F_TX_L4_MASK |		 \
+		RTE_MBUF_F_TX_TCP_SEG)
 
-#define IAVF_TX_OFFLOAD_MASK (  \
-		PKT_TX_OUTER_IPV6 |		 \
-		PKT_TX_OUTER_IPV4 |		 \
-		PKT_TX_IPV6 |			 \
-		PKT_TX_IPV4 |			 \
-		PKT_TX_VLAN_PKT |		 \
-		PKT_TX_IP_CKSUM |		 \
-		PKT_TX_L4_MASK |		 \
-		PKT_TX_TCP_SEG)
+#define IAVF_TX_OFFLOAD_MASK (RTE_MBUF_F_TX_OUTER_IPV6 |		 \
+		RTE_MBUF_F_TX_OUTER_IPV4 |		 \
+		RTE_MBUF_F_TX_IPV6 |			 \
+		RTE_MBUF_F_TX_IPV4 |			 \
+		RTE_MBUF_F_TX_VLAN |		 \
+		RTE_MBUF_F_TX_IP_CKSUM |		 \
+		RTE_MBUF_F_TX_L4_MASK |		 \
+		RTE_MBUF_F_TX_TCP_SEG)
 
 #define IAVF_TX_OFFLOAD_NOTSUP_MASK \
-		(PKT_TX_OFFLOAD_MASK ^ IAVF_TX_OFFLOAD_MASK)
+		(RTE_MBUF_F_TX_OFFLOAD_MASK ^ IAVF_TX_OFFLOAD_MASK)
 
 /**
  * Rx Flex Descriptors
@@ -252,6 +250,7 @@ struct iavf_tx_queue {
 #define IAVF_TX_FLAGS_VLAN_TAG_LOC_L2TAG1	BIT(0)
 #define IAVF_TX_FLAGS_VLAN_TAG_LOC_L2TAG2	BIT(1)
 	uint8_t vlan_flag;
+	uint8_t tc;
 };
 
 /* Offload features */
@@ -419,7 +418,7 @@ int iavf_dev_rx_queue_setup(struct rte_eth_dev *dev,
 
 int iavf_dev_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id);
 int iavf_dev_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id);
-void iavf_dev_rx_queue_release(void *rxq);
+void iavf_dev_rx_queue_release(struct rte_eth_dev *dev, uint16_t qid);
 
 int iavf_dev_tx_queue_setup(struct rte_eth_dev *dev,
 			   uint16_t queue_idx,
@@ -429,7 +428,7 @@ int iavf_dev_tx_queue_setup(struct rte_eth_dev *dev,
 int iavf_dev_tx_queue_start(struct rte_eth_dev *dev, uint16_t tx_queue_id);
 int iavf_dev_tx_queue_stop(struct rte_eth_dev *dev, uint16_t tx_queue_id);
 int iavf_dev_tx_done_cleanup(void *txq, uint32_t free_cnt);
-void iavf_dev_tx_queue_release(void *txq);
+void iavf_dev_tx_queue_release(struct rte_eth_dev *dev, uint16_t qid);
 void iavf_stop_queues(struct rte_eth_dev *dev);
 uint16_t iavf_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		       uint16_t nb_pkts);
@@ -452,7 +451,7 @@ void iavf_dev_rxq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 			  struct rte_eth_rxq_info *qinfo);
 void iavf_dev_txq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 			  struct rte_eth_txq_info *qinfo);
-uint32_t iavf_dev_rxq_count(struct rte_eth_dev *dev, uint16_t queue_id);
+uint32_t iavf_dev_rxq_count(void *rx_queue);
 int iavf_dev_rx_desc_status(void *rx_queue, uint16_t offset);
 int iavf_dev_tx_desc_status(void *tx_queue, uint16_t offset);
 
@@ -576,8 +575,8 @@ void iavf_dump_tx_descriptor(const struct iavf_tx_queue *txq,
 
 #define FDIR_PROC_ENABLE_PER_QUEUE(ad, on) do { \
 	int i; \
-	for (i = 0; i < (ad)->eth_dev->data->nb_rx_queues; i++) { \
-		struct iavf_rx_queue *rxq = (ad)->eth_dev->data->rx_queues[i]; \
+	for (i = 0; i < (ad)->dev_data->nb_rx_queues; i++) { \
+		struct iavf_rx_queue *rxq = (ad)->dev_data->rx_queues[i]; \
 		if (!rxq) \
 			continue; \
 		rxq->fdir_enabled = on; \

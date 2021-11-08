@@ -176,12 +176,12 @@ pipeline_ethdev_setup(struct evt_test *test, struct evt_options *opt)
 	struct rte_eth_rxconf rx_conf;
 	struct rte_eth_conf port_conf = {
 		.rxmode = {
-			.mq_mode = ETH_MQ_RX_RSS,
+			.mq_mode = RTE_ETH_MQ_RX_RSS,
 		},
 		.rx_adv_conf = {
 			.rss_conf = {
 				.rss_key = NULL,
-				.rss_hf = ETH_RSS_IP,
+				.rss_hf = RTE_ETH_RSS_IP,
 			},
 		},
 	};
@@ -197,9 +197,8 @@ pipeline_ethdev_setup(struct evt_test *test, struct evt_options *opt)
 		return -EINVAL;
 	}
 
-	port_conf.rxmode.max_rx_pkt_len = opt->max_pkt_sz;
-	if (opt->max_pkt_sz > RTE_ETHER_MAX_LEN)
-		port_conf.rxmode.offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
+	port_conf.rxmode.mtu = opt->max_pkt_sz - RTE_ETHER_HDR_LEN -
+		RTE_ETHER_CRC_LEN;
 
 	t->internal_port = 1;
 	RTE_ETH_FOREACH_DEV(i) {
@@ -224,7 +223,7 @@ pipeline_ethdev_setup(struct evt_test *test, struct evt_options *opt)
 
 		if (!(caps & RTE_EVENT_ETH_RX_ADAPTER_CAP_INTERNAL_PORT))
 			local_port_conf.rxmode.offloads |=
-				DEV_RX_OFFLOAD_RSS_HASH;
+				RTE_ETH_RX_OFFLOAD_RSS_HASH;
 
 		ret = rte_eth_dev_info_get(i, &dev_info);
 		if (ret != 0) {
@@ -234,9 +233,9 @@ pipeline_ethdev_setup(struct evt_test *test, struct evt_options *opt)
 		}
 
 		/* Enable mbuf fast free if PMD has the capability. */
-		if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
+		if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
 			local_port_conf.txmode.offloads |=
-				DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+				RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
 
 		rx_conf = dev_info.default_rxconf;
 		rx_conf.offloads = port_conf.rxmode.offloads;
@@ -259,9 +258,10 @@ pipeline_ethdev_setup(struct evt_test *test, struct evt_options *opt)
 		}
 
 		for (j = 0; j < opt->eth_queues; j++) {
-			if (rte_eth_rx_queue_setup(i, j, NB_RX_DESC,
-						   rte_socket_id(), &rx_conf,
-						   t->pool) < 0) {
+			if (rte_eth_rx_queue_setup(
+				    i, j, NB_RX_DESC, rte_socket_id(), &rx_conf,
+				    opt->per_port_pool ? t->pool[i] :
+							      t->pool[0]) < 0) {
 				evt_err("Failed to setup eth port [%d] rx_queue: %d.",
 					i, 0);
 				return -EINVAL;
@@ -331,7 +331,6 @@ pipeline_event_rx_adapter_setup(struct evt_options *opt, uint8_t stride,
 	uint16_t prod;
 	struct rte_mempool *vector_pool = NULL;
 	struct rte_event_eth_rx_adapter_queue_conf queue_conf;
-	struct rte_event_eth_rx_adapter_event_vector_config vec_conf;
 
 	memset(&queue_conf, 0,
 			sizeof(struct rte_event_eth_rx_adapter_queue_conf));
@@ -397,8 +396,12 @@ pipeline_event_rx_adapter_setup(struct evt_options *opt, uint8_t stride,
 			}
 
 			if (cap & RTE_EVENT_ETH_RX_ADAPTER_CAP_EVENT_VECTOR) {
+				queue_conf.vector_sz = opt->vector_size;
+				queue_conf.vector_timeout_ns =
+					opt->vector_tmo_nsec;
 				queue_conf.rx_queue_flags |=
 				RTE_EVENT_ETH_RX_ADAPTER_QUEUE_EVENT_VECTOR;
+				queue_conf.vector_mp = vector_pool;
 			} else {
 				evt_err("Rx adapter doesn't support event vector");
 				return -EINVAL;
@@ -416,17 +419,6 @@ pipeline_event_rx_adapter_setup(struct evt_options *opt, uint8_t stride,
 		if (ret) {
 			evt_err("failed to add rx queues to adapter[%d]", prod);
 			return ret;
-		}
-
-		if (opt->ena_vector) {
-			vec_conf.vector_sz = opt->vector_size;
-			vec_conf.vector_timeout_ns = opt->vector_tmo_nsec;
-			vec_conf.vector_mp = vector_pool;
-			if (rte_event_eth_rx_adapter_queue_event_vector_config(
-				    prod, prod, -1, &vec_conf) < 0) {
-				evt_err("Failed to configure event vectorization for Rx adapter");
-				return -EINVAL;
-			}
 		}
 
 		if (!(cap & RTE_EVENT_ETH_RX_ADAPTER_CAP_INTERNAL_PORT)) {
@@ -569,18 +561,35 @@ pipeline_mempool_setup(struct evt_test *test, struct evt_options *opt)
 			if (data_size  > opt->mbuf_sz)
 				opt->mbuf_sz = data_size;
 		}
+		if (opt->per_port_pool) {
+			char name[RTE_MEMPOOL_NAMESIZE];
+
+			snprintf(name, RTE_MEMPOOL_NAMESIZE, "%s-%d",
+				 test->name, i);
+			t->pool[i] = rte_pktmbuf_pool_create(
+				name,	      /* mempool name */
+				opt->pool_sz, /* number of elements*/
+				0,	      /* cache size*/
+				0, opt->mbuf_sz, opt->socket_id); /* flags */
+
+			if (t->pool[i] == NULL) {
+				evt_err("failed to create mempool %s", name);
+				return -ENOMEM;
+			}
+		}
 	}
 
-	t->pool = rte_pktmbuf_pool_create(test->name, /* mempool name */
+	if (!opt->per_port_pool) {
+		t->pool[0] = rte_pktmbuf_pool_create(
+			test->name,   /* mempool name */
 			opt->pool_sz, /* number of elements*/
-			512, /* cache size*/
-			0,
-			opt->mbuf_sz,
-			opt->socket_id); /* flags */
+			0,	      /* cache size*/
+			0, opt->mbuf_sz, opt->socket_id); /* flags */
 
-	if (t->pool == NULL) {
-		evt_err("failed to create mempool");
-		return -ENOMEM;
+		if (t->pool[0] == NULL) {
+			evt_err("failed to create mempool");
+			return -ENOMEM;
+		}
 	}
 
 	return 0;
@@ -589,10 +598,16 @@ pipeline_mempool_setup(struct evt_test *test, struct evt_options *opt)
 void
 pipeline_mempool_destroy(struct evt_test *test, struct evt_options *opt)
 {
-	RTE_SET_USED(opt);
 	struct test_pipeline *t = evt_test_priv(test);
+	int i;
 
-	rte_mempool_free(t->pool);
+	RTE_SET_USED(opt);
+	if (opt->per_port_pool) {
+		RTE_ETH_FOREACH_DEV(i)
+			rte_mempool_free(t->pool[i]);
+	} else {
+		rte_mempool_free(t->pool[0]);
+	}
 }
 
 int

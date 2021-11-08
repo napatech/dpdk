@@ -609,7 +609,7 @@ set_do_test(const char *key __rte_unused, const char *value, void *opaque)
 static int
 opdl_probe(struct rte_vdev_device *vdev)
 {
-	static struct rte_eventdev_ops evdev_opdl_ops = {
+	static struct eventdev_ops evdev_opdl_ops = {
 		.dev_configure = opdl_dev_configure,
 		.dev_infos_get = opdl_info_get,
 		.dev_close = opdl_close,
@@ -720,7 +720,7 @@ opdl_probe(struct rte_vdev_device *vdev)
 	dev->dequeue_burst = opdl_event_dequeue_burst;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return 0;
+		goto done;
 
 	opdl = dev->data->dev_private;
 	opdl->data = dev->data;
@@ -733,6 +733,8 @@ opdl_probe(struct rte_vdev_device *vdev)
 	if (do_test == 1)
 		test_result =  opdl_selftest();
 
+done:
+	event_dev_probing_finish(dev);
 	return test_result;
 }
 

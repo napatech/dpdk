@@ -19,7 +19,10 @@ enum {
 	IPSEC_PAD_AES_CBC = IPSEC_MAX_IV_SIZE,
 	IPSEC_PAD_AES_CTR = IPSEC_PAD_DEFAULT,
 	IPSEC_PAD_AES_GCM = IPSEC_PAD_DEFAULT,
+	IPSEC_PAD_AES_CCM = IPSEC_PAD_DEFAULT,
+	IPSEC_PAD_CHACHA20_POLY1305 = IPSEC_PAD_DEFAULT,
 	IPSEC_PAD_NULL = IPSEC_PAD_DEFAULT,
+	IPSEC_PAD_AES_GMAC = IPSEC_PAD_DEFAULT,
 };
 
 /* iv sizes for different algorithms */
@@ -67,6 +70,9 @@ enum sa_algo_type	{
 	ALGO_TYPE_AES_CBC,
 	ALGO_TYPE_AES_CTR,
 	ALGO_TYPE_AES_GCM,
+	ALGO_TYPE_AES_CCM,
+	ALGO_TYPE_CHACHA20_POLY1305,
+	ALGO_TYPE_AES_GMAC,
 	ALGO_TYPE_MAX
 };
 
@@ -126,6 +132,15 @@ struct rte_ipsec_sa {
 			struct replay_sqn *rsn[REPLAY_SQN_NUM];
 		} inb;
 	} sqn;
+	/* Statistics */
+	struct {
+		uint64_t count;
+		uint64_t bytes;
+		struct {
+			uint64_t count;
+			uint64_t authentication_failed;
+		} errors;
+	} statistics;
 
 } __rte_cache_aligned;
 

@@ -1,4 +1,4 @@
-DPDK_21 {
+DPDK_22 {
 	global:
 
 	rte_bpf_destroy;
@@ -13,4 +13,11 @@ DPDK_21 {
 	rte_bpf_load;
 
 	local: *;
+};
+
+EXPERIMENTAL {
+	global:
+
+	rte_bpf_convert;
+	rte_bpf_dump;
 };

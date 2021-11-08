@@ -32,7 +32,7 @@ rte_eth_copy_pci_info(struct rte_eth_dev *eth_dev,
 		return;
 	}
 
-	eth_dev->intr_handle = &pci_dev->intr_handle;
+	eth_dev->intr_handle = pci_dev->intr_handle;
 
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
 		eth_dev->data->dev_flags = 0;
@@ -59,7 +59,7 @@ eth_dev_pci_specific_init(struct rte_eth_dev *eth_dev, void *bus_device) {
 
 /**
  * @internal
- * Allocates a new ethdev slot for an ethernet device and returns the pointer
+ * Allocates a new ethdev slot for an Ethernet device and returns the pointer
  * to that slot for the driver to use.
  *
  * @param dev
@@ -149,6 +149,16 @@ rte_eth_dev_pci_generic_remove(struct rte_pci_device *pci_dev,
 
 	eth_dev = rte_eth_dev_allocated(pci_dev->device.name);
 	if (!eth_dev)
+		return 0;
+
+	/*
+	 * In secondary process, a released eth device can be found by its name
+	 * in shared memory.
+	 * If the state of the eth device is RTE_ETH_DEV_UNUSED, it means the
+	 * eth device has been released.
+	 */
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY &&
+	    eth_dev->state == RTE_ETH_DEV_UNUSED)
 		return 0;
 
 	if (dev_uninit) {

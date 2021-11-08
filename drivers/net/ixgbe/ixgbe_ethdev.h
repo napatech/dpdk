@@ -6,6 +6,7 @@
 #define _IXGBE_ETHDEV_H_
 
 #include <stdint.h>
+#include <sys/queue.h>
 
 #include "base/ixgbe_type.h"
 #include "base/ixgbe_dcb.h"
@@ -113,15 +114,15 @@
 #define IXGBE_FDIR_NVGRE_TUNNEL_TYPE    0x0
 
 #define IXGBE_RSS_OFFLOAD_ALL ( \
-	ETH_RSS_IPV4 | \
-	ETH_RSS_NONFRAG_IPV4_TCP | \
-	ETH_RSS_NONFRAG_IPV4_UDP | \
-	ETH_RSS_IPV6 | \
-	ETH_RSS_NONFRAG_IPV6_TCP | \
-	ETH_RSS_NONFRAG_IPV6_UDP | \
-	ETH_RSS_IPV6_EX | \
-	ETH_RSS_IPV6_TCP_EX | \
-	ETH_RSS_IPV6_UDP_EX)
+	RTE_ETH_RSS_IPV4 | \
+	RTE_ETH_RSS_NONFRAG_IPV4_TCP | \
+	RTE_ETH_RSS_NONFRAG_IPV4_UDP | \
+	RTE_ETH_RSS_IPV6 | \
+	RTE_ETH_RSS_NONFRAG_IPV6_TCP | \
+	RTE_ETH_RSS_NONFRAG_IPV6_UDP | \
+	RTE_ETH_RSS_IPV6_EX | \
+	RTE_ETH_RSS_IPV6_TCP_EX | \
+	RTE_ETH_RSS_IPV6_UDP_EX)
 
 #define IXGBE_VF_IRQ_ENABLE_MASK        3          /* vf irq enable mask */
 #define IXGBE_VF_MAXMSIVECTOR           1
@@ -244,20 +245,12 @@ struct ixgbe_hwstrip {
  * VF data which used by PF host only
  */
 #define IXGBE_MAX_VF_MC_ENTRIES		30
-#define IXGBE_MAX_MR_RULE_ENTRIES	4 /* number of mirroring rules supported */
 #define IXGBE_MAX_UTA                   128
 
 struct ixgbe_uta_info {
 	uint8_t  uc_filter_type;
 	uint16_t uta_in_use;
 	uint32_t uta_shadow[IXGBE_MAX_UTA];
-};
-
-#define IXGBE_MAX_MIRROR_RULES 4  /* Maximum nb. of mirror rules. */
-
-struct ixgbe_mirror_info {
-	struct rte_eth_mirror_conf mr_conf[IXGBE_MAX_MIRROR_RULES];
-	/**< store PF mirror rules configuration*/
 };
 
 struct ixgbe_vf_info {
@@ -488,7 +481,6 @@ struct ixgbe_adapter {
 	struct ixgbe_vfta           shadow_vfta;
 	struct ixgbe_hwstrip		hwstrip;
 	struct ixgbe_dcb_config     dcb_config;
-	struct ixgbe_mirror_info    mr_data;
 	struct ixgbe_vf_info        *vfdata;
 	struct ixgbe_uta_info       uta_info;
 #ifdef RTE_LIBRTE_IXGBE_BYPASS
@@ -589,9 +581,9 @@ void ixgbe_dev_clear_queues(struct rte_eth_dev *dev);
 
 void ixgbe_dev_free_queues(struct rte_eth_dev *dev);
 
-void ixgbe_dev_rx_queue_release(void *rxq);
+void ixgbe_dev_rx_queue_release(struct rte_eth_dev *dev, uint16_t qid);
 
-void ixgbe_dev_tx_queue_release(void *txq);
+void ixgbe_dev_tx_queue_release(struct rte_eth_dev *dev, uint16_t qid);
 
 int  ixgbe_dev_rx_queue_setup(struct rte_eth_dev *dev, uint16_t rx_queue_id,
 		uint16_t nb_rx_desc, unsigned int socket_id,
@@ -602,10 +594,7 @@ int  ixgbe_dev_tx_queue_setup(struct rte_eth_dev *dev, uint16_t tx_queue_id,
 		uint16_t nb_tx_desc, unsigned int socket_id,
 		const struct rte_eth_txconf *tx_conf);
 
-uint32_t ixgbe_dev_rx_queue_count(struct rte_eth_dev *dev,
-		uint16_t rx_queue_id);
-
-int ixgbe_dev_rx_descriptor_done(void *rx_queue, uint16_t offset);
+uint32_t ixgbe_dev_rx_queue_count(void *rx_queue);
 
 int ixgbe_dev_rx_descriptor_status(void *rx_queue, uint16_t offset);
 int ixgbe_dev_tx_descriptor_status(void *tx_queue, uint16_t offset);

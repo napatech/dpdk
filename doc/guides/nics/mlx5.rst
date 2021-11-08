@@ -99,6 +99,7 @@ Features
 - Hardware LRO.
 - Hairpin.
 - Multiple-thread flow insertion.
+- Matching on IPv4 Internet Header Length (IHL).
 - Matching on GTP extension header with raw encap/decap action.
 - Matching on Geneve TLV option header with raw encap/decap action.
 - RSS support in sample action.
@@ -107,9 +108,12 @@ Features
 - 21844 flow priorities for ingress or egress flow groups greater than 0 and for any transfer
   flow group.
 - Flow metering, including meter policy API.
+- Flow meter hierarchy.
 - Flow integrity offload API.
 - Connection tracking.
 - Sub-Function representors.
+- Sub-Function.
+
 
 Limitations
 -----------
@@ -123,6 +127,11 @@ Limitations
 
     - IPv4/UDP with CVLAN filtering
     - Unicast MAC filtering
+
+  - Additional rules are supported from WinOF2 version 2.70:
+
+    - IPv4/TCP with CVLAN filtering
+    - L4 steering rules for port RSS of UDP, TCP and IP
 
 - For secondary process:
 
@@ -186,8 +195,16 @@ Limitations
   size and ``txq_inline_min`` settings and may be from 2 (worst case forced by maximal
   inline settings) to 58.
 
-- Flows with a VXLAN Network Identifier equal (or ends to be equal)
-  to 0 are not supported.
+- Match on VXLAN supports the following fields only:
+
+     - VNI
+     - Last reserved 8-bits
+
+  Last reserved 8-bits matching is only supported When using DV flow
+  engine (``dv_flow_en`` = 1).
+  For ConnectX-5, the UDP destination port must be the standard one (4789).
+  Group zero's behavior may differ which depends on FW.
+  Matching value equals 0 (value & mask) is not supported.
 
 - L3 VXLAN and VXLAN-GPE tunnels cannot be supported together with MPLSoGRE and MPLSoUDP.
 
@@ -238,7 +255,7 @@ Limitations
   no MPRQ feature or vectorized code can be engaged.
 
 - When Multi-Packet Rx queue is configured (``mprq_en``), a Rx packet can be
-  externally attached to a user-provided mbuf with having EXT_ATTACHED_MBUF in
+  externally attached to a user-provided mbuf with having RTE_MBUF_F_EXTERNAL in
   ol_flags. As the mempool for the external buffer is managed by PMD, all the
   Rx mbufs must be freed before the device is closed. Otherwise, the mempool of
   the external buffers will be freed by PMD and the application which still
@@ -246,7 +263,7 @@ Limitations
 
 - If Multi-Packet Rx queue is configured (``mprq_en``) and Rx CQE compression is
   enabled (``rxq_cqe_comp_en``) at the same time, RSS hash result is not fully
-  supported. Some Rx packets may not have PKT_RX_RSS_HASH.
+  supported. Some Rx packets may not have RTE_MBUF_F_RX_RSS_HASH.
 
 - IPv6 Multicast messages are not supported on VM, while promiscuous mode
   and allmulticast mode are both set to off.
@@ -354,7 +371,7 @@ Limitations
 
 - CRC:
 
-  - ``DEV_RX_OFFLOAD_KEEP_CRC`` cannot be supported with decapsulation
+  - ``RTE_ETH_RX_OFFLOAD_KEEP_CRC`` cannot be supported with decapsulation
     for some NICs (such as ConnectX-6 Dx, ConnectX-6 Lx, and BlueField-2).
     The capability bit ``scatter_fcs_w_decap_disable`` shows NIC support.
 
@@ -406,20 +423,20 @@ Limitations
 - Meter:
 
   - All the meter colors with drop action will be counted only by the global drop statistics.
-  - Green color is not supported with drop action.
-  - Yellow detection is not supported.
+  - Yellow detection is only supported with ASO metering.
   - Red color must be with drop action.
   - Meter statistics are supported only for drop case.
-  - Meter yellow color detection is not supported.
   - A meter action created with pre-defined policy must be the last action in the flow except single case where the policy actions are:
      - green: NULL or END.
      - yellow: NULL or END.
      - RED: DROP / END.
   - The only supported meter policy actions:
-     - green: QUEUE, RSS, PORT_ID, JUMP, MARK and SET_TAG.
-     - yellow: must be empty.
+     - green: QUEUE, RSS, PORT_ID, REPRESENTED_PORT, JUMP, DROP, MARK and SET_TAG.
+     - yellow: QUEUE, RSS, PORT_ID, REPRESENTED_PORT, JUMP, DROP, MARK and SET_TAG.
      - RED: must be DROP.
+  - Policy actions of RSS for green and yellow should have the same configuration except queues.
   - meter profile packet mode is supported.
+  - meter profiles of RFC2697, RFC2698 and RFC4115 are supported.
 
 - Integrity:
 
@@ -441,6 +458,15 @@ Limitations
   - Flow rules insertion rate and memory consumption need more optimization.
   - 256 ports maximum.
   - 4M connections maximum.
+
+- Multi-thread flow insertion:
+
+  - In order to achieve best insertion rate, application should manage the flows per lcore.
+  - Better to disable memory reclaim by setting ``reclaim_mem_mode`` to 0 to accelerate the flow object allocation and release with cache.
+
+- HW hashed bonding
+
+  - TXQ affinity subjects to HW hash once enabled.
 
 Statistics
 ----------
@@ -584,9 +610,9 @@ Driver options
   and each stride receives one packet. MPRQ can improve throughput for
   small-packet traffic.
 
-  When MPRQ is enabled, max_rx_pkt_len can be larger than the size of
-  user-provided mbuf even if DEV_RX_OFFLOAD_SCATTER isn't enabled. PMD will
-  configure large stride size enough to accommodate max_rx_pkt_len as long as
+  When MPRQ is enabled, MTU can be larger than the size of
+  user-provided mbuf even if RTE_ETH_RX_OFFLOAD_SCATTER isn't enabled. PMD will
+  configure large stride size enough to accommodate MTU as long as
   device allows. Note that this can waste system memory compared to enabling Rx
   scatter and multi-segment packet.
 
@@ -622,7 +648,7 @@ Driver options
   the mbuf by external buffer attachment - ``rte_pktmbuf_attach_extbuf()``.
   A mempool for external buffers will be allocated and managed by PMD. If Rx
   packet is externally attached, ol_flags field of the mbuf will have
-  EXT_ATTACHED_MBUF and this flag must be preserved. ``RTE_MBUF_HAS_EXTBUF()``
+  RTE_MBUF_F_EXTERNAL and this flag must be preserved. ``RTE_MBUF_HAS_EXTBUF()``
   checks the flag. The default value is 128, valid only if ``mprq_en`` is set.
 
 - ``rxqs_min_mprq`` parameter [int]
@@ -694,6 +720,13 @@ Driver options
   For ConnectX-4 Lx NIC, it is allowed to specify values below 18, but
   it is not recommended and may prevent NIC from sending packets over
   some configurations.
+
+  For ConnectX-4 and ConnectX-4 Lx NICs, automatically configured value
+  is insufficient for some traffic, because they require at least all L2 headers
+  to be inlined. For example, Q-in-Q adds 4 bytes to default 18 bytes
+  of Ethernet and VLAN, thus ``txq_inline_min`` must be set to 22.
+  MPLS would add 4 bytes per label. Final value must account for all possible
+  L2 encapsulation headers used in particular environment.
 
   Please, note, this minimal data inlining disengages eMPW feature (Enhanced
   Multi-Packet Write), because last one does not support partial packet inlining.
@@ -972,6 +1005,19 @@ Driver options
 
   Enabled by default.
 
+- ``mr_mempool_reg_en`` parameter [int]
+
+  A nonzero value enables implicit registration of DMA memory of all mempools
+  except those having ``RTE_MEMPOOL_F_NON_IO``. This flag is set automatically
+  for mempools populated with non-contiguous objects or those without IOVA.
+  The effect is that when a packet from a mempool is transmitted,
+  its memory is already registered for DMA in the PMD and no registration
+  will happen on the data path. The tradeoff is extra work on the creation
+  of each mempool and increased HW resource use if some mempools
+  are not used with MLX5 devices.
+
+  Enabled by default.
+
 - ``representor`` parameter [list]
 
   This parameter can be used to instantiate DPDK Ethernet devices from
@@ -1055,6 +1101,20 @@ Driver options
   tunnel-decapsulated packets.
   If set to 0, this option forces the FCS feature and rejects tunnel
   decapsulation in the flow engine for such devices.
+
+  By default, the PMD will set this value to 1.
+
+- ``allow_duplicate_pattern`` parameter [int]
+
+  There are two options to choose:
+
+  - 0. Prevent insertion of rules with the same pattern items on non-root table.
+    In this case, only the first rule is inserted and the following rules are
+    rejected and error code EEXIST is returned.
+
+  - 1. Allow insertion of rules with the same pattern items.
+    In this case, all rules are inserted but only the first rule takes effect,
+    the next rule takes effect only if the previous rules are deleted.
 
   By default, the PMD will set this value to 1.
 
@@ -1434,44 +1494,56 @@ the DPDK application.
 
         echo -n "<device pci address" > /sys/bus/pci/drivers/mlx5_core/unbind
 
-5. Enbale switchdev mode::
+5. Enable switchdev mode::
 
         echo switchdev > /sys/class/net/<net device>/compat/devlink/mode
 
-Sub-Function representor
-------------------------
+Sub-Function support
+--------------------
 
 Sub-Function is a portion of the PCI device, a SF netdev has its own
-dedicated queues(txq, rxq). A SF netdev supports E-Switch representation
-offload similar to existing PF and VF representors. A SF shares PCI
-level resources with other SFs and/or with its parent PCI function.
+dedicated queues (txq, rxq).
+A SF shares PCI level resources with other SFs and/or with its parent PCI function.
+
+0. Requirement::
+
+        OFED version >= 5.4-0.3.3.0
 
 1. Configure SF feature::
 
-        mlxconfig -d <mst device> set PF_BAR2_SIZE=<0/1/2/3> PF_BAR2_ENABLE=1
+        # Run mlxconfig on both PFs on host and ECPFs on BlueField.
+        mlxconfig -d <mst device> set PER_PF_NUM_SF=1 PF_TOTAL_SF=252 PF_SF_BAR_SIZE=12
 
-        Value of PF_BAR2_SIZE:
+2. Enable switchdev mode::
 
-            0: 8 SFs
-            1: 16 SFs
-            2: 32 SFs
-            3: 64 SFs
+        mlxdevm dev eswitch set pci/<DBDF> mode switchdev
 
-2. Reset the FW::
+3. Add SF port::
 
-        mlxfwreset -d <mst device> reset
+        mlxdevm port add pci/<DBDF> flavour pcisf pfnum 0 sfnum <sfnum>
 
-3. Enable switchdev mode::
+        Get SFID from output: pci/<DBDF>/<SFID>
 
-        echo switchdev > /sys/class/net/<net device>/compat/devlink/mode
+4. Modify MAC address::
 
-4. Create SF::
+        mlxdevm port function set pci/<DBDF>/<SFID> hw_addr <MAC>
 
-        mlnx-sf -d <PCI_BDF> -a create
+5. Activate SF port::
 
-5. Probe SF representor::
+        mlxdevm port function set pci/<DBDF>/<ID> state active
 
-        testpmd> port attach <PCI_BDF>,representor=sf0,dv_flow_en=1
+6. Devargs to probe SF device::
+
+        auxiliary:mlx5_core.sf.<num>,dv_flow_en=1
+
+Sub-Function representor support
+--------------------------------
+
+A SF netdev supports E-Switch representation offload
+similar to PF and VF representors.
+Use <sfnum> to probe SF representor::
+
+        testpmd> port attach <PCI_BDF>,representor=sf<sfnum>,dv_flow_en=1
 
 Performance tuning
 ------------------
@@ -1684,6 +1756,16 @@ Supported hardware offloads
    |                       | |  OFED 4.7-3   | | OFED 4.7-3    |
    |                       | |  rdma-core 26 | | rdma-core 26  |
    |                       | |  ConnectX-5   | | ConnectX-5    |
+   +-----------------------+-----------------+-----------------+
+   | ASO Metering          | |  DPDK 21.05   | | DPDK 21.05    |
+   |                       | |  OFED 5.3     | | OFED 5.3      |
+   |                       | |  rdma-core 33 | | rdma-core 33  |
+   |                       | |  ConnectX-6 Dx| | ConnectX-6 Dx |
+   +-----------------------+-----------------+-----------------+
+   | Metering Hierarchy    | |  DPDK 21.08   | | DPDK 21.08    |
+   |                       | |  OFED 5.3     | | OFED 5.3      |
+   |                       | |  N/A          | | N/A           |
+   |                       | |  ConnectX-6 Dx| | ConnectX-6 Dx |
    +-----------------------+-----------------+-----------------+
    | Sampling              | |  DPDK 20.11   | | DPDK 20.11    |
    |                       | |  OFED 5.1-2   | | OFED 5.1-2    |
@@ -1909,3 +1991,29 @@ all flows with assistance of external tools.
    .. code-block:: console
 
        mlx_steering_dump.py -f <output_file> -flowptr <flow_ptr>
+
+How to share a meter between ports in the same switch domain
+------------------------------------------------------------
+
+This section demonstrates how to use the shared meter. A meter M can be created
+on port X and to be shared with a port Y on the same switch domain by the next way:
+
+.. code-block:: console
+
+   flow create X ingress transfer pattern eth / port_id id is Y / end actions meter mtr_id M / end
+
+How to use meter hierarchy
+--------------------------
+
+This section demonstrates how to create and use a meter hierarchy.
+A termination meter M can be the policy green action of another termination meter N.
+The two meters are chained together as a chain. Using meter N in a flow will apply
+both the meters in hierarchy on that flow.
+
+.. code-block:: console
+
+   add port meter policy 0 1 g_actions queue index 0 / end y_actions end r_actions drop / end
+   create port meter 0 M 1 1 yes 0xffff 1 0
+   add port meter policy 0 2 g_actions meter mtr_id M / end y_actions end r_actions drop / end
+   create port meter 0 N 2 2 yes 0xffff 1 0
+   flow create 0 ingress group 1 pattern eth / end actions meter mtr_id N / end

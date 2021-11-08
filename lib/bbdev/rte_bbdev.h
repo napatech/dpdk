@@ -309,6 +309,10 @@ struct rte_bbdev_driver_info {
 	uint16_t min_alignment;
 	/** HARQ memory available in kB */
 	uint32_t harq_buffer_size;
+	/** Byte endianness (RTE_BIG_ENDIAN/RTE_LITTLE_ENDIAN) supported
+	 *  for input/output data
+	 */
+	uint8_t data_endianness;
 	/** Default queue configuration used if none is supplied  */
 	struct rte_bbdev_queue_conf default_queue_conf;
 	/** Device operation capabilities */
@@ -434,7 +438,7 @@ struct rte_bbdev_callback;
 struct rte_intr_handle;
 
 /** Structure to keep track of registered callbacks */
-TAILQ_HEAD(rte_bbdev_cb_list, rte_bbdev_callback);
+RTE_TAILQ_HEAD(rte_bbdev_cb_list, rte_bbdev_callback);
 
 /**
  * @internal The data structure associated with a device. Drivers can access

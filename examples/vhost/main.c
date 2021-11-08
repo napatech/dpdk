@@ -44,6 +44,7 @@
 #define BURST_RX_RETRIES 4		/* Number of retries on RX. */
 
 #define JUMBO_FRAME_MAX_SIZE    0x2600
+#define MAX_MTU (JUMBO_FRAME_MAX_SIZE - (RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN))
 
 /* State of virtio device. */
 #define DEVICE_MAC_LEARNING 0
@@ -109,23 +110,23 @@ static int nb_sockets;
 /* empty vmdq configuration structure. Filled in programatically */
 static struct rte_eth_conf vmdq_conf_default = {
 	.rxmode = {
-		.mq_mode        = ETH_MQ_RX_VMDQ_ONLY,
+		.mq_mode        = RTE_ETH_MQ_RX_VMDQ_ONLY,
 		.split_hdr_size = 0,
 		/*
 		 * VLAN strip is necessary for 1G NIC such as I350,
 		 * this fixes bug of ipv4 forwarding in guest can't
 		 * forward pakets from one virtio dev to another virtio dev.
 		 */
-		.offloads = DEV_RX_OFFLOAD_VLAN_STRIP,
+		.offloads = RTE_ETH_RX_OFFLOAD_VLAN_STRIP,
 	},
 
 	.txmode = {
-		.mq_mode = ETH_MQ_TX_NONE,
-		.offloads = (DEV_TX_OFFLOAD_IPV4_CKSUM |
-			     DEV_TX_OFFLOAD_TCP_CKSUM |
-			     DEV_TX_OFFLOAD_VLAN_INSERT |
-			     DEV_TX_OFFLOAD_MULTI_SEGS |
-			     DEV_TX_OFFLOAD_TCP_TSO),
+		.mq_mode = RTE_ETH_MQ_TX_NONE,
+		.offloads = (RTE_ETH_TX_OFFLOAD_IPV4_CKSUM |
+			     RTE_ETH_TX_OFFLOAD_TCP_CKSUM |
+			     RTE_ETH_TX_OFFLOAD_VLAN_INSERT |
+			     RTE_ETH_TX_OFFLOAD_MULTI_SEGS |
+			     RTE_ETH_TX_OFFLOAD_TCP_TSO),
 	},
 	.rx_adv_conf = {
 		/*
@@ -133,7 +134,7 @@ static struct rte_eth_conf vmdq_conf_default = {
 		 * appropriate values
 		 */
 		.vmdq_rx_conf = {
-			.nb_queue_pools = ETH_8_POOLS,
+			.nb_queue_pools = RTE_ETH_8_POOLS,
 			.enable_default_pool = 0,
 			.default_pool = 0,
 			.nb_pool_maps = 0,
@@ -290,9 +291,9 @@ port_init(uint16_t port)
 		return -1;
 
 	rx_rings = (uint16_t)dev_info.max_rx_queues;
-	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
+	if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
 		port_conf.txmode.offloads |=
-			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+			RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
 	/* Configure ethernet device. */
 	retval = rte_eth_dev_configure(port, rx_rings, tx_rings, &port_conf);
 	if (retval != 0) {
@@ -369,14 +370,8 @@ port_init(uint16_t port)
 
 	RTE_LOG(INFO, VHOST_PORT, "Max virtio devices supported: %u\n", num_devices);
 	RTE_LOG(INFO, VHOST_PORT, "Port %u MAC: %02"PRIx8" %02"PRIx8" %02"PRIx8
-			" %02"PRIx8" %02"PRIx8" %02"PRIx8"\n",
-			port,
-			vmdq_ports_eth_addr[port].addr_bytes[0],
-			vmdq_ports_eth_addr[port].addr_bytes[1],
-			vmdq_ports_eth_addr[port].addr_bytes[2],
-			vmdq_ports_eth_addr[port].addr_bytes[3],
-			vmdq_ports_eth_addr[port].addr_bytes[4],
-			vmdq_ports_eth_addr[port].addr_bytes[5]);
+		" %02"PRIx8" %02"PRIx8" %02"PRIx8"\n",
+		port, RTE_ETHER_ADDR_BYTES(&vmdq_ports_eth_addr[port]));
 
 	return 0;
 }
@@ -562,8 +557,8 @@ us_vhost_parse_args(int argc, char **argv)
 		case 'P':
 			promiscuous = 1;
 			vmdq_conf_default.rx_adv_conf.vmdq_rx_conf.rx_mode =
-				ETH_VMDQ_ACCEPT_BROADCAST |
-				ETH_VMDQ_ACCEPT_MULTICAST;
+				RTE_ETH_VMDQ_ACCEPT_BROADCAST |
+				RTE_ETH_VMDQ_ACCEPT_MULTICAST;
 			break;
 
 		case OPT_VM2VM_NUM:
@@ -636,12 +631,8 @@ us_vhost_parse_args(int argc, char **argv)
 				return -1;
 			}
 			mergeable = !!ret;
-			if (ret) {
-				vmdq_conf_default.rxmode.offloads |=
-					DEV_RX_OFFLOAD_JUMBO_FRAME;
-				vmdq_conf_default.rxmode.max_rx_pkt_len
-					= JUMBO_FRAME_MAX_SIZE;
-			}
+			if (ret)
+				vmdq_conf_default.rxmode.mtu = MAX_MTU;
 			break;
 
 		case OPT_STATS_NUM:
@@ -763,7 +754,7 @@ link_vmdq(struct vhost_dev *vdev, struct rte_mbuf *m)
 	/* Learn MAC address of guest device from packet */
 	pkt_hdr = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 
-	if (find_vhost_dev(&pkt_hdr->s_addr)) {
+	if (find_vhost_dev(&pkt_hdr->src_addr)) {
 		RTE_LOG(ERR, VHOST_DATA,
 			"(%d) device is using a registered MAC!\n",
 			vdev->vid);
@@ -771,18 +762,16 @@ link_vmdq(struct vhost_dev *vdev, struct rte_mbuf *m)
 	}
 
 	for (i = 0; i < RTE_ETHER_ADDR_LEN; i++)
-		vdev->mac_address.addr_bytes[i] = pkt_hdr->s_addr.addr_bytes[i];
+		vdev->mac_address.addr_bytes[i] =
+			pkt_hdr->src_addr.addr_bytes[i];
 
 	/* vlan_tag currently uses the device_id. */
 	vdev->vlan_tag = vlan_tags[vdev->vid];
 
 	/* Print out VMDQ registration info. */
 	RTE_LOG(INFO, VHOST_DATA,
-		"(%d) mac %02x:%02x:%02x:%02x:%02x:%02x and vlan %d registered\n",
-		vdev->vid,
-		vdev->mac_address.addr_bytes[0], vdev->mac_address.addr_bytes[1],
-		vdev->mac_address.addr_bytes[2], vdev->mac_address.addr_bytes[3],
-		vdev->mac_address.addr_bytes[4], vdev->mac_address.addr_bytes[5],
+		"(%d) mac " RTE_ETHER_ADDR_PRT_FMT " and vlan %d registered\n",
+		vdev->vid, RTE_ETHER_ADDR_BYTES(&vdev->mac_address),
 		vdev->vlan_tag);
 
 	/* Register the MAC address. */
@@ -851,8 +840,11 @@ complete_async_pkts(struct vhost_dev *vdev)
 
 	complete_count = rte_vhost_poll_enqueue_completed(vdev->vid,
 					VIRTIO_RXQ, p_cpl, MAX_PKT_BURST);
-	if (complete_count)
+	if (complete_count) {
 		free_pkts(p_cpl, complete_count);
+		__atomic_sub_fetch(&vdev->pkts_inflight, complete_count, __ATOMIC_SEQ_CST);
+	}
+
 }
 
 static __rte_always_inline void
@@ -888,16 +880,11 @@ drain_vhost(struct vhost_dev *vdev)
 	if (builtin_net_driver) {
 		ret = vs_enqueue_pkts(vdev, VIRTIO_RXQ, m, nr_xmit);
 	} else if (async_vhost_driver) {
-		uint32_t cpu_cpl_nr = 0;
 		uint16_t enqueue_fail = 0;
-		struct rte_mbuf *m_cpu_cpl[nr_xmit];
 
 		complete_async_pkts(vdev);
-		ret = rte_vhost_submit_enqueue_burst(vdev->vid, VIRTIO_RXQ,
-					m, nr_xmit, m_cpu_cpl, &cpu_cpl_nr);
-
-		if (cpu_cpl_nr)
-			free_pkts(m_cpu_cpl, cpu_cpl_nr);
+		ret = rte_vhost_submit_enqueue_burst(vdev->vid, VIRTIO_RXQ, m, nr_xmit);
+		__atomic_add_fetch(&vdev->pkts_inflight, ret, __ATOMIC_SEQ_CST);
 
 		enqueue_fail = nr_xmit - ret;
 		if (enqueue_fail)
@@ -927,6 +914,9 @@ drain_vhost_table(void)
 	uint64_t cur_tsc;
 
 	TAILQ_FOREACH(vdev, &vhost_dev_list, global_vdev_entry) {
+		if (unlikely(vdev->remove == 1))
+			continue;
+
 		vhost_txq = vhost_txbuff[lcore_id * MAX_VHOST_DEVICE
 						+ vdev->vid];
 
@@ -956,7 +946,7 @@ virtio_tx_local(struct vhost_dev *vdev, struct rte_mbuf *m)
 	uint16_t lcore_id = rte_lcore_id();
 	pkt_hdr = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 
-	dst_vdev = find_vhost_dev(&pkt_hdr->d_addr);
+	dst_vdev = find_vhost_dev(&pkt_hdr->dst_addr);
 	if (!dst_vdev)
 		return -1;
 
@@ -1004,7 +994,7 @@ find_local_dest(struct vhost_dev *vdev, struct rte_mbuf *m,
 	struct rte_ether_hdr *pkt_hdr =
 		rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 
-	dst_vdev = find_vhost_dev(&pkt_hdr->d_addr);
+	dst_vdev = find_vhost_dev(&pkt_hdr->dst_addr);
 	if (!dst_vdev)
 		return 0;
 
@@ -1047,15 +1037,15 @@ static void virtio_tx_offload(struct rte_mbuf *m)
 	tcp_hdr = rte_pktmbuf_mtod_offset(m, struct rte_tcp_hdr *,
 		m->l2_len + m->l3_len);
 
-	m->ol_flags |= PKT_TX_TCP_SEG;
+	m->ol_flags |= RTE_MBUF_F_TX_TCP_SEG;
 	if ((ptype & RTE_PTYPE_L3_MASK) == RTE_PTYPE_L3_IPV4) {
-		m->ol_flags |= PKT_TX_IPV4;
-		m->ol_flags |= PKT_TX_IP_CKSUM;
+		m->ol_flags |= RTE_MBUF_F_TX_IPV4;
+		m->ol_flags |= RTE_MBUF_F_TX_IP_CKSUM;
 		ipv4_hdr = l3_hdr;
 		ipv4_hdr->hdr_checksum = 0;
 		tcp_hdr->cksum = rte_ipv4_phdr_cksum(l3_hdr, m->ol_flags);
 	} else { /* assume ethertype == RTE_ETHER_TYPE_IPV6 */
-		m->ol_flags |= PKT_TX_IPV6;
+		m->ol_flags |= RTE_MBUF_F_TX_IPV6;
 		tcp_hdr->cksum = rte_ipv6_phdr_cksum(l3_hdr, m->ol_flags);
 	}
 }
@@ -1087,7 +1077,7 @@ virtio_tx_route(struct vhost_dev *vdev, struct rte_mbuf *m, uint16_t vlan_tag)
 
 
 	nh = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
-	if (unlikely(rte_is_broadcast_ether_addr(&nh->d_addr))) {
+	if (unlikely(rte_is_broadcast_ether_addr(&nh->dst_addr))) {
 		struct vhost_dev *vdev2;
 
 		TAILQ_FOREACH(vdev2, &vhost_dev_list, global_vdev_entry) {
@@ -1126,7 +1116,7 @@ queue2nic:
 			(vh->vlan_tci != vlan_tag_be))
 			vh->vlan_tci = vlan_tag_be;
 	} else {
-		m->ol_flags |= PKT_TX_VLAN_PKT;
+		m->ol_flags |= RTE_MBUF_F_TX_VLAN;
 
 		/*
 		 * Find the right seg to adjust the data len when offset is
@@ -1150,7 +1140,7 @@ queue2nic:
 		m->vlan_tci = vlan_tag;
 	}
 
-	if (m->ol_flags & PKT_RX_LRO)
+	if (m->ol_flags & RTE_MBUF_F_RX_LRO)
 		virtio_tx_offload(m);
 
 	tx_q->m_table[tx_q->len++] = m;
@@ -1218,16 +1208,12 @@ drain_eth_rx(struct vhost_dev *vdev)
 		enqueue_count = vs_enqueue_pkts(vdev, VIRTIO_RXQ,
 						pkts, rx_count);
 	} else if (async_vhost_driver) {
-		uint32_t cpu_cpl_nr = 0;
 		uint16_t enqueue_fail = 0;
-		struct rte_mbuf *m_cpu_cpl[MAX_PKT_BURST];
 
 		complete_async_pkts(vdev);
 		enqueue_count = rte_vhost_submit_enqueue_burst(vdev->vid,
-					VIRTIO_RXQ, pkts, rx_count,
-					m_cpu_cpl, &cpu_cpl_nr);
-		if (cpu_cpl_nr)
-			free_pkts(m_cpu_cpl, cpu_cpl_nr);
+					VIRTIO_RXQ, pkts, rx_count);
+		__atomic_add_fetch(&vdev->pkts_inflight, enqueue_count, __ATOMIC_SEQ_CST);
 
 		enqueue_fail = rx_count - enqueue_count;
 		if (enqueue_fail)
@@ -1397,8 +1383,19 @@ destroy_device(int vid)
 		"(%d) device has been removed from data core\n",
 		vdev->vid);
 
-	if (async_vhost_driver)
+	if (async_vhost_driver) {
+		uint16_t n_pkt = 0;
+		struct rte_mbuf *m_cpl[vdev->pkts_inflight];
+
+		while (vdev->pkts_inflight) {
+			n_pkt = rte_vhost_clear_queue_thread_unsafe(vid, VIRTIO_RXQ,
+						m_cpl, vdev->pkts_inflight);
+			free_pkts(m_cpl, n_pkt);
+			__atomic_sub_fetch(&vdev->pkts_inflight, n_pkt, __ATOMIC_SEQ_CST);
+		}
+
 		rte_vhost_async_channel_unregister(vid, VIRTIO_RXQ);
+	}
 
 	rte_free(vdev);
 }
@@ -1468,7 +1465,7 @@ new_device(int vid)
 		vid, vdev->coreid);
 
 	if (async_vhost_driver) {
-		struct rte_vhost_async_features f;
+		struct rte_vhost_async_config config = {0};
 		struct rte_vhost_async_channel_ops channel_ops;
 
 		if (dma_type != NULL && strncmp(dma_type, "ioat", 4) == 0) {
@@ -1476,11 +1473,42 @@ new_device(int vid)
 			channel_ops.check_completed_copies =
 				ioat_check_completed_copies_cb;
 
-			f.async_inorder = 1;
-			f.async_threshold = 256;
+			config.features = RTE_VHOST_ASYNC_INORDER;
 
 			return rte_vhost_async_channel_register(vid, VIRTIO_RXQ,
-				f.intval, &channel_ops);
+				config, &channel_ops);
+		}
+	}
+
+	return 0;
+}
+
+static int
+vring_state_changed(int vid, uint16_t queue_id, int enable)
+{
+	struct vhost_dev *vdev = NULL;
+
+	TAILQ_FOREACH(vdev, &vhost_dev_list, global_vdev_entry) {
+		if (vdev->vid == vid)
+			break;
+	}
+	if (!vdev)
+		return -1;
+
+	if (queue_id != VIRTIO_RXQ)
+		return 0;
+
+	if (async_vhost_driver) {
+		if (!enable) {
+			uint16_t n_pkt = 0;
+			struct rte_mbuf *m_cpl[vdev->pkts_inflight];
+
+			while (vdev->pkts_inflight) {
+				n_pkt = rte_vhost_clear_queue_thread_unsafe(vid, queue_id,
+							m_cpl, vdev->pkts_inflight);
+				free_pkts(m_cpl, n_pkt);
+				__atomic_sub_fetch(&vdev->pkts_inflight, n_pkt, __ATOMIC_SEQ_CST);
+			}
 		}
 	}
 
@@ -1495,6 +1523,7 @@ static const struct vhost_device_ops virtio_net_device_ops =
 {
 	.new_device =  new_device,
 	.destroy_device = destroy_device,
+	.vring_state_changed = vring_state_changed,
 };
 
 /*

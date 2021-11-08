@@ -24,9 +24,9 @@ flags_common = [
 ]
 
 ## Part numbers are specific to Arm implementers
-# implementer specific aarch64 flags have middle priority
+# implementer specific armv8 flags have middle priority
 #     (will overwrite common flags)
-# part number specific aarch64 flags have higher priority
+# part number specific armv8 flags have higher priority
 #     (will overwrite both common and implementer specific flags)
 implementer_generic = {
     'description': 'Generic armv8',
@@ -37,20 +37,35 @@ implementer_generic = {
         ['RTE_MAX_NUMA_NODES', 4]
     ],
     'part_number_config': {
-        'generic': {'machine_args': ['-march=armv8-a+crc', '-moutline-atomics']}
+        'generic': {
+            'march': 'armv8-a',
+            'march_features': ['crc'],
+            'compiler_options': ['-moutline-atomics']
+        },
+        'generic_aarch32': {
+            'machine_args': ['-march=armv8-a', '-mfpu=neon'],
+            'flags': [
+                ['RTE_ARCH_ARM_NEON_MEMCPY', false],
+                ['RTE_ARCH_STRICT_ALIGN', true],
+                ['RTE_ARCH_ARMv8_AARCH32', true],
+                ['RTE_CACHE_LINE_SIZE', 64]
+            ]
+        }
     }
 }
 
 part_number_config_arm = {
-    '0xd03': {'machine_args':  ['-mcpu=cortex-a53']},
-    '0xd04': {'machine_args':  ['-mcpu=cortex-a35']},
-    '0xd07': {'machine_args':  ['-mcpu=cortex-a57']},
-    '0xd08': {'machine_args':  ['-mcpu=cortex-a72']},
-    '0xd09': {'machine_args':  ['-mcpu=cortex-a73']},
-    '0xd0a': {'machine_args':  ['-mcpu=cortex-a75']},
-    '0xd0b': {'machine_args':  ['-mcpu=cortex-a76']},
+    '0xd03': {'compiler_options':  ['-mcpu=cortex-a53']},
+    '0xd04': {'compiler_options':  ['-mcpu=cortex-a35']},
+    '0xd07': {'compiler_options':  ['-mcpu=cortex-a57']},
+    '0xd08': {'compiler_options':  ['-mcpu=cortex-a72']},
+    '0xd09': {'compiler_options':  ['-mcpu=cortex-a73']},
+    '0xd0a': {'compiler_options':  ['-mcpu=cortex-a75']},
+    '0xd0b': {'compiler_options':  ['-mcpu=cortex-a76']},
     '0xd0c': {
-        'machine_args':  ['-march=armv8.2-a+crypto', '-mcpu=neoverse-n1'],
+        'march': 'armv8.2-a',
+        'march_features': ['crypto'],
+        'compiler_options':  ['-mcpu=neoverse-n1'],
         'flags': [
             ['RTE_MACHINE', '"neoverse-n1"'],
             ['RTE_ARM_FEATURE_ATOMICS', true],
@@ -60,7 +75,8 @@ part_number_config_arm = {
         ]
     },
     '0xd49': {
-        'machine_args':  ['-march=armv8.5-a+crypto+sve2'],
+        'march': 'armv8.5-a',
+        'march_features': ['sve2'],
         'flags': [
             ['RTE_MACHINE', '"neoverse-n2"'],
             ['RTE_ARM_FEATURE_ATOMICS', true],
@@ -94,19 +110,21 @@ implementer_cavium = {
     ],
     'part_number_config': {
         '0xa1': {
-            'machine_args': ['-mcpu=thunderxt88'],
+            'compiler_options': ['-mcpu=thunderxt88'],
             'flags': flags_part_number_thunderx
         },
         '0xa2': {
-            'machine_args': ['-mcpu=thunderxt81'],
+            'compiler_options': ['-mcpu=thunderxt81'],
             'flags': flags_part_number_thunderx
         },
         '0xa3': {
-            'machine_args': ['-mcpu=thunderxt83'],
+            'compiler_options': ['-mcpu=thunderxt83'],
             'flags': flags_part_number_thunderx
         },
         '0xaf': {
-            'machine_args': ['-march=armv8.1-a+crc+crypto', '-mcpu=thunderx2t99'],
+            'march': 'armv8.1-a',
+            'march_features': ['crc', 'crypto'],
+            'compiler_options': ['-mcpu=thunderx2t99'],
             'flags': [
                 ['RTE_MACHINE', '"thunderx2"'],
                 ['RTE_ARM_FEATURE_ATOMICS', true],
@@ -116,7 +134,9 @@ implementer_cavium = {
             ]
         },
         '0xb2': {
-            'machine_args': ['-march=armv8.2-a+crc+crypto+lse', '-mcpu=octeontx2'],
+            'march': 'armv8.2-a',
+            'march_features': ['crc', 'crypto', 'lse'],
+            'compiler_options': ['-mcpu=octeontx2'],
             'flags': [
                 ['RTE_MACHINE', '"octeontx2"'],
                 ['RTE_ARM_FEATURE_ATOMICS', true],
@@ -137,7 +157,11 @@ implementer_ampere = {
         ['RTE_MAX_NUMA_NODES', 1]
     ],
     'part_number_config': {
-        '0x0': {'machine_args':  ['-march=armv8-a+crc+crypto', '-mtune=emag']}
+        '0x0': {
+            'march': 'armv8-a',
+            'march_features': ['crc', 'crypto'],
+            'compiler_options':  ['-mtune=emag']
+        }
     }
 }
 
@@ -149,7 +173,9 @@ implementer_hisilicon = {
     ],
     'part_number_config': {
         '0xd01': {
-            'machine_args': ['-march=armv8.2-a+crypto', '-mtune=tsv110'],
+            'march': 'armv8.2-a',
+            'march_features': ['crypto'],
+            'compiler_options': ['-mtune=tsv110'],
             'flags': [
                 ['RTE_MACHINE', '"Kunpeng 920"'],
                 ['RTE_ARM_FEATURE_ATOMICS', true],
@@ -158,7 +184,8 @@ implementer_hisilicon = {
             ]
         },
         '0xd02': {
-            'machine_args': ['-march=armv8.2-a+crypto+sve'],
+            'march': 'armv8.2-a',
+            'march_features': ['crypto', 'sve'],
             'flags': [
                 ['RTE_MACHINE', '"Kunpeng 930"'],
                 ['RTE_ARM_FEATURE_ATOMICS', true],
@@ -179,7 +206,14 @@ implementer_qualcomm = {
         ['RTE_MAX_NUMA_NODES', 1]
     ],
     'part_number_config': {
-        '0xc00': {'machine_args':  ['-march=armv8-a+crc']}
+        '0x800': {
+            'march': 'armv8-a',
+            'march_features': ['crc']
+        },
+        '0xc00': {
+            'march': 'armv8-a',
+            'march_features': ['crc']
+        }
     }
 }
 
@@ -193,12 +227,18 @@ implementers = {
     '0x51': implementer_qualcomm
 }
 
-# SoC specific aarch64 flags have the highest priority
+# SoC specific armv8 flags have the highest priority
 #     (will overwrite all other flags)
 soc_generic = {
-    'description': 'Generic un-optimized build for all aarch64 machines',
+    'description': 'Generic un-optimized build for armv8 aarch64 exec mode',
     'implementer': 'generic',
     'part_number': 'generic'
+}
+
+soc_generic_aarch32 = {
+    'description': 'Generic un-optimized build for armv8 aarch32 exec mode',
+    'implementer': 'generic',
+    'part_number': 'generic_aarch32'
 }
 
 soc_armada = {
@@ -238,6 +278,7 @@ soc_cn10k = {
         ['RTE_MAX_NUMA_NODES', 1]
     ],
     'part_number': '0xd49',
+    'extra_march_features': ['crypto'],
     'numa': false
 }
 
@@ -330,28 +371,30 @@ soc_thunderxt88 = {
 
 '''
 Start of SoCs list
-generic:     Generic un-optimized build for all aarch64 machines.
-armada:      Marvell ARMADA
-bluefield:   NVIDIA BlueField
-centriq2400: Qualcomm Centriq 2400
-cn10k:       Marvell OCTEON 10
-dpaa:        NXP DPAA
-emag:        Ampere eMAG
-graviton2:   AWS Graviton2
-kunpeng920:  HiSilicon Kunpeng 920
-kunpeng930:  HiSilicon Kunpeng 930
-n1sdp:       Arm Neoverse N1SDP
-n2:          Arm Neoverse N2
-octeontx2:   Marvell OCTEON TX2
-stingray:    Broadcom Stingray
-thunderx2:   Marvell ThunderX2 T99
-thunderxt88: Marvell ThunderX T88
+generic:         Generic un-optimized build for armv8 aarch64 execution mode.
+generic_aarch32: Generic un-optimized build for armv8 aarch32 execution mode.
+armada:          Marvell ARMADA
+bluefield:       NVIDIA BlueField
+centriq2400:     Qualcomm Centriq 2400
+cn10k:           Marvell OCTEON 10
+dpaa:            NXP DPAA
+emag:            Ampere eMAG
+graviton2:       AWS Graviton2
+kunpeng920:      HiSilicon Kunpeng 920
+kunpeng930:      HiSilicon Kunpeng 930
+n1sdp:           Arm Neoverse N1SDP
+n2:              Arm Neoverse N2
+octeontx2:       Marvell OCTEON TX2
+stingray:        Broadcom Stingray
+thunderx2:       Marvell ThunderX2 T99
+thunderxt88:     Marvell ThunderX T88
 End of SoCs list
 '''
 # The string above is included in the documentation, keep it in sync with the
 # SoCs list below.
 socs = {
     'generic': soc_generic,
+    'generic_aarch32': soc_generic_aarch32,
     'armada': soc_armada,
     'bluefield': soc_bluefield,
     'centriq2400': soc_centriq2400,
@@ -372,27 +415,45 @@ socs = {
 dpdk_conf.set('RTE_ARCH_ARM', 1)
 dpdk_conf.set('RTE_FORCE_INTRINSICS', 1)
 
+update_flags = false
+soc_flags = []
 if dpdk_conf.get('RTE_ARCH_32')
-    # armv7 build
+    # 32-bit build
     dpdk_conf.set('RTE_CACHE_LINE_SIZE', 64)
-    dpdk_conf.set('RTE_ARCH_ARMv7', 1)
-    # the minimum architecture supported, armv7-a, needs the following,
-    machine_args += '-mfpu=neon'
+    if meson.is_cross_build()
+        update_flags = true
+        soc = meson.get_cross_property('platform', '')
+        if soc == ''
+            error('Arm SoC must be specified in the cross file.')
+        endif
+        soc_config = socs.get(soc, {'not_supported': true})
+        flags_common = []
+    else
+        # armv7 build
+        dpdk_conf.set('RTE_ARCH_ARMv7', true)
+        # the minimum architecture supported, armv7-a, needs the following,
+        machine_args += '-mfpu=neon'
+    endif
 else
-    # aarch64 build
-    soc = get_option('platform')
+    # armv8 build
+    update_flags = true
     soc_config = {}
     if not meson.is_cross_build()
-        if machine == 'generic'
-            # generic build
-            if soc != ''
-                error('Building for a particular platform is unsupported with generic build.')
+        # for backwards compatibility:
+        #   machine=native is the same behavior as soc=native
+        #   machine=generic/default is the same as soc=generic
+        # cpu_instruction_set holds the proper value - native, generic or cpu
+        # the old behavior only distinguished between generic and native build
+        if machine != 'auto'
+            if cpu_instruction_set == 'generic'
+                soc = 'generic'
+            else
+                soc = 'native'
             endif
-            implementer_id = 'generic'
-            part_number = 'generic'
-        elif soc != ''
-            soc_config = socs.get(soc, {'not_supported': true})
         else
+            soc = platform
+        endif
+        if soc == 'native'
             # native build
             # The script returns ['Implementer', 'Variant', 'Architecture',
             # 'Primary Part number', 'Revision']
@@ -406,6 +467,9 @@ else
             else
                 error('Error when getting Arm Implementer ID and part number.')
             endif
+        else
+            # SoC build
+            soc_config = socs.get(soc, {'not_supported': true})
         endif
     else
         # cross build
@@ -415,8 +479,9 @@ else
         endif
         soc_config = socs.get(soc, {'not_supported': true})
     endif
+endif
 
-    soc_flags = []
+if update_flags
     if soc_config.has_key('not_supported')
         error('SoC @0@ not supported.'.format(soc))
     elif soc_config != {}
@@ -437,7 +502,7 @@ else
     else
         error('Unsupported Arm implementer: @0@. '.format(implementer_id) +
               'Please add support for it or use the generic ' +
-              '(-Dmachine=generic) build.')
+              '(-Dplatform=generic) build.')
     endif
 
     message('Arm implementer: ' + implementer_config['description'])
@@ -452,19 +517,71 @@ else
         error('Unsupported part number @0@ of implementer @1@. '
               .format(part_number, implementer_id) +
               'Please add support for it or use the generic ' +
-              '(-Dmachine=generic) build.')
+              '(-Dplatform=generic) build.')
     endif
 
     # add/overwrite flags in the proper order
     dpdk_flags = flags_common + implementer_config['flags'] + part_number_config.get('flags', []) + soc_flags
 
-    # apply supported machine args
     machine_args = [] # Clear previous machine args
-    foreach flag: part_number_config['machine_args']
-        if cc.has_argument(flag)
-            machine_args += flag
+
+    # probe supported archs and their features
+    candidate_march = ''
+    if part_number_config.has_key('march')
+        supported_marchs = ['armv8.6-a', 'armv8.5-a', 'armv8.4-a', 'armv8.3-a',
+                            'armv8.2-a', 'armv8.1-a', 'armv8-a']
+        check_compiler_support = false
+        foreach supported_march: supported_marchs
+            if supported_march == part_number_config['march']
+                # start checking from this version downwards
+                check_compiler_support = true
+            endif
+            if (check_compiler_support and
+                cc.has_argument('-march=' + supported_march))
+                candidate_march = supported_march
+                # highest supported march version found
+                break
+            endif
+        endforeach
+        if candidate_march == ''
+            error('No suitable armv8 march version found.')
         endif
-    endforeach
+        if candidate_march != part_number_config['march']
+            warning('Configuration march version is ' +
+                    '@0@, but the compiler supports only @1@.'
+                    .format(part_number_config['march'], candidate_march))
+        endif
+        candidate_march = '-march=' + candidate_march
+
+        march_features = []
+        if part_number_config.has_key('march_features')
+            march_features += part_number_config['march_features']
+        endif
+        if soc_config.has_key('extra_march_features')
+            march_features += soc_config['extra_march_features']
+        endif
+        foreach feature: march_features
+            if cc.has_argument('+'.join([candidate_march, feature]))
+                candidate_march = '+'.join([candidate_march, feature])
+            else
+                warning('The compiler does not support feature @0@'
+                    .format(feature))
+            endif
+        endforeach
+        machine_args += candidate_march
+    endif
+
+    # apply supported compiler options
+    if part_number_config.has_key('compiler_options')
+        foreach flag: part_number_config['compiler_options']
+            if cc.has_argument(flag)
+                machine_args += flag
+            else
+                warning('Configuration compiler option ' +
+                        '@0@ isn\'t supported.'.format(flag))
+            endif
+        endforeach
+    endif
 
     # apply flags
     foreach flag: dpdk_flags
@@ -478,6 +595,13 @@ message('Using machine args: @0@'.format(machine_args))
 if (cc.get_define('__ARM_NEON', args: machine_args) != '' or
     cc.get_define('__aarch64__', args: machine_args) != '')
     compile_time_cpuflags += ['RTE_CPUFLAG_NEON']
+endif
+
+if cc.get_define('__ARM_FEATURE_SVE', args: machine_args) != ''
+    compile_time_cpuflags += ['RTE_CPUFLAG_SVE']
+    if (cc.check_header('arm_sve.h'))
+        dpdk_conf.set('RTE_HAS_SVE_ACLE', 1)
+    endif
 endif
 
 if cc.get_define('__ARM_FEATURE_CRC32', args: machine_args) != ''

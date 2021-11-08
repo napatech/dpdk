@@ -187,6 +187,7 @@ int bnxt_representor_init(struct rte_eth_dev *eth_dev, void *params)
 	eth_dev->data->dev_flags |= RTE_ETH_DEV_REPRESENTOR |
 					RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 	eth_dev->data->representor_id = rep_params->vf_id;
+	eth_dev->data->backer_port_id = rep_params->parent_dev->data->port_id;
 
 	rte_eth_random_addr(vf_rep_bp->dflt_mac_addr);
 	memcpy(vf_rep_bp->mac_addr, vf_rep_bp->dflt_mac_addr,
@@ -536,7 +537,7 @@ int bnxt_rep_dev_info_get_op(struct rte_eth_dev *eth_dev,
 
 	dev_info->rx_offload_capa = BNXT_DEV_RX_OFFLOAD_SUPPORT;
 	if (parent_bp->flags & BNXT_FLAG_PTP_SUPPORTED)
-		dev_info->rx_offload_capa |= DEV_RX_OFFLOAD_TIMESTAMP;
+		dev_info->rx_offload_capa |= RTE_ETH_RX_OFFLOAD_TIMESTAMP;
 	dev_info->tx_offload_capa = BNXT_DEV_TX_OFFLOAD_SUPPORT;
 	dev_info->flow_type_rss_offloads = BNXT_ETH_RSS_SUPPORT;
 
@@ -630,7 +631,7 @@ int bnxt_rep_rx_queue_setup_op(struct rte_eth_dev *eth_dev,
 	if (eth_dev->data->rx_queues) {
 		rxq = eth_dev->data->rx_queues[queue_idx];
 		if (rxq)
-			bnxt_rx_queue_release_op(rxq);
+			bnxt_rx_queue_release_op(eth_dev, queue_idx);
 	}
 
 	rxq = rte_zmalloc_socket("bnxt_vfr_rx_queue",
@@ -640,6 +641,8 @@ int bnxt_rep_rx_queue_setup_op(struct rte_eth_dev *eth_dev,
 		PMD_DRV_LOG(ERR, "bnxt_vfr_rx_queue allocation failed!\n");
 		return -ENOMEM;
 	}
+
+	eth_dev->data->rx_queues[queue_idx] = rxq;
 
 	rxq->nb_rx_desc = nb_desc;
 
@@ -660,20 +663,19 @@ int bnxt_rep_rx_queue_setup_op(struct rte_eth_dev *eth_dev,
 	rxq->rx_ring->rx_buf_ring = buf_ring;
 	rxq->queue_id = queue_idx;
 	rxq->port_id = eth_dev->data->port_id;
-	eth_dev->data->rx_queues[queue_idx] = rxq;
 
 	return 0;
 
 out:
 	if (rxq)
-		bnxt_rep_rx_queue_release_op(rxq);
+		bnxt_rep_rx_queue_release_op(eth_dev, queue_idx);
 
 	return rc;
 }
 
-void bnxt_rep_rx_queue_release_op(void *rx_queue)
+void bnxt_rep_rx_queue_release_op(struct rte_eth_dev *dev, uint16_t queue_idx)
 {
-	struct bnxt_rx_queue *rxq = (struct bnxt_rx_queue *)rx_queue;
+	struct bnxt_rx_queue *rxq = dev->data->rx_queues[queue_idx];
 
 	if (!rxq)
 		return;
@@ -728,8 +730,8 @@ int bnxt_rep_tx_queue_setup_op(struct rte_eth_dev *eth_dev,
 
 	if (eth_dev->data->tx_queues) {
 		vfr_txq = eth_dev->data->tx_queues[queue_idx];
-		bnxt_rep_tx_queue_release_op(vfr_txq);
-		vfr_txq = NULL;
+		if (vfr_txq != NULL)
+			bnxt_rep_tx_queue_release_op(eth_dev, queue_idx);
 	}
 
 	vfr_txq = rte_zmalloc_socket("bnxt_vfr_tx_queue",
@@ -758,15 +760,16 @@ int bnxt_rep_tx_queue_setup_op(struct rte_eth_dev *eth_dev,
 	return 0;
 }
 
-void bnxt_rep_tx_queue_release_op(void *tx_queue)
+void bnxt_rep_tx_queue_release_op(struct rte_eth_dev *dev, uint16_t queue_idx)
 {
-	struct bnxt_vf_rep_tx_queue *vfr_txq = tx_queue;
+	struct bnxt_vf_rep_tx_queue *vfr_txq = dev->data->tx_queues[queue_idx];
 
 	if (!vfr_txq)
 		return;
 
 	rte_free(vfr_txq->txq);
 	rte_free(vfr_txq);
+	dev->data->tx_queues[queue_idx] = NULL;
 }
 
 int bnxt_rep_stats_get_op(struct rte_eth_dev *eth_dev,

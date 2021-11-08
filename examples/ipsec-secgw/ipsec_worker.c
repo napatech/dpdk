@@ -12,23 +12,31 @@
 #include "ipsec-secgw.h"
 #include "ipsec_worker.h"
 
+struct port_drv_mode_data {
+	struct rte_security_session *sess;
+	struct rte_security_ctx *ctx;
+};
+
 static inline enum pkt_type
 process_ipsec_get_pkt_type(struct rte_mbuf *pkt, uint8_t **nlp)
 {
 	struct rte_ether_hdr *eth;
+	uint32_t ptype = pkt->packet_type;
 
 	eth = rte_pktmbuf_mtod(pkt, struct rte_ether_hdr *);
-	if (eth->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4)) {
+	rte_prefetch0(eth);
+
+	if (RTE_ETH_IS_IPV4_HDR(ptype)) {
 		*nlp = RTE_PTR_ADD(eth, RTE_ETHER_HDR_LEN +
 				offsetof(struct ip, ip_p));
-		if (**nlp == IPPROTO_ESP)
+		if ((ptype & RTE_PTYPE_TUNNEL_MASK) == RTE_PTYPE_TUNNEL_ESP)
 			return PKT_TYPE_IPSEC_IPV4;
 		else
 			return PKT_TYPE_PLAIN_IPV4;
-	} else if (eth->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV6)) {
+	} else if (RTE_ETH_IS_IPV6_HDR(ptype)) {
 		*nlp = RTE_PTR_ADD(eth, RTE_ETHER_HDR_LEN +
 				offsetof(struct ip6_hdr, ip6_nxt));
-		if (**nlp == IPPROTO_ESP)
+		if ((ptype & RTE_PTYPE_TUNNEL_MASK) == RTE_PTYPE_TUNNEL_ESP)
 			return PKT_TYPE_IPSEC_IPV6;
 		else
 			return PKT_TYPE_PLAIN_IPV6;
@@ -44,8 +52,8 @@ update_mac_addrs(struct rte_mbuf *pkt, uint16_t portid)
 	struct rte_ether_hdr *ethhdr;
 
 	ethhdr = rte_pktmbuf_mtod(pkt, struct rte_ether_hdr *);
-	memcpy(&ethhdr->s_addr, &ethaddr_tbl[portid].src, RTE_ETHER_ADDR_LEN);
-	memcpy(&ethhdr->d_addr, &ethaddr_tbl[portid].dst, RTE_ETHER_ADDR_LEN);
+	memcpy(&ethhdr->src_addr, &ethaddr_tbl[portid].src, RTE_ETHER_ADDR_LEN);
+	memcpy(&ethhdr->dst_addr, &ethaddr_tbl[portid].dst, RTE_ETHER_ADDR_LEN);
 }
 
 static inline void
@@ -60,7 +68,8 @@ ipsec_event_pre_forward(struct rte_mbuf *m, unsigned int port_id)
 
 static inline void
 prepare_out_sessions_tbl(struct sa_ctx *sa_out,
-		struct rte_security_session **sess_tbl, uint16_t size)
+			 struct port_drv_mode_data *data,
+			 uint16_t size)
 {
 	struct rte_ipsec_session *pri_sess;
 	struct ipsec_sa *sa;
@@ -95,9 +104,10 @@ prepare_out_sessions_tbl(struct sa_ctx *sa_out,
 		}
 
 		/* Use only first inline session found for a given port */
-		if (sess_tbl[sa->portid])
+		if (data[sa->portid].sess)
 			continue;
-		sess_tbl[sa->portid] = pri_sess->security.ses;
+		data[sa->portid].sess = pri_sess->security.ses;
+		data[sa->portid].ctx = pri_sess->security.ctx;
 	}
 }
 
@@ -201,9 +211,9 @@ process_ipsec_ev_inbound(struct ipsec_ctx *ctx, struct route_table *rt,
 
 	switch (type) {
 	case PKT_TYPE_PLAIN_IPV4:
-		if (pkt->ol_flags & PKT_RX_SEC_OFFLOAD) {
+		if (pkt->ol_flags & RTE_MBUF_F_RX_SEC_OFFLOAD) {
 			if (unlikely(pkt->ol_flags &
-				     PKT_RX_SEC_OFFLOAD_FAILED)) {
+				     RTE_MBUF_F_RX_SEC_OFFLOAD_FAILED)) {
 				RTE_LOG(ERR, IPSEC,
 					"Inbound security offload failed\n");
 				goto drop_pkt_and_exit;
@@ -219,9 +229,9 @@ process_ipsec_ev_inbound(struct ipsec_ctx *ctx, struct route_table *rt,
 		break;
 
 	case PKT_TYPE_PLAIN_IPV6:
-		if (pkt->ol_flags & PKT_RX_SEC_OFFLOAD) {
+		if (pkt->ol_flags & RTE_MBUF_F_RX_SEC_OFFLOAD) {
 			if (unlikely(pkt->ol_flags &
-				     PKT_RX_SEC_OFFLOAD_FAILED)) {
+				     RTE_MBUF_F_RX_SEC_OFFLOAD_FAILED)) {
 				RTE_LOG(ERR, IPSEC,
 					"Inbound security offload failed\n");
 				goto drop_pkt_and_exit;
@@ -336,7 +346,7 @@ process_ipsec_ev_outbound(struct ipsec_ctx *ctx, struct route_table *rt,
 	}
 
 	/* Validate sa_idx */
-	if (sa_idx >= ctx->sa_ctx->nb_sa)
+	if (unlikely(sa_idx >= ctx->sa_ctx->nb_sa))
 		goto drop_pkt_and_exit;
 
 	/* Else the packet has to be protected */
@@ -351,22 +361,24 @@ process_ipsec_ev_outbound(struct ipsec_ctx *ctx, struct route_table *rt,
 	sess = ipsec_get_primary_session(sa);
 
 	/* Allow only inline protocol for now */
-	if (sess->type != RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL) {
+	if (unlikely(sess->type != RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL)) {
 		RTE_LOG(ERR, IPSEC, "SA type not supported\n");
 		goto drop_pkt_and_exit;
 	}
 
-	if (sess->security.ol_flags & RTE_SECURITY_TX_OLOAD_NEED_MDATA)
-		*(struct rte_security_session **)rte_security_dynfield(pkt) =
-				sess->security.ses;
+	rte_security_set_pkt_metadata(sess->security.ctx,
+				      sess->security.ses, pkt, NULL);
 
 	/* Mark the packet for Tx security offload */
-	pkt->ol_flags |= PKT_TX_SEC_OFFLOAD;
+	pkt->ol_flags |= RTE_MBUF_F_TX_SEC_OFFLOAD;
 
 	/* Get the port to which this pkt need to be submitted */
 	port_id = sa->portid;
 
 send_pkt:
+	/* Provide L2 len for Outbound processing */
+	pkt->l2_len = RTE_ETHER_HDR_LEN;
+
 	/* Update mac addresses */
 	update_mac_addrs(pkt, port_id);
 
@@ -398,7 +410,7 @@ static void
 ipsec_wrkr_non_burst_int_port_drv_mode(struct eh_event_link_info *links,
 		uint8_t nb_links)
 {
-	struct rte_security_session *sess_tbl[RTE_MAX_ETHPORTS] = { NULL };
+	struct port_drv_mode_data data[RTE_MAX_ETHPORTS];
 	unsigned int nb_rx = 0;
 	struct rte_mbuf *pkt;
 	struct rte_event ev;
@@ -412,6 +424,8 @@ ipsec_wrkr_non_burst_int_port_drv_mode(struct eh_event_link_info *links,
 		return;
 	}
 
+	memset(&data, 0, sizeof(struct port_drv_mode_data));
+
 	/* Get core ID */
 	lcore_id = rte_lcore_id();
 
@@ -422,8 +436,8 @@ ipsec_wrkr_non_burst_int_port_drv_mode(struct eh_event_link_info *links,
 	 * Prepare security sessions table. In outbound driver mode
 	 * we always use first session configured for a given port
 	 */
-	prepare_out_sessions_tbl(socket_ctx[socket_id].sa_out, sess_tbl,
-			RTE_MAX_ETHPORTS);
+	prepare_out_sessions_tbl(socket_ctx[socket_id].sa_out, data,
+				 RTE_MAX_ETHPORTS);
 
 	RTE_LOG(INFO, IPSEC,
 		"Launching event mode worker (non-burst - Tx internal port - "
@@ -460,19 +474,21 @@ ipsec_wrkr_non_burst_int_port_drv_mode(struct eh_event_link_info *links,
 
 		if (!is_unprotected_port(port_id)) {
 
-			if (unlikely(!sess_tbl[port_id])) {
+			if (unlikely(!data[port_id].sess)) {
 				rte_pktmbuf_free(pkt);
 				continue;
 			}
 
 			/* Save security session */
-			if (rte_security_dynfield_is_registered())
-				*(struct rte_security_session **)
-					rte_security_dynfield(pkt) =
-						sess_tbl[port_id];
+			rte_security_set_pkt_metadata(data[port_id].ctx,
+						      data[port_id].sess, pkt,
+						      NULL);
 
 			/* Mark the packet for Tx security offload */
-			pkt->ol_flags |= PKT_TX_SEC_OFFLOAD;
+			pkt->ol_flags |= RTE_MBUF_F_TX_SEC_OFFLOAD;
+
+			/* Provide L2 len for Outbound processing */
+			pkt->l2_len = RTE_ETHER_HDR_LEN;
 		}
 
 		/*

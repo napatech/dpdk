@@ -204,7 +204,7 @@ slave_vlan_filter_set(uint16_t bonded_port_id, uint16_t slave_port_id)
 
 	bonded_eth_dev = &rte_eth_devices[bonded_port_id];
 	if ((bonded_eth_dev->data->dev_conf.rxmode.offloads &
-			DEV_RX_OFFLOAD_VLAN_FILTER) == 0)
+			RTE_ETH_RX_OFFLOAD_VLAN_FILTER) == 0)
 		return 0;
 
 	internals = bonded_eth_dev->data->dev_private;
@@ -290,6 +290,7 @@ eth_bond_slave_inherit_dev_info_rx_first(struct bond_dev_private *internals,
 	struct rte_eth_rxconf *rxconf_i = &internals->default_rxconf;
 
 	internals->reta_size = di->reta_size;
+	internals->rss_key_len = di->hash_key_size;
 
 	/* Inherit Rx offload capabilities from the first slave device */
 	internals->rx_offload_capa = di->rx_offload_capa;
@@ -385,6 +386,11 @@ eth_bond_slave_inherit_dev_info_rx_next(struct bond_dev_private *internals,
 	 */
 	if (internals->reta_size > di->reta_size)
 		internals->reta_size = di->reta_size;
+	if (internals->rss_key_len > di->hash_key_size) {
+		RTE_BOND_LOG(WARNING, "slave has different rss key size, "
+				"configuring rss may fail");
+		internals->rss_key_len = di->hash_key_size;
+	}
 
 	if (!internals->max_rx_pktlen &&
 	    di->max_rx_pktlen < internals->candidate_max_rx_pktlen)
@@ -586,7 +592,7 @@ __eth_bond_slave_add_lock_free(uint16_t bonded_port_id, uint16_t slave_port_id)
 			return -1;
 		}
 
-		 if (link_props.link_status == ETH_LINK_UP) {
+		if (link_props.link_status == RTE_ETH_LINK_UP) {
 			if (internals->active_slave_count == 0 &&
 			    !internals->user_defined_primary_port)
 				bond_ethdev_primary_set(internals,
@@ -721,7 +727,7 @@ __eth_bond_slave_remove_lock_free(uint16_t bonded_port_id,
 		internals->tx_offload_capa = 0;
 		internals->rx_queue_offload_capa = 0;
 		internals->tx_queue_offload_capa = 0;
-		internals->flow_type_rss_offloads = ETH_RSS_PROTO_MASK;
+		internals->flow_type_rss_offloads = RTE_ETH_RSS_PROTO_MASK;
 		internals->reta_size = 0;
 		internals->candidate_max_rx_pktlen = 0;
 		internals->max_rx_pktlen = 0;

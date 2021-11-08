@@ -21,9 +21,32 @@ extern "C" {
 #endif
 
 #include <stdio.h>
-#include <sys/queue.h>
 #include <rte_compat.h>
 #include <rte_bus.h>
+
+/**
+ * Bus type key in global devargs syntax.
+ *
+ * Legacy devargs parser doesn't use this key as bus type
+ * is resolved as first optional value separated by ":".
+ */
+#define RTE_DEVARGS_KEY_BUS "bus"
+
+/**
+ * Class type key in global devargs syntax.
+ *
+ * Legacy devargs parser doesn't parse class type. PMD driver is
+ * encouraged to use this key to resolve class type.
+ */
+#define RTE_DEVARGS_KEY_CLASS "class"
+
+/**
+ * Driver type key in global devargs syntax.
+ *
+ * Legacy devargs parser doesn't parse driver type. PMD driver is
+ * encouraged to use this key to resolve driver type.
+ */
+#define RTE_DEVARGS_KEY_DRIVER "driver"
 
 /**
  * Type of generic device
@@ -33,12 +56,6 @@ enum rte_devtype {
 	RTE_DEVTYPE_BLOCKED,
 	RTE_DEVTYPE_VIRTUAL,
 };
-
-/* Backwards compatibility will be removed later */
-#define RTE_DEVTYPE_WHITELISTED_PCI \
-	RTE_DEPRECATED(RTE_DEVTYPE_WHITELISTED_PCI) RTE_DEVTYPE_ALLOWED
-#define RTE_DEVTYPE_BLACKLISTED_PCI \
-	RTE_DEPRECATED(RTE_DEVTYPE_BLACKLISTED_PCI) RTE_DEVTYPE_BLOCKED
 
 /**
  * Structure that stores a device given by the user with its arguments
@@ -52,7 +69,7 @@ enum rte_devtype {
  */
 struct rte_devargs {
 	/** Next in list. */
-	TAILQ_ENTRY(rte_devargs) next;
+	RTE_TAILQ_ENTRY(rte_devargs) next;
 	/** Type of device. */
 	enum rte_devtype type;
 	/** Device policy. */

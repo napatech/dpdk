@@ -102,9 +102,9 @@ mlx5_devx_modify_rq(struct mlx5_rxq_obj *rxq_obj, uint8_t type)
  * @return
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
-static int
-mlx5_devx_modify_sq(struct mlx5_txq_obj *obj, enum mlx5_txq_modify_type type,
-		    uint8_t dev_port)
+int
+mlx5_txq_devx_modify(struct mlx5_txq_obj *obj, enum mlx5_txq_modify_type type,
+		     uint8_t dev_port)
 {
 	struct mlx5_devx_modify_sq_attr msq_attr = { 0 };
 	int ret;
@@ -236,6 +236,7 @@ static int
 mlx5_rxq_create_devx_rq_resources(struct rte_eth_dev *dev, uint16_t idx)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_common_device *cdev = priv->sh->cdev;
 	struct mlx5_rxq_data *rxq_data = (*priv->rxqs)[idx];
 	struct mlx5_rxq_ctrl *rxq_ctrl =
 		container_of(rxq_data, struct mlx5_rxq_ctrl, rxq);
@@ -249,6 +250,8 @@ mlx5_rxq_create_devx_rq_resources(struct rte_eth_dev *dev, uint16_t idx)
 	rq_attr.vsd = (rxq_data->vlan_strip) ? 0 : 1;
 	rq_attr.cqn = rxq_ctrl->obj->cq_obj.cq->id;
 	rq_attr.scatter_fcs = (rxq_data->crc_present) ? 1 : 0;
+	rq_attr.ts_format =
+			mlx5_ts_format_conv(cdev->config.hca_attr.rq_ts_format);
 	/* Fill WQ attributes for this RQ. */
 	if (mlx5_rxq_mprq_enabled(rxq_data)) {
 		rq_attr.wq_attr.wq_type = MLX5_WQ_TYPE_CYCLIC_STRIDING_RQ;
@@ -275,12 +278,11 @@ mlx5_rxq_create_devx_rq_resources(struct rte_eth_dev *dev, uint16_t idx)
 	rq_attr.wq_attr.end_padding_mode = priv->config.hw_padding ?
 						MLX5_WQ_END_PAD_MODE_ALIGN :
 						MLX5_WQ_END_PAD_MODE_NONE;
-	rq_attr.wq_attr.pd = priv->sh->pdn;
+	rq_attr.wq_attr.pd = cdev->pdn;
 	rq_attr.counter_set_id = priv->counter_set_id;
 	/* Create RQ using DevX API. */
-	return mlx5_devx_rq_create(priv->sh->ctx, &rxq_ctrl->obj->rq_obj,
-				   wqe_size, log_desc_n, &rq_attr,
-				   rxq_ctrl->socket);
+	return mlx5_devx_rq_create(cdev->ctx, &rxq_ctrl->obj->rq_obj, wqe_size,
+				   log_desc_n, &rq_attr, rxq_ctrl->socket);
 }
 
 /**
@@ -364,8 +366,8 @@ mlx5_rxq_create_devx_cq_resources(struct rte_eth_dev *dev, uint16_t idx)
 	cq_attr.uar_page_id = mlx5_os_get_devx_uar_page_id(sh->devx_rx_uar);
 	log_cqe_n = log2above(cqe_n);
 	/* Create CQ using DevX API. */
-	ret = mlx5_devx_cq_create(sh->ctx, &rxq_ctrl->obj->cq_obj, log_cqe_n,
-				  &cq_attr, sh->numa_node);
+	ret = mlx5_devx_cq_create(sh->cdev->ctx, &rxq_ctrl->obj->cq_obj,
+				  log_cqe_n, &cq_attr, sh->numa_node);
 	if (ret)
 		return ret;
 	cq_obj = &rxq_ctrl->obj->cq_obj;
@@ -441,7 +443,7 @@ mlx5_rxq_obj_hairpin_new(struct rte_eth_dev *dev, uint16_t idx)
 			attr.wq_attr.log_hairpin_data_sz -
 			MLX5_HAIRPIN_QUEUE_STRIDE;
 	attr.counter_set_id = priv->counter_set_id;
-	tmpl->rq = mlx5_devx_cmd_create_rq(priv->sh->ctx, &attr,
+	tmpl->rq = mlx5_devx_cmd_create_rq(priv->sh->cdev->ctx, &attr,
 					   rxq_ctrl->socket);
 	if (!tmpl->rq) {
 		DRV_LOG(ERR,
@@ -485,8 +487,8 @@ mlx5_rxq_devx_obj_new(struct rte_eth_dev *dev, uint16_t idx)
 			  MLX5DV_DEVX_CREATE_EVENT_CHANNEL_FLAGS_OMIT_EV_DATA;
 
 		tmpl->devx_channel = mlx5_os_devx_create_event_channel
-								(priv->sh->ctx,
-								 devx_ev_flag);
+							(priv->sh->cdev->ctx,
+							 devx_ev_flag);
 		if (!tmpl->devx_channel) {
 			rte_errno = errno;
 			DRV_LOG(ERR, "Failed to create event channel %d.",
@@ -601,7 +603,7 @@ mlx5_devx_ind_table_new(struct rte_eth_dev *dev, const unsigned int log_n,
 							ind_tbl->queues_n);
 	if (!rqt_attr)
 		return -rte_errno;
-	ind_tbl->rqt = mlx5_devx_cmd_create_rqt(priv->sh->ctx, rqt_attr);
+	ind_tbl->rqt = mlx5_devx_cmd_create_rqt(priv->sh->cdev->ctx, rqt_attr);
 	mlx5_free(rqt_attr);
 	if (!ind_tbl->rqt) {
 		DRV_LOG(ERR, "Port %u cannot create DevX RQT.",
@@ -769,7 +771,7 @@ mlx5_devx_hrxq_new(struct rte_eth_dev *dev, struct mlx5_hrxq *hrxq,
 
 	mlx5_devx_tir_attr_set(dev, hrxq->rss_key, hrxq->hash_fields,
 			       hrxq->ind_table, tunnel, &tir_attr);
-	hrxq->tir = mlx5_devx_cmd_create_tir(priv->sh->ctx, &tir_attr);
+	hrxq->tir = mlx5_devx_cmd_create_tir(priv->sh->cdev->ctx, &tir_attr);
 	if (!hrxq->tir) {
 		DRV_LOG(ERR, "Port %u cannot create DevX TIR.",
 			dev->data->port_id);
@@ -888,6 +890,37 @@ mlx5_devx_drop_action_destroy(struct rte_eth_dev *dev)
 }
 
 /**
+ * Select TXQ TIS number.
+ *
+ * @param dev
+ *   Pointer to Ethernet device.
+ * @param queue_idx
+ *   Queue index in DPDK Tx queue array.
+ *
+ * @return
+ *   > 0 on success, a negative errno value otherwise.
+ */
+static uint32_t
+mlx5_get_txq_tis_num(struct rte_eth_dev *dev, uint16_t queue_idx)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	int tis_idx;
+
+	if (priv->sh->bond.n_port && priv->sh->lag.affinity_mode ==
+			MLX5_LAG_MODE_TIS) {
+		tis_idx = (priv->lag_affinity_idx + queue_idx) %
+			priv->sh->bond.n_port;
+		DRV_LOG(INFO, "port %d txq %d gets affinity %d and maps to PF %d.",
+			dev->data->port_id, queue_idx, tis_idx + 1,
+			priv->sh->lag.tx_remap_affinity[tis_idx]);
+	} else {
+		tis_idx = 0;
+	}
+	MLX5_ASSERT(priv->sh->tis[tis_idx]);
+	return priv->sh->tis[tis_idx]->id;
+}
+
+/**
  * Create the Tx hairpin queue object.
  *
  * @param dev
@@ -934,8 +967,9 @@ mlx5_txq_obj_hairpin_new(struct rte_eth_dev *dev, uint16_t idx)
 	attr.wq_attr.log_hairpin_num_packets =
 			attr.wq_attr.log_hairpin_data_sz -
 			MLX5_HAIRPIN_QUEUE_STRIDE;
-	attr.tis_num = priv->sh->tis->id;
-	tmpl->sq = mlx5_devx_cmd_create_sq(priv->sh->ctx, &attr);
+
+	attr.tis_num = mlx5_get_txq_tis_num(dev, idx);
+	tmpl->sq = mlx5_devx_cmd_create_sq(priv->sh->cdev->ctx, &attr);
 	if (!tmpl->sq) {
 		DRV_LOG(ERR,
 			"Port %u tx hairpin queue %u can't create SQ object.",
@@ -980,6 +1014,7 @@ mlx5_txq_create_devx_sq_resources(struct rte_eth_dev *dev, uint16_t idx,
 				  uint16_t log_desc_n)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_common_device *cdev = priv->sh->cdev;
 	struct mlx5_txq_data *txq_data = (*priv->txqs)[idx];
 	struct mlx5_txq_ctrl *txq_ctrl =
 			container_of(txq_data, struct mlx5_txq_ctrl, txq);
@@ -991,17 +1026,19 @@ mlx5_txq_create_devx_sq_resources(struct rte_eth_dev *dev, uint16_t idx,
 		.allow_swp = !!priv->config.swp,
 		.cqn = txq_obj->cq_obj.cq->id,
 		.tis_lst_sz = 1,
-		.tis_num = priv->sh->tis->id,
 		.wq_attr = (struct mlx5_devx_wq_attr){
-			.pd = priv->sh->pdn,
+			.pd = cdev->pdn,
 			.uar_page =
 				 mlx5_os_get_devx_uar_page_id(priv->sh->tx_uar),
 		},
-		.ts_format = mlx5_ts_format_conv(priv->sh->sq_ts_format),
+		.ts_format =
+			mlx5_ts_format_conv(cdev->config.hca_attr.sq_ts_format),
+		.tis_num = mlx5_get_txq_tis_num(dev, idx),
 	};
+
 	/* Create Send Queue object with DevX. */
-	return mlx5_devx_sq_create(priv->sh->ctx, &txq_obj->sq_obj, log_desc_n,
-				   &sq_attr, priv->sh->numa_node);
+	return mlx5_devx_sq_create(cdev->ctx, &txq_obj->sq_obj,
+				   log_desc_n, &sq_attr, priv->sh->numa_node);
 }
 #endif
 
@@ -1057,7 +1094,7 @@ mlx5_txq_devx_obj_new(struct rte_eth_dev *dev, uint16_t idx)
 		return 0;
 	}
 	/* Create completion queue object with DevX. */
-	ret = mlx5_devx_cq_create(sh->ctx, &txq_obj->cq_obj, log_desc_n,
+	ret = mlx5_devx_cq_create(sh->cdev->ctx, &txq_obj->cq_obj, log_desc_n,
 				  &cq_attr, priv->sh->numa_node);
 	if (ret) {
 		DRV_LOG(ERR, "Port %u Tx queue %u CQ creation failure.",
@@ -1117,7 +1154,7 @@ mlx5_txq_devx_obj_new(struct rte_eth_dev *dev, uint16_t idx)
 	*txq_data->qp_db = 0;
 	txq_data->qp_num_8s = txq_obj->sq_obj.sq->id << 8;
 	/* Change Send Queue state to Ready-to-Send. */
-	ret = mlx5_devx_modify_sq(txq_obj, MLX5_TXQ_MOD_RST2RDY, 0);
+	ret = mlx5_txq_devx_modify(txq_obj, MLX5_TXQ_MOD_RST2RDY, 0);
 	if (ret) {
 		rte_errno = errno;
 		DRV_LOG(ERR,
@@ -1186,7 +1223,7 @@ struct mlx5_obj_ops devx_obj_ops = {
 	.drop_action_create = mlx5_devx_drop_action_create,
 	.drop_action_destroy = mlx5_devx_drop_action_destroy,
 	.txq_obj_new = mlx5_txq_devx_obj_new,
-	.txq_obj_modify = mlx5_devx_modify_sq,
+	.txq_obj_modify = mlx5_txq_devx_modify,
 	.txq_obj_release = mlx5_txq_devx_obj_release,
 	.lb_dummy_queue_create = NULL,
 	.lb_dummy_queue_release = NULL,

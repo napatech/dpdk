@@ -2,21 +2,12 @@
  * Copyright(c) 2020 Intel Corporation
  */
 #include <stdlib.h>
-#include <string.h>
 #include <stdio.h>
 #include <errno.h>
-#include <inttypes.h>
-#include <sys/queue.h>
 #include <arpa/inet.h>
+#include <dlfcn.h>
 
-#include <rte_common.h>
-#include <rte_prefetch.h>
-#include <rte_byteorder.h>
-#include <rte_cycles.h>
-#include <rte_meter.h>
-
-#include "rte_swx_pipeline.h"
-#include "rte_swx_ctl.h"
+#include "rte_swx_pipeline_internal.h"
 
 #define CHECK(condition, err_code)                                             \
 do {                                                                           \
@@ -37,22 +28,9 @@ do {                                                                           \
 	       RTE_SWX_INSTRUCTION_SIZE),                                      \
 	      err_code)
 
-#ifndef TRACE_LEVEL
-#define TRACE_LEVEL 0
-#endif
-
-#if TRACE_LEVEL
-#define TRACE(...) printf(__VA_ARGS__)
-#else
-#define TRACE(...)
-#endif
-
 /*
  * Environment.
  */
-#define ntoh64(x) rte_be_to_cpu_64(x)
-#define hton64(x) rte_cpu_to_be_64(x)
-
 #ifndef RTE_SWX_PIPELINE_HUGE_PAGES_DISABLE
 
 #include <rte_malloc.h>
@@ -103,1245 +81,6 @@ env_free(void *start, size_t size)
 /*
  * Struct.
  */
-struct field {
-	char name[RTE_SWX_NAME_SIZE];
-	uint32_t n_bits;
-	uint32_t offset;
-};
-
-struct struct_type {
-	TAILQ_ENTRY(struct_type) node;
-	char name[RTE_SWX_NAME_SIZE];
-	struct field *fields;
-	uint32_t n_fields;
-	uint32_t n_bits;
-};
-
-TAILQ_HEAD(struct_type_tailq, struct_type);
-
-/*
- * Input port.
- */
-struct port_in_type {
-	TAILQ_ENTRY(port_in_type) node;
-	char name[RTE_SWX_NAME_SIZE];
-	struct rte_swx_port_in_ops ops;
-};
-
-TAILQ_HEAD(port_in_type_tailq, port_in_type);
-
-struct port_in {
-	TAILQ_ENTRY(port_in) node;
-	struct port_in_type *type;
-	void *obj;
-	uint32_t id;
-};
-
-TAILQ_HEAD(port_in_tailq, port_in);
-
-struct port_in_runtime {
-	rte_swx_port_in_pkt_rx_t pkt_rx;
-	void *obj;
-};
-
-/*
- * Output port.
- */
-struct port_out_type {
-	TAILQ_ENTRY(port_out_type) node;
-	char name[RTE_SWX_NAME_SIZE];
-	struct rte_swx_port_out_ops ops;
-};
-
-TAILQ_HEAD(port_out_type_tailq, port_out_type);
-
-struct port_out {
-	TAILQ_ENTRY(port_out) node;
-	struct port_out_type *type;
-	void *obj;
-	uint32_t id;
-};
-
-TAILQ_HEAD(port_out_tailq, port_out);
-
-struct port_out_runtime {
-	rte_swx_port_out_pkt_tx_t pkt_tx;
-	rte_swx_port_out_flush_t flush;
-	void *obj;
-};
-
-/*
- * Extern object.
- */
-struct extern_type_member_func {
-	TAILQ_ENTRY(extern_type_member_func) node;
-	char name[RTE_SWX_NAME_SIZE];
-	rte_swx_extern_type_member_func_t func;
-	uint32_t id;
-};
-
-TAILQ_HEAD(extern_type_member_func_tailq, extern_type_member_func);
-
-struct extern_type {
-	TAILQ_ENTRY(extern_type) node;
-	char name[RTE_SWX_NAME_SIZE];
-	struct struct_type *mailbox_struct_type;
-	rte_swx_extern_type_constructor_t constructor;
-	rte_swx_extern_type_destructor_t destructor;
-	struct extern_type_member_func_tailq funcs;
-	uint32_t n_funcs;
-};
-
-TAILQ_HEAD(extern_type_tailq, extern_type);
-
-struct extern_obj {
-	TAILQ_ENTRY(extern_obj) node;
-	char name[RTE_SWX_NAME_SIZE];
-	struct extern_type *type;
-	void *obj;
-	uint32_t struct_id;
-	uint32_t id;
-};
-
-TAILQ_HEAD(extern_obj_tailq, extern_obj);
-
-#ifndef RTE_SWX_EXTERN_TYPE_MEMBER_FUNCS_MAX
-#define RTE_SWX_EXTERN_TYPE_MEMBER_FUNCS_MAX 8
-#endif
-
-struct extern_obj_runtime {
-	void *obj;
-	uint8_t *mailbox;
-	rte_swx_extern_type_member_func_t funcs[RTE_SWX_EXTERN_TYPE_MEMBER_FUNCS_MAX];
-};
-
-/*
- * Extern function.
- */
-struct extern_func {
-	TAILQ_ENTRY(extern_func) node;
-	char name[RTE_SWX_NAME_SIZE];
-	struct struct_type *mailbox_struct_type;
-	rte_swx_extern_func_t func;
-	uint32_t struct_id;
-	uint32_t id;
-};
-
-TAILQ_HEAD(extern_func_tailq, extern_func);
-
-struct extern_func_runtime {
-	uint8_t *mailbox;
-	rte_swx_extern_func_t func;
-};
-
-/*
- * Header.
- */
-struct header {
-	TAILQ_ENTRY(header) node;
-	char name[RTE_SWX_NAME_SIZE];
-	struct struct_type *st;
-	uint32_t struct_id;
-	uint32_t id;
-};
-
-TAILQ_HEAD(header_tailq, header);
-
-struct header_runtime {
-	uint8_t *ptr0;
-};
-
-struct header_out_runtime {
-	uint8_t *ptr0;
-	uint8_t *ptr;
-	uint32_t n_bytes;
-};
-
-/*
- * Instruction.
- */
-
-/* Packet headers are always in Network Byte Order (NBO), i.e. big endian.
- * Packet meta-data fields are always assumed to be in Host Byte Order (HBO).
- * Table entry fields can be in either NBO or HBO; they are assumed to be in HBO
- * when transferred to packet meta-data and in NBO when transferred to packet
- * headers.
- */
-
-/* Notation conventions:
- *    -Header field: H = h.header.field (dst/src)
- *    -Meta-data field: M = m.field (dst/src)
- *    -Extern object mailbox field: E = e.field (dst/src)
- *    -Extern function mailbox field: F = f.field (dst/src)
- *    -Table action data field: T = t.field (src only)
- *    -Immediate value: I = 32-bit unsigned value (src only)
- */
-
-enum instruction_type {
-	/* rx m.port_in */
-	INSTR_RX,
-
-	/* tx port_out
-	 * port_out = MI
-	 */
-	INSTR_TX,   /* port_out = M */
-	INSTR_TX_I, /* port_out = I */
-
-	/* extract h.header */
-	INSTR_HDR_EXTRACT,
-	INSTR_HDR_EXTRACT2,
-	INSTR_HDR_EXTRACT3,
-	INSTR_HDR_EXTRACT4,
-	INSTR_HDR_EXTRACT5,
-	INSTR_HDR_EXTRACT6,
-	INSTR_HDR_EXTRACT7,
-	INSTR_HDR_EXTRACT8,
-
-	/* emit h.header */
-	INSTR_HDR_EMIT,
-	INSTR_HDR_EMIT_TX,
-	INSTR_HDR_EMIT2_TX,
-	INSTR_HDR_EMIT3_TX,
-	INSTR_HDR_EMIT4_TX,
-	INSTR_HDR_EMIT5_TX,
-	INSTR_HDR_EMIT6_TX,
-	INSTR_HDR_EMIT7_TX,
-	INSTR_HDR_EMIT8_TX,
-
-	/* validate h.header */
-	INSTR_HDR_VALIDATE,
-
-	/* invalidate h.header */
-	INSTR_HDR_INVALIDATE,
-
-	/* mov dst src
-	 * dst = src
-	 * dst = HMEF, src = HMEFTI
-	 */
-	INSTR_MOV,    /* dst = MEF, src = MEFT */
-	INSTR_MOV_MH, /* dst = MEF, src = H */
-	INSTR_MOV_HM, /* dst = H, src = MEFT */
-	INSTR_MOV_HH, /* dst = H, src = H */
-	INSTR_MOV_I,  /* dst = HMEF, src = I */
-
-	/* dma h.header t.field
-	 * memcpy(h.header, t.field, sizeof(h.header))
-	 */
-	INSTR_DMA_HT,
-	INSTR_DMA_HT2,
-	INSTR_DMA_HT3,
-	INSTR_DMA_HT4,
-	INSTR_DMA_HT5,
-	INSTR_DMA_HT6,
-	INSTR_DMA_HT7,
-	INSTR_DMA_HT8,
-
-	/* add dst src
-	 * dst += src
-	 * dst = HMEF, src = HMEFTI
-	 */
-	INSTR_ALU_ADD,    /* dst = MEF, src = MEF */
-	INSTR_ALU_ADD_MH, /* dst = MEF, src = H */
-	INSTR_ALU_ADD_HM, /* dst = H, src = MEF */
-	INSTR_ALU_ADD_HH, /* dst = H, src = H */
-	INSTR_ALU_ADD_MI, /* dst = MEF, src = I */
-	INSTR_ALU_ADD_HI, /* dst = H, src = I */
-
-	/* sub dst src
-	 * dst -= src
-	 * dst = HMEF, src = HMEFTI
-	 */
-	INSTR_ALU_SUB,    /* dst = MEF, src = MEF */
-	INSTR_ALU_SUB_MH, /* dst = MEF, src = H */
-	INSTR_ALU_SUB_HM, /* dst = H, src = MEF */
-	INSTR_ALU_SUB_HH, /* dst = H, src = H */
-	INSTR_ALU_SUB_MI, /* dst = MEF, src = I */
-	INSTR_ALU_SUB_HI, /* dst = H, src = I */
-
-	/* ckadd dst src
-	 * dst = dst '+ src[0:1] '+ src[2:3] + ...
-	 * dst = H, src = {H, h.header}
-	 */
-	INSTR_ALU_CKADD_FIELD,    /* src = H */
-	INSTR_ALU_CKADD_STRUCT20, /* src = h.header, with sizeof(header) = 20 */
-	INSTR_ALU_CKADD_STRUCT,   /* src = h.hdeader, with any sizeof(header) */
-
-	/* cksub dst src
-	 * dst = dst '- src
-	 * dst = H, src = H
-	 */
-	INSTR_ALU_CKSUB_FIELD,
-
-	/* and dst src
-	 * dst &= src
-	 * dst = HMEF, src = HMEFTI
-	 */
-	INSTR_ALU_AND,    /* dst = MEF, src = MEFT */
-	INSTR_ALU_AND_MH, /* dst = MEF, src = H */
-	INSTR_ALU_AND_HM, /* dst = H, src = MEFT */
-	INSTR_ALU_AND_HH, /* dst = H, src = H */
-	INSTR_ALU_AND_I,  /* dst = HMEF, src = I */
-
-	/* or dst src
-	 * dst |= src
-	 * dst = HMEF, src = HMEFTI
-	 */
-	INSTR_ALU_OR,    /* dst = MEF, src = MEFT */
-	INSTR_ALU_OR_MH, /* dst = MEF, src = H */
-	INSTR_ALU_OR_HM, /* dst = H, src = MEFT */
-	INSTR_ALU_OR_HH, /* dst = H, src = H */
-	INSTR_ALU_OR_I,  /* dst = HMEF, src = I */
-
-	/* xor dst src
-	 * dst ^= src
-	 * dst = HMEF, src = HMEFTI
-	 */
-	INSTR_ALU_XOR,    /* dst = MEF, src = MEFT */
-	INSTR_ALU_XOR_MH, /* dst = MEF, src = H */
-	INSTR_ALU_XOR_HM, /* dst = H, src = MEFT */
-	INSTR_ALU_XOR_HH, /* dst = H, src = H */
-	INSTR_ALU_XOR_I,  /* dst = HMEF, src = I */
-
-	/* shl dst src
-	 * dst <<= src
-	 * dst = HMEF, src = HMEFTI
-	 */
-	INSTR_ALU_SHL,    /* dst = MEF, src = MEF */
-	INSTR_ALU_SHL_MH, /* dst = MEF, src = H */
-	INSTR_ALU_SHL_HM, /* dst = H, src = MEF */
-	INSTR_ALU_SHL_HH, /* dst = H, src = H */
-	INSTR_ALU_SHL_MI, /* dst = MEF, src = I */
-	INSTR_ALU_SHL_HI, /* dst = H, src = I */
-
-	/* shr dst src
-	 * dst >>= src
-	 * dst = HMEF, src = HMEFTI
-	 */
-	INSTR_ALU_SHR,    /* dst = MEF, src = MEF */
-	INSTR_ALU_SHR_MH, /* dst = MEF, src = H */
-	INSTR_ALU_SHR_HM, /* dst = H, src = MEF */
-	INSTR_ALU_SHR_HH, /* dst = H, src = H */
-	INSTR_ALU_SHR_MI, /* dst = MEF, src = I */
-	INSTR_ALU_SHR_HI, /* dst = H, src = I */
-
-	/* regprefetch REGARRAY index
-	 * prefetch REGARRAY[index]
-	 * index = HMEFTI
-	 */
-	INSTR_REGPREFETCH_RH, /* index = H */
-	INSTR_REGPREFETCH_RM, /* index = MEFT */
-	INSTR_REGPREFETCH_RI, /* index = I */
-
-	/* regrd dst REGARRAY index
-	 * dst = REGARRAY[index]
-	 * dst = HMEF, index = HMEFTI
-	 */
-	INSTR_REGRD_HRH, /* dst = H, index = H */
-	INSTR_REGRD_HRM, /* dst = H, index = MEFT */
-	INSTR_REGRD_HRI, /* dst = H, index = I */
-	INSTR_REGRD_MRH, /* dst = MEF, index = H */
-	INSTR_REGRD_MRM, /* dst = MEF, index = MEFT */
-	INSTR_REGRD_MRI, /* dst = MEF, index = I */
-
-	/* regwr REGARRAY index src
-	 * REGARRAY[index] = src
-	 * index = HMEFTI, src = HMEFTI
-	 */
-	INSTR_REGWR_RHH, /* index = H, src = H */
-	INSTR_REGWR_RHM, /* index = H, src = MEFT */
-	INSTR_REGWR_RHI, /* index = H, src = I */
-	INSTR_REGWR_RMH, /* index = MEFT, src = H */
-	INSTR_REGWR_RMM, /* index = MEFT, src = MEFT */
-	INSTR_REGWR_RMI, /* index = MEFT, src = I */
-	INSTR_REGWR_RIH, /* index = I, src = H */
-	INSTR_REGWR_RIM, /* index = I, src = MEFT */
-	INSTR_REGWR_RII, /* index = I, src = I */
-
-	/* regadd REGARRAY index src
-	 * REGARRAY[index] += src
-	 * index = HMEFTI, src = HMEFTI
-	 */
-	INSTR_REGADD_RHH, /* index = H, src = H */
-	INSTR_REGADD_RHM, /* index = H, src = MEFT */
-	INSTR_REGADD_RHI, /* index = H, src = I */
-	INSTR_REGADD_RMH, /* index = MEFT, src = H */
-	INSTR_REGADD_RMM, /* index = MEFT, src = MEFT */
-	INSTR_REGADD_RMI, /* index = MEFT, src = I */
-	INSTR_REGADD_RIH, /* index = I, src = H */
-	INSTR_REGADD_RIM, /* index = I, src = MEFT */
-	INSTR_REGADD_RII, /* index = I, src = I */
-
-	/* metprefetch METARRAY index
-	 * prefetch METARRAY[index]
-	 * index = HMEFTI
-	 */
-	INSTR_METPREFETCH_H, /* index = H */
-	INSTR_METPREFETCH_M, /* index = MEFT */
-	INSTR_METPREFETCH_I, /* index = I */
-
-	/* meter METARRAY index length color_in color_out
-	 * color_out = meter(METARRAY[index], length, color_in)
-	 * index = HMEFTI, length = HMEFT, color_in = MEFTI, color_out = MEF
-	 */
-	INSTR_METER_HHM, /* index = H, length = H, color_in = MEFT */
-	INSTR_METER_HHI, /* index = H, length = H, color_in = I */
-	INSTR_METER_HMM, /* index = H, length = MEFT, color_in = MEFT */
-	INSTR_METER_HMI, /* index = H, length = MEFT, color_in = I */
-	INSTR_METER_MHM, /* index = MEFT, length = H, color_in = MEFT */
-	INSTR_METER_MHI, /* index = MEFT, length = H, color_in = I */
-	INSTR_METER_MMM, /* index = MEFT, length = MEFT, color_in = MEFT */
-	INSTR_METER_MMI, /* index = MEFT, length = MEFT, color_in = I */
-	INSTR_METER_IHM, /* index = I, length = H, color_in = MEFT */
-	INSTR_METER_IHI, /* index = I, length = H, color_in = I */
-	INSTR_METER_IMM, /* index = I, length = MEFT, color_in = MEFT */
-	INSTR_METER_IMI, /* index = I, length = MEFT, color_in = I */
-
-	/* table TABLE */
-	INSTR_TABLE,
-
-	/* extern e.obj.func */
-	INSTR_EXTERN_OBJ,
-
-	/* extern f.func */
-	INSTR_EXTERN_FUNC,
-
-	/* jmp LABEL
-	 * Unconditional jump
-	 */
-	INSTR_JMP,
-
-	/* jmpv LABEL h.header
-	 * Jump if header is valid
-	 */
-	INSTR_JMP_VALID,
-
-	/* jmpnv LABEL h.header
-	 * Jump if header is invalid
-	 */
-	INSTR_JMP_INVALID,
-
-	/* jmph LABEL
-	 * Jump if table lookup hit
-	 */
-	INSTR_JMP_HIT,
-
-	/* jmpnh LABEL
-	 * Jump if table lookup miss
-	 */
-	INSTR_JMP_MISS,
-
-	/* jmpa LABEL ACTION
-	 * Jump if action run
-	 */
-	INSTR_JMP_ACTION_HIT,
-
-	/* jmpna LABEL ACTION
-	 * Jump if action not run
-	 */
-	INSTR_JMP_ACTION_MISS,
-
-	/* jmpeq LABEL a b
-	 * Jump if a is equal to b
-	 * a = HMEFT, b = HMEFTI
-	 */
-	INSTR_JMP_EQ,    /* a = MEFT, b = MEFT */
-	INSTR_JMP_EQ_MH, /* a = MEFT, b = H */
-	INSTR_JMP_EQ_HM, /* a = H, b = MEFT */
-	INSTR_JMP_EQ_HH, /* a = H, b = H */
-	INSTR_JMP_EQ_I,  /* (a, b) = (MEFT, I) or (a, b) = (H, I) */
-
-	/* jmpneq LABEL a b
-	 * Jump if a is not equal to b
-	 * a = HMEFT, b = HMEFTI
-	 */
-	INSTR_JMP_NEQ,    /* a = MEFT, b = MEFT */
-	INSTR_JMP_NEQ_MH, /* a = MEFT, b = H */
-	INSTR_JMP_NEQ_HM, /* a = H, b = MEFT */
-	INSTR_JMP_NEQ_HH, /* a = H, b = H */
-	INSTR_JMP_NEQ_I,  /* (a, b) = (MEFT, I) or (a, b) = (H, I) */
-
-	/* jmplt LABEL a b
-	 * Jump if a is less than b
-	 * a = HMEFT, b = HMEFTI
-	 */
-	INSTR_JMP_LT,    /* a = MEFT, b = MEFT */
-	INSTR_JMP_LT_MH, /* a = MEFT, b = H */
-	INSTR_JMP_LT_HM, /* a = H, b = MEFT */
-	INSTR_JMP_LT_HH, /* a = H, b = H */
-	INSTR_JMP_LT_MI, /* a = MEFT, b = I */
-	INSTR_JMP_LT_HI, /* a = H, b = I */
-
-	/* jmpgt LABEL a b
-	 * Jump if a is greater than b
-	 * a = HMEFT, b = HMEFTI
-	 */
-	INSTR_JMP_GT,    /* a = MEFT, b = MEFT */
-	INSTR_JMP_GT_MH, /* a = MEFT, b = H */
-	INSTR_JMP_GT_HM, /* a = H, b = MEFT */
-	INSTR_JMP_GT_HH, /* a = H, b = H */
-	INSTR_JMP_GT_MI, /* a = MEFT, b = I */
-	INSTR_JMP_GT_HI, /* a = H, b = I */
-
-	/* return
-	 * Return from action
-	 */
-	INSTR_RETURN,
-};
-
-struct instr_operand {
-	uint8_t struct_id;
-	uint8_t n_bits;
-	uint8_t offset;
-	uint8_t pad;
-};
-
-struct instr_io {
-	struct {
-		union {
-			struct {
-				uint8_t offset;
-				uint8_t n_bits;
-				uint8_t pad[2];
-			};
-
-			uint32_t val;
-		};
-	} io;
-
-	struct {
-		uint8_t header_id[8];
-		uint8_t struct_id[8];
-		uint8_t n_bytes[8];
-	} hdr;
-};
-
-struct instr_hdr_validity {
-	uint8_t header_id;
-};
-
-struct instr_table {
-	uint8_t table_id;
-};
-
-struct instr_extern_obj {
-	uint8_t ext_obj_id;
-	uint8_t func_id;
-};
-
-struct instr_extern_func {
-	uint8_t ext_func_id;
-};
-
-struct instr_dst_src {
-	struct instr_operand dst;
-	union {
-		struct instr_operand src;
-		uint64_t src_val;
-	};
-};
-
-struct instr_regarray {
-	uint8_t regarray_id;
-	uint8_t pad[3];
-
-	union {
-		struct instr_operand idx;
-		uint32_t idx_val;
-	};
-
-	union {
-		struct instr_operand dstsrc;
-		uint64_t dstsrc_val;
-	};
-};
-
-struct instr_meter {
-	uint8_t metarray_id;
-	uint8_t pad[3];
-
-	union {
-		struct instr_operand idx;
-		uint32_t idx_val;
-	};
-
-	struct instr_operand length;
-
-	union {
-		struct instr_operand color_in;
-		uint32_t color_in_val;
-	};
-
-	struct instr_operand color_out;
-};
-
-struct instr_dma {
-	struct {
-		uint8_t header_id[8];
-		uint8_t struct_id[8];
-	} dst;
-
-	struct {
-		uint8_t offset[8];
-	} src;
-
-	uint16_t n_bytes[8];
-};
-
-struct instr_jmp {
-	struct instruction *ip;
-
-	union {
-		struct instr_operand a;
-		uint8_t header_id;
-		uint8_t action_id;
-	};
-
-	union {
-		struct instr_operand b;
-		uint64_t b_val;
-	};
-};
-
-struct instruction {
-	enum instruction_type type;
-	union {
-		struct instr_io io;
-		struct instr_hdr_validity valid;
-		struct instr_dst_src mov;
-		struct instr_regarray regarray;
-		struct instr_meter meter;
-		struct instr_dma dma;
-		struct instr_dst_src alu;
-		struct instr_table table;
-		struct instr_extern_obj ext_obj;
-		struct instr_extern_func ext_func;
-		struct instr_jmp jmp;
-	};
-};
-
-struct instruction_data {
-	char label[RTE_SWX_NAME_SIZE];
-	char jmp_label[RTE_SWX_NAME_SIZE];
-	uint32_t n_users; /* user = jmp instruction to this instruction. */
-	int invalid;
-};
-
-/*
- * Action.
- */
-struct action {
-	TAILQ_ENTRY(action) node;
-	char name[RTE_SWX_NAME_SIZE];
-	struct struct_type *st;
-	int *args_endianness; /* 0 = Host Byte Order (HBO). */
-	struct instruction *instructions;
-	uint32_t n_instructions;
-	uint32_t id;
-};
-
-TAILQ_HEAD(action_tailq, action);
-
-/*
- * Table.
- */
-struct table_type {
-	TAILQ_ENTRY(table_type) node;
-	char name[RTE_SWX_NAME_SIZE];
-	enum rte_swx_table_match_type match_type;
-	struct rte_swx_table_ops ops;
-};
-
-TAILQ_HEAD(table_type_tailq, table_type);
-
-struct match_field {
-	enum rte_swx_table_match_type match_type;
-	struct field *field;
-};
-
-struct table {
-	TAILQ_ENTRY(table) node;
-	char name[RTE_SWX_NAME_SIZE];
-	char args[RTE_SWX_NAME_SIZE];
-	struct table_type *type; /* NULL when n_fields == 0. */
-
-	/* Match. */
-	struct match_field *fields;
-	uint32_t n_fields;
-	struct header *header; /* Only valid when n_fields > 0. */
-
-	/* Action. */
-	struct action **actions;
-	struct action *default_action;
-	uint8_t *default_action_data;
-	uint32_t n_actions;
-	int default_action_is_const;
-	uint32_t action_data_size_max;
-
-	uint32_t size;
-	uint32_t id;
-};
-
-TAILQ_HEAD(table_tailq, table);
-
-struct table_runtime {
-	rte_swx_table_lookup_t func;
-	void *mailbox;
-	uint8_t **key;
-};
-
-struct table_statistics {
-	uint64_t n_pkts_hit[2]; /* 0 = Miss, 1 = Hit. */
-	uint64_t *n_pkts_action;
-};
-
-/*
- * Register array.
- */
-struct regarray {
-	TAILQ_ENTRY(regarray) node;
-	char name[RTE_SWX_NAME_SIZE];
-	uint64_t init_val;
-	uint32_t size;
-	uint32_t id;
-};
-
-TAILQ_HEAD(regarray_tailq, regarray);
-
-struct regarray_runtime {
-	uint64_t *regarray;
-	uint32_t size_mask;
-};
-
-/*
- * Meter array.
- */
-struct meter_profile {
-	TAILQ_ENTRY(meter_profile) node;
-	char name[RTE_SWX_NAME_SIZE];
-	struct rte_meter_trtcm_params params;
-	struct rte_meter_trtcm_profile profile;
-	uint32_t n_users;
-};
-
-TAILQ_HEAD(meter_profile_tailq, meter_profile);
-
-struct metarray {
-	TAILQ_ENTRY(metarray) node;
-	char name[RTE_SWX_NAME_SIZE];
-	uint32_t size;
-	uint32_t id;
-};
-
-TAILQ_HEAD(metarray_tailq, metarray);
-
-struct meter {
-	struct rte_meter_trtcm m;
-	struct meter_profile *profile;
-	enum rte_color color_mask;
-	uint8_t pad[20];
-
-	uint64_t n_pkts[RTE_COLORS];
-	uint64_t n_bytes[RTE_COLORS];
-};
-
-struct metarray_runtime {
-	struct meter *metarray;
-	uint32_t size_mask;
-};
-
-/*
- * Pipeline.
- */
-struct thread {
-	/* Packet. */
-	struct rte_swx_pkt pkt;
-	uint8_t *ptr;
-
-	/* Structures. */
-	uint8_t **structs;
-
-	/* Packet headers. */
-	struct header_runtime *headers; /* Extracted or generated headers. */
-	struct header_out_runtime *headers_out; /* Emitted headers. */
-	uint8_t *header_storage;
-	uint8_t *header_out_storage;
-	uint64_t valid_headers;
-	uint32_t n_headers_out;
-
-	/* Packet meta-data. */
-	uint8_t *metadata;
-
-	/* Tables. */
-	struct table_runtime *tables;
-	struct rte_swx_table_state *table_state;
-	uint64_t action_id;
-	int hit; /* 0 = Miss, 1 = Hit. */
-
-	/* Extern objects and functions. */
-	struct extern_obj_runtime *extern_objs;
-	struct extern_func_runtime *extern_funcs;
-
-	/* Instructions. */
-	struct instruction *ip;
-	struct instruction *ret;
-};
-
-#define MASK64_BIT_GET(mask, pos) ((mask) & (1LLU << (pos)))
-#define MASK64_BIT_SET(mask, pos) ((mask) | (1LLU << (pos)))
-#define MASK64_BIT_CLR(mask, pos) ((mask) & ~(1LLU << (pos)))
-
-#define HEADER_VALID(thread, header_id) \
-	MASK64_BIT_GET((thread)->valid_headers, header_id)
-
-#define ALU(thread, ip, operator)  \
-{                                                                              \
-	uint8_t *dst_struct = (thread)->structs[(ip)->alu.dst.struct_id];      \
-	uint64_t *dst64_ptr = (uint64_t *)&dst_struct[(ip)->alu.dst.offset];   \
-	uint64_t dst64 = *dst64_ptr;                                           \
-	uint64_t dst64_mask = UINT64_MAX >> (64 - (ip)->alu.dst.n_bits);       \
-	uint64_t dst = dst64 & dst64_mask;                                     \
-									       \
-	uint8_t *src_struct = (thread)->structs[(ip)->alu.src.struct_id];      \
-	uint64_t *src64_ptr = (uint64_t *)&src_struct[(ip)->alu.src.offset];   \
-	uint64_t src64 = *src64_ptr;                                           \
-	uint64_t src64_mask = UINT64_MAX >> (64 - (ip)->alu.src.n_bits);       \
-	uint64_t src = src64 & src64_mask;                                     \
-									       \
-	uint64_t result = dst operator src;                                    \
-									       \
-	*dst64_ptr = (dst64 & ~dst64_mask) | (result & dst64_mask);            \
-}
-
-#if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
-
-#define ALU_MH(thread, ip, operator)  \
-{                                                                              \
-	uint8_t *dst_struct = (thread)->structs[(ip)->alu.dst.struct_id];      \
-	uint64_t *dst64_ptr = (uint64_t *)&dst_struct[(ip)->alu.dst.offset];   \
-	uint64_t dst64 = *dst64_ptr;                                           \
-	uint64_t dst64_mask = UINT64_MAX >> (64 - (ip)->alu.dst.n_bits);       \
-	uint64_t dst = dst64 & dst64_mask;                                     \
-									       \
-	uint8_t *src_struct = (thread)->structs[(ip)->alu.src.struct_id];      \
-	uint64_t *src64_ptr = (uint64_t *)&src_struct[(ip)->alu.src.offset];   \
-	uint64_t src64 = *src64_ptr;                                           \
-	uint64_t src = ntoh64(src64) >> (64 - (ip)->alu.src.n_bits);           \
-									       \
-	uint64_t result = dst operator src;                                    \
-									       \
-	*dst64_ptr = (dst64 & ~dst64_mask) | (result & dst64_mask);            \
-}
-
-#define ALU_HM(thread, ip, operator)  \
-{                                                                              \
-	uint8_t *dst_struct = (thread)->structs[(ip)->alu.dst.struct_id];      \
-	uint64_t *dst64_ptr = (uint64_t *)&dst_struct[(ip)->alu.dst.offset];   \
-	uint64_t dst64 = *dst64_ptr;                                           \
-	uint64_t dst64_mask = UINT64_MAX >> (64 - (ip)->alu.dst.n_bits);       \
-	uint64_t dst = ntoh64(dst64) >> (64 - (ip)->alu.dst.n_bits);           \
-									       \
-	uint8_t *src_struct = (thread)->structs[(ip)->alu.src.struct_id];      \
-	uint64_t *src64_ptr = (uint64_t *)&src_struct[(ip)->alu.src.offset];   \
-	uint64_t src64 = *src64_ptr;                                           \
-	uint64_t src64_mask = UINT64_MAX >> (64 - (ip)->alu.src.n_bits);       \
-	uint64_t src = src64 & src64_mask;                                     \
-									       \
-	uint64_t result = dst operator src;                                    \
-	result = hton64(result << (64 - (ip)->alu.dst.n_bits));                \
-									       \
-	*dst64_ptr = (dst64 & ~dst64_mask) | result;                           \
-}
-
-#define ALU_HM_FAST(thread, ip, operator)  \
-{                                                                                 \
-	uint8_t *dst_struct = (thread)->structs[(ip)->alu.dst.struct_id];         \
-	uint64_t *dst64_ptr = (uint64_t *)&dst_struct[(ip)->alu.dst.offset];      \
-	uint64_t dst64 = *dst64_ptr;                                              \
-	uint64_t dst64_mask = UINT64_MAX >> (64 - (ip)->alu.dst.n_bits);          \
-	uint64_t dst = dst64 & dst64_mask;                                        \
-										  \
-	uint8_t *src_struct = (thread)->structs[(ip)->alu.src.struct_id];         \
-	uint64_t *src64_ptr = (uint64_t *)&src_struct[(ip)->alu.src.offset];      \
-	uint64_t src64 = *src64_ptr;                                              \
-	uint64_t src64_mask = UINT64_MAX >> (64 - (ip)->alu.src.n_bits);          \
-	uint64_t src = hton64(src64 & src64_mask) >> (64 - (ip)->alu.dst.n_bits); \
-										  \
-	uint64_t result = dst operator src;                                       \
-										  \
-	*dst64_ptr = (dst64 & ~dst64_mask) | result;                              \
-}
-
-#define ALU_HH(thread, ip, operator)  \
-{                                                                              \
-	uint8_t *dst_struct = (thread)->structs[(ip)->alu.dst.struct_id];      \
-	uint64_t *dst64_ptr = (uint64_t *)&dst_struct[(ip)->alu.dst.offset];   \
-	uint64_t dst64 = *dst64_ptr;                                           \
-	uint64_t dst64_mask = UINT64_MAX >> (64 - (ip)->alu.dst.n_bits);       \
-	uint64_t dst = ntoh64(dst64) >> (64 - (ip)->alu.dst.n_bits);           \
-									       \
-	uint8_t *src_struct = (thread)->structs[(ip)->alu.src.struct_id];      \
-	uint64_t *src64_ptr = (uint64_t *)&src_struct[(ip)->alu.src.offset];   \
-	uint64_t src64 = *src64_ptr;                                           \
-	uint64_t src = ntoh64(src64) >> (64 - (ip)->alu.src.n_bits);           \
-									       \
-	uint64_t result = dst operator src;                                    \
-	result = hton64(result << (64 - (ip)->alu.dst.n_bits));                \
-									       \
-	*dst64_ptr = (dst64 & ~dst64_mask) | result;                           \
-}
-
-#define ALU_HH_FAST(thread, ip, operator)  \
-{                                                                                             \
-	uint8_t *dst_struct = (thread)->structs[(ip)->alu.dst.struct_id];                     \
-	uint64_t *dst64_ptr = (uint64_t *)&dst_struct[(ip)->alu.dst.offset];                  \
-	uint64_t dst64 = *dst64_ptr;                                                          \
-	uint64_t dst64_mask = UINT64_MAX >> (64 - (ip)->alu.dst.n_bits);                      \
-	uint64_t dst = dst64 & dst64_mask;                                                    \
-											      \
-	uint8_t *src_struct = (thread)->structs[(ip)->alu.src.struct_id];                     \
-	uint64_t *src64_ptr = (uint64_t *)&src_struct[(ip)->alu.src.offset];                  \
-	uint64_t src64 = *src64_ptr;                                                          \
-	uint64_t src = (src64 << (64 - (ip)->alu.src.n_bits)) >> (64 - (ip)->alu.dst.n_bits); \
-											      \
-	uint64_t result = dst operator src;                                                   \
-											      \
-	*dst64_ptr = (dst64 & ~dst64_mask) | result;                                          \
-}
-
-#else
-
-#define ALU_MH ALU
-#define ALU_HM ALU
-#define ALU_HM_FAST ALU
-#define ALU_HH ALU
-#define ALU_HH_FAST ALU
-
-#endif
-
-#define ALU_I(thread, ip, operator)  \
-{                                                                              \
-	uint8_t *dst_struct = (thread)->structs[(ip)->alu.dst.struct_id];      \
-	uint64_t *dst64_ptr = (uint64_t *)&dst_struct[(ip)->alu.dst.offset];   \
-	uint64_t dst64 = *dst64_ptr;                                           \
-	uint64_t dst64_mask = UINT64_MAX >> (64 - (ip)->alu.dst.n_bits);       \
-	uint64_t dst = dst64 & dst64_mask;                                     \
-									       \
-	uint64_t src = (ip)->alu.src_val;                                      \
-									       \
-	uint64_t result = dst operator src;                                    \
-									       \
-	*dst64_ptr = (dst64 & ~dst64_mask) | (result & dst64_mask);            \
-}
-
-#define ALU_MI ALU_I
-
-#if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
-
-#define ALU_HI(thread, ip, operator)  \
-{                                                                              \
-	uint8_t *dst_struct = (thread)->structs[(ip)->alu.dst.struct_id];      \
-	uint64_t *dst64_ptr = (uint64_t *)&dst_struct[(ip)->alu.dst.offset];   \
-	uint64_t dst64 = *dst64_ptr;                                           \
-	uint64_t dst64_mask = UINT64_MAX >> (64 - (ip)->alu.dst.n_bits);       \
-	uint64_t dst = ntoh64(dst64) >> (64 - (ip)->alu.dst.n_bits);           \
-									       \
-	uint64_t src = (ip)->alu.src_val;                                      \
-									       \
-	uint64_t result = dst operator src;                                    \
-	result = hton64(result << (64 - (ip)->alu.dst.n_bits));                \
-									       \
-	*dst64_ptr = (dst64 & ~dst64_mask) | result;                           \
-}
-
-#else
-
-#define ALU_HI ALU_I
-
-#endif
-
-#define MOV(thread, ip)  \
-{                                                                              \
-	uint8_t *dst_struct = (thread)->structs[(ip)->mov.dst.struct_id];      \
-	uint64_t *dst64_ptr = (uint64_t *)&dst_struct[(ip)->mov.dst.offset];   \
-	uint64_t dst64 = *dst64_ptr;                                           \
-	uint64_t dst64_mask = UINT64_MAX >> (64 - (ip)->mov.dst.n_bits);       \
-									       \
-	uint8_t *src_struct = (thread)->structs[(ip)->mov.src.struct_id];      \
-	uint64_t *src64_ptr = (uint64_t *)&src_struct[(ip)->mov.src.offset];   \
-	uint64_t src64 = *src64_ptr;                                           \
-	uint64_t src64_mask = UINT64_MAX >> (64 - (ip)->mov.src.n_bits);       \
-	uint64_t src = src64 & src64_mask;                                     \
-									       \
-	*dst64_ptr = (dst64 & ~dst64_mask) | (src & dst64_mask);               \
-}
-
-#if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
-
-#define MOV_MH(thread, ip)  \
-{                                                                              \
-	uint8_t *dst_struct = (thread)->structs[(ip)->mov.dst.struct_id];      \
-	uint64_t *dst64_ptr = (uint64_t *)&dst_struct[(ip)->mov.dst.offset];   \
-	uint64_t dst64 = *dst64_ptr;                                           \
-	uint64_t dst64_mask = UINT64_MAX >> (64 - (ip)->mov.dst.n_bits);       \
-									       \
-	uint8_t *src_struct = (thread)->structs[(ip)->mov.src.struct_id];      \
-	uint64_t *src64_ptr = (uint64_t *)&src_struct[(ip)->mov.src.offset];   \
-	uint64_t src64 = *src64_ptr;                                           \
-	uint64_t src = ntoh64(src64) >> (64 - (ip)->mov.src.n_bits);           \
-									       \
-	*dst64_ptr = (dst64 & ~dst64_mask) | (src & dst64_mask);               \
-}
-
-#define MOV_HM(thread, ip)  \
-{                                                                              \
-	uint8_t *dst_struct = (thread)->structs[(ip)->mov.dst.struct_id];      \
-	uint64_t *dst64_ptr = (uint64_t *)&dst_struct[(ip)->mov.dst.offset];   \
-	uint64_t dst64 = *dst64_ptr;                                           \
-	uint64_t dst64_mask = UINT64_MAX >> (64 - (ip)->mov.dst.n_bits);       \
-									       \
-	uint8_t *src_struct = (thread)->structs[(ip)->mov.src.struct_id];      \
-	uint64_t *src64_ptr = (uint64_t *)&src_struct[(ip)->mov.src.offset];   \
-	uint64_t src64 = *src64_ptr;                                           \
-	uint64_t src64_mask = UINT64_MAX >> (64 - (ip)->mov.src.n_bits);       \
-	uint64_t src = src64 & src64_mask;                                     \
-									       \
-	src = hton64(src) >> (64 - (ip)->mov.dst.n_bits);                      \
-	*dst64_ptr = (dst64 & ~dst64_mask) | src;                              \
-}
-
-#define MOV_HH(thread, ip)  \
-{                                                                              \
-	uint8_t *dst_struct = (thread)->structs[(ip)->mov.dst.struct_id];      \
-	uint64_t *dst64_ptr = (uint64_t *)&dst_struct[(ip)->mov.dst.offset];   \
-	uint64_t dst64 = *dst64_ptr;                                           \
-	uint64_t dst64_mask = UINT64_MAX >> (64 - (ip)->mov.dst.n_bits);       \
-									       \
-	uint8_t *src_struct = (thread)->structs[(ip)->mov.src.struct_id];      \
-	uint64_t *src64_ptr = (uint64_t *)&src_struct[(ip)->mov.src.offset];   \
-	uint64_t src64 = *src64_ptr;                                           \
-									       \
-	uint64_t src = src64 << (64 - (ip)->mov.src.n_bits);                   \
-	src = src >> (64 - (ip)->mov.dst.n_bits);                              \
-	*dst64_ptr = (dst64 & ~dst64_mask) | src;                              \
-}
-
-#else
-
-#define MOV_MH MOV
-#define MOV_HM MOV
-#define MOV_HH MOV
-
-#endif
-
-#define MOV_I(thread, ip)  \
-{                                                                              \
-	uint8_t *dst_struct = (thread)->structs[(ip)->mov.dst.struct_id];      \
-	uint64_t *dst64_ptr = (uint64_t *)&dst_struct[(ip)->mov.dst.offset];   \
-	uint64_t dst64 = *dst64_ptr;                                           \
-	uint64_t dst64_mask = UINT64_MAX >> (64 - (ip)->mov.dst.n_bits);       \
-									       \
-	uint64_t src = (ip)->mov.src_val;                                      \
-									       \
-	*dst64_ptr = (dst64 & ~dst64_mask) | (src & dst64_mask);               \
-}
-
-#define JMP_CMP(thread, ip, operator)  \
-{                                                                              \
-	uint8_t *a_struct = (thread)->structs[(ip)->jmp.a.struct_id];          \
-	uint64_t *a64_ptr = (uint64_t *)&a_struct[(ip)->jmp.a.offset];         \
-	uint64_t a64 = *a64_ptr;                                               \
-	uint64_t a64_mask = UINT64_MAX >> (64 - (ip)->jmp.a.n_bits);           \
-	uint64_t a = a64 & a64_mask;                                           \
-									       \
-	uint8_t *b_struct = (thread)->structs[(ip)->jmp.b.struct_id];          \
-	uint64_t *b64_ptr = (uint64_t *)&b_struct[(ip)->jmp.b.offset];         \
-	uint64_t b64 = *b64_ptr;                                               \
-	uint64_t b64_mask = UINT64_MAX >> (64 - (ip)->jmp.b.n_bits);           \
-	uint64_t b = b64 & b64_mask;                                           \
-									       \
-	(thread)->ip = (a operator b) ? (ip)->jmp.ip : ((thread)->ip + 1);     \
-}
-
-#if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
-
-#define JMP_CMP_MH(thread, ip, operator)  \
-{                                                                              \
-	uint8_t *a_struct = (thread)->structs[(ip)->jmp.a.struct_id];          \
-	uint64_t *a64_ptr = (uint64_t *)&a_struct[(ip)->jmp.a.offset];         \
-	uint64_t a64 = *a64_ptr;                                               \
-	uint64_t a64_mask = UINT64_MAX >> (64 - (ip)->jmp.a.n_bits);           \
-	uint64_t a = a64 & a64_mask;                                           \
-									       \
-	uint8_t *b_struct = (thread)->structs[(ip)->jmp.b.struct_id];          \
-	uint64_t *b64_ptr = (uint64_t *)&b_struct[(ip)->jmp.b.offset];         \
-	uint64_t b64 = *b64_ptr;                                               \
-	uint64_t b = ntoh64(b64) >> (64 - (ip)->jmp.b.n_bits);                 \
-									       \
-	(thread)->ip = (a operator b) ? (ip)->jmp.ip : ((thread)->ip + 1);     \
-}
-
-#define JMP_CMP_HM(thread, ip, operator)  \
-{                                                                              \
-	uint8_t *a_struct = (thread)->structs[(ip)->jmp.a.struct_id];          \
-	uint64_t *a64_ptr = (uint64_t *)&a_struct[(ip)->jmp.a.offset];         \
-	uint64_t a64 = *a64_ptr;                                               \
-	uint64_t a = ntoh64(a64) >> (64 - (ip)->jmp.a.n_bits);                 \
-									       \
-	uint8_t *b_struct = (thread)->structs[(ip)->jmp.b.struct_id];          \
-	uint64_t *b64_ptr = (uint64_t *)&b_struct[(ip)->jmp.b.offset];         \
-	uint64_t b64 = *b64_ptr;                                               \
-	uint64_t b64_mask = UINT64_MAX >> (64 - (ip)->jmp.b.n_bits);           \
-	uint64_t b = b64 & b64_mask;                                           \
-									       \
-	(thread)->ip = (a operator b) ? (ip)->jmp.ip : ((thread)->ip + 1);     \
-}
-
-#define JMP_CMP_HH(thread, ip, operator)  \
-{                                                                              \
-	uint8_t *a_struct = (thread)->structs[(ip)->jmp.a.struct_id];          \
-	uint64_t *a64_ptr = (uint64_t *)&a_struct[(ip)->jmp.a.offset];         \
-	uint64_t a64 = *a64_ptr;                                               \
-	uint64_t a = ntoh64(a64) >> (64 - (ip)->jmp.a.n_bits);                 \
-									       \
-	uint8_t *b_struct = (thread)->structs[(ip)->jmp.b.struct_id];          \
-	uint64_t *b64_ptr = (uint64_t *)&b_struct[(ip)->jmp.b.offset];         \
-	uint64_t b64 = *b64_ptr;                                               \
-	uint64_t b = ntoh64(b64) >> (64 - (ip)->jmp.b.n_bits);                 \
-									       \
-	(thread)->ip = (a operator b) ? (ip)->jmp.ip : ((thread)->ip + 1);     \
-}
-
-#define JMP_CMP_HH_FAST(thread, ip, operator)  \
-{                                                                              \
-	uint8_t *a_struct = (thread)->structs[(ip)->jmp.a.struct_id];          \
-	uint64_t *a64_ptr = (uint64_t *)&a_struct[(ip)->jmp.a.offset];         \
-	uint64_t a64 = *a64_ptr;                                               \
-	uint64_t a = a64 << (64 - (ip)->jmp.a.n_bits);                         \
-									       \
-	uint8_t *b_struct = (thread)->structs[(ip)->jmp.b.struct_id];          \
-	uint64_t *b64_ptr = (uint64_t *)&b_struct[(ip)->jmp.b.offset];         \
-	uint64_t b64 = *b64_ptr;                                               \
-	uint64_t b = b64 << (64 - (ip)->jmp.b.n_bits);                         \
-									       \
-	(thread)->ip = (a operator b) ? (ip)->jmp.ip : ((thread)->ip + 1);     \
-}
-
-#else
-
-#define JMP_CMP_MH JMP_CMP
-#define JMP_CMP_HM JMP_CMP
-#define JMP_CMP_HH JMP_CMP
-#define JMP_CMP_HH_FAST JMP_CMP
-
-#endif
-
-#define JMP_CMP_I(thread, ip, operator)  \
-{                                                                              \
-	uint8_t *a_struct = (thread)->structs[(ip)->jmp.a.struct_id];          \
-	uint64_t *a64_ptr = (uint64_t *)&a_struct[(ip)->jmp.a.offset];         \
-	uint64_t a64 = *a64_ptr;                                               \
-	uint64_t a64_mask = UINT64_MAX >> (64 - (ip)->jmp.a.n_bits);           \
-	uint64_t a = a64 & a64_mask;                                           \
-									       \
-	uint64_t b = (ip)->jmp.b_val;                                          \
-									       \
-	(thread)->ip = (a operator b) ? (ip)->jmp.ip : ((thread)->ip + 1);     \
-}
-
-#define JMP_CMP_MI JMP_CMP_I
-
-#if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
-
-#define JMP_CMP_HI(thread, ip, operator)  \
-{                                                                              \
-	uint8_t *a_struct = (thread)->structs[(ip)->jmp.a.struct_id];          \
-	uint64_t *a64_ptr = (uint64_t *)&a_struct[(ip)->jmp.a.offset];         \
-	uint64_t a64 = *a64_ptr;                                               \
-	uint64_t a = ntoh64(a64) >> (64 - (ip)->jmp.a.n_bits);                 \
-									       \
-	uint64_t b = (ip)->jmp.b_val;                                          \
-									       \
-	(thread)->ip = (a operator b) ? (ip)->jmp.ip : ((thread)->ip + 1);     \
-}
-
-#else
-
-#define JMP_CMP_HI JMP_CMP_I
-
-#endif
-
-#define METADATA_READ(thread, offset, n_bits)                                  \
-({                                                                             \
-	uint64_t *m64_ptr = (uint64_t *)&(thread)->metadata[offset];           \
-	uint64_t m64 = *m64_ptr;                                               \
-	uint64_t m64_mask = UINT64_MAX >> (64 - (n_bits));                     \
-	(m64 & m64_mask);                                                      \
-})
-
-#define METADATA_WRITE(thread, offset, n_bits, value)                          \
-{                                                                              \
-	uint64_t *m64_ptr = (uint64_t *)&(thread)->metadata[offset];           \
-	uint64_t m64 = *m64_ptr;                                               \
-	uint64_t m64_mask = UINT64_MAX >> (64 - (n_bits));                     \
-									       \
-	uint64_t m_new = value;                                                \
-									       \
-	*m64_ptr = (m64 & ~m64_mask) | (m_new & m64_mask);                     \
-}
-
-#ifndef RTE_SWX_PIPELINE_THREADS_MAX
-#define RTE_SWX_PIPELINE_THREADS_MAX 16
-#endif
-
-struct rte_swx_pipeline {
-	struct struct_type_tailq struct_types;
-	struct port_in_type_tailq port_in_types;
-	struct port_in_tailq ports_in;
-	struct port_out_type_tailq port_out_types;
-	struct port_out_tailq ports_out;
-	struct extern_type_tailq extern_types;
-	struct extern_obj_tailq extern_objs;
-	struct extern_func_tailq extern_funcs;
-	struct header_tailq headers;
-	struct struct_type *metadata_st;
-	uint32_t metadata_struct_id;
-	struct action_tailq actions;
-	struct table_type_tailq table_types;
-	struct table_tailq tables;
-	struct regarray_tailq regarrays;
-	struct meter_profile_tailq meter_profiles;
-	struct metarray_tailq metarrays;
-
-	struct port_in_runtime *in;
-	struct port_out_runtime *out;
-	struct instruction **action_instructions;
-	struct rte_swx_table_state *table_state;
-	struct table_statistics *table_stats;
-	struct regarray_runtime *regarray_runtime;
-	struct metarray_runtime *metarray_runtime;
-	struct instruction *instructions;
-	struct thread threads[RTE_SWX_PIPELINE_THREADS_MAX];
-
-	uint32_t n_structs;
-	uint32_t n_ports_in;
-	uint32_t n_ports_out;
-	uint32_t n_extern_objs;
-	uint32_t n_extern_funcs;
-	uint32_t n_actions;
-	uint32_t n_tables;
-	uint32_t n_regarrays;
-	uint32_t n_metarrays;
-	uint32_t n_headers;
-	uint32_t thread_id;
-	uint32_t port_id;
-	uint32_t n_instructions;
-	int build_done;
-	int numa_node;
-};
-
-/*
- * Struct.
- */
 static struct struct_type *
 struct_type_find(struct rte_swx_pipeline *p, const char *name)
 {
@@ -1373,7 +112,8 @@ int
 rte_swx_pipeline_struct_type_register(struct rte_swx_pipeline *p,
 				      const char *name,
 				      struct rte_swx_field_params *fields,
-				      uint32_t n_fields)
+				      uint32_t n_fields,
+				      int last_field_has_variable_size)
 {
 	struct struct_type *st;
 	uint32_t i;
@@ -1385,11 +125,12 @@ rte_swx_pipeline_struct_type_register(struct rte_swx_pipeline *p,
 
 	for (i = 0; i < n_fields; i++) {
 		struct rte_swx_field_params *f = &fields[i];
+		int var_size = ((i == n_fields - 1) && last_field_has_variable_size) ? 1 : 0;
 		uint32_t j;
 
 		CHECK_NAME(f->name, EINVAL);
 		CHECK(f->n_bits, EINVAL);
-		CHECK(f->n_bits <= 64, EINVAL);
+		CHECK((f->n_bits <= 64) || var_size, EINVAL);
 		CHECK((f->n_bits & 7) == 0, EINVAL);
 
 		for (j = 0; j < i; j++) {
@@ -1416,14 +157,18 @@ rte_swx_pipeline_struct_type_register(struct rte_swx_pipeline *p,
 	for (i = 0; i < n_fields; i++) {
 		struct field *dst = &st->fields[i];
 		struct rte_swx_field_params *src = &fields[i];
+		int var_size = ((i == n_fields - 1) && last_field_has_variable_size) ? 1 : 0;
 
 		strcpy(dst->name, src->name);
 		dst->n_bits = src->n_bits;
 		dst->offset = st->n_bits;
+		dst->var_size = var_size;
 
 		st->n_bits += src->n_bits;
+		st->n_bits_min += var_size ? 0 : src->n_bits;
 	}
 	st->n_fields = n_fields;
+	st->var_size = last_field_has_variable_size;
 
 	/* Node add to tailq. */
 	TAILQ_INSERT_TAIL(&p->struct_types, st, node);
@@ -1947,6 +692,7 @@ rte_swx_pipeline_extern_type_register(struct rte_swx_pipeline *p,
 	CHECK_NAME(mailbox_struct_type_name, EINVAL);
 	mailbox_struct_type = struct_type_find(p, mailbox_struct_type_name);
 	CHECK(mailbox_struct_type, EINVAL);
+	CHECK(!mailbox_struct_type->var_size, EINVAL);
 
 	CHECK(constructor, EINVAL);
 	CHECK(destructor, EINVAL);
@@ -2238,6 +984,7 @@ rte_swx_pipeline_extern_func_register(struct rte_swx_pipeline *p,
 	CHECK_NAME(mailbox_struct_type_name, EINVAL);
 	mailbox_struct_type = struct_type_find(p, mailbox_struct_type_name);
 	CHECK(mailbox_struct_type, EINVAL);
+	CHECK(!mailbox_struct_type->var_size, EINVAL);
 
 	CHECK(func, EINVAL);
 
@@ -2483,11 +1230,14 @@ header_build(struct rte_swx_pipeline *p)
 
 		TAILQ_FOREACH(h, &p->headers, node) {
 			uint8_t *header_storage;
+			uint32_t n_bytes =  h->st->n_bits / 8;
 
 			header_storage = &t->header_storage[offset];
-			offset += h->st->n_bits / 8;
+			offset += n_bytes;
 
 			t->headers[h->id].ptr0 = header_storage;
+			t->headers[h->id].n_bytes = n_bytes;
+
 			t->structs[h->struct_id] = header_storage;
 		}
 	}
@@ -2560,6 +1310,7 @@ rte_swx_pipeline_packet_metadata_register(struct rte_swx_pipeline *p,
 	CHECK_NAME(struct_type_name, EINVAL);
 	st  = struct_type_find(p, struct_type_name);
 	CHECK(st, EINVAL);
+	CHECK(!st->var_size, EINVAL);
 	CHECK(!p->metadata_st, EINVAL);
 
 	p->metadata_st = st;
@@ -2627,6 +1378,26 @@ instruction_is_tx(enum instruction_type type)
 }
 
 static int
+instruction_does_tx(struct instruction *instr)
+{
+	switch (instr->type) {
+	case INSTR_TX:
+	case INSTR_TX_I:
+	case INSTR_HDR_EMIT_TX:
+	case INSTR_HDR_EMIT2_TX:
+	case INSTR_HDR_EMIT3_TX:
+	case INSTR_HDR_EMIT4_TX:
+	case INSTR_HDR_EMIT5_TX:
+	case INSTR_HDR_EMIT6_TX:
+	case INSTR_HDR_EMIT7_TX:
+	case INSTR_HDR_EMIT8_TX:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+static int
 instruction_is_jmp(struct instruction *instr)
 {
 	switch (instr->type) {
@@ -2661,6 +1432,24 @@ instruction_is_jmp(struct instruction *instr)
 	case INSTR_JMP_GT_HI:
 		return 1;
 
+	default:
+		return 0;
+	}
+}
+
+static int
+instruction_does_thread_yield(struct instruction *instr)
+{
+	switch (instr->type) {
+	case INSTR_RX:
+	case INSTR_TABLE:
+	case INSTR_TABLE_AF:
+	case INSTR_SELECTOR:
+	case INSTR_LEARNER:
+	case INSTR_LEARNER_AF:
+	case INSTR_EXTERN_OBJ:
+	case INSTR_EXTERN_FUNC:
+		return 1;
 	default:
 		return 0;
 	}
@@ -2742,62 +1531,6 @@ struct_field_parse(struct rte_swx_pipeline *p,
 	}
 }
 
-static inline void
-pipeline_port_inc(struct rte_swx_pipeline *p)
-{
-	p->port_id = (p->port_id + 1) & (p->n_ports_in - 1);
-}
-
-static inline void
-thread_ip_reset(struct rte_swx_pipeline *p, struct thread *t)
-{
-	t->ip = p->instructions;
-}
-
-static inline void
-thread_ip_set(struct thread *t, struct instruction *ip)
-{
-	t->ip = ip;
-}
-
-static inline void
-thread_ip_action_call(struct rte_swx_pipeline *p,
-		      struct thread *t,
-		      uint32_t action_id)
-{
-	t->ret = t->ip + 1;
-	t->ip = p->action_instructions[action_id];
-}
-
-static inline void
-thread_ip_inc(struct rte_swx_pipeline *p);
-
-static inline void
-thread_ip_inc(struct rte_swx_pipeline *p)
-{
-	struct thread *t = &p->threads[p->thread_id];
-
-	t->ip++;
-}
-
-static inline void
-thread_ip_inc_cond(struct thread *t, int cond)
-{
-	t->ip += cond;
-}
-
-static inline void
-thread_yield(struct rte_swx_pipeline *p)
-{
-	p->thread_id = (p->thread_id + 1) & (RTE_SWX_PIPELINE_THREADS_MAX - 1);
-}
-
-static inline void
-thread_yield_cond(struct rte_swx_pipeline *p, int cond)
-{
-	p->thread_id = (p->thread_id + cond) & (RTE_SWX_PIPELINE_THREADS_MAX - 1);
-}
-
 /*
  * rx.
  */
@@ -2821,44 +1554,6 @@ instr_rx_translate(struct rte_swx_pipeline *p,
 	instr->io.io.offset = f->offset / 8;
 	instr->io.io.n_bits = f->n_bits;
 	return 0;
-}
-
-static inline void
-instr_rx_exec(struct rte_swx_pipeline *p);
-
-static inline void
-instr_rx_exec(struct rte_swx_pipeline *p)
-{
-	struct thread *t = &p->threads[p->thread_id];
-	struct instruction *ip = t->ip;
-	struct port_in_runtime *port = &p->in[p->port_id];
-	struct rte_swx_pkt *pkt = &t->pkt;
-	int pkt_received;
-
-	/* Packet. */
-	pkt_received = port->pkt_rx(port->obj, pkt);
-	t->ptr = &pkt->pkt[pkt->offset];
-	rte_prefetch0(t->ptr);
-
-	TRACE("[Thread %2u] rx %s from port %u\n",
-	      p->thread_id,
-	      pkt_received ? "1 pkt" : "0 pkts",
-	      p->port_id);
-
-	/* Headers. */
-	t->valid_headers = 0;
-	t->n_headers_out = 0;
-
-	/* Meta-data. */
-	METADATA_WRITE(t, ip->io.io.offset, ip->io.io.n_bits, p->port_id);
-
-	/* Tables. */
-	t->table_state = p->table_state;
-
-	/* Thread. */
-	pipeline_port_inc(p);
-	thread_ip_inc_cond(t, pkt_received);
-	thread_yield(p);
 }
 
 /*
@@ -2912,83 +1607,12 @@ instr_drop_translate(struct rte_swx_pipeline *p,
 }
 
 static inline void
-emit_handler(struct thread *t)
-{
-	struct header_out_runtime *h0 = &t->headers_out[0];
-	struct header_out_runtime *h1 = &t->headers_out[1];
-	uint32_t offset = 0, i;
-
-	/* No header change or header decapsulation. */
-	if ((t->n_headers_out == 1) &&
-	    (h0->ptr + h0->n_bytes == t->ptr)) {
-		TRACE("Emit handler: no header change or header decap.\n");
-
-		t->pkt.offset -= h0->n_bytes;
-		t->pkt.length += h0->n_bytes;
-
-		return;
-	}
-
-	/* Header encapsulation (optionally, with prior header decasulation). */
-	if ((t->n_headers_out == 2) &&
-	    (h1->ptr + h1->n_bytes == t->ptr) &&
-	    (h0->ptr == h0->ptr0)) {
-		uint32_t offset;
-
-		TRACE("Emit handler: header encapsulation.\n");
-
-		offset = h0->n_bytes + h1->n_bytes;
-		memcpy(t->ptr - offset, h0->ptr, h0->n_bytes);
-		t->pkt.offset -= offset;
-		t->pkt.length += offset;
-
-		return;
-	}
-
-	/* Header insertion. */
-	/* TBD */
-
-	/* Header extraction. */
-	/* TBD */
-
-	/* For any other case. */
-	TRACE("Emit handler: complex case.\n");
-
-	for (i = 0; i < t->n_headers_out; i++) {
-		struct header_out_runtime *h = &t->headers_out[i];
-
-		memcpy(&t->header_out_storage[offset], h->ptr, h->n_bytes);
-		offset += h->n_bytes;
-	}
-
-	if (offset) {
-		memcpy(t->ptr - offset, t->header_out_storage, offset);
-		t->pkt.offset -= offset;
-		t->pkt.length += offset;
-	}
-}
-
-static inline void
-instr_tx_exec(struct rte_swx_pipeline *p);
-
-static inline void
 instr_tx_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t port_id = METADATA_READ(t, ip->io.io.offset, ip->io.io.n_bits);
-	struct port_out_runtime *port = &p->out[port_id];
-	struct rte_swx_pkt *pkt = &t->pkt;
 
-	TRACE("[Thread %2u]: tx 1 pkt to port %u\n",
-	      p->thread_id,
-	      (uint32_t)port_id);
-
-	/* Headers. */
-	emit_handler(t);
-
-	/* Packet. */
-	port->pkt_tx(port->obj, pkt);
+	__instr_tx_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_reset(p, t);
@@ -3000,19 +1624,8 @@ instr_tx_i_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t port_id = ip->io.io.val;
-	struct port_out_runtime *port = &p->out[port_id];
-	struct rte_swx_pkt *pkt = &t->pkt;
 
-	TRACE("[Thread %2u]: tx (i) 1 pkt to port %u\n",
-	      p->thread_id,
-	      (uint32_t)port_id);
-
-	/* Headers. */
-	emit_handler(t);
-
-	/* Packet. */
-	port->pkt_tx(port->obj, pkt);
+	__instr_tx_i_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_reset(p, t);
@@ -3033,65 +1646,70 @@ instr_hdr_extract_translate(struct rte_swx_pipeline *p,
 	struct header *h;
 
 	CHECK(!action, EINVAL);
-	CHECK(n_tokens == 2, EINVAL);
+	CHECK((n_tokens == 2) || (n_tokens == 3), EINVAL);
 
 	h = header_parse(p, tokens[1]);
 	CHECK(h, EINVAL);
 
-	instr->type = INSTR_HDR_EXTRACT;
-	instr->io.hdr.header_id[0] = h->id;
-	instr->io.hdr.struct_id[0] = h->struct_id;
-	instr->io.hdr.n_bytes[0] = h->st->n_bits / 8;
+	if (n_tokens == 2) {
+		CHECK(!h->st->var_size, EINVAL);
+
+		instr->type = INSTR_HDR_EXTRACT;
+		instr->io.hdr.header_id[0] = h->id;
+		instr->io.hdr.struct_id[0] = h->struct_id;
+		instr->io.hdr.n_bytes[0] = h->st->n_bits / 8;
+	} else {
+		struct field *mf;
+
+		CHECK(h->st->var_size, EINVAL);
+
+		mf = metadata_field_parse(p, tokens[2]);
+		CHECK(mf, EINVAL);
+		CHECK(!mf->var_size, EINVAL);
+
+		instr->type = INSTR_HDR_EXTRACT_M;
+		instr->io.io.offset = mf->offset / 8;
+		instr->io.io.n_bits = mf->n_bits;
+		instr->io.hdr.header_id[0] = h->id;
+		instr->io.hdr.struct_id[0] = h->struct_id;
+		instr->io.hdr.n_bytes[0] = h->st->n_bits_min / 8;
+	}
+
 	return 0;
 }
 
-static inline void
-__instr_hdr_extract_exec(struct rte_swx_pipeline *p, uint32_t n_extract);
-
-static inline void
-__instr_hdr_extract_exec(struct rte_swx_pipeline *p, uint32_t n_extract)
+static int
+instr_hdr_lookahead_translate(struct rte_swx_pipeline *p,
+			      struct action *action,
+			      char **tokens,
+			      int n_tokens,
+			      struct instruction *instr,
+			      struct instruction_data *data __rte_unused)
 {
-	struct thread *t = &p->threads[p->thread_id];
-	struct instruction *ip = t->ip;
-	uint64_t valid_headers = t->valid_headers;
-	uint8_t *ptr = t->ptr;
-	uint32_t offset = t->pkt.offset;
-	uint32_t length = t->pkt.length;
-	uint32_t i;
+	struct header *h;
 
-	for (i = 0; i < n_extract; i++) {
-		uint32_t header_id = ip->io.hdr.header_id[i];
-		uint32_t struct_id = ip->io.hdr.struct_id[i];
-		uint32_t n_bytes = ip->io.hdr.n_bytes[i];
+	CHECK(!action, EINVAL);
+	CHECK(n_tokens == 2, EINVAL);
 
-		TRACE("[Thread %2u]: extract header %u (%u bytes)\n",
-		      p->thread_id,
-		      header_id,
-		      n_bytes);
+	h = header_parse(p, tokens[1]);
+	CHECK(h, EINVAL);
+	CHECK(!h->st->var_size, EINVAL);
 
-		/* Headers. */
-		t->structs[struct_id] = ptr;
-		valid_headers = MASK64_BIT_SET(valid_headers, header_id);
+	instr->type = INSTR_HDR_LOOKAHEAD;
+	instr->io.hdr.header_id[0] = h->id;
+	instr->io.hdr.struct_id[0] = h->struct_id;
+	instr->io.hdr.n_bytes[0] = 0; /* Unused. */
 
-		/* Packet. */
-		offset += n_bytes;
-		length -= n_bytes;
-		ptr += n_bytes;
-	}
-
-	/* Headers. */
-	t->valid_headers = valid_headers;
-
-	/* Packet. */
-	t->pkt.offset = offset;
-	t->pkt.length = length;
-	t->ptr = ptr;
+	return 0;
 }
 
 static inline void
 instr_hdr_extract_exec(struct rte_swx_pipeline *p)
 {
-	__instr_hdr_extract_exec(p, 1);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
+
+	__instr_hdr_extract_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3100,10 +1718,10 @@ instr_hdr_extract_exec(struct rte_swx_pipeline *p)
 static inline void
 instr_hdr_extract2_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 2 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_hdr_extract_exec(p, 2);
+	__instr_hdr_extract2_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3112,10 +1730,10 @@ instr_hdr_extract2_exec(struct rte_swx_pipeline *p)
 static inline void
 instr_hdr_extract3_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 3 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_hdr_extract_exec(p, 3);
+	__instr_hdr_extract3_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3124,10 +1742,10 @@ instr_hdr_extract3_exec(struct rte_swx_pipeline *p)
 static inline void
 instr_hdr_extract4_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 4 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_hdr_extract_exec(p, 4);
+	__instr_hdr_extract4_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3136,10 +1754,10 @@ instr_hdr_extract4_exec(struct rte_swx_pipeline *p)
 static inline void
 instr_hdr_extract5_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 5 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_hdr_extract_exec(p, 5);
+	__instr_hdr_extract5_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3148,10 +1766,10 @@ instr_hdr_extract5_exec(struct rte_swx_pipeline *p)
 static inline void
 instr_hdr_extract6_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 6 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_hdr_extract_exec(p, 6);
+	__instr_hdr_extract6_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3160,10 +1778,10 @@ instr_hdr_extract6_exec(struct rte_swx_pipeline *p)
 static inline void
 instr_hdr_extract7_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 7 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_hdr_extract_exec(p, 7);
+	__instr_hdr_extract7_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3172,10 +1790,34 @@ instr_hdr_extract7_exec(struct rte_swx_pipeline *p)
 static inline void
 instr_hdr_extract8_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 8 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_hdr_extract_exec(p, 8);
+	__instr_hdr_extract8_exec(p, t, ip);
+
+	/* Thread. */
+	thread_ip_inc(p);
+}
+
+static inline void
+instr_hdr_extract_m_exec(struct rte_swx_pipeline *p)
+{
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
+
+	__instr_hdr_extract_m_exec(p, t, ip);
+
+	/* Thread. */
+	thread_ip_inc(p);
+}
+
+static inline void
+instr_hdr_lookahead_exec(struct rte_swx_pipeline *p)
+{
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
+
+	__instr_hdr_lookahead_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3207,80 +1849,12 @@ instr_hdr_emit_translate(struct rte_swx_pipeline *p,
 }
 
 static inline void
-__instr_hdr_emit_exec(struct rte_swx_pipeline *p, uint32_t n_emit);
-
-static inline void
-__instr_hdr_emit_exec(struct rte_swx_pipeline *p, uint32_t n_emit)
+instr_hdr_emit_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t valid_headers = t->valid_headers;
-	uint32_t n_headers_out = t->n_headers_out;
-	struct header_out_runtime *ho = &t->headers_out[n_headers_out - 1];
-	uint8_t *ho_ptr = NULL;
-	uint32_t ho_nbytes = 0, first = 1, i;
 
-	for (i = 0; i < n_emit; i++) {
-		uint32_t header_id = ip->io.hdr.header_id[i];
-		uint32_t struct_id = ip->io.hdr.struct_id[i];
-		uint32_t n_bytes = ip->io.hdr.n_bytes[i];
-
-		struct header_runtime *hi = &t->headers[header_id];
-		uint8_t *hi_ptr = t->structs[struct_id];
-
-		if (!MASK64_BIT_GET(valid_headers, header_id))
-			continue;
-
-		TRACE("[Thread %2u]: emit header %u\n",
-		      p->thread_id,
-		      header_id);
-
-		/* Headers. */
-		if (first) {
-			first = 0;
-
-			if (!t->n_headers_out) {
-				ho = &t->headers_out[0];
-
-				ho->ptr0 = hi->ptr0;
-				ho->ptr = hi_ptr;
-
-				ho_ptr = hi_ptr;
-				ho_nbytes = n_bytes;
-
-				n_headers_out = 1;
-
-				continue;
-			} else {
-				ho_ptr = ho->ptr;
-				ho_nbytes = ho->n_bytes;
-			}
-		}
-
-		if (ho_ptr + ho_nbytes == hi_ptr) {
-			ho_nbytes += n_bytes;
-		} else {
-			ho->n_bytes = ho_nbytes;
-
-			ho++;
-			ho->ptr0 = hi->ptr0;
-			ho->ptr = hi_ptr;
-
-			ho_ptr = hi_ptr;
-			ho_nbytes = n_bytes;
-
-			n_headers_out++;
-		}
-	}
-
-	ho->n_bytes = ho_nbytes;
-	t->n_headers_out = n_headers_out;
-}
-
-static inline void
-instr_hdr_emit_exec(struct rte_swx_pipeline *p)
-{
-	__instr_hdr_emit_exec(p, 1);
+	__instr_hdr_emit_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3289,81 +1863,105 @@ instr_hdr_emit_exec(struct rte_swx_pipeline *p)
 static inline void
 instr_hdr_emit_tx_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 2 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_hdr_emit_exec(p, 1);
-	instr_tx_exec(p);
+	__instr_hdr_emit_tx_exec(p, t, ip);
+
+	/* Thread. */
+	thread_ip_reset(p, t);
+	instr_rx_exec(p);
 }
 
 static inline void
 instr_hdr_emit2_tx_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 3 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_hdr_emit_exec(p, 2);
-	instr_tx_exec(p);
+	__instr_hdr_emit2_tx_exec(p, t, ip);
+
+	/* Thread. */
+	thread_ip_reset(p, t);
+	instr_rx_exec(p);
 }
 
 static inline void
 instr_hdr_emit3_tx_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 4 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_hdr_emit_exec(p, 3);
-	instr_tx_exec(p);
+	__instr_hdr_emit3_tx_exec(p, t, ip);
+
+	/* Thread. */
+	thread_ip_reset(p, t);
+	instr_rx_exec(p);
 }
 
 static inline void
 instr_hdr_emit4_tx_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 5 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_hdr_emit_exec(p, 4);
-	instr_tx_exec(p);
+	__instr_hdr_emit4_tx_exec(p, t, ip);
+
+	/* Thread. */
+	thread_ip_reset(p, t);
+	instr_rx_exec(p);
 }
 
 static inline void
 instr_hdr_emit5_tx_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 6 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_hdr_emit_exec(p, 5);
-	instr_tx_exec(p);
+	__instr_hdr_emit5_tx_exec(p, t, ip);
+
+	/* Thread. */
+	thread_ip_reset(p, t);
+	instr_rx_exec(p);
 }
 
 static inline void
 instr_hdr_emit6_tx_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 7 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_hdr_emit_exec(p, 6);
-	instr_tx_exec(p);
+	__instr_hdr_emit6_tx_exec(p, t, ip);
+
+	/* Thread. */
+	thread_ip_reset(p, t);
+	instr_rx_exec(p);
 }
 
 static inline void
 instr_hdr_emit7_tx_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 8 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_hdr_emit_exec(p, 7);
-	instr_tx_exec(p);
+	__instr_hdr_emit7_tx_exec(p, t, ip);
+
+	/* Thread. */
+	thread_ip_reset(p, t);
+	instr_rx_exec(p);
 }
 
 static inline void
 instr_hdr_emit8_tx_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 9 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_hdr_emit_exec(p, 8);
-	instr_tx_exec(p);
+	__instr_hdr_emit8_tx_exec(p, t, ip);
+
+	/* Thread. */
+	thread_ip_reset(p, t);
+	instr_rx_exec(p);
 }
 
 /*
@@ -3394,12 +1992,8 @@ instr_hdr_validate_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint32_t header_id = ip->valid.header_id;
 
-	TRACE("[Thread %2u] validate header %u\n", p->thread_id, header_id);
-
-	/* Headers. */
-	t->valid_headers = MASK64_BIT_SET(t->valid_headers, header_id);
+	__instr_hdr_validate_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3433,12 +2027,8 @@ instr_hdr_invalidate_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint32_t header_id = ip->valid.header_id;
 
-	TRACE("[Thread %2u] invalidate header %u\n", p->thread_id, header_id);
-
-	/* Headers. */
-	t->valid_headers = MASK64_BIT_CLR(t->valid_headers, header_id);
+	__instr_hdr_invalidate_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3450,6 +2040,12 @@ instr_hdr_invalidate_exec(struct rte_swx_pipeline *p)
 static struct table *
 table_find(struct rte_swx_pipeline *p, const char *name);
 
+static struct selector *
+selector_find(struct rte_swx_pipeline *p, const char *name);
+
+static struct learner *
+learner_find(struct rte_swx_pipeline *p, const char *name);
+
 static int
 instr_table_translate(struct rte_swx_pipeline *p,
 		      struct action *action,
@@ -3459,16 +2055,34 @@ instr_table_translate(struct rte_swx_pipeline *p,
 		      struct instruction_data *data __rte_unused)
 {
 	struct table *t;
+	struct selector *s;
+	struct learner *l;
 
 	CHECK(!action, EINVAL);
 	CHECK(n_tokens == 2, EINVAL);
 
 	t = table_find(p, tokens[1]);
-	CHECK(t, EINVAL);
+	if (t) {
+		instr->type = INSTR_TABLE;
+		instr->table.table_id = t->id;
+		return 0;
+	}
 
-	instr->type = INSTR_TABLE;
-	instr->table.table_id = t->id;
-	return 0;
+	s = selector_find(p, tokens[1]);
+	if (s) {
+		instr->type = INSTR_SELECTOR;
+		instr->table.table_id = s->id;
+		return 0;
+	}
+
+	l = learner_find(p, tokens[1]);
+	if (l) {
+		instr->type = INSTR_LEARNER;
+		instr->table.table_id = l->id;
+		return 0;
+	}
+
+	CHECK(0, EINVAL);
 }
 
 static inline void
@@ -3522,6 +2136,313 @@ instr_table_exec(struct rte_swx_pipeline *p)
 	thread_ip_action_call(p, t, action_id);
 }
 
+static inline void
+instr_table_af_exec(struct rte_swx_pipeline *p)
+{
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
+	uint32_t table_id = ip->table.table_id;
+	struct rte_swx_table_state *ts = &t->table_state[table_id];
+	struct table_runtime *table = &t->tables[table_id];
+	struct table_statistics *stats = &p->table_stats[table_id];
+	uint64_t action_id, n_pkts_hit, n_pkts_action;
+	uint8_t *action_data;
+	action_func_t action_func;
+	int done, hit;
+
+	/* Table. */
+	done = table->func(ts->obj,
+			   table->mailbox,
+			   table->key,
+			   &action_id,
+			   &action_data,
+			   &hit);
+	if (!done) {
+		/* Thread. */
+		TRACE("[Thread %2u] table %u (not finalized)\n",
+		      p->thread_id,
+		      table_id);
+
+		thread_yield(p);
+		return;
+	}
+
+	action_id = hit ? action_id : ts->default_action_id;
+	action_data = hit ? action_data : ts->default_action_data;
+	action_func = p->action_funcs[action_id];
+	n_pkts_hit = stats->n_pkts_hit[hit];
+	n_pkts_action = stats->n_pkts_action[action_id];
+
+	TRACE("[Thread %2u] table %u (%s, action %u)\n",
+	      p->thread_id,
+	      table_id,
+	      hit ? "hit" : "miss",
+	      (uint32_t)action_id);
+
+	t->action_id = action_id;
+	t->structs[0] = action_data;
+	t->hit = hit;
+	stats->n_pkts_hit[hit] = n_pkts_hit + 1;
+	stats->n_pkts_action[action_id] = n_pkts_action + 1;
+
+	/* Thread. */
+	thread_ip_inc(p);
+
+	/* Action. */
+	action_func(p);
+}
+
+static inline void
+instr_selector_exec(struct rte_swx_pipeline *p)
+{
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
+	uint32_t selector_id = ip->table.table_id;
+	struct rte_swx_table_state *ts = &t->table_state[p->n_tables + selector_id];
+	struct selector_runtime *selector = &t->selectors[selector_id];
+	struct selector_statistics *stats = &p->selector_stats[selector_id];
+	uint64_t n_pkts = stats->n_pkts;
+	int done;
+
+	/* Table. */
+	done = rte_swx_table_selector_select(ts->obj,
+			   selector->mailbox,
+			   selector->group_id_buffer,
+			   selector->selector_buffer,
+			   selector->member_id_buffer);
+	if (!done) {
+		/* Thread. */
+		TRACE("[Thread %2u] selector %u (not finalized)\n",
+		      p->thread_id,
+		      selector_id);
+
+		thread_yield(p);
+		return;
+	}
+
+
+	TRACE("[Thread %2u] selector %u\n",
+	      p->thread_id,
+	      selector_id);
+
+	stats->n_pkts = n_pkts + 1;
+
+	/* Thread. */
+	thread_ip_inc(p);
+}
+
+static inline void
+instr_learner_exec(struct rte_swx_pipeline *p)
+{
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
+	uint32_t learner_id = ip->table.table_id;
+	struct rte_swx_table_state *ts = &t->table_state[p->n_tables +
+		p->n_selectors + learner_id];
+	struct learner_runtime *l = &t->learners[learner_id];
+	struct learner_statistics *stats = &p->learner_stats[learner_id];
+	uint64_t action_id, n_pkts_hit, n_pkts_action, time;
+	uint8_t *action_data;
+	int done, hit;
+
+	/* Table. */
+	time = rte_get_tsc_cycles();
+
+	done = rte_swx_table_learner_lookup(ts->obj,
+					    l->mailbox,
+					    time,
+					    l->key,
+					    &action_id,
+					    &action_data,
+					    &hit);
+	if (!done) {
+		/* Thread. */
+		TRACE("[Thread %2u] learner %u (not finalized)\n",
+		      p->thread_id,
+		      learner_id);
+
+		thread_yield(p);
+		return;
+	}
+
+	action_id = hit ? action_id : ts->default_action_id;
+	action_data = hit ? action_data : ts->default_action_data;
+	n_pkts_hit = stats->n_pkts_hit[hit];
+	n_pkts_action = stats->n_pkts_action[action_id];
+
+	TRACE("[Thread %2u] learner %u (%s, action %u)\n",
+	      p->thread_id,
+	      learner_id,
+	      hit ? "hit" : "miss",
+	      (uint32_t)action_id);
+
+	t->action_id = action_id;
+	t->structs[0] = action_data;
+	t->hit = hit;
+	t->learner_id = learner_id;
+	t->time = time;
+	stats->n_pkts_hit[hit] = n_pkts_hit + 1;
+	stats->n_pkts_action[action_id] = n_pkts_action + 1;
+
+	/* Thread. */
+	thread_ip_action_call(p, t, action_id);
+}
+
+static inline void
+instr_learner_af_exec(struct rte_swx_pipeline *p)
+{
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
+	uint32_t learner_id = ip->table.table_id;
+	struct rte_swx_table_state *ts = &t->table_state[p->n_tables +
+		p->n_selectors + learner_id];
+	struct learner_runtime *l = &t->learners[learner_id];
+	struct learner_statistics *stats = &p->learner_stats[learner_id];
+	uint64_t action_id, n_pkts_hit, n_pkts_action, time;
+	uint8_t *action_data;
+	action_func_t action_func;
+	int done, hit;
+
+	/* Table. */
+	time = rte_get_tsc_cycles();
+
+	done = rte_swx_table_learner_lookup(ts->obj,
+					    l->mailbox,
+					    time,
+					    l->key,
+					    &action_id,
+					    &action_data,
+					    &hit);
+	if (!done) {
+		/* Thread. */
+		TRACE("[Thread %2u] learner %u (not finalized)\n",
+		      p->thread_id,
+		      learner_id);
+
+		thread_yield(p);
+		return;
+	}
+
+	action_id = hit ? action_id : ts->default_action_id;
+	action_data = hit ? action_data : ts->default_action_data;
+	action_func = p->action_funcs[action_id];
+	n_pkts_hit = stats->n_pkts_hit[hit];
+	n_pkts_action = stats->n_pkts_action[action_id];
+
+	TRACE("[Thread %2u] learner %u (%s, action %u)\n",
+	      p->thread_id,
+	      learner_id,
+	      hit ? "hit" : "miss",
+	      (uint32_t)action_id);
+
+	t->action_id = action_id;
+	t->structs[0] = action_data;
+	t->hit = hit;
+	t->learner_id = learner_id;
+	t->time = time;
+	stats->n_pkts_hit[hit] = n_pkts_hit + 1;
+	stats->n_pkts_action[action_id] = n_pkts_action + 1;
+
+	/* Thread. */
+	thread_ip_action_call(p, t, action_id);
+
+	/* Action */
+	action_func(p);
+}
+
+/*
+ * learn.
+ */
+static struct action *
+action_find(struct rte_swx_pipeline *p, const char *name);
+
+static int
+action_has_nbo_args(struct action *a);
+
+static int
+learner_action_args_check(struct rte_swx_pipeline *p, struct action *a, const char *mf_name);
+
+static int
+instr_learn_translate(struct rte_swx_pipeline *p,
+		      struct action *action,
+		      char **tokens,
+		      int n_tokens,
+		      struct instruction *instr,
+		      struct instruction_data *data __rte_unused)
+{
+	struct action *a;
+	const char *mf_name;
+	uint32_t mf_offset = 0;
+
+	CHECK(action, EINVAL);
+	CHECK((n_tokens == 2) || (n_tokens == 3), EINVAL);
+
+	a = action_find(p, tokens[1]);
+	CHECK(a, EINVAL);
+	CHECK(!action_has_nbo_args(a), EINVAL);
+
+	mf_name = (n_tokens > 2) ? tokens[2] : NULL;
+	CHECK(!learner_action_args_check(p, a, mf_name), EINVAL);
+
+	if (mf_name) {
+		struct field *mf;
+
+		mf = metadata_field_parse(p, mf_name);
+		CHECK(mf, EINVAL);
+
+		mf_offset = mf->offset / 8;
+	}
+
+	instr->type = INSTR_LEARNER_LEARN;
+	instr->learn.action_id = a->id;
+	instr->learn.mf_offset = mf_offset;
+
+	return 0;
+}
+
+static inline void
+instr_learn_exec(struct rte_swx_pipeline *p)
+{
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
+
+	__instr_learn_exec(p, t, ip);
+
+	/* Thread. */
+	thread_ip_inc(p);
+}
+
+/*
+ * forget.
+ */
+static int
+instr_forget_translate(struct rte_swx_pipeline *p __rte_unused,
+		       struct action *action,
+		       char **tokens __rte_unused,
+		       int n_tokens,
+		       struct instruction *instr,
+		       struct instruction_data *data __rte_unused)
+{
+	CHECK(action, EINVAL);
+	CHECK(n_tokens == 1, EINVAL);
+
+	instr->type = INSTR_LEARNER_FORGET;
+
+	return 0;
+}
+
+static inline void
+instr_forget_exec(struct rte_swx_pipeline *p)
+{
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
+
+	__instr_forget_exec(p, t, ip);
+
+	/* Thread. */
+	thread_ip_inc(p);
+}
+
 /*
  * extern.
  */
@@ -3571,18 +2492,10 @@ instr_extern_obj_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint32_t obj_id = ip->ext_obj.ext_obj_id;
-	uint32_t func_id = ip->ext_obj.func_id;
-	struct extern_obj_runtime *obj = &t->extern_objs[obj_id];
-	rte_swx_extern_type_member_func_t func = obj->funcs[func_id];
-
-	TRACE("[Thread %2u] extern obj %u member func %u\n",
-	      p->thread_id,
-	      obj_id,
-	      func_id);
+	uint32_t done;
 
 	/* Extern object member function execute. */
-	uint32_t done = func(obj->obj, obj->mailbox);
+	done = __instr_extern_obj_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc_cond(t, done);
@@ -3594,16 +2507,10 @@ instr_extern_func_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint32_t ext_func_id = ip->ext_func.ext_func_id;
-	struct extern_func_runtime *ext_func = &t->extern_funcs[ext_func_id];
-	rte_swx_extern_func_t func = ext_func->func;
-
-	TRACE("[Thread %2u] extern func %u\n",
-	      p->thread_id,
-	      ext_func_id);
+	uint32_t done;
 
 	/* Extern function execute. */
-	uint32_t done = func(ext_func->mailbox);
+	done = __instr_extern_func_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc_cond(t, done);
@@ -3630,10 +2537,13 @@ instr_mov_translate(struct rte_swx_pipeline *p,
 
 	fdst = struct_field_parse(p, NULL, dst, &dst_struct_id);
 	CHECK(fdst, EINVAL);
+	CHECK(!fdst->var_size, EINVAL);
 
 	/* MOV, MOV_MH, MOV_HM or MOV_HH. */
 	fsrc = struct_field_parse(p, action, src, &src_struct_id);
 	if (fsrc) {
+		CHECK(!fsrc->var_size, EINVAL);
+
 		instr->type = INSTR_MOV;
 		if (dst[0] != 'h' && src[0] == 'h')
 			instr->type = INSTR_MOV_MH;
@@ -3672,10 +2582,7 @@ instr_mov_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] mov\n",
-	      p->thread_id);
-
-	MOV(t, ip);
+	__instr_mov_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3687,10 +2594,7 @@ instr_mov_mh_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] mov (mh)\n",
-	      p->thread_id);
-
-	MOV_MH(t, ip);
+	__instr_mov_mh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3702,10 +2606,7 @@ instr_mov_hm_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] mov (hm)\n",
-	      p->thread_id);
-
-	MOV_HM(t, ip);
+	__instr_mov_hm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3717,10 +2618,7 @@ instr_mov_hh_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] mov (hh)\n",
-	      p->thread_id);
-
-	MOV_HH(t, ip);
+	__instr_mov_hh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3732,11 +2630,7 @@ instr_mov_i_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] mov m.f %" PRIx64 "\n",
-	      p->thread_id,
-	      ip->mov.src_val);
-
-	MOV_I(t, ip);
+	__instr_mov_i_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3746,46 +2640,12 @@ instr_mov_i_exec(struct rte_swx_pipeline *p)
  * dma.
  */
 static inline void
-__instr_dma_ht_exec(struct rte_swx_pipeline *p, uint32_t n_dma);
-
-static inline void
-__instr_dma_ht_exec(struct rte_swx_pipeline *p, uint32_t n_dma)
+instr_dma_ht_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint8_t *action_data = t->structs[0];
-	uint64_t valid_headers = t->valid_headers;
-	uint32_t i;
 
-	for (i = 0; i < n_dma; i++) {
-		uint32_t header_id = ip->dma.dst.header_id[i];
-		uint32_t struct_id = ip->dma.dst.struct_id[i];
-		uint32_t offset = ip->dma.src.offset[i];
-		uint32_t n_bytes = ip->dma.n_bytes[i];
-
-		struct header_runtime *h = &t->headers[header_id];
-		uint8_t *h_ptr0 = h->ptr0;
-		uint8_t *h_ptr = t->structs[struct_id];
-
-		void *dst = MASK64_BIT_GET(valid_headers, header_id) ?
-			h_ptr : h_ptr0;
-		void *src = &action_data[offset];
-
-		TRACE("[Thread %2u] dma h.s t.f\n", p->thread_id);
-
-		/* Headers. */
-		memcpy(dst, src, n_bytes);
-		t->structs[struct_id] = dst;
-		valid_headers = MASK64_BIT_SET(valid_headers, header_id);
-	}
-
-	t->valid_headers = valid_headers;
-}
-
-static inline void
-instr_dma_ht_exec(struct rte_swx_pipeline *p)
-{
-	__instr_dma_ht_exec(p, 1);
+	__instr_dma_ht_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3794,10 +2654,10 @@ instr_dma_ht_exec(struct rte_swx_pipeline *p)
 static inline void
 instr_dma_ht2_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 2 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_dma_ht_exec(p, 2);
+	__instr_dma_ht2_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3806,10 +2666,10 @@ instr_dma_ht2_exec(struct rte_swx_pipeline *p)
 static inline void
 instr_dma_ht3_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 3 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_dma_ht_exec(p, 3);
+	__instr_dma_ht3_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3818,10 +2678,10 @@ instr_dma_ht3_exec(struct rte_swx_pipeline *p)
 static inline void
 instr_dma_ht4_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 4 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_dma_ht_exec(p, 4);
+	__instr_dma_ht4_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3830,10 +2690,10 @@ instr_dma_ht4_exec(struct rte_swx_pipeline *p)
 static inline void
 instr_dma_ht5_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 5 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_dma_ht_exec(p, 5);
+	__instr_dma_ht5_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3842,10 +2702,10 @@ instr_dma_ht5_exec(struct rte_swx_pipeline *p)
 static inline void
 instr_dma_ht6_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 6 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_dma_ht_exec(p, 6);
+	__instr_dma_ht6_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3854,10 +2714,10 @@ instr_dma_ht6_exec(struct rte_swx_pipeline *p)
 static inline void
 instr_dma_ht7_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 7 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_dma_ht_exec(p, 7);
+	__instr_dma_ht7_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3866,10 +2726,10 @@ instr_dma_ht7_exec(struct rte_swx_pipeline *p)
 static inline void
 instr_dma_ht8_exec(struct rte_swx_pipeline *p)
 {
-	TRACE("[Thread %2u] *** The next 8 instructions are fused. ***\n",
-	      p->thread_id);
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
 
-	__instr_dma_ht_exec(p, 8);
+	__instr_dma_ht8_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -3895,10 +2755,13 @@ instr_alu_add_translate(struct rte_swx_pipeline *p,
 
 	fdst = struct_field_parse(p, NULL, dst, &dst_struct_id);
 	CHECK(fdst, EINVAL);
+	CHECK(!fdst->var_size, EINVAL);
 
 	/* ADD, ADD_HM, ADD_MH, ADD_HH. */
 	fsrc = struct_field_parse(p, action, src, &src_struct_id);
 	if (fsrc) {
+		CHECK(!fsrc->var_size, EINVAL);
+
 		instr->type = INSTR_ALU_ADD;
 		if (dst[0] == 'h' && src[0] != 'h')
 			instr->type = INSTR_ALU_ADD_HM;
@@ -3948,10 +2811,13 @@ instr_alu_sub_translate(struct rte_swx_pipeline *p,
 
 	fdst = struct_field_parse(p, NULL, dst, &dst_struct_id);
 	CHECK(fdst, EINVAL);
+	CHECK(!fdst->var_size, EINVAL);
 
 	/* SUB, SUB_HM, SUB_MH, SUB_HH. */
 	fsrc = struct_field_parse(p, action, src, &src_struct_id);
 	if (fsrc) {
+		CHECK(!fsrc->var_size, EINVAL);
+
 		instr->type = INSTR_ALU_SUB;
 		if (dst[0] == 'h' && src[0] != 'h')
 			instr->type = INSTR_ALU_SUB_HM;
@@ -4000,10 +2866,13 @@ instr_alu_ckadd_translate(struct rte_swx_pipeline *p,
 
 	fdst = header_field_parse(p, dst, &hdst);
 	CHECK(fdst && (fdst->n_bits == 16), EINVAL);
+	CHECK(!fdst->var_size, EINVAL);
 
 	/* CKADD_FIELD. */
 	fsrc = header_field_parse(p, src, &hsrc);
 	if (fsrc) {
+		CHECK(!fsrc->var_size, EINVAL);
+
 		instr->type = INSTR_ALU_CKADD_FIELD;
 		instr->alu.dst.struct_id = (uint8_t)hdst->struct_id;
 		instr->alu.dst.n_bits = fdst->n_bits;
@@ -4017,6 +2886,7 @@ instr_alu_ckadd_translate(struct rte_swx_pipeline *p,
 	/* CKADD_STRUCT, CKADD_STRUCT20. */
 	hsrc = header_parse(p, src);
 	CHECK(hsrc, EINVAL);
+	CHECK(!hsrc->st->var_size, EINVAL);
 
 	instr->type = INSTR_ALU_CKADD_STRUCT;
 	if ((hsrc->st->n_bits / 8) == 20)
@@ -4047,9 +2917,11 @@ instr_alu_cksub_translate(struct rte_swx_pipeline *p,
 
 	fdst = header_field_parse(p, dst, &hdst);
 	CHECK(fdst && (fdst->n_bits == 16), EINVAL);
+	CHECK(!fdst->var_size, EINVAL);
 
 	fsrc = header_field_parse(p, src, &hsrc);
 	CHECK(fsrc, EINVAL);
+	CHECK(!fsrc->var_size, EINVAL);
 
 	instr->type = INSTR_ALU_CKSUB_FIELD;
 	instr->alu.dst.struct_id = (uint8_t)hdst->struct_id;
@@ -4078,10 +2950,13 @@ instr_alu_shl_translate(struct rte_swx_pipeline *p,
 
 	fdst = struct_field_parse(p, NULL, dst, &dst_struct_id);
 	CHECK(fdst, EINVAL);
+	CHECK(!fdst->var_size, EINVAL);
 
 	/* SHL, SHL_HM, SHL_MH, SHL_HH. */
 	fsrc = struct_field_parse(p, action, src, &src_struct_id);
 	if (fsrc) {
+		CHECK(!fsrc->var_size, EINVAL);
+
 		instr->type = INSTR_ALU_SHL;
 		if (dst[0] == 'h' && src[0] != 'h')
 			instr->type = INSTR_ALU_SHL_HM;
@@ -4131,10 +3006,13 @@ instr_alu_shr_translate(struct rte_swx_pipeline *p,
 
 	fdst = struct_field_parse(p, NULL, dst, &dst_struct_id);
 	CHECK(fdst, EINVAL);
+	CHECK(!fdst->var_size, EINVAL);
 
 	/* SHR, SHR_HM, SHR_MH, SHR_HH. */
 	fsrc = struct_field_parse(p, action, src, &src_struct_id);
 	if (fsrc) {
+		CHECK(!fsrc->var_size, EINVAL);
+
 		instr->type = INSTR_ALU_SHR;
 		if (dst[0] == 'h' && src[0] != 'h')
 			instr->type = INSTR_ALU_SHR_HM;
@@ -4184,10 +3062,13 @@ instr_alu_and_translate(struct rte_swx_pipeline *p,
 
 	fdst = struct_field_parse(p, NULL, dst, &dst_struct_id);
 	CHECK(fdst, EINVAL);
+	CHECK(!fdst->var_size, EINVAL);
 
 	/* AND, AND_MH, AND_HM, AND_HH. */
 	fsrc = struct_field_parse(p, action, src, &src_struct_id);
 	if (fsrc) {
+		CHECK(!fsrc->var_size, EINVAL);
+
 		instr->type = INSTR_ALU_AND;
 		if (dst[0] != 'h' && src[0] == 'h')
 			instr->type = INSTR_ALU_AND_MH;
@@ -4237,10 +3118,13 @@ instr_alu_or_translate(struct rte_swx_pipeline *p,
 
 	fdst = struct_field_parse(p, NULL, dst, &dst_struct_id);
 	CHECK(fdst, EINVAL);
+	CHECK(!fdst->var_size, EINVAL);
 
 	/* OR, OR_MH, OR_HM, OR_HH. */
 	fsrc = struct_field_parse(p, action, src, &src_struct_id);
 	if (fsrc) {
+		CHECK(!fsrc->var_size, EINVAL);
+
 		instr->type = INSTR_ALU_OR;
 		if (dst[0] != 'h' && src[0] == 'h')
 			instr->type = INSTR_ALU_OR_MH;
@@ -4290,10 +3174,13 @@ instr_alu_xor_translate(struct rte_swx_pipeline *p,
 
 	fdst = struct_field_parse(p, NULL, dst, &dst_struct_id);
 	CHECK(fdst, EINVAL);
+	CHECK(!fdst->var_size, EINVAL);
 
 	/* XOR, XOR_MH, XOR_HM, XOR_HH. */
 	fsrc = struct_field_parse(p, action, src, &src_struct_id);
 	if (fsrc) {
+		CHECK(!fsrc->var_size, EINVAL);
+
 		instr->type = INSTR_ALU_XOR;
 		if (dst[0] != 'h' && src[0] == 'h')
 			instr->type = INSTR_ALU_XOR_MH;
@@ -4332,10 +3219,8 @@ instr_alu_add_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] add\n", p->thread_id);
-
-	/* Structs. */
-	ALU(t, ip, +);
+	/* Structs */
+	__instr_alu_add_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4347,10 +3232,8 @@ instr_alu_add_mh_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] add (mh)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_MH(t, ip, +);
+	__instr_alu_add_mh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4362,10 +3245,8 @@ instr_alu_add_hm_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] add (hm)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_HM(t, ip, +);
+	__instr_alu_add_hm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4377,10 +3258,8 @@ instr_alu_add_hh_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] add (hh)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_HH(t, ip, +);
+	__instr_alu_add_hh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4392,10 +3271,8 @@ instr_alu_add_mi_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] add (mi)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_MI(t, ip, +);
+	__instr_alu_add_mi_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4407,10 +3284,8 @@ instr_alu_add_hi_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] add (hi)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_HI(t, ip, +);
+	__instr_alu_add_hi_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4422,10 +3297,8 @@ instr_alu_sub_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] sub\n", p->thread_id);
-
 	/* Structs. */
-	ALU(t, ip, -);
+	__instr_alu_sub_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4437,10 +3310,8 @@ instr_alu_sub_mh_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] sub (mh)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_MH(t, ip, -);
+	__instr_alu_sub_mh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4452,10 +3323,8 @@ instr_alu_sub_hm_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] sub (hm)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_HM(t, ip, -);
+	__instr_alu_sub_hm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4467,10 +3336,8 @@ instr_alu_sub_hh_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] sub (hh)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_HH(t, ip, -);
+	__instr_alu_sub_hh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4482,10 +3349,8 @@ instr_alu_sub_mi_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] sub (mi)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_MI(t, ip, -);
+	__instr_alu_sub_mi_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4497,10 +3362,8 @@ instr_alu_sub_hi_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] sub (hi)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_HI(t, ip, -);
+	__instr_alu_sub_hi_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4512,10 +3375,8 @@ instr_alu_shl_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] shl\n", p->thread_id);
-
 	/* Structs. */
-	ALU(t, ip, <<);
+	__instr_alu_shl_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4527,10 +3388,8 @@ instr_alu_shl_mh_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] shl (mh)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_MH(t, ip, <<);
+	__instr_alu_shl_mh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4542,10 +3401,8 @@ instr_alu_shl_hm_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] shl (hm)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_HM(t, ip, <<);
+	__instr_alu_shl_hm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4557,10 +3414,8 @@ instr_alu_shl_hh_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] shl (hh)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_HH(t, ip, <<);
+	__instr_alu_shl_hh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4572,10 +3427,8 @@ instr_alu_shl_mi_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] shl (mi)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_MI(t, ip, <<);
+	__instr_alu_shl_mi_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4587,10 +3440,8 @@ instr_alu_shl_hi_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] shl (hi)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_HI(t, ip, <<);
+	__instr_alu_shl_hi_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4602,10 +3453,8 @@ instr_alu_shr_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] shr\n", p->thread_id);
-
 	/* Structs. */
-	ALU(t, ip, >>);
+	__instr_alu_shr_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4617,10 +3466,8 @@ instr_alu_shr_mh_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] shr (mh)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_MH(t, ip, >>);
+	__instr_alu_shr_mh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4632,10 +3479,8 @@ instr_alu_shr_hm_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] shr (hm)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_HM(t, ip, >>);
+	__instr_alu_shr_hm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4647,10 +3492,8 @@ instr_alu_shr_hh_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] shr (hh)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_HH(t, ip, >>);
+	__instr_alu_shr_hh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4662,10 +3505,8 @@ instr_alu_shr_mi_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] shr (mi)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_MI(t, ip, >>);
+	__instr_alu_shr_mi_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4677,10 +3518,8 @@ instr_alu_shr_hi_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] shr (hi)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_HI(t, ip, >>);
+	__instr_alu_shr_hi_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4692,10 +3531,8 @@ instr_alu_and_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] and\n", p->thread_id);
-
 	/* Structs. */
-	ALU(t, ip, &);
+	__instr_alu_and_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4707,10 +3544,8 @@ instr_alu_and_mh_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] and (mh)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_MH(t, ip, &);
+	__instr_alu_and_mh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4722,10 +3557,8 @@ instr_alu_and_hm_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] and (hm)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_HM_FAST(t, ip, &);
+	__instr_alu_and_hm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4737,10 +3570,8 @@ instr_alu_and_hh_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] and (hh)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_HH_FAST(t, ip, &);
+	__instr_alu_and_hh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4752,10 +3583,8 @@ instr_alu_and_i_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] and (i)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_I(t, ip, &);
+	__instr_alu_and_i_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4767,10 +3596,8 @@ instr_alu_or_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] or\n", p->thread_id);
-
 	/* Structs. */
-	ALU(t, ip, |);
+	__instr_alu_or_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4782,10 +3609,8 @@ instr_alu_or_mh_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] or (mh)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_MH(t, ip, |);
+	__instr_alu_or_mh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4797,10 +3622,8 @@ instr_alu_or_hm_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] or (hm)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_HM_FAST(t, ip, |);
+	__instr_alu_or_hm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4812,10 +3635,8 @@ instr_alu_or_hh_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] or (hh)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_HH_FAST(t, ip, |);
+	__instr_alu_or_hh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4827,10 +3648,8 @@ instr_alu_or_i_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] or (i)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_I(t, ip, |);
+	__instr_alu_or_i_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4842,10 +3661,8 @@ instr_alu_xor_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] xor\n", p->thread_id);
-
 	/* Structs. */
-	ALU(t, ip, ^);
+	__instr_alu_xor_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4857,10 +3674,8 @@ instr_alu_xor_mh_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] xor (mh)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_MH(t, ip, ^);
+	__instr_alu_xor_mh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4872,10 +3687,8 @@ instr_alu_xor_hm_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] xor (hm)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_HM_FAST(t, ip, ^);
+	__instr_alu_xor_hm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4887,10 +3700,8 @@ instr_alu_xor_hh_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] xor (hh)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_HH_FAST(t, ip, ^);
+	__instr_alu_xor_hh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4902,10 +3713,8 @@ instr_alu_xor_i_exec(struct rte_swx_pipeline *p)
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
 
-	TRACE("[Thread %2u] xor (i)\n", p->thread_id);
-
 	/* Structs. */
-	ALU_I(t, ip, ^);
+	__instr_alu_xor_i_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4916,55 +3725,9 @@ instr_alu_ckadd_field_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint8_t *dst_struct, *src_struct;
-	uint16_t *dst16_ptr, dst;
-	uint64_t *src64_ptr, src64, src64_mask, src;
-	uint64_t r;
-
-	TRACE("[Thread %2u] ckadd (field)\n", p->thread_id);
 
 	/* Structs. */
-	dst_struct = t->structs[ip->alu.dst.struct_id];
-	dst16_ptr = (uint16_t *)&dst_struct[ip->alu.dst.offset];
-	dst = *dst16_ptr;
-
-	src_struct = t->structs[ip->alu.src.struct_id];
-	src64_ptr = (uint64_t *)&src_struct[ip->alu.src.offset];
-	src64 = *src64_ptr;
-	src64_mask = UINT64_MAX >> (64 - ip->alu.src.n_bits);
-	src = src64 & src64_mask;
-
-	r = dst;
-	r = ~r & 0xFFFF;
-
-	/* The first input (r) is a 16-bit number. The second and the third
-	 * inputs are 32-bit numbers. In the worst case scenario, the sum of the
-	 * three numbers (output r) is a 34-bit number.
-	 */
-	r += (src >> 32) + (src & 0xFFFFFFFF);
-
-	/* The first input is a 16-bit number. The second input is an 18-bit
-	 * number. In the worst case scenario, the sum of the two numbers is a
-	 * 19-bit number.
-	 */
-	r = (r & 0xFFFF) + (r >> 16);
-
-	/* The first input is a 16-bit number (0 .. 0xFFFF). The second input is
-	 * a 3-bit number (0 .. 7). Their sum is a 17-bit number (0 .. 0x10006).
-	 */
-	r = (r & 0xFFFF) + (r >> 16);
-
-	/* When the input r is (0 .. 0xFFFF), the output r is equal to the input
-	 * r, so the output is (0 .. 0xFFFF). When the input r is (0x10000 ..
-	 * 0x10006), the output r is (0 .. 7). So no carry bit can be generated,
-	 * therefore the output r is always a 16-bit number.
-	 */
-	r = (r & 0xFFFF) + (r >> 16);
-
-	r = ~r & 0xFFFF;
-	r = r ? r : 0xFFFF;
-
-	*dst16_ptr = (uint16_t)r;
+	__instr_alu_ckadd_field_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -4975,67 +3738,9 @@ instr_alu_cksub_field_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint8_t *dst_struct, *src_struct;
-	uint16_t *dst16_ptr, dst;
-	uint64_t *src64_ptr, src64, src64_mask, src;
-	uint64_t r;
-
-	TRACE("[Thread %2u] cksub (field)\n", p->thread_id);
 
 	/* Structs. */
-	dst_struct = t->structs[ip->alu.dst.struct_id];
-	dst16_ptr = (uint16_t *)&dst_struct[ip->alu.dst.offset];
-	dst = *dst16_ptr;
-
-	src_struct = t->structs[ip->alu.src.struct_id];
-	src64_ptr = (uint64_t *)&src_struct[ip->alu.src.offset];
-	src64 = *src64_ptr;
-	src64_mask = UINT64_MAX >> (64 - ip->alu.src.n_bits);
-	src = src64 & src64_mask;
-
-	r = dst;
-	r = ~r & 0xFFFF;
-
-	/* Subtraction in 1's complement arithmetic (i.e. a '- b) is the same as
-	 * the following sequence of operations in 2's complement arithmetic:
-	 *    a '- b = (a - b) % 0xFFFF.
-	 *
-	 * In order to prevent an underflow for the below subtraction, in which
-	 * a 33-bit number (the subtrahend) is taken out of a 16-bit number (the
-	 * minuend), we first add a multiple of the 0xFFFF modulus to the
-	 * minuend. The number we add to the minuend needs to be a 34-bit number
-	 * or higher, so for readability reasons we picked the 36-bit multiple.
-	 * We are effectively turning the 16-bit minuend into a 36-bit number:
-	 *    (a - b) % 0xFFFF = (a + 0xFFFF00000 - b) % 0xFFFF.
-	 */
-	r += 0xFFFF00000ULL; /* The output r is a 36-bit number. */
-
-	/* A 33-bit number is subtracted from a 36-bit number (the input r). The
-	 * result (the output r) is a 36-bit number.
-	 */
-	r -= (src >> 32) + (src & 0xFFFFFFFF);
-
-	/* The first input is a 16-bit number. The second input is a 20-bit
-	 * number. Their sum is a 21-bit number.
-	 */
-	r = (r & 0xFFFF) + (r >> 16);
-
-	/* The first input is a 16-bit number (0 .. 0xFFFF). The second input is
-	 * a 5-bit number (0 .. 31). The sum is a 17-bit number (0 .. 0x1001E).
-	 */
-	r = (r & 0xFFFF) + (r >> 16);
-
-	/* When the input r is (0 .. 0xFFFF), the output r is equal to the input
-	 * r, so the output is (0 .. 0xFFFF). When the input r is (0x10000 ..
-	 * 0x1001E), the output r is (0 .. 31). So no carry bit can be
-	 * generated, therefore the output r is always a 16-bit number.
-	 */
-	r = (r & 0xFFFF) + (r >> 16);
-
-	r = ~r & 0xFFFF;
-	r = r ? r : 0xFFFF;
-
-	*dst16_ptr = (uint16_t)r;
+	__instr_alu_cksub_field_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5046,47 +3751,9 @@ instr_alu_ckadd_struct20_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint8_t *dst_struct, *src_struct;
-	uint16_t *dst16_ptr;
-	uint32_t *src32_ptr;
-	uint64_t r0, r1;
-
-	TRACE("[Thread %2u] ckadd (struct of 20 bytes)\n", p->thread_id);
 
 	/* Structs. */
-	dst_struct = t->structs[ip->alu.dst.struct_id];
-	dst16_ptr = (uint16_t *)&dst_struct[ip->alu.dst.offset];
-
-	src_struct = t->structs[ip->alu.src.struct_id];
-	src32_ptr = (uint32_t *)&src_struct[0];
-
-	r0 = src32_ptr[0]; /* r0 is a 32-bit number. */
-	r1 = src32_ptr[1]; /* r1 is a 32-bit number. */
-	r0 += src32_ptr[2]; /* The output r0 is a 33-bit number. */
-	r1 += src32_ptr[3]; /* The output r1 is a 33-bit number. */
-	r0 += r1 + src32_ptr[4]; /* The output r0 is a 35-bit number. */
-
-	/* The first input is a 16-bit number. The second input is a 19-bit
-	 * number. Their sum is a 20-bit number.
-	 */
-	r0 = (r0 & 0xFFFF) + (r0 >> 16);
-
-	/* The first input is a 16-bit number (0 .. 0xFFFF). The second input is
-	 * a 4-bit number (0 .. 15). The sum is a 17-bit number (0 .. 0x1000E).
-	 */
-	r0 = (r0 & 0xFFFF) + (r0 >> 16);
-
-	/* When the input r is (0 .. 0xFFFF), the output r is equal to the input
-	 * r, so the output is (0 .. 0xFFFF). When the input r is (0x10000 ..
-	 * 0x1000E), the output r is (0 .. 15). So no carry bit can be
-	 * generated, therefore the output r is always a 16-bit number.
-	 */
-	r0 = (r0 & 0xFFFF) + (r0 >> 16);
-
-	r0 = ~r0 & 0xFFFF;
-	r0 = r0 ? r0 : 0xFFFF;
-
-	*dst16_ptr = (uint16_t)r0;
+	__instr_alu_ckadd_struct20_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5097,49 +3764,9 @@ instr_alu_ckadd_struct_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint8_t *dst_struct, *src_struct;
-	uint16_t *dst16_ptr;
-	uint32_t *src32_ptr;
-	uint64_t r = 0;
-	uint32_t i;
-
-	TRACE("[Thread %2u] ckadd (struct)\n", p->thread_id);
 
 	/* Structs. */
-	dst_struct = t->structs[ip->alu.dst.struct_id];
-	dst16_ptr = (uint16_t *)&dst_struct[ip->alu.dst.offset];
-
-	src_struct = t->structs[ip->alu.src.struct_id];
-	src32_ptr = (uint32_t *)&src_struct[0];
-
-	/* The max number of 32-bit words in a 256-byte header is 8 = 2^3.
-	 * Therefore, in the worst case scenario, a 35-bit number is added to a
-	 * 16-bit number (the input r), so the output r is 36-bit number.
-	 */
-	for (i = 0; i < ip->alu.src.n_bits / 32; i++, src32_ptr++)
-		r += *src32_ptr;
-
-	/* The first input is a 16-bit number. The second input is a 20-bit
-	 * number. Their sum is a 21-bit number.
-	 */
-	r = (r & 0xFFFF) + (r >> 16);
-
-	/* The first input is a 16-bit number (0 .. 0xFFFF). The second input is
-	 * a 5-bit number (0 .. 31). The sum is a 17-bit number (0 .. 0x1000E).
-	 */
-	r = (r & 0xFFFF) + (r >> 16);
-
-	/* When the input r is (0 .. 0xFFFF), the output r is equal to the input
-	 * r, so the output is (0 .. 0xFFFF). When the input r is (0x10000 ..
-	 * 0x1001E), the output r is (0 .. 31). So no carry bit can be
-	 * generated, therefore the output r is always a 16-bit number.
-	 */
-	r = (r & 0xFFFF) + (r >> 16);
-
-	r = ~r & 0xFFFF;
-	r = r ? r : 0xFFFF;
-
-	*dst16_ptr = (uint16_t)r;
+	__instr_alu_ckadd_struct_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5172,6 +3799,8 @@ instr_regprefetch_translate(struct rte_swx_pipeline *p,
 	/* REGPREFETCH_RH, REGPREFETCH_RM. */
 	fidx = struct_field_parse(p, action, idx, &idx_struct_id);
 	if (fidx) {
+		CHECK(!fidx->var_size, EINVAL);
+
 		instr->type = INSTR_REGPREFETCH_RM;
 		if (idx[0] == 'h')
 			instr->type = INSTR_REGPREFETCH_RH;
@@ -5215,10 +3844,13 @@ instr_regrd_translate(struct rte_swx_pipeline *p,
 
 	fdst = struct_field_parse(p, NULL, dst, &dst_struct_id);
 	CHECK(fdst, EINVAL);
+	CHECK(!fdst->var_size, EINVAL);
 
 	/* REGRD_HRH, REGRD_HRM, REGRD_MRH, REGRD_MRM. */
 	fidx = struct_field_parse(p, action, idx, &idx_struct_id);
 	if (fidx) {
+		CHECK(!fidx->var_size, EINVAL);
+
 		instr->type = INSTR_REGRD_MRM;
 		if (dst[0] == 'h' && idx[0] != 'h')
 			instr->type = INSTR_REGRD_HRM;
@@ -5276,6 +3908,9 @@ instr_regwr_translate(struct rte_swx_pipeline *p,
 	fidx = struct_field_parse(p, action, idx, &idx_struct_id);
 	fsrc = struct_field_parse(p, action, src, &src_struct_id);
 	if (fidx && fsrc) {
+		CHECK(!fidx->var_size, EINVAL);
+		CHECK(!fsrc->var_size, EINVAL);
+
 		instr->type = INSTR_REGWR_RMM;
 		if (idx[0] == 'h' && src[0] != 'h')
 			instr->type = INSTR_REGWR_RHM;
@@ -5296,6 +3931,8 @@ instr_regwr_translate(struct rte_swx_pipeline *p,
 
 	/* REGWR_RHI, REGWR_RMI. */
 	if (fidx && !fsrc) {
+		CHECK(!fidx->var_size, EINVAL);
+
 		src_val = strtoull(src, &src, 0);
 		CHECK(!src[0], EINVAL);
 
@@ -5315,6 +3952,8 @@ instr_regwr_translate(struct rte_swx_pipeline *p,
 	if (!fidx && fsrc) {
 		idx_val = strtoul(idx, &idx, 0);
 		CHECK(!idx[0], EINVAL);
+
+		CHECK(!fsrc->var_size, EINVAL);
 
 		instr->type = INSTR_REGWR_RIM;
 		if (src[0] == 'h')
@@ -5365,6 +4004,9 @@ instr_regadd_translate(struct rte_swx_pipeline *p,
 	fidx = struct_field_parse(p, action, idx, &idx_struct_id);
 	fsrc = struct_field_parse(p, action, src, &src_struct_id);
 	if (fidx && fsrc) {
+		CHECK(!fidx->var_size, EINVAL);
+		CHECK(!fsrc->var_size, EINVAL);
+
 		instr->type = INSTR_REGADD_RMM;
 		if (idx[0] == 'h' && src[0] != 'h')
 			instr->type = INSTR_REGADD_RHM;
@@ -5385,6 +4027,8 @@ instr_regadd_translate(struct rte_swx_pipeline *p,
 
 	/* REGADD_RHI, REGADD_RMI. */
 	if (fidx && !fsrc) {
+		CHECK(!fidx->var_size, EINVAL);
+
 		src_val = strtoull(src, &src, 0);
 		CHECK(!src[0], EINVAL);
 
@@ -5404,6 +4048,8 @@ instr_regadd_translate(struct rte_swx_pipeline *p,
 	if (!fidx && fsrc) {
 		idx_val = strtoul(idx, &idx, 0);
 		CHECK(!idx[0], EINVAL);
+
+		CHECK(!fsrc->var_size, EINVAL);
 
 		instr->type = INSTR_REGADD_RIM;
 		if (src[0] == 'h')
@@ -5430,134 +4076,14 @@ instr_regadd_translate(struct rte_swx_pipeline *p,
 	return 0;
 }
 
-static inline uint64_t *
-instr_regarray_regarray(struct rte_swx_pipeline *p, struct instruction *ip)
-{
-	struct regarray_runtime *r = &p->regarray_runtime[ip->regarray.regarray_id];
-	return r->regarray;
-}
-
-static inline uint64_t
-instr_regarray_idx_hbo(struct rte_swx_pipeline *p, struct thread *t, struct instruction *ip)
-{
-	struct regarray_runtime *r = &p->regarray_runtime[ip->regarray.regarray_id];
-
-	uint8_t *idx_struct = t->structs[ip->regarray.idx.struct_id];
-	uint64_t *idx64_ptr = (uint64_t *)&idx_struct[ip->regarray.idx.offset];
-	uint64_t idx64 = *idx64_ptr;
-	uint64_t idx64_mask = UINT64_MAX >> (64 - ip->regarray.idx.n_bits);
-	uint64_t idx = idx64 & idx64_mask & r->size_mask;
-
-	return idx;
-}
-
-#if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
-
-static inline uint64_t
-instr_regarray_idx_nbo(struct rte_swx_pipeline *p, struct thread *t, struct instruction *ip)
-{
-	struct regarray_runtime *r = &p->regarray_runtime[ip->regarray.regarray_id];
-
-	uint8_t *idx_struct = t->structs[ip->regarray.idx.struct_id];
-	uint64_t *idx64_ptr = (uint64_t *)&idx_struct[ip->regarray.idx.offset];
-	uint64_t idx64 = *idx64_ptr;
-	uint64_t idx = (ntoh64(idx64) >> (64 - ip->regarray.idx.n_bits)) & r->size_mask;
-
-	return idx;
-}
-
-#else
-
-#define instr_regarray_idx_nbo instr_regarray_idx_hbo
-
-#endif
-
-static inline uint64_t
-instr_regarray_idx_imm(struct rte_swx_pipeline *p, struct instruction *ip)
-{
-	struct regarray_runtime *r = &p->regarray_runtime[ip->regarray.regarray_id];
-
-	uint64_t idx = ip->regarray.idx_val & r->size_mask;
-
-	return idx;
-}
-
-static inline uint64_t
-instr_regarray_src_hbo(struct thread *t, struct instruction *ip)
-{
-	uint8_t *src_struct = t->structs[ip->regarray.dstsrc.struct_id];
-	uint64_t *src64_ptr = (uint64_t *)&src_struct[ip->regarray.dstsrc.offset];
-	uint64_t src64 = *src64_ptr;
-	uint64_t src64_mask = UINT64_MAX >> (64 - ip->regarray.dstsrc.n_bits);
-	uint64_t src = src64 & src64_mask;
-
-	return src;
-}
-
-#if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
-
-static inline uint64_t
-instr_regarray_src_nbo(struct thread *t, struct instruction *ip)
-{
-	uint8_t *src_struct = t->structs[ip->regarray.dstsrc.struct_id];
-	uint64_t *src64_ptr = (uint64_t *)&src_struct[ip->regarray.dstsrc.offset];
-	uint64_t src64 = *src64_ptr;
-	uint64_t src = ntoh64(src64) >> (64 - ip->regarray.dstsrc.n_bits);
-
-	return src;
-}
-
-#else
-
-#define instr_regarray_src_nbo instr_regarray_src_hbo
-
-#endif
-
-static inline void
-instr_regarray_dst_hbo_src_hbo_set(struct thread *t, struct instruction *ip, uint64_t src)
-{
-	uint8_t *dst_struct = t->structs[ip->regarray.dstsrc.struct_id];
-	uint64_t *dst64_ptr = (uint64_t *)&dst_struct[ip->regarray.dstsrc.offset];
-	uint64_t dst64 = *dst64_ptr;
-	uint64_t dst64_mask = UINT64_MAX >> (64 - ip->regarray.dstsrc.n_bits);
-
-	*dst64_ptr = (dst64 & ~dst64_mask) | (src & dst64_mask);
-
-}
-
-#if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
-
-static inline void
-instr_regarray_dst_nbo_src_hbo_set(struct thread *t, struct instruction *ip, uint64_t src)
-{
-	uint8_t *dst_struct = t->structs[ip->regarray.dstsrc.struct_id];
-	uint64_t *dst64_ptr = (uint64_t *)&dst_struct[ip->regarray.dstsrc.offset];
-	uint64_t dst64 = *dst64_ptr;
-	uint64_t dst64_mask = UINT64_MAX >> (64 - ip->regarray.dstsrc.n_bits);
-
-	src = hton64(src) >> (64 - ip->regarray.dstsrc.n_bits);
-	*dst64_ptr = (dst64 & ~dst64_mask) | (src & dst64_mask);
-}
-
-#else
-
-#define instr_regarray_dst_nbo_src_hbo_set instr_regarray_dst_hbo_src_hbo_set
-
-#endif
-
 static inline void
 instr_regprefetch_rh_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx;
-
-	TRACE("[Thread %2u] regprefetch (r[h])\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_nbo(p, t, ip);
-	rte_prefetch0(&regarray[idx]);
+	__instr_regprefetch_rh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5568,14 +4094,9 @@ instr_regprefetch_rm_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx;
-
-	TRACE("[Thread %2u] regprefetch (r[m])\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_hbo(p, t, ip);
-	rte_prefetch0(&regarray[idx]);
+	__instr_regprefetch_rm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5586,14 +4107,9 @@ instr_regprefetch_ri_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx;
-
-	TRACE("[Thread %2u] regprefetch (r[i])\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_imm(p, ip);
-	rte_prefetch0(&regarray[idx]);
+	__instr_regprefetch_ri_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5604,14 +4120,9 @@ instr_regrd_hrh_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx;
-
-	TRACE("[Thread %2u] regrd (h = r[h])\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_nbo(p, t, ip);
-	instr_regarray_dst_nbo_src_hbo_set(t, ip, regarray[idx]);
+	__instr_regrd_hrh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5622,14 +4133,9 @@ instr_regrd_hrm_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx;
-
-	TRACE("[Thread %2u] regrd (h = r[m])\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_hbo(p, t, ip);
-	instr_regarray_dst_nbo_src_hbo_set(t, ip, regarray[idx]);
+	__instr_regrd_hrm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5640,14 +4146,9 @@ instr_regrd_mrh_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx;
-
-	TRACE("[Thread %2u] regrd (m = r[h])\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_nbo(p, t, ip);
-	instr_regarray_dst_hbo_src_hbo_set(t, ip, regarray[idx]);
+	__instr_regrd_mrh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5658,12 +4159,9 @@ instr_regrd_mrm_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx;
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_hbo(p, t, ip);
-	instr_regarray_dst_hbo_src_hbo_set(t, ip, regarray[idx]);
+	__instr_regrd_mrm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5674,14 +4172,9 @@ instr_regrd_hri_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx;
-
-	TRACE("[Thread %2u] regrd (h = r[i])\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_imm(p, ip);
-	instr_regarray_dst_nbo_src_hbo_set(t, ip, regarray[idx]);
+	__instr_regrd_hri_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5692,14 +4185,9 @@ instr_regrd_mri_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx;
-
-	TRACE("[Thread %2u] regrd (m = r[i])\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_imm(p, ip);
-	instr_regarray_dst_hbo_src_hbo_set(t, ip, regarray[idx]);
+	__instr_regrd_mri_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5710,15 +4198,9 @@ instr_regwr_rhh_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx, src;
-
-	TRACE("[Thread %2u] regwr (r[h] = h)\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_nbo(p, t, ip);
-	src = instr_regarray_src_nbo(t, ip);
-	regarray[idx] = src;
+	__instr_regwr_rhh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5729,15 +4211,9 @@ instr_regwr_rhm_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx, src;
-
-	TRACE("[Thread %2u] regwr (r[h] = m)\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_nbo(p, t, ip);
-	src = instr_regarray_src_hbo(t, ip);
-	regarray[idx] = src;
+	__instr_regwr_rhm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5748,15 +4224,9 @@ instr_regwr_rmh_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx, src;
-
-	TRACE("[Thread %2u] regwr (r[m] = h)\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_hbo(p, t, ip);
-	src = instr_regarray_src_nbo(t, ip);
-	regarray[idx] = src;
+	__instr_regwr_rmh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5767,15 +4237,9 @@ instr_regwr_rmm_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx, src;
-
-	TRACE("[Thread %2u] regwr (r[m] = m)\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_hbo(p, t, ip);
-	src = instr_regarray_src_hbo(t, ip);
-	regarray[idx] = src;
+	__instr_regwr_rmm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5786,15 +4250,9 @@ instr_regwr_rhi_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx, src;
-
-	TRACE("[Thread %2u] regwr (r[h] = i)\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_nbo(p, t, ip);
-	src = ip->regarray.dstsrc_val;
-	regarray[idx] = src;
+	__instr_regwr_rhi_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5805,15 +4263,9 @@ instr_regwr_rmi_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx, src;
-
-	TRACE("[Thread %2u] regwr (r[m] = i)\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_hbo(p, t, ip);
-	src = ip->regarray.dstsrc_val;
-	regarray[idx] = src;
+	__instr_regwr_rmi_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5824,15 +4276,9 @@ instr_regwr_rih_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx, src;
-
-	TRACE("[Thread %2u] regwr (r[i] = h)\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_imm(p, ip);
-	src = instr_regarray_src_nbo(t, ip);
-	regarray[idx] = src;
+	__instr_regwr_rih_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5843,15 +4289,9 @@ instr_regwr_rim_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx, src;
-
-	TRACE("[Thread %2u] regwr (r[i] = m)\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_imm(p, ip);
-	src = instr_regarray_src_hbo(t, ip);
-	regarray[idx] = src;
+	__instr_regwr_rim_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5862,15 +4302,9 @@ instr_regwr_rii_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx, src;
-
-	TRACE("[Thread %2u] regwr (r[i] = i)\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_imm(p, ip);
-	src = ip->regarray.dstsrc_val;
-	regarray[idx] = src;
+	__instr_regwr_rii_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5881,15 +4315,9 @@ instr_regadd_rhh_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx, src;
-
-	TRACE("[Thread %2u] regadd (r[h] += h)\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_nbo(p, t, ip);
-	src = instr_regarray_src_nbo(t, ip);
-	regarray[idx] += src;
+	__instr_regadd_rhh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5900,15 +4328,9 @@ instr_regadd_rhm_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx, src;
-
-	TRACE("[Thread %2u] regadd (r[h] += m)\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_nbo(p, t, ip);
-	src = instr_regarray_src_hbo(t, ip);
-	regarray[idx] += src;
+	__instr_regadd_rhm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5919,15 +4341,9 @@ instr_regadd_rmh_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx, src;
-
-	TRACE("[Thread %2u] regadd (r[m] += h)\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_hbo(p, t, ip);
-	src = instr_regarray_src_nbo(t, ip);
-	regarray[idx] += src;
+	__instr_regadd_rmh_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5938,15 +4354,9 @@ instr_regadd_rmm_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx, src;
-
-	TRACE("[Thread %2u] regadd (r[m] += m)\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_hbo(p, t, ip);
-	src = instr_regarray_src_hbo(t, ip);
-	regarray[idx] += src;
+	__instr_regadd_rmm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5957,15 +4367,9 @@ instr_regadd_rhi_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx, src;
-
-	TRACE("[Thread %2u] regadd (r[h] += i)\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_nbo(p, t, ip);
-	src = ip->regarray.dstsrc_val;
-	regarray[idx] += src;
+	__instr_regadd_rhi_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5976,15 +4380,9 @@ instr_regadd_rmi_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx, src;
-
-	TRACE("[Thread %2u] regadd (r[m] += i)\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_hbo(p, t, ip);
-	src = ip->regarray.dstsrc_val;
-	regarray[idx] += src;
+	__instr_regadd_rmi_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -5995,15 +4393,9 @@ instr_regadd_rih_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx, src;
-
-	TRACE("[Thread %2u] regadd (r[i] += h)\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_imm(p, ip);
-	src = instr_regarray_src_nbo(t, ip);
-	regarray[idx] += src;
+	__instr_regadd_rih_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -6014,15 +4406,9 @@ instr_regadd_rim_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx, src;
-
-	TRACE("[Thread %2u] regadd (r[i] += m)\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_imm(p, ip);
-	src = instr_regarray_src_hbo(t, ip);
-	regarray[idx] += src;
+	__instr_regadd_rim_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -6033,15 +4419,9 @@ instr_regadd_rii_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	uint64_t *regarray, idx, src;
-
-	TRACE("[Thread %2u] regadd (r[i] += i)\n", p->thread_id);
 
 	/* Structs. */
-	regarray = instr_regarray_regarray(p, ip);
-	idx = instr_regarray_idx_imm(p, ip);
-	src = ip->regarray.dstsrc_val;
-	regarray[idx] += src;
+	__instr_regadd_rii_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -6074,6 +4454,8 @@ instr_metprefetch_translate(struct rte_swx_pipeline *p,
 	/* METPREFETCH_H, METPREFETCH_M. */
 	fidx = struct_field_parse(p, action, idx, &idx_struct_id);
 	if (fidx) {
+		CHECK(!fidx->var_size, EINVAL);
+
 		instr->type = INSTR_METPREFETCH_M;
 		if (idx[0] == 'h')
 			instr->type = INSTR_METPREFETCH_H;
@@ -6119,14 +4501,19 @@ instr_meter_translate(struct rte_swx_pipeline *p,
 
 	flength = struct_field_parse(p, action, length, &length_struct_id);
 	CHECK(flength, EINVAL);
+	CHECK(!flength->var_size, EINVAL);
 
 	fcin = struct_field_parse(p, action, color_in, &color_in_struct_id);
 
 	fcout = struct_field_parse(p, NULL, color_out, &color_out_struct_id);
 	CHECK(fcout, EINVAL);
+	CHECK(!fcout->var_size, EINVAL);
 
 	/* index = HMEFT, length = HMEFT, color_in = MEFT, color_out = MEF. */
 	if (fidx && fcin) {
+		CHECK(!fidx->var_size, EINVAL);
+		CHECK(!fcin->var_size, EINVAL);
+
 		instr->type = INSTR_METER_MMM;
 		if (idx[0] == 'h' && length[0] == 'h')
 			instr->type = INSTR_METER_HHM;
@@ -6158,7 +4545,11 @@ instr_meter_translate(struct rte_swx_pipeline *p,
 
 	/* index = HMEFT, length = HMEFT, color_in = I, color_out = MEF. */
 	if (fidx && !fcin) {
-		uint32_t color_in_val = strtoul(color_in, &color_in, 0);
+		uint32_t color_in_val;
+
+		CHECK(!fidx->var_size, EINVAL);
+
+		color_in_val = strtoul(color_in, &color_in, 0);
 		CHECK(!color_in[0], EINVAL);
 
 		instr->type = INSTR_METER_MMI;
@@ -6194,6 +4585,8 @@ instr_meter_translate(struct rte_swx_pipeline *p,
 
 		idx_val = strtoul(idx, &idx, 0);
 		CHECK(!idx[0], EINVAL);
+
+		CHECK(!fcin->var_size, EINVAL);
 
 		instr->type = INSTR_METER_IMM;
 		if (length[0] == 'h')
@@ -6252,119 +4645,14 @@ instr_meter_translate(struct rte_swx_pipeline *p,
 	CHECK(0, EINVAL);
 }
 
-static inline struct meter *
-instr_meter_idx_hbo(struct rte_swx_pipeline *p, struct thread *t, struct instruction *ip)
-{
-	struct metarray_runtime *r = &p->metarray_runtime[ip->meter.metarray_id];
-
-	uint8_t *idx_struct = t->structs[ip->meter.idx.struct_id];
-	uint64_t *idx64_ptr = (uint64_t *)&idx_struct[ip->meter.idx.offset];
-	uint64_t idx64 = *idx64_ptr;
-	uint64_t idx64_mask = UINT64_MAX >> (64 - (ip)->meter.idx.n_bits);
-	uint64_t idx = idx64 & idx64_mask & r->size_mask;
-
-	return &r->metarray[idx];
-}
-
-#if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
-
-static inline struct meter *
-instr_meter_idx_nbo(struct rte_swx_pipeline *p, struct thread *t, struct instruction *ip)
-{
-	struct metarray_runtime *r = &p->metarray_runtime[ip->meter.metarray_id];
-
-	uint8_t *idx_struct = t->structs[ip->meter.idx.struct_id];
-	uint64_t *idx64_ptr = (uint64_t *)&idx_struct[ip->meter.idx.offset];
-	uint64_t idx64 = *idx64_ptr;
-	uint64_t idx = (ntoh64(idx64) >> (64 - ip->meter.idx.n_bits)) & r->size_mask;
-
-	return &r->metarray[idx];
-}
-
-#else
-
-#define instr_meter_idx_nbo instr_meter_idx_hbo
-
-#endif
-
-static inline struct meter *
-instr_meter_idx_imm(struct rte_swx_pipeline *p, struct instruction *ip)
-{
-	struct metarray_runtime *r = &p->metarray_runtime[ip->meter.metarray_id];
-
-	uint64_t idx =  ip->meter.idx_val & r->size_mask;
-
-	return &r->metarray[idx];
-}
-
-static inline uint32_t
-instr_meter_length_hbo(struct thread *t, struct instruction *ip)
-{
-	uint8_t *src_struct = t->structs[ip->meter.length.struct_id];
-	uint64_t *src64_ptr = (uint64_t *)&src_struct[ip->meter.length.offset];
-	uint64_t src64 = *src64_ptr;
-	uint64_t src64_mask = UINT64_MAX >> (64 - (ip)->meter.length.n_bits);
-	uint64_t src = src64 & src64_mask;
-
-	return (uint32_t)src;
-}
-
-#if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
-
-static inline uint32_t
-instr_meter_length_nbo(struct thread *t, struct instruction *ip)
-{
-	uint8_t *src_struct = t->structs[ip->meter.length.struct_id];
-	uint64_t *src64_ptr = (uint64_t *)&src_struct[ip->meter.length.offset];
-	uint64_t src64 = *src64_ptr;
-	uint64_t src = ntoh64(src64) >> (64 - ip->meter.length.n_bits);
-
-	return (uint32_t)src;
-}
-
-#else
-
-#define instr_meter_length_nbo instr_meter_length_hbo
-
-#endif
-
-static inline enum rte_color
-instr_meter_color_in_hbo(struct thread *t, struct instruction *ip)
-{
-	uint8_t *src_struct = t->structs[ip->meter.color_in.struct_id];
-	uint64_t *src64_ptr = (uint64_t *)&src_struct[ip->meter.color_in.offset];
-	uint64_t src64 = *src64_ptr;
-	uint64_t src64_mask = UINT64_MAX >> (64 - ip->meter.color_in.n_bits);
-	uint64_t src = src64 & src64_mask;
-
-	return (enum rte_color)src;
-}
-
-static inline void
-instr_meter_color_out_hbo_set(struct thread *t, struct instruction *ip, enum rte_color color_out)
-{
-	uint8_t *dst_struct = t->structs[ip->meter.color_out.struct_id];
-	uint64_t *dst64_ptr = (uint64_t *)&dst_struct[ip->meter.color_out.offset];
-	uint64_t dst64 = *dst64_ptr;
-	uint64_t dst64_mask = UINT64_MAX >> (64 - ip->meter.color_out.n_bits);
-
-	uint64_t src = (uint64_t)color_out;
-
-	*dst64_ptr = (dst64 & ~dst64_mask) | (src & dst64_mask);
-}
-
 static inline void
 instr_metprefetch_h_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	struct meter *m;
-
-	TRACE("[Thread %2u] metprefetch (h)\n", p->thread_id);
 
 	/* Structs. */
-	m = instr_meter_idx_nbo(p, t, ip);
-	rte_prefetch0(m);
+	__instr_metprefetch_h_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -6375,13 +4663,9 @@ instr_metprefetch_m_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	struct meter *m;
-
-	TRACE("[Thread %2u] metprefetch (m)\n", p->thread_id);
 
 	/* Structs. */
-	m = instr_meter_idx_hbo(p, t, ip);
-	rte_prefetch0(m);
+	__instr_metprefetch_m_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -6392,13 +4676,9 @@ instr_metprefetch_i_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	struct meter *m;
-
-	TRACE("[Thread %2u] metprefetch (i)\n", p->thread_id);
 
 	/* Structs. */
-	m = instr_meter_idx_imm(p, ip);
-	rte_prefetch0(m);
+	__instr_metprefetch_i_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -6409,35 +4689,9 @@ instr_meter_hhm_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	struct meter *m;
-	uint64_t time, n_pkts, n_bytes;
-	uint32_t length;
-	enum rte_color color_in, color_out;
-
-	TRACE("[Thread %2u] meter (hhm)\n", p->thread_id);
 
 	/* Structs. */
-	m = instr_meter_idx_nbo(p, t, ip);
-	rte_prefetch0(m->n_pkts);
-	time = rte_get_tsc_cycles();
-	length = instr_meter_length_nbo(t, ip);
-	color_in = instr_meter_color_in_hbo(t, ip);
-
-	color_out = rte_meter_trtcm_color_aware_check(&m->m,
-		&m->profile->profile,
-		time,
-		length,
-		color_in);
-
-	color_out &= m->color_mask;
-
-	n_pkts = m->n_pkts[color_out];
-	n_bytes = m->n_bytes[color_out];
-
-	instr_meter_color_out_hbo_set(t, ip, color_out);
-
-	m->n_pkts[color_out] = n_pkts + 1;
-	m->n_bytes[color_out] = n_bytes + length;
+	__instr_meter_hhm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -6448,35 +4702,9 @@ instr_meter_hhi_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	struct meter *m;
-	uint64_t time, n_pkts, n_bytes;
-	uint32_t length;
-	enum rte_color color_in, color_out;
-
-	TRACE("[Thread %2u] meter (hhi)\n", p->thread_id);
 
 	/* Structs. */
-	m = instr_meter_idx_nbo(p, t, ip);
-	rte_prefetch0(m->n_pkts);
-	time = rte_get_tsc_cycles();
-	length = instr_meter_length_nbo(t, ip);
-	color_in = (enum rte_color)ip->meter.color_in_val;
-
-	color_out = rte_meter_trtcm_color_aware_check(&m->m,
-		&m->profile->profile,
-		time,
-		length,
-		color_in);
-
-	color_out &= m->color_mask;
-
-	n_pkts = m->n_pkts[color_out];
-	n_bytes = m->n_bytes[color_out];
-
-	instr_meter_color_out_hbo_set(t, ip, color_out);
-
-	m->n_pkts[color_out] = n_pkts + 1;
-	m->n_bytes[color_out] = n_bytes + length;
+	__instr_meter_hhi_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -6487,73 +4715,22 @@ instr_meter_hmm_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	struct meter *m;
-	uint64_t time, n_pkts, n_bytes;
-	uint32_t length;
-	enum rte_color color_in, color_out;
-
-	TRACE("[Thread %2u] meter (hmm)\n", p->thread_id);
 
 	/* Structs. */
-	m = instr_meter_idx_nbo(p, t, ip);
-	rte_prefetch0(m->n_pkts);
-	time = rte_get_tsc_cycles();
-	length = instr_meter_length_hbo(t, ip);
-	color_in = instr_meter_color_in_hbo(t, ip);
-
-	color_out = rte_meter_trtcm_color_aware_check(&m->m,
-		&m->profile->profile,
-		time,
-		length,
-		color_in);
-
-	color_out &= m->color_mask;
-
-	n_pkts = m->n_pkts[color_out];
-	n_bytes = m->n_bytes[color_out];
-
-	instr_meter_color_out_hbo_set(t, ip, color_out);
-
-	m->n_pkts[color_out] = n_pkts + 1;
-	m->n_bytes[color_out] = n_bytes + length;
+	__instr_meter_hmm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
 }
+
 static inline void
 instr_meter_hmi_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	struct meter *m;
-	uint64_t time, n_pkts, n_bytes;
-	uint32_t length;
-	enum rte_color color_in, color_out;
-
-	TRACE("[Thread %2u] meter (hmi)\n", p->thread_id);
 
 	/* Structs. */
-	m = instr_meter_idx_nbo(p, t, ip);
-	rte_prefetch0(m->n_pkts);
-	time = rte_get_tsc_cycles();
-	length = instr_meter_length_hbo(t, ip);
-	color_in = (enum rte_color)ip->meter.color_in_val;
-
-	color_out = rte_meter_trtcm_color_aware_check(&m->m,
-		&m->profile->profile,
-		time,
-		length,
-		color_in);
-
-	color_out &= m->color_mask;
-
-	n_pkts = m->n_pkts[color_out];
-	n_bytes = m->n_bytes[color_out];
-
-	instr_meter_color_out_hbo_set(t, ip, color_out);
-
-	m->n_pkts[color_out] = n_pkts + 1;
-	m->n_bytes[color_out] = n_bytes + length;
+	__instr_meter_hmi_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -6564,35 +4741,9 @@ instr_meter_mhm_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	struct meter *m;
-	uint64_t time, n_pkts, n_bytes;
-	uint32_t length;
-	enum rte_color color_in, color_out;
-
-	TRACE("[Thread %2u] meter (mhm)\n", p->thread_id);
 
 	/* Structs. */
-	m = instr_meter_idx_hbo(p, t, ip);
-	rte_prefetch0(m->n_pkts);
-	time = rte_get_tsc_cycles();
-	length = instr_meter_length_nbo(t, ip);
-	color_in = instr_meter_color_in_hbo(t, ip);
-
-	color_out = rte_meter_trtcm_color_aware_check(&m->m,
-		&m->profile->profile,
-		time,
-		length,
-		color_in);
-
-	color_out &= m->color_mask;
-
-	n_pkts = m->n_pkts[color_out];
-	n_bytes = m->n_bytes[color_out];
-
-	instr_meter_color_out_hbo_set(t, ip, color_out);
-
-	m->n_pkts[color_out] = n_pkts + 1;
-	m->n_bytes[color_out] = n_bytes + length;
+	__instr_meter_mhm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -6603,35 +4754,9 @@ instr_meter_mhi_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	struct meter *m;
-	uint64_t time, n_pkts, n_bytes;
-	uint32_t length;
-	enum rte_color color_in, color_out;
-
-	TRACE("[Thread %2u] meter (mhi)\n", p->thread_id);
 
 	/* Structs. */
-	m = instr_meter_idx_hbo(p, t, ip);
-	rte_prefetch0(m->n_pkts);
-	time = rte_get_tsc_cycles();
-	length = instr_meter_length_nbo(t, ip);
-	color_in = (enum rte_color)ip->meter.color_in_val;
-
-	color_out = rte_meter_trtcm_color_aware_check(&m->m,
-		&m->profile->profile,
-		time,
-		length,
-		color_in);
-
-	color_out &= m->color_mask;
-
-	n_pkts = m->n_pkts[color_out];
-	n_bytes = m->n_bytes[color_out];
-
-	instr_meter_color_out_hbo_set(t, ip, color_out);
-
-	m->n_pkts[color_out] = n_pkts + 1;
-	m->n_bytes[color_out] = n_bytes + length;
+	__instr_meter_mhi_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -6642,35 +4767,9 @@ instr_meter_mmm_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	struct meter *m;
-	uint64_t time, n_pkts, n_bytes;
-	uint32_t length;
-	enum rte_color color_in, color_out;
-
-	TRACE("[Thread %2u] meter (mmm)\n", p->thread_id);
 
 	/* Structs. */
-	m = instr_meter_idx_hbo(p, t, ip);
-	rte_prefetch0(m->n_pkts);
-	time = rte_get_tsc_cycles();
-	length = instr_meter_length_hbo(t, ip);
-	color_in = instr_meter_color_in_hbo(t, ip);
-
-	color_out = rte_meter_trtcm_color_aware_check(&m->m,
-		&m->profile->profile,
-		time,
-		length,
-		color_in);
-
-	color_out &= m->color_mask;
-
-	n_pkts = m->n_pkts[color_out];
-	n_bytes = m->n_bytes[color_out];
-
-	instr_meter_color_out_hbo_set(t, ip, color_out);
-
-	m->n_pkts[color_out] = n_pkts + 1;
-	m->n_bytes[color_out] = n_bytes + length;
+	__instr_meter_mmm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -6681,35 +4780,9 @@ instr_meter_mmi_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	struct meter *m;
-	uint64_t time, n_pkts, n_bytes;
-	uint32_t length;
-	enum rte_color color_in, color_out;
-
-	TRACE("[Thread %2u] meter (mmi)\n", p->thread_id);
 
 	/* Structs. */
-	m = instr_meter_idx_hbo(p, t, ip);
-	rte_prefetch0(m->n_pkts);
-	time = rte_get_tsc_cycles();
-	length = instr_meter_length_hbo(t, ip);
-	color_in = (enum rte_color)ip->meter.color_in_val;
-
-	color_out = rte_meter_trtcm_color_aware_check(&m->m,
-		&m->profile->profile,
-		time,
-		length,
-		color_in);
-
-	color_out &= m->color_mask;
-
-	n_pkts = m->n_pkts[color_out];
-	n_bytes = m->n_bytes[color_out];
-
-	instr_meter_color_out_hbo_set(t, ip, color_out);
-
-	m->n_pkts[color_out] = n_pkts + 1;
-	m->n_bytes[color_out] = n_bytes + length;
+	__instr_meter_mmi_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -6720,35 +4793,9 @@ instr_meter_ihm_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	struct meter *m;
-	uint64_t time, n_pkts, n_bytes;
-	uint32_t length;
-	enum rte_color color_in, color_out;
-
-	TRACE("[Thread %2u] meter (ihm)\n", p->thread_id);
 
 	/* Structs. */
-	m = instr_meter_idx_imm(p, ip);
-	rte_prefetch0(m->n_pkts);
-	time = rte_get_tsc_cycles();
-	length = instr_meter_length_nbo(t, ip);
-	color_in = instr_meter_color_in_hbo(t, ip);
-
-	color_out = rte_meter_trtcm_color_aware_check(&m->m,
-		&m->profile->profile,
-		time,
-		length,
-		color_in);
-
-	color_out &= m->color_mask;
-
-	n_pkts = m->n_pkts[color_out];
-	n_bytes = m->n_bytes[color_out];
-
-	instr_meter_color_out_hbo_set(t, ip, color_out);
-
-	m->n_pkts[color_out] = n_pkts + 1;
-	m->n_bytes[color_out] = n_bytes + length;
+	__instr_meter_ihm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -6759,35 +4806,9 @@ instr_meter_ihi_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	struct meter *m;
-	uint64_t time, n_pkts, n_bytes;
-	uint32_t length;
-	enum rte_color color_in, color_out;
-
-	TRACE("[Thread %2u] meter (ihi)\n", p->thread_id);
 
 	/* Structs. */
-	m = instr_meter_idx_imm(p, ip);
-	rte_prefetch0(m->n_pkts);
-	time = rte_get_tsc_cycles();
-	length = instr_meter_length_nbo(t, ip);
-	color_in = (enum rte_color)ip->meter.color_in_val;
-
-	color_out = rte_meter_trtcm_color_aware_check(&m->m,
-		&m->profile->profile,
-		time,
-		length,
-		color_in);
-
-	color_out &= m->color_mask;
-
-	n_pkts = m->n_pkts[color_out];
-	n_bytes = m->n_bytes[color_out];
-
-	instr_meter_color_out_hbo_set(t, ip, color_out);
-
-	m->n_pkts[color_out] = n_pkts + 1;
-	m->n_bytes[color_out] = n_bytes + length;
+	__instr_meter_ihi_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -6798,73 +4819,22 @@ instr_meter_imm_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	struct meter *m;
-	uint64_t time, n_pkts, n_bytes;
-	uint32_t length;
-	enum rte_color color_in, color_out;
-
-	TRACE("[Thread %2u] meter (imm)\n", p->thread_id);
 
 	/* Structs. */
-	m = instr_meter_idx_imm(p, ip);
-	rte_prefetch0(m->n_pkts);
-	time = rte_get_tsc_cycles();
-	length = instr_meter_length_hbo(t, ip);
-	color_in = instr_meter_color_in_hbo(t, ip);
-
-	color_out = rte_meter_trtcm_color_aware_check(&m->m,
-		&m->profile->profile,
-		time,
-		length,
-		color_in);
-
-	color_out &= m->color_mask;
-
-	n_pkts = m->n_pkts[color_out];
-	n_bytes = m->n_bytes[color_out];
-
-	instr_meter_color_out_hbo_set(t, ip, color_out);
-
-	m->n_pkts[color_out] = n_pkts + 1;
-	m->n_bytes[color_out] = n_bytes + length;
+	__instr_meter_imm_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
 }
+
 static inline void
 instr_meter_imi_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	struct meter *m;
-	uint64_t time, n_pkts, n_bytes;
-	uint32_t length;
-	enum rte_color color_in, color_out;
-
-	TRACE("[Thread %2u] meter (imi)\n", p->thread_id);
 
 	/* Structs. */
-	m = instr_meter_idx_imm(p, ip);
-	rte_prefetch0(m->n_pkts);
-	time = rte_get_tsc_cycles();
-	length = instr_meter_length_hbo(t, ip);
-	color_in = (enum rte_color)ip->meter.color_in_val;
-
-	color_out = rte_meter_trtcm_color_aware_check(&m->m,
-		&m->profile->profile,
-		time,
-		length,
-		color_in);
-
-	color_out &= m->color_mask;
-
-	n_pkts = m->n_pkts[color_out];
-	n_bytes = m->n_bytes[color_out];
-
-	instr_meter_color_out_hbo_set(t, ip, color_out);
-
-	m->n_pkts[color_out] = n_pkts + 1;
-	m->n_bytes[color_out] = n_bytes + length;
+	__instr_meter_imi_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -6873,9 +4843,6 @@ instr_meter_imi_exec(struct rte_swx_pipeline *p)
 /*
  * jmp.
  */
-static struct action *
-action_find(struct rte_swx_pipeline *p, const char *name);
-
 static int
 instr_jmp_translate(struct rte_swx_pipeline *p __rte_unused,
 		    struct action *action __rte_unused,
@@ -7042,10 +5009,13 @@ instr_jmp_eq_translate(struct rte_swx_pipeline *p,
 
 	fa = struct_field_parse(p, action, a, &a_struct_id);
 	CHECK(fa, EINVAL);
+	CHECK(!fa->var_size, EINVAL);
 
 	/* JMP_EQ, JMP_EQ_MH, JMP_EQ_HM, JMP_EQ_HH. */
 	fb = struct_field_parse(p, action, b, &b_struct_id);
 	if (fb) {
+		CHECK(!fb->var_size, EINVAL);
+
 		instr->type = INSTR_JMP_EQ;
 		if (a[0] != 'h' && b[0] == 'h')
 			instr->type = INSTR_JMP_EQ_MH;
@@ -7099,10 +5069,13 @@ instr_jmp_neq_translate(struct rte_swx_pipeline *p,
 
 	fa = struct_field_parse(p, action, a, &a_struct_id);
 	CHECK(fa, EINVAL);
+	CHECK(!fa->var_size, EINVAL);
 
 	/* JMP_NEQ, JMP_NEQ_MH, JMP_NEQ_HM, JMP_NEQ_HH. */
 	fb = struct_field_parse(p, action, b, &b_struct_id);
 	if (fb) {
+		CHECK(!fb->var_size, EINVAL);
+
 		instr->type = INSTR_JMP_NEQ;
 		if (a[0] != 'h' && b[0] == 'h')
 			instr->type = INSTR_JMP_NEQ_MH;
@@ -7156,10 +5129,13 @@ instr_jmp_lt_translate(struct rte_swx_pipeline *p,
 
 	fa = struct_field_parse(p, action, a, &a_struct_id);
 	CHECK(fa, EINVAL);
+	CHECK(!fa->var_size, EINVAL);
 
 	/* JMP_LT, JMP_LT_MH, JMP_LT_HM, JMP_LT_HH. */
 	fb = struct_field_parse(p, action, b, &b_struct_id);
 	if (fb) {
+		CHECK(!fb->var_size, EINVAL);
+
 		instr->type = INSTR_JMP_LT;
 		if (a[0] == 'h' && b[0] != 'h')
 			instr->type = INSTR_JMP_LT_HM;
@@ -7213,10 +5189,13 @@ instr_jmp_gt_translate(struct rte_swx_pipeline *p,
 
 	fa = struct_field_parse(p, action, a, &a_struct_id);
 	CHECK(fa, EINVAL);
+	CHECK(!fa->var_size, EINVAL);
 
 	/* JMP_GT, JMP_GT_MH, JMP_GT_HM, JMP_GT_HH. */
 	fb = struct_field_parse(p, action, b, &b_struct_id);
 	if (fb) {
+		CHECK(!fb->var_size, EINVAL);
+
 		instr->type = INSTR_JMP_GT;
 		if (a[0] == 'h' && b[0] != 'h')
 			instr->type = INSTR_JMP_GT_HM;
@@ -7670,6 +5649,14 @@ instr_translate(struct rte_swx_pipeline *p,
 						   instr,
 						   data);
 
+	if (!strcmp(tokens[tpos], "lookahead"))
+		return instr_hdr_lookahead_translate(p,
+						     action,
+						     &tokens[tpos],
+						     n_tokens - tpos,
+						     instr,
+						     data);
+
 	if (!strcmp(tokens[tpos], "emit"))
 		return instr_hdr_emit_translate(p,
 						action,
@@ -7830,6 +5817,22 @@ instr_translate(struct rte_swx_pipeline *p,
 					     instr,
 					     data);
 
+	if (!strcmp(tokens[tpos], "learn"))
+		return instr_learn_translate(p,
+					     action,
+					     &tokens[tpos],
+					     n_tokens - tpos,
+					     instr,
+					     data);
+
+	if (!strcmp(tokens[tpos], "forget"))
+		return instr_forget_translate(p,
+					      action,
+					      &tokens[tpos],
+					      n_tokens - tpos,
+					      instr,
+					      data);
+
 	if (!strcmp(tokens[tpos], "extern"))
 		return instr_extern_translate(p,
 					      action,
@@ -7980,7 +5983,7 @@ instr_label_check(struct instruction_data *instruction_data,
 			continue;
 
 		for (j = i + 1; j < n_instructions; j++)
-			CHECK(strcmp(label, data[j].label), EINVAL);
+			CHECK(strcmp(label, instruction_data[j].label), EINVAL);
 	}
 
 	/* Get users for each instruction label. */
@@ -8308,7 +6311,7 @@ instr_pattern_mov_all_validate_search(struct rte_swx_pipeline *p,
 		return 0;
 
 	h = header_find_by_struct_id(p, instr[0].mov.dst.struct_id);
-	if (!h)
+	if (!h || h->st->var_size)
 		return 0;
 
 	for (src_field_id = 0; src_field_id < a->st->n_fields; src_field_id++)
@@ -8628,13 +6631,14 @@ instruction_config(struct rte_swx_pipeline *p,
 
 	if (a) {
 		a->instructions = instr;
+		a->instruction_data = data;
 		a->n_instructions = n_instructions;
 	} else {
 		p->instructions = instr;
+		p->instruction_data = data;
 		p->n_instructions = n_instructions;
 	}
 
-	free(data);
 	return 0;
 
 error:
@@ -8642,8 +6646,6 @@ error:
 	free(instr);
 	return err;
 }
-
-typedef void (*instr_exec_t)(struct rte_swx_pipeline *);
 
 static instr_exec_t instruction_table[] = {
 	[INSTR_RX] = instr_rx_exec,
@@ -8658,6 +6660,8 @@ static instr_exec_t instruction_table[] = {
 	[INSTR_HDR_EXTRACT6] = instr_hdr_extract6_exec,
 	[INSTR_HDR_EXTRACT7] = instr_hdr_extract7_exec,
 	[INSTR_HDR_EXTRACT8] = instr_hdr_extract8_exec,
+	[INSTR_HDR_EXTRACT_M] = instr_hdr_extract_m_exec,
+	[INSTR_HDR_LOOKAHEAD] = instr_hdr_lookahead_exec,
 
 	[INSTR_HDR_EMIT] = instr_hdr_emit_exec,
 	[INSTR_HDR_EMIT_TX] = instr_hdr_emit_tx_exec,
@@ -8787,6 +6791,12 @@ static instr_exec_t instruction_table[] = {
 	[INSTR_METER_IMI] = instr_meter_imi_exec,
 
 	[INSTR_TABLE] = instr_table_exec,
+	[INSTR_TABLE_AF] = instr_table_af_exec,
+	[INSTR_SELECTOR] = instr_selector_exec,
+	[INSTR_LEARNER] = instr_learner_exec,
+	[INSTR_LEARNER_AF] = instr_learner_af_exec,
+	[INSTR_LEARNER_LEARN] = instr_learn_exec,
+	[INSTR_LEARNER_FORGET] = instr_forget_exec,
 	[INSTR_EXTERN_OBJ] = instr_extern_obj_exec,
 	[INSTR_EXTERN_FUNC] = instr_extern_func_exec,
 
@@ -8827,12 +6837,41 @@ static instr_exec_t instruction_table[] = {
 	[INSTR_RETURN] = instr_return_exec,
 };
 
+static int
+instruction_table_build(struct rte_swx_pipeline *p)
+{
+	p->instruction_table = calloc(RTE_SWX_PIPELINE_INSTRUCTION_TABLE_SIZE_MAX,
+				      sizeof(struct instr_exec_t *));
+	if (!p->instruction_table)
+		return -EINVAL;
+
+	memcpy(p->instruction_table, instruction_table, sizeof(instruction_table));
+
+	return 0;
+}
+
+static void
+instruction_table_build_free(struct rte_swx_pipeline *p)
+{
+	if (!p->instruction_table)
+		return;
+
+	free(p->instruction_table);
+	p->instruction_table = NULL;
+}
+
+static void
+instruction_table_free(struct rte_swx_pipeline *p)
+{
+	instruction_table_build_free(p);
+}
+
 static inline void
 instr_exec(struct rte_swx_pipeline *p)
 {
 	struct thread *t = &p->threads[p->thread_id];
 	struct instruction *ip = t->ip;
-	instr_exec_t instr = instruction_table[ip->type];
+	instr_exec_t instr = p->instruction_table[ip->type];
 
 	instr(p);
 }
@@ -8882,6 +6921,42 @@ action_field_parse(struct action *action, const char *name)
 	return action_field_find(action, &name[2]);
 }
 
+static int
+action_has_nbo_args(struct action *a)
+{
+	uint32_t i;
+
+	/* Return if the action does not have any args. */
+	if (!a->st)
+		return 0; /* FALSE */
+
+	for (i = 0; i < a->st->n_fields; i++)
+		if (a->args_endianness[i])
+			return 1; /* TRUE */
+
+	return 0; /* FALSE */
+}
+
+static int
+action_does_learning(struct action *a)
+{
+	uint32_t i;
+
+	for (i = 0; i < a->n_instructions; i++)
+		switch (a->instructions[i].type) {
+		case INSTR_LEARNER_LEARN:
+			return 1; /* TRUE */
+
+		case INSTR_LEARNER_FORGET:
+			return 1; /* TRUE */
+
+		default:
+			continue;
+		}
+
+	return 0; /* FALSE */
+}
+
 int
 rte_swx_pipeline_action_config(struct rte_swx_pipeline *p,
 			       const char *name,
@@ -8889,7 +6964,7 @@ rte_swx_pipeline_action_config(struct rte_swx_pipeline *p,
 			       const char **instructions,
 			       uint32_t n_instructions)
 {
-	struct struct_type *args_struct_type;
+	struct struct_type *args_struct_type = NULL;
 	struct action *a;
 	int err;
 
@@ -8902,8 +6977,7 @@ rte_swx_pipeline_action_config(struct rte_swx_pipeline *p,
 		CHECK_NAME(args_struct_type_name, EINVAL);
 		args_struct_type = struct_type_find(p, args_struct_type_name);
 		CHECK(args_struct_type, EINVAL);
-	} else {
-		args_struct_type = NULL;
+		CHECK(!args_struct_type->var_size, EINVAL);
 	}
 
 	/* Node allocation. */
@@ -8942,12 +7016,16 @@ action_build(struct rte_swx_pipeline *p)
 {
 	struct action *action;
 
-	p->action_instructions = calloc(p->n_actions,
-					sizeof(struct instruction *));
+	/* p->action_instructions. */
+	p->action_instructions = calloc(p->n_actions, sizeof(struct instruction *));
 	CHECK(p->action_instructions, ENOMEM);
 
 	TAILQ_FOREACH(action, &p->actions, node)
 		p->action_instructions[action->id] = action->instructions;
+
+	/* p->action_funcs. */
+	p->action_funcs = calloc(p->n_actions, sizeof(action_func_t));
+	CHECK(p->action_funcs, ENOMEM);
 
 	return 0;
 }
@@ -8955,6 +7033,9 @@ action_build(struct rte_swx_pipeline *p)
 static void
 action_build_free(struct rte_swx_pipeline *p)
 {
+	free(p->action_funcs);
+	p->action_funcs = NULL;
+
 	free(p->action_instructions);
 	p->action_instructions = NULL;
 }
@@ -8972,6 +7053,7 @@ action_free(struct rte_swx_pipeline *p)
 			break;
 
 		TAILQ_REMOVE(&p->actions, action, node);
+		free(action->instruction_data);
 		free(action->instructions);
 		free(action);
 	}
@@ -9107,37 +7189,42 @@ rte_swx_pipeline_table_type_register(struct rte_swx_pipeline *p,
 	return 0;
 }
 
-static enum rte_swx_table_match_type
+static int
 table_match_type_resolve(struct rte_swx_match_field_params *fields,
 			 uint32_t n_fields,
-			 uint32_t max_offset_field_id)
+			 enum rte_swx_table_match_type *match_type)
 {
-	uint32_t n_fields_em = 0, i;
+	uint32_t n_fields_em = 0, n_fields_lpm = 0, i;
 
-	for (i = 0; i < n_fields; i++)
-		if (fields[i].match_type == RTE_SWX_TABLE_MATCH_EXACT)
+	for (i = 0; i < n_fields; i++) {
+		struct rte_swx_match_field_params  *f = &fields[i];
+
+		if (f->match_type == RTE_SWX_TABLE_MATCH_EXACT)
 			n_fields_em++;
 
-	if (n_fields_em == n_fields)
-		return RTE_SWX_TABLE_MATCH_EXACT;
+		if (f->match_type == RTE_SWX_TABLE_MATCH_LPM)
+			n_fields_lpm++;
+	}
 
-	if ((n_fields_em == n_fields - 1) &&
-	    (fields[max_offset_field_id].match_type == RTE_SWX_TABLE_MATCH_LPM))
-		return RTE_SWX_TABLE_MATCH_LPM;
+	if ((n_fields_lpm > 1) ||
+	    (n_fields_lpm && (n_fields_em != n_fields - 1)))
+		return -EINVAL;
 
-	return RTE_SWX_TABLE_MATCH_WILDCARD;
+	*match_type = (n_fields_em == n_fields) ?
+		       RTE_SWX_TABLE_MATCH_EXACT :
+		       RTE_SWX_TABLE_MATCH_WILDCARD;
+
+	return 0;
 }
 
 static int
 table_match_fields_check(struct rte_swx_pipeline *p,
 			 struct rte_swx_pipeline_table_params *params,
-			 struct header **header,
-			 uint32_t *min_offset_field_id,
-			 uint32_t *max_offset_field_id)
+			 struct header **header)
 {
 	struct header *h0 = NULL;
 	struct field *hf, *mf;
-	uint32_t *offset = NULL, min_offset, max_offset, min_offset_pos, max_offset_pos, i;
+	uint32_t *offset = NULL, i;
 	int status = 0;
 
 	/* Return if no match fields. */
@@ -9146,6 +7233,9 @@ table_match_fields_check(struct rte_swx_pipeline *p,
 			status = -EINVAL;
 			goto end;
 		}
+
+		if (header)
+			*header = NULL;
 
 		return 0;
 	}
@@ -9162,7 +7252,7 @@ table_match_fields_check(struct rte_swx_pipeline *p,
 	 */
 	hf = header_field_parse(p, params->fields[0].name, &h0);
 	mf = metadata_field_parse(p, params->fields[0].name);
-	if (!hf && !mf) {
+	if ((!hf && !mf) || (hf && hf->var_size)) {
 		status = -EINVAL;
 		goto end;
 	}
@@ -9174,7 +7264,7 @@ table_match_fields_check(struct rte_swx_pipeline *p,
 			struct header *h;
 
 			hf = header_field_parse(p, params->fields[i].name, &h);
-			if (!hf || (h->id != h0->id)) {
+			if (!hf || (h->id != h0->id) || hf->var_size) {
 				status = -EINVAL;
 				goto end;
 			}
@@ -9201,33 +7291,9 @@ table_match_fields_check(struct rte_swx_pipeline *p,
 			}
 	}
 
-	/* Find the min and max offset fields. */
-	min_offset = offset[0];
-	max_offset = offset[0];
-	min_offset_pos = 0;
-	max_offset_pos = 0;
-
-	for (i = 1; i < params->n_fields; i++) {
-		if (offset[i] < min_offset) {
-			min_offset = offset[i];
-			min_offset_pos = i;
-		}
-
-		if (offset[i] > max_offset) {
-			max_offset = offset[i];
-			max_offset_pos = i;
-		}
-	}
-
 	/* Return. */
 	if (header)
 		*header = h0;
-
-	if (min_offset_field_id)
-		*min_offset_field_id = min_offset_pos;
-
-	if (max_offset_field_id)
-		*max_offset_field_id = max_offset_pos;
 
 end:
 	free(offset);
@@ -9243,25 +7309,23 @@ rte_swx_pipeline_table_config(struct rte_swx_pipeline *p,
 			      uint32_t size)
 {
 	struct table_type *type;
-	struct table *t;
+	struct table *t = NULL;
 	struct action *default_action;
 	struct header *header = NULL;
-	uint32_t action_data_size_max = 0, min_offset_field_id = 0, max_offset_field_id = 0, i;
+	uint32_t action_data_size_max = 0, i;
 	int status = 0;
 
 	CHECK(p, EINVAL);
 
 	CHECK_NAME(name, EINVAL);
 	CHECK(!table_find(p, name), EEXIST);
+	CHECK(!selector_find(p, name), EEXIST);
+	CHECK(!learner_find(p, name), EEXIST);
 
 	CHECK(params, EINVAL);
 
 	/* Match checks. */
-	status = table_match_fields_check(p,
-					  params,
-					  &header,
-					  &min_offset_field_id,
-					  &max_offset_field_id);
+	status = table_match_fields_check(p, params, &header);
 	if (status)
 		return status;
 
@@ -9272,15 +7336,23 @@ rte_swx_pipeline_table_config(struct rte_swx_pipeline *p,
 		const char *action_name = params->action_names[i];
 		struct action *a;
 		uint32_t action_data_size;
+		int action_is_for_table_entries = 1, action_is_for_default_entry = 1;
 
 		CHECK_NAME(action_name, EINVAL);
 
 		a = action_find(p, action_name);
 		CHECK(a, EINVAL);
+		CHECK(!action_does_learning(a), EINVAL);
 
 		action_data_size = a->st ? a->st->n_bits / 8 : 0;
 		if (action_data_size > action_data_size_max)
 			action_data_size_max = action_data_size;
+
+		if (params->action_is_for_table_entries)
+			action_is_for_table_entries = params->action_is_for_table_entries[i];
+		if (params->action_is_for_default_entry)
+			action_is_for_default_entry = params->action_is_for_default_entry[i];
+		CHECK(action_is_for_table_entries || action_is_for_default_entry, EINVAL);
 	}
 
 	CHECK_NAME(params->default_action_name, EINVAL);
@@ -9289,6 +7361,9 @@ rte_swx_pipeline_table_config(struct rte_swx_pipeline *p,
 			    params->default_action_name))
 			break;
 	CHECK(i < params->n_actions, EINVAL);
+	CHECK(!params->action_is_for_default_entry || params->action_is_for_default_entry[i],
+	      EINVAL);
+
 	default_action = action_find(p, params->default_action_name);
 	CHECK((default_action->st && params->default_action_data) ||
 	      !params->default_action_data, EINVAL);
@@ -9300,12 +7375,11 @@ rte_swx_pipeline_table_config(struct rte_swx_pipeline *p,
 	if (params->n_fields) {
 		enum rte_swx_table_match_type match_type;
 
-		match_type = table_match_type_resolve(params->fields,
-						      params->n_fields,
-						      max_offset_field_id);
-		type = table_type_resolve(p,
-					  recommended_table_type_name,
-					  match_type);
+		status = table_match_type_resolve(params->fields, params->n_fields, &match_type);
+		if (status)
+			return status;
+
+		type = table_type_resolve(p, recommended_table_type_name, match_type);
 		CHECK(type, EINVAL);
 	} else {
 		type = NULL;
@@ -9316,27 +7390,26 @@ rte_swx_pipeline_table_config(struct rte_swx_pipeline *p,
 	CHECK(t, ENOMEM);
 
 	t->fields = calloc(params->n_fields, sizeof(struct match_field));
-	if (!t->fields) {
-		free(t);
-		CHECK(0, ENOMEM);
-	}
+	if (!t->fields)
+		goto nomem;
 
 	t->actions = calloc(params->n_actions, sizeof(struct action *));
-	if (!t->actions) {
-		free(t->fields);
-		free(t);
-		CHECK(0, ENOMEM);
-	}
+	if (!t->actions)
+		goto nomem;
 
 	if (action_data_size_max) {
 		t->default_action_data = calloc(1, action_data_size_max);
-		if (!t->default_action_data) {
-			free(t->actions);
-			free(t->fields);
-			free(t);
-			CHECK(0, ENOMEM);
-		}
+		if (!t->default_action_data)
+			goto nomem;
 	}
+
+	t->action_is_for_table_entries = calloc(params->n_actions, sizeof(int));
+	if (!t->action_is_for_table_entries)
+		goto nomem;
+
+	t->action_is_for_default_entry = calloc(params->n_actions, sizeof(int));
+	if (!t->action_is_for_default_entry)
+		goto nomem;
 
 	/* Node initialization. */
 	strcpy(t->name, name);
@@ -9356,8 +7429,18 @@ rte_swx_pipeline_table_config(struct rte_swx_pipeline *p,
 	t->n_fields = params->n_fields;
 	t->header = header;
 
-	for (i = 0; i < params->n_actions; i++)
+	for (i = 0; i < params->n_actions; i++) {
+		int action_is_for_table_entries = 1, action_is_for_default_entry = 1;
+
+		if (params->action_is_for_table_entries)
+			action_is_for_table_entries = params->action_is_for_table_entries[i];
+		if (params->action_is_for_default_entry)
+			action_is_for_default_entry = params->action_is_for_default_entry[i];
+
 		t->actions[i] = action_find(p, params->action_names[i]);
+		t->action_is_for_table_entries[i] = action_is_for_table_entries;
+		t->action_is_for_default_entry[i] = action_is_for_default_entry;
+	}
 	t->default_action = default_action;
 	if (default_action->st)
 		memcpy(t->default_action_data,
@@ -9375,6 +7458,19 @@ rte_swx_pipeline_table_config(struct rte_swx_pipeline *p,
 	p->n_tables++;
 
 	return 0;
+
+nomem:
+	if (!t)
+		return -ENOMEM;
+
+	free(t->action_is_for_default_entry);
+	free(t->action_is_for_table_entries);
+	free(t->default_action_data);
+	free(t->actions);
+	free(t->fields);
+	free(t);
+
+	return -ENOMEM;
 }
 
 static struct rte_swx_table_params *
@@ -9453,82 +7549,6 @@ table_params_free(struct rte_swx_table_params *params)
 
 	free(params->key_mask0);
 	free(params);
-}
-
-static int
-table_state_build(struct rte_swx_pipeline *p)
-{
-	struct table *table;
-
-	p->table_state = calloc(p->n_tables,
-				sizeof(struct rte_swx_table_state));
-	CHECK(p->table_state, ENOMEM);
-
-	TAILQ_FOREACH(table, &p->tables, node) {
-		struct rte_swx_table_state *ts = &p->table_state[table->id];
-
-		if (table->type) {
-			struct rte_swx_table_params *params;
-
-			/* ts->obj. */
-			params = table_params_get(table);
-			CHECK(params, ENOMEM);
-
-			ts->obj = table->type->ops.create(params,
-				NULL,
-				table->args,
-				p->numa_node);
-
-			table_params_free(params);
-			CHECK(ts->obj, ENODEV);
-		}
-
-		/* ts->default_action_data. */
-		if (table->action_data_size_max) {
-			ts->default_action_data =
-				malloc(table->action_data_size_max);
-			CHECK(ts->default_action_data, ENOMEM);
-
-			memcpy(ts->default_action_data,
-			       table->default_action_data,
-			       table->action_data_size_max);
-		}
-
-		/* ts->default_action_id. */
-		ts->default_action_id = table->default_action->id;
-	}
-
-	return 0;
-}
-
-static void
-table_state_build_free(struct rte_swx_pipeline *p)
-{
-	uint32_t i;
-
-	if (!p->table_state)
-		return;
-
-	for (i = 0; i < p->n_tables; i++) {
-		struct rte_swx_table_state *ts = &p->table_state[i];
-		struct table *table = table_find_by_id(p, i);
-
-		/* ts->obj. */
-		if (table->type && ts->obj)
-			table->type->ops.free(ts->obj);
-
-		/* ts->default_action_data. */
-		free(ts->default_action_data);
-	}
-
-	free(p->table_state);
-	p->table_state = NULL;
-}
-
-static void
-table_state_free(struct rte_swx_pipeline *p)
-{
-	table_state_build_free(p);
 }
 
 static int
@@ -9656,6 +7676,997 @@ table_free(struct rte_swx_pipeline *p)
 		TAILQ_REMOVE(&p->table_types, elem, node);
 		free(elem);
 	}
+}
+
+/*
+ * Selector.
+ */
+static struct selector *
+selector_find(struct rte_swx_pipeline *p, const char *name)
+{
+	struct selector *s;
+
+	TAILQ_FOREACH(s, &p->selectors, node)
+		if (strcmp(s->name, name) == 0)
+			return s;
+
+	return NULL;
+}
+
+static struct selector *
+selector_find_by_id(struct rte_swx_pipeline *p, uint32_t id)
+{
+	struct selector *s = NULL;
+
+	TAILQ_FOREACH(s, &p->selectors, node)
+		if (s->id == id)
+			return s;
+
+	return NULL;
+}
+
+static int
+selector_fields_check(struct rte_swx_pipeline *p,
+		      struct rte_swx_pipeline_selector_params *params,
+		      struct header **header)
+{
+	struct header *h0 = NULL;
+	struct field *hf, *mf;
+	uint32_t i;
+
+	/* Return if no selector fields. */
+	if (!params->n_selector_fields || !params->selector_field_names)
+		return -EINVAL;
+
+	/* Check that all the selector fields either belong to the same header
+	 * or are all meta-data fields.
+	 */
+	hf = header_field_parse(p, params->selector_field_names[0], &h0);
+	mf = metadata_field_parse(p, params->selector_field_names[0]);
+	if (!hf && !mf)
+		return -EINVAL;
+
+	for (i = 1; i < params->n_selector_fields; i++)
+		if (h0) {
+			struct header *h;
+
+			hf = header_field_parse(p, params->selector_field_names[i], &h);
+			if (!hf || (h->id != h0->id))
+				return -EINVAL;
+		} else {
+			mf = metadata_field_parse(p, params->selector_field_names[i]);
+			if (!mf)
+				return -EINVAL;
+		}
+
+	/* Check that there are no duplicated match fields. */
+	for (i = 0; i < params->n_selector_fields; i++) {
+		const char *field_name = params->selector_field_names[i];
+		uint32_t j;
+
+		for (j = i + 1; j < params->n_selector_fields; j++)
+			if (!strcmp(params->selector_field_names[j], field_name))
+				return -EINVAL;
+	}
+
+	/* Return. */
+	if (header)
+		*header = h0;
+
+	return 0;
+}
+
+int
+rte_swx_pipeline_selector_config(struct rte_swx_pipeline *p,
+				 const char *name,
+				 struct rte_swx_pipeline_selector_params *params)
+{
+	struct selector *s;
+	struct header *selector_header = NULL;
+	struct field *group_id_field, *member_id_field;
+	uint32_t i;
+	int status = 0;
+
+	CHECK(p, EINVAL);
+
+	CHECK_NAME(name, EINVAL);
+	CHECK(!table_find(p, name), EEXIST);
+	CHECK(!selector_find(p, name), EEXIST);
+	CHECK(!learner_find(p, name), EEXIST);
+
+	CHECK(params, EINVAL);
+
+	CHECK_NAME(params->group_id_field_name, EINVAL);
+	group_id_field = metadata_field_parse(p, params->group_id_field_name);
+	CHECK(group_id_field, EINVAL);
+
+	for (i = 0; i < params->n_selector_fields; i++) {
+		const char *field_name = params->selector_field_names[i];
+
+		CHECK_NAME(field_name, EINVAL);
+	}
+	status = selector_fields_check(p, params, &selector_header);
+	if (status)
+		return status;
+
+	CHECK_NAME(params->member_id_field_name, EINVAL);
+	member_id_field = metadata_field_parse(p, params->member_id_field_name);
+	CHECK(member_id_field, EINVAL);
+
+	CHECK(params->n_groups_max, EINVAL);
+
+	CHECK(params->n_members_per_group_max, EINVAL);
+
+	/* Memory allocation. */
+	s = calloc(1, sizeof(struct selector));
+	if (!s) {
+		status = -ENOMEM;
+		goto error;
+	}
+
+	s->selector_fields = calloc(params->n_selector_fields, sizeof(struct field *));
+	if (!s->selector_fields) {
+		status = -ENOMEM;
+		goto error;
+	}
+
+	/* Node initialization. */
+	strcpy(s->name, name);
+
+	s->group_id_field = group_id_field;
+
+	for (i = 0; i < params->n_selector_fields; i++) {
+		const char *field_name = params->selector_field_names[i];
+
+		s->selector_fields[i] = selector_header ?
+			header_field_parse(p, field_name, NULL) :
+			metadata_field_parse(p, field_name);
+	}
+
+	s->n_selector_fields = params->n_selector_fields;
+
+	s->selector_header = selector_header;
+
+	s->member_id_field = member_id_field;
+
+	s->n_groups_max = params->n_groups_max;
+
+	s->n_members_per_group_max = params->n_members_per_group_max;
+
+	s->id = p->n_selectors;
+
+	/* Node add to tailq. */
+	TAILQ_INSERT_TAIL(&p->selectors, s, node);
+	p->n_selectors++;
+
+	return 0;
+
+error:
+	if (!s)
+		return status;
+
+	free(s->selector_fields);
+
+	free(s);
+
+	return status;
+}
+
+static void
+selector_params_free(struct rte_swx_table_selector_params *params)
+{
+	if (!params)
+		return;
+
+	free(params->selector_mask);
+
+	free(params);
+}
+
+static struct rte_swx_table_selector_params *
+selector_table_params_get(struct selector *s)
+{
+	struct rte_swx_table_selector_params *params = NULL;
+	struct field *first, *last;
+	uint32_t i;
+
+	/* Memory allocation. */
+	params = calloc(1, sizeof(struct rte_swx_table_selector_params));
+	if (!params)
+		goto error;
+
+	/* Group ID. */
+	params->group_id_offset = s->group_id_field->offset / 8;
+
+	/* Find first (smallest offset) and last (biggest offset) selector fields. */
+	first = s->selector_fields[0];
+	last = s->selector_fields[0];
+
+	for (i = 0; i < s->n_selector_fields; i++) {
+		struct field *f = s->selector_fields[i];
+
+		if (f->offset < first->offset)
+			first = f;
+
+		if (f->offset > last->offset)
+			last = f;
+	}
+
+	/* Selector offset and size. */
+	params->selector_offset = first->offset / 8;
+	params->selector_size = (last->offset + last->n_bits - first->offset) / 8;
+
+	/* Memory allocation. */
+	params->selector_mask = calloc(1, params->selector_size);
+	if (!params->selector_mask)
+		goto error;
+
+	/* Selector mask. */
+	for (i = 0; i < s->n_selector_fields; i++) {
+		struct field *f = s->selector_fields[i];
+		uint32_t start = (f->offset - first->offset) / 8;
+		size_t size = f->n_bits / 8;
+
+		memset(&params->selector_mask[start], 0xFF, size);
+	}
+
+	/* Member ID. */
+	params->member_id_offset = s->member_id_field->offset / 8;
+
+	/* Maximum number of groups. */
+	params->n_groups_max = s->n_groups_max;
+
+	/* Maximum number of members per group. */
+	params->n_members_per_group_max = s->n_members_per_group_max;
+
+	return params;
+
+error:
+	selector_params_free(params);
+	return NULL;
+}
+
+static void
+selector_build_free(struct rte_swx_pipeline *p)
+{
+	uint32_t i;
+
+	for (i = 0; i < RTE_SWX_PIPELINE_THREADS_MAX; i++) {
+		struct thread *t = &p->threads[i];
+		uint32_t j;
+
+		if (!t->selectors)
+			continue;
+
+		for (j = 0; j < p->n_selectors; j++) {
+			struct selector_runtime *r = &t->selectors[j];
+
+			free(r->mailbox);
+		}
+
+		free(t->selectors);
+		t->selectors = NULL;
+	}
+
+	free(p->selector_stats);
+	p->selector_stats = NULL;
+}
+
+static int
+selector_build(struct rte_swx_pipeline *p)
+{
+	uint32_t i;
+	int status = 0;
+
+	/* Per pipeline: selector statistics. */
+	p->selector_stats = calloc(p->n_selectors, sizeof(struct selector_statistics));
+	if (!p->selector_stats) {
+		status = -ENOMEM;
+		goto error;
+	}
+
+	/* Per thread: selector run-time. */
+	for (i = 0; i < RTE_SWX_PIPELINE_THREADS_MAX; i++) {
+		struct thread *t = &p->threads[i];
+		struct selector *s;
+
+		t->selectors = calloc(p->n_selectors, sizeof(struct selector_runtime));
+		if (!t->selectors) {
+			status = -ENOMEM;
+			goto error;
+		}
+
+		TAILQ_FOREACH(s, &p->selectors, node) {
+			struct selector_runtime *r = &t->selectors[s->id];
+			uint64_t size;
+
+			/* r->mailbox. */
+			size = rte_swx_table_selector_mailbox_size_get();
+			if (size) {
+				r->mailbox = calloc(1, size);
+				if (!r->mailbox) {
+					status = -ENOMEM;
+					goto error;
+				}
+			}
+
+			/* r->group_id_buffer. */
+			r->group_id_buffer = &t->structs[p->metadata_struct_id];
+
+			/* r->selector_buffer. */
+			r->selector_buffer = s->selector_header ?
+				&t->structs[s->selector_header->struct_id] :
+				&t->structs[p->metadata_struct_id];
+
+			/* r->member_id_buffer. */
+			r->member_id_buffer = &t->structs[p->metadata_struct_id];
+		}
+	}
+
+	return 0;
+
+error:
+	selector_build_free(p);
+	return status;
+}
+
+static void
+selector_free(struct rte_swx_pipeline *p)
+{
+	selector_build_free(p);
+
+	/* Selector tables. */
+	for ( ; ; ) {
+		struct selector *elem;
+
+		elem = TAILQ_FIRST(&p->selectors);
+		if (!elem)
+			break;
+
+		TAILQ_REMOVE(&p->selectors, elem, node);
+		free(elem->selector_fields);
+		free(elem);
+	}
+}
+
+/*
+ * Learner table.
+ */
+static struct learner *
+learner_find(struct rte_swx_pipeline *p, const char *name)
+{
+	struct learner *l;
+
+	TAILQ_FOREACH(l, &p->learners, node)
+		if (!strcmp(l->name, name))
+			return l;
+
+	return NULL;
+}
+
+static struct learner *
+learner_find_by_id(struct rte_swx_pipeline *p, uint32_t id)
+{
+	struct learner *l = NULL;
+
+	TAILQ_FOREACH(l, &p->learners, node)
+		if (l->id == id)
+			return l;
+
+	return NULL;
+}
+
+static int
+learner_match_fields_check(struct rte_swx_pipeline *p,
+			   struct rte_swx_pipeline_learner_params *params,
+			   struct header **header)
+{
+	struct header *h0 = NULL;
+	struct field *hf, *mf;
+	uint32_t i;
+
+	/* Return if no match fields. */
+	if (!params->n_fields || !params->field_names)
+		return -EINVAL;
+
+	/* Check that all the match fields either belong to the same header
+	 * or are all meta-data fields.
+	 */
+	hf = header_field_parse(p, params->field_names[0], &h0);
+	mf = metadata_field_parse(p, params->field_names[0]);
+	if (!hf && !mf)
+		return -EINVAL;
+
+	for (i = 1; i < params->n_fields; i++)
+		if (h0) {
+			struct header *h;
+
+			hf = header_field_parse(p, params->field_names[i], &h);
+			if (!hf || (h->id != h0->id))
+				return -EINVAL;
+		} else {
+			mf = metadata_field_parse(p, params->field_names[i]);
+			if (!mf)
+				return -EINVAL;
+		}
+
+	/* Check that there are no duplicated match fields. */
+	for (i = 0; i < params->n_fields; i++) {
+		const char *field_name = params->field_names[i];
+		uint32_t j;
+
+		for (j = i + 1; j < params->n_fields; j++)
+			if (!strcmp(params->field_names[j], field_name))
+				return -EINVAL;
+	}
+
+	/* Return. */
+	if (header)
+		*header = h0;
+
+	return 0;
+}
+
+static int
+learner_action_args_check(struct rte_swx_pipeline *p, struct action *a, const char *mf_name)
+{
+	struct struct_type *mst = p->metadata_st, *ast = a->st;
+	struct field *mf, *af;
+	uint32_t mf_pos, i;
+
+	if (!ast) {
+		if (mf_name)
+			return -EINVAL;
+
+		return 0;
+	}
+
+	/* Check that mf_name is the name of a valid meta-data field. */
+	CHECK_NAME(mf_name, EINVAL);
+	mf = metadata_field_parse(p, mf_name);
+	CHECK(mf, EINVAL);
+
+	/* Check that there are enough meta-data fields, starting with the mf_name field, to cover
+	 * all the action arguments.
+	 */
+	mf_pos = mf - mst->fields;
+	CHECK(mst->n_fields - mf_pos >= ast->n_fields, EINVAL);
+
+	/* Check that the size of each of the identified meta-data fields matches exactly the size
+	 * of the corresponding action argument.
+	 */
+	for (i = 0; i < ast->n_fields; i++) {
+		mf = &mst->fields[mf_pos + i];
+		af = &ast->fields[i];
+
+		CHECK(mf->n_bits == af->n_bits, EINVAL);
+	}
+
+	return 0;
+}
+
+static int
+learner_action_learning_check(struct rte_swx_pipeline *p,
+			      struct action *action,
+			      const char **action_names,
+			      uint32_t n_actions)
+{
+	uint32_t i;
+
+	/* For each "learn" instruction of the current action, check that the learned action (i.e.
+	 * the action passed as argument to the "learn" instruction) is also enabled for the
+	 * current learner table.
+	 */
+	for (i = 0; i < action->n_instructions; i++) {
+		struct instruction *instr = &action->instructions[i];
+		uint32_t found = 0, j;
+
+		if (instr->type != INSTR_LEARNER_LEARN)
+			continue;
+
+		for (j = 0; j < n_actions; j++) {
+			struct action *a;
+
+			a = action_find(p, action_names[j]);
+			if (!a)
+				return -EINVAL;
+
+			if (a->id == instr->learn.action_id)
+				found = 1;
+		}
+
+		if (!found)
+			return -EINVAL;
+	}
+
+	return 0;
+}
+
+int
+rte_swx_pipeline_learner_config(struct rte_swx_pipeline *p,
+			      const char *name,
+			      struct rte_swx_pipeline_learner_params *params,
+			      uint32_t size,
+			      uint32_t timeout)
+{
+	struct learner *l = NULL;
+	struct action *default_action;
+	struct header *header = NULL;
+	uint32_t action_data_size_max = 0, i;
+	int status = 0;
+
+	CHECK(p, EINVAL);
+
+	CHECK_NAME(name, EINVAL);
+	CHECK(!table_find(p, name), EEXIST);
+	CHECK(!selector_find(p, name), EEXIST);
+	CHECK(!learner_find(p, name), EEXIST);
+
+	CHECK(params, EINVAL);
+
+	/* Match checks. */
+	status = learner_match_fields_check(p, params, &header);
+	if (status)
+		return status;
+
+	/* Action checks. */
+	CHECK(params->n_actions, EINVAL);
+	CHECK(params->action_names, EINVAL);
+	for (i = 0; i < params->n_actions; i++) {
+		const char *action_name = params->action_names[i];
+		struct action *a;
+		uint32_t action_data_size;
+		int action_is_for_table_entries = 1, action_is_for_default_entry = 1;
+
+		CHECK_NAME(action_name, EINVAL);
+
+		a = action_find(p, action_name);
+		CHECK(a, EINVAL);
+
+		status = learner_action_learning_check(p,
+						       a,
+						       params->action_names,
+						       params->n_actions);
+		if (status)
+			return status;
+
+		action_data_size = a->st ? a->st->n_bits / 8 : 0;
+		if (action_data_size > action_data_size_max)
+			action_data_size_max = action_data_size;
+
+		if (params->action_is_for_table_entries)
+			action_is_for_table_entries = params->action_is_for_table_entries[i];
+		if (params->action_is_for_default_entry)
+			action_is_for_default_entry = params->action_is_for_default_entry[i];
+		CHECK(action_is_for_table_entries || action_is_for_default_entry, EINVAL);
+	}
+
+	CHECK_NAME(params->default_action_name, EINVAL);
+	for (i = 0; i < p->n_actions; i++)
+		if (!strcmp(params->action_names[i],
+			    params->default_action_name))
+			break;
+	CHECK(i < params->n_actions, EINVAL);
+	CHECK(!params->action_is_for_default_entry || params->action_is_for_default_entry[i],
+	      EINVAL);
+
+	default_action = action_find(p, params->default_action_name);
+	CHECK((default_action->st && params->default_action_data) ||
+	      !params->default_action_data, EINVAL);
+
+	/* Any other checks. */
+	CHECK(size, EINVAL);
+	CHECK(timeout, EINVAL);
+
+	/* Memory allocation. */
+	l = calloc(1, sizeof(struct learner));
+	if (!l)
+		goto nomem;
+
+	l->fields = calloc(params->n_fields, sizeof(struct field *));
+	if (!l->fields)
+		goto nomem;
+
+	l->actions = calloc(params->n_actions, sizeof(struct action *));
+	if (!l->actions)
+		goto nomem;
+
+	if (action_data_size_max) {
+		l->default_action_data = calloc(1, action_data_size_max);
+		if (!l->default_action_data)
+			goto nomem;
+	}
+
+	l->action_is_for_table_entries = calloc(params->n_actions, sizeof(int));
+	if (!l->action_is_for_table_entries)
+		goto nomem;
+
+	l->action_is_for_default_entry = calloc(params->n_actions, sizeof(int));
+	if (!l->action_is_for_default_entry)
+		goto nomem;
+
+	/* Node initialization. */
+	strcpy(l->name, name);
+
+	for (i = 0; i < params->n_fields; i++) {
+		const char *field_name = params->field_names[i];
+
+		l->fields[i] = header ?
+			header_field_parse(p, field_name, NULL) :
+			metadata_field_parse(p, field_name);
+	}
+
+	l->n_fields = params->n_fields;
+
+	l->header = header;
+
+	for (i = 0; i < params->n_actions; i++) {
+		int action_is_for_table_entries = 1, action_is_for_default_entry = 1;
+
+		if (params->action_is_for_table_entries)
+			action_is_for_table_entries = params->action_is_for_table_entries[i];
+		if (params->action_is_for_default_entry)
+			action_is_for_default_entry = params->action_is_for_default_entry[i];
+
+		l->actions[i] = action_find(p, params->action_names[i]);
+		l->action_is_for_table_entries[i] = action_is_for_table_entries;
+		l->action_is_for_default_entry[i] = action_is_for_default_entry;
+	}
+
+	l->default_action = default_action;
+
+	if (default_action->st)
+		memcpy(l->default_action_data,
+		       params->default_action_data,
+		       default_action->st->n_bits / 8);
+
+	l->n_actions = params->n_actions;
+
+	l->default_action_is_const = params->default_action_is_const;
+
+	l->action_data_size_max = action_data_size_max;
+
+	l->size = size;
+
+	l->timeout = timeout;
+
+	l->id = p->n_learners;
+
+	/* Node add to tailq. */
+	TAILQ_INSERT_TAIL(&p->learners, l, node);
+	p->n_learners++;
+
+	return 0;
+
+nomem:
+	if (!l)
+		return -ENOMEM;
+
+	free(l->action_is_for_default_entry);
+	free(l->action_is_for_table_entries);
+	free(l->default_action_data);
+	free(l->actions);
+	free(l->fields);
+	free(l);
+
+	return -ENOMEM;
+}
+
+static void
+learner_params_free(struct rte_swx_table_learner_params *params)
+{
+	if (!params)
+		return;
+
+	free(params->key_mask0);
+
+	free(params);
+}
+
+static struct rte_swx_table_learner_params *
+learner_params_get(struct learner *l)
+{
+	struct rte_swx_table_learner_params *params = NULL;
+	struct field *first, *last;
+	uint32_t i;
+
+	/* Memory allocation. */
+	params = calloc(1, sizeof(struct rte_swx_table_learner_params));
+	if (!params)
+		goto error;
+
+	/* Find first (smallest offset) and last (biggest offset) match fields. */
+	first = l->fields[0];
+	last = l->fields[0];
+
+	for (i = 0; i < l->n_fields; i++) {
+		struct field *f = l->fields[i];
+
+		if (f->offset < first->offset)
+			first = f;
+
+		if (f->offset > last->offset)
+			last = f;
+	}
+
+	/* Key offset and size. */
+	params->key_offset = first->offset / 8;
+	params->key_size = (last->offset + last->n_bits - first->offset) / 8;
+
+	/* Memory allocation. */
+	params->key_mask0 = calloc(1, params->key_size);
+	if (!params->key_mask0)
+		goto error;
+
+	/* Key mask. */
+	for (i = 0; i < l->n_fields; i++) {
+		struct field *f = l->fields[i];
+		uint32_t start = (f->offset - first->offset) / 8;
+		size_t size = f->n_bits / 8;
+
+		memset(&params->key_mask0[start], 0xFF, size);
+	}
+
+	/* Action data size. */
+	params->action_data_size = l->action_data_size_max;
+
+	/* Maximum number of keys. */
+	params->n_keys_max = l->size;
+
+	/* Timeout. */
+	params->key_timeout = l->timeout;
+
+	return params;
+
+error:
+	learner_params_free(params);
+	return NULL;
+}
+
+static void
+learner_build_free(struct rte_swx_pipeline *p)
+{
+	uint32_t i;
+
+	for (i = 0; i < RTE_SWX_PIPELINE_THREADS_MAX; i++) {
+		struct thread *t = &p->threads[i];
+		uint32_t j;
+
+		if (!t->learners)
+			continue;
+
+		for (j = 0; j < p->n_learners; j++) {
+			struct learner_runtime *r = &t->learners[j];
+
+			free(r->mailbox);
+		}
+
+		free(t->learners);
+		t->learners = NULL;
+	}
+
+	if (p->learner_stats) {
+		for (i = 0; i < p->n_learners; i++)
+			free(p->learner_stats[i].n_pkts_action);
+
+		free(p->learner_stats);
+	}
+}
+
+static int
+learner_build(struct rte_swx_pipeline *p)
+{
+	uint32_t i;
+	int status = 0;
+
+	/* Per pipeline: learner statistics. */
+	p->learner_stats = calloc(p->n_learners, sizeof(struct learner_statistics));
+	CHECK(p->learner_stats, ENOMEM);
+
+	for (i = 0; i < p->n_learners; i++) {
+		p->learner_stats[i].n_pkts_action = calloc(p->n_actions, sizeof(uint64_t));
+		CHECK(p->learner_stats[i].n_pkts_action, ENOMEM);
+	}
+
+	/* Per thread: learner run-time. */
+	for (i = 0; i < RTE_SWX_PIPELINE_THREADS_MAX; i++) {
+		struct thread *t = &p->threads[i];
+		struct learner *l;
+
+		t->learners = calloc(p->n_learners, sizeof(struct learner_runtime));
+		if (!t->learners) {
+			status = -ENOMEM;
+			goto error;
+		}
+
+		TAILQ_FOREACH(l, &p->learners, node) {
+			struct learner_runtime *r = &t->learners[l->id];
+			uint64_t size;
+
+			/* r->mailbox. */
+			size = rte_swx_table_learner_mailbox_size_get();
+			if (size) {
+				r->mailbox = calloc(1, size);
+				if (!r->mailbox) {
+					status = -ENOMEM;
+					goto error;
+				}
+			}
+
+			/* r->key. */
+			r->key = l->header ?
+				&t->structs[l->header->struct_id] :
+				&t->structs[p->metadata_struct_id];
+		}
+	}
+
+	return 0;
+
+error:
+	learner_build_free(p);
+	return status;
+}
+
+static void
+learner_free(struct rte_swx_pipeline *p)
+{
+	learner_build_free(p);
+
+	/* Learner tables. */
+	for ( ; ; ) {
+		struct learner *l;
+
+		l = TAILQ_FIRST(&p->learners);
+		if (!l)
+			break;
+
+		TAILQ_REMOVE(&p->learners, l, node);
+		free(l->fields);
+		free(l->actions);
+		free(l->default_action_data);
+		free(l);
+	}
+}
+
+/*
+ * Table state.
+ */
+static int
+table_state_build(struct rte_swx_pipeline *p)
+{
+	struct table *table;
+	struct selector *s;
+	struct learner *l;
+
+	p->table_state = calloc(p->n_tables + p->n_selectors,
+				sizeof(struct rte_swx_table_state));
+	CHECK(p->table_state, ENOMEM);
+
+	TAILQ_FOREACH(table, &p->tables, node) {
+		struct rte_swx_table_state *ts = &p->table_state[table->id];
+
+		if (table->type) {
+			struct rte_swx_table_params *params;
+
+			/* ts->obj. */
+			params = table_params_get(table);
+			CHECK(params, ENOMEM);
+
+			ts->obj = table->type->ops.create(params,
+				NULL,
+				table->args,
+				p->numa_node);
+
+			table_params_free(params);
+			CHECK(ts->obj, ENODEV);
+		}
+
+		/* ts->default_action_data. */
+		if (table->action_data_size_max) {
+			ts->default_action_data =
+				malloc(table->action_data_size_max);
+			CHECK(ts->default_action_data, ENOMEM);
+
+			memcpy(ts->default_action_data,
+			       table->default_action_data,
+			       table->action_data_size_max);
+		}
+
+		/* ts->default_action_id. */
+		ts->default_action_id = table->default_action->id;
+	}
+
+	TAILQ_FOREACH(s, &p->selectors, node) {
+		struct rte_swx_table_state *ts = &p->table_state[p->n_tables + s->id];
+		struct rte_swx_table_selector_params *params;
+
+		/* ts->obj. */
+		params = selector_table_params_get(s);
+		CHECK(params, ENOMEM);
+
+		ts->obj = rte_swx_table_selector_create(params, NULL, p->numa_node);
+
+		selector_params_free(params);
+		CHECK(ts->obj, ENODEV);
+	}
+
+	TAILQ_FOREACH(l, &p->learners, node) {
+		struct rte_swx_table_state *ts = &p->table_state[p->n_tables +
+			p->n_selectors + l->id];
+		struct rte_swx_table_learner_params *params;
+
+		/* ts->obj. */
+		params = learner_params_get(l);
+		CHECK(params, ENOMEM);
+
+		ts->obj = rte_swx_table_learner_create(params, p->numa_node);
+		learner_params_free(params);
+		CHECK(ts->obj, ENODEV);
+
+		/* ts->default_action_data. */
+		if (l->action_data_size_max) {
+			ts->default_action_data = malloc(l->action_data_size_max);
+			CHECK(ts->default_action_data, ENOMEM);
+
+			memcpy(ts->default_action_data,
+			       l->default_action_data,
+			       l->action_data_size_max);
+		}
+
+		/* ts->default_action_id. */
+		ts->default_action_id = l->default_action->id;
+	}
+
+	return 0;
+}
+
+static void
+table_state_build_free(struct rte_swx_pipeline *p)
+{
+	uint32_t i;
+
+	if (!p->table_state)
+		return;
+
+	for (i = 0; i < p->n_tables; i++) {
+		struct rte_swx_table_state *ts = &p->table_state[i];
+		struct table *table = table_find_by_id(p, i);
+
+		/* ts->obj. */
+		if (table->type && ts->obj)
+			table->type->ops.free(ts->obj);
+
+		/* ts->default_action_data. */
+		free(ts->default_action_data);
+	}
+
+	for (i = 0; i < p->n_selectors; i++) {
+		struct rte_swx_table_state *ts = &p->table_state[p->n_tables + i];
+
+		/* ts->obj. */
+		if (ts->obj)
+			rte_swx_table_selector_free(ts->obj);
+	}
+
+	for (i = 0; i < p->n_learners; i++) {
+		struct rte_swx_table_state *ts = &p->table_state[p->n_tables + p->n_selectors + i];
+
+		/* ts->obj. */
+		if (ts->obj)
+			rte_swx_table_learner_free(ts->obj);
+
+		/* ts->default_action_data. */
+		free(ts->default_action_data);
+	}
+
+	free(p->table_state);
+	p->table_state = NULL;
+}
+
+static void
+table_state_free(struct rte_swx_pipeline *p)
+{
+	table_state_build_free(p);
 }
 
 /*
@@ -9988,6 +8999,8 @@ rte_swx_pipeline_config(struct rte_swx_pipeline **p, int numa_node)
 	TAILQ_INIT(&pipeline->actions);
 	TAILQ_INIT(&pipeline->table_types);
 	TAILQ_INIT(&pipeline->tables);
+	TAILQ_INIT(&pipeline->selectors);
+	TAILQ_INIT(&pipeline->learners);
 	TAILQ_INIT(&pipeline->regarrays);
 	TAILQ_INIT(&pipeline->meter_profiles);
 	TAILQ_INIT(&pipeline->metarrays);
@@ -10002,16 +9015,24 @@ rte_swx_pipeline_config(struct rte_swx_pipeline **p, int numa_node)
 void
 rte_swx_pipeline_free(struct rte_swx_pipeline *p)
 {
+	void *lib;
+
 	if (!p)
 		return;
 
+	lib = p->lib;
+
+	free(p->instruction_data);
 	free(p->instructions);
 
 	metarray_free(p);
 	regarray_free(p);
 	table_state_free(p);
+	learner_free(p);
+	selector_free(p);
 	table_free(p);
 	action_free(p);
+	instruction_table_free(p);
 	metadata_free(p);
 	header_free(p);
 	extern_func_free(p);
@@ -10021,6 +9042,9 @@ rte_swx_pipeline_free(struct rte_swx_pipeline *p)
 	struct_free(p);
 
 	free(p);
+
+	if (lib)
+		dlclose(lib);
 }
 
 int
@@ -10044,6 +9068,9 @@ rte_swx_pipeline_instructions_config(struct rte_swx_pipeline *p,
 
 	return 0;
 }
+
+static int
+pipeline_compile(struct rte_swx_pipeline *p);
 
 int
 rte_swx_pipeline_build(struct rte_swx_pipeline *p)
@@ -10081,11 +9108,23 @@ rte_swx_pipeline_build(struct rte_swx_pipeline *p)
 	if (status)
 		goto error;
 
+	status = instruction_table_build(p);
+	if (status)
+		goto error;
+
 	status = action_build(p);
 	if (status)
 		goto error;
 
 	status = table_build(p);
+	if (status)
+		goto error;
+
+	status = selector_build(p);
+	if (status)
+		goto error;
+
+	status = learner_build(p);
 	if (status)
 		goto error;
 
@@ -10102,14 +9141,20 @@ rte_swx_pipeline_build(struct rte_swx_pipeline *p)
 		goto error;
 
 	p->build_done = 1;
+
+	pipeline_compile(p);
+
 	return 0;
 
 error:
 	metarray_build_free(p);
 	regarray_build_free(p);
 	table_state_build_free(p);
+	learner_build_free(p);
+	selector_build_free(p);
 	table_build_free(p);
 	action_build_free(p);
+	instruction_table_build_free(p);
 	metadata_build_free(p);
 	header_build_free(p);
 	extern_func_build_free(p);
@@ -10167,6 +9212,8 @@ rte_swx_ctl_pipeline_info_get(struct rte_swx_pipeline *p,
 	pipeline->n_ports_out = p->n_ports_out;
 	pipeline->n_actions = n_actions;
 	pipeline->n_tables = n_tables;
+	pipeline->n_selectors = p->n_selectors;
+	pipeline->n_learners = p->n_learners;
 	pipeline->n_regarrays = p->n_regarrays;
 	pipeline->n_metarrays = p->n_metarrays;
 
@@ -10291,6 +9338,9 @@ rte_swx_ctl_table_action_info_get(struct rte_swx_pipeline *p,
 
 	table_action->action_id = t->actions[table_action_id]->id;
 
+	table_action->action_is_for_table_entries = t->action_is_for_table_entries[table_action_id];
+	table_action->action_is_for_default_entry = t->action_is_for_default_entry[table_action_id];
+
 	return 0;
 }
 
@@ -10316,6 +9366,173 @@ rte_swx_ctl_table_ops_get(struct rte_swx_pipeline *p,
 	} else {
 		*is_stub = 1;
 	}
+
+	return 0;
+}
+
+int
+rte_swx_ctl_selector_info_get(struct rte_swx_pipeline *p,
+			      uint32_t selector_id,
+			      struct rte_swx_ctl_selector_info *selector)
+{
+	struct selector *s = NULL;
+
+	if (!p || !selector)
+		return -EINVAL;
+
+	s = selector_find_by_id(p, selector_id);
+	if (!s)
+		return -EINVAL;
+
+	strcpy(selector->name, s->name);
+
+	selector->n_selector_fields = s->n_selector_fields;
+	selector->n_groups_max = s->n_groups_max;
+	selector->n_members_per_group_max = s->n_members_per_group_max;
+
+	return 0;
+}
+
+int
+rte_swx_ctl_selector_group_id_field_info_get(struct rte_swx_pipeline *p,
+	 uint32_t selector_id,
+	 struct rte_swx_ctl_table_match_field_info *field)
+{
+	struct selector *s;
+
+	if (!p || (selector_id >= p->n_selectors) || !field)
+		return -EINVAL;
+
+	s = selector_find_by_id(p, selector_id);
+	if (!s)
+		return -EINVAL;
+
+	field->match_type = RTE_SWX_TABLE_MATCH_EXACT;
+	field->is_header = 0;
+	field->n_bits = s->group_id_field->n_bits;
+	field->offset = s->group_id_field->offset;
+
+	return 0;
+}
+
+int
+rte_swx_ctl_selector_field_info_get(struct rte_swx_pipeline *p,
+	 uint32_t selector_id,
+	 uint32_t selector_field_id,
+	 struct rte_swx_ctl_table_match_field_info *field)
+{
+	struct selector *s;
+	struct field *f;
+
+	if (!p || (selector_id >= p->n_selectors) || !field)
+		return -EINVAL;
+
+	s = selector_find_by_id(p, selector_id);
+	if (!s || (selector_field_id >= s->n_selector_fields))
+		return -EINVAL;
+
+	f = s->selector_fields[selector_field_id];
+	field->match_type = RTE_SWX_TABLE_MATCH_EXACT;
+	field->is_header = s->selector_header ? 1 : 0;
+	field->n_bits = f->n_bits;
+	field->offset = f->offset;
+
+	return 0;
+}
+
+int
+rte_swx_ctl_selector_member_id_field_info_get(struct rte_swx_pipeline *p,
+	 uint32_t selector_id,
+	 struct rte_swx_ctl_table_match_field_info *field)
+{
+	struct selector *s;
+
+	if (!p || (selector_id >= p->n_selectors) || !field)
+		return -EINVAL;
+
+	s = selector_find_by_id(p, selector_id);
+	if (!s)
+		return -EINVAL;
+
+	field->match_type = RTE_SWX_TABLE_MATCH_EXACT;
+	field->is_header = 0;
+	field->n_bits = s->member_id_field->n_bits;
+	field->offset = s->member_id_field->offset;
+
+	return 0;
+}
+
+int
+rte_swx_ctl_learner_info_get(struct rte_swx_pipeline *p,
+			     uint32_t learner_id,
+			     struct rte_swx_ctl_learner_info *learner)
+{
+	struct learner *l = NULL;
+
+	if (!p || !learner)
+		return -EINVAL;
+
+	l = learner_find_by_id(p, learner_id);
+	if (!l)
+		return -EINVAL;
+
+	strcpy(learner->name, l->name);
+
+	learner->n_match_fields = l->n_fields;
+	learner->n_actions = l->n_actions;
+	learner->default_action_is_const = l->default_action_is_const;
+	learner->size = l->size;
+
+	return 0;
+}
+
+int
+rte_swx_ctl_learner_match_field_info_get(struct rte_swx_pipeline *p,
+					 uint32_t learner_id,
+					 uint32_t match_field_id,
+					 struct rte_swx_ctl_table_match_field_info *match_field)
+{
+	struct learner *l;
+	struct field *f;
+
+	if (!p || (learner_id >= p->n_learners) || !match_field)
+		return -EINVAL;
+
+	l = learner_find_by_id(p, learner_id);
+	if (!l || (match_field_id >= l->n_fields))
+		return -EINVAL;
+
+	f = l->fields[match_field_id];
+	match_field->match_type = RTE_SWX_TABLE_MATCH_EXACT;
+	match_field->is_header = l->header ? 1 : 0;
+	match_field->n_bits = f->n_bits;
+	match_field->offset = f->offset;
+
+	return 0;
+}
+
+int
+rte_swx_ctl_learner_action_info_get(struct rte_swx_pipeline *p,
+				    uint32_t learner_id,
+				    uint32_t learner_action_id,
+				    struct rte_swx_ctl_table_action_info *learner_action)
+{
+	struct learner *l;
+
+	if (!p || (learner_id >= p->n_learners) || !learner_action)
+		return -EINVAL;
+
+	l = learner_find_by_id(p, learner_id);
+	if (!l || (learner_action_id >= l->n_actions))
+		return -EINVAL;
+
+	learner_action->action_id = l->actions[learner_action_id]->id;
+
+	learner_action->action_is_for_table_entries =
+		l->action_is_for_table_entries[learner_action_id];
+
+	learner_action->action_is_for_default_entry =
+		l->action_is_for_default_entry[learner_action_id];
 
 	return 0;
 }
@@ -10395,12 +9612,63 @@ rte_swx_ctl_pipeline_table_stats_read(struct rte_swx_pipeline *p,
 
 	table_stats = &p->table_stats[table->id];
 
-	memcpy(&stats->n_pkts_action,
-	       &table_stats->n_pkts_action,
+	memcpy(stats->n_pkts_action,
+	       table_stats->n_pkts_action,
 	       p->n_actions * sizeof(uint64_t));
 
 	stats->n_pkts_hit = table_stats->n_pkts_hit[1];
 	stats->n_pkts_miss = table_stats->n_pkts_hit[0];
+
+	return 0;
+}
+
+int
+rte_swx_ctl_pipeline_selector_stats_read(struct rte_swx_pipeline *p,
+	const char *selector_name,
+	struct rte_swx_pipeline_selector_stats *stats)
+{
+	struct selector *s;
+
+	if (!p || !selector_name || !selector_name[0] || !stats)
+		return -EINVAL;
+
+	s = selector_find(p, selector_name);
+	if (!s)
+		return -EINVAL;
+
+	stats->n_pkts = p->selector_stats[s->id].n_pkts;
+
+	return 0;
+}
+
+int
+rte_swx_ctl_pipeline_learner_stats_read(struct rte_swx_pipeline *p,
+					const char *learner_name,
+					struct rte_swx_learner_stats *stats)
+{
+	struct learner *l;
+	struct learner_statistics *learner_stats;
+
+	if (!p || !learner_name || !learner_name[0] || !stats || !stats->n_pkts_action)
+		return -EINVAL;
+
+	l = learner_find(p, learner_name);
+	if (!l)
+		return -EINVAL;
+
+	learner_stats = &p->learner_stats[l->id];
+
+	memcpy(stats->n_pkts_action,
+	       learner_stats->n_pkts_action,
+	       p->n_actions * sizeof(uint64_t));
+
+	stats->n_pkts_hit = learner_stats->n_pkts_hit[1];
+	stats->n_pkts_miss = learner_stats->n_pkts_hit[0];
+
+	stats->n_pkts_learn_ok = learner_stats->n_pkts_learn[0];
+	stats->n_pkts_learn_err = learner_stats->n_pkts_learn[1];
+
+	stats->n_pkts_forget = learner_stats->n_pkts_forget;
 
 	return 0;
 }
@@ -10627,4 +9895,2615 @@ rte_swx_ctl_meter_stats_read(struct rte_swx_pipeline *p,
 	memcpy(stats->n_bytes, m->n_bytes, sizeof(m->n_bytes));
 
 	return 0;
+}
+
+/*
+ * Pipeline compilation.
+ */
+static const char *
+instr_type_to_name(struct instruction *instr)
+{
+	switch (instr->type) {
+	case INSTR_RX: return "INSTR_RX";
+
+	case INSTR_TX: return "INSTR_TX";
+	case INSTR_TX_I: return "INSTR_TX_I";
+
+	case INSTR_HDR_EXTRACT: return "INSTR_HDR_EXTRACT";
+	case INSTR_HDR_EXTRACT2: return "INSTR_HDR_EXTRACT2";
+	case INSTR_HDR_EXTRACT3: return "INSTR_HDR_EXTRACT3";
+	case INSTR_HDR_EXTRACT4: return "INSTR_HDR_EXTRACT4";
+	case INSTR_HDR_EXTRACT5: return "INSTR_HDR_EXTRACT5";
+	case INSTR_HDR_EXTRACT6: return "INSTR_HDR_EXTRACT6";
+	case INSTR_HDR_EXTRACT7: return "INSTR_HDR_EXTRACT7";
+	case INSTR_HDR_EXTRACT8: return "INSTR_HDR_EXTRACT8";
+
+	case INSTR_HDR_EXTRACT_M: return "INSTR_HDR_EXTRACT_M";
+
+	case INSTR_HDR_LOOKAHEAD: return "INSTR_HDR_LOOKAHEAD";
+
+	case INSTR_HDR_EMIT: return "INSTR_HDR_EMIT";
+	case INSTR_HDR_EMIT_TX: return "INSTR_HDR_EMIT_TX";
+	case INSTR_HDR_EMIT2_TX: return "INSTR_HDR_EMIT2_TX";
+	case INSTR_HDR_EMIT3_TX: return "INSTR_HDR_EMIT3_TX";
+	case INSTR_HDR_EMIT4_TX: return "INSTR_HDR_EMIT4_TX";
+	case INSTR_HDR_EMIT5_TX: return "INSTR_HDR_EMIT5_TX";
+	case INSTR_HDR_EMIT6_TX: return "INSTR_HDR_EMIT6_TX";
+	case INSTR_HDR_EMIT7_TX: return "INSTR_HDR_EMIT7_TX";
+	case INSTR_HDR_EMIT8_TX: return "INSTR_HDR_EMIT8_TX";
+
+	case INSTR_HDR_VALIDATE: return "INSTR_HDR_VALIDATE";
+	case INSTR_HDR_INVALIDATE: return "INSTR_HDR_INVALIDATE";
+
+	case INSTR_MOV: return "INSTR_MOV";
+	case INSTR_MOV_MH: return "INSTR_MOV_MH";
+	case INSTR_MOV_HM: return "INSTR_MOV_HM";
+	case INSTR_MOV_HH: return "INSTR_MOV_HH";
+	case INSTR_MOV_I: return "INSTR_MOV_I";
+
+	case INSTR_DMA_HT: return "INSTR_DMA_HT";
+	case INSTR_DMA_HT2: return "INSTR_DMA_HT2";
+	case INSTR_DMA_HT3: return "INSTR_DMA_HT3";
+	case INSTR_DMA_HT4: return "INSTR_DMA_HT4";
+	case INSTR_DMA_HT5: return "INSTR_DMA_HT5";
+	case INSTR_DMA_HT6: return "INSTR_DMA_HT6";
+	case INSTR_DMA_HT7: return "INSTR_DMA_HT7";
+	case INSTR_DMA_HT8: return "INSTR_DMA_HT8";
+
+	case INSTR_ALU_ADD: return "INSTR_ALU_ADD";
+	case INSTR_ALU_ADD_MH: return "INSTR_ALU_ADD_MH";
+	case INSTR_ALU_ADD_HM: return "INSTR_ALU_ADD_HM";
+	case INSTR_ALU_ADD_HH: return "INSTR_ALU_ADD_HH";
+	case INSTR_ALU_ADD_MI: return "INSTR_ALU_ADD_MI";
+	case INSTR_ALU_ADD_HI: return "INSTR_ALU_ADD_HI";
+
+	case INSTR_ALU_SUB: return "INSTR_ALU_SUB";
+	case INSTR_ALU_SUB_MH: return "INSTR_ALU_SUB_MH";
+	case INSTR_ALU_SUB_HM: return "INSTR_ALU_SUB_HM";
+	case INSTR_ALU_SUB_HH: return "INSTR_ALU_SUB_HH";
+	case INSTR_ALU_SUB_MI: return "INSTR_ALU_SUB_MI";
+	case INSTR_ALU_SUB_HI: return "INSTR_ALU_SUB_HI";
+
+	case INSTR_ALU_CKADD_FIELD: return "INSTR_ALU_CKADD_FIELD";
+	case INSTR_ALU_CKADD_STRUCT20: return "INSTR_ALU_CKADD_STRUCT20";
+	case INSTR_ALU_CKADD_STRUCT: return "INSTR_ALU_CKADD_STRUCT";
+	case INSTR_ALU_CKSUB_FIELD: return "INSTR_ALU_CKSUB_FIELD";
+
+	case INSTR_ALU_AND: return "INSTR_ALU_AND";
+	case INSTR_ALU_AND_MH: return "INSTR_ALU_AND_MH";
+	case INSTR_ALU_AND_HM: return "INSTR_ALU_AND_HM";
+	case INSTR_ALU_AND_HH: return "INSTR_ALU_AND_HH";
+	case INSTR_ALU_AND_I: return "INSTR_ALU_AND_I";
+
+	case INSTR_ALU_OR: return "INSTR_ALU_OR";
+	case INSTR_ALU_OR_MH: return "INSTR_ALU_OR_MH";
+	case INSTR_ALU_OR_HM: return "INSTR_ALU_OR_HM";
+	case INSTR_ALU_OR_HH: return "INSTR_ALU_OR_HH";
+	case INSTR_ALU_OR_I: return "INSTR_ALU_OR_I";
+
+	case INSTR_ALU_XOR: return "INSTR_ALU_XOR";
+	case INSTR_ALU_XOR_MH: return "INSTR_ALU_XOR_MH";
+	case INSTR_ALU_XOR_HM: return "INSTR_ALU_XOR_HM";
+	case INSTR_ALU_XOR_HH: return "INSTR_ALU_XOR_HH";
+	case INSTR_ALU_XOR_I: return "INSTR_ALU_XOR_I";
+
+	case INSTR_ALU_SHL: return "INSTR_ALU_SHL";
+	case INSTR_ALU_SHL_MH: return "INSTR_ALU_SHL_MH";
+	case INSTR_ALU_SHL_HM: return "INSTR_ALU_SHL_HM";
+	case INSTR_ALU_SHL_HH: return "INSTR_ALU_SHL_HH";
+	case INSTR_ALU_SHL_MI: return "INSTR_ALU_SHL_MI";
+	case INSTR_ALU_SHL_HI: return "INSTR_ALU_SHL_HI";
+
+	case INSTR_ALU_SHR: return "INSTR_ALU_SHR";
+	case INSTR_ALU_SHR_MH: return "INSTR_ALU_SHR_MH";
+	case INSTR_ALU_SHR_HM: return "INSTR_ALU_SHR_HM";
+	case INSTR_ALU_SHR_HH: return "INSTR_ALU_SHR_HH";
+	case INSTR_ALU_SHR_MI: return "INSTR_ALU_SHR_MI";
+	case INSTR_ALU_SHR_HI: return "INSTR_ALU_SHR_HI";
+
+	case INSTR_REGPREFETCH_RH: return "INSTR_REGPREFETCH_RH";
+	case INSTR_REGPREFETCH_RM: return "INSTR_REGPREFETCH_RM";
+	case INSTR_REGPREFETCH_RI: return "INSTR_REGPREFETCH_RI";
+
+	case INSTR_REGRD_HRH: return "INSTR_REGRD_HRH";
+	case INSTR_REGRD_HRM: return "INSTR_REGRD_HRM";
+	case INSTR_REGRD_HRI: return "INSTR_REGRD_HRI";
+	case INSTR_REGRD_MRH: return "INSTR_REGRD_MRH";
+	case INSTR_REGRD_MRM: return "INSTR_REGRD_MRM";
+	case INSTR_REGRD_MRI: return "INSTR_REGRD_MRI";
+
+	case INSTR_REGWR_RHH: return "INSTR_REGWR_RHH";
+	case INSTR_REGWR_RHM: return "INSTR_REGWR_RHM";
+	case INSTR_REGWR_RHI: return "INSTR_REGWR_RHI";
+	case INSTR_REGWR_RMH: return "INSTR_REGWR_RMH";
+	case INSTR_REGWR_RMM: return "INSTR_REGWR_RMM";
+	case INSTR_REGWR_RMI: return "INSTR_REGWR_RMI";
+	case INSTR_REGWR_RIH: return "INSTR_REGWR_RIH";
+	case INSTR_REGWR_RIM: return "INSTR_REGWR_RIM";
+	case INSTR_REGWR_RII: return "INSTR_REGWR_RII";
+
+	case INSTR_REGADD_RHH: return "INSTR_REGADD_RHH";
+	case INSTR_REGADD_RHM: return "INSTR_REGADD_RHM";
+	case INSTR_REGADD_RHI: return "INSTR_REGADD_RHI";
+	case INSTR_REGADD_RMH: return "INSTR_REGADD_RMH";
+	case INSTR_REGADD_RMM: return "INSTR_REGADD_RMM";
+	case INSTR_REGADD_RMI: return "INSTR_REGADD_RMI";
+	case INSTR_REGADD_RIH: return "INSTR_REGADD_RIH";
+	case INSTR_REGADD_RIM: return "INSTR_REGADD_RIM";
+	case INSTR_REGADD_RII: return "INSTR_REGADD_RII";
+
+	case INSTR_METPREFETCH_H: return "INSTR_METPREFETCH_H";
+	case INSTR_METPREFETCH_M: return "INSTR_METPREFETCH_M";
+	case INSTR_METPREFETCH_I: return "INSTR_METPREFETCH_I";
+
+	case INSTR_METER_HHM: return "INSTR_METER_HHM";
+	case INSTR_METER_HHI: return "INSTR_METER_HHI";
+	case INSTR_METER_HMM: return "INSTR_METER_HMM";
+	case INSTR_METER_HMI: return "INSTR_METER_HMI";
+	case INSTR_METER_MHM: return "INSTR_METER_MHM";
+	case INSTR_METER_MHI: return "INSTR_METER_MHI";
+	case INSTR_METER_MMM: return "INSTR_METER_MMM";
+	case INSTR_METER_MMI: return "INSTR_METER_MMI";
+	case INSTR_METER_IHM: return "INSTR_METER_IHM";
+	case INSTR_METER_IHI: return "INSTR_METER_IHI";
+	case INSTR_METER_IMM: return "INSTR_METER_IMM";
+	case INSTR_METER_IMI: return "INSTR_METER_IMI";
+
+	case INSTR_TABLE: return "INSTR_TABLE";
+	case INSTR_TABLE_AF: return "INSTR_TABLE_AF";
+	case INSTR_SELECTOR: return "INSTR_SELECTOR";
+	case INSTR_LEARNER: return "INSTR_LEARNER";
+	case INSTR_LEARNER_AF: return "INSTR_LEARNER_AF";
+
+	case INSTR_LEARNER_LEARN: return "INSTR_LEARNER_LEARN";
+	case INSTR_LEARNER_FORGET: return "INSTR_LEARNER_FORGET";
+
+	case INSTR_EXTERN_OBJ: return "INSTR_EXTERN_OBJ";
+	case INSTR_EXTERN_FUNC: return "INSTR_EXTERN_FUNC";
+
+	case INSTR_JMP: return "INSTR_JMP";
+	case INSTR_JMP_VALID: return "INSTR_JMP_VALID";
+	case INSTR_JMP_INVALID: return "INSTR_JMP_INVALID";
+	case INSTR_JMP_HIT: return "INSTR_JMP_HIT";
+	case INSTR_JMP_MISS: return "INSTR_JMP_MISS";
+	case INSTR_JMP_ACTION_HIT: return "INSTR_JMP_ACTION_HIT";
+	case INSTR_JMP_ACTION_MISS: return "INSTR_JMP_ACTION_MISS";
+	case INSTR_JMP_EQ: return "INSTR_JMP_EQ";
+	case INSTR_JMP_EQ_MH: return "INSTR_JMP_EQ_MH";
+	case INSTR_JMP_EQ_HM: return "INSTR_JMP_EQ_HM";
+	case INSTR_JMP_EQ_HH: return "INSTR_JMP_EQ_HH";
+	case INSTR_JMP_EQ_I: return "INSTR_JMP_EQ_I";
+	case INSTR_JMP_NEQ: return "INSTR_JMP_NEQ";
+	case INSTR_JMP_NEQ_MH: return "INSTR_JMP_NEQ_MH";
+	case INSTR_JMP_NEQ_HM: return "INSTR_JMP_NEQ_HM";
+	case INSTR_JMP_NEQ_HH: return "INSTR_JMP_NEQ_HH";
+	case INSTR_JMP_NEQ_I: return "INSTR_JMP_NEQ_I";
+	case INSTR_JMP_LT: return "INSTR_JMP_LT";
+	case INSTR_JMP_LT_MH: return "INSTR_JMP_LT_MH";
+	case INSTR_JMP_LT_HM: return "INSTR_JMP_LT_HM";
+	case INSTR_JMP_LT_HH: return "INSTR_JMP_LT_HH";
+	case INSTR_JMP_LT_MI: return "INSTR_JMP_LT_MI";
+	case INSTR_JMP_LT_HI: return "INSTR_JMP_LT_HI";
+	case INSTR_JMP_GT: return "INSTR_JMP_GT";
+	case INSTR_JMP_GT_MH: return "INSTR_JMP_GT_MH";
+	case INSTR_JMP_GT_HM: return "INSTR_JMP_GT_HM";
+	case INSTR_JMP_GT_HH: return "INSTR_JMP_GT_HH";
+	case INSTR_JMP_GT_MI: return "INSTR_JMP_GT_MI";
+	case INSTR_JMP_GT_HI: return "INSTR_JMP_GT_HI";
+
+	case INSTR_RETURN: return "INSTR_RETURN";
+
+	default: return "INSTR_UNKNOWN";
+	}
+}
+
+typedef void
+(*instruction_export_t)(struct instruction *, FILE *);
+
+static void
+instr_io_export(struct instruction *instr, FILE *f)
+{
+	uint32_t n_io = 0, n_io_imm = 0, n_hdrs = 0, i;
+
+	/* n_io, n_io_imm, n_hdrs. */
+	if (instr->type == INSTR_RX ||
+	    instr->type == INSTR_TX ||
+	    instr->type == INSTR_HDR_EXTRACT_M ||
+	    (instr->type >= INSTR_HDR_EMIT_TX && instr->type <= INSTR_HDR_EMIT8_TX))
+		n_io = 1;
+
+	if (instr->type == INSTR_TX_I)
+		n_io_imm = 1;
+
+	if (instr->type >= INSTR_HDR_EXTRACT && instr->type <= INSTR_HDR_EXTRACT8)
+		n_hdrs = 1 + (instr->type - INSTR_HDR_EXTRACT);
+
+	if (instr->type == INSTR_HDR_EXTRACT_M ||
+	    instr->type == INSTR_HDR_LOOKAHEAD ||
+	    instr->type == INSTR_HDR_EMIT)
+		n_hdrs = 1;
+
+	if (instr->type >= INSTR_HDR_EMIT_TX && instr->type <= INSTR_HDR_EMIT8_TX)
+		n_hdrs = 1 + (instr->type - INSTR_HDR_EMIT_TX);
+
+	/* instr. */
+	fprintf(f,
+		"\t{\n"
+		"\t\t.type = %s,\n",
+		instr_type_to_name(instr));
+
+	/* instr.io. */
+	fprintf(f,
+		"\t\t.io = {\n");
+
+	/* instr.io.io. */
+	if (n_io)
+		fprintf(f,
+			"\t\t\t.io = {\n"
+			"\t\t\t\t.offset = %u,\n"
+			"\t\t\t\t.n_bits = %u,\n"
+			"\t\t\t},\n",
+			instr->io.io.offset,
+			instr->io.io.n_bits);
+
+	if (n_io_imm)
+		fprintf(f,
+			"\t\t\t.io = {\n"
+			"\t\t\t\t.val = %u,\n"
+			"\t\t\t},\n",
+			instr->io.io.val);
+
+	/* instr.io.hdr. */
+	if (n_hdrs) {
+		fprintf(f,
+			"\t\t.hdr = {\n");
+
+		/* instr.io.hdr.header_id. */
+		fprintf(f,
+			"\t\t\t.header_id = {");
+
+		for (i = 0; i < n_hdrs; i++)
+			fprintf(f,
+				"%u, ",
+				instr->io.hdr.header_id[i]);
+
+		fprintf(f,
+			"},\n");
+
+		/* instr.io.hdr.struct_id. */
+		fprintf(f,
+			"\t\t\t.struct_id = {");
+
+		for (i = 0; i < n_hdrs; i++)
+			fprintf(f,
+				"%u, ",
+				instr->io.hdr.struct_id[i]);
+
+		fprintf(f,
+			"},\n");
+
+		/* instr.io.hdr.n_bytes. */
+		fprintf(f,
+			"\t\t\t.n_bytes = {");
+
+		for (i = 0; i < n_hdrs; i++)
+			fprintf(f,
+				"%u, ",
+				instr->io.hdr.n_bytes[i]);
+
+		fprintf(f,
+			"},\n");
+
+		/* instr.io.hdr - closing curly brace. */
+		fprintf(f,
+			"\t\t\t}\n,");
+	}
+
+	/* instr.io - closing curly brace. */
+	fprintf(f,
+		"\t\t},\n");
+
+	/* instr - closing curly brace. */
+	fprintf(f,
+		"\t},\n");
+}
+
+static void
+instr_hdr_validate_export(struct instruction *instr, FILE *f)
+{
+	fprintf(f,
+		"\t{\n"
+		"\t\t.type = %s,\n"
+		"\t\t.valid = {\n"
+		"\t\t\t.header_id = %u,\n"
+		"\t\t},\n"
+		"\t},\n",
+		instr_type_to_name(instr),
+		instr->valid.header_id);
+}
+
+static void
+instr_mov_export(struct instruction *instr, FILE *f)
+{
+	if (instr->type != INSTR_MOV_I)
+		fprintf(f,
+			"\t{\n"
+			"\t\t.type = %s,\n"
+			"\t\t.mov = {\n"
+			"\t\t\t.dst = {\n"
+			"\t\t\t\t.struct_id = %u,\n"
+			"\t\t\t\t.n_bits = %u,\n"
+			"\t\t\t\t.offset = %u,\n"
+			"\t\t\t},\n"
+			"\t\t\t.src = {\n"
+			"\t\t\t\t.struct_id = %u,\n"
+			"\t\t\t\t.n_bits = %u,\n"
+			"\t\t\t\t.offset = %u,\n"
+			"\t\t\t},\n"
+			"\t\t},\n"
+			"\t},\n",
+			instr_type_to_name(instr),
+			instr->mov.dst.struct_id,
+			instr->mov.dst.n_bits,
+			instr->mov.dst.offset,
+			instr->mov.src.struct_id,
+			instr->mov.src.n_bits,
+			instr->mov.src.offset);
+	else
+		fprintf(f,
+			"\t{\n"
+			"\t\t.type = %s,\n"
+			"\t\t.mov = {\n"
+			"\t\t\t.dst = {\n"
+			"\t\t\t\t.struct_id = %u,\n"
+			"\t\t\t\t.n_bits = %u,\n"
+			"\t\t\t\t.offset = %u,\n"
+			"\t\t\t}\n,"
+			"\t\t\t.src_val = %" PRIu64 ",\n"
+			"\t\t},\n"
+			"\t},\n",
+			instr_type_to_name(instr),
+			instr->mov.dst.struct_id,
+			instr->mov.dst.n_bits,
+			instr->mov.dst.offset,
+			instr->mov.src_val);
+}
+
+static void
+instr_dma_ht_export(struct instruction *instr, FILE *f)
+{
+	uint32_t n_dma = 0, i;
+
+	/* n_dma. */
+	n_dma = 1 + (instr->type - INSTR_DMA_HT);
+
+	/* instr. */
+	fprintf(f,
+		"\t{\n"
+		"\t\t.type = %s,\n",
+		instr_type_to_name(instr));
+
+	/* instr.dma. */
+	fprintf(f,
+		"\t\t.dma = {\n");
+
+	/* instr.dma.dst. */
+	fprintf(f,
+		"\t\t\t.dst = {\n");
+
+	/* instr.dma.dst.header_id. */
+	fprintf(f,
+		"\t\t\t\t.header_id = {");
+
+	for (i = 0; i < n_dma; i++)
+		fprintf(f,
+			"%u, ",
+			instr->dma.dst.header_id[i]);
+
+	fprintf(f,
+		"},\n");
+
+	/* instr.dma.dst.struct_id. */
+	fprintf(f,
+		"\t\t\t\t.struct_id = {");
+
+	for (i = 0; i < n_dma; i++)
+		fprintf(f,
+			"%u, ",
+			instr->dma.dst.struct_id[i]);
+
+	fprintf(f,
+		"},\n");
+
+	/* instr.dma.dst - closing curly brace. */
+	fprintf(f,
+		"\t\t\t},\n");
+
+	/* instr.dma.src. */
+	fprintf(f,
+		"\t\t\t.src = {\n");
+
+	/* instr.dma.src.offset. */
+	fprintf(f,
+		"\t\t\t\t.offset = {");
+
+	for (i = 0; i < n_dma; i++)
+		fprintf(f,
+			"%u, ",
+			instr->dma.src.offset[i]);
+
+	fprintf(f,
+		"},\n");
+
+	/* instr.dma.src - closing curly brace. */
+	fprintf(f,
+		"\t\t\t},\n");
+
+	/* instr.dma.n_bytes. */
+	fprintf(f,
+		"\t\t\t.n_bytes = {");
+
+	for (i = 0; i < n_dma; i++)
+		fprintf(f,
+			"%u, ",
+			instr->dma.n_bytes[i]);
+
+	fprintf(f,
+		"},\n");
+
+	/* instr.dma - closing curly brace. */
+	fprintf(f,
+		"\t\t},\n");
+
+	/* instr - closing curly brace. */
+	fprintf(f,
+		"\t},\n");
+}
+
+static void
+instr_alu_export(struct instruction *instr, FILE *f)
+{
+	int imm = 0;
+
+	if (instr->type == INSTR_ALU_ADD_MI ||
+	    instr->type == INSTR_ALU_ADD_HI ||
+	    instr->type == INSTR_ALU_SUB_MI ||
+	    instr->type == INSTR_ALU_SUB_HI ||
+	    instr->type == INSTR_ALU_SHL_MI ||
+	    instr->type == INSTR_ALU_SHL_HI ||
+	    instr->type == INSTR_ALU_SHR_MI ||
+	    instr->type == INSTR_ALU_SHR_HI ||
+	    instr->type == INSTR_ALU_AND_I ||
+	    instr->type == INSTR_ALU_OR_I ||
+	    instr->type == INSTR_ALU_XOR_I)
+		imm = 1;
+
+	if (!imm)
+		fprintf(f,
+			"\t{\n"
+			"\t\t.type = %s,\n"
+			"\t\t.alu = {\n"
+			"\t\t\t.dst = {\n"
+			"\t\t\t\t.struct_id = %u,\n"
+			"\t\t\t\t.n_bits = %u,\n"
+			"\t\t\t\t.offset = %u,\n"
+			"\t\t\t},\n"
+			"\t\t\t.src = {\n"
+			"\t\t\t\t.struct_id = %u,\n"
+			"\t\t\t\t.n_bits = %u,\n"
+			"\t\t\t\t.offset = %u,\n"
+			"\t\t\t},\n"
+			"\t\t},\n"
+			"\t},\n",
+			instr_type_to_name(instr),
+			instr->alu.dst.struct_id,
+			instr->alu.dst.n_bits,
+			instr->alu.dst.offset,
+			instr->alu.src.struct_id,
+			instr->alu.src.n_bits,
+			instr->alu.src.offset);
+	else
+		fprintf(f,
+			"\t{\n"
+			"\t\t.type = %s,\n"
+			"\t\t.alu = {\n"
+			"\t\t\t.dst = {\n"
+			"\t\t\t\t.struct_id = %u,\n"
+			"\t\t\t\t.n_bits = %u,\n"
+			"\t\t\t\t.offset = %u,\n"
+			"\t\t\t}\n,"
+			"\t\t\t.src_val = %" PRIu64 ",\n"
+			"\t\t},\n"
+			"\t},\n",
+			instr_type_to_name(instr),
+			instr->alu.dst.struct_id,
+			instr->alu.dst.n_bits,
+			instr->alu.dst.offset,
+			instr->alu.src_val);
+}
+
+static void
+instr_reg_export(struct instruction *instr __rte_unused, FILE *f __rte_unused)
+{
+	int prefetch  = 0, idx_imm = 0, src_imm = 0;
+
+	if (instr->type == INSTR_REGPREFETCH_RH ||
+	    instr->type == INSTR_REGPREFETCH_RM ||
+	    instr->type == INSTR_REGPREFETCH_RI)
+		prefetch = 1;
+
+	/* index is the 3rd operand for the regrd instruction and the 2nd
+	 * operand for the regwr and regadd instructions.
+	 */
+	if (instr->type == INSTR_REGPREFETCH_RI ||
+	    instr->type == INSTR_REGRD_HRI ||
+	    instr->type == INSTR_REGRD_MRI ||
+	    instr->type == INSTR_REGWR_RIH ||
+	    instr->type == INSTR_REGWR_RIM ||
+	    instr->type == INSTR_REGWR_RII ||
+	    instr->type == INSTR_REGADD_RIH ||
+	    instr->type == INSTR_REGADD_RIM ||
+	    instr->type == INSTR_REGADD_RII)
+		idx_imm = 1;
+
+	/* src is the 3rd operand for the regwr and regadd instructions. */
+	if (instr->type == INSTR_REGWR_RHI ||
+	    instr->type == INSTR_REGWR_RMI ||
+	    instr->type == INSTR_REGWR_RII ||
+	    instr->type == INSTR_REGADD_RHI ||
+	    instr->type == INSTR_REGADD_RMI ||
+	    instr->type == INSTR_REGADD_RII)
+		src_imm = 1;
+
+	/* instr.regarray.regarray_id. */
+	fprintf(f,
+		"\t{\n"
+		"\t\t.type = %s,\n"
+		"\t\t.regarray = {\n"
+		"\t\t\t.regarray_id = %u,\n",
+		instr_type_to_name(instr),
+		instr->regarray.regarray_id);
+
+	/* instr.regarray.idx / instr.regarray.idx_val. */
+	if (!idx_imm)
+		fprintf(f,
+			"\t\t\t\t.idx = {\n"
+			"\t\t\t\t\t.struct_id = %u,\n"
+			"\t\t\t\t\t.n_bits = %u,\n"
+			"\t\t\t\t\t.offset = %u,\n"
+			"\t\t\t\t},\n",
+			instr->regarray.idx.struct_id,
+			instr->regarray.idx.n_bits,
+			instr->regarray.idx.offset);
+	else
+		fprintf(f,
+			"\t\t\t\t.idx_val = %u,\n",
+			instr->regarray.idx_val);
+
+	/* instr.regarray.dstsrc / instr.regarray.dstsrc_val. */
+	if (!prefetch) {
+		if (!src_imm)
+			fprintf(f,
+				"\t\t\t\t.dstsrc = {\n"
+				"\t\t\t\t\t.struct_id = %u,\n"
+				"\t\t\t\t\t.n_bits = %u,\n"
+				"\t\t\t\t\t.offset = %u,\n"
+				"\t\t\t\t},\n",
+				instr->regarray.dstsrc.struct_id,
+				instr->regarray.dstsrc.n_bits,
+				instr->regarray.dstsrc.offset);
+		else
+			fprintf(f,
+				"\t\t\t\t.dstsrc_val = %" PRIu64 ",\n",
+				instr->regarray.dstsrc_val);
+	}
+
+	/* instr.regarray and instr - closing curly braces. */
+	fprintf(f,
+		"\t\t},\n"
+		"\t},\n");
+}
+
+static void
+instr_meter_export(struct instruction *instr __rte_unused, FILE *f __rte_unused)
+{
+	int prefetch  = 0, idx_imm = 0, color_in_imm = 0;
+
+	if (instr->type == INSTR_METPREFETCH_H ||
+	    instr->type == INSTR_METPREFETCH_M ||
+	    instr->type == INSTR_METPREFETCH_I)
+		prefetch = 1;
+
+	/* idx_imm. */
+	if (instr->type == INSTR_METPREFETCH_I ||
+	    instr->type == INSTR_METER_IHM ||
+	    instr->type == INSTR_METER_IHI ||
+	    instr->type == INSTR_METER_IMM ||
+	    instr->type == INSTR_METER_IMI)
+		idx_imm = 1;
+
+	/* color_in_imm. */
+	if (instr->type == INSTR_METER_HHI ||
+	    instr->type == INSTR_METER_HMI ||
+	    instr->type == INSTR_METER_MHI ||
+	    instr->type == INSTR_METER_MMI ||
+	    instr->type == INSTR_METER_IHI ||
+	    instr->type == INSTR_METER_IMI)
+		color_in_imm = 1;
+
+	/* instr.meter.metarray_id. */
+	fprintf(f,
+		"\t{\n"
+		"\t\t.type = %s,\n"
+		"\t\t.meter = {\n"
+		"\t\t\t.metarray_id = %u,\n",
+		instr_type_to_name(instr),
+		instr->meter.metarray_id);
+
+	/* instr.meter.idx / instr.meter.idx_val. */
+	if (!idx_imm)
+		fprintf(f,
+			"\t\t\t.idx = {\n"
+			"\t\t\t\t.struct_id = %u,\n"
+			"\t\t\t\t.n_bits = %u,\n"
+			"\t\t\t\t.offset = %u,\n"
+			"\t\t\t},\n",
+			instr->meter.idx.struct_id,
+			instr->meter.idx.n_bits,
+			instr->meter.idx.offset);
+	else
+		fprintf(f,
+			"\t\t\t.idx_val = %u,\n",
+			instr->meter.idx_val);
+
+	if (!prefetch) {
+		/* instr.meter.length. */
+		fprintf(f,
+			"\t\t\t.length = {\n"
+			"\t\t\t\t.struct_id = %u,\n"
+			"\t\t\t\t.n_bits = %u,\n"
+			"\t\t\t\t.offset = %u,\n"
+			"\t\t\t},\n",
+			instr->meter.length.struct_id,
+			instr->meter.length.n_bits,
+			instr->meter.length.offset);
+
+		/* instr.meter.color_in / instr.meter.color_in_val. */
+		if (!color_in_imm)
+			fprintf(f,
+				"\t\t\t.color_in = {\n"
+				"\t\t\t\t.struct_id = %u,\n"
+				"\t\t\t\t.n_bits = %u,\n"
+				"\t\t\t\t.offset = %u,\n"
+				"\t\t\t},\n",
+				instr->meter.color_in.struct_id,
+				instr->meter.color_in.n_bits,
+				instr->meter.color_in.offset);
+		else
+			fprintf(f,
+				"\t\t\t.color_in_val = %u,\n",
+				(uint32_t)instr->meter.color_in_val);
+
+		/* instr.meter.color_out. */
+		fprintf(f,
+			"\t\t\t.color_out = {\n"
+			"\t\t\t\t.struct_id = %u,\n"
+			"\t\t\t\t.n_bits = %u,\n"
+			"\t\t\t\t.offset = %u,\n"
+			"\t\t\t},\n",
+			instr->meter.color_out.struct_id,
+			instr->meter.color_out.n_bits,
+			instr->meter.color_out.offset);
+	}
+
+	/* instr.meter and instr - closing curly braces. */
+	fprintf(f,
+		"\t\t},\n"
+		"\t},\n");
+}
+
+static void
+instr_table_export(struct instruction *instr,
+		FILE *f)
+{
+	fprintf(f,
+		"\t{\n"
+		"\t\t.type = %s,\n"
+		"\t\t.table = {\n"
+		"\t\t\t.table_id = %u,\n"
+		"\t\t},\n"
+		"\t},\n",
+		instr_type_to_name(instr),
+		instr->table.table_id);
+}
+
+static void
+instr_learn_export(struct instruction *instr, FILE *f)
+{
+	fprintf(f,
+		"\t{\n"
+		"\t\t.type = %s,\n"
+		"\t\t.learn = {\n"
+		"\t\t\t\t.action_id = %u,\n"
+		"\t\t},\n"
+		"\t},\n",
+		instr_type_to_name(instr),
+		instr->learn.action_id);
+}
+
+static void
+instr_forget_export(struct instruction *instr, FILE *f)
+{
+	fprintf(f,
+		"\t{\n"
+		"\t\t.type = %s,\n"
+		"\t},\n",
+		instr_type_to_name(instr));
+}
+
+static void
+instr_extern_export(struct instruction *instr, FILE *f)
+{
+	if (instr->type == INSTR_EXTERN_OBJ)
+		fprintf(f,
+			"\t{\n"
+			"\t\t.type = %s,\n"
+			"\t\t.ext_obj = {\n"
+			"\t\t\t.ext_obj_id = %u,\n"
+			"\t\t\t.func_id = %u,\n"
+			"\t\t},\n"
+			"\t},\n",
+			instr_type_to_name(instr),
+			instr->ext_obj.ext_obj_id,
+			instr->ext_obj.func_id);
+	else
+		fprintf(f,
+			"\t{\n"
+			"\t\t.type = %s,\n"
+			"\t\t.ext_func = {\n"
+			"\t\t\t.ext_func_id = %u,\n"
+			"\t\t},\n"
+			"\t},\n",
+			instr_type_to_name(instr),
+			instr->ext_func.ext_func_id);
+}
+
+static void
+instr_jmp_export(struct instruction *instr, FILE *f __rte_unused)
+{
+	fprintf(f,
+		"\t{\n"
+		"\t\t.type = %s,\n"
+		"\t\t.jmp = {\n"
+		"\t\t\t.ip = NULL,\n",
+		instr_type_to_name(instr));
+
+	switch (instr->type) {
+	case INSTR_JMP_VALID:
+	case INSTR_JMP_INVALID:
+		fprintf(f,
+			"\t\t\t.header_id = %u,\n",
+			instr->jmp.header_id);
+		break;
+
+	case INSTR_JMP_ACTION_HIT:
+	case INSTR_JMP_ACTION_MISS:
+		fprintf(f,
+			"\t\t\t.action_id = %u,\n",
+			instr->jmp.action_id);
+		break;
+
+	case INSTR_JMP_EQ:
+	case INSTR_JMP_EQ_MH:
+	case INSTR_JMP_EQ_HM:
+	case INSTR_JMP_EQ_HH:
+	case INSTR_JMP_NEQ:
+	case INSTR_JMP_NEQ_MH:
+	case INSTR_JMP_NEQ_HM:
+	case INSTR_JMP_NEQ_HH:
+	case INSTR_JMP_LT:
+	case INSTR_JMP_LT_MH:
+	case INSTR_JMP_LT_HM:
+	case INSTR_JMP_LT_HH:
+	case INSTR_JMP_GT:
+	case INSTR_JMP_GT_MH:
+	case INSTR_JMP_GT_HM:
+	case INSTR_JMP_GT_HH:
+		fprintf(f,
+			"\t\t\t.a = {\n"
+			"\t\t\t\t.struct_id = %u,\n"
+			"\t\t\t\t.n_bits = %u,\n"
+			"\t\t\t\t.offset = %u,\n"
+			"\t\t\t},\n"
+			"\t\t\t.b = {\n"
+			"\t\t\t\t.struct_id = %u,\n"
+			"\t\t\t\t.n_bits = %u,\n"
+			"\t\t\t\t.offset = %u,\n"
+			"\t\t\t},\n",
+			instr->jmp.a.struct_id,
+			instr->jmp.a.n_bits,
+			instr->jmp.a.offset,
+			instr->jmp.b.struct_id,
+			instr->jmp.b.n_bits,
+			instr->jmp.b.offset);
+		break;
+
+	case INSTR_JMP_EQ_I:
+	case INSTR_JMP_NEQ_I:
+	case INSTR_JMP_LT_MI:
+	case INSTR_JMP_LT_HI:
+	case INSTR_JMP_GT_MI:
+	case INSTR_JMP_GT_HI:
+		fprintf(f,
+			"\t\t\t.a = {\n"
+			"\t\t\t\t.struct_id = %u,\n"
+			"\t\t\t\t.n_bits = %u,\n"
+			"\t\t\t\t.offset = %u,\n"
+			"\t\t\t}\n,"
+			"\t\t\t.b_val = %" PRIu64 ",\n",
+			instr->jmp.a.struct_id,
+			instr->jmp.a.n_bits,
+			instr->jmp.a.offset,
+			instr->jmp.b_val);
+		break;
+
+	default:
+		break;
+	}
+
+	fprintf(f,
+		"\t\t},\n"
+		"\t},\n");
+}
+
+static void
+instr_return_export(struct instruction *instr,
+		FILE *f)
+{
+	fprintf(f,
+		"\t{\n"
+		"\t\t.type = %s,\n",
+		instr_type_to_name(instr));
+
+	fprintf(f,
+		"\t},\n");
+}
+
+static instruction_export_t export_table[] = {
+	[INSTR_RX] = instr_io_export,
+
+	[INSTR_TX] = instr_io_export,
+	[INSTR_TX_I] = instr_io_export,
+
+	[INSTR_HDR_EXTRACT] = instr_io_export,
+	[INSTR_HDR_EXTRACT2] = instr_io_export,
+	[INSTR_HDR_EXTRACT3] = instr_io_export,
+	[INSTR_HDR_EXTRACT4] = instr_io_export,
+	[INSTR_HDR_EXTRACT5] = instr_io_export,
+	[INSTR_HDR_EXTRACT6] = instr_io_export,
+	[INSTR_HDR_EXTRACT7] = instr_io_export,
+	[INSTR_HDR_EXTRACT8] = instr_io_export,
+
+	[INSTR_HDR_EXTRACT_M] = instr_io_export,
+
+	[INSTR_HDR_LOOKAHEAD] = instr_io_export,
+
+	[INSTR_HDR_EMIT] = instr_io_export,
+	[INSTR_HDR_EMIT_TX] = instr_io_export,
+	[INSTR_HDR_EMIT2_TX] = instr_io_export,
+	[INSTR_HDR_EMIT3_TX] = instr_io_export,
+	[INSTR_HDR_EMIT4_TX] = instr_io_export,
+	[INSTR_HDR_EMIT5_TX] = instr_io_export,
+	[INSTR_HDR_EMIT6_TX] = instr_io_export,
+	[INSTR_HDR_EMIT7_TX] = instr_io_export,
+	[INSTR_HDR_EMIT8_TX] = instr_io_export,
+
+	[INSTR_HDR_VALIDATE] = instr_hdr_validate_export,
+	[INSTR_HDR_INVALIDATE] = instr_hdr_validate_export,
+
+	[INSTR_MOV] = instr_mov_export,
+	[INSTR_MOV_MH] = instr_mov_export,
+	[INSTR_MOV_HM] = instr_mov_export,
+	[INSTR_MOV_HH] = instr_mov_export,
+	[INSTR_MOV_I] = instr_mov_export,
+
+	[INSTR_DMA_HT]  = instr_dma_ht_export,
+	[INSTR_DMA_HT2] = instr_dma_ht_export,
+	[INSTR_DMA_HT3] = instr_dma_ht_export,
+	[INSTR_DMA_HT4] = instr_dma_ht_export,
+	[INSTR_DMA_HT5] = instr_dma_ht_export,
+	[INSTR_DMA_HT6] = instr_dma_ht_export,
+	[INSTR_DMA_HT7] = instr_dma_ht_export,
+	[INSTR_DMA_HT8] = instr_dma_ht_export,
+
+	[INSTR_ALU_ADD] = instr_alu_export,
+	[INSTR_ALU_ADD_MH] = instr_alu_export,
+	[INSTR_ALU_ADD_HM] = instr_alu_export,
+	[INSTR_ALU_ADD_HH] = instr_alu_export,
+	[INSTR_ALU_ADD_MI] = instr_alu_export,
+	[INSTR_ALU_ADD_HI] = instr_alu_export,
+
+	[INSTR_ALU_SUB] = instr_alu_export,
+	[INSTR_ALU_SUB_MH] = instr_alu_export,
+	[INSTR_ALU_SUB_HM] = instr_alu_export,
+	[INSTR_ALU_SUB_HH] = instr_alu_export,
+	[INSTR_ALU_SUB_MI] = instr_alu_export,
+	[INSTR_ALU_SUB_HI] = instr_alu_export,
+
+	[INSTR_ALU_CKADD_FIELD] = instr_alu_export,
+	[INSTR_ALU_CKADD_STRUCT] = instr_alu_export,
+	[INSTR_ALU_CKADD_STRUCT20] = instr_alu_export,
+	[INSTR_ALU_CKSUB_FIELD] = instr_alu_export,
+
+	[INSTR_ALU_AND] = instr_alu_export,
+	[INSTR_ALU_AND_MH] = instr_alu_export,
+	[INSTR_ALU_AND_HM] = instr_alu_export,
+	[INSTR_ALU_AND_HH] = instr_alu_export,
+	[INSTR_ALU_AND_I] = instr_alu_export,
+
+	[INSTR_ALU_OR] = instr_alu_export,
+	[INSTR_ALU_OR_MH] = instr_alu_export,
+	[INSTR_ALU_OR_HM] = instr_alu_export,
+	[INSTR_ALU_OR_HH] = instr_alu_export,
+	[INSTR_ALU_OR_I] = instr_alu_export,
+
+	[INSTR_ALU_XOR] = instr_alu_export,
+	[INSTR_ALU_XOR_MH] = instr_alu_export,
+	[INSTR_ALU_XOR_HM] = instr_alu_export,
+	[INSTR_ALU_XOR_HH] = instr_alu_export,
+	[INSTR_ALU_XOR_I] = instr_alu_export,
+
+	[INSTR_ALU_SHL] = instr_alu_export,
+	[INSTR_ALU_SHL_MH] = instr_alu_export,
+	[INSTR_ALU_SHL_HM] = instr_alu_export,
+	[INSTR_ALU_SHL_HH] = instr_alu_export,
+	[INSTR_ALU_SHL_MI] = instr_alu_export,
+	[INSTR_ALU_SHL_HI] = instr_alu_export,
+
+	[INSTR_ALU_SHR] = instr_alu_export,
+	[INSTR_ALU_SHR_MH] = instr_alu_export,
+	[INSTR_ALU_SHR_HM] = instr_alu_export,
+	[INSTR_ALU_SHR_HH] = instr_alu_export,
+	[INSTR_ALU_SHR_MI] = instr_alu_export,
+	[INSTR_ALU_SHR_HI] = instr_alu_export,
+
+	[INSTR_REGPREFETCH_RH] = instr_reg_export,
+	[INSTR_REGPREFETCH_RM] = instr_reg_export,
+	[INSTR_REGPREFETCH_RI] = instr_reg_export,
+
+	[INSTR_REGRD_HRH] = instr_reg_export,
+	[INSTR_REGRD_HRM] = instr_reg_export,
+	[INSTR_REGRD_MRH] = instr_reg_export,
+	[INSTR_REGRD_MRM] = instr_reg_export,
+	[INSTR_REGRD_HRI] = instr_reg_export,
+	[INSTR_REGRD_MRI] = instr_reg_export,
+
+	[INSTR_REGWR_RHH] = instr_reg_export,
+	[INSTR_REGWR_RHM] = instr_reg_export,
+	[INSTR_REGWR_RMH] = instr_reg_export,
+	[INSTR_REGWR_RMM] = instr_reg_export,
+	[INSTR_REGWR_RHI] = instr_reg_export,
+	[INSTR_REGWR_RMI] = instr_reg_export,
+	[INSTR_REGWR_RIH] = instr_reg_export,
+	[INSTR_REGWR_RIM] = instr_reg_export,
+	[INSTR_REGWR_RII] = instr_reg_export,
+
+	[INSTR_REGADD_RHH] = instr_reg_export,
+	[INSTR_REGADD_RHM] = instr_reg_export,
+	[INSTR_REGADD_RMH] = instr_reg_export,
+	[INSTR_REGADD_RMM] = instr_reg_export,
+	[INSTR_REGADD_RHI] = instr_reg_export,
+	[INSTR_REGADD_RMI] = instr_reg_export,
+	[INSTR_REGADD_RIH] = instr_reg_export,
+	[INSTR_REGADD_RIM] = instr_reg_export,
+	[INSTR_REGADD_RII] = instr_reg_export,
+
+	[INSTR_METPREFETCH_H] = instr_meter_export,
+	[INSTR_METPREFETCH_M] = instr_meter_export,
+	[INSTR_METPREFETCH_I] = instr_meter_export,
+
+	[INSTR_METER_HHM] = instr_meter_export,
+	[INSTR_METER_HHI] = instr_meter_export,
+	[INSTR_METER_HMM] = instr_meter_export,
+	[INSTR_METER_HMI] = instr_meter_export,
+	[INSTR_METER_MHM] = instr_meter_export,
+	[INSTR_METER_MHI] = instr_meter_export,
+	[INSTR_METER_MMM] = instr_meter_export,
+	[INSTR_METER_MMI] = instr_meter_export,
+	[INSTR_METER_IHM] = instr_meter_export,
+	[INSTR_METER_IHI] = instr_meter_export,
+	[INSTR_METER_IMM] = instr_meter_export,
+	[INSTR_METER_IMI] = instr_meter_export,
+
+	[INSTR_TABLE] = instr_table_export,
+	[INSTR_TABLE_AF] = instr_table_export,
+	[INSTR_SELECTOR] = instr_table_export,
+	[INSTR_LEARNER] = instr_table_export,
+	[INSTR_LEARNER_AF] = instr_table_export,
+
+	[INSTR_LEARNER_LEARN] = instr_learn_export,
+	[INSTR_LEARNER_FORGET] = instr_forget_export,
+
+	[INSTR_EXTERN_OBJ] = instr_extern_export,
+	[INSTR_EXTERN_FUNC] = instr_extern_export,
+
+	[INSTR_JMP] = instr_jmp_export,
+	[INSTR_JMP_VALID] = instr_jmp_export,
+	[INSTR_JMP_INVALID] = instr_jmp_export,
+	[INSTR_JMP_HIT] = instr_jmp_export,
+	[INSTR_JMP_MISS] = instr_jmp_export,
+	[INSTR_JMP_ACTION_HIT] = instr_jmp_export,
+	[INSTR_JMP_ACTION_MISS] = instr_jmp_export,
+
+	[INSTR_JMP_EQ] = instr_jmp_export,
+	[INSTR_JMP_EQ_MH] = instr_jmp_export,
+	[INSTR_JMP_EQ_HM] = instr_jmp_export,
+	[INSTR_JMP_EQ_HH] = instr_jmp_export,
+	[INSTR_JMP_EQ_I] = instr_jmp_export,
+
+	[INSTR_JMP_NEQ] = instr_jmp_export,
+	[INSTR_JMP_NEQ_MH] = instr_jmp_export,
+	[INSTR_JMP_NEQ_HM] = instr_jmp_export,
+	[INSTR_JMP_NEQ_HH] = instr_jmp_export,
+	[INSTR_JMP_NEQ_I] = instr_jmp_export,
+
+	[INSTR_JMP_LT] = instr_jmp_export,
+	[INSTR_JMP_LT_MH] = instr_jmp_export,
+	[INSTR_JMP_LT_HM] = instr_jmp_export,
+	[INSTR_JMP_LT_HH] = instr_jmp_export,
+	[INSTR_JMP_LT_MI] = instr_jmp_export,
+	[INSTR_JMP_LT_HI] = instr_jmp_export,
+
+	[INSTR_JMP_GT] = instr_jmp_export,
+	[INSTR_JMP_GT_MH] = instr_jmp_export,
+	[INSTR_JMP_GT_HM] = instr_jmp_export,
+	[INSTR_JMP_GT_HH] = instr_jmp_export,
+	[INSTR_JMP_GT_MI] = instr_jmp_export,
+	[INSTR_JMP_GT_HI] = instr_jmp_export,
+
+	[INSTR_RETURN] = instr_return_export,
+};
+
+static void
+action_data_codegen(struct action *a, FILE *f)
+{
+	uint32_t i;
+
+	fprintf(f,
+		"static const struct instruction action_%s_instructions[] = {\n",
+		a->name);
+
+	for (i = 0; i < a->n_instructions; i++) {
+		struct instruction *instr = &a->instructions[i];
+		instruction_export_t func = export_table[instr->type];
+
+		func(instr, f);
+	}
+
+	fprintf(f, "};\n");
+}
+
+static const char *
+instr_type_to_func(struct instruction *instr)
+{
+	switch (instr->type) {
+	case INSTR_RX: return NULL;
+
+	case INSTR_TX: return "__instr_tx_exec";
+	case INSTR_TX_I: return "__instr_tx_i_exec";
+
+	case INSTR_HDR_EXTRACT: return "__instr_hdr_extract_exec";
+	case INSTR_HDR_EXTRACT2: return "__instr_hdr_extract2_exec";
+	case INSTR_HDR_EXTRACT3: return "__instr_hdr_extract3_exec";
+	case INSTR_HDR_EXTRACT4: return "__instr_hdr_extract4_exec";
+	case INSTR_HDR_EXTRACT5: return "__instr_hdr_extract5_exec";
+	case INSTR_HDR_EXTRACT6: return "__instr_hdr_extract6_exec";
+	case INSTR_HDR_EXTRACT7: return "__instr_hdr_extract7_exec";
+	case INSTR_HDR_EXTRACT8: return "__instr_hdr_extract8_exec";
+
+	case INSTR_HDR_EXTRACT_M: return "__instr_hdr_extract_m_exec";
+
+	case INSTR_HDR_LOOKAHEAD: return "__instr_hdr_lookahead_exec";
+
+	case INSTR_HDR_EMIT: return "__instr_hdr_emit_exec";
+	case INSTR_HDR_EMIT_TX: return "__instr_hdr_emit_tx_exec";
+	case INSTR_HDR_EMIT2_TX: return "__instr_hdr_emit2_tx_exec";
+	case INSTR_HDR_EMIT3_TX: return "__instr_hdr_emit3_tx_exec";
+	case INSTR_HDR_EMIT4_TX: return "__instr_hdr_emit4_tx_exec";
+	case INSTR_HDR_EMIT5_TX: return "__instr_hdr_emit5_tx_exec";
+	case INSTR_HDR_EMIT6_TX: return "__instr_hdr_emit6_tx_exec";
+	case INSTR_HDR_EMIT7_TX: return "__instr_hdr_emit7_tx_exec";
+	case INSTR_HDR_EMIT8_TX: return "__instr_hdr_emit8_tx_exec";
+
+	case INSTR_HDR_VALIDATE: return "__instr_hdr_validate_exec";
+	case INSTR_HDR_INVALIDATE: return "__instr_hdr_invalidate_exec";
+
+	case INSTR_MOV: return "__instr_mov_exec";
+	case INSTR_MOV_MH: return "__instr_mov_mh_exec";
+	case INSTR_MOV_HM: return "__instr_mov_hm_exec";
+	case INSTR_MOV_HH: return "__instr_mov_hh_exec";
+	case INSTR_MOV_I: return "__instr_mov_i_exec";
+
+	case INSTR_DMA_HT: return "__instr_dma_ht_exec";
+	case INSTR_DMA_HT2: return "__instr_dma_ht2_exec";
+	case INSTR_DMA_HT3: return "__instr_dma_ht3_exec";
+	case INSTR_DMA_HT4: return "__instr_dma_ht4_exec";
+	case INSTR_DMA_HT5: return "__instr_dma_ht5_exec";
+	case INSTR_DMA_HT6: return "__instr_dma_ht6_exec";
+	case INSTR_DMA_HT7: return "__instr_dma_ht7_exec";
+	case INSTR_DMA_HT8: return "__instr_dma_ht8_exec";
+
+	case INSTR_ALU_ADD: return "__instr_alu_add_exec";
+	case INSTR_ALU_ADD_MH: return "__instr_alu_add_mh_exec";
+	case INSTR_ALU_ADD_HM: return "__instr_alu_add_hm_exec";
+	case INSTR_ALU_ADD_HH: return "__instr_alu_add_hh_exec";
+	case INSTR_ALU_ADD_MI: return "__instr_alu_add_mi_exec";
+	case INSTR_ALU_ADD_HI: return "__instr_alu_add_hi_exec";
+
+	case INSTR_ALU_SUB: return "__instr_alu_sub_exec";
+	case INSTR_ALU_SUB_MH: return "__instr_alu_sub_mh_exec";
+	case INSTR_ALU_SUB_HM: return "__instr_alu_sub_hm_exec";
+	case INSTR_ALU_SUB_HH: return "__instr_alu_sub_hh_exec";
+	case INSTR_ALU_SUB_MI: return "__instr_alu_sub_mi_exec";
+	case INSTR_ALU_SUB_HI: return "__instr_alu_sub_hi_exec";
+
+	case INSTR_ALU_CKADD_FIELD: return "__instr_alu_ckadd_field_exec";
+	case INSTR_ALU_CKADD_STRUCT20: return "__instr_alu_ckadd_struct20_exec";
+	case INSTR_ALU_CKADD_STRUCT: return "__instr_alu_ckadd_struct_exec";
+	case INSTR_ALU_CKSUB_FIELD: return "__instr_alu_cksub_field_exec";
+
+	case INSTR_ALU_AND: return "__instr_alu_and_exec";
+	case INSTR_ALU_AND_MH: return "__instr_alu_and_mh_exec";
+	case INSTR_ALU_AND_HM: return "__instr_alu_and_hm_exec";
+	case INSTR_ALU_AND_HH: return "__instr_alu_and_hh_exec";
+	case INSTR_ALU_AND_I: return "__instr_alu_and_i_exec";
+
+	case INSTR_ALU_OR: return "__instr_alu_or_exec";
+	case INSTR_ALU_OR_MH: return "__instr_alu_or_mh_exec";
+	case INSTR_ALU_OR_HM: return "__instr_alu_or_hm_exec";
+	case INSTR_ALU_OR_HH: return "__instr_alu_or_hh_exec";
+	case INSTR_ALU_OR_I: return "__instr_alu_or_i_exec";
+
+	case INSTR_ALU_XOR: return "__instr_alu_xor_exec";
+	case INSTR_ALU_XOR_MH: return "__instr_alu_xor_mh_exec";
+	case INSTR_ALU_XOR_HM: return "__instr_alu_xor_hm_exec";
+	case INSTR_ALU_XOR_HH: return "__instr_alu_xor_hh_exec";
+	case INSTR_ALU_XOR_I: return "__instr_alu_xor_i_exec";
+
+	case INSTR_ALU_SHL: return "__instr_alu_shl_exec";
+	case INSTR_ALU_SHL_MH: return "__instr_alu_shl_mh_exec";
+	case INSTR_ALU_SHL_HM: return "__instr_alu_shl_hm_exec";
+	case INSTR_ALU_SHL_HH: return "__instr_alu_shl_hh_exec";
+	case INSTR_ALU_SHL_MI: return "__instr_alu_shl_mi_exec";
+	case INSTR_ALU_SHL_HI: return "__instr_alu_shl_hi_exec";
+
+	case INSTR_ALU_SHR: return "__instr_alu_shr_exec";
+	case INSTR_ALU_SHR_MH: return "__instr_alu_shr_mh_exec";
+	case INSTR_ALU_SHR_HM: return "__instr_alu_shr_hm_exec";
+	case INSTR_ALU_SHR_HH: return "__instr_alu_shr_hh_exec";
+	case INSTR_ALU_SHR_MI: return "__instr_alu_shr_mi_exec";
+	case INSTR_ALU_SHR_HI: return "__instr_alu_shr_hi_exec";
+
+	case INSTR_REGPREFETCH_RH: return "__instr_regprefetch_rh_exec";
+	case INSTR_REGPREFETCH_RM: return "__instr_regprefetch_rm_exec";
+	case INSTR_REGPREFETCH_RI: return "__instr_regprefetch_ri_exec";
+
+	case INSTR_REGRD_HRH: return "__instr_regrd_hrh_exec";
+	case INSTR_REGRD_HRM: return "__instr_regrd_hrm_exec";
+	case INSTR_REGRD_HRI: return "__instr_regrd_hri_exec";
+	case INSTR_REGRD_MRH: return "__instr_regrd_mrh_exec";
+	case INSTR_REGRD_MRM: return "__instr_regrd_mrm_exec";
+	case INSTR_REGRD_MRI: return "__instr_regrd_mri_exec";
+
+	case INSTR_REGWR_RHH: return "__instr_regwr_rhh_exec";
+	case INSTR_REGWR_RHM: return "__instr_regwr_rhm_exec";
+	case INSTR_REGWR_RHI: return "__instr_regwr_rhi_exec";
+	case INSTR_REGWR_RMH: return "__instr_regwr_rmh_exec";
+	case INSTR_REGWR_RMM: return "__instr_regwr_rmm_exec";
+	case INSTR_REGWR_RMI: return "__instr_regwr_rmi_exec";
+	case INSTR_REGWR_RIH: return "__instr_regwr_rih_exec";
+	case INSTR_REGWR_RIM: return "__instr_regwr_rim_exec";
+	case INSTR_REGWR_RII: return "__instr_regwr_rii_exec";
+
+	case INSTR_REGADD_RHH: return "__instr_regadd_rhh_exec";
+	case INSTR_REGADD_RHM: return "__instr_regadd_rhm_exec";
+	case INSTR_REGADD_RHI: return "__instr_regadd_rhi_exec";
+	case INSTR_REGADD_RMH: return "__instr_regadd_rmh_exec";
+	case INSTR_REGADD_RMM: return "__instr_regadd_rmm_exec";
+	case INSTR_REGADD_RMI: return "__instr_regadd_rmi_exec";
+	case INSTR_REGADD_RIH: return "__instr_regadd_rih_exec";
+	case INSTR_REGADD_RIM: return "__instr_regadd_rim_exec";
+	case INSTR_REGADD_RII: return "__instr_regadd_rii_exec";
+
+	case INSTR_METPREFETCH_H: return "__instr_metprefetch_h_exec";
+	case INSTR_METPREFETCH_M: return "__instr_metprefetch_m_exec";
+	case INSTR_METPREFETCH_I: return "__instr_metprefetch_i_exec";
+
+	case INSTR_METER_HHM: return "__instr_meter_hhm_exec";
+	case INSTR_METER_HHI: return "__instr_meter_hhi_exec";
+	case INSTR_METER_HMM: return "__instr_meter_hmm_exec";
+	case INSTR_METER_HMI: return "__instr_meter_hmi_exec";
+	case INSTR_METER_MHM: return "__instr_meter_mhm_exec";
+	case INSTR_METER_MHI: return "__instr_meter_mhi_exec";
+	case INSTR_METER_MMM: return "__instr_meter_mmm_exec";
+	case INSTR_METER_MMI: return "__instr_meter_mmi_exec";
+	case INSTR_METER_IHM: return "__instr_meter_ihm_exec";
+	case INSTR_METER_IHI: return "__instr_meter_ihi_exec";
+	case INSTR_METER_IMM: return "__instr_meter_imm_exec";
+	case INSTR_METER_IMI: return "__instr_meter_imi_exec";
+
+	case INSTR_TABLE: return NULL;
+	case INSTR_TABLE_AF: return NULL;
+	case INSTR_SELECTOR: return NULL;
+	case INSTR_LEARNER: return NULL;
+	case INSTR_LEARNER_AF: return NULL;
+
+	case INSTR_LEARNER_LEARN: return "__instr_learn_exec";
+	case INSTR_LEARNER_FORGET: return "__instr_forget_exec";
+
+	case INSTR_EXTERN_OBJ: return NULL;
+	case INSTR_EXTERN_FUNC: return NULL;
+
+	case INSTR_JMP: return NULL;
+	case INSTR_JMP_VALID: return NULL;
+	case INSTR_JMP_INVALID: return NULL;
+	case INSTR_JMP_HIT: return NULL;
+	case INSTR_JMP_MISS: return NULL;
+	case INSTR_JMP_ACTION_HIT: return NULL;
+	case INSTR_JMP_ACTION_MISS: return NULL;
+	case INSTR_JMP_EQ: return NULL;
+	case INSTR_JMP_EQ_MH: return NULL;
+	case INSTR_JMP_EQ_HM: return NULL;
+	case INSTR_JMP_EQ_HH: return NULL;
+	case INSTR_JMP_EQ_I: return NULL;
+	case INSTR_JMP_NEQ: return NULL;
+	case INSTR_JMP_NEQ_MH: return NULL;
+	case INSTR_JMP_NEQ_HM: return NULL;
+	case INSTR_JMP_NEQ_HH: return NULL;
+	case INSTR_JMP_NEQ_I: return NULL;
+	case INSTR_JMP_LT: return NULL;
+	case INSTR_JMP_LT_MH: return NULL;
+	case INSTR_JMP_LT_HM: return NULL;
+	case INSTR_JMP_LT_HH: return NULL;
+	case INSTR_JMP_LT_MI: return NULL;
+	case INSTR_JMP_LT_HI: return NULL;
+	case INSTR_JMP_GT: return NULL;
+	case INSTR_JMP_GT_MH: return NULL;
+	case INSTR_JMP_GT_HM: return NULL;
+	case INSTR_JMP_GT_HH: return NULL;
+	case INSTR_JMP_GT_MI: return NULL;
+	case INSTR_JMP_GT_HI: return NULL;
+
+	case INSTR_RETURN: return NULL;
+
+	default: return NULL;
+	}
+}
+
+static void
+action_instr_does_tx_codegen(struct action *a,
+			uint32_t instr_pos,
+			struct instruction *instr,
+			FILE *f)
+{
+	fprintf(f,
+		"%s(p, t, &action_%s_instructions[%u]);\n"
+		"\tthread_ip_reset(p, t);\n"
+		"\tinstr_rx_exec(p);\n"
+		"\treturn;\n",
+		instr_type_to_func(instr),
+		a->name,
+		instr_pos);
+}
+
+static void
+action_instr_extern_obj_codegen(struct action *a,
+				uint32_t instr_pos,
+				FILE *f)
+{
+	fprintf(f,
+		"while (!__instr_extern_obj_exec(p, t, &action_%s_instructions[%u]));\n",
+		a->name,
+		instr_pos);
+}
+
+static void
+action_instr_extern_func_codegen(struct action *a,
+				 uint32_t instr_pos,
+				 FILE *f)
+{
+	fprintf(f,
+		"while (!__instr_extern_func_exec(p, t, &action_%s_instructions[%u]));\n",
+		a->name,
+		instr_pos);
+}
+
+static void
+action_instr_jmp_codegen(struct action *a,
+			 uint32_t instr_pos,
+			 struct instruction *instr,
+			 struct instruction_data *data,
+			 FILE *f)
+{
+	switch (instr->type) {
+	case INSTR_JMP:
+		fprintf(f,
+			"goto %s;\n",
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_VALID:
+		fprintf(f,
+			"if (HEADER_VALID(t, action_%s_instructions[%u].jmp.header_id))\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_INVALID:
+		fprintf(f,
+			"if (!HEADER_VALID(t, action_%s_instructions[%u].jmp.header_id))\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_HIT:
+		fprintf(f,
+			"if (t->hit)\n"
+			"\t\tgoto %s;\n",
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_MISS:
+		fprintf(f,
+			"if (!t->hit)\n"
+			"\t\tgoto %s;\n",
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_ACTION_HIT:
+		fprintf(f,
+			"if (t->action_id == action_%s_instructions[%u].jmp.action_id)\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_ACTION_MISS:
+		fprintf(f,
+			"if (t->action_id != action_%s_instructions[%u].jmp.action_id)\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_EQ:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &action_%s_instructions[%u].jmp.a) == "
+			"instr_operand_hbo(t, &action_%s_instructions[%u].jmp.b))\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_EQ_MH:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &action_%s_instructions[%u].jmp.a) == "
+			"instr_operand_nbo(t, &action_%s_instructions[%u].jmp.b))\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_EQ_HM:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &action_%s_instructions[%u].jmp.a) == "
+			"instr_operand_hbo(t, &action_%s_instructions[%u].jmp.b))\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_EQ_HH:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &action_%s_instructions[%u].jmp.a) == "
+			"instr_operand_nbo(t, &action_%s_instructions[%u].jmp.b))\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_EQ_I:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &action_%s_instructions[%u].jmp.a) == "
+			"action_%s_instructions[%u].jmp.b_val)\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_NEQ:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &action_%s_instructions[%u].jmp.a) != "
+			"instr_operand_hbo(t, &action_%s_instructions[%u].jmp.b))\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_NEQ_MH:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &action_%s_instructions[%u].jmp.a) != "
+			"instr_operand_nbo(t, &action_%s_instructions[%u].jmp.b))\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_NEQ_HM:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &action_%s_instructions[%u].jmp.a) != "
+			"instr_operand_hbo(t, &action_%s_instructions[%u].jmp.b))\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_NEQ_HH:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &action_%s_instructions[%u].jmp.a) != "
+			"instr_operand_nbo(t, &action_%s_instructions[%u].jmp.b))\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_NEQ_I:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &action_%s_instructions[%u].jmp.a) != "
+			"action_%s_instructions[%u].jmp.b_val)\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_LT:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &action_%s_instructions[%u].jmp.a) < "
+			"instr_operand_hbo(t, &action_%s_instructions[%u].jmp.b))\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_LT_MH:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &action_%s_instructions[%u].jmp.a) < "
+			"instr_operand_nbo(t, &action_%s_instructions[%u].jmp.b))\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_LT_HM:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &action_%s_instructions[%u].jmp.a) < "
+			"instr_operand_hbo(t, &action_%s_instructions[%u].jmp.b))\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_LT_HH:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &action_%s_instructions[%u].jmp.a) < "
+			"instr_operand_nbo(t, &action_%s_instructions[%u].jmp.b))\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_LT_MI:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &action_%s_instructions[%u].jmp.a) < "
+			"action_%s_instructions[%u].jmp.b_val)\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_LT_HI:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &action_%s_instructions[%u].jmp.a) < "
+			"action_%s_instructions[%u].jmp.b_val)\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_GT:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &action_%s_instructions[%u].jmp.a) > "
+			"instr_operand_hbo(t, &action_%s_instructions[%u].jmp.b))\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_GT_MH:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &action_%s_instructions[%u].jmp.a) > "
+			"instr_operand_nbo(t, &action_%s_instructions[%u].jmp.b))\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_GT_HM:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &action_%s_instructions[%u].jmp.a) > "
+			"instr_operand_hbo(t, &action_%s_instructions[%u].jmp.b))\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_GT_HH:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &action_%s_instructions[%u].jmp.a) > "
+			"instr_operand_nbo(t, &action_%s_instructions[%u].jmp.b))\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_GT_MI:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &action_%s_instructions[%u].jmp.a) > "
+			"action_%s_instructions[%u].jmp.b_val)\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	case INSTR_JMP_GT_HI:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &action_%s_instructions[%u].jmp.a) > "
+			"action_%s_instructions[%u].jmp.b_val)\n"
+			"\t\tgoto %s;\n",
+			a->name,
+			instr_pos,
+			a->name,
+			instr_pos,
+			data->jmp_label);
+		return;
+
+	default:
+		return;
+	}
+}
+
+static void
+action_instr_return_codegen(FILE *f)
+{
+	fprintf(f,
+		"return;\n");
+}
+
+static void
+action_instr_codegen(struct action *a, FILE *f)
+{
+	uint32_t i;
+
+	fprintf(f,
+		"void\n"
+		"action_%s_run(struct rte_swx_pipeline *p)\n"
+		"{\n"
+		"\tstruct thread *t = &p->threads[p->thread_id];\n"
+		"\n",
+		a->name);
+
+	for (i = 0; i < a->n_instructions; i++) {
+		struct instruction *instr = &a->instructions[i];
+		struct instruction_data *data = &a->instruction_data[i];
+
+		/* Label, if present. */
+		if (data->label[0])
+			fprintf(f, "\n%s : ", data->label);
+		else
+			fprintf(f, "\n\t");
+
+		/* TX instruction type. */
+		if (instruction_does_tx(instr)) {
+			action_instr_does_tx_codegen(a, i, instr, f);
+			continue;
+		}
+
+		/* Extern object/function instruction type. */
+		if (instr->type == INSTR_EXTERN_OBJ) {
+			action_instr_extern_obj_codegen(a, i, f);
+			continue;
+		}
+
+		if (instr->type == INSTR_EXTERN_FUNC) {
+			action_instr_extern_func_codegen(a, i, f);
+			continue;
+		}
+
+		/* Jump instruction type. */
+		if (instruction_is_jmp(instr)) {
+			action_instr_jmp_codegen(a, i, instr, data, f);
+			continue;
+		}
+
+		/* Return instruction type. */
+		if (instr->type == INSTR_RETURN) {
+			action_instr_return_codegen(f);
+			continue;
+		}
+
+		/* Any other instruction type. */
+		fprintf(f,
+			"%s(p, t, &action_%s_instructions[%u]);\n",
+			instr_type_to_func(instr),
+			a->name,
+			i);
+	}
+
+	fprintf(f, "}\n\n");
+}
+
+struct instruction_group {
+	TAILQ_ENTRY(instruction_group) node;
+
+	uint32_t group_id;
+
+	uint32_t first_instr_id;
+
+	uint32_t last_instr_id;
+
+	instr_exec_t func;
+};
+
+TAILQ_HEAD(instruction_group_list, instruction_group);
+
+static struct instruction_group *
+instruction_group_list_group_find(struct instruction_group_list *igl, uint32_t instruction_id)
+{
+	struct instruction_group *g;
+
+	TAILQ_FOREACH(g, igl, node)
+		if ((g->first_instr_id <= instruction_id) && (instruction_id <= g->last_instr_id))
+			return g;
+
+	return NULL;
+}
+
+static void
+instruction_group_list_free(struct instruction_group_list *igl)
+{
+	if (!igl)
+		return;
+
+	for ( ; ; ) {
+		struct instruction_group *g;
+
+		g = TAILQ_FIRST(igl);
+		if (!g)
+			break;
+
+		TAILQ_REMOVE(igl, g, node);
+		free(g);
+	}
+
+	free(igl);
+}
+
+static struct instruction_group_list *
+instruction_group_list_create(struct rte_swx_pipeline *p)
+{
+	struct instruction_group_list *igl = NULL;
+	struct instruction_group *g = NULL;
+	uint32_t n_groups = 0, i;
+
+	if (!p || !p->instructions || !p->instruction_data || !p->n_instructions)
+		goto error;
+
+	/* List init. */
+	igl = calloc(1, sizeof(struct instruction_group_list));
+	if (!igl)
+		goto error;
+
+	TAILQ_INIT(igl);
+
+	/* Allocate the first group. */
+	g = calloc(1, sizeof(struct instruction_group));
+	if (!g)
+		goto error;
+
+	/* Iteration 1: Separate the instructions into groups based on the thread yield
+	 * instructions. Do not worry about the jump instructions at this point.
+	 */
+	for (i = 0; i < p->n_instructions; i++) {
+		struct instruction *instr = &p->instructions[i];
+
+		/* Check for thread yield instructions. */
+		if (!instruction_does_thread_yield(instr))
+			continue;
+
+		/* If the current group contains at least one instruction, then finalize it (with
+		 * the previous instruction), add it to the list and allocate a new group (that
+		 * starts with the current instruction).
+		 */
+		if (i - g->first_instr_id) {
+			/* Finalize the group. */
+			g->last_instr_id = i - 1;
+
+			/* Add the group to the list. Advance the number of groups. */
+			TAILQ_INSERT_TAIL(igl, g, node);
+			n_groups++;
+
+			/* Allocate a new group. */
+			g = calloc(1, sizeof(struct instruction_group));
+			if (!g)
+				goto error;
+
+			/* Initialize the new group. */
+			g->group_id = n_groups;
+			g->first_instr_id = i;
+		}
+
+		/* Finalize the current group (with the current instruction, therefore this group
+		 * contains just the current thread yield instruction), add it to the list and
+		 * allocate a new group (that starts with the next instruction).
+		 */
+
+		/* Finalize the group. */
+		g->last_instr_id = i;
+
+		/* Add the group to the list. Advance the number of groups. */
+		TAILQ_INSERT_TAIL(igl, g, node);
+		n_groups++;
+
+		/* Allocate a new group. */
+		g = calloc(1, sizeof(struct instruction_group));
+		if (!g)
+			goto error;
+
+		/* Initialize the new group. */
+		g->group_id = n_groups;
+		g->first_instr_id = i + 1;
+	}
+
+	/* Handle the last group. */
+	if (i - g->first_instr_id) {
+		/* Finalize the group. */
+		g->last_instr_id = i - 1;
+
+		/* Add the group to the list. Advance the number of groups. */
+		TAILQ_INSERT_TAIL(igl, g, node);
+		n_groups++;
+	} else
+		free(g);
+
+	g = NULL;
+
+	/* Iteration 2: Handle jumps. If the current group contains an instruction which represents
+	 * the destination of a jump instruction located in a different group ("far jump"), then the
+	 * current group has to be split, so that the instruction representing the far jump
+	 * destination is at the start of its group.
+	 */
+	for ( ; ; ) {
+		int is_modified = 0;
+
+		for (i = 0; i < p->n_instructions; i++) {
+			struct instruction_data *data = &p->instruction_data[i];
+			struct instruction_group *g;
+			uint32_t j;
+
+			/* Continue when the current instruction is not a jump destination. */
+			if (!data->n_users)
+				continue;
+
+			g = instruction_group_list_group_find(igl, i);
+			if (!g)
+				goto error;
+
+			/* Find out all the jump instructions with this destination. */
+			for (j = 0; j < p->n_instructions; j++) {
+				struct instruction *jmp_instr = &p->instructions[j];
+				struct instruction_data *jmp_data = &p->instruction_data[j];
+				struct instruction_group *jmp_g, *new_g;
+
+				/* Continue when not a jump instruction. Even when jump instruction,
+				 * continue when the jump destination is not this instruction.
+				 */
+				if (!instruction_is_jmp(jmp_instr) ||
+				    strcmp(jmp_data->jmp_label, data->label))
+					continue;
+
+				jmp_g = instruction_group_list_group_find(igl, j);
+				if (!jmp_g)
+					goto error;
+
+				/* Continue when both the jump instruction and the jump destination
+				 * instruction are in the same group. Even when in different groups,
+				 * still continue if the jump destination instruction is already the
+				 * first instruction of its group.
+				 */
+				if ((jmp_g->group_id == g->group_id) || (g->first_instr_id == i))
+					continue;
+
+				/* Split the group of the current jump destination instruction to
+				 * make this instruction the first instruction of a new group.
+				 */
+				new_g = calloc(1, sizeof(struct instruction_group));
+				if (!new_g)
+					goto error;
+
+				new_g->group_id = n_groups;
+				new_g->first_instr_id = i;
+				new_g->last_instr_id = g->last_instr_id;
+
+				g->last_instr_id = i - 1;
+
+				TAILQ_INSERT_AFTER(igl, g, new_g, node);
+				n_groups++;
+				is_modified = 1;
+
+				/* The decision to split this group (to make the current instruction
+				 * the first instruction of a new group) is already taken and fully
+				 * implemented, so no need to search for more reasons to do it.
+				 */
+				break;
+			}
+		}
+
+		/* Re-evaluate everything, as at least one group got split, so some jumps that were
+		 * previously considered local (i.e. the jump destination is in the same group as
+		 * the jump instruction) can now be "far jumps" (i.e. the jump destination is in a
+		 * different group than the jump instruction). Wost case scenario: each instruction
+		 * that is a jump destination ends up as the first instruction of its group.
+		 */
+		if (!is_modified)
+			break;
+	}
+
+	/* Re-assign the group IDs to be in incremental order. */
+	i = 0;
+	TAILQ_FOREACH(g, igl, node) {
+		g->group_id = i;
+
+		i++;
+	}
+
+	return igl;
+
+error:
+	instruction_group_list_free(igl);
+
+	free(g);
+
+	return NULL;
+}
+
+static void
+pipeline_instr_does_tx_codegen(struct rte_swx_pipeline *p __rte_unused,
+			       uint32_t instr_pos,
+			       struct instruction *instr,
+			       FILE *f)
+{
+	fprintf(f,
+		"%s(p, t, &pipeline_instructions[%u]);\n"
+		"\tthread_ip_reset(p, t);\n"
+		"\tinstr_rx_exec(p);\n"
+		"\treturn;\n",
+		instr_type_to_func(instr),
+		instr_pos);
+}
+
+static int
+pipeline_instr_jmp_codegen(struct rte_swx_pipeline *p,
+			   struct instruction_group_list *igl,
+			   uint32_t jmp_instr_id,
+			   struct instruction *jmp_instr,
+			   struct instruction_data *jmp_data,
+			   FILE *f)
+{
+	struct instruction_group *jmp_g, *g;
+	struct instruction_data *data;
+	uint32_t instr_id;
+
+	switch (jmp_instr->type) {
+	case INSTR_JMP:
+		break;
+
+	case INSTR_JMP_VALID:
+		fprintf(f,
+			"if (HEADER_VALID(t, pipeline_instructions[%u].jmp.header_id))",
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_INVALID:
+		fprintf(f,
+			"if (!HEADER_VALID(t, pipeline_instructions[%u].jmp.header_id))",
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_HIT:
+		fprintf(f,
+			"if (t->hit)\n");
+		break;
+
+	case INSTR_JMP_MISS:
+		fprintf(f,
+			"if (!t->hit)\n");
+		break;
+
+	case INSTR_JMP_ACTION_HIT:
+		fprintf(f,
+			"if (t->action_id == pipeline_instructions[%u].jmp.action_id)",
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_ACTION_MISS:
+		fprintf(f,
+			"if (t->action_id != pipeline_instructions[%u].jmp.action_id)",
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_EQ:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &pipeline_instructions[%u].jmp.a) == "
+			"instr_operand_hbo(t, &pipeline_instructions[%u].jmp.b))",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_EQ_MH:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &pipeline_instructions[%u].jmp.a) == "
+			"instr_operand_nbo(t, &pipeline_instructions[%u].jmp.b))",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_EQ_HM:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &pipeline_instructions[%u].jmp.a) == "
+			"instr_operand_hbo(t, &pipeline_instructions[%u].jmp.b))",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_EQ_HH:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &pipeline_instructions[%u].jmp.a) == "
+			"instr_operand_nbo(t, &pipeline_instructions[%u].jmp.b))",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_EQ_I:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &pipeline_instructions[%u].jmp.a) == "
+			"pipeline_instructions[%u].jmp.b_val)",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_NEQ:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &pipeline_instructions[%u].jmp.a) != "
+			"instr_operand_hbo(t, &pipeline_instructions[%u].jmp.b))",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_NEQ_MH:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &pipeline_instructions[%u].jmp.a) != "
+			"instr_operand_nbo(t, &pipeline_instructions[%u].jmp.b))",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_NEQ_HM:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &pipeline_instructions[%u].jmp.a) != "
+			"instr_operand_hbo(t, &pipeline_instructions[%u].jmp.b))",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_NEQ_HH:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &pipeline_instructions[%u].jmp.a) != "
+			"instr_operand_nbo(t, &pipeline_instructions[%u].jmp.b))",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_NEQ_I:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &pipeline_instructions[%u].jmp.a) != "
+			"pipeline_instructions[%u].jmp.b_val)",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_LT:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &pipeline_instructions[%u].jmp.a) < "
+			"instr_operand_hbo(t, &pipeline_instructions[%u].jmp.b))",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_LT_MH:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &pipeline_instructions[%u].jmp.a) < "
+			"instr_operand_nbo(t, &pipeline_instructions[%u].jmp.b))",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_LT_HM:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &pipeline_instructions[%u].jmp.a) < "
+			"instr_operand_hbo(t, &pipeline_instructions[%u].jmp.b))",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_LT_HH:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &pipeline_instructions[%u].jmp.a) < "
+			"instr_operand_nbo(t, &pipeline_instructions[%u].jmp.b))",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_LT_MI:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &pipeline_instructions[%u].jmp.a) < "
+			"pipeline_instructions[%u].jmp.b_val)",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_LT_HI:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &pipeline_instructions[%u].jmp.a) < "
+			"pipeline_instructions[%u].jmp.b_val)",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_GT:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &pipeline_instructions[%u].jmp.a) > "
+			"instr_operand_hbo(t, &pipeline_instructions[%u].jmp.b))",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_GT_MH:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &pipeline_instructions[%u].jmp.a) > "
+			"instr_operand_nbo(t, &pipeline_instructions[%u].jmp.b))",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_GT_HM:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &pipeline_instructions[%u].jmp.a) > "
+			"instr_operand_hbo(t, &pipeline_instructions[%u].jmp.b))",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_GT_HH:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &pipeline_instructions[%u].jmp.a) > "
+			"instr_operand_nbo(t, &pipeline_instructions[%u].jmp.b))",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_GT_MI:
+		fprintf(f,
+			"if (instr_operand_hbo(t, &pipeline_instructions[%u].jmp.a) > "
+			"pipeline_instructions[%u].jmp.b_val)",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	case INSTR_JMP_GT_HI:
+		fprintf(f,
+			"if (instr_operand_nbo(t, &pipeline_instructions[%u].jmp.a) > "
+			"pipeline_instructions[%u].jmp.b_val)",
+			jmp_instr_id,
+			jmp_instr_id);
+		break;
+
+	default:
+		break;
+	}
+
+	/* Find the instruction group of the jump instruction. */
+	jmp_g = instruction_group_list_group_find(igl, jmp_instr_id);
+	if (!jmp_g)
+		return -EINVAL;
+
+	/* Find the instruction group of the jump destination instruction. */
+	data = label_find(p->instruction_data, p->n_instructions, jmp_data->jmp_label);
+	if (!data)
+		return -EINVAL;
+
+	instr_id = data - p->instruction_data;
+
+	g = instruction_group_list_group_find(igl, instr_id);
+	if (!g)
+		return -EINVAL;
+
+	/* Code generation for "near" jump (same instruction group) or "far" jump (different
+	 * instruction group).
+	 */
+	if (g->group_id == jmp_g->group_id)
+		fprintf(f,
+			"\n\t\tgoto %s;\n",
+			jmp_data->jmp_label);
+	else
+		fprintf(f,
+			" {\n"
+			"\t\tthread_ip_set(t, &p->instructions[%u]);\n"
+			"\t\treturn;\n"
+			"\t}\n\n",
+			g->group_id);
+
+	return 0;
+}
+
+static void
+instruction_group_list_codegen(struct instruction_group_list *igl,
+			       struct rte_swx_pipeline *p,
+			       FILE *f)
+{
+	struct instruction_group *g;
+	uint32_t i;
+	int is_required = 0;
+
+	/* Check if code generation is required. */
+	TAILQ_FOREACH(g, igl, node)
+		if (g->first_instr_id < g->last_instr_id)
+			is_required = 1;
+
+	if (!is_required)
+		return;
+
+	/* Generate the code for the pipeline instruction array. */
+	fprintf(f,
+		"static const struct instruction pipeline_instructions[] = {\n");
+
+	for (i = 0; i < p->n_instructions; i++) {
+		struct instruction *instr = &p->instructions[i];
+		instruction_export_t func = export_table[instr->type];
+
+		func(instr, f);
+	}
+
+	fprintf(f, "};\n\n");
+
+	/* Generate the code for the pipeline functions: one function for each instruction group
+	 * that contains more than one instruction.
+	 */
+	TAILQ_FOREACH(g, igl, node) {
+		struct instruction *last_instr;
+		uint32_t j;
+
+		/* Skip if group contains a single instruction. */
+		if (g->last_instr_id == g->first_instr_id)
+			continue;
+
+		/* Generate new pipeline function. */
+		fprintf(f,
+			"void\n"
+			"pipeline_func_%u(struct rte_swx_pipeline *p)\n"
+			"{\n"
+			"\tstruct thread *t = &p->threads[p->thread_id];\n"
+			"\n",
+			g->group_id);
+
+		/* Generate the code for each pipeline instruction. */
+		for (j = g->first_instr_id; j <= g->last_instr_id; j++) {
+			struct instruction *instr = &p->instructions[j];
+			struct instruction_data *data = &p->instruction_data[j];
+
+			/* Label, if present. */
+			if (data->label[0])
+				fprintf(f, "\n%s : ", data->label);
+			else
+				fprintf(f, "\n\t");
+
+			/* TX instruction type. */
+			if (instruction_does_tx(instr)) {
+				pipeline_instr_does_tx_codegen(p, j, instr, f);
+				continue;
+			}
+
+			/* Jump instruction type. */
+			if (instruction_is_jmp(instr)) {
+				pipeline_instr_jmp_codegen(p, igl, j, instr, data, f);
+				continue;
+			}
+
+			/* Any other instruction type. */
+			fprintf(f,
+				"%s(p, t, &pipeline_instructions[%u]);\n",
+				instr_type_to_func(instr),
+				j);
+		}
+
+		/* Finalize the generated pipeline function. For some instructions such as TX,
+		 * emit-many-and-TX and unconditional jump, the next instruction has been already
+		 * decided unconditionally and the instruction pointer of the current thread set
+		 * accordingly; for all the other instructions, the instruction pointer must be
+		 * incremented now.
+		 */
+		last_instr = &p->instructions[g->last_instr_id];
+
+		if (!instruction_does_tx(last_instr) && (last_instr->type != INSTR_JMP))
+			fprintf(f,
+				"thread_ip_inc(p);\n");
+
+		fprintf(f,
+			"}\n"
+			"\n");
+	}
+}
+
+static uint32_t
+instruction_group_list_custom_instructions_count(struct instruction_group_list *igl)
+{
+	struct instruction_group *g;
+	uint32_t n_custom_instr = 0;
+
+	/* Groups with a single instruction: no function is generated for this group, the group
+	 * keeps its current instruction. Groups with more than two instructions: one function and
+	 * the associated custom instruction get generated for each such group.
+	 */
+	TAILQ_FOREACH(g, igl, node) {
+		if (g->first_instr_id == g->last_instr_id)
+			continue;
+
+		n_custom_instr++;
+	}
+
+	return n_custom_instr;
+}
+
+static int
+pipeline_codegen(struct rte_swx_pipeline *p, struct instruction_group_list *igl)
+{
+	struct action *a;
+	FILE *f = NULL;
+
+	/* Create the .c file. */
+	f = fopen("/tmp/pipeline.c", "w");
+	if (!f)
+		return -EIO;
+
+	/* Include the .h file. */
+	fprintf(f, "#include \"rte_swx_pipeline_internal.h\"\n");
+
+	/* Add the code for each action. */
+	TAILQ_FOREACH(a, &p->actions, node) {
+		fprintf(f, "/**\n * Action %s\n */\n\n", a->name);
+
+		action_data_codegen(a, f);
+
+		fprintf(f, "\n");
+
+		action_instr_codegen(a, f);
+
+		fprintf(f, "\n");
+	}
+
+	/* Add the pipeline code. */
+	instruction_group_list_codegen(igl, p, f);
+
+	/* Close the .c file. */
+	fclose(f);
+
+	return 0;
+}
+
+#ifndef RTE_SWX_PIPELINE_CMD_MAX_SIZE
+#define RTE_SWX_PIPELINE_CMD_MAX_SIZE 4096
+#endif
+
+static int
+pipeline_libload(struct rte_swx_pipeline *p, struct instruction_group_list *igl)
+{
+	struct action *a;
+	struct instruction_group *g;
+	char *dir_in, *buffer = NULL;
+	const char *dir_out;
+	int status = 0;
+
+	/* Get the environment variables. */
+	dir_in = getenv("RTE_INSTALL_DIR");
+	if (!dir_in) {
+		status = -EINVAL;
+		goto free;
+	}
+
+	dir_out = "/tmp";
+
+	/* Memory allocation for the command buffer. */
+	buffer = malloc(RTE_SWX_PIPELINE_CMD_MAX_SIZE);
+	if (!buffer) {
+		status = -ENOMEM;
+		goto free;
+	}
+
+	snprintf(buffer,
+		 RTE_SWX_PIPELINE_CMD_MAX_SIZE,
+		 "gcc -c -O3 -fpic -Wno-deprecated-declarations -o %s/pipeline.o %s/pipeline.c "
+		 "-I %s/lib/pipeline "
+		 "-I %s/lib/eal/include "
+		 "-I %s/lib/eal/x86/include "
+		 "-I %s/lib/eal/include/generic "
+		 "-I %s/lib/meter "
+		 "-I %s/lib/port "
+		 "-I %s/lib/table "
+		 "-I %s/lib/pipeline "
+		 "-I %s/config "
+		 "-I %s/build "
+		 "-I %s/lib/eal/linux/include "
+		 ">%s/pipeline.log 2>&1 "
+		 "&& "
+		 "gcc -shared %s/pipeline.o -o %s/libpipeline.so "
+		 ">>%s/pipeline.log 2>&1",
+		 dir_out,
+		 dir_out,
+		 dir_in,
+		 dir_in,
+		 dir_in,
+		 dir_in,
+		 dir_in,
+		 dir_in,
+		 dir_in,
+		 dir_in,
+		 dir_in,
+		 dir_in,
+		 dir_in,
+		 dir_out,
+		 dir_out,
+		 dir_out,
+		 dir_out);
+
+	/* Build the shared object library. */
+	status = system(buffer);
+	if (status)
+		goto free;
+
+	/* Open library. */
+	snprintf(buffer,
+		 RTE_SWX_PIPELINE_CMD_MAX_SIZE,
+		 "%s/libpipeline.so",
+		 dir_out);
+
+	p->lib = dlopen(buffer, RTLD_LAZY);
+	if (!p->lib) {
+		status = -EIO;
+		goto free;
+	}
+
+	/* Get the action function symbols. */
+	TAILQ_FOREACH(a, &p->actions, node) {
+		snprintf(buffer, RTE_SWX_PIPELINE_CMD_MAX_SIZE, "action_%s_run", a->name);
+
+		p->action_funcs[a->id] = dlsym(p->lib, buffer);
+		if (!p->action_funcs[a->id]) {
+			status = -EINVAL;
+			goto free;
+		}
+	}
+
+	/* Get the pipeline function symbols. */
+	TAILQ_FOREACH(g, igl, node) {
+		if (g->first_instr_id == g->last_instr_id)
+			continue;
+
+		snprintf(buffer, RTE_SWX_PIPELINE_CMD_MAX_SIZE, "pipeline_func_%u", g->group_id);
+
+		g->func = dlsym(p->lib, buffer);
+		if (!g->func) {
+			status = -EINVAL;
+			goto free;
+		}
+	}
+
+free:
+	if (status && p->lib) {
+		dlclose(p->lib);
+		p->lib = NULL;
+	}
+
+	free(buffer);
+
+	return status;
+}
+
+static int
+pipeline_adjust_check(struct rte_swx_pipeline *p __rte_unused,
+		      struct instruction_group_list *igl)
+{
+	uint32_t n_custom_instr = instruction_group_list_custom_instructions_count(igl);
+
+	/* Check that enough space is available within the pipeline instruction table to store all
+	 * the custom instructions.
+	 */
+	if (INSTR_CUSTOM_0 + n_custom_instr > RTE_SWX_PIPELINE_INSTRUCTION_TABLE_SIZE_MAX)
+		return -ENOSPC;
+
+	return 0;
+}
+
+static void
+pipeline_adjust(struct rte_swx_pipeline *p, struct instruction_group_list *igl)
+{
+	struct instruction_group *g;
+	uint32_t i;
+
+	/* Pipeline table instructions. */
+	for (i = 0; i < p->n_instructions; i++) {
+		struct instruction *instr = &p->instructions[i];
+
+		if (instr->type == INSTR_TABLE)
+			instr->type = INSTR_TABLE_AF;
+
+		if (instr->type == INSTR_LEARNER)
+			instr->type = INSTR_LEARNER_AF;
+	}
+
+	/* Pipeline custom instructions. */
+	i = 0;
+	TAILQ_FOREACH(g, igl, node) {
+		struct instruction *instr = &p->instructions[g->first_instr_id];
+		uint32_t j;
+
+		if (g->first_instr_id == g->last_instr_id)
+			continue;
+
+		/* Install a new custom instruction. */
+		p->instruction_table[INSTR_CUSTOM_0 + i] = g->func;
+
+		/* First instruction of the group: change its type to the new custom instruction. */
+		instr->type = INSTR_CUSTOM_0 + i;
+
+		/* All the subsequent instructions of the group: invalidate. */
+		for (j = g->first_instr_id + 1; j <= g->last_instr_id; j++) {
+			struct instruction_data *data = &p->instruction_data[j];
+
+			data->invalid = 1;
+		}
+
+		i++;
+	}
+
+	/* Remove the invalidated instructions. */
+	p->n_instructions = instr_compact(p->instructions, p->instruction_data, p->n_instructions);
+
+	/* Resolve the jump destination for any "standalone" jump instructions (i.e. those jump
+	 * instructions that are the only instruction within their group, so they were left
+	 * unmodified).
+	 */
+	instr_jmp_resolve(p->instructions, p->instruction_data, p->n_instructions);
+}
+
+static int
+pipeline_compile(struct rte_swx_pipeline *p)
+{
+	struct instruction_group_list *igl = NULL;
+	int status = 0;
+
+	igl = instruction_group_list_create(p);
+	if (!igl) {
+		status = -ENOMEM;
+		goto free;
+	}
+
+	/* Code generation. */
+	status = pipeline_codegen(p, igl);
+	if (status)
+		goto free;
+
+	/* Build and load the shared object library. */
+	status = pipeline_libload(p, igl);
+	if (status)
+		goto free;
+
+	/* Adjust instructions. */
+	status = pipeline_adjust_check(p, igl);
+	if (status)
+		goto free;
+
+	pipeline_adjust(p, igl);
+
+free:
+	instruction_group_list_free(igl);
+
+	return status;
 }

@@ -32,7 +32,7 @@ vhost_user_iotlb_pending_remove_all(struct vhost_virtqueue *vq)
 
 	rte_rwlock_write_lock(&vq->iotlb_pending_lock);
 
-	TAILQ_FOREACH_SAFE(node, &vq->iotlb_pending_list, next, temp_node) {
+	RTE_TAILQ_FOREACH_SAFE(node, &vq->iotlb_pending_list, next, temp_node) {
 		TAILQ_REMOVE(&vq->iotlb_pending_list, node, next);
 		rte_mempool_put(vq->iotlb_pool, node);
 	}
@@ -100,7 +100,8 @@ vhost_user_iotlb_pending_remove(struct vhost_virtqueue *vq,
 
 	rte_rwlock_write_lock(&vq->iotlb_pending_lock);
 
-	TAILQ_FOREACH_SAFE(node, &vq->iotlb_pending_list, next, temp_node) {
+	RTE_TAILQ_FOREACH_SAFE(node, &vq->iotlb_pending_list, next,
+				temp_node) {
 		if (node->iova < iova)
 			continue;
 		if (node->iova >= iova + size)
@@ -121,7 +122,7 @@ vhost_user_iotlb_cache_remove_all(struct vhost_virtqueue *vq)
 
 	rte_rwlock_write_lock(&vq->iotlb_lock);
 
-	TAILQ_FOREACH_SAFE(node, &vq->iotlb_list, next, temp_node) {
+	RTE_TAILQ_FOREACH_SAFE(node, &vq->iotlb_list, next, temp_node) {
 		TAILQ_REMOVE(&vq->iotlb_list, node, next);
 		rte_mempool_put(vq->iotlb_pool, node);
 	}
@@ -141,7 +142,7 @@ vhost_user_iotlb_cache_random_evict(struct vhost_virtqueue *vq)
 
 	entry_idx = rte_rand() % vq->iotlb_cache_nr;
 
-	TAILQ_FOREACH_SAFE(node, &vq->iotlb_list, next, temp_node) {
+	RTE_TAILQ_FOREACH_SAFE(node, &vq->iotlb_list, next, temp_node) {
 		if (!entry_idx) {
 			TAILQ_REMOVE(&vq->iotlb_list, node, next);
 			rte_mempool_put(vq->iotlb_pool, node);
@@ -218,7 +219,7 @@ vhost_user_iotlb_cache_remove(struct vhost_virtqueue *vq,
 
 	rte_rwlock_write_lock(&vq->iotlb_lock);
 
-	TAILQ_FOREACH_SAFE(node, &vq->iotlb_list, next, temp_node) {
+	RTE_TAILQ_FOREACH_SAFE(node, &vq->iotlb_list, next, temp_node) {
 		/* Sorted list */
 		if (unlikely(iova + size < node->iova))
 			break;
@@ -320,8 +321,8 @@ vhost_user_iotlb_init(struct virtio_net *dev, int vq_index)
 	vq->iotlb_pool = rte_mempool_create(pool_name,
 			IOTLB_CACHE_SIZE, sizeof(struct vhost_iotlb_entry), 0,
 			0, 0, NULL, NULL, NULL, socket,
-			MEMPOOL_F_NO_CACHE_ALIGN |
-			MEMPOOL_F_SP_PUT);
+			RTE_MEMPOOL_F_NO_CACHE_ALIGN |
+			RTE_MEMPOOL_F_SP_PUT);
 	if (!vq->iotlb_pool) {
 		VHOST_LOG_CONFIG(ERR,
 				"Failed to create IOTLB cache pool (%s)\n",

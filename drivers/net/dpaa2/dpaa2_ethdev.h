@@ -19,6 +19,7 @@
 
 #define DPAA2_MIN_RX_BUF_SIZE 512
 #define DPAA2_MAX_RX_PKT_LEN  10240 /*WRIOP support*/
+#define NET_DPAA2_PMD_DRIVER_NAME net_dpaa2
 
 #define MAX_TCS			DPNI_MAX_TC
 #define MAX_RX_QUEUES		128
@@ -64,12 +65,17 @@
 #define DPAA2_TX_CONF_ENABLE	0x08
 
 #define DPAA2_RSS_OFFLOAD_ALL ( \
-	ETH_RSS_L2_PAYLOAD | \
-	ETH_RSS_IP | \
-	ETH_RSS_UDP | \
-	ETH_RSS_TCP | \
-	ETH_RSS_SCTP | \
-	ETH_RSS_MPLS)
+	RTE_ETH_RSS_L2_PAYLOAD | \
+	RTE_ETH_RSS_IP | \
+	RTE_ETH_RSS_UDP | \
+	RTE_ETH_RSS_TCP | \
+	RTE_ETH_RSS_SCTP | \
+	RTE_ETH_RSS_MPLS | \
+	RTE_ETH_RSS_C_VLAN | \
+	RTE_ETH_RSS_S_VLAN | \
+	RTE_ETH_RSS_ESP | \
+	RTE_ETH_RSS_AH | \
+	RTE_ETH_RSS_PPPOE)
 
 /* LX2 FRC Parsed values (Little Endian) */
 #define DPAA2_PKT_TYPE_ETHER		0x0060
@@ -239,6 +245,7 @@ uint16_t dummy_dev_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts);
 void dpaa2_dev_free_eqresp_buf(uint16_t eqresp_ci);
 void dpaa2_flow_clean(struct rte_eth_dev *dev);
 uint16_t dpaa2_dev_tx_conf(void *queue)  __rte_unused;
+int dpaa2_dev_is_dpaa2(struct rte_eth_dev *dev);
 
 int dpaa2_timesync_enable(struct rte_eth_dev *dev);
 int dpaa2_timesync_disable(struct rte_eth_dev *dev);

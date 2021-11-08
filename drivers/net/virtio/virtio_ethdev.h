@@ -58,8 +58,6 @@ void virtio_dev_cq_start(struct rte_eth_dev *dev);
  * RX/TX function prototypes
  */
 
-int virtio_dev_rx_queue_done(void *rxq, uint16_t offset);
-
 int  virtio_dev_rx_queue_setup(struct rte_eth_dev *dev, uint16_t rx_queue_id,
 		uint16_t nb_rx_desc, unsigned int socket_id,
 		const struct rte_eth_rxconf *rx_conf,
@@ -119,5 +117,10 @@ int virtio_dev_stop(struct rte_eth_dev *dev);
 int virtio_dev_close(struct rte_eth_dev *dev);
 int virtio_inject_pkts(struct rte_eth_dev *dev, struct rte_mbuf **tx_pkts,
 		int nb_pkts);
+
+bool virtio_rx_check_scatter(uint16_t max_rx_pkt_len, uint16_t rx_buf_size,
+			bool rx_scatter_enabled, const char **error);
+
+uint16_t virtio_rx_mem_pool_buf_size(struct rte_mempool *mp);
 
 #endif /* _VIRTIO_ETHDEV_H_ */

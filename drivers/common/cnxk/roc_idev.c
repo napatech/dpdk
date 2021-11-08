@@ -36,6 +36,10 @@ idev_set_defaults(struct idev_cfg *idev)
 	idev->lmt_pf_func = 0;
 	idev->lmt_base_addr = 0;
 	idev->num_lmtlines = 0;
+	idev->bphy = NULL;
+	idev->cpt = NULL;
+	idev->nix_inl_dev = NULL;
+	plt_spinlock_init(&idev->nix_inl_dev_lock);
 	__atomic_store_n(&idev->npa_refcnt, 0, __ATOMIC_RELEASE);
 }
 
@@ -168,6 +172,26 @@ roc_idev_num_lmtlines_get(void)
 		num_lmtlines = idev->num_lmtlines;
 
 	return num_lmtlines;
+}
+
+struct roc_cpt *
+roc_idev_cpt_get(void)
+{
+	struct idev_cfg *idev = idev_get_cfg();
+
+	if (idev != NULL)
+		return idev->cpt;
+
+	return NULL;
+}
+
+void
+roc_idev_cpt_set(struct roc_cpt *cpt)
+{
+	struct idev_cfg *idev = idev_get_cfg();
+
+	if (idev != NULL)
+		__atomic_store_n(&idev->cpt, cpt, __ATOMIC_RELEASE);
 }
 
 struct roc_nix *

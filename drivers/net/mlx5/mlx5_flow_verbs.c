@@ -83,6 +83,11 @@ mlx5_flow_discover_priorities(struct rte_eth_dev *dev)
 	int i;
 	int priority = 0;
 
+#if defined(HAVE_MLX5DV_DR_DEVX_PORT) || defined(HAVE_MLX5DV_DR_DEVX_PORT_V35)
+	/* If DevX supported, driver must support 16 verbs flow priorities. */
+	priority = RTE_DIM(priority_map_5);
+	goto out;
+#endif
 	if (!drop->qp) {
 		rte_errno = ENOTSUP;
 		return -rte_errno;
@@ -109,6 +114,9 @@ mlx5_flow_discover_priorities(struct rte_eth_dev *dev)
 			dev->data->port_id, priority);
 		return -rte_errno;
 	}
+#if defined(HAVE_MLX5DV_DR_DEVX_PORT) || defined(HAVE_MLX5DV_DR_DEVX_PORT_V35)
+out:
+#endif
 	DRV_LOG(INFO, "port %u supported flow priorities:"
 		" 0-%d for ingress or egress root table,"
 		" 0-%d for non-root table or transfer root table.",
@@ -198,7 +206,7 @@ flow_verbs_counter_create(struct rte_eth_dev *dev,
 {
 #if defined(HAVE_IBV_DEVICE_COUNTERS_SET_V42)
 	struct mlx5_priv *priv = dev->data->dev_private;
-	struct ibv_context *ctx = priv->sh->ctx;
+	struct ibv_context *ctx = priv->sh->cdev->ctx;
 	struct ibv_counter_set_init_attr init = {
 			 .counter_set_id = counter->shared_info.id};
 
@@ -210,7 +218,7 @@ flow_verbs_counter_create(struct rte_eth_dev *dev,
 	return 0;
 #elif defined(HAVE_IBV_DEVICE_COUNTERS_SET_V45)
 	struct mlx5_priv *priv = dev->data->dev_private;
-	struct ibv_context *ctx = priv->sh->ctx;
+	struct ibv_context *ctx = priv->sh->cdev->ctx;
 	struct ibv_counters_init_attr init = {0};
 	struct ibv_counter_attach_attr attach;
 	int ret;
@@ -250,8 +258,6 @@ flow_verbs_counter_create(struct rte_eth_dev *dev,
  *
  * @param[in] dev
  *   Pointer to the Ethernet device structure.
- * @param[in] shared
- *   Indicate if this counter is shared with other flows.
  * @param[in] id
  *   Counter identifier.
  *
@@ -259,21 +265,17 @@ flow_verbs_counter_create(struct rte_eth_dev *dev,
  *   Index to the counter, 0 otherwise and rte_errno is set.
  */
 static uint32_t
-flow_verbs_counter_new(struct rte_eth_dev *dev, uint32_t shared, uint32_t id)
+flow_verbs_counter_new(struct rte_eth_dev *dev, uint32_t id __rte_unused)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_flow_counter_mng *cmng = &priv->sh->cmng;
 	struct mlx5_flow_counter_pool *pool = NULL;
 	struct mlx5_flow_counter *cnt = NULL;
-	union mlx5_l3t_data data;
 	uint32_t n_valid = cmng->n_valid;
 	uint32_t pool_idx, cnt_idx;
 	uint32_t i;
 	int ret;
 
-	if (shared && !mlx5_l3t_get_entry(priv->sh->cnt_id_tbl, id, &data) &&
-	    data.dword)
-		return data.dword;
 	for (pool_idx = 0; pool_idx < n_valid; ++pool_idx) {
 		pool = cmng->pools[pool_idx];
 		if (!pool)
@@ -320,13 +322,6 @@ flow_verbs_counter_new(struct rte_eth_dev *dev, uint32_t shared, uint32_t id)
 	TAILQ_REMOVE(&pool->counters[0], cnt, next);
 	i = MLX5_CNT_ARRAY_IDX(pool, cnt);
 	cnt_idx = MLX5_MAKE_CNT_IDX(pool_idx, i);
-	if (shared) {
-		data.dword = cnt_idx;
-		if (mlx5_l3t_set_entry(priv->sh->cnt_id_tbl, id, &data))
-			return 0;
-		cnt->shared_info.id = id;
-		cnt_idx |= MLX5_CNT_SHARED_OFFSET;
-	}
 	/* Create counter with Verbs. */
 	ret = flow_verbs_counter_create(dev, cnt);
 	if (!ret) {
@@ -352,14 +347,10 @@ flow_verbs_counter_new(struct rte_eth_dev *dev, uint32_t shared, uint32_t id)
 static void
 flow_verbs_counter_release(struct rte_eth_dev *dev, uint32_t counter)
 {
-	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_flow_counter_pool *pool;
 	struct mlx5_flow_counter *cnt;
 
 	cnt = flow_verbs_counter_get_by_idx(dev, counter, &pool);
-	if (IS_LEGACY_SHARED_CNT(counter) &&
-	    mlx5_l3t_clear_entry(priv->sh->cnt_id_tbl, cnt->shared_info.id))
-		return;
 #if defined(HAVE_IBV_DEVICE_COUNTERS_SET_V42)
 	claim_zero(mlx5_glue->destroy_counter_set
 			((struct ibv_counter_set *)cnt->dcs_when_active));
@@ -1198,8 +1189,7 @@ flow_verbs_translate_action_count(struct mlx5_flow *dev_flow,
 #endif
 
 	if (!flow->counter) {
-		flow->counter = flow_verbs_counter_new(dev, count->shared,
-						       count->id);
+		flow->counter = flow_verbs_counter_new(dev, count->id);
 		if (!flow->counter)
 			return rte_flow_error_set(error, rte_errno,
 						  RTE_FLOW_ERROR_TYPE_ACTION,
@@ -1257,6 +1247,7 @@ flow_verbs_validate(struct rte_eth_dev *dev,
 	uint8_t next_protocol = 0xff;
 	uint16_t ether_type = 0;
 	bool is_empty_vlan = false;
+	uint16_t udp_dport = 0;
 
 	if (items == NULL)
 		return -1;
@@ -1364,6 +1355,15 @@ flow_verbs_validate(struct rte_eth_dev *dev,
 			ret = mlx5_flow_validate_item_udp(items, item_flags,
 							  next_protocol,
 							  error);
+			const struct rte_flow_item_udp *spec = items->spec;
+			const struct rte_flow_item_udp *mask = items->mask;
+			if (!mask)
+				mask = &rte_flow_item_udp_mask;
+			if (spec != NULL)
+				udp_dport = rte_be_to_cpu_16
+						(spec->hdr.dst_port &
+						 mask->hdr.dst_port);
+
 			if (ret < 0)
 				return ret;
 			last_item = tunnel ? MLX5_FLOW_LAYER_INNER_L4_UDP :
@@ -1381,8 +1381,9 @@ flow_verbs_validate(struct rte_eth_dev *dev,
 					     MLX5_FLOW_LAYER_OUTER_L4_TCP;
 			break;
 		case RTE_FLOW_ITEM_TYPE_VXLAN:
-			ret = mlx5_flow_validate_item_vxlan(items, item_flags,
-							    error);
+			ret = mlx5_flow_validate_item_vxlan(dev, udp_dport,
+							    items, item_flags,
+							    attr, error);
 			if (ret < 0)
 				return ret;
 			last_item = MLX5_FLOW_LAYER_VXLAN;
@@ -1820,9 +1821,10 @@ flow_verbs_translate(struct rte_eth_dev *dev,
 			flow_verbs_translate_item_tcp(dev_flow, items,
 						      item_flags);
 			subpriority = MLX5_PRIORITY_MAP_L4;
-			dev_flow->hash_fields |=
-				mlx5_flow_hashfields_adjust
-					(rss_desc, tunnel, ETH_RSS_TCP,
+			if (dev_flow->hash_fields != 0)
+				dev_flow->hash_fields |=
+					mlx5_flow_hashfields_adjust
+					(rss_desc, tunnel, RTE_ETH_RSS_TCP,
 					 (IBV_RX_HASH_SRC_PORT_TCP |
 					  IBV_RX_HASH_DST_PORT_TCP));
 			item_flags |= tunnel ? MLX5_FLOW_LAYER_INNER_L4_TCP :
@@ -1832,9 +1834,10 @@ flow_verbs_translate(struct rte_eth_dev *dev,
 			flow_verbs_translate_item_udp(dev_flow, items,
 						      item_flags);
 			subpriority = MLX5_PRIORITY_MAP_L4;
-			dev_flow->hash_fields |=
-				mlx5_flow_hashfields_adjust
-					(rss_desc, tunnel, ETH_RSS_UDP,
+			if (dev_flow->hash_fields != 0)
+				dev_flow->hash_fields |=
+					mlx5_flow_hashfields_adjust
+					(rss_desc, tunnel, RTE_ETH_RSS_UDP,
 					 (IBV_RX_HASH_SRC_PORT_UDP |
 					  IBV_RX_HASH_DST_PORT_UDP));
 			item_flags |= tunnel ? MLX5_FLOW_LAYER_INNER_L4_UDP :

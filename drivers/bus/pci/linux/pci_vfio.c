@@ -29,7 +29,7 @@
 
 /**
  * @file
- * PCI probing under linux (VFIO version)
+ * PCI probing using Linux VFIO.
  *
  * This code tries to determine if the PCI device is bound to VFIO driver,
  * and initialize it (map BARs, set up interrupts) if that's the case.
@@ -47,7 +47,9 @@ int
 pci_vfio_read_config(const struct rte_intr_handle *intr_handle,
 		    void *buf, size_t len, off_t offs)
 {
-	return pread64(intr_handle->vfio_dev_fd, buf, len,
+	int vfio_dev_fd = rte_intr_dev_fd_get(intr_handle);
+
+	return pread64(vfio_dev_fd, buf, len,
 	       VFIO_GET_REGION_ADDR(VFIO_PCI_CONFIG_REGION_INDEX) + offs);
 }
 
@@ -55,7 +57,9 @@ int
 pci_vfio_write_config(const struct rte_intr_handle *intr_handle,
 		    const void *buf, size_t len, off_t offs)
 {
-	return pwrite64(intr_handle->vfio_dev_fd, buf, len,
+	int vfio_dev_fd = rte_intr_dev_fd_get(intr_handle);
+
+	return pwrite64(vfio_dev_fd, buf, len,
 	       VFIO_GET_REGION_ADDR(VFIO_PCI_CONFIG_REGION_INDEX) + offs);
 }
 
@@ -262,6 +266,12 @@ pci_vfio_setup_interrupts(struct rte_pci_device *dev, int vfio_dev_fd)
 			return -1;
 		}
 
+		/* Reallocate the efds and elist fields of intr_handle based
+		 * on PCI device MSIX size.
+		 */
+		if (rte_intr_event_list_update(dev->intr_handle, irq.count))
+			return -1;
+
 		/* if this vector cannot be used with eventfd, fail if we explicitly
 		 * specified interrupt type, otherwise continue */
 		if ((irq.flags & VFIO_IRQ_INFO_EVENTFD) == 0) {
@@ -281,21 +291,27 @@ pci_vfio_setup_interrupts(struct rte_pci_device *dev, int vfio_dev_fd)
 			return -1;
 		}
 
-		dev->intr_handle.fd = fd;
-		dev->intr_handle.vfio_dev_fd = vfio_dev_fd;
+		if (rte_intr_fd_set(dev->intr_handle, fd))
+			return -1;
+
+		if (rte_intr_dev_fd_set(dev->intr_handle, vfio_dev_fd))
+			return -1;
 
 		switch (i) {
 		case VFIO_PCI_MSIX_IRQ_INDEX:
 			intr_mode = RTE_INTR_MODE_MSIX;
-			dev->intr_handle.type = RTE_INTR_HANDLE_VFIO_MSIX;
+			rte_intr_type_set(dev->intr_handle,
+						 RTE_INTR_HANDLE_VFIO_MSIX);
 			break;
 		case VFIO_PCI_MSI_IRQ_INDEX:
 			intr_mode = RTE_INTR_MODE_MSI;
-			dev->intr_handle.type = RTE_INTR_HANDLE_VFIO_MSI;
+			rte_intr_type_set(dev->intr_handle,
+						 RTE_INTR_HANDLE_VFIO_MSI);
 			break;
 		case VFIO_PCI_INTX_IRQ_INDEX:
 			intr_mode = RTE_INTR_MODE_LEGACY;
-			dev->intr_handle.type = RTE_INTR_HANDLE_VFIO_LEGACY;
+			rte_intr_type_set(dev->intr_handle,
+						 RTE_INTR_HANDLE_VFIO_LEGACY);
 			break;
 		default:
 			RTE_LOG(ERR, EAL, "Unknown interrupt type!\n");
@@ -362,11 +378,16 @@ pci_vfio_enable_notifier(struct rte_pci_device *dev, int vfio_dev_fd)
 		return -1;
 	}
 
-	dev->vfio_req_intr_handle.fd = fd;
-	dev->vfio_req_intr_handle.type = RTE_INTR_HANDLE_VFIO_REQ;
-	dev->vfio_req_intr_handle.vfio_dev_fd = vfio_dev_fd;
+	if (rte_intr_fd_set(dev->vfio_req_intr_handle, fd))
+		return -1;
 
-	ret = rte_intr_callback_register(&dev->vfio_req_intr_handle,
+	if (rte_intr_type_set(dev->vfio_req_intr_handle, RTE_INTR_HANDLE_VFIO_REQ))
+		return -1;
+
+	if (rte_intr_dev_fd_set(dev->vfio_req_intr_handle, vfio_dev_fd))
+		return -1;
+
+	ret = rte_intr_callback_register(dev->vfio_req_intr_handle,
 					 pci_vfio_req_handler,
 					 (void *)&dev->device);
 	if (ret) {
@@ -374,10 +395,10 @@ pci_vfio_enable_notifier(struct rte_pci_device *dev, int vfio_dev_fd)
 		goto error;
 	}
 
-	ret = rte_intr_enable(&dev->vfio_req_intr_handle);
+	ret = rte_intr_enable(dev->vfio_req_intr_handle);
 	if (ret) {
 		RTE_LOG(ERR, EAL, "Fail to enable req notifier.\n");
-		ret = rte_intr_callback_unregister(&dev->vfio_req_intr_handle,
+		ret = rte_intr_callback_unregister(dev->vfio_req_intr_handle,
 						 pci_vfio_req_handler,
 						 (void *)&dev->device);
 		if (ret < 0)
@@ -390,9 +411,9 @@ pci_vfio_enable_notifier(struct rte_pci_device *dev, int vfio_dev_fd)
 error:
 	close(fd);
 
-	dev->vfio_req_intr_handle.fd = -1;
-	dev->vfio_req_intr_handle.type = RTE_INTR_HANDLE_UNKNOWN;
-	dev->vfio_req_intr_handle.vfio_dev_fd = -1;
+	rte_intr_fd_set(dev->vfio_req_intr_handle, -1);
+	rte_intr_type_set(dev->vfio_req_intr_handle, RTE_INTR_HANDLE_UNKNOWN);
+	rte_intr_dev_fd_set(dev->vfio_req_intr_handle, -1);
 
 	return -1;
 }
@@ -403,13 +424,13 @@ pci_vfio_disable_notifier(struct rte_pci_device *dev)
 {
 	int ret;
 
-	ret = rte_intr_disable(&dev->vfio_req_intr_handle);
+	ret = rte_intr_disable(dev->vfio_req_intr_handle);
 	if (ret) {
 		RTE_LOG(ERR, EAL, "fail to disable req notifier.\n");
 		return -1;
 	}
 
-	ret = rte_intr_callback_unregister_sync(&dev->vfio_req_intr_handle,
+	ret = rte_intr_callback_unregister_sync(dev->vfio_req_intr_handle,
 					   pci_vfio_req_handler,
 					   (void *)&dev->device);
 	if (ret < 0) {
@@ -418,11 +439,11 @@ pci_vfio_disable_notifier(struct rte_pci_device *dev)
 		return -1;
 	}
 
-	close(dev->vfio_req_intr_handle.fd);
+	close(rte_intr_fd_get(dev->vfio_req_intr_handle));
 
-	dev->vfio_req_intr_handle.fd = -1;
-	dev->vfio_req_intr_handle.type = RTE_INTR_HANDLE_UNKNOWN;
-	dev->vfio_req_intr_handle.vfio_dev_fd = -1;
+	rte_intr_fd_set(dev->vfio_req_intr_handle, -1);
+	rte_intr_type_set(dev->vfio_req_intr_handle, RTE_INTR_HANDLE_UNKNOWN);
+	rte_intr_dev_fd_set(dev->vfio_req_intr_handle, -1);
 
 	return 0;
 }
@@ -705,9 +726,12 @@ pci_vfio_map_resource_primary(struct rte_pci_device *dev)
 
 	struct pci_map *maps;
 
-	dev->intr_handle.fd = -1;
+	if (rte_intr_fd_set(dev->intr_handle, -1))
+		return -1;
+
 #ifdef HAVE_VFIO_DEV_REQ_INTERFACE
-	dev->vfio_req_intr_handle.fd = -1;
+	if (rte_intr_fd_set(dev->vfio_req_intr_handle, -1))
+		return -1;
 #endif
 
 	/* store PCI address string */
@@ -854,9 +878,11 @@ pci_vfio_map_resource_secondary(struct rte_pci_device *dev)
 
 	struct pci_map *maps;
 
-	dev->intr_handle.fd = -1;
+	if (rte_intr_fd_set(dev->intr_handle, -1))
+		return -1;
 #ifdef HAVE_VFIO_DEV_REQ_INTERFACE
-	dev->vfio_req_intr_handle.fd = -1;
+	if (rte_intr_fd_set(dev->vfio_req_intr_handle, -1))
+		return -1;
 #endif
 
 	/* store PCI address string */
@@ -897,9 +923,11 @@ pci_vfio_map_resource_secondary(struct rte_pci_device *dev)
 	}
 
 	/* we need save vfio_dev_fd, so it can be used during release */
-	dev->intr_handle.vfio_dev_fd = vfio_dev_fd;
+	if (rte_intr_dev_fd_set(dev->intr_handle, vfio_dev_fd))
+		goto err_vfio_dev_fd;
 #ifdef HAVE_VFIO_DEV_REQ_INTERFACE
-	dev->vfio_req_intr_handle.vfio_dev_fd = vfio_dev_fd;
+	if (rte_intr_dev_fd_set(dev->vfio_req_intr_handle, vfio_dev_fd))
+		goto err_vfio_dev_fd;
 #endif
 
 	return 0;
@@ -968,7 +996,7 @@ pci_vfio_unmap_resource_primary(struct rte_pci_device *dev)
 	struct rte_pci_addr *loc = &dev->addr;
 	struct mapped_pci_resource *vfio_res = NULL;
 	struct mapped_pci_res_list *vfio_res_list;
-	int ret;
+	int ret, vfio_dev_fd;
 
 	/* store PCI address string */
 	snprintf(pci_addr, sizeof(pci_addr), PCI_PRI_FMT,
@@ -982,20 +1010,21 @@ pci_vfio_unmap_resource_primary(struct rte_pci_device *dev)
 	}
 
 #endif
-	if (close(dev->intr_handle.fd) < 0) {
+	if (close(rte_intr_fd_get(dev->intr_handle)) < 0) {
 		RTE_LOG(INFO, EAL, "Error when closing eventfd file descriptor for %s\n",
 			pci_addr);
 		return -1;
 	}
 
-	if (pci_vfio_set_bus_master(dev->intr_handle.vfio_dev_fd, false)) {
+	vfio_dev_fd = rte_intr_dev_fd_get(dev->intr_handle);
+	if (pci_vfio_set_bus_master(vfio_dev_fd, false)) {
 		RTE_LOG(ERR, EAL, "%s cannot unset bus mastering for PCI device!\n",
 				pci_addr);
 		return -1;
 	}
 
 	ret = rte_vfio_release_device(rte_pci_get_sysfs_path(), pci_addr,
-				  dev->intr_handle.vfio_dev_fd);
+				      vfio_dev_fd);
 	if (ret < 0) {
 		RTE_LOG(ERR, EAL, "Cannot release VFIO device\n");
 		return ret;
@@ -1024,14 +1053,15 @@ pci_vfio_unmap_resource_secondary(struct rte_pci_device *dev)
 	struct rte_pci_addr *loc = &dev->addr;
 	struct mapped_pci_resource *vfio_res = NULL;
 	struct mapped_pci_res_list *vfio_res_list;
-	int ret;
+	int ret, vfio_dev_fd;
 
 	/* store PCI address string */
 	snprintf(pci_addr, sizeof(pci_addr), PCI_PRI_FMT,
 			loc->domain, loc->bus, loc->devid, loc->function);
 
+	vfio_dev_fd = rte_intr_dev_fd_get(dev->intr_handle);
 	ret = rte_vfio_release_device(rte_pci_get_sysfs_path(), pci_addr,
-				  dev->intr_handle.vfio_dev_fd);
+				      vfio_dev_fd);
 	if (ret < 0) {
 		RTE_LOG(ERR, EAL, "Cannot release VFIO device\n");
 		return ret;
@@ -1079,9 +1109,10 @@ void
 pci_vfio_ioport_read(struct rte_pci_ioport *p,
 		     void *data, size_t len, off_t offset)
 {
-	const struct rte_intr_handle *intr_handle = &p->dev->intr_handle;
+	const struct rte_intr_handle *intr_handle = p->dev->intr_handle;
+	int vfio_dev_fd = rte_intr_dev_fd_get(intr_handle);
 
-	if (pread64(intr_handle->vfio_dev_fd, data,
+	if (pread64(vfio_dev_fd, data,
 		    len, p->base + offset) <= 0)
 		RTE_LOG(ERR, EAL,
 			"Can't read from PCI bar (%" PRIu64 ") : offset (%x)\n",
@@ -1092,9 +1123,10 @@ void
 pci_vfio_ioport_write(struct rte_pci_ioport *p,
 		      const void *data, size_t len, off_t offset)
 {
-	const struct rte_intr_handle *intr_handle = &p->dev->intr_handle;
+	const struct rte_intr_handle *intr_handle = p->dev->intr_handle;
+	int vfio_dev_fd = rte_intr_dev_fd_get(intr_handle);
 
-	if (pwrite64(intr_handle->vfio_dev_fd, data,
+	if (pwrite64(vfio_dev_fd, data,
 		     len, p->base + offset) <= 0)
 		RTE_LOG(ERR, EAL,
 			"Can't write to PCI bar (%" PRIu64 ") : offset (%x)\n",

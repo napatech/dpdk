@@ -475,8 +475,6 @@ struct rte_event_timer {
 	 *  - op: RTE_EVENT_OP_NEW
 	 *  - event_type: RTE_EVENT_TYPE_TIMER
 	 */
-	volatile enum rte_event_timer_state state;
-	/**< State of the event timer. */
 	uint64_t timeout_ticks;
 	/**< Expiry timer ticks expressed in number of *timer_ticks_ns* from
 	 * now.
@@ -488,6 +486,8 @@ struct rte_event_timer {
 	 * implementation specific values to share between the arm and cancel
 	 * operations.  The application should not modify this field.
 	 */
+	enum rte_event_timer_state state;
+	/**< State of the event timer. */
 	uint8_t user_meta[0];
 	/**< Memory to store user specific metadata.
 	 * The event timer adapter implementation should not modify this area.
@@ -523,7 +523,7 @@ struct rte_event_timer_adapter {
 	/**< Pointer to driver cancel function. */
 	struct rte_event_timer_adapter_data *data;
 	/**< Pointer to shared adapter data */
-	const struct rte_event_timer_adapter_ops *ops;
+	const struct event_timer_adapter_ops *ops;
 	/**< Functions exported by adapter driver */
 
 	RTE_STD_C11

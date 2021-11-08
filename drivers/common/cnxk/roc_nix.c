@@ -113,10 +113,13 @@ roc_nix_max_pkt_len(struct roc_nix *roc_nix)
 {
 	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
 
+	if (roc_nix_is_sdp(roc_nix))
+		return NIX_SDP_MAX_HW_FRS;
+
 	if (roc_model_is_cn9k())
 		return NIX_CN9K_MAX_HW_FRS;
 
-	if (nix->lbk_link || roc_nix_is_sdp(roc_nix))
+	if (nix->lbk_link)
 		return NIX_LBK_MAX_HW_FRS;
 
 	return NIX_RPM_MAX_HW_FRS;
@@ -145,9 +148,12 @@ roc_nix_lf_alloc(struct roc_nix *roc_nix, uint32_t nb_rxq, uint32_t nb_txq,
 	req->npa_func = idev_npa_pffunc_get();
 	req->sso_func = idev_sso_pffunc_get();
 	req->rx_cfg = rx_cfg;
+	if (roc_nix_is_lbk(roc_nix) && roc_nix->enable_loop &&
+	    roc_model_is_cn98xx())
+		req->flags = NIX_LF_LBK_BLK_SEL;
 
 	if (!roc_nix->rss_tag_as_xor)
-		req->flags = NIX_LF_RSS_TAG_LSB_AS_ADDER;
+		req->flags |= NIX_LF_RSS_TAG_LSB_AS_ADDER;
 
 	rc = mbox_process_msg(mbox, (void *)&rsp);
 	if (rc)
@@ -178,6 +184,8 @@ roc_nix_lf_alloc(struct roc_nix *roc_nix, uint32_t nb_rxq, uint32_t nb_txq,
 	nix->sqs = plt_zmalloc(sizeof(struct roc_nix_sq *) * nb_txq, 0);
 	if (!nix->sqs)
 		return -ENOMEM;
+
+	nix_tel_node_add(roc_nix);
 fail:
 	return rc;
 }
@@ -300,7 +308,7 @@ sdp_lbk_id_update(struct plt_pci_device *pci_dev, struct nix *nix)
 	}
 }
 
-static inline uint64_t
+uint64_t
 nix_get_blkaddr(struct dev *dev)
 {
 	uint64_t reg;
@@ -413,6 +421,7 @@ lf_detach:
 dev_fini:
 	rc |= dev_fini(dev, pci_dev);
 fail:
+	nix_tel_node_del(roc_nix);
 	return rc;
 }
 

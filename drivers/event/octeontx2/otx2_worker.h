@@ -264,7 +264,7 @@ otx2_ssogws_prepare_pkt(const struct otx2_eth_txq *txq, struct rte_mbuf *m,
 			uint64_t *cmd, const uint32_t flags)
 {
 	otx2_lmt_mov(cmd, txq->cmd, otx2_nix_tx_ext_subs(flags));
-	otx2_nix_xmit_prepare(m, cmd, flags);
+	otx2_nix_xmit_prepare(m, cmd, flags, txq->lso_tun_fmt);
 }
 
 static __rte_always_inline uint16_t
@@ -277,7 +277,7 @@ otx2_ssogws_event_tx(uint64_t base, struct rte_event *ev, uint64_t *cmd,
 	uint16_t ref_cnt = m->refcnt;
 
 	if ((flags & NIX_TX_OFFLOAD_SECURITY_F) &&
-	    (m->ol_flags & PKT_TX_SEC_OFFLOAD)) {
+	    (m->ol_flags & RTE_MBUF_F_TX_SEC_OFFLOAD)) {
 		txq = otx2_ssogws_xtract_meta(m, txq_data);
 		return otx2_sec_event_tx(base, ev, m, txq, flags);
 	}

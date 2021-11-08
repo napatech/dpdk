@@ -21,7 +21,7 @@ nix_get_rx_offload_capa(struct otx2_eth_dev *dev)
 
 	if (otx2_dev_is_vf(dev) ||
 	    dev->npc_flow.switch_header_type == OTX2_PRIV_FLAGS_HIGIG)
-		capa &= ~DEV_RX_OFFLOAD_TIMESTAMP;
+		capa &= ~RTE_ETH_RX_OFFLOAD_TIMESTAMP;
 
 	return capa;
 }
@@ -33,16 +33,17 @@ nix_get_tx_offload_capa(struct otx2_eth_dev *dev)
 
 	/* TSO not supported for earlier chip revisions */
 	if (otx2_dev_is_96xx_A0(dev) || otx2_dev_is_95xx_Ax(dev))
-		capa &= ~(DEV_TX_OFFLOAD_TCP_TSO |
-			  DEV_TX_OFFLOAD_VXLAN_TNL_TSO |
-			  DEV_TX_OFFLOAD_GENEVE_TNL_TSO |
-			  DEV_TX_OFFLOAD_GRE_TNL_TSO);
+		capa &= ~(RTE_ETH_TX_OFFLOAD_TCP_TSO |
+			  RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO |
+			  RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO |
+			  RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO);
 	return capa;
 }
 
 static const struct otx2_dev_ops otx2_dev_ops = {
 	.link_status_update = otx2_eth_dev_link_status_update,
-	.ptp_info_update = otx2_eth_dev_ptp_info_update
+	.ptp_info_update = otx2_eth_dev_ptp_info_update,
+	.link_status_get = otx2_eth_dev_link_status_get,
 };
 
 static int
@@ -65,8 +66,8 @@ nix_lf_alloc(struct otx2_eth_dev *dev, uint32_t nb_rxq, uint32_t nb_txq)
 	req->npa_func = otx2_npa_pf_func_get();
 	req->sso_func = otx2_sso_pf_func_get();
 	req->rx_cfg = BIT_ULL(35 /* DIS_APAD */);
-	if (dev->rx_offloads & (DEV_RX_OFFLOAD_TCP_CKSUM |
-			 DEV_RX_OFFLOAD_UDP_CKSUM)) {
+	if (dev->rx_offloads & (RTE_ETH_RX_OFFLOAD_TCP_CKSUM |
+			 RTE_ETH_RX_OFFLOAD_UDP_CKSUM)) {
 		req->rx_cfg |= BIT_ULL(37 /* CSUM_OL4 */);
 		req->rx_cfg |= BIT_ULL(36 /* CSUM_IL4 */);
 	}
@@ -372,7 +373,7 @@ nix_cq_rq_init(struct rte_eth_dev *eth_dev, struct otx2_eth_dev *dev,
 
 	aq->rq.sso_ena = 0;
 
-	if (rxq->offloads & DEV_RX_OFFLOAD_SECURITY)
+	if (rxq->offloads & RTE_ETH_RX_OFFLOAD_SECURITY)
 		aq->rq.ipsech_ena = 1;
 
 	aq->rq.cq = qid; /* RQ to CQ 1:1 mapped */
@@ -554,16 +555,17 @@ otx2_nix_rxq_mbuf_setup(struct otx2_eth_dev *dev, uint16_t port_id)
 }
 
 static void
-otx2_nix_rx_queue_release(void *rx_queue)
+otx2_nix_rx_queue_release(struct rte_eth_dev *dev, uint16_t qid)
 {
-	struct otx2_eth_rxq *rxq = rx_queue;
+	struct otx2_eth_rxq *rxq = dev->data->rx_queues[qid];
 
 	if (!rxq)
 		return;
 
 	otx2_nix_dbg("Releasing rxq %u", rxq->rq);
 	nix_cq_rq_uninit(rxq->eth_dev, rxq);
-	rte_free(rx_queue);
+	rte_free(rxq);
+	dev->data->rx_queues[qid] = NULL;
 }
 
 static int
@@ -607,9 +609,8 @@ otx2_nix_rx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t rq,
 	/* Free memory prior to re-allocation if needed */
 	if (eth_dev->data->rx_queues[rq] != NULL) {
 		otx2_nix_dbg("Freeing memory prior to re-allocation %d", rq);
-		otx2_nix_rx_queue_release(eth_dev->data->rx_queues[rq]);
+		otx2_nix_rx_queue_release(eth_dev, rq);
 		rte_eth_dma_zone_free(eth_dev, "cq", rq);
-		eth_dev->data->rx_queues[rq] = NULL;
 	}
 
 	offloads = rx_conf->offloads | eth_dev->data->dev_conf.rxmode.offloads;
@@ -640,6 +641,8 @@ otx2_nix_rx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t rq,
 	rxq->lookup_mem = otx2_nix_fastpath_lookup_mem_get();
 	rxq->tstamp = &dev->tstamp;
 
+	eth_dev->data->rx_queues[rq] = rxq;
+
 	/* Alloc completion queue */
 	rc = nix_cq_rq_init(eth_dev, dev, rq, rxq, mp);
 	if (rc) {
@@ -656,14 +659,13 @@ otx2_nix_rx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t rq,
 	otx2_nix_dbg("rq=%d pool=%s qsize=%d nb_desc=%d->%d",
 		     rq, mp->name, qsize, nb_desc, rxq->qlen);
 
-	eth_dev->data->rx_queues[rq] = rxq;
 	eth_dev->data->rx_queue_state[rq] = RTE_ETH_QUEUE_STATE_STOPPED;
 
 	/* Calculating delta and freq mult between PTP HI clock and tsc.
 	 * These are needed in deriving raw clock value from tsc counter.
 	 * read_clock eth op returns raw clock value.
 	 */
-	if ((dev->rx_offloads & DEV_RX_OFFLOAD_TIMESTAMP) ||
+	if ((dev->rx_offloads & RTE_ETH_RX_OFFLOAD_TIMESTAMP) ||
 	    otx2_ethdev_is_ptp_en(dev)) {
 		rc = otx2_nix_raw_clock_tsc_conv(dev);
 		if (rc) {
@@ -678,7 +680,7 @@ otx2_nix_rx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t rq,
 	return 0;
 
 free_rxq:
-	otx2_nix_rx_queue_release(rxq);
+	otx2_nix_rx_queue_release(eth_dev, rq);
 fail:
 	return rc;
 }
@@ -690,7 +692,7 @@ nix_sq_max_sqe_sz(struct otx2_eth_txq *txq)
 	 * Maximum three segments can be supported with W8, Choose
 	 * NIX_MAXSQESZ_W16 for multi segment offload.
 	 */
-	if (txq->offloads & DEV_TX_OFFLOAD_MULTI_SEGS)
+	if (txq->offloads & RTE_ETH_TX_OFFLOAD_MULTI_SEGS)
 		return NIX_MAXSQESZ_W16;
 	else
 		return NIX_MAXSQESZ_W8;
@@ -705,29 +707,29 @@ nix_rx_offload_flags(struct rte_eth_dev *eth_dev)
 	struct rte_eth_rxmode *rxmode = &conf->rxmode;
 	uint16_t flags = 0;
 
-	if (rxmode->mq_mode == ETH_MQ_RX_RSS &&
-			(dev->rx_offloads & DEV_RX_OFFLOAD_RSS_HASH))
+	if (rxmode->mq_mode == RTE_ETH_MQ_RX_RSS &&
+			(dev->rx_offloads & RTE_ETH_RX_OFFLOAD_RSS_HASH))
 		flags |= NIX_RX_OFFLOAD_RSS_F;
 
-	if (dev->rx_offloads & (DEV_RX_OFFLOAD_TCP_CKSUM |
-			 DEV_RX_OFFLOAD_UDP_CKSUM))
+	if (dev->rx_offloads & (RTE_ETH_RX_OFFLOAD_TCP_CKSUM |
+			 RTE_ETH_RX_OFFLOAD_UDP_CKSUM))
 		flags |= NIX_RX_OFFLOAD_CHECKSUM_F;
 
-	if (dev->rx_offloads & (DEV_RX_OFFLOAD_IPV4_CKSUM |
-				DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM))
+	if (dev->rx_offloads & (RTE_ETH_RX_OFFLOAD_IPV4_CKSUM |
+				RTE_ETH_RX_OFFLOAD_OUTER_IPV4_CKSUM))
 		flags |= NIX_RX_OFFLOAD_CHECKSUM_F;
 
-	if (dev->rx_offloads & DEV_RX_OFFLOAD_SCATTER)
+	if (dev->rx_offloads & RTE_ETH_RX_OFFLOAD_SCATTER)
 		flags |= NIX_RX_MULTI_SEG_F;
 
-	if (dev->rx_offloads & (DEV_RX_OFFLOAD_VLAN_STRIP |
-				DEV_RX_OFFLOAD_QINQ_STRIP))
+	if (dev->rx_offloads & (RTE_ETH_RX_OFFLOAD_VLAN_STRIP |
+				RTE_ETH_RX_OFFLOAD_QINQ_STRIP))
 		flags |= NIX_RX_OFFLOAD_VLAN_STRIP_F;
 
-	if ((dev->rx_offloads & DEV_RX_OFFLOAD_TIMESTAMP))
+	if ((dev->rx_offloads & RTE_ETH_RX_OFFLOAD_TIMESTAMP))
 		flags |= NIX_RX_OFFLOAD_TSTAMP_F;
 
-	if (dev->rx_offloads & DEV_RX_OFFLOAD_SECURITY)
+	if (dev->rx_offloads & RTE_ETH_RX_OFFLOAD_SECURITY)
 		flags |= NIX_RX_OFFLOAD_SECURITY_F;
 
 	if (!dev->ptype_disable)
@@ -744,15 +746,15 @@ nix_tx_offload_flags(struct rte_eth_dev *eth_dev)
 	uint16_t flags = 0;
 
 	/* Fastpath is dependent on these enums */
-	RTE_BUILD_BUG_ON(PKT_TX_TCP_CKSUM != (1ULL << 52));
-	RTE_BUILD_BUG_ON(PKT_TX_SCTP_CKSUM != (2ULL << 52));
-	RTE_BUILD_BUG_ON(PKT_TX_UDP_CKSUM != (3ULL << 52));
-	RTE_BUILD_BUG_ON(PKT_TX_IP_CKSUM != (1ULL << 54));
-	RTE_BUILD_BUG_ON(PKT_TX_IPV4 != (1ULL << 55));
-	RTE_BUILD_BUG_ON(PKT_TX_OUTER_IP_CKSUM != (1ULL << 58));
-	RTE_BUILD_BUG_ON(PKT_TX_OUTER_IPV4 != (1ULL << 59));
-	RTE_BUILD_BUG_ON(PKT_TX_OUTER_IPV6 != (1ULL << 60));
-	RTE_BUILD_BUG_ON(PKT_TX_OUTER_UDP_CKSUM != (1ULL << 41));
+	RTE_BUILD_BUG_ON(RTE_MBUF_F_TX_TCP_CKSUM != (1ULL << 52));
+	RTE_BUILD_BUG_ON(RTE_MBUF_F_TX_SCTP_CKSUM != (2ULL << 52));
+	RTE_BUILD_BUG_ON(RTE_MBUF_F_TX_UDP_CKSUM != (3ULL << 52));
+	RTE_BUILD_BUG_ON(RTE_MBUF_F_TX_IP_CKSUM != (1ULL << 54));
+	RTE_BUILD_BUG_ON(RTE_MBUF_F_TX_IPV4 != (1ULL << 55));
+	RTE_BUILD_BUG_ON(RTE_MBUF_F_TX_OUTER_IP_CKSUM != (1ULL << 58));
+	RTE_BUILD_BUG_ON(RTE_MBUF_F_TX_OUTER_IPV4 != (1ULL << 59));
+	RTE_BUILD_BUG_ON(RTE_MBUF_F_TX_OUTER_IPV6 != (1ULL << 60));
+	RTE_BUILD_BUG_ON(RTE_MBUF_F_TX_OUTER_UDP_CKSUM != (1ULL << 41));
 	RTE_BUILD_BUG_ON(RTE_MBUF_L2_LEN_BITS != 7);
 	RTE_BUILD_BUG_ON(RTE_MBUF_L3_LEN_BITS != 9);
 	RTE_BUILD_BUG_ON(RTE_MBUF_OUTL2_LEN_BITS != 7);
@@ -766,43 +768,43 @@ nix_tx_offload_flags(struct rte_eth_dev *eth_dev)
 	RTE_BUILD_BUG_ON(offsetof(struct rte_mbuf, tx_offload) !=
 			 offsetof(struct rte_mbuf, pool) + 2 * sizeof(void *));
 
-	if (conf & DEV_TX_OFFLOAD_VLAN_INSERT ||
-	    conf & DEV_TX_OFFLOAD_QINQ_INSERT)
+	if (conf & RTE_ETH_TX_OFFLOAD_VLAN_INSERT ||
+	    conf & RTE_ETH_TX_OFFLOAD_QINQ_INSERT)
 		flags |= NIX_TX_OFFLOAD_VLAN_QINQ_F;
 
-	if (conf & DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM ||
-	    conf & DEV_TX_OFFLOAD_OUTER_UDP_CKSUM)
+	if (conf & RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM ||
+	    conf & RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM)
 		flags |= NIX_TX_OFFLOAD_OL3_OL4_CSUM_F;
 
-	if (conf & DEV_TX_OFFLOAD_IPV4_CKSUM ||
-	    conf & DEV_TX_OFFLOAD_TCP_CKSUM ||
-	    conf & DEV_TX_OFFLOAD_UDP_CKSUM ||
-	    conf & DEV_TX_OFFLOAD_SCTP_CKSUM)
+	if (conf & RTE_ETH_TX_OFFLOAD_IPV4_CKSUM ||
+	    conf & RTE_ETH_TX_OFFLOAD_TCP_CKSUM ||
+	    conf & RTE_ETH_TX_OFFLOAD_UDP_CKSUM ||
+	    conf & RTE_ETH_TX_OFFLOAD_SCTP_CKSUM)
 		flags |= NIX_TX_OFFLOAD_L3_L4_CSUM_F;
 
-	if (!(conf & DEV_TX_OFFLOAD_MBUF_FAST_FREE))
+	if (!(conf & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE))
 		flags |= NIX_TX_OFFLOAD_MBUF_NOFF_F;
 
-	if (conf & DEV_TX_OFFLOAD_MULTI_SEGS)
+	if (conf & RTE_ETH_TX_OFFLOAD_MULTI_SEGS)
 		flags |= NIX_TX_MULTI_SEG_F;
 
 	/* Enable Inner checksum for TSO */
-	if (conf & DEV_TX_OFFLOAD_TCP_TSO)
+	if (conf & RTE_ETH_TX_OFFLOAD_TCP_TSO)
 		flags |= (NIX_TX_OFFLOAD_TSO_F |
 			  NIX_TX_OFFLOAD_L3_L4_CSUM_F);
 
 	/* Enable Inner and Outer checksum for Tunnel TSO */
-	if (conf & (DEV_TX_OFFLOAD_VXLAN_TNL_TSO |
-		    DEV_TX_OFFLOAD_GENEVE_TNL_TSO |
-		    DEV_TX_OFFLOAD_GRE_TNL_TSO))
+	if (conf & (RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO |
+		    RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO |
+		    RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO))
 		flags |= (NIX_TX_OFFLOAD_TSO_F |
 			  NIX_TX_OFFLOAD_OL3_OL4_CSUM_F |
 			  NIX_TX_OFFLOAD_L3_L4_CSUM_F);
 
-	if (conf & DEV_TX_OFFLOAD_SECURITY)
+	if (conf & RTE_ETH_TX_OFFLOAD_SECURITY)
 		flags |= NIX_TX_OFFLOAD_SECURITY_F;
 
-	if ((dev->rx_offloads & DEV_RX_OFFLOAD_TIMESTAMP))
+	if ((dev->rx_offloads & RTE_ETH_RX_OFFLOAD_TIMESTAMP))
 		flags |= NIX_TX_OFFLOAD_TSTAMP_F;
 
 	return flags;
@@ -911,9 +913,9 @@ otx2_nix_enable_mseg_on_jumbo(struct otx2_eth_rxq *rxq)
 	mbp_priv = rte_mempool_get_priv(rxq->pool);
 	buffsz = mbp_priv->mbuf_data_room_size - RTE_PKTMBUF_HEADROOM;
 
-	if (eth_dev->data->dev_conf.rxmode.max_rx_pkt_len > buffsz) {
-		dev->rx_offloads |= DEV_RX_OFFLOAD_SCATTER;
-		dev->tx_offloads |= DEV_TX_OFFLOAD_MULTI_SEGS;
+	if (eth_dev->data->mtu + (uint32_t)NIX_L2_OVERHEAD > buffsz) {
+		dev->rx_offloads |= RTE_ETH_RX_OFFLOAD_SCATTER;
+		dev->tx_offloads |= RTE_ETH_TX_OFFLOAD_MULTI_SEGS;
 
 		/* Setting up the rx[tx]_offload_flags due to change
 		 * in rx[tx]_offloads.
@@ -1122,7 +1124,7 @@ nix_alloc_sqb_pool(int port, struct otx2_eth_txq *txq, uint16_t nb_desc)
 
 	txq->sqb_pool = rte_mempool_create_empty(name, NIX_MAX_SQB, blk_sz,
 						 0, 0, dev->node,
-						 MEMPOOL_F_NO_SPREAD);
+						 RTE_MEMPOOL_F_NO_SPREAD);
 	txq->nb_sqb_bufs = nb_sqb_bufs;
 	txq->sqes_per_sqb_log2 = (uint16_t)rte_log2_u32(sqes_per_sqb);
 	txq->nb_sqb_bufs_adj = nb_sqb_bufs -
@@ -1148,7 +1150,7 @@ nix_alloc_sqb_pool(int port, struct otx2_eth_txq *txq, uint16_t nb_desc)
 		goto fail;
 	}
 
-	tmp = rte_mempool_calc_obj_size(blk_sz, MEMPOOL_F_NO_SPREAD, &sz);
+	tmp = rte_mempool_calc_obj_size(blk_sz, RTE_MEMPOOL_F_NO_SPREAD, &sz);
 	if (dev->sqb_size != sz.elt_size) {
 		otx2_err("sqe pool block size is not expected %d != %d",
 			 dev->sqb_size, tmp);
@@ -1216,15 +1218,12 @@ otx2_nix_form_default_desc(struct otx2_eth_txq *txq)
 }
 
 static void
-otx2_nix_tx_queue_release(void *_txq)
+otx2_nix_tx_queue_release(struct rte_eth_dev *eth_dev, uint16_t qid)
 {
-	struct otx2_eth_txq *txq = _txq;
-	struct rte_eth_dev *eth_dev;
+	struct otx2_eth_txq *txq = eth_dev->data->tx_queues[qid];
 
 	if (!txq)
 		return;
-
-	eth_dev = txq->dev->eth_dev;
 
 	otx2_nix_dbg("Releasing txq %u", txq->sq);
 
@@ -1240,6 +1239,7 @@ otx2_nix_tx_queue_release(void *_txq)
 	}
 	otx2_nix_sq_flush_post(txq);
 	rte_free(txq);
+	eth_dev->data->tx_queues[qid] = NULL;
 }
 
 
@@ -1267,8 +1267,7 @@ otx2_nix_tx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t sq,
 	/* Free memory prior to re-allocation if needed. */
 	if (eth_dev->data->tx_queues[sq] != NULL) {
 		otx2_nix_dbg("Freeing memory prior to re-allocation %d", sq);
-		otx2_nix_tx_queue_release(eth_dev->data->tx_queues[sq]);
-		eth_dev->data->tx_queues[sq] = NULL;
+		otx2_nix_tx_queue_release(eth_dev, sq);
 	}
 
 	/* Find the expected offloads for this queue */
@@ -1287,6 +1286,7 @@ otx2_nix_tx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t sq,
 	txq->sqb_pool = NULL;
 	txq->offloads = offloads;
 	dev->tx_offloads |= offloads;
+	eth_dev->data->tx_queues[sq] = txq;
 
 	/*
 	 * Allocate memory for flow control updates from HW.
@@ -1326,18 +1326,18 @@ otx2_nix_tx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t sq,
 	txq->qconf.nb_desc = nb_desc;
 	memcpy(&txq->qconf.conf.tx, tx_conf, sizeof(struct rte_eth_txconf));
 
+	txq->lso_tun_fmt = dev->lso_tun_fmt;
 	otx2_nix_form_default_desc(txq);
 
 	otx2_nix_dbg("sq=%d fc=%p offload=0x%" PRIx64 " sqb=0x%" PRIx64 ""
 		     " lmt_addr=%p nb_sqb_bufs=%d sqes_per_sqb_log2=%d", sq,
 		     fc->addr, offloads, txq->sqb_pool->pool_id, txq->lmt_addr,
 		     txq->nb_sqb_bufs, txq->sqes_per_sqb_log2);
-	eth_dev->data->tx_queues[sq] = txq;
 	eth_dev->data->tx_queue_state[sq] = RTE_ETH_QUEUE_STATE_STOPPED;
 	return 0;
 
 free_txq:
-	otx2_nix_tx_queue_release(txq);
+	otx2_nix_tx_queue_release(eth_dev, sq);
 fail:
 	return rc;
 }
@@ -1376,8 +1376,7 @@ nix_store_queue_cfg_and_then_release(struct rte_eth_dev *eth_dev)
 		}
 		memcpy(&tx_qconf[i], &txq[i]->qconf, sizeof(*tx_qconf));
 		tx_qconf[i].valid = true;
-		otx2_nix_tx_queue_release(txq[i]);
-		eth_dev->data->tx_queues[i] = NULL;
+		otx2_nix_tx_queue_release(eth_dev, i);
 	}
 
 	rxq = (struct otx2_eth_rxq **)eth_dev->data->rx_queues;
@@ -1389,8 +1388,7 @@ nix_store_queue_cfg_and_then_release(struct rte_eth_dev *eth_dev)
 		}
 		memcpy(&rx_qconf[i], &rxq[i]->qconf, sizeof(*rx_qconf));
 		rx_qconf[i].valid = true;
-		otx2_nix_rx_queue_release(rxq[i]);
-		eth_dev->data->rx_queues[i] = NULL;
+		otx2_nix_rx_queue_release(eth_dev, i);
 	}
 
 	dev->tx_qconf = tx_qconf;
@@ -1410,8 +1408,6 @@ nix_restore_queue_cfg(struct rte_eth_dev *eth_dev)
 	struct otx2_eth_dev *dev = otx2_eth_pmd_priv(eth_dev);
 	struct otx2_eth_qconf *tx_qconf = dev->tx_qconf;
 	struct otx2_eth_qconf *rx_qconf = dev->rx_qconf;
-	struct otx2_eth_txq **txq;
-	struct otx2_eth_rxq **rxq;
 	int rc, i, nb_rxq, nb_txq;
 
 	nb_rxq = RTE_MIN(dev->configured_nb_rx_qs, eth_dev->data->nb_rx_queues);
@@ -1448,9 +1444,8 @@ nix_restore_queue_cfg(struct rte_eth_dev *eth_dev)
 					     &tx_qconf[i].conf.tx);
 		if (rc) {
 			otx2_err("Failed to setup tx queue rc=%d", rc);
-			txq = (struct otx2_eth_txq **)eth_dev->data->tx_queues;
 			for (i -= 1; i >= 0; i--)
-				otx2_nix_tx_queue_release(txq[i]);
+				otx2_nix_tx_queue_release(eth_dev, i);
 			goto fail;
 		}
 	}
@@ -1466,9 +1461,8 @@ nix_restore_queue_cfg(struct rte_eth_dev *eth_dev)
 					     rx_qconf[i].mempool);
 		if (rc) {
 			otx2_err("Failed to setup rx queue rc=%d", rc);
-			rxq = (struct otx2_eth_rxq **)eth_dev->data->rx_queues;
 			for (i -= 1; i >= 0; i--)
-				otx2_nix_rx_queue_release(rxq[i]);
+				otx2_nix_rx_queue_release(eth_dev, i);
 			goto release_tx_queues;
 		}
 	}
@@ -1478,9 +1472,8 @@ nix_restore_queue_cfg(struct rte_eth_dev *eth_dev)
 	return 0;
 
 release_tx_queues:
-	txq = (struct otx2_eth_txq **)eth_dev->data->tx_queues;
 	for (i = 0; i < eth_dev->data->nb_tx_queues; i++)
-		otx2_nix_tx_queue_release(txq[i]);
+		otx2_nix_tx_queue_release(eth_dev, i);
 fail:
 	if (tx_qconf)
 		free(tx_qconf);
@@ -1676,7 +1669,7 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	struct otx2_mbox *mbox = dev->mbox;
 	struct nix_lso_format_cfg_rsp *rsp;
 	struct nix_lso_format_cfg *req;
-	uint8_t base;
+	uint8_t *fmt;
 	int rc;
 
 	/* Skip if TSO was not requested */
@@ -1691,11 +1684,9 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	if (rc)
 		return rc;
 
-	base = rsp->lso_format_idx;
-	if (base != NIX_LSO_FORMAT_IDX_TSOV4)
+	if (rsp->lso_format_idx != NIX_LSO_FORMAT_IDX_TSOV4)
 		return -EFAULT;
-	dev->lso_base_idx = base;
-	otx2_nix_dbg("tcpv4 lso fmt=%u", base);
+	otx2_nix_dbg("tcpv4 lso fmt=%u", rsp->lso_format_idx);
 
 
 	/*
@@ -1707,9 +1698,9 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	if (rc)
 		return rc;
 
-	if (rsp->lso_format_idx != base + 1)
+	if (rsp->lso_format_idx != NIX_LSO_FORMAT_IDX_TSOV6)
 		return -EFAULT;
-	otx2_nix_dbg("tcpv6 lso fmt=%u\n", base + 1);
+	otx2_nix_dbg("tcpv6 lso fmt=%u\n", rsp->lso_format_idx);
 
 	/*
 	 * IPv4/UDP/TUN HDR/IPv4/TCP LSO
@@ -1720,9 +1711,8 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	if (rc)
 		return rc;
 
-	if (rsp->lso_format_idx != base + 2)
-		return -EFAULT;
-	otx2_nix_dbg("udp tun v4v4 fmt=%u\n", base + 2);
+	dev->lso_udp_tun_idx[NIX_LSO_TUN_V4V4] = rsp->lso_format_idx;
+	otx2_nix_dbg("udp tun v4v4 fmt=%u\n", rsp->lso_format_idx);
 
 	/*
 	 * IPv4/UDP/TUN HDR/IPv6/TCP LSO
@@ -1733,9 +1723,8 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	if (rc)
 		return rc;
 
-	if (rsp->lso_format_idx != base + 3)
-		return -EFAULT;
-	otx2_nix_dbg("udp tun v4v6 fmt=%u\n", base + 3);
+	dev->lso_udp_tun_idx[NIX_LSO_TUN_V4V6] = rsp->lso_format_idx;
+	otx2_nix_dbg("udp tun v4v6 fmt=%u\n", rsp->lso_format_idx);
 
 	/*
 	 * IPv6/UDP/TUN HDR/IPv4/TCP LSO
@@ -1746,9 +1735,8 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	if (rc)
 		return rc;
 
-	if (rsp->lso_format_idx != base + 4)
-		return -EFAULT;
-	otx2_nix_dbg("udp tun v6v4 fmt=%u\n", base + 4);
+	dev->lso_udp_tun_idx[NIX_LSO_TUN_V6V4] = rsp->lso_format_idx;
+	otx2_nix_dbg("udp tun v6v4 fmt=%u\n", rsp->lso_format_idx);
 
 	/*
 	 * IPv6/UDP/TUN HDR/IPv6/TCP LSO
@@ -1758,9 +1746,9 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	rc = otx2_mbox_process_msg(mbox, (void *)&rsp);
 	if (rc)
 		return rc;
-	if (rsp->lso_format_idx != base + 5)
-		return -EFAULT;
-	otx2_nix_dbg("udp tun v6v6 fmt=%u\n", base + 5);
+
+	dev->lso_udp_tun_idx[NIX_LSO_TUN_V6V6] = rsp->lso_format_idx;
+	otx2_nix_dbg("udp tun v6v6 fmt=%u\n", rsp->lso_format_idx);
 
 	/*
 	 * IPv4/TUN HDR/IPv4/TCP LSO
@@ -1771,9 +1759,8 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	if (rc)
 		return rc;
 
-	if (rsp->lso_format_idx != base + 6)
-		return -EFAULT;
-	otx2_nix_dbg("tun v4v4 fmt=%u\n", base + 6);
+	dev->lso_tun_idx[NIX_LSO_TUN_V4V4] = rsp->lso_format_idx;
+	otx2_nix_dbg("tun v4v4 fmt=%u\n", rsp->lso_format_idx);
 
 	/*
 	 * IPv4/TUN HDR/IPv6/TCP LSO
@@ -1784,9 +1771,8 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	if (rc)
 		return rc;
 
-	if (rsp->lso_format_idx != base + 7)
-		return -EFAULT;
-	otx2_nix_dbg("tun v4v6 fmt=%u\n", base + 7);
+	dev->lso_tun_idx[NIX_LSO_TUN_V4V6] = rsp->lso_format_idx;
+	otx2_nix_dbg("tun v4v6 fmt=%u\n", rsp->lso_format_idx);
 
 	/*
 	 * IPv6/TUN HDR/IPv4/TCP LSO
@@ -1797,9 +1783,8 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	if (rc)
 		return rc;
 
-	if (rsp->lso_format_idx != base + 8)
-		return -EFAULT;
-	otx2_nix_dbg("tun v6v4 fmt=%u\n", base + 8);
+	dev->lso_tun_idx[NIX_LSO_TUN_V6V4] = rsp->lso_format_idx;
+	otx2_nix_dbg("tun v6v4 fmt=%u\n", rsp->lso_format_idx);
 
 	/*
 	 * IPv6/TUN HDR/IPv6/TCP LSO
@@ -1809,9 +1794,26 @@ nix_setup_lso_formats(struct otx2_eth_dev *dev)
 	rc = otx2_mbox_process_msg(mbox, (void *)&rsp);
 	if (rc)
 		return rc;
-	if (rsp->lso_format_idx != base + 9)
-		return -EFAULT;
-	otx2_nix_dbg("tun v6v6 fmt=%u\n", base + 9);
+
+	dev->lso_tun_idx[NIX_LSO_TUN_V6V6] = rsp->lso_format_idx;
+	otx2_nix_dbg("tun v6v6 fmt=%u\n", rsp->lso_format_idx);
+
+	/* Save all tun formats into u64 for fast path.
+	 * Lower 32bit has non-udp tunnel formats.
+	 * Upper 32bit has udp tunnel formats.
+	 */
+	fmt = dev->lso_tun_idx;
+	dev->lso_tun_fmt = ((uint64_t)fmt[NIX_LSO_TUN_V4V4] |
+			    (uint64_t)fmt[NIX_LSO_TUN_V4V6] << 8 |
+			    (uint64_t)fmt[NIX_LSO_TUN_V6V4] << 16 |
+			    (uint64_t)fmt[NIX_LSO_TUN_V6V6] << 24);
+
+	fmt = dev->lso_udp_tun_idx;
+	dev->lso_tun_fmt |= ((uint64_t)fmt[NIX_LSO_TUN_V4V4] << 32 |
+			     (uint64_t)fmt[NIX_LSO_TUN_V4V6] << 40 |
+			     (uint64_t)fmt[NIX_LSO_TUN_V6V4] << 48 |
+			     (uint64_t)fmt[NIX_LSO_TUN_V6V6] << 56);
+
 	return 0;
 }
 
@@ -1846,21 +1848,21 @@ otx2_nix_configure(struct rte_eth_dev *eth_dev)
 		goto fail_configure;
 	}
 
-	if (rxmode->mq_mode != ETH_MQ_RX_NONE &&
-	    rxmode->mq_mode != ETH_MQ_RX_RSS) {
+	if (rxmode->mq_mode != RTE_ETH_MQ_RX_NONE &&
+	    rxmode->mq_mode != RTE_ETH_MQ_RX_RSS) {
 		otx2_err("Unsupported mq rx mode %d", rxmode->mq_mode);
 		goto fail_configure;
 	}
 
-	if (txmode->mq_mode != ETH_MQ_TX_NONE) {
+	if (txmode->mq_mode != RTE_ETH_MQ_TX_NONE) {
 		otx2_err("Unsupported mq tx mode %d", txmode->mq_mode);
 		goto fail_configure;
 	}
 
 	if (otx2_dev_is_Ax(dev) &&
-	    (txmode->offloads & DEV_TX_OFFLOAD_SCTP_CKSUM) &&
-	    ((txmode->offloads & DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM) ||
-	    (txmode->offloads & DEV_TX_OFFLOAD_OUTER_UDP_CKSUM))) {
+	    (txmode->offloads & RTE_ETH_TX_OFFLOAD_SCTP_CKSUM) &&
+	    ((txmode->offloads & RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM) ||
+	    (txmode->offloads & RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM))) {
 		otx2_err("Outer IP and SCTP checksum unsupported");
 		goto fail_configure;
 	}
@@ -2160,6 +2162,7 @@ otx2_nix_dev_stop(struct rte_eth_dev *eth_dev)
 	struct otx2_eth_dev *dev = otx2_eth_pmd_priv(eth_dev);
 	struct rte_mbuf *rx_pkts[32];
 	struct otx2_eth_rxq *rxq;
+	struct rte_eth_link link;
 	int count, i, j, rc;
 
 	nix_lf_switch_header_type_enable(dev, false);
@@ -2184,6 +2187,10 @@ otx2_nix_dev_stop(struct rte_eth_dev *eth_dev)
 	/* Stop tx queues  */
 	for (i = 0; i < eth_dev->data->nb_tx_queues; i++)
 		otx2_nix_tx_queue_stop(eth_dev, i);
+
+	/* Bring down link status internally */
+	memset(&link, 0, sizeof(link));
+	rte_eth_linkstatus_set(eth_dev, &link);
 
 	return 0;
 }
@@ -2228,7 +2235,7 @@ otx2_nix_dev_start(struct rte_eth_dev *eth_dev)
 	 * enabled in PF owning this VF
 	 */
 	memset(&dev->tstamp, 0, sizeof(struct otx2_timesync_info));
-	if ((dev->rx_offloads & DEV_RX_OFFLOAD_TIMESTAMP) ||
+	if ((dev->rx_offloads & RTE_ETH_RX_OFFLOAD_TIMESTAMP) ||
 	    otx2_ethdev_is_ptp_en(dev))
 		otx2_nix_timesync_enable(eth_dev);
 	else
@@ -2433,7 +2440,6 @@ otx2_eth_dev_init(struct rte_eth_dev *eth_dev)
 	int rc, max_entries;
 
 	eth_dev->dev_ops = &otx2_eth_dev_ops;
-	eth_dev->rx_descriptor_done = otx2_nix_rx_descriptor_done;
 	eth_dev->rx_queue_count = otx2_nix_rx_queue_count;
 	eth_dev->rx_descriptor_status = otx2_nix_rx_descriptor_status;
 	eth_dev->tx_descriptor_status = otx2_nix_tx_descriptor_status;
@@ -2557,8 +2563,8 @@ otx2_eth_dev_init(struct rte_eth_dev *eth_dev)
 	rc = otx2_eth_sec_ctx_create(eth_dev);
 	if (rc)
 		goto free_mac_addrs;
-	dev->tx_offload_capa |= DEV_TX_OFFLOAD_SECURITY;
-	dev->rx_offload_capa |= DEV_RX_OFFLOAD_SECURITY;
+	dev->tx_offload_capa |= RTE_ETH_TX_OFFLOAD_SECURITY;
+	dev->rx_offload_capa |= RTE_ETH_RX_OFFLOAD_SECURITY;
 
 	/* Initialize rte-flow */
 	rc = otx2_flow_init(dev);
@@ -2625,18 +2631,19 @@ otx2_eth_dev_uninit(struct rte_eth_dev *eth_dev, bool mbox_close)
 
 	nix_cgx_stop_link_event(dev);
 
+	/* Unregister the dev ops, this is required to stop VFs from
+	 * receiving link status updates on exit path.
+	 */
+	dev->ops = NULL;
+
 	/* Free up SQs */
-	for (i = 0; i < eth_dev->data->nb_tx_queues; i++) {
-		otx2_nix_tx_queue_release(eth_dev->data->tx_queues[i]);
-		eth_dev->data->tx_queues[i] = NULL;
-	}
+	for (i = 0; i < eth_dev->data->nb_tx_queues; i++)
+		otx2_nix_tx_queue_release(eth_dev, i);
 	eth_dev->data->nb_tx_queues = 0;
 
 	/* Free up RQ's and CQ's */
-	for (i = 0; i < eth_dev->data->nb_rx_queues; i++) {
-		otx2_nix_rx_queue_release(eth_dev->data->rx_queues[i]);
-		eth_dev->data->rx_queues[i] = NULL;
-	}
+	for (i = 0; i < eth_dev->data->nb_rx_queues; i++)
+		otx2_nix_rx_queue_release(eth_dev, i);
 	eth_dev->data->nb_rx_queues = 0;
 
 	/* Free tm resources */

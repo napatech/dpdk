@@ -10,7 +10,6 @@
 #include <unistd.h>
 #include <stdarg.h>
 #include <inttypes.h>
-#include <netinet/in.h>
 #include <rte_string_fns.h>
 #include <rte_byteorder.h>
 #include <rte_common.h>
@@ -46,6 +45,7 @@
 #include "ixgbe_rxtx.h"
 #include "base/ixgbe_type.h"
 #include "base/ixgbe_phy.h"
+#include "base/ixgbe_osdep.h"
 #include "ixgbe_regs.h"
 
 /*
@@ -173,8 +173,8 @@ static int ixgbevf_dev_xstats_get_names(struct rte_eth_dev *dev,
 	struct rte_eth_xstat_name *xstats_names, unsigned limit);
 static int ixgbe_dev_xstats_get_names_by_id(
 	struct rte_eth_dev *dev,
-	struct rte_eth_xstat_name *xstats_names,
 	const uint64_t *ids,
+	struct rte_eth_xstat_name *xstats_names,
 	unsigned int limit);
 static int ixgbe_dev_queue_stats_mapping_set(struct rte_eth_dev *eth_dev,
 					     uint16_t queue_id,
@@ -281,11 +281,6 @@ static int ixgbevf_dev_allmulticast_disable(struct rte_eth_dev *dev);
 static int ixgbe_uc_hash_table_set(struct rte_eth_dev *dev, struct
 		rte_ether_addr * mac_addr, uint8_t on);
 static int ixgbe_uc_all_hash_table_set(struct rte_eth_dev *dev, uint8_t on);
-static int ixgbe_mirror_rule_set(struct rte_eth_dev *dev,
-		struct rte_eth_mirror_conf *mirror_conf,
-		uint8_t rule_id, uint8_t on);
-static int ixgbe_mirror_rule_reset(struct rte_eth_dev *dev,
-		uint8_t	rule_id);
 static int ixgbe_dev_rx_queue_intr_enable(struct rte_eth_dev *dev,
 					  uint16_t queue_id);
 static int ixgbe_dev_rx_queue_intr_disable(struct rte_eth_dev *dev,
@@ -529,8 +524,6 @@ static const struct eth_dev_ops ixgbe_eth_dev_ops = {
 	.mac_addr_set         = ixgbe_set_default_mac_addr,
 	.uc_hash_table_set    = ixgbe_uc_hash_table_set,
 	.uc_all_hash_table_set  = ixgbe_uc_all_hash_table_set,
-	.mirror_rule_set      = ixgbe_mirror_rule_set,
-	.mirror_rule_reset    = ixgbe_mirror_rule_reset,
 	.set_queue_rate_limit = ixgbe_set_queue_rate_limit,
 	.reta_update          = ixgbe_dev_rss_reta_update,
 	.reta_query           = ixgbe_dev_rss_reta_query,
@@ -1034,7 +1027,7 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 {
 	struct ixgbe_adapter *ad = eth_dev->data->dev_private;
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
 	struct ixgbe_vfta *shadow_vfta =
@@ -1057,7 +1050,6 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 
 	eth_dev->dev_ops = &ixgbe_eth_dev_ops;
 	eth_dev->rx_queue_count       = ixgbe_dev_rx_queue_count;
-	eth_dev->rx_descriptor_done   = ixgbe_dev_rx_descriptor_done;
 	eth_dev->rx_descriptor_status = ixgbe_dev_rx_descriptor_status;
 	eth_dev->tx_descriptor_status = ixgbe_dev_tx_descriptor_status;
 	eth_dev->rx_pkt_burst = &ixgbe_recv_pkts;
@@ -1218,6 +1210,8 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 		PMD_INIT_LOG(ERR,
 			     "Failed to allocate %d bytes needed to store MAC addresses",
 			     RTE_ETHER_ADDR_LEN * IXGBE_VMDQ_NUM_UC_MAC);
+		rte_free(eth_dev->data->mac_addrs);
+		eth_dev->data->mac_addrs = NULL;
 		return -ENOMEM;
 	}
 
@@ -1393,6 +1387,7 @@ static int ixgbe_fdir_filter_init(struct rte_eth_dev *eth_dev)
 	if (!fdir_info->hash_map) {
 		PMD_INIT_LOG(ERR,
 			     "Failed to allocate memory for fdir hash map!");
+		rte_hash_free(fdir_info->hash_handle);
 		return -ENOMEM;
 	}
 	fdir_info->mask_added = FALSE;
@@ -1429,6 +1424,7 @@ static int ixgbe_l2_tn_filter_init(struct rte_eth_dev *eth_dev)
 	if (!l2_tn_info->hash_map) {
 		PMD_INIT_LOG(ERR,
 			"Failed to allocate memory for L2 TN hash map!");
+		rte_hash_free(l2_tn_info->hash_handle);
 		return -ENOMEM;
 	}
 	l2_tn_info->e_tag_en = FALSE;
@@ -1529,7 +1525,7 @@ eth_ixgbevf_dev_init(struct rte_eth_dev *eth_dev)
 	uint32_t tc, tcs;
 	struct ixgbe_adapter *ad = eth_dev->data->dev_private;
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
 	struct ixgbe_vfta *shadow_vfta =
@@ -1542,7 +1538,6 @@ eth_ixgbevf_dev_init(struct rte_eth_dev *eth_dev)
 	PMD_INIT_FUNC_TRACE();
 
 	eth_dev->dev_ops = &ixgbevf_eth_dev_ops;
-	eth_dev->rx_descriptor_done   = ixgbe_dev_rx_descriptor_done;
 	eth_dev->rx_descriptor_status = ixgbe_dev_rx_descriptor_status;
 	eth_dev->tx_descriptor_status = ixgbe_dev_tx_descriptor_status;
 	eth_dev->rx_pkt_burst = &ixgbe_recv_pkts;
@@ -1650,13 +1645,8 @@ eth_ixgbevf_dev_init(struct rte_eth_dev *eth_dev)
 		}
 		PMD_INIT_LOG(INFO, "\tVF MAC address not assigned by Host PF");
 		PMD_INIT_LOG(INFO, "\tAssign randomly generated MAC address "
-			     "%02x:%02x:%02x:%02x:%02x:%02x",
-			     perm_addr->addr_bytes[0],
-			     perm_addr->addr_bytes[1],
-			     perm_addr->addr_bytes[2],
-			     perm_addr->addr_bytes[3],
-			     perm_addr->addr_bytes[4],
-			     perm_addr->addr_bytes[5]);
+			     RTE_ETHER_ADDR_PRT_FMT,
+				 RTE_ETHER_ADDR_BYTES(perm_addr));
 	}
 
 	/* Copy the permanent MAC address */
@@ -1670,6 +1660,8 @@ eth_ixgbevf_dev_init(struct rte_eth_dev *eth_dev)
 
 	default:
 		PMD_INIT_LOG(ERR, "VF Initialization Failure: %d", diag);
+		rte_free(eth_dev->data->mac_addrs);
+		eth_dev->data->mac_addrs = NULL;
 		return -EIO;
 	}
 
@@ -1865,7 +1857,7 @@ ixgbe_vlan_tpid_set(struct rte_eth_dev *dev,
 	qinq &= IXGBE_DMATXCTL_GDV;
 
 	switch (vlan_type) {
-	case ETH_VLAN_TYPE_INNER:
+	case RTE_ETH_VLAN_TYPE_INNER:
 		if (qinq) {
 			reg = IXGBE_READ_REG(hw, IXGBE_VLNCTRL);
 			reg = (reg & (~IXGBE_VLNCTRL_VET)) | (uint32_t)tpid;
@@ -1880,7 +1872,7 @@ ixgbe_vlan_tpid_set(struct rte_eth_dev *dev,
 				    " by single VLAN");
 		}
 		break;
-	case ETH_VLAN_TYPE_OUTER:
+	case RTE_ETH_VLAN_TYPE_OUTER:
 		if (qinq) {
 			/* Only the high 16-bits is valid */
 			IXGBE_WRITE_REG(hw, IXGBE_EXVET, (uint32_t)tpid <<
@@ -1966,11 +1958,11 @@ ixgbe_vlan_hw_strip_bitmap_set(struct rte_eth_dev *dev, uint16_t queue, bool on)
 	rxq = dev->data->rx_queues[queue];
 
 	if (on) {
-		rxq->vlan_flags = PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED;
-		rxq->offloads |= DEV_RX_OFFLOAD_VLAN_STRIP;
+		rxq->vlan_flags = RTE_MBUF_F_RX_VLAN | RTE_MBUF_F_RX_VLAN_STRIPPED;
+		rxq->offloads |= RTE_ETH_RX_OFFLOAD_VLAN_STRIP;
 	} else {
-		rxq->vlan_flags = PKT_RX_VLAN;
-		rxq->offloads &= ~DEV_RX_OFFLOAD_VLAN_STRIP;
+		rxq->vlan_flags = RTE_MBUF_F_RX_VLAN;
+		rxq->offloads &= ~RTE_ETH_RX_OFFLOAD_VLAN_STRIP;
 	}
 }
 
@@ -2091,7 +2083,7 @@ ixgbe_vlan_hw_strip_config(struct rte_eth_dev *dev)
 	PMD_INIT_FUNC_TRACE();
 
 	if (hw->mac.type == ixgbe_mac_82598EB) {
-		if (rxmode->offloads & DEV_RX_OFFLOAD_VLAN_STRIP) {
+		if (rxmode->offloads & RTE_ETH_RX_OFFLOAD_VLAN_STRIP) {
 			ctrl = IXGBE_READ_REG(hw, IXGBE_VLNCTRL);
 			ctrl |= IXGBE_VLNCTRL_VME;
 			IXGBE_WRITE_REG(hw, IXGBE_VLNCTRL, ctrl);
@@ -2108,7 +2100,7 @@ ixgbe_vlan_hw_strip_config(struct rte_eth_dev *dev)
 		for (i = 0; i < dev->data->nb_rx_queues; i++) {
 			rxq = dev->data->rx_queues[i];
 			ctrl = IXGBE_READ_REG(hw, IXGBE_RXDCTL(rxq->reg_idx));
-			if (rxq->offloads & DEV_RX_OFFLOAD_VLAN_STRIP) {
+			if (rxq->offloads & RTE_ETH_RX_OFFLOAD_VLAN_STRIP) {
 				ctrl |= IXGBE_RXDCTL_VME;
 				on = TRUE;
 			} else {
@@ -2130,17 +2122,17 @@ ixgbe_config_vlan_strip_on_all_queues(struct rte_eth_dev *dev, int mask)
 	struct rte_eth_rxmode *rxmode;
 	struct ixgbe_rx_queue *rxq;
 
-	if (mask & ETH_VLAN_STRIP_MASK) {
+	if (mask & RTE_ETH_VLAN_STRIP_MASK) {
 		rxmode = &dev->data->dev_conf.rxmode;
-		if (rxmode->offloads & DEV_RX_OFFLOAD_VLAN_STRIP)
+		if (rxmode->offloads & RTE_ETH_RX_OFFLOAD_VLAN_STRIP)
 			for (i = 0; i < dev->data->nb_rx_queues; i++) {
 				rxq = dev->data->rx_queues[i];
-				rxq->offloads |= DEV_RX_OFFLOAD_VLAN_STRIP;
+				rxq->offloads |= RTE_ETH_RX_OFFLOAD_VLAN_STRIP;
 			}
 		else
 			for (i = 0; i < dev->data->nb_rx_queues; i++) {
 				rxq = dev->data->rx_queues[i];
-				rxq->offloads &= ~DEV_RX_OFFLOAD_VLAN_STRIP;
+				rxq->offloads &= ~RTE_ETH_RX_OFFLOAD_VLAN_STRIP;
 			}
 	}
 }
@@ -2151,19 +2143,18 @@ ixgbe_vlan_offload_config(struct rte_eth_dev *dev, int mask)
 	struct rte_eth_rxmode *rxmode;
 	rxmode = &dev->data->dev_conf.rxmode;
 
-	if (mask & ETH_VLAN_STRIP_MASK) {
+	if (mask & RTE_ETH_VLAN_STRIP_MASK)
 		ixgbe_vlan_hw_strip_config(dev);
-	}
 
-	if (mask & ETH_VLAN_FILTER_MASK) {
-		if (rxmode->offloads & DEV_RX_OFFLOAD_VLAN_FILTER)
+	if (mask & RTE_ETH_VLAN_FILTER_MASK) {
+		if (rxmode->offloads & RTE_ETH_RX_OFFLOAD_VLAN_FILTER)
 			ixgbe_vlan_hw_filter_enable(dev);
 		else
 			ixgbe_vlan_hw_filter_disable(dev);
 	}
 
-	if (mask & ETH_VLAN_EXTEND_MASK) {
-		if (rxmode->offloads & DEV_RX_OFFLOAD_VLAN_EXTEND)
+	if (mask & RTE_ETH_VLAN_EXTEND_MASK) {
+		if (rxmode->offloads & RTE_ETH_RX_OFFLOAD_VLAN_EXTEND)
 			ixgbe_vlan_hw_extend_enable(dev);
 		else
 			ixgbe_vlan_hw_extend_disable(dev);
@@ -2202,10 +2193,10 @@ ixgbe_check_vf_rss_rxq_num(struct rte_eth_dev *dev, uint16_t nb_rx_q)
 	switch (nb_rx_q) {
 	case 1:
 	case 2:
-		RTE_ETH_DEV_SRIOV(dev).active = ETH_64_POOLS;
+		RTE_ETH_DEV_SRIOV(dev).active = RTE_ETH_64_POOLS;
 		break;
 	case 4:
-		RTE_ETH_DEV_SRIOV(dev).active = ETH_32_POOLS;
+		RTE_ETH_DEV_SRIOV(dev).active = RTE_ETH_32_POOLS;
 		break;
 	default:
 		return -EINVAL;
@@ -2229,18 +2220,18 @@ ixgbe_check_mq_mode(struct rte_eth_dev *dev)
 	if (RTE_ETH_DEV_SRIOV(dev).active != 0) {
 		/* check multi-queue mode */
 		switch (dev_conf->rxmode.mq_mode) {
-		case ETH_MQ_RX_VMDQ_DCB:
-			PMD_INIT_LOG(INFO, "ETH_MQ_RX_VMDQ_DCB mode supported in SRIOV");
+		case RTE_ETH_MQ_RX_VMDQ_DCB:
+			PMD_INIT_LOG(INFO, "RTE_ETH_MQ_RX_VMDQ_DCB mode supported in SRIOV");
 			break;
-		case ETH_MQ_RX_VMDQ_DCB_RSS:
+		case RTE_ETH_MQ_RX_VMDQ_DCB_RSS:
 			/* DCB/RSS VMDQ in SRIOV mode, not implement yet */
 			PMD_INIT_LOG(ERR, "SRIOV active,"
 					" unsupported mq_mode rx %d.",
 					dev_conf->rxmode.mq_mode);
 			return -EINVAL;
-		case ETH_MQ_RX_RSS:
-		case ETH_MQ_RX_VMDQ_RSS:
-			dev->data->dev_conf.rxmode.mq_mode = ETH_MQ_RX_VMDQ_RSS;
+		case RTE_ETH_MQ_RX_RSS:
+		case RTE_ETH_MQ_RX_VMDQ_RSS:
+			dev->data->dev_conf.rxmode.mq_mode = RTE_ETH_MQ_RX_VMDQ_RSS;
 			if (nb_rx_q <= RTE_ETH_DEV_SRIOV(dev).nb_q_per_pool)
 				if (ixgbe_check_vf_rss_rxq_num(dev, nb_rx_q)) {
 					PMD_INIT_LOG(ERR, "SRIOV is active,"
@@ -2250,12 +2241,12 @@ ixgbe_check_mq_mode(struct rte_eth_dev *dev)
 					return -EINVAL;
 				}
 			break;
-		case ETH_MQ_RX_VMDQ_ONLY:
-		case ETH_MQ_RX_NONE:
+		case RTE_ETH_MQ_RX_VMDQ_ONLY:
+		case RTE_ETH_MQ_RX_NONE:
 			/* if nothing mq mode configure, use default scheme */
-			dev->data->dev_conf.rxmode.mq_mode = ETH_MQ_RX_VMDQ_ONLY;
+			dev->data->dev_conf.rxmode.mq_mode = RTE_ETH_MQ_RX_VMDQ_ONLY;
 			break;
-		default: /* ETH_MQ_RX_DCB, ETH_MQ_RX_DCB_RSS or ETH_MQ_TX_DCB*/
+		default: /* RTE_ETH_MQ_RX_DCB, RTE_ETH_MQ_RX_DCB_RSS or RTE_ETH_MQ_TX_DCB*/
 			/* SRIOV only works in VMDq enable mode */
 			PMD_INIT_LOG(ERR, "SRIOV is active,"
 					" wrong mq_mode rx %d.",
@@ -2264,12 +2255,12 @@ ixgbe_check_mq_mode(struct rte_eth_dev *dev)
 		}
 
 		switch (dev_conf->txmode.mq_mode) {
-		case ETH_MQ_TX_VMDQ_DCB:
-			PMD_INIT_LOG(INFO, "ETH_MQ_TX_VMDQ_DCB mode supported in SRIOV");
-			dev->data->dev_conf.txmode.mq_mode = ETH_MQ_TX_VMDQ_DCB;
+		case RTE_ETH_MQ_TX_VMDQ_DCB:
+			PMD_INIT_LOG(INFO, "RTE_ETH_MQ_TX_VMDQ_DCB mode supported in SRIOV");
+			dev->data->dev_conf.txmode.mq_mode = RTE_ETH_MQ_TX_VMDQ_DCB;
 			break;
-		default: /* ETH_MQ_TX_VMDQ_ONLY or ETH_MQ_TX_NONE */
-			dev->data->dev_conf.txmode.mq_mode = ETH_MQ_TX_VMDQ_ONLY;
+		default: /* RTE_ETH_MQ_TX_VMDQ_ONLY or RTE_ETH_MQ_TX_NONE */
+			dev->data->dev_conf.txmode.mq_mode = RTE_ETH_MQ_TX_VMDQ_ONLY;
 			break;
 		}
 
@@ -2284,13 +2275,13 @@ ixgbe_check_mq_mode(struct rte_eth_dev *dev)
 			return -EINVAL;
 		}
 	} else {
-		if (dev_conf->rxmode.mq_mode == ETH_MQ_RX_VMDQ_DCB_RSS) {
+		if (dev_conf->rxmode.mq_mode == RTE_ETH_MQ_RX_VMDQ_DCB_RSS) {
 			PMD_INIT_LOG(ERR, "VMDQ+DCB+RSS mq_mode is"
 					  " not supported.");
 			return -EINVAL;
 		}
 		/* check configuration for vmdb+dcb mode */
-		if (dev_conf->rxmode.mq_mode == ETH_MQ_RX_VMDQ_DCB) {
+		if (dev_conf->rxmode.mq_mode == RTE_ETH_MQ_RX_VMDQ_DCB) {
 			const struct rte_eth_vmdq_dcb_conf *conf;
 
 			if (nb_rx_q != IXGBE_VMDQ_DCB_NB_QUEUES) {
@@ -2299,15 +2290,15 @@ ixgbe_check_mq_mode(struct rte_eth_dev *dev)
 				return -EINVAL;
 			}
 			conf = &dev_conf->rx_adv_conf.vmdq_dcb_conf;
-			if (!(conf->nb_queue_pools == ETH_16_POOLS ||
-			       conf->nb_queue_pools == ETH_32_POOLS)) {
+			if (!(conf->nb_queue_pools == RTE_ETH_16_POOLS ||
+			       conf->nb_queue_pools == RTE_ETH_32_POOLS)) {
 				PMD_INIT_LOG(ERR, "VMDQ+DCB selected,"
 						" nb_queue_pools must be %d or %d.",
-						ETH_16_POOLS, ETH_32_POOLS);
+						RTE_ETH_16_POOLS, RTE_ETH_32_POOLS);
 				return -EINVAL;
 			}
 		}
-		if (dev_conf->txmode.mq_mode == ETH_MQ_TX_VMDQ_DCB) {
+		if (dev_conf->txmode.mq_mode == RTE_ETH_MQ_TX_VMDQ_DCB) {
 			const struct rte_eth_vmdq_dcb_tx_conf *conf;
 
 			if (nb_tx_q != IXGBE_VMDQ_DCB_NB_QUEUES) {
@@ -2316,39 +2307,39 @@ ixgbe_check_mq_mode(struct rte_eth_dev *dev)
 				return -EINVAL;
 			}
 			conf = &dev_conf->tx_adv_conf.vmdq_dcb_tx_conf;
-			if (!(conf->nb_queue_pools == ETH_16_POOLS ||
-			       conf->nb_queue_pools == ETH_32_POOLS)) {
+			if (!(conf->nb_queue_pools == RTE_ETH_16_POOLS ||
+			       conf->nb_queue_pools == RTE_ETH_32_POOLS)) {
 				PMD_INIT_LOG(ERR, "VMDQ+DCB selected,"
 						" nb_queue_pools != %d and"
 						" nb_queue_pools != %d.",
-						ETH_16_POOLS, ETH_32_POOLS);
+						RTE_ETH_16_POOLS, RTE_ETH_32_POOLS);
 				return -EINVAL;
 			}
 		}
 
 		/* For DCB mode check our configuration before we go further */
-		if (dev_conf->rxmode.mq_mode == ETH_MQ_RX_DCB) {
+		if (dev_conf->rxmode.mq_mode == RTE_ETH_MQ_RX_DCB) {
 			const struct rte_eth_dcb_rx_conf *conf;
 
 			conf = &dev_conf->rx_adv_conf.dcb_rx_conf;
-			if (!(conf->nb_tcs == ETH_4_TCS ||
-			       conf->nb_tcs == ETH_8_TCS)) {
+			if (!(conf->nb_tcs == RTE_ETH_4_TCS ||
+			       conf->nb_tcs == RTE_ETH_8_TCS)) {
 				PMD_INIT_LOG(ERR, "DCB selected, nb_tcs != %d"
 						" and nb_tcs != %d.",
-						ETH_4_TCS, ETH_8_TCS);
+						RTE_ETH_4_TCS, RTE_ETH_8_TCS);
 				return -EINVAL;
 			}
 		}
 
-		if (dev_conf->txmode.mq_mode == ETH_MQ_TX_DCB) {
+		if (dev_conf->txmode.mq_mode == RTE_ETH_MQ_TX_DCB) {
 			const struct rte_eth_dcb_tx_conf *conf;
 
 			conf = &dev_conf->tx_adv_conf.dcb_tx_conf;
-			if (!(conf->nb_tcs == ETH_4_TCS ||
-			       conf->nb_tcs == ETH_8_TCS)) {
+			if (!(conf->nb_tcs == RTE_ETH_4_TCS ||
+			       conf->nb_tcs == RTE_ETH_8_TCS)) {
 				PMD_INIT_LOG(ERR, "DCB selected, nb_tcs != %d"
 						" and nb_tcs != %d.",
-						ETH_4_TCS, ETH_8_TCS);
+						RTE_ETH_4_TCS, RTE_ETH_8_TCS);
 				return -EINVAL;
 			}
 		}
@@ -2357,7 +2348,7 @@ ixgbe_check_mq_mode(struct rte_eth_dev *dev)
 		 * When DCB/VT is off, maximum number of queues changes,
 		 * except for 82598EB, which remains constant.
 		 */
-		if (dev_conf->txmode.mq_mode == ETH_MQ_TX_NONE &&
+		if (dev_conf->txmode.mq_mode == RTE_ETH_MQ_TX_NONE &&
 				hw->mac.type != ixgbe_mac_82598EB) {
 			if (nb_tx_q > IXGBE_NONE_MODE_TX_NB_QUEUES) {
 				PMD_INIT_LOG(ERR,
@@ -2381,8 +2372,8 @@ ixgbe_dev_configure(struct rte_eth_dev *dev)
 
 	PMD_INIT_FUNC_TRACE();
 
-	if (dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG)
-		dev->data->dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_RSS_HASH;
+	if (dev->data->dev_conf.rxmode.mq_mode & RTE_ETH_MQ_RX_RSS_FLAG)
+		dev->data->dev_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_RSS_HASH;
 
 	/* multipe queue mode checking */
 	ret  = ixgbe_check_mq_mode(dev);
@@ -2548,7 +2539,7 @@ ixgbe_dev_start(struct rte_eth_dev *dev)
 	struct ixgbe_vf_info *vfinfo =
 		*IXGBE_DEV_PRIVATE_TO_P_VFDATA(dev->data->dev_private);
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	uint32_t intr_vector = 0;
 	int err;
 	bool link_up = false, negotiate = 0;
@@ -2603,11 +2594,9 @@ ixgbe_dev_start(struct rte_eth_dev *dev)
 			return -1;
 	}
 
-	if (rte_intr_dp_is_en(intr_handle) && !intr_handle->intr_vec) {
-		intr_handle->intr_vec =
-			rte_zmalloc("intr_vec",
-				    dev->data->nb_rx_queues * sizeof(int), 0);
-		if (intr_handle->intr_vec == NULL) {
+	if (rte_intr_dp_is_en(intr_handle)) {
+		if (rte_intr_vec_list_alloc(intr_handle, "intr_vec",
+						   dev->data->nb_rx_queues)) {
 			PMD_INIT_LOG(ERR, "Failed to allocate %d rx_queues"
 				     " intr_vec", dev->data->nb_rx_queues);
 			return -ENOMEM;
@@ -2627,15 +2616,15 @@ ixgbe_dev_start(struct rte_eth_dev *dev)
 		goto error;
 	}
 
-	mask = ETH_VLAN_STRIP_MASK | ETH_VLAN_FILTER_MASK |
-		ETH_VLAN_EXTEND_MASK;
+	mask = RTE_ETH_VLAN_STRIP_MASK | RTE_ETH_VLAN_FILTER_MASK |
+		RTE_ETH_VLAN_EXTEND_MASK;
 	err = ixgbe_vlan_offload_config(dev, mask);
 	if (err) {
 		PMD_INIT_LOG(ERR, "Unable to set VLAN offload");
 		goto error;
 	}
 
-	if (dev->data->dev_conf.rxmode.mq_mode == ETH_MQ_RX_VMDQ_ONLY) {
+	if (dev->data->dev_conf.rxmode.mq_mode == RTE_ETH_MQ_RX_VMDQ_ONLY) {
 		/* Enable vlan filtering for VMDq */
 		ixgbe_vmdq_vlan_hw_filter_enable(dev);
 	}
@@ -2712,17 +2701,17 @@ ixgbe_dev_start(struct rte_eth_dev *dev)
 	case ixgbe_mac_X550:
 	case ixgbe_mac_X550EM_x:
 	case ixgbe_mac_X550EM_a:
-		allowed_speeds = ETH_LINK_SPEED_100M | ETH_LINK_SPEED_1G |
-			ETH_LINK_SPEED_2_5G |  ETH_LINK_SPEED_5G |
-			ETH_LINK_SPEED_10G;
+		allowed_speeds = RTE_ETH_LINK_SPEED_100M | RTE_ETH_LINK_SPEED_1G |
+			RTE_ETH_LINK_SPEED_2_5G |  RTE_ETH_LINK_SPEED_5G |
+			RTE_ETH_LINK_SPEED_10G;
 		if (hw->device_id == IXGBE_DEV_ID_X550EM_A_1G_T ||
 				hw->device_id == IXGBE_DEV_ID_X550EM_A_1G_T_L)
-			allowed_speeds = ETH_LINK_SPEED_10M |
-				ETH_LINK_SPEED_100M | ETH_LINK_SPEED_1G;
+			allowed_speeds = RTE_ETH_LINK_SPEED_10M |
+				RTE_ETH_LINK_SPEED_100M | RTE_ETH_LINK_SPEED_1G;
 		break;
 	default:
-		allowed_speeds = ETH_LINK_SPEED_100M | ETH_LINK_SPEED_1G |
-			ETH_LINK_SPEED_10G;
+		allowed_speeds = RTE_ETH_LINK_SPEED_100M | RTE_ETH_LINK_SPEED_1G |
+			RTE_ETH_LINK_SPEED_10G;
 	}
 
 	link_speeds = &dev->data->dev_conf.link_speeds;
@@ -2736,7 +2725,7 @@ ixgbe_dev_start(struct rte_eth_dev *dev)
 	}
 
 	speed = 0x0;
-	if (*link_speeds == ETH_LINK_SPEED_AUTONEG) {
+	if (*link_speeds == RTE_ETH_LINK_SPEED_AUTONEG) {
 		switch (hw->mac.type) {
 		case ixgbe_mac_82598EB:
 			speed = IXGBE_LINK_SPEED_82598_AUTONEG;
@@ -2754,17 +2743,17 @@ ixgbe_dev_start(struct rte_eth_dev *dev)
 			speed = IXGBE_LINK_SPEED_82599_AUTONEG;
 		}
 	} else {
-		if (*link_speeds & ETH_LINK_SPEED_10G)
+		if (*link_speeds & RTE_ETH_LINK_SPEED_10G)
 			speed |= IXGBE_LINK_SPEED_10GB_FULL;
-		if (*link_speeds & ETH_LINK_SPEED_5G)
+		if (*link_speeds & RTE_ETH_LINK_SPEED_5G)
 			speed |= IXGBE_LINK_SPEED_5GB_FULL;
-		if (*link_speeds & ETH_LINK_SPEED_2_5G)
+		if (*link_speeds & RTE_ETH_LINK_SPEED_2_5G)
 			speed |= IXGBE_LINK_SPEED_2_5GB_FULL;
-		if (*link_speeds & ETH_LINK_SPEED_1G)
+		if (*link_speeds & RTE_ETH_LINK_SPEED_1G)
 			speed |= IXGBE_LINK_SPEED_1GB_FULL;
-		if (*link_speeds & ETH_LINK_SPEED_100M)
+		if (*link_speeds & RTE_ETH_LINK_SPEED_100M)
 			speed |= IXGBE_LINK_SPEED_100_FULL;
-		if (*link_speeds & ETH_LINK_SPEED_10M)
+		if (*link_speeds & RTE_ETH_LINK_SPEED_10M)
 			speed |= IXGBE_LINK_SPEED_10_FULL;
 	}
 
@@ -2843,7 +2832,7 @@ ixgbe_dev_stop(struct rte_eth_dev *dev)
 	struct ixgbe_vf_info *vfinfo =
 		*IXGBE_DEV_PRIVATE_TO_P_VFDATA(dev->data->dev_private);
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	int vf;
 	struct ixgbe_tm_conf *tm_conf =
 		IXGBE_DEV_PRIVATE_TO_TM_CONF(dev->data->dev_private);
@@ -2894,10 +2883,7 @@ ixgbe_dev_stop(struct rte_eth_dev *dev)
 
 	/* Clean datapath event and queue/vec mapping */
 	rte_intr_efd_disable(intr_handle);
-	if (intr_handle->intr_vec != NULL) {
-		rte_free(intr_handle->intr_vec);
-		intr_handle->intr_vec = NULL;
-	}
+	rte_intr_vec_list_free(intr_handle);
 
 	/* reset hierarchy commit */
 	tm_conf->committed = false;
@@ -2981,7 +2967,7 @@ ixgbe_dev_close(struct rte_eth_dev *dev)
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	int retries = 0;
 	int ret;
 
@@ -3436,8 +3422,8 @@ static int ixgbe_dev_xstats_get_names(__rte_unused struct rte_eth_dev *dev,
 
 static int ixgbe_dev_xstats_get_names_by_id(
 	struct rte_eth_dev *dev,
-	struct rte_eth_xstat_name *xstats_names,
 	const uint64_t *ids,
+	struct rte_eth_xstat_name *xstats_names,
 	unsigned int limit)
 {
 	if (!ids) {
@@ -3496,7 +3482,7 @@ static int ixgbe_dev_xstats_get_names_by_id(
 	uint16_t size = ixgbe_xstats_calc_num();
 	struct rte_eth_xstat_name xstats_names_copy[size];
 
-	ixgbe_dev_xstats_get_names_by_id(dev, xstats_names_copy, NULL,
+	ixgbe_dev_xstats_get_names_by_id(dev, NULL, xstats_names_copy,
 			size);
 
 	for (i = 0; i < limit; i++) {
@@ -3798,6 +3784,7 @@ ixgbevf_dev_stats_reset(struct rte_eth_dev *dev)
 	hw_stats->vfgorc = 0;
 	hw_stats->vfgptc = 0;
 	hw_stats->vfgotc = 0;
+	hw_stats->vfmprc = 0;
 
 	return 0;
 }
@@ -3839,7 +3826,7 @@ ixgbe_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		 * When DCB/VT is off, maximum number of queues changes,
 		 * except for 82598EB, which remains constant.
 		 */
-		if (dev_conf->txmode.mq_mode == ETH_MQ_TX_NONE &&
+		if (dev_conf->txmode.mq_mode == RTE_ETH_MQ_TX_NONE &&
 				hw->mac.type != ixgbe_mac_82598EB)
 			dev_info->max_tx_queues = IXGBE_NONE_MODE_TX_NB_QUEUES;
 	}
@@ -3849,9 +3836,9 @@ ixgbe_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->max_hash_mac_addrs = IXGBE_VMDQ_NUM_UC_MAC;
 	dev_info->max_vfs = pci_dev->max_vfs;
 	if (hw->mac.type == ixgbe_mac_82598EB)
-		dev_info->max_vmdq_pools = ETH_16_POOLS;
+		dev_info->max_vmdq_pools = RTE_ETH_16_POOLS;
 	else
-		dev_info->max_vmdq_pools = ETH_64_POOLS;
+		dev_info->max_vmdq_pools = RTE_ETH_64_POOLS;
 	dev_info->max_mtu =  dev_info->max_rx_pktlen - IXGBE_ETH_OVERHEAD;
 	dev_info->min_mtu = RTE_ETHER_MIN_MTU;
 	dev_info->vmdq_queue_num = dev_info->max_rx_queues;
@@ -3890,21 +3877,21 @@ ixgbe_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->reta_size = ixgbe_reta_size_get(hw->mac.type);
 	dev_info->flow_type_rss_offloads = IXGBE_RSS_OFFLOAD_ALL;
 
-	dev_info->speed_capa = ETH_LINK_SPEED_1G | ETH_LINK_SPEED_10G;
+	dev_info->speed_capa = RTE_ETH_LINK_SPEED_1G | RTE_ETH_LINK_SPEED_10G;
 	if (hw->device_id == IXGBE_DEV_ID_X550EM_A_1G_T ||
 			hw->device_id == IXGBE_DEV_ID_X550EM_A_1G_T_L)
-		dev_info->speed_capa = ETH_LINK_SPEED_10M |
-			ETH_LINK_SPEED_100M | ETH_LINK_SPEED_1G;
+		dev_info->speed_capa = RTE_ETH_LINK_SPEED_10M |
+			RTE_ETH_LINK_SPEED_100M | RTE_ETH_LINK_SPEED_1G;
 
 	if (hw->mac.type == ixgbe_mac_X540 ||
 	    hw->mac.type == ixgbe_mac_X540_vf ||
 	    hw->mac.type == ixgbe_mac_X550 ||
 	    hw->mac.type == ixgbe_mac_X550_vf) {
-		dev_info->speed_capa |= ETH_LINK_SPEED_100M;
+		dev_info->speed_capa |= RTE_ETH_LINK_SPEED_100M;
 	}
 	if (hw->mac.type == ixgbe_mac_X550) {
-		dev_info->speed_capa |= ETH_LINK_SPEED_2_5G;
-		dev_info->speed_capa |= ETH_LINK_SPEED_5G;
+		dev_info->speed_capa |= RTE_ETH_LINK_SPEED_2_5G;
+		dev_info->speed_capa |= RTE_ETH_LINK_SPEED_5G;
 	}
 
 	/* Driver-preferred Rx/Tx parameters */
@@ -3973,9 +3960,9 @@ ixgbevf_dev_info_get(struct rte_eth_dev *dev,
 	dev_info->max_hash_mac_addrs = IXGBE_VMDQ_NUM_UC_MAC;
 	dev_info->max_vfs = pci_dev->max_vfs;
 	if (hw->mac.type == ixgbe_mac_82598EB)
-		dev_info->max_vmdq_pools = ETH_16_POOLS;
+		dev_info->max_vmdq_pools = RTE_ETH_16_POOLS;
 	else
-		dev_info->max_vmdq_pools = ETH_64_POOLS;
+		dev_info->max_vmdq_pools = RTE_ETH_64_POOLS;
 	dev_info->rx_queue_offload_capa = ixgbe_get_rx_queue_offloads(dev);
 	dev_info->rx_offload_capa = (ixgbe_get_rx_port_offloads(dev) |
 				     dev_info->rx_queue_offload_capa);
@@ -4218,11 +4205,11 @@ ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
 	u32 esdp_reg;
 
 	memset(&link, 0, sizeof(link));
-	link.link_status = ETH_LINK_DOWN;
-	link.link_speed = ETH_SPEED_NUM_NONE;
-	link.link_duplex = ETH_LINK_HALF_DUPLEX;
+	link.link_status = RTE_ETH_LINK_DOWN;
+	link.link_speed = RTE_ETH_SPEED_NUM_NONE;
+	link.link_duplex = RTE_ETH_LINK_HALF_DUPLEX;
 	link.link_autoneg = !(dev->data->dev_conf.link_speeds &
-			ETH_LINK_SPEED_FIXED);
+			RTE_ETH_LINK_SPEED_FIXED);
 
 	hw->mac.get_link_status = true;
 
@@ -4244,8 +4231,8 @@ ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
 		diag = ixgbe_check_link(hw, &link_speed, &link_up, wait);
 
 	if (diag != 0) {
-		link.link_speed = ETH_SPEED_NUM_100M;
-		link.link_duplex = ETH_LINK_FULL_DUPLEX;
+		link.link_speed = RTE_ETH_SPEED_NUM_100M;
+		link.link_duplex = RTE_ETH_LINK_FULL_DUPLEX;
 		return rte_eth_linkstatus_set(dev, &link);
 	}
 
@@ -4281,37 +4268,37 @@ ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
 		return rte_eth_linkstatus_set(dev, &link);
 	}
 
-	link.link_status = ETH_LINK_UP;
-	link.link_duplex = ETH_LINK_FULL_DUPLEX;
+	link.link_status = RTE_ETH_LINK_UP;
+	link.link_duplex = RTE_ETH_LINK_FULL_DUPLEX;
 
 	switch (link_speed) {
 	default:
 	case IXGBE_LINK_SPEED_UNKNOWN:
-		link.link_speed = ETH_SPEED_NUM_UNKNOWN;
+		link.link_speed = RTE_ETH_SPEED_NUM_UNKNOWN;
 		break;
 
 	case IXGBE_LINK_SPEED_10_FULL:
-		link.link_speed = ETH_SPEED_NUM_10M;
+		link.link_speed = RTE_ETH_SPEED_NUM_10M;
 		break;
 
 	case IXGBE_LINK_SPEED_100_FULL:
-		link.link_speed = ETH_SPEED_NUM_100M;
+		link.link_speed = RTE_ETH_SPEED_NUM_100M;
 		break;
 
 	case IXGBE_LINK_SPEED_1GB_FULL:
-		link.link_speed = ETH_SPEED_NUM_1G;
+		link.link_speed = RTE_ETH_SPEED_NUM_1G;
 		break;
 
 	case IXGBE_LINK_SPEED_2_5GB_FULL:
-		link.link_speed = ETH_SPEED_NUM_2_5G;
+		link.link_speed = RTE_ETH_SPEED_NUM_2_5G;
 		break;
 
 	case IXGBE_LINK_SPEED_5GB_FULL:
-		link.link_speed = ETH_SPEED_NUM_5G;
+		link.link_speed = RTE_ETH_SPEED_NUM_5G;
 		break;
 
 	case IXGBE_LINK_SPEED_10GB_FULL:
-		link.link_speed = ETH_SPEED_NUM_10G;
+		link.link_speed = RTE_ETH_SPEED_NUM_10G;
 		break;
 	}
 
@@ -4528,7 +4515,7 @@ ixgbe_dev_link_status_print(struct rte_eth_dev *dev)
 		PMD_INIT_LOG(INFO, "Port %d: Link Up - speed %u Mbps - %s",
 					(int)(dev->data->port_id),
 					(unsigned)link.link_speed,
-			link.link_duplex == ETH_LINK_FULL_DUPLEX ?
+			link.link_duplex == RTE_ETH_LINK_FULL_DUPLEX ?
 					"full-duplex" : "half-duplex");
 	} else {
 		PMD_INIT_LOG(INFO, " Port %d: Link Down",
@@ -4626,7 +4613,7 @@ ixgbe_dev_interrupt_delayed_handler(void *param)
 {
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct ixgbe_interrupt *intr =
 		IXGBE_DEV_PRIVATE_TO_INTR(dev->data->dev_private);
 	struct ixgbe_hw *hw =
@@ -4747,13 +4734,13 @@ ixgbe_flow_ctrl_get(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 		tx_pause = 0;
 
 	if (rx_pause && tx_pause)
-		fc_conf->mode = RTE_FC_FULL;
+		fc_conf->mode = RTE_ETH_FC_FULL;
 	else if (rx_pause)
-		fc_conf->mode = RTE_FC_RX_PAUSE;
+		fc_conf->mode = RTE_ETH_FC_RX_PAUSE;
 	else if (tx_pause)
-		fc_conf->mode = RTE_FC_TX_PAUSE;
+		fc_conf->mode = RTE_ETH_FC_TX_PAUSE;
 	else
-		fc_conf->mode = RTE_FC_NONE;
+		fc_conf->mode = RTE_ETH_FC_NONE;
 
 	return 0;
 }
@@ -5051,8 +5038,8 @@ ixgbe_dev_rss_reta_update(struct rte_eth_dev *dev,
 	}
 
 	for (i = 0; i < reta_size; i += IXGBE_4_BIT_WIDTH) {
-		idx = i / RTE_RETA_GROUP_SIZE;
-		shift = i % RTE_RETA_GROUP_SIZE;
+		idx = i / RTE_ETH_RETA_GROUP_SIZE;
+		shift = i % RTE_ETH_RETA_GROUP_SIZE;
 		mask = (uint8_t)((reta_conf[idx].mask >> shift) &
 						IXGBE_4_BIT_MASK);
 		if (!mask)
@@ -5099,8 +5086,8 @@ ixgbe_dev_rss_reta_query(struct rte_eth_dev *dev,
 	}
 
 	for (i = 0; i < reta_size; i += IXGBE_4_BIT_WIDTH) {
-		idx = i / RTE_RETA_GROUP_SIZE;
-		shift = i % RTE_RETA_GROUP_SIZE;
+		idx = i / RTE_ETH_RETA_GROUP_SIZE;
+		shift = i % RTE_ETH_RETA_GROUP_SIZE;
 		mask = (uint8_t)((reta_conf[idx].mask >> shift) &
 						IXGBE_4_BIT_MASK);
 		if (!mask)
@@ -5172,7 +5159,6 @@ ixgbe_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	struct ixgbe_hw *hw;
 	struct rte_eth_dev_info dev_info;
 	uint32_t frame_size = mtu + IXGBE_ETH_OVERHEAD;
-	struct rte_eth_dev_data *dev_data = dev->data;
 	int ret;
 
 	ret = ixgbe_dev_info_get(dev, &dev_info);
@@ -5186,9 +5172,9 @@ ixgbe_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	/* If device is started, refuse mtu that requires the support of
 	 * scattered packets when this feature has not been enabled before.
 	 */
-	if (dev_data->dev_started && !dev_data->scattered_rx &&
-	    (frame_size + 2 * IXGBE_VLAN_TAG_SIZE >
-	     dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM)) {
+	if (dev->data->dev_started && !dev->data->scattered_rx &&
+	    frame_size + 2 * IXGBE_VLAN_TAG_SIZE >
+			dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM) {
 		PMD_INIT_LOG(ERR, "Stop port first.");
 		return -EINVAL;
 	}
@@ -5197,23 +5183,15 @@ ixgbe_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	hlreg0 = IXGBE_READ_REG(hw, IXGBE_HLREG0);
 
 	/* switch to jumbo mode if needed */
-	if (frame_size > IXGBE_ETH_MAX_LEN) {
-		dev->data->dev_conf.rxmode.offloads |=
-			DEV_RX_OFFLOAD_JUMBO_FRAME;
+	if (mtu > RTE_ETHER_MTU)
 		hlreg0 |= IXGBE_HLREG0_JUMBOEN;
-	} else {
-		dev->data->dev_conf.rxmode.offloads &=
-			~DEV_RX_OFFLOAD_JUMBO_FRAME;
+	else
 		hlreg0 &= ~IXGBE_HLREG0_JUMBOEN;
-	}
 	IXGBE_WRITE_REG(hw, IXGBE_HLREG0, hlreg0);
-
-	/* update max frame size */
-	dev->data->dev_conf.rxmode.max_rx_pkt_len = frame_size;
 
 	maxfrs = IXGBE_READ_REG(hw, IXGBE_MAXFRS);
 	maxfrs &= 0x0000FFFF;
-	maxfrs |= (dev->data->dev_conf.rxmode.max_rx_pkt_len << 16);
+	maxfrs |= (frame_size << 16);
 	IXGBE_WRITE_REG(hw, IXGBE_MAXFRS, maxfrs);
 
 	return 0;
@@ -5271,22 +5249,22 @@ ixgbevf_dev_configure(struct rte_eth_dev *dev)
 	PMD_INIT_LOG(DEBUG, "Configured Virtual Function port id: %d",
 		     dev->data->port_id);
 
-	if (dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG)
-		dev->data->dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_RSS_HASH;
+	if (dev->data->dev_conf.rxmode.mq_mode & RTE_ETH_MQ_RX_RSS_FLAG)
+		dev->data->dev_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_RSS_HASH;
 
 	/*
 	 * VF has no ability to enable/disable HW CRC
 	 * Keep the persistent behavior the same as Host PF
 	 */
 #ifndef RTE_LIBRTE_IXGBE_PF_DISABLE_STRIP_CRC
-	if (conf->rxmode.offloads & DEV_RX_OFFLOAD_KEEP_CRC) {
+	if (conf->rxmode.offloads & RTE_ETH_RX_OFFLOAD_KEEP_CRC) {
 		PMD_INIT_LOG(NOTICE, "VF can't disable HW CRC Strip");
-		conf->rxmode.offloads &= ~DEV_RX_OFFLOAD_KEEP_CRC;
+		conf->rxmode.offloads &= ~RTE_ETH_RX_OFFLOAD_KEEP_CRC;
 	}
 #else
-	if (!(conf->rxmode.offloads & DEV_RX_OFFLOAD_KEEP_CRC)) {
+	if (!(conf->rxmode.offloads & RTE_ETH_RX_OFFLOAD_KEEP_CRC)) {
 		PMD_INIT_LOG(NOTICE, "VF can't enable HW CRC Strip");
-		conf->rxmode.offloads |= DEV_RX_OFFLOAD_KEEP_CRC;
+		conf->rxmode.offloads |= RTE_ETH_RX_OFFLOAD_KEEP_CRC;
 	}
 #endif
 
@@ -5307,7 +5285,7 @@ ixgbevf_dev_start(struct rte_eth_dev *dev)
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint32_t intr_vector = 0;
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 
 	int err, mask = 0;
 
@@ -5346,8 +5324,8 @@ ixgbevf_dev_start(struct rte_eth_dev *dev)
 	ixgbevf_set_vfta_all(dev, 1);
 
 	/* Set HW strip */
-	mask = ETH_VLAN_STRIP_MASK | ETH_VLAN_FILTER_MASK |
-		ETH_VLAN_EXTEND_MASK;
+	mask = RTE_ETH_VLAN_STRIP_MASK | RTE_ETH_VLAN_FILTER_MASK |
+		RTE_ETH_VLAN_EXTEND_MASK;
 	err = ixgbevf_vlan_offload_config(dev, mask);
 	if (err) {
 		PMD_INIT_LOG(ERR, "Unable to set VLAN offload (%d)", err);
@@ -5364,17 +5342,18 @@ ixgbevf_dev_start(struct rte_eth_dev *dev)
 		 * now only one vector is used for Rx queue
 		 */
 		intr_vector = 1;
-		if (rte_intr_efd_enable(intr_handle, intr_vector))
+		if (rte_intr_efd_enable(intr_handle, intr_vector)) {
+			ixgbe_dev_clear_queues(dev);
 			return -1;
+		}
 	}
 
-	if (rte_intr_dp_is_en(intr_handle) && !intr_handle->intr_vec) {
-		intr_handle->intr_vec =
-			rte_zmalloc("intr_vec",
-				    dev->data->nb_rx_queues * sizeof(int), 0);
-		if (intr_handle->intr_vec == NULL) {
+	if (rte_intr_dp_is_en(intr_handle)) {
+		if (rte_intr_vec_list_alloc(intr_handle, "intr_vec",
+						   dev->data->nb_rx_queues)) {
 			PMD_INIT_LOG(ERR, "Failed to allocate %d rx_queues"
 				     " intr_vec", dev->data->nb_rx_queues);
+			ixgbe_dev_clear_queues(dev);
 			return -ENOMEM;
 		}
 	}
@@ -5411,7 +5390,7 @@ ixgbevf_dev_stop(struct rte_eth_dev *dev)
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct ixgbe_adapter *adapter = dev->data->dev_private;
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 
 	if (hw->adapter_stopped)
 		return 0;
@@ -5439,10 +5418,7 @@ ixgbevf_dev_stop(struct rte_eth_dev *dev)
 
 	/* Clean datapath event and queue/vec mapping */
 	rte_intr_efd_disable(intr_handle);
-	if (intr_handle->intr_vec != NULL) {
-		rte_free(intr_handle->intr_vec);
-		intr_handle->intr_vec = NULL;
-	}
+	rte_intr_vec_list_free(intr_handle);
 
 	adapter->rss_reta_updated = 0;
 
@@ -5454,7 +5430,7 @@ ixgbevf_dev_close(struct rte_eth_dev *dev)
 {
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	int ret;
 
 	PMD_INIT_FUNC_TRACE();
@@ -5581,10 +5557,10 @@ ixgbevf_vlan_offload_config(struct rte_eth_dev *dev, int mask)
 	int on = 0;
 
 	/* VF function only support hw strip feature, others are not support */
-	if (mask & ETH_VLAN_STRIP_MASK) {
+	if (mask & RTE_ETH_VLAN_STRIP_MASK) {
 		for (i = 0; i < dev->data->nb_rx_queues; i++) {
 			rxq = dev->data->rx_queues[i];
-			on = !!(rxq->offloads &	DEV_RX_OFFLOAD_VLAN_STRIP);
+			on = !!(rxq->offloads &	RTE_ETH_RX_OFFLOAD_VLAN_STRIP);
 			ixgbevf_vlan_strip_queue_set(dev, i, on);
 		}
 	}
@@ -5715,12 +5691,12 @@ ixgbe_uc_all_hash_table_set(struct rte_eth_dev *dev, uint8_t on)
 		return -ENOTSUP;
 
 	if (on) {
-		for (i = 0; i < ETH_VMDQ_NUM_UC_HASH_ARRAY; i++) {
+		for (i = 0; i < RTE_ETH_VMDQ_NUM_UC_HASH_ARRAY; i++) {
 			uta_info->uta_shadow[i] = ~0;
 			IXGBE_WRITE_REG(hw, IXGBE_UTA(i), ~0);
 		}
 	} else {
-		for (i = 0; i < ETH_VMDQ_NUM_UC_HASH_ARRAY; i++) {
+		for (i = 0; i < RTE_ETH_VMDQ_NUM_UC_HASH_ARRAY; i++) {
 			uta_info->uta_shadow[i] = 0;
 			IXGBE_WRITE_REG(hw, IXGBE_UTA(i), 0);
 		}
@@ -5734,210 +5710,25 @@ ixgbe_convert_vm_rx_mask_to_val(uint16_t rx_mask, uint32_t orig_val)
 {
 	uint32_t new_val = orig_val;
 
-	if (rx_mask & ETH_VMDQ_ACCEPT_UNTAG)
+	if (rx_mask & RTE_ETH_VMDQ_ACCEPT_UNTAG)
 		new_val |= IXGBE_VMOLR_AUPE;
-	if (rx_mask & ETH_VMDQ_ACCEPT_HASH_MC)
+	if (rx_mask & RTE_ETH_VMDQ_ACCEPT_HASH_MC)
 		new_val |= IXGBE_VMOLR_ROMPE;
-	if (rx_mask & ETH_VMDQ_ACCEPT_HASH_UC)
+	if (rx_mask & RTE_ETH_VMDQ_ACCEPT_HASH_UC)
 		new_val |= IXGBE_VMOLR_ROPE;
-	if (rx_mask & ETH_VMDQ_ACCEPT_BROADCAST)
+	if (rx_mask & RTE_ETH_VMDQ_ACCEPT_BROADCAST)
 		new_val |= IXGBE_VMOLR_BAM;
-	if (rx_mask & ETH_VMDQ_ACCEPT_MULTICAST)
+	if (rx_mask & RTE_ETH_VMDQ_ACCEPT_MULTICAST)
 		new_val |= IXGBE_VMOLR_MPE;
 
 	return new_val;
-}
-
-#define IXGBE_MRCTL_VPME  0x01 /* Virtual Pool Mirroring. */
-#define IXGBE_MRCTL_UPME  0x02 /* Uplink Port Mirroring. */
-#define IXGBE_MRCTL_DPME  0x04 /* Downlink Port Mirroring. */
-#define IXGBE_MRCTL_VLME  0x08 /* VLAN Mirroring. */
-#define IXGBE_INVALID_MIRROR_TYPE(mirror_type) \
-	((mirror_type) & ~(uint8_t)(ETH_MIRROR_VIRTUAL_POOL_UP | \
-	ETH_MIRROR_UPLINK_PORT | ETH_MIRROR_DOWNLINK_PORT | ETH_MIRROR_VLAN))
-
-static int
-ixgbe_mirror_rule_set(struct rte_eth_dev *dev,
-		      struct rte_eth_mirror_conf *mirror_conf,
-		      uint8_t rule_id, uint8_t on)
-{
-	uint32_t mr_ctl, vlvf;
-	uint32_t mp_lsb = 0;
-	uint32_t mv_msb = 0;
-	uint32_t mv_lsb = 0;
-	uint32_t mp_msb = 0;
-	uint8_t i = 0;
-	int reg_index = 0;
-	uint64_t vlan_mask = 0;
-
-	const uint8_t pool_mask_offset = 32;
-	const uint8_t vlan_mask_offset = 32;
-	const uint8_t dst_pool_offset = 8;
-	const uint8_t rule_mr_offset  = 4;
-	const uint8_t mirror_rule_mask = 0x0F;
-
-	struct ixgbe_mirror_info *mr_info =
-			(IXGBE_DEV_PRIVATE_TO_PFDATA(dev->data->dev_private));
-	struct ixgbe_hw *hw =
-		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	uint8_t mirror_type = 0;
-
-	if (ixgbe_vt_check(hw) < 0)
-		return -ENOTSUP;
-
-	if (rule_id >= IXGBE_MAX_MIRROR_RULES)
-		return -EINVAL;
-
-	if (IXGBE_INVALID_MIRROR_TYPE(mirror_conf->rule_type)) {
-		PMD_DRV_LOG(ERR, "unsupported mirror type 0x%x.",
-			    mirror_conf->rule_type);
-		return -EINVAL;
-	}
-
-	if (mirror_conf->rule_type & ETH_MIRROR_VLAN) {
-		mirror_type |= IXGBE_MRCTL_VLME;
-		/* Check if vlan id is valid and find conresponding VLAN ID
-		 * index in VLVF
-		 */
-		for (i = 0; i < IXGBE_VLVF_ENTRIES; i++) {
-			if (mirror_conf->vlan.vlan_mask & (1ULL << i)) {
-				/* search vlan id related pool vlan filter
-				 * index
-				 */
-				reg_index = ixgbe_find_vlvf_slot(
-						hw,
-						mirror_conf->vlan.vlan_id[i],
-						false);
-				if (reg_index < 0)
-					return -EINVAL;
-				vlvf = IXGBE_READ_REG(hw,
-						      IXGBE_VLVF(reg_index));
-				if ((vlvf & IXGBE_VLVF_VIEN) &&
-				    ((vlvf & IXGBE_VLVF_VLANID_MASK) ==
-				      mirror_conf->vlan.vlan_id[i]))
-					vlan_mask |= (1ULL << reg_index);
-				else
-					return -EINVAL;
-			}
-		}
-
-		if (on) {
-			mv_lsb = vlan_mask & 0xFFFFFFFF;
-			mv_msb = vlan_mask >> vlan_mask_offset;
-
-			mr_info->mr_conf[rule_id].vlan.vlan_mask =
-						mirror_conf->vlan.vlan_mask;
-			for (i = 0; i < ETH_VMDQ_MAX_VLAN_FILTERS; i++) {
-				if (mirror_conf->vlan.vlan_mask & (1ULL << i))
-					mr_info->mr_conf[rule_id].vlan.vlan_id[i] =
-						mirror_conf->vlan.vlan_id[i];
-			}
-		} else {
-			mv_lsb = 0;
-			mv_msb = 0;
-			mr_info->mr_conf[rule_id].vlan.vlan_mask = 0;
-			for (i = 0; i < ETH_VMDQ_MAX_VLAN_FILTERS; i++)
-				mr_info->mr_conf[rule_id].vlan.vlan_id[i] = 0;
-		}
-	}
-
-	/**
-	 * if enable pool mirror, write related pool mask register,if disable
-	 * pool mirror, clear PFMRVM register
-	 */
-	if (mirror_conf->rule_type & ETH_MIRROR_VIRTUAL_POOL_UP) {
-		mirror_type |= IXGBE_MRCTL_VPME;
-		if (on) {
-			mp_lsb = mirror_conf->pool_mask & 0xFFFFFFFF;
-			mp_msb = mirror_conf->pool_mask >> pool_mask_offset;
-			mr_info->mr_conf[rule_id].pool_mask =
-					mirror_conf->pool_mask;
-
-		} else {
-			mp_lsb = 0;
-			mp_msb = 0;
-			mr_info->mr_conf[rule_id].pool_mask = 0;
-		}
-	}
-	if (mirror_conf->rule_type & ETH_MIRROR_UPLINK_PORT)
-		mirror_type |= IXGBE_MRCTL_UPME;
-	if (mirror_conf->rule_type & ETH_MIRROR_DOWNLINK_PORT)
-		mirror_type |= IXGBE_MRCTL_DPME;
-
-	/* read  mirror control register and recalculate it */
-	mr_ctl = IXGBE_READ_REG(hw, IXGBE_MRCTL(rule_id));
-
-	if (on) {
-		mr_ctl |= mirror_type;
-		mr_ctl &= mirror_rule_mask;
-		mr_ctl |= mirror_conf->dst_pool << dst_pool_offset;
-	} else {
-		mr_ctl &= ~(mirror_conf->rule_type & mirror_rule_mask);
-	}
-
-	mr_info->mr_conf[rule_id].rule_type = mirror_conf->rule_type;
-	mr_info->mr_conf[rule_id].dst_pool = mirror_conf->dst_pool;
-
-	/* write mirrror control  register */
-	IXGBE_WRITE_REG(hw, IXGBE_MRCTL(rule_id), mr_ctl);
-
-	/* write pool mirrror control  register */
-	if (mirror_conf->rule_type & ETH_MIRROR_VIRTUAL_POOL_UP) {
-		IXGBE_WRITE_REG(hw, IXGBE_VMRVM(rule_id), mp_lsb);
-		IXGBE_WRITE_REG(hw, IXGBE_VMRVM(rule_id + rule_mr_offset),
-				mp_msb);
-	}
-	/* write VLAN mirrror control  register */
-	if (mirror_conf->rule_type & ETH_MIRROR_VLAN) {
-		IXGBE_WRITE_REG(hw, IXGBE_VMRVLAN(rule_id), mv_lsb);
-		IXGBE_WRITE_REG(hw, IXGBE_VMRVLAN(rule_id + rule_mr_offset),
-				mv_msb);
-	}
-
-	return 0;
-}
-
-static int
-ixgbe_mirror_rule_reset(struct rte_eth_dev *dev, uint8_t rule_id)
-{
-	int mr_ctl = 0;
-	uint32_t lsb_val = 0;
-	uint32_t msb_val = 0;
-	const uint8_t rule_mr_offset = 4;
-
-	struct ixgbe_hw *hw =
-		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct ixgbe_mirror_info *mr_info =
-		(IXGBE_DEV_PRIVATE_TO_PFDATA(dev->data->dev_private));
-
-	if (ixgbe_vt_check(hw) < 0)
-		return -ENOTSUP;
-
-	if (rule_id >= IXGBE_MAX_MIRROR_RULES)
-		return -EINVAL;
-
-	memset(&mr_info->mr_conf[rule_id], 0,
-	       sizeof(struct rte_eth_mirror_conf));
-
-	/* clear PFVMCTL register */
-	IXGBE_WRITE_REG(hw, IXGBE_MRCTL(rule_id), mr_ctl);
-
-	/* clear pool mask register */
-	IXGBE_WRITE_REG(hw, IXGBE_VMRVM(rule_id), lsb_val);
-	IXGBE_WRITE_REG(hw, IXGBE_VMRVM(rule_id + rule_mr_offset), msb_val);
-
-	/* clear vlan mask register */
-	IXGBE_WRITE_REG(hw, IXGBE_VMRVLAN(rule_id), lsb_val);
-	IXGBE_WRITE_REG(hw, IXGBE_VMRVLAN(rule_id + rule_mr_offset), msb_val);
-
-	return 0;
 }
 
 static int
 ixgbevf_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct ixgbe_interrupt *intr =
 		IXGBE_DEV_PRIVATE_TO_INTR(dev->data->dev_private);
 	struct ixgbe_hw *hw =
@@ -5963,7 +5754,7 @@ ixgbevf_dev_rx_queue_intr_disable(struct rte_eth_dev *dev, uint16_t queue_id)
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	uint32_t vec = IXGBE_MISC_VEC_ID;
 
 	if (rte_intr_allow_others(intr_handle))
@@ -5979,7 +5770,7 @@ static int
 ixgbe_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	uint32_t mask;
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -6106,7 +5897,7 @@ static void
 ixgbevf_configure_msix(struct rte_eth_dev *dev)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint32_t q_idx;
@@ -6133,8 +5924,10 @@ ixgbevf_configure_msix(struct rte_eth_dev *dev)
 		 * as IXGBE_VF_MAXMSIVECOTR = 1
 		 */
 		ixgbevf_set_ivar_map(hw, 0, q_idx, vector_idx);
-		intr_handle->intr_vec[q_idx] = vector_idx;
-		if (vector_idx < base + intr_handle->nb_efd - 1)
+		rte_intr_vec_list_index_set(intr_handle, q_idx,
+						   vector_idx);
+		if (vector_idx < base + rte_intr_nb_efd_get(intr_handle)
+		    - 1)
 			vector_idx++;
 	}
 
@@ -6155,7 +5948,7 @@ static void
 ixgbe_configure_msix(struct rte_eth_dev *dev)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint32_t queue_id, base = IXGBE_MISC_VEC_ID;
@@ -6199,8 +5992,10 @@ ixgbe_configure_msix(struct rte_eth_dev *dev)
 			queue_id++) {
 			/* by default, 1:1 mapping */
 			ixgbe_set_ivar_map(hw, 0, queue_id, vec);
-			intr_handle->intr_vec[queue_id] = vec;
-			if (vec < base + intr_handle->nb_efd - 1)
+			rte_intr_vec_list_index_set(intr_handle,
+							   queue_id, vec);
+			if (vec < base + rte_intr_nb_efd_get(intr_handle)
+			    - 1)
 				vec++;
 		}
 
@@ -6238,7 +6033,6 @@ ixgbe_set_queue_rate_limit(struct rte_eth_dev *dev,
 			   uint16_t queue_idx, uint16_t tx_rate)
 {
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct rte_eth_rxmode *rxmode;
 	uint32_t rf_dec, rf_int;
 	uint32_t bcnrc_val;
 	uint16_t link_speed = dev->data->dev_link.link_speed;
@@ -6260,19 +6054,15 @@ ixgbe_set_queue_rate_limit(struct rte_eth_dev *dev,
 		bcnrc_val = 0;
 	}
 
-	rxmode = &dev->data->dev_conf.rxmode;
 	/*
 	 * Set global transmit compensation time to the MMW_SIZE in RTTBCNRM
 	 * register. MMW_SIZE=0x014 if 9728-byte jumbo is supported, otherwise
 	 * set as 0x4.
 	 */
-	if ((rxmode->offloads & DEV_RX_OFFLOAD_JUMBO_FRAME) &&
-	    (rxmode->max_rx_pkt_len >= IXGBE_MAX_JUMBO_FRAME_SIZE))
-		IXGBE_WRITE_REG(hw, IXGBE_RTTBCNRM,
-			IXGBE_MMW_SIZE_JUMBO_FRAME);
+	if (dev->data->mtu + IXGBE_ETH_OVERHEAD >= IXGBE_MAX_JUMBO_FRAME_SIZE)
+		IXGBE_WRITE_REG(hw, IXGBE_RTTBCNRM, IXGBE_MMW_SIZE_JUMBO_FRAME);
 	else
-		IXGBE_WRITE_REG(hw, IXGBE_RTTBCNRM,
-			IXGBE_MMW_SIZE_DEFAULT);
+		IXGBE_WRITE_REG(hw, IXGBE_RTTBCNRM, IXGBE_MMW_SIZE_DEFAULT);
 
 	/* Set RTTBCNRC of queue X */
 	IXGBE_WRITE_REG(hw, IXGBE_RTTDQSEL, queue_idx);
@@ -6301,14 +6091,8 @@ ixgbevf_add_mac_addr(struct rte_eth_dev *dev, struct rte_ether_addr *mac_addr,
 	diag = ixgbevf_set_uc_addr_vf(hw, 2, mac_addr->addr_bytes);
 	if (diag != 0)
 		PMD_DRV_LOG(ERR, "Unable to add MAC address "
-			    "%02x:%02x:%02x:%02x:%02x:%02x - diag=%d",
-			    mac_addr->addr_bytes[0],
-			    mac_addr->addr_bytes[1],
-			    mac_addr->addr_bytes[2],
-			    mac_addr->addr_bytes[3],
-			    mac_addr->addr_bytes[4],
-			    mac_addr->addr_bytes[5],
-			    diag);
+			    RTE_ETHER_ADDR_PRT_FMT " - diag=%d",
+			    RTE_ETHER_ADDR_BYTES(mac_addr), diag);
 	return diag;
 }
 
@@ -6350,14 +6134,8 @@ ixgbevf_remove_mac_addr(struct rte_eth_dev *dev, uint32_t index)
 		if (diag != 0)
 			PMD_DRV_LOG(ERR,
 				    "Adding again MAC address "
-				    "%02x:%02x:%02x:%02x:%02x:%02x failed "
-				    "diag=%d",
-				    mac_addr->addr_bytes[0],
-				    mac_addr->addr_bytes[1],
-				    mac_addr->addr_bytes[2],
-				    mac_addr->addr_bytes[3],
-				    mac_addr->addr_bytes[4],
-				    mac_addr->addr_bytes[5],
+				     RTE_ETHER_ADDR_PRT_FMT " failed "
+				    "diag=%d", RTE_ETHER_ADDR_BYTES(mac_addr),
 				    diag);
 	}
 }
@@ -6556,8 +6334,7 @@ ixgbevf_dev_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 
 	hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
-	if (mtu < RTE_ETHER_MIN_MTU ||
-			max_frame > RTE_ETHER_MAX_JUMBO_FRAME_LEN)
+	if (mtu < RTE_ETHER_MIN_MTU || max_frame > RTE_ETHER_MAX_JUMBO_FRAME_LEN)
 		return -EINVAL;
 
 	/* If device is started, refuse mtu that requires the support of
@@ -6565,7 +6342,7 @@ ixgbevf_dev_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 	 */
 	if (dev_data->dev_started && !dev_data->scattered_rx &&
 	    (max_frame + 2 * IXGBE_VLAN_TAG_SIZE >
-	     dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM)) {
+			dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM)) {
 		PMD_INIT_LOG(ERR, "Stop port first.");
 		return -EINVAL;
 	}
@@ -6582,8 +6359,6 @@ ixgbevf_dev_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 	if (ixgbevf_rlpml_set_vf(hw, max_frame))
 		return -EINVAL;
 
-	/* update max frame size */
-	dev->data->dev_conf.rxmode.max_rx_pkt_len = max_frame;
 	return 0;
 }
 
@@ -6942,15 +6717,15 @@ ixgbe_start_timecounters(struct rte_eth_dev *dev)
 	rte_eth_linkstatus_get(dev, &link);
 
 	switch (link.link_speed) {
-	case ETH_SPEED_NUM_100M:
+	case RTE_ETH_SPEED_NUM_100M:
 		incval = IXGBE_INCVAL_100;
 		shift = IXGBE_INCVAL_SHIFT_100;
 		break;
-	case ETH_SPEED_NUM_1G:
+	case RTE_ETH_SPEED_NUM_1G:
 		incval = IXGBE_INCVAL_1GB;
 		shift = IXGBE_INCVAL_SHIFT_1GB;
 		break;
-	case ETH_SPEED_NUM_10G:
+	case RTE_ETH_SPEED_NUM_10G:
 	default:
 		incval = IXGBE_INCVAL_10GB;
 		shift = IXGBE_INCVAL_SHIFT_10GB;
@@ -7361,16 +7136,16 @@ ixgbe_reta_size_get(enum ixgbe_mac_type mac_type) {
 	case ixgbe_mac_X550:
 	case ixgbe_mac_X550EM_x:
 	case ixgbe_mac_X550EM_a:
-		return ETH_RSS_RETA_SIZE_512;
+		return RTE_ETH_RSS_RETA_SIZE_512;
 	case ixgbe_mac_X550_vf:
 	case ixgbe_mac_X550EM_x_vf:
 	case ixgbe_mac_X550EM_a_vf:
-		return ETH_RSS_RETA_SIZE_64;
+		return RTE_ETH_RSS_RETA_SIZE_64;
 	case ixgbe_mac_X540_vf:
 	case ixgbe_mac_82599_vf:
 		return 0;
 	default:
-		return ETH_RSS_RETA_SIZE_128;
+		return RTE_ETH_RSS_RETA_SIZE_128;
 	}
 }
 
@@ -7380,10 +7155,10 @@ ixgbe_reta_reg_get(enum ixgbe_mac_type mac_type, uint16_t reta_idx) {
 	case ixgbe_mac_X550:
 	case ixgbe_mac_X550EM_x:
 	case ixgbe_mac_X550EM_a:
-		if (reta_idx < ETH_RSS_RETA_SIZE_128)
+		if (reta_idx < RTE_ETH_RSS_RETA_SIZE_128)
 			return IXGBE_RETA(reta_idx >> 2);
 		else
-			return IXGBE_ERETA((reta_idx - ETH_RSS_RETA_SIZE_128) >> 2);
+			return IXGBE_ERETA((reta_idx - RTE_ETH_RSS_RETA_SIZE_128) >> 2);
 	case ixgbe_mac_X550_vf:
 	case ixgbe_mac_X550EM_x_vf:
 	case ixgbe_mac_X550EM_a_vf:
@@ -7439,7 +7214,7 @@ ixgbe_dev_get_dcb_info(struct rte_eth_dev *dev,
 	uint8_t nb_tcs;
 	uint8_t i, j;
 
-	if (dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_DCB_FLAG)
+	if (dev->data->dev_conf.rxmode.mq_mode & RTE_ETH_MQ_RX_DCB_FLAG)
 		dcb_info->nb_tcs = dcb_config->num_tcs.pg_tcs;
 	else
 		dcb_info->nb_tcs = 1;
@@ -7450,7 +7225,7 @@ ixgbe_dev_get_dcb_info(struct rte_eth_dev *dev,
 	if (dcb_config->vt_mode) { /* vt is enabled*/
 		struct rte_eth_vmdq_dcb_conf *vmdq_rx_conf =
 				&dev->data->dev_conf.rx_adv_conf.vmdq_dcb_conf;
-		for (i = 0; i < ETH_DCB_NUM_USER_PRIORITIES; i++)
+		for (i = 0; i < RTE_ETH_DCB_NUM_USER_PRIORITIES; i++)
 			dcb_info->prio_tc[i] = vmdq_rx_conf->dcb_tc[i];
 		if (RTE_ETH_DEV_SRIOV(dev).active > 0) {
 			for (j = 0; j < nb_tcs; j++) {
@@ -7474,9 +7249,9 @@ ixgbe_dev_get_dcb_info(struct rte_eth_dev *dev,
 	} else { /* vt is disabled*/
 		struct rte_eth_dcb_rx_conf *rx_conf =
 				&dev->data->dev_conf.rx_adv_conf.dcb_rx_conf;
-		for (i = 0; i < ETH_DCB_NUM_USER_PRIORITIES; i++)
+		for (i = 0; i < RTE_ETH_DCB_NUM_USER_PRIORITIES; i++)
 			dcb_info->prio_tc[i] = rx_conf->dcb_tc[i];
-		if (dcb_info->nb_tcs == ETH_4_TCS) {
+		if (dcb_info->nb_tcs == RTE_ETH_4_TCS) {
 			for (i = 0; i < dcb_info->nb_tcs; i++) {
 				dcb_info->tc_queue.tc_rxq[0][i].base = i * 32;
 				dcb_info->tc_queue.tc_rxq[0][i].nb_queue = 16;
@@ -7489,7 +7264,7 @@ ixgbe_dev_get_dcb_info(struct rte_eth_dev *dev,
 			dcb_info->tc_queue.tc_txq[0][1].nb_queue = 32;
 			dcb_info->tc_queue.tc_txq[0][2].nb_queue = 16;
 			dcb_info->tc_queue.tc_txq[0][3].nb_queue = 16;
-		} else if (dcb_info->nb_tcs == ETH_8_TCS) {
+		} else if (dcb_info->nb_tcs == RTE_ETH_8_TCS) {
 			for (i = 0; i < dcb_info->nb_tcs; i++) {
 				dcb_info->tc_queue.tc_rxq[0][i].base = i * 16;
 				dcb_info->tc_queue.tc_rxq[0][i].nb_queue = 16;
@@ -7742,7 +7517,7 @@ ixgbe_dev_l2_tunnel_filter_add(struct rte_eth_dev *dev,
 	}
 
 	switch (l2_tunnel->l2_tunnel_type) {
-	case RTE_L2_TUNNEL_TYPE_E_TAG:
+	case RTE_ETH_L2_TUNNEL_TYPE_E_TAG:
 		ret = ixgbe_e_tag_filter_add(dev, l2_tunnel);
 		break;
 	default:
@@ -7774,7 +7549,7 @@ ixgbe_dev_l2_tunnel_filter_del(struct rte_eth_dev *dev,
 		return ret;
 
 	switch (l2_tunnel->l2_tunnel_type) {
-	case RTE_L2_TUNNEL_TYPE_E_TAG:
+	case RTE_ETH_L2_TUNNEL_TYPE_E_TAG:
 		ret = ixgbe_e_tag_filter_del(dev, l2_tunnel);
 		break;
 	default:
@@ -7871,12 +7646,12 @@ ixgbe_dev_udp_tunnel_port_add(struct rte_eth_dev *dev,
 		return -EINVAL;
 
 	switch (udp_tunnel->prot_type) {
-	case RTE_TUNNEL_TYPE_VXLAN:
+	case RTE_ETH_TUNNEL_TYPE_VXLAN:
 		ret = ixgbe_add_vxlan_port(hw, udp_tunnel->udp_port);
 		break;
 
-	case RTE_TUNNEL_TYPE_GENEVE:
-	case RTE_TUNNEL_TYPE_TEREDO:
+	case RTE_ETH_TUNNEL_TYPE_GENEVE:
+	case RTE_ETH_TUNNEL_TYPE_TEREDO:
 		PMD_DRV_LOG(ERR, "Tunnel type is not supported now.");
 		ret = -EINVAL;
 		break;
@@ -7908,11 +7683,11 @@ ixgbe_dev_udp_tunnel_port_del(struct rte_eth_dev *dev,
 		return -EINVAL;
 
 	switch (udp_tunnel->prot_type) {
-	case RTE_TUNNEL_TYPE_VXLAN:
+	case RTE_ETH_TUNNEL_TYPE_VXLAN:
 		ret = ixgbe_del_vxlan_port(hw, udp_tunnel->udp_port);
 		break;
-	case RTE_TUNNEL_TYPE_GENEVE:
-	case RTE_TUNNEL_TYPE_TEREDO:
+	case RTE_ETH_TUNNEL_TYPE_GENEVE:
+	case RTE_ETH_TUNNEL_TYPE_TEREDO:
 		PMD_DRV_LOG(ERR, "Tunnel type is not supported now.");
 		ret = -EINVAL;
 		break;

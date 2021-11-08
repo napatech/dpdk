@@ -6,6 +6,12 @@
 #define _ROC_NIX_H_
 
 /* Constants */
+#define ROC_NIX_BPF_PER_PFFUNC	      64
+#define ROC_NIX_BPF_ID_INVALID	      0xFFFF
+#define ROC_NIX_BPF_LEVEL_IDX_INVALID 0xFF
+#define ROC_NIX_BPF_LEVEL_MAX	      3
+#define ROC_NIX_BPF_STATS_MAX	      12
+
 enum roc_nix_rss_reta_sz {
 	ROC_NIX_RSS_RETA_SZ_64 = 64,
 	ROC_NIX_RSS_RETA_SZ_128 = 128,
@@ -27,6 +33,108 @@ enum roc_nix_fc_mode {
 enum roc_nix_vlan_type {
 	ROC_NIX_VLAN_TYPE_INNER = 0x01,
 	ROC_NIX_VLAN_TYPE_OUTER = 0x02,
+};
+
+enum roc_nix_bpf_level_flag {
+	ROC_NIX_BPF_LEVEL_F_LEAF = BIT(0),
+	ROC_NIX_BPF_LEVEL_F_MID = BIT(1),
+	ROC_NIX_BPF_LEVEL_F_TOP = BIT(2),
+};
+
+enum roc_nix_bpf_pc_mode {
+	ROC_NIX_BPF_PC_MODE_VLAN_INNER,
+	ROC_NIX_BPF_PC_MODE_VLAN_OUTER,
+	ROC_NIX_BPF_PC_MODE_DSCP_INNER,
+	ROC_NIX_BPF_PC_MODE_DSCP_OUTER,
+	ROC_NIX_BPF_PC_MODE_GEN_INNER,
+	ROC_NIX_BPF_PC_MODE_GEN_OUTER
+};
+
+enum roc_nix_bpf_color {
+	ROC_NIX_BPF_COLOR_GREEN,
+	ROC_NIX_BPF_COLOR_YELLOW,
+	ROC_NIX_BPF_COLOR_RED,
+	ROC_NIX_BPF_COLOR_MAX
+};
+
+enum roc_nix_bpf_algo {
+	ROC_NIX_BPF_ALGO_NONE,
+	ROC_NIX_BPF_ALGO_2698,
+	ROC_NIX_BPF_ALGO_4115,
+	ROC_NIX_BPF_ALGO_2697
+};
+
+enum roc_nix_bpf_lmode { ROC_NIX_BPF_LMODE_BYTE, ROC_NIX_BPF_LMODE_PACKET };
+
+enum roc_nix_bpf_action {
+	ROC_NIX_BPF_ACTION_PASS,
+	ROC_NIX_BPF_ACTION_DROP,
+	ROC_NIX_BPF_ACTION_RED
+};
+
+enum roc_nix_bpf_stats {
+	ROC_NIX_BPF_GREEN_PKT_F_PASS = BIT_ULL(0),
+	ROC_NIX_BPF_GREEN_OCTS_F_PASS = BIT_ULL(1),
+	ROC_NIX_BPF_GREEN_PKT_F_DROP = BIT_ULL(2),
+	ROC_NIX_BPF_GREEN_OCTS_F_DROP = BIT_ULL(3),
+	ROC_NIX_BPF_YELLOW_PKT_F_PASS = BIT_ULL(4),
+	ROC_NIX_BPF_YELLOW_OCTS_F_PASS = BIT_ULL(5),
+	ROC_NIX_BPF_YELLOW_PKT_F_DROP = BIT_ULL(6),
+	ROC_NIX_BPF_YELLOW_OCTS_F_DROP = BIT_ULL(7),
+	ROC_NIX_BPF_RED_PKT_F_PASS = BIT_ULL(8),
+	ROC_NIX_BPF_RED_OCTS_F_PASS = BIT_ULL(9),
+	ROC_NIX_BPF_RED_PKT_F_DROP = BIT_ULL(10),
+	ROC_NIX_BPF_RED_OCTS_F_DROP = BIT_ULL(11),
+};
+
+struct roc_nix_bpf_cfg {
+	enum roc_nix_bpf_algo alg;
+	enum roc_nix_bpf_lmode lmode;
+	enum roc_nix_bpf_color icolor;
+	enum roc_nix_bpf_pc_mode pc_mode;
+	bool tnl_ena;
+	union {
+		/* Valid when *alg* is set to ROC_NIX_BPF_ALGO_2697. */
+		struct {
+			uint64_t cir;
+			uint64_t cbs;
+			uint64_t ebs;
+		} algo2697;
+
+		/* Valid when *alg* is set to ROC_NIX_BPF_ALGO_2698. */
+		struct {
+			uint64_t cir;
+			uint64_t pir;
+			uint64_t cbs;
+			uint64_t pbs;
+		} algo2698;
+
+		/* Valid when *alg* is set to ROC_NIX_BPF_ALGO_4115. */
+		struct {
+			uint64_t cir;
+			uint64_t eir;
+			uint64_t cbs;
+			uint64_t ebs;
+		} algo4115;
+	};
+
+	enum roc_nix_bpf_action action[ROC_NIX_BPF_COLOR_MAX];
+
+	/* Reserved for future config*/
+	uint32_t rsvd[3];
+};
+
+struct roc_nix_bpf_objs {
+	uint16_t level;
+	uint16_t count;
+	uint16_t ids[ROC_NIX_BPF_PER_PFFUNC];
+};
+
+struct roc_nix_bpf_precolor {
+#define ROC_NIX_BPF_PRE_COLOR_MAX 64
+	uint8_t count;
+	enum roc_nix_bpf_pc_mode mode;
+	enum roc_nix_bpf_color color[ROC_NIX_BPF_PRE_COLOR_MAX];
 };
 
 struct roc_nix_vlan_config {
@@ -85,10 +193,11 @@ struct roc_nix_eeprom_info {
 #define ROC_NIX_LF_RX_CFG_LEN_OL3     BIT_ULL(41)
 
 /* Group 0 will be used for RSS, 1 -7 will be used for npc_flow RSS action*/
-#define ROC_NIX_RSS_GROUP_DEFAULT 0
-#define ROC_NIX_RSS_GRPS	  8
-#define ROC_NIX_RSS_RETA_MAX	  ROC_NIX_RSS_RETA_SZ_256
-#define ROC_NIX_RSS_KEY_LEN	  48 /* 352 Bits */
+#define ROC_NIX_RSS_GROUP_DEFAULT    0
+#define ROC_NIX_RSS_GRPS	     8
+#define ROC_NIX_RSS_RETA_MAX	     ROC_NIX_RSS_RETA_SZ_256
+#define ROC_NIX_RSS_KEY_LEN	     48 /* 352 Bits */
+#define ROC_NIX_RSS_MCAM_IDX_DEFAULT (-1)
 
 #define ROC_NIX_DEFAULT_HW_FRS 1514
 
@@ -141,6 +250,7 @@ struct roc_nix_stats_queue {
 struct roc_nix_rq {
 	/* Input parameters */
 	uint16_t qid;
+	uint16_t bpf_id;
 	uint64_t aura_handle;
 	bool ipsech_ena;
 	uint16_t first_skip;
@@ -160,8 +270,17 @@ struct roc_nix_rq {
 	uint32_t vwqe_max_sz_exp;
 	uint64_t vwqe_wait_tmo;
 	uint64_t vwqe_aura_handle;
+	/* Average LPB aura level drop threshold for RED */
+	uint8_t red_drop;
+	/* Average LPB aura level pass threshold for RED */
+	uint8_t red_pass;
+	/* Average SPB aura level drop threshold for RED */
+	uint8_t spb_red_drop;
+	/* Average SPB aura level pass threshold for RED */
+	uint8_t spb_red_pass;
 	/* End of Input parameters */
 	struct roc_nix *roc_nix;
+	bool inl_dev_ref;
 };
 
 struct roc_nix_cq {
@@ -184,12 +303,16 @@ struct roc_nix_sq {
 	enum roc_nix_sq_max_sqe_sz max_sqe_sz;
 	uint32_t nb_desc;
 	uint16_t qid;
+	uint16_t cqid;
+	bool sso_ena;
+	bool cq_ena;
 	/* End of Input parameters */
 	uint16_t sqes_per_sqb_log2;
 	struct roc_nix *roc_nix;
 	uint64_t aura_handle;
 	int16_t nb_sqb_bufs_adj;
 	uint16_t nb_sqb_bufs;
+	uint16_t aura_sqb_bufs;
 	plt_iova_t io_addr;
 	void *lmt_addr;
 	void *sqe_mem;
@@ -233,6 +356,10 @@ typedef void (*link_status_t)(struct roc_nix *roc_nix,
 /* PTP info update callback */
 typedef int (*ptp_info_update_t)(struct roc_nix *roc_nix, bool enable);
 
+/* Link status get callback */
+typedef void (*link_info_get_t)(struct roc_nix *roc_nix,
+				struct roc_nix_link_info *link);
+
 struct roc_nix {
 	/* Input parameters */
 	struct plt_pci_device *pci_dev;
@@ -241,6 +368,12 @@ struct roc_nix {
 	uint16_t max_sqb_count;
 	enum roc_nix_rss_reta_sz reta_sz;
 	bool enable_loop;
+	bool hw_vlan_ins;
+	uint8_t lock_rx_ctx;
+	uint32_t outb_nb_desc;
+	uint16_t outb_nb_crypto_qs;
+	uint16_t ipsec_in_max_spi;
+	uint16_t ipsec_out_max_sa;
 	/* End of input parameters */
 	/* LMT line base for "Per Core Tx LMT line" mode*/
 	uintptr_t lmt_base;
@@ -259,6 +392,28 @@ enum roc_nix_lso_tun_type {
 	ROC_NIX_LSO_TUN_V6V6,
 	ROC_NIX_LSO_TUN_MAX,
 };
+
+/* Restrict CN9K sched weight to have a minimum quantum */
+#define ROC_NIX_CN9K_TM_RR_WEIGHT_MAX 255u
+
+/* NIX TM Inlines */
+static inline uint64_t
+roc_nix_tm_max_sched_wt_get(void)
+{
+	if (roc_model_is_cn9k())
+		return ROC_NIX_CN9K_TM_RR_WEIGHT_MAX;
+	else
+		return NIX_TM_RR_WEIGHT_MAX;
+}
+
+static inline uint64_t
+roc_nix_tm_max_shaper_burst_get(void)
+{
+	if (roc_model_is_cn9k())
+		return NIX_CN9K_TM_MAX_SHAPER_BURST;
+	else
+		return NIX_TM_MAX_SHAPER_BURST;
+}
 
 /* Dev */
 int __roc_api roc_nix_dev_init(struct roc_nix *roc_nix);
@@ -307,7 +462,6 @@ int __roc_api roc_nix_register_cq_irqs(struct roc_nix *roc_nix);
 void __roc_api roc_nix_unregister_cq_irqs(struct roc_nix *roc_nix);
 
 /* Traffic Management */
-#define ROC_NIX_TM_MAX_SCHED_WT	       ((uint8_t)~0)
 #define ROC_NIX_TM_SHAPER_PROFILE_NONE UINT32_MAX
 #define ROC_NIX_TM_NODE_ID_INVALID     UINT32_MAX
 
@@ -371,6 +525,22 @@ struct roc_nix_tm_shaper_profile {
 	void (*free_fn)(void *profile);
 };
 
+enum roc_nix_tm_node_stats_type {
+	ROC_NIX_TM_NODE_PKTS_DROPPED,
+	ROC_NIX_TM_NODE_BYTES_DROPPED,
+	ROC_NIX_TM_NODE_GREEN_PKTS,
+	ROC_NIX_TM_NODE_GREEN_BYTES,
+	ROC_NIX_TM_NODE_YELLOW_PKTS,
+	ROC_NIX_TM_NODE_YELLOW_BYTES,
+	ROC_NIX_TM_NODE_RED_PKTS,
+	ROC_NIX_TM_NODE_RED_BYTES,
+	ROC_NIX_TM_NODE_STATS_MAX,
+};
+
+struct roc_nix_tm_node_stats {
+	uint64_t stats[ROC_NIX_TM_NODE_STATS_MAX];
+};
+
 int __roc_api roc_nix_tm_node_add(struct roc_nix *roc_nix,
 				  struct roc_nix_tm_node *roc_node);
 int __roc_api roc_nix_tm_node_delete(struct roc_nix *roc_nix, uint32_t node_id,
@@ -408,6 +578,9 @@ roc_nix_tm_shaper_profile_get(struct roc_nix *roc_nix, uint32_t profile_id);
 struct roc_nix_tm_shaper_profile *__roc_api roc_nix_tm_shaper_profile_next(
 	struct roc_nix *roc_nix, struct roc_nix_tm_shaper_profile *__prev);
 
+int __roc_api roc_nix_tm_node_stats_get(struct roc_nix *roc_nix,
+					uint32_t node_id, bool clear,
+					struct roc_nix_tm_node_stats *stats);
 /*
  * TM ratelimit tree API.
  */
@@ -432,6 +605,72 @@ int __roc_api roc_nix_tm_rsrc_count(struct roc_nix *roc_nix,
 int __roc_api roc_nix_tm_node_name_get(struct roc_nix *roc_nix,
 				       uint32_t node_id, char *buf,
 				       size_t buflen);
+int __roc_api roc_nix_smq_flush(struct roc_nix *roc_nix);
+int __roc_api roc_nix_tm_max_prio(struct roc_nix *roc_nix, int lvl);
+int __roc_api roc_nix_tm_lvl_is_leaf(struct roc_nix *roc_nix, int lvl);
+void __roc_api
+roc_nix_tm_shaper_default_red_algo(struct roc_nix_tm_node *node,
+				   struct roc_nix_tm_shaper_profile *profile);
+int __roc_api roc_nix_tm_lvl_cnt_get(struct roc_nix *roc_nix);
+int __roc_api roc_nix_tm_lvl_have_link_access(struct roc_nix *roc_nix, int lvl);
+int __roc_api roc_nix_tm_prepare_rate_limited_tree(struct roc_nix *roc_nix);
+bool __roc_api roc_nix_tm_is_user_hierarchy_enabled(struct roc_nix *nix);
+int __roc_api roc_nix_tm_tree_type_get(struct roc_nix *nix);
+
+/* Ingress Policer API */
+int __roc_api
+roc_nix_bpf_count_get(struct roc_nix *roc_nix, uint8_t lvl_mask,
+		      uint16_t count[ROC_NIX_BPF_LEVEL_MAX] /* Out */);
+
+int __roc_api roc_nix_bpf_alloc(struct roc_nix *roc_nix, uint8_t lvl_mask,
+				uint16_t per_lvl_cnt[ROC_NIX_BPF_LEVEL_MAX],
+				struct roc_nix_bpf_objs *profs /* Out */);
+
+int __roc_api roc_nix_bpf_free(struct roc_nix *roc_nix,
+			       struct roc_nix_bpf_objs *profs,
+			       uint8_t num_prof);
+
+int __roc_api roc_nix_bpf_free_all(struct roc_nix *roc_nix);
+
+int __roc_api roc_nix_bpf_config(struct roc_nix *roc_nix, uint16_t id,
+				 enum roc_nix_bpf_level_flag lvl_flag,
+				 struct roc_nix_bpf_cfg *cfg);
+
+int __roc_api roc_nix_bpf_ena_dis(struct roc_nix *roc_nix, uint16_t id,
+				  struct roc_nix_rq *rq, bool enable);
+
+int __roc_api roc_nix_bpf_dump(struct roc_nix *roc_nix, uint16_t id,
+			       enum roc_nix_bpf_level_flag lvl_flag);
+
+int __roc_api roc_nix_bpf_pre_color_tbl_setup(
+	struct roc_nix *roc_nix, uint16_t id,
+	enum roc_nix_bpf_level_flag lvl_flag, struct roc_nix_bpf_precolor *tbl);
+
+/* Use ROC_NIX_BPF_ID_INVALID as dst_id to disconnect */
+int __roc_api roc_nix_bpf_connect(struct roc_nix *roc_nix,
+				  enum roc_nix_bpf_level_flag lvl_flag,
+				  uint16_t src_id, uint16_t dst_id);
+
+int __roc_api
+roc_nix_bpf_stats_read(struct roc_nix *roc_nix, uint16_t id, uint64_t mask,
+		       enum roc_nix_bpf_level_flag lvl_flag,
+		       uint64_t stats[ROC_NIX_BPF_STATS_MAX] /* Out */);
+
+int __roc_api roc_nix_bpf_stats_reset(struct roc_nix *roc_nix, uint16_t id,
+				      uint64_t mask,
+				      enum roc_nix_bpf_level_flag lvl_flag);
+
+int __roc_api
+roc_nix_bpf_lf_stats_read(struct roc_nix *roc_nix, uint64_t mask,
+			  uint64_t stats[ROC_NIX_BPF_STATS_MAX] /* Out */);
+
+int __roc_api roc_nix_bpf_lf_stats_reset(struct roc_nix *roc_nix,
+					 uint64_t mask);
+
+uint8_t __roc_api
+roc_nix_bpf_level_to_idx(enum roc_nix_bpf_level_flag lvl_flag);
+
+uint8_t __roc_api roc_nix_bpf_stats_to_idx(enum roc_nix_bpf_stats lvl_flag);
 
 /* MAC */
 int __roc_api roc_nix_mac_rxtx_start_stop(struct roc_nix *roc_nix, bool start);
@@ -456,6 +695,9 @@ int __roc_api roc_nix_mac_max_rx_len_set(struct roc_nix *roc_nix,
 int __roc_api roc_nix_mac_link_cb_register(struct roc_nix *roc_nix,
 					   link_status_t link_update);
 void __roc_api roc_nix_mac_link_cb_unregister(struct roc_nix *roc_nix);
+int __roc_api roc_nix_mac_link_info_get_cb_register(
+	struct roc_nix *roc_nix, link_info_get_t link_info_get);
+void __roc_api roc_nix_mac_link_info_get_cb_unregister(struct roc_nix *roc_nix);
 
 /* Ops */
 int __roc_api roc_nix_switch_hdr_set(struct roc_nix *roc_nix,
@@ -482,6 +724,9 @@ int __roc_api roc_nix_fc_mode_set(struct roc_nix *roc_nix,
 				  enum roc_nix_fc_mode mode);
 
 enum roc_nix_fc_mode __roc_api roc_nix_fc_mode_get(struct roc_nix *roc_nix);
+
+void __roc_api rox_nix_fc_npa_bp_cfg(struct roc_nix *roc_nix, uint64_t pool_id,
+				     uint8_t ena, uint8_t force);
 
 /* NPC */
 int __roc_api roc_nix_npc_promisc_ena_dis(struct roc_nix *roc_nix, int enable);

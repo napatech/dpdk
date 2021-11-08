@@ -20,11 +20,11 @@
 #include <rte_service_component.h>
 #include <rte_cycles.h>
 
-#include "rte_eventdev.h"
+#include "event_timer_adapter_pmd.h"
 #include "eventdev_pmd.h"
-#include "rte_eventdev_trace.h"
 #include "rte_event_timer_adapter.h"
-#include "rte_event_timer_adapter_pmd.h"
+#include "rte_eventdev.h"
+#include "eventdev_trace.h"
 
 #define DATA_MZ_NAME_MAX_LEN 64
 #define DATA_MZ_NAME_FORMAT "rte_event_timer_adapter_data_%d"
@@ -33,9 +33,9 @@ RTE_LOG_REGISTER_SUFFIX(evtim_logtype, adapter.timer, NOTICE);
 RTE_LOG_REGISTER_SUFFIX(evtim_buffer_logtype, adapter.timer, NOTICE);
 RTE_LOG_REGISTER_SUFFIX(evtim_svc_logtype, adapter.timer.svc, NOTICE);
 
-static struct rte_event_timer_adapter adapters[RTE_EVENT_TIMER_ADAPTER_NUM_MAX];
+static struct rte_event_timer_adapter *adapters;
 
-static const struct rte_event_timer_adapter_ops swtim_ops;
+static const struct event_timer_adapter_ops swtim_ops;
 
 #define EVTIM_LOG(level, logtype, ...) \
 	rte_log(RTE_LOG_ ## level, logtype, \
@@ -137,6 +137,17 @@ rte_event_timer_adapter_create_ext(
 	char mz_name[DATA_MZ_NAME_MAX_LEN];
 	int n, ret;
 	struct rte_eventdev *dev;
+
+	if (adapters == NULL) {
+		adapters = rte_zmalloc("Eventdev",
+				       sizeof(struct rte_event_timer_adapter) *
+					       RTE_EVENT_TIMER_ADAPTER_NUM_MAX,
+				       RTE_CACHE_LINE_SIZE);
+		if (adapters == NULL) {
+			rte_errno = ENOMEM;
+			return NULL;
+		}
+	}
 
 	if (conf == NULL) {
 		rte_errno = EINVAL;
@@ -312,6 +323,17 @@ rte_event_timer_adapter_lookup(uint16_t adapter_id)
 	int ret;
 	struct rte_eventdev *dev;
 
+	if (adapters == NULL) {
+		adapters = rte_zmalloc("Eventdev",
+				       sizeof(struct rte_event_timer_adapter) *
+					       RTE_EVENT_TIMER_ADAPTER_NUM_MAX,
+				       RTE_CACHE_LINE_SIZE);
+		if (adapters == NULL) {
+			rte_errno = ENOMEM;
+			return NULL;
+		}
+	}
+
 	if (adapters[adapter_id].allocated)
 		return &adapters[adapter_id]; /* Adapter is already loaded */
 
@@ -358,7 +380,7 @@ rte_event_timer_adapter_lookup(uint16_t adapter_id)
 int
 rte_event_timer_adapter_free(struct rte_event_timer_adapter *adapter)
 {
-	int ret;
+	int i, ret;
 
 	ADAPTER_VALID_OR_ERR_RET(adapter, -EINVAL);
 	FUNC_PTR_OR_ERR_RET(adapter->ops->uninit, -EINVAL);
@@ -381,6 +403,16 @@ rte_event_timer_adapter_free(struct rte_event_timer_adapter *adapter)
 
 	adapter->data = NULL;
 	adapter->allocated = 0;
+
+	ret = 0;
+	for (i = 0; i < RTE_EVENT_TIMER_ADAPTER_NUM_MAX; i++)
+		if (adapters[i].allocated)
+			ret = adapters[i].allocated;
+
+	if (!ret) {
+		rte_free(adapters);
+		adapters = NULL;
+	}
 
 	rte_eventdev_trace_timer_adapter_free(adapter);
 	return 0;
@@ -1207,15 +1239,15 @@ swtim_arm_tmo_tick_burst(const struct rte_event_timer_adapter *adapter,
 	return __swtim_arm_burst(adapter, evtims, nb_evtims);
 }
 
-static const struct rte_event_timer_adapter_ops swtim_ops = {
-	.init			= swtim_init,
-	.uninit			= swtim_uninit,
-	.start			= swtim_start,
-	.stop			= swtim_stop,
-	.get_info		= swtim_get_info,
-	.stats_get		= swtim_stats_get,
-	.stats_reset		= swtim_stats_reset,
-	.arm_burst		= swtim_arm_burst,
-	.arm_tmo_tick_burst	= swtim_arm_tmo_tick_burst,
-	.cancel_burst		= swtim_cancel_burst,
+static const struct event_timer_adapter_ops swtim_ops = {
+	.init = swtim_init,
+	.uninit = swtim_uninit,
+	.start = swtim_start,
+	.stop = swtim_stop,
+	.get_info = swtim_get_info,
+	.stats_get = swtim_stats_get,
+	.stats_reset = swtim_stats_reset,
+	.arm_burst = swtim_arm_burst,
+	.arm_tmo_tick_burst = swtim_arm_tmo_tick_burst,
+	.cancel_burst = swtim_cancel_burst,
 };

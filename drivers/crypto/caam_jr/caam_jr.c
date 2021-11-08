@@ -9,7 +9,7 @@
 
 #include <rte_byteorder.h>
 #include <rte_common.h>
-#include <rte_cryptodev_pmd.h>
+#include <cryptodev_pmd.h>
 #include <rte_crypto.h>
 #include <rte_cryptodev.h>
 #include <rte_bus_vdev.h>
@@ -2367,6 +2367,8 @@ caam_jr_dev_init(const char *name,
 	security_instance->ops = &caam_jr_security_ops;
 	security_instance->sess_cnt = 0;
 	dev->security_ctx = security_instance;
+
+	rte_cryptodev_pmd_probing_finish(dev);
 
 	RTE_LOG(INFO, PMD, "%s cryptodev init\n", dev->data->name);
 

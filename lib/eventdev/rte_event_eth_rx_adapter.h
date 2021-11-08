@@ -26,6 +26,7 @@
  * The ethernet Rx event adapter's functions are:
  *  - rte_event_eth_rx_adapter_create_ext()
  *  - rte_event_eth_rx_adapter_create()
+ *  - rte_event_eth_rx_adapter_create_with_params()
  *  - rte_event_eth_rx_adapter_free()
  *  - rte_event_eth_rx_adapter_queue_add()
  *  - rte_event_eth_rx_adapter_queue_del()
@@ -33,10 +34,11 @@
  *  - rte_event_eth_rx_adapter_stop()
  *  - rte_event_eth_rx_adapter_stats_get()
  *  - rte_event_eth_rx_adapter_stats_reset()
+ *  - rte_event_eth_rx_adapter_queue_conf_get()
  *
  * The application creates an ethernet to event adapter using
  * rte_event_eth_rx_adapter_create_ext() or rte_event_eth_rx_adapter_create()
- * functions.
+ * or rte_event_eth_rx_adapter_create_with_params() functions.
  * The adapter needs to know which ethernet rx queues to poll for mbufs as well
  * as event device parameters such as the event queue identifier, event
  * priority and scheduling type that the adapter should use when constructing
@@ -171,9 +173,6 @@ struct rte_event_eth_rx_adapter_queue_conf {
 	 * The event adapter sets ev.event_type to RTE_EVENT_TYPE_ETHDEV in the
 	 * enqueued event.
 	 */
-};
-
-struct rte_event_eth_rx_adapter_event_vector_config {
 	uint16_t vector_sz;
 	/**<
 	 * Indicates the maximum number for mbufs to combine and form a vector.
@@ -201,6 +200,8 @@ struct rte_event_eth_rx_adapter_event_vector_config {
 	 * Valid when RTE_EVENT_ETH_RX_ADAPTER_QUEUE_EVENT_VECTOR flag is set in
 	 * @see rte_event_eth_rx_adapter_queue_conf::rx_queue_flags.
 	 */
+	uint16_t event_buf_size;
+	/**< event buffer size for this queue */
 };
 
 /**
@@ -231,6 +232,10 @@ struct rte_event_eth_rx_adapter_stats {
 	 */
 	uint64_t rx_intr_packets;
 	/**< Received packet count for interrupt mode Rx queues */
+	uint64_t rx_event_buf_count;
+	/**< Rx event buffered count */
+	uint64_t rx_event_buf_size;
+	/**< Rx event buffer size */
 };
 
 /**
@@ -257,6 +262,19 @@ struct rte_event_eth_rx_adapter_vector_limits {
 	/**< Maximum vector timeout configurable.
 	 * @see rte_event_eth_rx_adapter_event_vector_config::vector_timeout_ns
 	 */
+};
+
+/**
+ * A structure to hold adapter config params
+ */
+struct rte_event_eth_rx_adapter_params {
+	uint16_t event_buf_size;
+	/**< size of event buffer for the adapter.
+	 * This value is rounded up for better buffer utilization
+	 * and performance.
+	 */
+	bool use_queue_event_buf;
+	/**< flag to indicate that event buffer is separate for each queue */
 };
 
 /**
@@ -358,6 +376,33 @@ int rte_event_eth_rx_adapter_create_ext(uint8_t id, uint8_t dev_id,
  */
 int rte_event_eth_rx_adapter_create(uint8_t id, uint8_t dev_id,
 				struct rte_event_port_conf *port_config);
+
+/**
+ * This is a variant of rte_event_eth_rx_adapter_create() with additional
+ * adapter params specified in ``struct rte_event_eth_rx_adapter_params``.
+ *
+ * @param id
+ *  The identifier of the ethernet Rx event adapter.
+ *
+ * @param dev_id
+ *  The identifier of the event device to configure.
+ *
+ * @param port_config
+ *  Argument of type *rte_event_port_conf* that is passed to the conf_cb
+ *  function.
+ *
+ * @param rxa_params
+ *  Pointer to struct rte_event_eth_rx_adapter_params.
+ *  In case of NULL, default values are used.
+ *
+ * @return
+ *   - 0: Success
+ *   - <0: Error code on failure
+ */
+__rte_experimental
+int rte_event_eth_rx_adapter_create_with_params(uint8_t id, uint8_t dev_id,
+			struct rte_event_port_conf *port_config,
+			struct rte_event_eth_rx_adapter_params *rxa_params);
 
 /**
  * Free an event adapter
@@ -543,37 +588,35 @@ int rte_event_eth_rx_adapter_cb_register(uint8_t id, uint16_t eth_dev_id,
  *  - 0: Success.
  *  - <0: Error code on failure.
  */
-__rte_experimental
 int rte_event_eth_rx_adapter_vector_limits_get(
 	uint8_t dev_id, uint16_t eth_port_id,
 	struct rte_event_eth_rx_adapter_vector_limits *limits);
 
 /**
- * Configure event vectorization for a given ethernet device queue, that has
- * been added to a event eth Rx adapter.
+ * Retrieve Rx queue config information.
  *
  * @param id
- *  The identifier of the ethernet Rx event adapter.
- *
+ *  Adapter identifier.
+
  * @param eth_dev_id
- *  The identifier of the ethernet device.
- *
+ *  Port identifier of Ethernet device.
+
  * @param rx_queue_id
  *  Ethernet device receive queue index.
- *  If rx_queue_id is -1, then all Rx queues configured for the ethernet device
- *  are configured with event vectorization.
- *
- * @param config
- *  Event vector configuration structure.
- *
+
+ * @param[out] queue_conf
+ *  Pointer to struct rte_event_eth_rx_adapter_queue_conf
+
  * @return
- *  - 0: Success, Receive queue configured correctly.
+ *  - 0: Success, Receive queue added correctly.
  *  - <0: Error code on failure.
  */
 __rte_experimental
-int rte_event_eth_rx_adapter_queue_event_vector_config(
-	uint8_t id, uint16_t eth_dev_id, int32_t rx_queue_id,
-	struct rte_event_eth_rx_adapter_event_vector_config *config);
+int rte_event_eth_rx_adapter_queue_conf_get(uint8_t id,
+			uint16_t eth_dev_id,
+			uint16_t rx_queue_id,
+			struct rte_event_eth_rx_adapter_queue_conf *queue_conf);
+
 
 #ifdef __cplusplus
 }

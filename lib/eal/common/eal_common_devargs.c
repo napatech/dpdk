@@ -19,6 +19,7 @@
 #include <rte_kvargs.h>
 #include <rte_log.h>
 #include <rte_tailq.h>
+#include <rte_string_fns.h>
 #include "eal_private.h"
 
 /** user device double-linked queue type definition */
@@ -28,16 +29,26 @@ TAILQ_HEAD(rte_devargs_list, rte_devargs);
 static struct rte_devargs_list devargs_list =
 	TAILQ_HEAD_INITIALIZER(devargs_list);
 
-static size_t
-devargs_layer_count(const char *s)
+/* Resolve devargs name from bus arguments. */
+static int
+devargs_bus_parse_default(struct rte_devargs *devargs,
+			  struct rte_kvargs *bus_args)
 {
-	size_t i = s ? 1 : 0;
+	const char *name;
 
-	while (s != NULL && s[0] != '\0') {
-		i += s[0] == '/';
-		s++;
+	/* Parse devargs name from bus key-value list. */
+	name = rte_kvargs_get(bus_args, "name");
+	if (name == NULL) {
+		RTE_LOG(DEBUG, EAL, "devargs name not found: %s\n",
+			devargs->data);
+		return 0;
 	}
-	return i;
+	if (rte_strscpy(devargs->name, name, sizeof(devargs->name)) < 0) {
+		RTE_LOG(ERR, EAL, "devargs name too long: %s\n",
+			devargs->data);
+		return -E2BIG;
+	}
+	return 0;
 }
 
 int
@@ -49,27 +60,17 @@ rte_devargs_layers_parse(struct rte_devargs *devargs,
 		const char *str;
 		struct rte_kvargs *kvlist;
 	} layers[] = {
-		{ "bus=",    NULL, NULL, },
-		{ "class=",  NULL, NULL, },
-		{ "driver=", NULL, NULL, },
+		{ RTE_DEVARGS_KEY_BUS "=",    NULL, NULL, },
+		{ RTE_DEVARGS_KEY_CLASS "=",  NULL, NULL, },
+		{ RTE_DEVARGS_KEY_DRIVER "=", NULL, NULL, },
 	};
 	struct rte_kvargs_pair *kv = NULL;
-	struct rte_class *cls = NULL;
-	struct rte_bus *bus = NULL;
-	const char *s = devstr;
-	size_t nblayer;
-	size_t i = 0;
+	struct rte_kvargs *bus_kvlist = NULL;
+	char *s;
+	size_t nblayer = 0;
+	size_t i;
 	int ret = 0;
 	bool allocated_data = false;
-
-	/* Split each sub-lists. */
-	nblayer = devargs_layer_count(devstr);
-	if (nblayer > RTE_DIM(layers)) {
-		RTE_LOG(ERR, EAL, "Invalid format: too many layers (%zu)\n",
-			nblayer);
-		ret = -E2BIG;
-		goto get_out;
-	}
 
 	/* If the devargs points the devstr
 	 * as source data, then it should not allocate
@@ -83,34 +84,41 @@ rte_devargs_layers_parse(struct rte_devargs *devargs,
 			goto get_out;
 		}
 		allocated_data = true;
-		s = devargs->data;
 	}
+	s = devargs->data;
 
 	while (s != NULL) {
-		if (i >= RTE_DIM(layers)) {
-			RTE_LOG(ERR, EAL, "Unrecognized layer %s\n", s);
-			ret = -EINVAL;
+		if (nblayer > RTE_DIM(layers)) {
+			ret = -E2BIG;
 			goto get_out;
 		}
-		/*
-		 * The last layer is free-form.
-		 * The "driver" key is not required (but accepted).
-		 */
-		if (strncmp(layers[i].key, s, strlen(layers[i].key)) &&
-				i != RTE_DIM(layers) - 1)
-			goto next_layer;
-		layers[i].str = s;
-		layers[i].kvlist = rte_kvargs_parse_delim(s, NULL, "/");
-		if (layers[i].kvlist == NULL) {
-			RTE_LOG(ERR, EAL, "Could not parse %s\n", s);
-			ret = -EINVAL;
-			goto get_out;
-		}
-		s = strchr(s, '/');
-		if (s != NULL)
+		layers[nblayer].str = s;
+
+		/* Locate next layer starts with valid layer key. */
+		while (s != NULL) {
+			s = strchr(s, '/');
+			if (s == NULL)
+				break;
+			for (i = 0; i < RTE_DIM(layers); i++) {
+				if (strncmp(s + 1, layers[i].key,
+					    strlen(layers[i].key)) == 0) {
+					*s = '\0';
+					break;
+				}
+			}
 			s++;
-next_layer:
-		i++;
+			if (i < RTE_DIM(layers))
+				break;
+		}
+
+		layers[nblayer].kvlist = rte_kvargs_parse
+				(layers[nblayer].str, NULL);
+		if (layers[nblayer].kvlist == NULL) {
+			ret = -EINVAL;
+			goto get_out;
+		}
+
+		nblayer++;
 	}
 
 	/* Parse each sub-list. */
@@ -118,47 +126,38 @@ next_layer:
 		if (layers[i].kvlist == NULL)
 			continue;
 		kv = &layers[i].kvlist->pairs[0];
-		if (strcmp(kv->key, "bus") == 0) {
-			bus = rte_bus_find_by_name(kv->value);
-			if (bus == NULL) {
+		if (kv->key == NULL)
+			continue;
+		if (strcmp(kv->key, RTE_DEVARGS_KEY_BUS) == 0) {
+			bus_kvlist = layers[i].kvlist;
+			devargs->bus_str = layers[i].str;
+			devargs->bus = rte_bus_find_by_name(kv->value);
+			if (devargs->bus == NULL) {
 				RTE_LOG(ERR, EAL, "Could not find bus \"%s\"\n",
 					kv->value);
 				ret = -EFAULT;
 				goto get_out;
 			}
-		} else if (strcmp(kv->key, "class") == 0) {
-			cls = rte_class_find_by_name(kv->value);
-			if (cls == NULL) {
+		} else if (strcmp(kv->key, RTE_DEVARGS_KEY_CLASS) == 0) {
+			devargs->cls_str = layers[i].str;
+			devargs->cls = rte_class_find_by_name(kv->value);
+			if (devargs->cls == NULL) {
 				RTE_LOG(ERR, EAL, "Could not find class \"%s\"\n",
 					kv->value);
 				ret = -EFAULT;
 				goto get_out;
 			}
-		} else if (strcmp(kv->key, "driver") == 0) {
-			/* Ignore */
+		} else if (strcmp(kv->key, RTE_DEVARGS_KEY_DRIVER) == 0) {
+			devargs->drv_str = layers[i].str;
 			continue;
 		}
 	}
 
-	/* Fill devargs fields. */
-	devargs->bus_str = layers[0].str;
-	devargs->cls_str = layers[1].str;
-	devargs->drv_str = layers[2].str;
-	devargs->bus = bus;
-	devargs->cls = cls;
-
-	/* If we own the data, clean up a bit
-	 * the several layers string, to ease
-	 * their parsing afterward.
-	 */
-	if (devargs->data != devstr) {
-		char *s = devargs->data;
-
-		while ((s = strchr(s, '/'))) {
-			*s = '\0';
-			s++;
-		}
-	}
+	/* Resolve devargs name. */
+	if (devargs->bus != NULL && devargs->bus->devargs_parse != NULL)
+		ret = devargs->bus->devargs_parse(devargs);
+	else if (bus_kvlist != NULL)
+		ret = devargs_bus_parse_default(devargs, bus_kvlist);
 
 get_out:
 	for (i = 0; i < RTE_DIM(layers); i++) {
@@ -192,6 +191,15 @@ rte_devargs_parse(struct rte_devargs *da, const char *dev)
 
 	if (da == NULL)
 		return -EINVAL;
+
+	/* First parse according global device syntax. */
+	if (rte_devargs_layers_parse(da, dev) == 0) {
+		if (da->bus != NULL || da->cls != NULL)
+			return 0;
+		rte_devargs_reset(da);
+	}
+
+	/* Otherwise fallback to legacy syntax: */
 
 	/* Retrieve eventual bus info */
 	do {
@@ -291,7 +299,7 @@ rte_devargs_insert(struct rte_devargs **da)
 	if (*da == NULL || (*da)->bus == NULL)
 		return -1;
 
-	TAILQ_FOREACH_SAFE(listed_da, &devargs_list, next, tmp) {
+	RTE_TAILQ_FOREACH_SAFE(listed_da, &devargs_list, next, tmp) {
 		if (listed_da == *da)
 			/* devargs already in the list */
 			return 0;
@@ -358,7 +366,7 @@ rte_devargs_remove(struct rte_devargs *devargs)
 	if (devargs == NULL || devargs->bus == NULL)
 		return -1;
 
-	TAILQ_FOREACH_SAFE(d, &devargs_list, next, tmp) {
+	RTE_TAILQ_FOREACH_SAFE(d, &devargs_list, next, tmp) {
 		if (strcmp(d->bus->name, devargs->bus->name) == 0 &&
 		    strcmp(d->name, devargs->name) == 0) {
 			TAILQ_REMOVE(&devargs_list, d, next);

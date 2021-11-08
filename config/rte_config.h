@@ -50,7 +50,6 @@
 
 /* mbuf defines */
 #define RTE_MBUF_DEFAULT_MEMPOOL_OPS "ring_mp_mc"
-#define RTE_MBUF_REFCNT_ATOMIC 1
 #define RTE_PKTMBUF_HEADROOM 128
 
 /* ether defines */
@@ -72,6 +71,7 @@
 
 /* eventdev defines */
 #define RTE_EVENT_MAX_DEVS 16
+#define RTE_EVENT_MAX_PORTS_PER_DEV 255
 #define RTE_EVENT_MAX_QUEUES_PER_DEV 255
 #define RTE_EVENT_TIMER_ADAPTER_NUM_MAX 32
 #define RTE_EVENT_ETH_INTR_RING_SIZE 1024

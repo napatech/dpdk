@@ -163,6 +163,39 @@ af_pf_wait_msg(struct dev *dev, uint16_t vf, int num_msg)
 		rsp->rc = msg->rc;
 		rsp->pcifunc = msg->pcifunc;
 
+		/* Whenever a PF comes up, AF sends the link status to it but
+		 * when VF comes up no such event is sent to respective VF.
+		 * Using MBOX_MSG_NIX_LF_START_RX response from AF for the
+		 * purpose and send the link status of PF to VF.
+		 */
+		if (msg->id == MBOX_MSG_NIX_LF_START_RX) {
+			/* Send link status to VF */
+			struct cgx_link_user_info linfo;
+			struct mbox_msghdr *vf_msg;
+			size_t sz;
+
+			/* Get the link status */
+			memset(&linfo, 0, sizeof(struct cgx_link_user_info));
+			if (dev->ops && dev->ops->link_status_get)
+				dev->ops->link_status_get(dev->roc_nix, &linfo);
+
+			sz = PLT_ALIGN(mbox_id2size(MBOX_MSG_CGX_LINK_EVENT),
+				       MBOX_MSG_ALIGN);
+			/* Prepare the message to be sent */
+			vf_msg = mbox_alloc_msg(&dev->mbox_vfpf_up, vf, sz);
+			if (vf_msg) {
+				mbox_req_init(MBOX_MSG_CGX_LINK_EVENT, vf_msg);
+				memcpy((uint8_t *)vf_msg +
+				       sizeof(struct mbox_msghdr), &linfo,
+				       sizeof(struct cgx_link_user_info));
+
+				vf_msg->rc = msg->rc;
+				vf_msg->pcifunc = msg->pcifunc;
+				/* Send to VF */
+				mbox_msg_send(&dev->mbox_vfpf_up, vf);
+			}
+		}
+
 		offset = mbox->rx_start + msg->next_msgoff;
 	}
 	plt_spinlock_unlock(&mdev->mbox_lock);
@@ -608,7 +641,7 @@ roc_af_pf_mbox_irq(void *param)
 static int
 mbox_register_pf_irq(struct plt_pci_device *pci_dev, struct dev *dev)
 {
-	struct plt_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct plt_intr_handle *intr_handle = pci_dev->intr_handle;
 	int i, rc;
 
 	/* HW clear irq */
@@ -658,7 +691,7 @@ mbox_register_pf_irq(struct plt_pci_device *pci_dev, struct dev *dev)
 static int
 mbox_register_vf_irq(struct plt_pci_device *pci_dev, struct dev *dev)
 {
-	struct plt_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct plt_intr_handle *intr_handle = pci_dev->intr_handle;
 	int rc;
 
 	/* Clear irq */
@@ -691,7 +724,7 @@ mbox_register_irq(struct plt_pci_device *pci_dev, struct dev *dev)
 static void
 mbox_unregister_pf_irq(struct plt_pci_device *pci_dev, struct dev *dev)
 {
-	struct plt_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct plt_intr_handle *intr_handle = pci_dev->intr_handle;
 	int i;
 
 	/* HW clear irq */
@@ -722,7 +755,7 @@ mbox_unregister_pf_irq(struct plt_pci_device *pci_dev, struct dev *dev)
 static void
 mbox_unregister_vf_irq(struct plt_pci_device *pci_dev, struct dev *dev)
 {
-	struct plt_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct plt_intr_handle *intr_handle = pci_dev->intr_handle;
 
 	/* Clear irq */
 	plt_write64(~0ull, dev->bar2 + RVU_VF_INT_ENA_W1C);
@@ -806,7 +839,7 @@ roc_pf_vf_flr_irq(void *param)
 static int
 vf_flr_unregister_irqs(struct plt_pci_device *pci_dev, struct dev *dev)
 {
-	struct plt_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct plt_intr_handle *intr_handle = pci_dev->intr_handle;
 	int i;
 
 	plt_base_dbg("Unregister VF FLR interrupts for %s", pci_dev->name);
@@ -827,7 +860,7 @@ vf_flr_unregister_irqs(struct plt_pci_device *pci_dev, struct dev *dev)
 static int
 vf_flr_register_irqs(struct plt_pci_device *pci_dev, struct dev *dev)
 {
-	struct plt_intr_handle *handle = &pci_dev->intr_handle;
+	struct plt_intr_handle *handle = pci_dev->intr_handle;
 	int i, rc;
 
 	plt_base_dbg("Register VF FLR interrupts for %s", pci_dev->name);
@@ -851,6 +884,38 @@ vf_flr_register_irqs(struct plt_pci_device *pci_dev, struct dev *dev)
 	return 0;
 }
 
+static void
+clear_rvum_interrupts(struct dev *dev)
+{
+	uint64_t intr;
+	int i;
+
+	if (dev_is_vf(dev)) {
+		/* Clear VF mbox interrupt */
+		intr = plt_read64(dev->bar2 + RVU_VF_INT);
+		if (intr)
+			plt_write64(intr, dev->bar2 + RVU_VF_INT);
+	} else {
+		/* Clear AF PF interrupt line */
+		intr = plt_read64(dev->bar2 + RVU_PF_INT);
+		if (intr)
+			plt_write64(intr, dev->bar2 + RVU_PF_INT);
+		for (i = 0; i < MAX_VFPF_DWORD_BITS; ++i) {
+			/* Clear MBOX interrupts */
+			intr = plt_read64(dev->bar2 + RVU_PF_VFPF_MBOX_INTX(i));
+			if (intr)
+				plt_write64(intr,
+					    dev->bar2 +
+						    RVU_PF_VFPF_MBOX_INTX(i));
+			/* Clear VF FLR interrupts */
+			intr = plt_read64(dev->bar2 + RVU_PF_VFFLR_INTX(i));
+			if (intr)
+				plt_write64(intr,
+					    dev->bar2 + RVU_PF_VFFLR_INTX(i));
+		}
+	}
+}
+
 int
 dev_active_vfs(struct dev *dev)
 {
@@ -870,6 +935,8 @@ dev_vf_hwcap_update(struct plt_pci_device *pci_dev, struct dev *dev)
 		break;
 	case PCI_DEVID_CNXK_RVU_SSO_TIM_VF:
 	case PCI_DEVID_CNXK_RVU_NPA_VF:
+	case PCI_DEVID_CN10K_RVU_CPT_VF:
+	case PCI_DEVID_CN9K_RVU_CPT_VF:
 	case PCI_DEVID_CNXK_RVU_AF_VF:
 	case PCI_DEVID_CNXK_RVU_VF:
 	case PCI_DEVID_CNXK_RVU_SDP_VF:
@@ -915,43 +982,30 @@ dev_vf_mbase_put(struct plt_pci_device *pci_dev, uintptr_t vf_mbase)
 	mbox_mem_unmap((void *)vf_mbase, MBOX_SIZE * pci_dev->max_vfs);
 }
 
-static uint16_t
-dev_pf_total_vfs(struct plt_pci_device *pci_dev)
-{
-	uint16_t total_vfs = 0;
-	int sriov_pos, rc;
-
-	sriov_pos =
-		plt_pci_find_ext_capability(pci_dev, ROC_PCI_EXT_CAP_ID_SRIOV);
-	if (sriov_pos <= 0) {
-		plt_warn("Unable to find SRIOV cap, rc=%d", sriov_pos);
-		return 0;
-	}
-
-	rc = plt_pci_read_config(pci_dev, &total_vfs, 2,
-				 sriov_pos + ROC_PCI_SRIOV_TOTAL_VF);
-	if (rc < 0) {
-		plt_warn("Unable to read SRIOV cap, rc=%d", rc);
-		return 0;
-	}
-
-	return total_vfs;
-}
-
 static int
-dev_setup_shared_lmt_region(struct mbox *mbox)
+dev_setup_shared_lmt_region(struct mbox *mbox, bool valid_iova, uint64_t iova)
 {
 	struct lmtst_tbl_setup_req *req;
 
 	req = mbox_alloc_msg_lmtst_tbl_setup(mbox);
-	req->pcifunc = idev_lmt_pffunc_get();
+	/* This pcifunc is defined with primary pcifunc whose LMT address
+	 * will be shared. If call contains valid IOVA, following pcifunc
+	 * field is of no use.
+	 */
+	req->pcifunc = valid_iova ? 0 : idev_lmt_pffunc_get();
+	req->use_local_lmt_region = valid_iova;
+	req->lmt_iova = iova;
 
 	return mbox_process(mbox);
 }
 
+/* Total no of lines * size of each lmtline */
+#define LMT_REGION_SIZE (ROC_NUM_LMT_LINES * ROC_LMT_LINE_SZ)
 static int
-dev_lmt_setup(struct plt_pci_device *pci_dev, struct dev *dev)
+dev_lmt_setup(struct dev *dev)
 {
+	char name[PLT_MEMZONE_NAMESIZE];
+	const struct plt_memzone *mz;
 	struct idev_cfg *idev;
 	int rc;
 
@@ -965,8 +1019,11 @@ dev_lmt_setup(struct plt_pci_device *pci_dev, struct dev *dev)
 	/* Set common lmt region from second pf_func onwards. */
 	if (!dev->disable_shared_lmt && idev_lmt_pffunc_get() &&
 	    dev->pf_func != idev_lmt_pffunc_get()) {
-		rc = dev_setup_shared_lmt_region(dev->mbox);
+		rc = dev_setup_shared_lmt_region(dev->mbox, false, 0);
 		if (!rc) {
+			/* On success, updating lmt base of secondary pf_funcs
+			 * with primary pf_func's lmt base.
+			 */
 			dev->lmt_base = roc_idev_lmt_base_addr_get();
 			return rc;
 		}
@@ -975,34 +1032,30 @@ dev_lmt_setup(struct plt_pci_device *pci_dev, struct dev *dev)
 			dev->pf_func, rc);
 	}
 
-	if (dev_is_vf(dev)) {
-		/* VF BAR4 should always be sufficient enough to
-		 * hold LMT lines.
-		 */
-		if (pci_dev->mem_resource[4].len <
-		    (RVU_LMT_LINE_MAX * RVU_LMT_SZ)) {
-			plt_err("Not enough bar4 space for lmt lines");
-			return -EFAULT;
-		}
+	/* Allocating memory for LMT region */
+	sprintf(name, "LMT_MAP%x", dev->pf_func);
 
-		dev->lmt_base = dev->bar4;
-	} else {
-		uint64_t bar4_mbox_sz = MBOX_SIZE;
-
-		/* PF BAR4 should always be sufficient enough to
-		 * hold PF-AF MBOX + PF-VF MBOX + LMT lines.
-		 */
-		if (pci_dev->mem_resource[4].len <
-		    (bar4_mbox_sz + (RVU_LMT_LINE_MAX * RVU_LMT_SZ))) {
-			plt_err("Not enough bar4 space for lmt lines and mbox");
-			return -EFAULT;
-		}
-
-		/* LMT base is just after total VF MBOX area */
-		bar4_mbox_sz += (MBOX_SIZE * dev_pf_total_vfs(pci_dev));
-		dev->lmt_base = dev->bar4 + bar4_mbox_sz;
+	/* Setting alignment to ensure correct masking for resetting to lmt base
+	 * of a core after all lmt lines under that core are used.
+	 * Alignment value LMT_REGION_SIZE to handle the case where all lines
+	 * are used by 1 core.
+	 */
+	mz = plt_lmt_region_reserve_aligned(name, LMT_REGION_SIZE,
+					    LMT_REGION_SIZE);
+	if (!mz) {
+		plt_err("Memory alloc failed: %s", strerror(errno));
+		goto fail;
 	}
 
+	/* Share the IOVA address with Kernel */
+	rc = dev_setup_shared_lmt_region(dev->mbox, true, mz->iova);
+	if (rc) {
+		errno = rc;
+		goto free;
+	}
+
+	dev->lmt_base = mz->iova;
+	dev->lmt_mz = mz;
 	/* Base LMT address should be chosen from only those pci funcs which
 	 * participate in LMT shared mode.
 	 */
@@ -1016,6 +1069,10 @@ dev_lmt_setup(struct plt_pci_device *pci_dev, struct dev *dev)
 	}
 
 	return 0;
+free:
+	plt_memzone_free(mz);
+fail:
+	return -errno;
 }
 
 int
@@ -1064,6 +1121,9 @@ dev_init(struct dev *dev, struct plt_pci_device *pci_dev)
 		up_direction = MBOX_DIR_PFAF_UP;
 		intr_offset = RVU_PF_INT;
 	}
+
+	/* Clear all RVUM interrupts */
+	clear_rvum_interrupts(dev);
 
 	/* Initialize the local mbox */
 	rc = mbox_init(&dev->mbox_local, mbox, bar2, direction, 1, intr_offset);
@@ -1130,7 +1190,7 @@ dev_init(struct dev *dev, struct plt_pci_device *pci_dev)
 		goto iounmap;
 
 	/* Setup LMT line base */
-	rc = dev_lmt_setup(pci_dev, dev);
+	rc = dev_lmt_setup(dev);
 	if (rc)
 		goto iounmap;
 
@@ -1151,7 +1211,7 @@ error:
 int
 dev_fini(struct dev *dev, struct plt_pci_device *pci_dev)
 {
-	struct plt_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct plt_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct mbox *mbox;
 
 	/* Check if this dev hosts npalf and has 1+ refs */
@@ -1160,6 +1220,10 @@ dev_fini(struct dev *dev, struct plt_pci_device *pci_dev)
 
 	/* Clear references to this pci dev */
 	npa_lf_fini();
+
+	/* Releasing memory allocated for lmt region */
+	if (dev->lmt_mz)
+		plt_memzone_free(dev->lmt_mz);
 
 	mbox_unregister_irq(pci_dev, dev);
 

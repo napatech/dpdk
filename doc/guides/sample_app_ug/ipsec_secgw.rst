@@ -93,7 +93,7 @@ Additionally the event mode introduces two submodes of processing packets:
   protocol use case, the worker thread resembles l2fwd worker thread as the IPsec
   processing is done entirely in HW. This mode can be used to benchmark the raw
   performance of the HW. The driver submode is selected with --single-sa option
-  (used also by poll mode). When --single-sa option is used in conjution with event
+  (used also by poll mode). When --single-sa option is used in conjunction with event
   mode then index passed to --single-sa is ignored.
 
 * App submode: This submode has all the features currently implemented with the
@@ -209,12 +209,12 @@ Where:
     device will ensure the ordering. Ordering will be lost when tried in PARALLEL.
 
 *   ``--rxoffload MASK``: RX HW offload capabilities to enable/use on this port
-    (bitmask of DEV_RX_OFFLOAD_* values). It is an optional parameter and
+    (bitmask of RTE_ETH_RX_OFFLOAD_* values). It is an optional parameter and
     allows user to disable some of the RX HW offload capabilities.
     By default all HW RX offloads are enabled.
 
 *   ``--txoffload MASK``: TX HW offload capabilities to enable/use on this port
-    (bitmask of DEV_TX_OFFLOAD_* values). It is an optional parameter and
+    (bitmask of RTE_ETH_TX_OFFLOAD_* values). It is an optional parameter and
     allows user to disable some of the TX HW offload capabilities.
     By default all HW TX offloads are enabled.
 

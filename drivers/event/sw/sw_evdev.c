@@ -561,10 +561,9 @@ sw_eth_rx_adapter_caps_get(const struct rte_eventdev *dev,
 }
 
 static int
-sw_timer_adapter_caps_get(const struct rte_eventdev *dev,
-			  uint64_t flags,
+sw_timer_adapter_caps_get(const struct rte_eventdev *dev, uint64_t flags,
 			  uint32_t *caps,
-			  const struct rte_event_timer_adapter_ops **ops)
+			  const struct event_timer_adapter_ops **ops)
 {
 	RTE_SET_USED(dev);
 	RTE_SET_USED(flags);
@@ -945,7 +944,7 @@ static int32_t sw_sched_service_func(void *args)
 static int
 sw_probe(struct rte_vdev_device *vdev)
 {
-	static struct rte_eventdev_ops evdev_sw_ops = {
+	static struct eventdev_ops evdev_sw_ops = {
 			.dev_configure = sw_dev_configure,
 			.dev_infos_get = sw_info_get,
 			.dev_close = sw_close,
@@ -1123,6 +1122,8 @@ sw_probe(struct rte_vdev_device *vdev)
 
 	dev->data->service_inited = 1;
 	dev->data->service_id = sw->service_id;
+
+	event_dev_probing_finish(dev);
 
 	return 0;
 }

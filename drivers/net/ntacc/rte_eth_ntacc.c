@@ -358,7 +358,7 @@ static __rte_always_inline uint16_t eth_ntacc_convert_pkt_to_mbuf(NtDyn3Descr_t 
   case 22:
     // We do have a color value defined
     mbuf->hash.fdir.hi = ((dyn3->color_hi << 14) & 0xFFFFC000) | dyn3->color_lo;
-    mbuf->ol_flags |= PKT_RX_FDIR_ID | PKT_RX_FDIR;
+    mbuf->ol_flags |= RTE_MBUF_F_RX_FDIR_ID | RTE_MBUF_F_RX_FDIR;
     break;
   case 24:
     // We do have a colormask set for protocol lookup
@@ -366,13 +366,13 @@ static __rte_always_inline uint16_t eth_ntacc_convert_pkt_to_mbuf(NtDyn3Descr_t 
     if (mbuf->packet_type != 0) {
       mbuf->hash.fdir.lo = dyn3->offset0;
       mbuf->hash.fdir.hi = dyn3->offset1;
-      mbuf->ol_flags |= PKT_RX_FDIR_FLX | PKT_RX_FDIR;
+      mbuf->ol_flags |= RTE_MBUF_F_RX_FDIR_ID | RTE_MBUF_F_RX_FDIR;
     }
     break;
   case 26:
     // We do have a hash value defined
       mbuf->hash.rss = dyn3->color_hi;
-      mbuf->ol_flags |= PKT_RX_RSS_HASH;
+      mbuf->ol_flags |= RTE_MBUF_F_RX_RSS_HASH;
       break;
   }
 
@@ -561,12 +561,12 @@ static uint16_t eth_ntacc_rx_mode2(void *queue,
     case 20:
       // We do have a hash value defined
       mbuf->hash.rss = dyn3->color_hi;
-      mbuf->ol_flags |= PKT_RX_RSS_HASH;
+      mbuf->ol_flags |= RTE_MBUF_F_RX_RSS_HASH;
       break;
     case 22:
       // We do have a color value defined
       mbuf->hash.fdir.hi = ((dyn3->color_hi << 14) & 0xFFFFC000) | dyn3->color_lo;
-      mbuf->ol_flags |= PKT_RX_FDIR_ID | PKT_RX_FDIR;
+      mbuf->ol_flags |= RTE_MBUF_F_RX_FDIR_FLX | RTE_MBUF_F_RX_FDIR;
       break;
     case 24:
       // We do have a colormask set for protocol lookup
@@ -574,7 +574,7 @@ static uint16_t eth_ntacc_rx_mode2(void *queue,
       if (mbuf->packet_type != 0) {
         mbuf->hash.fdir.lo = dyn3->offset0;
         mbuf->hash.fdir.hi = dyn3->offset1;
-        mbuf->ol_flags |= PKT_RX_FDIR_FLX | PKT_RX_FDIR;
+        mbuf->ol_flags |= RTE_MBUF_F_RX_FDIR_FLX | RTE_MBUF_F_RX_FDIR;
       }
       break;
     }
@@ -1012,46 +1012,46 @@ static int eth_dev_stop(struct rte_eth_dev *dev)
   _dev_flow_flush(dev, &error);
   _destroy_drop_errored_packets_filter(internals);
 
-	for (queue = 0; queue < dev->data->nb_rx_queues; queue++) {
-		if (rx_q[queue].enabled) {
-			eth_rx_queue_stop(dev, queue);
-		}
-	}
+  for (queue = 0; queue < dev->data->nb_rx_queues; queue++) {
+    if (rx_q[queue].enabled) {
+      eth_rx_queue_stop(dev, queue);
+    }
+  }
   for (queue = 0; queue < dev->data->nb_rx_queues; queue++) {
     if (rx_q[queue].enabled) {
       if (rx_q[queue].pSeg) {
         (*_NT_NetRxRelease)(rx_q[queue].pNetRx, rx_q[queue].pSeg);
         rx_q[queue].pSeg = NULL;
       }
-		}
+    }
   }
-	for (queue = 0; queue < dev->data->nb_rx_queues; queue++) {
-		if (rx_q[queue].enabled) {
-			if (rx_q[queue].pNetRx) {
-				if (!rx_q[queue].stream_assigned) {
-					 char ntpl_buf[50];
-					 uint32_t ntplID;
-					 snprintf(ntpl_buf, 50, "assign[streamid=%u]=all", rx_q[queue].stream_id);
-					 NTACC_LOCK(&internals->configlock);
-					 DoNtpl(ntpl_buf, &ntplID, internals, NULL);
-					 NTACC_UNLOCK(&internals->configlock);
-					 snprintf(ntpl_buf, 50, "delete=%u", ntplID);
-					 NTACC_LOCK(&internals->configlock);
-					 DoNtpl(ntpl_buf, &ntplID, internals, NULL);
-					 NTACC_UNLOCK(&internals->configlock);
-					 rx_q[queue].stream_assigned = 0;
-				 }
-				 (void)(*_NT_NetRxClose)(rx_q[queue].pNetRx);
-				 rx_q[queue].pNetRx = NULL;
-			}
-		}
-	}
-	for (queue = 0; queue < dev->data->nb_rx_queues; queue++) {
-		if (rx_q[queue].enabled) {
-			memset(&rx_q[queue].ringControl, 0, sizeof(rx_q[queue].ringControl));
-			rx_q[queue].enabled = false;
-		}
-	}
+  for (queue = 0; queue < dev->data->nb_rx_queues; queue++) {
+    if (rx_q[queue].enabled) {
+      if (rx_q[queue].pNetRx) {
+        if (!rx_q[queue].stream_assigned) {
+           char ntpl_buf[50];
+           uint32_t ntplID;
+           snprintf(ntpl_buf, 50, "assign[streamid=%u]=all", rx_q[queue].stream_id);
+           NTACC_LOCK(&internals->configlock);
+           DoNtpl(ntpl_buf, &ntplID, internals, NULL);
+           NTACC_UNLOCK(&internals->configlock);
+           snprintf(ntpl_buf, 50, "delete=%u", ntplID);
+           NTACC_LOCK(&internals->configlock);
+           DoNtpl(ntpl_buf, &ntplID, internals, NULL);
+           NTACC_UNLOCK(&internals->configlock);
+           rx_q[queue].stream_assigned = 0;
+         }
+         (void)(*_NT_NetRxClose)(rx_q[queue].pNetRx);
+         rx_q[queue].pNetRx = NULL;
+      }
+    }
+  }
+  for (queue = 0; queue < dev->data->nb_rx_queues; queue++) {
+    if (rx_q[queue].enabled) {
+      memset(&rx_q[queue].ringControl, 0, sizeof(rx_q[queue].ringControl));
+      rx_q[queue].enabled = false;
+    }
+  }
 
   for (queue = 0; queue < dev->data->nb_tx_queues; queue++) {
     if (tx_q[queue].enabled) {
@@ -1191,8 +1191,7 @@ static int eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_in
   dev_info->tx_desc_lim.nb_min = 32;
   dev_info->tx_desc_lim.nb_align = 32;
 
-  dev_info->rx_offload_capa = DEV_RX_OFFLOAD_JUMBO_FRAME |
-                              DEV_RX_OFFLOAD_RSS_HASH    |
+  dev_info->rx_offload_capa = DEV_RX_OFFLOAD_RSS_HASH    |
                               DEV_RX_OFFLOAD_TIMESTAMP   |
                               DEV_RX_OFFLOAD_KEEP_CRC    |
                               DEV_RX_OFFLOAD_SCATTER;
@@ -1444,7 +1443,7 @@ static int eth_dev_close(struct rte_eth_dev *dev)
   return 0;
 }
 
-static void eth_queue_release(void *q __rte_unused)
+static void eth_queue_release(struct rte_eth_dev *dev __rte_unused, uint16_t queue_id __rte_unused)
 {
 }
 
@@ -1477,8 +1476,8 @@ static int eth_link_update(struct rte_eth_dev *dev,
 
   dev->data->dev_link.link_status = pInfo->u.port_v8.data.state == NT_LINK_STATE_UP ? 1 : 0;
   switch (pInfo->u.port_v8.data.speed) {
-	case NT_LINK_SPEED_UNKNOWN:
-	case NT_LINK_SPEED_END:
+  case NT_LINK_SPEED_UNKNOWN:
+  case NT_LINK_SPEED_END:
     dev->data->dev_link.link_speed = ETH_SPEED_NUM_1G;
     break;
   case NT_LINK_SPEED_10M:
@@ -2318,7 +2317,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
 
   if (!reuse) {
     if (DoNtpl(ntpl_buf, &ntplID, internals, NULL) != 0) {
-			NTACC_UNLOCK(&internals->configlock);
+      NTACC_UNLOCK(&internals->configlock);
       goto FlowError;
     }
     NTACC_LOCK(&internals->lock);
@@ -2447,7 +2446,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
     }
     NTACC_UNLOCK(&internals->lock);
 
-		// Check that the hostbuffers are deleted/changed
+    // Check that the hostbuffers are deleted/changed
     counter = 0;
     found = false;
     while (counter < 10 && found == false) {
@@ -2459,7 +2458,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       }
     }
 
-		NTACC_LOCK(&internals->lock);
+    NTACC_LOCK(&internals->lock);
     rte_free(internals->defaultFlow);
     internals->defaultFlow = NULL;
     NTACC_UNLOCK(&internals->lock);
@@ -2576,10 +2575,10 @@ static const struct rte_flow_ops _dev_flow_ops = {
 };
 
 static int _dev_flow_ops_get(struct rte_eth_dev *dev __rte_unused,
-														 const struct rte_flow_ops **ops)
+                             const struct rte_flow_ops **ops)
 {
-	*ops = &_dev_flow_ops;
-	return 0;
+  *ops = &_dev_flow_ops;
+  return 0;
 }
 
 static int eth_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
@@ -2589,14 +2588,14 @@ static int eth_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t 
   int length1;
 
   length1 = snprintf(buf, 71, "PMD %s - %d.%d.%d - %03d-%04d-%02d-%02d-%02d", NT_VER,
-																																							internals->version.major,
-																																					    internals->version.minor,
-																																					    internals->version.patch,
-																																					    internals->fpgaid.s.item,
-																																					    internals->fpgaid.s.product,
-																																					    internals->fpgaid.s.ver,
-																																					    internals->fpgaid.s.rev,
-																																					    internals->fpgaid.s.build);
+                                                                              internals->version.major,
+                                                                              internals->version.minor,
+                                                                              internals->version.patch,
+                                                                              internals->fpgaid.s.item,
+                                                                              internals->fpgaid.s.product,
+                                                                              internals->fpgaid.s.ver,
+                                                                              internals->fpgaid.s.rev,
+                                                                              internals->fpgaid.s.build);
   snprintf(fw_version, fw_size, "%s", buf);
 
   if ((size_t)length1 < fw_size) {
@@ -2706,7 +2705,7 @@ static struct eth_dev_ops ops = {
     .dev_supported_ptypes_get = _dev_supported_ptypes_get,
     .promiscuous_enable = eth_promiscuous_enable,
     .promiscuous_disable = eth_promiscuous_disable,
-		.flow_ops_get = _dev_flow_ops_get,
+    .flow_ops_get = _dev_flow_ops_get,
 };
 
 enum property_type_s {
@@ -2942,7 +2941,7 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
 
     switch (pInfo->u.port_v7.data.speed) {
     case NT_LINK_SPEED_UNKNOWN:
-		case NT_LINK_SPEED_END:
+    case NT_LINK_SPEED_END:
       pmd_link.link_speed = ETH_SPEED_NUM_1G;
       break;
     case NT_LINK_SPEED_10M:
@@ -3356,12 +3355,12 @@ static const struct rte_pci_id ntacc_pci_id_map[] = {
   {
     RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT100E3)
   },
-	{
-		RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT100A01)
-	},
-	{
-		RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT50B01)
-	},
+  {
+    RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT100A01)
+  },
+  {
+    RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT50B01)
+  },
   {
     RTE_PCI_DEVICE(PCI_VENDOR_ID_INTEL,PCIE_DEVICE_ID_PF_DSC_1_X) // Intel AFU adapter
   },

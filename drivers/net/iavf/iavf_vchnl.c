@@ -13,6 +13,7 @@
 #include <rte_common.h>
 
 #include <rte_debug.h>
+#include <rte_alarm.h>
 #include <rte_atomic.h>
 #include <rte_eal.h>
 #include <rte_ether.h>
@@ -71,7 +72,6 @@ iavf_read_msg_from_pf(struct iavf_adapter *adapter, uint16_t buf_len,
 {
 	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(adapter);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
-	struct rte_eth_dev *dev = adapter->eth_dev;
 	struct iavf_arq_event_info event;
 	enum iavf_aq_result result = IAVF_MSG_NON;
 	enum virtchnl_ops opcode;
@@ -113,7 +113,7 @@ iavf_read_msg_from_pf(struct iavf_adapter *adapter, uint16_t buf_len,
 				speed = vpe->event_data.link_event.link_speed;
 				vf->link_speed = iavf_convert_link_speed(speed);
 			}
-			iavf_dev_link_update(dev, 0);
+			iavf_dev_link_update(vf->eth_dev, 0);
 			PMD_DRV_LOG(INFO, "Link status update:%s",
 					vf->link_up ? "up" : "down");
 			break;
@@ -181,7 +181,7 @@ iavf_execute_vf_cmd(struct iavf_adapter *adapter, struct iavf_cmd_info *args)
 						   args->out_buffer);
 			if (result == IAVF_MSG_CMD)
 				break;
-			rte_delay_ms(ASQ_DELAY_MS);
+			iavf_msec_delay(ASQ_DELAY_MS);
 		} while (i++ < MAX_TRY_TIMES);
 		if (i >= MAX_TRY_TIMES ||
 		    vf->cmd_retval != VIRTCHNL_STATUS_SUCCESS) {
@@ -207,7 +207,7 @@ iavf_execute_vf_cmd(struct iavf_adapter *adapter, struct iavf_cmd_info *args)
 				err = -1;
 				break;
 			}
-			rte_delay_ms(ASQ_DELAY_MS);
+			iavf_msec_delay(ASQ_DELAY_MS);
 			/* If don't read msg or read sys event, continue */
 		} while (i++ < MAX_TRY_TIMES);
 		if (i >= MAX_TRY_TIMES ||
@@ -225,7 +225,7 @@ iavf_execute_vf_cmd(struct iavf_adapter *adapter, struct iavf_cmd_info *args)
 		do {
 			if (vf->pend_cmd == VIRTCHNL_OP_UNKNOWN)
 				break;
-			rte_delay_ms(ASQ_DELAY_MS);
+			iavf_msec_delay(ASQ_DELAY_MS);
 			/* If don't read msg or read sys event, continue */
 		} while (i++ < MAX_TRY_TIMES);
 
@@ -467,7 +467,8 @@ iavf_get_vf_resource(struct iavf_adapter *adapter)
 		VIRTCHNL_VF_OFFLOAD_REQ_QUEUES |
 		VIRTCHNL_VF_OFFLOAD_CRC |
 		VIRTCHNL_VF_OFFLOAD_VLAN_V2 |
-		VIRTCHNL_VF_LARGE_NUM_QPAIRS;
+		VIRTCHNL_VF_LARGE_NUM_QPAIRS |
+		VIRTCHNL_VF_OFFLOAD_QOS;
 
 	args.in_args = (uint8_t *)&caps;
 	args.in_args_size = sizeof(caps);
@@ -688,8 +689,8 @@ iavf_enable_queues(struct iavf_adapter *adapter)
 	memset(&queue_select, 0, sizeof(queue_select));
 	queue_select.vsi_id = vf->vsi_res->vsi_id;
 
-	queue_select.rx_queues = BIT(adapter->eth_dev->data->nb_rx_queues) - 1;
-	queue_select.tx_queues = BIT(adapter->eth_dev->data->nb_tx_queues) - 1;
+	queue_select.rx_queues = BIT(adapter->dev_data->nb_rx_queues) - 1;
+	queue_select.tx_queues = BIT(adapter->dev_data->nb_tx_queues) - 1;
 
 	args.ops = VIRTCHNL_OP_ENABLE_QUEUES;
 	args.in_args = (u8 *)&queue_select;
@@ -716,8 +717,8 @@ iavf_disable_queues(struct iavf_adapter *adapter)
 	memset(&queue_select, 0, sizeof(queue_select));
 	queue_select.vsi_id = vf->vsi_res->vsi_id;
 
-	queue_select.rx_queues = BIT(adapter->eth_dev->data->nb_rx_queues) - 1;
-	queue_select.tx_queues = BIT(adapter->eth_dev->data->nb_tx_queues) - 1;
+	queue_select.rx_queues = BIT(adapter->dev_data->nb_rx_queues) - 1;
+	queue_select.tx_queues = BIT(adapter->dev_data->nb_tx_queues) - 1;
 
 	args.ops = VIRTCHNL_OP_DISABLE_QUEUES;
 	args.in_args = (u8 *)&queue_select;
@@ -787,12 +788,12 @@ iavf_enable_queues_lv(struct iavf_adapter *adapter)
 	queue_chunk[VIRTCHNL_QUEUE_TYPE_TX].type = VIRTCHNL_QUEUE_TYPE_TX;
 	queue_chunk[VIRTCHNL_QUEUE_TYPE_TX].start_queue_id = 0;
 	queue_chunk[VIRTCHNL_QUEUE_TYPE_TX].num_queues =
-		adapter->eth_dev->data->nb_tx_queues;
+		adapter->dev_data->nb_tx_queues;
 
 	queue_chunk[VIRTCHNL_QUEUE_TYPE_RX].type = VIRTCHNL_QUEUE_TYPE_RX;
 	queue_chunk[VIRTCHNL_QUEUE_TYPE_RX].start_queue_id = 0;
 	queue_chunk[VIRTCHNL_QUEUE_TYPE_RX].num_queues =
-		adapter->eth_dev->data->nb_rx_queues;
+		adapter->dev_data->nb_rx_queues;
 
 	args.ops = VIRTCHNL_OP_ENABLE_QUEUES_V2;
 	args.in_args = (u8 *)queue_select;
@@ -831,12 +832,12 @@ iavf_disable_queues_lv(struct iavf_adapter *adapter)
 	queue_chunk[VIRTCHNL_QUEUE_TYPE_TX].type = VIRTCHNL_QUEUE_TYPE_TX;
 	queue_chunk[VIRTCHNL_QUEUE_TYPE_TX].start_queue_id = 0;
 	queue_chunk[VIRTCHNL_QUEUE_TYPE_TX].num_queues =
-		adapter->eth_dev->data->nb_tx_queues;
+		adapter->dev_data->nb_tx_queues;
 
 	queue_chunk[VIRTCHNL_QUEUE_TYPE_RX].type = VIRTCHNL_QUEUE_TYPE_RX;
 	queue_chunk[VIRTCHNL_QUEUE_TYPE_RX].start_queue_id = 0;
 	queue_chunk[VIRTCHNL_QUEUE_TYPE_RX].num_queues =
-		adapter->eth_dev->data->nb_rx_queues;
+		adapter->dev_data->nb_rx_queues;
 
 	args.ops = VIRTCHNL_OP_DISABLE_QUEUES_V2;
 	args.in_args = (u8 *)queue_select;
@@ -967,9 +968,9 @@ iavf_configure_queues(struct iavf_adapter *adapter,
 		uint16_t num_queue_pairs, uint16_t index)
 {
 	struct iavf_rx_queue **rxq =
-		(struct iavf_rx_queue **)adapter->eth_dev->data->rx_queues;
+		(struct iavf_rx_queue **)adapter->dev_data->rx_queues;
 	struct iavf_tx_queue **txq =
-		(struct iavf_tx_queue **)adapter->eth_dev->data->tx_queues;
+		(struct iavf_tx_queue **)adapter->dev_data->tx_queues;
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
 	struct virtchnl_vsi_queue_config_info *vc_config;
 	struct virtchnl_queue_pair_info *vc_qp;
@@ -993,7 +994,7 @@ iavf_configure_queues(struct iavf_adapter *adapter,
 		vc_qp->txq.queue_id = i;
 
 		/* Virtchnnl configure tx queues by pairs */
-		if (i < adapter->eth_dev->data->nb_tx_queues) {
+		if (i < adapter->dev_data->nb_tx_queues) {
 			vc_qp->txq.ring_len = txq[i]->nb_tx_desc;
 			vc_qp->txq.dma_ring_addr = txq[i]->tx_ring_phys_addr;
 		}
@@ -1002,7 +1003,7 @@ iavf_configure_queues(struct iavf_adapter *adapter,
 		vc_qp->rxq.queue_id = i;
 		vc_qp->rxq.max_pkt_size = vf->max_pkt_len;
 
-		if (i >= adapter->eth_dev->data->nb_rx_queues)
+		if (i >= adapter->dev_data->nb_rx_queues)
 			continue;
 
 		/* Virtchnnl configure rx queues by pairs */
@@ -1071,7 +1072,7 @@ iavf_config_irq_map(struct iavf_adapter *adapter)
 		return -ENOMEM;
 
 	map_info->num_vectors = vf->nb_msix;
-	for (i = 0; i < adapter->eth_dev->data->nb_rx_queues; i++) {
+	for (i = 0; i < adapter->dev_data->nb_rx_queues; i++) {
 		vecmap =
 		    &map_info->vecmap[vf->qv_map[i].vector_id - vf->msix_base];
 		vecmap->vsi_id = vf->vsi_res->vsi_id;
@@ -1150,7 +1151,7 @@ iavf_add_del_all_mac_addr(struct iavf_adapter *adapter, bool add)
 		j = 0;
 		len = sizeof(struct virtchnl_ether_addr_list);
 		for (i = begin; i < IAVF_NUM_MACADDR_MAX; i++, next_begin++) {
-			addr = &adapter->eth_dev->data->mac_addrs[i];
+			addr = &adapter->dev_data->mac_addrs[i];
 			if (rte_is_zero_ether_addr(addr))
 				continue;
 			len += sizeof(struct virtchnl_ether_addr);
@@ -1167,7 +1168,7 @@ iavf_add_del_all_mac_addr(struct iavf_adapter *adapter, bool add)
 		}
 
 		for (i = begin; i < next_begin; i++) {
-			addr = &adapter->eth_dev->data->mac_addrs[i];
+			addr = &adapter->dev_data->mac_addrs[i];
 			if (rte_is_zero_ether_addr(addr))
 				continue;
 			rte_memcpy(list->list[j].addr, addr->addr_bytes,
@@ -1175,10 +1176,8 @@ iavf_add_del_all_mac_addr(struct iavf_adapter *adapter, bool add)
 			list->list[j].type = (j == 0 ?
 					      VIRTCHNL_ETHER_ADDR_PRIMARY :
 					      VIRTCHNL_ETHER_ADDR_EXTRA);
-			PMD_DRV_LOG(DEBUG, "add/rm mac:%x:%x:%x:%x:%x:%x",
-				    addr->addr_bytes[0], addr->addr_bytes[1],
-				    addr->addr_bytes[2], addr->addr_bytes[3],
-				    addr->addr_bytes[4], addr->addr_bytes[5]);
+			PMD_DRV_LOG(DEBUG, "add/rm mac:" RTE_ETHER_ADDR_PRT_FMT,
+				    RTE_ETHER_ADDR_BYTES(addr));
 			j++;
 		}
 		list->vsi_id = vf->vsi_res->vsi_id;
@@ -1257,8 +1256,8 @@ iavf_config_promisc(struct iavf_adapter *adapter,
 		PMD_DRV_LOG(ERR,
 			    "fail to execute command CONFIG_PROMISCUOUS_MODE");
 
-		if (err == IAVF_NOT_SUPPORTED)
-			return -ENOTSUP;
+		if (err == -ENOTSUP)
+			return err;
 
 		return -EAGAIN;
 	}
@@ -1551,6 +1550,59 @@ iavf_set_hena(struct iavf_adapter *adapter, uint64_t hena)
 }
 
 int
+iavf_get_qos_cap(struct iavf_adapter *adapter)
+{
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
+	struct iavf_cmd_info args;
+	uint32_t len;
+	int err;
+
+	args.ops = VIRTCHNL_OP_GET_QOS_CAPS;
+	args.in_args = NULL;
+	args.in_args_size = 0;
+	args.out_buffer = vf->aq_resp;
+	args.out_size = IAVF_AQ_BUF_SZ;
+	err = iavf_execute_vf_cmd(adapter, &args);
+
+	if (err) {
+		PMD_DRV_LOG(ERR,
+			    "Failed to execute command of OP_GET_VF_RESOURCE");
+		return -1;
+	}
+
+	len =  sizeof(struct virtchnl_qos_cap_list) +
+		IAVF_MAX_TRAFFIC_CLASS * sizeof(struct virtchnl_qos_cap_elem);
+
+	rte_memcpy(vf->qos_cap, args.out_buffer,
+		   RTE_MIN(args.out_size, len));
+
+	return 0;
+}
+
+int iavf_set_q_tc_map(struct rte_eth_dev *dev,
+		struct virtchnl_queue_tc_mapping *q_tc_mapping, uint16_t size)
+{
+	struct iavf_adapter *adapter =
+			IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
+	struct iavf_cmd_info args;
+	int err;
+
+	memset(&args, 0, sizeof(args));
+	args.ops = VIRTCHNL_OP_CONFIG_QUEUE_TC_MAP;
+	args.in_args = (uint8_t *)q_tc_mapping;
+	args.in_args_size = size;
+	args.out_buffer = vf->aq_resp;
+	args.out_size = IAVF_AQ_BUF_SZ;
+
+	err = iavf_execute_vf_cmd(adapter, &args);
+	if (err)
+		PMD_DRV_LOG(ERR, "Failed to execute command of"
+			    " VIRTCHNL_OP_CONFIG_TC_MAP");
+	return err;
+}
+
+int
 iavf_add_del_mc_addr_list(struct iavf_adapter *adapter,
 			struct rte_ether_addr *mc_addrs,
 			uint32_t mc_addrs_num, bool add)
@@ -1572,13 +1624,8 @@ iavf_add_del_mc_addr_list(struct iavf_adapter *adapter,
 
 	for (i = 0; i < mc_addrs_num; i++) {
 		if (!IAVF_IS_MULTICAST(mc_addrs[i].addr_bytes)) {
-			PMD_DRV_LOG(ERR, "Invalid mac:%x:%x:%x:%x:%x:%x",
-				    mc_addrs[i].addr_bytes[0],
-				    mc_addrs[i].addr_bytes[1],
-				    mc_addrs[i].addr_bytes[2],
-				    mc_addrs[i].addr_bytes[3],
-				    mc_addrs[i].addr_bytes[4],
-				    mc_addrs[i].addr_bytes[5]);
+			PMD_DRV_LOG(ERR, "Invalid mac:" RTE_ETHER_ADDR_PRT_FMT,
+				    RTE_ETHER_ADDR_BYTES(&mc_addrs[i]));
 			return -EINVAL;
 		}
 
@@ -1605,9 +1652,10 @@ iavf_add_del_mc_addr_list(struct iavf_adapter *adapter,
 }
 
 int
-iavf_request_queues(struct iavf_adapter *adapter, uint16_t num)
+iavf_request_queues(struct rte_eth_dev *dev, uint16_t num)
 {
-	struct rte_eth_dev *dev = adapter->eth_dev;
+	struct iavf_adapter *adapter =
+		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf =  IAVF_DEV_PRIVATE_TO_VF(adapter);
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct virtchnl_vf_res_request vfres;
@@ -1633,13 +1681,20 @@ iavf_request_queues(struct iavf_adapter *adapter, uint16_t num)
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	/*
-	 * disable interrupt to avoid the admin queue message to be read
-	 * before iavf_read_msg_from_pf.
-	 */
-	rte_intr_disable(&pci_dev->intr_handle);
-	err = iavf_execute_vf_cmd(adapter, &args);
-	rte_intr_enable(&pci_dev->intr_handle);
+	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_WB_ON_ITR) {
+		/* disable interrupt to avoid the admin queue message to be read
+		 * before iavf_read_msg_from_pf.
+		 */
+		rte_intr_disable(pci_dev->intr_handle);
+		err = iavf_execute_vf_cmd(adapter, &args);
+		rte_intr_enable(pci_dev->intr_handle);
+	} else {
+		rte_eal_alarm_cancel(iavf_dev_alarm_handler, dev);
+		err = iavf_execute_vf_cmd(adapter, &args);
+		rte_eal_alarm_set(IAVF_ALARM_INTERVAL,
+				  iavf_dev_alarm_handler, dev);
+	}
+
 	if (err) {
 		PMD_DRV_LOG(ERR, "fail to execute command OP_REQUEST_QUEUES");
 		return err;

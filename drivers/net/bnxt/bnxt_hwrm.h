@@ -37,6 +37,8 @@ struct hwrm_func_qstats_output;
 	(1 << (HWRM_ASYNC_EVENT_CMPL_EVENT_ID_DEFAULT_VNIC_CHANGE - 32))
 #define	ASYNC_CMPL_EVENT_ID_ECHO_REQUEST	\
 	(1 << (HWRM_ASYNC_EVENT_CMPL_EVENT_ID_ECHO_REQUEST - 64))
+#define	ASYNC_CMPL_EVENT_ID_ERROR_REPORT	\
+	(1 << (HWRM_ASYNC_EVENT_CMPL_EVENT_ID_ERROR_REPORT - 64))
 
 #define HWRM_QUEUE_SERVICE_PROFILE_LOSSY \
 	HWRM_QUEUE_QPORTCFG_OUTPUT_QUEUE_ID0_SERVICE_PROFILE_LOSSY
@@ -143,7 +145,7 @@ int bnxt_hwrm_func_buf_unrgtr(struct bnxt *bp);
 int bnxt_hwrm_func_driver_register(struct bnxt *bp);
 int bnxt_hwrm_func_qcaps(struct bnxt *bp);
 int bnxt_hwrm_func_reset(struct bnxt *bp);
-int bnxt_hwrm_func_driver_unregister(struct bnxt *bp, uint32_t flags);
+int bnxt_hwrm_func_driver_unregister(struct bnxt *bp);
 int bnxt_hwrm_func_qstats(struct bnxt *bp, uint16_t fid,
 			  struct rte_eth_stats *stats,
 			  struct hwrm_func_qstats_output *func_qstats);
@@ -168,9 +170,6 @@ int bnxt_hwrm_ring_grp_alloc(struct bnxt *bp, unsigned int idx);
 int bnxt_hwrm_ring_grp_free(struct bnxt *bp, unsigned int idx);
 
 int bnxt_hwrm_stat_clear(struct bnxt *bp, struct bnxt_cp_ring_info *cpr);
-int bnxt_hwrm_ctx_qstats(struct bnxt *bp, uint32_t cid, int idx,
-			 struct rte_eth_stats *stats, uint8_t rx);
-
 int bnxt_hwrm_ver_get(struct bnxt *bp, uint32_t timeout);
 
 int bnxt_hwrm_vnic_alloc(struct bnxt *bp, struct bnxt_vnic_info *vnic);
@@ -301,4 +300,14 @@ int bnxt_hwrm_cfa_adv_flow_mgmt_qcaps(struct bnxt *bp);
 int bnxt_hwrm_fw_echo_reply(struct bnxt *bp, uint32_t echo_req_data1,
 			    uint32_t echo_req_data2);
 int bnxt_hwrm_poll_ver_get(struct bnxt *bp);
+int bnxt_hwrm_rx_ring_reset(struct bnxt *bp, int queue_index);
+int bnxt_hwrm_ring_stats(struct bnxt *bp, uint32_t cid, int idx,
+			 struct bnxt_ring_stats *stats, bool rx);
+int bnxt_hwrm_read_sfp_module_eeprom_info(struct bnxt *bp, uint16_t i2c_addr,
+					  uint16_t page_number, uint16_t start_addr,
+					  uint16_t data_length, uint8_t *buf);
+int bnxt_hwrm_stat_ctx_alloc(struct bnxt *bp, struct bnxt_cp_ring_info *cpr);
+void bnxt_free_hwrm_tx_ring(struct bnxt *bp, int queue_index);
+int bnxt_alloc_hwrm_tx_ring(struct bnxt *bp, int queue_index);
+int bnxt_hwrm_config_host_mtu(struct bnxt *bp);
 #endif

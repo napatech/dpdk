@@ -40,6 +40,9 @@
 
 #define ICE_RXDID_COMMS_OVS	22
 
+extern uint64_t ice_timestamp_dynflag;
+extern int ice_timestamp_dynfield_offset;
+
 typedef void (*ice_rx_release_mbufs_t)(struct ice_rx_queue *rxq);
 typedef void (*ice_tx_release_mbufs_t)(struct ice_tx_queue *txq);
 typedef void (*ice_rxd_to_pkt_fields_t)(struct ice_rx_queue *rxq,
@@ -89,6 +92,8 @@ struct ice_rx_queue {
 	ice_rxd_to_pkt_fields_t rxd_to_pkt_fields; /* handle FlexiMD by RXDID */
 	ice_rx_release_mbufs_t rx_rel_mbufs;
 	uint64_t offloads;
+	uint32_t time_high;
+	const struct rte_memzone *mz;
 };
 
 struct ice_tx_entry {
@@ -133,6 +138,7 @@ struct ice_tx_queue {
 	bool tx_deferred_start; /* don't start this queue in dev start */
 	bool q_set; /* indicate if tx queue has been configured */
 	ice_tx_release_mbufs_t tx_rel_mbufs;
+	const struct rte_memzone *mz;
 };
 
 /* Offload features */
@@ -209,6 +215,8 @@ int ice_fdir_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id);
 int ice_fdir_tx_queue_stop(struct rte_eth_dev *dev, uint16_t tx_queue_id);
 void ice_rx_queue_release(void *rxq);
 void ice_tx_queue_release(void *txq);
+void ice_dev_rx_queue_release(struct rte_eth_dev *dev, uint16_t qid);
+void ice_dev_tx_queue_release(struct rte_eth_dev *dev, uint16_t qid);
 void ice_free_queues(struct rte_eth_dev *dev);
 int ice_fdir_setup_tx_resources(struct ice_pf *pf);
 int ice_fdir_setup_rx_resources(struct ice_pf *pf);
@@ -222,7 +230,7 @@ uint16_t ice_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 void ice_set_tx_function_flag(struct rte_eth_dev *dev,
 			      struct ice_tx_queue *txq);
 void ice_set_tx_function(struct rte_eth_dev *dev);
-uint32_t ice_rx_queue_count(struct rte_eth_dev *dev, uint16_t rx_queue_id);
+uint32_t ice_rx_queue_count(void *rx_queue);
 void ice_rxq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 		      struct rte_eth_rxq_info *qinfo);
 void ice_txq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
@@ -250,11 +258,18 @@ uint16_t ice_xmit_pkts_vec(void *tx_queue, struct rte_mbuf **tx_pkts,
 			   uint16_t nb_pkts);
 uint16_t ice_recv_pkts_vec_avx2(void *rx_queue, struct rte_mbuf **rx_pkts,
 				uint16_t nb_pkts);
+uint16_t ice_recv_pkts_vec_avx2_offload(void *rx_queue, struct rte_mbuf **rx_pkts,
+					uint16_t nb_pkts);
 uint16_t ice_recv_scattered_pkts_vec_avx2(void *rx_queue,
 					  struct rte_mbuf **rx_pkts,
 					  uint16_t nb_pkts);
+uint16_t ice_recv_scattered_pkts_vec_avx2_offload(void *rx_queue,
+						  struct rte_mbuf **rx_pkts,
+						  uint16_t nb_pkts);
 uint16_t ice_xmit_pkts_vec_avx2(void *tx_queue, struct rte_mbuf **tx_pkts,
 				uint16_t nb_pkts);
+uint16_t ice_xmit_pkts_vec_avx2_offload(void *tx_queue, struct rte_mbuf **tx_pkts,
+					uint16_t nb_pkts);
 uint16_t ice_recv_pkts_vec_avx512(void *rx_queue, struct rte_mbuf **rx_pkts,
 				  uint16_t nb_pkts);
 uint16_t ice_recv_pkts_vec_avx512_offload(void *rx_queue,
@@ -277,8 +292,8 @@ int ice_get_monitor_addr(void *rx_queue, struct rte_power_monitor_cond *pmc);
 
 #define FDIR_PARSING_ENABLE_PER_QUEUE(ad, on) do { \
 	int i; \
-	for (i = 0; i < (ad)->eth_dev->data->nb_rx_queues; i++) { \
-		struct ice_rx_queue *rxq = (ad)->eth_dev->data->rx_queues[i]; \
+	for (i = 0; i < (ad)->pf.dev_data->nb_rx_queues; i++) { \
+		struct ice_rx_queue *rxq = (ad)->pf.dev_data->rx_queues[i]; \
 		if (!rxq) \
 			continue; \
 		rxq->fdir_enabled = on; \
@@ -302,6 +317,36 @@ void ice_fdir_rx_parsing_enable(struct ice_adapter *ad, bool on)
 				FDIR_PARSING_ENABLE_PER_QUEUE(ad, on);
 		}
 	}
+}
+
+/* Helper function to convert a 32b nanoseconds timestamp to 64b. */
+static inline
+uint64_t ice_tstamp_convert_32b_64b(struct ice_hw *hw, uint32_t in_timestamp)
+{
+	const uint64_t mask = 0xFFFFFFFF;
+	uint32_t hi, lo, lo2, delta;
+	uint64_t time, ns;
+
+	lo = ICE_READ_REG(hw, GLTSYN_TIME_L(0));
+	hi = ICE_READ_REG(hw, GLTSYN_TIME_H(0));
+	lo2 = ICE_READ_REG(hw, GLTSYN_TIME_L(0));
+
+	if (lo2 < lo) {
+		lo = ICE_READ_REG(hw, GLTSYN_TIME_L(0));
+		hi = ICE_READ_REG(hw, GLTSYN_TIME_H(0));
+	}
+
+	time = ((uint64_t)hi << 32) | lo;
+
+	delta = (in_timestamp - (uint32_t)(time & mask));
+	if (delta > (mask / 2)) {
+		delta = ((uint32_t)(time & mask) - in_timestamp);
+		ns = time - delta;
+	} else {
+		ns = time + delta;
+	}
+
+	return ns;
 }
 
 #endif /* _ICE_RXTX_H_ */

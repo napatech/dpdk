@@ -13,6 +13,15 @@
 		(lmt_addr) += ((uint64_t)lmt_id << ROC_LMT_LINE_SIZE_LOG2);    \
 	} while (0)
 
+#define ROC_LMT_CPT_BASE_ID_GET(lmt_addr, lmt_id)                              \
+	do {                                                                   \
+		/* 16 Lines per core */                                        \
+		lmt_id = ROC_LMT_CPT_BASE_ID_OFF;                              \
+		lmt_id += (plt_lcore_id() << ROC_LMT_CPT_LINES_PER_CORE_LOG2); \
+		/* Each line is of 128B */                                     \
+		(lmt_addr) += ((uint64_t)lmt_id << ROC_LMT_LINE_SIZE_LOG2);    \
+	} while (0)
+
 #define roc_load_pair(val0, val1, addr)                                        \
 	({                                                                     \
 		asm volatile("ldp %x[x0], %x[x1], [%x[p1]]"                    \
@@ -182,6 +191,15 @@ roc_lmt_mov_seg_nv(void *out, const void *in, const uint16_t segdw)
 
 	for (i = 0; i < segdw; i++)
 		dst128[i] = src128[i];
+}
+
+static __plt_always_inline void
+roc_atf_ret(void)
+{
+	/* This will allow wfi in EL0 to cause async exception to EL3
+	 * which will optionally perform necessary actions.
+	 */
+	__asm("wfi");
 }
 
 #endif /* _ROC_IO_H_ */

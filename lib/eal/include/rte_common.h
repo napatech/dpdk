@@ -623,7 +623,7 @@ rte_bsf32(uint32_t v)
  *     Returns 0 if ``v`` was 0, otherwise returns 1.
  */
 static inline int
-rte_bsf32_safe(uint64_t v, uint32_t *pos)
+rte_bsf32_safe(uint32_t v, uint32_t *pos)
 {
 	if (v == 0)
 		return 0;
@@ -777,6 +777,14 @@ rte_log2_u64(uint64_t v)
 			(type *)(((uintptr_t)_ptr) - offsetof(type, member)); \
 		})
 #endif
+
+/** Swap two variables. */
+#define RTE_SWAP(a, b) \
+	__extension__ ({ \
+		typeof (a) _a = a; \
+		a = b; \
+		b = _a; \
+	})
 
 /**
  * Get the size of a field in a structure.

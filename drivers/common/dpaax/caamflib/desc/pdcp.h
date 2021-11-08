@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause or GPL-2.0+
  * Copyright 2008-2013 Freescale Semiconductor, Inc.
- * Copyright 2019-2020 NXP
+ * Copyright 2019-2021 NXP
  */
 
 #ifndef __DESC_PDCP_H__
@@ -269,6 +269,9 @@ enum pdb_type_e {
 	PDCP_PDB_TYPE_REDUCED_PDB,
 	PDCP_PDB_TYPE_INVALID
 };
+
+#define REDUCED_PDB_DESCBUF_HFN_BEARER_DIR_OFFSET 4
+#define FULL_PDB_DESCBUF_HFN_BEARER_DIR_OFFSET 8
 
 /**
  * rta_inline_pdcp_query() - Provide indications if a key can be passed as
@@ -2543,7 +2546,8 @@ static inline int
 insert_hfn_ov_op(struct program *p,
 		 uint32_t shift,
 		 enum pdb_type_e pdb_type,
-		 unsigned char era_2_sw_hfn_ovrd)
+		 unsigned char era_2_sw_hfn_ovrd,
+		 bool clear_dpovrd_at_end)
 {
 	uint32_t imm = PDCP_DPOVRD_HFN_OV_EN;
 	uint16_t hfn_pdb_offset;
@@ -2564,11 +2568,11 @@ insert_hfn_ov_op(struct program *p,
 		return 0;
 
 	case PDCP_PDB_TYPE_REDUCED_PDB:
-		hfn_pdb_offset = 4;
+		hfn_pdb_offset = REDUCED_PDB_DESCBUF_HFN_BEARER_DIR_OFFSET;
 		break;
 
 	case PDCP_PDB_TYPE_FULL_PDB:
-		hfn_pdb_offset = 8;
+		hfn_pdb_offset = FULL_PDB_DESCBUF_HFN_BEARER_DIR_OFFSET;
 		break;
 
 	default:
@@ -2594,13 +2598,14 @@ insert_hfn_ov_op(struct program *p,
 	MATHB(p, MATH0, SHLD, MATH0, MATH0, 8, 0);
 	MOVE(p, MATH0, 0, DESCBUF, hfn_pdb_offset, 4, IMMED);
 
-	if (rta_sec_era >= RTA_SEC_ERA_8)
+	if (clear_dpovrd_at_end && (rta_sec_era >= RTA_SEC_ERA_8)) {
 		/*
 		 * For ERA8, DPOVRD could be handled by the PROTOCOL command
 		 * itself. For now, this is not done. Thus, clear DPOVRD here
 		 * to alleviate any side-effects.
 		 */
 		MATHB(p, DPOVRD, AND, ZERO, DPOVRD, 4, STL);
+	}
 
 	SET_LABEL(p, keyjump);
 	PATCH_JUMP(p, pkeyjump, keyjump);
@@ -2986,7 +2991,7 @@ cnstr_shdsc_pdcp_c_plane_encap(uint32_t *descbuf,
 	SET_LABEL(p, pdb_end);
 
 	err = insert_hfn_ov_op(p, sn_size, pdb_type,
-			       era_2_sw_hfn_ovrd);
+			       era_2_sw_hfn_ovrd, true);
 	if (err)
 		return err;
 
@@ -3140,7 +3145,7 @@ cnstr_shdsc_pdcp_c_plane_decap(uint32_t *descbuf,
 	SET_LABEL(p, pdb_end);
 
 	err = insert_hfn_ov_op(p, sn_size, pdb_type,
-			       era_2_sw_hfn_ovrd);
+			       era_2_sw_hfn_ovrd, true);
 	if (err)
 		return err;
 
@@ -3316,7 +3321,7 @@ cnstr_shdsc_pdcp_u_plane_encap(uint32_t *descbuf,
 	}
 	SET_LABEL(p, pdb_end);
 
-	err = insert_hfn_ov_op(p, sn_size, pdb_type, era_2_sw_hfn_ovrd);
+	err = insert_hfn_ov_op(p, sn_size, pdb_type, era_2_sw_hfn_ovrd, true);
 	if (err)
 		return err;
 
@@ -3520,7 +3525,7 @@ cnstr_shdsc_pdcp_u_plane_decap(uint32_t *descbuf,
 	}
 	SET_LABEL(p, pdb_end);
 
-	err = insert_hfn_ov_op(p, sn_size, pdb_type, era_2_sw_hfn_ovrd);
+	err = insert_hfn_ov_op(p, sn_size, pdb_type, era_2_sw_hfn_ovrd, true);
 	if (err)
 		return err;
 
@@ -3710,9 +3715,10 @@ cnstr_shdsc_pdcp_short_mac(uint32_t *descbuf,
 		break;
 
 	case PDCP_AUTH_TYPE_SNOW:
+		/* IV calculation based on 3GPP specs. 36331, section:5.3.7.4 */
 		iv[0] = 0xFFFFFFFF;
-		iv[1] = swap ? swab32(0x04000000) : 0x04000000;
-		iv[2] = swap ? swab32(0xF8000000) : 0xF8000000;
+		iv[1] = swab32(0x04000000);
+		iv[2] = swab32(0xF8000000);
 
 		KEY(p, KEY2, authdata->key_enc_flags, authdata->key,
 		    authdata->keylen, INLINE_KEY(authdata));

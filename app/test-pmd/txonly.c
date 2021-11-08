@@ -40,6 +40,13 @@
 
 #include "testpmd.h"
 
+struct tx_timestamp {
+	rte_be32_t signature;
+	rte_be16_t pkt_idx;
+	rte_be16_t queue_idx;
+	rte_be64_t ts;
+};
+
 /* use RFC863 Discard Protocol */
 uint16_t tx_udp_src_port = 9;
 uint16_t tx_udp_dst_port = 9;
@@ -207,7 +214,7 @@ pkt_burst_prepare(struct rte_mbuf *pkt, struct rte_mempool *mbp,
 
 	rte_pktmbuf_reset_headroom(pkt);
 	pkt->data_len = tx_pkt_seg_lengths[0];
-	pkt->ol_flags &= EXT_ATTACHED_MBUF;
+	pkt->ol_flags &= RTE_MBUF_F_EXTERNAL;
 	pkt->ol_flags |= ol_flags;
 	pkt->vlan_tci = vlan_tci;
 	pkt->vlan_tci_outer = vlan_tci_outer;
@@ -257,18 +264,25 @@ pkt_burst_prepare(struct rte_mbuf *pkt, struct rte_mempool *mbp,
 
 	if (unlikely(timestamp_enable)) {
 		uint64_t skew = RTE_PER_LCORE(timestamp_qskew);
-		struct {
-			rte_be32_t signature;
-			rte_be16_t pkt_idx;
-			rte_be16_t queue_idx;
-			rte_be64_t ts;
-		} timestamp_mark;
+		struct tx_timestamp timestamp_mark;
 
 		if (unlikely(timestamp_init_req !=
 				RTE_PER_LCORE(timestamp_idone))) {
-			struct rte_eth_dev *dev = &rte_eth_devices[fs->tx_port];
-			unsigned int txqs_n = dev->data->nb_tx_queues;
-			uint64_t phase = tx_pkt_times_inter * fs->tx_queue /
+			struct rte_eth_dev_info dev_info;
+			unsigned int txqs_n;
+			uint64_t phase;
+			int ret;
+
+			ret = eth_dev_info_get_print_err(fs->tx_port, &dev_info);
+			if (ret != 0) {
+				TESTPMD_LOG(ERR,
+					"Failed to get device info for port %d,"
+					"could not finish timestamp init",
+					fs->tx_port);
+				return false;
+			}
+			txqs_n = dev_info.nb_tx_queues;
+			phase = tx_pkt_times_inter * fs->tx_queue /
 					 (txqs_n ? txqs_n : 1);
 			/*
 			 * Initialize the scheduling time phase shift
@@ -340,18 +354,18 @@ pkt_burst_transmit(struct fwd_stream *fs)
 	tx_offloads = txp->dev_conf.txmode.offloads;
 	vlan_tci = txp->tx_vlan_id;
 	vlan_tci_outer = txp->tx_vlan_id_outer;
-	if (tx_offloads	& DEV_TX_OFFLOAD_VLAN_INSERT)
-		ol_flags = PKT_TX_VLAN_PKT;
-	if (tx_offloads & DEV_TX_OFFLOAD_QINQ_INSERT)
-		ol_flags |= PKT_TX_QINQ_PKT;
-	if (tx_offloads & DEV_TX_OFFLOAD_MACSEC_INSERT)
-		ol_flags |= PKT_TX_MACSEC;
+	if (tx_offloads	& RTE_ETH_TX_OFFLOAD_VLAN_INSERT)
+		ol_flags = RTE_MBUF_F_TX_VLAN;
+	if (tx_offloads & RTE_ETH_TX_OFFLOAD_QINQ_INSERT)
+		ol_flags |= RTE_MBUF_F_TX_QINQ;
+	if (tx_offloads & RTE_ETH_TX_OFFLOAD_MACSEC_INSERT)
+		ol_flags |= RTE_MBUF_F_TX_MACSEC;
 
 	/*
 	 * Initialize Ethernet header.
 	 */
-	rte_ether_addr_copy(&peer_eth_addrs[fs->peer_addr], &eth_hdr.d_addr);
-	rte_ether_addr_copy(&ports[fs->tx_port].eth_addr, &eth_hdr.s_addr);
+	rte_ether_addr_copy(&peer_eth_addrs[fs->peer_addr], &eth_hdr.dst_addr);
+	rte_ether_addr_copy(&ports[fs->tx_port].eth_addr, &eth_hdr.src_addr);
 	eth_hdr.ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
 
 	if (rte_mempool_get_bulk(mbp, (void **)pkts_burst,
@@ -423,16 +437,26 @@ pkt_burst_transmit(struct fwd_stream *fs)
 	get_end_cycles(fs, start_tsc);
 }
 
-static void
+static int
 tx_only_begin(portid_t pi)
 {
-	uint16_t pkt_data_len;
+	uint16_t pkt_hdr_len, pkt_data_len;
 	int dynf;
 
-	pkt_data_len = (uint16_t) (tx_pkt_length - (
-					sizeof(struct rte_ether_hdr) +
-					sizeof(struct rte_ipv4_hdr) +
-					sizeof(struct rte_udp_hdr)));
+	pkt_hdr_len = (uint16_t)(sizeof(struct rte_ether_hdr) +
+				 sizeof(struct rte_ipv4_hdr) +
+				 sizeof(struct rte_udp_hdr));
+	pkt_data_len = tx_pkt_length - pkt_hdr_len;
+
+	if ((tx_pkt_split == TX_PKT_SPLIT_RND || txonly_multi_flow) &&
+	    tx_pkt_seg_lengths[0] < pkt_hdr_len) {
+		TESTPMD_LOG(ERR,
+			    "Random segment number or multiple flow is enabled, "
+			    "but tx_pkt_seg_lengths[0] %u < %u (needed)\n",
+			    tx_pkt_seg_lengths[0], pkt_hdr_len);
+		return -EINVAL;
+	}
+
 	setup_pkt_udp_ip_headers(&pkt_ip_hdr, &pkt_udp_hdr, pkt_data_len);
 
 	timestamp_enable = false;
@@ -451,10 +475,42 @@ tx_only_begin(portid_t pi)
 			   timestamp_mask &&
 			   timestamp_off >= 0 &&
 			   !rte_eth_read_clock(pi, &timestamp_initial[pi]);
-	if (timestamp_enable)
+
+	if (timestamp_enable) {
+		pkt_hdr_len += sizeof(struct tx_timestamp);
+
+		if (tx_pkt_split == TX_PKT_SPLIT_RND) {
+			if (tx_pkt_seg_lengths[0] < pkt_hdr_len) {
+				TESTPMD_LOG(ERR,
+					    "Time stamp and random segment number are enabled, "
+					    "but tx_pkt_seg_lengths[0] %u < %u (needed)\n",
+					    tx_pkt_seg_lengths[0], pkt_hdr_len);
+				return -EINVAL;
+			}
+		} else {
+			uint16_t total = 0;
+			uint8_t i;
+
+			for (i = 0; i < tx_pkt_nb_segs; i++) {
+				total += tx_pkt_seg_lengths[i];
+				if (total >= pkt_hdr_len)
+					break;
+			}
+
+			if (total < pkt_hdr_len) {
+				TESTPMD_LOG(ERR,
+					    "Not enough Tx segment space for time stamp info, "
+					    "total %u < %u (needed)\n",
+					    total, pkt_hdr_len);
+				return -EINVAL;
+			}
+		}
 		timestamp_init_req++;
+	}
+
 	/* Make sure all settings are visible on forwarding cores.*/
 	rte_wmb();
+	return 0;
 }
 
 struct fwd_engine tx_only_engine = {

@@ -32,7 +32,7 @@
 
 #define IP6_FULL_MASK (sizeof(((struct ip_addr *)NULL)->ip.ip6.ip6) * CHAR_BIT)
 
-#define MBUF_NO_SEC_OFFLOAD(m) ((m->ol_flags & PKT_RX_SEC_OFFLOAD) == 0)
+#define MBUF_NO_SEC_OFFLOAD(m) ((m->ol_flags & RTE_MBUF_F_RX_SEC_OFFLOAD) == 0)
 
 struct supported_cipher_algo {
 	const char *keyword;
@@ -759,20 +759,25 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 			continue;
 		}
 		if (strcmp(tokens[ti], "udp-encap") == 0) {
-			APP_CHECK(ips->type ==
-				RTE_SECURITY_ACTION_TYPE_LOOKASIDE_PROTOCOL,
-				status, "UDP encapsulation is allowed if the "
-				"session is of type lookaside-protocol-offload "
-				"only.");
-			if (status->status < 0)
-				return;
-			APP_CHECK_PRESENCE(udp_encap_p, tokens[ti], status);
-			if (status->status < 0)
-				return;
+			switch (ips->type) {
+			case RTE_SECURITY_ACTION_TYPE_LOOKASIDE_PROTOCOL:
+			case RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL:
+				APP_CHECK_PRESENCE(udp_encap_p, tokens[ti],
+						   status);
+				if (status->status < 0)
+					return;
 
-			rule->udp_encap = 1;
-			app_sa_prm.udp_encap = 1;
-			udp_encap_p = 1;
+				rule->udp_encap = 1;
+				app_sa_prm.udp_encap = 1;
+				udp_encap_p = 1;
+				break;
+			default:
+				APP_CHECK(0, status,
+					"UDP encapsulation not supported for "
+					"security session type %d",
+					ips->type);
+				return;
+			}
 			continue;
 		}
 
@@ -981,7 +986,7 @@ check_eth_dev_caps(uint16_t portid, uint32_t inbound)
 
 	if (inbound) {
 		if ((dev_info.rx_offload_capa &
-				DEV_RX_OFFLOAD_SECURITY) == 0) {
+				RTE_ETH_RX_OFFLOAD_SECURITY) == 0) {
 			RTE_LOG(WARNING, PORT,
 				"hardware RX IPSec offload is not supported\n");
 			return -EINVAL;
@@ -989,7 +994,7 @@ check_eth_dev_caps(uint16_t portid, uint32_t inbound)
 
 	} else { /* outbound */
 		if ((dev_info.tx_offload_capa &
-				DEV_TX_OFFLOAD_SECURITY) == 0) {
+				RTE_ETH_TX_OFFLOAD_SECURITY) == 0) {
 			RTE_LOG(WARNING, PORT,
 				"hardware TX IPSec offload is not supported\n");
 			return -EINVAL;
@@ -1623,7 +1628,7 @@ sa_check_offloads(uint16_t port_id, uint64_t *rx_offloads,
 				rule_type ==
 				RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL)
 				&& rule->portid == port_id)
-			*rx_offloads |= DEV_RX_OFFLOAD_SECURITY;
+			*rx_offloads |= RTE_ETH_RX_OFFLOAD_SECURITY;
 	}
 
 	/* Check for outbound rules that use offloads and use this port */
@@ -1634,7 +1639,7 @@ sa_check_offloads(uint16_t port_id, uint64_t *rx_offloads,
 				rule_type ==
 				RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL)
 				&& rule->portid == port_id)
-			*tx_offloads |= DEV_TX_OFFLOAD_SECURITY;
+			*tx_offloads |= RTE_ETH_TX_OFFLOAD_SECURITY;
 	}
 	return 0;
 }

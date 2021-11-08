@@ -31,6 +31,7 @@
 #define ICE_PPP_IPV4_PROTO	0x0021
 #define ICE_PPP_IPV6_PROTO	0x0057
 #define ICE_IPV4_PROTO_NVGRE	0x002F
+#define ICE_SW_PRI_BASE 6
 
 #define ICE_SW_INSET_ETHER ( \
 	ICE_INSET_DMAC | ICE_INSET_SMAC | ICE_INSET_ETHERTYPE)
@@ -44,6 +45,12 @@
 	ICE_INSET_IPV4_PROTO | ICE_INSET_IPV4_TTL | ICE_INSET_IPV4_TOS)
 #define ICE_SW_INSET_MAC_QINQ_IPV4 ( \
 	ICE_SW_INSET_MAC_QINQ | ICE_SW_INSET_MAC_IPV4)
+#define ICE_SW_INSET_MAC_QINQ_IPV4_TCP ( \
+	ICE_SW_INSET_MAC_QINQ_IPV4 | \
+	ICE_INSET_TCP_DST_PORT | ICE_INSET_TCP_SRC_PORT)
+#define ICE_SW_INSET_MAC_QINQ_IPV4_UDP ( \
+	ICE_SW_INSET_MAC_QINQ_IPV4 | \
+	ICE_INSET_UDP_DST_PORT | ICE_INSET_UDP_SRC_PORT)
 #define ICE_SW_INSET_MAC_IPV4_TCP ( \
 	ICE_INSET_DMAC | ICE_INSET_IPV4_DST | ICE_INSET_IPV4_SRC | \
 	ICE_INSET_IPV4_TTL | ICE_INSET_IPV4_TOS | \
@@ -58,6 +65,12 @@
 	ICE_INSET_IPV6_NEXT_HDR)
 #define ICE_SW_INSET_MAC_QINQ_IPV6 ( \
 	ICE_SW_INSET_MAC_QINQ | ICE_SW_INSET_MAC_IPV6)
+#define ICE_SW_INSET_MAC_QINQ_IPV6_TCP ( \
+	ICE_SW_INSET_MAC_QINQ_IPV6 | \
+	ICE_INSET_TCP_DST_PORT | ICE_INSET_TCP_SRC_PORT)
+#define ICE_SW_INSET_MAC_QINQ_IPV6_UDP ( \
+	ICE_SW_INSET_MAC_QINQ_IPV6 | \
+	ICE_INSET_UDP_DST_PORT | ICE_INSET_UDP_SRC_PORT)
 #define ICE_SW_INSET_MAC_IPV6_TCP ( \
 	ICE_INSET_DMAC | ICE_INSET_IPV6_DST | ICE_INSET_IPV6_SRC | \
 	ICE_INSET_IPV6_HOP_LIMIT | ICE_INSET_IPV6_TC | \
@@ -216,7 +229,11 @@ ice_pattern_match_item ice_switch_pattern_dist_list[] = {
 	{pattern_eth_ipv4_pfcp,				ICE_INSET_NONE,				ICE_INSET_NONE,				ICE_INSET_NONE},
 	{pattern_eth_ipv6_pfcp,				ICE_INSET_NONE,				ICE_INSET_NONE,				ICE_INSET_NONE},
 	{pattern_eth_qinq_ipv4,				ICE_SW_INSET_MAC_QINQ_IPV4,		ICE_INSET_NONE,				ICE_INSET_NONE},
+	{pattern_eth_qinq_ipv4_tcp,			ICE_SW_INSET_MAC_QINQ_IPV4_TCP,		ICE_INSET_NONE,				ICE_INSET_NONE},
+	{pattern_eth_qinq_ipv4_udp,			ICE_SW_INSET_MAC_QINQ_IPV4_UDP,		ICE_INSET_NONE,				ICE_INSET_NONE},
 	{pattern_eth_qinq_ipv6,				ICE_SW_INSET_MAC_QINQ_IPV6,		ICE_INSET_NONE,				ICE_INSET_NONE},
+	{pattern_eth_qinq_ipv6_tcp,			ICE_SW_INSET_MAC_QINQ_IPV6_TCP,		ICE_INSET_NONE,				ICE_INSET_NONE},
+	{pattern_eth_qinq_ipv6_udp,			ICE_SW_INSET_MAC_QINQ_IPV6_UDP,		ICE_INSET_NONE,				ICE_INSET_NONE},
 	{pattern_eth_qinq_pppoes,			ICE_SW_INSET_MAC_PPPOE,			ICE_INSET_NONE,				ICE_INSET_NONE},
 	{pattern_eth_qinq_pppoes_proto,			ICE_SW_INSET_MAC_PPPOE_PROTO,		ICE_INSET_NONE,				ICE_INSET_NONE},
 	{pattern_eth_qinq_pppoes_ipv4,			ICE_SW_INSET_MAC_PPPOE_IPV4,		ICE_INSET_NONE,				ICE_INSET_NONE},
@@ -295,7 +312,11 @@ ice_pattern_match_item ice_switch_pattern_perm_list[] = {
 	{pattern_eth_ipv4_pfcp,				ICE_INSET_NONE,				ICE_INSET_NONE,				ICE_INSET_NONE},
 	{pattern_eth_ipv6_pfcp,				ICE_INSET_NONE,				ICE_INSET_NONE,				ICE_INSET_NONE},
 	{pattern_eth_qinq_ipv4,				ICE_SW_INSET_MAC_QINQ_IPV4,		ICE_INSET_NONE,				ICE_INSET_NONE},
+	{pattern_eth_qinq_ipv4_tcp,			ICE_SW_INSET_MAC_QINQ_IPV4_TCP,		ICE_INSET_NONE,				ICE_INSET_NONE},
+	{pattern_eth_qinq_ipv4_udp,			ICE_SW_INSET_MAC_QINQ_IPV4_UDP,		ICE_INSET_NONE,				ICE_INSET_NONE},
 	{pattern_eth_qinq_ipv6,				ICE_SW_INSET_MAC_QINQ_IPV6,		ICE_INSET_NONE,				ICE_INSET_NONE},
+	{pattern_eth_qinq_ipv6_tcp,			ICE_SW_INSET_MAC_QINQ_IPV6_TCP,		ICE_INSET_NONE,				ICE_INSET_NONE},
+	{pattern_eth_qinq_ipv6_udp,			ICE_SW_INSET_MAC_QINQ_IPV6_UDP,		ICE_INSET_NONE,				ICE_INSET_NONE},
 	{pattern_eth_qinq_pppoes,			ICE_SW_INSET_MAC_PPPOE,			ICE_INSET_NONE,				ICE_INSET_NONE},
 	{pattern_eth_qinq_pppoes_proto,			ICE_SW_INSET_MAC_PPPOE_PROTO,		ICE_INSET_NONE,				ICE_INSET_NONE},
 	{pattern_eth_qinq_pppoes_ipv4,			ICE_SW_INSET_MAC_PPPOE_IPV4,		ICE_INSET_NONE,				ICE_INSET_NONE},
@@ -1350,7 +1371,7 @@ ice_switch_parse_pattern(const struct rte_flow_item pattern[],
 				return false;
 			}
 			if (gtp_psc_spec && gtp_psc_mask) {
-				if (gtp_psc_mask->pdu_type) {
+				if (gtp_psc_mask->hdr.type) {
 					rte_flow_error_set(error, EINVAL,
 						RTE_FLOW_ERROR_TYPE_ITEM,
 						item,
@@ -1358,13 +1379,13 @@ ice_switch_parse_pattern(const struct rte_flow_item pattern[],
 					return false;
 				}
 				input = &outer_input_set;
-				if (gtp_psc_mask->qfi)
+				if (gtp_psc_mask->hdr.qfi)
 					*input |= ICE_INSET_GTPU_QFI;
 				list[t].type = ICE_GTP;
 				list[t].h_u.gtp_hdr.qfi =
-					gtp_psc_spec->qfi;
+					gtp_psc_spec->hdr.qfi;
 				list[t].m_u.gtp_hdr.qfi =
-					gtp_psc_mask->qfi;
+					gtp_psc_mask->hdr.qfi;
 				input_set_byte += 1;
 				t++;
 			}
@@ -1572,7 +1593,10 @@ ice_switch_parse_dcf_action(struct ice_dcf_adapter *ad,
 	rule_info->sw_act.src = rule_info->sw_act.vsi_handle;
 	rule_info->sw_act.flag = ICE_FLTR_RX;
 	rule_info->rx = 1;
-	rule_info->priority = priority + 5;
+	/* 0 denotes lowest priority of recipe and highest priority
+	 * of rte_flow. Change rte_flow priority into recipe priority.
+	 */
+	rule_info->priority = ICE_SW_PRI_BASE - priority;
 
 	return 0;
 }
@@ -1585,7 +1609,7 @@ ice_switch_parse_action(struct ice_pf *pf,
 		struct ice_adv_rule_info *rule_info)
 {
 	struct ice_vsi *vsi = pf->main_vsi;
-	struct rte_eth_dev *dev = pf->adapter->eth_dev;
+	struct rte_eth_dev_data *dev_data = pf->adapter->pf.dev_data;
 	const struct rte_flow_action_queue *act_q;
 	const struct rte_flow_action_rss *act_qgrop;
 	uint16_t base_queue, i;
@@ -1616,7 +1640,7 @@ ice_switch_parse_action(struct ice_pf *pf,
 				goto error;
 			if ((act_qgrop->queue[0] +
 				act_qgrop->queue_num) >
-				dev->data->nb_rx_queues)
+				dev_data->nb_rx_queues)
 				goto error1;
 			for (i = 0; i < act_qgrop->queue_num - 1; i++)
 				if (act_qgrop->queue[i + 1] !=
@@ -1627,7 +1651,7 @@ ice_switch_parse_action(struct ice_pf *pf,
 			break;
 		case RTE_FLOW_ACTION_TYPE_QUEUE:
 			act_q = action->conf;
-			if (act_q->index >= dev->data->nb_rx_queues)
+			if (act_q->index >= dev_data->nb_rx_queues)
 				goto error;
 			rule_info->sw_act.fltr_act =
 				ICE_FWD_TO_Q;
@@ -1651,7 +1675,10 @@ ice_switch_parse_action(struct ice_pf *pf,
 	rule_info->sw_act.vsi_handle = vsi->idx;
 	rule_info->rx = 1;
 	rule_info->sw_act.src = vsi->idx;
-	rule_info->priority = priority + 5;
+	/* 0 denotes lowest priority of recipe and highest priority
+	 * of rte_flow. Change rte_flow priority into recipe priority.
+	 */
+	rule_info->priority = ICE_SW_PRI_BASE - priority;
 
 	return 0;
 

@@ -12,7 +12,6 @@
 #include <signal.h>
 #include <pthread.h>
 #include <sys/types.h>
-#include <sys/syscall.h>
 #include <sys/eventfd.h>
 
 #include <rte_byteorder.h>
@@ -106,7 +105,7 @@ dpaa_add_to_device_list(struct rte_dpaa_device *newdev)
 	struct rte_dpaa_device *dev = NULL;
 	struct rte_dpaa_device *tdev = NULL;
 
-	TAILQ_FOREACH_SAFE(dev, &rte_dpaa_bus.device_list, next, tdev) {
+	RTE_TAILQ_FOREACH_SAFE(dev, &rte_dpaa_bus.device_list, next, tdev) {
 		comp = compare_dpaa_devices(newdev, dev);
 		if (comp < 0) {
 			TAILQ_INSERT_BEFORE(dev, newdev, next);
@@ -173,6 +172,15 @@ dpaa_create_device_list(void)
 
 		dev->device.bus = &rte_dpaa_bus.bus;
 
+		/* Allocate interrupt handle instance */
+		dev->intr_handle =
+			rte_intr_instance_alloc(RTE_INTR_INSTANCE_F_PRIVATE);
+		if (dev->intr_handle == NULL) {
+			DPAA_BUS_LOG(ERR, "Failed to allocate intr handle");
+			ret = -ENOMEM;
+			goto cleanup;
+		}
+
 		cfg = &dpaa_netcfg->port_cfg[i];
 		fman_intf = cfg->fman_if;
 
@@ -215,6 +223,15 @@ dpaa_create_device_list(void)
 			goto cleanup;
 		}
 
+		/* Allocate interrupt handle instance */
+		dev->intr_handle =
+			rte_intr_instance_alloc(RTE_INTR_INSTANCE_F_PRIVATE);
+		if (dev->intr_handle == NULL) {
+			DPAA_BUS_LOG(ERR, "Failed to allocate intr handle");
+			ret = -ENOMEM;
+			goto cleanup;
+		}
+
 		dev->device_type = FSL_DPAA_CRYPTO;
 		dev->id.dev_id = rte_dpaa_bus.device_count + i;
 
@@ -246,8 +263,9 @@ dpaa_clean_device_list(void)
 	struct rte_dpaa_device *dev = NULL;
 	struct rte_dpaa_device *tdev = NULL;
 
-	TAILQ_FOREACH_SAFE(dev, &rte_dpaa_bus.device_list, next, tdev) {
+	RTE_TAILQ_FOREACH_SAFE(dev, &rte_dpaa_bus.device_list, next, tdev) {
 		TAILQ_REMOVE(&rte_dpaa_bus.device_list, dev, next);
+		rte_intr_instance_free(dev->intr_handle);
 		free(dev);
 		dev = NULL;
 	}
@@ -314,7 +332,7 @@ int rte_dpaa_portal_init(void *arg)
 
 	DPAA_PER_LCORE_PORTAL->qman_idx = qman_get_portal_index();
 	DPAA_PER_LCORE_PORTAL->bman_idx = bman_get_portal_index();
-	DPAA_PER_LCORE_PORTAL->tid = syscall(SYS_gettid);
+	DPAA_PER_LCORE_PORTAL->tid = rte_gettid();
 
 	ret = pthread_setspecific(dpaa_portal_key,
 				  (void *)DPAA_PER_LCORE_PORTAL);
@@ -560,8 +578,11 @@ static int rte_dpaa_setup_intr(struct rte_intr_handle *intr_handle)
 		return errno;
 	}
 
-	intr_handle->fd = fd;
-	intr_handle->type = RTE_INTR_HANDLE_EXT;
+	if (rte_intr_fd_set(intr_handle, fd))
+		return rte_errno;
+
+	if (rte_intr_type_set(intr_handle, RTE_INTR_HANDLE_EXT))
+		return rte_errno;
 
 	return 0;
 }
@@ -613,7 +634,7 @@ rte_dpaa_bus_probe(void)
 
 	TAILQ_FOREACH(dev, &rte_dpaa_bus.device_list, next) {
 		if (dev->device_type == FSL_DPAA_ETH) {
-			ret = rte_dpaa_setup_intr(&dev->intr_handle);
+			ret = rte_dpaa_setup_intr(dev->intr_handle);
 			if (ret)
 				DPAA_BUS_ERR("Error setting up interrupt.\n");
 		}

@@ -171,7 +171,8 @@ sfc_ef10_rx_qrefill(struct sfc_ef10_rxq *rxq)
 
 	SFC_ASSERT(rxq->added != added);
 	rxq->added = added;
-	sfc_ef10_rx_qpush(rxq->doorbell, added, ptr_mask);
+	sfc_ef10_rx_qpush(rxq->doorbell, added, ptr_mask,
+			  &rxq->dp.dpq.rx_dbells);
 }
 
 static void
@@ -329,7 +330,7 @@ sfc_ef10_rx_process_event(struct sfc_ef10_rxq *rxq, efx_qword_t rx_ev,
 	/* Mask RSS hash offload flag if RSS is not enabled */
 	sfc_ef10_rx_ev_to_offloads(rx_ev, m,
 				   (rxq->flags & SFC_EF10_RXQ_RSS_HASH) ?
-				   ~0ull : ~PKT_RX_RSS_HASH);
+				   ~0ull : ~RTE_MBUF_F_RX_RSS_HASH);
 
 	/* data_off already moved past pseudo header */
 	pseudo_hdr = (uint8_t *)m->buf_addr + RTE_PKTMBUF_HEADROOM;
@@ -337,7 +338,7 @@ sfc_ef10_rx_process_event(struct sfc_ef10_rxq *rxq, efx_qword_t rx_ev,
 	/*
 	 * Always get RSS hash from pseudo header to avoid
 	 * condition/branching. If it is valid or not depends on
-	 * PKT_RX_RSS_HASH in m->ol_flags.
+	 * RTE_MBUF_F_RX_RSS_HASH in m->ol_flags.
 	 */
 	m->hash.rss = sfc_ef10_rx_pseudo_hdr_get_hash(pseudo_hdr);
 
@@ -391,7 +392,7 @@ sfc_ef10_rx_process_event(struct sfc_ef10_rxq *rxq, efx_qword_t rx_ev,
 		/*
 		 * Always get RSS hash from pseudo header to avoid
 		 * condition/branching. If it is valid or not depends on
-		 * PKT_RX_RSS_HASH in m->ol_flags.
+		 * RTE_MBUF_F_RX_RSS_HASH in m->ol_flags.
 		 */
 		m->hash.rss = sfc_ef10_rx_pseudo_hdr_get_hash(pseudo_hdr);
 
@@ -818,10 +819,10 @@ struct sfc_dp_rx sfc_ef10_rx = {
 	},
 	.features		= SFC_DP_RX_FEAT_MULTI_PROCESS |
 				  SFC_DP_RX_FEAT_INTR,
-	.dev_offload_capa	= DEV_RX_OFFLOAD_CHECKSUM |
-				  DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM |
-				  DEV_RX_OFFLOAD_RSS_HASH,
-	.queue_offload_capa	= DEV_RX_OFFLOAD_SCATTER,
+	.dev_offload_capa	= RTE_ETH_RX_OFFLOAD_CHECKSUM |
+				  RTE_ETH_RX_OFFLOAD_OUTER_IPV4_CKSUM |
+				  RTE_ETH_RX_OFFLOAD_RSS_HASH,
+	.queue_offload_capa	= RTE_ETH_RX_OFFLOAD_SCATTER,
 	.get_dev_info		= sfc_ef10_rx_get_dev_info,
 	.qsize_up_rings		= sfc_ef10_rx_qsize_up_rings,
 	.qcreate		= sfc_ef10_rx_qcreate,

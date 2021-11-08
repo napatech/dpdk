@@ -22,13 +22,15 @@ sfc_kvargs_parse(struct sfc_adapter *sa)
 	struct rte_eth_dev *eth_dev = (sa)->eth_dev;
 	struct rte_devargs *devargs = eth_dev->device->devargs;
 	const char **params = (const char *[]){
+		SFC_KVARG_SWITCH_MODE,
+		SFC_KVARG_REPRESENTOR,
 		SFC_KVARG_STATS_UPDATE_PERIOD_MS,
 		SFC_KVARG_PERF_PROFILE,
 		SFC_KVARG_RX_DATAPATH,
 		SFC_KVARG_TX_DATAPATH,
 		SFC_KVARG_FW_VARIANT,
 		SFC_KVARG_RXD_WAIT_TIMEOUT_NS,
-		SFC_EFX_KVARG_DEV_CLASS,
+		RTE_DEVARGS_KEY_CLASS,
 		NULL,
 	};
 

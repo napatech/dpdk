@@ -1,10 +1,14 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2020 Mellanox Technologies, Ltd
  */
+
+#include <sys/queue.h>
+
 #include <rte_windows.h>
 #include <rte_errno.h>
 #include <rte_log.h>
 #include <rte_eal.h>
+#include <rte_memory.h>
 
 #include "private.h"
 #include "pci_netuio.h"
@@ -236,6 +240,7 @@ get_device_resource_info(HDEVINFO dev_info,
 	}
 
 	/* Get NUMA node using DEVPKEY_Device_Numa_Node */
+	dev->device.numa_node = SOCKET_ID_ANY;
 	res = SetupDiGetDevicePropertyW(dev_info, dev_info_data,
 		&DEVPKEY_Device_Numa_Node, &property_type,
 		(BYTE *)&numa_node, sizeof(numa_node), NULL, 0);

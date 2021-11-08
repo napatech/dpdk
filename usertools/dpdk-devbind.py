@@ -45,6 +45,12 @@ octeontx2_dma = {'Class': '08', 'Vendor': '177d', 'Device': 'a081',
                  'SVendor': None, 'SDevice': None}
 octeontx2_ree = {'Class': '08', 'Vendor': '177d', 'Device': 'a0f4',
                  'SVendor': None, 'SDevice': None}
+cnxk_bphy = {'Class': '08', 'Vendor': '177d', 'Device': 'a089',
+             'SVendor': None, 'SDevice': None}
+cnxk_bphy_cgx = {'Class': '08', 'Vendor': '177d', 'Device': 'a059,a060',
+                 'SVendor': None, 'SDevice': None}
+cnxk_inl_dev = {'Class': '08', 'Vendor': '177d', 'Device': 'a0f0,a0f1',
+                'SVendor': None, 'SDevice': None}
 
 intel_dlb = {'Class': '0b', 'Vendor': '8086', 'Device': '270b,2710,2714',
              'SVendor': None, 'SDevice': None}
@@ -65,13 +71,13 @@ intel_ntb_icx = {'Class': '06', 'Vendor': '8086', 'Device': '347e',
 network_devices = [network_class, cavium_pkx, avp_vnic, ifpga_class]
 baseband_devices = [acceleration_class]
 crypto_devices = [encryption_class, intel_processor_class]
+dma_devices = [intel_idxd_spr, intel_ioat_bdw, intel_ioat_icx, intel_ioat_skx]
 eventdev_devices = [cavium_sso, cavium_tim, intel_dlb, octeontx2_sso]
 mempool_devices = [cavium_fpa, octeontx2_npa]
 compress_devices = [cavium_zip]
 regex_devices = [octeontx2_ree]
-misc_devices = [intel_ioat_bdw, intel_ioat_skx, intel_ioat_icx, intel_idxd_spr,
-                intel_ntb_skx, intel_ntb_icx,
-                octeontx2_dma]
+misc_devices = [cnxk_bphy, cnxk_bphy_cgx, cnxk_inl_dev, intel_ntb_skx,
+                intel_ntb_icx, octeontx2_dma]
 
 # global dict ethernet devices present. Dictionary indexed by PCI address.
 # Each device within this is itself a dictionary of device properties
@@ -86,6 +92,7 @@ b_flag = None
 status_flag = False
 force_flag = False
 args = []
+
 
 # check if a specific kernel module is loaded
 def module_is_loaded(module):
@@ -174,10 +181,12 @@ def get_pci_device_details(dev_id, probe_lspci):
 
     return device
 
+
 def clear_data():
     '''This function clears any old data'''
     global devices
     devices = {}
+
 
 def get_device_details(devices_type):
     '''This function populates the "devices" dictionary. The keys used are
@@ -224,7 +233,7 @@ def get_device_details(devices_type):
         rt_info = route.split()
         for i in range(len(rt_info) - 1):
             if rt_info[i] == "dev":
-                ssh_if.append(rt_info[i+1])
+                ssh_if.append(rt_info[i + 1])
 
     # based on the basic info, get extended text details
     for d in devices.keys():
@@ -278,6 +287,7 @@ def device_type_match(dev, devices_type):
                 return True
     return False
 
+
 def dev_id_from_dev_name(dev_name):
     '''Take a device "name" - a string passed in by user to identify a NIC
     device, and determine the device id - i.e. the domain:bus:slot.func - for
@@ -317,9 +327,9 @@ def unbind_one(dev_id, force):
     filename = "/sys/bus/pci/drivers/%s/unbind" % dev["Driver_str"]
     try:
         f = open(filename, "a")
-    except:
-        sys.exit("Error: unbind failed for %s - Cannot open %s" %
-                 (dev_id, filename))
+    except OSError as err:
+        sys.exit("Error: unbind failed for %s - Cannot open %s: %s" %
+                 (dev_id, filename, err))
     f.write(dev_id)
     f.close()
 
@@ -357,58 +367,58 @@ def bind_one(dev_id, driver, force):
         if exists(filename):
             try:
                 f = open(filename, "w")
-            except:
-                print("Error: bind failed for %s - Cannot open %s"
-                      % (dev_id, filename), file=sys.stderr)
+            except OSError as err:
+                print("Error: bind failed for %s - Cannot open %s: %s"
+                      % (dev_id, filename, err), file=sys.stderr)
                 return
             try:
                 f.write("%s" % driver)
                 f.close()
-            except:
+            except OSError as err:
                 print("Error: bind failed for %s - Cannot write driver %s to "
-                      "PCI ID " % (dev_id, driver), file=sys.stderr)
+                      "PCI ID: %s" % (dev_id, driver, err), file=sys.stderr)
                 return
         # For kernels < 3.15 use new_id to add PCI id's to the driver
         else:
             filename = "/sys/bus/pci/drivers/%s/new_id" % driver
             try:
                 f = open(filename, "w")
-            except:
-                print("Error: bind failed for %s - Cannot open %s"
-                      % (dev_id, filename), file=sys.stderr)
+            except OSError as err:
+                print("Error: bind failed for %s - Cannot open %s: %s"
+                      % (dev_id, filename, err), file=sys.stderr)
                 return
             try:
                 # Convert Device and Vendor Id to int to write to new_id
                 f.write("%04x %04x" % (int(dev["Vendor"], 16),
                                        int(dev["Device"], 16)))
                 f.close()
-            except:
+            except OSError as err:
                 print("Error: bind failed for %s - Cannot write new PCI ID to "
-                      "driver %s" % (dev_id, driver), file=sys.stderr)
+                      "driver %s: %s" % (dev_id, driver, err), file=sys.stderr)
                 return
 
     # do the bind by writing to /sys
     filename = "/sys/bus/pci/drivers/%s/bind" % driver
     try:
         f = open(filename, "a")
-    except:
-        print("Error: bind failed for %s - Cannot open %s"
-              % (dev_id, filename), file=sys.stderr)
+    except OSError as err:
+        print("Error: bind failed for %s - Cannot open %s: %s"
+              % (dev_id, filename, err), file=sys.stderr)
         if saved_driver is not None:  # restore any previous driver
             bind_one(dev_id, saved_driver, force)
         return
     try:
         f.write(dev_id)
         f.close()
-    except:
+    except OSError as err:
         # for some reason, closing dev_id after adding a new PCI ID to new_id
         # results in IOError. however, if the device was successfully bound,
         # we don't care for any errors and can safely ignore IOError
         tmp = get_pci_device_details(dev_id, True)
         if "Driver_str" in tmp and tmp["Driver_str"] == driver:
             return
-        print("Error: bind failed for %s - Cannot bind to driver %s"
-              % (dev_id, driver), file=sys.stderr)
+        print("Error: bind failed for %s - Cannot bind to driver %s: %s"
+              % (dev_id, driver, err), file=sys.stderr)
         if saved_driver is not None:  # restore any previous driver
             bind_one(dev_id, saved_driver, force)
         return
@@ -420,15 +430,15 @@ def bind_one(dev_id, driver, force):
     if exists(filename):
         try:
             f = open(filename, "w")
-        except:
-            sys.exit("Error: unbind failed for %s - Cannot open %s"
-                     % (dev_id, filename))
+        except OSError as err:
+            sys.exit("Error: unbind failed for %s - Cannot open %s: %s"
+                     % (dev_id, filename, err))
         try:
             f.write("\00")
             f.close()
-        except:
-            sys.exit("Error: unbind failed for %s - Cannot open %s"
-                     % (dev_id, filename))
+        except OSError as err:
+            sys.exit("Error: unbind failed for %s - Cannot write %s: %s"
+                     % (dev_id, filename, err))
 
 
 def unbind_all(dev_list, force=False):
@@ -462,7 +472,7 @@ def bind_all(dev_list, driver, force=False):
         dev_id_from_dev_name(driver)
         # if we've made it this far, this means that the "driver" was a valid
         # device string, so it's probably not a valid driver name.
-        sys.exit("Error: Driver '%s' does not look like a valid driver. " \
+        sys.exit("Error: Driver '%s' does not look like a valid driver. "
                  "Did you forget to specify the driver to bind devices to?" % driver)
     except ValueError:
         # driver generated error - it's not a valid device ID, so all is well
@@ -492,8 +502,8 @@ def bind_all(dev_list, driver, force=False):
                 continue
 
             # update information about this device
-            devices[d] = dict(devices[d].items() +
-                              get_pci_device_details(d, True).items())
+            devices[d] = dict(devices[d].items()
+                              + get_pci_device_details(d, True).items())
 
             # check if updated information indicates that the device was bound
             if "Driver_str" in devices[d]:
@@ -507,7 +517,7 @@ def display_devices(title, dev_list, extra_params=None):
      device's dictionary.'''
     strings = []  # this holds the strings to print. We sort before printing
     print("\n%s" % title)
-    print("="*len(title))
+    print("=" * len(title))
     if not dev_list:
         strings.append("<none>")
     else:
@@ -522,6 +532,7 @@ def display_devices(title, dev_list, extra_params=None):
     # sort before printing, so that the entries appear in PCI order
     strings.sort()
     print("\n".join(strings))  # print one per line
+
 
 def show_device_status(devices_type, device_name, if_field=False):
     global dpdk_drivers
@@ -565,6 +576,7 @@ def show_device_status(devices_type, device_name, if_field=False):
         display_devices("Other %s devices" % device_name, no_drv,
                         "unused=%(Module_str)s")
 
+
 def show_status():
     '''Function called when the script is passed the "--status" option.
     Displays to the user what devices are bound to the igb_uio driver, the
@@ -578,6 +590,9 @@ def show_status():
 
     if status_dev in ["crypto", "all"]:
         show_device_status(crypto_devices, "Crypto")
+
+    if status_dev in ["dma", "all"]:
+        show_device_status(dma_devices, "DMA")
 
     if status_dev in ["event", "all"]:
         show_device_status(eventdev_devices, "Eventdev")
@@ -647,8 +662,8 @@ To bind 0000:02:00.0 and 0000:02:00.1 to the ixgbe kernel driver
     parser.add_argument(
         '--status-dev',
         help="Print the status of given device group.",
-        choices=['baseband', 'compress', 'crypto', 'event',
-                'mempool', 'misc', 'net', 'regex'])
+        choices=['baseband', 'compress', 'crypto', 'dma', 'event',
+                 'mempool', 'misc', 'net', 'regex'])
     bind_group = parser.add_mutually_exclusive_group()
     bind_group.add_argument(
         '-b',
@@ -710,6 +725,7 @@ For devices bound to Linux kernel drivers, they may be referred to by interface 
         new_args.extend(pci_glob(arg))
     args = new_args
 
+
 def do_arg_actions():
     '''do the actual action requested by the user'''
     global b_flag
@@ -728,6 +744,7 @@ def do_arg_actions():
             get_device_details(network_devices)
             get_device_details(baseband_devices)
             get_device_details(crypto_devices)
+            get_device_details(dma_devices)
             get_device_details(eventdev_devices)
             get_device_details(mempool_devices)
             get_device_details(compress_devices)
@@ -750,12 +767,14 @@ def main():
     get_device_details(network_devices)
     get_device_details(baseband_devices)
     get_device_details(crypto_devices)
+    get_device_details(dma_devices)
     get_device_details(eventdev_devices)
     get_device_details(mempool_devices)
     get_device_details(compress_devices)
     get_device_details(regex_devices)
     get_device_details(misc_devices)
     do_arg_actions()
+
 
 if __name__ == "__main__":
     main()

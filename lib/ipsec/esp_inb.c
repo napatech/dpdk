@@ -15,7 +15,7 @@
 #include "misc.h"
 #include "pad.h"
 
-typedef uint16_t (*esp_inb_process_t)(const struct rte_ipsec_sa *sa,
+typedef uint16_t (*esp_inb_process_t)(struct rte_ipsec_sa *sa,
 	struct rte_mbuf *mb[], uint32_t sqn[], uint32_t dr[], uint16_t num,
 	uint8_t sqh_len);
 
@@ -63,6 +63,8 @@ inb_cop_prepare(struct rte_crypto_op *cop,
 {
 	struct rte_crypto_sym_op *sop;
 	struct aead_gcm_iv *gcm;
+	struct aead_ccm_iv *ccm;
+	struct aead_chacha20_poly1305_iv *chacha20_poly1305;
 	struct aesctr_cnt_blk *ctr;
 	uint64_t *ivc, *ivp;
 	uint32_t algo;
@@ -83,6 +85,24 @@ inb_cop_prepare(struct rte_crypto_op *cop,
 			sa->iv_ofs);
 		aead_gcm_iv_fill(gcm, ivp[0], sa->salt);
 		break;
+	case ALGO_TYPE_AES_CCM:
+		sop_aead_prepare(sop, sa, icv, pofs, plen);
+
+		/* fill AAD IV (located inside crypto op) */
+		ccm = rte_crypto_op_ctod_offset(cop, struct aead_ccm_iv *,
+			sa->iv_ofs);
+		aead_ccm_iv_fill(ccm, ivp[0], sa->salt);
+		break;
+	case ALGO_TYPE_CHACHA20_POLY1305:
+		sop_aead_prepare(sop, sa, icv, pofs, plen);
+
+		/* fill AAD IV (located inside crypto op) */
+		chacha20_poly1305 = rte_crypto_op_ctod_offset(cop,
+				struct aead_chacha20_poly1305_iv *,
+				sa->iv_ofs);
+		aead_chacha20_poly1305_iv_fill(chacha20_poly1305,
+					       ivp[0], sa->salt);
+		break;
 	case ALGO_TYPE_AES_CBC:
 	case ALGO_TYPE_3DES_CBC:
 		sop_ciph_auth_prepare(sop, sa, icv, pofs, plen);
@@ -90,6 +110,14 @@ inb_cop_prepare(struct rte_crypto_op *cop,
 		/* copy iv from the input packet to the cop */
 		ivc = rte_crypto_op_ctod_offset(cop, uint64_t *, sa->iv_ofs);
 		copy_iv(ivc, ivp, sa->iv_len);
+		break;
+	case ALGO_TYPE_AES_GMAC:
+		sop_ciph_auth_prepare(sop, sa, icv, pofs, plen);
+
+		/* fill AAD IV (located inside crypto op) */
+		gcm = rte_crypto_op_ctod_offset(cop, struct aead_gcm_iv *,
+			sa->iv_ofs);
+		aead_gcm_iv_fill(gcm, ivp[0], sa->salt);
 		break;
 	case ALGO_TYPE_AES_CTR:
 		sop_ciph_auth_prepare(sop, sa, icv, pofs, plen);
@@ -110,6 +138,8 @@ inb_cpu_crypto_prepare(const struct rte_ipsec_sa *sa, struct rte_mbuf *mb,
 	uint32_t *pofs, uint32_t plen, void *iv)
 {
 	struct aead_gcm_iv *gcm;
+	struct aead_ccm_iv *ccm;
+	struct aead_chacha20_poly1305_iv *chacha20_poly1305;
 	struct aesctr_cnt_blk *ctr;
 	uint64_t *ivp;
 	uint32_t clen;
@@ -120,8 +150,18 @@ inb_cpu_crypto_prepare(const struct rte_ipsec_sa *sa, struct rte_mbuf *mb,
 
 	switch (sa->algo_type) {
 	case ALGO_TYPE_AES_GCM:
+	case ALGO_TYPE_AES_GMAC:
 		gcm = (struct aead_gcm_iv *)iv;
 		aead_gcm_iv_fill(gcm, ivp[0], sa->salt);
+		break;
+	case ALGO_TYPE_AES_CCM:
+		ccm = (struct aead_ccm_iv *)iv;
+		aead_ccm_iv_fill(ccm, ivp[0], sa->salt);
+		break;
+	case ALGO_TYPE_CHACHA20_POLY1305:
+		chacha20_poly1305 = (struct aead_chacha20_poly1305_iv *)iv;
+		aead_chacha20_poly1305_iv_fill(chacha20_poly1305,
+					       ivp[0], sa->salt);
 		break;
 	case ALGO_TYPE_AES_CBC:
 	case ALGO_TYPE_3DES_CBC:
@@ -175,6 +215,8 @@ inb_pkt_xprepare(const struct rte_ipsec_sa *sa, rte_be64_t sqc,
 	const union sym_op_data *icv)
 {
 	struct aead_gcm_aad *aad;
+	struct aead_ccm_aad *caad;
+	struct aead_chacha20_poly1305_aad *chacha_aad;
 
 	/* insert SQN.hi between ESP trailer and ICV */
 	if (sa->sqh_len != 0)
@@ -184,9 +226,27 @@ inb_pkt_xprepare(const struct rte_ipsec_sa *sa, rte_be64_t sqc,
 	 * fill AAD fields, if any (aad fields are placed after icv),
 	 * right now we support only one AEAD algorithm: AES-GCM.
 	 */
-	if (sa->aad_len != 0) {
-		aad = (struct aead_gcm_aad *)(icv->va + sa->icv_len);
-		aead_gcm_aad_fill(aad, sa->spi, sqc, IS_ESN(sa));
+	switch (sa->algo_type) {
+	case ALGO_TYPE_AES_GCM:
+		if (sa->aad_len != 0) {
+			aad = (struct aead_gcm_aad *)(icv->va + sa->icv_len);
+			aead_gcm_aad_fill(aad, sa->spi, sqc, IS_ESN(sa));
+		}
+		break;
+	case ALGO_TYPE_AES_CCM:
+		if (sa->aad_len != 0) {
+			caad = (struct aead_ccm_aad *)(icv->va + sa->icv_len);
+			aead_ccm_aad_fill(caad, sa->spi, sqc, IS_ESN(sa));
+		}
+		break;
+	case ALGO_TYPE_CHACHA20_POLY1305:
+		if (sa->aad_len != 0) {
+			chacha_aad = (struct aead_chacha20_poly1305_aad *)
+			    (icv->va + sa->icv_len);
+			aead_chacha20_poly1305_aad_fill(chacha_aad,
+						sa->spi, sqc, IS_ESN(sa));
+		}
+		break;
 	}
 }
 
@@ -399,7 +459,7 @@ static inline int32_t
 trs_process_check(struct rte_mbuf *mb, struct rte_mbuf **ml,
 	uint32_t *tofs, struct rte_esp_tail espt, uint32_t hlen, uint32_t tlen)
 {
-	if ((mb->ol_flags & PKT_RX_SEC_OFFLOAD_FAILED) != 0 ||
+	if ((mb->ol_flags & RTE_MBUF_F_RX_SEC_OFFLOAD_FAILED) != 0 ||
 			tlen + hlen > mb->pkt_len)
 		return -EBADMSG;
 
@@ -487,8 +547,8 @@ trs_process_step3(struct rte_mbuf *mb)
 	/* reset mbuf packet type */
 	mb->packet_type &= (RTE_PTYPE_L2_MASK | RTE_PTYPE_L3_MASK);
 
-	/* clear the PKT_RX_SEC_OFFLOAD flag if set */
-	mb->ol_flags &= ~PKT_RX_SEC_OFFLOAD;
+	/* clear the RTE_MBUF_F_RX_SEC_OFFLOAD flag if set */
+	mb->ol_flags &= ~RTE_MBUF_F_RX_SEC_OFFLOAD;
 }
 
 /*
@@ -505,18 +565,18 @@ tun_process_step3(struct rte_mbuf *mb, uint64_t txof_msk, uint64_t txof_val)
 	mb->packet_type = RTE_PTYPE_UNKNOWN;
 	mb->tx_offload = (mb->tx_offload & txof_msk) | txof_val;
 
-	/* clear the PKT_RX_SEC_OFFLOAD flag if set */
-	mb->ol_flags &= ~PKT_RX_SEC_OFFLOAD;
+	/* clear the RTE_MBUF_F_RX_SEC_OFFLOAD flag if set */
+	mb->ol_flags &= ~RTE_MBUF_F_RX_SEC_OFFLOAD;
 }
 
 /*
  * *process* function for tunnel packets
  */
 static inline uint16_t
-tun_process(const struct rte_ipsec_sa *sa, struct rte_mbuf *mb[],
+tun_process(struct rte_ipsec_sa *sa, struct rte_mbuf *mb[],
 	    uint32_t sqn[], uint32_t dr[], uint16_t num, uint8_t sqh_len)
 {
-	uint32_t adj, i, k, tl;
+	uint32_t adj, i, k, tl, bytes;
 	uint32_t hl[num], to[num];
 	struct rte_esp_tail espt[num];
 	struct rte_mbuf *ml[num];
@@ -538,6 +598,7 @@ tun_process(const struct rte_ipsec_sa *sa, struct rte_mbuf *mb[],
 		process_step1(mb[i], tlen, &ml[i], &espt[i], &hl[i], &to[i]);
 
 	k = 0;
+	bytes = 0;
 	for (i = 0; i != num; i++) {
 
 		adj = hl[i] + cofs;
@@ -561,10 +622,13 @@ tun_process(const struct rte_ipsec_sa *sa, struct rte_mbuf *mb[],
 			tun_process_step3(mb[i], sa->tx_offload.msk,
 				sa->tx_offload.val);
 			k++;
+			bytes += mb[i]->pkt_len;
 		} else
 			dr[i - k] = i;
 	}
 
+	sa->statistics.count += k;
+	sa->statistics.bytes += bytes;
 	return k;
 }
 
@@ -572,11 +636,11 @@ tun_process(const struct rte_ipsec_sa *sa, struct rte_mbuf *mb[],
  * *process* function for tunnel packets
  */
 static inline uint16_t
-trs_process(const struct rte_ipsec_sa *sa, struct rte_mbuf *mb[],
+trs_process(struct rte_ipsec_sa *sa, struct rte_mbuf *mb[],
 	uint32_t sqn[], uint32_t dr[], uint16_t num, uint8_t sqh_len)
 {
 	char *np;
-	uint32_t i, k, l2, tl;
+	uint32_t i, k, l2, tl, bytes;
 	uint32_t hl[num], to[num];
 	struct rte_esp_tail espt[num];
 	struct rte_mbuf *ml[num];
@@ -596,6 +660,7 @@ trs_process(const struct rte_ipsec_sa *sa, struct rte_mbuf *mb[],
 		process_step1(mb[i], tlen, &ml[i], &espt[i], &hl[i], &to[i]);
 
 	k = 0;
+	bytes = 0;
 	for (i = 0; i != num; i++) {
 
 		tl = tlen + espt[i].pad_len;
@@ -614,10 +679,13 @@ trs_process(const struct rte_ipsec_sa *sa, struct rte_mbuf *mb[],
 			/* update mbuf's metadata */
 			trs_process_step3(mb[i]);
 			k++;
+			bytes += mb[i]->pkt_len;
 		} else
 			dr[i - k] = i;
 	}
 
+	sa->statistics.count += k;
+	sa->statistics.bytes += bytes;
 	return k;
 }
 

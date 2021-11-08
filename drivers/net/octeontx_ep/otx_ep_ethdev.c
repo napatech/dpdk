@@ -33,15 +33,14 @@ otx_ep_dev_info_get(struct rte_eth_dev *eth_dev,
 
 	otx_epvf = OTX_EP_DEV(eth_dev);
 
-	devinfo->speed_capa = ETH_LINK_SPEED_10G;
+	devinfo->speed_capa = RTE_ETH_LINK_SPEED_10G;
 	devinfo->max_rx_queues = otx_epvf->max_rx_queues;
 	devinfo->max_tx_queues = otx_epvf->max_tx_queues;
 
 	devinfo->min_rx_bufsize = OTX_EP_MIN_RX_BUF_SIZE;
 	devinfo->max_rx_pktlen = OTX_EP_MAX_PKT_SZ;
-	devinfo->rx_offload_capa = DEV_RX_OFFLOAD_JUMBO_FRAME;
-	devinfo->rx_offload_capa |= DEV_RX_OFFLOAD_SCATTER;
-	devinfo->tx_offload_capa = DEV_TX_OFFLOAD_MULTI_SEGS;
+	devinfo->rx_offload_capa = RTE_ETH_RX_OFFLOAD_SCATTER;
+	devinfo->tx_offload_capa = RTE_ETH_TX_OFFLOAD_MULTI_SEGS;
 
 	devinfo->max_mac_addrs = OTX_EP_MAX_MAC_ADDRS;
 
@@ -248,16 +247,18 @@ otx_ep_rx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t q_no,
  * Release the receive queue/ringbuffer. Called by
  * the upper layers.
  *
- * @param rxq
- *    Opaque pointer to the receive queue to release
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param q_no
+ *   Receive queue index.
  *
  * @return
  *    - nothing
  */
 static void
-otx_ep_rx_queue_release(void *rxq)
+otx_ep_rx_queue_release(struct rte_eth_dev *dev, uint16_t q_no)
 {
-	struct otx_ep_droq *rq = (struct otx_ep_droq *)rxq;
+	struct otx_ep_droq *rq = dev->data->rx_queues[q_no];
 	struct otx_ep_device *otx_epvf = rq->otx_ep_dev;
 	int q_id = rq->q_no;
 
@@ -321,16 +322,18 @@ otx_ep_tx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t q_no,
  * Release the transmit queue/ringbuffer. Called by
  * the upper layers.
  *
- * @param txq
- *    Opaque pointer to the transmit queue to release
+ * @param dev
+ *    Pointer to Ethernet device structure.
+ * @param q_no
+ *    Transmit queue index.
  *
  * @return
  *    - nothing
  */
 static void
-otx_ep_tx_queue_release(void *txq)
+otx_ep_tx_queue_release(struct rte_eth_dev *dev, uint16_t q_no)
 {
-	struct otx_ep_instr_queue *tq = (struct otx_ep_instr_queue *)txq;
+	struct otx_ep_instr_queue *tq = dev->data->tx_queues[q_no];
 
 	otx_ep_delete_iqs(tq->otx_ep_dev, tq->q_no);
 }

@@ -160,7 +160,7 @@ i40e_fdir_setup(struct i40e_pf *pf)
 	int err = I40E_SUCCESS;
 	char z_name[RTE_MEMZONE_NAMESIZE];
 	const struct rte_memzone *mz = NULL;
-	struct rte_eth_dev *eth_dev = pf->adapter->eth_dev;
+	struct rte_eth_dev *eth_dev = &rte_eth_devices[pf->dev_data->port_id];
 	uint16_t i;
 
 	if ((pf->flags & I40E_FLAG_FDIR) == 0) {
@@ -264,10 +264,10 @@ i40e_fdir_setup(struct i40e_pf *pf)
 	return I40E_SUCCESS;
 
 fail_mem:
-	i40e_dev_rx_queue_release(pf->fdir.rxq);
+	i40e_rx_queue_release(pf->fdir.rxq);
 	pf->fdir.rxq = NULL;
 fail_setup_rx:
-	i40e_dev_tx_queue_release(pf->fdir.txq);
+	i40e_tx_queue_release(pf->fdir.txq);
 	pf->fdir.txq = NULL;
 fail_setup_tx:
 	i40e_vsi_release(vsi);
@@ -284,7 +284,6 @@ i40e_fdir_teardown(struct i40e_pf *pf)
 {
 	struct i40e_hw *hw = I40E_PF_TO_HW(pf);
 	struct i40e_vsi *vsi;
-	struct rte_eth_dev *dev = pf->adapter->eth_dev;
 
 	vsi = pf->fdir.fdir_vsi;
 	if (!vsi)
@@ -301,11 +300,9 @@ i40e_fdir_teardown(struct i40e_pf *pf)
 	if (err)
 		PMD_DRV_LOG(DEBUG, "Failed to do FDIR RX switch off");
 
-	i40e_dev_rx_queue_release(pf->fdir.rxq);
-	rte_eth_dma_zone_free(dev, "fdir_rx_ring", pf->fdir.rxq->queue_id);
+	i40e_rx_queue_release(pf->fdir.rxq);
 	pf->fdir.rxq = NULL;
-	i40e_dev_tx_queue_release(pf->fdir.txq);
-	rte_eth_dma_zone_free(dev, "fdir_tx_ring", pf->fdir.txq->queue_id);
+	i40e_tx_queue_release(pf->fdir.txq);
 	pf->fdir.txq = NULL;
 	i40e_vsi_release(vsi);
 	pf->fdir.fdir_vsi = NULL;
@@ -1607,13 +1604,13 @@ i40e_flow_set_fdir_inset(struct i40e_pf *pf,
 	}
 
 	/* Check if the configuration is conflicted */
-	if (pf->fdir.inset_flag[pctype] &&
+	if (pf->fdir.flow_count[pctype] &&
 	    memcmp(&pf->fdir.input_set[pctype], &input_set, sizeof(uint64_t))) {
 		PMD_DRV_LOG(ERR, "Conflict with the first rule's input set.");
 		return -EINVAL;
 	}
 
-	if (pf->fdir.inset_flag[pctype] &&
+	if (pf->fdir.flow_count[pctype] &&
 	    !memcmp(&pf->fdir.input_set[pctype], &input_set, sizeof(uint64_t)))
 		return 0;
 
@@ -1666,7 +1663,6 @@ i40e_flow_set_fdir_inset(struct i40e_pf *pf,
 	I40E_WRITE_FLUSH(hw);
 
 	pf->fdir.input_set[pctype] = input_set;
-	pf->fdir.inset_flag[pctype] = 1;
 	return 0;
 }
 
@@ -1768,7 +1764,8 @@ i40e_flow_add_del_fdir_filter(struct rte_eth_dev *dev,
 
 	if (add) {
 		/* configure the input set for common PCTYPEs*/
-		if (!filter->input.flow_ext.customized_pctype) {
+		if (!filter->input.flow_ext.customized_pctype &&
+		    !filter->input.flow_ext.pkt_template) {
 			ret = i40e_flow_set_fdir_inset(pf, pctype,
 					filter->input.flow_ext.input_set);
 			if (ret < 0)
@@ -1889,11 +1886,13 @@ i40e_flow_add_del_fdir_filter(struct rte_eth_dev *dev,
 	}
 
 	if (add) {
+		fdir_info->flow_count[pctype]++;
 		fdir_info->fdir_actual_cnt++;
 		if (fdir_info->fdir_invalprio == 1 &&
 				fdir_info->fdir_guarantee_free_space > 0)
 			fdir_info->fdir_guarantee_free_space--;
 	} else {
+		fdir_info->flow_count[pctype]--;
 		fdir_info->fdir_actual_cnt--;
 		if (fdir_info->fdir_invalprio == 1 &&
 				fdir_info->fdir_guarantee_free_space <

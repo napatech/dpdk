@@ -16,7 +16,7 @@
 #include <rte_udp.h>
 #include <rte_vxlan.h>
 #include <rte_cryptodev.h>
-#include <rte_cryptodev_pmd.h>
+#include <cryptodev_pmd.h>
 
 #include "rte_table_action.h"
 
@@ -615,8 +615,8 @@ encap_ether_apply(void *data,
 		RTE_ETHER_TYPE_IPV6;
 
 	/* Ethernet */
-	rte_ether_addr_copy(&p->ether.ether.da, &d->ether.d_addr);
-	rte_ether_addr_copy(&p->ether.ether.sa, &d->ether.s_addr);
+	rte_ether_addr_copy(&p->ether.ether.da, &d->ether.dst_addr);
+	rte_ether_addr_copy(&p->ether.ether.sa, &d->ether.src_addr);
 	d->ether.ether_type = rte_htons(ethertype);
 
 	return 0;
@@ -633,8 +633,8 @@ encap_vlan_apply(void *data,
 		RTE_ETHER_TYPE_IPV6;
 
 	/* Ethernet */
-	rte_ether_addr_copy(&p->vlan.ether.da, &d->ether.d_addr);
-	rte_ether_addr_copy(&p->vlan.ether.sa, &d->ether.s_addr);
+	rte_ether_addr_copy(&p->vlan.ether.da, &d->ether.dst_addr);
+	rte_ether_addr_copy(&p->vlan.ether.sa, &d->ether.src_addr);
 	d->ether.ether_type = rte_htons(RTE_ETHER_TYPE_VLAN);
 
 	/* VLAN */
@@ -657,8 +657,8 @@ encap_qinq_apply(void *data,
 		RTE_ETHER_TYPE_IPV6;
 
 	/* Ethernet */
-	rte_ether_addr_copy(&p->qinq.ether.da, &d->ether.d_addr);
-	rte_ether_addr_copy(&p->qinq.ether.sa, &d->ether.s_addr);
+	rte_ether_addr_copy(&p->qinq.ether.da, &d->ether.dst_addr);
+	rte_ether_addr_copy(&p->qinq.ether.sa, &d->ether.src_addr);
 	d->ether.ether_type = rte_htons(RTE_ETHER_TYPE_QINQ);
 
 	/* SVLAN */
@@ -683,8 +683,8 @@ encap_qinq_pppoe_apply(void *data,
 	struct encap_qinq_pppoe_data *d = data;
 
 	/* Ethernet */
-	rte_ether_addr_copy(&p->qinq.ether.da, &d->ether.d_addr);
-	rte_ether_addr_copy(&p->qinq.ether.sa, &d->ether.s_addr);
+	rte_ether_addr_copy(&p->qinq.ether.da, &d->ether.dst_addr);
+	rte_ether_addr_copy(&p->qinq.ether.sa, &d->ether.src_addr);
 	d->ether.ether_type = rte_htons(RTE_ETHER_TYPE_VLAN);
 
 	/* SVLAN */
@@ -719,8 +719,8 @@ encap_mpls_apply(void *data,
 	uint32_t i;
 
 	/* Ethernet */
-	rte_ether_addr_copy(&p->mpls.ether.da, &d->ether.d_addr);
-	rte_ether_addr_copy(&p->mpls.ether.sa, &d->ether.s_addr);
+	rte_ether_addr_copy(&p->mpls.ether.da, &d->ether.dst_addr);
+	rte_ether_addr_copy(&p->mpls.ether.sa, &d->ether.src_addr);
 	d->ether.ether_type = rte_htons(ethertype);
 
 	/* MPLS */
@@ -746,8 +746,8 @@ encap_pppoe_apply(void *data,
 	struct encap_pppoe_data *d = data;
 
 	/* Ethernet */
-	rte_ether_addr_copy(&p->pppoe.ether.da, &d->ether.d_addr);
-	rte_ether_addr_copy(&p->pppoe.ether.sa, &d->ether.s_addr);
+	rte_ether_addr_copy(&p->pppoe.ether.da, &d->ether.dst_addr);
+	rte_ether_addr_copy(&p->pppoe.ether.sa, &d->ether.src_addr);
 	d->ether.ether_type = rte_htons(RTE_ETHER_TYPE_PPPOE_SESSION);
 
 	/* PPPoE and PPP*/
@@ -777,9 +777,9 @@ encap_vxlan_apply(void *data,
 
 			/* Ethernet */
 			rte_ether_addr_copy(&p->vxlan.ether.da,
-					&d->ether.d_addr);
+					&d->ether.dst_addr);
 			rte_ether_addr_copy(&p->vxlan.ether.sa,
-					&d->ether.s_addr);
+					&d->ether.src_addr);
 			d->ether.ether_type = rte_htons(RTE_ETHER_TYPE_VLAN);
 
 			/* VLAN */
@@ -818,9 +818,9 @@ encap_vxlan_apply(void *data,
 
 			/* Ethernet */
 			rte_ether_addr_copy(&p->vxlan.ether.da,
-					&d->ether.d_addr);
+					&d->ether.dst_addr);
 			rte_ether_addr_copy(&p->vxlan.ether.sa,
-					&d->ether.s_addr);
+					&d->ether.src_addr);
 			d->ether.ether_type = rte_htons(RTE_ETHER_TYPE_IPV4);
 
 			/* IPv4*/
@@ -855,9 +855,9 @@ encap_vxlan_apply(void *data,
 
 			/* Ethernet */
 			rte_ether_addr_copy(&p->vxlan.ether.da,
-					&d->ether.d_addr);
+					&d->ether.dst_addr);
 			rte_ether_addr_copy(&p->vxlan.ether.sa,
-					&d->ether.s_addr);
+					&d->ether.src_addr);
 			d->ether.ether_type = rte_htons(RTE_ETHER_TYPE_VLAN);
 
 			/* VLAN */
@@ -896,9 +896,9 @@ encap_vxlan_apply(void *data,
 
 			/* Ethernet */
 			rte_ether_addr_copy(&p->vxlan.ether.da,
-					&d->ether.d_addr);
+					&d->ether.dst_addr);
 			rte_ether_addr_copy(&p->vxlan.ether.sa,
-					&d->ether.s_addr);
+					&d->ether.src_addr);
 			d->ether.ether_type = rte_htons(RTE_ETHER_TYPE_IPV6);
 
 			/* IPv6*/
@@ -1732,7 +1732,7 @@ struct sym_crypto_data {
 static int
 sym_crypto_cfg_check(struct rte_table_action_sym_crypto_config *cfg)
 {
-	if (!rte_cryptodev_pmd_is_valid_dev(cfg->cryptodev_id))
+	if (!rte_cryptodev_is_valid_dev(cfg->cryptodev_id))
 		return -EINVAL;
 	if (cfg->mp_create == NULL || cfg->mp_init == NULL)
 		return -EINVAL;
@@ -2085,7 +2085,7 @@ pkt_work_tag(struct rte_mbuf *mbuf,
 	struct tag_data *data)
 {
 	mbuf->hash.fdir.hi = data->tag;
-	mbuf->ol_flags |= PKT_RX_FDIR | PKT_RX_FDIR_ID;
+	mbuf->ol_flags |= RTE_MBUF_F_RX_FDIR | RTE_MBUF_F_RX_FDIR_ID;
 }
 
 static __rte_always_inline void
@@ -2103,10 +2103,10 @@ pkt4_work_tag(struct rte_mbuf *mbuf0,
 	mbuf2->hash.fdir.hi = data2->tag;
 	mbuf3->hash.fdir.hi = data3->tag;
 
-	mbuf0->ol_flags |= PKT_RX_FDIR | PKT_RX_FDIR_ID;
-	mbuf1->ol_flags |= PKT_RX_FDIR | PKT_RX_FDIR_ID;
-	mbuf2->ol_flags |= PKT_RX_FDIR | PKT_RX_FDIR_ID;
-	mbuf3->ol_flags |= PKT_RX_FDIR | PKT_RX_FDIR_ID;
+	mbuf0->ol_flags |= RTE_MBUF_F_RX_FDIR | RTE_MBUF_F_RX_FDIR_ID;
+	mbuf1->ol_flags |= RTE_MBUF_F_RX_FDIR | RTE_MBUF_F_RX_FDIR_ID;
+	mbuf2->ol_flags |= RTE_MBUF_F_RX_FDIR | RTE_MBUF_F_RX_FDIR_ID;
+	mbuf3->ol_flags |= RTE_MBUF_F_RX_FDIR | RTE_MBUF_F_RX_FDIR_ID;
 }
 
 /**

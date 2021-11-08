@@ -77,7 +77,7 @@ int rte_get_rx_ol_flag_list(uint64_t mask, char *buf, size_t buflen);
  * @param mask
  *   The mask describing the flag. Usually only one bit must be set.
  *   Several bits can be given if they belong to the same mask.
- *   Ex: PKT_TX_L4_MASK.
+ *   Ex: RTE_MBUF_F_TX_L4_MASK.
  * @return
  *   The name of this flag, or NULL if it's not a valid TX flag.
  */
@@ -191,11 +191,6 @@ rte_mbuf_from_indirect(struct rte_mbuf *mi)
  * mbuf is already known because it doesn't need to access mbuf contents in
  * order to get the mempool pointer.
  *
- * @warning
- * @b EXPERIMENTAL: This API may change without prior notice.
- * This will be used by rte_mbuf_to_baddr() which has redundant code once
- * experimental tag is removed.
- *
  * @param mb
  *   The pointer to the mbuf.
  * @param mp
@@ -203,7 +198,6 @@ rte_mbuf_from_indirect(struct rte_mbuf *mi)
  * @return
  *   The pointer of the mbuf buffer.
  */
-__rte_experimental
 static inline char *
 rte_mbuf_buf_addr(struct rte_mbuf *mb, struct rte_mempool *mp)
 {
@@ -213,26 +207,15 @@ rte_mbuf_buf_addr(struct rte_mbuf *mb, struct rte_mempool *mp)
 /**
  * Return the default address of the beginning of the mbuf data.
  *
- * @warning
- * @b EXPERIMENTAL: This API may change without prior notice.
- *
  * @param mb
  *   The pointer to the mbuf.
  * @return
  *   The pointer of the beginning of the mbuf data.
  */
-__rte_experimental
 static inline char *
-rte_mbuf_data_addr_default(__rte_unused struct rte_mbuf *mb)
+rte_mbuf_data_addr_default(struct rte_mbuf *mb)
 {
-	/* gcc complains about calling this experimental function even
-	 * when not using it. Hide it with ALLOW_EXPERIMENTAL_API.
-	 */
-#ifdef ALLOW_EXPERIMENTAL_API
 	return rte_mbuf_buf_addr(mb, mb->pool) + RTE_PKTMBUF_HEADROOM;
-#else
-	return NULL;
-#endif
 }
 
 /**
@@ -251,13 +234,7 @@ rte_mbuf_data_addr_default(__rte_unused struct rte_mbuf *mb)
 static inline char *
 rte_mbuf_to_baddr(struct rte_mbuf *md)
 {
-#ifdef ALLOW_EXPERIMENTAL_API
 	return rte_mbuf_buf_addr(md, md->pool);
-#else
-	char *buffer_addr;
-	buffer_addr = (char *)md + sizeof(*md) + rte_pktmbuf_priv_size(md->pool);
-	return buffer_addr;
-#endif
 }
 
 /**
@@ -272,7 +249,6 @@ rte_mbuf_to_baddr(struct rte_mbuf *md)
  * @return
  *   The starting address of the private data area of the given mbuf.
  */
-__rte_experimental
 static inline void *
 rte_mbuf_to_priv(struct rte_mbuf *m)
 {
@@ -536,7 +512,6 @@ rte_mbuf_sanity_check(const struct rte_mbuf *m, int is_header);
  *   - -1 if a problem is detected, reason then points to a string describing
  *     the reason why the mbuf is deemed invalid.
  */
-__rte_experimental
 int rte_mbuf_check(const struct rte_mbuf *m, int is_header,
 		   const char **reason);
 
@@ -874,7 +849,7 @@ static inline void rte_pktmbuf_reset(struct rte_mbuf *m)
 	m->nb_segs = 1;
 	m->port = RTE_MBUF_PORT_INVALID;
 
-	m->ol_flags &= EXT_ATTACHED_MBUF;
+	m->ol_flags &= RTE_MBUF_F_EXTERNAL;
 	m->packet_type = 0;
 	rte_pktmbuf_reset_headroom(m);
 
@@ -1089,7 +1064,7 @@ rte_pktmbuf_attach_extbuf(struct rte_mbuf *m, void *buf_addr,
 	m->data_len = 0;
 	m->data_off = 0;
 
-	m->ol_flags |= EXT_ATTACHED_MBUF;
+	m->ol_flags |= RTE_MBUF_F_EXTERNAL;
 	m->shinfo = shinfo;
 }
 
@@ -1163,7 +1138,7 @@ static inline void rte_pktmbuf_attach(struct rte_mbuf *mi, struct rte_mbuf *m)
 		/* if m is not direct, get the mbuf that embeds the data */
 		rte_mbuf_refcnt_update(rte_mbuf_from_indirect(m), 1);
 		mi->priv_size = m->priv_size;
-		mi->ol_flags = m->ol_flags | IND_ATTACHED_MBUF;
+		mi->ol_flags = m->ol_flags | RTE_MBUF_F_INDIRECT;
 	}
 
 	__rte_pktmbuf_copy_hdr(mi, m);
@@ -1297,7 +1272,7 @@ static inline int __rte_pktmbuf_pinned_extbuf_decref(struct rte_mbuf *m)
 	struct rte_mbuf_ext_shared_info *shinfo;
 
 	/* Clear flags, mbuf is being freed. */
-	m->ol_flags = EXT_ATTACHED_MBUF;
+	m->ol_flags = RTE_MBUF_F_EXTERNAL;
 	shinfo = m->shinfo;
 
 	/* Optimize for performance - do not dec/reinit */
@@ -1346,10 +1321,10 @@ rte_pktmbuf_prefree_seg(struct rte_mbuf *m)
 				return NULL;
 		}
 
-		if (m->next != NULL) {
+		if (m->next != NULL)
 			m->next = NULL;
+		if (m->nb_segs != 1)
 			m->nb_segs = 1;
-		}
 
 		return m;
 
@@ -1363,10 +1338,10 @@ rte_pktmbuf_prefree_seg(struct rte_mbuf *m)
 				return NULL;
 		}
 
-		if (m->next != NULL) {
+		if (m->next != NULL)
 			m->next = NULL;
+		if (m->nb_segs != 1)
 			m->nb_segs = 1;
-		}
 		rte_mbuf_refcnt_set(m, 1);
 
 		return m;
@@ -1426,7 +1401,6 @@ static inline void rte_pktmbuf_free(struct rte_mbuf *m)
  *  @param count
  *    Array size.
  */
-__rte_experimental
 void rte_pktmbuf_free_bulk(struct rte_mbuf **mbufs, unsigned int count);
 
 /**
@@ -1456,7 +1430,7 @@ rte_pktmbuf_clone(struct rte_mbuf *md, struct rte_mempool *mp);
  * set of mbufs. The private data are is not copied.
  *
  * @param m
- *   The packet mbuf to be copiedd.
+ *   The packet mbuf to be copied.
  * @param mp
  *   The mempool from which the "clone" mbufs are allocated.
  * @param offset
@@ -1470,7 +1444,6 @@ rte_pktmbuf_clone(struct rte_mbuf *md, struct rte_mempool *mp);
  *   - The pointer to the new "clone" mbuf on success.
  *   - NULL if allocation fails.
  */
-__rte_experimental
 struct rte_mbuf *
 rte_pktmbuf_copy(const struct rte_mbuf *m, struct rte_mempool *mp,
 		 uint32_t offset, uint32_t length);
@@ -1775,10 +1748,7 @@ static inline int rte_pktmbuf_chain(struct rte_mbuf *head, struct rte_mbuf *tail
 	return 0;
 }
 
-/*
- * @warning
- * @b EXPERIMENTAL: This API may change without prior notice.
- *
+/**
  * For given input values generate raw tx_offload value.
  * Note that it is caller responsibility to make sure that input parameters
  * don't exceed maximum bit-field values.
@@ -1828,28 +1798,28 @@ rte_validate_tx_offload(const struct rte_mbuf *m)
 	uint64_t ol_flags = m->ol_flags;
 
 	/* Does packet set any of available offloads? */
-	if (!(ol_flags & PKT_TX_OFFLOAD_MASK))
+	if (!(ol_flags & RTE_MBUF_F_TX_OFFLOAD_MASK))
 		return 0;
 
 	/* IP checksum can be counted only for IPv4 packet */
-	if ((ol_flags & PKT_TX_IP_CKSUM) && (ol_flags & PKT_TX_IPV6))
+	if ((ol_flags & RTE_MBUF_F_TX_IP_CKSUM) && (ol_flags & RTE_MBUF_F_TX_IPV6))
 		return -EINVAL;
 
 	/* IP type not set when required */
-	if (ol_flags & (PKT_TX_L4_MASK | PKT_TX_TCP_SEG))
-		if (!(ol_flags & (PKT_TX_IPV4 | PKT_TX_IPV6)))
+	if (ol_flags & (RTE_MBUF_F_TX_L4_MASK | RTE_MBUF_F_TX_TCP_SEG))
+		if (!(ol_flags & (RTE_MBUF_F_TX_IPV4 | RTE_MBUF_F_TX_IPV6)))
 			return -EINVAL;
 
 	/* Check requirements for TSO packet */
-	if (ol_flags & PKT_TX_TCP_SEG)
+	if (ol_flags & RTE_MBUF_F_TX_TCP_SEG)
 		if ((m->tso_segsz == 0) ||
-				((ol_flags & PKT_TX_IPV4) &&
-				!(ol_flags & PKT_TX_IP_CKSUM)))
+				((ol_flags & RTE_MBUF_F_TX_IPV4) &&
+				 !(ol_flags & RTE_MBUF_F_TX_IP_CKSUM)))
 			return -EINVAL;
 
-	/* PKT_TX_OUTER_IP_CKSUM set for non outer IPv4 packet. */
-	if ((ol_flags & PKT_TX_OUTER_IP_CKSUM) &&
-			!(ol_flags & PKT_TX_OUTER_IPV4))
+	/* RTE_MBUF_F_TX_OUTER_IP_CKSUM set for non outer IPv4 packet. */
+	if ((ol_flags & RTE_MBUF_F_TX_OUTER_IP_CKSUM) &&
+			!(ol_flags & RTE_MBUF_F_TX_OUTER_IPV4))
 		return -EINVAL;
 
 	return 0;

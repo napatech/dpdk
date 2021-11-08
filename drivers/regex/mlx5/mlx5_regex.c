@@ -9,9 +9,10 @@
 #include <rte_regexdev.h>
 #include <rte_regexdev_core.h>
 #include <rte_regexdev_driver.h>
+#include <rte_bus_pci.h>
 
-#include <mlx5_common_pci.h>
 #include <mlx5_common.h>
+#include <mlx5_common_mr.h>
 #include <mlx5_glue.h>
 #include <mlx5_devx_cmds.h>
 #include <mlx5_prm.h>
@@ -35,9 +36,11 @@ const struct rte_regexdev_ops mlx5_regexdev_ops = {
 };
 
 int
-mlx5_regex_start(struct rte_regexdev *dev __rte_unused)
+mlx5_regex_start(struct rte_regexdev *dev)
 {
-	return 0;
+	struct mlx5_regex_priv *priv = dev->data->dev_private;
+
+	return mlx5_dev_mempool_subscribe(priv->cdev);
 }
 
 int
@@ -76,163 +79,114 @@ mlx5_regex_engines_status(struct ibv_context *ctx, int num_engines)
 }
 
 static void
-mlx5_regex_get_name(char *name, struct rte_pci_device *pci_dev __rte_unused)
+mlx5_regex_get_name(char *name, struct rte_device *dev)
 {
-	sprintf(name, "mlx5_regex_%02x:%02x.%02x", pci_dev->addr.bus,
-		pci_dev->addr.devid, pci_dev->addr.function);
+	sprintf(name, "mlx5_regex_%s", dev->name);
 }
 
 static int
-mlx5_regex_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
-		     struct rte_pci_device *pci_dev)
+mlx5_regex_dev_probe(struct mlx5_common_device *cdev)
 {
-	struct ibv_device *ibv;
 	struct mlx5_regex_priv *priv = NULL;
-	struct ibv_context *ctx = NULL;
-	struct mlx5_hca_attr attr;
+	struct mlx5_hca_attr *attr = &cdev->config.hca_attr;
 	char name[RTE_REGEXDEV_NAME_MAX_LEN];
 	int ret;
 	uint32_t val;
 
-	ibv = mlx5_os_get_ibv_device(&pci_dev->addr);
-	if (!ibv) {
-		DRV_LOG(ERR, "No matching IB device for PCI slot "
-			PCI_PRI_FMT ".", pci_dev->addr.domain,
-			pci_dev->addr.bus, pci_dev->addr.devid,
-			pci_dev->addr.function);
-		return -rte_errno;
-	}
-	DRV_LOG(INFO, "PCI information matches for device \"%s\".",
-		ibv->name);
-	ctx = mlx5_glue->dv_open_device(ibv);
-	if (!ctx) {
-		DRV_LOG(ERR, "Failed to open IB device \"%s\".", ibv->name);
-		rte_errno = ENODEV;
-		return -rte_errno;
-	}
-	ret = mlx5_devx_cmd_query_hca_attr(ctx, &attr);
-	if (ret) {
-		DRV_LOG(ERR, "Unable to read HCA capabilities.");
-		rte_errno = ENOTSUP;
-		goto dev_error;
-	} else if (!attr.regex || attr.regexp_num_of_engines == 0) {
+	if ((!attr->regex && !attr->mmo_regex_sq_en && !attr->mmo_regex_qp_en)
+	    || attr->regexp_num_of_engines == 0) {
 		DRV_LOG(ERR, "Not enough capabilities to support RegEx, maybe "
 			"old FW/OFED version?");
 		rte_errno = ENOTSUP;
-		goto dev_error;
+		return -rte_errno;
 	}
-	if (mlx5_regex_engines_status(ctx, 2)) {
+	if (mlx5_regex_engines_status(cdev->ctx, 2)) {
 		DRV_LOG(ERR, "RegEx engine error.");
 		rte_errno = ENOMEM;
-		goto dev_error;
+		return -rte_errno;
 	}
 	priv = rte_zmalloc("mlx5 regex device private", sizeof(*priv),
 			   RTE_CACHE_LINE_SIZE);
 	if (!priv) {
 		DRV_LOG(ERR, "Failed to allocate private memory.");
 		rte_errno = ENOMEM;
-		goto dev_error;
+		return -rte_errno;
 	}
-	priv->sq_ts_format = attr.sq_ts_format;
-	priv->ctx = ctx;
+	priv->mmo_regex_qp_cap = attr->mmo_regex_qp_en;
+	priv->mmo_regex_sq_cap = attr->mmo_regex_sq_en;
+	priv->cdev = cdev;
 	priv->nb_engines = 2; /* attr.regexp_num_of_engines */
-	ret = mlx5_devx_regex_register_read(priv->ctx, 0,
+	ret = mlx5_devx_regex_register_read(priv->cdev->ctx, 0,
 					    MLX5_RXP_CSR_IDENTIFIER, &val);
 	if (ret) {
 		DRV_LOG(ERR, "CSR read failed!");
-		return -1;
+		goto dev_error;
 	}
 	if (val == MLX5_RXP_BF2_IDENTIFIER)
 		priv->is_bf2 = 1;
 	/* Default RXP programming mode to Shared. */
 	priv->prog_mode = MLX5_RXP_SHARED_PROG_MODE;
-	mlx5_regex_get_name(name, pci_dev);
+	mlx5_regex_get_name(name, cdev->dev);
 	priv->regexdev = rte_regexdev_register(name);
 	if (priv->regexdev == NULL) {
 		DRV_LOG(ERR, "Failed to register RegEx device.");
 		rte_errno = rte_errno ? rte_errno : EINVAL;
-		goto error;
+		goto dev_error;
 	}
 	/*
 	 * This PMD always claims the write memory barrier on UAR
 	 * registers writings, it is safe to allocate UAR with any
 	 * memory mapping type.
 	 */
-	priv->uar = mlx5_devx_alloc_uar(ctx, -1);
+	priv->uar = mlx5_devx_alloc_uar(priv->cdev->ctx, -1);
 	if (!priv->uar) {
 		DRV_LOG(ERR, "can't allocate uar.");
-		rte_errno = ENOMEM;
-		goto error;
-	}
-	priv->pd = mlx5_glue->alloc_pd(ctx);
-	if (!priv->pd) {
-		DRV_LOG(ERR, "can't allocate pd.");
 		rte_errno = ENOMEM;
 		goto error;
 	}
 	priv->regexdev->dev_ops = &mlx5_regexdev_ops;
 	priv->regexdev->enqueue = mlx5_regexdev_enqueue;
 #ifdef HAVE_MLX5_UMR_IMKEY
-	if (!attr.umr_indirect_mkey_disabled &&
-	    !attr.umr_modify_entity_size_disabled)
+	if (!attr->umr_indirect_mkey_disabled &&
+	    !attr->umr_modify_entity_size_disabled)
 		priv->has_umr = 1;
 	if (priv->has_umr)
 		priv->regexdev->enqueue = mlx5_regexdev_enqueue_gga;
 #endif
 	priv->regexdev->dequeue = mlx5_regexdev_dequeue;
-	priv->regexdev->device = (struct rte_device *)pci_dev;
+	priv->regexdev->device = cdev->dev;
 	priv->regexdev->data->dev_private = priv;
 	priv->regexdev->state = RTE_REGEXDEV_READY;
-	priv->mr_scache.reg_mr_cb = mlx5_common_verbs_reg_mr;
-	priv->mr_scache.dereg_mr_cb = mlx5_common_verbs_dereg_mr;
-	ret = mlx5_mr_btree_init(&priv->mr_scache.cache,
-				 MLX5_MR_BTREE_CACHE_N * 2,
-				 rte_socket_id());
-	if (ret) {
-		DRV_LOG(ERR, "MR init tree failed.");
-	    rte_errno = ENOMEM;
-		goto error;
-	}
 	DRV_LOG(INFO, "RegEx GGA is %s.",
 		priv->has_umr ? "supported" : "unsupported");
 	return 0;
 
 error:
-	if (priv->pd)
-		mlx5_glue->dealloc_pd(priv->pd);
 	if (priv->uar)
 		mlx5_glue->devx_free_uar(priv->uar);
 	if (priv->regexdev)
 		rte_regexdev_unregister(priv->regexdev);
 dev_error:
-	if (ctx)
-		mlx5_glue->close_device(ctx);
 	if (priv)
 		rte_free(priv);
 	return -rte_errno;
 }
 
 static int
-mlx5_regex_pci_remove(struct rte_pci_device *pci_dev)
+mlx5_regex_dev_remove(struct mlx5_common_device *cdev)
 {
 	char name[RTE_REGEXDEV_NAME_MAX_LEN];
 	struct rte_regexdev *dev;
 	struct mlx5_regex_priv *priv = NULL;
 
-	mlx5_regex_get_name(name, pci_dev);
+	mlx5_regex_get_name(name, cdev->dev);
 	dev = rte_regexdev_get_device_by_name(name);
 	if (!dev)
 		return 0;
 	priv = dev->data->dev_private;
 	if (priv) {
-		if (priv->pd)
-			mlx5_glue->dealloc_pd(priv->pd);
 		if (priv->uar)
 			mlx5_glue->devx_free_uar(priv->uar);
-		if (priv->regexdev)
-			rte_regexdev_unregister(priv->regexdev);
-		if (priv->ctx)
-			mlx5_glue->close_device(priv->ctx);
 		if (priv->regexdev)
 			rte_regexdev_unregister(priv->regexdev);
 		rte_free(priv);
@@ -254,24 +208,19 @@ static const struct rte_pci_id mlx5_regex_pci_id_map[] = {
 	}
 };
 
-static struct mlx5_pci_driver mlx5_regex_driver = {
-	.driver_class = MLX5_CLASS_REGEX,
-	.pci_driver = {
-		.driver = {
-			.name = RTE_STR(MLX5_REGEX_DRIVER_NAME),
-		},
-		.id_table = mlx5_regex_pci_id_map,
-		.probe = mlx5_regex_pci_probe,
-		.remove = mlx5_regex_pci_remove,
-		.drv_flags = 0,
-	},
+static struct mlx5_class_driver mlx5_regex_driver = {
+	.drv_class = MLX5_CLASS_REGEX,
+	.name = RTE_STR(MLX5_REGEX_DRIVER_NAME),
+	.id_table = mlx5_regex_pci_id_map,
+	.probe = mlx5_regex_dev_probe,
+	.remove = mlx5_regex_dev_remove,
 };
 
 RTE_INIT(rte_mlx5_regex_init)
 {
 	mlx5_common_init();
 	if (mlx5_glue)
-		mlx5_pci_driver_register(&mlx5_regex_driver);
+		mlx5_class_driver_register(&mlx5_regex_driver);
 }
 
 RTE_LOG_REGISTER_DEFAULT(mlx5_regex_logtype, NOTICE)

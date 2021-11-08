@@ -1,7 +1,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2018 Intel Corporation
 
+if is_windows
+    build = false
+    reason = 'not supported on Windows'
+    subdir_done()
+endif
+
 sources = files('bpf.c',
+        'bpf_dump.c',
         'bpf_exec.c',
         'bpf_load.c',
         'bpf_pkt.c',
@@ -24,4 +31,9 @@ if dep.found()
     dpdk_conf.set('RTE_LIBRTE_BPF_ELF', 1)
     sources += files('bpf_load_elf.c')
     ext_deps += dep
+endif
+
+if dpdk_conf.has('RTE_PORT_PCAP')
+    sources += files('bpf_convert.c')
+    ext_deps += pcap_dep
 endif

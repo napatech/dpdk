@@ -38,7 +38,7 @@ fm10k_reset_tx_queue(struct fm10k_tx_queue *txq);
 #define RXEFLAG_SHIFT     (13)
 /* IPE/L4E flag shift */
 #define L3L4EFLAG_SHIFT     (14)
-/* shift PKT_RX_L4_CKSUM_GOOD into one byte by 1 bit */
+/* shift RTE_MBUF_F_RX_L4_CKSUM_GOOD into one byte by 1 bit */
 #define CKSUM_SHIFT     (1)
 
 static inline void
@@ -52,10 +52,10 @@ fm10k_desc_to_olflags_v(__m128i descs[4], struct rte_mbuf **rx_pkts)
 
 	const __m128i pkttype_msk = _mm_set_epi16(
 			0x0000, 0x0000, 0x0000, 0x0000,
-			PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED,
-			PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED,
-			PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED,
-			PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED);
+			RTE_MBUF_F_RX_VLAN | RTE_MBUF_F_RX_VLAN_STRIPPED,
+			RTE_MBUF_F_RX_VLAN | RTE_MBUF_F_RX_VLAN_STRIPPED,
+			RTE_MBUF_F_RX_VLAN | RTE_MBUF_F_RX_VLAN_STRIPPED,
+			RTE_MBUF_F_RX_VLAN | RTE_MBUF_F_RX_VLAN_STRIPPED);
 
 	/* mask everything except rss type */
 	const __m128i rsstype_msk = _mm_set_epi16(
@@ -75,10 +75,10 @@ fm10k_desc_to_olflags_v(__m128i descs[4], struct rte_mbuf **rx_pkts)
 	const __m128i l3l4cksum_flag = _mm_set_epi8(0, 0, 0, 0,
 			0, 0, 0, 0,
 			0, 0, 0, 0,
-			(PKT_RX_IP_CKSUM_BAD | PKT_RX_L4_CKSUM_BAD) >> CKSUM_SHIFT,
-			(PKT_RX_IP_CKSUM_BAD | PKT_RX_L4_CKSUM_GOOD) >> CKSUM_SHIFT,
-			(PKT_RX_IP_CKSUM_GOOD | PKT_RX_L4_CKSUM_BAD) >> CKSUM_SHIFT,
-			(PKT_RX_IP_CKSUM_GOOD | PKT_RX_L4_CKSUM_GOOD) >> CKSUM_SHIFT);
+			(RTE_MBUF_F_RX_IP_CKSUM_BAD | RTE_MBUF_F_RX_L4_CKSUM_BAD) >> CKSUM_SHIFT,
+			(RTE_MBUF_F_RX_IP_CKSUM_BAD | RTE_MBUF_F_RX_L4_CKSUM_GOOD) >> CKSUM_SHIFT,
+			(RTE_MBUF_F_RX_IP_CKSUM_GOOD | RTE_MBUF_F_RX_L4_CKSUM_BAD) >> CKSUM_SHIFT,
+			(RTE_MBUF_F_RX_IP_CKSUM_GOOD | RTE_MBUF_F_RX_L4_CKSUM_GOOD) >> CKSUM_SHIFT);
 
 	const __m128i rxe_flag = _mm_set_epi8(0, 0, 0, 0,
 			0, 0, 0, 0,
@@ -87,9 +87,10 @@ fm10k_desc_to_olflags_v(__m128i descs[4], struct rte_mbuf **rx_pkts)
 
 	/* map rss type to rss hash flag */
 	const __m128i rss_flags = _mm_set_epi8(0, 0, 0, 0,
-			0, 0, 0, PKT_RX_RSS_HASH,
-			PKT_RX_RSS_HASH, 0, PKT_RX_RSS_HASH, 0,
-			PKT_RX_RSS_HASH, PKT_RX_RSS_HASH, PKT_RX_RSS_HASH, 0);
+			0, 0, 0, RTE_MBUF_F_RX_RSS_HASH,
+			RTE_MBUF_F_RX_RSS_HASH, 0, RTE_MBUF_F_RX_RSS_HASH, 0,
+			RTE_MBUF_F_RX_RSS_HASH, RTE_MBUF_F_RX_RSS_HASH,
+			RTE_MBUF_F_RX_RSS_HASH, 0);
 
 	/* Calculate RSS_hash and Vlan fields */
 	ptype0 = _mm_unpacklo_epi16(descs[0], descs[1]);
@@ -208,11 +209,11 @@ fm10k_rx_vec_condition_check(struct rte_eth_dev *dev)
 {
 #ifndef RTE_LIBRTE_IEEE1588
 	struct rte_eth_rxmode *rxmode = &dev->data->dev_conf.rxmode;
-	struct rte_fdir_conf *fconf = &dev->data->dev_conf.fdir_conf;
+	struct rte_eth_fdir_conf *fconf = &dev->data->dev_conf.fdir_conf;
 
 #ifndef RTE_FM10K_RX_OLFLAGS_ENABLE
 	/* whithout rx ol_flags, no VP flag report */
-	if (rxmode->offloads & DEV_RX_OFFLOAD_VLAN_EXTEND)
+	if (rxmode->offloads & RTE_ETH_RX_OFFLOAD_VLAN_EXTEND)
 		return -1;
 #endif
 
@@ -221,7 +222,7 @@ fm10k_rx_vec_condition_check(struct rte_eth_dev *dev)
 		return -1;
 
 	/* no header split support */
-	if (rxmode->offloads & DEV_RX_OFFLOAD_HEADER_SPLIT)
+	if (rxmode->offloads & RTE_ETH_RX_OFFLOAD_HEADER_SPLIT)
 		return -1;
 
 	return 0;
@@ -472,7 +473,7 @@ fm10k_recv_raw_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
 		mbp1 = _mm_loadu_si128((__m128i *)&mbufp[pos]);
 
 		/* Read desc statuses backwards to avoid race condition */
-		/* A.1 load 4 pkts desc */
+		/* A.1 load desc[3] */
 		descs0[3] = _mm_loadu_si128((__m128i *)(rxdp + 3));
 		rte_compiler_barrier();
 
@@ -484,9 +485,9 @@ fm10k_recv_raw_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
 		mbp2 = _mm_loadu_si128((__m128i *)&mbufp[pos+2]);
 #endif
 
+		/* A.1 load desc[2-0] */
 		descs0[2] = _mm_loadu_si128((__m128i *)(rxdp + 2));
 		rte_compiler_barrier();
-		/* B.1 load 2 mbuf point */
 		descs0[1] = _mm_loadu_si128((__m128i *)(rxdp + 1));
 		rte_compiler_barrier();
 		descs0[0] = _mm_loadu_si128((__m128i *)(rxdp));
@@ -544,7 +545,7 @@ fm10k_recv_raw_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
 			/* and with mask to extract bits, flipping 1-0 */
 			__m128i eop_bits = _mm_andnot_si128(staterr, eop_check);
 			/* the staterr values are not in order, as the count
-			 * count of dd bits doesn't care. However, for end of
+			 * of dd bits doesn't care. However, for end of
 			 * packet tracking, we do care, so shuffle. This also
 			 * compresses the 32-bit values to 8-bit
 			 */

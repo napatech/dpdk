@@ -5,7 +5,11 @@
 #ifndef _IAVF_ETHDEV_H_
 #define _IAVF_ETHDEV_H_
 
+#include <sys/queue.h>
+
 #include <rte_kvargs.h>
+#include <rte_tm_driver.h>
+
 #include <iavf_prototype.h>
 #include <iavf_adminq_cmd.h>
 #include <iavf_type.h>
@@ -46,18 +50,18 @@
 	VIRTCHNL_VF_OFFLOAD_RX_POLLING)
 
 #define IAVF_RSS_OFFLOAD_ALL ( \
-	ETH_RSS_IPV4 | \
-	ETH_RSS_FRAG_IPV4 |         \
-	ETH_RSS_NONFRAG_IPV4_TCP |  \
-	ETH_RSS_NONFRAG_IPV4_UDP |  \
-	ETH_RSS_NONFRAG_IPV4_SCTP | \
-	ETH_RSS_NONFRAG_IPV4_OTHER | \
-	ETH_RSS_IPV6 | \
-	ETH_RSS_FRAG_IPV6 | \
-	ETH_RSS_NONFRAG_IPV6_TCP | \
-	ETH_RSS_NONFRAG_IPV6_UDP | \
-	ETH_RSS_NONFRAG_IPV6_SCTP | \
-	ETH_RSS_NONFRAG_IPV6_OTHER)
+	RTE_ETH_RSS_IPV4 | \
+	RTE_ETH_RSS_FRAG_IPV4 |         \
+	RTE_ETH_RSS_NONFRAG_IPV4_TCP |  \
+	RTE_ETH_RSS_NONFRAG_IPV4_UDP |  \
+	RTE_ETH_RSS_NONFRAG_IPV4_SCTP | \
+	RTE_ETH_RSS_NONFRAG_IPV4_OTHER | \
+	RTE_ETH_RSS_IPV6 | \
+	RTE_ETH_RSS_FRAG_IPV6 | \
+	RTE_ETH_RSS_NONFRAG_IPV6_TCP | \
+	RTE_ETH_RSS_NONFRAG_IPV6_UDP | \
+	RTE_ETH_RSS_NONFRAG_IPV6_SCTP | \
+	RTE_ETH_RSS_NONFRAG_IPV6_OTHER)
 
 #define IAVF_MISC_VEC_ID                RTE_INTR_VEC_ZERO_OFFSET
 #define IAVF_RX_VEC_START               RTE_INTR_VEC_RXTX_OFFSET
@@ -66,6 +70,8 @@
 #define IAVF_ITR_INDEX_DEFAULT          0
 #define IAVF_QUEUE_ITR_INTERVAL_DEFAULT 32 /* 32 us */
 #define IAVF_QUEUE_ITR_INTERVAL_MAX     8160 /* 8160 us */
+
+#define IAVF_ALARM_INTERVAL 50000 /* us */
 
 /* The overhead from MTU to max frame size.
  * Considering QinQ packet, the VLAN tag needs to be counted twice.
@@ -81,6 +87,10 @@
 
 #define IAVF_RX_DESC_EXT_STATUS_FLEXBH_MASK  0x03
 #define IAVF_RX_DESC_EXT_STATUS_FLEXBH_FD_ID 0x01
+
+#define IAVF_BITS_PER_BYTE 8
+
+#define IAVF_VLAN_TAG_PCP_OFFSET 13
 
 struct iavf_adapter;
 struct iavf_rx_queue;
@@ -129,6 +139,45 @@ enum iavf_aq_result {
 	IAVF_MSG_CMD,      /* Read async command result */
 };
 
+/* Struct to store Traffic Manager node configuration. */
+struct iavf_tm_node {
+	TAILQ_ENTRY(iavf_tm_node) node;
+	uint32_t id;
+	uint32_t tc;
+	uint32_t priority;
+	uint32_t weight;
+	uint32_t reference_count;
+	struct iavf_tm_node *parent;
+	struct rte_tm_node_params params;
+};
+
+TAILQ_HEAD(iavf_tm_node_list, iavf_tm_node);
+
+/* node type of Traffic Manager */
+enum iavf_tm_node_type {
+	IAVF_TM_NODE_TYPE_PORT,
+	IAVF_TM_NODE_TYPE_TC,
+	IAVF_TM_NODE_TYPE_QUEUE,
+	IAVF_TM_NODE_TYPE_MAX,
+};
+
+/* Struct to store all the Traffic Manager configuration. */
+struct iavf_tm_conf {
+	struct iavf_tm_node *root; /* root node - vf vsi */
+	struct iavf_tm_node_list tc_list; /* node list for all the TCs */
+	struct iavf_tm_node_list queue_list; /* node list for all the queues */
+	uint32_t nb_tc_node;
+	uint32_t nb_queue_node;
+	bool committed;
+};
+
+/* Struct to store queue TC mapping. Queue is continuous in one TC */
+struct iavf_qtc_map {
+	uint8_t	tc;
+	uint16_t start_queue_id;
+	uint16_t queue_count;
+};
+
 /* Structure to store private data specific for VF instance. */
 struct iavf_info {
 	uint16_t num_queue_pairs;
@@ -175,6 +224,12 @@ struct iavf_info {
 	struct iavf_fdir_info fdir; /* flow director info */
 	/* indicate large VF support enabled or not */
 	bool lv_enabled;
+
+	struct virtchnl_qos_cap_list *qos_cap;
+	struct iavf_qtc_map *qtc_map;
+	struct iavf_tm_conf tm_conf;
+
+	struct rte_eth_dev *eth_dev;
 };
 
 #define IAVF_MAX_PKT_TYPE 1024
@@ -203,7 +258,7 @@ struct iavf_devargs {
 /* Structure to store private data for each VF instance. */
 struct iavf_adapter {
 	struct iavf_hw hw;
-	struct rte_eth_dev *eth_dev;
+	struct rte_eth_dev_data *dev_data;
 	struct iavf_info vf;
 
 	bool rx_bulk_alloc_allowed;
@@ -229,8 +284,6 @@ struct iavf_adapter {
 	(&(((struct iavf_vsi *)vsi)->adapter->hw))
 #define IAVF_VSI_TO_VF(vsi) \
 	(&(((struct iavf_vsi *)vsi)->adapter->vf))
-#define IAVF_VSI_TO_ETH_DEV(vsi) \
-	(((struct iavf_vsi *)vsi)->adapter->eth_dev)
 
 static inline void
 iavf_init_adminq_parameter(struct iavf_hw *hw)
@@ -286,7 +339,8 @@ _clear_cmd(struct iavf_info *vf)
 static inline int
 _atomic_set_cmd(struct iavf_info *vf, enum virtchnl_ops ops)
 {
-	int ret = rte_atomic32_cmpset(&vf->pend_cmd, VIRTCHNL_OP_UNKNOWN, ops);
+	int ret = rte_atomic32_cmpset((volatile uint32_t *)&vf->pend_cmd,
+		VIRTCHNL_OP_UNKNOWN, ops);
 
 	if (!ret)
 		PMD_DRV_LOG(ERR, "There is incomplete cmd %d", vf->pend_cmd);
@@ -323,6 +377,7 @@ int iavf_config_irq_map_lv(struct iavf_adapter *adapter, uint16_t num,
 void iavf_add_del_all_mac_addr(struct iavf_adapter *adapter, bool add);
 int iavf_dev_link_update(struct rte_eth_dev *dev,
 			__rte_unused int wait_to_complete);
+void iavf_dev_alarm_handler(void *param);
 int iavf_query_stats(struct iavf_adapter *adapter,
 		    struct virtchnl_eth_stats **pstats);
 int iavf_config_promisc(struct iavf_adapter *adapter, bool enable_unicast,
@@ -342,6 +397,13 @@ int iavf_rss_hash_set(struct iavf_adapter *ad, uint64_t rss_hf, bool add);
 int iavf_add_del_mc_addr_list(struct iavf_adapter *adapter,
 			struct rte_ether_addr *mc_addrs,
 			uint32_t mc_addrs_num, bool add);
-int iavf_request_queues(struct iavf_adapter *adapter, uint16_t num);
+int iavf_request_queues(struct rte_eth_dev *dev, uint16_t num);
 int iavf_get_max_rss_queue_region(struct iavf_adapter *adapter);
+int iavf_get_qos_cap(struct iavf_adapter *adapter);
+int iavf_set_q_tc_map(struct rte_eth_dev *dev,
+			struct virtchnl_queue_tc_mapping *q_tc_mapping,
+			uint16_t size);
+void iavf_tm_conf_init(struct rte_eth_dev *dev);
+void iavf_tm_conf_uninit(struct rte_eth_dev *dev);
+extern const struct rte_tm_ops iavf_tm_ops;
 #endif /* _IAVF_ETHDEV_H_ */

@@ -18,5 +18,9 @@ sources = files(
         'nfpcore/nfp_mutex.c',
         'nfpcore/nfp_nsp_eth.c',
         'nfpcore/nfp_hwinfo.c',
-        'nfp_net.c',
+        'nfp_common.c',
+        'nfp_rxtx.c',
+        'nfp_cpp_bridge.c',
+        'nfp_ethdev_vf.c',
+        'nfp_ethdev.c',
 )

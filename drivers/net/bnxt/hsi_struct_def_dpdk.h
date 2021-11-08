@@ -364,6 +364,8 @@ struct cmd_nums {
 	#define HWRM_QUEUE_VLANPRI_QCAPS                  UINT32_C(0x83)
 	#define HWRM_QUEUE_VLANPRI2PRI_QCFG               UINT32_C(0x84)
 	#define HWRM_QUEUE_VLANPRI2PRI_CFG                UINT32_C(0x85)
+	#define HWRM_QUEUE_GLOBAL_CFG                     UINT32_C(0x86)
+	#define HWRM_QUEUE_GLOBAL_QCFG                    UINT32_C(0x87)
 	#define HWRM_CFA_L2_FILTER_ALLOC                  UINT32_C(0x90)
 	#define HWRM_CFA_L2_FILTER_FREE                   UINT32_C(0x91)
 	#define HWRM_CFA_L2_FILTER_CFG                    UINT32_C(0x92)
@@ -438,6 +440,8 @@ struct cmd_nums {
 	#define HWRM_FW_STATE_UNQUIESCE                   UINT32_C(0xd8)
 	/* Tells the fw to collect dsc dump on a given port and lane. */
 	#define HWRM_PORT_DSC_DUMP                        UINT32_C(0xd9)
+	#define HWRM_PORT_EP_TX_QCFG                      UINT32_C(0xda)
+	#define HWRM_PORT_EP_TX_CFG                       UINT32_C(0xdb)
 	#define HWRM_TEMP_MONITOR_QUERY                   UINT32_C(0xe0)
 	#define HWRM_REG_POWER_QUERY                      UINT32_C(0xe1)
 	#define HWRM_CORE_FREQUENCY_QUERY                 UINT32_C(0xe2)
@@ -535,6 +539,10 @@ struct cmd_nums {
 	#define HWRM_CFA_ADV_FLOW_MGNT_QCAPS              UINT32_C(0x124)
 	/* Experimental - DEPRECATED */
 	#define HWRM_CFA_TFLIB                            UINT32_C(0x125)
+	/* Experimental */
+	#define HWRM_CFA_LAG_GROUP_MEMBER_RGTR            UINT32_C(0x126)
+	/* Experimental */
+	#define HWRM_CFA_LAG_GROUP_MEMBER_UNRGTR          UINT32_C(0x127)
 	/* Engine CKV - Get the current allocation status of keys provisioned in the key vault. */
 	#define HWRM_ENGINE_CKV_STATUS                    UINT32_C(0x12e)
 	/* Engine CKV - Add a new CKEK used to encrypt keys. */
@@ -637,6 +645,18 @@ struct cmd_nums {
 	#define HWRM_FUNC_SPD_CFG                         UINT32_C(0x19a)
 	/* Query SoC packet DMA settings */
 	#define HWRM_FUNC_SPD_QCFG                        UINT32_C(0x19b)
+	/* PTP - Queries configuration of timesync IO pins. */
+	#define HWRM_FUNC_PTP_PIN_QCFG                    UINT32_C(0x19c)
+	/* PTP - Configuration of timesync IO pins. */
+	#define HWRM_FUNC_PTP_PIN_CFG                     UINT32_C(0x19d)
+	/* PTP - Configuration for disciplining PHC. */
+	#define HWRM_FUNC_PTP_CFG                         UINT32_C(0x19e)
+	/* PTP - Queries for PHC timestamps. */
+	#define HWRM_FUNC_PTP_TS_QUERY                    UINT32_C(0x19f)
+	/* PTP - Extended PTP configuration. */
+	#define HWRM_FUNC_PTP_EXT_CFG                     UINT32_C(0x1a0)
+	/* PTP - Query extended PTP configuration. */
+	#define HWRM_FUNC_PTP_EXT_QCFG                    UINT32_C(0x1a1)
 	/* Experimental */
 	#define HWRM_SELFTEST_QLIST                       UINT32_C(0x200)
 	/* Experimental */
@@ -674,6 +694,26 @@ struct cmd_nums {
 	#define HWRM_MFG_PARAM_SEEPROM_READ               UINT32_C(0x20f)
 	/* Tells the fw to get the health of seeprom data */
 	#define HWRM_MFG_PARAM_SEEPROM_HEALTH             UINT32_C(0x210)
+	/*
+	 * The command is used for certificate provisioning to export a
+	 * Certificate Signing Request (CSR) from the device.
+	 */
+	#define HWRM_MFG_PRVSN_EXPORT_CSR                 UINT32_C(0x211)
+	/*
+	 * The command is used for certificate provisioning to import a
+	 * CA-signed certificate chain to the device.
+	 */
+	#define HWRM_MFG_PRVSN_IMPORT_CERT                UINT32_C(0x212)
+	/*
+	 * The command is used for certificate provisioning to query the
+	 * provisioned state.
+	 */
+	#define HWRM_MFG_PRVSN_GET_STATE                  UINT32_C(0x213)
+	/*
+	 * The command is used to get the hash of the NVM configuration that is
+	 * calculated during firmware boot.
+	 */
+	#define HWRM_MFG_GET_NVM_MEASUREMENT              UINT32_C(0x214)
 	/* Experimental */
 	#define HWRM_TF                                   UINT32_C(0x2bc)
 	/* Experimental */
@@ -698,6 +738,8 @@ struct cmd_nums {
 	#define HWRM_TF_SESSION_RESC_FREE                 UINT32_C(0x2ce)
 	/* Experimental */
 	#define HWRM_TF_SESSION_RESC_FLUSH                UINT32_C(0x2cf)
+	/* Experimental */
+	#define HWRM_TF_SESSION_RESC_INFO                 UINT32_C(0x2d0)
 	/* Experimental */
 	#define HWRM_TF_TBL_TYPE_GET                      UINT32_C(0x2da)
 	/* Experimental */
@@ -726,6 +768,8 @@ struct cmd_nums {
 	#define HWRM_TF_EM_DELETE                         UINT32_C(0x2eb)
 	/* Experimental */
 	#define HWRM_TF_EM_HASH_INSERT                    UINT32_C(0x2ec)
+	/* Experimental */
+	#define HWRM_TF_EM_MOVE                           UINT32_C(0x2ed)
 	/* Experimental */
 	#define HWRM_TF_TCAM_SET                          UINT32_C(0x2f8)
 	/* Experimental */
@@ -781,6 +825,25 @@ struct cmd_nums {
 	#define HWRM_DBG_QCFG                             UINT32_C(0xff21)
 	/* Set destination parameters for crashdump medium */
 	#define HWRM_DBG_CRASHDUMP_MEDIUM_CFG             UINT32_C(0xff22)
+	/* Experimental */
+	#define HWRM_DBG_USEQ_ALLOC                       UINT32_C(0xff23)
+	/* Experimental */
+	#define HWRM_DBG_USEQ_FREE                        UINT32_C(0xff24)
+	/* Experimental */
+	#define HWRM_DBG_USEQ_FLUSH                       UINT32_C(0xff25)
+	/* Experimental */
+	#define HWRM_DBG_USEQ_QCAPS                       UINT32_C(0xff26)
+	/* Experimental */
+	#define HWRM_DBG_USEQ_CW_CFG                      UINT32_C(0xff27)
+	/* Experimental */
+	#define HWRM_DBG_USEQ_SCHED_CFG                   UINT32_C(0xff28)
+	/* Experimental */
+	#define HWRM_DBG_USEQ_RUN                         UINT32_C(0xff29)
+	/* Experimental */
+	#define HWRM_DBG_USEQ_DELIVERY_REQ                UINT32_C(0xff2a)
+	/* Experimental */
+	#define HWRM_DBG_USEQ_RESP_HDR                    UINT32_C(0xff2b)
+	#define HWRM_NVM_DEFRAG                           UINT32_C(0xffec)
 	#define HWRM_NVM_REQ_ARBITRATION                  UINT32_C(0xffed)
 	/* Experimental */
 	#define HWRM_NVM_FACTORY_DEFAULTS                 UINT32_C(0xffee)
@@ -900,6 +963,13 @@ struct ret_codes {
 	 */
 	#define HWRM_ERR_CODE_RESOURCE_LOCKED              UINT32_C(0x11)
 	/*
+	 * This error code is reported by Firmware when an operation requested
+	 * by a VF cannot be forwarded to the parent PF as required, either
+	 * because the PF is down or otherwise doesn't have an appropriate
+	 * async completion ring or associated forwarding buffers configured.
+	 */
+	#define HWRM_ERR_CODE_PF_UNAVAILABLE               UINT32_C(0x12)
+	/*
 	 * This value indicates that the HWRM response is in TLV format and
 	 * should be interpreted as one or more TLVs starting with the
 	 * hwrm_resp_hdr TLV. This value is not an indication of any error
@@ -986,8 +1056,8 @@ struct hwrm_err_output {
 #define HWRM_VERSION_MINOR 10
 #define HWRM_VERSION_UPDATE 2
 /* non-zero means beta version */
-#define HWRM_VERSION_RSVD 15
-#define HWRM_VERSION_STR "1.10.2.15"
+#define HWRM_VERSION_RSVD 44
+#define HWRM_VERSION_STR "1.10.2.44"
 
 /****************
  * hwrm_ver_get *
@@ -1543,7 +1613,18 @@ struct hwrm_ver_get_output {
 	 * used with the short cmd request format.
 	 */
 	uint16_t	max_ext_req_len;
-	uint8_t	unused_1[5];
+	/*
+	 * This field returns the maximum request timeout value in seconds.
+	 * For backward compatibility, a value of zero should be interpreted
+	 * as the default value of 40 seconds. Drivers should always honor the
+	 * maximum timeout, but are permitted to warn if a longer duration than
+	 * this default is advertised. Values larger than 40 seconds should
+	 * only be used as a stopgap measure to address a device limitation or
+	 * for the purposes of test and debugging. The long term goal is for
+	 * firmware to significantly reduce this value in the passage of time.
+	 */
+	uint16_t	max_req_timeout;
+	uint8_t	unused_1[3];
 	/*
 	 * This field is used in Output records to indicate that the output
 	 * is completely written to RAM.  This field should be read as '1'
@@ -7462,9 +7543,29 @@ struct hwrm_async_event_cmpl {
 	 */
 	#define HWRM_ASYNC_EVENT_CMPL_EVENT_ID_ECHO_REQUEST \
 		UINT32_C(0x42)
+	/*
+	 * An event from firmware indicating who has been selected as the
+	 * PHC Master or secondary. Also indicates the last time a failover
+	 * happens.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_EVENT_ID_PHC_MASTER \
+		UINT32_C(0x43)
+	/*
+	 * An event from firmware showing the last PPS timestamp that has been
+	 * latched.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_EVENT_ID_PPS_TIMESTAMP \
+		UINT32_C(0x44)
+	/*
+	 * An event from firmware indicating that an error has occurred.
+	 * The driver should log the event so that an administrator can be
+	 * aware that a problem has occurred that may need attention.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_EVENT_ID_ERROR_REPORT \
+		UINT32_C(0x45)
 	/* Maximum Registrable event id. */
 	#define HWRM_ASYNC_EVENT_CMPL_EVENT_ID_MAX_RGTR_EVENT_ID \
-		UINT32_C(0x43)
+		UINT32_C(0x46)
 	/*
 	 * A trace log message. This contains firmware trace logs string
 	 * embedded in the asynchronous message. This is an experimental
@@ -7757,6 +7858,9 @@ struct hwrm_async_event_cmpl_dcb_config_change {
 	/* APP configuration change */
 	#define HWRM_ASYNC_EVENT_CMPL_DCB_CONFIG_CHANGE_EVENT_DATA2_APP \
 		UINT32_C(0x4)
+	/* DSCP configuration change */
+	#define HWRM_ASYNC_EVENT_CMPL_DCB_CONFIG_CHANGE_EVENT_DATA2_DSCP \
+		UINT32_C(0x8)
 	uint8_t	opaque_v;
 	/*
 	 * This value is written by the NIC such that it will be different
@@ -8771,6 +8875,17 @@ struct hwrm_async_event_cmpl_vf_cfg_change {
 		HWRM_ASYNC_EVENT_CMPL_VF_CFG_CHANGE_EVENT_ID_VF_CFG_CHANGE
 	/* Event specific data */
 	uint32_t	event_data2;
+	/*
+	 * This value indicates the VF ID of the VF whose configuration
+	 * is changing if this async. event is sent to the parent PF.
+	 * The firmware supports sending this to the parent PF if the
+	 * `hwrm_func_qcaps.vf_cfg_async_for_pf_supported` value is 1.
+	 * This value is undefined when the async. event is sent to the
+	 * VF.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_VF_CFG_CHANGE_EVENT_DATA2_VF_ID_MASK \
+		UINT32_C(0xffff)
+	#define HWRM_ASYNC_EVENT_CMPL_VF_CFG_CHANGE_EVENT_DATA2_VF_ID_SFT 0
 	uint8_t	opaque_v;
 	/*
 	 * This value is written by the NIC such that it will be different
@@ -9663,6 +9778,230 @@ struct hwrm_async_event_cmpl_echo_request {
 	uint32_t	event_data1;
 } __rte_packed;
 
+/* hwrm_async_event_cmpl_phc_master (size:128b/16B) */
+struct hwrm_async_event_cmpl_phc_master {
+	uint16_t	type;
+	/*
+	 * This field indicates the exact type of the completion.
+	 * By convention, the LSB identifies the length of the
+	 * record in 16B units. Even values indicate 16B
+	 * records. Odd values indicate 32B
+	 * records.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_TYPE_MASK \
+		UINT32_C(0x3f)
+	#define HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_TYPE_SFT             0
+	/* HWRM Asynchronous Event Information */
+	#define HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_TYPE_HWRM_ASYNC_EVENT \
+		UINT32_C(0x2e)
+	#define HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_TYPE_LAST \
+		HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_TYPE_HWRM_ASYNC_EVENT
+	/* Identifiers of events. */
+	uint16_t	event_id;
+	/*
+	 * This async event is used to notify driver of changes
+	 * in PHC master. Only one master function can configure
+	 * PHC.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_EVENT_ID_PHC_MASTER \
+		UINT32_C(0x43)
+	#define HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_EVENT_ID_LAST \
+		HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_EVENT_ID_PHC_MASTER
+	/* Event specific data */
+	uint32_t	event_data2;
+	/* This field provides the current master function. */
+	#define HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_EVENT_DATA2_PHC_MASTER_FID_MASK \
+		UINT32_C(0xffff)
+	#define HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_EVENT_DATA2_PHC_MASTER_FID_SFT \
+		0
+	/* This field provides the current secondary function. */
+	#define HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_EVENT_DATA2_PHC_SEC_FID_MASK \
+		UINT32_C(0xffff0000)
+	#define HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_EVENT_DATA2_PHC_SEC_FID_SFT \
+		16
+	uint8_t	opaque_v;
+	/*
+	 * This value is written by the NIC such that it will be different
+	 * for each pass through the completion queue. The even passes
+	 * will write 1. The odd passes will write 0.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_V          UINT32_C(0x1)
+	/* opaque is 7 b */
+	#define HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_OPAQUE_MASK UINT32_C(0xfe)
+	#define HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_OPAQUE_SFT 1
+	/* 8-lsb timestamp (100-msec resolution) */
+	uint8_t	timestamp_lo;
+	/* 16-lsb timestamp (100-msec resolution) */
+	uint16_t	timestamp_hi;
+	/* Event specific data */
+	uint32_t	event_data1;
+	/* Indicates to the driver the type of PHC event. */
+	#define HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_EVENT_DATA1_FLAGS_MASK \
+		UINT32_C(0xf)
+	#define HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_EVENT_DATA1_FLAGS_SFT \
+		0
+	/*
+	 * Indicates PHC Master selection event. The master fid is
+	 * specified in event_data2.phc_master_fid.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_EVENT_DATA1_FLAGS_PHC_MASTER \
+		UINT32_C(0x1)
+	/*
+	 * Indicates PHC Secondary selection event. The secondary fid is
+	 * specified in event_data2.phc_sec_fid.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_EVENT_DATA1_FLAGS_PHC_SECONDARY \
+		UINT32_C(0x2)
+	/*
+	 * Indicates PHC failover event. Failover happens from
+	 * event_data2.phc_master_fid to event_data2.phc_sec_fid.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_EVENT_DATA1_FLAGS_PHC_FAILOVER \
+		UINT32_C(0x3)
+	#define HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_EVENT_DATA1_FLAGS_LAST \
+		HWRM_ASYNC_EVENT_CMPL_PHC_MASTER_EVENT_DATA1_FLAGS_PHC_FAILOVER
+} __rte_packed;
+
+/* hwrm_async_event_cmpl_pps_timestamp (size:128b/16B) */
+struct hwrm_async_event_cmpl_pps_timestamp {
+	uint16_t	type;
+	/*
+	 * This field indicates the exact type of the completion.
+	 * By convention, the LSB identifies the length of the
+	 * record in 16B units. Even values indicate 16B
+	 * records. Odd values indicate 32B
+	 * records.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_TYPE_MASK \
+		UINT32_C(0x3f)
+	#define HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_TYPE_SFT             0
+	/* HWRM Asynchronous Event Information */
+	#define HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_TYPE_HWRM_ASYNC_EVENT \
+		UINT32_C(0x2e)
+	#define HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_TYPE_LAST \
+		HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_TYPE_HWRM_ASYNC_EVENT
+	/* Identifiers of events. */
+	uint16_t	event_id;
+	/*
+	 * This async notification message can be used to inform
+	 * driver of the latest PPS timestamp that has been latched.
+	 * When driver enables PPS event, Firmware will generate
+	 * PPS timestamps every second, Firmware informs driver
+	 * of this timestamp through the async event.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_EVENT_ID_PPS_TIMESTAMP \
+		UINT32_C(0x44)
+	#define HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_EVENT_ID_LAST \
+		HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_EVENT_ID_PPS_TIMESTAMP
+	/* Event specific data */
+	uint32_t	event_data2;
+	/* Indicates the PPS event type */
+	#define HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_EVENT_DATA2_EVENT_TYPE \
+		UINT32_C(0x1)
+	/* This is an internal event. */
+	#define HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_EVENT_DATA2_EVENT_TYPE_INTERNAL \
+		UINT32_C(0x0)
+	/* This is an external event. */
+	#define HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_EVENT_DATA2_EVENT_TYPE_EXTERNAL \
+		UINT32_C(0x1)
+	#define HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_EVENT_DATA2_EVENT_TYPE_LAST \
+		HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_EVENT_DATA2_EVENT_TYPE_EXTERNAL
+	/*
+	 * Indicates the pin number on which the event is
+	 * received.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_EVENT_DATA2_PIN_NUMBER_MASK \
+		UINT32_C(0xe)
+	#define HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_EVENT_DATA2_PIN_NUMBER_SFT \
+		1
+	/*
+	 * Contains bits[47:32] of the upper PPS timestamp.
+	 * Lower 32 bits are in event_data1. Together they
+	 * provide the 48 bit PPS timestamp.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_EVENT_DATA2_PPS_TIMESTAMP_UPPER_MASK \
+		UINT32_C(0xffff0)
+	#define HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_EVENT_DATA2_PPS_TIMESTAMP_UPPER_SFT \
+		4
+	uint8_t	opaque_v;
+	/*
+	 * This value is written by the NIC such that it will be different
+	 * for each pass through the completion queue. The even passes
+	 * will write 1. The odd passes will write 0.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_V          UINT32_C(0x1)
+	/* opaque is 7 b */
+	#define HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_OPAQUE_MASK UINT32_C(0xfe)
+	#define HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_OPAQUE_SFT 1
+	/* 8-lsb timestamp (100-msec resolution) */
+	uint8_t	timestamp_lo;
+	/* 16-lsb timestamp (100-msec resolution) */
+	uint16_t	timestamp_hi;
+	/* Contains the lower 32 bits of the PPS timestamp. */
+	uint32_t	event_data1;
+	/* Contains the lower 32 bit PPS timestamp */
+	#define HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_EVENT_DATA1_PPS_TIMESTAMP_LOWER_MASK \
+		UINT32_C(0xffffffff)
+	#define HWRM_ASYNC_EVENT_CMPL_PPS_TIMESTAMP_EVENT_DATA1_PPS_TIMESTAMP_LOWER_SFT \
+		0
+} __rte_packed;
+
+/* hwrm_async_event_cmpl_error_report (size:128b/16B) */
+struct hwrm_async_event_cmpl_error_report {
+	uint16_t	type;
+	/*
+	 * This field indicates the exact type of the completion.
+	 * By convention, the LSB identifies the length of the
+	 * record in 16B units. Even values indicate 16B
+	 * records. Odd values indicate 32B
+	 * records.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_TYPE_MASK \
+		UINT32_C(0x3f)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_TYPE_SFT             0
+	/* HWRM Asynchronous Event Information */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_TYPE_HWRM_ASYNC_EVENT \
+		UINT32_C(0x2e)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_TYPE_LAST \
+		HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_TYPE_HWRM_ASYNC_EVENT
+	/* Identifiers of events. */
+	uint16_t	event_id;
+	/*
+	 * This async notification message is used to inform
+	 * the driver that an error has occurred which may need
+	 * the attention of the administrator.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_EVENT_ID_ERROR_REPORT \
+		UINT32_C(0x45)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_EVENT_ID_LAST \
+		HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_EVENT_ID_ERROR_REPORT
+	/* Event specific data. */
+	uint32_t	event_data2;
+	uint8_t	opaque_v;
+	/*
+	 * This value is written by the NIC such that it will be different
+	 * for each pass through the completion queue. The even passes
+	 * will write 1. The odd passes will write 0.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_V          UINT32_C(0x1)
+	/* opaque is 7 b */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_OPAQUE_MASK UINT32_C(0xfe)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_OPAQUE_SFT 1
+	/* 8-lsb timestamp (100-msec resolution) */
+	uint8_t	timestamp_lo;
+	/* 16-lsb timestamp (100-msec resolution) */
+	uint16_t	timestamp_hi;
+	/* Event specific data */
+	uint32_t	event_data1;
+	/*
+	 * Indicates the type of error being reported. See section on Error
+	 * Report event error_types for details on each error.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_EVENT_DATA1_ERROR_TYPE_MASK \
+		UINT32_C(0xff)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_EVENT_DATA1_ERROR_TYPE_SFT 0
+} __rte_packed;
+
 /* hwrm_async_event_cmpl_fw_trace_msg (size:128b/16B) */
 struct hwrm_async_event_cmpl_fw_trace_msg {
 	uint16_t	type;
@@ -9831,6 +10170,220 @@ struct hwrm_async_event_cmpl_hwrm_error {
 	/* Time stamp for error event */
 	#define HWRM_ASYNC_EVENT_CMPL_HWRM_ERROR_EVENT_DATA1_TIMESTAMP \
 		UINT32_C(0x1)
+} __rte_packed;
+
+/* hwrm_async_event_cmpl_error_report_base (size:128b/16B) */
+struct hwrm_async_event_cmpl_error_report_base {
+	uint16_t	type;
+	/*
+	 * This field indicates the exact type of the completion.
+	 * By convention, the LSB identifies the length of the
+	 * record in 16B units. Even values indicate 16B
+	 * records. Odd values indicate 32B
+	 * records.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_TYPE_MASK \
+		UINT32_C(0x3f)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_TYPE_SFT             0
+	/* HWRM Asynchronous Event Information */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_TYPE_HWRM_ASYNC_EVENT \
+		UINT32_C(0x2e)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_TYPE_LAST \
+		HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_TYPE_HWRM_ASYNC_EVENT
+	/* Identifiers of events. */
+	uint16_t	event_id;
+	/*
+	 * This async notification message is used to inform
+	 * the driver that an error has occurred which may need
+	 * the attention of the administrator.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_EVENT_ID_ERROR_REPORT \
+		UINT32_C(0x45)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_EVENT_ID_LAST \
+		HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_EVENT_ID_ERROR_REPORT
+	/* Event specific data. */
+	uint32_t	event_data2;
+	uint8_t	opaque_v;
+	/*
+	 * This value is written by the NIC such that it will be different
+	 * for each pass through the completion queue. The even passes
+	 * will write 1. The odd passes will write 0.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_V \
+		UINT32_C(0x1)
+	/* opaque is 7 b */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_OPAQUE_MASK \
+		UINT32_C(0xfe)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_OPAQUE_SFT 1
+	/* 8-lsb timestamp (100-msec resolution) */
+	uint8_t	timestamp_lo;
+	/* 16-lsb timestamp (100-msec resolution) */
+	uint16_t	timestamp_hi;
+	/* Event specific data */
+	uint32_t	event_data1;
+	/* Indicates the type of error being reported. */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_EVENT_DATA1_ERROR_TYPE_MASK \
+		UINT32_C(0xff)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_EVENT_DATA1_ERROR_TYPE_SFT \
+		0
+	/* Reserved */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_EVENT_DATA1_ERROR_TYPE_RESERVED \
+		UINT32_C(0x0)
+	/*
+	 * The NIC was subjected to an extended pause storm which caused it
+	 * to disable flow control in order to avoid stalling the Tx path.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_EVENT_DATA1_ERROR_TYPE_PAUSE_STORM \
+		UINT32_C(0x1)
+	/*
+	 * The NIC received an interrupt storm on a TSIO pin being used as
+	 * PPS_IN which caused it to disable the interrupt. The signal
+	 * should be fixed to be a proper 1 PPS signal before re-enabling
+	 * it. The pin number on which this signal was received is stored
+	 * in event_data2 as pin_id.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_EVENT_DATA1_ERROR_TYPE_INVALID_SIGNAL \
+		UINT32_C(0x2)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_EVENT_DATA1_ERROR_TYPE_LAST \
+		HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_BASE_EVENT_DATA1_ERROR_TYPE_INVALID_SIGNAL
+} __rte_packed;
+
+/* hwrm_async_event_cmpl_error_report_pause_storm (size:128b/16B) */
+struct hwrm_async_event_cmpl_error_report_pause_storm {
+	uint16_t	type;
+	/*
+	 * This field indicates the exact type of the completion.
+	 * By convention, the LSB identifies the length of the
+	 * record in 16B units. Even values indicate 16B
+	 * records. Odd values indicate 32B
+	 * records.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_PAUSE_STORM_TYPE_MASK \
+		UINT32_C(0x3f)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_PAUSE_STORM_TYPE_SFT \
+		0
+	/* HWRM Asynchronous Event Information */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_PAUSE_STORM_TYPE_HWRM_ASYNC_EVENT \
+		UINT32_C(0x2e)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_PAUSE_STORM_TYPE_LAST \
+		HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_PAUSE_STORM_TYPE_HWRM_ASYNC_EVENT
+	/* Identifiers of events. */
+	uint16_t	event_id;
+	/*
+	 * This async notification message is used to inform
+	 * the driver that an error has occurred which may need
+	 * the attention of the administrator.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_PAUSE_STORM_EVENT_ID_ERROR_REPORT \
+		UINT32_C(0x45)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_PAUSE_STORM_EVENT_ID_LAST \
+		HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_PAUSE_STORM_EVENT_ID_ERROR_REPORT
+	/* Event specific data. */
+	uint32_t	event_data2;
+	uint8_t	opaque_v;
+	/*
+	 * This value is written by the NIC such that it will be different
+	 * for each pass through the completion queue. The even passes
+	 * will write 1. The odd passes will write 0.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_PAUSE_STORM_V \
+		UINT32_C(0x1)
+	/* opaque is 7 b */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_PAUSE_STORM_OPAQUE_MASK \
+		UINT32_C(0xfe)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_PAUSE_STORM_OPAQUE_SFT 1
+	/* 8-lsb timestamp (100-msec resolution) */
+	uint8_t	timestamp_lo;
+	/* 16-lsb timestamp (100-msec resolution) */
+	uint16_t	timestamp_hi;
+	/* Event specific data */
+	uint32_t	event_data1;
+	/* Indicates the type of error being reported. */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_PAUSE_STORM_EVENT_DATA1_ERROR_TYPE_MASK \
+		UINT32_C(0xff)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_PAUSE_STORM_EVENT_DATA1_ERROR_TYPE_SFT \
+		0
+	/*
+	 * The NIC was subjected to an extended pause storm which caused it
+	 * to disable flow control in order to avoid stalling the Tx path.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_PAUSE_STORM_EVENT_DATA1_ERROR_TYPE_PAUSE_STORM \
+		UINT32_C(0x1)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_PAUSE_STORM_EVENT_DATA1_ERROR_TYPE_LAST \
+		HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_PAUSE_STORM_EVENT_DATA1_ERROR_TYPE_PAUSE_STORM
+} __rte_packed;
+
+/* hwrm_async_event_cmpl_error_report_invalid_signal (size:128b/16B) */
+struct hwrm_async_event_cmpl_error_report_invalid_signal {
+	uint16_t	type;
+	/*
+	 * This field indicates the exact type of the completion.
+	 * By convention, the LSB identifies the length of the
+	 * record in 16B units. Even values indicate 16B
+	 * records. Odd values indicate 32B
+	 * records.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_TYPE_MASK \
+		UINT32_C(0x3f)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_TYPE_SFT \
+		0
+	/* HWRM Asynchronous Event Information */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_TYPE_HWRM_ASYNC_EVENT \
+		UINT32_C(0x2e)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_TYPE_LAST \
+		HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_TYPE_HWRM_ASYNC_EVENT
+	/* Identifiers of events. */
+	uint16_t	event_id;
+	/*
+	 * This async notification message is used to inform
+	 * the driver that an error has occurred which may need
+	 * the attention of the administrator.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_EVENT_ID_ERROR_REPORT \
+		UINT32_C(0x45)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_EVENT_ID_LAST \
+		HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_EVENT_ID_ERROR_REPORT
+	/* Event specific data. */
+	uint32_t	event_data2;
+	/* Indicates the TSIO pin on which invalid signal is detected. */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_EVENT_DATA2_PIN_ID_MASK \
+		UINT32_C(0xff)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_EVENT_DATA2_PIN_ID_SFT \
+		0
+	uint8_t	opaque_v;
+	/*
+	 * This value is written by the NIC such that it will be different
+	 * for each pass through the completion queue. The even passes
+	 * will write 1. The odd passes will write 0.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_V \
+		UINT32_C(0x1)
+	/* opaque is 7 b */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_OPAQUE_MASK \
+		UINT32_C(0xfe)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_OPAQUE_SFT 1
+	/* 8-lsb timestamp (100-msec resolution) */
+	uint8_t	timestamp_lo;
+	/* 16-lsb timestamp (100-msec resolution) */
+	uint16_t	timestamp_hi;
+	/* Event specific data */
+	uint32_t	event_data1;
+	/* Indicates the type of error being reported. */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_EVENT_DATA1_ERROR_TYPE_MASK \
+		UINT32_C(0xff)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_EVENT_DATA1_ERROR_TYPE_SFT \
+		0
+	/*
+	 * The NIC received an interrupt storm on a TSIO pin being used as
+	 * PPS_IN which caused it to disable the interrupt. The signal
+	 * should be fixed to be a proper 1 PPS signal before re-enabling
+	 * it. The pin number on which this signal was received is stored
+	 * in event_data2 as pin_id.
+	 */
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_EVENT_DATA1_ERROR_TYPE_INVALID_SIGNAL \
+		UINT32_C(0x2)
+	#define HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_EVENT_DATA1_ERROR_TYPE_LAST \
+		HWRM_ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_EVENT_DATA1_ERROR_TYPE_INVALID_SIGNAL
 } __rte_packed;
 
 /* metadata_base_msg (size:64b/8B) */
@@ -11337,6 +11890,48 @@ struct hwrm_func_qcaps_output {
 	 */
 	#define HWRM_FUNC_QCAPS_OUTPUT_FLAGS_EXT_ECHO_REQUEST_SUPPORTED \
 		UINT32_C(0x8000)
+	/*
+	 * When this bit is '1', it indicates that core firmware supports
+	 * NPAR 1.2 on this function.
+	 */
+	#define HWRM_FUNC_QCAPS_OUTPUT_FLAGS_EXT_NPAR_1_2_SUPPORTED \
+		UINT32_C(0x10000)
+	/* When this bit is '1', it indicates that PTM feature is supported. */
+	#define HWRM_FUNC_QCAPS_OUTPUT_FLAGS_EXT_PTP_PTM_SUPPORTED \
+		UINT32_C(0x20000)
+	/* When this bit is '1', it indicates that PPS feature is supported. */
+	#define HWRM_FUNC_QCAPS_OUTPUT_FLAGS_EXT_PTP_PPS_SUPPORTED \
+		UINT32_C(0x40000)
+	/*
+	 * When this bit is '1', it indicates that VF config. change
+	 * async event is supported on the parent PF if the async.
+	 * event is registered by the PF.
+	 */
+	#define HWRM_FUNC_QCAPS_OUTPUT_FLAGS_EXT_VF_CFG_ASYNC_FOR_PF_SUPPORTED \
+		UINT32_C(0x80000)
+	/*
+	 * When this bit is '1', the NIC supports configuration of
+	 * partition_min_bw and partition_max_bw.
+	 */
+	#define HWRM_FUNC_QCAPS_OUTPUT_FLAGS_EXT_PARTITION_BW_SUPPORTED \
+		UINT32_C(0x100000)
+	/*
+	 * When this bit is '1', the FW supports configuration of
+	 * PCP and TPID values of the default VLAN.
+	 */
+	#define HWRM_FUNC_QCAPS_OUTPUT_FLAGS_EXT_DFLT_VLAN_TPID_PCP_SUPPORTED \
+		UINT32_C(0x200000)
+	/* When this bit is '1', it indicates that HW and FW support KTLS. */
+	#define HWRM_FUNC_QCAPS_OUTPUT_FLAGS_EXT_KTLS_SUPPORTED \
+		UINT32_C(0x400000)
+	/*
+	 * When this bit is '1', the firmware supports HWRM_PORT_EP_TX_CFG
+	 * and HWRM_PORT_EP_TX_QCFG for endpoint rate control, and additions
+	 * to HWRM_QUEUE_GLOBAL_CFG and HWRM_QUEUE_GLOBAL_QCFG for receive
+	 * rate control.
+	 */
+	#define HWRM_FUNC_QCAPS_OUTPUT_FLAGS_EXT_EP_RATE_CONTROL \
+		UINT32_C(0x800000)
 	/* The maximum number of SCHQs supported by this device. */
 	uint8_t	max_schqs;
 	uint8_t	mpc_chnls_cap;
@@ -11375,8 +11970,9 @@ struct hwrm_func_qcaps_output {
 	 * This field is used in Output records to indicate that the output
 	 * is completely written to RAM.  This field should be read as '1'
 	 * to indicate that the output has been completely written.
-	 * When writing a command completion or response to an internal processor,
-	 * the order of writes has to be such that this field is written last.
+	 * When writing a command completion or response to an internal
+	 * processor, the order of writes has to be such that this field is
+	 * written last.
 	 */
 	uint8_t	valid;
 } __rte_packed;
@@ -11427,7 +12023,7 @@ struct hwrm_func_qcfg_input {
 	uint8_t	unused_0[6];
 } __rte_packed;
 
-/* hwrm_func_qcfg_output (size:768b/96B) */
+/* hwrm_func_qcfg_output (size:832b/104B) */
 struct hwrm_func_qcfg_output {
 	/* The specific error status for the command. */
 	uint16_t	error_code;
@@ -11574,6 +12170,14 @@ struct hwrm_func_qcfg_output {
 	#define HWRM_FUNC_QCFG_OUTPUT_FLAGS_MULTI_ROOT \
 		UINT32_C(0x2000)
 	/*
+	 * This flag indicates RDMA support for child VFS of
+	 * a physical function.
+	 * If set to 1, RoCE is supported on all child VFs.
+	 * If set to 0, RoCE is disabled on all child VFs.
+	 */
+	#define HWRM_FUNC_QCFG_OUTPUT_FLAGS_ENABLE_RDMA_SRIOV \
+		UINT32_C(0x4000)
+	/*
 	 * This value is current MAC address configured for this
 	 * function. A value of 00-00-00-00-00-00 indicates no
 	 * MAC address is currently configured.
@@ -11616,12 +12220,15 @@ struct hwrm_func_qcfg_output {
 	/* The allocated number of vnics to the function. */
 	uint16_t	alloc_vnics;
 	/*
-	 * The maximum transmission unit of the function.
-	 * If the reported mtu value is non-zero then it will used for the
-	 * rings allocated on this function. otherwise the default
+	 * The maximum transmission unit of the function
+	 * configured by the admin pf.
+	 * If the reported mtu value is non-zero then it will be used for the
+	 * rings allocated on this function, otherwise the default
 	 * value is used if ring MTU is not specified.
+	 * The driver cannot use any MTU bigger than this value
+	 * if it is non-zero.
 	 */
-	uint16_t	mtu;
+	uint16_t	admin_mtu;
 	/*
 	 * The maximum receive unit of the function.
 	 * For vnics allocated on this function, this default
@@ -11645,6 +12252,8 @@ struct hwrm_func_qcfg_output {
 	#define HWRM_FUNC_QCFG_OUTPUT_PORT_PARTITION_TYPE_NPAR1_5 UINT32_C(0x3)
 	/* Network Partitioning 2.0 */
 	#define HWRM_FUNC_QCFG_OUTPUT_PORT_PARTITION_TYPE_NPAR2_0 UINT32_C(0x4)
+	/* Network Partitioning 1.2 */
+	#define HWRM_FUNC_QCFG_OUTPUT_PORT_PARTITION_TYPE_NPAR1_2 UINT32_C(0x5)
 	/* Unknown */
 	#define HWRM_FUNC_QCFG_OUTPUT_PORT_PARTITION_TYPE_UNKNOWN \
 		UINT32_C(0xff)
@@ -11668,11 +12277,9 @@ struct hwrm_func_qcfg_output {
 	uint16_t	dflt_vnic_id;
 	uint16_t	max_mtu_configured;
 	/*
-	 * Minimum BW allocated for this function.
-	 * The HWRM will translate this value into byte counter and
-	 * time interval used for the scheduler inside the device.
-	 * A value of 0 indicates the minimum bandwidth is not
-	 * configured.
+	 * Minimum guaranteed transmit bandwidth for this function. When
+	 * specified for a PF, does not affect traffic from the PF's child VFs.
+	 * A value of 0 indicates the minimum bandwidth is not configured.
 	 */
 	uint32_t	min_bw;
 	/* The bandwidth value. */
@@ -11706,7 +12313,7 @@ struct hwrm_func_qcfg_output {
 	/* Value is in Gb or GB (base 10). */
 	#define HWRM_FUNC_QCFG_OUTPUT_MIN_BW_BW_VALUE_UNIT_GIGA \
 		(UINT32_C(0x6) << 29)
-	/* Value is in 1/100th of a percentage of total bandwidth. */
+	/* Value is in 1/100th of a percentage of link bandwidth. */
 	#define HWRM_FUNC_QCFG_OUTPUT_MIN_BW_BW_VALUE_UNIT_PERCENT1_100 \
 		(UINT32_C(0x1) << 29)
 	/* Invalid unit */
@@ -11715,11 +12322,9 @@ struct hwrm_func_qcfg_output {
 	#define HWRM_FUNC_QCFG_OUTPUT_MIN_BW_BW_VALUE_UNIT_LAST \
 		HWRM_FUNC_QCFG_OUTPUT_MIN_BW_BW_VALUE_UNIT_INVALID
 	/*
-	 * Maximum BW allocated for this function.
-	 * The HWRM will translate this value into byte counter and
-	 * time interval used for the scheduler inside the device.
-	 * A value of 0 indicates that the maximum bandwidth is not
-	 * configured.
+	 * Maximum transmit rate for this function. When specified for a PF,
+	 * does not affect traffic from the PF's child VFs.
+	 * A value of 0 indicates that the maximum bandwidth is not configured.
 	 */
 	uint32_t	max_bw;
 	/* The bandwidth value. */
@@ -11753,7 +12358,7 @@ struct hwrm_func_qcfg_output {
 	/* Value is in Gb or GB (base 10). */
 	#define HWRM_FUNC_QCFG_OUTPUT_MAX_BW_BW_VALUE_UNIT_GIGA \
 		(UINT32_C(0x6) << 29)
-	/* Value is in 1/100th of a percentage of total bandwidth. */
+	/* Value is in 1/100th of a percentage of link bandwidth. */
 	#define HWRM_FUNC_QCFG_OUTPUT_MAX_BW_BW_VALUE_UNIT_PERCENT1_100 \
 		(UINT32_C(0x1) << 29)
 	/* Invalid unit */
@@ -11922,7 +12527,94 @@ struct hwrm_func_qcfg_output {
 	 */
 	#define HWRM_FUNC_QCFG_OUTPUT_MPC_CHNLS_PRIMATE_ENABLED \
 		UINT32_C(0x10)
-	uint8_t	unused_2[6];
+	uint8_t	unused_2[3];
+	/*
+	 * Minimum guaranteed bandwidth for the network partition made up
+	 * of the caller physical function and all its child virtual
+	 * functions. The rate is specified as a percentage of the bandwidth
+	 * of the link the partition is associated with. A value of 0
+	 * indicates that no minimum bandwidth is configured.
+	 * The format of this field is defined to match min_bw, even though
+	 * the partition minimum rate is always specified as a percentage.
+	 */
+	uint32_t	partition_min_bw;
+	/* The bandwidth value. */
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MIN_BW_BW_VALUE_MASK \
+		UINT32_C(0xfffffff)
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MIN_BW_BW_VALUE_SFT \
+		0
+	/*
+	 * The granularity of the value (bits or bytes). Firmware never sets
+	 * this field.
+	 */
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MIN_BW_SCALE \
+		UINT32_C(0x10000000)
+	/* Value is in bits. */
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MIN_BW_SCALE_BITS \
+		(UINT32_C(0x0) << 28)
+	/* Value is in bytes. */
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MIN_BW_SCALE_BYTES \
+		(UINT32_C(0x1) << 28)
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MIN_BW_SCALE_LAST \
+		HWRM_FUNC_QCFG_OUTPUT_PARTITION_MIN_BW_SCALE_BYTES
+	/* Always percentage of link bandwidth. */
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MIN_BW_BW_VALUE_UNIT_MASK \
+		UINT32_C(0xe0000000)
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MIN_BW_BW_VALUE_UNIT_SFT \
+		29
+	/* Bandwidth value is in hundredths of a percent of link bandwidth. */
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MIN_BW_BW_VALUE_UNIT_PERCENT1_100 \
+		(UINT32_C(0x1) << 29)
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MIN_BW_BW_VALUE_UNIT_LAST \
+		HWRM_FUNC_QCFG_OUTPUT_PARTITION_MIN_BW_BW_VALUE_UNIT_PERCENT1_100
+	/*
+	 * The maximum bandwidth that may be used by the network partition
+	 * made up of the caller physical function and all its child virtual
+	 * functions. The rate is specified as a percentage of the bandwidth
+	 * of the link the partition is associated with. A value of 0
+	 * indicates that no maximum bandwidth is configured.
+	 * The format of this field is defined to match max_bw, even though
+	 * the partition bandwidth must be specified as a percentage.
+	 */
+	uint32_t	partition_max_bw;
+	/* The bandwidth value. */
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MAX_BW_BW_VALUE_MASK \
+		UINT32_C(0xfffffff)
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MAX_BW_BW_VALUE_SFT \
+		0
+	/*
+	 * The granularity of the value (bits or bytes). Firmware never sets
+	 * this field.
+	 */
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MAX_BW_SCALE \
+		UINT32_C(0x10000000)
+	/* Value is in bits. */
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MAX_BW_SCALE_BITS \
+		(UINT32_C(0x0) << 28)
+	/* Value is in bytes. */
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MAX_BW_SCALE_BYTES \
+		(UINT32_C(0x1) << 28)
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MAX_BW_SCALE_LAST \
+		HWRM_FUNC_QCFG_OUTPUT_PARTITION_MAX_BW_SCALE_BYTES
+	/* Always a percentage of link bandwidth. */
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MAX_BW_BW_VALUE_UNIT_MASK \
+		UINT32_C(0xe0000000)
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MAX_BW_BW_VALUE_UNIT_SFT \
+		29
+	/* Value is in hundredths of a percent of link bandwidth. */
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MAX_BW_BW_VALUE_UNIT_PERCENT1_100 \
+		(UINT32_C(0x1) << 29)
+	#define HWRM_FUNC_QCFG_OUTPUT_PARTITION_MAX_BW_BW_VALUE_UNIT_LAST \
+		HWRM_FUNC_QCFG_OUTPUT_PARTITION_MAX_BW_BW_VALUE_UNIT_PERCENT1_100
+	/*
+	 * The maximum transmission unit of the function
+	 * configured by the host pf/vf.
+	 * If the reported mtu value is non-zero then it will be used for the
+	 * rings allocated on this function, otherwise the default
+	 * value is used if ring MTU is not specified.
+	 */
+	uint16_t	host_mtu;
+	uint8_t	unused_3;
 	/*
 	 * This field is used in Output records to indicate that the output
 	 * is completely written to RAM.  This field should be read as '1'
@@ -11938,7 +12630,7 @@ struct hwrm_func_qcfg_output {
  *****************/
 
 
-/* hwrm_func_cfg_input (size:768b/96B) */
+/* hwrm_func_cfg_input (size:832b/104B) */
 struct hwrm_func_cfg_input {
 	/* The HWRM command request type. */
 	uint16_t	req_type;
@@ -12204,10 +12896,10 @@ struct hwrm_func_cfg_input {
 		UINT32_C(0x40000000)
 	uint32_t	enables;
 	/*
-	 * This bit must be '1' for the mtu field to be
+	 * This bit must be '1' for the admin_mtu field to be
 	 * configured.
 	 */
-	#define HWRM_FUNC_CFG_INPUT_ENABLES_MTU \
+	#define HWRM_FUNC_CFG_INPUT_ENABLES_ADMIN_MTU \
 		UINT32_C(0x1)
 	/*
 	 * This bit must be '1' for the mru field to be
@@ -12360,6 +13052,33 @@ struct hwrm_func_cfg_input {
 	#define HWRM_FUNC_CFG_INPUT_ENABLES_MPC_CHNLS \
 		UINT32_C(0x2000000)
 	/*
+	 * This bit must be '1' for the partition_min_bw field to be
+	 * configured.
+	 */
+	#define HWRM_FUNC_CFG_INPUT_ENABLES_PARTITION_MIN_BW \
+		UINT32_C(0x4000000)
+	/*
+	 * This bit must be '1' for the partition_max_bw field to be
+	 * configured.
+	 */
+	#define HWRM_FUNC_CFG_INPUT_ENABLES_PARTITION_MAX_BW \
+		UINT32_C(0x8000000)
+	/*
+	 * This bit must be '1' for the tpid field to be
+	 * configured. This bit is only valid when dflt_vlan enable
+	 * bit is set.
+	 */
+	#define HWRM_FUNC_CFG_INPUT_ENABLES_TPID \
+		UINT32_C(0x10000000)
+	/*
+	 * This bit must be '1' for the host_mtu field to be
+	 * configured.
+	 */
+	#define HWRM_FUNC_CFG_INPUT_ENABLES_HOST_MTU \
+		UINT32_C(0x20000000)
+	/*
+	 * This field can be used by the admin PF to configure
+	 * mtu of foster PFs.
 	 * The maximum transmission unit of the function.
 	 * The HWRM should make sure that the mtu of
 	 * the function does not exceed the mtu of the physical
@@ -12372,7 +13091,7 @@ struct hwrm_func_cfg_input {
 	 * The HWRM should make sure that the mtu of each transmit
 	 * ring that is assigned to a function has a valid mtu.
 	 */
-	uint16_t	mtu;
+	uint16_t	admin_mtu;
 	/*
 	 * The maximum receive unit of the function.
 	 * The HWRM should make sure that the mru of
@@ -12436,9 +13155,9 @@ struct hwrm_func_cfg_input {
 	 */
 	uint32_t	dflt_ip_addr[4];
 	/*
-	 * Minimum BW allocated for this function.
-	 * The HWRM will translate this value into byte counter and
-	 * time interval used for the scheduler inside the device.
+	 * Minimum guaranteed transmit bandwidth for this function. When
+	 * specified for a PF, does not affect traffic from the PF's child VFs.
+	 * A value of 0 indicates the minimum bandwidth is not configured.
 	 */
 	uint32_t	min_bw;
 	/* The bandwidth value. */
@@ -12481,9 +13200,9 @@ struct hwrm_func_cfg_input {
 	#define HWRM_FUNC_CFG_INPUT_MIN_BW_BW_VALUE_UNIT_LAST \
 		HWRM_FUNC_CFG_INPUT_MIN_BW_BW_VALUE_UNIT_INVALID
 	/*
-	 * Maximum BW allocated for this function.
-	 * The HWRM will translate this value into byte counter and
-	 * time interval used for the scheduler inside the device.
+	 * Maximum transmit rate for this function. When specified for a PF,
+	 * does not affect traffic from the PF's child VFs.
+	 * A value of 0 indicates that the maximum bandwidth is not configured.
 	 */
 	uint32_t	max_bw;
 	/* The bandwidth value. */
@@ -12703,7 +13422,111 @@ struct hwrm_func_cfg_input {
 	 */
 	#define HWRM_FUNC_CFG_INPUT_MPC_CHNLS_PRIMATE_DISABLE \
 		UINT32_C(0x200)
-	uint8_t	unused_0[4];
+	/*
+	 * Minimum guaranteed bandwidth for the network partition made up
+	 * of the caller physical function and all its child virtual
+	 * functions. The rate is specified as a percentage of the bandwidth
+	 * of the link the partition is associated with. A value of 0
+	 * indicates that no minimum bandwidth is configured. The sum of the
+	 * minimum bandwidths for all partitions on a link must not exceed
+	 * 100%.
+	 * The format of this field is defined to match min_bw, even though
+	 * it does not allow all the options for min_bw at this time.
+	 */
+	uint32_t	partition_min_bw;
+	/* The bandwidth value. */
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MIN_BW_BW_VALUE_MASK \
+		UINT32_C(0xfffffff)
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MIN_BW_BW_VALUE_SFT \
+		0
+	/*
+	 * The granularity of the value (bits or bytes). Firmware ignores
+	 * this field.
+	 */
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MIN_BW_SCALE \
+		UINT32_C(0x10000000)
+	/* Value is in bits. */
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MIN_BW_SCALE_BITS \
+		(UINT32_C(0x0) << 28)
+	/* Value is in bytes. */
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MIN_BW_SCALE_BYTES \
+		(UINT32_C(0x1) << 28)
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MIN_BW_SCALE_LAST \
+		HWRM_FUNC_CFG_INPUT_PARTITION_MIN_BW_SCALE_BYTES
+	/* Bandwidth units. Must be set to percent1_100. */
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MIN_BW_BW_VALUE_UNIT_MASK \
+		UINT32_C(0xe0000000)
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MIN_BW_BW_VALUE_UNIT_SFT \
+		29
+	/* Value is in hundredths of a percent of link bandwidth. */
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MIN_BW_BW_VALUE_UNIT_PERCENT1_100 \
+		(UINT32_C(0x1) << 29)
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MIN_BW_BW_VALUE_UNIT_LAST \
+		HWRM_FUNC_CFG_INPUT_PARTITION_MIN_BW_BW_VALUE_UNIT_PERCENT1_100
+	/*
+	 * The maximum bandwidth that may be used by the network partition
+	 * made up of the caller physical function and all its child virtual
+	 * functions. The rate is specified as a percentage of the bandwidth
+	 * of the link the partition is associated with. A value of 0
+	 * indicates that no maximum bandwidth is configured.
+	 * The format of this field is defined to match max_bw, even though it
+	 * does not allow all the options for max_bw at this time.
+	 */
+	uint32_t	partition_max_bw;
+	/* The bandwidth value. */
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MAX_BW_BW_VALUE_MASK \
+		UINT32_C(0xfffffff)
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MAX_BW_BW_VALUE_SFT \
+		0
+	/*
+	 * The granularity of the value (bits or bytes). Firmware ignores
+	 * this field.
+	 */
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MAX_BW_SCALE \
+		UINT32_C(0x10000000)
+	/* Value is in bits. */
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MAX_BW_SCALE_BITS \
+		(UINT32_C(0x0) << 28)
+	/* Value is in bytes. */
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MAX_BW_SCALE_BYTES \
+		(UINT32_C(0x1) << 28)
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MAX_BW_SCALE_LAST \
+		HWRM_FUNC_CFG_INPUT_PARTITION_MAX_BW_SCALE_BYTES
+	/* Bandwidth units. Must be set to percent1_100. */
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MAX_BW_BW_VALUE_UNIT_MASK \
+		UINT32_C(0xe0000000)
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MAX_BW_BW_VALUE_UNIT_SFT \
+		29
+	/* Value is in hundredths of a percent of link bandwidth. */
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MAX_BW_BW_VALUE_UNIT_PERCENT1_100 \
+		(UINT32_C(0x1) << 29)
+	#define HWRM_FUNC_CFG_INPUT_PARTITION_MAX_BW_BW_VALUE_UNIT_LAST \
+		HWRM_FUNC_CFG_INPUT_PARTITION_MAX_BW_BW_VALUE_UNIT_PERCENT1_100
+	/*
+	 * The TPID for the function for which default VLAN
+	 * is configured. If the dflt_vlan is not specified
+	 * with the TPID, FW returns error. If the TPID is
+	 * not specified with dflt_vlan, the default TPID of
+	 * 0x8100 will be used. This field is specified in
+	 * network byte order.
+	 */
+	uint16_t	tpid;
+	/*
+	 * This field can be used by the host PF to configure
+	 * mtu value.
+	 * The maximum transmission unit of the function.
+	 * The HWRM should make sure that the mtu of
+	 * the function does not exceed the mtu of the physical
+	 * port that this function is associated with.
+	 *
+	 * In addition to configuring mtu per function, it is
+	 * possible to configure mtu per transmit ring.
+	 * By default, the mtu of each transmit ring associated
+	 * with a function is equal to the mtu of the function.
+	 * The HWRM should make sure that the mtu of each transmit
+	 * ring that is assigned to a function has a valid mtu.
+	 */
+	uint16_t	host_mtu;
 } __rte_packed;
 
 /* hwrm_func_cfg_output (size:128b/16B) */
@@ -13271,6 +14094,15 @@ struct hwrm_func_drv_rgtr_input {
 	 */
 	#define HWRM_FUNC_DRV_RGTR_INPUT_FLAGS_FAST_RESET_SUPPORT \
 		UINT32_C(0x80)
+	/*
+	 * When this bit is 1, the function's driver is indicating the
+	 * support of handling the vnic_rss_cfg's INVALID_PARAM error
+	 * returned by firmware. Firmware returns error, if host driver
+	 * configures the invalid hash_types bit combination for a given
+	 * IP version.
+	 */
+	#define HWRM_FUNC_DRV_RGTR_INPUT_FLAGS_RSS_STRICT_HASH_TYPE_SUPPORT \
+		UINT32_C(0x100)
 	uint32_t	enables;
 	/*
 	 * This bit must be '1' for the os_type field to be
@@ -14074,7 +14906,7 @@ struct hwrm_func_backing_store_qcaps_input {
 	uint64_t	resp_addr;
 } __rte_packed;
 
-/* hwrm_func_backing_store_qcaps_output (size:704b/88B) */
+/* hwrm_func_backing_store_qcaps_output (size:832b/104B) */
 struct hwrm_func_backing_store_qcaps_output {
 	/* The specific error status for the command. */
 	uint16_t	error_code;
@@ -14230,6 +15062,18 @@ struct hwrm_func_backing_store_qcaps_output {
 	#define HWRM_FUNC_BACKING_STORE_QCAPS_OUTPUT_CTX_INIT_MASK_MRAV \
 		UINT32_C(0x20)
 	/*
+	 * If this bit is '1' then the Tx KTLS context type should be
+	 * initialized with the ctx_kind_initializer at the specified offset.
+	 */
+	#define HWRM_FUNC_BACKING_STORE_QCAPS_OUTPUT_CTX_INIT_MASK_TKC \
+		UINT32_C(0x40)
+	/*
+	 * If this bit is '1' then the Rx KTLS context type should be
+	 * initialized with the ctx_kind_initializer at the specified offset.
+	 */
+	#define HWRM_FUNC_BACKING_STORE_QCAPS_OUTPUT_CTX_INIT_MASK_RKC \
+		UINT32_C(0x80)
+	/*
 	 * Specifies the doubleword offset of ctx_kind_initializer for this
 	 * context type.
 	 */
@@ -14273,8 +15117,32 @@ struct hwrm_func_backing_store_qcaps_output {
 	 * this count in `backing_store_cfg`.
 	 */
 	uint8_t	tqm_fp_rings_count_ext;
+	/*
+	 * Specifies the doubleword offset of ctx_kind_initializer for Tx
+	 * KTLS context type.
+	 */
+	uint8_t	tkc_init_offset;
+	/*
+	 * Specifies the doubleword offset of ctx_kind_initializer for Rx
+	 * KTLS context type.
+	 */
+	uint8_t	rkc_init_offset;
+	/* Tx KTLS context entry size in bytes. */
+	uint16_t	tkc_entry_size;
+	/* Rx KTLS context entry size in bytes. */
+	uint16_t	rkc_entry_size;
+	/*
+	 * Maximum number of Tx KTLS context entries supported for this
+	 * function.
+	 */
+	uint32_t	tkc_max_entries;
+	/*
+	 * Maximum number of Rx KTLS context entries supported for this
+	 * function.
+	 */
+	uint32_t	rkc_max_entries;
 	/* Reserved for future. */
-	uint8_t	rsvd[5];
+	uint8_t	rsvd[7];
 	/*
 	 * This field is used in Output records to indicate that the output
 	 * is completely written to RAM.  This field should be read as '1'
@@ -14343,7 +15211,7 @@ struct tqm_fp_ring_cfg {
  *******************************/
 
 
-/* hwrm_func_backing_store_cfg_input (size:2432b/304B) */
+/* hwrm_func_backing_store_cfg_input (size:2688b/336B) */
 struct hwrm_func_backing_store_cfg_input {
 	/* The HWRM command request type. */
 	uint16_t	req_type;
@@ -14503,6 +15371,18 @@ struct hwrm_func_backing_store_cfg_input {
 	 */
 	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_ENABLES_TQM_RING10 \
 		UINT32_C(0x40000)
+	/*
+	 * This bit must be '1' for the Tx KTLS context
+	 * fields to be configured.
+	 */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_ENABLES_TKC \
+		UINT32_C(0x80000)
+	/*
+	 * This bit must be '1' for the Rx KTLS context
+	 * fields to be configured.
+	 */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_ENABLES_RKC \
+		UINT32_C(0x100000)
 	/* QPC page size and level. */
 	uint8_t	qpc_pg_size_qpc_lvl;
 	/* QPC PBL indirect levels. */
@@ -15521,6 +16401,105 @@ struct hwrm_func_backing_store_cfg_input {
 	uint32_t	tqm_ring10_num_entries;
 	/* TQM ring page directory. */
 	uint64_t	tqm_ring10_page_dir;
+	/* Number of Tx KTLS context entries allocated. */
+	uint32_t	tkc_num_entries;
+	/* Number of Rx KTLS context entries allocated. */
+	uint32_t	rkc_num_entries;
+	/* Tx KTLS context page directory. */
+	uint64_t	tkc_page_dir;
+	/* Rx KTLS context page directory. */
+	uint64_t	rkc_page_dir;
+	/* Number of bytes allocated for each Tx KTLS context entry. */
+	uint16_t	tkc_entry_size;
+	/* Number of bytes allocated for each Rx KTLS context entry. */
+	uint16_t	rkc_entry_size;
+	/* Tx KTLS context page size and level. */
+	uint8_t	tkc_pg_size_tkc_lvl;
+	/* Tx KTLS context PBL indirect levels. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_TKC_LVL_MASK \
+		UINT32_C(0xf)
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_TKC_LVL_SFT       0
+	/* PBL pointer is physical start address. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_TKC_LVL_LVL_0 \
+		UINT32_C(0x0)
+	/* PBL pointer points to PTE table. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_TKC_LVL_LVL_1 \
+		UINT32_C(0x1)
+	/* PBL pointer points to PDE table with each entry pointing to PTE tables. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_TKC_LVL_LVL_2 \
+		UINT32_C(0x2)
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_TKC_LVL_LAST \
+		HWRM_FUNC_BACKING_STORE_CFG_INPUT_TKC_LVL_LVL_2
+	/* Tx KTLS context page size. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_TKC_PG_SIZE_MASK \
+		UINT32_C(0xf0)
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_TKC_PG_SIZE_SFT   4
+	/* 4KB. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_TKC_PG_SIZE_PG_4K \
+		(UINT32_C(0x0) << 4)
+	/* 8KB. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_TKC_PG_SIZE_PG_8K \
+		(UINT32_C(0x1) << 4)
+	/* 64KB. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_TKC_PG_SIZE_PG_64K \
+		(UINT32_C(0x2) << 4)
+	/* 2MB. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_TKC_PG_SIZE_PG_2M \
+		(UINT32_C(0x3) << 4)
+	/* 8MB. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_TKC_PG_SIZE_PG_8M \
+		(UINT32_C(0x4) << 4)
+	/* 1GB. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_TKC_PG_SIZE_PG_1G \
+		(UINT32_C(0x5) << 4)
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_TKC_PG_SIZE_LAST \
+		HWRM_FUNC_BACKING_STORE_CFG_INPUT_TKC_PG_SIZE_PG_1G
+	/* Rx KTLS context page size and level. */
+	uint8_t	rkc_pg_size_rkc_lvl;
+	/* Rx KTLS context PBL indirect levels. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_RKC_LVL_MASK \
+		UINT32_C(0xf)
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_RKC_LVL_SFT       0
+	/* PBL pointer is physical start address. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_RKC_LVL_LVL_0 \
+		UINT32_C(0x0)
+	/* PBL pointer points to PTE table. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_RKC_LVL_LVL_1 \
+		UINT32_C(0x1)
+	/*
+	 * PBL pointer points to PDE table with each entry pointing to
+	 * PTE tables.
+	 */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_RKC_LVL_LVL_2 \
+		UINT32_C(0x2)
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_RKC_LVL_LAST \
+		HWRM_FUNC_BACKING_STORE_CFG_INPUT_RKC_LVL_LVL_2
+	/* Rx KTLS context page size. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_RKC_PG_SIZE_MASK \
+		UINT32_C(0xf0)
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_RKC_PG_SIZE_SFT   4
+	/* 4KB. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_RKC_PG_SIZE_PG_4K \
+		(UINT32_C(0x0) << 4)
+	/* 8KB. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_RKC_PG_SIZE_PG_8K \
+		(UINT32_C(0x1) << 4)
+	/* 64KB. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_RKC_PG_SIZE_PG_64K \
+		(UINT32_C(0x2) << 4)
+	/* 2MB. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_RKC_PG_SIZE_PG_2M \
+		(UINT32_C(0x3) << 4)
+	/* 8MB. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_RKC_PG_SIZE_PG_8M \
+		(UINT32_C(0x4) << 4)
+	/* 1GB. */
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_RKC_PG_SIZE_PG_1G \
+		(UINT32_C(0x5) << 4)
+	#define HWRM_FUNC_BACKING_STORE_CFG_INPUT_RKC_PG_SIZE_LAST \
+		HWRM_FUNC_BACKING_STORE_CFG_INPUT_RKC_PG_SIZE_PG_1G
+	/* Reserved for future. */
+	uint8_t	rsvd[2];
 } __rte_packed;
 
 /* hwrm_func_backing_store_cfg_output (size:128b/16B) */
@@ -15581,7 +16560,7 @@ struct hwrm_func_backing_store_qcfg_input {
 	uint64_t	resp_addr;
 } __rte_packed;
 
-/* hwrm_func_backing_store_qcfg_output (size:2304b/288B) */
+/* hwrm_func_backing_store_qcfg_output (size:2496b/312B) */
 struct hwrm_func_backing_store_qcfg_output {
 	/* The specific error status for the command. */
 	uint16_t	error_code;
@@ -15721,6 +16700,18 @@ struct hwrm_func_backing_store_qcfg_output {
 	 */
 	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_ENABLES_TQM_RING10 \
 		UINT32_C(0x40000)
+	/*
+	 * This bit must be '1' for the Tx KTLS context
+	 * fields to be configured.
+	 */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_ENABLES_TKC \
+		UINT32_C(0x80000)
+	/*
+	 * This bit must be '1' for the Rx KTLS context
+	 * fields to be configured.
+	 */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_ENABLES_RKC \
+		UINT32_C(0x100000)
 	/* QPC page size and level. */
 	uint8_t	qpc_pg_size_qpc_lvl;
 	/* QPC PBL indirect levels. */
@@ -16617,7 +17608,103 @@ struct hwrm_func_backing_store_qcfg_output {
 	uint32_t	tqm_ring10_num_entries;
 	/* TQM ring page directory. */
 	uint64_t	tqm_ring10_page_dir;
-	uint8_t	unused_1[7];
+	/* Number of Tx KTLS context entries. */
+	uint32_t	tkc_num_entries;
+	/* Number of Rx KTLS context entries. */
+	uint32_t	rkc_num_entries;
+	/* Tx KTLS context page directory. */
+	uint64_t	tkc_page_dir;
+	/* Rx KTLS context page directory. */
+	uint64_t	rkc_page_dir;
+	/* Tx KTLS context page size and level. */
+	uint8_t	tkc_pg_size_tkc_lvl;
+	/* Tx KTLS context PBL indirect levels. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_TKC_LVL_MASK \
+		UINT32_C(0xf)
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_TKC_LVL_SFT       0
+	/* PBL pointer is physical start address. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_TKC_LVL_LVL_0 \
+		UINT32_C(0x0)
+	/* PBL pointer points to PTE table. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_TKC_LVL_LVL_1 \
+		UINT32_C(0x1)
+	/*
+	 * PBL pointer points to PDE table with each entry pointing to
+	 * PTE tables.
+	 */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_TKC_LVL_LVL_2 \
+		UINT32_C(0x2)
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_TKC_LVL_LAST \
+		HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_TKC_LVL_LVL_2
+	/* Tx KTLS context page size. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_TKC_PG_SIZE_MASK \
+		UINT32_C(0xf0)
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_TKC_PG_SIZE_SFT   4
+	/* 4KB. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_TKC_PG_SIZE_PG_4K \
+		(UINT32_C(0x0) << 4)
+	/* 8KB. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_TKC_PG_SIZE_PG_8K \
+		(UINT32_C(0x1) << 4)
+	/* 64KB. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_TKC_PG_SIZE_PG_64K \
+		(UINT32_C(0x2) << 4)
+	/* 2MB. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_TKC_PG_SIZE_PG_2M \
+		(UINT32_C(0x3) << 4)
+	/* 8MB. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_TKC_PG_SIZE_PG_8M \
+		(UINT32_C(0x4) << 4)
+	/* 1GB. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_TKC_PG_SIZE_PG_1G \
+		(UINT32_C(0x5) << 4)
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_TKC_PG_SIZE_LAST \
+		HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_TKC_PG_SIZE_PG_1G
+	/* Rx KTLS context page size and level. */
+	uint8_t	rkc_pg_size_rkc_lvl;
+	/* Rx KTLS context PBL indirect levels. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_RKC_LVL_MASK \
+		UINT32_C(0xf)
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_RKC_LVL_SFT       0
+	/* PBL pointer is physical start address. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_RKC_LVL_LVL_0 \
+		UINT32_C(0x0)
+	/* PBL pointer points to PTE table. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_RKC_LVL_LVL_1 \
+		UINT32_C(0x1)
+	/*
+	 * PBL pointer points to PDE table with each entry pointing to
+	 * PTE tables.
+	 */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_RKC_LVL_LVL_2 \
+		UINT32_C(0x2)
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_RKC_LVL_LAST \
+		HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_RKC_LVL_LVL_2
+	/* Rx KTLS context page size. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_RKC_PG_SIZE_MASK \
+		UINT32_C(0xf0)
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_RKC_PG_SIZE_SFT   4
+	/* 4KB. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_RKC_PG_SIZE_PG_4K \
+		(UINT32_C(0x0) << 4)
+	/* 8KB. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_RKC_PG_SIZE_PG_8K \
+		(UINT32_C(0x1) << 4)
+	/* 64KB. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_RKC_PG_SIZE_PG_64K \
+		(UINT32_C(0x2) << 4)
+	/* 2MB. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_RKC_PG_SIZE_PG_2M \
+		(UINT32_C(0x3) << 4)
+	/* 8MB. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_RKC_PG_SIZE_PG_8M \
+		(UINT32_C(0x4) << 4)
+	/* 1GB. */
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_RKC_PG_SIZE_PG_1G \
+		(UINT32_C(0x5) << 4)
+	#define HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_RKC_PG_SIZE_LAST \
+		HWRM_FUNC_BACKING_STORE_QCFG_OUTPUT_RKC_PG_SIZE_PG_1G
+	uint8_t	unused_1[5];
 	/*
 	 * This field is used in Output records to indicate that the output
 	 * is completely written to RAM.  This field should be read as 1
@@ -30177,7 +31264,7 @@ struct hwrm_vnic_qcaps_output {
 		UINT32_C(0x20)
 	/*
 	 * When this bit is '1', the capability to
-	 * mirror the the RoCE traffic is supported.
+	 * mirror the RoCE traffic is supported.
 	 * If set to '0', then the capability to mirror the
 	 * RoCE traffic is not supported.
 	 */
@@ -30930,7 +32017,7 @@ struct hwrm_vnic_plcmodes_cfg_input {
 	uint16_t	hds_threshold;
 	/*
 	 * When virtio placement algorithm is enabled, this
-	 * value is used to determine the the maximum number of BDs
+	 * value is used to determine the maximum number of BDs
 	 * that can be used to place an Rx Packet.
 	 * If an incoming packet does not fit in the buffers described
 	 * by the max BDs, the packet will be dropped and an error
@@ -31094,7 +32181,7 @@ struct hwrm_vnic_plcmodes_qcfg_output {
 	uint16_t	hds_threshold;
 	/*
 	 * When virtio placement algorithm is enabled, this
-	 * value is used to determine the the maximum number of BDs
+	 * value is used to determine the maximum number of BDs
 	 * that can be used to place an Rx Packet.
 	 * If an incoming packet does not fit in the buffers described
 	 * by the max BDs, the packet will be dropped and an error
@@ -31640,7 +32727,7 @@ struct hwrm_ring_alloc_output {
  ******************/
 
 
-/* hwrm_ring_free_input (size:192b/24B) */
+/* hwrm_ring_free_input (size:256b/32B) */
 struct hwrm_ring_free_input {
 	/* The HWRM command request type. */
 	uint16_t	req_type;
@@ -31686,10 +32773,37 @@ struct hwrm_ring_free_input {
 	#define HWRM_RING_FREE_INPUT_RING_TYPE_NQ        UINT32_C(0x5)
 	#define HWRM_RING_FREE_INPUT_RING_TYPE_LAST \
 		HWRM_RING_FREE_INPUT_RING_TYPE_NQ
-	uint8_t	unused_0;
+	uint8_t	flags;
+	/*
+	 * If this bit is set to '1', ring_id in this command belongs to
+	 * virtio function. prod_idx in this command corresponds to doorbell
+	 * producer index. opaque field in this command needs to be inserted
+	 * by firmware in VEE_FLUSH completion record.
+	 * Firmware will poll the corresponding ring context to reach the
+	 * given producer index before sending successful response. It will
+	 * finish the completion using VEE_FLUSH completion record.
+	 *
+	 * If this bit is '0', firmware will not treat ring_id as virtio
+	 * ring and ignore prod_idx, opaque fields.
+	 *
+	 * This feature is not applicable for L2 or RoCE.
+	 */
+	#define HWRM_RING_FREE_INPUT_FLAGS_VIRTIO_RING_VALID UINT32_C(0x1)
+	#define HWRM_RING_FREE_INPUT_FLAGS_LAST \
+		HWRM_RING_FREE_INPUT_FLAGS_VIRTIO_RING_VALID
 	/* Physical number of ring allocated. */
 	uint16_t	ring_id;
-	uint8_t	unused_1[4];
+	/*
+	 * Ring BD producer index posted by the virtio block.
+	 * This field is valid if virtio_ring_valid flag is set.
+	 */
+	uint32_t	prod_idx;
+	/*
+	 * User defined opaque field to be inserted into VEE_FLUSH completion
+	 * record. This field is valid if virtio_ring_valid flag is set.
+	 */
+	uint32_t	opaque;
+	uint32_t	unused_1;
 } __rte_packed;
 
 /* hwrm_ring_free_output (size:128b/16B) */
@@ -41854,6 +42968,12 @@ struct hwrm_cfa_adv_flow_mgnt_qcaps_output {
 	 */
 	#define HWRM_CFA_ADV_FLOW_MGNT_QCAPS_OUTPUT_FLAGS_L2_FILTER_TRAFFIC_TYPE_L2_ROCE_SUPPORTED \
 		UINT32_C(0x10000)
+	/*
+	 * If set to 1, firmware is capable of HW LAG. This bit is only
+	 * advertised if the calling function is a PAXC function.
+	 */
+	#define HWRM_CFA_ADV_FLOW_MGNT_QCAPS_OUTPUT_FLAGS_LAG_SUPPORTED \
+		UINT32_C(0x20000)
 	uint8_t	unused_0[3];
 	/*
 	 * This field is used in Output records to indicate that the output
@@ -42143,8 +43263,24 @@ struct hwrm_tf_session_open_output {
 	 * the newly created session.
 	 */
 	uint32_t	fw_session_client_id;
-	/* unused. */
-	uint32_t	unused0;
+	uint32_t	flags;
+	/* Indicates if the shared session has been created. */
+	#define HWRM_TF_SESSION_OPEN_OUTPUT_FLAGS_SHARED_SESSION \
+		UINT32_C(0x1)
+	/*
+	 * If this bit set to 0, then it indicates the shared session
+	 * has been created by another session.
+	 */
+	#define HWRM_TF_SESSION_OPEN_OUTPUT_FLAGS_SHARED_SESSION_NOT_CREATOR \
+		UINT32_C(0x0)
+	/*
+	 * If this bit is set to 1, then it indicates the shared session
+	 * is created by this session.
+	 */
+	#define HWRM_TF_SESSION_OPEN_OUTPUT_FLAGS_SHARED_SESSION_CREATOR \
+		UINT32_C(0x1)
+	#define HWRM_TF_SESSION_OPEN_OUTPUT_FLAGS_SHARED_SESSION_LAST \
+		HWRM_TF_SESSION_OPEN_OUTPUT_FLAGS_SHARED_SESSION_CREATOR
 	/* unused. */
 	uint8_t	unused1[3];
 	/*
@@ -42937,6 +44073,105 @@ struct hwrm_tf_session_resc_flush_output {
 	uint16_t	resp_len;
 	/* unused. */
 	uint8_t	unused0[7];
+	/*
+	 * This field is used in Output records to indicate that the output
+	 * is completely written to RAM. This field should be read as '1'
+	 * to indicate that the output has been completely written.
+	 * When writing a command completion or response to an internal
+	 * processor, the order of writes has to be such that this field is
+	 * written last.
+	 */
+	uint8_t	valid;
+} __rte_packed;
+
+/*****************************
+ * hwrm_tf_session_resc_info *
+ *****************************/
+
+
+/* hwrm_tf_session_resc_info_input (size:320b/40B) */
+struct hwrm_tf_session_resc_info_input {
+	/* The HWRM command request type. */
+	uint16_t	req_type;
+	/*
+	 * The completion ring to send the completion event on. This should
+	 * be the NQ ID returned from the `nq_alloc` HWRM command.
+	 */
+	uint16_t	cmpl_ring;
+	/*
+	 * The sequence ID is used by the driver for tracking multiple
+	 * commands. This ID is treated as opaque data by the firmware and
+	 * the value is returned in the `hwrm_resp_hdr` upon completion.
+	 */
+	uint16_t	seq_id;
+	/*
+	 * The target ID of the command:
+	 * * 0x0-0xFFF8 - The function ID
+	 * * 0xFFF8-0xFFFC, 0xFFFE - Reserved for internal processors
+	 * * 0xFFFD - Reserved for user-space HWRM interface
+	 * * 0xFFFF - HWRM
+	 */
+	uint16_t	target_id;
+	/*
+	 * A physical address pointer pointing to a host buffer that the
+	 * command's response data will be written. This can be either a host
+	 * physical address (HPA) or a guest physical address (GPA) and must
+	 * point to a physically contiguous block of memory.
+	 */
+	uint64_t	resp_addr;
+	/* Firmware session id returned when HWRM_TF_SESSION_OPEN is sent. */
+	uint32_t	fw_session_id;
+	/* Control flags. */
+	uint16_t	flags;
+	/* Indicates the flow direction. */
+	#define HWRM_TF_SESSION_RESC_INFO_INPUT_FLAGS_DIR     UINT32_C(0x1)
+	/* If this bit set to 0, then it indicates rx flow. */
+	#define HWRM_TF_SESSION_RESC_INFO_INPUT_FLAGS_DIR_RX    UINT32_C(0x0)
+	/* If this bit is set to 1, then it indicates tx flow. */
+	#define HWRM_TF_SESSION_RESC_INFO_INPUT_FLAGS_DIR_TX    UINT32_C(0x1)
+	#define HWRM_TF_SESSION_RESC_INFO_INPUT_FLAGS_DIR_LAST \
+		HWRM_TF_SESSION_RESC_INFO_INPUT_FLAGS_DIR_TX
+	/*
+	 * Defines the array size of the provided req_addr and
+	 * resv_addr array buffers. Should be set to the number of
+	 * request entries.
+	 */
+	uint16_t	req_size;
+	/*
+	 * This is the DMA address for the request input data array
+	 * buffer. Array is of tf_rm_resc_req_entry type. Size of the
+	 * array buffer is provided by the 'req_size' field in this
+	 * message.
+	 */
+	uint64_t	req_addr;
+	/*
+	 * This is the DMA address for the resc output data array
+	 * buffer. Array is of tf_rm_resc_entry type. Size of the array
+	 * buffer is provided by the 'req_size' field in this
+	 * message.
+	 */
+	uint64_t	resc_addr;
+} __rte_packed;
+
+/* hwrm_tf_session_resc_info_output (size:128b/16B) */
+struct hwrm_tf_session_resc_info_output {
+	/* The specific error status for the command. */
+	uint16_t	error_code;
+	/* The HWRM command request type. */
+	uint16_t	req_type;
+	/* The sequence ID from the original command. */
+	uint16_t	seq_id;
+	/* The length of the response data in number of bytes. */
+	uint16_t	resp_len;
+	/*
+	 * Size of the returned tf_rm_resc_entry data array. The value
+	 * cannot exceed the req_size defined by the input msg. The data
+	 * array is returned using the resv_addr specified DMA
+	 * address also provided by the input msg.
+	 */
+	uint16_t	size;
+	/* unused. */
+	uint8_t	unused0[5];
 	/*
 	 * This field is used in Output records to indicate that the output
 	 * is completely written to RAM. This field should be read as '1'
@@ -44429,6 +45664,79 @@ struct hwrm_tf_em_delete_output {
 	/* The length of the response data in number of bytes. */
 	uint16_t	resp_len;
 	/* Original stack allocation index. */
+	uint16_t	em_index;
+	/* unused. */
+	uint16_t	unused0[3];
+} __rte_packed;
+
+/*******************
+ * hwrm_tf_em_move *
+ *******************/
+
+
+/* hwrm_tf_em_move_input (size:320b/40B) */
+struct hwrm_tf_em_move_input {
+	/* The HWRM command request type. */
+	uint16_t	req_type;
+	/*
+	 * The completion ring to send the completion event on. This should
+	 * be the NQ ID returned from the `nq_alloc` HWRM command.
+	 */
+	uint16_t	cmpl_ring;
+	/*
+	 * The sequence ID is used by the driver for tracking multiple
+	 * commands. This ID is treated as opaque data by the firmware and
+	 * the value is returned in the `hwrm_resp_hdr` upon completion.
+	 */
+	uint16_t	seq_id;
+	/*
+	 * The target ID of the command:
+	 * * 0x0-0xFFF8 - The function ID
+	 * * 0xFFF8-0xFFFC, 0xFFFE - Reserved for internal processors
+	 * * 0xFFFD - Reserved for user-space HWRM interface
+	 * * 0xFFFF - HWRM
+	 */
+	uint16_t	target_id;
+	/*
+	 * A physical address pointer pointing to a host buffer that the
+	 * command's response data will be written. This can be either a host
+	 * physical address (HPA) or a guest physical address (GPA) and must
+	 * point to a physically contiguous block of memory.
+	 */
+	uint64_t	resp_addr;
+	/* Session Id. */
+	uint32_t	fw_session_id;
+	/* Control flags. */
+	uint16_t	flags;
+	/* Indicates the flow direction. */
+	#define HWRM_TF_EM_MOVE_INPUT_FLAGS_DIR     UINT32_C(0x1)
+	/* If this bit set to 0, then it indicates rx flow. */
+	#define HWRM_TF_EM_MOVE_INPUT_FLAGS_DIR_RX    UINT32_C(0x0)
+	/* If this bit is set to 1, then it indicates tx flow. */
+	#define HWRM_TF_EM_MOVE_INPUT_FLAGS_DIR_TX    UINT32_C(0x1)
+	#define HWRM_TF_EM_MOVE_INPUT_FLAGS_DIR_LAST \
+		HWRM_TF_EM_MOVE_INPUT_FLAGS_DIR_TX
+	/* Number of EM entry blocks */
+	uint16_t	num_blocks;
+	/* New index for entry */
+	uint32_t	new_index;
+	/* Unused */
+	uint32_t	unused0;
+	/* EM internal flow handle. */
+	uint64_t	flow_handle;
+} __rte_packed;
+
+/* hwrm_tf_em_move_output (size:128b/16B) */
+struct hwrm_tf_em_move_output {
+	/* The specific error status for the command. */
+	uint16_t	error_code;
+	/* The HWRM command request type. */
+	uint16_t	req_type;
+	/* The sequence ID from the original command. */
+	uint16_t	seq_id;
+	/* The length of the response data in number of bytes. */
+	uint16_t	resp_len;
+	/* Index of old entry. */
 	uint16_t	em_index;
 	/* unused. */
 	uint16_t	unused0[3];
@@ -46989,8 +48297,8 @@ struct hwrm_nvm_write_input {
 	 */
 	uint64_t	host_src_addr;
 	/*
-	 * The Directory Entry Type (valid values are defined in the bnxnvm
-	 * directory_type enum defined in the file bnxnvm_defs.h).
+	 * The Directory Entry Type (valid values are defined in the
+	 * bnxnvm_directory_type enum defined in the file bnxnvm_defs.h).
 	 */
 	uint16_t	dir_type;
 	/*
@@ -47003,10 +48311,10 @@ struct hwrm_nvm_write_input {
 	/* Directory Entry Attribute flags (see BNX_DIR_ATTR_* in the file bnxnvm_defs.h). */
 	uint16_t	dir_attr;
 	/*
-	 * Length of data to write, in bytes. May be less than or equal to the allocated
-	 * size for the directory entry.
-	 * The data length stored in the directory entry will be updated to reflect
-	 * this value once the write is complete.
+	 * Length of data to write, in bytes.May be
+	 * less than or equal to the allocated size for the directory entry.
+	 * The data length stored in the directory entry will be updated to
+	 * reflect this value once the write is complete.
 	 */
 	uint32_t	dir_data_length;
 	/* Option. */
@@ -47019,15 +48327,15 @@ struct hwrm_nvm_write_input {
 	#define HWRM_NVM_WRITE_INPUT_FLAGS_KEEP_ORIG_ACTIVE_IMG \
 		UINT32_C(0x1)
 	/*
-	 * The requested length of the allocated NVM for the item, in bytes. This
-	 * value may be greater than or equal to the specified data length (dir_data_length).
+	 * The requested length of the allocated NVM for the item, in bytes.
+	 * This value may be greater than or equal to the specified data length (dir_data_length).
 	 * If this value is less than the specified data length, it will be ignored.
-	 * The response will contain the actual allocated item length, which may be
-	 * greater than the requested item length.
+	 * The response will contain the actual allocated item length, which may
+	 * be greater than the requested item length.
 	 * The purpose for allocating more than the required number of bytes for
 	 * an item's data is to pre-allocate extra storage (padding) to accommodate
-	 * the potential future growth of an item (e.g. upgraded firmware with a
-	 * size increase, log growth, expanded configuration data).
+	 * the potential future growth of an item (e.g. upgraded firmware with
+	 * a size increase, log growth, expanded configuration data).
 	 */
 	uint32_t	dir_item_length;
 	uint32_t	unused_0;
@@ -47045,10 +48353,9 @@ struct hwrm_nvm_write_output {
 	uint16_t	resp_len;
 	/*
 	 * Length of the allocated NVM for the item, in bytes. The value may be
-	 * greater than or equal to the specified data length or the requested
-	 * item length.
-	 * The actual item length used when creating a new directory entry will be
-	 * a multiple of an NVM block size.
+	 * greater than or equal to the specified data length or the requested item length.
+	 * The actual item length used when creating a new directory entry will
+	 * be a multiple of an NVM block size.
 	 */
 	uint32_t	dir_item_length;
 	/* The directory index of the created or modified item. */
@@ -47538,14 +48845,11 @@ struct hwrm_nvm_mod_dir_entry_input {
 	 */
 	uint16_t	dir_ordinal;
 	/*
-	 * The Directory Entry Extension flags (see BNX_DIR_EXT_* for extension
-	 * flag definitions).
+	 * The Directory Entry Extension flags (see BNX_DIR_EXT_* for
+	 * extension flag definitions).
 	 */
 	uint16_t	dir_ext;
-	/*
-	 * Directory Entry Attribute flags (see BNX_DIR_ATTR_* for attribute flag
-	 * definitions).
-	 */
+	/* Directory Entry Attribute flags (see BNX_DIR_ATTR_* for attribute flag definitions). */
 	uint16_t	dir_attr;
 	/*
 	 * If valid, then this field updates the checksum
@@ -48406,8 +49710,8 @@ struct hwrm_fw_reset_input {
 	#define HWRM_FW_RESET_INPUT_EMBEDDED_PROC_TYPE_HOST \
 		UINT32_C(0x4)
 	/*
-	 * AP processor complex (in multi-host environment). Use host_idx to
-	 * control which core is reset
+	 * AP processor complex (in multi-host environment).
+	 * Use host_idx to control which core is reset
 	 */
 	#define HWRM_FW_RESET_INPUT_EMBEDDED_PROC_TYPE_AP \
 		UINT32_C(0x5)
@@ -48625,4 +49929,87 @@ struct hcomm_status {
 } __rte_packed;
 /* This is the GRC offset where the hcomm_status struct resides. */
 #define HCOMM_STATUS_STRUCT_LOC		0x31001F0UL
+
+/**************************
+ * hwrm_port_phy_i2c_read *
+ **************************/
+
+
+/* hwrm_port_phy_i2c_read_input (size:320b/40B) */
+struct hwrm_port_phy_i2c_read_input {
+	/* The HWRM command request type. */
+	uint16_t	req_type;
+	/*
+	 * The completion ring to send the completion event on. This should
+	 * be the NQ ID returned from the `nq_alloc` HWRM command.
+	 */
+	uint16_t	cmpl_ring;
+	/*
+	 * The sequence ID is used by the driver for tracking multiple
+	 * commands. This ID is treated as opaque data by the firmware and
+	 * the value is returned in the `hwrm_resp_hdr` upon completion.
+	 */
+	uint16_t	seq_id;
+	/*
+	 * The target ID of the command:
+	 * * 0x0-0xFFF8 - The function ID
+	 * * 0xFFF8-0xFFFC, 0xFFFE - Reserved for internal processors
+	 * * 0xFFFD - Reserved for user-space HWRM interface
+	 * * 0xFFFF - HWRM
+	 */
+	uint16_t	target_id;
+	/*
+	 * A physical address pointer pointing to a host buffer that the
+	 * command's response data will be written. This can be either a host
+	 * physical address (HPA) or a guest physical address (GPA) and must
+	 * point to a physically contiguous block of memory.
+	 */
+	uint64_t	resp_addr;
+	uint32_t	flags;
+	uint32_t	enables;
+	/*
+	 * This bit must be '1' for the page_offset field to be
+	 * configured.
+	 */
+	#define HWRM_PORT_PHY_I2C_READ_INPUT_ENABLES_PAGE_OFFSET     0x1UL
+	/* Port ID of port. */
+	uint16_t	port_id;
+	/* 8-bit I2C slave address. */
+	uint8_t	i2c_slave_addr;
+	uint8_t	unused_0;
+	/* The page number that is being accessed over I2C. */
+	uint16_t	page_number;
+	/* Offset within the page that is being accessed over I2C. */
+	uint16_t	page_offset;
+	/*
+	 * Length of data to read, in bytes starting at the offset
+	 * specified above. If the offset is not specified, then
+	 * the data shall be read from the beginning of the page.
+	 */
+	uint8_t	data_length;
+	uint8_t	unused_1[7];
+} __rte_packed;
+
+/* hwrm_port_phy_i2c_read_output (size:640b/80B) */
+struct hwrm_port_phy_i2c_read_output {
+	/* The specific error status for the command. */
+	uint16_t	error_code;
+	/* The HWRM command request type. */
+	uint16_t	req_type;
+	/* The sequence ID from the original command. */
+	uint16_t	seq_id;
+	/* The length of the response data in number of bytes. */
+	uint16_t	resp_len;
+	/* Up to 64B of data. */
+	uint32_t	data[16];
+	uint8_t	unused_0[7];
+	/*
+	 * This field is used in Output records to indicate that the output
+	 * is completely written to RAM.  This field should be read as '1'
+	 * to indicate that the output has been completely written.
+	 * When writing a command completion or response to an internal processor,
+	 * the order of writes has to be such that this field is written last.
+	 */
+	uint8_t	valid;
+} __rte_packed;
 #endif /* _HSI_STRUCT_DEF_DPDK_H_ */

@@ -26,7 +26,6 @@ extern "C" {
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
-#include <sys/queue.h>
 #include <errno.h>
 #include <rte_common.h>
 #include <rte_config.h>
@@ -57,10 +56,8 @@ enum rte_ring_queue_behavior {
 enum rte_ring_sync_type {
 	RTE_RING_SYNC_MT,     /**< multi-thread safe (default mode) */
 	RTE_RING_SYNC_ST,     /**< single thread only */
-#ifdef ALLOW_EXPERIMENTAL_API
 	RTE_RING_SYNC_MT_RTS, /**< multi-thread relaxed tail sync */
 	RTE_RING_SYNC_MT_HTS, /**< multi-thread head/tail sync */
-#endif
 };
 
 /**
@@ -121,12 +118,7 @@ struct rte_ring_hts_headtail {
  * a problem.
  */
 struct rte_ring {
-	/*
-	 * Note: this field kept the RTE_MEMZONE_NAMESIZE size due to ABI
-	 * compatibility requirements, it could be changed to RTE_RING_NAMESIZE
-	 * next time the ABI changes
-	 */
-	char name[RTE_MEMZONE_NAMESIZE] __rte_cache_aligned;
+	char name[RTE_RING_NAMESIZE] __rte_cache_aligned;
 	/**< Name of the ring. */
 	int flags;               /**< Flags supplied at creation. */
 	const struct rte_memzone *memzone;

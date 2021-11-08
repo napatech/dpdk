@@ -9,7 +9,6 @@
 #include <rte_log.h>
 #include <rte_debug.h>
 #include <rte_pci.h>
-#include <rte_atomic.h>
 #include <rte_branch_prediction.h>
 #include <rte_memory.h>
 #include <rte_tailq.h>
@@ -4598,7 +4597,7 @@ static void t4_handle_get_port_info(struct port_info *pi, const __be64 *rpl)
 		t4_os_link_changed(adapter, pi->pidx);
 	}
 
-	if (mod_changed) {
+	if (mod_changed != 0 && is_pf4(adapter) != 0) {
 		u32 mod_caps = lc->admin_caps;
 		int ret;
 

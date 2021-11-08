@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright (C) 2019 Marvell International Ltd.
  */
-#include <rte_cryptodev.h>
+#include <cryptodev_pmd.h>
 #include <rte_ethdev.h>
 
 #include "otx2_cryptodev.h"
@@ -37,7 +37,7 @@ otx2_cpt_hardware_caps_get(const struct rte_cryptodev *dev,
 	}
 
 	vf->cpt_revision = rsp->cpt_revision;
-	memcpy(hw_caps, rsp->eng_caps,
+	otx2_mbox_memcpy(hw_caps, rsp->eng_caps,
 		sizeof(union cpt_eng_caps) * CPT_MAX_ENG_TYPES);
 
 	return 0;

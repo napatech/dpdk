@@ -9,8 +9,8 @@ Overview
 --------
 
 This API provides a generic means to configure hardware to match specific
-ingress or egress traffic, alter its fate and query related counters
-according to any number of user-defined rules.
+traffic, alter its fate and query related counters according to any
+number of user-defined rules.
 
 It is named *rte_flow* after the prefix used for all its symbols, and is
 defined in ``rte_flow.h``.
@@ -146,19 +146,16 @@ Note that support for more than a single priority level is not guaranteed.
 Attribute: Traffic direction
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Flow rule patterns apply to inbound and/or outbound traffic.
-
-In the context of this API, **ingress** and **egress** respectively stand
-for **inbound** and **outbound** based on the standpoint of the application
-creating a flow rule.
-
-There are no exceptions to this definition.
+Unless `Attribute: Transfer`_ is specified, flow rule patterns apply
+to inbound and / or outbound traffic. With this respect, ``ingress``
+and ``egress`` respectively stand for **inbound** and **outbound**
+based on the standpoint of the application creating a flow rule.
 
 Several pattern items and actions are valid and can be used in both
 directions. At least one direction must be specified.
 
 Specifying both directions at once for a given rule is not recommended but
-may be valid in a few cases (e.g. shared counters).
+may be valid in a few cases.
 
 Attribute: Transfer
 ^^^^^^^^^^^^^^^^^^^
@@ -171,12 +168,13 @@ When supported, this effectively enables an application to reroute traffic
 not necessarily intended for it (e.g. coming from or addressed to different
 physical ports, VFs or applications) at the device level.
 
-It complements the behavior of some pattern items such as `Item: PHY_PORT`_
-and is meaningless without them.
-
-When transferring flow rules, **ingress** and **egress** attributes
-(`Attribute: Traffic direction`_) keep their original meaning, as if
-processing traffic emitted or received by the application.
+In "transfer" flows, the use of `Attribute: Traffic direction`_ in the sense of
+implicitly matching packets going to or going from the ethdev used to create
+flow rules is **deprecated**. `Attribute: Transfer`_ shifts the viewpoint to
+the embedded switch. In it, `Attribute: Traffic direction`_ is ambiguous as
+the switch serves many different endpoints. The application should match
+traffic originating from precise locations. To do so, it should
+use `Item: PORT_REPRESENTOR`_ and `Item: REPRESENTED_PORT`_.
 
 Pattern item
 ~~~~~~~~~~~~
@@ -504,6 +502,10 @@ Usage example, matching non-TCPv4 packets only:
 Item: ``PF``
 ^^^^^^^^^^^^
 
+This item is deprecated. Consider:
+ - `Item: PORT_REPRESENTOR`_
+ - `Item: REPRESENTED_PORT`_
+
 Matches traffic originating from (ingress) or going to (egress) the physical
 function of the current device.
 
@@ -530,6 +532,10 @@ the application and thus not associated with a DPDK port ID.
 
 Item: ``VF``
 ^^^^^^^^^^^^
+
+This item is deprecated. Consider:
+ - `Item: PORT_REPRESENTOR`_
+ - `Item: REPRESENTED_PORT`_
 
 Matches traffic originating from (ingress) or going to (egress) a given
 virtual function of the current device.
@@ -561,6 +567,10 @@ separate entities, should be addressed through their own DPDK port IDs.
 
 Item: ``PHY_PORT``
 ^^^^^^^^^^^^^^^^^^
+
+This item is deprecated. Consider:
+ - `Item: PORT_REPRESENTOR`_
+ - `Item: REPRESENTED_PORT`_
 
 Matches traffic originating from (ingress) or going to (egress) a physical
 port of the underlying device.
@@ -595,6 +605,10 @@ associated with a port_id should be retrieved by other means.
 
 Item: ``PORT_ID``
 ^^^^^^^^^^^^^^^^^
+
+This item is deprecated. Consider:
+ - `Item: PORT_REPRESENTOR`_
+ - `Item: REPRESENTED_PORT`_
 
 Matches traffic originating from (ingress) or going to (egress) a given DPDK
 port ID.
@@ -687,9 +701,9 @@ Item: ``META``
 Matches 32 bit metadata item set.
 
 On egress, metadata can be set either by mbuf metadata field with
-PKT_TX_DYNF_METADATA flag or ``SET_META`` action. On ingress, ``SET_META``
+RTE_MBUF_DYNFLAG_TX_METADATA flag or ``SET_META`` action. On ingress, ``SET_META``
 action sets metadata for a packet and the metadata will be reported via
-``metadata`` dynamic field of ``rte_mbuf`` with PKT_RX_DYNF_METADATA flag.
+``metadata`` dynamic field of ``rte_mbuf`` with RTE_MBUF_DYNFLAG_RX_METADATA flag.
 
 - Default ``mask`` matches the specified Rx metadata value.
 
@@ -1425,6 +1439,165 @@ Matches a conntrack state after conntrack action.
 - ``flags``: conntrack packet state flags.
 - Default ``mask`` matches all state bits.
 
+Item: ``PORT_REPRESENTOR``
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Matches traffic entering the embedded switch from the given ethdev.
+
+Term **ethdev** and the concept of **port representor** are synonymous.
+The **represented port** is an *entity* plugged to the embedded switch
+at the opposite end of the "wire" leading to the ethdev.
+
+::
+
+    .--------------------.
+    |  PORT_REPRESENTOR  |  Ethdev (Application Port Referred to by its ID)
+    '--------------------'
+              ||
+              \/
+      .----------------.
+      |  Logical Port  |
+      '----------------'
+              ||
+              ||
+              ||
+              \/
+         .----------.
+         |  Switch  |
+         '----------'
+              :
+               :
+              :
+               :
+      .----------------.
+      |  Logical Port  |
+      '----------------'
+              :
+               :
+    .--------------------.
+    |  REPRESENTED_PORT  |  Net / Guest / Another Ethdev (Same Application)
+    '--------------------'
+
+
+- Incompatible with `Attribute: Traffic direction`_.
+- Requires `Attribute: Transfer`_.
+
+.. _table_rte_flow_item_ethdev:
+
+.. table:: ``struct rte_flow_item_ethdev``
+
+   +----------+-------------+---------------------------+
+   | Field    | Subfield    | Value                     |
+   +==========+=============+===========================+
+   | ``spec`` | ``port_id`` | ethdev port ID            |
+   +----------+-------------+---------------------------+
+   | ``last`` | ``port_id`` | upper range value         |
+   +----------+-------------+---------------------------+
+   | ``mask`` | ``port_id`` | zeroed for wildcard match |
+   +----------+-------------+---------------------------+
+
+- Default ``mask`` provides exact match behaviour.
+
+See also `Action: PORT_REPRESENTOR`_.
+
+Item: ``REPRESENTED_PORT``
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Matches traffic entering the embedded switch from
+the entity represented by the given ethdev.
+
+Term **ethdev** and the concept of **port representor** are synonymous.
+The **represented port** is an *entity* plugged to the embedded switch
+at the opposite end of the "wire" leading to the ethdev.
+
+::
+
+    .--------------------.
+    |  PORT_REPRESENTOR  |  Ethdev (Application Port Referred to by its ID)
+    '--------------------'
+              :
+               :
+      .----------------.
+      |  Logical Port  |
+      '----------------'
+              :
+               :
+              :
+               :
+         .----------.
+         |  Switch  |
+         '----------'
+              /\
+              ||
+              ||
+              ||
+      .----------------.
+      |  Logical Port  |
+      '----------------'
+              /\
+              ||
+    .--------------------.
+    |  REPRESENTED_PORT  |  Net / Guest / Another Ethdev (Same Application)
+    '--------------------'
+
+
+- Incompatible with `Attribute: Traffic direction`_.
+- Requires `Attribute: Transfer`_.
+
+This item is meant to use the same structure as `Item: PORT_REPRESENTOR`_.
+
+See also `Action: REPRESENTED_PORT`_.
+
+Item: ``FLEX``
+^^^^^^^^^^^^^^
+
+Matches with the custom network protocol header that was created
+using rte_flow_flex_item_create() API. The application describes
+the desired header structure, defines the header fields attributes
+and header relations with preceding and following protocols and
+configures the ethernet devices accordingly via
+rte_flow_flex_item_create() routine.
+
+- ``handle``: the flex item handle returned by the PMD on successful
+  rte_flow_flex_item_create() call, mask for this field is ignored.
+- ``length``: match pattern length in bytes. If the length does not cover
+  all fields defined in item configuration, the pattern spec and mask are
+  considered by the driver as padded with trailing zeroes till the full
+  configured item pattern length.
+- ``pattern``: pattern to match. The pattern is concatenation of bit fields
+  configured at item creation. At configuration the fields are presented
+  by sample_data array. The order of the bitfields is defined by the order
+  of sample_data elements. The width of each bitfield is defined by the width
+  specified in the corresponding sample_data element as well. If pattern
+  length is smaller than configured fields overall length it is considered
+  as padded with trailing zeroes up to full configured length, both for
+  value and mask.
+
+Item: ``L2TPV2``
+^^^^^^^^^^^^^^^^^^^
+
+Matches a L2TPv2 header.
+
+- ``flags_version``: flags(12b), version(4b).
+- ``length``: total length of the message.
+- ``tunnel_id``: identifier for the control connection.
+- ``session_id``: identifier for a session within a tunnel.
+- ``ns``: sequence number for this date or control message.
+- ``nr``: sequence number expected in the next control message to be received.
+- ``offset_size``: offset of payload data.
+- ``offset_padding``: offset padding, variable length.
+- Default ``mask`` matches flags_version only.
+
+Item: ``PPP``
+^^^^^^^^^^^^^^^^^^^
+
+Matches a PPP header.
+
+- ``addr``: PPP address.
+- ``ctrl``: PPP control.
+- ``proto_id``: PPP protocol identifier.
+- Default ``mask`` matches addr, ctrl, proto_id.
+
 Actions
 ~~~~~~~
 
@@ -1491,9 +1664,7 @@ Actions are performed in list order:
    +=======+========+============+=======+
    | 0     | MARK   | ``mark``   | 0x2a  |
    +-------+--------+------------+-------+
-   | 1     | COUNT  | ``shared`` | 0     |
-   |       |        +------------+-------+
-   |       |        | ``id``     | 0     |
+   | 1     | COUNT  | ``id``     | 0     |
    +-------+--------+------------+-------+
    | 2     | QUEUE  | ``queue``  | 10    |
    +-------+--------+------------+-------+
@@ -1656,8 +1827,8 @@ flows to loop between groups.
 Action: ``MARK``
 ^^^^^^^^^^^^^^^^
 
-Attaches an integer value to packets and sets ``PKT_RX_FDIR`` and
-``PKT_RX_FDIR_ID`` mbuf flags.
+Attaches an integer value to packets and sets ``RTE_MBUF_F_RX_FDIR`` and
+``RTE_MBUF_F_RX_FDIR_ID`` mbuf flags.
 
 This value is arbitrary and application-defined. Maximum allowed value
 depends on the underlying implementation. It is returned in the
@@ -1677,7 +1848,7 @@ Action: ``FLAG``
 ^^^^^^^^^^^^^^^^
 
 Flags packets. Similar to `Action: MARK`_ without a specific value; only
-sets the ``PKT_RX_FDIR`` mbuf flag.
+sets the ``RTE_MBUF_F_RX_FDIR`` mbuf flag.
 
 - No configurable properties.
 
@@ -1734,19 +1905,8 @@ action must specify a unique id.
 Counters can be retrieved and reset through ``rte_flow_query()``, see
 ``struct rte_flow_query_count``.
 
-The shared flag indicates whether the counter is unique to the flow rule the
-action is specified with, or whether it is a shared counter.
-
-For a count action with the shared flag set, then a global device
-namespace is assumed for the counter id, so that any matched flow rules using
-a count action with the same counter id on the same port will contribute to
-that counter.
-
 For ports within the same switch domain then the counter id namespace extends
 to all ports within that switch domain.
-
-The shared flag is DEPRECATED and ``INDIRECT`` ``COUNT`` action should be used
-to make shared counters.
 
 .. _table_rte_flow_action_count:
 
@@ -1755,8 +1915,6 @@ to make shared counters.
    +------------+---------------------------------+
    | Field      | Value                           |
    +============+=================================+
-   | ``shared`` | DEPRECATED, shared counter flag |
-   +------------+---------------------------------+
    | ``id``     | counter id                      |
    +------------+---------------------------------+
 
@@ -1835,26 +1993,30 @@ only matching traffic goes through.
 
 .. table:: RSS
 
-   +---------------+---------------------------------------------+
-   | Field         | Value                                       |
-   +===============+=============================================+
-   | ``func``      | RSS hash function to apply                  |
-   +---------------+---------------------------------------------+
-   | ``level``     | encapsulation level for ``types``           |
-   +---------------+---------------------------------------------+
-   | ``types``     | specific RSS hash types (see ``ETH_RSS_*``) |
-   +---------------+---------------------------------------------+
-   | ``key_len``   | hash key length in bytes                    |
-   +---------------+---------------------------------------------+
-   | ``queue_num`` | number of entries in ``queue``              |
-   +---------------+---------------------------------------------+
-   | ``key``       | hash key                                    |
-   +---------------+---------------------------------------------+
-   | ``queue``     | queue indices to use                        |
-   +---------------+---------------------------------------------+
+   +---------------+-------------------------------------------------+
+   | Field         | Value                                           |
+   +===============+=================================================+
+   | ``func``      | RSS hash function to apply                      |
+   +---------------+-------------------------------------------------+
+   | ``level``     | encapsulation level for ``types``               |
+   +---------------+-------------------------------------------------+
+   | ``types``     | specific RSS hash types (see ``RTE_ETH_RSS_*``) |
+   +---------------+-------------------------------------------------+
+   | ``key_len``   | hash key length in bytes                        |
+   +---------------+-------------------------------------------------+
+   | ``queue_num`` | number of entries in ``queue``                  |
+   +---------------+-------------------------------------------------+
+   | ``key``       | hash key                                        |
+   +---------------+-------------------------------------------------+
+   | ``queue``     | queue indices to use                            |
+   +---------------+-------------------------------------------------+
 
 Action: ``PF``
 ^^^^^^^^^^^^^^
+
+This action is deprecated. Consider:
+ - `Action: PORT_REPRESENTOR`_
+ - `Action: REPRESENTED_PORT`_
 
 Directs matching traffic to the physical function (PF) of the current
 device.
@@ -1875,6 +2037,10 @@ See `Item: PF`_.
 
 Action: ``VF``
 ^^^^^^^^^^^^^^
+
+This action is deprecated. Consider:
+ - `Action: PORT_REPRESENTOR`_
+ - `Action: REPRESENTED_PORT`_
 
 Directs matching traffic to a given virtual function of the current device.
 
@@ -1900,6 +2066,10 @@ See `Item: VF`_.
 Action: ``PHY_PORT``
 ^^^^^^^^^^^^^^^^^^^^
 
+This action is deprecated. Consider:
+ - `Action: PORT_REPRESENTOR`_
+ - `Action: REPRESENTED_PORT`_
+
 Directs matching traffic to a given physical port index of the underlying
 device.
 
@@ -1919,6 +2089,10 @@ See `Item: PHY_PORT`_.
 
 Action: ``PORT_ID``
 ^^^^^^^^^^^^^^^^^^^
+This action is deprecated. Consider:
+ - `Action: PORT_REPRESENTOR`_
+ - `Action: REPRESENTED_PORT`_
+
 Directs matching traffic to a given DPDK port ID.
 
 See `Item: PORT_ID`_.
@@ -2635,10 +2809,10 @@ Action: ``SET_META``
 
 Set metadata. Item ``META`` matches metadata.
 
-Metadata set by mbuf metadata field with PKT_TX_DYNF_METADATA flag on egress
+Metadata set by mbuf metadata field with RTE_MBUF_DYNFLAG_TX_METADATA flag on egress
 will be overridden by this action. On ingress, the metadata will be carried by
 ``metadata`` dynamic field of ``rte_mbuf`` which can be accessed by
-``RTE_FLOW_DYNF_METADATA()``. PKT_RX_DYNF_METADATA flag will be set along
+``RTE_FLOW_DYNF_METADATA()``. RTE_MBUF_DYNFLAG_RX_METADATA flag will be set along
 with the data.
 
 The mbuf dynamic field must be registered by calling
@@ -2835,6 +3009,22 @@ a packet to any other part of it.
 ``value`` sets an immediate value to be used as a source or points to a
 location of the value in memory. It is used instead of ``level`` and ``offset``
 for ``RTE_FLOW_FIELD_VALUE`` and ``RTE_FLOW_FIELD_POINTER`` respectively.
+The data in memory should be presented exactly in the same byte order and
+length as in the relevant flow item, i.e. data for field with type
+``RTE_FLOW_FIELD_MAC_DST`` should follow the conventions of ``dst`` field
+in ``rte_flow_item_eth`` structure, with type ``RTE_FLOW_FIELD_IPV6_SRC`` -
+``rte_flow_item_ipv6`` conventions, and so on. If the field size is larger than
+16 bytes the pattern can be provided as pointer only.
+
+The bitfield extracted from the memory being applied as second operation
+parameter is defined by action width and by the destination field offset.
+Application should provide the data in immediate value memory (either as
+buffer or by pointer) exactly as item field without any applied explicit offset,
+and destination packet field (with specified width and bit offset) will be
+replaced by immediate source bits from the same bit offset. For example,
+to replace the third byte of MAC address with value 0x85, application should
+specify destination width as 8, destination offset as 16, and provide immediate
+value as sequence of bytes {xxx, xxx, 0x85, xxx, xxx, xxx}.
 
 .. _table_rte_flow_action_modify_field:
 
@@ -2865,7 +3055,13 @@ for ``RTE_FLOW_FIELD_VALUE`` and ``RTE_FLOW_FIELD_POINTER`` respectively.
    +---------------+----------------------------------------------------------+
    | ``offset``    | number of bits to skip at the beginning                  |
    +---------------+----------------------------------------------------------+
-   | ``value``     | immediate value or a pointer to this value               |
+   | ``value``     | immediate value buffer (source field only, not           |
+   |               | applicable to destination) for RTE_FLOW_FIELD_VALUE      |
+   |               | field type                                               |
+   +---------------+----------------------------------------------------------+
+   | ``pvalue``    | pointer to immediate value data (source field only, not  |
+   |               | applicable to destination) for RTE_FLOW_FIELD_POINTER    |
+   |               | field type                                               |
    +---------------+----------------------------------------------------------+
 
 Action: ``CONNTRACK``
@@ -2998,6 +3194,107 @@ which is set in the packet meta-data (i.e. struct ``rte_mbuf::sched::color``)
    +=================+==============+
    | ``meter_color`` | Packet color |
    +-----------------+--------------+
+
+Action: ``PORT_REPRESENTOR``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+At embedded switch level, send matching traffic to the given ethdev.
+
+Term **ethdev** and the concept of **port representor** are synonymous.
+The **represented port** is an *entity* plugged to the embedded switch
+at the opposite end of the "wire" leading to the ethdev.
+
+::
+
+    .--------------------.
+    |  PORT_REPRESENTOR  |  Ethdev (Application Port Referred to by its ID)
+    '--------------------'
+              /\
+              ||
+      .----------------.
+      |  Logical Port  |
+      '----------------'
+              /\
+              ||
+              ||
+              ||
+         .----------.       .--------------------.
+         |  Switch  |  <==  |  Matching Traffic  |
+         '----------'       '--------------------'
+              :
+               :
+              :
+               :
+      .----------------.
+      |  Logical Port  |
+      '----------------'
+              :
+               :
+    .--------------------.
+    |  REPRESENTED_PORT  |  Net / Guest / Another Ethdev (Same Application)
+    '--------------------'
+
+
+- Requires `Attribute: Transfer`_.
+
+.. _table_rte_flow_action_ethdev:
+
+.. table:: ``struct rte_flow_action_ethdev``
+
+   +-------------+----------------+
+   | Field       | Value          |
+   +=============+================+
+   | ``port_id`` | ethdev port ID |
+   +-------------+----------------+
+
+See also `Item: PORT_REPRESENTOR`_.
+
+Action: ``REPRESENTED_PORT``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+At embedded switch level, send matching traffic to
+the entity represented by the given ethdev.
+
+Term **ethdev** and the concept of **port representor** are synonymous.
+The **represented port** is an *entity* plugged to the embedded switch
+at the opposite end of the "wire" leading to the ethdev.
+
+::
+
+    .--------------------.
+    |  PORT_REPRESENTOR  |  Ethdev (Application Port Referred to by its ID)
+    '--------------------'
+              :
+               :
+      .----------------.
+      |  Logical Port  |
+      '----------------'
+              :
+               :
+              :
+               :
+         .----------.       .--------------------.
+         |  Switch  |  <==  |  Matching Traffic  |
+         '----------'       '--------------------'
+              ||
+              ||
+              ||
+              \/
+      .----------------.
+      |  Logical Port  |
+      '----------------'
+              ||
+              \/
+    .--------------------.
+    |  REPRESENTED_PORT  |  Net / Guest / Another Ethdev (Same Application)
+    '--------------------'
+
+
+- Requires `Attribute: Transfer`_.
+
+This action is meant to use the same structure as `Action: PORT_REPRESENTOR`_.
+
+See also `Item: REPRESENTED_PORT`_.
 
 Negative types
 ~~~~~~~~~~~~~~

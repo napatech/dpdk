@@ -6,6 +6,10 @@
 IOAT Rawdev Driver
 ===================
 
+.. warning::
+        As of DPDK 21.11 the rawdev implementation of the IOAT driver has been deprecated.
+        Please use the dmadev library instead.
+
 The ``ioat`` rawdev driver provides a poll-mode driver (PMD) for Intel\ |reg|
 Data Streaming Accelerator `(Intel DSA)
 <https://01.org/blogs/2019/introducing-intel-data-streaming-accelerator>`_ and for Intel\ |reg|
@@ -33,6 +37,14 @@ Compilation
 
 For builds using ``meson`` and ``ninja``, the driver will be built when the target platform is x86-based.
 No additional compilation steps are necessary.
+
+.. note::
+        Since the addition of the dmadev library, the ``ioat`` and ``idxd`` parts of this driver
+        will only be built if their ``dmadev`` counterparts are not built.
+        The following can be used to disable the ``dmadev`` drivers,
+        if the raw drivers are to be used instead::
+
+                $ meson -Ddisable_drivers=dma/* <build_dir>
 
 Device Setup
 -------------
@@ -65,7 +77,7 @@ To assign an engine to a group::
         $ accel-config config-engine dsa0/engine0.1 --group-id=1
 
 To assign work queues to groups for passing descriptors to the engines a similar accel-config command can be used.
-However, the work queues also need to be configured depending on the use-case.
+However, the work queues also need to be configured depending on the use case.
 Some configuration options include:
 
 * mode (Dedicated/Shared): Indicates whether a WQ may accept jobs from multiple queues simultaneously.

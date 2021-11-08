@@ -55,7 +55,7 @@ License Header
 ~~~~~~~~~~~~~~
 
 Each file must begin with a special comment containing the
-`Software Package Data Exchange (SPDX) License Identfier <https://spdx.org/using-spdx-license-identifier>`_.
+`Software Package Data Exchange (SPDX) License Identifier <https://spdx.org/using-spdx-license-identifier>`_.
 
 Generally this is the BSD License, except for code granted special exceptions.
 The SPDX licences identifier is sufficient, a file should not contain
@@ -1023,6 +1023,16 @@ The following guidelines apply to the build system code in meson.build files in 
 
 * Line continuations should be doubly-indented to ensure visible difference from normal indentation.
   Any line continuations beyond the first may be singly indented to avoid large amounts of indentation.
+
+* Where a line is split in the middle of a statement, e.g. a multiline `if` statement,
+  brackets should be used in preference to escaping the line break.
+
+Example::
+
+    if (condition1 and condition2            # line breaks inside () need no escaping
+            and condition3 and condition4)
+        x = y
+    endif
 
 * Lists of files or components must be alphabetical unless doing so would cause errors.
 

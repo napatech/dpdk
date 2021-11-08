@@ -166,7 +166,7 @@ eth_txgbevf_dev_init(struct rte_eth_dev *eth_dev)
 	int err;
 	uint32_t tc, tcs;
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct txgbe_hw *hw = TXGBE_DEV_HW(eth_dev);
 	struct txgbe_vfta *shadow_vfta = TXGBE_DEV_VFTA(eth_dev);
 	struct txgbe_hwstrip *hwstrip = TXGBE_DEV_HWSTRIP(eth_dev);
@@ -282,13 +282,8 @@ eth_txgbevf_dev_init(struct rte_eth_dev *eth_dev)
 		}
 		PMD_INIT_LOG(INFO, "\tVF MAC address not assigned by Host PF");
 		PMD_INIT_LOG(INFO, "\tAssign randomly generated MAC address "
-			     "%02x:%02x:%02x:%02x:%02x:%02x",
-			     perm_addr->addr_bytes[0],
-			     perm_addr->addr_bytes[1],
-			     perm_addr->addr_bytes[2],
-			     perm_addr->addr_bytes[3],
-			     perm_addr->addr_bytes[4],
-			     perm_addr->addr_bytes[5]);
+			     RTE_ETHER_ADDR_PRT_FMT,
+				 RTE_ETHER_ADDR_BYTES(perm_addr));
 	}
 
 	/* Copy the permanent MAC address */
@@ -491,14 +486,14 @@ txgbevf_dev_info_get(struct rte_eth_dev *dev,
 	dev_info->max_mac_addrs = hw->mac.num_rar_entries;
 	dev_info->max_hash_mac_addrs = TXGBE_VMDQ_NUM_UC_MAC;
 	dev_info->max_vfs = pci_dev->max_vfs;
-	dev_info->max_vmdq_pools = ETH_64_POOLS;
+	dev_info->max_vmdq_pools = RTE_ETH_64_POOLS;
 	dev_info->rx_queue_offload_capa = txgbe_get_rx_queue_offloads(dev);
 	dev_info->rx_offload_capa = (txgbe_get_rx_port_offloads(dev) |
 				     dev_info->rx_queue_offload_capa);
 	dev_info->tx_queue_offload_capa = txgbe_get_tx_queue_offloads(dev);
 	dev_info->tx_offload_capa = txgbe_get_tx_port_offloads(dev);
 	dev_info->hash_key_size = TXGBE_HKEY_MAX_INDEX * sizeof(uint32_t);
-	dev_info->reta_size = ETH_RSS_RETA_SIZE_128;
+	dev_info->reta_size = RTE_ETH_RSS_RETA_SIZE_128;
 	dev_info->flow_type_rss_offloads = TXGBE_RSS_OFFLOAD_ALL;
 
 	dev_info->default_rxconf = (struct rte_eth_rxconf) {
@@ -579,22 +574,22 @@ txgbevf_dev_configure(struct rte_eth_dev *dev)
 	PMD_INIT_LOG(DEBUG, "Configured Virtual Function port id: %d",
 		     dev->data->port_id);
 
-	if (dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG)
-		dev->data->dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_RSS_HASH;
+	if (dev->data->dev_conf.rxmode.mq_mode & RTE_ETH_MQ_RX_RSS_FLAG)
+		dev->data->dev_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_RSS_HASH;
 
 	/*
 	 * VF has no ability to enable/disable HW CRC
 	 * Keep the persistent behavior the same as Host PF
 	 */
 #ifndef RTE_LIBRTE_TXGBE_PF_DISABLE_STRIP_CRC
-	if (conf->rxmode.offloads & DEV_RX_OFFLOAD_KEEP_CRC) {
+	if (conf->rxmode.offloads & RTE_ETH_RX_OFFLOAD_KEEP_CRC) {
 		PMD_INIT_LOG(NOTICE, "VF can't disable HW CRC Strip");
-		conf->rxmode.offloads &= ~DEV_RX_OFFLOAD_KEEP_CRC;
+		conf->rxmode.offloads &= ~RTE_ETH_RX_OFFLOAD_KEEP_CRC;
 	}
 #else
-	if (!(conf->rxmode.offloads & DEV_RX_OFFLOAD_KEEP_CRC)) {
+	if (!(conf->rxmode.offloads & RTE_ETH_RX_OFFLOAD_KEEP_CRC)) {
 		PMD_INIT_LOG(NOTICE, "VF can't enable HW CRC Strip");
-		conf->rxmode.offloads |= DEV_RX_OFFLOAD_KEEP_CRC;
+		conf->rxmode.offloads |= RTE_ETH_RX_OFFLOAD_KEEP_CRC;
 	}
 #endif
 
@@ -613,7 +608,7 @@ txgbevf_dev_start(struct rte_eth_dev *dev)
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
 	uint32_t intr_vector = 0;
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 
 	int err, mask = 0;
 
@@ -628,6 +623,7 @@ txgbevf_dev_start(struct rte_eth_dev *dev)
 		return err;
 	}
 	hw->mac.get_link_status = true;
+	hw->dev_start = true;
 
 	/* negotiate mailbox API version to use with the PF. */
 	txgbevf_negotiate_api(hw);
@@ -651,8 +647,8 @@ txgbevf_dev_start(struct rte_eth_dev *dev)
 	txgbevf_set_vfta_all(dev, 1);
 
 	/* Set HW strip */
-	mask = ETH_VLAN_STRIP_MASK | ETH_VLAN_FILTER_MASK |
-		ETH_VLAN_EXTEND_MASK;
+	mask = RTE_ETH_VLAN_STRIP_MASK | RTE_ETH_VLAN_FILTER_MASK |
+		RTE_ETH_VLAN_EXTEND_MASK;
 	err = txgbevf_vlan_offload_config(dev, mask);
 	if (err) {
 		PMD_INIT_LOG(ERR, "Unable to set VLAN offload (%d)", err);
@@ -673,11 +669,9 @@ txgbevf_dev_start(struct rte_eth_dev *dev)
 			return -1;
 	}
 
-	if (rte_intr_dp_is_en(intr_handle) && !intr_handle->intr_vec) {
-		intr_handle->intr_vec =
-			rte_zmalloc("intr_vec",
-				    dev->data->nb_rx_queues * sizeof(int), 0);
-		if (intr_handle->intr_vec == NULL) {
+	if (rte_intr_dp_is_en(intr_handle)) {
+		if (rte_intr_vec_list_alloc(intr_handle, "intr_vec",
+						   dev->data->nb_rx_queues)) {
 			PMD_INIT_LOG(ERR, "Failed to allocate %d rx_queues"
 				     " intr_vec", dev->data->nb_rx_queues);
 			return -ENOMEM;
@@ -716,7 +710,7 @@ txgbevf_dev_stop(struct rte_eth_dev *dev)
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
 	struct txgbe_adapter *adapter = TXGBE_DEV_ADAPTER(dev);
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 
 	if (hw->adapter_stopped)
 		return 0;
@@ -743,12 +737,10 @@ txgbevf_dev_stop(struct rte_eth_dev *dev)
 
 	/* Clean datapath event and queue/vec mapping */
 	rte_intr_efd_disable(intr_handle);
-	if (intr_handle->intr_vec != NULL) {
-		rte_free(intr_handle->intr_vec);
-		intr_handle->intr_vec = NULL;
-	}
+	rte_intr_vec_list_free(intr_handle);
 
 	adapter->rss_reta_updated = 0;
+	hw->dev_start = false;
 
 	return 0;
 }
@@ -758,7 +750,7 @@ txgbevf_dev_close(struct rte_eth_dev *dev)
 {
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	int ret;
 
 	PMD_INIT_FUNC_TRACE();
@@ -823,7 +815,7 @@ static void txgbevf_set_vfta_all(struct rte_eth_dev *dev, bool on)
 			mask = 1;
 			for (j = 0; j < 32; j++) {
 				if (vfta & mask)
-					txgbe_set_vfta(hw, (i << 5) + j, 0,
+					hw->mac.set_vfta(hw, (i << 5) + j, 0,
 						       on, false);
 				mask <<= 1;
 			}
@@ -894,10 +886,10 @@ txgbevf_vlan_offload_config(struct rte_eth_dev *dev, int mask)
 	int on = 0;
 
 	/* VF function only support hw strip feature, others are not support */
-	if (mask & ETH_VLAN_STRIP_MASK) {
+	if (mask & RTE_ETH_VLAN_STRIP_MASK) {
 		for (i = 0; i < dev->data->nb_rx_queues; i++) {
 			rxq = dev->data->rx_queues[i];
-			on = !!(rxq->offloads &	DEV_RX_OFFLOAD_VLAN_STRIP);
+			on = !!(rxq->offloads &	RTE_ETH_RX_OFFLOAD_VLAN_STRIP);
 			txgbevf_vlan_strip_queue_set(dev, i, on);
 		}
 	}
@@ -919,7 +911,7 @@ static int
 txgbevf_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct txgbe_interrupt *intr = TXGBE_DEV_INTR(dev);
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
 	uint32_t vec = TXGBE_MISC_VEC_ID;
@@ -941,7 +933,7 @@ txgbevf_dev_rx_queue_intr_disable(struct rte_eth_dev *dev, uint16_t queue_id)
 	struct txgbe_interrupt *intr = TXGBE_DEV_INTR(dev);
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	uint32_t vec = TXGBE_MISC_VEC_ID;
 
 	if (rte_intr_allow_others(intr_handle))
@@ -981,7 +973,7 @@ static void
 txgbevf_configure_msix(struct rte_eth_dev *dev)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
 	uint32_t q_idx;
 	uint32_t vector_idx = TXGBE_MISC_VEC_ID;
@@ -1007,8 +999,10 @@ txgbevf_configure_msix(struct rte_eth_dev *dev)
 		 * as TXGBE_VF_MAXMSIVECOTR = 1
 		 */
 		txgbevf_set_ivar_map(hw, 0, q_idx, vector_idx);
-		intr_handle->intr_vec[q_idx] = vector_idx;
-		if (vector_idx < base + intr_handle->nb_efd - 1)
+		rte_intr_vec_list_index_set(intr_handle, q_idx,
+						   vector_idx);
+		if (vector_idx < base + rte_intr_nb_efd_get(intr_handle)
+		    - 1)
 			vector_idx++;
 	}
 
@@ -1039,14 +1033,8 @@ txgbevf_add_mac_addr(struct rte_eth_dev *dev, struct rte_ether_addr *mac_addr,
 	err = txgbevf_set_uc_addr_vf(hw, 2, mac_addr->addr_bytes);
 	if (err != 0)
 		PMD_DRV_LOG(ERR, "Unable to add MAC address "
-			    "%02x:%02x:%02x:%02x:%02x:%02x - err=%d",
-			    mac_addr->addr_bytes[0],
-			    mac_addr->addr_bytes[1],
-			    mac_addr->addr_bytes[2],
-			    mac_addr->addr_bytes[3],
-			    mac_addr->addr_bytes[4],
-			    mac_addr->addr_bytes[5],
-			    err);
+			    RTE_ETHER_ADDR_PRT_FMT " - err=%d",
+			    RTE_ETHER_ADDR_BYTES(mac_addr), err);
 	return err;
 }
 
@@ -1088,15 +1076,9 @@ txgbevf_remove_mac_addr(struct rte_eth_dev *dev, uint32_t index)
 		if (err != 0)
 			PMD_DRV_LOG(ERR,
 				    "Adding again MAC address "
-				    "%02x:%02x:%02x:%02x:%02x:%02x failed "
+				    RTE_ETHER_ADDR_PRT_FMT " failed "
 				    "err=%d",
-				    mac_addr->addr_bytes[0],
-				    mac_addr->addr_bytes[1],
-				    mac_addr->addr_bytes[2],
-				    mac_addr->addr_bytes[3],
-				    mac_addr->addr_bytes[4],
-				    mac_addr->addr_bytes[5],
-				    err);
+				    RTE_ETHER_ADDR_BYTES(mac_addr), err);
 	}
 }
 
@@ -1143,8 +1125,6 @@ txgbevf_dev_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 	if (txgbevf_rlpml_set_vf(hw, max_frame))
 		return -EINVAL;
 
-	/* update max frame size */
-	dev->data->dev_conf.rxmode.max_rx_pkt_len = max_frame;
 	return 0;
 }
 

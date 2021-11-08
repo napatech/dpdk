@@ -212,10 +212,10 @@ test_op_forward_mode(uint8_t session_less)
 
 		if (cap & RTE_EVENT_CRYPTO_ADAPTER_CAP_SESSION_PRIVATE_DATA) {
 			/* Fill in private user data information */
-			rte_memcpy(&m_data.response_info, &response_info,
-				sizeof(response_info));
-			rte_memcpy(&m_data.request_info, &request_info,
-				sizeof(request_info));
+			m_data.request_info.cdev_id = request_info.cdev_id;
+			m_data.request_info.queue_pair_id =
+				request_info.queue_pair_id;
+			m_data.response_info.event = response_info.event;
 			rte_cryptodev_sym_session_set_user_data(sess,
 						&m_data, sizeof(m_data));
 		}
@@ -228,14 +228,12 @@ test_op_forward_mode(uint8_t session_less)
 		op->sess_type = RTE_CRYPTO_OP_SESSIONLESS;
 		first_xform = &cipher_xform;
 		sym_op->xform = first_xform;
-		uint32_t len = IV_OFFSET + MAXIMUM_IV_LENGTH +
-				(sizeof(struct rte_crypto_sym_xform) * 2);
+		uint32_t len = IV_OFFSET + MAXIMUM_IV_LENGTH;
 		op->private_data_offset = len;
 		/* Fill in private data information */
-		rte_memcpy(&m_data.response_info, &response_info,
-			   sizeof(response_info));
-		rte_memcpy(&m_data.request_info, &request_info,
-			   sizeof(request_info));
+		m_data.request_info.cdev_id = request_info.cdev_id;
+		m_data.request_info.queue_pair_id = request_info.queue_pair_id;
+		m_data.response_info.event = response_info.event;
 		rte_memcpy((uint8_t *)op + len, &m_data, sizeof(m_data));
 	}
 
@@ -406,8 +404,7 @@ test_op_new_mode(uint8_t session_less)
 
 		if (cap & RTE_EVENT_CRYPTO_ADAPTER_CAP_SESSION_PRIVATE_DATA) {
 			/* Fill in private user data information */
-			rte_memcpy(&m_data.response_info, &response_info,
-				   sizeof(m_data));
+			m_data.response_info.event = response_info.event;
 			rte_cryptodev_sym_session_set_user_data(sess,
 						&m_data, sizeof(m_data));
 		}
@@ -423,12 +420,10 @@ test_op_new_mode(uint8_t session_less)
 		op->sess_type = RTE_CRYPTO_OP_SESSIONLESS;
 		first_xform = &cipher_xform;
 		sym_op->xform = first_xform;
-		uint32_t len = IV_OFFSET + MAXIMUM_IV_LENGTH +
-				(sizeof(struct rte_crypto_sym_xform) * 2);
+		uint32_t len = IV_OFFSET + MAXIMUM_IV_LENGTH;
 		op->private_data_offset = len;
 		/* Fill in private data information */
-		rte_memcpy(&m_data.response_info, &response_info,
-			   sizeof(m_data));
+		m_data.response_info.event = response_info.event;
 		rte_memcpy((uint8_t *)op + len, &m_data, sizeof(m_data));
 	}
 
@@ -520,7 +515,8 @@ configure_cryptodev(void)
 			NUM_MBUFS, MBUF_CACHE_SIZE,
 			DEFAULT_NUM_XFORMS *
 			sizeof(struct rte_crypto_sym_xform) +
-			MAXIMUM_IV_LENGTH,
+			MAXIMUM_IV_LENGTH +
+			sizeof(union rte_event_crypto_metadata),
 			rte_socket_id());
 	if (params.op_mpool == NULL) {
 		RTE_LOG(ERR, USER1, "Can't create CRYPTO_OP_POOL\n");
@@ -805,6 +801,10 @@ test_crypto_adapter_stop(void)
 		rte_service_runstate_set(evdev_service_id, 0);
 		rte_service_lcore_stop(slcore_id);
 		rte_service_lcore_del(slcore_id);
+		rte_cryptodev_stop(TEST_CDEV_ID);
+		rte_event_dev_stop(evdev);
+	} else {
+		rte_cryptodev_stop(TEST_CDEV_ID);
 		rte_event_dev_stop(evdev);
 	}
 }
@@ -851,6 +851,10 @@ test_crypto_adapter_conf(enum rte_event_crypto_adapter_mode mode)
 	/* start the eventdev */
 	TEST_ASSERT_SUCCESS(rte_event_dev_start(evdev),
 				"Failed to start event device");
+
+	/* start the cryptodev */
+	TEST_ASSERT_SUCCESS(rte_cryptodev_start(TEST_CDEV_ID),
+				"Failed to start crypto device");
 
 	return TEST_SUCCESS;
 }

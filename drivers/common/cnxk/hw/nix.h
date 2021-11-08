@@ -692,9 +692,16 @@
 #define NIX_RX_BAND_PROF_ACTIONRESULT_DROP (0x1ull) /* [CN10K, .) */
 #define NIX_RX_BAND_PROF_ACTIONRESULT_RED  (0x2ull) /* [CN10K, .) */
 
-#define NIX_RX_BAND_PROF_LAYER_LEAF   (0x0ull) /* [CN10K, .) */
-#define NIX_RX_BAND_PROF_LAYER_MIDDLE (0x1ull) /* [CN10K, .) */
-#define NIX_RX_BAND_PROF_LAYER_TOP    (0x2ull) /* [CN10K, .) */
+#define NIX_RX_BAND_PROF_LAYER_LEAF    (0x0ull) /* [CN10K, .) */
+#define NIX_RX_BAND_PROF_LAYER_INVALID (0x1ull) /* [CN10K, .) */
+#define NIX_RX_BAND_PROF_LAYER_MIDDLE  (0x2ull) /* [CN10K, .) */
+#define NIX_RX_BAND_PROF_LAYER_TOP     (0x3ull) /* [CN10K, .) */
+#define NIX_RX_BAND_PROF_LAYER_MAX     (0x4ull) /* [CN10K, .) */
+
+#define NIX_RX_BAND_PROF_PC_MODE_VLAN (0x0ull) /* [CN10K, .) */
+#define NIX_RX_BAND_PROF_PC_MODE_DSCP (0x1ull) /* [CN10K, .) */
+#define NIX_RX_BAND_PROF_PC_MODE_GEN  (0x2ull) /* [CN10K, .) */
+#define NIX_RX_BAND_PROF_PC_MODE_RSVD (0x3ull) /* [CN10K, .) */
 
 #define NIX_RX_COLORRESULT_GREEN  (0x0ull) /* [CN10K, .) */
 #define NIX_RX_COLORRESULT_YELLOW (0x1ull) /* [CN10K, .) */
@@ -2102,8 +2109,58 @@ struct nix_lso_format {
 
 #define NIX_CN9K_MAX_HW_FRS 9212UL
 #define NIX_LBK_MAX_HW_FRS  65535UL
+#define NIX_SDP_MAX_HW_FRS  65535UL
 #define NIX_RPM_MAX_HW_FRS  16380UL
 #define NIX_MIN_HW_FRS	    60UL
+
+/** NIX policer rate limits */
+#define NIX_BPF_MAX_RATE_DIV_EXP  12
+#define NIX_BPF_MAX_RATE_EXPONENT 0xf
+#define NIX_BPF_MAX_RATE_MANTISSA 0xff
+
+#define NIX_BPF_RATE_CONST 2000000ULL
+
+/* NIX rate calculation in Bits/Sec
+ *	PIR_ADD = ((256 + NIX_*_PIR[RATE_MANTISSA])
+ *		<< NIX_*_PIR[RATE_EXPONENT]) / 256
+ *	PIR = (2E6 * PIR_ADD / (1 << NIX_*_PIR[RATE_DIVIDER_EXPONENT]))
+ *
+ *	CIR_ADD = ((256 + NIX_*_CIR[RATE_MANTISSA])
+ *		<< NIX_*_CIR[RATE_EXPONENT]) / 256
+ *	CIR = (2E6 * CIR_ADD / (CCLK_TICKS << NIX_*_CIR[RATE_DIVIDER_EXPONENT]))
+ */
+#define NIX_BPF_RATE(exponent, mantissa, div_exp)                              \
+	((NIX_BPF_RATE_CONST * ((256 + (mantissa)) << (exponent))) /           \
+	 (((1ull << (div_exp)) * 256)))
+
+/* Meter rate limits in Bits/Sec */
+#define NIX_BPF_RATE_MIN NIX_BPF_RATE(0, 0, NIX_BPF_MAX_RATE_DIV_EXP)
+#define NIX_BPF_RATE_MAX                                                       \
+	NIX_BPF_RATE(NIX_BPF_MAX_RATE_EXPONENT, NIX_BPF_MAX_RATE_MANTISSA, 0)
+
+#define NIX_BPF_DEFAULT_ADJUST_MANTISSA 511
+#define NIX_BPF_DEFAULT_ADJUST_EXPONENT 0
+
+/** NIX burst limits */
+#define NIX_BPF_MAX_BURST_EXPONENT 0xf
+#define NIX_BPF_MAX_BURST_MANTISSA 0xff
+
+/* NIX burst calculation
+ *	PIR_BURST = ((256 + NIX_*_PIR[BURST_MANTISSA])
+ *		<< (NIX_*_PIR[BURST_EXPONENT] + 1))
+ *			/ 256
+ *
+ *	CIR_BURST = ((256 + NIX_*_CIR[BURST_MANTISSA])
+ *		<< (NIX_*_CIR[BURST_EXPONENT] + 1))
+ *			/ 256
+ */
+#define NIX_BPF_BURST(exponent, mantissa)                                      \
+	(((256 + (mantissa)) << ((exponent) + 1)) / 256)
+
+/** Meter burst limits */
+#define NIX_BPF_BURST_MIN NIX_BPF_BURST(0, 0)
+#define NIX_BPF_BURST_MAX                                                      \
+	NIX_BPF_BURST(NIX_BPF_MAX_BURST_EXPONENT, NIX_BPF_MAX_BURST_MANTISSA)
 
 /* NIX rate limits */
 #define NIX_TM_MAX_RATE_DIV_EXP	 12
@@ -2132,9 +2189,13 @@ struct nix_lso_format {
 	NIX_TM_SHAPER_RATE(NIX_TM_MAX_RATE_EXPONENT, NIX_TM_MAX_RATE_MANTISSA, \
 			   0)
 
+#define NIX_TM_MIN_SHAPER_PPS_RATE 25
+#define NIX_TM_MAX_SHAPER_PPS_RATE (100ul << 20)
+
 /* NIX burst limits */
-#define NIX_TM_MAX_BURST_EXPONENT 0xf
-#define NIX_TM_MAX_BURST_MANTISSA 0xff
+#define NIX_TM_MAX_BURST_EXPONENT      0xful
+#define NIX_TM_MAX_BURST_MANTISSA      0x7ffful
+#define NIX_CN9K_TM_MAX_BURST_MANTISSA 0xfful
 
 /* NIX burst calculation
  *	PIR_BURST = ((256 + NIX_*_PIR[BURST_MANTISSA])
@@ -2146,7 +2207,7 @@ struct nix_lso_format {
  *			/ 256
  */
 #define NIX_TM_SHAPER_BURST(exponent, mantissa)                                \
-	(((256 + (mantissa)) << ((exponent) + 1)) / 256)
+	(((256ul + (mantissa)) << ((exponent) + 1)) / 256ul)
 
 /* Burst limit in Bytes */
 #define NIX_TM_MIN_SHAPER_BURST NIX_TM_SHAPER_BURST(0, 0)
@@ -2155,13 +2216,17 @@ struct nix_lso_format {
 	NIX_TM_SHAPER_BURST(NIX_TM_MAX_BURST_EXPONENT,                         \
 			    NIX_TM_MAX_BURST_MANTISSA)
 
+#define NIX_CN9K_TM_MAX_SHAPER_BURST                                           \
+	NIX_TM_SHAPER_BURST(NIX_TM_MAX_BURST_EXPONENT,                         \
+			    NIX_CN9K_TM_MAX_BURST_MANTISSA)
+
 /* Min is limited so that NIX_AF_SMQX_CFG[MINLEN]+ADJUST is not -ve */
 #define NIX_TM_LENGTH_ADJUST_MIN ((int)-NIX_MIN_HW_FRS + 1)
 #define NIX_TM_LENGTH_ADJUST_MAX 255
 
 #define NIX_TM_TLX_SP_PRIO_MAX	   10
 #define NIX_CN9K_TM_RR_QUANTUM_MAX (BIT_ULL(24) - 1)
-#define NIX_TM_RR_QUANTUM_MAX	   (BIT_ULL(14) - 1)
+#define NIX_TM_RR_WEIGHT_MAX	   (BIT_ULL(14) - 1)
 
 /* [CN9K, CN10K) */
 #define NIX_CN9K_TXSCH_LVL_SMQ_MAX 512
@@ -2187,5 +2252,11 @@ struct nix_lso_format {
 /* Software defined LSO base format IDX */
 #define NIX_LSO_FORMAT_IDX_TSOV4 0
 #define NIX_LSO_FORMAT_IDX_TSOV6 1
+
+/* [CN10K, .) */
+#define NIX_SENDSTATALG_MASK	  0x7
+#define NIX_SENDSTATALG_SEL_MASK  0x8
+#define NIX_SENDSTAT_IOFFSET_MASK 0xFFF
+#define NIX_SENDSTAT_OOFFSET_MASK 0xFFF
 
 #endif /* __NIX_HW_H__ */

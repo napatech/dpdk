@@ -16,7 +16,9 @@
 #define NIX_SQB_LOWER_THRESH ((uint16_t)70)
 
 /* Apply BP/DROP when CQ is 95% full */
-#define NIX_CQ_THRESH_LEVEL (5 * 256 / 100)
+#define NIX_CQ_THRESH_LEVEL	(5 * 256 / 100)
+#define NIX_CQ_FULL_ERRATA_SKID (1024ull * 256)
+#define NIX_RQ_AURA_THRESH(x)	(((x)*95) / 100)
 
 /* IRQ triggered when NIX_LF_CINTX_CNT[QCOUNT] crosses this value */
 #define CQ_CQE_THRESH_DEFAULT	0x1ULL
@@ -89,6 +91,7 @@ struct nix_tm_shaper_profile {
 	struct nix_tm_tb commit;
 	struct nix_tm_tb peak;
 	int32_t pkt_len_adj;
+	int32_t pkt_mode_adj;
 	bool pkt_mode;
 	uint32_t id;
 	void (*free_fn)(void *profile);
@@ -161,6 +164,21 @@ struct nix {
 	uint16_t tm_link_cfg_lvl;
 	uint16_t contig_rsvd[NIX_TXSCH_LVL_CNT];
 	uint16_t discontig_rsvd[NIX_TXSCH_LVL_CNT];
+
+	/* Ipsec info */
+	uint16_t cpt_msixoff[MAX_RVU_BLKLF_CNT];
+	bool inl_inb_ena;
+	bool inl_outb_ena;
+	void *inb_sa_base;
+	size_t inb_sa_sz;
+	void *outb_sa_base;
+	size_t outb_sa_sz;
+	uint16_t outb_err_sso_pffunc;
+	struct roc_cpt_lf *cpt_lf_base;
+	uint16_t nb_cpt_lf;
+	/* Mode provided by driver */
+	bool inb_inl_dev;
+
 } __plt_cache_aligned;
 
 enum nix_err_status {
@@ -169,6 +187,7 @@ enum nix_err_status {
 	NIX_ERR_INVALID_RANGE,
 	NIX_ERR_INTERNAL,
 	NIX_ERR_OP_NOTSUP,
+	NIX_ERR_HW_NOTSUP,
 	NIX_ERR_QUEUE_INVALID_RANGE,
 	NIX_ERR_AQ_READ_FAILED,
 	NIX_ERR_AQ_WRITE_FAILED,
@@ -255,11 +274,14 @@ struct nix_tm_shaper_data {
 static inline uint64_t
 nix_tm_weight_to_rr_quantum(uint64_t weight)
 {
-	uint64_t max = (roc_model_is_cn9k() ? NIX_CN9K_TM_RR_QUANTUM_MAX :
-						    NIX_TM_RR_QUANTUM_MAX);
+	uint64_t max = NIX_CN9K_TM_RR_QUANTUM_MAX;
 
-	weight &= (uint64_t)ROC_NIX_TM_MAX_SCHED_WT;
-	return (weight * max) / ROC_NIX_TM_MAX_SCHED_WT;
+	/* From CN10K onwards, we only configure RR weight */
+	if (!roc_model_is_cn9k())
+		return weight;
+
+	weight &= (uint64_t)max;
+	return (weight * max) / ROC_NIX_CN9K_TM_RR_WEIGHT_MAX;
 }
 
 static inline bool
@@ -345,7 +367,12 @@ int nix_tm_txsch_reg_config(struct nix *nix, enum roc_nix_tm_tree tree);
 int nix_tm_update_parent_info(struct nix *nix, enum roc_nix_tm_tree tree);
 int nix_tm_sq_sched_conf(struct nix *nix, struct nix_tm_node *node,
 			 bool rr_quantum_only);
-int nix_tm_prepare_rate_limited_tree(struct roc_nix *roc_nix);
+
+int nix_rq_cn9k_cfg(struct dev *dev, struct roc_nix_rq *rq, uint16_t qints,
+		    bool cfg, bool ena);
+int nix_rq_cfg(struct dev *dev, struct roc_nix_rq *rq, uint16_t qints, bool cfg,
+	       bool ena);
+int nix_rq_ena_dis(struct dev *dev, struct roc_nix_rq *rq, bool enable);
 
 /*
  * TM priv utils.
@@ -391,5 +418,24 @@ struct nix_tm_node *nix_tm_node_alloc(void);
 void nix_tm_node_free(struct nix_tm_node *node);
 struct nix_tm_shaper_profile *nix_tm_shaper_profile_alloc(void);
 void nix_tm_shaper_profile_free(struct nix_tm_shaper_profile *profile);
+
+uint64_t nix_get_blkaddr(struct dev *dev);
+void nix_lf_rq_dump(__io struct nix_cn10k_rq_ctx_s *ctx);
+int nix_lf_gen_reg_dump(uintptr_t nix_lf_base, uint64_t *data);
+int nix_lf_stat_reg_dump(uintptr_t nix_lf_base, uint64_t *data,
+			 uint8_t lf_tx_stats, uint8_t lf_rx_stats);
+int nix_lf_int_reg_dump(uintptr_t nix_lf_base, uint64_t *data, uint16_t qints,
+			uint16_t cints);
+int nix_q_ctx_get(struct dev *dev, uint8_t ctype, uint16_t qid,
+		  __io void **ctx_p);
+
+/*
+ * Telemetry
+ */
+int nix_tel_node_add(struct roc_nix *roc_nix);
+void nix_tel_node_del(struct roc_nix *roc_nix);
+int nix_tel_node_add_rq(struct roc_nix_rq *rq);
+int nix_tel_node_add_cq(struct roc_nix_cq *cq);
+int nix_tel_node_add_sq(struct roc_nix_sq *sq);
 
 #endif /* _ROC_NIX_PRIV_H_ */

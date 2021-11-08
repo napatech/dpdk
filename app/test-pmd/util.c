@@ -98,13 +98,19 @@ dump_pkt_burst(uint16_t port_id, uint16_t queue, struct rte_mbuf *pkts[],
 		int ret;
 		struct rte_flow_error error;
 		struct rte_flow_restore_info info = { 0, };
+		struct rte_port *port = &ports[port_id];
 
 		mb = pkts[i];
+		if (rxq_share > 0)
+			MKDUMPSTR(print_buf, buf_size, cur_len, "port %u, ",
+				  mb->port);
 		eth_hdr = rte_pktmbuf_read(mb, 0, sizeof(_eth_hdr), &_eth_hdr);
 		eth_type = RTE_BE_TO_CPU_16(eth_hdr->ether_type);
 		packet_type = mb->packet_type;
 		is_encapsulation = RTE_ETH_IS_TUNNEL_PKT(packet_type);
-		ret = rte_flow_get_restore_info(port_id, mb, &info, &error);
+
+		ret = rte_flow_get_restore_info(port->flow_transfer_proxy,
+						mb, &info, &error);
 		if (!ret) {
 			MKDUMPSTR(print_buf, buf_size, cur_len,
 				  "restore info:");
@@ -142,29 +148,29 @@ dump_pkt_burst(uint16_t port_id, uint16_t queue, struct rte_mbuf *pkts[],
 					  " - no miss group");
 			MKDUMPSTR(print_buf, buf_size, cur_len, "\n");
 		}
-		print_ether_addr("  src=", &eth_hdr->s_addr,
+		print_ether_addr("  src=", &eth_hdr->src_addr,
 				 print_buf, buf_size, &cur_len);
-		print_ether_addr(" - dst=", &eth_hdr->d_addr,
+		print_ether_addr(" - dst=", &eth_hdr->dst_addr,
 				 print_buf, buf_size, &cur_len);
 		MKDUMPSTR(print_buf, buf_size, cur_len,
 			  " - type=0x%04x - length=%u - nb_segs=%d",
 			  eth_type, (unsigned int) mb->pkt_len,
 			  (int)mb->nb_segs);
 		ol_flags = mb->ol_flags;
-		if (ol_flags & PKT_RX_RSS_HASH) {
+		if (ol_flags & RTE_MBUF_F_RX_RSS_HASH) {
 			MKDUMPSTR(print_buf, buf_size, cur_len,
 				  " - RSS hash=0x%x",
 				  (unsigned int) mb->hash.rss);
 			MKDUMPSTR(print_buf, buf_size, cur_len,
 				  " - RSS queue=0x%x", (unsigned int) queue);
 		}
-		if (ol_flags & PKT_RX_FDIR) {
+		if (ol_flags & RTE_MBUF_F_RX_FDIR) {
 			MKDUMPSTR(print_buf, buf_size, cur_len,
 				  " - FDIR matched ");
-			if (ol_flags & PKT_RX_FDIR_ID)
+			if (ol_flags & RTE_MBUF_F_RX_FDIR_ID)
 				MKDUMPSTR(print_buf, buf_size, cur_len,
 					  "ID=0x%x", mb->hash.fdir.hi);
-			else if (ol_flags & PKT_RX_FDIR_FLX)
+			else if (ol_flags & RTE_MBUF_F_RX_FDIR_FLX)
 				MKDUMPSTR(print_buf, buf_size, cur_len,
 					  "flex bytes=0x%08x %08x",
 					  mb->hash.fdir.hi, mb->hash.fdir.lo);
@@ -176,18 +182,18 @@ dump_pkt_burst(uint16_t port_id, uint16_t queue, struct rte_mbuf *pkts[],
 		if (is_timestamp_enabled(mb))
 			MKDUMPSTR(print_buf, buf_size, cur_len,
 				  " - timestamp %"PRIu64" ", get_timestamp(mb));
-		if (ol_flags & PKT_RX_QINQ)
+		if (ol_flags & RTE_MBUF_F_RX_QINQ)
 			MKDUMPSTR(print_buf, buf_size, cur_len,
 				  " - QinQ VLAN tci=0x%x, VLAN tci outer=0x%x",
 				  mb->vlan_tci, mb->vlan_tci_outer);
-		else if (ol_flags & PKT_RX_VLAN)
+		else if (ol_flags & RTE_MBUF_F_RX_VLAN)
 			MKDUMPSTR(print_buf, buf_size, cur_len,
 				  " - VLAN tci=0x%x", mb->vlan_tci);
-		if (!is_rx && (ol_flags & PKT_TX_DYNF_METADATA))
+		if (!is_rx && (ol_flags & RTE_MBUF_DYNFLAG_TX_METADATA))
 			MKDUMPSTR(print_buf, buf_size, cur_len,
 				  " - Tx metadata: 0x%x",
 				  *RTE_FLOW_DYNF_METADATA(mb));
-		if (is_rx && (ol_flags & PKT_RX_DYNF_METADATA))
+		if (is_rx && (ol_flags & RTE_MBUF_DYNFLAG_RX_METADATA))
 			MKDUMPSTR(print_buf, buf_size, cur_len,
 				  " - Rx metadata: 0x%x",
 				  *RTE_FLOW_DYNF_METADATA(mb));
@@ -266,15 +272,20 @@ dump_pkt_burst(uint16_t port_id, uint16_t queue, struct rte_mbuf *pkts[],
 				vx_vni = rte_be_to_cpu_32(vxlan_hdr->vx_vni);
 				MKDUMPSTR(print_buf, buf_size, cur_len,
 					  " - VXLAN packet: packet type =%d, "
-					  "Destination UDP port =%d, VNI = %d",
-					  packet_type, udp_port, vx_vni >> 8);
+					  "Destination UDP port =%d, VNI = %d, "
+					  "last_rsvd = %d", packet_type,
+					  udp_port, vx_vni >> 8, vx_vni & 0xff);
 			}
 		}
 		MKDUMPSTR(print_buf, buf_size, cur_len,
 			  " - %s queue=0x%x", is_rx ? "Receive" : "Send",
 			  (unsigned int) queue);
 		MKDUMPSTR(print_buf, buf_size, cur_len, "\n");
-		rte_get_rx_ol_flag_list(mb->ol_flags, buf, sizeof(buf));
+		if (is_rx)
+			rte_get_rx_ol_flag_list(mb->ol_flags, buf, sizeof(buf));
+		else
+			rte_get_tx_ol_flag_list(mb->ol_flags, buf, sizeof(buf));
+
 		MKDUMPSTR(print_buf, buf_size, cur_len,
 			  "  ol_flags: %s\n", buf);
 		if (rte_mbuf_check(mb, 1, &reason) < 0)
@@ -320,7 +331,7 @@ tx_pkt_set_md(uint16_t port_id, __rte_unused uint16_t queue,
 		for (i = 0; i < nb_pkts; i++) {
 			*RTE_FLOW_DYNF_METADATA(pkts[i]) =
 						ports[port_id].tx_metadata;
-			pkts[i]->ol_flags |= PKT_TX_DYNF_METADATA;
+			pkts[i]->ol_flags |= RTE_MBUF_DYNFLAG_TX_METADATA;
 		}
 	return nb_pkts;
 }
@@ -432,8 +443,23 @@ eth_dev_info_get_print_err(uint16_t port_id,
 
 	ret = rte_eth_dev_info_get(port_id, dev_info);
 	if (ret != 0)
-		printf("Error during getting device (port %u) info: %s\n",
-				port_id, strerror(-ret));
+		fprintf(stderr,
+			"Error during getting device (port %u) info: %s\n",
+			port_id, strerror(-ret));
+
+	return ret;
+}
+
+int
+eth_dev_conf_get_print_err(uint16_t port_id, struct rte_eth_conf *dev_conf)
+{
+	int ret;
+
+	ret = rte_eth_dev_conf_get(port_id, dev_conf);
+	if (ret != 0)
+		fprintf(stderr,
+			"Error during getting device configuration (port %u): %s\n",
+			port_id, strerror(-ret));
 
 	return ret;
 }
@@ -449,7 +475,8 @@ eth_set_promisc_mode(uint16_t port, int enable)
 		ret = rte_eth_promiscuous_disable(port);
 
 	if (ret != 0)
-		printf("Error during %s promiscuous mode for port %u: %s\n",
+		fprintf(stderr,
+			"Error during %s promiscuous mode for port %u: %s\n",
 			enable ? "enabling" : "disabling",
 			port, rte_strerror(-ret));
 }
@@ -465,7 +492,8 @@ eth_set_allmulticast_mode(uint16_t port, int enable)
 		ret = rte_eth_allmulticast_disable(port);
 
 	if (ret != 0)
-		printf("Error during %s all-multicast mode for port %u: %s\n",
+		fprintf(stderr,
+			"Error during %s all-multicast mode for port %u: %s\n",
 			enable ? "enabling" : "disabling",
 			port, rte_strerror(-ret));
 }
@@ -477,7 +505,8 @@ eth_link_get_nowait_print_err(uint16_t port_id, struct rte_eth_link *link)
 
 	ret = rte_eth_link_get_nowait(port_id, link);
 	if (ret < 0)
-		printf("Device (port %u) link get (without wait) failed: %s\n",
+		fprintf(stderr,
+			"Device (port %u) link get (without wait) failed: %s\n",
 			port_id, rte_strerror(-ret));
 
 	return ret;
@@ -490,8 +519,9 @@ eth_macaddr_get_print_err(uint16_t port_id, struct rte_ether_addr *mac_addr)
 
 	ret = rte_eth_macaddr_get(port_id, mac_addr);
 	if (ret != 0)
-		printf("Error getting device (port %u) mac address: %s\n",
-				port_id, rte_strerror(-ret));
+		fprintf(stderr,
+			"Error getting device (port %u) mac address: %s\n",
+			port_id, rte_strerror(-ret));
 
 	return ret;
 }

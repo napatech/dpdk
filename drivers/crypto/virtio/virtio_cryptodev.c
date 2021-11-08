@@ -9,7 +9,7 @@
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
 #include <rte_cryptodev.h>
-#include <rte_cryptodev_pmd.h>
+#include <cryptodev_pmd.h>
 #include <rte_eal.h>
 
 #include "virtio_cryptodev.h"
@@ -753,6 +753,8 @@ crypto_virtio_create(const char *name, struct rte_pci_device *pci_dev,
 	if (virtio_crypto_init_device(cryptodev,
 			VIRTIO_CRYPTO_PMD_GUEST_FEATURES) < 0)
 		return -1;
+
+	rte_cryptodev_pmd_probing_finish(cryptodev);
 
 	return 0;
 }

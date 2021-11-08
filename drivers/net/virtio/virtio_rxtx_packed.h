@@ -166,7 +166,7 @@ virtio_vec_rx_offload(struct rte_mbuf *m, struct virtio_net_hdr *hdr)
 		return 0;
 
 	/* GSO not support in vec path, skip check */
-	m->ol_flags |= PKT_RX_IP_CKSUM_UNKNOWN;
+	m->ol_flags |= RTE_MBUF_F_RX_IP_CKSUM_UNKNOWN;
 
 	ptype = rte_net_get_ptype(m, &hdr_lens, RTE_PTYPE_ALL_MASK);
 	m->packet_type = ptype;
@@ -178,7 +178,7 @@ virtio_vec_rx_offload(struct rte_mbuf *m, struct virtio_net_hdr *hdr)
 	if (hdr->flags & VIRTIO_NET_HDR_F_NEEDS_CSUM) {
 		hdrlen = hdr_lens.l2_len + hdr_lens.l3_len + hdr_lens.l4_len;
 		if (hdr->csum_start <= hdrlen && l4_supported) {
-			m->ol_flags |= PKT_RX_L4_CKSUM_NONE;
+			m->ol_flags |= RTE_MBUF_F_RX_L4_CKSUM_NONE;
 		} else {
 			/* Unknown proto or tunnel, do sw cksum. We can assume
 			 * the cksum field is in the first segment since the
@@ -200,7 +200,7 @@ virtio_vec_rx_offload(struct rte_mbuf *m, struct virtio_net_hdr *hdr)
 					off) = csum;
 		}
 	} else if (hdr->flags & VIRTIO_NET_HDR_F_DATA_VALID && l4_supported) {
-		m->ol_flags |= PKT_RX_L4_CKSUM_GOOD;
+		m->ol_flags |= RTE_MBUF_F_RX_L4_CKSUM_GOOD;
 	}
 
 	return 0;
@@ -288,7 +288,7 @@ virtio_recv_refill_packed_vec(struct virtnet_rx *rxvq,
 			dxp = &vq->vq_descx[idx + i];
 			dxp->cookie = (void *)cookie[total_num + i];
 
-			addr = cookie[total_num + i]->buf_iova +
+			addr = VIRTIO_MBUF_ADDR(cookie[total_num + i], vq) +
 				RTE_PKTMBUF_HEADROOM - hw->vtnet_hdr_size;
 			start_dp[idx + i].addr = addr;
 			start_dp[idx + i].len = cookie[total_num + i]->buf_len

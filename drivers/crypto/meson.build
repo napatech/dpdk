@@ -6,15 +6,15 @@ if is_windows
 endif
 
 drivers = [
-        'aesni_gcm',
-        'aesni_mb',
         'armv8',
         'bcmfs',
         'caam_jr',
         'ccp',
+        'cnxk',
         'dpaa_sec',
         'dpaa2_sec',
-        'kasumi',
+        'ipsec_mb',
+        'mlx5',
         'mvsam',
         'nitrox',
         'null',
@@ -22,9 +22,7 @@ drivers = [
         'octeontx2',
         'openssl',
         'scheduler',
-        'snow3g',
         'virtio',
-        'zuc',
 ]
 
 std_deps = ['cryptodev'] # cryptodev pulls in all other needed deps

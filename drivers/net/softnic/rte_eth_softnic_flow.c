@@ -1448,13 +1448,6 @@ flow_rule_action_get(struct pmd_internals *softnic,
 					action,
 					"COUNT: Null configuration");
 
-			if (conf->shared)
-				return rte_flow_error_set(error,
-					ENOTSUP,
-					RTE_FLOW_ERROR_TYPE_ACTION_CONF,
-					conf,
-					"COUNT: Shared counters not supported");
-
 			if (n_count)
 				return rte_flow_error_set(error,
 					ENOTSUP,
@@ -2207,7 +2200,8 @@ pmd_flow_flush(struct rte_eth_dev *dev,
 			void *temp;
 			int status;
 
-			TAILQ_FOREACH_SAFE(flow, &table->flows, node, temp) {
+			RTE_TAILQ_FOREACH_SAFE(flow, &table->flows, node,
+				temp) {
 				/* Rule delete. */
 				status = softnic_pipeline_table_rule_delete
 						(softnic,

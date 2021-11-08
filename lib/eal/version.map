@@ -1,4 +1,4 @@
-DPDK_21 {
+DPDK_22 {
 	global:
 
 	__rte_panic;
@@ -70,6 +70,36 @@ DPDK_21 {
 	rte_epoll_ctl;
 	rte_epoll_wait;
 	rte_exit;
+	rte_extmem_attach;
+	rte_extmem_detach;
+	rte_extmem_register;
+	rte_extmem_unregister;
+	rte_fbarray_attach;
+	rte_fbarray_destroy;
+	rte_fbarray_detach;
+	rte_fbarray_dump_metadata;
+	rte_fbarray_find_biggest_free;
+	rte_fbarray_find_biggest_used;
+	rte_fbarray_find_contig_free;
+	rte_fbarray_find_contig_used;
+	rte_fbarray_find_idx;
+	rte_fbarray_find_next_free;
+	rte_fbarray_find_next_n_free;
+	rte_fbarray_find_next_n_used;
+	rte_fbarray_find_next_used;
+	rte_fbarray_find_prev_free;
+	rte_fbarray_find_prev_n_free;
+	rte_fbarray_find_prev_n_used;
+	rte_fbarray_find_prev_used;
+	rte_fbarray_find_rev_biggest_free;
+	rte_fbarray_find_rev_biggest_used;
+	rte_fbarray_find_rev_contig_free;
+	rte_fbarray_find_rev_contig_used;
+	rte_fbarray_get;
+	rte_fbarray_init;
+	rte_fbarray_is_used;
+	rte_fbarray_set_free;
+	rte_fbarray_set_used;
 	rte_free;
 	rte_get_hpet_cycles; # WINDOWS_NO_EXPORT
 	rte_get_hpet_hz; # WINDOWS_NO_EXPORT
@@ -79,18 +109,10 @@ DPDK_21 {
 	rte_hexdump;
 	rte_hypervisor_get;
 	rte_hypervisor_get_name; # WINDOWS_NO_EXPORT
-	rte_intr_allow_others;
 	rte_intr_callback_register;
 	rte_intr_callback_unregister;
-	rte_intr_cap_multiple;
 	rte_intr_disable;
-	rte_intr_dp_is_en;
-	rte_intr_efd_disable;
-	rte_intr_efd_enable;
 	rte_intr_enable;
-	rte_intr_free_epoll_fd;
-	rte_intr_rx_ctl;
-	rte_intr_tls_epfd;
 	rte_keepalive_create; # WINDOWS_NO_EXPORT
 	rte_keepalive_dispatch_pings; # WINDOWS_NO_EXPORT
 	rte_keepalive_mark_alive; # WINDOWS_NO_EXPORT
@@ -110,17 +132,28 @@ DPDK_21 {
 	rte_log_get_level;
 	rte_log_get_stream;
 	rte_log_register;
+	rte_log_register_type_and_pick_level;
 	rte_log_set_global_level;
 	rte_log_set_level;
 	rte_log_set_level_pattern;
 	rte_log_set_level_regexp;
 	rte_malloc;
+	rte_malloc_dump_heaps;
 	rte_malloc_dump_stats;
 	rte_malloc_get_socket_stats;
+	rte_malloc_heap_create;
+	rte_malloc_heap_destroy;
+	rte_malloc_heap_get_socket;
+	rte_malloc_heap_memory_add;
+	rte_malloc_heap_memory_attach;
+	rte_malloc_heap_memory_detach;
+	rte_malloc_heap_memory_remove;
+	rte_malloc_heap_socket_is_external;
 	rte_malloc_set_limit;
 	rte_malloc_socket;
 	rte_malloc_validate;
 	rte_malloc_virt2iova;
+	rte_mcfg_get_single_file_segments;
 	rte_mcfg_mem_read_lock;
 	rte_mcfg_mem_read_unlock;
 	rte_mcfg_mem_write_lock;
@@ -133,12 +166,34 @@ DPDK_21 {
 	rte_mcfg_tailq_read_unlock;
 	rte_mcfg_tailq_write_lock;
 	rte_mcfg_tailq_write_unlock;
+	rte_mcfg_timer_lock;
+	rte_mcfg_timer_unlock;
+	rte_mem_alloc_validator_register;
+	rte_mem_alloc_validator_unregister;
+	rte_mem_check_dma_mask;
+	rte_mem_check_dma_mask_thread_unsafe;
+	rte_mem_event_callback_register;
+	rte_mem_event_callback_unregister;
+	rte_mem_iova2virt;
 	rte_mem_lock_page;
+	rte_mem_set_dma_mask;
 	rte_mem_virt2iova;
+	rte_mem_virt2memseg;
+	rte_mem_virt2memseg_list;
 	rte_mem_virt2phy;
 	rte_memdump;
 	rte_memory_get_nchannel;
 	rte_memory_get_nrank;
+	rte_memseg_contig_walk;
+	rte_memseg_contig_walk_thread_unsafe;
+	rte_memseg_get_fd;
+	rte_memseg_get_fd_offset;
+	rte_memseg_get_fd_offset_thread_unsafe;
+	rte_memseg_get_fd_thread_unsafe;
+	rte_memseg_list_walk;
+	rte_memseg_list_walk_thread_unsafe;
+	rte_memseg_walk;
+	rte_memseg_walk_thread_unsafe;
 	rte_memzone_dump;
 	rte_memzone_free;
 	rte_memzone_lookup;
@@ -146,9 +201,17 @@ DPDK_21 {
 	rte_memzone_reserve_aligned;
 	rte_memzone_reserve_bounded;
 	rte_memzone_walk;
+	rte_mp_action_register;
+	rte_mp_action_unregister;
+	rte_mp_reply;
+	rte_mp_request_async;
+	rte_mp_request_sync;
+	rte_mp_sendmsg;
 	rte_openlog_stream;
 	rte_rand;
+	rte_rand_max;
 	rte_realloc;
+	rte_realloc_socket;
 	rte_reciprocal_value;
 	rte_reciprocal_value_u64;
 	rte_rtm_supported;
@@ -186,7 +249,7 @@ DPDK_21 {
 	rte_socket_count;
 	rte_socket_id;
 	rte_socket_id_by_idx;
-	rte_srand; # WINDOWS_NO_EXPORT
+	rte_srand;
 	rte_strerror;
 	rte_strscpy;
 	rte_strsplit;
@@ -194,11 +257,11 @@ DPDK_21 {
 	rte_thread_get_affinity;
 	rte_thread_set_affinity;
 	rte_thread_setname;
-	rte_uuid_compare; # WINDOWS_NO_EXPORT
-	rte_uuid_is_null; # WINDOWS_NO_EXPORT
-	rte_uuid_parse; # WINDOWS_NO_EXPORT
-	rte_uuid_unparse; # WINDOWS_NO_EXPORT
-	rte_version; # WINDOWS_NO_EXPORT
+	rte_uuid_compare;
+	rte_uuid_is_null;
+	rte_uuid_parse;
+	rte_uuid_unparse;
+	rte_version;
 	rte_vfio_clear_group; # WINDOWS_NO_EXPORT
 	rte_vfio_container_create; # WINDOWS_NO_EXPORT
 	rte_vfio_container_destroy; # WINDOWS_NO_EXPORT
@@ -224,48 +287,11 @@ DPDK_21 {
 EXPERIMENTAL {
 	global:
 
-	# added in 18.02
-	rte_mp_action_register;
-	rte_mp_action_unregister;
-	rte_mp_reply;
-	rte_mp_sendmsg;
-
 	# added in 18.05
 	rte_dev_event_callback_register;
 	rte_dev_event_callback_unregister;
-	rte_dev_event_monitor_start; # WINDOWS_NO_EXPORT
-	rte_dev_event_monitor_stop; # WINDOWS_NO_EXPORT
-	rte_fbarray_attach;
-	rte_fbarray_destroy;
-	rte_fbarray_detach;
-	rte_fbarray_dump_metadata;
-	rte_fbarray_find_contig_free;
-	rte_fbarray_find_contig_used;
-	rte_fbarray_find_idx;
-	rte_fbarray_find_next_free;
-	rte_fbarray_find_next_n_free;
-	rte_fbarray_find_next_n_used;
-	rte_fbarray_find_next_used;
-	rte_fbarray_get;
-	rte_fbarray_init;
-	rte_fbarray_is_used;
-	rte_fbarray_set_free;
-	rte_fbarray_set_used;
-	rte_log_register_type_and_pick_level;
-	rte_malloc_dump_heaps;
-	rte_mem_alloc_validator_register;
-	rte_mem_alloc_validator_unregister;
-	rte_mem_check_dma_mask;
-	rte_mem_event_callback_register;
-	rte_mem_event_callback_unregister;
-	rte_mem_iova2virt;
-	rte_mem_virt2memseg;
-	rte_mem_virt2memseg_list;
-	rte_memseg_contig_walk;
-	rte_memseg_list_walk;
-	rte_memseg_walk;
-	rte_mp_request_async;
-	rte_mp_request_sync;
+	rte_dev_event_monitor_start;
+	rte_dev_event_monitor_stop;
 
 	# added in 18.08
 	rte_class_find;
@@ -274,62 +300,22 @@ EXPERIMENTAL {
 	rte_class_unregister;
 	rte_dev_iterator_init;
 	rte_dev_iterator_next;
-	rte_fbarray_find_prev_free;
-	rte_fbarray_find_prev_n_free;
-	rte_fbarray_find_prev_n_used;
-	rte_fbarray_find_prev_used;
-	rte_fbarray_find_rev_contig_free;
-	rte_fbarray_find_rev_contig_used;
-	rte_memseg_contig_walk_thread_unsafe;
-	rte_memseg_list_walk_thread_unsafe;
-	rte_memseg_walk_thread_unsafe;
 
 	# added in 18.11
 	rte_delay_us_sleep;
 	rte_dev_event_callback_process;
-	rte_dev_hotplug_handle_disable; # WINDOWS_NO_EXPORT
-	rte_dev_hotplug_handle_enable; # WINDOWS_NO_EXPORT
-	rte_malloc_heap_create;
-	rte_malloc_heap_destroy;
-	rte_malloc_heap_get_socket;
-	rte_malloc_heap_memory_add;
-	rte_malloc_heap_memory_attach;
-	rte_malloc_heap_memory_detach;
-	rte_malloc_heap_memory_remove;
-	rte_malloc_heap_socket_is_external;
-	rte_mem_check_dma_mask_thread_unsafe;
-	rte_mem_set_dma_mask;
-	rte_memseg_get_fd;
-	rte_memseg_get_fd_offset;
-	rte_memseg_get_fd_offset_thread_unsafe;
-	rte_memseg_get_fd_thread_unsafe;
-
-	# added in 19.02
-	rte_extmem_attach;
-	rte_extmem_detach;
-	rte_extmem_register;
-	rte_extmem_unregister;
+	rte_dev_hotplug_handle_disable;
+	rte_dev_hotplug_handle_enable;
 
 	# added in 19.05
 	rte_dev_dma_map;
 	rte_dev_dma_unmap;
-	rte_fbarray_find_biggest_free;
-	rte_fbarray_find_biggest_used;
-	rte_fbarray_find_rev_biggest_free;
-	rte_fbarray_find_rev_biggest_used;
 	rte_intr_callback_unregister_pending;
-	rte_realloc_socket;
 
 	# added in 19.08
 	rte_intr_ack;
 	rte_lcore_cpuset;
 	rte_lcore_to_cpu_id;
-	rte_mcfg_timer_lock;
-	rte_mcfg_timer_unlock;
-	rte_rand_max; # WINDOWS_NO_EXPORT
-
-	# added in 19.11
-	rte_mcfg_get_single_file_segments;
 
 	# added in 20.02
 	rte_thread_is_intr;
@@ -417,17 +403,58 @@ EXPERIMENTAL {
 	rte_thread_key_delete;
 	rte_thread_value_get;
 	rte_thread_value_set;
-	rte_version_minor; # WINDOWS_NO_EXPORT
-	rte_version_month; # WINDOWS_NO_EXPORT
-	rte_version_prefix; # WINDOWS_NO_EXPORT
-	rte_version_release; # WINDOWS_NO_EXPORT
-	rte_version_suffix; # WINDOWS_NO_EXPORT
-	rte_version_year; # WINDOWS_NO_EXPORT
+	rte_version_minor;
+	rte_version_month;
+	rte_version_prefix;
+	rte_version_release;
+	rte_version_suffix;
+	rte_version_year;
+
+	# added in 21.08
+	rte_power_monitor_multi; # WINDOWS_NO_EXPORT
+
+	# added in 21.11
+	rte_intr_fd_get;
+	rte_intr_fd_set;
+	rte_intr_instance_alloc;
+	rte_intr_instance_free;
+	rte_intr_type_get;
+	rte_intr_type_set;
 };
 
 INTERNAL {
 	global:
 
+	rte_firmware_read;
+	rte_intr_allow_others;
+	rte_intr_cap_multiple;
+	rte_intr_dev_fd_get;
+	rte_intr_dev_fd_set;
+	rte_intr_dp_is_en;
+	rte_intr_efd_counter_size_set;
+	rte_intr_efd_counter_size_get;
+	rte_intr_efd_disable;
+	rte_intr_efd_enable;
+	rte_intr_efds_index_get;
+	rte_intr_efds_index_set;
+	rte_intr_elist_index_get;
+	rte_intr_elist_index_set;
+	rte_intr_event_list_update;
+	rte_intr_free_epoll_fd;
+	rte_intr_instance_dup;
+	rte_intr_instance_windows_handle_get;
+	rte_intr_instance_windows_handle_set;
+	rte_intr_max_intr_get;
+	rte_intr_max_intr_set;
+	rte_intr_nb_efd_get;
+	rte_intr_nb_efd_set;
+	rte_intr_nb_intr_get;
+	rte_intr_rx_ctl;
+	rte_intr_tls_epfd;
+	rte_intr_vec_list_alloc;
+	rte_intr_vec_list_free;
+	rte_intr_vec_list_index_get;
+	rte_intr_vec_list_index_set;
 	rte_mem_lock;
 	rte_mem_map;
 	rte_mem_page_size;

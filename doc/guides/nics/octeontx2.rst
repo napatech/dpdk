@@ -153,7 +153,7 @@ Runtime Config Options
 
       -a 0002:02:00.0,max_sqb_count=64
 
-   With the above configuration, each send queue's decscriptor buffer count is
+   With the above configuration, each send queue's descriptor buffer count is
    limited to a maximum of 64 buffers.
 
 - ``Switch header enable`` (default ``none``)
@@ -242,7 +242,7 @@ configure the following features:
 #. Hierarchical scheduling
 #. Single rate - Two color, Two rate - Three color shaping
 
-Both DWRR and Static Priority(SP) hierarchial scheduling is supported.
+Both DWRR and Static Priority(SP) hierarchical scheduling is supported.
 
 Every parent can have atmost 10 SP Children and unlimited DWRR children.
 
@@ -403,10 +403,13 @@ Actions:
    +----+-----------------------------------------+
    | 12 | RTE_FLOW_ACTION_TYPE_PORT_ID            |
    +----+-----------------------------------------+
+   | 13 | RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR   |
+   +----+-----------------------------------------+
 
 .. note::
 
-   ``RTE_FLOW_ACTION_TYPE_PORT_ID`` is only supported between PF and its VFs.
+   ``RTE_FLOW_ACTION_TYPE_PORT_ID``, ``RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR``
+   are only supported between PF and its VFs.
 
 .. _table_octeontx2_supported_egress_action_types:
 

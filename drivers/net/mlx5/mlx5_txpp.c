@@ -49,7 +49,7 @@ static int
 mlx5_txpp_create_event_channel(struct mlx5_dev_ctx_shared *sh)
 {
 	MLX5_ASSERT(!sh->txpp.echan);
-	sh->txpp.echan = mlx5_os_devx_create_event_channel(sh->ctx,
+	sh->txpp.echan = mlx5_os_devx_create_event_channel(sh->cdev->ctx,
 			MLX5DV_DEVX_CREATE_EVENT_CHANNEL_FLAGS_OMIT_EV_DATA);
 	if (!sh->txpp.echan) {
 		rte_errno = errno;
@@ -104,7 +104,7 @@ mlx5_txpp_alloc_pp_index(struct mlx5_dev_ctx_shared *sh)
 	MLX5_SET(set_pp_rate_limit_context, &pp, rate_mode,
 		 sh->txpp.test ? MLX5_DATA_RATE : MLX5_WQE_RATE);
 	sh->txpp.pp = mlx5_glue->dv_alloc_pp
-				(sh->ctx, sizeof(pp), &pp,
+				(sh->cdev->ctx, sizeof(pp), &pp,
 				 MLX5DV_PP_ALLOC_FLAGS_DEDICATED_INDEX);
 	if (sh->txpp.pp == NULL) {
 		DRV_LOG(ERR, "Failed to allocate packet pacing index.");
@@ -230,12 +230,13 @@ mlx5_txpp_create_rearm_queue(struct mlx5_dev_ctx_shared *sh)
 		.cd_master = 1,
 		.state = MLX5_SQC_STATE_RST,
 		.tis_lst_sz = 1,
-		.tis_num = sh->tis->id,
+		.tis_num = sh->tis[0]->id,
 		.wq_attr = (struct mlx5_devx_wq_attr){
-			.pd = sh->pdn,
+			.pd = sh->cdev->pdn,
 			.uar_page = mlx5_os_get_devx_uar_page_id(sh->tx_uar),
 		},
-		.ts_format = mlx5_ts_format_conv(sh->sq_ts_format),
+		.ts_format = mlx5_ts_format_conv
+				       (sh->cdev->config.hca_attr.sq_ts_format),
 	};
 	struct mlx5_devx_modify_sq_attr msq_attr = { 0 };
 	struct mlx5_devx_cq_attr cq_attr = {
@@ -245,7 +246,7 @@ mlx5_txpp_create_rearm_queue(struct mlx5_dev_ctx_shared *sh)
 	int ret;
 
 	/* Create completion queue object for Rearm Queue. */
-	ret = mlx5_devx_cq_create(sh->ctx, &wq->cq_obj,
+	ret = mlx5_devx_cq_create(sh->cdev->ctx, &wq->cq_obj,
 				  log2above(MLX5_TXPP_REARM_CQ_SIZE), &cq_attr,
 				  sh->numa_node);
 	if (ret) {
@@ -259,7 +260,7 @@ mlx5_txpp_create_rearm_queue(struct mlx5_dev_ctx_shared *sh)
 	/* Create send queue object for Rearm Queue. */
 	sq_attr.cqn = wq->cq_obj.cq->id;
 	/* There should be no WQE leftovers in the cyclic queue. */
-	ret = mlx5_devx_sq_create(sh->ctx, &wq->sq_obj,
+	ret = mlx5_devx_sq_create(sh->cdev->ctx, &wq->sq_obj,
 				  log2above(MLX5_TXPP_REARM_SQ_SIZE), &sq_attr,
 				  sh->numa_node);
 	if (ret) {
@@ -333,8 +334,8 @@ mlx5_txpp_fill_wqe_clock_queue(struct mlx5_dev_ctx_shared *sh)
 		/* Build test packet L2 header (Ethernet). */
 		dst = (uint8_t *)&es->inline_data;
 		eth_hdr = (struct rte_ether_hdr *)dst;
-		rte_eth_random_addr(&eth_hdr->d_addr.addr_bytes[0]);
-		rte_eth_random_addr(&eth_hdr->s_addr.addr_bytes[0]);
+		rte_eth_random_addr(&eth_hdr->dst_addr.addr_bytes[0]);
+		rte_eth_random_addr(&eth_hdr->src_addr.addr_bytes[0]);
 		eth_hdr->ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
 		/* Build test packet L3 header (IP v4). */
 		dst += sizeof(struct rte_ether_hdr);
@@ -409,7 +410,7 @@ mlx5_txpp_create_clock_queue(struct mlx5_dev_ctx_shared *sh)
 	sh->txpp.ts_p = 0;
 	sh->txpp.ts_n = 0;
 	/* Create completion queue object for Clock Queue. */
-	ret = mlx5_devx_cq_create(sh->ctx, &wq->cq_obj,
+	ret = mlx5_devx_cq_create(sh->cdev->ctx, &wq->cq_obj,
 				  log2above(MLX5_TXPP_CLKQ_SIZE), &cq_attr,
 				  sh->numa_node);
 	if (ret) {
@@ -433,7 +434,7 @@ mlx5_txpp_create_clock_queue(struct mlx5_dev_ctx_shared *sh)
 	/* Create send queue object for Clock Queue. */
 	if (sh->txpp.test) {
 		sq_attr.tis_lst_sz = 1;
-		sq_attr.tis_num = sh->tis->id;
+		sq_attr.tis_num = sh->tis[0]->id;
 		sq_attr.non_wire = 0;
 		sq_attr.static_sq_wq = 1;
 	} else {
@@ -444,9 +445,11 @@ mlx5_txpp_create_clock_queue(struct mlx5_dev_ctx_shared *sh)
 	sq_attr.packet_pacing_rate_limit_index = sh->txpp.pp_id;
 	sq_attr.wq_attr.cd_slave = 1;
 	sq_attr.wq_attr.uar_page = mlx5_os_get_devx_uar_page_id(sh->tx_uar);
-	sq_attr.wq_attr.pd = sh->pdn;
-	sq_attr.ts_format = mlx5_ts_format_conv(sh->sq_ts_format);
-	ret = mlx5_devx_sq_create(sh->ctx, &wq->sq_obj, log2above(wq->sq_size),
+	sq_attr.wq_attr.pd = sh->cdev->pdn;
+	sq_attr.ts_format =
+		mlx5_ts_format_conv(sh->cdev->config.hca_attr.sq_ts_format);
+	ret = mlx5_devx_sq_create(sh->cdev->ctx, &wq->sq_obj,
+				  log2above(wq->sq_size),
 				  &sq_attr, sh->numa_node);
 	if (ret) {
 		rte_errno = errno;
@@ -530,8 +533,8 @@ mlx5_atomic_read_cqe(rte_int128_t *from, rte_int128_t *ts)
 {
 	/*
 	 * The only CQE of Clock Queue is being continuously
-	 * update by hardware with soecified rate. We have to
-	 * read timestump and WQE completion index atomically.
+	 * updated by hardware with specified rate. We must
+	 * read timestamp and WQE completion index atomically.
 	 */
 #if defined(RTE_ARCH_X86_64)
 	rte_int128_t src;
@@ -592,13 +595,22 @@ mlx5_txpp_update_timestamp(struct mlx5_dev_ctx_shared *sh)
 	} to;
 	uint64_t ts;
 	uint16_t ci;
+	uint8_t opcode;
 
 	mlx5_atomic_read_cqe((rte_int128_t *)&cqe->timestamp, &to.u128);
-	if (to.cts.op_own >> 4) {
-		DRV_LOG(DEBUG, "Clock Queue error sync lost.");
-		__atomic_fetch_add(&sh->txpp.err_clock_queue,
+	opcode = MLX5_CQE_OPCODE(to.cts.op_own);
+	if (opcode) {
+		if (opcode != MLX5_CQE_INVALID) {
+			/*
+			 * Commit the error state if and only if
+			 * we have got at least one actual completion.
+			 */
+			DRV_LOG(DEBUG,
+				"Clock Queue error sync lost (%X).", opcode);
+				__atomic_fetch_add(&sh->txpp.err_clock_queue,
 				   1, __ATOMIC_RELAXED);
-		sh->txpp.sync_lost = 1;
+			sh->txpp.sync_lost = 1;
+		}
 		return;
 	}
 	ci = rte_be_to_cpu_16(to.cts.wqe_counter);
@@ -747,11 +759,11 @@ mlx5_txpp_interrupt_handler(void *cb_arg)
 static void
 mlx5_txpp_stop_service(struct mlx5_dev_ctx_shared *sh)
 {
-	if (!sh->txpp.intr_handle.fd)
+	if (!rte_intr_fd_get(sh->txpp.intr_handle))
 		return;
-	mlx5_intr_callback_unregister(&sh->txpp.intr_handle,
+	mlx5_intr_callback_unregister(sh->txpp.intr_handle,
 				      mlx5_txpp_interrupt_handler, sh);
-	sh->txpp.intr_handle.fd = 0;
+	rte_intr_instance_free(sh->txpp.intr_handle);
 }
 
 /* Attach interrupt handler and fires first request to Rearm Queue. */
@@ -775,13 +787,22 @@ mlx5_txpp_start_service(struct mlx5_dev_ctx_shared *sh)
 		rte_errno = errno;
 		return -rte_errno;
 	}
-	memset(&sh->txpp.intr_handle, 0, sizeof(sh->txpp.intr_handle));
+	sh->txpp.intr_handle =
+			rte_intr_instance_alloc(RTE_INTR_INSTANCE_F_SHARED);
+	if (sh->txpp.intr_handle == NULL) {
+		DRV_LOG(ERR, "Fail to allocate intr_handle");
+		return -ENOMEM;
+	}
 	fd = mlx5_os_get_devx_channel_fd(sh->txpp.echan);
-	sh->txpp.intr_handle.fd = fd;
-	sh->txpp.intr_handle.type = RTE_INTR_HANDLE_EXT;
-	if (rte_intr_callback_register(&sh->txpp.intr_handle,
+	if (rte_intr_fd_set(sh->txpp.intr_handle, fd))
+		return -rte_errno;
+
+	if (rte_intr_type_set(sh->txpp.intr_handle, RTE_INTR_HANDLE_EXT))
+		return -rte_errno;
+
+	if (rte_intr_callback_register(sh->txpp.intr_handle,
 				       mlx5_txpp_interrupt_handler, sh)) {
-		sh->txpp.intr_handle.fd = 0;
+		rte_intr_fd_set(sh->txpp.intr_handle, 0);
 		DRV_LOG(ERR, "Failed to register CQE interrupt %d.", rte_errno);
 		return -rte_errno;
 	}

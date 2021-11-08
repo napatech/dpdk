@@ -57,7 +57,7 @@
 	IAVF_INSET_IPV6_HOP_LIMIT)
 
 #define IAVF_FDIR_INSET_ETH_IPV6_FRAG_EXT (\
-	IAVF_INSET_IPV6_ID)
+	IAVF_FDIR_INSET_ETH_IPV6 | IAVF_INSET_IPV6_ID)
 
 #define IAVF_FDIR_INSET_ETH_IPV6_UDP (\
 	IAVF_INSET_IPV6_SRC | IAVF_INSET_IPV6_DST | \
@@ -119,7 +119,12 @@
 #define IAVF_FDIR_INSET_L2TPV3OIP (\
 	IAVF_L2TPV3OIP_SESSION_ID)
 
-#define IAVF_FDIR_INSET_ESP (\
+#define IAVF_FDIR_INSET_IPV4_ESP (\
+	IAVF_INSET_IPV4_SRC | IAVF_INSET_IPV4_DST | \
+	IAVF_INSET_ESP_SPI)
+
+#define IAVF_FDIR_INSET_IPV6_ESP (\
+	IAVF_INSET_IPV6_SRC | IAVF_INSET_IPV6_DST | \
 	IAVF_INSET_ESP_SPI)
 
 #define IAVF_FDIR_INSET_AH (\
@@ -138,6 +143,30 @@
 
 #define IAVF_FDIR_INSET_ECPRI (\
 	IAVF_INSET_ECPRI)
+
+#define IAVF_FDIR_INSET_GRE_IPV4 (\
+	IAVF_INSET_TUN_IPV4_SRC | IAVF_INSET_TUN_IPV4_DST | \
+	IAVF_INSET_TUN_IPV4_TOS | IAVF_INSET_TUN_IPV4_PROTO)
+
+#define IAVF_FDIR_INSET_GRE_IPV4_TCP (\
+	IAVF_FDIR_INSET_GRE_IPV4 | IAVF_INSET_TUN_TCP_SRC_PORT | \
+	IAVF_INSET_TUN_TCP_DST_PORT)
+
+#define IAVF_FDIR_INSET_GRE_IPV4_UDP (\
+	IAVF_FDIR_INSET_GRE_IPV4 | IAVF_INSET_TUN_UDP_SRC_PORT | \
+	IAVF_INSET_TUN_UDP_DST_PORT)
+
+#define IAVF_FDIR_INSET_GRE_IPV6 (\
+	IAVF_INSET_TUN_IPV6_SRC | IAVF_INSET_TUN_IPV6_DST | \
+	IAVF_INSET_TUN_IPV6_TC | IAVF_INSET_TUN_IPV6_NEXT_HDR)
+
+#define IAVF_FDIR_INSET_GRE_IPV6_TCP (\
+	IAVF_FDIR_INSET_GRE_IPV6 | IAVF_INSET_TUN_TCP_SRC_PORT | \
+	IAVF_INSET_TUN_TCP_DST_PORT)
+
+#define IAVF_FDIR_INSET_GRE_IPV6_UDP (\
+	IAVF_FDIR_INSET_GRE_IPV6 | IAVF_INSET_TUN_UDP_SRC_PORT | \
+	IAVF_INSET_TUN_UDP_DST_PORT)
 
 static struct iavf_pattern_match_item iavf_fdir_pattern[] = {
 	{iavf_pattern_ethertype,		 IAVF_FDIR_INSET_ETH,		IAVF_INSET_NONE},
@@ -164,12 +193,68 @@ static struct iavf_pattern_match_item iavf_fdir_pattern[] = {
 	{iavf_pattern_eth_ipv4_gtpu_eh_ipv6,	 IAVF_FDIR_INSET_GTPU_IPV6,	IAVF_INSET_NONE},
 	{iavf_pattern_eth_ipv4_gtpu_eh_ipv6_udp, IAVF_FDIR_INSET_GTPU_IPV6_UDP,	IAVF_INSET_NONE},
 	{iavf_pattern_eth_ipv4_gtpu_eh_ipv6_tcp, IAVF_FDIR_INSET_GTPU_IPV6_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv4_gtpu,		 IAVF_FDIR_INSET_IPV4_GTPU,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv4_gtpu_ipv4,	 IAVF_FDIR_INSET_GTPU_IPV4,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv4_gtpu_ipv4_udp,	 IAVF_FDIR_INSET_GTPU_IPV4_UDP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv4_gtpu_ipv4_tcp,	 IAVF_FDIR_INSET_GTPU_IPV4_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv4_gtpu_ipv6,	 IAVF_FDIR_INSET_GTPU_IPV6,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv4_gtpu_ipv6_udp,	 IAVF_FDIR_INSET_GTPU_IPV6_UDP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv4_gtpu_ipv6_tcp,	 IAVF_FDIR_INSET_GTPU_IPV6_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv6_gtpu,		 IAVF_FDIR_INSET_IPV4_GTPU,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv6_gtpu_ipv4,	 IAVF_FDIR_INSET_GTPU_IPV4,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv6_gtpu_ipv4_udp,	 IAVF_FDIR_INSET_GTPU_IPV4_UDP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv6_gtpu_ipv4_tcp,	 IAVF_FDIR_INSET_GTPU_IPV4_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv6_gtpu_ipv6,	 IAVF_FDIR_INSET_GTPU_IPV6,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv6_gtpu_ipv6_udp,	 IAVF_FDIR_INSET_GTPU_IPV6_UDP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv6_gtpu_ipv6_tcp,	 IAVF_FDIR_INSET_GTPU_IPV6_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv4_gtpu,		 IAVF_FDIR_INSET_IPV6_GTPU,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv4_gtpu_ipv4,	 IAVF_FDIR_INSET_GTPU_IPV4,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv4_gtpu_ipv4_udp,	 IAVF_FDIR_INSET_GTPU_IPV4_UDP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv4_gtpu_ipv4_tcp,	 IAVF_FDIR_INSET_GTPU_IPV4_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv4_gtpu_ipv6,	 IAVF_FDIR_INSET_GTPU_IPV6,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv4_gtpu_ipv6_udp,	 IAVF_FDIR_INSET_GTPU_IPV6_UDP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv4_gtpu_ipv6_tcp,	 IAVF_FDIR_INSET_GTPU_IPV6_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv6_gtpu,		 IAVF_FDIR_INSET_IPV6_GTPU,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv6_gtpu_ipv4,	 IAVF_FDIR_INSET_GTPU_IPV4,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv6_gtpu_ipv4_udp,	 IAVF_FDIR_INSET_GTPU_IPV4_UDP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv6_gtpu_ipv4_tcp,	 IAVF_FDIR_INSET_GTPU_IPV4_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv6_gtpu_ipv6,	 IAVF_FDIR_INSET_GTPU_IPV6,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv6_gtpu_ipv6_udp,	 IAVF_FDIR_INSET_GTPU_IPV6_UDP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv6_gtpu_ipv6_tcp,	 IAVF_FDIR_INSET_GTPU_IPV6_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv4_gtpu_eh,		 IAVF_FDIR_INSET_IPV4_GTPU_EH,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv4_gtpu_eh_ipv4,		 IAVF_FDIR_INSET_GTPU_IPV4,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv4_gtpu_eh_ipv4_udp,	 IAVF_FDIR_INSET_GTPU_IPV4_UDP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv4_gtpu_eh_ipv4_tcp,	 IAVF_FDIR_INSET_GTPU_IPV4_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv4_gtpu_eh_ipv6,		 IAVF_FDIR_INSET_GTPU_IPV6,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv4_gtpu_eh_ipv6_udp,	 IAVF_FDIR_INSET_GTPU_IPV6_UDP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv4_gtpu_eh_ipv6_tcp,	 IAVF_FDIR_INSET_GTPU_IPV6_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv6_gtpu_eh,		 IAVF_FDIR_INSET_IPV4_GTPU_EH,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv6_gtpu_eh_ipv4,		 IAVF_FDIR_INSET_GTPU_IPV4,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv6_gtpu_eh_ipv4_udp,	 IAVF_FDIR_INSET_GTPU_IPV4_UDP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv6_gtpu_eh_ipv4_tcp,	 IAVF_FDIR_INSET_GTPU_IPV4_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv6_gtpu_eh_ipv6,		 IAVF_FDIR_INSET_GTPU_IPV6,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv6_gtpu_eh_ipv6_udp,	 IAVF_FDIR_INSET_GTPU_IPV6_UDP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv6_gtpu_eh_ipv6_tcp,	 IAVF_FDIR_INSET_GTPU_IPV6_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv4_gtpu_eh,		 IAVF_FDIR_INSET_IPV6_GTPU_EH,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv4_gtpu_eh_ipv4,		 IAVF_FDIR_INSET_GTPU_IPV4,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv4_gtpu_eh_ipv4_udp,	 IAVF_FDIR_INSET_GTPU_IPV4_UDP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv4_gtpu_eh_ipv4_tcp,	 IAVF_FDIR_INSET_GTPU_IPV4_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv4_gtpu_eh_ipv6,		 IAVF_FDIR_INSET_GTPU_IPV6,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv4_gtpu_eh_ipv6_udp,	 IAVF_FDIR_INSET_GTPU_IPV6_UDP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv4_gtpu_eh_ipv6_tcp,	 IAVF_FDIR_INSET_GTPU_IPV6_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv6_gtpu_eh,		 IAVF_FDIR_INSET_IPV6_GTPU_EH,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv6_gtpu_eh_ipv4,		 IAVF_FDIR_INSET_GTPU_IPV4,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv6_gtpu_eh_ipv4_udp,	 IAVF_FDIR_INSET_GTPU_IPV4_UDP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv6_gtpu_eh_ipv4_tcp,	 IAVF_FDIR_INSET_GTPU_IPV4_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv6_gtpu_eh_ipv6,		 IAVF_FDIR_INSET_GTPU_IPV6,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv6_gtpu_eh_ipv6_udp,	 IAVF_FDIR_INSET_GTPU_IPV6_UDP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv6_gtpu_eh_ipv6_tcp,	 IAVF_FDIR_INSET_GTPU_IPV6_TCP,	IAVF_INSET_NONE},
 	{iavf_pattern_eth_ipv6_gtpu,		 IAVF_FDIR_INSET_IPV6_GTPU,	IAVF_INSET_NONE},
 	{iavf_pattern_eth_ipv6_gtpu_eh,		 IAVF_FDIR_INSET_IPV6_GTPU_EH,	IAVF_INSET_NONE},
 	{iavf_pattern_eth_ipv4_l2tpv3,		 IAVF_FDIR_INSET_L2TPV3OIP,	IAVF_INSET_NONE},
 	{iavf_pattern_eth_ipv6_l2tpv3,		 IAVF_FDIR_INSET_L2TPV3OIP,	IAVF_INSET_NONE},
-	{iavf_pattern_eth_ipv4_esp,		 IAVF_FDIR_INSET_ESP,		IAVF_INSET_NONE},
-	{iavf_pattern_eth_ipv6_esp,		 IAVF_FDIR_INSET_ESP,		IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_esp,		 IAVF_FDIR_INSET_IPV4_ESP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_esp,		 IAVF_FDIR_INSET_IPV6_ESP,	IAVF_INSET_NONE},
 	{iavf_pattern_eth_ipv4_ah,		 IAVF_FDIR_INSET_AH,		IAVF_INSET_NONE},
 	{iavf_pattern_eth_ipv6_ah,		 IAVF_FDIR_INSET_AH,		IAVF_INSET_NONE},
 	{iavf_pattern_eth_ipv4_udp_esp,		 IAVF_FDIR_INSET_IPV4_NATT_ESP,	IAVF_INSET_NONE},
@@ -178,6 +263,18 @@ static struct iavf_pattern_match_item iavf_fdir_pattern[] = {
 	{iavf_pattern_eth_ipv6_pfcp,		 IAVF_FDIR_INSET_PFCP,		IAVF_INSET_NONE},
 	{iavf_pattern_eth_ecpri,		 IAVF_FDIR_INSET_ECPRI,		IAVF_INSET_NONE},
 	{iavf_pattern_eth_ipv4_ecpri,		 IAVF_FDIR_INSET_ECPRI,		IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv4,	IAVF_FDIR_INSET_GRE_IPV4,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv4_tcp,	IAVF_FDIR_INSET_GRE_IPV4_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv4_udp,	IAVF_FDIR_INSET_GRE_IPV4_UDP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv6,	IAVF_FDIR_INSET_GRE_IPV6,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv6_tcp,	IAVF_FDIR_INSET_GRE_IPV6_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv4_gre_ipv6_udp,	IAVF_FDIR_INSET_GRE_IPV6_UDP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv4,	IAVF_FDIR_INSET_GRE_IPV4,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv4_tcp,	IAVF_FDIR_INSET_GRE_IPV4_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv4_udp,	IAVF_FDIR_INSET_GRE_IPV4_UDP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv6,	IAVF_FDIR_INSET_GRE_IPV6,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv6_tcp,	IAVF_FDIR_INSET_GRE_IPV6_TCP,	IAVF_INSET_NONE},
+	{iavf_pattern_eth_ipv6_gre_ipv6_udp,	IAVF_FDIR_INSET_GRE_IPV6_UDP,	IAVF_INSET_NONE},
 };
 
 static struct iavf_flow_parser iavf_fdir_parser;
@@ -334,7 +431,7 @@ iavf_fdir_parse_action_qregion(struct iavf_adapter *ad,
 		}
 	}
 
-	if (rss->queue[rss->queue_num - 1] >= ad->eth_dev->data->nb_rx_queues) {
+	if (rss->queue[rss->queue_num - 1] >= ad->dev_data->nb_rx_queues) {
 		rte_flow_error_set(error, EINVAL,
 				RTE_FLOW_ERROR_TYPE_ACTION, act,
 				"Invalid queue region indexes.");
@@ -414,7 +511,7 @@ iavf_fdir_parse_action(struct iavf_adapter *ad,
 			filter_action->act_conf.queue.index = act_q->index;
 
 			if (filter_action->act_conf.queue.index >=
-				ad->eth_dev->data->nb_rx_queues) {
+				ad->dev_data->nb_rx_queues) {
 				rte_flow_error_set(error, EINVAL,
 					RTE_FLOW_ERROR_TYPE_ACTION,
 					actions, "Invalid queue for FDIR.");
@@ -567,6 +664,7 @@ iavf_fdir_add_fragment_hdr(struct virtchnl_proto_hdrs *hdrs, int layer)
 	/* adding dummy fragment header */
 	hdr1 = &hdrs->proto_hdr[layer];
 	VIRTCHNL_SET_PROTO_HDR_TYPE(hdr1, IPV4_FRAG);
+	hdr1->field_selector = 0;
 	hdrs->count = ++layer;
 }
 
@@ -584,7 +682,6 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 	const struct rte_flow_item_ipv4 *ipv4_spec, *ipv4_last, *ipv4_mask;
 	const struct rte_flow_item_ipv6 *ipv6_spec, *ipv6_mask;
 	const struct rte_flow_item_ipv6_frag_ext *ipv6_frag_spec;
-	const struct rte_flow_item_ipv6_frag_ext *ipv6_frag_last;
 	const struct rte_flow_item_ipv6_frag_ext *ipv6_frag_mask;
 	const struct rte_flow_item_udp *udp_spec, *udp_mask;
 	const struct rte_flow_item_tcp *tcp_spec, *tcp_mask;
@@ -596,6 +693,7 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 	const struct rte_flow_item_ah *ah_spec, *ah_mask;
 	const struct rte_flow_item_pfcp *pfcp_spec, *pfcp_mask;
 	const struct rte_flow_item_ecpri *ecpri_spec, *ecpri_mask;
+	const struct rte_flow_item_gre *gre_spec, *gre_mask;
 	const struct rte_flow_item *item = pattern;
 	struct virtchnl_proto_hdr *hdr, *hdr1 = NULL;
 	struct rte_ecpri_common_hdr ecpri_common;
@@ -760,17 +858,16 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 
 			hdrs->count = ++layer;
 
-			/* only support any packet id for fragment IPv4
-			 * any packet_id:
-			 * spec is 0, last is 0xffff, mask is 0xffff
+			/* fragment Ipv4:
+			 * spec is 0x2000, mask is 0x2000
 			 */
-			if (ipv4_last && ipv4_spec->hdr.packet_id == 0 &&
-			    ipv4_last->hdr.packet_id == UINT16_MAX &&
-			    ipv4_mask->hdr.packet_id == UINT16_MAX &&
-			    ipv4_mask->hdr.fragment_offset == UINT16_MAX) {
+			if (ipv4_spec->hdr.fragment_offset ==
+			    rte_cpu_to_be_16(RTE_IPV4_HDR_MF_FLAG) &&
+			    ipv4_mask->hdr.fragment_offset ==
+			    rte_cpu_to_be_16(RTE_IPV4_HDR_MF_FLAG)) {
 				/* all IPv4 fragment packet has the same
-				 * ethertype, if the spec is for all valid
-				 * packet id, set ethertype into input set.
+				 * ethertype, if the spec and mask is valid,
+				 * set ethertype into input set.
 				 */
 				input_set |= IAVF_INSET_ETHERTYPE;
 				VIRTCHNL_ADD_PROTO_HDR_FIELD_BIT(hdr1, ETH,
@@ -854,7 +951,6 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 
 		case RTE_FLOW_ITEM_TYPE_IPV6_FRAG_EXT:
 			ipv6_frag_spec = item->spec;
-			ipv6_frag_last = item->last;
 			ipv6_frag_mask = item->mask;
 			next_type = (item + 1)->type;
 
@@ -867,17 +963,16 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 				break;
 			}
 
-			/* only support any packet id for fragment IPv6
-			 * any packet_id:
-			 * spec is 0, last is 0xffffffff, mask is 0xffffffff
+			/* fragment Ipv6:
+			 * spec is 0x1, mask is 0x1
 			 */
-			if (ipv6_frag_last && ipv6_frag_spec->hdr.id == 0 &&
-			    ipv6_frag_last->hdr.id == UINT32_MAX &&
-			    ipv6_frag_mask->hdr.id == UINT32_MAX &&
-			    ipv6_frag_mask->hdr.frag_data == UINT16_MAX) {
+			if (ipv6_frag_spec->hdr.frag_data ==
+			    rte_cpu_to_be_16(1) &&
+			    ipv6_frag_mask->hdr.frag_data ==
+			    rte_cpu_to_be_16(1)) {
 				/* all IPv6 fragment packet has the same
-				 * ethertype, if the spec is for all valid
-				 * packet id, set ethertype into input set.
+				 * ethertype, if the spec and mask is valid,
+				 * set ethertype into input set.
 				 */
 				input_set |= IAVF_INSET_ETHERTYPE;
 				VIRTCHNL_ADD_PROTO_HDR_FIELD_BIT(hdr1, ETH,
@@ -1066,17 +1161,28 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 
 			if (!gtp_psc_spec)
 				VIRTCHNL_SET_PROTO_HDR_TYPE(hdr, GTPU_EH);
-			else if ((gtp_psc_mask->qfi) && !(gtp_psc_mask->pdu_type))
+			else if ((gtp_psc_mask->hdr.qfi) &&
+				!(gtp_psc_mask->hdr.type))
 				VIRTCHNL_SET_PROTO_HDR_TYPE(hdr, GTPU_EH);
-			else if (gtp_psc_spec->pdu_type == IAVF_GTPU_EH_UPLINK)
+			else if (gtp_psc_spec->hdr.type == IAVF_GTPU_EH_UPLINK)
 				VIRTCHNL_SET_PROTO_HDR_TYPE(hdr, GTPU_EH_PDU_UP);
-			else if (gtp_psc_spec->pdu_type == IAVF_GTPU_EH_DWLINK)
+			else if (gtp_psc_spec->hdr.type == IAVF_GTPU_EH_DWLINK)
 				VIRTCHNL_SET_PROTO_HDR_TYPE(hdr, GTPU_EH_PDU_DWN);
 
 			if (gtp_psc_spec && gtp_psc_mask) {
-				if (gtp_psc_mask->qfi == UINT8_MAX) {
+				if (gtp_psc_mask->hdr.qfi == 0x3F) {
 					input_set |= IAVF_INSET_GTPU_QFI;
-					VIRTCHNL_ADD_PROTO_HDR_FIELD_BIT(hdr, GTPU_EH, QFI);
+					if (!gtp_psc_mask->hdr.type)
+						VIRTCHNL_ADD_PROTO_HDR_FIELD_BIT(hdr,
+										 GTPU_EH, QFI);
+					else if (gtp_psc_spec->hdr.type ==
+								IAVF_GTPU_EH_UPLINK)
+						VIRTCHNL_ADD_PROTO_HDR_FIELD_BIT(hdr,
+										 GTPU_UP, QFI);
+					else if (gtp_psc_spec->hdr.type ==
+								IAVF_GTPU_EH_DWLINK)
+						VIRTCHNL_ADD_PROTO_HDR_FIELD_BIT(hdr,
+										 GTPU_DWN, QFI);
 				}
 
 				rte_memcpy(hdr->buffer, gtp_psc_spec,
@@ -1191,6 +1297,24 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 				rte_memcpy(hdr->buffer, ecpri_spec,
 					sizeof(*ecpri_spec));
 			}
+
+			hdrs->count = ++layer;
+			break;
+
+		case RTE_FLOW_ITEM_TYPE_GRE:
+			gre_spec = item->spec;
+			gre_mask = item->mask;
+
+			hdr = &hdrs->proto_hdr[layer];
+
+			VIRTCHNL_SET_PROTO_HDR_TYPE(hdr, GRE);
+
+			if (gre_spec && gre_mask) {
+				rte_memcpy(hdr->buffer, gre_spec,
+					   sizeof(*gre_spec));
+			}
+
+			tun_inner = 1;
 
 			hdrs->count = ++layer;
 			break;

@@ -103,15 +103,15 @@ mlx5_vdpa_vhost_mem_regions_prepare(int vid, uint8_t *mode, uint64_t *mem_size,
 			size = mem->regions[i].guest_phys_addr -
 				(mem->regions[i - 1].guest_phys_addr +
 				 mem->regions[i - 1].size);
-			*gcd = rte_get_gcd(*gcd, size);
+			*gcd = rte_get_gcd64(*gcd, size);
 			klm_entries_num += KLM_NUM_MAX_ALIGN(size);
 		}
 		size = mem->regions[i].size;
-		*gcd = rte_get_gcd(*gcd, size);
+		*gcd = rte_get_gcd64(*gcd, size);
 		klm_entries_num += KLM_NUM_MAX_ALIGN(size);
 	}
 	if (*gcd > MLX5_MAX_KLM_BYTE_COUNT)
-		*gcd = rte_get_gcd(*gcd, MLX5_MAX_KLM_BYTE_COUNT);
+		*gcd = rte_get_gcd64(*gcd, MLX5_MAX_KLM_BYTE_COUNT);
 	if (!RTE_IS_POWER_OF_2(*gcd)) {
 		uint64_t candidate_gcd = rte_align64prevpow2(*gcd);
 
@@ -177,10 +177,10 @@ mlx5_vdpa_mem_register(struct mlx5_vdpa_priv *priv)
 	struct mlx5_devx_mkey_attr mkey_attr;
 	struct mlx5_vdpa_query_mr *entry = NULL;
 	struct rte_vhost_mem_region *reg = NULL;
-	uint8_t mode;
+	uint8_t mode = 0;
 	uint32_t entries_num = 0;
 	uint32_t i;
-	uint64_t gcd;
+	uint64_t gcd = 0;
 	uint64_t klm_size;
 	uint64_t mem_size;
 	uint64_t k;
@@ -193,7 +193,7 @@ mlx5_vdpa_mem_register(struct mlx5_vdpa_priv *priv)
 	if (!mem)
 		return -rte_errno;
 	priv->vmem = mem;
-	priv->null_mr = mlx5_glue->alloc_null_mr(priv->pd);
+	priv->null_mr = mlx5_glue->alloc_null_mr(priv->cdev->pd);
 	if (!priv->null_mr) {
 		DRV_LOG(ERR, "Failed to allocate null MR.");
 		ret = -errno;
@@ -209,7 +209,7 @@ mlx5_vdpa_mem_register(struct mlx5_vdpa_priv *priv)
 			DRV_LOG(ERR, "Failed to allocate mem entry memory.");
 			goto error;
 		}
-		entry->umem = mlx5_glue->devx_umem_reg(priv->ctx,
+		entry->umem = mlx5_glue->devx_umem_reg(priv->cdev->ctx,
 					 (void *)(uintptr_t)reg->host_user_addr,
 					     reg->size, IBV_ACCESS_LOCAL_WRITE);
 		if (!entry->umem) {
@@ -220,9 +220,10 @@ mlx5_vdpa_mem_register(struct mlx5_vdpa_priv *priv)
 		mkey_attr.addr = (uintptr_t)(reg->guest_phys_addr);
 		mkey_attr.size = reg->size;
 		mkey_attr.umem_id = entry->umem->umem_id;
-		mkey_attr.pd = priv->pdn;
+		mkey_attr.pd = priv->cdev->pdn;
 		mkey_attr.pg_access = 1;
-		entry->mkey = mlx5_devx_cmd_mkey_create(priv->ctx, &mkey_attr);
+		entry->mkey = mlx5_devx_cmd_mkey_create(priv->cdev->ctx,
+							&mkey_attr);
 		if (!entry->mkey) {
 			DRV_LOG(ERR, "Failed to create direct Mkey.");
 			ret = -rte_errno;
@@ -267,7 +268,7 @@ mlx5_vdpa_mem_register(struct mlx5_vdpa_priv *priv)
 	}
 	mkey_attr.addr = (uintptr_t)(mem->regions[0].guest_phys_addr);
 	mkey_attr.size = mem_size;
-	mkey_attr.pd = priv->pdn;
+	mkey_attr.pd = priv->cdev->pdn;
 	mkey_attr.umem_id = 0;
 	/* Must be zero for KLM mode. */
 	mkey_attr.log_entity_size = mode == MLX5_MKC_ACCESS_MODE_KLM_FBS ?
@@ -281,7 +282,7 @@ mlx5_vdpa_mem_register(struct mlx5_vdpa_priv *priv)
 		ret = -ENOMEM;
 		goto error;
 	}
-	entry->mkey = mlx5_devx_cmd_mkey_create(priv->ctx, &mkey_attr);
+	entry->mkey = mlx5_devx_cmd_mkey_create(priv->cdev->ctx, &mkey_attr);
 	if (!entry->mkey) {
 		DRV_LOG(ERR, "Failed to create indirect Mkey.");
 		ret = -rte_errno;

@@ -5,7 +5,13 @@
 #ifndef __CNXK_EVENTDEV_H__
 #define __CNXK_EVENTDEV_H__
 
+#include <string.h>
+
+#include <cryptodev_pmd.h>
 #include <rte_devargs.h>
+#include <rte_ethdev.h>
+#include <rte_event_eth_rx_adapter.h>
+#include <rte_event_eth_tx_adapter.h>
 #include <rte_kvargs.h>
 #include <rte_mbuf_pool_ops.h>
 #include <rte_pci.h>
@@ -18,6 +24,7 @@
 
 #define CNXK_SSO_XAE_CNT   "xae_cnt"
 #define CNXK_SSO_GGRP_QOS  "qos"
+#define CNXK_SSO_FORCE_BP  "force_rx_bp"
 #define CN9K_SSO_SINGLE_WS "single_ws"
 #define CN10K_SSO_GW_MODE  "gw_mode"
 
@@ -30,6 +37,8 @@
 #define CNXK_SSO_MZ_NAME       "cnxk_evdev_mz"
 #define CNXK_SSO_XAQ_CACHE_CNT (0x7)
 #define CNXK_SSO_XAQ_SLACK     (8)
+#define CNXK_SSO_WQE_SG_PTR    (9)
+#define CNXK_SSO_SQB_LIMIT     (0x180)
 
 #define CNXK_TT_FROM_TAG(x)	    (((x) >> 32) & SSO_TT_EMPTY)
 #define CNXK_TT_FROM_EVENT(x)	    (((x) >> 38) & SSO_TT_EMPTY)
@@ -44,6 +53,12 @@
 #define CN10K_GW_MODE_NONE     0
 #define CN10K_GW_MODE_PREF     1
 #define CN10K_GW_MODE_PREF_WFE 2
+
+#define CNXK_VALID_DEV_OR_ERR_RET(dev, drv_name)                               \
+	do {                                                                   \
+		if (strncmp(dev->driver->name, drv_name, strlen(drv_name)))    \
+			return -EINVAL;                                        \
+	} while (0)
 
 typedef void *(*cnxk_sso_init_hws_mem_t)(void *dev, uint8_t port_id);
 typedef void (*cnxk_sso_hws_setup_t)(void *dev, void *ws, uintptr_t *grp_base);
@@ -81,33 +96,36 @@ struct cnxk_sso_evdev {
 	uint64_t nb_xaq_cfg;
 	rte_iova_t fc_iova;
 	struct rte_mempool *xaq_pool;
+	uint64_t rx_offloads;
+	uint64_t tx_offloads;
 	uint64_t adptr_xae_cnt;
+	uint16_t rx_adptr_pool_cnt;
+	uint64_t *rx_adptr_pools;
+	uint64_t *tx_adptr_data;
+	uint16_t max_port_id;
 	uint16_t tim_adptr_ring_cnt;
 	uint16_t *timer_adptr_rings;
 	uint64_t *timer_adptr_sz;
+	uint16_t vec_pool_cnt;
+	uint64_t *vec_pools;
 	/* Dev args */
 	uint32_t xae_cnt;
 	uint8_t qos_queue_cnt;
 	struct cnxk_sso_qos *qos_parse_data;
+	uint8_t force_ena_bp;
 	/* CN9K */
 	uint8_t dual_ws;
 	/* CN10K */
 	uint8_t gw_mode;
+	/* Crypto adapter */
+	uint8_t is_ca_internal_port;
 } __rte_cache_aligned;
 
-/* CN10K HWS ops */
-#define CN10K_SSO_HWS_OPS                                                      \
-	uintptr_t swtag_desched_op;                                            \
-	uintptr_t swtag_flush_op;                                              \
-	uintptr_t swtag_untag_op;                                              \
-	uintptr_t swtag_norm_op;                                               \
-	uintptr_t updt_wqe_op;                                                 \
-	uintptr_t tag_wqe_op;                                                  \
-	uintptr_t getwrk_op
-
 struct cn10k_sso_hws {
-	/* Get Work Fastpath data */
-	CN10K_SSO_HWS_OPS;
+	uint64_t base;
+	/* PTP timestamp */
+	struct cnxk_timesync_info *tstamp;
+	void *lookup_mem;
 	uint32_t gw_wdata;
 	uint8_t swtag_req;
 	uint8_t hws_id;
@@ -115,8 +133,10 @@ struct cn10k_sso_hws {
 	uint64_t xaq_lmt __rte_cache_aligned;
 	uint64_t *fc_mem;
 	uintptr_t grps_base[CNXK_SSO_MAX_HWGRP];
-	uint64_t base;
+	/* Tx Fastpath data */
+	uint64_t tx_base __rte_cache_aligned;
 	uintptr_t lmt_base;
+	uint8_t tx_adptr_data[];
 } __rte_cache_aligned;
 
 /* CN9K HWS ops */
@@ -132,13 +152,18 @@ struct cn10k_sso_hws {
 struct cn9k_sso_hws {
 	/* Get Work Fastpath data */
 	CN9K_SSO_HWS_OPS;
+	/* PTP timestamp */
+	struct cnxk_timesync_info *tstamp;
+	void *lookup_mem;
 	uint8_t swtag_req;
 	uint8_t hws_id;
 	/* Add Work Fastpath data */
 	uint64_t xaq_lmt __rte_cache_aligned;
 	uint64_t *fc_mem;
 	uintptr_t grps_base[CNXK_SSO_MAX_HWGRP];
-	uint64_t base;
+	/* Tx Fastpath data */
+	uint64_t base __rte_cache_aligned;
+	uint8_t tx_adptr_data[];
 } __rte_cache_aligned;
 
 struct cn9k_sso_hws_state {
@@ -148,6 +173,9 @@ struct cn9k_sso_hws_state {
 struct cn9k_sso_hws_dual {
 	/* Get Work Fastpath data */
 	struct cn9k_sso_hws_state ws_state[2]; /* Ping and Pong */
+	/* PTP timestamp */
+	struct cnxk_timesync_info *tstamp;
+	void *lookup_mem;
 	uint8_t swtag_req;
 	uint8_t vws; /* Ping pong bit */
 	uint8_t hws_id;
@@ -155,7 +183,9 @@ struct cn9k_sso_hws_dual {
 	uint64_t xaq_lmt __rte_cache_aligned;
 	uint64_t *fc_mem;
 	uintptr_t grps_base[CNXK_SSO_MAX_HWGRP];
-	uint64_t base[2];
+	/* Tx Fastpath data */
+	uint64_t base[2] __rte_cache_aligned;
+	uint8_t tx_adptr_data[];
 } __rte_cache_aligned;
 
 struct cnxk_sso_hws_cookie {
@@ -247,7 +277,33 @@ int cnxk_sso_xstats_reset(struct rte_eventdev *event_dev,
 			  int16_t queue_port_id, const uint32_t ids[],
 			  uint32_t n);
 
+/* Crypto adapter APIs. */
+int cnxk_crypto_adapter_qp_add(const struct rte_eventdev *event_dev,
+			       const struct rte_cryptodev *cdev,
+			       int32_t queue_pair_id);
+int cnxk_crypto_adapter_qp_del(const struct rte_cryptodev *cdev,
+			       int32_t queue_pair_id);
+
 /* CN9K */
 void cn9k_sso_set_rsrc(void *arg);
+
+/* Common adapter ops */
+int cnxk_sso_rx_adapter_queue_add(
+	const struct rte_eventdev *event_dev, const struct rte_eth_dev *eth_dev,
+	int32_t rx_queue_id,
+	const struct rte_event_eth_rx_adapter_queue_conf *queue_conf);
+int cnxk_sso_rx_adapter_queue_del(const struct rte_eventdev *event_dev,
+				  const struct rte_eth_dev *eth_dev,
+				  int32_t rx_queue_id);
+int cnxk_sso_rx_adapter_start(const struct rte_eventdev *event_dev,
+			      const struct rte_eth_dev *eth_dev);
+int cnxk_sso_rx_adapter_stop(const struct rte_eventdev *event_dev,
+			     const struct rte_eth_dev *eth_dev);
+int cnxk_sso_tx_adapter_queue_add(const struct rte_eventdev *event_dev,
+				  const struct rte_eth_dev *eth_dev,
+				  int32_t tx_queue_id);
+int cnxk_sso_tx_adapter_queue_del(const struct rte_eventdev *event_dev,
+				  const struct rte_eth_dev *eth_dev,
+				  int32_t tx_queue_id);
 
 #endif /* __CNXK_EVENTDEV_H__ */

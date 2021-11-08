@@ -1,6 +1,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2017 Intel Corporation
 
+if is_windows
+	build = false
+	reason = 'not supported on Windows'
+	subdir_done()
+endif
+
 if not get_option('tests')
     subdir_done()
 endif
@@ -17,6 +23,7 @@ test_sources = files(
         'test_bitmap.c',
         'test_bpf.c',
         'test_byteorder.c',
+        'test_cksum.c',
         'test_cmdline.c',
         'test_cmdline_cirbuf.c',
         'test_cmdline_etheraddr.c',
@@ -31,11 +38,15 @@ test_sources = files(
         'test_cryptodev.c',
         'test_cryptodev_asym.c',
         'test_cryptodev_blockcipher.c',
+        'test_cryptodev_security_ipsec.c',
         'test_cryptodev_security_pdcp.c',
         'test_cycles.c',
         'test_debug.c',
+        'test_devargs.c',
         'test_distributor.c',
         'test_distributor_perf.c',
+        'test_dmadev.c',
+        'test_dmadev_api.c',
         'test_eal_flags.c',
         'test_eal_fs.c',
         'test_efd.c',
@@ -155,6 +166,7 @@ test_deps = [
         'cmdline',
         'cryptodev',
         'distributor',
+        'dmadev',
         'efd',
         'ethdev',
         'eventdev',
@@ -185,15 +197,17 @@ test_deps = [
 # to indicate whether it can run in no-huge mode.
 fast_tests = [
         ['acl_autotest', true],
-        ['alarm_autotest', false],
         ['atomic_autotest', false],
+        ['bpf_autotest', true],
+        ['bpf_convert_autotest', true],
         ['bitops_autotest', true],
         ['byteorder_autotest', true],
+        ['cksum_autotest', true],
         ['cmdline_autotest', true],
         ['common_autotest', true],
         ['cpuflags_autotest', true],
-        ['cycles_autotest', true],
         ['debug_autotest', true],
+        ['devargs_autotest', true],
         ['eal_flags_c_opt_autotest', false],
         ['eal_flags_main_opt_autotest', false],
         ['eal_flags_n_opt_autotest', false],
@@ -255,7 +269,6 @@ fast_tests = [
         ['user_delay_us', true],
         ['version_autotest', true],
         ['crc_autotest', true],
-        ['delay_us_sleep_autotest', true],
         ['distributor_autotest', false],
         ['eventdev_common_autotest', true],
         ['fbarray_autotest', true],
@@ -314,6 +327,8 @@ perf_test_names = [
 driver_test_names = [
         'cryptodev_aesni_mb_autotest',
         'cryptodev_aesni_gcm_autotest',
+        'cryptodev_cn9k_autotest',
+        'cryptodev_cn10k_autotest',
         'cryptodev_dpaa_sec_autotest',
         'cryptodev_dpaa2_sec_autotest',
         'cryptodev_null_autotest',
@@ -326,6 +341,7 @@ driver_test_names = [
         'cryptodev_sw_mvsam_autotest',
         'cryptodev_sw_snow3g_autotest',
         'cryptodev_sw_zuc_autotest',
+        'dmadev_autotest',
         'eventdev_selftest_octeontx',
         'eventdev_selftest_sw',
         'rawdev_autotest',
@@ -386,6 +402,10 @@ if dpdk_conf.has('RTE_NET_RING')
     fast_tests += [['bitratestats_autotest', true]]
     fast_tests += [['latencystats_autotest', true]]
     fast_tests += [['pdump_autotest', true]]
+endif
+
+if dpdk_conf.has('RTE_PORT_PCAP')
+    test_sources += 'test_pcapng.c'
 endif
 
 if dpdk_conf.has('RTE_LIB_POWER')
@@ -451,13 +471,8 @@ message('hugepage availability: @0@'.format(has_hugepage))
 timeout_seconds = 600
 timeout_seconds_fast = 10
 
-get_coremask = find_program('get-coremask.sh')
-num_cores_arg = '-l ' + run_command(get_coremask).stdout().strip()
-
-default_test_args = [num_cores_arg]
-
 foreach arg : fast_tests
-    test_args = default_test_args
+    test_args = []
     run_test = true
     if not has_hugepage
         if arg[1]
@@ -490,7 +505,6 @@ endforeach
 foreach arg : perf_test_names
     test(arg, dpdk_test,
             env : ['DPDK_TEST=' + arg],
-            args : default_test_args,
             timeout : timeout_seconds,
             is_parallel : false,
             suite : 'perf-tests')
@@ -499,7 +513,6 @@ endforeach
 foreach arg : driver_test_names
     test(arg, dpdk_test,
             env : ['DPDK_TEST=' + arg],
-            args : default_test_args,
             timeout : timeout_seconds,
             is_parallel : false,
             suite : 'driver-tests')
@@ -508,7 +521,6 @@ endforeach
 foreach arg : dump_test_names
     test(arg, dpdk_test,
             env : ['DPDK_TEST=' + arg],
-            args : default_test_args,
             timeout : timeout_seconds,
             is_parallel : false,
             suite : 'debug-tests')

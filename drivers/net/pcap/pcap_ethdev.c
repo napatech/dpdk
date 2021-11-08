@@ -51,6 +51,7 @@ struct queue_stat {
 	volatile unsigned long pkts;
 	volatile unsigned long bytes;
 	volatile unsigned long err_pkts;
+	volatile unsigned long rx_nombuf;
 };
 
 struct queue_missed_stat {
@@ -135,10 +136,10 @@ static const char *valid_arguments[] = {
 };
 
 static struct rte_eth_link pmd_link = {
-		.link_speed = ETH_SPEED_NUM_10G,
-		.link_duplex = ETH_LINK_FULL_DUPLEX,
-		.link_status = ETH_LINK_DOWN,
-		.link_autoneg = ETH_LINK_FIXED,
+		.link_speed = RTE_ETH_SPEED_NUM_10G,
+		.link_duplex = RTE_ETH_LINK_FULL_DUPLEX,
+		.link_status = RTE_ETH_LINK_DOWN,
+		.link_autoneg = RTE_ETH_LINK_FIXED,
 };
 
 RTE_LOG_REGISTER_DEFAULT(eth_pcap_logtype, NOTICE);
@@ -297,8 +298,10 @@ eth_pcap_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 			break;
 
 		mbuf = rte_pktmbuf_alloc(pcap_q->mb_pool);
-		if (unlikely(mbuf == NULL))
+		if (unlikely(mbuf == NULL)) {
+			pcap_q->rx_stat.rx_nombuf++;
 			break;
+		}
 
 		if (header.caplen <= rte_pktmbuf_tailroom(mbuf)) {
 			/* pcap packet will fit in the mbuf, can copy it */
@@ -311,6 +314,7 @@ eth_pcap_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 						       mbuf,
 						       packet,
 						       header.caplen) == -1)) {
+				pcap_q->rx_stat.err_pkts++;
 				rte_pktmbuf_free(mbuf);
 				break;
 			}
@@ -655,7 +659,7 @@ status_up:
 	for (i = 0; i < dev->data->nb_tx_queues; i++)
 		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
 
-	dev->data->dev_link.link_status = ETH_LINK_UP;
+	dev->data->dev_link.link_status = RTE_ETH_LINK_UP;
 
 	return 0;
 }
@@ -710,7 +714,7 @@ status_down:
 	for (i = 0; i < dev->data->nb_tx_queues; i++)
 		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
 
-	dev->data->dev_link.link_status = ETH_LINK_DOWN;
+	dev->data->dev_link.link_status = RTE_ETH_LINK_DOWN;
 
 	return 0;
 }
@@ -743,6 +747,7 @@ eth_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	unsigned int i;
 	unsigned long rx_packets_total = 0, rx_bytes_total = 0;
 	unsigned long rx_missed_total = 0;
+	unsigned long rx_nombuf_total = 0, rx_err_total = 0;
 	unsigned long tx_packets_total = 0, tx_bytes_total = 0;
 	unsigned long tx_packets_err_total = 0;
 	const struct pmd_internals *internal = dev->data->dev_private;
@@ -751,6 +756,8 @@ eth_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 			i < dev->data->nb_rx_queues; i++) {
 		stats->q_ipackets[i] = internal->rx_queue[i].rx_stat.pkts;
 		stats->q_ibytes[i] = internal->rx_queue[i].rx_stat.bytes;
+		rx_nombuf_total += internal->rx_queue[i].rx_stat.rx_nombuf;
+		rx_err_total += internal->rx_queue[i].rx_stat.err_pkts;
 		rx_packets_total += stats->q_ipackets[i];
 		rx_bytes_total += stats->q_ibytes[i];
 		rx_missed_total += queue_missed_stat_get(dev, i);
@@ -768,6 +775,8 @@ eth_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	stats->ipackets = rx_packets_total;
 	stats->ibytes = rx_bytes_total;
 	stats->imissed = rx_missed_total;
+	stats->ierrors = rx_err_total;
+	stats->rx_nombuf = rx_nombuf_total;
 	stats->opackets = tx_packets_total;
 	stats->obytes = tx_bytes_total;
 	stats->oerrors = tx_packets_err_total;
@@ -784,6 +793,8 @@ eth_stats_reset(struct rte_eth_dev *dev)
 	for (i = 0; i < dev->data->nb_rx_queues; i++) {
 		internal->rx_queue[i].rx_stat.pkts = 0;
 		internal->rx_queue[i].rx_stat.bytes = 0;
+		internal->rx_queue[i].rx_stat.err_pkts = 0;
+		internal->rx_queue[i].rx_stat.rx_nombuf = 0;
 		queue_missed_stat_reset(dev, i);
 	}
 
@@ -844,11 +855,6 @@ eth_dev_close(struct rte_eth_dev *dev)
 		dev->data->mac_addrs = NULL;
 
 	return 0;
-}
-
-static void
-eth_queue_release(void *q __rte_unused)
-{
 }
 
 static int
@@ -995,8 +1001,6 @@ static const struct eth_dev_ops ops = {
 	.tx_queue_start = eth_tx_queue_start,
 	.rx_queue_stop = eth_rx_queue_stop,
 	.tx_queue_stop = eth_tx_queue_stop,
-	.rx_queue_release = eth_queue_release,
-	.tx_queue_release = eth_queue_release,
 	.link_update = eth_link_update,
 	.stats_get = eth_stats_get,
 	.stats_reset = eth_stats_reset,
@@ -1362,6 +1366,33 @@ eth_from_pcaps(struct rte_vdev_device *vdev,
 	return 0;
 }
 
+static void
+eth_release_pcaps(struct pmd_devargs *pcaps,
+		struct pmd_devargs *dumpers,
+		int single_iface)
+{
+	unsigned int i;
+
+	if (single_iface) {
+		if (pcaps->queue[0].pcap)
+			pcap_close(pcaps->queue[0].pcap);
+		return;
+	}
+
+	for (i = 0; i < dumpers->num_of_queue; i++) {
+		if (dumpers->queue[i].dumper)
+			pcap_dump_close(dumpers->queue[i].dumper);
+
+		if (dumpers->queue[i].pcap)
+			pcap_close(dumpers->queue[i].pcap);
+	}
+
+	for (i = 0; i < pcaps->num_of_queue; i++) {
+		if (pcaps->queue[i].pcap)
+			pcap_close(pcaps->queue[i].pcap);
+	}
+}
+
 static int
 pmd_pcap_probe(struct rte_vdev_device *dev)
 {
@@ -1581,6 +1612,9 @@ create_eth:
 
 free_kvlist:
 	rte_kvargs_free(kvlist);
+
+	if (ret < 0)
+		eth_release_pcaps(&pcaps, &dumpers, devargs_all.single_iface);
 
 	return ret;
 }

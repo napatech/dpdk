@@ -7,7 +7,7 @@
 #include <rte_common.h>
 #include <rte_hexdump.h>
 #include <rte_cryptodev.h>
-#include <rte_cryptodev_pmd.h>
+#include <cryptodev_pmd.h>
 #include <rte_bus_vdev.h>
 #include <rte_malloc.h>
 #include <rte_cpuflags.h>
@@ -801,6 +801,8 @@ cryptodev_armv8_crypto_create(const char *name,
 	internals = dev->data->dev_private;
 
 	internals->max_nb_qpairs = init_params->max_nb_queue_pairs;
+
+	rte_cryptodev_pmd_probing_finish(dev);
 
 	return 0;
 

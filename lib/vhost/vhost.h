@@ -164,6 +164,7 @@ struct vhost_virtqueue {
 
 	uint16_t		batch_copy_nb_elems;
 	struct batch_copy_elem	*batch_copy_elems;
+	int			numa_node;
 	bool			used_wrap_counter;
 	bool			avail_wrap_counter;
 
@@ -217,9 +218,7 @@ struct vhost_virtqueue {
 	};
 
 	/* vq async features */
-	bool		async_inorder;
 	bool		async_registered;
-	uint16_t	async_threshold;
 
 	int			notif_enable;
 #define VIRTIO_UNINITIALIZED_NOTIF	(-1)
@@ -370,6 +369,10 @@ struct virtio_net {
 	int16_t			broadcast_rarp;
 	uint32_t		nr_vring;
 	int			async_copy;
+
+	/* Record the dma map status for each region. */
+	bool			*async_map_status;
+
 	int			extbuf;
 	int			linearbuf;
 	struct vhost_virtqueue	*virtqueue[VHOST_MAX_QUEUE_PAIRS * 2];

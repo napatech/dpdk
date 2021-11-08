@@ -20,6 +20,45 @@
 #include "mlx5_tx.h"
 #include "mlx5_utils.h"
 
+/**
+ * Handle a port-agnostic message.
+ *
+ * @return
+ *   0 on success, 1 when message is not port-agnostic, (-1) on error.
+ */
+static int
+mlx5_mp_os_handle_port_agnostic(const struct rte_mp_msg *mp_msg,
+				const void *peer)
+{
+	struct rte_mp_msg mp_res;
+	struct mlx5_mp_param *res = (struct mlx5_mp_param *)mp_res.param;
+	const struct mlx5_mp_param *param =
+		(const struct mlx5_mp_param *)mp_msg->param;
+	const struct mlx5_mp_arg_mempool_reg *mpr;
+	struct mlx5_mp_id mp_id;
+
+	switch (param->type) {
+	case MLX5_MP_REQ_MEMPOOL_REGISTER:
+		mlx5_mp_id_init(&mp_id, param->port_id);
+		mp_init_msg(&mp_id, &mp_res, param->type);
+		mpr = &param->args.mempool_reg;
+		res->result = mlx5_mr_mempool_register(mpr->share_cache,
+						       mpr->pd, mpr->mempool,
+						       NULL);
+		return rte_mp_reply(&mp_res, peer);
+	case MLX5_MP_REQ_MEMPOOL_UNREGISTER:
+		mlx5_mp_id_init(&mp_id, param->port_id);
+		mp_init_msg(&mp_id, &mp_res, param->type);
+		mpr = &param->args.mempool_reg;
+		res->result = mlx5_mr_mempool_unregister(mpr->share_cache,
+							 mpr->mempool, NULL);
+		return rte_mp_reply(&mp_res, peer);
+	default:
+		return 1;
+	}
+	return -1;
+}
+
 int
 mlx5_mp_os_primary_handle(const struct rte_mp_msg *mp_msg, const void *peer)
 {
@@ -29,11 +68,17 @@ mlx5_mp_os_primary_handle(const struct rte_mp_msg *mp_msg, const void *peer)
 		(const struct mlx5_mp_param *)mp_msg->param;
 	struct rte_eth_dev *dev;
 	struct mlx5_priv *priv;
+	struct mlx5_common_device *cdev;
 	struct mr_cache_entry entry;
 	uint32_t lkey;
 	int ret;
 
 	MLX5_ASSERT(rte_eal_process_type() == RTE_PROC_PRIMARY);
+	/* Port-agnostic messages. */
+	ret = mlx5_mp_os_handle_port_agnostic(mp_msg, peer);
+	if (ret <= 0)
+		return ret;
+	/* Port-specific messages. */
 	if (!rte_eth_dev_is_valid_port(param->port_id)) {
 		rte_errno = ENODEV;
 		DRV_LOG(ERR, "port %u invalid port ID", param->port_id);
@@ -41,13 +86,13 @@ mlx5_mp_os_primary_handle(const struct rte_mp_msg *mp_msg, const void *peer)
 	}
 	dev = &rte_eth_devices[param->port_id];
 	priv = dev->data->dev_private;
+	cdev = priv->sh->cdev;
 	switch (param->type) {
 	case MLX5_MP_REQ_CREATE_MR:
 		mp_init_msg(&priv->mp_id, &mp_res, param->type);
-		lkey = mlx5_mr_create_primary(priv->sh->pd,
-					      &priv->sh->share_cache,
+		lkey = mlx5_mr_create_primary(cdev->pd, &cdev->mr_scache,
 					      &entry, param->args.addr,
-					      priv->config.mr_ext_memseg_en);
+					      cdev->config.mr_ext_memseg_en);
 		if (lkey == UINT32_MAX)
 			res->result = -rte_errno;
 		ret = rte_mp_reply(&mp_res, peer);
@@ -55,7 +100,7 @@ mlx5_mp_os_primary_handle(const struct rte_mp_msg *mp_msg, const void *peer)
 	case MLX5_MP_REQ_VERBS_CMD_FD:
 		mp_init_msg(&priv->mp_id, &mp_res, param->type);
 		mp_res.num_fds = 1;
-		mp_res.fds[0] = ((struct ibv_context *)priv->sh->ctx)->cmd_fd;
+		mp_res.fds[0] = ((struct ibv_context *)cdev->ctx)->cmd_fd;
 		res->result = 0;
 		ret = rte_mp_reply(&mp_res, peer);
 		break;
@@ -202,7 +247,8 @@ mp_req_on_rxtx(struct rte_eth_dev *dev, enum mlx5_mp_req_type type)
 	mp_init_msg(&priv->mp_id, &mp_req, type);
 	if (type == MLX5_MP_REQ_START_RXTX) {
 		mp_req.num_fds = 1;
-		mp_req.fds[0] = ((struct ibv_context *)priv->sh->ctx)->cmd_fd;
+		mp_req.fds[0] =
+			((struct ibv_context *)priv->sh->cdev->ctx)->cmd_fd;
 	}
 	ret = rte_mp_request_sync(&mp_req, &mp_rep, &ts);
 	if (ret) {

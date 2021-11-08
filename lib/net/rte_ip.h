@@ -25,6 +25,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netinet/ip.h>
+#include <netinet/ip6.h>
 #endif
 
 #include <rte_byteorder.h>
@@ -38,7 +39,19 @@ extern "C" {
  * IPv4 Header
  */
 struct rte_ipv4_hdr {
-	uint8_t  version_ihl;		/**< version and header length */
+	__extension__
+	union {
+		uint8_t version_ihl;    /**< version and header length */
+		struct {
+#if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
+			uint8_t ihl:4;     /**< header length */
+			uint8_t version:4; /**< version */
+#elif RTE_BYTE_ORDER == RTE_BIG_ENDIAN
+			uint8_t version:4; /**< version */
+			uint8_t ihl:4;     /**< header length */
+#endif
+		};
+	};
 	uint8_t  type_of_service;	/**< type of service */
 	rte_be16_t total_length;	/**< length of packet */
 	rte_be16_t packet_id;		/**< packet ID */
@@ -141,29 +154,18 @@ rte_ipv4_hdr_len(const struct rte_ipv4_hdr *ipv4_hdr)
 static inline uint32_t
 __rte_raw_cksum(const void *buf, size_t len, uint32_t sum)
 {
-	/* workaround gcc strict-aliasing warning */
-	uintptr_t ptr = (uintptr_t)buf;
+	/* extend strict-aliasing rules */
 	typedef uint16_t __attribute__((__may_alias__)) u16_p;
-	const u16_p *u16_buf = (const u16_p *)ptr;
+	const u16_p *u16_buf = (const u16_p *)buf;
+	const u16_p *end = u16_buf + len / sizeof(*u16_buf);
 
-	while (len >= (sizeof(*u16_buf) * 4)) {
-		sum += u16_buf[0];
-		sum += u16_buf[1];
-		sum += u16_buf[2];
-		sum += u16_buf[3];
-		len -= sizeof(*u16_buf) * 4;
-		u16_buf += 4;
-	}
-	while (len >= sizeof(*u16_buf)) {
+	for (; u16_buf != end; ++u16_buf)
 		sum += *u16_buf;
-		len -= sizeof(*u16_buf);
-		u16_buf += 1;
-	}
 
-	/* if length is in odd bytes */
-	if (len == 1) {
+	/* if length is odd, keeping it byte order independent */
+	if (unlikely(len % 2)) {
 		uint16_t left = 0;
-		*(uint8_t *)&left = *(const uint8_t *)u16_buf;
+		*(unsigned char *)&left = *(const unsigned char *)end;
 		sum += left;
 	}
 
@@ -333,7 +335,7 @@ rte_ipv4_phdr_cksum(const struct rte_ipv4_hdr *ipv4_hdr, uint64_t ol_flags)
 	psd_hdr.dst_addr = ipv4_hdr->dst_addr;
 	psd_hdr.zero = 0;
 	psd_hdr.proto = ipv4_hdr->next_proto_id;
-	if (ol_flags & PKT_TX_TCP_SEG) {
+	if (ol_flags & RTE_MBUF_F_TX_TCP_SEG) {
 		psd_hdr.len = 0;
 	} else {
 		l3_len = rte_be_to_cpu_16(ipv4_hdr->total_length);
@@ -344,20 +346,10 @@ rte_ipv4_phdr_cksum(const struct rte_ipv4_hdr *ipv4_hdr, uint64_t ol_flags)
 }
 
 /**
- * Process the IPv4 UDP or TCP checksum.
- *
- * The IP and layer 4 checksum must be set to 0 in the packet by
- * the caller.
- *
- * @param ipv4_hdr
- *   The pointer to the contiguous IPv4 header.
- * @param l4_hdr
- *   The pointer to the beginning of the L4 header.
- * @return
- *   The complemented checksum to set in the IP packet.
+ * @internal Calculate the non-complemented IPv4 L4 checksum
  */
 static inline uint16_t
-rte_ipv4_udptcp_cksum(const struct rte_ipv4_hdr *ipv4_hdr, const void *l4_hdr)
+__rte_ipv4_udptcp_cksum(const struct rte_ipv4_hdr *ipv4_hdr, const void *l4_hdr)
 {
 	uint32_t cksum;
 	uint32_t l3_len, l4_len;
@@ -374,16 +366,64 @@ rte_ipv4_udptcp_cksum(const struct rte_ipv4_hdr *ipv4_hdr, const void *l4_hdr)
 	cksum += rte_ipv4_phdr_cksum(ipv4_hdr, 0);
 
 	cksum = ((cksum & 0xffff0000) >> 16) + (cksum & 0xffff);
-	cksum = (~cksum) & 0xffff;
+
+	return (uint16_t)cksum;
+}
+
+/**
+ * Process the IPv4 UDP or TCP checksum.
+ *
+ * The layer 4 checksum must be set to 0 in the L4 header by the caller.
+ *
+ * @param ipv4_hdr
+ *   The pointer to the contiguous IPv4 header.
+ * @param l4_hdr
+ *   The pointer to the beginning of the L4 header.
+ * @return
+ *   The complemented checksum to set in the L4 header.
+ */
+static inline uint16_t
+rte_ipv4_udptcp_cksum(const struct rte_ipv4_hdr *ipv4_hdr, const void *l4_hdr)
+{
+	uint16_t cksum = __rte_ipv4_udptcp_cksum(ipv4_hdr, l4_hdr);
+
+	cksum = ~cksum;
+
 	/*
-	 * Per RFC 768:If the computed checksum is zero for UDP,
+	 * Per RFC 768: If the computed checksum is zero for UDP,
 	 * it is transmitted as all ones
 	 * (the equivalent in one's complement arithmetic).
 	 */
 	if (cksum == 0 && ipv4_hdr->next_proto_id == IPPROTO_UDP)
 		cksum = 0xffff;
 
-	return (uint16_t)cksum;
+	return cksum;
+}
+
+/**
+ * Validate the IPv4 UDP or TCP checksum.
+ *
+ * In case of UDP, the caller must first check if udp_hdr->dgram_cksum is 0
+ * (i.e. no checksum).
+ *
+ * @param ipv4_hdr
+ *   The pointer to the contiguous IPv4 header.
+ * @param l4_hdr
+ *   The pointer to the beginning of the L4 header.
+ * @return
+ *   Return 0 if the checksum is correct, else -1.
+ */
+__rte_experimental
+static inline int
+rte_ipv4_udptcp_cksum_verify(const struct rte_ipv4_hdr *ipv4_hdr,
+			     const void *l4_hdr)
+{
+	uint16_t cksum = __rte_ipv4_udptcp_cksum(ipv4_hdr, l4_hdr);
+
+	if (cksum != 0xffff)
+		return -1;
+
+	return 0;
 }
 
 /**
@@ -435,7 +475,7 @@ rte_ipv6_phdr_cksum(const struct rte_ipv6_hdr *ipv6_hdr, uint64_t ol_flags)
 	} psd_hdr;
 
 	psd_hdr.proto = (uint32_t)(ipv6_hdr->proto << 24);
-	if (ol_flags & PKT_TX_TCP_SEG) {
+	if (ol_flags & RTE_MBUF_F_TX_TCP_SEG) {
 		psd_hdr.len = 0;
 	} else {
 		psd_hdr.len = ipv6_hdr->payload_len;
@@ -449,20 +489,10 @@ rte_ipv6_phdr_cksum(const struct rte_ipv6_hdr *ipv6_hdr, uint64_t ol_flags)
 }
 
 /**
- * Process the IPv6 UDP or TCP checksum.
- *
- * The IPv4 header should not contains options. The layer 4 checksum
- * must be set to 0 in the packet by the caller.
- *
- * @param ipv6_hdr
- *   The pointer to the contiguous IPv6 header.
- * @param l4_hdr
- *   The pointer to the beginning of the L4 header.
- * @return
- *   The complemented checksum to set in the IP packet.
+ * @internal Calculate the non-complemented IPv6 L4 checksum
  */
 static inline uint16_t
-rte_ipv6_udptcp_cksum(const struct rte_ipv6_hdr *ipv6_hdr, const void *l4_hdr)
+__rte_ipv6_udptcp_cksum(const struct rte_ipv6_hdr *ipv6_hdr, const void *l4_hdr)
 {
 	uint32_t cksum;
 	uint32_t l4_len;
@@ -473,7 +503,30 @@ rte_ipv6_udptcp_cksum(const struct rte_ipv6_hdr *ipv6_hdr, const void *l4_hdr)
 	cksum += rte_ipv6_phdr_cksum(ipv6_hdr, 0);
 
 	cksum = ((cksum & 0xffff0000) >> 16) + (cksum & 0xffff);
-	cksum = (~cksum) & 0xffff;
+
+	return (uint16_t)cksum;
+}
+
+/**
+ * Process the IPv6 UDP or TCP checksum.
+ *
+ * The IPv6 header must not be followed by extension headers. The layer 4
+ * checksum must be set to 0 in the L4 header by the caller.
+ *
+ * @param ipv6_hdr
+ *   The pointer to the contiguous IPv6 header.
+ * @param l4_hdr
+ *   The pointer to the beginning of the L4 header.
+ * @return
+ *   The complemented checksum to set in the L4 header.
+ */
+static inline uint16_t
+rte_ipv6_udptcp_cksum(const struct rte_ipv6_hdr *ipv6_hdr, const void *l4_hdr)
+{
+	uint16_t cksum = __rte_ipv6_udptcp_cksum(ipv6_hdr, l4_hdr);
+
+	cksum = ~cksum;
+
 	/*
 	 * Per RFC 768: If the computed checksum is zero for UDP,
 	 * it is transmitted as all ones
@@ -482,7 +535,34 @@ rte_ipv6_udptcp_cksum(const struct rte_ipv6_hdr *ipv6_hdr, const void *l4_hdr)
 	if (cksum == 0 && ipv6_hdr->proto == IPPROTO_UDP)
 		cksum = 0xffff;
 
-	return (uint16_t)cksum;
+	return cksum;
+}
+
+/**
+ * Validate the IPv6 UDP or TCP checksum.
+ *
+ * In case of UDP, the caller must first check if udp_hdr->dgram_cksum is 0:
+ * this is either invalid or means no checksum in some situations. See 8.1
+ * (Upper-Layer Checksums) in RFC 8200.
+ *
+ * @param ipv6_hdr
+ *   The pointer to the contiguous IPv6 header.
+ * @param l4_hdr
+ *   The pointer to the beginning of the L4 header.
+ * @return
+ *   Return 0 if the checksum is correct, else -1.
+ */
+__rte_experimental
+static inline int
+rte_ipv6_udptcp_cksum_verify(const struct rte_ipv6_hdr *ipv6_hdr,
+			     const void *l4_hdr)
+{
+	uint16_t cksum = __rte_ipv6_udptcp_cksum(ipv6_hdr, l4_hdr);
+
+	if (cksum != 0xffff)
+		return -1;
+
+	return 0;
 }
 
 /** IPv6 fragment extension header. */

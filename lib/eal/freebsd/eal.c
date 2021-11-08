@@ -575,12 +575,14 @@ eal_parse_args(int argc, char **argv)
 		}
 	}
 
-	/* create runtime data directory */
-	if (internal_conf->no_shconf == 0 &&
-			eal_create_runtime_dir() < 0) {
-		RTE_LOG(ERR, EAL, "Cannot create runtime directory\n");
-		ret = -1;
-		goto out;
+	/* create runtime data directory. In no_shconf mode, skip any errors */
+	if (eal_create_runtime_dir() < 0) {
+		if (internal_conf->no_shconf == 0) {
+			RTE_LOG(ERR, EAL, "Cannot create runtime directory\n");
+			ret = -1;
+			goto out;
+		} else
+			RTE_LOG(WARNING, EAL, "No DPDK runtime directory created\n");
 	}
 
 	if (eal_adjust_config(internal_conf) != 0) {
@@ -716,6 +718,10 @@ rte_eal_init(int argc, char **argv)
 
 	/* FreeBSD always uses legacy memory model */
 	internal_conf->legacy_mem = true;
+	if (internal_conf->in_memory) {
+		RTE_LOG(WARNING, EAL, "Warning: ignoring unsupported flag, '%s'\n", OPT_IN_MEMORY);
+		internal_conf->in_memory = false;
+	}
 
 	if (eal_plugins_init() < 0) {
 		rte_eal_init_alert("Cannot init plugins");
@@ -944,7 +950,7 @@ rte_eal_init(int argc, char **argv)
 		rte_eal_init_alert("Cannot clear runtime directory");
 		return -1;
 	}
-	if (!internal_conf->no_telemetry) {
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY && !internal_conf->no_telemetry) {
 		int tlog = rte_log_register_type_and_pick_level(
 				"lib.telemetry", RTE_LOG_WARNING);
 		if (tlog < 0)
@@ -969,6 +975,7 @@ rte_eal_cleanup(void)
 	rte_mp_channel_cleanup();
 	/* after this point, any DPDK pointers will become dangling */
 	rte_eal_memory_detach();
+	rte_eal_alarm_cleanup();
 	rte_trace_save();
 	eal_trace_fini();
 	eal_cleanup_config(internal_conf);

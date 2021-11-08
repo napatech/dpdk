@@ -220,7 +220,8 @@ sfc_ef10_essb_rx_qrefill(struct sfc_ef10_essb_rxq *rxq)
 
 	SFC_ASSERT(rxq->added != added);
 	rxq->added = added;
-	sfc_ef10_rx_qpush(rxq->doorbell, added, rxq_ptr_mask);
+	sfc_ef10_rx_qpush(rxq->doorbell, added, rxq_ptr_mask,
+			  &rxq->dp.dpq.rx_dbells);
 }
 
 static bool
@@ -373,13 +374,13 @@ sfc_ef10_essb_rx_get_pending(struct sfc_ef10_essb_rxq *rxq,
 			rte_pktmbuf_data_len(m) = pkt_len;
 
 			m->ol_flags |=
-				(PKT_RX_RSS_HASH *
+				(RTE_MBUF_F_RX_RSS_HASH *
 				 !!EFX_TEST_QWORD_BIT(*qwordp,
 					ES_EZ_ESSB_RX_PREFIX_HASH_VALID_LBN)) |
-				(PKT_RX_FDIR_ID *
+				(RTE_MBUF_F_RX_FDIR_ID *
 				 !!EFX_TEST_QWORD_BIT(*qwordp,
 					ES_EZ_ESSB_RX_PREFIX_MARK_VALID_LBN)) |
-				(PKT_RX_FDIR *
+				(RTE_MBUF_F_RX_FDIR *
 				 !!EFX_TEST_QWORD_BIT(*qwordp,
 					ES_EZ_ESSB_RX_PREFIX_MATCH_FLAG_LBN));
 
@@ -745,8 +746,8 @@ struct sfc_dp_rx sfc_ef10_essb_rx = {
 	},
 	.features		= SFC_DP_RX_FEAT_FLOW_FLAG |
 				  SFC_DP_RX_FEAT_FLOW_MARK,
-	.dev_offload_capa	= DEV_RX_OFFLOAD_CHECKSUM |
-				  DEV_RX_OFFLOAD_RSS_HASH,
+	.dev_offload_capa	= RTE_ETH_RX_OFFLOAD_CHECKSUM |
+				  RTE_ETH_RX_OFFLOAD_RSS_HASH,
 	.queue_offload_capa	= 0,
 	.get_dev_info		= sfc_ef10_essb_rx_get_dev_info,
 	.pool_ops_supported	= sfc_ef10_essb_rx_pool_ops_supported,

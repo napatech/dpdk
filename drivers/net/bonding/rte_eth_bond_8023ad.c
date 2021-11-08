@@ -55,11 +55,11 @@ bond_print_lacp(struct lacpdu *l)
 	uint8_t *addr;
 
 	addr = l->actor.port_params.system.addr_bytes;
-	snprintf(a_address, sizeof(a_address), "%02X:%02X:%02X:%02X:%02X:%02X",
+	snprintf(a_address, sizeof(a_address), RTE_ETHER_ADDR_PRT_FMT,
 		addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
 
 	addr = l->partner.port_params.system.addr_bytes;
-	snprintf(p_address, sizeof(p_address), "%02X:%02X:%02X:%02X:%02X:%02X",
+	snprintf(p_address, sizeof(p_address), RTE_ETHER_ADDR_PRT_FMT,
 		addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
 
 	for (i = 0; i < 8; i++) {
@@ -587,8 +587,8 @@ tx_machine(struct bond_dev_private *internals, uint16_t slave_id)
 	hdr = rte_pktmbuf_mtod(lacp_pkt, struct lacpdu_header *);
 
 	/* Source and destination MAC */
-	rte_ether_addr_copy(&lacp_mac_addr, &hdr->eth_hdr.d_addr);
-	rte_eth_macaddr_get(slave_id, &hdr->eth_hdr.s_addr);
+	rte_ether_addr_copy(&lacp_mac_addr, &hdr->eth_hdr.dst_addr);
+	rte_eth_macaddr_get(slave_id, &hdr->eth_hdr.src_addr);
 	hdr->eth_hdr.ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_SLOW);
 
 	lacpdu = &hdr->lacpdu;
@@ -770,25 +770,25 @@ link_speed_key(uint16_t speed) {
 	uint16_t key_speed;
 
 	switch (speed) {
-	case ETH_SPEED_NUM_NONE:
+	case RTE_ETH_SPEED_NUM_NONE:
 		key_speed = 0x00;
 		break;
-	case ETH_SPEED_NUM_10M:
+	case RTE_ETH_SPEED_NUM_10M:
 		key_speed = BOND_LINK_SPEED_KEY_10M;
 		break;
-	case ETH_SPEED_NUM_100M:
+	case RTE_ETH_SPEED_NUM_100M:
 		key_speed = BOND_LINK_SPEED_KEY_100M;
 		break;
-	case ETH_SPEED_NUM_1G:
+	case RTE_ETH_SPEED_NUM_1G:
 		key_speed = BOND_LINK_SPEED_KEY_1000M;
 		break;
-	case ETH_SPEED_NUM_10G:
+	case RTE_ETH_SPEED_NUM_10G:
 		key_speed = BOND_LINK_SPEED_KEY_10G;
 		break;
-	case ETH_SPEED_NUM_20G:
+	case RTE_ETH_SPEED_NUM_20G:
 		key_speed = BOND_LINK_SPEED_KEY_20G;
 		break;
-	case ETH_SPEED_NUM_40G:
+	case RTE_ETH_SPEED_NUM_40G:
 		key_speed = BOND_LINK_SPEED_KEY_40G;
 		break;
 	default:
@@ -839,6 +839,27 @@ rx_machine_update(struct bond_dev_private *internals, uint16_t slave_id,
 }
 
 static void
+bond_mode_8023ad_dedicated_rxq_process(struct bond_dev_private *internals,
+			uint16_t slave_id)
+{
+#define DEDICATED_QUEUE_BURST_SIZE 32
+	struct rte_mbuf *lacp_pkt[DEDICATED_QUEUE_BURST_SIZE];
+	uint16_t rx_count = rte_eth_rx_burst(slave_id,
+				internals->mode4.dedicated_queues.rx_qid,
+				lacp_pkt, DEDICATED_QUEUE_BURST_SIZE);
+
+	if (rx_count) {
+		uint16_t i;
+
+		for (i = 0; i < rx_count; i++)
+			bond_mode_8023ad_handle_slow_pkt(internals, slave_id,
+					lacp_pkt[i]);
+	} else {
+		rx_machine_update(internals, slave_id, NULL);
+	}
+}
+
+static void
 bond_mode_8023ad_periodic_cb(void *arg)
 {
 	struct rte_eth_dev *bond_dev = arg;
@@ -866,7 +887,7 @@ bond_mode_8023ad_periodic_cb(void *arg)
 
 		if (ret >= 0 && link_info.link_status != 0) {
 			key = link_speed_key(link_info.link_speed) << 1;
-			if (link_info.link_duplex == ETH_LINK_FULL_DUPLEX)
+			if (link_info.link_duplex == RTE_ETH_LINK_FULL_DUPLEX)
 				key |= BOND_LINK_FULL_DUPLEX_KEY;
 		} else {
 			key = 0;
@@ -926,15 +947,8 @@ bond_mode_8023ad_periodic_cb(void *arg)
 
 			rx_machine_update(internals, slave_id, lacp_pkt);
 		} else {
-			uint16_t rx_count = rte_eth_rx_burst(slave_id,
-					internals->mode4.dedicated_queues.rx_qid,
-					&lacp_pkt, 1);
-
-			if (rx_count == 1)
-				bond_mode_8023ad_handle_slow_pkt(internals,
-						slave_id, lacp_pkt);
-			else
-				rx_machine_update(internals, slave_id, NULL);
+			bond_mode_8023ad_dedicated_rxq_process(internals,
+					slave_id);
 		}
 
 		periodic_machine(internals, slave_id);
@@ -1346,7 +1360,7 @@ bond_mode_8023ad_handle_slow_pkt(struct bond_dev_private *internals,
 		} while (unlikely(retval == 0));
 
 		m_hdr->marker.tlv_type_marker = MARKER_TLV_TYPE_RESP;
-		rte_eth_macaddr_get(slave_id, &m_hdr->eth_hdr.s_addr);
+		rte_eth_macaddr_get(slave_id, &m_hdr->eth_hdr.src_addr);
 
 		if (internals->mode4.dedicated_queues.enabled == 0) {
 			if (rte_ring_enqueue(port->tx_ring, pkt) != 0) {

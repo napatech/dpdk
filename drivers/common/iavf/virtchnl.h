@@ -85,6 +85,10 @@ enum virtchnl_rx_hsplit {
 	VIRTCHNL_RX_HSPLIT_SPLIT_SCTP    = 8,
 };
 
+enum virtchnl_bw_limit_type {
+	VIRTCHNL_BW_SHAPER = 0,
+};
+
 #define VIRTCHNL_ETH_LENGTH_OF_ADDRESS	6
 /* END GENERIC DEFINES */
 
@@ -130,6 +134,7 @@ enum virtchnl_ops {
 	VIRTCHNL_OP_ADD_CLOUD_FILTER = 32,
 	VIRTCHNL_OP_DEL_CLOUD_FILTER = 33,
 	/* opcodes 34, 35, 36, and 37 are reserved */
+	VIRTCHNL_OP_DCF_CONFIG_BW = 37,
 	VIRTCHNL_OP_DCF_VLAN_OFFLOAD = 38,
 	VIRTCHNL_OP_DCF_CMD_DESC = 39,
 	VIRTCHNL_OP_DCF_CMD_BUFF = 40,
@@ -141,7 +146,6 @@ enum virtchnl_ops {
 	VIRTCHNL_OP_DEL_RSS_CFG = 46,
 	VIRTCHNL_OP_ADD_FDIR_FILTER = 47,
 	VIRTCHNL_OP_DEL_FDIR_FILTER = 48,
-	VIRTCHNL_OP_QUERY_FDIR_FILTER = 49,
 	VIRTCHNL_OP_GET_MAX_RSS_QREGION = 50,
 	VIRTCHNL_OP_GET_OFFLOAD_VLAN_V2_CAPS = 51,
 	VIRTCHNL_OP_ADD_VLAN_V2 = 52,
@@ -152,6 +156,8 @@ enum virtchnl_ops {
 	VIRTCHNL_OP_DISABLE_VLAN_INSERTION_V2 = 57,
 	VIRTCHNL_OP_ENABLE_VLAN_FILTERING_V2 = 58,
 	VIRTCHNL_OP_DISABLE_VLAN_FILTERING_V2 = 59,
+	VIRTCHNL_OP_GET_QOS_CAPS = 66,
+	VIRTCHNL_OP_CONFIG_QUEUE_TC_MAP = 67,
 	VIRTCHNL_OP_ENABLE_QUEUES_V2 = 107,
 	VIRTCHNL_OP_DISABLE_QUEUES_V2 = 108,
 	VIRTCHNL_OP_MAP_QUEUE_VECTOR = 111,
@@ -237,8 +243,6 @@ static inline const char *virtchnl_op_str(enum virtchnl_ops v_opcode)
 		return "VIRTCHNL_OP_ADD_FDIR_FILTER";
 	case VIRTCHNL_OP_DEL_FDIR_FILTER:
 		return "VIRTCHNL_OP_DEL_FDIR_FILTER";
-	case VIRTCHNL_OP_QUERY_FDIR_FILTER:
-		return "VIRTCHNL_OP_QUERY_FDIR_FILTER";
 	case VIRTCHNL_OP_GET_MAX_RSS_QREGION:
 		return "VIRTCHNL_OP_GET_MAX_RSS_QREGION";
 	case VIRTCHNL_OP_ENABLE_QUEUES_V2:
@@ -398,6 +402,7 @@ VIRTCHNL_CHECK_STRUCT_LEN(16, virtchnl_vsi_resource);
 #define VIRTCHNL_VF_OFFLOAD_RX_FLEX_DESC	BIT(26)
 #define VIRTCHNL_VF_OFFLOAD_ADV_RSS_PF		BIT(27)
 #define VIRTCHNL_VF_OFFLOAD_FDIR_PF		BIT(28)
+#define VIRTCHNL_VF_OFFLOAD_QOS		BIT(29)
 #define VIRTCHNL_VF_CAP_DCF			BIT(30)
 	/* BIT(31) is reserved */
 
@@ -1285,6 +1290,14 @@ struct virtchnl_filter {
 
 VIRTCHNL_CHECK_STRUCT_LEN(272, virtchnl_filter);
 
+struct virtchnl_shaper_bw {
+	/* Unit is Kbps */
+	u32 committed;
+	u32 peak;
+};
+
+VIRTCHNL_CHECK_STRUCT_LEN(8, virtchnl_shaper_bw);
+
 /* VIRTCHNL_OP_DCF_GET_VSI_MAP
  * VF sends this message to get VSI mapping table.
  * PF responds with an indirect message containing VF's
@@ -1356,6 +1369,37 @@ struct virtchnl_dcf_vlan_offload {
 };
 
 VIRTCHNL_CHECK_STRUCT_LEN(16, virtchnl_dcf_vlan_offload);
+
+struct virtchnl_dcf_bw_cfg {
+	u8 tc_num;
+#define VIRTCHNL_DCF_BW_CIR		BIT(0)
+#define VIRTCHNL_DCF_BW_PIR		BIT(1)
+	u8 bw_type;
+	u8 pad[2];
+	enum virtchnl_bw_limit_type type;
+	union {
+		struct virtchnl_shaper_bw shaper;
+		u8 pad2[32];
+	};
+};
+
+VIRTCHNL_CHECK_STRUCT_LEN(40, virtchnl_dcf_bw_cfg);
+
+/* VIRTCHNL_OP_DCF_CONFIG_BW
+ * VF send this message to set the bandwidth configuration of each
+ * TC with a specific vf id. The flag node_type is to indicate that
+ * this message is to configure VSI node or TC node bandwidth.
+ */
+struct virtchnl_dcf_bw_cfg_list {
+	u16 vf_id;
+	u8 num_elem;
+#define VIRTCHNL_DCF_TARGET_TC_BW	0
+#define VIRTCHNL_DCF_TARGET_VF_BW	1
+	u8 node_type;
+	struct virtchnl_dcf_bw_cfg cfg[1];
+};
+
+VIRTCHNL_CHECK_STRUCT_LEN(44, virtchnl_dcf_bw_cfg_list);
 
 struct virtchnl_supported_rxdids {
 	/* see enum virtchnl_rx_desc_id_bitmasks */
@@ -1504,6 +1548,7 @@ enum virtchnl_proto_hdr_type {
 	 */
 	VIRTCHNL_PROTO_HDR_IPV4_FRAG,
 	VIRTCHNL_PROTO_HDR_IPV6_EH_FRAG,
+	VIRTCHNL_PROTO_HDR_GRE,
 };
 
 /* Protocol header field within a protocol header. */
@@ -1526,6 +1571,7 @@ enum virtchnl_proto_hdr_field {
 	VIRTCHNL_PROTO_HDR_IPV4_DSCP,
 	VIRTCHNL_PROTO_HDR_IPV4_TTL,
 	VIRTCHNL_PROTO_HDR_IPV4_PROT,
+	VIRTCHNL_PROTO_HDR_IPV4_CHKSUM,
 	/* IPV6 */
 	VIRTCHNL_PROTO_HDR_IPV6_SRC =
 		PROTO_HDR_FIELD_START(VIRTCHNL_PROTO_HDR_IPV6),
@@ -1550,14 +1596,17 @@ enum virtchnl_proto_hdr_field {
 	VIRTCHNL_PROTO_HDR_TCP_SRC_PORT =
 		PROTO_HDR_FIELD_START(VIRTCHNL_PROTO_HDR_TCP),
 	VIRTCHNL_PROTO_HDR_TCP_DST_PORT,
+	VIRTCHNL_PROTO_HDR_TCP_CHKSUM,
 	/* UDP */
 	VIRTCHNL_PROTO_HDR_UDP_SRC_PORT =
 		PROTO_HDR_FIELD_START(VIRTCHNL_PROTO_HDR_UDP),
 	VIRTCHNL_PROTO_HDR_UDP_DST_PORT,
+	VIRTCHNL_PROTO_HDR_UDP_CHKSUM,
 	/* SCTP */
 	VIRTCHNL_PROTO_HDR_SCTP_SRC_PORT =
 		PROTO_HDR_FIELD_START(VIRTCHNL_PROTO_HDR_SCTP),
 	VIRTCHNL_PROTO_HDR_SCTP_DST_PORT,
+	VIRTCHNL_PROTO_HDR_SCTP_CHKSUM,
 	/* GTPU_IP */
 	VIRTCHNL_PROTO_HDR_GTPU_IP_TEID =
 		PROTO_HDR_FIELD_START(VIRTCHNL_PROTO_HDR_GTPU_IP),
@@ -1594,6 +1643,11 @@ enum virtchnl_proto_hdr_field {
 	/* IPv6 Extension Fragment */
 	VIRTCHNL_PROTO_HDR_IPV6_EH_FRAG_PKID =
 		PROTO_HDR_FIELD_START(VIRTCHNL_PROTO_HDR_IPV6_EH_FRAG),
+	/* GTPU_DWN/UP */
+	VIRTCHNL_PROTO_HDR_GTPU_DWN_QFI =
+		PROTO_HDR_FIELD_START(VIRTCHNL_PROTO_HDR_GTPU_EH_PDU_DWN),
+	VIRTCHNL_PROTO_HDR_GTPU_UP_QFI =
+		PROTO_HDR_FIELD_START(VIRTCHNL_PROTO_HDR_GTPU_EH_PDU_UP),
 };
 
 struct virtchnl_proto_hdr {
@@ -1677,20 +1731,6 @@ struct virtchnl_fdir_rule {
 
 VIRTCHNL_CHECK_STRUCT_LEN(2604, virtchnl_fdir_rule);
 
-/* query information to retrieve fdir rule counters.
- * PF will fill out this structure to reset counter.
- */
-struct virtchnl_fdir_query_info {
-	u32 match_packets_valid:1;
-	u32 match_bytes_valid:1;
-	u32 reserved:30;  /* Reserved, must be zero. */
-	u32 pad;
-	u64 matched_packets; /* Number of packets for this rule. */
-	u64 matched_bytes;   /* Number of bytes through this rule. */
-};
-
-VIRTCHNL_CHECK_STRUCT_LEN(24, virtchnl_fdir_query_info);
-
 /* Status returned to VF after VF requests FDIR commands
  * VIRTCHNL_FDIR_SUCCESS
  * VF FDIR related request is successfully done by PF
@@ -1767,24 +1807,62 @@ struct virtchnl_fdir_del {
 
 VIRTCHNL_CHECK_STRUCT_LEN(12, virtchnl_fdir_del);
 
-/* VIRTCHNL_OP_QUERY_FDIR_FILTER
- * VF sends this request to PF by filling out vsi_id,
- * flow_id and reset_counter. PF will return query_info
- * and query_status to VF.
+/* VIRTCHNL_OP_GET_QOS_CAPS
+ * VF sends this message to get its QoS Caps, such as
+ * TC number, Arbiter and Bandwidth.
  */
-struct virtchnl_fdir_query {
-	u16 vsi_id;   /* INPUT */
-	u16 pad1[3];
-	u32 flow_id;  /* INPUT */
-	u32 reset_counter:1; /* INPUT */
-	struct virtchnl_fdir_query_info query_info; /* OUTPUT */
-
-	/* see enum virtchnl_fdir_prgm_status; OUTPUT */
-	s32 status;
-	u32 pad2;
+struct virtchnl_qos_cap_elem {
+	u8 tc_num;
+	u8 tc_prio;
+#define VIRTCHNL_ABITER_STRICT      0
+#define VIRTCHNL_ABITER_ETS         2
+	u8 arbiter;
+#define VIRTCHNL_STRICT_WEIGHT      1
+	u8 weight;
+	enum virtchnl_bw_limit_type type;
+	union {
+		struct virtchnl_shaper_bw shaper;
+		u8 pad2[32];
+	};
 };
 
-VIRTCHNL_CHECK_STRUCT_LEN(48, virtchnl_fdir_query);
+VIRTCHNL_CHECK_STRUCT_LEN(40, virtchnl_qos_cap_elem);
+
+struct virtchnl_qos_cap_list {
+	u16 vsi_id;
+	u16 num_elem;
+	struct virtchnl_qos_cap_elem cap[1];
+};
+
+VIRTCHNL_CHECK_STRUCT_LEN(44, virtchnl_qos_cap_list);
+
+/* VIRTCHNL_OP_CONFIG_QUEUE_TC_MAP
+ * VF sends message virtchnl_queue_tc_mapping to set queue to tc
+ * mapping for all the Tx and Rx queues with a specified VSI, and
+ * would get response about bitmap of valid user priorities
+ * associated with queues.
+ */
+struct virtchnl_queue_tc_mapping {
+	u16 vsi_id;
+	u16 num_tc;
+	u16 num_queue_pairs;
+	u8 pad[2];
+	union {
+		struct {
+			u16 start_queue_id;
+			u16 queue_count;
+		} req;
+		struct {
+#define VIRTCHNL_USER_PRIO_TYPE_UP	0
+#define VIRTCHNL_USER_PRIO_TYPE_DSCP	1
+			u16 prio_type;
+			u16 valid_prio_bitmap;
+		} resp;
+	} tc[1];
+};
+
+VIRTCHNL_CHECK_STRUCT_LEN(12, virtchnl_queue_tc_mapping);
+
 
 /* TX and RX queue types are valid in legacy as well as split queue models.
  * With Split Queue model, 2 additional types are introduced - TX_COMPLETION
@@ -2117,6 +2195,19 @@ virtchnl_vc_validate_vf_msg(struct virtchnl_version_info *ver, u32 v_opcode,
 	case VIRTCHNL_OP_DCF_GET_VSI_MAP:
 	case VIRTCHNL_OP_DCF_GET_PKG_INFO:
 		break;
+	case VIRTCHNL_OP_DCF_CONFIG_BW:
+		valid_len = sizeof(struct virtchnl_dcf_bw_cfg_list);
+		if (msglen >= valid_len) {
+			struct virtchnl_dcf_bw_cfg_list *cfg_list =
+				(struct virtchnl_dcf_bw_cfg_list *)msg;
+			if (cfg_list->num_elem == 0) {
+				err_msg_format = true;
+				break;
+			}
+			valid_len += (cfg_list->num_elem - 1) *
+					 sizeof(struct virtchnl_dcf_bw_cfg);
+		}
+		break;
 	case VIRTCHNL_OP_GET_SUPPORTED_RXDIDS:
 		break;
 	case VIRTCHNL_OP_ADD_RSS_CFG:
@@ -2129,8 +2220,20 @@ virtchnl_vc_validate_vf_msg(struct virtchnl_version_info *ver, u32 v_opcode,
 	case VIRTCHNL_OP_DEL_FDIR_FILTER:
 		valid_len = sizeof(struct virtchnl_fdir_del);
 		break;
-	case VIRTCHNL_OP_QUERY_FDIR_FILTER:
-		valid_len = sizeof(struct virtchnl_fdir_query);
+	case VIRTCHNL_OP_GET_QOS_CAPS:
+		break;
+	case VIRTCHNL_OP_CONFIG_QUEUE_TC_MAP:
+		valid_len = sizeof(struct virtchnl_queue_tc_mapping);
+		if (msglen >= valid_len) {
+			struct virtchnl_queue_tc_mapping *q_tc =
+				(struct virtchnl_queue_tc_mapping *)msg;
+			if (q_tc->num_tc == 0) {
+				err_msg_format = true;
+				break;
+			}
+			valid_len += (q_tc->num_tc - 1) *
+					 sizeof(q_tc->tc[0]);
+		}
 		break;
 	case VIRTCHNL_OP_GET_OFFLOAD_VLAN_V2_CAPS:
 		break;

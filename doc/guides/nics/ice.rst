@@ -28,7 +28,8 @@ Linux Prerequisites
 Windows Prerequisites
 ---------------------
 
-- Follow the DPDK `Getting Started Guide for Windows <https://doc.dpdk.org/guides/windows_gsg/index.html>`_ to setup the basic DPDK environment.
+- Follow the :doc:`guide for Windows <../windows_gsg/run_apps>`
+  to setup the basic DPDK environment.
 
 - Identify the Intel® Ethernet adapter and get the latest NVM/FW version.
 
@@ -54,6 +55,8 @@ The detailed information can refer to chapter Tested Platforms/Tested NICs in re
    |    20.11  |     1.3.2     |      1.3.20     |  1.3.24   |      N/A     |    2.3    |
    +-----------+---------------+-----------------+-----------+--------------+-----------+
    |    21.02  |     1.4.11    |      1.3.24     |  1.3.28   |    1.3.4     |    2.4    |
+   +-----------+---------------+-----------------+-----------+--------------+-----------+
+   |    21.05  |     1.6.5     |      1.3.26     |  1.3.30   |    1.3.6     |    3.0    |
    +-----------+---------------+-----------------+-----------+--------------+-----------+
 
 Pre-Installation Configuration
@@ -208,6 +211,34 @@ Runtime Config Options
 
   The ``rte_net_ice_dump_proto_xtr_metadata`` routine shows how to
   access the protocol extraction result in ``struct rte_mbuf``.
+
+- ``Hardware debug mask log support`` (default ``0``)
+
+  User can enable the related hardware debug mask such as ICE_DBG_NVM::
+
+    -a 0000:88:00.0,hw_debug_mask=0x80 --log-level=pmd.net.ice.driver:8
+
+  These ICE_DBG_XXX are defined in ``drivers/net/ice/base/ice_type.h``.
+
+- ``1PPS out support``
+
+  The E810 supports four single-ended GPIO signals (SDP[20:23]). The 1PPS
+  signal outputs via SDP[20:23]. User can select GPIO pin index flexibly.
+  Pin index 0 means SDP20, 1 means SDP21 and so on. For example::
+
+    -a af:00.0,pps_out='[pin:0]'
+
+- ``Low Rx latency`` (default ``0``)
+
+  vRAN workloads require low latency DPDK interface for the front haul
+  interface connection to Radio. By specifying ``1`` for parameter
+  ``rx_low_latency``, each completed Rx descriptor can be written immediately
+  to host memory and the Rx interrupt latency can be reduced to 2us::
+
+    -a 0000:88:00.0,rx_low_latency=1
+
+  As a trade-off, this configuration may cause the packet processing performance
+  degradation due to the PCI bandwidth limitation.
 
 Driver compilation and testing
 ------------------------------

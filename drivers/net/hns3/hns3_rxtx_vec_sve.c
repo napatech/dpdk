@@ -43,7 +43,7 @@ hns3_desc_parse_field_sve(struct hns3_rx_queue *rxq,
 
 	for (i = 0; i < (int)bd_vld_num; i++) {
 		/* init rte_mbuf.rearm_data last 64-bit */
-		rx_pkts[i]->ol_flags = PKT_RX_RSS_HASH;
+		rx_pkts[i]->ol_flags = RTE_MBUF_F_RX_RSS_HASH;
 
 		ret = hns3_handle_bdinfo(rxq, rx_pkts[i], key->bd_base_info[i],
 					 key->l234_info[i]);
@@ -475,7 +475,7 @@ hns3_xmit_fixed_burst_vec_sve(void *__restrict tx_queue,
 	txq->next_to_use += nb_pkts - nb_tx;
 
 	txq->tx_bd_ready -= nb_pkts;
-	hns3_write_reg_opt(txq->io_tail_reg, nb_pkts);
+	hns3_write_txq_tail_reg(txq, nb_pkts);
 
 	return nb_pkts;
 }

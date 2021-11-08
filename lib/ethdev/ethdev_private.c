@@ -174,3 +174,86 @@ done:
 		RTE_LOG(ERR, EAL, "wrong representor format: %s\n", str);
 	return str == NULL ? -1 : 0;
 }
+
+static uint16_t
+dummy_eth_rx_burst(__rte_unused void *rxq,
+		__rte_unused struct rte_mbuf **rx_pkts,
+		__rte_unused uint16_t nb_pkts)
+{
+	RTE_ETHDEV_LOG(ERR, "rx_pkt_burst for not ready port\n");
+	rte_errno = ENOTSUP;
+	return 0;
+}
+
+static uint16_t
+dummy_eth_tx_burst(__rte_unused void *txq,
+		__rte_unused struct rte_mbuf **tx_pkts,
+		__rte_unused uint16_t nb_pkts)
+{
+	RTE_ETHDEV_LOG(ERR, "tx_pkt_burst for not ready port\n");
+	rte_errno = ENOTSUP;
+	return 0;
+}
+
+void
+eth_dev_fp_ops_reset(struct rte_eth_fp_ops *fpo)
+{
+	static void *dummy_data[RTE_MAX_QUEUES_PER_PORT];
+	static const struct rte_eth_fp_ops dummy_ops = {
+		.rx_pkt_burst = dummy_eth_rx_burst,
+		.tx_pkt_burst = dummy_eth_tx_burst,
+		.rxq = {.data = dummy_data, .clbk = dummy_data,},
+		.txq = {.data = dummy_data, .clbk = dummy_data,},
+	};
+
+	*fpo = dummy_ops;
+}
+
+void
+eth_dev_fp_ops_setup(struct rte_eth_fp_ops *fpo,
+		const struct rte_eth_dev *dev)
+{
+	fpo->rx_pkt_burst = dev->rx_pkt_burst;
+	fpo->tx_pkt_burst = dev->tx_pkt_burst;
+	fpo->tx_pkt_prepare = dev->tx_pkt_prepare;
+	fpo->rx_queue_count = dev->rx_queue_count;
+	fpo->rx_descriptor_status = dev->rx_descriptor_status;
+	fpo->tx_descriptor_status = dev->tx_descriptor_status;
+
+	fpo->rxq.data = dev->data->rx_queues;
+	fpo->rxq.clbk = (void **)(uintptr_t)dev->post_rx_burst_cbs;
+
+	fpo->txq.data = dev->data->tx_queues;
+	fpo->txq.clbk = (void **)(uintptr_t)dev->pre_tx_burst_cbs;
+}
+
+uint16_t
+rte_eth_call_rx_callbacks(uint16_t port_id, uint16_t queue_id,
+	struct rte_mbuf **rx_pkts, uint16_t nb_rx, uint16_t nb_pkts,
+	void *opaque)
+{
+	const struct rte_eth_rxtx_callback *cb = opaque;
+
+	while (cb != NULL) {
+		nb_rx = cb->fn.rx(port_id, queue_id, rx_pkts, nb_rx,
+				nb_pkts, cb->param);
+		cb = cb->next;
+	}
+
+	return nb_rx;
+}
+
+uint16_t
+rte_eth_call_tx_callbacks(uint16_t port_id, uint16_t queue_id,
+	struct rte_mbuf **tx_pkts, uint16_t nb_pkts, void *opaque)
+{
+	const struct rte_eth_rxtx_callback *cb = opaque;
+
+	while (cb != NULL) {
+		nb_pkts = cb->fn.tx(port_id, queue_id, tx_pkts, nb_pkts,
+				cb->param);
+		cb = cb->next;
+	}
+
+	return nb_pkts;
+}

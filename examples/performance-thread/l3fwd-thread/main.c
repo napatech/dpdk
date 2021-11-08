@@ -26,7 +26,6 @@
 #include <rte_memcpy.h>
 #include <rte_eal.h>
 #include <rte_launch.h>
-#include <rte_atomic.h>
 #include <rte_cycles.h>
 #include <rte_prefetch.h>
 #include <rte_lcore.h>
@@ -307,21 +306,22 @@ static uint16_t nb_tx_thread_params = RTE_DIM(tx_thread_params_array_default);
 
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
-		.mq_mode = ETH_MQ_RX_RSS,
-		.max_rx_pkt_len = RTE_ETHER_MAX_LEN,
+		.mq_mode = RTE_ETH_MQ_RX_RSS,
 		.split_hdr_size = 0,
-		.offloads = DEV_RX_OFFLOAD_CHECKSUM,
+		.offloads = RTE_ETH_RX_OFFLOAD_CHECKSUM,
 	},
 	.rx_adv_conf = {
 		.rss_conf = {
 			.rss_key = NULL,
-			.rss_hf = ETH_RSS_TCP,
+			.rss_hf = RTE_ETH_RSS_TCP,
 		},
 	},
 	.txmode = {
-		.mq_mode = ETH_MQ_TX_NONE,
+		.mq_mode = RTE_ETH_MQ_TX_NONE,
 	},
 };
+
+static uint32_t max_pkt_len;
 
 static struct rte_mempool *pktmbuf_pool[NB_SOCKETS];
 
@@ -570,8 +570,8 @@ RTE_DEFINE_PER_LCORE(struct lcore_conf *, lcore_conf);
  */
 static int lthreads_on = 1; /**< Use lthreads for processing*/
 
-rte_atomic16_t rx_counter;  /**< Number of spawned rx threads */
-rte_atomic16_t tx_counter;  /**< Number of spawned tx threads */
+uint16_t rx_counter;  /**< Number of spawned rx threads */
+uint16_t tx_counter;  /**< Number of spawned tx threads */
 
 struct thread_conf {
 	uint16_t lcore_id;      /**< Initial lcore for rx thread */
@@ -1068,24 +1068,24 @@ simple_ipv4_fwd_8pkts(struct rte_mbuf *m[8], uint16_t portid)
 #endif
 
 	/* dst addr */
-	*(uint64_t *)&eth_hdr[0]->d_addr = dest_eth_addr[dst_port[0]];
-	*(uint64_t *)&eth_hdr[1]->d_addr = dest_eth_addr[dst_port[1]];
-	*(uint64_t *)&eth_hdr[2]->d_addr = dest_eth_addr[dst_port[2]];
-	*(uint64_t *)&eth_hdr[3]->d_addr = dest_eth_addr[dst_port[3]];
-	*(uint64_t *)&eth_hdr[4]->d_addr = dest_eth_addr[dst_port[4]];
-	*(uint64_t *)&eth_hdr[5]->d_addr = dest_eth_addr[dst_port[5]];
-	*(uint64_t *)&eth_hdr[6]->d_addr = dest_eth_addr[dst_port[6]];
-	*(uint64_t *)&eth_hdr[7]->d_addr = dest_eth_addr[dst_port[7]];
+	*(uint64_t *)&eth_hdr[0]->dst_addr = dest_eth_addr[dst_port[0]];
+	*(uint64_t *)&eth_hdr[1]->dst_addr = dest_eth_addr[dst_port[1]];
+	*(uint64_t *)&eth_hdr[2]->dst_addr = dest_eth_addr[dst_port[2]];
+	*(uint64_t *)&eth_hdr[3]->dst_addr = dest_eth_addr[dst_port[3]];
+	*(uint64_t *)&eth_hdr[4]->dst_addr = dest_eth_addr[dst_port[4]];
+	*(uint64_t *)&eth_hdr[5]->dst_addr = dest_eth_addr[dst_port[5]];
+	*(uint64_t *)&eth_hdr[6]->dst_addr = dest_eth_addr[dst_port[6]];
+	*(uint64_t *)&eth_hdr[7]->dst_addr = dest_eth_addr[dst_port[7]];
 
 	/* src addr */
-	rte_ether_addr_copy(&ports_eth_addr[dst_port[0]], &eth_hdr[0]->s_addr);
-	rte_ether_addr_copy(&ports_eth_addr[dst_port[1]], &eth_hdr[1]->s_addr);
-	rte_ether_addr_copy(&ports_eth_addr[dst_port[2]], &eth_hdr[2]->s_addr);
-	rte_ether_addr_copy(&ports_eth_addr[dst_port[3]], &eth_hdr[3]->s_addr);
-	rte_ether_addr_copy(&ports_eth_addr[dst_port[4]], &eth_hdr[4]->s_addr);
-	rte_ether_addr_copy(&ports_eth_addr[dst_port[5]], &eth_hdr[5]->s_addr);
-	rte_ether_addr_copy(&ports_eth_addr[dst_port[6]], &eth_hdr[6]->s_addr);
-	rte_ether_addr_copy(&ports_eth_addr[dst_port[7]], &eth_hdr[7]->s_addr);
+	rte_ether_addr_copy(&ports_eth_addr[dst_port[0]], &eth_hdr[0]->src_addr);
+	rte_ether_addr_copy(&ports_eth_addr[dst_port[1]], &eth_hdr[1]->src_addr);
+	rte_ether_addr_copy(&ports_eth_addr[dst_port[2]], &eth_hdr[2]->src_addr);
+	rte_ether_addr_copy(&ports_eth_addr[dst_port[3]], &eth_hdr[3]->src_addr);
+	rte_ether_addr_copy(&ports_eth_addr[dst_port[4]], &eth_hdr[4]->src_addr);
+	rte_ether_addr_copy(&ports_eth_addr[dst_port[5]], &eth_hdr[5]->src_addr);
+	rte_ether_addr_copy(&ports_eth_addr[dst_port[6]], &eth_hdr[6]->src_addr);
+	rte_ether_addr_copy(&ports_eth_addr[dst_port[7]], &eth_hdr[7]->src_addr);
 
 	send_single_packet(m[0], (uint8_t)dst_port[0]);
 	send_single_packet(m[1], (uint8_t)dst_port[1]);
@@ -1203,24 +1203,24 @@ simple_ipv6_fwd_8pkts(struct rte_mbuf *m[8], uint16_t portid)
 		dst_port[7] = portid;
 
 	/* dst addr */
-	*(uint64_t *)&eth_hdr[0]->d_addr = dest_eth_addr[dst_port[0]];
-	*(uint64_t *)&eth_hdr[1]->d_addr = dest_eth_addr[dst_port[1]];
-	*(uint64_t *)&eth_hdr[2]->d_addr = dest_eth_addr[dst_port[2]];
-	*(uint64_t *)&eth_hdr[3]->d_addr = dest_eth_addr[dst_port[3]];
-	*(uint64_t *)&eth_hdr[4]->d_addr = dest_eth_addr[dst_port[4]];
-	*(uint64_t *)&eth_hdr[5]->d_addr = dest_eth_addr[dst_port[5]];
-	*(uint64_t *)&eth_hdr[6]->d_addr = dest_eth_addr[dst_port[6]];
-	*(uint64_t *)&eth_hdr[7]->d_addr = dest_eth_addr[dst_port[7]];
+	*(uint64_t *)&eth_hdr[0]->dst_addr = dest_eth_addr[dst_port[0]];
+	*(uint64_t *)&eth_hdr[1]->dst_addr = dest_eth_addr[dst_port[1]];
+	*(uint64_t *)&eth_hdr[2]->dst_addr = dest_eth_addr[dst_port[2]];
+	*(uint64_t *)&eth_hdr[3]->dst_addr = dest_eth_addr[dst_port[3]];
+	*(uint64_t *)&eth_hdr[4]->dst_addr = dest_eth_addr[dst_port[4]];
+	*(uint64_t *)&eth_hdr[5]->dst_addr = dest_eth_addr[dst_port[5]];
+	*(uint64_t *)&eth_hdr[6]->dst_addr = dest_eth_addr[dst_port[6]];
+	*(uint64_t *)&eth_hdr[7]->dst_addr = dest_eth_addr[dst_port[7]];
 
 	/* src addr */
-	rte_ether_addr_copy(&ports_eth_addr[dst_port[0]], &eth_hdr[0]->s_addr);
-	rte_ether_addr_copy(&ports_eth_addr[dst_port[1]], &eth_hdr[1]->s_addr);
-	rte_ether_addr_copy(&ports_eth_addr[dst_port[2]], &eth_hdr[2]->s_addr);
-	rte_ether_addr_copy(&ports_eth_addr[dst_port[3]], &eth_hdr[3]->s_addr);
-	rte_ether_addr_copy(&ports_eth_addr[dst_port[4]], &eth_hdr[4]->s_addr);
-	rte_ether_addr_copy(&ports_eth_addr[dst_port[5]], &eth_hdr[5]->s_addr);
-	rte_ether_addr_copy(&ports_eth_addr[dst_port[6]], &eth_hdr[6]->s_addr);
-	rte_ether_addr_copy(&ports_eth_addr[dst_port[7]], &eth_hdr[7]->s_addr);
+	rte_ether_addr_copy(&ports_eth_addr[dst_port[0]], &eth_hdr[0]->src_addr);
+	rte_ether_addr_copy(&ports_eth_addr[dst_port[1]], &eth_hdr[1]->src_addr);
+	rte_ether_addr_copy(&ports_eth_addr[dst_port[2]], &eth_hdr[2]->src_addr);
+	rte_ether_addr_copy(&ports_eth_addr[dst_port[3]], &eth_hdr[3]->src_addr);
+	rte_ether_addr_copy(&ports_eth_addr[dst_port[4]], &eth_hdr[4]->src_addr);
+	rte_ether_addr_copy(&ports_eth_addr[dst_port[5]], &eth_hdr[5]->src_addr);
+	rte_ether_addr_copy(&ports_eth_addr[dst_port[6]], &eth_hdr[6]->src_addr);
+	rte_ether_addr_copy(&ports_eth_addr[dst_port[7]], &eth_hdr[7]->src_addr);
 
 	send_single_packet(m[0], dst_port[0]);
 	send_single_packet(m[1], dst_port[1]);
@@ -1268,11 +1268,11 @@ l3fwd_simple_forward(struct rte_mbuf *m, uint16_t portid)
 		++(ipv4_hdr->hdr_checksum);
 #endif
 		/* dst addr */
-		*(uint64_t *)&eth_hdr->d_addr = dest_eth_addr[dst_port];
+		*(uint64_t *)&eth_hdr->dst_addr = dest_eth_addr[dst_port];
 
 		/* src addr */
 		rte_ether_addr_copy(&ports_eth_addr[dst_port],
-				&eth_hdr->s_addr);
+				&eth_hdr->src_addr);
 
 		send_single_packet(m, dst_port);
 	} else if (RTE_ETH_IS_IPV6_HDR(m->packet_type)) {
@@ -1290,11 +1290,11 @@ l3fwd_simple_forward(struct rte_mbuf *m, uint16_t portid)
 			dst_port = portid;
 
 		/* dst addr */
-		*(uint64_t *)&eth_hdr->d_addr = dest_eth_addr[dst_port];
+		*(uint64_t *)&eth_hdr->dst_addr = dest_eth_addr[dst_port];
 
 		/* src addr */
 		rte_ether_addr_copy(&ports_eth_addr[dst_port],
-				&eth_hdr->s_addr);
+				&eth_hdr->src_addr);
 
 		send_single_packet(m, dst_port);
 	} else
@@ -1910,11 +1910,8 @@ cpu_load_collector(__rte_unused void *arg) {
 	printf("Waiting for %d rx threads and %d tx threads\n", n_rx_thread,
 			n_tx_thread);
 
-	while (rte_atomic16_read(&rx_counter) < n_rx_thread)
-		rte_pause();
-
-	while (rte_atomic16_read(&tx_counter) < n_tx_thread)
-		rte_pause();
+	rte_wait_until_equal_16(&rx_counter, n_rx_thread, __ATOMIC_RELAXED);
+	rte_wait_until_equal_16(&tx_counter, n_tx_thread, __ATOMIC_RELAXED);
 
 	for (i = 0; i < n_rx_thread; i++) {
 
@@ -2036,7 +2033,7 @@ lthread_tx_per_ring(void *dummy)
 	RTE_LOG(INFO, L3FWD, "entering main tx loop on lcore %u\n", rte_lcore_id());
 
 	nb_rx = 0;
-	rte_atomic16_inc(&tx_counter);
+	__atomic_fetch_add(&tx_counter, 1, __ATOMIC_RELAXED);
 	while (1) {
 
 		/*
@@ -2161,7 +2158,7 @@ lthread_rx(void *dummy)
 	worker_id = 0;
 
 	rx_conf->conf.cpu_id = sched_getcpu();
-	rte_atomic16_inc(&rx_counter);
+	__atomic_fetch_add(&rx_counter, 1, __ATOMIC_RELAXED);
 	while (1) {
 
 		/*
@@ -2243,7 +2240,7 @@ lthread_spawner(__rte_unused void *arg)
 	 * scheduler as this lthread, yielding is required to let them to run and
 	 * prevent deadlock here.
 	 */
-	while (rte_atomic16_read(&rx_counter) < n_rx_thread)
+	while (__atomic_load_n(&rx_counter, __ATOMIC_RELAXED) < n_rx_thread)
 		lthread_sleep(100000);
 
 	/*
@@ -2323,7 +2320,7 @@ pthread_tx(void *dummy)
 	RTE_LOG(INFO, L3FWD, "Entering main Tx loop on lcore %u\n", rte_lcore_id());
 
 	tx_conf->conf.cpu_id = sched_getcpu();
-	rte_atomic16_inc(&tx_counter);
+	__atomic_fetch_add(&tx_counter, 1, __ATOMIC_RELAXED);
 	while (1) {
 
 		cur_tsc = rte_rdtsc();
@@ -2406,7 +2403,7 @@ pthread_rx(void *dummy)
 
 	worker_id = 0;
 	rx_conf->conf.cpu_id = sched_getcpu();
-	rte_atomic16_inc(&rx_counter);
+	__atomic_fetch_add(&rx_counter, 1, __ATOMIC_RELAXED);
 	while (1) {
 
 		/*
@@ -2643,7 +2640,7 @@ print_usage(const char *prgname)
 	printf("%s [EAL options] -- -p PORTMASK -P"
 		"  [--rx (port,queue,lcore,thread)[,(port,queue,lcore,thread]]"
 		"  [--tx (lcore,thread)[,(lcore,thread]]"
-		"  [--enable-jumbo [--max-pkt-len PKTLEN]]\n"
+		"  [--max-pkt-len PKTLEN]"
 		"  [--parse-ptype]\n\n"
 		"  -p PORTMASK: hexadecimal bitmask of ports to configure\n"
 		"  -P : enable promiscuous mode\n"
@@ -2653,8 +2650,7 @@ print_usage(const char *prgname)
 		"  --eth-dest=X,MM:MM:MM:MM:MM:MM: optional, ethernet destination for port X\n"
 		"  --no-numa: optional, disable numa awareness\n"
 		"  --ipv6: optional, specify it if running ipv6 packets\n"
-		"  --enable-jumbo: enable jumbo frame"
-		" which max packet len is PKTLEN in decimal (64-9600)\n"
+		"  --max-pkt-len PKTLEN: maximum packet length in decimal (64-9600)\n"
 		"  --hash-entry-num: specify the hash entry number in hexadecimal to be setup\n"
 		"  --no-lthreads: turn off lthread model\n"
 		"  --parse-ptype: set to use software to analyze packet type\n\n",
@@ -2877,8 +2873,8 @@ enum {
 	OPT_NO_NUMA_NUM,
 #define OPT_IPV6            "ipv6"
 	OPT_IPV6_NUM,
-#define OPT_ENABLE_JUMBO    "enable-jumbo"
-	OPT_ENABLE_JUMBO_NUM,
+#define OPT_MAX_PKT_LEN "max-pkt-len"
+	OPT_MAX_PKT_LEN_NUM,
 #define OPT_HASH_ENTRY_NUM  "hash-entry-num"
 	OPT_HASH_ENTRY_NUM_NUM,
 #define OPT_NO_LTHREADS     "no-lthreads"
@@ -2902,7 +2898,7 @@ parse_args(int argc, char **argv)
 		{OPT_ETH_DEST,       1, NULL, OPT_ETH_DEST_NUM       },
 		{OPT_NO_NUMA,        0, NULL, OPT_NO_NUMA_NUM        },
 		{OPT_IPV6,           0, NULL, OPT_IPV6_NUM           },
-		{OPT_ENABLE_JUMBO,   0, NULL, OPT_ENABLE_JUMBO_NUM   },
+		{OPT_MAX_PKT_LEN,    1, NULL, OPT_MAX_PKT_LEN_NUM    },
 		{OPT_HASH_ENTRY_NUM, 1, NULL, OPT_HASH_ENTRY_NUM_NUM },
 		{OPT_NO_LTHREADS,    0, NULL, OPT_NO_LTHREADS_NUM    },
 		{OPT_PARSE_PTYPE,    0, NULL, OPT_PARSE_PTYPE_NUM    },
@@ -2981,35 +2977,10 @@ parse_args(int argc, char **argv)
 			parse_ptype_on = 1;
 			break;
 
-		case OPT_ENABLE_JUMBO_NUM:
-		{
-			struct option lenopts = {"max-pkt-len",
-					required_argument, 0, 0};
-
-			printf("jumbo frame is enabled - disabling simple TX path\n");
-			port_conf.rxmode.offloads |=
-					DEV_RX_OFFLOAD_JUMBO_FRAME;
-			port_conf.txmode.offloads |=
-					DEV_TX_OFFLOAD_MULTI_SEGS;
-
-			/* if no max-pkt-len set, use the default value
-			 * RTE_ETHER_MAX_LEN
-			 */
-			if (getopt_long(argc, argvopt, "", &lenopts,
-					&option_index) == 0) {
-
-				ret = parse_max_pkt_len(optarg);
-				if ((ret < 64) || (ret > MAX_JUMBO_PKT_LEN)) {
-					printf("invalid packet length\n");
-					print_usage(prgname);
-					return -1;
-				}
-				port_conf.rxmode.max_rx_pkt_len = ret;
-			}
-			printf("set jumbo frame max packet length to %u\n",
-				(unsigned int)port_conf.rxmode.max_rx_pkt_len);
+		case OPT_MAX_PKT_LEN_NUM:
+			max_pkt_len = parse_max_pkt_len(optarg);
 			break;
-		}
+
 #if (APP_LOOKUP_METHOD == APP_LOOKUP_EXACT_MATCH)
 		case OPT_HASH_ENTRY_NUM_NUM:
 			ret = parse_hash_entry_number(optarg);
@@ -3466,7 +3437,7 @@ check_all_ports_link_status(uint32_t port_mask)
 				continue;
 			}
 			/* clear all_ports_up flag if any link down */
-			if (link.link_status == ETH_LINK_DOWN) {
+			if (link.link_status == RTE_ETH_LINK_DOWN) {
 				all_ports_up = 0;
 				break;
 			}
@@ -3487,6 +3458,41 @@ check_all_ports_link_status(uint32_t port_mask)
 			printf("done\n");
 		}
 	}
+}
+
+static uint32_t
+eth_dev_get_overhead_len(uint32_t max_rx_pktlen, uint16_t max_mtu)
+{
+	uint32_t overhead_len;
+
+	if (max_mtu != UINT16_MAX && max_rx_pktlen > max_mtu)
+		overhead_len = max_rx_pktlen - max_mtu;
+	else
+		overhead_len = RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN;
+
+	return overhead_len;
+}
+
+static int
+config_port_max_pkt_len(struct rte_eth_conf *conf,
+		struct rte_eth_dev_info *dev_info)
+{
+	uint32_t overhead_len;
+
+	if (max_pkt_len == 0)
+		return 0;
+
+	if (max_pkt_len < RTE_ETHER_MIN_LEN || max_pkt_len > MAX_JUMBO_PKT_LEN)
+		return -1;
+
+	overhead_len = eth_dev_get_overhead_len(dev_info->max_rx_pktlen,
+			dev_info->max_mtu);
+	conf->rxmode.mtu = max_pkt_len - overhead_len;
+
+	if (conf->rxmode.mtu > RTE_ETHER_MTU)
+		conf->txmode.offloads |= RTE_ETH_TX_OFFLOAD_MULTI_SEGS;
+
+	return 0;
 }
 
 int
@@ -3577,9 +3583,15 @@ main(int argc, char **argv)
 				"Error during getting device (port %u) info: %s\n",
 				portid, strerror(-ret));
 
-		if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
+		ret = config_port_max_pkt_len(&local_port_conf, &dev_info);
+		if (ret != 0)
+			rte_exit(EXIT_FAILURE,
+				"Invalid max packet length: %u (port %u)\n",
+				max_pkt_len, portid);
+
+		if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
 			local_port_conf.txmode.offloads |=
-				DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+				RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
 
 		local_port_conf.rx_adv_conf.rss_conf.rss_hf &=
 			dev_info.flow_type_rss_offloads;

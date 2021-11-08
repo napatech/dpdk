@@ -108,6 +108,7 @@ struct ice_aqc_list_caps_elem {
 #define ICE_AQC_CAPS_TXQS				0x0042
 #define ICE_AQC_CAPS_MSIX				0x0043
 #define ICE_AQC_CAPS_FD					0x0045
+#define ICE_AQC_CAPS_1588				0x0046
 #define ICE_AQC_CAPS_MAX_MTU				0x0047
 #define ICE_AQC_CAPS_IWARP				0x0051
 #define ICE_AQC_CAPS_PCIE_RESET_AVOIDANCE		0x0076
@@ -1670,6 +1671,7 @@ struct ice_aqc_link_topo_addr {
 struct ice_aqc_get_link_topo {
 	struct ice_aqc_link_topo_addr addr;
 	u8 node_part_num;
+#define ICE_ACQ_GET_LINK_TOPO_NODE_NR_PCA9575	0x21
 	u8 rsvd[9];
 };
 
@@ -2711,11 +2713,42 @@ struct ice_aqc_driver_shared_params {
 	__le32 addr_low;
 };
 
+enum ice_aqc_driver_params {
+	/* OS clock index for PTP timer Domain 0 */
+	ICE_AQC_DRIVER_PARAM_CLK_IDX_TMR0 = 0,
+	/* OS clock index for PTP timer Domain 1 */
+	ICE_AQC_DRIVER_PARAM_CLK_IDX_TMR1,
+
+	/* Add new parameters above */
+	ICE_AQC_DRIVER_PARAM_MAX = 16,
+};
+
 /* Lan Queue Overflow Event (direct, 0x1001) */
 struct ice_aqc_event_lan_overflow {
 	__le32 prtdcb_ruptq;
 	__le32 qtx_ctl;
 	u8 reserved[8];
+};
+
+/* Debug Dump Internal Data (indirect 0xFF08) */
+struct ice_aqc_debug_dump_internals {
+	u8 cluster_id;
+#define ICE_AQC_DBG_DUMP_CLUSTER_ID_SW		0
+#define ICE_AQC_DBG_DUMP_CLUSTER_ID_ACL		1
+#define ICE_AQC_DBG_DUMP_CLUSTER_ID_TXSCHED	2
+#define ICE_AQC_DBG_DUMP_CLUSTER_ID_PROFILES	3
+/* EMP_DRAM only dumpable in device debug mode */
+#define ICE_AQC_DBG_DUMP_CLUSTER_ID_EMP_DRAM	4
+#define ICE_AQC_DBG_DUMP_CLUSTER_ID_LINK	5
+/* AUX_REGS only dumpable in device debug mode */
+#define ICE_AQC_DBG_DUMP_CLUSTER_ID_AUX_REGS	6
+#define ICE_AQC_DBG_DUMP_CLUSTER_ID_DCB	7
+#define ICE_AQC_DBG_DUMP_CLUSTER_ID_L2P	8
+	u8 reserved;
+	__le16 table_id; /* Used only for non-memory clusters */
+	__le32 idx; /* In table entries for tables, in bytes for memory */
+	__le32 addr_high;
+	__le32 addr_low;
 };
 
 /* Set Health Status (direct 0xFF20) */
@@ -2793,50 +2826,6 @@ struct ice_aqc_clear_health_status {
 	__le32 reserved[4];
 };
 
-/* Set FW Logging configuration (indirect 0xFF30)
- * Register for FW Logging (indirect 0xFF31)
- * Query FW Logging (indirect 0xFF32)
- * FW Log Event (indirect 0xFF33)
- * Get FW Log (indirect 0xFF34)
- * Clear FW Log (indirect 0xFF35)
- */
-
-struct ice_aqc_fw_log {
-	u8 cmd_flags;
-#define ICE_AQC_FW_LOG_CONF_UART_EN	BIT(0)
-#define ICE_AQC_FW_LOG_CONF_AQ_EN	BIT(1)
-#define ICE_AQC_FW_LOG_CONF_SET_VALID	BIT(3)
-#define ICE_AQC_FW_LOG_AQ_REGISTER	BIT(0)
-#define ICE_AQC_FW_LOG_AQ_QUERY		BIT(2)
-#define ICE_AQC_FW_LOG_PERSISTENT	BIT(0)
-	u8 rsp_flag;
-#define ICE_AQC_FW_LOG_MORE_DATA	BIT(1)
-	__le16 fw_rt_msb;
-	union {
-		struct {
-			__le32 fw_rt_lsb;
-		} sync;
-		struct {
-			__le16 log_resolution;
-#define ICE_AQC_FW_LOG_MIN_RESOLUTION		(1)
-#define ICE_AQC_FW_LOG_MAX_RESOLUTION		(128)
-			__le16 mdl_cnt;
-		} cfg;
-	} ops;
-	__le32 addr_high;
-	__le32 addr_low;
-};
-
-/* Response Buffer for:
- *    Set Firmware Logging Configuration (0xFF30)
- *    Query FW Logging (0xFF32)
- */
-struct ice_aqc_fw_log_cfg_resp {
-	__le16 module_identifier;
-	u8 log_level;
-	u8 rsvd0;
-};
-
 /**
  * struct ice_aq_desc - Admin Queue (AQ) descriptor
  * @flags: ICE_AQ_FLAG_* flags
@@ -2881,6 +2870,7 @@ struct ice_aq_desc {
 		struct ice_aqc_i2c read_write_i2c;
 		struct ice_aqc_read_i2c_resp read_i2c_resp;
 		struct ice_aqc_gpio read_write_gpio;
+		struct ice_aqc_sw_gpio sw_read_write_gpio;
 		struct ice_aqc_sff_eeprom read_write_sff_param;
 		struct ice_aqc_set_port_id_led set_port_id_led;
 		struct ice_aqc_get_sw_cfg get_sw_conf;
@@ -2936,6 +2926,7 @@ struct ice_aq_desc {
 		struct ice_aqc_download_pkg download_pkg;
 		struct ice_aqc_get_pkg_info_list get_pkg_info_list;
 		struct ice_aqc_driver_shared_params drv_shared_params;
+		struct ice_aqc_debug_dump_internals debug_dump;
 		struct ice_aqc_set_mac_lb set_mac_lb;
 		struct ice_aqc_alloc_free_res_cmd sw_res_ctrl;
 		struct ice_aqc_get_res_alloc get_res;
@@ -3119,6 +3110,7 @@ enum ice_adminq_opc {
 	ice_aqc_opc_set_event_mask			= 0x0613,
 	ice_aqc_opc_set_mac_lb				= 0x0620,
 	ice_aqc_opc_get_link_topo			= 0x06E0,
+	ice_aqc_opc_get_link_topo_pin			= 0x06E1,
 	ice_aqc_opc_read_i2c				= 0x06E2,
 	ice_aqc_opc_write_i2c				= 0x06E3,
 	ice_aqc_opc_set_port_id_led			= 0x06E9,
@@ -3202,19 +3194,14 @@ enum ice_adminq_opc {
 	/* Standalone Commands/Events */
 	ice_aqc_opc_event_lan_overflow			= 0x1001,
 
+	/* debug commands */
+	ice_aqc_opc_debug_dump_internals		= 0xFF08,
+
 	/* SystemDiagnostic commands */
 	ice_aqc_opc_set_health_status_config		= 0xFF20,
 	ice_aqc_opc_get_supported_health_status_codes	= 0xFF21,
 	ice_aqc_opc_get_health_status			= 0xFF22,
 	ice_aqc_opc_clear_health_status			= 0xFF23,
-
-	/* FW Logging Commands */
-	ice_aqc_opc_fw_logs_config			= 0xFF30,
-	ice_aqc_opc_fw_logs_register			= 0xFF31,
-	ice_aqc_opc_fw_logs_query			= 0xFF32,
-	ice_aqc_opc_fw_logs_event			= 0xFF33,
-	ice_aqc_opc_fw_logs_get				= 0xFF34,
-	ice_aqc_opc_fw_logs_clear			= 0xFF35
 };
 
 #endif /* _ICE_ADMINQ_CMD_H_ */

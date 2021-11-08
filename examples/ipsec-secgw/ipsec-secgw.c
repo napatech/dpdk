@@ -24,7 +24,6 @@
 #include <rte_log.h>
 #include <rte_eal.h>
 #include <rte_launch.h>
-#include <rte_atomic.h>
 #include <rte_cycles.h>
 #include <rte_prefetch.h>
 #include <rte_lcore.h>
@@ -234,20 +233,19 @@ static struct lcore_conf lcore_conf[RTE_MAX_LCORE];
 
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
-		.mq_mode	= ETH_MQ_RX_RSS,
-		.max_rx_pkt_len = RTE_ETHER_MAX_LEN,
+		.mq_mode	= RTE_ETH_MQ_RX_RSS,
 		.split_hdr_size = 0,
-		.offloads = DEV_RX_OFFLOAD_CHECKSUM,
+		.offloads = RTE_ETH_RX_OFFLOAD_CHECKSUM,
 	},
 	.rx_adv_conf = {
 		.rss_conf = {
 			.rss_key = NULL,
-			.rss_hf = ETH_RSS_IP | ETH_RSS_UDP |
-				ETH_RSS_TCP | ETH_RSS_SCTP,
+			.rss_hf = RTE_ETH_RSS_IP | RTE_ETH_RSS_UDP |
+				RTE_ETH_RSS_TCP | RTE_ETH_RSS_SCTP,
 		},
 	},
 	.txmode = {
-		.mq_mode = ETH_MQ_TX_NONE,
+		.mq_mode = RTE_ETH_MQ_TX_NONE,
 	},
 };
 
@@ -466,7 +464,7 @@ prepare_one_packet(struct rte_mbuf *pkt, struct ipsec_traffic *t)
 	 * with the security session.
 	 */
 
-	if (pkt->ol_flags & PKT_RX_SEC_OFFLOAD &&
+	if (pkt->ol_flags & RTE_MBUF_F_RX_SEC_OFFLOAD &&
 			rte_security_dynfield_is_registered()) {
 		struct ipsec_sa *sa;
 		struct ipsec_mbuf_metadata *priv;
@@ -533,7 +531,7 @@ prepare_tx_pkt(struct rte_mbuf *pkt, uint16_t port,
 		ip->ip_sum = 0;
 
 		/* calculate IPv4 cksum in SW */
-		if ((pkt->ol_flags & PKT_TX_IP_CKSUM) == 0)
+		if ((pkt->ol_flags & RTE_MBUF_F_TX_IP_CKSUM) == 0)
 			ip->ip_sum = rte_ipv4_cksum((struct rte_ipv4_hdr *)ip);
 
 		ethhdr->ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
@@ -545,9 +543,9 @@ prepare_tx_pkt(struct rte_mbuf *pkt, uint16_t port,
 		ethhdr->ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV6);
 	}
 
-	memcpy(&ethhdr->s_addr, &ethaddr_tbl[port].src,
+	memcpy(&ethhdr->src_addr, &ethaddr_tbl[port].src,
 			sizeof(struct rte_ether_addr));
-	memcpy(&ethhdr->d_addr, &ethaddr_tbl[port].dst,
+	memcpy(&ethhdr->dst_addr, &ethaddr_tbl[port].dst,
 			sizeof(struct rte_ether_addr));
 }
 
@@ -696,7 +694,7 @@ inbound_sp_sa(struct sp_ctx *sp, struct sa_ctx *sa, struct traffic_type *ip,
 		}
 
 		/* Only check SPI match for processed IPSec packets */
-		if (i < lim && ((m->ol_flags & PKT_RX_SEC_OFFLOAD) == 0)) {
+		if (i < lim && ((m->ol_flags & RTE_MBUF_F_RX_SEC_OFFLOAD) == 0)) {
 			free_pkts(&m, 1);
 			continue;
 		}
@@ -848,16 +846,6 @@ process_pkts_inbound_nosp(struct ipsec_ctx *ipsec_ctx,
 	struct rte_mbuf *m;
 	uint32_t nb_pkts_in, i, idx;
 
-	/* Drop any IPv4 traffic from unprotected ports */
-	free_pkts(traffic->ip4.pkts, traffic->ip4.num);
-
-	traffic->ip4.num = 0;
-
-	/* Drop any IPv6 traffic from unprotected ports */
-	free_pkts(traffic->ip6.pkts, traffic->ip6.num);
-
-	traffic->ip6.num = 0;
-
 	if (app_sa_prm.enable == 0) {
 
 		nb_pkts_in = ipsec_inbound(ipsec_ctx, traffic->ipsec.pkts,
@@ -978,7 +966,7 @@ route4_pkts(struct rt_ctx *rt_ctx, struct rte_mbuf *pkts[], uint8_t nb_pkts)
 	 */
 
 	for (i = 0; i < nb_pkts; i++) {
-		if (!(pkts[i]->ol_flags & PKT_TX_SEC_OFFLOAD)) {
+		if (!(pkts[i]->ol_flags & RTE_MBUF_F_TX_SEC_OFFLOAD)) {
 			/* Security offload not enabled. So an LPM lookup is
 			 * required to get the hop
 			 */
@@ -995,7 +983,7 @@ route4_pkts(struct rt_ctx *rt_ctx, struct rte_mbuf *pkts[], uint8_t nb_pkts)
 	lpm_pkts = 0;
 
 	for (i = 0; i < nb_pkts; i++) {
-		if (pkts[i]->ol_flags & PKT_TX_SEC_OFFLOAD) {
+		if (pkts[i]->ol_flags & RTE_MBUF_F_TX_SEC_OFFLOAD) {
 			/* Read hop from the SA */
 			pkt_hop = get_hop_for_offload_pkt(pkts[i], 0);
 		} else {
@@ -1029,7 +1017,7 @@ route6_pkts(struct rt_ctx *rt_ctx, struct rte_mbuf *pkts[], uint8_t nb_pkts)
 	 */
 
 	for (i = 0; i < nb_pkts; i++) {
-		if (!(pkts[i]->ol_flags & PKT_TX_SEC_OFFLOAD)) {
+		if (!(pkts[i]->ol_flags & RTE_MBUF_F_TX_SEC_OFFLOAD)) {
 			/* Security offload not enabled. So an LPM lookup is
 			 * required to get the hop
 			 */
@@ -1047,7 +1035,7 @@ route6_pkts(struct rt_ctx *rt_ctx, struct rte_mbuf *pkts[], uint8_t nb_pkts)
 	lpm_pkts = 0;
 
 	for (i = 0; i < nb_pkts; i++) {
-		if (pkts[i]->ol_flags & PKT_TX_SEC_OFFLOAD) {
+		if (pkts[i]->ol_flags & RTE_MBUF_F_TX_SEC_OFFLOAD) {
 			/* Read hop from the SA */
 			pkt_hop = get_hop_for_offload_pkt(pkts[i], 1);
 		} else {
@@ -1456,10 +1444,10 @@ print_usage(const char *prgname)
 		"               \"parallel\" : Parallel\n"
 		"  --" CMD_LINE_OPT_RX_OFFLOAD
 		": bitmask of the RX HW offload capabilities to enable/use\n"
-		"                         (DEV_RX_OFFLOAD_*)\n"
+		"                         (RTE_ETH_RX_OFFLOAD_*)\n"
 		"  --" CMD_LINE_OPT_TX_OFFLOAD
 		": bitmask of the TX HW offload capabilities to enable/use\n"
-		"                         (DEV_TX_OFFLOAD_*)\n"
+		"                         (RTE_ETH_TX_OFFLOAD_*)\n"
 		"  --" CMD_LINE_OPT_REASSEMBLE " NUM"
 		": max number of entries in reassemble(fragment) table\n"
 		"    (zero (default value) disables reassembly)\n"
@@ -1494,6 +1482,8 @@ parse_portmask(const char *portmask)
 {
 	char *end = NULL;
 	unsigned long pm;
+
+	errno = 0;
 
 	/* parse hexadecimal string */
 	pm = strtoul(portmask, &end, 16);
@@ -1908,7 +1898,7 @@ check_all_ports_link_status(uint32_t port_mask)
 				continue;
 			}
 			/* clear all_ports_up flag if any link down */
-			if (link.link_status == ETH_LINK_DOWN) {
+			if (link.link_status == RTE_ETH_LINK_DOWN) {
 				all_ports_up = 0;
 				break;
 			}
@@ -2161,7 +2151,6 @@ cryptodevs_init(uint16_t req_queue_num)
 static void
 port_init(uint16_t portid, uint64_t req_rx_offloads, uint64_t req_tx_offloads)
 {
-	uint32_t frame_size;
 	struct rte_eth_dev_info dev_info;
 	struct rte_eth_txconf *txconf;
 	uint16_t nb_tx_queue, nb_rx_queue;
@@ -2209,14 +2198,11 @@ port_init(uint16_t portid, uint64_t req_rx_offloads, uint64_t req_tx_offloads)
 	printf("Creating queues: nb_rx_queue=%d nb_tx_queue=%u...\n",
 			nb_rx_queue, nb_tx_queue);
 
-	frame_size = MTU_TO_FRAMELEN(mtu_size);
-	if (frame_size > local_port_conf.rxmode.max_rx_pkt_len)
-		local_port_conf.rxmode.offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
-	local_port_conf.rxmode.max_rx_pkt_len = frame_size;
+	local_port_conf.rxmode.mtu = mtu_size;
 
 	if (multi_seg_required()) {
-		local_port_conf.rxmode.offloads |= DEV_RX_OFFLOAD_SCATTER;
-		local_port_conf.txmode.offloads |= DEV_TX_OFFLOAD_MULTI_SEGS;
+		local_port_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_SCATTER;
+		local_port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_MULTI_SEGS;
 	}
 
 	local_port_conf.rxmode.offloads |= req_rx_offloads;
@@ -2239,12 +2225,12 @@ port_init(uint16_t portid, uint64_t req_rx_offloads, uint64_t req_tx_offloads)
 			portid, local_port_conf.txmode.offloads,
 			dev_info.tx_offload_capa);
 
-	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
+	if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
 		local_port_conf.txmode.offloads |=
-			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+			RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
 
-	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_IPV4_CKSUM)
-		local_port_conf.txmode.offloads |= DEV_TX_OFFLOAD_IPV4_CKSUM;
+	if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_IPV4_CKSUM)
+		local_port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_IPV4_CKSUM;
 
 	printf("port %u configurng rx_offloads=0x%" PRIx64
 		", tx_offloads=0x%" PRIx64 "\n",
@@ -2300,10 +2286,10 @@ port_init(uint16_t portid, uint64_t req_rx_offloads, uint64_t req_tx_offloads)
 		qconf->tx_queue_id[portid] = tx_queueid;
 
 		/* Pre-populate pkt offloads based on capabilities */
-		qconf->outbound.ipv4_offloads = PKT_TX_IPV4;
-		qconf->outbound.ipv6_offloads = PKT_TX_IPV6;
-		if (local_port_conf.txmode.offloads & DEV_TX_OFFLOAD_IPV4_CKSUM)
-			qconf->outbound.ipv4_offloads |= PKT_TX_IP_CKSUM;
+		qconf->outbound.ipv4_offloads = RTE_MBUF_F_TX_IPV4;
+		qconf->outbound.ipv6_offloads = RTE_MBUF_F_TX_IPV6;
+		if (local_port_conf.txmode.offloads & RTE_ETH_TX_OFFLOAD_IPV4_CKSUM)
+			qconf->outbound.ipv4_offloads |= RTE_MBUF_F_TX_IP_CKSUM;
 
 		tx_queueid++;
 
@@ -2663,7 +2649,7 @@ create_default_ipsec_flow(uint16_t port_id, uint64_t rx_offloads)
 	struct rte_flow *flow;
 	int ret;
 
-	if (!(rx_offloads & DEV_RX_OFFLOAD_SECURITY))
+	if (!(rx_offloads & RTE_ETH_RX_OFFLOAD_SECURITY))
 		return;
 
 	/* Add the default rte_flow to enable SECURITY for all ESP packets */

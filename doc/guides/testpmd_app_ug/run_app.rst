@@ -56,6 +56,12 @@ The command line options are:
     Display statistics every PERIOD seconds, if interactive mode is disabled.
     The default value is 0, which means that the statistics will not be displayed.
 
+*   ``--display-xstats xstat_name1[,...]``
+
+    Display comma-separated list of extended statistics every PERIOD seconds
+    as specified in ``--stats-period`` or when used with interactive commands
+    that show Rx/Tx statistics (i.e. 'show port stats').
+
 *   ``--nb-cores=N``
 
     Set the number of forwarding cores,
@@ -112,7 +118,7 @@ The command line options are:
     Set the data size of the mbufs used to N bytes, where N < 65536.
     The default value is 2048. If multiple mbuf-size values are specified the
     extra memory pools will be created for allocating mbufs to receive packets
-    with buffer splittling features.
+    with buffer splitting features.
 
 *   ``--total-num-mbufs=N``
 
@@ -252,6 +258,7 @@ The command line options are:
        tm
        noisy
        5tswap
+       shared-rxq
 
 *   ``--rss-ip``
 
@@ -305,6 +312,11 @@ The command line options are:
     Sending clones reduces host CPU load on creating packets and may help
     in testing extreme speeds or maxing out Tx packet performance.
     N should be not zero, but less than 'burst' parameter.
+
+*   ``--flowgen-flows=N``
+
+    Set the number of flows to be generated in `flowgen` mode, where
+    1 <= N <= INT32_MAX.
 
 *   ``--mbcache=N``
 
@@ -383,6 +395,14 @@ The command line options are:
 *   ``--txonly-multi-flow``
 
     Generate multiple flows in txonly mode.
+
+*   ``--rxq-share=[X]``
+
+    Create queues in shared Rx queue mode if device supports.
+    Shared Rx queues are grouped per X ports. X defaults to UINT32_MAX,
+    implies all ports join share group 1. Forwarding engine "shared-rxq"
+    should be used for shared Rx queues. This engine does Rx only and
+    update stream statistics accordingly.
 
 *   ``--eth-link-speed``
 
@@ -526,7 +546,7 @@ The command line options are:
     Set the hexadecimal bitmask of RX multi queue mode which can be enabled.
     The default value is 0x7::
 
-       ETH_MQ_RX_RSS_FLAG | ETH_MQ_RX_DCB_FLAG | ETH_MQ_RX_VMDQ_FLAG
+       RTE_ETH_MQ_RX_RSS_FLAG | RTE_ETH_MQ_RX_DCB_FLAG | RTE_ETH_MQ_RX_VMDQ_FLAG
 
 *   ``--record-core-cycles``
 
@@ -545,3 +565,87 @@ The command line options are:
 	bit 0 - two hairpin ports loop
 
     The default value is 0. Hairpin will use single port mode and implicit Tx flow mode.
+
+
+Testpmd Multi-Process Command-line Options
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The following are the command-line options for testpmd multi-process support:
+
+*   primary process:
+
+.. code-block:: console
+
+    sudo ./dpdk-testpmd -a xxx --proc-type=auto -l 0-1 -- -i --rxq=4 --txq=4 \
+        --num-procs=2 --proc-id=0
+
+*   secondary process:
+
+.. code-block:: console
+
+    sudo ./dpdk-testpmd -a xxx --proc-type=auto -l 2-3 -- -i --rxq=4 --txq=4 \
+        --num-procs=2 --proc-id=1
+
+The command line options are:
+
+*   ``--num-procs=N``
+
+    The number of processes which will be used.
+
+*   ``--proc-id=ID``
+
+    The ID of the current process (ID < num-procs). ID should be different in
+    primary process and secondary process, which starts from '0'.
+
+Calculation rule for queue:
+All queues are allocated to different processes based on ``proc_num`` and
+``proc_id``.
+Calculation rule for the testpmd to allocate queues to each process:
+*   start(queue start id) = proc_id * nb_q / num_procs；
+
+*   end(queue end id) = start + nb_q / num_procs；
+
+For example, if testpmd is configured to have 4 Tx and Rx queues,
+queues 0 and 1 will be used by the primary process and
+queues 2 and 3 will be used by the secondary process.
+
+The number of queues should be a multiple of the number of processes. If not,
+redundant queues will exist after queues are allocated to processes. If RSS
+is enabled, packet loss occurs when traffic is sent to all processes at the same
+time. Some traffic goes to redundant queues and cannot be forwarded.
+
+All the dev ops is supported in primary process. While secondary process is
+not permitted to allocate or release shared memory, so some ops are not supported
+as follows:
+
+- ``dev_configure``
+- ``dev_start``
+- ``dev_stop``
+- ``rx_queue_setup``
+- ``tx_queue_setup``
+- ``rx_queue_release``
+- ``tx_queue_release``
+
+So, any command from testpmd which calls those APIs will not be supported in
+secondary process, like:
+
+.. code-block:: console
+
+    port config all rxq|txq|rxd|txd <value>
+    port config <port_id> rx_offload xxx on/off
+    port config <port_id> tx_offload xxx on/off
+
+etc.
+
+When secondary is running, port in primary is not permitted to be stopped.
+Reconfigure operation is only valid in primary.
+
+Stats is supported, stats will not change when one quits and starts, as they
+share the same buffer to store the stats. Flow rules are maintained in process
+level: primary and secondary has its own flow list (but one flow list in HW).
+The two can see all the queues, so setting the flow rules for the other is OK.
+But in the testpmd primary process receiving or transmitting packets from the
+queue allocated for secondary process is not permitted, and same for secondary
+process.
+
+Flow API and RSS are supported.

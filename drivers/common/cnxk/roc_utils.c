@@ -34,6 +34,9 @@ roc_error_msg_get(int errorcode)
 	case NIX_ERR_OP_NOTSUP:
 		err_msg = "Operation not supported";
 		break;
+	case NIX_ERR_HW_NOTSUP:
+		err_msg = "Hardware does not support";
+		break;
 	case NIX_ERR_QUEUE_INVALID_RANGE:
 		err_msg = "Invalid Queue range";
 		break;
@@ -64,6 +67,9 @@ roc_error_msg_get(int errorcode)
 	case NIX_ERR_TM_INVALID_SHAPER_PROFILE:
 		err_msg = "TM shaper profile invalid";
 		break;
+	case NIX_ERR_TM_PKT_MODE_MISMATCH:
+		err_msg = "shaper profile pkt mode mismatch";
+		break;
 	case NIX_ERR_TM_WEIGHT_EXCEED:
 		err_msg = "TM DWRR weight exceeded";
 		break;
@@ -87,6 +93,9 @@ roc_error_msg_get(int errorcode)
 		break;
 	case NIX_ERR_TM_SHAPER_PROFILE_EXISTS:
 		err_msg = "TM shaper profile exists";
+		break;
+	case NIX_ERR_TM_SHAPER_PKT_LEN_ADJUST:
+		err_msg = "length adjust invalid";
 		break;
 	case NIX_ERR_TM_INVALID_TREE:
 		err_msg = "TM tree invalid";
@@ -113,7 +122,7 @@ roc_error_msg_get(int errorcode)
 		err_msg = "NPC invalid spec";
 		break;
 	case NPC_ERR_INVALID_MASK:
-		err_msg = "NPC  invalid mask";
+		err_msg = "NPC invalid mask";
 		break;
 	case NPC_ERR_INVALID_KEX:
 		err_msg = "NPC invalid key";

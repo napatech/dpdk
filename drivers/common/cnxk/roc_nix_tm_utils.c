@@ -8,9 +8,23 @@
 static inline uint64_t
 nix_tm_shaper2regval(struct nix_tm_shaper_data *shaper)
 {
-	return (shaper->burst_exponent << 37) | (shaper->burst_mantissa << 29) |
-	       (shaper->div_exp << 13) | (shaper->exponent << 9) |
-	       (shaper->mantissa << 1);
+	uint64_t regval;
+
+	if (roc_model_is_cn9k()) {
+		regval = (shaper->burst_exponent << 37);
+		regval |= (shaper->burst_mantissa << 29);
+		regval |= (shaper->div_exp << 13);
+		regval |= (shaper->exponent << 9);
+		regval |= (shaper->mantissa << 1);
+		return regval;
+	}
+
+	regval = (shaper->burst_exponent << 44);
+	regval |= (shaper->burst_mantissa << 29);
+	regval |= (shaper->div_exp << 13);
+	regval |= (shaper->exponent << 9);
+	regval |= (shaper->mantissa << 1);
+	return regval;
 }
 
 uint16_t
@@ -178,20 +192,26 @@ uint64_t
 nix_tm_shaper_burst_conv(uint64_t value, uint64_t *exponent_p,
 			 uint64_t *mantissa_p)
 {
+	uint64_t min_burst, max_burst;
 	uint64_t exponent, mantissa;
+	uint32_t max_mantissa;
 
-	if (value < NIX_TM_MIN_SHAPER_BURST || value > NIX_TM_MAX_SHAPER_BURST)
+	min_burst = NIX_TM_MIN_SHAPER_BURST;
+	max_burst = roc_nix_tm_max_shaper_burst_get();
+
+	if (value < min_burst || value > max_burst)
 		return 0;
 
+	max_mantissa = (roc_model_is_cn9k() ? NIX_CN9K_TM_MAX_BURST_MANTISSA :
+					      NIX_TM_MAX_BURST_MANTISSA);
 	/* Calculate burst exponent and mantissa using
 	 * the following formula:
 	 *
-	 * value = (((256 + mantissa) << (exponent + 1)
-	 / 256)
+	 * value = (((256 + mantissa) << (exponent + 1) / 256)
 	 *
 	 */
 	exponent = NIX_TM_MAX_BURST_EXPONENT;
-	mantissa = NIX_TM_MAX_BURST_MANTISSA;
+	mantissa = max_mantissa;
 
 	while (value < (1ull << (exponent + 1)))
 		exponent -= 1;
@@ -199,8 +219,7 @@ nix_tm_shaper_burst_conv(uint64_t value, uint64_t *exponent_p,
 	while (value < ((256 + mantissa) << (exponent + 1)) / 256)
 		mantissa -= 1;
 
-	if (exponent > NIX_TM_MAX_BURST_EXPONENT ||
-	    mantissa > NIX_TM_MAX_BURST_MANTISSA)
+	if (exponent > NIX_TM_MAX_BURST_EXPONENT || mantissa > max_mantissa)
 		return 0;
 
 	if (exponent_p)
@@ -216,6 +235,9 @@ nix_tm_shaper_conf_get(struct nix_tm_shaper_profile *profile,
 		       struct nix_tm_shaper_data *cir,
 		       struct nix_tm_shaper_data *pir)
 {
+	memset(cir, 0, sizeof(*cir));
+	memset(pir, 0, sizeof(*pir));
+
 	if (!profile)
 		return;
 
@@ -409,6 +431,7 @@ nix_tm_topology_reg_prep(struct nix *nix, struct nix_tm_node *node,
 			 volatile uint64_t *reg, volatile uint64_t *regval,
 			 volatile uint64_t *regval_mask)
 {
+	struct roc_nix *roc_nix = nix_priv_to_roc_nix(nix);
 	uint8_t k = 0, hw_lvl, parent_lvl;
 	uint64_t parent = 0, child = 0;
 	enum roc_nix_tm_tree tree;
@@ -454,8 +477,11 @@ nix_tm_topology_reg_prep(struct nix *nix, struct nix_tm_node *node,
 		reg[k] = NIX_AF_SMQX_CFG(schq);
 		regval[k] = (BIT_ULL(50) | NIX_MIN_HW_FRS |
 			     ((nix->mtu & 0xFFFF) << 8));
-		regval_mask[k] =
-			~(BIT_ULL(50) | GENMASK_ULL(6, 0) | GENMASK_ULL(23, 8));
+		/* Maximum Vtag insertion size as a multiple of four bytes */
+		if (roc_nix->hw_vlan_ins)
+			regval[k] |= (0x2ULL << 36);
+		regval_mask[k] = ~(BIT_ULL(50) | GENMASK_ULL(6, 0) |
+				   GENMASK_ULL(23, 8) | GENMASK_ULL(38, 36));
 		k++;
 
 		/* Parent and schedule conf */
@@ -540,6 +566,7 @@ nix_tm_sched_reg_prep(struct nix *nix, struct nix_tm_node *node,
 	uint64_t rr_quantum;
 	uint8_t k = 0;
 
+	/* For CN9K, weight needs to be converted to quantum */
 	rr_quantum = nix_tm_weight_to_rr_quantum(node->weight);
 
 	/* For children to root, strict prio is default if either
@@ -550,7 +577,7 @@ nix_tm_sched_reg_prep(struct nix *nix, struct nix_tm_node *node,
 		strict_prio = NIX_TM_TL1_DFLT_RR_PRIO;
 
 	plt_tm_dbg("Schedule config node %s(%u) lvl %u id %u, "
-		   "prio 0x%" PRIx64 ", rr_quantum 0x%" PRIx64 " (%p)",
+		   "prio 0x%" PRIx64 ", rr_quantum/rr_wt 0x%" PRIx64 " (%p)",
 		   nix_tm_hwlvl2str(node->hw_lvl), schq, node->lvl, node->id,
 		   strict_prio, rr_quantum, node);
 
@@ -600,12 +627,10 @@ nix_tm_shaper_reg_prep(struct nix_tm_node *node,
 	uint64_t adjust = 0;
 	uint8_t k = 0;
 
-	memset(&cir, 0, sizeof(cir));
-	memset(&pir, 0, sizeof(pir));
 	nix_tm_shaper_conf_get(profile, &cir, &pir);
 
-	if (node->pkt_mode)
-		adjust = 1;
+	if (profile && node->pkt_mode)
+		adjust = profile->pkt_mode_adj;
 	else if (profile)
 		adjust = profile->pkt_len_adj;
 
@@ -999,4 +1024,157 @@ nix_tm_shaper_profile_free(struct nix_tm_shaper_profile *profile)
 		return;
 
 	(profile->free_fn)(profile);
+}
+
+int
+roc_nix_tm_node_stats_get(struct roc_nix *roc_nix, uint32_t node_id, bool clear,
+			  struct roc_nix_tm_node_stats *n_stats)
+{
+	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
+	struct mbox *mbox = (&nix->dev)->mbox;
+	struct nix_txschq_config *req, *rsp;
+	struct nix_tm_node *node;
+	uint32_t schq;
+	int rc, i;
+
+	node = nix_tm_node_search(nix, node_id, ROC_NIX_TM_USER);
+	if (!node)
+		return NIX_ERR_TM_INVALID_NODE;
+
+	if (node->hw_lvl != NIX_TXSCH_LVL_TL1)
+		return NIX_ERR_OP_NOTSUP;
+
+	/* Check if node has HW resource */
+	if (!(node->flags & NIX_TM_NODE_HWRES))
+		return 0;
+
+	schq = node->hw_id;
+	/* Skip fetch if not requested */
+	if (!n_stats)
+		goto clear_stats;
+
+	memset(n_stats, 0, sizeof(struct roc_nix_tm_node_stats));
+
+	req = mbox_alloc_msg_nix_txschq_cfg(mbox);
+	req->read = 1;
+	req->lvl = NIX_TXSCH_LVL_TL1;
+
+	i = 0;
+	req->reg[i++] = NIX_AF_TL1X_DROPPED_PACKETS(schq);
+	req->reg[i++] = NIX_AF_TL1X_DROPPED_BYTES(schq);
+	req->reg[i++] = NIX_AF_TL1X_GREEN_PACKETS(schq);
+	req->reg[i++] = NIX_AF_TL1X_GREEN_BYTES(schq);
+	req->reg[i++] = NIX_AF_TL1X_YELLOW_PACKETS(schq);
+	req->reg[i++] = NIX_AF_TL1X_YELLOW_BYTES(schq);
+	req->reg[i++] = NIX_AF_TL1X_RED_PACKETS(schq);
+	req->reg[i++] = NIX_AF_TL1X_RED_BYTES(schq);
+	req->num_regs = i;
+
+	rc = mbox_process_msg(mbox, (void **)&rsp);
+	if (rc)
+		return rc;
+
+	/* Return stats */
+	n_stats->stats[ROC_NIX_TM_NODE_PKTS_DROPPED] = rsp->regval[0];
+	n_stats->stats[ROC_NIX_TM_NODE_BYTES_DROPPED] = rsp->regval[1];
+	n_stats->stats[ROC_NIX_TM_NODE_GREEN_PKTS] = rsp->regval[2];
+	n_stats->stats[ROC_NIX_TM_NODE_GREEN_BYTES] = rsp->regval[3];
+	n_stats->stats[ROC_NIX_TM_NODE_YELLOW_PKTS] = rsp->regval[4];
+	n_stats->stats[ROC_NIX_TM_NODE_YELLOW_BYTES] = rsp->regval[5];
+	n_stats->stats[ROC_NIX_TM_NODE_RED_PKTS] = rsp->regval[6];
+	n_stats->stats[ROC_NIX_TM_NODE_RED_BYTES] = rsp->regval[7];
+
+clear_stats:
+	if (!clear)
+		return 0;
+
+	/* Clear all the stats */
+	req = mbox_alloc_msg_nix_txschq_cfg(mbox);
+	req->lvl = NIX_TXSCH_LVL_TL1;
+	i = 0;
+	req->reg[i++] = NIX_AF_TL1X_DROPPED_PACKETS(schq);
+	req->reg[i++] = NIX_AF_TL1X_DROPPED_BYTES(schq);
+	req->reg[i++] = NIX_AF_TL1X_GREEN_PACKETS(schq);
+	req->reg[i++] = NIX_AF_TL1X_GREEN_BYTES(schq);
+	req->reg[i++] = NIX_AF_TL1X_YELLOW_PACKETS(schq);
+	req->reg[i++] = NIX_AF_TL1X_YELLOW_BYTES(schq);
+	req->reg[i++] = NIX_AF_TL1X_RED_PACKETS(schq);
+	req->reg[i++] = NIX_AF_TL1X_RED_BYTES(schq);
+	req->num_regs = i;
+
+	return mbox_process_msg(mbox, (void **)&rsp);
+}
+
+bool
+roc_nix_tm_is_user_hierarchy_enabled(struct roc_nix *roc_nix)
+{
+	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
+
+	if ((nix->tm_flags & NIX_TM_HIERARCHY_ENA) &&
+	    (nix->tm_tree == ROC_NIX_TM_USER))
+		return true;
+	return false;
+}
+
+int
+roc_nix_tm_tree_type_get(struct roc_nix *roc_nix)
+{
+	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
+
+	return nix->tm_tree;
+}
+
+int
+roc_nix_tm_max_prio(struct roc_nix *roc_nix, int lvl)
+{
+	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
+	int hw_lvl = nix_tm_lvl2nix(nix, lvl);
+
+	return nix_tm_max_prio(nix, hw_lvl);
+}
+
+int
+roc_nix_tm_lvl_is_leaf(struct roc_nix *roc_nix, int lvl)
+{
+	return nix_tm_is_leaf(roc_nix_to_nix_priv(roc_nix), lvl);
+}
+
+void
+roc_nix_tm_shaper_default_red_algo(struct roc_nix_tm_node *node,
+				   struct roc_nix_tm_shaper_profile *roc_prof)
+{
+	struct nix_tm_node *tm_node = (struct nix_tm_node *)node;
+	struct nix_tm_shaper_profile *profile;
+	struct nix_tm_shaper_data cir, pir;
+
+	profile = (struct nix_tm_shaper_profile *)roc_prof->reserved;
+	tm_node->red_algo = NIX_REDALG_STD;
+
+	/* C0 doesn't support STALL when both PIR & CIR are enabled */
+	if (profile && roc_model_is_cn96_cx()) {
+		nix_tm_shaper_conf_get(profile, &cir, &pir);
+
+		if (pir.rate && cir.rate)
+			tm_node->red_algo = NIX_REDALG_DISCARD;
+	}
+}
+
+int
+roc_nix_tm_lvl_cnt_get(struct roc_nix *roc_nix)
+{
+	if (nix_tm_have_tl1_access(roc_nix_to_nix_priv(roc_nix)))
+		return NIX_TXSCH_LVL_CNT;
+
+	return (NIX_TXSCH_LVL_CNT - 1);
+}
+
+int
+roc_nix_tm_lvl_have_link_access(struct roc_nix *roc_nix, int lvl)
+{
+	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
+
+	if (nix_tm_lvl2nix(nix, lvl) == NIX_TXSCH_LVL_TL1)
+		return 1;
+
+	return 0;
 }

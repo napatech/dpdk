@@ -53,7 +53,8 @@ print_err_msg(struct rte_mtr_error *error)
 	if (error->cause)
 		snprintf(buf, sizeof(buf), "cause: %p, ", error->cause);
 
-	printf("%s: %s%s (error %d)\n", errstr, error->cause ? buf : "",
+	fprintf(stderr, "%s: %s%s (error %d)\n",
+		errstr, error->cause ? buf : "",
 		error->message ? error->message : "(no stated reason)",
 		error->type);
 }
@@ -100,13 +101,13 @@ parse_dscp_table_entries(char *str, enum rte_color **dscp_table)
 	while (1) {
 		if (strcmp(token, "G") == 0 ||
 			strcmp(token, "g") == 0)
-			*dscp_table[i++] = RTE_COLOR_GREEN;
+			(*dscp_table)[i++] = RTE_COLOR_GREEN;
 		else if (strcmp(token, "Y") == 0 ||
 			strcmp(token, "y") == 0)
-			*dscp_table[i++] = RTE_COLOR_YELLOW;
+			(*dscp_table)[i++] = RTE_COLOR_YELLOW;
 		else if (strcmp(token, "R") == 0 ||
 			strcmp(token, "r") == 0)
-			*dscp_table[i++] = RTE_COLOR_RED;
+			(*dscp_table)[i++] = RTE_COLOR_RED;
 		else {
 			free(*dscp_table);
 			return -1;
@@ -791,7 +792,8 @@ static void cmd_create_port_meter_parsed(void *parsed_result,
 	/* Parse meter input color string params */
 	ret = parse_meter_color_str(c_str, &use_prev_meter_color, &dscp_table);
 	if (ret) {
-		printf(" Meter input color params string parse error\n");
+		fprintf(stderr,
+			" Meter input color params string parse error\n");
 		return;
 	}
 
@@ -1199,7 +1201,7 @@ static void cmd_set_port_meter_dscp_table_parsed(void *parsed_result,
 	/* Parse string */
 	ret = parse_multi_token_string(t_str, &port_id, &mtr_id, &dscp_table);
 	if (ret) {
-		printf(" Multi token string parse error\n");
+		fprintf(stderr, " Multi token string parse error\n");
 		return;
 	}
 

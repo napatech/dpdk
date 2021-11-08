@@ -21,10 +21,11 @@
 #define strdup(str) _strdup(str)
 #define strtok_r(str, delim, saveptr) strtok_s(str, delim, saveptr)
 #ifndef RTE_TOOLCHAIN_GCC
+#define strcasecmp(s1, s2) _stricmp(s1, s2)
 #define strncasecmp(s1, s2, count) _strnicmp(s1, s2, count)
 #endif
 
-#define open(path, flags, ...) _open(path, flags, ##__VA_ARGS__)
+#define open(...) _open(__VA_ARGS__)
 #define read(fd, buf, n) _read(fd, buf, n)
 #define write(fd, buf, n) _write(fd, buf, n)
 #define close(fd) _close(fd)
@@ -36,6 +37,14 @@
 #define IPPROTO_GRE	47
 #ifdef RTE_TOOLCHAIN_GCC
 #define IPPROTO_SCTP	132
+#endif
+
+#ifndef IPDEFTTL
+#define IPDEFTTL 64
+#endif
+
+#ifndef S_ISREG
+#define S_ISREG(mode)  (((mode) & S_IFMT) == S_IFREG)
 #endif
 
 #ifdef RTE_TOOLCHAIN_GCC
@@ -67,5 +76,38 @@ rte_timespec_get(struct timespec *now, int base)
 #define timespec_get(ts, base) rte_timespec_get(ts, base)
 
 #endif /* RTE_TOOLCHAIN_GCC */
+
+/* Identifier for system-wide realtime clock. */
+#define CLOCK_REALTIME                  0
+/* Monotonic system-wide clock. */
+#define CLOCK_MONOTONIC                 1
+
+typedef int clockid_t;
+
+static inline int
+rte_clock_gettime(clockid_t clock_id, struct timespec *tp)
+{
+	const int NS_PER_SEC = 1E9;
+	LARGE_INTEGER pf, pc;
+	LONGLONG nsec;
+
+	switch (clock_id) {
+	case CLOCK_REALTIME:
+		if (timespec_get(tp, TIME_UTC) != TIME_UTC)
+			return -1;
+		return 0;
+	case CLOCK_MONOTONIC:
+		QueryPerformanceFrequency(&pf);
+		QueryPerformanceCounter(&pc);
+
+		nsec = pc.QuadPart * NS_PER_SEC / pf.QuadPart;
+		tp->tv_sec = nsec / NS_PER_SEC;
+		tp->tv_nsec = nsec - tp->tv_sec * NS_PER_SEC;
+		return 0;
+	default:
+		return -1;
+	}
+}
+#define clock_gettime(clock_id, tp) rte_clock_gettime(clock_id, tp)
 
 #endif /* _RTE_OS_SHIM_ */

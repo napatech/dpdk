@@ -87,7 +87,8 @@ typedef struct efx_ev_ops_s {
 	void		(*eevo_fini)(efx_nic_t *);
 	efx_rc_t	(*eevo_qcreate)(efx_nic_t *, unsigned int,
 					  efsys_mem_t *, size_t, uint32_t,
-					  uint32_t, uint32_t, efx_evq_t *);
+					  uint32_t, uint32_t, uint32_t,
+					  efx_evq_t *);
 	void		(*eevo_qdestroy)(efx_evq_t *);
 	efx_rc_t	(*eevo_qprime)(efx_evq_t *, unsigned int);
 	void		(*eevo_qpost)(efx_evq_t *, uint16_t);
@@ -820,6 +821,7 @@ typedef struct efx_mae_s {
 	/** Outer rule match field capabilities. */
 	efx_mae_field_cap_t		*em_outer_rule_field_caps;
 	size_t				em_outer_rule_field_caps_size;
+	uint32_t			em_max_ncounters;
 } efx_mae_t;
 
 #endif /* EFSYS_OPT_MAE */
@@ -1528,6 +1530,12 @@ efx_mcdi_get_workarounds(
 #if EFSYS_OPT_RIVERHEAD || EFX_OPTS_EF10()
 
 LIBEFX_INTERNAL
+extern	__checkReturn		efx_rc_t
+efx_mcdi_intf_from_pcie(
+	__in			uint32_t pcie_intf,
+	__out			efx_pcie_interface_t *efx_intf);
+
+LIBEFX_INTERNAL
 extern	__checkReturn	efx_rc_t
 efx_mcdi_init_evq(
 	__in		efx_nic_t *enp,
@@ -1535,6 +1543,7 @@ efx_mcdi_init_evq(
 	__in		efsys_mem_t *esmp,
 	__in		size_t nevs,
 	__in		uint32_t irq,
+	__in		uint32_t target_evq,
 	__in		uint32_t us,
 	__in		uint32_t flags,
 	__in		boolean_t low_latency);
@@ -1720,9 +1729,11 @@ struct efx_mae_match_spec_s {
 	efx_mae_rule_type_t		emms_type;
 	uint32_t			emms_prio;
 	union emms_mask_value_pairs {
-		uint8_t			action[MAE_FIELD_MASK_VALUE_PAIRS_LEN];
+		uint8_t			action[
+					    MAE_FIELD_MASK_VALUE_PAIRS_V2_LEN];
 		uint8_t			outer[MAE_ENC_FIELD_PAIRS_LEN];
 	} emms_mask_value_pairs;
+	uint8_t				emms_outer_rule_recirc_id;
 };
 
 typedef enum efx_mae_action_e {
@@ -1730,6 +1741,7 @@ typedef enum efx_mae_action_e {
 	EFX_MAE_ACTION_DECAP,
 	EFX_MAE_ACTION_VLAN_POP,
 	EFX_MAE_ACTION_VLAN_PUSH,
+	EFX_MAE_ACTION_COUNT,
 	EFX_MAE_ACTION_ENCAP,
 
 	/*
@@ -1760,6 +1772,7 @@ typedef struct efx_mae_action_vlan_push_s {
 
 typedef struct efx_mae_actions_rsrc_s {
 	efx_mae_eh_id_t			emar_eh_id;
+	efx_counter_t			emar_counter_id;
 } efx_mae_actions_rsrc_t;
 
 struct efx_mae_actions_s {
@@ -1770,6 +1783,7 @@ struct efx_mae_actions_s {
 	unsigned int			ema_n_vlan_tags_to_push;
 	efx_mae_action_vlan_push_t	ema_vlan_push_descs[
 	    EFX_MAE_VLAN_PUSH_MAX_NTAGS];
+	unsigned int			ema_n_count_actions;
 	uint32_t			ema_mark_value;
 	efx_mport_sel_t			ema_deliver_mport;
 

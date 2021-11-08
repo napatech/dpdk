@@ -194,7 +194,7 @@ npa_stack_dma_alloc(struct npa_lf *lf, char *name, int pool_id, size_t size)
 {
 	const char *mz_name = npa_stack_memzone_name(lf, pool_id, name);
 
-	return plt_memzone_reserve_cache_align(mz_name, size);
+	return plt_memzone_reserve_aligned(mz_name, size, 0, ROC_ALIGN);
 }
 
 static inline int
@@ -236,7 +236,7 @@ npa_aura_pool_pair_alloc(struct npa_lf *lf, const uint32_t block_size,
 
 	/* Block size should be cache line aligned and in range of 128B-128KB */
 	if (block_size % ROC_ALIGN || block_size < 128 ||
-	    block_size > 128 * 1024)
+	    block_size > ROC_NPA_MAX_BLOCK_SZ)
 		return NPA_ERR_INVALID_BLOCK_SZ;
 
 	pos = 0;
@@ -278,13 +278,15 @@ npa_aura_pool_pair_alloc(struct npa_lf *lf, const uint32_t block_size,
 	/* Update aura fields */
 	aura->pool_addr = pool_id; /* AF will translate to associated poolctx */
 	aura->ena = 1;
-	aura->shift = __builtin_clz(block_count) - 8;
+	aura->shift = plt_log2_u32(block_count);
+	aura->shift = aura->shift < 8 ? 0 : aura->shift - 8;
 	aura->limit = block_count;
 	aura->pool_caching = 1;
 	aura->err_int_ena = BIT(NPA_AURA_ERR_INT_AURA_ADD_OVER);
 	aura->err_int_ena |= BIT(NPA_AURA_ERR_INT_AURA_ADD_UNDER);
 	aura->err_int_ena |= BIT(NPA_AURA_ERR_INT_AURA_FREE_UNDER);
 	aura->err_int_ena |= BIT(NPA_AURA_ERR_INT_POOL_DIS);
+	aura->avg_con = ROC_NPA_AVG_CONT;
 	/* Many to one reduction */
 	aura->err_qint_idx = aura_id % lf->qints;
 
@@ -293,13 +295,15 @@ npa_aura_pool_pair_alloc(struct npa_lf *lf, const uint32_t block_size,
 	pool->ena = 1;
 	pool->buf_size = block_size / ROC_ALIGN;
 	pool->stack_max_pages = stack_size;
-	pool->shift = __builtin_clz(block_count) - 8;
+	pool->shift = plt_log2_u32(block_count);
+	pool->shift = pool->shift < 8 ? 0 : pool->shift - 8;
 	pool->ptr_start = 0;
 	pool->ptr_end = ~0;
 	pool->stack_caching = 1;
 	pool->err_int_ena = BIT(NPA_POOL_ERR_INT_OVFLS);
 	pool->err_int_ena |= BIT(NPA_POOL_ERR_INT_RANGE);
 	pool->err_int_ena |= BIT(NPA_POOL_ERR_INT_PERR);
+	pool->avg_con = ROC_NPA_AVG_CONT;
 
 	/* Many to one reduction */
 	pool->err_qint_idx = pool_id % lf->qints;
@@ -706,7 +710,7 @@ npa_lf_init(struct dev *dev, struct plt_pci_device *pci_dev)
 
 	lf->pf_func = dev->pf_func;
 	lf->npa_msixoff = npa_msixoff;
-	lf->intr_handle = &pci_dev->intr_handle;
+	lf->intr_handle = pci_dev->intr_handle;
 	lf->pci_dev = pci_dev;
 
 	idev->npa_pf_func = dev->pf_func;

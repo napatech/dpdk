@@ -142,8 +142,14 @@ HW Offload Drivers
 
 This section lists dataplane H/W block(s) available in cnxk SoC.
 
+#. **Ethdev Driver**
+   See :doc:`../nics/cnxk` for NIX Ethdev driver information.
+
 #. **Mempool Driver**
    See :doc:`../mempool/cnxk` for NPA mempool driver information.
+
+#. **Baseband PHY Driver**
+   See :doc:`../rawdevs/cnxk_bphy` for Baseband PHY driver information.
 
 Procedure to Setup Platform
 ---------------------------
@@ -352,7 +358,7 @@ RPM example usage:
         Packets received with FrameCheckSequenceErrors: 0
         Packets received with VLAN header: 0
         Error packets: 0
-        Packets recievd with unicast DMAC: 0
+        Packets received with unicast DMAC: 0
         Packets received with multicast DMAC: 0
         Packets received with broadcast DMAC: 0
         Dropped packets: 0

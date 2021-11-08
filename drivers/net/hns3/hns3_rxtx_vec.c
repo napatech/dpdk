@@ -19,11 +19,11 @@ hns3_tx_check_vec_support(struct rte_eth_dev *dev)
 	struct rte_eth_txmode *txmode = &dev->data->dev_conf.txmode;
 
 	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	if (hns3_dev_ptp_supported(hw))
+	if (hns3_dev_get_support(hw, PTP))
 		return -ENOTSUP;
 
-	/* Only support DEV_TX_OFFLOAD_MBUF_FAST_FREE */
-	if (txmode->offloads != DEV_TX_OFFLOAD_MBUF_FAST_FREE)
+	/* Only support RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE */
+	if (txmode->offloads != RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
 		return -ENOTSUP;
 
 	return 0;
@@ -172,15 +172,11 @@ hns3_rxq_vec_setup_rearm_data(struct hns3_rx_queue *rxq)
 			 offsetof(struct rte_mbuf, rearm_data));
 	RTE_BUILD_BUG_ON(offsetof(struct rte_mbuf, refcnt) <
 			 offsetof(struct rte_mbuf, rearm_data));
-	RTE_BUILD_BUG_ON(offsetof(struct rte_mbuf, refcnt) <
-			 offsetof(struct rte_mbuf, rearm_data));
 	RTE_BUILD_BUG_ON(offsetof(struct rte_mbuf, nb_segs) <
 			 offsetof(struct rte_mbuf, rearm_data));
 	RTE_BUILD_BUG_ON(offsetof(struct rte_mbuf, port) <
 			 offsetof(struct rte_mbuf, rearm_data));
 	RTE_BUILD_BUG_ON(offsetof(struct rte_mbuf, data_off) -
-			 offsetof(struct rte_mbuf, rearm_data) > 6);
-	RTE_BUILD_BUG_ON(offsetof(struct rte_mbuf, refcnt) -
 			 offsetof(struct rte_mbuf, rearm_data) > 6);
 	RTE_BUILD_BUG_ON(offsetof(struct rte_mbuf, refcnt) -
 			 offsetof(struct rte_mbuf, rearm_data) > 6);
@@ -232,13 +228,13 @@ hns3_rxq_vec_check(struct hns3_rx_queue *rxq, void *arg)
 int
 hns3_rx_check_vec_support(struct rte_eth_dev *dev)
 {
-	struct rte_fdir_conf *fconf = &dev->data->dev_conf.fdir_conf;
+	struct rte_eth_fdir_conf *fconf = &dev->data->dev_conf.fdir_conf;
 	struct rte_eth_rxmode *rxmode = &dev->data->dev_conf.rxmode;
-	uint64_t offloads_mask = DEV_RX_OFFLOAD_TCP_LRO |
-				 DEV_RX_OFFLOAD_VLAN;
+	uint64_t offloads_mask = RTE_ETH_RX_OFFLOAD_TCP_LRO |
+				 RTE_ETH_RX_OFFLOAD_VLAN;
 
 	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	if (hns3_dev_ptp_supported(hw))
+	if (hns3_dev_get_support(hw, PTP))
 		return -ENOTSUP;
 
 	if (dev->data->scattered_rx)

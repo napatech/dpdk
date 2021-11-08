@@ -59,49 +59,79 @@ eal_pmd_path = join_paths(get_option('prefix'), driver_install_path)
 if not is_windows
     meson.add_install_script('../buildtools/symlink-drivers-solibs.sh',
             get_option('libdir'), pmd_subdir_opt)
+elif meson.version().version_compare('>=0.55.0')
+    # 0.55.0 is required to use external program with add_install_script
+    meson.add_install_script(py3,
+            files('../buildtools/symlink-drivers-solibs.py'),
+            get_option('libdir'), pmd_subdir_opt, get_option('bindir'))
 endif
 
 # init disable/enable driver lists that will be populated in different places
 disable_drivers = ''
 enable_drivers = ''
 
-# set the machine type and cflags for it
+platform = get_option('platform')
+
+# set the cpu_instruction_set and cflags for it
 if meson.is_cross_build()
-    machine = host_machine.cpu()
+    cpu_instruction_set = host_machine.cpu()
 else
+    cpu_instruction_set = get_option('cpu_instruction_set')
     machine = get_option('machine')
+    if machine != 'auto'
+        warning('The "machine" option is deprecated. ' +
+                'Please use "cpu_instruction_set" instead.')
+        if cpu_instruction_set != 'auto'
+            error('Setting both "machine" and ' +
+                '"cpu_instruction_set" is unsupported.')
+        endif
+        cpu_instruction_set = machine
+        if cpu_instruction_set == 'default'
+            cpu_instruction_set = 'generic'
+        endif
+    endif
 endif
 
-# machine type 'generic' is special, it selects the per arch agreed common
-# minimal baseline needed for DPDK. Machine type 'default' is also supported
-# with the same meaning for backwards compatibility.
+if platform == 'native'
+    if cpu_instruction_set == 'auto'
+        cpu_instruction_set = 'native'
+    endif
+elif platform == 'generic'
+    if cpu_instruction_set == 'auto'
+        cpu_instruction_set = 'generic'
+    endif
+endif
+
+# cpu_instruction_set 'generic' is special, it selects the per arch agreed
+# common minimal baseline needed for DPDK. cpu_instruction_set 'default' is
+# also supported with the same meaning for backwards compatibility.
 # That might not be the most optimized, but the most portable version while
 # still being able to support the CPU features required for DPDK.
 # This can be bumped up by the DPDK project, but it can never be an
 # invariant like 'native'
-if machine == 'default' or machine == 'generic'
+if cpu_instruction_set == 'generic'
     if host_machine.cpu_family().startswith('x86')
-        # matches the old pre-meson build systems generic machine
-        machine = 'corei7'
+        # matches the old pre-meson build systems generic cpu_instruction_set
+        cpu_instruction_set = 'corei7'
     elif host_machine.cpu_family().startswith('arm')
-        machine = 'armv7-a'
+        cpu_instruction_set = 'armv7-a'
     elif host_machine.cpu_family().startswith('aarch')
         # arm64 manages generic config in config/arm/meson.build
-        machine = 'generic'
+        cpu_instruction_set = 'generic'
     elif host_machine.cpu_family().startswith('ppc')
-        machine = 'power8'
+        cpu_instruction_set = 'power8'
     endif
 endif
 
-dpdk_conf.set('RTE_MACHINE', machine)
+dpdk_conf.set('RTE_MACHINE', cpu_instruction_set)
 machine_args = []
 
 # ppc64 does not support -march= at all, use -mcpu and -mtune for that
 if host_machine.cpu_family().startswith('ppc')
-    machine_args += '-mcpu=' + machine
-    machine_args += '-mtune=' + machine
+    machine_args += '-mcpu=' + cpu_instruction_set
+    machine_args += '-mtune=' + cpu_instruction_set
 else
-    machine_args += '-march=' + machine
+    machine_args += '-march=' + cpu_instruction_set
 endif
 
 toolchain = cc.get_id()
@@ -170,6 +200,16 @@ libexecinfo = cc.find_library('libexecinfo', required: false)
 if libexecinfo.found() and cc.has_header('execinfo.h')
     add_project_link_arguments('-lexecinfo', language: 'c')
     dpdk_extra_ldflags += '-lexecinfo'
+endif
+
+libarchive = dependency('libarchive', required: false, method: 'pkg-config')
+if libarchive.found()
+    dpdk_conf.set('RTE_HAS_LIBARCHIVE', 1)
+    # Push libarchive link dependency at the project level to support
+    # statically linking dpdk apps. Details at:
+    # https://inbox.dpdk.org/dev/20210605004024.660267a1@sovereign/
+    add_project_link_arguments('-larchive', language: 'c')
+    dpdk_extra_ldflags += '-larchive'
 endif
 
 # check for libbsd
@@ -247,8 +287,6 @@ foreach arg: warning_flags
 endforeach
 
 # set other values pulled from the build options
-dpdk_conf.set('RTE_MAX_LCORE', get_option('max_lcores'))
-dpdk_conf.set('RTE_MAX_NUMA_NODES', get_option('max_numa_nodes'))
 dpdk_conf.set('RTE_MAX_ETHPORTS', get_option('max_ethports'))
 dpdk_conf.set('RTE_LIBEAL_USE_HPET', get_option('use_hpet'))
 dpdk_conf.set('RTE_ENABLE_TRACE_FP', get_option('enable_trace_fp'))
@@ -261,7 +299,9 @@ if dpdk_conf.get('RTE_ARCH_64')
 else # for 32-bit we need smaller reserved memory areas
     dpdk_conf.set('RTE_MAX_MEM_MB', 2048)
 endif
-
+if get_option('mbuf_refcnt_atomic')
+    dpdk_conf.set('RTE_MBUF_REFCNT_ATOMIC', true)
+endif
 
 compile_time_cpuflags = []
 subdir(arch_subdir)
@@ -282,6 +322,51 @@ if meson.is_cross_build()
     endif
 endif
 
+max_lcores = get_option('max_lcores')
+if max_lcores == 'detect'
+	# discovery makes sense only for non-cross builds
+	if meson.is_cross_build()
+		error('Discovery of max_lcores is not supported for cross-compilation.')
+	endif
+	# overwrite the default value with discovered values
+	max_lcores = run_command(get_cpu_count_cmd).stdout().to_int()
+	min_lcores = 2
+	# DPDK must be built for at least 2 cores
+	if max_lcores < min_lcores
+		message('Found less than @0@ cores, building for @0@ cores'.format(min_lcores))
+		max_lcores = min_lcores
+	else
+		message('Found @0@ cores'.format(max_lcores))
+	endif
+	dpdk_conf.set('RTE_MAX_LCORE', max_lcores)
+elif max_lcores != 'default'
+	# overwrite the default value from arch_subdir with user input
+	dpdk_conf.set('RTE_MAX_LCORE', max_lcores.to_int())
+endif
+
+max_numa_nodes = get_option('max_numa_nodes')
+if max_numa_nodes == 'detect'
+	# discovery makes sense only for non-cross builds
+	if meson.is_cross_build()
+		error('Discovery of max_numa_nodes not supported for cross-compilation.')
+	endif
+	# overwrite the default value with discovered values
+	max_numa_nodes = run_command(get_numa_count_cmd).stdout().to_int()
+	message('Found @0@ numa nodes'.format(max_numa_nodes))
+	dpdk_conf.set('RTE_MAX_NUMA_NODES', max_numa_nodes)
+elif max_numa_nodes != 'default'
+	# overwrite the default value from arch_subdir with user input
+	dpdk_conf.set('RTE_MAX_NUMA_NODES', max_numa_nodes.to_int())
+endif
+
+# check that CPU and NUMA counts are set
+if not dpdk_conf.has('RTE_MAX_LCORE')
+	error('Number of CPU cores not specified.')
+endif
+if not dpdk_conf.has('RTE_MAX_NUMA_NODES')
+	error('Number of NUMA nodes not specified.')
+endif
+
 # set the install path for the drivers
 dpdk_conf.set_quoted('RTE_EAL_PMD_PATH', eal_pmd_path)
 
@@ -300,7 +385,8 @@ if is_freebsd
 endif
 
 if is_windows
-    # VirtualAlloc2() is available since Windows 10 / Server 2016.
+    # VirtualAlloc2() is available since Windows 10 / Server 2019.
+    # It's essential for EAL, so we don't support older versions.
     add_project_arguments('-D_WIN32_WINNT=0x0A00', language: 'c')
 
     # Use MinGW-w64 stdio, because DPDK assumes ANSI-compliant formatting.
@@ -312,17 +398,6 @@ if is_windows
     if cc.get_id() == 'clang'
         add_project_arguments('-D_CRT_SECURE_NO_WARNINGS', language: 'c')
     endif
-
-    add_project_link_arguments('-lws2_32', language: 'c')
-
-    # Contrary to docs, VirtualAlloc2() is exported by mincore.lib
-    # in Windows SDK, while MinGW exports it by advapi32.a.
-    if is_ms_linker
-        add_project_link_arguments('-lmincore', language: 'c')
-    endif
-
-    add_project_link_arguments('-ladvapi32', '-lsetupapi', language: 'c')
-    add_project_link_arguments('-ldbghelp', language: 'c')
 endif
 
 if get_option('b_lto')

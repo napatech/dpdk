@@ -347,16 +347,6 @@ static int i40e_dev_sync_phy_type(struct i40e_hw *hw);
 static void i40e_configure_registers(struct i40e_hw *hw);
 static void i40e_hw_init(struct rte_eth_dev *dev);
 static int i40e_config_qinq(struct i40e_hw *hw, struct i40e_vsi *vsi);
-static enum i40e_status_code i40e_aq_del_mirror_rule(struct i40e_hw *hw,
-						     uint16_t seid,
-						     uint16_t rule_type,
-						     uint16_t *entries,
-						     uint16_t count,
-						     uint16_t rule_id);
-static int i40e_mirror_rule_set(struct rte_eth_dev *dev,
-			struct rte_eth_mirror_conf *mirror_conf,
-			uint8_t sw_id, uint8_t on);
-static int i40e_mirror_rule_reset(struct rte_eth_dev *dev, uint8_t sw_id);
 
 static int i40e_timesync_enable(struct rte_eth_dev *dev);
 static int i40e_timesync_disable(struct rte_eth_dev *dev);
@@ -507,8 +497,6 @@ static const struct eth_dev_ops i40e_eth_dev_ops = {
 	.txq_info_get                 = i40e_txq_info_get,
 	.rx_burst_mode_get            = i40e_rx_burst_mode_get,
 	.tx_burst_mode_get            = i40e_tx_burst_mode_get,
-	.mirror_rule_set              = i40e_mirror_rule_set,
-	.mirror_rule_reset            = i40e_mirror_rule_reset,
 	.timesync_enable              = i40e_timesync_enable,
 	.timesync_disable             = i40e_timesync_disable,
 	.timesync_read_rx_timestamp   = i40e_timesync_read_rx_timestamp,
@@ -532,7 +520,7 @@ static const struct eth_dev_ops i40e_eth_dev_ops = {
 /* store statistics names and its offset in stats structure */
 struct rte_i40e_xstats_name_off {
 	char name[RTE_ETH_XSTATS_NAME_SIZE];
-	unsigned offset;
+	int offset;
 };
 
 static const struct rte_i40e_xstats_name_off rte_i40e_stats_strings[] = {
@@ -542,6 +530,8 @@ static const struct rte_i40e_xstats_name_off rte_i40e_stats_strings[] = {
 	{"rx_dropped_packets", offsetof(struct i40e_eth_stats, rx_discards)},
 	{"rx_unknown_protocol_packets", offsetof(struct i40e_eth_stats,
 		rx_unknown_protocol)},
+	{"rx_size_error_packets", offsetof(struct i40e_pf, rx_err1) -
+				  offsetof(struct i40e_pf, stats)},
 	{"tx_unicast_packets", offsetof(struct i40e_eth_stats, tx_unicast)},
 	{"tx_multicast_packets", offsetof(struct i40e_eth_stats, tx_multicast)},
 	{"tx_broadcast_packets", offsetof(struct i40e_eth_stats, tx_broadcast)},
@@ -732,10 +722,11 @@ i40e_write_global_rx_ctl(struct i40e_hw *hw, uint32_t reg_addr,
 			 uint32_t reg_val)
 {
 	uint32_t ori_reg_val;
-	struct rte_eth_dev *dev;
+	struct rte_eth_dev_data *dev_data =
+		((struct i40e_adapter *)hw->back)->pf.dev_data;
+	struct rte_eth_dev *dev = &rte_eth_devices[dev_data->port_id];
 
 	ori_reg_val = i40e_read_rx_ctl(hw, reg_addr);
-	dev = ((struct i40e_adapter *)hw->back)->eth_dev;
 	i40e_write_rx_ctl(hw, reg_addr, reg_val);
 	if (ori_reg_val != reg_val)
 		PMD_DRV_LOG(WARNING,
@@ -1087,6 +1078,7 @@ i40e_init_fdir_filter_list(struct rte_eth_dev *dev)
 	char fdir_hash_name[RTE_HASH_NAMESIZE];
 	uint32_t alloc = hw->func_caps.fd_filters_guaranteed;
 	uint32_t best = hw->func_caps.fd_filters_best_effort;
+	enum i40e_filter_pctype pctype;
 	struct rte_bitmap *bmp = NULL;
 	uint32_t bmp_size;
 	void *mem = NULL;
@@ -1134,6 +1126,10 @@ i40e_init_fdir_filter_list(struct rte_eth_dev *dev)
 		ret = -ENOMEM;
 		goto err_fdir_filter_array_alloc;
 	}
+
+	for (pctype = I40E_FILTER_PCTYPE_NONF_IPV4_UDP;
+	     pctype <= I40E_FILTER_PCTYPE_L2_PAYLOAD; pctype++)
+		pf->fdir.flow_count[pctype] = 0;
 
 	fdir_info->fdir_space_size = alloc + best;
 	fdir_info->fdir_actual_cnt = 0;
@@ -1321,7 +1317,9 @@ i40e_aq_debug_write_global_register(struct i40e_hw *hw,
 				    struct i40e_asq_cmd_details *cmd_details)
 {
 	uint64_t ori_reg_val;
-	struct rte_eth_dev *dev;
+	struct rte_eth_dev_data *dev_data =
+		((struct i40e_adapter *)hw->back)->pf.dev_data;
+	struct rte_eth_dev *dev = &rte_eth_devices[dev_data->port_id];
 	int ret;
 
 	ret = i40e_aq_debug_read_register(hw, reg_addr, &ori_reg_val, NULL);
@@ -1331,7 +1329,6 @@ i40e_aq_debug_write_global_register(struct i40e_hw *hw,
 			    reg_addr);
 		return -EIO;
 	}
-	dev = ((struct i40e_adapter *)hw->back)->eth_dev;
 
 	if (ori_reg_val != reg_val)
 		PMD_DRV_LOG(WARNING,
@@ -1427,7 +1424,6 @@ eth_i40e_dev_init(struct rte_eth_dev *dev, void *init_params __rte_unused)
 
 	dev->dev_ops = &i40e_eth_dev_ops;
 	dev->rx_queue_count = i40e_dev_rx_queue_count;
-	dev->rx_descriptor_done = i40e_dev_rx_descriptor_done;
 	dev->rx_descriptor_status = i40e_dev_rx_descriptor_status;
 	dev->tx_descriptor_status = i40e_dev_tx_descriptor_status;
 	dev->rx_pkt_burst = i40e_recv_pkts;
@@ -1444,13 +1440,11 @@ eth_i40e_dev_init(struct rte_eth_dev *dev, void *init_params __rte_unused)
 	}
 	i40e_set_default_ptype_table(dev);
 	pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	intr_handle = &pci_dev->intr_handle;
+	intr_handle = pci_dev->intr_handle;
 
 	rte_eth_copy_pci_info(dev, pci_dev);
-	dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	pf->adapter = I40E_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
-	pf->adapter->eth_dev = dev;
 	pf->dev_data = dev->data;
 
 	hw->back = I40E_PF_TO_ADAPTER(pf);
@@ -1635,7 +1629,7 @@ eth_i40e_dev_init(struct rte_eth_dev *dev, void *init_params __rte_unused)
 
 	/* Set the global registers with default ether type value */
 	if (!pf->support_multi_driver) {
-		ret = i40e_vlan_tpid_set(dev, ETH_VLAN_TYPE_OUTER,
+		ret = i40e_vlan_tpid_set(dev, RTE_ETH_VLAN_TYPE_OUTER,
 					 RTE_ETHER_TYPE_VLAN);
 		if (ret != I40E_SUCCESS) {
 			PMD_INIT_LOG(ERR,
@@ -1720,9 +1714,6 @@ eth_i40e_dev_init(struct rte_eth_dev *dev, void *init_params __rte_unused)
 	 */
 	i40e_aq_set_mac_config(hw, I40E_FRAME_SIZE_MAX, TRUE, false, 0, NULL);
 
-	/* initialize mirror rule list */
-	TAILQ_INIT(&pf->mirror_list);
-
 	/* initialize RSS rule list */
 	TAILQ_INIT(&pf->rss_config_list);
 
@@ -1754,12 +1745,14 @@ eth_i40e_dev_init(struct rte_eth_dev *dev, void *init_params __rte_unused)
 	return 0;
 
 err_init_fdir_filter_list:
-	rte_free(pf->tunnel.hash_table);
+	rte_hash_free(pf->tunnel.hash_table);
 	rte_free(pf->tunnel.hash_map);
 err_init_tunnel_filter_list:
-	rte_free(pf->ethertype.hash_table);
+	rte_hash_free(pf->ethertype.hash_table);
 	rte_free(pf->ethertype.hash_map);
 err_init_ethtype_filter_list:
+	rte_intr_callback_unregister(intr_handle,
+		i40e_dev_interrupt_handler, dev);
 	rte_free(dev->data->mac_addrs);
 	dev->data->mac_addrs = NULL;
 err_mac_alloc:
@@ -1903,8 +1896,8 @@ i40e_dev_configure(struct rte_eth_dev *dev)
 	ad->tx_simple_allowed = true;
 	ad->tx_vec_allowed = true;
 
-	if (dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG)
-		dev->data->dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_RSS_HASH;
+	if (dev->data->dev_conf.rxmode.mq_mode & RTE_ETH_MQ_RX_RSS_FLAG)
+		dev->data->dev_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_RSS_HASH;
 
 	/* Only legacy filter API needs the following fdir config. So when the
 	 * legacy filter API is deprecated, the following codes should also be
@@ -1938,13 +1931,13 @@ i40e_dev_configure(struct rte_eth_dev *dev)
 	 *  number, which will be available after rx_queue_setup(). dev_start()
 	 *  function is good to place RSS setup.
 	 */
-	if (mq_mode & ETH_MQ_RX_VMDQ_FLAG) {
+	if (mq_mode & RTE_ETH_MQ_RX_VMDQ_FLAG) {
 		ret = i40e_vmdq_setup(dev);
 		if (ret)
 			goto err;
 	}
 
-	if (mq_mode & ETH_MQ_RX_DCB_FLAG) {
+	if (mq_mode & RTE_ETH_MQ_RX_DCB_FLAG) {
 		ret = i40e_dcb_setup(dev);
 		if (ret) {
 			PMD_DRV_LOG(ERR, "failed to configure DCB.");
@@ -1977,9 +1970,9 @@ err:
 void
 i40e_vsi_queues_unbind_intr(struct i40e_vsi *vsi)
 {
-	struct rte_eth_dev *dev = vsi->adapter->eth_dev;
+	struct rte_eth_dev *dev = I40E_VSI_TO_ETH_DEV(vsi);
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct i40e_hw *hw = I40E_VSI_TO_HW(vsi);
 	uint16_t msix_vect = vsi->msix_intr;
 	uint16_t i;
@@ -2093,12 +2086,13 @@ __vsi_queues_bind_intr(struct i40e_vsi *vsi, uint16_t msix_vect,
 int
 i40e_vsi_queues_bind_intr(struct i40e_vsi *vsi, uint16_t itr_idx)
 {
-	struct rte_eth_dev *dev = vsi->adapter->eth_dev;
+	struct rte_eth_dev *dev = I40E_VSI_TO_ETH_DEV(vsi);
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct i40e_hw *hw = I40E_VSI_TO_HW(vsi);
 	uint16_t msix_vect = vsi->msix_intr;
-	uint16_t nb_msix = RTE_MIN(vsi->nb_msix, intr_handle->nb_efd);
+	uint16_t nb_msix = RTE_MIN(vsi->nb_msix,
+				   rte_intr_nb_efd_get(intr_handle));
 	uint16_t queue_idx = 0;
 	int record = 0;
 	int i;
@@ -2148,8 +2142,8 @@ i40e_vsi_queues_bind_intr(struct i40e_vsi *vsi, uint16_t itr_idx)
 					       vsi->nb_used_qps - i,
 					       itr_idx);
 			for (; !!record && i < vsi->nb_used_qps; i++)
-				intr_handle->intr_vec[queue_idx + i] =
-					msix_vect;
+				rte_intr_vec_list_index_set(intr_handle,
+						queue_idx + i, msix_vect);
 			break;
 		}
 		/* 1:1 queue/msix_vect mapping */
@@ -2157,7 +2151,9 @@ i40e_vsi_queues_bind_intr(struct i40e_vsi *vsi, uint16_t itr_idx)
 				       vsi->base_queue + i, 1,
 				       itr_idx);
 		if (!!record)
-			intr_handle->intr_vec[queue_idx + i] = msix_vect;
+			if (rte_intr_vec_list_index_set(intr_handle,
+						queue_idx + i, msix_vect))
+				return -rte_errno;
 
 		msix_vect++;
 		nb_msix--;
@@ -2169,9 +2165,9 @@ i40e_vsi_queues_bind_intr(struct i40e_vsi *vsi, uint16_t itr_idx)
 void
 i40e_vsi_enable_queues_intr(struct i40e_vsi *vsi)
 {
-	struct rte_eth_dev *dev = vsi->adapter->eth_dev;
+	struct rte_eth_dev *dev = I40E_VSI_TO_ETH_DEV(vsi);
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct i40e_hw *hw = I40E_VSI_TO_HW(vsi);
 	struct i40e_pf *pf = I40E_VSI_TO_PF(vsi);
 	uint16_t msix_intr, i;
@@ -2196,9 +2192,9 @@ i40e_vsi_enable_queues_intr(struct i40e_vsi *vsi)
 void
 i40e_vsi_disable_queues_intr(struct i40e_vsi *vsi)
 {
-	struct rte_eth_dev *dev = vsi->adapter->eth_dev;
+	struct rte_eth_dev *dev = I40E_VSI_TO_ETH_DEV(vsi);
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct i40e_hw *hw = I40E_VSI_TO_HW(vsi);
 	struct i40e_pf *pf = I40E_VSI_TO_PF(vsi);
 	uint16_t msix_intr, i;
@@ -2221,17 +2217,17 @@ i40e_parse_link_speeds(uint16_t link_speeds)
 {
 	uint8_t link_speed = I40E_LINK_SPEED_UNKNOWN;
 
-	if (link_speeds & ETH_LINK_SPEED_40G)
+	if (link_speeds & RTE_ETH_LINK_SPEED_40G)
 		link_speed |= I40E_LINK_SPEED_40GB;
-	if (link_speeds & ETH_LINK_SPEED_25G)
+	if (link_speeds & RTE_ETH_LINK_SPEED_25G)
 		link_speed |= I40E_LINK_SPEED_25GB;
-	if (link_speeds & ETH_LINK_SPEED_20G)
+	if (link_speeds & RTE_ETH_LINK_SPEED_20G)
 		link_speed |= I40E_LINK_SPEED_20GB;
-	if (link_speeds & ETH_LINK_SPEED_10G)
+	if (link_speeds & RTE_ETH_LINK_SPEED_10G)
 		link_speed |= I40E_LINK_SPEED_10GB;
-	if (link_speeds & ETH_LINK_SPEED_1G)
+	if (link_speeds & RTE_ETH_LINK_SPEED_1G)
 		link_speed |= I40E_LINK_SPEED_1GB;
-	if (link_speeds & ETH_LINK_SPEED_100M)
+	if (link_speeds & RTE_ETH_LINK_SPEED_100M)
 		link_speed |= I40E_LINK_SPEED_100MB;
 
 	return link_speed;
@@ -2339,13 +2335,13 @@ i40e_apply_link_speed(struct rte_eth_dev *dev)
 	abilities |= I40E_AQ_PHY_ENABLE_ATOMIC_LINK |
 		     I40E_AQ_PHY_LINK_ENABLED;
 
-	if (conf->link_speeds == ETH_LINK_SPEED_AUTONEG) {
-		conf->link_speeds = ETH_LINK_SPEED_40G |
-				    ETH_LINK_SPEED_25G |
-				    ETH_LINK_SPEED_20G |
-				    ETH_LINK_SPEED_10G |
-				    ETH_LINK_SPEED_1G |
-				    ETH_LINK_SPEED_100M;
+	if (conf->link_speeds == RTE_ETH_LINK_SPEED_AUTONEG) {
+		conf->link_speeds = RTE_ETH_LINK_SPEED_40G |
+				    RTE_ETH_LINK_SPEED_25G |
+				    RTE_ETH_LINK_SPEED_20G |
+				    RTE_ETH_LINK_SPEED_10G |
+				    RTE_ETH_LINK_SPEED_1G |
+				    RTE_ETH_LINK_SPEED_100M;
 
 		abilities |= I40E_AQ_PHY_AN_ENABLED;
 	} else {
@@ -2364,7 +2360,7 @@ i40e_dev_start(struct rte_eth_dev *dev)
 	struct i40e_vsi *main_vsi = pf->main_vsi;
 	int ret, i;
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	uint32_t intr_vector = 0;
 	struct i40e_vsi *vsi;
 	uint16_t nb_rxq, nb_txq;
@@ -2382,12 +2378,9 @@ i40e_dev_start(struct rte_eth_dev *dev)
 			return ret;
 	}
 
-	if (rte_intr_dp_is_en(intr_handle) && !intr_handle->intr_vec) {
-		intr_handle->intr_vec =
-			rte_zmalloc("intr_vec",
-				    dev->data->nb_rx_queues * sizeof(int),
-				    0);
-		if (!intr_handle->intr_vec) {
+	if (rte_intr_dp_is_en(intr_handle)) {
+		if (rte_intr_vec_list_alloc(intr_handle, "intr_vec",
+						   dev->data->nb_rx_queues)) {
 			PMD_INIT_LOG(ERR,
 				"Failed to allocate %d rx_queues intr_vec",
 				dev->data->nb_rx_queues);
@@ -2528,7 +2521,7 @@ i40e_dev_stop(struct rte_eth_dev *dev)
 	struct i40e_hw *hw = I40E_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct i40e_vsi *main_vsi = pf->main_vsi;
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	int i;
 
 	if (hw->adapter_stopped == 1)
@@ -2569,10 +2562,9 @@ i40e_dev_stop(struct rte_eth_dev *dev)
 
 	/* Clean datapath event and queue/vec mapping */
 	rte_intr_efd_disable(intr_handle);
-	if (intr_handle->intr_vec) {
-		rte_free(intr_handle->intr_vec);
-		intr_handle->intr_vec = NULL;
-	}
+
+	/* Cleanup vector list */
+	rte_intr_vec_list_free(intr_handle);
 
 	/* reset hierarchy commit */
 	pf->tm_conf.committed = false;
@@ -2591,8 +2583,7 @@ i40e_dev_close(struct rte_eth_dev *dev)
 	struct i40e_pf *pf = I40E_DEV_PRIVATE_TO_PF(dev->data->dev_private);
 	struct i40e_hw *hw = I40E_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
-	struct i40e_mirror_rule *p_mirror;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct i40e_filter_control_settings settings;
 	struct rte_flow *p_flow;
 	uint32_t reg;
@@ -2611,25 +2602,6 @@ i40e_dev_close(struct rte_eth_dev *dev)
 
 
 	ret = i40e_dev_stop(dev);
-
-	/* Remove all mirror rules */
-	while ((p_mirror = TAILQ_FIRST(&pf->mirror_list))) {
-		ret = i40e_aq_del_mirror_rule(hw,
-					      pf->main_vsi->veb->seid,
-					      p_mirror->rule_type,
-					      p_mirror->entries,
-					      p_mirror->num_entries,
-					      p_mirror->id);
-		if (ret < 0)
-			PMD_DRV_LOG(ERR, "failed to remove mirror rule: "
-				    "status = %d, aq_err = %d.", ret,
-				    hw->aq.asq_last_status);
-
-		/* remove mirror software resource anyway */
-		TAILQ_REMOVE(&pf->mirror_list, p_mirror, rules);
-		rte_free(p_mirror);
-		pf->nb_mirror_rule--;
-	}
 
 	i40e_dev_free_queues(dev);
 
@@ -2880,7 +2852,6 @@ static __rte_always_inline void
 update_link_reg(struct i40e_hw *hw, struct rte_eth_link *link)
 {
 /* Link status registers and values*/
-#define I40E_PRTMAC_LINKSTA		0x001E2420
 #define I40E_REG_LINK_UP		0x40000080
 #define I40E_PRTMAC_MACC		0x001E24E0
 #define I40E_REG_MACC_25GB		0x00020000
@@ -2893,7 +2864,7 @@ update_link_reg(struct i40e_hw *hw, struct rte_eth_link *link)
 	uint32_t link_speed;
 	uint32_t reg_val;
 
-	reg_val = I40E_READ_REG(hw, I40E_PRTMAC_LINKSTA);
+	reg_val = I40E_READ_REG(hw, I40E_PRTMAC_LINKSTA(0));
 	link_speed = reg_val & I40E_REG_SPEED_MASK;
 	reg_val &= I40E_REG_LINK_UP;
 	link->link_status = (reg_val == I40E_REG_LINK_UP) ? 1 : 0;
@@ -2904,34 +2875,34 @@ update_link_reg(struct i40e_hw *hw, struct rte_eth_link *link)
 	/* Parse the link status */
 	switch (link_speed) {
 	case I40E_REG_SPEED_0:
-		link->link_speed = ETH_SPEED_NUM_100M;
+		link->link_speed = RTE_ETH_SPEED_NUM_100M;
 		break;
 	case I40E_REG_SPEED_1:
-		link->link_speed = ETH_SPEED_NUM_1G;
+		link->link_speed = RTE_ETH_SPEED_NUM_1G;
 		break;
 	case I40E_REG_SPEED_2:
 		if (hw->mac.type == I40E_MAC_X722)
-			link->link_speed = ETH_SPEED_NUM_2_5G;
+			link->link_speed = RTE_ETH_SPEED_NUM_2_5G;
 		else
-			link->link_speed = ETH_SPEED_NUM_10G;
+			link->link_speed = RTE_ETH_SPEED_NUM_10G;
 		break;
 	case I40E_REG_SPEED_3:
 		if (hw->mac.type == I40E_MAC_X722) {
-			link->link_speed = ETH_SPEED_NUM_5G;
+			link->link_speed = RTE_ETH_SPEED_NUM_5G;
 		} else {
 			reg_val = I40E_READ_REG(hw, I40E_PRTMAC_MACC);
 
 			if (reg_val & I40E_REG_MACC_25GB)
-				link->link_speed = ETH_SPEED_NUM_25G;
+				link->link_speed = RTE_ETH_SPEED_NUM_25G;
 			else
-				link->link_speed = ETH_SPEED_NUM_40G;
+				link->link_speed = RTE_ETH_SPEED_NUM_40G;
 		}
 		break;
 	case I40E_REG_SPEED_4:
 		if (hw->mac.type == I40E_MAC_X722)
-			link->link_speed = ETH_SPEED_NUM_10G;
+			link->link_speed = RTE_ETH_SPEED_NUM_10G;
 		else
-			link->link_speed = ETH_SPEED_NUM_20G;
+			link->link_speed = RTE_ETH_SPEED_NUM_20G;
 		break;
 	default:
 		PMD_DRV_LOG(ERR, "Unknown link speed info %u", link_speed);
@@ -2958,8 +2929,8 @@ update_link_aq(struct i40e_hw *hw, struct rte_eth_link *link,
 		status = i40e_aq_get_link_info(hw, enable_lse,
 						&link_status, NULL);
 		if (unlikely(status != I40E_SUCCESS)) {
-			link->link_speed = ETH_SPEED_NUM_NONE;
-			link->link_duplex = ETH_LINK_FULL_DUPLEX;
+			link->link_speed = RTE_ETH_SPEED_NUM_NONE;
+			link->link_duplex = RTE_ETH_LINK_FULL_DUPLEX;
 			PMD_DRV_LOG(ERR, "Failed to get link info");
 			return;
 		}
@@ -2974,28 +2945,28 @@ update_link_aq(struct i40e_hw *hw, struct rte_eth_link *link,
 	/* Parse the link status */
 	switch (link_status.link_speed) {
 	case I40E_LINK_SPEED_100MB:
-		link->link_speed = ETH_SPEED_NUM_100M;
+		link->link_speed = RTE_ETH_SPEED_NUM_100M;
 		break;
 	case I40E_LINK_SPEED_1GB:
-		link->link_speed = ETH_SPEED_NUM_1G;
+		link->link_speed = RTE_ETH_SPEED_NUM_1G;
 		break;
 	case I40E_LINK_SPEED_10GB:
-		link->link_speed = ETH_SPEED_NUM_10G;
+		link->link_speed = RTE_ETH_SPEED_NUM_10G;
 		break;
 	case I40E_LINK_SPEED_20GB:
-		link->link_speed = ETH_SPEED_NUM_20G;
+		link->link_speed = RTE_ETH_SPEED_NUM_20G;
 		break;
 	case I40E_LINK_SPEED_25GB:
-		link->link_speed = ETH_SPEED_NUM_25G;
+		link->link_speed = RTE_ETH_SPEED_NUM_25G;
 		break;
 	case I40E_LINK_SPEED_40GB:
-		link->link_speed = ETH_SPEED_NUM_40G;
+		link->link_speed = RTE_ETH_SPEED_NUM_40G;
 		break;
 	default:
 		if (link->link_status)
-			link->link_speed = ETH_SPEED_NUM_UNKNOWN;
+			link->link_speed = RTE_ETH_SPEED_NUM_UNKNOWN;
 		else
-			link->link_speed = ETH_SPEED_NUM_NONE;
+			link->link_speed = RTE_ETH_SPEED_NUM_NONE;
 		break;
 	}
 }
@@ -3012,9 +2983,9 @@ i40e_dev_link_update(struct rte_eth_dev *dev,
 	memset(&link, 0, sizeof(link));
 
 	/* i40e uses full duplex only */
-	link.link_duplex = ETH_LINK_FULL_DUPLEX;
+	link.link_duplex = RTE_ETH_LINK_FULL_DUPLEX;
 	link.link_autoneg = !(dev->data->dev_conf.link_speeds &
-			ETH_LINK_SPEED_FIXED);
+			RTE_ETH_LINK_SPEED_FIXED);
 
 	if (!wait_to_complete && !enable_lse)
 		update_link_reg(hw, &link);
@@ -3230,6 +3201,10 @@ i40e_read_stats_registers(struct i40e_pf *pf, struct i40e_hw *hw)
 			    pf->offset_loaded,
 			    &os->eth.rx_unknown_protocol,
 			    &ns->eth.rx_unknown_protocol);
+	i40e_stat_update_48(hw, I40E_GL_RXERR1_H(hw->pf_id + I40E_MAX_VF),
+			    I40E_GL_RXERR1_L(hw->pf_id + I40E_MAX_VF),
+			    pf->offset_loaded, &pf->rx_err1_offset,
+			    &pf->rx_err1);
 	i40e_stat_update_48_in_64(hw, I40E_GLPRT_GOTCH(hw->port),
 				  I40E_GLPRT_GOTCL(hw->port),
 				  pf->offset_loaded, &os->eth.tx_bytes,
@@ -3429,7 +3404,8 @@ i40e_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	stats->ipackets = pf->main_vsi->eth_stats.rx_unicast +
 			pf->main_vsi->eth_stats.rx_multicast +
 			pf->main_vsi->eth_stats.rx_broadcast -
-			pf->main_vsi->eth_stats.rx_discards;
+			pf->main_vsi->eth_stats.rx_discards -
+			pf->rx_err1;
 	stats->opackets = ns->eth.tx_unicast +
 			ns->eth.tx_multicast +
 			ns->eth.tx_broadcast;
@@ -3443,7 +3419,8 @@ i40e_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 			pf->main_vsi->eth_stats.rx_discards;
 	stats->ierrors  = ns->crc_errors +
 			ns->rx_length_errors + ns->rx_undersize +
-			ns->rx_oversize + ns->rx_fragments + ns->rx_jabber;
+			ns->rx_oversize + ns->rx_fragments + ns->rx_jabber +
+			pf->rx_err1;
 
 	if (pf->vfs) {
 		for (i = 0; i < pf->vf_num; i++) {
@@ -3742,34 +3719,33 @@ i40e_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->min_mtu = RTE_ETHER_MIN_MTU;
 	dev_info->rx_queue_offload_capa = 0;
 	dev_info->rx_offload_capa =
-		DEV_RX_OFFLOAD_VLAN_STRIP |
-		DEV_RX_OFFLOAD_QINQ_STRIP |
-		DEV_RX_OFFLOAD_IPV4_CKSUM |
-		DEV_RX_OFFLOAD_UDP_CKSUM |
-		DEV_RX_OFFLOAD_TCP_CKSUM |
-		DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM |
-		DEV_RX_OFFLOAD_KEEP_CRC |
-		DEV_RX_OFFLOAD_SCATTER |
-		DEV_RX_OFFLOAD_VLAN_EXTEND |
-		DEV_RX_OFFLOAD_VLAN_FILTER |
-		DEV_RX_OFFLOAD_JUMBO_FRAME |
-		DEV_RX_OFFLOAD_RSS_HASH;
+		RTE_ETH_RX_OFFLOAD_VLAN_STRIP |
+		RTE_ETH_RX_OFFLOAD_QINQ_STRIP |
+		RTE_ETH_RX_OFFLOAD_IPV4_CKSUM |
+		RTE_ETH_RX_OFFLOAD_UDP_CKSUM |
+		RTE_ETH_RX_OFFLOAD_TCP_CKSUM |
+		RTE_ETH_RX_OFFLOAD_OUTER_IPV4_CKSUM |
+		RTE_ETH_RX_OFFLOAD_KEEP_CRC |
+		RTE_ETH_RX_OFFLOAD_SCATTER |
+		RTE_ETH_RX_OFFLOAD_VLAN_EXTEND |
+		RTE_ETH_RX_OFFLOAD_VLAN_FILTER |
+		RTE_ETH_RX_OFFLOAD_RSS_HASH;
 
-	dev_info->tx_queue_offload_capa = DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+	dev_info->tx_queue_offload_capa = RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
 	dev_info->tx_offload_capa =
-		DEV_TX_OFFLOAD_VLAN_INSERT |
-		DEV_TX_OFFLOAD_QINQ_INSERT |
-		DEV_TX_OFFLOAD_IPV4_CKSUM |
-		DEV_TX_OFFLOAD_UDP_CKSUM |
-		DEV_TX_OFFLOAD_TCP_CKSUM |
-		DEV_TX_OFFLOAD_SCTP_CKSUM |
-		DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM |
-		DEV_TX_OFFLOAD_TCP_TSO |
-		DEV_TX_OFFLOAD_VXLAN_TNL_TSO |
-		DEV_TX_OFFLOAD_GRE_TNL_TSO |
-		DEV_TX_OFFLOAD_IPIP_TNL_TSO |
-		DEV_TX_OFFLOAD_GENEVE_TNL_TSO |
-		DEV_TX_OFFLOAD_MULTI_SEGS |
+		RTE_ETH_TX_OFFLOAD_VLAN_INSERT |
+		RTE_ETH_TX_OFFLOAD_QINQ_INSERT |
+		RTE_ETH_TX_OFFLOAD_IPV4_CKSUM |
+		RTE_ETH_TX_OFFLOAD_UDP_CKSUM |
+		RTE_ETH_TX_OFFLOAD_TCP_CKSUM |
+		RTE_ETH_TX_OFFLOAD_SCTP_CKSUM |
+		RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM |
+		RTE_ETH_TX_OFFLOAD_TCP_TSO |
+		RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO |
+		RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO |
+		RTE_ETH_TX_OFFLOAD_IPIP_TNL_TSO |
+		RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO |
+		RTE_ETH_TX_OFFLOAD_MULTI_SEGS |
 		dev_info->tx_queue_offload_capa;
 	dev_info->dev_capa =
 		RTE_ETH_DEV_CAPA_RUNTIME_RX_QUEUE_SETUP |
@@ -3828,7 +3804,7 @@ i40e_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 
 	if (I40E_PHY_TYPE_SUPPORT_40G(hw->phy.phy_types)) {
 		/* For XL710 */
-		dev_info->speed_capa = ETH_LINK_SPEED_40G;
+		dev_info->speed_capa = RTE_ETH_LINK_SPEED_40G;
 		dev_info->default_rxportconf.nb_queues = 2;
 		dev_info->default_txportconf.nb_queues = 2;
 		if (dev->data->nb_rx_queues == 1)
@@ -3842,17 +3818,17 @@ i40e_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 
 	} else if (I40E_PHY_TYPE_SUPPORT_25G(hw->phy.phy_types)) {
 		/* For XXV710 */
-		dev_info->speed_capa = ETH_LINK_SPEED_25G;
+		dev_info->speed_capa = RTE_ETH_LINK_SPEED_25G;
 		dev_info->default_rxportconf.nb_queues = 1;
 		dev_info->default_txportconf.nb_queues = 1;
 		dev_info->default_rxportconf.ring_size = 256;
 		dev_info->default_txportconf.ring_size = 256;
 	} else {
 		/* For X710 */
-		dev_info->speed_capa = ETH_LINK_SPEED_1G | ETH_LINK_SPEED_10G;
+		dev_info->speed_capa = RTE_ETH_LINK_SPEED_1G | RTE_ETH_LINK_SPEED_10G;
 		dev_info->default_rxportconf.nb_queues = 1;
 		dev_info->default_txportconf.nb_queues = 1;
-		if (dev->data->dev_conf.link_speeds & ETH_LINK_SPEED_10G) {
+		if (dev->data->dev_conf.link_speeds & RTE_ETH_LINK_SPEED_10G) {
 			dev_info->default_rxportconf.ring_size = 512;
 			dev_info->default_txportconf.ring_size = 256;
 		} else {
@@ -3891,7 +3867,7 @@ i40e_vlan_tpid_set_by_registers(struct rte_eth_dev *dev,
 	int ret;
 
 	if (qinq) {
-		if (vlan_type == ETH_VLAN_TYPE_OUTER)
+		if (vlan_type == RTE_ETH_VLAN_TYPE_OUTER)
 			reg_id = 2;
 	}
 
@@ -3938,12 +3914,12 @@ i40e_vlan_tpid_set(struct rte_eth_dev *dev,
 	struct i40e_hw *hw = I40E_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct i40e_pf *pf = I40E_DEV_PRIVATE_TO_PF(dev->data->dev_private);
 	int qinq = dev->data->dev_conf.rxmode.offloads &
-		   DEV_RX_OFFLOAD_VLAN_EXTEND;
+		   RTE_ETH_RX_OFFLOAD_VLAN_EXTEND;
 	int ret = 0;
 
-	if ((vlan_type != ETH_VLAN_TYPE_INNER &&
-	     vlan_type != ETH_VLAN_TYPE_OUTER) ||
-	    (!qinq && vlan_type == ETH_VLAN_TYPE_INNER)) {
+	if ((vlan_type != RTE_ETH_VLAN_TYPE_INNER &&
+	     vlan_type != RTE_ETH_VLAN_TYPE_OUTER) ||
+	    (!qinq && vlan_type == RTE_ETH_VLAN_TYPE_INNER)) {
 		PMD_DRV_LOG(ERR,
 			    "Unsupported vlan type.");
 		return -EINVAL;
@@ -3957,12 +3933,12 @@ i40e_vlan_tpid_set(struct rte_eth_dev *dev,
 	/* 802.1ad frames ability is added in NVM API 1.7*/
 	if (hw->flags & I40E_HW_FLAG_802_1AD_CAPABLE) {
 		if (qinq) {
-			if (vlan_type == ETH_VLAN_TYPE_OUTER)
+			if (vlan_type == RTE_ETH_VLAN_TYPE_OUTER)
 				hw->first_tag = rte_cpu_to_le_16(tpid);
-			else if (vlan_type == ETH_VLAN_TYPE_INNER)
+			else if (vlan_type == RTE_ETH_VLAN_TYPE_INNER)
 				hw->second_tag = rte_cpu_to_le_16(tpid);
 		} else {
-			if (vlan_type == ETH_VLAN_TYPE_OUTER)
+			if (vlan_type == RTE_ETH_VLAN_TYPE_OUTER)
 				hw->second_tag = rte_cpu_to_le_16(tpid);
 		}
 		ret = i40e_aq_set_switch_config(hw, 0, 0, 0, NULL);
@@ -4021,37 +3997,37 @@ i40e_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 	struct rte_eth_rxmode *rxmode;
 
 	rxmode = &dev->data->dev_conf.rxmode;
-	if (mask & ETH_VLAN_FILTER_MASK) {
-		if (rxmode->offloads & DEV_RX_OFFLOAD_VLAN_FILTER)
+	if (mask & RTE_ETH_VLAN_FILTER_MASK) {
+		if (rxmode->offloads & RTE_ETH_RX_OFFLOAD_VLAN_FILTER)
 			i40e_vsi_config_vlan_filter(vsi, TRUE);
 		else
 			i40e_vsi_config_vlan_filter(vsi, FALSE);
 	}
 
-	if (mask & ETH_VLAN_STRIP_MASK) {
+	if (mask & RTE_ETH_VLAN_STRIP_MASK) {
 		/* Enable or disable VLAN stripping */
-		if (rxmode->offloads & DEV_RX_OFFLOAD_VLAN_STRIP)
+		if (rxmode->offloads & RTE_ETH_RX_OFFLOAD_VLAN_STRIP)
 			i40e_vsi_config_vlan_stripping(vsi, TRUE);
 		else
 			i40e_vsi_config_vlan_stripping(vsi, FALSE);
 	}
 
-	if (mask & ETH_VLAN_EXTEND_MASK) {
-		if (rxmode->offloads & DEV_RX_OFFLOAD_VLAN_EXTEND) {
+	if (mask & RTE_ETH_VLAN_EXTEND_MASK) {
+		if (rxmode->offloads & RTE_ETH_RX_OFFLOAD_VLAN_EXTEND) {
 			i40e_vsi_config_double_vlan(vsi, TRUE);
 			/* Set global registers with default ethertype. */
-			i40e_vlan_tpid_set(dev, ETH_VLAN_TYPE_OUTER,
+			i40e_vlan_tpid_set(dev, RTE_ETH_VLAN_TYPE_OUTER,
 					   RTE_ETHER_TYPE_VLAN);
-			i40e_vlan_tpid_set(dev, ETH_VLAN_TYPE_INNER,
+			i40e_vlan_tpid_set(dev, RTE_ETH_VLAN_TYPE_INNER,
 					   RTE_ETHER_TYPE_VLAN);
 		}
 		else
 			i40e_vsi_config_double_vlan(vsi, FALSE);
 	}
 
-	if (mask & ETH_QINQ_STRIP_MASK) {
+	if (mask & RTE_ETH_QINQ_STRIP_MASK) {
 		/* Enable or disable outer VLAN stripping */
-		if (rxmode->offloads & DEV_RX_OFFLOAD_QINQ_STRIP)
+		if (rxmode->offloads & RTE_ETH_RX_OFFLOAD_QINQ_STRIP)
 			i40e_vsi_config_outer_vlan_stripping(vsi, TRUE);
 		else
 			i40e_vsi_config_outer_vlan_stripping(vsi, FALSE);
@@ -4134,17 +4110,17 @@ i40e_flow_ctrl_get(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 	 /* Return current mode according to actual setting*/
 	switch (hw->fc.current_mode) {
 	case I40E_FC_FULL:
-		fc_conf->mode = RTE_FC_FULL;
+		fc_conf->mode = RTE_ETH_FC_FULL;
 		break;
 	case I40E_FC_TX_PAUSE:
-		fc_conf->mode = RTE_FC_TX_PAUSE;
+		fc_conf->mode = RTE_ETH_FC_TX_PAUSE;
 		break;
 	case I40E_FC_RX_PAUSE:
-		fc_conf->mode = RTE_FC_RX_PAUSE;
+		fc_conf->mode = RTE_ETH_FC_RX_PAUSE;
 		break;
 	case I40E_FC_NONE:
 	default:
-		fc_conf->mode = RTE_FC_NONE;
+		fc_conf->mode = RTE_ETH_FC_NONE;
 	};
 
 	return 0;
@@ -4160,10 +4136,10 @@ i40e_flow_ctrl_set(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 	struct i40e_hw *hw;
 	struct i40e_pf *pf;
 	enum i40e_fc_mode rte_fcmode_2_i40e_fcmode[] = {
-		[RTE_FC_NONE] = I40E_FC_NONE,
-		[RTE_FC_RX_PAUSE] = I40E_FC_RX_PAUSE,
-		[RTE_FC_TX_PAUSE] = I40E_FC_TX_PAUSE,
-		[RTE_FC_FULL] = I40E_FC_FULL
+		[RTE_ETH_FC_NONE] = I40E_FC_NONE,
+		[RTE_ETH_FC_RX_PAUSE] = I40E_FC_RX_PAUSE,
+		[RTE_ETH_FC_TX_PAUSE] = I40E_FC_TX_PAUSE,
+		[RTE_ETH_FC_FULL] = I40E_FC_FULL
 	};
 
 	/* high_water field in the rte_eth_fc_conf using the kilobytes unit */
@@ -4310,7 +4286,7 @@ i40e_macaddr_add(struct rte_eth_dev *dev,
 	}
 
 	rte_memcpy(&mac_filter.mac_addr, mac_addr, RTE_ETHER_ADDR_LEN);
-	if (rxmode->offloads & DEV_RX_OFFLOAD_VLAN_FILTER)
+	if (rxmode->offloads & RTE_ETH_RX_OFFLOAD_VLAN_FILTER)
 		mac_filter.filter_type = I40E_MACVLAN_PERFECT_MATCH;
 	else
 		mac_filter.filter_type = I40E_MAC_PERFECT_MATCH;
@@ -4463,7 +4439,7 @@ i40e_dev_rss_reta_update(struct rte_eth_dev *dev,
 	int ret;
 
 	if (reta_size != lut_size ||
-		reta_size > ETH_RSS_RETA_SIZE_512) {
+		reta_size > RTE_ETH_RSS_RETA_SIZE_512) {
 		PMD_DRV_LOG(ERR,
 			"The size of hash lookup table configured (%d) doesn't match the number hardware can supported (%d)",
 			reta_size, lut_size);
@@ -4479,8 +4455,8 @@ i40e_dev_rss_reta_update(struct rte_eth_dev *dev,
 	if (ret)
 		goto out;
 	for (i = 0; i < reta_size; i++) {
-		idx = i / RTE_RETA_GROUP_SIZE;
-		shift = i % RTE_RETA_GROUP_SIZE;
+		idx = i / RTE_ETH_RETA_GROUP_SIZE;
+		shift = i % RTE_ETH_RETA_GROUP_SIZE;
 		if (reta_conf[idx].mask & (1ULL << shift))
 			lut[i] = reta_conf[idx].reta[shift];
 	}
@@ -4506,7 +4482,7 @@ i40e_dev_rss_reta_query(struct rte_eth_dev *dev,
 	int ret;
 
 	if (reta_size != lut_size ||
-		reta_size > ETH_RSS_RETA_SIZE_512) {
+		reta_size > RTE_ETH_RSS_RETA_SIZE_512) {
 		PMD_DRV_LOG(ERR,
 			"The size of hash lookup table configured (%d) doesn't match the number hardware can supported (%d)",
 			reta_size, lut_size);
@@ -4523,8 +4499,8 @@ i40e_dev_rss_reta_query(struct rte_eth_dev *dev,
 	if (ret)
 		goto out;
 	for (i = 0; i < reta_size; i++) {
-		idx = i / RTE_RETA_GROUP_SIZE;
-		shift = i % RTE_RETA_GROUP_SIZE;
+		idx = i / RTE_ETH_RETA_GROUP_SIZE;
+		shift = i % RTE_ETH_RETA_GROUP_SIZE;
 		if (reta_conf[idx].mask & (1ULL << shift))
 			reta_conf[idx].reta[shift] = lut[i];
 	}
@@ -4548,13 +4524,15 @@ i40e_allocate_dma_mem_d(__rte_unused struct i40e_hw *hw,
 			u64 size,
 			u32 alignment)
 {
+	static uint64_t i40e_dma_memzone_id;
 	const struct rte_memzone *mz = NULL;
 	char z_name[RTE_MEMZONE_NAMESIZE];
 
 	if (!mem)
 		return I40E_ERR_PARAM;
 
-	snprintf(z_name, sizeof(z_name), "i40e_dma_%"PRIu64, rte_rand());
+	snprintf(z_name, sizeof(z_name), "i40e_dma_%" PRIu64,
+		__atomic_fetch_add(&i40e_dma_memzone_id, 1, __ATOMIC_RELAXED));
 	mz = rte_memzone_reserve_bounded(z_name, size, SOCKET_ID_ANY,
 			RTE_MEMZONE_IOVA_CONTIG, alignment, RTE_PGSIZE_2M);
 	if (!mz)
@@ -4839,7 +4817,7 @@ i40e_pf_parameter_init(struct rte_eth_dev *dev)
 			pf->max_nb_vmdq_vsi = RTE_MIN(pf->max_nb_vmdq_vsi,
 				hw->func_caps.num_vsis - vsi_count);
 			pf->max_nb_vmdq_vsi = RTE_MIN(pf->max_nb_vmdq_vsi,
-				ETH_64_POOLS);
+				RTE_ETH_64_POOLS);
 			if (pf->max_nb_vmdq_vsi) {
 				pf->flags |= I40E_FLAG_VMDQ;
 				pf->vmdq_nb_qps = pf->vmdq_nb_qp_max;
@@ -5428,7 +5406,7 @@ i40e_vsi_release(struct i40e_vsi *vsi)
 
 	/* VSI has child to attach, release child first */
 	if (vsi->veb) {
-		TAILQ_FOREACH_SAFE(vsi_list, &vsi->veb->head, list, temp) {
+		RTE_TAILQ_FOREACH_SAFE(vsi_list, &vsi->veb->head, list, temp) {
 			if (i40e_vsi_release(vsi_list->vsi) != I40E_SUCCESS)
 				return -1;
 		}
@@ -5436,7 +5414,8 @@ i40e_vsi_release(struct i40e_vsi *vsi)
 	}
 
 	if (vsi->floating_veb) {
-		TAILQ_FOREACH_SAFE(vsi_list, &vsi->floating_veb->head, list, temp) {
+		RTE_TAILQ_FOREACH_SAFE(vsi_list, &vsi->floating_veb->head,
+			list, temp) {
 			if (i40e_vsi_release(vsi_list->vsi) != I40E_SUCCESS)
 				return -1;
 		}
@@ -5444,7 +5423,7 @@ i40e_vsi_release(struct i40e_vsi *vsi)
 
 	/* Remove all macvlan filters of the VSI */
 	i40e_vsi_remove_all_macvlan_filter(vsi);
-	TAILQ_FOREACH_SAFE(f, &vsi->mac_list, next, temp)
+	RTE_TAILQ_FOREACH_SAFE(f, &vsi->mac_list, next, temp)
 		rte_free(f);
 
 	if (vsi->type != I40E_VSI_MAIN &&
@@ -6047,7 +6026,7 @@ i40e_vsi_config_vlan_filter(struct i40e_vsi *vsi, bool on)
 	i = 0;
 
 	/* Remove all existing mac */
-	TAILQ_FOREACH_SAFE(f, &vsi->mac_list, next, temp) {
+	RTE_TAILQ_FOREACH_SAFE(f, &vsi->mac_list, next, temp) {
 		mac_filter[i] = f->mac_info;
 		ret = i40e_vsi_delete_mac(vsi, &f->mac_info.mac_addr);
 		if (ret) {
@@ -6124,10 +6103,10 @@ i40e_dev_init_vlan(struct rte_eth_dev *dev)
 	int mask = 0;
 
 	/* Apply vlan offload setting */
-	mask = ETH_VLAN_STRIP_MASK |
-	       ETH_QINQ_STRIP_MASK |
-	       ETH_VLAN_FILTER_MASK |
-	       ETH_VLAN_EXTEND_MASK;
+	mask = RTE_ETH_VLAN_STRIP_MASK |
+	       RTE_ETH_QINQ_STRIP_MASK |
+	       RTE_ETH_VLAN_FILTER_MASK |
+	       RTE_ETH_VLAN_EXTEND_MASK;
 	ret = i40e_vlan_offload_set(dev, mask);
 	if (ret) {
 		PMD_DRV_LOG(INFO, "Failed to update vlan offload");
@@ -6222,6 +6201,8 @@ i40e_pf_setup(struct i40e_pf *pf)
 	memset(&pf->stats_offset, 0, sizeof(struct i40e_hw_port_stats));
 	memset(&pf->internal_stats, 0, sizeof(struct i40e_eth_stats));
 	memset(&pf->internal_stats_offset, 0, sizeof(struct i40e_eth_stats));
+	pf->rx_err1 = 0;
+	pf->rx_err1_offset = 0;
 
 	ret = i40e_pf_get_switch_config(pf);
 	if (ret != I40E_SUCCESS) {
@@ -6254,9 +6235,9 @@ i40e_pf_setup(struct i40e_pf *pf)
 
 	/* Configure filter control */
 	memset(&settings, 0, sizeof(settings));
-	if (hw->func_caps.rss_table_size == ETH_RSS_RETA_SIZE_128)
+	if (hw->func_caps.rss_table_size == RTE_ETH_RSS_RETA_SIZE_128)
 		settings.hash_lut_size = I40E_HASH_LUT_SIZE_128;
-	else if (hw->func_caps.rss_table_size == ETH_RSS_RETA_SIZE_512)
+	else if (hw->func_caps.rss_table_size == RTE_ETH_RSS_RETA_SIZE_512)
 		settings.hash_lut_size = I40E_HASH_LUT_SIZE_512;
 	else {
 		PMD_DRV_LOG(ERR, "Hash lookup table size (%u) not supported",
@@ -6411,8 +6392,7 @@ i40e_dev_tx_init(struct i40e_pf *pf)
 			break;
 	}
 	if (ret == I40E_SUCCESS)
-		i40e_set_tx_function(container_of(pf, struct i40e_adapter, pf)
-				     ->eth_dev);
+		i40e_set_tx_function(&rte_eth_devices[pf->dev_data->port_id]);
 
 	return ret;
 }
@@ -6440,8 +6420,7 @@ i40e_dev_rx_init(struct i40e_pf *pf)
 		}
 	}
 	if (ret == I40E_SUCCESS)
-		i40e_set_rx_function(container_of(pf, struct i40e_adapter, pf)
-				     ->eth_dev);
+		i40e_set_rx_function(&rte_eth_devices[pf->dev_data->port_id]);
 
 	return ret;
 }
@@ -7029,6 +7008,7 @@ i40e_remove_macvlan_filters(struct i40e_vsi *vsi,
 	int ret = I40E_SUCCESS;
 	struct i40e_hw *hw = I40E_VSI_TO_HW(vsi);
 	struct i40e_aqc_remove_macvlan_element_data *req_list;
+	enum i40e_admin_queue_err aq_status;
 
 	if (filter == NULL  || total == 0)
 		return I40E_ERR_PARAM;
@@ -7076,11 +7056,17 @@ i40e_remove_macvlan_filters(struct i40e_vsi *vsi,
 			req_list[i].flags = rte_cpu_to_le_16(flags);
 		}
 
-		ret = i40e_aq_remove_macvlan(hw, vsi->seid, req_list,
-						actual_num, NULL);
+		ret = i40e_aq_remove_macvlan_v2(hw, vsi->seid, req_list,
+						actual_num, NULL, &aq_status);
+
 		if (ret != I40E_SUCCESS) {
-			PMD_DRV_LOG(ERR, "Failed to remove macvlan filter");
-			goto DONE;
+			/* Do not report as an error when firmware returns ENOENT */
+			if (aq_status == I40E_AQ_RC_ENOENT) {
+				ret = I40E_SUCCESS;
+			} else {
+				PMD_DRV_LOG(ERR, "Failed to remove macvlan filter");
+				goto DONE;
+			}
 		}
 		num += actual_num;
 	} while (num < total);
@@ -7111,7 +7097,7 @@ i40e_find_vlan_filter(struct i40e_vsi *vsi,
 {
 	uint32_t vid_idx, vid_bit;
 
-	if (vlan_id > ETH_VLAN_ID_MAX)
+	if (vlan_id > RTE_ETH_VLAN_ID_MAX)
 		return 0;
 
 	vid_idx = I40E_VFTA_IDX(vlan_id);
@@ -7146,7 +7132,7 @@ i40e_set_vlan_filter(struct i40e_vsi *vsi,
 	struct i40e_aqc_add_remove_vlan_element_data vlan_data = {0};
 	int ret;
 
-	if (vlan_id > ETH_VLAN_ID_MAX)
+	if (vlan_id > RTE_ETH_VLAN_ID_MAX)
 		return;
 
 	i40e_store_vlan_filter(vsi, vlan_id, on);
@@ -7740,25 +7726,25 @@ static int
 i40e_dev_get_filter_type(uint16_t filter_type, uint16_t *flag)
 {
 	switch (filter_type) {
-	case RTE_TUNNEL_FILTER_IMAC_IVLAN:
+	case RTE_ETH_TUNNEL_FILTER_IMAC_IVLAN:
 		*flag = I40E_AQC_ADD_CLOUD_FILTER_IMAC_IVLAN;
 		break;
-	case RTE_TUNNEL_FILTER_IMAC_IVLAN_TENID:
+	case RTE_ETH_TUNNEL_FILTER_IMAC_IVLAN_TENID:
 		*flag = I40E_AQC_ADD_CLOUD_FILTER_IMAC_IVLAN_TEN_ID;
 		break;
-	case RTE_TUNNEL_FILTER_IMAC_TENID:
+	case RTE_ETH_TUNNEL_FILTER_IMAC_TENID:
 		*flag = I40E_AQC_ADD_CLOUD_FILTER_IMAC_TEN_ID;
 		break;
-	case RTE_TUNNEL_FILTER_OMAC_TENID_IMAC:
+	case RTE_ETH_TUNNEL_FILTER_OMAC_TENID_IMAC:
 		*flag = I40E_AQC_ADD_CLOUD_FILTER_OMAC_TEN_ID_IMAC;
 		break;
-	case ETH_TUNNEL_FILTER_IMAC:
+	case RTE_ETH_TUNNEL_FILTER_IMAC:
 		*flag = I40E_AQC_ADD_CLOUD_FILTER_IMAC;
 		break;
-	case ETH_TUNNEL_FILTER_OIP:
+	case RTE_ETH_TUNNEL_FILTER_OIP:
 		*flag = I40E_AQC_ADD_CLOUD_FILTER_OIP;
 		break;
-	case ETH_TUNNEL_FILTER_IIP:
+	case RTE_ETH_TUNNEL_FILTER_IIP:
 		*flag = I40E_AQC_ADD_CLOUD_FILTER_IIP;
 		break;
 	default:
@@ -7880,7 +7866,7 @@ i40e_status_code i40e_replace_mpls_l1_filter(struct i40e_pf *pf)
 	struct i40e_aqc_replace_cloud_filters_cmd  filter_replace;
 	struct i40e_aqc_replace_cloud_filters_cmd_buf  filter_replace_buf;
 	struct i40e_hw *hw = I40E_PF_TO_HW(pf);
-	struct rte_eth_dev *dev = ((struct i40e_adapter *)hw->back)->eth_dev;
+	struct rte_eth_dev *dev = &rte_eth_devices[pf->dev_data->port_id];
 	enum i40e_status_code status = I40E_SUCCESS;
 
 	if (pf->support_multi_driver) {
@@ -7941,7 +7927,7 @@ i40e_status_code i40e_replace_mpls_cloud_filter(struct i40e_pf *pf)
 	struct i40e_aqc_replace_cloud_filters_cmd  filter_replace;
 	struct i40e_aqc_replace_cloud_filters_cmd_buf  filter_replace_buf;
 	struct i40e_hw *hw = I40E_PF_TO_HW(pf);
-	struct rte_eth_dev *dev = ((struct i40e_adapter *)hw->back)->eth_dev;
+	struct rte_eth_dev *dev = &rte_eth_devices[pf->dev_data->port_id];
 	enum i40e_status_code status = I40E_SUCCESS;
 
 	if (pf->support_multi_driver) {
@@ -8016,7 +8002,7 @@ i40e_replace_gtp_l1_filter(struct i40e_pf *pf)
 	struct i40e_aqc_replace_cloud_filters_cmd  filter_replace;
 	struct i40e_aqc_replace_cloud_filters_cmd_buf  filter_replace_buf;
 	struct i40e_hw *hw = I40E_PF_TO_HW(pf);
-	struct rte_eth_dev *dev = ((struct i40e_adapter *)hw->back)->eth_dev;
+	struct rte_eth_dev *dev = &rte_eth_devices[pf->dev_data->port_id];
 	enum i40e_status_code status = I40E_SUCCESS;
 
 	if (pf->support_multi_driver) {
@@ -8104,7 +8090,7 @@ i40e_status_code i40e_replace_gtp_cloud_filter(struct i40e_pf *pf)
 	struct i40e_aqc_replace_cloud_filters_cmd  filter_replace;
 	struct i40e_aqc_replace_cloud_filters_cmd_buf  filter_replace_buf;
 	struct i40e_hw *hw = I40E_PF_TO_HW(pf);
-	struct rte_eth_dev *dev = ((struct i40e_adapter *)hw->back)->eth_dev;
+	struct rte_eth_dev *dev = &rte_eth_devices[pf->dev_data->port_id];
 	enum i40e_status_code status = I40E_SUCCESS;
 
 	if (pf->support_multi_driver) {
@@ -8179,7 +8165,7 @@ i40e_replace_port_l1_filter(struct i40e_pf *pf,
 	struct i40e_aqc_replace_cloud_filters_cmd  filter_replace;
 	enum i40e_status_code status = I40E_SUCCESS;
 	struct i40e_hw *hw = I40E_PF_TO_HW(pf);
-	struct rte_eth_dev *dev = ((struct i40e_adapter *)hw->back)->eth_dev;
+	struct rte_eth_dev *dev = &rte_eth_devices[pf->dev_data->port_id];
 
 	if (pf->support_multi_driver) {
 		PMD_DRV_LOG(ERR, "Replace l1 filter is not supported.");
@@ -8251,7 +8237,7 @@ i40e_replace_port_cloud_filter(struct i40e_pf *pf,
 	struct i40e_aqc_replace_cloud_filters_cmd  filter_replace;
 	enum i40e_status_code status = I40E_SUCCESS;
 	struct i40e_hw *hw = I40E_PF_TO_HW(pf);
-	struct rte_eth_dev *dev = ((struct i40e_adapter *)hw->back)->eth_dev;
+	struct rte_eth_dev *dev = &rte_eth_devices[pf->dev_data->port_id];
 
 	if (pf->support_multi_driver) {
 		PMD_DRV_LOG(ERR, "Replace cloud filter is not supported.");
@@ -8724,16 +8710,16 @@ i40e_dev_udp_tunnel_port_add(struct rte_eth_dev *dev,
 		return -EINVAL;
 
 	switch (udp_tunnel->prot_type) {
-	case RTE_TUNNEL_TYPE_VXLAN:
+	case RTE_ETH_TUNNEL_TYPE_VXLAN:
 		ret = i40e_add_vxlan_port(pf, udp_tunnel->udp_port,
 					  I40E_AQC_TUNNEL_TYPE_VXLAN);
 		break;
-	case RTE_TUNNEL_TYPE_VXLAN_GPE:
+	case RTE_ETH_TUNNEL_TYPE_VXLAN_GPE:
 		ret = i40e_add_vxlan_port(pf, udp_tunnel->udp_port,
 					  I40E_AQC_TUNNEL_TYPE_VXLAN_GPE);
 		break;
-	case RTE_TUNNEL_TYPE_GENEVE:
-	case RTE_TUNNEL_TYPE_TEREDO:
+	case RTE_ETH_TUNNEL_TYPE_GENEVE:
+	case RTE_ETH_TUNNEL_TYPE_TEREDO:
 		PMD_DRV_LOG(ERR, "Tunnel type is not supported now.");
 		ret = -1;
 		break;
@@ -8759,12 +8745,12 @@ i40e_dev_udp_tunnel_port_del(struct rte_eth_dev *dev,
 		return -EINVAL;
 
 	switch (udp_tunnel->prot_type) {
-	case RTE_TUNNEL_TYPE_VXLAN:
-	case RTE_TUNNEL_TYPE_VXLAN_GPE:
+	case RTE_ETH_TUNNEL_TYPE_VXLAN:
+	case RTE_ETH_TUNNEL_TYPE_VXLAN_GPE:
 		ret = i40e_del_vxlan_port(pf, udp_tunnel->udp_port);
 		break;
-	case RTE_TUNNEL_TYPE_GENEVE:
-	case RTE_TUNNEL_TYPE_TEREDO:
+	case RTE_ETH_TUNNEL_TYPE_GENEVE:
+	case RTE_ETH_TUNNEL_TYPE_TEREDO:
 		PMD_DRV_LOG(ERR, "Tunnel type is not supported now.");
 		ret = -1;
 		break;
@@ -8856,7 +8842,7 @@ int
 i40e_pf_reset_rss_reta(struct i40e_pf *pf)
 {
 	struct i40e_hw *hw = &pf->adapter->hw;
-	uint8_t lut[ETH_RSS_RETA_SIZE_512];
+	uint8_t lut[RTE_ETH_RSS_RETA_SIZE_512];
 	uint32_t i;
 	int num;
 
@@ -8864,7 +8850,7 @@ i40e_pf_reset_rss_reta(struct i40e_pf *pf)
 	 * configured. It's necessary to calculate the actual PF
 	 * queues that are configured.
 	 */
-	if (pf->dev_data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_VMDQ_FLAG)
+	if (pf->dev_data->dev_conf.rxmode.mq_mode & RTE_ETH_MQ_RX_VMDQ_FLAG)
 		num = i40e_pf_calc_configured_queues_num(pf);
 	else
 		num = pf->dev_data->nb_rx_queues;
@@ -8943,7 +8929,7 @@ i40e_pf_config_rss(struct i40e_pf *pf)
 	rss_hf = pf->dev_data->dev_conf.rx_adv_conf.rss_conf.rss_hf;
 	mq_mode = pf->dev_data->dev_conf.rxmode.mq_mode;
 	if (!(rss_hf & pf->adapter->flow_types_mask) ||
-	    !(mq_mode & ETH_MQ_RX_RSS_FLAG))
+	    !(mq_mode & RTE_ETH_MQ_RX_RSS_FLAG))
 		return 0;
 
 	hw = I40E_PF_TO_HW(pf);
@@ -9578,9 +9564,10 @@ void
 i40e_check_write_global_reg(struct i40e_hw *hw, uint32_t addr, uint32_t val)
 {
 	uint32_t reg = i40e_read_rx_ctl(hw, addr);
-	struct rte_eth_dev *dev;
+	struct rte_eth_dev_data *dev_data =
+		((struct i40e_adapter *)hw->back)->pf.dev_data;
+	struct rte_eth_dev *dev = &rte_eth_devices[dev_data->port_id];
 
-	dev = ((struct i40e_adapter *)hw->back)->eth_dev;
 	if (reg != val) {
 		i40e_write_rx_ctl(hw, addr, val);
 		PMD_DRV_LOG(WARNING,
@@ -10226,323 +10213,6 @@ i40e_config_qinq(struct i40e_hw *hw, struct i40e_vsi *vsi)
 	return 0;
 }
 
-/**
- * i40e_aq_add_mirror_rule
- * @hw: pointer to the hardware structure
- * @seid: VEB seid to add mirror rule to
- * @dst_id: destination vsi seid
- * @entries: Buffer which contains the entities to be mirrored
- * @count: number of entities contained in the buffer
- * @rule_id:the rule_id of the rule to be added
- *
- * Add a mirror rule for a given veb.
- *
- **/
-static enum i40e_status_code
-i40e_aq_add_mirror_rule(struct i40e_hw *hw,
-			uint16_t seid, uint16_t dst_id,
-			uint16_t rule_type, uint16_t *entries,
-			uint16_t count, uint16_t *rule_id)
-{
-	struct i40e_aq_desc desc;
-	struct i40e_aqc_add_delete_mirror_rule cmd;
-	struct i40e_aqc_add_delete_mirror_rule_completion *resp =
-		(struct i40e_aqc_add_delete_mirror_rule_completion *)
-		&desc.params.raw;
-	uint16_t buff_len;
-	enum i40e_status_code status;
-
-	i40e_fill_default_direct_cmd_desc(&desc,
-					  i40e_aqc_opc_add_mirror_rule);
-	memset(&cmd, 0, sizeof(cmd));
-
-	buff_len = sizeof(uint16_t) * count;
-	desc.datalen = rte_cpu_to_le_16(buff_len);
-	if (buff_len > 0)
-		desc.flags |= rte_cpu_to_le_16(
-			(uint16_t)(I40E_AQ_FLAG_BUF | I40E_AQ_FLAG_RD));
-	cmd.rule_type = rte_cpu_to_le_16(rule_type <<
-				I40E_AQC_MIRROR_RULE_TYPE_SHIFT);
-	cmd.num_entries = rte_cpu_to_le_16(count);
-	cmd.seid = rte_cpu_to_le_16(seid);
-	cmd.destination = rte_cpu_to_le_16(dst_id);
-
-	rte_memcpy(&desc.params.raw, &cmd, sizeof(cmd));
-	status = i40e_asq_send_command(hw, &desc, entries, buff_len, NULL);
-	PMD_DRV_LOG(INFO,
-		"i40e_aq_add_mirror_rule, aq_status %d, rule_id = %u mirror_rules_used = %u, mirror_rules_free = %u,",
-		hw->aq.asq_last_status, resp->rule_id,
-		resp->mirror_rules_used, resp->mirror_rules_free);
-	*rule_id = rte_le_to_cpu_16(resp->rule_id);
-
-	return status;
-}
-
-/**
- * i40e_aq_del_mirror_rule
- * @hw: pointer to the hardware structure
- * @seid: VEB seid to add mirror rule to
- * @entries: Buffer which contains the entities to be mirrored
- * @count: number of entities contained in the buffer
- * @rule_id:the rule_id of the rule to be delete
- *
- * Delete a mirror rule for a given veb.
- *
- **/
-static enum i40e_status_code
-i40e_aq_del_mirror_rule(struct i40e_hw *hw,
-		uint16_t seid, uint16_t rule_type, uint16_t *entries,
-		uint16_t count, uint16_t rule_id)
-{
-	struct i40e_aq_desc desc;
-	struct i40e_aqc_add_delete_mirror_rule cmd;
-	uint16_t buff_len = 0;
-	enum i40e_status_code status;
-	void *buff = NULL;
-
-	i40e_fill_default_direct_cmd_desc(&desc,
-					  i40e_aqc_opc_delete_mirror_rule);
-	memset(&cmd, 0, sizeof(cmd));
-	if (rule_type == I40E_AQC_MIRROR_RULE_TYPE_VLAN) {
-		desc.flags |= rte_cpu_to_le_16((uint16_t)(I40E_AQ_FLAG_BUF |
-							  I40E_AQ_FLAG_RD));
-		cmd.num_entries = count;
-		buff_len = sizeof(uint16_t) * count;
-		desc.datalen = rte_cpu_to_le_16(buff_len);
-		buff = (void *)entries;
-	} else
-		/* rule id is filled in destination field for deleting mirror rule */
-		cmd.destination = rte_cpu_to_le_16(rule_id);
-
-	cmd.rule_type = rte_cpu_to_le_16(rule_type <<
-				I40E_AQC_MIRROR_RULE_TYPE_SHIFT);
-	cmd.seid = rte_cpu_to_le_16(seid);
-
-	rte_memcpy(&desc.params.raw, &cmd, sizeof(cmd));
-	status = i40e_asq_send_command(hw, &desc, buff, buff_len, NULL);
-
-	return status;
-}
-
-/**
- * i40e_mirror_rule_set
- * @dev: pointer to the hardware structure
- * @mirror_conf: mirror rule info
- * @sw_id: mirror rule's sw_id
- * @on: enable/disable
- *
- * set a mirror rule.
- *
- **/
-static int
-i40e_mirror_rule_set(struct rte_eth_dev *dev,
-			struct rte_eth_mirror_conf *mirror_conf,
-			uint8_t sw_id, uint8_t on)
-{
-	struct i40e_pf *pf = I40E_DEV_PRIVATE_TO_PF(dev->data->dev_private);
-	struct i40e_hw *hw = I40E_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct i40e_mirror_rule *it, *mirr_rule = NULL;
-	struct i40e_mirror_rule *parent = NULL;
-	uint16_t seid, dst_seid, rule_id;
-	uint16_t i, j = 0;
-	int ret;
-
-	PMD_DRV_LOG(DEBUG, "i40e_mirror_rule_set: sw_id = %d.", sw_id);
-
-	if (pf->main_vsi->veb == NULL || pf->vfs == NULL) {
-		PMD_DRV_LOG(ERR,
-			"mirror rule can not be configured without veb or vfs.");
-		return -ENOSYS;
-	}
-	if (pf->nb_mirror_rule > I40E_MAX_MIRROR_RULES) {
-		PMD_DRV_LOG(ERR, "mirror table is full.");
-		return -ENOSPC;
-	}
-	if (mirror_conf->dst_pool > pf->vf_num) {
-		PMD_DRV_LOG(ERR, "invalid destination pool %u.",
-				 mirror_conf->dst_pool);
-		return -EINVAL;
-	}
-
-	seid = pf->main_vsi->veb->seid;
-
-	TAILQ_FOREACH(it, &pf->mirror_list, rules) {
-		if (sw_id <= it->index) {
-			mirr_rule = it;
-			break;
-		}
-		parent = it;
-	}
-	if (mirr_rule && sw_id == mirr_rule->index) {
-		if (on) {
-			PMD_DRV_LOG(ERR, "mirror rule exists.");
-			return -EEXIST;
-		} else {
-			ret = i40e_aq_del_mirror_rule(hw, seid,
-					mirr_rule->rule_type,
-					mirr_rule->entries,
-					mirr_rule->num_entries, mirr_rule->id);
-			if (ret < 0) {
-				PMD_DRV_LOG(ERR,
-					"failed to remove mirror rule: ret = %d, aq_err = %d.",
-					ret, hw->aq.asq_last_status);
-				return -ENOSYS;
-			}
-			TAILQ_REMOVE(&pf->mirror_list, mirr_rule, rules);
-			rte_free(mirr_rule);
-			pf->nb_mirror_rule--;
-			return 0;
-		}
-	} else if (!on) {
-		PMD_DRV_LOG(ERR, "mirror rule doesn't exist.");
-		return -ENOENT;
-	}
-
-	mirr_rule = rte_zmalloc("i40e_mirror_rule",
-				sizeof(struct i40e_mirror_rule) , 0);
-	if (!mirr_rule) {
-		PMD_DRV_LOG(ERR, "failed to allocate memory");
-		return I40E_ERR_NO_MEMORY;
-	}
-	switch (mirror_conf->rule_type) {
-	case ETH_MIRROR_VLAN:
-		for (i = 0, j = 0; i < ETH_MIRROR_MAX_VLANS; i++) {
-			if (mirror_conf->vlan.vlan_mask & (1ULL << i)) {
-				mirr_rule->entries[j] =
-					mirror_conf->vlan.vlan_id[i];
-				j++;
-			}
-		}
-		if (j == 0) {
-			PMD_DRV_LOG(ERR, "vlan is not specified.");
-			rte_free(mirr_rule);
-			return -EINVAL;
-		}
-		mirr_rule->rule_type = I40E_AQC_MIRROR_RULE_TYPE_VLAN;
-		break;
-	case ETH_MIRROR_VIRTUAL_POOL_UP:
-	case ETH_MIRROR_VIRTUAL_POOL_DOWN:
-		/* check if the specified pool bit is out of range */
-		if (mirror_conf->pool_mask > (uint64_t)(1ULL << (pf->vf_num + 1))) {
-			PMD_DRV_LOG(ERR, "pool mask is out of range.");
-			rte_free(mirr_rule);
-			return -EINVAL;
-		}
-		for (i = 0, j = 0; i < pf->vf_num; i++) {
-			if (mirror_conf->pool_mask & (1ULL << i)) {
-				mirr_rule->entries[j] = pf->vfs[i].vsi->seid;
-				j++;
-			}
-		}
-		if (mirror_conf->pool_mask & (1ULL << pf->vf_num)) {
-			/* add pf vsi to entries */
-			mirr_rule->entries[j] = pf->main_vsi_seid;
-			j++;
-		}
-		if (j == 0) {
-			PMD_DRV_LOG(ERR, "pool is not specified.");
-			rte_free(mirr_rule);
-			return -EINVAL;
-		}
-		/* egress and ingress in aq commands means from switch but not port */
-		mirr_rule->rule_type =
-			(mirror_conf->rule_type == ETH_MIRROR_VIRTUAL_POOL_UP) ?
-			I40E_AQC_MIRROR_RULE_TYPE_VPORT_EGRESS :
-			I40E_AQC_MIRROR_RULE_TYPE_VPORT_INGRESS;
-		break;
-	case ETH_MIRROR_UPLINK_PORT:
-		/* egress and ingress in aq commands means from switch but not port*/
-		mirr_rule->rule_type = I40E_AQC_MIRROR_RULE_TYPE_ALL_EGRESS;
-		break;
-	case ETH_MIRROR_DOWNLINK_PORT:
-		mirr_rule->rule_type = I40E_AQC_MIRROR_RULE_TYPE_ALL_INGRESS;
-		break;
-	default:
-		PMD_DRV_LOG(ERR, "unsupported mirror type %d.",
-			mirror_conf->rule_type);
-		rte_free(mirr_rule);
-		return -EINVAL;
-	}
-
-	/* If the dst_pool is equal to vf_num, consider it as PF */
-	if (mirror_conf->dst_pool == pf->vf_num)
-		dst_seid = pf->main_vsi_seid;
-	else
-		dst_seid = pf->vfs[mirror_conf->dst_pool].vsi->seid;
-
-	ret = i40e_aq_add_mirror_rule(hw, seid, dst_seid,
-				      mirr_rule->rule_type, mirr_rule->entries,
-				      j, &rule_id);
-	if (ret < 0) {
-		PMD_DRV_LOG(ERR,
-			"failed to add mirror rule: ret = %d, aq_err = %d.",
-			ret, hw->aq.asq_last_status);
-		rte_free(mirr_rule);
-		return -ENOSYS;
-	}
-
-	mirr_rule->index = sw_id;
-	mirr_rule->num_entries = j;
-	mirr_rule->id = rule_id;
-	mirr_rule->dst_vsi_seid = dst_seid;
-
-	if (parent)
-		TAILQ_INSERT_AFTER(&pf->mirror_list, parent, mirr_rule, rules);
-	else
-		TAILQ_INSERT_HEAD(&pf->mirror_list, mirr_rule, rules);
-
-	pf->nb_mirror_rule++;
-	return 0;
-}
-
-/**
- * i40e_mirror_rule_reset
- * @dev: pointer to the device
- * @sw_id: mirror rule's sw_id
- *
- * reset a mirror rule.
- *
- **/
-static int
-i40e_mirror_rule_reset(struct rte_eth_dev *dev, uint8_t sw_id)
-{
-	struct i40e_pf *pf = I40E_DEV_PRIVATE_TO_PF(dev->data->dev_private);
-	struct i40e_hw *hw = I40E_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct i40e_mirror_rule *it, *mirr_rule = NULL;
-	uint16_t seid;
-	int ret;
-
-	PMD_DRV_LOG(DEBUG, "i40e_mirror_rule_reset: sw_id = %d.", sw_id);
-
-	seid = pf->main_vsi->veb->seid;
-
-	TAILQ_FOREACH(it, &pf->mirror_list, rules) {
-		if (sw_id == it->index) {
-			mirr_rule = it;
-			break;
-		}
-	}
-	if (mirr_rule) {
-		ret = i40e_aq_del_mirror_rule(hw, seid,
-				mirr_rule->rule_type,
-				mirr_rule->entries,
-				mirr_rule->num_entries, mirr_rule->id);
-		if (ret < 0) {
-			PMD_DRV_LOG(ERR,
-				"failed to remove mirror rule: status = %d, aq_err = %d.",
-				ret, hw->aq.asq_last_status);
-			return -ENOSYS;
-		}
-		TAILQ_REMOVE(&pf->mirror_list, mirr_rule, rules);
-		rte_free(mirr_rule);
-		pf->nb_mirror_rule--;
-	} else {
-		PMD_DRV_LOG(ERR, "mirror rule doesn't exist.");
-		return -ENOENT;
-	}
-	return 0;
-}
-
 static uint64_t
 i40e_read_systime_cyclecounter(struct rte_eth_dev *dev)
 {
@@ -10596,16 +10266,16 @@ i40e_start_timecounters(struct rte_eth_dev *dev)
 	rte_eth_linkstatus_get(dev, &link);
 
 	switch (link.link_speed) {
-	case ETH_SPEED_NUM_40G:
-	case ETH_SPEED_NUM_25G:
+	case RTE_ETH_SPEED_NUM_40G:
+	case RTE_ETH_SPEED_NUM_25G:
 		tsync_inc_l = I40E_PTP_40GB_INCVAL & 0xFFFFFFFF;
 		tsync_inc_h = I40E_PTP_40GB_INCVAL >> 32;
 		break;
-	case ETH_SPEED_NUM_10G:
+	case RTE_ETH_SPEED_NUM_10G:
 		tsync_inc_l = I40E_PTP_10GB_INCVAL & 0xFFFFFFFF;
 		tsync_inc_h = I40E_PTP_10GB_INCVAL >> 32;
 		break;
-	case ETH_SPEED_NUM_1G:
+	case RTE_ETH_SPEED_NUM_1G:
 		tsync_inc_l = I40E_PTP_1GB_INCVAL & 0xFFFFFFFF;
 		tsync_inc_h = I40E_PTP_1GB_INCVAL >> 32;
 		break;
@@ -10833,7 +10503,7 @@ i40e_parse_dcb_configure(struct rte_eth_dev *dev,
 	else
 		*tc_map = RTE_LEN2MASK(dcb_rx_conf->nb_tcs, uint8_t);
 
-	if (dev->data->dev_conf.dcb_capability_en & ETH_DCB_PFC_SUPPORT) {
+	if (dev->data->dev_conf.dcb_capability_en & RTE_ETH_DCB_PFC_SUPPORT) {
 		dcb_cfg->pfc.willing = 0;
 		dcb_cfg->pfc.pfccap = I40E_MAX_TRAFFIC_CLASS;
 		dcb_cfg->pfc.pfcenable = *tc_map;
@@ -11341,7 +11011,7 @@ i40e_dev_get_dcb_info(struct rte_eth_dev *dev,
 	uint16_t bsf, tc_mapping;
 	int i, j = 0;
 
-	if (dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_DCB_FLAG)
+	if (dev->data->dev_conf.rxmode.mq_mode & RTE_ETH_MQ_RX_DCB_FLAG)
 		dcb_info->nb_tcs = rte_bsf32(vsi->enabled_tc + 1);
 	else
 		dcb_info->nb_tcs = 1;
@@ -11389,7 +11059,7 @@ i40e_dev_get_dcb_info(struct rte_eth_dev *dev,
 				dcb_info->tc_queue.tc_rxq[j][i].nb_queue;
 		}
 		j++;
-	} while (j < RTE_MIN(pf->nb_cfg_vmdq_vsi, ETH_MAX_VMDQ_POOL));
+	} while (j < RTE_MIN(pf->nb_cfg_vmdq_vsi, RTE_ETH_MAX_VMDQ_POOL));
 	return 0;
 }
 
@@ -11397,11 +11067,11 @@ static int
 i40e_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct i40e_hw *hw = I40E_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint16_t msix_intr;
 
-	msix_intr = intr_handle->intr_vec[queue_id];
+	msix_intr = rte_intr_vec_list_index_get(intr_handle, queue_id);
 	if (msix_intr == I40E_MISC_VEC_ID)
 		I40E_WRITE_REG(hw, I40E_PFINT_DYN_CTL0,
 			       I40E_PFINT_DYN_CTL0_INTENA_MASK |
@@ -11416,7 +11086,7 @@ i40e_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 			       I40E_PFINT_DYN_CTLN_ITR_INDX_MASK);
 
 	I40E_WRITE_FLUSH(hw);
-	rte_intr_ack(&pci_dev->intr_handle);
+	rte_intr_ack(pci_dev->intr_handle);
 
 	return 0;
 }
@@ -11425,11 +11095,11 @@ static int
 i40e_dev_rx_queue_intr_disable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
+	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct i40e_hw *hw = I40E_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint16_t msix_intr;
 
-	msix_intr = intr_handle->intr_vec[queue_id];
+	msix_intr = rte_intr_vec_list_index_get(intr_handle, queue_id);
 	if (msix_intr == I40E_MISC_VEC_ID)
 		I40E_WRITE_REG(hw, I40E_PFINT_DYN_CTL0,
 			       I40E_PFINT_DYN_CTL0_ITR_INDX_MASK);
@@ -11747,34 +11417,16 @@ static int i40e_set_default_mac_addr(struct rte_eth_dev *dev,
 }
 
 static int
-i40e_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
+i40e_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu __rte_unused)
 {
-	struct i40e_pf *pf = I40E_DEV_PRIVATE_TO_PF(dev->data->dev_private);
-	struct rte_eth_dev_data *dev_data = pf->dev_data;
-	uint32_t frame_size = mtu + I40E_ETH_OVERHEAD;
-	int ret = 0;
-
-	/* check if mtu is within the allowed range */
-	if (mtu < RTE_ETHER_MIN_MTU || frame_size > I40E_FRAME_SIZE_MAX)
-		return -EINVAL;
-
 	/* mtu setting is forbidden if port is start */
-	if (dev_data->dev_started) {
+	if (dev->data->dev_started != 0) {
 		PMD_DRV_LOG(ERR, "port %d must be stopped before configuration",
-			    dev_data->port_id);
+			    dev->data->port_id);
 		return -EBUSY;
 	}
 
-	if (frame_size > I40E_ETH_MAX_LEN)
-		dev_data->dev_conf.rxmode.offloads |=
-			DEV_RX_OFFLOAD_JUMBO_FRAME;
-	else
-		dev_data->dev_conf.rxmode.offloads &=
-			~DEV_RX_OFFLOAD_JUMBO_FRAME;
-
-	dev_data->dev_conf.rxmode.max_rx_pkt_len = frame_size;
-
-	return ret;
+	return 0;
 }
 
 /* Restore ethertype filter */
@@ -12372,7 +12024,7 @@ i40e_cloud_filter_qinq_create(struct i40e_pf *pf)
 	struct i40e_aqc_replace_cloud_filters_cmd  filter_replace;
 	struct i40e_aqc_replace_cloud_filters_cmd_buf  filter_replace_buf;
 	struct i40e_hw *hw = I40E_PF_TO_HW(pf);
-	struct rte_eth_dev *dev = ((struct i40e_adapter *)hw->back)->eth_dev;
+	struct rte_eth_dev *dev = &rte_eth_devices[pf->dev_data->port_id];
 
 	if (pf->support_multi_driver) {
 		PMD_DRV_LOG(ERR, "Replace cloud filter is not supported.");

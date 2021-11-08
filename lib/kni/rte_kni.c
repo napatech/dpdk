@@ -677,8 +677,9 @@ kni_allocate_mbufs(struct rte_kni *kni)
 		return;
 	}
 
-	allocq_free = (kni->alloc_q->read - kni->alloc_q->write - 1)
-			& (MAX_MBUF_BURST_NUM - 1);
+	allocq_free = kni_fifo_free_count(kni->alloc_q);
+	allocq_free = (allocq_free > MAX_MBUF_BURST_NUM) ?
+		MAX_MBUF_BURST_NUM : allocq_free;
 	for (i = 0; i < allocq_free; i++) {
 		pkts[i] = rte_pktmbuf_alloc(kni->pktmbuf_pool);
 		if (unlikely(pkts[i] == NULL)) {
@@ -810,6 +811,9 @@ rte_kni_update_link(struct rte_kni *kni, unsigned int linkup)
 	}
 	old_linkup = (old_carrier[0] == '1');
 
+	if (old_linkup == (int)linkup)
+		goto out;
+
 	new_carrier = linkup ? "1" : "0";
 	ret = write(fd, new_carrier, 1);
 	if (ret < 1) {
@@ -817,7 +821,7 @@ rte_kni_update_link(struct rte_kni *kni, unsigned int linkup)
 		close(fd);
 		return -1;
 	}
-
+out:
 	close(fd);
 	return old_linkup;
 }

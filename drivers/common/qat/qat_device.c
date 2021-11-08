@@ -10,6 +10,18 @@
 #include "adf_transport_access_macros.h"
 #include "qat_sym_pmd.h"
 #include "qat_comp_pmd.h"
+#include "adf_pf2vf_msg.h"
+#include "qat_pf2vf.h"
+
+/* pv2vf data Gen 4*/
+struct qat_pf2vf_dev qat_pf2vf_gen4 = {
+	.pf2vf_offset = ADF_4XXXIOV_PF2VM_OFFSET,
+	.vf2pf_offset = ADF_4XXXIOV_VM2PF_OFFSET,
+	.pf2vf_type_shift = ADF_PFVF_2X_MSGTYPE_SHIFT,
+	.pf2vf_type_mask = ADF_PFVF_2X_MSGTYPE_MASK,
+	.pf2vf_data_shift = ADF_PFVF_2X_MSGDATA_SHIFT,
+	.pf2vf_data_mask = ADF_PFVF_2X_MSGDATA_MASK,
+};
 
 /* Hardware device information per generation */
 __extension__
@@ -29,6 +41,12 @@ struct qat_gen_hw_data qat_gen_config[] =  {
 		.dev_gen = QAT_GEN3,
 		.qp_hw_data = qat_gen3_qps,
 		.comp_num_im_bufs_required = QAT_NUM_INTERM_BUFS_GEN3
+	},
+	[QAT_GEN4] = {
+		.dev_gen = QAT_GEN4,
+		.qp_hw_data = NULL,
+		.comp_num_im_bufs_required = QAT_NUM_INTERM_BUFS_GEN3,
+		.pf2vf_dev = &qat_pf2vf_gen4
 	},
 };
 
@@ -58,6 +76,9 @@ static const struct rte_pci_id pci_id_qat_map[] = {
 		},
 		{
 			RTE_PCI_DEVICE(0x8086, 0x18a1),
+		},
+		{
+			RTE_PCI_DEVICE(0x8086, 0x4941),
 		},
 		{.device_id = 0},
 };
@@ -104,6 +125,44 @@ qat_get_qat_dev_from_pci_dev(struct rte_pci_device *pci_dev)
 
 	return qat_pci_get_named_dev(name);
 }
+
+static int
+qat_gen4_reset_ring_pair(struct qat_pci_device *qat_pci_dev)
+{
+	int ret = 0, i;
+	uint8_t data[4];
+	struct qat_pf2vf_msg pf2vf_msg;
+
+	pf2vf_msg.msg_type = ADF_VF2PF_MSGTYPE_RP_RESET;
+	pf2vf_msg.block_hdr = -1;
+	for (i = 0; i < QAT_GEN4_BUNDLE_NUM; i++) {
+		pf2vf_msg.msg_data = i;
+		ret = qat_pf2vf_exch_msg(qat_pci_dev, pf2vf_msg, 1, data);
+		if (ret) {
+			QAT_LOG(ERR, "QAT error when reset bundle no %d",
+				i);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
+int qat_query_svc(struct qat_pci_device *qat_dev, uint8_t *val)
+{
+	int ret = -(EINVAL);
+	struct qat_pf2vf_msg pf2vf_msg;
+
+	if (qat_dev->qat_dev_gen == QAT_GEN4) {
+		pf2vf_msg.msg_type = ADF_VF2PF_MSGTYPE_GET_SMALL_BLOCK_REQ;
+		pf2vf_msg.block_hdr = ADF_VF2PF_BLOCK_MSG_GET_RING_TO_SVC_REQ;
+		pf2vf_msg.msg_data = 2;
+		ret = qat_pf2vf_exch_msg(qat_dev, pf2vf_msg, 2, val);
+	}
+
+	return ret;
+}
+
 
 static void qat_dev_parse_cmd(const char *str, struct qat_dev_cmd_param
 		*qat_dev_cmd_param)
@@ -232,14 +291,34 @@ qat_pci_device_allocate(struct rte_pci_device *pci_dev,
 	case 0x18a1:
 		qat_dev->qat_dev_gen = QAT_GEN3;
 		break;
+	case 0x4941:
+		qat_dev->qat_dev_gen = QAT_GEN4;
+		break;
 	default:
 		QAT_LOG(ERR, "Invalid dev_id, can't determine generation");
 		rte_memzone_free(qat_pci_devs[qat_dev->qat_dev_id].mz);
 		return NULL;
 	}
 
+	if (qat_dev->qat_dev_gen == QAT_GEN4) {
+		qat_dev->misc_bar_io_addr = pci_dev->mem_resource[2].addr;
+		if (qat_dev->misc_bar_io_addr == NULL) {
+			QAT_LOG(ERR, "QAT cannot get access to VF misc bar");
+			return NULL;
+		}
+	}
+
 	if (devargs && devargs->drv_str)
 		qat_dev_parse_cmd(devargs->drv_str, qat_dev_cmd_param);
+
+	if (qat_dev->qat_dev_gen >= QAT_GEN4) {
+		if (qat_read_qp_config(qat_dev)) {
+			QAT_LOG(ERR,
+				"Cannot acquire ring configuration for QAT_%d",
+				qat_dev_id);
+			return NULL;
+		}
+	}
 
 	rte_spinlock_init(&qat_dev->arb_csr_lock);
 	qat_nb_pci_devices++;
@@ -328,6 +407,15 @@ static int qat_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 	qat_pci_dev = qat_pci_device_allocate(pci_dev, qat_dev_cmd_param);
 	if (qat_pci_dev == NULL)
 		return -ENODEV;
+
+	if (qat_pci_dev->qat_dev_gen == QAT_GEN4) {
+		if (qat_gen4_reset_ring_pair(qat_pci_dev)) {
+			QAT_LOG(ERR,
+				"Cannot reset ring pairs, does pf driver supports pf2vf comms?"
+				);
+			return -ENODEV;
+		}
+	}
 
 	sym_ret = qat_sym_dev_create(qat_pci_dev, qat_dev_cmd_param);
 	if (sym_ret == 0) {

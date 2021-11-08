@@ -19,13 +19,12 @@ extern "C" {
 #endif
 
 #include <stdio.h>
-#include <sys/queue.h>
 
 #include <rte_log.h>
 #include <rte_dev.h>
 
 /** Double linked list of buses */
-TAILQ_HEAD(rte_bus_list, rte_bus);
+RTE_TAILQ_HEAD(rte_bus_list, rte_bus);
 
 
 /**
@@ -140,6 +139,22 @@ typedef int (*rte_bus_unplug_t)(struct rte_device *dev);
 typedef int (*rte_bus_parse_t)(const char *name, void *addr);
 
 /**
+ * Parse bus part of the device arguments.
+ *
+ * The field name of the struct rte_devargs will be set.
+ *
+ * @param da
+ *	Pointer to the devargs to parse.
+ *
+ * @return
+ *	0 on successful parsing, otherwise rte_errno is set.
+ *	-EINVAL: on parsing error.
+ *	-ENODEV: if no key matching a device argument is specified.
+ *	-E2BIG: device name is too long.
+ */
+typedef int (*rte_bus_devargs_parse_t)(struct rte_devargs *da);
+
+/**
  * Device level DMA map function.
  * After a successful call, the memory segment will be mapped to the
  * given device.
@@ -219,12 +234,6 @@ enum rte_bus_scan_mode {
 	RTE_BUS_SCAN_BLOCKLIST,
 };
 
-/* Backwards compatibility will be removed */
-#define RTE_BUS_SCAN_WHITELIST \
-	RTE_DEPRECATED(RTE_BUS_SCAN_WHITELIST) RTE_BUS_SCAN_ALLOWLIST
-#define RTE_BUS_SCAN_BLACKLIST \
-	RTE_DEPRECATED(RTE_BUS_SCAN_BLACKLIST) RTE_BUS_SCAN_BLOCKLIST
-
 /**
  * A structure used to configure bus operations.
  */
@@ -250,7 +259,7 @@ typedef enum rte_iova_mode (*rte_bus_get_iommu_class_t)(void);
  * A structure describing a generic bus.
  */
 struct rte_bus {
-	TAILQ_ENTRY(rte_bus) next;   /**< Next bus object in linked list */
+	RTE_TAILQ_ENTRY(rte_bus) next; /**< Next bus object in linked list */
 	const char *name;            /**< Name of the bus */
 	rte_bus_scan_t scan;         /**< Scan for devices attached to bus */
 	rte_bus_probe_t probe;       /**< Probe devices on bus */
@@ -258,6 +267,7 @@ struct rte_bus {
 	rte_bus_plug_t plug;         /**< Probe single device for drivers */
 	rte_bus_unplug_t unplug;     /**< Remove single device from driver */
 	rte_bus_parse_t parse;       /**< Parse a device name */
+	rte_bus_devargs_parse_t devargs_parse; /**< Parse bus devargs */
 	rte_dev_dma_map_t dma_map;   /**< DMA map for device in the bus */
 	rte_dev_dma_unmap_t dma_unmap; /**< DMA unmap for device in the bus */
 	struct rte_bus_conf conf;    /**< Bus configuration */

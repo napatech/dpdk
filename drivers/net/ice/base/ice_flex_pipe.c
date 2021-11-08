@@ -218,7 +218,7 @@ ice_pkg_advance_sect(struct ice_seg *ice_seg, struct ice_pkg_enum *state)
  * When the function returns a NULL pointer, then the end of the matching
  * sections has been reached.
  */
-static void *
+void *
 ice_pkg_enum_section(struct ice_seg *ice_seg, struct ice_pkg_enum *state,
 		     u32 sect_type)
 {
@@ -284,7 +284,7 @@ ice_pkg_enum_section(struct ice_seg *ice_seg, struct ice_pkg_enum *state,
  * indicates a base offset of 10, and the index for the entry is 2, then
  * section handler function should set the offset to 10 + 2 = 12.
  */
-static void *
+void *
 ice_pkg_enum_entry(struct ice_seg *ice_seg, struct ice_pkg_enum *state,
 		   u32 sect_type, u32 *offset,
 		   void *(*handler)(u32 sect_type, void *section,
@@ -1263,8 +1263,13 @@ ice_init_pkg_info(struct ice_hw *hw, struct ice_pkg_hdr *pkg_hdr)
 	if (!pkg_hdr)
 		return ICE_ERR_PARAM;
 
+	hw->pkg_seg_id = SEGMENT_TYPE_ICE_E810;
+
+	ice_debug(hw, ICE_DBG_INIT, "Pkg using segment id: 0x%08X\n",
+		  hw->pkg_seg_id);
+
 	seg_hdr = (struct ice_generic_seg_hdr *)
-		ice_find_seg_in_pkg(hw, SEGMENT_TYPE_ICE, pkg_hdr);
+		ice_find_seg_in_pkg(hw, hw->pkg_seg_id, pkg_hdr);
 	if (seg_hdr) {
 		struct ice_meta_sect *meta;
 		struct ice_pkg_enum state;
@@ -1496,7 +1501,7 @@ ice_chk_pkg_compat(struct ice_hw *hw, struct ice_pkg_hdr *ospkg,
 	}
 
 	/* find ICE segment in given package */
-	*seg = (struct ice_seg *)ice_find_seg_in_pkg(hw, SEGMENT_TYPE_ICE,
+	*seg = (struct ice_seg *)ice_find_seg_in_pkg(hw, hw->pkg_seg_id,
 						     ospkg);
 	if (!*seg) {
 		ice_debug(hw, ICE_DBG_INIT, "no ice segment in package.\n");
@@ -3432,7 +3437,7 @@ static void ice_init_prof_masks(struct ice_hw *hw, enum ice_block blk)
 	per_pf = ICE_PROF_MASK_COUNT / hw->dev_caps.num_funcs;
 
 	hw->blk[blk].masks.count = per_pf;
-	hw->blk[blk].masks.first = hw->pf_id * per_pf;
+	hw->blk[blk].masks.first = hw->logical_pf_id * per_pf;
 
 	ice_memset(hw->blk[blk].masks.masks, 0,
 		   sizeof(hw->blk[blk].masks.masks), ICE_NONDMA_MEM);
@@ -4712,11 +4717,17 @@ static const struct ice_fd_src_dst_pair ice_fd_pairs[] = {
 	{ ICE_PROT_IPV4_IL, 2, 12 },
 	{ ICE_PROT_IPV4_IL, 2, 16 },
 
+	{ ICE_PROT_IPV4_IL_IL, 2, 12 },
+	{ ICE_PROT_IPV4_IL_IL, 2, 16 },
+
 	{ ICE_PROT_IPV6_OF_OR_S, 8, 8 },
 	{ ICE_PROT_IPV6_OF_OR_S, 8, 24 },
 
 	{ ICE_PROT_IPV6_IL, 8, 8 },
 	{ ICE_PROT_IPV6_IL, 8, 24 },
+
+	{ ICE_PROT_IPV6_IL_IL, 8, 8 },
+	{ ICE_PROT_IPV6_IL_IL, 8, 24 },
 
 	{ ICE_PROT_TCP_IL, 1, 0 },
 	{ ICE_PROT_TCP_IL, 1, 2 },

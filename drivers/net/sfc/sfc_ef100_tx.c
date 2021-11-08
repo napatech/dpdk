@@ -10,6 +10,7 @@
 #include <stdbool.h>
 
 #include <rte_mbuf.h>
+#include <rte_mbuf_dyn.h>
 #include <rte_io.h>
 #include <rte_net.h>
 
@@ -98,7 +99,7 @@ static int
 sfc_ef100_tx_prepare_pkt_tso(struct sfc_ef100_txq * const txq,
 			     struct rte_mbuf *m)
 {
-	size_t header_len = ((m->ol_flags & PKT_TX_TUNNEL_MASK) ?
+	size_t header_len = ((m->ol_flags & RTE_MBUF_F_TX_TUNNEL_MASK) ?
 			     m->outer_l2_len + m->outer_l3_len : 0) +
 			    m->l2_len + m->l3_len + m->l4_len;
 	size_t payload_len = m->pkt_len - header_len;
@@ -106,12 +107,12 @@ sfc_ef100_tx_prepare_pkt_tso(struct sfc_ef100_txq * const txq,
 	unsigned int nb_payload_descs;
 
 #ifdef RTE_LIBRTE_SFC_EFX_DEBUG
-	switch (m->ol_flags & PKT_TX_TUNNEL_MASK) {
+	switch (m->ol_flags & RTE_MBUF_F_TX_TUNNEL_MASK) {
 	case 0:
 		/* FALLTHROUGH */
-	case PKT_TX_TUNNEL_VXLAN:
+	case RTE_MBUF_F_TX_TUNNEL_VXLAN:
 		/* FALLTHROUGH */
-	case PKT_TX_TUNNEL_GENEVE:
+	case RTE_MBUF_F_TX_TUNNEL_GENEVE:
 		break;
 	default:
 		return ENOTSUP;
@@ -164,11 +165,11 @@ sfc_ef100_tx_prepare_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 		 * pseudo-header checksum which is calculated below,
 		 * but requires contiguous packet headers.
 		 */
-		if ((m->ol_flags & PKT_TX_TUNNEL_MASK) &&
-		    (m->ol_flags & PKT_TX_L4_MASK)) {
+		if ((m->ol_flags & RTE_MBUF_F_TX_TUNNEL_MASK) &&
+		    (m->ol_flags & RTE_MBUF_F_TX_L4_MASK)) {
 			calc_phdr_cksum = true;
 			max_nb_header_segs = 1;
-		} else if (m->ol_flags & PKT_TX_TCP_SEG) {
+		} else if (m->ol_flags & RTE_MBUF_F_TX_TCP_SEG) {
 			max_nb_header_segs = txq->tso_max_nb_header_descs;
 		}
 
@@ -180,7 +181,7 @@ sfc_ef100_tx_prepare_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 			break;
 		}
 
-		if (m->ol_flags & PKT_TX_TCP_SEG) {
+		if (m->ol_flags & RTE_MBUF_F_TX_TCP_SEG) {
 			ret = sfc_ef100_tx_prepare_pkt_tso(txq, m);
 			if (unlikely(ret != 0)) {
 				rte_errno = ret;
@@ -197,7 +198,7 @@ sfc_ef100_tx_prepare_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 			 * and does not require any assistance.
 			 */
 			ret = rte_net_intel_cksum_flags_prepare(m,
-					m->ol_flags & ~PKT_TX_IP_CKSUM);
+					m->ol_flags & ~RTE_MBUF_F_TX_IP_CKSUM);
 			if (unlikely(ret != 0)) {
 				rte_errno = -ret;
 				break;
@@ -309,16 +310,29 @@ sfc_ef100_tx_reap(struct sfc_ef100_txq *txq)
 	sfc_ef100_tx_reap_num_descs(txq, sfc_ef100_tx_process_events(txq));
 }
 
+static void
+sfc_ef100_tx_qdesc_prefix_create(const struct rte_mbuf *m, efx_oword_t *tx_desc)
+{
+	efx_mport_id_t *mport_id =
+		RTE_MBUF_DYNFIELD(m, sfc_dp_mport_offset, efx_mport_id_t *);
+
+	EFX_POPULATE_OWORD_3(*tx_desc,
+			ESF_GZ_TX_PREFIX_EGRESS_MPORT,
+			mport_id->id,
+			ESF_GZ_TX_PREFIX_EGRESS_MPORT_EN, 1,
+			ESF_GZ_TX_DESC_TYPE, ESE_GZ_TX_DESC_TYPE_PREFIX);
+}
+
 static uint8_t
 sfc_ef100_tx_qdesc_cso_inner_l3(uint64_t tx_tunnel)
 {
 	uint8_t inner_l3;
 
 	switch (tx_tunnel) {
-	case PKT_TX_TUNNEL_VXLAN:
+	case RTE_MBUF_F_TX_TUNNEL_VXLAN:
 		inner_l3 = ESE_GZ_TX_DESC_CS_INNER_L3_VXLAN;
 		break;
-	case PKT_TX_TUNNEL_GENEVE:
+	case RTE_MBUF_F_TX_TUNNEL_GENEVE:
 		inner_l3 = ESE_GZ_TX_DESC_CS_INNER_L3_GENEVE;
 		break;
 	default:
@@ -338,25 +352,25 @@ sfc_ef100_tx_qdesc_send_create(const struct rte_mbuf *m, efx_oword_t *tx_desc)
 	uint16_t part_cksum_w;
 	uint16_t l4_offset_w;
 
-	if ((m->ol_flags & PKT_TX_TUNNEL_MASK) == 0) {
-		outer_l3 = (m->ol_flags & PKT_TX_IP_CKSUM);
-		outer_l4 = (m->ol_flags & PKT_TX_L4_MASK);
+	if ((m->ol_flags & RTE_MBUF_F_TX_TUNNEL_MASK) == 0) {
+		outer_l3 = (m->ol_flags & RTE_MBUF_F_TX_IP_CKSUM);
+		outer_l4 = (m->ol_flags & RTE_MBUF_F_TX_L4_MASK);
 		inner_l3 = ESE_GZ_TX_DESC_CS_INNER_L3_OFF;
 		partial_en = ESE_GZ_TX_DESC_CSO_PARTIAL_EN_OFF;
 		part_cksum_w = 0;
 		l4_offset_w = 0;
 	} else {
-		outer_l3 = (m->ol_flags & PKT_TX_OUTER_IP_CKSUM);
-		outer_l4 = (m->ol_flags & PKT_TX_OUTER_UDP_CKSUM);
+		outer_l3 = (m->ol_flags & RTE_MBUF_F_TX_OUTER_IP_CKSUM);
+		outer_l4 = (m->ol_flags & RTE_MBUF_F_TX_OUTER_UDP_CKSUM);
 		inner_l3 = sfc_ef100_tx_qdesc_cso_inner_l3(m->ol_flags &
-							   PKT_TX_TUNNEL_MASK);
+							   RTE_MBUF_F_TX_TUNNEL_MASK);
 
-		switch (m->ol_flags & PKT_TX_L4_MASK) {
-		case PKT_TX_TCP_CKSUM:
+		switch (m->ol_flags & RTE_MBUF_F_TX_L4_MASK) {
+		case RTE_MBUF_F_TX_TCP_CKSUM:
 			partial_en = ESE_GZ_TX_DESC_CSO_PARTIAL_EN_TCP;
 			part_cksum_w = offsetof(struct rte_tcp_hdr, cksum) >> 1;
 			break;
-		case PKT_TX_UDP_CKSUM:
+		case RTE_MBUF_F_TX_UDP_CKSUM:
 			partial_en = ESE_GZ_TX_DESC_CSO_PARTIAL_EN_UDP;
 			part_cksum_w = offsetof(struct rte_udp_hdr,
 						dgram_cksum) >> 1;
@@ -382,7 +396,7 @@ sfc_ef100_tx_qdesc_send_create(const struct rte_mbuf *m, efx_oword_t *tx_desc)
 			ESF_GZ_TX_SEND_CSO_OUTER_L4, outer_l4,
 			ESF_GZ_TX_DESC_TYPE, ESE_GZ_TX_DESC_TYPE_SEND);
 
-	if (m->ol_flags & PKT_TX_VLAN_PKT) {
+	if (m->ol_flags & RTE_MBUF_F_TX_VLAN) {
 		efx_oword_t tx_desc_extra_fields;
 
 		EFX_POPULATE_OWORD_2(tx_desc_extra_fields,
@@ -423,7 +437,7 @@ sfc_ef100_tx_qdesc_tso_create(const struct rte_mbuf *m,
 	 */
 	int ed_inner_ip_id = ESE_GZ_TX_DESC_IP4_ID_INC_MOD16;
 	uint8_t inner_l3 = sfc_ef100_tx_qdesc_cso_inner_l3(
-					m->ol_flags & PKT_TX_TUNNEL_MASK);
+					m->ol_flags & RTE_MBUF_F_TX_TUNNEL_MASK);
 
 	EFX_POPULATE_OWORD_10(*tx_desc,
 			ESF_GZ_TX_TSO_MSS, m->tso_segsz,
@@ -464,7 +478,7 @@ sfc_ef100_tx_qdesc_tso_create(const struct rte_mbuf *m,
 
 	EFX_OR_OWORD(*tx_desc, tx_desc_extra_fields);
 
-	if (m->ol_flags & PKT_TX_VLAN_PKT) {
+	if (m->ol_flags & RTE_MBUF_F_TX_VLAN) {
 		EFX_POPULATE_OWORD_2(tx_desc_extra_fields,
 				ESF_GZ_TX_TSO_VLAN_INSERT_EN, 1,
 				ESF_GZ_TX_TSO_VLAN_INSERT_TCI, m->vlan_tci);
@@ -489,6 +503,7 @@ sfc_ef100_tx_qpush(struct sfc_ef100_txq *txq, unsigned int added)
 	 * operations that follow it (i.e. doorbell write).
 	 */
 	rte_write32(dword.ed_u32[0], txq->doorbell);
+	txq->dp.dpq.tx_dbells++;
 
 	sfc_ef100_tx_debug(txq, "TxQ pushed doorbell at pidx %u (added=%u)",
 			   EFX_DWORD_FIELD(dword, ERF_GZ_TX_RING_PIDX),
@@ -504,7 +519,7 @@ sfc_ef100_tx_pkt_descs_max(const struct rte_mbuf *m)
 #define SFC_MBUF_SEG_LEN_MAX		UINT16_MAX
 	RTE_BUILD_BUG_ON(sizeof(m->data_len) != 2);
 
-	if (m->ol_flags & PKT_TX_TCP_SEG) {
+	if (m->ol_flags & RTE_MBUF_F_TX_TCP_SEG) {
 		/* Tx TSO descriptor */
 		extra_descs++;
 		/*
@@ -522,6 +537,11 @@ sfc_ef100_tx_pkt_descs_max(const struct rte_mbuf *m)
 		RTE_BUILD_BUG_ON(SFC_EF100_TX_SEND_DESC_LEN_MAX <
 				 RTE_MIN((unsigned int)EFX_MAC_PDU_MAX,
 				 SFC_MBUF_SEG_LEN_MAX));
+	}
+
+	if (m->ol_flags & sfc_dp_mport_override) {
+		/* Tx override prefix descriptor will be used */
+		extra_descs++;
 	}
 
 	/*
@@ -551,7 +571,7 @@ sfc_ef100_xmit_tso_pkt(struct sfc_ef100_txq * const txq,
 	size_t header_len;
 	size_t remaining_hdr_len;
 
-	if (m->ol_flags & PKT_TX_TUNNEL_MASK) {
+	if (m->ol_flags & RTE_MBUF_F_TX_TUNNEL_MASK) {
 		outer_iph_off = m->outer_l2_len;
 		outer_udph_off = outer_iph_off + m->outer_l3_len;
 	} else {
@@ -670,7 +690,13 @@ sfc_ef100_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 				break;
 		}
 
-		if (m_seg->ol_flags & PKT_TX_TCP_SEG) {
+		if (m_seg->ol_flags & sfc_dp_mport_override) {
+			id = added++ & txq->ptr_mask;
+			sfc_ef100_tx_qdesc_prefix_create(m_seg,
+							 &txq->txq_hw_ring[id]);
+		}
+
+		if (m_seg->ol_flags & RTE_MBUF_F_TX_TCP_SEG) {
 			m_seg = sfc_ef100_xmit_tso_pkt(txq, m_seg, &added);
 		} else {
 			id = added++ & txq->ptr_mask;
@@ -709,6 +735,9 @@ sfc_ef100_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		}
 
 		dma_desc_space -= (added - pkt_start);
+
+		sfc_pkts_bytes_add(&txq->dp.dpq.stats, 1,
+				   rte_pktmbuf_pkt_len(*pktp));
 	}
 
 	if (likely(added != txq->added)) {
@@ -939,18 +968,19 @@ struct sfc_dp_tx sfc_ef100_tx = {
 		.type		= SFC_DP_TX,
 		.hw_fw_caps	= SFC_DP_HW_FW_CAP_EF100,
 	},
-	.features		= SFC_DP_TX_FEAT_MULTI_PROCESS,
+	.features		= SFC_DP_TX_FEAT_MULTI_PROCESS |
+				  SFC_DP_TX_FEAT_STATS,
 	.dev_offload_capa	= 0,
-	.queue_offload_capa	= DEV_TX_OFFLOAD_VLAN_INSERT |
-				  DEV_TX_OFFLOAD_IPV4_CKSUM |
-				  DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM |
-				  DEV_TX_OFFLOAD_OUTER_UDP_CKSUM |
-				  DEV_TX_OFFLOAD_UDP_CKSUM |
-				  DEV_TX_OFFLOAD_TCP_CKSUM |
-				  DEV_TX_OFFLOAD_MULTI_SEGS |
-				  DEV_TX_OFFLOAD_TCP_TSO |
-				  DEV_TX_OFFLOAD_VXLAN_TNL_TSO |
-				  DEV_TX_OFFLOAD_GENEVE_TNL_TSO,
+	.queue_offload_capa	= RTE_ETH_TX_OFFLOAD_VLAN_INSERT |
+				  RTE_ETH_TX_OFFLOAD_IPV4_CKSUM |
+				  RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM |
+				  RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM |
+				  RTE_ETH_TX_OFFLOAD_UDP_CKSUM |
+				  RTE_ETH_TX_OFFLOAD_TCP_CKSUM |
+				  RTE_ETH_TX_OFFLOAD_MULTI_SEGS |
+				  RTE_ETH_TX_OFFLOAD_TCP_TSO |
+				  RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO |
+				  RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO,
 	.get_dev_info		= sfc_ef100_get_dev_info,
 	.qsize_up_rings		= sfc_ef100_tx_qsize_up_rings,
 	.qcreate		= sfc_ef100_tx_qcreate,

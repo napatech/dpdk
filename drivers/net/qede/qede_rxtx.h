@@ -73,14 +73,14 @@
 #define QEDE_MAX_ETHER_HDR_LEN	(RTE_ETHER_HDR_LEN + QEDE_ETH_OVERHEAD)
 #define QEDE_ETH_MAX_LEN	(RTE_ETHER_MTU + QEDE_MAX_ETHER_HDR_LEN)
 
-#define QEDE_RSS_OFFLOAD_ALL    (ETH_RSS_IPV4			|\
-				 ETH_RSS_NONFRAG_IPV4_TCP	|\
-				 ETH_RSS_NONFRAG_IPV4_UDP	|\
-				 ETH_RSS_IPV6			|\
-				 ETH_RSS_NONFRAG_IPV6_TCP	|\
-				 ETH_RSS_NONFRAG_IPV6_UDP	|\
-				 ETH_RSS_VXLAN			|\
-				 ETH_RSS_GENEVE)
+#define QEDE_RSS_OFFLOAD_ALL    (RTE_ETH_RSS_IPV4			|\
+				 RTE_ETH_RSS_NONFRAG_IPV4_TCP	|\
+				 RTE_ETH_RSS_NONFRAG_IPV4_UDP	|\
+				 RTE_ETH_RSS_IPV6			|\
+				 RTE_ETH_RSS_NONFRAG_IPV6_TCP	|\
+				 RTE_ETH_RSS_NONFRAG_IPV6_UDP	|\
+				 RTE_ETH_RSS_VXLAN			|\
+				 RTE_ETH_RSS_GENEVE)
 
 #define QEDE_RXTX_MAX(qdev) \
 	(RTE_MAX(qdev->num_rx_queues, qdev->num_tx_queues))
@@ -144,20 +144,20 @@
 
 #define QEDE_PKT_TYPE_TUNN_MAX_TYPE			0x20 /* 2^5 */
 
-#define QEDE_TX_CSUM_OFFLOAD_MASK (PKT_TX_IP_CKSUM              | \
-				   PKT_TX_TCP_CKSUM             | \
-				   PKT_TX_UDP_CKSUM             | \
-				   PKT_TX_OUTER_IP_CKSUM        | \
-				   PKT_TX_TCP_SEG		| \
-				   PKT_TX_IPV4			| \
-				   PKT_TX_IPV6)
+#define QEDE_TX_CSUM_OFFLOAD_MASK (RTE_MBUF_F_TX_IP_CKSUM              | \
+				   RTE_MBUF_F_TX_TCP_CKSUM             | \
+				   RTE_MBUF_F_TX_UDP_CKSUM             | \
+				   RTE_MBUF_F_TX_OUTER_IP_CKSUM        | \
+				   RTE_MBUF_F_TX_TCP_SEG		| \
+				   RTE_MBUF_F_TX_IPV4			| \
+				   RTE_MBUF_F_TX_IPV6)
 
 #define QEDE_TX_OFFLOAD_MASK (QEDE_TX_CSUM_OFFLOAD_MASK | \
-			      PKT_TX_VLAN_PKT		| \
-			      PKT_TX_TUNNEL_MASK)
+			      RTE_MBUF_F_TX_VLAN		| \
+			      RTE_MBUF_F_TX_TUNNEL_MASK)
 
 #define QEDE_TX_OFFLOAD_NOTSUP_MASK \
-	(PKT_TX_OFFLOAD_MASK ^ QEDE_TX_OFFLOAD_MASK)
+	(RTE_MBUF_F_TX_OFFLOAD_MASK ^ QEDE_TX_OFFLOAD_MASK)
 
 /* TPA related structures */
 struct qede_agg_info {

@@ -1,8 +1,16 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2017 Intel Corporation
 
+if is_windows
+    build = false
+    reason = 'not supported on Windows'
+    subdir_done()
+endif
+
 sources = files(
         'rte_swx_table_em.c',
+        'rte_swx_table_learner.c',
+        'rte_swx_table_selector.c',
         'rte_swx_table_wm.c',
         'rte_table_acl.c',
         'rte_table_array.c',
@@ -20,6 +28,8 @@ headers = files(
         'rte_lru.h',
         'rte_swx_table.h',
         'rte_swx_table_em.h',
+        'rte_swx_table_learner.h',
+        'rte_swx_table_selector.h',
         'rte_swx_table_wm.h',
         'rte_table.h',
         'rte_table_acl.h',

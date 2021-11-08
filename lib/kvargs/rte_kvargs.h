@@ -98,7 +98,6 @@ struct rte_kvargs *rte_kvargs_parse(const char *args,
  *   - A pointer to an allocated rte_kvargs structure on success
  *   - NULL on error
  */
-__rte_experimental
 struct rte_kvargs *rte_kvargs_parse_delim(const char *args,
 		const char *const valid_keys[],
 		const char *valid_ends);
@@ -117,7 +116,7 @@ void rte_kvargs_free(struct rte_kvargs *kvlist);
 /**
  * Get the value associated with a given key.
  *
- * If multiple key matches, the value of the first one is returned.
+ * If multiple keys match, the value of the first one is returned.
  *
  * The memory returned is allocated as part of the rte_kvargs structure,
  * it must never be modified.
@@ -126,13 +125,39 @@ void rte_kvargs_free(struct rte_kvargs *kvlist);
  *   A list of rte_kvargs pair of 'key=value'.
  * @param key
  *   The matching key.
+ *
+ * @return
+ *   NULL if no key matches the input,
+ *   a value associated with a matching key otherwise.
+ */
+const char *rte_kvargs_get(const struct rte_kvargs *kvlist, const char *key);
 
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice
+ *
+ * Get the value associated with a given key and value.
+ *
+ * Find the first entry in the kvlist whose key and value match the
+ * ones passed as argument.
+ *
+ * The memory returned is allocated as part of the rte_kvargs structure,
+ * it must never be modified.
+ *
+ * @param kvlist
+ *   A list of rte_kvargs pair of 'key=value'.
+ * @param key
+ *   The matching key. If NULL, any key will match.
+ * @param value
+ *   The matching value. If NULL, any value will match.
+ *
  * @return
  *   NULL if no key matches the input,
  *   a value associated with a matching key otherwise.
  */
 __rte_experimental
-const char *rte_kvargs_get(const struct rte_kvargs *kvlist, const char *key);
+const char *rte_kvargs_get_with_value(const struct rte_kvargs *kvlist,
+				      const char *key, const char *value);
 
 /**
  * Call a handler function for each key/value matching the key
@@ -165,38 +190,12 @@ int rte_kvargs_process(const struct rte_kvargs *kvlist,
  *   The rte_kvargs structure
  * @param key_match
  *   The key that should match, or NULL to count all associations
-
+ *
  * @return
  *   The number of entries
  */
 unsigned rte_kvargs_count(const struct rte_kvargs *kvlist,
 	const char *key_match);
-
-/**
- * Generic kvarg handler for string comparison.
- *
- * This function can be used for a generic string comparison processing
- * on a list of kvargs.
- *
- * @param key
- *   kvarg pair key.
- *
- * @param value
- *   kvarg pair value.
- *
- * @param opaque
- *   Opaque pointer to a string.
- *
- * @return
- *   0 if the strings match.
- *   !0 otherwise or on error.
- *
- *   Unlike strcmp, comparison ordering is not kept.
- *   In order for rte_kvargs_process to stop processing on match error,
- *   a negative value is returned even if strcmp had returned a positive one.
- */
-__rte_experimental
-int rte_kvargs_strcmp(const char *key, const char *value, void *opaque);
 
 #ifdef __cplusplus
 }

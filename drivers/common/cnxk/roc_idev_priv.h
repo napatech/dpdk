@@ -7,6 +7,9 @@
 
 /* Intra device related functions */
 struct npa_lf;
+struct roc_bphy;
+struct roc_cpt;
+struct nix_inl_dev;
 struct idev_cfg {
 	uint16_t sso_pf_func;
 	uint16_t npa_pf_func;
@@ -16,6 +19,10 @@ struct idev_cfg {
 	uint16_t lmt_pf_func;
 	uint16_t num_lmtlines;
 	uint64_t lmt_base_addr;
+	struct roc_bphy *bphy;
+	struct roc_cpt *cpt;
+	struct nix_inl_dev *nix_inl_dev;
+	plt_spinlock_t nix_inl_dev_lock;
 };
 
 /* Generic */

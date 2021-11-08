@@ -22,6 +22,7 @@ extern "C" {
 
 #include "rte_swx_port.h"
 #include "rte_swx_table.h"
+#include "rte_swx_table_selector.h"
 
 struct rte_swx_pipeline;
 
@@ -47,6 +48,12 @@ struct rte_swx_ctl_pipeline_info {
 
 	/** Number of tables. */
 	uint32_t n_tables;
+
+	/** Number of selector tables. */
+	uint32_t n_selectors;
+
+	/** Number of learner tables. */
+	uint32_t n_learners;
 
 	/** Number of register arrays. */
 	uint32_t n_regarrays;
@@ -294,6 +301,12 @@ rte_swx_ctl_table_match_field_info_get(struct rte_swx_pipeline *p,
 struct rte_swx_ctl_table_action_info {
 	/** Action ID. */
 	uint32_t action_id;
+
+	/**  When non-zero (true), the action can be assigned to regular table entries. */
+	int action_is_for_table_entries;
+
+	/**  When non-zero (true), the action can be assigned to the table default entry. */
+	int action_is_for_default_entry;
 };
 
 /**
@@ -384,6 +397,265 @@ int
 rte_swx_ctl_pipeline_table_stats_read(struct rte_swx_pipeline *p,
 				      const char *table_name,
 				      struct rte_swx_table_stats *stats);
+
+/*
+ * Selector Table Query API.
+ */
+
+/** Selector info. */
+struct rte_swx_ctl_selector_info {
+	/** Selector table name. */
+	char name[RTE_SWX_CTL_NAME_SIZE];
+
+	/** Number of selector fields. */
+	uint32_t n_selector_fields;
+
+	/** Maximum number of groups. */
+	uint32_t n_groups_max;
+
+	/** Maximum number of members per group. */
+	uint32_t n_members_per_group_max;
+};
+
+/**
+ * Selector table info get
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] selector_id
+ *   Selector table ID (0 .. *n_selectors* - 1).
+ * @param[out] selector
+ *   Selector table info.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+int
+rte_swx_ctl_selector_info_get(struct rte_swx_pipeline *p,
+			      uint32_t selector_id,
+			      struct rte_swx_ctl_selector_info *selector);
+
+/**
+ * Selector table "group ID" field info get
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] selector_id
+ *   Selector table ID (0 .. *n_selectors*).
+ * @param[out] field
+ *   Selector table "group ID" field info.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+int
+rte_swx_ctl_selector_group_id_field_info_get(struct rte_swx_pipeline *p,
+					     uint32_t selector_id,
+					     struct rte_swx_ctl_table_match_field_info *field);
+
+/**
+ * Sselector table selector field info get
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] selector_id
+ *   Selector table ID (0 .. *n_selectors*).
+ * @param[in] selector_field_id
+ *   Selector table selector field ID (0 .. *n_selector_fields* - 1).
+ * @param[out] field
+ *   Selector table selector field info.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+int
+rte_swx_ctl_selector_field_info_get(struct rte_swx_pipeline *p,
+				    uint32_t selector_id,
+				    uint32_t selector_field_id,
+				    struct rte_swx_ctl_table_match_field_info *field);
+
+/**
+ * Selector table "member ID" field info get
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] selector_id
+ *   Selector table ID (0 .. *n_selectors*).
+ * @param[out] field
+ *   Selector table "member ID" field info.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+int
+rte_swx_ctl_selector_member_id_field_info_get(struct rte_swx_pipeline *p,
+					      uint32_t selector_id,
+					      struct rte_swx_ctl_table_match_field_info *field);
+
+/** Selector table statistics. */
+struct rte_swx_pipeline_selector_stats {
+	/** Number of packets. */
+	uint64_t n_pkts;
+};
+
+/**
+ * Selector table statistics counters read
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] selector_name
+ *   Selector table name.
+ * @param[out] stats
+ *   Selector table stats. Must point to a pre-allocated structure.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+int
+rte_swx_ctl_pipeline_selector_stats_read(struct rte_swx_pipeline *p,
+					 const char *selector_name,
+					 struct rte_swx_pipeline_selector_stats *stats);
+
+/*
+ * Learner Table Query API.
+ */
+
+/** Learner table info. */
+struct rte_swx_ctl_learner_info {
+	/** Learner table name. */
+	char name[RTE_SWX_CTL_NAME_SIZE];
+
+	/** Number of match fields. */
+	uint32_t n_match_fields;
+
+	/** Number of actions. */
+	uint32_t n_actions;
+
+	/** Non-zero (true) when the default action is constant, therefore it
+	 * cannot be changed; zero (false) when the default action not constant,
+	 * therefore it can be changed.
+	 */
+	int default_action_is_const;
+
+	/** Learner table size parameter. */
+	uint32_t size;
+};
+
+/**
+ * Learner table info get
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] learner_id
+ *   Learner table ID (0 .. *n_learners* - 1).
+ * @param[out] learner
+ *   Learner table info.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+int
+rte_swx_ctl_learner_info_get(struct rte_swx_pipeline *p,
+			     uint32_t learner_id,
+			     struct rte_swx_ctl_learner_info *learner);
+
+/**
+ * Learner table match field info get
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] learner_id
+ *   Learner table ID (0 .. *n_learners* - 1).
+ * @param[in] match_field_id
+ *   Match field ID (0 .. *n_match_fields* - 1).
+ * @param[out] match_field
+ *   Learner table match field info.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+int
+rte_swx_ctl_learner_match_field_info_get(struct rte_swx_pipeline *p,
+					 uint32_t learner_id,
+					 uint32_t match_field_id,
+					 struct rte_swx_ctl_table_match_field_info *match_field);
+
+/**
+ * Learner table action info get
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] learner_id
+ *   Learner table ID (0 .. *n_learners* - 1).
+ * @param[in] learner_action_id
+ *   Action index within the set of learner table actions (0 .. learner table n_actions - 1). Not
+ *   to be confused with the pipeline-leve action ID (0 .. pipeline n_actions - 1), which is
+ *   precisely what this function returns as part of the *learner_action*.
+ * @param[out] learner_action
+ *   Learner action info.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+int
+rte_swx_ctl_learner_action_info_get(struct rte_swx_pipeline *p,
+				    uint32_t learner_id,
+				    uint32_t learner_action_id,
+				    struct rte_swx_ctl_table_action_info *learner_action);
+
+/** Learner table statistics. */
+struct rte_swx_learner_stats {
+	/** Number of packets with lookup hit. */
+	uint64_t n_pkts_hit;
+
+	/** Number of packets with lookup miss. */
+	uint64_t n_pkts_miss;
+
+	/** Number of packets with successful learning. */
+	uint64_t n_pkts_learn_ok;
+
+	/** Number of packets with learning error. */
+	uint64_t n_pkts_learn_err;
+
+	/** Number of packets with forget event. */
+	uint64_t n_pkts_forget;
+
+	/** Number of packets (with either lookup hit or miss) per pipeline action. Array of
+	 * pipeline *n_actions* elements indedex by the pipeline-level *action_id*, therefore this
+	 * array has the same size for all the tables within the same pipeline.
+	 */
+	uint64_t *n_pkts_action;
+};
+
+/**
+ * Learner table statistics counters read
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] learner_name
+ *   Learner table name.
+ * @param[out] stats
+ *   Learner table stats. Must point to a pre-allocated structure. The *n_pkts_action* field also
+ *   needs to be pre-allocated as array of pipeline *n_actions* elements. The pipeline actions that
+ *   are not valid for the current learner table have their associated *n_pkts_action* element
+ *   always set to zero.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+int
+rte_swx_ctl_pipeline_learner_stats_read(struct rte_swx_pipeline *p,
+				      const char *learner_name,
+				      struct rte_swx_learner_stats *stats);
 
 /*
  * Table Update API.
@@ -530,6 +802,132 @@ rte_swx_ctl_pipeline_table_entry_delete(struct rte_swx_ctl_pipeline *ctl,
 					struct rte_swx_table_entry *entry);
 
 /**
+ * Pipeline selector table group add
+ *
+ * Add a new group to a selector table. This operation is executed before this
+ * function returns and its result is independent of the result of the next
+ * commit operation.
+ *
+ * @param[in] ctl
+ *   Pipeline control handle.
+ * @param[in] selector_name
+ *   Selector table name.
+ * @param[out] group_id
+ *   The ID of the new group. Only valid when the function call is successful.
+ *   This group is initially empty, i.e. it does not contain any members.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument;
+ *   -ENOSPC: All groups are currently in use, no group available.
+ */
+__rte_experimental
+int
+rte_swx_ctl_pipeline_selector_group_add(struct rte_swx_ctl_pipeline *ctl,
+					const char *selector_name,
+					uint32_t *group_id);
+
+/**
+ * Pipeline selector table group delete
+ *
+ * Schedule a group for deletion as part of the next commit operation. The group
+ * to be deleted can be empty or non-empty.
+ *
+ * @param[in] ctl
+ *   Pipeline control handle.
+ * @param[in] selector_name
+ *   Selector table name.
+ * @param[in] group_id
+ *   Group to be deleted from the selector table.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument;
+ *   -ENOMEM: Not enough memory.
+ */
+__rte_experimental
+int
+rte_swx_ctl_pipeline_selector_group_delete(struct rte_swx_ctl_pipeline *ctl,
+					   const char *selector_name,
+					   uint32_t group_id);
+
+/**
+ * Pipeline selector table member add to group
+ *
+ * Schedule the operation to add a new member to an existing group as part of
+ * the next commit operation. If this member is already in this group, the
+ * member weight is updated to the new value. A weight of zero means this member
+ * is to be deleted from the group.
+ *
+ * @param[in] ctl
+ *   Pipeline control handle.
+ * @param[in] selector_name
+ *   Selector table name.
+ * @param[in] group_id
+ *   The group ID.
+ * @param[in] member_id
+ *   The member to be added to the group.
+ * @param[in] member_weight
+ *   Member weight.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument;
+ *   -ENOMEM: Not enough memory;
+ *   -ENOSPC: The group is full.
+ */
+__rte_experimental
+int
+rte_swx_ctl_pipeline_selector_group_member_add(struct rte_swx_ctl_pipeline *ctl,
+					       const char *selector_name,
+					       uint32_t group_id,
+					       uint32_t member_id,
+					       uint32_t member_weight);
+
+/**
+ * Pipeline selector table member delete from group
+ *
+ * Schedule the operation to delete a member from an existing group as part of
+ * the next commit operation.
+ *
+ * @param[in] ctl
+ *   Pipeline control handle.
+ * @param[in] selector_name
+ *   Selector table name.
+ * @param[in] group_id
+ *   The group ID. Must be valid.
+ * @param[in] member_id
+ *   The member to be added to the group. Must be valid.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+int
+rte_swx_ctl_pipeline_selector_group_member_delete(struct rte_swx_ctl_pipeline *ctl,
+						  const char *selector_name,
+						  uint32_t group_id,
+						  uint32_t member_id);
+
+/**
+ * Pipeline learner table default entry add
+ *
+ * Schedule learner table default entry update as part of the next commit operation.
+ *
+ * @param[in] ctl
+ *   Pipeline control handle.
+ * @param[in] learner_name
+ *   Learner table name.
+ * @param[in] entry
+ *   The new table default entry. The *key* and *key_mask* entry fields are ignored.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+int
+rte_swx_ctl_pipeline_learner_default_entry_add(struct rte_swx_ctl_pipeline *ctl,
+					       const char *learner_name,
+					       struct rte_swx_table_entry *entry);
+
+/**
  * Pipeline commit
  *
  * Perform all the scheduled table work.
@@ -588,6 +986,32 @@ rte_swx_ctl_pipeline_table_entry_read(struct rte_swx_ctl_pipeline *ctl,
 				      int *is_blank_or_comment);
 
 /**
+ * Pipeline learner table default entry read
+ *
+ * Read learner table default entry from string.
+ *
+ * @param[in] ctl
+ *   Pipeline control handle.
+ * @param[in] learner_name
+ *   Learner table name.
+ * @param[in] string
+ *   String containing the learner table default entry.
+ * @param[out] is_blank_or_comment
+ *   On error, this argument provides an indication of whether *string* contains
+ *   an invalid table entry (set to zero) or a blank or comment line that should
+ *   typically be ignored (set to a non-zero value).
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+struct rte_swx_table_entry *
+rte_swx_ctl_pipeline_learner_default_entry_read(struct rte_swx_ctl_pipeline *ctl,
+						const char *learner_name,
+						const char *string,
+						int *is_blank_or_comment);
+
+/**
  * Pipeline table print to file
  *
  * Print all the table entries to file.
@@ -607,6 +1031,27 @@ int
 rte_swx_ctl_pipeline_table_fprintf(FILE *f,
 				   struct rte_swx_ctl_pipeline *ctl,
 				   const char *table_name);
+
+/**
+ * Pipeline selector print to file
+ *
+ * Print all the selector entries to file.
+ *
+ * @param[in] f
+ *   Output file.
+ * @param[in] ctl
+ *   Pipeline control handle.
+ * @param[in] selector_name
+ *   Selector table name.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument.
+ */
+__rte_experimental
+int
+rte_swx_ctl_pipeline_selector_fprintf(FILE *f,
+				      struct rte_swx_ctl_pipeline *ctl,
+				      const char *selector_name);
 
 /*
  * Register Array Query API.

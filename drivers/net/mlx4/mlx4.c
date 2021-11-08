@@ -391,9 +391,9 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 	mlx4_flow_clean(priv);
 	mlx4_rss_deinit(priv);
 	for (i = 0; i != dev->data->nb_rx_queues; ++i)
-		mlx4_rx_queue_release(dev->data->rx_queues[i]);
+		mlx4_rx_queue_release(dev, i);
 	for (i = 0; i != dev->data->nb_tx_queues; ++i)
-		mlx4_tx_queue_release(dev->data->tx_queues[i]);
+		mlx4_tx_queue_release(dev, i);
 	mlx4_proc_priv_uninit(dev);
 	mlx4_mr_release(dev);
 	if (priv->pd != NULL) {
@@ -1014,11 +1014,8 @@ err_secondary:
 			      " (error: %s)", strerror(err));
 			goto port_error;
 		}
-		INFO("port %u MAC address is %02x:%02x:%02x:%02x:%02x:%02x",
-		     priv->port,
-		     mac.addr_bytes[0], mac.addr_bytes[1],
-		     mac.addr_bytes[2], mac.addr_bytes[3],
-		     mac.addr_bytes[4], mac.addr_bytes[5]);
+		INFO("port %u MAC address is " RTE_ETHER_ADDR_PRT_FMT,
+		     priv->port, RTE_ETHER_ADDR_BYTES(&mac));
 		/* Register MAC address. */
 		priv->mac[0] = mac;
 
@@ -1045,9 +1042,19 @@ err_secondary:
 		rte_eth_copy_pci_info(eth_dev, pci_dev);
 		eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 		/* Initialize local interrupt handle for current port. */
-		memset(&priv->intr_handle, 0, sizeof(struct rte_intr_handle));
-		priv->intr_handle.fd = -1;
-		priv->intr_handle.type = RTE_INTR_HANDLE_EXT;
+		priv->intr_handle =
+			rte_intr_instance_alloc(RTE_INTR_INSTANCE_F_SHARED);
+		if (priv->intr_handle == NULL) {
+			RTE_LOG(ERR, EAL, "Fail to allocate intr_handle\n");
+			goto port_error;
+		}
+
+		if (rte_intr_fd_set(priv->intr_handle, -1))
+			goto port_error;
+
+		if (rte_intr_type_set(priv->intr_handle, RTE_INTR_HANDLE_EXT))
+			goto port_error;
+
 		/*
 		 * Override ethdev interrupt handle pointer with private
 		 * handle instead of that of the parent PCI device used by
@@ -1060,7 +1067,7 @@ err_secondary:
 		 * besides setting up eth_dev->intr_handle, the rest is
 		 * handled by rte_intr_rx_ctl().
 		 */
-		eth_dev->intr_handle = &priv->intr_handle;
+		eth_dev->intr_handle = priv->intr_handle;
 		priv->dev_data = eth_dev->data;
 		eth_dev->dev_ops = &mlx4_dev_ops;
 #ifdef HAVE_IBV_MLX4_BUF_ALLOCATORS
@@ -1105,6 +1112,7 @@ err_secondary:
 		prev_dev = eth_dev;
 		continue;
 port_error:
+		rte_intr_instance_free(priv->intr_handle);
 		rte_free(priv);
 		if (eth_dev != NULL)
 			eth_dev->data->dev_private = NULL;

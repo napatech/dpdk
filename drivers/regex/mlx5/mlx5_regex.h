@@ -17,12 +17,12 @@
 #include "mlx5_rxp.h"
 #include "mlx5_regex_utils.h"
 
-struct mlx5_regex_sq {
+struct mlx5_regex_hw_qp {
 	uint16_t log_nb_desc; /* Log 2 number of desc for this object. */
-	struct mlx5_devx_sq sq_obj; /* The SQ DevX object. */
+	struct mlx5_devx_qp qp_obj; /* The QP DevX object. */
 	size_t pi, db_pi;
 	size_t ci;
-	uint32_t sqn;
+	uint32_t qpn;
 };
 
 struct mlx5_regex_cq {
@@ -34,10 +34,10 @@ struct mlx5_regex_cq {
 struct mlx5_regex_qp {
 	uint32_t flags; /* QP user flags. */
 	uint32_t nb_desc; /* Total number of desc for this qp. */
-	struct mlx5_regex_sq *sqs; /* Pointer to sq array. */
-	uint16_t nb_obj; /* Number of sq objects. */
+	struct mlx5_regex_hw_qp *qps; /* Pointer to qp array. */
+	uint16_t nb_obj; /* Number of qp objects. */
 	struct mlx5_regex_cq cq; /* CQ struct. */
-	uint32_t free_sqs;
+	uint32_t free_qps;
 	struct mlx5_regex_job *jobs;
 	struct ibv_mr *metadata;
 	struct ibv_mr *outputs;
@@ -58,8 +58,7 @@ struct mlx5_regex_db {
 
 struct mlx5_regex_priv {
 	TAILQ_ENTRY(mlx5_regex_priv) next;
-	struct ibv_context *ctx; /* Device context. */
-	struct rte_pci_device *pci_dev;
+	struct mlx5_common_device *cdev; /* Backend mlx5 device. */
 	struct rte_regexdev *regexdev; /* Pointer to the RegEx dev. */
 	uint16_t nb_queues; /* Number of queues. */
 	struct mlx5_regex_qp *qps; /* Pointer to the qp array. */
@@ -69,32 +68,11 @@ struct mlx5_regex_priv {
 				MLX5_RXP_EM_COUNT];
 	uint32_t nb_engines; /* Number of RegEx engines. */
 	struct mlx5dv_devx_uar *uar; /* UAR object. */
-	struct ibv_pd *pd;
-	struct mlx5_mr_share_cache mr_scache; /* Global shared MR cache. */
 	uint8_t is_bf2; /* The device is BF2 device. */
-	uint8_t sq_ts_format; /* Whether SQ supports timestamp formats. */
 	uint8_t has_umr; /* The device supports UMR. */
+	uint32_t mmo_regex_qp_cap:1;
+	uint32_t mmo_regex_sq_cap:1;
 };
-
-#ifdef HAVE_IBV_FLOW_DV_SUPPORT
-static inline int
-regex_get_pdn(void *pd, uint32_t *pdn)
-{
-	struct mlx5dv_obj obj;
-	struct mlx5dv_pd pd_info;
-	int ret = 0;
-
-	obj.pd.in = pd;
-	obj.pd.out = &pd_info;
-	ret = mlx5_glue->dv_init_obj(&obj, MLX5DV_OBJ_PD);
-	if (ret) {
-		DRV_LOG(DEBUG, "Fail to get PD object info");
-		return ret;
-	}
-	*pdn = pd_info.pdn;
-	return 0;
-}
-#endif
 
 /* mlx5_regex.c */
 int mlx5_regex_start(struct rte_regexdev *dev);

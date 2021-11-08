@@ -9,12 +9,8 @@
 
 #include "rte_ethdev.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /*
- * Convert rte_eth_dev pointer to port id.
+ * Convert rte_eth_dev pointer to port ID.
  * NULL will be translated to RTE_MAX_ETHPORTS.
  */
 uint16_t eth_dev_to_id(const struct rte_eth_dev *dev);
@@ -30,8 +26,11 @@ eth_find_device(const struct rte_eth_dev *_start, rte_eth_cmp_t cmp,
 /* Parse devargs value for representor parameter. */
 int rte_eth_devargs_parse_representor_ports(char *str, void *data);
 
-#ifdef __cplusplus
-}
-#endif
+/* reset eth fast-path API to dummy values */
+void eth_dev_fp_ops_reset(struct rte_eth_fp_ops *fpo);
+
+/* setup eth fast-path API to ethdev values */
+void eth_dev_fp_ops_setup(struct rte_eth_fp_ops *fpo,
+		const struct rte_eth_dev *dev);
 
 #endif /* _ETH_PRIVATE_H_ */

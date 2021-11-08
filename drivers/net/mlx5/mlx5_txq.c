@@ -98,35 +98,42 @@ uint64_t
 mlx5_get_tx_port_offloads(struct rte_eth_dev *dev)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
-	uint64_t offloads = (DEV_TX_OFFLOAD_MULTI_SEGS |
-			     DEV_TX_OFFLOAD_VLAN_INSERT);
+	uint64_t offloads = (RTE_ETH_TX_OFFLOAD_MULTI_SEGS |
+			     RTE_ETH_TX_OFFLOAD_VLAN_INSERT);
 	struct mlx5_dev_config *config = &priv->config;
 
 	if (config->hw_csum)
-		offloads |= (DEV_TX_OFFLOAD_IPV4_CKSUM |
-			     DEV_TX_OFFLOAD_UDP_CKSUM |
-			     DEV_TX_OFFLOAD_TCP_CKSUM);
+		offloads |= (RTE_ETH_TX_OFFLOAD_IPV4_CKSUM |
+			     RTE_ETH_TX_OFFLOAD_UDP_CKSUM |
+			     RTE_ETH_TX_OFFLOAD_TCP_CKSUM);
 	if (config->tso)
-		offloads |= DEV_TX_OFFLOAD_TCP_TSO;
+		offloads |= RTE_ETH_TX_OFFLOAD_TCP_TSO;
 	if (config->tx_pp)
-		offloads |= DEV_TX_OFFLOAD_SEND_ON_TIMESTAMP;
+		offloads |= RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP;
 	if (config->swp) {
-		if (config->hw_csum)
-			offloads |= DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM;
-		if (config->tso)
-			offloads |= (DEV_TX_OFFLOAD_IP_TNL_TSO |
-				     DEV_TX_OFFLOAD_UDP_TNL_TSO);
+		if (config->swp & MLX5_SW_PARSING_CSUM_CAP)
+			offloads |= RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM;
+		if (config->swp & MLX5_SW_PARSING_TSO_CAP)
+			offloads |= (RTE_ETH_TX_OFFLOAD_IP_TNL_TSO |
+				     RTE_ETH_TX_OFFLOAD_UDP_TNL_TSO);
 	}
 	if (config->tunnel_en) {
 		if (config->hw_csum)
-			offloads |= DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM;
-		if (config->tso)
-			offloads |= (DEV_TX_OFFLOAD_VXLAN_TNL_TSO |
-				     DEV_TX_OFFLOAD_GRE_TNL_TSO |
-				     DEV_TX_OFFLOAD_GENEVE_TNL_TSO);
+			offloads |= RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM;
+		if (config->tso) {
+			if (config->tunnel_en &
+				MLX5_TUNNELED_OFFLOADS_VXLAN_CAP)
+				offloads |= RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO;
+			if (config->tunnel_en &
+				MLX5_TUNNELED_OFFLOADS_GRE_CAP)
+				offloads |= RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO;
+			if (config->tunnel_en &
+				MLX5_TUNNELED_OFFLOADS_GENEVE_CAP)
+				offloads |= RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO;
+		}
 	}
 	if (!config->mprq.enabled)
-		offloads |= DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+		offloads |= RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
 	return offloads;
 }
 
@@ -470,28 +477,21 @@ mlx5_tx_hairpin_queue_setup(struct rte_eth_dev *dev, uint16_t idx,
 /**
  * DPDK callback to release a TX queue.
  *
- * @param dpdk_txq
- *   Generic TX queue pointer.
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param qid
+ *   Transmit queue index.
  */
 void
-mlx5_tx_queue_release(void *dpdk_txq)
+mlx5_tx_queue_release(struct rte_eth_dev *dev, uint16_t qid)
 {
-	struct mlx5_txq_data *txq = (struct mlx5_txq_data *)dpdk_txq;
-	struct mlx5_txq_ctrl *txq_ctrl;
-	struct mlx5_priv *priv;
-	unsigned int i;
+	struct mlx5_txq_data *txq = dev->data->tx_queues[qid];
 
 	if (txq == NULL)
 		return;
-	txq_ctrl = container_of(txq, struct mlx5_txq_ctrl, txq);
-	priv = txq_ctrl->priv;
-	for (i = 0; (i != priv->txqs_n); ++i)
-		if ((*priv->txqs)[i] == txq) {
-			DRV_LOG(DEBUG, "port %u removing Tx queue %u from list",
-				PORT_ID(priv), txq->idx);
-			mlx5_txq_release(ETH_DEV(priv), i);
-			break;
-		}
+	DRV_LOG(DEBUG, "port %u removing Tx queue %u from list",
+		dev->data->port_id, qid);
+	mlx5_txq_release(dev, qid);
 }
 
 /**
@@ -505,10 +505,10 @@ mlx5_tx_queue_release(void *dpdk_txq)
 static void
 txq_uar_ncattr_init(struct mlx5_txq_ctrl *txq_ctrl, size_t page_size)
 {
-	struct mlx5_priv *priv = txq_ctrl->priv;
+	struct mlx5_common_device *cdev = txq_ctrl->priv->sh->cdev;
 	off_t cmd;
 
-	txq_ctrl->txq.db_heu = priv->config.dbnc == MLX5_TXDB_HEURISTIC;
+	txq_ctrl->txq.db_heu = cdev->config.dbnc == MLX5_TXDB_HEURISTIC;
 	txq_ctrl->txq.db_nc = 0;
 	/* Check the doorbell register mapping type. */
 	cmd = txq_ctrl->uar_mmap_offset / page_size;
@@ -801,22 +801,22 @@ txq_set_params(struct mlx5_txq_ctrl *txq_ctrl)
 	unsigned int inlen_mode; /* Minimal required Inline data. */
 	unsigned int txqs_inline; /* Min Tx queues to enable inline. */
 	uint64_t dev_txoff = priv->dev_data->dev_conf.txmode.offloads;
-	bool tso = txq_ctrl->txq.offloads & (DEV_TX_OFFLOAD_TCP_TSO |
-					    DEV_TX_OFFLOAD_VXLAN_TNL_TSO |
-					    DEV_TX_OFFLOAD_GRE_TNL_TSO |
-					    DEV_TX_OFFLOAD_IP_TNL_TSO |
-					    DEV_TX_OFFLOAD_UDP_TNL_TSO);
+	bool tso = txq_ctrl->txq.offloads & (RTE_ETH_TX_OFFLOAD_TCP_TSO |
+					    RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO |
+					    RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO |
+					    RTE_ETH_TX_OFFLOAD_IP_TNL_TSO |
+					    RTE_ETH_TX_OFFLOAD_UDP_TNL_TSO);
 	bool vlan_inline;
 	unsigned int temp;
 
 	txq_ctrl->txq.fast_free =
-		!!((txq_ctrl->txq.offloads & DEV_TX_OFFLOAD_MBUF_FAST_FREE) &&
-		   !(txq_ctrl->txq.offloads & DEV_TX_OFFLOAD_MULTI_SEGS) &&
+		!!((txq_ctrl->txq.offloads & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE) &&
+		   !(txq_ctrl->txq.offloads & RTE_ETH_TX_OFFLOAD_MULTI_SEGS) &&
 		   !config->mprq.enabled);
 	if (config->txqs_inline == MLX5_ARG_UNSET)
 		txqs_inline =
 #if defined(RTE_ARCH_ARM64)
-		(priv->pci_dev->id.device_id ==
+		(priv->pci_dev && priv->pci_dev->id.device_id ==
 			PCI_DEVICE_ID_MELLANOX_CONNECTX5BF) ?
 			MLX5_INLINE_MAX_TXQS_BLUEFIELD :
 #endif
@@ -870,7 +870,7 @@ txq_set_params(struct mlx5_txq_ctrl *txq_ctrl)
 	 * tx_burst routine.
 	 */
 	txq_ctrl->txq.vlan_en = config->hw_vlan_insert;
-	vlan_inline = (dev_txoff & DEV_TX_OFFLOAD_VLAN_INSERT) &&
+	vlan_inline = (dev_txoff & RTE_ETH_TX_OFFLOAD_VLAN_INSERT) &&
 		      !config->hw_vlan_insert;
 	/*
 	 * If there are few Tx queues it is prioritized
@@ -978,11 +978,21 @@ txq_set_params(struct mlx5_txq_ctrl *txq_ctrl)
 						    MLX5_MAX_TSO_HEADER);
 		txq_ctrl->txq.tso_en = 1;
 	}
-	txq_ctrl->txq.tunnel_en = config->tunnel_en | config->swp;
-	txq_ctrl->txq.swp_en = ((DEV_TX_OFFLOAD_IP_TNL_TSO |
-				 DEV_TX_OFFLOAD_UDP_TNL_TSO |
-				 DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM) &
-				txq_ctrl->txq.offloads) && config->swp;
+	if (((RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO & txq_ctrl->txq.offloads) &&
+	    (config->tunnel_en & MLX5_TUNNELED_OFFLOADS_VXLAN_CAP)) |
+	   ((RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO & txq_ctrl->txq.offloads) &&
+	    (config->tunnel_en & MLX5_TUNNELED_OFFLOADS_GRE_CAP)) |
+	   ((RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO & txq_ctrl->txq.offloads) &&
+	    (config->tunnel_en & MLX5_TUNNELED_OFFLOADS_GENEVE_CAP)) |
+	   (config->swp  & MLX5_SW_PARSING_TSO_CAP))
+		txq_ctrl->txq.tunnel_en = 1;
+	txq_ctrl->txq.swp_en = (((RTE_ETH_TX_OFFLOAD_IP_TNL_TSO |
+				  RTE_ETH_TX_OFFLOAD_UDP_TNL_TSO) &
+				  txq_ctrl->txq.offloads) && (config->swp &
+				  MLX5_SW_PARSING_TSO_CAP)) |
+				((RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM &
+				 txq_ctrl->txq.offloads) && (config->swp &
+				 MLX5_SW_PARSING_CSUM_CAP));
 }
 
 /**
@@ -1124,13 +1134,11 @@ mlx5_txq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		rte_errno = ENOMEM;
 		return NULL;
 	}
-	if (mlx5_mr_btree_init(&tmpl->txq.mr_ctrl.cache_bh,
-			       MLX5_MR_BTREE_CACHE_N, socket)) {
+	if (mlx5_mr_ctrl_init(&tmpl->txq.mr_ctrl,
+			      &priv->sh->cdev->mr_scache.dev_gen, socket)) {
 		/* rte_errno is already set. */
 		goto error;
 	}
-	/* Save pointer of global generation number to check memory event. */
-	tmpl->txq.mr_ctrl.dev_gen_ptr = &priv->sh->share_cache.dev_gen;
 	MLX5_ASSERT(desc > MLX5_TX_COMP_THRESH);
 	tmpl->txq.offloads = conf->offloads |
 			     dev->data->dev_conf.txmode.offloads;
@@ -1246,7 +1254,7 @@ mlx5_txq_release(struct rte_eth_dev *dev, uint16_t idx)
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_txq_ctrl *txq_ctrl;
 
-	if (!(*priv->txqs)[idx])
+	if (priv->txqs == NULL || (*priv->txqs)[idx] == NULL)
 		return 0;
 	txq_ctrl = container_of((*priv->txqs)[idx], struct mlx5_txq_ctrl, txq);
 	if (__atomic_sub_fetch(&txq_ctrl->refcnt, 1, __ATOMIC_RELAXED) > 1)

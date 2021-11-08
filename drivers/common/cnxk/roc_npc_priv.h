@@ -5,10 +5,11 @@
 #ifndef _ROC_NPC_PRIV_H_
 #define _ROC_NPC_PRIV_H_
 
-#define NPC_IH_LENGTH	  8
-#define NPC_TPID_LENGTH	  2
-#define NPC_HIGIG2_LENGTH 16
-#define NPC_COUNTER_NONE  (-1)
+#define NPC_IH_LENGTH	     8
+#define NPC_TPID_LENGTH	     2
+#define NPC_HIGIG2_LENGTH    16
+#define NPC_MAX_RAW_ITEM_LEN 16
+#define NPC_COUNTER_NONE     (-1)
 
 #define NPC_RSS_GRPS 8
 
@@ -45,10 +46,12 @@
 #define NPC_MCAM_KEY_X4_WORDS	  7 /* Number of 64-bit words */
 
 #define NPC_RVUPF_MAX_9XXX 0x10 /* HRM: RVU_PRIV_CONST */
+#define NPC_RVUPF_MAX_98XX 0x18 /* HRM: RVU_PRIV_CONST */
 #define NPC_RVUPF_MAX_10XX 0x20 /* HRM: RVU_PRIV_CONST */
 #define NPC_NIXLF_MAX	   0x80 /* HRM: NIX_AF_CONST2 */
-#define NPC_MCAME_PER_PF   2	/* DRV: RSVD_MCAM_ENTRIES_PER_PF */
+#define NPC_MCAME_PER_PF   3	/* DRV: RSVD_MCAM_ENTRIES_PER_PF */
 #define NPC_MCAME_PER_LF   1	/* DRV: RSVD_MCAM_ENTRIES_PER_NIXLF */
+#define NPC_NIXLF_MAX_98XX (2 * NPC_NIXLF_MAX) /*2 NIXLFs */
 #define NPC_MCAME_RESVD_9XXX                                                   \
 	(NPC_NIXLF_MAX * NPC_MCAME_PER_LF +                                    \
 	 (NPC_RVUPF_MAX_9XXX - 1) * NPC_MCAME_PER_PF)
@@ -56,6 +59,19 @@
 #define NPC_MCAME_RESVD_10XX                                                   \
 	(NPC_NIXLF_MAX * NPC_MCAME_PER_LF +                                    \
 	 (NPC_RVUPF_MAX_10XX - 1) * NPC_MCAME_PER_PF)
+
+#define NPC_MCAME_RESVD_98XX                                                   \
+	(NPC_NIXLF_MAX_98XX * NPC_MCAME_PER_LF +                               \
+	 (NPC_RVUPF_MAX_98XX - 1) * NPC_MCAME_PER_PF)
+
+#define NPC_ACTION_MAX_VLAN_PARAMS    3
+#define NPC_ACTION_MAX_VLANS_STRIPPED 2
+
+struct npc_action_vtag_info {
+	uint16_t vlan_id;
+	uint16_t vlan_ethtype;
+	uint8_t vlan_pcp;
+};
 
 enum npc_err_status {
 	NPC_ERR_PARAM = -1024,
@@ -328,13 +344,12 @@ struct npc_get_datax_cfg {
 
 TAILQ_HEAD(npc_flow_list, roc_npc_flow);
 
-struct npc_mcam_ents_info {
-	/* Current max & min values of mcam index */
-	uint32_t max_id;
-	uint32_t min_id;
-	uint32_t free_ent;
-	uint32_t live_ent;
+struct npc_prio_flow_entry {
+	struct roc_npc_flow *flow;
+	TAILQ_ENTRY(npc_prio_flow_entry) next;
 };
+
+TAILQ_HEAD(npc_prio_flow_list_head, npc_prio_flow_entry);
 
 struct npc {
 	struct mbox *mbox;			/* Mbox */
@@ -350,26 +365,13 @@ struct npc {
 	uint16_t flow_max_priority;		/* Max priority for flow */
 	uint16_t switch_header_type; /* Suppprted switch header type */
 	uint32_t mark_actions;	     /* Number of mark actions */
+	uint32_t vtag_strip_actions; /* vtag insert/strip actions */
 	uint16_t pf_func;	     /* pf_func of device */
 	npc_dxcfg_t prx_dxcfg;	     /* intf, lid, lt, extract */
 	npc_fxcfg_t prx_fxcfg;	     /* Flag extract */
 	npc_ld_flags_t prx_lfcfg;    /* KEX LD_Flags CFG */
-	/* mcam entry info per priority level: both free & in-use */
-	struct npc_mcam_ents_info *flow_entry_info;
-	/* Bitmap of free preallocated entries in ascending index &
-	 * descending priority
-	 */
-	struct plt_bitmap **free_entries;
-	/* Bitmap of free preallocated entries in descending index &
-	 * ascending priority
-	 */
-	struct plt_bitmap **free_entries_rev;
-	/* Bitmap of live entries in ascending index & descending priority */
-	struct plt_bitmap **live_entries;
-	/* Bitmap of live entries in descending index & ascending priority */
-	struct plt_bitmap **live_entries_rev;
-	/* Priority bucket wise tail queue of all npc_flow resources */
 	struct npc_flow_list *flow_list;
+	struct npc_prio_flow_list_head *prio_flow_list;
 	struct plt_bitmap *rss_grp_entries;
 };
 
@@ -414,9 +416,9 @@ int npc_parse_lf(struct npc_parse_state *pst);
 int npc_parse_lg(struct npc_parse_state *pst);
 int npc_parse_lh(struct npc_parse_state *pst);
 int npc_mcam_fetch_kex_cfg(struct npc *npc);
-int npc_check_preallocated_entry_cache(struct mbox *mbox,
-				       struct roc_npc_flow *flow,
-				       struct npc *npc);
+int npc_get_free_mcam_entry(struct mbox *mbox, struct roc_npc_flow *flow,
+			    struct npc *npc);
+void npc_delete_prio_list_entry(struct npc *npc, struct roc_npc_flow *flow);
 int npc_flow_free_all_resources(struct npc *npc);
 const struct roc_npc_item_info *
 npc_parse_skip_void_and_any_items(const struct roc_npc_item_info *pattern);

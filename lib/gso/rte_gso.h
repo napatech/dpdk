@@ -52,11 +52,11 @@ struct rte_gso_ctx {
 	uint32_t gso_types;
 	/**< the bit mask of required GSO types. The GSO library
 	 * uses the same macros as that of describing device TX
-	 * offloading capabilities (i.e. DEV_TX_OFFLOAD_*_TSO) for
+	 * offloading capabilities (i.e. RTE_ETH_TX_OFFLOAD_*_TSO) for
 	 * gso_types.
 	 *
 	 * For example, if applications want to segment TCP/IPv4
-	 * packets, set DEV_TX_OFFLOAD_TCP_TSO in gso_types.
+	 * packets, set RTE_ETH_TX_OFFLOAD_TCP_TSO in gso_types.
 	 */
 	uint16_t gso_size;
 	/**< maximum size of an output GSO segment, including packet
@@ -77,8 +77,8 @@ struct rte_gso_ctx {
  *
  * Before calling rte_gso_segment(), applications must set proper ol_flags
  * for the packet. The GSO library uses the same macros as that of TSO.
- * For example, set PKT_TX_TCP_SEG and PKT_TX_IPV4 in ol_flags to segment
- * a TCP/IPv4 packet. If rte_gso_segment() succeeds, the PKT_TX_TCP_SEG
+ * For example, set RTE_MBUF_F_TX_TCP_SEG and RTE_MBUF_F_TX_IPV4 in ol_flags to segment
+ * a TCP/IPv4 packet. If rte_gso_segment() succeeds, the RTE_MBUF_F_TX_TCP_SEG
  * flag is removed for all GSO segments and the input packet.
  *
  * Each of the newly-created GSO segments is organized as a two-segment

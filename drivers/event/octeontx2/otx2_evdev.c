@@ -178,41 +178,41 @@ SSO_RX_ADPTR_ENQ_FASTPATH_FUNC
 	};
 
 	/* Tx modes */
-	const event_tx_adapter_enqueue
+	const event_tx_adapter_enqueue_t
 		ssogws_tx_adptr_enq[2][2][2][2][2][2][2] = {
 #define T(name, f6, f5, f4, f3, f2, f1, f0, sz, flags)			\
 		[f6][f5][f4][f3][f2][f1][f0] =				\
 			otx2_ssogws_tx_adptr_enq_ ## name,
-SSO_TX_ADPTR_ENQ_FASTPATH_FUNC
+			SSO_TX_ADPTR_ENQ_FASTPATH_FUNC
 #undef T
-	};
+		};
 
-	const event_tx_adapter_enqueue
+	const event_tx_adapter_enqueue_t
 		ssogws_tx_adptr_enq_seg[2][2][2][2][2][2][2] = {
 #define T(name, f6, f5, f4, f3, f2, f1, f0, sz, flags)			\
 		[f6][f5][f4][f3][f2][f1][f0] =				\
 			otx2_ssogws_tx_adptr_enq_seg_ ## name,
-SSO_TX_ADPTR_ENQ_FASTPATH_FUNC
+			SSO_TX_ADPTR_ENQ_FASTPATH_FUNC
 #undef T
-	};
+		};
 
-	const event_tx_adapter_enqueue
+	const event_tx_adapter_enqueue_t
 		ssogws_dual_tx_adptr_enq[2][2][2][2][2][2][2] = {
 #define T(name, f6, f5, f4, f3, f2, f1, f0, sz, flags)			\
 		[f6][f5][f4][f3][f2][f1][f0] =				\
 			otx2_ssogws_dual_tx_adptr_enq_ ## name,
-SSO_TX_ADPTR_ENQ_FASTPATH_FUNC
+			SSO_TX_ADPTR_ENQ_FASTPATH_FUNC
 #undef T
-	};
+		};
 
-	const event_tx_adapter_enqueue
+	const event_tx_adapter_enqueue_t
 		ssogws_dual_tx_adptr_enq_seg[2][2][2][2][2][2][2] = {
 #define T(name, f6, f5, f4, f3, f2, f1, f0, sz, flags)			\
 		[f6][f5][f4][f3][f2][f1][f0] =				\
 			otx2_ssogws_dual_tx_adptr_enq_seg_ ## name,
-SSO_TX_ADPTR_ENQ_FASTPATH_FUNC
+			SSO_TX_ADPTR_ENQ_FASTPATH_FUNC
 #undef T
-	};
+		};
 
 	event_dev->enqueue			= otx2_ssogws_enq;
 	event_dev->enqueue_burst		= otx2_ssogws_enq_burst;
@@ -1596,7 +1596,7 @@ otx2_sso_close(struct rte_eventdev *event_dev)
 }
 
 /* Initialize and register event driver with DPDK Application */
-static struct rte_eventdev_ops otx2_sso_ops = {
+static struct eventdev_ops otx2_sso_ops = {
 	.dev_infos_get    = otx2_sso_info_get,
 	.dev_configure    = otx2_sso_configure,
 	.queue_def_conf   = otx2_sso_queue_def_conf,
@@ -1639,6 +1639,7 @@ static struct rte_eventdev_ops otx2_sso_ops = {
 #define OTX2_SSO_XAE_CNT	"xae_cnt"
 #define OTX2_SSO_SINGLE_WS	"single_ws"
 #define OTX2_SSO_GGRP_QOS	"qos"
+#define OTX2_SSO_FORCE_BP	"force_rx_bp"
 
 static void
 parse_queue_param(char *value, void *opaque)
@@ -1734,6 +1735,8 @@ sso_parse_devargs(struct otx2_sso_evdev *dev, struct rte_devargs *devargs)
 			   &single_ws);
 	rte_kvargs_process(kvlist, OTX2_SSO_GGRP_QOS, &parse_sso_kvargs_dict,
 			   dev);
+	rte_kvargs_process(kvlist, OTX2_SSO_FORCE_BP, &parse_kvargs_flag,
+			   &dev->force_rx_bp);
 	otx2_parse_common_devargs(kvlist);
 	dev->dual_ws = !single_ws;
 	rte_kvargs_free(kvlist);
@@ -1892,4 +1895,5 @@ RTE_PMD_REGISTER_KMOD_DEP(event_octeontx2, "vfio-pci");
 RTE_PMD_REGISTER_PARAM_STRING(event_octeontx2, OTX2_SSO_XAE_CNT "=<int>"
 			      OTX2_SSO_SINGLE_WS "=1"
 			      OTX2_SSO_GGRP_QOS "=<string>"
+			      OTX2_SSO_FORCE_BP "=1"
 			      OTX2_NPA_LOCK_MASK "=<1-65535>");

@@ -38,7 +38,6 @@
 #include <stdint.h>
 #include <errno.h>
 #include <inttypes.h>
-#include <sys/queue.h>
 
 #include <rte_config.h>
 #include <rte_spinlock.h>
@@ -117,10 +116,11 @@ struct rte_mempool_objsz {
 /* "MP_<name>" */
 #define	RTE_MEMPOOL_MZ_FORMAT	RTE_MEMPOOL_MZ_PREFIX "%s"
 
-#define	MEMPOOL_PG_SHIFT_MAX	(sizeof(uintptr_t) * CHAR_BIT - 1)
+#define	MEMPOOL_PG_SHIFT_MAX \
+	RTE_DEPRECATED(MEMPOOL_PG_SHIFT_MAX) (sizeof(uintptr_t) * CHAR_BIT - 1)
 
-/** Mempool over one chunk of physically continuous memory */
-#define	MEMPOOL_PG_NUM_DEFAULT	1
+/** Deprecated. Mempool over one chunk of physically continuous memory */
+#define	MEMPOOL_PG_NUM_DEFAULT	RTE_DEPRECATED(MEMPOOL_PG_NUM_DEFAULT) 1
 
 #ifndef RTE_MEMPOOL_ALIGN
 /**
@@ -141,7 +141,7 @@ struct rte_mempool_objsz {
  * double-frees.
  */
 struct rte_mempool_objhdr {
-	STAILQ_ENTRY(rte_mempool_objhdr) next; /**< Next in list. */
+	RTE_STAILQ_ENTRY(rte_mempool_objhdr) next; /**< Next in list. */
 	struct rte_mempool *mp;          /**< The mempool owning the object. */
 	rte_iova_t iova;                 /**< IO address of the object. */
 #ifdef RTE_LIBRTE_MEMPOOL_DEBUG
@@ -152,7 +152,7 @@ struct rte_mempool_objhdr {
 /**
  * A list of object headers type
  */
-STAILQ_HEAD(rte_mempool_objhdr_list, rte_mempool_objhdr);
+RTE_STAILQ_HEAD(rte_mempool_objhdr_list, rte_mempool_objhdr);
 
 #ifdef RTE_LIBRTE_MEMPOOL_DEBUG
 
@@ -171,7 +171,7 @@ struct rte_mempool_objtlr {
 /**
  * A list of memory where objects are stored
  */
-STAILQ_HEAD(rte_mempool_memhdr_list, rte_mempool_memhdr);
+RTE_STAILQ_HEAD(rte_mempool_memhdr_list, rte_mempool_memhdr);
 
 /**
  * Callback used to free a memory chunk
@@ -186,7 +186,7 @@ typedef void (rte_mempool_memchunk_free_cb_t)(struct rte_mempool_memhdr *memhdr,
  * and physically contiguous.
  */
 struct rte_mempool_memhdr {
-	STAILQ_ENTRY(rte_mempool_memhdr) next; /**< Next in list. */
+	RTE_STAILQ_ENTRY(rte_mempool_memhdr) next; /**< Next in list. */
 	struct rte_mempool *mp;  /**< The mempool owning the chunk */
 	void *addr;              /**< Virtual address of the chunk */
 	rte_iova_t iova;         /**< IO address of the chunk */
@@ -210,12 +210,7 @@ struct rte_mempool_info {
  * The RTE mempool structure.
  */
 struct rte_mempool {
-	/*
-	 * Note: this field kept the RTE_MEMZONE_NAMESIZE size due to ABI
-	 * compatibility requirements, it could be changed to
-	 * RTE_MEMPOOL_NAMESIZE next time the ABI changes
-	 */
-	char name[RTE_MEMZONE_NAMESIZE]; /**< Name of mempool. */
+	char name[RTE_MEMPOOL_NAMESIZE]; /**< Name of mempool. */
 	RTE_STD_C11
 	union {
 		void *pool_data;         /**< Ring or pool to store objects. */
@@ -256,14 +251,55 @@ struct rte_mempool {
 #endif
 }  __rte_cache_aligned;
 
-#define MEMPOOL_F_NO_SPREAD      0x0001
-		/**< Spreading among memory channels not required. */
-#define MEMPOOL_F_NO_CACHE_ALIGN 0x0002 /**< Do not align objs on cache lines.*/
-#define MEMPOOL_F_SP_PUT         0x0004 /**< Default put is "single-producer".*/
-#define MEMPOOL_F_SC_GET         0x0008 /**< Default get is "single-consumer".*/
-#define MEMPOOL_F_POOL_CREATED   0x0010 /**< Internal: pool is created. */
-#define MEMPOOL_F_NO_IOVA_CONTIG 0x0020 /**< Don't need IOVA contiguous objs. */
+/** Spreading among memory channels not required. */
+#define RTE_MEMPOOL_F_NO_SPREAD		0x0001
+/**
+ * Backward compatibility synonym for RTE_MEMPOOL_F_NO_SPREAD.
+ * To be deprecated.
+ */
+#define MEMPOOL_F_NO_SPREAD		RTE_MEMPOOL_F_NO_SPREAD
+/** Do not align objects on cache lines. */
+#define RTE_MEMPOOL_F_NO_CACHE_ALIGN	0x0002
+/**
+ * Backward compatibility synonym for RTE_MEMPOOL_F_NO_CACHE_ALIGN.
+ * To be deprecated.
+ */
+#define MEMPOOL_F_NO_CACHE_ALIGN	RTE_MEMPOOL_F_NO_CACHE_ALIGN
+/** Default put is "single-producer". */
+#define RTE_MEMPOOL_F_SP_PUT		0x0004
+/**
+ * Backward compatibility synonym for RTE_MEMPOOL_F_SP_PUT.
+ * To be deprecated.
+ */
+#define MEMPOOL_F_SP_PUT		RTE_MEMPOOL_F_SP_PUT
+/** Default get is "single-consumer". */
+#define RTE_MEMPOOL_F_SC_GET		0x0008
+/**
+ * Backward compatibility synonym for RTE_MEMPOOL_F_SC_GET.
+ * To be deprecated.
+ */
+#define MEMPOOL_F_SC_GET		RTE_MEMPOOL_F_SC_GET
+/** Internal: pool is created. */
+#define RTE_MEMPOOL_F_POOL_CREATED	0x0010
+/** Don't need IOVA contiguous objects. */
+#define RTE_MEMPOOL_F_NO_IOVA_CONTIG	0x0020
+/**
+ * Backward compatibility synonym for RTE_MEMPOOL_F_NO_IOVA_CONTIG.
+ * To be deprecated.
+ */
+#define MEMPOOL_F_NO_IOVA_CONTIG	RTE_MEMPOOL_F_NO_IOVA_CONTIG
+/** Internal: no object from the pool can be used for device IO (DMA). */
+#define RTE_MEMPOOL_F_NON_IO		0x0040
 
+/**
+ * This macro lists all the mempool flags an application may request.
+ */
+#define RTE_MEMPOOL_VALID_USER_FLAGS (RTE_MEMPOOL_F_NO_SPREAD \
+	| RTE_MEMPOOL_F_NO_CACHE_ALIGN \
+	| RTE_MEMPOOL_F_SP_PUT \
+	| RTE_MEMPOOL_F_SC_GET \
+	| RTE_MEMPOOL_F_NO_IOVA_CONTIG \
+	)
 /**
  * @internal When debug is enabled, store some statistics.
  *
@@ -275,30 +311,35 @@ struct rte_mempool {
  *   Number to add to the object-oriented statistics.
  */
 #ifdef RTE_LIBRTE_MEMPOOL_DEBUG
-#define __MEMPOOL_STAT_ADD(mp, name, n) do {                    \
+#define RTE_MEMPOOL_STAT_ADD(mp, name, n) do {                  \
 		unsigned __lcore_id = rte_lcore_id();           \
 		if (__lcore_id < RTE_MAX_LCORE) {               \
 			mp->stats[__lcore_id].name += n;        \
 		}                                               \
-	} while(0)
+	} while (0)
 #else
-#define __MEMPOOL_STAT_ADD(mp, name, n) do {} while(0)
+#define RTE_MEMPOOL_STAT_ADD(mp, name, n) do {} while (0)
 #endif
 
 /**
- * Calculate the size of the mempool header.
+ * @internal Calculate the size of the mempool header.
  *
  * @param mp
  *   Pointer to the memory pool.
  * @param cs
  *   Size of the per-lcore cache.
  */
-#define MEMPOOL_HEADER_SIZE(mp, cs) \
+#define RTE_MEMPOOL_HEADER_SIZE(mp, cs) \
 	(sizeof(*(mp)) + (((cs) == 0) ? 0 : \
 	(sizeof(struct rte_mempool_cache) * RTE_MAX_LCORE)))
 
+/** Deprecated. Use RTE_MEMPOOL_HEADER_SIZE() for internal purposes only. */
+#define MEMPOOL_HEADER_SIZE(mp, cs) \
+	RTE_DEPRECATED(MEMPOOL_HEADER_SIZE) RTE_MEMPOOL_HEADER_SIZE(mp, cs)
+
 /* return the header of a mempool object (internal) */
-static inline struct rte_mempool_objhdr *__mempool_get_header(void *obj)
+static inline struct rte_mempool_objhdr *
+rte_mempool_get_header(void *obj)
 {
 	return (struct rte_mempool_objhdr *)RTE_PTR_SUB(obj,
 		sizeof(struct rte_mempool_objhdr));
@@ -315,12 +356,12 @@ static inline struct rte_mempool_objhdr *__mempool_get_header(void *obj)
  */
 static inline struct rte_mempool *rte_mempool_from_obj(void *obj)
 {
-	struct rte_mempool_objhdr *hdr = __mempool_get_header(obj);
+	struct rte_mempool_objhdr *hdr = rte_mempool_get_header(obj);
 	return hdr->mp;
 }
 
 /* return the trailer of a mempool object (internal) */
-static inline struct rte_mempool_objtlr *__mempool_get_trailer(void *obj)
+static inline struct rte_mempool_objtlr *rte_mempool_get_trailer(void *obj)
 {
 	struct rte_mempool *mp = rte_mempool_from_obj(obj);
 	return (struct rte_mempool_objtlr *)RTE_PTR_ADD(obj, mp->elt_size);
@@ -344,10 +385,10 @@ void rte_mempool_check_cookies(const struct rte_mempool *mp,
 	void * const *obj_table_const, unsigned n, int free);
 
 #ifdef RTE_LIBRTE_MEMPOOL_DEBUG
-#define __mempool_check_cookies(mp, obj_table_const, n, free) \
+#define RTE_MEMPOOL_CHECK_COOKIES(mp, obj_table_const, n, free) \
 	rte_mempool_check_cookies(mp, obj_table_const, n, free)
 #else
-#define __mempool_check_cookies(mp, obj_table_const, n, free) do {} while(0)
+#define RTE_MEMPOOL_CHECK_COOKIES(mp, obj_table_const, n, free) do {} while (0)
 #endif /* RTE_LIBRTE_MEMPOOL_DEBUG */
 
 /**
@@ -369,13 +410,13 @@ void rte_mempool_contig_blocks_check_cookies(const struct rte_mempool *mp,
 	void * const *first_obj_table_const, unsigned int n, int free);
 
 #ifdef RTE_LIBRTE_MEMPOOL_DEBUG
-#define __mempool_contig_blocks_check_cookies(mp, first_obj_table_const, n, \
-					      free) \
+#define RTE_MEMPOOL_CONTIG_BLOCKS_CHECK_COOKIES(mp, first_obj_table_const, n, \
+						free) \
 	rte_mempool_contig_blocks_check_cookies(mp, first_obj_table_const, n, \
 						free)
 #else
-#define __mempool_contig_blocks_check_cookies(mp, first_obj_table_const, n, \
-					      free) \
+#define RTE_MEMPOOL_CONTIG_BLOCKS_CHECK_COOKIES(mp, first_obj_table_const, n, \
+						free) \
 	do {} while (0)
 #endif /* RTE_LIBRTE_MEMPOOL_DEBUG */
 
@@ -425,9 +466,9 @@ typedef unsigned (*rte_mempool_get_count)(const struct rte_mempool *mp);
  * Calculate memory size required to store given number of objects.
  *
  * If mempool objects are not required to be IOVA-contiguous
- * (the flag MEMPOOL_F_NO_IOVA_CONTIG is set), min_chunk_size defines
+ * (the flag RTE_MEMPOOL_F_NO_IOVA_CONTIG is set), min_chunk_size defines
  * virtually contiguous chunk size. Otherwise, if mempool objects must
- * be IOVA-contiguous (the flag MEMPOOL_F_NO_IOVA_CONTIG is clear),
+ * be IOVA-contiguous (the flag RTE_MEMPOOL_F_NO_IOVA_CONTIG is clear),
  * min_chunk_size defines IOVA-contiguous chunk size.
  *
  * @param[in] mp
@@ -710,8 +751,8 @@ rte_mempool_ops_dequeue_bulk(struct rte_mempool *mp,
 	ops = rte_mempool_get_ops(mp->ops_index);
 	ret = ops->dequeue(mp, obj_table, n);
 	if (ret == 0) {
-		__MEMPOOL_STAT_ADD(mp, get_common_pool_bulk, 1);
-		__MEMPOOL_STAT_ADD(mp, get_common_pool_objs, n);
+		RTE_MEMPOOL_STAT_ADD(mp, get_common_pool_bulk, 1);
+		RTE_MEMPOOL_STAT_ADD(mp, get_common_pool_objs, n);
 	}
 	return ret;
 }
@@ -760,8 +801,8 @@ rte_mempool_ops_enqueue_bulk(struct rte_mempool *mp, void * const *obj_table,
 {
 	struct rte_mempool_ops *ops;
 
-	__MEMPOOL_STAT_ADD(mp, put_common_pool_bulk, 1);
-	__MEMPOOL_STAT_ADD(mp, put_common_pool_objs, n);
+	RTE_MEMPOOL_STAT_ADD(mp, put_common_pool_bulk, 1);
+	RTE_MEMPOOL_STAT_ADD(mp, put_common_pool_objs, n);
 	rte_mempool_trace_ops_enqueue_bulk(mp, obj_table, n);
 	ops = rte_mempool_get_ops(mp->ops_index);
 	return ops->enqueue(mp, obj_table, n);
@@ -891,11 +932,15 @@ int rte_mempool_register_ops(const struct rte_mempool_ops *ops);
  * Note that the rte_mempool_register_ops fails silently here when
  * more than RTE_MEMPOOL_MAX_OPS_IDX is registered.
  */
-#define MEMPOOL_REGISTER_OPS(ops)				\
+#define RTE_MEMPOOL_REGISTER_OPS(ops)				\
 	RTE_INIT(mp_hdlr_init_##ops)				\
 	{							\
 		rte_mempool_register_ops(&ops);			\
 	}
+
+/** Deprecated. Use RTE_MEMPOOL_REGISTER_OPS() instead. */
+#define MEMPOOL_REGISTER_OPS(ops) \
+	RTE_DEPRECATED(MEMPOOL_REGISTER_OPS) RTE_MEMPOOL_REGISTER_OPS(ops)
 
 /**
  * An object callback function for mempool.
@@ -975,29 +1020,29 @@ typedef void (rte_mempool_ctor_t)(struct rte_mempool *, void *);
  *   constraint for the reserved zone.
  * @param flags
  *   The *flags* arguments is an OR of following flags:
- *   - MEMPOOL_F_NO_SPREAD: By default, objects addresses are spread
+ *   - RTE_MEMPOOL_F_NO_SPREAD: By default, objects addresses are spread
  *     between channels in RAM: the pool allocator will add padding
  *     between objects depending on the hardware configuration. See
  *     Memory alignment constraints for details. If this flag is set,
  *     the allocator will just align them to a cache line.
- *   - MEMPOOL_F_NO_CACHE_ALIGN: By default, the returned objects are
+ *   - RTE_MEMPOOL_F_NO_CACHE_ALIGN: By default, the returned objects are
  *     cache-aligned. This flag removes this constraint, and no
  *     padding will be present between objects. This flag implies
- *     MEMPOOL_F_NO_SPREAD.
- *   - MEMPOOL_F_SP_PUT: If this flag is set, the default behavior
+ *     RTE_MEMPOOL_F_NO_SPREAD.
+ *   - RTE_MEMPOOL_F_SP_PUT: If this flag is set, the default behavior
  *     when using rte_mempool_put() or rte_mempool_put_bulk() is
  *     "single-producer". Otherwise, it is "multi-producers".
- *   - MEMPOOL_F_SC_GET: If this flag is set, the default behavior
+ *   - RTE_MEMPOOL_F_SC_GET: If this flag is set, the default behavior
  *     when using rte_mempool_get() or rte_mempool_get_bulk() is
  *     "single-consumer". Otherwise, it is "multi-consumers".
- *   - MEMPOOL_F_NO_IOVA_CONTIG: If set, allocated objects won't
+ *   - RTE_MEMPOOL_F_NO_IOVA_CONTIG: If set, allocated objects won't
  *     necessarily be contiguous in IO memory.
  * @return
  *   The pointer to the new allocated mempool, on success. NULL on error
  *   with rte_errno set appropriately. Possible rte_errno values include:
  *    - E_RTE_NO_CONFIG - function could not get pointer to rte_config structure
  *    - E_RTE_SECONDARY - function was called from a secondary process instance
- *    - EINVAL - cache size provided is too large
+ *    - EINVAL - cache size provided is too large or an unknown flag was passed
  *    - ENOSPC - the maximum number of memzones has already been allocated
  *    - EEXIST - a memzone with the same name already exists
  *    - ENOMEM - no appropriate memory area found in which to create memzone
@@ -1286,14 +1331,14 @@ rte_mempool_cache_flush(struct rte_mempool_cache *cache,
  *   A pointer to a mempool cache structure. May be NULL if not needed.
  */
 static __rte_always_inline void
-__mempool_generic_put(struct rte_mempool *mp, void * const *obj_table,
-		      unsigned int n, struct rte_mempool_cache *cache)
+rte_mempool_do_generic_put(struct rte_mempool *mp, void * const *obj_table,
+			   unsigned int n, struct rte_mempool_cache *cache)
 {
 	void **cache_objs;
 
 	/* increment stat now, adding in mempool always success */
-	__MEMPOOL_STAT_ADD(mp, put_bulk, 1);
-	__MEMPOOL_STAT_ADD(mp, put_objs, n);
+	RTE_MEMPOOL_STAT_ADD(mp, put_bulk, 1);
+	RTE_MEMPOOL_STAT_ADD(mp, put_objs, n);
 
 	/* No cache provided or if put would overflow mem allocated for cache */
 	if (unlikely(cache == NULL || n > RTE_MEMPOOL_CACHE_MAX_SIZE))
@@ -1350,8 +1395,8 @@ rte_mempool_generic_put(struct rte_mempool *mp, void * const *obj_table,
 			unsigned int n, struct rte_mempool_cache *cache)
 {
 	rte_mempool_trace_generic_put(mp, obj_table, n, cache);
-	__mempool_check_cookies(mp, obj_table, n, 0);
-	__mempool_generic_put(mp, obj_table, n, cache);
+	RTE_MEMPOOL_CHECK_COOKIES(mp, obj_table, n, 0);
+	rte_mempool_do_generic_put(mp, obj_table, n, cache);
 }
 
 /**
@@ -1411,8 +1456,8 @@ rte_mempool_put(struct rte_mempool *mp, void *obj)
  *   - <0: Error; code of ring dequeue function.
  */
 static __rte_always_inline int
-__mempool_generic_get(struct rte_mempool *mp, void **obj_table,
-		      unsigned int n, struct rte_mempool_cache *cache)
+rte_mempool_do_generic_get(struct rte_mempool *mp, void **obj_table,
+			   unsigned int n, struct rte_mempool_cache *cache)
 {
 	int ret;
 	uint32_t index, len;
@@ -1451,8 +1496,8 @@ __mempool_generic_get(struct rte_mempool *mp, void **obj_table,
 
 	cache->len -= n;
 
-	__MEMPOOL_STAT_ADD(mp, get_success_bulk, 1);
-	__MEMPOOL_STAT_ADD(mp, get_success_objs, n);
+	RTE_MEMPOOL_STAT_ADD(mp, get_success_bulk, 1);
+	RTE_MEMPOOL_STAT_ADD(mp, get_success_objs, n);
 
 	return 0;
 
@@ -1462,11 +1507,11 @@ ring_dequeue:
 	ret = rte_mempool_ops_dequeue_bulk(mp, obj_table, n);
 
 	if (ret < 0) {
-		__MEMPOOL_STAT_ADD(mp, get_fail_bulk, 1);
-		__MEMPOOL_STAT_ADD(mp, get_fail_objs, n);
+		RTE_MEMPOOL_STAT_ADD(mp, get_fail_bulk, 1);
+		RTE_MEMPOOL_STAT_ADD(mp, get_fail_objs, n);
 	} else {
-		__MEMPOOL_STAT_ADD(mp, get_success_bulk, 1);
-		__MEMPOOL_STAT_ADD(mp, get_success_objs, n);
+		RTE_MEMPOOL_STAT_ADD(mp, get_success_bulk, 1);
+		RTE_MEMPOOL_STAT_ADD(mp, get_success_objs, n);
 	}
 
 	return ret;
@@ -1497,9 +1542,9 @@ rte_mempool_generic_get(struct rte_mempool *mp, void **obj_table,
 			unsigned int n, struct rte_mempool_cache *cache)
 {
 	int ret;
-	ret = __mempool_generic_get(mp, obj_table, n, cache);
+	ret = rte_mempool_do_generic_get(mp, obj_table, n, cache);
 	if (ret == 0)
-		__mempool_check_cookies(mp, obj_table, n, 1);
+		RTE_MEMPOOL_CHECK_COOKIES(mp, obj_table, n, 1);
 	rte_mempool_trace_generic_get(mp, obj_table, n, cache);
 	return ret;
 }
@@ -1590,13 +1635,13 @@ rte_mempool_get_contig_blocks(struct rte_mempool *mp,
 
 	ret = rte_mempool_ops_dequeue_contig_blocks(mp, first_obj_table, n);
 	if (ret == 0) {
-		__MEMPOOL_STAT_ADD(mp, get_success_bulk, 1);
-		__MEMPOOL_STAT_ADD(mp, get_success_blks, n);
-		__mempool_contig_blocks_check_cookies(mp, first_obj_table, n,
-						      1);
+		RTE_MEMPOOL_STAT_ADD(mp, get_success_bulk, 1);
+		RTE_MEMPOOL_STAT_ADD(mp, get_success_blks, n);
+		RTE_MEMPOOL_CONTIG_BLOCKS_CHECK_COOKIES(mp, first_obj_table, n,
+							1);
 	} else {
-		__MEMPOOL_STAT_ADD(mp, get_fail_bulk, 1);
-		__MEMPOOL_STAT_ADD(mp, get_fail_blks, n);
+		RTE_MEMPOOL_STAT_ADD(mp, get_fail_bulk, 1);
+		RTE_MEMPOOL_STAT_ADD(mp, get_fail_blks, n);
 	}
 
 	rte_mempool_trace_get_contig_blocks(mp, first_obj_table, n);
@@ -1677,7 +1722,7 @@ rte_mempool_empty(const struct rte_mempool *mp)
  *   A pointer (virtual address) to the element of the pool.
  * @return
  *   The IO address of the elt element.
- *   If the mempool was created with MEMPOOL_F_NO_IOVA_CONTIG, the
+ *   If the mempool was created with RTE_MEMPOOL_F_NO_IOVA_CONTIG, the
  *   returned value is RTE_BAD_IOVA.
  */
 static inline rte_iova_t
@@ -1712,7 +1757,7 @@ void rte_mempool_audit(struct rte_mempool *mp);
 static inline void *rte_mempool_get_priv(struct rte_mempool *mp)
 {
 	return (char *)mp +
-		MEMPOOL_HEADER_SIZE(mp, mp->cache_size);
+		RTE_MEMPOOL_HEADER_SIZE(mp, mp->cache_size);
 }
 
 /**
@@ -1774,6 +1819,68 @@ void rte_mempool_walk(void (*func)(struct rte_mempool *, void *arg),
  */
 int
 rte_mempool_get_page_size(struct rte_mempool *mp, size_t *pg_sz);
+
+/**
+ * Mempool event type.
+ * @internal
+ */
+enum rte_mempool_event {
+	/** Occurs after a mempool is fully populated. */
+	RTE_MEMPOOL_EVENT_READY = 0,
+	/** Occurs before the destruction of a mempool begins. */
+	RTE_MEMPOOL_EVENT_DESTROY = 1,
+};
+
+/**
+ * @internal
+ * Mempool event callback.
+ *
+ * rte_mempool_event_callback_register() may be called from within the callback,
+ * but the callbacks registered this way will not be invoked for the same event.
+ * rte_mempool_event_callback_unregister() may only be safely called
+ * to remove the running callback.
+ */
+typedef void (rte_mempool_event_callback)(
+		enum rte_mempool_event event,
+		struct rte_mempool *mp,
+		void *user_data);
+
+/**
+ * @internal
+ * Register a callback function invoked on mempool life cycle event.
+ * The function will be invoked in the process
+ * that performs an action which triggers the callback.
+ *
+ * @param func
+ *   Callback function.
+ * @param user_data
+ *   User data.
+ *
+ * @return
+ *   0 on success, negative on failure and rte_errno is set.
+ */
+__rte_internal
+int
+rte_mempool_event_callback_register(rte_mempool_event_callback *func,
+				    void *user_data);
+
+/**
+ * @internal
+ * Unregister a callback added with rte_mempool_event_callback_register().
+ * @p func and @p user_data must exactly match registration parameters.
+ *
+ * @param func
+ *   Callback function.
+ * @param user_data
+ *   User data.
+ *
+ * @return
+ *   0 on success, negative on failure and rte_errno is set.
+ */
+__rte_internal
+int
+rte_mempool_event_callback_unregister(rte_mempool_event_callback *func,
+				      void *user_data);
 
 #ifdef __cplusplus
 }

@@ -720,8 +720,8 @@ acc100_intr_enable(struct rte_bbdev *dev)
 	struct acc100_device *d = dev->data->dev_private;
 
 	/* Only MSI are currently supported */
-	if (dev->intr_handle->type == RTE_INTR_HANDLE_VFIO_MSI ||
-			dev->intr_handle->type == RTE_INTR_HANDLE_UIO) {
+	if (rte_intr_type_get(dev->intr_handle) == RTE_INTR_HANDLE_VFIO_MSI ||
+			rte_intr_type_get(dev->intr_handle) == RTE_INTR_HANDLE_UIO) {
 
 		ret = allocate_info_ring(dev);
 		if (ret < 0) {
@@ -980,6 +980,7 @@ acc100_dev_info_get(struct rte_bbdev *dev,
 					RTE_BBDEV_TURBO_NEG_LLR_1_BIT_IN |
 					RTE_BBDEV_TURBO_MAP_DEC |
 					RTE_BBDEV_TURBO_DEC_TB_CRC_24B_KEEP |
+					RTE_BBDEV_TURBO_DEC_CRC_24B_DROP |
 					RTE_BBDEV_TURBO_DEC_SCATTER_GATHER,
 				.max_llr_modulus = INT8_MAX,
 				.num_buffers_src =
@@ -1088,6 +1089,7 @@ acc100_dev_info_get(struct rte_bbdev *dev,
 #else
 	dev_info->harq_buffer_size = 0;
 #endif
+	dev_info->data_endianness = RTE_LITTLE_ENDIAN;
 	acc100_check_ir(d);
 }
 
@@ -1096,8 +1098,8 @@ acc100_queue_intr_enable(struct rte_bbdev *dev, uint16_t queue_id)
 {
 	struct acc100_queue *q = dev->data->queues[queue_id].queue_private;
 
-	if (dev->intr_handle->type != RTE_INTR_HANDLE_VFIO_MSI &&
-			dev->intr_handle->type != RTE_INTR_HANDLE_UIO)
+	if (rte_intr_type_get(dev->intr_handle) != RTE_INTR_HANDLE_VFIO_MSI &&
+			rte_intr_type_get(dev->intr_handle) != RTE_INTR_HANDLE_UIO)
 		return -ENOTSUP;
 
 	q->irq_enable = 1;
@@ -1109,8 +1111,8 @@ acc100_queue_intr_disable(struct rte_bbdev *dev, uint16_t queue_id)
 {
 	struct acc100_queue *q = dev->data->queues[queue_id].queue_private;
 
-	if (dev->intr_handle->type != RTE_INTR_HANDLE_VFIO_MSI &&
-			dev->intr_handle->type != RTE_INTR_HANDLE_UIO)
+	if (rte_intr_type_get(dev->intr_handle) != RTE_INTR_HANDLE_VFIO_MSI &&
+			rte_intr_type_get(dev->intr_handle) != RTE_INTR_HANDLE_UIO)
 		return -ENOTSUP;
 
 	q->irq_enable = 0;
@@ -1708,8 +1710,12 @@ acc100_dma_desc_td_fill(struct rte_bbdev_dec_op *op,
 	}
 
 	if ((op->turbo_dec.code_block_mode == RTE_BBDEV_TRANSPORT_BLOCK)
-		&& !check_bit(op->turbo_dec.op_flags,
-		RTE_BBDEV_TURBO_DEC_TB_CRC_24B_KEEP))
+			&& !check_bit(op->turbo_dec.op_flags,
+			RTE_BBDEV_TURBO_DEC_TB_CRC_24B_KEEP))
+		crc24_overlap = 24;
+	if ((op->turbo_dec.code_block_mode == RTE_BBDEV_CODE_BLOCK)
+			&& check_bit(op->turbo_dec.op_flags,
+			RTE_BBDEV_TURBO_DEC_CRC_24B_DROP))
 		crc24_overlap = 24;
 
 	/* Calculates circular buffer size.
@@ -1744,7 +1750,8 @@ acc100_dma_desc_td_fill(struct rte_bbdev_dec_op *op,
 
 	next_triplet = acc100_dma_fill_blk_type_out(
 			desc, h_output, *h_out_offset,
-			k >> 3, next_triplet, ACC100_DMA_BLKID_OUT_HARD);
+			(k - crc24_overlap) >> 3, next_triplet,
+			ACC100_DMA_BLKID_OUT_HARD);
 	if (unlikely(next_triplet < 0)) {
 		rte_bbdev_log(ERR,
 				"Mismatch between data to process and mbuf data length in bbdev_op: %p",
@@ -4178,7 +4185,7 @@ static int acc100_pci_probe(struct rte_pci_driver *pci_drv,
 
 	/* Fill HW specific part of device structure */
 	bbdev->device = &pci_dev->device;
-	bbdev->intr_handle = &pci_dev->intr_handle;
+	bbdev->intr_handle = pci_dev->intr_handle;
 	bbdev->data->socket_id = pci_dev->device.numa_node;
 
 	/* Invoke ACC100 device initialization function */

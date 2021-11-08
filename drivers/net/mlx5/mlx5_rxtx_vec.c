@@ -106,22 +106,27 @@ mlx5_rx_replenish_bulk_mbuf(struct mlx5_rxq_data *rxq)
 			rxq->stats.rx_nombuf += n;
 			return;
 		}
-		for (i = 0; i < n; ++i) {
-			void *buf_addr;
+		if (unlikely(mlx5_mr_btree_len(&rxq->mr_ctrl.cache_bh) > 1)) {
+			for (i = 0; i < n; ++i) {
+				/*
+				 * In order to support the mbufs with external attached
+				 * data buffer we should use the buf_addr pointer
+				 * instead of rte_mbuf_buf_addr(). It touches the mbuf
+				 * itself and may impact the performance.
+				 */
+				void *buf_addr = elts[i]->buf_addr;
 
-			/*
-			 * In order to support the mbufs with external attached
-			 * data buffer we should use the buf_addr pointer
-			 * instead of rte_mbuf_buf_addr(). It touches the mbuf
-			 * itself and may impact the performance.
-			 */
-			buf_addr = elts[i]->buf_addr;
-			wq[i].addr = rte_cpu_to_be_64((uintptr_t)buf_addr +
-						      RTE_PKTMBUF_HEADROOM);
-			/* If there's a single MR, no need to replace LKey. */
-			if (unlikely(mlx5_mr_btree_len(&rxq->mr_ctrl.cache_bh)
-				     > 1))
+				wq[i].addr = rte_cpu_to_be_64((uintptr_t)buf_addr +
+							      RTE_PKTMBUF_HEADROOM);
 				wq[i].lkey = mlx5_rx_mb2mr(rxq, elts[i]);
+			}
+		} else {
+			for (i = 0; i < n; ++i) {
+				void *buf_addr = elts[i]->buf_addr;
+
+				wq[i].addr = rte_cpu_to_be_64((uintptr_t)buf_addr +
+							      RTE_PKTMBUF_HEADROOM);
+			}
 		}
 		rxq->rq_ci += n;
 		/* Prevent overflowing into consumed mbufs. */
@@ -152,7 +157,8 @@ mlx5_rx_mprq_replenish_bulk_mbuf(struct mlx5_rxq_data *rxq)
 	unsigned int i;
 
 	if (n >= rxq->rq_repl_thresh &&
-	    rxq->elts_ci - rxq->rq_pi <= rxq->rq_repl_thresh) {
+	    rxq->elts_ci - rxq->rq_pi <=
+	    rxq->rq_repl_thresh + MLX5_VPMD_RX_MAX_BURST) {
 		MLX5_ASSERT(n >= MLX5_VPMD_RXQ_RPLNSH_THRESH(elts_n));
 		MLX5_ASSERT(MLX5_VPMD_RXQ_RPLNSH_THRESH(elts_n) >
 			     MLX5_VPMD_DESCS_PER_LOOP);
@@ -442,6 +448,8 @@ rxq_burst_mprq_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts,
 	rte_prefetch0(cq + 3);
 	pkts_n = RTE_MIN(pkts_n, MLX5_VPMD_RX_MAX_BURST);
 	mlx5_rx_mprq_replenish_bulk_mbuf(rxq);
+	/* Not to move past the allocated mbufs. */
+	pkts_n = RTE_MIN(pkts_n, rxq->elts_ci - rxq->rq_pi);
 	/* See if there're unreturned mbufs from compressed CQE. */
 	rcvd_pkt = rxq->decompressed;
 	if (rcvd_pkt > 0) {
@@ -457,8 +465,6 @@ rxq_burst_mprq_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts,
 	/* Not to cross queue end. */
 	pkts_n = RTE_MIN(pkts_n, elts_n - elts_idx);
 	pkts_n = RTE_MIN(pkts_n, q_n - cq_idx);
-	/* Not to move past the allocated mbufs. */
-	pkts_n = RTE_MIN(pkts_n, rxq->elts_ci - rxq->rq_pi);
 	if (!pkts_n) {
 		*no_cq = !cp_pkt;
 		return cp_pkt;

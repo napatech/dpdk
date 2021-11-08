@@ -74,6 +74,8 @@ SFC EFX PMD has support for:
 
 - SR-IOV PF
 
+- Port representors (see :ref: switch_representation)
+
 
 Non-supported Features
 ----------------------
@@ -190,6 +192,8 @@ Supported actions (***non-transfer*** rules):
 
 Supported pattern items (***transfer*** rules):
 
+- PORT_REPRESENTOR (cannot repeat; conflicts with other traffic source items)
+
 - PORT_ID (cannot repeat; conflicts with other traffic source items)
 
 - PHY_PORT (cannot repeat; conflicts with other traffic source items)
@@ -228,6 +232,10 @@ Supported actions (***transfer*** rules):
 
 - OF_VLAN_SET_PCP
 
+- VXLAN_DECAP
+
+- VXLAN_ENCAP
+
 - FLAG
 
 - MARK
@@ -239,6 +247,8 @@ Supported actions (***transfer*** rules):
 - VF
 
 - PORT_ID
+
+- COUNT
 
 - DROP
 
@@ -364,6 +374,28 @@ boolean parameters value.
   **vdpa** device will work as vdpa device and will be probed by vdpa/sfc driver.
   If this parameter is not specified then ef100 device will operate as
   network device.
+
+- ``switch_mode`` [legacy|switchdev] (see below for default)
+
+  In legacy mode, NIC firmware provides Ethernet virtual bridging (EVB) API
+  to configure switching inside NIC to deliver traffic to physical (PF) and
+  virtual (VF) PCI functions. PF driver is responsible to build the
+  infrastructure for VFs, and traffic goes to/from VF by default in accordance
+  with MAC address assigned, permissions and filters installed by VF drivers.
+  In switchdev mode VF traffic goes via port representor (if any) on PF, and
+  software virtual switch (for example, Open vSwitch) makes the decision.
+  Software virtual switch may install MAE rules to pass established traffic
+  flows via hardware and offload software datapath as the result.
+  Default is legacy, unless representors are specified, in which case switchdev
+  is chosen.
+
+- ``representor`` parameter [list]
+
+  Instantiate port representor Ethernet devices for specified Virtual
+  Functions list.
+
+  It is a standard parameter whose format is described in
+  :ref:`ethernet_device_standard_device_arguments`.
 
 - ``rx_datapath`` [auto|efx|ef10|ef10_essb] (default **auto**)
 

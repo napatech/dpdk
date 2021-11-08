@@ -1,4 +1,4 @@
-DPDK_21 {
+DPDK_22 {
 	global:
 
 	rte_mempool_audit;
@@ -63,4 +63,12 @@ EXPERIMENTAL {
 	__rte_mempool_trace_ops_alloc;
 	__rte_mempool_trace_ops_free;
 	__rte_mempool_trace_set_ops_byname;
+};
+
+INTERNAL {
+	global:
+
+	# added in 21.11
+	rte_mempool_event_callback_register;
+	rte_mempool_event_callback_unregister;
 };

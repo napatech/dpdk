@@ -37,6 +37,8 @@ struct rte_crypto_vec {
 	rte_iova_t iova;
 	/** length of the data buffer */
 	uint32_t len;
+	/** total buffer length */
+	uint32_t tot_len;
 };
 
 /**
@@ -69,7 +71,9 @@ struct rte_crypto_sym_vec {
 	/** number of operations to perform */
 	uint32_t num;
 	/** array of SGL vectors */
-	struct rte_crypto_sgl *sgl;
+	struct rte_crypto_sgl *src_sgl;
+	/** array of SGL vectors for OOP, keep it NULL for inplace*/
+	struct rte_crypto_sgl *dest_sgl;
 	/** array of pointers to cipher IV */
 	struct rte_crypto_va_iova_ptr *iv;
 	/** array of pointers to digest */
@@ -195,9 +199,6 @@ struct rte_crypto_cipher_xform {
 	enum rte_crypto_cipher_algorithm algo;
 	/**< Cipher algorithm */
 
-	RTE_STD_C11
-	union { /* temporary anonymous union for ABI compatibility */
-
 	struct {
 		const uint8_t *data;	/**< pointer to key data */
 		uint16_t length;	/**< key length in bytes */
@@ -233,27 +234,6 @@ struct rte_crypto_cipher_xform {
 	 *  - Each key can be either 128 bits (16 bytes) or 256 bits (32 bytes).
 	 *  - Both keys must have the same size.
 	 **/
-
-	RTE_STD_C11
-	struct { /* temporary anonymous struct for ABI compatibility */
-		const uint8_t *_key_data; /* reserved for key.data union */
-		uint16_t _key_length;     /* reserved for key.length union */
-		/* next field can fill the padding hole */
-
-	uint16_t dataunit_len;
-	/**< When RTE_CRYPTODEV_FF_CIPHER_MULTIPLE_DATA_UNITS is enabled,
-	 * this is the data-unit length of the algorithm,
-	 * otherwise or when the value is 0, use the operation length.
-	 * The value should be in the range defined by the dataunit_set field
-	 * in the cipher capability.
-	 *
-	 * - For AES-XTS it is the size of data-unit, from IEEE Std 1619-2007.
-	 * For-each data-unit in the operation, the tweak (IV) value is
-	 * assigned consecutively starting from the operation assigned IV.
-	 */
-
-	}; }; /* temporary struct nested in union for ABI compatibility */
-
 	struct {
 		uint16_t offset;
 		/**< Starting point for Initialisation Vector or Counter,
@@ -297,6 +277,18 @@ struct rte_crypto_cipher_xform {
 		 * which can be in the range 7 to 13 inclusive.
 		 */
 	} iv;	/**< Initialisation vector parameters */
+
+	uint32_t dataunit_len;
+	/**< When RTE_CRYPTODEV_FF_CIPHER_MULTIPLE_DATA_UNITS is enabled,
+	 * this is the data-unit length of the algorithm,
+	 * otherwise or when the value is 0, use the operation length.
+	 * The value should be in the range defined by the dataunit_set field
+	 * in the cipher capability.
+	 *
+	 * - For AES-XTS it is the size of data-unit, from IEEE Std 1619-2007.
+	 * For-each data-unit in the operation, the tweak (IV) value is
+	 * assigned consecutively starting from the operation assigned IV.
+	 */
 };
 
 /** Symmetric Authentication / Hash Algorithms
@@ -975,6 +967,7 @@ rte_crypto_mbuf_to_vec(const struct rte_mbuf *mb, uint32_t ofs, uint32_t len,
 
 	vec[0].base = rte_pktmbuf_mtod_offset(mb, void *, ofs);
 	vec[0].iova = rte_pktmbuf_iova_offset(mb, ofs);
+	vec[0].tot_len = mb->buf_len - rte_pktmbuf_headroom(mb) - ofs;
 
 	/* whole data lies in the first segment */
 	seglen = mb->data_len - ofs;
@@ -990,12 +983,14 @@ rte_crypto_mbuf_to_vec(const struct rte_mbuf *mb, uint32_t ofs, uint32_t len,
 
 		vec[i].base = rte_pktmbuf_mtod(nseg, void *);
 		vec[i].iova = rte_pktmbuf_iova(nseg);
+		vec[i].tot_len = mb->buf_len - rte_pktmbuf_headroom(mb) - ofs;
 
 		seglen = nseg->data_len;
 		if (left <= seglen) {
 			/* whole requested data is completed */
 			vec[i].len = left;
 			left = 0;
+			i++;
 			break;
 		}
 
@@ -1005,7 +1000,7 @@ rte_crypto_mbuf_to_vec(const struct rte_mbuf *mb, uint32_t ofs, uint32_t len,
 	}
 
 	RTE_ASSERT(left == 0);
-	return i + 1;
+	return i;
 }
 
 

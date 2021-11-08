@@ -21,6 +21,7 @@ The public API headers are grouped by topics:
   [compressdev]        (@ref rte_compressdev.h),
   [compress]           (@ref rte_comp.h),
   [regexdev]           (@ref rte_regexdev.h),
+  [dmadev]             (@ref rte_dmadev.h),
   [eventdev]           (@ref rte_eventdev.h),
   [event_eth_rx_adapter]   (@ref rte_event_eth_rx_adapter.h),
   [event_eth_tx_adapter]   (@ref rte_event_eth_tx_adapter.h),
@@ -120,7 +121,9 @@ The public API headers are grouped by topics:
   [MPLS]               (@ref rte_mpls.h),
   [VXLAN]              (@ref rte_vxlan.h),
   [Geneve]             (@ref rte_geneve.h),
-  [eCPRI]              (@ref rte_ecpri.h)
+  [eCPRI]              (@ref rte_ecpri.h),
+  [L2TPv2]             (@ref rte_l2tpv2.h),
+  [PPP]                (@ref rte_ppp.h)
 
 - **QoS**:
   [metering]           (@ref rte_meter.h),
@@ -209,6 +212,7 @@ The public API headers are grouped by topics:
 - **debug**:
   [jobstats]           (@ref rte_jobstats.h),
   [telemetry]          (@ref rte_telemetry.h),
+  [pcapng]             (@ref rte_pcapng.h),
   [pdump]              (@ref rte_pdump.h),
   [hexdump]            (@ref rte_hexdump.h),
   [debug]              (@ref rte_debug.h),

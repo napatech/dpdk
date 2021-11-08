@@ -16,6 +16,7 @@ addons:
     packages: &required_packages
       - [libnuma-dev, python3-setuptools, python3-wheel, python3-pip, python3-pyelftools, ninja-build]
       - [libbsd-dev, libpcap-dev, libibverbs-dev, libcrypto++-dev, libfdt-dev, libjansson-dev]
+      - [libarchive-dev]
 
 _aarch64_packages: &aarch64_packages
   - *required_packages
@@ -41,7 +42,7 @@ script: ./.ci/${TRAVIS_OS_NAME}-build.sh
 env:
   global:
     - LIBABIGAIL_VERSION=libabigail-1.8
-    - REF_GIT_TAG=v21.02
+    - REF_GIT_TAG=none
 
 jobs:
   include:
@@ -60,14 +61,6 @@ jobs:
         packages:
           - *required_packages
           - *doc_packages
-  - env: DEF_LIB="shared" ABI_CHECKS=true
-    arch: amd64
-    compiler: gcc
-    addons:
-      apt:
-        packages:
-          - *required_packages
-          - *libabigail_build_packages
   # x86_64 clang jobs
   - env: DEF_LIB="static"
     arch: amd64
@@ -144,17 +137,6 @@ jobs:
         packages:
           - *required_packages
           - *doc_packages
-  - env: DEF_LIB="shared" ABI_CHECKS=true
-    dist: focal
-    arch: arm64-graviton2
-    virt: vm
-    group: edge
-    compiler: gcc
-    addons:
-      apt:
-        packages:
-          - *required_packages
-          - *libabigail_build_packages
   # aarch64 clang jobs
   - env: DEF_LIB="static"
     dist: focal

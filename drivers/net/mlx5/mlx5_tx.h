@@ -18,7 +18,6 @@
 
 #include "mlx5.h"
 #include "mlx5_autoconf.h"
-#include "mlx5_mr.h"
 
 /* TX burst subroutines return codes. */
 enum mlx5_txcmp_code {
@@ -78,7 +77,7 @@ uint16_t mlx5_tx_burst_##func(void *txq, \
 
 /* Mbuf dynamic flag offset for inline. */
 extern uint64_t rte_net_mlx5_dynf_inline_mask;
-#define PKT_TX_DYNF_NOINLINE rte_net_mlx5_dynf_inline_mask
+#define RTE_MBUF_F_TX_DYNF_NOINLINE rte_net_mlx5_dynf_inline_mask
 
 extern uint32_t mlx5_ptype_table[] __rte_cache_aligned;
 extern uint8_t mlx5_cksum_table[1 << 10] __rte_cache_aligned;
@@ -204,7 +203,7 @@ int mlx5_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 int mlx5_tx_hairpin_queue_setup
 	(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	 const struct rte_eth_hairpin_conf *hairpin_conf);
-void mlx5_tx_queue_release(void *dpdk_txq);
+void mlx5_tx_queue_release(struct rte_eth_dev *dev, uint16_t qid);
 void txq_uar_init(struct mlx5_txq_ctrl *txq_ctrl);
 int mlx5_tx_uar_init_secondary(struct rte_eth_dev *dev, int fd);
 void mlx5_tx_uar_uninit_secondary(struct rte_eth_dev *dev);
@@ -235,12 +234,6 @@ void mlx5_txq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 		       struct rte_eth_txq_info *qinfo);
 int mlx5_tx_burst_mode_get(struct rte_eth_dev *dev, uint16_t tx_queue_id,
 			   struct rte_eth_burst_mode *mode);
-
-/* mlx5_mr.c */
-
-uint32_t mlx5_tx_mb2mr_bh(struct mlx5_txq_data *txq, struct rte_mbuf *mb);
-uint32_t mlx5_tx_update_ext_mp(struct mlx5_txq_data *txq, uintptr_t addr,
-			       struct rte_mempool *mp);
 
 /* mlx5_tx_empw.c */
 
@@ -359,12 +352,12 @@ __mlx5_uar_write64(uint64_t val, void *addr, rte_spinlock_t *lock)
 #endif
 
 /**
- * Query LKey from a packet buffer for Tx. If not found, add the mempool.
+ * Query LKey from a packet buffer for Tx.
  *
  * @param txq
  *   Pointer to Tx queue structure.
- * @param addr
- *   Address to search.
+ * @param mb
+ *   Pointer to mbuf.
  *
  * @return
  *   Searched LKey on success, UINT32_MAX on no match.
@@ -373,19 +366,12 @@ static __rte_always_inline uint32_t
 mlx5_tx_mb2mr(struct mlx5_txq_data *txq, struct rte_mbuf *mb)
 {
 	struct mlx5_mr_ctrl *mr_ctrl = &txq->mr_ctrl;
-	uintptr_t addr = (uintptr_t)mb->buf_addr;
-	uint32_t lkey;
+	struct mlx5_txq_ctrl *txq_ctrl =
+			container_of(txq, struct mlx5_txq_ctrl, txq);
+	struct mlx5_priv *priv = txq_ctrl->priv;
 
-	/* Check generation bit to see if there's any change on existing MRs. */
-	if (unlikely(*mr_ctrl->dev_gen_ptr != mr_ctrl->cur_gen))
-		mlx5_mr_flush_local_cache(mr_ctrl);
-	/* Linear search on MR cache array. */
-	lkey = mlx5_mr_lookup_lkey(mr_ctrl->cache, &mr_ctrl->mru,
-				   MLX5_MR_CACHE_N, addr);
-	if (likely(lkey != UINT32_MAX))
-		return lkey;
 	/* Take slower bottom-half on miss. */
-	return mlx5_tx_mb2mr_bh(txq, mb);
+	return mlx5_mr_mb2mr(priv->sh->cdev, &priv->mp_id, mr_ctrl, mb);
 }
 
 /**
@@ -513,22 +499,22 @@ txq_mbuf_to_swp(struct mlx5_txq_local *__rte_restrict loc,
 	if (!MLX5_TXOFF_CONFIG(SWP))
 		return 0;
 	ol = loc->mbuf->ol_flags;
-	tunnel = ol & PKT_TX_TUNNEL_MASK;
+	tunnel = ol & RTE_MBUF_F_TX_TUNNEL_MASK;
 	/*
 	 * Check whether Software Parser is required.
 	 * Only customized tunnels may ask for.
 	 */
-	if (likely(tunnel != PKT_TX_TUNNEL_UDP && tunnel != PKT_TX_TUNNEL_IP))
+	if (likely(tunnel != RTE_MBUF_F_TX_TUNNEL_UDP && tunnel != RTE_MBUF_F_TX_TUNNEL_IP))
 		return 0;
 	/*
 	 * The index should have:
-	 * bit[0:1] = PKT_TX_L4_MASK
-	 * bit[4] = PKT_TX_IPV6
-	 * bit[8] = PKT_TX_OUTER_IPV6
-	 * bit[9] = PKT_TX_OUTER_UDP
+	 * bit[0:1] = RTE_MBUF_F_TX_L4_MASK
+	 * bit[4] = RTE_MBUF_F_TX_IPV6
+	 * bit[8] = RTE_MBUF_F_TX_OUTER_IPV6
+	 * bit[9] = RTE_MBUF_F_TX_OUTER_UDP
 	 */
-	idx = (ol & (PKT_TX_L4_MASK | PKT_TX_IPV6 | PKT_TX_OUTER_IPV6)) >> 52;
-	idx |= (tunnel == PKT_TX_TUNNEL_UDP) ? (1 << 9) : 0;
+	idx = (ol & (RTE_MBUF_F_TX_L4_MASK | RTE_MBUF_F_TX_IPV6 | RTE_MBUF_F_TX_OUTER_IPV6)) >> 52;
+	idx |= (tunnel == RTE_MBUF_F_TX_TUNNEL_UDP) ? (1 << 9) : 0;
 	*swp_flags = mlx5_swp_types_table[idx];
 	/*
 	 * Set offsets for SW parser. Since ConnectX-5, SW parser just
@@ -538,19 +524,19 @@ txq_mbuf_to_swp(struct mlx5_txq_local *__rte_restrict loc,
 	 * should be set regardless of HW offload.
 	 */
 	off = loc->mbuf->outer_l2_len;
-	if (MLX5_TXOFF_CONFIG(VLAN) && ol & PKT_TX_VLAN_PKT)
+	if (MLX5_TXOFF_CONFIG(VLAN) && ol & RTE_MBUF_F_TX_VLAN)
 		off += sizeof(struct rte_vlan_hdr);
 	set = (off >> 1) << 8; /* Outer L3 offset. */
 	off += loc->mbuf->outer_l3_len;
-	if (tunnel == PKT_TX_TUNNEL_UDP)
+	if (tunnel == RTE_MBUF_F_TX_TUNNEL_UDP)
 		set |= off >> 1; /* Outer L4 offset. */
-	if (ol & (PKT_TX_IPV4 | PKT_TX_IPV6)) { /* Inner IP. */
-		const uint64_t csum = ol & PKT_TX_L4_MASK;
+	if (ol & (RTE_MBUF_F_TX_IPV4 | RTE_MBUF_F_TX_IPV6)) { /* Inner IP. */
+		const uint64_t csum = ol & RTE_MBUF_F_TX_L4_MASK;
 			off += loc->mbuf->l2_len;
 		set |= (off >> 1) << 24; /* Inner L3 offset. */
-		if (csum == PKT_TX_TCP_CKSUM ||
-		    csum == PKT_TX_UDP_CKSUM ||
-		    (MLX5_TXOFF_CONFIG(TSO) && ol & PKT_TX_TCP_SEG)) {
+		if (csum == RTE_MBUF_F_TX_TCP_CKSUM ||
+		    csum == RTE_MBUF_F_TX_UDP_CKSUM ||
+		    (MLX5_TXOFF_CONFIG(TSO) && ol & RTE_MBUF_F_TX_TCP_SEG)) {
 			off += loc->mbuf->l3_len;
 			set |= (off >> 1) << 16; /* Inner L4 offset. */
 		}
@@ -572,16 +558,16 @@ static __rte_always_inline uint8_t
 txq_ol_cksum_to_cs(struct rte_mbuf *buf)
 {
 	uint32_t idx;
-	uint8_t is_tunnel = !!(buf->ol_flags & PKT_TX_TUNNEL_MASK);
-	const uint64_t ol_flags_mask = PKT_TX_TCP_SEG | PKT_TX_L4_MASK |
-				       PKT_TX_IP_CKSUM | PKT_TX_OUTER_IP_CKSUM;
+	uint8_t is_tunnel = !!(buf->ol_flags & RTE_MBUF_F_TX_TUNNEL_MASK);
+	const uint64_t ol_flags_mask = RTE_MBUF_F_TX_TCP_SEG | RTE_MBUF_F_TX_L4_MASK |
+				       RTE_MBUF_F_TX_IP_CKSUM | RTE_MBUF_F_TX_OUTER_IP_CKSUM;
 
 	/*
 	 * The index should have:
-	 * bit[0] = PKT_TX_TCP_SEG
-	 * bit[2:3] = PKT_TX_UDP_CKSUM, PKT_TX_TCP_CKSUM
-	 * bit[4] = PKT_TX_IP_CKSUM
-	 * bit[8] = PKT_TX_OUTER_IP_CKSUM
+	 * bit[0] = RTE_MBUF_F_TX_TCP_SEG
+	 * bit[2:3] = RTE_MBUF_F_TX_UDP_CKSUM, RTE_MBUF_F_TX_TCP_CKSUM
+	 * bit[4] = RTE_MBUF_F_TX_IP_CKSUM
+	 * bit[8] = RTE_MBUF_F_TX_OUTER_IP_CKSUM
 	 * bit[9] = tunnel
 	 */
 	idx = ((buf->ol_flags & ol_flags_mask) >> 50) | (!!is_tunnel << 9);
@@ -952,11 +938,12 @@ mlx5_tx_eseg_none(struct mlx5_txq_data *__rte_restrict txq __rte_unused,
 	es->swp_offs = txq_mbuf_to_swp(loc, &es->swp_flags, olx);
 	/* Fill metadata field if needed. */
 	es->metadata = MLX5_TXOFF_CONFIG(METADATA) ?
-		       loc->mbuf->ol_flags & PKT_TX_DYNF_METADATA ?
-		       *RTE_FLOW_DYNF_METADATA(loc->mbuf) : 0 : 0;
+		       loc->mbuf->ol_flags & RTE_MBUF_DYNFLAG_TX_METADATA ?
+		       rte_cpu_to_be_32(*RTE_FLOW_DYNF_METADATA(loc->mbuf)) :
+		       0 : 0;
 	/* Engage VLAN tag insertion feature if requested. */
 	if (MLX5_TXOFF_CONFIG(VLAN) &&
-	    loc->mbuf->ol_flags & PKT_TX_VLAN_PKT) {
+	    loc->mbuf->ol_flags & RTE_MBUF_F_TX_VLAN) {
 		/*
 		 * We should get here only if device support
 		 * this feature correctly.
@@ -1012,8 +999,9 @@ mlx5_tx_eseg_dmin(struct mlx5_txq_data *__rte_restrict txq __rte_unused,
 	es->swp_offs = txq_mbuf_to_swp(loc, &es->swp_flags, olx);
 	/* Fill metadata field if needed. */
 	es->metadata = MLX5_TXOFF_CONFIG(METADATA) ?
-		       loc->mbuf->ol_flags & PKT_TX_DYNF_METADATA ?
-		       *RTE_FLOW_DYNF_METADATA(loc->mbuf) : 0 : 0;
+		       loc->mbuf->ol_flags & RTE_MBUF_DYNFLAG_TX_METADATA ?
+		       rte_cpu_to_be_32(*RTE_FLOW_DYNF_METADATA(loc->mbuf)) :
+		       0 : 0;
 	psrc = rte_pktmbuf_mtod(loc->mbuf, uint8_t *);
 	es->inline_hdr_sz = RTE_BE16(MLX5_ESEG_MIN_INLINE_SIZE);
 	es->inline_data = *(unaligned_uint16_t *)psrc;
@@ -1095,8 +1083,9 @@ mlx5_tx_eseg_data(struct mlx5_txq_data *__rte_restrict txq,
 	es->swp_offs = txq_mbuf_to_swp(loc, &es->swp_flags, olx);
 	/* Fill metadata field if needed. */
 	es->metadata = MLX5_TXOFF_CONFIG(METADATA) ?
-		       loc->mbuf->ol_flags & PKT_TX_DYNF_METADATA ?
-		       *RTE_FLOW_DYNF_METADATA(loc->mbuf) : 0 : 0;
+		       loc->mbuf->ol_flags & RTE_MBUF_DYNFLAG_TX_METADATA ?
+		       rte_cpu_to_be_32(*RTE_FLOW_DYNF_METADATA(loc->mbuf)) :
+		       0 : 0;
 	psrc = rte_pktmbuf_mtod(loc->mbuf, uint8_t *);
 	es->inline_hdr_sz = rte_cpu_to_be_16(inlen);
 	es->inline_data = *(unaligned_uint16_t *)psrc;
@@ -1203,7 +1192,7 @@ mlx5_tx_mseg_memcpy(uint8_t *pdst,
 			MLX5_ASSERT(loc->mbuf_nseg > 1);
 			MLX5_ASSERT(loc->mbuf);
 			--loc->mbuf_nseg;
-			if (loc->mbuf->ol_flags & PKT_TX_DYNF_NOINLINE) {
+			if (loc->mbuf->ol_flags & RTE_MBUF_F_TX_DYNF_NOINLINE) {
 				unsigned int diff;
 
 				if (copy >= must) {
@@ -1307,8 +1296,9 @@ mlx5_tx_eseg_mdat(struct mlx5_txq_data *__rte_restrict txq,
 	es->swp_offs = txq_mbuf_to_swp(loc, &es->swp_flags, olx);
 	/* Fill metadata field if needed. */
 	es->metadata = MLX5_TXOFF_CONFIG(METADATA) ?
-		       loc->mbuf->ol_flags & PKT_TX_DYNF_METADATA ?
-		       *RTE_FLOW_DYNF_METADATA(loc->mbuf) : 0 : 0;
+		       loc->mbuf->ol_flags & RTE_MBUF_DYNFLAG_TX_METADATA ?
+		       rte_cpu_to_be_32(*RTE_FLOW_DYNF_METADATA(loc->mbuf)) :
+		       0 : 0;
 	MLX5_ASSERT(inlen >= MLX5_ESEG_MIN_INLINE_SIZE);
 	pdst = (uint8_t *)&es->inline_data;
 	if (MLX5_TXOFF_CONFIG(VLAN) && vlan) {
@@ -1338,7 +1328,8 @@ mlx5_tx_eseg_mdat(struct mlx5_txq_data *__rte_restrict txq,
 		 * Copying may be interrupted inside the routine
 		 * if run into no inline hint flag.
 		 */
-		copy = tlen >= txq->inlen_mode ? 0 : (txq->inlen_mode - tlen);
+		copy = tso ? inlen : txq->inlen_mode;
+		copy = tlen >= copy ? 0 : (copy - tlen);
 		copy = mlx5_tx_mseg_memcpy(pdst, loc, part, copy, olx);
 		tlen += copy;
 		if (likely(inlen <= tlen) || copy < part) {
@@ -1813,13 +1804,13 @@ mlx5_tx_packet_multi_tso(struct mlx5_txq_data *__rte_restrict txq,
 	 * the required space in WQE ring buffer.
 	 */
 	dlen = rte_pktmbuf_pkt_len(loc->mbuf);
-	if (MLX5_TXOFF_CONFIG(VLAN) && loc->mbuf->ol_flags & PKT_TX_VLAN_PKT)
+	if (MLX5_TXOFF_CONFIG(VLAN) && loc->mbuf->ol_flags & RTE_MBUF_F_TX_VLAN)
 		vlan = sizeof(struct rte_vlan_hdr);
 	inlen = loc->mbuf->l2_len + vlan +
 		loc->mbuf->l3_len + loc->mbuf->l4_len;
 	if (unlikely((!inlen || !loc->mbuf->tso_segsz)))
 		return MLX5_TXCMP_CODE_ERROR;
-	if (loc->mbuf->ol_flags & PKT_TX_TUNNEL_MASK)
+	if (loc->mbuf->ol_flags & RTE_MBUF_F_TX_TUNNEL_MASK)
 		inlen += loc->mbuf->outer_l2_len + loc->mbuf->outer_l3_len;
 	/* Packet must contain all TSO headers. */
 	if (unlikely(inlen > MLX5_MAX_TSO_HEADER ||
@@ -1928,7 +1919,7 @@ mlx5_tx_packet_multi_send(struct mlx5_txq_data *__rte_restrict txq,
 	/* Update sent data bytes counter. */
 	txq->stats.obytes += rte_pktmbuf_pkt_len(loc->mbuf);
 	if (MLX5_TXOFF_CONFIG(VLAN) &&
-	    loc->mbuf->ol_flags & PKT_TX_VLAN_PKT)
+	    loc->mbuf->ol_flags & RTE_MBUF_F_TX_VLAN)
 		txq->stats.obytes += sizeof(struct rte_vlan_hdr);
 #endif
 	/*
@@ -2027,7 +2018,7 @@ mlx5_tx_packet_multi_inline(struct mlx5_txq_data *__rte_restrict txq,
 	 * to estimate the required space for WQE.
 	 */
 	dlen = rte_pktmbuf_pkt_len(loc->mbuf);
-	if (MLX5_TXOFF_CONFIG(VLAN) && loc->mbuf->ol_flags & PKT_TX_VLAN_PKT)
+	if (MLX5_TXOFF_CONFIG(VLAN) && loc->mbuf->ol_flags & RTE_MBUF_F_TX_VLAN)
 		vlan = sizeof(struct rte_vlan_hdr);
 	inlen = dlen + vlan;
 	/* Check against minimal length. */
@@ -2035,11 +2026,13 @@ mlx5_tx_packet_multi_inline(struct mlx5_txq_data *__rte_restrict txq,
 		return MLX5_TXCMP_CODE_ERROR;
 	MLX5_ASSERT(txq->inlen_send >= MLX5_ESEG_MIN_INLINE_SIZE);
 	if (inlen > txq->inlen_send ||
-	    loc->mbuf->ol_flags & PKT_TX_DYNF_NOINLINE) {
+	    loc->mbuf->ol_flags & RTE_MBUF_F_TX_DYNF_NOINLINE) {
 		struct rte_mbuf *mbuf;
 		unsigned int nxlen;
 		uintptr_t start;
 
+		mbuf = loc->mbuf;
+		nxlen = rte_pktmbuf_data_len(mbuf);
 		/*
 		 * Packet length exceeds the allowed inline data length,
 		 * check whether the minimal inlining is required.
@@ -2049,28 +2042,23 @@ mlx5_tx_packet_multi_inline(struct mlx5_txq_data *__rte_restrict txq,
 				    MLX5_ESEG_MIN_INLINE_SIZE);
 			MLX5_ASSERT(txq->inlen_mode <= txq->inlen_send);
 			inlen = txq->inlen_mode;
-		} else {
-			if (loc->mbuf->ol_flags & PKT_TX_DYNF_NOINLINE ||
-			    !vlan || txq->vlan_en) {
-				/*
-				 * VLAN insertion will be done inside by HW.
-				 * It is not utmost effective - VLAN flag is
-				 * checked twice, but we should proceed the
-				 * inlining length correctly and take into
-				 * account the VLAN header being inserted.
-				 */
-				return mlx5_tx_packet_multi_send
-							(txq, loc, olx);
-			}
+		} else if (vlan && !txq->vlan_en) {
+			/*
+			 * VLAN insertion is requested and hardware does not
+			 * support the offload, will do with software inline.
+			 */
 			inlen = MLX5_ESEG_MIN_INLINE_SIZE;
+		} else if (mbuf->ol_flags & RTE_MBUF_F_TX_DYNF_NOINLINE ||
+			   nxlen > txq->inlen_send) {
+			return mlx5_tx_packet_multi_send(txq, loc, olx);
+		} else {
+			goto do_first;
 		}
 		/*
 		 * Now we know the minimal amount of data is requested
 		 * to inline. Check whether we should inline the buffers
 		 * from the chain beginning to eliminate some mbufs.
 		 */
-		mbuf = loc->mbuf;
-		nxlen = rte_pktmbuf_data_len(mbuf);
 		if (unlikely(nxlen <= txq->inlen_send)) {
 			/* We can inline first mbuf at least. */
 			if (nxlen < inlen) {
@@ -2092,6 +2080,7 @@ mlx5_tx_packet_multi_inline(struct mlx5_txq_data *__rte_restrict txq,
 					goto do_align;
 				}
 			}
+do_first:
 			do {
 				inlen = nxlen;
 				mbuf = NEXT(mbuf);
@@ -2199,7 +2188,7 @@ mlx5_tx_burst_mseg(struct mlx5_txq_data *__rte_restrict txq,
 		if (loc->elts_free < NB_SEGS(loc->mbuf))
 			return MLX5_TXCMP_CODE_EXIT;
 		if (MLX5_TXOFF_CONFIG(TSO) &&
-		    unlikely(loc->mbuf->ol_flags & PKT_TX_TCP_SEG)) {
+		    unlikely(loc->mbuf->ol_flags & RTE_MBUF_F_TX_TCP_SEG)) {
 			/* Proceed with multi-segment TSO. */
 			ret = mlx5_tx_packet_multi_tso(txq, loc, olx);
 		} else if (MLX5_TXOFF_CONFIG(INLINE)) {
@@ -2225,7 +2214,7 @@ mlx5_tx_burst_mseg(struct mlx5_txq_data *__rte_restrict txq,
 			continue;
 		/* Here ends the series of multi-segment packets. */
 		if (MLX5_TXOFF_CONFIG(TSO) &&
-		    unlikely(loc->mbuf->ol_flags & PKT_TX_TCP_SEG))
+		    unlikely(loc->mbuf->ol_flags & RTE_MBUF_F_TX_TCP_SEG))
 			return MLX5_TXCMP_CODE_TSO;
 		return MLX5_TXCMP_CODE_SINGLE;
 	}
@@ -2292,7 +2281,7 @@ mlx5_tx_burst_tso(struct mlx5_txq_data *__rte_restrict txq,
 		}
 		dlen = rte_pktmbuf_data_len(loc->mbuf);
 		if (MLX5_TXOFF_CONFIG(VLAN) &&
-		    loc->mbuf->ol_flags & PKT_TX_VLAN_PKT) {
+		    loc->mbuf->ol_flags & RTE_MBUF_F_TX_VLAN) {
 			vlan = sizeof(struct rte_vlan_hdr);
 		}
 		/*
@@ -2303,7 +2292,7 @@ mlx5_tx_burst_tso(struct mlx5_txq_data *__rte_restrict txq,
 		       loc->mbuf->l3_len + loc->mbuf->l4_len;
 		if (unlikely((!hlen || !loc->mbuf->tso_segsz)))
 			return MLX5_TXCMP_CODE_ERROR;
-		if (loc->mbuf->ol_flags & PKT_TX_TUNNEL_MASK)
+		if (loc->mbuf->ol_flags & RTE_MBUF_F_TX_TUNNEL_MASK)
 			hlen += loc->mbuf->outer_l2_len +
 				loc->mbuf->outer_l3_len;
 		/* Segment must contain all TSO headers. */
@@ -2369,7 +2358,7 @@ mlx5_tx_burst_tso(struct mlx5_txq_data *__rte_restrict txq,
 		if (MLX5_TXOFF_CONFIG(MULTI) &&
 		    unlikely(NB_SEGS(loc->mbuf) > 1))
 			return MLX5_TXCMP_CODE_MULTI;
-		if (likely(!(loc->mbuf->ol_flags & PKT_TX_TCP_SEG)))
+		if (likely(!(loc->mbuf->ol_flags & RTE_MBUF_F_TX_TCP_SEG)))
 			return MLX5_TXCMP_CODE_SINGLE;
 		/* Continue with the next TSO packet. */
 	}
@@ -2410,14 +2399,14 @@ mlx5_tx_able_to_empw(struct mlx5_txq_data *__rte_restrict txq,
 	/* Check for TSO packet. */
 	if (newp &&
 	    MLX5_TXOFF_CONFIG(TSO) &&
-	    unlikely(loc->mbuf->ol_flags & PKT_TX_TCP_SEG))
+	    unlikely(loc->mbuf->ol_flags & RTE_MBUF_F_TX_TCP_SEG))
 		return MLX5_TXCMP_CODE_TSO;
 	/* Check if eMPW is enabled at all. */
 	if (!MLX5_TXOFF_CONFIG(EMPW))
 		return MLX5_TXCMP_CODE_SINGLE;
 	/* Check if eMPW can be engaged. */
 	if (MLX5_TXOFF_CONFIG(VLAN) &&
-	    unlikely(loc->mbuf->ol_flags & PKT_TX_VLAN_PKT) &&
+	    unlikely(loc->mbuf->ol_flags & RTE_MBUF_F_TX_VLAN) &&
 		(!MLX5_TXOFF_CONFIG(INLINE) ||
 		 unlikely((rte_pktmbuf_data_len(loc->mbuf) +
 			   sizeof(struct rte_vlan_hdr)) > txq->inlen_empw))) {
@@ -2470,8 +2459,8 @@ mlx5_tx_match_empw(struct mlx5_txq_data *__rte_restrict txq,
 		return false;
 	/* Fill metadata field if needed. */
 	if (MLX5_TXOFF_CONFIG(METADATA) &&
-		es->metadata != (loc->mbuf->ol_flags & PKT_TX_DYNF_METADATA ?
-				 *RTE_FLOW_DYNF_METADATA(loc->mbuf) : 0))
+		es->metadata != (loc->mbuf->ol_flags & RTE_MBUF_DYNFLAG_TX_METADATA ?
+				 rte_cpu_to_be_32(*RTE_FLOW_DYNF_METADATA(loc->mbuf)) : 0))
 		return false;
 	/* Legacy MPW can send packets with the same length only. */
 	if (MLX5_TXOFF_CONFIG(MPW) &&
@@ -2479,7 +2468,7 @@ mlx5_tx_match_empw(struct mlx5_txq_data *__rte_restrict txq,
 		return false;
 	/* There must be no VLAN packets in eMPW loop. */
 	if (MLX5_TXOFF_CONFIG(VLAN))
-		MLX5_ASSERT(!(loc->mbuf->ol_flags & PKT_TX_VLAN_PKT));
+		MLX5_ASSERT(!(loc->mbuf->ol_flags & RTE_MBUF_F_TX_VLAN));
 	/* Check if the scheduling is requested. */
 	if (MLX5_TXOFF_CONFIG(TXPP) &&
 	    loc->mbuf->ol_flags & txq->ts_mask)
@@ -2915,7 +2904,7 @@ mlx5_tx_burst_empw_inline(struct mlx5_txq_data *__rte_restrict txq,
 			}
 			/* Inline or not inline - that's the Question. */
 			if (dlen > txq->inlen_empw ||
-			    loc->mbuf->ol_flags & PKT_TX_DYNF_NOINLINE)
+			    loc->mbuf->ol_flags & RTE_MBUF_F_TX_DYNF_NOINLINE)
 				goto pointer_empw;
 			if (MLX5_TXOFF_CONFIG(MPW)) {
 				if (dlen > txq->inlen_send)
@@ -2940,7 +2929,7 @@ mlx5_tx_burst_empw_inline(struct mlx5_txq_data *__rte_restrict txq,
 			}
 			/* Inline entire packet, optional VLAN insertion. */
 			if (MLX5_TXOFF_CONFIG(VLAN) &&
-			    loc->mbuf->ol_flags & PKT_TX_VLAN_PKT) {
+			    loc->mbuf->ol_flags & RTE_MBUF_F_TX_VLAN) {
 				/*
 				 * The packet length must be checked in
 				 * mlx5_tx_able_to_empw() and packet
@@ -3005,7 +2994,7 @@ pointer_empw:
 			MLX5_ASSERT(room >= MLX5_WQE_DSEG_SIZE);
 			if (MLX5_TXOFF_CONFIG(VLAN))
 				MLX5_ASSERT(!(loc->mbuf->ol_flags &
-					    PKT_TX_VLAN_PKT));
+					    RTE_MBUF_F_TX_VLAN));
 			mlx5_tx_dseg_ptr(txq, loc, dseg, dptr, dlen, olx);
 			/* We have to store mbuf in elts.*/
 			txq->elts[txq->elts_head++ & txq->elts_m] = loc->mbuf;
@@ -3150,7 +3139,7 @@ mlx5_tx_burst_single_send(struct mlx5_txq_data *__rte_restrict txq,
 
 			inlen = rte_pktmbuf_data_len(loc->mbuf);
 			if (MLX5_TXOFF_CONFIG(VLAN) &&
-			    loc->mbuf->ol_flags & PKT_TX_VLAN_PKT) {
+			    loc->mbuf->ol_flags & RTE_MBUF_F_TX_VLAN) {
 				vlan = sizeof(struct rte_vlan_hdr);
 				inlen += vlan;
 			}
@@ -3171,7 +3160,7 @@ mlx5_tx_burst_single_send(struct mlx5_txq_data *__rte_restrict txq,
 				if (inlen <= MLX5_ESEG_MIN_INLINE_SIZE)
 					return MLX5_TXCMP_CODE_ERROR;
 				if (loc->mbuf->ol_flags &
-				    PKT_TX_DYNF_NOINLINE) {
+				    RTE_MBUF_F_TX_DYNF_NOINLINE) {
 					/*
 					 * The hint flag not to inline packet
 					 * data is set. Check whether we can
@@ -3381,7 +3370,7 @@ single_no_inline:
 			/* Update sent data bytes counter. */
 			txq->stats.obytes += rte_pktmbuf_data_len(loc->mbuf);
 			if (MLX5_TXOFF_CONFIG(VLAN) &&
-			    loc->mbuf->ol_flags & PKT_TX_VLAN_PKT)
+			    loc->mbuf->ol_flags & RTE_MBUF_F_TX_VLAN)
 				txq->stats.obytes +=
 					sizeof(struct rte_vlan_hdr);
 #endif
@@ -3577,7 +3566,7 @@ enter_send_multi:
 		}
 		/* Dedicated branch for single-segment TSO packets. */
 		if (MLX5_TXOFF_CONFIG(TSO) &&
-		    unlikely(loc.mbuf->ol_flags & PKT_TX_TCP_SEG)) {
+		    unlikely(loc.mbuf->ol_flags & RTE_MBUF_F_TX_TCP_SEG)) {
 			/*
 			 * TSO might require special way for inlining
 			 * (dedicated parameters) and is sent with

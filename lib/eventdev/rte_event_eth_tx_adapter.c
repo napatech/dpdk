@@ -3,10 +3,10 @@
  */
 #include <rte_spinlock.h>
 #include <rte_service_component.h>
-#include <rte_ethdev.h>
+#include <ethdev_driver.h>
 
 #include "eventdev_pmd.h"
-#include "rte_eventdev_trace.h"
+#include "eventdev_trace.h"
 #include "rte_event_eth_tx_adapter.h"
 
 #define TXA_BATCH_SIZE		32
@@ -286,7 +286,6 @@ txa_service_conf_cb(uint8_t __rte_unused id, uint8_t dev_id,
 		return ret;
 	}
 
-	pc->event_port_cfg = 0;
 	ret = rte_event_port_setup(dev_id, port_id, pc);
 	if (ret) {
 		RTE_EDEV_LOG_ERR("failed to setup event port %u\n",

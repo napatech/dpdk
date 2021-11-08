@@ -19,6 +19,8 @@ extern "C" {
 #include <rte_interrupts.h>
 #include <rte_trace_point.h>
 
+#include "eal_interrupts.h"
+
 /* Alarm */
 RTE_TRACE_POINT(
 	rte_eal_trace_alarm_set,
@@ -149,7 +151,7 @@ RTE_TRACE_POINT(
 	RTE_TRACE_POINT_ARGS(const struct rte_intr_handle *handle,
 		rte_intr_callback_fn cb, void *cb_arg, int rc),
 	rte_trace_point_emit_int(rc);
-	rte_trace_point_emit_int(handle->vfio_dev_fd);
+	rte_trace_point_emit_int(handle->dev_fd);
 	rte_trace_point_emit_int(handle->fd);
 	rte_trace_point_emit_int(handle->type);
 	rte_trace_point_emit_u32(handle->max_intr);
@@ -162,7 +164,7 @@ RTE_TRACE_POINT(
 	RTE_TRACE_POINT_ARGS(const struct rte_intr_handle *handle,
 		rte_intr_callback_fn cb, void *cb_arg, int rc),
 	rte_trace_point_emit_int(rc);
-	rte_trace_point_emit_int(handle->vfio_dev_fd);
+	rte_trace_point_emit_int(handle->dev_fd);
 	rte_trace_point_emit_int(handle->fd);
 	rte_trace_point_emit_int(handle->type);
 	rte_trace_point_emit_u32(handle->max_intr);
@@ -174,7 +176,7 @@ RTE_TRACE_POINT(
 	rte_eal_trace_intr_enable,
 	RTE_TRACE_POINT_ARGS(const struct rte_intr_handle *handle, int rc),
 	rte_trace_point_emit_int(rc);
-	rte_trace_point_emit_int(handle->vfio_dev_fd);
+	rte_trace_point_emit_int(handle->dev_fd);
 	rte_trace_point_emit_int(handle->fd);
 	rte_trace_point_emit_int(handle->type);
 	rte_trace_point_emit_u32(handle->max_intr);
@@ -184,7 +186,7 @@ RTE_TRACE_POINT(
 	rte_eal_trace_intr_disable,
 	RTE_TRACE_POINT_ARGS(const struct rte_intr_handle *handle, int rc),
 	rte_trace_point_emit_int(rc);
-	rte_trace_point_emit_int(handle->vfio_dev_fd);
+	rte_trace_point_emit_int(handle->dev_fd);
 	rte_trace_point_emit_int(handle->fd);
 	rte_trace_point_emit_int(handle->type);
 	rte_trace_point_emit_u32(handle->max_intr);

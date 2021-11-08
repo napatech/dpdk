@@ -115,6 +115,32 @@ Runtime Config Options
   For example::
   -a 0000:7d:00.0,dev_caps_mask=0xF
 
+- ``mbx_time_limit_ms`` (default ``500``)
+   Used to define the mailbox time limit by user.
+   Current, the max waiting time for MBX response is 500ms, but in
+   some scenarios, it is not enough. Since it depends on the response
+   of the kernel mode driver, and its response time is related to the
+   scheduling of the system. In this special scenario, most of the
+   cores are isolated, and only a few cores are used for system
+   scheduling. When a large number of services are started, the
+   scheduling of the system will be very busy, and the reply of the
+   mbx message will time out, which will cause our PMD initialization
+   to fail. So provide access to set mailbox time limit for user.
+
+   For example::
+   -a 0000:7d:00.0,mbx_time_limit_ms=600
+
+Link status event Pre-conditions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Firmware 1.8.0.0 and later versions support reporting link changes to the PF.
+Therefore, to use the LSC for the PF driver, ensure that the firmware version
+also supports reporting link changes.
+If the VF driver needs to support LSC, special patch must be added:
+`<https://git.kernel.org/pub/scm/linux/kernel/git/next/linux-next.git/commit/drivers/net/ethernet/hisilicon/hns3?h=next-20210428&id=18b6e31f8bf4ac7af7b057228f38a5a530378e4e>`_.
+Note: The patch has been uploaded to 5.13 of the Linux kernel mainline.
+
+
 Driver compilation and testing
 ------------------------------
 

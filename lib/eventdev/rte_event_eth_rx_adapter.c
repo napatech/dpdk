@@ -11,21 +11,23 @@
 #include <rte_common.h>
 #include <rte_dev.h>
 #include <rte_errno.h>
-#include <rte_ethdev.h>
+#include <ethdev_driver.h>
 #include <rte_log.h>
 #include <rte_malloc.h>
 #include <rte_service_component.h>
 #include <rte_thash.h>
 #include <rte_interrupts.h>
+#include <rte_mbuf_dyn.h>
+#include <rte_telemetry.h>
 
 #include "rte_eventdev.h"
 #include "eventdev_pmd.h"
-#include "rte_eventdev_trace.h"
+#include "eventdev_trace.h"
 #include "rte_event_eth_rx_adapter.h"
 
 #define BATCH_SIZE		32
 #define BLOCK_CNT_THRESHOLD	10
-#define ETH_EVENT_BUFFER_SIZE	(4*BATCH_SIZE)
+#define ETH_EVENT_BUFFER_SIZE	(6*BATCH_SIZE)
 #define MAX_VECTOR_SIZE		1024
 #define MIN_VECTOR_SIZE		4
 #define MAX_VECTOR_NS		1E9
@@ -39,6 +41,8 @@
 #define ETH_BRIDGE_INTR_THREAD_EXIT	1
 /* Sentinel value to detect initialized file handle */
 #define INIT_FD		-1
+
+#define RXA_ADAPTER_ARRAY "rte_event_eth_rx_adapter_array"
 
 /*
  * Used to store port and queue ID of interrupting Rx queue
@@ -78,22 +82,33 @@ struct eth_rx_vector_data {
 TAILQ_HEAD(eth_rx_vector_data_list, eth_rx_vector_data);
 
 /* Instance per adapter */
-struct rte_eth_event_enqueue_buffer {
+struct eth_event_enqueue_buffer {
 	/* Count of events in this buffer */
 	uint16_t count;
 	/* Array of events in this buffer */
-	struct rte_event events[ETH_EVENT_BUFFER_SIZE];
+	struct rte_event *events;
+	/* size of event buffer */
+	uint16_t events_size;
+	/* Event enqueue happens from head */
+	uint16_t head;
+	/* New packets from rte_eth_rx_burst is enqued from tail */
+	uint16_t tail;
+	/* last element in the buffer before rollover */
+	uint16_t last;
+	uint16_t last_mask;
 };
 
-struct rte_event_eth_rx_adapter {
+struct event_eth_rx_adapter {
 	/* RSS key */
 	uint8_t rss_key_be[RSS_KEY_SIZE];
 	/* Event device identifier */
 	uint8_t eventdev_id;
-	/* Per ethernet device structure */
-	struct eth_device_info *eth_devices;
 	/* Event port identifier */
 	uint8_t event_port_id;
+	/* Flag indicating per rxq event buffer */
+	bool use_queue_event_buf;
+	/* Per ethernet device structure */
+	struct eth_device_info *eth_devices;
 	/* Lock to serialize config updates with service function */
 	rte_spinlock_t rx_lock;
 	/* Max mbufs processed in any service function invocation */
@@ -109,7 +124,7 @@ struct rte_event_eth_rx_adapter {
 	/* Next entry in wrr[] to begin polling */
 	uint32_t wrr_pos;
 	/* Event burst buffer */
-	struct rte_eth_event_enqueue_buffer event_enqueue_buffer;
+	struct eth_event_enqueue_buffer event_enqueue_buffer;
 	/* Vector enable flag */
 	uint8_t ena_vector;
 	/* Timestamp of previous vector expiry list traversal */
@@ -229,14 +244,38 @@ struct eth_rx_queue_info {
 	uint32_t flow_id_mask;	/* Set to ~0 if app provides flow id else 0 */
 	uint64_t event;
 	struct eth_rx_vector_data vector_data;
+	struct eth_event_enqueue_buffer *event_buf;
 };
 
-static struct rte_event_eth_rx_adapter **event_eth_rx_adapter;
+static struct event_eth_rx_adapter **event_eth_rx_adapter;
+
+/* Enable dynamic timestamp field in mbuf */
+static uint64_t event_eth_rx_timestamp_dynflag;
+static int event_eth_rx_timestamp_dynfield_offset = -1;
+
+static inline rte_mbuf_timestamp_t *
+rxa_timestamp_dynfield(struct rte_mbuf *mbuf)
+{
+	return RTE_MBUF_DYNFIELD(mbuf,
+		event_eth_rx_timestamp_dynfield_offset, rte_mbuf_timestamp_t *);
+}
 
 static inline int
 rxa_validate_id(uint8_t id)
 {
 	return id < RTE_EVENT_ETH_RX_ADAPTER_MAX_INSTANCE;
+}
+
+static inline struct eth_event_enqueue_buffer *
+rxa_event_buf_get(struct event_eth_rx_adapter *rx_adapter, uint16_t eth_dev_id,
+		  uint16_t rx_queue_id)
+{
+	if (rx_adapter->use_queue_event_buf) {
+		struct eth_device_info *dev_info =
+			&rx_adapter->eth_devices[eth_dev_id];
+		return dev_info->rx_queue[rx_queue_id].event_buf;
+	} else
+		return &rx_adapter->event_enqueue_buffer;
 }
 
 #define RTE_EVENT_ETH_RX_ADAPTER_ID_VALID_OR_ERR_RET(id, retval) do { \
@@ -247,7 +286,7 @@ rxa_validate_id(uint8_t id)
 } while (0)
 
 static inline int
-rxa_sw_adapter_queue_count(struct rte_event_eth_rx_adapter *rx_adapter)
+rxa_sw_adapter_queue_count(struct event_eth_rx_adapter *rx_adapter)
 {
 	return rx_adapter->num_rx_polled + rx_adapter->num_rx_intr;
 }
@@ -265,10 +304,9 @@ static uint16_t rxa_gcd_u16(uint16_t a, uint16_t b)
  * http://kb.linuxvirtualserver.org/wiki/Weighted_Round-Robin_Scheduling
  */
 static int
-rxa_wrr_next(struct rte_event_eth_rx_adapter *rx_adapter,
-	 unsigned int n, int *cw,
-	 struct eth_rx_poll_entry *eth_rx_poll, uint16_t max_wt,
-	 uint16_t gcd, int prev)
+rxa_wrr_next(struct event_eth_rx_adapter *rx_adapter, unsigned int n, int *cw,
+	     struct eth_rx_poll_entry *eth_rx_poll, uint16_t max_wt,
+	     uint16_t gcd, int prev)
 {
 	int i = prev;
 	uint16_t w;
@@ -373,10 +411,9 @@ rxa_nb_intr_vect(struct eth_device_info *dev_info, int rx_queue_id, int add)
 /* Calculate nb_rx_intr after deleting interrupt mode rx queues
  */
 static void
-rxa_calc_nb_post_intr_del(struct rte_event_eth_rx_adapter *rx_adapter,
-			struct eth_device_info *dev_info,
-			int rx_queue_id,
-			uint32_t *nb_rx_intr)
+rxa_calc_nb_post_intr_del(struct event_eth_rx_adapter *rx_adapter,
+			  struct eth_device_info *dev_info, int rx_queue_id,
+			  uint32_t *nb_rx_intr)
 {
 	uint32_t intr_diff;
 
@@ -392,12 +429,10 @@ rxa_calc_nb_post_intr_del(struct rte_event_eth_rx_adapter *rx_adapter,
  * interrupt queues could currently be poll mode Rx queues
  */
 static void
-rxa_calc_nb_post_add_intr(struct rte_event_eth_rx_adapter *rx_adapter,
-			struct eth_device_info *dev_info,
-			int rx_queue_id,
-			uint32_t *nb_rx_poll,
-			uint32_t *nb_rx_intr,
-			uint32_t *nb_wrr)
+rxa_calc_nb_post_add_intr(struct event_eth_rx_adapter *rx_adapter,
+			  struct eth_device_info *dev_info, int rx_queue_id,
+			  uint32_t *nb_rx_poll, uint32_t *nb_rx_intr,
+			  uint32_t *nb_wrr)
 {
 	uint32_t intr_diff;
 	uint32_t poll_diff;
@@ -424,11 +459,9 @@ rxa_calc_nb_post_add_intr(struct rte_event_eth_rx_adapter *rx_adapter,
  * after deleting poll mode rx queues
  */
 static void
-rxa_calc_nb_post_poll_del(struct rte_event_eth_rx_adapter *rx_adapter,
-			struct eth_device_info *dev_info,
-			int rx_queue_id,
-			uint32_t *nb_rx_poll,
-			uint32_t *nb_wrr)
+rxa_calc_nb_post_poll_del(struct event_eth_rx_adapter *rx_adapter,
+			  struct eth_device_info *dev_info, int rx_queue_id,
+			  uint32_t *nb_rx_poll, uint32_t *nb_wrr)
 {
 	uint32_t poll_diff;
 	uint32_t wrr_len_diff;
@@ -449,13 +482,10 @@ rxa_calc_nb_post_poll_del(struct rte_event_eth_rx_adapter *rx_adapter,
 /* Calculate nb_rx_* after adding poll mode rx queues
  */
 static void
-rxa_calc_nb_post_add_poll(struct rte_event_eth_rx_adapter *rx_adapter,
-			struct eth_device_info *dev_info,
-			int rx_queue_id,
-			uint16_t wt,
-			uint32_t *nb_rx_poll,
-			uint32_t *nb_rx_intr,
-			uint32_t *nb_wrr)
+rxa_calc_nb_post_add_poll(struct event_eth_rx_adapter *rx_adapter,
+			  struct eth_device_info *dev_info, int rx_queue_id,
+			  uint16_t wt, uint32_t *nb_rx_poll,
+			  uint32_t *nb_rx_intr, uint32_t *nb_wrr)
 {
 	uint32_t intr_diff;
 	uint32_t poll_diff;
@@ -482,13 +512,10 @@ rxa_calc_nb_post_add_poll(struct rte_event_eth_rx_adapter *rx_adapter,
 
 /* Calculate nb_rx_* after adding rx_queue_id */
 static void
-rxa_calc_nb_post_add(struct rte_event_eth_rx_adapter *rx_adapter,
-		struct eth_device_info *dev_info,
-		int rx_queue_id,
-		uint16_t wt,
-		uint32_t *nb_rx_poll,
-		uint32_t *nb_rx_intr,
-		uint32_t *nb_wrr)
+rxa_calc_nb_post_add(struct event_eth_rx_adapter *rx_adapter,
+		     struct eth_device_info *dev_info, int rx_queue_id,
+		     uint16_t wt, uint32_t *nb_rx_poll, uint32_t *nb_rx_intr,
+		     uint32_t *nb_wrr)
 {
 	if (wt != 0)
 		rxa_calc_nb_post_add_poll(rx_adapter, dev_info, rx_queue_id,
@@ -500,12 +527,10 @@ rxa_calc_nb_post_add(struct rte_event_eth_rx_adapter *rx_adapter,
 
 /* Calculate nb_rx_* after deleting rx_queue_id */
 static void
-rxa_calc_nb_post_del(struct rte_event_eth_rx_adapter *rx_adapter,
-		struct eth_device_info *dev_info,
-		int rx_queue_id,
-		uint32_t *nb_rx_poll,
-		uint32_t *nb_rx_intr,
-		uint32_t *nb_wrr)
+rxa_calc_nb_post_del(struct event_eth_rx_adapter *rx_adapter,
+		     struct eth_device_info *dev_info, int rx_queue_id,
+		     uint32_t *nb_rx_poll, uint32_t *nb_rx_intr,
+		     uint32_t *nb_wrr)
 {
 	rxa_calc_nb_post_poll_del(rx_adapter, dev_info, rx_queue_id, nb_rx_poll,
 				nb_wrr);
@@ -517,8 +542,7 @@ rxa_calc_nb_post_del(struct rte_event_eth_rx_adapter *rx_adapter,
  * Allocate the rx_poll array
  */
 static struct eth_rx_poll_entry *
-rxa_alloc_poll(struct rte_event_eth_rx_adapter *rx_adapter,
-	uint32_t num_rx_polled)
+rxa_alloc_poll(struct event_eth_rx_adapter *rx_adapter, uint32_t num_rx_polled)
 {
 	size_t len;
 
@@ -534,7 +558,7 @@ rxa_alloc_poll(struct rte_event_eth_rx_adapter *rx_adapter,
  * Allocate the WRR array
  */
 static uint32_t *
-rxa_alloc_wrr(struct rte_event_eth_rx_adapter *rx_adapter, int nb_wrr)
+rxa_alloc_wrr(struct event_eth_rx_adapter *rx_adapter, int nb_wrr)
 {
 	size_t len;
 
@@ -547,11 +571,9 @@ rxa_alloc_wrr(struct rte_event_eth_rx_adapter *rx_adapter, int nb_wrr)
 }
 
 static int
-rxa_alloc_poll_arrays(struct rte_event_eth_rx_adapter *rx_adapter,
-		uint32_t nb_poll,
-		uint32_t nb_wrr,
-		struct eth_rx_poll_entry **rx_poll,
-		uint32_t **wrr_sched)
+rxa_alloc_poll_arrays(struct event_eth_rx_adapter *rx_adapter, uint32_t nb_poll,
+		      uint32_t nb_wrr, struct eth_rx_poll_entry **rx_poll,
+		      uint32_t **wrr_sched)
 {
 
 	if (nb_poll == 0) {
@@ -576,9 +598,8 @@ rxa_alloc_poll_arrays(struct rte_event_eth_rx_adapter *rx_adapter,
 
 /* Precalculate WRR polling sequence for all queues in rx_adapter */
 static void
-rxa_calc_wrr_sequence(struct rte_event_eth_rx_adapter *rx_adapter,
-		struct eth_rx_poll_entry *rx_poll,
-		uint32_t *rx_wrr)
+rxa_calc_wrr_sequence(struct event_eth_rx_adapter *rx_adapter,
+		      struct eth_rx_poll_entry *rx_poll, uint32_t *rx_wrr)
 {
 	uint16_t d;
 	uint16_t q;
@@ -705,13 +726,13 @@ rxa_do_softrss(struct rte_mbuf *m, const uint8_t *rss_key_be)
 }
 
 static inline int
-rxa_enq_blocked(struct rte_event_eth_rx_adapter *rx_adapter)
+rxa_enq_blocked(struct event_eth_rx_adapter *rx_adapter)
 {
 	return !!rx_adapter->enq_block_count;
 }
 
 static inline void
-rxa_enq_block_start_ts(struct rte_event_eth_rx_adapter *rx_adapter)
+rxa_enq_block_start_ts(struct event_eth_rx_adapter *rx_adapter)
 {
 	if (rx_adapter->rx_enq_block_start_ts)
 		return;
@@ -724,8 +745,8 @@ rxa_enq_block_start_ts(struct rte_event_eth_rx_adapter *rx_adapter)
 }
 
 static inline void
-rxa_enq_block_end_ts(struct rte_event_eth_rx_adapter *rx_adapter,
-		    struct rte_event_eth_rx_adapter_stats *stats)
+rxa_enq_block_end_ts(struct event_eth_rx_adapter *rx_adapter,
+		     struct rte_event_eth_rx_adapter_stats *stats)
 {
 	if (unlikely(!stats->rx_enq_start_ts))
 		stats->rx_enq_start_ts = rte_get_tsc_cycles();
@@ -744,24 +765,39 @@ rxa_enq_block_end_ts(struct rte_event_eth_rx_adapter *rx_adapter,
 
 /* Enqueue buffered events to event device */
 static inline uint16_t
-rxa_flush_event_buffer(struct rte_event_eth_rx_adapter *rx_adapter)
+rxa_flush_event_buffer(struct event_eth_rx_adapter *rx_adapter,
+		       struct eth_event_enqueue_buffer *buf)
 {
-	struct rte_eth_event_enqueue_buffer *buf =
-	    &rx_adapter->event_enqueue_buffer;
 	struct rte_event_eth_rx_adapter_stats *stats = &rx_adapter->stats;
+	uint16_t count = buf->last ? buf->last - buf->head : buf->count;
 
-	if (!buf->count)
+	if (!count)
 		return 0;
 
 	uint16_t n = rte_event_enqueue_new_burst(rx_adapter->eventdev_id,
 					rx_adapter->event_port_id,
-					buf->events,
-					buf->count);
-	if (n != buf->count) {
-		memmove(buf->events,
-			&buf->events[n],
-			(buf->count - n) * sizeof(struct rte_event));
+					&buf->events[buf->head],
+					count);
+	if (n != count)
 		stats->rx_enq_retry++;
+
+	buf->head += n;
+
+	if (buf->last && n == count) {
+		uint16_t n1;
+
+		n1 = rte_event_enqueue_new_burst(rx_adapter->eventdev_id,
+					rx_adapter->event_port_id,
+					&buf->events[0],
+					buf->tail);
+
+		if (n1 != buf->tail)
+			stats->rx_enq_retry++;
+
+		buf->last = 0;
+		buf->head = n1;
+		buf->last_mask = 0;
+		n += n1;
 	}
 
 	n ? rxa_enq_block_end_ts(rx_adapter, stats) :
@@ -774,7 +810,7 @@ rxa_flush_event_buffer(struct rte_event_eth_rx_adapter *rx_adapter)
 }
 
 static inline void
-rxa_init_vector(struct rte_event_eth_rx_adapter *rx_adapter,
+rxa_init_vector(struct event_eth_rx_adapter *rx_adapter,
 		struct eth_rx_vector_data *vec)
 {
 	vec->vector_ev->nb_elem = 0;
@@ -785,9 +821,9 @@ rxa_init_vector(struct rte_event_eth_rx_adapter *rx_adapter,
 }
 
 static inline uint16_t
-rxa_create_event_vector(struct rte_event_eth_rx_adapter *rx_adapter,
+rxa_create_event_vector(struct event_eth_rx_adapter *rx_adapter,
 			struct eth_rx_queue_info *queue_info,
-			struct rte_eth_event_enqueue_buffer *buf,
+			struct eth_event_enqueue_buffer *buf,
 			struct rte_mbuf **mbufs, uint16_t num)
 {
 	struct rte_event *ev = &buf->events[buf->count];
@@ -845,20 +881,16 @@ rxa_create_event_vector(struct rte_event_eth_rx_adapter *rx_adapter,
 }
 
 static inline void
-rxa_buffer_mbufs(struct rte_event_eth_rx_adapter *rx_adapter,
-		uint16_t eth_dev_id,
-		uint16_t rx_queue_id,
-		struct rte_mbuf **mbufs,
-		uint16_t num)
+rxa_buffer_mbufs(struct event_eth_rx_adapter *rx_adapter, uint16_t eth_dev_id,
+		 uint16_t rx_queue_id, struct rte_mbuf **mbufs, uint16_t num,
+		 struct eth_event_enqueue_buffer *buf)
 {
 	uint32_t i;
 	struct eth_device_info *dev_info =
 					&rx_adapter->eth_devices[eth_dev_id];
 	struct eth_rx_queue_info *eth_rx_queue_info =
 					&dev_info->rx_queue[rx_queue_id];
-	struct rte_eth_event_enqueue_buffer *buf =
-					&rx_adapter->event_enqueue_buffer;
-	struct rte_event *ev = &buf->events[buf->count];
+	uint16_t new_tail = buf->tail;
 	uint64_t event = eth_rx_queue_info->event;
 	uint32_t flow_id_mask = eth_rx_queue_info->flow_id_mask;
 	struct rte_mbuf *m = mbufs[0];
@@ -867,13 +899,29 @@ rxa_buffer_mbufs(struct rte_event_eth_rx_adapter *rx_adapter,
 	int do_rss;
 	uint16_t nb_cb;
 	uint16_t dropped;
+	uint64_t ts, ts_mask;
 
 	if (!eth_rx_queue_info->ena_vector) {
-		/* 0xffff ffff if PKT_RX_RSS_HASH is set, otherwise 0 */
-		rss_mask = ~(((m->ol_flags & PKT_RX_RSS_HASH) != 0) - 1);
+		ts = m->ol_flags & event_eth_rx_timestamp_dynflag ?
+						0 : rte_get_tsc_cycles();
+
+		/* 0xffff ffff ffff ffff if RTE_MBUF_F_RX_TIMESTAMP is set,
+		 * otherwise 0
+		 */
+		ts_mask = (uint64_t)(!(m->ol_flags &
+				       event_eth_rx_timestamp_dynflag)) - 1ULL;
+
+		/* 0xffff ffff if RTE_MBUF_F_RX_RSS_HASH is set, otherwise 0 */
+		rss_mask = ~(((m->ol_flags & RTE_MBUF_F_RX_RSS_HASH) != 0) - 1);
 		do_rss = !rss_mask && !eth_rx_queue_info->flow_id_mask;
 		for (i = 0; i < num; i++) {
+			struct rte_event *ev;
+
 			m = mbufs[i];
+			*rxa_timestamp_dynfield(m) = ts |
+					(*rxa_timestamp_dynfield(m) & ts_mask);
+
+			ev = &buf->events[new_tail];
 
 			rss = do_rss ? rxa_do_softrss(m, rx_adapter->rss_key_be)
 				     : m->hash.rss;
@@ -881,7 +929,7 @@ rxa_buffer_mbufs(struct rte_event_eth_rx_adapter *rx_adapter,
 			ev->flow_id = (rss & ~flow_id_mask) |
 				      (ev->flow_id & flow_id_mask);
 			ev->mbuf = m;
-			ev++;
+			new_tail++;
 		}
 	} else {
 		num = rxa_create_event_vector(rx_adapter, eth_rx_queue_info,
@@ -892,9 +940,14 @@ rxa_buffer_mbufs(struct rte_event_eth_rx_adapter *rx_adapter,
 
 		dropped = 0;
 		nb_cb = dev_info->cb_fn(eth_dev_id, rx_queue_id,
-					ETH_EVENT_BUFFER_SIZE, buf->count,
-					&buf->events[buf->count], num,
-					dev_info->cb_arg, &dropped);
+				       buf->last |
+				       (buf->events_size & ~buf->last_mask),
+				       buf->count >= BATCH_SIZE ?
+						buf->count - BATCH_SIZE : 0,
+				       &buf->events[buf->tail],
+				       num,
+				       dev_info->cb_arg,
+				       &dropped);
 		if (unlikely(nb_cb > num))
 			RTE_EDEV_LOG_ERR("Rx CB returned %d (> %d) events",
 				nb_cb, num);
@@ -905,20 +958,36 @@ rxa_buffer_mbufs(struct rte_event_eth_rx_adapter *rx_adapter,
 	}
 
 	buf->count += num;
+	buf->tail += num;
+}
+
+static inline bool
+rxa_pkt_buf_available(struct eth_event_enqueue_buffer *buf)
+{
+	uint32_t nb_req = buf->tail + BATCH_SIZE;
+
+	if (!buf->last) {
+		if (nb_req <= buf->events_size)
+			return true;
+
+		if (buf->head >= BATCH_SIZE) {
+			buf->last_mask = ~0;
+			buf->last = buf->tail;
+			buf->tail = 0;
+			return true;
+		}
+	}
+
+	return nb_req <= buf->head;
 }
 
 /* Enqueue packets from  <port, q>  to event buffer */
 static inline uint32_t
-rxa_eth_rx(struct rte_event_eth_rx_adapter *rx_adapter,
-	uint16_t port_id,
-	uint16_t queue_id,
-	uint32_t rx_count,
-	uint32_t max_rx,
-	int *rxq_empty)
+rxa_eth_rx(struct event_eth_rx_adapter *rx_adapter, uint16_t port_id,
+	   uint16_t queue_id, uint32_t rx_count, uint32_t max_rx,
+	   int *rxq_empty, struct eth_event_enqueue_buffer *buf)
 {
 	struct rte_mbuf *mbufs[BATCH_SIZE];
-	struct rte_eth_event_enqueue_buffer *buf =
-					&rx_adapter->event_enqueue_buffer;
 	struct rte_event_eth_rx_adapter_stats *stats =
 					&rx_adapter->stats;
 	uint16_t n;
@@ -929,9 +998,9 @@ rxa_eth_rx(struct rte_event_eth_rx_adapter *rx_adapter,
 	/* Don't do a batch dequeue from the rx queue if there isn't
 	 * enough space in the enqueue buffer.
 	 */
-	while (BATCH_SIZE <= (RTE_DIM(buf->events) - buf->count)) {
+	while (rxa_pkt_buf_available(buf)) {
 		if (buf->count >= BATCH_SIZE)
-			rxa_flush_event_buffer(rx_adapter);
+			rxa_flush_event_buffer(rx_adapter, buf);
 
 		stats->rx_poll_count++;
 		n = rte_eth_rx_burst(port_id, queue_id, mbufs, BATCH_SIZE);
@@ -940,21 +1009,20 @@ rxa_eth_rx(struct rte_event_eth_rx_adapter *rx_adapter,
 				*rxq_empty = 1;
 			break;
 		}
-		rxa_buffer_mbufs(rx_adapter, port_id, queue_id, mbufs, n);
+		rxa_buffer_mbufs(rx_adapter, port_id, queue_id, mbufs, n, buf);
 		nb_rx += n;
 		if (rx_count + nb_rx > max_rx)
 			break;
 	}
 
 	if (buf->count > 0)
-		rxa_flush_event_buffer(rx_adapter);
+		rxa_flush_event_buffer(rx_adapter, buf);
 
 	return nb_rx;
 }
 
 static inline void
-rxa_intr_ring_enqueue(struct rte_event_eth_rx_adapter *rx_adapter,
-		void *data)
+rxa_intr_ring_enqueue(struct event_eth_rx_adapter *rx_adapter, void *data)
 {
 	uint16_t port_id;
 	uint16_t queue;
@@ -994,8 +1062,8 @@ rxa_intr_ring_enqueue(struct rte_event_eth_rx_adapter *rx_adapter,
 }
 
 static int
-rxa_intr_ring_check_avail(struct rte_event_eth_rx_adapter *rx_adapter,
-			uint32_t num_intr_vec)
+rxa_intr_ring_check_avail(struct event_eth_rx_adapter *rx_adapter,
+			  uint32_t num_intr_vec)
 {
 	if (rx_adapter->num_intr_vec + num_intr_vec >
 				RTE_EVENT_ETH_INTR_RING_SIZE) {
@@ -1010,9 +1078,9 @@ rxa_intr_ring_check_avail(struct rte_event_eth_rx_adapter *rx_adapter,
 
 /* Delete entries for (dev, queue) from the interrupt ring */
 static void
-rxa_intr_ring_del_entries(struct rte_event_eth_rx_adapter *rx_adapter,
-			struct eth_device_info *dev_info,
-			uint16_t rx_queue_id)
+rxa_intr_ring_del_entries(struct event_eth_rx_adapter *rx_adapter,
+			  struct eth_device_info *dev_info,
+			  uint16_t rx_queue_id)
 {
 	int i, n;
 	union queue_data qd;
@@ -1045,7 +1113,7 @@ rxa_intr_ring_del_entries(struct rte_event_eth_rx_adapter *rx_adapter,
 static void *
 rxa_intr_thread(void *arg)
 {
-	struct rte_event_eth_rx_adapter *rx_adapter = arg;
+	struct event_eth_rx_adapter *rx_adapter = arg;
 	struct rte_epoll_event *epoll_events = rx_adapter->epoll_events;
 	int n, i;
 
@@ -1068,12 +1136,12 @@ rxa_intr_thread(void *arg)
  * mbufs to eventdev
  */
 static inline uint32_t
-rxa_intr_ring_dequeue(struct rte_event_eth_rx_adapter *rx_adapter)
+rxa_intr_ring_dequeue(struct event_eth_rx_adapter *rx_adapter)
 {
 	uint32_t n;
 	uint32_t nb_rx = 0;
 	int rxq_empty;
-	struct rte_eth_event_enqueue_buffer *buf;
+	struct eth_event_enqueue_buffer *buf;
 	rte_spinlock_t *ring_lock;
 	uint8_t max_done = 0;
 
@@ -1088,9 +1156,9 @@ rxa_intr_ring_dequeue(struct rte_event_eth_rx_adapter *rx_adapter)
 	ring_lock = &rx_adapter->intr_ring_lock;
 
 	if (buf->count >= BATCH_SIZE)
-		rxa_flush_event_buffer(rx_adapter);
+		rxa_flush_event_buffer(rx_adapter, buf);
 
-	while (BATCH_SIZE <= (RTE_DIM(buf->events) - buf->count)) {
+	while (rxa_pkt_buf_available(buf)) {
 		struct eth_device_info *dev_info;
 		uint16_t port;
 		uint16_t queue;
@@ -1140,7 +1208,7 @@ rxa_intr_ring_dequeue(struct rte_event_eth_rx_adapter *rx_adapter)
 					continue;
 				n = rxa_eth_rx(rx_adapter, port, i, nb_rx,
 					rx_adapter->max_nb_rx,
-					&rxq_empty);
+					&rxq_empty, buf);
 				nb_rx += n;
 
 				enq_buffer_full = !rxq_empty && n == 0;
@@ -1161,7 +1229,7 @@ rxa_intr_ring_dequeue(struct rte_event_eth_rx_adapter *rx_adapter)
 		} else {
 			n = rxa_eth_rx(rx_adapter, port, queue, nb_rx,
 				rx_adapter->max_nb_rx,
-				&rxq_empty);
+				&rxq_empty, buf);
 			rx_adapter->qd_valid = !rxq_empty;
 			nb_rx += n;
 			if (nb_rx > rx_adapter->max_nb_rx)
@@ -1188,17 +1256,16 @@ done:
  * it.
  */
 static inline uint32_t
-rxa_poll(struct rte_event_eth_rx_adapter *rx_adapter)
+rxa_poll(struct event_eth_rx_adapter *rx_adapter)
 {
 	uint32_t num_queue;
 	uint32_t nb_rx = 0;
-	struct rte_eth_event_enqueue_buffer *buf;
+	struct eth_event_enqueue_buffer *buf = NULL;
 	uint32_t wrr_pos;
 	uint32_t max_nb_rx;
 
 	wrr_pos = rx_adapter->wrr_pos;
 	max_nb_rx = rx_adapter->max_nb_rx;
-	buf = &rx_adapter->event_enqueue_buffer;
 
 	/* Iterate through a WRR sequence */
 	for (num_queue = 0; num_queue < rx_adapter->wrr_len; num_queue++) {
@@ -1206,24 +1273,31 @@ rxa_poll(struct rte_event_eth_rx_adapter *rx_adapter)
 		uint16_t qid = rx_adapter->eth_rx_poll[poll_idx].eth_rx_qid;
 		uint16_t d = rx_adapter->eth_rx_poll[poll_idx].eth_dev_id;
 
+		buf = rxa_event_buf_get(rx_adapter, d, qid);
+
 		/* Don't do a batch dequeue from the rx queue if there isn't
 		 * enough space in the enqueue buffer.
 		 */
 		if (buf->count >= BATCH_SIZE)
-			rxa_flush_event_buffer(rx_adapter);
-		if (BATCH_SIZE > (ETH_EVENT_BUFFER_SIZE - buf->count)) {
-			rx_adapter->wrr_pos = wrr_pos;
-			return nb_rx;
+			rxa_flush_event_buffer(rx_adapter, buf);
+		if (!rxa_pkt_buf_available(buf)) {
+			if (rx_adapter->use_queue_event_buf)
+				goto poll_next_entry;
+			else {
+				rx_adapter->wrr_pos = wrr_pos;
+				return nb_rx;
+			}
 		}
 
 		nb_rx += rxa_eth_rx(rx_adapter, d, qid, nb_rx, max_nb_rx,
-				NULL);
+				NULL, buf);
 		if (nb_rx > max_nb_rx) {
 			rx_adapter->wrr_pos =
 				    (wrr_pos + 1) % rx_adapter->wrr_len;
 			break;
 		}
 
+poll_next_entry:
 		if (++wrr_pos == rx_adapter->wrr_len)
 			wrr_pos = 0;
 	}
@@ -1233,13 +1307,14 @@ rxa_poll(struct rte_event_eth_rx_adapter *rx_adapter)
 static void
 rxa_vector_expire(struct eth_rx_vector_data *vec, void *arg)
 {
-	struct rte_event_eth_rx_adapter *rx_adapter = arg;
-	struct rte_eth_event_enqueue_buffer *buf =
-		&rx_adapter->event_enqueue_buffer;
+	struct event_eth_rx_adapter *rx_adapter = arg;
+	struct eth_event_enqueue_buffer *buf = NULL;
 	struct rte_event *ev;
 
+	buf = rxa_event_buf_get(rx_adapter, vec->port, vec->queue);
+
 	if (buf->count)
-		rxa_flush_event_buffer(rx_adapter);
+		rxa_flush_event_buffer(rx_adapter, buf);
 
 	if (vec->vector_ev->nb_elem == 0)
 		return;
@@ -1257,7 +1332,7 @@ rxa_vector_expire(struct eth_rx_vector_data *vec, void *arg)
 static int
 rxa_service_func(void *args)
 {
-	struct rte_event_eth_rx_adapter *rx_adapter = args;
+	struct event_eth_rx_adapter *rx_adapter = args;
 	struct rte_event_eth_rx_adapter_stats *stats;
 
 	if (rte_spinlock_trylock(&rx_adapter->rx_lock) == 0)
@@ -1295,7 +1370,7 @@ rxa_service_func(void *args)
 static int
 rte_event_eth_rx_adapter_init(void)
 {
-	const char *name = "rte_event_eth_rx_adapter_array";
+	const char *name = RXA_ADAPTER_ARRAY;
 	const struct rte_memzone *mz;
 	unsigned int sz;
 
@@ -1318,7 +1393,22 @@ rte_event_eth_rx_adapter_init(void)
 	return 0;
 }
 
-static inline struct rte_event_eth_rx_adapter *
+static int
+rxa_memzone_lookup(void)
+{
+	const struct rte_memzone *mz;
+
+	if (event_eth_rx_adapter == NULL) {
+		mz = rte_memzone_lookup(RXA_ADAPTER_ARRAY);
+		if (mz == NULL)
+			return -ENOMEM;
+		event_eth_rx_adapter = mz->addr;
+	}
+
+	return 0;
+}
+
+static inline struct event_eth_rx_adapter *
 rxa_id_to_adapter(uint8_t id)
 {
 	return event_eth_rx_adapter ?
@@ -1335,7 +1425,7 @@ rxa_default_conf_cb(uint8_t id, uint8_t dev_id,
 	int started;
 	uint8_t port_id;
 	struct rte_event_port_conf *port_conf = arg;
-	struct rte_event_eth_rx_adapter *rx_adapter = rxa_id_to_adapter(id);
+	struct event_eth_rx_adapter *rx_adapter = rxa_id_to_adapter(id);
 
 	dev = &rte_eventdevs[rx_adapter->eventdev_id];
 	dev_conf = dev->data->dev_conf;
@@ -1384,7 +1474,7 @@ rxa_epoll_create1(void)
 }
 
 static int
-rxa_init_epd(struct rte_event_eth_rx_adapter *rx_adapter)
+rxa_init_epd(struct event_eth_rx_adapter *rx_adapter)
 {
 	if (rx_adapter->epd != INIT_FD)
 		return 0;
@@ -1401,7 +1491,7 @@ rxa_init_epd(struct rte_event_eth_rx_adapter *rx_adapter)
 }
 
 static int
-rxa_create_intr_thread(struct rte_event_eth_rx_adapter *rx_adapter)
+rxa_create_intr_thread(struct event_eth_rx_adapter *rx_adapter)
 {
 	int err;
 	char thread_name[RTE_MAX_THREAD_NAME_LEN];
@@ -1445,7 +1535,7 @@ error:
 }
 
 static int
-rxa_destroy_intr_thread(struct rte_event_eth_rx_adapter *rx_adapter)
+rxa_destroy_intr_thread(struct event_eth_rx_adapter *rx_adapter)
 {
 	int err;
 
@@ -1466,7 +1556,7 @@ rxa_destroy_intr_thread(struct rte_event_eth_rx_adapter *rx_adapter)
 }
 
 static int
-rxa_free_intr_resources(struct rte_event_eth_rx_adapter *rx_adapter)
+rxa_free_intr_resources(struct event_eth_rx_adapter *rx_adapter)
 {
 	int ret;
 
@@ -1484,9 +1574,8 @@ rxa_free_intr_resources(struct rte_event_eth_rx_adapter *rx_adapter)
 }
 
 static int
-rxa_disable_intr(struct rte_event_eth_rx_adapter *rx_adapter,
-	struct eth_device_info *dev_info,
-	uint16_t rx_queue_id)
+rxa_disable_intr(struct event_eth_rx_adapter *rx_adapter,
+		 struct eth_device_info *dev_info, uint16_t rx_queue_id)
 {
 	int err;
 	uint16_t eth_dev_id = dev_info->dev->data->port_id;
@@ -1514,9 +1603,8 @@ rxa_disable_intr(struct rte_event_eth_rx_adapter *rx_adapter,
 }
 
 static int
-rxa_del_intr_queue(struct rte_event_eth_rx_adapter *rx_adapter,
-		struct eth_device_info *dev_info,
-		int rx_queue_id)
+rxa_del_intr_queue(struct event_eth_rx_adapter *rx_adapter,
+		   struct eth_device_info *dev_info, int rx_queue_id)
 {
 	int err;
 	int i;
@@ -1573,9 +1661,8 @@ rxa_del_intr_queue(struct rte_event_eth_rx_adapter *rx_adapter,
 }
 
 static int
-rxa_config_intr(struct rte_event_eth_rx_adapter *rx_adapter,
-	struct eth_device_info *dev_info,
-	uint16_t rx_queue_id)
+rxa_config_intr(struct event_eth_rx_adapter *rx_adapter,
+		struct eth_device_info *dev_info, uint16_t rx_queue_id)
 {
 	int err, err1;
 	uint16_t eth_dev_id = dev_info->dev->data->port_id;
@@ -1663,9 +1750,8 @@ err_free_queue:
 }
 
 static int
-rxa_add_intr_queue(struct rte_event_eth_rx_adapter *rx_adapter,
-	struct eth_device_info *dev_info,
-	int rx_queue_id)
+rxa_add_intr_queue(struct event_eth_rx_adapter *rx_adapter,
+		   struct eth_device_info *dev_info, int rx_queue_id)
 
 {
 	int i, j, err;
@@ -1713,9 +1799,8 @@ rxa_add_intr_queue(struct rte_event_eth_rx_adapter *rx_adapter,
 	return err;
 }
 
-
 static int
-rxa_init_service(struct rte_event_eth_rx_adapter *rx_adapter, uint8_t id)
+rxa_init_service(struct event_eth_rx_adapter *rx_adapter, uint8_t id)
 {
 	int ret;
 	struct rte_service_spec service;
@@ -1758,10 +1843,9 @@ err_done:
 }
 
 static void
-rxa_update_queue(struct rte_event_eth_rx_adapter *rx_adapter,
-		struct eth_device_info *dev_info,
-		int32_t rx_queue_id,
-		uint8_t add)
+rxa_update_queue(struct event_eth_rx_adapter *rx_adapter,
+		 struct eth_device_info *dev_info, int32_t rx_queue_id,
+		 uint8_t add)
 {
 	struct eth_rx_queue_info *queue_info;
 	int enabled;
@@ -1811,9 +1895,8 @@ rxa_set_vector_data(struct eth_rx_queue_info *queue_info, uint16_t vector_count,
 }
 
 static void
-rxa_sw_del(struct rte_event_eth_rx_adapter *rx_adapter,
-	struct eth_device_info *dev_info,
-	int32_t rx_queue_id)
+rxa_sw_del(struct event_eth_rx_adapter *rx_adapter,
+	   struct eth_device_info *dev_info, int32_t rx_queue_id)
 {
 	struct eth_rx_vector_data *vec;
 	int pollq;
@@ -1851,13 +1934,19 @@ rxa_sw_del(struct rte_event_eth_rx_adapter *rx_adapter,
 	rx_adapter->num_rx_intr -= intrq;
 	dev_info->nb_rx_intr -= intrq;
 	dev_info->nb_shared_intr -= intrq && sintrq;
+	if (rx_adapter->use_queue_event_buf) {
+		struct eth_event_enqueue_buffer *event_buf =
+			dev_info->rx_queue[rx_queue_id].event_buf;
+		rte_free(event_buf->events);
+		rte_free(event_buf);
+		dev_info->rx_queue[rx_queue_id].event_buf = NULL;
+	}
 }
 
-static void
-rxa_add_queue(struct rte_event_eth_rx_adapter *rx_adapter,
-	struct eth_device_info *dev_info,
-	int32_t rx_queue_id,
-	const struct rte_event_eth_rx_adapter_queue_conf *conf)
+static int
+rxa_add_queue(struct event_eth_rx_adapter *rx_adapter,
+	      struct eth_device_info *dev_info, int32_t rx_queue_id,
+	      const struct rte_event_eth_rx_adapter_queue_conf *conf)
 {
 	struct eth_rx_queue_info *queue_info;
 	const struct rte_event *ev = &conf->ev;
@@ -1865,15 +1954,21 @@ rxa_add_queue(struct rte_event_eth_rx_adapter *rx_adapter,
 	int intrq;
 	int sintrq;
 	struct rte_event *qi_ev;
+	struct eth_event_enqueue_buffer *new_rx_buf = NULL;
+	uint16_t eth_dev_id = dev_info->dev->data->port_id;
+	int ret;
 
 	if (rx_queue_id == -1) {
 		uint16_t nb_rx_queues;
 		uint16_t i;
 
 		nb_rx_queues = dev_info->dev->data->nb_rx_queues;
-		for (i = 0; i <	nb_rx_queues; i++)
-			rxa_add_queue(rx_adapter, dev_info, i, conf);
-		return;
+		for (i = 0; i <	nb_rx_queues; i++) {
+			ret = rxa_add_queue(rx_adapter, dev_info, i, conf);
+			if (ret)
+				return ret;
+		}
+		return 0;
 	}
 
 	pollq = rxa_polled_queue(dev_info, rx_queue_id);
@@ -1894,6 +1989,24 @@ rxa_add_queue(struct rte_event_eth_rx_adapter *rx_adapter,
 		queue_info->flow_id_mask = ~0;
 	} else
 		qi_ev->flow_id = 0;
+
+	if (conf->rx_queue_flags &
+	    RTE_EVENT_ETH_RX_ADAPTER_QUEUE_EVENT_VECTOR) {
+		queue_info->ena_vector = 1;
+		qi_ev->event_type = RTE_EVENT_TYPE_ETH_RX_ADAPTER_VECTOR;
+		rxa_set_vector_data(queue_info, conf->vector_sz,
+				    conf->vector_timeout_ns, conf->vector_mp,
+				    rx_queue_id, dev_info->dev->data->port_id);
+		rx_adapter->ena_vector = 1;
+		rx_adapter->vector_tmo_ticks =
+			rx_adapter->vector_tmo_ticks ?
+				      RTE_MIN(queue_info->vector_data
+							.vector_timeout_ticks >>
+						1,
+					rx_adapter->vector_tmo_ticks) :
+				queue_info->vector_data.vector_timeout_ticks >>
+					1;
+	}
 
 	rxa_update_queue(rx_adapter, dev_info, rx_queue_id, 1);
 	if (rxa_polled_queue(dev_info, rx_queue_id)) {
@@ -1918,48 +2031,43 @@ rxa_add_queue(struct rte_event_eth_rx_adapter *rx_adapter,
 				dev_info->next_q_idx = 0;
 		}
 	}
-}
 
-static void
-rxa_sw_event_vector_configure(
-	struct rte_event_eth_rx_adapter *rx_adapter, uint16_t eth_dev_id,
-	int rx_queue_id,
-	const struct rte_event_eth_rx_adapter_event_vector_config *config)
-{
-	struct eth_device_info *dev_info = &rx_adapter->eth_devices[eth_dev_id];
-	struct eth_rx_queue_info *queue_info;
-	struct rte_event *qi_ev;
+	if (!rx_adapter->use_queue_event_buf)
+		return 0;
 
-	if (rx_queue_id == -1) {
-		uint16_t nb_rx_queues;
-		uint16_t i;
-
-		nb_rx_queues = dev_info->dev->data->nb_rx_queues;
-		for (i = 0; i < nb_rx_queues; i++)
-			rxa_sw_event_vector_configure(rx_adapter, eth_dev_id, i,
-						      config);
-		return;
+	new_rx_buf = rte_zmalloc_socket("rx_buffer_meta",
+				sizeof(*new_rx_buf), 0,
+				rte_eth_dev_socket_id(eth_dev_id));
+	if (new_rx_buf == NULL) {
+		RTE_EDEV_LOG_ERR("Failed to allocate event buffer meta for "
+				 "dev_id: %d queue_id: %d",
+				 eth_dev_id, rx_queue_id);
+		return -ENOMEM;
 	}
 
-	queue_info = &dev_info->rx_queue[rx_queue_id];
-	qi_ev = (struct rte_event *)&queue_info->event;
-	queue_info->ena_vector = 1;
-	qi_ev->event_type = RTE_EVENT_TYPE_ETH_RX_ADAPTER_VECTOR;
-	rxa_set_vector_data(queue_info, config->vector_sz,
-			    config->vector_timeout_ns, config->vector_mp,
-			    rx_queue_id, dev_info->dev->data->port_id);
-	rx_adapter->ena_vector = 1;
-	rx_adapter->vector_tmo_ticks =
-		rx_adapter->vector_tmo_ticks ?
-			      RTE_MIN(config->vector_timeout_ns >> 1,
-				rx_adapter->vector_tmo_ticks) :
-			      config->vector_timeout_ns >> 1;
+	new_rx_buf->events_size = RTE_ALIGN(conf->event_buf_size, BATCH_SIZE);
+	new_rx_buf->events_size += (2 * BATCH_SIZE);
+	new_rx_buf->events = rte_zmalloc_socket("rx_buffer",
+				sizeof(struct rte_event) *
+				new_rx_buf->events_size, 0,
+				rte_eth_dev_socket_id(eth_dev_id));
+	if (new_rx_buf->events == NULL) {
+		rte_free(new_rx_buf);
+		RTE_EDEV_LOG_ERR("Failed to allocate event buffer for "
+				 "dev_id: %d queue_id: %d",
+				 eth_dev_id, rx_queue_id);
+		return -ENOMEM;
+	}
+
+	queue_info->event_buf = new_rx_buf;
+
+	return 0;
 }
 
-static int rxa_sw_add(struct rte_event_eth_rx_adapter *rx_adapter,
-		uint16_t eth_dev_id,
-		int rx_queue_id,
-		const struct rte_event_eth_rx_adapter_queue_conf *queue_conf)
+static int
+rxa_sw_add(struct event_eth_rx_adapter *rx_adapter, uint16_t eth_dev_id,
+	   int rx_queue_id,
+	   const struct rte_event_eth_rx_adapter_queue_conf *queue_conf)
 {
 	struct eth_device_info *dev_info = &rx_adapter->eth_devices[eth_dev_id];
 	struct rte_event_eth_rx_adapter_queue_conf temp_conf;
@@ -1982,6 +2090,16 @@ static int rxa_sw_add(struct rte_event_eth_rx_adapter *rx_adapter,
 			temp_conf.servicing_weight = 1;
 		}
 		queue_conf = &temp_conf;
+
+		if (queue_conf->servicing_weight == 0 &&
+		    rx_adapter->use_queue_event_buf) {
+
+			RTE_EDEV_LOG_ERR("Use of queue level event buffer "
+					 "not supported for interrupt queues "
+					 "dev_id: %d queue_id: %d",
+					 eth_dev_id, rx_queue_id);
+			return -EINVAL;
+		}
 	}
 
 	nb_rx_queues = dev_info->dev->data->nb_rx_queues;
@@ -2061,7 +2179,9 @@ static int rxa_sw_add(struct rte_event_eth_rx_adapter *rx_adapter,
 
 
 
-	rxa_add_queue(rx_adapter, dev_info, rx_queue_id, queue_conf);
+	ret = rxa_add_queue(rx_adapter, dev_info, rx_queue_id, queue_conf);
+	if (ret)
+		goto err_free_rxqueue;
 	rxa_calc_wrr_sequence(rx_adapter, rx_poll, rx_wrr);
 
 	rte_free(rx_adapter->eth_rx_poll);
@@ -2082,13 +2202,13 @@ err_free_rxqueue:
 	rte_free(rx_poll);
 	rte_free(rx_wrr);
 
-	return 0;
+	return ret;
 }
 
 static int
 rxa_ctrl(uint8_t id, int start)
 {
-	struct rte_event_eth_rx_adapter *rx_adapter;
+	struct event_eth_rx_adapter *rx_adapter;
 	struct rte_eventdev *dev;
 	struct eth_device_info *dev_info;
 	uint32_t i;
@@ -2130,12 +2250,15 @@ rxa_ctrl(uint8_t id, int start)
 	return 0;
 }
 
-int
-rte_event_eth_rx_adapter_create_ext(uint8_t id, uint8_t dev_id,
-				rte_event_eth_rx_adapter_conf_cb conf_cb,
-				void *conf_arg)
+static int
+rxa_create(uint8_t id, uint8_t dev_id,
+	   struct rte_event_eth_rx_adapter_params *rxa_params,
+	   rte_event_eth_rx_adapter_conf_cb conf_cb,
+	   void *conf_arg)
 {
-	struct rte_event_eth_rx_adapter *rx_adapter;
+	struct event_eth_rx_adapter *rx_adapter;
+	struct eth_event_enqueue_buffer *buf;
+	struct rte_event *events;
 	int ret;
 	int socket_id;
 	uint16_t i;
@@ -2150,6 +2273,7 @@ rte_event_eth_rx_adapter_create_ext(uint8_t id, uint8_t dev_id,
 
 	RTE_EVENT_ETH_RX_ADAPTER_ID_VALID_OR_ERR_RET(id, -EINVAL);
 	RTE_EVENTDEV_VALID_DEVID_OR_ERR_RET(dev_id, -EINVAL);
+
 	if (conf_cb == NULL)
 		return -EINVAL;
 
@@ -2197,16 +2321,109 @@ rte_event_eth_rx_adapter_create_ext(uint8_t id, uint8_t dev_id,
 		rte_free(rx_adapter);
 		return -ENOMEM;
 	}
+
 	rte_spinlock_init(&rx_adapter->rx_lock);
+
 	for (i = 0; i < RTE_MAX_ETHPORTS; i++)
 		rx_adapter->eth_devices[i].dev = &rte_eth_devices[i];
 
+	/* Rx adapter event buffer allocation */
+	rx_adapter->use_queue_event_buf = rxa_params->use_queue_event_buf;
+
+	if (!rx_adapter->use_queue_event_buf) {
+		buf = &rx_adapter->event_enqueue_buffer;
+		buf->events_size = rxa_params->event_buf_size;
+
+		events = rte_zmalloc_socket(rx_adapter->mem_name,
+					    buf->events_size * sizeof(*events),
+					    0, socket_id);
+		if (events == NULL) {
+			RTE_EDEV_LOG_ERR("Failed to allocate memory "
+					 "for adapter event buffer");
+			rte_free(rx_adapter->eth_devices);
+			rte_free(rx_adapter);
+			return -ENOMEM;
+		}
+
+		rx_adapter->event_enqueue_buffer.events = events;
+	}
+
 	event_eth_rx_adapter[id] = rx_adapter;
+
 	if (conf_cb == rxa_default_conf_cb)
 		rx_adapter->default_cb_arg = 1;
+
+	if (rte_mbuf_dyn_rx_timestamp_register(
+			&event_eth_rx_timestamp_dynfield_offset,
+			&event_eth_rx_timestamp_dynflag) != 0) {
+		RTE_EDEV_LOG_ERR("Error registering timestamp field in mbuf\n");
+		return -rte_errno;
+	}
+
 	rte_eventdev_trace_eth_rx_adapter_create(id, dev_id, conf_cb,
 		conf_arg);
 	return 0;
+}
+
+int
+rte_event_eth_rx_adapter_create_ext(uint8_t id, uint8_t dev_id,
+				rte_event_eth_rx_adapter_conf_cb conf_cb,
+				void *conf_arg)
+{
+	struct rte_event_eth_rx_adapter_params rxa_params = {0};
+
+	/* use default values for adapter params */
+	rxa_params.event_buf_size = ETH_EVENT_BUFFER_SIZE;
+	rxa_params.use_queue_event_buf = false;
+
+	return rxa_create(id, dev_id, &rxa_params, conf_cb, conf_arg);
+}
+
+int
+rte_event_eth_rx_adapter_create_with_params(uint8_t id, uint8_t dev_id,
+			struct rte_event_port_conf *port_config,
+			struct rte_event_eth_rx_adapter_params *rxa_params)
+{
+	struct rte_event_port_conf *pc;
+	int ret;
+	struct rte_event_eth_rx_adapter_params temp_params = {0};
+
+	if (port_config == NULL)
+		return -EINVAL;
+
+	if (rxa_params == NULL) {
+		/* use default values if rxa_params is NULL */
+		rxa_params = &temp_params;
+		rxa_params->event_buf_size = ETH_EVENT_BUFFER_SIZE;
+		rxa_params->use_queue_event_buf = false;
+	} else if ((!rxa_params->use_queue_event_buf &&
+		    rxa_params->event_buf_size == 0) ||
+		   (rxa_params->use_queue_event_buf &&
+		    rxa_params->event_buf_size != 0)) {
+		RTE_EDEV_LOG_ERR("Invalid adapter params\n");
+		return -EINVAL;
+	} else if (!rxa_params->use_queue_event_buf) {
+		/* adjust event buff size with BATCH_SIZE used for fetching
+		 * packets from NIC rx queues to get full buffer utilization
+		 * and prevent unnecessary rollovers.
+		 */
+
+		rxa_params->event_buf_size =
+			RTE_ALIGN(rxa_params->event_buf_size, BATCH_SIZE);
+		rxa_params->event_buf_size += (BATCH_SIZE + BATCH_SIZE);
+	}
+
+	pc = rte_malloc(NULL, sizeof(*pc), 0);
+	if (pc == NULL)
+		return -ENOMEM;
+
+	*pc = *port_config;
+
+	ret = rxa_create(id, dev_id, rxa_params, rxa_default_conf_cb, pc);
+	if (ret)
+		rte_free(pc);
+
+	return ret;
 }
 
 int
@@ -2218,12 +2435,14 @@ rte_event_eth_rx_adapter_create(uint8_t id, uint8_t dev_id,
 
 	if (port_config == NULL)
 		return -EINVAL;
+
 	RTE_EVENT_ETH_RX_ADAPTER_ID_VALID_OR_ERR_RET(id, -EINVAL);
 
 	pc = rte_malloc(NULL, sizeof(*pc), 0);
 	if (pc == NULL)
 		return -ENOMEM;
 	*pc = *port_config;
+
 	ret = rte_event_eth_rx_adapter_create_ext(id, dev_id,
 					rxa_default_conf_cb,
 					pc);
@@ -2235,7 +2454,7 @@ rte_event_eth_rx_adapter_create(uint8_t id, uint8_t dev_id,
 int
 rte_event_eth_rx_adapter_free(uint8_t id)
 {
-	struct rte_event_eth_rx_adapter *rx_adapter;
+	struct event_eth_rx_adapter *rx_adapter;
 
 	RTE_EVENT_ETH_RX_ADAPTER_ID_VALID_OR_ERR_RET(id, -EINVAL);
 
@@ -2252,6 +2471,8 @@ rte_event_eth_rx_adapter_free(uint8_t id)
 	if (rx_adapter->default_cb_arg)
 		rte_free(rx_adapter->conf_arg);
 	rte_free(rx_adapter->eth_devices);
+	if (!rx_adapter->use_queue_event_buf)
+		rte_free(rx_adapter->event_enqueue_buffer.events);
 	rte_free(rx_adapter);
 	event_eth_rx_adapter[id] = NULL;
 
@@ -2267,9 +2488,10 @@ rte_event_eth_rx_adapter_queue_add(uint8_t id,
 {
 	int ret;
 	uint32_t cap;
-	struct rte_event_eth_rx_adapter *rx_adapter;
+	struct event_eth_rx_adapter *rx_adapter;
 	struct rte_eventdev *dev;
 	struct eth_device_info *dev_info;
+	struct rte_event_eth_rx_adapter_vector_limits limits;
 
 	RTE_EVENT_ETH_RX_ADAPTER_ID_VALID_OR_ERR_RET(id, -EINVAL);
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(eth_dev_id, -EINVAL);
@@ -2297,13 +2519,46 @@ rte_event_eth_rx_adapter_queue_add(uint8_t id,
 		return -EINVAL;
 	}
 
-	if ((cap & RTE_EVENT_ETH_RX_ADAPTER_CAP_EVENT_VECTOR) == 0 &&
-	    (queue_conf->rx_queue_flags &
-	     RTE_EVENT_ETH_RX_ADAPTER_QUEUE_EVENT_VECTOR)) {
-		RTE_EDEV_LOG_ERR("Event vectorization is not supported,"
-				 " eth port: %" PRIu16 " adapter id: %" PRIu8,
-				 eth_dev_id, id);
-		return -EINVAL;
+	if (queue_conf->rx_queue_flags &
+	    RTE_EVENT_ETH_RX_ADAPTER_QUEUE_EVENT_VECTOR) {
+
+		if ((cap & RTE_EVENT_ETH_RX_ADAPTER_CAP_EVENT_VECTOR) == 0) {
+			RTE_EDEV_LOG_ERR("Event vectorization is not supported,"
+					 " eth port: %" PRIu16
+					 " adapter id: %" PRIu8,
+					 eth_dev_id, id);
+			return -EINVAL;
+		}
+
+		ret = rte_event_eth_rx_adapter_vector_limits_get(
+			rx_adapter->eventdev_id, eth_dev_id, &limits);
+		if (ret < 0) {
+			RTE_EDEV_LOG_ERR("Failed to get event device vector limits,"
+					 " eth port: %" PRIu16
+					 " adapter id: %" PRIu8,
+					 eth_dev_id, id);
+			return -EINVAL;
+		}
+		if (queue_conf->vector_sz < limits.min_sz ||
+		    queue_conf->vector_sz > limits.max_sz ||
+		    queue_conf->vector_timeout_ns < limits.min_timeout_ns ||
+		    queue_conf->vector_timeout_ns > limits.max_timeout_ns ||
+		    queue_conf->vector_mp == NULL) {
+			RTE_EDEV_LOG_ERR("Invalid event vector configuration,"
+					 " eth port: %" PRIu16
+					 " adapter id: %" PRIu8,
+					 eth_dev_id, id);
+			return -EINVAL;
+		}
+		if (queue_conf->vector_mp->elt_size <
+		    (sizeof(struct rte_event_vector) +
+		     (sizeof(uintptr_t) * queue_conf->vector_sz))) {
+			RTE_EDEV_LOG_ERR("Invalid event vector configuration,"
+					 " eth port: %" PRIu16
+					 " adapter id: %" PRIu8,
+					 eth_dev_id, id);
+			return -EINVAL;
+		}
 	}
 
 	if ((cap & RTE_EVENT_ETH_RX_ADAPTER_CAP_MULTI_EVENTQ) == 0 &&
@@ -2318,6 +2573,14 @@ rte_event_eth_rx_adapter_queue_add(uint8_t id,
 			rte_eth_devices[eth_dev_id].data->nb_rx_queues) {
 		RTE_EDEV_LOG_ERR("Invalid rx queue_id %" PRIu16,
 			 (uint16_t)rx_queue_id);
+		return -EINVAL;
+	}
+
+	if ((rx_adapter->use_queue_event_buf &&
+	     queue_conf->event_buf_size == 0) ||
+	    (!rx_adapter->use_queue_event_buf &&
+	     queue_conf->event_buf_size != 0)) {
+		RTE_EDEV_LOG_ERR("Invalid Event buffer size for the queue");
 		return -EINVAL;
 	}
 
@@ -2385,7 +2648,7 @@ rte_event_eth_rx_adapter_queue_del(uint8_t id, uint16_t eth_dev_id,
 {
 	int ret = 0;
 	struct rte_eventdev *dev;
-	struct rte_event_eth_rx_adapter *rx_adapter;
+	struct event_eth_rx_adapter *rx_adapter;
 	struct eth_device_info *dev_info;
 	uint32_t cap;
 	uint32_t nb_rx_poll = 0;
@@ -2476,6 +2739,11 @@ rte_event_eth_rx_adapter_queue_del(uint8_t id, uint16_t eth_dev_id,
 		rx_adapter->eth_rx_poll = rx_poll;
 		rx_adapter->wrr_sched = rx_wrr;
 		rx_adapter->wrr_len = nb_wrr;
+		/*
+		 * reset next poll start position (wrr_pos) to avoid buffer
+		 * overrun when wrr_len is reduced in case of queue delete
+		 */
+		rx_adapter->wrr_pos = 0;
 		rx_adapter->num_intr_vec += num_intr_vec;
 
 		if (dev_info->nb_dev_queues == 0) {
@@ -2496,83 +2764,6 @@ unlock_ret:
 
 	rte_eventdev_trace_eth_rx_adapter_queue_del(id, eth_dev_id,
 		rx_queue_id, ret);
-	return ret;
-}
-
-int
-rte_event_eth_rx_adapter_queue_event_vector_config(
-	uint8_t id, uint16_t eth_dev_id, int32_t rx_queue_id,
-	struct rte_event_eth_rx_adapter_event_vector_config *config)
-{
-	struct rte_event_eth_rx_adapter_vector_limits limits;
-	struct rte_event_eth_rx_adapter *rx_adapter;
-	struct rte_eventdev *dev;
-	uint32_t cap;
-	int ret;
-
-	RTE_EVENT_ETH_RX_ADAPTER_ID_VALID_OR_ERR_RET(id, -EINVAL);
-	RTE_ETH_VALID_PORTID_OR_ERR_RET(eth_dev_id, -EINVAL);
-
-	rx_adapter = rxa_id_to_adapter(id);
-	if ((rx_adapter == NULL) || (config == NULL))
-		return -EINVAL;
-
-	dev = &rte_eventdevs[rx_adapter->eventdev_id];
-	ret = rte_event_eth_rx_adapter_caps_get(rx_adapter->eventdev_id,
-						eth_dev_id, &cap);
-	if (ret) {
-		RTE_EDEV_LOG_ERR("Failed to get adapter caps edev %" PRIu8
-				 "eth port %" PRIu16,
-				 id, eth_dev_id);
-		return ret;
-	}
-
-	if (!(cap & RTE_EVENT_ETH_RX_ADAPTER_CAP_EVENT_VECTOR)) {
-		RTE_EDEV_LOG_ERR("Event vectorization is not supported,"
-				 " eth port: %" PRIu16 " adapter id: %" PRIu8,
-				 eth_dev_id, id);
-		return -EINVAL;
-	}
-
-	ret = rte_event_eth_rx_adapter_vector_limits_get(
-		rx_adapter->eventdev_id, eth_dev_id, &limits);
-	if (ret) {
-		RTE_EDEV_LOG_ERR("Failed to get vector limits edev %" PRIu8
-				 "eth port %" PRIu16,
-				 rx_adapter->eventdev_id, eth_dev_id);
-		return ret;
-	}
-
-	if (config->vector_sz < limits.min_sz ||
-	    config->vector_sz > limits.max_sz ||
-	    config->vector_timeout_ns < limits.min_timeout_ns ||
-	    config->vector_timeout_ns > limits.max_timeout_ns ||
-	    config->vector_mp == NULL) {
-		RTE_EDEV_LOG_ERR("Invalid event vector configuration,"
-				 " eth port: %" PRIu16 " adapter id: %" PRIu8,
-				 eth_dev_id, id);
-		return -EINVAL;
-	}
-	if (config->vector_mp->elt_size <
-	    (sizeof(struct rte_event_vector) +
-	     (sizeof(uintptr_t) * config->vector_sz))) {
-		RTE_EDEV_LOG_ERR("Invalid event vector configuration,"
-				 " eth port: %" PRIu16 " adapter id: %" PRIu8,
-				 eth_dev_id, id);
-		return -EINVAL;
-	}
-
-	if (cap & RTE_EVENT_ETH_RX_ADAPTER_CAP_INTERNAL_PORT) {
-		RTE_FUNC_PTR_OR_ERR_RET(
-			*dev->dev_ops->eth_rx_adapter_event_vector_config,
-			-ENOTSUP);
-		ret = dev->dev_ops->eth_rx_adapter_event_vector_config(
-			dev, &rte_eth_devices[eth_dev_id], rx_queue_id, config);
-	} else {
-		rxa_sw_event_vector_configure(rx_adapter, eth_dev_id,
-					      rx_queue_id, config);
-	}
-
 	return ret;
 }
 
@@ -2632,13 +2823,17 @@ int
 rte_event_eth_rx_adapter_stats_get(uint8_t id,
 			       struct rte_event_eth_rx_adapter_stats *stats)
 {
-	struct rte_event_eth_rx_adapter *rx_adapter;
+	struct event_eth_rx_adapter *rx_adapter;
+	struct eth_event_enqueue_buffer *buf;
 	struct rte_event_eth_rx_adapter_stats dev_stats_sum = { 0 };
 	struct rte_event_eth_rx_adapter_stats dev_stats;
 	struct rte_eventdev *dev;
 	struct eth_device_info *dev_info;
 	uint32_t i;
 	int ret;
+
+	if (rxa_memzone_lookup())
+		return -ENOMEM;
 
 	RTE_EVENT_ETH_RX_ADAPTER_ID_VALID_OR_ERR_RET(id, -EINVAL);
 
@@ -2667,16 +2862,29 @@ rte_event_eth_rx_adapter_stats_get(uint8_t id,
 
 	stats->rx_packets += dev_stats_sum.rx_packets;
 	stats->rx_enq_count += dev_stats_sum.rx_enq_count;
+
+	if (!rx_adapter->use_queue_event_buf) {
+		buf = &rx_adapter->event_enqueue_buffer;
+		stats->rx_event_buf_count = buf->count;
+		stats->rx_event_buf_size = buf->events_size;
+	} else {
+		stats->rx_event_buf_count = 0;
+		stats->rx_event_buf_size = 0;
+	}
+
 	return 0;
 }
 
 int
 rte_event_eth_rx_adapter_stats_reset(uint8_t id)
 {
-	struct rte_event_eth_rx_adapter *rx_adapter;
+	struct event_eth_rx_adapter *rx_adapter;
 	struct rte_eventdev *dev;
 	struct eth_device_info *dev_info;
 	uint32_t i;
+
+	if (rxa_memzone_lookup())
+		return -ENOMEM;
 
 	RTE_EVENT_ETH_RX_ADAPTER_ID_VALID_OR_ERR_RET(id, -EINVAL);
 
@@ -2701,7 +2909,10 @@ rte_event_eth_rx_adapter_stats_reset(uint8_t id)
 int
 rte_event_eth_rx_adapter_service_id_get(uint8_t id, uint32_t *service_id)
 {
-	struct rte_event_eth_rx_adapter *rx_adapter;
+	struct event_eth_rx_adapter *rx_adapter;
+
+	if (rxa_memzone_lookup())
+		return -ENOMEM;
 
 	RTE_EVENT_ETH_RX_ADAPTER_ID_VALID_OR_ERR_RET(id, -EINVAL);
 
@@ -2721,7 +2932,7 @@ rte_event_eth_rx_adapter_cb_register(uint8_t id,
 					rte_event_eth_rx_adapter_cb_fn cb_fn,
 					void *cb_arg)
 {
-	struct rte_event_eth_rx_adapter *rx_adapter;
+	struct event_eth_rx_adapter *rx_adapter;
 	struct eth_device_info *dev_info;
 	uint32_t cap;
 	int ret;
@@ -2758,4 +2969,211 @@ rte_event_eth_rx_adapter_cb_register(uint8_t id,
 	rte_spinlock_unlock(&rx_adapter->rx_lock);
 
 	return 0;
+}
+
+int
+rte_event_eth_rx_adapter_queue_conf_get(uint8_t id,
+			uint16_t eth_dev_id,
+			uint16_t rx_queue_id,
+			struct rte_event_eth_rx_adapter_queue_conf *queue_conf)
+{
+	struct rte_eventdev *dev;
+	struct event_eth_rx_adapter *rx_adapter;
+	struct eth_device_info *dev_info;
+	struct eth_rx_queue_info *queue_info;
+	struct rte_event *qi_ev;
+	int ret;
+
+	if (rxa_memzone_lookup())
+		return -ENOMEM;
+
+	RTE_EVENT_ETH_RX_ADAPTER_ID_VALID_OR_ERR_RET(id, -EINVAL);
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(eth_dev_id, -EINVAL);
+
+	if (rx_queue_id >= rte_eth_devices[eth_dev_id].data->nb_rx_queues) {
+		RTE_EDEV_LOG_ERR("Invalid rx queue_id %u", rx_queue_id);
+		return -EINVAL;
+	}
+
+	if (queue_conf == NULL) {
+		RTE_EDEV_LOG_ERR("Rx queue conf struct cannot be NULL");
+		return -EINVAL;
+	}
+
+	rx_adapter = rxa_id_to_adapter(id);
+	if (rx_adapter == NULL)
+		return -EINVAL;
+
+	dev_info = &rx_adapter->eth_devices[eth_dev_id];
+	if (dev_info->rx_queue == NULL ||
+	    !dev_info->rx_queue[rx_queue_id].queue_enabled) {
+		RTE_EDEV_LOG_ERR("Rx queue %u not added", rx_queue_id);
+		return -EINVAL;
+	}
+
+	queue_info = &dev_info->rx_queue[rx_queue_id];
+	qi_ev = (struct rte_event *)&queue_info->event;
+
+	memset(queue_conf, 0, sizeof(*queue_conf));
+	queue_conf->rx_queue_flags = 0;
+	if (queue_info->flow_id_mask != 0)
+		queue_conf->rx_queue_flags |=
+			RTE_EVENT_ETH_RX_ADAPTER_QUEUE_FLOW_ID_VALID;
+	queue_conf->servicing_weight = queue_info->wt;
+
+	memcpy(&queue_conf->ev, qi_ev, sizeof(*qi_ev));
+
+	dev = &rte_eventdevs[rx_adapter->eventdev_id];
+	if (dev->dev_ops->eth_rx_adapter_queue_conf_get != NULL) {
+		ret = (*dev->dev_ops->eth_rx_adapter_queue_conf_get)(dev,
+						&rte_eth_devices[eth_dev_id],
+						rx_queue_id,
+						queue_conf);
+		return ret;
+	}
+
+	return 0;
+}
+
+#define RXA_ADD_DICT(stats, s) rte_tel_data_add_dict_u64(d, #s, stats.s)
+
+static int
+handle_rxa_stats(const char *cmd __rte_unused,
+		 const char *params,
+		 struct rte_tel_data *d)
+{
+	uint8_t rx_adapter_id;
+	struct rte_event_eth_rx_adapter_stats rx_adptr_stats;
+
+	if (params == NULL || strlen(params) == 0 || !isdigit(*params))
+		return -1;
+
+	/* Get Rx adapter ID from parameter string */
+	rx_adapter_id = atoi(params);
+	RTE_EVENT_ETH_RX_ADAPTER_ID_VALID_OR_ERR_RET(rx_adapter_id, -EINVAL);
+
+	/* Get Rx adapter stats */
+	if (rte_event_eth_rx_adapter_stats_get(rx_adapter_id,
+					       &rx_adptr_stats)) {
+		RTE_EDEV_LOG_ERR("Failed to get Rx adapter stats\n");
+		return -1;
+	}
+
+	rte_tel_data_start_dict(d);
+	rte_tel_data_add_dict_u64(d, "rx_adapter_id", rx_adapter_id);
+	RXA_ADD_DICT(rx_adptr_stats, rx_packets);
+	RXA_ADD_DICT(rx_adptr_stats, rx_poll_count);
+	RXA_ADD_DICT(rx_adptr_stats, rx_dropped);
+	RXA_ADD_DICT(rx_adptr_stats, rx_enq_retry);
+	RXA_ADD_DICT(rx_adptr_stats, rx_event_buf_count);
+	RXA_ADD_DICT(rx_adptr_stats, rx_event_buf_size);
+	RXA_ADD_DICT(rx_adptr_stats, rx_enq_count);
+	RXA_ADD_DICT(rx_adptr_stats, rx_enq_start_ts);
+	RXA_ADD_DICT(rx_adptr_stats, rx_enq_block_cycles);
+	RXA_ADD_DICT(rx_adptr_stats, rx_enq_end_ts);
+	RXA_ADD_DICT(rx_adptr_stats, rx_intr_packets);
+
+	return 0;
+}
+
+static int
+handle_rxa_stats_reset(const char *cmd __rte_unused,
+		       const char *params,
+		       struct rte_tel_data *d __rte_unused)
+{
+	uint8_t rx_adapter_id;
+
+	if (params == NULL || strlen(params) == 0 || ~isdigit(*params))
+		return -1;
+
+	/* Get Rx adapter ID from parameter string */
+	rx_adapter_id = atoi(params);
+	RTE_EVENT_ETH_RX_ADAPTER_ID_VALID_OR_ERR_RET(rx_adapter_id, -EINVAL);
+
+	/* Reset Rx adapter stats */
+	if (rte_event_eth_rx_adapter_stats_reset(rx_adapter_id)) {
+		RTE_EDEV_LOG_ERR("Failed to reset Rx adapter stats\n");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int
+handle_rxa_get_queue_conf(const char *cmd __rte_unused,
+			  const char *params,
+			  struct rte_tel_data *d)
+{
+	uint8_t rx_adapter_id;
+	uint16_t rx_queue_id;
+	int eth_dev_id;
+	char *token, *l_params;
+	struct rte_event_eth_rx_adapter_queue_conf queue_conf;
+
+	if (params == NULL || strlen(params) == 0 || !isdigit(*params))
+		return -1;
+
+	/* Get Rx adapter ID from parameter string */
+	l_params = strdup(params);
+	token = strtok(l_params, ",");
+	rx_adapter_id = strtoul(token, NULL, 10);
+	RTE_EVENT_ETH_RX_ADAPTER_ID_VALID_OR_ERR_RET(rx_adapter_id, -EINVAL);
+
+	token = strtok(NULL, ",");
+	if (token == NULL || strlen(token) == 0 || !isdigit(*token))
+		return -1;
+
+	/* Get device ID from parameter string */
+	eth_dev_id = strtoul(token, NULL, 10);
+	RTE_EVENTDEV_VALID_DEVID_OR_ERR_RET(eth_dev_id, -EINVAL);
+
+	token = strtok(NULL, ",");
+	if (token == NULL || strlen(token) == 0 || !isdigit(*token))
+		return -1;
+
+	/* Get Rx queue ID from parameter string */
+	rx_queue_id = strtoul(token, NULL, 10);
+	if (rx_queue_id >= rte_eth_devices[eth_dev_id].data->nb_rx_queues) {
+		RTE_EDEV_LOG_ERR("Invalid rx queue_id %u", rx_queue_id);
+		return -EINVAL;
+	}
+
+	token = strtok(NULL, "\0");
+	if (token != NULL)
+		RTE_EDEV_LOG_ERR("Extra parameters passed to eventdev"
+				 " telemetry command, igrnoring");
+
+	if (rte_event_eth_rx_adapter_queue_conf_get(rx_adapter_id, eth_dev_id,
+						    rx_queue_id, &queue_conf)) {
+		RTE_EDEV_LOG_ERR("Failed to get Rx adapter queue config");
+		return -1;
+	}
+
+	rte_tel_data_start_dict(d);
+	rte_tel_data_add_dict_u64(d, "rx_adapter_id", rx_adapter_id);
+	rte_tel_data_add_dict_u64(d, "eth_dev_id", eth_dev_id);
+	rte_tel_data_add_dict_u64(d, "rx_queue_id", rx_queue_id);
+	RXA_ADD_DICT(queue_conf, rx_queue_flags);
+	RXA_ADD_DICT(queue_conf, servicing_weight);
+	RXA_ADD_DICT(queue_conf.ev, queue_id);
+	RXA_ADD_DICT(queue_conf.ev, sched_type);
+	RXA_ADD_DICT(queue_conf.ev, priority);
+	RXA_ADD_DICT(queue_conf.ev, flow_id);
+
+	return 0;
+}
+
+RTE_INIT(rxa_init_telemetry)
+{
+	rte_telemetry_register_cmd("/eventdev/rxa_stats",
+		handle_rxa_stats,
+		"Returns Rx adapter stats. Parameter: rxa_id");
+
+	rte_telemetry_register_cmd("/eventdev/rxa_stats_reset",
+		handle_rxa_stats_reset,
+		"Reset Rx adapter stats. Parameter: rxa_id");
+
+	rte_telemetry_register_cmd("/eventdev/rxa_queue_conf",
+		handle_rxa_get_queue_conf,
+		"Returns Rx queue config. Parameter: rxa_id, dev_id, queue_id");
 }

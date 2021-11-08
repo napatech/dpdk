@@ -171,7 +171,6 @@ extern "C" {
 #include <stdint.h>
 
 #include "rte_eventdev.h"
-#include "eventdev_pmd.h"
 
 /**
  * Crypto event adapter mode
@@ -227,6 +226,7 @@ union rte_event_crypto_metadata {
 	struct rte_event_crypto_request request_info;
 	/**< Request information to be filled in by application
 	 * for RTE_EVENT_CRYPTO_ADAPTER_OP_FORWARD mode.
+	 * First 8 bytes of request_info is reserved for response_info.
 	 */
 	struct rte_event response_info;
 	/**< Response information to be filled in by application
@@ -439,8 +439,8 @@ rte_event_crypto_adapter_queue_pair_del(uint8_t id, uint8_t cdev_id,
  *  - <0: Error code on failure.
  *
  * @note
- *  The eventdev to which the event_crypto_adapter is connected needs to
- *  be started before calling rte_event_crypto_adapter_start().
+ *  The eventdev and cryptodev to which the event_crypto_adapter is connected
+ *  needs to be started before calling rte_event_crypto_adapter_start().
  */
 int
 rte_event_crypto_adapter_start(uint8_t id);
@@ -569,12 +569,19 @@ rte_event_crypto_adapter_enqueue(uint8_t dev_id,
 				struct rte_event ev[],
 				uint16_t nb_events)
 {
-	const struct rte_eventdev *dev = &rte_eventdevs[dev_id];
+	const struct rte_event_fp_ops *fp_ops;
+	void *port;
 
+	fp_ops = &rte_event_fp_ops[dev_id];
+	port = fp_ops->data[port_id];
 #ifdef RTE_LIBRTE_EVENTDEV_DEBUG
-	RTE_EVENTDEV_VALID_DEVID_OR_ERR_RET(dev_id, -EINVAL);
+	if (dev_id >= RTE_EVENT_MAX_DEVS ||
+	    port_id >= RTE_EVENT_MAX_PORTS_PER_DEV) {
+		rte_errno = EINVAL;
+		return 0;
+	}
 
-	if (port_id >= dev->data->nb_ports) {
+	if (port == NULL) {
 		rte_errno = EINVAL;
 		return 0;
 	}
@@ -582,7 +589,7 @@ rte_event_crypto_adapter_enqueue(uint8_t dev_id,
 	rte_eventdev_trace_crypto_adapter_enqueue(dev_id, port_id, ev,
 		nb_events);
 
-	return dev->ca_enqueue(dev->data->ports[port_id], ev, nb_events);
+	return fp_ops->ca_enqueue(port, ev, nb_events);
 }
 
 #ifdef __cplusplus

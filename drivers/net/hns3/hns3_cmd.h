@@ -162,6 +162,9 @@ enum hns3_opcode_type {
 	HNS3_OPC_TM_INTERNAL_CNT        = 0x0851,
 	HNS3_OPC_TM_INTERNAL_STS_1      = 0x0852,
 
+	HNS3_OPC_TM_PORT_LIMIT_RATE     = 0x0870,
+	HNS3_OPC_TM_TC_LIMIT_RATE       = 0x0871,
+
 	/* Mailbox cmd */
 	HNS3_OPC_MBX_VF_TO_PF           = 0x2001,
 
@@ -312,6 +315,7 @@ enum HNS3_CAPS_BITS {
 	 */
 	HNS3_CAPS_FD_QUEUE_REGION_B = 2,
 	HNS3_CAPS_PTP_B,
+	HNS3_CAPS_TX_PUSH_B = 6,
 	HNS3_CAPS_PHY_IMP_B = 7,
 	HNS3_CAPS_TQP_TXRX_INDEP_B,
 	HNS3_CAPS_HW_PAD_B,
@@ -319,6 +323,16 @@ enum HNS3_CAPS_BITS {
 	HNS3_CAPS_UDP_TUNNEL_CSUM_B,
 	HNS3_CAPS_RAS_IMP_B,
 	HNS3_CAPS_RXD_ADV_LAYOUT_B = 15,
+	HNS3_CAPS_TM_B = 17,
+};
+
+/* Capabilities of VF dependent on the PF */
+enum HNS3VF_CAPS_BITS {
+	/*
+	 * The following capability index definitions must be the same as those
+	 * in kernel side PF.
+	 */
+	HNS3VF_CAPS_VLAN_FLT_MOD_B = 0,
 };
 
 enum HNS3_API_CAP_BITS {
@@ -909,7 +923,8 @@ enum hns3_mac_vlan_add_resp_code {
 	HNS3_ADD_MC_OVERFLOW,      /* ADD failed for MC overflow */
 };
 
-#define HNS3_MC_MAC_VLAN_ADD_DESC_NUM	3
+#define HNS3_MC_MAC_VLAN_OPS_DESC_NUM   3
+#define HNS3_UC_MAC_VLAN_OPS_DESC_NUM   1
 
 #define HNS3_MAC_VLAN_BIT0_EN_B		0
 #define HNS3_MAC_VLAN_BIT1_EN_B		1

@@ -87,18 +87,6 @@ rte_lcore_id(void)
 unsigned int rte_get_main_lcore(void);
 
 /**
- * Deprecated function the id of the main lcore
- *
- * @return
- *   the id of the main lcore
- */
-__rte_deprecated
-static inline unsigned int rte_get_master_lcore(void)
-{
-	return rte_get_main_lcore();
-}
-
-/**
  * Return the number of execution units (lcores) on the system.
  *
  * @return
@@ -245,9 +233,6 @@ unsigned int rte_get_next_lcore(unsigned int i, int skip_main, int wrap);
 	for (i = rte_get_next_lcore(-1, 1, 0);				\
 	     i < RTE_MAX_LCORE;						\
 	     i = rte_get_next_lcore(i, 1, 0))
-
-#define RTE_LCORE_FOREACH_SLAVE(l)					\
-	RTE_DEPRECATED(RTE_LCORE_FOREACH_SLAVE) RTE_LCORE_FOREACH_WORKER(l)
 
 /**
  * Callback prototype for initializing lcores.
@@ -420,10 +405,11 @@ rte_thread_unregister(void);
 /**
  * Create a control thread.
  *
- * Wrapper to pthread_create(), pthread_setname_np() and
- * pthread_setaffinity_np(). The affinity of the new thread is based
- * on the CPU affinity retrieved at the time rte_eal_init() was called,
- * the dataplane and service lcores are then excluded.
+ * Creates a control thread with the given name and attributes. The
+ * affinity of the new thread is based on the CPU affinity retrieved
+ * at the time rte_eal_init() was called, the dataplane and service
+ * lcores are then excluded. If setting the name of the thread fails,
+ * the error is ignored and a debug message is logged.
  *
  * @param thread
  *   Filled with the thread id of the new created thread.

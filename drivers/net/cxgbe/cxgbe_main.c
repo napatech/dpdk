@@ -20,7 +20,6 @@
 #include <rte_log.h>
 #include <rte_debug.h>
 #include <rte_pci.h>
-#include <rte_atomic.h>
 #include <rte_branch_prediction.h>
 #include <rte_memory.h>
 #include <rte_tailq.h>
@@ -417,13 +416,15 @@ void cxgbe_remove_tid(struct tid_info *t, unsigned int chan, unsigned int tid,
 
 	if (t->tid_tab[tid]) {
 		t->tid_tab[tid] = NULL;
-		rte_atomic32_dec(&t->conns_in_use);
+		__atomic_sub_fetch(&t->conns_in_use, 1, __ATOMIC_RELAXED);
 		if (t->hash_base && tid >= t->hash_base) {
 			if (family == FILTER_TYPE_IPV4)
-				rte_atomic32_dec(&t->hash_tids_in_use);
+				__atomic_sub_fetch(&t->hash_tids_in_use, 1,
+						   __ATOMIC_RELAXED);
 		} else {
 			if (family == FILTER_TYPE_IPV4)
-				rte_atomic32_dec(&t->tids_in_use);
+				__atomic_sub_fetch(&t->tids_in_use, 1,
+						   __ATOMIC_RELAXED);
 		}
 	}
 
@@ -445,13 +446,15 @@ void cxgbe_insert_tid(struct tid_info *t, void *data, unsigned int tid,
 	t->tid_tab[tid] = data;
 	if (t->hash_base && tid >= t->hash_base) {
 		if (family == FILTER_TYPE_IPV4)
-			rte_atomic32_inc(&t->hash_tids_in_use);
+			__atomic_add_fetch(&t->hash_tids_in_use, 1,
+					   __ATOMIC_RELAXED);
 	} else {
 		if (family == FILTER_TYPE_IPV4)
-			rte_atomic32_inc(&t->tids_in_use);
+			__atomic_add_fetch(&t->tids_in_use, 1,
+					   __ATOMIC_RELAXED);
 	}
 
-	rte_atomic32_inc(&t->conns_in_use);
+	__atomic_add_fetch(&t->conns_in_use, 1, __ATOMIC_RELAXED);
 }
 
 /**
@@ -504,10 +507,8 @@ static int tid_init(struct tid_info *t)
 
 	t->afree = NULL;
 	t->atids_in_use = 0;
-	rte_atomic32_init(&t->tids_in_use);
-	rte_atomic32_set(&t->tids_in_use, 0);
-	rte_atomic32_init(&t->conns_in_use);
-	rte_atomic32_set(&t->conns_in_use, 0);
+	t->tids_in_use = 0;
+	t->conns_in_use = 0;
 
 	/* Setup the free list for atid_tab and clear the stid bitmap. */
 	if (natids) {
@@ -1500,6 +1501,20 @@ static int adap_init0(struct adapter *adap)
 	ret = t4_query_params(adap, adap->mbox, adap->pf, 0, 1, params, val);
 	adap->params.vi_enable_rx = (ret == 0 && val[0] != 0);
 
+	/* Read the RAW MPS entries. In T6, the last 2 TCAM entries
+	 * are reserved for RAW MAC addresses (rawf = 2, one per port).
+	 */
+	if (CHELSIO_CHIP_VERSION(adap->params.chip) > CHELSIO_T5) {
+		params[0] = CXGBE_FW_PARAM_PFVF(RAWF_START);
+		params[1] = CXGBE_FW_PARAM_PFVF(RAWF_END);
+		ret = t4_query_params(adap, adap->mbox, adap->pf, 0, 2,
+				      params, val);
+		if (ret == 0) {
+			adap->params.rawf_start = val[0];
+			adap->params.rawf_size = val[1] - val[0] + 1;
+		}
+	}
+
 	/*
 	 * The MTU/MSS Table is initialized by now, so load their values.  If
 	 * we're initializing the adapter, then we'll make any modifications
@@ -1646,8 +1661,7 @@ int cxgbe_link_start(struct port_info *pi)
 	unsigned int mtu;
 	int ret;
 
-	mtu = pi->eth_dev->data->dev_conf.rxmode.max_rx_pkt_len -
-	      (RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN);
+	mtu = pi->eth_dev->data->mtu;
 
 	conf_offloads = pi->eth_dev->data->dev_conf.rxmode.offloads;
 
@@ -1656,7 +1670,7 @@ int cxgbe_link_start(struct port_info *pi)
 	 * that step explicitly.
 	 */
 	ret = t4_set_rxmode(adapter, adapter->mbox, pi->viid, mtu, -1, -1, -1,
-			    !!(conf_offloads & DEV_RX_OFFLOAD_VLAN_STRIP),
+			    !!(conf_offloads & RTE_ETH_RX_OFFLOAD_VLAN_STRIP),
 			    true);
 	if (ret == 0) {
 		ret = cxgbe_mpstcam_modify(pi, (int)pi->xact_addr_filt,
@@ -1680,7 +1694,7 @@ int cxgbe_link_start(struct port_info *pi)
 	}
 
 	if (ret == 0 && cxgbe_force_linkup(adapter))
-		pi->eth_dev->data->dev_link.link_status = ETH_LINK_UP;
+		pi->eth_dev->data->dev_link.link_status = RTE_ETH_LINK_UP;
 	return ret;
 }
 
@@ -1711,10 +1725,10 @@ int cxgbe_write_rss_conf(const struct port_info *pi, uint64_t rss_hf)
 	if (rss_hf & CXGBE_RSS_HF_IPV4_MASK)
 		flags |= F_FW_RSS_VI_CONFIG_CMD_IP4TWOTUPEN;
 
-	if (rss_hf & ETH_RSS_NONFRAG_IPV4_TCP)
+	if (rss_hf & RTE_ETH_RSS_NONFRAG_IPV4_TCP)
 		flags |= F_FW_RSS_VI_CONFIG_CMD_IP4FOURTUPEN;
 
-	if (rss_hf & ETH_RSS_NONFRAG_IPV4_UDP)
+	if (rss_hf & RTE_ETH_RSS_NONFRAG_IPV4_UDP)
 		flags |= F_FW_RSS_VI_CONFIG_CMD_IP4FOURTUPEN |
 			 F_FW_RSS_VI_CONFIG_CMD_UDPEN;
 
@@ -1851,7 +1865,7 @@ static void fw_caps_to_speed_caps(enum fw_port_type port_type,
 {
 #define SET_SPEED(__speed_name) \
 	do { \
-		*speed_caps |= ETH_LINK_ ## __speed_name; \
+		*speed_caps |= RTE_ETH_LINK_ ## __speed_name; \
 	} while (0)
 
 #define FW_CAPS_TO_SPEED(__fw_name) \
@@ -1938,7 +1952,7 @@ void cxgbe_get_speed_caps(struct port_info *pi, u32 *speed_caps)
 			      speed_caps);
 
 	if (!(pi->link_cfg.pcaps & FW_PORT_CAP32_ANEG))
-		*speed_caps |= ETH_LINK_SPEED_FIXED;
+		*speed_caps |= RTE_ETH_LINK_SPEED_FIXED;
 }
 
 /**

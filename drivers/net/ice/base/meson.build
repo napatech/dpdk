@@ -14,6 +14,18 @@ sources = [
         'ice_acl.c',
         'ice_acl_ctrl.c',
         'ice_vlan_mode.c',
+        'ice_ptp_hw.c',
+        'ice_parser.c',
+        'ice_imem.c',
+        'ice_metainit.c',
+        'ice_pg_cam.c',
+        'ice_bst_tcam.c',
+        'ice_ptype_mk.c',
+        'ice_mk_grp.c',
+        'ice_proto_grp.c',
+        'ice_flg_rd.c',
+        'ice_xlt_kb.c',
+        'ice_parser_rt.c',
 ]
 
 error_cflags = [
@@ -43,4 +55,4 @@ endforeach
 base_lib = static_library('ice_base', sources,
         dependencies: static_rte_eal,
         c_args: c_args)
-base_objs = base_lib.extract_all_objects()
+base_objs = base_lib.extract_all_objects(recursive: true)

@@ -46,14 +46,15 @@ if static_ibverbs
 endif
 
 sources += files('mlx5_nl.c')
+sources += files('mlx5_common_auxiliary.c')
 sources += files('mlx5_common_os.c')
 sources += files('mlx5_common_verbs.c')
 if not dlopen_ibverbs
     sources += files('mlx5_glue.c')
 endif
 
-# To maintain the compatibility with the make build system
-# mlx5_autoconf.h file is still generated.
+deps += ['bus_auxiliary']
+
 # input array for meson member search:
 # [ "MACRO to define if found", "header for the search",
 #   "symbol to search", "struct member to search" ]
@@ -93,6 +94,10 @@ has_sym_args = [
             'IBV_WQ_FLAG_RX_END_PADDING' ],
         [ 'HAVE_MLX5DV_DR_DEVX_PORT', 'infiniband/mlx5dv.h',
             'mlx5dv_query_devx_port' ],
+        [ 'HAVE_MLX5DV_DR_DEVX_PORT_V35', 'infiniband/mlx5dv.h',
+            'mlx5dv_query_port' ],
+        [ 'HAVE_MLX5DV_DR_CREATE_DEST_IB_PORT', 'infiniband/mlx5dv.h',
+            'mlx5dv_dr_action_create_dest_ib_port' ],
         [ 'HAVE_IBV_DEVX_OBJ', 'infiniband/mlx5dv.h',
             'mlx5dv_devx_obj_create' ],
         [ 'HAVE_IBV_FLOW_DEVX_COUNTERS', 'infiniband/mlx5dv.h',
@@ -170,6 +175,8 @@ has_sym_args = [
             'RDMA_NLDEV_ATTR_DEV_NAME' ],
         [ 'HAVE_RDMA_NLDEV_ATTR_PORT_INDEX', 'rdma/rdma_netlink.h',
             'RDMA_NLDEV_ATTR_PORT_INDEX' ],
+        [ 'HAVE_RDMA_NLDEV_ATTR_PORT_STATE', 'rdma/rdma_netlink.h',
+            'RDMA_NLDEV_ATTR_PORT_STATE' ],
         [ 'HAVE_RDMA_NLDEV_ATTR_NDEV_INDEX', 'rdma/rdma_netlink.h',
             'RDMA_NLDEV_ATTR_NDEV_INDEX' ],
         [ 'HAVE_MLX5_DR_FLOW_DUMP', 'infiniband/mlx5dv.h',
@@ -191,6 +198,8 @@ has_sym_args = [
             'mlx5dv_dump_dr_rule' ],
         [ 'HAVE_MLX5_DR_ACTION_ASO_CT', 'infiniband/mlx5dv.h',
             'MLX5DV_DR_ACTION_FLAGS_ASO_CT_DIRECTION_INITIATOR' ],
+        [ 'HAVE_MLX5_DR_ALLOW_DUPLICATE', 'infiniband/mlx5dv.h',
+            'mlx5dv_dr_domain_allow_duplicate_rules' ],
 ]
 config = configuration_data()
 foreach arg:has_sym_args

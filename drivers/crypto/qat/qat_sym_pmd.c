@@ -7,7 +7,7 @@
 #include <rte_dev.h>
 #include <rte_malloc.h>
 #include <rte_pci.h>
-#include <rte_cryptodev_pmd.h>
+#include <cryptodev_pmd.h>
 #ifdef RTE_LIB_SECURITY
 #include <rte_security_driver.h>
 #endif
@@ -36,6 +36,11 @@ static const struct rte_cryptodev_capabilities qat_gen3_sym_capabilities[] = {
 	QAT_BASE_GEN1_SYM_CAPABILITIES,
 	QAT_EXTRA_GEN2_SYM_CAPABILITIES,
 	QAT_EXTRA_GEN3_SYM_CAPABILITIES,
+	RTE_CRYPTODEV_END_OF_CAPABILITIES_LIST()
+};
+
+static const struct rte_cryptodev_capabilities qat_gen4_sym_capabilities[] = {
+	QAT_BASE_GEN4_SYM_CAPABILITIES,
 	RTE_CRYPTODEV_END_OF_CAPABILITIES_LIST()
 };
 
@@ -90,13 +95,11 @@ static void qat_sym_dev_info_get(struct rte_cryptodev *dev,
 			struct rte_cryptodev_info *info)
 {
 	struct qat_sym_dev_private *internals = dev->data->dev_private;
-	const struct qat_qp_hw_data *sym_hw_qps =
-		qat_gen_config[internals->qat_dev->qat_dev_gen]
-			      .qp_hw_data[QAT_SERVICE_SYMMETRIC];
+	struct qat_pci_device *qat_dev = internals->qat_dev;
 
 	if (info != NULL) {
 		info->max_nb_queue_pairs =
-			qat_qps_per_service(sym_hw_qps, QAT_SERVICE_SYMMETRIC);
+			qat_qps_per_service(qat_dev, QAT_SERVICE_SYMMETRIC);
 		info->feature_flags = dev->feature_flags;
 		info->capabilities = internals->qat_dev_capabilities;
 		info->driver_id = qat_sym_driver_id;
@@ -141,6 +144,7 @@ static void qat_sym_stats_reset(struct rte_cryptodev *dev)
 static int qat_sym_qp_release(struct rte_cryptodev *dev, uint16_t queue_pair_id)
 {
 	struct qat_sym_dev_private *qat_private = dev->data->dev_private;
+	enum qat_device_gen qat_dev_gen = qat_private->qat_dev->qat_dev_gen;
 
 	QAT_LOG(DEBUG, "Release sym qp %u on device %d",
 				queue_pair_id, dev->data->dev_id);
@@ -148,7 +152,7 @@ static int qat_sym_qp_release(struct rte_cryptodev *dev, uint16_t queue_pair_id)
 	qat_private->qat_dev->qps_in_use[QAT_SERVICE_SYMMETRIC][queue_pair_id]
 						= NULL;
 
-	return qat_qp_release((struct qat_qp **)
+	return qat_qp_release(qat_dev_gen, (struct qat_qp **)
 			&(dev->data->queue_pairs[queue_pair_id]));
 }
 
@@ -160,14 +164,34 @@ static int qat_sym_qp_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 	int ret = 0;
 	uint32_t i;
 	struct qat_qp_config qat_qp_conf;
+	const struct qat_qp_hw_data *sym_hw_qps = NULL;
+	const struct qat_qp_hw_data *qp_hw_data = NULL;
 
 	struct qat_qp **qp_addr =
 			(struct qat_qp **)&(dev->data->queue_pairs[qp_id]);
 	struct qat_sym_dev_private *qat_private = dev->data->dev_private;
-	const struct qat_qp_hw_data *sym_hw_qps =
-			qat_gen_config[qat_private->qat_dev->qat_dev_gen]
-				      .qp_hw_data[QAT_SERVICE_SYMMETRIC];
-	const struct qat_qp_hw_data *qp_hw_data = sym_hw_qps + qp_id;
+	struct qat_pci_device *qat_dev = qat_private->qat_dev;
+
+	if (qat_dev->qat_dev_gen == QAT_GEN4) {
+		int ring_pair =
+			qat_select_valid_queue(qat_dev, qp_id,
+				QAT_SERVICE_SYMMETRIC);
+
+		if (ring_pair < 0) {
+			QAT_LOG(ERR,
+				"qp_id %u invalid for this device, no enough services allocated for GEN4 device",
+				qp_id);
+			return -EINVAL;
+		}
+		sym_hw_qps =
+			&qat_dev->qp_gen4_data[0][0];
+		qp_hw_data =
+			&qat_dev->qp_gen4_data[ring_pair][0];
+	} else {
+		sym_hw_qps = qat_gen_config[qat_dev->qat_dev_gen]
+				.qp_hw_data[QAT_SERVICE_SYMMETRIC];
+		qp_hw_data = sym_hw_qps + qp_id;
+	}
 
 	/* If qp is already in use free ring memory and qp metadata. */
 	if (*qp_addr != NULL) {
@@ -175,7 +199,7 @@ static int qat_sym_qp_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 		if (ret < 0)
 			return ret;
 	}
-	if (qp_id >= qat_qps_per_service(sym_hw_qps, QAT_SERVICE_SYMMETRIC)) {
+	if (qp_id >= qat_qps_per_service(qat_dev, QAT_SERVICE_SYMMETRIC)) {
 		QAT_LOG(ERR, "qp_id %u invalid for this device", qp_id);
 		return -EINVAL;
 	}
@@ -386,8 +410,10 @@ qat_sym_dev_create(struct qat_pci_device *qat_pci_dev,
 			RTE_CRYPTODEV_FF_OOP_SGL_IN_LB_OUT |
 			RTE_CRYPTODEV_FF_OOP_LB_IN_SGL_OUT |
 			RTE_CRYPTODEV_FF_OOP_LB_IN_LB_OUT |
-			RTE_CRYPTODEV_FF_DIGEST_ENCRYPTED |
-			RTE_CRYPTODEV_FF_SYM_RAW_DP;
+			RTE_CRYPTODEV_FF_DIGEST_ENCRYPTED;
+
+	if (qat_pci_dev->qat_dev_gen < QAT_GEN4)
+		cryptodev->feature_flags |= RTE_CRYPTODEV_FF_SYM_RAW_DP;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
@@ -431,6 +457,10 @@ qat_sym_dev_create(struct qat_pci_device *qat_pci_dev,
 		capabilities = qat_gen3_sym_capabilities;
 		capa_size = sizeof(qat_gen3_sym_capabilities);
 		break;
+	case QAT_GEN4:
+		capabilities = qat_gen4_sym_capabilities;
+		capa_size = sizeof(qat_gen4_sym_capabilities);
+		break;
 	default:
 		QAT_LOG(DEBUG,
 			"QAT gen %d capabilities unknown",
@@ -469,6 +499,8 @@ qat_sym_dev_create(struct qat_pci_device *qat_pci_dev,
 	qat_pci_dev->sym_dev = internals;
 	QAT_LOG(DEBUG, "Created QAT SYM device %s as cryptodev instance %d",
 			cryptodev->data->name, internals->sym_dev_id);
+
+	rte_cryptodev_pmd_probing_finish(cryptodev);
 
 	return 0;
 

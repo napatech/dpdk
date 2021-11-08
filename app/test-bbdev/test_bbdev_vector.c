@@ -149,6 +149,8 @@ op_decoder_flag_strtoul(char *token, uint32_t *op_flag_value)
 		*op_flag_value = RTE_BBDEV_TURBO_DEC_SCATTER_GATHER;
 	else if (!strcmp(token, "RTE_BBDEV_TURBO_DEC_TB_CRC_24B_KEEP"))
 		*op_flag_value = RTE_BBDEV_TURBO_DEC_TB_CRC_24B_KEEP;
+	else if (!strcmp(token, "RTE_BBDEV_TURBO_DEC_CRC_24B_DROP"))
+		*op_flag_value = RTE_BBDEV_TURBO_DEC_CRC_24B_DROP;
 	else {
 		printf("The given value is not a turbo decoder flag\n");
 		return -1;
@@ -167,6 +169,8 @@ op_ldpc_decoder_flag_strtoul(char *token, uint32_t *op_flag_value)
 		*op_flag_value = RTE_BBDEV_LDPC_CRC_TYPE_24B_CHECK;
 	else if (!strcmp(token, "RTE_BBDEV_LDPC_CRC_TYPE_24B_DROP"))
 		*op_flag_value = RTE_BBDEV_LDPC_CRC_TYPE_24B_DROP;
+	else if (!strcmp(token, "RTE_BBDEV_LDPC_CRC_TYPE_16_CHECK"))
+		*op_flag_value = RTE_BBDEV_LDPC_CRC_TYPE_16_CHECK;
 	else if (!strcmp(token, "RTE_BBDEV_LDPC_DEINTERLEAVER_BYPASS"))
 		*op_flag_value = RTE_BBDEV_LDPC_DEINTERLEAVER_BYPASS;
 	else if (!strcmp(token, "RTE_BBDEV_LDPC_HQ_COMBINE_IN_ENABLE"))

@@ -130,7 +130,7 @@ init_shared_mem(void)
 		mark_free(dynfield1);
 
 		/* init free_flags */
-		for (mask = PKT_FIRST_FREE; mask <= PKT_LAST_FREE; mask <<= 1)
+		for (mask = RTE_MBUF_F_FIRST_FREE; mask <= RTE_MBUF_F_LAST_FREE; mask <<= 1)
 			shm->free_flags |= mask;
 
 		process_score();
@@ -498,6 +498,10 @@ rte_mbuf_dynflag_register_bitnum(const struct rte_mbuf_dynflag *params,
 {
 	int ret;
 
+	if (params->flags != 0) {
+		rte_errno = EINVAL;
+		return -1;
+	}
 	if (req >= RTE_SIZEOF_FIELD(struct rte_mbuf, ol_flags) * CHAR_BIT &&
 			req != UINT_MAX) {
 		rte_errno = EINVAL;

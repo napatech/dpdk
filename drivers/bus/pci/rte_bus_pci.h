@@ -8,8 +8,7 @@
 
 /**
  * @file
- *
- * RTE PCI Bus Interface
+ * PCI device & driver interface
  */
 
 #ifdef __cplusplus
@@ -20,7 +19,6 @@ extern "C" {
 #include <stdlib.h>
 #include <limits.h>
 #include <errno.h>
-#include <sys/queue.h>
 #include <stdint.h>
 #include <inttypes.h>
 
@@ -38,16 +36,16 @@ struct rte_pci_device;
 struct rte_pci_driver;
 
 /** List of PCI devices */
-TAILQ_HEAD(rte_pci_device_list, rte_pci_device);
+RTE_TAILQ_HEAD(rte_pci_device_list, rte_pci_device);
 /** List of PCI drivers */
-TAILQ_HEAD(rte_pci_driver_list, rte_pci_driver);
+RTE_TAILQ_HEAD(rte_pci_driver_list, rte_pci_driver);
 
 /* PCI Bus iterators */
 #define FOREACH_DEVICE_ON_PCIBUS(p)	\
-		TAILQ_FOREACH(p, &(rte_pci_bus.device_list), next)
+		RTE_TAILQ_FOREACH(p, &(rte_pci_bus.device_list), next)
 
 #define FOREACH_DRIVER_ON_PCIBUS(p)	\
-		TAILQ_FOREACH(p, &(rte_pci_bus.driver_list), next)
+		RTE_TAILQ_FOREACH(p, &(rte_pci_bus.driver_list), next)
 
 struct rte_devargs;
 
@@ -65,18 +63,18 @@ enum rte_pci_kernel_driver {
  * A structure describing a PCI device.
  */
 struct rte_pci_device {
-	TAILQ_ENTRY(rte_pci_device) next;   /**< Next probed PCI device. */
+	RTE_TAILQ_ENTRY(rte_pci_device) next;   /**< Next probed PCI device. */
 	struct rte_device device;           /**< Inherit core device */
 	struct rte_pci_addr addr;           /**< PCI location. */
 	struct rte_pci_id id;               /**< PCI ID. */
 	struct rte_mem_resource mem_resource[PCI_MAX_RESOURCE];
 					    /**< PCI Memory Resource */
-	struct rte_intr_handle intr_handle; /**< Interrupt handle */
+	struct rte_intr_handle *intr_handle; /**< Interrupt handle */
 	struct rte_pci_driver *driver;      /**< PCI driver used in probing */
 	uint16_t max_vfs;                   /**< sriov enable if not zero */
 	enum rte_pci_kernel_driver kdrv;    /**< Kernel driver passthrough */
 	char name[PCI_PRI_STR_SIZE+1];      /**< PCI location (ASCII) */
-	struct rte_intr_handle vfio_req_intr_handle;
+	struct rte_intr_handle *vfio_req_intr_handle;
 				/**< Handler of VFIO request interrupt */
 };
 
@@ -161,7 +159,7 @@ typedef int (pci_dma_unmap_t)(struct rte_pci_device *dev, void *addr,
  * A structure describing a PCI driver.
  */
 struct rte_pci_driver {
-	TAILQ_ENTRY(rte_pci_driver) next;  /**< Next in list. */
+	RTE_TAILQ_ENTRY(rte_pci_driver) next;  /**< Next in list. */
 	struct rte_driver driver;          /**< Inherit core driver. */
 	struct rte_pci_bus *bus;           /**< PCI bus reference. */
 	rte_pci_probe_t *probe;            /**< Device probe function. */
@@ -248,6 +246,20 @@ void rte_pci_dump(FILE *f);
  */
 __rte_experimental
 off_t rte_pci_find_ext_capability(struct rte_pci_device *dev, uint32_t cap);
+
+/**
+ * Enables/Disables Bus Master for device's PCI command register.
+ *
+ *  @param dev
+ *    A pointer to rte_pci_device structure.
+ *  @param enable
+ *    Enable or disable Bus Master.
+ *
+ *  @return
+ *  0 on success, -1 on error in PCI config space read/write.
+ */
+__rte_experimental
+int rte_pci_set_bus_master(struct rte_pci_device *dev, bool enable);
 
 /**
  * Register a PCI driver.

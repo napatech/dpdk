@@ -5,6 +5,7 @@
 #include <rte_ipsec.h>
 #include <rte_esp.h>
 #include <rte_ip.h>
+#include <rte_udp.h>
 #include <rte_errno.h>
 #include <rte_cryptodev.h>
 
@@ -47,6 +48,15 @@ fill_crypto_xform(struct crypto_xform *xform, uint64_t type,
 		if (xfn != NULL)
 			return -EINVAL;
 		xform->aead = &xf->aead;
+
+	/* GMAC has only auth */
+	} else if (xf->type == RTE_CRYPTO_SYM_XFORM_AUTH &&
+			xf->auth.algo == RTE_CRYPTO_AUTH_AES_GMAC) {
+		if (xfn != NULL)
+			return -EINVAL;
+		xform->auth = &xf->auth;
+		xform->cipher = &xfn->cipher;
+
 	/*
 	 * CIPHER+AUTH xforms are expected in strict order,
 	 * depending on SA direction:
@@ -208,6 +218,10 @@ fill_sa_type(const struct rte_ipsec_sa_prm *prm, uint64_t *type)
 	} else
 		return -EINVAL;
 
+	/* check for UDP encapsulation flag */
+	if (prm->ipsec_xform.options.udp_encap == 1)
+		tp |= RTE_IPSEC_SATP_NATT_ENABLE;
+
 	/* check for ESN flag */
 	if (prm->ipsec_xform.options.esn == 0)
 		tp |= RTE_IPSEC_SATP_ESN_DISABLE;
@@ -247,12 +261,13 @@ esp_inb_init(struct rte_ipsec_sa *sa)
 	sa->ctp.cipher.length = sa->icv_len + sa->ctp.cipher.offset;
 
 	/*
-	 * for AEAD and NULL algorithms we can assume that
+	 * for AEAD algorithms we can assume that
 	 * auth and cipher offsets would be equal.
 	 */
 	switch (sa->algo_type) {
 	case ALGO_TYPE_AES_GCM:
-	case ALGO_TYPE_NULL:
+	case ALGO_TYPE_AES_CCM:
+	case ALGO_TYPE_CHACHA20_POLY1305:
 		sa->ctp.auth.raw = sa->ctp.cipher.raw;
 		break;
 	default:
@@ -279,11 +294,11 @@ esp_inb_tun_init(struct rte_ipsec_sa *sa, const struct rte_ipsec_sa_prm *prm)
  * Init ESP outbound specific things.
  */
 static void
-esp_outb_init(struct rte_ipsec_sa *sa, uint32_t hlen)
+esp_outb_init(struct rte_ipsec_sa *sa, uint32_t hlen, uint64_t sqn)
 {
 	uint8_t algo_type;
 
-	sa->sqn.outb = 1;
+	sa->sqn.outb = sqn > 1 ? sqn : 1;
 
 	algo_type = sa->algo_type;
 
@@ -294,6 +309,8 @@ esp_outb_init(struct rte_ipsec_sa *sa, uint32_t hlen)
 
 	switch (algo_type) {
 	case ALGO_TYPE_AES_GCM:
+	case ALGO_TYPE_AES_CCM:
+	case ALGO_TYPE_CHACHA20_POLY1305:
 	case ALGO_TYPE_AES_CTR:
 	case ALGO_TYPE_NULL:
 		sa->ctp.cipher.offset = hlen + sizeof(struct rte_esp_hdr) +
@@ -305,15 +322,20 @@ esp_outb_init(struct rte_ipsec_sa *sa, uint32_t hlen)
 		sa->ctp.cipher.offset = hlen + sizeof(struct rte_esp_hdr);
 		sa->ctp.cipher.length = sa->iv_len;
 		break;
+	case ALGO_TYPE_AES_GMAC:
+		sa->ctp.cipher.offset = 0;
+		sa->ctp.cipher.length = 0;
+		break;
 	}
 
 	/*
-	 * for AEAD and NULL algorithms we can assume that
+	 * for AEAD algorithms we can assume that
 	 * auth and cipher offsets would be equal.
 	 */
 	switch (algo_type) {
 	case ALGO_TYPE_AES_GCM:
-	case ALGO_TYPE_NULL:
+	case ALGO_TYPE_AES_CCM:
+	case ALGO_TYPE_CHACHA20_POLY1305:
 		sa->ctp.auth.raw = sa->ctp.cipher.raw;
 		break;
 	default:
@@ -338,13 +360,23 @@ esp_outb_tun_init(struct rte_ipsec_sa *sa, const struct rte_ipsec_sa_prm *prm)
 	sa->hdr_len = prm->tun.hdr_len;
 	sa->hdr_l3_off = prm->tun.hdr_l3_off;
 
+	memcpy(sa->hdr, prm->tun.hdr, prm->tun.hdr_len);
+
+	/* insert UDP header if UDP encapsulation is inabled */
+	if (sa->type & RTE_IPSEC_SATP_NATT_ENABLE) {
+		struct rte_udp_hdr *udph = (struct rte_udp_hdr *)
+				&sa->hdr[prm->tun.hdr_len];
+		sa->hdr_len += sizeof(struct rte_udp_hdr);
+		udph->src_port = prm->ipsec_xform.udp.sport;
+		udph->dst_port = prm->ipsec_xform.udp.dport;
+		udph->dgram_cksum = 0;
+	}
+
 	/* update l2_len and l3_len fields for outbound mbuf */
 	sa->tx_offload.val = rte_mbuf_tx_offload(sa->hdr_l3_off,
 		sa->hdr_len - sa->hdr_l3_off, 0, 0, 0, 0, 0);
 
-	memcpy(sa->hdr, prm->tun.hdr, sa->hdr_len);
-
-	esp_outb_init(sa, sa->hdr_len);
+	esp_outb_init(sa, sa->hdr_len, prm->ipsec_xform.esn.value);
 }
 
 /*
@@ -355,7 +387,8 @@ esp_sa_init(struct rte_ipsec_sa *sa, const struct rte_ipsec_sa_prm *prm,
 	const struct crypto_xform *cxf)
 {
 	static const uint64_t msk = RTE_IPSEC_SATP_DIR_MASK |
-				RTE_IPSEC_SATP_MODE_MASK;
+				RTE_IPSEC_SATP_MODE_MASK |
+				RTE_IPSEC_SATP_NATT_MASK;
 
 	if (prm->ipsec_xform.options.ecn)
 		sa->tos_mask |= RTE_IPV4_HDR_ECN_MASK;
@@ -374,13 +407,39 @@ esp_sa_init(struct rte_ipsec_sa *sa, const struct rte_ipsec_sa_prm *prm,
 			sa->pad_align = IPSEC_PAD_AES_GCM;
 			sa->algo_type = ALGO_TYPE_AES_GCM;
 			break;
+		case RTE_CRYPTO_AEAD_AES_CCM:
+			/* RFC 4309 */
+			sa->aad_len = sizeof(struct aead_ccm_aad);
+			sa->icv_len = cxf->aead->digest_length;
+			sa->iv_ofs = cxf->aead->iv.offset;
+			sa->iv_len = sizeof(uint64_t);
+			sa->pad_align = IPSEC_PAD_AES_CCM;
+			sa->algo_type = ALGO_TYPE_AES_CCM;
+			break;
+		case RTE_CRYPTO_AEAD_CHACHA20_POLY1305:
+			/* RFC 7634 & 8439*/
+			sa->aad_len = sizeof(struct aead_chacha20_poly1305_aad);
+			sa->icv_len = cxf->aead->digest_length;
+			sa->iv_ofs = cxf->aead->iv.offset;
+			sa->iv_len = sizeof(uint64_t);
+			sa->pad_align = IPSEC_PAD_CHACHA20_POLY1305;
+			sa->algo_type = ALGO_TYPE_CHACHA20_POLY1305;
+			break;
 		default:
 			return -EINVAL;
 		}
+	} else if (cxf->auth->algo == RTE_CRYPTO_AUTH_AES_GMAC) {
+		/* RFC 4543 */
+		/* AES-GMAC is a special case of auth that needs IV */
+		sa->pad_align = IPSEC_PAD_AES_GMAC;
+		sa->iv_len = sizeof(uint64_t);
+		sa->icv_len = cxf->auth->digest_length;
+		sa->iv_ofs = cxf->auth->iv.offset;
+		sa->algo_type = ALGO_TYPE_AES_GMAC;
+
 	} else {
 		sa->icv_len = cxf->auth->digest_length;
 		sa->iv_ofs = cxf->cipher->iv.offset;
-		sa->sqh_len = IS_ESN(sa) ? sizeof(uint32_t) : 0;
 
 		switch (cxf->cipher->algo) {
 		case RTE_CRYPTO_CIPHER_NULL:
@@ -414,6 +473,7 @@ esp_sa_init(struct rte_ipsec_sa *sa, const struct rte_ipsec_sa_prm *prm,
 		}
 	}
 
+	sa->sqh_len = IS_ESN(sa) ? sizeof(uint32_t) : 0;
 	sa->udata = prm->userdata;
 	sa->spi = rte_cpu_to_be_32(prm->ipsec_xform.spi);
 	sa->salt = prm->ipsec_xform.salt;
@@ -431,12 +491,18 @@ esp_sa_init(struct rte_ipsec_sa *sa, const struct rte_ipsec_sa_prm *prm,
 	case (RTE_IPSEC_SATP_DIR_IB | RTE_IPSEC_SATP_MODE_TRANS):
 		esp_inb_init(sa);
 		break;
+	case (RTE_IPSEC_SATP_DIR_OB | RTE_IPSEC_SATP_MODE_TUNLV4 |
+			RTE_IPSEC_SATP_NATT_ENABLE):
+	case (RTE_IPSEC_SATP_DIR_OB | RTE_IPSEC_SATP_MODE_TUNLV6 |
+			RTE_IPSEC_SATP_NATT_ENABLE):
 	case (RTE_IPSEC_SATP_DIR_OB | RTE_IPSEC_SATP_MODE_TUNLV4):
 	case (RTE_IPSEC_SATP_DIR_OB | RTE_IPSEC_SATP_MODE_TUNLV6):
 		esp_outb_tun_init(sa, prm);
 		break;
+	case (RTE_IPSEC_SATP_DIR_OB | RTE_IPSEC_SATP_MODE_TRANS |
+			RTE_IPSEC_SATP_NATT_ENABLE):
 	case (RTE_IPSEC_SATP_DIR_OB | RTE_IPSEC_SATP_MODE_TRANS):
-		esp_outb_init(sa, 0);
+		esp_outb_init(sa, 0, prm->ipsec_xform.esn.value);
 		break;
 	}
 
@@ -447,15 +513,19 @@ esp_sa_init(struct rte_ipsec_sa *sa, const struct rte_ipsec_sa_prm *prm,
  * helper function, init SA replay structure.
  */
 static void
-fill_sa_replay(struct rte_ipsec_sa *sa, uint32_t wnd_sz, uint32_t nb_bucket)
+fill_sa_replay(struct rte_ipsec_sa *sa, uint32_t wnd_sz, uint32_t nb_bucket,
+	uint64_t sqn)
 {
 	sa->replay.win_sz = wnd_sz;
 	sa->replay.nb_bucket = nb_bucket;
 	sa->replay.bucket_index_mask = nb_bucket - 1;
 	sa->sqn.inb.rsn[0] = (struct replay_sqn *)(sa + 1);
-	if ((sa->type & RTE_IPSEC_SATP_SQN_MASK) == RTE_IPSEC_SATP_SQN_ATOM)
+	sa->sqn.inb.rsn[0]->sqn = sqn;
+	if ((sa->type & RTE_IPSEC_SATP_SQN_MASK) == RTE_IPSEC_SATP_SQN_ATOM) {
 		sa->sqn.inb.rsn[1] = (struct replay_sqn *)
 			((uintptr_t)sa->sqn.inb.rsn[0] + rsn_size(nb_bucket));
+		sa->sqn.inb.rsn[1]->sqn = sqn;
+	}
 }
 
 int
@@ -507,9 +577,13 @@ rte_ipsec_sa_init(struct rte_ipsec_sa *sa, const struct rte_ipsec_sa_prm *prm,
 	if (prm->ipsec_xform.proto != RTE_SECURITY_IPSEC_SA_PROTO_ESP)
 		return -EINVAL;
 
-	if (prm->ipsec_xform.mode == RTE_SECURITY_IPSEC_SA_MODE_TUNNEL &&
-			prm->tun.hdr_len > sizeof(sa->hdr))
-		return -EINVAL;
+	if (prm->ipsec_xform.mode == RTE_SECURITY_IPSEC_SA_MODE_TUNNEL) {
+		uint32_t hlen = prm->tun.hdr_len;
+		if (sa->type & RTE_IPSEC_SATP_NATT_ENABLE)
+			hlen += sizeof(struct rte_udp_hdr);
+		if (hlen > sizeof(sa->hdr))
+			return -EINVAL;
+	}
 
 	rc = fill_crypto_xform(&cxf, type, prm);
 	if (rc != 0)
@@ -531,7 +605,7 @@ rte_ipsec_sa_init(struct rte_ipsec_sa *sa, const struct rte_ipsec_sa_prm *prm,
 
 	/* fill replay window related fields */
 	if (nb != 0)
-		fill_sa_replay(sa, wsz, nb);
+		fill_sa_replay(sa, wsz, nb, prm->ipsec_xform.esn.value);
 
 	return sz;
 }
@@ -583,18 +657,24 @@ uint16_t
 pkt_flag_process(const struct rte_ipsec_session *ss,
 		struct rte_mbuf *mb[], uint16_t num)
 {
-	uint32_t i, k;
+	uint32_t i, k, bytes;
 	uint32_t dr[num];
 
 	RTE_SET_USED(ss);
 
 	k = 0;
+	bytes = 0;
 	for (i = 0; i != num; i++) {
-		if ((mb[i]->ol_flags & PKT_RX_SEC_OFFLOAD_FAILED) == 0)
+		if ((mb[i]->ol_flags & RTE_MBUF_F_RX_SEC_OFFLOAD_FAILED) == 0) {
 			k++;
+			bytes += mb[i]->pkt_len;
+		}
 		else
 			dr[i - k] = i;
 	}
+
+	ss->sa->statistics.count += k;
+	ss->sa->statistics.bytes += bytes;
 
 	/* handle unprocessed mbufs */
 	if (k != num) {

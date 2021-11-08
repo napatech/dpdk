@@ -70,8 +70,10 @@ static int enic_vf_dev_tx_queue_setup(struct rte_eth_dev *eth_dev,
 	return 0;
 }
 
-static void enic_vf_dev_tx_queue_release(void *txq)
+static void enic_vf_dev_tx_queue_release(struct rte_eth_dev *dev, uint16_t qid)
 {
+	void *txq = dev->data->tx_queues[qid];
+
 	ENICPMD_FUNC_TRACE();
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return;
@@ -108,8 +110,10 @@ static int enic_vf_dev_rx_queue_setup(struct rte_eth_dev *eth_dev,
 	return 0;
 }
 
-static void enic_vf_dev_rx_queue_release(void *rxq)
+static void enic_vf_dev_rx_queue_release(struct rte_eth_dev *dev, uint16_t qid)
 {
+	void *rxq = dev->data->rx_queues[qid];
+
 	ENICPMD_FUNC_TRACE();
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return;
@@ -659,9 +663,9 @@ int enic_vf_representor_init(struct rte_eth_dev *eth_dev, void *init_params)
 
 	eth_dev->device->driver = pf->rte_dev->device->driver;
 	eth_dev->dev_ops = &enic_vf_representor_dev_ops;
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_REPRESENTOR |
-					RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_REPRESENTOR;
 	eth_dev->data->representor_id = vf->vf_id;
+	eth_dev->data->backer_port_id = pf->port_id;
 	eth_dev->data->mac_addrs = rte_zmalloc("enic_mac_addr_vf",
 		sizeof(struct rte_ether_addr) *
 		ENIC_UNICAST_PERFECT_FILTERS, 0);

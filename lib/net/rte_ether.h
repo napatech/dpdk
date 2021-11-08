@@ -221,6 +221,20 @@ rte_ether_addr_copy(const struct rte_ether_addr *__restrict ea_from,
 	*ea_to = *ea_from;
 }
 
+/**
+ * Macro to print six-bytes of MAC address in hex format
+ */
+#define RTE_ETHER_ADDR_PRT_FMT     "%02X:%02X:%02X:%02X:%02X:%02X"
+/**
+ * Macro to extract the MAC address bytes from rte_ether_addr struct
+ */
+#define RTE_ETHER_ADDR_BYTES(mac_addrs) ((mac_addrs)->addr_bytes[0]), \
+					 ((mac_addrs)->addr_bytes[1]), \
+					 ((mac_addrs)->addr_bytes[2]), \
+					 ((mac_addrs)->addr_bytes[3]), \
+					 ((mac_addrs)->addr_bytes[4]), \
+					 ((mac_addrs)->addr_bytes[5])
+
 #define RTE_ETHER_ADDR_FMT_SIZE         18
 /**
  * Format 48bits Ethernet address in pattern xx:xx:xx:xx:xx:xx.
@@ -249,37 +263,18 @@ rte_ether_format_addr(char *buf, uint16_t size,
  *   0 if successful
  *   -1 and sets rte_errno if invalid string
  */
-__rte_experimental
 int
 rte_ether_unformat_addr(const char *str, struct rte_ether_addr *eth_addr);
-
-/* Windows Sockets headers contain `#define s_addr S_un.S_addr`.
- * Temporarily disable this macro to avoid conflict at definition.
- * Place source MAC address in both `s_addr` and `S_un.S_addr` fields,
- * so that access works either directly or through the macro.
- */
-#pragma push_macro("s_addr")
-#ifdef s_addr
-#undef s_addr
-#endif
 
 /**
  * Ethernet header: Contains the destination address, source address
  * and frame type.
  */
 struct rte_ether_hdr {
-	struct rte_ether_addr d_addr; /**< Destination address. */
-	RTE_STD_C11
-	union {
-		struct rte_ether_addr s_addr; /**< Source address. */
-		struct {
-			struct rte_ether_addr S_addr;
-		} S_un; /**< Do not use directly; use s_addr instead.*/
-	};
+	struct rte_ether_addr dst_addr; /**< Destination address. */
+	struct rte_ether_addr src_addr; /**< Source address. */
 	rte_be16_t ether_type; /**< Frame type. */
 } __rte_aligned(2);
-
-#pragma pop_macro("s_addr")
 
 /**
  * Ethernet VLAN Header.
@@ -336,7 +331,7 @@ static inline int rte_vlan_strip(struct rte_mbuf *m)
 		return -1;
 
 	vh = (struct rte_vlan_hdr *)(eh + 1);
-	m->ol_flags |= PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED;
+	m->ol_flags |= RTE_MBUF_F_RX_VLAN | RTE_MBUF_F_RX_VLAN_STRIPPED;
 	m->vlan_tci = rte_be_to_cpu_16(vh->vlan_tci);
 
 	/* Copy ether header over rather than moving whole packet */
@@ -372,7 +367,7 @@ static inline int rte_vlan_insert(struct rte_mbuf **m)
 		return -EINVAL;
 
 	oh = rte_pktmbuf_mtod(*m, struct rte_ether_hdr *);
-	nh = (struct rte_ether_hdr *)
+	nh = (struct rte_ether_hdr *)(void *)
 		rte_pktmbuf_prepend(*m, sizeof(struct rte_vlan_hdr));
 	if (nh == NULL)
 		return -ENOSPC;
@@ -383,9 +378,9 @@ static inline int rte_vlan_insert(struct rte_mbuf **m)
 	vh = (struct rte_vlan_hdr *) (nh + 1);
 	vh->vlan_tci = rte_cpu_to_be_16((*m)->vlan_tci);
 
-	(*m)->ol_flags &= ~(PKT_RX_VLAN_STRIPPED | PKT_TX_VLAN);
+	(*m)->ol_flags &= ~(RTE_MBUF_F_RX_VLAN_STRIPPED | RTE_MBUF_F_TX_VLAN);
 
-	if ((*m)->ol_flags & PKT_TX_TUNNEL_MASK)
+	if ((*m)->ol_flags & RTE_MBUF_F_TX_TUNNEL_MASK)
 		(*m)->outer_l2_len += sizeof(struct rte_vlan_hdr);
 	else
 		(*m)->l2_len += sizeof(struct rte_vlan_hdr);

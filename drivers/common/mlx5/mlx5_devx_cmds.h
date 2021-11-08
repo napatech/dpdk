@@ -5,18 +5,10 @@
 #ifndef RTE_PMD_MLX5_DEVX_CMDS_H_
 #define RTE_PMD_MLX5_DEVX_CMDS_H_
 
-#include "mlx5_glue.h"
-#include "mlx5_prm.h"
 #include <rte_compat.h>
 
-/*
- * Defines the amount of retries to allocate the first UAR in the page.
- * OFED 5.0.x and Upstream rdma_core before v29 returned the NULL as
- * UAR base address if UAR was not the first object in the UAR page.
- * It caused the PMD failure and we should try to get another UAR
- * till we get the first one with non-NULL base address returned.
- */
-#define MLX5_ALLOC_UAR_RETRY 32
+#include "mlx5_glue.h"
+#include "mlx5_prm.h"
 
 /* This is limitation of libibverbs: in length variable type is u16. */
 #define MLX5_DEVX_MAX_KLM_ENTRIES ((UINT16_MAX - \
@@ -89,6 +81,11 @@ struct mlx5_hca_vdpa_attr {
 	uint64_t doorbell_bar_offset;
 };
 
+struct mlx5_hca_flow_attr {
+	uint32_t tunnel_header_0_1;
+	uint32_t tunnel_header_2_3;
+};
+
 /* HCA supports this number of time periods for LRO. */
 #define MLX5_LRO_NUM_SUPP_PERIODS 4
 
@@ -103,14 +100,22 @@ struct mlx5_hca_attr {
 	uint32_t eth_virt:1;
 	uint32_t wqe_vlan_insert:1;
 	uint32_t csum_cap:1;
+	uint32_t vlan_cap:1;
 	uint32_t wqe_inline_mode:2;
 	uint32_t vport_inline_mode:3;
 	uint32_t tunnel_stateless_geneve_rx:1;
 	uint32_t geneve_max_opt_len:1; /* 0x0: 14DW, 0x1: 63DW */
 	uint32_t tunnel_stateless_gtp:1;
+	uint32_t max_lso_cap;
+	uint32_t scatter_fcs:1;
 	uint32_t lro_cap:1;
 	uint32_t tunnel_lro_gre:1;
 	uint32_t tunnel_lro_vxlan:1;
+	uint32_t tunnel_stateless_gre:1;
+	uint32_t tunnel_stateless_vxlan:1;
+	uint32_t swp:1;
+	uint32_t swp_csum:1;
+	uint32_t swp_lso:1;
 	uint32_t lro_max_msg_sz_mode:2;
 	uint32_t lro_timer_supported_periods[MLX5_LRO_NUM_SUPP_PERIODS];
 	uint16_t lro_min_mss_size;
@@ -136,6 +141,7 @@ struct mlx5_hca_attr {
 	uint32_t roce:1;
 	uint32_t rq_ts_format:2;
 	uint32_t sq_ts_format:2;
+	uint32_t steering_format_version:4;
 	uint32_t qp_ts_format:2;
 	uint32_t regex:1;
 	uint32_t reg_c_preserve:1;
@@ -148,6 +154,8 @@ struct mlx5_hca_attr {
 	uint32_t crypto_login:1; /* General obj type CRYPTO_LOGIN supported. */
 	uint32_t regexp_num_of_engines;
 	uint32_t log_max_ft_sampler_num:8;
+	uint32_t inner_ipv4_ihl:1;
+	uint32_t outer_ipv4_ihl:1;
 	uint32_t geneve_tlv_opt;
 	uint32_t cqe_compression:1;
 	uint32_t mini_cqe_resp_flow_tag:1;
@@ -155,6 +163,7 @@ struct mlx5_hca_attr {
 	uint32_t pkt_integrity_match:1; /* 1 if HW supports integrity item */
 	struct mlx5_hca_qos_attr qos;
 	struct mlx5_hca_vdpa_attr vdpa;
+	struct mlx5_hca_flow_attr flow;
 	int log_max_qp_sz;
 	int log_max_cq_sz;
 	int log_max_qp;
@@ -164,15 +173,29 @@ struct mlx5_hca_attr {
 	uint32_t log_max_srq;
 	uint32_t log_max_srq_sz;
 	uint32_t rss_ind_tbl_cap;
-	uint32_t mmo_dma_en:1;
-	uint32_t mmo_compress_en:1;
-	uint32_t mmo_decompress_en:1;
+	uint32_t mmo_dma_sq_en:1;
+	uint32_t mmo_compress_sq_en:1;
+	uint32_t mmo_decompress_sq_en:1;
+	uint32_t mmo_dma_qp_en:1;
+	uint32_t mmo_compress_qp_en:1;
+	uint32_t mmo_decompress_qp_en:1;
+	uint32_t mmo_regex_qp_en:1;
+	uint32_t mmo_regex_sq_en:1;
 	uint32_t compress_min_block_size:4;
 	uint32_t log_max_mmo_dma:5;
 	uint32_t log_max_mmo_compress:5;
 	uint32_t log_max_mmo_decompress:5;
 	uint32_t umr_modify_entity_size_disabled:1;
 	uint32_t umr_indirect_mkey_disabled:1;
+};
+
+/* LAG Context. */
+struct mlx5_devx_lag_context {
+	uint32_t fdb_selection_mode:1;
+	uint32_t port_select_mode:3;
+	uint32_t lag_state:3;
+	uint32_t tx_remap_affinity_1:4;
+	uint32_t tx_remap_affinity_2:4;
 };
 
 struct mlx5_devx_wq_attr {
@@ -388,6 +411,8 @@ struct mlx5_devx_qp_attr {
 	uint64_t dbr_address;
 	uint32_t wq_umem_id;
 	uint64_t wq_umem_offset;
+	uint32_t user_index:24;
+	uint32_t mmo:1;
 };
 
 struct mlx5_devx_virtio_q_couners_attr {
@@ -657,4 +682,8 @@ struct mlx5_devx_obj *
 mlx5_devx_cmd_create_crypto_login_obj(void *ctx,
 				      struct mlx5_devx_crypto_login_attr *attr);
 
+__rte_internal
+int
+mlx5_devx_cmd_query_lag(void *ctx,
+			struct mlx5_devx_lag_context *lag_ctx);
 #endif /* RTE_PMD_MLX5_DEVX_CMDS_H_ */

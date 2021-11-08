@@ -44,10 +44,12 @@ static int
 hns3_allocate_dma_mem(struct hns3_hw *hw, struct hns3_cmq_ring *ring,
 		      uint64_t size, uint32_t alignment)
 {
+	static uint64_t hns3_dma_memzone_id;
 	const struct rte_memzone *mz = NULL;
 	char z_name[RTE_MEMZONE_NAMESIZE];
 
-	snprintf(z_name, sizeof(z_name), "hns3_dma_%" PRIu64, rte_rand());
+	snprintf(z_name, sizeof(z_name), "hns3_dma_%" PRIu64,
+		__atomic_fetch_add(&hns3_dma_memzone_id, 1, __ATOMIC_RELAXED));
 	mz = rte_memzone_reserve_bounded(z_name, size, SOCKET_ID_ANY,
 					 RTE_MEMZONE_IOVA_CONTIG, alignment,
 					 RTE_PGSIZE_2M);
@@ -421,13 +423,15 @@ hns3_get_caps_name(uint32_t caps_id)
 	} dev_caps[] = {
 		{ HNS3_CAPS_FD_QUEUE_REGION_B, "fd_queue_region" },
 		{ HNS3_CAPS_PTP_B,             "ptp"             },
+		{ HNS3_CAPS_TX_PUSH_B,         "tx_push"         },
 		{ HNS3_CAPS_PHY_IMP_B,         "phy_imp"         },
 		{ HNS3_CAPS_TQP_TXRX_INDEP_B,  "tqp_txrx_indep"  },
 		{ HNS3_CAPS_HW_PAD_B,          "hw_pad"          },
 		{ HNS3_CAPS_STASH_B,           "stash"           },
 		{ HNS3_CAPS_UDP_TUNNEL_CSUM_B, "udp_tunnel_csum" },
 		{ HNS3_CAPS_RAS_IMP_B,         "ras_imp"         },
-		{ HNS3_CAPS_RXD_ADV_LAYOUT_B,  "rxd_adv_layout"  }
+		{ HNS3_CAPS_RXD_ADV_LAYOUT_B,  "rxd_adv_layout"  },
+		{ HNS3_CAPS_TM_B,              "tm_capability"   }
 	};
 	uint32_t i;
 
@@ -489,6 +493,8 @@ hns3_parse_capability(struct hns3_hw *hw,
 			hns3_warn(hw, "ignore PTP capability due to lack of "
 				  "rxd advanced layout capability.");
 	}
+	if (hns3_get_bit(caps, HNS3_CAPS_TX_PUSH_B))
+		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_TX_PUSH_B, 1);
 	if (hns3_get_bit(caps, HNS3_CAPS_PHY_IMP_B))
 		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_COPPER_B, 1);
 	if (hns3_get_bit(caps, HNS3_CAPS_TQP_TXRX_INDEP_B))
@@ -503,6 +509,8 @@ hns3_parse_capability(struct hns3_hw *hw,
 				HNS3_DEV_SUPPORT_OUTER_UDP_CKSUM_B, 1);
 	if (hns3_get_bit(caps, HNS3_CAPS_RAS_IMP_B))
 		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_RAS_IMP_B, 1);
+	if (hns3_get_bit(caps, HNS3_CAPS_TM_B))
+		hns3_set_bit(hw->capability, HNS3_DEV_SUPPORT_TM_B, 1);
 }
 
 static uint32_t
@@ -609,7 +617,7 @@ hns3_update_dev_lsc_cap(struct hns3_hw *hw, int fw_compact_cmd_result)
 static int
 hns3_apply_fw_compat_cmd_result(struct hns3_hw *hw, int result)
 {
-	if (result != 0 && hns3_dev_copper_supported(hw)) {
+	if (result != 0 && hns3_dev_get_support(hw, COPPER)) {
 		hns3_err(hw, "firmware fails to initialize the PHY, ret = %d.",
 			 result);
 		return result;
@@ -648,7 +656,7 @@ hns3_firmware_compat_config(struct hns3_hw *hw, bool is_init)
 	}
 	if (revision == PCI_REVISION_ID_HIP09_A) {
 		struct hns3_pf *pf = HNS3_DEV_HW_TO_PF(hw);
-		if (hns3_dev_copper_supported(hw) == 0 || pf->is_tmp_phy) {
+		if (hns3_dev_get_support(hw, COPPER) == 0 || pf->is_tmp_phy) {
 			PMD_INIT_LOG(ERR, "***use temp phy driver in dpdk***");
 			pf->is_tmp_phy = true;
 			hns3_set_bit(hw->capability,
@@ -666,7 +674,7 @@ hns3_firmware_compat_config(struct hns3_hw *hw, bool is_init)
 	if (is_init) {
 		hns3_set_bit(compat, HNS3_LINK_EVENT_REPORT_EN_B, 1);
 		hns3_set_bit(compat, HNS3_NCSI_ERROR_REPORT_EN_B, 0);
-		if (hns3_dev_copper_supported(hw))
+		if (hns3_dev_get_support(hw, COPPER))
 			hns3_set_bit(compat, HNS3_FIRMWARE_PHY_DRIVER_EN_B, 1);
 	}
 	req->compat = rte_cpu_to_le_32(compat);
