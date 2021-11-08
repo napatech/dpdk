@@ -566,7 +566,7 @@ static uint16_t eth_ntacc_rx_mode2(void *queue,
     case 22:
       // We do have a color value defined
       mbuf->hash.fdir.hi = ((dyn3->color_hi << 14) & 0xFFFFC000) | dyn3->color_lo;
-      mbuf->ol_flags |= RTE_MBUF_F_RX_FDIR_FLX | RTE_MBUF_F_RX_FDIR;
+      mbuf->ol_flags |= RTE_MBUF_F_RX_FDIR_ID | RTE_MBUF_F_RX_FDIR;
       break;
     case 24:
       // We do have a colormask set for protocol lookup
@@ -574,7 +574,7 @@ static uint16_t eth_ntacc_rx_mode2(void *queue,
       if (mbuf->packet_type != 0) {
         mbuf->hash.fdir.lo = dyn3->offset0;
         mbuf->hash.fdir.hi = dyn3->offset1;
-        mbuf->ol_flags |= RTE_MBUF_F_RX_FDIR_FLX | RTE_MBUF_F_RX_FDIR;
+        mbuf->ol_flags |= RTE_MBUF_F_RX_FDIR_ID | RTE_MBUF_F_RX_FDIR;
       }
       break;
     }

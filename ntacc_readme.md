@@ -308,7 +308,7 @@ Following rte_flow filter actions are supported:
 |`RTE_FLOW_ACTION_TYPE_PHY_PORT`| `index`                               |
 
 - `RTE_FLOW_ACTION_TYPE_MARK`
-  - If MARK is set and a packet matching the filter is received, the mark value will be copied to mbuf->hash.fdir.hi and the PKT_RX_FDIR_ID flag in mbuf->ol_flags is set.
+  - If MARK is set and a packet matching the filter is received, the mark value will be copied to mbuf->hash.fdir.hi and the RTE_MBUF_F_RX_FDIR_ID flag in mbuf->ol_flags is set.
   - If a packet not matching the filter is received, the HASH value of the packet will be copied to mbuf->hash.rss and the PKT_RX_RSS_HASH flag in mbuf->ol_flags is set.
 
 - `RTE_FLOW_ACTION_TYPE_RSS`
@@ -848,7 +848,7 @@ The mbuf fields set:
 | mbuf->packet_type | The packet type according to rte_mbuf_ptype.h |
 | mbuf->hash.fdir.lo | Either layer3 or innerlayer3 offset |
 | mbuf->hash.fdir.hi | Either layer4 or innerlayer4 offset |
-| mbuf->ol_flags | PKT_RX_FDIR_FLX and PKT_RX_FDIR<br> if packet_type, hash.fdir.lo and hash.fdir.hi contains valid values |
+| mbuf->ol_flags | RTE_MBUF_F_RX_FDIR_ID and RTE_MBUF_F_RX_FDIR<br> if packet_type, hash.fdir.lo and hash.fdir.hi contains valid values |
 
 > Note: `RTE_FLOW_ACTION_TYPE_MARK` cannot be used as the same time as `RTE_FLOW_ACTION_TYPE_FLAG` and no valid hash value is returned.
 
