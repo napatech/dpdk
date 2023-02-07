@@ -1092,7 +1092,7 @@ static int eth_dev_configure(struct rte_eth_dev *dev)
 
   uint i;
 
-  if (dev->data->dev_conf.rxmode.mq_mode == ETH_MQ_RX_RSS) {
+  if (dev->data->dev_conf.rxmode.mq_mode == RTE_ETH_MQ_RX_RSS) {
     internals->rss_hf = dev->data->dev_conf.rx_adv_conf.rss_conf.rss_hf;
   }
   else {
@@ -1146,7 +1146,7 @@ static int eth_dev_configure(struct rte_eth_dev *dev)
     internals->txq[i].maxTxPktSize = internals->maxTxPktSize;
   }
 
-  if (rx_offloads & DEV_RX_OFFLOAD_TIMESTAMP)
+  if (rx_offloads & RTE_ETH_RX_OFFLOAD_TIMESTAMP)
   {
     if (internals->tsMultiplier == 0) {
       enable_ts[dev->data->port_id] = false;
@@ -1191,32 +1191,32 @@ static int eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_in
   dev_info->tx_desc_lim.nb_min = 32;
   dev_info->tx_desc_lim.nb_align = 32;
 
-  dev_info->rx_offload_capa = DEV_RX_OFFLOAD_RSS_HASH    |
-                              DEV_RX_OFFLOAD_TIMESTAMP   |
-                              DEV_RX_OFFLOAD_KEEP_CRC    |
-                              DEV_RX_OFFLOAD_SCATTER;
+  dev_info->rx_offload_capa = RTE_ETH_RX_OFFLOAD_RSS_HASH    |
+                              RTE_ETH_RX_OFFLOAD_TIMESTAMP   |
+                              RTE_ETH_RX_OFFLOAD_KEEP_CRC    |
+                              RTE_ETH_RX_OFFLOAD_SCATTER;
 
   dev_info->rx_queue_offload_capa = dev_info->rx_offload_capa;
 
-  dev_info->flow_type_rss_offloads = ETH_RSS_NONFRAG_IPV4_OTHER |
-                                     ETH_RSS_NONFRAG_IPV4_TCP   |
-                                     ETH_RSS_NONFRAG_IPV4_UDP   |
-                                     ETH_RSS_NONFRAG_IPV4_SCTP  |
-                                     ETH_RSS_IPV4               |
-                                     ETH_RSS_FRAG_IPV4          |
-                                     ETH_RSS_NONFRAG_IPV6_OTHER |
-                                     ETH_RSS_NONFRAG_IPV6_TCP   |
-                                     ETH_RSS_IPV6_TCP_EX        |
-                                     ETH_RSS_NONFRAG_IPV6_UDP   |
-                                     ETH_RSS_IPV6_UDP_EX        |
-                                     ETH_RSS_NONFRAG_IPV6_SCTP  |
-                                     ETH_RSS_IPV6               |
-                                     ETH_RSS_FRAG_IPV6          |
-                                     ETH_RSS_IPV6_EX;
+  dev_info->flow_type_rss_offloads = RTE_ETH_RSS_NONFRAG_IPV4_OTHER |
+                                     RTE_ETH_RSS_NONFRAG_IPV4_TCP   |
+                                     RTE_ETH_RSS_NONFRAG_IPV4_UDP   |
+                                     RTE_ETH_RSS_NONFRAG_IPV4_SCTP  |
+                                     RTE_ETH_RSS_IPV4               |
+                                     RTE_ETH_RSS_FRAG_IPV4          |
+                                     RTE_ETH_RSS_NONFRAG_IPV6_OTHER |
+                                     RTE_ETH_RSS_NONFRAG_IPV6_TCP   |
+                                     RTE_ETH_RSS_IPV6_TCP_EX        |
+                                     RTE_ETH_RSS_NONFRAG_IPV6_UDP   |
+                                     RTE_ETH_RSS_IPV6_UDP_EX        |
+                                     RTE_ETH_RSS_NONFRAG_IPV6_SCTP  |
+                                     RTE_ETH_RSS_IPV6               |
+                                     RTE_ETH_RSS_FRAG_IPV6          |
+                                     RTE_ETH_RSS_IPV6_EX;
   dev_info->hash_key_size = 0;
 
-  dev_info->tx_offload_capa = DEV_TX_OFFLOAD_MULTI_SEGS;
-  dev_info->tx_queue_offload_capa = DEV_TX_OFFLOAD_MULTI_SEGS;
+  dev_info->tx_offload_capa = RTE_ETH_TX_OFFLOAD_MULTI_SEGS;
+  dev_info->tx_queue_offload_capa = RTE_ETH_TX_OFFLOAD_MULTI_SEGS;
 
   pInfo = (NtInfo_t *)rte_malloc(internals->name, sizeof(NtInfo_t), 0);
   if (!pInfo) {
@@ -1240,25 +1240,25 @@ static int eth_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_in
   // Update speed capabilities for the port
   dev_info->speed_capa = 0;
   if (pInfo->u.port_v7.data.capabilities.speed & NT_LINK_SPEED_10M) {
-    dev_info->speed_capa |= ETH_LINK_SPEED_10M;
+    dev_info->speed_capa |= RTE_ETH_LINK_SPEED_10M;
   }
   if (pInfo->u.port_v7.data.capabilities.speed & NT_LINK_SPEED_100M) {
-    dev_info->speed_capa |= ETH_LINK_SPEED_100M;
+    dev_info->speed_capa |= RTE_ETH_LINK_SPEED_100M;
   }
   if (pInfo->u.port_v7.data.capabilities.speed & NT_LINK_SPEED_1G) {
-    dev_info->speed_capa |= ETH_LINK_SPEED_1G;
+    dev_info->speed_capa |= RTE_ETH_LINK_SPEED_1G;
   }
   if (pInfo->u.port_v7.data.capabilities.speed & NT_LINK_SPEED_10G) {
-    dev_info->speed_capa |= ETH_LINK_SPEED_10G;
+    dev_info->speed_capa |= RTE_ETH_LINK_SPEED_10G;
   }
   if (pInfo->u.port_v7.data.capabilities.speed & NT_LINK_SPEED_40G) {
-    dev_info->speed_capa |= ETH_LINK_SPEED_40G;
+    dev_info->speed_capa |= RTE_ETH_LINK_SPEED_40G;
   }
   if (pInfo->u.port_v7.data.capabilities.speed & NT_LINK_SPEED_100G) {
-    dev_info->speed_capa |= ETH_LINK_SPEED_100G;
+    dev_info->speed_capa |= RTE_ETH_LINK_SPEED_100G;
   }
   if (pInfo->u.port_v7.data.capabilities.speed & NT_LINK_SPEED_50G) {
-    dev_info->speed_capa |= ETH_LINK_SPEED_50G;
+    dev_info->speed_capa |= RTE_ETH_LINK_SPEED_50G;
   }
   rte_free(pInfo);
   return 0;
@@ -1478,31 +1478,31 @@ static int eth_link_update(struct rte_eth_dev *dev,
   switch (pInfo->u.port_v8.data.speed) {
   case NT_LINK_SPEED_UNKNOWN:
   case NT_LINK_SPEED_END:
-    dev->data->dev_link.link_speed = ETH_SPEED_NUM_1G;
+    dev->data->dev_link.link_speed = RTE_ETH_SPEED_NUM_1G;
     break;
   case NT_LINK_SPEED_10M:
-    dev->data->dev_link.link_speed = ETH_SPEED_NUM_10M;
+    dev->data->dev_link.link_speed = RTE_ETH_SPEED_NUM_10M;
     break;
   case NT_LINK_SPEED_100M:
-    dev->data->dev_link.link_speed = ETH_SPEED_NUM_100M;
+    dev->data->dev_link.link_speed = RTE_ETH_SPEED_NUM_100M;
     break;
   case NT_LINK_SPEED_1G:
-    dev->data->dev_link.link_speed = ETH_SPEED_NUM_1G;
+    dev->data->dev_link.link_speed = RTE_ETH_SPEED_NUM_1G;
     break;
   case NT_LINK_SPEED_10G:
-    dev->data->dev_link.link_speed = ETH_SPEED_NUM_10G;
+    dev->data->dev_link.link_speed = RTE_ETH_SPEED_NUM_10G;
     break;
   case NT_LINK_SPEED_25G:
-    dev->data->dev_link.link_speed = ETH_SPEED_NUM_25G;
+    dev->data->dev_link.link_speed = RTE_ETH_SPEED_NUM_25G;
     break;
   case NT_LINK_SPEED_40G:
-    dev->data->dev_link.link_speed = ETH_SPEED_NUM_40G;
+    dev->data->dev_link.link_speed = RTE_ETH_SPEED_NUM_40G;
     break;
   case NT_LINK_SPEED_50G:
-    dev->data->dev_link.link_speed = ETH_SPEED_NUM_50G;
+    dev->data->dev_link.link_speed = RTE_ETH_SPEED_NUM_50G;
     break;
   case NT_LINK_SPEED_100G:
-    dev->data->dev_link.link_speed = ETH_SPEED_NUM_100G;
+    dev->data->dev_link.link_speed = RTE_ETH_SPEED_NUM_100G;
     break;
   }
   rte_free(pInfo);
@@ -1794,14 +1794,14 @@ static inline int _handle_actions(struct rte_eth_dev *dev,
       *pAction |= ACTION_DROP;
       *pTypeMask |= DROP_FILTER;
       break;
-    case RTE_FLOW_ACTION_TYPE_PHY_PORT:
+    case RTE_FLOW_ACTION_TYPE_REPRESENTED_PORT:
       // Setup packet forward filter - The forward port must be the physical port number on the adapter
       if (*pAction & (ACTION_RSS | ACTION_QUEUE | ACTION_DROP)) {
         rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, NULL, "Queue, RSS or drop must not be defined for a forward filter");
         return 1;
       }
       *pAction |= ACTION_FORWARD;
-      *pForwardPort = ((const struct rte_flow_action_phy_port *)actions->conf)->index + internals->local_port_offset;
+      *pForwardPort = ((const struct rte_flow_action_ethdev *)actions->conf)->port_id + internals->local_port_offset;
       if (_checkForwardPort(internals, pForwardPort, false, 0, error)) {
         return 1;
       }
@@ -1853,14 +1853,14 @@ static inline int _handle_items(const struct rte_flow_item items[],
         break;
     case RTE_FLOW_ITEM_TYPE_VOID:
       continue;
-    case RTE_FLOW_ITEM_TYPE_PHY_PORT:
+    case RTE_FLOW_ITEM_TYPE_REPRESENTED_PORT:
       if (*pNb_ports < MAX_NTACC_PORTS) {
-        const struct rte_flow_item_phy_port *spec = (const struct rte_flow_item_phy_port *)items->spec;
-        if (spec->index > internals->nbPortsOnAdapter) {
+        const struct rte_flow_item_ethdev *spec = (const struct rte_flow_item_ethdev *)items->spec;
+        if (spec->port_id > internals->nbPortsOnAdapter) {
           rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM, NULL, "Illegal port number in port flow. All port numbers must be from the same adapter");
           return 1;
         }
-        plist_ports[(*pNb_ports)++] = spec->index + internals->local_port_offset;
+        plist_ports[(*pNb_ports)++] = spec->port_id + internals->local_port_offset;
       }
       break;
     case RTE_FLOW_ITEM_TYPE_ETH:
@@ -2269,7 +2269,7 @@ static struct rte_flow *_dev_flow_create(struct rte_eth_dev *dev,
       break;
     }
 
-    if ((dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_KEEP_CRC) == 0) {
+    if ((dev->data->dev_conf.rxmode.offloads & RTE_ETH_RX_OFFLOAD_KEEP_CRC) == 0) {
       // Remove FCS
       snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, ";Slice=EndOfFrame[-4]");
     }
@@ -2498,7 +2498,7 @@ static int _dev_flow_isolate(struct rte_eth_dev *dev,
       snprintf(ntpl_buf, NTPL_BSIZE, "assign[priority=62;Descriptor=DYN3,length=26,colorbits=14;");
 #endif
 
-      if ((dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_KEEP_CRC) == 0) {
+      if ((dev->data->dev_conf.rxmode.offloads & RTE_ETH_RX_OFFLOAD_KEEP_CRC) == 0) {
         // Remove FCS
         snprintf(&ntpl_buf[strlen(ntpl_buf)], NTPL_BSIZE - strlen(ntpl_buf) - 1, "Slice=EndOfFrame[-4];");
       }
@@ -2942,37 +2942,37 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     switch (pInfo->u.port_v7.data.speed) {
     case NT_LINK_SPEED_UNKNOWN:
     case NT_LINK_SPEED_END:
-      pmd_link.link_speed = ETH_SPEED_NUM_1G;
+      pmd_link.link_speed = RTE_ETH_SPEED_NUM_1G;
       break;
     case NT_LINK_SPEED_10M:
-      pmd_link.link_speed = ETH_SPEED_NUM_10M;
+      pmd_link.link_speed = RTE_ETH_SPEED_NUM_10M;
       break;
     case NT_LINK_SPEED_100M:
-      pmd_link.link_speed = ETH_SPEED_NUM_100M;
+      pmd_link.link_speed = RTE_ETH_SPEED_NUM_100M;
       break;
     case NT_LINK_SPEED_1G:
-      pmd_link.link_speed = ETH_SPEED_NUM_1G;
+      pmd_link.link_speed = RTE_ETH_SPEED_NUM_1G;
       break;
     case NT_LINK_SPEED_10G:
-      pmd_link.link_speed = ETH_SPEED_NUM_10G;
+      pmd_link.link_speed = RTE_ETH_SPEED_NUM_10G;
       break;
     case NT_LINK_SPEED_25G:
-      pmd_link.link_speed = ETH_SPEED_NUM_25G;
+      pmd_link.link_speed = RTE_ETH_SPEED_NUM_25G;
       break;
     case NT_LINK_SPEED_40G:
-      pmd_link.link_speed = ETH_SPEED_NUM_40G;
+      pmd_link.link_speed = RTE_ETH_SPEED_NUM_40G;
       break;
     case NT_LINK_SPEED_50G:
-      pmd_link.link_speed = ETH_SPEED_NUM_50G;
+      pmd_link.link_speed = RTE_ETH_SPEED_NUM_50G;
       break;
     case NT_LINK_SPEED_100G:
-      pmd_link.link_speed = ETH_SPEED_NUM_100G;
+      pmd_link.link_speed = RTE_ETH_SPEED_NUM_100G;
       break;
     }
 
     memcpy(&eth_addr[internals->port].addr_bytes, &pInfo->u.port_v7.data.macAddress, sizeof(eth_addr[internals->port].addr_bytes));
 
-    pmd_link.link_duplex = ETH_LINK_FULL_DUPLEX;
+    pmd_link.link_duplex = RTE_ETH_LINK_FULL_DUPLEX;
     pmd_link.link_status = 0;
 
     internals->if_index = internals->port;
